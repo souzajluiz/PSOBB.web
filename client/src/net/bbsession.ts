@@ -7,6 +7,7 @@
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
 import { BBConnection, readUtf16, type Command, type Transport } from './bbconnection.ts';
+import { Lobby } from './lobby.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
 
@@ -47,6 +48,34 @@ export const LOGIN_ERRORS: Record<number, string> = {
   7: 'Game ID suspended',
   8: 'No record for this Game ID',
 };
+
+export interface NewCharacter {
+  name: string; // up to 12 characters
+  charClass: number; // index into CLASS_NAMES
+  sectionId?: number; // defaults to the PSO name-based formula
+  costume?: number;
+  skin?: number;
+  face?: number;
+  head?: number;
+  hair?: number;
+  hairColor?: [number, number, number];
+  proportion?: [number, number]; // 0..1 (x, y)
+}
+
+export interface MenuItem {
+  menuId: number;
+  itemId: number;
+  name: string;
+  flags: number;
+}
+
+// Section ID as derived by PSO from the character name: sum of the name's
+// character codes, mod 10 (community-documented; to be confirmed against the client).
+export function sectionIdForName(name: string): number {
+  let sum = 0;
+  for (const ch of name) sum += ch.charCodeAt(0);
+  return sum % 10;
+}
 
 export interface SessionOptions {
   nsk: Uint8Array;
@@ -114,6 +143,73 @@ export class BBSession {
     return out;
   }
 
+  // E5 on the data-server connection; server answers E4 {slot, result=1}.
+  async createCharacter(slot: number, c: NewCharacter): Promise<void> {
+    const conn = this.requireConn();
+    const body = new Uint8Array(0x80);
+    const dv = new DataView(body.buffer);
+    dv.setInt32(0, slot, true);
+    const visual = 4 + 8; // SC_PlayerPreview: slot, then preview {exp, level, visual}
+    const sh = visual + 0x10; // PlayerVisualConfigSharedT
+    dv.setUint32(sh + 0x08, 0xffffffff, true); // name color
+    body[sh + 0x20] = c.sectionId ?? sectionIdForName(c.name);
+    body[sh + 0x21] = c.charClass;
+    dv.setUint16(sh + 0x28, c.costume ?? 0, true);
+    dv.setUint16(sh + 0x2a, c.skin ?? 0, true);
+    dv.setUint16(sh + 0x2c, c.face ?? 0, true);
+    dv.setUint16(sh + 0x2e, c.head ?? 0, true);
+    dv.setUint16(sh + 0x30, c.hair ?? 0, true);
+    const [r, g, b] = c.hairColor ?? [0, 0, 0];
+    dv.setUint16(sh + 0x32, r, true);
+    dv.setUint16(sh + 0x34, g, true);
+    dv.setUint16(sh + 0x36, b, true);
+    const [px, py] = c.proportion ?? [0.5, 0.5];
+    dv.setFloat32(sh + 0x38, px, true);
+    dv.setFloat32(sh + 0x3c, py, true);
+    const name = `\tE${c.name.slice(0, 12)}`;
+    for (let i = 0; i < name.length; i++) dv.setUint16(visual + 0x50 + i * 2, name.charCodeAt(i), true);
+    conn.send(0xe5, 0, body);
+    const r1 = await conn.waitFor(0xe4, 0x1a, 0xd5);
+    if (r1.command !== 0xe4 || new DataView(r1.data.buffer, r1.data.byteOffset).getUint32(4, true) !== 1) {
+      throw new Error(r1.command === 0xe4 ? 'character creation rejected' : readUtf16(r1.data, 0, r1.data.length >> 1));
+    }
+    this.log(`character created in slot ${slot + 1}`);
+  }
+
+  // Game-server phase: 93 with connection_phase 4, main menu (07), "Go to lobby" (10) -> 67.
+  async enterLobby(username: string, password: string, slot: number, port = 12000): Promise<Lobby> {
+    const init = this.init;
+    if (!init) throw new Error('log in first');
+    const conn = await this.open(port);
+    conn.sendLogin({
+      username,
+      password,
+      guildCardNumber: init.guildCardNumber,
+      securityToken: init.securityToken,
+      clientConfig: init.clientConfig,
+      connectionPhase: 4,
+      characterSlot: slot,
+    });
+    const lobby = new Lobby(conn);
+    const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (first.command === 0x1a || first.command === 0xd5) {
+      throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
+    }
+    if (first.command === 0x07) {
+      const items = parseMenu(first.data);
+      this.log(`main menu: ${items.map((i) => i.name).join(' | ')}`);
+      const choice = items.find((i) => /lobby/i.test(i.name));
+      if (!choice) throw new Error('server menu has no lobby entry');
+      const sel = new Uint8Array(8);
+      new DataView(sel.buffer).setUint32(0, choice.menuId, true);
+      new DataView(sel.buffer).setUint32(4, choice.itemId, true);
+      conn.send(0x10, 0, sel);
+      await conn.waitFor(0x67);
+    }
+    this.log(`joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}, client id ${lobby.selfId}`);
+    return lobby;
+  }
+
   close(): void {
     this.conn?.close();
     this.conn = null;
@@ -123,6 +219,22 @@ export class BBSession {
     if (!this.conn) throw new Error('not connected');
     return this.conn;
   }
+}
+
+// 07 menu: entries of S_MenuItem_PC_BB_08 (0x2C): u32 menu_id, u32 item_id,
+// u8 difficulty, u8 players, UTF-16 name[0x10], u8 episode, u8 flags
+export function parseMenu(data: Uint8Array): MenuItem[] {
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const items: MenuItem[] = [];
+  for (let o = 0; o + 0x2c <= data.length; o += 0x2c) {
+    items.push({
+      menuId: dv.getUint32(o, true),
+      itemId: dv.getUint32(o + 4, true),
+      name: readUtf16(data, o + 0x0a, 0x10).replace(/\t[EJ]/g, ''),
+      flags: data[o + 0x2b],
+    });
+  }
+  return items;
 }
 
 // S_ClientInit_BB_00E6: error_code, player_tag, guild_card_number, security_token, client_config[0x28]

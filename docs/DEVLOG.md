@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-16: character creation and the lobby
+
+**Method:** walked the flow live with a Node script against newserv, logging every command, then wrote `Lobby` and the session steps from what came back. Struct offsets come from newserv's `CommandFormats.hh` / `PlayerSubordinates.hh`.
+
+**What landed:**
+- **Session:** `BBSession.createCharacter` (E5 → E4) and `BBSession.enterLobby` (93 phase 4 → 07 menu → 10 "Go to lobby" → 67).
+- **`Lobby`:** player roster (67/68/69), chat (06), movement subcommands (6x1F/20/3E/3F/40/42), with automatic 6x20 replies to 6x1F.
+- **Lobby view:**
+  - Loads `map_lobby_NNn.rel` for the lobby number.
+  - Players are class-colored capsules with name tags.
+  - Third-person camera.
+  - WASD running sends 6x42 every 150 ms and 6x3E on release.
+  - Ground height comes from a raycast against the render mesh.
+- **Online tab:** slot cards with Create / Play, a creation form (name, class, live section ID), the lobby with player list and chat.
+
+**Tests:**
+- `tests/lobby.live.ts` runs two clients: A sees B join (68), B gets A's chat, run, stop and angle, and A sees B leave (69). 7/7 pass.
+- `tests/bot.live.ts` is a bot that circles the first player and echoes chat.
+
+**Verified in Chrome:** login → Play → lobby 1 rendered with the bot running around; chat round trip "hello bot" → "echo: hello bot". No console errors.
+
+**Open:**
+- The section ID uses the community formula (sum of name chars mod 10); confirm it against the client.
+- Spawn points are approximated (first floor found near the origin).
+
 ## 2026-10-16: map viewer
 
 **What landed:**

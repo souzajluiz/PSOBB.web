@@ -56,6 +56,35 @@ newserv's reasoning (from `on_93_BB`): the BB client needs a reconnect during th
 | 08 | `visual` (0x70): `guild_card_number` string[0x10], shared visual config[0x40] (`section_id` @+0x20, `char_class` @+0x21, `costume`/`skin`/`face`/`head`/`hair` @+0x28..), `name` UTF-16[0x10] with `\tE` prefix |
 | 78 | `play_time_seconds` |
 
+## Character creation
+
+On the data-server connection (after the second `E6`): `E5` with `{i32 slot, PlayerDispDataV4Preview}`. `PlayerVisualConfigV4` inside it: `guild_card_number` string[0x10], shared config (`name_color` @+0x08, `section_id` @+0x20, `char_class` @+0x21, `costume`/`skin`/`face`/`head`/`hair` u16 @+0x28..+0x30, `hair_r/g/b` u16 @+0x32..+0x36, `proportion_x/y` f32 @+0x38/+0x3C), `name` UTF-16 with `\tE` prefix @+0x50. Server answers `E4 {slot, result=1}`.
+
+## Game server → lobby
+
+| # | Dir | Cmd | Content |
+|---|---|---|---|
+| 1 | C→S | `93` | `connection_phase = 4`, `character_slot`, plus guild card / token / client config |
+| 2 | S→C | `E6`, `B1`, `E7` | accepted, server time, full character (0x3994 bytes) |
+| 3 | S→C | `07` | main menu: entries of 0x2C (`menu_id`, `item_id`, u8, u8, UTF-16 name[0x10], u8 episode, u8 flags). newserv: *Go to lobby*, *Patches*, *Disconnect* |
+| 4 | C→S | `10` | `{menu_id, item_id}` |
+| 5 | S→C | `83`, `C5`, `67` | lobby list, challenge ranks, **join lobby** |
+
+`67` / `68` (join / one more player) = `LobbyFlags` (0x0C: `client_id`, `leader_id`, `disable_udp`, `lobby_number`, `block_number`, …) + entries of 0x520: `PlayerLobbyDataBB` (0x44: `guild_card_number` @+4, `client_id` @+0x1C, name UTF-16 @+0x20), `PlayerInventory` (0x34C), `PlayerDispDataV4` (0x190: stats with `level` @+0x18, visual @+0x24). `69`: player left, `flag` = client id.
+
+## Lobby traffic
+
+- **Chat `06`:** `u32 unused, u32 guild_card_number`, UTF-16 text. Sent as `\tE<text>`; received as `<name>\t\tE<text>`.
+- **Subcommands `60`/`62`:** `u8 sub, u8 size_in_dwords, u16 client_id`, payload. Implemented:
+
+| Sub | Meaning | Payload |
+|---|---|---|
+| `1F` | joined; asks others for positions | `i32 floor` |
+| `20` | set position (answer to 1F) | `i32 floor, f32 x, y, z, u32 angle` |
+| `3E`/`3F` | stop at / set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
+| `40` | walk to | `f32 x, z, u32 flags` |
+| `42` | run to | `f32 x, z` |
+
 ## BB cipher
 
 Implemented in `client/src/net/bbcrypt.ts`, ported from newserv's `PSOBBEncryption`.

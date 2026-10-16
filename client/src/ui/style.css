@@ -121,3 +121,27 @@ select {
 }
 .viewport:focus-visible { outline: 2px solid var(--accent); }
 .hint { margin: 8px 0 0; color: var(--muted); font-size: 0.8rem; }
+
+button.secondary { background: transparent; border-color: var(--edge); color: var(--muted); }
+h3 { margin: 12px 0 6px; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+
+.slots li { display: grid; gap: 6px; align-content: start; }
+.slots li button { justify-self: start; padding: 4px 14px; }
+
+.create-form { margin-top: 12px; border-top: 1px solid var(--edge); padding-top: 4px; }
+.create-form h3 { flex-basis: 100%; }
+output { padding: 8px 0; color: var(--text); }
+
+.lobby-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; }
+.lobby-layout .viewport { margin-top: 0; }
+@media (max-width: 760px) { .lobby-layout { grid-template-columns: 1fr; } }
+.lobby-side { display: flex; flex-direction: column; min-width: 0; }
+.lobby-side h3:first-child { margin-top: 0; }
+.player-list { list-style: none; margin: 0; padding: 0; font-size: 0.9rem; }
+.player-list li { padding: 2px 0; }
+.player-list .me { color: var(--accent); }
+.chat-log { list-style: none; margin: 0; padding: 6px; flex: 1; min-height: 160px; max-height: 320px; overflow: auto; background: #02101e; border: 1px solid var(--edge); border-radius: 4px; font-size: 0.85rem; }
+.chat-log .who { color: var(--accent); font-weight: 600; }
+.chat-form { display: flex; gap: 6px; margin: 8px 0; }
+.chat-form input { flex: 1; min-width: 0; }
+.chat-form button { padding: 8px 12px; }

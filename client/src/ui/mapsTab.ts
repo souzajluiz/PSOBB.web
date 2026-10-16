@@ -1,4 +1,5 @@
-import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
+import { pickDataFolder, type DataSource } from '../data/source.ts';
+import { detectDevDataSource, onDataSource, setDataSource } from '../data/store.ts';
 import { MapViewer, textureArchiveFor } from '../render/mapviewer.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -55,7 +56,7 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
 
   $('pick-folder').addEventListener('click', async () => {
     try {
-      await useSource(await pickDataFolder());
+      setDataSource(await pickDataFolder());
     } catch (err) {
       if ((err as DOMException).name !== 'AbortError') setStatus((err as Error).message, 'err');
     }
@@ -68,10 +69,9 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
     activate: () => {
       if (activated) return;
       activated = true;
-      void (async () => {
-        if (await HttpSource.available()) await useSource(new HttpSource());
-        else setStatus('Open your PSOBB folder (the one containing data/scene) to browse maps.');
-      })();
+      setStatus('Open your PSOBB folder (the one containing data/scene) to browse maps.');
+      onDataSource((s) => void useSource(s));
+      void detectDevDataSource();
     },
   };
 }

@@ -11,8 +11,9 @@
 - [x] Vite + TypeScript project
 - [x] Login screen in Chrome via the bridge
 - [x] Follow the `19` redirect and list character slots (`E3` → `E4`/`E5`)
-- [ ] Character creation (`93` phase 2 + `E5`)
-- [ ] Character select → ship select → lobby (`93` phase 4/5)
+- [x] Character creation (`E5` on the data connection → `E4` approve)
+- [x] Character select → main menu (`07`/`10`) → lobby (`93` phase 4)
+- [ ] Title, login and character select screens identical to the original client
 - [x] `data/` folder picker (File System Access API) + dev-server source
 
 ## Phase 3: map viewer
@@ -27,9 +28,10 @@
 - [ ] Enemy/object markers from `map_*e.dat` / `o.dat`
 
 ## Phase 4: online
-- [ ] Lobby: player list, chat
-- [ ] Own movement sent via `6x40/6x42/6x3E` (layouts in the decomp's `headers/network.h`)
-- [ ] Other players rendered from incoming `6x`
+- [x] Lobby: 3D lobby map, player list, chat
+- [x] Own movement sent via `6x42` / `6x3E`, ground-following by raycast on the render mesh
+- [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
+- [ ] Real lobby spawn points and collision (`*c.rel`)
 - [ ] Character models (`pl?smp.rel`, `pl?tex.afs`) and animations
 
 ## Phase 5: game

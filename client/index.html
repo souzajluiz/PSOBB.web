@@ -33,25 +33,54 @@
       </div>
 
       <div id="tab-online" class="tab-page">
-      <section id="login-panel" class="panel">
-        <h2>Login</h2>
-        <form id="login-form">
-          <label>Game ID <input name="username" autocomplete="username" required value="webtest" /></label>
-          <label>Password <input name="password" type="password" autocomplete="current-password" required value="webtest" /></label>
-          <button type="submit">Connect</button>
-        </form>
-        <p id="login-status" class="status" role="status"></p>
-      </section>
+        <section id="login-panel" class="panel">
+          <h2>Login</h2>
+          <form id="login-form">
+            <label>Game ID <input name="username" autocomplete="username" required value="webtest" /></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required value="webtest" /></label>
+            <button type="submit">Connect</button>
+          </form>
+          <p id="login-status" class="status" role="status"></p>
+        </section>
 
-      <section id="chars-panel" class="panel" hidden>
-        <h2>Characters <small id="guild-card"></small></h2>
-        <ol id="char-slots" class="slots"></ol>
-      </section>
+        <section id="chars-panel" class="panel" hidden>
+          <h2>Characters <small id="guild-card"></small></h2>
+          <ol id="char-slots" class="slots"></ol>
+          <form id="create-form" class="create-form" hidden>
+            <h3>New character in slot <span id="create-slot"></span></h3>
+            <label>Name <input name="name" required maxlength="12" pattern="[ -~]{1,12}" /></label>
+            <label>Class <select name="charClass" id="create-class"></select></label>
+            <label>Section ID <output id="create-section"></output></label>
+            <button type="submit">Create</button>
+            <button type="button" id="create-cancel" class="secondary">Cancel</button>
+          </form>
+        </section>
 
-      <section class="panel log-panel">
-        <h2>Protocol log</h2>
-        <pre id="log" aria-live="polite"></pre>
-      </section>
+        <section id="lobby-panel" class="panel" hidden>
+          <h2>Lobby <small id="lobby-title"></small></h2>
+          <div class="lobby-layout">
+            <div>
+              <canvas id="lobby-canvas" class="viewport"></canvas>
+              <p class="hint">Click the view, then WASD / arrows to run. Drag to turn the camera, scroll to zoom.</p>
+            </div>
+            <aside class="lobby-side">
+              <h3>Players</h3>
+              <ul id="lobby-players" class="player-list"></ul>
+              <h3>Chat</h3>
+              <ol id="chat-log" class="chat-log" aria-live="polite"></ol>
+              <form id="chat-form" class="chat-form">
+                <input name="text" maxlength="80" placeholder="Say something" autocomplete="off" aria-label="Chat message" />
+                <button type="submit">Send</button>
+              </form>
+              <button id="leave-lobby" type="button" class="secondary">Leave</button>
+            </aside>
+          </div>
+        </section>
+
+        <section class="panel log-panel">
+          <h2>Protocol log</h2>
+          <pre id="log" aria-live="polite"></pre>
+        </section>
       </div>
     </main>
     <script type="module" src="/src/main.ts"></script>

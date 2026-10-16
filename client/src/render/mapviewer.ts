@@ -30,8 +30,12 @@ export class MapViewer {
   private materials: MaterialCache | null = null;
   private textures: THREE.Texture[] = [];
   private resizeObserver: ResizeObserver;
+  private raycaster = new THREE.Raycaster();
   private keys = new Set<string>();
   private clock = new THREE.Clock();
+  // When set, replaces the free-fly camera: called every frame with the
+  // pressed keys and the frame time.
+  onFrame: ((dt: number, keys: ReadonlySet<string>) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -63,6 +67,11 @@ export class MapViewer {
   // WASD/QE moves camera and orbit target together.
   private frame(): void {
     const dt = Math.min(this.clock.getDelta(), 0.1);
+    if (this.onFrame) {
+      this.onFrame(dt, this.keys);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
     const speed = (this.keys.has('shift') ? 1200 : 300) * dt;
     const forward = new THREE.Vector3();
     this.camera.getWorldDirection(forward);
@@ -125,6 +134,18 @@ export class MapViewer {
     this.scene.add(root);
     this.mapRoot = root;
     this.frameAll();
+  }
+
+  // Height of the map surface under (x, z), searching downward from `fromY`.
+  groundHeight(x: number, z: number, fromY = 1000): number | null {
+    if (!this.mapRoot) return null;
+    this.raycaster.set(new THREE.Vector3(x, fromY, z), new THREE.Vector3(0, -1, 0));
+    const hit = this.raycaster.intersectObject(this.mapRoot, true)[0];
+    return hit ? hit.point.y : null;
+  }
+
+  setOrbitEnabled(enabled: boolean): void {
+    this.controls.enabled = enabled;
   }
 
   frameAll(): void {
