@@ -16,7 +16,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Map viewer: n.rel (fmt2) + XJ models + XVM textures (DXT1/DXT3/565/1555) | ✅ all 175 maps parse; rendered in Chrome |
 | Character creation (E5) | ✅ live in Chrome |
 | Lobby: 3D lobby map, players, chat, running (6x42/6x3E), position sync (6x1F/6x20) | ✅ live in Chrome with a bot |
-| Original-style title / login / character select screens | 🚧 |
+| Original-style screens (`classic.html`): title with the original textures, matched to captures by SSIM | 🚧 title done; select/creation next |
 | Character models, animations | ⏳ |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).

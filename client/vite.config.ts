@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, sep } from 'node:path';
 
@@ -39,6 +39,23 @@ export default defineConfig({
             res.statusCode = 404;
             res.end();
           }
+        });
+        // Development only: the classic UI posts renders here for pixel
+        // comparison with captures of the original client (../.captures, ignored).
+        server.middlewares.use('/__capture', (req, res) => {
+          const name = new URL(req.url ?? '/', 'http://dev').searchParams.get('name') ?? '';
+          if (req.method !== 'POST' || !/^[a-z0-9_-]{1,40}$/.test(name)) {
+            res.statusCode = 400;
+            return res.end();
+          }
+          const chunks: Buffer[] = [];
+          req.on('data', (c: Buffer) => chunks.push(c));
+          req.on('end', () => {
+            const dir = resolve(import.meta.dirname, '../.captures');
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(resolve(dir, `${name}.png`), Buffer.concat(chunks));
+            res.end('ok');
+          });
         });
         server.middlewares.use('/keys', (req, res, next) => {
           const name = (req.url ?? '').replace(/^\//, '');

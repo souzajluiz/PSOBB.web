@@ -1,5 +1,38 @@
 # Devlog
 
+## 2026-10-16: classic UI, title screen
+
+**Goal:** the title, login and character screens must look identical to the original client.
+
+**Reference:**
+- The psobb.io macOS build (a Wine wrapper) was pointed at the local newserv. It reads `LoginHost` / `PatchHost` from `psobb.cfg`; the original file is backed up as `psobb.cfg.psobbio-original`.
+- Reference captures were taken with `screencapture` while driving the client with keystrokes: title, patch notice, SELECT CHARACTER, character creation, the "Connecting.." warp.
+- The captures stay local (`client/public/ref/`, ignored by git).
+
+**Findings:**
+- The UI font is Tahoma: the client's `font_tahoma.reg` sets `FONT_JPN=Tahoma`.
+- Loose files in `data/` override `data.gsl` entries; `ClientFiles` resolves names the same way.
+- The BB title is `title.prs`. `title_eng.prs` is the GameCube Episode I&II title, and `TitleEP4.prs` is the Episode 4 variant.
+- `title.prs` layout:
+  - 0: "PRESS ENTER KEY" and menu labels.
+  - 1–2: logo layers.
+  - 3–10: background, 640×512 in tiles.
+  - 11: magic circle.
+  - 12: rings.
+  - 13–20: background with the strong flare.
+- The UI is laid out in a 640×480 virtual screen stretched to the window. `Stage` reproduces this with a Canvas2D transform.
+
+**Matching method:**
+- `window.classicCapture()` renders the stage at 2880×1800 and posts it to a dev-only `/__capture` endpoint.
+- `tools/compare.sh` reports SSIM/PSNR (ffmpeg) against the capture, globally or per region.
+- Parameters were chosen by grid search:
+  - The flare layer drawn opaque was best on the left background (SSIM 0.83 → 0.90).
+  - Circle: 385 px, centered at (345, 256), rotated -0.2 rad.
+  - An additive beam with rays was added.
+- Result: SSIM 0.716 → 0.732 and PSNR 18.8 → 19.4 for the whole frame. The remaining gap is mostly the beam/ray effect and the circle's glow.
+
+**Note:** Chrome throttles requestAnimationFrame to 2 fps while its window is covered by another app. That is not a client bug; bring the window to the front when measuring.
+
 ## 2026-10-16: character creation and the lobby
 
 **Method:** walked the flow live with a Node script against newserv, logging every command, then wrote `Lobby` and the session steps from what came back. Struct offsets come from newserv's `CommandFormats.hh` / `PlayerSubordinates.hh`.
