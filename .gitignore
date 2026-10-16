@@ -1,0 +1,15 @@
+node_modules/
+dist/
+vendor/
+*.log
+.DS_Store
+# Never commit PSO client data or binaries (Sega copyright)
+psobb-client/
+*.exe
+*.gsl
+*.afs
+*.xvm
+*.nj
+*.xj
+*.rel
+*.prs
