@@ -13,6 +13,26 @@
         <p>Phantasy Star Online Blue Burst in the browser</p>
       </header>
 
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="online" aria-selected="true">Online</button>
+        <button role="tab" data-tab="maps" aria-selected="false">Map viewer</button>
+      </nav>
+
+      <div id="tab-maps" class="tab-page" hidden>
+        <section class="panel">
+          <h2>Map viewer <small id="data-label"></small></h2>
+          <div class="toolbar">
+            <button id="pick-folder" type="button">Open PSOBB data folder</button>
+            <label class="grow">Map <select id="map-select" disabled></select></label>
+            <button id="frame-map" type="button" disabled>Frame</button>
+          </div>
+          <p id="map-status" class="status" role="status"></p>
+          <canvas id="map-canvas" class="viewport"></canvas>
+          <p class="hint">Drag to orbit, scroll to zoom, right-drag to pan. Click the view, then WASD to move, Q/E down/up, Shift faster.</p>
+        </section>
+      </div>
+
+      <div id="tab-online" class="tab-page">
       <section id="login-panel" class="panel">
         <h2>Login</h2>
         <form id="login-form">
@@ -32,6 +52,7 @@
         <h2>Protocol log</h2>
         <pre id="log" aria-live="polite"></pre>
       </section>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

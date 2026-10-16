@@ -21,7 +21,7 @@ body {
 }
 
 .shell {
-  max-width: 880px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 24px 16px 48px;
   display: grid;
@@ -91,3 +91,33 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   color: var(--muted);
   white-space: pre-wrap;
 }
+
+.tabs { display: flex; gap: 8px; }
+.tabs button { background: transparent; border-color: var(--edge); color: var(--muted); }
+.tabs button[aria-selected='true'] { background: linear-gradient(#2b78b5, #18507e); border-color: var(--accent); color: #fff; }
+.tab-page { display: grid; gap: 16px; }
+.tab-page[hidden] { display: none; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.toolbar .grow { flex: 1 1 260px; }
+select {
+  background: #02101e;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.viewport {
+  display: block;
+  width: 100%;
+  height: min(70vh, 720px);
+  margin-top: 12px;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  background: #0a1424;
+  outline: none;
+}
+.viewport:focus-visible { outline: 2px solid var(--accent); }
+.hint { margin: 8px 0 0; color: var(--muted); font-size: 0.8rem; }

@@ -86,3 +86,46 @@ Table of 0x30-byte entries (`name[0x20]`, `u32 page`, `u32 size`, `u64`), termin
 - `data/scene/map_<area>c.rel`: collision
 - `data/scene/map_<area>.xvm`: textures
 - `data.gsl` → `map_<area>_NNe.dat` / `o.dat`: enemy/object spawns (same format as Tethealla's `map/`)
+
+## REL container
+
+The last 0x20 bytes are the footer: `u32 relocations_offset`, `u32 num_relocations`, `u32[2]`, `u32 root_offset`, `u32[3]` (newserv `RELFileFooterT`). Pointers inside are file offsets, so they can be followed without relocating.
+
+## Map render geometry (`map_*n.rel`, "fmt2")
+
+Root (from the decomp's map loader, `headers/assets.h`):
+
+| Off | Field |
+|---|---|
+| 00 | magic `fmt2` |
+| 08 | `u16 section_count` |
+| 10 | `u32 sections` |
+| 14 | `u32 texture_list` (NJTL: `{u32 entries, u32 count}`, entry `{u32 name, u32 attr, u32 texaddr}`; same order as the `.xvm`) |
+
+Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f32 radius`, `u32 static_entries`, `u32 animated_entries`, `u32 static_count`, `u32 animated_count`, `u32 flags`.
+
+- Static entry (0x10): `u32 object`, `u32`, `u32`, `u32 flags` (usually `0x200000`; `0x10001` also seen).
+- Animated entry (0x20): `u32 object`, motion data (not decoded yet).
+- Some Episode 2 maps have entries with flags `0x10224` whose pointer targets another record type; skipped for now.
+
+## Ninja object / XJ model
+
+- `NJS_OBJECT` (0x34): `u32 eval_flags`, `u32 model`, `f32 pos[3]`, `i32 ang[3]` (BAMS), `f32 scale[3]`, `u32 child`, `u32 sibling`. Rotation order X→Y→Z (`ZYX` in three.js), or Y→X→Z with `EVAL_ZXY_ANG` (0x20).
+- XJ model (0x2C): `u32 flags`, `u32 vertex_info`, `u32 vertex_info_count`, `u32 opaque_strips`, `u32 opaque_count`, `u32 alpha_strips`, `u32 alpha_count`, `f32 center[3]`, `f32 radius`.
+- Vertex info (0x10): `u32 type`, `u32 vertices`, `u32 stride`, `u32 count`. Layouts seen in maps:
+
+  | type | stride | layout |
+  |---|---|---|
+  | 4 | 16 | position, D3DCOLOR |
+  | 5 (also 0x10005) | 24 | position, D3DCOLOR, uv |
+  | 7 | 36 | position, normal, D3DCOLOR, uv |
+
+- Strip list entry (0x14): `u32 materials`, `u32 material_count`, `u32 indices`, `u32 index_count`, `u32`. Indices are u16 triangle strips (the client draws them with `D3DPT_TRIANGLESTRIP`).
+- Material (0x10): `u32 type`, `u32 arg1`, `u32 arg2`, `u32 arg3`. These are sticky render-state changes matching the client's `g_StandardRenderStateSetters`: 2 blend (`src`, `dst` Ninja blend factors), 3 texture id, 4 texture addressing, 5 material color, 6 lighting.
+
+## XVM textures
+
+- `XVMH`: `u32 header_size`, `u32 count`, …; chunks start at `header_size + 8`.
+- `XVRT` chunk: `u32 size` (bytes after this field), `+0x08 u32 flags` (bit 0 mipmaps, bit 1 alpha), `+0x0C u32 format`, `+0x10 u32 global index`, `+0x14 u16 width`, `+0x16 u16 height`, `+0x18 u32 data size`, pixels at `+0x40`.
+- Formats found in Ephinea's `scene/*.xvm` (7821 textures): 6 = DXT1 (most), 7 = DXT3, 2 = R5G6B5, 3 = 16-bit with alpha. Uncompressed formats are Xbox-swizzled (Morton order).
+- Map textures: `map_city00_00n.rel` → `map_city00.xvm`.

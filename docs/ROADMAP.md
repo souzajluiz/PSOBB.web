@@ -13,13 +13,17 @@
 - [x] Follow the `19` redirect and list character slots (`E3` → `E4`/`E5`)
 - [ ] Character creation (`93` phase 2 + `E5`)
 - [ ] Character select → ship select → lobby (`93` phase 4/5)
-- [ ] `data/` folder picker (File System Access API) and file index
+- [x] `data/` folder picker (File System Access API) + dev-server source
 
 ## Phase 3: map viewer
-- [ ] REL parser (relocation table + root pointer)
-- [ ] XJ parser (BB models: vertex/index buffers)
-- [ ] XVM/XVR decoding (DXT/ARGB textures) to WebGL textures
-- [ ] Render `map_city00_00n.rel` (Pioneer 2) with a free camera
+- [x] REL parser (footer + root pointer)
+- [x] XJ parser (BB models: vertex/index buffers, strips, render-state materials)
+- [x] XVM/XVR decoding (DXT1, DXT3, R5G6B5, A1R5G5B5/A4R4G4B4 swizzled) to WebGL textures
+- [x] Render `map_city00_00n.rel` (Pioneer 2) and Forest with orbit + WASD camera
+- [ ] Identify the Episode 2 entries with flags `0x10224` (403 skipped across jungle/seabed)
+- [ ] Texture addressing modes (material type 4), material colors (type 5)
+- [ ] Animated map entries (motions) and texture animation (`.tam`)
+- [ ] Verify handedness (possible X mirroring) against the real client
 - [ ] Enemy/object markers from `map_*e.dat` / `o.dat`
 
 ## Phase 4: online

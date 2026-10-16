@@ -1,5 +1,6 @@
 import { BBSession, CLASS_NAMES, SECTION_IDS, type CharacterPreview } from './net/bbsession.ts';
 import { connectBridge } from './net/wstransport.ts';
+import { initMapsTab } from './ui/mapsTab.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const logEl = $<HTMLPreElement>('log');
@@ -72,5 +73,20 @@ form.addEventListener('submit', async (e) => {
     button.disabled = false;
   }
 });
+
+const mapsTab = initMapsTab(log);
+function showTab(name: string): void {
+  for (const b of document.querySelectorAll<HTMLButtonElement>('[role=tab]')) {
+    b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  }
+  $('tab-online').hidden = name !== 'online';
+  $('tab-maps').hidden = name !== 'maps';
+  if (name === 'maps') mapsTab.activate();
+  history.replaceState(null, '', `#${name}`);
+}
+for (const b of document.querySelectorAll<HTMLButtonElement>('[role=tab]')) {
+  b.addEventListener('click', () => showTab(b.dataset.tab!));
+}
+showTab(location.hash === '#maps' ? 'maps' : 'online');
 
 log('ready. bridge: ws://127.0.0.1:8080 (override with ?bridge=ws://host:port)');

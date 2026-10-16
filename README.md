@@ -13,8 +13,8 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | WebSocket ↔ TCP bridge | ✅ |
 | BB login (03 → 93 → E6 → 19 redirect → 93 → E6) | ✅ live in Chrome against newserv |
 | Character slot previews (E3 → E4/E5) | ✅ live in Chrome |
+| Map viewer: n.rel (fmt2) + XJ models + XVM textures (DXT1/DXT3/565/1555) | ✅ all 175 maps parse; rendered in Chrome |
 | Character creation | ⏳ |
-| Map viewer (`.rel` / `.xvm`) | ⏳ |
 | Lobby, movement, other players | ⏳ |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
@@ -48,10 +48,11 @@ Requirements: macOS or Linux, Node ≥ 23.6 (tested with 24.18), CMake, Git, Chr
 
 # Tests
 node tests/oracle.test.ts        # TS ports vs newserv (needs client files)
+node tests/formats.test.ts       # parses every map n.rel and .xvm in the client
 node tests/login.live.ts         # live login through the bridge
 ```
 
-The format tests look for client data in `~/Downloads/psobb-client/data` (override with `PSOBB_DATA=...`).
+The format tests and the dev server look for client data in `~/Downloads/psobb-client/data` (override with `PSOBB_DATA=...`). In the **Map viewer** tab you can also pick your PSOBB folder with *Open PSOBB data folder* (Chrome/Edge); files are read locally and never uploaded.
 
 ## References
 
@@ -67,7 +68,9 @@ The project builds on three sources, described in [docs/REFERENCES.md](docs/REFE
 bridge/              WebSocket <-> TCP relay
 client/              Vite + TypeScript web client
 client/src/net/      BB cipher, connection framing, login session
-client/src/formats/  PRS, GSL, AFS (REL/XJ/XVM next)
+client/src/formats/  PRS, GSL, AFS, REL, XJ, map n.rel, XVM
+client/src/render/   three.js scene building (Ninja objects, map viewer)
+client/src/data/     data/ folder access (File System Access API, dev server)
 tests/               oracle tests against newserv, live tests
 scripts/             newserv setup
 docs/                documentation
