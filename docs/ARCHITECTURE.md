@@ -1,54 +1,58 @@
-# Arquitetura
+# Architecture
 
-## Visão geral
+## Overview
 
 ```
 ┌──────────────────────── Chrome ────────────────────────┐
 │  client/ (TypeScript, Vite, three.js)                  │
-│   ├─ formats/  PRS, GSL, AFS, REL/XJ, XVM  ◄── pasta data/ do usuário
-│   ├─ net/      BBCrypt + BBConnection                   │
-│   └─ render/   cena three.js (mapas, modelos)           │
+│   ├─ formats/  PRS, GSL, AFS, REL/XJ, XVM  ◄── user's data/ folder
+│   ├─ net/      BBCrypt, BBConnection, BBSession         │
+│   └─ render/   three.js scene (maps, models)            │
 └──────────────┬─────────────────────────────────────────┘
-               │ WebSocket (binário, cifrado ponta a ponta)
+               │ WebSocket (binary, end-to-end encrypted)
 ┌──────────────▼──────────────┐
-│ bridge/ (Node + ws)         │  relay de bytes puro, allowlist de portas
+│ bridge/ (Node + ws)         │  pure byte relay, port allowlist
 └──────────────┬──────────────┘
                │ TCP
 ┌──────────────▼──────────────┐
-│ newserv (C++)               │  login, lobby, jogos, quests, drops
+│ newserv (C++)               │  login, lobbies, games, quests, drops
 └─────────────────────────────┘
 ```
 
-## Decisões
+## Decisions
 
-### Reescrever o cliente na web, não emular o `.exe`
+### Rewrite the client for the web instead of emulating the `.exe`
 
-O `PsoBB.exe` é Win32 com Direct3D 8, DirectInput, DirectSound e WinSock. Emular x86 e Direct3D no navegador seria lento e frágil. Por isso o cliente é **reimplementado** em TypeScript, e as duas decompilações servem de especificação (veja [REFERENCES.md](REFERENCES.md)).
+`PsoBB.exe` is Win32 + Direct3D 8 + DirectInput + DirectSound + WinSock. Emulating x86 and D3D in a browser would be slow and fragile. The client is therefore **reimplemented** in TypeScript, and the two decompilations serve as the specification (see [REFERENCES.md](REFERENCES.md)).
 
-### three.js em vez de Godot
+### three.js instead of Godot
 
-A decompilação matching mira um porte em Godot. Para um alvo **web-first**, three.js tem três vantagens:
-- Não precisa dos export templates do Godot, que ocupam mais de 1 GB.
-- Não exige COOP/COEP nem SharedArrayBuffer.
-- Os parsers dos formatos do PSO (PRS, NJ/XJ, XVM) rodam em JS/TS direto no navegador, que é onde os dados do usuário já estão.
+The matching decompilation aims at a Godot port. For a **web-first** target, three.js wins on three counts:
+- No Godot export templates (more than 1 GB).
+- No COOP/COEP or SharedArrayBuffer requirements.
+- The PSO format parsers (PRS, NJ/XJ, XVM) run directly in the browser, where the user's data already is.
 
-A lógica de jogo extraída da decompilação é portável para qualquer engine, então dá pra rever essa escolha depois.
+Game logic recovered from the decompilation is engine-agnostic, so this choice can be revisited.
 
-### Ponte burra (relay) em vez de gateway com protocolo
+### Dumb relay instead of a protocol gateway
 
-O navegador não abre TCP. A ponte só copia bytes entre o WebSocket e o TCP. A criptografia e todo o protocolo ficam no navegador. Vantagens:
-- A ponte é trivial e genérica, com cerca de 60 linhas.
-- O cliente web fala exatamente o mesmo protocolo do cliente original, então o newserv não precisa de nenhuma mudança.
-- O redirecionamento BB (comando `19`) vira apenas "reconectar pela ponte em outra porta".
+Browsers cannot open TCP sockets. The bridge only copies bytes between WebSocket and TCP. Encryption and the whole protocol live in the browser. This keeps things simple:
+- The bridge is about 60 lines and fully generic.
+- The web client speaks exactly the original client's protocol, so newserv needs no changes.
+- A BB redirect (command `19`) just means "reconnect through the bridge to another port".
 
-**Segurança:** a ponte só aceita portas da allowlist (`ALLOWED_PORTS`) e escuta só em `127.0.0.1`. Sem a allowlist ela seria um proxy TCP aberto.
+**Security:** the bridge only accepts ports in `ALLOWED_PORTS` and listens on `127.0.0.1` only. Without the allowlist it would be an open TCP proxy.
 
-### Assets do usuário, não do repositório
+### User-supplied assets
 
-O navegador lê a pasta `data/` da instalação do PSOBB do próprio usuário. Nada da Sega entra no repositório nem no deploy.
+The browser reads the `data/` folder of the user's own PSOBB installation. Nothing from SEGA enters the repository or a deployment.
 
-## Testes
+### BB key file
 
-- `tests/oracle.test.ts`: compara cada porte TS com o binário do newserv usando dados reais (cifra BB com chaves `default` e `default4`, PRS de 20 arquivos do `data.gsl`, e as 1524 entradas do GSL).
-- `tests/login.live.ts`: login BB real pela ponte contra o newserv rodando.
-- Chrome: toda funcionalidade de UI é verificada no Chrome (claude-in-chrome) antes do commit.
+The client needs a `.nsk` key file. During development Vite serves it from the local newserv checkout (`vendor/newserv/system/blueburst/keys/`) at `/keys/<name>.nsk`. The key is never committed to this repository.
+
+## Testing
+
+- `tests/oracle.test.ts` compares every TS port with the newserv binary using real data. It covers the BB cipher with the `default` and `default4` keys, PRS on 20 files from `data.gsl`, and all 1524 GSL entries.
+- `tests/login.live.ts` runs a real BB login through the bridge against a running newserv.
+- **Chrome:** every UI feature is exercised in Chrome (via claude-in-chrome) before it is committed.

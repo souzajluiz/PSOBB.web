@@ -1,9 +1,10 @@
-# Notas legais
+# Legal notes
 
-- **Phantasy Star Online** e todos os assets do jogo (modelos, texturas, sons, textos e executáveis) pertencem à SEGA. Este repositório **não contém nem distribui** nenhum desses arquivos. O `.gitignore` bloqueia as extensões do cliente (`.gsl`, `.afs`, `.xvm`, `.nj`, `.xj`, `.rel`, `.prs`, `.exe`).
-- O cliente web lê os arquivos da **instalação do próprio usuário**, localmente no navegador.
-- O código portado do **newserv** segue a licença MIT, e cada arquivo indica a origem.
-- As decompilações são usadas como **referência de comportamento** para interoperabilidade. Nenhum pseudo-código ou binário delas é copiado para cá.
-- **Não exponha o newserv nem a ponte na internet sem revisar a segurança:**
-  - A API HTTP do newserv tem `POST /y/shell-exec`.
-  - A ponte precisa da allowlist de portas.
+- **Phantasy Star Online** and all game assets (models, textures, sounds, text, executables) are owned by SEGA. This repository **does not contain or distribute** any of them. `.gitignore` blocks the client file extensions (`.gsl`, `.afs`, `.xvm`, `.nj`, `.xj`, `.rel`, `.prs`, `.exe`).
+- The web client reads files from the **user's own installation**, locally in the browser.
+- Code ported from **newserv** is under the MIT license, and each file states its origin.
+- The decompilations are used as **behavioral references** for interoperability. No pseudo-code or binaries from them are copied here.
+- **Do not expose newserv or the bridge to the internet without a security review:**
+  - newserv's HTTP API has `POST /y/shell-exec`.
+  - The bridge relies on its port allowlist.
+  - The local setup binds newserv's game ports on all interfaces, so use a firewall on untrusted networks.

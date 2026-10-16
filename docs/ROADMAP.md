@@ -1,33 +1,35 @@
 # Roadmap
 
-## Fase 1: fundação ✅
-- [x] Compilar o newserv no macOS (Apple Silicon)
-- [x] Cifra BB em TS, com teste contra o newserv
-- [x] PRS, GSL e AFS em TS, com teste contra o newserv
-- [x] Ponte WebSocket ↔ TCP com allowlist
-- [x] Login BB real pela ponte (`03` → `93` → `E6`)
+## Phase 1: foundation ✅
+- [x] Build newserv on macOS (Apple Silicon)
+- [x] BB cipher in TS, tested against newserv
+- [x] PRS, GSL, AFS in TS, tested against newserv
+- [x] WebSocket ↔ TCP bridge with port allowlist
+- [x] Live BB login through the bridge
 
-## Fase 2: cliente no navegador 🚧
-- [ ] Projeto Vite + TypeScript + three.js
-- [ ] Seletor da pasta `data/` (File System Access API) e índice dos arquivos
-- [ ] Tela de login no Chrome, conectando pela ponte
-- [ ] Seguir o redirecionamento `19`, a seleção de personagem (`E3`/`E5`) e a entrada no lobby
+## Phase 2: browser client 🚧
+- [x] Vite + TypeScript project
+- [x] Login screen in Chrome via the bridge
+- [x] Follow the `19` redirect and list character slots (`E3` → `E4`/`E5`)
+- [ ] Character creation (`93` phase 2 + `E5`)
+- [ ] Character select → ship select → lobby (`93` phase 4/5)
+- [ ] `data/` folder picker (File System Access API) and file index
 
-## Fase 3: viewer de mapas
-- [ ] Parser de REL (tabela de relocação + ponteiro raiz)
-- [ ] Parser de XJ (modelos do BB: vertex/index buffers)
-- [ ] Decodificação de XVM/XVR (texturas DXT/ARGB) para textura WebGL
-- [ ] Render do `map_city00_00n.rel` (Pioneer 2) com câmera livre
-- [ ] Marcadores de inimigos e objetos a partir de `map_*e.dat` / `o.dat`
+## Phase 3: map viewer
+- [ ] REL parser (relocation table + root pointer)
+- [ ] XJ parser (BB models: vertex/index buffers)
+- [ ] XVM/XVR decoding (DXT/ARGB textures) to WebGL textures
+- [ ] Render `map_city00_00n.rel` (Pioneer 2) with a free camera
+- [ ] Enemy/object markers from `map_*e.dat` / `o.dat`
 
-## Fase 4: online
-- [ ] Lobby: lista de jogadores, chat
-- [ ] Movimento próprio enviado via `6x40/6x42/6x3E` (layouts em `headers/network.h` da decomp)
-- [ ] Outros jogadores renderizados a partir dos `6x` recebidos
-- [ ] Modelos de personagem (`pl?smp.rel`, `pl?tex.afs`) e animações
+## Phase 4: online
+- [ ] Lobby: player list, chat
+- [ ] Own movement sent via `6x40/6x42/6x3E` (layouts in the decomp's `headers/network.h`)
+- [ ] Other players rendered from incoming `6x`
+- [ ] Character models (`pl?smp.rel`, `pl?tex.afs`) and animations
 
-## Fase 5: jogo
-- [ ] Colisão (`*c.rel`)
-- [ ] Inimigos, combate (fórmulas em `notes/_wiki_combat_formulas.md`)
-- [ ] Itens e inventário
-- [ ] Quests (opcodes já documentados nas notas e no assembler do newserv)
+## Phase 5: game
+- [ ] Collision (`*c.rel`)
+- [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
+- [ ] Items and inventory
+- [ ] Quests (opcodes documented in the notes and in newserv's assembler)

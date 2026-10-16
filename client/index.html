@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PSOBB.web</title>
+    <link rel="stylesheet" href="/src/ui/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="brand">
+        <h1>PSOBB<span>.web</span></h1>
+        <p>Phantasy Star Online Blue Burst in the browser</p>
+      </header>
+
+      <section id="login-panel" class="panel">
+        <h2>Login</h2>
+        <form id="login-form">
+          <label>Game ID <input name="username" autocomplete="username" required value="webtest" /></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required value="webtest" /></label>
+          <button type="submit">Connect</button>
+        </form>
+        <p id="login-status" class="status" role="status"></p>
+      </section>
+
+      <section id="chars-panel" class="panel" hidden>
+        <h2>Characters <small id="guild-card"></small></h2>
+        <ol id="char-slots" class="slots"></ol>
+      </section>
+
+      <section class="panel log-panel">
+        <h2>Protocol log</h2>
+        <pre id="log" aria-live="polite"></pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

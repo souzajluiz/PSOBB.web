@@ -1,0 +1,19 @@
+{
+  "name": "psobb-web-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/three": "0.180.0",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  }
+}

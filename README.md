@@ -1,69 +1,74 @@
 # PSOBB.web
 
-Cliente de **Phantasy Star Online: Blue Burst** rodando no navegador, conectando num servidor [newserv](https://github.com/fuzziqersoftware/newserv).
+A **Phantasy Star Online: Blue Burst** client that runs in the browser and connects to a [newserv](https://github.com/fuzziqersoftware/newserv) server.
 
-> Projeto pessoal/educacional de engenharia reversa e interoperabilidade. Nenhum arquivo do jogo (Sega) é distribuído aqui: cada usuário aponta o navegador para a própria instalação do PSOBB. Veja [docs/LEGAL.md](docs/LEGAL.md).
+> Personal/educational reverse-engineering and interoperability project. No game files (SEGA) are distributed here: each user points the browser at their own PSOBB installation. See [docs/LEGAL.md](docs/LEGAL.md).
 
 ## Status
 
-| Etapa | Estado |
+| Step | State |
 |---|---|
-| Cifra BB (Blowfish variante) em TypeScript | ✅ testada byte a byte contra newserv |
-| PRS, GSL, AFS em TypeScript | ✅ testados contra newserv com arquivos reais do cliente |
-| Ponte WebSocket ↔ TCP | ✅ |
-| Login BB (03 → 93 → E6) via ponte | ✅ testado ao vivo contra newserv |
-| Cliente web (Vite + three.js) | 🚧 em andamento |
-| Viewer de mapas (`.rel` / `.xvm`) | ⏳ |
-| Lobby, movimentação, outros jogadores | ⏳ |
+| BB cipher (Blowfish variant) in TypeScript | ✅ byte-identical to newserv |
+| PRS, GSL, AFS in TypeScript | ✅ verified against newserv with real client files |
+| WebSocket ↔ TCP bridge | ✅ |
+| BB login (03 → 93 → E6 → 19 redirect → 93 → E6) | ✅ live in Chrome against newserv |
+| Character slot previews (E3 → E4/E5) | ✅ live in Chrome |
+| Character creation | ⏳ |
+| Map viewer (`.rel` / `.xvm`) | ⏳ |
+| Lobby, movement, other players | ⏳ |
 
-Detalhes e próximos passos: [docs/ROADMAP.md](docs/ROADMAP.md). Diário de desenvolvimento: [docs/DEVLOG.md](docs/DEVLOG.md).
+Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
-## Arquitetura
+## Architecture
 
 ```
  Chrome ──WebSocket──> bridge (Node) ──TCP──> newserv
-   │                                            (servidor PSO, C++)
-   └─ lê a pasta data/ do PSOBB do usuário (File System Access API)
+   │                                            (PSO server, C++)
+   └─ reads the user's PSOBB data/ folder (File System Access API)
 ```
 
-Explicação completa em [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Protocolo e formatos em [docs/PROTOCOL.md](docs/PROTOCOL.md).
+Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Protocol and file formats: [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-## Rodando localmente
+## Running locally
 
-Requisitos: macOS ou Linux, Node ≥ 23.6 (testado com 24.18), CMake, Git, Chrome.
+Requirements: macOS or Linux, Node ≥ 23.6 (tested with 24.18), CMake, Git, Chrome.
 
 ```bash
-# 1. Compilar o newserv (clona em vendor/, não versionado)
+# 1. Build newserv (cloned into vendor/, not committed)
 ./scripts/setup-newserv.sh
 
-# 2. Subir o servidor
+# 2. Start the server
 (cd vendor/newserv && ./build/newserv)
 
-# 3. Subir a ponte WebSocket
+# 3. Start the WebSocket bridge
 (cd bridge && npm install && npm start)
 
-# 4. Testes
-node tests/oracle.test.ts        # TS vs newserv (precisa dos arquivos do cliente)
-node tests/login.live.ts         # login real via ponte
+# 4. Start the web client, then open http://127.0.0.1:5173 in Chrome
+(cd client && npm install && npm run dev)
+
+# Tests
+node tests/oracle.test.ts        # TS ports vs newserv (needs client files)
+node tests/login.live.ts         # live login through the bridge
 ```
 
-Os testes de formato procuram o cliente em `~/Downloads/psobb-client/data` (mude com `PSOBB_DATA=...`).
+The format tests look for client data in `~/Downloads/psobb-client/data` (override with `PSOBB_DATA=...`).
 
-## Referências
+## References
 
-O projeto se apoia em três fontes, descritas em [docs/REFERENCES.md](docs/REFERENCES.md):
+The project builds on three sources, described in [docs/REFERENCES.md](docs/REFERENCES.md):
 
-1. **newserv**: servidor, formatos e protocolo (MIT).
-2. **original-psobb-client-source**: dump Ghidra do `psobb.exe` com notas de protocolo, opcodes e fórmulas.
-3. **Decompilação matching do PsoBB.exe**: lógica de jogo comprovada byte a byte (repositório privado, usado só como referência).
+1. **newserv**: server, file formats and protocol (MIT).
+2. **original-psobb-client-source**: Ghidra dump of `psobb.exe` with protocol, opcode and formula notes.
+3. **A matching decompilation of PsoBB.exe**: game logic proven byte-for-byte (private repository, used as reference only).
 
-## Estrutura
+## Layout
 
 ```
-bridge/          ponte WebSocket ↔ TCP
-client/src/net/  cifra BB e conexão/protocolo
-client/src/formats/  PRS, GSL, AFS (e em breve REL/XJ/XVM)
-tests/           testes contra newserv (oráculo) e testes ao vivo
-scripts/         setup do newserv
-docs/            documentação
+bridge/              WebSocket <-> TCP relay
+client/              Vite + TypeScript web client
+client/src/net/      BB cipher, connection framing, login session
+client/src/formats/  PRS, GSL, AFS (REL/XJ/XVM next)
+tests/               oracle tests against newserv, live tests
+scripts/             newserv setup
+docs/                documentation
 ```

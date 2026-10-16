@@ -42,6 +42,9 @@ export class BBConnection {
   private outCrypt: BBCrypt | null = null;
   private buffer = new Uint8Array(0);
   private waiters: Array<{ match: (c: Command) => boolean; resolve: (c: Command) => void }> = [];
+  // Commands no waiter has claimed yet. Several commands often arrive in one
+  // chunk (e.g. E6 + 19), so a waiter registered after an await must still see them.
+  private backlog: Command[] = [];
 
   onCommand: (cmd: Command) => void = () => {};
   onClose: () => void = () => {};
@@ -53,9 +56,12 @@ export class BBConnection {
     transport.onClose = () => this.onClose();
   }
 
-  // Resolves with the next command whose number is in `commands`.
+  // Resolves with the next unclaimed command whose number is in `commands`.
   waitFor(...commands: number[]): Promise<Command> {
-    return new Promise((resolve) => this.waiters.push({ match: (c) => commands.includes(c.command), resolve }));
+    const match = (c: Command) => commands.includes(c.command);
+    const i = this.backlog.findIndex(match);
+    if (i >= 0) return Promise.resolve(this.backlog.splice(i, 1)[0]);
+    return new Promise((resolve) => this.waiters.push({ match, resolve }));
   }
 
   send(command: number, flag: number, payload: Uint8Array = new Uint8Array(0)): void {
@@ -132,9 +138,14 @@ export class BBConnection {
   }
 
   private dispatch(cmd: Command): void {
-    const i = this.waiters.findIndex((w) => w.match(cmd));
-    if (i >= 0) this.waiters.splice(i, 1)[0].resolve(cmd);
     this.onCommand(cmd);
+    const i = this.waiters.findIndex((w) => w.match(cmd));
+    if (i >= 0) {
+      this.waiters.splice(i, 1)[0].resolve(cmd);
+    } else {
+      this.backlog.push(cmd);
+      if (this.backlog.length > 256) this.backlog.shift();
+    }
   }
 }
 
