@@ -458,3 +458,66 @@ The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`,
 Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
 
 `client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
+
+## Sound effects
+
+### Bank files (`data/sound/*.pac`)
+
+A bank is a run of waves with no file header. Each wave starts on a 32-byte boundary:
+
+| Offset | Size | Field |
+|---|---|---|
+| `+0x00` | 16 | PCMWAVEFORMAT: format tag 1, channels, rate, byte rate, block align, bits. All waves are 16-bit mono, 22050 Hz, except `duel02.pac` #5 (44100 Hz). |
+| `+0x10` | 12 | left over from the source RIFF (`data` + size, or another chunk such as `cue `); not read |
+| `+0x1c` | 4 | PCM byte count |
+| `+0x20` | n | PCM, then padding to the next 32-byte boundary |
+
+The exe does not walk the file. It takes each wave's offset from records in the exe (below). For all 26 banks, walking the 32-byte aligned waves gives the same offsets in the same order. `ephinea.pac` (7 waves) has the same layout but is not in the exe's bank table. `sonicteamfx.bin` is not a bank: no loader or string in the exe names it, and it is not PCM.
+
+### Tables in PsoBB.exe
+
+| Address | Content |
+|---|---|
+| `0x00a21560` | `char*[26]` bank names: ancient, boss01–04, cave, city, common, duel01–02, forest, machine, beach, boss05–08, jungle, ruin, ship, tower, water, wilds, crater, desert, boss09 |
+| `0x00a214e0` | `u32[26]` entries per bank |
+| `0x00a21460` | `i32*[26]` wave slot of each entry |
+| `0x00a215e0` | `rec*[26]`, 16-byte records: `+0` u8 group, `+1` u8 index, `+2` u8 flags (bit 0 = loop), `+4` u32 file offset, `+8` u32 loop start, `+0xc` u32 loop end (samples) |
+| `0x00989e60` | `i32[]` area → bank |
+| `0x00a1f840` | `i32[0x700]` SE id → wave slot (identity except for 127 ids) |
+| `0x00a13b20` | `u32[0x700]` slot flags: bits 8–14 attenuation 0–127, bit 15 3D (when the type nibble is 0), bits 24–27 buffer type (0 or 10 = 3D), bit 28 voices of the slot may overlap, bit 31 random pitch |
+
+`tools/gen-se-tables.py` turns these into `client/src/audio/se_tables.ts`.
+
+### Loading
+
+The slot table `0x00acb3a8` has 0x700 slots of 0x20 bytes: `+0` header pointer, `+4` PCM pointer, `+8` PCM size, `+0xc` record flags, `+0x10` loop start, `+0x14` loop end − start, `+0x1c` header pointer (non-zero = loaded, `FUN_00829110`).
+
+- `FUN_00829b7c` (start-up) → `FUN_00829a04` loads `common.pac` and fills its slots. It stays resident.
+- `FUN_00828d40(area)` (through `FUN_00815584`) loads bank `0x00989e60[area]`. If the area bank changes, `FUN_00828c38` frees the old one, clears the slot table, and refills common's slots. The new bank is then written on top, so for a slot in both banks, the area bank wins.
+- Start-up (`FUN_00824944`) and the character screens (`FUN_004df9ec`) call `FUN_00815584(0)`, so `city.pac` is loaded on the title and character screens.
+- On a bank change, `FUN_00829af8` stops the playing voices, except UI slots (0x56f–0x58f) and a few others.
+
+### Playing
+
+`FUN_00814298(id, pos, volume, flags)` plays a one-shot. `FUN_008144b0(id, handle, pos, volume, flags)` plays a voice that can be updated and looped.
+
+1. `id` → slot via `0x00a1f840` (`FUN_0081443c`). In areas 0x15/0x16, ids 0x559–0x55c become 0x4b1–0x4b4. Ids ≥ 0x700 use slot 0.
+2. With a 3D position: the distance to the listener (`0x00acb39c`) is measured. At 2 or less, the sound plays as 2D. At 300 or more, it is dropped, except in areas 0xe, 0x1f and 0x2c. 3D buffers get min distance 80 and max distance 500.
+3. Volume: `a = clamp(-attenuation [+ volume if flags & 2], -127, 0)`, `f = (1 + a/127) * (1 + master/127) - 1`, `SetVolume(round(f³ * 6400))` (hundredths of a dB). `master` is `DAT_00ab59f8`, the SE volume option.
+4. `FUN_00828e4c`: there are 64 voices (`0x00acb388`, 0x48 bytes each). If the slot's flags lack bit 28, playing voices of the same slot are stopped first (`FUN_00829c38`). The first free voice is used; if none is free, nothing plays. The DirectSound buffer is created with `CTRLVOLUME | CTRLPOSITIONNOTIFY` (plus `CTRL3D` for 3D slots). There is no pan or frequency control: a voice's pitch value (`+0x34`: −500, or random when bit 31 is set) is never applied to the PC buffer.
+5. Looping (`FUN_008292dc`, record flag bit 0): a notify event is armed. When it fires, `FUN_00828978` stops the buffer, seeks to `block align × loop start`, and plays again.
+
+### UI sound ids
+
+| Id | Bank | Used for | Callers |
+|---|---|---|---|
+| `0x56f` | common | cursor move | title `FUN_006fed2c`, windows `0x734aab`…, slot list `0x412653`, char creation `FUN_004eb5f0`, `FUN_004ef208`, editors |
+| `0x570` | common | confirm | windows `0x7351c5`, `0x738883`, slot list `0x412742`, char creation |
+| `0x571` | common | AUTO roll done | `FUN_004f2988` |
+| `0x573` | common | back (char creation) | `FUN_004ef208`, `FUN_004f0f44`, `FUN_004f1cb8`, `FUN_004f34a8` |
+| `0x575` | common | not allowed | `FUN_004f0b80` (invalid name), `0x7351ac` |
+| `0x57c` | common | name entry closed with an invalid name | `FUN_004f34a8` |
+| `0x585` | common | cancel | slot list `0x412e4e`, windows `0x7388d0`, `FUN_00413ac0` |
+| `0x420` | city | title menu confirm | `FUN_006fed2c`, `FUN_006fede0` |
+
+`client/src/audio/se.ts` implements this: banks through the `DataSource`, PCM copied straight into `AudioBuffer`s, volume as gain `10^(ds/2000)`, the 64-voice limit and the same-slot rule. The UI calls it through the module-level `se(id)`, which `classic/main.ts` installs.
