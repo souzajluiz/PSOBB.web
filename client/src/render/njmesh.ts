@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import type { NjObject, XjModel, XjMaterial } from '../formats/xj.ts';
-import { EVAL_HIDE, EVAL_ZXY_ANG } from '../formats/xj.ts';
+import { EVAL_HIDE, EVAL_ZXY_ANG, XJ_ADDRESS_CLAMP, XJ_ADDRESS_MIRROR } from '../formats/xj.ts';
 
 export type TextureLookup = (id: number) => THREE.Texture | null;
 
@@ -32,21 +32,61 @@ export function stripToTriangles(strip: Uint16Array): number[] {
   return out;
 }
 
+// XJ texture address mode (material type 4) -> three.js wrap mode.
+export function wrapMode(address: number): THREE.Wrapping {
+  if (address === XJ_ADDRESS_CLAMP) return THREE.ClampToEdgeWrapping;
+  if (address === XJ_ADDRESS_MIRROR) return THREE.MirroredRepeatWrapping;
+  return THREE.RepeatWrapping; // 2, and 3 (the client's table maps it to D3DTADDRESS_WRAP too)
+}
+
+// D3DCOLOR (0xAARRGGBB) -> linear three.js color + alpha.
+function d3dColor(argb: number): { color: THREE.Color; alpha: number } {
+  const color = new THREE.Color().setRGB(((argb >>> 16) & 0xff) / 255, ((argb >>> 8) & 0xff) / 255, (argb & 0xff) / 255, THREE.SRGBColorSpace);
+  return { color, alpha: (argb >>> 24) / 255 };
+}
+
 export class MaterialCache {
   private cache = new Map<string, THREE.Material>();
+  // Wrap modes live on THREE.Texture, so each (texture, wrapS, wrapT) needs its own
+  // Texture object. Clones share the image source.
+  private wrapped = new Map<string, THREE.Texture>();
   private textures: TextureLookup;
 
   constructor(textures: TextureLookup) {
     this.textures = textures;
   }
 
+  private texture(id: number, addressU: number, addressV: number): THREE.Texture | null {
+    if (id < 0) return null;
+    const base = this.textures(id);
+    if (!base) return null;
+    const s = wrapMode(addressU), t = wrapMode(addressV);
+    if (base.wrapS === s && base.wrapT === t) return base;
+    const key = `${id}|${s}|${t}`;
+    let tex = this.wrapped.get(key);
+    if (!tex) {
+      tex = base.clone();
+      tex.wrapS = s;
+      tex.wrapT = t;
+      tex.needsUpdate = true;
+      this.wrapped.set(key, tex);
+    }
+    return tex;
+  }
+
   get(m: XjMaterial, alpha: boolean, vertexColors: boolean): THREE.Material {
-    const key = `${m.textureId}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}`;
+    // Material color (type 5) only matters for meshes without per-vertex colors:
+    // the client feeds its diffuse in as the constant vertex color.
+    const diffuse = vertexColors ? 0xffffffff : m.diffuse;
+    const key = `${m.textureId}|${m.addressU}|${m.addressV}|${diffuse}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}`;
     let mat = this.cache.get(key);
     if (!mat) {
-      const map = m.textureId >= 0 ? this.textures(m.textureId) : null;
+      const map = this.texture(m.textureId, m.addressU, m.addressV);
+      const { color, alpha: opacity } = d3dColor(diffuse);
       const basic = new THREE.MeshBasicMaterial({
         map,
+        color,
+        opacity: alpha ? opacity : 1,
         vertexColors,
         side: THREE.DoubleSide,
         transparent: alpha,
@@ -58,6 +98,7 @@ export class MaterialCache {
         basic.blendSrc = BLEND_FACTORS[m.blendSrc] ?? THREE.SrcAlphaFactor;
         basic.blendDst = (BLEND_FACTORS[m.blendDst] ?? THREE.OneMinusSrcAlphaFactor) as THREE.BlendingDstFactor;
       }
+      basic.userData.textureId = m.textureId;
       mat = basic;
       this.cache.set(key, mat);
     }
@@ -67,6 +108,9 @@ export class MaterialCache {
   dispose(): void {
     for (const m of this.cache.values()) m.dispose();
     this.cache.clear();
+    // Only the clones are ours; the base textures belong to the caller.
+    for (const t of this.wrapped.values()) t.dispose();
+    this.wrapped.clear();
   }
 }
 

@@ -10,9 +10,11 @@
 // Vertex info (0x10): u32 type, u32 vertices, u32 vertex_size, u32 vertex_count
 // Strip list entry (0x14): u32 materials, u32 material_count, u32 indices,
 //   u32 index_count, u32 unused. Indices are u16 triangle strips.
-// Material (0x10): u32 type, u32 arg1, u32 arg2, u32 arg3. Types follow the
-//   client's g_StandardRenderStateSetters table: 2 blend, 3 texture,
-//   4 texture addressing, 5 material color, 6 lighting.
+// Material (0x10): u32 type, u32 arg1, u32 arg2, u32 arg3. The type indexes the
+//   client's 9-entry g_StandardRenderStateSetters table (read from PsoBB.exe at
+//   0xa218c0): 0/1 no-op, 2 blend, 3 texture, 4 texture addressing,
+//   5 material color, 6 lighting, 7 texture-coordinate generation (env map),
+//   8 material color source.
 
 import type { RelFile } from './rel.ts';
 
@@ -33,14 +35,45 @@ export interface XjVertices {
   uvs: Float32Array | null;
 }
 
+// Texture address modes (material type 4 args). The client maps them through the
+// D3D enum table at 0xa21944 = [3, 2, 1, 1, ...]: 0 -> D3DTADDRESS_CLAMP,
+// 1 -> MIRROR, 2 -> WRAP, 3 -> WRAP (index 3 already belongs to the blend part of
+// the table). Map data agrees: UVs stay in [0, 1] for 98-100% of mode 0/3 strips
+// and leave it for 97-99% of mode 1/2 strips.
+export const XJ_ADDRESS_CLAMP = 0;
+export const XJ_ADDRESS_MIRROR = 1;
+export const XJ_ADDRESS_WRAP = 2;
+export const XJ_ADDRESS_WRAP_3 = 3;
+
 export interface XjMaterial {
   textureId: number; // -1 if none
   blendSrc: number;
   blendDst: number;
-  addressU: number;
+  addressU: number; // XJ_ADDRESS_*
   addressV: number;
   lighting: boolean;
+  // Material type 5: D3DCOLOR (0xAARRGGBB; bytes B, G, R, A in the file).
+  // The client uses diffuse as the constant vertex color of meshes without
+  // per-vertex colors; ambient only reaches D3D when the material source is
+  // switched to "material". 0xffffffff when never set.
+  ambient: number;
+  diffuse: number;
+  // Material type 7: texture coordinates generated from camera space
+  // (environment mapping) instead of the vertex UVs.
+  envMap: boolean;
 }
+
+export const XJ_DEFAULT_MATERIAL: Readonly<XjMaterial> = {
+  textureId: -1,
+  blendSrc: 4,
+  blendDst: 5,
+  addressU: XJ_ADDRESS_WRAP, // D3D default; every map strip sets its own mode
+  addressV: XJ_ADDRESS_WRAP,
+  lighting: true,
+  ambient: 0xffffffff,
+  diffuse: 0xffffffff,
+  envMap: false,
+};
 
 export interface XjStrip {
   material: XjMaterial;
@@ -143,8 +176,13 @@ function parseStrips(rel: RelFile, o: number, count: number, alpha: boolean, sta
       } else if (kind === 4) {
         state.addressU = a1;
         state.addressV = a2;
+      } else if (kind === 5) {
+        state.ambient = a1;
+        state.diffuse = a2;
       } else if (kind === 6) {
         state.lighting = a1 !== 0;
+      } else if (kind === 7) {
+        state.envMap = a1 !== 0;
       }
     }
     const indices = new Uint16Array(idxCount);
@@ -157,7 +195,7 @@ function parseStrips(rel: RelFile, o: number, count: number, alpha: boolean, sta
 export function parseXjModel(rel: RelFile, o: number): XjModel {
   const viPtr = rel.ptr(o + 4);
   const viCount = rel.u32(o + 8);
-  const state: XjMaterial = { textureId: -1, blendSrc: 4, blendDst: 5, addressU: 0, addressV: 0, lighting: true };
+  const state: XjMaterial = { ...XJ_DEFAULT_MATERIAL };
   const strips = [
     ...parseStrips(rel, rel.ptr(o + 0x0c), rel.u32(o + 0x10), false, state),
     ...parseStrips(rel, rel.ptr(o + 0x14), rel.u32(o + 0x18), true, state),
