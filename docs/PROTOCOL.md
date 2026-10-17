@@ -390,3 +390,11 @@ The file is a list of blocks `{u16 type, u16 size}`, where `size` counts the byt
 
 - **UV scroll:** `FUN_0066f58c` creates the scroll effect for that texture and forces wrap addressing (`FUN_0081a55c`). Each tick `FUN_0066f804` adds the speed to the offset, which is kept as a short wrapped to ±255 and divided by 256.0 (`0x00939fc0`).
 - **Count:** 151 files, with 1080 scrolls and 558 swaps.
+
+## Background music
+
+The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`, `CHARA.adx` in `FUN_004df9ec` (character select/creation), and `LOBBY.ADX` / `city.adx` / seasonal variants in `FUN_00642c30`. The PC data stores each one as `data/ogg/<NAME>.ogg`: the same base name, upper case.
+
+Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
+
+`client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
