@@ -76,6 +76,8 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 | 4 | C→S | `10` | `{menu_id, item_id}` |
 | 5 | S→C | `83`, `C5`, `67` | lobby list, challenge ranks, **join lobby** |
 
+**`07` entry 0 is the menu title**, not an item: newserv sends `{menu_id, item_id = 0xFFFFFFFF, name = menu name}` first (`send_menu_t`). PsoBB.exe's 07 handler (0x0079ba38) compares that name with `L"BLOCK"`: otherwise it is a ship menu, the name is kept as the ship name (0x00aab2ec, shown later as `<ship>:<block>-<lobby>` in the lobby) and the window is titled with the client's own `L"Ship Select"` (`L"Block Select"` for block menus). `10` may be answered by another `07` (sub-menu, e.g. *Patches*) instead of `67`; `BBSession.connectGameServer` / `selectMenuItem` expose these steps for the classic UI.
+
 `67` / `68` (join / one more player) = `LobbyFlags` (0x0C: `client_id`, `leader_id`, `disable_udp`, `lobby_number`, `block_number`, …) + entries of 0x520: `PlayerLobbyDataBB` (0x44: `guild_card_number` @+4, `client_id` @+0x1C, name UTF-16 @+0x20), `PlayerInventory` (0x34C), `PlayerDispDataV4` (0x190: stats with `level` @+0x18, visual @+0x24). `69`: player left, `flag` = client id.
 
 ## Full character file (`E7`, `SC_SyncSaveFiles_BB_E7`, 0x3994 bytes)
@@ -133,6 +135,66 @@ The text table must come from the same build as the ItemPMT, because the client 
 | `3E`/`3F` | stop at / set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
 | `40` | walk to | `f32 x, z, u32 flags` |
 | `42` | run to | `f32 x, z` |
+
+## Games (team rooms)
+
+Implemented in `client/src/net/game.ts` (`Game extends Lobby`), tested live by `tests/game.live.ts`. Sources: newserv `CommandFormats.hh`, `ReceiveCommands.cc` (`on_C1_BB`, `on_10_game_menu`, `on_1D`, `on_6F`, `on_61_98`, `on_84`), `ReceiveSubcommands.cc`, `ServerState.cc` (`send_lobby_join_notifications`), and the real-client captures in newserv's `tests/` (`GC-ForestGameRareMagFeed`: create alone and warp; `GC-XB-CrossplayForestGame`: a second player joins). The GC captures use the same command and subcommand numbers as BB except for the 4-byte header.
+
+| Step | Dir | Cmd | Content |
+|---|---|---|---|
+| Create | C→S | `C1` | `C_CreateGame_BB_C1` (0x50): `menu_id`, `item_id` (0), name UTF-16[0x10] @08, password UTF-16[0x10] @28, `difficulty` @48 (0–3), `battle_mode` @49, `challenge_mode` @4A, `episode` @4B (1, 2, 3 = Episode 4), `solo_mode` @4C. newserv keeps 14 characters of the name. |
+| List | C→S | `08` | empty |
+| | S→C | `08` | `S_MenuItem_PC_BB_08` entries (0x2C), flag = number of games. The first entry is the server name (item 0, flags 4). Per game: `item_id` = game id, `difficulty_tag` = 0x22 + difficulty, `num_players`, name, `episode` byte = `max_clients << 4 | episode` (`0x10 | episode` for solo), `flags`: 2 password, 4 not joinable (BB), 0x10 battle, 0x20 challenge, episode << 6 |
+| Join | C→S | `10` | `{menu_id = 0x44000044, item_id = game id}`; with a password: flag 2 and UTF-16 password[0x10] @08 (0x28 bytes) |
+| Refused | S→C | `01` / `0101` | lobby message box (text after an 8-byte header), e.g. "another player is currently loading" |
+| Joined | S→C | `64` | `S_JoinGame_BB_64` (0x1A0), flag = player count: `Variations` (16 × `{u32 layout, u32 entities}`) @000, `PlayerLobbyDataBB[4]` @080 **in slot order** (empty slots zero), `client_id` @190, `leader_id` @191, `disable_udp`, `difficulty` @193, `battle_mode`, `event`, `section_id` @196, `challenge_mode`, `random_seed` @198, `episode` @19C, `solo_mode` @19E, `is_in_quest` @19F |
+| | S→C | `1D` | ping; newserv **holds every command for the joiner** (the other players' sync) until the client answers `1D` |
+| Others | S→C | `65` | the joiner's full entry (same layout as `68`) |
+| Left | S→C | `66` | flag = client id; data `{client_id, leader_id, disable_udp, 0}` |
+
+Loading sequence of the joining client (captures, mirrored by `Game`): `1D` reply, `8A` (game name; the server answers `8A` with UTF-16 text), then after loading the floor `6x3F` (position), `6x1F` (floor), `6x3B`, `6F`. The server answers `6F` with `B1` (time) and the client sends `99`. Another client may only join once `6F` cleared the loading flag (otherwise `01` "currently loading").
+
+When `65` arrives, the players already in the game send state to the joiner with private commands (`62`/`6D`, flag = joiner's client id). newserv registers exactly which ones it expects (`expected_game_state_sync_commands`) and disconnects a client that sends an unexpected one:
+
+| Sender | Order (capture) | Subcommands |
+|---|---|---|
+| leader | 1 | `6x6D` item state (`6D`, BC0-compressed `G_SyncItemState_6x6D_Decompressed`: next drop number per floor, next item id per player = 0x00010000 + 0x00200000 × client + items used, floor item counts) |
+| leader | 2–4 | `6x6B` enemy, `6x6C` object, `6x6E` set flag states (BC0) |
+| leader | 5–6 | `6x6F` quest flags (`62`), `6x71` unblock join (`62`, header only) |
+| everyone | 7 | `6x70` own player (`6D`, `G_SyncPlayerDispAndInventory_BB_6x70`, 0x4C0) |
+
+On BB the server, not the leader, then sends `6x72` (resume) to **every player except the joiner** once the leader's `6x70` arrived (`send_resume_game`). The web client sends `6x6D`, `6x71` and `6x70`. It does not send `6x6B`/`6x6C`/`6x6E`: newserv checks the entity counts of every floor's map against its own (including enemy children), which needs the full entity expansion; nor `6x6F`, since the client does not track quest flags. The BC0 data is sent as a literal-only stream (newserv `bc0_encode`: one control byte with a 1 bit per literal, LSB first, then up to 8 bytes).
+
+`6x70` (BB, offsets from the subcommand start): extended header `{0x70, 0, client_id, u32 size}`; `G_6x70_Base_V1` @008 (`client_id` u16 @008, `room` @00A, `game_flags` @00C, position @010, angle (3 × i32 BAMS) @01C, `current_hp` @02A, bonus HP/TP @02C/@02E, status effects @030, `language32` @06C, `player_tag` @070, guild card @074, telepipe @080 (owner 0xFFFF = none), death flags @09C, hold state @0A0, `area` @0B4, `player_flags` @0B8, `technique_levels_v1` @0BC); `PlayerVisualConfigV4` @0D0; `PlayerStats` @140; `num_items` @164; `PlayerInventoryItem[30]` @168; `floor` @4B0. newserv re-encodes it for the joiner and fills `client_id` and the guild card itself. **The joiner gets the other players' appearance only from `6x70`** (`64` carries names and guild cards).
+
+Extended subcommands (`6D`, and `6C`/`62` for large payloads) have size byte 0 and a `u32` byte size after the 4-byte header; `Lobby.onSubcommands` reads both forms.
+
+| Sub | Meaning | Payload |
+|---|---|---|
+| `1F` | set floor and ask for positions (others answer `6x20`) | `i32 floor` |
+| `21` | inter-level warp | `i32 floor` |
+| `22` / `23` | player invisible / visible (while changing floors) | none |
+| `3B` | clear temporary photon blast state flags (sent after each floor load) | none |
+| `3F` | set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
+| `40` | walk to | `f32 x, z, u32 flags` (8 = near an enemy) |
+
+Warp (capture): `6x21 {floor}`, `6x22`, …load…, `6x3F`, `6x1F {floor}`, `6x3B`, `6x23`.
+
+Leave: `98` with `C_CharacterData_BB_61_98` (0x824: inventory, `PlayerDispDataV4`, `PlayerRecordsEntry_BB` {client id, challenge 0x140, battle 0x18} @4DC, `ChoiceSearchConfig` @638, info board UTF-16[0xAC] @650, blocked senders[0x1E] @7A8, `auto_reply_enabled` @820). newserv keeps its own inventory/disp for BB and only stores the records, choice search, info board and blocked senders, so the web client fills them from the `00E7` save data (`PSOBBCharacterFile`: info board @2B44, battle records @2C9C, challenge records @2CB8, choice search @2E20). It answers with `00E7` (save data). Then `84 {menu_id = 0x33000033, item_id = lobby id}` → `67`.
+
+### Floors and map files
+
+Floor → area (newserv `default_floor_to_area`): Episode 1 floor = area (0 Pioneer 2, 1–2 Forest, 3–5 Caves, 6–7 Mines, 8–10 Ruins, 11–14 bosses); Episode 2 area = 0x12 + floor; Episode 4: 0x2D, 0x24..0x2C, 0x2E.
+
+The map files of a floor come from the client's `SetDataTableOn.rel` (`SetDataTableOff.rel` for solo; newserv also has `*Ulti.rel` tables for Episode 1 Ultimate, not present in Ephinea's client), parsed by `client/src/formats/setdatatable.ts` and checked against newserv's `disassemble-set-data-table` (`tests/setdatatable.test.ts`). REL root → area table `{u32 layouts, u32 count}` → layout table `{u32 entities, u32 count}` → entries of three C string pointers: object list basename, enemy+event list basename, area setup name. With the floor's `{layout, entities}` from `64`:
+
+- objects `<object basename>o.dat`, enemies `<enemy basename>e.dat`, events `<enemy basename>.evt`; on floor 0 the suffix is `_s` / `_c1` / `_d` for solo / challenge / battle;
+- render geometry: the setup name plus `n.rel` (`map_forest01n.rel`, `map_cave01_00n.rel`), or with `_00` added (`map_city00` → `map_city00_00n.rel`, `map_labo00`, the Episode 2 jungle maps); `map_boss04` is drawn from `map_darkfalz00n.rel`. This is the same pairing as `setVariantsForMap` in `formats/setdata.ts`;
+- the server only picks among the free-play variation counts of newserv's `num_free_play_variations_for_floor` (the table also holds quest-only layouts, e.g. Cave layouts 03–05).
+
+All 235 free-play floor variations of the three episodes resolve to a render map, a collision map and set files in Ephinea's client.
+
+Player start: the floor's `TObjPlayerSet` with `param1` = client id and `param4` = 0 when arriving from a lower floor, 1 when returning from a higher one. Area warps: `TObjAreaWarpForest` (type 2) with the destination floor in `param4` (Forest 1 has one to floor 2 and one back to floor 0); `TObjCityAreaWarp` (0x44, the Pioneer 2 teleporter, which opens a destination menu in the original).
 
 ## BB cipher
 
@@ -441,3 +503,66 @@ The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`,
 Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
 
 `client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
+
+## Sound effects
+
+### Bank files (`data/sound/*.pac`)
+
+A bank is a run of waves with no file header. Each wave starts on a 32-byte boundary:
+
+| Offset | Size | Field |
+|---|---|---|
+| `+0x00` | 16 | PCMWAVEFORMAT: format tag 1, channels, rate, byte rate, block align, bits. All waves are 16-bit mono, 22050 Hz, except `duel02.pac` #5 (44100 Hz). |
+| `+0x10` | 12 | left over from the source RIFF (`data` + size, or another chunk such as `cue `); not read |
+| `+0x1c` | 4 | PCM byte count |
+| `+0x20` | n | PCM, then padding to the next 32-byte boundary |
+
+The exe does not walk the file. It takes each wave's offset from records in the exe (below). For all 26 banks, walking the 32-byte aligned waves gives the same offsets in the same order. `ephinea.pac` (7 waves) has the same layout but is not in the exe's bank table. `sonicteamfx.bin` is not a bank: no loader or string in the exe names it, and it is not PCM.
+
+### Tables in PsoBB.exe
+
+| Address | Content |
+|---|---|
+| `0x00a21560` | `char*[26]` bank names: ancient, boss01–04, cave, city, common, duel01–02, forest, machine, beach, boss05–08, jungle, ruin, ship, tower, water, wilds, crater, desert, boss09 |
+| `0x00a214e0` | `u32[26]` entries per bank |
+| `0x00a21460` | `i32*[26]` wave slot of each entry |
+| `0x00a215e0` | `rec*[26]`, 16-byte records: `+0` u8 group, `+1` u8 index, `+2` u8 flags (bit 0 = loop), `+4` u32 file offset, `+8` u32 loop start, `+0xc` u32 loop end (samples) |
+| `0x00989e60` | `i32[]` area → bank |
+| `0x00a1f840` | `i32[0x700]` SE id → wave slot (identity except for 127 ids) |
+| `0x00a13b20` | `u32[0x700]` slot flags: bits 8–14 attenuation 0–127, bit 15 3D (when the type nibble is 0), bits 24–27 buffer type (0 or 10 = 3D), bit 28 voices of the slot may overlap, bit 31 random pitch |
+
+`tools/gen-se-tables.py` turns these into `client/src/audio/se_tables.ts`.
+
+### Loading
+
+The slot table `0x00acb3a8` has 0x700 slots of 0x20 bytes: `+0` header pointer, `+4` PCM pointer, `+8` PCM size, `+0xc` record flags, `+0x10` loop start, `+0x14` loop end − start, `+0x1c` header pointer (non-zero = loaded, `FUN_00829110`).
+
+- `FUN_00829b7c` (start-up) → `FUN_00829a04` loads `common.pac` and fills its slots. It stays resident.
+- `FUN_00828d40(area)` (through `FUN_00815584`) loads bank `0x00989e60[area]`. If the area bank changes, `FUN_00828c38` frees the old one, clears the slot table, and refills common's slots. The new bank is then written on top, so for a slot in both banks, the area bank wins.
+- Start-up (`FUN_00824944`) and the character screens (`FUN_004df9ec`) call `FUN_00815584(0)`, so `city.pac` is loaded on the title and character screens.
+- On a bank change, `FUN_00829af8` stops the playing voices, except UI slots (0x56f–0x58f) and a few others.
+
+### Playing
+
+`FUN_00814298(id, pos, volume, flags)` plays a one-shot. `FUN_008144b0(id, handle, pos, volume, flags)` plays a voice that can be updated and looped.
+
+1. `id` → slot via `0x00a1f840` (`FUN_0081443c`). In areas 0x15/0x16, ids 0x559–0x55c become 0x4b1–0x4b4. Ids ≥ 0x700 use slot 0.
+2. With a 3D position: the distance to the listener (`0x00acb39c`) is measured. At 2 or less, the sound plays as 2D. At 300 or more, it is dropped, except in areas 0xe, 0x1f and 0x2c. 3D buffers get min distance 80 and max distance 500.
+3. Volume: `a = clamp(-attenuation [+ volume if flags & 2], -127, 0)`, `f = (1 + a/127) * (1 + master/127) - 1`, `SetVolume(round(f³ * 6400))` (hundredths of a dB). `master` is `DAT_00ab59f8`, the SE volume option.
+4. `FUN_00828e4c`: there are 64 voices (`0x00acb388`, 0x48 bytes each). If the slot's flags lack bit 28, playing voices of the same slot are stopped first (`FUN_00829c38`). The first free voice is used; if none is free, nothing plays. The DirectSound buffer is created with `CTRLVOLUME | CTRLPOSITIONNOTIFY` (plus `CTRL3D` for 3D slots). There is no pan or frequency control: a voice's pitch value (`+0x34`: −500, or random when bit 31 is set) is never applied to the PC buffer.
+5. Looping (`FUN_008292dc`, record flag bit 0): a notify event is armed. When it fires, `FUN_00828978` stops the buffer, seeks to `block align × loop start`, and plays again.
+
+### UI sound ids
+
+| Id | Bank | Used for | Callers |
+|---|---|---|---|
+| `0x56f` | common | cursor move | title `FUN_006fed2c`, windows `0x734aab`…, slot list `0x412653`, char creation `FUN_004eb5f0`, `FUN_004ef208`, editors |
+| `0x570` | common | confirm | windows `0x7351c5`, `0x738883`, slot list `0x412742`, char creation |
+| `0x571` | common | AUTO roll done | `FUN_004f2988` |
+| `0x573` | common | back (char creation) | `FUN_004ef208`, `FUN_004f0f44`, `FUN_004f1cb8`, `FUN_004f34a8` |
+| `0x575` | common | not allowed | `FUN_004f0b80` (invalid name), `0x7351ac` |
+| `0x57c` | common | name entry closed with an invalid name | `FUN_004f34a8` |
+| `0x585` | common | cancel | slot list `0x412e4e`, windows `0x7388d0`, `FUN_00413ac0` |
+| `0x420` | city | title menu confirm | `FUN_006fed2c`, `FUN_006fede0` |
+
+`client/src/audio/se.ts` implements this: banks through the `DataSource`, PCM copied straight into `AudioBuffer`s, volume as gain `10^(ds/2000)`, the 64-voice limit and the same-slot rule. The UI calls it through the module-level `se(id)`, which `classic/main.ts` installs.

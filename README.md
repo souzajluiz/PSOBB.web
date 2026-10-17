@@ -22,6 +22,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Character models (NJCM from `pl?nj.bml`, textures by appearance), all 12 classes | ✅ dev page `models.html` |
 | Player motions (`plymotiondata.rlc`) and animated models in the lobby (idle/walk/run) | ✅ live in Chrome with a bot |
 | Character file (`E7`), ItemPMT from the server stream, item names, Inventory panel | ✅ 1536 item definitions and 1515 names match newserv |
+| Games: create/list/join, Pioneer 2 and field floors from the server's variations, warps, back to the lobby | ✅ live in Chrome with a bot |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -63,6 +64,8 @@ node tests/items.test.ts         # ItemPMT parser and item names vs newserv's re
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/charfile.live.ts      # character file (E7) and inventory with item names
+node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, back to lobby
+node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
 

@@ -6,8 +6,10 @@ import {
   sectionIdForName,
   type CharacterPreview,
 } from '../net/bbsession.ts';
+import { DIFFICULTY_NAMES, EPISODE_NAMES, Game, floorToArea, type GameListEntry } from '../net/game.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
+import { AREA_NAMES, GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { initInventoryPanel } from './inventoryPanel.ts';
@@ -27,6 +29,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let lobby: Lobby | null = null;
   let lobbyView: LobbyView | null = null;
   let viewer: MapViewer | null = null;
+  let game: Game | null = null;
+  let gameView: GameView | null = null;
+  let busy = false;
   const inventory = initInventoryPanel($('lobby-panel'), log);
 
   const setStatus = (msg: string, kind: '' | 'ok' | 'err' = '') => {
@@ -95,22 +100,13 @@ export function initOnlineTab(log: (msg: string) => void): void {
     if (!session) return;
     try {
       setStatus('Joining lobby...');
-      const source = await requireDataSource();
-      await inventory.prepare(session, source);
+      await inventory.prepare(session, await requireDataSource());
       lobby = await session.enterLobby(credentials.username, credentials.password, slot);
       $('chars-panel').hidden = true;
       $('login-panel').hidden = true;
       $('lobby-panel').hidden = false;
-      $('lobby-title').textContent = `· Lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}`;
-      viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
-      const mapName = lobbyMapFile(lobby.lobbyNumber);
-      await viewer.load(source, mapName);
-      log(`lobby map ${mapName} loaded`);
-      const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, log);
-      log(`lobby collision: ${mapData.collision?.faceCount ?? 0} faces, ${mapData.spawns.size} spawn points`);
-      lobbyView = new LobbyView(viewer, lobby, mapData);
+      await showLobby(lobby);
       wireLobby(lobby);
-      inventory.show(session.character);
       setStatus(`In lobby ${lobby.lobbyNumber + 1}`, 'ok');
       $('lobby-canvas').focus();
     } catch (err) {
@@ -119,12 +115,202 @@ export function initOnlineTab(log: (msg: string) => void): void {
     }
   }
 
+  // Lobby map, collision, spawn points and players.
+  async function showLobby(l: Lobby): Promise<void> {
+    const source = await requireDataSource();
+    $('lobby-title').textContent = `· Lobby ${l.lobbyNumber + 1}, block ${l.blockNumber}`;
+    viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
+    const mapName = lobbyMapFile(l.lobbyNumber);
+    await viewer.load(source, mapName);
+    log(`lobby map ${mapName} loaded`);
+    const mapData = await loadLobbyMapData(source, l.lobbyNumber, log);
+    log(`lobby collision: ${mapData.collision?.faceCount ?? 0} faces, ${mapData.spawns.size} spawn points`);
+    lobbyView = new LobbyView(viewer, l, mapData);
+    renderPlayers(l);
+    games.update();
+    inventory.show(session?.character ?? null);
+  }
+
+  // --- Games (create / list / join, field floors, back to the lobby) ----------
+
+  const ctx = () => ({ guildCardNumber: session?.init?.guildCardNumber ?? 0, fullCharacter: () => session?.fullCharacter ?? null });
+
+  async function enterGame(start: (l: Lobby) => Promise<Game>): Promise<void> {
+    if (!lobby || !session || busy || game) return;
+    busy = true;
+    games.update();
+    try {
+      const source = await requireDataSource();
+      setStatus('Joining game...');
+      const g = await start(lobby);
+      g.log = log;
+      game = g;
+      lobbyView?.dispose();
+      lobbyView = null;
+      viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
+      const view = new GameView(viewer, g, source, log);
+      gameView = view;
+      view.onFloor = (f) => {
+        $('lobby-title').textContent = `· Game "${g.name}" · ${f.name} (floor ${f.floor}) · ${f.enemies} enemies, ${f.objects} objects`;
+        renderPlayers(g);
+        games.update();
+      };
+      wireLobby(g);
+      const info = g.info!;
+      addChat('*', `entered game "${g.name}" (${EPISODE_NAMES[info.episode] ?? ''}, ${DIFFICULTY_NAMES[info.difficulty] ?? ''})`);
+      await view.enter();
+      setStatus(`In game "${g.name}"`, 'ok');
+      $('lobby-canvas').focus();
+    } catch (err) {
+      setStatus(errorText(err), 'err');
+      log(`error: ${errorText(err)}`);
+      if (game && !gameView?.current) {
+        busy = false;
+        await leaveGame();
+      }
+    } finally {
+      busy = false;
+      games.update();
+    }
+  }
+
+  async function leaveGame(): Promise<void> {
+    if (!game || busy) return;
+    busy = true;
+    games.update();
+    try {
+      gameView?.dispose();
+      gameView = null;
+      const g = game;
+      game = null;
+      const l = await g.leave();
+      lobby = l;
+      await showLobby(l);
+      addChat('*', 'back in the lobby');
+      setStatus(`In lobby ${l.lobbyNumber + 1}`, 'ok');
+    } catch (err) {
+      setStatus(errorText(err), 'err');
+    } finally {
+      busy = false;
+      games.update();
+    }
+  }
+
+  function buildGamePanel(): { update: () => void } {
+    const side = document.querySelector<HTMLElement>('.lobby-side')!;
+    const box = document.createElement('div');
+    box.className = 'game-box';
+    box.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin:12px 0';
+    const h = document.createElement('h3');
+    h.textContent = 'Games';
+    const input = (name: string, placeholder: string) => {
+      const i = document.createElement('input');
+      i.name = name;
+      i.placeholder = placeholder;
+      i.maxLength = 14;
+      i.autocomplete = 'off';
+      return i;
+    };
+    const name = input('game-name', 'Game name');
+    const password = input('game-password', 'Password (optional)');
+    const difficulty = document.createElement('select');
+    difficulty.setAttribute('aria-label', 'Difficulty');
+    difficulty.append(...DIFFICULTY_NAMES.map((n, i) => new Option(n, String(i))));
+    const episode = document.createElement('select');
+    episode.setAttribute('aria-label', 'Episode');
+    episode.append(...Object.entries(EPISODE_NAMES).map(([v, n]) => new Option(n, v)));
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.textContent = 'Create game';
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'secondary';
+    refresh.textContent = 'Refresh game list';
+    const list = document.createElement('ul');
+    list.className = 'player-list game-list';
+    const warp = document.createElement('select');
+    warp.setAttribute('aria-label', 'Warp to floor');
+    const warpBtn = document.createElement('button');
+    warpBtn.type = 'button';
+    warpBtn.textContent = 'Warp';
+    const leave = document.createElement('button');
+    leave.type = 'button';
+    leave.className = 'secondary';
+    leave.textContent = 'Back to lobby';
+    const lobbyControls: HTMLElement[] = [name, password, difficulty, episode, create, refresh, list];
+    const gameControls: HTMLElement[] = [warp, warpBtn, leave];
+    box.append(h, ...lobbyControls, ...gameControls);
+    side.querySelector('#leave-lobby')?.before(box);
+
+    create.addEventListener('click', () => {
+      const n = name.value.trim() || `${lobby?.self?.name ?? 'web'} game`;
+      void enterGame((l) =>
+        Game.create(l, ctx(), { name: n.slice(0, 14), password: password.value, difficulty: Number(difficulty.value), episode: Number(episode.value) }),
+      );
+    });
+    refresh.addEventListener('click', () => void refreshList());
+    warpBtn.addEventListener('click', () => {
+      if (!gameView) return;
+      void gameView.warpTo(Number(warp.value)).catch((err) => setStatus(errorText(err), 'err'));
+    });
+    leave.addEventListener('click', () => void leaveGame());
+
+    async function refreshList(): Promise<void> {
+      if (!lobby || game) return;
+      try {
+        const entries = await Game.list(lobby.conn);
+        const empty = document.createElement('li');
+        empty.textContent = 'No games';
+        list.replaceChildren(...(entries.length ? entries.map(gameItem) : [empty]));
+      } catch (err) {
+        setStatus(errorText(err), 'err');
+      }
+    }
+
+    function gameItem(e: GameListEntry): HTMLLIElement {
+      const li = document.createElement('li');
+      li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px';
+      const mode = e.solo ? ' solo' : e.battle ? ' battle' : e.challenge ? ' challenge' : '';
+      li.append(`${e.name} · ${e.players}/${e.maxPlayers} · Ep${e.episode === 3 ? 4 : e.episode} ${DIFFICULTY_NAMES[e.difficulty] ?? ''}${mode}${e.passworded ? ' (password)' : ''}`);
+      const join = document.createElement('button');
+      join.type = 'button';
+      join.textContent = 'Join';
+      join.disabled = !e.joinable;
+      join.addEventListener('click', () => void enterGame((l) => Game.join(l, ctx(), e.itemId, e.passworded ? password.value : '')));
+      li.append(join);
+      return li;
+    }
+
+    const update = () => {
+      const g = game;
+      for (const c of lobbyControls) c.hidden = !!g;
+      for (const c of gameControls) c.hidden = !g;
+      for (const c of [create, refresh, warpBtn, leave]) c.disabled = busy;
+      h.textContent = g ? `Game "${g.name}"` : 'Games';
+      if (g?.info) {
+        const areas = floorToArea(g.info.episode);
+        const current = gameView?.current?.floor ?? 0;
+        const options: HTMLOptionElement[] = [];
+        for (let f = 0; f < 0x0f; f++) {
+          const label = AREA_NAMES[areas[f]];
+          if (label) options.push(new Option(`${f}: ${label}`, String(f)));
+        }
+        warp.replaceChildren(...options);
+        warp.value = String(current === 0 ? 1 : 0);
+      }
+    };
+    update();
+    return { update };
+  }
+
+  const games = buildGamePanel();
+
   function renderPlayers(l: Lobby): void {
     const items = [...l.players.values()]
       .sort((a, b) => a.clientId - b.clientId)
       .map((p: LobbyPlayer) => {
         const li = document.createElement('li');
-        li.textContent = `${p.name} · Lv${p.level} ${CLASS_NAMES[p.charClass] ?? ''}`;
+        li.textContent = `${p.name} · Lv${p.level} ${CLASS_NAMES[p.charClass] ?? ''}${l === game ? ` · floor ${p.floor}` : ''}`;
         if (p.clientId === l.selfId) li.className = 'me';
         return li;
       });
@@ -144,11 +330,22 @@ export function initOnlineTab(log: (msg: string) => void): void {
 
   function wireLobby(l: Lobby): void {
     renderPlayers(l);
+    const announced = new Set<number>();
+    l.on('joined', () => announced.clear());
     l.on('playerJoined', (p) => {
+      if (l !== (game ?? lobby)) return;
       renderPlayers(l);
-      addChat('*', `${p.name} joined`);
+      // Games announce a player again when its 6x70 (appearance) arrives.
+      if (!announced.has(p.clientId)) addChat('*', `${p.name} joined`);
+      announced.add(p.clientId);
     });
-    l.on('playerLeft', () => renderPlayers(l));
+    l.on('playerLeft', (id) => {
+      announced.delete(id);
+      if (l === (game ?? lobby)) renderPlayers(l);
+    });
+    l.on('floorChanged', () => {
+      if (l === game) renderPlayers(l);
+    });
     l.on('chat', (from, gc, text) => addChat(from?.name ?? `#${gc}`, text));
     l.conn.onClose = () => {
       addChat('*', 'disconnected from server');
@@ -157,6 +354,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
   }
 
   function leaveLobby(): void {
+    gameView?.dispose();
+    gameView = null;
+    game = null;
     lobbyView?.dispose();
     lobbyView = null;
     lobby = null;
@@ -213,8 +413,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
     e.preventDefault();
     const input = (e.target as HTMLFormElement).elements.namedItem('text') as HTMLInputElement;
     const text = input.value.trim();
-    if (!text || !lobby) return;
-    lobby.sendChat(text);
+    const room = game ?? lobby;
+    if (!text || !room) return;
+    room.sendChat(text);
     input.value = '';
   });
   $('leave-lobby').addEventListener('click', leaveLobby);

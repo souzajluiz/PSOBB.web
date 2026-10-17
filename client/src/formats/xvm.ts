@@ -15,6 +15,7 @@ export interface XvrTexture {
   height: number;
   format: number;
   flags: number;
+  gbix?: number; // global texture index (XVRT +0x10)
   rgba: Uint8Array; // decoded top mip level, width*height*4
 }
 
@@ -48,7 +49,8 @@ function readXvrt(data: Uint8Array, dv: DataView, o: number, index: number): Xvr
   const width = dv.getUint16(o + 0x14, true);
   const height = dv.getUint16(o + 0x16, true);
   const pixels = data.subarray(o + 0x40, o + 8 + size);
-  return { index, width, height, format, flags, rgba: decodeXvr(pixels, width, height, format, flags) };
+  const gbix = dv.getUint32(o + 0x10, true);
+  return { index, width, height, format, flags, gbix, rgba: decodeXvr(pixels, width, height, format, flags) };
 }
 
 function decodeXvr(src: Uint8Array, w: number, h: number, format: number, flags: number): Uint8Array {

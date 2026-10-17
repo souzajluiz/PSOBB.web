@@ -23,6 +23,7 @@
 //   f256_ad         cursor bars at the bottom (DAT_00a3b09c)
 //   f256_player_tex Enter/Esc key caps (DAT_00a3b1d4)
 
+import { se, SE } from '../audio/se.ts';
 import type { CharacterPreview } from '../net/bbsession.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { VH, VW, type Screen, type Stage } from './stage.ts';
@@ -333,10 +334,11 @@ export class CharSelectScreen implements Screen {
 
   key(e: KeyboardEvent): void {
     const n = Math.max(1, Math.min(this.slots.length, RE.slots.length));
-    if (e.key === 'ArrowDown') this.selected = (this.selected + 1) % n;
-    else if (e.key === 'ArrowUp') this.selected = (this.selected + n - 1) % n;
-    else if (e.key === 'Enter') this.handlers.enter(this.selected);
-    else if (e.key === 'Escape') this.handlers.cancel();
+    // Slot list 0x00412610..0x00412742: SE 0x56f Up/Down, 0x570 Enter; 0x00412e4e: 0x585 Esc.
+    if (e.key === 'ArrowDown') (se(SE.cursor), (this.selected = (this.selected + 1) % n));
+    else if (e.key === 'ArrowUp') (se(SE.cursor), (this.selected = (this.selected + n - 1) % n));
+    else if (e.key === 'Enter') (se(SE.ok), this.handlers.enter(this.selected));
+    else if (e.key === 'Escape') (se(SE.cancel), this.handlers.cancel());
   }
 
   pointer(vx: number, vy: number, click: boolean): void {
