@@ -485,6 +485,24 @@ export class LobbyView {
     if (m) this.setGait(m, m.gait, true);
   }
 
+  // Knockback: moves a player by (dx, dz) through the map collision
+  // (render/combat.ts, the velocity of 6x4B / 6x4C).
+  pushPlayer(clientId: number, dx: number, dz: number): void {
+    const m = this.markers.get(clientId);
+    if (!m) return;
+    const pos = m.group.position;
+    if (this.collision) {
+      const r = this.collision.move(pos.x, pos.y, pos.z, dx, dz);
+      pos.set(r.x, r.y, r.z);
+    } else {
+      const y = this.viewer.groundHeight(pos.x + dx, pos.z + dz, pos.y + 30);
+      if (y !== null && Math.abs(y - pos.y) < 25) pos.set(pos.x + dx, y, pos.z + dz);
+    }
+    m.target.copy(pos);
+    const me = this.lobby.self;
+    if (me && me.clientId === clientId) me.position = { x: pos.x, y: pos.y, z: pos.z };
+  }
+
   // World position of each player (for 2D overlays such as name tags).
   playerPositions(): Map<number, THREE.Vector3> {
     const out = new Map<number, THREE.Vector3>();

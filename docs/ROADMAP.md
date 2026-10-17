@@ -61,7 +61,10 @@
 - [ ] Remaining object models (Pioneer 2 shops and doors, laser-fence switches, jungle rocks, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
 - [ ] Boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps
 - [x] Combat: three-attack combo (`6x43`/`6x44`/`6x45`, motion tables and hit frames from the exe), hit detection with the ItemPMT weapon ranges, the hit/damage formulas, enemy flinch/death motions, `6x46`/`6x0A`/`6x76`, kill -> `6x60` drop request and `6xC8` EXP request (`combat/`, `render/combat.ts`, `tests/combat.test.ts`)
-- [ ] Combat: techniques (`6x47`/`6x48`), photon blasts, specials and status effects, the player taking damage (`6x4A`-`6x4F`), enemy AI, hit boxes per body part, damage numbers and the lock-on reticle
+- [x] Combat: the player taking damage (`6x4A` shield, `6x4B`/`6x4C` light/heavy hit, `6x89`+`6x4D` death, `6x4E` revivable, `6x4F` revive), HP tracking, the hit / knockback / death / stand-up field motions, the HP read-out (`combat/playerdamage.ts`)
+- [x] Combat: enemy AI from the generic enemy FSM (idle and the walk home, the search radius, the war cry, the chase at the BattleParamEntry MovementData speeds, the melee at the AttackData reach with its damage and knockback, the 15-tick recovery) (`combat/enemyai.ts`)
+- [x] Combat: damage numbers over a hit enemy and the lock-on reticle (`render/combatoverlay.ts`)
+- [ ] Combat: techniques (`6x47`/`6x48`), photon blasts, specials and status effects, hit boxes per body part, the per-family enemy FSMs (Savage Wolf's leap, Rag Rappy's fake death, Monest spawning Mothmants, Poison Lily), line of sight and the idle wander path, enemies attacking remote players
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)
 - [x] Inventory panel in the Online tab

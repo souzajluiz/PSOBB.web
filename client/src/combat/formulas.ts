@@ -82,13 +82,22 @@ export interface DamageResult {
 }
 
 // FUN_007732b8 for one hit box without elemental parts or hit-box defense.
-export function rollDamage(attacker: AttackerStats, defender: DefenderStats, attackType: AttackType, rng: Rng): DamageResult {
+// `multiplier` is the function's third argument: the player's weapon attacks
+// pass 0x009cb9d0[attack type], an enemy's melee its own value (1.0 for the
+// generic enemy attack, see combat/enemyai.ts).
+export function rollDamage(
+  attacker: AttackerStats,
+  defender: DefenderStats,
+  attackType: AttackType,
+  rng: Rng,
+  multiplier: number = ATTACK_DAMAGE_MULT[attackType],
+): DamageResult {
   const r = rng();
   const attr = 1 + 0.01 * (attacker.attributePercent ?? 0);
   let d = (attacker.atp + attacker.atpSpread * r) * 0.2 + attacker.equipAtp * 0.2 * attr + defender.dfp * -0.2;
   let critical = false;
   if (d >= 0) {
-    d *= ATTACK_DAMAGE_MULT[attackType];
+    d *= multiplier;
     const roll = rng() * (attacker.isPlayer ? 500 : 200);
     if (Math.min(attacker.lck, 100) >= roll) {
       d *= 1.5;

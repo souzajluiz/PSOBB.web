@@ -24,6 +24,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Character file (`E7`), ItemPMT from the server stream, item names, Inventory panel | ✅ 1536 item definitions and 1515 names match newserv |
 | Games: create/list/join, Pioneer 2 and field floors from the server's variations, warps, back to the lobby | ✅ live in Chrome with a bot |
 | Items on the floor (6x5D/6x5F/6x59) with their `item.bml` box models, pickup (6x5A), item boxes (6x0B + 6xA2), equip/unequip/use/drop from the Inventory panel | ✅ every ItemPMT item resolves to a model; two clients live against newserv |
+| Combat: attack combo (6x43-6x45/6x46/6x0A), the player taking damage and dying (6x4A-6x4F, 6x89), enemy AI (notice, chase, melee), damage numbers and the lock-on reticle | ✅ Forest families from the exe tables; two clients live against newserv |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -66,11 +67,12 @@ node tests/items.test.ts         # ItemPMT parser and item names vs newserv's re
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/charfile.live.ts      # character file (E7) and inventory with item names
-node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, switch flag (6x05), wave event (6x67), attack and kill an enemy (6x43/6x46/6x0A/6x76/6x60/6xC8), back to lobby
+node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, switch flag (6x05), wave event (6x67), attack and kill an enemy (6x43/6x46/6x0A/6x76/6x60/6xC8), taking damage and dying (6x4A-6x4F, 6x89), back to lobby
 node tests/fieldbgm.test.ts      # area -> BGM table, interactive-music sequencer, chained-Ogg links of data/ogg/slbgm_*.ogg
 node tests/warpmenu.test.ts      # Ragol teleporter entries, warp windows, boss warp table, doors, warps found in the set data
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
 node tests/combat.test.ts        # damage/accuracy formulas, attack combo timing, enemy slot ids and battle params vs newserv
+node tests/combatdepth.test.ts   # player hit/death motions and the 6x4A-6x4F flow, enemy AI (search radius, chase, melee, recovery) and its exe tables
 node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them
 node tests/itemmodels.test.ts    # every ItemPMT item resolves to an item.bml floor model; BC0, item subcommands, inventory rules
 node tests/items.live.ts         # two clients: drop/pick up items, split a stack, meseta, equip/use, break Forest 1 boxes

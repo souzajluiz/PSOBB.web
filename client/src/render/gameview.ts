@@ -101,7 +101,11 @@ export class GameView {
       log,
     });
     // Combat lives in render/combat.ts; the view only hands it the floor.
-    this.combat = new CombatView(viewer, game, this.files, this.enemyLayer, { log, floorFilesFor: (f) => this.floorFilesFor(f) });
+    this.combat = new CombatView(viewer, game, this.files, this.enemyLayer, {
+      log,
+      floorFilesFor: (f) => this.floorFilesFor(f),
+      ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+    });
   }
 
   // Number of set-data objects on the floors before `floor` (object entity

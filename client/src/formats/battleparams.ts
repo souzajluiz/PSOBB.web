@@ -32,6 +32,24 @@ export interface EnemyAttackData {
   maxAtp: number;
   minAta: number;
   maxAta: number;
+  distanceX: number; // f32 @08: melee reach, checked by EnemyAI_CheckFacingArc_00772c08
+  angle: number; // u32 @0C: half-angle of the attack arc, out of 0x10000
+  distanceY: number; // f32 @10
+}
+
+// MovementData (0x30, newserv names the fields fparam1..6 / iparam1..6). The
+// meaning of the first four for a walking enemy is newserv
+// notes/movement-data.txt, and matches RemoveEnemyFromList_0052ad44, which
+// copies fparam1/fparam2 into enemy+0x39c / the animation frame step normally
+// and fparam3/fparam4 while the "near the player" flag is set.
+export interface EnemyMovementData {
+  fparam1: number; // idle move speed (units per tick, returning to the spawn point)
+  fparam2: number; // idle walking animation speed
+  fparam3: number; // engaged move speed (approaching a player)
+  fparam4: number; // engaged animation speed
+  fparam5: number;
+  fparam6: number;
+  iparam: readonly number[]; // iparam1..6
 }
 
 export interface EnemyResistData {
@@ -72,7 +90,29 @@ export class BattleParams {
   attack(difficulty: number, index: number): EnemyAttackData {
     const o = 0x3600 + (difficulty * 0x60 + index) * 0x30;
     const s = (k: number) => this.dv.getInt16(o + k, true);
-    return { minAtp: s(0), maxAtp: s(2), minAta: s(4), maxAta: s(6) };
+    return {
+      minAtp: s(0),
+      maxAtp: s(2),
+      minAta: s(4),
+      maxAta: s(6),
+      distanceX: this.dv.getFloat32(o + 8, true),
+      angle: this.dv.getUint32(o + 0x0c, true),
+      distanceY: this.dv.getFloat32(o + 0x10, true),
+    };
+  }
+
+  movement(difficulty: number, index: number): EnemyMovementData {
+    const o = 0xae00 + (difficulty * 0x60 + index) * 0x30;
+    const f = (k: number) => this.dv.getFloat32(o + k, true);
+    return {
+      fparam1: f(0),
+      fparam2: f(4),
+      fparam3: f(8),
+      fparam4: f(0x0c),
+      fparam5: f(0x10),
+      fparam6: f(0x14),
+      iparam: [0, 1, 2, 3, 4, 5].map((i) => this.dv.getUint32(o + 0x18 + i * 4, true)),
+    };
   }
 
   resist(difficulty: number, index: number): EnemyResistData {

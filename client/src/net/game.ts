@@ -734,6 +734,52 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // --- the player taking damage (combat/playerdamage.ts has the exe side) ---
+
+  // 6x4A (G_ShieldAttack_6x4A, 4): the attack was fully shielded; the receiving
+  // client plays the evade motion (action_evade @ 0x0069a9c8).
+  sendShieldAttack(): void {
+    this.sendSubcommand(0x4a, new Uint8Array(0));
+  }
+
+  // 6x4B / 6x4C (G_HitByEnemy_6x4B_6x4C, 0x10): hit by an enemy for at most
+  // (4B) or more than (4C) a quarter of max HP. {u16 angle (BAMS), u16
+  // current_hp, f32 velocity_x, f32 velocity_z}; the send sites are
+  // dispatch_action_got_hit_light / _heavy.
+  sendHitByEnemy(heavy: boolean, angle: number, currentHp: number, vx: number, vz: number): void {
+    const p = new Uint8Array(0x0c);
+    const dv = new DataView(p.buffer);
+    dv.setUint16(0, RAD_TO_BAMS(angle), true);
+    dv.setUint16(2, Math.max(0, Math.min(0xffff, Math.round(currentHp))), true);
+    dv.setFloat32(4, vx, true);
+    dv.setFloat32(8, vz, true);
+    this.sendSubcommand(heavy ? 0x4c : 0x4b, p);
+  }
+
+  // 6x89 + 6x4D, both sent by dispatch_actions_0x89_0x4d @ 0x0069e234 in one
+  // call: {u16 killer entity id, u16 0} and {u32 death_flags} (player+0x92c).
+  sendPlayerDeath(killerEntityId: number, deathFlags: number): void {
+    const a = new Uint8Array(4);
+    const adv = new DataView(a.buffer);
+    adv.setUint16(0, killerEntityId & 0xffff, true);
+    adv.setUint16(2, 0, true);
+    this.sendSubcommand(0x89, a);
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setUint32(0, deathFlags >>> 0, true);
+    this.sendSubcommand(0x4d, b);
+  }
+
+  // 6x4E (G_PlayerRevivable_6x4E, 4): the particle a Reverser / Moon Atomizer
+  // can target.
+  sendPlayerRevivable(): void {
+    this.sendSubcommand(0x4e, new Uint8Array(0));
+  }
+
+  // 6x4F (G_PlayerRevived_6x4F, 4).
+  sendPlayerRevived(): void {
+    this.sendSubcommand(0x4f, new Uint8Array(0));
+  }
+
   // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
   sendWalk(x: number, z: number, nearEnemy = false): void {
     const p = new Uint8Array(12);
@@ -834,6 +880,28 @@ export function parseAttack(body: Uint8Array): { clientId: number; step: number;
   if (body.length < 8 || body[0] < 0x43 || body[0] > 0x45) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
   return { clientId: dv.getUint16(2, true), step: body[0] - 0x43, angle: dv.getUint16(4, true) * BAMS_TO_RAD, attackType: dv.getUint16(6, true) };
+}
+
+// 6x4B / 6x4C from another client.
+export function parseHitByEnemy(body: Uint8Array): { clientId: number; heavy: boolean; angle: number; currentHp: number; vx: number; vz: number } | null {
+  if (body.length < 0x10 || (body[0] !== 0x4b && body[0] !== 0x4c)) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return {
+    clientId: dv.getUint16(2, true),
+    heavy: body[0] === 0x4c,
+    angle: dv.getUint16(4, true) * BAMS_TO_RAD,
+    currentHp: dv.getUint16(6, true),
+    vx: dv.getFloat32(8, true),
+    vz: dv.getFloat32(12, true),
+  };
+}
+
+// 6x4D (death), 6x4E (revivable), 6x4F (revived) and 6x4A (fully shielded):
+// header-only apart from 6x4D's death flags.
+export function parsePlayerDeath(body: Uint8Array): { clientId: number; deathFlags: number } | null {
+  if (body.length < 8 || body[0] !== 0x4d) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), deathFlags: dv.getUint32(4, true) };
 }
 
 // 6x46: the entity ids a strike hit.
