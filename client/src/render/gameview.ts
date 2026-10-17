@@ -22,6 +22,7 @@ import { floorToArea, type Game } from '../net/game.ts';
 import { GameItems } from '../net/items.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
+import { FieldHud } from './fieldhud.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
 import { EnemyLayer } from './enemyview.ts';
@@ -69,6 +70,7 @@ export class GameView {
   private field: GameField;
   readonly items: GameItems;
   readonly floorItems: FloorItemLayer;
+  readonly hud: FieldHud;
   private collision: CollisionWorld | null = null;
   private objectCounts = new Map<number, Promise<number>>();
   private enemyCounts = new Map<number, Promise<number>>();
@@ -113,6 +115,16 @@ export class GameView {
       floorFilesFor: (f) => this.floorFilesFor(f),
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
     });
+    // Classic field HUD: action palette and main menu (render/fieldhud.ts).
+    this.hud = new FieldHud(viewer, this.files, {
+      ...character,
+      items: this.items,
+      area: () => this.current?.area ?? 0,
+      questStarted: () => this.quest !== null,
+      blocked: () => this.field.menu.open,
+      log,
+    });
+    this.hud.load().catch((err) => log(`field HUD: ${(err as Error).message}`));
   }
 
   // Number of set-data objects on the floors before `floor` (object entity
@@ -353,6 +365,7 @@ export class GameView {
     await this.combat.enterFloor(floor, area, enemySets, await this.combat.enemyBase(floor));
     if (this.disposed) return;
     this.combat.attach(this.view);
+    this.hud.attach();
     this.current = {
       floor,
       area,
@@ -423,6 +436,7 @@ export class GameView {
   dispose(): void {
     this.disposed = true;
     this.combat.dispose();
+    this.hud.dispose();
     this.field.dispose();
     this.floorItems.dispose();
     this.items.dispose();

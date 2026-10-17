@@ -1,0 +1,175 @@
+// Classic field HUD: action palette data and icons (classic/palette.ts), the
+// main menu rules (classic/fieldmenu.ts), the Item Pack rows, actions and
+// amount spinner (classic/itempack.ts), the Technique menu (classic/techmenu.ts)
+// and the item command bytes the menus end in (net/items.ts).
+// Run: node tests/fieldhud.test.ts
+import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
+import {
+  AmountSpinner,
+  categoryIcon,
+  classCanUse,
+  hasBonuses,
+  ItemPackMenu,
+  itemRow,
+  itemRowName,
+  purposeItems,
+  PURPOSE,
+  type RowContext,
+} from '../client/src/classic/itempack.ts';
+import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, EMPTY_ICON } from '../client/src/classic/palette.ts';
+import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
+import { ItemPMT } from '../client/src/formats/itempmt.ts';
+import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
+import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
+import { buildDropItem, buildEquip, buildSplitStack, buildUseItem } from '../client/src/net/items.ts';
+
+let failures = 0;
+const eq = (a: unknown, b: unknown, what: string) => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    failures++;
+    console.log(`FAIL ${what}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`);
+  }
+};
+
+// --- palette (newserv config_hunter_ranger / config_force) ---
+const hunterConfig = new Uint8Array(0xe8);
+hunterConfig.set([0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 2, 1, 0, 0, 4, 0, 0, 0], 0);
+hunterConfig[60] = 1;
+const pal = parsePalette(hunterConfig);
+eq(pal.flipped, false, 'not flipped');
+eq(currentPalette(pal).slots.map((s) => [s.group1, s.group2]), [[2, 0], [2, 1], [4, 0]], 'hunter palette: attack, heavy, Monomate');
+eq(pal.palettes[1].middleOverride.group1, 1, 'second palette middle override');
+eq(pal.palettes[1].slots.map((s) => s.group1), [0, 0, 0], 'second palette empty');
+const raw = new Uint8Array(CONFIG_OFFSET + 0xe8);
+raw.set(hunterConfig, CONFIG_OFFSET);
+eq(paletteFromCharacter(raw)?.palettes[0].slots[2].group1, 4, 'palette from E7 +0x3E0');
+eq(paletteFromCharacter(new Uint8Array(10)), null, 'short E7');
+eq(paletteIcon(2, 0), { texture: 6, u: 200, v: 43 }, 'normal attack icon (0x009f15e8)');
+eq(paletteIcon(2, 1), { texture: 6, u: 200, v: 0 }, 'heavy attack icon');
+eq(paletteIcon(3, 0), { texture: 5, u: 50, v: 0 }, 'Foie icon (0x009f12e0)');
+eq(paletteIcon(3, 6), { texture: 5, u: 0, v: 0 }, 'Zonde icon');
+eq(paletteIcon(4, 0), { texture: 6, u: 0, v: 0 }, 'Monomate icon (0x009f1380)');
+eq(paletteIcon(4, 0x0d).texture, 7, 'item index >= 0xD uses texture 7');
+eq(paletteIcon(7, 8), { texture: 6, u: 150, v: 129 }, 'top special icon (0x009f1420)');
+eq(paletteIcon(0, 0), EMPTY_ICON, 'empty slot');
+
+// --- main menu rules (ValidateMenuItemCondition_00732620) ---
+const field: MenuRules = { lobby: false, safe: false, online: true, questStarted: false, inTeam: false };
+const city: MenuRules = { ...field, safe: true };
+eq(validateMenuEntry(3, field), { id: 3, enabled: true }, 'Technique in the field');
+eq(validateMenuEntry(3, city), { id: 4, enabled: false }, 'Technique in Pioneer 2');
+eq(validateMenuEntry(7, field), { id: 8, enabled: true }, 'Quit online');
+eq(validateMenuEntry(0x0c, city).enabled, false, 'Area Map in the city');
+eq(validateMenuEntry(0x0f, field), { id: 0x10, enabled: false }, 'Quest Board without a quest');
+eq(validateMenuEntry(0x1a, field).enabled, false, 'Trade Window outside Pioneer 2');
+eq(validateMenuEntry(0x23, field).enabled, false, 'Team without a team');
+eq(validateMenuEntry(9, { ...field, lobby: true }), { id: 10, enabled: false }, 'Equip in the lobby');
+eq([0, 0x0f, 0x12, 0x2d, 1].map(isSafeMap), [true, true, true, true, false], 'safe maps 0x0097f1c8');
+
+// --- item rows ---
+const pmt = new ItemPMT();
+pmt.weaponKinds = [0, 0, 1, 0, 0, 0, 6];
+pmt.weapons[1] = [{ id: 10, usabilityFlags: 0xff, atpRequired: 0, mstRequired: 0, ataRequired: 0 } as never];
+pmt.weapons[6] = [{ id: 11, usabilityFlags: 0x02 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80, atpRequired: 0, mstRequired: 0, ataRequired: 0 } as never];
+pmt.armors[0] = { id: 20, usabilityFlags: 0xff, requiredLevel: 0 } as never;
+pmt.tools[0] = [{ id: 30, itemFlags: 2 } as never];
+pmt.tools[2] = [{ id: 31, itemFlags: 2 } as never];
+pmt.maxTechLevels = [[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 14, 29, 29, 0xff, 14, 0xff]];
+const text: string[][] = [];
+text[1] = [];
+text[1][10] = 'Saber';
+text[1][11] = 'Handgun';
+text[1][20] = 'Frame';
+text[1][30] = 'Monomate';
+text[1][31] = 'Disk:';
+text[3] = [];
+text[3][30] = 'Health recovery fluid.';
+text[5] = ['Foie '];
+const names = new ItemNames(pmt, text);
+const ctx: RowContext = { names, charClass: 0, level: 2, stats: { atp: 50, mst: 0, ata: 50 }, lobby: false };
+const inv = (hex: string, equipped = false): InventoryItem => ({ index: 0, state: 1, flags: equipped ? 8 : 0, extensionData1: 0, extensionData2: 0, equipped, data: itemFromHex(hex) });
+const saber = inv('000100000000000000000000 00010000 00000000', true);
+eq(itemRow(saber, ctx), { id: 0x100, icon1: 0x0c, icon2: 0, name: 'Saber', count: '', nameColor: '#ffffff', iconColor: '#ffffff' }, 'equipped Saber row');
+eq(itemRowName(itemFromHex('000100030000000000000000'), names), 'Saber +3', 'grind format "%s +%d"');
+const mate = inv('030000000004000000000000 01000100 00000000');
+eq(itemRow(mate, ctx).count, '×4', 'stack count "×n"');
+eq(itemRow(mate, ctx).icon2, 5, 'mate icon');
+eq(itemRowName(itemFromHex('030200000000000000000000'), names), 'Disk:Foie  Lv.1', 'disk "%s%s Lv.%d"');
+const gun = inv('000600000000000000000000');
+eq(categoryIcon(gun.data, (k) => pmt.weaponKinds[k]), 1, 'gun icon (kind 6 -> 3)');
+eq(classCanUse(0, 0x02 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80), false, 'HUmar cannot use a ranger-only weapon');
+eq(itemRow(gun, ctx).icon1, 0x13, 'class X icon');
+eq(itemRow(gun, ctx).nameColor, '#909090', 'unusable name colour');
+eq(hasBonuses(itemFromHex('000100000000010a00000000')), true, 'attribute -> green');
+eq(itemRow(inv('000100000000010a00000000'), ctx).nameColor, '#61e853', 'bonus colour');
+
+// --- Purpose (ChallengePlayer_AddNormalItemList_00751324) ---
+const pctx = { lobby: false, canUse: () => true, equipProblems: () => 0, undroppable: () => false };
+const label = (i: number) => `#${i.toString(16)}`;
+eq(purposeItems(saber, pctx, label).map((i) => [i.label, i.value, i.enabled]), [['#74', 2, true], ['#72', 3, true], ['#76', 7, true]], 'equipped weapon: Remove, Drop, Sort');
+eq(purposeItems(mate, pctx, label).map((i) => i.value), [0, 3, 7], 'tool: Use, Drop, Sort');
+eq(purposeItems('meseta', pctx, label).map((i) => i.value), [PURPOSE.mesetaDrop], 'meseta: Drop');
+eq(purposeItems(mate, { ...pctx, lobby: true }, label).every((i) => !i.enabled), true, 'nothing in the lobby');
+
+// --- amount spinner (CreateNumericDisplayListWindow_00728ac4) ---
+const a = new AmountSpinner(25);
+eq([a.digits, a.value], [2, 1], 'two digits, starts at 1');
+a.up();
+eq(a.value, 2, 'up adds 1');
+a.left();
+a.up();
+eq(a.value, 12, 'tens digit adds 10');
+a.up();
+a.up();
+eq(a.value, 1, 'over max wraps to min');
+a.down();
+eq(a.value, 25, 'under min wraps to max');
+eq([a.digitRight(0), a.digitRight(1)], [113, 101], 'digit right edges for 2 digits (224 wide)');
+
+// --- the Item Pack flow ends in the item actions ---
+const calls: string[] = [];
+const character = { meseta: 300, inventory: [saber, mate] } as unknown as CharacterFile;
+const menu = new ItemPackMenu({
+  character: () => character,
+  rowContext: () => ctx,
+  purposeContext: () => pctx,
+  text: (g, i) => `${g}:${i}`,
+  actions: {
+    use: (id) => calls.push(`use ${id}`),
+    equip: (id) => calls.push(`equip ${id}`),
+    unequip: (id) => calls.push(`unequip ${id}`),
+    drop: (id, n) => calls.push(`drop ${id} ${n}`),
+    dropMeseta: (n) => calls.push(`meseta ${n}`),
+  },
+});
+const press = (...keys: string[]) => keys.forEach((key) => menu.key({ key } as KeyboardEvent));
+eq(menu.rows.length, 3, 'two items and meseta');
+press('Enter', 'Enter'); // Saber: Remove
+press('ArrowDown', 'Enter', 'Enter'); // Monomate: Use
+press('Enter', 'ArrowDown', 'Enter', 'ArrowUp', 'ArrowUp', 'Enter'); // Monomate: Drop 3
+press('ArrowDown', 'Enter', 'Enter', 'ArrowLeft', 'ArrowLeft', 'ArrowUp', 'Enter'); // meseta: 101
+eq(calls, ['unequip 256', 'use 65537', 'drop 65537 3', 'meseta 101'], 'menu actions');
+eq(menu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes the list');
+
+// --- technique menu ---
+const tenv = { text: (g: number, i: number) => (g === 6 && i === 0x13 ? 'Level:' : g === 7 ? '\nRequired TP: ' : g === 5 ? `T${i}` : g === 6 ? `\n\nD${i}` : ''), level: (t: number) => (t === 0 ? 3 : null), canCast: () => true };
+eq(TECH_TYPES[0], [0, 6, 3], 'Simple Attack list 0x00974a4c');
+eq(techTpCost(0, 0), 5, 'Foie Lv1 TP');
+eq(techTpCost(0, 29), 43, 'Foie Lv30 TP');
+eq(techTpCost(0x11, 10), 20, 'Reverser fixed TP');
+eq(techItems(0, tenv).map((i) => i.enabled), [true, false, false], 'learned Foie only');
+eq(techInfo(0, tenv), 'Level:3\nRequired TP: 8\n\nD0', 'info text');
+eq(techInfo(6, tenv), '', 'not learned: empty');
+
+// --- command bytes behind the actions (net/items.ts) ---
+const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+eq(hex(buildEquip(0, 0x10000, 0)), '250300000000010000000000', '6x25 equip');
+eq(hex(buildUseItem(1, 0x10001)), '2702010001000100', '6x27 use');
+eq(hex(buildDropItem(0, 0x10002, 1, 0, 0, 0, 1)), '2a0600000100010002000100000000000000000000000000', '6x2A drop');
+eq(hex(buildSplitStack(0, 0x10001, 3, 1, 0, 0)), 'c30600000100000000000000000000000100010003000000', '6xC3 split');
+
+if (failures) {
+  console.log(`${failures} failure(s)`);
+  process.exit(1);
+}
+console.log('fieldhud: all checks passed');

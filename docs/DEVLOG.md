@@ -1,5 +1,60 @@
 # Devlog
 
+## 2026-10-17: the field main menu, the Item Pack, the Technique menu and the action palette
+
+**What changed:** a game now has the classic field HUD, drawn on a 2D canvas
+over the 3D view (`render/fieldhud.ts`, created by `GameView`).
+
+- **Main menu** (Home / F12): the lobby's `MainMenu` with the field rules of
+  `ValidateMenuItemCondition_00732620` — an entry that is not available is
+  replaced by id + 1 and drawn 0x686868 (Technique and Area Map on safe maps,
+  Quest Board without a quest, Trade outside Pioneer 2, Team without a team,
+  Quit becomes "Disconnect" online); safe maps from `0x0097f1c8` (0, 0xF,
+  0x12, 0x2D). While it is open the player gets no keys, the palette hides
+  and the view shift of `FUN_00733b2c` applies (`classic/fieldmenu.ts`).
+- **Item Pack > Items** (`ChallengePlayer_StateMachine_00750954`,
+  `classic/itempack.ts`): Item List at table entry 3 (13, 256) 308 x 184 with
+  the "n/30" teal pill (`0x007367d0`), rows of two 18 x 18 icons from
+  f256_hyouji.prs texture 1 (table `0x00970b40`), the name (`get_item_name`
+  `0x005d2aac` formats) and "×n" right-aligned; colours and icons from
+  `ItemEntity_UpdateColoring_0072c045` / `0x0072b9d0` (equipped, untekked,
+  unusable class X, S-rank, rare, bonuses); the description window at entry 2
+  (324, 256) 240 x 184 (unitxt group 3 by PMT id, `0x005d3078`); Purpose at
+  entry 4 (Use / Equip / Remove / Drop / Sort, `0x00751324`); the list
+  collapses to the chosen row (`0x0073600c`); the Amount spinner at entry 5
+  (`0x00728ac4`: digits of the texturejapanese.xvm font, green arrows of
+  texture 0, Up/Down by 10^digit with wrap, Left/Right digit). Use / Equip /
+  Remove / Drop / meseta drop call `GameItems` (6x27 / 6x25 / 6x26 / 6x2A /
+  6xC3). The list follows the inventory.
+- **Technique** (`update_technique_menu`, `classic/techmenu.ts`): Type window
+  at entry 0x12, Techniques at 0x13 (lists `0x009f57a8`), names group 5,
+  unlearned disabled, learned but not castable here 0xfffd3901; the info window
+  at entry 0x14 242 x 161 with "Level:", "Required TP:" (the exe's technique
+  table `0x009cf3c0`, tp + v_tp / 100 * level) and the description.
+- **Action palette** (`classic/palette.ts`): the window at entry 0x20 (484,
+  368) 150 x 107 with the hexagon background of texture 2, the three slots and
+  the top icon at the element positions of `0x009f1480`, icons 50 x 43 from
+  textures 5 / 6 / 7 by slot type (tables `0x009f15e8`, `0x009f12e0`,
+  `0x009f1380`, `0x009f1420`), tool counts from `0x0096f51c`, and the Ctrl tab
+  (texture 0 at (46, 0)) that lights for 3 frames when Ctrl switches palettes.
+  The data is the character's `PlayerDispDataV4.config` (E7 + 0x3E0): two
+  `action_palette` records after the flipped flag.
+
+**Checks:** `tests/fieldhud.test.ts` (palette parsing and icons, menu rules,
+row names / icons / colours, Purpose lists, the amount spinner, a key-driven
+Item Pack flow ending in use / unequip / drop / meseta drop, technique lists /
+TP / info, command bytes). In Chrome against newserv (Pioneer 2, Forest 1):
+the palette shows normal / heavy attack and Monomate ×4, Ctrl switches to the
+empty second palette; Home opens the menu with Technique and Team grey in
+Pioneer 2; Item Pack > Items lists Saber / Frame / Mag (E icons) and the
+mates with ×4, the Saber description; dropping 2 Monomates put a stack of 2 on
+the floor (6xC3 / 6x5D), Remove / Equip toggled the Frame; in Forest the
+Technique menu lists Rafoie.. greyed for the HUmar.
+
+**Left:** casting (6x47 / 6x48), Equip / MAG / Area Map windows, the equipment
+detail pages, sort (6xC4), palette saving (07ED), window animations. The
+item list compares stat requirements with the character file's base stats.
+
 ## 2026-10-17: the boss warp's beams follow its 6x6A state
 
 **What changed:** online, `CreateWarpMapObject_0066c4b4` does not build the

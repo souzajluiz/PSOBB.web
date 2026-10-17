@@ -1,0 +1,269 @@
+// The classic field HUD of a game: the action palette at the bottom right and
+// the main menu (Home / F12) with its Item Pack and Technique windows, drawn
+// with the classic renderers (classic/palette.ts, classic/fieldmenu.ts) on a
+// 2D canvas laid over the game's 3D canvas, like render/warpmenu.ts.
+//
+// PsoBB.exe (Ephinea 1.25.13) behaviour kept here:
+//   - the menu locks the player's input (DisablePlayerInputForMenu_006936ec,
+//     unknown_keyboard_enable_in_menu(0)): movement and the action palette
+//     get no keys while it is open, and the palette window hides
+//     (unknown_update_player_menu_hide_palette);
+//   - while the menu is open the 3D view moves right / up and scales by 0.75
+//     over 3 frames (render_player_menu_background FUN_00733b2c,
+//     classic/mainmenu.ts menuViewShift);
+//   - "Action Palette Change" (Ctrl in the default key config) flips the
+//     palette (HandlePlayerPaletteToggle_00694f0c) and lights the Ctrl tab.
+// Windows use the in-game space of classic/ingame.ts: a uniform scale by
+// height, windows on the right half following the right edge.
+
+import * as THREE from 'three';
+import type { ClientFiles } from '../data/clientfiles.ts';
+import { parseUnitxt } from '../classic/charcreate_text.ts';
+import { anchorX } from '../classic/ingame.ts';
+import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
+import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
+import { menuViewShift } from '../classic/mainmenu.ts';
+import { PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteTextures } from '../classic/palette.ts';
+import { textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
+import type { ItemNames } from '../formats/itemnames.ts';
+import type { CharacterFile } from '../net/charfile.ts';
+import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
+import type { MapViewer } from './mapviewer.ts';
+
+const FRAME = 1 / 30;
+const NO_KEYS: ReadonlySet<string> = new Set();
+// newserv class_flags_for_class: bit 0x10 = android.
+const ANDROID_CLASSES = new Set([2, 4, 5, 9]);
+
+export interface FieldHudOptions {
+  character: () => CharacterFile | null;
+  fullCharacter: () => Uint8Array | null;
+  items: GameItems;
+  area: () => number;
+  questStarted: () => boolean;
+  // Another window (a warp menu) has the keyboard.
+  blocked: () => boolean;
+  log?: (msg: string) => void;
+}
+
+interface Textures {
+  skin: WindowSkin;
+  menu: FieldMenuTextures;
+  palette: PaletteTextures;
+}
+
+export class FieldHud {
+  private viewer: MapViewer;
+  private files: ClientFiles;
+  private opts: FieldHudOptions;
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private host: HTMLCanvasElement;
+  private tex: Textures | null = null;
+  private groups: string[][] | null = null;
+  private names: () => ItemNames | null = () => null;
+  private palette: PaletteData | null = null;
+  private paletteHud = new PaletteHud();
+  readonly menu: FieldMenu;
+  private acc = 0;
+  private inventoryKey = '';
+  private onKey = (e: KeyboardEvent) => this.key(e);
+  private hook = (dt: number) => this.frame(dt);
+  private disposed = false;
+
+  constructor(viewer: MapViewer, files: ClientFiles, opts: FieldHudOptions) {
+    this.viewer = viewer;
+    this.files = files;
+    this.opts = opts;
+    this.host = viewer.renderer.domElement;
+    this.canvas = document.createElement('canvas');
+    this.canvas.className = 'field-hud-overlay';
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none' });
+    this.host.parentElement?.append(this.canvas);
+    this.ctx = this.canvas.getContext('2d')!;
+    // Capture phase on the canvas itself: runs before the movement, combat
+    // and item listeners (bubble phase on the same element) and stops them
+    // while a menu is open.
+    this.host.addEventListener('keydown', this.onKey, true);
+    viewer.frameHooks.add(this.hook);
+    this.menu = new FieldMenu({
+      text: (g, i) => this.text(g, i),
+      rules: () => {
+        const area = this.opts.area();
+        return { lobby: area === 0x0f, safe: isSafeMap(area), online: true, questStarted: this.opts.questStarted(), inTeam: false };
+      },
+      android: () => ANDROID_CLASSES.has(this.opts.character()?.charClass ?? 0),
+      itemPack: {
+        character: () => this.opts.character(),
+        rowContext: () => this.rowContext(),
+        purposeContext: () => ({
+          lobby: this.opts.area() === 0x0f,
+          canUse: (it) => this.opts.items.canUse(it, this.rules()),
+          equipProblems: (it) => equipProblems(it.data, this.rowContext()),
+          undroppable: (it) => undroppable(it.data, this.names()),
+        }),
+        text: (g, i) => this.text(g, i),
+        actions: {
+          use: (id) => this.opts.items.use(id, this.rules()),
+          equip: (id) => this.opts.items.equip(id),
+          unequip: (id) => this.opts.items.unequip(id),
+          drop: (id, amount) => this.opts.items.drop(id, amount),
+          dropMeseta: (amount) => this.opts.items.drop(MESETA_ITEM_ID, amount),
+        },
+      },
+      tech: {
+        text: (g, i) => this.text(g, i),
+        level: (t) => this.opts.character()?.techLevels[t] ?? null,
+        canCast: () => !isSafeMap(this.opts.area()),
+      },
+    });
+  }
+
+  // Item names and ItemPMT (the Online tab's inventory panel loads them from
+  // the server's stream file).
+  setNames(names: () => ItemNames | null): void {
+    this.names = names;
+  }
+
+  private rules() {
+    const names = this.names();
+    const charClass = this.opts.character()?.charClass ?? 0;
+    return {
+      maxTechLevel: (tech: number) => names?.pmt.maxTechLevels[tech]?.[charClass] ?? 0xff,
+      maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
+    };
+  }
+
+  private rowContext(): RowContext {
+    const c = this.opts.character();
+    return {
+      names: this.names(),
+      charClass: c?.charClass ?? 0,
+      level: c?.level ?? 1,
+      stats: { atp: c?.stats.atp ?? 0, mst: c?.stats.mst ?? 0, ata: c?.stats.ata ?? 0 },
+      lobby: this.opts.area() === 0x0f,
+    };
+  }
+
+  // unitxt string without the language markers (render/warpmenu.ts).
+  private text(group: number, index: number): string {
+    return (this.groups?.[group]?.[index] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, '');
+  }
+
+  async load(): Promise<void> {
+    if (this.tex) return;
+    const hyouji = await textureBitmaps(await this.files.textures('f256_hyouji.prs'));
+    const jp = await textureBitmaps(await this.files.textures('texturejapanese.xvm'));
+    // Ephinea's loose unitxt_j.prs is the English text (render/warpmenu.ts).
+    const { data } = await this.files.readFirst(['unitxt_j.prs', 'unitxt_e.prs']);
+    this.groups = parseUnitxt(data);
+    if (this.disposed) return;
+    const skin = { frame: hyouji[1], bars: hyouji[2] };
+    this.tex = {
+      skin,
+      menu: { menu: { panel: hyouji[13], labels: jp[2] }, icons: hyouji[1], arrows: hyouji[0], digits: jp[0] },
+      palette: { bg: hyouji[2], tabs: hyouji[0], icons: { 5: hyouji[5], 6: hyouji[6], 7: hyouji[7] }, digits: jp[0] },
+    };
+  }
+
+  // Chains viewer.onFrame (call after the floor's LobbyView / GameField /
+  // CombatView took it): no keys reach the player while the menu is open,
+  // and the menu's view shift is applied to the projection.
+  attach(): void {
+    const inner = this.viewer.onFrame;
+    this.viewer.onFrame = (dt, keys) => {
+      inner?.(dt, this.menu.isOpen ? NO_KEYS : keys);
+      const cam = this.viewer.camera;
+      cam.updateProjectionMatrix();
+      const f = this.menu.shift;
+      if (f) {
+        const { ox, oy, s } = menuViewShift(f);
+        cam.projectionMatrix.premultiply(new THREE.Matrix4().set(s, 0, 0, ox, 0, s, 0, oy, 0, 0, 1, 0, 0, 0, 0, 1));
+        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+      }
+    };
+  }
+
+  private key(e: KeyboardEvent): void {
+    if (this.disposed || this.opts.blocked()) return;
+    if (e.key === 'Home' || e.key === 'F12') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (this.tex) this.menu.toggle();
+      return;
+    }
+    if (this.menu.isOpen) {
+      if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.menu.key(e);
+      return;
+    }
+    if (e.key === 'Control' && !e.repeat && this.palette) this.paletteHud.flip(this.palette);
+  }
+
+  private frame(dt: number): void {
+    if (this.disposed) return;
+    this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
+    this.acc += dt;
+    while (this.acc >= FRAME) {
+      this.acc -= FRAME;
+      this.menu.tick();
+      this.paletteHud.tick();
+    }
+    this.watchInventory();
+    this.draw();
+  }
+
+  // The Item Pack list follows the inventory (6x25..6x2A, 6xBE, pickups).
+  private watchInventory(): void {
+    const c = this.opts.character();
+    const key = c ? `${c.meseta}|${c.inventory.map((i) => `${i.data.id}:${i.equipped ? 1 : 0}:${stackSize(i.data)}:${[...i.data.data1].join(',')}`).join(';')}` : '';
+    if (key === this.inventoryKey) return;
+    this.inventoryKey = key;
+    this.menu.inventoryChanged();
+  }
+
+  // Stack count of palette item index i (0x0096f51c).
+  private itemCount(i: number): number {
+    const t = PALETTE_ITEMS[i];
+    const it = t && this.opts.character()?.inventory.find((x) => x.data.data1[0] === 3 && x.data.data1[1] === t[0] && x.data.data1[2] === t[1]);
+    return it ? stackSize(it.data) : 0;
+  }
+
+  private draw(): void {
+    const host = this.host;
+    const w = host.clientWidth;
+    const h = host.clientHeight;
+    const dpr = Math.min(devicePixelRatio, 2);
+    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+    }
+    Object.assign(this.canvas.style, { left: `${host.offsetLeft}px`, top: `${host.offsetTop}px`, width: `${w}px`, height: `${h}px` });
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    if (!this.tex || !this.canvas.height) return;
+    const s = this.canvas.height / VH;
+    const extra = Math.max(0, this.canvas.width / s - VW);
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    if (this.palette && !this.menu.isOpen) {
+      this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i) }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
+    }
+    this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra);
+  }
+
+  // Console aid: window.gameView.hud.debug()
+  debug() {
+    return { palette: this.palette, menuOpen: this.menu.isOpen };
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.host.removeEventListener('keydown', this.onKey, true);
+    this.viewer.frameHooks.delete(this.hook);
+    this.canvas.remove();
+  }
+}

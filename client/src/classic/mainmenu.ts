@@ -84,9 +84,20 @@ export interface MainMenuTextures {
 // Leaf actions the lobby implements; the rest only close the help text.
 export type MenuAction = (id: number) => void;
 
+// ValidateMenuItemCondition_00732620: the id shown for an entry (an entry
+// that is not available here is replaced by id + 1, its "cannot be used"
+// help text) and whether it can be chosen (drawn 0x686868 otherwise).
+export type MenuValidate = (id: number) => { id: number; enabled: boolean };
+
+interface ShownEntry extends MenuEntry {
+  enabled: boolean;
+}
+
 export class MainMenu {
   open = false;
-  private stack: Array<{ entries: MenuEntry[]; cursor: number }> = [];
+  // Optional ValidateMenuItemCondition_00732620 rules (the field sets them).
+  validate: MenuValidate | null = null;
+  private stack: Array<{ entries: ShownEntry[]; cursor: number }> = [];
   private ages: number[] = [];
   private height = 0;
   private heightLeft = 0;
@@ -124,7 +135,11 @@ export class MainMenu {
     this.stack = [];
   }
 
-  private show(entries: MenuEntry[], cursor: number): void {
+  private show(raw: MenuEntry[], cursor: number): void {
+    const entries: ShownEntry[] = raw.map((e) => {
+      const v = this.validate?.(e.id) ?? { id: e.id, enabled: true };
+      return { id: v.id, sub: e.sub, enabled: v.enabled };
+    });
     this.stack.push({ entries, cursor });
     this.ages = entries.map((_, i) => -2 * i);
     this.heightLeft = 8;
@@ -154,6 +169,10 @@ export class MainMenu {
       se(SE.cursor);
     } else if (e.key === 'Enter') {
       const it = lv.entries[lv.cursor];
+      if (!it.enabled) {
+        se(SE.buzzer);
+        return;
+      }
       se(SE.ok);
       if (it.sub) this.show(it.sub, 0);
       else this.action(it.id);
@@ -193,7 +212,7 @@ export class MainMenu {
       const rx = x + 10;
       const ry = y + TOP + i * ROW;
       if (ry + ROW > y + h) return;
-      const color = i === lv.cursor ? 0xff6121 : 0xffffff;
+      const color = !it.enabled ? 0x686868 : i === lv.cursor ? 0xff6121 : 0xffffff;
       ctx.save();
       ctx.globalAlpha = Math.min(1, age / 4);
       ctx.drawImage(tintLabel(tex.labels, color), u, v, 98, 16, rx, ry, 98, 16);
