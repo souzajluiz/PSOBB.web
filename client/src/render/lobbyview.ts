@@ -151,7 +151,6 @@ export class LobbyView {
   private files: ClientFiles | null;
   private assets = new Map<number, Promise<PlayerAssets>>();
   private motions: Promise<PlayerMotions> | null = null;
-  private lights: THREE.Light[];
   private disposed = false;
 
   constructor(viewer: MapViewer, lobby: Lobby, mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null }) {
@@ -160,11 +159,8 @@ export class LobbyView {
     this.collision = mapData.collision;
     this.spawns = mapData.spawns;
     this.files = mapData.files;
-    // The map is unlit (vertex colors); the player materials are Lambert.
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-    sun.position.set(30, 80, 50);
-    this.lights = [new THREE.HemisphereLight(0xffffff, 0x445566, 1.5), sun];
-    for (const l of this.lights) viewer.scene.add(l);
+    // The map is unlit (vertex colors); the player materials are Lambert, lit by
+    // the area light the viewer takes from lightentry.bin (MapViewer.setArea).
     viewer.setOrbitEnabled(false);
     viewer.onFrame = (dt, keys) => this.frame(dt, keys);
 
@@ -336,6 +332,7 @@ export class LobbyView {
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
+    this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
     // Local movement relative to the camera.
     if (me && mine) {
@@ -426,7 +423,7 @@ export class LobbyView {
   dispose(): void {
     this.disposed = true;
     for (const id of [...this.markers.keys()]) this.removeMarker(id);
-    for (const l of this.lights) this.viewer.scene.remove(l);
+    this.viewer.fogProbe = null;
     for (const d of this.disposers) d();
     this.viewer.onFrame = null;
     this.viewer.setOrbitEnabled(true);

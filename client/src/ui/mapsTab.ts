@@ -132,6 +132,7 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
     const v = variants.find((x) => x.label === variantSelect.value);
     if (!v) {
       viewer.clearEntities();
+      viewer.setFogRegions([]);
       setStatus(variants.length ? `${mapLine} · set data hidden` : `${mapLine} · no set data for this map`, 'ok');
       return;
     }
@@ -140,6 +141,7 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
     if (token !== loadToken || !viewer.geometry) return;
     const placed = placeEntities(ents, viewer.geometry.sections, areaForMap(select.value));
     viewer.setEntities(placed);
+    viewer.setFogRegions(placed);
     viewer.setEntitiesVisible(showBox.checked);
     viewer.setLabelsVisible(labelsBox.checked);
     const n = (c: string) => placed.filter((p) => p.category === c).length;
