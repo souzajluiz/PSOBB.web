@@ -286,6 +286,289 @@ Enemy entity ids are 0x1000 + the enemy slot counted over all floors: one `e.dat
 
 **Battle music** (`FUN_0069821c` → `FUN_008114b0`): battle while an enemy of the local player's room is built and not dead; after the last one dies the calm music returns 90 frames (0x5A) later. The player's room is the one on the player object (+0x28); the web client resolves it from the map sections the position falls into.
 
+## Quests
+
+Implemented in `client/src/net/quests.ts` (menus and the file transfer),
+`client/src/formats/questbin.ts` + `questdat.ts` + `questopcodes.ts` (the two
+files), `client/src/quest/vm.ts` + `session.ts` + `run.ts` (the script VM and
+the game wiring). Tested by `tests/quests.test.ts` (every Blue Burst quest
+newserv ships) and `tests/quest.live.ts` (the whole exchange against newserv).
+
+Sources: newserv `CommandFormats.hh`, `SendCommands.cc`
+(`send_quest_menu`, `send_open_quest_file`, `send_quest_file_chunk`,
+`send_quest_barrier_if_all_clients_ready`), `ReceiveCommands.cc`
+(`on_09`, `on_10_quest_categories`, `on_10_quest_menu`, `set_lobby_quest`,
+`on_13_A7_V3_V4`, `on_AC_V3_BB`, `on_quest_loaded`), `QuestScript.hh`/`.cc`,
+`Map.hh`; and, for the client side, `refsrc` `headers/quests.h` plus the named
+Ghidra dump (addresses below).
+
+### Picking a quest and receiving its files
+
+| Step | Dir | Cmd | Content |
+|---|---|---|---|
+| Ask for the menu | C→S | `A2` | empty |
+| Categories | S→C | `A2` | `S_QuestMenuEntry_BB_A2_A4` (0x13C), flag = count: `menu_id`, `item_id` = category id, UTF-16 `name[0x20]` @08, UTF-16 `short_description[0x78]` @48, `u8 disabled` @138. Category entries use `menu_id` 0x01000001 (Ep1/Ep3/Ep4) or 0x02000002 (Ep2) |
+| Open a category | C→S | `10` | `{menu_id, item_id}` |
+| Quest list | S→C | `A2` | same entries, `menu_id` 0x55010155 (Ep1) or 0x55020255 (Ep2), `item_id` = the server's quest number |
+| Ask about a quest | C→S | `09` | `C_MenuItemInfoRequest_09` `{menu_id, item_id}`. newserv answers nothing for a **category** (its short description already came with the entry) |
+| Description | S→C | `A3` | plain UTF-16 text (same shape as `1A`/`D5`); `header.flag` carries the Challenge stage number (51–59 Ep1, 61–65 Ep2) or is ignored |
+| Load a quest | C→S | `10` | `{menu_id, item_id}` |
+| Open file | S→C | `44` | `S_OpenFile_BB_44_A6` (0x50): `u8 unused[0x22]`, `u16 type` @22, ASCII `filename[0x10]` @24, `u32 file_size` @34, ASCII `name[0x18]` @38 (`"PSO/<quest name>"`). Sent once for the `.bin`, once for the `.dat` |
+| Confirm | C→S | `44` | `C_OpenFileConfirmation_44_A6`: ASCII `filename[0x10]`, flag echoed |
+| Chunk | S→C | `13` | `S_WriteFile_13_A7` (0x414): ASCII `filename[0x10]`, `u8 data[0x400]`, `u32 data_size` @410; flag = chunk index (offset / 0x400) |
+| Confirm chunk | C→S | `13` | ASCII `filename[0x10]`, flag = the chunk index |
+| Barrier | C→S | `AC` | empty: this client has the files |
+| Start | S→C | `AC` | empty: every client is loaded, the quest starts |
+
+- The client only considers a file complete when a chunk is **shorter than
+  0x400**; newserv therefore appends one zero byte to a file whose size is a
+  multiple of 0x400 (PRS stops at its own end marker, so the byte is never
+  read). `net/quests.ts` honours the short-chunk rule and also stops at the
+  announced size, so a server that does not pad still works.
+- newserv keeps `V3_V4_QUEST_LOAD_MAX_CHUNKS_IN_FLIGHT` = 4 chunks in flight
+  and sends chunk `flag + 4` on each acknowledgement, so the acknowledgements
+  are what drives the transfer.
+- `A6` / `A7` are the same pair for **download quests** (what the original
+  client would write to the memory card). newserv sends them when a client
+  picks a quest from a lobby rather than from a game; `A4` is the download
+  quest menu and `A5` its description. `QuestClient` handles both and marks
+  the result with `download: true`.
+- Both files arrive **PRS-compressed**. The client decompresses them into one
+  buffer in `decompress_received_quest_files` (PsoBB.exe `0x006d0174`) and then
+  sets the quest-load state to 7 ("ready to start").
+- The server names the files after **its own** quest number (`quest58.bin`),
+  which is not always the number in the `.bin` header: `q058` ships with 105
+  in its header.
+
+### `.bin`: the script file
+
+`PSOQuestHeaderBB` (newserv `QuestScript.hh`):
+
+| Off | Field |
+|---|---|
+| 0000 | `u32 text_offset` — start of the bytecode |
+| 0004 | `u32 label_table_offset` — start of the `u32` label table |
+| 0008 | `u32 size` — total size of the three sections |
+| 000C | `u16 unknown_a1` (0xFFFF), `u16 unknown_a2` (0xFFFF) |
+| 0010 | `u16 quest_number` (0xFFFF for challenge quests), `u16 unknown_a6` |
+| 0014 | `u8 episode` (0 = Ep1, 1 = Ep2, 2 = Ep4), `u8 max_players` (0 means 4), `u8 joinable`, `u8 unknown_a4` |
+| 0018 | UTF-16 `name[0x20]` |
+| 0058 | UTF-16 `short_description[0x80]` |
+| 0158 | UTF-16 `long_description[0x120]` |
+| 0398 | end of the header Qedit writes |
+| 0398 | `u32 unknown_a5`; 039C `u16 solo_unlock_flags[8]` |
+| 03AC | `FloorAssignment floor_assignments[0x10]` (8 bytes: `floor`, `area`, `type`, `layout_var`, `entities_var`, 3 unused; 0xFF = unused) |
+| 042C | `CreateItemMaskEntry create_item_mask_entries[0x40]` (0x38 each) |
+| 122C | end of the full header |
+
+The extension past 0x398 only exists when `text_offset` and
+`label_table_offset` both point past it. All 335 Blue Burst quest files newserv
+ships carry it; the assembler fills `floor_assignments` with the immediates of
+the first 16 `bb_map_designate` opcodes it emits.
+
+The **label table** is one `u32` per label and a label's file offset is
+`text_offset + table[label]`. **Label 0 is the quest entry point**:
+`quest_start_thread(0)` (PsoBB.exe `0x006bc76c`), whose `QuestThread2`
+constructor (`0x006bc800`) sets `pc = objcode_labels[label]` and marks the
+thread dead when that entry is 0xFFFFFFFF.
+
+**Bytecode**: one opcode byte, except that `0xF8` and `0xF9` introduce a
+two-byte opcode (`(first << 8) | second`), which is the client's three
+256-entry opcode spaces. Dispatch is a 772-entry table of
+(`setup_func`, `opcode_func`) pairs (`.c:559261`): the setup shim reads the
+inline argument bytes with `quest_read_objcode_{1,2,4}` and tail-calls the
+body. `client/src/formats/questopcodes.ts` is generated from newserv's
+602-entry `DEFAULT_OPCODE_DEFS` by `tools/gen-quest-opcodes.ts`; 528 of them
+apply to BB.
+
+Two argument sources, both live in the same VM:
+
+- **Inline**: the setup shim reads the bytes listed in the table.
+- **Arg stack**: an opcode flagged `F_ARGS` reads **no inline bytes at all**.
+  Its arguments were pushed on `g_QuestOpcodeArgStack[8]` by the preceding
+  `arg_push*` opcodes (0x48–0x4E, `.c:611281`–`.c:611345`):
+  `arg_pushr r` pushes the register's **value**, `arg_pushl`/`b`/`w` the
+  immediate, `arg_pusha r` the register's address, `arg_pusho l` the label.
+  `opcode_setup_a` (`.c:602676`) clears the stack after the call. Register
+  arguments of an `F_ARGS` opcode are therefore pushed as plain immediates
+  holding the register number, which is what real quests do: newserv
+  disassembles `arg_pushb 0x3C; set_player_start_position` as `r60-r63`.
+
+Registers are `g_pQuestGlobalRegisters[256]` (every index masked with 0xFF);
+the float opcodes (`flet`, `fadd`, …) reinterpret the same dwords. The call
+stack is `quest_stack[]`, bounded in practice by the 376 bytes of local state a
+`QuestThread2` keeps (about 94 dwords).
+
+A `.bin`'s label table mixes code labels with data labels (strings, NPC stat
+blocks, camera splines), so anything that walks the bytecode statically starts
+at label 0 and follows the arguments whose data type is `SCRIPT`, and treats
+the next label's offset as the end of a label's body.
+
+### `.dat`: the quest's own set data
+
+A stream of typed chunks, walked by `HandleQuestDat` (PsoBB.exe `0x006ba0da`,
+`refsrc` `headers/quests.h`); cross-checked against newserv
+`Map.hh MapFile::SectionHeader`:
+
+```
+00 u32 type          0 = end, 1 = objects, 2 = enemies, 3 = events,
+                     4 = random enemy locations, 5 = random enemy definitions
+04 u32 section_size  this chunk, including the 0x10 header
+08 u32 floor         0..0x11
+0C u32 data_size     payload size
+10 payload[data_size]
+```
+
+The payloads are byte-for-byte what a free-play file holds: 0x44 per object and
+0x48 per enemy (`formats/setdata.ts`), and the events payload is an `.evt` file
+(`formats/events.ts`, header + entries + action stream, offsets relative to the
+payload). Several chunks of the same type may name the same floor; the client
+appends them in order and re-indexes the floor's lists
+(`AssignMapObjectIds` `0x0080eda0`, `AssignEnemyIds` `0x0080ee4c`).
+
+Over the 335 BB quest files newserv ships: 1146 floors, 119701 objects, 75405
+enemies, 19094 wave events that resolve to enemies and 257 that only run an
+action stream; 84 floors carry the type 4/5 random-enemy sections (which go
+with the `evt2` event format and are **not** parsed here).
+
+### Which floors come from the quest
+
+`HandleQuestDat` takes a per-floor mode from the map designation set while the
+quest's start label runs. `process_map_designate_v3_BB` (PsoBB.exe `.c:613155`;
+the v2 form is `.c:613132`) writes `floor_map_designations[floor]` =
+{`map`, `map_variant`, `objset`} and `g_QuestData8_00a95628[floor]` = the type:
+
+| type | Meaning |
+|---|---|
+| 0 | the quest's own set data (the `.dat` chunks) on the designated map and variation |
+| 1 | the **offline** free-play template of that map and variation |
+| 2 | the **online** free-play template |
+| 3 | nothing at all |
+
+The geometry is always the designated map's:
+`MapLoader_LoadAndSwapGeometry_00806fcc` reads `floor_map_designations[floor]`
+and indexes the map's asset-prefix list with `map_variant`, which is the same
+(area, layout, entities) lookup the free-play set data table does.
+
+The three opcodes that set it:
+
+| Opcode | Name | Arguments |
+|---|---|---|
+| `C4` | `map_designate` | `regsA[0]` = floor (and the area), `[1]` = type, `[2]` = major variation; the minor variation is zeroed |
+| `F80D` | `map_designate_ex` | `regsA[0..4]` = floor, area, type, layout var, entities var |
+| `F951` | `bb_map_designate` | the same five as immediates (`I8` each) |
+
+`set_episode` (`F8BC`) resets every designation.
+
+Running the start label of each of the 166 BB-English quests reproduces the
+`floor_assignments` the assembler wrote into the header in **164** of them. The
+two that differ are honest: `q035` designates floor 0 somewhere the start label
+does not reach, and `q142` designates floors 5 and 7 twice, so the VM ends on
+the later value while the header keeps the first.
+
+### Floor handlers and the quest threads
+
+`set_floor_handler` (0x95, `F_ARGS`: floor, label) stores the label in
+`floor_handlers[floor]` (`set_floor_handler` at `.c:615036`, 0x12 entries,
+0xFFFFFFFF = none). When the player arrives on a floor,
+`quest_start_floor_thread` (`.c:615128`) builds a new `QuestThread2` at that
+label. `clr_floor_handler` clears it. Every BB quest uses it: 1133 occurrences
+across the 335 files.
+
+`thread` (0x04) and `thread_stg` (0xB1) spawn a thread at a label too; each
+thread has its own pc, call stack and arg stack, and runs until it yields
+(`sync` = end of frame, `ret` on an empty stack, `exit`, or a message window).
+
+### Quest flags, counters and switch flags
+
+| Opcode | Name | Effect |
+|---|---|---|
+| `13`/`14`/`15` | `gset` / `gclear` / `grev` | set / clear / invert flag A; each sends `6x75` on BB |
+| `16`/`17` | `glet` / `gget` | set flag A from a register / read it into one |
+| `F925`/`F926` | `read_counter` / `write_counter` | quest counters 0–15 |
+| `F82B`/`F82C` | `set_switch_flag_sync` / `clear_switch_flag_sync` | switch flag on a floor, **synced** with `6x05` |
+| `90`/`91` | `switch_on` / `switch_off` | switch flag, deliberately **not** synced |
+| `F82D`/`F82E` | `read_switch_flag` / `read_switch_flag_on_floor` | read one back |
+| `D9`/`EF` | `sync_register` / `sync_register2` | write a register and send `6x77` |
+
+- `6x75` `G_UpdateQuestFlag_V3_BB_6x75` (0x0C): `{75, 02, unused}`, `u16 flag`
+  (< 0x400) @04, `u16 action` @06 (0 = set, 1 = clear), `u16 difficulty` @08,
+  `u16 unused`.
+- `6x6F` `G_SetQuestFlags_BB_6x6F` (0x208): the whole flag table, 0x200 bytes =
+  4 difficulties × 0x80, **MSB-first** bits within each byte
+  (newserv `PlayerSubordinates.hh` `FlagsTable<0x400, 4, Difficulty>`), then
+  `u32 use_apply_mask` (the client always sends 1). Sent by the leader to a
+  joining player.
+- `6x77` `G_SyncQuestRegister_6x77` (0x0C): `u16 register_number` @04 (< 0x100),
+  `u16 unused`, `u32 value` @08.
+
+`net/game.ts` keeps the current difficulty's 0x80 bytes in `Game.questFlags`,
+updates them from `6x75` and `6x6F`, and sends `6x75` when the VM sets one.
+
+### Opcodes the VM runs
+
+`client/src/quest/vm.ts` implements the opening set: control flow (`nop`,
+`ret`, `sync`, `exit`, `thread`, `thread_stg`, `call`, `jmp`, `jmp_on/off`, the
+sixteen `jmp*`/`ujmp*` comparisons, `switch_jmp`, `switch_call`, `va_start`,
+`va_end`, `va_call`), the arg stack, registers and the stack (`let`, `leti`,
+`letb`, `letw`, `leta`, `leto`, `set`, `clear`, `rev`, `stack_push*`,
+`stack_pop*`, `sync_register`, `sync_register2`), integer and float arithmetic
+(`add`…`xori`, `flet`…`fdivi`, `dec2float`, `float2dec`), quest flags, counters
+and switch flags (above), the map designations, `set_episode`,
+`set_floor_handler`, `clr_floor_handler`, `initial_floor`, `set_mainwarp`,
+`clear_mainwarp`, `go_floor`, `override_warp_dest_floor`,
+`restore_warp_dest_floor`, `set_ult_map`, `set_area_total`,
+`set_current_area_number`, `set_area_title`, the message windows (`message`,
+`window_msg`, `add_msg`, `message_end`, `window_msg_end`, `list`), the quest
+board (`set_quest_board_handler`, `clear_quest_board_handler`, `disp_msg_qb`,
+`close_msg_qb`), the completion callbacks (`set_qt_*` / `clr_qt_*`), NPC
+creation (`npc_crp`, `npc_crptalk`, `npc_crp_id`, `npc_crptalk_id`,
+`npc_crppk`, `npc_kill`, `npc_text`, `npc_text_id`), the coordinate handlers
+(`at_coords_call`, `at_coords_talk`, `set_obj_param`),
+`construct_delayed_object` / `construct_delayed_enemy`, and the state getters
+(`get_client_id`, `get_difficulty_level_v1/v2`, `get_number_of_players`,
+`get_players_present`, `get_player_room`, `get_coord_of_player`,
+`get_player_state`, `get_player_hp_tp`, `p_dead`, `p_hpstat`, `chk_ene_num`,
+`if_zone_clear`, `gettime`, `get_random`, `get_game_version`,
+`dark_falz_is_dead`, `qexit`).
+
+About 45 visual, audio, camera, HUD and input-lock opcodes (`fadein`, `bgm`,
+`cam_*`, `hud_*`, `cine_*`, `p_action_disable`, …) are accepted as no-ops and
+not reported.
+
+**Not implemented** (decoded for their length, logged by name once, skipped).
+Running the start label and every floor handler of the 166 BB-English quests
+reaches these and nothing else:
+
+| Cluster | Opcodes |
+|---|---|
+| Challenge mode | `cmode_stage`, `set_cmode_difficulty`, `set_cmode_base_time`, `set_cmode_rank_threshold`, `set_cmode_rank_result`, `set_cmode_grave_rates`, `set_cmode_char_template`, `cmode_check_any_player_dead`, `exp_multiplication`, `chl_create_retry_menu`, `chl_show_dead_player_list` |
+| Battle Arena | `ba_initial_floor` and the rest of the `ba_*` family |
+| Enemies | `set_override_enemy_bp_index`, `set_enemy_movement_data`, `set_enemy_physical_data`, `set_enemy_resist_data`, `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
+| Items / player | `unequip_item`, `equip_item`, `item_create*`, `p_return_guild`, `pl_add_meseta2` |
+| Misc | `enable_keyword_detect`, `npc_coords_call`, `shift_right`, `start_battlebgm` |
+
+Nothing else is missing: the generated table covers all 528 BB opcodes, so an
+unimplemented one still advances the program counter correctly.
+
+### What the web client approximates
+
+- The message windows, the choice list and the quest board are plain DOM
+  overlays over the canvas, not the game's own text renderer. The `<rXX>`,
+  `<fXX>`, `<cr>`, `<hero name>`, `<hero job>`, `<time>` and `<color X>` tokens
+  are interpolated; the rest of the token list (`<pl_name>`, `<last_chat>`,
+  `<team_name>`, …) is stripped, not resolved.
+- `npc_crp*` records the NPC (position, angle, state, template, client id) and
+  logs it; no NPC model is created and no `6x69` is sent.
+- `set_player_start_position` is recorded but the player still spawns at the
+  floor's `TObjPlayerSet`.
+- `get_player_state` always reports "standing" for a player that is present:
+  the web client does not model the action state machine.
+- `playerHpTp` only answers for the local character.
+- `6x6F` is received but still not sent to a joining player.
+- The random-enemy sections (types 4 and 5) and the `evt2` event format are
+  recognised and skipped.
+
 ## BB cipher
 
 Implemented in `client/src/net/bbcrypt.ts`, ported from newserv's `PSOBBEncryption`.

@@ -10,6 +10,8 @@ import {
 import { DIFFICULTY_NAMES, EPISODE_NAMES, Game, floorToArea, type GameListEntry } from '../net/game.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
+import { QuestClient, type LoadedQuest, type QuestMenuEntry } from '../net/quests.ts';
+import { runQuest, type QuestRunner } from '../quest/run.ts';
 import { AREA_NAMES, GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
@@ -35,6 +37,11 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let gameView: GameView | null = null;
   let busy = false;
   let bgm: BgmPlayer | null = null; // floor music in games (render/gamefield.ts)
+  let quests: QuestClient | null = null; // quest menu + file download (net/quests.ts)
+  let questRunner: QuestRunner | null = null;
+  // Set by buildQuestPanel below; the game panel's update() runs it too, and
+  // it is called before that panel exists.
+  let questPanelUpdate: () => void = () => {};
   const inventory = initInventoryPanel($('lobby-panel'), log);
 
   const setStatus = (msg: string, kind: '' | 'ok' | 'err' = '') => {
@@ -105,6 +112,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
       setStatus('Joining lobby...');
       await inventory.prepare(session, await requireDataSource());
       lobby = await session.enterLobby(credentials.username, credentials.password, slot);
+      installQuestClient(lobby);
       $('chars-panel').hidden = true;
       $('login-panel').hidden = true;
       $('lobby-panel').hidden = false;
@@ -116,6 +124,48 @@ export function initOnlineTab(log: (msg: string) => void): void {
       setStatus(errorText(err), 'err');
       log(`error: ${errorText(err)}`);
     }
+  }
+
+  // The quest menu and the 44/13 download live on the lobby connection, which
+  // a game keeps using; install the handler once per connection.
+  function installQuestClient(l: Lobby): void {
+    quests = new QuestClient(l.conn, {
+      log,
+      // The server sends the files whenever any player picks a quest, so the
+      // same path runs for our own choice and for someone else's.
+      onQuest: (q) => void startQuest(q),
+      onStart: () => {
+        addChat('*', 'quest started');
+        questPanel.update();
+      },
+    });
+  }
+
+  async function startQuest(q: LoadedQuest): Promise<void> {
+    const view = gameView;
+    const g = game;
+    if (!view || !g) {
+      log(`quest "${q.name}" arrived outside a game (download quest); not started`);
+      return;
+    }
+    try {
+      questRunner?.dispose();
+      questRunner = await runQuest({
+        quest: q,
+        game: g,
+        view,
+        anchor: $('lobby-canvas'),
+        heroName: () => session?.character?.name ?? '',
+        heroClass: () => session?.character?.charClass ?? 0,
+        log,
+      });
+      addChat('*', `quest "${questRunner.session.name}" loaded`);
+      setStatus(`Quest "${questRunner.session.name}"`, 'ok');
+    } catch (err) {
+      log(`quest failed to start: ${errorText(err)}`);
+      setStatus(errorText(err), 'err');
+    }
+    questPanel.update();
   }
 
   // Lobby map, collision, spawn points and players.
@@ -213,6 +263,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
   async function leaveGame(): Promise<void> {
     if (!game || busy) return;
     inventory.setActions(null);
+    questRunner?.dispose();
+    questRunner = null;
     busy = true;
     games.update();
     try {
@@ -319,6 +371,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     }
 
     const update = () => {
+      questPanelUpdate();
       const g = game;
       for (const c of lobbyControls) c.hidden = !!g;
       for (const c of gameControls) c.hidden = !g;
@@ -341,6 +394,96 @@ export function initOnlineTab(log: (msg: string) => void): void {
   }
 
   const games = buildGamePanel();
+  const questPanel = buildQuestPanel();
+
+
+  // Quest menu: A2 for the categories, 10 for a category's quest list, 09 for
+  // a quest's long description, 10 again to load it (net/quests.ts).
+  function buildQuestPanel(): { update: () => void } {
+    const side = document.querySelector<HTMLElement>('.lobby-side')!;
+    const box = document.createElement('div');
+    box.className = 'quest-box';
+    box.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin:12px 0';
+    const h = document.createElement('h3');
+    h.textContent = 'Quests';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Quest menu';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'secondary';
+    back.textContent = 'Categories';
+    back.hidden = true;
+    const list = document.createElement('ul');
+    list.className = 'player-list quest-list';
+    const info = document.createElement('p');
+    info.className = 'status';
+    info.style.cssText = 'white-space:pre-wrap;font-size:12px';
+    box.append(h, open, back, list, info);
+    side.querySelector('#leave-lobby')?.before(box);
+
+    const setList = (entries: QuestMenuEntry[], onPick: (e: QuestMenuEntry) => void) => {
+      const empty = document.createElement('li');
+      empty.textContent = 'Nothing here';
+      list.replaceChildren(
+        ...(entries.length
+          ? entries.map((e) => {
+              const li = document.createElement('li');
+              li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:6px';
+              li.append(`${e.name}${e.disabled ? ' (locked)' : ''}`);
+              const b = document.createElement('button');
+              b.type = 'button';
+              b.textContent = e.isCategory ? 'Open' : 'Load';
+              b.disabled = e.disabled;
+              b.addEventListener('click', () => onPick(e));
+              li.append(b);
+              li.title = e.shortDescription;
+              return li;
+            })
+          : [empty]),
+      );
+    };
+
+    const showCategories = async () => {
+      if (!quests) return;
+      back.hidden = true;
+      info.textContent = '';
+      const cats = await quests.requestMenu();
+      setList(cats, (c) => void showQuests(c));
+    };
+
+    const showQuests = async (category: QuestMenuEntry) => {
+      if (!quests) return;
+      const entries = await quests.selectCategory(category);
+      back.hidden = false;
+      setList(entries, (q) => void pick(q));
+      // The long description of the first quest, so the panel shows something.
+      if (entries[0]) info.textContent = await quests.requestInfo(entries[0]);
+    };
+
+    const pick = async (entry: QuestMenuEntry) => {
+      if (!quests) return;
+      info.textContent = await quests.requestInfo(entry);
+      log(`loading quest "${entry.name}" (number ${entry.itemId})`);
+      // The files arrive through QuestClient.onQuest, which starts the quest.
+      void quests.selectQuest(entry);
+    };
+
+    open.addEventListener('click', () => void showCategories().catch((err) => setStatus(errorText(err), 'err')));
+    back.addEventListener('click', () => void showCategories().catch((err) => setStatus(errorText(err), 'err')));
+
+    const update = () => {
+      const inGame = !!game;
+      // The box sets display:flex inline, which would beat the [hidden] rule.
+      box.style.display = inGame ? 'flex' : 'none';
+      const running = questRunner?.session ?? null;
+      h.textContent = running ? `Quest "${running.name}"` : 'Quests';
+      open.disabled = !quests || busy || !!running;
+    };
+    questPanelUpdate = update;
+    update();
+    return { update };
+  }
 
   function renderPlayers(l: Lobby): void {
     const items = [...l.players.values()]
@@ -391,6 +534,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
   }
 
   function leaveLobby(): void {
+    questRunner?.dispose();
+    questRunner = null;
+    quests = null;
     gameView?.dispose();
     gameView = null;
     game = null;

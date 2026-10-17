@@ -69,4 +69,9 @@
 - [x] Item commands: equip/unequip/use/drop from the Inventory panel (`6x25`/`6x26`/`6x27`/`6x2A`/`6xC3`/`6x29`), pickup (`6x5A` → `6x59`), server drops (`6x5D`/`6x5F`), inventory creation (`6xBE`), join item state (`6x6D`, BC0) — `net/items.ts`
 - [x] Items on the floor with the client's own models (`item.bml` box models, present colours, spin) and item boxes broken with Enter (`6x0B` + `6xA2`) — `formats/itemmodels.ts`, `render/flooritems.ts`
 - [ ] Item drop animation (arc from the enemy/box), the "item found" HUD line and sounds, the classic Item Pack menus (equip/use from the in-game menu), bank and shops (`6xBB`/`6xB5`/`6xB7`), tekker (`6xB8`/`6xBA`), mag feeding (`6x28`), partial-stack UI beyond "Drop 1"
-- [ ] Quests (opcodes documented in the notes and in newserv's assembler)
+- [x] Quests: the server's quest menu (`A2`/`A3`, `09`/`10`), the `44`/`13` file pair (and the `A6`/`A7` download variants) with the `AC` barrier (`net/quests.ts`)
+- [x] Quest `.bin`: BB header, label table and a bytecode decoder over all 528 BB opcodes, generated from newserv's table (`formats/questbin.ts`, `formats/questopcodes.ts`, `tools/gen-quest-opcodes.ts`)
+- [x] Quest `.dat`: the typed-chunk objects / enemies / wave events per floor (`formats/questdat.ts`)
+- [x] Quest VM: threads, registers, the arg stack, floor handlers, the map designations, quest flags (`6x75`/`6x6F`), counters, switch flags, message windows and the quest board (`quest/vm.ts`, `quest/session.ts`, `quest/run.ts`)
+- [x] Quest floors: the quest's designation decides the map and the variation, and its `.dat` replaces the free-play set data (`render/gameview.ts`)
+- [ ] Quests: NPC models and `6x69`, the classic message window and quest board, `set_player_start_position`, challenge mode and Battle Arena opcodes, the enemy-parameter family, random-enemy `.dat` sections (types 4/5) and the `evt2` event format

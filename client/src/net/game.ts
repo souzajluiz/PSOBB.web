@@ -26,6 +26,9 @@ import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby
 
 export const MENU_ID_LOBBY = 0x33000033;
 export const MENU_ID_GAME = 0x44000044;
+// Quest flags per difficulty: 0x400 flags, one bit each (newserv
+// src/PlayerSubordinates.hh QuestFlags = FlagsTable<0x400, 4, Difficulty>).
+export const QUEST_FLAG_BYTES = 0x80;
 
 export const DIFFICULTY_NAMES = ['Normal', 'Hard', 'Very Hard', 'Ultimate'];
 export const EPISODE_NAMES: Record<number, string> = { 1: 'Episode 1', 2: 'Episode 2', 3: 'Episode 4' };
@@ -360,6 +363,11 @@ export class Game extends Lobby {
   private started = false;
   // Inventory item counts of the players in the game (item ids they have used).
   private inventoryCounts = new Map<number, number>();
+  // Quest flags of the current difficulty (0x400 flags, MSB-first bits), kept
+  // in step with 6x75 and 6x6F. The quest VM reads and writes them.
+  readonly questFlags = new Uint8Array(QUEST_FLAG_BYTES);
+  // Registers another client synced with 6x77 (sync_register).
+  readonly questRegisters = new Map<number, number>();
   // Resolves when the server acknowledged our 6F (B1): other players can join now.
   readonly ready: Promise<void>;
   private resolveReady!: () => void;
@@ -575,6 +583,29 @@ export class Game extends Lobby {
       case 0x72:
         this.resumed = true;
         break;
+      case 0x75: {
+        // G_UpdateQuestFlag_V3_BB_6x75: another client's quest opcode changed
+        // a flag. action 0 = set, 1 = clear.
+        if (body.length < 8) return;
+        const flag = dv.getUint16(4, true);
+        this.writeQuestFlag(flag, dv.getUint16(6, true) === 0);
+        break;
+      }
+      case 0x6f: {
+        // G_SetQuestFlags_BB_6x6F: the leader's whole flag table while we load
+        // (0x200 bytes, 0x80 per difficulty, MSB-first bits; newserv
+        // PlayerSubordinates.hh FlagsTable<0x400, 4, Difficulty>).
+        if (body.length < 4 + 0x200) return;
+        const at = 4 + (this.info?.difficulty ?? 0) * QUEST_FLAG_BYTES;
+        this.questFlags.set(body.subarray(at, at + QUEST_FLAG_BYTES));
+        break;
+      }
+      case 0x77: {
+        // G_SyncQuestRegister_6x77: another client's sync_register.
+        if (body.length < 0x0c) return;
+        this.questRegisters.set(dv.getUint16(4, true) & 0xff, dv.getInt32(8, true));
+        break;
+      }
       case 0x1f:
       case 0x21: {
         const p = this.players.get(clientId);
@@ -659,6 +690,52 @@ export class Game extends Lobby {
     dv.setUint32(4, floor, true);
     dv.setUint32(8, eventId, true);
     dv.setUint32(12, this.selfId, true);
+    this.conn.send(0x60, 0, body);
+  }
+
+  // Reads a quest flag of the current difficulty.
+  getQuestFlag(flag: number): boolean {
+    if (flag >= QUEST_FLAG_BYTES * 8) return false;
+    return !!(this.questFlags[flag >> 3] & (0x80 >> (flag & 7)));
+  }
+
+  private writeQuestFlag(flag: number, set: boolean): void {
+    if (flag >= QUEST_FLAG_BYTES * 8) return;
+    const mask = 0x80 >> (flag & 7);
+    if (set) this.questFlags[flag >> 3] |= mask;
+    else this.questFlags[flag >> 3] &= ~mask;
+  }
+
+  // Sets a quest flag locally and tells the other players (6x75).
+  setQuestFlag(flag: number, set: boolean): void {
+    this.writeQuestFlag(flag, set);
+    this.sendQuestFlag(flag, set);
+  }
+
+  // 6x75 (G_UpdateQuestFlag_V3_BB_6x75, 0x0C): {75, 02, unused, u16 flag,
+  // u16 action (0 = set, 1 = clear), u16 difficulty, u16 unused}. Sent by the
+  // quest opcodes gset / gclear / grev / glet (newserv QuestScript.cc:560).
+  sendQuestFlag(flag: number, set: boolean, difficulty = this.info?.difficulty ?? 0): void {
+    const body = new Uint8Array(0x0c);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x75;
+    body[1] = 0x02;
+    dv.setUint16(4, flag, true);
+    dv.setUint16(6, set ? 0 : 1, true);
+    dv.setUint16(8, difficulty, true);
+    this.conn.send(0x60, 0, body);
+  }
+
+  // 6x77 (G_SyncQuestRegister_6x77, 0x0C): {77, 02, unused, u16 register,
+  // u16 unused, u32 value}. Sent by the sync_register / sync_register2
+  // opcodes (0xD9 / 0xEF).
+  sendQuestRegister(register: number, value: number): void {
+    const body = new Uint8Array(0x0c);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x77;
+    body[1] = 0x02;
+    dv.setUint16(4, register & 0xff, true);
+    dv.setInt32(8, value | 0, true);
     this.conn.send(0x60, 0, body);
   }
 
