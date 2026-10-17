@@ -1,5 +1,39 @@
 # Devlog
 
+## 2026-10-17: Pioneer 2 doors, the Lab's warps and the city beams' speed
+
+**What changed:**
+
+- **Pioneer 2 doors** (`0x0046` shop, `0x0047` Hunter's Guild, `0x0048` Ragol
+  warp, `0x0049` medical center): one class
+  (`InitializeHuntersGuildDoorEntity_006460d8`) with a data block per type:
+  `{step, open distance^2, close distance^2, box radius, box unk1}` at
+  `0x00935ac4` (shop: 1, 60, 80, 2, 25), `0x00935a78` (guild: 2, 60, 80, 2,
+  24), `0x009c7114` (warp: 0.0 in the image, set to 1.0 by `0x006470b4`; 90,
+  120, 50, 6.5) and `0x00935a54` (medical: 1, 60, 80, 4, 25). The state at
+  `+0xac` runs closed `0x00645eb0` (a player within the open distance: opening,
+  box off), opening `0x00646410` (nobody within the close distance: closing;
+  else +step up to the last frame), open `0x00645f5c` and closing `0x00645eec`
+  (a player within the open distance reopens it; the box is back on only at
+  frame 0): `stepCityDoor` and `CITY_DOORS` in `render/fieldobjects.ts`.
+  Models from `bm_obj_city_common.bml`: shop model 11 / motion 10, guild 21 /
+  12, warp door 9 + 10 / 8 + 9 (the shutter's halves), medical 20 / 11.
+- **City warps**: the updates (`0x0064ab90`, `0x0064ae2c`, `0x0064b118`) add
+  4.0 per tick (`0x009363f4`), not the fitted 1.0, and wrap at the last frame
+  by subtracting count - 1 (new drive `loop-last`); `TObjCityMapWarp` draws
+  its base (model 13) only when param5 is 0. The city loader is in the asset
+  list of the Lab too (per-area list table `0x00a05d60`, entry 0x12), so the
+  Lab's Ragol teleporter, area warp and map warp now have their models.
+- **`TObjLaboMapWarp`** (`0x02BD`, create `0x0064b3ac`): radius 23.0,
+  `bm_obj_warp_labo.bml`, render `0x0064b508`: model 1 when param5 is 0, then
+  model 0 with motion 0 at +4 per tick, texture list of model 1.
+
+**Checks:** `tests/warpmenu.test.ts` (the city door cycle, no flags; Pioneer
+2 now lists its four doors), `tests/waves.test.ts` (the new models build with
+no missing textures). In Chrome against newserv, Pioneer 2: the guild door
+stayed shut with the player at 100, opened at 40 (frames 16, 34, 52, open at
+59), closed again from 90 and its box came back.
+
 ## 2026-10-17: the boss warp's beams follow its 6x6A state
 
 **What changed:** online, `CreateWarpMapObject_0066c4b4` does not build the

@@ -13,7 +13,7 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { parseUnitxt } from '../client/src/classic/charcreate_text.ts';
 import { AREA_TEXT, areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
 import { objectModelFor } from '../client/src/formats/objectmodels.ts';
-import { bossWarpFloor, collectFieldObjects, doorFlags, doorLamps, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import { bossWarpFloor, CITY_DOORS, collectFieldObjects, doorFlags, doorLamps, stepCityDoor, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 let failures = 0;
@@ -49,6 +49,23 @@ eq([1, 2, 3, 6, 8, 10].map((f) => bossWarpFloor(1, f)), [0xb, 0xb, 0xc, 0xd, 0xe
 eq([1, 3, 5, 10, 11].map((f) => bossWarpFloor(2, f)), [0xe, 0xf, 0xc, 0xd, 0xd], 'Ep2 boss floors');
 eq([1, 5, 8].map((f) => bossWarpFloor(3, f)), [9, 9, 9], 'Ep4 boss floor');
 
+// --- Pioneer 2 doors (stepCityDoor, data blocks 0x00935ac4 / 0x00935a78 / 0x009c7114 / 0x00935a54) ---
+{
+  const d = { state: 2, frame: 0, city: CITY_DOORS[0x47] } as FieldDoor; // guild: step 2, open 60, close 80
+  stepCityDoor(d, 70, 30);
+  eq(d.state, 2, 'city door stays shut at 70 (> 60)');
+  stepCityDoor(d, 59, 30);
+  eq(d.state, 4, 'city door opens within 60');
+  for (let i = 0; i < 20 && d.state === 4; i++) stepCityDoor(d, 75, 30);
+  eq([d.state, d.frame], [5, 29], 'opening keeps going under 80 and stops at the last frame');
+  stepCityDoor(d, 80, 30);
+  eq(d.state, 3, 'nobody within 80: closing');
+  stepCityDoor(d, 70, 30);
+  eq([d.state, d.frame], [3, 27], 'closing goes on at 70 (not within 60)');
+  stepCityDoor(d, 50, 30);
+  eq(d.state, 4, 'a player within 60 reopens it');
+}
+
 // --- Boss warp parts by 6x6A state (SeabedTuriganeMapObjectRender_0066c38c) ---
 {
   const bw = (area: number, episode: number) =>
@@ -65,6 +82,7 @@ eq(doorFlags(obj(0xc2, -1)), { flags: [], locked: false }, 'TODoorCave02 negativ
 eq(doorFlags(obj(0xc2, 0x101)), { flags: [], locked: true }, 'TODoorCave02 > 0x100 = locked');
 eq(doorFlags(obj(0xc1, 0x10, 1)), { flags: [0x10, 0x11, 0x12], locked: false }, 'TODoorCave01 three flags');
 eq(doorFlags(obj(0x14b, 0x20)), { flags: [0x20, 0x21], locked: false }, 'TODoorAncient09 two flags');
+eq(doorFlags(obj(0x48, 5)), { flags: [], locked: false }, 'city doors take no flag');
 eq(doorFlags(obj(0x1ab, 0x30, 2)), { flags: [0x30, 0x31], locked: false }, 'four-light Ruins door: param5 flags');
 eq(doorFlags(obj(0x1c0, 0x30, 0)), { flags: [], locked: false }, 'four-light Space door: no flag = open');
 eq(doorFlags(obj(0x221, 0x30, 7)), { flags: [0x30, 0x31, 0x32, 0x33], locked: false }, 'Seabed four-light door: param5 clamped to 4');

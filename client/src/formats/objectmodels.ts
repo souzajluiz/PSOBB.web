@@ -35,9 +35,10 @@ export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off' | 'idle' 
 
 // How a part's motion is advanced: loop adds `speed` frames per game tick,
 // restart too but goes back to frame 0 once past the last frame instead of
-// wrapping the overshoot (restart-last: once it reaches the last frame), door
-// follows the door state machine, laser the fence's own one.
-export type PartDrive = 'loop' | 'restart' | 'restart-last' | 'door' | 'laser';
+// wrapping the overshoot (restart-last: once it reaches the last frame),
+// loop-last wraps at the last frame instead of the frame count, door follows
+// the door state machine, laser the fence's own one.
+export type PartDrive = 'loop' | 'loop-last' | 'restart' | 'restart-last' | 'door' | 'laser';
 
 interface ObjectPartBase {
   model: number; // model entry (BML position)
@@ -260,31 +261,86 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       ]);
     }
     // Pioneer 2 warps, bm_obj_city_common.bml + bm_obj_city_common.xvm (loader
-    // FUN_00645b18, DAT_00a8f434 / DAT_00a8f430). Renders read the model array
-    // (+0x42c, 0x10 per model, +8) and motion array (+0x430, 8 per motion, +4)
-    // directly:
+    // FUN_00645b18, DAT_00a8f434 / DAT_00a8f430). The loader is in the asset
+    // lists of Pioneer 2 of every episode (per-area list table 0x00a05d60:
+    // entries 0, 0x12 = the Lab, 0x2d), so the Lab's warps use it too. Renders
+    // read the model array (+0x42c, 0x10 per model, +8) and motion array
+    // (+0x430, 8 per motion, +4) directly:
     //   0x0043 TObjCityMainWarp, render 0x0064abe0: model 12 (fd_obj_warp_big)
     //          and model 0 (de_obj_bigbeam) with motion 5, frame +0xc8;
     //   0x0044 TObjCityAreaWarp, render FUN_0064aeac: model 1 (de_obj_citybeam)
     //          with motion 6, frame +0xc8;
     //   0x0045 TObjCityMapWarp, render 0x0064b190: model 13 (fd_obj_warp_small)
-    //          and model 3 (de_obj_smallbeam) with motion 7, frame +0x100.
-    // Beam speed 1 frame per tick (fitted, the updates were not traced).
+    //          only when param5 is 0, and model 3 (de_obj_smallbeam) with
+    //          motion 7, frame +0x100.
+    // The updates (0x0064ab90, 0x0064ae2c, 0x0064b118) add 4.0 (0x009363f4)
+    // and wrap at motion 7's last frame: frame -= count - 1 once frame >=
+    // count - 1. Motions 5, 6 and 7 all have 30 frames, so each beam wraps at
+    // its own last frame (drive loop-last).
     case 0x0043:
-      if (area !== 0 && area !== 0x2d) return null;
+      if (area !== 0 && area !== 0x12 && area !== 0x2d) return null;
       return spec('TObjCityMainWarp', 'bm_obj_city_common.bml', [
         { model: 12, textures: 'bm_obj_city_common.xvm' },
-        { model: 0, textures: 'bm_obj_city_common.xvm', motion: 5, drive: 'loop', speed: 1 },
+        { model: 0, textures: 'bm_obj_city_common.xvm', motion: 5, drive: 'loop-last', speed: 4 },
       ]);
     case 0x0044:
-      if (area !== 0 && area !== 0x2d) return null;
-      return spec('TObjCityAreaWarp', 'bm_obj_city_common.bml', [{ model: 1, textures: 'bm_obj_city_common.xvm', motion: 6, drive: 'loop', speed: 1 }]);
-    case 0x0045:
-      if (area !== 0 && area !== 0x2d) return null;
-      return spec('TObjCityMapWarp', 'bm_obj_city_common.bml', [
-        { model: 13, textures: 'bm_obj_city_common.xvm' },
-        { model: 3, textures: 'bm_obj_city_common.xvm', motion: 7, drive: 'loop', speed: 1 },
-      ]);
+      if (area !== 0 && area !== 0x12 && area !== 0x2d) return null;
+      return spec('TObjCityAreaWarp', 'bm_obj_city_common.bml', [{ model: 1, textures: 'bm_obj_city_common.xvm', motion: 6, drive: 'loop-last', speed: 4 }]);
+    case 0x0045: {
+      if (area !== 0 && area !== 0x12 && area !== 0x2d) return null;
+      const beam: ObjectPartSpec = { model: 3, textures: 'bm_obj_city_common.xvm', motion: 7, drive: 'loop-last', speed: 4 };
+      return spec('TObjCityMapWarp', 'bm_obj_city_common.bml', Math.trunc(o.params[4]) === 0 ? [{ model: 13, textures: 'bm_obj_city_common.xvm' }, beam] : [beam]);
+    }
+    // TObjLaboMapWarp (0x02BD): create 0x0064b3ac, ctor 0x0064b428 (radius
+    // 23.0 at +0xac), loader LoadWarpLaboBMLData_0064b688:
+    // bm_obj_warp_labo.bml. Render 0x0064b508 (vtable 0x00b30300): texture
+    // list of model 1; model 1 (warp_obj01) only when param5 is 0, then model 0
+    // (warp_citybeam) with motion 0 at frame +0x100. Update 0x0064b48c: +4.0
+    // per tick, wrapping at the last frame like the city warps.
+    case 0x02bd: {
+      const beam: ObjectPartSpec = { model: 0, texlistOf: 1, motion: 0, drive: 'loop-last', speed: 4 };
+      return spec('TObjLaboMapWarp', 'bm_obj_warp_labo.bml', Math.trunc(o.params[4]) === 0 ? [{ model: 1, texlistOf: 1 }, beam] : [beam]);
+    }
+    // Pioneer 2 doors (Episodes 1 and 4), bm_obj_city_common.bml: a shared
+    // class (ctor InitializeHuntersGuildDoorEntity_006460d8) whose per-type
+    // data block gives the speed, the open / close distances and the box
+    // (render/fieldobjects.ts CITY_DOORS):
+    //   0x0046 TObjCityDoor_Shop   create 0x00646000, render 0x006461f8:
+    //          model 11 (fd_obj_shopdoor_01) with motion 10, frame +0xb4
+    //   0x0047 TObjCityDoor_Guild  create 0x00646258, render 0x00646360:
+    //          model 21 (hunter_door) with motion 12
+    //   0x0048 TObjCityDoor_Warp   create 0x006464d0, render 0x00646670:
+    //          model 9 with motion 8 and model 10 with motion 9 (the shutter's
+    //          two halves, fd_obj_n_tobira_shut_sita / _ue)
+    //   0x0049 TObjCityDoor_Med    create 0x006466f4, render 0x00646804:
+    //          model 20 (fe_obj_o_medical_door01l) with motion 11
+    // Box: InitEnemyCollisionBoxes_007b9a88 with offset 0 (0x00935a94..) and
+    // the block's +0x0c (radius) / +0x10 (unk1).
+    case 0x0046:
+      return spec('TObjCityDoor_Shop', 'bm_obj_city_common.bml', [{ model: 11, textures: 'bm_obj_city_common.xvm', motion: 10, drive: 'door' }], {
+        collision: BOX(0x00935ac4, 25, 2, 0),
+        door: true,
+      });
+    case 0x0047:
+      return spec('TObjCityDoor_Guild', 'bm_obj_city_common.bml', [{ model: 21, textures: 'bm_obj_city_common.xvm', motion: 12, drive: 'door' }], {
+        collision: BOX(0x00935a78, 24, 2, 0),
+        door: true,
+      });
+    case 0x0048:
+      return spec(
+        'TObjCityDoor_Warp',
+        'bm_obj_city_common.bml',
+        [
+          { model: 9, textures: 'bm_obj_city_common.xvm', motion: 8, drive: 'door' },
+          { model: 10, textures: 'bm_obj_city_common.xvm', motion: 9, drive: 'door' },
+        ],
+        { collision: BOX(0x009c7114, 6.5, 50, 0), door: true },
+      );
+    case 0x0049:
+      return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door' }], {
+        collision: BOX(0x00935a54, 25, 4, 0),
+        door: true,
+      });
     // TObjGoalWarpAncient (0x0140) / TObjMapWarpAncient (0x0141): ctors
     // 0x00640d84 / 0x00640a80 use models 1, 3, 5 with motions 0, 2 and models
     // 0, 2, 4 with motion 1 of bm_o_warp_ancient.bml (generic).

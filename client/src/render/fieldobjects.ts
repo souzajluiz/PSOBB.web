@@ -35,6 +35,11 @@
 //          while closed (FUN_007b52c4) and off while open (FUN_007b52ec).
 //          While locked, the laser plays motion 1 at +1.0 per frame
 //          (0x00937990) and the sign fades in (FUN_006569cf).
+//   Pioneer 2 doors (0x0046 shop, 0x0047 guild, 0x0048 Ragol warp, 0x0049
+//   medical center) have no flag: a shared class (vtables 0x00b2f700 /
+//   0x00b2f760 / 0x00b2f7c0 / 0x00b2f820, state at +0xac dispatched by
+//   0x00645fb8) opens for the players near it, with per-type numbers in
+//   CITY_DOORS (stepCityDoor).
 //   Cave / Mine / Ruins doors take a switch flag in param4 (negative =
 //   always unlocked, > 0x100 = always locked) or a base flag plus a count
 //   (newserv Map.cc); they use the Forest door's distances here.
@@ -80,6 +85,7 @@ export interface FieldDoor {
   flags: number[]; // all must be set; empty = always unlocked
   locked: boolean; // permanently locked (flag > 0x100)
   lamps: boolean; // four-light door: lamp i waits for flags[i] (objectmodels.ts lamps)
+  city: CityDoor | null; // Pioneer 2 door: opened by distance alone (stepCityDoor)
   state: number; // FUN_00656eb4 states: 0 locked, 2 closed, 4 opening, 5 open, 3 closing
   frame: number; // open motion frame
   laserFrame: number; // locked laser motion frame
@@ -143,9 +149,28 @@ const DOOR_TYPES = new Set([
   // Episode 2 and the Lab: VR door, four-light doors, the laser door and the
   // jungle main gate, the Seabed doors and the Lab doors.
   0x0192, 0x01a0, 0x01ab, 0x01c0, 0x0202, 0x0204, 0x0221, 0x0222, 0x0056, 0x02bb, 0x0130,
+  // Pioneer 2 (CITY_DOORS).
+  0x0046, 0x0047, 0x0048, 0x0049,
 ]);
 
 const LAMP_DOORS = new Set([0x01ab, 0x01c0, 0x0221, 0x0222]);
+
+// Pioneer 2 doors: the data block each constructor hands to
+// InitializeHuntersGuildDoorEntity_006460d8 ({f32 step, f32 open distance^2,
+// f32 close distance^2, ...}). The Ragol warp door's step is 0.0 in the
+// image and set to 1.0 by the static initializer 0x006470b4.
+export interface CityDoor {
+  step: number; // motion frames per tick
+  open: number; // a player within this distance opens it (closed / closing)
+  close: number; // it closes once nobody is within this distance (opening / open)
+}
+
+export const CITY_DOORS: Record<number, CityDoor> = {
+  0x0046: { step: 1, open: 60, close: 80 }, // 0x00935ac4
+  0x0047: { step: 2, open: 60, close: 80 }, // 0x00935a78
+  0x0048: { step: 1, open: 90, close: 120 }, // 0x009c7114
+  0x0049: { step: 1, open: 60, close: 80 }, // 0x00935a54
+};
 
 // Lamps of a four-light door while it is closed: all lit once it is
 // unlocked, else lamp i when it waits for no flag or its flag is set.
@@ -168,6 +193,7 @@ export function doorFlags(o: ObjectSet): { flags: number[]; locked: boolean } {
   const p4 = o.params[3];
   const p5 = o.params[4];
   const range = (base: number, n: number) => Array.from({ length: n }, (_, i) => base + i);
+  if (CITY_DOORS[o.type]) return { flags: [], locked: false };
   switch (o.type) {
     case 0x0080:
       return { flags: [p4 & 0xff], locked: false };
@@ -249,7 +275,7 @@ export function collectFieldObjects(
       default:
         if (DOOR_TYPES.has(o.type)) {
           const { flags, locked } = doorFlags(o);
-          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), state: 0, frame: 0, laserFrame: 0, mesh: null });
+          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, state: 0, frame: 0, laserFrame: 0, mesh: null });
         } else if (BOX_TYPES.has(o.type)) {
           boxes.push({ ...base, type: o.type, yaw: p.yaw, broken: false });
         } else if (SWITCH_RADIUS[o.type] !== undefined && o.params[3] >= 0 && o.params[3] < 0x100) {
@@ -261,6 +287,45 @@ export function collectFieldObjects(
 }
 
 const dist3 = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+// One frame of a Pioneer 2 door, in the FieldDoor states (2 closed, 4
+// opening, 5 open, 3 closing). The client's handlers (vtable +0x34..+0x40):
+//   closed  0x00645eb0  a player within `open` -> opening (collision off)
+//   opening 0x00646410  nobody within `close` -> closing; else frame += step,
+//                       open at the last frame
+//   open    0x00645f5c  nobody within `close` -> closing
+//   closing 0x00645eec  a player within `open` -> opening; else frame -= step,
+//                       closed at frame 0 (collision on)
+// `nearest` is the distance of the nearest player on the floor (the check
+// 0x006470e0 goes through the four player slots).
+export function stepCityDoor(d: FieldDoor, nearest: number, frames: number): void {
+  const c = d.city!;
+  const last = Math.max(0, frames - 1);
+  switch (d.state) {
+    case 0:
+    case 2:
+      d.state = 2;
+      if (nearest < c.open) d.state = 4;
+      break;
+    case 4:
+      if (nearest >= c.close) d.state = 3;
+      else if (last <= d.frame + c.step) {
+        d.frame = last;
+        d.state = 5;
+      } else d.frame += c.step;
+      break;
+    case 5:
+      if (nearest >= c.close) d.state = 3;
+      break;
+    case 3:
+      if (nearest < c.open) d.state = 4;
+      else if (d.frame - c.step <= 0) {
+        d.frame = 0;
+        d.state = 2;
+      } else d.frame -= c.step;
+      break;
+  }
+}
 
 // One frame of a door (FUN_00656eb4 without the unlock camera of state 1).
 // `nearest` gives the distance of the nearest player on the floor, `frames`
@@ -362,6 +427,7 @@ export class FieldObjects {
     const out: Obstacle[] = [];
     for (const d of this.doors) {
       if (d.state === 4 || d.state === 5) continue;
+      if (d.city && d.state !== 2) continue; // the box is back on only once it is shut
       const box = this.models?.models.get(d.index)?.spec.collision;
       const halfX = box && box.type === 1 ? box.halfX : 20;
       const halfZ = box && box.type === 1 ? box.halfZ : 10;
@@ -423,7 +489,8 @@ export class FieldObjects {
     for (const d of this.doors) {
       const nearest = players.reduce((m, p) => Math.min(m, dist3(d, p)), Infinity);
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
-      stepDoor(d, this.unlocked(d), nearest, frames);
+      if (d.city) stepCityDoor(d, players.reduce((m, p) => Math.min(m, Math.hypot(d.x - p.x, d.z - p.z)), Infinity), frames);
+      else stepDoor(d, this.unlocked(d), nearest, frames);
       if (this.models?.models.has(d.index)) {
         if (d.lamps) this.models.setLamps(d.index, d.state === 0 || d.state === 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
         else this.models.setState(d.index, d.state === 0 ? 'locked' : 'unlocked');

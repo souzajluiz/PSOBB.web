@@ -164,8 +164,10 @@ export class NodeAnimator {
   // overshoot over: 'past' once the frame is past the last one
   // (UpdateSeabedTuriganeWarpPosition_0066d28c: frame > count - 1), 'last'
   // once it reaches it (SeabedTuriganeMapObjectUpdate_0066aeec:
-  // count <= frame + 1.0).
-  restart: false | 'past' | 'last' = false;
+  // count <= frame + 1.0). 'carry-last' keeps the overshoot but wraps at the
+  // last frame instead of the frame count (the city warps' updates
+  // 0x0064ab90: if frame >= count - 1 then frame -= count - 1).
+  restart: false | 'past' | 'last' | 'carry-last' = false;
   private v: [number, number, number] = [0, 0, 0];
   private euler = new THREE.Euler();
   private qa = new THREE.Quaternion();
@@ -224,7 +226,9 @@ export class NodeAnimator {
     this.tickRemainder -= Math.floor(this.tickRemainder);
     for (let i = 0; i < ticks; i++) {
       this.frame += this.speed;
-      if (this.loop && this.restart) {
+      if (this.loop && this.restart === 'carry-last') {
+        if (m.frameCount > 2 && this.frame >= m.frameCount - 1) this.frame -= m.frameCount - 1;
+      } else if (this.loop && this.restart) {
         if (this.restarts(this.frame)) this.frame = 0;
       } else if (this.loop) {
         if (this.frame >= m.frameCount) this.frame -= m.frameCount;
@@ -233,7 +237,8 @@ export class NodeAnimator {
       }
     }
     let f = this.frame + this.speed * this.tickRemainder;
-    if (this.loop && this.restart) f = this.restarts(f) ? 0 : f;
+    if (this.loop && this.restart === 'carry-last') f = m.frameCount > 2 ? f % (m.frameCount - 1) : f;
+    else if (this.loop && this.restart) f = this.restarts(f) ? 0 : f;
     else f = this.loop ? f % m.frameCount : Math.min(f, m.frameCount - 1);
     this.apply(f);
   }
