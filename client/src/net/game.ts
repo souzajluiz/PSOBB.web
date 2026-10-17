@@ -736,7 +736,7 @@ export class Game extends Lobby {
     const body = new Uint8Array(0x0c);
     const dv = new DataView(body.buffer);
     body[0] = 0x75;
-    body[1] = 0x02;
+    body[1] = 0x03; // size in dwords: 0x0C bytes (newserv rejects a short 6x75)
     dv.setUint16(4, flag, true);
     dv.setUint16(6, set ? 0 : 1, true);
     dv.setUint16(8, difficulty, true);
@@ -750,7 +750,7 @@ export class Game extends Lobby {
     const body = new Uint8Array(0x0c);
     const dv = new DataView(body.buffer);
     body[0] = 0x77;
-    body[1] = 0x02;
+    body[1] = 0x03; // size in dwords: 0x0C bytes (newserv drops the client on 0x08)
     dv.setUint16(4, register & 0xff, true);
     dv.setInt32(8, value | 0, true);
     this.conn.send(0x60, 0, body);

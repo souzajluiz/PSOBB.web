@@ -530,6 +530,38 @@ export class LobbyView {
     if (me && me.clientId === clientId) me.position = { x: pos.x, y: pos.y, z: pos.z };
   }
 
+  // Where a player stands and faces (radians), as drawn.
+  playerPose(clientId: number): { x: number; y: number; z: number; angle: number } | null {
+    const m = this.markers.get(clientId);
+    if (!m) return null;
+    const p = m.group.position;
+    return { x: p.x, y: p.y, z: p.z, angle: m.angle };
+  }
+
+  // Puts a player at once at (x, z) on the ground under y, facing `angle`
+  // (6x24 and set_player_start_position; the local player also tells the
+  // others with a stop at the new place).
+  placePlayer(clientId: number, x: number, y: number, z: number, angle: number): void {
+    const gy = this.ground(x, z, y + STEP_UP) ?? y;
+    const m = this.markers.get(clientId);
+    if (m) {
+      m.group.position.set(x, gy, z);
+      m.target.set(x, gy, z);
+      m.angle = angle;
+      m.group.rotation.y = angle;
+    }
+    const p = this.lobby.players.get(clientId);
+    if (p) {
+      p.position = { x, y: gy, z };
+      p.angle = angle;
+      p.moving = false;
+    }
+    if (clientId === this.lobby.selfId) {
+      this.cameraYaw = angle + Math.PI;
+      this.lobby.sendStop(x, gy, z, angle);
+    }
+  }
+
   // World position of each player (for 2D overlays such as name tags).
   playerPositions(): Map<number, THREE.Vector3> {
     const out = new Map<number, THREE.Vector3>();

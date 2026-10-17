@@ -237,8 +237,10 @@ export class ChatBubble {
 
   // FUN_00720940: new text. Lifetime round(len * 3.3 + 55.5) frames; an open
   // balloon shrinks to half size and grows again with the new text (state 5).
-  say(text: string): void {
-    this.lines = wrapGameText(text, B.wrap);
+  // `wrap`: width limit; quest balloons (flag 4, ChatBubbleEntity_UpdateText
+  // AndSize_00720954) pass Infinity and keep the text's own line breaks.
+  say(text: string, wrap: number = B.wrap): void {
+    this.lines = wrapGameText(text, wrap);
     this.textW = Math.max(...this.lines.map(gameTextWidth));
     const textH = this.lines.length * GAME_TEXT.lineHeight - 6;
     this.target = { w: this.textW + B.pad, h: textH + B.pad };

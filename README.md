@@ -26,6 +26,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Items on the floor (6x5D/6x5F/6x59) with their `item.bml` box models, pickup (6x5A), item boxes (6x0B + 6xA2), equip/unequip/use/drop from the Inventory panel | ✅ every ItemPMT item resolves to a model; two clients live against newserv |
 | Quests: the server's quest menu (A2/A3), the 44/13 file pair and the AC barrier, the `.bin` script and the `.dat` set data, a script VM that runs a quest's opening | ✅ all 335 BB quest files parse; "Lost HEAT SWORD" loaded and played live in Chrome |
 | Combat: attack combo (6x43-6x45/6x46/6x0A), the player taking damage and dying (6x4A-6x4F, 6x89), enemy AI (notice, chase, melee), damage numbers and the lock-on reticle | ✅ Forest families from the exe tables; two clients live against newserv |
+| NPCs (Pioneer 2, Lab, quests) with the client's models and motions, talk, the area script, the Hunter's Guild counter, a quest from the counter to the reward (6x24, 6x69, 6xC9) | ✅ 66 NPC archives build; Mop-up Operation #1 taken and paid live in Chrome |
 | Boss rooms: enemy child objects (Vol Opt's monitors and pillars, Sorcerer bits, Belra arms, De Rol Le / Barba Ray and Saint-Milion parts), boss warp gathering (6x6A) and boss music phases | ✅ live in Chrome |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
@@ -81,6 +82,8 @@ node tests/itemmodels.test.ts    # every ItemPMT item resolves to an item.bml fl
 node tests/items.live.ts         # two clients: drop/pick up items, split a stack, meseta, equip/use, break Forest 1 boxes
 node tests/waves.test.ts         # every free-play floor's .evt parses; every object type resolves to a model and builds; wave state machine and door collision
 node tests/quests.test.ts        # every BB quest newserv ships: .bin header, label table, full bytecode walk, .dat chunks, VM run, vs newserv disassemble-quest-script
+node tests/npcs.test.ts          # every NPC entry of every free-play floor and BB quest resolves; all NPC models build; the area script reaches the counters
+node tests/questflow.test.ts     # Mop-up Operation #1 from its start to the reward in the VM; 6x24 / 6x69 / 6xC9 layouts; npcplayerchar.dat
 node tests/quest.live.ts         # the quest menu (A2/09/10), the 44/13 download, the AC barrier, then run the quest's start label
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```

@@ -28,6 +28,9 @@ export interface LobbyPlayer {
   gait: 'walk' | 'run'; // last 6x40 (walk) or 6x42 (run)
   floor: number;
   visible?: boolean; // games: 6x22 (invisible while changing floors) / 6x23
+  // A quest's NPC player (6x69, quest/npcplayers.ts): the npcplayerchar.dat
+  // template it was made from.
+  npcTemplate?: number;
 }
 
 export interface LobbyEvents {
@@ -130,6 +133,24 @@ export class Lobby {
 
   protected emit<K extends keyof LobbyEvents>(event: K, ...args: Parameters<LobbyEvents[K]>): void {
     for (const fn of this.listeners.get(event) ?? []) (fn as unknown as (...a: Parameters<LobbyEvents[K]>) => void)(...args);
+  }
+
+  // A player the client made itself (a quest's NPC player, 6x69): listeners
+  // see it join and move like any other player.
+  addLocalPlayer(p: LobbyPlayer): void {
+    this.players.set(p.clientId, p);
+    this.emit('playerJoined', p);
+    this.emit('moved', p);
+  }
+
+  removeLocalPlayer(clientId: number): void {
+    if (!this.players.delete(clientId)) return;
+    this.emit('playerLeft', clientId);
+  }
+
+  // Tells the listeners a player was moved without a network command (6x24).
+  notifyMoved(p: LobbyPlayer): void {
+    this.emit('moved', p);
   }
 
   get self(): LobbyPlayer | undefined {
