@@ -1,0 +1,220 @@
+// Particle effects of type 0 from particleentry.dat (data.gsl, 0x98 bytes per
+// entry), as PsoBB.exe (Ephinea 1.25.13) runs them. Used by the "Connecting.."
+// warp (entries 0x13 load_blue, 0x15 load_yellow, 0x17 loadhikari,
+// 0x1d load_circle, 0x6e load_red, 0x16 load_carsol).
+//
+// Emitter FUN_0050a3a0(pos, rotation, id, 1) -> FUN_00508f58: acc += rate
+// (+0x44) each frame, one particle per whole unit.
+// Spawn FUN_0050ec4c:
+//   pos = emitter + (rand - 0.5) * variation (+0x18..+0x20)
+//   size = rand * (+0x28) + (+0x24)
+//   life = round(rand * (+0x4c) + (+0x48)) frames
+//   velocity (local) = (rand * (+0x38) + (+0x30), rand * (+0x3c) + (+0x34), 0)
+//   rotated about Y by a random angle (FUN_007829f4).
+// Update FUN_0050dbb8:
+//   velocity x/z *= +0x50, velocity y += +0x54, size *= +0x2c, age += 1/life;
+//   the local velocity is turned by the emitter rotation (FUN_0083a610 into
+//   +0x118) and added to the position (FUN_0050e618).
+//   fade = min(age / +0x58, (1 - age) / +0x5c) (1 outside those ranges);
+//   RGB = clamp(age * (+0x6c..+0x74) + (+0x7c..+0x84)) * fade.
+// Render FUN_0050e698:
+//   tex_flags (+0x88) & 4: streak along the projected step, length +0x64 *
+//   |step|, thickness +0x68 * |step| (renderer 4, rotated quad);
+//   otherwise a square sprite of half size 16 * size (renderer 3).
+//   Blend SRCALPHA/ONE (additive).
+// Texture (+0x14) is a GBIX of effect_nt.xvm.
+
+export interface ParticleEntry {
+  id: number;
+  name: string;
+  gbix: number;
+  variation: [number, number, number];
+  size: [number, number, number];
+  vel0: [number, number]; // +0x30, +0x34
+  velRand: [number, number]; // +0x38, +0x3c
+  rate: number;
+  life: [number, number];
+  damping: number;
+  gravity: number;
+  fade: [number, number];
+  streak: [number, number]; // +0x64, +0x68
+  colorSlope: [number, number, number];
+  colorBase: [number, number, number];
+  flags: number;
+}
+
+export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
+  const o = id * 0x98;
+  const dv = new DataView(dat.buffer, dat.byteOffset + o, 0x98);
+  const f = (k: number) => dv.getFloat32(k, true);
+  let name = '';
+  for (let i = 0; i < 16 && dat[o + i]; i++) name += String.fromCharCode(dat[o + i]);
+  return {
+    id,
+    name,
+    gbix: dv.getUint32(0x14, true),
+    variation: [f(0x18), f(0x1c), f(0x20)],
+    size: [f(0x24), f(0x28), f(0x2c)],
+    vel0: [f(0x30), f(0x34)],
+    velRand: [f(0x38), f(0x3c)],
+    rate: f(0x44),
+    life: [dv.getInt32(0x48, true), dv.getInt32(0x4c, true)],
+    damping: f(0x50),
+    gravity: f(0x54),
+    fade: [f(0x58), f(0x5c)],
+    streak: [f(0x64), f(0x68)],
+    colorSlope: [f(0x6c), f(0x70), f(0x74)],
+    colorBase: [f(0x7c), f(0x80), f(0x84)],
+    flags: dv.getUint32(0x88, true),
+  };
+}
+
+export interface Emitter {
+  entry: ParticleEntry;
+  pos: [number, number, number];
+  rotX: number; // radians (BAMS 0x4000 = 90 degrees)
+  acc: number;
+}
+
+interface Particle {
+  e: Emitter;
+  p: [number, number, number];
+  v: [number, number, number]; // local
+  step: [number, number, number]; // world step of the last frame
+  size: number;
+  age: number;
+  dt: number;
+}
+
+export const NT_SIZE = 16; // effect_nt metadata width (see title.ts)
+
+// Projection with the fixed camera at the origin looking down -Z
+// (FUN_004d31f4(9) + FUN_004d33c0(0, (0,0,-1)) in the connection loop) and
+// the default perspective (D = 437.44, title.ts) around the screen centre.
+export class ParticleSystem {
+  emitters: Emitter[] = [];
+  private list: Particle[] = [];
+  private seed = 1;
+  centre: [number, number] = [320, 240];
+  D = 437.44;
+
+  private rand(): number {
+    this.seed = (Math.imul(this.seed, 214013) + 2531011) | 0;
+    return ((this.seed >>> 16) & 0x7fff) / 32768;
+  }
+
+  add(entry: ParticleEntry, pos: [number, number, number], rotX: number): void {
+    this.emitters.push({ entry, pos, rotX, acc: 0 });
+  }
+
+  step(spawn = true): void {
+    if (spawn) {
+      for (const e of this.emitters) {
+        e.acc += e.entry.rate;
+        while (e.acc >= 1) {
+          e.acc -= 1;
+          this.list.push(this.spawn(e));
+        }
+      }
+    }
+    for (const q of this.list) this.update(q);
+    this.list = this.list.filter((q) => q.age < 1);
+  }
+
+  get count(): number {
+    return this.list.length;
+  }
+
+  private spawn(e: Emitter): Particle {
+    const d = e.entry;
+    const r = () => this.rand();
+    const p: [number, number, number] = [
+      e.pos[0] + (r() - 0.5) * d.variation[0],
+      e.pos[1] + (r() - 0.5) * d.variation[1],
+      e.pos[2] + (r() - 0.5) * d.variation[2],
+    ];
+    const size = r() * d.size[1] + d.size[0];
+    const dt = 1 / Math.max(1, Math.round(r() * d.life[1] + d.life[0]));
+    const vx = r() * d.velRand[0] + d.vel0[0];
+    const vy = r() * d.velRand[1] + d.vel0[1];
+    const a = r() * Math.PI * 2;
+    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt };
+  }
+
+  private update(q: Particle): void {
+    const d = q.e.entry;
+    q.v = [q.v[0] * d.damping, q.v[1] + d.gravity, q.v[2] * d.damping];
+    q.size *= d.size[2];
+    // Emitter rotation about X: y' = y cos - z sin, z' = y sin + z cos.
+    const c = Math.cos(q.e.rotX), s = Math.sin(q.e.rotX);
+    q.step = [q.v[0], q.v[1] * c - q.v[2] * s, q.v[1] * s + q.v[2] * c];
+    q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
+    q.age += q.dt;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, texture: (gbix: number) => CanvasImageSource | null, tint: (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource): void {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const q of this.list) {
+      const d = q.e.entry;
+      const z = -q.p[2];
+      if (z < 1) continue;
+      const img = texture(d.gbix);
+      if (!img) continue;
+      const t = Math.min(q.age, 1);
+      const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
+      if (fade <= 0) continue;
+      const c = [0, 1, 2].map((i) => Math.max(0, Math.min(1, t * d.colorSlope[i] + d.colorBase[i])) * 255);
+      ctx.globalAlpha = fade;
+      const tinted = tint(img, `g${d.gbix}`, c[0], c[1], c[2]);
+      const k = this.D / z;
+      const sx = this.centre[0] + q.p[0] * k;
+      const sy = this.centre[1] - q.p[1] * k;
+      if (d.flags & 4) {
+        const L = Math.hypot(...q.step);
+        if (L === 0) continue;
+        const e = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
+        if (-e[2] < 1) continue;
+        const ke = this.D / -e[2];
+        const ex = this.centre[0] + e[0] * ke;
+        const ey = this.centre[1] - e[1] * ke;
+        const hw = k * NT_SIZE * d.streak[0] * L;
+        const hh = k * NT_SIZE * d.streak[1] * L;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(Math.atan2(ey - sy, ex - sx));
+        ctx.drawImage(tinted, -hw, -hh, hw * 2, hh * 2);
+        ctx.restore();
+      } else {
+        const h = k * NT_SIZE * q.size;
+        ctx.drawImage(tinted, sx - h, sy - h, h * 2, h * 2);
+      }
+    }
+    ctx.restore();
+  }
+}
+
+// Additive tint of a texture (vertex color x texel), cached per color step.
+export function makeTinter(): (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource {
+  const cache = new Map<string, OffscreenCanvas>();
+  return (img, key, r, g, b) => {
+    const q = (v: number) => Math.round(v / 8) * 8;
+    const k = `${key}|${q(r)},${q(g)},${q(b)}`;
+    let c = cache.get(k);
+    if (!c) {
+      const w = (img as { width: number }).width;
+      const h = (img as { height: number }).height;
+      c = new OffscreenCanvas(w, h);
+      const g2 = c.getContext('2d')!;
+      g2.drawImage(img, 0, 0);
+      g2.globalCompositeOperation = 'multiply';
+      g2.fillStyle = `rgb(${q(r)},${q(g)},${q(b)})`;
+      g2.fillRect(0, 0, w, h);
+      g2.globalCompositeOperation = 'destination-in';
+      g2.drawImage(img, 0, 0);
+      if (cache.size > 2000) cache.clear();
+      cache.set(k, c);
+    }
+    return c;
+  };
+}

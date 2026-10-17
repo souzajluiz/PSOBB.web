@@ -243,6 +243,43 @@ export class BBSession {
     return lobby;
   }
 
+  // Game-server phase split in two steps for a UI that shows the server's
+  // menu (classic client): 93 with connection_phase 4, then the first 07
+  // (main menu; entry 0 is the menu title, item_id 0xFFFFFFFF) or a direct 67.
+  async connectGameServer(username: string, password: string, slot: number, port = 12000): Promise<{ lobby: Lobby; menu: MenuItem[] | null }> {
+    const init = this.init;
+    if (!init) throw new Error('log in first');
+    const conn = await this.open(port);
+    conn.sendLogin({
+      username,
+      password,
+      guildCardNumber: init.guildCardNumber,
+      securityToken: init.securityToken,
+      clientConfig: init.clientConfig,
+      connectionPhase: 4,
+      characterSlot: slot,
+    });
+    const lobby = new Lobby(conn);
+    const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (first.command === 0x1a || first.command === 0xd5) {
+      throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
+    }
+    return { lobby, menu: first.command === 0x07 ? parseMenu(first.data) : null };
+  }
+
+  // 10 {menu_id, item_id}; resolves with the next menu (07) or null once the
+  // lobby was joined (67).
+  async selectMenuItem(item: MenuItem): Promise<MenuItem[] | null> {
+    const conn = this.requireConn();
+    const sel = new Uint8Array(8);
+    new DataView(sel.buffer).setUint32(0, item.menuId, true);
+    new DataView(sel.buffer).setUint32(4, item.itemId, true);
+    conn.send(0x10, 0, sel);
+    const r = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (r.command === 0x1a || r.command === 0xd5) throw new Error(readUtf16(r.data, 0, r.data.length >> 1));
+    return r.command === 0x07 ? parseMenu(r.data) : null;
+  }
+
   close(): void {
     this.conn?.close();
     this.conn = null;

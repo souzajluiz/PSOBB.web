@@ -18,11 +18,16 @@ export interface Screen {
   // 'left43': uniform scale by height, 4:3 area anchored left (menus such as
   // SELECT CHARACTER); drawFullscreen paints the whole window first.
   layout?: 'stretch' | 'left43';
+  // true: the canvas is cleared to transparent so a 3D view underneath shows
+  // through (lobby, ship select).
+  transparent?: boolean;
   drawFullscreen?(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage): void;
   enter?(stage: Stage): void;
   update(dt: number, stage: Stage): void;
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void;
   key?(e: KeyboardEvent, stage: Stage): void;
+  keyUp?(e: KeyboardEvent, stage: Stage): void;
+  blur?(stage: Stage): void;
   leave?(stage: Stage): void;
 }
 
@@ -56,6 +61,8 @@ export class Stage {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(e.key)) e.preventDefault();
       this.screen?.key?.(e, this);
     });
+    canvas.addEventListener('keyup', (e) => this.screen?.keyUp?.(e, this));
+    canvas.addEventListener('blur', () => this.screen?.blur?.(this));
     const loop = (now: number) => {
       const dt = Math.min((now - this.last) / 1000, 0.1);
       this.last = now;
@@ -86,8 +93,11 @@ export class Stage {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    if (this.screen?.transparent) ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    else {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
     if (!this.screen) return;
     this.screen.update(dt, this);
     this.paint(ctx, this.canvas.width, this.canvas.height);
