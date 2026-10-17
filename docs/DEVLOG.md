@@ -85,6 +85,17 @@
 - The analog model rotation (`FUN_004ef18c`) and the camera idle demo (states 1–4 of `0x009b8c60`).
 - Under the widescreen patch, k = 1 (normal steps) shifts the viewport by 128·W/640 as the code says; no capture shows a normal step with a model.
 - The creation screen does not cross-fade the model on look changes; it is rebuilt with the motion frame kept.
+
+## 2026-10-17: enemy models and idle motions
+
+**What changed:** the game view draws the enemies of each floor with their real models instead of markers (`render/enemyview.ts`), at their spawn position and rotation, playing their idle motion. `formats/enemymodels.ts` maps every set type (and the params that pick variants) to an archive, a model entry and a motion; `render/enemymodel.ts` loads the BML like the client (entries by position, textures shared by texture-list name, separate XVMs for texture swaps) and plays NJS_MOTION on the bones. Objects, NPCs and the two controller types without a model keep their markers. `formats/njmotion.ts` now decodes quaternion keys (Episode 4 motions) and standalone `.njm` files; `RelFile` can wrap a Ninja chunk body.
+
+**From PsoBB.exe:** the per-area type → factory table `0x009fba60`, the asset descriptors (e.g. `0x009bb3f4`) and the loader `FUN_005b7a84`, the Ultimate (`FUN_00520e6c`) and low-detail (`FUN_00482a20`) archive choices, the rappy season table `0x009bbbc0`, and for each constructor the model choice, texture swaps and motion table slot (see PROTOCOL.md, "Enemy models", and the comments in `enemymodels.ts`). newserv's Map.cc comments were used to name params and cross-check the type names.
+
+**Checks:** `tests/enemies.test.ts`: 94 archives match their descriptors; all 24304 enemy entries of the 235 Episode 1/2/4 free-play floor variations (online and offline tables) resolve for every difficulty, both detail levels and the seasonal events; 136 distinct models build with no missing textures and their motions play. In Chrome against newserv: Forest 1 (Booma, Wolf, Rappy, Monest), Cave 1 (sharks, Poison Lily), Jungle North (Merillia, Gibbon, Gee) and Crater East (Boota, quaternion motions) render textured and animated.
+
+**Not done:** sub-objects drawn by separate objects (Dark Belra's arms, Sorcerer bits, Deldepth disc, Morfos arm, Recons, Pofuilly tails, Saint-Milion parts, Vol Opt phase 1), Recobox orientation, Sinow stealth, boss intro motions (the idle slot is shown), the server's rare flags (only param-driven variants), De Rol Le / Barba Ray fins and tentacles.
+
 ## 2026-10-17: character file, item table and item names
 
 **What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.

@@ -481,6 +481,27 @@ Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymot
 
 **Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
 
+## Enemy models (`bm_ene_*.bml`, boss archives)
+
+Code: `formats/enemymodels.ts` (table), `render/enemymodel.ts` (loader, animator), `render/enemyview.ts` (floor layer). Test: `tests/enemies.test.ts`. Addresses are VAs in the Ephinea `PsoBB.exe`.
+
+**Type → constructor.** `0x009fba60` holds one pointer per area (47, newserv area numbers) to a list of 0x10-byte rows `{u32 set type, u32 factory, f32 distance², u32 child count}` ended by type `0xFFFF`. The factory allocates the object and runs the constructor (e.g. Forest 1: `0x44` Booma → `0x00535e50`, `0x41` Rappy → `0x00526cc4`, `0x42` Monest → `0x00519144`, `0x43` Wolf → `0x0051b26c`). Types without a row (e.g. type 0 in a few Episode 2 files) construct nothing.
+
+**Asset descriptors.** Each enemy class has a loader (per-area lists such as `0x009fc420`, pairs of load/unload functions) that loads one archive through a descriptor `{char *bml; char **models; char **motions; u16 model_count; u16 motion_count}` (e.g. Shark `0x009bb3f4`: `bm_ene_bm1_shark.bml`, 3 models, 12 motions). `TBinModel` (`FUN_005b7a84`) reads the archive entries **by position**: the first `model_count` entries become the model array (`+0x42C`, 0x10 bytes: `+8` NJCM object, `+0xC` texture list, textures from the XVM attached to the entry), the next `motion_count` the motion array (`+0x430`, 8 bytes: `+4` NJS_MOTION). The names in the descriptor are not used (`bm4_ps_ma_body.bml` stores its motions in another order; Dubchic's motion files are named `*_me2_me2.njm`, the descriptor says `*_me2_y_me2.njm`). Header byte 9 ≠ 0 means 0x20-byte blob alignment (else 0x800); byte 8 `'P'` marks compressed entries.
+
+**Variants.**
+- Ultimate: `FUN_00520e6c` = online flag `DAT_009f9860` and difficulty `DAT_00a9cd68 == 3` (offline difficulty is capped at 2, `FUN_0077b2a8`). Loaders then pass another archive name with the same descriptor (`FUN_0051f674`): `*_a.bml` (`*_ap.bml` for Vol Opt and the rappies).
+- Low detail: Episode 2 loaders load their own `*_low.bml` descriptor when `FUN_00482a20()` (`DAT_00a46c64`, a graphics option set in `FUN_00482ca0`) is 0.
+- Rappy: archive from `0x009bbbc0[episode·8 + season·2 + ultimate]`, season from the lobby event (1 → Christmas `_xs`, 4 → Easter `_es`, 5 → Halloween `_hw`); Episode 4 always `bm_ene_sandlappy.bml` (`lappy_*4.bml` are not referenced). Rare (param6 & 1): Episode 1 draws model 0 with `re3_b_lappy_base_ao.xvm` (Ultimate `_niji`), Episode 2 and 4 model 1.
+- Texture swaps: Gillchic draws with `me2_y_me2_z.xvm`; Sinow Gold / Spigell / Zele use a texture list copy with ids 0–2 → 3–5; Mericus/Merikle ids 0–2 → 3–5 / 6–8 (`FUN_00573100`); Monest, Barbarous Wolf and Canadine draw a model with another entry's texture list.
+- Del Lily (area 0x23) loads `bm_ene_dkflower.bml` with the Poison Lily descriptor.
+
+**Constructor.** set_params (vtable `+0x14C`, `FUN_00786848` for most) stores param1..5 at `+0x35C..+0x36C`, param6 at `+0x370`, param7 at `+0x374`. The constructor picks model entry *i* (`obj+0x34`, texture list `obj+0x24`), sets the motion table (`obj+0xD8`) and starts a slot with `FUN_007aa4c8`. Motion table rows are the player motion records (`u16 mode, u16 next, u32 motion index, f32 speed, u32 flags`); a few tables get their speeds from static initialisers (Rappy `0x00527890`, De Rol Le `0x00434340`, Barba Ray `0x004b9bd8`). Per-type model and idle rules, with addresses, are in `formats/enemymodels.ts`; examples: Booma family param6 0/1/2 → models 0/2/1; sharks → 2/0/1; Dimenian → 2 − param6; Hildebear param6 ≥ 1 → model 2 (Hildeblue) else 1.
+
+**Motion data** (`.njm`, NMDM chunk): angle keys are 16-bit (`NJS_MKEY_SA`, 8 bytes) in every enemy motion; Episode 4 motions use quaternion keys (type `0x2000`, 0x14 bytes: `u32 frame, f32 w, x, y, z`) instead of angles. Motions with element type 7 also carry scale keys.
+
+**Not decoded:** child objects drawn by separate sub-objects (Dark Belra's arms, Chaos Sorcerer's bits, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Saint-Milion's parts), Recobox orientation, Vol Opt phase 1 parts (the `0xC2` controller draws nothing), Olga Flow's height offset (`+0x4F0`).
+
 ## Map texture animation (`map_<area>[_<layout>].tam`)
 
 Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.

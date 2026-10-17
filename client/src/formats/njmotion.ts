@@ -22,7 +22,7 @@
 //     (NJS_MKEY_SA). The motion header does not say which one is used; the
 //     caller knows (the player motion data is only ever read as short keys).
 
-import type { RelFile } from './rel.ts';
+import { RelFile } from './rel.ts';
 
 export const MTYPE_POS = 0x1;
 export const MTYPE_ANG = 0x2;
@@ -37,11 +37,17 @@ export interface NjKey {
   value: [number, number, number]; // angles already in radians
 }
 
+export interface NjQuatKey {
+  frame: number;
+  value: [number, number, number, number]; // as stored (see readQuatKeys)
+}
+
 export interface NjNodeMotion {
   position: NjKey[] | null;
   rotation: NjKey[] | null;
   scale: NjKey[] | null;
-  // Elements this decoder does not expand (e.g. quaternions): key counts only.
+  quaternion: NjQuatKey[] | null;
+  // Elements this decoder does not expand: key counts only.
   other: Array<{ type: number; count: number }>;
 }
 
@@ -58,6 +64,19 @@ export interface NjMotion {
 export interface NjMotionOptions {
   // Angle keys are NJS_MKEY_SA (8 bytes, i16 angles) instead of 16-byte keys.
   shortAngles?: boolean;
+}
+
+// Quaternion keys (0x14): u32 frame, f32[4].
+function readQuatKeys(rel: RelFile, p: number, n: number): NjQuatKey[] {
+  if (p + n * 0x14 > rel.data.length) throw new Error(`quaternion keys at 0x${p.toString(16)} (${n}) out of range`);
+  const keys: NjQuatKey[] = [];
+  for (let i = 0; i < n; i++) {
+    const k = p + i * 0x14;
+    const frame = rel.u32(k);
+    if (keys.length && frame <= keys[keys.length - 1].frame) break;
+    keys.push({ frame, value: [rel.f32(k + 4), rel.f32(k + 8), rel.f32(k + 12), rel.f32(k + 16)] });
+  }
+  return keys;
 }
 
 function readKeys(rel: RelFile, p: number, n: number, kind: 'vec' | 'ang' | 'sang'): NjKey[] {
@@ -97,7 +116,7 @@ export function parseNjMotion(rel: RelFile, o: number, nodeCount: number, opts: 
   const nodes: NjNodeMotion[] = [];
   for (let n = 0; n < nodeCount; n++) {
     const rec = mdata + n * elements * 8;
-    const node: NjNodeMotion = { position: null, rotation: null, scale: null, other: [] };
+    const node: NjNodeMotion = { position: null, rotation: null, scale: null, quaternion: null, other: [] };
     elemTypes.forEach((t, e) => {
       const count = rel.u32(rec + (elements + e) * 4);
       if (!count) return;
@@ -105,6 +124,7 @@ export function parseNjMotion(rel: RelFile, o: number, nodeCount: number, opts: 
       if (t === MTYPE_POS) node.position = readKeys(rel, keys, count, 'vec');
       else if (t === MTYPE_ANG) node.rotation = readKeys(rel, keys, count, opts.shortAngles ? 'sang' : 'ang');
       else if (t === MTYPE_SCL) node.scale = readKeys(rel, keys, count, 'vec');
+      else if (t === MTYPE_QUAT) node.quaternion = readQuatKeys(rel, keys, count);
       else node.other.push({ type: t, count });
     });
     nodes.push(node);
@@ -144,4 +164,12 @@ export function sampleKeys(keys: NjKey[], frame: number, frameCount: number, out
     out[c] = a.value[c] + d * t;
   }
   return out;
+}
+
+// Standalone motion file (.njm, e.g. a BML entry): an NMDM chunk whose body is
+// the NJS_MOTION, pointers relative to the chunk body.
+export function parseNjmFile(data: Uint8Array, nodeCount: number, opts: NjMotionOptions = {}): NjMotion {
+  const rel = RelFile.chunk(data, 'NMDM');
+  if (!rel) throw new Error('no NMDM chunk found');
+  return parseNjMotion(rel, 0, nodeCount, opts);
 }
