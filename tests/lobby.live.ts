@@ -39,7 +39,8 @@ a.lobby.sendChat('hello from the browser client');
 const text = await timeout(chat);
 check(`B received chat "${text}"`, text.includes('hello from the browser client'));
 
-const moved = new Promise<LobbyPlayer>((r) => b.lobby.on('moved', (p) => p.clientId === a.lobby.selfId && r(p)));
+// A also answers B's 6x1F with a 6x20 (not moving); wait for the run itself.
+const moved = new Promise<LobbyPlayer>((r) => b.lobby.on('moved', (p) => p.clientId === a.lobby.selfId && p.moving && r(p)));
 a.lobby.sendRun(123.5, -45.25);
 const m = await timeout(moved);
 check(`B saw A run to (${m.position.x}, ${m.position.z})`, m.position.x === 123.5 && m.position.z === -45.25);
