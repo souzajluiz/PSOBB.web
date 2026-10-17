@@ -9,11 +9,31 @@ https://github.com/fuzziqersoftware/newserv
 - **Test oracle:** its CLI (`encrypt-data`, `decompress-prs`, `extract-gsl`, …) produces the expected outputs for `tests/oracle.test.ts`.
 - **Ported code:** `BBCrypt`, `prsDecompress`, `GSLArchive` and `AFSArchive`. Each file cites its origin; MIT allows this as long as the notice is kept.
 
-## 2. original-psobb-client-source (gitlab.psobb.io)
+## 2. original-psobb-client-source (gitlab.psobb.io): look here first
 
 https://gitlab.psobb.io/psobb/original-psobb-client-source
 
-Ghidra dump of `psobb.exe` with community-curated headers and notes:
+**The first place to look for anything that must come from the client.** Its
+`src/Psobb.exe-*.c` is a full Ghidra dump of the binary (~986k lines, ~13300
+functions) whose functions are named by the community with the address kept as
+a suffix, so an address found anywhere resolves to a name and a body:
+`UpdateGroundItem_005c4010`, `InitializeItemBML_005d7ccc`. Running Ghidra
+headless (`tools/ghidra/run_any.sh`) is the fallback for what the dump leaves
+unnamed or unresolved, and for data tables, which the dump does not carry.
+
+Clone it anywhere and point `REFSRC` at it (the default is
+`../refsrc/original-psobb-client-source`, outside this repository, and it is
+never committed here):
+
+```sh
+git clone --depth 1 https://gitlab.psobb.io/psobb/original-psobb-client-source.git
+tools/refsrc.sh addr 005d7ccc      # the function at that address, with its body
+tools/refsrc.sh name ItemBML       # declarations whose name matches
+tools/refsrc.sh body FunctionName  # one body by name
+tools/refsrc.sh grep 0x5F          # every hit in headers/ and notes/
+```
+
+It also carries community-curated headers and notes:
 - `headers/network.h`: 6x subcommand layouts (movement `6x40/42/3E`, attacks `6x43-45`, …)
 - `notes/quest_opcodes_*.md`: quest opcode semantics
 - `notes/_wiki_combat_formulas.md`, `notes/_wiki_item_tables.md`

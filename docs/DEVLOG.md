@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-17: the named Ghidra dump is the first place to look
+
+**What changed:** `tools/refsrc.sh` looks things up in the
+[original-psobb-client-source](https://gitlab.psobb.io/psobb/original-psobb-client-source)
+checkout. Its `src/Psobb.exe-*.c` is a full Ghidra dump of the binary (~986k
+lines, ~13300 functions) whose functions carry community-given names with the
+address kept as a suffix, so an address from a capture, a note or another
+function resolves to a name and a body in one grep:
+
+```sh
+tools/refsrc.sh addr 005c4010   # UpdateGroundItem_005c4010, with its body
+tools/refsrc.sh name ItemBML    # LoadItemBMLChunks_005d7a68, InitializeItemBML_005d7ccc, ...
+tools/refsrc.sh grep 0x5F       # the hits in headers/ and notes/
+```
+
+Everything that has to come from the client is looked up there first; Ghidra
+headless (`tools/ghidra/run_any.sh`) stays the fallback for what the dump
+leaves unnamed and for the data tables, which it does not carry. The checkout
+lives outside this repository (`REFSRC`, by default
+`../refsrc/original-psobb-client-source`) and is never committed here.
+
 ## 2026-10-17: items on the floor, pickup and the item commands
 
 **What changed:** a game now has items. `net/items.ts` (`GameItems`) keeps the floor items and the local inventory and speaks the Blue Burst item protocol: server drops (`6x5F` from boxes and enemies, `6x5D` for meseta and split stacks), pickup (`6x5A` → the server's `6x59`), dropping (`6x2A`, or `6xC3` + `6x29` for part of a stack and for meseta), equip/unequip/use (`6x25`/`6x26`/`6x27`), inventory creation (`6xBE`), floor-item destruction (`6x63`) and the item state a joining player receives (`6x6D`, BC0-decompressed here for the first time). It also tracks the other players' inventories (from `65`, `6x70`, `6x59`, `6xBE`, `6x29`) so their `6x2A` drops can be shown. `render/flooritems.ts` draws the items with the client's own box models and handles Enter: pick up the nearest item, else break the nearest item box (`6x0B` + `6xA2` to the leader). The Inventory panel (`ui/inventoryPanel.ts`) gained Equip / Unequip / Use / Drop / Drop 1 buttons and a meseta drop field; the rows follow the local inventory, which `GameItems` keeps in step with the server (and writes back into the raw `E7` so the next `6x70` carries it). `render/gameview.ts` only gained the wiring.

@@ -85,7 +85,7 @@ Player models: with the dev server running, open http://127.0.0.1:5173/models.ht
 The project builds on three sources, described in [docs/REFERENCES.md](docs/REFERENCES.md):
 
 1. **newserv**: server, file formats and protocol (MIT).
-2. **original-psobb-client-source**: Ghidra dump of `psobb.exe` with protocol, opcode and formula notes.
+2. **original-psobb-client-source**: Ghidra dump of `psobb.exe` with named functions, protocol, opcode and formula notes. **Anything that has to come from the client is looked up here first** (`tools/refsrc.sh addr 005d7ccc`); Ghidra headless is the fallback.
 3. **A matching decompilation of PsoBB.exe**: game logic proven byte-for-byte (private repository, used as reference only).
 
 ## Layout
