@@ -1,8 +1,16 @@
 // 3D lobby: renders the lobby map, a marker per player, and drives the local
 // player with WASD, sending 6x42 (run) while moving and 6x3E (stop) on release.
+// Walking uses the map collision (c.rel); players start at the lobby's
+// TObjPlayerSet spawn point for their client id (map_lobby_NNo.dat).
 
 import * as THREE from 'three';
+import { ClientFiles } from '../data/clientfiles.ts';
+import type { DataSource } from '../data/source.ts';
+import { parseMapCRel } from '../formats/crel.ts';
+import { parseMapNRel } from '../formats/nrel.ts';
+import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
+import { CollisionWorld, STEP_UP } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const RUN_SPEED = 120; // units per second (approximate)
@@ -15,7 +23,49 @@ const CLASS_COLORS = [
 ];
 
 export function lobbyMapFile(lobbyNumber: number): string {
-  return `map_lobby_${String((lobbyNumber % 10) + 1).padStart(2, '0')}n.rel`;
+  return `map_${lobbyArea(lobbyNumber)}n.rel`;
+}
+
+function lobbyArea(lobbyNumber: number): string {
+  return `lobby_${String((lobbyNumber % 10) + 1).padStart(2, '0')}`;
+}
+
+export interface LobbySpawn {
+  x: number;
+  y: number;
+  z: number;
+  angle: number; // radians, same convention as LobbyPlayer.angle
+}
+
+export interface LobbyMapData {
+  collision: CollisionWorld | null;
+  spawns: Map<number, LobbySpawn>; // by client id
+}
+
+// Loads the lobby's collision (scene/map_lobby_NNc.rel) and player spawn points
+// (map_lobby_NNo.dat from data.gsl, positions relative to the n.rel rooms).
+// Missing files only degrade the view, so errors are reported and swallowed.
+export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, log: (msg: string) => void = () => {}): Promise<LobbyMapData> {
+  const area = lobbyArea(lobbyNumber);
+  const data: LobbyMapData = { collision: null, spawns: new Map() };
+  try {
+    data.collision = new CollisionWorld(parseMapCRel(await source.read(`scene/map_${area}c.rel`)));
+  } catch (err) {
+    log(`no collision for ${area}: ${(err as Error).message}`);
+  }
+  try {
+    const rooms = parseMapNRel(await source.read(`scene/map_${area}n.rel`)).sections;
+    const sets = parseObjectSets(await new ClientFiles(source).read(`map_${area}o.dat`));
+    for (const s of playerSpawns(sets)) {
+      if (s.source !== 0 || data.spawns.has(s.clientId)) continue;
+      const room = rooms.find((r) => r.id === s.room);
+      const [x, y, z] = roomToWorld(s.position, room);
+      data.spawns.set(s.clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
+    }
+  } catch (err) {
+    log(`no spawn points for ${area}: ${(err as Error).message}`);
+  }
+  return data;
 }
 
 function nameSprite(text: string): THREE.Sprite {
@@ -55,10 +105,14 @@ export class LobbyView {
   private sendTimer = 0;
   private wasMoving = false;
   private disposers: Array<() => void> = [];
+  private collision: CollisionWorld | null;
+  private spawns: Map<number, LobbySpawn>;
 
-  constructor(viewer: MapViewer, lobby: Lobby) {
+  constructor(viewer: MapViewer, lobby: Lobby, mapData: LobbyMapData = { collision: null, spawns: new Map() }) {
     this.viewer = viewer;
     this.lobby = lobby;
+    this.collision = mapData.collision;
+    this.spawns = mapData.spawns;
     viewer.setOrbitEnabled(false);
     viewer.onFrame = (dt, keys) => this.frame(dt, keys);
 
@@ -71,28 +125,50 @@ export class LobbyView {
     this.bindMouse(viewer.renderer.domElement);
   }
 
+  // Ground under (x, z): map collision when available, else the render mesh.
+  private ground(x: number, z: number, fromY: number): number | null {
+    return this.collision ? this.collision.groundHeight(x, z, fromY) : this.viewer.groundHeight(x, z, fromY);
+  }
+
+  // The client puts a player joining a lobby on the TObjPlayerSet whose param1
+  // equals its client id (12 per lobby, ids 0-11).
+  private spawnFor(clientId: number): LobbySpawn | null {
+    const s = this.spawns.get(clientId);
+    if (!s) return null;
+    return { ...s, y: this.ground(s.x, s.z, s.y + STEP_UP) ?? s.y };
+  }
+
   private placeSelfOnGround(): void {
     const me = this.lobby.self;
     if (!me) return;
-    // Spiral out from the origin until the map has a floor under us.
-    for (let r = 0; r < 400; r += 20) {
-      for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
-        const x = Math.cos(a) * r;
-        const z = Math.sin(a) * r;
-        const y = this.viewer.groundHeight(x, z, 200);
-        if (y !== null) {
-          me.position = { x, y, z };
-          const m = this.markers.get(me.clientId);
-          if (m) {
-            m.group.position.set(x, y, z);
-            m.target.set(x, y, z);
+    let spot = this.spawnFor(me.clientId);
+    if (!spot) {
+      // No spawn data: spiral out from the origin until the map has a floor under us.
+      search: for (let r = 0; r < 400; r += 20) {
+        for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
+          const x = Math.cos(a) * r;
+          const z = Math.sin(a) * r;
+          const y = this.ground(x, z, 200);
+          if (y !== null) {
+            spot = { x, y, z, angle: me.angle };
+            break search;
           }
-          this.lobby.sendStop(x, y, z, me.angle);
-          return;
+          if (r === 0) break;
         }
-        if (r === 0) break;
       }
     }
+    if (!spot) return;
+    const { x, y, z, angle } = spot;
+    me.position = { x, y, z };
+    me.angle = angle;
+    const m = this.markers.get(me.clientId);
+    if (m) {
+      m.group.position.set(x, y, z);
+      m.target.set(x, y, z);
+      m.angle = angle;
+    }
+    this.cameraYaw = angle + Math.PI; // camera behind the player
+    this.lobby.sendStop(x, y, z, angle);
   }
 
   private bindMouse(canvas: HTMLCanvasElement): void {
@@ -139,9 +215,13 @@ export class LobbyView {
     const label = nameSprite(`${p.name}  Lv${p.level}`);
     label.position.y = 38;
     group.add(body, nose, label);
-    group.position.set(p.position.x, p.position.y, p.position.z);
+    // A player that has not reported a position yet stands on its spawn point.
+    const unplaced = p.position.x === 0 && p.position.y === 0 && p.position.z === 0;
+    const spawn = unplaced && p.clientId !== this.lobby.selfId ? this.spawnFor(p.clientId) : null;
+    if (spawn) group.position.set(spawn.x, spawn.y, spawn.z);
+    else group.position.set(p.position.x, p.position.y, p.position.z);
     this.viewer.scene.add(group);
-    this.markers.set(p.clientId, { group, target: group.position.clone(), angle: p.angle });
+    this.markers.set(p.clientId, { group, target: group.position.clone(), angle: spawn ? spawn.angle : p.angle });
   }
 
   private removeMarker(id: number): void {
@@ -163,7 +243,7 @@ export class LobbyView {
     if (p.clientId === this.lobby.selfId) return;
     const m = this.markers.get(p.clientId);
     if (!m) return;
-    const y = p.moving ? (this.viewer.groundHeight(p.position.x, p.position.z, m.group.position.y + 50) ?? m.group.position.y) : p.position.y;
+    const y = p.moving ? (this.ground(p.position.x, p.position.z, m.group.position.y + STEP_UP) ?? m.group.position.y) : p.position.y;
     m.target.set(p.position.x, y, p.position.z);
     if (!p.moving) m.angle = p.angle;
   }
@@ -184,14 +264,22 @@ export class LobbyView {
       const moving = dir.lengthSq() > 0;
       if (moving) {
         dir.normalize();
-        const next = mine.group.position.clone().addScaledVector(dir, RUN_SPEED * dt);
-        const y = this.viewer.groundHeight(next.x, next.z, mine.group.position.y + 30);
-        // Only walk onto floor that is not a wall-sized step.
-        if (y !== null && Math.abs(y - mine.group.position.y) < 25) {
-          next.y = y;
-          mine.group.position.copy(next);
-          mine.target.copy(next);
+        const pos = mine.group.position;
+        const step = RUN_SPEED * dt;
+        if (this.collision) {
+          // Sub-step so a long frame cannot tunnel through thin walls.
+          const n = Math.max(1, Math.ceil(step / 4));
+          for (let i = 0; i < n; i++) {
+            const r = this.collision.move(pos.x, pos.y, pos.z, (dir.x * step) / n, (dir.z * step) / n);
+            pos.set(r.x, r.y, r.z);
+          }
+        } else {
+          const next = pos.clone().addScaledVector(dir, step);
+          const y = this.viewer.groundHeight(next.x, next.z, pos.y + 30);
+          // Only walk onto floor that is not a wall-sized step.
+          if (y !== null && Math.abs(y - pos.y) < 25) pos.set(next.x, y, next.z);
         }
+        mine.target.copy(pos);
         mine.angle = Math.atan2(dir.x, dir.z);
         this.sendTimer -= dt;
         if (this.sendTimer <= 0) {

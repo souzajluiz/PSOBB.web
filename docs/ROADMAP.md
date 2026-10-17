@@ -29,13 +29,14 @@
 
 ## Phase 4: online
 - [x] Lobby: 3D lobby map, player list, chat
-- [x] Own movement sent via `6x42` / `6x3E`, ground-following by raycast on the render mesh
+- [x] Own movement sent via `6x42` / `6x3E`, ground-following on the map collision
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
-- [ ] Real lobby spawn points and collision (`*c.rel`)
+- [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
+- [ ] Collision of lobby objects (counters, props from `o.dat`) and the real per-class hitbox radius
 - [ ] Character models (`pl?smp.rel`, `pl?tex.afs`) and animations
 
 ## Phase 5: game
-- [ ] Collision (`*c.rel`)
+- [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
 - [ ] Items and inventory
 - [ ] Quests (opcodes documented in the notes and in newserv's assembler)

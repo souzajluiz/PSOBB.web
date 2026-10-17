@@ -8,7 +8,7 @@ import {
 } from '../net/bbsession.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
-import { LobbyView, lobbyMapFile } from '../render/lobbyview.ts';
+import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -103,7 +103,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
       const mapName = lobbyMapFile(lobby.lobbyNumber);
       await viewer.load(source, mapName);
       log(`lobby map ${mapName} loaded`);
-      lobbyView = new LobbyView(viewer, lobby);
+      const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, log);
+      log(`lobby collision: ${mapData.collision?.faceCount ?? 0} faces, ${mapData.spawns.size} spawn points`);
+      lobbyView = new LobbyView(viewer, lobby, mapData);
       wireLobby(lobby);
       setStatus(`In lobby ${lobby.lobbyNumber + 1}`, 'ok');
       $('lobby-canvas').focus();

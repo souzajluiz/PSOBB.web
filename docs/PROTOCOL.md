@@ -137,6 +137,54 @@ Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f
 - Animated entry (0x20): `u32 object`, motion data (not decoded yet).
 - Some Episode 2 maps have entries with flags `0x10224` whose pointer targets another record type; skipped for now.
 
+## Map collision (`map_*c.rel`)
+
+Read by `MapLoader_LoadCollision` → `copy_map_collision_data` in the client; parser in `client/src/formats/crel.ts`, queries in `client/src/render/collision.ts`. All 175 files in Ephinea's `data/scene` parse (15847 meshes, 966528 faces). Coordinates are world space (no room transform).
+
+REL root → `u32` pointer to an array of mesh containers (0x18), terminated by a null `mesh`:
+
+| Off | Field |
+|---|---|
+| 00 | `u32 mesh` → mesh header |
+| 04 | `f32 x, y, z` bounding circle center (only x/z used) |
+| 10 | `f32 radius` (XZ) |
+| 14 | `u32 flags`: a query skips the mesh unless `flags & mask`; `0x40000000` = never ground |
+
+Mesh header (0x10): `u32 vertex_count` (unused by the client), `u32 vertices` (`f32[3]`), `u32 face_count`, `u32 faces`.
+
+Face (0x24): `u16 v0, v1, v2`, `u16 flags`, `f32 normal[3]`, `f32 center[3]`, `f32 radius` (XZ bounding circle).
+
+Face flags, from the masks the client passes:
+
+| Bit | Meaning |
+|---|---|
+| `0x0001` | floor (most ground) |
+| `0x0002` / `0x0004` / `0x0008` / `0x0010` | shallow water / deep water / footprints / grass ground types; not ground by themselves (ground needs `flags & mask & 0xFFE1`) |
+| `0x0020`, `0x0080`, `0x0800`, `0x2000` | walls for players (mask `0x28A0`) |
+| `0x0040` | also ground for players (mask `0x5F`) |
+| `0x0100` | mostly paired with `0x01`/`0x20`; meaning unknown |
+| `0x4000` | used by some enemy ground queries |
+| `0x8000` | camera collision (the only bit tested by the 0x8000 ray) |
+
+Queries (constants read from `PsoBB.exe`):
+
+- **Ground** (`unknown_geometry_raycast`): faces with `ny >= -1e-4`, the point inside the triangle in XZ (edge products `>= 1e-5`) and at least one vertex at or below the probe height. The highest such plane wins, so a slightly higher step still counts. Players query from `y + bloodstain_z_offset` with mask `0x5F` (`play_footstep_effects`); generic objects use `0x16EF`.
+- **Walls** (`line_segment_intersects_triangle`): one-sided. The segment must go against the normal (`d·n < -1e-5`), start in front (`> 1e-5`), and cross the triangle with `t` in [0, 1]. Players cast them 5 units above the feet. First a ray along the motion (`|v| + radius`): if `dot(dir, n) <= -0.87` the player stops, otherwise it slides. Then 8 rays of hitbox radius at 45° steps push it out of walls.
+
+## Player spawn points (`map_*o.dat`)
+
+Object set files in `data.gsl` are bare arrays of 0x44-byte `ObjectSetEntry` records (newserv `Map.hh`): `u16 type` @0, `u16 floor` @6, `u16 room` @0xC, `f32 pos[3]` @0x10 (relative to the n.rel section whose id is `room`), `i32 angle[3]` @0x1C (BAMS), `f32 param1..3` @0x28, `i32 param4..6` @0x34.
+
+Type `0x0000` is `TObjPlayerSet`: `param1` = client id, `param4` = source (0 = coming from a lower floor, 1 = returning from a higher floor). Each `map_lobby_NNo.dat` has 12 of them, one per client id 0–11, all in room 1 (at the origin):
+
+| Client ids | Positions (x, z), y = 20 | Facing |
+|---|---|---|
+| 0–3 | (0, 135), (-20, 145), (20, 145), (0, 165) | 0x8000 (toward -Z) |
+| 4–7 | (85, 50), (95, 70), (95, 30), (115, 50) | 0xC000 |
+| 8–11 | (-85, 50), (-95, 30), (-95, 70), (-115, 50) | 0x4000 |
+
+The angle uses the client's convention (direction = `(sin a, cos a)`). The web client spawns each player on the set matching its `client_id` from `67`/`68`.
+
 ## Ninja object / XJ model
 
 - `NJS_OBJECT` (0x34): `u32 eval_flags`, `u32 model`, `f32 pos[3]`, `i32 ang[3]` (BAMS), `f32 scale[3]`, `u32 child`, `u32 sibling`. Rotation order X→Y→Z (`ZYX` in three.js), or Y→X→Z with `EVAL_ZXY_ANG` (0x20).

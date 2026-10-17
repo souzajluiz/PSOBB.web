@@ -51,6 +51,7 @@ Requirements: macOS or Linux, Node ≥ 23.6 (tested with 24.18), CMake, Git, Chr
 # Tests
 node tests/oracle.test.ts        # TS ports vs newserv (needs client files)
 node tests/formats.test.ts       # parses every map n.rel and .xvm in the client
+node tests/collision.test.ts     # parses every map c.rel, checks ground at player spawn points
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
