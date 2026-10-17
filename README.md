@@ -67,6 +67,7 @@ node tests/lobby.live.ts         # two clients: create char, lobby, chat, moveme
 node tests/charfile.live.ts      # character file (E7) and inventory with item names
 node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, back to lobby
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
+node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
 

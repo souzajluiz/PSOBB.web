@@ -150,6 +150,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
       viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
       const view = new GameView(viewer, g, source, log);
       gameView = view;
+      // For automated checks from the browser console.
+      (window as unknown as { gameView?: GameView }).gameView = view;
       view.onFloor = (f) => {
         $('lobby-title').textContent = `· Game "${g.name}" · ${f.name} (floor ${f.floor}) · ${f.enemies} enemies, ${f.objects} objects`;
         renderPlayers(g);

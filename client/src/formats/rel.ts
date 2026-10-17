@@ -11,12 +11,31 @@ export class RelFile {
   readonly dv: DataView;
   readonly root: number;
 
-  constructor(data: Uint8Array) {
-    if (data.length < 0x20) throw new Error('REL file too small');
+  // `root` given: no footer is read (e.g. the body of an NJCM / NMDM chunk,
+  // whose pointers are offsets from the start of the chunk body).
+  constructor(data: Uint8Array, root?: number) {
     this.data = data;
     this.dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    if (root !== undefined) {
+      this.root = root;
+      return;
+    }
+    if (data.length < 0x20) throw new Error('REL file too small');
     this.root = this.u32(data.length - 0x10);
     if (this.root >= data.length) throw new Error(`REL root offset ${this.root} out of range`);
+  }
+
+  // Body of the first IFF chunk with this tag in a Ninja file (.nj/.xj/.njm), or null.
+  static chunk(data: Uint8Array, tag: string): RelFile | null {
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    for (let o = 0; o + 8 <= data.length; ) {
+      const t = String.fromCharCode(data[o], data[o + 1], data[o + 2], data[o + 3]);
+      const size = dv.getUint32(o + 4, true);
+      if (o + 8 + size > data.length) throw new Error(`Ninja chunk ${t} extends beyond end of file`);
+      if (t === tag) return new RelFile(data.subarray(o + 8, o + 8 + size), 0);
+      o += 8 + size;
+    }
+    return null;
   }
 
   u8(o: number): number {

@@ -2,7 +2,9 @@
 // the variations of the join command (64) through the client's set data table
 // (SetDataTableOn.rel), places the players with the LobbyView machinery
 // (collision, TObjPlayerSet spawn points, animated models, 6x40/42/3E), shows
-// enemies and objects of the floor's set data as markers, and warps between
+// the enemies of the floor's set data with their models and idle motions
+// (render/enemyview.ts; markers for objects, NPCs and anything without a
+// model), and warps between
 // floors: walking into an area warp object (TObjAreaWarpForest,
 // TObjCityAreaWarp) or calling warpTo() sends 6x21/6x22, loads the next floor,
 // then sends 6x3F/6x1F/6x3B/6x23 (net/game.ts).
@@ -16,6 +18,7 @@ import { parseSetFile, placeEntities } from '../formats/setdata.ts';
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
 import { CollisionWorld } from './collision.ts';
+import { EnemyLayer } from './enemyview.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -62,6 +65,7 @@ export class GameView {
   private log: (msg: string) => void;
   private table: Promise<SetDataTable | null> | null = null;
   private view: LobbyView | null = null;
+  readonly enemyLayer: EnemyLayer;
   private warps: Warp[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private busy = false;
@@ -75,6 +79,7 @@ export class GameView {
     this.source = source;
     this.files = new ClientFiles(source);
     this.log = log;
+    this.enemyLayer = new EnemyLayer(viewer, this.files);
   }
 
   private mode(): GameMode {
@@ -134,6 +139,7 @@ export class GameView {
   private async loadFloor(floor: number, source: number): Promise<void> {
     this.view?.dispose();
     this.view = null;
+    this.enemyLayer.clear();
     this.warps = [];
     const { area, files, geometry } = await this.floorFilesFor(floor);
     if (!geometry) throw new Error(`no map for floor ${floor} (area ${area})`);
@@ -177,7 +183,12 @@ export class GameView {
         entities.push(...enemies);
       }
       const placed = placeEntities(entities, sections, area).filter((p) => !(p.entity.kind === 'object' && p.entity.type === 0));
-      this.viewer.setEntities(placed);
+      const info = this.game.info!;
+      const modeled = await this.enemyLayer.show(placed, { area, episode: info.episode, difficulty: info.difficulty, event: info.event ?? 0 });
+      if (this.disposed) return;
+      const s = this.enemyLayer.stats;
+      this.log(`enemy models: ${s.placed} placed${s.unresolved.length ? `, no model: ${[...new Set(s.unresolved)].join(', ')}` : ''}${s.errors.length ? `, errors: ${s.errors.join('; ')}` : ''}`);
+      this.viewer.setEntities(placed.filter((p) => !modeled.has(p)));
       this.viewer.setFogRegions(placed); // TObjFogCollision* regions switch the fog as we walk
       this.viewer.setEntitiesVisible(true);
     }
@@ -227,6 +238,7 @@ export class GameView {
     if (this.timer) clearInterval(this.timer);
     this.view?.dispose();
     this.view = null;
+    this.enemyLayer.dispose();
     this.viewer.clearEntities();
   }
 }

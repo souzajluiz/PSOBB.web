@@ -109,6 +109,8 @@ export class MapViewer {
   // When set, replaces the free-fly camera: called every frame with the
   // pressed keys and the frame time.
   onFrame: ((dt: number, keys: ReadonlySet<string>) => void) | null = null;
+  // Called every frame with the frame time (e.g. enemy motions).
+  readonly frameHooks = new Set<(dt: number) => void>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -150,6 +152,7 @@ export class MapViewer {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.mapAnimator.update(dt);
     this.textureAnimator?.update(dt);
+    for (const hook of this.frameHooks) hook(dt);
     this.updateFog(dt);
     if (this.onFrame) {
       this.onFrame(dt, this.keys);
