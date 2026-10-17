@@ -158,3 +158,28 @@ Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f
 - `XVRT` chunk: `u32 size` (bytes after this field), `+0x08 u32 flags` (bit 0 mipmaps, bit 1 alpha), `+0x0C u32 format`, `+0x10 u32 global index`, `+0x14 u16 width`, `+0x16 u16 height`, `+0x18 u32 data size`, pixels at `+0x40`.
 - Formats found in Ephinea's `scene/*.xvm` (7821 textures): 6 = DXT1 (most), 7 = DXT3, 2 = R5G6B5, 3 = 16-bit with alpha. Uncompressed formats are Xbox-swizzled (Morton order).
 - Map textures: `map_city00_00n.rel` → `map_city00.xvm`.
+
+## Player character models
+
+Files (loose in `data/`, not in `data.gsl`): `pl<L>nj.bml` (models), `pl<L>tex.afs` (textures), with `<L>` = `A`..`L` for class 0..11 (HUmar .. RAmarl). `O`..`Y` are extra NPC-style models. The loose `pl<L>bdy00.nj` etc. are byte-identical to the BML entries for `A`..`L`. `pl<L>smp.rel` is a separate low-poly model with motions (not decoded). Player motions are in `data.gsl` → `plymotiondata.rlc` (not decoded yet).
+
+### BML (`formats/bml.ts`)
+
+Header 0x40: `u32`, `u32 count`, `u32` (0x150), …. Entries of 0x40 follow: `name[0x20]`, `u32 compressed_size` @+0x20, `u32 decompressed_size` @+0x28, `u32 compressed_texture_size` @+0x2C, `u32 decompressed_texture_size` @+0x30. Data starts at the next 0x800 boundary; each entry is PRS data followed by an optional PRS-compressed XVM. Blobs are aligned to 0x800 in `pl?nj.bml` but to 0x20 in e.g. `bm_ene_*.bml`; the reader uses 0x800 when everything fits, else 0x20.
+
+### Ninja chunk model (`formats/njcm.ts`)
+
+IFF chunks `{tag[4], u32 size}`: `NJTL`, `NJCM`, `POF0`, `NMDM`. Pointers are offsets from the chunk's data. The `NJCM` data starts with the root `NJS_OBJECT` (same 0x34 layout as XJ); its model is `NJS_CNK_MODEL` = `u32 vlist, u32 plist, f32 center[3], f32 radius`.
+
+- **Vertex chunks:** `u8 type, u8 flags, u16 size` (u32 words), `u16 index_offset, u16 count`. Types 32..50; the player files use 41 (position + normal) and 44 (position + normal + Ninja flags). Ninja flags: low 16 bits = vertex index (+ `index_offset`), high 16 bits = weight/255. `flags & 3`: 0 = first weight (overwrite), 1 = middle, 2 = last (add). Seen flag values: 0x00, 0x80, 0x81, 0x82.
+- **Polygon chunks:** `u8 type, u8 flags`. 1 blend (`flags` bits 3-5 src, 0-2 dst), 4 **cache** list `flags` (rest of the list is stored), 5 **draw** cached list, 8/9 texture (`u16`: bits 0-12 id; `flags` 0x80/0x40 flip U/V, 0x20/0x10 clamp U/V), 16..31 material (`u16 size` in u16 words; diffuse/ambient/specular BGRA by type bits 0/1/2), 64..75 strips (`u16 size`, `u16` count + user-offset words; per strip `i16 len` (negative = reversed), per vertex `u16 index`, then uv `i16 u,v` (65: /255, 66: /1023), …). Strip flags: 0x01 no lighting, 0x08 alpha, 0x10 double-sided, 0x40 env map. Type 89 (unknown, has a size field) appears in `plO..Rbdy00.nj` and is skipped.
+- **Evaluation:** walking the tree, every node writes its transformed vertices into one vertex buffer shared by the whole tree; strips index that buffer. The body caches its main polygon list at the root and draws it at a later node, after the weighted vertices have been completed. `render/njcmmesh.ts` replays this in the bind pose and turns the writers of each vertex into skin weights; every strip of all 12 classes resolves.
+
+### Assembly and textures (`render/playermodel.ts`)
+
+- `pl<L>bdy00.nj`: 64 nodes. Head (`hed00`, androids `hed00..04`), hair (`hai00..09`) and cap (`capNN`, drawn with hair style NN) attach to **body node 59** (depth-first index). Hair and cap NN share one texture list.
+- `pl<L>tex.afs`: one `XVRT` per entry. Texture ids are per part; the game maps them to AFS entries from the appearance. Layout found:
+  - humans/newmans: 18 costume blocks (3 to 26 entries; some hold 4 skin variants), ears ×4 skins, faces 5×4 (`base + 4*face + skin`; HUmar/RAmar interleave face/ear pairs), hair, skin and/or costume swatches, 11 emblems.
+  - androids: 25 skin blocks of 5 (entries 3–4 are `hed00`'s for HUcast/RAcaseal/HUcaseal), one group of 25×k per other head, skin swatches, 11 emblems.
+  - The last 11 entries are the section ID emblems (Viridia..Whitill, then an empty ring). Body texture id 0 is the emblem.
+- The per-class tables are in `playermodel.ts`. The default appearance of all 12 classes looks right. Hair/cap textures of the hat-wearing classes and non-default android heads are best guesses.
