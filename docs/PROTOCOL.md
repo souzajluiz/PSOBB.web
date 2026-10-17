@@ -299,6 +299,8 @@ The angle uses the client's convention (direction = `(sin a, cos a)`). The web c
 
 Files (loose in `data/`, not in `data.gsl`): `pl<L>nj.bml` (models), `pl<L>tex.afs` (textures), with `<L>` = `A`..`L` for class 0..11 (HUmar .. RAmarl). `O`..`Y` are extra NPC-style models. The loose `pl<L>bdy00.nj` etc. are byte-identical to the BML entries for `A`..`L`. `pl<L>smp.rel` holds the 7 proportion shapes as a REL for the character select/creation screen (`FUN_004e9a68`, `FUN_004e7a64`; not decoded here, `plZsmpnj.afs` has the same shapes). Player motions are in `data.gsl` → `plymotiondata.rlc` (not decoded yet).
 
+Files (loose in `data/`, not in `data.gsl`): `pl<L>nj.bml` (models), `pl<L>tex.afs` (textures), with `<L>` = `A`..`L` for class 0..11 (HUmar .. RAmarl). `O`..`Y` are extra NPC-style models. The loose `pl<L>bdy00.nj` etc. are byte-identical to the BML entries for `A`..`L`. `pl<L>smp.rel` is a separate low-poly model with motions (not decoded). Player motions are in `data.gsl` → `plymotiondata.rlc` (see *Player motions* below).
+
 ### BML (`formats/bml.ts`)
 
 Header 0x40: `u32`, `u32 count`, `u32` (0x150), …. Entries of 0x40 follow: `name[0x20]`, `u32 compressed_size` @+0x20, `u32 decompressed_size` @+0x28, `u32 compressed_texture_size` @+0x2C, `u32 decompressed_texture_size` @+0x30. Data starts at the next 0x800 boundary; each entry is PRS data followed by an optional PRS-compressed XVM. Blobs are aligned to 0x800 in `pl?nj.bml` but to 0x20 in e.g. `bm_ene_*.bml`; the reader uses 0x800 when everything fits, else 0x20.
@@ -341,3 +343,30 @@ Not a scale: the body and head are **morphed** between 7 shapes per class from `
 - Weights (`FUN_004e86e4`): `wc = (x − a.x)/(c.x − a.x)`, `wb = (y − a.y − wc (c.y − a.y))/(b.y − a.y)`, `wa = 1 − wb − wc`.
 - Blend (`FUN_004e7e54`, nodes in depth-first order, flags from `FUN_007aaefc`): model center; position if any shape has `!UNIT_POS` (clears the flag); body only: scale if any has `!UNIT_SCL`; vertex chunks 41/44 (`FUN_004e838c`): position, normal (renormalized), Ninja-flags weight `round(Σ w·hi16)`. The head loop blends vertices when shape `a` has a vertex list.
 - In game the 3 shapes are loaded per player by `FUN_004ee448` and blended by `FUN_004ee534`; character creation does the same (`FUN_00603ce0`). The `pl<L>nj.bml` body equals shape 3 (P3) only approximately.
+
+- `pl<L>bdy00.nj`: 64 nodes. Head (`hed00`, androids `hed00..04`), hair (`hai00..09`) and cap (`capNN`, drawn with hair style NN) attach to **body node 59** (depth-first index). Hair and cap NN share one texture list.
+- `pl<L>tex.afs`: one `XVRT` per entry. Texture ids are per part; the game maps them to AFS entries from the appearance. Layout found:
+  - humans/newmans: 18 costume blocks (3 to 26 entries; some hold 4 skin variants), ears ×4 skins, faces 5×4 (`base + 4*face + skin`; HUmar/RAmar interleave face/ear pairs), hair, skin and/or costume swatches, 11 emblems.
+  - androids: 25 skin blocks of 5 (entries 3–4 are `hed00`'s for HUcast/RAcaseal/HUcaseal), one group of 25×k per other head, skin swatches, 11 emblems.
+  - The last 11 entries are the section ID emblems (Viridia..Whitill, then an empty ring). Body texture id 0 is the emblem.
+- The per-class tables are in `playermodel.ts`. The default appearance of all 12 classes looks right. Hair/cap textures of the hat-wearing classes and non-default android heads are best guesses.
+
+## Player motions (`plymotiondata.rlc`)
+
+Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymotion.ts`, `render/playeranim.ts`. Test: `tests/motions.test.ts`.
+
+**RelChunk container** (`RelChunkVer0.20`, header **big-endian**): `char magic[0x10]`, `u32 count` @0x10 (572), `u32 table_offset` @0x14 (0x20), `u32 data_offset` @0x18 (0x1200), `u32 0`; then `count` × `{u32 offset, u32 size}`, entries 0x20-aligned. The client copies the table into a 0x12E0-byte buffer (≤ 600 entries, `FUN_006a7af4`).
+
+**PRC entries** (little-endian): `u32 decompressed_size`, `u32 seed`, then PRS data XORed with the PSO V2 stream cipher seeded with `seed` (newserv `decrypt_pr2_data`). Each decompresses to a REL (footer as in maps) whose root points to `{u32 0, NJS_MOTION*}`.
+
+**NJS_MOTION** in all 572 entries: 64 nodes (the `pl?bdy00.nj` skeleton, depth-first), `type` 3 (position + angle), `inp_fn` 2 (linear). Position keys are 0x10 (`u32 frame, f32 x, y, z`). Angle keys are **8 bytes**: `u16 frame, i16 x, y, z` (16-bit BAMS, `NJS_MKEY_SA`), unlike the 16-byte `i32` angle keys of map motions; the header does not say which. The key lists of each motion tile the file from offset 0 up to the mdata table, so a list at offset 0 has a 0 pointer: a list exists when its count is non-zero. Keys run from frame 0 to `frame_count - 1` (9150 of 9153 angle tracks). Entry 20, node 42 claims more keys than it has (the list runs into the next one); the decoder stops at the first frame that goes backwards. Angles that cross ±180° between keys are interpolated the short way (16-bit arithmetic); otherwise limbs would spin.
+
+**Motion sets** (Ghidra, Ephinea `PsoBB.exe`):
+- `FUN_006875a0` sets the motion type from the class (switch at `0x0093c584`): 0 male (HUmar, HUcast, RAmar, RAcast, FOnewm), 1 female (HUnewearl, RAcaseal, FOnewearl), 2 FOmarl, 3 FOmar, 4 HUcaseal, 5 RAmarl.
+- Town/lobby (`DAT_00a943cc == 0`, set back by `FUN_006a7748` when leaving a game; games set 1): motion set object with vtable `0x00b3a040`. Types 1, 2, 4, 5 use set 1, types 0, 3 set 0 (`FUN_006a7508`). Tables: `0x009cc08c` → records, `0x009cc094` → rlc indices, `[set][weapon 0..18][slot 0..55]` (all weapon columns identical).
+- Record (0x10): `u16 mode, u16 next_slot, u32 slot, f32 speed, u32 flags`. Modes: 1 loop, 2 play then go to `next_slot`, 3 play once and hold.
+- Idle / walk / run = vtable `+0x54` / `+0x50` / `+0x70` = slots 0 / 1 / 2, or 3 / 4 / 5 for type 2 (FOmarl). Set 0: entries 201 / 200 / 207 (speed 0.9 / 1.4 / 0.8); set 1: 335 / 412 / 416 (1.0 / 1.0 / 0.8); FOmarl: 487 / 506 / 508.
+- Field: vtable `0x00b39ec0`, tables `0x009cbeec` (records) and `0x009cbf04` (indices), `[type 0..5][weapon 0..18][slot 0..71]` (not used yet).
+
+**Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
+

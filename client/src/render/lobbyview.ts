@@ -1,7 +1,11 @@
-// 3D lobby: renders the lobby map, a marker per player, and drives the local
-// player with WASD, sending 6x42 (run) while moving and 6x3E (stop) on release.
-// Walking uses the map collision (c.rel); players start at the lobby's
-// TObjPlayerSet spawn point for their client id (map_lobby_NNo.dat).
+// 3D lobby: renders the lobby map, the players' character models, and drives
+// the local player with WASD, sending 6x42 (run) while moving and 6x3E (stop)
+// on release. Walking uses the map collision (c.rel); players start at the
+// lobby's TObjPlayerSet spawn point for their client id (map_lobby_NNo.dat).
+// Models come from pl<L>nj.bml / pl<L>tex.afs with the appearance of the
+// lobby join data, animated with the town idle / walk / run motions of
+// plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
+// the files are missing) a capsule stands in.
 
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -9,9 +13,12 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
+import { locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { PlayerAnimator } from './playeranim.ts';
+import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
 const RUN_SPEED = 120; // units per second (approximate)
 const SEND_INTERVAL = 0.15; // seconds between 6x42 while moving
@@ -40,6 +47,8 @@ export interface LobbySpawn {
 export interface LobbyMapData {
   collision: CollisionWorld | null;
   spawns: Map<number, LobbySpawn>; // by client id
+  // Client files for the player models and motions (null: capsules only).
+  files: ClientFiles | null;
 }
 
 // Loads the lobby's collision (scene/map_lobby_NNc.rel) and player spawn points
@@ -47,7 +56,8 @@ export interface LobbyMapData {
 // Missing files only degrade the view, so errors are reported and swallowed.
 export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, log: (msg: string) => void = () => {}): Promise<LobbyMapData> {
   const area = lobbyArea(lobbyNumber);
-  const data: LobbyMapData = { collision: null, spawns: new Map() };
+  const files = new ClientFiles(source);
+  const data: LobbyMapData = { collision: null, spawns: new Map(), files };
   try {
     data.collision = new CollisionWorld(parseMapCRel(await source.read(`scene/map_${area}c.rel`)));
   } catch (err) {
@@ -55,7 +65,7 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
   }
   try {
     const rooms = parseMapNRel(await source.read(`scene/map_${area}n.rel`)).sections;
-    const sets = parseObjectSets(await new ClientFiles(source).read(`map_${area}o.dat`));
+    const sets = parseObjectSets(await files.read(`map_${area}o.dat`));
     for (const s of playerSpawns(sets)) {
       if (s.source !== 0 || data.spawns.has(s.clientId)) continue;
       const room = rooms.find((r) => r.id === s.room);
@@ -84,7 +94,7 @@ function nameSprite(text: string): THREE.Sprite {
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
-  sprite.scale.set(w / 2.5, 16, 1);
+  sprite.scale.set(w / 6, 40 / 6, 1);
   sprite.renderOrder = 10;
   return sprite;
 }
@@ -93,6 +103,37 @@ interface Marker {
   group: THREE.Group;
   target: THREE.Vector3;
   angle: number;
+  capsule: THREE.Object3D | null;
+  model: THREE.Object3D | null;
+  animator: PlayerAnimator | null;
+  charClass: number;
+  gait: Locomotion;
+}
+
+// Stand-in until the model is loaded.
+function capsule(charClass: number): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(4, 10, 4, 12), new THREE.MeshBasicMaterial({ color: CLASS_COLORS[charClass] ?? 0xcccccc }));
+  body.position.y = 9;
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(2, 6, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, 13, 5);
+  g.add(body, nose);
+  return g;
+}
+
+function disposeObject(o: THREE.Object3D, disposeMaps: boolean): void {
+  o.traverse((c) => {
+    if (c instanceof THREE.Mesh || c instanceof THREE.Sprite) {
+      c.geometry.dispose();
+      const mats = (Array.isArray(c.material) ? c.material : [c.material]) as (THREE.Material & { map?: THREE.Texture | null })[];
+      for (const mat of mats) {
+        // Player textures are shared by every model of the class.
+        if (disposeMaps) mat.map?.dispose();
+        mat.dispose();
+      }
+    }
+  });
 }
 
 export class LobbyView {
@@ -101,18 +142,29 @@ export class LobbyView {
   private markers = new Map<number, Marker>();
   private cameraYaw = Math.PI;
   private cameraPitch = 0.35;
-  private cameraDistance = 140;
+  private cameraDistance = 70;
   private sendTimer = 0;
   private wasMoving = false;
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
   private spawns: Map<number, LobbySpawn>;
+  private files: ClientFiles | null;
+  private assets = new Map<number, Promise<PlayerAssets>>();
+  private motions: Promise<PlayerMotions> | null = null;
+  private lights: THREE.Light[];
+  private disposed = false;
 
-  constructor(viewer: MapViewer, lobby: Lobby, mapData: LobbyMapData = { collision: null, spawns: new Map() }) {
+  constructor(viewer: MapViewer, lobby: Lobby, mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null }) {
     this.viewer = viewer;
     this.lobby = lobby;
     this.collision = mapData.collision;
     this.spawns = mapData.spawns;
+    this.files = mapData.files;
+    // The map is unlit (vertex colors); the player materials are Lambert.
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(30, 80, 50);
+    this.lights = [new THREE.HemisphereLight(0xffffff, 0x445566, 1.5), sun];
+    for (const l of this.lights) viewer.scene.add(l);
     viewer.setOrbitEnabled(false);
     viewer.onFrame = (dt, keys) => this.frame(dt, keys);
 
@@ -186,7 +238,7 @@ export class LobbyView {
     };
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      this.cameraDistance = Math.min(600, Math.max(40, this.cameraDistance * (e.deltaY > 0 ? 1.1 : 0.9)));
+      this.cameraDistance = Math.min(600, Math.max(20, this.cameraDistance * (e.deltaY > 0 ? 1.1 : 0.9)));
     };
     canvas.addEventListener('pointerdown', down);
     canvas.addEventListener('pointerup', up);
@@ -203,39 +255,72 @@ export class LobbyView {
   private addMarker(p: LobbyPlayer): void {
     this.removeMarker(p.clientId);
     const group = new THREE.Group();
-    const color = CLASS_COLORS[p.charClass] ?? 0xcccccc;
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(6, 14, 4, 12),
-      new THREE.MeshBasicMaterial({ color }),
-    );
-    body.position.y = 13;
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(3, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-    nose.rotation.x = Math.PI / 2;
-    nose.position.set(0, 18, 7);
+    const stand = capsule(p.charClass);
     const label = nameSprite(`${p.name}  Lv${p.level}`);
-    label.position.y = 38;
-    group.add(body, nose, label);
+    label.position.y = 24;
+    group.add(stand, label);
     // A player that has not reported a position yet stands on its spawn point.
     const unplaced = p.position.x === 0 && p.position.y === 0 && p.position.z === 0;
     const spawn = unplaced && p.clientId !== this.lobby.selfId ? this.spawnFor(p.clientId) : null;
     if (spawn) group.position.set(spawn.x, spawn.y, spawn.z);
     else group.position.set(p.position.x, p.position.y, p.position.z);
     this.viewer.scene.add(group);
-    this.markers.set(p.clientId, { group, target: group.position.clone(), angle: spawn ? spawn.angle : p.angle });
+    const marker: Marker = {
+      group,
+      target: group.position.clone(),
+      angle: spawn ? spawn.angle : p.angle,
+      capsule: stand,
+      model: null,
+      animator: null,
+      charClass: p.charClass,
+      gait: 'idle',
+    };
+    this.markers.set(p.clientId, marker);
+    void this.loadModel(p, marker);
+  }
+
+  private classAssets(charClass: number): Promise<PlayerAssets> {
+    let a = this.assets.get(charClass);
+    if (!a) this.assets.set(charClass, (a = loadPlayerAssets(this.files!, charClass)));
+    return a;
+  }
+
+  private async loadModel(p: LobbyPlayer, marker: Marker): Promise<void> {
+    if (!this.files || p.charClass < 0 || p.charClass > 11) return;
+    try {
+      this.motions ??= this.files.read(PLAYER_MOTION_FILE).then((d) => new PlayerMotions(d));
+      const [assets, motions] = await Promise.all([this.classAssets(p.charClass), this.motions]);
+      if (this.disposed || this.markers.get(p.clientId) !== marker) return;
+      const model = buildPlayerModel(assets, p.appearance);
+      const body = assets.parts.get(`pl${classLetter(p.charClass)}bdy00.nj`)!;
+      marker.animator = new PlayerAnimator(model.partBones[0], body, motions);
+      marker.model = model.root;
+      if (marker.capsule) {
+        marker.group.remove(marker.capsule);
+        disposeObject(marker.capsule, true);
+        marker.capsule = null;
+      }
+      marker.group.add(model.root);
+      this.setGait(marker, marker.gait, true);
+    } catch (err) {
+      console.warn(`player model for ${p.name}: ${(err as Error).message}`);
+    }
+  }
+
+  // Town idle / walk / run motion of the marker's class.
+  private setGait(m: Marker, gait: Locomotion, force = false): void {
+    if (m.gait === gait && !force) return;
+    m.gait = gait;
+    if (!m.animator) return;
+    const cls = m.charClass;
+    m.animator.play(townMotion(cls, locomotionSlot(cls, gait)), LOCOMOTION_FACTOR[gait], (slot) => townMotion(cls, slot));
   }
 
   private removeMarker(id: number): void {
     const m = this.markers.get(id);
     if (!m) return;
     this.viewer.scene.remove(m.group);
-    m.group.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.Sprite) {
-        o.geometry.dispose();
-        const mat = o.material as THREE.Material & { map?: THREE.Texture };
-        mat.map?.dispose();
-        mat.dispose();
-      }
-    });
+    for (const child of m.group.children) disposeObject(child, child !== m.model);
     this.markers.delete(id);
   }
 
@@ -281,6 +366,7 @@ export class LobbyView {
         }
         mine.target.copy(pos);
         mine.angle = Math.atan2(dir.x, dir.z);
+        this.setGait(mine, 'run');
         this.sendTimer -= dt;
         if (this.sendTimer <= 0) {
           this.lobby.sendRun(mine.group.position.x, mine.group.position.z);
@@ -290,6 +376,7 @@ export class LobbyView {
         const p = mine.group.position;
         this.lobby.sendStop(p.x, p.y, p.z, mine.angle);
         this.sendTimer = 0;
+        this.setGait(mine, 'idle');
       }
       this.wasMoving = moving;
     }
@@ -298,21 +385,34 @@ export class LobbyView {
     for (const [id, m] of this.markers) {
       if (me && id === me.clientId) {
         m.group.rotation.y = m.angle;
+        m.animator?.update(dt);
         continue;
       }
+      // Remote players run (or walk, 6x40) toward the last reported point and
+      // idle once there.
       const delta = m.target.clone().sub(m.group.position);
+      delta.y = 0;
       const dist = delta.length();
       if (dist > 0.5) {
         const step = Math.min(dist, Math.max(RUN_SPEED * dt, dist * 0.2));
         m.group.position.addScaledVector(delta.normalize(), step);
-        if (delta.x || delta.z) m.angle = Math.atan2(delta.x, delta.z);
+        m.group.position.y += (m.target.y - m.group.position.y) * Math.min(1, step / dist);
+        m.angle = Math.atan2(delta.x, delta.z);
+        this.setGait(m, this.lobby.players.get(id)?.gait === 'walk' ? 'walk' : 'run');
+      } else {
+        m.group.position.y = m.target.y;
+        // Arrived: face the angle of the last stop (6x3E / 6x3F / 6x20).
+        const p = this.lobby.players.get(id);
+        if (p && !p.moving) m.angle = p.angle;
+        this.setGait(m, 'idle');
       }
       m.group.rotation.y = m.angle;
+      m.animator?.update(dt);
     }
 
     // Third-person camera.
     if (mine) {
-      const focus = mine.group.position.clone().add(new THREE.Vector3(0, 20, 0));
+      const focus = mine.group.position.clone().add(new THREE.Vector3(0, 14, 0));
       const cam = this.viewer.camera;
       cam.position.set(
         focus.x + Math.sin(this.cameraYaw) * Math.cos(this.cameraPitch) * this.cameraDistance,
@@ -324,7 +424,9 @@ export class LobbyView {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const id of [...this.markers.keys()]) this.removeMarker(id);
+    for (const l of this.lights) this.viewer.scene.remove(l);
     for (const d of this.disposers) d();
     this.viewer.onFrame = null;
     this.viewer.setOrbitEnabled(true);

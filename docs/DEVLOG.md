@@ -178,6 +178,26 @@ In `models.html` (new proportion sliders): FOmar hats follow the costume colors,
 
 **Open:** the exact normal renormalization in `FUN_004e838c` (it does not matter after shading). `pl<L>smp.rel` is not decoded. No side-by-side capture exists for each class.
 
+## 2026-10-16: animated players in the lobby
+
+**Goal:** decode the player motions and replace the lobby capsules with animated character models.
+
+**Container:** `plymotiondata.rlc` is a big-endian `RelChunkVer0.20` table of 572 PRC entries (PRS + PSO V2 cipher, newserv's PR2/PRC). Each is a REL with one `NJS_MOTION` for the 64-node body. Format in PROTOCOL.md.
+
+**Findings:**
+- Angle keys are 8 bytes (`u16 frame`, `i16` BAMS), not the 16-byte keys of map motions; the motion headers are identical (type 3, inp 2). The key lists tile each file exactly, which confirmed the size. Key lists at REL offset 0 have a 0 pointer, so a list is present when its count is non-zero (`njmotion.ts` now does this for maps too; all 11954 map motions still decode).
+- The motion numbers come from `PsoBB.exe` tables. A per-player motion set object (player+0x38c) maps class → motion type (6 types), and in the town/lobby folds them into 2 sets with 56 slots. Idle/walk/run are slots 0/1/2 (3/4/5 for FOmarl). The tables (rlc index, mode, next, speed, flags) are copied into `formats/plymotion.ts`.
+- Playback speed: record speed per tick, ×1.5 in the run state. Motion changes cross-fade over 5 ticks.
+
+**Lobby:** `LobbyView` loads `pl?nj.bml`/`pl?tex.afs` per class (cached) and builds each player's model from the appearance in `67`/`68` (`LobbyPlayer.appearance`). `PlayerAnimator` plays town idle while standing and run while moving (walk after a `6x40`), for the local player and the others. The capsule stays as a stand-in until the model has loaded. Lights were added for the Lambert player materials, and the camera moved closer (70 units).
+
+**Verified:** `tests/motions.test.ts` decodes all 572 motions (184,944 keys), checks every town table entry, and plays idle/walk/run on all 12 class models. In Chrome against newserv with the bot: HUmar idles at the spawn facing the counter, runs and turns with WASD and returns to idle on release; the RAcast bot runs between points.
+
+**Open:**
+- `proportion_x/y` are parsed but not applied.
+- The 30 ticks/s rate is assumed. The game's run speed may be 8 units/tick (`DAT_00a94320`, used as `sin/cos × 8`), while the lobby moves at 120 units/s.
+- The field (per-weapon) motion tables, emotes and other town slots are not used yet. Spline interpolation is not implemented (no player motion uses it).
+
 ## 2026-10-16: title screen rebuilt from the decompiled code
 
 **What changed:** the title is now drawn from what `PsoBB.exe` does instead of parameters fitted to a capture.

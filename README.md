@@ -20,7 +20,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Map collision (`c.rel`) and real lobby spawn points (`o.dat` player sets) | ✅ 175 c.rel parse; walking uses the client's collision rules |
 | Enemy/object markers from set data (`map_*e.dat` / `o.dat`) | ✅ 838 files match newserv; shown in the map viewer |
 | Character models (NJCM from `pl?nj.bml`, textures by appearance), all 12 classes | ✅ dev page `models.html` |
-| Animations | ⏳ |
+| Player motions (`plymotiondata.rlc`) and animated models in the lobby (idle/walk/run) | ✅ live in Chrome with a bot |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -57,6 +57,7 @@ node tests/formats.test.ts       # parses every map n.rel and .xvm in the client
 node tests/collision.test.ts     # parses every map c.rel, checks ground at player spawn points
 node tests/setdata.test.ts       # enemy/object set data vs newserv disassemble-free-map
 node tests/players.test.ts       # parses and builds every player class and appearance variant
+node tests/motions.test.ts       # decodes every player motion, plays idle/walk/run on every class
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
