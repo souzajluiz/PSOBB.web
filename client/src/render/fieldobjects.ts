@@ -319,6 +319,10 @@ export class FieldObjects {
   private pressed = new Set<number>(); // switches the local player stands on
   private models: ObjectLayer | null;
   private collision: CollisionWorld | null;
+  // The boss warp the local player is using and its 6x6A state
+  // (render/bosswarp.ts); the other boss warps sit in state 0, or 4 while
+  // their switch flag is not set.
+  private drivenWarp: { index: number; state: number } | null = null;
   onSwitch: (sw: FieldSwitch) => void = () => {};
   onEventTrigger: (t: FieldEventTrigger) => void = () => {};
 
@@ -377,6 +381,22 @@ export class FieldObjects {
     return out;
   }
 
+  setBossWarpState(index: number | null, state: number): void {
+    this.drivenWarp = index === null ? null : { index, state };
+  }
+
+  // Boss warp state as its parts show it (objectmodels.ts, case 0x0019): the
+  // idle beam in state 0, the active one in states 1 and 2, the base alone
+  // in states 3 and 4.
+  private showBossWarps(): void {
+    for (const w of this.warps) {
+      if (w.kind !== 'boss') continue;
+      const locked = w.flag >= 0 && !this.flags.has(w.flag);
+      const state = this.drivenWarp?.index === w.index ? this.drivenWarp.state : locked ? 4 : 0;
+      this.models?.setState(w.index, state === 0 ? 'idle' : state === 1 || state === 2 ? 'active' : 'off');
+    }
+  }
+
   // One game frame: switches under the local player, event triggers, door states.
   frame(self: { x: number; y: number; z: number } | null, others: Array<{ x: number; y: number; z: number }>): void {
     if (self) {
@@ -418,6 +438,7 @@ export class FieldObjects {
       panel.position.y = 15 - 30 * (d.frame / Math.max(1, frames - 1));
       panel.visible = d.state !== 5;
     }
+    this.showBossWarps();
     if (this.collision) this.collision.obstacles = this.obstacles();
   }
 

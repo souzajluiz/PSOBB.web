@@ -50,7 +50,7 @@ function texRemap(p: ObjectPartSpec): number[] | undefined {
   return ids;
 }
 
-const loops = (drive: ObjectPartSpec['drive']) => drive === 'loop' || drive === 'restart';
+const loops = (drive: ObjectPartSpec['drive']) => drive === 'loop' || drive === 'restart' || drive === 'restart-last';
 
 function toEnemyPart(p: ObjectPartSpec): EnemyPartSpec {
   return {
@@ -127,7 +127,8 @@ export class ObjectLayer {
             });
           }
           const animator = built.animators[0] ?? null;
-          if (animator && part.drive === 'restart') animator.restart = true;
+          if (animator && part.drive === 'restart') animator.restart = 'past';
+          if (animator && part.drive === 'restart-last') animator.restart = 'last';
           if (animator && loops(part.drive)) animators.push(animator);
           if (animator && !loops(part.drive)) animator.setFrame(0);
           model.parts.push({ show: part.show ?? 'always', group: built.root, animator, drive: part.drive, nodes: built.partNodes[0] ?? [] });
@@ -154,7 +155,7 @@ export class ObjectLayer {
   }
 
   // Shows the parts of one object for a state: doors pass 'locked' or
-  // 'unlocked', switches 'on' or 'off'.
+  // 'unlocked', switches 'on' or 'off', boss warps 'idle', 'active' or 'off'.
   setState(index: number, state: PartShow): void {
     const m = this.models.get(index);
     if (!m) return;

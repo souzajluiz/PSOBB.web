@@ -160,10 +160,12 @@ export class NodeAnimator {
   private loop: boolean;
   private tickRemainder = 0;
   frame = 0;
-  // A looping motion goes back to frame 0 once it is past the last frame
-  // instead of carrying the overshoot over (UpdateSeabedTuriganeWarpPosition
-  // _0066d28c: frame += step; if frame > count - 1 then frame = 0).
-  restart = false;
+  // A looping motion that goes back to frame 0 instead of carrying the
+  // overshoot over: 'past' once the frame is past the last one
+  // (UpdateSeabedTuriganeWarpPosition_0066d28c: frame > count - 1), 'last'
+  // once it reaches it (SeabedTuriganeMapObjectUpdate_0066aeec:
+  // count <= frame + 1.0).
+  restart: false | 'past' | 'last' = false;
   private v: [number, number, number] = [0, 0, 0];
   private euler = new THREE.Euler();
   private qa = new THREE.Quaternion();
@@ -223,7 +225,7 @@ export class NodeAnimator {
     for (let i = 0; i < ticks; i++) {
       this.frame += this.speed;
       if (this.loop && this.restart) {
-        if (this.frame > m.frameCount - 1) this.frame = 0;
+        if (this.restarts(this.frame)) this.frame = 0;
       } else if (this.loop) {
         if (this.frame >= m.frameCount) this.frame -= m.frameCount;
       } else if (this.frame >= m.frameCount - 1) {
@@ -231,9 +233,14 @@ export class NodeAnimator {
       }
     }
     let f = this.frame + this.speed * this.tickRemainder;
-    if (this.loop && this.restart) f = f > m.frameCount - 1 ? 0 : f;
+    if (this.loop && this.restart) f = this.restarts(f) ? 0 : f;
     else f = this.loop ? f % m.frameCount : Math.min(f, m.frameCount - 1);
     this.apply(f);
+  }
+
+  private restarts(frame: number): boolean {
+    const last = this.motion.frameCount - 1;
+    return this.restart === 'last' ? frame >= last : frame > last;
   }
 
   private quat(keys: NjQuatKey[], frame: number, out: THREE.Quaternion): THREE.Quaternion {

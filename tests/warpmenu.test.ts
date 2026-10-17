@@ -12,6 +12,7 @@ import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { floorToArea } from '../client/src/net/game.ts';
 import { parseUnitxt } from '../client/src/classic/charcreate_text.ts';
 import { AREA_TEXT, areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
+import { objectModelFor } from '../client/src/formats/objectmodels.ts';
 import { bossWarpFloor, collectFieldObjects, doorFlags, doorLamps, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
@@ -47,6 +48,15 @@ eq(ccaWarpLayout(100), { x: 176, y: 130, w: 120, h: 74 }, 'CCA gate window (FUN_
 eq([1, 2, 3, 6, 8, 10].map((f) => bossWarpFloor(1, f)), [0xb, 0xb, 0xc, 0xd, 0xe, 0xe], 'Ep1 boss floors');
 eq([1, 3, 5, 10, 11].map((f) => bossWarpFloor(2, f)), [0xe, 0xf, 0xc, 0xd, 0xd], 'Ep2 boss floors');
 eq([1, 5, 8].map((f) => bossWarpFloor(3, f)), [9, 9, 9], 'Ep4 boss floor');
+
+// --- Boss warp parts by 6x6A state (SeabedTuriganeMapObjectRender_0066c38c) ---
+{
+  const bw = (area: number, episode: number) =>
+    objectModelFor({ kind: 'object', index: 0, type: 0x19, floor: 0, group: 0, section: 0, unknownA3: 0, position: [0, 0, 0], rotation: [0, 0, 0], params: [0, 0, 0, 0, 0, 0] }, { area, episode })!;
+  eq(bw(2, 1).parts.map((p) => [p.model, p.motion ?? -1, p.show ?? 'always', p.drive ?? '']), [[0, -1, 'always', ''], [2, 1, 'idle', 'restart-last'], [1, 0, 'active', 'restart-last']], 'Forest boss warp: idle model 2 / motion 1, active model 1 / motion 0');
+  eq(bw(0x13, 2).parts.map((p) => [p.model, p.motion ?? -1, p.show ?? 'always']), [[0, -1, 'always'], [1, 0, 'idle'], [1, 0, 'active']], 'jungle boss warp: model 1 / motion 0 in both');
+  eq(bw(9, 1).bml, 'bm_obj_warpboss_ancient.bml', 'Ruins boss warp archive');
+}
 
 // --- Doors ---
 const obj = (type: number, p4: number, p5 = 0): ObjectSet => ({ kind: 'object', index: 0, type, floor: 0, group: 0, section: 0, unknownA3: 0, position: [0, 0, 0], rotation: [0, 0, 0], params: [0, 0, 0, p4, p5, 0] });

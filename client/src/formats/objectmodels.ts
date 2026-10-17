@@ -31,17 +31,17 @@ export interface ObjectModelContext {
 }
 
 // When a part is drawn.
-export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off';
+export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off' | 'idle' | 'active';
 
 // How a part's motion is advanced: loop adds `speed` frames per game tick,
 // restart too but goes back to frame 0 once past the last frame instead of
-// wrapping the overshoot, door follows the door state machine, laser the
-// fence's own one.
-export type PartDrive = 'loop' | 'restart' | 'door' | 'laser';
+// wrapping the overshoot (restart-last: once it reaches the last frame), door
+// follows the door state machine, laser the fence's own one.
+export type PartDrive = 'loop' | 'restart' | 'restart-last' | 'door' | 'laser';
 
 interface ObjectPartBase {
   model: number; // model entry (BML position)
-  show?: PartShow; // locked/unlocked: doors and boss warps; on/off: switches
+  show?: PartShow; // locked/unlocked: doors; on/off: switches; idle/active: boss warps
   textureId?: number; // FUN_0081a588: every mesh uses this texture id
   // Texture id -> texture id of the list, for the ids it names (the others
   // keep theirs): how the client's per-node FUN_0081a588 calls come out when
@@ -214,27 +214,49 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // loads, so it draws like TObjWarpBoss. Its render,
     // SeabedTuriganeMapObjectRender_0066c38c, draws the base and then the
     // animated model when +0xd4 is set.
-    case 0x0160:
+    case 0x0160: {
       if (episode === 3) return null; // TObjFogCollisionPoison
-    // fall through
-    case 0x0019: {
       if (area >= 8 && area <= 10) {
-        return spec('TObjWarpBoss', 'bm_obj_warpboss_ancient.bml', [
+        return spec('TObjWarpBoss03', 'bm_obj_warpboss_ancient.bml', [
           { model: 0, texlistOf: 2 },
           { model: 2, texlistOf: 2, motion: 1, drive: 'loop', speed: 4, show: 'locked' },
           { model: 1, texlistOf: 2, motion: 0, drive: 'loop', speed: 4, show: 'unlocked' },
         ]);
       }
-      if (episode === 2 || area === 0x1c || area === 0x1d) {
-        return spec('TObjWarpBoss', 'bm_obj_warpboss_jungle.bml', [
-          { model: 0, texlistOf: 0 },
-          { model: 1, texlistOf: 0, motion: 0, drive: 'loop', speed: 4 },
-        ]);
-      }
-      return spec('TObjWarpBoss', 'bm_obj_warpboss.bml', [
+      return spec('TObjWarpBoss03', 'bm_obj_warpboss.bml', [
         { model: 0, texlistOf: 2 },
         { model: 2, texlistOf: 2, motion: 1, drive: 'loop', speed: 4, show: 'locked' },
         { model: 1, texlistOf: 2, motion: 0, drive: 'loop', speed: 4, show: 'unlocked' },
+      ]);
+    }
+    // Online, CreateWarpMapObject_0066c4b4 builds the 6x6A boss warp (0x1e8
+    // bytes, vtable 0x00b35440; the 0x0066c6cc object above is the offline /
+    // Episode 4 one). Its render SeabedTuriganeMapObjectRender_0066c38c draws
+    // model 0 and, when +0xd4 is set, the model at +0xd4 with the motion at
+    // +0xd8 at frame +0xc8, without fog, both with the texture list of model 2
+    // (jungle: 0). The update 0x0066aeec adds 4.0 (0x00939c14) to the frame
+    // and sets it back to 0 once frame + 1.0 reaches the motion's frame count.
+    // The state handlers set +0xd4 / +0xd8 (loader init_bosswarp_assets):
+    //   state 0 (idle, 0x0066b9e0 sub 0)       model 2 + motion 1 (jungle: model 1 + motion 0)
+    //   states 1 and 2 (gather 0x0066b5f8, warp 0x0066b4fc, sub 0)
+    //                                          model 1 + motion 0
+    //   state 3 (occupied 0x0066b370), state 4 (locked 0x0064bc3c): +0xd4 = 0,
+    //                                          the base alone
+    // so the parts are shown by the warp's state: 'idle', 'active', or
+    // neither (render/fieldobjects.ts setBossWarpState).
+    case 0x0019: {
+      const ancient = area >= 8 && area <= 10;
+      if (!ancient && (episode === 2 || area === 0x1c || area === 0x1d)) {
+        return spec('TObjWarpBoss', 'bm_obj_warpboss_jungle.bml', [
+          { model: 0, texlistOf: 0 },
+          { model: 1, texlistOf: 0, motion: 0, drive: 'restart-last', speed: 4, show: 'idle' },
+          { model: 1, texlistOf: 0, motion: 0, drive: 'restart-last', speed: 4, show: 'active' },
+        ]);
+      }
+      return spec('TObjWarpBoss', ancient ? 'bm_obj_warpboss_ancient.bml' : 'bm_obj_warpboss.bml', [
+        { model: 0, texlistOf: 2 },
+        { model: 2, texlistOf: 2, motion: 1, drive: 'restart-last', speed: 4, show: 'idle' },
+        { model: 1, texlistOf: 2, motion: 0, drive: 'restart-last', speed: 4, show: 'active' },
       ]);
     }
     // Pioneer 2 warps, bm_obj_city_common.bml + bm_obj_city_common.xvm (loader

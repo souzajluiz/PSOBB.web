@@ -1,5 +1,35 @@
 # Devlog
 
+## 2026-10-17: the boss warp's beams follow its 6x6A state
+
+**What changed:** online, `CreateWarpMapObject_0066c4b4` does not build the
+object the models were taken from: that one (`0x0066c6cc`, render
+`0x0066cadc`) is the offline / Episode 4 transporter. The online one (0x1e8
+bytes, vtable `0x00b35440`, the 6x6A state machine of `render/bosswarp.ts`)
+renders with `SeabedTuriganeMapObjectRender_0066c38c`: model 0 always, and the
+model at `+0xd4` with the motion at `+0xd8` (frame `+0xc8`, no fog) when the
+state handler set one. State 0 sets model 2 + motion 1 (jungle: model 1 +
+motion 0), the gather (state 1) and warp (state 2) handlers set model 1 +
+motion 0 (with sound effect 6 on the gather), and the occupied (state 3) and
+locked (state 4) handlers clear it, so a warp still waiting for its switch
+flag shows only its base. The update `0x0066aeec` adds 4.0 (`0x00939c14`) to
+the frame and sets it back to 0 once frame + 1.0 reaches the frame count:
+part drive `restart-last`. `objectmodels.ts` gives the beams `show: 'idle'` /
+`'active'`, and `FieldObjects.setBossWarpState` / `showBossWarps` pick them
+from the state the local machine runs (`gamefield.ts`), or 0 / 4 for the
+other boss warps. `TObjWarpBoss03` (`0x0160`) keeps the locked / unlocked
+parts.
+
+There is no camera in the boss warp's handlers (the only camera read is the
+render's distance cull), so the ROADMAP's "boss-warp cutscene camera" is
+dropped: the client has none.
+
+**Checks:** `tests/warpmenu.test.ts` (the boss warp parts per archive and
+state). In Chrome against newserv, VR Temple Beta: the boss warp showed its
+base alone while switch flag 47 was unset and the idle beam once it was set;
+walking in opened the question with the player list, Yes went through the
+gather and the warp to Barba Ray (floor 14).
+
 ## 2026-10-17: the CCA main gate, four-light door lamps and the jungle warp beams
 
 **What changed:**

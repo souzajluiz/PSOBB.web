@@ -337,6 +337,7 @@ export class GameField {
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
+    this.objects?.setBossWarpState(this.bossWarpObject?.index ?? null, this.bossWarp.state);
   }
 
   private updateBattleMusic(w: FloorWaves, pos: { x: number; y: number; z: number }, ticks: number): void {

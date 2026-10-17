@@ -63,7 +63,7 @@
 - [ ] Remaining object models (Pioneer 2 shops and their doors, the Lab city warps, jungle rocks, traps, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
 - [x] Boss fight music phases (`audio/bossbgm.ts`: the track of every phase and the `6x15`/`6x19`/`6xA4`/`6xA5` triggers) and `6x6A` boss warp gathering (`render/bosswarp.ts`: confirmation, party list, 300-frame gather, warp) — `tests/bossrooms.test.ts`
 - [x] CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps (flags = param5), the jungle warp beams (color by param6, 4 frames per tick, radius 15)
-- [ ] The boss-warp cutscene camera and the boss warp object's own animation during the gather / warp states
+- [x] The boss warp object's beams by 6x6A state (idle / gather + warp / occupied + locked); the client has no boss-warp cutscene camera
 - [x] Combat: three-attack combo (`6x43`/`6x44`/`6x45`, motion tables and hit frames from the exe), hit detection with the ItemPMT weapon ranges, the hit/damage formulas, enemy flinch/death motions, `6x46`/`6x0A`/`6x76`, kill -> `6x60` drop request and `6xC8` EXP request (`combat/`, `render/combat.ts`, `tests/combat.test.ts`)
 - [x] Combat: the player taking damage (`6x4A` shield, `6x4B`/`6x4C` light/heavy hit, `6x89`+`6x4D` death, `6x4E` revivable, `6x4F` revive), HP tracking, the hit / knockback / death / stand-up field motions, the HP read-out (`combat/playerdamage.ts`)
 - [x] Combat: enemy AI from the generic enemy FSM (idle and the walk home, the search radius, the war cry, the chase at the BattleParamEntry MovementData speeds, the melee at the AttackData reach with its damage and knockback, the 15-tick recovery) (`combat/enemyai.ts`)
