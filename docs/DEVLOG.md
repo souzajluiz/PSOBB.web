@@ -85,6 +85,76 @@ The 3D preview (`FUN_00406ab4`) and the per-slot icons (`FUN_0040e004`, drawn on
 - The timing of the UI builder states, which gate when the tags and lines start. They start at frame 0 here.
 - The 3D preview and slot icons for existing characters.
 
+## 2026-10-16: title effects and the window renderer from the decompiled code
+
+**What changed:**
+- The title's light beam is now the original particle effects, not a drawing.
+- The flash and the pulsing "PRESS ENTER KEY" are drawn as `PsoBB.exe` draws them.
+- The Login menu and the login window use the client's generic window renderer and its textures. The renderer lives in `stage.ts` so other screens can reuse it.
+
+**Light beam (effects 0x1e3–0x1e5):**
+- `FUN_0050a0ec(pos, id, 1)` creates an emitter. Ids below 0x200 index `particleentry.dat` in `data.gsl` (512 entries of 0x98 bytes).
+- Entries 0x1e3 `title_a`, 0x1e4 `title_b` and 0x1e5 `title_seiunn` hold all the parameters. Their textures are GBIX 700460 and 700151 of `effect_nt.xvm`, which are textures #5 and #43. The id-to-index table is filled from `effect_nt.gvm`'s texlist (code at 0x00501c4c).
+- Emitter (`FUN_00508f58`): adds `number` (+0x44) to an accumulator each frame and spawns one particle per whole unit.
+- `title_a`/`title_b` are type 2 (`FUN_0051145c`, update `FUN_0051095c`, render `FUN_00511004`):
+  - they start at a random offset in a flat 10×1×10 (5×1×5) box around (0, 0, −47);
+  - each frame they step |`vacume` + rand·`speed_x`| ≈ 0.2 units away from the emitter (`FUN_007a8f28`);
+  - with `tex_flags` 4 they are drawn as streaks along the step's on-screen direction, 7·|step| (1.3·|step|) long and 0.05·|step| (0.03·|step|) high, through renderer type 4 (rotated quad).
+  - Particles moving in depth give the fanned rays; particles moving sideways give the horizontal core.
+- `title_seiunn` is type 0 (`FUN_0050ec4c`, update `FUN_0050dbb8`, render `FUN_0050e698`):
+  - slow (0.08–0.12 units per frame) bluish clouds in random XZ directions, damped by 0.9969 per frame;
+  - they live 350–650 frames;
+  - they are drawn from the 4×4 atlas, with frame = round(15·age).
+- Colours and fades follow the update code:
+  - RGB = clamp(age·slope + base) × fade, with fade = min(age/+0x58, (1−age)/+0x5c);
+  - the effect_nt renderers with flag 1 premultiply the fade, and the blend is SRCALPHA/ONE (`FUN_007a902c`, ninja blend 8/10).
+- Projection (renderers at 0x801b40–0x802114):
+  - screen = centre + (x, −y)·D/−z, and the sprite half-size is D/−z · 16 · size;
+  - the title sets the screen centre to (124, 201) with `FUN_004d434c`, from constants 0x0096e27c/78 × the viewport scale;
+  - D = 240·cot(fov/2) for the default perspective (`FUN_0082eea0`, angle 0x3555 → fov 57.5°, D = 437.44).
+  - On the reference capture the rays converge at x = 124 of the stretched 640-wide screen, and the core sits at y ≈ 201.
+- `f128_ray_left/right01..20` (`f128_ray.prs`) are **not** this effect. They are referenced only from 0x00410b7b, the pre-title logo/ad code.
+- The simulation is deterministic (seeded MSVC-style rand) and replays from frame 0 when the clock jumps back.
+
+**Flash (`FUN_006f475c`, frames 150–170 of 300):**
+- k = frame%300 − 150, and the grey level is the low byte of trunc(255·(1 − k·4.2/20)).
+- The value goes negative from k = 5 and the byte wraps, so the original strobes; this is reproduced as is.
+- It is an additive quad of texture 12, UV (0.574, 0)–(0.824, 0.25), from (319.5, 199.5) to (185.6, 65.6). The corners are reversed, so the image is mirrored on both axes.
+- The rectangle comes from 0x0096e1c0 (200), 0x0096e1c8 (320), 0x0096e1c4 (128), 0x0096e148 (−0.5) and the size factor 4.2 at 0x0096e154.
+
+**"PRESS ENTER KEY" (title menu child, vtable 0x00b3eaf8):**
+- `FUN_006ff0d4` draws entry 10 of the sprite set at 0x009cff00 + 10·0x20 through `FUN_0082b6bc`:
+  - position (193, 338), scale 1;
+  - a 256×32 quad with texels (0,0)–(255,31) of title texture 0 (UV = texel/256, clamped to 1).
+- Material alpha = (sin(3°·(frame%120)) + 1)/2 (`FUN_006fede0`, frame%120 by the 0x88888889 multiply).
+- In state 0, Enter creates the account object `FUN_007617e8`.
+
+**Login window:**
+- `FUN_007617e8` reads ACCOUNT/PASSWORD from the registry. Its `FUN_00761c48` builds the "Login" menu that psobb.io shows. It is the original menu, not a psobb.io addition:
+  - `FUN_0073566c(&{210, 300}, 5, unitxt(41,2) "Login")`, size {220, 120};
+  - items unitxt(41,3..6);
+  - a fifth, unselectable item in colour 0xffffcc33 showing "[account]" or unitxt(41,7) "Empty" (`FUN_00761bc0`).
+- The credential window is the "Input UserID" YesNo window (`CreateChatShortcutMenuYesNoWindow_0073840c(140, 330, 360, 100, 4)`):
+  - "UserID" and "Password" label/value rows, with ':' at +154 and the value at +166 (`RenderInfoCounterEntity_0072e930`);
+  - "Confirm" and "Cancel" centred at +202.5. `login.ts` now draws this window.
+- Generic window renderer (vtable 0x00b40a38, render `FUN_007352d0`). The texlist is `f256_hyouji.prs` (`FUN_00712d14`).
+  - Frame (`FUN_00710f80`):
+    - a nine-slice of the 96×96 texel block of texture 1: 32×32 corners (half size when the window is under 64), tiles in steps of 32 with the last tile cut;
+    - the height is rounded up to a multiple of 4.
+    - The x87 code was checked by running the dumped instructions in a small numeric interpreter for several sizes.
+  - Layout (`FUN_0071b900`, `FUN_0071bc28`): content = window inset by 10, plus 6 under a title. Items are 0x14 apart (`FUN_00735c90`).
+  - Title pill (`FUN_00760b85`):
+    - drawn at (x, y−13) (template 0x00974d00);
+    - left cap 40×27, middle max(0, textWidth−112)+80 stretched from texels +20..+60, right cap +40..+80;
+    - rows by state from 0x00974bf8: teal 98, orange 125, green 152.
+    - The text is centred, 4 px below the pill top (`FUN_00760dac`).
+  - Selection bar (`FUN_007120ec`): additive, texture 2, texels (151,57) orange or (151,76) green. The 16-px caps span x−2..x+14 and the right side mirrors it.
+- psobb.io's widescreen patch draws these windows with a uniform scale, centred horizontally (`inWindowSpace`), while the background, logo and particles stay stretched. Both were measured on the capture: the window at x = 210 lands at 120 + 210·1.875 of 1440 px.
+
+**Measured, not decompiled:** item text height and font size (Tahoma bold, 11 px virtual; rows centred 7.5 px below the row top), the selection bar height (16), and the selected item's text colour.
+
+**Result:** full-frame SSIM 0.727 → 0.771, PSNR 20.4 → 21.2 (frame 885).
+
 ## 2026-10-16: title screen rebuilt from the decompiled code
 
 **What changed:** the title is now drawn from what `PsoBB.exe` does instead of parameters fitted to a capture.

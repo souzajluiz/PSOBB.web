@@ -1,43 +1,36 @@
-// Title screen, reproduced from the psobb.io client (reference capture
-// docs/reference: title.png) with the textures of title.prs.
+// Title screen, rendered from what PsoBB.exe does (Ephinea build 1.25.13).
 //
 // title.prs (XVM, 21 textures):
 //   0      "PRESS ENTER KEY" + Japanese menu labels (256x256, DXT3)
-//   1, 2   logo layers (black letters with white rim) drawn over the background at (64,62) and (320,62)
-//   3-10   background, 640x512 in tiles: 256x256 at (0,0) (0,256) (256,0) (256,256),
-//          128x128 at (512,0) (512,128) (512,256) (512,384)
+//   1, 2   logo layers
+//   3-10   background, 640x512 in tiles
 //   11     magic circle (512x512)
-//   12     small rings
-//   13-20  the same background with a stronger flare (cross-faded for the shine)
+//   12     small rings / flash
+//   13-20  the same background with a stronger flare
+// effect_nt.xvm: particle textures (GBIX 700460 = #5, 700151 = #43).
+// f256_hyouji.prs: window skin of the "Login" menu (see stage.ts).
+//
+// Decompiled functions:
+//   FUN_006f8130  title constructor: children, title.adx, screen centre
+//                 (124, 201) via FUN_004d434c, particle emitters 0x1e3-0x1e5
+//   FUN_006f475c  background render (tiles, flash, magic circle)
+//   FUN_006f4cc4  logo and version
+//   FUN_006fed04 / FUN_006ff0d4  title menu child: "PRESS ENTER KEY"
+//   FUN_00761c48  the "Login" menu window (text group 41 of unitxt)
+// Coordinates are in the 640x480 virtual screen; game logic runs at 30 fps.
 
-import { drawPanel, drawPill, drawSelectBar, drawText, type Screen, type Stage } from './stage.ts';
+import { drawMenuWindow, drawText, inWindowSpace, type MenuItem, type Screen, type Stage, type WindowSkin } from './stage.ts';
 
-const TILE_POS: Array<[number, number]> = [
-  [0, 0], [0, 256], [256, 0], [256, 256], [512, 0], [512, 128], [512, 256], [512, 384],
-];
-
-export interface TitleMenuItem {
-  label: string;
-  color?: string;
+export interface TitleMenuItem extends MenuItem {
   action: () => void;
 }
 
-// Layout measured from the reference capture, in 640x480 virtual pixels.
-const MENU = {
-  pill: { x: 230, y: 288, w: 131, h: 24 },
-  panel: { x: 229, y: 301, w: 182, h: 116 },
-  firstItemY: 323,
-  itemStep: 20,
-  centerX: 320,
-  bar: { x: 238, w: 164, h: 8 },
-};
+export interface TitleAssets {
+  title: ImageBitmap[]; // title.prs
+  effect: ImageBitmap[]; // effect_nt.xvm
+  skin: WindowSkin; // f256_hyouji.prs textures 1 and 2
+}
 
-// Values decompiled from PsoBB.exe (Ephinea build, 1.25.13):
-//   title background render  FUN_006f475c
-//   logo / version render    FUN_006f4cc4
-//   static init              0x006f4bb0
-// Coordinates are in the 640x480 virtual screen. The title runs on a frame
-// counter (game logic at 30 fps); the effect cycle is 300 frames.
 const RE = {
   fps: 30,
   // FUN_00415ab0/00415bcc tile table 0x009a3840: {x, y, w, h, texture offset}
@@ -45,48 +38,53 @@ const RE = {
     [512, 384, 128, 128, 7], [512, 256, 128, 128, 6], [512, 128, 128, 128, 5], [512, 0, 128, 128, 4],
     [0, 256, 256, 256, 1], [0, 0, 256, 256, 0], [256, 256, 256, 256, 3], [256, 0, 256, 256, 2],
   ] as const,
-  baseLayer: 3, // drawn at z -130
-  flareLayer: 13, // drawn at z -150, in front of the base layer
+  baseLayer: 3,
+  flareLayer: 13,
   center: [320, 220] as const, // 0x00a96918 / 0x00a9691c
   framesPerTurn: 900, // angle = frame * 0x10000 / 900 (BAMS)
   // FUN_007a919c(0, 0x58, 0x73, frame, 300, 150, 165, 180): RGB(0,88,115) pulsing to white
   color: [0, 88, 115] as const,
   pulse: [300, 150, 165, 180] as const,
-  ring: { texture: 11, size: 430, uv: [0, 0, 0.84] }, // rotates by -angle
-  innerRing: { texture: 12, size: 178, uv: [0, 0, 0.348] }, // rotates by +angle
+  ring: { texture: 11, size: 430, uv: [0, 0, 0.84] },
+  innerRing: { texture: 12, size: 178, uv: [0, 0, 0.348] },
   node: { texture: 12, size: 104, uv: [0.3496, 0, 0.203] },
   nodeOffsets: [[-137, -79], [137, -79], [0, 156]] as const, // 0x0096e168
   logo: [[1, 64, 61], [2, 320, 61]] as const,
   version: [10, 460] as const,
+  // FUN_006f475c, frames 150..170 of each 300: additive sprite, texture 12.
+  // Rect from 0x0096e1c0 (200), 0x0096e1c8 (320), 0x0096e1c4 (128), 0x0096e148
+  // (-0.5) and the scale 4.2 (0x0096e154): x0 = 320 - 0.5, y0 = 200 - 0.5,
+  // x1 = 320 - 4.2*128*0.25, y1 = 200 - 134.4. x0 > x1 and y0 > y1, so the
+  // UVs (0x00a96904..10) are mirrored on both axes. z = 0.00714.
+  flash: { x0: 319.5, y0: 199.5, x1: 185.6, y1: 65.6, uv: [0.574, 0, 0.824, 0.25] },
+  // FUN_006ff0d4 -> FUN_0082b6bc(sprite set 0x009cff00 + 10*0x20, entry 10, z -10, flags 0x22):
+  // set position (193, 338), scale 1; entry 10 = 256x32, texels (0,0)-(255,31)
+  // of texture 0. Alpha (material color) = (sin(3 deg * (frame % 120)) + 1) / 2
+  // (FUN_006fede0), white.
+  press: { x: 193, y: 338, w: 256, h: 32, uv: [0, 0, 255 / 256, 31 / 256] },
+  // FUN_00761c48: FUN_0073566c(&{210, 300}, 5 items, unitxt(41,2) "Login"),
+  // window size {220, 120} (0x00974e10).
+  login: { x: 210, y: 300, w: 220, h: 120 },
 };
 
-// Not decompiled yet: the light beam/rays are particle effects 0x1e3-0x1e5
-// created by the title constructor (FUN_006f8130). Approximated procedurally.
-export const TITLE_TUNING = {
-  // psobb.io's widescreen patch keeps the rotating circle quads round while the
-  // 4:3 layout is stretched to 16:10; 1/1.2 undoes the stretch around x=320.
-  circleAspect: 1 / 1.2,
-  menuFont: 9.5,
-  beamY: 201,
-  beamLength: 280,
-  beamHeight: 24,
-  beamAlpha: 1,
-  rays: 14,
-};
+// psobb.io's widescreen patch keeps the rotating circle quads round while the
+// 4:3 layout is stretched to 16:10; 1/1.2 undoes the stretch around x=320.
+export const TITLE_TUNING = { circleAspect: 1 / 1.2 };
 
 export class TitleScreen implements Screen {
   private tex: ImageBitmap[];
-  private press: ImageBitmap;
+  private skin: WindowSkin;
+  private fx: TitleParticles;
   private tintCache = new Map<string, OffscreenCanvas>();
   private items: TitleMenuItem[];
   private selected = 0;
   private versionText: string;
   title = 'Login';
 
-  // `c`: the 21 textures of title.prs as bitmaps.
-  constructor(c: ImageBitmap[], items: TitleMenuItem[], versionText: string) {
-    this.tex = c;
-    this.press = c[0];
+  constructor(assets: TitleAssets, items: TitleMenuItem[], versionText: string) {
+    this.tex = assets.title;
+    this.skin = assets.skin;
+    this.fx = new TitleParticles(assets.effect);
     this.items = items;
     this.versionText = versionText;
   }
@@ -94,17 +92,17 @@ export class TitleScreen implements Screen {
   update(): void {}
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
-    const frame = stage.time * RE.fps;
-    // Background: base layer, then the flare layer in front of it.
+    const frame = Math.floor(stage.time * RE.fps);
     for (const layer of [RE.baseLayer, RE.flareLayer]) {
       for (const [x, y, w, h, i] of RE.tiles) ctx.drawImage(this.tex[layer + i], x, y, w, h);
     }
+    this.drawFlash(ctx, frame);
 
     // Magic circle: additive, colored by the pulse.
     const [r, g, b] = pulseColor(frame);
     const angle = ((frame % RE.framesPerTurn) / RE.framesPerTurn) * Math.PI * 2;
     const [cx, cy] = RE.center;
-    const tinted = (texture: number) => this.tinted(texture, r, g, b);
+    const tinted = (texture: number) => this.tinted(this.tex[texture], `t${texture}`, r, g, b);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.translate(cx, 0);
@@ -119,47 +117,57 @@ export class TitleScreen implements Screen {
     }
     ctx.restore();
 
-    this.drawBeam(ctx, stage);
+    this.fx.advanceTo(frame);
+    this.fx.draw(ctx, (img, key, cr, cg, cb) => this.tinted(img, key, cr, cg, cb));
     for (const [i, x, y] of RE.logo) ctx.drawImage(this.tex[i], x, y, 256, 256);
 
-    // Faint "PRESS ENTER KEY" behind the window, as in the original.
-    ctx.globalAlpha = 0.18;
-    ctx.drawImage(this.press, 28, 4, 200, 26, 240, 342, 167, 22);
+    // "PRESS ENTER KEY", pulsing (title menu child, state 0).
+    const p = RE.press;
+    ctx.globalAlpha = (Math.sin(((3 * (frame % 120)) / 180) * Math.PI) + 1) / 2;
+    const t0 = this.tex[0];
+    ctx.drawImage(t0, p.uv[0] * t0.width, p.uv[1] * t0.height, (p.uv[2] - p.uv[0]) * t0.width, (p.uv[3] - p.uv[1]) * t0.height, p.x, p.y, p.w, p.h);
     ctx.globalAlpha = 1;
 
-    // Login window.
-    const m = MENU;
-    drawPanel(ctx, m.panel.x, m.panel.y, m.panel.w, m.panel.h);
-    drawPill(ctx, m.pill.x, m.pill.y, m.pill.w, m.pill.h);
-    drawText(ctx, this.title, m.pill.x + m.pill.w / 2, m.pill.y + m.pill.h / 2 + 0.5, { size: TITLE_TUNING.menuFont, color: '#120400', align: 'center' });
-    this.items.forEach((item, i) => {
-      const y = m.firstItemY + i * m.itemStep;
-      if (i === this.selected) {
-        drawSelectBar(ctx, m.bar.x, y - m.bar.h / 2, m.bar.w, m.bar.h, 0.75 + 0.25 * Math.sin(stage.time * 6));
-      }
-      const color = i === this.selected ? '#ffc19a' : item.color ?? '#ffffff';
-      drawText(ctx, item.label, m.centerX, y + 0.5, { size: TITLE_TUNING.menuFont, color, align: 'center', shadow: 'rgba(0,0,0,0.6)' });
-    });
+    inWindowSpace(ctx, stage, () =>
+      drawMenuWindow(ctx, this.skin, { ...RE.login, title: this.title }, this.items, this.selected),
+    );
 
-    // The original prints its version in a wide, letter-spaced debug font.
     ctx.letterSpacing = '1.6px';
     drawText(ctx, this.versionText, RE.version[0], RE.version[1] + 6, { size: 10.5, color: '#f4f4f4', bold: false, shadow: '#000' });
     ctx.letterSpacing = '0px';
   }
 
+  // Flash, FUN_006f475c: gray level = low byte of trunc(255 * (1 - 0.21 k)),
+  // k = frame % 300 - 150 in 0..20. The value goes negative from k = 5 and
+  // the byte wraps, so the original flickers; reproduced as is.
+  private drawFlash(ctx: CanvasRenderingContext2D, frame: number): void {
+    const k = (frame % 300) - 150;
+    if (k < 0 || k > 20) return;
+    const level = Math.trunc((1 - (k / 20) * Math.fround(4.2)) * 255) & 0xff;
+    const f = RE.flash;
+    const t = this.tex[12];
+    const [u0, v0, u1, v1] = f.uv;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // Mirrored on both axes: the u0/v0 corner is at (x0, y0) = bottom right.
+    ctx.translate(f.x0, f.y0);
+    ctx.scale(-1, -1);
+    ctx.drawImage(this.tinted(t, 't12', level, level, level), u0 * t.width, v0 * t.height, (u1 - u0) * t.width, (v1 - v0) * t.height, 0, 0, f.x0 - f.x1, f.y0 - f.y1);
+    ctx.restore();
+  }
+
   // Texture multiplied by a vertex color, as D3D does with diffuse * texture.
-  // Colors are quantized so the pulse needs only a few cached variants.
-  private tinted(texture: number, r: number, g: number, b: number): OffscreenCanvas {
-    const q = (v: number) => Math.round(v / 16) * 16;
-    const key = `${texture}:${q(r)},${q(g)},${q(b)}`;
+  // Colors are quantized so only a few cached variants are needed.
+  private tinted(src: CanvasImageSource & { width: number; height: number }, id: string, r: number, g: number, b: number): OffscreenCanvas {
+    const q = (v: number) => Math.min(255, Math.round(v / 8) * 8);
+    const key = `${id}:${q(r)},${q(g)},${q(b)}`;
     let c = this.tintCache.get(key);
     if (!c) {
-      const src = this.tex[texture];
       c = new OffscreenCanvas(src.width, src.height);
       const g2 = c.getContext('2d')!;
       g2.drawImage(src, 0, 0);
       g2.globalCompositeOperation = 'multiply';
-      g2.fillStyle = `rgb(${Math.min(255, q(r))}, ${Math.min(255, q(g))}, ${Math.min(255, q(b))})`;
+      g2.fillStyle = `rgb(${q(r)}, ${q(g)}, ${q(b)})`;
       g2.fillRect(0, 0, c.width, c.height);
       g2.globalCompositeOperation = 'destination-in';
       g2.drawImage(src, 0, 0);
@@ -168,54 +176,29 @@ export class TitleScreen implements Screen {
     return c;
   }
 
-  private drawBeam(ctx: CanvasRenderingContext2D, stage: Stage): void {
-    const t = TITLE_TUNING;
-    const pulse = 0.9 + 0.1 * Math.sin(stage.time * 3);
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = t.beamAlpha * pulse;
-    // Fades in from the left edge and out toward the logo.
-    const gx = ctx.createLinearGradient(0, 0, t.beamLength, 0);
-    gx.addColorStop(0, 'rgba(150, 200, 255, 0.85)');
-    gx.addColorStop(0.55, 'rgba(225, 240, 255, 1)');
-    gx.addColorStop(1, 'rgba(120, 190, 255, 0)');
-    for (const [h, a] of [[t.beamHeight, 0.35], [t.beamHeight * 0.45, 0.6], [t.beamHeight * 0.15, 1]] as const) {
-      ctx.globalAlpha = t.beamAlpha * pulse * a;
-      ctx.fillStyle = gx;
-      ctx.beginPath();
-      ctx.ellipse(t.beamLength * 0.35, t.beamY, t.beamLength * 0.65, h / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Thin rays fanning out of the beam, slowly flickering.
-    ctx.lineWidth = 0.4;
-    for (let i = 0; i < t.rays; i++) {
-      const a = ((i / t.rays) - 0.5) * 1.2 + 0.05 * Math.sin(stage.time * 2 + i);
-      const len = 120 + 60 * ((i * 37) % 10) / 10;
-      ctx.globalAlpha = t.beamAlpha * (0.25 + 0.2 * Math.sin(stage.time * 4 + i * 1.7));
-      ctx.strokeStyle = 'rgb(110, 150, 255)';
-      ctx.beginPath();
-      ctx.moveTo(150, t.beamY);
-      ctx.lineTo(150 - Math.cos(a) * len, t.beamY + Math.sin(a) * len * 0.8);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
   key(e: KeyboardEvent): void {
-    if (e.key === 'ArrowDown') this.selected = (this.selected + 1) % this.items.length;
-    else if (e.key === 'ArrowUp') this.selected = (this.selected + this.items.length - 1) % this.items.length;
+    const n = this.selectable();
+    if (e.key === 'ArrowDown') this.selected = n[(n.indexOf(this.selected) + 1) % n.length];
+    else if (e.key === 'ArrowUp') this.selected = n[(n.indexOf(this.selected) + n.length - 1) % n.length];
     else if (e.key === 'Enter') this.items[this.selected].action();
   }
 
-  // Mouse support: virtual coordinates -> menu item.
+  private selectable(): number[] {
+    return this.items.flatMap((it, i) => (it.selectable === false ? [] : [i]));
+  }
+
+  // Mouse support: virtual coordinates (4:3 window space) -> menu item.
   pointer(vx: number, vy: number, click: boolean): void {
-    const m = MENU;
-    if (vx < m.panel.x || vx > m.panel.x + m.panel.w) return;
-    const i = Math.round((vy - m.firstItemY) / m.itemStep);
-    if (i < 0 || i >= this.items.length) return;
+    const w = RE.login;
+    if (vx < w.x || vx > w.x + w.w) return;
+    const i = Math.floor((vy - (w.y + 16)) / 20);
+    if (!this.selectable().includes(i)) return;
     this.selected = i;
     if (click) this.items[i].action();
   }
+
+  // The menu is drawn in window space; main.ts maps pointer coordinates with it.
+  readonly pointerSpace = 'window';
 }
 
 // FUN_007a919c: base color, lerped to white between frames 150 -> 165 -> 180 of 300.
@@ -244,4 +227,196 @@ function drawRotated(
   ctx.rotate(angle);
   ctx.drawImage(img, u * img.width, v * img.height, e * img.width, e * img.height, -size / 2, -size / 2, size, size);
   ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Light beam: particle effects 0x1e3 "title_a", 0x1e4 "title_b" and 0x1e5
+// "title_seiunn", entries of particleentry.dat (0x98 bytes each, data.gsl),
+// emitted at (0, 0, -47) by FUN_0050a0ec from the title constructor.
+//
+// Emitter (FUN_00508f58): acc += number (+0x44) each frame; while acc >= 1,
+// acc -= 1 and spawn one particle of particle_type (+0x10).
+// Type 2 (title_a/b, FUN_0051145c, update FUN_0051095c, render FUN_00511004):
+//   start = emitter + (rand - 0.5) * variation (+0x18..+0x20); speed = vacume
+//   (+0x30) + rand * speed_x (+0x38), scaled by +0x50 every frame; each frame
+//   the particle moves `speed` toward the emitter (negative: away from it,
+//   FUN_007a8f28) and remembers the step. Life = round(duration (+0x48) +
+//   rand * appear (+0x4c)) frames. tex_flags & 4: drawn as a streak along the
+//   on-screen direction of the step, width radius (+0x60) * |step|, height
+//   opt1 (+0x64) * |step| (renderer 4: rotated quad).
+// Type 0 (title_seiunn, FUN_0050ec4c, update FUN_0050dbb8, render FUN_0050e698):
+//   velocity (vacume + rand * speed_x, 0, 0) rotated by a random angle about Y,
+//   x/z damped by +0x50 each frame; size = scale_x (+0x24) + rand * scale_y
+//   (+0x28), times scale_z (+0x2c) each frame; tex_flags & 0x10: atlas frame
+//   = round(15 * age) (renderer 3: axis-aligned quad).
+// Both: fade = min(age / +0x58, (1 - age) / +0x5c) (1 outside those ranges);
+// RGB = clamp(age * (+0x6c, +0x70, +0x74) + (+0x7c, +0x80, +0x84)) * fade
+// (effect_nt renderers with flag 1 premultiply); blend SRCALPHA/ONE.
+// Projection (renderers 0x801b..0x802114): view space = world (no camera on
+// the title), screen = centre + (x, -y) * D / -z, with the centre set to
+// (124, 201) by the title (FUN_004d434c -> 0x00a48828) and D = 240 * cot(fov/2)
+// for the default perspective (FUN_0082eea0 with angle 0x3555:
+// fov = 2 * atan(tan(0x3555 * 0.425) / 1.1333) = 57.5 deg, D = 437.44).
+// Sprite half-size = D / -z * 16 (effect_nt metadata width) * size.
+// ---------------------------------------------------------------------------
+
+interface ParticleDef {
+  type: 0 | 2;
+  texture: number; // effect_nt.xvm index
+  variation: [number, number, number];
+  size: [number, number, number]; // base, random, per-frame factor
+  vacume: number;
+  speed: number;
+  damping: number; // +0x50
+  rate: number; // +0x44
+  life: [number, number]; // duration, appear
+  fade: [number, number]; // +0x58, +0x5c
+  streak: [number, number]; // +0x60, +0x64
+  colorSlope: [number, number, number];
+  colorBase: [number, number, number];
+  frames: number; // atlas frames (renderer metadata), 1 = whole texture
+}
+
+// Values read from particleentry.dat (data.gsl) entries 0x1e3..0x1e5.
+const PARTICLES: ParticleDef[] = [
+  { type: 2, texture: 5, variation: [10, 1, 10], size: [0.05, 0.15, 1], vacume: -0.2, speed: 0.05, damping: 1, rate: 0.8, life: [50, 10], fade: [0.8, 0.9498], streak: [7, 0.05], colorSlope: [0, -0.2, 0], colorBase: [0.8, 0.8, 0.8], frames: 1 },
+  { type: 2, texture: 5, variation: [5, 1, 5], size: [0.05, 0.15, 1], vacume: -0.2, speed: 0.1, damping: 1, rate: 0.5, life: [100, 20], fade: [0.6, 0.7], streak: [1.3, 0.03], colorSlope: [0, -0.5, 0], colorBase: [0.9, 0.9, 0.9], frames: 1 },
+  { type: 0, texture: 43, variation: [0, 0, 0], size: [0.07, 0.15, 0.994], vacume: 0.0798, speed: 0.0399, damping: 0.9969, rate: 0.8, life: [350, 300], fade: [0.1, 0.5], streak: [3, 0.8], colorSlope: [-1, -0.8, 0], colorBase: [0.5, 0.6998, 1], frames: 16 },
+];
+
+const EMITTER: [number, number, number] = [0, 0, -47];
+const SCREEN_CENTER: [number, number] = [124, 201];
+const PROJ_D = 437.44;
+const NT_SIZE = 16; // effect_nt metadata width/height of textures 5 and 43
+
+interface Particle {
+  def: ParticleDef;
+  p: [number, number, number];
+  v: [number, number, number]; // type 0 velocity / type 2 last step
+  speed: number;
+  size: number;
+  age: number;
+  dt: number;
+}
+
+class TitleParticles {
+  private tex: ImageBitmap[];
+  private list: Particle[] = [];
+  private acc = [0, 0, 0];
+  private frame = 0;
+  private seed = 1;
+
+  constructor(effect: ImageBitmap[]) {
+    this.tex = effect;
+  }
+
+  // MSVC-like rand() / 32768, seeded so captures are reproducible.
+  private rand(): number {
+    this.seed = (Math.imul(this.seed, 214013) + 2531011) | 0;
+    return ((this.seed >>> 16) & 0x7fff) / 32768;
+  }
+
+  advanceTo(frame: number): void {
+    if (frame < this.frame) {
+      this.list = [];
+      this.acc = [0, 0, 0];
+      this.frame = 0;
+      this.seed = 1;
+    }
+    // Cap catch-up work after long pauses: older particles are dead anyway.
+    if (frame - this.frame > 1200) {
+      this.list = [];
+      this.frame = frame - 1200;
+    }
+    while (this.frame < frame) this.step();
+  }
+
+  private step(): void {
+    this.frame++;
+    PARTICLES.forEach((def, i) => {
+      this.acc[i] += def.rate;
+      while (this.acc[i] >= 1) {
+        this.acc[i] -= 1;
+        this.list.push(this.spawn(def));
+      }
+    });
+    for (const q of this.list) this.update(q);
+    this.list = this.list.filter((q) => q.age < 1);
+  }
+
+  private spawn(def: ParticleDef): Particle {
+    const r = () => this.rand();
+    const p: [number, number, number] = [
+      EMITTER[0] + (r() - 0.5) * def.variation[0],
+      EMITTER[1] + (r() - 0.5) * def.variation[1],
+      EMITTER[2] + (r() - 0.5) * def.variation[2],
+    ];
+    const size = r() * def.size[1] + def.size[0];
+    const dt = 1 / Math.round(r() * def.life[1] + def.life[0]);
+    if (def.type === 2) {
+      const speed = r() * def.speed + def.vacume;
+      return { def, p, v: [0, 0, 0], speed, size, age: 0, dt };
+    }
+    const vx = r() * def.speed + def.vacume;
+    const a = r() * Math.PI * 2; // FUN_007829f4 about Y
+    return { def, p, v: [vx * Math.cos(a), 0, -vx * Math.sin(a)], speed: 0, size, age: 0, dt };
+  }
+
+  private update(q: Particle): void {
+    const d = q.def;
+    if (d.type === 2) {
+      q.speed *= d.damping;
+      const dx = EMITTER[0] - q.p[0], dy = EMITTER[1] - q.p[1], dz = EMITTER[2] - q.p[2];
+      const len = Math.hypot(dx, dy, dz);
+      if (q.speed < len && len !== 0) q.v = [(dx / len) * q.speed, (dy / len) * q.speed, (dz / len) * q.speed];
+      else q.v = [dx, dy, dz];
+      q.p = [q.p[0] + q.v[0], q.p[1] + q.v[1], q.p[2] + q.v[2]];
+    } else {
+      q.p = [q.p[0] + q.v[0], q.p[1] + q.v[1], q.p[2] + q.v[2]];
+      q.v = [q.v[0] * d.damping, q.v[1], q.v[2] * d.damping];
+      q.size *= d.size[2];
+    }
+    q.age += q.dt;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, tint: (img: ImageBitmap, key: string, r: number, g: number, b: number) => OffscreenCanvas): void {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const q of this.list) {
+      const d = q.def;
+      const z = -q.p[2];
+      if (z < 1) continue; // renderers skip z_view > -1
+      const k = PROJ_D / z;
+      const sx = SCREEN_CENTER[0] + q.p[0] * k;
+      const sy = SCREEN_CENTER[1] - q.p[1] * k;
+      const t = Math.min(q.age, 1);
+      const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
+      if (fade <= 0) continue;
+      const c = [0, 1, 2].map((i) => Math.max(0, Math.min(1, t * d.colorSlope[i] + d.colorBase[i])) * 255);
+      // Fade is applied as alpha on a tinted copy (additive: same result).
+      ctx.globalAlpha = fade * (254 / 255);
+      const img = tint(this.tex[d.texture], `nt${d.texture}`, c[0], c[1], c[2]);
+      if (d.type === 2) {
+        const L = Math.hypot(q.v[0], q.v[1], q.v[2]);
+        if (L === 0) continue;
+        const e = [q.p[0] + q.v[0], q.p[1] + q.v[1], q.p[2] + q.v[2]];
+        const ke = PROJ_D / -e[2];
+        const ex = SCREEN_CENTER[0] + e[0] * ke;
+        const ey = SCREEN_CENTER[1] - e[1] * ke;
+        const hw = k * NT_SIZE * d.streak[0] * L;
+        const hh = k * NT_SIZE * d.streak[1] * L;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(Math.atan2(ey - sy, ex - sx));
+        ctx.drawImage(img, -hw, -hh, hw * 2, hh * 2);
+        ctx.restore();
+      } else {
+        const frame = Math.round((d.frames - 1) * t);
+        const cell = img.width / 4;
+        const h = k * NT_SIZE * q.size;
+        ctx.drawImage(img, (frame % 4) * cell, Math.floor(frame / 4) * cell, cell, cell, sx - h, sy - h, h * 2, h * 2);
+      }
+    }
+    ctx.restore();
+  }
 }
