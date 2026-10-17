@@ -51,6 +51,7 @@
 - The Pioneer 2 teleporter menu, boss warps (`TObjWarpBoss`), in-floor map warps (`TObjMapWarpForest`) and doors.
 - Field BGM. The area track names are in the exe; only the lobby and city tracks are mapped so far.
 - Ultimate Episode 1 uses `SetDataTable*Ulti.rel` on newserv, but that table is not in Ephinea's client. Whether Ultimate uses the `map_a*` geometry is not verified.
+
 ## 2026-10-17: sound effects from data/sound/*.pac
 
 **What changed:** the classic UI now plays the game's sound effects. `formats/sepac.ts` parses the banks, `audio/se_tables.ts` is generated from the exe by `tools/gen-se-tables.py`, and `audio/se.ts` (`SePlayer`, plus a shared `se(id)`) plays them with Web Audio. The title, login window, character select and character creation call `se()` wherever the decompiled code calls `FUN_00814298`. Details are in PROTOCOL.md, "Sound effects".
