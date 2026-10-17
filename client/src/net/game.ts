@@ -630,7 +630,10 @@ export class Game extends Lobby {
   // entity id (0x4000 + object index across all floors of the game) and
   // flags 1 (set), as in newserv's captures of real clients
   // (DCv1-DCv2-PCv2-CrossplayPrivateDrops: 05 03 68 40 .. 07 00 01 01).
-  sendSwitchFlag(entityId: number, floor: number, flag: number, set = true): void {
+  // `flags` overrides the flag byte: bit 0 = set the flag, bit 1 = play the
+  // room unlock sound. A wave event's first set_switch_flag sends 3
+  // (FUN_0080cd7c), the rest 1, and clear_switch_flag sends 0.
+  sendSwitchFlag(entityId: number, floor: number, flag: number, set = true, flags = set ? 1 : 0): void {
     const body = new Uint8Array(0x0c);
     const dv = new DataView(body.buffer);
     body[0] = 0x05;
@@ -639,7 +642,37 @@ export class Game extends Lobby {
     dv.setUint16(4, this.selfId, true);
     dv.setUint16(8, flag, true);
     body[10] = floor;
-    body[11] = set ? 1 : 0;
+    body[11] = flags;
+    this.conn.send(0x60, 0, body);
+  }
+
+  // 6x67 (G_TriggerSetEvent_6x67, 0x10 bytes): {67, 04, entity id, u32 floor,
+  // u32 event id, u32 client id}. A trigger object sends its own entity id
+  // (0x4000 + object index), a wave event's trigger_event action 0xFFFF
+  // (FUN_0080ce24).
+  sendTriggerEvent(entityId: number, floor: number, eventId: number): void {
+    const body = new Uint8Array(0x10);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x67;
+    body[1] = 0x04;
+    dv.setUint16(2, entityId, true);
+    dv.setUint32(4, floor, true);
+    dv.setUint32(8, eventId, true);
+    dv.setUint32(12, this.selfId, true);
+    this.conn.send(0x60, 0, body);
+  }
+
+  // 6x76 (G_SetEntitySetFlags_6x76, 8 bytes): {76, 02, entity id, u16 floor,
+  // u16 flags}. The client ORs the flags into the entity's set entry; flag 8
+  // means the enemy is dead, which is what advances a wave event.
+  sendEntitySetFlags(entityId: number, floor: number, flags: number): void {
+    const body = new Uint8Array(8);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x76;
+    body[1] = 0x02;
+    dv.setUint16(2, entityId, true);
+    dv.setUint16(4, floor, true);
+    dv.setUint16(6, flags, true);
     this.conn.send(0x60, 0, body);
   }
 
@@ -678,18 +711,7 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, buildEnemyState(enemyIndex, totalDamage, flags));
   }
 
-  // 6x76 (G_SetEntitySetFlags_6x76, 8): {entity id} {u16 floor, u16 flags};
-  // the client sends flags 8 for a dead enemy.
-  sendEntitySetFlags(entityId: number, floor: number, flags: number): void {
-    const b = new Uint8Array(8);
-    const dv = new DataView(b.buffer);
-    b[0] = 0x76;
-    b[1] = 2;
-    dv.setUint16(2, entityId, true);
-    dv.setUint16(4, floor, true);
-    dv.setUint16(6, flags, true);
-    this.conn.send(0x60, 0, b);
-  }
+  // A killed enemy is reported with 6x76 flags 8 (sendEntitySetFlags above).
 
   // 6x60 (G_StandardDropItemRequest_PC_V3_BB_6x60, 0x18) for a killed enemy,
   // sent privately to the leader (62) like the original client; on BB newserv

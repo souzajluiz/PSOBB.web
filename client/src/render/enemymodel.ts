@@ -91,7 +91,11 @@ export class EnemyArchive {
     const e = this.bml.entries[i];
     if (!e || i >= this.modelCount) throw new Error(`${this.name}: no model ${i}`);
     const data = this.bml.get(e.name);
-    if (/\.nj$/i.test(e.name)) {
+    // The BML keeps at most 0x20 characters of the name, so some entries lose
+    // their extension (bm_obj_ep4_container_01_hakai_s.); those are chunk
+    // models, which parse as NJ.
+    const chunk = /\.nj$/i.test(e.name) || !/\.[a-z0-9]+$/i.test(e.name);
+    if (chunk) {
       const f = parseNinjaChunkFile(data);
       m = { kind: 'nj', name: e.name, object: f.object!, textures: f.textureNames };
     } else {
@@ -184,6 +188,19 @@ export class NodeAnimator {
     this.frame = 0;
     this.tickRemainder = 0;
     this.apply(0);
+  }
+
+  // Plays one explicit frame (door and laser motions are driven by their own
+  // state machine, not by the tick counter).
+  setFrame(frame: number): void {
+    const m = this.motion;
+    const f = m.frameCount > 1 ? Math.min(Math.max(frame, 0), m.frameCount - 1) : 0;
+    this.frame = f;
+    this.apply(f);
+  }
+
+  get frameCount(): number {
+    return this.motion.frameCount;
   }
 
   update(dt: number): void {
@@ -336,6 +353,22 @@ export class EnemyArchiveCache {
 
   constructor(files: ClientFiles) {
     this.files = files;
+  }
+
+  // Object archives: the model count is not in a descriptor here, so it is
+  // taken from the entry names (models first, then the .njm / .njs motions,
+  // which is how every object archive is laid out).
+  getAuto(name: string): Promise<EnemyArchive> {
+    let p = this.archives.get(name);
+    if (!p) {
+      p = this.files.read(name).then((data) => {
+        const bml = new BmlArchive(data);
+        const first = bml.entries.findIndex((e) => /\.(njm|njs)$/i.test(e.name));
+        return new EnemyArchive(name, data, first < 0 ? bml.entries.length : first);
+      });
+      this.archives.set(name, p);
+    }
+    return p;
   }
 
   get(name: string, modelCount: number): Promise<EnemyArchive> {

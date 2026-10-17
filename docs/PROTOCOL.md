@@ -224,6 +224,68 @@ Switches: `TObjDoorKey` (0x81, ctor `FUN_00658b0c` on the generic switch `FUN_00
 
 The entity id of an object is 0x4000 + its index counted over the object lists (`o.dat`) of all floors in order (newserv `MapState::object_state_for_index`); wave events use 0xFFFF. Real-client capture (newserv `DCv1-DCv2-PCv2-CrossplayPrivateDrops`): `05 03 68 40 00 00 FC 8C 07 00 01 01`. Received `6x05` set or clear the flag on that floor.
 
+### Object models
+
+Implemented in `client/src/formats/objectmodels.ts` (type → archive table) and `render/objectview.ts` (floor layer), tested by `tests/waves.test.ts`. The per-area factory table above gives the constructor; every class also has a loader, run when the area is loaded, that reads one BML with `LoadBML_005b7a84` into a global (entries by position, models first and then motions, exactly as for enemy archives) and usually a separate texture archive with `FUN_008009dc("<name>.gvm")` — on Blue Burst the file is `<name>.xvm`. `FUN_005b8610(i)` / `FUN_005b8624(i)` / `FUN_005b8638(i)` (thiscall on the archive) return model *i*, its texture list and motion *i*; the render functions draw a model with `FUN_00835090` (static) or `FUN_00835574` (model, frame), pick the texture list with `FUN_00829cc8` and set the texture id of every mesh with `FUN_0081a588(model, id)`.
+
+| Object | Archive (loader) | Models |
+|---|---|---|
+| `TObjAreaWarpForest` / `TObjMapWarpForest` | `fs_obj_warp.bml` + `fs_obj_warp.xvm` (`0x0066ad38`) | base 0 (4 for the map warp) and beam 1 (5) with motion 0 (2), frame +4.0 per frame (`0x00939a2c`); the beam's texture id is `{3, 2}[param6 & 1]` (`FUN_00669ab0`) |
+| `TObjWarpBoss` | `bm_obj_warpboss.bml`, `bm_obj_warpboss_ancient.bml` (Ruins), `bm_obj_warpboss_jungle.bml` (Episode 2 / Seabed) (`FUN_0066cc28`) | base 0 plus model 2 with motion 1 while locked, or model 1 with motion 0 when open (`FUN_0066c89c`, `FUN_0066cadc`) |
+| `TObjCityMainWarp` / `TObjCityAreaWarp` / `TObjCityMapWarp` | `bm_obj_city_common.bml` + `bm_obj_city_common.xvm` (`FUN_00645b18`) | 12 + 0 with motion 5, 1 with motion 6, 13 + 3 with motion 7 |
+| `TObjDoor` (Forest) | `fe_obj_doa_kanban.bml` + `fe_obj_door.xvm` (`FUN_0065753c`) | locked: door 4, laser 3 with motion 1 (+1.0 per frame, `0x00937990`), sign 0 with texture id = the door number in the colour of `0x009c7b04[digit]`, lamps 1 and 2 with texture 0x15; unlocked: door 4 with motion 0 at the state machine's frame, lamps with texture 0x16 (`FUN_006571f4` → `0x009c7ad8`) |
+| Cave / Mine / Ruins / VR / Seabed / Lab / Episode 4 doors | one archive each (`bm_fs_obj_do_doa0{1,2,3}`, `bm_fs_obj_ki_doa{,2}`, `bm_fe_obj_o_door0{1,3,4}l`, `fs_obj_door07_m`, `fs_obj_o_door0{5,6}l`, `fs_obj_o_vs2door01l`, `fs_obj_ex_doa01`, `bm_obj_door_ruins`, `bm_obj_door_space`, `bm_o_door_seabed01[_u]`, `bm_obj_door_labo`, `bm_obj_labodoor_nrm`, `bm_obj_beamdoa`, `bm_o_jungle_doormain`, `bm_obj_ep4_door`) | model 0 with motion 0; the `*r.gvm` texture list is used while locked and the `*g.gvm` one when open. Ultimate Episode 1 loads the `_a` archives (online flag `DAT_009f9860` and difficulty 3). |
+| `TObjDoorKey` (switch) | `abeno_fs_obj001_fosuno.bml` + `fe_obj_switch.xvm` (`FUN_00658d00`) | base 1 always, glow 2 while the flag is set, digit 0 with texture id = `clamp(param6, 0, 9)` in colour `0x009c7ce0[digit]` (`FUN_00658824` / `FUN_0065893c`) |
+| Other switches | `bm_fs_obj_do_doa_panel` / `fs_obj_key_jungle` (Episode 2, Seabed), `bm_fs_obj_ki_doa_panel`, `bm_fs_obj_o_doorpanel`, `bm_fs_obj_o_doorswitch01`, `bm_fd_obj_n_switch` | model 0 (`0x0062b0c8`, `FUN_0062c050`, `FUN_0062ab64`, `FUN_0062a0a8`) |
+| Boxes | `fe_obj_hako01_hahen02` + `fs_obj_hako01_{n,a}.gvm`, `bm_obj_seabed_con` (Seabed), `bm_obj_ep4_container` (Episode 4), and their rare counterparts (`FUN_0064f674`, `FUN_0064f448`) | model 1 (normal) or 2 (rare); collision sphere `0x009c77ac` (radius 9, 6 units up) |
+
+The door's collision box comes from `InitEnemyCollisionBoxes_007b9a88(&box, 1)` in the constructor (0x2C bytes: position, radius, half-width, type, flags). Every door but a few uses 20 × 10 half extents 20 units up; the Forest door is 40 × 10 at floor level, the jungle gate 80 × 20, the laser door 30 × 10. While the door is closed the client sets flag 1 on the box (`FUN_007b52c4`) and clears it when the door opens (`FUN_007b52ec`); `render/collision.ts` keeps these boxes in `CollisionWorld.obstacles` and refuses a move that ends inside one.
+
+### Wave events (`<enemy basename>.evt`)
+
+Implemented in `client/src/formats/events.ts` (file), `render/waves.ts` (state machine) and `render/gamefield.ts` (wiring), tested by `tests/waves.test.ts` and `tests/game.live.ts`. The floor's event file is the SetDataTable's enemy basename + `.evt` (`LoadMapEventTableByVariant_0080cf78`), loaded whole into `g_MapEventTablesArray[floor]`.
+
+```
+00 u32 action_stream_offset   (from the start of the file)
+04 u32 entries_offset         (0x10)
+08 u32 entry_count
+0C u32 format                 (0, or 'evt2' for the random-wave quest format)
+entries (0x14 each):
+  00 u32 event_id   several entries may share an id
+  04 u16 flags      runtime: 2 handler built, 4 active, 8 actions run, 0x10 all enemies dead
+  06 u16 event_type index into the handler table 0x00a11e24; 1 = the wave handler, 0 = nothing
+  08 u16 room       the wave's enemies are the e.dat entries with this room
+  0A u16 wave       and this wave number
+  0C u32 delay      frames between the trigger and the spawn
+  10 u32 action_offset
+```
+
+Action stream (`ProcessQuestEventCommands_0080cc44`, dispatch table `0x00a11da0` of `{reader, handler}` pairs; operands read by `FUN_0080ccd8` (u16) and `FUN_0080cd18` (u32)):
+
+| Opcode | Action | Handler |
+|---|---|---|
+| `00` | nop | — |
+| `01` | stop | `FUN_0080cd40` |
+| `08 u16 u16` | `construct_objects(room, group)` | `FUN_0080cd4c` → `FUN_00810ae8` |
+| `09 u16 u16` | `construct_enemies(room, wave)` | `FUN_0080cd64` → `FUN_00810e54` |
+| `0A u16` | `set_switch_flag(flag)`, sends `6x05` | `FUN_0080cd7c` |
+| `0B u16` | `clear_switch_flag(flag)`, sends `6x05` with flags 0 | `FUN_0080cddc` |
+| `0C u32` | `trigger_event(id)`, sends `6x67` | `FUN_0080ce24` |
+| `0D u16 u16` | `construct_enemies` then stop | `FUN_0080ce74` |
+
+**Triggering.** `TObjEvtCollision` (`o.dat` type 0x0008, ctor `FUN_00659ebc`, update `FUN_00659d98`): radius `param1`, event id `param4`, idle for 3 frames after construction; when the local player is inside the radius it sends `6x67` with its own entity id and sets its own set flag 8, so it fires once. `FUN_008003e0` both sends a subcommand and runs its handler locally, so the sender handles its own `6x67`. The handler `FUN_00659f5c` calls `set_active_map_event_on_floor` for the current floor (the **first** event with that id whose flag 2 is clear gets a handler and `flags |= 6`); for another floor it only sets flag 4 on every event with that id, and `set_active_map_events` builds their handlers when that floor is entered.
+
+**Handler** (`quest_event_handler_constructor`, `update_quest_event`): state 0 counts the delay down and then constructs every e.dat entry of the event's room and wave that is neither built (flag 2) nor dead (flag 8) (`unknown_enemy_spawn`, `0x00811188`); state 1 waits until none of them is alive (`DerolleHasUninitializedSubordinate_00787f04`) and sets flag 0x10; state 2 sets flag 8, runs the action stream and, if it triggered no further event, shows the room-unlocked message to the players in the room; then it clears flag 4 and the handler is destroyed (clearing flag 2). The first `set_switch_flag` of a run sends flags byte 3 (set + unlock sound, `g_QuestEventInitialized`), the rest 1.
+
+| Sub | Meaning | Payload (after the 4-byte header) |
+|---|---|---|
+| `67` | trigger set event (`G_TriggerSetEvent_6x67`, 0x10) | `u32 floor, u32 event id, u32 client id`; entity id 0x4000 + object index for a trigger object, 0xFFFF for an action |
+| `76` | set entity set flags (`G_SetEntitySetFlags_6x76`, 8) | `u16 floor, u16 flags`; entity id 0x1000 + enemy slot or 0x4000 + object index. Flag 8 = defeated, which is what advances a wave |
+
+Enemy entity ids are 0x1000 + the enemy slot counted over all floors: one `e.dat` entry takes one slot plus its children (Monest 30 Mothmants, Pofuilly 4 copies, Pan Arms 2, boss parts…), ported from newserv's `SuperMap::add_enemy_and_children` into `formats/enemyids.ts`. newserv checks these ids when it tracks wave state, so the counts must match.
+
+**Battle music** (`FUN_0069821c` → `FUN_008114b0`): battle while an enemy of the local player's room is built and not dead; after the last one dies the calm music returns 90 frames (0x5A) later. The player's room is the one on the player object (+0x28); the web client resolves it from the map sections the position falls into.
+
 ## BB cipher
 
 Implemented in `client/src/net/bbcrypt.ts`, ported from newserv's `PSOBBEncryption`.

@@ -1,6 +1,9 @@
 // Enemy models of a floor: resolves each enemy set entry to its model
 // (formats/enemymodels.ts), builds it at the spawn point and plays its idle
-// motion every frame.
+// motion every frame. In a game every enemy belongs to a wave event and only
+// exists once its wave has spawned (render/waves.ts), so the game hides them
+// all (hideAll) and shows each set entry when its wave starts (setVisible);
+// the map viewer leaves them visible.
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -34,6 +37,9 @@ export class EnemyLayer {
     for (const a of this.animators) a.update(dt);
   };
   private generation = 0;
+  private byIndex = new Map<number, THREE.Object3D>(); // e.dat entry index -> model root
+  private hidden = false; // hideAll() was called for the current floor
+  startHidden = false; // games: every floor starts with all enemies hidden (waves show them)
   stats: EnemyLayerStats = { placed: 0, unresolved: [], errors: [] };
   instances: EnemyInstance[] = [];
 
@@ -47,6 +53,7 @@ export class EnemyLayer {
   // a model (the caller can keep markers for the rest).
   async show(items: PlacedEntity[], ctx: EnemyModelContext): Promise<Set<PlacedEntity>> {
     this.clear();
+    this.hidden = this.startHidden;
     const gen = ++this.generation;
     const root = new THREE.Group();
     root.name = 'enemies';
@@ -72,6 +79,8 @@ export class EnemyLayer {
         built.root.rotation.y = p.yaw;
         built.root.name = `${spec.name} #${e.index}`;
         built.root.userData.entity = p;
+        built.root.visible = !this.hidden;
+        this.byIndex.set(e.index, built.root);
         root.add(built.root);
         animators.push(...built.animators);
         instances.push({ placed: p, spec, archive, root: built.root, animators: built.animators, parts: built.animatedParts });
@@ -105,12 +114,36 @@ export class EnemyLayer {
       if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
     });
     for (const m of materials) m.dispose();
+    this.byIndex.delete(instance.placed.entity.index);
+  }
+
+  // Hides every enemy (models built later start hidden too) until setVisible().
+  hideAll(): void {
+    this.hidden = true;
+    for (const r of this.byIndex.values()) r.visible = false;
+  }
+
+  // Shows or hides the enemy of e.dat entry `index` (wave spawns and deaths).
+  setVisible(index: number, visible: boolean): void {
+    const r = this.byIndex.get(index);
+    if (r) r.visible = visible;
+  }
+
+  isVisible(index: number): boolean {
+    return this.byIndex.get(index)?.visible ?? false;
+  }
+
+  // Model root of e.dat entry `index` (userData.entity is its PlacedEntity).
+  model(index: number): THREE.Object3D | null {
+    return this.byIndex.get(index) ?? null;
   }
 
   clear(): void {
     this.generation++;
     this.animators = [];
     this.instances = [];
+    this.byIndex.clear();
+    this.hidden = false;
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
     const materials = new Set<THREE.Material>();

@@ -1,6 +1,8 @@
 // Per-floor game logic around the game view: floor music (audio/fieldbgm.ts),
-// warp menus (warpmenu.ts), doors and switches (fieldobjects.ts) and the
-// switch flags they share with the other players (6x05).
+// warp menus (warpmenu.ts), doors, switches and boxes (fieldobjects.ts,
+// models from render/objectview.ts), the wave events of the floor
+// (render/waves.ts, formats/events.ts) and the state they share with the
+// other players (6x05, 6x67, 6x76).
 //
 // The warp objects follow the base class update FUN_006698e0: inside the
 // radius the menu opens; leaving the radius closes it; Cancel keeps it closed
@@ -8,14 +10,31 @@
 // radius in 3D (FUN_00669a58); here the check is horizontal with a 30-unit
 // height window because the position other players see (6x42) has no height
 // while running.
+//
+// Wave events: a TObjEvtCollision the player walks into (or a trigger_event
+// action) sends 6x67 and starts the event's wave; the enemies of that room and
+// wave appear after the event's delay; when they are all dead the event's
+// action stream runs (unlock doors with 6x05, start the next wave with 6x67).
+// Enemies only exist once their wave has spawned, so the enemy layer starts
+// hidden (EnemyLayer.startHidden) and each wave shows its own.
+// While a wave of the local player's room is alive the music is the battle
+// variant (FUN_0069821c -> FUN_008114b0), and it returns to calm 90 frames
+// after the last enemy of the room dies.
 
 import type { BgmPlayer } from '../audio/bgm.ts';
 import { FieldMusic } from '../audio/fieldbgm.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import type { PlacedEntity } from '../formats/setdata.ts';
+import { parseEventFile, type WaveEvent } from '../formats/events.ts';
+import { enemySlots } from '../formats/enemyids.ts';
+import type { MapSection } from '../formats/nrel.ts';
+import type { EnemySet, PlacedEntity } from '../formats/setdata.ts';
 import { floorToArea, parseSwitchFlag, type Game } from '../net/game.ts';
+import type { CollisionWorld } from './collision.ts';
+import type { EnemyLayer } from './enemyview.ts';
 import { FieldObjects, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
 import type { MapViewer } from './mapviewer.ts';
+import type { ObjectLayer } from './objectview.ts';
+import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
 import { areaWarpLayout, mainWarpItems, mainWarpLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 
@@ -24,6 +43,19 @@ export interface GameFieldOptions {
   warpTo: (floor: number) => Promise<void>;
   toLobby: () => void;
   log: (msg: string) => void;
+}
+
+// What loadFloor() hands over with the floor's entities.
+export interface FloorEntities {
+  placed: PlacedEntity[]; // objects of the floor (markers already placed)
+  objectBase: number; // objects on the floors before this one
+  enemySets: EnemySet[]; // e.dat entries of the floor
+  enemyBase: number; // enemy slots on the floors before this one
+  eventFile: Uint8Array | null; // the floor's .evt
+  sections: MapSection[];
+  enemies: EnemyLayer | null;
+  objects: ObjectLayer | null;
+  collision: CollisionWorld | null;
 }
 
 const NO_KEYS: ReadonlySet<string> = new Set();
@@ -38,12 +70,24 @@ export class GameField {
   readonly menu: WarpMenuOverlay;
   private objects: FieldObjects | null = null;
   private floor = 0;
+  private area = 0;
   private objectBase = 0;
   private flags = new Map<number, Set<number>>(); // switch flags by floor
   private suppressed = new Set<number>(); // warps cancelled until the player leaves them
   private menuWarp: FieldWarp | null = null;
   private busy = false;
   private disposed = false;
+  // Wave events: state per floor, kept across floor changes like the client's
+  // g_MapEventTablesArray.
+  private waves = new Map<number, FloorWaves>();
+  private pendingTriggers = new Map<number, Set<number>>(); // 6x67 for floors not loaded yet
+  private enemies: EnemyLayer | null = null;
+  private sections: MapSection[] = [];
+  private enemyFirstSlot: number[] = [];
+  private enemyBase = 0;
+  private battleFrames = 0; // 0x5a countdown after the room is cleared
+  private battle = false;
+  private frameAcc = 0;
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, opts: GameFieldOptions) {
     this.viewer = viewer;
@@ -54,12 +98,31 @@ export class GameField {
     this.menu = new WarpMenuOverlay(viewer.renderer.domElement);
     void this.menu.load(files).catch((err) => opts.log(`warp menu: ${(err as Error).message}`));
     const onSub = (sub: number, _client: number, body: Uint8Array) => {
-      if (sub !== 0x05 || this.disposed) return;
-      const s = parseSwitchFlag(body);
-      if (!s || s.flag >= 0x100) return;
-      const set = this.flagsOf(s.floor);
-      if (s.set) set.add(s.flag);
-      else set.delete(s.flag);
+      if (this.disposed) return;
+      if (sub === 0x05) {
+        const s = parseSwitchFlag(body);
+        if (!s || s.flag >= 0x100) return;
+        const set = this.flagsOf(s.floor);
+        if (s.set) set.add(s.flag);
+        else set.delete(s.flag);
+        return;
+      }
+      if (sub === 0x67) {
+        // G_TriggerSetEvent_6x67: {u32 floor, u32 event id, u32 client id}
+        if (body.length < 0x10) return;
+        const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+        this.triggerEvent(dv.getUint32(4, true), dv.getUint32(8, true));
+        return;
+      }
+      if (sub === 0x76) {
+        // G_SetEntitySetFlags_6x76: {u16 entity, u16 floor, u16 flags}
+        if (body.length < 8) return;
+        const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+        const entity = dv.getUint16(2, true);
+        const floor = dv.getUint16(4, true);
+        const flags = dv.getUint16(6, true);
+        if (flags & 0x08) this.killEntity(entity, floor);
+      }
     };
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
   }
@@ -71,19 +134,143 @@ export class GameField {
   }
 
   // A floor was loaded. `objectBase` = number of objects on the floors before
-  // this one (entity ids are 0x4000 + global object index).
-  enterFloor(floor: number, area: number, placed: PlacedEntity[], objectBase: number): void {
+  // this one (entity ids are 0x4000 + global object index); enemy entity ids
+  // are 0x1000 + global enemy slot (formats/enemyids.ts).
+  enterFloor(floor: number, area: number, e: FloorEntities): void {
     this.menu.close();
     this.objects?.dispose();
+    this.waves.get(this.floor)?.leave();
     this.floor = floor;
-    this.objectBase = objectBase;
+    this.area = area;
+    this.objectBase = e.objectBase;
+    this.enemyBase = e.enemyBase;
+    this.enemies = e.enemies;
+    this.sections = e.sections;
     this.suppressed.clear();
+    this.battle = false;
+    this.battleFrames = 0;
     const episode = this.game.info?.episode ?? 1;
-    this.objects = new FieldObjects(this.viewer, placed, { episode, floor, area }, this.flagsOf(floor));
+    this.enemyFirstSlot = enemySlots(e.enemySets, area).first;
+    this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision);
     this.objects.onSwitch = (s) => this.pressSwitch(s);
+    this.objects.onEventTrigger = (t) => {
+      this.opts.log(`event trigger ${t.index}: event ${t.eventId}`);
+      this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
+      this.triggerEvent(floor, t.eventId);
+    };
     this.music?.enter(area, episode);
+    this.setupWaves(floor, e);
     const o = this.objects;
-    this.opts.log(`floor ${floor}: ${o.warps.length} warps (${o.warps.map((w) => `${w.kind}${w.floor >= 0 ? `->${w.floor}` : ''}`).join(', ')}), ${o.doors.length} doors, ${o.switches.length} switches`);
+    const w = this.waves.get(floor);
+    this.opts.log(
+      `floor ${floor}: ${o.warps.length} warps (${o.warps.map((x) => `${x.kind}${x.floor >= 0 ? `->${x.floor}` : ''}`).join(', ')}), ` +
+        `${o.doors.length} doors, ${o.switches.length} switches, ${o.boxes.length} boxes, ${o.triggers.length} event triggers, ${w?.events.length ?? 0} wave events`,
+    );
+  }
+
+  private setupWaves(floor: number, e: FloorEntities): void {
+    let w = this.waves.get(floor);
+    if (!w) {
+      let events: WaveEvent[] = [];
+      if (e.eventFile) {
+        try {
+          events = parseEventFile(e.eventFile).events;
+        } catch (err) {
+          this.opts.log(`event file: ${(err as Error).message}`);
+        }
+      }
+      w = new FloorWaves(events, e.enemySets, {
+        spawn: (list) => this.spawn(list),
+        sendTrigger: (id) => this.game.sendTriggerEvent(0xffff, floor, id),
+        sendSwitchFlag: (flag, set, flags) => this.game.sendSwitchFlag(0xffff, floor, flag, set, flags),
+        setSwitchFlag: (flag, set) => {
+          const f = this.flagsOf(floor);
+          if (set) f.add(flag);
+          else f.delete(flag);
+        },
+        constructObjects: (room, group) => this.opts.log(`construct_objects room ${room} group ${group} (not implemented)`),
+        roomCleared: (room) => this.opts.log(`room ${room} cleared`),
+        log: (m) => this.opts.log(m),
+      });
+      this.waves.set(floor, w);
+    }
+    // Enemies of a wave only exist once it starts.
+    if (this.enemies) {
+      this.enemies.startHidden = w.events.length > 0;
+      if (w.events.length > 0) this.enemies.hideAll();
+    }
+    w.enter();
+    const pending = this.pendingTriggers.get(floor);
+    if (pending) {
+      for (const id of pending) w.trigger(id);
+      pending.clear();
+    }
+    // A floor with no wave events (Pioneer 2, bosses) shows its enemies at once.
+    if (!w.events.length) for (const [i] of this.enemyFirstSlot.entries()) this.enemies?.setVisible(i, true);
+  }
+
+  private spawn(list: WaveEnemy[]): void {
+    for (const e of list) this.enemies?.setVisible(e.key, true);
+    this.opts.log(`wave spawn: ${list.length} enemies (room ${list[0]?.room}, wave ${list[0]?.wave})`);
+  }
+
+  // 6x67, from the network, from an event action or from a trigger object.
+  triggerEvent(floor: number, eventId: number): void {
+    const w = this.waves.get(floor);
+    if (w) {
+      if (!w.trigger(eventId)) this.opts.log(`event ${eventId} on floor ${floor}: no event with that id is free`);
+      return;
+    }
+    let set = this.pendingTriggers.get(floor);
+    if (!set) this.pendingTriggers.set(floor, (set = new Set()));
+    set.add(eventId);
+  }
+
+  // An enemy died: `entityId` is 0x1000 + its global slot, as the 6x subcommand
+  // headers carry it. Called for 6x76 from other clients and by the combat
+  // code for local kills.
+  onEnemyKilled(entityId: number, floor = this.floor): void {
+    this.killEntity(entityId, floor);
+  }
+
+  private killEntity(entityId: number, floor: number): void {
+    if (entityId < 0x1000 || entityId >= 0x4000) return;
+    const w = this.waves.get(floor);
+    if (!w) return;
+    const slot = entityId - 0x1000 - (floor === this.floor ? this.enemyBase : 0);
+    const index = this.setEntryForSlot(slot);
+    if (index < 0) return;
+    w.kill(index);
+    if (floor === this.floor) this.enemies?.setVisible(index, false);
+  }
+
+  // e.dat entry that owns a floor-relative enemy slot.
+  private setEntryForSlot(slot: number): number {
+    if (slot < 0) return -1;
+    let lo = 0;
+    let hi = this.enemyFirstSlot.length - 1;
+    if (hi < 0 || slot < this.enemyFirstSlot[0]) return -1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.enemyFirstSlot[mid] <= slot) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  // Room of a position: the map section whose circle contains it, nearest first
+  // (the client keeps the room id on the player, +0x28).
+  roomAt(pos: { x: number; y: number; z: number }): number {
+    let best = -1;
+    let bestD = Infinity;
+    for (const s of this.sections) {
+      const d = Math.hypot(s.position[0] - pos.x, s.position[2] - pos.z);
+      if (d <= s.radius && d < bestD) {
+        bestD = d;
+        best = s.id;
+      }
+    }
+    return best;
   }
 
   // Call after the LobbyView of the floor has been created: it takes over
@@ -109,7 +296,33 @@ export class GameField {
     this.music?.tick(dt, pos);
     const others = [...this.game.players.values()].filter((p) => p.clientId !== me?.clientId && p.floor === this.floor && p.visible !== false).map((p) => p.position);
     this.objects?.frame(pos, others);
+    // The wave state machine runs on game ticks (30/s).
+    this.frameAcc += dt * 30;
+    const ticks = Math.min(Math.floor(this.frameAcc), 30);
+    this.frameAcc -= Math.floor(this.frameAcc);
+    const w = this.waves.get(this.floor);
+    for (let i = 0; i < ticks; i++) w?.frame();
+    if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
+  }
+
+  private updateBattleMusic(w: FloorWaves, pos: { x: number; y: number; z: number }, ticks: number): void {
+    const room = this.roomAt(pos);
+    const fighting = room >= 0 && w.battleIn(room);
+    if (fighting) {
+      this.battleFrames = 0;
+      if (!this.battle) {
+        this.battle = true;
+        this.opts.bgm?.setBattle(true);
+      }
+      return;
+    }
+    if (!this.battle) return;
+    this.battleFrames += ticks;
+    if (this.battleFrames >= BATTLE_LINGER_FRAMES) {
+      this.battle = false;
+      this.opts.bgm?.setBattle(false);
+    }
   }
 
   private inside(w: FieldWarp, p: { x: number; y: number; z: number }): boolean {
@@ -162,6 +375,51 @@ export class GameField {
     } finally {
       this.busy = false;
     }
+  }
+
+  // Debug helpers, reachable from the console (see GameView.debug()).
+  debug() {
+    const self = this;
+    return {
+      floor: () => self.floor,
+      room: () => (self.game.self ? self.roomAt(self.game.self.position) : -1),
+      events: () =>
+        (self.waves.get(self.floor)?.events ?? []).map((e, i) => ({
+          index: i,
+          id: e.id,
+          room: e.room,
+          wave: e.wave,
+          delay: e.delay,
+          flags: self.waves.get(self.floor)?.flags[i] ?? 0,
+          actions: e.actions,
+        })),
+      // Starts the wave event with this id on the current floor.
+      trigger: (eventId: number) => {
+        self.game.sendTriggerEvent(0xffff, self.floor, eventId);
+        self.triggerEvent(self.floor, eventId);
+        return `triggered ${eventId}`;
+      },
+      // Kills every alive enemy of the active waves (or of one room).
+      killWave: (room?: number) => {
+        const w = self.waves.get(self.floor);
+        if (!w) return 'no waves on this floor';
+        const alive = w.aliveEnemies().filter((e) => room === undefined || e.room === room);
+        for (const e of alive) {
+          w.kill(e.key);
+          self.enemies?.setVisible(e.key, false);
+          self.game.sendEntitySetFlags(0x1000 + self.enemyBase + (self.enemyFirstSlot[e.key] ?? e.key), self.floor, 0x08);
+        }
+        return `killed ${alive.length} enemies`;
+      },
+      switches: () => [...self.flagsOf(self.floor)].sort((a, b) => a - b),
+      doors: () => (self.objects?.doors ?? []).map((d) => ({ index: d.index, type: d.type, flags: d.flags, state: d.state })),
+      boxes: () => (self.objects?.boxes ?? []).map((b) => ({ index: b.index, type: b.type, x: b.x, y: b.y, z: b.z, broken: b.broken })),
+    };
+  }
+
+  // The items agent breaks boxes through this.
+  get fieldObjects(): FieldObjects | null {
+    return this.objects;
   }
 
   dispose(): void {

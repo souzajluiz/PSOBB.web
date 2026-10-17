@@ -276,6 +276,9 @@ export class CombatView {
     const targets: EnemyRuntime[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead) continue;
+      // An enemy whose wave has not spawned yet is not in the room (its model
+      // is hidden by render/waves.ts), so it cannot be hit.
+      if (!e.instance.root.visible) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;

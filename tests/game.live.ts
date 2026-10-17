@@ -1,6 +1,7 @@
 // Two clients and a game: A creates it, B lists and joins it, both see each
 // other, move (6x42 / 6x40 / 6x3E), A warps to Forest 1, B follows, both go
-// A steps on a switch (6x05), both go back to the lobby. Requires newserv + bridge running. Run: node tests/game.live.ts
+// A steps on a switch (6x05), triggers a wave event (6x67) and reports an
+// enemy dead (6x76), both go back to the lobby. Requires newserv + bridge running. Run: node tests/game.live.ts
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BBSession } from '../client/src/net/bbsession.ts';
@@ -9,6 +10,8 @@ import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseEnemySets, parseSetFile, type ObjectSet } from '../client/src/formats/setdata.ts';
 import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
 import { ENEMY_TYPE_PARAMS } from '../client/src/formats/entitynames.ts';
+import { parseEventFile } from '../client/src/formats/events.ts';
+import { enemySlots } from '../client/src/formats/enemyids.ts';
 import { floorFiles, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import type { Lobby, LobbyPlayer } from '../client/src/net/lobby.ts';
 import { nodeBridge } from './lib/nodews.ts';
@@ -126,6 +129,41 @@ try {
     ga.sendSwitchFlag(0x4000 + base + sw.index, 1, flag);
     const s = await bSawSwitch;
     check(`B saw A set switch flag ${s?.flag} on floor ${s?.floor} (entity 0x${s?.entityId.toString(16)}, object type 0x${sw.type.toString(16)})`, s?.flag === flag && s?.floor === 1 && s.set);
+
+    // Wave events: A triggers Forest 1's first event with 6x67 (as a
+    // TObjEvtCollision does), B receives it; then A reports the first enemy of
+    // that wave dead with 6x76 (flags 8) and B receives that too. newserv
+    // tracks both (it logs "Client triggered set events" and advances the
+    // event when every enemy of the wave has flag 8).
+    const events = parseEventFile(read(f1.events)).events;
+    const ev = events.find((e) => e.type === 1)!;
+    const enemies = parseEnemySets(read(f1.enemies));
+    const waveSlots = enemySlots(enemies, 1).first;
+    const victim = enemies.findIndex((e) => e.section === ev.room && e.wave === ev.wave);
+    const bSawTrigger = waitEvent<{ floor: number; id: number }>(
+      (r) =>
+        gb.on('subcommand', (sub, _c, body) => {
+          if (sub !== 0x67 || body.length < 0x10) return;
+          const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+          r({ floor: dv.getUint32(4, true), id: dv.getUint32(8, true) });
+        }),
+      'B sees 6x67',
+    );
+    ga.sendTriggerEvent(0xffff, 1, ev.id);
+    const t = await bSawTrigger;
+    check(`B saw A trigger wave event ${t.id} on floor ${t.floor} (room ${ev.room}, wave ${ev.wave})`, t.id === ev.id && t.floor === 1);
+    const bSawKill = waitEvent<{ entity: number; floor: number; flags: number }>(
+      (r) =>
+        gb.on('subcommand', (sub, _c, body) => {
+          if (sub !== 0x76 || body.length < 8) return;
+          const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+          r({ entity: dv.getUint16(2, true), floor: dv.getUint16(4, true), flags: dv.getUint16(6, true) });
+        }),
+      'B sees 6x76',
+    );
+    ga.sendEntitySetFlags(0x1000 + waveSlots[victim], 1, 0x08);
+    const k = await bSawKill;
+    check(`B saw A kill enemy 0x${k.entity.toString(16)} on floor ${k.floor} (flags ${k.flags})`, k.entity === 0x1000 + waveSlots[victim] && k.floor === 1 && k.flags === 8);
   }
 
   // Combat: A attacks and kills the first enemy of Forest 1 (6x43, 6x46,
