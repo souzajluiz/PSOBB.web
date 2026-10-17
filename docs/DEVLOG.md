@@ -155,6 +155,29 @@ The 3D preview (`FUN_00406ab4`) and the per-slot icons (`FUN_0040e004`, drawn on
 
 **Result:** full-frame SSIM 0.727 → 0.771, PSNR 20.4 → 21.2 (frame 885).
 
+## 2026-10-16: player appearance tables and proportions from PsoBB.exe
+
+**What changed:** the guessed texture slot tables in `render/playermodel.ts` are gone. Texture lists, appearance limits and proportions now follow the client code.
+
+**Findings:**
+- The appearance record at `0x009b5b60 + 0x2c * class` holds the limits, the hair/cap/head model names and three texture *name* lists (hair, head, body). `FUN_004e6920` edits each name from the appearance: costume digits, skin letter, face digit, section ID letter. `FUN_004ed735` then binary-searches the class's sorted name table at `0x009b59e0` to find the `pl<L>tex.afs` entry. The tables are generated into `render/playertables.ts` by `tools/gen-player-tables.py`.
+- Check: every name the rules can produce exists in the table, and every AFS entry is reachable except two unused FOmar textures.
+- Caps use the hair list, and their textures follow the costume (e.g. RAmar `pxtDb_<costume>z_w_hg1`). The head hangs from node 58, hair/cap from node 59 (`FUN_0068a088`).
+- The old guesses were wrong in the body lists of HUnewearl, RAcast, RAcaseal, FOmarl, FOnewm, FOnewearl, FOmar and RAmarl (RAmarl's teal top), and in the hair/cap lists of RAmar, FOmarl, FOnewm, FOnewearl, FOmar and RAmarl. HUmar, HUcast and HUcaseal were already right.
+- `proportion_x/y` do not scale the model. They morph the body and head between 7 shapes per class from `plZsmpnj.afs`, with barycentric weights over 8 triangles of the unit square (`FUN_004e877c`, `FUN_004e86e4`, `FUN_004e7e54`). The blend covers node positions, scales and vertex positions/normals/weights. In game this runs per player (`FUN_004ee448` loads, `FUN_004ee534` blends).
+- Out-of-range appearance values reset to 0 (`FUN_004e665c`); before, they wrapped around.
+
+**Verified:** `tests/players.test.ts`:
+- name resolution for every costume/skin/face/section;
+- part texture ids inside their lists;
+- every shape matches the node/vertex layout of the part it morphs;
+- builds at 8 proportion points;
+- spot checks.
+
+In `models.html` (new proportion sliders): FOmar hats follow the costume colors, RAmarl's top is red, and RAcast at max proportions is bulkier.
+
+**Open:** the exact normal renormalization in `FUN_004e838c` (it does not matter after shading). `pl<L>smp.rel` is not decoded. No side-by-side capture exists for each class.
+
 ## 2026-10-16: title screen rebuilt from the decompiled code
 
 **What changed:** the title is now drawn from what `PsoBB.exe` does instead of parameters fitted to a capture.

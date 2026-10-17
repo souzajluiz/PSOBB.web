@@ -6,38 +6,27 @@
 // plL...), as in the file list of PsoBB.exe (planj.bml, plbnj.bml, ...).
 // Letters O..Y are the extra NPC-style models (not handled here).
 //
-// Parts: pl<L>bdy00.nj is the 64-node skeleton with the body. Heads
-// (pl<L>hed<NN>.nj, androids have 5), hair (pl<L>hai<NN>.nj, 10 styles) and
-// caps (pl<L>cap<NN>.nj, drawn with hair style NN when present) are attached
-// to body node 59 (depth-first index), the head node. Hair and cap NN share
-// one texture list.
+// Parts (class record at 0x009b5b60 + 0x2c * class, playertables.ts):
+// pl<L>bdy00.nj is the 64-node skeleton with the body; the head
+// (pl<L>hed<NN>.nj, androids have 5) hangs from body node 58 and hair
+// (pl<L>hai<NN>.nj, 10 styles) and caps (pl<L>cap<NN>.nj, drawn with hair
+// style NN when present) from node 59 (depth-first indices; the player draw
+// FUN_0068a088 uses the node matrices at +0xe80 and +0xec0). Hair and cap NN
+// share one texture list; only the hair gets the hair color.
 //
 // Texture ids in each part index a per-part texture list that the game builds
-// from pl<L>tex.afs according to the appearance. The tables below were
-// derived from the archive contents (contact sheets of every class) and the
-// texture ids each part uses, then checked by eye in models.html; they are not
-// taken from the game's code. The order of the body/head lists (e.g. HUnewearl
-// body = [emblem, skin top, skin bottom... ] with entry 1 of the costume block
-// first) follows the PSO v2 lists hard-coded in the PSOv2 web client
-// (gitlab.com/dashgl/psov2, AssetPlayer.js, GPL; used as a reference only).
-// Common layout of pl<L>tex.afs:
-//   humans/newmans: [18 costume blocks][ears x4][faces 5 x 4 skins][hair]
-//                   [skin and/or costume swatches][11 section ID emblems]
-//   androids:       [25 skin blocks of 5][head blocks][swatches][11 emblems]
-// The last 11 entries are the section ID emblems (Viridia .. Whitill, then an
-// empty ring); body texture id 0 is always the emblem.
-// Known gaps: per-style hair/cap texture lists of the hat-wearing classes
-// (RAmar, FOmarl, FOnewm, FOnewearl, FOmar, RAmarl), parts of the FOmar and
-// RAmarl body lists, and the non-default android heads are best guesses
-// (the default appearance of all 12 classes looks right).
+// by name from the appearance (see "Texture lists" below); the body and head
+// are morphed by proportion_x/y (see "Proportions").
 
 import * as THREE from 'three';
 import { AFSArchive } from '../formats/archives.ts';
 import { BmlArchive } from '../formats/bml.ts';
-import { parseNinjaChunkFile, type NjcmObject } from '../formats/njcm.ts';
+import { parseNinjaChunkFile, type NjcmModel as NjcmChunkModel, type NjcmObject } from '../formats/njcm.ts';
+import { EVAL_UNIT_POS, EVAL_UNIT_SCL } from '../formats/xj.ts';
 import { parseXvr } from '../formats/xvm.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { NjcmModelBuilder, type NjcmModel, type NjcmPartInput } from './njcmmesh.ts';
+import { PLAYER_CLASS_TABLES, SMP_BASE, SMP_COUNT } from './playertables.ts';
 
 export const CLASS_NAMES = [
   'HUmar', 'HUnewearl', 'HUcast', 'RAmar', 'RAcast', 'RAcaseal',
@@ -48,8 +37,10 @@ export const SECTION_IDS = [
   'Viridia', 'Greenill', 'Skyly', 'Bluefull', 'Purplenum', 'Pinkal', 'Redria', 'Oran', 'Yellowboze', 'Whitill',
 ] as const;
 
-// Body node the head, hair and cap hang from.
+// Body node the hair and cap hang from.
 export const HEAD_NODE = 59;
+// Body node the head model hangs from (same bind pose as node 59).
+export const HEAD_MODEL_NODE = 58;
 
 // PlayerVisualConfig fields (newserv PlayerSubordinates.hh) that affect the model.
 export interface PlayerAppearance {
@@ -80,11 +71,14 @@ export function isAndroid(charClass: number): boolean {
   return charClass === 2 || charClass === 4 || charClass === 5 || charClass === 9;
 }
 
-// Appearance limits of BB (v3/v4 maxima from newserv's ClassMaxes).
+// Number of values of each appearance field: the limits of the class record
+// (0x009b5b60 + 0x2c * class, i16 costume/skin/face/head/hair) that
+// FUN_004e665c checks; a limit of 0 means the field must be 0 (count 1 here).
+// Humans/newmans: 18 costumes, 4 skins, 5 faces, 1 head, 10 hair styles;
+// androids: 1, 25, 1, 5, 1.
 export function appearanceLimits(charClass: number): { costume: number; skin: number; face: number; head: number; hair: number } {
-  return isAndroid(charClass)
-    ? { costume: 1, skin: 25, face: 1, head: 5, hair: 1 }
-    : { costume: 18, skin: 4, face: 5, head: 1, hair: 10 };
+  const [costume, skin, face, head, hair] = PLAYER_CLASS_TABLES[charClass].limits.map((n) => Math.max(n, 1));
+  return { costume, skin, face, head, hair };
 }
 
 export interface PlayerAssets {
@@ -94,9 +88,11 @@ export interface PlayerAssets {
   textures: (THREE.Texture | null)[]; // one per pl<L>tex.afs entry, decoded lazily
   textureCount: number;
   textureData: AFSArchive;
+  // plZsmpnj.afs (proportion shapes of every class); null = no proportions.
+  morphs: AFSArchive | null;
 }
 
-export function parsePlayerAssets(charClass: number, bmlData: Uint8Array, afsData: Uint8Array): PlayerAssets {
+export function parsePlayerAssets(charClass: number, bmlData: Uint8Array, afsData: Uint8Array, smpData?: Uint8Array): PlayerAssets {
   const letter = classLetter(charClass);
   const bml = new BmlArchive(bmlData);
   const parts = new Map<string, NjcmObject>();
@@ -105,14 +101,16 @@ export function parsePlayerAssets(charClass: number, bmlData: Uint8Array, afsDat
     if (f.object) parts.set(e.name, f.object);
   }
   const afs = new AFSArchive(afsData);
-  return { charClass, letter, parts, textures: new Array(afs.entries.length).fill(null), textureCount: afs.entries.length, textureData: afs };
+  const morphs = smpData ? new AFSArchive(smpData) : null;
+  return { charClass, letter, parts, textures: new Array(afs.entries.length).fill(null), textureCount: afs.entries.length, textureData: afs, morphs };
 }
 
 export async function loadPlayerAssets(files: ClientFiles, charClass: number): Promise<PlayerAssets> {
   const letter = classLetter(charClass);
-  // Loose files in data/ (not in data.gsl).
-  const [bml, afs] = await Promise.all([files.read(`pl${letter}nj.bml`), files.read(`pl${letter}tex.afs`)]);
-  return parsePlayerAssets(charClass, bml, afs);
+  // Loose files in data/ (not in data.gsl). plZsmpnj.afs is the archive the
+  // client opens as file 0xdf (FUN_004e65a3).
+  const [bml, afs, smp] = await Promise.all([files.read(`pl${letter}nj.bml`), files.read(`pl${letter}tex.afs`), files.read('plZsmpnj.afs')]);
+  return parsePlayerAssets(charClass, bml, afs, smp);
 }
 
 function texture(assets: PlayerAssets, index: number): THREE.Texture | null {
@@ -134,6 +132,21 @@ function texture(assets: PlayerAssets, index: number): THREE.Texture | null {
 
 // ---------------------------------------------------------------------------
 // Texture lists
+//
+// FUN_004e6920 (called from FUN_004e660c with the player's PlayerVisualConfig)
+// builds three texture lists, each from a list of texture names of the class
+// record (playertables.ts): hair (record +0x20, indexed by hair style; hai and
+// cap both draw with it), head (+0x24, by head) and body (+0x28). Each name,
+// "pxt" + part letter + type + "_NNv_...", is copied and edited in place:
+//   type 'b' (body) or 't' (hands), NN != "00", costume limit > 0: NN = costume + 1
+//   type 'b', 'f' (face) or 't', v != 'z', skin limit > 0:          v = 'a' + skin
+//   type 'f', N[1] != '0', face limit > 0:                          N[1] = '1' + face
+//   type 'c' (section ID emblem): v = 'a' + section ID, or 'z' (empty ring) when
+//   the section ID is invalid
+// and looked up by name in the class's sorted texture name table
+// (FUN_004ed735, binary search); the index is the pl<L>tex.afs entry. A name
+// that is not found loads entry 0 and flags the list. Texture id N of a part
+// is entry N of its list. Every name these rules produce exists in the table.
 
 interface TexLists {
   body: number[];
@@ -141,145 +154,196 @@ interface TexLists {
   hair: number[]; // shared by hai<NN> and cap<NN>
 }
 
-// Texture ids a part uses, sorted.
-function usedIds(obj: NjcmObject | undefined, out = new Set<number>()): Set<number> {
-  if (!obj) return out;
-  for (const p of obj.model?.polys ?? []) if (p.op === 'texture') out.add(p.id);
-  for (const c of obj.children) usedIds(c, out);
-  return out;
-}
-
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-// Human/newman layout parameters (see the header comment).
-interface HumanLayout {
-  costumeBase: (costume: number) => number; // first entry of a costume block
-  // Body ids 1.. as offsets: 'c+N' costume block entry, 'cs+N' costume block
-  // entry N + 3*skin, 'cs1+N' entry N + skin, 'cs2+N' entry N + 2*skin,
-  // 'skin+B' entry B + skin, 'cos+B' entry B + costume, 'fix+B' entry B.
-  body: string[];
-  // Head ids: 'face+B' B + 4*face + skin, 'ear+B' B + skin,
-  // 'pair+B' B + 2*(4*face + skin) (+1 for the ear, given as 'pair1+B').
-  head: string[];
-  hairBase: number;
-  capBase: number; // offset of cap textures inside a costume block (-1: none)
-}
-
-const HUMAN_LAYOUTS: Record<number, HumanLayout> = {
-  0: { costumeBase: (c) => c * 3, body: ['c+0', 'c+1', 'c+2', 'cos+108'], head: ['pair+54', 'pair1+54'], hairBase: 94, capBase: -1 },
-  1: {
-    costumeBase: (c) => 1 + c * 13,
-    body: ['cs+1', 'cs+2', 'cs+0', 'c+12', 'skin+277', 'cos+281', 'fix+0'],
-    head: ['ear+235', 'face+239'],
-    hairBase: 259,
-    capBase: -1,
-  },
-  3: { costumeBase: (c) => c * 7, body: ['c+4', 'c+5', 'c+6', 'cos+179'], head: ['pair+126', 'pair1+126'], hairBase: 166, capBase: 0 },
-  6: { costumeBase: (c) => c * 16, body: ['c+1', 'c+2', 'c+0', 'skin+322'], head: ['face+288'], hairBase: 308, capBase: 3 },
-  7: { costumeBase: (c) => c * 17, body: ['c+4', 'c+5', 'cs1+0', 'c+6'], head: ['ear+306', 'face+310'], hairBase: 330, capBase: 7 },
-  8: { costumeBase: (c) => c * 26, body: ['cs+1', 'cs+2', 'skin+501', 'cs+0'], head: ['face+472', 'ear+468'], hairBase: 492, capBase: 12 },
-  10: {
-    costumeBase: (c) => (c === 0 ? 0 : 17 + (c - 1) * 15),
-    body: ['c+4', 'c+5', 'c+6', 'cs1+0'],
-    head: ['face+276', 'ear+272'],
-    hairBase: 296,
-    capBase: 7,
-  },
-  11: { costumeBase: (c) => c * 16, body: ['cs2+0', 'cs2+1', 'c+8'], head: ['face+288'], hairBase: 308, capBase: 9 },
-};
-
-function humanTexLists(assets: PlayerAssets, a: PlayerAppearance, emblem: number): TexLists {
-  const L = HUMAN_LAYOUTS[assets.charClass];
-  const cb = L.costumeBase(a.costume);
-  const slot = (spec: string): number => {
-    const [kind, n] = spec.split('+');
-    const v = Number(n);
-    switch (kind) {
-      case 'c': return cb + v;
-      case 'cs': return cb + v + 3 * a.skin;
-      case 'cs1': return cb + v + a.skin;
-      case 'cs2': return cb + v + 2 * a.skin;
-      case 'skin': return v + a.skin;
-      case 'cos': return v + a.costume;
-      case 'fix': return v;
-      case 'face': return v + 4 * a.face + a.skin;
-      case 'ear': return v + a.skin;
-      case 'pair': return v + 2 * (4 * a.face + a.skin);
-      case 'pair1': return v + 2 * (4 * a.face + a.skin) + 1;
-      default: throw new Error(`bad texture slot ${spec}`);
-    }
-  };
-  // Hair: each style takes the next run of hair textures (ids used by its
-  // hair model); ids only used by the cap come from the costume block.
-  let hairCursor = L.hairBase;
-  let capCursor = L.capBase;
-  let hair: number[] = [];
-  for (let s = 0; s <= a.hair; s++) {
-    const hai = usedIds(assets.parts.get(`pl${assets.letter}hai${pad2(s)}.nj`));
-    const cap = usedIds(assets.parts.get(`pl${assets.letter}cap${pad2(s)}.nj`));
-    const list: number[] = [];
-    const ids = [...new Set([...hai, ...cap])].sort((x, y) => x - y);
-    for (const id of ids) {
-      if (hai.has(id) || L.capBase < 0) list[id] = hairCursor++;
-      else list[id] = cb + capCursor++;
-    }
-    hair = list;
+function textureName(template: string, a: PlayerAppearance, limits: readonly number[]): string {
+  const s = ('pxt' + template).split('');
+  const type = s[4];
+  if (limits[0] > 0 && !(s[6] === '0' && s[7] === '0') && (type === 'b' || type === 't')) {
+    const v = a.costume + 1;
+    s[6] = String(Math.trunc(v / 10));
+    s[7] = String(v % 10);
   }
-  return { body: [emblem, ...L.body.map(slot)], head: L.head.map(slot), hair };
+  if (limits[1] > 0 && s[8] !== 'z' && (type === 'b' || type === 'f' || type === 't')) s[8] = String.fromCharCode(0x61 + a.skin);
+  if (limits[2] > 0 && s[7] !== '0' && type === 'f') s[7] = String.fromCharCode(0x31 + a.face);
+  if (type === 'c') s[8] = a.sectionId >= 0 && a.sectionId < 10 ? String.fromCharCode(0x61 + a.sectionId) : 'z';
+  return s.join('');
 }
 
-// Android layouts: 25 skin blocks of 5 at 0, then one group of 25 entries
-// (times the number of textures it holds) per head model.
-interface AndroidLayout {
-  body: number[]; // body ids 1.. as offsets into the skin block
-  // Per head model: texture ids as [group base, textures per skin, index] or
-  // ['block', offset] for an entry of the skin block.
-  heads: (readonly [number, number, number] | readonly ['block', number])[][];
+// Texture names of each part for an appearance, in texture id order.
+export function playerTextureNames(charClass: number, appearance: PlayerAppearance): { body: string[]; head: string[]; hair: string[] } {
+  const t = PLAYER_CLASS_TABLES[charClass];
+  const a = clampAppearance(charClass, appearance);
+  const names = (list: readonly number[] | undefined) => (list ?? []).map((i) => textureName(t.names[i], a, t.limits));
+  return { body: names(t.body), head: names(t.head[a.head]), hair: names(t.hair?.[a.hair]) };
 }
 
-const ANDROID_LAYOUTS: Record<number, AndroidLayout> = {
-  2: {
-    body: [0, 1, 2, -250],
-    heads: [[['block', 3], ['block', 4]], [[125, 2, 0], [125, 2, 1]], [[175, 1, 0]], [[200, 1, 0]], [[225, 1, 0]]],
-  },
-  4: {
-    body: [1, 2, 3, -275, 0],
-    heads: [[['block', 4]], [[125, 2, 0], [125, 2, 1]], [[175, 1, 0]], [[200, 2, 0], [200, 2, 1]], [[250, 1, 0]]],
-  },
-  5: {
-    body: [0, 1, 2, -350],
-    heads: [
-      [['block', 3], ['block', 4]],
-      [[125, 3, 0], [125, 3, 1], [125, 3, 2]],
-      [[200, 2, 0], [200, 2, 1]],
-      [[250, 2, 0], [250, 2, 1]],
-      [[300, 2, 0], [300, 2, 1]],
-    ],
-  },
-  9: {
-    body: [0, 1, 2],
-    heads: [
-      [['block', 3], ['block', 4]],
-      [[125, 2, 0], [125, 2, 1]],
-      [[175, 2, 0], [175, 2, 1]],
-      [[225, 3, 0], [225, 3, 1], [225, 3, 2]],
-      [[300, 3, 0], [300, 3, 1], [300, 3, 2]],
-    ],
-  },
-};
-
-function androidTexLists(assets: PlayerAssets, a: PlayerAppearance, emblem: number): TexLists {
-  const L = ANDROID_LAYOUTS[assets.charClass];
-  const block = 5 * a.skin;
-  // Negative body offsets are swatch groups: -B = entry B + skin.
-  const body = [emblem, ...L.body.map((o) => (o < 0 ? -o + a.skin : block + o))];
-  const head = (L.heads[a.head] ?? L.heads[0]).map((s) => (s[0] === 'block' ? block + s[1] : s[0] + s[1] * a.skin + s[2]));
-  return { body, head, hair: [] };
+const nameIndexes = new Map<number, Map<string, number>>();
+function textureIndex(charClass: number, name: string): number {
+  let m = nameIndexes.get(charClass);
+  if (!m) {
+    m = new Map(PLAYER_CLASS_TABLES[charClass].names.map((n, i) => ['pxt' + n, i]));
+    nameIndexes.set(charClass, m);
+  }
+  return m.get(name) ?? 0;
 }
 
 export function playerTextureLists(assets: PlayerAssets, a: PlayerAppearance): TexLists {
-  const emblem = assets.textureCount - 11 + (a.sectionId >= 0 && a.sectionId < 10 ? a.sectionId : 10);
-  return isAndroid(assets.charClass) ? androidTexLists(assets, a, emblem) : humanTexLists(assets, a, emblem);
+  const n = playerTextureNames(assets.charClass, a);
+  const idx = (list: string[]) => list.map((name) => textureIndex(assets.charClass, name));
+  return { body: idx(n.body), head: idx(n.head), hair: idx(n.hair) };
+}
+
+// ---------------------------------------------------------------------------
+// Proportions (PlayerVisualConfig proportion_x / proportion_y)
+//
+// The body and head are not scaled: they are morphed between 7 shapes per
+// class (and head) stored in plZsmpnj.afs (playertables.ts: SMP_BASE/COUNT).
+// The proportion square is split into 8 triangles over 9 points
+// (0x009b1680, x of points 1, 2, 3, 5, 6 set at run time by FUN_004e9690):
+//   P0 (0,0)  P1 (1/3,0)  P2 (2/3,0)  P3 (1/3,1/2)  P4 (0,1)
+//   P5 (1/3,1)  P6 (2/3,1)  P7 (1,1)  P8 (1,0)
+// triangle vertices at 0x009b16e0; shape of point 7 = shape 4, point 8 =
+// shape 0 (FUN_004e93b4). FUN_004e877c picks the triangle, FUN_004e86e4 the
+// barycentric weights, FUN_004e7e54 blends the three shapes into the model:
+// per node (depth-first) the model center, the position (if any shape has a
+// position), the scale (body only, if any shape has one) and the vertex chunks
+// 41/44 (position, normal renormalized, Ninja-flags weight). In game the
+// three shapes are loaded per player by FUN_004ee448 and blended by
+// FUN_004ee534; character creation does the same in FUN_00603ce0.
+// FUN_004e686c first resets both to 0 unless 0 <= x < 1 and 0 <= y < 1.
+
+const F13 = Math.fround(1 / 3);
+const F23 = Math.fround(2 / 3);
+const PROPORTION_POINTS: readonly (readonly [number, number])[] = [
+  [0, 0], [F13, 0], [F23, 0], [F13, 0.5], [0, 1], [F13, 1], [F23, 1], [1, 1], [1, 0],
+];
+const PROPORTION_TRIANGLES: readonly (readonly [number, number, number])[] = [
+  [1, 3, 0], [0, 4, 3], [3, 5, 4], [1, 3, 2], [2, 6, 3], [3, 5, 6], [2, 6, 7], [8, 7, 2],
+];
+const POINT_SHAPE = (p: number) => (p === 7 ? 4 : p === 8 ? 0 : p);
+
+export function validProportions(x: number, y: number): [number, number] {
+  return x >= 0 && x < 1 && y >= 0 && y < 1 ? [x, y] : [0, 0];
+}
+
+// FUN_004e877c (same constants as FUN_006045e8 for character creation).
+function proportionTriangle(x: number, y: number): number {
+  if (x > F23) return (x - F23) * 3 <= y ? 6 : 7;
+  if (x <= F13) {
+    if (F23 * y <= x) return 0;
+    return x <= (y - 1) * -F23 ? 1 : 2;
+  }
+  if (x <= (y - 1) * -F23) return 3;
+  return y * F23 <= x ? 4 : 5;
+}
+
+// Shapes (0..6) and weights the client blends for these proportions.
+export function proportionMorph(proportionX: number, proportionY: number): { shapes: [number, number, number]; weights: [number, number, number] } {
+  const [x, y] = validProportions(proportionX, proportionY);
+  const [ia, ib, ic] = PROPORTION_TRIANGLES[proportionTriangle(x, y)];
+  const [pa, pb, pc] = [PROPORTION_POINTS[ia], PROPORTION_POINTS[ib], PROPORTION_POINTS[ic]];
+  const wc = Math.fround((x - pa[0]) / (pc[0] - pa[0]));
+  const wb = Math.fround((y - pa[1] - wc * (pc[1] - pa[1])) / (pb[1] - pa[1]));
+  const wa = Math.fround(1 - (wb + wc));
+  return { shapes: [POINT_SHAPE(ia), POINT_SHAPE(ib), POINT_SHAPE(ic)], weights: [wa, wb, wc] };
+}
+
+export function morphTargetEntry(charClass: number, shape: number, head: number, part: 'body' | 'head'): number {
+  return SMP_BASE[charClass] + SMP_COUNT[charClass] * shape + (part === 'body' ? SMP_COUNT[charClass] - 1 : head);
+}
+
+function flatten(o: NjcmObject, out: NjcmObject[] = []): NjcmObject[] {
+  out.push(o);
+  for (const c of o.children) flatten(c, out);
+  return out;
+}
+
+function cloneObject(o: NjcmObject): NjcmObject {
+  return {
+    ...o,
+    position: [...o.position],
+    scale: [...o.scale],
+    model: o.model && {
+      ...o.model,
+      center: [...o.model.center],
+      vertices: o.model.vertices.map((v) => ({
+        ...v,
+        positions: v.positions.slice(),
+        normals: v.normals?.slice() ?? null,
+        weights: v.weights?.slice() ?? null,
+      })),
+    },
+    children: o.children.map(cloneObject),
+  };
+}
+
+// x87 FISTP in the default rounding mode (nearest, ties to even).
+const roundEven = (v: number) => {
+  const f = Math.floor(v);
+  const d = v - f;
+  return d > 0.5 || (d === 0.5 && f % 2 !== 0) ? f + 1 : f;
+};
+
+// FUN_004e838c: vertex chunks 41 (position + normal) and 44 (+ Ninja flags) of
+// the destination, in order, until another chunk type.
+function blendVertices(dst: NjcmChunkModel, src: NjcmChunkModel[], w: readonly number[]): void {
+  for (let c = 0; c < dst.vertices.length; c++) {
+    const d = dst.vertices[c];
+    if (d.type !== 41 && d.type !== 44) return;
+    const s = src.map((m) => m.vertices[c]);
+    if (s.some((v) => !v || v.positions.length !== d.positions.length)) return;
+    for (let i = 0; i < d.positions.length; i++) d.positions[i] = Math.fround(w[0] * s[0].positions[i] + w[1] * s[1].positions[i] + w[2] * s[2].positions[i]);
+    if (d.normals && s.every((v) => v.normals)) {
+      for (let i = 0; i < d.normals.length; i += 3) {
+        const n = [0, 1, 2].map((k) => w[0] * s[0].normals![i + k] + w[1] * s[1].normals![i + k] + w[2] * s[2].normals![i + k]);
+        const len = Math.hypot(n[0], n[1], n[2]);
+        for (let k = 0; k < 3; k++) d.normals[i + k] = Math.fround(len ? n[k] / len : n[k]);
+      }
+    }
+    if (d.weights && s.every((v) => v.weights)) {
+      for (let i = 0; i < d.weights.length; i++) {
+        const hi = s.map((v) => Math.round(v.weights![i] * 255));
+        d.weights[i] = roundEven(w[0] * hi[0] + w[1] * hi[1] + w[2] * hi[2]) / 255;
+      }
+    }
+  }
+}
+
+// FUN_007aaefc node flags: 1 position, 4 scale, 0x10 vertex list.
+const nodeFlags = (o: NjcmObject) =>
+  (o.flags & EVAL_UNIT_POS ? 0 : 1) | (o.flags & EVAL_UNIT_SCL ? 0 : 4) | (o.model?.vertices.length ? 0x10 : 0);
+
+// FUN_004e7e54: blends three shapes into a copy of `base`. `body` selects the
+// body loop (64 nodes, scale blended, vertices if any shape has them); the
+// head loop (5 nodes) does not blend scale and blends vertices when the
+// first shape has them.
+export function morphObject(base: NjcmObject, shapes: NjcmObject[], weights: readonly number[], body: boolean): NjcmObject {
+  const out = cloneObject(base);
+  const dst = flatten(out);
+  const src = shapes.map((s) => flatten(s));
+  const blend3 = (get: (o: NjcmObject) => readonly number[], i: number) =>
+    [0, 1, 2].map((k) => Math.fround(weights[0] * get(src[0][i])[k] + weights[1] * get(src[1][i])[k] + weights[2] * get(src[2][i])[k])) as [number, number, number];
+  const count = Math.min(dst.length, body ? 64 : 5);
+  for (let i = 0; i < count; i++) {
+    const d = dst[i];
+    if (src.some((s) => !s[i])) break;
+    const models = src.map((s) => s[i].model);
+    const allModels = models.every((m) => m) ? (models as NjcmChunkModel[]) : null;
+    if (d.model && allModels) d.model.center = blend3((o) => o.model!.center, i);
+    const flags = src.map((s) => nodeFlags(s[i]));
+    const any = flags[0] | flags[1] | flags[2];
+    if (any & 1) {
+      d.flags &= ~EVAL_UNIT_POS;
+      d.position = blend3((o) => o.position, i);
+    }
+    if (body && any & 4) {
+      d.flags &= ~EVAL_UNIT_SCL;
+      d.scale = blend3((o) => o.scale, i);
+    }
+    if ((body ? any : flags[0]) & 0x10 && d.model && allModels) blendVertices(d.model, allModels, weights);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,10 +353,29 @@ export interface PlayerModel extends NjcmModel {
   parts: string[];
 }
 
+// FUN_004e665c: a value outside 0..limit-1 (or not 0 when the limit is 0)
+// is reset to 0; an invalid section ID becomes id % 10, hair color channels
+// outside 0..255 become 0, invalid proportions become (0, 0).
 export function clampAppearance(charClass: number, a: PlayerAppearance): PlayerAppearance {
   const m = appearanceLimits(charClass);
-  const wrap = (v: number, n: number) => ((Math.trunc(v) % n) + n) % n;
-  return { ...a, costume: wrap(a.costume, m.costume), skin: wrap(a.skin, m.skin), face: wrap(a.face, m.face), head: wrap(a.head, m.head), hair: wrap(a.hair, m.hair) };
+  const fix = (v: number, n: number) => (Number.isInteger(v) && v >= 0 && v < n ? v : 0);
+  const color = (v: number) => (Number.isInteger(v) && v >= 0 && v <= 255 ? v : 0);
+  const sectionId = a.sectionId === -1 ? 0 : a.sectionId >= 0 && a.sectionId <= 9 ? a.sectionId : Math.trunc(a.sectionId) % 10;
+  const [proportionX, proportionY] = validProportions(a.proportionX, a.proportionY);
+  return {
+    ...a,
+    sectionId,
+    costume: fix(a.costume, m.costume),
+    skin: fix(a.skin, m.skin),
+    face: fix(a.face, m.face),
+    head: fix(a.head, m.head),
+    hair: fix(a.hair, m.hair),
+    hairR: color(a.hairR),
+    hairG: color(a.hairG),
+    hairB: color(a.hairB),
+    proportionX,
+    proportionY,
+  };
 }
 
 export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE): PlayerModel {
@@ -305,9 +388,21 @@ export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppeara
     if (!p) throw new Error(`${name} missing from pl${L}nj.bml`);
     return p;
   };
-  const inputs: NjcmPartInput[] = [{ name: `pl${L}bdy00.nj`, root: part(`pl${L}bdy00.nj`), textures: lookup(lists.body) }];
   const head = isAndroid(assets.charClass) ? `pl${L}hed${pad2(a.head)}.nj` : `pl${L}hed00.nj`;
-  inputs.push({ name: head, root: part(head), textures: lookup(lists.head), attachTo: HEAD_NODE });
+  let bodyRoot = part(`pl${L}bdy00.nj`);
+  let headRoot = part(head);
+  if (assets.morphs) {
+    const { shapes, weights } = proportionMorph(a.proportionX, a.proportionY);
+    const shape = (s: number, p: 'body' | 'head') => {
+      const o = parseNinjaChunkFile(assets.morphs!.get(morphTargetEntry(assets.charClass, s, a.head, p))).object;
+      if (!o) throw new Error(`plZsmpnj.afs: no model for class ${assets.charClass} shape ${s} ${p}`);
+      return o;
+    };
+    bodyRoot = morphObject(bodyRoot, shapes.map((s) => shape(s, 'body')), weights, true);
+    headRoot = morphObject(headRoot, shapes.map((s) => shape(s, 'head')), weights, false);
+  }
+  const inputs: NjcmPartInput[] = [{ name: `pl${L}bdy00.nj`, root: bodyRoot, textures: lookup(lists.body) }];
+  inputs.push({ name: head, root: headRoot, textures: lookup(lists.head), attachTo: HEAD_MODEL_NODE });
   if (!isAndroid(assets.charClass)) {
     const hair = `pl${L}hai${pad2(a.hair)}.nj`;
     const hairColor = new THREE.Color().setRGB(a.hairR / 255, a.hairG / 255, a.hairB / 255, THREE.SRGBColorSpace);
