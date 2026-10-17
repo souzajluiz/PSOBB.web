@@ -677,6 +677,23 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, body);
   }
 
+  // 6x6A (G_SetBossWarpState_6x6A, 8 bytes): {6a, 02, entity id, u16 state,
+  // u16 unused}. The boss warp object sends it with its own entity id
+  // (0x4000 + object index) when the player accepts (state 1 = gather
+  // players) and the floor leader when everyone is inside (state 2 = warp);
+  // see render/bosswarp.ts for the states. The client runs its own handler
+  // too (checked_call_packet0x60_subcommand sends and then dispatches
+  // locally), so the sender applies the same state change.
+  sendBossWarpState(entityId: number, state: number): void {
+    const body = new Uint8Array(8);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x6a;
+    body[1] = 0x02;
+    dv.setUint16(2, entityId, true);
+    dv.setUint16(4, state, true);
+    this.conn.send(0x60, 0, body);
+  }
+
   // 6x67 (G_TriggerSetEvent_6x67, 0x10 bytes): {67, 04, entity id, u32 floor,
   // u32 event id, u32 client id}. A trigger object sends its own entity id
   // (0x4000 + object index), a wave event's trigger_event action 0xFFFF

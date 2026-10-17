@@ -33,6 +33,19 @@ const read = (name: string) => (loose.has(name) ? new Uint8Array(readFileSync(jo
 // 1. Every asset descriptor: the archive exists, has the descriptor's entry
 //    count (the loader reads by position) and the descriptor's model names.
 const archives = new Map<string, EnemyArchive>();
+// Second archives an enemy loads (EnemyModelSpec.archives), loaded on demand.
+const extraArchives = new Map<string, EnemyArchive | null>();
+const extraArchive = (bml: string, models: number): EnemyArchive | null => {
+  let a = extraArchives.get(bml);
+  if (a === undefined) {
+    const data = read(bml);
+    check(!!data, `${bml}: missing`);
+    a = data ? new EnemyArchive(bml, data, models) : null;
+    check(!a || a.modelCount === models, `${bml}: ${a?.modelCount} models, descriptor ${models}`);
+    extraArchives.set(bml, a);
+  }
+  return a;
+};
 const renamed: string[] = [];
 for (const a of ENEMY_ASSETS) {
   for (const bml of [a.bml, a.ultimate, a.low].filter((n): n is string => !!n)) {
@@ -80,15 +93,31 @@ const tryBuild = (spec: EnemyModelSpec, what: string) => {
       check(!!d, `${what}: texture archive ${t} missing`);
       if (d) external.set(t, texturesFromXvm(d));
     }
-    for (const p of spec.parts) {
-      check(p.model >= 0 && p.model < archive.modelCount, `${what}: model ${p.model} of ${archive.modelCount}`);
-      if (p.motion) check(p.motion.index >= 0 && p.motion.index < archive.motionCount, `${what}: motion ${p.motion.index} of ${archive.motionCount}`);
+    const extra = new Map<string, EnemyArchive>();
+    for (const a of spec.archives ?? []) {
+      const loaded = extraArchive(a.bml, a.models);
+      if (loaded) extra.set(a.bml, loaded);
     }
-    const b = buildEnemy(archive, spec.parts, 0, external);
+    for (const p of spec.parts) {
+      const own = p.archive ? extra.get(p.archive) : archive;
+      check(!!own, `${what}: archive ${p.archive} not in spec.archives`);
+      if (!own) continue;
+      check(p.model >= 0 && p.model < own.modelCount, `${what}: model ${p.model} of ${own.modelCount}`);
+      if (p.texlistOf !== undefined) check(p.texlistOf >= 0 && p.texlistOf < own.modelCount, `${what}: texlistOf ${p.texlistOf} of ${own.modelCount}`);
+      if (p.motion) check(p.motion.index >= 0 && p.motion.index < own.motionCount, `${what}: motion ${p.motion.index} of ${own.motionCount}`);
+    }
+    const b = buildEnemy(archive, spec.parts, 0, external, extra);
     check(b.triangles > 0, `${what}: no triangles`);
     check(b.missingTextures === 0, `${what}: ${b.missingTextures} missing textures`);
     for (const a of b.animators) for (let i = 0; i < 40; i++) a.update(1 / 30);
     check(b.animators.length === spec.parts.filter((p) => p.motion).length, `${what}: ${b.animators.length} animators`);
+    // Children: every part gets its own group under the right root, and the
+    // ones the client hides at spawn are not drawn.
+    const worldParts = spec.parts.filter((p) => p.place === 'world');
+    check(b.world.children.length === worldParts.length, `${what}: ${b.world.children.length} world children, ${worldParts.length} parts`);
+    check(b.root.children.length === spec.parts.length - worldParts.length, `${what}: ${b.root.children.length} roots, ${spec.parts.length - worldParts.length} parts`);
+    const hidden = [...b.root.children, ...b.world.children].filter((c) => !c.visible).length;
+    check(hidden === spec.parts.filter((p) => p.hidden).length, `${what}: ${hidden} hidden groups`);
   } catch (err) {
     check(false, `${what}: ${(err as Error).message}`);
   }

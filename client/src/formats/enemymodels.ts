@@ -259,6 +259,24 @@ export interface EnemyModelSpec {
   models: number; // descriptor model count (motions start after these entries)
   parts: EnemyPartSpec[];
   textures?: string[]; // extra texture archives the parts use (EnemyPartSpec.textureArchive)
+  // Other BMLs the enemy loads (EnemyPartSpec.archive), with their descriptor
+  // model counts.
+  archives?: Array<{ bml: string; models: number }>;
+}
+
+// Descriptor of a second archive an enemy loads (not reached through
+// enemyModelFor's `pick`, so its counts are listed here).
+const EXTRA_ASSETS: Record<string, { models: number; motions: number }> = {
+  // 0x009f7b3c, loaded next to bm_ene_boss09.bml by the Saint-Milion
+  // constructor (two descriptors in g_SaintEmilionBmlModelPaths): 3 models
+  // (shokushu_body00..02.nj) and 7 motions.
+  'bm_ene_boss09_tentacle.bml': { models: 3, motions: 7 },
+};
+
+function extra(bml: string): { bml: string; models: number } {
+  const a = EXTRA_ASSETS[bml];
+  if (!a) throw new Error(`no asset descriptor for ${bml}`);
+  return { bml, models: a.models };
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(Math.trunc(v), lo), hi);
@@ -275,8 +293,80 @@ function pick(base: string, ctx: EnemyModelContext): string {
 function spec(name: string, bml: string, parts: EnemyPartSpec[]): EnemyModelSpec {
   const a = BY_BML.get(bml);
   if (!a) throw new Error(`no asset descriptor for ${bml}`);
-  const textures = parts.map((p) => p.textureArchive).filter((t): t is string => !!t);
-  return { name, bml, models: a.models.length, parts, ...(textures.length ? { textures } : {}) };
+  const textures = [...new Set(parts.map((p) => p.textureArchive).filter((t): t is string => !!t))];
+  const archives = [...new Set(parts.map((p) => p.archive).filter((t): t is string => !!t))].map(extra);
+  return { name, bml, models: a.models.length, parts, ...(textures.length ? { textures } : {}), ...(archives.length ? { archives } : {}) };
+}
+
+// --- Child objects ----------------------------------------------------------
+//
+// The constructors below build their rotation as round(degrees * 65536 / 360)
+// (0x008fe574 / 0x008fe220 = 65536.0, 0x008fe570 = 360.0); formats/setdata.ts
+// turns the same 16-bit angle into radians the same way.
+const BAMS = 0x10000;
+const bams = (deg: number) => Math.round((deg * BAMS) / 360);
+const rad = (angle: number) => (angle / BAMS) * Math.PI * 2;
+
+// Vol Opt phase 1 (controller ctor 0x0043e3b0, AI state 0 at 0x0043c680). The
+// controller itself draws nothing; in state 0 it creates, from the arena
+// origin g_VoloptForm2Config/-Value = (0, 0) (= the boss03 room origin):
+//   - 6 pillars (ctor 0x004422d4, entity ids base+1..6): model entry 17
+//     (me5p01_y_all.nj) with the motion table at 0x009a5240 slot 0 =
+//     wait_me5p01_y_all (motion 15, 0.7 frames/tick, started by
+//     Enemy__InitAnimation(,0) in 0x00443ef0). Placed on a ring of radius 76.0
+//     (0x008fe56c) at i * 60 degrees, facing -0x4000 - angle.
+//   - 24 monitors (ctor 0x0044161c, ids base+7..base+30): four shapes by
+//     i & 3 -> model entry 0x009a5210[shape] = {2, 5, 8, 11} (the blue
+//     fe_obj_vo_mo_{dai,sho01,sho02,sho03}_ao models; 0x009a5220 = {1, 4, 7,
+//     10} are the red ones and 0x009a5230 = {3, 6, 9, 12} the broken ones).
+//     The position is 0x009a51e0[shape] = (0, 0, -110) (shape 2: -115) turned
+//     by (i >> 2) * 60 degrees, so six walls of four monitors: the four
+//     screens of a wall share that point because each model is built at its
+//     own place on the wall. (The constructor also fills a runtime array at
+//     0x00A44860 with the same position but y = 43.0 for shape 0, the big
+//     "dai" monitor, and 15.0 for the small ones; that array is the lock-on
+//     target, not the model's position, which keeps the table's y = 0.)
+//     The models are static (.xj, no motion table).
+//   - 1 lightning rod (ctor 0x0043... CreateVoloptMinion, id base+0x21, only
+//     while g_VoloptDifficultyMode == 0): model entry 16
+//     (fs_obj_hiraishin_a.nj) at (0, 80, 0), motion table slot 0.
+// newserv Map.cc add_enemy_and_children builds the same set for type 0xC2:
+// VOL_OPT_1, 6 x VOL_OPT_PILLAR, 24 x VOL_OPT_MONITOR, 2 x NONE, VOL_OPT_AMP,
+// VOL_OPT_CORE, NONE (0x23 children).
+const VOLOPT_MONITOR_MODEL = [2, 5, 8, 11]; // 0x009a5210
+const VOLOPT_MONITOR_OFFSET = [-110, -110, -115, -110]; // 0x009a51e0, z of each shape
+const VOLOPT_PILLAR_RADIUS = 76; // 0x008fe56c
+
+function volOptChildren(): EnemyPartSpec[] {
+  const parts: EnemyPartSpec[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = bams(i * 60);
+    parts.push({
+      model: 17,
+      motion: loop(15, 0.7),
+      place: 'world',
+      name: `pillar ${i}`,
+      offset: [VOLOPT_PILLAR_RADIUS * Math.cos(rad(a)), 0, VOLOPT_PILLAR_RADIUS * Math.sin(rad(a))],
+      yaw: rad(-0x4000 - a),
+    });
+  }
+  for (let i = 0; i < 24; i++) {
+    const shape = i & 3;
+    const a = rad(bams((i >> 2) * 60));
+    const z = VOLOPT_MONITOR_OFFSET[shape];
+    parts.push({
+      model: VOLOPT_MONITOR_MODEL[shape],
+      place: 'world',
+      name: `monitor ${i}`,
+      // multiply_4x4_matrix_by_vec3f of (0, 0, z) with a Y rotation of `a`.
+      offset: [z * Math.sin(a), 0, z * Math.cos(a)],
+      yaw: a,
+    });
+  }
+  // The lightning rod's motion table (g_VoloptMinionStatsData) is not located
+  // yet, so it is drawn in its bind pose.
+  parts.push({ model: 16, place: 'world', name: 'lightning rod', offset: [0, 80, 0] });
+  return parts;
 }
 
 // Lobby event -> rappy season (FUN_00527934: DAT_00921ae0[event]): 1 -> 1
@@ -292,8 +382,10 @@ const RAPPY_BML = [
   ['bm_ene_lappy_hw.bml', 'bm_ene_lappy_ap_hw.bml'],
 ];
 
-// Types whose object draws nothing itself (controllers).
-export const NO_MODEL_TYPES = new Set([0xa3, 0xc2]);
+// Types whose object draws nothing itself (controllers). Vol Opt's controller
+// draws nothing either, but it creates the monitors and pillars, so it has a
+// model spec.
+export const NO_MODEL_TYPES = new Set([0xa3]);
 
 // The model of an enemy set entry, or null for types that draw nothing (the
 // Dark Gunner control enemy) or whose model is not decoded yet.
@@ -381,10 +473,26 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // Delsaber: ctor 0x0055018c, table 0x009bd5e0 slot 0 = wait, 1.0.
     case 0xa0:
       return spec('TObjEneSaver', 'bm_ene_df1_saver.bml', [{ model: 0, motion: loop(9, 1) }]);
-    // Chaos Sorcerer: ctor 0x0059b220, body model 0 (the bits are child
-    // objects), table 0x009bfe80 slot 0 = wait, 0.6.
-    case 0xa1:
-      return spec('TObjEneRe4Sorcerer', pick('bm_ene_re4_sorcerer.bml', ctx), [{ model: 0, motion: loop(7, 0.6) }]);
+    // Chaos Sorcerer: ctor 0x0059b220, body model 0, table 0x009bfe80 slot 0 =
+    // wait, 0.6; the render (0x0059b63c) draws the body 22.0 above the entity.
+    // The two bits are child entities (newserv: BEE_R and BEE_L): their stat
+    // init 0x0059ae6c takes model entry 1 (re4_b_bit.nj) with model 0's
+    // texture list (init_sorcererbee_global_config caches model_files[1].njcm
+    // and model_files[0].njtl) and no motion of their own, and
+    // SorcererUpdateChargePositionOffsets_0059c770 puts them at
+    // +-15.0 (0x00929948) along (cos yaw, -sin yaw) and 18.0 (0x00929944)
+    // above the body.
+    case 0xa1: {
+      const bit = (side: 1 | -1): EnemyPartSpec => ({
+        model: 1,
+        texlistOf: 0,
+        place: 'enemy',
+        name: side > 0 ? 'bit R' : 'bit L',
+        // The enemy's own yaw turns the offset, so it is given unrotated.
+        offset: [side * 15, 18, 0],
+      });
+      return spec('TObjEneRe4Sorcerer', pick('bm_ene_re4_sorcerer.bml', ctx), [{ model: 0, motion: loop(7, 0.6), offset: [0, 22, 0] }, bit(1), bit(-1)]);
+    }
     // Dark Gunner: factory 0x00545e54, model 1 (FUN_005b8610(1)), table
     // 0x009bcf60 slot 0 = wait, 1.0.
     case 0xa2:
@@ -395,11 +503,18 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // Chaos Bringer: ctor 0x0053a454, table 0x009bccc0 slot 0 = wait, 0.8.
     case 0xa4:
       return spec('TObjEneDf2Bringer', pick('bm_ene_df2_bringer.bml', ctx), [{ model: 0, motion: loop(9, 0.8) }]);
-    // Dark Belra: ctor 0x00536bfc, body model 0, table 0x009bcaa0 slot 0 =
-    // wait, 0.8. The arms (models 1, 2) are a child object (0x005398b0) whose
-    // attachment is not decoded yet.
+    // Dark Belra: ctor 0x00536bfc, body model 0 (the arms are part of its node
+    // tree), table 0x009bcaa0 slot 0 = wait, 0.8. models 1 and 2
+    // (re7_b1_larm.nj, re7_b1_rarm.nj) belong to the arm child object
+    // (ctor 0x005398b0): the body throws one by handing the arm entity a model
+    // index and a spawn offset, and the arm's render 0x00539e5c returns at once
+    // while its state (+0xb4) is 0, so at rest neither arm is drawn.
     case 0xa5:
-      return spec('TObjEneRe7Berura', pick('bm_ene_re7_berura.bml', ctx), [{ model: 0, motion: loop(6, 0.8) }]);
+      return spec('TObjEneRe7Berura', pick('bm_ene_re7_berura.bml', ctx), [
+        { model: 0, motion: loop(6, 0.8) },
+        { model: 1, hidden: true, name: 'left arm' },
+        { model: 2, hidden: true, name: 'right arm' },
+      ]);
     // Dimenian / La / So: ctor 0x00551d3c, FUN_005520f8 (model 2 - param6),
     // table 0x009bd840 slot 0 = stund, 0.6.
     case 0xa6:
@@ -417,28 +532,81 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     case 0xc0:
       if (ep === 2) return spec('TBoss5Gryphon', 'bm_boss5_gryphon.bml', [{ model: 0, motion: loop(9, 0.8) }]);
       return spec('TBoss1Dragon', pick('bm_boss1_dragon.bml', ctx), [{ model: 0, motion: loop(17, 0.5) }]);
-    // De Rol Le: ctor 0x0042ad4c, body model 2; the ctor starts the "enter"
-    // slot; idle = slot 1 of 0x009a45c0 = forward, speed 0.6 (static init 0x00434372).
+    // De Rol Le: ctor 0x0042ad4c, body model 2 (its node chain carries the ten
+    // shell segments newserv counts as DE_ROL_LE_BODY children: the area init
+    // walks model_files[2].njcm child/next twelve times); the ctor starts the
+    // "enter" slot, idle = slot 1 of 0x009a45c0 = forward, speed 0.6 (static
+    // init 0x00434372). The other entries are the fight's own objects:
+    //   - model 4 (tentacle) is cloned node by node into a writable buffer by
+    //     DerolleInitializeParameters_00439444 and animated with tloop;
+    //   - model 3 (sting) is the mine object's model, nine of them
+    //     (DE_ROL_LE_MINE): DerolleInitialize_00437368 sets
+    //     +0x34 = model_files[3].njcm and +0x24 = model_files[2].njtl, so both
+    //     draw with the body's texture list;
+    //   - models 5 and 6 (helm_break, shell_break) are the destruction debris:
+    //     0x0042a034 draws 28 children of model 5 and 0x0042a238 19 of model 6
+    //     at per-piece positions.
+    // None of them is drawn until the fight spawns it, so they are built but
+    // hidden.
     case 0xc1:
-      return spec('TBoss2DeRolLe', pick('bm_boss2_de_rol_le.bml', ctx), [{ model: 2, motion: loop(11, 0.6) }]);
+      return spec('TBoss2DeRolLe', pick('bm_boss2_de_rol_le.bml', ctx), [
+        { model: 2, motion: loop(11, 0.6) },
+        { model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, name: 'tentacle' },
+        { model: 3, texlistOf: 2, hidden: true, name: 'mine' },
+      ]);
     // Barba Ray: ctor 0x004af634, body model 0; idle = slot 1 of 0x009aba20 =
-    // forward, 0.6 (static init 0x004b9c00).
+    // forward, 0.6 (static init 0x004b9c00). Same shape as De Rol Le: model 1
+    // is the tentacle (tloop), model 5 the hige tentacle that drops the Pig
+    // Rays (hige_wait), models 2/3 the debris. newserv counts 10
+    // BARBA_RAY_JOINT and 0x24 PIG_RAY children; the Pig Rays have their own
+    // archive (bm_boss7_crawfish.bml) and are not placed by the constructor.
     case 0xcb:
-      return spec('TBoss7DeRolLeC', 'bm_boss7_de_rol_le_c.bml', [{ model: 0, motion: loop(11, 0.6) }]);
-    // Vol Opt: 0xc2 is the controller and draws nothing itself (ctor
-    // 0x0043e3b0); 0xc5 (phase 2, ctor 0x004483fc -> FUN_004491cc) draws model
-    // 19 (FUN_00448e40), table 0x009a5340 slot 0 = wait_me5p02_y_all, 0.7.
+      return spec('TBoss7DeRolLeC', 'bm_boss7_de_rol_le_c.bml', [
+        { model: 0, motion: loop(11, 0.6) },
+        { model: 1, texlistOf: 0, motion: loop(17, 0.6), hidden: true, name: 'tentacle' },
+        { model: 5, texlistOf: 0, motion: loop(20, 0.6), hidden: true, name: 'hige tentacle' },
+      ]);
+    // Vol Opt: 0xc2 is the controller. It draws nothing itself (ctor
+    // 0x0043e3b0) but creates phase 1's monitors, pillars and lightning rod
+    // (volOptChildren above); 0xc5 (phase 2, ctor 0x004483fc -> FUN_004491cc)
+    // draws model 19 (FUN_00448e40), table 0x009a5340 slot 0 =
+    // wait_me5p02_y_all, 0.7.
     case 0xc2:
-      return null;
+      return spec('TBoss3Volopt', pick('bm_boss3_volopt.bml', ctx), volOptChildren());
     case 0xc5:
       return spec('TBoss3VoloptP02', pick('bm_boss3_volopt.bml', ctx), [{ model: 19, motion: loop(16, 0.7) }]);
     // Dark Falz: the controller (ctor 0x0044c93c) creates the phase-1 body
     // (0x0044e44a -> FUN_004570b0), whose render FUN_00455568 draws six models
     // at its origin (table 0x009a6140) with the state-0 motions of table
     // 0x009a5e28; frame step 0.4 (+0x3f4, set by the ctor).
+    // The six model entries are the table at 0x009a6140 = {7, 5, 3, 2, 4, 1}
+    // (waist, dodai, the three heads and the body).
+    // The controller creates the later forms as their own objects (newserv
+    // aliases DARK_FALZ_1/2/3 onto this entry): form 2 is models 8 and 9
+    // (df2_s_body, df2_s_dodai1, idle wait_df2_* = motions 81 and 82) and
+    // form 3 models 10..13 (df3_s_body / df3_s_wing and their Ultimate
+    // df3_sl_* pair, idle wait_df3_* = 84, 85 and 83). Rico's hologram
+    // (model 15, df_rikomiraju_body, motions ricoult1/ricoult2 = 70, 71) and
+    // her ring (model 18, rico_ring3_rico_ring, motion 69) belong to the
+    // Ultimate form-3 scene. They are built hidden: the controller places them
+    // when the form changes, not at spawn.
     case 0xc8: {
       const m = (model: number, motion: number): EnemyPartSpec => ({ model, motion: loop(motion, 0.4) });
-      return spec('TBoss4DarkFalz', 'darkfalz_dat.bml', [m(7, 80), m(5, 78), m(3, 77), m(2, 77), m(4, 77), m(1, 76)]);
+      const later = (model: number, motion: number, name: string): EnemyPartSpec => ({ ...m(model, motion), hidden: true, name });
+      return spec('TBoss4DarkFalz', 'darkfalz_dat.bml', [
+        m(7, 80),
+        m(5, 78),
+        m(3, 77),
+        m(2, 77),
+        m(4, 77),
+        m(1, 76),
+        later(8, 81, 'form 2 body'),
+        later(9, 82, 'form 2 base'),
+        later(ult ? 12 : 10, 84, 'form 3 body'),
+        later(ult ? 13 : 11, 85, 'form 3 wing'),
+        later(15, 70, 'Rico'),
+        later(18, 69, 'Rico ring'),
+      ]);
     }
     // Olga Flow: the controller (ctor 0x0048d814) creates the phase-1 beast
     // (FUN_0048d188 -> ctor 0x00497580); its render FUN_00494120 draws models
@@ -535,11 +703,34 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // table 0x009c10c0 slot 0 = stund, 0.6.
     case 0x117:
       return spec('GoranFamily', 'bm_ene_golan.bml', [{ model: clamp(p6, 0, 2), motion: loop(9, 0.6) }]);
-    // Saint-Milion / Shambertin: ctor 0x0076a8e8, FUN_0076af74 (model
-    // 0x009f75c8[variant]); the ctor starts the "advent" motion (slot 0),
-    // idle = slot 1 of 0x009f6a20 = 1st_move, speed 4. Sub-parts not decoded.
+    // Saint-Milion / Shambertin: ctor 0x0076acf0 (factory 0x0076a86c),
+    // SaintEmilionPart_LoadBmlAndStats_0076af74 picks model
+    // 0x009f75c8[variant]; the ctor starts the "advent" motion (slot 0), idle =
+    // slot 1 of 0x009f6a20 = 1st_move, speed 4.
+    // The constructor also creates, in this order (newserv counts 0x18
+    // children: 8 of the boss type and 16 spinners):
+    //   - 0x13 TObjBoss09 parts from the table at 0x009f71a4 (0x30 bytes each)
+    //     that are hitboxes only: SaintEmilionPart_Constructor_00764bc8 copies
+    //     11 dwords of the row into +0xb0 and hands them to
+    //     ConstructEntityHitbox_007b9ccc, no model;
+    //   - 8 parts (SaintEmilionPart_Create_00765310) placed on the boss's own
+    //     matrices 5..12 (SaintEmilionPart_ValidateMatrixIndex_00768964);
+    //   - 0x10 spinners (SaintEmilionEntityFactory_CreateEntity_0076f34c) from
+    //     the *second* archive the boss loads, bm_ene_boss09_tentacle.bml
+    //     (descriptor 0x009f7b3c, 3 models + 7 motions): shokushu_body00..02,
+    //     one per variant.
+    // The spinners' positions come from the fight's matrices, so one is built
+    // hidden here rather than sixteen at a guessed place. It is built without a
+    // motion: the model has 59 nodes but every motion of that archive except
+    // 2nd_attack covers 32, so the client animates a sub-tree of it (the part
+    // class 0x00766b20 keeps three model/texture/motion slots from the table at
+    // 0x009f5b20 = {archive 0 chunk 0, archive 0 chunk 1, archive 1 chunk 0}),
+    // which is not decoded yet.
     case 0x119:
-      return spec('Episode4Boss', 'bm_ene_boss09.bml', [{ model: p6 & 1, motion: loop(9, 4) }]);
+      return spec('Episode4Boss', 'bm_ene_boss09.bml', [
+        { model: p6 & 1, motion: loop(9, 4) },
+        { model: p6 & 1, archive: 'bm_ene_boss09_tentacle.bml', hidden: true, name: 'spinner' },
+      ]);
   }
   return null;
 }

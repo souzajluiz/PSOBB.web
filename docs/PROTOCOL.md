@@ -214,6 +214,26 @@ Base update `FUN_006698e0`: while the local player is within the radius (`FUN_00
 - Area and boss warps (`FUN_00669410`): one item, the destination area's name, unitxt group 10 index from the table at `0x0097c660` (`FUN_0079313c`). Window at position-table entry 0x35 = (267, 130), sized by `FUN_0073608c`: width = text + 20, height = 14 + 20.
 - Ragol teleporter (`FUN_00649cec`): one item per set bit of the mask `DAT_00a8f4fc` computed by `FUN_0064a428` (quest bits `DAT_00a8f500` ORed in). Bit *i* → floor `table[i]`, name unitxt(10, `text[i]`): Episode 1 floors `0x00936260` / text `0x00936300`, Episode 2 `0x009362a0` / `0x00936340`, Episode 4 `0x00936404` / `0x00936430`. Masks: Episode 1 `0xA5` & `0xFFFE03FF` → Forest 1, Cave 1, Mine 1, Ruins 1; Episode 2 `0x215` (type 1: & `0xFFFE780F` → VR Temple Alpha, VR Spaceship Alpha; type 2: & `0xFFFE7FF0` → Central Control Area, Seabed Upper; then & `0xFFFF87FF`); Episode 4 `0x3F` & `0xFFFFFCFF` → Crater East/West/South/North, Crater Interior, Desert 1. The quest-flag checks (`FUN_0064a650`, flags `0x1F9`/`0x201`/`0x207`... per newserv) only OR in bits the base mask already has, and `FUN_006dc358` returns 0, so this client offers every destination in free play. Window at entry 0x34 = (176, 130), width 288 (`FUN_00736138`), height = items × 20 − 6 + 20, capped at 160 (`FUN_007361d0`, scrolling), items centred (`FUN_00736458`). The names come from Ephinea's loose `unitxt_j.prs` (`data.gsl:unitxt_e.prs` has empty Episode 4 entries).
 
+#### Boss warp: gathering the party (`6x6A`)
+
+Code: `client/src/render/bosswarp.ts`, wired in `gamefield.ts`. Test: `tests/bossrooms.test.ts`. A boss warp does not warp the player who steps in: it asks, gathers the party, then warps whoever is standing in it. The object keeps the state at `+0xE0` (what `6x6A` carries), the state it is currently running at `+0xE2` and a substate at `+0xE4`; its update notices a state change, lets the old state clean up with substate `-1`, copies `+0xE0` to `+0xE2` and restarts at substate 0:
+
+| State | Handler | Behaviour |
+|---|---|---|
+| 0 idle / confirmation | `0x0066B9E0` | inside the radius: the Yes/No window (unitxt 11:0x54 "This transporter can transport more than one player…", GUI position 0x38 = (244, 224), width 368.0, cursor on "No") and the player list (position 0x36 = (17, 224)) with a tick per player already at the warp and `0xFFFFFF00` for a player whose movement is disabled. "Yes" sends `6x6A` state 1; "No", a cancel or leaving the radius disables the local player's movement and waits. The floor leader sends `6x6A` state 2 as soon as all four players are on this floor inside the radius |
+| 1 gather players | `0x0066B5F8` | arms a 300-frame timer, plays sound effect 6, shows unitxt 11:0x55 ("The transporter was activated"); the leader sends `6x6A` state 2 when the timer runs out or everyone is inside |
+| 2 warp | `0x0066B4FC` | 0x96-frame warp animation; offline the local player inside the radius is warped at once; then state 3 |
+| 3 destination occupied | `0x0066B370` | one-line window, unitxt 11:0x53 ("Battle going on in the next area…", position 0x37 = (228, 224)); back to state 0 once the destination is free |
+| 4 locked | — | until the switch flag is set (newserv; the flag check is skipped on Pioneer 2, `FUN_0066C838`) |
+
+The leader's automatic advance is gated by the global at `0x009C9558`, which is **1 in the image** and only cleared by the quest opcode `warp_off` (`warp_on` sets it), so free play gathers normally.
+
+| Sub | Meaning | Payload |
+|---|---|---|
+| `6A` | set boss warp state (`G_SetBossWarpState_6x6A`, 8 bytes) | `{6A, 02, u16 entity id (0x4000 + object index), u16 state, u16 unused}` |
+
+`checked_call_packet0x60_subcommand` sends the subcommand **and then runs the client's own handler**, so the sender applies the same state change; this client does the same (`Game.sendBossWarpState` + `BossWarp.receive`).
+
 Doors open when their switch flags are set. `TObjDoor` (0x80, Forest; ctor `FUN_006573d4`, update `FUN_00656e28` → `FUN_00656eb4`): flag = `param4 & 0xFF`, number on the door = `(param4 >> 8) % 10`, `param6` = unlock camera (0x50 frames). States: 0 locked until the flag is set (`FUN_00816eec`); 2 closed: opens when a player on the floor is within 70.0 (`0x00937964`); 4 opening, +1.8 motion frames per frame (`0x0093795c`); 5 open until no player is within 100.0 (`0x0093796c`); 3 closing, −1.8 per frame. Collision is on while closed (`FUN_007b52c4`) and off while open (`FUN_007b52ec`). Cave / Mine / Ruins doors (0xC1, 0xC2, 0xCE, 0x100, 0x102, 0x144–0x14B) take their flags from `param4`/`param5` as newserv documents and reuse the Forest door's distances.
 
 Switches: `TObjDoorKey` (0x81, ctor `FUN_00658b0c` on the generic switch `FUN_0062998c`, radius 20.0 at +0xcc) sets flag `param4` and sends `6x05`:
@@ -914,7 +934,23 @@ Code: `formats/enemymodels.ts` (table), `render/enemymodel.ts` (loader, animator
 
 **Motion data** (`.njm`, NMDM chunk): angle keys are 16-bit (`NJS_MKEY_SA`, 8 bytes) in every enemy motion; Episode 4 motions use quaternion keys (type `0x2000`, 0x14 bytes: `u32 frame, f32 w, x, y, z`) instead of angles. Motions with element type 7 also carry scale keys.
 
-**Not decoded:** child objects drawn by separate sub-objects (Dark Belra's arms, Chaos Sorcerer's bits, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Saint-Milion's parts), Recobox orientation, Vol Opt phase 1 parts (the `0xC2` controller draws nothing), Olga Flow's height offset (`+0x4F0`).
+### Child objects
+
+Several enemies are more than one object: the constructor creates child entities with their own model entry, archive or place in the arena. `EnemyPartSpec` carries one child (`model`, `motion`, `texlistOf`, `archive`, `place`, `offset`, `yaw`, `hidden`); a child the fight spawns later is built but not drawn (`hidden`).
+
+| Enemy | Children |
+|---|---|
+| Chaos Sorcerer `0xA1` | 2 bits (newserv `BEE_R` / `BEE_L`): model entry 1 (`re4_b_bit.nj`) with model 0's texture list (`init_sorcererbee_global_config` caches `model_files[1].njcm` and `model_files[0].njtl`, stat init `0x0059AE6C`), at ±15.0 (`0x00929948`) along `(cos yaw, −sin yaw)` and 18.0 (`0x00929944`) above the body (`SorcererUpdateChargePositionOffsets_0059C770`). The body itself is drawn 22.0 above the entity (`0x0059B63C`) |
+| Vol Opt `0xC2` | The controller draws nothing; in AI state 0 (`0x0043C680`) it creates, from the arena origin `g_VoloptForm2Config/-Value` = (0, 0) — the `map_boss03` section origin — 6 pillars (ctor `0x004422D4`), 24 monitors (ctor `0x0044161C`) and 1 lightning rod (`0x0043C954`). Pillars: model entry 17 (`me5p01_y_all.nj`), motion table `0x009A5240` slot 0 = `wait_me5p01_y_all` at 0.7 (started by `0x00443EF0`), ring radius 76.0 (`0x008FE56C`), `i·60°`, facing `−0x4000 − angle`. Monitors: shape `i & 3` → model `0x009A5210[shape]` = {2, 5, 8, 11} (the blue `fe_obj_vo_mo_*_ao`; `0x009A5220` = {1, 4, 7, 10} red, `0x009A5230` = {3, 6, 9, 12} broken), position `0x009A51E0[shape]` = (0, 0, −110) (shape 2: −115) turned by `(i >> 2)·60°`, static `.xj` models. The runtime array at `0x00A44860` gets the same position with y = 43.0 (shape 0) or 15.0 — the lock-on height, not the model's. Lightning rod: model entry 16 (`fs_obj_hiraishin_a.nj`) at (0, 80, 0) |
+| Dark Belra `0xA5` | models 1 and 2 (`re7_b1_larm/rarm.nj`) are the thrown-arm child object (ctor `0x005398B0`); its render `0x00539E5C` returns while its state `+0xB4` is 0, so at rest neither arm is drawn |
+| De Rol Le `0xC1` | the body model 2 carries the ten shell segments (`init_derolle_global_config` walks `model_files[2].njcm` child/next 12 times); model 4 is the tentacle (cloned node by node by `DerolleInitializeParameters_00439444`, `tloop`), model 3 the nine mines (`DerolleInitialize_00437368`: `+0x34 = model_files[3].njcm`, `+0x24 = model_files[2].njtl`), models 5 and 6 the destruction debris (28 and 19 children drawn by `0x0042A034` / `0x0042A238`) |
+| Barba Ray `0xCB` | same shape: model 1 tentacle, model 5 the `hige` tentacle that drops the Pig Rays (own archive `bm_boss7_crawfish.bml`), models 2/3 debris |
+| Dark Falz `0xC8` | form 1 draws the six entries of `0x009A6140` = {7, 5, 3, 2, 4, 1}; form 2 is models 8, 9 and form 3 models 10–13 (Ultimate `df3_sl_*`); Rico's hologram (model 15) and her ring (model 18) belong to the Ultimate form-3 scene |
+| Saint-Milion `0x119` | the ctor `0x0076ACF0` creates 0x13 hitbox-only parts from the table `0x009F71A4` (0x30 bytes, copied to `+0xB0` and handed to `ConstructEntityHitbox_007B9CCC`), 8 parts on the boss's own matrices 5..12, and 16 spinners from a **second archive**, `bm_ene_boss09_tentacle.bml` (descriptor `0x009F7B3C`, 3 models `shokushu_body00..02` + 7 motions) |
+
+newserv's `add_enemy_and_children` (`src/Map.cc`) builds the same sets, which is how the counts were cross-checked: Sorcerer 2, De Rol Le 0x13, Vol Opt 0x23, Barba Ray 0x2F, Saint-Milion 0x18.
+
+**Not decoded:** where the fight puts the children it spawns (tentacles, mines, arms, spinners), Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation, Olga Flow's height offset (`+0x4F0`). The spinner is built without a motion: its model has 59 nodes while every motion of that archive but `2nd_attack` covers 32, so the client animates a sub-tree of it (the part class `0x00766B20` keeps three model/texture/motion slots from the table `0x009F5B20` = {archive 0 chunk 0, archive 0 chunk 1, archive 1 chunk 0}).
 
 ## Combat (player attacks, damage, enemy state)
 
@@ -1094,6 +1130,20 @@ Each area id has a scene record in the table at `0x00a160c0` (12 bytes: name, st
 | Gal Gryphon, Olga Flow, Barba Ray, Gol Dragon | `gryphon.adx`, `HALL.adx` (`FUN_0048722c`), `delo2.adx`, `dragon2.adx` |
 | Crater routes / Crater Interior / Desert | interactive 9 / 10 / 11 |
 | Saint-Milion | `slbgm_boss09.ogg` (`slbgm_boss09b.ogg` when `DAT_00a9b078 == 1`), `FUN_0076b688` |
+
+### Boss music phases
+
+Code: `client/src/audio/bossbgm.ts`. Test: `tests/bossrooms.test.ts`. A boss floor does not keep one track: the area object starts the entry track and the boss swaps it when it changes form. Every swap is a `play_bgm(name)` call (`FUN_00814AFC`, `data/adx/<name>` or, for Episode 4, `data/ogg/<name>`):
+
+| Area | Phase 0 (entry) | Phase 1 | Phase 2 |
+|---|---|---|---|
+| 0x0D Vol Opt | interactive 3 (Ruins) past z 4000 | `vol_opt1.adx` (`init_volopt_stuff` `0x0043EE2C`) | `vol_opt2.adx` (form 2, `0x0043EDA4`, also `0x00440763`) |
+| 0x0E Dark Falz | interactive 4 after 0x5A frames (`T1.adx` at `0x0044BAD5`) | `dark1.adx` (`0x0044D716`) | `dark2.adx` (`0x0044E0DA`) |
+| 0x1F Olga Flow | `HALL.adx` (`0x0048726B`; `T2.adx` `0x0048725E` during the cutscene) | `proto1.adx` (form-1 entry `0x0048F2D8`) | `proto2.adx` (form-2 entry `0x0048F1E4`) |
+| 0x0B / 0x0C / 0x1E / 0x20 / 0x21 | `dragon.adx` / `delo.adx` / `gryphon.adx` / `delo2.adx` / `dragon2.adx` | — | — |
+| 0x2C Saint-Milion | `slbgm_boss09.ogg`, or `slbgm_boss09b.ogg` for the Shambertin/Kondrieu variant (`FUN_0076B688`) | — | — |
+
+The form changes are the boss's own and the room leader broadcasts them, so a client that only watches the room learns the phase from the boss action subcommands (newserv `CommandFormats.hh`): `6x15` `G_VolOptBossActions` (`action` 0–2 = Vol Opt phase 1, 3–7 = phase 2), `6x19` `G_DarkFalzActions` (`u16 phase`, `0xFFFF` = no change), and `6xA4` / `6xA5` (Olga Flow form 1 / form 2 actions). `bossPhaseOf(area, sub, body)` maps them to a phase and `FieldMusic.setBossPhase` plays it; the phase only moves forward. Which of `dark1`/`dark2` belongs to which Dark Falz form follows from the order of the two calls — the handlers are not traced further.
 
 Interactive music (`client/src/audio/slbgm.ts`): twelve descriptors at `0x00a16088` = `{char name[0x20] ("slbgm_forest.afs"), i32 records, i32, i32, ptr calm table, ptr battle table}`, records of five `i16` `{first, loop, count, transition, next}`. `FUN_00814c00` swaps the extension for `ogg`: `data/ogg/slbgm_forest.ogg` is a **chained Ogg Vorbis** file and every logical bitstream (link) is one segment; the streaming thread (`FUN_0086ee8c`, `FUN_0086f530`) plays queued link numbers back to back (`FUN_0086e114` → 256-entry ring at +0x708). Start (`FUN_00814c7c`): queue `calm[0].first` and `first + 1` (or `calm[next].first` for a one-link record). Each time the queue drains to the playing link (`FUN_00814f30`): in the same mode, the next link of the record until `count`, then record `next` starting at `first` the first time a record changes and at `loop` afterwards; on a mode change the record's `transition` link, then (`FUN_00815170`) `other[record].next` at its `loop` link (a transition of −1 switches at once). Battle is requested (`FUN_00814c5c`) while the player's room has an active wave event (`FUN_0069821c`, `FUN_008114b0`), calm again 0x5A frames after it is clear; the Dark Falz music ignores it. In every file the highest link the tables use is the last link of the file. Browsers decode each link separately (its own Ogg headers) and schedule them sample-accurately.
 

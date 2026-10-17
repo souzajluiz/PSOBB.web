@@ -5,12 +5,15 @@
 // functions pick the music:
 //   - field areas start the interactive music (FUN_00814c7c(index), slbgm.ts);
 //   - bosses play an ADX track (FUN_00814afc), some only after an event;
+//   - a boss's own form changes swap the track again (audio/bossbgm.ts:
+//     setBossPhase);
 //   - Pioneer 2 and the Lab (FUN_007a7484 -> FUN_006428bc) create BGM zones
 //     (TObjBgmCol objects from the tables at 0x00934f40 / 0x00935040) and a
 //     manager (FUN_00642824) that plays FUN_00642c30's track (city.adx outside
 //     the lobby) when nothing is playing.
 
 import type { BgmPlayer } from './bgm.ts';
+import { bossBgm, type BossBgm } from './bossbgm.ts';
 
 export type FieldBgm =
   | { kind: 'sl'; index: number; delayFrames?: number; minZ?: number }
@@ -168,17 +171,25 @@ export class FieldMusic {
   private inside: boolean[] = [];
   private zoneTrack = CITY_TRACK; // DAT_00a8f32c, set to 4 by FUN_006428bc
   private acc = 0;
+  private boss: BossBgm | null = null;
+  private bossPhaseIndex = 0;
 
   constructor(bgm: BgmPlayer) {
     this.bgm = bgm;
   }
 
-  enter(area: number, episode: number): void {
+  enter(area: number, episode: number, bossVariant = 0): void {
     this.spec = fieldBgm(area, episode);
+    this.boss = bossBgm(area, episode, bossVariant);
+    this.bossPhaseIndex = 0;
     this.frames = 0;
     this.started = false;
     this.zoneTrack = CITY_TRACK;
     this.inside = this.spec.kind === 'city' ? this.spec.zones.map(() => false) : [];
+    // Saint-Milion's two tracks differ by boss variant (FUN_0076b688), and
+    // audio/bossbgm.ts carries both, so its phase 0 names the entry track.
+    const first = this.boss?.phases[0];
+    if (first && first.kind === 'adx' && this.spec.kind === 'adx') this.spec = { ...this.spec, name: first.name };
     // The end function of the previous area (FUN_007a6dd8, FUN_007a759c, ...)
     // stops the music (FUN_00815434), so every floor starts its track afresh.
     this.bgm.stop();
@@ -221,5 +232,27 @@ export class FieldMusic {
     this.started = true;
     if (s.kind === 'sl') this.bgm.playInteractive(s.index);
     else void this.bgm.play(s.name);
+  }
+
+  // Boss of the current floor, or null on a floor without one.
+  get bossMusic(): BossBgm | null {
+    return this.boss;
+  }
+
+  get bossPhase(): number {
+    return this.bossPhaseIndex;
+  }
+
+  // The boss changed form (audio/bossbgm.ts): play that phase's track. The
+  // boss only ever moves forward, so an earlier phase is ignored.
+  setBossPhase(phase: number): boolean {
+    const boss = this.boss;
+    if (!boss || phase <= this.bossPhaseIndex || phase >= boss.phases.length) return false;
+    this.bossPhaseIndex = phase;
+    const track = boss.phases[phase];
+    this.started = true;
+    if (track.kind === 'sl') this.bgm.playInteractive(track.index);
+    else void this.bgm.play(track.name);
+    return true;
   }
 }

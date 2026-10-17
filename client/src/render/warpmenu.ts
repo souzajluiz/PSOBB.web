@@ -103,6 +103,19 @@ export interface WarpMenuChoice {
   floor: number;
 }
 
+// Extra windows the boss warp draws next to the menu (render/bosswarp.ts):
+// the question or notice above the items, and the list of the players at the
+// warp in its own window.
+export interface WarpMenuExtra {
+  message?: string; // may hold newlines
+  panel?: { layout: WarpMenuLayout; rows: Array<{ label: string; color: string }> };
+}
+
+// Window that holds `lines` text lines and `items` selectable items.
+export function textWindowLayout(x: number, y: number, w: number, lines: number, items: number): WarpMenuLayout {
+  return { x, y, w, h: lines * LINE + items * ITEM_STEP + BORDER };
+}
+
 // The open menu, drawn on a 2D canvas laid over the 3D canvas.
 export class WarpMenuOverlay {
   private canvas: HTMLCanvasElement;
@@ -110,8 +123,10 @@ export class WarpMenuOverlay {
   private host: HTMLCanvasElement;
   private skin: WindowSkin | null = null;
   private text: string[] | null = null;
+  private groups: string[][] | null = null;
   private items: WarpMenuChoice[] = [];
   private layout: WarpMenuLayout | null = null;
+  private extra: WarpMenuExtra = {};
   private cursor = 0;
   private resolve: ((floor: number | null) => void) | null = null;
   private onKey = (e: KeyboardEvent) => this.key(e);
@@ -136,8 +151,15 @@ export class WarpMenuOverlay {
       // Ephinea's loose unitxt_j.prs carries the English names of all three
       // episodes (data.gsl's unitxt_e.prs has empty Episode 4 entries).
       const { data } = await files.readFirst(['unitxt_j.prs', 'unitxt_e.prs']);
-      this.text = parseUnitxt(data)[10] ?? [];
+      this.groups = parseUnitxt(data);
+      this.text = this.groups[10] ?? [];
     }
+  }
+
+  // Any unitxt group (the boss warp uses group 11 for its windows and group
+  // 15 for "Yes" / "No").
+  string(group: number, index: number): string {
+    return (this.groups?.[group]?.[index] ?? `#${group}:${index}`).replace(/\t[CEJ][0-9A-Za-z]?/g, '');
   }
 
   get open(): boolean {
@@ -152,12 +174,21 @@ export class WarpMenuOverlay {
     return this.text?.[textIndex] ?? `#${textIndex}`;
   }
 
+  // Replaces the extra windows of the open menu (the boss warp refreshes the
+  // player list every frame).
+  update(extra: WarpMenuExtra): void {
+    if (this.open) this.extra = extra;
+  }
+
   // Shows the menu; resolves with the chosen floor, or null on cancel/close.
-  show(items: WarpMenuChoice[], layout: WarpMenuLayout): Promise<number | null> {
+  // `cursor` is the item selected first (the boss warp's Yes/No starts on No,
+  // ListWindowObject_SetSelectedIndex_0073d148(.., 1)).
+  show(items: WarpMenuChoice[], layout: WarpMenuLayout, extra: WarpMenuExtra = {}, cursor = 0): Promise<number | null> {
     this.close();
     this.items = items;
     this.layout = layout;
-    this.cursor = 0;
+    this.extra = extra;
+    this.cursor = Math.min(Math.max(0, cursor), Math.max(0, items.length - 1));
     this.canvas.style.display = '';
     const p = new Promise<number | null>((res) => (this.resolve = res));
     const loop = () => {
@@ -181,9 +212,9 @@ export class WarpMenuOverlay {
   private key(e: KeyboardEvent): void {
     if (!this.open) return;
     const n = this.items.length;
-    if (e.key === 'ArrowUp') this.cursor = (this.cursor + n - 1) % n;
-    else if (e.key === 'ArrowDown') this.cursor = (this.cursor + 1) % n;
-    else if (e.key === 'Enter') this.close(this.items[this.cursor]?.floor ?? null);
+    if (e.key === 'ArrowUp' && n) this.cursor = (this.cursor + n - 1) % n;
+    else if (e.key === 'ArrowDown' && n) this.cursor = (this.cursor + 1) % n;
+    else if (e.key === 'Enter' && n) this.close(this.items[this.cursor]?.floor ?? null);
     else if (e.key === 'Backspace' || e.key === 'Escape') this.close(null);
     else return;
     e.preventDefault();
@@ -205,6 +236,14 @@ export class WarpMenuOverlay {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const L = this.layout;
     if (!L || !this.skin) return;
+    if (!this.items.length && !this.extra.message) {
+      // Only the side windows (the boss warp's notice while nothing is asked).
+      const s0 = this.canvas.height / VH;
+      const e0 = Math.max(0, this.canvas.width / s0 - VW);
+      ctx.setTransform(s0, 0, 0, s0, 0, 0);
+      this.drawPanel(ctx, e0);
+      return;
+    }
     // Uniform scale by height; windows on the right half follow the right edge
     // (classic/ingame.ts inGameSpace / anchorX).
     const s = this.canvas.height / VH;
@@ -212,14 +251,30 @@ export class WarpMenuOverlay {
     ctx.setTransform(s, 0, 0, s, 0, 0);
     const x = anchorX(L.x, L.w, extra);
     drawWindowFrame(ctx, this.skin.frame, x, L.y, L.w, L.h);
-    const top = L.y + 10;
-    const visible = Math.max(1, Math.floor((L.h - BORDER + GAP) / ITEM_STEP));
+    let top = L.y + 10;
+    if (this.extra.message) {
+      for (const line of this.extra.message.split('\n')) {
+        drawGameText(ctx, line, x + 10, top + 1, '#ffffff');
+        top += LINE;
+      }
+    }
+    const room = L.h - (top - L.y) - 10 + GAP;
+    const visible = Math.max(1, Math.floor(room / ITEM_STEP));
     const first = Math.min(Math.max(0, this.cursor - visible + 1), Math.max(0, this.items.length - visible));
-    drawSelectBar(ctx, this.skin.bars, x + 10, top + (this.cursor - first) * ITEM_STEP, L.w - 20, 16);
+    if (this.items.length) drawSelectBar(ctx, this.skin.bars, x + 10, top + (this.cursor - first) * ITEM_STEP, L.w - 20, 16);
     this.items.slice(first, first + visible).forEach((it, i) => {
       const tw = gameTextWidth(it.label);
       drawGameText(ctx, it.label, x + (L.w - tw) / 2, top + i * ITEM_STEP + 1, first + i === this.cursor ? '#ffc19a' : '#ffffff');
     });
+    this.drawPanel(ctx, extra);
+  }
+
+  private drawPanel(ctx: CanvasRenderingContext2D, extra: number): void {
+    const p = this.extra.panel;
+    if (!p || !this.skin) return;
+    const x = anchorX(p.layout.x, p.layout.w, extra);
+    drawWindowFrame(ctx, this.skin.frame, x, p.layout.y, p.layout.w, p.layout.h);
+    p.rows.forEach((r, i) => drawGameText(ctx, r.label, x + 10, p.layout.y + 11 + i * ITEM_STEP, r.color));
   }
 
   dispose(): void {
