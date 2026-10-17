@@ -14,7 +14,8 @@
 //   S->C B1 (time)       C->S 99
 // Others in the game get 65 (full player entry). The leader then sends to the
 // joiner (6D/62 with flag = joiner's client id) 6x6D, 6x6B, 6x6C, 6x6E, 6x6F,
-// 6x71, 6x70; every other player sends 6x70. On BB the server sends 6x72.
+// 6x71, 6x70; every other player sends 6x70. On BB the server then sends 6x72
+// (resume) to every player except the joiner (newserv send_resume_game).
 // Warp:    C->S 6x21 {floor}, 6x22 (invisible), ...load..., 6x3F, 6x1F, 6x3B, 6x23 (visible)
 // Leave:   C->S 98 (C_CharacterData_BB_61_98), 84 {LOBBY menu id, lobby id} -> S->C 67
 //          The others get 66 (flag = client id; data: client_id, leader_id, ...).
@@ -346,7 +347,8 @@ export class Game extends Lobby {
   name = '';
   // Loading state: true from 64 until finishLoading() sends 6F.
   loading = true;
-  // Set when the server resumed the game for us (6x72 on BB).
+  // Set when the server resumed the game after a player joined (6x72; on BB the
+  // server sends it to everyone but the joiner).
   resumed = false;
   readonly lobby: Lobby;
   private ctx: GameContext;
@@ -355,6 +357,11 @@ export class Game extends Lobby {
   private resolveJoined!: () => void;
   private rejectJoined!: (e: Error) => void;
   private started = false;
+  // Inventory item counts of the players in the game (item ids they have used).
+  private inventoryCounts = new Map<number, number>();
+  // Resolves when the server acknowledged our 6F (B1): other players can join now.
+  readonly ready: Promise<void>;
+  private resolveReady!: () => void;
   log: (msg: string) => void = () => {};
 
   private constructor(lobby: Lobby, ctx: GameContext) {
@@ -367,6 +374,7 @@ export class Game extends Lobby {
       this.resolveJoined = res;
       this.rejectJoined = rej;
     });
+    this.ready = new Promise((res) => (this.resolveReady = res));
     this.on('subcommand', (sub, clientId, body) => this.onGameSubcommand(sub, clientId, body));
   }
 
@@ -442,6 +450,7 @@ export class Game extends Lobby {
         const id = c.flag;
         this.leaderId = c.data[1] ?? this.leaderId;
         this.players.delete(id);
+        this.inventoryCounts.delete(id);
         this.emit('playerLeft', id);
         return;
       }
@@ -452,7 +461,10 @@ export class Game extends Lobby {
         if (c.data.length) this.name = stripMarkers(readUtf16(c.data, 0, c.data.length >> 1));
         return;
       case 0xb1: // server time, sent after 6F; the client answers 99
-        if (this.info && !this.loading) this.conn.send(0x99, 0);
+        if (this.info && !this.loading) {
+          this.conn.send(0x99, 0);
+          this.resolveReady();
+        }
         return;
       case 0x67:
       case 0x68:
@@ -488,6 +500,7 @@ export class Game extends Lobby {
     me.floor = 0;
     me.position = { x: 0, y: 0, z: 0 };
     this.players.set(info.clientId, me);
+    this.inventoryCounts.set(info.clientId, this.selfSnapshot.inventory[0]);
     this.lobby.detach();
     this.loading = true;
     this.conn.send(0x8a, 0); // the client asks for the game name while loading
@@ -502,6 +515,7 @@ export class Game extends Lobby {
     if (c.data.length < o + 0x520) return;
     const p = parseLobbyPlayer(c.data, o);
     this.leaderId = c.data[1];
+    this.inventoryCounts.set(p.clientId, c.data[o + 0x44]);
     this.players.set(p.clientId, p);
     this.emit('playerJoined', p);
     this.sendJoinSync(p.clientId);
@@ -513,11 +527,20 @@ export class Game extends Lobby {
     const me = this.self;
     if (!me) return;
     if (this.selfId === this.leaderId) {
-      // 6x6D item state (G_SyncItemState_6x6D_Decompressed, 0x8C): the web client
-      // does not track item drops or item ids yet, so the counts are zero.
-      // newserv ignores the content for BB (it generates the item state for the
-      // joiner itself) and only logs the item id mismatch.
-      this.conn.send(0x6d, target, syncStateCommand(0x6d, new Uint8Array(0x8c)));
+      // 6x6D item state (G_SyncItemState_6x6D_Decompressed, 0x8C: next drop number
+      // per floor, next item id per player, floor item count per floor). The web
+      // client does not track drops, so drop numbers and floor items are zero.
+      // Item ids start at 0x00010000 + 0x00200000 * client id (newserv
+      // Lobby::reset_next_item_ids) and each loaded player has used one per
+      // inventory item; the joiner has not assigned its own yet. newserv
+      // regenerates the item state for a BB joiner and only compares the ids.
+      const items = new Uint8Array(0x8c);
+      const idv = new DataView(items.buffer);
+      for (let i = 0; i < 12; i++) {
+        const used = i === target ? 0 : (this.inventoryCounts.get(i) ?? 0);
+        idv.setUint32(0x20 + i * 4, 0x00010000 + 0x00200000 * i + used, true);
+      }
+      this.conn.send(0x6d, target, syncStateCommand(0x6d, items));
       // 6x6B / 6x6C / 6x6E (enemy, object, set flag states) are not sent: newserv
       // requires exactly the entity counts of every floor's map (including enemy
       // children), which needs the full entity expansion. 6x6F (quest flags) is
@@ -540,6 +563,7 @@ export class Game extends Lobby {
         const p = this.players.get(id) ?? blankPlayer(id, dv.getUint32(0x74, true), '');
         parsePlayerSync(body, p);
         this.players.set(id, p);
+        this.inventoryCounts.set(id, dv.getUint32(0x164, true));
         // Re-announce so views rebuild the model with the real appearance.
         this.emit('playerJoined', p);
         this.emit('floorChanged', p);
@@ -596,6 +620,22 @@ export class Game extends Lobby {
     this.sendSubcommand(0x1f, int32(me.floor));
     this.sendSubcommand(0x3b, new Uint8Array(0));
     this.sendSubcommand(0x23, new Uint8Array(0));
+  }
+
+  // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
+  sendWalk(x: number, z: number, nearEnemy = false): void {
+    const p = new Uint8Array(12);
+    const dv = new DataView(p.buffer);
+    dv.setFloat32(0, x, true);
+    dv.setFloat32(4, z, true);
+    dv.setUint32(8, nearEnemy ? 8 : 0, true);
+    this.sendSubcommand(0x40, p);
+    const me = this.self;
+    if (me) {
+      me.position = { x, y: me.position.y, z };
+      me.moving = true;
+      me.gait = 'walk';
+    }
   }
 
   // 6x3F: set position {is_near_enemy, angle, floor, room, pos}.
