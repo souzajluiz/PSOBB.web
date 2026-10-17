@@ -1,5 +1,39 @@
 # Devlog
 
+## 2026-10-17: the original camera, zoom limits and key config
+
+**Camera** (`render/playercamera.ts`, decoded from the player camera
+`CreateUnknownPlayerCamera_004d7e70` / `UpdateUnknownPlayerCamera_004d7698`):
+five zoom levels (`camera_zoom_level_ARRAY_009ace60`: source height / distance
+behind / target height = 18 / 25 / 19.8, 25.43 / 45.42 / 19.8, 26.9 / 53.6 /
+16.4, 28.4 / 61.8 / 13.1, 30 / 70 / 9.8, target 5 in front), level 1 at start
+(`0x009acedc`), clamped to 0..4 (`set_camera_zoom_level`) and stepped by the
+mouse wheel. The farthest the camera gets is 70 behind and 30 up; before it
+went from 20 to 600. While the player moves at least 0.5 units a frame
+(`0x00909798`) the camera angle turns toward the player's back by at most
+5 * 127 BAMS a frame (`ProcessCameraChaseState_004d7a1c`,
+`SmoothCameraAngle_004d6370`); the Camera key puts it straight behind. There
+is no mouse look in the client, so dragging no longer turns the camera. Left
+out: the 18x move lead of the target and the source / target lerp
+(`unknown_vec3_lerp`).
+
+**Keys** (`input/keyconfig.ts`): BB's default keyboard config (newserv's
+`default-keyboard-config.bin`), read with the key config menu's label table
+(`0x0097b500`) and the client's key codes (enum `pso_keycode`, A = 0x10): W /
+S / A / D move, Enter decides, Backspace cancels, Home opens the menu, Space
+starts chat, End opens symbol chat, the arrows select, Left / Down / Right are
+the action palette's left / middle / right slots, Ctrl switches the palette
+and Up is the Camera key. Movement no longer runs on the arrows, and attacks
+come from what the palette slot holds (`palette_slots[1]` for Left, the dump's
+"main slot left pressed"; 0 for Down; 2 for Right) instead of F3-F5 / Z / X /
+C. Only attack slots act yet (items and techniques on the palette log a
+line). The game keys no longer scroll the page.
+
+**Checks:** `tests/controls.test.ts` (zoom table and clamp, camera source and
+target, the chase step and its 0.5 threshold, every binding of newserv's
+default config against `KEYS`). In Chrome, Forest 1: ten wheel steps leave the
+camera at level 4, 70 units behind the player.
+
 ## 2026-10-17: entity ids from the server's own maps
 
 **Bug:** killing some enemies disconnected the client. newserv logged "Flag

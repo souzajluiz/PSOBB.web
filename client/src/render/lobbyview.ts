@@ -7,6 +7,8 @@
 // plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
 // the files are missing) a capsule stands in.
 
+import { PlayerCamera } from './playercamera.ts';
+import { KEYS } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
@@ -149,9 +151,17 @@ export class LobbyView {
   private viewer: MapViewer;
   private lobby: Lobby;
   private markers = new Map<number, Marker>();
-  private cameraYaw = Math.PI;
-  private cameraPitch = 0.35;
-  private cameraDistance = 70;
+  // The client's player camera (render/playercamera.ts): five zoom levels,
+  // chasing behind the player while it runs.
+  private camera = new PlayerCamera();
+  private cameraTicks = 0;
+  private cameraKeyHeld = false;
+  private get cameraYaw(): number {
+    return this.camera.angle;
+  }
+  private set cameraYaw(v: number) {
+    this.camera.angle = v;
+  }
   private sendTimer = 0;
   private wasMoving = false;
   private disposers: Array<() => void> = [];
@@ -254,31 +264,18 @@ export class LobbyView {
     this.lobby.sendStop(x, y, z, angle);
   }
 
+  // The client has no mouse look: a click only gives the view the keyboard,
+  // and the wheel steps the camera's zoom level (render/playercamera.ts).
   private bindMouse(canvas: HTMLCanvasElement): void {
-    let dragging = false;
-    const down = (e: PointerEvent) => {
-      dragging = true;
-      canvas.setPointerCapture(e.pointerId);
-      canvas.focus();
-    };
-    const up = () => (dragging = false);
-    const move = (e: PointerEvent) => {
-      if (!dragging) return;
-      this.cameraYaw -= e.movementX * 0.005;
-      this.cameraPitch = Math.min(1.2, Math.max(-0.2, this.cameraPitch + e.movementY * 0.004));
-    };
+    const down = () => canvas.focus();
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
-      this.cameraDistance = Math.min(600, Math.max(20, this.cameraDistance * (e.deltaY > 0 ? 1.1 : 0.9)));
+      this.camera.step(e.deltaY > 0 ? 1 : -1);
     };
     canvas.addEventListener('pointerdown', down);
-    canvas.addEventListener('pointerup', up);
-    canvas.addEventListener('pointermove', move);
     canvas.addEventListener('wheel', wheel, { passive: false });
     this.disposers.push(() => {
       canvas.removeEventListener('pointerdown', down);
-      canvas.removeEventListener('pointerup', up);
-      canvas.removeEventListener('pointermove', move);
       canvas.removeEventListener('wheel', wheel);
     });
   }
@@ -400,10 +397,13 @@ export class LobbyView {
       const forward = new THREE.Vector3(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
       const right = new THREE.Vector3(-forward.z, 0, forward.x);
       const dir = new THREE.Vector3();
-      if (keys.has('w') || keys.has('arrowup')) dir.add(forward);
-      if (keys.has('s') || keys.has('arrowdown')) dir.sub(forward);
-      if (keys.has('d') || keys.has('arrowright')) dir.add(right);
-      if (keys.has('a') || keys.has('arrowleft')) dir.sub(right);
+      // Move Forward / Backward / Left / Right: W / S / A / D in the BB
+      // default key config (input/keyconfig.ts); the arrows belong to the
+      // action palette and the camera.
+      if (keys.has(KEYS.moveForward)) dir.add(forward);
+      if (keys.has(KEYS.moveBackward)) dir.sub(forward);
+      if (keys.has(KEYS.moveRight)) dir.add(right);
+      if (keys.has(KEYS.moveLeft)) dir.sub(right);
       const moving = dir.lengthSq() > 0;
       if (moving) {
         dir.normalize();
@@ -468,16 +468,19 @@ export class LobbyView {
       m.animator?.update(dt);
     }
 
-    // Third-person camera.
+    // The player camera: the Camera key puts it behind the player, it chases
+    // the heading while the player runs (one step per game frame).
     if (mine) {
-      const focus = mine.group.position.clone().add(new THREE.Vector3(0, 14, 0));
+      const pos = mine.group.position;
+      const camKey = keys.has(KEYS.camera);
+      if (camKey && !this.cameraKeyHeld) this.camera.reset(mine.angle);
+      this.cameraKeyHeld = camKey;
+      this.cameraTicks = Math.min(this.cameraTicks + dt * 30, 30);
+      for (; this.cameraTicks >= 1; this.cameraTicks--) this.camera.tick(pos, mine.angle);
+      const { source, target } = this.camera.view(pos, mine.angle);
       const cam = this.viewer.camera;
-      cam.position.set(
-        focus.x + Math.sin(this.cameraYaw) * Math.cos(this.cameraPitch) * this.cameraDistance,
-        focus.y + Math.sin(this.cameraPitch) * this.cameraDistance,
-        focus.z + Math.cos(this.cameraYaw) * Math.cos(this.cameraPitch) * this.cameraDistance,
-      );
-      cam.lookAt(focus);
+      cam.position.set(source.x, source.y, source.z);
+      cam.lookAt(target.x, target.y, target.z);
     }
   }
 

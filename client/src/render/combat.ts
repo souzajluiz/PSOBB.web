@@ -14,6 +14,7 @@
 // Reach and cone come from ItemPMT's weapon range table (FUN_007a19c0 /
 // FUN_005e4ba8); enemy stats from BattleParamEntry (the server's stream file).
 
+import { PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents } from '../combat/attack.ts';
 import {
@@ -75,15 +76,15 @@ const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 // GC-ForestGameRareMagFeed sends 0x20900E00 for a killing hit).
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 
-// Action palette keys. newserv's default-keyboard-config.bin maps the key
-// config inputs in the order of the unitxt labels, which puts Action Palette
-// Left / Middle / Right / Top on F3 / F4 / F5 / F6. Which action sits in each
-// palette slot is part of the character's palette, which is not decoded: we
-// ASSUME the usual normal / heavy / special order and also accept Z / X / C.
-const ATTACK_KEYS: ReadonlyArray<readonly [string[], AttackType]> = [
-  [['f3', 'z'], 0],
-  [['f4', 'x'], 1],
-  [['f5', 'c'], 2],
+// Action palette keys (input/keyconfig.ts: Left / Down / Right in the BB
+// default key config) and what they do: the palette slot's group 1 = 2 is an
+// attack whose group 2 is the attack type (0 normal, 1 heavy, 2 special).
+// Without a palette (no character file yet) the slots hold newserv's default
+// hunter palette: slot 0 normal, slot 1 heavy, slot 2 Monomate.
+const DEFAULT_SLOTS: ReadonlyArray<{ group1: number; group2: number; disabled: boolean }> = [
+  { group1: 2, group2: 0, disabled: false },
+  { group1: 2, group2: 1, disabled: false },
+  { group1: 4, group2: 0, disabled: false },
 ];
 
 interface EnemyRuntime {
@@ -104,6 +105,8 @@ interface EnemyRuntime {
 
 export interface CombatOptions {
   log: (msg: string) => void;
+  // palette_slots[index] of the current action palette (render/fieldhud.ts).
+  paletteSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
   // Map files of a floor (GameView.floorFilesFor).
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
   // Ground height under (x, z), so a walking enemy follows the floor.
@@ -355,10 +358,13 @@ export class CombatView {
     const view = this.view;
     if (me && view) {
       const blocked = this.damage.busy;
-      for (const [names, type] of ATTACK_KEYS) {
-        const down = names.some((k) => keys.has(k));
-        const key = names[0];
-        if (down && !this.held.has(key) && !blocked) this.press(type);
+      for (const [key, index] of PALETTE_KEYS) {
+        const down = keys.has(key);
+        if (down && !this.held.has(key) && !blocked) {
+          const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
+          if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
+          else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks are wired yet`);
+        }
         if (down) this.held.add(key);
         else this.held.delete(key);
       }

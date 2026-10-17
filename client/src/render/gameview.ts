@@ -119,6 +119,7 @@ export class GameView {
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
       ...character,
       source,
+      paletteSlot: (i) => this.hud?.paletteSlot(i) ?? null,
     });
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
     this.hud = new FieldHud(viewer, this.files, {

@@ -23,7 +23,7 @@ import { anchorX } from '../classic/ingame.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
-import { PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteTextures } from '../classic/palette.ts';
+import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
 import type { ItemNames } from '../formats/itemnames.ts';
 import type { CharacterFile } from '../net/charfile.ts';
@@ -121,6 +121,13 @@ export class FieldHud {
 
   // Item names and ItemPMT (the Online tab's inventory panel loads them from
   // the server's stream file).
+  // palette_slots[index] of the current action palette (render/combat.ts
+  // reads it for the palette keys, input/keyconfig.ts PALETTE_KEYS).
+  paletteSlot(index: number): PaletteSlot | null {
+    this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
+    return this.palette ? (currentPalette(this.palette).slots[index] ?? null) : null;
+  }
+
   setNames(names: () => ItemNames | null): void {
     this.names = names;
   }
