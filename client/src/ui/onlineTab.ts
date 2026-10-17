@@ -14,6 +14,7 @@ import { AREA_NAMES, GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { initInventoryPanel } from './inventoryPanel.ts';
+import { isEquippable, MESETA_ITEM_ID } from '../net/items.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -151,8 +152,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
       lobbyView = null;
       viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
       bgm ??= new BgmPlayer(source);
-      const view = new GameView(viewer, g, source, log, bgm);
+      const view = new GameView(viewer, g, source, log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null });
       gameView = view;
+      wireItems(view);
       view.onLobbyWarp = () => void leaveGame();
       Object.assign(window, { gameView: view, psoGameView: view, psoBgm: bgm }); // development aid (console)
       view.onFloor = (f) => {
@@ -179,8 +181,36 @@ export function initOnlineTab(log: (msg: string) => void): void {
     }
   }
 
+  // Floor item models need ItemPMT (rarity, tool box types); the panel gets
+  // the item buttons and follows the inventory (net/items.ts).
+  function wireItems(view: GameView): void {
+    const names = inventory.names;
+    if (names) {
+      view.floorItems.setTables(
+        { isRare: (it) => names.isRare(it), toolType: (a, b) => names.pmt.getTool(a, b)?.type },
+        (it) => names.describe(it.data),
+      );
+    }
+    const charClass = () => session?.character?.charClass ?? 0;
+    const rules = {
+      maxTechLevel: (tech: number) => names?.pmt.maxTechLevels[tech]?.[charClass()] ?? 0xff,
+      maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
+    };
+    view.items.onInventoryChanged = () => inventory.show(session?.character ?? null);
+    inventory.setActions({
+      equip: (id) => view.items.equip(id),
+      unequip: (id) => view.items.unequip(id),
+      use: (id) => view.items.use(id, rules),
+      canUse: (it) => view.items.canUse(it, rules),
+      canEquip: (it) => isEquippable(it.data.data1),
+      drop: (id, amount) => view.items.drop(id, amount),
+      dropMeseta: (amount) => view.items.drop(MESETA_ITEM_ID, amount),
+    });
+  }
+
   async function leaveGame(): Promise<void> {
     if (!game || busy) return;
+    inventory.setActions(null);
     busy = true;
     games.update();
     try {

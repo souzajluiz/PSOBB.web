@@ -7,6 +7,11 @@
 // need a unitxt from the same build as that ItemPMT (the client indexes the
 // text table with the PMT ids): the client's unitxt_e/unitxt_j are tried first,
 // then, on the dev server, newserv's bb-v4 text set (/newserv-text/).
+//
+// In a game the panel gets item actions (net/items.ts GameItems through
+// setActions): Equip / Unequip (6x25 / 6x26), Use (6x27), Drop (6x2A, or
+// 6xC3 for one item of a stack and for meseta). The rows follow the local
+// inventory, which GameItems updates as the server answers.
 
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -14,13 +19,28 @@ import type { DataSource } from '../data/source.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
 import { CLASS_NAMES, SECTION_IDS, type BBSession } from '../net/bbsession.ts';
-import type { CharacterFile } from '../net/charfile.ts';
+import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
+import { stackSize } from '../net/items.ts';
+
+export interface InventoryActions {
+  equip(itemId: number): void;
+  unequip(itemId: number): void;
+  use(itemId: number): void;
+  canUse(item: InventoryItem): boolean;
+  canEquip(item: InventoryItem): boolean;
+  drop(itemId: number, amount?: number): void;
+  dropMeseta(amount: number): void;
+}
 
 export interface InventoryPanel {
   // Call on the data-server connection (after login, before enterLobby).
   prepare(session: BBSession, source: DataSource): Promise<void>;
   show(character: CharacterFile | null): void;
   hide(): void;
+  // Item names (ItemPMT + text) once prepare() has run.
+  readonly names: ItemNames | null;
+  // Buttons for each item while in a game; null removes them.
+  setActions(actions: InventoryActions | null): void;
 }
 
 async function loadText(files: ClientFiles, matches: (t: string[][]) => boolean, log: (m: string) => void) {
@@ -64,8 +84,28 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
   const q = <T extends HTMLElement>(sel: string) => panel.querySelector(sel) as T;
   let names: ItemNames | null = null;
   let note = '';
+  let actions: InventoryActions | null = null;
+  let last: CharacterFile | null = null;
+  const button = (label: string, title: string, fn: () => void) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'inv-act';
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener('click', fn);
+    return b;
+  };
 
   return {
+    get names() {
+      return names;
+    },
+
+    setActions(a) {
+      actions = a;
+      if (last) this.show(last);
+    },
+
     async prepare(session, source) {
       names = null;
       note = '';
@@ -92,6 +132,7 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
     },
 
     show(c) {
+      last = c;
       panel.hidden = !c;
       if (!c) return;
       q('.inv-char').textContent = `· ${c.name}, Lv ${c.level} ${CLASS_NAMES[c.charClass] ?? ''} · ${SECTION_IDS[c.sectionId] ?? ''}`;
@@ -133,6 +174,14 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
           mark.textContent = it.equipped ? 'E' : '';
           mark.title = it.equipped ? 'Equipped' : '';
           li.append(mark, describe(it.data));
+          if (actions) {
+            const a = actions;
+            const id = it.data.id;
+            if (a.canEquip(it)) li.append(it.equipped ? button('Unequip', 'Unequip (6x26)', () => a.unequip(id)) : button('Equip', 'Equip (6x25)', () => a.equip(id)));
+            if (a.canUse(it)) li.append(button('Use', 'Use (6x27)', () => a.use(id)));
+            if (stackSize(it.data) > 1) li.append(button('Drop 1', 'Drop one of the stack (6xC3)', () => a.drop(id, 1)));
+            li.append(button('Drop', 'Drop on the floor (6x2A)', () => a.drop(id)));
+          }
           return li;
         }),
       );
@@ -145,6 +194,20 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
         }),
       );
       q('.inv-note').textContent = note;
+      if (actions && c.meseta > 0) {
+        const a = actions;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.max = String(c.meseta);
+        input.value = String(Math.min(10, c.meseta));
+        input.className = 'inv-meseta';
+        input.setAttribute('aria-label', 'Meseta to drop');
+        const row = document.createElement('p');
+        row.className = 'inv-meseta-row';
+        row.append(input, button('Drop meseta', 'Drop meseta on the floor (6xC3)', () => a.dropMeseta(Math.floor(Number(input.value)))));
+        q('.inv-note').append(row);
+      }
     },
 
     hide() {

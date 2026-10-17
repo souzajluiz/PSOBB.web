@@ -549,6 +549,8 @@ export class Game extends Lobby {
       const unblock = new Uint8Array([0x71, 0x01, 0x00, 0x00]);
       this.conn.send(0x62, target, unblock);
     }
+    // Fresh save data: net/items.ts keeps the inventory (item ids, pickups) in it.
+    this.selfSnapshot = selfData(this.ctx.fullCharacter(), this.lobby.selfEntry);
     const sync = buildPlayerSync(this.selfSnapshot, { clientId: this.selfId, floor: me.floor, position: me.position, angle: me.angle }, this.ctx.guildCardNumber);
     this.conn.send(0x6d, target, sync);
   }
