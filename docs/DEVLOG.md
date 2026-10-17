@@ -1,5 +1,102 @@
 # Devlog
 
+## 2026-10-17: NPCs, the Hunter's Guild and a quest from the counter to the reward
+
+**What changed:** Pioneer 2, the Lab and the quests have their people, and an
+Episode 1 quest can now be taken at the guild counter, played and paid.
+
+- **NPC classes from the factory table** (`formats/npcmodels.ts`). The per-area
+  table at `0x009fba60` (the enemies' table) also builds the NPCs. Every
+  humanoid factory runs an initializer that calls one of three base
+  constructors, which differ only in the motion table they pass to
+  `Player__ApplyWeaponAnimationData`: `SpawnEnemyTypeA_00609010` (table
+  `0x0092f470`), `InitializeChallengePlayerObject_0060c858` (`0x0092f79c`) and
+  `ConstructEnemyTypeA_0060a580` (`0x0092f5a4`); each table is idle
+  `{1, -, 0, 0.9, 1}` + walk `{1, -, 2|1|3, 1.4, 0x20000002}` into the
+  NJS_ACTION array of `plymotionnpctown.cpt` (`LoadNpcTownMotion_00607418`, a
+  PRC REL). The model is model entry 0 of a BML descriptor (`LoadBML_005b7a84`,
+  e.g. `0x009c4110` `bm_n_ebw_i_body.bml`) or a REL (`load_rel_asset`, `*root`
+  = the NJS_OBJECT) with a separate `.gvm`, read as `.xvm` on PC (`npc_a00_data.rel`
+  + `n_a00_w_body.xvm` ...). The tekker's archive is picked by the local
+  section id (`load_tekker_assets`, `0x009c408c`[10]); the NgcBase cast (Elly,
+  Karen, Leo, Nol, ...; types 0xF2..0xFF) comes from `InitializeDerolleBMLData
+  _0060fca4`, which loads per map type (`0x00807e68` = `0x0097f040`[area]: towns
+  all 14 from `0x009c44e0`, jungle/seaside `0x009c46ac`, seabed `0x009c46c4`,
+  Episode 4 `0x009c46d4`). 57 classes, 66 archives, all 64-node skeletons.
+- **Parameters** (`InitializeEnemyBaseObject_00606c28`, the set_params
+  override `0x00606a34`): param2 / param3 are display registers
+  (`UpdateMovementRestriction_00606f10`; `>= 1000` = the area script's
+  register), param4 the talk action (100..999 talks in the quest, >= 1000 in
+  the area script, and it is the speaker id of `message`), param5 the talk
+  label.
+- **Talking** (`render/npcview.ts`, `EnemyObjectUpdate_0060648c`): the NPC
+  turns to the player by `0x400` BAMS a tick (`0x009c3eb0 + 8`), the player is
+  turned to face it, then the label runs and the NPC waits for its thread.
+  Enter talks to the NPC within 20 units and 60 degrees in front (the counter
+  rule `IsEntityInFrontAndInRange_006d739c`, `0x0096c2a0`).
+- **The area script** (`quest/town.ts`): Pioneer 2's dialogue is a quest-format
+  script, `0x009ce700[locale * 17 + 0x0096a180[map * 2 + online]]` =
+  `map_city_on_e.bin` (Lab: `map_labo_on_e.bin`). The counter clerks call
+  `bb_p2_menu(n)` (`SetBankMenuOpenFlag_006d7370`), and the counter object of
+  `p2_special_npc_menus` (`0x009cf100`: weapon, medical, gear, item, HUNTER
+  GUILD, check room, judgment, THE GOVERNMENT GENERAL, giveaway) opens.
+- **The Hunter's Guild** (`CreateMedicalCenterDialog_006cafb8` -> the online
+  dialog `0x006cd830`): without a quest, the clerk lines of unitxt_shop group 1
+  (17 / 18 for the government / Lab counters), the server's menu (A2, flag 1 at
+  the government counter as newserv's `on_A2` reads it), the description (A3)
+  and "Will you take this offer?"; with one, `GameListMenu_ProcessQuestResult
+  State_006cdd30`: r255 = success (line 11, then the `set_qt_success` label: the
+  reward window and `pl_add_meseta2` -> 6xC9), r253 = failure, else the
+  cancel offer (the `set_qt_cancel` label). A paid quest answers "That quest
+  was completed." afterwards.
+- **Quest opcodes**: `set_player_start_position` sends 6x24 and moves the
+  player (`opcode_p_setpos`, angle in degrees), `p_return_guild` warps to
+  Pioneer 2's guild spawn, `at_coords_talk` / `at_coords_call` zones,
+  `update_switch_flag`, `del_obj_param`, `npc_crp*` -> 6x69 + an NPC player
+  built from `npcplayerchar.dat` (64 records of 0x70, `LoadCharacterData
+  _007adf48`) and drawn as a player; 6x69 and 6x77 from others are applied.
+- **Text like the exe** (`quest/questui.ts`): `message` is the word balloon
+  over the speaker (`DisplayChatBubble_007184f8` with flags 0x2d: white, no
+  name tab, the text's own line breaks, held until the script moves on);
+  `add_msg` follows the exe's three outputs (window, quest board, else the last
+  speaker); `window_msg` is the window at GUI 0xbe (88, 120), 384 x 80
+  (`0x00971d18`); `list` at GUI 0x39; the quest board text at GUI 0x74; yes / no
+  at GUI 0x2d. The DOM overlay is gone.
+- **Fixes**: a `LABEL16_SET` argument is a u8 count of u16 labels (the decoder
+  read u16s until a zero, so `switch_jmp` landed inside the next instruction:
+  q101 opened the Ragol warp to floor 0); 6x75 and 6x77 now carry size 3
+  (newserv dropped the client on the 8-byte 6x77 the first `sync_register`
+  sent).
+
+**Checks:** `tests/npcs.test.ts`: 3634 NPC entries of 235 free-play floor
+variations and 575 BB quest floors resolve (types no factory constructs, like
+q068's 0x14, are skipped as the client does; 0x33 / 0x45 / 0x46 are counted as
+not drawn yet); the 66 archives build with 64 nodes and no missing texture and
+play the idle motion; the Pioneer 2 talk parameters; the area script runs every
+NPC's label, every balloon speaks as that NPC, and the counters 0..7 open.
+`tests/questflow.test.ts`: Mop-up Operation #1 places the four players,
+opens the Ragol warp to Forest 1, the lieutenant's briefing is 7+ balloon
+pages over NPC 105 and starts the mission (r0, synced), and the success
+label pays 1500 meseta; the 6x24 / 6x69 / 6xC9 layouts; npcplayerchar.dat.
+`tests/quests.test.ts`, `tests/enemies.test.ts`, `tests/warpmenu.test.ts` and
+`tsc --noEmit` pass. In Chrome against newserv: Pioneer 2 shows its 23 NPCs
+(the Lab its 21, Elly says "Hello! WebHunter." in her balloon); Enter at the
+guild clerk opened the welcome window, the categories, Extermination, the
+long description with "Will you take this offer?"; Yes downloaded and started
+Mop-up Operation #1, which moved the player to its start; the lieutenant
+turned and spoke the briefing in balloons; Forest 1 loaded the quest floor;
+back at the guild with r255 set the clerk said "Very good! ..." and the
+reward window showed "You've been awarded 1500 Meseta." and newserv answered
+the 6xC9 with 6xBE.
+
+**Approximations / open:** the talk target is the counter's range / facing
+rule, not the player's action-palette target; walking townspeople stand
+still; the camera movers of the talk are not played; NPC players do not
+follow or fight (6x69 commands 1-3 are logged); the guild clerk's lines use
+the quest window's position; text colours are drawn white; the quest board
+list opens with B (the exe opens it from the main menu); the other counters
+(shops, bank, tekker, medical center) only log.
+
 ## 2026-10-17: the CCA main gate, four-light door lamps and the jungle warp beams
 
 **What changed:**
