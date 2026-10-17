@@ -13,6 +13,7 @@ psobb-client/
 *.xj
 *.rel
 *.prs
+*.dat
 *.png
 client/public/ref/
 .captures/

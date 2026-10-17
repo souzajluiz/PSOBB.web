@@ -27,6 +27,12 @@ export class ClientFiles {
     return this.loose!.has(name) || !!this.gsl?.has(name);
   }
 
+  // Every file name in data/ and data.gsl (loose files first, no duplicates).
+  async names(): Promise<string[]> {
+    await this.index();
+    return [...new Set([...this.loose!, ...(this.gsl?.entries.keys() ?? [])])];
+  }
+
   read(name: string): Promise<Uint8Array> {
     let p = this.cache.get(name);
     if (!p) {

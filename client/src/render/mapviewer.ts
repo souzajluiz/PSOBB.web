@@ -6,6 +6,7 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapNRel, type MapGeometry } from '../formats/nrel.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { buildObjectTree, MaterialCache } from './njmesh.ts';
+import type { PlacedEntity } from '../formats/setdata.ts';
 
 export interface MapStats {
   sections: number;
@@ -21,6 +22,12 @@ export function textureArchiveFor(nrel: string): string {
   return nrel.replace(/(_\d\d)?n\.rel$/, '.xvm');
 }
 
+// Marker colors: enemies red, NPCs (from the enemy file) cyan, objects yellow.
+export const MARKER_COLORS = { enemy: 0xff4040, npc: 0x40d8ff, object: 0xffd040 } as const;
+const MARKER_LIFT = 6; // markers float above the spawn point so they are not buried in the floor
+const UP = new THREE.Vector3(0, 1, 0);
+const ONE = new THREE.Vector3(1, 1, 1);
+
 export class MapViewer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -33,6 +40,15 @@ export class MapViewer {
   private raycaster = new THREE.Raycaster();
   private keys = new Set<string>();
   private clock = new THREE.Clock();
+  private entityRoot: THREE.Group | null = null;
+  private entityMeshes: Array<{ mesh: THREE.InstancedMesh; items: PlacedEntity[] }> = [];
+  private labelRoot: THREE.Group | null = null;
+  private labelTextures = new Map<string, THREE.CanvasTexture>();
+  private labelsVisible = false;
+  private tooltip: HTMLDivElement | null = null;
+  private hoverId = -1;
+  // Geometry of the map shown last (sections are needed to place set data).
+  geometry: MapGeometry | null = null;
   // When set, replaces the free-fly camera: called every frame with the
   // pressed keys and the frame time.
   onFrame: ((dt: number, keys: ReadonlySet<string>) => void) | null = null;
@@ -52,6 +68,8 @@ export class MapViewer {
     canvas.addEventListener('keydown', (e) => this.keys.add(e.key.toLowerCase()));
     canvas.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
     canvas.addEventListener('blur', () => this.keys.clear());
+    canvas.addEventListener('pointermove', (e) => this.hover(e));
+    canvas.addEventListener('pointerleave', () => this.setTooltip(null));
     this.renderer.setAnimationLoop(() => this.frame());
   }
 
@@ -109,6 +127,7 @@ export class MapViewer {
 
   show(geometry: MapGeometry, xvm: Uint8Array | null): void {
     this.clear();
+    this.geometry = geometry;
     this.textures = xvm
       ? parseXvm(xvm).map((t) => {
           const tex = new THREE.DataTexture(t.rgba, t.width, t.height, THREE.RGBAFormat);
@@ -179,7 +198,149 @@ export class MapViewer {
     };
   }
 
+  // --- Enemy/object markers (set data) ---------------------------------------
+
+  // Replaces the markers. Each category gets one InstancedMesh.
+  setEntities(items: PlacedEntity[]): void {
+    this.clearEntities();
+    const root = new THREE.Group();
+    root.name = 'set-data';
+    const geometry = new THREE.OctahedronGeometry(5);
+    for (const category of ['enemy', 'npc', 'object'] as const) {
+      const list = items.filter((p) => p.category === category);
+      if (!list.length) continue;
+      const material = new THREE.MeshBasicMaterial({ color: MARKER_COLORS[category] });
+      const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+      const m = new THREE.Matrix4();
+      const q = new THREE.Quaternion();
+      list.forEach((p, i) => {
+        q.setFromAxisAngle(UP, p.yaw);
+        m.compose(new THREE.Vector3(p.world[0], p.world[1] + MARKER_LIFT, p.world[2]), q, ONE);
+        mesh.setMatrixAt(i, m);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      root.add(mesh);
+      this.entityMeshes.push({ mesh, items: list });
+    }
+    this.scene.add(root);
+    this.entityRoot = root;
+    if (this.labelsVisible) this.buildLabels();
+  }
+
+  setEntitiesVisible(visible: boolean): void {
+    if (this.entityRoot) this.entityRoot.visible = visible;
+    if (this.labelRoot) this.labelRoot.visible = visible && this.labelsVisible;
+    if (!visible) this.setTooltip(null);
+  }
+
+  setLabelsVisible(visible: boolean): void {
+    this.labelsVisible = visible;
+    if (visible && !this.labelRoot) this.buildLabels();
+    if (this.labelRoot) this.labelRoot.visible = visible && (this.entityRoot?.visible ?? false);
+  }
+
+  private buildLabels(): void {
+    if (!this.entityMeshes.length) return;
+    const root = new THREE.Group();
+    for (const { items } of this.entityMeshes) {
+      for (const p of items) {
+        const tex = this.labelTexture(p.name, MARKER_COLORS[p.category]);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, sizeAttenuation: false, depthTest: false, transparent: true }));
+        const h = 0.028;
+        sprite.scale.set((h * tex.image.width) / tex.image.height, h, 1);
+        sprite.center.set(0.5, 0);
+        sprite.position.set(p.world[0], p.world[1] + MARKER_LIFT + 6, p.world[2]);
+        sprite.renderOrder = 10;
+        root.add(sprite);
+      }
+    }
+    root.visible = this.entityRoot?.visible ?? true;
+    this.scene.add(root);
+    this.labelRoot = root;
+  }
+
+  private labelTexture(text: string, color: number): THREE.CanvasTexture {
+    const key = `${color}:${text}`;
+    let tex = this.labelTextures.get(key);
+    if (tex) return tex;
+    const font = '600 28px system-ui, sans-serif';
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d')!;
+    ctx.font = font;
+    c.width = Math.ceil(ctx.measureText(text).width) + 16;
+    c.height = 40;
+    ctx.font = font;
+    ctx.fillStyle = 'rgba(2, 10, 20, 0.7)';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 8, c.height / 2 + 1);
+    tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.labelTextures.set(key, tex);
+    return tex;
+  }
+
+  private hover(e: PointerEvent): void {
+    if (!this.entityRoot?.visible || !this.entityMeshes.length || e.buttons) return this.setTooltip(null);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObjects(this.entityMeshes.map((m) => m.mesh), false)[0];
+    const entry = hit && this.entityMeshes.find((m) => m.mesh === hit.object);
+    const item = entry && hit.instanceId !== undefined ? entry.items[hit.instanceId] : null;
+    this.setTooltip(item, e.clientX, e.clientY);
+  }
+
+  private setTooltip(item: PlacedEntity | null | undefined, x = 0, y = 0): void {
+    if (!item) {
+      if (this.tooltip) this.tooltip.hidden = true;
+      this.hoverId = -1;
+      return;
+    }
+    if (!this.tooltip) {
+      const t = document.createElement('div');
+      t.style.cssText =
+        'position:fixed;z-index:20;pointer-events:none;padding:6px 9px;border-radius:4px;' +
+        'background:rgba(2,10,20,.9);border:1px solid #2b4a66;color:#dce8f4;font:12px/1.4 system-ui,sans-serif;white-space:pre';
+      document.body.append(t);
+      this.tooltip = t;
+    }
+    const e = item.entity;
+    const id = e.kind === 'enemy' ? 0x1000 + e.index : 0x4000 + e.index;
+    if (id !== this.hoverId) {
+      this.hoverId = id;
+      const hex = (n: number, w = 4) => n.toString(16).toUpperCase().padStart(w, '0');
+      const extra = e.kind === 'enemy' ? `wave ${e.wave}${e.numChildren ? ` · children ${e.numChildren}` : ''}` : `group ${e.group}`;
+      this.tooltip.textContent =
+        `${item.name}\n${e.kind} #${e.index} · type ${hex(e.type)} · section ${e.section}${item.sectionFound ? '' : ' (missing)'} · ${extra}\n` +
+        `local ${e.position.map((v) => v.toFixed(1)).join(', ')} · world ${item.world.map((v) => v.toFixed(1)).join(', ')}`;
+    }
+    this.tooltip.hidden = false;
+    this.tooltip.style.left = `${x + 14}px`;
+    this.tooltip.style.top = `${y + 14}px`;
+  }
+
+  clearEntities(): void {
+    for (const { mesh } of this.entityMeshes) (mesh.material as THREE.Material).dispose();
+    this.entityMeshes[0]?.mesh.geometry.dispose();
+    this.entityMeshes = [];
+    if (this.entityRoot) this.scene.remove(this.entityRoot);
+    this.entityRoot = null;
+    if (this.labelRoot) {
+      this.labelRoot.traverse((o) => {
+        if (o instanceof THREE.Sprite) o.material.dispose();
+      });
+      this.scene.remove(this.labelRoot);
+    }
+    this.labelRoot = null;
+    this.setTooltip(null);
+  }
+
   clear(): void {
+    this.clearEntities();
+    this.geometry = null;
     if (this.mapRoot) {
       this.mapRoot.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
