@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BBSession } from '../client/src/net/bbsession.ts';
-import { Game, parseAttack, parseAttackTargets, parseEnemyState, parseSwitchFlag } from '../client/src/net/game.ts';
+import { Game, parseAttack, parseAttackTargets, parseEnemyState, parseHitByEnemy, parsePlayerDeath, parseSwitchFlag } from '../client/src/net/game.ts';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseEnemySets, parseSetFile, type ObjectSet } from '../client/src/formats/setdata.ts';
 import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
@@ -225,6 +225,47 @@ try {
     } else {
       console.log('PASS the drop request was accepted (the enemy dropped nothing this time)');
     }
+  }
+
+  // A takes damage: an attack it shields off (6x4A), a light hit (6x4B), a
+  // heavy hit (6x4C), its death (6x89 + 6x4D), the revivable particle (6x4E)
+  // and the revive (6x4F). B receives all of them.
+  {
+    const sawA = <T>(sub: number, parse: (b: Uint8Array) => T, what: string) =>
+      waitEvent<T>((r) => gb.on('subcommand', (s, c, body) => s === sub && c === 0 && r(parse(body))), what);
+
+    const bSawShield = sawA(0x4a, (b) => b.length, 'B sees 6x4A');
+    ga.sendShieldAttack();
+    check(`B saw A shield an attack (6x4A, ${await bSawShield} bytes)`, (await bSawShield) === 4);
+
+    const bSawLight = sawA(0x4b, parseHitByEnemy, 'B sees 6x4B');
+    ga.sendHitByEnemy(false, Math.PI / 2, 40, 1.5, -0.5);
+    const light = await bSawLight;
+    check(
+      `B saw A take a light hit (6x4B, angle ${light?.angle.toFixed(3)}, ${light?.currentHp} HP, velocity ${light?.vx}/${light?.vz})`,
+      light?.clientId === 0 && light.heavy === false && light.currentHp === 40 && Math.abs(light.vx - 1.5) < 1e-6,
+    );
+
+    const bSawHeavy = sawA(0x4c, parseHitByEnemy, 'B sees 6x4C');
+    ga.sendHitByEnemy(true, 0, 1, -3, 0);
+    const heavy = await bSawHeavy;
+    check(`B saw A take a heavy hit (6x4C, ${heavy?.currentHp} HP left)`, heavy?.heavy === true && heavy.currentHp === 1 && Math.abs(heavy.vx + 3) < 1e-6);
+
+    const bSawKill = sawA(0x89, (b) => new DataView(b.buffer, b.byteOffset, b.byteLength).getUint16(4, true), 'B sees 6x89');
+    const bSawDied = sawA(0x4d, parsePlayerDeath, 'B sees 6x4D');
+    const killer = 0x1000; // the first enemy slot of the game
+    ga.sendPlayerDeath(killer, 2);
+    check(`B saw who killed A (6x89, entity 0x${(await bSawKill).toString(16)})`, (await bSawKill) === killer);
+    const died = await bSawDied;
+    check(`B saw A die (6x4D, death flags 0x${died?.deathFlags.toString(16)})`, died?.clientId === 0 && died.deathFlags === 2);
+
+    const bSawRevivable = sawA(0x4e, (b) => b.length, 'B sees 6x4E');
+    ga.sendPlayerRevivable();
+    check('B saw A become revivable (6x4E)', (await bSawRevivable) === 4);
+
+    const bSawRevived = sawA(0x4f, (b) => b.length, 'B sees 6x4F');
+    ga.sendPlayerRevived();
+    check('B saw A revive (6x4F)', (await bSawRevived) === 4);
   }
 
   // Back to the lobby.

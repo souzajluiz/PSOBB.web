@@ -160,3 +160,8 @@ h3 small { text-transform: none; letter-spacing: 0; }
 .inv-items .inv-act { margin-left: 6px; padding: 0 6px; font-size: 0.8rem; }
 .inv-meseta-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
 .inv-meseta { width: 7em; }
+
+/* Combat HP read-out over the field canvas (render/combat.ts) */
+.combat-hp { position: absolute; padding: 4px 10px; border-radius: 4px; background: rgba(2, 16, 30, 0.72); border: 1px solid var(--edge); color: #d8ecff; font-variant-numeric: tabular-nums; font-weight: 600; pointer-events: none; }
+.combat-hp.low { color: #ffcf5a; }
+.combat-hp.dead { color: #ff7a6a; }

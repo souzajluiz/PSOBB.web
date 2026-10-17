@@ -16,7 +16,18 @@
 
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents } from '../combat/attack.ts';
+import {
+  AI_PROFILES,
+  aiConfig,
+  collisionRadius,
+  EnemyAi,
+  enemySpeeds,
+  movementIndex,
+  type AiTarget,
+  type EnemyAiMotion,
+} from '../combat/enemyai.ts';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
+import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
 import {
   applyDamage,
   enemyDefender,
@@ -24,17 +35,20 @@ import {
   playerAttacker,
   rollDamage,
   rollHit,
+  type AttackerStats,
   type AttackType,
   type DefenderStats,
 } from '../combat/formulas.ts';
-import { BattleParams, battleParamFile } from '../formats/battleparams.ts';
+import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
 import { parseItemPMT, type ItemPMT, type WeaponRange } from '../formats/itempmt.ts';
+import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
-import { parseAttack, parseEnemyState, type Game } from '../net/game.ts';
+import { parseAttack, parseEnemyState, parseHitByEnemy, parsePlayerDeath, type Game } from '../net/game.ts';
+import { CombatOverlay } from './combatoverlay.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -66,12 +80,33 @@ interface EnemyRuntime {
   dead: boolean;
   state: 'idle' | 'damage' | 'death';
   removeIn: number; // seconds until a dead enemy is removed
+  ai: EnemyAi | null; // combat/enemyai.ts (null: no AI profile for this class)
+  attacker: AttackerStats | null; // this enemy hitting a player
+  attack: EnemyAttackData | null;
 }
 
 export interface CombatOptions {
   log: (msg: string) => void;
   // Map files of a floor (GameView.floorFilesFor).
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
+  // Ground height under (x, z), so a walking enemy follows the floor.
+  ground?: (x: number, z: number, fromY: number) => number | null;
+}
+
+// Enemy attacker stats out of the BattleParamEntry rows, as
+// set_enemy_stats_from_battleparams (0x007621xx) builds them: ATP = stats.atp,
+// spread = attack.max_atp - attack.min_atp, ATA = attack.min_ata + stats.ata,
+// LCK = stats.lck; the "equipment ATP" an enemy carries is attack.min_atp
+// (*(i16 *)(entity+0x31c)).
+function enemyAttacker(stats: { atp: number; ata: number; lck: number }, attack: EnemyAttackData): AttackerStats {
+  return {
+    atp: stats.atp,
+    atpSpread: Math.max(0, attack.maxAtp - attack.minAtp),
+    equipAtp: attack.minAtp,
+    ata: attack.minAta + stats.ata,
+    lck: stats.lck,
+    isPlayer: false,
+  };
 }
 
 export class CombatView {
@@ -93,6 +128,19 @@ export class CombatView {
   private rng: () => number = Math.random;
   // Set when a remote player is attacking, so LobbyView keeps its motion.
   private attacking = new Set<number>();
+  // The local player's HP, hit / death motions and 6x4A..6x4F (see
+  // combat/playerdamage.ts).
+  readonly damage: PlayerDamage;
+  private overlay: CombatOverlay | null = null;
+  private tickRemainder = 0;
+  private lockOn: EnemyRuntime | null = null;
+  // Remote players in a hit / death motion: LobbyView must not play their gait.
+  private hurt = new Set<number>();
+  private hpReadout: HTMLElement | null = null;
+  // The web client has no Reverser or Moon Atomizer, so this key revives the
+  // local player (the real client needs another player's item or a trip back
+  // to Pioneer 2).
+  private reviveKey = 'r';
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -100,20 +148,72 @@ export class CombatView {
     this.files = files;
     this.layer = layer;
     this.opts = opts;
+    this.damage = new PlayerDamage({
+      motion: (kind) => this.playSelfMotion(kind),
+      push: (vx, vz) => this.view?.pushPlayer(this.game.selfId, vx, vz),
+      face: (angle) => this.view?.setPlayerAngle(this.game.selfId, angle),
+      sendHit: (heavy, angle, hp, vx, vz) => this.game.sendHitByEnemy(heavy, angle, hp, vx, vz),
+      sendShieldAttack: () => this.game.sendShieldAttack(),
+      sendDeath: (killer, flags) => this.game.sendPlayerDeath(killer, flags),
+      sendRevivable: () => this.game.sendPlayerRevivable(),
+      sendRevived: () => this.game.sendPlayerRevived(),
+      log: (msg) => this.opts.log(msg),
+    });
     game.on('subcommand', (sub, clientId, body) => this.onSubcommand(sub, clientId, body));
   }
 
-  // True while that player is in an attack motion (LobbyView must not play a
-  // gait motion over it).
-  isAttacking = (clientId: number): boolean => this.attacking.has(clientId);
+  // True while that player is in an attack, hit or death motion (LobbyView must
+  // not play a gait motion over it, and the local player must not move).
+  isAttacking = (clientId: number): boolean =>
+    this.attacking.has(clientId) || this.hurt.has(clientId) || (clientId === this.game.selfId && this.damage.busy);
 
   attach(view: LobbyView): void {
     this.view = view;
+    this.overlay ??= new CombatOverlay(this.viewer.scene);
+    this.hpReadout ??= this.makeHpReadout();
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
       inner?.(dt, keys);
       this.frame(dt, keys);
     };
+  }
+
+  // Small HP read-out over the canvas (the client's own HUD is not drawn yet).
+  private makeHpReadout(): HTMLElement | null {
+    const parent = this.viewer.renderer.domElement.parentElement;
+    if (!parent) return null;
+    if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+    const el = document.createElement('div');
+    el.className = 'combat-hp';
+    parent.appendChild(el);
+    return el;
+  }
+
+  private updateHpReadout(): void {
+    const el = this.hpReadout;
+    if (!el) return;
+    // Keep it in the bottom-left corner of the canvas itself (the parent also
+    // holds the hint line under it).
+    const canvas = this.viewer.renderer.domElement;
+    el.style.left = `${canvas.offsetLeft + 12}px`;
+    el.style.top = `${canvas.offsetTop + canvas.clientHeight - 40}px`;
+    const d = this.damage;
+    if (!d.maxHp) {
+      el.textContent = '';
+      return;
+    }
+    el.textContent = d.dead ? `HP 0/${d.maxHp} - dead (press ${this.reviveKey.toUpperCase()})` : `HP ${d.hp}/${d.maxHp}`;
+    el.classList.toggle('low', d.hp > 0 && d.hp <= d.maxHp * 0.25);
+    el.classList.toggle('dead', d.dead);
+  }
+
+  // Max HP of the local player: PlayerDispDataV4's PlayerStats
+  // (atp, mst, evp, hp, dfp, ata, lck as u16).
+  private selfStats(): { atp: number; mst: number; evp: number; hp: number; dfp: number; ata: number; lck: number } {
+    const disp = this.game.selfSnapshot.disp;
+    const dv = new DataView(disp.buffer, disp.byteOffset, disp.byteLength);
+    const u = (k: number) => (disp.byteLength >= k + 2 ? dv.getUint16(k, true) : 0);
+    return { atp: u(0), mst: u(2), evp: u(4), hp: u(6), dfp: u(8), ata: u(0x0a), lck: u(0x0c) };
   }
 
   // Enemy slots of the floor (entity ids) and their stats.
@@ -131,30 +231,77 @@ export class CombatView {
     });
     const params = await this.battleParams();
     if (this.disposed) return;
+    const difficulty = this.game.info?.difficulty ?? 0;
+    const ultimate = difficulty === 3;
     let withStats = 0;
+    let withAi = 0;
     for (const instance of this.layer.instances) {
       const head = headOf.get((instance.placed.entity as EnemySet).index);
       if (!head) continue;
       const def = ENEMY_TYPE_PARAMS[head.slot.type];
       let stats: DefenderStats = { hp: 1, maxHp: 1, evp: 0, dfp: 0 };
+      let attacker: AttackerStats | null = null;
+      let attack: EnemyAttackData | null = null;
       if (params && def && def.stats.length) {
-        const difficulty = this.game.info?.difficulty ?? 0;
-        stats = enemyDefender(params.stats(difficulty, def.stats[0]), params.resist(difficulty, def.resist[0] ?? def.stats[0]));
+        const s = params.stats(difficulty, def.stats[0]);
+        stats = enemyDefender(s, params.resist(difficulty, def.resist[0] ?? def.stats[0]));
+        attack = params.attack(difficulty, def.attack[0] ?? def.stats[0]);
+        attacker = enemyAttacker(s, attack);
         withStats++;
+      }
+      // Behaviour: the AI profile of the client class plus the enemy's own
+      // AI record (search radius / turn rate) and MovementData speeds.
+      const className = instance.spec.name;
+      const profile = AI_PROFILES[className] ?? null;
+      let ai: EnemyAi | null = null;
+      if (profile) {
+        // initdata_param6 (set entry params[5]) is the subtype, as
+        // formats/enemymodels.ts reads it.
+        const subtype = Math.max(0, Math.trunc(head.slot.set.params[5]));
+        const cfg = aiConfig(className, subtype);
+        const mi = params ? movementIndex(head.slot.type) : null;
+        const radius = collisionRadius(className, subtype, ultimate);
+        ai = new EnemyAi({
+          x: instance.placed.world[0],
+          z: instance.placed.world[2],
+          angle: instance.placed.yaw,
+          profile,
+          detect: cfg.detect,
+          turnRate: cfg.turnRate,
+          attack,
+          // No MovementData: 0.5 units per tick is ASSUMED (the Booma family's
+          // engaged speed) so the enemy still closes in.
+          speeds: enemySpeeds(params && mi !== null ? params.movement(difficulty, mi) : null, 0.5),
+          radius,
+          // initdata_param2: the e.dat entry's wander radius.
+          wander: Math.max(0, head.slot.set.params[1]),
+        });
+        withAi++;
       }
       this.enemies.set(head.index, {
         instance,
         index: head.index,
         slot: head.slot,
         stats,
-        motions: enemyCombatMotions(instance.spec.name, instance.archive),
+        motions: enemyCombatMotions(className, instance.archive),
         rtIndex: def?.rt ?? 0xff,
         dead: false,
         state: 'idle',
         removeIn: 0,
+        ai,
+        attacker,
+        attack,
       });
     }
-    this.opts.log(`combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ${withStats} with battle params`);
+    // HP follows the player across floors (a warp does not heal); it is only
+    // refilled when the character's max HP is not known yet or changed.
+    const s = this.selfStats();
+    const maxHp = s.hp || 1;
+    this.damage.reset(maxHp, this.damage.maxHp === maxHp && !this.damage.dead ? this.damage.hp : maxHp);
+    this.opts.log(
+      `combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ` +
+        `${withStats} with battle params, ${withAi} with AI; you have ${this.damage.hp} HP`,
+    );
   }
 
   // --- local player ----------------------------------------------------------
@@ -164,12 +311,19 @@ export class CombatView {
     const me = this.game.self;
     const view = this.view;
     if (me && view) {
+      const blocked = this.damage.busy;
       for (const [names, type] of ATTACK_KEYS) {
         const down = names.some((k) => keys.has(k));
         const key = names[0];
-        if (down && !this.held.has(key)) this.press(type);
+        if (down && !this.held.has(key) && !blocked) this.press(type);
         if (down) this.held.add(key);
         else this.held.delete(key);
+      }
+      if (keys.has(this.reviveKey)) {
+        if (!this.held.has(this.reviveKey) && this.damage.state === 'revivable') this.damage.revive();
+        this.held.add(this.reviveKey);
+      } else {
+        this.held.delete(this.reviveKey);
       }
       const animator = view.playerAnimator(me.clientId);
       if (this.attack?.active && animator) {
@@ -183,15 +337,138 @@ export class CombatView {
     for (const [index, e] of [...this.enemies]) {
       if (e.state === 'idle') continue;
       const ended = e.instance.animators.every((a) => a.ended);
-      if (e.state === 'damage' && ended) this.playIdle(e);
+      if (e.state === 'damage' && ended) {
+        this.playIdle(e);
+        e.ai?.resume();
+        if (e.ai?.motion) this.playEnemyMotion(e, e.ai.motion);
+      }
       if (e.state === 'death') {
         e.removeIn -= dt;
         if (ended && e.removeIn <= 0) {
           this.layer.remove(e.instance);
           this.enemies.delete(index);
+          if (this.lockOn === e) this.lockOn = null;
         }
       }
     }
+    // Game ticks (30 per second) drive the enemy AI and the player's hit state.
+    this.tickRemainder += dt * GAME_TICKS_PER_SECOND;
+    let ticks = Math.floor(this.tickRemainder);
+    this.tickRemainder -= ticks;
+    ticks = Math.min(ticks, 5); // a long frame must not run the AI away
+    for (let i = 0; i < ticks; i++) {
+      this.tickEnemies();
+      this.damage.tick();
+    }
+    this.updateLockOn();
+    this.overlay?.update(dt);
+    this.updateHpReadout();
+  }
+
+  // Players an enemy can target: on this floor and alive.
+  private aiTargets(): AiTarget[] {
+    const view = this.view;
+    if (!view) return [];
+    const positions = view.playerPositions();
+    const out: AiTarget[] = [];
+    for (const [id, pos] of positions) {
+      const p = this.game.players.get(id);
+      if (!p) continue;
+      if (id === this.game.selfId && this.damage.dead) continue;
+      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false });
+    }
+    return out;
+  }
+
+  private tickEnemies(): void {
+    const targets = this.aiTargets();
+    for (const e of this.enemies.values()) {
+      const ai = e.ai;
+      if (!ai || e.dead || e.state !== 'idle') continue;
+      // An enemy whose wave has not spawned is not in the room yet.
+      if (!e.instance.root.visible) continue;
+      const ended = e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended);
+      const r = ai.tick(targets, ended);
+      const root = e.instance.root;
+      if (r.x !== root.position.x || r.z !== root.position.z) {
+        const y = this.opts.ground?.(r.x, r.z, root.position.y + 30) ?? null;
+        root.position.set(r.x, y ?? root.position.y, r.z);
+      }
+      root.rotation.y = r.angle;
+      if (r.motion) this.playEnemyMotion(e, r.motion);
+      if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult);
+    }
+  }
+
+  private playEnemyMotion(e: EnemyRuntime, m: EnemyAiMotion): void {
+    for (const a of e.instance.animators) {
+      try {
+        a.play(e.instance.archive.motion(m.index, a.nodeCount), m.speed, m.loop);
+      } catch (err) {
+        this.opts.log(`enemy motion ${m.index}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  // One enemy melee landing on a player: the hit roll and the damage of
+  // FUN_00777664 / FUN_007732b8 with the attack's own multiplier.
+  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number): void {
+    if (clientId !== this.game.selfId) return; // other clients resolve their own hits
+    const view = this.view;
+    if (!view || !e.attacker) return;
+    const from = view.playerPositions().get(clientId);
+    const p = e.instance.root.position;
+    const stats = this.selfStats();
+    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: stats.evp, dfp: stats.dfp };
+    // The generic hit check has no attack-type or combo multiplier for an
+    // enemy's melee: accuracy 1.0.
+    const chance = (e.attacker.ata - defender.evp * 0.2) * 0.01;
+    let total = 0;
+    if (chance > 0 && this.rng() <= chance) {
+      total = rollDamage(e.attacker, defender, 0, this.rng, mult).damage;
+    }
+    const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
+    this.damage.hit(total, angle, knockback, 0x1000 | e.index);
+  }
+
+  // Lock-on cursor: the nearest live enemy in front of the player
+  // (SetDerolleLockonTarget_0078730c picks the client's own target the same way).
+  private updateLockOn(): void {
+    const view = this.view;
+    const me = this.game.self;
+    if (!view || !me || !this.overlay) return;
+    const from = view.playerPositions().get(me.clientId);
+    if (!from || this.damage.dead) {
+      this.overlay.setTarget(null);
+      this.lockOn = null;
+      return;
+    }
+    let best: EnemyRuntime | null = null;
+    let bestSq = 220 * 220; // ASSUMED lock-on range
+    for (const e of this.enemies.values()) {
+      if (e.dead || !e.instance.root.visible) continue;
+      const p = e.instance.root.position;
+      let diff = Math.atan2(p.x - from.x, p.z - from.z) - me.angle;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      if (Math.abs(diff) > Math.PI / 3) continue;
+      const d = (p.x - from.x) ** 2 + (p.z - from.z) ** 2;
+      if (d >= bestSq) continue;
+      best = e;
+      bestSq = d;
+    }
+    this.lockOn = best;
+    this.overlay.setTarget(best ? { x: best.instance.root.position.x, y: best.instance.root.position.y + 22, z: best.instance.root.position.z } : null);
+  }
+
+  // Plays one of the player's hit / death / revive field motions.
+  private playSelfMotion(kind: HitMotionKind): void {
+    const me = this.game.self;
+    const view = this.view;
+    if (!me || !view) return;
+    const animator = view.playerAnimator(me.clientId);
+    if (!animator) return;
+    animator.paused = false;
+    animator.play(hitMotion(MOTION_TYPE[me.charClass] ?? 0, this.weaponClass(), kind), 1);
   }
 
   private press(type: AttackType): void {
@@ -297,12 +574,20 @@ export class CombatView {
     for (const e of hit) {
       let flags = ENEMY_BASE_FLAGS;
       let damage = 0;
+      let critical = false;
       if (rollHit(attacker, e.stats, attackType, step, this.rng)) {
-        damage = rollDamage(attacker, e.stats, attackType, this.rng).damage;
+        const r = rollDamage(attacker, e.stats, attackType, this.rng);
+        damage = r.damage;
+        critical = r.critical;
       }
       flags |= applyDamage(e.stats, damage);
       const total = e.stats.maxHp - e.stats.hp;
       this.game.sendEnemyState(e.index, total, flags);
+      // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
+      const p = e.instance.root.position;
+      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+      // The enemy turns on its attacker (unknown_enemy_behavior_4).
+      if (damage >= 1) e.ai?.onDamage(me.clientId);
       if (flags & FLAG_DEAD) this.killEnemy(e, flags);
       else if (damage >= 1) this.playDamage(e);
       this.opts.log(
@@ -373,7 +658,53 @@ export class CombatView {
       }
       return;
     }
+    // Another player taking damage / dying / being revived: its hit and death
+    // motions (combat/playerdamage.ts documents the commands).
+    if (sub === 0x4a || sub === 0x4b || sub === 0x4c) {
+      if (clientId === this.game.selfId) return;
+      const kind: HitMotionKind = sub === 0x4a ? 'guard' : sub === 0x4c ? 'heavy' : 'light';
+      const h = sub === 0x4a ? null : parseHitByEnemy(body);
+      if (h && sub === 0x4c) this.view?.setPlayerAngle(clientId, h.angle);
+      this.playRemoteMotion(clientId, kind, sub === 0x4c ? 40 : 20);
+      return;
+    }
+    if (sub === 0x4d) {
+      const d = parsePlayerDeath(body);
+      if (!d || d.clientId === this.game.selfId) return;
+      this.playRemoteMotion(d.clientId, 'death', 0);
+      this.opts.log(`player ${d.clientId} died (6x4D flags 0x${d.deathFlags.toString(16)})`);
+      return;
+    }
+    if (sub === 0x4f) {
+      if (clientId === this.game.selfId) return;
+      this.playRemoteMotion(clientId, 'revive', 40);
+      return;
+    }
     if (sub === 0x5f) this.opts.log(`item dropped (6x5F, ${body.length} bytes)`);
+  }
+
+  // Plays a hit / death / revive motion on a remote player and keeps its gait
+  // suppressed for `ticks` ticks (0 = until it is revived).
+  private playRemoteMotion(clientId: number, kind: HitMotionKind, ticks: number): void {
+    const view = this.view;
+    const p = this.game.players.get(clientId);
+    if (!view || !p) return;
+    const animator = view.playerAnimator(clientId);
+    if (!animator) return;
+    this.hurt.add(clientId);
+    animator.paused = false;
+    animator.play(hitMotion(MOTION_TYPE[p.charClass] ?? 0, 0, kind), 1);
+    if (!ticks) return;
+    let left = ticks;
+    const hook = (dt: number) => {
+      left -= dt * GAME_TICKS_PER_SECOND;
+      if (this.disposed || left <= 0) {
+        this.viewer.frameHooks.delete(hook);
+        this.hurt.delete(clientId);
+        view.resetGait(clientId);
+      }
+    };
+    this.viewer.frameHooks.add(hook);
   }
 
   private remoteAttack(clientId: number, step: number, angle: number): void {
@@ -420,6 +751,7 @@ export class CombatView {
   private playDeath(e: EnemyRuntime): void {
     e.state = 'death';
     e.removeIn = 0.5;
+    e.ai?.kill();
     if (e.motions.death) this.playMotion(e, e.motions.death.index, e.motions.death.speed, false);
   }
 
@@ -506,5 +838,9 @@ export class CombatView {
     this.disposed = true;
     this.enemies.clear();
     this.view = null;
+    this.overlay?.dispose();
+    this.overlay = null;
+    this.hpReadout?.remove();
+    this.hpReadout = null;
   }
 }

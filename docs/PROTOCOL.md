@@ -991,6 +991,70 @@ Phases (`+0x330`, `FUN_00698FA8`): a normal attack goes straight to phase 3; hea
 
 The weapon class (`FUN_006A7B80`, 0..18, 0 = bare hands) is taken from ItemPMT's weapon kind table, which is assumed to be what the client uses for the motion set.
 
+### The player taking damage (`6x4A`, `6x4B`/`6x4C`, `6x89`+`6x4D`, `6x4E`, `6x4F`)
+
+The player state machine (`player+0x32E`, `input_state_1` in the reference headers) has `13 = got_hit_light`, `14 = got_hit_heavy`, `15 = dead` next to `5/6/7` (the three attacks) and `10 = evade`. Entering a state runs its handler with argument 0, which ends the previous state and plays the motion the field motion set's vtable (`0x00B39EC0`) returns; each getter is a `mov eax, N; ret`:
+
+| state | handler | vtable | motion slot | extras |
+| --- | --- | --- | --- | --- |
+| 13 light hit | `handle_input_state_got_hit_light` (entry `FUN_0069ED10`) | `+0x60` → `0x006A75AC` | 11 | sound effect `0x13`, invulnerability `get_invincibility_frames()` |
+| 14 heavy hit | `handle_input_state_got_hit_heavy` | `+0x58` → `0x006A759C` | 9 | sound effect `0x14`, invulnerability frames = 300 (literal) |
+| 15 dead | `handle_input_state_dead` | `+0x64` → `0x006A75B4` | 12 | only when death flag `1` is clear; with it set a "dead helper object" is created instead |
+| 10 evade | `handle_input_state_evade_attack` | `+0x5C` → `0x006A75A4` | 10 | what the `6x4A` handler `action_evade` (`0x0069A9C8`) plays |
+| stand up | — | `+0x68` → `0x006A75BC` | 13 | the motion after a revive |
+
+Every one of those slots has mode 3 (play once, hold the last frame) in the field tables `0x009CBEEC` / `0x009CBF04`; the flag word is `0xA0000040` for slots 9 and 11, `0x20000100` for slot 10, `0x80` for slot 12 and `0x20000400` for slot 13.
+
+`get_invincibility_frames` reads `invincibility_frames[8 + x]` of the table at `0x009690E8` while the scene is `logged_in` = **60 ticks**, and `[12 + x]` = 120 / 150 / 180 / 210 when `player+0x2B4 == 3`.
+
+Commands (layouts: newserv `src/CommandFormats.hh`; send sites in the exe):
+
+| command | size | payload | sent by |
+| --- | --- | --- | --- |
+| `6x4A` `G_ShieldAttack_6x4A` | 4 | — | the attack did no damage; the receiver plays the evade motion |
+| `6x4B` / `6x4C` `G_HitByEnemy_6x4B_6x4C` | 0x10 | `u16 angle` (`player+0x60`), `u16 current_hp` (`+0x334`), `f32 velocity_x` (`+0x30C`), `f32 velocity_z` (`+0x314`) | `dispatch_action_got_hit_light` @ `0x0069EC4C` / `dispatch_action_got_hit_heavy` @ `0x0069E7B8` |
+| `6x89` `G_PlayerDeath` | 8 | `u16 killer entity` (`get_enemy_last_attacker_idx` @ `0x007778D8`), `u16 0` | `dispatch_actions_0x89_0x4d` @ `0x0069E234` |
+| `6x4D` `G_PlayerDied_6x4D` | 8 | `u32 death_flags` (`player+0x92C`) | the same function, right after the `6x89` |
+| `6x4E` `G_PlayerRevivable_6x4E` | 4 | — | the particle a Reverser / Moon Atomizer can target |
+| `6x4F` `G_PlayerRevived_6x4F` | 4 | — | the revive |
+
+`6x4B` vs `6x4C` is chosen at the call site by the damage as a fraction of max HP (≤ 25% → `6x4B`), the same quarter that sets the enemy-side flag `0x400`. `6x4C` additionally recomputes the facing from the knockback velocity when its squared length passes `_DAT_0093DA04`, drops the inventory on death (`Player_DropItemsOnDeath` @ `0x0068D9C4`) and calls `0x00692068`. `death_flags`: bit 0 "items already dropped", bit 1 "no drop items in inventory" (set when `CheckForDropItemInInventory` @ `0x0069248C` returned 0), bit 2 cleared on the first death frame.
+
+### Enemy behaviour
+
+The Forest families share one AI substrate whose dispatcher is `unknown_booma_enemy_ai` (its per-state handlers sit in `0x0052A000..0x0052C000`; `booma_constructor` installs them through `booma_vtable`, and the Hildebear, Shark, Grass Assassin and Lily constructors install the same ones). It switches on `enemy+0x32E`: 0 spawn (vtable `+0x154`), 1 wander / idle (`+0x158`), 2 (`+0x15C`), 3 chase (`+0x160`), 4 (`+0x164`), 5 attack (`+0x168`) … 9 (`+0x178`); `set_booma_enemy_killed` sets state 8 with animation 8. Each tick ends with `SetDerolleLockonTarget_0078730C` + `enable_reticle`.
+
+Per-enemy AI record at `enemy+0x358` (7 dwords, stride `0x1C`; `+0x00` f32 target search radius, `+0x04` f32 extra wander allowance, `+0x08` i32 turn rate in BAMS per tick):
+
+| enemy | record | installed at | search radius | turn rate |
+| --- | --- | --- | --- | --- |
+| Booma / Gobooma / Gigobooma | `g_BoomaHitboxParams` `0x009BC880` (per subtype) | `0x005360DD` | 225 / 250 / 300 | 1024 |
+| Hildebear family | `0x009BB200` (per subtype) | the Hildebear constructor | 225 / 250 / 300 | 1024 |
+| Monest | `0x009BB764` | `0x005192E8` (ctor `0x005191C0`) | 225 | 1536 |
+| Savage / Barbarous Wolf | `g_SavageWolfConfig` `0x009BB9EC` | `0x0051B406` (ctor `0x0051B2E8`) | 225 | 1536 |
+| Rag Rappy | `g_RappyMaxAttackRange` `0x009BC144` | `0x00526EC5` (ctor `0x00526D90`) | 150 | 1024 |
+| Poison Lily | `0x009BC33C` | `0x005295A0` (ctor `0x005293AC`) | 225 | 512 |
+| anything else | `DefaultEnemyCollisionParams` `0x009C3EB0` | — | 100 | 1024 |
+
+The states, as far as they are reproduced here:
+
+- **idle** (`unknown_enemy_behavior_1`): plays animation 2 and wanders inside `cfg[1] + the e.dat entry's wander radius (initdata_param2) + the collision radius` of its spawn point; past that it walks straight back, turning at most `cfg[2]` BAMS per tick (`ClampAngleDifference_007A8C74`).
+- **target search** (`unknown_booma_enemy_find_target`): `EnemyGetNearestTargetInRange_007714CC(this, cfg[0], 0)` takes the nearest player inside `cfg[0]` that has line of sight (`EnemyAI_CheckLineOfSight_00771E14` / `cast_ray_at_map_collision_geometry`); a target on another floor is dropped.
+- **notice** (`unknown_enemy_behavior_4`): idle → state 3 with animation 7 (the war cry) and substate 0.
+- **chase** (`unknown_booma_enemy_chase_target`): substate 0 plays the war cry and its sound (vtable `+0x188`) until the animation ends, then animation 2 and substate 1; substate 1 steers at the target's `weapon_position` with `SorcererProcessProjectileLogic_00772AA0(this, speed, cfg[2], x, y, z, 0)` = turn by at most `cfg[2]`, step `speed` along the facing. The target is given up after `0x96` = 150 ticks of not reaching it.
+- **speed** (`RemoveEnemyFromList_0052AD44`): `enemy+0x39C` (units per tick) and the animation frame step come from the enemy's `BattleParamEntry` **MovementData** — `fparam1`/`fparam2` normally and `fparam3`/`fparam4` while the "near the player" flag is set (newserv `notes/movement-data.txt` names them idle move speed / idle walking animation speed / engaged move speed / engaged animation speed; Booma: 0.8 / 0.8 / 0.5 / 0.5). `ClearEnemyHitbox_0052AC5C` sets that flag from the squared distance to the target against `0x00922330..0x0092233C` = {10000, 2500, 22500, 10000}, i.e. 50 / 100 units for a Hunter class and 100 / 150 for every other class.
+- **attack**: `unknown_booma_enemy_attack_behavior` enters state 5 substate 1 and picks animation 4 or 3 by `g_BoomaAttackSuccessChance`. `unknown_enemy_behavior_2` runs it: at animation frame 7 (`check_entity_animation_elapsed_threshold(this, 7.0)`) it calls the target's `try_hit_entity(this, 1.0)` and `cause_knockback(this, 3.0)`; when the attack animation ends it sets animation 0 and waits `0xF` = 15 ticks before vtable `+0x19C` puts it back into the chase. The reach is the enemy's `AttackData.distance_x` with the half-angle `AttackData.angle` out of `0x10000` (`EnemyAI_CheckFacingArc_00772C08`): Booma 12 / `0x1C71`, Savage Wolf 20 / `0x1A00`, Hildebear 30 / `0x2200`.
+
+`booma_constructor` also fixes the collision radii in `init_booma_subtypes_global_config`: 7 / 7 / 8, and 10 / 10 / 9 in Ultimate.
+
+Enemy animation tables (rows `{u16 mode, u16 next, u32 motion, f32 frames per tick, u32 flags}`; mode 1 loops, flags `0x1` idle-ish, `0x4` attack, `0x8` damage, `0x10` death, `0x20` one-shot transition). Booma, `0x009BC980`: slot 0 stand (motion 9, 0.6), 2 walk (11, 0.5), 3 attack A (1, 0.65), 4 attack B (2, 0.85), 6 damage (3, 1.5), 7 war cry (10, 0.8), 8 death (5, 0.6). The `animation_id` the FSM writes is the slot number.
+
+The MovementData index of an enemy type is not in newserv's `type_defs`; `notes/movement-data.txt` lists it separately, and for every Episode 1 type there it equals the ResistData index (Booma `0x4A`, Gobooma `0x4B`, Gigobooma `0x4C`, Hildebear `0x48`, Hildeblue `0x49`, Mothmant `0x00`, Monest `0x01`, Savage Wolf `0x02`, Barbarous Wolf `0x03`, Poison Lily `0x04`, Rag Rappy `0x18`). Monest's and the wolves' MovementData is all zeros ("loaded with assets but not used").
+
+### Damage numbers and the lock-on reticle
+
+The number over a hit entity is `round(d)` of each hit box, drawn by `FUN_0078A5E8` (see the damage formula above). The reticle is `enable_reticle`, called by every enemy AI state after `SetDerolleLockonTarget_0078730C` picked the lock-on target.
+
 ## Map texture animation (`map_<area>[_<layout>].tam`)
 
 Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.

@@ -153,6 +153,35 @@ PROTOCOL.md, "Quests"):
 - `set_player_start_position` is recorded but the player still spawns at the
   floor's `TObjPlayerSet`; `get_player_state` always answers "standing".
 - `6x6F` is read but still not sent to a joining player.
+## 2026-10-17: taking damage, dying, and enemies that come after you
+
+**What changed:** combat now works in both directions. `combat/playerdamage.ts` tracks the local player's HP and runs the hit / knockback / death / revive states of the client's player state machine, with the field motions and the `6x4A` / `6x4B` / `6x4C` / `6x89` + `6x4D` / `6x4E` / `6x4F` subcommands (`net/game.ts` gained the senders and the parsers). `combat/enemyai.ts` is the generic walking-enemy FSM: an enemy stands at its spawn point, notices a player inside its search radius, cries out, walks at it at its BattleParamEntry movement speed, attacks when the player is inside its AttackData reach and arc, deals damage and knockback at the attack animation's hit frame, recovers for 15 ticks and goes back to the chase or home. `render/combat.ts` drives both at 30 Hz, resolves the enemy melee against the player with the client's own hit and damage formulas, and keeps a small HP read-out over the canvas. `render/combatoverlay.ts` adds the damage number over a hit enemy and the lock-on reticle. `formats/battleparams.ts` now also reads AttackData's reach / arc and the MovementData block.
+
+**From PsoBB.exe** (addresses and layouts in PROTOCOL.md, "The player taking damage" and "Enemy behaviour"):
+- Player states `13 / 14 / 15` (light hit, heavy hit, dead) play field motion slots **11 / 9 / 12**, the evade of `6x4A` slot **10** and the stand-up after a revive slot **13**; the slot numbers are the motion-set vtable getters `0x006A75AC`, `0x006A759C`, `0x006A75B4`, `0x006A75A4`, `0x006A75BC`, all `mov eax, N; ret`. The rows come out of the field motion tables `0x009CBEEC` / `0x009CBF04`, all mode 3.
+- Invulnerability after a light hit is `invincibility_frames[8 + x]` of the table at `0x009690E8` = 60 ticks; the heavy-hit handler writes the literal 300.
+- `6x4B` vs `6x4C` is the damage as a fraction of max HP (≤ 25% is light), and `6x4C` turns the player to face the knockback.
+- Dying sends `6x89` (the killer's entity id from `get_enemy_last_attacker_idx` @ `0x007778D8`) and `6x4D` (`player+0x92C` death flags) from one function, `dispatch_actions_0x89_0x4d` @ `0x0069E234`; `6x4E` follows when the death motion ends.
+- The Forest enemies share one AI dispatcher (`unknown_booma_enemy_ai`, 10 states). Its per-enemy record at `enemy+0x358` gives the target search radius and the turn rate: Booma family `g_BoomaHitboxParams` @ `0x009BC880` = 225 / 250 / 300 units and 1024 BAMS per tick, Monest `0x009BB764` = 225 / 1536, Savage Wolf `0x009BB9EC` = 225 / 1536, Rag Rappy `0x009BC144` = 150 / 1024, and `DefaultEnemyCollisionParams` @ `0x009C3EB0` = 100 / 1024 for everything else.
+- The move speed and the animation step are the enemy's **MovementData** from BattleParamEntry: `fparam1`/`fparam2` normally, `fparam3`/`fparam4` within 50 units of a Hunter (100 for other classes), with hysteresis out at 100 / 150 — the squared distances `{10000, 2500, 22500, 10000}` at `0x00922330` read by `ClearEnemyHitbox_0052AC5C`. Booma: 0.8 / 0.8 / 0.5 / 0.5.
+- The melee lands at animation frame 7 (`check_entity_animation_elapsed_threshold(this, 7.0)`) with `try_hit_entity(this, 1.0)` + `cause_knockback(this, 3.0)`, and the recovery is `0xF` = 15 ticks. The reach and arc are `AttackData.distance_x` / `.angle` (Booma 12 and `0x1C71` ≈ 40°).
+- Booma collision radii 7 / 7 / 8 (10 / 10 / 9 in Ultimate) are literals in `init_booma_subtypes_global_config`.
+
+**Checks:**
+- `tests/combatdepth.test.ts`: 691 checks. All 570 hit / death / revive motion rows, the spot values against the exe tables, the light/heavy split and the whole `PlayerDamage` flow (invulnerability, knockback decay, death → revivable → revive), the `6x4B`/`6x4C`/`6x4D` wire layouts, the AI tables (search radii, turn rates, collision radii, guard-stance distances, the MovementData-index rule against newserv's `notes/movement-data.txt`) and the FSM itself (idle → notice → chase → attack → recover → home, the turn-rate clamp, the 150-tick give-up, a Monest that never moves), plus one Booma hit against the real `BattleParamEntry_on.dat`.
+- `tests/game.live.ts` gained a block where A shields an attack, takes a light and a heavy hit, dies and revives, and B receives `6x4A`, `6x4B`, `6x4C`, `6x89`, `6x4D`, `6x4E` and `6x4F` — newserv accepts all of them.
+- `tests/combat.test.ts` still passes (5946 checks); `tsc --noEmit` is clean.
+- In Chrome against newserv: in Forest 1, Boomas noticed the player at ~145 units, cried out, walked in to `reach + collision radius` = 19 units, attacked and knocked the player back; HP fell 20 → 2 → 0, the death motion played and held, the read-out showed `HP 0/20 - dead (press R)`, R revived with 3/20 HP and the Boomas killed the player again. Attacking back logged `hit E-73 (BOOMA) for 8: 84/92 HP`, the lock-on reticle tracked the nearest enemy in front and the damage numbers floated up over it.
+
+**Approximations / open:**
+- The enemies never check line of sight (the client raycasts the map collision in `unknown_booma_enemy_find_target`), so one can notice a player through a wall; an idle enemy stands still instead of walking the wander path, and the pack-spreading (`Derolle*Subordinate*`) is not reproduced.
+- Every family uses the generic FSM. Savage Wolf (its own `SavageWolfProcessState_*` leap), Rag Rappy (`update_rappy`, the fake death), Monest (spawns Mothmants) and Poison Lily keep their motions but not their own state machines; the wolf's and Monest's MovementData is zero in the file, so the wolf falls back to an assumed 0.5 units per tick and a Monest simply never moves.
+- The attack animation's length and the war cry's length come from the enemy's motion itself, but the second attack (`animation_id` 3 vs 4, chosen by `g_BoomaAttackSuccessChance`) is just alternated; that float was not read out of the binary.
+- The knockback is a single impulse damped 0.75 per tick instead of the client's velocity integration (`ClampAndDampPlayerVelocity_00694230`), and the `_DAT_0093DA04` turn threshold is assumed small.
+- Only the local player is hurt by enemies: each client resolves its own hits, so a second client is never damaged by this client's AI (the real game works the same way, but there every client runs the AI of the enemies it owns).
+- The player's EVP and DFP are the character's base stats; the equipment contribution (`FUN_00770DA4`'s equip path) is still not decoded, as for ATP in the attack direction.
+- Reviving is bound to R because the web client has no Reverser, Moon Atomizer or trip back to Pioneer 2; the real client cannot revive itself.
+- Hit boxes per body part, techniques, specials and status effects are still missing.
 
 ## 2026-10-17: the named Ghidra dump is the first place to look
 
