@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-17: items on the floor, pickup and the item commands
+
+**What changed:** a game now has items. `net/items.ts` (`GameItems`) keeps the floor items and the local inventory and speaks the Blue Burst item protocol: server drops (`6x5F` from boxes and enemies, `6x5D` for meseta and split stacks), pickup (`6x5A` → the server's `6x59`), dropping (`6x2A`, or `6xC3` + `6x29` for part of a stack and for meseta), equip/unequip/use (`6x25`/`6x26`/`6x27`), inventory creation (`6xBE`), floor-item destruction (`6x63`) and the item state a joining player receives (`6x6D`, BC0-decompressed here for the first time). It also tracks the other players' inventories (from `65`, `6x70`, `6x59`, `6xBE`, `6x29`) so their `6x2A` drops can be shown. `render/flooritems.ts` draws the items with the client's own box models and handles Enter: pick up the nearest item, else break the nearest item box (`6x0B` + `6xA2` to the leader). The Inventory panel (`ui/inventoryPanel.ts`) gained Equip / Unequip / Use / Drop / Drop 1 buttons and a meseta drop field; the rows follow the local inventory, which `GameItems` keeps in step with the server (and writes back into the raw `E7` so the next `6x70` carries it). `render/gameview.ts` only gained the wiring.
+
+**From PsoBB.exe** (details and addresses in PROTOCOL.md, "Items on the floor, pickup and the item commands"):
+- A dropped item is **not** drawn with its own model: `FUN_005d7ccc` loads `item.bml` (descriptor `0x009c2794`: 14 models, 1 motion) and `FUN_005d7a2c(kind)` hands out model `kind + 2` with `gun_bullet.xj`'s texture list. `ItemModel.afs` / `ItemTexture.afs` are the held weapon models, not the floor boxes.
+- The box kind (`+0xf5`) comes from the table `0x0092bb88` = {0, 1, 1, 2, 3} indexed by `data1[0]`, or 4 when the item is rare (`FUN_005d6990` → `FUN_005d693c`, the same stars/flags test the item names use). Tools with an ItemPMT `type` take kind `type + 4` (`FUN_005c3e3c`), which is how the event boxes (egg, pumpkin, present) appear.
+- Wrapped items (`FUN_005d281c`) and kinds 6/7 draw the gift box with two tint tables, `0x009c2000` (box) and `0x009c2060` (ribbon), indexed by the present colour in `+0xf0` (`FUN_005d68b4`).
+- Kind 5 (rare tools) scrolls its texture by `1/256` per frame (`FUN_005cb350`, `0x0092bd9c`); every floor item turns `0x200` BAMS per frame (`FUN_005c4010`). There is no bobbing and no extra glow pass in the floor item code.
+
+**Checks:**
+- `tests/itemmodels.test.ts`: all 14 `item.bml` entries match the descriptor and the 11 box models build with no missing texture; every ItemPMT item (3055 looks: 1536 definitions, plain and wrapped) resolves to one of them; the decompiled rules spot-checked on hand-made items; BC0 round trip and `6x6D` parsing; the `6x5F` and `6xA2` layouts against newserv's real-client capture (`GC-ForestGameRareMagFeed`); the inventory rules (stacking, splitting, meseta, equip slots, armor unequipping its units, write-back to `E7`). 4608 checks pass.
+- `tests/items.live.ts` (two clients against newserv): item ids (creator from `64`, joiner from `6x6D`), A drops an item and B picks it up and gives it back, one item of a stack through `6xC3`/`6x5D`/`6x29`, meseta, equip/unequip/use seen by the other client, Forest 1 boxes broken with `6x0B` + `6xA2` until one drops an item that both clients see and A picks up; at the end each client's inventory equals the one newserv sends back in the lobby (`67`).
+- `tests/items.test.ts` and `tests/game.live.ts` still pass; `tsc --noEmit` is clean.
+- In Chrome against newserv: in a game on Pioneer 2, Drop put the Handgun and a Monofluid on the floor as spinning boxes at the player's feet, the Inventory panel updated (Monofluid x5 → x4), walking away and back kept them in place, Enter picked one up again, and a second client joining the same game received them in its `6x6D` and saw the same floor items.
+
+**Approximations / open:**
+- The drop commands carry only x and z, so the box is placed on the collision mesh under that point; the client's own height rule was not traced.
+- The Enter radii (15 for items, 20 for boxes) are fitted; newserv refuses a pickup beyond 30. Enter is a stand-in until combat can break boxes.
+- No drop animation (the original throws the box in an arc), no "item found" HUD line or sounds, no classic Item Pack menu actions (the buttons live in the Online tab's panel), no bank, shop, tekker or mag feeding, and no partial-stack amount beyond "Drop 1".
+- Enemy drops are implemented on the receiving side only (`6x5F`); the kill requests come from the combat agent's code.
+
 ## 2026-10-17: real 3D characters in the classic screens
 
 **What changed:**

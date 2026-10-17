@@ -157,3 +157,6 @@ output { padding: 8px 0; color: var(--text); }
 .inv-items li.rare { color: #ffd76a; }
 .inv-items .mark { display: inline-block; width: 1.4em; color: var(--accent); font-weight: 600; }
 h3 small { text-transform: none; letter-spacing: 0; }
+.inv-items .inv-act { margin-left: 6px; padding: 0 6px; font-size: 0.8rem; }
+.inv-meseta-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.inv-meseta { width: 7em; }

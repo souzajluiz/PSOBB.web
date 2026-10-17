@@ -509,6 +509,47 @@ Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymot
 
 **Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
 
+## Items on the floor, pickup and the item commands
+
+Code: `net/items.ts` (commands and inventory), `formats/itemmodels.ts` (which model a dropped item uses), `render/flooritems.ts` (floor layer, Enter to pick up / break a box), `ui/inventoryPanel.ts` (buttons). Tests: `tests/itemmodels.test.ts`, `tests/items.live.ts`. Command layouts are newserv's `CommandFormats.hh`; addresses are VAs in the Ephinea `PsoBB.exe`.
+
+**Who owns the items.** On Blue Burst the server does. The client only asks:
+
+| Direction | Command | Meaning |
+| --- | --- | --- |
+| S→C | `6x5F` (0x2C) | drop from a box or an enemy: `{floor, source (1 enemy / 2 box), entity index, x, z, room, drop number, ItemData}` |
+| S→C | `6x5D` (0x28) | drop of meseta or of a split stack: `{floor, room, x, z, ItemData}` |
+| C→S | `6x5A` (0x0C) | pickup request `{item id, floor}` |
+| S→C | `6x59` (0x0C) | pickup granted `{picker, floor, item id}`, to every player including the picker |
+| C→S | `6x2A` (0x18) | drop a whole item `{amount, floor, item id, x, y, z}` (forwarded to the others, not echoed) |
+| C→S | `6xC3` (0x18) | drop part of a stack or meseta `{floor, x, z, item id, amount}`; item id `0xFFFFFFFF` = meseta |
+| C→S | `6x29` (0x0C) | delete from the inventory `{item id, amount}` — the client sends it after the server's `6x5D` for its own split |
+| C→S | `6x25` / `6x26` / `6x27` | equip `{item id, slot}` / unequip `{item id}` / use `{item id}` |
+| S→C | `6xBE` (0x1C) | create an item in a player's inventory (bank, shop, tekker, unwrapped present) |
+| S→C | `6x63` (0x0C) | destroy a floor item |
+| C→S | `6x0B` (0x0C) + `6xA2` (0x28) | a box was broken: object state `{entity 0x4000+index, flags 1, index}` via `60`, then the drop request via `62` to the leader |
+| S→C | `6x6D` | item state for a joining player: BC0-compressed `{u16 next drop number[16], u32 next item id[12], u32 item count[15], FloorItem[]}` (`FloorItem` is 0x24 bytes, same layout as inside `6x5F`) |
+
+**Item ids.** newserv (`Lobby::reset_next_item_ids`) gives player *n* the range starting at `0x00010000 + 0x00200000 * n` and assigns the ids of the inventory in slot order: the creator of a game takes them at `64`, a joiner takes the ids the `6x6D` announces. Server drops use `0x00810000` and above.
+
+**Pickup rules** (newserv `on_pick_up_item_generic`): the item must still exist, be visible to that player, be within a distance of 30 (`dist² ≤ 900`) and fit in the inventory; otherwise the request is dropped and the item stays on the floor.
+
+**Box drop request.** `6xA2` extends `6x60` with the box's `param3..6`. `ignore_def` says whether the box has a fixed drop: `TObjContainerBase` (0x92), `TOContainerAncientItemCommon` (0x161) and `TObjContainerJungEx` (0x203) specialize when `param1 <= 0`, `__DESERT_CRYSTALS_BOX__` (0x38D) when `(int)param1 == 2`; every other box ignores its params. newserv reads the params from its own map, so a wrong value only logs a warning. Capture (`tests/GC-ForestGameRareMagFeed.test.txt`): `62 00 2C 00 A2 0A 00 00 01 30 7C 00 …` — `6x0B` for K-078 first, then `6xA2` with `rt_index 0x30`, the object index and the area.
+
+**Floor item models** (`formats/itemmodels.ts`). The dropped item is one of the small boxes in `item.bml`, not the item's own model (`ItemModel.afs` holds the held/equipped weapon models):
+
+- `FUN_005d7ccc` loads `item.bml` with the descriptor at `0x009c2794` = {`item.bml`, 14 models, 1 motion}. Entries by position: 0 `gun_bullet.xj` (its XVM carries every `ixt_box*` texture), 1 `armor_scan.xj`, 2..7 `ixm_box01..06`, 8 `ixm_box07_gift`, 9 `ixm_box08_xmas`, 10 `ixm_box09_egg`, 11 `ixm_box10_pumpkin`, 12 `ixm_box11_flower`, 13 `wxmR04_d_t_efect.xj`, then `armor_scan.njm`.
+- `FUN_005d7a2c(kind)` returns model `kind + 2` with texture list 0 (`gun_bullet`'s).
+- Floor item object: ctor `FUN_005c3a94` (vtable `0x00b0c020`), `+0xf5` = box kind, `+0xf0` = present colour, `+0xdc` flags (0x100 kill counter, 0x400 wrapped).
+  - colour `FUN_005d68b4`: weapon `data1[5] & 0xF`, armor/shield/unit `data1[4] & 0xF`, tool `data1[3] & 0xF`, else 0.
+  - kind: rare (`FUN_005d6990`: `FUN_005d693c(item) >= 9`) → 4, else the byte table `0x0092bb88[clamp(data1[0], 0, 4)]` = {0, 1, 1, 2, 3} (weapon → box01, armor/shield/unit and mag → box02, tool → box03, meseta → box04). `FUN_005d693c` is the same rarity test as the item names: ItemPMT stars for weapons and armors (`FUN_005e5450`, ids from 0xB1), tool flag 0x80, mag `data1[1] > 0x27`.
+  - tools (subclass `FUN_005de2d8`): when the ItemPMT tool's `type` is not 0 the kind becomes `type + 4` (`FUN_005c3e3c`), which clamps kinds ≥ 11 back to box03 and forces colour 5 for kind 7. In the BB table that gives the event boxes: type 1 (the 29 "item" tools) → kind 5, type 2 → 6, 3 → 7, 4 → 8 (egg), 5 → 9 (pumpkin).
+  - wrapped (`FUN_005d281c`: weapon/armor `data1[4] & 0x40`, non-stackable tool `data1[3] & 0x40`, mag `data2[2] & 0x40`) sets flag 0x400.
+- Render `FUN_005c407c` (state 0 only) indexes the table `0x0092bac0` by kind, and flag 0x400 forces entry 6. Entries 0-4 and 8-10 (`FUN_005c37c4`) draw the kind's model; 5 (`FUN_005c39a0`) adds a texture scroll (`FUN_005cb350(1, 1, 0xb)`, step `1/256` = `0x0092bd9c` per frame); 6 and 7 (`FUN_005c383c`) draw the gift box whatever the kind, the root tinted with `0x009c2000[colour]` and its child with `0x009c2060[colour]` (6 colours each).
+- Update `FUN_005c4010`: the Y angle (`+0x60`) turns `0x200` BAMS per frame (30 frames/s). No bobbing and no separate glow pass are in the floor item code; the "glow" of a rare drop is box05's scrolling texture.
+
+**Not from the exe (fitted):** the height of a floor item (the drop commands carry only x and z, so the box is placed on the collision mesh under that point), the Enter radius for pickup (15) and for breaking a box (20), and the assumption that the scroll counter advances once per frame.
+
 ## Enemy models (`bm_ene_*.bml`, boss archives)
 
 Code: `formats/enemymodels.ts` (table), `render/enemymodel.ts` (loader, animator), `render/enemyview.ts` (floor layer). Test: `tests/enemies.test.ts`. Addresses are VAs in the Ephinea `PsoBB.exe`.

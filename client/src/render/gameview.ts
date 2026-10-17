@@ -7,7 +7,8 @@
 // model), and warps between floors: choosing a destination in a warp object's
 // menu (render/gamefield.ts: area, boss and Ragol warps, doors, switches, floor
 // music) or calling warpTo() sends 6x21/6x22, loads the next floor, then sends
-// 6x3F/6x1F/6x3B/6x23 (net/game.ts).
+// 6x3F/6x1F/6x3B/6x23 (net/game.ts). Items on the floor, pickup and item
+// boxes: net/items.ts (GameItems) and render/flooritems.ts (FloorItemLayer).
 
 import type { BgmPlayer } from '../audio/bgm.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -18,6 +19,9 @@ import { parseObjectSets, playerSpawns, roomToWorld, type ObjectSetEntry } from 
 import { parseSetFile, placeEntities } from '../formats/setdata.ts';
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
+import { GameItems } from '../net/items.ts';
+import type { CharacterFile } from '../net/charfile.ts';
+import { FloorItemLayer } from './flooritems.ts';
 import { CollisionWorld } from './collision.ts';
 import { EnemyLayer } from './enemyview.ts';
 import { GameField } from './gamefield.ts';
@@ -56,6 +60,9 @@ export class GameView {
   private view: LobbyView | null = null;
   readonly enemyLayer: EnemyLayer;
   private field: GameField;
+  readonly items: GameItems;
+  readonly floorItems: FloorItemLayer;
+  private collision: CollisionWorld | null = null;
   private objectCounts = new Map<number, Promise<number>>();
   private busy = false;
   private disposed = false;
@@ -64,7 +71,14 @@ export class GameView {
   // The lobby teleporter (TObjCityAreaWarp) was used: the caller leaves the game.
   onLobbyWarp: () => void = () => {};
 
-  constructor(viewer: MapViewer, game: Game, source: DataSource, log: (msg: string) => void = () => {}, bgm: BgmPlayer | null = null) {
+  constructor(
+    viewer: MapViewer,
+    game: Game,
+    source: DataSource,
+    log: (msg: string) => void = () => {},
+    bgm: BgmPlayer | null = null,
+    character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null } = { character: () => null, fullCharacter: () => null },
+  ) {
     this.viewer = viewer;
     this.game = game;
     this.source = source;
@@ -72,6 +86,12 @@ export class GameView {
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.field = new GameField(viewer, game, this.files, { bgm, log, warpTo: (f) => this.warpTo(f), toLobby: () => this.onLobbyWarp() });
+    this.items = new GameItems(game, { ...character, log });
+    this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
+      ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+      blocked: () => this.field.menu.open || this.busy,
+      log,
+    });
   }
 
   // Number of set-data objects on the floors before `floor` (object entity
@@ -126,6 +146,7 @@ export class GameView {
     await this.loadFloor(0, 0);
     const me = this.game.self!;
     this.game.finishLoading(me.position.x, me.position.y, me.position.z, me.angle);
+    this.items.ensureIds();
   }
 
   // 6x21 + 6x22, load, then 6x3F / 6x1F / 6x3B / 6x23.
@@ -200,8 +221,12 @@ export class GameView {
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
     this.view = new LobbyView(this.viewer, this.game, mapData, { showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
-    this.field.enterFloor(floor, area, placedObjects, await this.objectBase(floor));
+    const objectBase = await this.objectBase(floor);
+    this.field.enterFloor(floor, area, placedObjects, objectBase);
     this.field.attach();
+    this.collision = mapData.collision;
+    this.floorItems.enterFloor(floor, area, placedObjects, objectBase);
+    this.floorItems.attach();
     this.current = {
       floor,
       area,
@@ -221,6 +246,8 @@ export class GameView {
   dispose(): void {
     this.disposed = true;
     this.field.dispose();
+    this.floorItems.dispose();
+    this.items.dispose();
     this.view?.dispose();
     this.view = null;
     this.enemyLayer.dispose();

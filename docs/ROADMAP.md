@@ -61,5 +61,7 @@
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)
 - [x] Inventory panel in the Online tab
-- [ ] Item use/equip commands (`6x25`/`6x26`/`6x27`), item drops, item models (`ItemModel.afs`)
+- [x] Item commands: equip/unequip/use/drop from the Inventory panel (`6x25`/`6x26`/`6x27`/`6x2A`/`6xC3`/`6x29`), pickup (`6x5A` → `6x59`), server drops (`6x5D`/`6x5F`), inventory creation (`6xBE`), join item state (`6x6D`, BC0) — `net/items.ts`
+- [x] Items on the floor with the client's own models (`item.bml` box models, present colours, spin) and item boxes broken with Enter (`6x0B` + `6xA2`) — `formats/itemmodels.ts`, `render/flooritems.ts`
+- [ ] Item drop animation (arc from the enemy/box), the "item found" HUD line and sounds, the classic Item Pack menus (equip/use from the in-game menu), bank and shops (`6xBB`/`6xB5`/`6xB7`), tekker (`6xB8`/`6xBA`), mag feeding (`6x28`), partial-stack UI beyond "Drop 1"
 - [ ] Quests (opcodes documented in the notes and in newserv's assembler)
