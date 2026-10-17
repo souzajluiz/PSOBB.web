@@ -23,6 +23,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Player motions (`plymotiondata.rlc`) and animated models in the lobby (idle/walk/run) | ✅ live in Chrome with a bot |
 | Character file (`E7`), ItemPMT from the server stream, item names, Inventory panel | ✅ 1536 item definitions and 1515 names match newserv |
 | Games: create/list/join, Pioneer 2 and field floors from the server's variations, warps, back to the lobby | ✅ live in Chrome with a bot |
+| Items on the floor (6x5D/6x5F/6x59) with their `item.bml` box models, pickup (6x5A), item boxes (6x0B + 6xA2), equip/unequip/use/drop from the Inventory panel | ✅ every ItemPMT item resolves to a model; two clients live against newserv |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -70,6 +71,8 @@ node tests/fieldbgm.test.ts      # area -> BGM table, interactive-music sequence
 node tests/warpmenu.test.ts      # Ragol teleporter entries, warp windows, boss warp table, doors, warps found in the set data
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
 node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them
+node tests/itemmodels.test.ts    # every ItemPMT item resolves to an item.bml floor model; BC0, item subcommands, inventory rules
+node tests/items.live.ts         # two clients: drop/pick up items, split a stack, meseta, equip/use, break Forest 1 boxes
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
 
