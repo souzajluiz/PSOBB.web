@@ -10,6 +10,7 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
+import { initInventoryPanel } from './inventoryPanel.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -26,6 +27,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let lobby: Lobby | null = null;
   let lobbyView: LobbyView | null = null;
   let viewer: MapViewer | null = null;
+  const inventory = initInventoryPanel($('lobby-panel'), log);
 
   const setStatus = (msg: string, kind: '' | 'ok' | 'err' = '') => {
     loginStatus.textContent = msg;
@@ -94,6 +96,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     try {
       setStatus('Joining lobby...');
       const source = await requireDataSource();
+      await inventory.prepare(session, source);
       lobby = await session.enterLobby(credentials.username, credentials.password, slot);
       $('chars-panel').hidden = true;
       $('login-panel').hidden = true;
@@ -107,6 +110,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
       log(`lobby collision: ${mapData.collision?.faceCount ?? 0} faces, ${mapData.spawns.size} spawn points`);
       lobbyView = new LobbyView(viewer, lobby, mapData);
       wireLobby(lobby);
+      inventory.show(session.character);
       setStatus(`In lobby ${lobby.lobbyNumber + 1}`, 'ok');
       $('lobby-canvas').focus();
     } catch (err) {
@@ -159,6 +163,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     session?.close();
     session = null;
     $('lobby-panel').hidden = true;
+    inventory.hide();
     $('login-panel').hidden = false;
     $<HTMLOListElement>('chat-log').replaceChildren();
     setStatus('Left the lobby. Connect again to pick a character.');

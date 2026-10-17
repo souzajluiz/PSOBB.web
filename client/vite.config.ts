@@ -6,6 +6,10 @@ import { resolve, sep } from 'node:path';
 // The BB key file comes from the local newserv checkout (vendor/, not committed)
 // and is served at /keys/<name>.nsk during development.
 const KEYS_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/blueburst/keys');
+// Development only: newserv's bb-v4 text set (unitxt_*.prs), served at
+// /newserv-text/. Item names need a unitxt from the same build as the ItemPMT
+// the server streams; newserv's matches its own ItemPMT.
+const NEWSERV_TEXT_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/text-sets/bb-v4');
 
 // Development only: a local PSOBB data/ folder exposed at /psobb-data/ so the map
 // viewer can be tested without the (unscriptable) native folder picker.
@@ -56,6 +60,17 @@ export default defineConfig({
             writeFileSync(resolve(dir, `${name}.png`), Buffer.concat(chunks));
             res.end('ok');
           });
+        });
+        server.middlewares.use('/newserv-text', (req, res, next) => {
+          const name = (req.url ?? '').replace(/^\//, '');
+          if (!/^unitxt_[a-z]+\.prs$/.test(name)) return next();
+          try {
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.end(readFileSync(resolve(NEWSERV_TEXT_DIR, name)));
+          } catch {
+            res.statusCode = 404;
+            res.end();
+          }
         });
         server.middlewares.use('/keys', (req, res, next) => {
           const name = (req.url ?? '').replace(/^\//, '');

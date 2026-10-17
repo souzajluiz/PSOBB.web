@@ -6,7 +6,8 @@
 //   3. reconnect to the redirect port, send 93 again carrying those values
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
-import { BBConnection, readUtf16, type Command, type Transport } from './bbconnection.ts';
+import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
+import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
@@ -107,6 +108,8 @@ export interface SessionOptions {
 export class BBSession {
   conn: BBConnection | null = null;
   init: ClientInit | null = null;
+  // Full character file from the game server's E7 (filled by enterLobby).
+  character: CharacterFile | null = null;
   private opts: SessionOptions;
 
   constructor(opts: SessionOptions) {
@@ -223,6 +226,12 @@ export class BBSession {
     if (first.command === 0x1a || first.command === 0xd5) {
       throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
     }
+    // E7 (full save files) is sent before the menu, so it is already in the backlog.
+    const e7 = conn.poll(0xe7);
+    if (e7) {
+      this.character = parseCharacterFile(e7.data);
+      this.log(`character file: ${this.character.name}, ${this.character.inventory.length} items, ${this.character.meseta} meseta`);
+    }
     if (first.command === 0x07) {
       const items = parseMenu(first.data);
       this.log(`main menu: ${items.map((i) => i.name).join(' | ')}`);
@@ -236,6 +245,37 @@ export class BBSession {
     }
     this.log(`joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}, client id ${lobby.selfId}`);
     return lobby;
+  }
+
+  // BB stream file (data-server connection, after login): 04EB asks for the
+  // index (01EB, flag = entry count, entries {u32 size, u32 crc32, u32 offset,
+  // char name[0x40]}), then 03EB with flag = chunk index for each 0x6800-byte
+  // chunk (02EB {u32 chunk_index, data}). The files are concatenated in index
+  // order. newserv sends ItemPMT.prs, ItemMagEdit.prs, PlyLevelTbl.prs and the
+  // BattleParamEntry*.dat tables (DataIndex::generate_bb_stream_file).
+  async streamFiles(): Promise<Map<string, Uint8Array>> {
+    const conn = this.requireConn();
+    conn.send(0x04eb, 0);
+    const index = await conn.waitFor(0x01eb);
+    const dv = new DataView(index.data.buffer, index.data.byteOffset, index.data.byteLength);
+    const entries: Array<{ name: string; size: number; offset: number }> = [];
+    for (let i = 0; i < index.flag && (i + 1) * 0x4c <= index.data.length; i++) {
+      const o = i * 0x4c;
+      entries.push({ size: dv.getUint32(o, true), offset: dv.getUint32(o + 8, true), name: readAscii(index.data, o + 12, 0x40) });
+    }
+    const total = entries.reduce((n, e) => Math.max(n, e.offset + e.size), 0);
+    const stream = new Uint8Array(total);
+    const CHUNK = 0x6800;
+    for (let chunk = 0; chunk * CHUNK < total; chunk++) {
+      conn.send(0x03eb, chunk);
+      const c = await conn.waitFor(0x02eb);
+      const at = new DataView(c.data.buffer, c.data.byteOffset).getUint32(0, true) * CHUNK;
+      stream.set(c.data.subarray(4, 4 + Math.min(CHUNK, total - at)), at);
+    }
+    const files = new Map<string, Uint8Array>();
+    for (const e of entries) files.set(e.name, stream.slice(e.offset, e.offset + e.size));
+    this.log(`stream file: ${entries.map((e) => `${e.name} (${e.size})`).join(', ')}`);
+    return files;
   }
 
   close(): void {

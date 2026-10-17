@@ -78,6 +78,49 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 
 `67` / `68` (join / one more player) = `LobbyFlags` (0x0C: `client_id`, `leader_id`, `disable_udp`, `lobby_number`, `block_number`, …) + entries of 0x520: `PlayerLobbyDataBB` (0x44: `guild_card_number` @+4, `client_id` @+0x1C, name UTF-16 @+0x20), `PlayerInventory` (0x34C), `PlayerDispDataV4` (0x190: stats with `level` @+0x18, visual @+0x24). `69`: player left, `flag` = client id.
 
+## Full character file (`E7`, `SC_SyncSaveFiles_BB_E7`, 0x3994 bytes)
+
+Sent by the game server after the phase-4 `93`, before the `07` menu, so it is already in `BBConnection`'s backlog when the menu arrives; `BBSession.enterLobby` takes it with `conn.poll(0xE7)` and fills `session.character` (`net/charfile.ts`). Layouts from newserv `SaveFileFormats.hh`, `PlayerInventory.hh`, `PlayerSubordinates.hh`, `LevelTable.hh`.
+
+| Off | Size | Field |
+|---|---|---|
+| 0000 | 0x2EA4 | `PSOBBCharacterFile` |
+| 2EA4 | 0x2B8 | `PSOBBBaseSystemFile` (key config etc.) |
+| 315C | 0x838 | `PSOBBFullTeamMembership` (team name UTF-16 @+0x14) |
+
+`PSOBBCharacterFile`:
+
+| Off | Field |
+|---|---|
+| 0000 | `PlayerInventory` (0x34C): u8 `num_items`, `hp_from_materials`, `tp_from_materials`, `language`; 30 × `PlayerInventoryItem` (0x1C) |
+| 034C | `PlayerDispDataV4` (0x190): stats (u16 ATP, MST, EVP, HP, DFP, ATA, LCK, ESP; f32 ×2; u32 `level` (0-based) @+0x18, `exp` @+0x1C, `meseta` @+0x20), visual (0x70) @+0x24, config (0xE8), `technique_levels_v1[0x14]` @+0x17C |
+| 04E8 | u32 `play_time_seconds` |
+| 06F4 | u32 `death_count` |
+| 06F8 | `PlayerBank200` (0x12C8): u32 `num_items`, u32 `meseta`, 200 × {`ItemData`, u16 `amount`, u16 `present`} |
+| 19C0 | `GuildCardBB` (0x108): u32 number, name, team name, description, …, language @+0x105 |
+| 29EC / 2B44 | auto reply / info board (UTF-16, 0xAC) |
+
+`PlayerInventoryItem`: u8 `state` (1 = held, 2 = equipped), u8, u8 `extension_data1`, u8 `extension_data2`, u32 `flags` @+4 (0x04 equippable, **0x08 equipped**, 0x100 kill count, 0x400 wrapped), `ItemData` @+8.
+
+`ItemData` (0x14): `data1[12]`, u32 `id`, `data2[4]`. `data1[0]` = class (0 weapon, 1 armor/shield/unit, 2 mag, 3 tool, 4 meseta). Weapon: `[1..2]` kind, `[3]` grind, `[4]` special (0x80 unidentified, 0x40 wrapped), `[6..11]` three (stat, percent) pairs (1 native, 2 A.beast, 3 machine, 4 dark, 5 hit). Armor/shield: `[5]` slots, `data1w[3]` DFP bonus, `data1w[4]` EVP bonus. Unit: `data1w[3]` modifier (+/++/−/−−). Mag: `[2]` level, `[3]` photon blasts (LLRRRCCC), `data1w[2..5]` DEF/POW/DEX/MIND ×100, `data2` = synchro, IQ, flags (PB slots), color. Tool: `[5]` stack count; tech disk: `[2]` level − 1, `[4]` technique.
+
+Technique level t = `technique_levels_v1[t]` + `inventory.items[t].extension_data1` (+1 for display); 0xFF = not learned (newserv `get_technique_level`).
+
+## BB stream file (`04EB` / `01EB` / `03EB` / `02EB`)
+
+On the data-server connection the client asks for the stream file: `04EB` (no body) → `01EB` with `flag` = entry count, entries of 0x4C {u32 size, u32 CRC32, u32 offset, char name[0x40]}; then `03EB` with `flag` = chunk index → `02EB` {u32 chunk_index, data ≤ 0x6800}. Files are concatenated in index order. newserv sends `BattleParamEntry*.dat` (6), `PlyLevelTbl.prs`, `ItemMagEdit.prs`, **`ItemPMT.prs`**. `BBSession.streamFiles()` downloads it.
+
+## Item parameter table (`ItemPMT.prs`)
+
+Not in `data.gsl`: on BB the server provides it (stream file above). `formats/itempmt.ts` ports newserv's V4 `BinaryItemParameterTableT`. PRS-compressed REL; the root (REL footer @size−0x10) holds 0x17 u32 offsets: weapon, armor, unit, tool, mag tables, weapon kinds, photon colors, ranges, weapon sale divisors (f32 per class), non-weapon sale divisors, mag feed (8 × 11 × 8 bytes), star values (u8 from id 0xB1), specials ({u16 type, u16 amount}), weapon effects, stat boosts (6 bytes), shield effects, max tech levels (19 × 12), combinations (0x10), sound remaps, tech boosts (0x18), unwrap, unsealable, ranged specials. Weapon/armor/unit/mag/tool tables are `ArrayRef {u32 count, u32 offset}` lists (weapons and tools: one per `data1[1]`; armor table: [armors, shields]). Entry sizes: weapon 0x2C, armor/shield 0x20, unit 0x14, mag 0x1C, tool 0x18, all starting with `ItemBaseV4 {u32 id, u16 type, u16 skin, u32 team_points}`. Bare arrays have no stored length: as in newserv, the length runs to the next pointer target found in the REL relocation table.
+
+## Item names
+
+`ItemBase.id` indexes **unitxt collection 1** (`parseUnitxt` numbering; newserv uses `get(BB_V4, ENGLISH, 1)`). Weapon special names are in the same collection at 0x256 + special (`SpecialStarsBeginIndex`, e.g. 599 = "Draw"), technique names are collection 5, and tech disks use the tech-disk tool's name ("Disk:") + technique + " Lv.N" (Ryuker/Reverser hide Lv.1). `formats/itemnames.ts` `ItemNames.describe` follows newserv `describe_item`: `[Wrapped] [????] [Special] Name [+grind] [K:kills] [N/AB/M/D[/hit]]`; armor `(N slots) +xDEF +yEVP`; units `Name+`/`++`/`-`/`--`; mags `LVn def/pow/dex/mind sync% IQ PB:… (color)`; stackable tools `xN`.
+
+The text table must come from the same build as the ItemPMT, because the client indexes it with the PMT ids. In the test client folder (Ephinea) neither text table matches newserv's PMT: `data.gsl:unitxt_e.prs` has 946 item strings (Saber at 156) and the loose `unitxt_j.prs` (English text) has 1550 (Saber at 289, specials at 1048), while newserv's PMT puts Saber at 177 and specials at 599, matching newserv's own `system/text-sets/bb-v4/unitxt_e.prs` (1081 strings). `ItemNames.textMatches` checks that every id is in range and that entry 0x256 + special count is `????`; the Inventory panel tries the client's unitxt first and falls back to newserv's text set (dev server `/newserv-text/`). newserv's `names-v4.json` differs from that unitxt in four hand-corrected strings ("Ressurection", two trailing spaces).
+
+
 ## Lobby traffic
 
 - **Chat `06`:** `u32 unused, u32 guild_card_number`, UTF-16 text. Sent as `\tE<text>`; received as `<name>\t\tE<text>`.

@@ -64,6 +64,12 @@ export class BBConnection {
     return new Promise((resolve) => this.waiters.push({ match, resolve }));
   }
 
+  // Takes an already received, unclaimed command without waiting (null if none).
+  poll(...commands: number[]): Command | null {
+    const i = this.backlog.findIndex((c) => commands.includes(c.command));
+    return i >= 0 ? this.backlog.splice(i, 1)[0] : null;
+  }
+
   send(command: number, flag: number, payload: Uint8Array = new Uint8Array(0)): void {
     const size = HEADER_SIZE + payload.length;
     const padded = new Uint8Array((size + 7) & ~7);
