@@ -376,3 +376,17 @@ Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymot
 
 **Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
 
+
+## Map texture animation (`map_<area>[_<layout>].tam`)
+
+Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.
+
+The file is a list of blocks `{u16 type, u16 size}`, where `size` counts the bytes after this header, ending with type `0xFFFF`.
+
+| Block | Layout | Used by |
+|---|---|---|
+| type & 1 (UV scroll) | `u16 count, u16 pad`, then count × `{u16 id, u16 texture, f32 scroll_u, f32 scroll_v, f32 speed_u, f32 speed_v}` | entries with flag `0x20`: the row whose `id` equals the effect slot id is copied into the slot |
+| type & 2 (texture swap) | `u16 id, u16 count`, then count × `{i16 texture, i16 frames}` | entries with flag `0x40`: matched by animation id. `frames = -1` holds that texture |
+
+- **UV scroll:** `FUN_0066f58c` creates the scroll effect for that texture and forces wrap addressing (`FUN_0081a55c`). Each tick `FUN_0066f804` adds the speed to the offset, which is kept as a short wrapped to ±255 and divided by 256.0 (`0x00939fc0`).
+- **Count:** 151 files, with 1080 scrolls and 558 swaps.

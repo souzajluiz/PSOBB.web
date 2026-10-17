@@ -26,7 +26,8 @@
 - [x] Texture addressing modes (material type 4: clamp/mirror/wrap), material colors (type 5)
 - [x] Decode animated map entries (`NJS_MOTION` layout)
 - [x] Play map motions (animated entries: frame += step per 30 Hz tick, wrapped at the frame count)
-- [ ] Texture animation (`.tam`), UV-scroll effect slots, env-map texgen (material type 7)
+- [x] Texture animation (`.tam`): UV-scroll effect slots and texture swaps
+- [ ] Env-map texgen (material type 7), water distortion (`map_*i.bin`)
 - [x] Verify handedness: the client is right-handed like three.js, so no mirroring is needed
 
 ## Phase 4: online

@@ -7,6 +7,8 @@ import { parseMapNRel, type MapGeometry } from '../formats/nrel.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
 import { MapAnimator } from './mapanim.ts';
+import { TextureAnimator } from './texanim.ts';
+import { parseTam, tamFileFor, type TamFile } from '../formats/tam.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 
 export interface MapStats {
@@ -49,6 +51,7 @@ export class MapViewer {
   private textures: THREE.Texture[] = [];
   private resizeObserver: ResizeObserver;
   readonly mapAnimator = new MapAnimator();
+  private textureAnimator: TextureAnimator | null = null;
   private raycaster = new THREE.Raycaster();
   private keys = new Set<string>();
   private clock = new THREE.Clock();
@@ -98,6 +101,7 @@ export class MapViewer {
   private frame(): void {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.mapAnimator.update(dt);
+    this.textureAnimator?.update(dt);
     if (this.onFrame) {
       this.onFrame(dt, this.keys);
       this.renderer.render(this.scene, this.camera);
@@ -137,11 +141,17 @@ export class MapViewer {
         xvm = null;
       }
     }
-    this.show(geometry, xvm);
+    let tam: TamFile | null = null;
+    try {
+      tam = parseTam(await source.read(`scene/${tamFileFor(nrelName)}`));
+    } catch {
+      tam = null; // most maps have no texture animation file
+    }
+    this.show(geometry, xvm, tam);
     return this.stats(geometry);
   }
 
-  show(geometry: MapGeometry, xvm: Uint8Array | null): void {
+  show(geometry: MapGeometry, xvm: Uint8Array | null, tam: TamFile | null = null): void {
     this.clear();
     this.geometry = geometry;
     this.textures = xvm
@@ -157,6 +167,7 @@ export class MapViewer {
         })
       : [];
     this.materials = new MaterialCache((id) => this.textures[id] ?? null);
+    this.textureAnimator = tam ? new TextureAnimator(tam, (id) => this.textures[id] ?? null) : null;
 
     const root = new THREE.Group();
     for (const section of geometry.sections) {
@@ -165,13 +176,16 @@ export class MapViewer {
       s.rotation.set(section.rotation[0], section.rotation[1], section.rotation[2], 'YXZ'); // map sections rotate in the client's Y, X, Z order (see DEVLOG)
       for (const entry of section.entries) {
         if (!entry.rendered) continue;
+        let root: THREE.Object3D;
         if (entry.animated && entry.motion) {
-          const { root, nodes } = buildObjectTreeWithNodes(entry.object, this.materials);
-          this.mapAnimator.add(nodes, entry.motion, entry.frameStep);
-          s.add(root);
+          const built = buildObjectTreeWithNodes(entry.object, this.materials);
+          this.mapAnimator.add(built.nodes, entry.motion, entry.frameStep);
+          root = built.root;
         } else {
-          s.add(buildObjectTree(entry.object, this.materials));
+          root = buildObjectTree(entry.object, this.materials);
         }
+        this.textureAnimator?.attach(entry, root);
+        s.add(root);
       }
       root.add(s);
     }
@@ -220,7 +234,7 @@ export class MapViewer {
       triangles,
       textures: this.textures.length,
       skippedEntries: g.skippedEntries.length,
-      animations: this.mapAnimator.count,
+      animations: this.mapAnimator.count + (this.textureAnimator?.count ?? 0),
     };
   }
 
@@ -366,6 +380,8 @@ export class MapViewer {
 
   clear(): void {
     this.mapAnimator.clear();
+    this.textureAnimator?.dispose();
+    this.textureAnimator = null;
     this.clearEntities();
     this.geometry = null;
     if (this.mapRoot) {
