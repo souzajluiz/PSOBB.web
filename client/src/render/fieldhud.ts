@@ -41,6 +41,9 @@ export interface FieldHudOptions {
   items: GameItems;
   area: () => number;
   questStarted: () => boolean;
+  // Starts a technique cast from the Technique menu (render/combat.ts
+  // castTechnique); false when it cannot be cast.
+  cast?: (tech: number) => boolean;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   log?: (msg: string) => void;
@@ -115,6 +118,14 @@ export class FieldHud {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
         canCast: () => !isSafeMap(this.opts.area()),
+        // A cast destroys the technique window (flags |= 1 after
+        // SendCastTechPacket_0069a2f0); closing the whole menu with it is
+        // ASSUMED.
+        cast: (t) => {
+          const ok = this.opts.cast?.(t) ?? false;
+          if (ok) this.menu.close();
+          return ok;
+        },
       },
     });
   }

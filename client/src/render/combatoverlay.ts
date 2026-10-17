@@ -73,9 +73,41 @@ interface Floating {
   age: number;
 }
 
+export type TechEffectKind = 'fire' | 'ice' | 'lightning' | 'light' | 'dark' | 'resta' | 'support';
+
+const TECH_COLORS: Record<TechEffectKind, number> = {
+  fire: 0xff6a20,
+  ice: 0x7fd8ff,
+  lightning: 0xfff070,
+  light: 0xffffff,
+  dark: 0xb060ff,
+  resta: 0x60ff80,
+  support: 0x6090ff,
+};
+const EFFECT_LIFETIME = 0.6; // seconds
+
+let glow: THREE.Texture | null = null;
+// A soft white disc, tinted per technique.
+function glowTexture(): THREE.Texture {
+  if (glow) return glow;
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const c = canvas.getContext('2d')!;
+  const g = c.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = g;
+  c.fillRect(0, 0, size, size);
+  glow = new THREE.CanvasTexture(canvas);
+  return glow;
+}
+
 export class CombatOverlay {
   private scene: THREE.Scene;
   private numbers: Floating[] = [];
+  private effects: Array<Floating & { radius: number }> = [];
   private reticle: THREE.Sprite;
 
   constructor(scene: THREE.Scene) {
@@ -92,6 +124,18 @@ export class CombatOverlay {
     this.numbers.push({ sprite, age: 0 });
   }
 
+  // A technique's placeholder effect: a coloured disc that grows to `radius`
+  // and fades (the client's own effects, tec_*.bml / g_TechniqueEffectData
+  // Pointers, are not drawn; the colour per element is ASSUMED).
+  techEffect(kind: TechEffectKind, x: number, y: number, z: number, radius: number): void {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: TECH_COLORS[kind], depthTest: false, transparent: true, blending: THREE.AdditiveBlending }));
+    sprite.position.set(x, y + 10, z);
+    sprite.scale.set(4, 4, 1);
+    sprite.renderOrder = 18;
+    this.scene.add(sprite);
+    this.effects.push({ sprite, age: 0, radius: Math.max(6, radius) });
+  }
+
   // Lock-on cursor over the current target (null hides it).
   setTarget(pos: { x: number; y: number; z: number } | null): void {
     this.reticle.visible = pos !== null;
@@ -99,6 +143,19 @@ export class CombatOverlay {
   }
 
   update(dt: number): void {
+    for (let i = this.effects.length - 1; i >= 0; i--) {
+      const f = this.effects[i];
+      f.age += dt;
+      const t = Math.min(1, f.age / EFFECT_LIFETIME);
+      const s = 4 + (f.radius * 2 - 4) * Math.sqrt(t);
+      f.sprite.scale.set(s, s, 1);
+      (f.sprite.material as THREE.SpriteMaterial).opacity = 1 - t;
+      if (t >= 1) {
+        this.scene.remove(f.sprite);
+        (f.sprite.material as THREE.SpriteMaterial).dispose();
+        this.effects.splice(i, 1);
+      }
+    }
     for (let i = this.numbers.length - 1; i >= 0; i--) {
       const n = this.numbers[i];
       n.age += dt;
@@ -122,6 +179,11 @@ export class CombatOverlay {
       m.dispose();
     }
     this.numbers = [];
+    for (const f of this.effects) {
+      this.scene.remove(f.sprite);
+      (f.sprite.material as THREE.SpriteMaterial).dispose();
+    }
+    this.effects = [];
     this.scene.remove(this.reticle);
     const rm = this.reticle.material as THREE.SpriteMaterial;
     rm.map?.dispose();

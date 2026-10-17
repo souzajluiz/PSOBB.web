@@ -138,6 +138,7 @@ export class GameView {
       area: () => this.current?.area ?? 0,
       questStarted: () => this.quest !== null,
       blocked: () => this.field.menu.open,
+      cast: (t) => this.combat.castTechnique(t),
       log,
     });
     this.hud.load().catch((err) => log(`field HUD: ${(err as Error).message}`));

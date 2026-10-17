@@ -155,10 +155,10 @@ eq(menu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes the
 const tenv = { text: (g: number, i: number) => (g === 6 && i === 0x13 ? 'Level:' : g === 7 ? '\nRequired TP: ' : g === 5 ? `T${i}` : g === 6 ? `\n\nD${i}` : ''), level: (t: number) => (t === 0 ? 3 : null), canCast: () => true };
 eq(TECH_TYPES[0], [0, 6, 3], 'Simple Attack list 0x00974a4c');
 eq(techTpCost(0, 0), 5, 'Foie Lv1 TP');
-eq(techTpCost(0, 29), 43, 'Foie Lv30 TP');
+eq(techTpCost(0, 29), 42, 'Foie Lv30 TP (5 + 29 * 1.3 = 42.7, truncated)');
 eq(techTpCost(0x11, 10), 20, 'Reverser fixed TP');
 eq(techItems(0, tenv).map((i) => i.enabled), [true, false, false], 'learned Foie only');
-eq(techInfo(0, tenv), 'Level:3\nRequired TP: 8\n\nD0', 'info text');
+eq(techInfo(0, tenv), 'Level:3\nRequired TP: 7\n\nD0', 'info text');
 eq(techInfo(6, tenv), '', 'not learned: empty');
 
 // --- command bytes behind the actions (net/items.ts) ---

@@ -23,6 +23,7 @@
 import type { BBConnection, Command } from './bbconnection.ts';
 import { readUtf16 } from './bbconnection.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
+import { splitLevel } from '../combat/techniques.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
 export const MENU_ID_GAME = 0x44000044;
@@ -798,6 +799,22 @@ export class Game extends Lobby {
     this.sendSubcommand(0x46, p);
   }
 
+  // --- Techniques (combat/techniques.ts; SendCastTechPacket_0069a2f0 and the
+  // release in HandleHeavySpecialAttackUnsafeMap send these) ---------------
+
+  // 6x8D then 6x47 at the start of a cast. The client sends 6x8D on every
+  // cast (level_upgrade 0 up to level 15), newserv only forwards it.
+  sendCastTechnique(tech: number, level: number, targets: Array<{ entityId: number; hitbox?: number }>): void {
+    const { sent, extra } = splitLevel(level);
+    this.conn.send(0x60, 0, buildTechLevelOverride(this.selfId, extra));
+    this.conn.send(0x60, 0, buildCastTechnique(this.selfId, tech, sent, targets));
+  }
+
+  // 6x48 when the technique is released.
+  sendCastTechniqueComplete(tech: number, level: number): void {
+    this.conn.send(0x60, 0, buildCastTechniqueComplete(this.selfId, tech, splitLevel(level).sent));
+  }
+
   // 6x0A (G_UpdateEnemyState_6x0A, 0x0C): {entity id 0x1000 | index} {u16
   // index, u16 total damage, u32 game flags}. Flags: 0x20000000 enemy,
   // 0x200 hit, 0x400 big hit, 0x800 dead, 0x100 missed (see combat/formulas.ts).
@@ -938,6 +955,64 @@ export function buildEnemyState(enemyIndex: number, totalDamage: number, flags: 
   dv.setUint16(6, Math.min(0xffff, Math.max(0, Math.round(totalDamage))), true);
   dv.setUint32(8, flags >>> 0, true);
   return b;
+}
+
+// 6x8D G_SetTechniqueLevelOverride_6x8D: {header, u8 level_upgrade, u8 0, u16 0}.
+export function buildTechLevelOverride(clientId: number, extra: number): Uint8Array {
+  const b = new Uint8Array(8);
+  b[0] = 0x8d;
+  b[1] = 2;
+  new DataView(b.buffer).setUint16(2, clientId, true);
+  b[4] = extra & 0xff;
+  return b;
+}
+
+// 6x47 G_CastTechnique_Header_6x47: {header, u8 technique, u8 0, u8 level
+// (<= 14), u8 target count (0..10)} + {u16 entity id, u16 hit box} per
+// target; size = 2 + count (SendCastTechPacket_0069a2f0).
+export function buildCastTechnique(clientId: number, tech: number, level: number, targets: Array<{ entityId: number; hitbox?: number }>): Uint8Array {
+  const list = targets.slice(0, 10);
+  const b = new Uint8Array(8 + list.length * 4);
+  const dv = new DataView(b.buffer);
+  b[0] = 0x47;
+  b[1] = 2 + list.length;
+  dv.setUint16(2, clientId, true);
+  b[4] = tech;
+  b[6] = level;
+  b[7] = list.length;
+  list.forEach((t, i) => {
+    dv.setUint16(8 + i * 4, t.entityId, true);
+    dv.setUint16(10 + i * 4, t.hitbox ?? 0, true);
+  });
+  return b;
+}
+
+// 6x48 G_CastTechniqueComplete_6x48: {header, u16 technique, u16 level (the
+// 6x47 level)} (built at 0x006a03c4).
+export function buildCastTechniqueComplete(clientId: number, tech: number, level: number): Uint8Array {
+  const b = new Uint8Array(8);
+  const dv = new DataView(b.buffer);
+  b[0] = 0x48;
+  b[1] = 2;
+  dv.setUint16(2, clientId, true);
+  dv.setUint16(4, tech, true);
+  dv.setUint16(6, level, true);
+  return b;
+}
+
+export function parseCastTechnique(body: Uint8Array): { clientId: number; tech: number; level: number; targets: number[] } | null {
+  if (body.length < 8 || body[0] !== 0x47) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const n = Math.min(10, body[7], (body.length - 8) >> 2);
+  const targets: number[] = [];
+  for (let i = 0; i < n; i++) targets.push(dv.getUint16(8 + i * 4, true));
+  return { clientId: dv.getUint16(2, true), tech: body[4], level: body[6], targets };
+}
+
+export function parseCastTechniqueComplete(body: Uint8Array): { clientId: number; tech: number; level: number } | null {
+  if (body.length < 8 || body[0] !== 0x48) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), tech: dv.getUint16(4, true), level: dv.getUint16(6, true) };
 }
 
 export function buildDropRequest(req: { floor: number; rtIndex: number; enemyIndex: number; x: number; z: number; room: number; area: number }): Uint8Array {

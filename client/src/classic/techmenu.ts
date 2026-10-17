@@ -22,12 +22,15 @@
 //     empty for a technique not learned.
 // TP cost (GetTechniqueData_006ded14): the technique table at 0x009cf3c0
 // (19 x 0x2C bytes), tp_cost (+0x10) + v_tp_cost (+0x23) / 100.0
-// (0x0096ce84) * level, rounded; Ryuker and Reverser have a fixed cost.
-// Enter on a castable technique sends the cast (SendCastTechPacket_0069a2f0)
-// and closes the window; casting is not part of the web client yet, so the
-// confirm plays SE 0x585 like the client does when it cannot cast.
+// (0x0096ce84) * level, truncated (fistp with the control word | 0xC00);
+// Ryuker and Reverser have a fixed cost (combat/techniques.ts).
+// Enter on a castable technique sends the cast (SendCastTechPacket_0069a2f0,
+// combat/techniques.ts and render/combat.ts castTechnique) and closes the
+// window; when the cast is refused (TP, already casting) it plays SE 0x585
+// like the client.
 
 import { se, SE } from '../audio/se.ts';
+import { techTpCost } from '../combat/techniques.ts';
 import { drawListWindow, drawTextWindow, listKey, type ListItem } from './fieldwindows.ts';
 import type { WindowSkin } from './stage.ts';
 
@@ -44,21 +47,10 @@ export const TECH_TYPES: ReadonlyArray<readonly number[]> = [
   [13, 10, 11, 12, 14], // 0x00974a24 Support: Shifta, Deband, Jellen, Zalure, Ryuker
 ];
 
-// technique_data_array (0x009cf3c0): tp_cost, v_tp_cost per technique.
-const TP_COST: ReadonlyArray<readonly [number, number]> = [
-  [5, 130], [20, 70], [30, 25], [4, 120], [25, 50], [35, 20], [6, 110], [25, 60], [35, 30], [45, 110],
-  [10, 100], [10, 50], [10, 50], [10, 100], [10, 50], [15, 120], [10, 50], [20, 0], [30, 105],
-];
+// GetTechniqueData_006ded14 tp_cost for a 0-based level (combat/techniques.ts).
+export { techTpCost };
 const RYUKER = 0x0e;
 const REVERSER = 0x11;
-
-// GetTechniqueData_006ded14 tp_cost for a 0-based level (clamped to 0..29).
-export function techTpCost(tech: number, level: number): number {
-  const [base, step] = TP_COST[tech] ?? [0, 0];
-  if (tech === RYUKER || tech === REVERSER) return base;
-  const lv = Math.max(0, Math.min(0x1d, level));
-  return Math.round((step / 100) * lv + base);
-}
 
 export interface TechMenuEnv {
   text: (group: number, index: number) => string;

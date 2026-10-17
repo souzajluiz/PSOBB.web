@@ -13,6 +13,10 @@
 //     the leader and, on BB, 6xC8 so the server grants EXP.
 // Reach and cone come from ItemPMT's weapon range table (FUN_007a19c0 /
 // FUN_005e4ba8); enemy stats from BattleParamEntry (the server's stream file).
+// Techniques (palette group 1 = 3, or the Technique menu) are cast by
+// castTechnique(): combat/techniques.ts holds the data, the formulas and the
+// cast state machine; this file sends 6x8D / 6x47 / 6x48 and applies the
+// hits like a weapon strike (6x0A, kill flow).
 
 import { PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -40,6 +44,22 @@ import {
   type AttackType,
   type DefenderStats,
 } from '../combat/formulas.ts';
+import {
+  castMotion,
+  megidChance,
+  releaseFrame,
+  restaHeal,
+  targetListKind,
+  TECH,
+  TECH_NAMES,
+  TechCast,
+  techData,
+  techDamage,
+  techElement,
+  techPower,
+  type TechniqueData,
+  type TechResist,
+} from '../combat/techniques.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
@@ -51,6 +71,8 @@ import { fetchStreamFiles } from '../net/bbsession.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import {
   parseAttack,
+  parseCastTechnique,
+  parseCastTechniqueComplete,
   parseChangeLevel,
   parseEnemyState,
   parseExpMultiplier,
@@ -101,7 +123,33 @@ interface EnemyRuntime {
   attacker: AttackerStats | null; // this enemy hitting a player
   attack: EnemyAttackData | null;
   exp: number; // BattleParamEntry exp of the enemy's stats row
+  resist: TechResist; // ResistData efr / eic / eth / elt / edk
 }
+
+// The local player's technique cast in progress.
+interface CastInProgress {
+  tech: number;
+  level: number; // 0-based effective level
+  data: TechniqueData;
+  state: TechCast;
+  targets: EnemyRuntime[];
+}
+
+// A technique's hit waiting for its object to reach the target (game ticks).
+interface PendingTechHit {
+  ticks: number;
+  apply: () => void;
+}
+
+// 6x47 / 6x48 subcommand numbers.
+const SUB_CAST_TECHNIQUE = 0x47;
+const SUB_CAST_TECHNIQUE_COMPLETE = 0x48;
+// ASSUMED: Rafoie's explosion reaches enemies within this distance of its
+// target (the real object is a projectile with its own collision).
+const RAFOIE_BLAST_RADIUS = 20;
+// ASSUMED: the targeting system's height window for techniques (the weapon
+// hit uses the same).
+const TECH_HEIGHT_WINDOW = 40;
 
 export interface CombatOptions {
   log: (msg: string) => void;
@@ -180,6 +228,9 @@ export class CombatView {
   // local player (the real client needs another player's item or a trip back
   // to Pioneer 2).
   private reviveKey = 'r';
+  private cast: CastInProgress | null = null;
+  private techHits: PendingTechHit[] = [];
+  private castTickRemainder = 0;
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -263,6 +314,8 @@ export class CombatView {
     this.base = base;
     this.enemies.clear();
     this.attack = null;
+    this.cast = null;
+    this.techHits = [];
     this.attacking.clear();
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
@@ -283,10 +336,13 @@ export class CombatView {
       let attacker: AttackerStats | null = null;
       let attack: EnemyAttackData | null = null;
       let exp = 0;
+      let resist: TechResist = { efr: 0, eic: 0, eth: 0, elt: 0, edk: 0 };
       if (params && def && def.stats.length) {
         const s = params.stats(difficulty, def.stats[0]);
         exp = s.exp;
-        stats = enemyDefender(s, params.resist(difficulty, def.resist[0] ?? def.stats[0]));
+        const r = params.resist(difficulty, def.resist[0] ?? def.stats[0]);
+        stats = enemyDefender(s, r);
+        resist = { efr: r.efr, eic: r.eic, eth: r.eth, elt: r.elt, edk: r.edk };
         attack = params.attack(difficulty, def.attack[0] ?? def.stats[0]);
         attacker = enemyAttacker(s, attack);
         withStats++;
@@ -334,6 +390,7 @@ export class CombatView {
         attacker,
         attack,
         exp,
+        resist,
       });
     }
     // HP follows the player across floors (a warp does not heal); it is only
@@ -363,7 +420,8 @@ export class CombatView {
         if (down && !this.held.has(key) && !blocked) {
           const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
           if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
-          else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks are wired yet`);
+          else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);
+          else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks and techniques are wired yet`);
         }
         if (down) this.held.add(key);
         else this.held.delete(key);
@@ -382,6 +440,10 @@ export class CombatView {
         else if (r.idle) this.attacking.delete(me.clientId);
       }
     }
+    this.castTickRemainder += dt * GAME_TICKS_PER_SECOND;
+    const castTicks = Math.min(5, Math.floor(this.castTickRemainder));
+    this.castTickRemainder -= Math.floor(this.castTickRemainder);
+    for (let i = 0; i < castTicks; i++) this.tickCast();
     // Enemy flinch / death motions.
     for (const [index, e] of [...this.enemies]) {
       if (e.state === 'idle') continue;
@@ -408,6 +470,7 @@ export class CombatView {
     for (let i = 0; i < ticks; i++) {
       this.tickEnemies();
       this.damage.tick();
+      this.tickTechHits();
     }
     this.updateLockOn();
     this.overlay?.update(dt);
@@ -542,7 +605,7 @@ export class CombatView {
 
   private press(type: AttackType): void {
     const me = this.game.self;
-    if (!me || !this.view) return;
+    if (!me || !this.view || this.cast) return;
     if (this.attack?.active) {
       this.attack.press(type);
       return;
@@ -641,7 +704,6 @@ export class CombatView {
     this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
     for (const e of hit) {
-      let flags = ENEMY_BASE_FLAGS;
       let damage = 0;
       let critical = false;
       if (rollHit(attacker, e.stats, attackType, step, this.rng)) {
@@ -649,20 +711,281 @@ export class CombatView {
         damage = r.damage;
         critical = r.critical;
       }
-      flags |= applyDamage(e.stats, damage);
-      const total = e.stats.maxHp - e.stats.hp;
-      this.game.sendEnemyState(e.index, total, flags);
-      // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
-      const p = e.instance.root.position;
-      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
-      // The enemy turns on its attacker (unknown_enemy_behavior_4).
-      if (damage >= 1) e.ai?.onDamage(me.clientId);
-      if (flags & FLAG_DEAD) this.killEnemy(e, flags);
-      else if (damage >= 1) this.playDamage(e);
-      this.opts.log(
-        `hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
-      );
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '');
     }
+  }
+
+  // One damaged (or missed) enemy: 6x0A with the new total, the number over
+  // it, its reaction, and the kill flow when it died. Shared by weapon hits
+  // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
+  private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string): void {
+    const me = this.game.self;
+    const flags = baseFlags | applyDamage(e.stats, damage);
+    const total = e.stats.maxHp - e.stats.hp;
+    this.game.sendEnemyState(e.index, total, flags);
+    // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
+    const p = e.instance.root.position;
+    this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+    // The enemy turns on its attacker (unknown_enemy_behavior_4).
+    if (damage >= 1 && me) e.ai?.onDamage(me.clientId);
+    if (flags & FLAG_DEAD) this.killEnemy(e, flags);
+    else if (damage >= 1) this.playDamage(e);
+    this.opts.log(
+      `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
+    );
+  }
+
+  // --- techniques -------------------------------------------------------------
+
+  // 0-based learned level of a technique (CalculateEffectiveTechniqueLevel;
+  // the character file keeps it 1-based), null when not learned.
+  private techLevel(tech: number): number | null {
+    const lv = this.opts.character?.()?.techLevels[tech];
+    return lv ? lv - 1 : null;
+  }
+
+  // CanPlayerCastTechnique_0069a0c4 + SendCastTechPacket_0069a2f0: starts a
+  // cast from the palette or the Technique menu; false when it cannot be cast.
+  castTechnique(tech: number): boolean {
+    const me = this.game.self;
+    const view = this.view;
+    const name = TECH_NAMES[tech] ?? `technique ${tech}`;
+    if (!me || !view || tech < 0 || tech > 18) return false;
+    if (this.cast || this.attack?.active || this.damage.busy || this.damage.dead) return false;
+    const level = this.techLevel(tech);
+    if (level === null) {
+      this.opts.log(`${name}: not learned`);
+      return false;
+    }
+    if (tech === TECH.ryuker) {
+      // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0 and the warp
+      // back to Pioneer 2 are not part of the web client.
+      this.opts.log(`${name}: not wired (no telepipe)`);
+      return false;
+    }
+    const data = techData(tech, level, me.charClass);
+    if (this.tp - data.tpCost < 0) {
+      this.opts.log(`${name} Lv${level + 1}: not enough TP (${this.tp} < ${data.tpCost})`);
+      return false;
+    }
+    const animator = view.playerAnimator(me.clientId);
+    if (!animator) return false;
+    const targets = this.techTargets(tech, data);
+    const kind = targetListKind(tech);
+    let sent: Array<{ entityId: number }> = [];
+    if (tech === TECH.resta || tech === TECH.anti || tech === TECH.shifta || tech === TECH.deband || tech === TECH.reverser) {
+      sent = this.playerTargets(data).map((id) => ({ entityId: id }));
+    } else if (kind === 'one') sent = targets.slice(0, 1).map((e) => ({ entityId: 0x1000 | e.index }));
+    else if (kind === 'list') sent = targets.map((e) => ({ entityId: 0x1000 | e.index }));
+    this.game.sendCastTechnique(tech, level, sent);
+    // The enter code of input state 8 turns the caster to the first target.
+    const first = targets[0];
+    const from = view.playerPositions().get(me.clientId);
+    if (first && from && kind !== 'none') {
+      const p = first.instance.root.position;
+      view.setPlayerAngle(me.clientId, Math.atan2(p.x - from.x, p.z - from.z));
+    }
+    const motionType = MOTION_TYPE[me.charClass] ?? 0;
+    const weaponClass = this.weaponClass();
+    animator.paused = false;
+    animator.play(castMotion(motionType, weaponClass), 1);
+    this.attacking.add(me.clientId);
+    this.cast = {
+      tech,
+      level,
+      data,
+      targets,
+      state: new TechCast(data, releaseFrame(motionType, weaponClass), {
+        release: () => this.releaseTechnique(),
+        done: () => {
+          this.cast = null;
+          this.attacking.delete(me.clientId);
+          animator.paused = false;
+          view.resetGait(me.clientId);
+        },
+      }),
+    };
+    this.opts.log(`cast ${name} Lv${level + 1} (${data.tpCost} TP, ${sent.length} target(s) in 6x47)`);
+    return true;
+  }
+
+  // One game tick of the local cast (ProcessHeavySpecialAttackState).
+  private tickCast(): void {
+    const c = this.cast;
+    const me = this.game.self;
+    if (!c || !me) return;
+    const animator = this.view?.playerAnimator(me.clientId);
+    if (!animator || this.damage.busy) {
+      // A hit or death ends input state 8 (its end handler,
+      // ResetPlayerTechState_006a2a90); a cast not released yet costs no TP.
+      this.cast = null;
+      this.attacking.delete(me.clientId);
+      if (animator) animator.paused = false;
+      return;
+    }
+    c.state.tick(animator.frame, animator.ended);
+    // Phase 1 holds the motion near its first frame.
+    animator.paused = c.state.holding;
+    if (c.state.holding) animator.frame = c.state.holdFrame;
+  }
+
+  // Enemies the technique reaches, nearest first: within range_h on the
+  // ground plane and inside the half-angle angle_h of the facing, the
+  // lock-on target first when it qualifies (ASSUMED: the targeting system's
+  // tech entries, SinowberillWeaponObject_FindTargetingParam_007a401c type 3,
+  // are filtered by the technique's own range and angle).
+  private techTargets(tech: number, data: TechniqueData): EnemyRuntime[] {
+    const me = this.game.self;
+    const from = me && this.view?.playerPositions().get(me.clientId);
+    if (!me || !from) return [];
+    if (techElement(tech) === null && tech !== TECH.jellen && tech !== TECH.zalure) return [];
+    const half = data.angleH * BAMS_TO_RAD;
+    const list: Array<{ e: EnemyRuntime; d: number }> = [];
+    for (const e of this.enemies.values()) {
+      if (e.dead || !e.instance.root.visible) continue;
+      const p = e.instance.root.position;
+      const dx = p.x - from.x;
+      const dz = p.z - from.z;
+      const d = Math.hypot(dx, dz);
+      if (d > data.rangeH || Math.abs(p.y - from.y) > TECH_HEIGHT_WINDOW) continue;
+      if (half < Math.PI) {
+        let diff = Math.atan2(dx, dz) - me.angle;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        if (Math.abs(diff) > half) continue;
+      }
+      list.push({ e, d });
+    }
+    list.sort((a, b) => a.d - b.d);
+    const out = list.map((x) => x.e);
+    const lock = this.lockOn;
+    if (lock && out.includes(lock)) {
+      out.splice(out.indexOf(lock), 1);
+      out.unshift(lock);
+    }
+    return out.slice(0, Math.max(1, data.targets));
+  }
+
+  // Party members (client ids) a support technique reaches: the caster, then
+  // the others within range_h (targets = 0 below level 3: the caster only).
+  private playerTargets(data: TechniqueData): number[] {
+    const me = this.game.self;
+    const positions = this.view?.playerPositions();
+    const from = me && positions?.get(me.clientId);
+    if (!me || !positions || !from) return [];
+    const out = [me.clientId];
+    for (const [id, p] of positions) {
+      if (id === me.clientId || out.length >= data.targets) continue;
+      if (Math.hypot(p.x - from.x, p.z - from.z) <= data.rangeH) out.push(id);
+    }
+    return out;
+  }
+
+  // The release frame (0x006a0340 area): TP, 6x48, then the technique's
+  // effect (action_launch_tech -> unknown_cast_tech).
+  private releaseTechnique(): void {
+    const c = this.cast;
+    const me = this.game.self;
+    const view = this.view;
+    if (!c || !me || !view) return;
+    const tp = this.tp - c.data.tpCost;
+    this.tp = tp < 1 ? 0 : tp;
+    this.game.sendCastTechniqueComplete(c.tech, c.level);
+    const name = TECH_NAMES[c.tech];
+    const from = view.playerPositions().get(me.clientId);
+    if (!from) return;
+    const mst = this.selfStats().mst;
+    if (c.tech === TECH.resta) {
+      const heal = restaHeal(c.level, mst, me.charClass);
+      const before = this.damage.hp;
+      if (!this.damage.dead) this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
+      this.overlay?.techEffect('resta', from.x, from.y, from.z, c.data.rangeH);
+      this.opts.log(`${name} Lv${c.level + 1}: +${heal} HP (${before} -> ${this.damage.hp}); other players heal on their own clients`);
+      return;
+    }
+    if (techElement(c.tech) === null) {
+      this.overlay?.techEffect('support', from.x, from.y, from.z, 20);
+      this.opts.log(`${name} Lv${c.level + 1}: cast, effect not wired`);
+      return;
+    }
+    // Who is hit: single-target techniques take the first target, Rafoie
+    // explodes around it, the others reach every target in range.
+    let hits = c.targets.filter((e) => !e.dead);
+    if (c.data.targets <= 1) hits = hits.slice(0, 1);
+    if (c.tech === TECH.rafoie) {
+      const t = hits[0];
+      hits = t ? [...this.enemies.values()].filter((e) => !e.dead && e.instance.root.position.distanceTo(t.instance.root.position) <= RAFOIE_BLAST_RADIUS) : [];
+    }
+    const element = techElement(c.tech)!;
+    if (!hits.length) {
+      // No target: the object flies straight ahead and fades (unknown_cast_tech).
+      const a = me.angle;
+      const r = Math.min(c.data.rangeH, 60);
+      this.overlay?.techEffect(element, from.x + Math.sin(a) * r, from.y, from.z + Math.cos(a) * r, 12);
+      this.opts.log(`${name} Lv${c.level + 1}: no target`);
+      return;
+    }
+    // ASSUMED: the object travels `speed` units per tick (Foie: speed +
+    // max(0, level - 4), TechniqueObject_ApplyPowerAndSpeedStats_006e31e8);
+    // techniques with speed 0 strike at once.
+    const speed = c.tech === TECH.foie ? c.data.speed + Math.max(0, c.level - 4) : c.data.speed;
+    const area = c.data.angleH * BAMS_TO_RAD >= Math.PI && c.data.targets > 1;
+    if (area) this.overlay?.techEffect(element, from.x, from.y, from.z, c.data.rangeH);
+    for (const e of hits) {
+      const p = e.instance.root.position;
+      const d = Math.hypot(p.x - from.x, p.z - from.z);
+      this.techHits.push({
+        ticks: speed > 0 ? Math.ceil(d / speed) : 0,
+        apply: () => {
+          if (e.dead || !this.enemies.has(e.index)) return;
+          if (!area) this.overlay?.techEffect(element, p.x, p.y, p.z, 14);
+          this.techHitEnemy(c.tech, c.level, mst, me.charClass, e);
+        },
+      });
+    }
+  }
+
+  // entity_hit_by_tech on an enemy (combat/techniques.ts).
+  private techHitEnemy(tech: number, level: number, mst: number, charClass: number, e: EnemyRuntime): void {
+    const name = TECH_NAMES[tech];
+    if (tech === TECH.megid) {
+      // Instant death with chance (power - EDK) * 0.01 (no boss-map check:
+      // ASSUMED the floor is not a boss map).
+      const chance = megidChance(level, e.resist.edk);
+      const kill = this.rng() < chance;
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `);
+      return;
+    }
+    const damage = techDamage(tech, level, mst, charClass, e.resist);
+    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `);
+  }
+
+  private tickTechHits(): void {
+    if (!this.techHits.length) return;
+    const due = this.techHits.filter((h) => --h.ticks < 0);
+    this.techHits = this.techHits.filter((h) => h.ticks >= 0);
+    for (const h of due) h.apply();
+  }
+
+  // Another player's 6x47: its cast motion (action_cast_tech enters input
+  // state 8 the same way); its 6x48 shows the effect.
+  private remoteCast(clientId: number, tech: number): void {
+    const view = this.view;
+    const p = this.game.players.get(clientId);
+    if (!view || !p) return;
+    const animator = view.playerAnimator(clientId);
+    if (!animator) return;
+    this.attacking.add(clientId);
+    animator.paused = false;
+    animator.play(castMotion(MOTION_TYPE[p.charClass] ?? 0, 0), 1);
+    this.opts.log(`player ${clientId} casts ${TECH_NAMES[tech] ?? tech}`);
+    const hook = () => {
+      if (this.disposed || animator.ended) {
+        this.viewer.frameHooks.delete(hook);
+        this.attacking.delete(clientId);
+        if (!this.disposed) view.resetGait(clientId);
+      }
+    };
+    this.viewer.frameHooks.add(hook);
   }
 
   private attackerStats() {
@@ -839,6 +1162,19 @@ export class CombatView {
     if (sub === 0xdd) {
       const m = parseExpMultiplier(body);
       if (m !== null) this.expMultiplier = Math.max(1, m);
+      return;
+    }
+    if (sub === SUB_CAST_TECHNIQUE) {
+      const t = parseCastTechnique(body);
+      if (t && t.clientId !== this.game.selfId) this.remoteCast(t.clientId, t.tech);
+      return;
+    }
+    if (sub === SUB_CAST_TECHNIQUE_COMPLETE) {
+      const t = parseCastTechniqueComplete(body);
+      if (!t || t.clientId === this.game.selfId) return;
+      const pos = this.view?.playerPositions().get(t.clientId);
+      const el = techElement(t.tech);
+      if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
       return;
     }
     if (sub >= 0x43 && sub <= 0x45) {

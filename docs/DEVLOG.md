@@ -1,5 +1,84 @@
 # Devlog
 
+## 2026-10-17: casting techniques
+
+**What changed:** techniques can be cast from the action palette (a slot with
+group 1 = 3, group 2 = the technique) and from Main menu > Technique.
+`combat/techniques.ts` holds the data and the rules, `render/combat.ts`
+`castTechnique()` runs the cast, and `net/game.ts` builds `6x8D` / `6x47` /
+`6x48`.
+
+**Details** (Ephinea `PsoBB.exe`, the named dump and objdump):
+- **Data.** The technique table `0x009cf3c0` (19 x 0x2C) is scaled per level
+  the way `GetTechniqueData_006ded14` does it. Its 19-case jump table
+  (`0x0096cb60`) was decoded from the disassembly. Range, cast time, charge
+  and half-angle depend on the level, and the support techniques get a class
+  boost (`0x009cc550`).
+- **TP cost is truncated, not rounded.** `fistp` runs with the control word
+  `| 0xC00`. The Technique menu's cost display changed with it: Foie Lv30
+  costs 42 TP, not 43.
+- **Power.** `GetTechniquePower_006dec5c`: power + v_power × level. Above
+  level 15 it is `add + factor × level` from `0x009cf720`.
+- **Damage.** `entity_hit_by_tech`:
+  `(MST + power) × (1 + class boost) × (100 − resist) × 0.002`. Fire uses
+  EFR, Barta and Gibarta / Rabarta use EIC, the Zonde family uses ETH,
+  Grants uses ELT. There is no hit roll and no critical.
+- **Megid.** It kills with chance `(power − EDK) × 0.01`.
+- **Resta.** It heals `MST × 0.5 + power`.
+- **Cast flow.** `SendCastTechPacket_0069a2f0` and the palette dispatch of
+  `handle_input_state_cast_tech` send `6x8D` (on every cast, level_upgrade 0
+  up to level 15), then `6x47 {tech, min(level, 14), targets}`.
+  - The cast motion is field slot 1 (motion set vtable +0x38 →
+    `0x007083d4`).
+  - The motion is held for `charge` ticks, then released at the frame from
+    `GetWeaponModelData` (`0x006ac778`: 13 with a weapon; 8, 17 or 13 bare
+    handed).
+  - At release (`0x006a0340` area) TP drops by `tp_cost` and `6x48 {u16
+    tech, u16 level}` goes out.
+  - After that the cast counts down `cast` ticks and waits for the motion to
+    end.
+  - A hit cancels the cast; no TP is spent then.
+- **6x47 targets.** Following `InitializeTechniqueTargetingParams_006e1a48`:
+  - one target for Foie, Rafoie, Barta, Gibarta, Zonde, Grants, Megid and
+    Reverser;
+  - a list for Gizonde and the support techniques;
+  - none for Gifoie, Rabarta and Razonde.
+- **Hits.** They go out as `6x0A` through the same path as a weapon strike,
+  so the kill, drop and EXP flow is shared (`applyEnemyHit`). newserv claims
+  the last hit from the `6x0A` 0x200 flag.
+- **Not wired yet.** Resta heals only the local player; other players heal
+  on their own clients. Shifta, Deband, Jellen, Zalure, Anti and Reverser
+  are cast (TP, motion, packets) but log "effect not wired". Ryuker is
+  refused (no telepipe).
+- **Remote players.** Another player's `6x47` plays their cast motion, and
+  their `6x48` shows the effect.
+- **ASSUMED:**
+  - Targets are the enemies within the technique's `range_h` and half-angle
+    `angle_h`, with the lock-on target first. The client's targeting system
+    entries (type 3) were not decoded.
+  - The object travels `speed` units per tick (Foie: + max(0, level − 4)).
+  - Rafoie's blast radius is 20.
+  - Equipment tech boosts are 0.
+  - The effect is a coloured placeholder disc. The client's own technique
+    effects are not drawn.
+  - A cast from the Technique menu closes the whole menu.
+
+**Verified:** `node tests/techniques.test.ts` covers TP for Lv1–30, the
+per-level fields (spot checks against the decode), power, the damage, heal
+and Megid formulas, the bytes of `6x8D` / `6x47` / `6x48`, and the cast
+timing. `tests/fieldhud.test.ts` was updated for the truncated TP. In Chrome I
+used a new FOnewearl (MST 58, Foie Lv1) on Forest 1. For the hit tests a
+temporary console hook, which was not committed, put me next to the nearest
+enemies and switched off their AI:
+- The palette's right key cast Foie and TP went 87 → 82.
+- Foie hit a Savage Wolf for 44, which matches (58 + 110) × 1.3 × 0.2.
+- It hit a Gobooma (EFR 25) for 33 per cast, and four casts killed it. newserv
+  answered with the drop `6x5F` and +6 EXP.
+- Main menu > Technique > Foie cast and closed the menu.
+- I did not check remote casts (a second client), Resta (the test character
+  only knows Foie), or Lv16+ casts live.
+
+
 ## 2026-10-17: the player turned into a capsule in games
 
 **Symptom:** in a game the player showed the capsule stand-in, and NPCs and
