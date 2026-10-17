@@ -90,6 +90,23 @@ export class EnemyLayer {
     return done;
   }
 
+  // Removes one enemy's model (render/combat.ts: the death motion ended).
+  remove(instance: EnemyInstance): void {
+    const i = this.instances.indexOf(instance);
+    if (i >= 0) this.instances.splice(i, 1);
+    this.animators = this.animators.filter((a) => !instance.animators.includes(a));
+    instance.root.removeFromParent();
+    const materials = new Set<THREE.Material>();
+    instance.root.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
+      }
+      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
+    });
+    for (const m of materials) m.dispose();
+  }
+
   clear(): void {
     this.generation++;
     this.animators = [];

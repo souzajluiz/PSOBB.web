@@ -352,7 +352,7 @@ export class Game extends Lobby {
   resumed = false;
   readonly lobby: Lobby;
   private ctx: GameContext;
-  private selfSnapshot: SelfData;
+  readonly selfSnapshot: SelfData;
   private joined: Promise<void>;
   private resolveJoined!: () => void;
   private rejectJoined!: (e: Error) => void;

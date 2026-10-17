@@ -108,6 +108,7 @@ function nameSprite(text: string): THREE.Sprite {
 }
 
 interface Marker {
+  clientId: number;
   group: THREE.Group;
   target: THREE.Vector3;
   angle: number;
@@ -165,6 +166,9 @@ export class LobbyView {
   private labels: boolean;
   // Which players to show (games: only the ones on the local player's floor).
   private showPlayer: (p: LobbyPlayer) => boolean;
+  // While this returns true for a player, its gait motion is not played over
+  // the attack motion and the local player does not move (render/combat.ts).
+  attacking: (clientId: number) => boolean = () => false;
 
   constructor(
     viewer: MapViewer,
@@ -293,6 +297,7 @@ export class LobbyView {
     else group.position.set(p.position.x, p.position.y, p.position.z);
     this.viewer.scene.add(group);
     const marker: Marker = {
+      clientId: p.clientId,
       group,
       target: group.position.clone(),
       angle: spawn ? spawn.angle : p.angle,
@@ -339,6 +344,7 @@ export class LobbyView {
     if (m.gait === gait && !force) return;
     m.gait = gait;
     if (!m.animator) return;
+    if (this.attacking(m.clientId)) return;
     const cls = m.charClass;
     m.animator.play(townMotion(cls, locomotionSlot(cls, gait)), LOCOMOTION_FACTOR[gait], (slot) => townMotion(cls, slot));
   }
@@ -365,8 +371,8 @@ export class LobbyView {
     const mine = me ? this.markers.get(me.clientId) : undefined;
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
-    // Local movement relative to the camera.
-    if (me && mine) {
+    // Local movement relative to the camera (not while attacking).
+    if (me && mine && !this.attacking(me.clientId)) {
       const forward = new THREE.Vector3(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
       const right = new THREE.Vector3(-forward.z, 0, forward.x);
       const dir = new THREE.Vector3();
@@ -458,6 +464,25 @@ export class LobbyView {
     if (!m) return null;
     const box = new THREE.Box3().setFromObject(m.group);
     return box.isEmpty() ? null : box.max.y - m.group.position.y;
+  }
+
+  // --- combat hooks (render/combat.ts) --------------------------------------
+
+  // Motion player of a player's model (null while the model loads).
+  playerAnimator(clientId: number): PlayerAnimator | null {
+    return this.markers.get(clientId)?.animator ?? null;
+  }
+
+  // Turns a player (6x43 carries the attack angle).
+  setPlayerAngle(clientId: number, angle: number): void {
+    const m = this.markers.get(clientId);
+    if (m) m.angle = angle;
+  }
+
+  // Plays the gait motion again after an attack motion ended.
+  resetGait(clientId: number): void {
+    const m = this.markers.get(clientId);
+    if (m) this.setGait(m, m.gait, true);
   }
 
   // World position of each player (for 2D overlays such as name tags).

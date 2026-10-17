@@ -15,10 +15,11 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel, type MapSection } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld, type ObjectSetEntry } from '../formats/objset.ts';
-import { parseSetFile, placeEntities } from '../formats/setdata.ts';
+import { parseSetFile, placeEntities, type EnemySet } from '../formats/setdata.ts';
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
 import { CollisionWorld } from './collision.ts';
+import { CombatView } from './combat.ts';
 import { EnemyLayer } from './enemyview.ts';
 import { GameField } from './gamefield.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
@@ -55,6 +56,7 @@ export class GameView {
   private table: Promise<SetDataTable | null> | null = null;
   private view: LobbyView | null = null;
   readonly enemyLayer: EnemyLayer;
+  readonly combat: CombatView;
   private field: GameField;
   private objectCounts = new Map<number, Promise<number>>();
   private busy = false;
@@ -72,6 +74,8 @@ export class GameView {
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.field = new GameField(viewer, game, this.files, { bgm, log, warpTo: (f) => this.warpTo(f), toLobby: () => this.onLobbyWarp() });
+    // Combat lives in render/combat.ts; the view only hands it the floor.
+    this.combat = new CombatView(viewer, game, this.files, this.enemyLayer, { log, floorFilesFor: (f) => this.floorFilesFor(f) });
   }
 
   // Number of set-data objects on the floors before `floor` (object entity
@@ -163,6 +167,7 @@ export class GameView {
     }
 
     let objects: ObjectSetEntry[] = [];
+    let enemySets: EnemySet[] = [];
     let enemyCount = 0;
     let placedObjects: ReturnType<typeof placeEntities> = [];
     if (files) {
@@ -182,6 +187,7 @@ export class GameView {
       if (await this.files.has(files.enemies)) {
         const enemies = parseSetFile(files.enemies, await this.files.read(files.enemies));
         enemyCount = enemies.length;
+        enemySets = enemies.filter((e): e is EnemySet => e.kind === 'enemy');
         entities.push(...enemies);
       }
       const placed = placeEntities(entities, sections, area).filter((p) => !(p.entity.kind === 'object' && p.entity.type === 0));
@@ -202,6 +208,10 @@ export class GameView {
     this.view = new LobbyView(this.viewer, this.game, mapData, { showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
     this.field.enterFloor(floor, area, placedObjects, await this.objectBase(floor));
     this.field.attach();
+    this.view.attacking = this.combat.isAttacking;
+    await this.combat.enterFloor(floor, area, enemySets, await this.combat.enemyBase(floor));
+    if (this.disposed) return;
+    this.combat.attach(this.view);
     this.current = {
       floor,
       area,
@@ -220,6 +230,7 @@ export class GameView {
 
   dispose(): void {
     this.disposed = true;
+    this.combat.dispose();
     this.field.dispose();
     this.view?.dispose();
     this.view = null;

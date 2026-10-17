@@ -4,9 +4,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BBSession } from '../client/src/net/bbsession.ts';
-import { Game, parseSwitchFlag } from '../client/src/net/game.ts';
+import { Game, parseAttack, parseAttackTargets, parseEnemyState, parseSwitchFlag } from '../client/src/net/game.ts';
 import { GSLArchive } from '../client/src/formats/archives.ts';
-import { parseSetFile, type ObjectSet } from '../client/src/formats/setdata.ts';
+import { parseEnemySets, parseSetFile, type ObjectSet } from '../client/src/formats/setdata.ts';
+import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
+import { ENEMY_TYPE_PARAMS } from '../client/src/formats/entitynames.ts';
 import { floorFiles, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import type { Lobby, LobbyPlayer } from '../client/src/net/lobby.ts';
 import { nodeBridge } from './lib/nodews.ts';
@@ -118,6 +120,67 @@ try {
     ga.sendSwitchFlag(0x4000 + base + sw.index, 1, sw.params[3] & 0xff);
     const s = await bSawSwitch;
     check(`B saw A set switch flag ${s?.flag} on floor ${s?.floor} (entity 0x${s?.entityId.toString(16)})`, s?.flag === (sw.params[3] & 0xff) && s?.floor === 1 && s.set);
+  }
+
+  // Combat: A attacks and kills the first enemy of Forest 1 (6x43, 6x46,
+  // 6x0A), B sees all three, and the kill makes the server drop an item
+  // (6x60 to the leader -> 6x5F) and grant EXP (6xC8 -> 6xBF).
+  {
+    const NEWSERV = process.env.NEWSERV ?? join(ROOT, 'vendor/newserv');
+    // newserv validates entity ids against its own BB map files, which are not
+    // always the ones the client has (its Pioneer 2 file has 21 enemy sets
+    // where the Ephinea client's has 23), so the index comes from its files.
+    const map = (n: string) => new Uint8Array(readFileSync(join(NEWSERV, 'system/maps/bb-v4', n)));
+    const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
+    const gsl2 = new GSLArchive(new Uint8Array(readFileSync(join(DATA, 'data.gsl'))));
+    const table = parseSetDataTable(existsSync(join(DATA, 'SetDataTableOn.rel')) ? new Uint8Array(readFileSync(join(DATA, 'SetDataTableOn.rel'))) : gsl2.get('SetDataTableOn.rel'));
+    const v = ga.info!.variations;
+    const base = expandEnemySets(parseEnemySets(map(floorFiles(table, 0, v[0].layout, v[0].entities, 0, 'normal')!.enemies)), 0).length;
+    const f1 = floorFiles(table, 1, v[1].layout, v[1].entities, 1, 'normal')!;
+    const slots = expandEnemySets(parseEnemySets(map(f1.enemies)), 1);
+    const i = slots.findIndex((s) => ENEMY_TYPE_PARAMS[s.type]?.rt !== 0xff && ENEMY_TYPE_PARAMS[s.type]?.rt !== undefined);
+    const slot = slots[i];
+    const index = base + i;
+    const entityId = 0x1000 | index;
+
+    const bSawAttack = waitEvent<ReturnType<typeof parseAttack>>((r) => gb.on('subcommand', (sub, _c, body) => sub === 0x43 && r(parseAttack(body))), 'B sees 6x43');
+    ga.sendAttack(0, Math.PI / 2, 0);
+    const atk = await bSawAttack;
+    check(`B saw A's first attack (6x43, angle ${atk?.angle.toFixed(3)}, type ${atk?.attackType})`, atk?.clientId === 0 && atk?.step === 0 && atk?.attackType === 0);
+
+    const bSawTargets = waitEvent<ReturnType<typeof parseAttackTargets>>((r) => gb.on('subcommand', (sub, _c, body) => sub === 0x46 && r(parseAttackTargets(body))), 'B sees 6x46');
+    ga.sendAttackTargets([{ entityId }]);
+    const targets = await bSawTargets;
+    check(`B saw the strike's target list (6x46: 0x${targets?.targets[0]?.toString(16)})`, targets?.targets.join() === String(entityId));
+
+    // The kill: HP is irrelevant to the server, which only tracks total damage.
+    const bSawState = waitEvent<ReturnType<typeof parseEnemyState>>((r) => gb.on('subcommand', (sub, _c, body) => sub === 0x0a && r(parseEnemyState(body))), 'B sees 6x0A');
+    const aSawDrop = waitEvent<Uint8Array>((r) => ga.on('subcommand', (sub, _c, body) => sub === 0x5f && r(body)), 'A sees the drop (6x5F)');
+    const aSawExp = waitEvent<Uint8Array>((r) => ga.on('subcommand', (sub, _c, body) => sub === 0xbf && r(body)), 'A gets EXP (6xBF)');
+    const flags = 0x20900e00; // enemy, on ground, activated, hit + big hit + dead
+    ga.sendEnemyState(index, 999, flags);
+    const state = await bSawState;
+    check(
+      `B saw E-${index.toString(16)} (${slot.type}) die (6x0A flags 0x${state?.flags.toString(16)}, damage ${state?.totalDamage})`,
+      state?.enemyIndex === index && (state.flags & 0x800) !== 0,
+    );
+    ga.sendEntitySetFlags(entityId, 1, 8);
+    ga.sendEnemyDropRequest({ floor: 1, rtIndex: ENEMY_TYPE_PARAMS[slot.type].rt, enemyIndex: index, x: 0, z: 0, room: slot.set.section, area: 1 });
+    ga.sendExpRequest(index, true);
+    const exp = await aSawExp;
+    check(`the server granted EXP for the kill (6xBF: ${new DataView(exp.buffer, exp.byteOffset).getUint32(4, true)} EXP)`, exp.length >= 8);
+    // The drop itself is a dice roll ("Drop not chosen" when the enemy drops
+    // nothing), so a 6x5F is only reported, not required.
+    const drop = await aSawDrop.catch(() => null);
+    if (drop) {
+      const dv = new DataView(drop.buffer, drop.byteOffset, drop.byteLength);
+      check(
+        `the server dropped an item (6x5F: source ${drop[5]}, entity 0x${dv.getUint16(6, true).toString(16)}, item ${[...drop.subarray(0x14, 0x18)].map((x) => x.toString(16).padStart(2, '0')).join('')})`,
+        drop.length >= 0x2c && drop[5] === 1,
+      );
+    } else {
+      console.log('PASS the drop request was accepted (the enemy dropped nothing this time)');
+    }
   }
 
   // Back to the lobby.

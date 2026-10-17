@@ -65,10 +65,11 @@ node tests/items.test.ts         # ItemPMT parser and item names vs newserv's re
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/charfile.live.ts      # character file (E7) and inventory with item names
-node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, switch flag (6x05), back to lobby
+node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, switch flag (6x05), attack and kill an enemy (6x43/6x46/6x0A/6x60/6xC8), back to lobby
 node tests/fieldbgm.test.ts      # area -> BGM table, interactive-music sequencer, chained-Ogg links of data/ogg/slbgm_*.ogg
 node tests/warpmenu.test.ts      # Ragol teleporter entries, warp windows, boss warp table, doors, warps found in the set data
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
+node tests/combat.test.ts        # damage/accuracy formulas, attack combo timing, enemy slot ids and battle params vs newserv
 node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```

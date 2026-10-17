@@ -530,6 +530,81 @@ Code: `formats/enemymodels.ts` (table), `render/enemymodel.ts` (loader, animator
 
 **Not decoded:** child objects drawn by separate sub-objects (Dark Belra's arms, Chaos Sorcerer's bits, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Saint-Milion's parts), Recobox orientation, Vol Opt phase 1 parts (the `0xC2` controller draws nothing), Olga Flow's height offset (`+0x4F0`).
 
+## Combat (player attacks, damage, enemy state)
+
+Code: `combat/attack.ts` (combo state machine, motion / hit-frame tables), `combat/formulas.ts` (hit and damage), `combat/enemymotions.ts` (damage and death motions), `render/combat.ts` (hit detection and the commands), `formats/battleparams.ts`, `formats/enemyslots.ts`, `formats/itempmt.ts` (weapon ranges). Tests: `tests/combat.test.ts`, `tests/game.live.ts`. Addresses are VAs in the Ephinea `PsoBB.exe` (1.25.13); newserv's checks are in `src/ReceiveSubcommands.cc`.
+
+### The commands of one attack
+
+| Command | Layout (newserv `CommandFormats.hh`) | When |
+| --- | --- | --- |
+| `6x43` / `6x44` / `6x45` | `G_Attack_6x43_6x44_6x45` (8): `u16 angle_y` (BAMS), `u16 attack_type` | attack 1, 2, 3 of a combo |
+| `6x46` | `G_AttackFinished_Header_6x46` (8 + 4·n): `u32 target_count`, then `{u16 entity_id, u16 hitbox}` (at most 10) | once per strike, with the entities it hit |
+| `6x0A` | `G_UpdateEnemyState_6x0A` (0x0C): header entity id `0x1000 \| index`, `u16 enemy_index`, `u16 total_damage`, `u32 game_flags` | once per damaged enemy |
+| `6x76` | `G_SetEntitySetFlags_6x76` (8): entity id, `u16 floor`, `u16 flags` (8 = dead) | after the killing `6x0A` |
+| `6x60` | `G_StandardDropItemRequest_PC_V3_BB_6x60` (0x18): `u8 floor, u8 rt_index, u16 entity_index, f32 x, f32 z, u16 room, u16 ignore_def, u8 effective_area` | a kill, sent to the leader with `62` |
+| `6xC8` | `G_EnemyEXPRequest_BB_6xC8` (0x0C): entity id, `u16 enemy_index`, `u16 requesting_client_id`, `u8 is_killer` | a kill, BB only |
+
+Order in a real client's capture (newserv `tests/GC-ForestGameRareMagFeed.test.txt`): `6x43`, `6x46`, `6x0A`, `6x76`, then `62`/`6x60`; on BB the server answers `6x5F` (the dropped floor item) and `6xBF` (EXP for every client).
+
+`6x0A` game flags (the capture sends `0x20900E00` for a killing hit): `0x20000000` entity is an enemy, `0x00800000` on the ground, `0x00100000` activated, `0x100` missed, `0x200` hit (flinch), `0x400` the hit was over 25% of max HP, `0x800` dead. newserv keeps `total_damage` and the "last hit by" client from this command and refuses player/object/item type bits.
+
+**Entity ids.** Each enemy *set* entry expands into one or more enemy slots (Monest + 30 Mothmants, Pan Arms + its halves, the boss parts…); the slots of all floors are numbered in order and slot *i* is entity `0x1000 + i` (`formats/enemyslots.ts`, ported from newserv's `SuperMap::add_enemy_and_children`). The id must match the server's own list: newserv's BB map files are not always the client's (its `map_city00_00e.dat` has 21 enemy sets where the Ephinea client's has 23), which shifts every later floor by 2.
+
+### Stat block of an entity
+
+`FUN_00770da4` (players, from `FUN_006960e4`) and `FUN_007868f8` (enemies, from every enemy constructor) fill the same fields out of `{PlayerStats, AttackData, ResistData}`:
+
+| Offset | Field |
+| --- | --- |
+| `+0x2BC` / `+0x334` | max HP / HP |
+| `+0x2CC` / `+0x2CE` | ATP / ATP spread |
+| `+0x2D0` / `+0x2D2` | EVP / DFP |
+| `+0x2D4` / `+0x2D6` | ATA / LCK |
+| `+0x2F6`, `+0x2F8`, `+0x2FA`, `+0x2FC`, `+0x2FE` | EFR, ETH, EIC, EDK, ELT |
+| `+0x31C` | → AttackData (its first `i16` is the equipment ATP) |
+
+Enemies: max HP = `stats.hp + stats.level`, EVP = `stats.evp + resist.evp_bonus`, DFP = `stats.dfp + resist.dfp_bonus`, ATA = `attack.min_ata + stats.ata`, spread = `attack.max_atp − attack.min_atp`. Players: ATA = `(class_attack.min_ata + stats.ata) × 0.1` (`DAT_00978358`), class AttackData at `0x00968A60 + class × 0x30` (`{min_atp, max_atp, min_ata}`, e.g. HUmar `{5, 10, 650}`). Shifta (`+0x278`) scales ATP and spread, Zalure (`+0x284`) scales DFP (`FUN_007791b8`).
+
+Enemy stats come from `BattleParamEntry*.dat` (`formats/battleparams.ts`): `PlayerStats[4][0x60]` at 0, `AttackData` at `0x3600`, `ResistData` at `0x7E00`, `MovementData` at `0xAE00`, indexed `[difficulty][bp index]`; the bp index per enemy type is newserv's `type_defs` (`ENEMY_TYPE_PARAMS` in `formats/entitynames.ts`). On BB the client gets the files from the server's stream file (`04EB`), like `ItemPMT.prs`.
+
+### Hit and damage
+
+Hit check (`FUN_007775EC` → `FUN_00777664`, enemy vtable `+0x70` / `+0x74`):
+
+```
+p = (ATA × type_mult × combo_mult − EVP × 0.2) × 0.01      (DAT_0097819C, DAT_00978198)
+hit  <=>  p > 0 and rand() <= p                            (FUN_007751B0: uniform 0..1)
+type_mult  = 0x009CB9DC[attack type] = {1.0, 0.7, 0.5}     (normal, heavy, special)
+combo_mult = 0x009CB9E8[combo step]  = {1.0, 1.3, 1.69}
+```
+
+Damage (`FUN_007732B8`, enemy vtable `+0x5C`), per hit box flagged by the hit check:
+
+```
+d  = (ATP + spread × rand()) × 0.2                          (_DAT_009782B4)
+   + equip_ATP × 0.2 × (1 + 0.01 × attribute%)              (attribute matching the target's kind)
+   + Σ elemental_i × (100 − resist_i) × 0.01                (attacker +0x2EC..+0x2F4)
+   − DFP × 0.2                                              (_DAT_009782A8 = −0.2)
+   − hitbox_defense
+if d >= 0: d ×= 0x009CB9D0[attack type] = {0.9, 1.7, 0.5}
+critical when rand() × (attacker is a player ? 500 : 200) <= min(LCK, 100): d ×= 1.5
+```
+
+The sum over the hit boxes is the hit: below 1 it is a miss (flag `0x100`); otherwise flag `0x200`, flag `0x400` when it is over `max_hp × 0.25` (`FUN_0077529C`, `DAT_0097822C`), `HP −= round(total)` (`FUN_00777414`) and flag `0x800` when HP drops below 1. The number drawn over the enemy is `round(d)` of each hit box (`FUN_0078A5E8`).
+
+### Reach
+
+`FUN_007A19C0` builds the attack volume from the weapon's `WeaponRange` (ItemPMT, root `+0x1C`; `FUN_005E4BA8` picks the row: a `RangedSpecial` match on `data1[1]`/`data1[2]` selects entry `0xED + index`, otherwise entry `data1[1]`). Fields `{f32 a, f32 b, u32 angle, u32 angle2, u32 max_targets}`: the volume reaches `a + b`, its inner distance is `b`, `angle` is the horizontal half-angle in BAMS and `max_targets` the number of entities one strike can hit (Saber: 14 + 18 units, `0x127D` ≈ 26°, 1 target).
+
+### Attack combo
+
+The three attacks are player states 5, 6, 7 (`FUN_006A11FC`, `FUN_006A0CFC`, `FUN_006A07D8`); `6x43`/`6x44`/`6x45` enter them (the local player sends with `send_and_handle_60`, `FUN_008003E0`, so its own attack runs through the same handler). Entering (`FUN_006A2F54`) sets the combo step, the speed factor `+0x8A8` (1.0, or 1.25 `DAT_0093DB24` for heavy and special) and plays the field motion of slot 2 / 3 / 4 (motion set vtable `+0x3C`/`+0x40`/`+0x44`; field tables `0x009CBEEC` records and `0x009CBF04` indices, `[motion type][weapon class][slot]`).
+
+Phases (`+0x330`, `FUN_00698FA8`): a normal attack goes straight to phase 3; heavy and special pause the motion for 6 ticks first (`+0x8BC`, `FUN_006A2AD4` plays the charge effect). In phase 3 (`FUN_00699058`) the motion frame crossing a hit frame (`FUN_007AAA30`) sends `6x46` with the targets (`FUN_00699248`) and opens the combo window (`FUN_006A2FB4`). Hit frames: `0x00968CA0 + class × 12 + step × 4`, with per-hit rows for daggers (`0x00968FDC`) and two more classes (`0x00969000`, `0x00969054`); the combo window in ticks is `0x00969078 + class × 3 + step`. A palette press before the window is lost (`FUN_006A31B0` flag 4); inside it the next attack is queued and starts when the motion ends (`FUN_006A1000`). Bare hands (class 0) end as soon as the motion does; other classes wait out the window timer.
+
+The weapon class (`FUN_006A7B80`, 0..18, 0 = bare hands) is taken from ItemPMT's weapon kind table, which is assumed to be what the client uses for the motion set.
+
 ## Map texture animation (`map_<area>[_<layout>].tam`)
 
 Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.

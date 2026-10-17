@@ -251,6 +251,11 @@ export class AttackState {
     this.events = events;
   }
 
+  // Replaces the callbacks (the owner rebuilds them per attack).
+  setEvents(events: AttackEvents): void {
+    this.events = events;
+  }
+
   // Enters attack `step` (0..2) with `type` (0 normal, 1 heavy, 2 special).
   begin(step: number, type: number): void {
     this.active = true;
