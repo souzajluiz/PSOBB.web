@@ -32,22 +32,41 @@ const MENU = {
   bar: { x: 238, w: 164, h: 8 },
 };
 
-// Rendering parameters tuned against the reference capture (tools/compare.sh).
-// Values found by SSIM search against the capture (flare layer: SSIM 0.83 -> 0.90
-// on the left background; circle: best of 4 grids, full-frame SSIM 0.727).
+// Values decompiled from PsoBB.exe (Ephinea build, 1.25.13):
+//   title background render  FUN_006f475c
+//   logo / version render    FUN_006f4cc4
+//   static init              0x006f4bb0
+// Coordinates are in the 640x480 virtual screen. The title runs on a frame
+// counter (game logic at 30 fps); the effect cycle is 300 frames.
+const RE = {
+  fps: 30,
+  // FUN_00415ab0/00415bcc tile table 0x009a3840: {x, y, w, h, texture offset}
+  tiles: [
+    [512, 384, 128, 128, 7], [512, 256, 128, 128, 6], [512, 128, 128, 128, 5], [512, 0, 128, 128, 4],
+    [0, 256, 256, 256, 1], [0, 0, 256, 256, 0], [256, 256, 256, 256, 3], [256, 0, 256, 256, 2],
+  ] as const,
+  baseLayer: 3, // drawn at z -130
+  flareLayer: 13, // drawn at z -150, in front of the base layer
+  center: [320, 220] as const, // 0x00a96918 / 0x00a9691c
+  framesPerTurn: 900, // angle = frame * 0x10000 / 900 (BAMS)
+  // FUN_007a919c(0, 0x58, 0x73, frame, 300, 150, 165, 180): RGB(0,88,115) pulsing to white
+  color: [0, 88, 115] as const,
+  pulse: [300, 150, 165, 180] as const,
+  ring: { texture: 11, size: 430, uv: [0, 0, 0.84] }, // rotates by -angle
+  innerRing: { texture: 12, size: 178, uv: [0, 0, 0.348] }, // rotates by +angle
+  node: { texture: 12, size: 104, uv: [0.3496, 0, 0.203] },
+  nodeOffsets: [[-137, -79], [137, -79], [0, 156]] as const, // 0x0096e168
+  logo: [[1, 64, 61], [2, 320, 61]] as const,
+  version: [10, 460] as const,
+};
+
+// Not decompiled yet: the light beam/rays are particle effects 0x1e3-0x1e5
+// created by the title constructor (FUN_006f8130). Approximated procedurally.
 export const TITLE_TUNING = {
-  flareMode: 'alpha' as 'none' | 'alpha' | 'add',
-  flareAlpha: 1,
-  flarePulse: 0,
-  circleAlpha: 0.8,
-  circleSize: 385,
-  circleX: 345,
-  circleY: 256,
-  circleAngle: -0.2,
-  circleSpin: 0.02,
-  circleGlow: 0.3,
+  // psobb.io's widescreen patch keeps the rotating circle quads round while the
+  // 4:3 layout is stretched to 16:10; 1/1.2 undoes the stretch around x=320.
+  circleAspect: 1 / 1.2,
   menuFont: 9.5,
-  // Horizontal light beam left of the logo (additive).
   beamY: 201,
   beamLength: 280,
   beamHeight: 24,
@@ -56,22 +75,18 @@ export const TITLE_TUNING = {
 };
 
 export class TitleScreen implements Screen {
-  private bgA: ImageBitmap[];
-  private bgB: ImageBitmap[];
+  private tex: ImageBitmap[];
   private press: ImageBitmap;
-  private logo: ImageBitmap[];
+  private tintCache = new Map<string, OffscreenCanvas>();
   private items: TitleMenuItem[];
   private selected = 0;
   private versionText: string;
   title = 'Login';
 
-  // `c`: title.prs textures as bitmaps; `tintedCircle`: texture 11 pre-tinted (see tintCircle).
-  constructor(c: ImageBitmap[], tintedCircle: ImageBitmap, items: TitleMenuItem[], versionText: string) {
-    this.tinted = tintedCircle;
-    this.bgA = c.slice(3, 11);
-    this.bgB = c.slice(13, 21);
+  // `c`: the 21 textures of title.prs as bitmaps.
+  constructor(c: ImageBitmap[], items: TitleMenuItem[], versionText: string) {
+    this.tex = c;
     this.press = c[0];
-    this.logo = [c[1], c[2]];
     this.items = items;
     this.versionText = versionText;
   }
@@ -79,37 +94,33 @@ export class TitleScreen implements Screen {
   update(): void {}
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
-    // Background (two layers, the second carries the brighter flare).
-    const t = TITLE_TUNING;
-    TILE_POS.forEach(([x, y], i) => ctx.drawImage(this.bgA[i], x, y));
-    if (t.flareMode !== 'none') {
-      ctx.save();
-      if (t.flareMode === 'add') ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = Math.max(0, t.flareAlpha + t.flarePulse * Math.sin(stage.time * 1.6));
-      TILE_POS.forEach(([x, y], i) => ctx.drawImage(this.bgB[i], x, y));
-      ctx.restore();
+    const frame = stage.time * RE.fps;
+    // Background: base layer, then the flare layer in front of it.
+    for (const layer of [RE.baseLayer, RE.flareLayer]) {
+      for (const [x, y, w, h, i] of RE.tiles) ctx.drawImage(this.tex[layer + i], x, y, w, h);
     }
 
-    // Magic circle, tinted cyan and added on top, slowly turning. It stays
-    // round on screen, so it is drawn in device space (300 virtual px wide).
-    const d = t.circleSize * stage.sx;
+    // Magic circle: additive, colored by the pulse.
+    const [r, g, b] = pulseColor(frame);
+    const angle = ((frame % RE.framesPerTurn) / RE.framesPerTurn) * Math.PI * 2;
+    const [cx, cy] = RE.center;
+    const tinted = (texture: number) => this.tinted(texture, r, g, b);
     ctx.save();
-    ctx.setTransform(1, 0, 0, 1, t.circleX * stage.sx, t.circleY * stage.sy);
-    ctx.rotate(t.circleAngle + stage.time * t.circleSpin);
     ctx.globalCompositeOperation = 'lighter';
-    if (t.circleGlow > 0) {
-      ctx.globalAlpha = t.circleGlow;
-      ctx.filter = `blur(${Math.max(1, d / 160)}px)`;
-      ctx.drawImage(this.tinted, -d / 2, -d / 2, d, d);
-      ctx.filter = 'none';
+    ctx.translate(cx, 0);
+    ctx.scale(TITLE_TUNING.circleAspect, 1);
+    ctx.translate(-cx, 0);
+    drawRotated(ctx, tinted(RE.ring.texture), RE.ring.uv, cx, cy, RE.ring.size, -angle);
+    drawRotated(ctx, tinted(RE.innerRing.texture), RE.innerRing.uv, cx, cy, RE.innerRing.size, angle);
+    for (const [ox, oy] of RE.nodeOffsets) {
+      const nx = cx - ox * Math.cos(angle) + oy * Math.sin(angle);
+      const ny = cy + ox * Math.sin(angle) + oy * Math.cos(angle);
+      drawRotated(ctx, tinted(RE.node.texture), RE.node.uv, nx, ny, RE.node.size, angle);
     }
-    ctx.globalAlpha = t.circleAlpha;
-    ctx.drawImage(this.tinted, -d / 2, -d / 2, d, d);
     ctx.restore();
 
     this.drawBeam(ctx, stage);
-    ctx.drawImage(this.logo[0], 64, 62);
-    ctx.drawImage(this.logo[1], 320, 62);
+    for (const [i, x, y] of RE.logo) ctx.drawImage(this.tex[i], x, y, 256, 256);
 
     // Faint "PRESS ENTER KEY" behind the window, as in the original.
     ctx.globalAlpha = 0.18;
@@ -132,11 +143,30 @@ export class TitleScreen implements Screen {
 
     // The original prints its version in a wide, letter-spaced debug font.
     ctx.letterSpacing = '1.6px';
-    drawText(ctx, this.versionText, 9, 467, { size: 10.5, color: '#f4f4f4', bold: false, shadow: '#000' });
+    drawText(ctx, this.versionText, RE.version[0], RE.version[1] + 6, { size: 10.5, color: '#f4f4f4', bold: false, shadow: '#000' });
     ctx.letterSpacing = '0px';
   }
 
-  private tinted: ImageBitmap;
+  // Texture multiplied by a vertex color, as D3D does with diffuse * texture.
+  // Colors are quantized so the pulse needs only a few cached variants.
+  private tinted(texture: number, r: number, g: number, b: number): OffscreenCanvas {
+    const q = (v: number) => Math.round(v / 16) * 16;
+    const key = `${texture}:${q(r)},${q(g)},${q(b)}`;
+    let c = this.tintCache.get(key);
+    if (!c) {
+      const src = this.tex[texture];
+      c = new OffscreenCanvas(src.width, src.height);
+      const g2 = c.getContext('2d')!;
+      g2.drawImage(src, 0, 0);
+      g2.globalCompositeOperation = 'multiply';
+      g2.fillStyle = `rgb(${Math.min(255, q(r))}, ${Math.min(255, q(g))}, ${Math.min(255, q(b))})`;
+      g2.fillRect(0, 0, c.width, c.height);
+      g2.globalCompositeOperation = 'destination-in';
+      g2.drawImage(src, 0, 0);
+      this.tintCache.set(key, c);
+    }
+    return c;
+  }
 
   private drawBeam(ctx: CanvasRenderingContext2D, stage: Stage): void {
     const t = TITLE_TUNING;
@@ -188,15 +218,30 @@ export class TitleScreen implements Screen {
   }
 }
 
-// Texture 11 tinted cyan, as the original draws it.
-export async function tintCircle(circle: ImageBitmap): Promise<ImageBitmap> {
-  const c = new OffscreenCanvas(circle.width, circle.height);
-  const g = c.getContext('2d')!;
-  g.drawImage(circle, 0, 0);
-  g.globalCompositeOperation = 'multiply';
-  g.fillStyle = '#1aa6c8';
-  g.fillRect(0, 0, c.width, c.height);
-  g.globalCompositeOperation = 'destination-in';
-  g.drawImage(circle, 0, 0);
-  return createImageBitmap(c);
+// FUN_007a919c: base color, lerped to white between frames 150 -> 165 -> 180 of 300.
+function pulseColor(frame: number): [number, number, number] {
+  const [period, a, peak, b] = RE.pulse;
+  const f = Math.floor(frame) % period;
+  let t = 0;
+  if (f >= a && f <= b) t = f < peak ? (f - a) / (peak - a) : (b - f) / (b - peak);
+  return RE.color.map((c) => Math.round((255 - c) * t + c)) as [number, number, number];
+}
+
+// FUN_006f46c4 + FUN_0082bb74: a size x size quad centered at (cx, cy),
+// rotated by `angle`, sampling the square UV region (u, v, extent).
+function drawRotated(
+  ctx: CanvasRenderingContext2D,
+  img: CanvasImageSource & { width: number; height: number },
+  uv: readonly number[],
+  cx: number,
+  cy: number,
+  size: number,
+  angle: number,
+): void {
+  const [u, v, e] = uv;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.drawImage(img, u * img.width, v * img.height, e * img.width, e * img.height, -size / 2, -size / 2, size, size);
+  ctx.restore();
 }

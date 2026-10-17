@@ -1,5 +1,32 @@
 # Devlog
 
+## 2026-10-16: title screen rebuilt from the decompiled code
+
+**What changed:** the title is now drawn from what `PsoBB.exe` does instead of parameters fitted to a capture.
+
+**How:**
+- Ghidra 12 headless analysis of the Ephinea `PsoBB.exe`, plus a small script (`DecompileAt.java`, kept out of the repo) that decompiles functions by address or pointer table, lists references and dumps assembly ranges.
+- The exe is instrumented: each function is wrapped in fake `MessageBoxA(-1, 0, 0, 5|4)` calls and `peetles_begin/end` markers. Ghidra still decompiles it, but some function bounds need forcing.
+
+**Findings:**
+- `FUN_006fb914` loads `Title.prs` (`"%s.prs"`) into a texture list and registers the title task.
+- `FUN_006f8130` constructs the title screen:
+  - starts `title.adx`;
+  - creates three child objects (background, menu, logo);
+  - creates particle effects `0x1e3`–`0x1e5` (the light beam, still approximated).
+- Background render, `FUN_006f475c`:
+  - tiles from the table at `0x009a3840`: base layer texture 3, flare layer texture 13 in front;
+  - every 300 frames (frames 150–170) a flash sprite, texture 12 UV (0.574, 0)–(0.824, 0.25);
+  - magic circle centered at (320, 220), one turn every 900 frames;
+  - ring: texture 11, size 430, UV 0–0.84;
+  - inner ring: texture 12, size 178, UV 0–0.348, rotating the other way;
+  - three nodes: texture 12, size 104, UV (0.3496, 0) +0.203, at offsets (±137, −79) and (0, 156);
+  - color from `FUN_007a919c`: RGB(0, 88, 115), pulsing to white over frames 150→165→180 of each 300-frame cycle.
+- Logo and version, `FUN_006f4cc4`: textures 1 and 2 at (64,61)–(320,317) and (320,61)–(576,317); version text at (10, 460).
+- The original BB has an in-game login window (`FUN_006fede0` → `FUN_007617e8`, user name and password), so the classic UI's login window matches the original flow.
+
+**Validation:** sweeping the frame counter, the capture matches angle ≈ 0 (frames 870–900): ring text and node positions line up. psobb.io's widescreen patch keeps these quads round, so the circle is compressed by 1/1.2 around x = 320.
+
 ## 2026-10-16: map collision and lobby spawn points
 
 **Goal:** walk on the real collision instead of raycasting the render mesh, and start in the lobby where the original client puts you.

@@ -7,7 +7,7 @@ import { connectBridge } from '../net/wstransport.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { LoginScreen } from './login.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
-import { tintCircle, TITLE_TUNING, TitleScreen } from './title.ts';
+import { TITLE_TUNING, TitleScreen } from './title.ts';
 
 const VERSION = 'PSOBB.web';
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
@@ -95,7 +95,6 @@ async function main(): Promise<void> {
 
   title = new TitleScreen(
     titleTex,
-    await tintCircle(titleTex[11]),
     [
       { label: 'Start Game', action: startGame },
       { label: 'Exit Game', action: () => (location.href = '/') },
