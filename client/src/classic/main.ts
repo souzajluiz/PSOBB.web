@@ -3,7 +3,13 @@
 import { BgmPlayer } from '../audio/bgm.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
-import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
+import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
+import type { Lobby } from '../net/lobby.ts';
+import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
+import { MapViewer } from '../render/mapviewer.ts';
+import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
+import { LobbyScreen } from './lobby.ts';
+import { ShipSelectScreen } from './shipselect.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
 import { TEXTURE_FILES } from './charcreate_data.ts';
@@ -75,7 +81,117 @@ async function main(): Promise<void> {
     });
 
   let session: BBSession | null = null;
+  let credentials = { username: '', password: '' };
   let title: TitleScreen;
+
+  // --- Game server: connecting warp -> ship select (07) -> lobby (67) ------
+  const worldCanvas = document.getElementById('world') as HTMLCanvasElement;
+  let viewer: MapViewer | null = null;
+  let lobbyView: LobbyView | null = null;
+  const world = (): MapViewer => (viewer ??= new MapViewer(worldCanvas));
+  const showWorld = (on: boolean) => (worldCanvas.hidden = !on);
+  let connectingAssets: ConnectingAssets | null = null;
+  const loadConnectingAssets = async (): Promise<ConnectingAssets> => {
+    if (connectingAssets) return connectingAssets;
+    const effect = new Map<number, ImageBitmap>();
+    const nt = await files.textures('effect_nt.xvm');
+    const bitmaps = await textureBitmaps(nt);
+    nt.forEach((t, i) => t.gbix !== undefined && effect.set(t.gbix, bitmaps[i]));
+    return (connectingAssets = { particleEntries: await files.read('particleentry.dat'), effect });
+  };
+  let unitxt: string[][] | null = null;
+  const text = async (group: number, index: number): Promise<string> => {
+    unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+    return (unitxt[group]?.[index] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, '');
+  };
+
+  // Behind the ship select the client shows the lobby; the camera path is
+  // not decoded yet, so it slowly circles the lobby centre (approximation).
+  const showLobbyBackdrop = async (lobbyNumber: number) => {
+    const v = world();
+    showWorld(true);
+    await v.load(source, lobbyMapFile(lobbyNumber));
+    v.setOrbitEnabled(false);
+    let t = 0;
+    v.onFrame = (dt) => {
+      t += dt * 0.05;
+      v.camera.position.set(Math.sin(t) * 260, 120, Math.cos(t) * 260);
+      v.camera.lookAt(0, 0, 0);
+    };
+  };
+
+  const enterLobby = async (lobby: Lobby, shipName: string) => {
+    const v = world();
+    showWorld(true);
+    lobbyView?.dispose();
+    await v.load(source, lobbyMapFile(lobby.lobbyNumber));
+    const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
+    lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
+    const screen = new LobbyScreen(v, lobbyView, lobby, titleAssets.skin, shipName);
+    lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
+    Object.assign(window, { classicLobby: screen, classicLobbyState: lobby });
+    show(screen);
+  };
+
+  const showShipSelect = async (lobby: Lobby, menu: ServerMenuItem[]) => {
+    // Entry 0 is the menu title (item_id 0xFFFFFFFF); the 07 handler keeps
+    // it as the ship name and titles the window itself.
+    const head = menu[0]?.itemId === 0xffffffff ? menu[0] : null;
+    const items = head ? menu.slice(1) : menu;
+    const block = head ? /^BLOCK/.test(head.name) : false;
+    const shipName = head && !block ? head.name : 'newserv';
+    await showLobbyBackdrop(0);
+    const screen: ShipSelectScreen = new ShipSelectScreen(
+      titleAssets.skin,
+      block ? 'Block Select' : 'Ship Select',
+      items.map((i) => ({ label: i.name })),
+      block ? await text(0x0f, 1) : await text(0x0f, 0),
+      async (index) => {
+        if (!session) return;
+        screen.busy = true;
+        try {
+          const next = await session.selectMenuItem(items[index]);
+          if (next) await showShipSelect(lobby, next);
+          else await enterLobby(lobby, shipName);
+        } catch (err) {
+          console.error(err);
+          screen.busy = false;
+        }
+      },
+      () => {
+        session?.close();
+        session = null;
+        showWorld(false);
+        show(title);
+      },
+    );
+    Object.assign(window, { classicShip: screen });
+    show(screen);
+  };
+
+  const connectToGame = async (slot: number) => {
+    if (!session) return;
+    const s = session;
+    showWorld(false);
+    const task = s.connectGameServer(credentials.username, credentials.password, slot);
+    const connecting = new ConnectingScreen(
+      await loadConnectingAssets(),
+      task,
+      () => {
+        void task.then(async ({ lobby, menu }) => {
+          if (menu) await showShipSelect(lobby, menu);
+          else await enterLobby(lobby, 'newserv');
+        });
+      },
+      (message) => {
+        console.error(`[classic] ${message}`);
+        session?.close();
+        session = null;
+        show(title);
+      },
+    );
+    show(connecting);
+  };
 
   // Empty slot -> character creation; the result goes out as E5.
   const showCreate = async (slot: number, slots: Array<CharacterPreview | null>) => {
@@ -114,7 +230,7 @@ async function main(): Promise<void> {
     const select = new CharSelectScreen(selectAssets, slots, {
       enter: (slot) => {
         if (!slots[slot]) void showCreate(slot, slots);
-        else console.log(`[classic] slot ${slot + 1} chosen`);
+        else void connectToGame(slot);
       },
       cancel: () => {
         session?.close();
@@ -137,6 +253,7 @@ async function main(): Promise<void> {
             session?.close();
             session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
             await session.login(username, password);
+            credentials = { username, password };
             try {
               localStorage.setItem('psobb.username', username);
             } catch {
@@ -177,6 +294,9 @@ async function main(): Promise<void> {
     // CHARA.adx for character select/creation (FUN_004df9ec).
     if (s instanceof TitleScreen || s instanceof LoginScreen) void bgm.play('title.adx');
     else if (s instanceof CharSelectScreen || s instanceof CharCreateScreen) void bgm.play('CHARA.adx');
+    // LOBBY.ADX in the lobby (FUN_00642c30); silence while connecting.
+    else if (s instanceof ShipSelectScreen || s instanceof LobbyScreen) void bgm.play('LOBBY.ADX');
+    else if (s instanceof ConnectingScreen) bgm.stop();
   }
 
   // ?screen=select jumps to the character list with empty slots and
@@ -184,6 +304,7 @@ async function main(): Promise<void> {
   const jump = new URLSearchParams(location.search).get('screen');
   if (jump === 'select') showSelect([null, null, null, null]);
   else if (jump === 'create') await showCreate(0, [null, null, null, null]);
+  else if (jump === 'connecting') show(new ConnectingScreen(await loadConnectingAssets(), new Promise(() => {}), () => {}, () => {}));
   else show(title);
 
   const toVirtual = (e: MouseEvent) => {

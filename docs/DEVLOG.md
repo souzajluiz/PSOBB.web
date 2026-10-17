@@ -1,5 +1,57 @@
 # Devlog
 
+## 2026-10-17: classic client from SELECT CHARACTER into the lobby
+
+**What changed:** choosing an existing slot in `classic.html` now runs the original flow: the "Connecting.." warp, the game-server login (93 phase 4), the server's main menu as the client's **Ship Select** window over the 3D lobby, `10` *Go to lobby*, `67`, and the 3D lobby (`render/lobbyview.ts` on a WebGL canvas under the 2D stage) with the lobby name window. Checked live in Chrome against newserv: warp, Ship Select, lobby, walking with W, chat send/receive (other players' chat and joins show in the log). `tests/lobby.live.ts` still passes.
+
+**"Connecting.." and the warp (`classic/connecting.ts`, `classic/particles.ts`):**
+- `FUN_007bd97c` is a modal loop around the connection. `FUN_004178f8` builds a 3D scene and the warp object `FUN_004179e8` (vtable 0x00af3738). It fades in from black (`FUN_00409d28` mode 2 → `FUN_0040a080`: alpha 1, −1/15 per frame).
+- The warp object's update `FUN_00417ccc` fixes the camera at the origin looking down −Z (`FUN_004d31f4(9)`, `FUN_004d33c0`). On its second frame it creates `FUN_00418794`, which has two children:
+  - `FUN_0040bf40`: particle effects 0x13 `load_blue`, 0x15 `load_yellow`, 0x17 `loadhikari`, 0x1d `load_circle`, 0x6e `load_red` (ids at 0x008f9ec8), 100 units ahead (0x008f9edc), rotations (0x4000,0,0) except 0x17 (table 0x009a3104);
+  - `FUN_00417f90`: 0x16 `load_carsol` at 65 units (0x008fb12c).
+- All six are particle type 0 (spawn `FUN_0050ec4c`, update `FUN_0050dbb8`, render `FUN_0050e698`):
+  - velocity (rand·+0x38 + +0x30, rand·+0x3c + +0x34, 0), turned by a random angle about Y, then by the emitter rotation. The quarter turn about X makes the rays fan out in the screen plane and fly toward the camera;
+  - x/z damped by +0x50, y += +0x54, size ×= +0x2c;
+  - tex_flags & 4 → streak of length +0x64·|step| and thickness +0x68·|step| (note: +0x64/+0x68 here, +0x60/+0x64 for type 2);
+  - textures by GBIX of `effect_nt.xvm` (785981 = #18, 700531 = #9, 700420 = #24). `XvrTexture` now carries `gbix`.
+- "Connecting.." object (vtable 0x00af2438, ctor `FUN_00407bf0`): render `FUN_00407f6c` draws "Connecting.." at (23, 331) while state < 3. `FUN_00408200` sets state 2 with the result, and update `FUN_00407c6c` waits 150 frames before state 3 (errors from unitxt group 0x36, `FUN_004080ac`). The screen keeps the warp for 150 frames after the server answers, like the original.
+- The result matches capture 09 of the original (rays, colors, centre, text position) by eye.
+
+**Ship Select (`classic/shipselect.ts`):**
+- 07 handler at 0x0079ba38: entry 0's name is compared with `L"BLOCK"`; the window title is the client's `L"Ship Select"` (0x0097ce50) or `L"Block Select"` (0x0097ce68). See PROTOCOL.md.
+- List window: `FUN_0073fdc4` → `FUN_0073fe9c` → `FUN_00736988`, at position-table entry 0x28.
+  - Position table: `FUN_0073ec50(i)` = 0x00971f40 + 8·i, {x, y} floats. Entry 0x28 = (12, 50).
+  - Size 385 × 184 from `FUN_00737f80` (0x00972dd4); the other modes are 385 × 104 and 300 × 104.
+  - Items 20 px apart (`FUN_00737cdc`), left-aligned 10 px in, 6 px below the title (measured).
+- Info window: `FUN_0079bb58` → `FUN_0079a8c4` → `FUN_0073a888` at entry 0xd5 = (294, 305), 342 × 144. It types unitxt 0x0F/0. `FUN_00793168(i)` is unitxt group 0x0F and `FUN_0079317c(i)` is group 0x0B.
+- Measured against the capture of the original:
+  - menu frame at x 13.2, y 51.6 (decoded 12, 50), 383 × 181 (decoded 385 × 184);
+  - info window 340 wide (decoded 342).
+- Widescreen (psobb.io): windows keep a uniform scale by height. Windows whose centre is on the right half move right by the extra width: the info window lands at 294 + 128 and the lobby window at 622 + 128 on a 768-unit screen. `classic/ingame.ts` does the same.
+
+**Lobby (`classic/lobby.ts`):**
+- Lobby name window: `FUN_0079eb78` formats `"%s:%02d-%02d"` (0x0097cef0) from the ship name, the block and lobby + 1. `FUN_0073f510` shows it in a 160 × 27 window (0x009f340c) whose right edge is at table entry 0xc0 = (622, 37). It shows "newserv:01-01" as on the capture.
+- BGM: `LOBBY.ADX` for Ship Select and the lobby (`FUN_00642c30`); silence while connecting.
+- `LobbyView` gained two small additive hooks: `{ labels: false }` (no 3D name sprites) and `playerPositions()` for 2D name tags. The Online tab is unchanged.
+
+**Keyboard (default key config):**
+- newserv's `default-keyboard-config.bin` (0x16C bytes, the client's `key_config`) is a list of `{u32, key id}` pairs. They follow the order of the key-config labels in unitxt group 0: Move Forward/Backward/Left/Right, Lock Move Forward, Lock Walk Forward, Decide, Cancel, Menu Open/Close, Start, Select Up/Down/Left/Right, …
+- Key ids are named by the table at 0x0097b5e0 (`{id, L": NAME"}`): 0x26 W, 0x22 S, 0x10 A, 0x13 D, 0x61 ENTER, 0x50 BACK SPACE, 0x06 HOME, 0x59 SPACE, 0x5c–0x5f arrows, 0x40–0x4b F1–F12, 0x2a–0x33 1–0.
+- So the defaults are: W/S/A/D move, Enter decides, Backspace cancels, Home is the menu, Space is Start, and the arrows select. The classic lobby moves with W/S/A/D only; the arrows no longer move the player there.
+
+**Approximations (marked in the code):**
+- The camera behind Ship Select slowly circles lobby 1. The original camera path is not decoded.
+- The info text types 2 characters per frame (fitted).
+- Ship Select fades in over 15 frames (fitted).
+- The chat log (bottom left), the chat input window and the name-tag offset are provisional; their code is not found yet. The chat input opens with Space or Enter.
+
+**Open:**
+- The chat log, chat balloon and chat input code. The chat trigger key is probably "Start" (Space) but is not proven.
+- The lobby menu (Home) and the info counter menus.
+- The ship-select camera.
+- Where the `DAT_00a48a3c` mode that picks the list size is set.
+- Fresh lobby captures of the original could not be taken this session: the display was asleep, so screencapture returned black frames.
+
 ## 2026-10-16: select character screen from the decompiled code
 
 **What changed:** `classic/charselect.ts` is now built from what `PsoBB.exe` (Ephinea 1.25.13) does. Before, it was laid out by hand from a capture. A new `classic/gametext.ts` reproduces the game's 2D text layout. SSIM against the psobb.io capture went from 0.487 to 0.920 (PSNR 18.4 → 28.1), measured at the same backtext animation frame.

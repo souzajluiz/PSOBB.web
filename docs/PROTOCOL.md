@@ -76,6 +76,8 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 | 4 | C→S | `10` | `{menu_id, item_id}` |
 | 5 | S→C | `83`, `C5`, `67` | lobby list, challenge ranks, **join lobby** |
 
+**`07` entry 0 is the menu title**, not an item: newserv sends `{menu_id, item_id = 0xFFFFFFFF, name = menu name}` first (`send_menu_t`). PsoBB.exe's 07 handler (0x0079ba38) compares that name with `L"BLOCK"`: otherwise it is a ship menu, the name is kept as the ship name (0x00aab2ec, shown later as `<ship>:<block>-<lobby>` in the lobby) and the window is titled with the client's own `L"Ship Select"` (`L"Block Select"` for block menus). `10` may be answered by another `07` (sub-menu, e.g. *Patches*) instead of `67`; `BBSession.connectGameServer` / `selectMenuItem` expose these steps for the classic UI.
+
 `67` / `68` (join / one more player) = `LobbyFlags` (0x0C: `client_id`, `leader_id`, `disable_udp`, `lobby_number`, `block_number`, …) + entries of 0x520: `PlayerLobbyDataBB` (0x44: `guild_card_number` @+4, `client_id` @+0x1C, name UTF-16 @+0x20), `PlayerInventory` (0x34C), `PlayerDispDataV4` (0x190: stats with `level` @+0x18, visual @+0x24). `69`: player left, `flag` = client id.
 
 ## Lobby traffic
