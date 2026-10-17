@@ -18,3 +18,4 @@ psobb-client/
 client/public/ref/
 .captures/
 .claude/
+.codegraph/
