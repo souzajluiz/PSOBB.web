@@ -1,3 +1,4 @@
+import { BgmPlayer } from '../audio/bgm.ts';
 import { requireDataSource } from '../data/store.ts';
 import {
   BBSession,
@@ -32,6 +33,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let game: Game | null = null;
   let gameView: GameView | null = null;
   let busy = false;
+  let bgm: BgmPlayer | null = null; // floor music in games (render/gamefield.ts)
   const inventory = initInventoryPanel($('lobby-panel'), log);
 
   const setStatus = (msg: string, kind: '' | 'ok' | 'err' = '') => {
@@ -148,8 +150,11 @@ export function initOnlineTab(log: (msg: string) => void): void {
       lobbyView?.dispose();
       lobbyView = null;
       viewer ??= new MapViewer($<HTMLCanvasElement>('lobby-canvas'));
-      const view = new GameView(viewer, g, source, log);
+      bgm ??= new BgmPlayer(source);
+      const view = new GameView(viewer, g, source, log, bgm);
       gameView = view;
+      view.onLobbyWarp = () => void leaveGame();
+      Object.assign(window, { psoGameView: view, psoBgm: bgm }); // development aid (console)
       view.onFloor = (f) => {
         $('lobby-title').textContent = `· Game "${g.name}" · ${f.name} (floor ${f.floor}) · ${f.enemies} enemies, ${f.objects} objects`;
         renderPlayers(g);
