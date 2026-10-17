@@ -126,6 +126,7 @@ if (existsSync(join(DATA, 'data.gsl'))) {
   eq([0x00, 0x02, 0x0b].map((a) => text[AREA_TEXT[a]]), ['Pioneer 2', 'Forest 2', 'Under the Dome'], 'area names');
   check(/^lobby$/i.test(text[AREA_TEXT[0x0f]]), 'lobby teleporter name');
 
+  let mapWarps = 0, mapWarpsNearPad = 0;
   const table = parseSetDataTable(read('SetDataTableOn.rel'));
   for (const episode of [1, 2, 3]) {
     const areas = floorToArea(episode);
@@ -143,10 +144,20 @@ if (existsSync(join(DATA, 'data.gsl'))) {
       if (floor === 0 && episode !== 2) check(o.warps.some((w) => w.kind === 'main'), `Ep${episode} Pioneer 2 has the Ragol teleporter`);
       if (episode === 1 && floor === 1) check(o.warps.some((w) => w.kind === 'area' && w.floor === 2) && o.doors.length > 0 && o.switches.length > 0, 'Forest 1 warp to floor 2, doors and switches');
       if (episode === 1 && floor === 2) check(o.warps.some((w) => w.kind === 'boss' && w.floor === 0xb), 'Forest 2 boss warp to the Dragon');
+      // A map warp lands next to another warp pad of the floor (the pads come
+      // in pairs), which shows the destination is in floor coordinates.
+      for (const w of o.warps.filter((x) => x.kind === 'map' && x.dest)) {
+        const near = Math.min(...o.warps.filter((x) => x !== w).map((x) => Math.hypot(x.x - w.dest!.x, x.z - w.dest!.z)));
+        if (process.env.VERBOSE) console.log(`  map warp ${w.index} -> (${w.dest!.x.toFixed(0)}, ${w.dest!.z.toFixed(0)}), nearest other warp ${near.toFixed(1)}`);
+        mapWarps++;
+        if (near < 100) mapWarpsNearPad++;
+      }
       if (episode === 2 && area === 0x17) check(o.warps.some((w) => w.kind === 'cca' && w.radius === 15), 'CCA has its main gate (TObjWarpJungMain)');
       if (episode === 2 && (area === 0x13 || area === 0x15 || area === 0x1c)) check(o.doors.some((d) => d.lamps), `Ep2 area 0x${area.toString(16)} has four-light doors`);
     }
   }
+  console.log(`map warps: ${mapWarpsNearPad} of ${mapWarps} land within 100 of another warp`);
+  check(mapWarps > 0 && mapWarpsNearPad / mapWarps > 0.8, 'map warp destinations are floor coordinates');
 } else {
   console.log(`(no ${DATA}; skipping the client data checks)`);
 }

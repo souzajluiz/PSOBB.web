@@ -100,6 +100,7 @@ export class GameView {
       warpTo: (f) => this.warpTo(f),
       toLobby: () => this.onLobbyWarp(),
       tickQuest: (dt) => this.quest?.tick(dt),
+      warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
     });
     this.items = new GameItems(game, { ...character, log });
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {

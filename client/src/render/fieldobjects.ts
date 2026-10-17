@@ -61,7 +61,7 @@ import type { CollisionWorld, Obstacle } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 
-export type WarpKind = 'area' | 'boss' | 'main' | 'cca' | 'lobby';
+export type WarpKind = 'area' | 'boss' | 'main' | 'cca' | 'map' | 'lobby';
 
 export interface FieldWarp {
   kind: WarpKind;
@@ -73,6 +73,11 @@ export interface FieldWarp {
   floor: number; // destination (-1 = menu, 0x0f = lobby)
   flag: number; // switch flag required (-1 = none)
   warpType: number; // TObjCityMainWarp param5 clamped to 0..2
+  // Intra-floor (map) warps: where the player lands, facing `angle`
+  // (radians), and the menu item's unitxt group 10 index.
+  dest?: { x: number; y: number; z: number };
+  angle?: number;
+  text?: number;
 }
 
 export interface FieldDoor {
@@ -258,6 +263,15 @@ export function collectFieldObjects(
       case 0x020a:
         warps.push({ ...base, kind: 'cca', radius: 15, floor: -1, flag: -1, warpType: 0 });
         break;
+      case 0x0003:
+      case 0x0045:
+      case 0x0141:
+      case 0x02bd: {
+        if (o.type === 0x0141 && o.params[4] < 0) break; // no warp lines, no warp (0x006408d8)
+        const city = o.type === 0x0045 || o.type === 0x02bd;
+        warps.push({ ...base, kind: 'map', radius: city ? 23 : 10, floor: -1, flag: -1, warpType: 0, ...mapWarpTarget(o, p.yaw), text: city ? CITY_MAP_WARP_TEXT[cityMapWarpText(o)] : MAP_WARP_TEXT });
+        break;
+      }
       case 0x0008:
         triggers.push({ ...base, radius: o.params[0], eventId: Math.trunc(o.params[3]), fired: false, age: 0 });
         break;
@@ -284,6 +298,35 @@ export function collectFieldObjects(
     }
   }
   return { warps, doors, switches, triggers, boxes };
+}
+
+// Map warps (TObjMapWarpForest 0x0003, TObjCityMapWarp 0x0045,
+// TObjMapWarpAncient 0x0141, TObjLaboMapWarp 0x02BD). Their base constructor
+// MapObjectBaseInitialize_00668ad8 turns four per-player offsets
+// (0x009c955c: (-10, 0, -10), (-15, 0, -15), (-5, 0, -15), (-10, 0, -20)) by
+// the object's own Y angle and adds them to the destination param1..3, but
+// the update (0x00669048) always hands the first one to
+// warp_player_from_source_to_dest (0x0069b184), with param4 as the angle:
+// the bug newserv documents (every player lands on the same spot). The menu
+// (+0x34: 0x00668e20, city / Lab 0x0064af7c / 0x0064b2d0) is one item at
+// position-table entry 0x35, sized like an area warp's: unitxt group 10 index
+// 0x30, or for the city / Lab warps 0x009363d0[param6] (param6 < 0 -> 0,
+// > 2 -> 1: 0x0064b038). Radius 10.0 from the base, 23.0 for the city and Lab
+// warps (0x0064b0d4, 0x0064b428).
+const MAP_WARP_OFFSET = [-10, 0, -10] as const;
+export const MAP_WARP_TEXT = 0x30;
+export const CITY_MAP_WARP_TEXT = [44, 45, 16] as const; // The Principal, Pioneer 2, Lab
+
+export function cityMapWarpText(o: ObjectSet): number {
+  const v = Math.trunc(o.params[5]);
+  return v < 0 ? 0 : v > 2 ? 1 : v;
+}
+
+export function mapWarpTarget(o: ObjectSet, yaw: number): { dest: { x: number; y: number; z: number }; angle: number } {
+  const [ox, oy, oz] = MAP_WARP_OFFSET;
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  const dest = { x: o.params[0] + ox * c + oz * s, y: o.params[1] + oy, z: o.params[2] - ox * s + oz * c };
+  return { dest, angle: (Math.trunc(o.params[3]) & 0xffff) * ((Math.PI * 2) / 0x10000) };
 }
 
 const dist3 = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);

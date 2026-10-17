@@ -200,6 +200,9 @@ export class LobbyView {
     });
     lobby.on('playerLeft', (id) => this.removeMarker(id));
     lobby.on('moved', (p) => this.onMoved(p));
+    lobby.on('teleported', (p) => {
+      if (p.clientId !== this.lobby.selfId) this.place(p.clientId, p.position, p.angle);
+    });
 
     this.placeSelfOnGround();
     this.bindMouse(viewer.renderer.domElement);
@@ -355,6 +358,27 @@ export class LobbyView {
     this.viewer.scene.remove(m.group);
     for (const child of m.group.children) disposeObject(child, child !== m.model);
     this.markers.delete(id);
+  }
+
+  // Puts a player's model at a spot at once (intra-floor warps, 6x55).
+  private place(clientId: number, pos: { x: number; y: number; z: number }, angle: number): void {
+    const m = this.markers.get(clientId);
+    if (!m) return;
+    m.group.position.set(pos.x, pos.y, pos.z);
+    m.target.set(pos.x, pos.y, pos.z);
+    m.angle = angle;
+  }
+
+  // An intra-floor warp of the local player: sends 6x55 and moves the model
+  // and the camera behind it.
+  warpSelf(pos: { x: number; y: number; z: number }, angle: number): void {
+    const me = this.lobby.self;
+    if (!me) return;
+    const y = this.ground(pos.x, pos.z, pos.y + STEP_UP) ?? pos.y;
+    const to = { x: pos.x, y, z: pos.z };
+    this.lobby.sendIntraMapWarp(to, angle);
+    this.place(me.clientId, to, angle);
+    this.cameraYaw = angle + Math.PI;
   }
 
   private onMoved(p: LobbyPlayer): void {

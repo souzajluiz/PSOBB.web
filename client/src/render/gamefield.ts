@@ -32,7 +32,7 @@ import type { EnemySet, PlacedEntity } from '../formats/setdata.ts';
 import { floorToArea, parseSwitchFlag, type Game } from '../net/game.ts';
 import type { CollisionWorld } from './collision.ts';
 import type { EnemyLayer } from './enemyview.ts';
-import { FieldObjects, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
+import { FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
@@ -46,6 +46,8 @@ export interface GameFieldOptions {
   // (quest/session.ts tick()).
   tickQuest?: (dt: number) => void;
   warpTo: (floor: number) => Promise<void>;
+  // Intra-floor warp of the local player (6x55, render/lobbyview.ts warpSelf).
+  warpSelf?: (pos: { x: number; y: number; z: number }, angle: number) => void;
   toLobby: () => void;
   log: (msg: string) => void;
 }
@@ -472,6 +474,9 @@ export class GameField {
     if (w.kind === 'main') {
       const items = mainWarpItems(episode, w.warpType).map((it) => ({ label: this.menu.label(it.text), floor: it.floor }));
       choice = this.menu.show(items, mainWarpLayout(items.length));
+    } else if (w.kind === 'map') {
+      const label = this.menu.label(w.text ?? MAP_WARP_TEXT);
+      choice = this.menu.show([{ label, floor: this.floor }], areaWarpLayout(gameTextWidth(label)));
     } else if (w.kind === 'cca') {
       const items = CCA_WARP.map((it) => ({ label: this.menu.label(it.text), floor: it.floor }));
       choice = this.menu.show(items, ccaWarpLayout(Math.max(...items.map((it) => gameTextWidth(it.label)))));
@@ -488,6 +493,11 @@ export class GameField {
       return;
     }
     this.suppressed.add(w.index);
+    if (w.kind === 'map' && w.dest) {
+      this.opts.log(`map warp to (${w.dest.x.toFixed(0)}, ${w.dest.y.toFixed(0)}, ${w.dest.z.toFixed(0)})`);
+      this.opts.warpSelf?.(w.dest, w.angle ?? 0);
+      return;
+    }
     if (w.kind === 'lobby') {
       this.opts.log('lobby teleporter');
       this.opts.toLobby();

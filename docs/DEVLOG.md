@@ -1,5 +1,35 @@
 # Devlog
 
+## 2026-10-17: map warps take the player across the floor
+
+**What changed:** the intra-floor warps work now: `TObjMapWarpForest`
+(`0x0003`), `TObjCityMapWarp` (`0x0045`, the Principal's office),
+`TObjMapWarpAncient` (`0x0141`) and `TObjLaboMapWarp` (`0x02BD`), kind `map` in
+`render/fieldobjects.ts`.
+
+- Base constructor `MapObjectBaseInitialize_00668ad8` (radius 10.0, 23.0 for
+  the city and Lab ones at `0x0064b0d4` / `0x0064b428`): four landing spots,
+  the offsets at `0x009c955c` ((-10, 0, -10), (-15, 0, -15), (-5, 0, -15),
+  (-10, 0, -20)) turned by the object's Y angle and added to param1..3. The
+  update `0x00669048` always uses the first one (the bug newserv documents:
+  everybody lands on the same spot) and param4 as the angle.
+- Menu (`+0x34`, `0x00668e20`; city / Lab `0x0064af7c` / `0x0064b2d0`): one
+  item at position-table entry `0x35`, sized like an area warp's: unitxt group
+  10 index `0x30`, or `0x009363d0[param6]` = 44 The Principal, 45 Pioneer 2,
+  16 Lab (param6 < 0 -> 0, > 2 -> 1, `0x0064b038`). A Ruins warp with a
+  negative param5 does nothing (`0x006408d8`).
+- Decide: `warp_player_from_source_to_dest` (`0x0069b184`) sends **`6x55`**
+  `{55, 08, client id, u32 angle, from xyz, to xyz}` (`net/lobby.ts`
+  `sendIntraMapWarp`); the local model is placed at once
+  (`LobbyView.warpSelf`), and another player's `6x55` places theirs
+  (`teleported` event) instead of walking them there.
+
+**Checks:** `tests/warpmenu.test.ts`: 84 of the 103 map warps of the free-play
+floors land within 100 units of another warp pad (the pads come in pairs), so
+param1..3 are floor coordinates. In Chrome against newserv, Pioneer 2: the
+warp at (0, -60) showed "The Principal", Enter moved the player to
+(0, 0, -1770), next to the return pad and outside its radius.
+
 ## 2026-10-17: Pioneer 2 doors, the Lab's warps and the city beams' speed
 
 **What changed:**

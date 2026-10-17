@@ -60,8 +60,9 @@
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision
 - [x] Wave events: the floor's `.evt` (`formats/events.ts`), the wave state machine (`render/waves.ts`), `6x67` / `6x76` sync, enemies appearing per wave, battle music while a wave of the room is alive
 - [x] Laser fences and their switches, the recovery ring and the second boss warp class; the volumes that draw nothing (fog, events, room ids, sounds, camera) are counted as invisible instead of missing
+- [x] Map warps (intra-floor): `TObjMapWarpForest`, `TObjCityMapWarp`, `TObjMapWarpAncient`, `TObjLaboMapWarp` menus and `6x55` (sent and received)
 - [x] Pioneer 2 doors (shop, guild, Ragol warp, medical center) with their own open/close distances, the Lab's city warps and map warp, the city warp beams' real speed
-- [ ] Remaining object models (the lobby door 0x54, shop generators, jungle rocks, traps, Vol Opt's ship door), the map warps' behaviour, the `construct_objects` action, the door unlock camera
+- [ ] Remaining object models (the lobby door 0x54, shop generators, jungle rocks, traps, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
 - [x] Boss fight music phases (`audio/bossbgm.ts`: the track of every phase and the `6x15`/`6x19`/`6xA4`/`6xA5` triggers) and `6x6A` boss warp gathering (`render/bosswarp.ts`: confirmation, party list, 300-frame gather, warp) — `tests/bossrooms.test.ts`
 - [x] CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps (flags = param5), the jungle warp beams (color by param6, 4 frames per tick, radius 15)
 - [x] The boss warp object's beams by 6x6A state (idle / gather + warp / occupied + locked); the client has no boss-warp cutscene camera

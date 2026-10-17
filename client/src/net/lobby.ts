@@ -35,6 +35,7 @@ export interface LobbyEvents {
   playerJoined: (p: LobbyPlayer) => void;
   playerLeft: (clientId: number) => void;
   moved: (p: LobbyPlayer) => void;
+  teleported: (p: LobbyPlayer) => void; // 6x55: placed at once, no walk
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
@@ -231,6 +232,13 @@ export class Lobby {
             p.moving = false;
             this.emit('moved', p);
             break;
+          case 0x55: // G_IntraMapWarp_6x55: {u32 angle, from xyz, to xyz}
+            if (body.length < 0x20) break;
+            p.angle = dv.getUint32(4, true) * BAMS_TO_RAD;
+            p.position = { x: dv.getFloat32(0x14, true), y: dv.getFloat32(0x18, true), z: dv.getFloat32(0x1c, true) };
+            p.moving = false;
+            this.emit('teleported', p);
+            break;
           case 0x40: // walk to x,z
           case 0x42: // run to x,z
             p.position = { x: dv.getFloat32(4, true), y: p.position.y, z: dv.getFloat32(8, true) };
@@ -291,6 +299,24 @@ export class Lobby {
     dv.setFloat32(16, z, true);
     this.sendSubcommand(0x3e, p);
     this.updateSelf(x, y, z, angle, false);
+  }
+
+  // 6x55 (G_IntraMapWarp_6x55, 0x20 bytes), as warp_player_from_source_to_dest
+  // (0x0069b184) builds it: {55, 08, client id, u32 angle, from xyz, to xyz}.
+  sendIntraMapWarp(to: { x: number; y: number; z: number }, angle: number): void {
+    const me = this.self;
+    if (!me) return;
+    const p = new Uint8Array(0x1c);
+    const dv = new DataView(p.buffer);
+    dv.setUint32(0, Math.round((angle / (Math.PI * 2)) * 0x10000) & 0xffff, true);
+    dv.setFloat32(4, me.position.x, true);
+    dv.setFloat32(8, me.position.y, true);
+    dv.setFloat32(12, me.position.z, true);
+    dv.setFloat32(16, to.x, true);
+    dv.setFloat32(20, to.y, true);
+    dv.setFloat32(24, to.z, true);
+    this.sendSubcommand(0x55, p);
+    this.updateSelf(to.x, to.y, to.z, angle, false);
   }
 
   // 6x20: answer a 6x1F position request.
