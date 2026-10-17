@@ -82,7 +82,7 @@ try {
   gb.sendWalk(-7, 33);
   const walk = await aSawWalk;
   check(`A saw B walk to (${walk.position.x}, ${walk.position.z})`, walk.position.x === -7 && walk.gait === 'walk');
-  const bSawStop = waitEvent<LobbyPlayer>((r) => gb.on('moved', (p) => p.clientId === 0 && !p.moving && r(p)), 'B sees A stop');
+  const bSawStop = waitEvent<LobbyPlayer>((r) => gb.on('moved', (p) => p.clientId === 0 && !p.moving && p.position.x === 55 && r(p)), 'B sees A stop');
   ga.sendStop(55, 0, -10, Math.PI);
   const stop = await bSawStop;
   check(`B saw A stop at (${stop.position.x}, ${stop.position.z})`, stop.position.x === 55 && Math.abs(stop.angle - Math.PI) < 0.01);

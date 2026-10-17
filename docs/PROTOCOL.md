@@ -91,6 +91,66 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 | `40` | walk to | `f32 x, z, u32 flags` |
 | `42` | run to | `f32 x, z` |
 
+## Games (team rooms)
+
+Implemented in `client/src/net/game.ts` (`Game extends Lobby`), tested live by `tests/game.live.ts`. Sources: newserv `CommandFormats.hh`, `ReceiveCommands.cc` (`on_C1_BB`, `on_10_game_menu`, `on_1D`, `on_6F`, `on_61_98`, `on_84`), `ReceiveSubcommands.cc`, `ServerState.cc` (`send_lobby_join_notifications`), and the real-client captures in newserv's `tests/` (`GC-ForestGameRareMagFeed`: create alone and warp; `GC-XB-CrossplayForestGame`: a second player joins). The GC captures use the same command and subcommand numbers as BB except for the 4-byte header.
+
+| Step | Dir | Cmd | Content |
+|---|---|---|---|
+| Create | C→S | `C1` | `C_CreateGame_BB_C1` (0x50): `menu_id`, `item_id` (0), name UTF-16[0x10] @08, password UTF-16[0x10] @28, `difficulty` @48 (0–3), `battle_mode` @49, `challenge_mode` @4A, `episode` @4B (1, 2, 3 = Episode 4), `solo_mode` @4C. newserv keeps 14 characters of the name. |
+| List | C→S | `08` | empty |
+| | S→C | `08` | `S_MenuItem_PC_BB_08` entries (0x2C), flag = number of games. The first entry is the server name (item 0, flags 4). Per game: `item_id` = game id, `difficulty_tag` = 0x22 + difficulty, `num_players`, name, `episode` byte = `max_clients << 4 | episode` (`0x10 | episode` for solo), `flags`: 2 password, 4 not joinable (BB), 0x10 battle, 0x20 challenge, episode << 6 |
+| Join | C→S | `10` | `{menu_id = 0x44000044, item_id = game id}`; with a password: flag 2 and UTF-16 password[0x10] @08 (0x28 bytes) |
+| Refused | S→C | `01` / `0101` | lobby message box (text after an 8-byte header), e.g. "another player is currently loading" |
+| Joined | S→C | `64` | `S_JoinGame_BB_64` (0x1A0), flag = player count: `Variations` (16 × `{u32 layout, u32 entities}`) @000, `PlayerLobbyDataBB[4]` @080 **in slot order** (empty slots zero), `client_id` @190, `leader_id` @191, `disable_udp`, `difficulty` @193, `battle_mode`, `event`, `section_id` @196, `challenge_mode`, `random_seed` @198, `episode` @19C, `solo_mode` @19E, `is_in_quest` @19F |
+| | S→C | `1D` | ping; newserv **holds every command for the joiner** (the other players' sync) until the client answers `1D` |
+| Others | S→C | `65` | the joiner's full entry (same layout as `68`) |
+| Left | S→C | `66` | flag = client id; data `{client_id, leader_id, disable_udp, 0}` |
+
+Loading sequence of the joining client (captures, mirrored by `Game`): `1D` reply, `8A` (game name; the server answers `8A` with UTF-16 text), then after loading the floor `6x3F` (position), `6x1F` (floor), `6x3B`, `6F`. The server answers `6F` with `B1` (time) and the client sends `99`. Another client may only join once `6F` cleared the loading flag (otherwise `01` "currently loading").
+
+When `65` arrives, the players already in the game send state to the joiner with private commands (`62`/`6D`, flag = joiner's client id). newserv registers exactly which ones it expects (`expected_game_state_sync_commands`) and disconnects a client that sends an unexpected one:
+
+| Sender | Order (capture) | Subcommands |
+|---|---|---|
+| leader | 1 | `6x6D` item state (`6D`, BC0-compressed `G_SyncItemState_6x6D_Decompressed`: next drop number per floor, next item id per player = 0x00010000 + 0x00200000 × client + items used, floor item counts) |
+| leader | 2–4 | `6x6B` enemy, `6x6C` object, `6x6E` set flag states (BC0) |
+| leader | 5–6 | `6x6F` quest flags (`62`), `6x71` unblock join (`62`, header only) |
+| everyone | 7 | `6x70` own player (`6D`, `G_SyncPlayerDispAndInventory_BB_6x70`, 0x4C0) |
+
+On BB the server, not the leader, then sends `6x72` (resume) to **every player except the joiner** once the leader's `6x70` arrived (`send_resume_game`). The web client sends `6x6D`, `6x71` and `6x70`. It does not send `6x6B`/`6x6C`/`6x6E`: newserv checks the entity counts of every floor's map against its own (including enemy children), which needs the full entity expansion; nor `6x6F`, since the client does not track quest flags. The BC0 data is sent as a literal-only stream (newserv `bc0_encode`: one control byte with a 1 bit per literal, LSB first, then up to 8 bytes).
+
+`6x70` (BB, offsets from the subcommand start): extended header `{0x70, 0, client_id, u32 size}`; `G_6x70_Base_V1` @008 (`client_id` u16 @008, `room` @00A, `game_flags` @00C, position @010, angle (3 × i32 BAMS) @01C, `current_hp` @02A, bonus HP/TP @02C/@02E, status effects @030, `language32` @06C, `player_tag` @070, guild card @074, telepipe @080 (owner 0xFFFF = none), death flags @09C, hold state @0A0, `area` @0B4, `player_flags` @0B8, `technique_levels_v1` @0BC); `PlayerVisualConfigV4` @0D0; `PlayerStats` @140; `num_items` @164; `PlayerInventoryItem[30]` @168; `floor` @4B0. newserv re-encodes it for the joiner and fills `client_id` and the guild card itself. **The joiner gets the other players' appearance only from `6x70`** (`64` carries names and guild cards).
+
+Extended subcommands (`6D`, and `6C`/`62` for large payloads) have size byte 0 and a `u32` byte size after the 4-byte header; `Lobby.onSubcommands` reads both forms.
+
+| Sub | Meaning | Payload |
+|---|---|---|
+| `1F` | set floor and ask for positions (others answer `6x20`) | `i32 floor` |
+| `21` | inter-level warp | `i32 floor` |
+| `22` / `23` | player invisible / visible (while changing floors) | none |
+| `3B` | clear temporary photon blast state flags (sent after each floor load) | none |
+| `3F` | set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
+| `40` | walk to | `f32 x, z, u32 flags` (8 = near an enemy) |
+
+Warp (capture): `6x21 {floor}`, `6x22`, …load…, `6x3F`, `6x1F {floor}`, `6x3B`, `6x23`.
+
+Leave: `98` with `C_CharacterData_BB_61_98` (0x824: inventory, `PlayerDispDataV4`, `PlayerRecordsEntry_BB` {client id, challenge 0x140, battle 0x18} @4DC, `ChoiceSearchConfig` @638, info board UTF-16[0xAC] @650, blocked senders[0x1E] @7A8, `auto_reply_enabled` @820). newserv keeps its own inventory/disp for BB and only stores the records, choice search, info board and blocked senders, so the web client fills them from the `00E7` save data (`PSOBBCharacterFile`: info board @2B44, battle records @2C9C, challenge records @2CB8, choice search @2E20). It answers with `00E7` (save data). Then `84 {menu_id = 0x33000033, item_id = lobby id}` → `67`.
+
+### Floors and map files
+
+Floor → area (newserv `default_floor_to_area`): Episode 1 floor = area (0 Pioneer 2, 1–2 Forest, 3–5 Caves, 6–7 Mines, 8–10 Ruins, 11–14 bosses); Episode 2 area = 0x12 + floor; Episode 4: 0x2D, 0x24..0x2C, 0x2E.
+
+The map files of a floor come from the client's `SetDataTableOn.rel` (`SetDataTableOff.rel` for solo; newserv also has `*Ulti.rel` tables for Episode 1 Ultimate, not present in Ephinea's client), parsed by `client/src/formats/setdatatable.ts` and checked against newserv's `disassemble-set-data-table` (`tests/setdatatable.test.ts`). REL root → area table `{u32 layouts, u32 count}` → layout table `{u32 entities, u32 count}` → entries of three C string pointers: object list basename, enemy+event list basename, area setup name. With the floor's `{layout, entities}` from `64`:
+
+- objects `<object basename>o.dat`, enemies `<enemy basename>e.dat`, events `<enemy basename>.evt`; on floor 0 the suffix is `_s` / `_c1` / `_d` for solo / challenge / battle;
+- render geometry: the setup name plus `n.rel` (`map_forest01n.rel`, `map_cave01_00n.rel`), or with `_00` added (`map_city00` → `map_city00_00n.rel`, `map_labo00`, the Episode 2 jungle maps); `map_boss04` is drawn from `map_darkfalz00n.rel`. This is the same pairing as `setVariantsForMap` in `formats/setdata.ts`;
+- the server only picks among the free-play variation counts of newserv's `num_free_play_variations_for_floor` (the table also holds quest-only layouts, e.g. Cave layouts 03–05).
+
+All 235 free-play floor variations of the three episodes resolve to a render map, a collision map and set files in Ephinea's client.
+
+Player start: the floor's `TObjPlayerSet` with `param1` = client id and `param4` = 0 when arriving from a lower floor, 1 when returning from a higher one. Area warps: `TObjAreaWarpForest` (type 2) with the destination floor in `param4` (Forest 1 has one to floor 2 and one back to floor 0); `TObjCityAreaWarp` (0x44, the Pioneer 2 teleporter, which opens a destination menu in the original).
+
 ## BB cipher
 
 Implemented in `client/src/net/bbcrypt.ts`, ported from newserv's `PSOBBEncryption`.

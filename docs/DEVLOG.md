@@ -1,5 +1,57 @@
 # Devlog
 
+## 2026-10-17: games: create, join, Pioneer 2 and the field
+
+**What changed:**
+- `net/game.ts`: games from the lobby. Create (`C1`), list (`08`), join (`10`), the join command `64`, the loading sequence, the state sync to a joining player, warps between floors and leaving to the lobby (`98` + `84`).
+- `formats/setdatatable.ts`: the client's `SetDataTableOn.rel` / `Off.rel`, which turns the variations of `64` into map files.
+- `render/gameview.ts`: loads the floor the player is on (render map, collision, player starts, enemy and object markers) and warps when the player walks into an area warp.
+- Online tab: a Games box in the lobby (create, refresh the list, join), then Warp and Back to lobby in the game.
+- `tests/game.live.ts`: two Node clients. A creates a game; B lists and joins it; both see each other; both move (`6x42`, `6x40`, `6x3E`); A warps to Forest 1 and B follows; both return to the lobby; the empty game is deleted. `tests/setdatatable.test.ts` compares the table parser with newserv and resolves every free-play floor.
+- The full write-up is in PROTOCOL.md, section "Games".
+
+**How the flow was established:** newserv's server code tells what it accepts, and its `tests/*.test.txt` captures show what a real client sends. They are GC sessions, but the command and subcommand numbers are the same as BB.
+- `GC-ForestGameRareMagFeed`: a player creates a game alone and warps.
+- `GC-XB-CrossplayForestGame`: a second player joins. The leader sends `6x6D`, `6x6B`, `6x6C`, `6x6E`, `6x6F`, `6x71` and `6x70` to the joiner.
+
+`seq.py` (scratch) turned the captures into command sequences.
+
+**Findings:**
+- **newserv holds the joiner's commands until it answers `1D`.** It sends `1D` right after `64`, and queues the other players' sync commands until the reply comes. A client that ignores pings never sees the others.
+- **Joins are serialized by the loading flag.** A second player gets `01` "another player is currently loading" until the first one has sent `6F`. The server answers `6F` with `B1`; `Game.ready` resolves on that `B1`.
+- **On BB the server sends `6x72` (resume), not the leader.** It goes to everyone except the joiner, once the leader's `6x70` has arrived.
+- **The state sync is strict.** newserv records which sync subcommands it expects from whom, and disconnects a client that sends one it did not expect.
+  - It also checks the entity counts in `6x6B`, `6x6C` and `6x6E` against every floor's map, including enemy children. The web client therefore sends only `6x6D`, `6x71` and `6x70`.
+  - `6x6D` holds the next item ids, 0x00010000 + 0x00200000 × client id + the items each player has used. newserv now logs that they match.
+  - The BC0 payload is a literal-only stream.
+- **`64` has no appearance data.** It carries `PlayerLobbyDataBB` only (names, guild cards), in slot order. Classes and appearance arrive later in each player's `6x70`. The view then rebuilds the model; the first frames show a capsule.
+- **`98` must carry real records.** For BB, newserv takes the battle and challenge records, choice search, info board and blocked senders from `98`, so zeros would wipe them. They are copied from the `00E7` save data. `BBSession.fullCharacter` keeps the latest `00E7`.
+- **Map files:** `SetDataTableOn.rel` maps (area, layout, entities) to an object basename, an enemy/event basename and an area setup name.
+  - The geometry is the setup name + `n.rel`, or + `_00n.rel` for `map_city00`, `map_labo00` and the jungles. `map_boss04` uses `map_darkfalz00n.rel`.
+  - The table also lists quest-only layouts (Cave 03–05). The server only picks within newserv's free-play counts.
+  - All 235 free-play variations of Episodes 1, 2 and 4 resolve to files that exist in Ephinea's client.
+- **Player starts:** `TObjPlayerSet` `param4` is 0 when arriving from a lower floor and 1 when coming back. In Forest 1, the 0 set is next to the warp from Pioneer 2 and the 1 set is next to the warp to Forest 2.
+- **Area warps:** `TObjAreaWarpForest` keeps the destination floor in `param4`. Walking within 12 units of one warps the player. The Pioneer 2 teleporter (`TObjCityAreaWarp`) goes to floor 1, since its destination menu is not implemented.
+- **Name length:** newserv keeps 14 characters of the game name, so the UI limits names to 14.
+
+**Lobby/view hooks (additive):**
+- `Lobby` gained `detach()` / `attach()`, `selfEntry`, extended-header subcommands, the `6x1F` floor, and the `floorChanged` event.
+- `LobbyView` gained a `showPlayer` filter, which hides players on other floors and players made invisible by `6x22`.
+- `LobbyView` now ignores events after `dispose()`. Its `Lobby` listeners outlive it, and the game reuses one `Game` across floor views.
+
+**Checked in Chrome:**
+- Create a game, then Pioneer 2 loads: 30 objects, 23 NPC sets, the player on its start point.
+- A Node bot joins: the FOmarl model appears, runs around and chats.
+- Warp to Forest 1: `map_forest01n.rel` with `map_forest01_02o.dat` / `e.dat` (111–120 objects, 59–69 enemy sets, depending on the variation).
+- Back to lobby: lobby 1 again, and the game list is empty.
+
+**Open:**
+- Enemies are markers. Models from `bm_ene_*.bml` and their motions are next.
+- The full sync for real-client joiners: `6x6B`, `6x6C` and `6x6E` need the client's entity expansion; `6x6F` needs the quest flags.
+- The Pioneer 2 teleporter menu, boss warps (`TObjWarpBoss`), in-floor map warps (`TObjMapWarpForest`) and doors.
+- Field BGM. The area track names are in the exe; only the lobby and city tracks are mapped so far.
+- Ultimate Episode 1 uses `SetDataTable*Ulti.rel` on newserv, but that table is not in Ephinea's client. Whether Ultimate uses the `map_a*` geometry is not verified.
+
 ## 2026-10-16: select character screen from the decompiled code
 
 **What changed:** `classic/charselect.ts` is now built from what `PsoBB.exe` (Ephinea 1.25.13) does. Before, it was laid out by hand from a capture. A new `classic/gametext.ts` reproduces the game's 2D text layout. SSIM against the psobb.io capture went from 0.487 to 0.920 (PSNR 18.4 → 28.1), measured at the same backtext animation frame.

@@ -148,6 +148,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
       gameView = view;
       view.onFloor = (f) => {
         $('lobby-title').textContent = `· Game "${g.name}" · ${f.name} (floor ${f.floor}) · ${f.enemies} enemies, ${f.objects} objects`;
+        renderPlayers(g);
         games.update();
       };
       wireLobby(g);
@@ -202,7 +203,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
       const i = document.createElement('input');
       i.name = name;
       i.placeholder = placeholder;
-      i.maxLength = 15;
+      i.maxLength = 14;
       i.autocomplete = 'off';
       return i;
     };
@@ -240,7 +241,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     create.addEventListener('click', () => {
       const n = name.value.trim() || `${lobby?.self?.name ?? 'web'} game`;
       void enterGame((l) =>
-        Game.create(l, ctx(), { name: n.slice(0, 15), password: password.value, difficulty: Number(difficulty.value), episode: Number(episode.value) }),
+        Game.create(l, ctx(), { name: n.slice(0, 14), password: password.value, difficulty: Number(difficulty.value), episode: Number(episode.value) }),
       );
     });
     refresh.addEventListener('click', () => void refreshList());

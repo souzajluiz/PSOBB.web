@@ -34,7 +34,7 @@ const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 const RAD_TO_BAMS = (r: number) => Math.round((r / (Math.PI * 2)) * 0x10000) & 0xffff;
 
 export interface CreateGameOptions {
-  name: string; // up to 16 characters
+  name: string; // newserv keeps 14 characters of the 0x10-unit field
   password?: string;
   difficulty?: number; // 0..3
   battle?: boolean;
