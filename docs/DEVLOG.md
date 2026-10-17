@@ -1,5 +1,15 @@
 # Devlog
 
+## 2026-10-17: sound effects from data/sound/*.pac
+
+**What changed:** the classic UI now plays the game's sound effects. `formats/sepac.ts` parses the banks, `audio/se_tables.ts` is generated from the exe by `tools/gen-se-tables.py`, and `audio/se.ts` (`SePlayer`, plus a shared `se(id)`) plays them with Web Audio. The title, login window, character select and character creation call `se()` wherever the decompiled code calls `FUN_00814298`. Details are in PROTOCOL.md, "Sound effects".
+
+**Format:** a bank is a run of 32-byte aligned waves. Each has a 0x20-byte header (PCMWAVEFORMAT, 12 leftover RIFF bytes, PCM size at `+0x1c`), then the PCM. The exe's per-bank offset records (`0x00a215e0`) match a walk of the file for all 26 banks. `tests/sound.test.ts` parses every bank: 1818 waves, 2524 s in total, each bank's count equal to the exe table's, and every loop point inside its wave.
+
+**Engine:** an SE id maps to a slot (`0x00a1f840`), and a slot to a wave of `common.pac` (always loaded) or of the area bank (`0x00989e60[area]`; area 0 = `city.pac`, loaded at start-up and on the character screens). Volume is `round(f³·6400)` hundredths of a dB with `f = (1 + a/127)(1 + master/127) − 1`, where `a` is the slot's attenuation byte. There are 64 voices; a slot without flag bit 28 cuts its own previous voice. PC buffers have no pan or pitch control.
+
+**Checked in Chrome:** `common.pac` and `city.pac` load into 222 slots. Every UI id (0x56f, 0x570, 0x571, 0x573, 0x575, 0x57c, 0x585, 0x420) resolves to a wave and starts a voice once the first key press unlocks audio. The cursor wave is 3107 frames at 22050 Hz with an RMS of 0.37.
+
 ## 2026-10-16: select character screen from the decompiled code
 
 **What changed:** `classic/charselect.ts` is now built from what `PsoBB.exe` (Ephinea 1.25.13) does. Before, it was laid out by hand from a capture. A new `classic/gametext.ts` reproduces the game's 2D text layout. SSIM against the psobb.io capture went from 0.487 to 0.920 (PSNR 18.4 → 28.1), measured at the same backtext animation frame.
