@@ -1,5 +1,112 @@
 # Devlog
 
+## 2026-10-17: support technique effects
+
+**What changed:** Shifta, Deband, Jellen, Zalure, Anti and Reverser now do
+something. `combat/buffs.ts` holds the rules. `render/combat.ts` applies them
+when the local player casts, and when another player's `6x48` lands on the
+local player or on an enemy. The status window shows the buff icons.
+
+**Details** (Ephinea `PsoBB.exe`, the named dump, `tools/exedata.py` and
+objdump):
+- **Power.** The support technique objects set power = v_power × level
+  (`UpdateSpecialAttackEntityStats_006f0ae4` for Shifta,
+  `UpdateTechniqueEntityStats_006f20cc` for Zalure). v_power is 1, so the
+  power is the 0-based level. `GetTechniquePower` and its jump above
+  level 15 are not used.
+- **Amount and duration.** `on_shifta_jellen_received` (`0x007791b8`) and
+  `on_deband_zalure_received` (`0x007793c8`), constants at
+  `0x009780c8..0x009780f8`:
+  - multiplier = (power × 1.3 + 10) × 0.01, negative for Jellen and Zalure:
+    Lv1 10 %, Lv15 28.2 %, Lv30 47.7 %;
+  - duration = (power × 10 + 40) × 30 frames: 40 s at Lv1, 180 s at Lv15,
+    330 s at Lv30.
+- **Stacking.** Shifta and Jellen share the attack slot (`+0x274..+0x27c`),
+  Deband and Zalure the defense slot (`+0x280..+0x288`). A cast whose
+  |multiplier| is smaller than the current one does nothing: it does not
+  replace it and does not refresh it. An equal or stronger one replaces the
+  type, the multiplier and the duration.
+- **Stats.** ATP (`+0x2cc`) and its spread (`+0x2ce`) move by
+  round(base × m). DFP (`+0x2d2`) moves the same way. ROUND is fistp, which
+  rounds half to even. The equipment ATP (`+0x31c`) is not touched. So:
+  - a Shifta'd player's weapon hits use the raised ATP and spread;
+  - Deband raises the DFP that an enemy's hit subtracts;
+  - Jellen lowers the enemy's ATP and spread when it hits the player;
+  - Zalure lowers the enemy's DFP against weapon hits.
+  Technique damage does not read DFP.
+- **Ticks.** `shifta_jellen_effect_tick` (`0x007782b4`) and
+  `deband_zalure_effect_tick` (`0x00778580`) count down once per frame. At 0
+  the slot clears and the stat goes back.
+- **Who is hit.** `TechniqueObject_UpdateTarget_006e2ac4` and
+  `update_anti_tech`:
+  - the caster always;
+  - the 6x47 list too from level 3 (Anti from level 2).
+  `entity_hit_by_tech` applies groups 9..12 on every client that runs the
+  object. Only the caster's client calls the enemy's `+0x130`
+  (`0x00787578`), which sends a `6x0A` with the unchanged total damage. The
+  web client does the same for each Jellen'd or Zalure'd enemy.
+- **Remote casts.** Another player's `6x48` runs at the 6x48 level, plus the
+  last `6x8D` level_upgrade when the level is 14 (`action_launch_tech`). It
+  uses that player's last `6x47` targets:
+  - Shifta / Deband / Anti apply to the local player when it is listed;
+  - Jellen / Zalure apply to the listed enemies;
+  - Reverser revives a dead local player.
+- **Anti.** `Player_ClearStatusEffect` (`0x00779868`) cures by level: poison
+  always, then shock, paralysis, confusion, slow, Jellen / Zalure, freeze.
+  The web client has no status effects yet. Only the Jellen / Zalure part
+  (level ≥ 5) clears anything; the rest is logged.
+- **Reverser.** `PlayerResetDeadState_0068fdc8` →
+  `PlayerRestoreHealthAndTP_0068fddc` revives with max HP / 2 on a field.
+  The revive goes through `PlayerDamage.revive` (`6x4F`). The local cast
+  targets the nearest party member lying dead within range_h (tracked from
+  `6x4D` / `6x4F`).
+- **HUD.** `QuickMenuUpdateShiftaStatusIcons_007426d8` shows one 32×28
+  sprite per occupied status slot. The icon comes from
+  `get_monster_status`: Shifta 6, Jellen 7, Deband 8, Zalure 9. The sprite is
+  f256_hyouji texture 1 at the texels of `0x0096fd20`. Its position is GUI
+  position `0x1e` = (226, 37) plus the status window's position, plus 16
+  per icon (`0x0096fdf0`).
+- **Ryuker** stays refused. A telepipe needs `6x68`, the pipe object and
+  the round trip to Pioneer 2, which is not cheap.
+- **ASSUMED:**
+  - Buffs survive a floor change.
+  - The status window's render position (`+0x40` / `+0x44`) is its
+    position (28, 37), so the first icon is at (254, 74).
+  - The Reverser target is the nearest dead party member.
+  - The remote cast passes `CheckTechniqueCooldown` (which would drop the
+    level to 0).
+  - Remote Resta still heals nobody here (it needs the caster's MST).
+
+**Verified:** `node tests/buffs.test.ts` covers:
+- the multipliers and durations at Lv1 / 15 / 30;
+- the fistp rounding;
+- the stronger-holds rule;
+- the 1200-frame expiry;
+- the ATP / spread / DFP values;
+- the weapon damage of a Shifta'd hunter and on a Zalure'd enemy;
+- an enemy hit with Jellen and with Deband;
+- Anti's list, Reverser's HP, the remote level, `6x8D` and the icon texels.
+
+The techniques, combat, combatdepth, fieldhud and controls tests still pass.
+
+In Chrome I used WebForce (FOnewearl), whose techniques I set with newserv's
+`$edit tech <name> <level>` lobby chat command (cheat mode is on by default
+in the local config): Shifta / Deband / Jellen / Zalure 15, Anti 7,
+Reverser 1. On Forest 1:
+- Shifta Lv15 → +28.2 % for 180 s, ATP 10 → 13 in the weapon attacker stats.
+- Deband Lv15 → DFP 13 → 17.
+- The red and blue status icons appeared right of the status window.
+- A temporary console hook, which was not committed, put me next to a
+  Booma and froze the AI. Zalure and Jellen Lv15 landed on it: Jellen took
+  its ATP 106 → 76; its DFP is 0 on Normal, so Zalure showed no change.
+  newserv accepted the `6x0A`s.
+- Fed fake remote packets through the subcommand handler:
+  - `6x8D` +6 / `6x47` / `6x48` Shifta → a Lv21 Shifta replaced mine
+    (+36 %, 240 s);
+  - Anti Lv7 → the cure line was logged;
+  - Reverser while dead → revived with 14/28 HP.
+- Not checked with a real second client.
+
 ## 2026-10-17: casting techniques
 
 **What changed:** techniques can be cast from the action palette (a slot with

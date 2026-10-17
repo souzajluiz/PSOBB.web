@@ -60,6 +60,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
+import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
@@ -79,6 +80,7 @@ import {
   parseGiveExp,
   parseHitByEnemy,
   parsePlayerDeath,
+  parseTechLevelOverride,
   type ChangeLevel,
   type Game,
 } from '../net/game.ts';
@@ -93,6 +95,15 @@ import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
+const pct = (m: number): string => `${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)}%`;
+// technique_group of a support technique and back (entity_hit_by_tech).
+const BUFF_GROUP: Partial<Record<number, BuffGroup>> = {
+  [TECH.shifta]: GROUP.shifta,
+  [TECH.deband]: GROUP.deband,
+  [TECH.jellen]: GROUP.jellen,
+  [TECH.zalure]: GROUP.zalure,
+};
+const buffName = (type: number): string => ({ 9: 'Shifta', 10: 'Deband', 11: 'Jellen', 12: 'Zalure' } as Record<number, string>)[type] ?? `effect ${type}`;
 // 6x0A base flags of an enemy that is on the ground and engaged
 // (0x20000000 enemy, 0x00800000 on ground, 0x00100000 activated; the capture
 // GC-ForestGameRareMagFeed sends 0x20900E00 for a killing hit).
@@ -124,6 +135,7 @@ interface EnemyRuntime {
   attack: EnemyAttackData | null;
   exp: number; // BattleParamEntry exp of the enemy's stats row
   resist: TechResist; // ResistData efr / eic / eth / elt / edk
+  buffs: EntityBuffs; // Jellen / Zalure (combat/buffs.ts)
 }
 
 // The local player's technique cast in progress.
@@ -133,6 +145,7 @@ interface CastInProgress {
   data: TechniqueData;
   state: TechCast;
   targets: EnemyRuntime[];
+  sent: number[]; // the 6x47 target entity ids
 }
 
 // A technique's hit waiting for its object to reach the target (game ticks).
@@ -231,6 +244,16 @@ export class CombatView {
   private cast: CastInProgress | null = null;
   private techHits: PendingTechHit[] = [];
   private castTickRemainder = 0;
+  // Shifta / Deband / Jellen / Zalure on the local player (combat/buffs.ts).
+  // ASSUMED: they survive a floor change (the client keeps the player object
+  // across field warps; its tick only runs on a field).
+  readonly selfBuffs = new EntityBuffs();
+  // Per remote client: the last 6x8D level_upgrade and the last 6x47, which its
+  // 6x48 technique object runs with (action_launch_tech).
+  private techOverride = new Map<number, number>();
+  private remoteCasts = new Map<number, { tech: number; targets: number[] }>();
+  // Remote players lying dead (6x4D .. 6x4F): Reverser targets.
+  private deadPlayers = new Set<number>();
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -391,6 +414,7 @@ export class CombatView {
         attack,
         exp,
         resist,
+        buffs: new EntityBuffs(),
       });
     }
     // HP follows the player across floors (a warp does not heal); it is only
@@ -471,6 +495,7 @@ export class CombatView {
       this.tickEnemies();
       this.damage.tick();
       this.tickTechHits();
+      this.tickBuffs();
     }
     this.updateLockOn();
     this.overlay?.update(dt);
@@ -494,7 +519,30 @@ export class CombatView {
       maxTp,
       pb: 0, // photon blasts are not implemented
       dead: this.damage.dead,
+      statusIcons: this.selfBuffs.icons(),
     };
+  }
+
+  // shifta_jellen_effect_tick / deband_zalure_effect_tick, once per frame on
+  // the local player and on every live enemy.
+  private tickBuffs(): void {
+    for (const s of this.selfBuffs.tick()) this.opts.log(`${buffName(s.type)} wore off`);
+    for (const e of this.enemies.values()) {
+      if (e.dead) continue;
+      for (const s of e.buffs.tick()) this.opts.log(`${buffName(s.type)} on E-${e.index.toString(16)} wore off`);
+    }
+  }
+
+  // An enemy's attacker stats with its Jellen applied.
+  private enemyAttackerOf(e: EnemyRuntime): AttackerStats | null {
+    const a = e.attacker;
+    if (!a) return null;
+    return { ...a, atp: e.buffs.atp(a.atp), atpSpread: e.buffs.atpSpread(a.atpSpread) };
+  }
+
+  // An enemy's defender stats with its Zalure applied.
+  private enemyDefenderOf(e: EnemyRuntime): DefenderStats {
+    return { ...e.stats, dfp: e.buffs.dfp(e.stats.dfp) };
   }
 
   // Players an enemy can target: on this floor and alive.
@@ -547,17 +595,19 @@ export class CombatView {
   private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number): void {
     if (clientId !== this.game.selfId) return; // other clients resolve their own hits
     const view = this.view;
-    if (!view || !e.attacker) return;
+    const attacker = this.enemyAttackerOf(e);
+    if (!view || !attacker) return;
     const from = view.playerPositions().get(clientId);
     const p = e.instance.root.position;
     const stats = this.selfStats();
-    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: stats.evp, dfp: stats.dfp };
+    // Deband / Zalure move the player's DFP (+0x2d2).
+    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: stats.evp, dfp: this.selfBuffs.dfp(stats.dfp) };
     // The generic hit check has no attack-type or combo multiplier for an
     // enemy's melee: accuracy 1.0.
-    const chance = (e.attacker.ata - defender.evp * 0.2) * 0.01;
+    const chance = (attacker.ata - defender.evp * 0.2) * 0.01;
     let total = 0;
     if (chance > 0 && this.rng() <= chance) {
-      total = rollDamage(e.attacker, defender, 0, this.rng, mult).damage;
+      total = rollDamage(attacker, defender, 0, this.rng, mult).damage;
     }
     const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
     this.damage.hit(total, angle, knockback, 0x1000 | e.index);
@@ -706,8 +756,9 @@ export class CombatView {
     for (const e of hit) {
       let damage = 0;
       let critical = false;
-      if (rollHit(attacker, e.stats, attackType, step, this.rng)) {
-        const r = rollDamage(attacker, e.stats, attackType, this.rng);
+      const defender = this.enemyDefenderOf(e);
+      if (rollHit(attacker, defender, attackType, step, this.rng)) {
+        const r = rollDamage(attacker, defender, attackType, this.rng);
         damage = r.damage;
         critical = r.critical;
       }
@@ -773,7 +824,10 @@ export class CombatView {
     const targets = this.techTargets(tech, data);
     const kind = targetListKind(tech);
     let sent: Array<{ entityId: number }> = [];
-    if (tech === TECH.resta || tech === TECH.anti || tech === TECH.shifta || tech === TECH.deband || tech === TECH.reverser) {
+    if (tech === TECH.reverser) {
+      const dead = this.reverserTarget(data);
+      sent = dead === null ? [] : [{ entityId: dead }];
+    } else if (tech === TECH.resta || tech === TECH.anti || tech === TECH.shifta || tech === TECH.deband) {
       sent = this.playerTargets(data).map((id) => ({ entityId: id }));
     } else if (kind === 'one') sent = targets.slice(0, 1).map((e) => ({ entityId: 0x1000 | e.index }));
     else if (kind === 'list') sent = targets.map((e) => ({ entityId: 0x1000 | e.index }));
@@ -795,6 +849,7 @@ export class CombatView {
       level,
       data,
       targets,
+      sent: sent.map((t) => t.entityId),
       state: new TechCast(data, releaseFrame(motionType, weaponClass), {
         release: () => this.releaseTechnique(),
         done: () => {
@@ -880,6 +935,27 @@ export class CombatView {
     return out;
   }
 
+  // Reverser's one 6x47 target: the nearest party member lying dead within
+  // range_h (ASSUMED: the targeting system's entry for the 6x4E particle).
+  private reverserTarget(data: TechniqueData): number | null {
+    const me = this.game.self;
+    const positions = this.view?.playerPositions();
+    const from = me && positions?.get(me.clientId);
+    if (!me || !positions || !from) return null;
+    let best: number | null = null;
+    let bestD = data.rangeH;
+    for (const id of this.deadPlayers) {
+      const p = positions.get(id);
+      if (!p) continue;
+      const d = Math.hypot(p.x - from.x, p.z - from.z);
+      if (d <= bestD) {
+        best = id;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
   // The release frame (0x006a0340 area): TP, 6x48, then the technique's
   // effect (action_launch_tech -> unknown_cast_tech).
   private releaseTechnique(): void {
@@ -903,8 +979,8 @@ export class CombatView {
       return;
     }
     if (techElement(c.tech) === null) {
-      this.overlay?.techEffect('support', from.x, from.y, from.z, 20);
-      this.opts.log(`${name} Lv${c.level + 1}: cast, effect not wired`);
+      this.overlay?.techEffect('support', from.x, from.y, from.z, c.tech === TECH.jellen || c.tech === TECH.zalure ? c.data.rangeH : 20);
+      this.releaseSupport(c);
       return;
     }
     // Who is hit: single-target techniques take the first target, Rafoie
@@ -944,6 +1020,70 @@ export class CombatView {
     }
   }
 
+  // The support techniques' objects on this client (combat/buffs.ts). The
+  // caster is always hit; the other players in the 6x47 list apply the effect
+  // on their own clients when this cast's 6x48 reaches them.
+  private releaseSupport(c: CastInProgress): void {
+    const name = `${TECH_NAMES[c.tech]} Lv${c.level + 1}`;
+    const power = supportPower(c.level);
+    const group = BUFF_GROUP[c.tech];
+    if (group === GROUP.shifta || group === GROUP.deband) {
+      this.applySelfBuff(group, power, name);
+      return;
+    }
+    if (group === GROUP.jellen || group === GROUP.zalure) {
+      const hits = c.targets.filter((e) => !e.dead && this.enemies.has(e.index));
+      for (const e of hits) this.buffEnemy(e, group, power, name, true);
+      if (!hits.length) this.opts.log(`${name}: no target`);
+      return;
+    }
+    if (c.tech === TECH.anti) {
+      this.applyAnti(c.level, name);
+      return;
+    }
+    if (c.tech === TECH.reverser) {
+      // The target revives on its own client (its copy of this object).
+      const t = c.sent[0];
+      this.opts.log(t === undefined ? `${name}: no dead party member in range` : `${name}: reviving player ${t}`);
+    }
+  }
+
+  // entity_hit_by_tech(shifta / deband) on the local player.
+  private applySelfBuff(group: BuffGroup, power: number, what: string): void {
+    const before = { atp: this.selfBuffs.attack.mult, dfp: this.selfBuffs.defense.mult };
+    const took = this.selfBuffs.apply(group, power);
+    const slot = group === GROUP.shifta || group === GROUP.jellen ? this.selfBuffs.attack : this.selfBuffs.defense;
+    if (!took) {
+      this.opts.log(`${what}: a stronger ${buffName(slot.type)} holds (${pct(group === GROUP.shifta ? before.atp : before.dfp)})`);
+      return;
+    }
+    const st = this.selfStats();
+    const stat = group === GROUP.shifta || group === GROUP.jellen ? `ATP ${st.atp} -> ${this.selfBuffs.atp(st.atp)}` : `DFP ${st.dfp} -> ${this.selfBuffs.dfp(st.dfp)}`;
+    this.opts.log(`${what}: ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
+  }
+
+  // entity_hit_by_tech(jellen / zalure) on an enemy; the caster's client
+  // reports it with 6x0A (vtable +0x130, 0x00787578: unchanged total damage).
+  private buffEnemy(e: EnemyRuntime, group: BuffGroup, power: number, what: string, own: boolean): void {
+    if (!e.buffs.apply(group, power)) return;
+    const slot = group === GROUP.jellen ? e.buffs.attack : e.buffs.defense;
+    const stat =
+      group === GROUP.jellen && e.attacker
+        ? `ATP ${e.attacker.atp} -> ${e.buffs.atp(e.attacker.atp)}`
+        : `DFP ${e.stats.dfp} -> ${e.buffs.dfp(e.stats.dfp)}`;
+    if (own) this.game.sendEnemyState(e.index, e.stats.maxHp - e.stats.hp, ENEMY_BASE_FLAGS);
+    this.opts.log(`${what}: E-${e.index.toString(16)} ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
+  }
+
+  // Player_ClearStatusEffect(level): the web client has no poison, paralysis,
+  // shock, slow, confusion or freeze yet, so only the Jellen / Zalure part
+  // (level >= 5) has something to clear.
+  private applyAnti(level: number, what: string): void {
+    const cures = antiCures(level);
+    const cleared = level >= 5 && this.selfBuffs.clearDebuffs();
+    this.opts.log(`${what}: cures ${cures.join(', ')}${cleared ? ' (Jellen / Zalure cleared)' : ''}; no other status effects exist yet`);
+  }
+
   // entity_hit_by_tech on an enemy (combat/techniques.ts).
   private techHitEnemy(tech: number, level: number, mst: number, charClass: number, e: EnemyRuntime): void {
     const name = TECH_NAMES[tech];
@@ -957,6 +1097,36 @@ export class CombatView {
     }
     const damage = techDamage(tech, level, mst, charClass, e.resist);
     this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `);
+  }
+
+  // Another player's 6x48: its technique object on this client hits the
+  // 6x47 targets (action_launch_tech -> unknown_cast_tech). Only the local
+  // player and the enemies are tracked here, so the effects that land on them
+  // are applied: Shifta / Deband / Anti from level 3 / 2 (the caster-only
+  // levels hit nobody else), Jellen / Zalure on the listed enemies, Reverser
+  // on a dead local player.
+  private remoteSupport(clientId: number, tech: number, sentLevel: number): void {
+    const cast = this.remoteCasts.get(clientId);
+    if (!cast || cast.tech !== tech) return;
+    const level = remoteTechLevel(sentLevel, this.techOverride.get(clientId) ?? 0);
+    const name = `player ${clientId}'s ${TECH_NAMES[tech]} Lv${level + 1}`;
+    const self = this.game.selfId;
+    const onMe = cast.targets.includes(self);
+    const group = BUFF_GROUP[tech];
+    if ((group === GROUP.shifta || group === GROUP.deband) && onMe && level >= 2) {
+      this.applySelfBuff(group, supportPower(level), name);
+    } else if (group === GROUP.jellen || group === GROUP.zalure) {
+      for (const id of cast.targets) {
+        const e = id >= 0x1000 ? this.enemies.get(id - 0x1000) : undefined;
+        if (e && !e.dead) this.buffEnemy(e, group, supportPower(level), name, false);
+      }
+    } else if (tech === TECH.anti && onMe && level >= 1) {
+      this.applyAnti(level, name);
+    } else if (tech === TECH.reverser && onMe && this.damage.dead) {
+      // PlayerResetDeadState_0068fdc8: max HP / 2 on a field.
+      this.damage.revive(reverserHp(this.damage.maxHp));
+      this.opts.log(`${name}: revived`);
+    }
   }
 
   private tickTechHits(): void {
@@ -995,11 +1165,14 @@ export class CombatView {
     const stats = { atp: dv.getUint16(0, true), ata: dv.getUint16(0x0a, true), lck: dv.getUint16(0x0c, true) };
     const w = this.equippedWeapon();
     const pmtWeapon = w && this.pmtSync ? this.pmtSync.getWeapon(w.data1[1], w.data1[2]) : undefined;
-    return playerAttacker(
+    const a = playerAttacker(
       me.charClass,
       stats,
       pmtWeapon ? { atpMin: pmtWeapon.atpMin, atpMax: pmtWeapon.atpMax, grind: w!.data1[3], ata: pmtWeapon.ata } : null,
     );
+    // Shifta / Jellen move ATP (+0x2cc) and its spread (+0x2ce); the
+    // equipment ATP (+0x31c) is not touched.
+    return { ...a, atp: this.selfBuffs.atp(a.atp), atpSpread: this.selfBuffs.atpSpread(a.atpSpread) };
   }
 
   // 6x0A (dead) was sent: 6x76, the drop request and the EXP request, then the
@@ -1164,8 +1337,14 @@ export class CombatView {
       if (m !== null) this.expMultiplier = Math.max(1, m);
       return;
     }
+    if (sub === 0x8d) {
+      const o = parseTechLevelOverride(body);
+      if (o) this.techOverride.set(o.clientId, o.extra);
+      return;
+    }
     if (sub === SUB_CAST_TECHNIQUE) {
       const t = parseCastTechnique(body);
+      if (t) this.remoteCasts.set(t.clientId, { tech: t.tech, targets: t.targets });
       if (t && t.clientId !== this.game.selfId) this.remoteCast(t.clientId, t.tech);
       return;
     }
@@ -1175,6 +1354,7 @@ export class CombatView {
       const pos = this.view?.playerPositions().get(t.clientId);
       const el = techElement(t.tech);
       if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
+      if (el === null) this.remoteSupport(t.clientId, t.tech, t.level);
       return;
     }
     if (sub >= 0x43 && sub <= 0x45) {
@@ -1213,11 +1393,13 @@ export class CombatView {
       const d = parsePlayerDeath(body);
       if (!d || d.clientId === this.game.selfId) return;
       this.playRemoteMotion(d.clientId, 'death', 0);
+      this.deadPlayers.add(d.clientId);
       this.opts.log(`player ${d.clientId} died (6x4D flags 0x${d.deathFlags.toString(16)})`);
       return;
     }
     if (sub === 0x4f) {
       if (clientId === this.game.selfId) return;
+      this.deadPlayers.delete(clientId);
       this.playRemoteMotion(clientId, 'revive', 40);
       return;
     }

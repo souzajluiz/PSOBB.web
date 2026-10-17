@@ -50,9 +50,14 @@ export class PlayerHud {
     try {
       const hyouji = await files.textures('f256_hyouji.prs');
       const text = await files.textures(['textureenglish.xvm', 'texturejapanese.xvm']);
-      const [panel, icons, font] = await Promise.all([textureBitmap(hyouji[13]), textureBitmap(hyouji[0]), textureBitmap(text[0])]);
+      const [panel, icons, font, status] = await Promise.all([
+        textureBitmap(hyouji[13]),
+        textureBitmap(hyouji[0]),
+        textureBitmap(text[0]),
+        hyouji[1] ? textureBitmap(hyouji[1]) : Promise.resolve(undefined),
+      ]);
       if (this.disposed) return;
-      this.textures = { panel, icons, font };
+      this.textures = { panel, icons, font, status };
     } catch (err) {
       this.log(`hud: textures unavailable (${(err as Error).message})`);
     }

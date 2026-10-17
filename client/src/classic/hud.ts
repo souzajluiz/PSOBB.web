@@ -349,6 +349,7 @@ export interface HudTextures {
   panel: CanvasImageSource; // f256_hyouji.prs texture 13
   icons: CanvasImageSource; // f256_hyouji.prs texture 0
   font: CanvasImageSource; // textureenglish.xvm / texturejapanese.xvm texture 0
+  status?: CanvasImageSource; // f256_hyouji.prs texture 1 (status icons)
 }
 
 export interface StatusValues {
@@ -361,6 +362,9 @@ export interface StatusValues {
   maxTp: number;
   pb: number; // photon blast gauge
   dead: boolean;
+  // get_monster_status icons of the player's status slots, in slot order
+  // (combat/buffs.ts statusIcon).
+  statusIcons?: readonly number[];
 }
 
 // The status window's state across frames (bars and their colours).
@@ -409,6 +413,7 @@ export class StatusWindow {
     // Element 14: the gauge number, centred on x 68.
     const pb = Math.min(Math.max(0, Math.round(v.pb)), 500);
     drawGlyphNumber(ctx, tex.font, pb, wx + 68 + numberWidth(pb) * 0.5, wy + 13);
+    if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx, wy);
   }
 
   private drawValue(ctx: CanvasRenderingContext2D, font: CanvasImageSource, label: string, value: number, max: number, wx: number, y: number, argb: Argb): void {
@@ -418,6 +423,45 @@ export class StatusWindow {
     const x = right - numberWidth(max) - 12;
     drawGlyphText(ctx, font, '/', x, y, argb);
     drawGlyphNumber(ctx, font, value, x, y, argb);
+  }
+}
+
+// --- status icons ------------------------------------------------------------
+
+// QuickMenuUpdateShiftaStatusIcons_007426d8 (run by the status window's update,
+// QuickMenuUpdateUI_00742248) keeps one small window per occupied status slot
+// of the player (+0x25c, +0x268, +0x274 attack technique, +0x280 defense
+// technique, 0xc apart), after a photon blast icon when one is ready. Each is
+// the template 0x009f1fdc {32 x 28, element list 0x009f1fa4: one sprite at
+// (0, 0) of texlist 0x00a983d8 = f256_hyouji.prs} created by
+// unknown_create_player_hud_freeze_icon at GUI position 0x1e = (226, 37) plus
+// the status window's render position (+0x40 / +0x44) plus 16 per icon
+// already shown (0x0096fdf4 / 0x0096fdf0). ui_target_window_status picks the
+// sprite: icon 14 hides it, icons < 10 use texture 1, others texture 2, at
+// the texels of the table 0x0096fd20 (i * 2 floats).
+// ASSUMED: the status window's render position is its position (28, 37), so
+// the first icon sits at (254, 74).
+export const STATUS_ICON_POS = { x: 226, y: 37 } as const;
+export const STATUS_ICON_STEP = 16;
+export const STATUS_ICON_SIZE = { w: 32, h: 28 } as const;
+// prettier-ignore
+const STATUS_ICON_TEXELS: readonly (readonly [number, number])[] = [
+  [0, 180], [32, 180], [64, 180], [96, 180], [128, 180],
+  [0, 208], [32, 208], [64, 208], [96, 208], [128, 208],
+];
+
+export function statusIconTexel(icon: number): readonly [number, number] | null {
+  return STATUS_ICON_TEXELS[icon] ?? null;
+}
+
+export function drawStatusIcons(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, icons: readonly number[], wx: number, wy: number): void {
+  let k = 0;
+  for (const icon of icons) {
+    const t = statusIconTexel(icon);
+    if (!t) continue;
+    const x = wx + STATUS_ICON_POS.x + k * STATUS_ICON_STEP;
+    drawModulated(ctx, tex, t[0], t[1], STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h, x, wy + STATUS_ICON_POS.y, STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h);
+    k++;
   }
 }
 

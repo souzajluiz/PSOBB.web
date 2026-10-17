@@ -1009,6 +1009,11 @@ export function parseCastTechnique(body: Uint8Array): { clientId: number; tech: 
   return { clientId: dv.getUint16(2, true), tech: body[4], level: body[6], targets };
 }
 
+export function parseTechLevelOverride(body: Uint8Array): { clientId: number; extra: number } | null {
+  if (body.length < 8 || body[0] !== 0x8d) return null;
+  return { clientId: new DataView(body.buffer, body.byteOffset, body.byteLength).getUint16(2, true), extra: body[4] };
+}
+
 export function parseCastTechniqueComplete(body: Uint8Array): { clientId: number; tech: number; level: number } | null {
   if (body.length < 8 || body[0] !== 0x48) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
