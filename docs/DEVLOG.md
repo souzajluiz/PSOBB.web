@@ -51,6 +51,7 @@
 - The ship-select camera.
 - Where the `DAT_00a48a3c` mode that picks the list size is set.
 - Fresh lobby captures of the original could not be taken this session: the display was asleep, so screencapture returned black frames.
+
 ## 2026-10-17: games: create, join, Pioneer 2 and the field
 
 **What changed:**
