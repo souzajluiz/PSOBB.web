@@ -21,6 +21,7 @@ export class ClientFiles {
   private source: DataSource;
   private loose: Set<string> | null = null;
   private gsl: GSLArchive | null = null;
+  private indexing: Promise<void> | null = null;
   private cache = new Map<string, Promise<Uint8Array>>();
   private opts: ClientFilesOptions;
 
@@ -35,10 +36,15 @@ export class ClientFiles {
     return res?.ok ? new Uint8Array(await res.arrayBuffer()) : null;
   }
 
-  private async index(): Promise<void> {
-    if (this.loose) return;
-    this.loose = new Set(await this.source.list(''));
-    if (this.loose.has('data.gsl')) this.gsl = new GSLArchive(await this.source.read('data.gsl'));
+  // One shared load: concurrent reads must all wait for data.gsl, not only
+  // for the loose file list.
+  private index(): Promise<void> {
+    this.indexing ??= (async () => {
+      const loose = new Set(await this.source.list(''));
+      if (loose.has('data.gsl')) this.gsl = new GSLArchive(await this.source.read('data.gsl'));
+      this.loose = loose;
+    })();
+    return this.indexing;
   }
 
   async has(name: string): Promise<boolean> {

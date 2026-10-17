@@ -1,5 +1,20 @@
 # Devlog
 
+## 2026-10-17: the player turned into a capsule in games
+
+**Symptom:** in a game the player showed the capsule stand-in, and NPCs and
+Pioneer 2 objects were missing; the console said `client file not found:
+plymotiondata.rlc` (and every other file that lives only in `data.gsl`).
+
+**Cause:** `ClientFiles.index()` set the loose file list before it had loaded
+`data.gsl` (71 MB). Reads that started while that load was in flight saw the
+list, skipped the wait and looked in a `gsl` that was still null. The game's
+many parallel reads (now also waiting on `/newserv-maps/`) hit it every time.
+
+**Fix:** `index()` keeps one shared promise and publishes the list only after
+`data.gsl` is open. Checked in Chrome: the player model, 21 NPCs and 8
+objects are back in Pioneer 2.
+
 ## 2026-10-17: a Docker image for Dokploy
 
 **What changed:** `Dockerfile` (multi-stage: newserv built from source at
