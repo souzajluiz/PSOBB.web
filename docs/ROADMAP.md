@@ -67,6 +67,9 @@
 - [x] Combat: the player taking damage (`6x4A` shield, `6x4B`/`6x4C` light/heavy hit, `6x89`+`6x4D` death, `6x4E` revivable, `6x4F` revive), HP tracking, the hit / knockback / death / stand-up field motions, the HP read-out (`combat/playerdamage.ts`)
 - [x] Combat: enemy AI from the generic enemy FSM (idle and the walk home, the search radius, the war cry, the chase at the BattleParamEntry MovementData speeds, the melee at the AttackData reach with its damage and knockback, the 15-tick recovery) (`combat/enemyai.ts`)
 - [x] Combat: damage numbers over a hit enemy and the lock-on reticle (`render/combatoverlay.ts`)
+- [x] In-game HUD from the exe: the player status window (name, colour badge, level, HP / TP bars with the hold-then-slide animation and low colours, numbers, photon blast gauge ring), the "EXP+n" and "Level Up" floating texts, the level-up lines (`classic/hud.ts`, `render/playerhud.ts`)
+- [x] Levels: PlyLevelTbl.prs from the stream file (`formats/plyleveltbl.ts`), max HP / TP formulas, `6xBF` EXP, `6x30` level-up with the table's gains, full heal and the level-up sound, `6xDD` EXP multiplier (`combat/progression.ts`, `tests/level.test.ts`)
+- [ ] HUD: the window-opening wipe, the party members' windows, photon blast charge, TP use, the message window's own scrolling / timing and frame, the level-up light and particle, name-tag level refresh
 - [ ] Combat: techniques (`6x47`/`6x48`), photon blasts, specials and status effects, hit boxes per body part, the per-family enemy FSMs (Savage Wolf's leap, Rag Rappy's fake death, Monest spawning Mothmants, Poison Lily), line of sight and the idle wander path, enemies attacking remote players
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)

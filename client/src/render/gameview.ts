@@ -112,6 +112,8 @@ export class GameView {
       log,
       floorFilesFor: (f) => this.floorFilesFor(f),
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+      ...character,
+      source,
     });
   }
 
