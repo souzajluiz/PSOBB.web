@@ -9,7 +9,9 @@ import type { Lobby } from '../net/lobby.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
-import { LobbyScreen } from './lobby.ts';
+import { LobbyScreen, type LobbyHud } from './lobby.ts';
+import { parseItemPMT } from '../formats/itempmt.ts';
+import { ItemNames } from '../formats/itemnames.ts';
 import { ShipSelectScreen } from './shipselect.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
@@ -122,6 +124,56 @@ async function main(): Promise<void> {
     };
   };
 
+  // HUD textures and text: f256_hyouji.prs 13 (main menu panel), the
+  // TextureEnglish/texturejapanese texlist (0x00a9cd48: texture 0 = name
+  // tab of the word balloons, texture 2 = main menu labels).
+  let hudTextures: { panel: ImageBitmap; texlist: ImageBitmap[] } | null = null;
+  const loadHud = async (infoCols: LobbyHud['infoCols']): Promise<LobbyHud> => {
+    hudTextures ??= {
+      panel: hyouji[13],
+      texlist: await textureBitmaps(await files.textures(['textureenglish.xvm', 'texturejapanese.xvm'])),
+    };
+    unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+    const table = unitxt;
+    return {
+      skin: titleAssets.skin,
+      bubble: { body: hyouji[1], tab: hudTextures.texlist[0] },
+      menu: { panel: hudTextures.panel, labels: hudTextures.texlist[2] },
+      text: (g, i) => (table[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
+      inventory: () => {
+        const c = session?.character;
+        if (!c) return null;
+        return c.inventory.map((it) => {
+          const name = itemNames ? itemNames.describe(it.data) : [...it.data.data1].map((b) => b.toString(16).padStart(2, '0')).join('');
+          return it.equipped ? `E ${name}` : name;
+        });
+      },
+      infoCols,
+    };
+  };
+  // Item names for the Item List window (ItemPMT from the stream file, as the
+  // Online tab's inventory panel does).
+  let itemNames: ItemNames | null = null;
+  const loadItemNames = async (s: BBSession) => {
+    try {
+      const pmtFile = (await files.has('ItemPMT.prs')) ? await files.read('ItemPMT.prs') : (await s.streamFiles()).get('ItemPMT.prs');
+      if (!pmtFile) return;
+      const pmt = parseItemPMT(pmtFile);
+      unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+      let text: string[][] | null = ItemNames.textMatches(pmt, unitxt) ? unitxt : null;
+      if (!text) {
+        const res = await fetch('/newserv-text/unitxt_e.prs').catch(() => null);
+        if (res?.ok) {
+          const t = parseUnitxt(new Uint8Array(await res.arrayBuffer()));
+          if (ItemNames.textMatches(pmt, t)) text = t;
+        }
+      }
+      itemNames = new ItemNames(pmt, text);
+    } catch (err) {
+      console.warn('[classic] item names unavailable', err);
+    }
+  };
+
   const enterLobby = async (lobby: Lobby, shipName: string) => {
     const v = world();
     showWorld(true);
@@ -129,7 +181,7 @@ async function main(): Promise<void> {
     await v.load(source, lobbyMapFile(lobby.lobbyNumber));
     const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
     lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
-    const screen = new LobbyScreen(v, lobbyView, lobby, titleAssets.skin, shipName);
+    const screen = new LobbyScreen(v, lobbyView, lobby, await loadHud(mapData.infoCols ?? []), shipName);
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
     Object.assign(window, { classicLobby: screen, classicLobbyState: lobby });
     show(screen);
@@ -255,6 +307,7 @@ async function main(): Promise<void> {
             session?.close();
             session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
             await session.login(username, password);
+            await loadItemNames(session);
             credentials = { username, password };
             try {
               localStorage.setItem('psobb.username', username);

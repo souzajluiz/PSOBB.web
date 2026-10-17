@@ -49,6 +49,9 @@ export interface LobbyMapData {
   spawns: Map<number, LobbySpawn>; // by client id
   // Client files for the player models and motions (null: capsules only).
   files: ClientFiles | null;
+  // TObjInfoCol (object type 0x0180): information counter trigger circles,
+  // world x/z and radius (param1).
+  infoCols?: Array<{ x: number; z: number; radius: number }>;
 }
 
 // Loads the lobby's collision (scene/map_lobby_NNc.rel) and player spawn points
@@ -57,7 +60,7 @@ export interface LobbyMapData {
 export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, log: (msg: string) => void = () => {}): Promise<LobbyMapData> {
   const area = lobbyArea(lobbyNumber);
   const files = new ClientFiles(source);
-  const data: LobbyMapData = { collision: null, spawns: new Map(), files };
+  const data: LobbyMapData = { collision: null, spawns: new Map(), files, infoCols: [] };
   try {
     data.collision = new CollisionWorld(parseMapCRel(await source.read(`scene/map_${area}c.rel`)));
   } catch (err) {
@@ -71,6 +74,11 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
       const room = rooms.find((r) => r.id === s.room);
       const [x, y, z] = roomToWorld(s.position, room);
       data.spawns.set(s.clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
+    }
+    for (const o of sets) {
+      if (o.type !== 0x0180) continue;
+      const [x, , z] = roomToWorld(o.position, rooms.find((r) => r.id === o.room));
+      data.infoCols!.push({ x, z, radius: o.fparams[0] });
     }
   } catch (err) {
     log(`no spawn points for ${area}: ${(err as Error).message}`);
@@ -441,6 +449,15 @@ export class LobbyView {
       );
       cam.lookAt(focus);
     }
+  }
+
+  // Height of a player's model above its position (bounding box top), for
+  // 2D overlays anchored at the head.
+  playerHeight(clientId: number): number | null {
+    const m = this.markers.get(clientId);
+    if (!m) return null;
+    const box = new THREE.Box3().setFromObject(m.group);
+    return box.isEmpty() ? null : box.max.y - m.group.position.y;
   }
 
   // World position of each player (for 2D overlays such as name tags).

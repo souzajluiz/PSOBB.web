@@ -11,32 +11,48 @@
 //     client's key_config) holds {u32, key id} pairs in the order of the key
 //     config labels (unitxt group 0: "Move Forward", "Move Backward",
 //     "Move Left", "Move Right", "Lock Move Forward", "Lock Walk Forward",
-//     "Decide", "Cancel", "Menu Open/Close", "Start", "Select Up"...). Key ids
-//     are named by the table at 0x0097b5e0 ({id, L": NAME"}): 0x26 W, 0x22 S,
-//     0x10 A, 0x13 D, 0x61 ENTER, 0x50 BACK SPACE, 0x06 HOME, 0x59 SPACE,
-//     0x5e/0x5d/0x5c/0x5f arrows, 0x40..0x4b F1..F12, 0x2a..0x33 1..0.
-//     So: W/S/A/D move, Enter decides, Backspace cancels, Home opens the menu,
-//     arrows move the selection.
-// Not decoded yet (drawn provisionally, see DEVLOG): the chat log, the chat
-// input box, the name tags' exact font/offset, the lobby menu (Home).
+//     "Decide", "Cancel", "Menu Open/Close", "Start", "Select Up"...), which
+//     is also the order of the client's input enum (0 move_forwards ..
+//     8 main_menu_1, 9 begin_chat_input, ...). Key ids are named by the table
+//     at 0x0097b5e0 ({id, L": NAME"}): 0x26 W, 0x22 S, 0x10 A, 0x13 D,
+//     0x61 ENTER, 0x50 BACK SPACE, 0x06 HOME, 0x59 SPACE, arrows 0x5c..0x5f.
+//     So: W/S/A/D move, Enter decides, Backspace cancels, Home opens the main
+//     menu (mainmenu.ts), Space opens the chat input (chat.ts), the arrows
+//     move selections.
+//   - chat: word balloons and the input line (chat.ts); the chat log is only
+//     shown in the main menu's Log Window (there is no log on screen).
+//   - information counter (counter.ts).
+// Name tags over the heads: no code for them was found in PsoBB.exe; they
+// are kept as on the psobb.io capture (fitted, see DEVLOG).
 
 import * as THREE from 'three';
+import { se } from '../audio/se.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
+import { ChatBubble, ChatBubbles, ChatInput, ChatLog, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
+import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, inGameSpace } from './ingame.ts';
-import { drawWindowFrame, type Screen, type Stage, type WindowSkin } from './stage.ts';
+import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import { type Screen, type Stage, type WindowSkin } from './stage.ts';
 
 // Default key config slots 0..3 (W, S, A, D) mapped to the keys LobbyView
 // reads for its movement.
 const MOVE_KEYS: Record<string, string> = { w: 'w', s: 's', a: 'a', d: 'd' };
-const CHAT_LINES = 6;
-const CHAT_MAX = 70; // UTF-16 units; the client's chat buffer limit is not decoded
+const FRAME = 1 / 30;
+const HEAD_FACTOR = 0.92; // FUN_00716204: model bound * 0.92 (0x0096fe90)
+const SE_CHAT = 0x574; // FUN_00720940
 
-interface ChatLine {
-  name: string;
-  text: string;
+export interface LobbyHud {
+  skin: WindowSkin;
+  bubble: BubbleTextures;
+  menu: MainMenuTextures;
+  // unitxt lookup (group, index), language markers removed.
+  text: (group: number, index: number) => string;
+  // Inventory rows for the Item List window (null: no character file).
+  inventory: () => string[] | null;
+  infoCols: InfoCol[];
 }
 
 export class LobbyScreen implements Screen {
@@ -44,24 +60,54 @@ export class LobbyScreen implements Screen {
   private lobby: Lobby;
   private view: LobbyView;
   private viewer: MapViewer;
-  private skin: WindowSkin;
+  private hud: LobbyHud;
   private shipName: string;
   private keys = new Set<string>();
-  private chat: ChatLine[] = [];
-  private input: string | null = null;
+  private log = new ChatLog();
+  private input = new ChatInput();
+  private bubbles = new ChatBubbles();
+  private menu: MainMenu;
+  private counter: InfoCounter;
+  private itemList: ItemListWindow | null = null;
+  private logWindow = false;
+  private heights = new Map<number, number>();
+  private acc = 0;
+  private frame = 0;
+  private extra = 0;
 
-  constructor(viewer: MapViewer, view: LobbyView, lobby: Lobby, skin: WindowSkin, shipName: string) {
+  constructor(viewer: MapViewer, view: LobbyView, lobby: Lobby, hud: LobbyHud, shipName: string) {
     this.viewer = viewer;
     this.view = view;
     this.lobby = lobby;
-    this.skin = skin;
+    this.hud = hud;
     this.shipName = shipName;
+    this.menu = new MainMenu(
+      (id) => hud.text(0x0b, id),
+      (id) => this.menuAction(id),
+    );
+    const t15 = (i: number) => hud.text(0x0f, i);
+    const counterText: CounterText = {
+      info: t15(3),
+      first: [t15(0x37), t15(0x38), t15(0x56)],
+      transport: [t15(0x40), t15(0x41)],
+      team: [t15(0x57), t15(0x58), t15(0x5b), t15(0x5c)],
+      party: [t15(0x3b), t15(0x3c)],
+    };
+    this.counter = new InfoCounter(counterText);
     // LobbyView reads the pressed keys from the viewer's frame callback;
-    // feed it the keys of the stage canvas instead.
+    // feed it the keys of the stage canvas instead (none while a menu or the
+    // chat input has the keyboard), then apply the main menu's view shift.
     const inner = viewer.onFrame;
-    viewer.onFrame = (dt) => inner?.(dt, this.keys);
-    lobby.on('chat', (from, gc, text) => this.addChat(from?.name ?? `#${gc}`, text));
-    lobby.on('playerJoined', (p: LobbyPlayer) => this.addChat('', `${p.name} joined`));
+    viewer.onFrame = (dt) => {
+      inner?.(dt, this.busy ? new Set() : this.keys);
+      this.applyViewShift();
+    };
+    lobby.on('chat', (from, gc, text) => this.onChat(from, gc, text));
+    lobby.on('playerLeft', (id) => this.heights.delete(id));
+  }
+
+  private get busy(): boolean {
+    return this.input.open || this.menu.open || this.counter.open;
   }
 
   get lobbyName(): string {
@@ -69,23 +115,115 @@ export class LobbyScreen implements Screen {
     return `${this.shipName}:${two(this.lobby.blockNumber)}-${two(this.lobby.lobbyNumber + 1)}`;
   }
 
-  private addChat(name: string, text: string): void {
-    this.chat.push({ name, text });
-    if (this.chat.length > 50) this.chat.shift();
+  // unknown_write_chat_message_to_logs: log line + balloon (flags 0xcb).
+  private onChat(from: LobbyPlayer | null, gc: number, text: string): void {
+    const name = from?.name ?? '';
+    this.log.add(name || `#${gc}`, text);
+    if (!from) return;
+    se(SE_CHAT);
+    const me = this.lobby.self?.position;
+    this.bubbles.say(from.clientId, from.name, text, (id) => {
+      const p = this.lobby.players.get(id)?.position;
+      return p && me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0;
+    });
   }
 
-  update(): void {}
+  private menuAction(id: number): void {
+    if (id === 0xb) {
+      const rows = this.hud.inventory();
+      this.itemList = new ItemListWindow(this.hud.text(0x0b, 0x37), rows ?? []);
+      this.menu.leafOpen = true;
+    } else if (id === 0x15) {
+      this.logWindow = true;
+      this.menu.leafOpen = true;
+    }
+  }
+
+  private applyViewShift(): void {
+    const cam = this.viewer.camera;
+    cam.updateProjectionMatrix();
+    if (!this.menu.shift) return;
+    const { ox, oy, s } = menuViewShift(this.menu.shift);
+    const m = new THREE.Matrix4().set(s, 0, 0, ox, 0, s, 0, oy, 0, 0, 1, 0, 0, 0, 0, 1);
+    cam.projectionMatrix.premultiply(m);
+    cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+  }
+
+  update(dt: number): void {
+    this.acc += dt;
+    while (this.acc >= FRAME) {
+      this.acc -= FRAME;
+      this.tick();
+    }
+  }
+
+  private tick(): void {
+    this.frame++;
+    this.menu.tick();
+    this.counter.tick();
+    const cam = this.viewer.camera;
+    const width = 640 + this.extra;
+    ChatBubble.screenW = width;
+    const positions = this.view.playerPositions();
+    this.bubbles.tick((id) => {
+      const pos = positions.get(id);
+      if (!pos) return null;
+      return projectHead(cam, pos, this.headHeight(id), width);
+    });
+  }
+
+  private headHeight(id: number): number {
+    let h = this.heights.get(id);
+    if (h === undefined) {
+      const top = this.view.playerHeight(id);
+      // Fitted fallback until the model is loaded.
+      h = (top ?? 18) * HEAD_FACTOR;
+      if (top !== null) this.heights.set(id, h);
+    }
+    return h;
+  }
+
+  private nearCounter(): boolean {
+    const p = this.lobby.self?.position;
+    if (!p) return false;
+    return this.hud.infoCols.some((c) => (p.x - c.x) ** 2 + (p.z - c.z) ** 2 <= c.radius * c.radius);
+  }
 
   key(e: KeyboardEvent): void {
-    if (this.input !== null) {
+    if (this.input.open) {
       e.preventDefault();
-      if (e.key === 'Enter') {
-        const t = this.input.trim();
-        if (t) this.lobby.sendChat(t);
-        this.input = null;
-      } else if (e.key === 'Escape') this.input = null;
-      else if (e.key === 'Backspace') this.input = this.input.slice(0, -1);
-      else if (e.key.length === 1 && this.input.length < CHAT_MAX) this.input += e.key;
+      const t = this.input.key(e);
+      if (t) this.lobby.sendChat(t);
+      return;
+    }
+    if (this.itemList) {
+      if (!this.itemList.key(e)) {
+        this.itemList = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
+    if (this.logWindow) {
+      if (e.key === 'Backspace' || e.key === 'Escape' || e.key === 'Enter') {
+        this.logWindow = false;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
+    if (e.key === 'Home' || e.key === 'F12') {
+      e.preventDefault();
+      if (!this.counter.open) {
+        this.keys.clear();
+        this.menu.toggle(MAIN_MENU);
+      }
+      return;
+    }
+    if (this.menu.open) {
+      this.menu.key(e);
+      return;
+    }
+    if (this.counter.open) {
+      this.counter.key(e);
       return;
     }
     const k = e.key.toLowerCase();
@@ -93,12 +231,15 @@ export class LobbyScreen implements Screen {
       this.keys.add(MOVE_KEYS[k]);
       return;
     }
-    // Space is "Start" and Enter "Decide" in the default config; both open
-    // the chat input here (the client's chat trigger is not decoded yet).
-    if (e.key === ' ' || e.key === 'Enter') {
+    if (e.key === ' ') {
       e.preventDefault();
       this.keys.clear();
-      this.input = '';
+      this.input.begin();
+      return;
+    }
+    if (e.key === 'Enter' && this.nearCounter()) {
+      this.keys.clear();
+      this.counter.begin();
     }
   }
 
@@ -117,14 +258,20 @@ export class LobbyScreen implements Screen {
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
     inGameSpace(ctx, stage, (extra) => {
+      this.extra = extra;
       this.drawNameTags(ctx, extra);
-      drawLobbyNameWindow(ctx, this.skin, this.lobbyName, extra);
-      this.drawChat(ctx);
+      this.bubbles.draw(ctx, this.hud.bubble);
+      drawLobbyNameWindow(ctx, this.hud.skin, this.lobbyName, extra);
+      this.input.draw(ctx, this.frame);
+      this.counter.draw(ctx, this.hud.skin, extra);
+      this.menu.draw(ctx, this.hud.skin, this.hud.menu);
+      this.itemList?.draw(ctx, this.hud.skin);
+      if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.log);
     });
   }
 
-  // Name above each player's head: projected from the model position plus a
-  // head offset (provisional: 22 units, white game text centred).
+  // Name above each player's head (fitted to the psobb.io capture: white
+  // game text centred 14 px above the head point; no code found in the exe).
   private drawNameTags(ctx: CanvasRenderingContext2D, extra: number): void {
     const cam = this.viewer.camera;
     const w = 640 + extra;
@@ -139,23 +286,6 @@ export class LobbyScreen implements Screen {
       const tw = gameTextWidth(p.name);
       drawGameText(ctx, p.name, x - tw / 2 + 1, y - 13, '#000000', 0.8);
       drawGameText(ctx, p.name, x - tw / 2, y - 14, '#ffffff');
-    }
-  }
-
-  // Provisional chat log (last lines, bottom left) and input window.
-  private drawChat(ctx: CanvasRenderingContext2D): void {
-    const lines = this.chat.slice(-CHAT_LINES);
-    const baseY = this.input !== null ? 400 : 440;
-    lines.forEach((l, i) => {
-      const y = baseY - (lines.length - i) * 18;
-      const s = l.name ? `${l.name} > ${l.text}` : l.text;
-      drawGameText(ctx, s, 13, y + 1, '#000000', 0.8);
-      drawGameText(ctx, s, 12, y, l.name ? '#ffffff' : '#ffcc33');
-    });
-    if (this.input !== null) {
-      drawWindowFrame(ctx, this.skin.frame, 8, 410, 420, 32);
-      const caret = Math.floor(performance.now() / 400) % 2 ? '_' : '';
-      drawGameText(ctx, this.input + caret, 18, 419);
     }
   }
 }

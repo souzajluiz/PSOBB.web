@@ -1,5 +1,84 @@
 # Devlog
 
+## 2026-10-17: lobby HUD from the decompiled code: chat, balloons, main menu, info counter
+
+**What changed:** the classic lobby HUD (`classic/lobby.ts`) is now built from what `PsoBB.exe` (Ephinea 1.25.13) does, in three new modules: `classic/chat.ts` (input line, word balloons, chat log), `classic/mainmenu.ts` (the Home menu, its help window, the Item List window, the 3D view shift) and `classic/counter.ts` (the information counter menus). Checked live in Chrome against newserv: chat (balloon with name tab and tail), Home menu with Item Pack > Items (the character file's inventory) and Chat > Log Window, and the counter's Transport menu. `tests/lobby.live.ts` still passes.
+
+**Chat key and input line:**
+- Inputs follow the key-config order: input 8 `main_menu_1` = "Menu Open/Close" (HOME), input 9 `begin_chat_input` = "Start" (SPACE). `FUN_0072f37c` opens the input when `FUN_0072fdac` sees input 9; Enter (0x61) sends and Escape (0x4c) cancels (`FUN_0072f280`). F12 is input 31 (`main_menu_2`).
+- `FUN_00713540` builds the input (`TWindowKeyboardBase`, ctor `0x0072ebfc`, vtable `0x00b40548`).
+  - `FUN_00731300(200, 2)`: 220.1 × 60 (200 + 20.1 at `0x00970f9c`, 2 × 20 + 20 at `0x00970f98`).
+  - At most 79 characters (`FUN_007312f0(0x4f)`).
+  - Window at table entry 0xc9 = (7, 397); the IME position is 0xcc = (11, 382).
+- The render (`FUN_0072fee4`) has no frame: flag 0x40 is only set by `FUN_0078ee8c`. Text wraps at the content width, 20 px per line.
+- The cursor (`FUN_007307a8`) is a 5 × 14 quad, `0x8000ff00` / `0x4000ff00` (table `0x00970f68`), alternating every 16 frames.
+
+**Chat log:** there is no log on screen.
+- `FUN_0073b858` keeps 30 lines `"<name> > <text>"` (`0x00a9a920`, separator `0x00971cfc`).
+- They show in the main menu's **Log Window** (id 0x15, `FUN_00752114`): a list window at (17, 36), 303 × 400 (`0x00973d78`), that also receives new lines (UI table + 0x44).
+- The old bottom-left log was not in the original and is gone.
+
+**Word balloons:** `FUN_007184f8` → `FUN_00718b74` holds up to 4 balloons (UI table + 0x90..0x9c). When all four are taken it replaces the one farthest from the player. Vtable `0x00b3fcc8`: update `FUN_0071dd20`, render `FUN_0071e084`.
+- **Text and size:** black text, wrapped at 200 px (`FUN_00720940`). The window is the text extent + 20.1 (`0x00970560`). Sound 0x574 plays on each message.
+- **Lifetime:** round(length × 3.3 + 55.5) frames (`0x0097037c`, `0x00970380`). Chat uses flags 0xcb (0x1cb with word wrap); bit 1 turns on the countdown.
+- **Scale animation:** scale += (target − scale) × 0.47 (`0x00970574`) until the step is below 0.011. It grows 0 → 1, and the text appears when it is done. On a new message it drops to 0.5 and the size lerps over 6 frames. At the end it shrinks to 0.
+- **Anchor:** the head point is the model position + model bound × 0.92 (`FUN_00716204`, `0x0096fe90`).
+- **Placement** (`FUN_0071f0c0`, `FUN_0071f830`):
+  - The balloon sits on an ellipse around the head, with radii ((w/2 + 20)/2, (h/2 + 10)/2) and a default angle of 0xd400 (up-right).
+  - It is pushed out by 1000 / camera distance, and only moves when the new spot is 10 or more away.
+  - The centre follows the target by 0.21 per frame (`0x00970468`).
+  - The balloon is clamped to 20 / 40 from the screen edges (`FUN_0071fe58`).
+- **Shape** (`FUN_0071ff10`, `FUN_00720308`, quad `FUN_0082bb74` = P0, P0+A, P0+A+B, P0+B):
+  - The white rounded block at (98, 0)–(194, 96) of `f256_hyouji` texture 1, tinted by the speaker's colour (table `0x009702a0`, 12 colours).
+  - It leans by 0.342 × height. The corner radius is min(h/2, 32), and the width with the lean is W = w + 0.342 h.
+  - A black copy is drawn first, offset by (3, 2.5) × scale.
+- **Tail** (`FUN_00720444`): a triangle from the balloon centre (half-width 12 × scale) toward the head, stopping 1000 / distance short of it. It is drawn black under the balloon and coloured over it.
+- **Name tab** (`FUN_0072062c`): `texturejapanese.xvm` texture 0, texels 145..193 × 237..256, at (−11, −18) from the balloon.
+  - 16 px caps, 25 px high, with the name in black at +6, +3.
+  - It fades in over 6 frames.
+
+**Main menu (Home):** the per-player menu object (`FUN_0071a3d0` + 0x2c, ctor `FUN_007338ac`) is filled by `FUN_00733d70` from layout tables of {u16 id, u16, u32 sub-table}.
+- **Entries (`0x009f2f40`):** Item Pack, Customize, Technique, Chat, Team, Options, Quit Game. Androids use `0x009f3020`, which has no Technique.
+- **Sub-tables:** Item Pack (`0x009f2f80`) = Equip, Items, MAG, Trade Window, Area Map, Quest Board. Chat (`0x009f2fb8`) = Shortcut, Symbol Chat, Guild Card, Simple Mail, Info Board, Log Window. Team (`0x009f2ff0`) = five team entries.
+- **Window:** `FUN_00738e40`, render `FUN_0073950c`, at table entry 0x1b = (28, 85).
+  - It is 116 wide (`0x009f316c`, set at `0x00739fbe`) and items are 16 px apart (`0x00a9a8e0`, set at `0x00739fb4`).
+  - Height = items × 16 + 51 + 39, lerped over 8 frames.
+  - The panel is `f256_hyouji` texture 13: an 18 × 28 corner, a 116 × 23 top, 16/4 px body strips and a 39 px bottom. The branch is chosen by `FUN_007083d4`, which returns 1.
+- **Labels** are images, not text: 98 × 16 texels of texture 2 of `TextureEnglish.gvm`/`texturejapanese.xvm` (`0x00a9cd48`, loaded by `FUN_0079324c`).
+  - The texel origins per id are in table `0x00971980`.
+  - Colours: selected 0xff6121, open sub-menu 0x51eaff, disabled 0x686868.
+  - The rows fade in one after another: age −2 × row, alpha = age / 4.
+- **Help window:** `FUN_0073249c` → `FUN_0073aa40` at entry 0x1c = (17, 312), 206 × 140 (`0x00971100`). It types unitxt 0x0B [id].
+- **3D view shift** (`FUN_00733b2c`): while the menu is open, the projection centre moves right by 80 and up by 115.2 (`0x009712c8`/`cc`), and the view scales by 0.75. The change takes 3 frames each way. It is done with a projection-matrix post-transform, and the balloons use the same projection.
+- **Item List** (Items, id 0xb, `FUN_0075086c` → `FUN_0075198c` → `FUN_00751a10`):
+  - The Ship Select list-window class at entry 3 = (13, 256), 308 × 184 (`0x00973ca0`), 36 rows, titled unitxt 0x0B/0x37 "Item List".
+  - Rows show `session.character` items with the names from `formats/itemnames.ts`. ItemPMT is loaded after login, as the Online tab does.
+
+**Information counter:**
+- **Trigger:** `TObjInfoCol` (object type 0x0180, radius param1; lobby 1 has six circles of radius 15 around the counter).
+  - Its update opens `FUN_0079f218` when the player is inside a circle and presses Decide.
+  - `loadLobbyMapData` now returns these circles (`infoCols`).
+- **First menu:** entry 0xc6 = (68, 251), "Organize PARTY / Transport / Team", with the info window typing 0x0F/3.
+- **Choosing an entry** collapses its menu to that line with the green bar (`FUN_0073600c`: 20 + line height, in 3 frames).
+  - The next menu opens at entry 0xc7 = (82, 292): Change SHIP / Change BLOCK (`FUN_0079b568`), or Create Team / Ranking / Master Menu / Leave Team (`FUN_0079a288`).
+- **Sizing** (`FUN_0073608c`, `FUN_00736458`): widest text + 20; items × 20 − 6 + 20; items centred.
+- **Checked against capture e01:** "Transport" in green over "Change SHIP / Change BLOCK" and "This is the Information Counter." match.
+  - psobb.io centres these menus horizontally (68 + 64 on a 768-wide screen).
+
+**Approximations and open items (marked in the code):**
+- **Balloons:**
+  - The overlap avoidance between balloons (`FUN_0071534c` with random retries) is not ported.
+  - The docking of balloons whose speaker is off screen (player-slot positions, `FUN_00717ca8`) is not ported; they are only clamped.
+  - The text height is taken as 20 × lines − 6.
+- **Name tags over heads:** no code for them was found in PsoBB.exe. They stay fitted to the psobb.io capture. The capture's name sits where ours does, at the counter.
+- **Main menu:**
+  - Selecting a sub-menu replaces the rows in the same panel; `FUN_00739418` was not fully traced.
+  - The window fade-in (`FUN_00710c94`) is not reproduced.
+  - Leaves other than Items and Log Window do nothing.
+- **Item List:** the client's row format (`FUN_00750954`) is not decoded. Rows are item names, with "E " marking equipped items.
+- **Counter:** "Organize PARTY" → Join/Create PARTY is assumed. The leaf actions (ship and block change, party, team) only close the menus.
+- **Ship Select:** the camera behind it is still not decoded.
+
 ## 2026-10-17: character file, item table and item names
 
 **What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.
