@@ -131,11 +131,45 @@ Root (from the decomp's map loader, `headers/assets.h`):
 | 10 | `u32 sections` |
 | 14 | `u32 texture_list` (NJTL: `{u32 entries, u32 count}`, entry `{u32 name, u32 attr, u32 texaddr}`; same order as the `.xvm`) |
 
-Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f32 radius`, `u32 static_entries`, `u32 animated_entries`, `u32 static_count`, `u32 animated_count`, `u32 flags`.
+Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f32 radius`, `u32 static_entries`, `u32 animated_entries`, `u32 static_count`, `u32 animated_count`, `u32 flags`. The client applies the section rotation with the `ZXY_ANG` order (Y, then X, then Z; three.js order `YXZ`); only two sections of `map_crater01_00n.rel` rotate about more than one axis.
 
-- Static entry (0x10): `u32 object`, `u32`, `u32`, `u32 flags` (usually `0x200000`; `0x10001` also seen).
-- Animated entry (0x20): `u32 object`, motion data (not decoded yet).
-- Some Episode 2 maps have entries with flags `0x10224` whose pointer targets another record type; skipped for now.
+Entries (layouts and flag meanings from the client's map draw loop `map_nrel_process_chunk_static_meshes` and its animated twin, checked against all 175 Ephinea `map_*n.rel`):
+
+| Entry | Layout |
+|---|---|
+| Static (0x10) | `u32 object`, `u32 effect`, `u32 texture_anim`, `u32 flags` |
+| Animated (0x20) | `u32 object`, `u32 motion` (`NJS_MOTION`), `u32`, `f32 frame`, `f32 frame_step`, `u32 effect`, `u32 texture_anim`, `u32 flags` |
+| Indirect object (0x10) | `u32 object`, `u32 ind_tex` (runtime), `f32` (runtime), `i16 ind_id`, `u8`, `u8` |
+| Effect slot (0x18) | `u16 id`, `u16 texture`, `f32 u, v` (accumulated), `f32 du, dv` (per frame), runtime hook pointer at +0x14 |
+| Texture anim (0xC) | `i16 animation_id` (a `.tam` id), `i16`, `i16 texture_index`, `i16 frame_counter`, `i32 frame_delay` |
+
+| Flag | Meaning |
+|---|---|
+| `0x1` | fog disabled while drawing |
+| `0x10` | receives the projected player shadow |
+| `0x20` | `effect` is set |
+| `0x40` | `texture_anim` is set; the `.tam` file swaps the texture |
+| `0x80` | indirect object drawn through a GameCube-only hook (a no-op on PC), so it is drawn plainly |
+| `0x100` | drawn only into the planar-reflection texture (seabed, `boss06`), never in the normal pass |
+| `0x200` | `object` points at an indirect-object record, whose first word is the `NJS_OBJECT` |
+| `0x400` | with `0x200` and without `0x80`: only the GameCube hook runs, so the PC client draws nothing |
+| `0x10000` | runtime visibility bit, also set in the file |
+
+- **Indirect entries** (the old "flags `0x10224`" mystery): 639 entries in Episode 2 jungle/seabed and `boss06`. `ind_id` is a row of `map_<area>i.bin`, which holds indirect-texture (distortion) parameters for waterfalls and water. The client binds a distortion texture on stage 0 and the mesh texture on stage 1. The viewer draws the plain mesh. The `i.bin` layout is big-endian: `"ind0"`, `u32 count`, then 8-byte rows `{u16 id, u8 a, u8 b, u8 texture, u8[3]}`. Every `ind_id` in the maps has a row.
+- **Not drawn on PC**: 1955 entries (`0x100`, `0x200|0x400` without `0x80`, and 27 animated entries without a motion). The parser keeps them in `MapSection.entries` with `rendered: false` and leaves them out of `objects`.
+- **Animated entries**: each tick the client does `frame += frame_step` and wraps at `motion.frame_count - 1`. At load, `frame_step` is overwritten with a per-map value (0.2 in the files; 0.5 for lobbies with variant < 10).
+- **`NJS_MOTION`** (0xC): `u32 mdata`, `u32 frame_count`, `u16 type`, `u16 inp_fn`.
+  - `type` element bits, in storage order: 1 position, 2 angle, 4 scale, …, 0x2000 quaternion. The maps use 0x3, 0x7 and 0x2001.
+  - `inp_fn`: the low nibble is the element count; 0x40 means spline interpolation.
+  - `mdata` has one record per node of the object tree, in depth-first order: N key-list pointers followed by N key counts.
+  - Keys are 0x10 bytes: `u32 frame`, then `f32[3]` (position/scale) or `i32[3]` BAMS (angle).
+  - 11954 motions decode. They are not applied yet; entries render in bind pose.
+
+## Handedness
+
+No mirroring is needed. The client builds a right-handed view matrix (`make_lookat_matrix`: z = eye − target, x = up × z) and a right-handed projection (`create_d3d_projection_matrix`: `_34 = -1`, `_33 = zf/(zn-zf)`, i.e. `D3DXMatrixPerspectiveFovRH`). Its Ninja rotation matrices are standard counter-clockwise rotations. That is exactly three.js' convention, so map coordinates go to three.js unchanged.
+
+Cross-check: rendered unmirrored in the viewer, the Pioneer 2 shop banners above the counters read left to right ("… SHOP", with the P's bowl on the right). The large `map_city00.xvm` sign boards (for example texture 40) read correctly from their open side; the side facing the wall is the mirrored one. The client sets `D3DCULL_NONE` for this pass, so the maps are drawn double-sided.
 
 ## Ninja object / XJ model
 
@@ -150,7 +184,18 @@ Section (0x34): `i32 id`, `f32 pos[3]`, `i32 rot[3]` (BAMS, 0x10000 = 360°), `f
   | 7 | 36 | position, normal, D3DCOLOR, uv |
 
 - Strip list entry (0x14): `u32 materials`, `u32 material_count`, `u32 indices`, `u32 index_count`, `u32`. Indices are u16 triangle strips (the client draws them with `D3DPT_TRIANGLESTRIP`).
-- Material (0x10): `u32 type`, `u32 arg1`, `u32 arg2`, `u32 arg3`. These are sticky render-state changes matching the client's `g_StandardRenderStateSetters`: 2 blend (`src`, `dst` Ninja blend factors), 3 texture id, 4 texture addressing, 5 material color, 6 lighting.
+- Material (0x10): `u32 type`, `u32 arg1`, `u32 arg2`, `u32 arg3`. These are sticky render-state changes; the type indexes the client's 9-entry `g_StandardRenderStateSetters` (read from `PsoBB.exe` at `0xa218c0`):
+
+  | type | setter | args |
+  |---|---|---|
+  | 0, 1 | no-op | |
+  | 2 | blend | `src`, `dst`: index into the D3D enum table at `0xa21944`, offset by 3 (0 zero, 1 one, 2 src color, 3 inv src color, 4 src alpha, 5 inv src alpha, 6 dst alpha, 7 inv dst alpha) |
+  | 3 | texture | texture id (NJTL / `.xvm` order) |
+  | 4 | texture addressing | U, V, read directly from the same table, which starts `[3, 2, 1, 1, …]`: **0 clamp, 1 mirror, 2 wrap, 3 wrap**. The map data agrees: UVs stay in [0, 1] for 98–100% of mode-0/3 strips and leave it for 97–99% of mode-1/2 strips. Every map strip sets a mode, so the default does not matter. |
+  | 5 | material color | `arg1` ambient, `arg2` diffuse, D3DCOLOR (bytes B, G, R, A). In the normal pass only the diffuse is used, as the constant vertex color of meshes without vertex colors. Never used in maps. |
+  | 6 | lighting | bool |
+  | 7 | texture-coordinate generation | bool. Camera-space generated UVs (environment map), used 1295 times, mostly in Ruins. Not rendered yet. |
+  | 8 | material color source | diffuse/ambient source (not seen in maps) |
 
 ## XVM textures
 

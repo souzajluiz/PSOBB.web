@@ -21,10 +21,11 @@
 - [x] XJ parser (BB models: vertex/index buffers, strips, render-state materials)
 - [x] XVM/XVR decoding (DXT1, DXT3, R5G6B5, A1R5G5B5/A4R4G4B4 swizzled) to WebGL textures
 - [x] Render `map_city00_00n.rel` (Pioneer 2) and Forest with orbit + WASD camera
-- [ ] Identify the Episode 2 entries with flags `0x10224` (403 skipped across jungle/seabed)
-- [ ] Texture addressing modes (material type 4), material colors (type 5)
-- [ ] Animated map entries (motions) and texture animation (`.tam`)
-- [ ] Verify handedness (possible X mirroring) against the real client
+- [x] Identify the Episode 2 entries with flags `0x10224`: indirect objects (`0x200`), now rendered; entries the PC client never draws are filtered
+- [x] Texture addressing modes (material type 4: clamp/mirror/wrap), material colors (type 5)
+- [x] Decode animated map entries (`NJS_MOTION` layout)
+- [ ] Play map motions, texture animation (`.tam`), UV-scroll effect slots, env-map texgen (material type 7)
+- [x] Verify handedness: the client is right-handed like three.js, so no mirroring is needed
 - [ ] Enemy/object markers from `map_*e.dat` / `o.dat`
 
 ## Phase 4: online

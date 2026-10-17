@@ -1,5 +1,37 @@
 # Devlog
 
+## 2026-10-16: map entries, texture addressing, motions, handedness
+
+**Goal:** close the open map-rendering gaps from Phase 3.
+
+**Method:**
+- Read the decomp's map draw loop (`map_nrel_process_chunk_static_meshes` and the animated loop), the loader, the render-state setters and the camera/projection code. They served as a specification.
+- Read two data tables straight from `PsoBB.exe`: `g_StandardRenderStateSetters` at `0xa218c0` and the D3D enum table at `0xa21944`.
+- Checked every claim against all 175 `map_*n.rel` with throwaway scripts.
+- Checked visually in a scratch three.js page.
+
+**Findings:**
+- **The "0x10224" entries are indirect objects.** Flag `0x200` means the entry points at a 0x10 record `{object, runtime ind-tex, runtime f32, i16 id}`; `id` selects a row of `map_*i.bin` (waterfall/water distortion parameters).
+  - 403 such entries were skipped before. Another 236 had been "parsed" as garbage objects.
+  - All 639 now resolve: jungle07 entries 108/109 are its waterfalls.
+- **Not every entry is drawn.** The PC client skips:
+  - `0x100` entries: drawn only into the seabed/`boss06` planar-reflection texture.
+  - `0x200|0x400` entries without `0x80`: a GameCube-only hook that is empty on PC.
+  - Animated entries without a motion.
+  - Together that is 1955 entries. They are now kept out of `objects`. Rendered model count: 133488 → 132169.
+- **Entry fields** that were "unknown u32" are now decoded:
+  - `+4`/`+8` (static) and `+0x14`/`+0x18` (animated) are an effect slot (flag `0x20`) and a `.tam` texture-animation record (flag `0x40`).
+  - Animated entries carry `NJS_MOTION`, current frame and frame step. 11954 motions decode (position/angle/scale keys).
+- **Texture address modes:** the table read from the exe maps 0 → clamp, 1 → mirror, 2/3 → wrap, and UV ranges in the data confirm it. `MaterialCache` now gives each (texture, wrapS, wrapT) its own `THREE.Texture` clone.
+- **Material type 5:** the diffuse color becomes the constant vertex color of meshes without vertex colors. It never occurs in maps.
+- **Material type 7:** camera-space texgen (environment map). It is parsed but not rendered.
+- **Handedness: no mirroring.** The client's view and projection matrices are both right-handed (`LookAtRH`, `PerspectiveFovRH`), its rotations are standard, and the Pioneer 2 shop banners read correctly in our render.
+
+**Open:**
+- Apply motions (an AnimationMixer in the viewer).
+- `.tam` texture animation, UV-scroll effect slots, env-map texgen, indirect-texture distortion.
+- The section rotation order in `mapviewer.ts` should be `YXZ` (client `ZXY_ANG` mode); this only matters for two crater sections.
+
 ## 2026-10-16: classic UI, title screen
 
 **Goal:** the title, login and character screens must look identical to the original client.
