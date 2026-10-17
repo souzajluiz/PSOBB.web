@@ -16,3 +16,4 @@ psobb-client/
 *.png
 client/public/ref/
 .captures/
+.claude/
