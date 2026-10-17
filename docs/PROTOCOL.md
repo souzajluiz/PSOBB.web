@@ -60,6 +60,12 @@ newserv's reasoning (from `on_93_BB`): the BB client needs a reconnect during th
 
 On the data-server connection (after the second `E6`): `E5` with `{i32 slot, PlayerDispDataV4Preview}`. `PlayerVisualConfigV4` inside it: `guild_card_number` string[0x10], shared config (`name_color` @+0x08, `section_id` @+0x20, `char_class` @+0x21, `costume`/`skin`/`face`/`head`/`hair` u16 @+0x28..+0x30, `hair_r/g/b` u16 @+0x32..+0x36, `proportion_x/y` f32 @+0x38/+0x3C), `name` UTF-16 with `\tE` prefix @+0x50. Server answers `E4 {slot, result=1}`.
 
+What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character creation"):
+- `guild_card_number` = `sprintf("%10d", guild card)` (FUN_004f34a8).
+- `version` (@+0x23) = 3 and `class_flags` (@+0x24) = the class's default (`0x009b5f60`; e.g. HUmar 0x25, RAcast 0x51, FOnewearl 0x8A); `name_color` 0xFFFFFFFF, `extra_model` 0, `validation_flags & 0xF5`.
+- `section_id` from FUN_004e7200, computed once when the character is confirmed. Starting at the first character after `\tE`: `sum = c0 + (narrow(c0) ? 0x2D : 0x53)`, then for each following character (at most 16) `sum += c`, plus 0x2D when switching from wide to narrow and 0x53 when switching from narrow to wide (narrow = `c < 0x100` or U+FF61..U+FF91). `section_id = (char_class + sum) % 10`. The class is part of the formula: "souzajluiz" is Pinkal (5) as a HUmar and Redria (6) as a HUnewearl. `sectionIdForName(name, charClass)` in `bbsession.ts` implements it.
+- The name buffer is 12 UTF-16 units including `\tE`, so 10 visible characters.
+
 ## Game server → lobby
 
 | # | Dir | Cmd | Content |

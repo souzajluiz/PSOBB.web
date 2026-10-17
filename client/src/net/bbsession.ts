@@ -33,6 +33,10 @@ export const CLASS_NAMES = [
   'FOmarl', 'FOnewm', 'FOnewearl', 'HUcaseal', 'FOmar', 'RAmarl',
 ];
 
+// class_flags of each class, from the client's default visual configs
+// (PsoBB.exe 0x009b5f60, 0x70 bytes per class, field +0x34).
+export const CLASS_FLAGS = [0x25, 0x2a, 0x31, 0x45, 0x51, 0x52, 0x86, 0x89, 0x8a, 0x32, 0x85, 0x46];
+
 export const SECTION_IDS = [
   'Viridia', 'Greennill', 'Skyly', 'Bluefull', 'Purplenum',
   'Pinkal', 'Redria', 'Oran', 'Yellowboze', 'Whitill',
@@ -52,7 +56,7 @@ export const LOGIN_ERRORS: Record<number, string> = {
 export interface NewCharacter {
   name: string; // up to 12 characters
   charClass: number; // index into CLASS_NAMES
-  sectionId?: number; // defaults to the PSO name-based formula
+  sectionId?: number; // defaults to the client's name + class formula (sectionIdForName)
   costume?: number;
   skin?: number;
   face?: number;
@@ -60,6 +64,7 @@ export interface NewCharacter {
   hair?: number;
   hairColor?: [number, number, number];
   proportion?: [number, number]; // 0..1 (x, y)
+  classFlags?: number; // defaults to CLASS_FLAGS[charClass]
 }
 
 export interface MenuItem {
@@ -69,12 +74,28 @@ export interface MenuItem {
   flags: number;
 }
 
-// Section ID as derived by PSO from the character name: sum of the name's
-// character codes, mod 10 (community-documented; to be confirmed against the client).
-export function sectionIdForName(name: string): number {
-  let sum = 0;
-  for (const ch of name) sum += ch.charCodeAt(0);
-  return sum % 10;
+// Section ID as derived by PsoBB.exe (FUN_004e7200, called when the new
+// character is confirmed). The name is walked from its first character (the
+// stored name starts with "\tE", which the client skips). Every character is
+// added to a running sum; switching between narrow (< 0x100 or half-width
+// katakana U+FF61..U+FF91) and wide characters adds 0x2D (to narrow) or 0x53
+// (to wide), and the first character counts as such a switch. At most 17
+// characters are read. The class number is added before taking mod 10, so the
+// same name gives different section IDs for different classes.
+export function sectionIdForName(name: string, charClass: number): number {
+  const narrow = (c: number) => c < 0x100 || (c >= 0xff61 && c <= 0xff91);
+  const chars = [...name.replace(/^\t[EJ]/, '')].map((ch) => ch.charCodeAt(0)).slice(0, 17);
+  if (chars.length === 0) return charClass % 10;
+  let wide = !narrow(chars[0]);
+  let sum = chars[0] + (wide ? 0x53 : 0x2d);
+  for (const c of chars.slice(1)) {
+    sum += c;
+    if (wide && narrow(c)) sum += 0x2d;
+    else if (!wide && !narrow(c)) sum += 0x53;
+    wide = !narrow(c);
+  }
+  const id = (charClass + sum) % 10;
+  return id >= 0 && id < 10 ? id : 0;
 }
 
 export interface SessionOptions {
@@ -151,9 +172,16 @@ export class BBSession {
     dv.setInt32(0, slot, true);
     const visual = 4 + 8; // SC_PlayerPreview: slot, then preview {exp, level, visual}
     const sh = visual + 0x10; // PlayerVisualConfigSharedT
+    // The client writes the guild card number as "%10d" into the first 12
+    // bytes (FUN_004f34a8) and keeps version 3 and class_flags from its
+    // default visual config for the class.
+    const gc = String(this.init?.guildCardNumber ?? 0).padStart(10, ' ');
+    for (let i = 0; i < gc.length && i < 12; i++) body[visual + i] = gc.charCodeAt(i);
     dv.setUint32(sh + 0x08, 0xffffffff, true); // name color
-    body[sh + 0x20] = c.sectionId ?? sectionIdForName(c.name);
+    body[sh + 0x20] = c.sectionId ?? sectionIdForName(c.name, c.charClass);
     body[sh + 0x21] = c.charClass;
+    body[sh + 0x23] = 3; // version
+    dv.setUint32(sh + 0x24, c.classFlags ?? CLASS_FLAGS[c.charClass] ?? 0, true);
     dv.setUint16(sh + 0x28, c.costume ?? 0, true);
     dv.setUint16(sh + 0x2a, c.skin ?? 0, true);
     dv.setUint16(sh + 0x2c, c.face ?? 0, true);

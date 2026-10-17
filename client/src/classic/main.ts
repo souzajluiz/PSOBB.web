@@ -4,6 +4,10 @@ import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
 import { connectBridge } from '../net/wstransport.ts';
+import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
+import { TEXTURE_FILES } from './charcreate_data.ts';
+import { PlaceholderModelView } from './charcreate_model.ts';
+import { parseUnitxt } from './charcreate_text.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { LoginScreen } from './login.ts';
@@ -60,12 +64,55 @@ async function main(): Promise<void> {
     playerTex: (await tex(['f256_player_tex_eng.prs', 'f256_player_tex.prs']))[0],
   };
 
+  let createAssets: CharCreateAssets | null = null;
+  const loadCreateAssets = async (): Promise<CharCreateAssets> =>
+    (createAssets ??= {
+      tex: await textureBitmaps(await files.textures(TEXTURE_FILES)),
+      text: parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data),
+    });
+
   let session: BBSession | null = null;
   let title: TitleScreen;
 
+  // Empty slot -> character creation; the result goes out as E5.
+  const showCreate = async (slot: number, slots: Array<CharacterPreview | null>) => {
+    const create: CharCreateScreen = new CharCreateScreen(
+      await loadCreateAssets(),
+      {
+        done: async (r) => {
+          try {
+            if (session) {
+              await session.createCharacter(slot, {
+                name: r.name,
+                charClass: r.charClass,
+                sectionId: r.sectionId,
+                classFlags: r.classFlags,
+                ...r.look,
+              });
+              showSelect(await session.characterPreviews());
+            } else {
+              console.log('[classic] created (offline)', r);
+              showSelect(slots.map((p, i) => (i === slot ? { slot, level: 1, exp: 0, name: r.name, charClass: r.charClass, sectionId: r.sectionId, playTimeSeconds: 0 } : p)));
+            }
+          } catch (err) {
+            console.error(err);
+            showSelect(slots);
+          }
+        },
+        cancel: () => showSelect(slots),
+      },
+      new PlaceholderModelView(),
+    );
+    Object.assign(window, { classicCreate: create });
+    show(create);
+  };
+
   const showSelect = (slots: Array<CharacterPreview | null>) => {
     const select = new CharSelectScreen(selectAssets, slots, {
-      enter: (slot) => console.log(`[classic] slot ${slot + 1} chosen`),
+      enter: (slot) => {
+        if (!slots[slot]) void showCreate(slot, slots);
+        else console.log(`[classic] slot ${slot + 1} chosen`);
+      },
       cancel: () => {
         session?.close();
         session = null;
@@ -125,9 +172,11 @@ async function main(): Promise<void> {
     stage.show(s);
   }
 
-  // ?screen=select jumps to the character list with empty slots (layout work).
+  // ?screen=select jumps to the character list with empty slots and
+  // ?screen=create to character creation, offline (layout work).
   const jump = new URLSearchParams(location.search).get('screen');
   if (jump === 'select') showSelect([null, null, null, null]);
+  else if (jump === 'create') await showCreate(0, [null, null, null, null]);
   else show(title);
 
   const toVirtual = (e: MouseEvent) => {
