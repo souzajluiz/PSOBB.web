@@ -13,7 +13,13 @@ import * as THREE from 'three';
 import type { NjcmObject } from '../formats/njcm.ts';
 import { sampleKeys, type NjMotion } from '../formats/njmotion.ts';
 import { EVAL_ZXY_ANG } from '../formats/xj.ts';
-import type { MotionRecord, PlayerMotions } from '../formats/plymotion.ts';
+import type { MotionRecord } from '../formats/plymotion.ts';
+
+// Where motions come from: plymotiondata.rlc (PlayerMotions) or the
+// character screens' charamakingmot.bml (classic/playerview.ts).
+export interface MotionSource {
+  get(index: number): NjMotion;
+}
 
 export const GAME_TICKS_PER_SECOND = 30;
 const BLEND_STEP = 0.2; // DAT_0097d970
@@ -39,7 +45,7 @@ export function depthFirstNodes(root: NjcmObject): NjcmObject[] {
 
 export class PlayerAnimator {
   private bones: BoneState[];
-  private motions: PlayerMotions;
+  private motions: MotionSource;
   private record: MotionRecord | null = null;
   private motion: NjMotion | null = null;
   private recordForSlot: ((slot: number) => MotionRecord) | null = null;
@@ -55,7 +61,7 @@ export class PlayerAnimator {
 
   // bodyBones: the body part's bones (NjcmModel.partBones[0]); bodyRoot: the
   // pl?bdy00.nj object they were built from.
-  constructor(bodyBones: THREE.Bone[], bodyRoot: NjcmObject, motions: PlayerMotions) {
+  constructor(bodyBones: THREE.Bone[], bodyRoot: NjcmObject, motions: MotionSource) {
     const nodes = depthFirstNodes(bodyRoot);
     this.bones = bodyBones.map((bone, i) => ({
       bone,

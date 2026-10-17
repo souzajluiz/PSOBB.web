@@ -59,6 +59,7 @@ The client needs a `.nsk` key file. During development Vite serves it from the l
 - The screens run on a 30 fps frame counter, like the game's logic.
 - Frame lines come from `addrawlinetask.prs` entries. Text follows `FUN_007ab554`: a 14 px cell, a 7 px space and a 20 px line (`gametext.ts`).
 - Under psobb.io's widescreen patch, menu screens keep the 4:3 UI anchored left (`layout = 'left43'`). Full-screen quads such as backgrounds are stretched to the window (`drawFullscreen`).
+- 3D characters (creation, select preview) are three.js scenes rendered into an offscreen WebGL canvas (`classic/playerview.ts`) that the screen draws over the whole window at its place in the draw order. Cameras and projections follow the decompiled code: Ninja perspective angles go through `njPerspectiveFovy` (`FUN_0082eea0`), and motions come from `charamakingmot.bml`.
 
 ## Testing
 

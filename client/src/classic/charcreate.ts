@@ -1228,7 +1228,7 @@ export class CharCreateScreen implements Screen {
     this.confirmFade = 0;
     this.modelFade = 0;
     this.editor = null;
-    this.model?.setAppearance(cls, look);
+    this.model?.setAppearance(cls, look, 0xff);
     this.model?.setCamera(this.cameraMode());
   }
 
@@ -1294,7 +1294,7 @@ export class CharCreateScreen implements Screen {
       if (this.editor.dead) this.editor = null;
     }
     this.helpForSub();
-    this.model?.setAppearance(d.cls, d.look);
+    this.model?.setAppearance(d.cls, d.look, d.sectionId);
     this.model?.setCamera(this.cameraMode());
     // Name fade (FUN_004ef530).
     const showName = (this.sub === 0 || (this.sub === 1 && this.step !== STEP.name)) && nameValid(d.name);
@@ -1422,10 +1422,8 @@ export class CharCreateScreen implements Screen {
 
   private drawDress(list: DrawList): void {
     const d = this.dress!;
-    if (this.model && this.modelFade > 0) {
-      const canvas = this.model.canvas;
-      list.add(-100, (ctx) => ctx.drawImage(canvas, 0, 0, 640, 480));
-    }
+    const model = this.model;
+    if (model) list.add(-100, (ctx) => model.draw(ctx));
     // Floor line (FUN_004ef530, colors 0x009b90d4): y 416..419, transparent
     // at x = 275 to 50% #c7c7c7 at 400, then solid to 640.
     const a = this.menuFade;

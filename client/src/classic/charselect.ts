@@ -9,7 +9,7 @@
 //   backtext        FUN_004012cc  vtable 0x00af2060, update FUN_00401304, render FUN_0040131c
 //   header          FUN_00415154  vtable 0x00af3500, row 0 of f512_midashi
 //   UI builder      FUN_00401504  vtable 0x00af20c0: tags, slot bars, slot text, frame lines
-//   3D preview      FUN_00406ab4  (character model, not reproduced)
+//   3D preview      FUN_00406ab4  character model (charselect_preview.ts)
 //   message         FUN_0040b72c  vtable 0x00af2810, "Please select character."
 //   slot list       FUN_004121f0  vtable 0x00af3158, cursor highlight + scrollbars
 //   help keys       FUN_0041571c  vtable 0x00af3538, positions overridden by the scene
@@ -25,6 +25,7 @@
 
 import { se, SE } from '../audio/se.ts';
 import type { CharacterPreview } from '../net/bbsession.ts';
+import { SelectPreview } from './charselect_preview.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { VH, VW, type Screen, type Stage } from './stage.ts';
 
@@ -142,6 +143,19 @@ const RE = {
     { x: 299, uv: [162, 210], label: 'Cancel' },
   ],
   key: { y: 421, size: 32, from: 640, frames: 20, alpha0: 0x33, alphaStep: 12, label: [32, 8] },
+  // FUN_0040e004 (container vtable 0x00af2c38) creates one child per slot
+  // (FUN_0040de04, vtable 0x00af2c48; 4 for this screen, table 0x008fa268),
+  // set up by FUN_00401664(3) -> FUN_0040e15c: start (131, 182), target the
+  // slot, visible flag = field +0xc of the slot record (FUN_006c44d0).
+  // States (0x009a317c): FUN_0040e1b0 sets a 180x38 quad with
+  // u 0..0.703125, v 0.59375..0.7421875 of f256_player_tex ("TRANSFERRING
+  // DATA") and goes to 1; FUN_0040df24 moves it by (target - start) / 15 and
+  // raises alpha by 1/15 for 14 frames, then snaps (state 2); FUN_0040dfcc
+  // fades it out by 1/15. Render FUN_0040de9c: only when the flag is set,
+  // white with alpha * 255, z 0.52 (FUN_0082b440).
+  // FUN_006c44d0 writes 0 to that field (DAT_00a95e3c, its only writer), so
+  // on Blue Burst the overlay never shows; it is kept for completeness.
+  icon: { w: 180, h: 38, uv: [0, 152, 180, 190], frames: 14, steps: 15 },
 };
 
 // unitxt_e group 0x39: 'NEW CHARACTER', 'LV%d'; group 0x1f entry 0.
@@ -164,10 +178,17 @@ export class CharSelectScreen implements Screen {
   private acc = 0;
   private cursorAlpha = [0, 0, 0, 0];
 
-  constructor(assets: CharSelectAssets, slots: Array<CharacterPreview | null>, handlers: CharSelectHandlers) {
+  private preview: SelectPreview | null;
+  private previewSlot = -1; // scene +0x54
+  // FUN_0040e004 children: frame counter per slot icon and its visible flag.
+  private iconFrames = [0, 0, 0, 0];
+  private iconFlags = [false, false, false, false];
+
+  constructor(assets: CharSelectAssets, slots: Array<CharacterPreview | null>, handlers: CharSelectHandlers, preview: SelectPreview | null = null) {
     this.assets = assets;
     this.slots = slots;
     this.handlers = handlers;
+    this.preview = preview;
   }
 
   setSlots(slots: Array<CharacterPreview | null>): void {
@@ -177,6 +198,11 @@ export class CharSelectScreen implements Screen {
   enter(): void {
     this.frame = 0;
     this.acc = 0;
+    this.previewSlot = -1;
+  }
+
+  leave(): void {
+    this.preview?.dispose();
   }
 
   update(dt: number): void {
@@ -186,6 +212,13 @@ export class CharSelectScreen implements Screen {
       this.frame++;
       // FUN_0041245c: the cursor slot is lit, the others fade out.
       this.cursorAlpha = this.cursorAlpha.map((a, i) => (i === this.selected ? 255 : Math.max(0, a - RE.cursor.decay)));
+      // FUN_00413b84: a new cursor slot restarts the preview.
+      if (this.selected !== this.previewSlot) {
+        this.previewSlot = this.selected;
+        this.preview?.select(this.slots[this.selected] ?? null);
+      }
+      this.preview?.tick();
+      this.iconFrames = this.iconFrames.map((n) => n + 1);
     }
   }
 
@@ -210,6 +243,8 @@ export class CharSelectScreen implements Screen {
     this.drawSlotText(ctx, f);
     drawLines(ctx, LINES.panel, f);
     drawLines(ctx, LINES.box, f);
+    this.drawIcons(ctx);
+    this.preview?.draw(ctx);
     this.drawMessage(ctx, f, ctx.canvas.width / stage.sx);
     drawLines(ctx, LINES.footer, f);
     this.drawCursor(ctx);
@@ -278,6 +313,25 @@ export class CharSelectScreen implements Screen {
         drawGameText(ctx, lv, lx, y + RE.text.line2, '#ffffff', a);
       }
     }
+  }
+
+  // Slot overlays of FUN_0040e004 (see RE.icon); never visible on BB.
+  private drawIcons(ctx: CanvasRenderingContext2D): void {
+    const c = RE.icon;
+    const img = this.assets.playerTex;
+    const s = img.width / 256;
+    RE.slots.forEach(([tx, ty], i) => {
+      if (!this.iconFlags[i]) return;
+      const n = Math.min(this.iconFrames[i], c.frames);
+      const [sx, sy] = RE.slots[0];
+      const k = n >= c.frames ? 1 : n / c.steps;
+      const x = sx + (tx - sx) * k;
+      const y = sy + (ty - sy) * k;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, k);
+      ctx.drawImage(img, c.uv[0] * s, c.uv[1] * s, (c.uv[2] - c.uv[0]) * s, (c.uv[3] - c.uv[1]) * s, x, y, c.w, c.h);
+      ctx.restore();
+    });
   }
 
   private drawCursor(ctx: CanvasRenderingContext2D): void {

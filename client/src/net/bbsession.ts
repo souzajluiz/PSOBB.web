@@ -27,6 +27,15 @@ export interface CharacterPreview {
   charClass: number;
   sectionId: number;
   playTimeSeconds: number;
+  // Visual config (PlayerVisualConfigV4 shared part), for the 3D preview.
+  classFlags?: number;
+  costume?: number;
+  skin?: number;
+  face?: number;
+  head?: number;
+  hair?: number;
+  hairColor?: [number, number, number];
+  proportion?: [number, number];
 }
 
 export const CLASS_NAMES = [
@@ -385,6 +394,16 @@ export function parsePreview(data: Uint8Array): CharacterPreview {
     charClass: data[shared + 0x21],
     name: readUtf16(data, visual + 0x50, 0x10).replace(/^\t[EJ]/, ''),
     playTimeSeconds: dv.getUint32(p + 0x78, true),
+    // shared config: class_flags @+0x24, costume/skin/face/head/hair u16
+    // @+0x28..+0x30, hair_r/g/b u16 @+0x32..+0x36, proportion_x/y f32 @+0x38/+0x3C
+    classFlags: dv.getUint32(shared + 0x24, true),
+    costume: dv.getUint16(shared + 0x28, true),
+    skin: dv.getUint16(shared + 0x2a, true),
+    face: dv.getUint16(shared + 0x2c, true),
+    head: dv.getUint16(shared + 0x2e, true),
+    hair: dv.getUint16(shared + 0x30, true),
+    hairColor: [dv.getUint16(shared + 0x32, true), dv.getUint16(shared + 0x34, true), dv.getUint16(shared + 0x36, true)],
+    proportion: [dv.getFloat32(shared + 0x38, true), dv.getFloat32(shared + 0x3c, true)],
   };
 }
 

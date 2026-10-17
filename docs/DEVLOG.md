@@ -1,5 +1,90 @@
 # Devlog
 
+## 2026-10-17: real 3D characters in the classic screens
+
+**What changed:**
+- Character creation now draws the real player model (`buildPlayerModel` with the proportion morph) instead of the capsule placeholder. It is animated and seen through the creation camera decoded from `PsoBB.exe`.
+- SELECT CHARACTER shows the selected slot's character, spinning, as `FUN_00406ab4` does.
+- The `E5` preview parser exposes the visual config.
+- New files: `classic/playerview.ts` (shared model, motion and projection code) and `classic/charselect_preview.ts`. `classic/charcreate_model.ts` was rewritten.
+
+**Creation camera (object `FUN_004eb334`, vtable `0x00afd318`):**
+- `FUN_004ea5a8` computes the eye: `+0x3c..+0x44` = (r·sin yaw, dist·sin pitch + height, r·cos yaw), with r = dist·cos pitch. The target `+0x48..+0x50` is (0, height, 0). `FUN_004d1ff4` copies eye, target and angle `+0x54` (0x438e) into the global camera.
+- Pitch and yaw are eased to 0 (`FUN_007a8c74(a, 0, 0xc0)`), so the camera looks horizontally from (0, height, dist).
+- `FUN_004ea854` (camera state 0):
+  - the step's mode (0 = HEAD/FACE/HAIR/SKIN, 1 = PROPORTION/AUTO, 2 = other steps) is adopted only after it has been requested for 31 frames;
+  - target distance and height: mode 0 = 0.5·h and 0.91·h; mode 1 = 25 and 11; mode 2 = 1.25·h and 0.55·h;
+  - h comes from `FUN_004e68cc`: the class table `0x009b11e0` (value at proportion_y = 1, value at 0), lerped by proportion_y, which is reset to 0 outside 0..1;
+  - each value moves with its own velocity (`+0x88`, `+0x8c`). The velocity grows by 0.003 per frame up to 0.1. Within 0.1 of the target it shrinks by 0.003, down to 0.00667, and it stops within 0.00667;
+  - starting values: distance 30 and height 10.5 (`DAT_00a72230`), mode 2.
+
+**Projection (`FUN_0082eea0` / `FUN_0082ebc8`, angle in ECX):**
+- a = ((angle·85)/100)/2 in integer BAMS, read from the disassembly (`LEA`/`ADD` chain, then the `0x51eb851f` multiply).
+- fovy = 2·trunc_BAMS(atan(tan(a)/1.1333334)). The result goes to `D3DXMatrixPerspectiveFov` with aspect 4/3.
+- Angle 0x3555 gives fovy 57.49° (focal 437.5 px for 480 lines). Angle 0x438e gives 73.74° (focal 320.0 px).
+
+**Two passes:**
+- The model pass is `FUN_004e7824` → `FUN_004eb3b8`, `FUN_004e7844`, `FUN_004eb430`:
+  - angle 0x3555, near 1, far 10000;
+  - the viewport is shifted by ox = −128·(W/640)·k (`_DAT_0091d8f0` = −128). `FUN_0082f308` clips it to x = |ox|..W, so the projection centre sits at (W + |ox|)/2: x = 384 of 640 normally.
+  - k (`DAT_00a72234`) is 1, except in the PROPORTION and AUTO editors (`FUN_004f2f28`, `FUN_004f2988`). Once their fade reaches 1, k drops by 1/30 per frame down to 0, which centres the model. While they close, k = max(k, 1 − fade).
+  - The model is at the origin, turned by `DAT_00a72120` (0; analog rotation is not reproduced).
+- The ruler (`FUN_004ea030`) is drawn by the editors in the 2D pass, after `FUN_004d2968` has reset the viewport to full and the projection to the camera's angle 0x438e (near 1, far 21000).
+- The captures confirm both projections:
+  - the ruler spacing in 05/06/07 is exactly 48 px per unit at 1800 lines (320/25·3.75), centred at y = 11;
+  - the feet, drawn with the narrower angle, reach well below the y = 0 line;
+  - in 08 the spacing is 51 px with the height already at 11, which is the camera still easing in from a mode-0 step.
+- The ruler quad's color is #404040 in sRGB (it was a linear 0.25 by mistake). Its strip order and colors come from `0x009b8c28`.
+
+**Motions:**
+- Both screens load `charamakingmot.bml` (`FUN_004e9a68`, `FUN_004072b8`). Its 49 entries are plain NMDM chunks: an `NJS_MOTION` at +8, offsets relative to it, long-form angle keys.
+- Both screens use the same 16-byte motion records (`0x009b1580` for creation, `0x009a2ec0` for select): {mode 1, next 0, entry, speed 1.0, flags 0}.
+- Records 0/1/2 are the idle `B02` for male / female / FOmarl (entries 33, 1, 0). Records 3..5 are `B01` (31, 32, 30) and 6..8 are `C10` (47, 48, 46).
+- The type is 0 when class_flags & 1 (`FUN_004e9370`), or on select when !(class_flags & 2) (`FUN_0040733c`). FOmarl (class 6) is 2.
+- `PlayerAnimator` now takes any `MotionSource`, so these motions play through it.
+- `tests/motions.test.ts` decodes the 9 records (2074 keys) and plays them on FOmar, FOmarl and HUnewearl.
+- During creation, the section ID is 0xFF until the name is confirmed, so the emblem texture is the empty ring `'z'`: `buildPlayerModel` gained an `emblemSectionId` override.
+
+**SELECT CHARACTER preview (`FUN_00406ab4` → `FUN_00406b50`, vtable `0x00af2308`):**
+- Mode 0 (`FUN_0040680c`): position (17, −10.5, −40), Y rotation 0xf3d5, spinning.
+- Update `FUN_00406bd8` is driven by the request `+0x100` set by the scene (`FUN_00413b84`): 1 on every cursor change, then 2 if the slot holds a character.
+  - State 1 builds the model from the current character (`FUN_004eba6c`) and starts record 0/1/2.
+  - State 2 waits for the model.
+  - State 3 turns it by −0x100 BAMS per frame. Motion changes: B01 at frames 900 and 1800 (`FUN_00407008`), C10 at 1350 (`FUN_00406fc8`), and back to idle at 2250 (`FUN_00407048`).
+  - Render `FUN_00407098` runs in state 3 only.
+- The select scene sets no camera or projection of its own. The view is taken as the identity and the projection as the client default (0x3555) over the whole window. That puts the model at x ≈ 506 of the 4:3 screen (≈ 560 of the 16:10 window), to the right of the CHARACTERS box. **No capture with a character exists to confirm this.**
+
+**Slot icons (`FUN_0040e004`):**
+- A container (vtable `0x00af2c38`) holds one child per slot (`FUN_0040de04`, vtable `0x00af2c48`; count 4 from `0x008fa268`). `FUN_00401664(3)` → `FUN_0040e15c` sets them up.
+- Each child is a 180×38 quad of `f256_player_tex` (u 0..0.703, v 0.594..0.742), the "TRANSFERRING DATA" bar:
+  - it flies from (131, 182) to its slot in 14 frames at 1/15 per frame, alpha +1/15 (`FUN_0040df24`);
+  - it fades out by 1/15 (`FUN_0040dfcc`);
+  - it is drawn white with that alpha (`FUN_0040de9c`).
+- The child draws only when the slot record's field +0xc is set. `FUN_006c44d0` writes 0 there, and that is the only reference to `DAT_00a95e3c`, so on Blue Burst the overlay never shows. It is implemented and kept hidden.
+
+**`E5` preview:**
+- `parsePreview` now also returns `classFlags`, `costume`, `skin`, `face`, `head`, `hair`, `hairColor` and `proportion` (shared config +0x24..+0x3c).
+- Live, against newserv: account webtest has slot 0 = HUmar "WebHunter", proportion (0.5, 0.5).
+- Characters made by older tools carry class_flags 0. The preview falls back to the class's own flags.
+
+**Validation:**
+- FOmar, costume 7, proportion (0.6, 0), AUTO step, compared with capture 05:
+  - SSIM 0.741, PSNR 22.7 over the whole frame (0.722 against 07);
+  - SSIM 0.656 on the model region (1440×900 crop 350×780 at 540, 60).
+  - What remains: the hair style and face are not matched, lighting (the lobby rig; the screen's lights are not decoded), and the ruler drawn under the model rather than depth-tested against it.
+- The model's size, position and the ruler line up with the capture.
+- In mode 2 (e.g. COSTUME) the model sits at x = 1728 of 2880, which is (W + 576)/2.
+- In Chrome:
+  - the select screen with two offline slots shows FOmar and FOmarl spinning to the right of the box;
+  - moving to an empty slot drops the model;
+  - there are no console errors.
+- `tsc`, `tests/players.test.ts` and `tests/motions.test.ts` pass.
+
+**Open:**
+- The camera and projection of the select scene; the lights of both screens.
+- The analog model rotation (`FUN_004ef18c`) and the camera idle demo (states 1–4 of `0x009b8c60`).
+- Under the widescreen patch, k = 1 (normal steps) shifts the viewport by 128·W/640 as the code says; no capture shows a normal step with a model.
+- The creation screen does not cross-fade the model on look changes; it is rebuilt with the motion frame kept.
 ## 2026-10-17: character file, item table and item names
 
 **What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.
