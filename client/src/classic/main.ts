@@ -2,7 +2,11 @@
 
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
-import { Stage, textureBitmaps, VH, VW } from './stage.ts';
+import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
+import { connectBridge } from '../net/wstransport.ts';
+import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
+import { LoginScreen } from './login.ts';
+import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { tintCircle, TITLE_TUNING, TitleScreen } from './title.ts';
 
 const VERSION = 'PSOBB.web';
@@ -22,15 +26,78 @@ async function dataSource(): Promise<DataSource> {
   return s;
 }
 
+async function loadKey(name = 'default'): Promise<Uint8Array> {
+  const res = await fetch(`/keys/${name}.nsk`);
+  if (!res.ok) throw new Error(`key file ${name}.nsk not found`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+function savedUser(): string {
+  try {
+    return localStorage.getItem('psobb.username') ?? '';
+  } catch {
+    return '';
+  }
+}
+
 async function main(): Promise<void> {
   const files = new ClientFiles(await dataSource());
   const stage = new Stage(canvas);
   const titleTex = await textureBitmaps(await files.textures('title.prs'));
-  const title = new TitleScreen(
+  const selectAssets: CharSelectAssets = {
+    header: (await textureBitmaps(await files.textures(['f512_midashi_eng.prs', 'f512_midashi.prs'])))[0],
+    tag: (await textureBitmaps(await files.textures(['f256_tag_eng.prs', 'f256_tag.prs'])))[0],
+    tunnel: await textureBitmaps(await files.textures('f256_backtext.prs')),
+  };
+
+  let session: BBSession | null = null;
+  let title: TitleScreen;
+
+  const showSelect = (slots: Array<CharacterPreview | null>) => {
+    const select = new CharSelectScreen(selectAssets, slots, {
+      enter: (slot) => console.log(`[classic] slot ${slot + 1} chosen`),
+      cancel: () => {
+        session?.close();
+        session = null;
+        show(title);
+      },
+    });
+    show(select);
+  };
+
+  const startGame = () => {
+    const login = new LoginScreen(
+      title,
+      {
+        submit: async (username, password) => {
+          login.busy = true;
+          try {
+            session?.close();
+            session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
+            await session.login(username, password);
+            try {
+              localStorage.setItem('psobb.username', username);
+            } catch {
+              // storage unavailable; nothing to remember
+            }
+            showSelect(await session.characterPreviews());
+          } catch (err) {
+            login.busy = false;
+            login.status = err instanceof Error ? err.message : String(err);
+          }
+        },
+        cancel: () => show(title),
+      },
+      savedUser(),
+    );
+    show(login);
+  };
+
+  title = new TitleScreen(
     titleTex,
     await tintCircle(titleTex[11]),
     [
-      { label: 'Start Game', action: () => console.log('[classic] start game') },
+      { label: 'Start Game', action: startGame },
       { label: 'Exit Game', action: () => (location.href = '/') },
       { label: 'Patch Download', action: () => {} },
       { label: 'Register UserID', action: () => {} },
@@ -38,26 +105,38 @@ async function main(): Promise<void> {
     ],
     VERSION,
   );
-  stage.show(title);
 
-  const toVirtual = (e: PointerEvent) => {
+  let current: Screen = title;
+  function show(s: Screen): void {
+    current = s;
+    stage.show(s);
+  }
+
+  // ?screen=select jumps to the character list with empty slots (layout work).
+  const jump = new URLSearchParams(location.search).get('screen');
+  if (jump === 'select') showSelect([null, null, null, null]);
+  else show(title);
+
+  const toVirtual = (e: MouseEvent) => {
     const r = canvas.getBoundingClientRect();
-    return [((e.clientX - r.left) / r.width) * VW, ((e.clientY - r.top) / r.height) * VH] as const;
+    const vy = ((e.clientY - r.top) / r.height) * VH;
+    const left43 = (current as { layout?: string }).layout === 'left43';
+    const vx = left43 ? ((e.clientX - r.left) / r.height) * VH : ((e.clientX - r.left) / r.width) * VW;
+    return [vx, vy] as const;
   };
-  canvas.addEventListener('pointermove', (e) => title.pointer(...toVirtual(e), false));
-  canvas.addEventListener('click', (e) => title.pointer(...toVirtual(e as PointerEvent), true));
-  (window as unknown as { classicStage: Stage }).classicStage = stage;
-  referenceOverlay();
-  Object.assign(window, { TITLE_TUNING, classicTime: (t: number) => (stage.time = t) });
-  (window as unknown as { classicCapture: (name: string, w?: number, h?: number) => Promise<string> }).classicCapture =
-    (name, w = 2880, h = 1800) => captureStage(stage, name, w, h);
-}
+  const pointer = (e: MouseEvent, click: boolean) =>
+    (current as { pointer?: (x: number, y: number, c: boolean) => void }).pointer?.(...toVirtual(e), click);
+  canvas.addEventListener('pointermove', (e) => pointer(e, false));
+  canvas.addEventListener('click', (e) => pointer(e, true));
 
-main().catch((e) => {
-  boot.hidden = false;
-  boot.textContent = `Error: ${e instanceof Error ? e.message : e}`;
-  console.error(e);
-});
+  referenceOverlay();
+  Object.assign(window, {
+    classicStage: stage,
+    TITLE_TUNING,
+    classicTime: (t: number) => (stage.time = t),
+    classicCapture: (name: string, w = 2880, h = 1800) => captureStage(stage, name, w, h),
+  });
+}
 
 // Development aid: renders the current screen at w x h and saves it through the
 // dev server (/__capture) for pixel comparison with the original client.
@@ -93,3 +172,9 @@ function referenceOverlay(): void {
     if (e.key === 'F2') img.style.mixBlendMode = img.style.mixBlendMode === 'difference' ? '' : 'difference';
   });
 }
+
+main().catch((e) => {
+  boot.hidden = false;
+  boot.textContent = `Error: ${e instanceof Error ? e.message : e}`;
+  console.error(e);
+});

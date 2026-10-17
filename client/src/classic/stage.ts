@@ -14,6 +14,11 @@ export const VH = 480;
 export const FONT = 'Tahoma, Verdana, sans-serif';
 
 export interface Screen {
+  // 'stretch': the 640x480 virtual screen fills the window (title).
+  // 'left43': uniform scale by height, 4:3 area anchored left (menus such as
+  // SELECT CHARACTER); drawFullscreen paints the whole window first.
+  layout?: 'stretch' | 'left43';
+  drawFullscreen?(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage): void;
   enter?(stage: Stage): void;
   update(dt: number, stage: Stage): void;
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void;
@@ -85,20 +90,29 @@ export class Stage {
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     if (!this.screen) return;
     this.screen.update(dt, this);
-    ctx.setTransform(this.sx, 0, 0, this.sy, 0, 0);
+    this.paint(ctx, this.canvas.width, this.canvas.height);
+  }
+
+  private paint(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const screen = this.screen!;
     ctx.imageSmoothingEnabled = true;
-    this.screen.draw(ctx, this);
+    if (screen.layout === 'left43') {
+      screen.drawFullscreen?.(ctx, w, h, this);
+      this.sx = this.sy = h / VH;
+    } else {
+      this.sx = w / VW;
+      this.sy = h / VH;
+    }
+    ctx.setTransform(this.sx, 0, 0, this.sy, 0, 0);
+    screen.draw(ctx, this);
   }
 
   // Draws the current screen into another context of size w x h (no update).
   renderTo(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     const [sx, sy] = [this.sx, this.sy];
-    this.sx = w / VW;
-    this.sy = h / VH;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
-    ctx.setTransform(this.sx, 0, 0, this.sy, 0, 0);
-    this.screen?.draw(ctx, this);
+    if (this.screen) this.paint(ctx, w, h);
     [this.sx, this.sy] = [sx, sy];
   }
 
