@@ -151,25 +151,41 @@ export class LobbyView {
   private files: ClientFiles | null;
   private assets = new Map<number, Promise<PlayerAssets>>();
   private motions: Promise<PlayerMotions> | null = null;
-  private lights: THREE.Light[];
   private disposed = false;
 
-  constructor(viewer: MapViewer, lobby: Lobby, mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null }) {
+  // labels: false leaves the name tags to the caller (classic HUD).
+  private labels: boolean;
+  // Which players to show (games: only the ones on the local player's floor).
+  private showPlayer: (p: LobbyPlayer) => boolean;
+
+  constructor(
+    viewer: MapViewer,
+    lobby: Lobby,
+    mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean } = {},
+  ) {
+    this.labels = options.labels ?? true;
     this.viewer = viewer;
     this.lobby = lobby;
+    this.showPlayer = options.showPlayer ?? (() => true);
     this.collision = mapData.collision;
     this.spawns = mapData.spawns;
     this.files = mapData.files;
-    // The map is unlit (vertex colors); the player materials are Lambert.
-    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
-    sun.position.set(30, 80, 50);
-    this.lights = [new THREE.HemisphereLight(0xffffff, 0x445566, 1.5), sun];
-    for (const l of this.lights) viewer.scene.add(l);
+    // The map is unlit (vertex colors); the player materials are Lambert, lit by
+    // the area light the viewer takes from lightentry.bin (MapViewer.setArea).
     viewer.setOrbitEnabled(false);
     viewer.onFrame = (dt, keys) => this.frame(dt, keys);
 
-    for (const p of lobby.players.values()) this.addMarker(p);
-    lobby.on('playerJoined', (p) => this.addMarker(p));
+    const sync = (p: LobbyPlayer) => {
+      if (this.disposed) return;
+      if (p.clientId === lobby.selfId || this.showPlayer(p)) this.addMarker(p);
+      else this.removeMarker(p.clientId);
+    };
+    for (const p of lobby.players.values()) if (p.clientId === lobby.selfId || this.showPlayer(p)) this.addMarker(p);
+    lobby.on('playerJoined', sync);
+    lobby.on('floorChanged', (p) => {
+      if (!this.disposed && this.markers.has(p.clientId) !== this.showPlayer(p)) sync(p);
+    });
     lobby.on('playerLeft', (id) => this.removeMarker(id));
     lobby.on('moved', (p) => this.onMoved(p));
 
@@ -256,9 +272,12 @@ export class LobbyView {
     this.removeMarker(p.clientId);
     const group = new THREE.Group();
     const stand = capsule(p.charClass);
-    const label = nameSprite(`${p.name}  Lv${p.level}`);
-    label.position.y = 24;
-    group.add(stand, label);
+    group.add(stand);
+    if (this.labels) {
+      const label = nameSprite(`${p.name}  Lv${p.level}`);
+      label.position.y = 24;
+      group.add(label);
+    }
     // A player that has not reported a position yet stands on its spawn point.
     const unplaced = p.position.x === 0 && p.position.y === 0 && p.position.z === 0;
     const spawn = unplaced && p.clientId !== this.lobby.selfId ? this.spawnFor(p.clientId) : null;
@@ -336,6 +355,7 @@ export class LobbyView {
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
+    this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
     // Local movement relative to the camera.
     if (me && mine) {
@@ -423,10 +443,17 @@ export class LobbyView {
     }
   }
 
+  // World position of each player (for 2D overlays such as name tags).
+  playerPositions(): Map<number, THREE.Vector3> {
+    const out = new Map<number, THREE.Vector3>();
+    for (const [id, m] of this.markers) out.set(id, m.group.position.clone());
+    return out;
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const id of [...this.markers.keys()]) this.removeMarker(id);
-    for (const l of this.lights) this.viewer.scene.remove(l);
+    this.viewer.fogProbe = null;
     for (const d of this.disposers) d();
     this.viewer.onFrame = null;
     this.viewer.setOrbitEnabled(true);

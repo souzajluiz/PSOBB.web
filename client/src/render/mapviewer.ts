@@ -9,7 +9,20 @@ import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njme
 import { MapAnimator } from './mapanim.ts';
 import { TextureAnimator } from './texanim.ts';
 import { parseTam, tamFileFor, type TamFile } from '../formats/tam.ts';
-import type { PlacedEntity } from '../formats/setdata.ts';
+import { areaForMap, type PlacedEntity } from '../formats/setdata.ts';
+import { ENTRY_NO_FOG } from '../formats/nrel.ts';
+import { ClientFiles } from '../data/clientfiles.ts';
+import {
+  defaultFogForArea,
+  FogController,
+  FogRegionManager,
+  fogRegionFromSet,
+  parseFogEntries,
+  regionActive,
+  type FogEntry,
+  type FogRegion,
+} from '../formats/fogentry.ts';
+import { lightForArea, parseLightEntries, type LightEntry } from '../formats/lightentry.ts';
 
 export interface MapStats {
   sections: number;
@@ -39,6 +52,17 @@ export function textureArchiveCandidates(nrel: string): string[] {
 export const MARKER_COLORS = { enemy: 0xff4040, npc: 0x40d8ff, object: 0xffd040 } as const;
 const MARKER_LIFT = 6; // markers float above the spawn point so they are not buried in the floor
 const UP = new THREE.Vector3(0, 1, 0);
+const GAME_FPS = 30; // the client's fog object and frame counter advance once per game frame
+
+// D3D lighting has no 1/pi in the Lambert term; three.js does.
+const D3D_LIGHT_SCALE = Math.PI;
+const srgb = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+const rgb24 = (c: number) => srgb(((c >>> 16) & 0xff) / 255, ((c >>> 8) & 0xff) / 255, (c & 0xff) / 255);
+
+interface AreaTables {
+  fog: FogEntry[] | null;
+  light: LightEntry[] | null;
+}
 const ONE = new THREE.Vector3(1, 1, 1);
 
 export class MapViewer {
@@ -62,6 +86,24 @@ export class MapViewer {
   private labelsVisible = false;
   private tooltip: HTMLDivElement | null = null;
   private hoverId = -1;
+  // Fog and lights (fogentry.dat / lightentry.bin).
+  private areaTables: Promise<AreaTables> | null = null;
+  private areaSource: DataSource | null = null;
+  private fog: FogController | null = null;
+  private fogRegions: FogRegion[] = [];
+  private fogManager = new FogRegionManager();
+  private fogClock = 0;
+  private gameFrame = 0;
+  private noFogMaterials: THREE.Material[] = [];
+  readonly sceneFog = new THREE.Fog(0x000000, 1000, 10000);
+  readonly ambientLight = new THREE.AmbientLight(0xffffff, 0.3 * D3D_LIGHT_SCALE);
+  readonly directionalLight = new THREE.DirectionalLight(0xffffff, D3D_LIGHT_SCALE);
+  area: number | null = null;
+  fogEnabled = true;
+  // Where the fog regions test for "the player": the orbit target unless set.
+  fogProbe: THREE.Vector3 | null = null;
+  // Switch flags for TObjFogCollisionSwitch regions (all off, as when a floor starts).
+  switchOn: (id: number) => boolean = () => false;
   // Geometry of the map shown last (sections are needed to place set data).
   geometry: MapGeometry | null = null;
   // When set, replaces the free-fly camera: called every frame with the
@@ -76,6 +118,12 @@ export class MapViewer {
     this.camera.position.set(0, 300, 600);
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
+    // The area light is given in camera space (FUN_00843a68 transforms it by the
+    // inverse view matrix), so it rides on the camera.
+    this.directionalLight.position.set(0, 0, 1);
+    this.directionalLight.target.position.set(0, 0, 0);
+    this.camera.add(this.directionalLight, this.directionalLight.target);
+    this.scene.add(this.camera, this.ambientLight);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas);
@@ -102,6 +150,7 @@ export class MapViewer {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.mapAnimator.update(dt);
     this.textureAnimator?.update(dt);
+    this.updateFog(dt);
     if (this.onFrame) {
       this.onFrame(dt, this.keys);
       this.renderer.render(this.scene, this.camera);
@@ -148,6 +197,8 @@ export class MapViewer {
       tam = null; // most maps have no texture animation file
     }
     this.show(geometry, xvm, tam);
+    const area = areaForMap(nrelName);
+    await this.setArea(source, area);
     return this.stats(geometry);
   }
 
@@ -184,6 +235,7 @@ export class MapViewer {
         } else {
           root = buildObjectTree(entry.object, this.materials);
         }
+        if (entry.flags & ENTRY_NO_FOG) this.disableFog(root);
         this.textureAnimator?.attach(entry, root);
         s.add(root);
       }
@@ -192,6 +244,133 @@ export class MapViewer {
     this.scene.add(root);
     this.mapRoot = root;
     this.frameAll();
+  }
+
+  // Entry flag 0x1: the client turns fog off while drawing the entry.
+  private disableFog(root: THREE.Object3D): void {
+    const copies = new Map<THREE.Material, THREE.Material>();
+    const copy = (m: THREE.Material) => {
+      let c = copies.get(m);
+      if (!c) {
+        c = m.clone();
+        (c as THREE.MeshBasicMaterial).fog = false;
+        copies.set(m, c);
+        this.noFogMaterials.push(c);
+      }
+      return c;
+    };
+    root.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.material = Array.isArray(o.material) ? o.material.map(copy) : copy(o.material);
+    });
+  }
+
+  // --- Area fog and light -----------------------------------------------------
+
+  private loadAreaTables(source: DataSource): Promise<AreaTables> {
+    if (this.areaTables && this.areaSource === source) return this.areaTables;
+    this.areaSource = source;
+    const files = new ClientFiles(source);
+    const read = async <T>(name: string, parse: (d: Uint8Array) => T): Promise<T | null> => {
+      try {
+        return parse(await files.read(name));
+      } catch {
+        return null;
+      }
+    };
+    this.areaTables = Promise.all([read('fogentry.dat', parseFogEntries), read('lightentry.bin', parseLightEntries)]).then(([fog, light]) => ({ fog, light }));
+    return this.areaTables;
+  }
+
+  // Applies the area's base fog (DEFAULT_FOG_BY_AREA) and light (lightentry.bin).
+  // `area` uses the newserv/client area numbers (setdata.ts areaForMap).
+  async setArea(source: DataSource, area: number | null): Promise<void> {
+    const tables = await this.loadAreaTables(source);
+    this.area = area;
+    this.fog = null;
+    this.fogManager = new FogRegionManager();
+    this.scene.fog = null;
+    if (area !== null && tables.fog) {
+      this.fog = new FogController(tables.fog);
+      this.fog.setBase(defaultFogForArea(area), true);
+      this.fog.tick(this.gameFrame);
+      this.applyFog();
+    }
+    const light = area !== null && tables.light ? lightForArea(tables.light, area) : null;
+    if (light) this.setLight(light);
+  }
+
+  setLight(l: LightEntry): void {
+    const [x, y, z] = l.direction;
+    const len = Math.hypot(x, y, z);
+    this.directionalLight.position.set(...(len > 1e-6 ? ([x / len, y / len, z / len] as const) : ([0, 0, 1] as const)));
+    this.directionalLight.color.copy(srgb(...l.color));
+    this.directionalLight.intensity = D3D_LIGHT_SCALE;
+    // Models and objects get D3DRS_AMBIENT = grey(ambient level) (FUN_00794a80).
+    this.ambientLight.color.copy(srgb(l.ambientLevel, l.ambientLevel, l.ambientLevel));
+    this.ambientLight.intensity = D3D_LIGHT_SCALE;
+  }
+
+  // Switches to fog entry `id` like a fog region does (fade unless immediate).
+  setFogOverride(id: number, immediate = false): void {
+    this.fog?.setOverride(id, immediate);
+  }
+
+  setFogEnabled(enabled: boolean): void {
+    this.fogEnabled = enabled;
+    this.applyFog();
+  }
+
+  get fogId(): number | null {
+    return this.fog?.currentId ?? null;
+  }
+
+  // Fog regions from the floor's object set data (types 0x07, 0x18, 0x160).
+  setFogRegions(items: PlacedEntity[]): void {
+    this.fogRegions = [];
+    for (const p of items) {
+      const e = p.entity;
+      if (e.kind !== 'object') continue;
+      const r = fogRegionFromSet(e.type, p.world, e.params.slice(0, 3), e.params.slice(3, 6));
+      if (r) this.fogRegions.push(r);
+    }
+  }
+
+  get fogRegionCount(): number {
+    return this.fogRegions.length;
+  }
+
+  private updateFog(dt: number): void {
+    if (!this.fog) return;
+    this.fogClock += dt * GAME_FPS;
+    let changed = false;
+    // At most a few game frames per rendered frame.
+    for (let n = 0; this.fogClock >= 1 && n < 4; n++) {
+      this.fogClock -= 1;
+      this.gameFrame++;
+      const probe = this.fogProbe ?? this.controls.target;
+      for (const r of this.fogRegions) {
+        if (!regionActive(r, this.switchOn)) continue;
+        const dx = r.position[0] - probe.x, dy = r.position[1] - probe.y, dz = r.position[2] - probe.z;
+        if (dx * dx + dy * dy + dz * dz < r.radius * r.radius) this.fogManager.register(r.fogId, r.fade);
+      }
+      this.fogManager.update(this.fog);
+      changed = this.fog.tick(this.gameFrame) || changed;
+    }
+    this.fogClock = Math.min(this.fogClock, 1);
+    if (changed) this.applyFog();
+  }
+
+  // FUN_005bc440: linear fog with the evaluated color, start and end.
+  private applyFog(): void {
+    if (!this.fog || !this.fogEnabled) {
+      this.scene.fog = null;
+      return;
+    }
+    const s = this.fog.state;
+    this.sceneFog.color.copy(rgb24(s.color));
+    this.sceneFog.near = s.start;
+    this.sceneFog.far = Math.max(s.end, s.start + 1e-3);
+    this.scene.fog = this.sceneFog;
   }
 
   // Height of the map surface under (x, z), searching downward from `fromY`.
@@ -249,7 +428,7 @@ export class MapViewer {
     for (const category of ['enemy', 'npc', 'object'] as const) {
       const list = items.filter((p) => p.category === category);
       if (!list.length) continue;
-      const material = new THREE.MeshBasicMaterial({ color: MARKER_COLORS[category] });
+      const material = new THREE.MeshBasicMaterial({ color: MARKER_COLORS[category], fog: false });
       const mesh = new THREE.InstancedMesh(geometry, material, list.length);
       const m = new THREE.Matrix4();
       const q = new THREE.Quaternion();
@@ -392,6 +571,9 @@ export class MapViewer {
       this.mapRoot = null;
     }
     this.materials?.dispose();
+    for (const m of this.noFogMaterials) m.dispose();
+    this.noFogMaterials = [];
+    this.fogRegions = [];
     for (const t of this.textures) t.dispose();
     this.textures = [];
   }

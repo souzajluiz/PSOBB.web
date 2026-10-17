@@ -16,6 +16,7 @@
 // stage.ts. The original edits each field in a sub-window; here the selected
 // field takes keystrokes directly.
 
+import { se, SE } from '../audio/se.ts';
 import { drawText, drawTitlePill, drawSelectBar, drawWindowFrame, FONT, inWindowSpace, ITEM_HEIGHT, ITEM_STEP, pillWidth, WINDOW_FONT, type Screen, type Stage, type WindowSkin } from './stage.ts';
 
 export interface LoginHandlers {
@@ -85,17 +86,19 @@ export class LoginScreen implements Screen {
 
   key(e: KeyboardEvent): void {
     if (this.busy) return;
-    if (e.key === 'Escape') return this.handlers.cancel();
+    // Window list 0x007384xx..0x007388d0: SE 0x56f cursor, 0x570 confirm, 0x585 cancel.
+    if (e.key === 'Escape') return (se(SE.cancel), this.handlers.cancel());
     if (e.key === 'ArrowDown' || e.key === 'Tab') {
       this.row = (this.row + 1) % 4;
-      return;
+      return se(SE.cursor);
     }
     if (e.key === 'ArrowUp') {
       this.row = (this.row + 3) % 4;
-      return;
+      return se(SE.cursor);
     }
     if (e.key === 'Enter') {
-      if (this.row === 3) return this.handlers.cancel();
+      if (this.row === 3) return (se(SE.cancel), this.handlers.cancel());
+      se(SE.ok);
       if (this.row === 0 && this.fields[0]) {
         this.row = 1;
         return;

@@ -85,6 +85,139 @@
 - The analog model rotation (`FUN_004ef18c`) and the camera idle demo (states 1–4 of `0x009b8c60`).
 - Under the widescreen patch, k = 1 (normal steps) shifts the viewport by 128·W/640 as the code says; no capture shows a normal step with a model.
 - The creation screen does not cross-fade the model on look changes; it is rebuilt with the motion frame kept.
+## 2026-10-17: character file, item table and item names
+
+**What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.
+
+**Checks:** `tests/items.test.ts` parses the ItemPMT newserv streams (rebuilt with `newserv encode-item-parameter-table` when no ItemPMT file is given) and compares 36124 values over 1536 item definitions plus specials, stat boosts, star values, max tech levels, tech boosts, combinations, mag feed tables and sale divisors with `item-parameter-table-bb-v4.json`: no mismatches. Names for 1515 item codes match `names-v4.json` (4 entries where newserv corrected the game's text are checked against the game's text). `tests/charfile.live.ts` logs in, downloads the stream file, joins the lobby and prints the character (WebHunter: Saber, Frame, Mag LV5, Monomate x4, Monofluid x4).
+
+**Finding:** ItemPMT ids and unitxt must come from the same build. The local Ephinea client's text tables do not match newserv's ItemPMT (Saber is unitxt entry 156 in `data.gsl:unitxt_e.prs`, 289 in Ephinea's loose `unitxt_j.prs`, 177 in newserv's). With newserv, the original client would show wrong item names for the same reason. The panel falls back to newserv's bb-v4 text set on the dev server.
+
+**Not verified against the exe:** the description format is newserv's; the client's own item-name formatting function was not traced in Ghidra yet.
+
+## 2026-10-17: classic client from SELECT CHARACTER into the lobby
+
+**What changed:** choosing an existing slot in `classic.html` now runs the original flow: the "Connecting.." warp, the game-server login (93 phase 4), the server's main menu as the client's **Ship Select** window over the 3D lobby, `10` *Go to lobby*, `67`, and the 3D lobby (`render/lobbyview.ts` on a WebGL canvas under the 2D stage) with the lobby name window. Checked live in Chrome against newserv: warp, Ship Select, lobby, walking with W, chat send/receive (other players' chat and joins show in the log). `tests/lobby.live.ts` still passes.
+
+**"Connecting.." and the warp (`classic/connecting.ts`, `classic/particles.ts`):**
+- `FUN_007bd97c` is a modal loop around the connection. `FUN_004178f8` builds a 3D scene and the warp object `FUN_004179e8` (vtable 0x00af3738). It fades in from black (`FUN_00409d28` mode 2 → `FUN_0040a080`: alpha 1, −1/15 per frame).
+- The warp object's update `FUN_00417ccc` fixes the camera at the origin looking down −Z (`FUN_004d31f4(9)`, `FUN_004d33c0`). On its second frame it creates `FUN_00418794`, which has two children:
+  - `FUN_0040bf40`: particle effects 0x13 `load_blue`, 0x15 `load_yellow`, 0x17 `loadhikari`, 0x1d `load_circle`, 0x6e `load_red` (ids at 0x008f9ec8), 100 units ahead (0x008f9edc), rotations (0x4000,0,0) except 0x17 (table 0x009a3104);
+  - `FUN_00417f90`: 0x16 `load_carsol` at 65 units (0x008fb12c).
+- All six are particle type 0 (spawn `FUN_0050ec4c`, update `FUN_0050dbb8`, render `FUN_0050e698`):
+  - velocity (rand·+0x38 + +0x30, rand·+0x3c + +0x34, 0), turned by a random angle about Y, then by the emitter rotation. The quarter turn about X makes the rays fan out in the screen plane and fly toward the camera;
+  - x/z damped by +0x50, y += +0x54, size ×= +0x2c;
+  - tex_flags & 4 → streak of length +0x64·|step| and thickness +0x68·|step| (note: +0x64/+0x68 here, +0x60/+0x64 for type 2);
+  - textures by GBIX of `effect_nt.xvm` (785981 = #18, 700531 = #9, 700420 = #24). `XvrTexture` now carries `gbix`.
+- "Connecting.." object (vtable 0x00af2438, ctor `FUN_00407bf0`): render `FUN_00407f6c` draws "Connecting.." at (23, 331) while state < 3. `FUN_00408200` sets state 2 with the result, and update `FUN_00407c6c` waits 150 frames before state 3 (errors from unitxt group 0x36, `FUN_004080ac`). The screen keeps the warp for 150 frames after the server answers, like the original.
+- The result matches capture 09 of the original (rays, colors, centre, text position) by eye.
+
+**Ship Select (`classic/shipselect.ts`):**
+- 07 handler at 0x0079ba38: entry 0's name is compared with `L"BLOCK"`; the window title is the client's `L"Ship Select"` (0x0097ce50) or `L"Block Select"` (0x0097ce68). See PROTOCOL.md.
+- List window: `FUN_0073fdc4` → `FUN_0073fe9c` → `FUN_00736988`, at position-table entry 0x28.
+  - Position table: `FUN_0073ec50(i)` = 0x00971f40 + 8·i, {x, y} floats. Entry 0x28 = (12, 50).
+  - Size 385 × 184 from `FUN_00737f80` (0x00972dd4); the other modes are 385 × 104 and 300 × 104.
+  - Items 20 px apart (`FUN_00737cdc`), left-aligned 10 px in, 6 px below the title (measured).
+- Info window: `FUN_0079bb58` → `FUN_0079a8c4` → `FUN_0073a888` at entry 0xd5 = (294, 305), 342 × 144. It types unitxt 0x0F/0. `FUN_00793168(i)` is unitxt group 0x0F and `FUN_0079317c(i)` is group 0x0B.
+- Measured against the capture of the original:
+  - menu frame at x 13.2, y 51.6 (decoded 12, 50), 383 × 181 (decoded 385 × 184);
+  - info window 340 wide (decoded 342).
+- Widescreen (psobb.io): windows keep a uniform scale by height. Windows whose centre is on the right half move right by the extra width: the info window lands at 294 + 128 and the lobby window at 622 + 128 on a 768-unit screen. `classic/ingame.ts` does the same.
+
+**Lobby (`classic/lobby.ts`):**
+- Lobby name window: `FUN_0079eb78` formats `"%s:%02d-%02d"` (0x0097cef0) from the ship name, the block and lobby + 1. `FUN_0073f510` shows it in a 160 × 27 window (0x009f340c) whose right edge is at table entry 0xc0 = (622, 37). It shows "newserv:01-01" as on the capture.
+- BGM: `LOBBY.ADX` for Ship Select and the lobby (`FUN_00642c30`); silence while connecting.
+- `LobbyView` gained two small additive hooks: `{ labels: false }` (no 3D name sprites) and `playerPositions()` for 2D name tags. The Online tab is unchanged.
+
+**Keyboard (default key config):**
+- newserv's `default-keyboard-config.bin` (0x16C bytes, the client's `key_config`) is a list of `{u32, key id}` pairs. They follow the order of the key-config labels in unitxt group 0: Move Forward/Backward/Left/Right, Lock Move Forward, Lock Walk Forward, Decide, Cancel, Menu Open/Close, Start, Select Up/Down/Left/Right, …
+- Key ids are named by the table at 0x0097b5e0 (`{id, L": NAME"}`): 0x26 W, 0x22 S, 0x10 A, 0x13 D, 0x61 ENTER, 0x50 BACK SPACE, 0x06 HOME, 0x59 SPACE, 0x5c–0x5f arrows, 0x40–0x4b F1–F12, 0x2a–0x33 1–0.
+- So the defaults are: W/S/A/D move, Enter decides, Backspace cancels, Home is the menu, Space is Start, and the arrows select. The classic lobby moves with W/S/A/D only; the arrows no longer move the player there.
+
+**Approximations (marked in the code):**
+- The camera behind Ship Select slowly circles lobby 1. The original camera path is not decoded.
+- The info text types 2 characters per frame (fitted).
+- Ship Select fades in over 15 frames (fitted).
+- The chat log (bottom left), the chat input window and the name-tag offset are provisional; their code is not found yet. The chat input opens with Space or Enter.
+
+**Open:**
+- The chat log, chat balloon and chat input code. The chat trigger key is probably "Start" (Space) but is not proven.
+- The lobby menu (Home) and the info counter menus.
+- The ship-select camera.
+- Where the `DAT_00a48a3c` mode that picks the list size is set.
+- Fresh lobby captures of the original could not be taken this session: the display was asleep, so screencapture returned black frames.
+
+## 2026-10-17: area fog and light
+
+**What changed:** the map viewer applies each area's fog and light the way `PsoBB.exe` does. New parsers `formats/fogentry.ts` and `formats/lightentry.ts`; `MapViewer.setArea(source, area)` (called by `load`) sets the base fog and the light, `setFogRegions(placed)` takes the fog regions from the set data, `setFogOverride(id)` switches like a region does, and `fogProbe` says where "the player" is (the orbit target by default; the lobby sets its own player). The lobby now uses the area light instead of its own lights. Map entries with flag `0x1` are drawn without fog. Details in PROTOCOL.md (Area fog, Fog regions, Area light).
+
+**How the fog works:** a fog object with four slots (base, override, staging, blend). The area start sets the base slot from the table at `0x009c1ec0` (fog id per area). Fog-region objects register their id every frame while the player is inside their sphere; the per-player manager switches the override in, or back to the base when nobody registered. Fades blend color, start and end over `1 / fade_step` frames (100 frames = 3.3 s for 0.01). Some entries wobble start/end with a sine. Render states are plain linear table fog (`FOGSTART`/`FOGEND` clamped to ≥ 0), which is what three.js `Fog` does.
+
+**Checks:** `tests/fog.test.ts` (fog/light values, wobble, fade length, region enter/leave). In Chrome: Forest 1 green haze (`0x80ffaa`, 0..2000), Caves 1 orange (`0xff7000`, 156..791), Mines 1 pale blue (`0xe1e2ff`, 100..4000), Ruins 1 dark green (`0x0d4015`, 0..1193 with the wobble frozen at switch time). Walking the orbit target into the Caves 1 switch room (`TObjFogCollisionSwitch`, radius 240, fog 0x11) fades to the black dark-room fog in about 3 seconds.
+
+**Open:** the sign convention of the light direction (treated as "toward the light", which makes the default `(0, 0, 1)` a headlight); the clear color behind the fog (kept as the viewer background); which areas set `FUN_0078b220()` (alternate fog file and light set); per-room `TObjLight` overrides; switch state (all switches are off in the viewer).
+
+## 2026-10-17: games: create, join, Pioneer 2 and the field
+
+**What changed:**
+- `net/game.ts`: games from the lobby. Create (`C1`), list (`08`), join (`10`), the join command `64`, the loading sequence, the state sync to a joining player, warps between floors and leaving to the lobby (`98` + `84`).
+- `formats/setdatatable.ts`: the client's `SetDataTableOn.rel` / `Off.rel`, which turns the variations of `64` into map files.
+- `render/gameview.ts`: loads the floor the player is on (render map, collision, player starts, enemy and object markers) and warps when the player walks into an area warp.
+- Online tab: a Games box in the lobby (create, refresh the list, join), then Warp and Back to lobby in the game.
+- `tests/game.live.ts`: two Node clients. A creates a game; B lists and joins it; both see each other; both move (`6x42`, `6x40`, `6x3E`); A warps to Forest 1 and B follows; both return to the lobby; the empty game is deleted. `tests/setdatatable.test.ts` compares the table parser with newserv and resolves every free-play floor.
+- The full write-up is in PROTOCOL.md, section "Games".
+
+**How the flow was established:** newserv's server code tells what it accepts, and its `tests/*.test.txt` captures show what a real client sends. They are GC sessions, but the command and subcommand numbers are the same as BB.
+- `GC-ForestGameRareMagFeed`: a player creates a game alone and warps.
+- `GC-XB-CrossplayForestGame`: a second player joins. The leader sends `6x6D`, `6x6B`, `6x6C`, `6x6E`, `6x6F`, `6x71` and `6x70` to the joiner.
+
+`seq.py` (scratch) turned the captures into command sequences.
+
+**Findings:**
+- **newserv holds the joiner's commands until it answers `1D`.** It sends `1D` right after `64`, and queues the other players' sync commands until the reply comes. A client that ignores pings never sees the others.
+- **Joins are serialized by the loading flag.** A second player gets `01` "another player is currently loading" until the first one has sent `6F`. The server answers `6F` with `B1`; `Game.ready` resolves on that `B1`.
+- **On BB the server sends `6x72` (resume), not the leader.** It goes to everyone except the joiner, once the leader's `6x70` has arrived.
+- **The state sync is strict.** newserv records which sync subcommands it expects from whom, and disconnects a client that sends one it did not expect.
+  - It also checks the entity counts in `6x6B`, `6x6C` and `6x6E` against every floor's map, including enemy children. The web client therefore sends only `6x6D`, `6x71` and `6x70`.
+  - `6x6D` holds the next item ids, 0x00010000 + 0x00200000 × client id + the items each player has used. newserv now logs that they match.
+  - The BC0 payload is a literal-only stream.
+- **`64` has no appearance data.** It carries `PlayerLobbyDataBB` only (names, guild cards), in slot order. Classes and appearance arrive later in each player's `6x70`. The view then rebuilds the model; the first frames show a capsule.
+- **`98` must carry real records.** For BB, newserv takes the battle and challenge records, choice search, info board and blocked senders from `98`, so zeros would wipe them. They are copied from the `00E7` save data. `BBSession.fullCharacter` keeps the latest `00E7`.
+- **Map files:** `SetDataTableOn.rel` maps (area, layout, entities) to an object basename, an enemy/event basename and an area setup name.
+  - The geometry is the setup name + `n.rel`, or + `_00n.rel` for `map_city00`, `map_labo00` and the jungles. `map_boss04` uses `map_darkfalz00n.rel`.
+  - The table also lists quest-only layouts (Cave 03–05). The server only picks within newserv's free-play counts.
+  - All 235 free-play variations of Episodes 1, 2 and 4 resolve to files that exist in Ephinea's client.
+- **Player starts:** `TObjPlayerSet` `param4` is 0 when arriving from a lower floor and 1 when coming back. In Forest 1, the 0 set is next to the warp from Pioneer 2 and the 1 set is next to the warp to Forest 2.
+- **Area warps:** `TObjAreaWarpForest` keeps the destination floor in `param4`. Walking within 12 units of one warps the player. The Pioneer 2 teleporter (`TObjCityAreaWarp`) goes to floor 1, since its destination menu is not implemented.
+- **Name length:** newserv keeps 14 characters of the game name, so the UI limits names to 14.
+
+**Lobby/view hooks (additive):**
+- `Lobby` gained `detach()` / `attach()`, `selfEntry`, extended-header subcommands, the `6x1F` floor, and the `floorChanged` event.
+- `LobbyView` gained a `showPlayer` filter, which hides players on other floors and players made invisible by `6x22`.
+- `LobbyView` now ignores events after `dispose()`. Its `Lobby` listeners outlive it, and the game reuses one `Game` across floor views.
+
+**Checked in Chrome:**
+- Create a game, then Pioneer 2 loads: 30 objects, 23 NPC sets, the player on its start point.
+- A Node bot joins: the FOmarl model appears, runs around and chats.
+- Warp to Forest 1: `map_forest01n.rel` with `map_forest01_02o.dat` / `e.dat` (111–120 objects, 59–69 enemy sets, depending on the variation).
+- Back to lobby: lobby 1 again, and the game list is empty.
+
+**Open:**
+- Enemies are markers. Models from `bm_ene_*.bml` and their motions are next.
+- The full sync for real-client joiners: `6x6B`, `6x6C` and `6x6E` need the client's entity expansion; `6x6F` needs the quest flags.
+- The Pioneer 2 teleporter menu, boss warps (`TObjWarpBoss`), in-floor map warps (`TObjMapWarpForest`) and doors.
+- Field BGM. The area track names are in the exe; only the lobby and city tracks are mapped so far.
+- Ultimate Episode 1 uses `SetDataTable*Ulti.rel` on newserv, but that table is not in Ephinea's client. Whether Ultimate uses the `map_a*` geometry is not verified.
+
+## 2026-10-17: sound effects from data/sound/*.pac
+
+**What changed:** the classic UI now plays the game's sound effects. `formats/sepac.ts` parses the banks, `audio/se_tables.ts` is generated from the exe by `tools/gen-se-tables.py`, and `audio/se.ts` (`SePlayer`, plus a shared `se(id)`) plays them with Web Audio. The title, login window, character select and character creation call `se()` wherever the decompiled code calls `FUN_00814298`. Details are in PROTOCOL.md, "Sound effects".
+
+**Format:** a bank is a run of 32-byte aligned waves. Each has a 0x20-byte header (PCMWAVEFORMAT, 12 leftover RIFF bytes, PCM size at `+0x1c`), then the PCM. The exe's per-bank offset records (`0x00a215e0`) match a walk of the file for all 26 banks. `tests/sound.test.ts` parses every bank: 1818 waves, 2524 s in total, each bank's count equal to the exe table's, and every loop point inside its wave.
+
+**Engine:** an SE id maps to a slot (`0x00a1f840`), and a slot to a wave of `common.pac` (always loaded) or of the area bank (`0x00989e60[area]`; area 0 = `city.pac`, loaded at start-up and on the character screens). Volume is `round(f³·6400)` hundredths of a dB with `f = (1 + a/127)(1 + master/127) − 1`, where `a` is the slot's attenuation byte. There are 64 voices; a slot without flag bit 28 cuts its own previous voice. PC buffers have no pan or pitch control.
+
+**Checked in Chrome:** `common.pac` and `city.pac` load into 222 slots. Every UI id (0x56f, 0x570, 0x571, 0x573, 0x575, 0x57c, 0x585, 0x420) resolves to a wave and starts a voice once the first key press unlocks audio. The cursor wave is 3107 frames at 22050 Hz with an RMS of 0.37.
 
 ## 2026-10-16: select character screen from the decompiled code
 

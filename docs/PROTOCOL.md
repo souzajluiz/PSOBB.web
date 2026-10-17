@@ -76,7 +76,52 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 | 4 | C→S | `10` | `{menu_id, item_id}` |
 | 5 | S→C | `83`, `C5`, `67` | lobby list, challenge ranks, **join lobby** |
 
+**`07` entry 0 is the menu title**, not an item: newserv sends `{menu_id, item_id = 0xFFFFFFFF, name = menu name}` first (`send_menu_t`). PsoBB.exe's 07 handler (0x0079ba38) compares that name with `L"BLOCK"`: otherwise it is a ship menu, the name is kept as the ship name (0x00aab2ec, shown later as `<ship>:<block>-<lobby>` in the lobby) and the window is titled with the client's own `L"Ship Select"` (`L"Block Select"` for block menus). `10` may be answered by another `07` (sub-menu, e.g. *Patches*) instead of `67`; `BBSession.connectGameServer` / `selectMenuItem` expose these steps for the classic UI.
+
 `67` / `68` (join / one more player) = `LobbyFlags` (0x0C: `client_id`, `leader_id`, `disable_udp`, `lobby_number`, `block_number`, …) + entries of 0x520: `PlayerLobbyDataBB` (0x44: `guild_card_number` @+4, `client_id` @+0x1C, name UTF-16 @+0x20), `PlayerInventory` (0x34C), `PlayerDispDataV4` (0x190: stats with `level` @+0x18, visual @+0x24). `69`: player left, `flag` = client id.
+
+## Full character file (`E7`, `SC_SyncSaveFiles_BB_E7`, 0x3994 bytes)
+
+Sent by the game server after the phase-4 `93`, before the `07` menu, so it is already in `BBConnection`'s backlog when the menu arrives; `BBSession.enterLobby` takes it with `conn.poll(0xE7)` and fills `session.character` (`net/charfile.ts`). Layouts from newserv `SaveFileFormats.hh`, `PlayerInventory.hh`, `PlayerSubordinates.hh`, `LevelTable.hh`.
+
+| Off | Size | Field |
+|---|---|---|
+| 0000 | 0x2EA4 | `PSOBBCharacterFile` |
+| 2EA4 | 0x2B8 | `PSOBBBaseSystemFile` (key config etc.) |
+| 315C | 0x838 | `PSOBBFullTeamMembership` (team name UTF-16 @+0x14) |
+
+`PSOBBCharacterFile`:
+
+| Off | Field |
+|---|---|
+| 0000 | `PlayerInventory` (0x34C): u8 `num_items`, `hp_from_materials`, `tp_from_materials`, `language`; 30 × `PlayerInventoryItem` (0x1C) |
+| 034C | `PlayerDispDataV4` (0x190): stats (u16 ATP, MST, EVP, HP, DFP, ATA, LCK, ESP; f32 ×2; u32 `level` (0-based) @+0x18, `exp` @+0x1C, `meseta` @+0x20), visual (0x70) @+0x24, config (0xE8), `technique_levels_v1[0x14]` @+0x17C |
+| 04E8 | u32 `play_time_seconds` |
+| 06F4 | u32 `death_count` |
+| 06F8 | `PlayerBank200` (0x12C8): u32 `num_items`, u32 `meseta`, 200 × {`ItemData`, u16 `amount`, u16 `present`} |
+| 19C0 | `GuildCardBB` (0x108): u32 number, name, team name, description, …, language @+0x105 |
+| 29EC / 2B44 | auto reply / info board (UTF-16, 0xAC) |
+
+`PlayerInventoryItem`: u8 `state` (1 = held, 2 = equipped), u8, u8 `extension_data1`, u8 `extension_data2`, u32 `flags` @+4 (0x04 equippable, **0x08 equipped**, 0x100 kill count, 0x400 wrapped), `ItemData` @+8.
+
+`ItemData` (0x14): `data1[12]`, u32 `id`, `data2[4]`. `data1[0]` = class (0 weapon, 1 armor/shield/unit, 2 mag, 3 tool, 4 meseta). Weapon: `[1..2]` kind, `[3]` grind, `[4]` special (0x80 unidentified, 0x40 wrapped), `[6..11]` three (stat, percent) pairs (1 native, 2 A.beast, 3 machine, 4 dark, 5 hit). Armor/shield: `[5]` slots, `data1w[3]` DFP bonus, `data1w[4]` EVP bonus. Unit: `data1w[3]` modifier (+/++/−/−−). Mag: `[2]` level, `[3]` photon blasts (LLRRRCCC), `data1w[2..5]` DEF/POW/DEX/MIND ×100, `data2` = synchro, IQ, flags (PB slots), color. Tool: `[5]` stack count; tech disk: `[2]` level − 1, `[4]` technique.
+
+Technique level t = `technique_levels_v1[t]` + `inventory.items[t].extension_data1` (+1 for display); 0xFF = not learned (newserv `get_technique_level`).
+
+## BB stream file (`04EB` / `01EB` / `03EB` / `02EB`)
+
+On the data-server connection the client asks for the stream file: `04EB` (no body) → `01EB` with `flag` = entry count, entries of 0x4C {u32 size, u32 CRC32, u32 offset, char name[0x40]}; then `03EB` with `flag` = chunk index → `02EB` {u32 chunk_index, data ≤ 0x6800}. Files are concatenated in index order. newserv sends `BattleParamEntry*.dat` (6), `PlyLevelTbl.prs`, `ItemMagEdit.prs`, **`ItemPMT.prs`**. `BBSession.streamFiles()` downloads it.
+
+## Item parameter table (`ItemPMT.prs`)
+
+Not in `data.gsl`: on BB the server provides it (stream file above). `formats/itempmt.ts` ports newserv's V4 `BinaryItemParameterTableT`. PRS-compressed REL; the root (REL footer @size−0x10) holds 0x17 u32 offsets: weapon, armor, unit, tool, mag tables, weapon kinds, photon colors, ranges, weapon sale divisors (f32 per class), non-weapon sale divisors, mag feed (8 × 11 × 8 bytes), star values (u8 from id 0xB1), specials ({u16 type, u16 amount}), weapon effects, stat boosts (6 bytes), shield effects, max tech levels (19 × 12), combinations (0x10), sound remaps, tech boosts (0x18), unwrap, unsealable, ranged specials. Weapon/armor/unit/mag/tool tables are `ArrayRef {u32 count, u32 offset}` lists (weapons and tools: one per `data1[1]`; armor table: [armors, shields]). Entry sizes: weapon 0x2C, armor/shield 0x20, unit 0x14, mag 0x1C, tool 0x18, all starting with `ItemBaseV4 {u32 id, u16 type, u16 skin, u32 team_points}`. Bare arrays have no stored length: as in newserv, the length runs to the next pointer target found in the REL relocation table.
+
+## Item names
+
+`ItemBase.id` indexes **unitxt collection 1** (`parseUnitxt` numbering; newserv uses `get(BB_V4, ENGLISH, 1)`). Weapon special names are in the same collection at 0x256 + special (`SpecialStarsBeginIndex`, e.g. 599 = "Draw"), technique names are collection 5, and tech disks use the tech-disk tool's name ("Disk:") + technique + " Lv.N" (Ryuker/Reverser hide Lv.1). `formats/itemnames.ts` `ItemNames.describe` follows newserv `describe_item`: `[Wrapped] [????] [Special] Name [+grind] [K:kills] [N/AB/M/D[/hit]]`; armor `(N slots) +xDEF +yEVP`; units `Name+`/`++`/`-`/`--`; mags `LVn def/pow/dex/mind sync% IQ PB:… (color)`; stackable tools `xN`.
+
+The text table must come from the same build as the ItemPMT, because the client indexes it with the PMT ids. In the test client folder (Ephinea) neither text table matches newserv's PMT: `data.gsl:unitxt_e.prs` has 946 item strings (Saber at 156) and the loose `unitxt_j.prs` (English text) has 1550 (Saber at 289, specials at 1048), while newserv's PMT puts Saber at 177 and specials at 599, matching newserv's own `system/text-sets/bb-v4/unitxt_e.prs` (1081 strings). `ItemNames.textMatches` checks that every id is in range and that entry 0x256 + special count is `????`; the Inventory panel tries the client's unitxt first and falls back to newserv's text set (dev server `/newserv-text/`). newserv's `names-v4.json` differs from that unitxt in four hand-corrected strings ("Ressurection", two trailing spaces).
+
 
 ## Lobby traffic
 
@@ -90,6 +135,66 @@ What PsoBB.exe puts in it for a new character (decompiled, see DEVLOG "character
 | `3E`/`3F` | stop at / set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
 | `40` | walk to | `f32 x, z, u32 flags` |
 | `42` | run to | `f32 x, z` |
+
+## Games (team rooms)
+
+Implemented in `client/src/net/game.ts` (`Game extends Lobby`), tested live by `tests/game.live.ts`. Sources: newserv `CommandFormats.hh`, `ReceiveCommands.cc` (`on_C1_BB`, `on_10_game_menu`, `on_1D`, `on_6F`, `on_61_98`, `on_84`), `ReceiveSubcommands.cc`, `ServerState.cc` (`send_lobby_join_notifications`), and the real-client captures in newserv's `tests/` (`GC-ForestGameRareMagFeed`: create alone and warp; `GC-XB-CrossplayForestGame`: a second player joins). The GC captures use the same command and subcommand numbers as BB except for the 4-byte header.
+
+| Step | Dir | Cmd | Content |
+|---|---|---|---|
+| Create | C→S | `C1` | `C_CreateGame_BB_C1` (0x50): `menu_id`, `item_id` (0), name UTF-16[0x10] @08, password UTF-16[0x10] @28, `difficulty` @48 (0–3), `battle_mode` @49, `challenge_mode` @4A, `episode` @4B (1, 2, 3 = Episode 4), `solo_mode` @4C. newserv keeps 14 characters of the name. |
+| List | C→S | `08` | empty |
+| | S→C | `08` | `S_MenuItem_PC_BB_08` entries (0x2C), flag = number of games. The first entry is the server name (item 0, flags 4). Per game: `item_id` = game id, `difficulty_tag` = 0x22 + difficulty, `num_players`, name, `episode` byte = `max_clients << 4 | episode` (`0x10 | episode` for solo), `flags`: 2 password, 4 not joinable (BB), 0x10 battle, 0x20 challenge, episode << 6 |
+| Join | C→S | `10` | `{menu_id = 0x44000044, item_id = game id}`; with a password: flag 2 and UTF-16 password[0x10] @08 (0x28 bytes) |
+| Refused | S→C | `01` / `0101` | lobby message box (text after an 8-byte header), e.g. "another player is currently loading" |
+| Joined | S→C | `64` | `S_JoinGame_BB_64` (0x1A0), flag = player count: `Variations` (16 × `{u32 layout, u32 entities}`) @000, `PlayerLobbyDataBB[4]` @080 **in slot order** (empty slots zero), `client_id` @190, `leader_id` @191, `disable_udp`, `difficulty` @193, `battle_mode`, `event`, `section_id` @196, `challenge_mode`, `random_seed` @198, `episode` @19C, `solo_mode` @19E, `is_in_quest` @19F |
+| | S→C | `1D` | ping; newserv **holds every command for the joiner** (the other players' sync) until the client answers `1D` |
+| Others | S→C | `65` | the joiner's full entry (same layout as `68`) |
+| Left | S→C | `66` | flag = client id; data `{client_id, leader_id, disable_udp, 0}` |
+
+Loading sequence of the joining client (captures, mirrored by `Game`): `1D` reply, `8A` (game name; the server answers `8A` with UTF-16 text), then after loading the floor `6x3F` (position), `6x1F` (floor), `6x3B`, `6F`. The server answers `6F` with `B1` (time) and the client sends `99`. Another client may only join once `6F` cleared the loading flag (otherwise `01` "currently loading").
+
+When `65` arrives, the players already in the game send state to the joiner with private commands (`62`/`6D`, flag = joiner's client id). newserv registers exactly which ones it expects (`expected_game_state_sync_commands`) and disconnects a client that sends an unexpected one:
+
+| Sender | Order (capture) | Subcommands |
+|---|---|---|
+| leader | 1 | `6x6D` item state (`6D`, BC0-compressed `G_SyncItemState_6x6D_Decompressed`: next drop number per floor, next item id per player = 0x00010000 + 0x00200000 × client + items used, floor item counts) |
+| leader | 2–4 | `6x6B` enemy, `6x6C` object, `6x6E` set flag states (BC0) |
+| leader | 5–6 | `6x6F` quest flags (`62`), `6x71` unblock join (`62`, header only) |
+| everyone | 7 | `6x70` own player (`6D`, `G_SyncPlayerDispAndInventory_BB_6x70`, 0x4C0) |
+
+On BB the server, not the leader, then sends `6x72` (resume) to **every player except the joiner** once the leader's `6x70` arrived (`send_resume_game`). The web client sends `6x6D`, `6x71` and `6x70`. It does not send `6x6B`/`6x6C`/`6x6E`: newserv checks the entity counts of every floor's map against its own (including enemy children), which needs the full entity expansion; nor `6x6F`, since the client does not track quest flags. The BC0 data is sent as a literal-only stream (newserv `bc0_encode`: one control byte with a 1 bit per literal, LSB first, then up to 8 bytes).
+
+`6x70` (BB, offsets from the subcommand start): extended header `{0x70, 0, client_id, u32 size}`; `G_6x70_Base_V1` @008 (`client_id` u16 @008, `room` @00A, `game_flags` @00C, position @010, angle (3 × i32 BAMS) @01C, `current_hp` @02A, bonus HP/TP @02C/@02E, status effects @030, `language32` @06C, `player_tag` @070, guild card @074, telepipe @080 (owner 0xFFFF = none), death flags @09C, hold state @0A0, `area` @0B4, `player_flags` @0B8, `technique_levels_v1` @0BC); `PlayerVisualConfigV4` @0D0; `PlayerStats` @140; `num_items` @164; `PlayerInventoryItem[30]` @168; `floor` @4B0. newserv re-encodes it for the joiner and fills `client_id` and the guild card itself. **The joiner gets the other players' appearance only from `6x70`** (`64` carries names and guild cards).
+
+Extended subcommands (`6D`, and `6C`/`62` for large payloads) have size byte 0 and a `u32` byte size after the 4-byte header; `Lobby.onSubcommands` reads both forms.
+
+| Sub | Meaning | Payload |
+|---|---|---|
+| `1F` | set floor and ask for positions (others answer `6x20`) | `i32 floor` |
+| `21` | inter-level warp | `i32 floor` |
+| `22` / `23` | player invisible / visible (while changing floors) | none |
+| `3B` | clear temporary photon blast state flags (sent after each floor load) | none |
+| `3F` | set position | `u16 near_enemy, u16 angle, i16 floor, i16 room, f32 x, y, z` |
+| `40` | walk to | `f32 x, z, u32 flags` (8 = near an enemy) |
+
+Warp (capture): `6x21 {floor}`, `6x22`, …load…, `6x3F`, `6x1F {floor}`, `6x3B`, `6x23`.
+
+Leave: `98` with `C_CharacterData_BB_61_98` (0x824: inventory, `PlayerDispDataV4`, `PlayerRecordsEntry_BB` {client id, challenge 0x140, battle 0x18} @4DC, `ChoiceSearchConfig` @638, info board UTF-16[0xAC] @650, blocked senders[0x1E] @7A8, `auto_reply_enabled` @820). newserv keeps its own inventory/disp for BB and only stores the records, choice search, info board and blocked senders, so the web client fills them from the `00E7` save data (`PSOBBCharacterFile`: info board @2B44, battle records @2C9C, challenge records @2CB8, choice search @2E20). It answers with `00E7` (save data). Then `84 {menu_id = 0x33000033, item_id = lobby id}` → `67`.
+
+### Floors and map files
+
+Floor → area (newserv `default_floor_to_area`): Episode 1 floor = area (0 Pioneer 2, 1–2 Forest, 3–5 Caves, 6–7 Mines, 8–10 Ruins, 11–14 bosses); Episode 2 area = 0x12 + floor; Episode 4: 0x2D, 0x24..0x2C, 0x2E.
+
+The map files of a floor come from the client's `SetDataTableOn.rel` (`SetDataTableOff.rel` for solo; newserv also has `*Ulti.rel` tables for Episode 1 Ultimate, not present in Ephinea's client), parsed by `client/src/formats/setdatatable.ts` and checked against newserv's `disassemble-set-data-table` (`tests/setdatatable.test.ts`). REL root → area table `{u32 layouts, u32 count}` → layout table `{u32 entities, u32 count}` → entries of three C string pointers: object list basename, enemy+event list basename, area setup name. With the floor's `{layout, entities}` from `64`:
+
+- objects `<object basename>o.dat`, enemies `<enemy basename>e.dat`, events `<enemy basename>.evt`; on floor 0 the suffix is `_s` / `_c1` / `_d` for solo / challenge / battle;
+- render geometry: the setup name plus `n.rel` (`map_forest01n.rel`, `map_cave01_00n.rel`), or with `_00` added (`map_city00` → `map_city00_00n.rel`, `map_labo00`, the Episode 2 jungle maps); `map_boss04` is drawn from `map_darkfalz00n.rel`. This is the same pairing as `setVariantsForMap` in `formats/setdata.ts`;
+- the server only picks among the free-play variation counts of newserv's `num_free_play_variations_for_floor` (the table also holds quest-only layouts, e.g. Cave layouts 03–05).
+
+All 235 free-play floor variations of the three episodes resolve to a render map, a collision map and set files in Ephinea's client.
+
+Player start: the floor's `TObjPlayerSet` with `param1` = client id and `param4` = 0 when arriving from a lower floor, 1 when returning from a higher one. Area warps: `TObjAreaWarpForest` (type 2) with the destination floor in `param4` (Forest 1 has one to floor 2 and one back to floor 0); `TObjCityAreaWarp` (0x44, the Pioneer 2 teleporter, which opens a destination menu in the original).
 
 ## BB cipher
 
@@ -376,7 +481,6 @@ Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymot
 
 **Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
 
-
 ## Map texture animation (`map_<area>[_<layout>].tam`)
 
 Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.
@@ -398,3 +502,116 @@ The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`,
 Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
 
 `client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
+
+## Area fog (`fogentry.dat`)
+
+Loose file or `data.gsl`; 0x4000 bytes = 256 entries of 0x40, little endian. `FUN_005bca88` loads it (`fogentry_a.dat`, 128 entries, when `FUN_0078b220() != 0`). Parsed by `client/src/formats/fogentry.ts`.
+
+| Off | Field |
+|---|---|
+| 00 | `u32 flags`: 1 or 2; bit 1 = wobble re-evaluated every frame, bit 2 = phase counter |
+| 04 | `u32 color` (D3DCOLOR, RGB) → `D3DRS_FOGCOLOR` |
+| 08 | `f32 end` → `D3DRS_FOGEND` |
+| 0C | `f32 start` → `D3DRS_FOGSTART` (often negative) |
+| 10 | `f32 fade_step`: fade progress per frame toward this entry (≤ 0 → 0.001); 0.01 = 100 frames |
+| 18 | `f32 wobble_speed` (degrees per frame) |
+| 20 | `f32 end_amplitude`: `end += sin(frame * speed + end_phase) * amp` |
+| 28 | `f32 start_amplitude`: same with `start_phase` |
+| 30 | `f32 aux_base` (default 640) + `aux_amplitude * sin(frame * speed)` → fog object `+0x194`, not a render state |
+| 3A / 3C / 3E | `u8 end_phase`, `u8 start_phase` (degrees), `u8 aux_amplitude` |
+
+- **Render states** (`FUN_005bc440`): `FUN_0082db44(1)` sets `FOGTABLEMODE = LINEAR` and `FOGVERTEXMODE = NONE` (or the reverse when `DAT_00acbf10` selects vertex fog; table `0x0098a3e4 = {0, 3, 3, 3}`), then `FOGCOLOR`, `FOGSTART`/`FOGEND` (`FUN_0082dae0`, each clamped to ≥ 0), `FOGENABLE = 1`. `FOGDENSITY` is never set. Linear table fog is depth-based, like three.js `Fog`.
+- **Sine:** `FUN_0082dcbc` takes BAMS; the angle is `(frame_counter (DAT_00a9c4ec) * speed + phase) * 65536 / 360`.
+- **Fog object** (`FUN_005bc4ec`, vtable `0x00b0bae0`, up to 4 in `DAT_00a8d774`): four parameter slots (pointers at `+0x174`): 0 base, 1 override, 2 staging, 3 blend; current slot `+0x184`.
+  - `FUN_005bd968(id, flags)` (base, all objects via `FUN_005bd918`) and `FUN_005bcf00(id, flags)` (override) copy the entry into slot 2; `flags & 1` = immediate, else fade. Same id as the current slot: no-op.
+  - `FUN_005bce64(flags)` returns to slot 0.
+  - Update `FUN_005bd2cc`: immediate → swap staging into place. Fade → slot 3 = lerp(from, to, t) per frame for color (per channel), start, end, amplitudes and phases (wobble speed copied from the target); `t += step` where step is the target's `fade_step` (the source's when fading back to the base); when `t ≥ 1` the target becomes current. Idle → re-evaluated only for wobbling entries (`FUN_005bd6d8`); others keep the value computed when they became current.
+- **Base fog per area:** `FUN_005bc4ec` calls `FUN_005bd918(table_0x009c1ec0[DAT_00aafc9c], 1)`, 47 entries indexed by the area number (`DEFAULT_FOG_BY_AREA`): Forest 1 → 1 (`0x80ffaa`, 0..2000), Caves 1 → 3 (`0xff7000`, 156..791), Mines 1 → 0x0e (`0xe1e2ff`, 100..4000), Ruins 1 → 0x1e (`0x0d4015`, -100..1200).
+- Map entries with flag `0x1` are drawn with fog disabled.
+
+### Fog regions (set objects)
+
+`TObjFogCollision` (0x07), `TObjFogCollisionSwitch` (0x18) and `TObjFogCollisionPoison` (0x160) in `map_*o.dat`. The base constructor `FUN_007ba33c` copies the set entry: `+0x68` param1 = radius, `+0x70` param3 = switch mode, `+0x84` param4 = fog id, `+0x88` param5 (0 = fade), `+0x8c` param6 = switch id.
+
+- Every frame, for each local player, a region whose sphere holds the player (`FUN_005c2a08`: squared distance < radius²) registers `(fog id, param5 == 0)` with that player's manager (`FUN_005c2240`, managers in `DAT_00a8d7cc[12]`). The highest id wins.
+- Switch regions (`FUN_005c252c`) register only while `(param3 >= 1) == switch_on(param6)`. The cave/mine dark rooms are param3 = 0, fog 0x11 (black, end 70): dark until the switch is pressed.
+- Manager update (`0x005c2ce8`): registrations → `FUN_005bcee4` override (id minus 0x1000 if ≥ 0x1000, clamped to 0..255; ids like `0x102d` carry a priority bit); none → back to the base fog.
+- Only 0x18 (278) and 0x160 (67) occur in the Ephinea set files. The 0x160 class is assumed to share the 0x18 layout (same params pattern).
+
+## Area light (`lightentry.bin`)
+
+Loose file or `data.gsl`; 0x1980 bytes = 96 entries of 0x44 (17 floats). Entry `area + (FUN_0078b220() ? 0x30 : 0)` is copied to `DAT_00a9d460` by `FUN_00793f64` → `FUN_00794034`. Parsed by `client/src/formats/lightentry.ts`.
+
+| Off | Field | Use |
+|---|---|---|
+| 00 | `f32[3]` | written by the light editor from two angles (`FUN_004e3084`); not used to draw |
+| 0C | `f32[3]` direction | `FUN_00843a68` → `D3DLIGHT9.Direction`, transformed by the inverse of the current matrix (camera space); not always unit length |
+| 18 | `f32[2]` | unused at run time |
+| 20 | `f32` ambient level | `D3DRS_AMBIENT = (l, l, l)` for models/objects (`FUN_00794a80`, `FUN_00794548`) |
+| 28 | `f32[3]` color | `FUN_00843a38` → `D3DLIGHT9.Diffuse` |
+| 38 | `f32[3]` ambient color | `D3DRS_AMBIENT` once at area start (`FUN_00794200`) |
+
+The maps are unlit (vertex colors); the light applies to player and object models (`TObjLight` objects, 0x04, can override it per room: list at `DAT_00a9cda4`, not handled). The viewer uses a camera-attached `DirectionalLight` with the direction treated as pointing toward the light, and π-scaled intensities because three.js' Lambert term divides by π.
+
+## Sound effects
+
+### Bank files (`data/sound/*.pac`)
+
+A bank is a run of waves with no file header. Each wave starts on a 32-byte boundary:
+
+| Offset | Size | Field |
+|---|---|---|
+| `+0x00` | 16 | PCMWAVEFORMAT: format tag 1, channels, rate, byte rate, block align, bits. All waves are 16-bit mono, 22050 Hz, except `duel02.pac` #5 (44100 Hz). |
+| `+0x10` | 12 | left over from the source RIFF (`data` + size, or another chunk such as `cue `); not read |
+| `+0x1c` | 4 | PCM byte count |
+| `+0x20` | n | PCM, then padding to the next 32-byte boundary |
+
+The exe does not walk the file. It takes each wave's offset from records in the exe (below). For all 26 banks, walking the 32-byte aligned waves gives the same offsets in the same order. `ephinea.pac` (7 waves) has the same layout but is not in the exe's bank table. `sonicteamfx.bin` is not a bank: no loader or string in the exe names it, and it is not PCM.
+
+### Tables in PsoBB.exe
+
+| Address | Content |
+|---|---|
+| `0x00a21560` | `char*[26]` bank names: ancient, boss01–04, cave, city, common, duel01–02, forest, machine, beach, boss05–08, jungle, ruin, ship, tower, water, wilds, crater, desert, boss09 |
+| `0x00a214e0` | `u32[26]` entries per bank |
+| `0x00a21460` | `i32*[26]` wave slot of each entry |
+| `0x00a215e0` | `rec*[26]`, 16-byte records: `+0` u8 group, `+1` u8 index, `+2` u8 flags (bit 0 = loop), `+4` u32 file offset, `+8` u32 loop start, `+0xc` u32 loop end (samples) |
+| `0x00989e60` | `i32[]` area → bank |
+| `0x00a1f840` | `i32[0x700]` SE id → wave slot (identity except for 127 ids) |
+| `0x00a13b20` | `u32[0x700]` slot flags: bits 8–14 attenuation 0–127, bit 15 3D (when the type nibble is 0), bits 24–27 buffer type (0 or 10 = 3D), bit 28 voices of the slot may overlap, bit 31 random pitch |
+
+`tools/gen-se-tables.py` turns these into `client/src/audio/se_tables.ts`.
+
+### Loading
+
+The slot table `0x00acb3a8` has 0x700 slots of 0x20 bytes: `+0` header pointer, `+4` PCM pointer, `+8` PCM size, `+0xc` record flags, `+0x10` loop start, `+0x14` loop end − start, `+0x1c` header pointer (non-zero = loaded, `FUN_00829110`).
+
+- `FUN_00829b7c` (start-up) → `FUN_00829a04` loads `common.pac` and fills its slots. It stays resident.
+- `FUN_00828d40(area)` (through `FUN_00815584`) loads bank `0x00989e60[area]`. If the area bank changes, `FUN_00828c38` frees the old one, clears the slot table, and refills common's slots. The new bank is then written on top, so for a slot in both banks, the area bank wins.
+- Start-up (`FUN_00824944`) and the character screens (`FUN_004df9ec`) call `FUN_00815584(0)`, so `city.pac` is loaded on the title and character screens.
+- On a bank change, `FUN_00829af8` stops the playing voices, except UI slots (0x56f–0x58f) and a few others.
+
+### Playing
+
+`FUN_00814298(id, pos, volume, flags)` plays a one-shot. `FUN_008144b0(id, handle, pos, volume, flags)` plays a voice that can be updated and looped.
+
+1. `id` → slot via `0x00a1f840` (`FUN_0081443c`). In areas 0x15/0x16, ids 0x559–0x55c become 0x4b1–0x4b4. Ids ≥ 0x700 use slot 0.
+2. With a 3D position: the distance to the listener (`0x00acb39c`) is measured. At 2 or less, the sound plays as 2D. At 300 or more, it is dropped, except in areas 0xe, 0x1f and 0x2c. 3D buffers get min distance 80 and max distance 500.
+3. Volume: `a = clamp(-attenuation [+ volume if flags & 2], -127, 0)`, `f = (1 + a/127) * (1 + master/127) - 1`, `SetVolume(round(f³ * 6400))` (hundredths of a dB). `master` is `DAT_00ab59f8`, the SE volume option.
+4. `FUN_00828e4c`: there are 64 voices (`0x00acb388`, 0x48 bytes each). If the slot's flags lack bit 28, playing voices of the same slot are stopped first (`FUN_00829c38`). The first free voice is used; if none is free, nothing plays. The DirectSound buffer is created with `CTRLVOLUME | CTRLPOSITIONNOTIFY` (plus `CTRL3D` for 3D slots). There is no pan or frequency control: a voice's pitch value (`+0x34`: −500, or random when bit 31 is set) is never applied to the PC buffer.
+5. Looping (`FUN_008292dc`, record flag bit 0): a notify event is armed. When it fires, `FUN_00828978` stops the buffer, seeks to `block align × loop start`, and plays again.
+
+### UI sound ids
+
+| Id | Bank | Used for | Callers |
+|---|---|---|---|
+| `0x56f` | common | cursor move | title `FUN_006fed2c`, windows `0x734aab`…, slot list `0x412653`, char creation `FUN_004eb5f0`, `FUN_004ef208`, editors |
+| `0x570` | common | confirm | windows `0x7351c5`, `0x738883`, slot list `0x412742`, char creation |
+| `0x571` | common | AUTO roll done | `FUN_004f2988` |
+| `0x573` | common | back (char creation) | `FUN_004ef208`, `FUN_004f0f44`, `FUN_004f1cb8`, `FUN_004f34a8` |
+| `0x575` | common | not allowed | `FUN_004f0b80` (invalid name), `0x7351ac` |
+| `0x57c` | common | name entry closed with an invalid name | `FUN_004f34a8` |
+| `0x585` | common | cancel | slot list `0x412e4e`, windows `0x7388d0`, `FUN_00413ac0` |
+| `0x420` | city | title menu confirm | `FUN_006fed2c`, `FUN_006fede0` |
+
+`client/src/audio/se.ts` implements this: banks through the `DataSource`, PCM copied straight into `AudioBuffer`s, volume as gain `10^(ds/2000)`, the 64-voice limit and the same-slot rule. The UI calls it through the module-level `se(id)`, which `classic/main.ts` installs.

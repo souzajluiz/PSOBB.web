@@ -6,7 +6,8 @@
 //   3. reconnect to the redirect port, send 93 again carrying those values
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
-import { BBConnection, readUtf16, type Command, type Transport } from './bbconnection.ts';
+import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
+import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
@@ -116,6 +117,11 @@ export interface SessionOptions {
 export class BBSession {
   conn: BBConnection | null = null;
   init: ClientInit | null = null;
+  // Latest full save data (00E7, SC_SyncSaveFiles_BB_E7, starts with the
+  // PSOBBCharacterFile). Sent at login and again after leaving a game (98).
+  fullCharacter: Uint8Array | null = null;
+  // The same, parsed (net/charfile.ts); updated with every E7.
+  character: CharacterFile | null = null;
   private opts: SessionOptions;
 
   constructor(opts: SessionOptions) {
@@ -129,8 +135,17 @@ export class BBSession {
   private async open(port: number): Promise<BBConnection> {
     this.conn?.close();
     const conn = new BBConnection(await this.opts.connect(port), this.opts.nsk);
-    conn.onCommand = (c) =>
+    conn.onCommand = (c) => {
       this.log(`<- ${hex(c.command, 4)} flag=${c.flag} (${c.data.length} bytes)`);
+      if (c.command === 0xe7) {
+        this.fullCharacter = c.data;
+        try {
+          this.character = parseCharacterFile(c.data);
+        } catch (err) {
+          this.log(`E7 parse failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    };
     this.conn = conn;
     await conn.waitFor(0x03, 0x9b);
     this.log(`connected to port ${port}, encryption ready`);
@@ -232,6 +247,11 @@ export class BBSession {
     if (first.command === 0x1a || first.command === 0xd5) {
       throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
     }
+    // E7 (full save files) arrives before the menu; drop it from the backlog
+    // (onCommand already stored and parsed it).
+    if (conn.poll(0xe7) && this.character) {
+      this.log(`character file: ${this.character.name}, ${this.character.inventory.length} items, ${this.character.meseta} meseta`);
+    }
     if (first.command === 0x07) {
       const items = parseMenu(first.data);
       this.log(`main menu: ${items.map((i) => i.name).join(' | ')}`);
@@ -245,6 +265,74 @@ export class BBSession {
     }
     this.log(`joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}, client id ${lobby.selfId}`);
     return lobby;
+  }
+
+  // BB stream file (data-server connection, after login): 04EB asks for the
+  // index (01EB, flag = entry count, entries {u32 size, u32 crc32, u32 offset,
+  // char name[0x40]}), then 03EB with flag = chunk index for each 0x6800-byte
+  // chunk (02EB {u32 chunk_index, data}). The files are concatenated in index
+  // order. newserv sends ItemPMT.prs, ItemMagEdit.prs, PlyLevelTbl.prs and the
+  // BattleParamEntry*.dat tables (DataIndex::generate_bb_stream_file).
+  async streamFiles(): Promise<Map<string, Uint8Array>> {
+    const conn = this.requireConn();
+    conn.send(0x04eb, 0);
+    const index = await conn.waitFor(0x01eb);
+    const dv = new DataView(index.data.buffer, index.data.byteOffset, index.data.byteLength);
+    const entries: Array<{ name: string; size: number; offset: number }> = [];
+    for (let i = 0; i < index.flag && (i + 1) * 0x4c <= index.data.length; i++) {
+      const o = i * 0x4c;
+      entries.push({ size: dv.getUint32(o, true), offset: dv.getUint32(o + 8, true), name: readAscii(index.data, o + 12, 0x40) });
+    }
+    const total = entries.reduce((n, e) => Math.max(n, e.offset + e.size), 0);
+    const stream = new Uint8Array(total);
+    const CHUNK = 0x6800;
+    for (let chunk = 0; chunk * CHUNK < total; chunk++) {
+      conn.send(0x03eb, chunk);
+      const c = await conn.waitFor(0x02eb);
+      const at = new DataView(c.data.buffer, c.data.byteOffset).getUint32(0, true) * CHUNK;
+      stream.set(c.data.subarray(4, 4 + Math.min(CHUNK, total - at)), at);
+    }
+    const files = new Map<string, Uint8Array>();
+    for (const e of entries) files.set(e.name, stream.slice(e.offset, e.offset + e.size));
+    this.log(`stream file: ${entries.map((e) => `${e.name} (${e.size})`).join(', ')}`);
+    return files;
+  }
+
+  // Game-server phase split in two steps for a UI that shows the server's
+  // menu (classic client): 93 with connection_phase 4, then the first 07
+  // (main menu; entry 0 is the menu title, item_id 0xFFFFFFFF) or a direct 67.
+  async connectGameServer(username: string, password: string, slot: number, port = 12000): Promise<{ lobby: Lobby; menu: MenuItem[] | null }> {
+    const init = this.init;
+    if (!init) throw new Error('log in first');
+    const conn = await this.open(port);
+    conn.sendLogin({
+      username,
+      password,
+      guildCardNumber: init.guildCardNumber,
+      securityToken: init.securityToken,
+      clientConfig: init.clientConfig,
+      connectionPhase: 4,
+      characterSlot: slot,
+    });
+    const lobby = new Lobby(conn);
+    const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (first.command === 0x1a || first.command === 0xd5) {
+      throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
+    }
+    return { lobby, menu: first.command === 0x07 ? parseMenu(first.data) : null };
+  }
+
+  // 10 {menu_id, item_id}; resolves with the next menu (07) or null once the
+  // lobby was joined (67).
+  async selectMenuItem(item: MenuItem): Promise<MenuItem[] | null> {
+    const conn = this.requireConn();
+    const sel = new Uint8Array(8);
+    new DataView(sel.buffer).setUint32(0, item.menuId, true);
+    new DataView(sel.buffer).setUint32(4, item.itemId, true);
+    conn.send(0x10, 0, sel);
+    const r = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (r.command === 0x1a || r.command === 0xd5) throw new Error(readUtf16(r.data, 0, r.data.length >> 1));
+    return r.command === 0x07 ? parseMenu(r.data) : null;
   }
 
   close(): void {

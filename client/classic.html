@@ -7,12 +7,17 @@
     <style>
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-      #stage { display: block; width: 100vw; height: 100vh; outline: none; }
+      #stage { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; outline: none; }
+      /* 3D view (ship select, lobby) under the 2D stage. */
+      #world { position: fixed; inset: 0; display: block; width: 100vw; height: 100vh; pointer-events: none; }
+      #world[hidden] { display: none; }
       #boot { position: fixed; inset: 0; display: grid; place-items: center; color: #9cc; font: 14px Tahoma, sans-serif; }
+      #boot[hidden] { display: none; }
       #boot button { font: inherit; padding: 8px 16px; }
     </style>
   </head>
   <body>
+    <canvas id="world" hidden aria-hidden="true"></canvas>
     <canvas id="stage" aria-label="PSOBB.web"></canvas>
     <div id="boot" hidden></div>
     <script type="module" src="/src/classic/main.ts"></script>

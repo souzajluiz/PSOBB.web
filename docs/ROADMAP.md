@@ -28,6 +28,7 @@
 - [x] Play map motions (animated entries: frame += step per 30 Hz tick, wrapped at the frame count)
 - [x] Texture animation (`.tam`): UV-scroll effect slots and texture swaps
 - [x] Env-map texgen (material type 7: camera-space normal * matrix 0x00a21800)
+- [x] Area fog and light (`fogentry.dat`, `lightentry.bin`, fog regions from set data, fades)
 - [ ] Water/indirect distortion (`map_*i.bin`)
 - [x] Verify handedness: the client is right-handed like three.js, so no mirroring is needed
 
@@ -46,6 +47,13 @@
 
 ## Phase 5: game
 - [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)
+- [x] Games: create (`C1`), list (`08`), join (`10` → `64`), loading (`1D`/`8A`/`6x3F`/`6x1F`/`6F`), join sync (`6x6D`/`6x71`/`6x70`), leave (`98` + `84`) (`net/game.ts`, `tests/game.live.ts`)
+- [x] Floor maps from the `64` variations via `SetDataTableOn.rel`; Pioneer 2 and field floors with collision, player starts, enemy/object markers; warps (`6x21`/`6x22`/`6x23`) by button or area warp objects
+- [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)
+- [ ] Enemy models (`bm_ene_*.bml`) and motions; Pioneer 2 teleporter menu, boss warps, doors; field BGM
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
-- [ ] Items and inventory
+- [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
+- [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)
+- [x] Inventory panel in the Online tab
+- [ ] Item use/equip commands (`6x25`/`6x26`/`6x27`), item drops, item models (`ItemModel.afs`)
 - [ ] Quests (opcodes documented in the notes and in newserv's assembler)

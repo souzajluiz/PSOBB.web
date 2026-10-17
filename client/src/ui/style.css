@@ -145,3 +145,15 @@ output { padding: 8px 0; color: var(--text); }
 .chat-form { display: flex; gap: 6px; margin: 8px 0; }
 .chat-form input { flex: 1; min-width: 0; }
 .chat-form button { padding: 8px 12px; }
+
+/* Inventory panel (ui/inventoryPanel.ts) */
+.inv-layout { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 16px; }
+@media (max-width: 720px) { .inv-layout { grid-template-columns: 1fr; } }
+.inv-stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 0.9rem; }
+.inv-stats dt { color: var(--muted); }
+.inv-stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+.inv-items { list-style: none; margin: 0; padding: 0; font-size: 0.9rem; }
+.inv-items li { padding: 3px 0; break-inside: avoid; }
+.inv-items li.rare { color: #ffd76a; }
+.inv-items .mark { display: inline-block; width: 1.4em; color: var(--accent); font-weight: 600; }
+h3 small { text-transform: none; letter-spacing: 0; }
