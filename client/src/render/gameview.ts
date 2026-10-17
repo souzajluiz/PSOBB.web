@@ -138,6 +138,7 @@ export class GameView {
     const { area, files, geometry } = await this.floorFilesFor(floor);
     if (!geometry) throw new Error(`no map for floor ${floor} (area ${area})`);
     await this.viewer.load(this.source, geometry);
+    if (area >= 0 && this.viewer.area !== area) await this.viewer.setArea(this.source, area); // base fog and light of the floor's area
     if (this.disposed) return;
     const sections = this.viewer.geometry?.sections ?? parseMapNRel(await this.source.read(`scene/${geometry}`)).sections;
 
@@ -177,6 +178,7 @@ export class GameView {
       }
       const placed = placeEntities(entities, sections, area).filter((p) => !(p.entity.kind === 'object' && p.entity.type === 0));
       this.viewer.setEntities(placed);
+      this.viewer.setFogRegions(placed); // TObjFogCollision* regions switch the fog as we walk
       this.viewer.setEntitiesVisible(true);
     }
 

@@ -438,7 +438,6 @@ Code: `formats/prc.ts`, `formats/rlc.ts`, `formats/njmotion.ts`, `formats/plymot
 
 **Playback** (`FUN_007aa4c8` start, `FUN_007aa094` tick, `FUN_007a9a6c` change): `frame += step` per game tick (30/s assumed), `step` = record speed; the walk state (`FUN_006a1ef0`) and run state (`FUN_006a1898`) multiply it by 1.0 (`DAT_00a94300`) and 1.5 (`DAT_00a94324`) (`FUN_006978a0`; ×0.5 / ×0.75 in slowed states). Mode 1 wraps at `frame_count`; modes 2/3 end at `frame_count - 1`. A motion change cross-fades from the current pose at 0.2 per tick (`DAT_0097d970`, 5 ticks) and restarts the new motion at frame 0, unless the new record has flag `0x80000000` or the old one `0x40000000`.
 
-
 ## Map texture animation (`map_<area>[_<layout>].tam`)
 
 Big-endian. Loaded by `FUN_0080a4c8`, byte-swapped by `FUN_00807828` and applied per section entry by `FUN_0080ab60`.
@@ -460,6 +459,56 @@ The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`,
 Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
 
 `client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
+
+## Area fog (`fogentry.dat`)
+
+Loose file or `data.gsl`; 0x4000 bytes = 256 entries of 0x40, little endian. `FUN_005bca88` loads it (`fogentry_a.dat`, 128 entries, when `FUN_0078b220() != 0`). Parsed by `client/src/formats/fogentry.ts`.
+
+| Off | Field |
+|---|---|
+| 00 | `u32 flags`: 1 or 2; bit 1 = wobble re-evaluated every frame, bit 2 = phase counter |
+| 04 | `u32 color` (D3DCOLOR, RGB) → `D3DRS_FOGCOLOR` |
+| 08 | `f32 end` → `D3DRS_FOGEND` |
+| 0C | `f32 start` → `D3DRS_FOGSTART` (often negative) |
+| 10 | `f32 fade_step`: fade progress per frame toward this entry (≤ 0 → 0.001); 0.01 = 100 frames |
+| 18 | `f32 wobble_speed` (degrees per frame) |
+| 20 | `f32 end_amplitude`: `end += sin(frame * speed + end_phase) * amp` |
+| 28 | `f32 start_amplitude`: same with `start_phase` |
+| 30 | `f32 aux_base` (default 640) + `aux_amplitude * sin(frame * speed)` → fog object `+0x194`, not a render state |
+| 3A / 3C / 3E | `u8 end_phase`, `u8 start_phase` (degrees), `u8 aux_amplitude` |
+
+- **Render states** (`FUN_005bc440`): `FUN_0082db44(1)` sets `FOGTABLEMODE = LINEAR` and `FOGVERTEXMODE = NONE` (or the reverse when `DAT_00acbf10` selects vertex fog; table `0x0098a3e4 = {0, 3, 3, 3}`), then `FOGCOLOR`, `FOGSTART`/`FOGEND` (`FUN_0082dae0`, each clamped to ≥ 0), `FOGENABLE = 1`. `FOGDENSITY` is never set. Linear table fog is depth-based, like three.js `Fog`.
+- **Sine:** `FUN_0082dcbc` takes BAMS; the angle is `(frame_counter (DAT_00a9c4ec) * speed + phase) * 65536 / 360`.
+- **Fog object** (`FUN_005bc4ec`, vtable `0x00b0bae0`, up to 4 in `DAT_00a8d774`): four parameter slots (pointers at `+0x174`): 0 base, 1 override, 2 staging, 3 blend; current slot `+0x184`.
+  - `FUN_005bd968(id, flags)` (base, all objects via `FUN_005bd918`) and `FUN_005bcf00(id, flags)` (override) copy the entry into slot 2; `flags & 1` = immediate, else fade. Same id as the current slot: no-op.
+  - `FUN_005bce64(flags)` returns to slot 0.
+  - Update `FUN_005bd2cc`: immediate → swap staging into place. Fade → slot 3 = lerp(from, to, t) per frame for color (per channel), start, end, amplitudes and phases (wobble speed copied from the target); `t += step` where step is the target's `fade_step` (the source's when fading back to the base); when `t ≥ 1` the target becomes current. Idle → re-evaluated only for wobbling entries (`FUN_005bd6d8`); others keep the value computed when they became current.
+- **Base fog per area:** `FUN_005bc4ec` calls `FUN_005bd918(table_0x009c1ec0[DAT_00aafc9c], 1)`, 47 entries indexed by the area number (`DEFAULT_FOG_BY_AREA`): Forest 1 → 1 (`0x80ffaa`, 0..2000), Caves 1 → 3 (`0xff7000`, 156..791), Mines 1 → 0x0e (`0xe1e2ff`, 100..4000), Ruins 1 → 0x1e (`0x0d4015`, -100..1200).
+- Map entries with flag `0x1` are drawn with fog disabled.
+
+### Fog regions (set objects)
+
+`TObjFogCollision` (0x07), `TObjFogCollisionSwitch` (0x18) and `TObjFogCollisionPoison` (0x160) in `map_*o.dat`. The base constructor `FUN_007ba33c` copies the set entry: `+0x68` param1 = radius, `+0x70` param3 = switch mode, `+0x84` param4 = fog id, `+0x88` param5 (0 = fade), `+0x8c` param6 = switch id.
+
+- Every frame, for each local player, a region whose sphere holds the player (`FUN_005c2a08`: squared distance < radius²) registers `(fog id, param5 == 0)` with that player's manager (`FUN_005c2240`, managers in `DAT_00a8d7cc[12]`). The highest id wins.
+- Switch regions (`FUN_005c252c`) register only while `(param3 >= 1) == switch_on(param6)`. The cave/mine dark rooms are param3 = 0, fog 0x11 (black, end 70): dark until the switch is pressed.
+- Manager update (`0x005c2ce8`): registrations → `FUN_005bcee4` override (id minus 0x1000 if ≥ 0x1000, clamped to 0..255; ids like `0x102d` carry a priority bit); none → back to the base fog.
+- Only 0x18 (278) and 0x160 (67) occur in the Ephinea set files. The 0x160 class is assumed to share the 0x18 layout (same params pattern).
+
+## Area light (`lightentry.bin`)
+
+Loose file or `data.gsl`; 0x1980 bytes = 96 entries of 0x44 (17 floats). Entry `area + (FUN_0078b220() ? 0x30 : 0)` is copied to `DAT_00a9d460` by `FUN_00793f64` → `FUN_00794034`. Parsed by `client/src/formats/lightentry.ts`.
+
+| Off | Field | Use |
+|---|---|---|
+| 00 | `f32[3]` | written by the light editor from two angles (`FUN_004e3084`); not used to draw |
+| 0C | `f32[3]` direction | `FUN_00843a68` → `D3DLIGHT9.Direction`, transformed by the inverse of the current matrix (camera space); not always unit length |
+| 18 | `f32[2]` | unused at run time |
+| 20 | `f32` ambient level | `D3DRS_AMBIENT = (l, l, l)` for models/objects (`FUN_00794a80`, `FUN_00794548`) |
+| 28 | `f32[3]` color | `FUN_00843a38` → `D3DLIGHT9.Diffuse` |
+| 38 | `f32[3]` ambient color | `D3DRS_AMBIENT` once at area start (`FUN_00794200`) |
+
+The maps are unlit (vertex colors); the light applies to player and object models (`TObjLight` objects, 0x04, can override it per room: list at `DAT_00a9cda4`, not handled). The viewer uses a camera-attached `DirectionalLight` with the direction treated as pointing toward the light, and π-scaled intensities because three.js' Lambert term divides by π.
 
 ## Sound effects
 
