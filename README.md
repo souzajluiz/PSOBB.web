@@ -24,6 +24,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Character file (`E7`), ItemPMT from the server stream, item names, Inventory panel | ✅ 1536 item definitions and 1515 names match newserv |
 | Games: create/list/join, Pioneer 2 and field floors from the server's variations, warps, back to the lobby | ✅ live in Chrome with a bot |
 | Items on the floor (6x5D/6x5F/6x59) with their `item.bml` box models, pickup (6x5A), item boxes (6x0B + 6xA2), equip/unequip/use/drop from the Inventory panel | ✅ every ItemPMT item resolves to a model; two clients live against newserv |
+| Quests: the server's quest menu (A2/A3), the 44/13 file pair and the AC barrier, the `.bin` script and the `.dat` set data, a script VM that runs a quest's opening | ✅ all 335 BB quest files parse; "Lost HEAT SWORD" loaded and played live in Chrome |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -75,6 +76,8 @@ node tests/enemies.test.ts       # every free-play enemy resolves to its model a
 node tests/itemmodels.test.ts    # every ItemPMT item resolves to an item.bml floor model; BC0, item subcommands, inventory rules
 node tests/items.live.ts         # two clients: drop/pick up items, split a stack, meseta, equip/use, break Forest 1 boxes
 node tests/waves.test.ts         # every free-play floor's .evt parses; every object type resolves to a model and builds; wave state machine and door collision
+node tests/quests.test.ts        # every BB quest newserv ships: .bin header, label table, full bytecode walk, .dat chunks, VM run, vs newserv disassemble-quest-script
+node tests/quest.live.ts         # the quest menu (A2/09/10), the 44/13 download, the AC barrier, then run the quest's start label
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
 
@@ -98,6 +101,7 @@ client/              Vite + TypeScript web client
 client/src/net/      BB cipher, connection framing, login session
 client/src/formats/  PRS, GSL, AFS, BML, REL, XJ, NJCM, map n.rel, XVM
 client/src/render/   three.js scene building (Ninja objects, map viewer)
+client/src/quest/    quest script VM, session and game wiring
 client/src/data/     data/ folder access (File System Access API, dev server)
 tests/               oracle tests against newserv, live tests
 scripts/             newserv setup

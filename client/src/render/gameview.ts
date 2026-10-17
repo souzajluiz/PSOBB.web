@@ -30,6 +30,7 @@ import { ObjectLayer } from './objectview.ts';
 import { enemySlots } from '../formats/enemyids.ts';
 import { parseEnemySets } from '../formats/setdata.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
+import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 export const AREA_NAMES: Record<number, string> = {
@@ -93,7 +94,13 @@ export class GameView {
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.objectLayer = new ObjectLayer(viewer, this.files);
-    this.field = new GameField(viewer, game, this.files, { bgm, log, warpTo: (f) => this.warpTo(f), toLobby: () => this.onLobbyWarp() });
+    this.field = new GameField(viewer, game, this.files, {
+      bgm,
+      log,
+      warpTo: (f) => this.warpTo(f),
+      toLobby: () => this.onLobbyWarp(),
+      tickQuest: (dt) => this.quest?.tick(dt),
+    });
     this.items = new GameItems(game, { ...character, log });
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
@@ -111,9 +118,12 @@ export class GameView {
     for (let f = 0; f < floor; f++) {
       let n = this.objectCounts.get(f);
       if (!n) {
-        n = this.floorFilesFor(f)
-          .then(async ({ files }) => (files && (await this.files.has(files.objects)) ? (await this.files.read(files.objects)).length / 0x44 : 0))
-          .catch(() => 0);
+        const quest = this.quest?.floorData(f);
+        n = quest
+          ? Promise.resolve(quest.objects.length)
+          : this.floorFilesFor(f)
+              .then(async ({ files }) => (files && (await this.files.has(files.objects)) ? (await this.files.read(files.objects)).length / 0x44 : 0))
+              .catch(() => 0);
         this.objectCounts.set(f, n);
       }
       base += await n;
@@ -129,12 +139,17 @@ export class GameView {
     for (let f = 0; f < floor; f++) {
       let n = this.enemyCounts.get(f);
       if (!n) {
-        n = this.floorFilesFor(f)
-          .then(async ({ area, files }) => {
-            if (!files || !(await this.files.has(files.enemies))) return 0;
-            return enemySlots(parseEnemySets(await this.files.read(files.enemies)), area).total;
-          })
-          .catch(() => 0);
+        const quest = this.quest?.floorData(f);
+        n = quest
+          ? this.floorFilesFor(f)
+              .then(({ area }) => enemySlots(quest.enemies, area).total)
+              .catch(() => 0)
+          : this.floorFilesFor(f)
+              .then(async ({ area, files }) => {
+                if (!files || !(await this.files.has(files.enemies))) return 0;
+                return enemySlots(parseEnemySets(await this.files.read(files.enemies)), area).total;
+              })
+              .catch(() => 0);
         this.enemyCounts.set(f, n);
       }
       base += await n;
@@ -160,12 +175,32 @@ export class GameView {
     return this.table;
   }
 
-  // Map files of a floor from the game's variations.
+  // The quest the game is running, if any. Its map designations replace the
+  // game's own variations, and its .dat replaces the free-play set data of the
+  // floors it owns (see quest/session.ts).
+  quest: QuestSession | null = null;
+
+  setQuest(quest: QuestSession | null): void {
+    this.quest = quest;
+    // Entity-id bases are counted per floor and differ with the quest's maps.
+    this.objectCounts.clear();
+    this.enemyCounts.clear();
+  }
+
+  private episode(): number {
+    return this.quest?.episode ?? this.game.info?.episode ?? 1;
+  }
+
+  // Map files of a floor: from the quest's designation when a quest is
+  // running, otherwise from the game's variations (64).
   async floorFilesFor(floor: number): Promise<{ area: number; files: FloorFiles | null; geometry: string | null }> {
     const info = this.game.info!;
-    const area = floorToArea(info.episode)[floor] ?? -1;
+    const designation = this.quest?.designation(floor) ?? null;
+    const area = designation && designation.area <= 0x2e ? designation.area : (floorToArea(this.episode())[floor] ?? -1);
     const table = await this.setDataTable();
-    const v = info.variations[floor] ?? { layout: 0, entities: 0 };
+    const v = designation
+      ? { layout: designation.layoutVar, entities: designation.entitiesVar }
+      : (info.variations[floor] ?? { layout: 0, entities: 0 });
     const files = table && area >= 0 ? floorFiles(table, area, v.layout, v.entities, floor, this.mode()) : null;
     const scene = new Set(await this.source.list('scene'));
     const geometry = files ? (geometryCandidates(files.setup).find((g) => scene.has(g)) ?? null) : null;
@@ -220,7 +255,30 @@ export class GameView {
     let enemyCount = 0;
     let placedObjects: ReturnType<typeof placeEntities> = [];
     let eventFile: Uint8Array | null = null;
-    if (files) {
+    // A quest floor takes its objects, enemies and wave events from the .dat
+    // (HandleQuestDat, PsoBB.exe 0x006ba0da) unless its designation says to
+    // load the free-play template of the designated map (type 1 or 2).
+    const questFloor = this.quest?.floorData(floor) ?? null;
+    if (questFloor) {
+      objects = parseObjectSets(questFloor.objectBytes);
+      mapData.spawns = spawnsFor(objects, sections, source);
+      const entities = [...questFloor.objects, ...questFloor.enemies];
+      enemySets = questFloor.enemies;
+      enemyCount = questFloor.enemies.length;
+      eventFile = questFloor.eventData;
+      const placed = placeEntities(entities, sections, area).filter((p) => !(p.entity.kind === 'object' && p.entity.type === 0));
+      const info = this.game.info!;
+      const modeled = await this.enemyLayer.show(placed, { area, episode: this.episode(), difficulty: info.difficulty, event: info.event ?? 0 });
+      if (this.disposed) return;
+      const s = this.enemyLayer.stats;
+      this.log(`quest floor ${floor}: ${s.placed} enemy models placed${s.unresolved.length ? `, no model: ${[...new Set(s.unresolved)].join(', ')}` : ''}`);
+      placedObjects = placed.filter((p) => p.entity.kind === 'object');
+      const objectModels = await this.objectLayer.show(placedObjects, { area, episode: this.episode(), ultimate: info.difficulty === 3 });
+      if (this.disposed) return;
+      this.viewer.setEntities(placed.filter((p) => !modeled.has(p) && !objectModels.has(p)));
+      this.viewer.setFogRegions(placed);
+      this.viewer.setEntitiesVisible(true);
+    } else if (files) {
       try {
         objects = parseObjectSets(await this.files.read(files.objects));
       } catch (err) {
@@ -265,6 +323,9 @@ export class GameView {
     me.position = { x: 0, y: 0, z: 0 };
     this.view = new LobbyView(this.viewer, this.game, mapData, { showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
     const objectBase = await this.objectBase(floor);
+    // The quest's floor handler runs on a new thread when the player arrives
+    // (quest_start_floor_thread, PsoBB.exe .c:615128).
+    this.quest?.enterFloor(floor);
     this.field.enterFloor(floor, area, {
       placed: placedObjects,
       objectBase,
@@ -298,6 +359,42 @@ export class GameView {
         `${mapData.spawns.size} spawn points`,
     );
     this.onFloor(this.current);
+  }
+
+  // Reloads the floor the player is on. Used when a quest's map designations
+  // replace what the floor holds (quest/run.ts).
+  async reloadCurrentFloor(): Promise<void> {
+    const floor = this.game.self?.floor ?? this.current?.floor ?? 0;
+    this.busy = true;
+    try {
+      await this.loadFloor(floor, 0);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  // --- what the quest VM asks of the field (quest/run.ts) ---
+
+  roomAt(pos: { x: number; y: number; z: number }): number {
+    return this.field.roomAt(pos);
+  }
+
+  zoneCleared(floor: number, room: number): boolean {
+    return this.field.zoneCleared(floor, room);
+  }
+
+  // construct_delayed_enemy (0x8B): make a room's wave appear now, the way a
+  // wave event's construct_enemies action does (render/waves.ts).
+  constructEnemies(floor: number, room: number, wave: number): void {
+    this.field.constructEnemies(floor, room, wave);
+  }
+
+  switchFlag(floor: number, flag: number): boolean {
+    return this.field.switchFlag(floor, flag);
+  }
+
+  setSwitchFlag(floor: number, flag: number, set: boolean): void {
+    this.field.setSwitchFlagFromQuest(floor, flag, set);
   }
 
   // Console helpers: window.psobb.waves (wave events, triggers, killWave).

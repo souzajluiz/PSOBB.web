@@ -222,6 +222,15 @@ export class FloorWaves {
     return triggered;
   }
 
+  // Makes a room's wave appear now: the same work as an action stream's
+  // construct_enemies (0x09 / 0x0D), reached from the quest opcode
+  // construct_delayed_enemy (0x8B) too.
+  constructEnemies(room: number, wave: number): void {
+    const spawn = this.enemies.filter((e) => e.room === room && e.wave === wave && !(e.flags & (ENEMY_BUILT | ENEMY_DEAD)));
+    for (const e of spawn) e.flags |= ENEMY_BUILT;
+    if (spawn.length) this.hooks.spawn(spawn);
+  }
+
   // Events whose wave is running (handler built and enemies spawned or due).
   activeEvents(): WaveEvent[] {
     return this.handlers.map((h) => h.event);

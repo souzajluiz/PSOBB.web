@@ -7,7 +7,8 @@
 │  client/ (TypeScript, Vite, three.js)                  │
 │   ├─ formats/  PRS, GSL, AFS, REL/XJ, XVM  ◄── user's data/ folder
 │   ├─ net/      BBCrypt, BBConnection, BBSession         │
-│   └─ render/   three.js scene (maps, models)            │
+│   ├─ render/   three.js scene (maps, models)            │
+│   └─ quest/    quest script VM (.bin bytecode, .dat floors) │
 └──────────────┬─────────────────────────────────────────┘
                │ WebSocket (binary, end-to-end encrypted)
 ┌──────────────▼──────────────┐

@@ -1,5 +1,101 @@
 # Devlog
 
+## 2026-10-17: quests, from the server's menu to a running script
+
+**What changed:** a game can load a quest and run it. `net/quests.ts`
+(`QuestClient`) speaks the whole exchange — `A2` for the quest menu, `10` for a
+category, `09`/`A3` for a description, `10` again to pick one, then the
+`44` + `13` file pair for the `.bin` and the `.dat` with the per-chunk
+acknowledgements, and the `AC` barrier in both directions (`A4`/`A5`/`A6`/`A7`
+for the download variants are handled on the same path). `formats/questbin.ts`
+parses the Blue Burst `.bin` (header, label table, bytecode decoder) and
+`formats/questdat.ts` the typed-chunk `.dat` (objects, enemies, wave events per
+floor). `formats/questopcodes.ts` is generated from newserv's opcode table by
+`tools/gen-quest-opcodes.ts`: 528 Blue Burst opcodes with their argument
+shapes, which is what lets the decoder skip an opcode it does not implement by
+exactly the right number of bytes. `quest/vm.ts` is the script VM
+(threads, registers, the arg stack, floor handlers, map designations, quest
+flags, message windows, the quest board); `quest/session.ts` ties the two files
+to it, `quest/run.ts` wires it to the game and the view. `render/gameview.ts`
+loads a floor from the quest's designation and its `.dat` instead of the
+free-play set data when a quest is running, `render/gamefield.ts` ticks the VM
+on the game clock and answers its switch-flag and zone-clear questions, and
+`net/game.ts` gained `6x75` / `6x6F` / `6x77` (quest flags and synced
+registers). The Online tab has a Quests panel: categories, the quest list,
+the long description and Load.
+
+**From PsoBB.exe and newserv** (layouts and the full opcode list in
+PROTOCOL.md, "Quests"):
+- **The VM is thread-based.** `quest_start_thread(0)` (`0x006bc76c`) runs label
+  0; `QuestThread2_Constructor_006bc800` sets `pc = objcode_labels[label]` and
+  kills the thread when that entry is 0xFFFFFFFF. `thread`, `thread_stg` and
+  every floor handler (`quest_start_floor_thread`, `.c:615128`, reading
+  `floor_handlers[g_CurrentFloor]`) spawn more. Each runs until it yields.
+- **Two argument sources.** Dispatch is a 772-entry table of (setup shim, body)
+  pairs (`.c:559261`). An opcode flagged `F_ARGS` reads *no* inline bytes: its
+  arguments come from `g_QuestOpcodeArgStack[8]`, filled by `arg_push*`
+  (`.c:611281`–`.c:611345`), and `opcode_setup_a` (`.c:602676`) clears the
+  stack afterwards. `opcode_set_floor_handler` (`.c:605650`) is the proof:
+  `set_floor_handler(argStack[0], (ushort)argStack[1])`. Register arguments on
+  that stack are pushed as plain immediates holding the register number, which
+  is what real quests emit (`arg_pushb 0x3C; set_player_start_position` is
+  `r60-r63`).
+- **Which floors are the quest's.** `process_map_designate_v3_BB`
+  (`.c:613155`) writes `floor_map_designations[floor]` = {map, map_variant,
+  objset} and the per-floor mode `g_QuestData8_00a95628[floor]`: 0 = the
+  quest's own set data, 1 = the offline free-play template, 2 = the online one,
+  3 = nothing. `HandleQuestDat` (`0x006ba0da`) then either loads the free-play
+  assets or appends the `.dat`'s chunks. The geometry always follows the
+  designation: `MapLoader_LoadAndSwapGeometry_00806fcc` indexes the map's
+  asset-prefix list with `map_variant`.
+- **Quest flags** are 0x400 bits per difficulty with MSB-first bit order
+  (newserv `FlagsTable<0x400, 4, Difficulty>`); `gset`/`gclear`/`grev`/`glet`
+  send `6x75` on BB, the leader sends the whole table as `6x6F`.
+
+**Checks:**
+- `tests/quests.test.ts`: all 335 Blue Burst `.bin` files newserv ships
+  decompress, parse (all 335 carry the full 0x122C header), produce a label
+  table whose label 0 decodes, and run through the VM without throwing; the
+  reachable bytecode of all of them decodes with **0 undefined opcodes**; their
+  `.dat` files give 1146 floors, 119701 objects, 75405 enemies and 19351 wave
+  events with no chunk errors; the generated opcode table is cross-checked
+  against `newserv disassemble-quest-script --bb` (every mnemonic newserv
+  prints exists in our table, and the name and episode match).
+- Running the start label of every BB-English quest and then every floor
+  handler reproduces the `floor_assignments` the quest assembler wrote into the
+  `.bin` header in 164 of 166 (the two that differ are explained in
+  PROTOCOL.md), and reaches no unimplemented opcode outside challenge mode,
+  Battle Arena and the enemy-parameter family.
+- `tests/quest.live.ts` against newserv: create a game, `A2` → 4 categories,
+  open Retrieval → 8 quests, `09`/`A3` description, load "Lost HEAT SWORD",
+  both files received and decompressed (11656 + 36056 bytes from 1622 + 14471),
+  `AC` round trip, the header and the menu entry agree, the VM designates
+  floors 0/1/2/11 and installs their four handlers, and the `.dat` carries set
+  data for all four.
+- `tsc --noEmit` clean; `tests/quests.test.ts`, `tests/game.live.ts` and
+  `tests/setdata.test.ts` pass.
+- In Chrome against newserv: created a game (Pioneer 2, 23 enemies / 30
+  objects free play), opened the Quest menu, picked "Lost HEAT SWORD"; the
+  floor reloaded with the quest's own set data (19 enemies / 26 objects, the
+  `.dat`'s floor-0 counts), the quest's opening dialogue played page by page
+  ("Ca... can you help me? Please?" through "I cannot do my job without it!
+  Please get it back for me."), and warping to Forest 1 loaded the quest's
+  forest (84 enemies / 103 objects) and ran its floor handler. No console
+  errors.
+
+**Approximations / open:**
+- The message window, the choice list and the quest board are DOM overlays, not
+  the game's own text renderer; only the common `<rXX>` / `<fXX>` / `<cr>` /
+  `<hero name>` / `<hero job>` tokens are interpolated.
+- `npc_crp*` records the NPC and logs it: no model, no `6x69`.
+- Challenge mode, Battle Arena, the enemy-parameter opcodes
+  (`set_enemy_*_data`, `set_override_enemy_bp_index`) and the item opcodes are
+  decoded and skipped; the random-enemy `.dat` sections (types 4/5) and the
+  `evt2` event format are recognised and skipped.
+- `set_player_start_position` is recorded but the player still spawns at the
+  floor's `TObjPlayerSet`; `get_player_state` always answers "standing".
+- `6x6F` is read but still not sent to a joining player.
+
 ## 2026-10-17: the named Ghidra dump is the first place to look
 
 **What changed:** `tools/refsrc.sh` looks things up in the

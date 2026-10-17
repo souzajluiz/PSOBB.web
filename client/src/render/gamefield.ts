@@ -40,6 +40,9 @@ import { gameTextWidth } from '../classic/gametext.ts';
 
 export interface GameFieldOptions {
   bgm?: BgmPlayer | null;
+  // Runs the quest VM's threads on the game clock, if a quest is loaded
+  // (quest/session.ts tick()).
+  tickQuest?: (dt: number) => void;
   warpTo: (floor: number) => Promise<void>;
   toLobby: () => void;
   log: (msg: string) => void;
@@ -291,6 +294,7 @@ export class GameField {
 
   private frame(dt: number): void {
     if (this.disposed) return;
+    this.opts.tickQuest?.(dt);
     const me = this.game.self;
     const pos = me && !this.game.loading ? me.position : null;
     this.music?.tick(dt, pos);
@@ -375,6 +379,39 @@ export class GameField {
     } finally {
       this.busy = false;
     }
+  }
+
+  // --- what the quest VM asks of the field (quest/run.ts) ---
+
+  // if_zone_clear (opcode 0x88): every wave of the room has been destroyed.
+  zoneCleared(floor: number, room: number): boolean {
+    const w = this.waves.get(floor);
+    if (!w) return false;
+    return !w.battleIn(room) && !w.aliveEnemies().some((e) => e.room === room);
+  }
+
+  // construct_delayed_enemy / an event's construct_enemies action.
+  constructEnemies(floor: number, room: number, wave: number): void {
+    const w = this.waves.get(floor);
+    if (!w) {
+      this.opts.log(`construct_enemies on floor ${floor}: no wave state`);
+      return;
+    }
+    w.constructEnemies(room, wave);
+  }
+
+  switchFlag(floor: number, flag: number): boolean {
+    return this.flagsOf(floor).has(flag);
+  }
+
+  // set_switch_flag_sync / clear_switch_flag_sync (F82B / F82C): set the flag
+  // locally and send 6x05 with no owning object (0xFFFF), the way a wave
+  // event's action stream does.
+  setSwitchFlagFromQuest(floor: number, flag: number, set: boolean): void {
+    const f = this.flagsOf(floor);
+    if (set) f.add(flag);
+    else f.delete(flag);
+    this.game.sendSwitchFlag(0xffff, floor, flag, set);
   }
 
   // Debug helpers, reachable from the console (see GameView.debug()).
