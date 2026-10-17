@@ -10,7 +10,7 @@
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import { objectModelFor, type ObjectModelContext, type ObjectModelSpec, type ObjectPartSpec, type PartShow } from '../formats/objectmodels.ts';
+import { isInvisibleObject, objectModelFor, type ObjectModelContext, type ObjectModelSpec, type ObjectPartSpec, type PartShow } from '../formats/objectmodels.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { buildEnemy, EnemyArchiveCache, type EnemyPartSpec, type NodeAnimator } from './enemymodel.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -36,6 +36,7 @@ export interface ObjectModel {
 export interface ObjectLayerStats {
   placed: number;
   unresolved: string[]; // names of object types with no model yet
+  invisible: number; // volumes and markers that draw nothing on purpose
   errors: string[];
 }
 
@@ -59,7 +60,7 @@ export class ObjectLayer {
   };
   private generation = 0;
   models = new Map<number, ObjectModel>(); // by o.dat entry index
-  stats: ObjectLayerStats = { placed: 0, unresolved: [], errors: [] };
+  stats: ObjectLayerStats = { placed: 0, unresolved: [], invisible: 0, errors: [] };
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -75,14 +76,16 @@ export class ObjectLayer {
     const root = new THREE.Group();
     root.name = 'objects';
     const done = new Set<PlacedEntity>();
-    const stats: ObjectLayerStats = { placed: 0, unresolved: [], errors: [] };
+    const stats: ObjectLayerStats = { placed: 0, unresolved: [], invisible: 0, errors: [] };
     const animators: NodeAnimator[] = [];
     for (const p of items) {
       const e = p.entity;
       if (e.kind !== 'object') continue;
       const spec = objectModelFor(e, ctx);
       if (!spec) {
-        stats.unresolved.push(p.name);
+        // A volume or marker draws nothing on purpose, so it is not a gap.
+        if (isInvisibleObject(p.name)) stats.invisible++;
+        else stats.unresolved.push(p.name);
         continue;
       }
       try {

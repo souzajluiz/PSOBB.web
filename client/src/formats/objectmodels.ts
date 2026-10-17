@@ -122,6 +122,32 @@ function containerSpec(name: string, area: number, red: boolean, ultimate: boole
     : spec(name, 'fe_obj_hako01_hahen02.bml', [{ model: 1, textures: ultimate ? 'fs_obj_hako01_a.xvm' : 'fs_obj_hako01_n.xvm' }], { collision: CONTAINER_SPHERE });
 }
 
+// Classes that draw nothing: volumes and markers the client reads but never
+// renders. TObjRoomId only has a debug display in the binary
+// (TObjRoomId_debug_display, create_TObjRoomId); the others drive the fog
+// (render/mapviewer.ts setFogRegions), the wave events (render/waves.ts), the
+// spawn points (render/lobbyview.ts), ambient sound and the camera.
+// Keyed by class name, not by type: the same type is a different class in
+// another area (0x0160 is TObjWarpBoss03 in the Ruins and
+// TObjFogCollisionPoison in Episode 4).
+const INVISIBLE_OBJECTS = new Set([
+  'TObjPlayerSet', // a spawn point
+  'TObjEnvSound',
+  'TObjEnvSoundEx',
+  'TObjEnvSoundGlobal',
+  'TObjFogCollision',
+  'TObjFogCollisionSwitch',
+  'TObjFogCollisionPoison',
+  'TObjEvtCollision', // the volume that triggers a wave event
+  'TObjRoomId',
+  'TObjCamera',
+]);
+
+// True when the class has no model on purpose, so a missing one is not a gap.
+export function isInvisibleObject(name: string): boolean {
+  return INVISIBLE_OBJECTS.has(name);
+}
+
 export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectModelSpec | null {
   const { area, episode } = ctx;
   const ult = !!ctx.ultimate && episode === 1;
@@ -157,6 +183,15 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // Render FUN_0066cadc: base, then +0xdc (with +0xe4) or +0xe0 (with +0xe8)
     // depending on +0xf4 (FUN_0066c838: 0 when the warp waits for a switch
     // flag, 1 otherwise), frame +0xfc (speed +0x100 = 4.0).
+    // TObjWarpBoss03 (0x0160 outside Episode 4, where the same type is the
+    // poison fog volume): its init, InitializeSeabedTuriganeWarpObject_0066c89c,
+    // fills the same fields from the same globals that init_bosswarp_assets
+    // loads, so it draws like TObjWarpBoss. Its render,
+    // SeabedTuriganeMapObjectRender_0066c38c, draws the base and then the
+    // animated model when +0xd4 is set.
+    case 0x0160:
+      if (episode === 3) return null; // TObjFogCollisionPoison
+    // fall through
     case 0x0019: {
       if (area >= 8 && area <= 10) {
         return spec('TObjWarpBoss', 'bm_obj_warpboss_ancient.bml', [
@@ -348,6 +383,51 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x00c0:
       if (episode === 2 || area === 0x1c || area === 0x1d) return spec('TOKeyCave01', 'fs_obj_key_jungle.bml', [{ model: 0, textures: 'fs_obj_key_jungle_red.xvm' }]);
       return spec('TOKeyCave01', 'bm_fs_obj_do_doa_panel.bml', [{ model: 0, textures: 'fs_obj_do_doa_panelr.xvm' }]);
+    // TLazerFenceSw (the laser fence with its switch motor). Loader (the one
+    // that fills g_SwitchLaserBMLAsset): fe_obj_switch_laz_j.bml when the map
+    // is a CCA tower / Seabed one (is_cca_tower_seanight_map_(), seabed_upper,
+    // seabed_lower), else fe_obj_switch_laz.bml, with the GVM (here XVM) of
+    // the same name, _a in Ultimate. It takes NJCM chunk 0 (the fence, whose
+    // child nodes are the up-to-three laser segments) and chunk 1 (the motor),
+    // and the two NJM chunks.
+    // Render MapObjectKomoVariant6Render_0065d9d0: while the switch is locked
+    // (state 0, MapObjectKomoVariant6StateIdle_0065d924 keeps it there until
+    // IsSwitchUnlockedOnCurrentFloor_00816eec) it draws the four laser nodes,
+    // tinted through laser_fence_xvm_color_indexes[+0xac], the static model at
+    // +0xbc and the animated one at +0xc0 with its motion at the frame in
+    // +0xb8, advanced by g_KomoVariant6AnimSpeed_00938adc.
+    // Which of the two motor models sits in +0xbc and which in +0xc0 is taken
+    // from their own names (…_moto animated, …_moto_taiki standing by) -
+    // ASSUMED; the laser tint table is data, not read here.
+    case 0x0084: {
+      const cca = area === 0x1c || area === 0x1d || (episode === 2 && area >= 0x11 && area <= 0x13);
+      const bml = cca ? 'fe_obj_switch_laz_j.bml' : 'fe_obj_switch_laz.bml';
+      const tex = cca ? 'fe_obj_switch_laz_j.xvm' : ax('fe_obj_switch_laz.xvm');
+      return spec('TLazerFenceSw', bml, [
+        { model: 1, textures: tex, motion: 1, drive: 'loop', speed: 1 },
+        { model: 2, textures: tex },
+        { model: 0, textures: tex, show: 'off' },
+      ]);
+    }
+    // TObjLazerFenceExtra: the laser fence without its own switch. Its loader
+    // (the one that fills generic_laser_fence_bml) takes fe_obj_lazer2_2.bml in
+    // the Episode 2 outdoor maps, the Seabed, the Tower and CCA, and
+    // fe_obj_lazer2_4m.bml everywhere else, both with the generic fence texture
+    // archive; MapObjectKomoVariant6Render_0065d9d0 draws its nodes with that
+    // list while the fence is on.
+    case 0x0096: {
+      const ep2 = episode === 2 || area === 0x1c || area === 0x1d;
+      return ep2
+        ? spec('TObjLazerFenceExtra', 'fe_obj_lazer2_2.bml', [{ model: 0, textures: 'fe_obj_lazer2_2.xvm', show: 'off' }])
+        : spec('TObjLazerFenceExtra', 'fe_obj_lazer2_4m.bml', [{ model: 0, textures: 'fe_obj_lazer2.xvm', show: 'off' }]);
+    }
+    // TOHealGeneral (the recovery ring): one model, loaded with LoadBML(.., 1,
+    // ..) from fe_obj_kaifuku_moto_2.bml in the maps of the loader's first
+    // branch and bm_fe_obj_kaifuku_moto.bml by default.
+    case 0x0013:
+      return episode === 2 || area === 0x1c || area === 0x1d
+        ? spec('TOHealGeneral', 'fe_obj_kaifuku_moto_2.bml', [{ model: 0 }])
+        : spec('TOHealGeneral', 'bm_fe_obj_kaifuku_moto.bml', [{ model: 0 }]);
     // TOKeyMachine01: ctor FUN_0062bf0c, loader FUN_0062c050.
     case 0x0101:
       return spec('TOKeyMachine01', 'bm_fs_obj_ki_doa_panel.bml', [{ model: 0, textures: 'fs_obj_ki_doa_panel_r.xvm' }]);

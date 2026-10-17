@@ -58,7 +58,8 @@
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision
 - [x] Wave events: the floor's `.evt` (`formats/events.ts`), the wave state machine (`render/waves.ts`), `6x67` / `6x76` sync, enemies appearing per wave, battle music while a wave of the room is alive
-- [ ] Remaining object models (Pioneer 2 shops and doors, laser-fence switches, jungle rocks, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
+- [x] Laser fences and their switches, the recovery ring and the second boss warp class; the volumes that draw nothing (fog, events, room ids, sounds, camera) are counted as invisible instead of missing
+- [ ] Remaining object models (Pioneer 2 shops and their doors, the Lab city warps, jungle rocks, traps, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
 - [ ] Boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps
 - [x] Combat: three-attack combo (`6x43`/`6x44`/`6x45`, motion tables and hit frames from the exe), hit detection with the ItemPMT weapon ranges, the hit/damage formulas, enemy flinch/death motions, `6x46`/`6x0A`/`6x76`, kill -> `6x60` drop request and `6xC8` EXP request (`combat/`, `render/combat.ts`, `tests/combat.test.ts`)
 - [ ] Combat: techniques (`6x47`/`6x48`), photon blasts, specials and status effects, the player taking damage (`6x4A`-`6x4F`), enemy AI, hit boxes per body part, damage numbers and the lock-on reticle

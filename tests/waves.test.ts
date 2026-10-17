@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseEventFile, parseActions } from '../client/src/formats/events.ts';
 import { enemySlotCount, enemySlots } from '../client/src/formats/enemyids.ts';
-import { objectModelFor } from '../client/src/formats/objectmodels.ts';
+import { isInvisibleObject, objectModelFor } from '../client/src/formats/objectmodels.ts';
 import { parseEnemySets, parseObjectSets } from '../client/src/formats/setdata.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { floorToArea } from '../client/src/net/game.ts';
@@ -246,6 +246,8 @@ for (const tname of ['SetDataTableOn.rel', 'SetDataTableOff.rel']) {
             for (const ultimate of area <= 0x0e ? [false, true] : [false]) {
               const spec = objectModelFor(o, { area, episode, ultimate });
               if (!spec) {
+                // Volumes and markers draw nothing on purpose.
+                if (isInvisibleObject(objectName(o.type))) continue;
                 let set = unresolved.get(objectName(o.type));
                 if (!set) unresolved.set(objectName(o.type), (set = new Set()));
                 set.add(area);

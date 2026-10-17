@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-17: more field objects, and an honest "no model" list
+
+**What changed:** four more object classes are drawn, and the volumes that draw
+nothing on purpose are no longer reported as gaps.
+
+- `TLazerFenceSw` (the laser fence with its motor): the loader that fills
+  `g_SwitchLaserBMLAsset` takes `fe_obj_switch_laz_j.bml` when the map is a CCA
+  tower or Seabed one (`is_cca_tower_seanight_map_()`, `seabed_upper`,
+  `seabed_lower`) and `fe_obj_switch_laz.bml` elsewhere, with the texture
+  archive of the same name (`_a` in Ultimate). It keeps NJCM chunk 0 (the
+  fence, whose children are the laser segments) and chunk 1 (the motor) plus
+  both NJM chunks. `MapObjectKomoVariant6Render_0065d9d0` draws the laser nodes
+  only while the switch is locked (state 0;
+  `MapObjectKomoVariant6StateIdle_0065d924` holds it there until
+  `IsSwitchUnlockedOnCurrentFloor_00816eec`), then the static model and the
+  animated one at the frame in `+0xb8`, advanced by
+  `g_KomoVariant6AnimSpeed_00938adc`.
+- `TObjLazerFenceExtra` (a fence with no switch of its own): the loader of
+  `generic_laser_fence_bml` picks `fe_obj_lazer2_2.bml` in the Episode 2 outdoor
+  maps, the Seabed, the Tower and CCA, and `fe_obj_lazer2_4m.bml` elsewhere.
+- `TOHealGeneral` (the recovery ring): one model, `fe_obj_kaifuku_moto_2.bml`
+  in the loader's first branch, `bm_fe_obj_kaifuku_moto.bml` by default.
+- `TObjWarpBoss03`: `InitializeSeabedTuriganeWarpObject_0066c89c` fills the same
+  fields from the globals `init_bosswarp_assets` loads, so it draws like
+  `TObjWarpBoss` (ancient archive in the Ruins, jungle in CCA and the Seabed,
+  the plain one elsewhere). Outside those areas the same type number is
+  `TObjFogCollisionPoison`, a volume, so the class is chosen by name.
+- `isInvisibleObject()` lists the classes that draw nothing on purpose
+  (`TObjPlayerSet`, the fog and event volumes, `TObjRoomId` — whose only drawing
+  code in the binary is `TObjRoomId_debug_display` —, the ambient sounds and the
+  camera). The object layer counts them separately and the floor log now reads
+  "N placed, M invisible", so "no model" means a real gap.
+
+**Checks:** `tests/waves.test.ts` builds every object of every free-play floor:
+45480 of 37911 entries resolve across the Ultimate variants (up from 44989), 137
+distinct models build with no missing texture (up from 133), and the remaining
+list is genuinely unimplemented classes (Pioneer 2 shops and their doors, the
+jungle rocks, Vol Opt's ship door and friends). `npx tsc --noEmit` passes.
+
 ## 2026-10-17: the named Ghidra dump is the first place to look
 
 **What changed:** `tools/refsrc.sh` looks things up in the

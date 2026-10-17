@@ -254,7 +254,11 @@ export class GameView {
       const objectModels = await this.objectLayer.show(placedObjects, { area, episode: info.episode, ultimate: info.difficulty === 3 });
       if (this.disposed) return;
       const os = this.objectLayer.stats;
-      this.log(`object models: ${os.placed} placed${os.unresolved.length ? `, no model: ${[...new Set(os.unresolved)].join(', ')}` : ''}${os.errors.length ? `, errors: ${os.errors.join('; ')}` : ''}`);
+      this.log(
+        `object models: ${os.placed} placed, ${os.invisible} invisible` +
+          `${os.unresolved.length ? `, no model: ${[...new Set(os.unresolved)].join(', ')}` : ''}` +
+          `${os.errors.length ? `, errors: ${os.errors.join('; ')}` : ''}`,
+      );
       this.viewer.setEntities(placed.filter((p) => !modeled.has(p) && !objectModels.has(p)));
       this.viewer.setFogRegions(placed); // TObjFogCollision* regions switch the fog as we walk
       this.viewer.setEntitiesVisible(true);
