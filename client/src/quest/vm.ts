@@ -63,9 +63,11 @@ export type YieldReason = 'none' | 'sync' | 'ret' | 'exit' | 'message' | 'list' 
 
 export interface QuestMessage {
   kind: 'message' | 'window' | 'questBoard';
-  // `message` carries the object/NPC id its dialogue belongs to.
+  // `message` carries the speaker: an NPC's talk action (>= 100) or a client id.
   target?: number;
   pages: string[];
+  // add_msg on the open quest board adds a line instead of replacing it.
+  append?: boolean;
 }
 
 export interface QuestNpcRequest {
@@ -122,7 +124,7 @@ export interface QuestVMHost {
   syncRegister?: (reg: number, value: number) => void;
   // UI.
   showMessage?: (m: QuestMessage) => void;
-  closeMessage?: (kind: QuestMessage['kind']) => void;
+  closeMessage?: (kind: QuestMessage['kind'], target?: number) => void;
   showList?: (choices: string[]) => void;
   // Map and movement.
   mapDesignated?: (floor: number, d: QuestFloorDesignation) => void;
@@ -132,6 +134,21 @@ export interface QuestVMHost {
   npcKilled?: (clientId: number) => void;
   questBoardChanged?: (items: QuestBoardItem[]) => void;
   random?: () => number; // [0, 1)
+  // set_player_start_position (opcode_p_setpos .c:605051): sends 6x24 and
+  // moves the player there at once. Position in units, angle in degrees.
+  teleport?: (clientId: number, pos: { x: number; y: number; z: number; angle: number }) => void;
+  // bb_p2_menu (opcode_BB_p2_menu -> SetBankMenuOpenFlag_006d7370) and
+  // p_talk_guild (menu 4): open a Pioneer 2 counter menu (formats/npcmodels.ts
+  // P2_MENUS).
+  p2Menu?: (menu: number) => void;
+  // p_return_guild (opcode_p_return_guild .c:605491): back to the Hunter's
+  // Guild on Pioneer 2 (SinowberillChallenge_HandlePlayerFloorChange_00693598).
+  returnToGuild?: () => void;
+  // pl_add_meseta / pl_add_meseta2 (.c:605706 / .c:605737): 6xC9 for the
+  // local player.
+  addMeseta?: (amount: number) => void;
+  // at_coords_talk / at_coords_call / set_obj_param registered or removed.
+  coordsChanged?: (handlers: QuestCoordsHandler[]) => void;
 }
 
 export interface QuestFloorDesignation {
@@ -153,7 +170,7 @@ export interface QuestVMOptions {
   autoAdvance?: boolean;
 }
 
-class QuestThread {
+export class QuestThread {
   readonly id: number;
   readonly label: number;
   pc = 0;
@@ -162,6 +179,9 @@ class QuestThread {
   done = false;
   // Local copy of the arg stack, as QuestThread2 keeps one (.c:602576).
   argStack: ArgValue[] = [];
+  // Called once when the thread ends (an NPC's talk waits for its thread,
+  // EnemyObjectUpdate_0060648c state 2).
+  onDone: (() => void) | null = null;
 
   constructor(id: number, label: number, pc: number) {
     this.id = id;
@@ -217,6 +237,11 @@ export class QuestVM {
   exitCode = 0;
   // The message or list the quest is waiting on, if any.
   pendingMessage: QuestMessage | null = null;
+  // g_QuestStateUnknown3 (the last `message` speaker) and the two window
+  // handles add_msg checks (g_QuestDialogHandle1 / 2).
+  lastMessageTarget = 0;
+  windowOpen = false;
+  questBoardOpen = false;
   pendingList: string[] | null = null;
   private pendingListReg = 0;
   // Opcodes that were decoded but not executed, by name, with a count.
@@ -311,7 +336,13 @@ export class QuestVM {
       this.runThread(t);
       if (this.exited) break;
     }
+    const finished = this.threads.filter((t) => t.done);
     this.threads = this.threads.filter((t) => !t.done);
+    for (const t of finished) {
+      const cb = t.onDone;
+      t.onDone = null;
+      cb?.();
+    }
   }
 
   runFrames(n: number): void {
@@ -852,14 +883,24 @@ export class QuestVM {
       }
 
       // --- messages ---
+      // The exe keeps three text outputs (opcode bodies .c:604091..604228):
+      // the speech balloon of `message` (DisplayChatBubble_007184f8 over the
+      // speaker: the NPC whose talk action is the id, or the player of that
+      // client id), the window of `window_msg` (g_QuestDialogHandle1) and the
+      // quest board text of `disp_msg_qb` (g_QuestDialogHandle2). add_msg
+      // replaces the window's text when it is open, else adds to the quest
+      // board, else speaks again as the last `message` speaker. message and
+      // window pages wait for the button (yield window_msg__message__chat_box).
       case 'message': {
-        this.pendingMessage = { kind: 'message', target: this.int(a, 0), pages: [this.str(a, 1)] };
+        this.lastMessageTarget = this.int(a, 0);
+        this.pendingMessage = { kind: 'message', target: this.lastMessageTarget, pages: [this.str(a, 1)] };
         this.host.showMessage?.(this.pendingMessage);
         t.yieldReason = 'message';
         clearArgs();
         return;
       }
       case 'window_msg': {
+        this.windowOpen = true;
         this.pendingMessage = { kind: 'window', pages: [this.str(a, 0)] };
         this.host.showMessage?.(this.pendingMessage);
         t.yieldReason = 'message';
@@ -868,20 +909,26 @@ export class QuestVM {
       }
       case 'add_msg': {
         const page = this.str(a, 0);
-        if (this.pendingMessage) this.pendingMessage.pages.push(page);
-        else {
+        if (this.windowOpen) {
           this.pendingMessage = { kind: 'window', pages: [page] };
           this.host.showMessage?.(this.pendingMessage);
+          t.yieldReason = 'message';
+        } else if (this.questBoardOpen) {
+          this.host.showMessage?.({ kind: 'questBoard', pages: [page], append: true });
+        } else {
+          this.pendingMessage = { kind: 'message', target: this.lastMessageTarget, pages: [page] };
+          this.host.showMessage?.(this.pendingMessage);
+          t.yieldReason = 'message';
         }
-        t.yieldReason = 'message';
         clearArgs();
         return;
       }
       case 'message_end':
       case 'window_msg_end': {
         const kind = name === 'message_end' ? 'message' : 'window';
+        if (kind === 'window') this.windowOpen = false;
         this.pendingMessage = null;
-        this.host.closeMessage?.(kind);
+        this.host.closeMessage?.(kind, kind === 'message' ? this.lastMessageTarget : undefined);
         for (const other of this.threads) if (other.yieldReason === 'message') other.yieldReason = 'none';
         return;
       }
@@ -894,13 +941,13 @@ export class QuestVM {
         return;
       }
       case 'disp_msg_qb': {
-        this.pendingMessage = { kind: 'questBoard', pages: [this.str(a, 0)] };
-        this.host.showMessage?.(this.pendingMessage);
+        this.questBoardOpen = true;
+        this.host.showMessage?.({ kind: 'questBoard', pages: [this.str(a, 0)] });
         clearArgs();
         return; // the quest board window does not block the thread
       }
       case 'close_msg_qb':
-        this.pendingMessage = null;
+        this.questBoardOpen = false;
         this.host.closeMessage?.('questBoard');
         return;
       case 'set_quest_board_handler': {
@@ -996,6 +1043,7 @@ export class QuestVM {
         // set_obj_param in its second register argument.
         if (name === 'set_obj_param') R[this.reg(a, 1)] = token;
         else R[base] = token;
+        this.host.coordsChanged?.(this.coordsHandlers);
         return;
       }
 
@@ -1072,12 +1120,9 @@ export class QuestVM {
         // actually appears is the TObjPlayerSet of the floor's set data
         // (render/gameview.ts); this records what the quest asked for.
         const base = this.reg(a, 1);
-        this.startPositions.set(this.int(a, 0), {
-          x: R[base],
-          y: R[(base + 1) & 0xff],
-          z: R[(base + 2) & 0xff],
-          angle: R[(base + 3) & 0xff],
-        });
+        const pos = { x: R[base], y: R[(base + 1) & 0xff], z: R[(base + 2) & 0xff], angle: R[(base + 3) & 0xff] };
+        this.startPositions.set(this.int(a, 0), pos);
+        this.host.teleport?.(this.int(a, 0), pos);
         clearArgs();
         return;
       }
@@ -1198,6 +1243,40 @@ export class QuestVM {
         // 4 on Xbox and BB (newserv QuestScript.cc).
         R[this.reg(a, 0)] = 4;
         return;
+      case 'bb_p2_menu':
+        this.host.p2Menu?.(this.int(a, 0));
+        clearArgs();
+        return;
+      case 'p_talk_guild':
+        // CreateMedicalCenterDialog_006cafb8 for that player: the guild menu.
+        if (this.int(a, 0) === (this.host.clientId?.() ?? 0)) this.host.p2Menu?.(4);
+        clearArgs();
+        return;
+      case 'p_return_guild':
+        this.host.returnToGuild?.();
+        return;
+      case 'pl_add_meseta':
+        // Only the local player's own reward goes to the server (6xC9).
+        if (this.int(a, 0) === (this.host.clientId?.() ?? 0)) this.host.addMeseta?.(this.int(a, 1));
+        clearArgs();
+        return;
+      case 'pl_add_meseta2':
+        this.host.addMeseta?.(this.int(a, 0));
+        clearArgs();
+        return;
+      case 'update_switch_flag': {
+        // regsA = switch flag, floor, flags (6x05); sent to everyone.
+        const base = this.reg(a, 0);
+        this.host.setSwitchFlag?.(R[(base + 1) & 0xff], R[base], (R[(base + 2) & 0xff] & 1) !== 0);
+        return;
+      }
+      case 'del_obj_param': {
+        const token = R[this.reg(a, 0)];
+        const at = this.coordsHandlers.findIndex((h) => h.token === token);
+        if (at >= 0) this.coordsHandlers.splice(at, 1);
+        this.host.coordsChanged?.(this.coordsHandlers);
+        return;
+      }
       case 'qexit':
         // A fade to black and out of the game, as a 6x73 would do.
         this.exited = true;
