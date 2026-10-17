@@ -5,7 +5,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { DataSource } from '../data/source.ts';
 import { parseMapNRel, type MapGeometry } from '../formats/nrel.ts';
 import { parseXvm } from '../formats/xvm.ts';
-import { buildObjectTree, MaterialCache } from './njmesh.ts';
+import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
+import { MapAnimator } from './mapanim.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 
 export interface MapStats {
@@ -15,6 +16,7 @@ export interface MapStats {
   triangles: number;
   textures: number;
   skippedEntries: number;
+  animations: number;
 }
 
 // "map_city00_00n.rel" -> "map_city00.xvm"; "map_forest01n.rel" -> "map_forest01.xvm"
@@ -46,6 +48,7 @@ export class MapViewer {
   private materials: MaterialCache | null = null;
   private textures: THREE.Texture[] = [];
   private resizeObserver: ResizeObserver;
+  readonly mapAnimator = new MapAnimator();
   private raycaster = new THREE.Raycaster();
   private keys = new Set<string>();
   private clock = new THREE.Clock();
@@ -94,6 +97,7 @@ export class MapViewer {
   // WASD/QE moves camera and orbit target together.
   private frame(): void {
     const dt = Math.min(this.clock.getDelta(), 0.1);
+    this.mapAnimator.update(dt);
     if (this.onFrame) {
       this.onFrame(dt, this.keys);
       this.renderer.render(this.scene, this.camera);
@@ -159,7 +163,16 @@ export class MapViewer {
       const s = new THREE.Group();
       s.position.set(...section.position);
       s.rotation.set(section.rotation[0], section.rotation[1], section.rotation[2], 'YXZ'); // map sections rotate in the client's Y, X, Z order (see DEVLOG)
-      for (const obj of section.objects) s.add(buildObjectTree(obj, this.materials));
+      for (const entry of section.entries) {
+        if (!entry.rendered) continue;
+        if (entry.animated && entry.motion) {
+          const { root, nodes } = buildObjectTreeWithNodes(entry.object, this.materials);
+          this.mapAnimator.add(nodes, entry.motion, entry.frameStep);
+          s.add(root);
+        } else {
+          s.add(buildObjectTree(entry.object, this.materials));
+        }
+      }
       root.add(s);
     }
     this.scene.add(root);
@@ -207,6 +220,7 @@ export class MapViewer {
       triangles,
       textures: this.textures.length,
       skippedEntries: g.skippedEntries.length,
+      animations: this.mapAnimator.count,
     };
   }
 
@@ -351,6 +365,7 @@ export class MapViewer {
   }
 
   clear(): void {
+    this.mapAnimator.clear();
     this.clearEntities();
     this.geometry = null;
     if (this.mapRoot) {

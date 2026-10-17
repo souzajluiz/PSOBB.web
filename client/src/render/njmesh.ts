@@ -169,3 +169,23 @@ export function buildObjectTree(obj: NjObject, materials: MaterialCache): THREE.
   for (const child of obj.children) node.add(buildObjectTree(child, materials));
   return node;
 }
+
+// Like buildObjectTree, but also returns the node groups in depth-first order,
+// which is the node order NJS_MOTION data uses.
+export function buildObjectTreeWithNodes(obj: NjObject, materials: MaterialCache): { root: THREE.Object3D; nodes: THREE.Object3D[] } {
+  const nodes: THREE.Object3D[] = [];
+  const build = (o: NjObject): THREE.Object3D => {
+    const node = new THREE.Group();
+    nodes.push(node);
+    node.position.set(...o.position);
+    node.rotation.set(o.rotation[0], o.rotation[1], o.rotation[2], o.flags & EVAL_ZXY_ANG ? 'YXZ' : 'ZYX');
+    node.scale.set(...o.scale);
+    if (o.model && !(o.flags & EVAL_HIDE)) {
+      const mesh = buildModelMesh(o.model, materials);
+      if (mesh) node.add(mesh);
+    }
+    for (const child of o.children) node.add(build(child));
+    return node;
+  };
+  return { root: build(obj), nodes };
+}

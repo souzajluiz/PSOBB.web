@@ -73,7 +73,7 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
 
   const describeMap = (name: string, s: MapStats, ms: number) =>
     `${name}: ${s.sections} sections, ${s.meshes} meshes, ${s.triangles.toLocaleString()} triangles, ` +
-    `${s.textures} textures${s.skippedEntries ? `, ${s.skippedEntries} unknown entries skipped` : ''} (${ms} ms)`;
+    `${s.textures} textures, ${s.animations} animated${s.skippedEntries ? `, ${s.skippedEntries} unknown entries skipped` : ''} (${ms} ms)`;
 
   async function loadSelected(): Promise<void> {
     if (!source || !select.value) return;
