@@ -97,7 +97,7 @@ export interface NjObject {
   children: NjObject[];
 }
 
-const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
+export const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
 // Vertex layout by stride. Stride 24 is ambiguous (position+normal vs
 // position+color+uv); the type field disambiguates. Observed in map n.rel:

@@ -99,6 +99,18 @@
 - `.tam` texture animation, UV-scroll effect slots, env-map texgen, indirect-texture distortion.
 - The section rotation order in `mapviewer.ts` should be `YXZ` (client `ZXY_ANG` mode); this only matters for two crater sections.
 
+## 2026-10-16: player character models
+
+**What landed:** BML reader, Ninja chunk (NJCM) model parser, skinned three.js builder, and `models.html`, a dev page that shows any of the 12 classes with costume/skin/face/head/hair/section ID/hair color. `node tests/players.test.ts` builds every class and variant.
+
+**Findings:**
+- Class letters A..L = class 0..11. Head, hair and cap hang from body node 59.
+- Chunk models share one vertex buffer across the tree. Weighted vertices are accumulated by later nodes, and the body's polygons are cached at the root and drawn at the end. Replaying that walk gives skin weights for free; all strips resolve.
+- `pl?nj.bml` aligns blobs to 0x800, `bm_ene_*.bml` to 0x20.
+- Texture ids are per part. The appearance → `pl?tex.afs` mapping was rebuilt from contact sheets of each archive, with the PSO v2 lists of the dashgl/psov2 viewer as ordering hints, then checked by eye. Defaults look right for all 12 classes. Hat/hair texture lists of six classes are approximate.
+
+**Next:** player motions (`plymotiondata.rlc`, NJM), and models in the lobby instead of capsules.
+
 ## 2026-10-16: classic UI, title screen
 
 **Goal:** the title, login and character screens must look identical to the original client.

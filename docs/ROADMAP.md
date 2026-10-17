@@ -34,7 +34,11 @@
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
 - [ ] Collision of lobby objects (counters, props from `o.dat`) and the real per-class hitbox radius
-- [ ] Character models (`pl?smp.rel`, `pl?tex.afs`) and animations
+- [ ] Real lobby spawn points and collision (`*c.rel`)
+- [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
+- [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
+- [ ] Player motions (`plymotiondata.rlc`, NJM) on the skinned models
+- [ ] Player models in the lobby instead of capsules; `proportion_x/y` scaling
 
 ## Phase 5: game
 - [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)
