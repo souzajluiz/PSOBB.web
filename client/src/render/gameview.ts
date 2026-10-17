@@ -21,6 +21,9 @@ import { floorToArea, type Game } from '../net/game.ts';
 import { CollisionWorld } from './collision.ts';
 import { EnemyLayer } from './enemyview.ts';
 import { GameField } from './gamefield.ts';
+import { ObjectLayer } from './objectview.ts';
+import { enemySlots } from '../formats/enemyids.ts';
+import { parseEnemySets } from '../formats/setdata.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -55,8 +58,10 @@ export class GameView {
   private table: Promise<SetDataTable | null> | null = null;
   private view: LobbyView | null = null;
   readonly enemyLayer: EnemyLayer;
+  readonly objectLayer: ObjectLayer;
   private field: GameField;
   private objectCounts = new Map<number, Promise<number>>();
+  private enemyCounts = new Map<number, Promise<number>>();
   private busy = false;
   private disposed = false;
   current: FloorInfo | null = null;
@@ -71,6 +76,7 @@ export class GameView {
     this.files = new ClientFiles(source);
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
+    this.objectLayer = new ObjectLayer(viewer, this.files);
     this.field = new GameField(viewer, game, this.files, { bgm, log, warpTo: (f) => this.warpTo(f), toLobby: () => this.onLobbyWarp() });
   }
 
@@ -85,6 +91,27 @@ export class GameView {
           .then(async ({ files }) => (files && (await this.files.has(files.objects)) ? (await this.files.read(files.objects)).length / 0x44 : 0))
           .catch(() => 0);
         this.objectCounts.set(f, n);
+      }
+      base += await n;
+    }
+    return base;
+  }
+
+  // Number of enemy slots on the floors before `floor` (an enemy's entity id
+  // is 0x1000 + its global slot; one e.dat entry can take several slots, see
+  // formats/enemyids.ts).
+  private async enemyBase(floor: number): Promise<number> {
+    let base = 0;
+    for (let f = 0; f < floor; f++) {
+      let n = this.enemyCounts.get(f);
+      if (!n) {
+        n = this.floorFilesFor(f)
+          .then(async ({ area, files }) => {
+            if (!files || !(await this.files.has(files.enemies))) return 0;
+            return enemySlots(parseEnemySets(await this.files.read(files.enemies)), area).total;
+          })
+          .catch(() => 0);
+        this.enemyCounts.set(f, n);
       }
       base += await n;
     }
@@ -148,6 +175,7 @@ export class GameView {
     this.view?.dispose();
     this.view = null;
     this.enemyLayer.clear();
+    this.objectLayer.clear();
     const { area, files, geometry } = await this.floorFilesFor(floor);
     if (!geometry) throw new Error(`no map for floor ${floor} (area ${area})`);
     await this.viewer.load(this.source, geometry);
@@ -165,6 +193,8 @@ export class GameView {
     let objects: ObjectSetEntry[] = [];
     let enemyCount = 0;
     let placedObjects: ReturnType<typeof placeEntities> = [];
+    let enemySets: ReturnType<typeof parseEnemySets> = [];
+    let eventFile: Uint8Array | null = null;
     if (files) {
       try {
         objects = parseObjectSets(await this.files.read(files.objects));
@@ -183,7 +213,11 @@ export class GameView {
         const enemies = parseSetFile(files.enemies, await this.files.read(files.enemies));
         enemyCount = enemies.length;
         entities.push(...enemies);
+        enemySets = enemies.filter((e): e is (typeof enemySets)[number] => e.kind === 'enemy');
       }
+      // The floor's wave events (<enemy basename>.evt).
+      if (await this.files.has(files.events)) eventFile = await this.files.read(files.events);
+      else this.log(`no event file ${files.events}`);
       const placed = placeEntities(entities, sections, area).filter((p) => !(p.entity.kind === 'object' && p.entity.type === 0));
       const info = this.game.info!;
       const modeled = await this.enemyLayer.show(placed, { area, episode: info.episode, difficulty: info.difficulty, event: info.event ?? 0 });
@@ -191,7 +225,11 @@ export class GameView {
       const s = this.enemyLayer.stats;
       this.log(`enemy models: ${s.placed} placed${s.unresolved.length ? `, no model: ${[...new Set(s.unresolved)].join(', ')}` : ''}${s.errors.length ? `, errors: ${s.errors.join('; ')}` : ''}`);
       placedObjects = placed.filter((p) => p.entity.kind === 'object');
-      this.viewer.setEntities(placed.filter((p) => !modeled.has(p)));
+      const objectModels = await this.objectLayer.show(placedObjects, { area, episode: info.episode, ultimate: info.difficulty === 3 });
+      if (this.disposed) return;
+      const os = this.objectLayer.stats;
+      this.log(`object models: ${os.placed} placed${os.unresolved.length ? `, no model: ${[...new Set(os.unresolved)].join(', ')}` : ''}${os.errors.length ? `, errors: ${os.errors.join('; ')}` : ''}`);
+      this.viewer.setEntities(placed.filter((p) => !modeled.has(p) && !objectModels.has(p)));
       this.viewer.setFogRegions(placed); // TObjFogCollision* regions switch the fog as we walk
       this.viewer.setEntitiesVisible(true);
     }
@@ -200,7 +238,17 @@ export class GameView {
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
     this.view = new LobbyView(this.viewer, this.game, mapData, { showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
-    this.field.enterFloor(floor, area, placedObjects, await this.objectBase(floor));
+    this.field.enterFloor(floor, area, {
+      placed: placedObjects,
+      objectBase: await this.objectBase(floor),
+      enemySets,
+      enemyBase: await this.enemyBase(floor),
+      eventFile,
+      sections,
+      enemies: this.enemyLayer,
+      objects: this.objectLayer,
+      collision: mapData.collision,
+    });
     this.field.attach();
     this.current = {
       floor,
@@ -218,12 +266,28 @@ export class GameView {
     this.onFloor(this.current);
   }
 
+  // Console helpers: window.psobb.waves (wave events, triggers, killWave).
+  debug() {
+    return this.field.debug();
+  }
+
+  // An enemy died (combat code / render/combat.ts): advances its wave event.
+  onEnemyKilled(entityId: number, floor?: number): void {
+    this.field.onEnemyKilled(entityId, floor);
+  }
+
+  // Boxes of the current floor, for the item drop code.
+  get fieldObjects() {
+    return this.field.fieldObjects;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.field.dispose();
     this.view?.dispose();
     this.view = null;
     this.enemyLayer.dispose();
+    this.objectLayer.dispose();
     this.viewer.clearEntities();
   }
 }

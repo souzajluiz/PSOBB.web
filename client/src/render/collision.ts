@@ -5,6 +5,12 @@
 //  - move() is a simplified unknown_player_touching_wall_maybe: one ray along
 //    the motion (stop when running nearly head-on into a wall, otherwise slide),
 //    then 8 radial rays around the new position to push out of walls.
+// `obstacles` holds the collision boxes of objects that block the player
+// (closed doors). The client keeps them in the object's box array
+// (InitEnemyCollisionBoxes_007b9a88, flag 1 set while the door is closed by
+// FUN_007b52c4 and cleared when it opens by FUN_007b52ec) and tests them with
+// the box-vs-box check at 0x00844540; here the player is a point with its
+// radius, which is enough to stop it walking through a door.
 // Constants were read from PsoBB.exe (.rdata) at the addresses the decomp uses.
 // Pure math, no three.js, so it runs in Node tests.
 
@@ -45,6 +51,19 @@ export interface SegmentHit {
   flags: number;
 }
 
+// A blocking object box in world space: a box of half extents (halfX, halfZ)
+// rotated by `yaw` around its center, between yMin and yMax.
+export interface Obstacle {
+  key: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  halfX: number;
+  halfZ: number;
+  height: number; // the client's boxes are +-50 around the box center
+}
+
 export interface MoveResult {
   x: number;
   y: number;
@@ -54,6 +73,8 @@ export interface MoveResult {
 
 export class CollisionWorld {
   readonly meshes: CollisionMesh[];
+  // Object boxes that block movement (set per frame by FieldObjects).
+  obstacles: Obstacle[] = [];
 
   constructor(collision: MapCollision) {
     this.meshes = collision.meshes;
@@ -169,10 +190,26 @@ export class CollisionWorld {
       if (pass === 1 && this.radialPush(nxp, ry, nzp, radius)) return stay;
     }
 
+    // 2b. Object boxes (closed doors) block the new position.
+    if (this.blockedBy(nxp, y, nzp, radius)) return stay;
+
     // 3. Ground under the new position; no floor means the move is refused.
     const ny = this.groundHeight(nxp, nzp, y + STEP_UP);
     if (ny === null) return stay;
     return { x: nxp, y: ny, z: nzp, blocked };
+  }
+
+  // True when (x, y, z) with `radius` overlaps a blocking object box.
+  blockedBy(x: number, y: number, z: number, radius = PLAYER_RADIUS): Obstacle | null {
+    for (const o of this.obstacles) {
+      if (y + WALL_RAY_HEIGHT < o.y - o.height || y > o.y + o.height) continue;
+      const dx = x - o.x, dz = z - o.z;
+      const c = Math.cos(-o.yaw), s = Math.sin(-o.yaw);
+      const lx = dx * c - dz * s;
+      const lz = dx * s + dz * c;
+      if (Math.abs(lx) <= o.halfX + radius && Math.abs(lz) <= o.halfZ + radius) return o;
+    }
+    return null;
   }
 
   // Deepest wall penetration among 8 rays of length `radius`, as an XZ push vector.

@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-17: object models, door collision and wave events
+
+**What changed:**
+- Field objects are drawn with their real models instead of stand-in panels: doors of every area, area / boss / Ragol / lobby teleporters, switches, boxes and the common scenery of each floor. `formats/objectmodels.ts` maps the `o.dat` type to an archive, model entries, texture archive, texture id and tint; `render/objectview.ts` loads the BMLs the way the client's loaders do and keeps the parts that are only drawn in one state (locked / unlocked door, lit switch) switchable. Doors play their opening motion, warps their beam motion.
+- Closed doors block the player: `render/collision.ts` gained `obstacles`, the object collision boxes the client turns on while a door is closed; `move()` refuses a step that ends inside one.
+- Wave events: `formats/events.ts` parses the floor's `.evt` (events and action stream), `render/waves.ts` runs the client's state machine (trigger → delay → spawn → all dead → actions), and `render/gamefield.ts` wires it to the enemy layer, the switch flags, the music and the network. Enemies of a wave only appear when their wave starts (`EnemyLayer.hideAll` / `setVisible`), the music switches to the battle variant while a wave of the player's room is alive, and `6x67` (trigger) / `6x76` (enemy defeated) are sent and received.
+- For the other agents: `GameView.onEnemyKilled(entityId, floor?)` advances the wave of a killed enemy, and `GameView.fieldObjects` exposes the floor's boxes (`boxes`, `breakBox(index)`). In the browser console `psoWaves` lists the events, triggers one (`psoWaves.trigger(id)`), kills the enemies of the active waves (`psoWaves.killWave([room])`) and dumps doors, switch flags and boxes.
+
+**From PsoBB.exe (Ephinea 1.25.13; details and addresses in PROTOCOL.md, "Object models" and "Wave events", and in the comments of the new files):**
+- Object factory: the per-area tables at `0x00a06be0`. Each class's loader reads one BML with `LoadBML_005b7a84` (entries by position) and a `.gvm`/`.xvm` texture archive; `FUN_005b8610/8624/8638` hand out model, texture list and motion. Renders use `FUN_00835090` / `FUN_00835574`, `FUN_00829cc8` for the texture list and `FUN_0081a588` for a per-mesh texture id (the door numbers and lamp colours).
+- Forest door `FUN_006573d4` / `FUN_006571f4`: the door, its laser, the numbered sign in the digit colour of `0x009c7b04` and the two lamps (texture 0x15 locked, 0x16 open). Forest switch `FUN_00658b0c` / `FUN_00658824`: base, glow while set, digit in the colour of `0x009c7ce0`.
+- Door collision boxes from `InitEnemyCollisionBoxes_007b9a88` in each constructor; flag 1 is set while closed (`FUN_007b52c4`) and cleared when open (`FUN_007b52ec`).
+- Event file and action stream: `LoadMapEventTableByVariant_0080cf78`, `set_active_map_event_on_floor`, `quest_event_handler_constructor` / `update_quest_event`, `ProcessQuestEventCommands_0080cc44` with the dispatch table `0x00a11da0`. `6x67` is handled by `FUN_00659f5c`, and `FUN_008003e0` runs the handler of what it sends, so the sender applies its own trigger.
+- Battle music: `FUN_0069821c` → `FUN_008114b0` (an enemy of the player's room built and not dead), calm again after 0x5A frames.
+- Enemy entity ids: 0x1000 + the slot of the entry, with the child counts ported from newserv's `add_enemy_and_children` (`formats/enemyids.ts`); newserv checks them.
+
+**Checks:**
+- `tests/waves.test.ts`: the 227 free-play event files parse (6730 events, 16833 actions, 6209 `set_switch_flag`, 3651 `trigger_event`); every object entry of every free-play floor resolves (44489 of them), 130 distinct models build with no missing textures and their motions play; the wave state machine runs a two-wave chain; the door collision box blocks and stops blocking.
+- `tests/game.live.ts` now also checks that a second client sees `6x67` (wave trigger) and `6x76` (enemy defeated) through newserv.
+- In Chrome against newserv: Pioneer 2 shows the Ragol teleporter with its beam; Forest 1 loads 76 object models (9 doors, 2 switches, 48 boxes, 11 event triggers, 20 wave events) and 66 enemy models that start hidden; `psoWaves.trigger(21)` spawned room 2's wave after its 30-frame delay, `killWave(2)` cleared it ("room 2 cleared") and set switch flag 2; the room 4 chain (events 41 → 411 → 412, 4 enemies each) unlocked door 43 (state 0 → 2) through its switch flag 3; the nine closed doors are nine collision boxes.
+
+**Approximations / open:**
+- Objects still without a model: the Pioneer 2 shops and their doors, laser-fence switches, jungle and crater rocks, Vol Opt's ship door (its two models parse as neither XJ nor NJ chunks), the Lab warps, and the invisible collision objects (which draw nothing anyway). The test prints the list.
+- The warp beams are drawn opaque; the exe blends them additively.
+- `construct_objects` (action 08) is logged, not executed; the door unlock camera (`TObjDoor` state 1) and the room-unlocked chat bubble are not shown.
+- Random-wave quest files (`evt2`) are parsed as empty: free play never uses them.
+- The web client applies 6x76 only for the wave state; enemy HP is the combat agent's.
+
 ## 2026-10-17: real 3D characters in the classic screens
 
 **What changed:**

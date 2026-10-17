@@ -323,8 +323,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return simpleDoor('TODoorLabo', 'bm_obj_door_labo.bml', DOOR_BOX_20(0x009c551c), 'obj_o_labodoor_l_red.xvm', 'obj_o_labodoor_l_grn.xvm');
     case 0x02bb:
       return simpleDoor('TODoorLaboNormal', 'bm_obj_labodoor_nrm.bml', DOOR_BOX_20(0x009c551c), 'o_labodoor_nrm_red.xvm', 'o_labodoor_nrm_green.xvm');
-    case 0x0130:
-      return simpleDoor('TODoorVoShip', 'bm_o_door_vo_ship.bml', DOOR_BOX_20(0x009c5574));
+    // 0x0130 TODoorVoShip (Vol Opt's room, loader FUN_00622844) is left for
+    // the boss pass: its two models do not parse as XJ or NJ chunk files yet.
 
     // ---- switches ----
     // TObjDoorKey (Forest/Cave switch): create 0x00658a90, ctor FUN_00658b0c;
@@ -465,6 +465,31 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TOTrapSeabed01', 'bm_obj_seabed_turigane.bml', [{ model: 0, textures: 'obj_seabed_turigane.xvm' }]);
     case 0x0213:
       return spec('TOJungleDesign', 'bm_obj_jungle_tree.bml', [{ model: 0, texlistOf: 0 }]);
+    case 0x0090: // TOKeyGenericSw: body of DAT_00a8ee48 (the lamp of DAT_00a8ee4c is not drawn here)
+      return spec('TOKeyGenericSw', 'fs_obj_hanyousu_body1.bml', [{ model: 0 }]);
+    case 0x00c3: // TOHangceilingCave01: ctor 0x00626dc8, model of DAT_00a8ed80 with its motion
+      if (episode === 2 || area === 0x23) return spec('TOHangceilingCave01', 'bm_obj_ruins_turiten.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }]);
+      return spec('TOHangceilingCave01', 'fe_obj_turiten_moto.bml', [{ model: 1, motion: 1, drive: 'loop', speed: 1 }]);
+    case 0x010c:
+      return spec('TOHangerMachine01', 'bm_fs_obj_hanger_moto.bml', [{ model: 0 }]);
+    case 0x0156: // TOMonumentAncient02: one of the three monument archives (ctor 0x00631e38)
+      return spec('TOMonumentAncient02', 'bm_fs_obj_o_monument02.bml', [{ model: 0 }]);
+    case 0x0210: // TOTrapChainSawKey: ctor 0x0063d134 picks the model from the stack (not traced); the 2 m saw
+      return spec('TOTrapChainSawKey', 'bm_obj_jungle_nokogiri.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }]);
+    // Episode 4 scenery: the constructors read the model index from the
+    // object's param4 (dword [EBX + 0x84]).
+    case 0x0301:
+      return spec('__WILDS_CRATER_CACTUS__', 'bm_obj_ep4_sabotena.bml', [{ model: clamp(p4(o), 0, 2) }]);
+    case 0x0302:
+      return spec('__WILDS_CRATER_BROWN_ROCK__', 'bm_obj_ep4_iwa_crater.bml', [{ model: clamp(p4(o), 0, 2) }]);
+    case 0x0303:
+      return spec('__WILDS_CRATER_BROWN_ROCK_DESTRUCTIBLE__', 'bm_obj_ep4_iwa_crater_brk.bml', [{ model: clamp(p4(o), 0, 1) }]);
+    case 0x0386:
+      return spec('__WILDS_CRATER_BLACK_ROCKS__', 'bm_obj_ep4_iwa_desert.bml', [{ model: clamp(p4(o), 0, 2) }]);
+    case 0x038b:
+      return spec('__FALLING_STALACTITE__', 'bm_obj_ep4_syounyuuseki.bml', [{ model: 3 }]);
+    case 0x038f:
+      return spec('__BEEHIVE__', 'bm_obj_ep4_bee_nest.bml', [{ model: clamp(p4(o), 0, 1), motion: clamp(p4(o), 0, 1), drive: 'loop', speed: 1 }]);
     case 0x038d:
       return spec('__DESERT_CRYSTALS_BOX__', 'bm_obj_ep4_crystal.bml', [{ model: 3 }]);
     case 0x0380:

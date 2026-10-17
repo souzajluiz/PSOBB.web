@@ -154,7 +154,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
       const view = new GameView(viewer, g, source, log, bgm);
       gameView = view;
       view.onLobbyWarp = () => void leaveGame();
-      Object.assign(window, { gameView: view, psoGameView: view, psoBgm: bgm }); // development aid (console)
+      // Development aids (console): psoWaves.events(), psoWaves.trigger(id),
+      // psoWaves.killWave(), psoWaves.doors(), psoWaves.boxes().
+      Object.assign(window, { gameView: view, psoGameView: view, psoBgm: bgm, psoWaves: view.debug() });
       view.onFloor = (f) => {
         $('lobby-title').textContent = `· Game "${g.name}" · ${f.name} (floor ${f.floor}) · ${f.enemies} enemies, ${f.objects} objects`;
         renderPlayers(g);

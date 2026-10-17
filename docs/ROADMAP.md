@@ -56,7 +56,10 @@
 - [ ] Enemy sub-objects (Belra arms, Sorcerer bits, Deldepth disc, Vol Opt phase 1, Saint-Milion parts)
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
-- [ ] Door and warp models, door collision, wave events (room-clear doors), boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A)
+- [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision
+- [x] Wave events: the floor's `.evt` (`formats/events.ts`), the wave state machine (`render/waves.ts`), `6x67` / `6x76` sync, enemies appearing per wave, battle music while a wave of the room is alive
+- [ ] Remaining object models (Pioneer 2 shops and doors, laser-fence switches, jungle rocks, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
+- [ ] Boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)

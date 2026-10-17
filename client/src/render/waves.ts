@@ -89,10 +89,13 @@ export class FloorWaves {
   private present = false;
   hooks: WaveHooks;
 
-  constructor(events: WaveEvent[], enemies: Array<{ room: number; wave: number }>, hooks: WaveHooks) {
+  // `enemies` are the floor's e.dat entries in order; `section` is the room
+  // id the event's `room` is matched against (the client compares the enemy's
+  // spawn_section_number).
+  constructor(events: WaveEvent[], enemies: Array<{ section: number; wave: number }>, hooks: WaveHooks) {
     this.events = events;
     this.flags = events.map(() => 0);
-    this.enemies = enemies.map((e, key) => ({ key, room: e.room, wave: e.wave, flags: 0 }));
+    this.enemies = enemies.map((e, key) => ({ key, room: e.section, wave: e.wave, flags: 0 }));
     this.hooks = hooks;
   }
 
