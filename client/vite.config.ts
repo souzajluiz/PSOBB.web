@@ -16,8 +16,19 @@ const NEWSERV_TEXT_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/
 // Set PSOBB_DATA to override. Bound to 127.0.0.1 with the rest of the dev server.
 const DATA_DIR = resolve(process.env.PSOBB_DATA ?? resolve(homedir(), 'Downloads/psobb-client/data'));
 
+// Vite only treats index.html as an entry point, so a build would drop the
+// other pages (classic.html, the classic UI; models.html, the player model
+// viewer). Every .html at the root is an entry, which also covers pages added
+// later.
+const pages = Object.fromEntries(
+  readdirSync(import.meta.dirname)
+    .filter((f) => f.endsWith('.html'))
+    .map((f) => [f.replace(/\.html$/, ''), resolve(import.meta.dirname, f)]),
+);
+
 export default defineConfig({
   server: { host: '127.0.0.1', port: 5173 },
+  build: { rollupOptions: { input: pages } },
   plugins: [
     {
       name: 'newserv-keys',

@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-17: a build that keeps every page, and parts that cannot be wrong
+
+**The build dropped two of the three pages.** Vite only treats `index.html` as
+an entry point, so `vite build` emitted `index.html` alone and left out
+`classic.html` (the classic UI, the whole point of the project) and
+`models.html` (the player model viewer). `client/vite.config.ts` now takes every
+`.html` at the client root as an entry, so a page added later is included on its
+own; a build now emits the three pages and the dev server still serves them.
+
+**The object part spec is a union now.** `ObjectPartSpec`
+(`client/src/formats/objectmodels.ts`) used to be one interface of optional
+fields, so a part could ask for a `drive` with no `motion` to drive, or for two
+texture lists at once, and still compile. It is an intersection of a base with
+two unions instead: a part either plays a motion and says how it is driven, or
+holds its bind pose; and its texture list is the archive entry's own, another
+entry's, or a separate archive - never two. `objectmodels.typecheck.ts` holds
+the compile-time checks: `tsc --noEmit` covers every file under `src`, so each
+`@ts-expect-error` there fails the build the day the type stops rejecting that
+mistake. Nothing imports the file, so the bundle is unchanged.
+
 ## 2026-10-17: more field objects, and an honest "no model" list
 
 **What changed:** four more object classes are drawn, and the volumes that draw

@@ -33,17 +33,26 @@ export interface ObjectModelContext {
 // When a part is drawn.
 export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off';
 
-export interface ObjectPartSpec {
+// How a part's motion is advanced: loop adds `speed` frames per game tick,
+// door follows the door state machine, laser the fence's own one.
+export type PartDrive = 'loop' | 'door' | 'laser';
+
+interface ObjectPartBase {
   model: number; // model entry (BML position)
   show?: PartShow; // locked/unlocked: doors and boss warps; on/off: switches
-  motion?: number; // motion entry, relative to the first motion
-  drive?: 'loop' | 'door' | 'laser'; // loop: frame += speed; door: frame of the door state machine
-  speed?: number; // frames per game tick (loop)
-  texlistOf?: number; // draw with this model entry's embedded texture list
-  textures?: string; // separate texture archive (.xvm) used as the texture list
   textureId?: number; // FUN_0081a588: every mesh uses this texture id
-  tint?: [number, number, number]; // constant color (render flag 0x10 + FUN_0082d710), 0..1
+  tint?: readonly [number, number, number]; // constant color (render flag 0x10 + FUN_0082d710), 0..1
 }
+
+// A part either plays a motion and says how it is driven, or holds its bind
+// pose: a `drive` or a `speed` without a `motion` does not compile.
+type PartMotion = { motion?: never; drive?: never; speed?: never } | { motion: number; drive: PartDrive; speed?: number };
+
+// The texture list is the archive entry's own, or one model entry's embedded
+// list, or a separate archive - never two of them at once.
+type PartTextures = { textures?: never; texlistOf?: never } | { textures: string; texlistOf?: never } | { texlistOf: number; textures?: never };
+
+export type ObjectPartSpec = ObjectPartBase & PartMotion & PartTextures;
 
 // Object collision box (InitEnemyCollisionBoxes_007b9a88 entry, 0x2c bytes):
 // type 1 = box of half extents (halfX, halfZ) in the object's frame
@@ -93,14 +102,11 @@ const spec = (name: string, bml: string, parts: ObjectPartSpec[], extra: Partial
 // A door whose single model opens with motion 0 (Cave, Mine, Ruins, VR, Seabed,
 // Lab, Episode 4): locked/unlocked texture lists as the loaders set them up.
 function simpleDoor(name: string, bml: string, collision: ObjectCollision, lockedTex?: string, unlockedTex?: string): ObjectModelSpec {
-  const base = { model: 0, motion: 0, drive: 'door' as const };
-  const parts: ObjectPartSpec[] =
-    lockedTex || unlockedTex
-      ? [
-          { ...base, show: 'locked', ...(lockedTex ? { textures: lockedTex } : {}) },
-          { ...base, show: 'unlocked', ...(unlockedTex ? { textures: unlockedTex } : {}) },
-        ]
-      : [base];
+  // Built per branch instead of spreading an optional `textures` in: a part
+  // either names a texture archive or takes the entry's own list.
+  const leaf = (show: PartShow, textures?: string): ObjectPartSpec =>
+    textures ? { model: 0, motion: 0, drive: 'door', show, textures } : { model: 0, motion: 0, drive: 'door', show };
+  const parts: ObjectPartSpec[] = lockedTex || unlockedTex ? [leaf('locked', lockedTex), leaf('unlocked', unlockedTex)] : [{ model: 0, motion: 0, drive: 'door' }];
   return spec(name, bml, parts, { collision, door: true });
 }
 
