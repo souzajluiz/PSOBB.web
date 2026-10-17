@@ -53,6 +53,21 @@ for (const m of enemyTypeCc.matchAll(/\{EnemyType::(\w+),.*"(\w+)",\s*"([^"]*)",
   enemyNames.push([m[2], m[3], m[4] === 'nullptr' ? null : m[4].slice(1, -1)]);
 }
 
+// type_defs columns: rt_index and the BattleParamEntry indexes (stats, attack,
+// resist) of each enemy type. NONE (0xFF) means no drop table.
+const enemyParams: Array<[string, number, number[], number[], number[]]> = [];
+const idxList = (s: string) =>
+  s
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => Number(x));
+for (const m of enemyTypeCc.matchAll(
+  /\{EnemyType::(\w+),\s*[^,]*,\s*(NONE|0x[0-9A-F]+),\s*(?:NONE|0x[0-9A-F]+),\s*\{([^}]*)\},\s*\{([^}]*)\},\s*\{([^}]*)\},/g,
+)) {
+  enemyParams.push([m[1], m[2] === 'NONE' ? 0xff : Number(m[2]), idxList(m[3]), idxList(m[4]), idxList(m[5])]);
+}
+
 const fmt = (rows: Array<[number, number, string]>) =>
   rows.map(([t, a, n]) => `  [0x${t.toString(16).padStart(4, '0')}, 0x${a.toString(16)}, ${JSON.stringify(n)}],`).join('\n');
 
@@ -75,6 +90,12 @@ ${fmt(enemies)}
 // newserv EnemyType enum name -> [in-game name, Ultimate name or null]
 export const ENEMY_TYPE_NAMES: Readonly<Record<string, readonly [string, string | null]>> = {
 ${enemyNames.map(([e, n, u]) => `  ${e}: [${JSON.stringify(n)}, ${JSON.stringify(u)}],`).join('\n')}
+};
+
+// newserv EnemyType enum name -> drop table index (rt_index, 0xFF = none) and
+// BattleParamEntry indexes (type_defs BP-STATS, BP-ATTACK, BP-RESIST columns).
+export const ENEMY_TYPE_PARAMS: Readonly<Record<string, { rt: number; stats: readonly number[]; attack: readonly number[]; resist: readonly number[] }>> = {
+${enemyParams.map(([e, rt, st, at, rs]) => `  ${e}: { rt: 0x${rt.toString(16)}, stats: [${st.join(', ')}], attack: [${at.join(', ')}], resist: [${rs.join(', ')}] },`).join('\n')}
 };
 `;
 const target = join(repo, 'client/src/formats/entitynames.ts');

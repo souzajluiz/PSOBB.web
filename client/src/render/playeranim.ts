@@ -51,6 +51,9 @@ export class PlayerAnimator {
   private recordForSlot: ((slot: number) => MotionRecord) | null = null;
   frame = 0;
   step = 0;
+  // Set while the motion must not advance (the charge phase of a heavy or
+  // special attack, FUN_00698fa8 phase 1/2 in render/combat.ts).
+  paused = false;
   // Cross-fade: pose captured when the motion changed, and progress 0..1.
   private blendFrom: { pos: THREE.Vector3; quat: THREE.Quaternion }[] | null = null;
   private blend = 1;
@@ -74,6 +77,11 @@ export class PlayerAnimator {
 
   get current(): MotionRecord | null {
     return this.record;
+  }
+
+  // The motion reached its last frame (modes 2 and 3 hold it there).
+  get ended(): boolean {
+    return !!this.motion && this.record?.mode !== 1 && this.frame >= this.motion.frameCount - 1;
   }
 
   // Starts `record` (a town/field motion table entry). `stepFactor` scales the
@@ -103,7 +111,7 @@ export class PlayerAnimator {
 
   // Advances by `dt` seconds (whole game ticks; the remainder carries over).
   update(dt: number): void {
-    if (!this.motion || !this.record) return;
+    if (!this.motion || !this.record || this.paused) return;
     this.tickRemainder += dt * GAME_TICKS_PER_SECOND;
     let ticks = Math.floor(this.tickRemainder);
     this.tickRemainder -= ticks;

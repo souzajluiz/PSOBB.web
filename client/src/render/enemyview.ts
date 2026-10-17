@@ -4,15 +4,25 @@
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import { enemyModelFor, type EnemyModelContext } from '../formats/enemymodels.ts';
+import { enemyModelFor, type EnemyModelContext, type EnemyModelSpec } from '../formats/enemymodels.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
-import { buildEnemy, EnemyArchiveCache, type NodeAnimator } from './enemymodel.ts';
+import { buildEnemy, EnemyArchiveCache, type EnemyArchive, type EnemyPartSpec, type NodeAnimator } from './enemymodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 export interface EnemyLayerStats {
   placed: number; // enemies with a model
   unresolved: string[]; // names of enemies without one
   errors: string[];
+}
+
+// A built enemy model (render/combat.ts plays its damage / death motions).
+export interface EnemyInstance {
+  placed: PlacedEntity;
+  spec: EnemyModelSpec;
+  archive: EnemyArchive;
+  root: THREE.Group;
+  animators: NodeAnimator[];
+  parts: EnemyPartSpec[]; // part of each animator
 }
 
 export class EnemyLayer {
@@ -25,6 +35,7 @@ export class EnemyLayer {
   };
   private generation = 0;
   stats: EnemyLayerStats = { placed: 0, unresolved: [], errors: [] };
+  instances: EnemyInstance[] = [];
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -42,6 +53,7 @@ export class EnemyLayer {
     const done = new Set<PlacedEntity>();
     const stats: EnemyLayerStats = { placed: 0, unresolved: [], errors: [] };
     const animators: NodeAnimator[] = [];
+    const instances: EnemyInstance[] = [];
     for (const p of items) {
       const e = p.entity;
       if (e.kind !== 'enemy' || p.category !== 'enemy') continue;
@@ -62,6 +74,7 @@ export class EnemyLayer {
         built.root.userData.entity = p;
         root.add(built.root);
         animators.push(...built.animators);
+        instances.push({ placed: p, spec, archive, root: built.root, animators: built.animators, parts: built.animatedParts });
         done.add(p);
         stats.placed++;
       } catch (err) {
@@ -72,13 +85,32 @@ export class EnemyLayer {
     this.viewer.scene.add(root);
     this.root = root;
     this.animators = animators;
+    this.instances = instances;
     this.stats = stats;
     return done;
+  }
+
+  // Removes one enemy's model (render/combat.ts: the death motion ended).
+  remove(instance: EnemyInstance): void {
+    const i = this.instances.indexOf(instance);
+    if (i >= 0) this.instances.splice(i, 1);
+    this.animators = this.animators.filter((a) => !instance.animators.includes(a));
+    instance.root.removeFromParent();
+    const materials = new Set<THREE.Material>();
+    instance.root.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
+      }
+      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
+    });
+    for (const m of materials) m.dispose();
   }
 
   clear(): void {
     this.generation++;
     this.animators = [];
+    this.instances = [];
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
     const materials = new Set<THREE.Material>();

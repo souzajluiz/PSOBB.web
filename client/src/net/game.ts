@@ -352,7 +352,8 @@ export class Game extends Lobby {
   resumed = false;
   readonly lobby: Lobby;
   private ctx: GameContext;
-  private selfSnapshot: SelfData;
+  // Rebuilt before a 6x6D sync so it carries what net/items.ts changed.
+  selfSnapshot: SelfData;
   private joined: Promise<void>;
   private resolveJoined!: () => void;
   private rejectJoined!: (e: Error) => void;
@@ -642,6 +643,75 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, body);
   }
 
+  // --- Combat (layouts: newserv CommandFormats.hh; order: the real-client
+  // capture GC-ForestGameRareMagFeed: 6x43, 6x46, 6x0A, 6x76, then 62/6x60
+  // to the leader when the enemy died) ------------------------------------
+
+  // 6x43 / 6x44 / 6x45 (G_Attack_6x43_6x44_6x45, 8): attack `step` 0..2 of a
+  // combo, {u16 angle_y (BAMS), u16 attack_type}.
+  sendAttack(step: number, angle: number, attackType: number): void {
+    const p = new Uint8Array(4);
+    const dv = new DataView(p.buffer);
+    dv.setUint16(0, RAD_TO_BAMS(angle), true);
+    dv.setUint16(2, attackType, true);
+    this.sendSubcommand(0x43 + Math.min(2, Math.max(0, step)), p);
+  }
+
+  // 6x46 (G_AttackFinished_Header_6x46): the targets of one strike, at most
+  // 10 {u16 entity id, u16 hit box}. newserv marks each enemy as last hit by us.
+  sendAttackTargets(targets: Array<{ entityId: number; hitbox?: number }>): void {
+    const list = targets.slice(0, 10);
+    const p = new Uint8Array(4 + list.length * 4);
+    const dv = new DataView(p.buffer);
+    dv.setUint32(0, list.length, true);
+    list.forEach((t, i) => {
+      dv.setUint16(4 + i * 4, t.entityId, true);
+      dv.setUint16(6 + i * 4, t.hitbox ?? 0, true);
+    });
+    this.sendSubcommand(0x46, p);
+  }
+
+  // 6x0A (G_UpdateEnemyState_6x0A, 0x0C): {entity id 0x1000 | index} {u16
+  // index, u16 total damage, u32 game flags}. Flags: 0x20000000 enemy,
+  // 0x200 hit, 0x400 big hit, 0x800 dead, 0x100 missed (see combat/formulas.ts).
+  sendEnemyState(enemyIndex: number, totalDamage: number, flags: number): void {
+    this.conn.send(0x60, 0, buildEnemyState(enemyIndex, totalDamage, flags));
+  }
+
+  // 6x76 (G_SetEntitySetFlags_6x76, 8): {entity id} {u16 floor, u16 flags};
+  // the client sends flags 8 for a dead enemy.
+  sendEntitySetFlags(entityId: number, floor: number, flags: number): void {
+    const b = new Uint8Array(8);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x76;
+    b[1] = 2;
+    dv.setUint16(2, entityId, true);
+    dv.setUint16(4, floor, true);
+    dv.setUint16(6, flags, true);
+    this.conn.send(0x60, 0, b);
+  }
+
+  // 6x60 (G_StandardDropItemRequest_PC_V3_BB_6x60, 0x18) for a killed enemy,
+  // sent privately to the leader (62) like the original client; on BB newserv
+  // generates the item and answers 6x5F to the game.
+  sendEnemyDropRequest(req: { floor: number; rtIndex: number; enemyIndex: number; x: number; z: number; room: number; area: number }): void {
+    this.conn.send(0x62, Math.max(0, this.leaderId), buildDropRequest(req));
+  }
+
+  // 6xC8 (G_EnemyEXPRequest_BB_6xC8, 0x0C): {entity id} {u16 enemy index, u16
+  // requesting client id, u8 is_killer}. newserv answers 6xBF (EXP) on BB.
+  sendExpRequest(enemyIndex: number, isKiller: boolean): void {
+    const b = new Uint8Array(0x0c);
+    const dv = new DataView(b.buffer);
+    b[0] = 0xc8;
+    b[1] = 3;
+    dv.setUint16(2, 0x1000 | enemyIndex, true);
+    dv.setUint16(4, enemyIndex, true);
+    dv.setUint16(6, this.selfId, true);
+    b[8] = isKiller ? 1 : 0;
+    this.conn.send(0x60, 0, b);
+  }
+
   // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
   sendWalk(x: number, z: number, nearEnemy = false): void {
     const p = new Uint8Array(12);
@@ -694,6 +764,64 @@ export function parseSwitchFlag(body: Uint8Array): { entityId: number; flag: num
   if (body.length < 0x0c || body[0] !== 0x05) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
   return { entityId: dv.getUint16(2, true), flag: dv.getUint16(8, true), floor: body[10], set: (body[11] & 1) !== 0 };
+}
+
+export function buildEnemyState(enemyIndex: number, totalDamage: number, flags: number): Uint8Array {
+  const b = new Uint8Array(0x0c);
+  const dv = new DataView(b.buffer);
+  b[0] = 0x0a;
+  b[1] = 3;
+  dv.setUint16(2, 0x1000 | enemyIndex, true);
+  dv.setUint16(4, enemyIndex, true);
+  dv.setUint16(6, Math.min(0xffff, Math.max(0, Math.round(totalDamage))), true);
+  dv.setUint32(8, flags >>> 0, true);
+  return b;
+}
+
+export function buildDropRequest(req: { floor: number; rtIndex: number; enemyIndex: number; x: number; z: number; room: number; area: number }): Uint8Array {
+  const b = new Uint8Array(0x18);
+  const dv = new DataView(b.buffer);
+  b[0] = 0x60;
+  b[1] = 6;
+  b[4] = req.floor;
+  b[5] = req.rtIndex;
+  dv.setUint16(6, req.enemyIndex, true);
+  dv.setFloat32(8, req.x, true);
+  dv.setFloat32(12, req.z, true);
+  dv.setUint16(0x10, req.room, true);
+  dv.setUint16(0x12, 0, true); // ignore_def: enemies are never specialized
+  b[0x14] = req.area;
+  return b;
+}
+
+export interface EnemyStateUpdate {
+  enemyIndex: number;
+  totalDamage: number;
+  flags: number;
+}
+
+// 6x0A from another client (or newserv, for fast kills).
+export function parseEnemyState(body: Uint8Array): EnemyStateUpdate | null {
+  if (body.length < 0x0c || body[0] !== 0x0a) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { enemyIndex: dv.getUint16(4, true), totalDamage: dv.getUint16(6, true), flags: dv.getUint32(8, true) };
+}
+
+// 6x43 / 6x44 / 6x45 from another client.
+export function parseAttack(body: Uint8Array): { clientId: number; step: number; angle: number; attackType: number } | null {
+  if (body.length < 8 || body[0] < 0x43 || body[0] > 0x45) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), step: body[0] - 0x43, angle: dv.getUint16(4, true) * BAMS_TO_RAD, attackType: dv.getUint16(6, true) };
+}
+
+// 6x46: the entity ids a strike hit.
+export function parseAttackTargets(body: Uint8Array): { clientId: number; targets: number[] } | null {
+  if (body.length < 8 || body[0] !== 0x46) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const n = Math.min(10, dv.getUint32(4, true), (body.length - 8) >> 2);
+  const targets: number[] = [];
+  for (let i = 0; i < n; i++) targets.push(dv.getUint16(8 + i * 4, true));
+  return { clientId: dv.getUint16(2, true), targets };
 }
 
 function int32(v: number): Uint8Array {

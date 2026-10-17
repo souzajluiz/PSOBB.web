@@ -274,28 +274,7 @@ export class BBSession {
   // order. newserv sends ItemPMT.prs, ItemMagEdit.prs, PlyLevelTbl.prs and the
   // BattleParamEntry*.dat tables (DataIndex::generate_bb_stream_file).
   async streamFiles(): Promise<Map<string, Uint8Array>> {
-    const conn = this.requireConn();
-    conn.send(0x04eb, 0);
-    const index = await conn.waitFor(0x01eb);
-    const dv = new DataView(index.data.buffer, index.data.byteOffset, index.data.byteLength);
-    const entries: Array<{ name: string; size: number; offset: number }> = [];
-    for (let i = 0; i < index.flag && (i + 1) * 0x4c <= index.data.length; i++) {
-      const o = i * 0x4c;
-      entries.push({ size: dv.getUint32(o, true), offset: dv.getUint32(o + 8, true), name: readAscii(index.data, o + 12, 0x40) });
-    }
-    const total = entries.reduce((n, e) => Math.max(n, e.offset + e.size), 0);
-    const stream = new Uint8Array(total);
-    const CHUNK = 0x6800;
-    for (let chunk = 0; chunk * CHUNK < total; chunk++) {
-      conn.send(0x03eb, chunk);
-      const c = await conn.waitFor(0x02eb);
-      const at = new DataView(c.data.buffer, c.data.byteOffset).getUint32(0, true) * CHUNK;
-      stream.set(c.data.subarray(4, 4 + Math.min(CHUNK, total - at)), at);
-    }
-    const files = new Map<string, Uint8Array>();
-    for (const e of entries) files.set(e.name, stream.slice(e.offset, e.offset + e.size));
-    this.log(`stream file: ${entries.map((e) => `${e.name} (${e.size})`).join(', ')}`);
-    return files;
+    return fetchStreamFiles(this.requireConn(), (m) => this.log(m));
   }
 
   // Game-server phase split in two steps for a UI that shows the server's
@@ -409,4 +388,30 @@ export function parsePreview(data: Uint8Array): CharacterPreview {
 
 export function hex(v: number, width = 2): string {
   return v.toString(16).toUpperCase().padStart(width, '0');
+}
+
+// BB stream file over any connection (see BBSession.streamFiles; newserv answers
+// 04EB / 03EB on the game server too).
+export async function fetchStreamFiles(conn: BBConnection, log: (msg: string) => void = () => {}): Promise<Map<string, Uint8Array>> {
+  conn.send(0x04eb, 0);
+  const index = await conn.waitFor(0x01eb);
+  const dv = new DataView(index.data.buffer, index.data.byteOffset, index.data.byteLength);
+  const entries: Array<{ name: string; size: number; offset: number }> = [];
+  for (let i = 0; i < index.flag && (i + 1) * 0x4c <= index.data.length; i++) {
+    const o = i * 0x4c;
+    entries.push({ size: dv.getUint32(o, true), offset: dv.getUint32(o + 8, true), name: readAscii(index.data, o + 12, 0x40) });
+  }
+  const total = entries.reduce((n, e) => Math.max(n, e.offset + e.size), 0);
+  const stream = new Uint8Array(total);
+  const CHUNK = 0x6800;
+  for (let chunk = 0; chunk * CHUNK < total; chunk++) {
+    conn.send(0x03eb, chunk);
+    const c = await conn.waitFor(0x02eb);
+    const at = new DataView(c.data.buffer, c.data.byteOffset).getUint32(0, true) * CHUNK;
+    stream.set(c.data.subarray(4, 4 + Math.min(CHUNK, total - at)), at);
+  }
+  const files = new Map<string, Uint8Array>();
+  for (const e of entries) files.set(e.name, stream.slice(e.offset, e.offset + e.size));
+  log(`stream file: ${entries.map((e) => `${e.name} (${e.size})`).join(', ')}`);
+  return files;
 }

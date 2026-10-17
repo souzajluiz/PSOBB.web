@@ -42,6 +42,31 @@ lives outside this repository (`REFSRC`, by default
 - The Enter radii (15 for items, 20 for boxes) are fitted; newserv refuses a pickup beyond 30. Enter is a stand-in until combat can break boxes.
 - No drop animation (the original throws the box in an arc), no "item found" HUD line or sounds, no classic Item Pack menu actions (the buttons live in the Online tab's panel), no bank, shop, tekker or mag feeding, and no partial-stack amount beyond "Drop 1".
 - Enemy drops are implemented on the receiving side only (`6x5F`); the kill requests come from the combat agent's code.
+## 2026-10-17: basic combat (attack combo, damage, enemy death, drop request)
+
+**What changed:** the game view can fight. The player attacks with the action-palette keys, the three-attack combo plays the real weapon motions, the hits are rolled with the client's own accuracy and damage formulas against the enemies' `BattleParamEntry` stats, damaged enemies flinch, dead ones play their death motion and disappear, and all of it is sent to the other clients and to newserv with the subcommands a real client sends. New files: `client/src/combat/{attack,formulas,enemymotions}.ts`, `client/src/render/combat.ts`, `client/src/formats/{battleparams,enemyslots}.ts`. `render/gameview.ts` only builds the `CombatView` and hands it each floor; `render/lobbyview.ts` gained four small hooks (`playerAnimator`, `setPlayerAngle`, `resetGait`, `attacking`), `render/enemymodel.ts` a `play()` / `ended` on `NodeAnimator` and `render/enemyview.ts` an instance list plus `remove()`.
+
+**From `PsoBB.exe` (Ephinea 1.25.13)** — the full decode is in PROTOCOL.md, "Combat":
+- Hit check `FUN_00777664`: `p = (ATA × {1.0, 0.7, 0.5}[type] × {1.0, 1.3, 1.69}[combo step] − EVP × 0.2) × 0.01`, rolled against `FUN_007751B0`.
+- Damage `FUN_007732B8`: `((ATP + spread × rand) + equip_ATP × (1 + attribute) + elements − DFP) × 0.2`, then `{0.9, 1.7, 0.5}[type]`, `× 1.5` on a critical (`rand × 500 <= min(LCK, 100)` for a player attacker, `× 200` for an enemy one). Below 1 damage is a miss; over 25% of max HP sets the big-hit flag; HP below 1 sets the dead flag.
+- Stat block of every entity (`FUN_00770DA4` for players, `FUN_007868F8` for enemies): ATP `+0x2CC`, spread `+0x2CE`, EVP `+0x2D0`, DFP `+0x2D2`, ATA `+0x2D4`, LCK `+0x2D6`, HP `+0x334`, resistances `+0x2F6..+0x2FE`. Player ATA is `(class_min_ata + ATA) × 0.1` with the class table at `0x00968A60`.
+- Combo states 5/6/7 (`FUN_006A11FC`, `FUN_006A0CFC`, `FUN_006A07D8`), their phases (`FUN_00698FA8`), the hit frames (`0x00968CA0`, per-hit rows for daggers and two more classes), the combo windows (`0x00969078`) and the field motion tables (`0x009CBEEC` / `0x009CBF04`, 6 motion types × 19 weapon classes × 72 slots; slots 2, 3, 4 are the attacks) are ported into `combat/attack.ts`.
+- Reach from ItemPMT's weapon range table (`FUN_007A19C0`, row picked by `FUN_005E4BA8`): the volume reaches `a + b` with a horizontal half-angle and a target limit (Saber: 32 units, ±26°, 1 target). `formats/itempmt.ts` now parses `WeaponRange` and `RangedSpecial`.
+- Enemy damage and death motions from the enemy motion tables already decoded (`combat/enemymotions.ts`); enemies whose table is not decoded fall back to the archive's `damage*` / `dead*` entries.
+
+**Protocol:** `6x43`/`6x44`/`6x45` (attack 1/2/3), `6x46` (the entities a strike hit), `6x0A` (enemy damage and flags, `0x20900E00` for a killing hit), `6x76` (set flags 8 on the dead enemy), `6x60` to the leader (drop request, `rt_index` from newserv's `type_defs`) and `6xC8` (BB EXP request). Incoming `6x43`-`6x45` play the attacker's motion, incoming `6x0A` applies the damage, flinch or death. Entity ids need the enemy *slot* expansion (children of Monest, Pan Arms, bosses…): `formats/enemyslots.ts` is a port of newserv's `SuperMap::add_enemy_and_children`, and `tools/gen-entity-names.ts` now also generates `ENEMY_TYPE_PARAMS` (drop index and `BattleParamEntry` indexes per enemy type).
+
+**Enemy stats:** `BattleParamEntry*.dat` (`formats/battleparams.ts`) comes from the server's stream file (`04EB`), which newserv also answers on the game-server connection, so the game view fetches `ItemPMT.prs` and the episode's table once per game (`net/bbsession.ts` gained `fetchStreamFiles`).
+
+**Checks:**
+- `tests/combat.test.ts` (new, 5946 checks): the formula constants and the hit / damage / flag math, the combo state machine (three-hit chain, a lost combo, the charge pause), the 6x byte layouts, every enemy slot of every Episode 1/2/4 floor against newserv's `print-free-supermap` (types and entity ids), and `BattleParamEntry` rows against newserv's `battle-params.json`.
+- `tests/game.live.ts`: client A attacks and kills a Forest 1 enemy; B sees `6x43`, `6x46` and the dead `6x0A`, and the server answers with EXP (`6xBF`) and the item drop (`6x5F`).
+- Chrome, against newserv: Forest 1 with 67 enemies, all with battle params; eight attacks on a Booma (92 HP) took it down 14, 16, 16, miss, 15, 16, 14, 15 with flinches, then the death motion, the drop request and the model being removed. No console errors.
+- `npx tsc --noEmit` passes.
+
+**Known mismatch:** entity ids are counted from the client's own map files, as the client does, but newserv validates them against its own BB maps, whose `map_city00_00e.dat` has 21 enemy sets where the Ephinea client's has 23 — so ids on floors above Pioneer 2 are shifted by 2 against this server. The commands are accepted and the drop and EXP work; the enemy the server credits can be a neighbour of the one the player hit. `tests/combat.test.ts` and `tests/game.live.ts` therefore read newserv's own map files when they need an id.
+
+**Not done:** techniques (`6x47`/`6x48`), photon blasts, weapon specials and status effects, the player taking damage (`6x4A`-`6x4F`), the equipped weapon model in hand, damage numbers and the lock-on reticle, hit boxes per body part (one box per enemy is used), enemy AI (enemies stand still), mechgun-style multi-shot attacks, and the action-palette assignment (the palette keys are assumed to be normal / heavy / special).
 
 ## 2026-10-17: real 3D characters in the classic screens
 

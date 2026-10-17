@@ -167,6 +167,25 @@ export class NodeAnimator {
     this.apply(this.frame);
   }
 
+  get nodeCount(): number {
+    return this.nodes.length;
+  }
+
+  // The current motion reached its last frame (non-looping motions hold it).
+  get ended(): boolean {
+    return !this.loop && this.frame >= this.motion.frameCount - 1;
+  }
+
+  // Switches to another motion from frame 0 (combat: damage / death motions).
+  play(motion: NjMotion, speed: number, loop: boolean): void {
+    this.motion = motion;
+    this.speed = speed;
+    this.loop = loop;
+    this.frame = 0;
+    this.tickRemainder = 0;
+    this.apply(0);
+  }
+
   update(dt: number): void {
     const m = this.motion;
     if (m.frameCount <= 1) return;
@@ -240,6 +259,7 @@ export interface EnemyPartSpec {
 export interface BuiltEnemy {
   root: THREE.Group;
   animators: NodeAnimator[];
+  animatedParts: EnemyPartSpec[]; // the part each animator plays (same order)
   missingTextures: number;
   triangles: number;
 }
@@ -255,6 +275,7 @@ function flagsDepthFirst(o: { flags: number; children: unknown[] }, out: number[
 export function buildEnemy(archive: EnemyArchive, parts: EnemyPartSpec[], phase = 0, external: ReadonlyMap<string, THREE.Texture[]> = new Map()): BuiltEnemy {
   const root = new THREE.Group();
   const animators: NodeAnimator[] = [];
+  const animatedParts: EnemyPartSpec[] = [];
   let missingTextures = 0;
   let triangles = 0;
   for (const part of parts) {
@@ -286,9 +307,10 @@ export function buildEnemy(archive: EnemyArchive, parts: EnemyPartSpec[], phase 
       const motion = archive.motion(part.motion.index, nodes.length);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
       animators.push(new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0));
+      animatedParts.push(part);
     }
   }
-  return { root, animators, missingTextures, triangles };
+  return { root, animators, animatedParts, missingTextures, triangles };
 }
 
 // Loads archives once per view.

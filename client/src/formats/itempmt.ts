@@ -139,6 +139,21 @@ export interface NonWeaponSaleDivisors {
   mag: number;
 }
 
+export interface WeaponRange {
+  horizontal: number;
+  vertical: number;
+  horizontalHalfAngle: number; // BAMS (0x10000 = 360 degrees)
+  verticalHalfAngle: number;
+  maxTargets: number;
+}
+
+export interface RangedSpecial {
+  data1_1: number;
+  data1_2: number; // 0xFF = any
+  rangeIndex: number; // weaponRanges[0xED + rangeIndex]
+  flag: number; // newserv unknown_a1
+}
+
 // V4 constants (newserv ItemParameterTableV4 template arguments).
 export const ITEM_STARS_FIRST_ID = 0xb1;
 export const SPECIAL_STARS_BEGIN_INDEX = 0x256;
@@ -161,6 +176,21 @@ export class ItemPMT {
   combinations: ItemCombination[] = [];
   techBoosts: TechBoost[] = [];
   unsealableItems: number[] = [];
+  weaponRanges: WeaponRange[] = []; // root +0x1C
+  rangedSpecials: RangedSpecial[] = []; // root +0x58
+
+  // Attack reach of a weapon, as PsoBB.exe FUN_005e4ba8 picks it (Ephinea
+  // 1.25.13): a ranged-special row matching data1[1] and data1[2] (or 0xFF)
+  // whose flag is 1, or 0 with a special attack (type 2), selects entry
+  // 0xED + its index (0x1284 / 0x14); otherwise entry data1[1].
+  weaponRange(data1_1: number, data1_2: number, attackType = 0): WeaponRange | undefined {
+    for (const r of this.rangedSpecials) {
+      if (r.data1_1 !== data1_1 || (r.data1_2 !== 0xff && r.data1_2 !== data1_2)) continue;
+      // flag 0 also needs a weapon vfunc (+0x84) to return 1, not decoded: ASSUMED true.
+      if (r.flag === 1 || (r.flag === 0 && attackType === 2)) return this.weaponRanges[0xed + r.rangeIndex];
+    }
+    return this.weaponRanges[data1_1];
+  }
 
   getWeapon(data1_1: number, data1_2: number): Weapon | undefined {
     return this.weapons[data1_1]?.[data1_2];
@@ -363,5 +393,17 @@ export function parseItemPMT(file: Uint8Array, compressed = true): ItemPMT {
     });
   }
   pmt.unsealableItems = readArray(arrayRef(UNSEALABLE_TABLE), 4, code3);
+  // WeaponRange (0x14, newserv's field names): f32 reach, f32 second
+  // distance, u32 half angle (BAMS), u32 second half angle, u32 max targets.
+  // PsoBB.exe FUN_007a19c0 uses them as: max distance = reach + second,
+  // +0xc0 = second, +0xb8 / +0xbc = the angles, +0x88 = max targets.
+  const WEAPON_RANGE_TABLE = r(7);
+  for (let i = 0, n = arrayCount(WEAPON_RANGE_TABLE, 0x14); i < n; i++) {
+    const o = WEAPON_RANGE_TABLE + i * 0x14;
+    pmt.weaponRanges.push({ horizontal: f32(o), vertical: f32(o + 4), horizontalHalfAngle: u32(o + 8), verticalHalfAngle: u32(o + 12), maxTargets: u32(o + 16) });
+  }
+  if (root + 0x5c <= d.length && r(22) !== 0xffffffff) {
+    pmt.rangedSpecials = readArray(arrayRef(r(22)), 4, (o) => ({ data1_1: u8(o), data1_2: u8(o + 1), rangeIndex: u8(o + 2), flag: u8(o + 3) }));
+  }
   return pmt;
 }
