@@ -86,7 +86,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
 
   function updateSection(): void {
     const name = (createForm.elements.namedItem('name') as HTMLInputElement).value;
-    $('create-section').textContent = name ? SECTION_IDS[sectionIdForName(name)] : '-';
+    $('create-section').textContent = name ? SECTION_IDS[sectionIdForName(name, Number((createForm.elements.namedItem('charClass') as HTMLSelectElement).value))] : '-';
   }
 
   async function play(slot: number): Promise<void> {
