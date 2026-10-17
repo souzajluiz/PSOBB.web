@@ -17,6 +17,7 @@ import {
   townMotion,
 } from '../client/src/formats/plymotion.ts';
 import { PlayerAnimator } from '../client/src/render/playeranim.ts';
+import { CharaMotions, charaMotionRecord } from '../client/src/classic/playerview.ts';
 import { buildPlayerModel, CLASS_NAMES, classLetter, DEFAULT_APPEARANCE, parsePlayerAssets } from '../client/src/render/playermodel.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
@@ -124,6 +125,31 @@ for (let cls = 0; cls < 12; cls++) {
     }
     if (g !== 'idle' && maxTurn < 0.3) fail(`${CLASS_NAMES[cls]} ${g}: bones barely move (${maxTurn.toFixed(2)} rad)`);
   }
+}
+
+// Character screens: charamakingmot.bml (NMDM chunks), the 9 motion records
+// of 0x009b1580 / 0x009a2ec0 played on FOmar, FOmarl and HUnewearl.
+{
+  const chara = new CharaMotions(gsl.get('charamakingmot.bml'));
+  let keys = 0;
+  for (let r = 0; r < 9; r++) {
+    const m = chara.get(charaMotionRecord(r).index);
+    if (m.frameCount < 2 || m.nodes.length !== 64) fail(`chara record ${r}: ${m.frameCount} frames, ${m.nodes.length} nodes`);
+    for (const n of m.nodes) keys += (n.position?.length ?? 0) + (n.rotation?.length ?? 0);
+  }
+  for (const [cls, type] of [[10, 0], [6, 2], [1, 1]] as const) {
+    const L = classLetter(cls);
+    const assets = parsePlayerAssets(cls, new Uint8Array(readFileSync(join(DATA, `pl${L}nj.bml`))), new Uint8Array(readFileSync(join(DATA, `pl${L}tex.afs`))));
+    const model = buildPlayerModel(assets, DEFAULT_APPEARANCE);
+    const anim = new PlayerAnimator(model.partBones[0], assets.parts.get(`pl${L}bdy00.nj`)!, chara);
+    for (const r of [type, 3 + type, 6 + type]) {
+      anim.play(charaMotionRecord(r));
+      for (let t = 0; t < 40; t++) anim.update(1 / 30);
+      model.root.updateMatrixWorld(true);
+      if (model.partBones[0].some((b) => b.matrixWorld.elements.some((v) => !Number.isFinite(v)))) fail(`${CLASS_NAMES[cls]} chara record ${r}: bone not finite`);
+    }
+  }
+  console.log(`charamakingmot.bml: 9 records decoded (${keys} keys), played on FOmar/FOmarl/HUnewearl`);
 }
 
 if (failures) {

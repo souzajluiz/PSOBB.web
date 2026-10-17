@@ -7,11 +7,13 @@ import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
 import { TEXTURE_FILES } from './charcreate_data.ts';
-import { PlaceholderModelView } from './charcreate_model.ts';
+import { PlayerModelView } from './charcreate_model.ts';
 import { parseUnitxt } from './charcreate_text.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
+import { SelectPreview } from './charselect_preview.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { LoginScreen } from './login.ts';
+import { CharaFiles } from './playerview.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { TITLE_TUNING, TitleScreen, type TitleAssets } from './title.ts';
 
@@ -67,6 +69,8 @@ async function main(): Promise<void> {
     playerTex: (await tex(['f256_player_tex_eng.prs', 'f256_player_tex.prs']))[0],
   };
 
+  const charaFiles = new CharaFiles(files);
+  let modelView: PlayerModelView | null = null;
   let createAssets: CharCreateAssets | null = null;
   const loadCreateAssets = async (): Promise<CharCreateAssets> =>
     (createAssets ??= {
@@ -95,7 +99,7 @@ async function main(): Promise<void> {
               showSelect(await session.characterPreviews());
             } else {
               console.log('[classic] created (offline)', r);
-              showSelect(slots.map((p, i) => (i === slot ? { slot, level: 1, exp: 0, name: r.name, charClass: r.charClass, sectionId: r.sectionId, playTimeSeconds: 0 } : p)));
+              showSelect(slots.map((p, i) => (i === slot ? { slot, level: 1, exp: 0, name: r.name, charClass: r.charClass, sectionId: r.sectionId, playTimeSeconds: 0, classFlags: r.classFlags, ...r.look } : p)));
             }
           } catch (err) {
             console.error(err);
@@ -104,9 +108,9 @@ async function main(): Promise<void> {
         },
         cancel: () => showSelect(slots),
       },
-      new PlaceholderModelView(),
+      (modelView?.dispose(), (modelView = new PlayerModelView(charaFiles))),
     );
-    Object.assign(window, { classicCreate: create });
+    Object.assign(window, { classicCreate: create, classicModel: modelView });
     show(create);
   };
 
@@ -121,7 +125,7 @@ async function main(): Promise<void> {
         session = null;
         show(title);
       },
-    });
+    }, new SelectPreview(charaFiles));
     Object.assign(window, { classicSelect: select });
     show(select);
   };

@@ -171,9 +171,13 @@ function textureName(template: string, a: PlayerAppearance, limits: readonly num
 }
 
 // Texture names of each part for an appearance, in texture id order.
-export function playerTextureNames(charClass: number, appearance: PlayerAppearance): { body: string[]; head: string[]; hair: string[] } {
+// `emblemSectionId` overrides the clamped section ID for the emblem ('c')
+// textures: character creation keeps 0xFF ("not computed yet") until the
+// name is confirmed, which draws the empty ring ('z').
+export function playerTextureNames(charClass: number, appearance: PlayerAppearance, emblemSectionId?: number): { body: string[]; head: string[]; hair: string[] } {
   const t = PLAYER_CLASS_TABLES[charClass];
   const a = clampAppearance(charClass, appearance);
+  if (emblemSectionId !== undefined) a.sectionId = emblemSectionId;
   const names = (list: readonly number[] | undefined) => (list ?? []).map((i) => textureName(t.names[i], a, t.limits));
   return { body: names(t.body), head: names(t.head[a.head]), hair: names(t.hair?.[a.hair]) };
 }
@@ -188,8 +192,8 @@ function textureIndex(charClass: number, name: string): number {
   return m.get(name) ?? 0;
 }
 
-export function playerTextureLists(assets: PlayerAssets, a: PlayerAppearance): TexLists {
-  const n = playerTextureNames(assets.charClass, a);
+export function playerTextureLists(assets: PlayerAssets, a: PlayerAppearance, emblemSectionId?: number): TexLists {
+  const n = playerTextureNames(assets.charClass, a, emblemSectionId);
   const idx = (list: string[]) => list.map((name) => textureIndex(assets.charClass, name));
   return { body: idx(n.body), head: idx(n.head), hair: idx(n.hair) };
 }
@@ -378,10 +382,10 @@ export function clampAppearance(charClass: number, a: PlayerAppearance): PlayerA
   };
 }
 
-export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE): PlayerModel {
+export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE, opts: { emblemSectionId?: number } = {}): PlayerModel {
   const a = clampAppearance(assets.charClass, appearance);
   const L = assets.letter;
-  const lists = playerTextureLists(assets, a);
+  const lists = playerTextureLists(assets, a, opts.emblemSectionId);
   const lookup = (list: number[]) => (id: number) => (list[id] !== undefined ? texture(assets, list[id]) : null);
   const part = (name: string) => {
     const p = assets.parts.get(name);
