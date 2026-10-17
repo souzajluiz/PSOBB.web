@@ -1,5 +1,90 @@
 # Devlog
 
+## 2026-10-16: select character screen from the decompiled code
+
+**What changed:** `classic/charselect.ts` is now built from what `PsoBB.exe` (Ephinea 1.25.13) does. Before, it was laid out by hand from a capture. A new `classic/gametext.ts` reproduces the game's 2D text layout. SSIM against the psobb.io capture went from 0.487 to 0.920 (PSNR 18.4 → 28.1), measured at the same backtext animation frame.
+
+**The scene:** scene 6 of the scene switch `FUN_0081aac8` is `FUN_004135e0` (vtable `0x00af3370`, state table `0x009a3738`). Its children, in creation order:
+
+| Object | Constructor / vtable | Render | What it draws |
+|---|---|---|---|
+| background | `FUN_004010b0` / `0x00af2028` | `FUN_004010e4` | black quad, then `f256_ad_pic_2` tiles via `FUN_00415bcc` (table `0x009a3840`, the same 640×512 layout as the title), additive |
+| backtext | `FUN_004012cc` / `0x00af2060` | `FUN_0040131c` | additive quad (0,0)–(639,479), texture = counter / 3, counter 0..14 (`FUN_00401304`) |
+| header | `FUN_00415154(row 0)` / `0x00af3500` | `FUN_004154b8` | 8 additive copies of the 512×40 `f512_midashi` row, color `0x1fffffff` |
+| UI builder | `FUN_00401504` / `0x00af20c0` | states `0x009a2d68` | tags, slot bars, slot text, frame lines |
+| message | `FUN_0040b72c` / `0x00af2810` | `FUN_0040b85c` | two centered lines |
+| slot list | `FUN_004121f0` / `0x00af3158` | `FUN_00412800` | cursor bars; owns the scrollbars (`0x00af2ff8`, `FUN_00411828`) |
+| help keys | `FUN_0041571c` / `0x00af3538` | `FUN_004158ec` | key caps and labels |
+
+The 3D preview (`FUN_00406ab4`) and the per-slot icons (`FUN_0040e004`, drawn only for existing characters) are not reproduced yet.
+
+**Blend modes:** `FUN_0082acfc(0|1, n)` sets the source and destination blend through the table in `FUN_00837468`. 8 → SRCALPHA, 10 → ONE, 6 → INVSRCALPHA. So `(8, 10)` is additive, which the canvas does with `'lighter'`. `FUN_007a902c` sets additive and `FUN_007a9044` restores normal blending. `FUN_0082bb60` takes the texture index in ECX and the vertex ARGB in EDX (read from the disassembly).
+
+**Frame lines are data:** `FUN_004088b8(parent, id)` instantiates entry `id` of `CAdDrawLineTask.prs` (`FUN_00408c20`). The file `addrawlinetask.prs` is a REL file whose root is an array of `{count, pairs, primitives}`. Each primitive is 0x2c bytes: `{index, x0, y0, z0, ARGB0, x1, y1, z1, ARGB1, speed, width}`.
+- A segment (`FUN_0040840c` / `FUN_004089f8`) grows by `speed` = 40 px per frame and is a quad `width` = 2 px wide.
+- When a segment completes, it starts the segments chained to it (pair `(a, b)`). Pairs `(-1, b)` start at once.
+- Entries used here:
+  - 8, the header lines, created by the header;
+  - 9, the footer lines, created by the message;
+  - 0xb, the CHARACTERS box and tag outline;
+  - 0x1c, the green panel (`0xff4da55f`).
+- The other lines are `0xff368bbc`.
+- Ephinea ships a loose `addrawlinetask.prs` whose right ends are at x = 853 (16:9). The `data.gsl` copy has 640, which is what the reference capture shows, so the values are taken from the `data.gsl` copy.
+
+**Values (640×480 virtual space, 30 frames per second):**
+- **Header** (`FUN_004153d4`): rows are 40 px in a 512 texture (`0x008fadac` / `0x008fada8`). Copy `i` is at x = 64 − (10 − t)²·k[i], with k = ±{1, .8, .6, .4} (`0x008fad68`), y 43..83, t = 0..10. The text drawn by `FUN_004155f0` at (620 − width, 86) is not visible in the capture.
+- **Tag** (`FUN_00414d60`, `FUN_00414c94`, `FUN_00402750(0)`):
+  - tag 0 of `f256_tag` at (134, 118), 174×32 (`0x008fad1c`/`0x008fad20`);
+  - u 0..0.6797, v row·32/256;
+  - additive, alpha +1/15 per frame.
+- **Slot bars** (`FUN_00401664(0, 0)` → `FUN_0040d3ac`, render `FUN_0040d6f8`):
+  - 180×38 at (131, 182 + 43·i) (`0x008f86b8`);
+  - RGB(54, 188, 136), additive, alpha 0.05 per frame up to 119/255 (`0x008fa1ec`/`0x008fa1f0`);
+  - they fly from slot 0 in 15 steps.
+- **Slot text** (`FUN_0040e694`):
+  - the name (unitxt group 0x39 entry 0 "NEW CHARACTER" when empty) at the bar origin;
+  - "LV%d" (0x39/1) right-aligned 20 px lower;
+  - each has a 0x111111 shadow at x + 1;
+  - alpha +1/15 per frame.
+- **Cursor** (`FUN_0041245c`, `FUN_00412800`):
+  - drawn from `f256_ad` texture 0 (`DAT_00a3b09c`, loaded at `0x00412954`), additive;
+  - three quads 16 | 148 | 16, v 224..242;
+  - u 0/16/32/48 for the orange bar, 49/65/81/97 for the green "chosen" bar (`DAT_00a3b088` = 16 at `0x00412948`);
+  - the cursor slot is set to alpha 255 and the others lose 25 per frame. The capture matches alpha ≈ 100 on the previous slot, i.e. it was taken about 6 frames after the cursor moved.
+- **Scrollbar** (`FUN_00411828`): RGB(37, 236, 0), alpha +1/15 per frame. Its geometry is set somewhere not found yet; x 314, y 182, 3×55 are measured from the capture.
+- **Message** (`FUN_0040b7d8`):
+  - unitxt 0x1f/0 "Please select character." at y = 370 (+20 for the second line);
+  - x = (640 − width) / 2 (`0x008f9e8c`/`0x008f9e88`);
+  - alpha +25 per frame.
+  - On the widescreen reference the line is centered on the whole window (768 virtual px at 16:10), so the patch must replace the 640. A residual offset of about 3.5 px remains.
+- **Help keys** (`FUN_0041571c`, `FUN_004157c4`, `FUN_0041594c`):
+  - 32×32 caps from `f256_player_tex`: Enter UV (122, 210), Esc (162, 210);
+  - at (156, 421) and (299, 421), set by `FUN_004135e0`;
+  - slide in from x = 640 as (640 − x)·(20 − t)²/400 + x;
+  - alpha from 0x33, +12 per frame;
+  - labels unitxt 0x31/0, 1 at (x + 32, y + 8).
+- **Text** (`FUN_007ab554`, `FUN_007ac344`):
+  - glyphs are drawn at virtual resolution with a 14 px cell (`0x0097db84`);
+  - a space advances 7 px (`0x0097db7c`) and a newline 20 px (`0x0097db78`);
+  - the width is the sum of the glyph advances;
+  - the last argument (0.4/0.5) is the quad's depth, not a scale.
+  - The face is fitted. Every string width in the capture matches Arial bold 11 px (NEW CHARACTER 102, "Please select character." 131, Enter 28, Cancel 36). Tahoma does not match, probably because psobb.io runs under Wine and falls back to another face.
+
+**Validation:**
+- `tools/compare.sh` against `select.png`: SSIM 0.920, PSNR 28.1.
+- The best backtext frame is texture 1 (SSIM 0.917 vs 0.87 for the other four), which confirms the animation and its additive blending.
+- Region SSIMs:
+  - slot area 0.87, or 0.92 with the previous slot's fade set to alpha 100;
+  - keys 0.89;
+  - header 0.93;
+  - message 0.39 (the 3.5 px offset).
+
+**Open:**
+- Where the scrollbar geometry and the 640 → 768 centering come from.
+- Why the header text is invisible.
+- The timing of the UI builder states, which gate when the tags and lines start. They start at frame 0 here.
+- The 3D preview and slot icons for existing characters.
+
 ## 2026-10-16: title screen rebuilt from the decompiled code
 
 **What changed:** the title is now drawn from what `PsoBB.exe` does instead of parameters fitted to a capture.
