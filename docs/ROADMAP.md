@@ -34,6 +34,8 @@
 
 ## Phase 4: online
 - [x] Lobby: 3D lobby map, player list, chat
+- [x] Classic lobby HUD from the exe: chat input (Space), word balloons with name tab, Log Window, Home main menu (labels, help, view shift), Item List, information counter menus
+- [ ] Classic HUD: balloon overlap avoidance and off-screen docking, sub-menu transitions, Item List row format, counter/menu leaf actions, ship-select camera
 - [x] Own movement sent via `6x42` / `6x3E`, ground-following on the map collision
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)

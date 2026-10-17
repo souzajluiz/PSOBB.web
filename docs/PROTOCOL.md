@@ -126,6 +126,7 @@ The text table must come from the same build as the ItemPMT, because the client 
 ## Lobby traffic
 
 - **Chat `06`:** `u32 unused, u32 guild_card_number`, UTF-16 text. Sent as `\tE<text>`; received as `<name>\t\tE<text>`.
+  The original client turns `\n` into spaces, logs `<name> > <text>` (30 lines, shown in the main menu's Log Window) and shows a word balloon over the speaker for round(len × 3.3 + 55.5) frames (see DEVLOG 2026-10-17, lobby HUD).
 - **Subcommands `60`/`62`:** `u8 sub, u8 size_in_dwords, u16 client_id`, payload. Implemented:
 
 | Sub | Meaning | Payload |
