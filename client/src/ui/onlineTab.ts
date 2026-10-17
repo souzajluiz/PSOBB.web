@@ -12,6 +12,8 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { QuestClient, type LoadedQuest, type QuestMenuEntry } from '../net/quests.ts';
 import { runQuest, type QuestRunner } from '../quest/run.ts';
+import { QuestTown } from '../quest/town.ts';
+import { ClientFiles } from '../data/clientfiles.ts';
 import { AREA_NAMES, GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
@@ -39,6 +41,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let bgm: BgmPlayer | null = null; // floor music in games (render/gamefield.ts)
   let quests: QuestClient | null = null; // quest menu + file download (net/quests.ts)
   let questRunner: QuestRunner | null = null;
+  // NPC talk, the area script, the counters and the quest windows of the
+  // current game (quest/town.ts).
+  let questTown: QuestTown | null = null;
   // Set by buildQuestPanel below; the game panel's update() runs it too, and
   // it is called before that panel exists.
   let questPanelUpdate: () => void = () => {};
@@ -150,15 +155,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
     }
     try {
       questRunner?.dispose();
-      questRunner = await runQuest({
-        quest: q,
-        game: g,
-        view,
-        anchor: $('lobby-canvas'),
-        heroName: () => session?.character?.name ?? '',
-        heroClass: () => session?.character?.charClass ?? 0,
-        log,
-      });
+      if (!questTown) throw new Error('no quest town for this game');
+      questRunner = await runQuest({ quest: q, game: g, view, town: questTown, log });
       addChat('*', `quest "${questRunner.session.name}" loaded`);
       setStatus(`Quest "${questRunner.session.name}"`, 'ok');
     } catch (err) {
@@ -205,6 +203,17 @@ export function initOnlineTab(log: (msg: string) => void): void {
       const view = new GameView(viewer, g, source, log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null });
       gameView = view;
       wireItems(view);
+      questTown = new QuestTown({
+        game: g,
+        view,
+        files: new ClientFiles(source),
+        canvas: $<HTMLCanvasElement>('lobby-canvas'),
+        quests: () => quests,
+        heroName: () => session?.character?.name ?? '',
+        heroClass: () => session?.character?.charClass ?? 0,
+        log,
+      });
+      Object.assign(window, { psoQuestTown: questTown });
       view.onLobbyWarp = () => void leaveGame();
       // Development aids (console): psoWaves.events(), psoWaves.trigger(id),
       // psoWaves.killWave(), psoWaves.doors(), psoWaves.boxes().
@@ -265,6 +274,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
     inventory.setActions(null);
     questRunner?.dispose();
     questRunner = null;
+    questTown?.dispose();
+    questTown = null;
     busy = true;
     games.update();
     try {
@@ -536,6 +547,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
   function leaveLobby(): void {
     questRunner?.dispose();
     questRunner = null;
+    questTown?.dispose();
+    questTown = null;
     quests = null;
     gameView?.dispose();
     gameView = null;

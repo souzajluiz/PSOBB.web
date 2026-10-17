@@ -194,10 +194,20 @@ export class QuestClient {
   }
 
   // C->S A2: ask for the quest menu. Resolves with the category list.
-  requestMenu(): Promise<QuestMenuEntry[]> {
+  // `government`: the flag the Principal's office counter sets (newserv
+  // on_A2: a BB A2 with a non-zero flag asks for the government quests; the
+  // Hunter's Guild sends 0).
+  requestMenu(government = false): Promise<QuestMenuEntry[]> {
     const p = new Promise<QuestMenuEntry[]>((resolve) => this.menuWaiters.push(resolve));
-    this.conn.send(0xa2, 0);
+    this.conn.send(0xa2, government ? 1 : 0);
     return p;
+  }
+
+  // C->S A9: the quest menu was closed without a choice (the online guild
+  // dialog sends it, send_packet0xa9 in MedicalCenterDialog_ProcessState
+  // _006cd8d8, so the server stops waiting for the leader's selection).
+  closeMenu(): void {
+    this.conn.send(0xa9, 0);
   }
 
   // C->S 10: choose a category. Resolves with that category's quest list.

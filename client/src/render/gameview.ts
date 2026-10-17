@@ -30,6 +30,8 @@ import { ObjectLayer } from './objectview.ts';
 import { enemySlots } from '../formats/enemyids.ts';
 import { parseEnemySets } from '../formats/setdata.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
+import { NpcLayer } from './npcview.ts';
+import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -64,6 +66,8 @@ export class GameView {
   private table: Promise<SetDataTable | null> | null = null;
   private view: LobbyView | null = null;
   readonly enemyLayer: EnemyLayer;
+  // NPCs of the floor (render/npcview.ts); quest/town.ts drives their talk.
+  readonly npcs: NpcLayer;
   readonly combat: CombatView;
   readonly objectLayer: ObjectLayer;
   private field: GameField;
@@ -78,6 +82,11 @@ export class GameView {
   onFloor: (info: FloorInfo) => void = () => {};
   // The lobby teleporter (TObjCityAreaWarp) was used: the caller leaves the game.
   onLobbyWarp: () => void = () => {};
+  // Called after every floor load (quest/town.ts loads the area script).
+  readonly floorHooks = new Set<(info: FloorInfo) => void>();
+  // While this returns true the local player cannot move, attack or pick up
+  // (an NPC talk, a quest message or list waits; UIState_SetLockedState).
+  inputBlocked: () => boolean = () => false;
 
   constructor(
     viewer: MapViewer,
@@ -93,6 +102,7 @@ export class GameView {
     this.files = new ClientFiles(source);
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
+    this.npcs = new NpcLayer(viewer, this.files);
     this.objectLayer = new ObjectLayer(viewer, this.files);
     this.field = new GameField(viewer, game, this.files, {
       bgm,
@@ -104,7 +114,7 @@ export class GameView {
     this.items = new GameItems(game, { ...character, log });
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
-      blocked: () => this.field.menu.open || this.busy,
+      blocked: () => this.field.menu.open || this.busy || this.inputBlocked(),
       log,
     });
     // Combat lives in render/combat.ts; the view only hands it the floor.
@@ -220,7 +230,9 @@ export class GameView {
   }
 
   // 6x21 + 6x22, load, then 6x3F / 6x1F / 6x3B / 6x23.
-  async warpTo(floor: number): Promise<void> {
+  // `source` picks the TObjPlayerSet group (p_return_guild uses 0, the
+  // spawn in front of the Hunter's Guild).
+  async warpTo(floor: number, source?: number): Promise<void> {
     const me = this.game.self;
     if (!me || this.busy || floor === me.floor) return;
     this.busy = true;
@@ -228,7 +240,7 @@ export class GameView {
       const from = me.floor;
       this.game.warp(floor);
       // TObjPlayerSet param4: 0 = arriving from a lower floor, 1 = returning from a higher one.
-      await this.loadFloor(floor, floor > from ? 0 : 1);
+      await this.loadFloor(floor, source ?? (floor > from ? 0 : 1));
       this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle);
     } finally {
       this.busy = false;
@@ -240,6 +252,7 @@ export class GameView {
     this.view = null;
     this.enemyLayer.clear();
     this.objectLayer.clear();
+    this.npcs.clear();
     const { area, files, geometry } = await this.floorFilesFor(floor);
     if (!geometry) throw new Error(`no map for floor ${floor} (area ${area})`);
     await this.viewer.load(this.source, geometry);
@@ -274,6 +287,9 @@ export class GameView {
       const info = this.game.info!;
       const modeled = await this.enemyLayer.show(placed, { area, episode: this.episode(), difficulty: info.difficulty, event: info.event ?? 0 });
       if (this.disposed) return;
+      const npcModels = await this.showNpcs(placed, area);
+      if (this.disposed) return;
+      for (const p of npcModels) modeled.add(p);
       const s = this.enemyLayer.stats;
       this.log(`quest floor ${floor}: ${s.placed} enemy models placed${s.unresolved.length ? `, no model: ${[...new Set(s.unresolved)].join(', ')}` : ''}`);
       placedObjects = placed.filter((p) => p.entity.kind === 'object');
@@ -310,6 +326,9 @@ export class GameView {
       const info = this.game.info!;
       const modeled = await this.enemyLayer.show(placed, { area, episode: info.episode, difficulty: info.difficulty, event: info.event ?? 0 });
       if (this.disposed) return;
+      const npcModels = await this.showNpcs(placed, area);
+      if (this.disposed) return;
+      for (const p of npcModels) modeled.add(p);
       const s = this.enemyLayer.stats;
       this.log(`enemy models: ${s.placed} placed${s.unresolved.length ? `, no model: ${[...new Set(s.unresolved)].join(', ')}` : ''}${s.errors.length ? `, errors: ${s.errors.join('; ')}` : ''}`);
       placedObjects = placed.filter((p) => p.entity.kind === 'object');
@@ -349,7 +368,8 @@ export class GameView {
     this.collision = mapData.collision;
     this.floorItems.enterFloor(floor, area, placedObjects, objectBase);
     this.floorItems.attach();
-    this.view.attacking = this.combat.isAttacking;
+    const attacking = this.combat.isAttacking;
+    this.view.attacking = (id) => attacking(id) || (id === this.game.selfId && this.inputBlocked());
     await this.combat.enterFloor(floor, area, enemySets, await this.combat.enemyBase(floor));
     if (this.disposed) return;
     this.combat.attach(this.view);
@@ -367,6 +387,50 @@ export class GameView {
         `${mapData.spawns.size} spawn points`,
     );
     this.onFloor(this.current);
+    for (const h of this.floorHooks) h(this.current);
+  }
+
+  // NPC models of the floor (render/npcview.ts); returns the entries drawn.
+  private async showNpcs(placed: ReturnType<typeof placeEntities>, area: number): Promise<Set<(typeof placed)[number]>> {
+    const done = await this.npcs.show(placed, { area, sectionId: this.game.self?.sectionId ?? 0 });
+    const n = this.npcs.stats;
+    if (n.placed || n.unresolved.length || n.errors.length) {
+      this.log(
+        `NPC models: ${n.placed} placed${n.hidden ? `, ${n.hidden} not loaded on this map` : ''}` +
+          `${n.unresolved.length ? `, no model: ${[...new Set(n.unresolved)].join(', ')}` : ''}` +
+          `${n.errors.length ? `, errors: ${n.errors.join('; ')}` : ''}`,
+      );
+    }
+    return done;
+  }
+
+  // --- what quest/town.ts asks of the view ---
+
+  get camera(): THREE.Camera {
+    return this.viewer.camera;
+  }
+
+  // The local player's position and facing (radians), as drawn.
+  selfPose(): { x: number; y: number; z: number; angle: number } | null {
+    return this.view?.playerPose(this.game.selfId) ?? null;
+  }
+
+  // Head point of a player (speech balloons of `message` with a client id).
+  playerHead(clientId: number): THREE.Vector3 | null {
+    const p = this.view?.playerPose(clientId);
+    if (!p) return null;
+    return new THREE.Vector3(p.x, p.y + (this.view?.playerHeight(clientId) ?? 16) * 0.92, p.z);
+  }
+
+  // Moves a player at once (6x24 / set_player_start_position), radians.
+  placePlayer(clientId: number, x: number, y: number, z: number, angle: number): void {
+    this.view?.placePlayer(clientId, x, y, z, angle);
+  }
+
+  // Turns the local player (an NPC talk turns the player to the NPC).
+  setSelfAngle(angle: number): void {
+    const p = this.selfPose();
+    if (p) this.view?.placePlayer(this.game.selfId, p.x, p.y, p.z, angle);
   }
 
   // Reloads the floor the player is on. Used when a quest's map designations
@@ -429,6 +493,7 @@ export class GameView {
     this.view?.dispose();
     this.view = null;
     this.enemyLayer.dispose();
+    this.npcs.dispose();
     this.objectLayer.dispose();
     this.viewer.clearEntities();
   }

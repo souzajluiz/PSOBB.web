@@ -213,13 +213,15 @@ export function decodeInstruction(data: Uint8Array, offset: number, fromArgStack
           break;
         }
         case 'LABEL16_SET': {
-          // u16 label indexes until a zero one.
+          // u8 count, then that many u16 label indexes (newserv QuestScript.cc
+          // reads LABEL16_SET as get_u8 + get_u16l each; e.g. q101's
+          // `40 00 02 C800 C900` = switch_jmp r0, [label 0xC8, label 0xC9]).
           const ids: number[] = [];
-          for (;;) {
-            const id = dv.getUint16(at, true);
+          const count = dv.getUint8(at);
+          at += 1;
+          for (let i = 0; i < count; i++) {
+            ids.push(dv.getUint16(at, true));
             at += 2;
-            if (!id) break;
-            ids.push(id);
           }
           args.push({ arg, value: ids.length, text: ids.join(',') });
           break;
