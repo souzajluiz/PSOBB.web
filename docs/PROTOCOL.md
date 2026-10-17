@@ -297,7 +297,7 @@ The angle uses the client's convention (direction = `(sin a, cos a)`). The web c
 
 ## Player character models
 
-Files (loose in `data/`, not in `data.gsl`): `pl<L>nj.bml` (models), `pl<L>tex.afs` (textures), with `<L>` = `A`..`L` for class 0..11 (HUmar .. RAmarl). `O`..`Y` are extra NPC-style models. The loose `pl<L>bdy00.nj` etc. are byte-identical to the BML entries for `A`..`L`. `pl<L>smp.rel` is a separate low-poly model with motions (not decoded). Player motions are in `data.gsl` → `plymotiondata.rlc` (not decoded yet).
+Files (loose in `data/`, not in `data.gsl`): `pl<L>nj.bml` (models), `pl<L>tex.afs` (textures), with `<L>` = `A`..`L` for class 0..11 (HUmar .. RAmarl). `O`..`Y` are extra NPC-style models. The loose `pl<L>bdy00.nj` etc. are byte-identical to the BML entries for `A`..`L`. `pl<L>smp.rel` holds the 7 proportion shapes as a REL for the character select/creation screen (`FUN_004e9a68`, `FUN_004e7a64`; not decoded here, `plZsmpnj.afs` has the same shapes). Player motions are in `data.gsl` → `plymotiondata.rlc` (not decoded yet).
 
 ### BML (`formats/bml.ts`)
 
@@ -311,11 +311,33 @@ IFF chunks `{tag[4], u32 size}`: `NJTL`, `NJCM`, `POF0`, `NMDM`. Pointers are of
 - **Polygon chunks:** `u8 type, u8 flags`. 1 blend (`flags` bits 3-5 src, 0-2 dst), 4 **cache** list `flags` (rest of the list is stored), 5 **draw** cached list, 8/9 texture (`u16`: bits 0-12 id; `flags` 0x80/0x40 flip U/V, 0x20/0x10 clamp U/V), 16..31 material (`u16 size` in u16 words; diffuse/ambient/specular BGRA by type bits 0/1/2), 64..75 strips (`u16 size`, `u16` count + user-offset words; per strip `i16 len` (negative = reversed), per vertex `u16 index`, then uv `i16 u,v` (65: /255, 66: /1023), …). Strip flags: 0x01 no lighting, 0x08 alpha, 0x10 double-sided, 0x40 env map. Type 89 (unknown, has a size field) appears in `plO..Rbdy00.nj` and is skipped.
 - **Evaluation:** walking the tree, every node writes its transformed vertices into one vertex buffer shared by the whole tree; strips index that buffer. The body caches its main polygon list at the root and draws it at a later node, after the weighted vertices have been completed. `render/njcmmesh.ts` replays this in the bind pose and turns the writers of each vertex into skin weights; every strip of all 12 classes resolves.
 
-### Assembly and textures (`render/playermodel.ts`)
+### Assembly and textures (`render/playermodel.ts`, from `PsoBB.exe`)
 
-- `pl<L>bdy00.nj`: 64 nodes. Head (`hed00`, androids `hed00..04`), hair (`hai00..09`) and cap (`capNN`, drawn with hair style NN) attach to **body node 59** (depth-first index). Hair and cap NN share one texture list.
-- `pl<L>tex.afs`: one `XVRT` per entry. Texture ids are per part; the game maps them to AFS entries from the appearance. Layout found:
-  - humans/newmans: 18 costume blocks (3 to 26 entries; some hold 4 skin variants), ears ×4 skins, faces 5×4 (`base + 4*face + skin`; HUmar/RAmar interleave face/ear pairs), hair, skin and/or costume swatches, 11 emblems.
-  - androids: 25 skin blocks of 5 (entries 3–4 are `hed00`'s for HUcast/RAcaseal/HUcaseal), one group of 25×k per other head, skin swatches, 11 emblems.
-  - The last 11 entries are the section ID emblems (Viridia..Whitill, then an empty ring). Body texture id 0 is the emblem.
-- The per-class tables are in `playermodel.ts`. The default appearance of all 12 classes looks right. Hair/cap textures of the hat-wearing classes and non-default android heads are best guesses.
+Per-class appearance record, `0x009b5b60 + 0x2c * class` (generated into `render/playertables.ts` by `tools/gen-player-tables.py`):
+
+| Offset | Type | Content |
+|---|---|---|
+| +0x00 | `i16[5]` | limits: costume, skin, face, head, hair (humans 18/4/5/0/10, androids 0/25/0/5/0; 0 = must be 0). `FUN_004e665c` resets an out-of-range value to 0 (not wrap), section ID −1 → 0, other invalid → id % 10, hair RGB outside 0..255 → 0. |
+| +0x10 | `char**` | hair models `pl<L>haiNN.nj` [hair] |
+| +0x14 | `char**` | cap models `pl<L>capNN.nj` [hair] (NULL entries; HUmar only `cap06`) |
+| +0x18 | `char**` | head models `pl<L>hedNN.nj` [head] |
+| +0x1c | `char*` | `pl<L>bdy00.nj` |
+| +0x20 | `TEXLIST*[hair]` | hair texture name lists (hai and cap draw with it) |
+| +0x24 | `TEXLIST*[head]` | head texture name lists |
+| +0x28 | `TEXLIST*` | body texture name list |
+
+`TEXLIST = { char** names, u32 count }`. `0x009b59e0 + 0x10 * class`: `{ u32 file id, u32 count, "PL<L>TEX.AFS", char** names }`; `names[i]` is the name of entry `i` of `pl<L>tex.afs` (sorted).
+
+- **Texture lists** (`FUN_004e6920`): each template name `pxt<L><type>_<NN><v>_...` is copied and edited: type `b`/`t` with NN ≠ `00` → NN = costume+1 (if costume limit > 0); type `b`/`f`/`t` with v ≠ `z` → v = `a`+skin (if skin limit > 0); type `f` with N[1] ≠ `0` → N[1] = `1`+face; type `c` (emblem) → v = `a`+section ID, or `z` (empty ring) if invalid. The name is binary-searched in the class's name table (`FUN_004ed735`) to get the AFS entry (not found → entry 0). Texture id N of a part is entry N of its list. Every name these rules can produce exists, and every AFS entry is reachable except `pxtKb_01z_t_hair1/2` (FOmar).
+- **Attachment** (`FUN_0068a088`): the head draws with the node matrix at +0xe80 (**node 58**) and the head list; the cap with +0xec0 (**node 59**) and the hair list; the hair with node 59, the hair list and the hair color (`FUN_004e70c4`, RGB/255 as material color). Nodes 58 and 59 have the same bind pose.
+
+### Proportions (`proportion_x`, `proportion_y`)
+
+Not a scale: the body and head are **morphed** between 7 shapes per class from `plZsmpnj.afs` (file id 0xdf). Entry = `SMP_BASE[class] + SMP_COUNT[class] * shape + k` (`0x009b8ea0`, `0x009b8e40`): `k` = head index for the head, `SMP_COUNT − 1` for the body (humans 2 per shape, androids 6). Each entry is an NJ file (NJTL + NJCM) with the node and vertex chunk layout of `pl<L>bdy00.nj` / `pl<L>hedNN.nj`.
+
+- `FUN_004e686c`: unless `0 ≤ x < 1` and `0 ≤ y < 1`, both become 0.
+- 9 points (`0x009b1680`, x of points 1, 2, 3, 5, 6 set by `FUN_004e9690`): P0 (0,0), P1 (⅓,0), P2 (⅔,0), P3 (⅓,½), P4 (0,1), P5 (⅓,1), P6 (⅔,1), P7 (1,1), P8 (1,0). Point 7 uses shape 4, point 8 shape 0.
+- 8 triangles (`0x009b16e0`, `[a,b,c]`): [1,3,0] [0,4,3] [3,5,4] [1,3,2] [2,6,3] [3,5,6] [2,6,7] [8,7,2]. `FUN_004e877c`: x > ⅔ → 6 if 3(x−⅔) ≤ y else 7; x ≤ ⅓ → 0 if ⅔y ≤ x, else 1 if x ≤ ⅔(1−y), else 2; otherwise 3 if x ≤ ⅔(1−y), else 4 if ⅔y ≤ x, else 5.
+- Weights (`FUN_004e86e4`): `wc = (x − a.x)/(c.x − a.x)`, `wb = (y − a.y − wc (c.y − a.y))/(b.y − a.y)`, `wa = 1 − wb − wc`.
+- Blend (`FUN_004e7e54`, nodes in depth-first order, flags from `FUN_007aaefc`): model center; position if any shape has `!UNIT_POS` (clears the flag); body only: scale if any has `!UNIT_SCL`; vertex chunks 41/44 (`FUN_004e838c`): position, normal (renormalized), Ninja-flags weight `round(Σ w·hi16)`. The head loop blends vertices when shape `a` has a vertex list.
+- In game the 3 shapes are loaded per player by `FUN_004ee448` and blended by `FUN_004ee534`; character creation does the same (`FUN_00603ce0`). The `pl<L>nj.bml` body equals shape 3 (P3) only approximately.

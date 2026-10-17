@@ -76,6 +76,8 @@ function appearance(): PlayerAppearance {
   a.hairR = parseInt(hex.slice(1, 3), 16);
   a.hairG = parseInt(hex.slice(3, 5), 16);
   a.hairB = parseInt(hex.slice(5, 7), 16);
+  a.proportionX = Number($<HTMLInputElement>('proportionX').value);
+  a.proportionY = Number($<HTMLInputElement>('proportionY').value);
   return a;
 }
 
@@ -151,7 +153,7 @@ async function main(): Promise<void> {
   files = new ClientFiles(await dataSource());
   clsSelect.addEventListener('change', () => void selectClass(Number(clsSelect.value)));
   sectionSelect.addEventListener('change', rebuild);
-  for (const id of [...fields, 'hair-color']) $(id).addEventListener('input', rebuild);
+  for (const id of [...fields, 'hair-color', 'proportionX', 'proportionY']) $(id).addEventListener('input', rebuild);
   await selectClass(Number(clsSelect.value));
 }
 
