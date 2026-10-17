@@ -5,6 +5,7 @@ import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
+import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { LoginScreen } from './login.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { TITLE_TUNING, TitleScreen } from './title.ts';
@@ -44,10 +45,14 @@ async function main(): Promise<void> {
   const files = new ClientFiles(await dataSource());
   const stage = new Stage(canvas);
   const titleTex = await textureBitmaps(await files.textures('title.prs'));
+  const tex = async (names: string[]) => textureBitmaps(await files.textures(names));
   const selectAssets: CharSelectAssets = {
-    header: (await textureBitmaps(await files.textures(['f512_midashi_eng.prs', 'f512_midashi.prs'])))[0],
-    tag: (await textureBitmaps(await files.textures(['f256_tag_eng.prs', 'f256_tag.prs'])))[0],
-    tunnel: await textureBitmaps(await files.textures('f256_backtext.prs')),
+    grid: await tex(['f256_ad_pic_2.prs']),
+    backtext: await tex(['f256_backtext.prs']),
+    midashi: await tex(['f512_midashi_eng.prs', 'f512_midashi.prs']),
+    tag: (await tex(['f256_tag_eng.prs', 'f256_tag.prs']))[0],
+    ad: (await tex(['f256_ad_eng.prs', 'f256_ad.prs']))[0],
+    playerTex: (await tex(['f256_player_tex_eng.prs', 'f256_player_tex.prs']))[0],
   };
 
   let session: BBSession | null = null;
@@ -62,6 +67,7 @@ async function main(): Promise<void> {
         show(title);
       },
     });
+    Object.assign(window, { classicSelect: select });
     show(select);
   };
 
@@ -132,6 +138,8 @@ async function main(): Promise<void> {
   Object.assign(window, {
     classicStage: stage,
     TITLE_TUNING,
+    GAME_TEXT,
+    clearGameTextCache,
     classicTime: (t: number) => (stage.time = t),
     classicCapture: (name: string, w = 2880, h = 1800) => captureStage(stage, name, w, h),
   });

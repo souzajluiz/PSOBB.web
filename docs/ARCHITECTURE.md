@@ -51,6 +51,15 @@ The browser reads the `data/` folder of the user's own PSOBB installation. Nothi
 
 The client needs a `.nsk` key file. During development Vite serves it from the local newserv checkout (`vendor/newserv/system/blueburst/keys/`) at `/keys/<name>.nsk`. The key is never committed to this repository.
 
+### Classic UI
+
+`client/src/classic/` redraws the original client's 2D screens (title, login, character select) on a Canvas2D stage. The stage works in the game's 640×480 virtual space. Rules:
+- Positions, sizes, colors, blend modes and timings come from the decompiled `PsoBB.exe`. Each value carries the address it was read from. Values fitted to captures are marked as such.
+- Additive blending (`FUN_0082acfc` 8/10, `FUN_007a902c`) maps to `globalCompositeOperation = 'lighter'`. The vertex alpha maps to `globalAlpha`.
+- The screens run on a 30 fps frame counter, like the game's logic.
+- Frame lines come from `addrawlinetask.prs` entries. Text follows `FUN_007ab554`: a 14 px cell, a 7 px space and a 20 px line (`gametext.ts`).
+- Under psobb.io's widescreen patch, menu screens keep the 4:3 UI anchored left (`layout = 'left43'`). Full-screen quads such as backgrounds are stretched to the window (`drawFullscreen`).
+
 ## Testing
 
 - `tests/oracle.test.ts` compares every TS port with the newserv binary using real data. It covers the BB cipher with the `default` and `default4` keys, PRS on 20 files from `data.gsl`, and all 1524 GSL entries.
