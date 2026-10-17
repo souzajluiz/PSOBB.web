@@ -146,7 +146,7 @@ export class MapViewer {
     for (const section of geometry.sections) {
       const s = new THREE.Group();
       s.position.set(...section.position);
-      s.rotation.set(section.rotation[0], section.rotation[1], section.rotation[2], 'ZYX');
+      s.rotation.set(section.rotation[0], section.rotation[1], section.rotation[2], 'YXZ'); // map sections rotate in the client's Y, X, Z order (see DEVLOG)
       for (const obj of section.objects) s.add(buildObjectTree(obj, this.materials));
       root.add(s);
     }
