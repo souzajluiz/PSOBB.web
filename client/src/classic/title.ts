@@ -19,6 +19,7 @@
 //   FUN_00761c48  the "Login" menu window (text group 41 of unitxt)
 // Coordinates are in the 640x480 virtual screen; game logic runs at 30 fps.
 
+import { se, SE } from '../audio/se.ts';
 import { drawMenuWindow, drawText, inWindowSpace, type MenuItem, type Screen, type Stage, type WindowSkin } from './stage.ts';
 
 export interface TitleMenuItem extends MenuItem {
@@ -178,9 +179,12 @@ export class TitleScreen implements Screen {
 
   key(e: KeyboardEvent): void {
     const n = this.selectable();
+    // FUN_006fed2c: SE 0x56f on Up/Down, 0x420 on Enter.
     if (e.key === 'ArrowDown') this.selected = n[(n.indexOf(this.selected) + 1) % n.length];
     else if (e.key === 'ArrowUp') this.selected = n[(n.indexOf(this.selected) + n.length - 1) % n.length];
-    else if (e.key === 'Enter') this.items[this.selected].action();
+    else if (e.key === 'Enter') return (se(SE.titleOk), this.items[this.selected].action());
+    else return;
+    se(SE.cursor);
   }
 
   private selectable(): number[] {
@@ -193,8 +197,9 @@ export class TitleScreen implements Screen {
     if (vx < w.x || vx > w.x + w.w) return;
     const i = Math.floor((vy - (w.y + 16)) / 20);
     if (!this.selectable().includes(i)) return;
+    if (i !== this.selected) se(SE.cursor);
     this.selected = i;
-    if (click) this.items[i].action();
+    if (click) (se(SE.titleOk), this.items[i].action());
   }
 
   // The menu is drawn in window space; main.ts maps pointer coordinates with it.

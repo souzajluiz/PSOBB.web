@@ -47,6 +47,10 @@
 
 ## Phase 5: game
 - [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)
+- [x] Games: create (`C1`), list (`08`), join (`10` → `64`), loading (`1D`/`8A`/`6x3F`/`6x1F`/`6F`), join sync (`6x6D`/`6x71`/`6x70`), leave (`98` + `84`) (`net/game.ts`, `tests/game.live.ts`)
+- [x] Floor maps from the `64` variations via `SetDataTableOn.rel`; Pioneer 2 and field floors with collision, player starts, enemy/object markers; warps (`6x21`/`6x22`/`6x23`) by button or area warp objects
+- [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)
+- [ ] Enemy models (`bm_ene_*.bml`) and motions; Pioneer 2 teleporter menu, boss warps, doors; field BGM
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
 - [ ] Items and inventory
 - [ ] Quests (opcodes documented in the notes and in newserv's assembler)
