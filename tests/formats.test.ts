@@ -80,5 +80,22 @@ for (const f of readdirSync(SCENE).filter((f) => f.endsWith('.xvm'))) {
   }
 }
 console.log(`xvm: ${xvms} archives, ${textures} textures`);
+// Texture animation files (.tam): every block must parse and reference sane values.
+{
+  const { parseTam } = await import('../client/src/formats/tam.ts');
+  let files = 0, scrolls = 0, swaps = 0;
+  for (const f of readdirSync(SCENE).filter((f) => f.endsWith('.tam'))) {
+    const t = parseTam(new Uint8Array(readFileSync(join(SCENE, f))));
+    files++;
+    scrolls += t.scrolls.length;
+    swaps += t.swaps.length;
+    const bad = t.scrolls.some((s) => ![...s.scroll, ...s.speed].every(Number.isFinite)) || t.swaps.some((w) => w.steps.some((x) => x.frames < -1));
+    if (bad) {
+      failures++;
+      console.log(`FAIL ${f}: bad tam values`);
+    }
+  }
+  console.log(`tam: ${files} files, ${scrolls} UV scrolls, ${swaps} texture swaps`);
+}
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

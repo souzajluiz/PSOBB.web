@@ -1,5 +1,6 @@
 // Entry point of the classic (original-looking) client.
 
+import { BgmPlayer } from '../audio/bgm.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview } from '../net/bbsession.ts';
@@ -46,7 +47,9 @@ function savedUser(): string {
 }
 
 async function main(): Promise<void> {
-  const files = new ClientFiles(await dataSource());
+  const source = await dataSource();
+  const files = new ClientFiles(source);
+  const bgm = new BgmPlayer(source);
   const stage = new Stage(canvas);
   const tex = async (names: string[]) => textureBitmaps(await files.textures(names));
   const hyouji = await textureBitmaps(await files.textures('f256_hyouji.prs'));
@@ -170,6 +173,10 @@ async function main(): Promise<void> {
   function show(s: Screen): void {
     current = s;
     stage.show(s);
+    // BGM per screen, as the exe requests it: title.adx (FUN_006f8130),
+    // CHARA.adx for character select/creation (FUN_004df9ec).
+    if (s instanceof TitleScreen || s instanceof LoginScreen) void bgm.play('title.adx');
+    else if (s instanceof CharSelectScreen || s instanceof CharCreateScreen) void bgm.play('CHARA.adx');
   }
 
   // ?screen=select jumps to the character list with empty slots and
