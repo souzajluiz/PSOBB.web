@@ -147,6 +147,91 @@ in the main gate opened the three-item window "Jungle Area North / Mountain
 Area / Seaside Area"; Down + Enter warped to Mountain (floor 8). In VR Temple
 Alpha the two-flag door showed four lamps, three green and one red with flag
 104 set; setting flag 105 unlocked it and it opened (state 5).
+## 2026-10-17: the status window, EXP and levels
+
+**What changed:** the game view draws the original client's HUD and the
+character levels up. `classic/hud.ts` is the local player's status window in
+the top-left corner (colour badge, name, `Lv`, HP / TP bars and numbers, the
+photon blast gauge ring), the "EXP+n" text over a killed enemy, the
+"Level Up" text over a player's head and the level-up lines of the message
+window; `render/playerhud.ts` lays a 2D canvas over the WebGL canvas, scales
+the 640x480 space by the window height, ticks the HUD at 30 frames per second
+and projects world anchors. `formats/plyleveltbl.ts` reads PlyLevelTbl.prs
+from the server's stream file; `combat/progression.ts` holds level, EXP and
+stats; `render/combat.ts` wires it: the kill shows the EXP the client
+computes, `6xBF` adds the server's EXP, `6x30` levels up, refills HP / TP and
+plays the level-up sound, `6xDD` sets the EXP multiplier, and level / EXP /
+stats are written back to the game snapshot and the session's E7. The HP
+read-out is gone (the DOM line only shows the revive hint while dead); max HP
+now uses the client's formula instead of the raw HP stat.
+
+**From PsoBB.exe:**
+- **Window:** `CreateChallengeMenuListWindow_007438f0` at window position 0x1d
+  of 0x00971f40 = (28, 37), template `0x009f3c04` = {228, 76, element list
+  `0x009f3a20`}: 15 typed records (sprite, texts, numbers, bars) with their
+  positions, colours and flags, decoded by
+  `allocate_counted_array_of_text_objects`. Background
+  `render_player_hud_bg` (0x00743b60): gauge pie, corner piece (texture 13
+  texels 118,80-187,160 at screen 0,0), window (texture 13 0,0-228,76) of
+  f256_hyouji.prs; the badge is texture 0 at (34 * slot, 202)
+  (`QuickMenuUpdateListItemPosition_0074253c`).
+- **Glyphs:** textureenglish.xvm texture 0, glyph c at ((c & 0xf) * 16,
+  c & 0xf0), 13 high (0x0097a7b8), advances / y offsets from 0x009fce80;
+  numbers right-aligned (`AutoClass6::unknown_render_text4`), 10 per digit
+  (0x00970dcc); current value and "/" at max.x - max.width - 12 (0x00973188).
+- **Bars:** `ScrollbarObject_Render_0072a2c4` / `_RenderThumb_00729c90`
+  (texels u 230/237-249/252, v 30..37), hold 0x24 frames then 2 per frame
+  (`UiElement_UpdateAnimation_00729fa4`, `UpdatePosition_00729924`), damage
+  colour 0xffff2924 / heal colour from the template, low (<= 20%, 0x0097308c)
+  colours 0xfff2ff19 / 0xffffc114 faded over 11.1 frames
+  (`QuickMenuTPBar_InterpolateColor_0072a4d8`).
+- **Gauge:** `QuickMenuRenderTextBackgroundInternal_00742bd4`, radius 26 at
+  window + (44, 30.5) (0x0097313c), arc 0..0xd700, colours 0x00972fa0.
+- **Max HP / TP:** `unknown_set_total_stats`: round(materials + (stat + level)
+  * factor), factors 0x00968fc4 = hunter 2.0 / 1.0, ranger 1.85 / 1.0, force
+  1.45 / 1.5, androids TP 0 (0x009691b0).
+- **EXP / levels:** `handle_packet0x60_subcommand0xbf` (0x006928c0) ->
+  vtable +0x30 = `add_to_player_exp_and_clamp` (0x006947dc), cap = threshold of
+  level 199 (`GetPlayerStatValue_006ac5e4`); 6x30
+  `UpdatePlayerStatsAndLevelMessage_006928e4` ->
+  `HandleInvincibilityAndEquipmentReset_00692c14` /
+  `ApplyCharacterStatAllocation_00692e84` for the local player, full refill,
+  `DisplayLevelUpMessage_00692aa4` (u"Level Up" 0x0093c818, SE 0x58d, 60
+  frames, 6-frame fades 0x0097a828). Kill EXP shown by `handle_experience`:
+  bp exp * (ep2 13 : 10) * (killer 10 : 8) / 100 * multiplier, magenta, 20
+  frames delay + 20 frames (`display_special_attack_text_effect`, float object
+  0x0078abd0: 1.4x glyphs, rise 1.4 per frame, per-glyph fade-in).
+- **Level-up lines:** `display_levelup_stats` (0x0073fa5c): unitxt(11, 0x59)
+  indent, "LEVEL n", "HP +", "TP +", ATP / DFP / MST / ATA / EVP (unitxt 11
+  0x9c..0xa0), one every 0x16 frames, into the message window at position
+  0x22 = (373, 203), 255 x 120.
+
+**Checks:**
+- `tests/level.test.ts` (78 checks): PlyLevelTbl.prs (Sega's file) equals
+  newserv's level-table-v4.json in all 2400 entries; thresholds, cap, multi-
+  level jumps, the HP / TP formulas per job, kill EXP, the 6xBF / 6x30 / 6xDD
+  parsers, the window layout (draw calls of the status window: positions,
+  texels, right-aligned numbers), the bar hold/slide and colour fade, the
+  floating text lifetimes and the message line pacing.
+- `tsc --noEmit` clean; `tests/combatdepth.test.ts` still passes.
+- In Chrome against newserv: a level 1 HUmar shows 40/40 HP, 29/29 TP; after
+  kills in Forest 1 the server's 6xBF raised EXP 15 -> 52, 6x30 arrived, the
+  window went to Lv 2, 48/48 HP, 35/35 TP and the message window listed
+  LEVEL 2, HP +8, TP +6, ATP +7, DFP +1, MST +5, ATA +1. No console errors.
+
+**Approximations / open:**
+- The window-opening wipe and slide-in are not drawn (the steady state is);
+  photon blasts and TP use do not exist yet, so the gauge stays at 0 and TP full.
+- The message window's own scroll / timeout and frame are not decoded: lines
+  scroll up when 5 are shown and fade after 300 frames (ASSUMED).
+- The head anchor of "Level Up" is the model's bounding-box top (the client
+  uses player +0x920); the level-up light / particle are not drawn.
+- Killing in Forest 1 can still get the client disconnected: newserv rejects
+  some `6x60` drop requests ("Flag update refers to missing enemy", then
+  "vector") when the enemy index does not match its map; this predates the
+  HUD (the live check stubbed the drop request).
+- The debug name label over the player and the player list keep the level
+  they were built with.
 
 ## 2026-10-17: a build that keeps every page, and parts that cannot be wrong
 

@@ -1013,3 +1013,43 @@ function int32(v: number): Uint8Array {
   new DataView(b.buffer).setInt32(0, v, true);
   return b;
 }
+
+// 6xBF (G_GiveExperience_Extension_BB_6xBF, 0x0C, BB only, sent by the server
+// after a 6xC8 or a 6xC6): {header with client id} u32 amount, u16 enemy
+// entity id (0xFFFF when not from an enemy). The client adds the amount
+// (handle_packet0x60_subcommand0xbf @ 0x006928c0 -> add_to_player_exp_and_clamp).
+export function parseGiveExp(body: Uint8Array): { clientId: number; amount: number; fromEntityId: number } | null {
+  if (body.length < 0x0c || body[0] !== 0xbf) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), amount: dv.getUint32(4, true), fromEntityId: dv.getUint16(8, true) };
+}
+
+// 6x30 (G_ChangePlayerLevel_6x30, 0x14): {header with client id} u16 atp, mst,
+// evp, hp, dfp, ata, level (0-based), is_level_down. newserv's send_level_up
+// adds the equipped mag's bonuses to atp / mst / dfp / ata. The client's
+// handler is UpdatePlayerStatsAndLevelMessage_006928e4.
+export interface ChangeLevel {
+  clientId: number;
+  atp: number;
+  mst: number;
+  evp: number;
+  hp: number;
+  dfp: number;
+  ata: number;
+  level: number;
+  levelDown: boolean;
+}
+
+export function parseChangeLevel(body: Uint8Array): ChangeLevel | null {
+  if (body.length < 0x14 || body[0] !== 0x30) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const u = (o: number) => dv.getUint16(o, true);
+  return { clientId: u(2), atp: u(4), mst: u(6), evp: u(8), hp: u(0x0a), dfp: u(0x0c), ata: u(0x0e), level: u(0x10), levelDown: u(0x12) === 1 };
+}
+
+// 6xDD (G_SetEXPMultiplier_BB_6xDD, 4 bytes): the lobby's EXP multiplier in
+// the header's u16 (newserv send_set_exp_multiplier).
+export function parseExpMultiplier(body: Uint8Array): number | null {
+  if (body.length < 4 || body[0] !== 0xdd) return null;
+  return new DataView(body.buffer, body.byteOffset, body.byteLength).getUint16(2, true);
+}

@@ -47,8 +47,24 @@ import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
-import { parseAttack, parseEnemyState, parseHitByEnemy, parsePlayerDeath, type Game } from '../net/game.ts';
+import type { CharacterFile } from '../net/charfile.ts';
+import {
+  parseAttack,
+  parseChangeLevel,
+  parseEnemyState,
+  parseExpMultiplier,
+  parseGiveExp,
+  parseHitByEnemy,
+  parsePlayerDeath,
+  type ChangeLevel,
+  type Game,
+} from '../net/game.ts';
+import { SePlayer } from '../audio/se.ts';
+import type { DataSource } from '../data/source.ts';
+import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
+import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
+import { PlayerHud } from './playerhud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -83,6 +99,7 @@ interface EnemyRuntime {
   ai: EnemyAi | null; // combat/enemyai.ts (null: no AI profile for this class)
   attacker: AttackerStats | null; // this enemy hitting a player
   attack: EnemyAttackData | null;
+  exp: number; // BattleParamEntry exp of the enemy's stats row
 }
 
 export interface CombatOptions {
@@ -91,7 +108,17 @@ export interface CombatOptions {
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
   // Ground height under (x, z), so a walking enemy follows the floor.
   ground?: (x: number, z: number, fromY: number) => number | null;
+  // The session's character (E7) kept in step with level / EXP / stats, like
+  // net/items.ts keeps the inventory.
+  character?: () => CharacterFile | null;
+  fullCharacter?: () => Uint8Array | null;
+  // The client data folder, for the HUD's sound effects (common.pac).
+  source?: DataSource;
 }
+
+// Sound of the local player's level-up (PlayDirectionalSoundBasedOnAction_00692bf4,
+// played when player +0x32c == 1, the local player).
+const SE_LEVEL_UP = 0x58d;
 
 // Enemy attacker stats out of the BattleParamEntry rows, as
 // set_enemy_stats_from_battleparams (0x007621xx) builds them: ATP = stats.atp,
@@ -137,6 +164,15 @@ export class CombatView {
   // Remote players in a hit / death motion: LobbyView must not play their gait.
   private hurt = new Set<number>();
   private hpReadout: HTMLElement | null = null;
+  // Level, EXP and stats of the local player (combat/progression.ts), from
+  // PlyLevelTbl.prs of the stream file; the HUD (classic/hud.ts).
+  progression: PlayerProgression | null = null;
+  private levelTablePromise: Promise<LevelTable | null> | null = null;
+  hud: PlayerHud | null = null;
+  tp = 0;
+  // 6xDD: the lobby's EXP multiplier (unknown_xp_multiplier).
+  expMultiplier = 1;
+  private sePlayer: SePlayer | null = null;
   // The web client has no Reverser or Moon Atomizer, so this key revives the
   // local player (the real client needs another player's item or a trip back
   // to Pioneer 2).
@@ -171,6 +207,10 @@ export class CombatView {
     this.view = view;
     this.overlay ??= new CombatOverlay(this.viewer.scene);
     this.hpReadout ??= this.makeHpReadout();
+    if (!this.hud) {
+      this.hud = new PlayerHud(this.viewer, this.files);
+      this.hud.log = this.opts.log;
+    }
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
       inner?.(dt, keys);
@@ -178,7 +218,8 @@ export class CombatView {
     };
   }
 
-  // Small HP read-out over the canvas (the client's own HUD is not drawn yet).
+  // The revive hint over the canvas while the local player is dead (the HUD
+  // itself is render/playerhud.ts).
   private makeHpReadout(): HTMLElement | null {
     const parent = this.viewer.renderer.domElement.parentElement;
     if (!parent) return null;
@@ -198,12 +239,8 @@ export class CombatView {
     el.style.left = `${canvas.offsetLeft + 12}px`;
     el.style.top = `${canvas.offsetTop + canvas.clientHeight - 40}px`;
     const d = this.damage;
-    if (!d.maxHp) {
-      el.textContent = '';
-      return;
-    }
-    el.textContent = d.dead ? `HP 0/${d.maxHp} - dead (press ${this.reviveKey.toUpperCase()})` : `HP ${d.hp}/${d.maxHp}`;
-    el.classList.toggle('low', d.hp > 0 && d.hp <= d.maxHp * 0.25);
+    el.hidden = !d.dead;
+    el.textContent = d.dead ? `dead - press ${this.reviveKey.toUpperCase()} to revive` : '';
     el.classList.toggle('dead', d.dead);
   }
 
@@ -242,8 +279,10 @@ export class CombatView {
       let stats: DefenderStats = { hp: 1, maxHp: 1, evp: 0, dfp: 0 };
       let attacker: AttackerStats | null = null;
       let attack: EnemyAttackData | null = null;
+      let exp = 0;
       if (params && def && def.stats.length) {
         const s = params.stats(difficulty, def.stats[0]);
+        exp = s.exp;
         stats = enemyDefender(s, params.resist(difficulty, def.resist[0] ?? def.stats[0]));
         attack = params.attack(difficulty, def.attack[0] ?? def.stats[0]);
         attacker = enemyAttacker(s, attack);
@@ -291,13 +330,17 @@ export class CombatView {
         ai,
         attacker,
         attack,
+        exp,
       });
     }
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();
-    const maxHp = s.hp || 1;
+    const progression = await this.ensureProgression();
+    if (this.disposed) return;
+    const maxHp = progression?.maxHp ?? (s.hp || 1);
     this.damage.reset(maxHp, this.damage.maxHp === maxHp && !this.damage.dead ? this.damage.hp : maxHp);
+    if (progression && this.tp === 0) this.tp = progression.maxTp;
     this.opts.log(
       `combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ` +
         `${withStats} with battle params, ${withAi} with AI; you have ${this.damage.hp} HP`,
@@ -363,6 +406,26 @@ export class CombatView {
     this.updateLockOn();
     this.overlay?.update(dt);
     this.updateHpReadout();
+    this.hud?.frame(dt, this.hudValues());
+  }
+
+  // What the status window shows (ChallengeMenuListWindow_UpdateStatusBar_007439e8).
+  private hudValues() {
+    const me = this.game.self;
+    const p = this.progression;
+    const maxTp = p?.maxTp ?? 0;
+    this.tp = Math.min(this.tp, maxTp);
+    return {
+      name: me?.name ?? '',
+      slot: this.game.selfId,
+      level: p ? p.level + 1 : (me?.level ?? 1),
+      hp: this.damage.hp,
+      maxHp: this.damage.maxHp,
+      tp: this.tp,
+      maxTp,
+      pb: 0, // photon blasts are not implemented
+      dead: this.damage.dead,
+    };
   }
 
   // Players an enemy can target: on this floor and alive.
@@ -629,13 +692,149 @@ export class CombatView {
       this.opts.log(`drop request for E-${e.index.toString(16)} (rt ${e.rtIndex.toString(16)}) sent to the leader`);
     }
     this.game.sendExpRequest(e.index, true);
+    // handle_experience: the EXP number over the enemy, on the killer's screen.
+    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer: true, multiplier: this.expMultiplier });
+    const anchor = e.instance.root.position.clone();
+    anchor.y += 22;
+    this.hud?.expPopup(amount, () => anchor);
     this.playDeath(e);
+  }
+
+  // --- level and EXP ---------------------------------------------------------
+
+  private levelTable(): Promise<LevelTable | null> {
+    this.levelTablePromise ??= (async () => {
+      try {
+        const data = (await this.files.has('PlyLevelTbl.prs')) ? await this.files.read('PlyLevelTbl.prs') : (await this.streamFiles()).get('PlyLevelTbl.prs');
+        if (!data) throw new Error('PlyLevelTbl.prs missing from the stream file');
+        return parsePlyLevelTbl(data);
+      } catch (err) {
+        this.opts.log(`combat: no level table (${(err as Error).message}); levels follow 6x30 only`);
+        return null;
+      }
+    })();
+    return this.levelTablePromise;
+  }
+
+  // The local player's level / EXP / stats out of the save data (disp +0x18
+  // level, +0x1c exp, stats @0; inventory bytes 1 / 2 = HP / TP materials).
+  private async ensureProgression(): Promise<PlayerProgression | null> {
+    if (this.progression) return this.progression;
+    const table = await this.levelTable();
+    if (!table) return null;
+    const disp = this.game.selfSnapshot.disp;
+    const inv = this.game.selfSnapshot.inventory;
+    const dv = new DataView(disp.buffer, disp.byteOffset, disp.byteLength);
+    const st = this.selfStats();
+    const me = this.game.self;
+    this.progression ??= new PlayerProgression(table, {
+      charClass: me?.charClass ?? this.opts.character?.()?.charClass ?? 0,
+      level: dv.getUint32(0x18, true),
+      exp: dv.getUint32(0x1c, true),
+      stats: { atp: st.atp, mst: st.mst, evp: st.evp, hp: st.hp, dfp: st.dfp, ata: st.ata, lck: st.lck },
+      hpMaterials: inv[1] ?? 0,
+      tpMaterials: inv[2] ?? 0,
+    });
+    const p = this.progression;
+    this.opts.log(`level ${p.level + 1}, ${p.exp} EXP (next level at ${p.nextExp ?? '-'}), ${p.maxHp} HP / ${p.maxTp} TP`);
+    return p;
+  }
+
+  // Writes level / EXP / stats back to the game's snapshot (6x70 / 6x6D syncs
+  // and the damage formulas read it) and to the session's character file.
+  private storeProgression(): void {
+    const p = this.progression;
+    if (!p) return;
+    const write = (buf: Uint8Array | null | undefined, base: number) => {
+      if (!buf || buf.length < base + 0x24) return;
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      const st = p.stats;
+      [st.atp, st.mst, st.evp, st.hp, st.dfp, st.ata, st.lck].forEach((v, i) => dv.setUint16(base + i * 2, v & 0xffff, true));
+      dv.setUint32(base + 0x18, p.level, true);
+      dv.setUint32(base + 0x1c, p.exp, true);
+    };
+    write(this.game.selfSnapshot.disp, 0);
+    write(this.opts.fullCharacter?.(), 0x34c);
+    const c = this.opts.character?.();
+    if (c) {
+      c.level = p.level + 1;
+      c.exp = p.exp;
+      Object.assign(c.stats, p.stats);
+    }
+    const me = this.game.self;
+    if (me) me.level = p.level + 1;
+  }
+
+  // 6xBF for the local player: add_to_player_exp_and_clamp.
+  private onGiveExp(amount: number): void {
+    const p = this.progression;
+    if (!p) return;
+    p.addExp(amount);
+    this.storeProgression();
+    this.opts.log(`+${amount} EXP: ${p.exp} (${p.nextExp === null ? 'max level' : `${p.toNext} to level ${p.level + 2}`})`);
+  }
+
+  // 6x30 (UpdatePlayerStatsAndLevelMessage_006928e4).
+  private onChangeLevel(c: ChangeLevel): void {
+    const view = this.view;
+    const head = (clientId: number) => () => {
+      const pos = view?.playerPositions().get(clientId);
+      if (!pos) return null;
+      pos.y += view?.playerHeight(clientId) ?? 18;
+      return pos;
+    };
+    if (c.clientId !== this.game.selfId) {
+      const other = this.game.players.get(c.clientId);
+      if (other) other.level = c.level + 1;
+      this.hud?.levelUpPopup(head(c.clientId), c.levelDown);
+      return;
+    }
+    const p = this.progression;
+    if (p) {
+      // HandleInvincibilityAndEquipmentReset_00692c14: level up from the
+      // table and show the gains.
+      const r = p.levelUp(c.level, this.equippedWeaponMinAta());
+      if (r) this.hud?.message(levelUpLines(r));
+      this.storeProgression();
+      this.damage.maxHp = p.maxHp;
+      this.opts.log(`level up: level ${p.level + 1}, ${p.maxHp} HP / ${p.maxTp} TP, next level at ${p.nextExp ?? '-'} EXP`);
+    }
+    // On a field floor HP and TP are refilled (unknown_set_total_stats, then
+    // hp = max_hp1, tp2 = max_tp2).
+    if (!this.damage.dead) this.damage.hp = this.damage.maxHp;
+    this.tp = p?.maxTp ?? this.tp;
+    this.hud?.levelUpPopup(head(c.clientId), c.levelDown);
+    this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+    this.sePlayer?.play(SE_LEVEL_UP);
+  }
+
+  // The equipped weapon's ItemPMT min ATA (the ATA the level-up message
+  // compares, BlendSinowberillChallengeState_00698088).
+  private equippedWeaponMinAta(): number {
+    const w = this.equippedWeapon();
+    if (!w || !this.pmtSync) return 0;
+    return this.pmtSync.getWeapon(w.data1[1], w.data1[2])?.ata ?? 0;
   }
 
   // --- remote players and enemies -------------------------------------------
 
   private onSubcommand(sub: number, clientId: number, body: Uint8Array): void {
     if (this.disposed) return;
+    if (sub === 0xbf) {
+      const g = parseGiveExp(body);
+      if (g && g.clientId === this.game.selfId) this.onGiveExp(g.amount);
+      return;
+    }
+    if (sub === 0x30) {
+      const c = parseChangeLevel(body);
+      if (c) this.onChangeLevel(c);
+      return;
+    }
+    if (sub === 0xdd) {
+      const m = parseExpMultiplier(body);
+      if (m !== null) this.expMultiplier = Math.max(1, m);
+      return;
+    }
     if (sub >= 0x43 && sub <= 0x45) {
       const a = parseAttack(body);
       if (!a || a.clientId === this.game.selfId) return;
@@ -842,5 +1041,7 @@ export class CombatView {
     this.overlay = null;
     this.hpReadout?.remove();
     this.hpReadout = null;
+    this.hud?.dispose();
+    this.hud = null;
   }
 }
