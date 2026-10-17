@@ -52,6 +52,8 @@ The browser reads the `data/` folder of the user's own PSOBB installation. Nothi
 
 The client needs a `.nsk` key file. During development Vite serves it from the local newserv checkout (`vendor/newserv/system/blueburst/keys/`) at `/keys/<name>.nsk`. The key is never committed to this repository.
 
+Games read their set data (`map_*.dat`, `map_*.evt`, `SetDataTable*.rel`) from the server's copy, which Vite serves from `vendor/newserv/system/maps/bb-v4/` at `/newserv-maps/`: newserv numbers the enemies and objects from those files, and client data that differs from them (the Ephinea build's does) shifts every entity id the game sends. Without the endpoint the client data is used.
+
 ### Classic UI
 
 `client/src/classic/` redraws the original client's 2D screens (title, login, character select) on a Canvas2D stage. The stage works in the game's 640×480 virtual space. Rules:

@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-17: entity ids from the server's own maps
+
+**Bug:** killing some enemies disconnected the client. newserv logged "Flag
+update refers to missing enemy" for the `6x76` and then "Error processing
+client command: vector" for the `6x60` drop request. The enemy ids were off
+by two from Forest 1 on: newserv numbers enemies and objects from its own
+set data (`vendor/newserv/system/maps/bb-v4`), and the Ephinea client data
+differs from it - its `map_city00_00e.dat` has 23 NPCs where newserv's has 21
+(and `map_forest01_03e.dat` differs too), so every floor after Pioneer 2
+started two ids later than on the server, and the last enemies of a floor
+pointed past the server's list.
+
+**Fix:** the dev server serves newserv's bb-v4 set data at `/newserv-maps/`
+(`map_*.dat`, `map_*.evt`, `SetDataTable*.rel`), and the game's
+`ClientFiles` (`serverSetData`, `data/clientfiles.ts`) reads those names from
+there first, falling back to the client data. A real client has the same
+requirement: its maps must be the server's. The map viewer keeps the client
+data.
+
+**Checks:** in Chrome against newserv, an Episode 1 game's Forest 1 now
+starts at entity `0x1015` (21 Pioneer 2 NPCs); killing its first enemy
+(`0x1015`, Barbarous Wolf) and its last (`0x1093`, Booma) logged "set flags
+0008 on E-016 / E-094", the drop roll and the EXP on both, with the same
+enemy types as the client, and no error or disconnect.
+
 ## 2026-10-17: map warps take the player across the floor
 
 **What changed:** the intra-floor warps work now: `TObjMapWarpForest`

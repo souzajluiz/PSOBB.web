@@ -6,14 +6,33 @@ import { prsDecompress } from '../formats/prs.ts';
 import { parseXvm, type XvrTexture } from '../formats/xvm.ts';
 import type { DataSource } from './source.ts';
 
+// Set data the server keeps its own copy of (newserv system/maps/bb-v4).
+export const SERVER_SET_DATA = /^(map_[a-z0-9_]+\.(dat|evt)|SetDataTable[A-Za-z]*\.rel)$/;
+
+export interface ClientFilesOptions {
+  // Base URL of the server's set data (the dev server's /newserv-maps/). A
+  // game takes its maps' entities from there when it has them: the server
+  // numbers enemies and objects from its copies, and client data that differs
+  // (Ephinea's) would shift every entity id.
+  serverSetData?: string;
+}
+
 export class ClientFiles {
   private source: DataSource;
   private loose: Set<string> | null = null;
   private gsl: GSLArchive | null = null;
   private cache = new Map<string, Promise<Uint8Array>>();
+  private opts: ClientFilesOptions;
 
-  constructor(source: DataSource) {
+  constructor(source: DataSource, opts: ClientFilesOptions = {}) {
     this.source = source;
+    this.opts = opts;
+  }
+
+  private async serverCopy(name: string): Promise<Uint8Array | null> {
+    if (!this.opts.serverSetData || !SERVER_SET_DATA.test(name)) return null;
+    const res = await fetch(this.opts.serverSetData + name).catch(() => null);
+    return res?.ok ? new Uint8Array(await res.arrayBuffer()) : null;
   }
 
   private async index(): Promise<void> {
@@ -37,6 +56,8 @@ export class ClientFiles {
     let p = this.cache.get(name);
     if (!p) {
       p = (async () => {
+        const server = await this.serverCopy(name);
+        if (server) return server;
         await this.index();
         if (this.loose!.has(name)) return this.source.read(name);
         if (this.gsl?.has(name)) return this.gsl.get(name);

@@ -90,7 +90,9 @@ export class GameView {
     this.viewer = viewer;
     this.game = game;
     this.source = source;
-    this.files = new ClientFiles(source);
+    // The game's maps come from the server's set data when the dev server has
+    // it (data/clientfiles.ts), so the entity ids match newserv's.
+    this.files = new ClientFiles(source, { serverSetData: '/newserv-maps/' });
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.objectLayer = new ObjectLayer(viewer, this.files);

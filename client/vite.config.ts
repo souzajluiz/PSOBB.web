@@ -10,6 +10,12 @@ const KEYS_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/blueburs
 // /newserv-text/. Item names need a unitxt from the same build as the ItemPMT
 // the server streams; newserv's matches its own ItemPMT.
 const NEWSERV_TEXT_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/text-sets/bb-v4');
+// Development only: newserv's bb-v4 set data (map_*e.dat / o.dat / .evt and
+// SetDataTable*.rel), served at /newserv-maps/. The server numbers enemies and
+// objects from its own copies, and the Ephinea client data differs from them
+// (its Pioneer 2 has 23 NPCs, newserv's 21), so the game uses these to keep
+// the entity ids of 6x0A / 6x60 / 6x76 / 6xC8 in step with the server.
+const NEWSERV_MAPS_DIR = resolve(import.meta.dirname, '../vendor/newserv/system/maps/bb-v4');
 
 // Development only: a local PSOBB data/ folder exposed at /psobb-data/ so the map
 // viewer can be tested without the (unscriptable) native folder picker.
@@ -78,6 +84,17 @@ export default defineConfig({
           try {
             res.setHeader('Content-Type', 'application/octet-stream');
             res.end(readFileSync(resolve(NEWSERV_TEXT_DIR, name)));
+          } catch {
+            res.statusCode = 404;
+            res.end();
+          }
+        });
+        server.middlewares.use('/newserv-maps', (req, res, next) => {
+          const name = (req.url ?? '').replace(/^\//, '');
+          if (!/^(map_[a-z0-9_]+\.(dat|evt)|SetDataTable[A-Za-z]*\.rel)$/.test(name)) return next();
+          try {
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.end(readFileSync(resolve(NEWSERV_MAPS_DIR, name)));
           } catch {
             res.statusCode = 404;
             res.end();
