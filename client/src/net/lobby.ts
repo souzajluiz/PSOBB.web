@@ -27,6 +27,7 @@ export interface LobbyPlayer {
   moving: boolean;
   gait: 'walk' | 'run'; // last 6x40 (walk) or 6x42 (run)
   floor: number;
+  visible?: boolean; // games: 6x22 (invisible while changing floors) / 6x23
 }
 
 export interface LobbyEvents {
@@ -36,6 +37,7 @@ export interface LobbyEvents {
   moved: (p: LobbyPlayer) => void;
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
+  floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
 }
 
 const ENTRY_SIZE = 0x520;
@@ -46,6 +48,11 @@ const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 export function stripMarkers(s: string): string {
   // PSO text uses \tE / \tJ language markers and \tC<x> color escapes.
   return s.replace(/\t[EJ]/g, '').replace(/\tC[0-9A-Za-z]/g, '');
+}
+
+// One 0x520-byte 65/67/68 entry (PlayerLobbyDataBB + PlayerInventory + PlayerDispDataV4).
+export function parseLobbyPlayer(data: Uint8Array, o: number): LobbyPlayer {
+  return parseEntry(data, o);
 }
 
 function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
@@ -89,6 +96,12 @@ export class Lobby {
   leaderId = -1;
   lobbyNumber = 0;
   blockNumber = 0;
+  // Raw 0x520-byte 67 entry of the local player (inventory + disp data), kept
+  // to build the 98 / 6x70 commands when this connection later joins a game.
+  selfEntry: Uint8Array | null = null;
+  // A detached Lobby ignores incoming commands (the connection is in a game,
+  // handled by net/game.ts). attach() makes it handle the next 67 again.
+  active = true;
   private listeners = new Map<keyof LobbyEvents, Array<(...args: never[]) => void>>();
 
   constructor(conn: BBConnection) {
@@ -96,7 +109,7 @@ export class Lobby {
     const prev = conn.onCommand;
     conn.onCommand = (c) => {
       prev(c);
-      this.handle(c);
+      if (this.active) this.handle(c);
     };
   }
 
@@ -106,7 +119,15 @@ export class Lobby {
     this.listeners.set(event, list);
   }
 
-  private emit<K extends keyof LobbyEvents>(event: K, ...args: Parameters<LobbyEvents[K]>): void {
+  detach(): void {
+    this.active = false;
+  }
+
+  attach(): void {
+    this.active = true;
+  }
+
+  protected emit<K extends keyof LobbyEvents>(event: K, ...args: Parameters<LobbyEvents[K]>): void {
     for (const fn of this.listeners.get(event) ?? []) (fn as unknown as (...a: Parameters<LobbyEvents[K]>) => void)(...args);
   }
 
@@ -154,6 +175,7 @@ export class Lobby {
       if (o + ENTRY_SIZE > d.length) break;
       const p = parseEntry(d, o);
       this.players.set(p.clientId, p);
+      if (c.command === 0x67 && p.clientId === this.selfId) this.selfEntry = d.slice(o, o + ENTRY_SIZE);
       added.push(p);
     }
     if (c.command === 0x67) {
@@ -176,11 +198,14 @@ export class Lobby {
     this.emit('chat', from, gc, text);
   }
 
-  private onSubcommands(data: Uint8Array): void {
+  protected onSubcommands(data: Uint8Array): void {
     let o = 0;
     while (o + 4 <= data.length) {
       const sub = data[o];
-      const size = data[o + 1] * 4;
+      // Size in dwords; 0 means an extended header (G_ExtendedHeaderT) with a
+      // u32 byte size after the first 4 bytes (6D commands, e.g. 6x70).
+      let size = data[o + 1] * 4;
+      if (!size && o + 8 <= data.length) size = new DataView(data.buffer, data.byteOffset + o + 4, 4).getUint32(0, true);
       if (!size || o + size > data.length) break;
       const body = data.subarray(o, o + size);
       const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
@@ -188,6 +213,9 @@ export class Lobby {
       const p = this.players.get(clientId);
       if (p) {
         switch (sub) {
+          case 0x1f: // set floor (and ask for positions)
+            if (body.length >= 8) p.floor = dv.getInt32(4, true);
+            break;
           case 0x20: // set position: floor, pos xyz, angle_y
             p.floor = dv.getInt32(4, true);
             p.position = { x: dv.getFloat32(8, true), y: dv.getFloat32(12, true), z: dv.getFloat32(16, true) };

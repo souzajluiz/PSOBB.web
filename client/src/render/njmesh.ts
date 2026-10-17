@@ -61,6 +61,23 @@ function d3dColor(argb: number): { color: THREE.Color; alpha: number } {
   return { color, alpha: (argb >>> 24) / 255 };
 }
 
+// Material type 7 (nrel_renderstate_set_transform): the client generates the UVs
+// from the camera-space normal and applies the texture matrix at 0x00a21800,
+// [0.5 0 / 0 -0.5 / 0.5 0.5], i.e. u = 0.5 nx + 0.5, v = -0.5 ny + 0.5 (sphere map).
+function applyEnvironmentTexgen(material: THREE.MeshBasicMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <uv_vertex>',
+      `#include <uv_vertex>
+      #ifdef USE_MAP
+        vec3 envNormal = normalize(normalMatrix * normal);
+        vMapUv = vec2(0.5 * envNormal.x + 0.5, -0.5 * envNormal.y + 0.5);
+      #endif`,
+    );
+  };
+  material.customProgramCacheKey = () => 'xj-envmap';
+}
+
 export class MaterialCache {
   private cache = new Map<string, THREE.Material>();
   // Wrap modes live on THREE.Texture, so each (texture, wrapS, wrapT) needs its own
@@ -90,11 +107,12 @@ export class MaterialCache {
     return tex;
   }
 
-  get(m: XjMaterial, alpha: boolean, vertexColors: boolean): THREE.Material {
+  get(m: XjMaterial, alpha: boolean, vertexColors: boolean, hasNormals = true): THREE.Material {
     // Material color (type 5) only matters for meshes without per-vertex colors:
     // the client feeds its diffuse in as the constant vertex color.
     const diffuse = vertexColors ? 0xffffffff : m.diffuse;
-    const key = `${m.textureId}|${m.addressU}|${m.addressV}|${diffuse}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}`;
+    const envMap = !!m.envMap && hasNormals;
+    const key = `${m.textureId}|${m.addressU}|${m.addressV}|${diffuse}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}|${envMap}`;
     let mat = this.cache.get(key);
     if (!mat) {
       const map = this.texture(m.textureId, m.addressU, m.addressV);
@@ -115,6 +133,7 @@ export class MaterialCache {
         basic.blendDst = (BLEND_FACTORS[m.blendDst] ?? THREE.OneMinusSrcAlphaFactor) as THREE.BlendingDstFactor;
       }
       basic.userData.textureId = m.textureId;
+      if (envMap) applyEnvironmentTexgen(basic);
       mat = basic;
       this.cache.set(key, mat);
     }
@@ -145,7 +164,7 @@ export function buildModelMesh(model: XjModel, materials: MaterialCache): THREE.
     const tris = stripToTriangles(strip.indices);
     if (!tris.length) continue;
     geom.addGroup(indices.length, tris.length, mats.length);
-    mats.push(materials.get(strip.material, strip.alpha, !!v.colors));
+    mats.push(materials.get(strip.material, strip.alpha, !!v.colors, !!v.normals));
     for (const t of tris) indices.push(t);
   }
   if (!indices.length) return null;

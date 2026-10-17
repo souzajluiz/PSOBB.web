@@ -23,6 +23,7 @@ import {
   HELP, HELP_ITEMS, LIST_BAR_END, OPTION_COUNTS, PORTRAITS, SPR, SPRITES, STEP, STEP_BAR_END, STEP_EDITOR, STEP_LISTS,
   TEXT_GROUP, TYPE_RANGE, type Appearance,
 } from './charcreate_data.ts';
+import { se, SE } from '../audio/se.ts';
 import type { CharacterModelView } from './charcreate_model.ts';
 import { FONT, type Screen, type Stage } from './stage.ts';
 
@@ -666,6 +667,7 @@ abstract class Editor {
 
   protected close(result: 'ok' | 'cancel', d: Dress): void {
     if (result === 'cancel') d.look = copyLook(d.backup); // FUN_004f12dc
+    se(result === 'cancel' ? SE.back : SE.ok); // SE 0x573 / 0x570 (FUN_004f0f44, FUN_004f1cb8, ...)
     this.result = result;
     this.alive = false;
   }
@@ -750,6 +752,7 @@ class ListEditor extends Editor {
         v = w;
       }
       setField(d.look, this.field, v);
+      if (v !== old) se(SE.cursor); // FUN_004f0f44
     }
     const page = this.layout(d).page;
     if (page > this.pageAnim) this.pageAnim = Math.min(page, this.pageAnim + 0.333333);
@@ -815,11 +818,12 @@ class HairEditor extends Editor {
     }
     this.tickFade();
     if (!this.alive) return;
-    if (pad.repeat.has('down')) this.row = (this.row + 1) % 4;
-    else if (pad.repeat.has('up')) this.row = (this.row + 3) % 4;
+    // FUN_004f1cb8: SE 0x56f on row and hair style changes.
+    if (pad.repeat.has('down')) (se(SE.cursor), (this.row = (this.row + 1) % 4));
+    else if (pad.repeat.has('up')) (se(SE.cursor), (this.row = (this.row + 3) % 4));
     if (this.row === 0) {
-      if (pad.repeat.has('right')) d.look.hair = (d.look.hair + 1) % Math.max(1, this.count);
-      else if (pad.repeat.has('left')) d.look.hair = (d.look.hair - 1 + this.count) % Math.max(1, this.count);
+      if (pad.repeat.has('right')) (se(SE.cursor), (d.look.hair = (d.look.hair + 1) % Math.max(1, this.count)));
+      else if (pad.repeat.has('left')) (se(SE.cursor), (d.look.hair = (d.look.hair - 1 + this.count) % Math.max(1, this.count)));
     } else {
       const c = this.row - 1;
       let v = d.look.hairColor[c];
@@ -952,6 +956,7 @@ class AutoEditor extends Editor {
       d.look.hairColor = [0, 1, 2].map((k) => Math.round(lerp(this.from.hairColor[k], this.to.hairColor[k]))) as [number, number, number];
       d.look.proportion = [lerp(this.from.proportion[0], this.to.proportion[0]), lerp(this.from.proportion[1], this.to.proportion[1])];
       if (this.roll > 0x1d) {
+        se(SE.auto); // FUN_004f2988
         this.rolled = true;
         this.state = 1;
       }
@@ -1009,9 +1014,11 @@ class NameEditor extends Editor {
     if (pad.pressed.has('ok')) {
       d.name = this.value.trimEnd();
       if (!nameValid(d.name)) d.name = '';
+      se(d.name ? SE.back : SE.nameNg); // FUN_004f34a8: 0x573, or 0x57c for an invalid name
       this.result = 'ok';
       this.alive = false;
     } else if (pad.pressed.has('cancel')) {
+      se(SE.back);
       this.result = 'cancel';
       this.alive = false;
     }
@@ -1148,9 +1155,10 @@ export class CharCreateScreen implements Screen {
     if (this.selActive && this.intro <= 3) {
       if (s.state === 0) {
         // FUN_004eb5f0
-        if (pad.repeat.has('down')) s.type = (s.type + 1) % 3;
-        else if (pad.repeat.has('up')) s.type = (s.type + 2) % 3;
+        if (pad.repeat.has('down')) (se(SE.cursor), (s.type = (s.type + 1) % 3));
+        else if (pad.repeat.has('up')) (se(SE.cursor), (s.type = (s.type + 2) % 3));
         if (pad.pressed.has('ok') || pad.pressed.has('right')) {
+          se(SE.ok);
           const [lo, hi] = TYPE_RANGE[s.type];
           if (s.cls < lo || s.cls > hi) s.cls = lo; // FUN_004eb6b8
           s.state = 1;
@@ -1160,13 +1168,14 @@ export class CharCreateScreen implements Screen {
         }
       } else if (s.state === 1) {
         // FUN_004eb6e0
-        if (pad.repeat.has('down')) s.cls++;
-        else if (pad.repeat.has('up')) s.cls--;
+        if (pad.repeat.has('down')) (se(SE.cursor), s.cls++);
+        else if (pad.repeat.has('up')) (se(SE.cursor), s.cls--);
         const [lo, hi] = TYPE_RANGE[s.type]; // FUN_004eb7bc
         if (s.cls < lo) s.cls = hi;
         else if (s.cls > hi) s.cls = lo;
-        if (pad.pressed.has('cancel') || pad.pressed.has('left')) s.state = 0;
+        if (pad.pressed.has('cancel') || pad.pressed.has('left')) (se(SE.back), (s.state = 0));
         else if (pad.pressed.has('ok')) {
+          se(SE.ok);
           s.state = 2;
           this.selLeave = 10;
         }
@@ -1302,14 +1311,17 @@ export class CharCreateScreen implements Screen {
       return;
     }
     if (d.sectionId === 0xff && pad.pressed.has('cancel')) {
+      se(SE.back);
       this.sub = 6;
       this.subTimer = 7;
       return;
     }
     const n = this.steps.length;
-    if (pad.repeat.has('down')) this.cursor = (this.cursor + 1) % n;
-    else if (pad.repeat.has('up')) this.cursor = (this.cursor + n - 1) % n;
+    if (pad.repeat.has('down')) (se(SE.cursor), (this.cursor = (this.cursor + 1) % n));
+    else if (pad.repeat.has('up')) (se(SE.cursor), (this.cursor = (this.cursor + n - 1) % n));
     if (!pad.pressed.has('ok')) return;
+    // The editors' constructors play 0x570; FUN_004f0b80 plays 0x575 without a valid name.
+    se(STEP_EDITOR[this.step].kind === 'ok' && !nameValid(d.name) ? SE.buzzer : SE.ok);
     d.backup = copyLook(d.look); // FUN_004ef354
     const ed = STEP_EDITOR[this.step];
     switch (ed.kind) {
@@ -1354,6 +1366,7 @@ export class CharCreateScreen implements Screen {
     if (f < 0.8) f += (0.8 - f) * 0.25;
     this.confirmFade = Math.min(1, f);
     if (this.pad.pressed.has('ok')) {
+      se(SE.ok); // FUN_004ef410
       this.sub = 5;
       this.subTimer = 7;
       this.outro = 10; // FUN_004ec4a4(7, 1)

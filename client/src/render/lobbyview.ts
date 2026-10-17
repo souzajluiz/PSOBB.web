@@ -156,16 +156,19 @@ export class LobbyView {
 
   // labels: false leaves the name tags to the caller (classic HUD).
   private labels: boolean;
+  // Which players to show (games: only the ones on the local player's floor).
+  private showPlayer: (p: LobbyPlayer) => boolean;
 
   constructor(
     viewer: MapViewer,
     lobby: Lobby,
     mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
-    options: { labels?: boolean } = {},
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean } = {},
   ) {
     this.labels = options.labels ?? true;
     this.viewer = viewer;
     this.lobby = lobby;
+    this.showPlayer = options.showPlayer ?? (() => true);
     this.collision = mapData.collision;
     this.spawns = mapData.spawns;
     this.files = mapData.files;
@@ -177,8 +180,16 @@ export class LobbyView {
     viewer.setOrbitEnabled(false);
     viewer.onFrame = (dt, keys) => this.frame(dt, keys);
 
-    for (const p of lobby.players.values()) this.addMarker(p);
-    lobby.on('playerJoined', (p) => this.addMarker(p));
+    const sync = (p: LobbyPlayer) => {
+      if (this.disposed) return;
+      if (p.clientId === lobby.selfId || this.showPlayer(p)) this.addMarker(p);
+      else this.removeMarker(p.clientId);
+    };
+    for (const p of lobby.players.values()) if (p.clientId === lobby.selfId || this.showPlayer(p)) this.addMarker(p);
+    lobby.on('playerJoined', sync);
+    lobby.on('floorChanged', (p) => {
+      if (!this.disposed && this.markers.has(p.clientId) !== this.showPlayer(p)) sync(p);
+    });
     lobby.on('playerLeft', (id) => this.removeMarker(id));
     lobby.on('moved', (p) => this.onMoved(p));
 

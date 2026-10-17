@@ -1,6 +1,7 @@
 // Entry point of the classic (original-looking) client.
 
 import { BgmPlayer } from '../audio/bgm.ts';
+import { SePlayer, setSePlayer } from '../audio/se.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
   const source = await dataSource();
   const files = new ClientFiles(source);
   const bgm = new BgmPlayer(source);
+  setSePlayer(new SePlayer(source)); // common.pac + city.pac (area 0), as at start-up
   const stage = new Stage(canvas);
   const tex = async (names: string[]) => textureBitmaps(await files.textures(names));
   const hyouji = await textureBitmaps(await files.textures('f256_hyouji.prs'));
