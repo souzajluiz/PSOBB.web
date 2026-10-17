@@ -58,6 +58,7 @@ node tests/collision.test.ts     # parses every map c.rel, checks ground at play
 node tests/setdata.test.ts       # enemy/object set data vs newserv disassemble-free-map
 node tests/players.test.ts       # parses and builds every player class and appearance variant
 node tests/motions.test.ts       # decodes every player motion, plays idle/walk/run on every class
+node tests/fog.test.ts           # fogentry.dat / lightentry.bin values and the fog fade state machine
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat

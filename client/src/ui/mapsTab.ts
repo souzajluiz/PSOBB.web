@@ -78,6 +78,7 @@ export function initMapsTab(log: (msg: string) => void): { activate: () => void 
   async function loadSelected(): Promise<void> {
     if (!source || !select.value) return;
     viewer ??= new MapViewer($<HTMLCanvasElement>('map-canvas'));
+    (globalThis as { mapViewer?: MapViewer }).mapViewer = viewer; // console/automation access
     const token = ++loadToken;
     const name = select.value;
     variantSelect.replaceChildren();
