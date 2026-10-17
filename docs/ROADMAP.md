@@ -52,5 +52,8 @@
 - [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)
 - [ ] Enemy models (`bm_ene_*.bml`) and motions; Pioneer 2 teleporter menu, boss warps, doors; field BGM
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
-- [ ] Items and inventory
+- [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
+- [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)
+- [x] Inventory panel in the Online tab
+- [ ] Item use/equip commands (`6x25`/`6x26`/`6x27`), item drops, item models (`ItemModel.afs`)
 - [ ] Quests (opcodes documented in the notes and in newserv's assembler)

@@ -12,6 +12,7 @@ import { connectBridge } from '../net/wstransport.ts';
 import { AREA_NAMES, GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
+import { initInventoryPanel } from './inventoryPanel.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -31,6 +32,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let game: Game | null = null;
   let gameView: GameView | null = null;
   let busy = false;
+  const inventory = initInventoryPanel($('lobby-panel'), log);
 
   const setStatus = (msg: string, kind: '' | 'ok' | 'err' = '') => {
     loginStatus.textContent = msg;
@@ -98,6 +100,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     if (!session) return;
     try {
       setStatus('Joining lobby...');
+      await inventory.prepare(session, await requireDataSource());
       lobby = await session.enterLobby(credentials.username, credentials.password, slot);
       $('chars-panel').hidden = true;
       $('login-panel').hidden = true;
@@ -125,6 +128,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     lobbyView = new LobbyView(viewer, l, mapData);
     renderPlayers(l);
     games.update();
+    inventory.show(session?.character ?? null);
   }
 
   // --- Games (create / list / join, field floors, back to the lobby) ----------
@@ -359,6 +363,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     session?.close();
     session = null;
     $('lobby-panel').hidden = true;
+    inventory.hide();
     $('login-panel').hidden = false;
     $<HTMLOListElement>('chat-log').replaceChildren();
     setStatus('Left the lobby. Connect again to pick a character.');

@@ -21,6 +21,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Enemy/object markers from set data (`map_*e.dat` / `o.dat`) | ✅ 838 files match newserv; shown in the map viewer |
 | Character models (NJCM from `pl?nj.bml`, textures by appearance), all 12 classes | ✅ dev page `models.html` |
 | Player motions (`plymotiondata.rlc`) and animated models in the lobby (idle/walk/run) | ✅ live in Chrome with a bot |
+| Character file (`E7`), ItemPMT from the server stream, item names, Inventory panel | ✅ 1536 item definitions and 1515 names match newserv |
 | Games: create/list/join, Pioneer 2 and field floors from the server's variations, warps, back to the lobby | ✅ live in Chrome with a bot |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
@@ -60,8 +61,10 @@ node tests/setdata.test.ts       # enemy/object set data vs newserv disassemble-
 node tests/players.test.ts       # parses and builds every player class and appearance variant
 node tests/motions.test.ts       # decodes every player motion, plays idle/walk/run on every class
 node tests/fog.test.ts           # fogentry.dat / lightentry.bin values and the fog fade state machine
+node tests/items.test.ts         # ItemPMT parser and item names vs newserv's reference tables
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
+node tests/charfile.live.ts      # character file (E7) and inventory with item names
 node tests/game.live.ts          # two clients: create/list/join a game, movement, warp to Forest 1, back to lobby
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat

@@ -1,5 +1,15 @@
 # Devlog
 
+## 2026-10-17: character file, item table and item names
+
+**What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.
+
+**Checks:** `tests/items.test.ts` parses the ItemPMT newserv streams (rebuilt with `newserv encode-item-parameter-table` when no ItemPMT file is given) and compares 36124 values over 1536 item definitions plus specials, stat boosts, star values, max tech levels, tech boosts, combinations, mag feed tables and sale divisors with `item-parameter-table-bb-v4.json`: no mismatches. Names for 1515 item codes match `names-v4.json` (4 entries where newserv corrected the game's text are checked against the game's text). `tests/charfile.live.ts` logs in, downloads the stream file, joins the lobby and prints the character (WebHunter: Saber, Frame, Mag LV5, Monomate x4, Monofluid x4).
+
+**Finding:** ItemPMT ids and unitxt must come from the same build. The local Ephinea client's text tables do not match newserv's ItemPMT (Saber is unitxt entry 156 in `data.gsl:unitxt_e.prs`, 289 in Ephinea's loose `unitxt_j.prs`, 177 in newserv's). With newserv, the original client would show wrong item names for the same reason. The panel falls back to newserv's bb-v4 text set on the dev server.
+
+**Not verified against the exe:** the description format is newserv's; the client's own item-name formatting function was not traced in Ghidra yet.
+
 ## 2026-10-17: classic client from SELECT CHARACTER into the lobby
 
 **What changed:** choosing an existing slot in `classic.html` now runs the original flow: the "Connecting.." warp, the game-server login (93 phase 4), the server's main menu as the client's **Ship Select** window over the 3D lobby, `10` *Go to lobby*, `67`, and the 3D lobby (`render/lobbyview.ts` on a WebGL canvas under the 2D stage) with the lobby name window. Checked live in Chrome against newserv: warp, Ship Select, lobby, walking with W, chat send/receive (other players' chat and joins show in the log). `tests/lobby.live.ts` still passes.
