@@ -26,6 +26,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Items on the floor (6x5D/6x5F/6x59) with their `item.bml` box models, pickup (6x5A), item boxes (6x0B + 6xA2), equip/unequip/use/drop from the Inventory panel | ✅ every ItemPMT item resolves to a model; two clients live against newserv |
 | Quests: the server's quest menu (A2/A3), the 44/13 file pair and the AC barrier, the `.bin` script and the `.dat` set data, a script VM that runs a quest's opening | ✅ all 335 BB quest files parse; "Lost HEAT SWORD" loaded and played live in Chrome |
 | Combat: attack combo (6x43-6x45/6x46/6x0A), the player taking damage and dying (6x4A-6x4F, 6x89), enemy AI (notice, chase, melee), damage numbers and the lock-on reticle | ✅ Forest families from the exe tables; two clients live against newserv |
+| Boss rooms: enemy child objects (Vol Opt's monitors and pillars, Sorcerer bits, Belra arms, De Rol Le / Barba Ray and Saint-Milion parts), boss warp gathering (6x6A) and boss music phases | ✅ live in Chrome |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -74,7 +75,8 @@ node tests/warpmenu.test.ts      # Ragol teleporter entries, warp windows, boss 
 node tests/setdatatable.test.ts  # SetDataTable*.rel vs newserv; every free-play floor resolves to map files
 node tests/combat.test.ts        # damage/accuracy formulas, attack combo timing, enemy slot ids and battle params vs newserv
 node tests/combatdepth.test.ts   # player hit/death motions and the 6x4A-6x4F flow, enemy AI (search radius, chase, melee, recovery) and its exe tables
-node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them
+node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them and their child objects
+node tests/bossrooms.test.ts     # boss warp gathering (6x6A state machine) and the boss music phases (6x15/6x19/6xA4/6xA5)
 node tests/itemmodels.test.ts    # every ItemPMT item resolves to an item.bml floor model; BC0, item subcommands, inventory rules
 node tests/items.live.ts         # two clients: drop/pick up items, split a stack, meseta, equip/use, break Forest 1 boxes
 node tests/waves.test.ts         # every free-play floor's .evt parses; every object type resolves to a model and builds; wave state machine and door collision

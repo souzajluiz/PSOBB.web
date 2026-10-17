@@ -22,6 +22,7 @@
 // after the last enemy of the room dies.
 
 import type { BgmPlayer } from '../audio/bgm.ts';
+import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { FieldMusic } from '../audio/fieldbgm.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseEventFile, type WaveEvent } from '../formats/events.ts';
@@ -35,7 +36,8 @@ import { FieldObjects, type FieldSwitch, type FieldWarp } from './fieldobjects.t
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
-import { areaWarpLayout, mainWarpItems, mainWarpLayout, WarpMenuOverlay } from './warpmenu.ts';
+import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
+import { areaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 
 export interface GameFieldOptions {
@@ -78,6 +80,10 @@ export class GameField {
   private flags = new Map<number, Set<number>>(); // switch flags by floor
   private suppressed = new Set<number>(); // warps cancelled until the player leaves them
   private menuWarp: FieldWarp | null = null;
+  // Boss warp the player is standing in and its state machine.
+  private bossWarpObject: FieldWarp | null = null;
+  private bossWarp = new BossWarp();
+  private bossWarpPrompt = false;
   private busy = false;
   private disposed = false;
   // Wave events: state per floor, kept across floor changes like the client's
@@ -116,6 +122,26 @@ export class GameField {
         const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
         this.triggerEvent(dv.getUint32(4, true), dv.getUint32(8, true));
         return;
+      }
+      if (sub === 0x6a) {
+        // G_SetBossWarpState_6x6A: {6a, 02, entity, u16 state}. Another player
+        // accepted the warp (state 1) or the leader started it (state 2).
+        if (body.length < 8) return;
+        const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+        const entity = dv.getUint16(2, true);
+        const state = dv.getUint16(4, true);
+        const w = this.objects?.warps.find((x) => x.kind === 'boss' && 0x4000 + this.objectBase + x.index === entity);
+        if (!w) return;
+        this.bossWarpObject = w;
+        this.bossWarp.receive(Math.min(4, state) as 0 | 1 | 2 | 3 | 4);
+        this.opts.log(`boss warp ${w.index}: state ${state}`);
+        return;
+      }
+      // A boss action from the room leader can report the boss's form, which
+      // changes the music (audio/bossbgm.ts).
+      const phase = bossPhaseOf(this.area, sub, body);
+      if (phase !== null && this.music?.setBossPhase(phase)) {
+        this.opts.log(`boss phase ${phase}: ${this.music.bossMusic?.name}`);
       }
       if (sub === 0x76) {
         // G_SetEntitySetFlags_6x76: {u16 entity, u16 floor, u16 flags}
@@ -161,7 +187,9 @@ export class GameField {
       this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
       this.triggerEvent(floor, t.eventId);
     };
-    this.music?.enter(area, episode);
+    // Saint-Milion's track depends on the boss variant (param6 & 1).
+    const boss = e.enemySets.find((s) => s.type === 0x119);
+    this.music?.enter(area, episode, boss ? Math.trunc(boss.params[5]) : 0);
     this.setupWaves(floor, e);
     const o = this.objects;
     const w = this.waves.get(floor);
@@ -308,6 +336,7 @@ export class GameField {
     for (let i = 0; i < ticks; i++) w?.frame();
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
+    for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
   }
 
   private updateBattleMusic(w: FloorWaves, pos: { x: number; y: number; z: number }, ticks: number): void {
@@ -337,13 +366,103 @@ export class GameField {
     const warps = this.objects?.warps ?? [];
     for (const w of warps) if (!this.inside(w, p)) this.suppressed.delete(w.index);
     if (this.menu.open) {
-      if (this.menuWarp && !this.inside(this.menuWarp, p)) this.menu.close(null); // walked out of the radius
+      // The boss warp keeps its windows open while the party gathers; an area
+      // or main warp closes as soon as the player steps out of the radius.
+      if (this.menuWarp && !this.bossWarp && !this.inside(this.menuWarp, p)) this.menu.close(null);
       return;
     }
     const w = warps.find((x) => this.inside(x, p) && !this.suppressed.has(x.index));
     if (!w) return;
     if (w.flag >= 0 && !this.flagsOf(this.floor).has(w.flag)) return; // boss warp still locked
+    if (w.kind === 'boss') {
+      this.bossWarpObject = w;
+      return; // driven by bossWarpFrame()
+    }
     void this.openMenu(w);
+  }
+
+  // --- Boss warp (render/bosswarp.ts) ---------------------------------------
+
+  // One game tick of the boss warp the player is standing in.
+  private bossWarpFrame(p: { x: number; y: number; z: number } | null): void {
+    const w = this.bossWarpObject;
+    if (!w) return;
+    if (!this.objects?.warps.includes(w)) {
+      this.bossWarpObject = null;
+      return;
+    }
+    const inRadius = !!p && this.inside(w, p);
+    // Back to idle and forget the object once nobody is around any more.
+    if (!inRadius && this.bossWarp.state === 0 && this.bossWarp.sub <= 1 && !this.menu.open) {
+      this.bossWarpObject = null;
+      this.menu.update({});
+      return;
+    }
+    const me = this.game.self;
+    const others = [...this.game.players.values()].filter((q) => q.clientId !== me?.clientId);
+    const rows = [me, ...others].filter((q): q is NonNullable<typeof q> => !!q).map((q) => ({
+      label: q.name || `player ${q.clientId}`,
+      // The client draws a player whose movement is disabled (i.e. already
+      // taken by the warp) in 0xFFFFFF00.
+      color: q.floor === this.floor && this.inside(w, q.position) ? '#ffff00' : '#f0f0f0',
+    }));
+    this.bossWarp.frame({
+      inRadius: () => inRadius,
+      gathered: () => [me, ...others].every((q) => !q || (q.floor === this.floor && this.inside(w, q.position))),
+      // The game leader runs the floor (net/game.ts keeps leaderId).
+      isLeader: () => this.game.selfId === this.game.leaderId,
+      partySize: () => this.game.players.size,
+      windows: (text, confirm) => this.bossWarpWindows(w, text, confirm, rows),
+      send: (state) => {
+        this.game.sendBossWarpState(0x4000 + this.objectBase + w.index, state);
+        this.bossWarp.receive(state);
+      },
+      warp: () => {
+        this.menu.close(null);
+        this.bossWarpObject = null;
+        this.bossWarp = new BossWarp();
+        this.suppressed.add(w.index);
+        this.busy = true;
+        this.opts.log(`boss warp to floor ${w.floor}`);
+        void this.opts
+          .warpTo(w.floor)
+          .catch((err) => this.opts.log(`warp failed: ${(err as Error).message}`))
+          .finally(() => (this.busy = false));
+      },
+      sound: (id) => this.opts.log(`boss warp sound effect ${id}`),
+      log: (msg) => this.opts.log(msg),
+    });
+  }
+
+  private bossWarpWindows(w: FieldWarp, text: number | null, confirm: boolean, rows: Array<{ label: string; color: string }>): void {
+    if (text === null) {
+      if (this.bossWarpPrompt) {
+        this.bossWarpPrompt = false;
+        this.menu.close(null);
+      }
+      return;
+    }
+    const message = this.menu.string(11, text);
+    const lines = message.split('\n').length;
+    const panel = {
+      layout: { x: POS_PLAYER_LIST[0], y: POS_PLAYER_LIST[1], w: 150, h: rows.length * 20 + 20 },
+      rows,
+    };
+    if (this.bossWarpPrompt) {
+      this.menu.update({ message, panel });
+      return;
+    }
+    this.bossWarpPrompt = true;
+    const pos = confirm ? POS_CONFIRM : POS_MESSAGE;
+    const items = confirm ? [{ label: this.menu.string(15, 0x23), floor: 1 }, { label: this.menu.string(15, 0x24), floor: 0 }] : [];
+    const layout = textWindowLayout(pos[0], pos[1], CONFIRM_WIDTH, lines, items.length);
+    this.menuWarp = w;
+    void this.menu.show(items, layout, { message, panel }, 1).then((answer) => {
+      this.bossWarpPrompt = false;
+      this.menuWarp = null;
+      if (answer !== null) this.bossWarp.answer(answer === 1);
+      else if (confirm) this.bossWarp.answer(false);
+    });
   }
 
   private async openMenu(w: FieldWarp): Promise<void> {
@@ -430,6 +549,13 @@ export class GameField {
           flags: self.waves.get(self.floor)?.flags[i] ?? 0,
           actions: e.actions,
         })),
+      // Boss music: the phases of this floor's boss and a way to step them
+      // (the real trigger is the leader's 6x15 / 6x19 / 6xA4 / 6xA5).
+      boss: () => {
+        const m = self.music?.bossMusic;
+        return m ? { name: m.name, phase: self.music?.bossPhase ?? 0, phases: m.phases } : 'no boss on this floor';
+      },
+      bossPhase: (phase: number) => (self.music?.setBossPhase(phase) ? `boss phase ${phase}` : `boss phase ${phase} not played`),
       // Starts the wave event with this id on the current floor.
       trigger: (eventId: number) => {
         self.game.sendTriggerEvent(0xffff, self.floor, eventId);

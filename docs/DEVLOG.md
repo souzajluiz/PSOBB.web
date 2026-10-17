@@ -182,6 +182,34 @@ PROTOCOL.md, "Quests"):
 - The player's EVP and DFP are the character's base stats; the equipment contribution (`FUN_00770DA4`'s equip path) is still not decoded, as for ATP in the attack direction.
 - Reviving is bound to R because the web client has no Reverser, Moon Atomizer or trip back to Pioneer 2; the real client cannot revive itself.
 - Hit boxes per body part, techniques, specials and status effects are still missing.
+## 2026-10-17: multi-part enemies, boss warp gathering and boss music phases
+
+**What changed:** three things that only show up in boss rooms.
+
+1. **Enemy child objects.** `EnemyPartSpec` (`render/enemymodel.ts`) gained a placement (`offset`, `yaw`, `place: 'enemy' | 'world'`), a `hidden` flag and an `archive` field, so an enemy can be built from children of its own archive, of a second archive, or placed around the arena instead of at its set entry. `buildEnemy` wraps every part in its own group and returns a second root for the world-placed ones; `EnemyLayer` adds that root to the scene unmoved and hides/shows/disposes it with the enemy. Enemies that gained children: **Chaos Sorcerer** (two bits), **Vol Opt phase 1** (6 pillars, 24 monitors and the lightning rod — the `0xC2` controller used to draw nothing at all), **Dark Belra** (the two thrown arms), **De Rol Le** and **Barba Ray** (tentacle and mine models), **Dark Falz** (forms 2 and 3, Rico and her ring) and **Saint-Milion** (its spinner, from the second archive `bm_ene_boss09_tentacle.bml`).
+2. **Boss warp gathering (`6x6A`).** `render/bosswarp.ts` is the transporter's five-state machine: the confirmation with the party list, the 300-frame gather, the 0x96-frame warp and the "battle going on in the next area" wait. `net/game.ts` sends `6x6A` and `gamefield.ts` drives the machine, draws the windows through the warp overlay (which gained a message line and a side panel) and warps when the machine says so.
+3. **Boss music phases.** `audio/bossbgm.ts` holds the track of every boss phase and maps the leader's boss action subcommands (`6x15`, `6x19`, `6xA4`/`6xA5`) to a phase; `FieldMusic.setBossPhase` plays it.
+
+**From PsoBB.exe** (addresses and tables in PROTOCOL.md, "Child objects", "Boss warp: gathering the party" and "Boss music phases"):
+- Vol Opt's controller AI state 0 (`0x0043C680`) builds the whole arena: 6 pillars on a ring of radius 76.0 (`0x008FE56C`) at 60° steps facing `−0x4000 − angle`, 24 monitors as 6 walls × 4 shapes (`i & 3` → model `0x009A5210[shape]`, position `0x009A51E0[shape]` turned by `(i >> 2)·60°`), and the lightning rod at (0, 80, 0). The arena origin is `g_VoloptForm2Config/-Value` = (0, 0) for phase 1 and (0, −5000) for phase 2, which is exactly where `map_boss03n.rel` puts its two sections.
+- The Chaos Sorcerer's bits are entities of their own with model entry 1 and the body's texture list, at ±15.0 and 18.0 above the body; the body itself is drawn 22.0 above its entity position, which this client was not doing.
+- A boss warp's state machine and its four handlers, the 300/0x96-frame timers, the three unitxt strings and the three GUI window positions.
+- Every `play_bgm` call site in the binary (there are 46; the ones that matter are `vol_opt1/2.adx`, `dark1/2.adx`, `proto1/2.adx`, `HALL.adx` and the two Saint-Milion OGGs).
+
+**How the values were read:** the named Ghidra dump gives the code, but not the data tables. Instead of Ghidra headless (which needs disk this machine does not have), the tables were read straight out of a local `PsoBB.exe` with a small PE reader, mapping VA → file offset through the section headers; it reproduced a known value first (`CITY_ZONES` at `0x00934F40`) before anything new was taken from it. Function entry points were pinned by finding the `E8` call sites that target the window a data reference sits in. newserv's `add_enemy_and_children` cross-checks every child count.
+
+**Checks:**
+- `tests/enemies.test.ts` also builds and checks the children now (part archives, `texlistOf` ranges, one group per part under the right root, the hidden ones not drawn): 139 distinct models over 235 floor variations, all pass.
+- `tests/bossrooms.test.ts` (new): the gather flow as a lone leader, the 300-frame timeout, "No", a non-leader waiting for the leader's `6x6A`, and the music table plus `bossPhaseOf` for `6x15`/`6x19`/`6xA4`/`6xA5`.
+- `tests/fieldbgm.test.ts`, `tests/warpmenu.test.ts`, `tests/waves.test.ts`, `tests/combat.test.ts`, `tests/sound.test.ts` still pass; `tsc --noEmit` is clean.
+- In Chrome against newserv: warped a game to Vol Opt (floor 13) and the arena came up with its six pillars on the 76-unit ring and the 24 monitors on the six walls; walked into the Forest 2 boss warp and the transporter asked with the party list, the `6x6A` went out on Yes and the floor change followed the gather.
+
+**Approximations / open:**
+- The children a fight spawns (tentacles, mines, arms, spinners) are built hidden: the boss FSM places them, and that is not decoded. Only one spinner is built rather than sixteen for the same reason.
+- The Saint-Milion spinner is built without a motion: its model has 59 nodes but its motions cover 32, so the client animates a sub-tree of it (the three model/texture/motion slots of `0x009F5B20`).
+- Which of `dark1.adx`/`dark2.adx` is form 2 and which is form 3 comes from the order of the two calls, not from the handlers.
+- The lightning rod is drawn in its bind pose: its motion table (`g_VoloptMinionStatsData`) has no address in the dump.
+- `map_boss03n.rel` has three sections that all carry id 0 (at z 0, −5000 and +5000), so the Vol Opt set entry is placed in the last of them. That is a pre-existing placement quirk of `placeEntities`, not touched here; the children are unaffected because the client places them from the arena origin.
 
 ## 2026-10-17: the named Ghidra dump is the first place to look
 

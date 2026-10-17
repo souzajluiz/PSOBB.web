@@ -1,6 +1,10 @@
 // Enemy models of a floor: resolves each enemy set entry to its model
 // (formats/enemymodels.ts), builds it at the spawn point and plays its idle
-// motion every frame. In a game every enemy belongs to a wave event and only
+// motion every frame. An enemy whose client object creates child objects (the
+// Chaos Sorcerer's bits, Vol Opt's monitors and pillars, Saint-Milion's
+// tentacles) builds them too: children placed relative to the enemy go under
+// its root, the ones the client places from the arena origin go into a second
+// root that stays at the world origin. In a game every enemy belongs to a wave event and only
 // exists once its wave has spawned (render/waves.ts), so the game hides them
 // all (hideAll) and shows each set entry when its wave starts (setVisible);
 // the map viewer leaves them visible.
@@ -24,6 +28,9 @@ export interface EnemyInstance {
   spec: EnemyModelSpec;
   archive: EnemyArchive;
   root: THREE.Group;
+  // Child objects the client places from the arena origin instead of the set
+  // entry (Vol Opt): a second root, left at the world origin.
+  world: THREE.Group | null;
   animators: NodeAnimator[];
   parts: EnemyPartSpec[]; // part of each animator
 }
@@ -38,6 +45,7 @@ export class EnemyLayer {
   };
   private generation = 0;
   private byIndex = new Map<number, THREE.Object3D>(); // e.dat entry index -> model root
+  private worldByIndex = new Map<number, THREE.Object3D>(); // -> its world-placed children
   private hidden = false; // hideAll() was called for the current floor
   startHidden = false; // games: every floor starts with all enemies hidden (waves show them)
   stats: EnemyLayerStats = { placed: 0, unresolved: [], errors: [] };
@@ -72,9 +80,11 @@ export class EnemyLayer {
       try {
         const archive = await this.cache.get(spec.bml, spec.models);
         for (const t of spec.textures ?? []) await this.cache.textures(t);
+        const extra = new Map<string, EnemyArchive>();
+        for (const a of spec.archives ?? []) extra.set(a.bml, await this.cache.get(a.bml, a.models));
         if (gen !== this.generation) return done;
         // Spread the start frames so a group does not move in lockstep.
-        const built = buildEnemy(archive, spec.parts, ((e.index * 0.618034) % 1 + 1) % 1, this.cache.loadedTextures);
+        const built = buildEnemy(archive, spec.parts, ((e.index * 0.618034) % 1 + 1) % 1, this.cache.loadedTextures, extra);
         built.root.position.set(p.world[0], p.world[1], p.world[2]);
         built.root.rotation.y = p.yaw;
         built.root.name = `${spec.name} #${e.index}`;
@@ -82,8 +92,16 @@ export class EnemyLayer {
         built.root.visible = !this.hidden;
         this.byIndex.set(e.index, built.root);
         root.add(built.root);
+        // World-placed children sit at the arena origin, not under the entry.
+        const world = built.world.children.length ? built.world : null;
+        if (world) {
+          world.name = `${spec.name} #${e.index} children`;
+          world.visible = !this.hidden;
+          root.add(world);
+          this.worldByIndex.set(e.index, world);
+        }
         animators.push(...built.animators);
-        instances.push({ placed: p, spec, archive, root: built.root, animators: built.animators, parts: built.animatedParts });
+        instances.push({ placed: p, spec, archive, root: built.root, world, animators: built.animators, parts: built.animatedParts });
         done.add(p);
         stats.placed++;
       } catch (err) {
@@ -104,29 +122,36 @@ export class EnemyLayer {
     const i = this.instances.indexOf(instance);
     if (i >= 0) this.instances.splice(i, 1);
     this.animators = this.animators.filter((a) => !instance.animators.includes(a));
-    instance.root.removeFromParent();
     const materials = new Set<THREE.Material>();
-    instance.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
-        for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
-      }
-      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
-    });
+    for (const r of [instance.root, instance.world]) {
+      if (!r) continue;
+      r.removeFromParent();
+      r.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
+        }
+        if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
+      });
+    }
     for (const m of materials) m.dispose();
     this.byIndex.delete(instance.placed.entity.index);
+    this.worldByIndex.delete(instance.placed.entity.index);
   }
 
   // Hides every enemy (models built later start hidden too) until setVisible().
   hideAll(): void {
     this.hidden = true;
     for (const r of this.byIndex.values()) r.visible = false;
+    for (const r of this.worldByIndex.values()) r.visible = false;
   }
 
   // Shows or hides the enemy of e.dat entry `index` (wave spawns and deaths).
   setVisible(index: number, visible: boolean): void {
     const r = this.byIndex.get(index);
     if (r) r.visible = visible;
+    const w = this.worldByIndex.get(index);
+    if (w) w.visible = visible;
   }
 
   isVisible(index: number): boolean {
@@ -143,6 +168,7 @@ export class EnemyLayer {
     this.animators = [];
     this.instances = [];
     this.byIndex.clear();
+    this.worldByIndex.clear();
     this.hidden = false;
     if (!this.root) return;
     this.viewer.scene.remove(this.root);

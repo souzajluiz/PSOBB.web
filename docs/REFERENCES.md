@@ -21,6 +21,19 @@ a suffix, so an address found anywhere resolves to a name and a body:
 headless (`tools/ghidra/run_any.sh`) is the fallback for what the dump leaves
 unnamed or unresolved, and for data tables, which the dump does not carry.
 
+The dump carries the code but **not the data tables**. Most of what is missing
+is a plain read at a known address, which `tools/exedata.py` does straight out
+of a local `PsoBB.exe` (point `PSOBB_EXE` at your own copy; it is never
+committed here), so Ghidra headless is only needed for what neither gives:
+
+```sh
+tools/exedata.py read 009a5210 u 4         # 4 uint32 (also f d i h H, b, s, p)
+tools/exedata.py read 008fe09c s           # a string
+tools/exedata.py motions 009a5240 8        # enemy motion table rows
+tools/exedata.py xref 009a51e0             # .text references to an address
+tools/exedata.py calls 0044161c 0044172a   # call targets in a range (pins an entry point)
+```
+
 Clone it anywhere and point `REFSRC` at it (the default is
 `../refsrc/original-psobb-client-source`, outside this repository, and it is
 never committed here):

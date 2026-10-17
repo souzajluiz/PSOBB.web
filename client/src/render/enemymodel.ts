@@ -15,6 +15,13 @@
 //
 // Motions: NMDM chunks. Angle keys are 16-bit (NJS_MKEY_SA, as in the player
 // motions); Episode 4 motions use quaternion keys (type 0x2000, w x y z).
+//
+// Several enemies are more than one object: their constructor creates child
+// entities that draw another model entry of the same archive (the Chaos
+// Sorcerer's two bits), another archive of the same enemy (Saint-Milion's
+// tentacles, loaded from a second descriptor) or a whole set of objects placed
+// around the arena (Vol Opt's monitors and pillars). EnemyPartSpec carries one
+// such child; formats/enemymodels.ts builds the list per enemy type.
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -271,10 +278,29 @@ export interface EnemyPartSpec {
   texlistOf?: number; // draw with this model entry's texture list
   texRemap?: number[]; // texture id i (< length) draws as texture texRemap[i] of the list
   textureArchive?: string; // separate XVM used as the texture list (e.g. Gillchic)
+  // --- child objects (formats/enemymodels.ts) -------------------------------
+  // Model and motion come from this archive instead of the enemy's own
+  // (Saint-Milion loads two BMLs); EnemyModelSpec.archives names it.
+  archive?: string;
+  // Where the client puts the child object:
+  //   undefined / 'enemy' the enemy's origin plus `offset`, turned with the
+  //                       enemy (the constructor builds the position from the
+  //                       parent entity's x/y/z and rotation)
+  //   'world'             the constructor builds the position from the arena
+  //                       origin, so the set entry's position and rotation do
+  //                       not apply (Vol Opt's monitors and pillars)
+  place?: 'enemy' | 'world';
+  offset?: readonly [number, number, number];
+  yaw?: number; // extra Y rotation, radians
+  // The client creates the object but only draws it in some fight states
+  // (thrown arms, tentacles the boss spawns): built, not drawn.
+  hidden?: boolean;
+  name?: string; // for the model tree / logs
 }
 
 export interface BuiltEnemy {
-  root: THREE.Group;
+  root: THREE.Group; // parts placed relative to the enemy
+  world: THREE.Group; // parts the client places from the arena origin
   animators: NodeAnimator[];
   animatedParts: EnemyPartSpec[]; // the part each animator plays (same order)
   missingTextures: number;
@@ -287,47 +313,65 @@ function flagsDepthFirst(o: { flags: number; children: unknown[] }, out: number[
   return out;
 }
 
-// Builds the parts of one enemy (each part is drawn at the enemy's origin).
+// Builds the parts of one enemy. A part without a placement is drawn at the
+// enemy's origin, a child object at its `offset` (turned with the enemy) and a
+// 'world' child under `world`, which the caller leaves at the arena origin.
 // `phase` offsets the start frame so neighbours do not move in lockstep.
-export function buildEnemy(archive: EnemyArchive, parts: EnemyPartSpec[], phase = 0, external: ReadonlyMap<string, THREE.Texture[]> = new Map()): BuiltEnemy {
+export function buildEnemy(
+  archive: EnemyArchive,
+  parts: EnemyPartSpec[],
+  phase = 0,
+  external: ReadonlyMap<string, THREE.Texture[]> = new Map(),
+  extra: ReadonlyMap<string, EnemyArchive> = new Map(),
+): BuiltEnemy {
   const root = new THREE.Group();
+  const world = new THREE.Group();
   const animators: NodeAnimator[] = [];
   const animatedParts: EnemyPartSpec[] = [];
   let missingTextures = 0;
   let triangles = 0;
   for (const part of parts) {
-    const data = archive.model(part.model);
-    const names = archive.model(part.texlistOf ?? part.model).textures;
+    const own = part.archive ? extra.get(part.archive) : archive;
+    if (!own) throw new Error(`archive ${part.archive} not loaded`);
+    const data = own.model(part.model);
+    const names = own.model(part.texlistOf ?? part.model).textures;
     const list = part.textureArchive ? external.get(part.textureArchive) : null;
     if (part.textureArchive && !list) throw new Error(`texture archive ${part.textureArchive} not loaded`);
     const lookup = (id: number) => {
       const i = part.texRemap && id < part.texRemap.length ? part.texRemap[id] : id;
       if (list) return list[i] ?? null;
-      return names[i] !== undefined ? archive.texture(names[i]) : null;
+      return names[i] !== undefined ? own.texture(names[i]) : null;
     };
+    // One group per part carries its placement (identity for a plain part).
+    const group = new THREE.Group();
+    if (part.name) group.name = part.name;
+    if (part.offset) group.position.set(part.offset[0], part.offset[1], part.offset[2]);
+    if (part.yaw) group.rotation.y = part.yaw;
+    if (part.hidden) group.visible = false;
+    (part.place === 'world' ? world : root).add(group);
     let nodes: THREE.Object3D[];
     if (data.kind === 'nj') {
       const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup }]);
-      root.add(built.root);
+      group.add(built.root);
       nodes = built.partBones[0];
       missingTextures += built.stats.missingTextures;
       triangles += built.stats.triangles;
     } else {
       const built = buildObjectTreeWithNodes(data.object, new MaterialCache(lookup));
-      root.add(built.root);
+      group.add(built.root);
       nodes = built.nodes;
       built.root.traverse((o) => {
         if (o instanceof THREE.Mesh) triangles += (o.geometry.index?.count ?? 0) / 3;
       });
     }
-    if (part.motion && part.motion.index >= 0 && part.motion.index < archive.motionCount) {
-      const motion = archive.motion(part.motion.index, nodes.length);
+    if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
+      const motion = own.motion(part.motion.index, nodes.length);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
       animators.push(new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0));
       animatedParts.push(part);
     }
   }
-  return { root, animators, animatedParts, missingTextures, triangles };
+  return { root, world, animators, animatedParts, missingTextures, triangles };
 }
 
 // Loads archives once per view.

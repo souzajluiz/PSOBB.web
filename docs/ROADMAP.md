@@ -53,14 +53,16 @@
 - [x] Floor maps from the `64` variations via `SetDataTableOn.rel`; Pioneer 2 and field floors with collision, player starts, enemy/object markers; warps (`6x21`/`6x22`/`6x23`) by button or area warp objects
 - [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)
 - [x] Enemy models (`bm_ene_*.bml`, boss archives) at their spawn points with their idle motions, variants by params/difficulty/season (`formats/enemymodels.ts`, `tests/enemies.test.ts`)
-- [ ] Enemy sub-objects (Belra arms, Sorcerer bits, Deldepth disc, Vol Opt phase 1, Saint-Milion parts)
+- [x] Enemy child objects: Sorcerer bits, Vol Opt phase 1 (pillars, monitors, lightning rod), Belra arms, De Rol Le / Barba Ray tentacles and mines, Dark Falz forms 2–3 and Rico's ring, Saint-Milion's spinner from its second archive (`EnemyPartSpec` placement, `tests/enemies.test.ts`)
+- [ ] Where the fight puts the children it spawns (tentacles, mines, thrown arms, the 16 spinners), the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision
 - [x] Wave events: the floor's `.evt` (`formats/events.ts`), the wave state machine (`render/waves.ts`), `6x67` / `6x76` sync, enemies appearing per wave, battle music while a wave of the room is alive
 - [x] Laser fences and their switches, the recovery ring and the second boss warp class; the volumes that draw nothing (fog, events, room ids, sounds, camera) are counted as invisible instead of missing
 - [ ] Remaining object models (Pioneer 2 shops and their doors, the Lab city warps, jungle rocks, traps, Vol Opt's ship door), the `construct_objects` action, the door unlock camera
-- [ ] Boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps
+- [x] Boss fight music phases (`audio/bossbgm.ts`: the track of every phase and the `6x15`/`6x19`/`6xA4`/`6xA5` triggers) and `6x6A` boss warp gathering (`render/bosswarp.ts`: confirmation, party list, 300-frame gather, warp) — `tests/bossrooms.test.ts`
+- [ ] CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps, the boss-warp cutscene camera and the warp object's own animation
 - [x] Combat: three-attack combo (`6x43`/`6x44`/`6x45`, motion tables and hit frames from the exe), hit detection with the ItemPMT weapon ranges, the hit/damage formulas, enemy flinch/death motions, `6x46`/`6x0A`/`6x76`, kill -> `6x60` drop request and `6xC8` EXP request (`combat/`, `render/combat.ts`, `tests/combat.test.ts`)
 - [x] Combat: the player taking damage (`6x4A` shield, `6x4B`/`6x4C` light/heavy hit, `6x89`+`6x4D` death, `6x4E` revivable, `6x4F` revive), HP tracking, the hit / knockback / death / stand-up field motions, the HP read-out (`combat/playerdamage.ts`)
 - [x] Combat: enemy AI from the generic enemy FSM (idle and the walk home, the search radius, the war cry, the chase at the BattleParamEntry MovementData speeds, the melee at the AttackData reach with its damage and knockback, the 15-tick recovery) (`combat/enemyai.ts`)
