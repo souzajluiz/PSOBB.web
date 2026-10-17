@@ -11,8 +11,8 @@ import { floorFiles, parseSetDataTable } from '../client/src/formats/setdatatabl
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { floorToArea } from '../client/src/net/game.ts';
 import { parseUnitxt } from '../client/src/classic/charcreate_text.ts';
-import { AREA_TEXT, areaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
-import { bossWarpFloor, collectFieldObjects, doorFlags, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import { AREA_TEXT, areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
+import { bossWarpFloor, collectFieldObjects, doorFlags, doorLamps, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 let failures = 0;
@@ -38,6 +38,11 @@ eq(mainWarpLayout(4), { x: 176, y: 130, w: 288, h: 94 }, 'Ep1 window');
 eq(mainWarpLayout(9).h, 160, 'height capped at 160');
 eq(areaWarpLayout(50), { x: 267, y: 130, w: 70, h: 34 }, 'area warp window');
 
+// --- CCA main gate (TObjWarpJungMain: 0x009c9660 floors, 0x009c9654 names) ---
+eq(CCA_WARP.map((i) => i.floor), [6, 8, 9], 'CCA gate floors: Jungle North, Mountain, Seaside');
+eq(CCA_WARP.map((i) => i.text), [22, 24, 25], 'CCA gate names');
+eq(ccaWarpLayout(100), { x: 176, y: 130, w: 120, h: 74 }, 'CCA gate window (FUN_0073608c)');
+
 // --- Boss warp destinations (0x0097f380) ---
 eq([1, 2, 3, 6, 8, 10].map((f) => bossWarpFloor(1, f)), [0xb, 0xb, 0xc, 0xd, 0xe, 0xe], 'Ep1 boss floors');
 eq([1, 3, 5, 10, 11].map((f) => bossWarpFloor(2, f)), [0xe, 0xf, 0xc, 0xd, 0xd], 'Ep2 boss floors');
@@ -50,6 +55,16 @@ eq(doorFlags(obj(0xc2, -1)), { flags: [], locked: false }, 'TODoorCave02 negativ
 eq(doorFlags(obj(0xc2, 0x101)), { flags: [], locked: true }, 'TODoorCave02 > 0x100 = locked');
 eq(doorFlags(obj(0xc1, 0x10, 1)), { flags: [0x10, 0x11, 0x12], locked: false }, 'TODoorCave01 three flags');
 eq(doorFlags(obj(0x14b, 0x20)), { flags: [0x20, 0x21], locked: false }, 'TODoorAncient09 two flags');
+eq(doorFlags(obj(0x1ab, 0x30, 2)), { flags: [0x30, 0x31], locked: false }, 'four-light Ruins door: param5 flags');
+eq(doorFlags(obj(0x1c0, 0x30, 0)), { flags: [], locked: false }, 'four-light Space door: no flag = open');
+eq(doorFlags(obj(0x221, 0x30, 7)), { flags: [0x30, 0x31, 0x32, 0x33], locked: false }, 'Seabed four-light door: param5 clamped to 4');
+eq(doorFlags(obj(0x222, -1, 3)), { flags: [], locked: false }, 'Seabed four-light door: negative = open');
+eq(doorFlags(obj(0x1ab, 0x101, 3)), { flags: [], locked: true }, 'four-light door: > 0x100 = locked');
+{
+  const d = { flags: [0x30, 0x31, 0x32] } as FieldDoor;
+  eq(doorLamps(d, false, new Set([0x31])), [false, true, false, true], 'lamps: flag set or no flag = lit');
+  eq(doorLamps(d, true, new Set()), [true, true, true, true], 'lamps: unlocked = all lit');
+}
 {
   const d: FieldDoor = { index: 0, type: 0x80, x: 0, y: 0, z: 0, yaw: 0, flags: [1], locked: false, state: 0, frame: 0, mesh: null };
   const states: number[] = [];
@@ -79,6 +94,7 @@ if (existsSync(join(DATA, 'data.gsl'))) {
   eq(mainWarpItems(1).map((i) => text[i.text]), ['Forest 1', 'Cave 1', 'Mine 1', 'Ruins 1'], 'Ep1 labels');
   console.log('Ep2 labels:', mainWarpItems(2).map((i) => text[i.text]).join(', '));
   console.log('Ep4 labels:', mainWarpItems(3).map((i) => text[i.text]).join(', '));
+  console.log('CCA gate labels:', CCA_WARP.map((i) => text[i.text]).join(', '));
   eq([0x00, 0x02, 0x0b].map((a) => text[AREA_TEXT[a]]), ['Pioneer 2', 'Forest 2', 'Under the Dome'], 'area names');
   check(/^lobby$/i.test(text[AREA_TEXT[0x0f]]), 'lobby teleporter name');
 
@@ -99,6 +115,8 @@ if (existsSync(join(DATA, 'data.gsl'))) {
       if (floor === 0 && episode !== 2) check(o.warps.some((w) => w.kind === 'main'), `Ep${episode} Pioneer 2 has the Ragol teleporter`);
       if (episode === 1 && floor === 1) check(o.warps.some((w) => w.kind === 'area' && w.floor === 2) && o.doors.length > 0 && o.switches.length > 0, 'Forest 1 warp to floor 2, doors and switches');
       if (episode === 1 && floor === 2) check(o.warps.some((w) => w.kind === 'boss' && w.floor === 0xb), 'Forest 2 boss warp to the Dragon');
+      if (episode === 2 && area === 0x17) check(o.warps.some((w) => w.kind === 'cca' && w.radius === 15), 'CCA has its main gate (TObjWarpJungMain)');
+      if (episode === 2 && (area === 0x13 || area === 0x15 || area === 0x1c)) check(o.doors.some((d) => d.lamps), `Ep2 area 0x${area.toString(16)} has four-light doors`);
     }
   }
 } else {

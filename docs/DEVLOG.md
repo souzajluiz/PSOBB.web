@@ -1,5 +1,59 @@
 # Devlog
 
+## 2026-10-17: the CCA main gate, four-light door lamps and the jungle warp beams
+
+**What changed:**
+
+- **CCA main gate** (`TObjWarpJungMain`, object `0x020A`): it is a warp with a
+  menu now. Constructor `0x0066d8bc` (create `0x0066d840`): the base warp
+  object, radius 15.0 at `+0xac`; in Challenge mode (`get_room_type() == 1`)
+  it removes itself unless param6 is odd. Its vtable `0x00b356e0` opens the
+  menu at `+0x34` (`0x0066dab4`): a list window at position-table entry `0x34`
+  = (176, 130) with three items, unitxt group 10 indices `22, 24, 25`
+  (`0x009c9654`), sized by `FUN_0073608c` (widest item + 20, items * 20 - 6 +
+  20); `+0x40` (`0x0066da28`) maps the chosen item to the floor table
+  `0x009c9660` = 6, 8, 9 (Jungle Area North, Mountain Area, Seaside Area).
+  `render/warpmenu.ts` (`CCA_WARP`, `ccaWarpLayout`), kind `cca` in
+  `render/fieldobjects.ts`.
+- **Jungle warps** (`TObjWarpJung` `0x0201` and the main gate): radius 15.0
+  (create `0x0066d4c4`; it was 10). The beam (model 1 of
+  `bm_obj_warp_jung.bml`) advances 4.0 frames per tick (`0x00939df8`) and goes
+  back to frame 0 once it is past the last frame (`0x0066d28c` /
+  `0x0066d6b4`) instead of wrapping the overshoot: new part drive `restart`
+  (`NodeAnimator.restart`). The render (`0x0066d2d8`) sets the six beam nodes
+  to `ts064_beam_aka` (red, param6 0) or `ts064_beam_ao` (blue, param6 1)
+  (names at `0x00939e68` / `0x00939e78`, looked up in texture list 0 by the
+  loader `0x0066db88`); those nodes are the only users of ids 1 and 8, so it is
+  a texture id remap (new part field `texIds`).
+- **Four-light doors** (`0x01AB` Temple, `0x01C0` Spaceship, `0x0221` /
+  `0x0222` Seabed): they wait for `param5` flags from `param4` (Ruins / Space:
+  the unlock check `0x0061fce0` loops over the raw param5; Seabed:
+  `DoorSetState_00620d70` clamps it to 0..4), not always four, and param4 >
+  0x100 never opens (`init_map_object_door_switch_type`). Before this a
+  two-lamp door waited for four flags and never opened. Each lamp is two model
+  nodes (`MapObject_InitializeGeneric_0078e9b0` depth-first indices: Ruins
+  `0x0061f8c4` 3,4,6,8 / 2,5,7,9; Space `0x0061fed8` 4,6,8,10 / 5,7,9,11;
+  Seabed `InitializeItemDoor_00620f90` 2,4,9,11 / 3,5,10,12; Seabed U
+  `0x006211b8` 2,4,7,9 / 3,5,8,10). While the door is closed the body keeps
+  its own texture list and lamp i takes the green list once its flag is set
+  (or when it waits for none, or the door is unlocked); opening, open and
+  closing draw the whole door green (renders `0x0061fa60`,
+  `RenderDoorSub_006209dc`). The Ruins / Space archive is picked by map
+  (`LoadDoorAssetsForCurrentMap_00620450`: maps 0x15/0x16 Spaceship), and
+  Seabed Lower uses the `_02` lists (`fs_obj_doorx4_atui_02`,
+  `fs_obj_doorx4_usui_02` and their greens). `objectmodels.ts` `lamps`,
+  `ObjectLayer.setLamps`, `fieldobjects.ts` `doorLamps`.
+
+**Checks:** `tests/warpmenu.test.ts` (CCA gate floors, names and window; the
+four-light flag rules; the lamp states; the CCA floor has its gate and Temple,
+Spaceship and Seabed have lamp doors), `tests/waves.test.ts` (every lamp node
+exists and draws a model; all object models still build with no missing
+textures). In Chrome against newserv: in an Episode 2 game on the CCA, standing
+in the main gate opened the three-item window "Jungle Area North / Mountain
+Area / Seaside Area"; Down + Enter warped to Mountain (floor 8). In VR Temple
+Alpha the two-flag door showed four lamps, three green and one red with flag
+104 set; setting flag 105 unlocked it and it opened (state 5).
+
 ## 2026-10-17: a build that keeps every page, and parts that cannot be wrong
 
 **The build dropped two of the three pages.** Vite only treats `index.html` as

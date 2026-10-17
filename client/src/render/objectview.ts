@@ -4,9 +4,10 @@
 // picks and keeps the parts that are only drawn in one state (locked /
 // unlocked door, lit switch) switchable.
 //
-// Motions: parts with drive 'loop' advance like an enemy idle motion; parts
-// with drive 'door' or 'laser' are driven by the door state machine
-// (fieldobjects.ts) through ObjectModel.setDoorFrame / setLaserFrame.
+// Motions: parts with drive 'loop' or 'restart' advance like an enemy idle
+// motion; parts with drive 'door' or 'laser' are driven by the door state
+// machine (fieldobjects.ts) through ObjectModel.setDoorFrame / setLaserFrame.
+// Four-light doors light their lamps one by one through setLamps.
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -24,6 +25,7 @@ export interface ObjectPart {
   group: THREE.Object3D;
   animator: NodeAnimator | null;
   drive: ObjectPartSpec['drive'];
+  nodes: THREE.Object3D[]; // node tree, depth first
 }
 
 export interface ObjectModel {
@@ -40,14 +42,29 @@ export interface ObjectLayerStats {
   errors: string[];
 }
 
+function texRemap(p: ObjectPartSpec): number[] | undefined {
+  if (p.textureId !== undefined) return new Array(ALL_IDS).fill(p.textureId);
+  if (!p.texIds) return undefined;
+  const ids = Array.from({ length: ALL_IDS }, (_, i) => i);
+  for (const [from, to] of Object.entries(p.texIds)) ids[Number(from)] = to;
+  return ids;
+}
+
+const loops = (drive: ObjectPartSpec['drive']) => drive === 'loop' || drive === 'restart';
+
 function toEnemyPart(p: ObjectPartSpec): EnemyPartSpec {
   return {
     model: p.model,
     texlistOf: p.texlistOf,
     textureArchive: p.textures,
-    texRemap: p.textureId !== undefined ? new Array(ALL_IDS).fill(p.textureId) : undefined,
-    motion: p.motion !== undefined ? { index: p.motion, speed: p.speed ?? 1, loop: p.drive === 'loop' } : null,
+    texRemap: texRemap(p),
+    motion: p.motion !== undefined ? { index: p.motion, speed: p.speed ?? 1, loop: loops(p.drive) } : null,
   };
+}
+
+// The meshes a node draws itself (its model), not those of its child nodes.
+function ownMeshes(node: THREE.Object3D, nodes: ReadonlySet<THREE.Object3D>): THREE.Object3D[] {
+  return node.children.filter((c) => !nodes.has(c));
 }
 
 export class ObjectLayer {
@@ -110,9 +127,10 @@ export class ObjectLayer {
             });
           }
           const animator = built.animators[0] ?? null;
-          if (animator && part.drive === 'loop') animators.push(animator);
-          if (animator && part.drive !== 'loop') animator.setFrame(0);
-          model.parts.push({ show: part.show ?? 'always', group: built.root, animator, drive: part.drive });
+          if (animator && part.drive === 'restart') animator.restart = true;
+          if (animator && loops(part.drive)) animators.push(animator);
+          if (animator && !loops(part.drive)) animator.setFrame(0);
+          model.parts.push({ show: part.show ?? 'always', group: built.root, animator, drive: part.drive, nodes: built.partNodes[0] ?? [] });
           model.root.add(built.root);
         }
         model.root.position.set(p.world[0], p.world[1], p.world[2]);
@@ -141,6 +159,33 @@ export class ObjectLayer {
     const m = this.models.get(index);
     if (!m) return;
     for (const part of m.parts) part.group.visible = part.show === 'always' || part.show === state;
+  }
+
+  // Four-light door: `lit` gives each lamp while the door is closed, null
+  // draws the whole door with the lit list (opening, open, closing). Parts 0
+  // and 1 are the door with its own list and with the lit one.
+  setLamps(index: number, lit: readonly boolean[] | null): void {
+    const m = this.models.get(index);
+    const lamps = m?.spec.lamps;
+    if (!m || !lamps || m.parts.length < 2) return;
+    const [own, green] = m.parts;
+    own.group.visible = lit !== null;
+    green.group.visible = true;
+    const ownSet = new Set(own.nodes);
+    const greenSet = new Set(green.nodes);
+    const lampOf = new Map<number, number>();
+    lamps.forEach((nodes, i) => nodes.forEach((n) => lampOf.set(n, i)));
+    green.nodes.forEach((node, n) => {
+      const lamp = lampOf.get(n);
+      const show = lit === null || (lamp !== undefined && lit[lamp]);
+      for (const o of ownMeshes(node, greenSet)) o.visible = show;
+    });
+    if (lit === null) return;
+    own.nodes.forEach((node, n) => {
+      const lamp = lampOf.get(n);
+      const show = lamp === undefined || !lit[lamp];
+      for (const o of ownMeshes(node, ownSet)) o.visible = show;
+    });
   }
 
   setVisible(index: number, visible: boolean): void {

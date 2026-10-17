@@ -34,13 +34,19 @@ export interface ObjectModelContext {
 export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off';
 
 // How a part's motion is advanced: loop adds `speed` frames per game tick,
-// door follows the door state machine, laser the fence's own one.
-export type PartDrive = 'loop' | 'door' | 'laser';
+// restart too but goes back to frame 0 once past the last frame instead of
+// wrapping the overshoot, door follows the door state machine, laser the
+// fence's own one.
+export type PartDrive = 'loop' | 'restart' | 'door' | 'laser';
 
 interface ObjectPartBase {
   model: number; // model entry (BML position)
   show?: PartShow; // locked/unlocked: doors and boss warps; on/off: switches
   textureId?: number; // FUN_0081a588: every mesh uses this texture id
+  // Texture id -> texture id of the list, for the ids it names (the others
+  // keep theirs): how the client's per-node FUN_0081a588 calls come out when
+  // the ids they replace occur only on the nodes they touch.
+  texIds?: Readonly<Record<number, number>>;
   tint?: readonly [number, number, number]; // constant color (render flag 0x10 + FUN_0082d710), 0..1
 }
 
@@ -71,11 +77,24 @@ export interface ObjectModelSpec {
   parts: ObjectPartSpec[];
   collision?: ObjectCollision;
   door?: boolean; // runs the door state machine (fieldobjects.ts)
+  // Four-light doors: the node indices (depth first, as
+  // MapObject_InitializeGeneric_0078e9b0 counts them) of each lamp. Parts
+  // 0 and 1 are the door with its own list and with the lit list; while the
+  // door is closed, lamp i is drawn from part 1 when lit and from part 0
+  // otherwise (render/objectview.ts setLamps).
+  lamps?: ReadonlyArray<readonly number[]>;
 }
 
 const p4 = (o: ObjectSet) => Math.trunc(o.params[3]);
 const p6 = (o: ObjectSet) => Math.trunc(o.params[5]);
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(Math.trunc(v), lo), hi);
+
+// Beam texture of the jungle warps: ids 1 and 8 of list 0 drawn as
+// ts064_beam_aka (8) or ts064_beam_ao (9) by |param6| & 1.
+const jungBeam = (o: ObjectSet): Record<number, number> => {
+  const t = Math.abs(p6(o)) & 1 ? 9 : 8;
+  return { 1: t, 8: t };
+};
 
 // Digit colors of the Forest door signs and switches (0x009c7b04 / 0x009c7ce0:
 // {a, r, g, b} floats per digit 0..9).
@@ -255,13 +274,21 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       ]);
     case 0x0141:
       return spec('TObjMapWarpAncient', 'bm_o_warp_ancient.bml', [{ model: 0 }, { model: 4 }, { model: 2, motion: 1, drive: 'loop', speed: 1 }]);
-    // TObjWarpJung: loader FUN_0066db88, bm_obj_warp_jung.bml: model 0 (base,
-    // with the archive's texture list 0) and model 1 (beam) with motion 0.
+    // TObjWarpJung (create 0x0066d4c4) and TObjWarpJungMain (create
+    // 0x0066d840): loader CreateSeabedTuriganeWarpObjectModel_0066db88,
+    // bm_obj_warp_jung.bml: model 0 (base, with the archive's texture list 0)
+    // and model 1 (beam) with motion 0. The update (0x0066d28c / 0x0066d6b4)
+    // adds 4.0 (0x00939df8) to the frame at +0xc8 and sets it back to 0 once
+    // it is past the last frame. The render (0x0066d2d8) first sets the
+    // texture of the six beam nodes (model 1: the five children of node 1 and
+    // node 7) to ts064_beam_aka (red) when param6 is 0 or ts064_beam_ao
+    // (blue) when it is 1 (the constructors keep |param6| & 1). Those nodes
+    // are the only ones using ids 1 and 8 of list 0, so the swap is an id remap.
     case 0x0201:
     case 0x020a:
       return spec(o.type === 0x0201 ? 'TObjWarpJung' : 'TObjWarpJungMain', 'bm_obj_warp_jung.bml', [
         { model: 0, texlistOf: 0 },
-        { model: 1, texlistOf: 0, motion: 0, drive: 'loop', speed: 1 },
+        { model: 1, texlistOf: 0, motion: 0, drive: 'restart', speed: 4, texIds: jungBeam(o) },
       ]);
 
     // ---- doors ----
@@ -336,10 +363,24 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TODoorVS2Door01', 'fs_obj_o_vs2door01l.bml', [{ model: 0, textures: 'fs_obj_o_vs2door01lr.xvm' }], { collision: DOOR_BOX_20(0x009c55bc), door: true });
     // Four-light doors (create 0x007bb130 / 0x007bb1ac, loader FUN_00620450:
     // bm_obj_door_ruins / bm_obj_door_space, green texture list when open).
+    // Four-light doors. TODoorFourLightRuins / TODoorFourLightSpace share the
+    // loader LoadDoorAssetsForCurrentMap_00620450, which picks the archive by
+    // map, not by type: 0x15/0x16 (Spaceship) bm_obj_door_space.bml +
+    // obj_door_space_green.gvm, any other map bm_obj_door_ruins.bml +
+    // obj_door_ruins_green.gvm. The constructors (Ruins 0x0061f8c4, Space
+    // 0x0061fed8) keep two nodes per lamp; the render (vtable 0x00b27a20 slot
+    // 2, 0x0061fa60) draws the door with the green list while it opens, is
+    // open or closes, and while it is closed draws the body with its own list
+    // and lamp i with the green list when it is lit: always once the door is
+    // unlocked, else when i >= param5 or switch flag param4 + i is set.
     case 0x01ab:
-      return simpleDoor('TODoorFourLightRuins', 'bm_obj_door_ruins.bml', DOOR_BOX_20(0x009c5458), undefined, 'obj_door_ruins_green.xvm');
-    case 0x01c0:
-      return simpleDoor('TODoorFourLightSpace', 'bm_obj_door_space.bml', DOOR_BOX_20(0x009c5458), undefined, 'obj_door_space_green.xvm');
+    case 0x01c0: {
+      const space = area === 0x15 || area === 0x16;
+      return {
+        ...simpleDoor(o.type === 0x01ab ? 'TODoorFourLightRuins' : 'TODoorFourLightSpace', space ? 'bm_obj_door_space.bml' : 'bm_obj_door_ruins.bml', DOOR_BOX_20(0x009c5458), undefined, space ? 'obj_door_space_green.xvm' : 'obj_door_ruins_green.xvm'),
+        lamps: o.type === 0x01ab ? [[3, 2], [4, 5], [6, 7], [8, 9]] : [[4, 5], [6, 7], [8, 9], [10, 11]],
+      };
+    }
     case 0x0192:
       return simpleDoor('TObjDoaEx01', 'fs_obj_ex_doa01.bml', BOX(0x009c798c, 20, 10, 20, -5));
     // TObjDoorJung (laser door, loader FUN_00657bac: bm_obj_beamdoa.bml, model
@@ -356,10 +397,26 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
         collision: BOX(0x009c7c9c, 80, 20, 0),
         door: true,
       });
-    case 0x0221:
-      return simpleDoor('TODoorFourLightSeabed', 'bm_o_door_seabed01.bml', DOOR_BOX_20(0x009c551c), 'fs_obj_doorx4_atui.xvm', 'fs_obj_doorx4_atui_green.xvm');
-    case 0x0222:
-      return simpleDoor('TODoorFourLightSeabedU', 'bm_o_door_seabed01_u.bml', DOOR_BOX_20(0x009c551c), 'fs_obj_doorx4_u.xvm', 'fs_obj_doorx4_u_green.xvm');
+    // TODoorFourLightSeabed (ctor InitializeItemDoor_00620f90, loader
+    // InitializeDoorAssetsStandard_006220fc) and TODoorFourLightSeabedU (ctor
+    // 0x006211b8, loader InitializeDoorAssetsUpper_00621f2c): the lists are
+    // fs_obj_doorx4_atui / _u (+0x50) and their _green (+0x54), the _02 ones
+    // on Seabed Lower (0x1d). Same lamps as above (RenderDoorSub_006209dc),
+    // with the count clamped to 0..4 (DoorSetState_00620d70).
+    case 0x0221: {
+      const lower = area === 0x1d ? '_02' : '';
+      return {
+        ...simpleDoor('TODoorFourLightSeabed', 'bm_o_door_seabed01.bml', DOOR_BOX_20(0x009c551c), `fs_obj_doorx4_atui${lower}.xvm`, `fs_obj_doorx4_atui_green${lower}.xvm`),
+        lamps: [[2, 3], [4, 5], [9, 10], [11, 12]],
+      };
+    }
+    case 0x0222: {
+      const lower = area === 0x1d;
+      return {
+        ...simpleDoor('TODoorFourLightSeabedU', 'bm_o_door_seabed01_u.bml', DOOR_BOX_20(0x009c551c), lower ? 'fs_obj_doorx4_usui_02.xvm' : 'fs_obj_doorx4_u.xvm', lower ? 'fs_obj_doorx4_usui_green_02.xvm' : 'fs_obj_doorx4_u_green.xvm'),
+        lamps: [[2, 3], [4, 5], [7, 8], [9, 10]],
+      };
+    }
     case 0x0056:
       return simpleDoor('TODoorLabo', 'bm_obj_door_labo.bml', DOOR_BOX_20(0x009c551c), 'obj_o_labodoor_l_red.xvm', 'obj_o_labodoor_l_grn.xvm');
     case 0x02bb:

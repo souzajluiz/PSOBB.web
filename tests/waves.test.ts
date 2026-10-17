@@ -288,8 +288,13 @@ for (const tname of ['SetDataTableOn.rel', 'SetDataTableOff.rel']) {
                         model: part.model,
                         texlistOf: part.texlistOf,
                         textureArchive: part.textures,
-                        texRemap: part.textureId !== undefined ? new Array(64).fill(part.textureId) : undefined,
-                        motion: part.motion !== undefined ? { index: part.motion, speed: part.speed ?? 1, loop: part.drive === 'loop' } : null,
+                        texRemap:
+                          part.textureId !== undefined
+                            ? new Array(64).fill(part.textureId)
+                            : part.texIds
+                              ? Array.from({ length: 64 }, (_, i) => part.texIds![i] ?? i)
+                              : undefined,
+                        motion: part.motion !== undefined ? { index: part.motion, speed: part.speed ?? 1, loop: part.drive === 'loop' || part.drive === 'restart' } : null,
                       },
                     ],
                     0,
@@ -299,6 +304,13 @@ for (const tname of ['SetDataTableOn.rel', 'SetDataTableOff.rel']) {
                   check(b.missingTextures === 0, `${what}: model ${part.model} has ${b.missingTextures} missing textures`);
                   for (const an of b.animators) for (let i = 0; i < 40; i++) an.update(1 / 30);
                   if (part.drive === 'door') check(b.animators.length === 1 && b.animators[0].frameCount > 1, `${what}: door motion has ${b.animators[0]?.frameCount} frames`);
+                  // Four-light doors: every lamp node exists and draws a model.
+                  for (const lamp of spec.lamps ?? []) {
+                    for (const n of lamp) {
+                      const node = b.partNodes[0][n];
+                      check(!!node && node.children.some((c) => !b.partNodes[0].includes(c)), `${what}: lamp node ${n} of ${b.partNodes[0].length} draws nothing`);
+                    }
+                  }
                 }
               } catch (err) {
                 check(false, `${what}: ${(err as Error).message}`);

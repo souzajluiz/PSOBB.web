@@ -37,7 +37,7 @@ import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
 import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
-import { areaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
+import { areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 
 export interface GameFieldOptions {
@@ -471,6 +471,9 @@ export class GameField {
     if (w.kind === 'main') {
       const items = mainWarpItems(episode, w.warpType).map((it) => ({ label: this.menu.label(it.text), floor: it.floor }));
       choice = this.menu.show(items, mainWarpLayout(items.length));
+    } else if (w.kind === 'cca') {
+      const items = CCA_WARP.map((it) => ({ label: this.menu.label(it.text), floor: it.floor }));
+      choice = this.menu.show(items, ccaWarpLayout(Math.max(...items.map((it) => gameTextWidth(it.label)))));
     } else {
       const area = w.kind === 'lobby' ? 0x0f : (floorToArea(episode)[w.floor] ?? -1);
       const label = this.menu.areaName(area);

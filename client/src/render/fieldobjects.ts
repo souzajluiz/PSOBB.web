@@ -8,8 +8,15 @@
 //   0x0002 TObjAreaWarpForest  create FUN_007bac58, base ctor FUN_00668b74:
 //          radius 10.0, destination param4 (FUN_0066982c)
 //   0x0140 TObjGoalWarpAncient Ruins floor warp, destination param4 (newserv)
-//   0x0201 TObjWarpJung, 0x0280 (after Barba Ray): same parameters (newserv);
-//          their radius is taken from TObjAreaWarpForest (not traced)
+//   0x0280 (after Barba Ray): same parameters (newserv); radius taken from
+//          TObjAreaWarpForest (not traced)
+//   0x0201 TObjWarpJung        create 0x0066d4c4: radius 15.0 (+0xac),
+//          destination param4; param6 = |param6| & 1 picks the beam color
+//          (objectmodels.ts) and, in Challenge mode (get_room_type() == 1),
+//          1 removes the object
+//   0x020A TObjWarpJungMain    create 0x0066d840 (CCA main gate): radius
+//          15.0, a menu of three destinations (warpmenu.ts ccaWarpItems); in
+//          Challenge mode it is removed unless param6 is odd
 //   0x0019 TObjWarpBoss        create FUN_0066c4b4: radius 19.0, destination
 //          floor from the table at 0x0097f380 (18 floors per episode,
 //          FUN_0080c340); param5 = switch flag that unlocks it (not on
@@ -49,7 +56,7 @@ import type { CollisionWorld, Obstacle } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 
-export type WarpKind = 'area' | 'boss' | 'main' | 'lobby';
+export type WarpKind = 'area' | 'boss' | 'main' | 'cca' | 'lobby';
 
 export interface FieldWarp {
   kind: WarpKind;
@@ -72,6 +79,7 @@ export interface FieldDoor {
   yaw: number;
   flags: number[]; // all must be set; empty = always unlocked
   locked: boolean; // permanently locked (flag > 0x100)
+  lamps: boolean; // four-light door: lamp i waits for flags[i] (objectmodels.ts lamps)
   state: number; // FUN_00656eb4 states: 0 locked, 2 closed, 4 opening, 5 open, 3 closing
   frame: number; // open motion frame
   laserFrame: number; // locked laser motion frame
@@ -137,6 +145,14 @@ const DOOR_TYPES = new Set([
   0x0192, 0x01a0, 0x01ab, 0x01c0, 0x0202, 0x0204, 0x0221, 0x0222, 0x0056, 0x02bb, 0x0130,
 ]);
 
+const LAMP_DOORS = new Set([0x01ab, 0x01c0, 0x0221, 0x0222]);
+
+// Lamps of a four-light door while it is closed: all lit once it is
+// unlocked, else lamp i when it waits for no flag or its flag is set.
+export function doorLamps(d: FieldDoor, unlocked: boolean, flags: ReadonlySet<number>): boolean[] {
+  return [0, 1, 2, 3].map((i) => unlocked || i >= d.flags.length || flags.has(d.flags[i]));
+}
+
 // Boxes (newserv Map.cc names): item boxes, enemy boxes, the rare ones and
 // their jungle / Ruins / VR counterparts.
 const BOX_TYPES = new Set([0x0088, 0x0091, 0x0092, 0x0093, 0x0161, 0x0162, 0x0200, 0x0203, 0x02b0]);
@@ -163,12 +179,20 @@ export function doorFlags(o: ObjectSet): { flags: number[]; locked: boolean } {
       return { flags: range(Math.min(0xfc, Math.max(0, p4)), 4), locked: false };
     case 0x014b:
       return { flags: range(Math.min(0xfe, Math.max(0, p4)), 2), locked: false };
-    case 0x01ab: // four-light doors: four consecutive flags
+    // Four-light doors (init_map_object_door_switch_type, vtable +0x44
+    // 0x0061c84c: param4 > 0x100 never opens, < 0 is always open): the flags
+    // param4 .. param4 + n - 1, n = param5 for Ruins / Space (0x0061fce0) and
+    // param5 clamped to 0..4 for the Seabed doors (DoorSetState_00620d70,
+    // checked by 0x00620d98).
+    case 0x01ab:
     case 0x01c0:
     case 0x0221:
-    case 0x0222:
+    case 0x0222: {
+      if (p4 > 0x100) return { flags: [], locked: true };
       if (p4 < 0) return { flags: [], locked: false };
-      return { flags: range(Math.min(0xfc, Math.max(0, p4)), 4), locked: false };
+      const n = o.type === 0x0221 || o.type === 0x0222 ? Math.min(4, Math.max(0, Math.trunc(p5))) : Math.max(0, Math.trunc(p5));
+      return { flags: range(p4, n), locked: false };
+    }
     default: // TODoorCave02 parameters (0x00C2, 0x00CE, 0x0102, 0x0144-0x0149)
       if (p4 < 0 || p4 === 0x100) return { flags: [], locked: false };
       if (p4 > 0x100) return { flags: [], locked: true };
@@ -199,9 +223,14 @@ export function collectFieldObjects(
     switch (o.type) {
       case 0x0002:
       case 0x0140:
-      case 0x0201:
       case 0x0280:
         warps.push({ ...base, kind: 'area', radius: 10, floor: o.params[3], flag: -1, warpType: 0 });
+        break;
+      case 0x0201:
+        warps.push({ ...base, kind: 'area', radius: 15, floor: o.params[3], flag: -1, warpType: 0 });
+        break;
+      case 0x020a:
+        warps.push({ ...base, kind: 'cca', radius: 15, floor: -1, flag: -1, warpType: 0 });
         break;
       case 0x0008:
         triggers.push({ ...base, radius: o.params[0], eventId: Math.trunc(o.params[3]), fired: false, age: 0 });
@@ -220,7 +249,7 @@ export function collectFieldObjects(
       default:
         if (DOOR_TYPES.has(o.type)) {
           const { flags, locked } = doorFlags(o);
-          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, state: 0, frame: 0, laserFrame: 0, mesh: null });
+          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), state: 0, frame: 0, laserFrame: 0, mesh: null });
         } else if (BOX_TYPES.has(o.type)) {
           boxes.push({ ...base, type: o.type, yaw: p.yaw, broken: false });
         } else if (SWITCH_RADIUS[o.type] !== undefined && o.params[3] >= 0 && o.params[3] < 0x100) {
@@ -376,7 +405,8 @@ export class FieldObjects {
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
       stepDoor(d, this.unlocked(d), nearest, frames);
       if (this.models?.models.has(d.index)) {
-        this.models.setState(d.index, d.state === 0 ? 'locked' : 'unlocked');
+        if (d.lamps) this.models.setLamps(d.index, d.state === 0 || d.state === 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
+        else this.models.setState(d.index, d.state === 0 ? 'locked' : 'unlocked');
         this.models.setDoorFrame(d.index, d.frame);
         this.models.setLaserFrame(d.index, d.laserFrame);
         continue;

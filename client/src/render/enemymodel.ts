@@ -160,6 +160,10 @@ export class NodeAnimator {
   private loop: boolean;
   private tickRemainder = 0;
   frame = 0;
+  // A looping motion goes back to frame 0 once it is past the last frame
+  // instead of carrying the overshoot over (UpdateSeabedTuriganeWarpPosition
+  // _0066d28c: frame += step; if frame > count - 1 then frame = 0).
+  restart = false;
   private v: [number, number, number] = [0, 0, 0];
   private euler = new THREE.Euler();
   private qa = new THREE.Quaternion();
@@ -218,14 +222,17 @@ export class NodeAnimator {
     this.tickRemainder -= Math.floor(this.tickRemainder);
     for (let i = 0; i < ticks; i++) {
       this.frame += this.speed;
-      if (this.loop) {
+      if (this.loop && this.restart) {
+        if (this.frame > m.frameCount - 1) this.frame = 0;
+      } else if (this.loop) {
         if (this.frame >= m.frameCount) this.frame -= m.frameCount;
       } else if (this.frame >= m.frameCount - 1) {
         this.frame = m.frameCount - 1;
       }
     }
     let f = this.frame + this.speed * this.tickRemainder;
-    f = this.loop ? f % m.frameCount : Math.min(f, m.frameCount - 1);
+    if (this.loop && this.restart) f = f > m.frameCount - 1 ? 0 : f;
+    else f = this.loop ? f % m.frameCount : Math.min(f, m.frameCount - 1);
     this.apply(f);
   }
 
@@ -303,6 +310,7 @@ export interface BuiltEnemy {
   world: THREE.Group; // parts the client places from the arena origin
   animators: NodeAnimator[];
   animatedParts: EnemyPartSpec[]; // the part each animator plays (same order)
+  partNodes: THREE.Object3D[][]; // node tree of each part, depth first (same order as `parts`)
   missingTextures: number;
   triangles: number;
 }
@@ -328,6 +336,7 @@ export function buildEnemy(
   const world = new THREE.Group();
   const animators: NodeAnimator[] = [];
   const animatedParts: EnemyPartSpec[] = [];
+  const partNodes: THREE.Object3D[][] = [];
   let missingTextures = 0;
   let triangles = 0;
   for (const part of parts) {
@@ -364,6 +373,7 @@ export function buildEnemy(
         if (o instanceof THREE.Mesh) triangles += (o.geometry.index?.count ?? 0) / 3;
       });
     }
+    partNodes.push(nodes);
     if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
       const motion = own.motion(part.motion.index, nodes.length);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
@@ -371,7 +381,7 @@ export function buildEnemy(
       animatedParts.push(part);
     }
   }
-  return { root, world, animators, animatedParts, missingTextures, triangles };
+  return { root, world, animators, animatedParts, partNodes, missingTextures, triangles };
 }
 
 // Loads archives once per view.

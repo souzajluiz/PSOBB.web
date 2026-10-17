@@ -14,7 +14,13 @@
 //   - the Ragol teleporter TObjCityMainWarp (FUN_00649cec): one item per
 //     available destination, window at entry 0x34 = (176, 130), 288 wide
 //     (FUN_00736138), height = items * 20 - 6 + 20, at most 160 (FUN_007361d0
-//     then scrolls); the items are centred (FUN_00736458).
+//     then scrolls); the items are centred (FUN_00736458);
+//   - the CCA main gate TObjWarpJungMain (vtable 0x00b356e0, +0x34 =
+//     0x0066dab4): three items, unitxt group 10 indices 0x009c9654 (22, 24,
+//     25) for the floors 0x009c9660 (6 Jungle North, 8 Mountain, 9 Seaside;
+//     +0x40 = 0x0066da28 maps the chosen item to its floor), window at
+//     entry 0x34 = (176, 130) sized by FUN_0073608c: width = widest item +
+//     20, height = items * (14 + 6) - 6 + 20; items centred.
 
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { anchorX } from '../classic/ingame.ts';
@@ -72,6 +78,13 @@ export function mainWarpItems(episode: number, warpType = 0, questBits = 0): War
   return out;
 }
 
+// The CCA main gate's destinations (0x009c9660 floors, 0x009c9654 texts).
+export const CCA_WARP: readonly WarpMenuItem[] = [
+  { floor: 6, text: 22 },
+  { floor: 8, text: 24 },
+  { floor: 9, text: 25 },
+];
+
 // Window layout in the 640x480 space.
 export interface WarpMenuLayout {
   x: number;
@@ -92,6 +105,11 @@ const BORDER = 20; // 0x0097140c / 0x0097141c: 10 px on each side
 export function mainWarpLayout(count: number): WarpMenuLayout {
   const content = count * (LINE + GAP) - GAP;
   return { x: MAIN_POS[0], y: MAIN_POS[1], w: MAIN_WIDTH, h: Math.min(MAX_HEIGHT, content + BORDER) };
+}
+
+// FUN_0073608c over `count` one-line items whose widest text is `textWidth`.
+export function ccaWarpLayout(textWidth: number, count = CCA_WARP.length): WarpMenuLayout {
+  return { x: MAIN_POS[0], y: MAIN_POS[1], w: textWidth + BORDER, h: count * (LINE + GAP) - GAP + BORDER };
 }
 
 export function areaWarpLayout(textWidth: number): WarpMenuLayout {
