@@ -25,7 +25,7 @@
 - [ ] Texture addressing modes (material type 4), material colors (type 5)
 - [ ] Animated map entries (motions) and texture animation (`.tam`)
 - [ ] Verify handedness (possible X mirroring) against the real client
-- [ ] Enemy/object markers from `map_*e.dat` / `o.dat`
+- [x] Enemy/object markers from `map_*e.dat` / `o.dat` (parser checked against newserv on 838 files)
 
 ## Phase 4: online
 - [x] Lobby: 3D lobby map, player list, chat

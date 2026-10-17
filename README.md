@@ -17,6 +17,8 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Character creation (E5) | ✅ live in Chrome |
 | Lobby: 3D lobby map, players, chat, running (6x42/6x3E), position sync (6x1F/6x20) | ✅ live in Chrome with a bot |
 | Original-style screens (`classic.html`): title with the original textures, matched to captures by SSIM | 🚧 title done; select/creation next |
+| Map collision (`c.rel`) and real lobby spawn points (`o.dat` player sets) | ✅ 175 c.rel parse; walking uses the client's collision rules |
+| Enemy/object markers from set data (`map_*e.dat` / `o.dat`) | ✅ 838 files match newserv; shown in the map viewer |
 | Character models, animations | ⏳ |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
@@ -52,6 +54,7 @@ Requirements: macOS or Linux, Node ≥ 23.6 (tested with 24.18), CMake, Git, Chr
 node tests/oracle.test.ts        # TS ports vs newserv (needs client files)
 node tests/formats.test.ts       # parses every map n.rel and .xvm in the client
 node tests/collision.test.ts     # parses every map c.rel, checks ground at player spawn points
+node tests/setdata.test.ts       # enemy/object set data vs newserv disassemble-free-map
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat

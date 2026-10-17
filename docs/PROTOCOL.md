@@ -116,6 +116,49 @@ Table of 0x30-byte entries (`name[0x20]`, `u32 page`, `u32 size`, `u64`), termin
 - `data/scene/map_<area>.xvm`: textures
 - `data.gsl` → `map_<area>_NNe.dat` / `o.dat`: enemy/object spawns (same format as Tethealla's `map/`)
 
+## Map set data (`map_*e.dat` / `map_*o.dat`)
+
+Free-play enemy (`e`) and object (`o`) spawns. Parsed by `client/src/formats/setdata.ts` (port of newserv `Map.hh`). A file is a bare array of entries with no header; its size must be a multiple of the entry size. Quest `.dat` files wrap the same entries in sections; not handled here.
+
+| Off | ObjectSetEntry (0x44) | EnemySetEntry (0x48) |
+|---|---|---|
+| 00 | `u16 base_type` | `u16 base_type` |
+| 02 | `u16 set_flags` (runtime) | `u16 set_flags` (runtime) |
+| 04 | `u16 index` (runtime) | `u16 index` (runtime) |
+| 06 | `u16 floor` | `u16 num_children` (0 = default for the type) |
+| 08 | `u16 entity_id` (runtime) | `u16 floor` |
+| 0A | `u16 group` | `u16 entity_id` (runtime) |
+| 0C | `u16 room` | `u16 room` |
+| 0E | `u16 unknown_a3` | `u16 wave_number` |
+| 10 | `f32 pos[3]` | `u16 wave_number2`, `u16 unknown_a1` |
+| 14 | | `f32 pos[3]` |
+| 1C | `i32 angle[3]` (BAMS) | |
+| 20 | | `i32 angle[3]` (BAMS) |
+| 28 | `f32 param1..3`, `i32 param4..6` | |
+| 2C | | `f32 param1..5`, then `i16 param6, param7` at 0x40 |
+| 40 / 44 | `u32` client pointer | `u32` client pointer |
+
+- **`room` is the n.rel section id** (`MapSection.id`, not the index), and `pos` is relative to that section. World position: rotate by the section angles about X, then Z, then Y, then add the section position (newserv `ChatCommands.cc`; note newserv passes the BAMS integers to `sin`/`cos` unconverted there). Checked: all 3366 rooms in newserv's `system/maps/room-layout-index.json` match the n.rel section positions, and only 1 of 63388 placed entities has no section (`map_lobby_green_be00o.dat`).
+- Only two sections in the client have X/Z angles (crater, < 0.05 rad), so the rotation order barely matters in practice.
+- Names: `base_type` maps to a client class name per area (`TObjEneBm5Wolf`, `TObjContainerItem`). The table is generated from newserv by `tools/gen-entity-names.ts`. The in-game enemy depends on params and area (e.g. `0x43` is Barbarous Wolf when `param2 >= 1`, else Savage Wolf; `0x44` is Booma/Gobooma/Gigobooma by `param6`); `enemyKind()` ports newserv's `add_enemy_and_children` switch (root enemy only, children are not expanded).
+
+### File names and n.rel pairing
+
+`map_<area>[_<layout>]_<entities>{e,o}[_s|_c1|_d].dat`. `_off` before `e`/`o` marks the offline (solo) set; `_s`, `_c1`, `_d` are mode-specific flavors in Pioneer 2 and the Lab.
+
+| n.rel | set data |
+|---|---|
+| `map_forest01n.rel` (no layouts) | `map_forest01_NN{e,o}.dat`, `map_forest01_NN_offe.dat` |
+| `map_cave01_LLn.rel` (layout `LL`) | `map_cave01_LL_NN{e,o}.dat` |
+| `map_city00_00n.rel`, `map_boss01n.rel`, `map_lobby_01n.rel` | same stem: `map_city00_00e.dat`, `map_boss01e.dat`, `map_lobby_01o.dat` |
+| `map_jungle01_00n.rel` (one geometry; `_00` is not a layout) | `map_jungle01_NN{e,o}.dat` |
+| `map_darkfalz00n.rel` | `map_boss04{e,o}.dat` |
+| `map_aforest01n.rel`, `map_acave01_00n.rel`, ... | the sets of the map without the `a` (every section of the plain map is present in the `a` map with the same transform) |
+
+111 of 175 n.rel files get set data. None for: the extra layouts `_03`..`_05` of caves/mines/ruins, `jungle04_02`, `jungle06`/`07` (quest areas), `ruins`/`space`/`seabed` `_02`, `soccer`, `vs`, `test01`. Set files left over: `map_boss01uo.dat`, `map_boss05uo.dat`, `map_forest01_gjo.dat`, `map_lobby_soccer0Xo.dat`.
+
+Loose files override `data.gsl`; in Ephinea's client 87 of the 114 loose set files that also exist inside `data.gsl` differ from the copy inside `data.gsl`.
+
 ## REL container
 
 The last 0x20 bytes are the footer: `u32 relocations_offset`, `u32 num_relocations`, `u32[2]`, `u32 root_offset`, `u32[3]` (newserv `RELFileFooterT`). Pointers inside are file offsets, so they can be followed without relocating.
