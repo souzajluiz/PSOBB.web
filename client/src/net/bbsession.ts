@@ -107,6 +107,9 @@ export interface SessionOptions {
 export class BBSession {
   conn: BBConnection | null = null;
   init: ClientInit | null = null;
+  // Latest full save data (00E7, SC_SyncSaveFiles_BB_E7, starts with the
+  // PSOBBCharacterFile). Sent at login and again after leaving a game (98).
+  fullCharacter: Uint8Array | null = null;
   private opts: SessionOptions;
 
   constructor(opts: SessionOptions) {
@@ -120,8 +123,10 @@ export class BBSession {
   private async open(port: number): Promise<BBConnection> {
     this.conn?.close();
     const conn = new BBConnection(await this.opts.connect(port), this.opts.nsk);
-    conn.onCommand = (c) =>
+    conn.onCommand = (c) => {
       this.log(`<- ${hex(c.command, 4)} flag=${c.flag} (${c.data.length} bytes)`);
+      if (c.command === 0xe7) this.fullCharacter = c.data;
+    };
     this.conn = conn;
     await conn.waitFor(0x03, 0x9b);
     this.log(`connected to port ${port}, encryption ready`);
