@@ -1,6 +1,7 @@
 import { detectDevDataSource } from './data/store.ts';
 import { initMapsTab } from './ui/mapsTab.ts';
 import { initOnlineTab } from './ui/onlineTab.ts';
+import { bridgeUrl } from './net/wstransport.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const logEl = $<HTMLPreElement>('log');
@@ -30,4 +31,4 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('[role=tab]')) {
 showTab(location.hash === '#maps' ? 'maps' : 'online');
 
 void detectDevDataSource();
-log('ready. bridge: ws://127.0.0.1:8080 (override with ?bridge=ws://host:port)');
+log(`ready. bridge: ${bridgeUrl()} (override with ?bridge=ws://host:port)`);

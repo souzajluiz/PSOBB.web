@@ -1,0 +1,20 @@
+# Everything the image does not build from, and nothing of Sega's.
+**/node_modules
+client/dist
+vendor
+.git
+.claude
+.codegraph
+.captures
+psobb-client
+*.log
+*.exe
+*.gsl
+*.afs
+*.xvm
+*.nj
+*.xj
+*.rel
+*.prs
+*.dat
+client/public/ref

@@ -2,8 +2,14 @@
 
 import type { Transport } from './bbconnection.ts';
 
+// ?bridge= overrides it. The dev server runs bridge.mjs on its own port; a
+// build is served by bridge/server.mjs, which relays at /bridge on its own
+// origin (the Docker image, docs/DEPLOY.md).
 export function bridgeUrl(): string {
-  return new URLSearchParams(location.search).get('bridge') ?? 'ws://127.0.0.1:8080';
+  const given = new URLSearchParams(location.search).get('bridge');
+  if (given) return given;
+  if (import.meta.env?.DEV) return 'ws://127.0.0.1:8080';
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bridge`;
 }
 
 export function connectBridge(port: number, base = bridgeUrl()): Promise<Transport> {

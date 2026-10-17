@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-17: a Docker image for Dokploy
+
+**What changed:** `Dockerfile` (multi-stage: newserv built from source at
+pinned commits, the Vite client build, an Ubuntu runtime with Node 24 and
+tini), `docker/entrypoint.sh` (starts newserv and the web server, keeps
+newserv's `players` / `licenses` / `teams` on the `/data/newserv` volume) and
+`bridge/server.mjs`, the production server: the built client plus the
+endpoints the dev server had (`/keys`, `/newserv-text`, `/newserv-maps`,
+`/psobb-data` from an optional mounted data folder) and the relay at
+`/bridge` on the same port. A client build now connects to `/bridge` on its
+own origin (`ws`/`wss` by the page's protocol); the dev server still uses
+`ws://127.0.0.1:8080`. Steps in `docs/DEPLOY.md`.
+
+**Checks:** `node bridge/server.mjs` against the local newserv: every
+endpoint answers, `..` paths get 404, and a WebSocket to `/bridge/?port=12000`
+receives newserv's `03` (380 bytes). The client stage was built from a clean
+copy (`npm ci` + `npm run build`). The image itself was not built here (no
+Docker on this machine).
+
 ## 2026-10-17: the original camera, zoom limits and key config
 
 **Camera** (`render/playercamera.ts`, decoded from the player camera

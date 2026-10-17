@@ -114,3 +114,7 @@ tests/               oracle tests against newserv, live tests
 scripts/             newserv setup
 docs/                documentation
 ```
+
+## Deploy
+
+One Docker image runs newserv, the built client and the relay on one HTTP port; see [docs/DEPLOY.md](docs/DEPLOY.md) (Dokploy steps included).
