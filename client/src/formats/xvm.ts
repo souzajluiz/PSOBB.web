@@ -25,16 +25,30 @@ export function parseXvm(data: Uint8Array): XvrTexture[] {
   const out: XvrTexture[] = [];
   let o = dv.getUint32(4, true) + 8;
   while (o + 0x40 <= data.length && tag(o) === 'XVRT') {
-    const size = dv.getUint32(o + 4, true);
-    const flags = dv.getUint32(o + 8, true);
-    const format = dv.getUint32(o + 0x0c, true);
-    const width = dv.getUint16(o + 0x14, true);
-    const height = dv.getUint16(o + 0x16, true);
-    const pixels = data.subarray(o + 0x40, o + 8 + size);
-    out.push({ index: out.length, width, height, format, flags, rgba: decodeXvr(pixels, width, height, format, flags) });
-    o += 8 + size;
+    out.push(readXvrt(data, dv, o, out.length));
+    o += 8 + dv.getUint32(o + 4, true);
   }
   return out;
+}
+
+// A lone XVRT chunk, as stored one per entry in the player texture archives
+// (pl?tex.afs).
+export function parseXvr(data: Uint8Array, index = 0): XvrTexture {
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  if (data.length < 0x40 || String.fromCharCode(data[0], data[1], data[2], data[3]) !== 'XVRT') {
+    throw new Error('not an XVR texture');
+  }
+  return readXvrt(data, dv, 0, index);
+}
+
+function readXvrt(data: Uint8Array, dv: DataView, o: number, index: number): XvrTexture {
+  const size = dv.getUint32(o + 4, true);
+  const flags = dv.getUint32(o + 8, true);
+  const format = dv.getUint32(o + 0x0c, true);
+  const width = dv.getUint16(o + 0x14, true);
+  const height = dv.getUint16(o + 0x16, true);
+  const pixels = data.subarray(o + 0x40, o + 8 + size);
+  return { index, width, height, format, flags, rgba: decodeXvr(pixels, width, height, format, flags) };
 }
 
 function decodeXvr(src: Uint8Array, w: number, h: number, format: number, flags: number): Uint8Array {
