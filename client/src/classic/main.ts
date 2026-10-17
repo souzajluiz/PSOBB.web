@@ -7,7 +7,7 @@ import { connectBridge } from '../net/wstransport.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { LoginScreen } from './login.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
-import { TITLE_TUNING, TitleScreen } from './title.ts';
+import { TITLE_TUNING, TitleScreen, type TitleAssets } from './title.ts';
 
 const VERSION = 'PSOBB.web';
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
@@ -43,7 +43,12 @@ function savedUser(): string {
 async function main(): Promise<void> {
   const files = new ClientFiles(await dataSource());
   const stage = new Stage(canvas);
-  const titleTex = await textureBitmaps(await files.textures('title.prs'));
+  const hyouji = await textureBitmaps(await files.textures('f256_hyouji.prs'));
+  const titleAssets: TitleAssets = {
+    title: await textureBitmaps(await files.textures('title.prs')),
+    effect: await textureBitmaps(await files.textures('effect_nt.xvm')),
+    skin: { frame: hyouji[1], bars: hyouji[2] },
+  };
   const selectAssets: CharSelectAssets = {
     header: (await textureBitmaps(await files.textures(['f512_midashi_eng.prs', 'f512_midashi.prs'])))[0],
     tag: (await textureBitmaps(await files.textures(['f256_tag_eng.prs', 'f256_tag.prs'])))[0],
@@ -68,6 +73,7 @@ async function main(): Promise<void> {
   const startGame = () => {
     const login = new LoginScreen(
       title,
+      titleAssets.skin,
       {
         submit: async (username, password) => {
           login.busy = true;
@@ -94,13 +100,15 @@ async function main(): Promise<void> {
   };
 
   title = new TitleScreen(
-    titleTex,
+    titleAssets,
     [
       { label: 'Start Game', action: startGame },
       { label: 'Exit Game', action: () => (location.href = '/') },
       { label: 'Patch Download', action: () => {} },
       { label: 'Register UserID', action: () => {} },
-      { label: 'Empty', color: '#f2c94c', action: () => {} },
+      // FUN_00735db8(..., flags 9, 4, 0xffffcc33): not selectable; shows
+      // "[account]" or unitxt(41,7) "Empty" (FUN_00761bc0).
+      { label: 'Empty', color: '#ffcc33', selectable: false, action: () => {} },
     ],
     VERSION,
   );
@@ -120,7 +128,12 @@ async function main(): Promise<void> {
     const r = canvas.getBoundingClientRect();
     const vy = ((e.clientY - r.top) / r.height) * VH;
     const left43 = (current as { layout?: string }).layout === 'left43';
-    const vx = left43 ? ((e.clientX - r.left) / r.height) * VH : ((e.clientX - r.left) / r.width) * VW;
+    const windowSpace = (current as { pointerSpace?: string }).pointerSpace === 'window';
+    const vx = left43
+      ? ((e.clientX - r.left) / r.height) * VH
+      : windowSpace
+        ? ((e.clientX - r.left - (r.width - (r.height * VW) / VH) / 2) / r.height) * VH
+        : ((e.clientX - r.left) / r.width) * VW;
     return [vx, vy] as const;
   };
   const pointer = (e: MouseEvent, click: boolean) =>

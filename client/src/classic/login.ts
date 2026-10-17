@@ -1,27 +1,48 @@
-// Game ID / password window drawn over the title screen.
-// The original client takes credentials in its launcher; the web client has no
-// launcher, so it asks here using the same window style as the title menu.
+// "Input UserID" window, opened from the title's Login menu.
+//
+// Decompiled from PsoBB.exe (Ephinea 1.25.13), the constructor at the
+// ChallengePlayerInputWindow vtable (psobb.c ~735490):
+//   CreateChatShortcutMenuYesNoWindow_0073840c(x 140, y 330, w 360, h 100, 4 items)
+//   title  unitxt(41, 8)  "Input UserID"
+//   item 0 unitxt(41, 9)  "UserID"   : user name      (AddInfoCounterItem_00738a04)
+//   item 1 unitxt(41, 10) "Password" : '*' per char, at most 8 (16 for some builds)
+//   item 2 unitxt(41, 1)  "Confirm"                    (ProcessNextInfoCounter_007389cc)
+//   item 3 unitxt(41, 0)  "Cancel"
+// Label/value rows (RenderInfoCounterEntity_0072e930): label at the content x,
+// ':' at +154 (0x00970f50), value at +166 (+12, 0x00970f4c).
+// Plain rows (SetInfoCounterText_0072ea1c): x = 202.5 - width / 2
+// (0x00970f48, 0x00970f44).
+// The window frame, title pill and selection bar are the generic renderer in
+// stage.ts. The original edits each field in a sub-window; here the selected
+// field takes keystrokes directly.
 
-import { drawPanel, drawPill, drawSelectBar, drawText, type Screen, type Stage } from './stage.ts';
+import { drawText, drawTitlePill, drawSelectBar, drawWindowFrame, FONT, inWindowSpace, ITEM_HEIGHT, ITEM_STEP, pillWidth, WINDOW_FONT, type Screen, type Stage, type WindowSkin } from './stage.ts';
 
 export interface LoginHandlers {
   submit: (username: string, password: string) => void;
   cancel: () => void;
 }
 
+const WIN = { x: 140, y: 330, w: 360, h: 100 };
+const TEXT = { title: 'Input UserID', user: 'UserID', password: 'Password', confirm: 'Confirm', cancel: 'Cancel' };
+const MAX_PASSWORD_MASK = 16;
+
 export class LoginScreen implements Screen {
   private behind: Screen;
+  private skin: WindowSkin;
   private handlers: LoginHandlers;
   private fields = ['', ''];
-  private field = 0;
+  private row = 0; // 0 UserID, 1 Password, 2 Confirm, 3 Cancel
   status = '';
   busy = false;
+  readonly pointerSpace = 'window';
 
-  constructor(behind: Screen, handlers: LoginHandlers, username = '') {
+  constructor(behind: Screen, skin: WindowSkin, handlers: LoginHandlers, username = '') {
     this.behind = behind;
+    this.skin = skin;
     this.handlers = handlers;
     this.fields[0] = username;
-    if (username) this.field = 1;
+    if (username) this.row = 1;
   }
 
   update(dt: number, stage: Stage): void {
@@ -30,50 +51,75 @@ export class LoginScreen implements Screen {
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
     this.behind.draw(ctx, stage);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    ctx.fillRect(0, 0, 640, 480);
-    const x = 200, y = 300, w = 240, h = 104;
-    drawPanel(ctx, x, y + 13, w, h);
-    drawPill(ctx, x + 1, y, 131, 24);
-    drawText(ctx, 'Login', x + 66, y + 12.5, { size: 9.5, color: '#120400', align: 'center' });
-    const labels = ['Game ID', 'Password'];
-    labels.forEach((label, i) => {
-      const fy = y + 46 + i * 24;
-      if (i === this.field) drawSelectBar(ctx, x + 8, fy - 5, w - 16, 10, 0.6);
-      drawText(ctx, label, x + 14, fy, { size: 9.5, color: '#ffffff', shadow: 'rgba(0,0,0,0.6)' });
-      const value = i === 1 ? '*'.repeat(this.fields[1].length) : this.fields[0];
-      const caret = i === this.field && Math.floor(stage.time * 2) % 2 === 0 ? '_' : '';
-      drawText(ctx, value + caret, x + 82, fy, { size: 9.5, color: '#f2c94c', shadow: 'rgba(0,0,0,0.6)' });
+    inWindowSpace(ctx, stage, () => this.drawWindow(ctx, stage));
+  }
+
+  private drawWindow(ctx: CanvasRenderingContext2D, stage: Stage): void {
+    const { x, y, w, h } = WIN;
+    drawWindowFrame(ctx, this.skin.frame, x, y, w, h);
+    const cx = x + 10;
+    const cy = y + 16;
+    const style = { size: WINDOW_FONT, shadow: 'rgba(0,0,0,0.85)' };
+    const caret = Math.floor(stage.time * 2) % 2 === 0 ? '_' : '';
+    const values = [this.fields[0], '*'.repeat(Math.min(this.fields[1].length, MAX_PASSWORD_MASK))];
+    [TEXT.user, TEXT.password].forEach((label, i) => {
+      const ty = cy + i * ITEM_STEP + 7.5;
+      drawText(ctx, label, cx, ty, { ...style, color: '#ffffff' });
+      drawText(ctx, ':', cx + 154, ty, { ...style, color: '#ffffff' });
+      drawText(ctx, values[i] + (i === this.row && !this.busy ? caret : ''), cx + 166, ty, { ...style, color: '#ffffff' });
     });
-    drawText(ctx, this.busy ? 'Connecting..' : this.status || 'Enter: OK    Esc: Cancel', x + w / 2, y + 104, {
-      size: 8.5,
-      color: this.status ? '#ff9a7a' : '#cfe8ee',
-      align: 'center',
+    ctx.font = `bold ${WINDOW_FONT}px ${FONT}`;
+    [TEXT.confirm, TEXT.cancel].forEach((label, i) => {
+      const tw = ctx.measureText(label).width;
+      drawText(ctx, label, cx + 202.5 - tw / 2, cy + (i + 2) * ITEM_STEP + 7.5, { ...style, color: '#ffffff' });
     });
+    if (!this.busy) drawSelectBar(ctx, this.skin.bars, cx, cy + this.row * ITEM_STEP, w - 20, ITEM_HEIGHT);
+
+    const tw = ctx.measureText(TEXT.title).width;
+    drawTitlePill(ctx, this.skin.frame, x, y - 13, tw, 1);
+    drawText(ctx, TEXT.title, x + pillWidth(tw) / 2, y - 13 + 4 + 7.5, { size: WINDOW_FONT, color: '#120400', align: 'center' });
+
+    const msg = this.busy ? 'Connecting..' : this.status;
+    if (msg) drawText(ctx, msg, x + w / 2, y + h + 14, { size: WINDOW_FONT, color: this.status && !this.busy ? '#ff9a7a' : '#ffffff', align: 'center', shadow: 'rgba(0,0,0,0.85)' });
   }
 
   key(e: KeyboardEvent): void {
     if (this.busy) return;
     if (e.key === 'Escape') return this.handlers.cancel();
-    if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      this.field = 1 - this.field;
+    if (e.key === 'ArrowDown' || e.key === 'Tab') {
+      this.row = (this.row + 1) % 4;
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      this.row = (this.row + 3) % 4;
       return;
     }
     if (e.key === 'Enter') {
-      if (this.field === 0 && this.fields[0]) {
-        this.field = 1;
+      if (this.row === 3) return this.handlers.cancel();
+      if (this.row === 0 && this.fields[0]) {
+        this.row = 1;
         return;
       }
       if (this.fields[0] && this.fields[1]) this.handlers.submit(this.fields[0], this.fields[1]);
+      else this.row = this.fields[0] ? 1 : 0;
       return;
     }
+    if (this.row > 1) return;
     if (e.key === 'Backspace') {
-      this.fields[this.field] = this.fields[this.field].slice(0, -1);
+      this.fields[this.row] = this.fields[this.row].slice(0, -1);
       return;
     }
-    if (e.key.length === 1 && /[ -~]/.test(e.key) && this.fields[this.field].length < 16) {
-      this.fields[this.field] += e.key;
+    if (e.key.length === 1 && /[ -~]/.test(e.key) && this.fields[this.row].length < 16) {
+      this.fields[this.row] += e.key;
       this.status = '';
     }
+  }
+
+  pointer(vx: number, vy: number, click: boolean): void {
+    if (this.busy || vx < WIN.x || vx > WIN.x + WIN.w) return;
+    const i = Math.floor((vy - (WIN.y + 16)) / ITEM_STEP);
+    if (i < 0 || i > 3) return;
+    this.row = i;
+    if (click && i >= 2) this.key(new KeyboardEvent('keydown', { key: 'Enter' }));
   }
 }
