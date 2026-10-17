@@ -5,10 +5,14 @@
 //   LobbyFlags (0x0C): client_id, leader_id, disable_udp, lobby_number, block_number, ...
 //   Entry (0x520): PlayerLobbyDataBB (0x44), PlayerInventory (0x34C), PlayerDispDataV4 (0x190)
 //   PlayerDispDataV4: PlayerStats (0x24; level @+0x18), PlayerVisualConfigV4 (0x70) @+0x24
+//   PlayerVisualConfigV4: guild card string[0x10], shared config @+0x10: section_id @+0x20,
+//     char_class @+0x21, costume/skin/face/head/hair u16 @+0x28..+0x30, hair_r/g/b u16
+//     @+0x32..+0x36, proportion_x/y f32 @+0x38/+0x3C
 // 06 chat: u32 unused, u32 guild_card_number, UTF-16 text
 // 60/62 game subcommands: u8 subcommand, u8 size (dwords), u16 client_id, payload
 
 import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
+import type { PlayerAppearance } from '../render/playermodel.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -17,9 +21,11 @@ export interface LobbyPlayer {
   charClass: number;
   sectionId: number;
   level: number;
+  appearance: PlayerAppearance;
   position: { x: number; y: number; z: number };
   angle: number; // radians
   moving: boolean;
+  gait: 'walk' | 'run'; // last 6x40 (walk) or 6x42 (run)
   floor: number;
 }
 
@@ -46,6 +52,20 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const visual = o + DISP + 0x24;
   const shared = visual + 0x10;
+  const u16 = (o: number) => dv.getUint16(shared + o, true);
+  const appearance: PlayerAppearance = {
+    sectionId: data[shared + 0x20],
+    costume: u16(0x28),
+    skin: u16(0x2a),
+    face: u16(0x2c),
+    head: u16(0x2e),
+    hair: u16(0x30),
+    hairR: u16(0x32),
+    hairG: u16(0x34),
+    hairB: u16(0x36),
+    proportionX: dv.getFloat32(shared + 0x38, true),
+    proportionY: dv.getFloat32(shared + 0x3c, true),
+  };
   return {
     clientId: dv.getUint32(o + LOBBY_DATA + 0x1c, true),
     guildCardNumber: dv.getUint32(o + LOBBY_DATA + 0x04, true),
@@ -53,9 +73,11 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
     charClass: data[shared + 0x21],
     sectionId: data[shared + 0x20],
     level: dv.getUint32(o + DISP + 0x18, true) + 1, // PlayerStats.level (0-based)
+    appearance,
     position: { x: 0, y: 0, z: 0 },
     angle: 0,
     moving: false,
+    gait: 'run',
     floor: 0,
   };
 }
@@ -185,6 +207,7 @@ export class Lobby {
           case 0x42: // run to x,z
             p.position = { x: dv.getFloat32(4, true), y: p.position.y, z: dv.getFloat32(8, true) };
             p.moving = true;
+            p.gait = sub === 0x40 ? 'walk' : 'run';
             this.emit('moved', p);
             break;
         }
