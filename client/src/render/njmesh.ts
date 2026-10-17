@@ -39,6 +39,22 @@ export function wrapMode(address: number): THREE.Wrapping {
   return THREE.RepeatWrapping; // 2, and 3 (the client's table maps it to D3DTADDRESS_WRAP too)
 }
 
+// D3D vertex colors are gamma-space values that the original multiplies with
+// the texture directly. three.js treats vertex colors as linear, so convert
+// (RGB only), otherwise lit areas come out washed out.
+function srgbToLinearColors(src: Float32Array): Float32Array {
+  const out = new Float32Array(src.length);
+  const c = new THREE.Color();
+  for (let i = 0; i < src.length; i += 4) {
+    c.setRGB(src[i], src[i + 1], src[i + 2], THREE.SRGBColorSpace);
+    out[i] = c.r;
+    out[i + 1] = c.g;
+    out[i + 2] = c.b;
+    out[i + 3] = src[i + 3];
+  }
+  return out;
+}
+
 // D3DCOLOR (0xAARRGGBB) -> linear three.js color + alpha.
 function d3dColor(argb: number): { color: THREE.Color; alpha: number } {
   const color = new THREE.Color().setRGB(((argb >>> 16) & 0xff) / 255, ((argb >>> 8) & 0xff) / 255, (argb & 0xff) / 255, THREE.SRGBColorSpace);
@@ -120,7 +136,7 @@ export function buildModelMesh(model: XjModel, materials: MaterialCache): THREE.
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(v.positions, 3));
   if (v.normals) geom.setAttribute('normal', new THREE.BufferAttribute(v.normals, 3));
-  if (v.colors) geom.setAttribute('color', new THREE.BufferAttribute(v.colors, 4));
+  if (v.colors) geom.setAttribute('color', new THREE.BufferAttribute(srgbToLinearColors(v.colors), 4));
   if (v.uvs) geom.setAttribute('uv', new THREE.BufferAttribute(v.uvs, 2));
 
   const indices: number[] = [];

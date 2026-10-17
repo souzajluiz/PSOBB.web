@@ -19,7 +19,16 @@ export interface MapStats {
 
 // "map_city00_00n.rel" -> "map_city00.xvm"; "map_forest01n.rel" -> "map_forest01.xvm"
 export function textureArchiveFor(nrel: string): string {
-  return nrel.replace(/(_\d\d)?n\.rel$/, '.xvm');
+  return textureArchiveCandidates(nrel)[0];
+}
+
+// Layout maps share one archive ("map_city00_00n.rel" -> "map_city00.xvm"), but
+// some names end in a number that is not a layout ("map_lobby_01n.rel" ->
+// "map_lobby_01.xvm"), so try both.
+export function textureArchiveCandidates(nrel: string): string[] {
+  const stripped = nrel.replace(/(_\d\d)?n\.rel$/, '.xvm');
+  const plain = nrel.replace(/n\.rel$/, '.xvm');
+  return stripped === plain ? [plain] : [stripped, plain];
 }
 
 // Marker colors: enemies red, NPCs (from the enemy file) cyan, objects yellow.
@@ -116,10 +125,13 @@ export class MapViewer {
     const nrelData = await source.read(`scene/${nrelName}`);
     const geometry = parseMapNRel(nrelData);
     let xvm: Uint8Array | null = null;
-    try {
-      xvm = await source.read(`scene/${textureArchiveFor(nrelName)}`);
-    } catch {
-      xvm = null;
+    for (const name of textureArchiveCandidates(nrelName)) {
+      try {
+        xvm = await source.read(`scene/${name}`);
+        break;
+      } catch {
+        xvm = null;
+      }
     }
     this.show(geometry, xvm);
     return this.stats(geometry);
