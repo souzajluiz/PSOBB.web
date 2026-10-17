@@ -622,6 +622,24 @@ export class Game extends Lobby {
     this.sendSubcommand(0x23, new Uint8Array(0));
   }
 
+  // 6x05 (G_WriteSwitchFlag_6x05, 0x0C bytes): {05, 03, entity id, client id,
+  // unused, u16 flag, u8 floor, u8 flags}. A switch object sends its own
+  // entity id (0x4000 + object index across all floors of the game) and
+  // flags 1 (set), as in newserv's captures of real clients
+  // (DCv1-DCv2-PCv2-CrossplayPrivateDrops: 05 03 68 40 .. 07 00 01 01).
+  sendSwitchFlag(entityId: number, floor: number, flag: number, set = true): void {
+    const body = new Uint8Array(0x0c);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x05;
+    body[1] = 0x03;
+    dv.setUint16(2, entityId, true);
+    dv.setUint16(4, this.selfId, true);
+    dv.setUint16(8, flag, true);
+    body[10] = floor;
+    body[11] = set ? 1 : 0;
+    this.conn.send(0x60, 0, body);
+  }
+
   // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
   sendWalk(x: number, z: number, nearEnemy = false): void {
     const p = new Uint8Array(12);
@@ -667,6 +685,13 @@ export class Game extends Lobby {
     await timeout(joinedLobby, 8000, 'lobby join (67)');
     return this.lobby;
   }
+}
+
+// 6x05 from another client or a wave event (entity 0xFFFF).
+export function parseSwitchFlag(body: Uint8Array): { entityId: number; flag: number; floor: number; set: boolean } | null {
+  if (body.length < 0x0c || body[0] !== 0x05) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { entityId: dv.getUint16(2, true), flag: dv.getUint16(8, true), floor: body[10], set: (body[11] & 1) !== 0 };
 }
 
 function int32(v: number): Uint8Array {

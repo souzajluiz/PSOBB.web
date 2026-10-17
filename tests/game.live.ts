@@ -1,10 +1,13 @@
 // Two clients and a game: A creates it, B lists and joins it, both see each
 // other, move (6x42 / 6x40 / 6x3E), A warps to Forest 1, B follows, both go
-// back to the lobby. Requires newserv + bridge running. Run: node tests/game.live.ts
-import { readFileSync } from 'node:fs';
+// A steps on a switch (6x05), both go back to the lobby. Requires newserv + bridge running. Run: node tests/game.live.ts
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BBSession } from '../client/src/net/bbsession.ts';
-import { Game } from '../client/src/net/game.ts';
+import { Game, parseSwitchFlag } from '../client/src/net/game.ts';
+import { GSLArchive } from '../client/src/formats/archives.ts';
+import { parseSetFile, type ObjectSet } from '../client/src/formats/setdata.ts';
+import { floorFiles, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import type { Lobby, LobbyPlayer } from '../client/src/net/lobby.ts';
 import { nodeBridge } from './lib/nodews.ts';
 
@@ -98,6 +101,24 @@ try {
   gb.finishWarp(5, 0, 5, 0);
   await aSawWarp;
   check('A saw B follow to floor 1', ga.players.get(1)?.floor === 1 && ga.self?.floor === 1);
+
+  // A steps on a Forest 1 switch: 6x05 with the switch's entity id
+  // (0x4000 + objects on Pioneer 2 + index in Forest 1's o.dat); B gets it.
+  {
+    const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
+    const gsl = new GSLArchive(new Uint8Array(readFileSync(join(DATA, 'data.gsl'))));
+    const read = (n: string) => (existsSync(join(DATA, n)) ? new Uint8Array(readFileSync(join(DATA, n))) : gsl.get(n));
+    const table = parseSetDataTable(read('SetDataTableOn.rel'));
+    const v = ga.info!.variations;
+    const p2 = floorFiles(table, 0, v[0].layout, v[0].entities, 0, 'normal')!;
+    const f1 = floorFiles(table, 1, v[1].layout, v[1].entities, 1, 'normal')!;
+    const base = read(p2.objects).length / 0x44;
+    const sw = parseSetFile(f1.objects, read(f1.objects)).find((o) => o.kind === 'object' && o.type === 0x81) as ObjectSet;
+    const bSawSwitch = waitEvent<ReturnType<typeof parseSwitchFlag>>((r) => gb.on('subcommand', (sub, _c, body) => sub === 0x05 && r(parseSwitchFlag(body))), 'B sees 6x05');
+    ga.sendSwitchFlag(0x4000 + base + sw.index, 1, sw.params[3] & 0xff);
+    const s = await bSawSwitch;
+    check(`B saw A set switch flag ${s?.flag} on floor ${s?.floor} (entity 0x${s?.entityId.toString(16)})`, s?.flag === (sw.params[3] & 0xff) && s?.floor === 1 && s.set);
+  }
 
   // Back to the lobby.
   const aSawLeave = waitEvent<number>((r) => ga.on('playerLeft', r), 'A gets 66');

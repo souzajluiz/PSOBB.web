@@ -53,7 +53,10 @@
 - [x] Floor maps from the `64` variations via `SetDataTableOn.rel`; Pioneer 2 and field floors with collision, player starts, enemy/object markers; warps (`6x21`/`6x22`/`6x23`) by button or area warp objects
 - [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)
 - [x] Enemy models (`bm_ene_*.bml`, boss archives) at their spawn points with their idle motions, variants by params/difficulty/season (`formats/enemymodels.ts`, `tests/enemies.test.ts`)
-- [ ] Enemy sub-objects (Belra arms, Sorcerer bits, Deldepth disc, Vol Opt phase 1, Saint-Milion parts); Pioneer 2 teleporter menu, boss warps, doors; field BGM
+- [ ] Enemy sub-objects (Belra arms, Sorcerer bits, Deldepth disc, Vol Opt phase 1, Saint-Milion parts)
+- [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
+- [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
+- [ ] Door and warp models, door collision, wave events (room-clear doors), boss fight music phases, `6x6A` boss warp gathering, CCA main-gate warp menu (0x20A)
 - [ ] Enemies, combat (formulas in `notes/_wiki_combat_formulas.md`)
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)

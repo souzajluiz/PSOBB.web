@@ -175,6 +175,27 @@
 - **Counter:** "Organize PARTY" → Join/Create PARTY is assumed. The leaf actions (ship and block change, party, team) only close the menus.
 - **Ship Select:** the camera behind it is still not decoded.
 
+## 2026-10-17: floor music, warp menus, doors and switches
+
+**What changed:**
+- `audio/slbgm.ts`, `audio/fieldbgm.ts`: every game floor plays the music `PsoBB.exe` picks for its area. Pioneer 2 and the Lab use the exe's BGM zones (shop, guild, medical, principal, city); field areas use the interactive music; bosses their ADX tracks. `BgmPlayer` gained `playInteractive(index)` and `setBattle(on)`; the Online tab now has music in games.
+- `render/warpmenu.ts`, `render/fieldobjects.ts`, `render/gamefield.ts`: warp objects open the original menus as a 2D overlay (classic window frame, selection bar and game text). The Ragol teleporter lists the destinations of the game's episode; area and boss warps show the destination name; the lobby teleporter leaves the game. Doors (Forest, Caves, Mines, Ruins, Desert) follow the Forest door's state machine and are drawn as stand-in panels; switches set their flag and send `6x05`; received `6x05` unlock doors too.
+- `GameView` hands this to `GameField` (a few lines in `loadFloor`/constructor); the old "walk into the teleporter → floor 1" shortcut is gone. Note: type 0x44 (`TObjCityAreaWarp`) is the **lobby** teleporter, the Ragol one is 0x43 (`TObjCityMainWarp`).
+
+**Findings (details in PROTOCOL.md, "Floor music" and "Warps, doors and switches"):**
+- Field music is not one track per area. The twelve `slbgm_*` descriptors (`0x00a16088`) hold calm and battle tables of `{first, loop, count, transition, next}` records, and `data/ogg/slbgm_*.ogg` are chained Ogg files whose links are the segments. The sequencer (`FUN_00814c7c`, `FUN_00814f30`, `FUN_00815170`) queues one link ahead. In all twelve files the highest link used by the tables is exactly the file's last link, which confirms the decoding.
+- Battle music is requested while the player's room has an active wave event (`FUN_0069821c` → `FUN_008114b0`). The web client runs no wave events yet, so the field music stays calm. `BgmPlayer.setBattle(true)` switches through the transition segments.
+- The Ragol teleporter's availability mask (`FUN_0064a428`) already contains every destination on this client: Episode 1 Forest 1, Cave 1, Mine 1, Ruins 1; Episode 2 VR Temple Alpha, VR Spaceship Alpha, CCA, Seabed Upper (Lab warp type 1 / 2 split them); Episode 4 the four Crater routes, Crater Interior, Desert 1.
+- Object factory: per-area tables of `{type, create, 250000.0, 0}` at `0x00a06be0` (index = area id).
+
+**Checks:** `tests/fieldbgm.test.ts` (area table, sequencer runs, chained-Ogg links of the user's 12 files, BGM zones and the Dark Falz delay), `tests/warpmenu.test.ts` (teleporter entries and labels for the three episodes, window layouts, boss warp table, door flags and states, the warps/doors/switches of every free-play floor of variation 0), `tests/game.live.ts` (a Forest 1 switch's `6x05` reaches the other client through newserv). In Chrome against newserv: Pioneer 2 started `GUILD.adx` at the spawn point (inside the guild zone) and `city.adx` elsewhere; the Ragol teleporter showed Forest 1 / Cave 1 / Mine 1 / Ruins 1 at (176, 130), Cave 1 was chosen with the arrows and Enter and the warp loaded Cave 1 with its interactive music playing (signal on the output); the Cave 1 warp to Cave 2 showed its one-item window; in Forest 1 a switch unlocked its door, which opened when the player came within 70 units; the lobby teleporter returned to lobby 1.
+
+**Approximations / open:**
+- Door and warp models are not drawn: doors are translucent panels (red locked, blue unlocked) that sink while opening; the door motion length is assumed to be 30 frames. Closed doors do not block movement yet.
+- Wave events (room-clear doors and battle music), the unlock camera of `TObjDoor`, the boss warp's `6x6A` player gathering, the boss fight music phases (`vol_opt1/2`, `dark1/2`, Olga's `T2`/`proto*`), the CCA main-gate warp menu (0x20A) and Episode 2's four-light doors are not done.
+- The warp radius is checked horizontally (±30 in height): the exe uses a 3D distance, but the position the client keeps has no height while running.
+- The radius of the Ruins/CCA floor warps and the other door types' distances are taken from the Forest objects, not traced.
+
 ## 2026-10-17: character file, item table and item names
 
 **What changed:** the full character file (`E7`) is parsed (`net/charfile.ts`) and exposed as `session.character` after `enterLobby`: inventory with equipped markers, stats, level/EXP/meseta, bank, guild card, play time, technique levels, mag stats. `BBSession.streamFiles()` downloads the BB stream file (`04EB`/`01EB`/`03EB`/`02EB`), which is where the BB client gets `ItemPMT.prs`. `formats/itempmt.ts` is a port of newserv's V4 ItemPMT reader; `formats/itemnames.ts` names items from ItemPMT ids + unitxt and formats them like newserv's `describe_item`. The Online tab shows an Inventory panel under the lobby.

@@ -195,7 +195,34 @@ The map files of a floor come from the client's `SetDataTableOn.rel` (`SetDataTa
 
 All 235 free-play floor variations of the three episodes resolve to a render map, a collision map and set files in Ephinea's client.
 
-Player start: the floor's `TObjPlayerSet` with `param1` = client id and `param4` = 0 when arriving from a lower floor, 1 when returning from a higher one. Area warps: `TObjAreaWarpForest` (type 2) with the destination floor in `param4` (Forest 1 has one to floor 2 and one back to floor 0); `TObjCityAreaWarp` (0x44, the Pioneer 2 teleporter, which opens a destination menu in the original).
+Player start: the floor's `TObjPlayerSet` with `param1` = client id and `param4` = 0 when arriving from a lower floor, 1 when returning from a higher one.
+
+### Warps, doors and switches
+
+Implemented in `client/src/render/fieldobjects.ts`, `warpmenu.ts` and `gamefield.ts`, tested by `tests/warpmenu.test.ts`. Objects are built from a per-area factory table of `{u32 type, create function, f32 250000.0, 0}` entries (pointer array at `0x00a06be0` by area id; Forest 1 at `0x00a0db20`, Pioneer 2 at `0x00a0df20`).
+
+| Type | Object | Radius | Destination / behaviour |
+|---|---|---|---|
+| `0x0002` | `TObjAreaWarpForest` (create `FUN_007bac58`, base ctor `FUN_00668b74` / `FUN_0066982c`) | 10.0 | `param4` |
+| `0x0019` | `TObjWarpBoss` (`FUN_0066c4b4`) | 19.0 | floor from the table at `0x0097f380` (18 floors per episode, `FUN_0080c340`); locked until switch flag `param5` unless on Pioneer 2 |
+| `0x0043` | `TObjCityMainWarp`, the Ragol teleporter (`FUN_0064a8dc`) | 25.0 | destination menu (`param5` = Episode 2 warp type, clamped 0..2) |
+| `0x0044` | `TObjCityAreaWarp`, the lobby teleporter (`FUN_0064ad68` → `FUN_0064ade4`) | 23.0 | floor 0x0F: the client leaves the game (`98` + `84`) |
+| `0x0140`, `0x0201`, `0x0280` | Ruins / CCA floor warps (newserv) | 10.0 (not traced) | `param4` |
+
+Base update `FUN_006698e0`: while the local player is within the radius (`FUN_00669a58`, 3D distance; the web client checks horizontally within ±30 in height), the object opens its menu (vtable +0x34), polls it (+0x40) and on Decide warps (+0x44, `FUN_00669650`). Leaving the radius closes the menu; Cancel keeps it closed until the player has left once (+0xbc). Control is disabled while the menu is open (`FUN_00791748(0)`).
+
+- Area and boss warps (`FUN_00669410`): one item, the destination area's name, unitxt group 10 index from the table at `0x0097c660` (`FUN_0079313c`). Window at position-table entry 0x35 = (267, 130), sized by `FUN_0073608c`: width = text + 20, height = 14 + 20.
+- Ragol teleporter (`FUN_00649cec`): one item per set bit of the mask `DAT_00a8f4fc` computed by `FUN_0064a428` (quest bits `DAT_00a8f500` ORed in). Bit *i* → floor `table[i]`, name unitxt(10, `text[i]`): Episode 1 floors `0x00936260` / text `0x00936300`, Episode 2 `0x009362a0` / `0x00936340`, Episode 4 `0x00936404` / `0x00936430`. Masks: Episode 1 `0xA5` & `0xFFFE03FF` → Forest 1, Cave 1, Mine 1, Ruins 1; Episode 2 `0x215` (type 1: & `0xFFFE780F` → VR Temple Alpha, VR Spaceship Alpha; type 2: & `0xFFFE7FF0` → Central Control Area, Seabed Upper; then & `0xFFFF87FF`); Episode 4 `0x3F` & `0xFFFFFCFF` → Crater East/West/South/North, Crater Interior, Desert 1. The quest-flag checks (`FUN_0064a650`, flags `0x1F9`/`0x201`/`0x207`... per newserv) only OR in bits the base mask already has, and `FUN_006dc358` returns 0, so this client offers every destination in free play. Window at entry 0x34 = (176, 130), width 288 (`FUN_00736138`), height = items × 20 − 6 + 20, capped at 160 (`FUN_007361d0`, scrolling), items centred (`FUN_00736458`). The names come from Ephinea's loose `unitxt_j.prs` (`data.gsl:unitxt_e.prs` has empty Episode 4 entries).
+
+Doors open when their switch flags are set. `TObjDoor` (0x80, Forest; ctor `FUN_006573d4`, update `FUN_00656e28` → `FUN_00656eb4`): flag = `param4 & 0xFF`, number on the door = `(param4 >> 8) % 10`, `param6` = unlock camera (0x50 frames). States: 0 locked until the flag is set (`FUN_00816eec`); 2 closed: opens when a player on the floor is within 70.0 (`0x00937964`); 4 opening, +1.8 motion frames per frame (`0x0093795c`); 5 open until no player is within 100.0 (`0x0093796c`); 3 closing, −1.8 per frame. Collision is on while closed (`FUN_007b52c4`) and off while open (`FUN_007b52ec`). Cave / Mine / Ruins doors (0xC1, 0xC2, 0xCE, 0x100, 0x102, 0x144–0x14B) take their flags from `param4`/`param5` as newserv documents and reuse the Forest door's distances.
+
+Switches: `TObjDoorKey` (0x81, ctor `FUN_00658b0c` on the generic switch `FUN_0062998c`, radius 20.0 at +0xcc) sets flag `param4` and sends `6x05`:
+
+| Sub | Meaning | Payload (after the 4-byte header `{05, 03, u16 entity id}`) |
+|---|---|---|
+| `05` | write switch flag (`G_WriteSwitchFlag_6x05`, 0x0C) | `u16 client_id, u16 unused, u16 flag, u8 floor, u8 flags` (1 = set, 2 = play the unlock sound) |
+
+The entity id of an object is 0x4000 + its index counted over the object lists (`o.dat`) of all floors in order (newserv `MapState::object_state_for_index`); wave events use 0xFFFF. Real-client capture (newserv `DCv1-DCv2-PCv2-CrossplayPrivateDrops`): `05 03 68 40 00 00 FC 8C 07 00 01 01`. Received `6x05` set or clear the flag on that floor.
 
 ## BB cipher
 
@@ -524,6 +551,26 @@ The exe requests ADX names: `title.adx` in the title constructor `FUN_006f8130`,
 Every file has a Vorbis comment `loop_start=<sample>`. The track plays from the start, then loops from that sample to the end of the file. For example, `TITLE.ogg` is 48 kHz and `loop_start=2881152` (60 s).
 
 `client/src/audio/bgm.ts` plays these with Web Audio, starting at the first user gesture because of the browser's autoplay policy.
+
+### Floor music
+
+Each area id has a scene record in the table at `0x00a160c0` (12 bytes: name, start function, end function; "CITY", "FOREST01", …). The end functions stop the music (`FUN_00815434`), so every floor starts its track afresh. The start functions pick (`client/src/audio/fieldbgm.ts`):
+
+| Areas | Music |
+|---|---|
+| Pioneer 2 (0x00, 0x2D), Lab (0x12) | `FUN_007a7484` → `FUN_006428bc`: BGM zones (`TObjBgmCol`, `{x, y, z, radius, track}` from `0x00934f40` / `0x00935040`, 12 each) and a manager `FUN_00642824` that plays `FUN_00642c30` (`city.adx` outside the lobby) when nothing plays. Entering a zone (`FUN_0064278c` edge, `FUN_00642724`) plays track `0x009c6fc0[i]`: SHOP, GUILD, MEDICAL, soutoku, city (via `FUN_00642c30`), labo |
+| Forest, Caves, Mines, Ruins | interactive music 0, 1, 2, 3 (`FUN_00814c7c`) |
+| Dragon, De Rol Le | `dragon.adx`, `delo.adx` |
+| Vol Opt | interactive 3 once the player's z ≥ 4000.0 (`FUN_00440980`, `0x008fe174`); `vol_opt1/2.adx` with the fight |
+| Dark Falz | interactive 4 after 0x5A frames (`FUN_0044baa8`; `T1.adx` when `FUN_00454058`); `dark1/2.adx` with the fight |
+| VR Temple / VR Spaceship (and battle areas) | interactive 7 / 8, only in Episode 2 (`DAT_00aafdb8 == 1`) |
+| CCA, Jungle, Mountain, Seaside (day and night), Tower | interactive 5 |
+| Seabed | interactive 6 |
+| Gal Gryphon, Olga Flow, Barba Ray, Gol Dragon | `gryphon.adx`, `HALL.adx` (`FUN_0048722c`), `delo2.adx`, `dragon2.adx` |
+| Crater routes / Crater Interior / Desert | interactive 9 / 10 / 11 |
+| Saint-Milion | `slbgm_boss09.ogg` (`slbgm_boss09b.ogg` when `DAT_00a9b078 == 1`), `FUN_0076b688` |
+
+Interactive music (`client/src/audio/slbgm.ts`): twelve descriptors at `0x00a16088` = `{char name[0x20] ("slbgm_forest.afs"), i32 records, i32, i32, ptr calm table, ptr battle table}`, records of five `i16` `{first, loop, count, transition, next}`. `FUN_00814c00` swaps the extension for `ogg`: `data/ogg/slbgm_forest.ogg` is a **chained Ogg Vorbis** file and every logical bitstream (link) is one segment; the streaming thread (`FUN_0086ee8c`, `FUN_0086f530`) plays queued link numbers back to back (`FUN_0086e114` → 256-entry ring at +0x708). Start (`FUN_00814c7c`): queue `calm[0].first` and `first + 1` (or `calm[next].first` for a one-link record). Each time the queue drains to the playing link (`FUN_00814f30`): in the same mode, the next link of the record until `count`, then record `next` starting at `first` the first time a record changes and at `loop` afterwards; on a mode change the record's `transition` link, then (`FUN_00815170`) `other[record].next` at its `loop` link (a transition of −1 switches at once). Battle is requested (`FUN_00814c5c`) while the player's room has an active wave event (`FUN_0069821c`, `FUN_008114b0`), calm again 0x5A frames after it is clear; the Dark Falz music ignores it. In every file the highest link the tables use is the last link of the file. Browsers decode each link separately (its own Ogg headers) and schedule them sample-accurately.
 
 ## Area fog (`fogentry.dat`)
 
