@@ -43,6 +43,14 @@
 //              action 0 deposit (item id 0xFFFFFFFF = meseta), 1 take (index
 //              0xFFFF = meseta), 3 leave the counter. The client applies
 //              deposits and meseta itself; a taken item comes back as 6xBE.
+//   tekker     C->S 6xB8 {item id} via 62 (ProcessActionPacket0x62_006ce6b8);
+//              newserv takes 100 meseta, uses up one item id of ours and
+//              answers 6xB9 {client id, ItemData} (the item identified, same
+//              id) to the lobby. Accepting: C->S 6x29 {item id, 1} via 60
+//              (Player_RemoveItemFromSlot_0068ee54), then 6xBA {item id} via
+//              62 (Player_AddItemToInventory_0068f48c), the client adding the
+//              identified item itself; newserv adds it too and repeats it as
+//              6xBE to everyone, the sender included.
 //   join sync  S->C 6x6D (BC0-compressed G_SyncItemState_6x6D: next drop
 //              number per floor, next item id per player, item count per
 //              floor, then FloorItem records), sent by newserv to a joiner
@@ -227,6 +235,28 @@ export function buildSellItem(clientId: number, itemId: number, amount: number):
   dv.setUint32(4, itemId >>> 0, true);
   dv.setUint32(8, amount, true);
   return b;
+}
+
+// G_IdentifyItemRequest_6xB8 (8): ProcessActionPacket0x62_006ce6b8 (the
+// action code ~0x47 = 0xB8, size 2, client id 0xFFFF).
+export function buildIdentifyItem(itemId: number): Uint8Array {
+  const { b, dv } = action62(0xb8, 8);
+  dv.setUint32(4, itemId >>> 0, true);
+  return b;
+}
+
+// G_AcceptItemIdentification_BB_6xBA (8): Player_AddItemToInventory_0068f48c
+// (~0x45 = 0xBA, size 2) with the original item id.
+export function buildAcceptIdentify(itemId: number): Uint8Array {
+  const { b, dv } = action62(0xba, 8);
+  dv.setUint32(4, itemId >>> 0, true);
+  return b;
+}
+
+// G_IdentifyResult_BB_6xB9 (0x18): {client id, ItemData}.
+export function parseIdentifyResult(body: Uint8Array): { clientId: number; item: ItemData } | null {
+  if (body.length < 0x18 || body[0] !== 0xb9) return null;
+  return { clientId: view(body).getUint16(2, true), item: readItem(body, 4) };
 }
 
 // G_RequestBankContents_BB_6xBB (8). The checksum only decides whether the
@@ -597,6 +627,10 @@ export class GameItems {
   bank: BankContents | null = null;
   onShop: (shopType: number) => void = () => {};
   onBank: () => void = () => {};
+  // The tekker's request and answer (the exe's g_ActionData_00a960d8 and
+  // its "processed" flag 0x00a960ec).
+  private identifySent: ItemData | null = null;
+  identifyResult: ItemData | null = null;
   // increment_item_id_for_player: the next id this client hands out itself
   // (shop purchases). Follows every id of ours it sees.
   private nextId = 0;
@@ -774,6 +808,15 @@ export class GameItems {
         const data = readItem(body, 4);
         if (clientId === self) {
           this.seenId(data.id);
+          // The tekker's accepted item is already in the inventory (the client
+          // adds it with 6xBA, Player_AddItemToInventory_0068f48c) when
+          // newserv repeats it here. The exe's 6xBE handler
+          // (SinowberillActionGiveItem_0068f74c) does not look for the id;
+          // skipping a known id keeps the inventory as newserv has it.
+          if (this.inventory?.find(data.id)) {
+            this.log(`6xBE: ${data.id.toString(16)} is already in the inventory`);
+            break;
+          }
           try {
             this.inventory?.add(data);
           } catch (err) {
@@ -805,6 +848,18 @@ export class GameItems {
         this.shops[shop.shopType] = shop.items;
         this.log(`6xB6: shop ${shop.shopType}, ${shop.items.length} items`);
         this.onShop(shop.shopType);
+        break;
+      }
+      case 0xb9: {
+        // 0x006ce718: the answer counts when its item id is the one sent;
+        // the request is marked answered either way (the window then shows
+        // the item as sent).
+        const r = parseIdentifyResult(body);
+        const sent = this.identifySent;
+        if (!r || !sent) break;
+        this.identifyResult = r.item.id === sent.id ? r.item : cloneItem(sent);
+        this.identifySent = null;
+        this.log(`6xB9: ${r.item.id.toString(16)} identified`);
         break;
       }
       case 0xbc: {
@@ -1000,6 +1055,45 @@ export class GameItems {
     this.log(`sold ${itemId.toString(16)} x${amount} for ${price}`);
     this.changed();
     return true;
+  }
+
+  // --- tekker --------------------------------------------------------------------
+
+  // 6xB8 (DialogbaseProcessAppraiseState_006da050 -> 0x006ce6b8); the answer
+  // is 6xB9 (identifyResult).
+  identify(itemId: number): void {
+    const it = this.inventory?.find(itemId);
+    if (!it) return;
+    this.identifySent = cloneItem(it.data);
+    this.identifyResult = null;
+    this.send62(buildIdentifyItem(itemId));
+  }
+
+  // The client's own payment (subtract_inventory_meseta: the tekker's fee,
+  // which newserv already took on 6xB8).
+  pay(amount: number): void {
+    const c = this.character;
+    if (!c) return;
+    c.meseta = Math.max(0, c.meseta - amount);
+    this.changed();
+  }
+
+  // Accepting the tekker's result (DialogbaseProcessBuyState_006d9b98 /
+  // DialogbaseConfirmEquipState_006d96d8): 6x29 for the unidentified item,
+  // then 6xBA and the identified item under the same id.
+  acceptIdentify(itemId: number, result: ItemData): void {
+    const inv = this.inventory;
+    if (!inv?.find(itemId)) return;
+    this.game.sendSubcommand(0x29, buildDeleteItem(this.game.selfId, itemId, 1).subarray(4));
+    inv.remove(itemId);
+    this.send62(buildAcceptIdentify(itemId));
+    try {
+      inv.add({ ...cloneItem(result), id: itemId >>> 0 });
+    } catch (err) {
+      this.log(`tekker: ${(err as Error).message}`);
+    }
+    this.identifyResult = null;
+    this.changed();
   }
 
   // --- bank ----------------------------------------------------------------------

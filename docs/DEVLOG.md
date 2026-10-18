@@ -1,5 +1,61 @@
 # Devlog
 
+## 2026-10-17: Tekker
+
+**What changed:** the tekker (bb_p2_menu 6, JUDGMENT) identifies unknown
+weapons: `classic/shop.ts` `TekkerCounter`, run by the field HUD like the
+shops, with `6xB8` / `6xB9` / `6xBA` in `net/items.ts`. Counter lines with
+"\tP" now show page by page.
+
+**Details** (Ephinea `PsoBB.exe`; the dump names these MedicalCenter* /
+Dialogbase*, the addresses are what matters):
+- **Counter** (`p2_special_npc_menus` entry 6: create 0x006d6e1c ->
+  0x006ce490, vtable 0x00b3be28, states 0x006ce528): greeting [1] in the
+  clerk window with Money, Enter, then the appraisal window; it closes once
+  the last line is read (0x006ce564).
+- **Text:** unitxt_shop group `0x0096c6ec[section id]` = 4 + section id
+  (`unknown_get_shop_unitxt_3`, title via 0x006dbe14); the section id is the
+  one that picks the tekker's model (0x00a9c4d8).
+- **Appraisal window** (0x006d93e4, vtable 0x00b3ca60, states 0x006d945c,
+  jump table 0x0096c3e8):
+  - 0: the items that are not identified (item vfunc +0x84 = 0x005d2fb0: a
+    weapon with data1[4] & 0x80, not wrapped) titled [0]; none: [2], close;
+  - 1 / 2: Enter -> [3] and Yes / No; Yes with more than 99 meseta sends
+    `6xB8 {item id}` (0x006ce6b8, via 62), says [6] and starts a 0x5f-frame
+    timer; without: [5], close; No: [4], back to the list; Backspace on the
+    list: [0xd], close (0x006ce688);
+  - 3 (0x006d9d94): when the timer is out and `6xB9` came (0x006ce718: the
+    answer counts only for the id sent), the "Result" list with the item
+    under a new id of ours, the description at 0x29, [8];
+  - 4 (0x006d9b98): Yes pays 100 itself; if `ValidateItemForEquip` passes,
+    [0xc] and Yes / No (state 7, 0x006d96d8), else the swap; No: [9] and
+    Yes / No (state 6: Yes pays 100, [0xa], Enter; No: back to [8]);
+  - the swap: `6x29 {id, 1}` (Player_RemoveItemFromSlot_0068ee54), `6xBA
+    {id}` and the item added under the original id
+    (Player_AddItemToInventory_0068f48c); equipping takes the weapon slot's
+    item off first. Then [0xb] and the list again.
+- **newserv** takes the 100 meseta and an item id at `6xB8`, and repeats the
+  accepted item as `6xBE` to the sender too. The exe's 6xBE handler
+  (0x0068f74c) adds it without looking at the id; the web client skips a
+  6xBE whose id it already has, so the inventory stays as newserv's.
+- **Left out:** the item picture window at 0x32 (124, 98), 160 x 120
+  (`unknown_get_itemkt_image`) and the "Appraise" / "Miniclear" BGM.
+- **ASSUMED:** no cursor bar on the Result list (its flags 0x10 / 0x40 /
+  0x80 are not decoded); that a line's later pages are only shown when the
+  state waits for Enter.
+
+**Checks:**
+- `tests/tekker.test.ts`: group, list filter, `6xB8` / `6xBA` bytes, `6xB9`
+  parse, accept with and without the equip question, refuse, the fee check,
+  leaving, the timer, GameItems' 6xB9 / swap / 6xBE echo.
+- In Chrome against newserv (the counter opened with
+  `gameView.hud.openCounter('tekker')`, items made with `$item`): WebForce
+  identified a ???? Saber into a Drain Saber +2 (no equip question: the
+  class check failed) and, in a second game, a ???? Cane into a Draw Cane
+  equipped in place of the Cane; a second Cane was refused (paid, stayed
+  unknown). Meseta 2000 -> 1900 -> 1700 matched; after logging in again
+  the server's inventory had the Drain Saber +2 once and no unknown Saber.
+
 ## 2026-10-17: Counter windows over the status window
 
 **What changed:** the shop and bank counter windows and the main menu are

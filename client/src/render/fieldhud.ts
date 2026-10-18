@@ -196,7 +196,7 @@ export class FieldHud {
     this.menu.close();
     const counter = createCounter(
       {
-        shopText: (i) => this.shopGroups?.[0]?.[i] ?? '',
+        shopText: (i, g = 0) => this.shopGroups?.[g]?.[i] ?? '',
         text: (g, i) => this.text(g, i),
         character: () => this.opts.character(),
         rowContext: () => this.rowContext(),

@@ -121,7 +121,7 @@ eq([MONEY_WINDOW.x, MONEY_WINDOW.y, MONEY_WINDOW.w], [12, 418, 226], 'Money at 0
 eq([QUANTITY_WINDOW.x, QUANTITY_WINDOW.y, BANK_WINDOW.y], [12, 389, 389], 'quantity 0x2c, bank 0x2b');
 eq([SHOPS.weapon.shopType, SHOPS.armor.shopType, SHOPS.tool.shopType], [1, 2, 0], '6xB5 types');
 eq([SHOPS.weapon.title, SHOPS.armor.title, SHOPS.tool.title], [0x26, 0x2a, 0x2d], 'list titles');
-eq(COUNTER_MENUS, { 0: 'weapon', 2: 'armor', 3: 'tool', 5: 'bank' }, 'bb_p2_menu counters');
+eq(COUNTER_MENUS, { 0: 'weapon', 2: 'armor', 3: 'tool', 5: 'bank', 6: 'tekker' }, 'bb_p2_menu counters');
 
 // --- commands ---
 eq(hex(buildShopRequest(1)), 'b502ffff01000000', '6xB5 weapon shop');

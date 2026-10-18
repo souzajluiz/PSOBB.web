@@ -42,8 +42,9 @@
 // cost / 8 per unit (0x006d600c).
 //
 // Not recovered: the windows' typing speed (the InfoWindow's), the bank item
-// windows' messages (their decompilation fails; see BankCounter), the
-// tekker (bb_p2_menu 6, left out).
+// windows' messages (their decompilation fails; see BankCounter).
+//
+// The tekker (bb_p2_menu 6, JUDGMENT): see TekkerCounter.
 
 import { se, SE } from '../audio/se.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
@@ -92,7 +93,8 @@ export const SHOP_TOOL = 0;
 export const SHOP_WEAPON = 1;
 export const SHOP_ARMOR = 2;
 
-export type CounterKind = 'weapon' | 'armor' | 'tool' | 'bank';
+export type CounterKind = 'weapon' | 'armor' | 'tool' | 'bank' | 'tekker';
+export type ShopKind = Exclude<CounterKind, 'bank' | 'tekker'>;
 
 export interface ShopDef {
   shopType: number; // 6xB5 / 6xB6 type
@@ -104,14 +106,14 @@ export interface ShopDef {
 // 0x006d54cc), 0x2a "Guards Shop" (0x006d3a10), 0x2d "Tools Shop"
 // (0x006d8a40) / 0x2e its greeting (0x006d922c). The Guards Shop greeting is
 // ASSUMED to be 0x2b, the entry after its name like the other two.
-export const SHOPS: Record<Exclude<CounterKind, 'bank'>, ShopDef> = {
+export const SHOPS: Record<ShopKind, ShopDef> = {
   weapon: { shopType: SHOP_WEAPON, title: 0x26, welcome: 0x27 },
   armor: { shopType: SHOP_ARMOR, title: 0x2a, welcome: 0x2b },
   tool: { shopType: SHOP_TOOL, title: 0x2d, welcome: 0x2e },
 };
 
 // bb_p2_menu number -> counter (P2_MENUS in formats/npcmodels.ts).
-export const COUNTER_MENUS: Readonly<Record<number, CounterKind>> = { 0: 'weapon', 2: 'armor', 3: 'tool', 5: 'bank' };
+export const COUNTER_MENUS: Readonly<Record<number, CounterKind>> = { 0: 'weapon', 2: 'armor', 3: 'tool', 5: 'bank', 6: 'tekker' };
 
 // unitxt_shop group 0 messages used here.
 export const MSG = {
@@ -366,10 +368,16 @@ export interface CounterItems {
   depositItem(itemId: number, amount: number): void;
   takeItem(index: number, amount: number): void;
   leaveBank(): void;
+  // The tekker (net/items.ts).
+  readonly identifyResult: ItemData | null;
+  identify(itemId: number): void;
+  acceptIdentify(itemId: number, result: ItemData): void;
+  pay(amount: number): void;
+  takeItemId(): number;
 }
 
 export interface CounterEnv {
-  shopText: (index: number) => string; // unitxt_shop group 0
+  shopText: (index: number, group?: number) => string; // unitxt_shop, group 0 by default
   text: (group: number, index: number) => string; // unitxt
   character: () => CharacterFile | null;
   rowContext: () => RowContext;
@@ -392,6 +400,8 @@ interface ItemList {
   top: number;
   resolve: ((index: number | null) => void) | null;
   quantity: ((index: number) => number) | null; // "Item Quantity" window
+  detail: boolean; // the description window at 0x29
+  bar: boolean; // the cursor bar
 }
 
 class Closed extends Error {}
@@ -407,6 +417,12 @@ abstract class CounterBase {
   private amount: { spinner: AmountSpinner; resolve: (v: number | null) => void } | null = null;
   private polls: Array<{ test: () => boolean; resolve: () => void }> = [];
   protected showBankMeseta = false;
+  // unitxt_shop group of the clerk's lines (the tekker's depends on the
+  // section id).
+  protected textGroup = 0;
+  private pages: string[] = [];
+  // Frames ticked (30 a second), for the states that count frames.
+  private frames = 0;
   private closed = false;
   done = false;
   onClose: () => void = () => {};
@@ -447,14 +463,34 @@ abstract class CounterBase {
   // The clerk's line (vtable +0x14(id, 1)); `wait` = the state waits for it
   // to finish typing and for Enter (vtable +0x20, ShopDialog_CheckMenuInput_006dc988).
   protected say(id: number): void {
-    this.clerk.set(this.env.shopText(id).replace(/\t[CEJ][0-9A-Za-z]?/g, ''));
+    // "\tP" splits a line into pages, each read with Enter (as quest/town.ts
+    // does for the guild lines).
+    const [first, ...rest] = this.env.shopText(id, this.textGroup).replace(/\t[CEJ][0-9A-Za-z]?/g, '').split('\tP');
+    this.clerk.set(first);
+    this.pages = rest;
   }
 
   protected async tell(id: number): Promise<void> {
     this.say(id);
-    await new Promise<void>((r) => (this.waitEnter = r));
-    this.waitEnter = null;
-    this.check();
+    await this.read();
+  }
+
+  // Waits for Enter on the line shown (finishing its typing first).
+  protected async read(): Promise<void> {
+    for (;;) {
+      await new Promise<void>((r) => (this.waitEnter = r));
+      this.waitEnter = null;
+      this.check();
+      const next = this.pages.shift();
+      if (next === undefined) return;
+      this.clerk.set(next);
+    }
+  }
+
+  // A state that counts down `n` frames.
+  protected async delay(n: number): Promise<void> {
+    const end = this.frames + n;
+    await this.until(() => this.frames >= end);
   }
 
   // A choice at 0x2d of unitxt_shop entries; resolves with the entry's index
@@ -479,9 +515,15 @@ abstract class CounterBase {
     return v;
   }
 
-  protected showList(title: string, rows: ItemRow[], items: ItemData[], quantity: ItemList['quantity'] = null): void {
+  protected showList(
+    title: string,
+    rows: ItemRow[],
+    items: ItemData[],
+    quantity: ItemList['quantity'] = null,
+    opts: { detail?: boolean; bar?: boolean } = {},
+  ): void {
     const cursor = this.list ? Math.min(this.list.cursor, Math.max(0, rows.length - 1)) : 0;
-    this.list = { title, rows, items, cursor, top: 0, resolve: null, quantity };
+    this.list = { title, rows, items, cursor, top: 0, resolve: null, quantity, detail: opts.detail ?? true, bar: opts.bar ?? true };
     this.clampTop();
   }
 
@@ -513,6 +555,7 @@ abstract class CounterBase {
   }
 
   tick(): void {
+    this.frames++;
     this.clerk.tick();
     const ready = this.polls.filter((p) => p.test());
     if (ready.length) {
@@ -592,7 +635,7 @@ abstract class CounterBase {
       this.drawList(ctx, skin, tex, l);
       const item = l.items[l.cursor];
       const R = SHOP_DETAIL;
-      if (item) drawTextWindow(ctx, skin, { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h }, itemDescription(item, this.env.rowContext().names));
+      if (item && l.detail) drawTextWindow(ctx, skin, { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h }, itemDescription(item, this.env.rowContext().names));
       if (l.quantity && item) this.drawCount(ctx, skin, QUANTITY_WINDOW, this.env.text(12, 1), l.quantity(l.cursor));
     }
     if (this.showBankMeseta && this.env.items.bank && !l) this.drawCount(ctx, skin, BANK_WINDOW, this.env.text(12, 2), this.env.items.bank.meseta);
@@ -614,7 +657,7 @@ abstract class CounterBase {
     const cx = L.x + INSET;
     const cy = L.y + INSET + TITLE_GAP;
     const cw = L.w - 2 * INSET;
-    if (l.rows.length) drawSelectBar(ctx, skin.bars, cx, cy + (l.cursor - l.top) * ROW, cw, 16);
+    if (l.rows.length && l.bar) drawSelectBar(ctx, skin.bars, cx, cy + (l.cursor - l.top) * ROW, cw, 16);
     l.rows.slice(l.top, l.top + LIST_ROWS).forEach((r, i) => {
       const y = cy + i * ROW;
       drawIcon(ctx, tex.icons, r.icon1, cx, y, r.iconColor, 0);
@@ -657,13 +700,13 @@ interface ShopEntry {
 }
 
 export class ShopCounter extends CounterBase {
-  readonly kind: Exclude<CounterKind, 'bank'>;
+  readonly kind: ShopKind;
   private def: ShopDef;
   // Items bought out of this visit's list (ShopDialog_MarkItemUnavailable_*:
   // data2 = -1 hides them).
   private soldOut = new Set<number>();
 
-  constructor(env: CounterEnv, kind: Exclude<CounterKind, 'bank'>) {
+  constructor(env: CounterEnv, kind: ShopKind) {
     super(env);
     this.kind = kind;
     this.def = SHOPS[kind];
@@ -1039,8 +1082,175 @@ export class BankCounter extends CounterBase {
   }
 }
 
-export type Counter = ShopCounter | BankCounter;
+// --- tekker -----------------------------------------------------------------------------
+
+// The JUDGMENT counter (p2_special_npc_menus entry 6: create
+// CreateMedicalcenterDialog_006d6e1c -> MedicalcenterDialog_Constructor_006ce490,
+// vtable 0x00b3be28, states 0x006ce528):
+//   0 (0x006ce7e4) -> 1; 1 (0x006ce780) the clerk window at 0x2e, line [1]
+//   and Money; 2 (0x006ce64c) waits for Enter; 3 (0x006ce598) opens the
+//   appraisal window; 4 (0x006ce564) closes once the last line is read.
+// The appraisal window (ShopDialog_Constructor_006d93e4, vtable 0x00b3ca60,
+// states 0x006d945c, jump table 0x0096c3e8; its "line read" check, vtable
+// +0x20 = 0x007083d4, is always true):
+//   0 (0x006d94f2) the inventory items that are not identified (item vfunc
+//     +0x84 = 0x005d2fb0: a weapon with data1[4] & 0x80 that is not wrapped)
+//     in a list titled [0]; none: [2] and state 11;
+//   1 (0x006da230) the list; Enter: [3] and Yes / No (state 2); Backspace:
+//     state 10, whose callback (0x006ce688) says [0xd] and closes;
+//   2 (0x006da050) Yes with more than 99 meseta: 6xB8, a 0x5f-frame timer,
+//     BGM "Appraise", [6], state 3; Yes without: [5], state 11 (the callback
+//     0x006ce6a8 closes after it); No / Backspace: [4], back to the list;
+//   3 (0x006d9d94) once the timer is out and 6xB9 came: a list titled
+//     "Result" (u"Result" @ 0x0096c444) with the item under a new id of ours
+//     (increment_item_id_for_player), the picture window at 0x32 and the
+//     description at 0x29, [8], state 4;
+//   4 (0x006d9b98) Yes: pays 100 (subtract_inventory_meseta); if the
+//     character can equip it (ValidateItemForEquip_005c9e40) [0xc] and state
+//     7, else the swap (6x29 + 6xBA, the item back under the original id),
+//     [0xb], BGM "Miniclear", state 0; No / Backspace: [9], state 6;
+//   6 (0x006d999c) Yes: pays 100, [0xa], state 5 (3 frames, then Enter, then
+//     [0xb] and state 0); No / Backspace: [8], state 4;
+//   7 (0x006d96d8) Yes: the swap, the slot's item off and the new one on
+//     (Player_EquipItem_0068de54); No / Backspace: the swap alone; [0xb],
+//     state 0.
+// The lines are unitxt_shop group 0x0096c6ec[section id] = 4 + section id
+// (unknown_get_shop_unitxt_3, 0x006dbe14 for the title), the section id
+// being the one that also picks the tekker's model (0x00a9c4d8).
+// Left out: the item picture window at 0x32 (124, 98), 160 x 120 (template
+// 0x00971018; unknown_get_itemkt_image) and the two BGM changes.
+export const TEKKER = {
+  title: 0,
+  welcome: 1,
+  noUnknown: 2,
+  cost: 3,
+  changeItem: 4,
+  noMeseta: 5,
+  examining: 6,
+  accept: 8,
+  stillPay: 9,
+  yourChoice: 0xa,
+  anythingElse: 0xb,
+  equipNow: 0xc,
+  comeAgain: 0xd,
+} as const;
+export const TEKKER_FEE = 100; // 0x006da050: 99 < meseta; newserv on_identify_item_bb
+export const TEKKER_WAIT = 0x5f; // state 3's timer, frames
+export const TEKKER_RESULT_TITLE = 'Result'; // 0x0096c444 (0x0096c438 on a Japanese client)
+
+// unitxt_shop group of the tekker's lines (0x0096c6ec: 4..13 by section id).
+export function tekkerGroup(sectionId: number): number {
+  return 4 + Math.max(0, Math.min(9, sectionId | 0));
+}
+
+// The items state 0 lists, in inventory order.
+export function unidentifiedItems(inventory: readonly InventoryItem[]): InventoryItem[] {
+  return inventory.filter((it) => !isTekked(it.data));
+}
+
+export class TekkerCounter extends CounterBase {
+  protected async run(): Promise<void> {
+    const items = this.env.items;
+    this.textGroup = tekkerGroup(this.env.character()?.sectionId ?? 0);
+    // Outer states 1 / 2.
+    await this.tell(TEKKER.welcome);
+    for (;;) {
+      // State 0.
+      const c = this.env.character();
+      if (!c) return;
+      const unknown = unidentifiedItems(c.inventory);
+      if (!unknown.length) {
+        this.closeList();
+        await this.tell(TEKKER.noUnknown);
+        return;
+      }
+      const ctx = this.env.rowContext();
+      this.showList(
+        this.env.shopText(TEKKER.title, this.textGroup),
+        unknown.map((it) => itemRow(it, ctx)),
+        unknown.map((it) => it.data),
+        null,
+        { detail: false },
+      );
+      // States 1 / 2.
+      let picked: InventoryItem | null = null;
+      while (!picked) {
+        const i = await this.pick();
+        if (i === null) {
+          this.closeList();
+          await this.tell(TEKKER.comeAgain);
+          return;
+        }
+        this.say(TEKKER.cost);
+        if ((await this.choose([MSG.yes, MSG.no])) !== 0) {
+          this.say(TEKKER.changeItem);
+          continue;
+        }
+        if (c.meseta < TEKKER_FEE) {
+          this.closeList();
+          await this.tell(TEKKER.noMeseta);
+          return;
+        }
+        picked = unknown[i] ?? null;
+      }
+      const originalId = picked.data.id;
+      items.identify(originalId);
+      this.closeList();
+      this.say(TEKKER.examining);
+      // State 3.
+      await this.delay(TEKKER_WAIT);
+      await this.until(() => items.identifyResult !== null);
+      const answer = items.identifyResult!;
+      const result: ItemData = { data1: answer.data1.slice(), id: items.takeItemId(), data2: answer.data2.slice() };
+      this.showList(TEKKER_RESULT_TITLE, [shopRow(result, '', this.env.rowContext())], [result], null, { bar: false });
+      this.say(TEKKER.accept);
+      // States 4 / 6.
+      for (;;) {
+        if ((await this.choose([MSG.yes, MSG.no])) === 0) {
+          this.closeList();
+          items.pay(TEKKER_FEE);
+          let equip = false;
+          if (equipProblems(result, this.env.rowContext()) === 0) {
+            // State 7.
+            this.say(TEKKER.equipNow);
+            equip = (await this.choose([MSG.yes, MSG.no])) === 0;
+          }
+          this.accept(originalId, result, equip);
+          this.say(TEKKER.anythingElse);
+          break;
+        }
+        this.say(TEKKER.stillPay);
+        if ((await this.choose([MSG.yes, MSG.no])) === 0) {
+          this.closeList();
+          items.pay(TEKKER_FEE);
+          this.say(TEKKER.yourChoice);
+          // State 5.
+          await this.delay(3);
+          await this.read();
+          this.say(TEKKER.anythingElse);
+          break;
+        }
+        this.say(TEKKER.accept);
+      }
+    }
+  }
+
+  private accept(originalId: number, result: ItemData, equip: boolean): void {
+    const items = this.env.items;
+    items.acceptIdentify(originalId, result);
+    if (!equip) return;
+    // DialogbaseConfirmEquipState_006d96d8: the item in the weapon slot comes
+    // off (Player_UnequipItem_0068dfd8), the new one goes on.
+    const old = this.env.character()?.inventory.find((i) => i.equipped && i.data.id !== originalId && i.data.data1[0] === result.data1[0]);
+    if (old) items.unequip(old.data.id);
+    items.equip(originalId);
+  }
+}
+
+export type Counter = ShopCounter | BankCounter | TekkerCounter;
 
 export function createCounter(env: CounterEnv, kind: CounterKind): Counter {
-  return kind === 'bank' ? new BankCounter(env) : new ShopCounter(env, kind);
+  if (kind === 'bank') return new BankCounter(env);
+  if (kind === 'tekker') return new TekkerCounter(env);
+  return new ShopCounter(env, kind);
 }
