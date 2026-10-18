@@ -19,3 +19,4 @@ client/public/ref/
 .captures/
 .claude/
 .codegraph/
+__pycache__/
