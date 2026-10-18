@@ -1,5 +1,64 @@
 # Devlog
 
+## 2026-10-18: Photon blasts
+
+**What changed:** the MAG's photon blast gauge now charges from damage dealt
+and taken and shows in the status window's ring; a palette slot holding a
+photon blast (group 1 = 5) fires the MAG's blast in that slot, sends `6x49`,
+`6x37`, `6x39` / `6x3A`, and the six basic blasts have their exe power
+formulas: Farlla / Estlla / Golla / Pilla hit the enemies in range, Leilla
+heals, Mylla & Youlla casts Anti, Deband and Shifta. Code:
+`combat/photonblast.ts`, `render/combat.ts`, `net/game.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Gain:** dealt (unknown_melee_attack_2, 0x006997a0) trunc(damage) /
+  ((level + 1) * 15) (0x0093daa4 / 0x0093daa0, at least 0); taken
+  (try_hit_entity on a local player) calculate_pb_gain_from_hit (0x0069b4f0)
+  of trunc(damage * 20). try_set_pb_charge (0x0069b550, vtable +0x134): local
+  player, alive, MAG equipped, on a field; set_pb_charge (0x006a7e84) caps at
+  100 (0x00966680) and sends `6x39` (0x006a7ec4); subtract_pb_charge sends
+  `6x3A` (0x006a7f48). The special attack adds nothing.
+- **Firing:** palette group 1 = 5 -> CanPlayerCastTechInCurrentState_0069a8c0
+  (no 0x20006 flags, ready flag +0x524 & 2, not already firing);
+  handle_input_state_use_photon_blast: 0x708 invulnerable frames, `6x49`
+  {pb number, target count, round(gauge), targets} of 3 + n dwords; its
+  receiver 0x0069a6b4; `6x37` {round(gauge)} at the motion's release
+  (SendPhotonBlastCompletionPacket_0069f93c).
+- **Power** (HandlePhotonBlastDamage_0067fa2c / ApplyPhotonBlastEffects_
+  0067ef10, constants 0x0093bcf4..0x0093bd14, base powers 0x009cb4e0 +
+  type * 0x2c = 500 / 350 / 1200 / 500 / 150 / 0): Farlla synchro * (ATP +
+  equipment ATP) * 0.025 + IQ * 2.5 + 500; Estlla EVP * synchro * 0.15 +
+  IQ * 15 + 350; Golla synchro * (ATP + equipment ATP) * 0.075 + IQ * 7.5 +
+  1200; Pilla ATA * synchro * 0.075 + IQ * 7.5 + 500; Leilla IQ * 0.5 + 150;
+  Mylla & Youlla min(IQ * 0.1, 20); then * gauge total * blasts joined *
+  0.01 (0x0093bc90). 0..3 hit with entity_hit_by_tech group 4 (power *
+  (100 - ELT) * 0.002); Leilla group 6 (Resta); Mylla & Youlla Anti
+  (Reverser on the dead), Deband, Shifta.
+
+**Assumed:** the palette's group 2 is the MAG slot (0 center, 1 right, 2
+left) and is sent as the pb number; the target list is the enemies within
+150 units (the table's third float), up to 10, and none for Leilla / Mylla &
+Youlla; the blast goes off 30 frames after `6x49` with the cast motion; the
+gauge empties when it goes off; Leilla's heal uses Resta's MST * 0.5 + power
+and Anti's level is trunc(power); the non-empty palette page condition of
+try_set_pb_charge is always met; only solo blasts (no joining or donating,
+remote players' blasts are not drawn). Left out: the blast objects, camera
+and particles, the shared 400-point gauge (add_pb_charge), the effect on
+other players' clients.
+
+**Tests:** `tests/photonblast.test.ts` (new): gain dealt / taken and the
+level clamp, the gauge cap with its `6x39` / `6x3A`, every blast's power,
+the group 4 damage, and the `6x49` / `6x37` / `6x39` / `6x3A` bytes.
+
+**Checked in Chrome** (WebHunter, Forest 1, test HP from the console): being
+hit by Boomas (18 damage at level 2) charged the gauge 11.7 per hit and it
+reached 100 ("photon blast ready", `6x39` reached newserv); the status
+window's ring showed 100. With Farlla put in the MAG's center slot from the
+console (the character's MAG had none yet) and a palette slot set to
+{5, 0}, the palette key sent `6x49` with 2 targets, both Boomas took 83
+(power 520.5 with synchro 10), then `6x37` and `6x3A` went out and the gauge
+was 0. No console errors.
+
 ## 2026-10-18: Weapon specials
 
 **What changed:** the palette's special attack now uses the equipped

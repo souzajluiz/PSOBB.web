@@ -817,6 +817,39 @@ export class Game extends Lobby {
     this.sendSubcommand(0x46, p);
   }
 
+  // --- Photon blasts (combat/photonblast.ts) -------------------------------
+
+  // 6x49 (G_ExecutePhotonBlast_Header_6x49): {client id} {i8 pb number, u8 0,
+  // u16 target count, u16 gauge, u16 0} + {u16 entity id, u16 hit box} per
+  // target (handle_input_state_use_photon_blast's dispatch).
+  sendPhotonBlast(pbNumber: number, gauge: number, targets: Array<{ entityId: number; hitbox?: number }>): void {
+    const list = targets.slice(0, 10);
+    const p = new Uint8Array(8 + list.length * 4);
+    const dv = new DataView(p.buffer);
+    dv.setInt8(0, pbNumber);
+    dv.setUint16(2, list.length, true);
+    dv.setUint16(4, Math.max(0, Math.round(gauge)), true);
+    list.forEach((t, i) => {
+      dv.setUint16(8 + i * 4, t.entityId, true);
+      dv.setUint16(10 + i * 4, t.hitbox ?? 0, true);
+    });
+    this.sendSubcommand(0x49, p);
+  }
+
+  // 6x37 {client id} {u16 gauge, u16 0}: the blast went off
+  // (SendPhotonBlastCompletionPacket_0069f93c).
+  sendPhotonBlastDone(gauge: number): void {
+    const p = new Uint8Array(4);
+    new DataView(p.buffer).setUint16(0, Math.max(0, Math.round(gauge)), true);
+    this.sendSubcommand(0x37, p);
+  }
+
+  // 6x39 / 6x3A {client id}: the gauge reached 100 / fell below it
+  // (0x006a7ec4 / 0x006a7f48).
+  sendPhotonBlastReady(ready: boolean): void {
+    this.sendSubcommand(ready ? 0x39 : 0x3a, new Uint8Array(0));
+  }
+
   // --- Techniques (combat/techniques.ts; SendCastTechPacket_0069a2f0 and the
   // release in HandleHeavySpecialAttackUnsafeMap send these) ---------------
 

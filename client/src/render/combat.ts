@@ -91,6 +91,8 @@ import {
   weaponSpecialByte,
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
+import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
+import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
@@ -299,6 +301,8 @@ export class CombatView {
   // Poison / paralysis / freeze / shock / slow / confusion on the local
   // player (combat/status.ts).
   readonly status: PlayerStatus;
+  // The MAG's photon blast gauge (combat/photonblast.ts).
+  readonly pb = new PhotonBlastGauge();
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -534,6 +538,7 @@ export class CombatView {
           const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
           if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
           else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);
+          else if (slot && !slot.disabled && slot.group1 === 5) this.firePhotonBlast(slot.group2);
           else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks and techniques are wired yet`);
         }
         if (down) this.held.add(key);
@@ -619,7 +624,7 @@ export class CombatView {
       maxHp: this.damage.maxHp,
       tp: this.tp,
       maxTp,
-      pb: 0, // photon blasts are not implemented
+      pb: this.pb.charge,
       dead: this.damage.dead,
       statusIcons: [...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
     };
@@ -951,6 +956,7 @@ export class CombatView {
     }
     const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
     this.damage.hit(total, angle, knockback, 0x1000 | e.index);
+    if (landed && total >= 1) this.gainPb(total, true);
     // The Ultimate wolves' and Mothmants' status rolls (combat/status.ts).
     const status = landed ? meleeHitStatus(e.slot.type, (this.game.info?.difficulty ?? 0) === 3, this.rng()) : null;
     if (status !== null) this.inflictStatus(status, `E-${e.index.toString(16)} (${e.slot.type})`);
@@ -1127,6 +1133,7 @@ export class CombatView {
         critical = r.critical;
       }
       this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '');
+      if (damage >= 1) this.gainPb(damage, false);
     }
   }
 
@@ -1151,6 +1158,7 @@ export class CombatView {
       if (retriesOnMiss(type) && p1 > 0 && this.rng() <= p1) {
         const r = rollDamage(attacker, this.enemyDefenderOf(e), 2, this.rng);
         this.applyEnemyHit(e, ENEMY_BASE_FLAGS, r.damage, r.critical, `${name} missed, plain strike: `);
+        if (r.damage >= 1) this.gainPb(r.damage, false);
       } else {
         this.applyEnemyHit(e, ENEMY_BASE_FLAGS, 0, false, `${name} MISS: `);
       }
@@ -1224,6 +1232,111 @@ export class CombatView {
     }
     if (damage >= 1) flags |= FLAG_HIT;
     this.applyEnemyHit(e, flags, damage, critical, what);
+  }
+
+  // --- photon blasts (combat/photonblast.ts) ---------------------------------
+
+  // The local player's equipped MAG.
+  private equippedMag(): { data1: Uint8Array; data2: Uint8Array; id: number } | null {
+    const char = this.opts.character?.();
+    const m = char?.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 2);
+    return m ? m.data : null;
+  }
+
+  // try_set_pb_charge: damage dealt or taken charges the gauge.
+  private gainPb(damage: number, taken: boolean): void {
+    if (this.damage.dead || this.area === 0 || !this.equippedMag()) return;
+    const level = this.progression?.level ?? Math.max(0, (this.game.self?.level ?? 1) - 1);
+    if (this.pb.add(pbGain(damage, level, taken)) === 'ready') {
+      this.game.sendPhotonBlastReady(true);
+      this.opts.log('photon blast ready (6x39)');
+    }
+  }
+
+  // A palette slot with group 1 = 5: the MAG's blast in slot `slot` (0 center,
+  // 1 right, 2 left; ASSUMED the palette's group 2 is that slot).
+  firePhotonBlast(slot: number): boolean {
+    const me = this.game.self;
+    const view = this.view;
+    if (!me || !view || this.area === 0) return false;
+    // CanPlayerCastTechInCurrentState_0069a8c0.
+    if (!this.status.canAttack || this.status.immobile || this.damage.busy || this.damage.dead) return false;
+    if (!this.pb.ready || this.pb.firing || this.cast || this.attack?.active) {
+      if (!this.pb.ready) this.opts.log(`photon blast: gauge ${Math.floor(this.pb.charge)}/100`);
+      return false;
+    }
+    const mag = this.equippedMag();
+    const type = mag ? photonBlasts(mag)[slot] : undefined;
+    if (!mag || type === undefined) {
+      this.opts.log(`photon blast: no blast in MAG slot ${slot}`);
+      return false;
+    }
+    const from = view.playerPositions().get(me.clientId);
+    if (!from) return false;
+    // ASSUMED target list: the enemies within the table's 150 units.
+    const targets =
+      type <= 3
+        ? [...this.enemies.values()]
+            .filter((e) => !e.dead && e.instance.root.visible && e.instance.root.position.distanceTo(from) <= PB_RANGE)
+            .sort((a, b) => a.instance.root.position.distanceToSquared(from) - b.instance.root.position.distanceToSquared(from))
+            .slice(0, PB_MAX_TARGETS)
+        : [];
+    const gauge = this.pb.charge;
+    this.game.sendPhotonBlast(slot, gauge, targets.map((e) => ({ entityId: 0x1000 | e.index })));
+    this.pb.firing = true;
+    this.damage.invuln = PB_INVULN_FRAMES;
+    const animator = view.playerAnimator(me.clientId);
+    if (animator) {
+      animator.paused = false;
+      animator.play(castMotion(MOTION_TYPE[me.charClass] ?? 0, this.weaponClass()), 1);
+    }
+    this.attacking.add(me.clientId);
+    const name = PB_NAMES[type];
+    this.opts.log(`photon blast ${name} (slot ${slot}, 6x49 with ${targets.length} target(s))`);
+    // ASSUMED: the blast goes off one second later (the PB object counts its
+    // own frames, UpdatePhotonBlastState_0067eed0).
+    this.techHits.push({
+      ticks: 30,
+      apply: () => this.photonBlastEffect(type, gauge, targets),
+    });
+    return true;
+  }
+
+  private photonBlastEffect(type: number, gauge: number, targets: EnemyRuntime[]): void {
+    const me = this.game.self;
+    const mag = this.equippedMag();
+    this.game.sendPhotonBlastDone(gauge);
+    if (this.pb.spend() === 'notReady') this.game.sendPhotonBlastReady(false);
+    this.pb.firing = false;
+    if (me) {
+      this.attacking.delete(me.clientId);
+      this.view?.resetGait(me.clientId);
+    }
+    if (!me || !mag) return;
+    const a = this.attackerStats();
+    const s = this.selfStats();
+    const power = pbPower(type, { atp: a.atp, equipAtp: a.equipAtp, evp: s.evp, ata: a.ata, synchro: mag.data2[0], iq: mag.data2[1] }, gauge, 1);
+    const name = `${PB_NAMES[type]} (power ${power.toFixed(1)})`;
+    const pos = this.view?.playerPositions().get(me.clientId);
+    if (pos) this.overlay?.techEffect(type === 4 ? 'resta' : type === 5 ? 'support' : 'light', pos.x, pos.y, pos.z, type <= 3 ? PB_RANGE / 3 : 20);
+    if (type <= 3) {
+      for (const e of targets) {
+        if (e.dead || !this.enemies.has(e.index)) continue;
+        this.applyEnemyHit(e, ENEMY_BASE_FLAGS, pbDamage(power, e.resist.elt), false, `${name}: `);
+      }
+    } else if (type === 4) {
+      // Group 6 (Resta) on the caster: HP + MST * 0.5 + power.
+      const heal = Math.round(Math.max(0, s.mst) * 0.5 + power);
+      this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
+      this.opts.log(`${name}: +${heal} HP (${this.damage.hp}/${this.damage.maxHp})`);
+    } else if (type === 5) {
+      // Anti, Deband, Shifta with the blast's power (ASSUMED: Anti's level is
+      // trunc(power)).
+      this.applyAnti(Math.trunc(power), name);
+      this.selfBuffs.apply(GROUP.deband, power);
+      this.selfBuffs.apply(GROUP.shifta, power);
+      this.opts.log(`${name}: Deband and Shifta`);
+    }
   }
 
   // One damaged (or missed) enemy: 6x0A with the new total, the number over
