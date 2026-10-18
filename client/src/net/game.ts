@@ -876,6 +876,23 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, buildEnemyState(enemyIndex, totalDamage, flags));
   }
 
+  // 6x2C (G_ImposeHold_6x2C, 0x14): {u8 0x2c, u8 5, u16 client id} {u16
+  // frames, u16 particle type, f32 x, f32 z, f32 radius^2}, as
+  // HandleHardAttackAction_0069375c builds it for the Grass Assassin's web.
+  sendImposeHold(frames: number, particle: number, x: number, z: number, radius2: number): void {
+    const b = new Uint8Array(0x14);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x2c;
+    b[1] = 5;
+    dv.setUint16(2, this.selfId, true);
+    dv.setUint16(4, frames & 0xffff, true);
+    dv.setUint16(6, particle & 0xffff, true);
+    dv.setFloat32(8, x, true);
+    dv.setFloat32(12, z, true);
+    dv.setFloat32(16, radius2, true);
+    this.conn.send(0x60, 0, b);
+  }
+
   // 6x9C (G_SetEnemyLowGameFlagsUltimate_6x9C, 8): {entity id 0x1000 | index}
   // {u32 status bits}, sent by 0x007877bc in Ultimate before the 6x0A whose
   // low six bits it carries (combat/enemystatus.ts).

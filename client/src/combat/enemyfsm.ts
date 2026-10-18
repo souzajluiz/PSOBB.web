@@ -20,16 +20,16 @@ import {
 import type { EnemyAttackData } from '../formats/battleparams.ts';
 import { STATUS } from './status.ts';
 
-const loop = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
-const once = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: false });
-const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+export const loop = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
+export const once = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: false });
+export const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 // ClampAngleDifference_007a8c74 in radians.
-function turnToward(from: number, to: number, max: number): number {
+export function turnToward(from: number, to: number, max: number): number {
   return wrap(from + Math.max(-max, Math.min(max, wrap(to - from))));
 }
 
-function nearest(targets: readonly AiTarget[], x: number, z: number, range: number): AiTarget | null {
+export function nearest(targets: readonly AiTarget[], x: number, z: number, range: number): AiTarget | null {
   let best: AiTarget | null = null;
   let bestSq = range * range;
   for (const t of targets) {
@@ -42,7 +42,7 @@ function nearest(targets: readonly AiTarget[], x: number, z: number, range: numb
   return best;
 }
 
-abstract class BrainBase implements EnemyBrain {
+export abstract class BrainBase implements EnemyBrain {
   abstract state: string;
   x: number;
   z: number;

@@ -1,5 +1,86 @@
 # Devlog
 
+## 2026-10-18: Caves enemies: Grass Assassin, Nano Dragon, Shark record, enemy shots
+
+**What changed:** two more Caves families run their own state machines
+(`combat/enemyfsmcaves.ts`): the Grass Assassin chases, slashes, spits its
+web (a 6x2C hold that roots the player for 180 frames) and, once enraged,
+dashes; the Nano Dragon wanders, circles, alternates its homing volley and
+its fire breath, and takes off / flies / lands. The Evil / Pal / Guil Shark
+keeps the Booma handlers it really uses, now with its own AI record. New
+shared pieces: enemy projectiles (`combat/enemyshots.ts`, drawn and resolved
+by `render/combat.ts`), enemy technique hits on the player, the player hold
+(`net/game.ts` sendImposeHold), super armor / invulnerable flags on a brain,
+and knockback scaled by the damage. Code: `combat/enemyfsmcaves.ts` (new),
+`combat/enemyshots.ts` (new), `combat/enemyai.ts`, `combat/enemyfsm.ts`
+(helpers exported), `combat/enemymotions.ts`, `render/combat.ts`,
+`net/game.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Enemy technique hits** (entity_hit_by_tech 0x00773afc): an enemy
+  attacker's base is MST * 0.5 (0x00978278) + power; group 0 (jump table
+  0x00977ea0 -> 0x00774cc7) multiplies it by 0.2 (0x00978250), truncated, no
+  resistance and no evasion roll.
+- **Shark** (shark_constructor, SetBoomaSubtype_00512f94): the Booma
+  dispatcher 0x0052b78c with the record 0x009bb200 + subtype * 0x1c: search
+  225 / 250 / 300, turn 1024 (0x009bb200 was cited for the Hildebear before;
+  it is the Shark's). Flinch row 6 of 0x009bb300 runs at 1.0.
+- **Grass Assassin** (ctor 0x005249c8, dispatcher 0x005224d0, table
+  0x009bbaa0, record 0x009bbb64 {400, 0.75, 256}): target every 30 frames;
+  attack pick 0x0052515c (enraged -> dash; else AttackData[0] slash, then
+  [1] web unless the target is held; range (10 + distance_x)^2 inside the
+  arc); chase 0x00523cb4 creeps at 0.75 * 0.125 until facing, then runs; the
+  slash 0x005238e8 (roll <= 0.5 picks motion 4 or 2, hit at frame 14,
+  knockback = the damage); the dash 0x00523024 (x2 speeds, length max(100,
+  d + 30 + 10), invulnerable crouch, each player hit once with knockback 2 *
+  damage, 150-frame cap, 90-frame rest); the web 0x00522af4 / 0x00522fb4 /
+  HandleHardAttackAction_0069375c (6x2C: 180 frames, particle 1, the
+  player's x / z, radius^2 0); enrage after a flinch below fparam1 of its HP.
+- **Nano Dragon** (ctor 0x0057f6b0, dispatcher 0x0057d734, table
+  0x009befc0, record 0x009bf0d0 {150, 0.46296, 768}): walk 0.46296 * 0.6,
+  drawn 15 + height; idle wander ((r + 1) * param2 * 0.4 from the spawn
+  point, 150 frames walking / 90 standing); combat circles 384 BAMS a frame;
+  a player within 400 inside 0xaaa: volley / breath alternately (only the
+  breath below 1/4 HP); the volley shoots one homing shot per player (up to
+  12, +-0x2000) at frame 20: fparam3 speed, steer fparam4 (x2 within 150)
+  growing by fparam5, 90 frames, iparam2; the breath at frame 20 flies at
+  fparam2, pierces, 500 units, iparam1; take-off rises 2.2 a frame from
+  frame 22 to 50, flies at fparam1, turns 1536, descends 2.3 a frame;
+  after a flinch that cost more than a quarter of its HP it breathes back.
+
+**Assumed:** the Grass Assassin's set fparam1 / fparam2 are the entry's
+param1 / param2 (inferred copy order), the dash "touch" as the bodies
+overlapping (10 + 5), and the hold blocks all movement (radius 0); the Nano
+Dragon's take-off takes the first of its three ray directions (no map rays),
+its combat wander heads for the target, its landing row starts at height
+40, the shots fly over flat ground and hit within their radius + 5, the
+breath and shots aim 10 above the player's feet, the mouth is 10 up, enemy
+technique hits do not knock back, shots are drawn as coloured balls.
+**Left out:** the Grass Assassin's emerge from the ground and the Ultimate
+web branch; the Nano Dragon's fly-in spawn, power-up on a kill (0xc) and
+its fall when killed in the air; the Pan Arms / Hidoom / Migium split and
+merge (the body's states are traced: shuffle 0x00581278, split at 1/3 HP
+into the HIDOOM / MIGIUM slots +1 / +2 with half the HP each, rejoin after
+900 frames; the arms' attack objects 0x005880c0 and the children's attack
+states are not), the Pofuilly Slime's split (its spawner hands out the
+never-used slots on a 3rd combo hit or a Barta hit), Del Lily's Megid.
+
+**Tests:** `tests/enemyfsmcaves.test.ts` (new): the Shark records and
+flinch row, the Grass Assassin's search, web hold, slash roll and damage
+knockback, enrage -> dash and its invulnerable crouch, the ambush mode; the
+Nano Dragon's 30-frame search, walk speed, volley / breath alternation and
+the low-HP breath, take-off to 50 and landing, the piercing breath's range,
+the homing shot.
+
+**Checked in Chrome** (WebHunter, Cave 1, HP raised and placement from the
+console): a Grass Assassin went idle > chase > web (`web hold for 180
+frames`, movement blocked, `hold released`) > slash; forced enraged it went
+crouch (invulnerable) > dash > rest. A Nano Dragon (its wave forced
+visible) went combat > volley > combat > breath, its shots and breath hit
+for 24 / 34 (technique hits); with the player 20 away it took off (lift
+65 = 15 + 50) and landed back in idle. The sharks got search 225 / 250 /
+300. No console errors.
+
 ## 2026-10-18: Window open / close animation and the opening wipe
 
 **What changed:** windows now open and close like the client's list

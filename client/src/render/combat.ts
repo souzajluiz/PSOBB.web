@@ -43,6 +43,8 @@ import {
   RappyFakeDeath,
   WolfAi,
 } from '../combat/enemyfsm.ts';
+import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
+import type { EnemyShot } from '../combat/enemyshots.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
 import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
@@ -198,6 +200,10 @@ interface PendingTechHit {
   ticks: number;
   apply: () => void;
 }
+
+// Client classes whose behaviour is a per-family FSM without a generic AI
+// profile (combat/enemyfsmcaves.ts, combat/enemyfsmmines.ts).
+const OWN_FSM = new Set(['TObjEneNanoDrago']);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -363,7 +369,7 @@ export class CombatView {
   // True while that player is in an attack, hit or death motion (LobbyView must
   // not play a gait motion over it, and the local player must not move).
   isAttacking = (clientId: number): boolean =>
-    this.attacking.has(clientId) || this.hurt.has(clientId) || (clientId === this.game.selfId && (this.damage.busy || this.status.immobile));
+    this.attacking.has(clientId) || this.hurt.has(clientId) || (clientId === this.game.selfId && (this.damage.busy || this.status.immobile || this.holdTicks > 0));
 
   attach(view: LobbyView): void {
     this.view = view;
@@ -476,7 +482,7 @@ export class CombatView {
         // monest_constructor: initdata_param2 / initdata_param3.
         monest = new MonestSpawner(head.slot.set.params[1], head.slot.set.params[2]);
       }
-      if (profile) {
+      if (profile || OWN_FSM.has(className)) {
         // initdata_param6 (set entry params[5]) is the subtype, as
         // formats/enemymodels.ts reads it.
         const subtype = Math.max(0, Math.trunc(head.slot.set.params[5]));
@@ -485,9 +491,18 @@ export class CombatView {
         const radius = collisionRadius(className, subtype, ultimate);
         const entityId = 0x1000 | head.index;
         const at = { x: instance.placed.world[0], z: instance.placed.world[2], angle: instance.placed.yaw };
+        const movement = params && mi !== null ? params.movement(difficulty, mi) : null;
+        const setParams = head.slot.set.params;
         if (className === 'TObjEneRe2Flower') ai = new LilyAi({ ...at, attack, radius, rng: () => this.rng() });
+        else if (className === 'TObjGrass') {
+          // AttackData [0] slash, [1] web, [2] dash (g_EnemyAttackStats).
+          const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [];
+          // ASSUMED: the set entry's param1 / param2 are the fparam1 / fparam2
+          // that 0x00786848 copies (the enrage fraction, the ambush run).
+          ai = new GrassAi({ ...at, attacks, radius, fparam1: setParams[0], fparam2: setParams[1], rng: () => this.rng() });
+        } else if (className === 'TObjEneNanoDrago') ai = new NanoDragonAi({ ...at, param2: setParams[1], movement, rng: () => this.rng() });
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
-        else ai = new EnemyAi({
+        else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
           z: instance.placed.world[2],
           angle: instance.placed.yaw,
@@ -779,7 +794,7 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
-      if (ai instanceof LilyAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       const r = ai.tick(targets, ended);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
@@ -790,14 +805,88 @@ export class CombatView {
       }
       root.rotation.y = r.angle;
       if (r.motion) this.playEnemyMotion(e, r.motion);
-      if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult);
+      if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale);
+      if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+      if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
+      if (r.hold && r.hold.clientId === this.game.selfId) this.imposeHold(r.hold, `E-${e.index.toString(16)} (${e.slot.type})`);
       if (r.status && r.status.clientId === this.game.selfId) {
         this.inflictStatus(r.status.type as StatusType, `E-${e.index.toString(16)} (${e.slot.type})`);
       }
       if (r.projectile && ai instanceof LilyAi) this.launchSpit(e, ai, r.projectile.x, r.projectile.z, r.projectile.angle);
     }
     this.tickSpits(targets);
+    this.tickShots(targets);
     this.tickFakeDeaths(targets);
+    if (this.holdTicks > 0 && --this.holdTicks === 0) this.opts.log('hold released');
+  }
+
+  // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
+
+  private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime; baseY: number; mesh: THREE.Mesh | null }> = [];
+
+  // ASSUMED look: a coloured ball per shot (the client's own effects and
+  // models are not drawn).
+  private launchShot(e: EnemyRuntime, shot: EnemyShot): void {
+    let mesh: THREE.Mesh | null = null;
+    try {
+      mesh = new THREE.Mesh(new THREE.SphereGeometry(shot.look.size, 8, 6), new THREE.MeshBasicMaterial({ color: shot.look.color }));
+      this.viewer.scene.add(mesh);
+    } catch {
+      mesh = null;
+    }
+    const baseY = e.instance.root.position.y - e.lift;
+    mesh?.position.set(shot.x, baseY + shot.y, shot.z);
+    this.shots.push({ shot, owner: e, baseY, mesh });
+  }
+
+  private tickShots(targets: AiTarget[]): void {
+    for (const s of this.shots) {
+      const hits = s.shot.tick(targets);
+      s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
+      for (const hit of hits) {
+        if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
+        const fx = s.shot.effect;
+        const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
+        if (fx.kind === 'tech') this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what);
+        else if (fx.kind === 'melee') this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult);
+        else this.inflictStatus(fx.status as StatusType, what);
+      }
+    }
+    for (const s of this.shots.filter((x) => x.shot.done)) {
+      s.mesh?.removeFromParent();
+      s.mesh?.geometry.dispose();
+      (s.mesh?.material as THREE.Material | undefined)?.dispose();
+    }
+    this.shots = this.shots.filter((x) => !x.shot.done);
+  }
+
+  // entity_hit_by_tech (0x00773afc) with group 0 on the local player: an
+  // enemy attacker's base is its MST * 0.5 (0x00978278) + power, and case 0
+  // (jump table 0x00977ea0 -> 0x00774cc7) multiplies it by 0.2 (0x00978250),
+  // truncated; no resistance, no evasion roll.
+  // ASSUMED: knockback 0 (try_knockdown_player's threshold was not traced).
+  private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string): void {
+    const view = this.view;
+    if (!view || this.damage.dead) return;
+    const me = view.playerPositions().get(this.game.selfId);
+    const ctx = this.difficultyParams;
+    const def = ENEMY_TYPE_PARAMS[e.slot.type];
+    const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
+    const damage = Math.trunc((mst * 0.5 + Math.max(0, power)) * Math.fround(0.2));
+    const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
+    this.damage.hit(damage, angle, 0, 0x1000 | e.index);
+    if (damage >= 1) this.gainPb(damage, true);
+    this.opts.log(`${what}: technique hit for ${damage}`);
+  }
+
+  // 6x2C on the local player (a Grass Assassin's web).
+  private holdTicks = 0;
+  private imposeHold(h: { frames: number; particle: number; x: number; z: number; radius2: number }, what: string): void {
+    if (this.damage.dead) return;
+    this.holdTicks = h.frames;
+    this.game.sendImposeHold(h.frames, h.particle, h.x, h.z, h.radius2);
+    this.view?.resetGait(this.game.selfId);
+    this.opts.log(`${what}: web hold for ${h.frames} frames`);
   }
 
   // --- per-family behaviour (combat/enemyfsm.ts) -----------------------------
@@ -976,7 +1065,7 @@ export class CombatView {
 
   // One enemy melee landing on a player: the hit roll and the damage of
   // FUN_00777664 / FUN_007732b8 with the attack's own multiplier.
-  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number): void {
+  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number, kbScale?: number): void {
     if (clientId !== this.game.selfId) return; // other clients resolve their own hits
     const view = this.view;
     const attacker = this.enemyAttackerOf(e);
@@ -996,7 +1085,8 @@ export class CombatView {
       total = rollDamage(attacker, defender, 0, this.rng, mult).damage;
     }
     const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
-    this.damage.hit(total, angle, knockback, 0x1000 | e.index);
+    // cause_knockback(kbScale * the damage try_hit_entity returned).
+    this.damage.hit(total, angle, kbScale !== undefined ? kbScale * total : knockback, 0x1000 | e.index);
     if (landed && total >= 1) this.gainPb(total, true);
     // The Ultimate wolves' and Mothmants' status rolls (combat/status.ts).
     const status = landed ? meleeHitStatus(e.slot.type, (this.game.info?.difficulty ?? 0) === 3, this.rng()) : null;
@@ -1385,6 +1475,12 @@ export class CombatView {
   // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
   private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string): void {
     const me = this.game.self;
+    if (e.ai?.invulnerable) {
+      // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
+      // "0" text and do nothing.
+      this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
+      return;
+    }
     const flags = baseFlags | applyDamage(e.stats, damage);
     this.sendEnemy(e, flags);
     // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
@@ -1394,7 +1490,7 @@ export class CombatView {
     if (damage >= 1 && me) e.ai?.onDamage(me.clientId);
     // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
-    else if (damage >= 1 && !e.status.locked) this.playDamage(e);
+    else if (damage >= 1 && !e.status.locked && !e.ai?.superArmor) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );

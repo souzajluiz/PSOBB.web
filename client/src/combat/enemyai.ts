@@ -59,6 +59,7 @@
 
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
+import type { EnemyShot } from './enemyshots.ts';
 
 export const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
@@ -161,8 +162,14 @@ export interface EnemyAiConfig {
 export const AI_CONFIG: Record<string, EnemyAiConfig> = {
   // g_BoomaHitboxParams @ 0x009bc880 (installed at booma_constructor+0x1c1).
   TObjEneBeast: { detect: [225, 250, 300], turnRate: 1024 },
-  // 0x009bb200 (the Hildebear constructor's `UNK_009bb1e4.field_0x1c + i*0x1C`).
+  // ASSUMED: the Hildebear's own record was not traced; 0x009bb200 (cited
+  // here before) is the Shark's (shark_constructor installs it).
   TObjEneMoja: { detect: [225, 250, 300], turnRate: 1024 },
+  // 0x009bb200 + subtype * 0x1c (shark_constructor, SetBoomaSubtype_00512f94):
+  // Evil / Pal / Guil Shark search 225 / 250 / 300, turn 1024. The Shark runs
+  // the Booma handlers (base ctor 0x0052b6ec, dispatcher 0x0052b78c): no
+  // behaviour of its own besides sounds and the attack trails.
+  TObjEneShark: { detect: [225, 250, 300], turnRate: 1024 },
   // g_SavageWolfConfig @ 0x009bb9ec (savage_wolf_constructor + 0x11e).
   TObjEneBm5Wolf: { detect: [225], turnRate: 1536 },
   // 0x009bb764 (the Monest constructor at 0x005191c0 + 0x128).
@@ -249,13 +256,22 @@ export interface AiFrame {
   x: number;
   z: number;
   angle: number; // radians
-  hit: { clientId: number; knockback: number; mult: number } | null; // the attack landed
+  // The attack landed. kbScale: cause_knockback(kbScale * the damage
+  // try_hit_entity returned) instead of the fixed `knockback` (Grass Assassin).
+  hit: { clientId: number; knockback: number; mult: number; kbScale?: number } | null;
   // Per-family FSMs (combat/enemyfsm.ts): a status effect landing on a player
   // without damage (Poison Lily's scream), a projectile to launch, and the
   // height of the model above the ground (Savage Wolf's leap).
   status?: { clientId: number; type: number } | null;
   projectile?: { x: number; z: number; angle: number } | null;
   lift?: number;
+  // Projectiles of the Caves / Mines FSMs (combat/enemyshots.ts).
+  shots?: EnemyShot[];
+  // A player hold (6x2C, the Grass Assassin's web): the player may not move
+  // farther than sqrt(radius2) from (x, z) for `frames`.
+  hold?: { clientId: number; frames: number; particle: number; x: number; z: number; radius2: number } | null;
+  // The model is hidden (a warping Sinow: vtable +0x174 / +0x178).
+  hidden?: boolean;
 }
 
 // What render/combat.ts drives: the generic FSM below or a per-family one.
@@ -266,6 +282,10 @@ export interface EnemyBrain {
   onDamage(clientId: number): void;
   resume(): string;
   kill(): void;
+  // Hits do not start the damage motion (flag 0x40000, the Garanz barrage).
+  readonly superArmor?: boolean;
+  // Hits do no damage (a crouching Grass Assassin, a cloaked Sinow ...).
+  readonly invulnerable?: boolean;
 }
 
 // One enemy's behaviour. Positions are world units, angles radians; tick() is

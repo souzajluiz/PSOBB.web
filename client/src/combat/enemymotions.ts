@@ -38,7 +38,12 @@ const TABLES: Record<string, EnemyCombatMotions> = {
   // (unknown_lily_handle_damage_taken), animation 5 (2, 0.5) the death state's.
   TObjEneRe2Flower: { damage: { index: 1, speed: 0.5 }, death: { index: 2, speed: 0.5 } },
   // 0x009bb300 has the same layout as TObjEneBeast (bm_ene_bm1_shark motions).
-  TObjEneShark: { damage: { index: 3, speed: 1.5 }, death: { index: 5, speed: 0.6 } },
+  // 0x009bb300 row 6 is the Shark's flinch at 1.0 (the Booma's is 1.5).
+  TObjEneShark: { damage: { index: 3, speed: 1 }, death: { index: 5, speed: 0.6 } },
+  // 0x009bbaa0 (Grass Assassin): row 5 flinch (0, 0.6), row 6 death (1, 0.4).
+  TObjGrass: { damage: { index: 0, speed: 0.6 }, death: { index: 1, speed: 0.4 } },
+  // 0x009befc0 (Nano Dragon): row 3 flinch (2, 0.8), row 4 death (3, 0.5).
+  TObjEneNanoDrago: { damage: { index: 2, speed: 0.8 }, death: { index: 3, speed: 0.5 } },
   TObjEneDimedian: { damage: { index: 3, speed: 1.5 }, death: { index: 5, speed: 0.6 } },
 };
 
