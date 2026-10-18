@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { MENU_LAYER } from '../classic/hud.ts';
+import { WindowAnim } from '../classic/windowanim.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
@@ -307,6 +308,9 @@ export class FieldHud {
   private frame(dt: number): void {
     if (this.disposed) return;
     this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
+    // PSOBBCharacterFile option_flags (+0x4ec): the window speed.
+    const full = this.opts.fullCharacter();
+    this.menu.speed = WindowAnim.speedOf(full && full.length >= 0x4f0 ? new DataView(full.buffer, full.byteOffset).getUint32(0x4ec, true) : undefined);
     this.acc += dt;
     while (this.acc >= FRAME) {
       this.acc -= FRAME;

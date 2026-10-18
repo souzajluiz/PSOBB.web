@@ -126,6 +126,7 @@ import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.
 import { CombatOverlay } from './combatoverlay.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
+import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
@@ -372,6 +373,9 @@ export class CombatView {
       this.hud = new PlayerHud(this.viewer, this.files);
       this.hud.log = this.opts.log;
     }
+    // PSOBBCharacterFile option_flags (+0x4ec): the window speed.
+    const full = this.opts.fullCharacter?.();
+    this.hud.windowSpeed = WindowAnim.speedOf(full && full.length >= 0x4f0 ? new DataView(full.buffer, full.byteOffset).getUint32(0x4ec, true) : undefined);
     this.levelUpFx ??= new LevelUpEffects(this.viewer, this.files, {
       position: (id) => this.view?.playerPositions().get(id) ?? null,
       litMaterials: (id) => this.view?.playerLitMaterials(id) ?? [],

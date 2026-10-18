@@ -1,5 +1,58 @@
 # Devlog
 
+## 2026-10-18: Window open / close animation and the opening wipe
+
+**What changed:** windows now open and close like the client's list
+windows: they fade in over the first 7.5 counter steps, their elements (bars,
+texts, numbers) are revealed by the opening wipe, and a closing window
+stretches wide and flat about its centre for 4 frames. The status window and
+the party members' windows run it fully (wipe per element); the field menu's
+leaf windows (Item Pack, Equip, MAG, Technique) fade in and close with it.
+The speed follows the character's window speed option (option_flags +0x4ec,
+bits 0x300). Code: `classic/windowanim.ts` (new), `classic/hud.ts`,
+`classic/fieldmenu.ts`, `classic/stage.ts` (windowFrames), `render/fieldhud.ts`,
+`render/playerhud.ts`, `render/combat.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- State: flags +0x2c (1 open, 2 animating, 4 close held, 0x20 silent), open
+  counter +0x5c, closing counter +0x22. Open
+  (UpdateListItemState_00712714 / MenuListItem_Initialize_00712c44): counter
+  0 (0x1000000 when the speed table 0x0097e4cc = {34, 51, 68, 0} gives 0),
+  flags |= 3, SE 0x572 unless silent. Close (play_sfx_for_closing_list_menu):
+  bit 4 while opening, else closing + SE 0x573.
+- unknown_closing_window per frame: counter += speed + 1
+  (GetCharacterOptionsBitfield_007be1d0, 1 without session data); open once
+  counter >= 7.5 (0x0096f754); closing ends when +0x22 reaches 4.5
+  (0x0096f758); a held close / reopen runs after.
+- Drawing: c = round(counter - 7.5) (0x0096f68c, x87 halves to even);
+  c < 0 gives the quads alpha (c + 7.5) / 7.5 (UIElement_SetTextColor
+  _0071bc8c, 0x00970098 / 0x00970094); each element shows (c - (x / W +
+  y / 21) * 7.5) * 17 px (ScrollbarObject_Render_0072a2c4, render_chat_bubbles
+  _and_more; 0x00970adc..ae4, 0x00970eb0..eb8); closing scales x by
+  1 + 0.5111 k and y by 1 - 0.2222 k about the centre (UIElement_SetScale
+  _0071bcec, 0x00970084..90, font_resizing_effect).
+
+**Assumed:** the status window opens when the HUD is created; texts are
+clipped at the revealed width (the client squeezes the partly shown glyph);
+a number's wipe starts at its left edge; the field menu runs one animation
+per leaf about the bounds of its frames, silent, without the element wipe
+(its frames and texts share one draw path), and windows a leaf opens later
+(Purpose, Amount) are not animated on their own. The window shine
+(UpdateAnimationStateMachine_00712834, RenderAnimationFrame_007129a8) is
+left out.
+
+**Tests:** `tests/windowanim.test.ts` (new): open timing per speed, c's
+rounding and the alpha, the wipe formula and pace, the 5-frame close and its
+scales, a close held during the opening, the option bits, the party windows
+fading in and closing.
+
+**Checked in Chrome** (WebHunter, Forest 1, window speed 0 from the save):
+the status window frozen at counter 18 showed "HP 48 /" half revealed and no
+bars yet; a party member removed from `game.players` closed its window
+stretched wide and flat (frozen at k = 2); Home -> Equip faded the leaf's
+windows in (alpha 0.47 at counter 3) and Backspace closed them with the same
+stretch while the main menu came back. No console errors.
+
 ## 2026-10-18: The message window's scrolling, timing and frame
 
 **What changed:** the player's message window (level-up lines, server text)

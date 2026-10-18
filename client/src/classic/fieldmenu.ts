@@ -24,7 +24,8 @@ import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
-import type { WindowSkin } from './stage.ts';
+import { windowFrames, type WindowSkin } from './stage.ts';
+import { WindowAnim, withWindowAnim } from './windowanim.ts';
 
 export const SAFE_MAPS = [0x00, 0x0f, 0x12, 0x2d];
 
@@ -88,6 +89,17 @@ export class FieldMenu {
   readonly menu: MainMenu;
   private leaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
   private env: FieldMenuEnv;
+  // The leaf's windows open and close with the list windows' animation
+  // (classic/windowanim.ts): fade in, then the 4-frame close about the
+  // centre. ASSUMED: one animation for all the windows of a leaf (the client
+  // runs one per window, opened together) about the bounds of its frames,
+  // silent (the menu's own cursor / decide / cancel sounds play), and the
+  // elements' wipe is left out for the menus (their frames and text share
+  // one draw path here).
+  readonly leafAnim = new WindowAnim(true, false);
+  private closingLeaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
+  private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
+  speed = 1;
 
   constructor(env: FieldMenuEnv) {
     this.env = env;
@@ -113,8 +125,15 @@ export class FieldMenu {
   }
 
   close(): void {
-    this.leaf = null;
+    this.closeLeaf();
     this.menu.close();
+  }
+
+  private closeLeaf(): void {
+    if (!this.leaf) return;
+    this.closingLeaf = this.leaf;
+    this.leaf = null;
+    this.leafAnim.close();
   }
 
   private entries(): MenuEntry[] {
@@ -131,6 +150,8 @@ export class FieldMenu {
     else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
     else return;
     this.menu.leafOpen = true;
+    this.closingLeaf = null;
+    this.leafAnim.open(this.speed);
   }
 
   // The inventory changed (net/items.ts): rebuild the item list.
@@ -141,12 +162,14 @@ export class FieldMenu {
   tick(): void {
     this.menu.tick();
     this.leaf?.tick();
+    this.leafAnim.tick(this.speed);
+    if (!this.leafAnim.visible) this.closingLeaf = null;
   }
 
   key(e: KeyboardEvent): void {
     if (this.leaf) {
       if (!this.leaf.key(e)) {
-        this.leaf = null;
+        this.closeLeaf();
         this.menu.leafOpen = false;
       }
       return;
@@ -158,7 +181,25 @@ export class FieldMenu {
   // right edge, classic/ingame.ts anchorX).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.menu.draw(ctx, skin, tex.menu);
-    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) this.leaf.draw(ctx, skin, tex, extra);
-    else if (this.leaf instanceof TechniqueMenu) this.leaf.draw(ctx, skin, extra);
+    const leaf = this.leaf ?? this.closingLeaf;
+    if (!leaf || !this.leafAnim.visible) return;
+    const rects: { x: number; y: number; w: number; h: number }[] = [];
+    windowFrames.record = (x, y, w, h) => rects.push({ x, y, w, h });
+    const b = this.leafBounds;
+    try {
+      withWindowAnim(ctx, this.leafAnim, b.x, b.y, b.w, b.h, () => {
+        if (leaf instanceof TechniqueMenu) leaf.draw(ctx, skin, extra);
+        else leaf.draw(ctx, skin, tex, extra);
+      });
+    } finally {
+      windowFrames.record = null;
+    }
+    if (rects.length) {
+      const x0 = Math.min(...rects.map((r) => r.x));
+      const y0 = Math.min(...rects.map((r) => r.y));
+      const x1 = Math.max(...rects.map((r) => r.x + r.w));
+      const y1 = Math.max(...rects.map((r) => r.y + r.h));
+      this.leafBounds = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
   }
 }

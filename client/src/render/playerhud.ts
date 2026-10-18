@@ -114,6 +114,12 @@ export class PlayerHud {
     this.messages.add(text);
   }
 
+  // The window speed option (classic/windowanim.ts WindowAnim.speedOf).
+  set windowSpeed(speed: number) {
+    this.status.speed = speed;
+    this.party.speed = speed;
+  }
+
   // One rendered frame: advance the 30 Hz HUD frames, then draw. `party`
   // gives the party members' windows their values by client slot.
   frame(dt: number, values: StatusValues, selfSlot = -1, party: (slot: number) => PartyValues | null = () => null): void {

@@ -65,6 +65,7 @@
 // 0x00973084), and the HP / TP texts take the same colour (white otherwise).
 
 import { drawGameText, gameTextWidth } from './gametext.ts';
+import { clipReveal, WindowAnim, withWindowAnim } from './windowanim.ts';
 
 export const STATUS_WINDOW = { x: 28, y: 37, w: 228, h: 76 } as const;
 
@@ -205,6 +206,16 @@ export function drawGlyphNumber(ctx: CanvasRenderingContext2D, font: CanvasImage
   }
 }
 
+// An element of a window under its opening wipe: drawn clipped to the part
+// that shows, from its left edge (x, y relative to the window; `w` the
+// content width, the window's own with flag 0x800).
+function wiped(ctx: CanvasRenderingContext2D, anim: WindowAnim, w: number, ex: number, ey: number, left: number, top: number, draw: () => void): void {
+  const r = anim.reveal(ex, ey, w);
+  ctx.save();
+  if (clipReveal(ctx, left, top, r, GLYPH_HEIGHT + 4)) draw();
+  ctx.restore();
+}
+
 // --- bars --------------------------------------------------------------------
 
 // HP / TP bar colours of the template and the update functions.
@@ -304,8 +315,9 @@ function drawBarFill(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, x: n
   drawModulated(ctx, tex, 252, 30, end, BAR_HEIGHT, x + width - 4, y, end, BAR_HEIGHT, argb);
 }
 
-// ScrollbarObject_Render_0072a2c4 without the window-opening wipe.
-export function drawBar(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, bar: BarState, x: number, y: number, colors: { heal: Argb; damage: Argb }): void {
+// ScrollbarObject_Render_0072a2c4; `limit` is the window-opening wipe's
+// width (classic/windowanim.ts): both fills are cut to it.
+export function drawBar(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, bar: BarState, x: number, y: number, colors: { heal: Argb; damage: Argb }, limit = Infinity): void {
   const target = bar.widthOf(bar.value);
   let long: number;
   let short: number;
@@ -319,6 +331,9 @@ export function drawBar(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, b
     short = bar.shown;
     under = colors.heal;
   }
+  if (limit <= 0) return;
+  long = Math.min(long, limit);
+  short = Math.min(short, limit);
   if (long <= 0) return;
   drawBarFill(ctx, tex, x, y, long, bar.width, under);
   drawBarFill(ctx, tex, x, y, short, bar.width, bar.color);
@@ -424,6 +439,10 @@ export class StatusWindow {
   readonly hp = new BarState(BAR_COLORS.hp.normal);
   readonly tp = new BarState(BAR_COLORS.tp.normal);
   readonly shake = new WindowShake();
+  // Template flags 0xb28: silent (0x20), no inset (0x800). ASSUMED: it opens
+  // with the HUD when the floor loads.
+  readonly anim = new WindowAnim(true, false);
+  speed = 1; // the window speed option (classic/windowanim.ts)
   hpText: Argb = BAR_COLORS.hp.text;
   tpText: Argb = BAR_COLORS.tp.text;
   values: StatusValues = { name: '', slot: 0, level: 1, hp: 0, maxHp: 0, tp: 0, maxTp: 0, pb: 0, dead: false };
@@ -446,40 +465,58 @@ export class StatusWindow {
     this.hp.tick();
     this.tp.tick();
     this.shake.tick(rng);
+    if (!this.anim.visible) this.anim.open(this.speed);
+    this.anim.tick(this.speed);
   }
 
   draw(ctx: CanvasRenderingContext2D, tex: HudTextures, wx = STATUS_WINDOW.x, wy = STATUS_WINDOW.y): void {
     const v = this.values;
     wx += this.shake.x;
     wy += this.shake.y;
-    // render_player_hud_bg: gauge, corner piece, window.
-    drawPbGauge(ctx, wx, wy, v.pb);
-    drawModulated(ctx, tex.panel, 118, 80, 69, 80, 0, 0, 69, 80);
-    drawModulated(ctx, tex.panel, 0, 0, 228, 76, wx, wy, 228, 76);
-    // Elements in list order.
-    drawModulated(ctx, tex.icons, 34 * (v.slot & 3), 202, 34, 29, wx + 27, wy + 16, 34, 29);
-    // Name: the player's name colour (+0x948), red while dead
-    // (QuickMenuUpdatePlayerInfo_00742454).
-    drawGlyphText(ctx, tex.font, v.name, wx + 124, wy + 67, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff));
-    drawGlyphNumber(ctx, tex.font, v.level, wx + 82, wy + 59);
-    drawBar(ctx, tex.panel, this.hp, wx + 90, wy + 24, BAR_COLORS.hp);
-    drawBar(ctx, tex.panel, this.tp, wx + 90, wy + 48, BAR_COLORS.tp);
-    drawGlyphText(ctx, tex.font, 'Lv', wx + 30, wy + 59);
-    this.drawValue(ctx, tex.font, 'HP', v.hp, v.maxHp, wx, wy + 9, this.hpText);
-    this.drawValue(ctx, tex.font, 'TP', v.tp, v.maxTp, wx, wy + 33, this.tpText);
-    // Element 14: the gauge number, centred on x 68.
-    const pb = Math.min(Math.max(0, Math.round(v.pb)), 500);
-    drawGlyphNumber(ctx, tex.font, pb, wx + 68 + numberWidth(pb) * 0.5, wy + 13);
-    if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx, wy);
+    const a = this.anim;
+    const W = STATUS_WINDOW.w;
+    const text = (ex: number, ey: number, left: number, draw: () => void) => wiped(ctx, a, W, ex, ey, wx + left, wy + ey, draw);
+    withWindowAnim(ctx, a, wx, wy, STATUS_WINDOW.w, STATUS_WINDOW.h, () => {
+      // render_player_hud_bg: gauge, corner piece, window.
+      drawPbGauge(ctx, wx, wy, v.pb);
+      drawModulated(ctx, tex.panel, 118, 80, 69, 80, 0, 0, 69, 80);
+      drawModulated(ctx, tex.panel, 0, 0, 228, 76, wx, wy, 228, 76);
+      // Elements in list order.
+      drawModulated(ctx, tex.icons, 34 * (v.slot & 3), 202, 34, 29, wx + 27, wy + 16, 34, 29);
+      // Name: the player's name colour (+0x948), red while dead
+      // (QuickMenuUpdatePlayerInfo_00742454).
+      text(124, 67, 124, () => drawGlyphText(ctx, tex.font, v.name, wx + 124, wy + 67, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff)));
+      text(82, 59, 82 - numberWidth(v.level), () => drawGlyphNumber(ctx, tex.font, v.level, wx + 82, wy + 59));
+      drawBar(ctx, tex.panel, this.hp, wx + 90, wy + 24, BAR_COLORS.hp, a.reveal(90, 24, W));
+      drawBar(ctx, tex.panel, this.tp, wx + 90, wy + 48, BAR_COLORS.tp, a.reveal(90, 48, W));
+      text(30, 59, 30, () => drawGlyphText(ctx, tex.font, 'Lv', wx + 30, wy + 59));
+      this.drawValue(ctx, tex.font, 'HP', v.hp, v.maxHp, wx, wy, 9, this.hpText, text);
+      this.drawValue(ctx, tex.font, 'TP', v.tp, v.maxTp, wx, wy, 33, this.tpText, text);
+      // Element 14: the gauge number, centred on x 68.
+      const pb = Math.min(Math.max(0, Math.round(v.pb)), 500);
+      text(68, 13, 68 - numberWidth(pb) * 0.5, () => drawGlyphNumber(ctx, tex.font, pb, wx + 68 + numberWidth(pb) * 0.5, wy + 13));
+      if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx, wy);
+    });
   }
 
-  private drawValue(ctx: CanvasRenderingContext2D, font: CanvasImageSource, label: string, value: number, max: number, wx: number, y: number, argb: Argb): void {
-    drawGlyphText(ctx, font, label, wx + 90, y, argb);
-    const right = wx + 210;
-    drawGlyphNumber(ctx, font, max, right, y, argb);
-    const x = right - numberWidth(max) - 12;
-    drawGlyphText(ctx, font, '/', x, y, argb);
-    drawGlyphNumber(ctx, font, value, x, y, argb);
+  private drawValue(
+    ctx: CanvasRenderingContext2D,
+    font: CanvasImageSource,
+    label: string,
+    value: number,
+    max: number,
+    wx: number,
+    wy: number,
+    ey: number,
+    argb: Argb,
+    text: (ex: number, ey: number, left: number, draw: () => void) => void,
+  ): void {
+    const y = wy + ey;
+    text(90, ey, 90, () => drawGlyphText(ctx, font, label, wx + 90, y, argb));
+    text(210, ey, 210 - numberWidth(max), () => drawGlyphNumber(ctx, font, max, wx + 210, y, argb));
+    const x = 210 - numberWidth(max) - 12;
+    text(x, ey, x, () => drawGlyphText(ctx, font, '/', wx + x, y, argb));
+    text(x, ey, x - numberWidth(value), () => drawGlyphNumber(ctx, font, value, wx + x, y, argb));
   }
 }
 
@@ -575,6 +612,13 @@ export class PartyWindow {
   readonly hp = new BarState(BAR_COLORS.hp.normal, PARTY_BAR_WIDTH);
   readonly shake = new WindowShake();
   values: PartyValues | null = null;
+  // What the window showed last (drawn while it closes).
+  private last: PartyValues | null = null;
+  // Template flags 0xb28: silent, no inset. It opens when its player is
+  // there (SinowberillChallengeObjectListWindow_UpdateListItemState_00712714)
+  // and closes when not (play_sfx_for_closing_list_menu).
+  readonly anim = new WindowAnim(true, false);
+  speed = 1;
   // Source and render y (+0x34 / +0x44) and the move counter (+0x50).
   y: number = PARTY_WINDOW.y;
   renderY: number = PARTY_WINDOW.y;
@@ -598,6 +642,10 @@ export class PartyWindow {
   // One 30 Hz frame of the window's update (0x0073ead8).
   tick(v: PartyValues | null, rng: Rng = Math.random): void {
     this.values = v;
+    if (v) this.last = v;
+    if (v) this.anim.open(this.speed);
+    else this.anim.close();
+    this.anim.tick(this.speed);
     if (v) {
       if (v.hp < this.hp.value) this.shake.start();
       this.hp.max = v.maxHp;
@@ -620,17 +668,22 @@ export class PartyWindow {
   }
 
   draw(ctx: CanvasRenderingContext2D, tex: HudTextures): void {
-    const v = this.values;
-    if (!v) return;
+    const v = this.values ?? this.last;
+    if (!v || !this.anim.visible) return;
     const wx = PARTY_WINDOW.x + this.shake.x;
     const wy = this.renderY + this.shake.y;
-    drawModulated(ctx, tex.panel, 0, 180, 114, 46, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h);
-    drawModulated(ctx, tex.icons, 34 * (this.slot & 3), 202, 34, 29, wx + 7, wy + 7, 34, 29);
-    drawGlyphText(ctx, tex.font, v.name, wx + 45, wy + 40, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff));
-    drawGlyphNumber(ctx, tex.font, v.level, wx + 100, wy + 19);
-    drawBar(ctx, tex.panel, this.hp, wx + 44, wy + 7, BAR_COLORS.hp);
-    drawGlyphText(ctx, tex.font, 'Lv', wx + 48, wy + 19);
-    if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx + PARTY_ICON_POS.x - STATUS_ICON_POS.x, wy + PARTY_ICON_POS.y - STATUS_ICON_POS.y);
+    const a = this.anim;
+    const W = PARTY_WINDOW.w;
+    const text = (ex: number, ey: number, left: number, draw: () => void) => wiped(ctx, a, W, ex, ey, wx + left, wy + ey, draw);
+    withWindowAnim(ctx, a, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h, () => {
+      drawModulated(ctx, tex.panel, 0, 180, 114, 46, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h);
+      drawModulated(ctx, tex.icons, 34 * (this.slot & 3), 202, 34, 29, wx + 7, wy + 7, 34, 29);
+      text(45, 40, 45, () => drawGlyphText(ctx, tex.font, v.name, wx + 45, wy + 40, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff)));
+      text(100, 19, 100 - numberWidth(v.level), () => drawGlyphNumber(ctx, tex.font, v.level, wx + 100, wy + 19));
+      drawBar(ctx, tex.panel, this.hp, wx + 44, wy + 7, BAR_COLORS.hp, a.reveal(44, 7, W));
+      text(48, 19, 48, () => drawGlyphText(ctx, tex.font, 'Lv', wx + 48, wy + 19));
+      if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx + PARTY_ICON_POS.x - STATUS_ICON_POS.x, wy + PARTY_ICON_POS.y - STATUS_ICON_POS.y);
+    });
   }
 }
 
@@ -647,9 +700,12 @@ export class PartyWindows {
     for (let i = 0; i < PARTY_WINDOWS; i++) this.windows.push(new PartyWindow((slot + 1 + i) & 3));
   }
 
+  speed = 1;
+
   tick(values: (slot: number) => PartyValues | null, rng: Rng = Math.random): void {
     let y: number = PARTY_WINDOW.y;
     for (const w of this.windows) {
+      w.speed = this.speed;
       const v = values(w.slot);
       if (v) {
         w.place(y);

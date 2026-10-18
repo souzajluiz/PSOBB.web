@@ -188,7 +188,12 @@ export function inWindowSpace(ctx: CanvasRenderingContext2D, stage: Stage, fn: (
 // 32x32 corners (halved when the window is smaller than 64), edges and centre
 // tiled in 32-texel steps, the last tile cut short (its UVs too). The height
 // is rounded up to a multiple of 4; vertex color = style color (white).
+// Collects the frames drawn while it is set (classic/fieldmenu.ts uses it for
+// the bounds of a menu leaf's windows).
+export const windowFrames: { record: ((x: number, y: number, w: number, h: number) => void) | null } = { record: null };
+
 export function drawWindowFrame(ctx: CanvasRenderingContext2D, tex: CanvasImageSource, x: number, y: number, w: number, h: number): void {
+  windowFrames.record?.(x, y, w, h);
   const hi = Math.trunc(h);
   const hq = hi + ((4 - (hi & 3)) & 3);
   const cw = Math.min(32, w / 2);
