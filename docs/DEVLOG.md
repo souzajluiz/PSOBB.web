@@ -1,5 +1,60 @@
 # Devlog
 
+## 2026-10-18: Party members' windows
+
+**What changed:** the field HUD now shows the other players' small windows
+under the status window (colour badge, name, level, HP bar), stacked and
+sliding into place like the client's, with the hit shake (also on the local
+status window) and the other players' HP kept from their subcommands. Code:
+`classic/hud.ts` (PartyWindow / PartyWindows / WindowShake),
+`combat/partyhp.ts` (new), `render/playerhud.ts`, `render/combat.ts`,
+`net/lobby.ts` / `net/game.ts` (HP stat, HP materials and name colour of
+64 / 65 entries and 6x70).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Windows:** QuickmenuobjectConstructor_00716354 makes three
+  (CreateQuestListEntry_0073ea0c) on any map but the lobby, for client slots
+  (own + 1 + i) & 3; base ChallengeMenuListWindow_Constructor_00742174,
+  vtable 0x00b41250, GUI position 0xbc = (30, 116), template 0x009f335c =
+  {114, 46, elements 0x009f32a0, flags 0xb28}. Render 0x0073eb60: texture 13
+  texels (0, 180)-(114, 226); elements: badge (7, 7) 34x29 at (34 * slot,
+  202) of texture 0, name (45, 40), level number right edge (100, 19), HP bar
+  (44, 7) 57 wide (status window colours and hold / slide rules), "Lv" (48,
+  19); status icons at GUI 0xbd = (117, 7).
+- **Stacking:** QuickMenuObject_UpdatePlayerListStates_00716858: y from 116,
+  55 apart (0x0096fe78) for the present players; a changed y moves the window
+  over 15 frames (+0x50 = 0xf, render += (source - render) / n,
+  UpdateRenderTransition_00710ee4); an absent player's window closes.
+- **Shake:** QuickMenuStatusBarUpdateHP_007422c4 sets +0x60 = 4 when HP went
+  down; QuickMenuUpdateListItemFloatingOffset_007429b0 offsets the render
+  position by rand / 32768 * 5 at angle rand / 32768 * 65536 for 4 frames.
+- **Remote HP:** 6x4B / 6x4C current_hp (action_get_hit_flinch 0x0069aa2c,
+  ClampEntityHP_00770b58), 6x2F type 0 set / 1 add / 2 full
+  (HandlePlayerHPModification_006933c0, ignored when dead), 6x30 new stats and
+  hp = max_hp1 on a field (UpdatePlayerStatsAndLevelMessage_006928e4), 6x4D
+  dead (name red, QuickMenuUpdatePlayerInfo_00742454), 6x70 current_hp +
+  materials + stats; max HP with the local formula (maxHpFor).
+
+**Assumed:** remote max HP leaves out equipment bonuses (as the local one);
+a player seen through a 64 / 65 entry starts full; a 6x4F revive gives max HP
+/ 2 (PlayerRestoreHealthAndTP_0068fddc); 6x9A what 0 / 3 subtracts / adds HP
+on the player whose client id is the entity index (handler 0x00779df4 not
+decoded); the window's other hide conditions (warp / quest states of
+UpdatePlayerListStates) and the photon-blast badge positions are left out;
+windows appear and close at once (the open / close animation is a later
+entry). Remote players' status icons are not tracked.
+
+**Tests:** `tests/party.test.ts` (new): slots, stacking and the 15-frame move,
+the layout (background, badge, bar, "Lv", level, name), the shake, and the
+6x4B / 6x2F / 6x9A / 6x4D / 6x4F / 6x70 HP rules.
+
+**Checked in Chrome** (WebHunter in a new game, Pioneer 2): two party members
+injected into `game.players` from the console (no second account), then 6x4B
+/ 6x2F / 6x4D pushed through the combat subcommand handler: the two windows
+stood under the status window at y 116 / 171 with their badges, names and
+levels; the hit held the red gap and faded the bar to the low colour, 6x2F
+type 2 refilled it, 6x4D turned the name red with an empty bar.
+
 ## 2026-10-18: Photon blasts
 
 **What changed:** the MAG's photon blast gauge now charges from damage dealt

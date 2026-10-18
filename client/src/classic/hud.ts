@@ -380,24 +380,60 @@ export interface StatusValues {
   maxTp: number;
   pb: number; // photon blast gauge
   dead: boolean;
+  // PlayerVisualConfig name_color (ARGB, the player's +0x948).
+  nameColor?: Argb;
   // get_monster_status icons of the player's status slots, in slot order
   // (combat/buffs.ts statusIcon).
   statusIcons?: readonly number[];
+}
+
+// The hit shake of a player's window (QuickMenuStatusBarUpdateHP_007422c4
+// sets +0x60 = 4 when the HP went down; QuickMenuUpdateListItemFloatingOffset
+// _007429b0 then moves the render position by a random step each frame:
+// angle = rand / 32768 * 65536 (0x00973050 / 0x00973054), distance =
+// rand / 32768 * 5 (0x0097304c), on top of the position the render
+// transition just reset it to, so the window jitters for 4 frames).
+export const SHAKE_FRAMES = 4;
+export const SHAKE_DISTANCE = 5;
+export type Rng = () => number; // [0, 1), like rand() / 32768
+
+export class WindowShake {
+  frames = 0;
+  x = 0;
+  y = 0;
+
+  start(): void {
+    this.frames = SHAKE_FRAMES;
+  }
+
+  tick(rng: Rng = Math.random): void {
+    this.x = 0;
+    this.y = 0;
+    if (this.frames <= 0) return;
+    this.frames--;
+    const angle = Math.round(rng() * 65536);
+    const d = rng() * SHAKE_DISTANCE;
+    const rad = (angle / 0x10000) * Math.PI * 2;
+    this.x = Math.cos(rad) * d;
+    this.y = Math.sin(rad) * d;
+  }
 }
 
 // The status window's state across frames (bars and their colours).
 export class StatusWindow {
   readonly hp = new BarState(BAR_COLORS.hp.normal);
   readonly tp = new BarState(BAR_COLORS.tp.normal);
+  readonly shake = new WindowShake();
   hpText: Argb = BAR_COLORS.hp.text;
   tpText: Argb = BAR_COLORS.tp.text;
   values: StatusValues = { name: '', slot: 0, level: 1, hp: 0, maxHp: 0, tp: 0, maxTp: 0, pb: 0, dead: false };
 
   // One 30 Hz frame: QuickMenuStatusBarUpdateHP_007422c4 /
-  // QuickMenuTPBarUpdate_00742378 then the bar animations.
-  tick(v: StatusValues): void {
+  // QuickMenuTPBarUpdate_00742378 then the bar animations and the shake.
+  tick(v: StatusValues, rng: Rng = Math.random): void {
     this.values = v;
     const hpLow = v.hp <= v.maxHp * LOW_FRACTION;
+    if (v.hp < this.hp.value) this.shake.start();
     this.hp.max = v.maxHp;
     this.hp.value = v.hp;
     this.hp.fadeTo(hpLow ? BAR_COLORS.hp.low : BAR_COLORS.hp.normal);
@@ -409,10 +445,13 @@ export class StatusWindow {
     this.tpText = tpLow ? BAR_COLORS.tp.lowText : BAR_COLORS.tp.text;
     this.hp.tick();
     this.tp.tick();
+    this.shake.tick(rng);
   }
 
   draw(ctx: CanvasRenderingContext2D, tex: HudTextures, wx = STATUS_WINDOW.x, wy = STATUS_WINDOW.y): void {
     const v = this.values;
+    wx += this.shake.x;
+    wy += this.shake.y;
     // render_player_hud_bg: gauge, corner piece, window.
     drawPbGauge(ctx, wx, wy, v.pb);
     drawModulated(ctx, tex.panel, 118, 80, 69, 80, 0, 0, 69, 80);
@@ -421,7 +460,7 @@ export class StatusWindow {
     drawModulated(ctx, tex.icons, 34 * (v.slot & 3), 202, 34, 29, wx + 27, wy + 16, 34, 29);
     // Name: the player's name colour (+0x948), red while dead
     // (QuickMenuUpdatePlayerInfo_00742454).
-    drawGlyphText(ctx, tex.font, v.name, wx + 124, wy + 67, v.dead ? 0xffff0000 : 0xffffffff);
+    drawGlyphText(ctx, tex.font, v.name, wx + 124, wy + 67, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff));
     drawGlyphNumber(ctx, tex.font, v.level, wx + 82, wy + 59);
     drawBar(ctx, tex.panel, this.hp, wx + 90, wy + 24, BAR_COLORS.hp);
     drawBar(ctx, tex.panel, this.tp, wx + 90, wy + 48, BAR_COLORS.tp);
@@ -480,6 +519,148 @@ export function drawStatusIcons(ctx: CanvasRenderingContext2D, tex: CanvasImageS
     const x = wx + STATUS_ICON_POS.x + k * STATUS_ICON_STEP;
     drawModulated(ctx, tex, t[0], t[1], STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h, x, wy + STATUS_ICON_POS.y, STATUS_ICON_SIZE.w, STATUS_ICON_SIZE.h);
     k++;
+  }
+}
+
+// --- party members' windows ----------------------------------------------------
+
+// The other players' small windows under the status window. The player's
+// HUD (QuickmenuobjectConstructor_00716354) creates three of them on any map
+// but the lobby (CreateQuestListEntry_0073ea0c(i), i = 0..2), for the client
+// slots (own slot + 1 + i) & 3, each a ChallengeMenuListWindow (base
+// constructor 0x00742174) with the vtable 0x00b41250 at GUI position 0xbc =
+// (30, 116) of the table at 0x00971f40, template 0x009f335c = {114, 46,
+// element list 0x009f32a0, flags 0xb28}. Its update (0x0073ead8) runs
+// QuickMenuClearSelection_00742430 (name), QuestListEntryUpdate_0073eb28
+// (QuickMenuStatusBarUpdateHP_007422c4 + QuickMenuLevelUpdate_00742404),
+// QuickMenuUpdateListItemPosition_0074253c (badge), the status icons at GUI
+// 0xbd = (117, 7), the render transition and the hit shake; its render
+// (QuestListEntryRender_0073eb3c -> 0x0073eb60) draws texture 13 texels
+// (0, 180)-(114, 226) (UVs 0 / 0.703125 / 0.4453125 / 0.8828125) at the
+// render position, 114 x 46 (0x00971f14 / 0x00971f10), then the elements:
+//    #  type        record (relative to the window)
+//    0  6 sprite    (7, 7) 34x29 of f256_hyouji.prs texture 0, re-pointed to
+//                   (34 * slot, 202) like the status window's badge
+//    1  3 text      (45, 40) the player's name, flags 4
+//    2  4 number    (100, 19) the level (right edge)
+//    3  2 bar       (44, 7) 57 wide, 0xff00ff15, heal 0xff00ca9e, damage
+//                   0xffff2924 (the status window's HP bar rules)
+//    4  3 text "Lv" (48, 19)
+// QuickMenuObject_UpdatePlayerListStates_00716858 stacks the windows: from
+// y = 116 (get_gui_position_y(0xbc)), each window whose player is present
+// gets that y as its source position (with a 15-frame move, +0x50 = 0xf, when
+// it changed) and the next one is 55 lower (0x0096fe78); a window whose
+// player is gone is closed (play_sfx_for_closing_list_menu). The move
+// (SinowberillChallengeObjectListWindow_UpdateRenderTransition_00710ee4):
+// render += (source - render) / n each frame while n counts down.
+export const PARTY_WINDOW = { x: 30, y: 116, w: 114, h: 46 } as const;
+export const PARTY_SPACING = 55;
+export const PARTY_MOVE_FRAMES = 15;
+export const PARTY_BAR_WIDTH = 57;
+export const PARTY_ICON_POS = { x: 117, y: 7 } as const;
+export const PARTY_WINDOWS = 3;
+
+export interface PartyValues {
+  name: string;
+  level: number; // displayed (1-based)
+  hp: number;
+  maxHp: number;
+  dead: boolean;
+  nameColor?: Argb;
+  statusIcons?: readonly number[];
+}
+
+export class PartyWindow {
+  readonly slot: number;
+  readonly hp = new BarState(BAR_COLORS.hp.normal, PARTY_BAR_WIDTH);
+  readonly shake = new WindowShake();
+  values: PartyValues | null = null;
+  // Source and render y (+0x34 / +0x44) and the move counter (+0x50).
+  y: number = PARTY_WINDOW.y;
+  renderY: number = PARTY_WINDOW.y;
+  private move = 0;
+
+  constructor(slot: number) {
+    this.slot = slot;
+  }
+
+  get shown(): boolean {
+    return this.values !== null;
+  }
+
+  // QuickMenuObject_UpdatePlayerListStates_00716858's placement.
+  place(y: number): void {
+    if (y === this.y) return;
+    this.y = y;
+    this.move = PARTY_MOVE_FRAMES;
+  }
+
+  // One 30 Hz frame of the window's update (0x0073ead8).
+  tick(v: PartyValues | null, rng: Rng = Math.random): void {
+    this.values = v;
+    if (v) {
+      if (v.hp < this.hp.value) this.shake.start();
+      this.hp.max = v.maxHp;
+      this.hp.value = v.hp;
+      this.hp.fadeTo(v.hp <= v.maxHp * LOW_FRACTION ? BAR_COLORS.hp.low : BAR_COLORS.hp.normal);
+    } else {
+      // QuickMenuStatusBarReset_00742120.
+      this.hp.max = 0;
+      this.hp.value = 0;
+      this.hp.fadeTo(BAR_COLORS.hp.normal, 1);
+    }
+    if (this.move > 0) {
+      this.renderY += (this.y - this.renderY) / this.move;
+      this.move--;
+    } else {
+      this.renderY = this.y;
+    }
+    this.hp.tick();
+    this.shake.tick(rng);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, tex: HudTextures): void {
+    const v = this.values;
+    if (!v) return;
+    const wx = PARTY_WINDOW.x + this.shake.x;
+    const wy = this.renderY + this.shake.y;
+    drawModulated(ctx, tex.panel, 0, 180, 114, 46, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h);
+    drawModulated(ctx, tex.icons, 34 * (this.slot & 3), 202, 34, 29, wx + 7, wy + 7, 34, 29);
+    drawGlyphText(ctx, tex.font, v.name, wx + 45, wy + 40, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff));
+    drawGlyphNumber(ctx, tex.font, v.level, wx + 100, wy + 19);
+    drawBar(ctx, tex.panel, this.hp, wx + 44, wy + 7, BAR_COLORS.hp);
+    drawGlyphText(ctx, tex.font, 'Lv', wx + 48, wy + 19);
+    if (tex.status) drawStatusIcons(ctx, tex.status, v.statusIcons ?? [], wx + PARTY_ICON_POS.x - STATUS_ICON_POS.x, wy + PARTY_ICON_POS.y - STATUS_ICON_POS.y);
+  }
+}
+
+// The three windows of the local player's HUD.
+export class PartyWindows {
+  readonly windows: PartyWindow[] = [];
+  private self = -1;
+
+  // The slots follow the local client id (CreateQuestListEntry_0073ea0c).
+  setSelf(slot: number): void {
+    if (slot === this.self) return;
+    this.self = slot;
+    this.windows.length = 0;
+    for (let i = 0; i < PARTY_WINDOWS; i++) this.windows.push(new PartyWindow((slot + 1 + i) & 3));
+  }
+
+  tick(values: (slot: number) => PartyValues | null, rng: Rng = Math.random): void {
+    let y: number = PARTY_WINDOW.y;
+    for (const w of this.windows) {
+      const v = values(w.slot);
+      if (v) {
+        w.place(y);
+        y += PARTY_SPACING;
+      }
+      w.tick(v, rng);
+    }
+  }
+
+  draw(ctx: CanvasRenderingContext2D, tex: HudTextures): void {
+    for (const w of this.windows) w.draw(ctx, tex);
   }
 }
 

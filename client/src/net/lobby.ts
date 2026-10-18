@@ -31,6 +31,12 @@ export interface LobbyPlayer {
   // A quest's NPC player (6x69, quest/npcplayers.ts): the npcplayerchar.dat
   // template it was made from.
   npcTemplate?: number;
+  // PlayerStats char_stats.hp and the inventory's HP materials byte (the
+  // party members' windows compute max HP from them: combat/partyhp.ts),
+  // and PlayerVisualConfig name_color (ARGB).
+  hpStat?: number;
+  hpMaterials?: number;
+  nameColor?: number;
 }
 
 export interface LobbyEvents {
@@ -84,6 +90,9 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
     charClass: data[shared + 0x21],
     sectionId: data[shared + 0x20],
     level: dv.getUint32(o + DISP + 0x18, true) + 1, // PlayerStats.level (0-based)
+    hpStat: dv.getUint16(o + DISP + 0x06, true),
+    hpMaterials: data[o + 0x44 + 1],
+    nameColor: dv.getUint32(shared + 0x08, true),
     appearance,
     position: { x: 0, y: 0, z: 0 },
     angle: 0,

@@ -14,7 +14,9 @@ import {
   levelUpText,
   MESSAGE_WINDOW,
   MessageLines,
+  PartyWindows,
   STATUS_LAYER,
+  type PartyValues,
   StatusWindow,
   type HudTextures,
   type StatusValues,
@@ -33,6 +35,7 @@ export class PlayerHud {
   readonly status = new StatusWindow();
   readonly floats = new FloatingTexts();
   readonly messages = new MessageLines();
+  readonly party = new PartyWindows();
   private ticks = 0;
   private disposed = false;
   private extra = 0; // virtual units beyond 640 on a wide window
@@ -106,15 +109,18 @@ export class PlayerHud {
     this.messages.enqueue(lines);
   }
 
-  // One rendered frame: advance the 30 Hz HUD frames, then draw.
-  frame(dt: number, values: StatusValues): void {
+  // One rendered frame: advance the 30 Hz HUD frames, then draw. `party`
+  // gives the party members' windows their values by client slot.
+  frame(dt: number, values: StatusValues, selfSlot = -1, party: (slot: number) => PartyValues | null = () => null): void {
     if (this.disposed) return;
+    if (selfSlot >= 0) this.party.setSelf(selfSlot);
     this.ticks += dt * GAME_TICKS_PER_SECOND;
     let n = Math.floor(this.ticks);
     this.ticks -= n;
     n = Math.min(n, 5);
     for (let i = 0; i < n; i++) {
       this.status.tick(values);
+      this.party.tick(party);
       this.floats.tick();
       this.messages.tick();
     }
@@ -146,6 +152,7 @@ export class PlayerHud {
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
     this.status.draw(ctx, tex);
+    this.party.draw(ctx, tex);
     this.floats.draw(ctx, tex.font);
     this.messages.draw(ctx, anchorX(MESSAGE_WINDOW.x, MESSAGE_WINDOW.w, this.extra));
   }

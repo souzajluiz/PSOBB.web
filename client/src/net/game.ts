@@ -301,6 +301,9 @@ export function parsePlayerSync(body: Uint8Array, into: LobbyPlayer): void {
   const name = stripMarkers(readUtf16(body, visual + 0x50, 0x10));
   if (name) into.name = name;
   into.level = dv.getUint32(0x140 + 0x18, true) + 1;
+  into.hpStat = dv.getUint16(0x140 + 0x06, true);
+  into.hpMaterials = dv.getUint16(0x2c, true);
+  into.nameColor = dv.getUint32(shared + 0x08, true);
   into.position = { x: dv.getFloat32(0x10, true), y: dv.getFloat32(0x14, true), z: dv.getFloat32(0x18, true) };
   into.angle = (dv.getInt32(0x20, true) & 0xffff) * BAMS_TO_RAD;
   into.floor = dv.getUint32(0x4b0, true);

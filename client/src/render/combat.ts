@@ -125,6 +125,8 @@ import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
 import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
 import { PlayerHud } from './playerhud.ts';
+import { PartyHp, syncHp } from '../combat/partyhp.ts';
+import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -296,6 +298,9 @@ export class CombatView {
   // 6x48 technique object runs with (action_launch_tech).
   private techOverride = new Map<number, number>();
   private remoteCasts = new Map<number, { tech: number; targets: number[] }>();
+  // The other players' HP for the party members' windows (combat/partyhp.ts).
+  readonly party = new PartyHp();
+  private partyOwners = new Map<number, number>();
   // Remote players lying dead (6x4D .. 6x4F): Reverser targets.
   private deadPlayers = new Set<number>();
   // Poison / paralysis / freeze / shock / slow / confusion on the local
@@ -607,7 +612,26 @@ export class CombatView {
     this.updateLockOn();
     this.overlay?.update(dt);
     this.updateHpReadout();
-    this.hud?.frame(dt, this.hudValues());
+    this.hud?.frame(dt, this.hudValues(), this.game.selfId, (slot) => this.partyValues(slot));
+  }
+
+  // What a party member's window shows (QuestListEntryUpdate_0073eb28,
+  // QuickMenuClearSelection_00742430): nothing for an empty slot.
+  private partyValues(slot: number): PartyValues | null {
+    if (slot === this.game.selfId) return null;
+    const p = this.game.players.get(slot);
+    if (!p || p.npcTemplate !== undefined) return null;
+    // A slot taken by a new player starts over.
+    if (this.partyOwners.get(slot) !== p.guildCardNumber) {
+      this.party.remove(slot);
+      this.partyOwners.set(slot, p.guildCardNumber);
+    }
+    const m = this.party.get(slot) ?? this.party.stats(slot, this.partyStats(p));
+    return { name: p.name, level: p.level, hp: m.hp, maxHp: m.maxHp, dead: m.dead || this.deadPlayers.has(slot), nameColor: p.nameColor };
+  }
+
+  private partyStats(p: { charClass: number; level: number; hpStat?: number; hpMaterials?: number }) {
+    return { charClass: p.charClass, level: p.level, hpStat: p.hpStat ?? 0, hpMaterials: p.hpMaterials ?? 0 };
   }
 
   // What the status window shows (ChallengeMenuListWindow_UpdateStatusBar_007439e8).
@@ -626,6 +650,7 @@ export class CombatView {
       maxTp,
       pb: this.pb.charge,
       dead: this.damage.dead,
+      nameColor: me?.nameColor,
       statusIcons: [...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
     };
   }
@@ -1888,7 +1913,13 @@ export class CombatView {
     };
     if (c.clientId !== this.game.selfId) {
       const other = this.game.players.get(c.clientId);
-      if (other) other.level = c.level + 1;
+      if (other) {
+        other.level = c.level + 1;
+        other.hpStat = c.hp;
+        // The new stats, then hp = max_hp1 on a field.
+        this.party.stats(c.clientId, this.partyStats(other));
+        if (this.area !== 0) this.party.refill(c.clientId);
+      }
       this.hud?.levelUpPopup(head(c.clientId), c.levelDown);
       return;
     }
@@ -1923,6 +1954,14 @@ export class CombatView {
 
   private onSubcommand(sub: number, clientId: number, body: Uint8Array): void {
     if (this.disposed) return;
+    if (sub === 0x70) {
+      const h = syncHp(body);
+      const p = h && h.clientId !== this.game.selfId ? this.game.players.get(h.clientId) : undefined;
+      if (h && p) this.party.stats(h.clientId, { ...this.partyStats(p), hpStat: h.hpStat, hpMaterials: h.hpMaterials, level: h.level }, h.hp);
+      return;
+    }
+    // Remote HP for the party members' windows; the handlers below still run.
+    this.party.receive(sub, body);
     if (sub === 0xbf) {
       const g = parseGiveExp(body);
       if (g && g.clientId === this.game.selfId) this.onGiveExp(g.amount);
