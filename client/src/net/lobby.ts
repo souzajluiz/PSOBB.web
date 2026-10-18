@@ -48,6 +48,9 @@ export interface LobbyEvents {
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
+  // B0 (RcvEmergencyCall): server text for the player's message window
+  // (handle_b0_packet -> DisplayChallengeResultToPlayer_00718350).
+  serverText: (text: string) => void;
 }
 
 const ENTRY_SIZE = 0x520;
@@ -180,6 +183,10 @@ export class Lobby {
       }
       case 0x06:
         this.onChat(c);
+        break;
+      case 0xb0:
+        // Same format as 01: 8 bytes, then the text.
+        this.emit('serverText', stripMarkers(readUtf16(c.data, 8, (c.data.length - 8) >> 1)).replace(/\r/g, ''));
         break;
       case 0x60:
       case 0x62:

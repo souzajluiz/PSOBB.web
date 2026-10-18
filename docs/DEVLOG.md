@@ -1,5 +1,50 @@
 # Devlog
 
+## 2026-10-18: The message window's scrolling, timing and frame
+
+**What changed:** the player's message window (level-up lines, server text)
+now works like the client's: a ring of 16 lines, no frame, text clipped to
+the content rectangle, lines expire after 0xb4 frames and scroll out of the
+top, new lines scroll the window when they pass the bottom; B0 server text
+messages go into it. Code: `classic/hud.ts` (MessageLines rewritten,
+wrapMessage), `render/playerhud.ts` (notice), `net/lobby.ts` (B0 ->
+`serverText`), `render/combat.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- CreateChatShortcutMenuYesNoListWindow_0073b3a0 at GUI 0x22 = (373, 203),
+  size {255, 120} (0x0096ffd8), 0x10 lines (SetListWindowRenderParameters
+  _0073b1e8, template 0x009f3268, flags 3, element list 0x009f3244: one
+  system-font text per line); ChatShortcutMenuYesNoListWindow_UpdateRender
+  _0073b470 draws only the text (no frame); content inset 10, clipped.
+- ListWindowObject_AppendItem_0073ae4c (flags 0xe from
+  DisplayChallengeResultToPlayer_00718350 / handle_b0_packet): a reused slot
+  drops its line and moves everything up by height + 6 (0x00971c8c); the line
+  goes at the write cursor, cursor += height + 6; past scroll + 120 the
+  target becomes cursor + 20 - 120 (0x00971c7c); flag 4 starts a 0xb4-frame
+  timer (+0x8c).
+- ListWindowObject_UpdateScrollAndHighlight_0073abb0 per frame: scroll +=
+  max(0.15 * rest, 15), snapping when the rest is smaller (UpdateScroll
+  _0073adcc, 0x00971c94 / 0x00971c90); lines wholly above the scroll are
+  dropped (0x00971c9c); UpdateItemHighlight_0073b208 counts timers down and
+  every expired line, oldest first, pulls the target to its y + height + 1
+  (0x00971c68).
+
+**Assumed:** a line is 14 high per text row with 6 between wrapped rows,
+wrapped at 235 px; flag 8 (a line waiting for the previous one to be typed
+out) is not modelled. The pickup texts the client writes with flag 0x200
+(DisplayExperienceText_00691578, FormatAndDisplayFloatingText_006916dc) look
+like debug output and are left out.
+
+**Tests:** `tests/level.test.ts`: 20 px per line, the 7th line's target, the
+15-px minimum step and the snap, dropping and rebasing, expiry after 0xb4
+frames, the ring of 16, wrapping.
+
+**Checked in Chrome** (WebHunter, Forest 1): a B0 command fed to
+`game.handle` and seven more lines from the console: the window scrolled,
+the oldest lines left at the top, five lines stayed visible inside the
+clipped area at the right of the view, and all of them scrolled away about
+six seconds later.
+
 ## 2026-10-18: Level-up light and particle
 
 **What changed:** a level change (6x30, own or another player's) on a field

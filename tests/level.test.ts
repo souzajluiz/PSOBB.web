@@ -27,6 +27,8 @@ import {
   glyphTextWidth,
   levelUpText,
   MessageLines,
+  MESSAGE_LINE_FRAMES,
+  wrapMessage,
   numberWidth,
   StatusWindow,
 } from '../client/src/classic/hud.ts';
@@ -255,7 +257,7 @@ const tex = { panel: { name: 'panel' }, icons: { name: 'icons' }, font: { name: 
   for (let i = 0; i < 20; i++) f.tick();
   check(f.size === 0, 'Level Up gone after 60 frames');
   // Message lines one every 0x16 frames.
-  const m = new MessageLines();
+  const m = new MessageLines((t) => t.length * 10);
   m.enqueue(['a', 'b', 'c']);
   m.tick();
   check(m.visible.length === 1 && m.pending === 2, 'first line at once');
@@ -281,6 +283,38 @@ const tex = { panel: { name: 'panel' }, icons: { name: 'icons' }, font: { name: 
   check(Math.abs(states[5].color[2] - (0.63 + 0.37 * 0.1)) < 1e-9, 'then 10% per frame back to white');
   const k = lightScale(states[5], primary);
   check(Math.abs(k[0] - (1 + 0.5) / (0.3 + 0.3)) < 1e-6 && k[2] < k[0], 'material scale: warm, brighter than the area');
+}
+
+{
+  // The message window: 20 per line, scrolls when a line passes 120, lines
+  // expire after 0xb4 frames and scroll out of the top.
+  const fixed = (t: string) => t.length * 10;
+  const m = new MessageLines(fixed);
+  for (let i = 0; i < 6; i++) m.add(`line ${i}`);
+  check(m.lines.map((l) => l.y).join() === '0,20,40,60,80,100' && m.target === 0, 'six lines 20 apart, no scroll yet');
+  m.add('line 6');
+  check(m.target === 140 + 20 - 120, `7th line: target = cursor + 20 - 120 (${m.target})`);
+  m.tick();
+  // 15 (at least) then line 0 (y + 14 < 15) is dropped: everything 20 up.
+  check(m.scroll === -5 && m.lines[0].text === 'line 1' && m.target === 20, `scroll step at least 15, oldest dropped (${m.scroll})`);
+  m.tick();
+  check(m.scroll === 10, `25 to go: 15 more (${m.scroll})`);
+  m.tick();
+  check(m.scroll === 20 - 20 && m.lines[0].text === 'line 2', `then snaps to the target, line 1 dropped (${m.scroll})`);
+  // Once at the target, line 0 (y + 14 < 40) is dropped and everything moves up.
+  check(m.lines[0].y === 0 && m.lines.length === 5, `rebased after dropping (${m.lines[0].y})`);
+  for (let i = 0; i < MESSAGE_LINE_FRAMES; i++) m.tick();
+  check(m.lines.length < 5, `expired lines scroll out (${m.lines.length} left)`);
+  for (let i = 0; i < 30; i++) m.tick();
+  check(m.lines.length === 0, 'all gone');
+  // 16 slots: the 17th line drops the oldest at once.
+  const r = new MessageLines(fixed);
+  for (let i = 0; i < 17; i++) r.add(`x${i}`);
+  check(r.lines.length === 16 && r.lines[0].text === 'x1', 'ring of 16');
+  check(wrapMessage('aaa bbb ccc', 70, fixed).join('|') === 'aaa bbb|ccc' && wrapMessage('a\nb', 100, fixed).length === 2, 'wrapping');
+  const tall = new MessageLines(fixed);
+  tall.add('aaaa bbbb cccc dddd eeee ffff');
+  check(tall.lines[0].rows.length === 2 && tall.lines[0].height === 34, 'two rows: 14 + 6 + 14');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

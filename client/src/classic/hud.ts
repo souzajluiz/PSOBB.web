@@ -64,7 +64,7 @@
 // (TP) when the value is at or under 20% of the maximum (0x0097308c,
 // 0x00973084), and the HP / TP texts take the same colour (white otherwise).
 
-import { drawGameText } from './gametext.ts';
+import { drawGameText, gameTextWidth } from './gametext.ts';
 
 export const STATUS_WINDOW = { x: 28, y: 37, w: 228, h: 76 } as const;
 
@@ -762,26 +762,100 @@ export class FloatingTexts {
   }
 }
 
-// --- message window lines ----------------------------------------------------
+// --- message window ---------------------------------------------------------
 
 // The player's message window (window position 0x22 = (373, 203) of the table
-// at 0x00971f40, built by CreateChatShortcutMenuYesNoListWindow_0073b3a0 with
-// the size {255, 120} at 0x0096ffd8) that display_levelup_stats fills through
-// DisplayChallengeResultToPlayer_00718350 -> ListWindowObject_AddItem_0073ae38.
-// The text is the system font (gametext.ts), 20 per line (FUN_007ab554).
-// APPROXIMATED: the window's own scrolling and how long a line stays are not
-// decoded; lines scroll up when the window is full and fade after
-// MESSAGE_LINE_FRAMES.
+// at 0x00971f40): CreateChatShortcutMenuYesNoListWindow_0073b3a0 with the size
+// {255, 120} (unknown_b0_window_params @ 0x0096ffd8) and 0x10 lines
+// (SetListWindowRenderParameters_0073b1e8 into the template 0x009f3268,
+// flags 3: no frame of its own, ChatShortcutMenuYesNoListWindow_UpdateRender
+// _0073b470 draws only the text; content inset 10 like every window without
+// flag 0x800, UiTextGeometryUpdate_0071b900, clipped to that rectangle; one
+// system-font text element per line, element list 0x009f3244).
+// display_levelup_stats / DisplayChallengeResultToPlayer_00718350 /
+// DisplayFormattedTextToPlayer_00718300 add lines with flags 0xe
+// (SinowberillChallengeObjectListWindow_AddItem_0071b550 ->
+// ListWindowObject_AppendItem_0073ae4c), flag 4 = the line expires after
+// +0x8c = 0xb4 frames.
+//   Append: the next of the 16 slots (+0x9c, a ring); a slot still holding
+//   an old line drops it first and moves everything (scroll +0x74, target
+//   +0x98, write cursor +0x94, every line's y) up by its height + 6
+//   (0x00971c8c). The line goes at y = cursor, cursor += height + 6; when
+//   cursor passes scroll + 120 the target becomes max(target, cursor + 20 -
+//   120) (0x00971c7c).
+//   Each frame (ListWindowObject_UpdateScrollAndHighlight_0073abb0):
+//   UpdateScroll_0073adcc moves the scroll by max(0.15 * (target - scroll),
+//   15) (0x00971c94 / 0x00971c90), snapping when the rest is smaller; lines
+//   wholly above the scroll are dropped (oldest first, everything moved up by
+//   height + 6, 0x00971c9c); UpdateItemHighlight_0073b208 counts the timers of
+//   flag-4 lines down and, from the oldest line on, every expired line sets
+//   the target to at least its y + height + 1 (0x00971c68) so it scrolls out
+//   of the top.
+// Line height: 14 per text line (the system font cell) and 6 between
+// wrapped lines, wrapped at the content width 235 (get_text_rendering_sizes
+// _for_list_item with w - 20, 0x00971c84). ASSUMED: that height rule and the
+// wrapping; flag 8 (a line waits for the previous one to be typed out) is
+// not modelled: lines show whole.
+// The level-up lines arrive one every 0x16 frames (display_levelup_stats);
+// enqueue() feeds them in at that pace.
 export const MESSAGE_WINDOW = { x: 373, y: 203, w: 255, h: 120 } as const;
-export const MESSAGE_LINE_FRAMES = 300; // ASSUMED
-const MESSAGE_LINES = Math.floor(MESSAGE_WINDOW.h / 20);
+export const MESSAGE_SLOTS = 0x10;
+export const MESSAGE_LINE_FRAMES = 0xb4;
+export const MESSAGE_GAP = 6; // 0x00971c8c / 0x00971c9c
+export const MESSAGE_INSET = 10;
+export const MESSAGE_SCROLL_MIN = 15; // 0x00971c90
+export const MESSAGE_SCROLL_RATE = 0.15; // 0x00971c94
+export const MESSAGE_BOTTOM_MARGIN = 20; // 0x00971c7c
+const MESSAGE_TEXT_LINE = 14;
+
+export interface MessageLine {
+  text: string;
+  rows: string[];
+  y: number;
+  height: number;
+  timer: number;
+  timed: boolean;
+}
+
+// Wraps text at `width` px of the system font (words, then characters).
+export function wrapMessage(text: string, width: number, measure: (s: string) => number = gameTextWidth): string[] {
+  const rows: string[] = [];
+  for (const para of text.split('\n')) {
+    let row = '';
+    for (const word of para.split(/(?<= )/)) {
+      if (row && measure((row + word).trimEnd()) > width) {
+        rows.push(row.trimEnd());
+        row = '';
+      }
+      row += word;
+      while (measure(row.trimEnd()) > width && row.length > 1) {
+        let k = row.length - 1;
+        while (k > 1 && measure(row.slice(0, k)) > width) k--;
+        rows.push(row.slice(0, k));
+        row = row.slice(k);
+      }
+    }
+    rows.push(row);
+  }
+  return rows;
+}
 
 export class MessageLines {
-  private lines: { text: string; age: number }[] = [];
+  private slots: (MessageLine | null)[] = new Array(MESSAGE_SLOTS).fill(null);
+  private next = 0; // +0x9c
+  private oldest = 0; // +0x84
+  scroll = 0; // +0x74
+  target = 0; // +0x98
+  private cursor = 0; // +0x94
   private queue: string[] = [];
   private gap = 0;
+  private measure: (s: string) => number;
 
-  // Lines that arrive one every `gapFrames` (the level-up message's 0x16).
+  constructor(measure: (s: string) => number = gameTextWidth) {
+    this.measure = measure;
+  }
+
+  // Lines that arrive one every 0x16 frames (display_levelup_stats).
   enqueue(lines: string[]): void {
     this.queue.push(...lines);
   }
@@ -790,26 +864,86 @@ export class MessageLines {
     return this.queue.length;
   }
 
+  // The lines in the window, oldest first.
+  get lines(): readonly MessageLine[] {
+    const out: MessageLine[] = [];
+    for (let i = 0; i < MESSAGE_SLOTS; i++) {
+      const l = this.slots[(this.oldest + i) % MESSAGE_SLOTS];
+      if (l) out.push(l);
+    }
+    return out;
+  }
+
   get visible(): readonly string[] {
     return this.lines.map((l) => l.text);
+  }
+
+  private shiftUp(d: number): void {
+    this.scroll -= d;
+    this.target -= d;
+    this.cursor -= d;
+    for (const l of this.slots) if (l) l.y -= d;
+  }
+
+  private dropOldest(): void {
+    const l = this.slots[this.oldest];
+    if (!l) return;
+    this.shiftUp(l.height + MESSAGE_GAP);
+    this.slots[this.oldest] = null;
+    this.oldest = (this.oldest + 1) % MESSAGE_SLOTS;
+  }
+
+  // ListWindowObject_AppendItem_0073ae4c with flags 0xe.
+  add(text: string, timed = true): void {
+    if (this.slots[this.next]) {
+      // The ring caught up with the oldest line: it goes first.
+      if (this.next === this.oldest) this.dropOldest();
+    }
+    const rows = wrapMessage(text, MESSAGE_WINDOW.w - 2 * MESSAGE_INSET, this.measure);
+    const height = rows.length * MESSAGE_TEXT_LINE + (rows.length - 1) * MESSAGE_GAP;
+    const line: MessageLine = { text, rows, y: this.cursor, height, timer: MESSAGE_LINE_FRAMES, timed };
+    this.slots[this.next] = line;
+    this.next = (this.next + 1) % MESSAGE_SLOTS;
+    this.cursor += height + MESSAGE_GAP;
+    if (this.scroll + MESSAGE_WINDOW.h < this.cursor) this.target = Math.max(this.target, this.cursor + MESSAGE_BOTTOM_MARGIN - MESSAGE_WINDOW.h);
   }
 
   tick(gapFrames = 0x16): void {
     if (this.gap > 0) this.gap--;
     if (this.gap <= 0 && this.queue.length) {
-      this.lines.push({ text: this.queue.shift()!, age: 0 });
-      if (this.lines.length > MESSAGE_LINES) this.lines.shift();
+      this.add(this.queue.shift()!);
       this.gap = gapFrames;
     }
-    for (const l of this.lines) l.age++;
-    this.lines = this.lines.filter((l) => l.age < MESSAGE_LINE_FRAMES);
+    // UpdateScroll_0073adcc.
+    const d = this.target - this.scroll;
+    const step = Math.max(MESSAGE_SCROLL_RATE * d, MESSAGE_SCROLL_MIN);
+    this.scroll = d < step ? this.target : this.scroll + step;
+    // Lines wholly above the top go.
+    for (let l = this.slots[this.oldest]; l && l.y + l.height < this.scroll; l = this.slots[this.oldest]) this.dropOldest();
+    // UpdateItemHighlight_0073b208.
+    for (const l of this.slots) if (l && l.timed && l.timer > 0) l.timer--;
+    for (let i = 0; i < MESSAGE_SLOTS; i++) {
+      const l = this.slots[(this.oldest + i) % MESSAGE_SLOTS];
+      if (!l || l.timer > 0 || !l.timed) break;
+      l.timed = false;
+      this.target = Math.max(this.target, l.y + 1 + l.height);
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, wx: number = MESSAGE_WINDOW.x): void {
-    this.lines.forEach((l, i) => {
-      const left = MESSAGE_LINE_FRAMES - l.age;
-      const alpha = Math.min(1, left / 30);
-      drawGameText(ctx, l.text, wx + 10, MESSAGE_WINDOW.y + 10 + i * 20, '#ffffff', alpha);
-    });
+    const left = wx + MESSAGE_INSET;
+    const top = MESSAGE_WINDOW.y + MESSAGE_INSET;
+    const w = MESSAGE_WINDOW.w - 2 * MESSAGE_INSET;
+    const h = MESSAGE_WINDOW.h - 2 * MESSAGE_INSET;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, w, h);
+    ctx.clip();
+    for (const l of this.lines) {
+      const y = top + l.y - this.scroll;
+      if (y + l.height < top || y > top + h) continue;
+      l.rows.forEach((row, k) => drawGameText(ctx, row, left, y + k * (MESSAGE_TEXT_LINE + MESSAGE_GAP), '#ffffff'));
+    }
+    ctx.restore();
   }
 }

@@ -109,6 +109,11 @@ export class PlayerHud {
     this.messages.enqueue(lines);
   }
 
+  // One line added at once (handle_b0_packet -> DisplayChallengeResultToPlayer).
+  notice(text: string): void {
+    this.messages.add(text);
+  }
+
   // One rendered frame: advance the 30 Hz HUD frames, then draw. `party`
   // gives the party members' windows their values by client slot.
   frame(dt: number, values: StatusValues, selfSlot = -1, party: (slot: number) => PartyValues | null = () => null): void {

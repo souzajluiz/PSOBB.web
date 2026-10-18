@@ -341,6 +341,9 @@ export class CombatView {
       log: (msg) => this.opts.log(msg),
     });
     game.on('subcommand', (sub, clientId, body) => this.onSubcommand(sub, clientId, body));
+    game.on('serverText', (text) => {
+      if (!this.disposed) this.hud?.notice(text);
+    });
   }
 
   // A status effect on the local player (an enemy attack's vtable +0xb8 ..
