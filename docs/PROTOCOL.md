@@ -164,7 +164,7 @@ When `65` arrives, the players already in the game send state to the joiner with
 | leader | 5–6 | `6x6F` quest flags (`62`), `6x71` unblock join (`62`, header only) |
 | everyone | 7 | `6x70` own player (`6D`, `G_SyncPlayerDispAndInventory_BB_6x70`, 0x4C0) |
 
-On BB the server, not the leader, then sends `6x72` (resume) to **every player except the joiner** once the leader's `6x70` arrived (`send_resume_game`). The web client sends `6x6D`, `6x71` and `6x70`. It does not send `6x6B`/`6x6C`/`6x6E`: newserv checks the entity counts of every floor's map against its own (including enemy children), which needs the full entity expansion; nor `6x6F`, since the client does not track quest flags. The BC0 data is sent as a literal-only stream (newserv `bc0_encode`: one control byte with a 1 bit per literal, LSB first, then up to 8 bytes).
+On BB the server, not the leader, then sends `6x72` (resume) to **every player except the joiner** once the leader's `6x70` arrived (`send_resume_game`). The web client sends all of them (`net/joinsync.ts`): `6x6B`/`6x6C`/`6x6E` with the game-wide counts of floors 0..0x11 (newserv checks them against every floor's map, enemy children included), `6x6F` with `use_apply_mask` 1 (the receiver copies only the 282 flags listed at 0x00969c60). Without a game view (node scripts) it sends `6x6D`, `6x6F`, `6x71` and `6x70`. The BC0 data is sent as a literal-only stream (newserv `bc0_encode`: one control byte with a 1 bit per literal, LSB first, then up to 8 bytes).
 
 `6x70` (BB, offsets from the subcommand start): extended header `{0x70, 0, client_id, u32 size}`; `G_6x70_Base_V1` @008 (`client_id` u16 @008, `room` @00A, `game_flags` @00C, position @010, angle (3 × i32 BAMS) @01C, `current_hp` @02A, bonus HP/TP @02C/@02E, status effects @030, `language32` @06C, `player_tag` @070, guild card @074, telepipe @080 (owner 0xFFFF = none), death flags @09C, hold state @0A0, `area` @0B4, `player_flags` @0B8, `technique_levels_v1` @0BC); `PlayerVisualConfigV4` @0D0; `PlayerStats` @140; `num_items` @164; `PlayerInventoryItem[30]` @168; `floor` @4B0. newserv re-encodes it for the joiner and fills `client_id` and the guild card itself. **The joiner gets the other players' appearance only from `6x70`** (`64` carries names and guild cards).
 
@@ -585,7 +585,6 @@ unimplemented one still advances the program counter correctly.
 - `get_player_state` always reports "standing" for a player that is present:
   the web client does not model the action state machine.
 - `playerHpTp` only answers for the local character.
-- `6x6F` is received but still not sent to a joining player.
 - The random-enemy sections (types 4 and 5) and the `evt2` event format are
   recognised and skipped.
 

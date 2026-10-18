@@ -1,5 +1,81 @@
 # Devlog
 
+## 2026-10-18: Full join sync: 6x6B / 6x6C / 6x6E / 6x6F sent and applied
+
+**What changed:** when a player joins a game we lead, the web client now
+sends everything the exe's leader sends, in its order: `6x6D`, `6x6B` (saved
+enemy states), `6x6C` (saved object states), `6x6E` (object / enemy set
+flags, wave event flags, switch flags), `6x6F` (quest flags), `6x71`, then
+`6x70`. When we join, the received tables are applied: dead enemy set entries
+do not spawn, wave events keep their state, switch flags and constructed
+delayed objects come back, broken boxes stay broken, and `6x6F` overwrites
+only the exe's list of quest flags. newserv accepts the counts (it checks them
+against every floor's map, enemy children included). Code:
+`net/joinsync.ts` (new), `net/game.ts`, `net/items.ts`,
+`render/gamefield.ts`, `render/gameview.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Order**: unknown_player_join_party (the 65 handler, before 0x0079cb0c):
+  SendPacket0x6D_Subcommand0x6D_0079cc64, `6x6B`, `6x6C`,
+  send_packet0x6d_subcommand0x6e (= BuildAndSendPacket0x6E_0079cd2c),
+  send_packet0x60_subcommand0x6f (= SendQuestGlobalFlags_0079ce28),
+  send_packet0x60_subcommand0x71; then `6x70`.
+- **Header**: PacketCompressor_Compress_007a47dc writes the decompressed and
+  compressed sizes at +8 / +0x0C and returns compressed + 8; the size field is
+  ((that + 3) & ~3) + 8.
+- **6x6B / 6x6C**: g_SavedEnemyStatusData (entity_index_count x 0x0C: flags,
+  drop id, damage, buffs) and g_SavedBoxStatusData (g_EntityIndexCounter_Quest
+  x 4: flags, drop id). reset_box_enemy_rare_status sets the drop ids
+  (objects 0x100 + i, enemies 0xCA0 + i). They follow the sent 6x0A
+  (prepare_send_packet0x60_subcommand0xa) and the received one
+  (action_hit_enemy: Ultimate keeps the low 6 bits), 6x0B
+  (handle_packet0x60_0xb_box_break: flags at +4) and 6x5F
+  (handle_packet0x60_subcommand0x5f: drop id 0xFFFF). The joiner copies them
+  (HandleLobbyPartyStateUpdate_0079fba4, HandleLobbyBoxStatusUpdate_0079fc30);
+  enemies zero their own flags and damage on construction
+  (reset_enemy_damage_taken), so dead enemies come from the set flags.
+- **6x6E**: CollectMapObjectAndMonsterFlags_008123f0 ({0x10, objects,
+  objects * 2 + 0x10, enemy sets} + flags & 0xFFFD of every object and enemy
+  set entry of all floors), AggregateMapEventIds_0080d32c (every floor's wave
+  event flags & 0xFFFD, file order), CopyFloorSwitchesBitmap_00816fac (0x240
+  bytes, MSB first). The compressor gets `total size` bytes from the buffer
+  start, so the 8-byte head pushes the last 8 switch bytes out (newserv notes
+  the same bug). HandleLobbyMonsterMapStateUpdate_0079fd30 applies them
+  (copy_monster_object_init_flags, copy_map_event_flags, copy_floor_switches,
+  set_active_map_events). Set flag 8 = dead enemy; object flags 0x01 / 0x10 =
+  constructed delayed object (floor loader 0x008129b0).
+- **6x6F**: {6F, 82, 0, 0x200 bytes of g_QuestGlobalFlags (0x00a95680), u32 1};
+  HandleLobbyQuestFlagsUpdate_0079feb4 -> SetQuestGlobalFlags_006bb55c copies
+  only the 282 flags of the list at 0x00969c60 in every difficulty (the whole
+  table when the u32 is not 1). The flag table is now the full 4-difficulty
+  one; `questFlags` is the current difficulty's view of it.
+- **Layout**: render/gameview.ts `syncLayout()` walks floors 0..0x11 (objects,
+  enemy set entries and slots, wave event ids, with each floor's bases);
+  render/gamefield.ts exports its FloorWaves, switch sets and constructed keys
+  into the tables before the leader sends, and imports them on the joiner when
+  a floor's wave state is first built. 6x76 for a floor not loaded yet is kept
+  until the floor is known (it was dropped before), and 6x76 for a loaded
+  floor other than the current one now uses that floor's slot base.
+
+**Verified:** `tests/joinsync.test.ts` (tables, builders, round trips, the
+truncation, the apply list); `tests/joinsync.live.ts` against newserv (A
+leads, kills an enemy, breaks a box, sets a switch and a quest flag; B joins
+and gets 2092 enemy states, 2038 object states, 1220 set flags, 349 event
+flags; newserv logs "Importing ... from sync command" without count errors and
+A stays connected). In Chrome: the web client as leader on Forest 1 (6x76 +
+switch 7) and a node joiner: newserv accepted all three commands, the joiner
+got the dead set entry and switch 7. The web client as joiner of a node
+leader that killed all 67 Forest 1 set entries and set switch 7: 6x6B / 6x6C /
+6x6E arrived (2222 / 2016 / 1250 / 349), and on warping to Forest 1 all 67 set
+entries were dead, no enemy was visible and switch 7 was on.
+
+**Assumed:** g_QuestGlobalFlags starts as the save file's quest_flags
+(+0x4F4); the joiner's last 8 switch bytes (uninitialised heap in the exe) are
+zero; object set flags are only tracked for delayed objects (0x10 when their
+room/group was constructed; an object of the group already built by distance
+would have 2 and is sent as 0); the drop number / floor item part of 6x6D is
+still zero; 6x9C's status bits are not written into the saved enemy table.
+
 ## 2026-10-18: Ruins enemies: Bulclaw / Claw, Dark Belra, Dark / Death Gunner, Chaos Bringer, Chaos Sorcerer, Delsaber; confused enemies; Del Lily's Megid
 
 **What changed:** the Ruins families run their own state machines

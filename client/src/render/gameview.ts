@@ -31,7 +31,9 @@ import { EnemyLayer } from './enemyview.ts';
 import { GameField } from './gamefield.ts';
 import { ObjectLayer } from './objectview.ts';
 import { enemySlots } from '../formats/enemyids.ts';
-import { parseEnemySets } from '../formats/setdata.ts';
+import { parseEnemySets, type ObjectSet } from '../formats/setdata.ts';
+import { parseEventFile } from '../formats/events.ts';
+import { buildSyncLayout, type SyncFloor, type SyncLayout } from '../net/joinsync.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
 import { NpcLayer } from './npcview.ts';
 import { TelepipeLayer, type Arrival } from './telepipe.ts';
@@ -85,6 +87,7 @@ export class GameView {
   private collision: CollisionWorld | null = null;
   private objectCounts = new Map<number, Promise<number>>();
   private enemyCounts = new Map<number, Promise<number>>();
+  private layout: Promise<SyncLayout> | null = null;
   private busy = false;
   private disposed = false;
   current: FloorInfo | null = null;
@@ -126,6 +129,14 @@ export class GameView {
       talkCamera: () => this.npcs.talkCameraView(),
     });
     this.items = new GameItems(game, { ...character, log });
+    // Join sync (net/joinsync.ts): when we lead and a player joins, the
+    // field's set / event / switch flags go into the game's tables first.
+    game.prepareJoinSync = async () => {
+      const layout = await this.syncLayout();
+      if (this.disposed) return null;
+      this.field.exportSync(game.joinSync, layout);
+      return layout.counts;
+    };
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
       blocked: () => this.field.menu.open || this.busy || this.inputBlocked(),
@@ -262,6 +273,51 @@ export class GameView {
     // Entity-id bases are counted per floor and differ with the quest's maps.
     this.objectCounts.clear();
     this.enemyCounts.clear();
+    this.layout = null;
+  }
+
+  // Every floor's entities (0..0x11, the exe's per-floor tables), for the
+  // join sync's game-wide indices: objects, enemy set entries and their slots,
+  // wave events. A floor without set data contributes nothing.
+  syncLayout(): Promise<SyncLayout> {
+    this.layout ??= (async () => {
+      const floors: Array<Omit<SyncFloor, 'objectBase' | 'enemySetBase' | 'enemySlotBase' | 'eventBase'>> = [];
+      for (let f = 0; f < 0x12; f++) {
+        let objects: ObjectSet[] = [];
+        let enemies: EnemySet[] = [];
+        let events: Uint8Array | null = null;
+        let area = -1;
+        try {
+          const quest = this.quest?.floorData(f) ?? null;
+          const ff = await this.floorFilesFor(f);
+          area = ff.area;
+          if (quest) {
+            objects = quest.objects;
+            enemies = quest.enemies;
+            events = quest.eventData;
+          } else if (ff.files) {
+            const files = ff.files;
+            if (await this.files.has(files.objects)) objects = parseSetFile(files.objects, await this.files.read(files.objects)).filter((e): e is ObjectSet => e.kind === 'object');
+            if (await this.files.has(files.enemies)) enemies = parseEnemySets(await this.files.read(files.enemies));
+            if (await this.files.has(files.events)) events = await this.files.read(files.events);
+          }
+        } catch (err) {
+          this.log(`join sync layout, floor ${f}: ${(err as Error).message}`);
+        }
+        let eventIds: number[] = [];
+        if (events) {
+          try {
+            eventIds = parseEventFile(events).events.map((e) => e.id);
+          } catch {
+            // no events
+          }
+        }
+        const slots = enemySlots(enemies, area);
+        floors.push({ floor: f, objects, setFirstSlots: slots.first, enemySlots: slots.total, eventIds });
+      }
+      return buildSyncLayout(floors);
+    })();
+    return this.layout;
   }
 
   private episode(): number {
@@ -419,9 +475,12 @@ export class GameView {
     // The quest's floor handler runs on a new thread when the player arrives
     // (quest_start_floor_thread, PsoBB.exe .c:615128).
     this.quest?.enterFloor(floor);
+    // The joiner's 6x6E is game-wide: the field takes this floor's part.
+    const syncFloor = this.game.joinSync.received.setFlags ? ((await this.syncLayout()).floors[floor] ?? null) : null;
     this.field.enterFloor(floor, area, {
       placed: placedObjects,
       objectBase,
+      sync: syncFloor,
       enemySets,
       enemyBase: await this.enemyBase(floor),
       eventFile,

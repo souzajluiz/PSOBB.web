@@ -35,7 +35,8 @@ import type { EnemyLayer } from './enemyview.ts';
 import { constructKey, FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
-import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
+import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, type WaveEnemy } from './waves.ts';
+import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
 import { areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
@@ -58,6 +59,9 @@ export interface GameFieldOptions {
 export interface FloorEntities {
   placed: PlacedEntity[]; // objects of the floor (markers already placed)
   objectBase: number; // objects on the floors before this one
+  // The floor's place in the game-wide join sync tables, when a 6x6E came
+  // (net/joinsync.ts): its set flags, wave event flags and switches apply.
+  sync?: SyncFloor | null;
   enemySets: EnemySet[]; // e.dat entries of the floor
   enemyBase: number; // enemy slots on the floors before this one
   eventFile: Uint8Array | null; // the floor's .evt
@@ -95,6 +99,9 @@ export class GameField {
   // g_MapEventTablesArray.
   private waves = new Map<number, FloorWaves>();
   private pendingTriggers = new Map<number, Set<number>>(); // 6x67 for floors not loaded yet
+  private pendingKills = new Map<number, Set<number>>(); // 6x76 flag 8 for floors not loaded yet (entity ids)
+  private syncFloor: SyncFloor | null = null;
+  private slotBases = new Map<number, { base: number; first: number[] }>(); // enemy slots of the floors loaded so far
   private enemies: EnemyLayer | null = null;
   private sections: MapSection[] = [];
   private enemyFirstSlot: number[] = [];
@@ -177,10 +184,48 @@ export class GameField {
     this.opts.log(`construct_objects floor ${floor} room ${room} group ${group}: ${floor === this.floor ? `${n} objects` : 'kept for the next visit'}`);
   }
 
+  // Switch flags of a floor; a floor seen for the first time starts from the
+  // game's switch table (g_FloorSwitchesBitmap_00ac9fa0, which a joiner's
+  // 6x6E filled).
   private flagsOf(floor: number): Set<number> {
     let s = this.flags.get(floor);
-    if (!s) this.flags.set(floor, (s = new Set()));
+    if (!s) {
+      this.flags.set(floor, (s = new Set()));
+      for (let f = 0; f < 0x100; f++) if (this.game.joinSync.switchFlag(floor, f)) s.add(f);
+    }
     return s;
+  }
+
+  // Join sync, leader side (send_packet0x6d_subcommand0x6e): the field's
+  // per-floor state into the game-wide tables. Floors this client never
+  // loaded keep what the tables hold (a 6x6E we received, 6x76 / 6x67 kept
+  // for later); flag 2 (built) is masked out by the builder.
+  exportSync(state: JoinSyncState, layout: SyncLayout): void {
+    for (const f of layout.floors) {
+      const flags = this.flags.get(f.floor);
+      if (flags) for (let k = 0; k < 0x100; k++) state.setSwitchFlag(f.floor, k, flags.has(k));
+      const w = this.waves.get(f.floor);
+      if (w) {
+        w.flags.forEach((v, i) => (state.eventFlags[f.eventBase + i] = v));
+        w.enemies.forEach((e, i) => (state.enemySetFlags[f.enemySetBase + i] = (state.enemySetFlags[f.enemySetBase + i] & ~(ENEMY_DEAD | ENEMY_BUILT)) | e.flags));
+      } else {
+        // 6x67 for a floor that is not loaded: set_flag_for_map_event_on_floor
+        // sets flag 4 on every event with the id.
+        for (const id of this.pendingTriggers.get(f.floor) ?? []) f.eventIds.forEach((e, i) => e === id && (state.eventFlags[f.eventBase + i] |= 4));
+        for (const entity of this.pendingKills.get(f.floor) ?? []) {
+          const i = f.setFirstSlots.indexOf(entity - 0x1000 - f.enemySlotBase);
+          if (i >= 0) state.enemySetFlags[f.enemySetBase + i] |= ENEMY_DEAD;
+        }
+      }
+      // construct_map_objects_for_section_flag sets 0x12 on the objects it
+      // builds. ASSUMED: only delayed objects (group != 0) are tracked; an
+      // object of the group already built by distance keeps 0 here.
+      const built = this.constructed.get(f.floor);
+      if (built)
+        f.objects.forEach((o, i) => {
+          if (o.group !== 0 && built.has(constructKey(o.section, o.group))) state.objectSetFlags[f.objectBase + i] |= 0x10;
+        });
+    }
   }
 
   // A floor was loaded. `objectBase` = number of objects on the floors before
@@ -201,6 +246,20 @@ export class GameField {
     this.battleFrames = 0;
     const episode = this.game.info?.episode ?? 1;
     this.enemyFirstSlot = enemySlots(e.enemySets, area).first;
+    this.syncFloor = e.sync ?? null;
+    this.slotBases.set(floor, { base: e.enemyBase, first: this.enemyFirstSlot });
+    if (e.sync) {
+      // The floor loader (0x008129b0) builds a delayed object whose set flags
+      // hold 0x01 or 0x10 (6x6E); the field keeps them as constructed keys.
+      const sync = this.game.joinSync;
+      for (const p of e.placed) {
+        const o = p.entity;
+        if (o.kind !== 'object' || o.group === 0) continue;
+        if (sync.objectSetFlags[e.sync.objectBase + o.index] & 0x11) this.constructedOf(floor).add(constructKey(o.section, o.group));
+      }
+      const flags = this.flagsOf(floor);
+      for (let f = 0; f < 0x100; f++) if (sync.switchFlag(floor, f)) flags.add(f);
+    }
     this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision, this.constructedOf(floor));
     this.objects.onSwitch = (s) => this.pressSwitch(s);
     this.objects.onEventTrigger = (t) => {
@@ -245,6 +304,20 @@ export class GameField {
         log: (m) => this.opts.log(m),
       });
       this.waves.set(floor, w);
+      // copy_map_event_flags / copy_monster_object_init_flags (6x6E): the
+      // floor's wave event and enemy set flags, as the leader had them.
+      const sync = this.syncFloor;
+      if (sync) {
+        const t = this.game.joinSync;
+        w.flags.forEach((_, i) => (w!.flags[i] = t.eventFlags[sync.eventBase + i] ?? 0));
+        w.enemies.forEach((en, i) => (en.flags = (t.enemySetFlags[sync.enemySetBase + i] ?? 0) & ~ENEMY_BUILT));
+        // set_active_map_events builds the handlers of the active events (enter()).
+      }
+    }
+    const kills = this.pendingKills.get(floor);
+    if (kills) {
+      for (const entity of kills) this.killEntity(entity, floor);
+      kills.clear();
     }
     // Enemies of a wave only exist once it starts.
     if (this.enemies) {
@@ -257,8 +330,9 @@ export class GameField {
       for (const id of pending) w.trigger(id);
       pending.clear();
     }
-    // A floor with no wave events (Pioneer 2, bosses) shows its enemies at once.
-    if (!w.events.length) for (const [i] of this.enemyFirstSlot.entries()) this.enemies?.setVisible(i, true);
+    // A floor with no wave events (Pioneer 2, bosses) shows its enemies at
+    // once, except those whose set entry is dead (flag 8).
+    if (!w.events.length) for (const [i] of this.enemyFirstSlot.entries()) this.enemies?.setVisible(i, !(w.enemies[i]?.flags & ENEMY_DEAD));
   }
 
   private spawn(list: WaveEnemy[]): void {
@@ -288,23 +362,29 @@ export class GameField {
   private killEntity(entityId: number, floor: number): void {
     if (entityId < 0x1000 || entityId >= 0x4000) return;
     const w = this.waves.get(floor);
-    if (!w) return;
-    const slot = entityId - 0x1000 - (floor === this.floor ? this.enemyBase : 0);
-    const index = this.setEntryForSlot(slot);
+    if (!w) {
+      // Kept until the floor's set data is known (export or the first visit).
+      let set = this.pendingKills.get(floor);
+      if (!set) this.pendingKills.set(floor, (set = new Set()));
+      set.add(entityId);
+      return;
+    }
+    const at = this.slotBases.get(floor) ?? { base: this.enemyBase, first: this.enemyFirstSlot };
+    const index = this.setEntryForSlot(entityId - 0x1000 - at.base, at.first);
     if (index < 0) return;
     w.kill(index);
     if (floor === this.floor) this.enemies?.setVisible(index, false);
   }
 
   // e.dat entry that owns a floor-relative enemy slot.
-  private setEntryForSlot(slot: number): number {
+  private setEntryForSlot(slot: number, first: readonly number[] = this.enemyFirstSlot): number {
     if (slot < 0) return -1;
     let lo = 0;
-    let hi = this.enemyFirstSlot.length - 1;
-    if (hi < 0 || slot < this.enemyFirstSlot[0]) return -1;
+    let hi = first.length - 1;
+    if (hi < 0 || slot < first[0]) return -1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
-      if (this.enemyFirstSlot[mid] <= slot) lo = mid;
+      if (first[mid] <= slot) lo = mid;
       else hi = mid - 1;
     }
     return lo;

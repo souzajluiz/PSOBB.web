@@ -900,6 +900,15 @@ export class GameItems {
         this.onBank();
         break;
       }
+      case 0x6c: {
+        // Join sync (net/game.ts applied it to g_SavedBoxStatusData first): a
+        // new object gets its saved entry through vtable +0x10, the call 6x0B
+        // makes (construct_map_objects_for_section_flag), so a box whose saved
+        // flags hold 1 (box_get_hit) is built broken.
+        const sync = this.game.joinSync;
+        for (let i = 0; i < sync.received.objects; i++) if (sync.objectFlags(i) & 1) this.markBoxOpened(i);
+        break;
+      }
       case 0x0b: {
         // Another player opened a box.
         if (body.length >= 0x0c && clientId >= 0x4000 && dv.getUint32(4, true) & 1) this.markBoxOpened(dv.getUint32(8, true));
@@ -1256,7 +1265,9 @@ export class GameItems {
   // Break a box: 6x0B (object state, flag 1) then 6xA2 to the leader.
   openBox(r: BoxRequest): void {
     if (this.openedBoxes.has(r.objectIndex)) return;
-    this.game.conn.send(0x60, 0, buildObjectState(r.objectIndex, 1)); // header carries the object's entity id
+    const state = buildObjectState(r.objectIndex, 1);
+    this.game.recordSent(state); // g_SavedBoxStatusData (net/joinsync.ts)
+    this.game.conn.send(0x60, 0, state); // header carries the object's entity id
     this.markBoxOpened(r.objectIndex);
     if (!ITEM_BOX_TYPES.has(r.type)) return;
     this.game.conn.send(0x62, Math.max(0, this.game.leaderId), buildBoxDropRequest(r));

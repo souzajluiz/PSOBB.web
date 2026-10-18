@@ -25,6 +25,7 @@ import type { BBConnection, Command } from './bbconnection.ts';
 import { readUtf16 } from './bbconnection.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
 import { splitLevel } from '../combat/techniques.ts';
+import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
 export const MENU_ID_GAME = 0x44000044;
@@ -161,32 +162,8 @@ export function floorToArea(episode: number): number[] {
   }
 }
 
-// Literal-only BC0 stream (newserv Compression.cc bc0_encode): one control
-// byte with a 1 bit per literal (LSB first), then up to 8 literal bytes.
-export function bc0Encode(data: Uint8Array): Uint8Array {
-  const out: number[] = [];
-  for (let i = 0; i < data.length; i += 8) {
-    const n = Math.min(8, data.length - i);
-    out.push((1 << n) - 1);
-    for (let k = 0; k < n; k++) out.push(data[i + k]);
-  }
-  return new Uint8Array(out);
-}
-
-// G_SyncGameStateHeader_6x6B_6x6C_6x6D_6x6E + BC0 data, padded to 4 bytes.
-function syncStateCommand(sub: number, decompressed: Uint8Array): Uint8Array {
-  const compressed = bc0Encode(decompressed);
-  const size = (0x10 + compressed.length + 3) & ~3;
-  const out = new Uint8Array(size);
-  const dv = new DataView(out.buffer);
-  out[0] = sub;
-  out[1] = 0; // extended header
-  dv.setUint32(4, size, true);
-  dv.setUint32(8, decompressed.length, true);
-  dv.setUint32(12, compressed.length, true);
-  out.set(compressed, 0x10);
-  return out;
-}
+// Literal-only BC0 stream and the 6x6B..6x6E header: net/joinsync.ts.
+export { bc0Encode } from './joinsync.ts';
 
 const ENTRY_INVENTORY = 0x44; // within a 0x520 67/65 entry
 const ENTRY_DISP = 0x44 + 0x34c;
@@ -369,9 +346,21 @@ export class Game extends Lobby {
   private started = false;
   // Inventory item counts of the players in the game (item ids they have used).
   private inventoryCounts = new Map<number, number>();
-  // Quest flags of the current difficulty (0x400 flags, MSB-first bits), kept
-  // in step with 6x75 and 6x6F. The quest VM reads and writes them.
-  readonly questFlags = new Uint8Array(QUEST_FLAG_BYTES);
+  // The tables the join sync carries (net/joinsync.ts): saved enemy and
+  // object states, set / event / switch flags, quest flags.
+  readonly joinSync = new JoinSyncState();
+  // Called by sendJoinSync when we lead and a player joins: brings
+  // joinSync's set / event / switch flags up to date and returns the game's
+  // entity counts (render/gameview.ts). Without it only 6x6D, 6x6F, 6x71 and
+  // 6x70 go out (newserv rejects 6x6B / 6x6C / 6x6E whose counts are wrong).
+  prepareJoinSync: (() => Promise<SyncCounts | null>) | null = null;
+  // Quest flags of the current difficulty (0x400 flags, MSB-first bits), a view
+  // of joinSync.questFlags (g_QuestGlobalFlags), kept in step with 6x75 and
+  // 6x6F. The quest VM reads and writes them.
+  get questFlags(): Uint8Array {
+    const d = Math.min(3, Math.max(0, this.info?.difficulty ?? 0));
+    return this.joinSync.questFlags.subarray(d * QUEST_FLAG_BYTES, (d + 1) * QUEST_FLAG_BYTES);
+  }
   // Registers another client synced with 6x77 (sync_register).
   readonly questRegisters = new Map<number, number>();
   // Every player's telepipe (net/telepipe.ts): 6x68, 6x70 and our own.
@@ -387,6 +376,11 @@ export class Game extends Lobby {
     this.ctx = ctx;
     this.active = false; // until our own create/join request is answered
     this.selfSnapshot = selfData(ctx.fullCharacter(), lobby.selfEntry);
+    // g_QuestGlobalFlags comes from the character's session data
+    // (InitializeQuestGlobalFlags_006bb754). ASSUMED: that is the save file's
+    // quest_flags (PSOBBCharacterFile +0x4F4, 0x200 bytes).
+    const full = ctx.fullCharacter();
+    if (full && full.length >= 0x4f4 + QUEST_FLAG_TABLE_BYTES) this.joinSync.questFlags.set(full.subarray(0x4f4, 0x4f4 + QUEST_FLAG_TABLE_BYTES));
     this.joined = new Promise((res, rej) => {
       this.resolveJoined = res;
       this.rejectJoined = rej;
@@ -538,12 +532,14 @@ export class Game extends Lobby {
     this.sendJoinSync(p.clientId);
   }
 
-  // What the original client sends to a joining player (GC-XB-CrossplayForestGame capture):
-  // the leader sends the state commands, everyone sends its own 6x70.
+  // What the original client sends to a joining player (unknown_player_join_party,
+  // GC-XB-CrossplayForestGame capture): the leader sends 6x6D, 6x6B, 6x6C, 6x6E,
+  // 6x6F and 6x71 (net/joinsync.ts), then everyone sends its own 6x70.
   private sendJoinSync(target: number): void {
     const me = this.self;
     if (!me) return;
-    if (this.selfId === this.leaderId) {
+    const leader = this.selfId === this.leaderId;
+    if (leader) {
       // 6x6D item state (G_SyncItemState_6x6D_Decompressed, 0x8C: next drop number
       // per floor, next item id per player, floor item count per floor). The web
       // client does not track drops, so drop numbers and floor items are zero.
@@ -558,23 +554,57 @@ export class Game extends Lobby {
         idv.setUint32(0x20 + i * 4, 0x00010000 + 0x00200000 * i + used, true);
       }
       this.conn.send(0x6d, target, syncStateCommand(0x6d, items));
-      // 6x6B / 6x6C / 6x6E (enemy, object, set flag states) are not sent: newserv
-      // requires exactly the entity counts of every floor's map (including enemy
-      // children), which needs the full entity expansion. 6x6F (quest flags) is
-      // not sent either: the web client does not track them and zeros would
-      // overwrite the game's flags.
-      const unblock = new Uint8Array([0x71, 0x01, 0x00, 0x00]);
-      this.conn.send(0x62, target, unblock);
     }
-    // Fresh save data: net/items.ts keeps the inventory (item ids, pickups) in it.
-    this.selfSnapshot = selfData(this.ctx.fullCharacter(), this.lobby.selfEntry);
-    const sync = buildPlayerSync(
-      this.selfSnapshot,
-      { clientId: this.selfId, floor: me.floor, position: me.position, angle: me.angle },
-      this.ctx.guildCardNumber,
-      this.telepipes.get(this.selfId),
-    );
-    this.conn.send(0x6d, target, sync);
+    const rest = async (): Promise<void> => {
+      if (leader) {
+        let counts: SyncCounts | null = null;
+        try {
+          counts = (await this.prepareJoinSync?.()) ?? null;
+        } catch (err) {
+          this.log(`join sync: ${(err as Error).message}`);
+        }
+        if (!this.players.has(target)) return; // the joiner left meanwhile
+        if (counts) {
+          this.conn.send(0x6d, target, this.joinSync.build6x6B(counts.enemySlots));
+          this.conn.send(0x6d, target, this.joinSync.build6x6C(counts.objects));
+          this.conn.send(0x6d, target, this.joinSync.build6x6E(counts));
+          this.log(`join sync to ${target}: ${counts.enemySlots} enemy slots, ${counts.objects} objects, ${counts.enemySets} enemy sets, ${counts.events} events`);
+        }
+        this.conn.send(0x62, target, this.joinSync.build6x6F());
+        this.conn.send(0x62, target, new Uint8Array([0x71, 0x01, 0x00, 0x00]));
+      }
+      // Fresh save data: net/items.ts keeps the inventory (item ids, pickups) in it.
+      this.selfSnapshot = selfData(this.ctx.fullCharacter(), this.lobby.selfEntry);
+      const sync = buildPlayerSync(
+        this.selfSnapshot,
+        { clientId: this.selfId, floor: me.floor, position: me.position, angle: me.angle },
+        this.ctx.guildCardNumber,
+        this.telepipes.get(this.selfId),
+      );
+      this.conn.send(0x6d, target, sync);
+    };
+    void rest();
+  }
+
+  // Our own 6x0A, 6x0B and 6x5F go through here too, so the saved tables
+  // follow them as the exe's senders do.
+  recordSent(body: Uint8Array): void {
+    this.recordState(body[0], body, false);
+  }
+
+  private recordState(sub: number, body: Uint8Array, received: boolean): void {
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const ultimate = (this.info?.difficulty ?? 0) === 3;
+    if (sub === 0x0a && body.length >= 0x0c) {
+      this.joinSync.recordEnemyState(dv.getUint16(4, true), dv.getUint32(8, true), dv.getUint16(6, true), received, ultimate);
+    } else if (sub === 0x0b && body.length >= 0x0c) {
+      // handle_packet0x60_0xb_box_break: the object index at +8 (the exe takes
+      // it from the object the header names when it exists; the same index).
+      this.joinSync.recordObjectState(dv.getUint32(8, true), dv.getUint32(4, true));
+    } else if (sub === 0x5f && body.length >= 8) {
+      // G_DropItem_6x5F: FloorItem {u8 floor, u8 from enemy, u16 entity index, ...}.
+      this.joinSync.recordDrop(body[5] === 1, dv.getUint16(6, true));
+    }
   }
 
   private onGameSubcommand(sub: number, clientId: number, body: Uint8Array): void {
@@ -613,15 +643,29 @@ export class Game extends Lobby {
         this.writeQuestFlag(flag, dv.getUint16(6, true) === 0);
         break;
       }
-      case 0x6f: {
-        // G_SetQuestFlags_BB_6x6F: the leader's whole flag table while we load
-        // (0x200 bytes, 0x80 per difficulty, MSB-first bits; newserv
-        // PlayerSubordinates.hh FlagsTable<0x400, 4, Difficulty>).
-        if (body.length < 4 + 0x200) return;
-        const at = 4 + (this.info?.difficulty ?? 0) * QUEST_FLAG_BYTES;
-        this.questFlags.set(body.subarray(at, at + QUEST_FLAG_BYTES));
+      case 0x6f:
+        // G_SetQuestFlags_BB_6x6F: the leader's flag table while we load
+        // (0x200 bytes, 0x80 per difficulty); with use_apply_mask only the
+        // flags of the exe's list are taken (net/joinsync.ts).
+        this.joinSync.apply6x6F(body);
+        break;
+      case 0x6b:
+        this.log(`6x6B: ${this.joinSync.apply6x6B(body)} enemy states`);
+        break;
+      case 0x6c:
+        this.log(`6x6C: ${this.joinSync.apply6x6C(body)} object states`);
+        break;
+      case 0x6e: {
+        const ok = this.joinSync.apply6x6E(body);
+        const r = this.joinSync.received;
+        this.log(ok ? `6x6E: ${r.objects} object / ${r.enemySets} enemy set flags, ${r.events} event flags, switch flags` : '6x6E: malformed');
         break;
       }
+      case 0x0a:
+      case 0x0b:
+      case 0x5f:
+        this.recordState(sub, body, true);
+        break;
       case 0x77: {
         // G_SyncQuestRegister_6x77: another client's sync_register.
         if (body.length < 0x0c) return;
@@ -873,7 +917,9 @@ export class Game extends Lobby {
   // index, u16 total damage, u32 game flags}. Flags: 0x20000000 enemy,
   // 0x200 hit, 0x400 big hit, 0x800 dead, 0x100 missed (see combat/formulas.ts).
   sendEnemyState(enemyIndex: number, totalDamage: number, flags: number): void {
-    this.conn.send(0x60, 0, buildEnemyState(enemyIndex, totalDamage, flags));
+    const b = buildEnemyState(enemyIndex, totalDamage, flags);
+    this.recordSent(b);
+    this.conn.send(0x60, 0, b);
   }
 
   // 6x2C (G_ImposeHold_6x2C, 0x14): {u8 0x2c, u8 5, u16 client id} {u16
