@@ -627,6 +627,8 @@ export class GameItems {
   bank: BankContents | null = null;
   onShop: (shopType: number) => void = () => {};
   onBank: () => void = () => {};
+  // The Telepipe was used (render/telepipe.ts opens the pipe).
+  onTelepipe: () => void = () => {};
   // The tekker's request and answer (the exe's g_ActionData_00a960d8 and
   // its "processed" flag 0x00a960ec).
   private identifySent: ItemData | null = null;
@@ -946,10 +948,16 @@ export class GameItems {
   // technique disks the class can learn, grinders with an equipped weapon
   // below its max grind, and the materials. `maxTechLevel(tech)` and
   // `maxGrind()` come from ItemPMT.
-  canUse(it: InventoryItem, rules: { maxTechLevel?: (tech: number) => number; maxGrind?: (weapon: ItemData) => number } = {}): boolean {
+  canUse(
+    it: InventoryItem,
+    rules: { maxTechLevel?: (tech: number) => number; maxGrind?: (weapon: ItemData) => number; telepipe?: () => boolean } = {},
+  ): boolean {
     const d = it.data.data1;
     if (wrappedFlag(it.data)) return true;
     if (d[0] !== 3) return false;
+    // ValidateItemForEquip_005c9e40: the Telepipe needs
+    // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0.
+    if (d[1] === 7) return rules.telepipe?.() ?? false;
     if (d[1] < 0x0a && d[1] !== 2) return true;
     if (d[1] === 2) {
       const max = rules.maxTechLevel?.(d[4]);
@@ -975,6 +983,8 @@ export class GameItems {
     if (wrappedFlag(it.data)) {
       unwrap(it.data);
     } else {
+      // use_telepipe -> unknown_cast_tech(ryuker): the caster's pipe.
+      if (d[1] === 7) this.onTelepipe();
       if (d[1] === 2) c.techLevels[d[4]] = d[2] + 1;
       if (d[1] === 0x0a) {
         const w = c.inventory.find((i) => i.equipped && i.data.data1[0] === 0)!;

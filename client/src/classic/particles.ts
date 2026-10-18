@@ -74,9 +74,12 @@ export interface Emitter {
   pos: [number, number, number];
   rotX: number; // radians (BAMS 0x4000 = 90 degrees)
   acc: number;
+  // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
+  // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
+  tint?: number;
 }
 
-interface Particle {
+export interface Particle {
   e: Emitter;
   p: [number, number, number];
   v: [number, number, number]; // local
@@ -103,8 +106,13 @@ export class ParticleSystem {
     return ((this.seed >>> 16) & 0x7fff) / 32768;
   }
 
-  add(entry: ParticleEntry, pos: [number, number, number], rotX: number): void {
-    this.emitters.push({ entry, pos, rotX, acc: 0 });
+  add(entry: ParticleEntry, pos: [number, number, number], rotX: number, tint?: number): void {
+    this.emitters.push({ entry, pos, rotX, acc: 0, tint });
+  }
+
+  // The live particles (render/telepipe.ts draws them in the world).
+  get live(): readonly Particle[] {
+    return this.list;
   }
 
   step(spawn = true): void {
@@ -161,10 +169,9 @@ export class ParticleSystem {
       if (z < 1) continue;
       const img = texture(d.gbix);
       if (!img) continue;
-      const t = Math.min(q.age, 1);
-      const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
+      const { fade, rgb } = particleShade(q);
       if (fade <= 0) continue;
-      const c = [0, 1, 2].map((i) => Math.max(0, Math.min(1, t * d.colorSlope[i] + d.colorBase[i])) * 255);
+      const c = rgb.map((v) => v * 255);
       ctx.globalAlpha = fade;
       const tinted = tint(img, `g${d.gbix}`, c[0], c[1], c[2]);
       const k = this.D / z;
@@ -192,6 +199,20 @@ export class ParticleSystem {
     }
     ctx.restore();
   }
+}
+
+// A particle's fade and colour (0..1) at its age (FUN_0050dbb8), with the
+// emitter's tint.
+export function particleShade(q: Particle): { fade: number; rgb: [number, number, number] } {
+  const d = q.e.entry;
+  const t = Math.min(q.age, 1);
+  const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
+  const tint = q.e.tint;
+  const rgb = [0, 1, 2].map((i) => {
+    const v = Math.max(0, Math.min(1, t * d.colorSlope[i] + d.colorBase[i]));
+    return tint ? v * (((tint >>> (16 - 8 * i)) & 0xff) / 255) : v;
+  }) as [number, number, number];
+  return { fade, rgb };
 }
 
 // Additive tint of a texture (vertex color x texel), cached per color step.

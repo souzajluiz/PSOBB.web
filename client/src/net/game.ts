@@ -20,6 +20,7 @@
 // Leave:   C->S 98 (C_CharacterData_BB_61_98), 84 {LOBBY menu id, lobby id} -> S->C 67
 //          The others get 66 (flag = client id; data: client_id, leader_id, ...).
 
+import { NO_OWNER, parseTelepipeState, readTelepipe, TelepipeStore, writeTelepipe, type TelepipeState } from './telepipe.ts';
 import type { BBConnection, Command } from './bbconnection.ts';
 import { readUtf16 } from './bbconnection.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
@@ -245,7 +246,7 @@ export interface PlayerState {
 //       area @0B4, player_flags @0B8, technique_levels_v1 @0BC
 //   0D0 PlayerVisualConfigV4   140 PlayerStats   164 num_items
 //   168 PlayerInventoryItem[30]   4B0 floor   4B4/4B8 xb user id   4BC unknown
-export function buildPlayerSync(self: SelfData, s: PlayerState, guildCardNumber: number): Uint8Array {
+export function buildPlayerSync(self: SelfData, s: PlayerState, guildCardNumber: number, telepipe?: TelepipeState): Uint8Array {
   const out = new Uint8Array(0x4c0);
   const dv = new DataView(out.buffer);
   out[0] = 0x70;
@@ -263,7 +264,8 @@ export function buildPlayerSync(self: SelfData, s: PlayerState, guildCardNumber:
   dv.setUint32(0x6c, self.inventory[3], true); // language
   dv.setUint32(0x70, 0x00010000, true); // player_tag
   dv.setUint32(0x74, guildCardNumber, true);
-  dv.setUint16(0x80, 0xffff, true); // telepipe owner: none
+  if (telepipe) writeTelepipe(dv, 0x80, telepipe);
+  else dv.setUint16(0x80, NO_OWNER, true); // telepipe owner: none
   dv.setUint32(0x98, 0x0000ffff, true); // telepipe unknown_a4 default
   dv.setUint32(0xb4, s.floor, true); // area
   out.set(self.disp.subarray(0x17c, 0x190), 0xbc); // technique_levels_v1
@@ -369,6 +371,8 @@ export class Game extends Lobby {
   readonly questFlags = new Uint8Array(QUEST_FLAG_BYTES);
   // Registers another client synced with 6x77 (sync_register).
   readonly questRegisters = new Map<number, number>();
+  // Every player's telepipe (net/telepipe.ts): 6x68, 6x70 and our own.
+  readonly telepipes = new TelepipeStore();
   // Resolves when the server acknowledged our 6F (B1): other players can join now.
   readonly ready: Promise<void>;
   private resolveReady!: () => void;
@@ -561,7 +565,12 @@ export class Game extends Lobby {
     }
     // Fresh save data: net/items.ts keeps the inventory (item ids, pickups) in it.
     this.selfSnapshot = selfData(this.ctx.fullCharacter(), this.lobby.selfEntry);
-    const sync = buildPlayerSync(this.selfSnapshot, { clientId: this.selfId, floor: me.floor, position: me.position, angle: me.angle }, this.ctx.guildCardNumber);
+    const sync = buildPlayerSync(
+      this.selfSnapshot,
+      { clientId: this.selfId, floor: me.floor, position: me.position, angle: me.angle },
+      this.ctx.guildCardNumber,
+      this.telepipes.get(this.selfId),
+    );
     this.conn.send(0x6d, target, sync);
   }
 
@@ -576,6 +585,8 @@ export class Game extends Lobby {
         parsePlayerSync(body, p);
         this.players.set(id, p);
         this.inventoryCounts.set(id, dv.getUint32(0x164, true));
+        const pipe = readTelepipe(dv, 0x80);
+        if (pipe.owner === id) this.telepipes.set(pipe);
         // Re-announce so views rebuild the model with the real appearance.
         this.emit('playerJoined', p);
         this.emit('floorChanged', p);
@@ -584,6 +595,13 @@ export class Game extends Lobby {
       case 0x72:
         this.resumed = true;
         break;
+      case 0x68: {
+        // Another player's telepipe (render/telepipe.ts shows it). The header's
+        // client id field is unused (G_UnusedHeader).
+        const pipe = parseTelepipeState(body);
+        if (pipe && pipe.owner !== this.selfId) this.telepipes.receive(pipe);
+        break;
+      }
       case 0x75: {
         // G_UpdateQuestFlag_V3_BB_6x75: another client's quest opcode changed
         // a flag. action 0 = set, 1 = clear.

@@ -233,6 +233,9 @@ export class CombatView {
   progression: PlayerProgression | null = null;
   private levelTablePromise: Promise<LevelTable | null> | null = null;
   hud: PlayerHud | null = null;
+  // Ryuker's pipe (render/telepipe.ts): whether one can be opened here
+  // (SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0) and opening it.
+  telepipe: { allowed: () => boolean; open: () => boolean } | null = null;
   tp = 0;
   // 6xDD: the lobby's EXP multiplier (unknown_xp_multiplier).
   expMultiplier = 1;
@@ -808,10 +811,10 @@ export class CombatView {
       this.opts.log(`${name}: not learned`);
       return false;
     }
-    if (tech === TECH.ryuker) {
-      // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0 and the warp
-      // back to Pioneer 2 are not part of the web client.
-      this.opts.log(`${name}: not wired (no telepipe)`);
+    if (tech === TECH.ryuker && !this.telepipe?.allowed()) {
+      // CanPlayerCastTechnique_0069a0c4: Ryuker needs
+      // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0.
+      this.opts.log(`${name}: no telepipe here`);
       return false;
     }
     const data = techData(tech, level, me.charClass);
@@ -970,6 +973,13 @@ export class CombatView {
     const from = view.playerPositions().get(me.clientId);
     if (!from) return;
     const mst = this.selfStats().mst;
+    if (c.tech === TECH.ryuker) {
+      // unknown_cast_tech case ryuker: the caster's own client opens the pipe
+      // (CreateChallengeObjectEntity_006e8478).
+      const opened = this.telepipe?.open() ?? false;
+      this.opts.log(`${name}: ${opened ? 'telepipe opened' : 'no new telepipe'}`);
+      return;
+    }
     if (c.tech === TECH.resta) {
       const heal = restaHeal(c.level, mst, me.charClass);
       const before = this.damage.hp;

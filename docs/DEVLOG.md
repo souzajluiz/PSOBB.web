@@ -1,5 +1,72 @@
 # Devlog
 
+## 2026-10-17: Ryuker and telepipes
+
+**What changed:** Ryuker and the Telepipe item open a pipe on a field floor;
+using it takes the player to Pioneer 2, where the owner's pipe (TObjLuker)
+takes anyone back, and the owner's trip closes it. Other players' pipes come
+with `6x68` (and `6x70` for a joiner). `net/telepipe.ts` (state, commands,
+rules), `render/telepipe.ts` (pipes in the world, using them), wired into
+`render/gameview.ts`, `render/combat.ts`, `render/fieldhud.ts` and
+`net/items.ts`.
+
+**Details** (Ephinea `PsoBB.exe`; the dump names this code Challenge* /
+Sinowberill*):
+- **State:** each player object holds a TelepipeState at +0x904 (owner,
+  floor, room, x / y / z, angle), filled by `set_saved_telepipe_information`;
+  open while its floor is not 0 (0x006e839c).
+- **6x68** (`SendTelepipeStatePacket_006e90b8`, 0x1C via 60); the handler
+  (`ProcessTelepipeTeleportRequest_006e9410`, subcommand table 0x00a100xx)
+  stores it unless it names the pipe already known (same floor, within 0.2
+  on the ground plane, 0x0096d920) and shows it when the owner is on our
+  floor. A floor that loads shows every pipe on it (0x006e9548).
+- **Opening** (`unknown_cast_tech` case ryuker, caster's client only;
+  `use_telepipe` calls the same): allowed by
+  `SinowberillChallengePlayer_UpdateTelepipeState_00688b4c` (not battle or
+  challenge, not a boss map: type 0x0B in the table at 0x0097f040, not a
+  safe map); the item is greyed out otherwise (ValidateItemForEquip). State
+  0 of the pipe (`ChallengeEntity_Update_006e88d0`) skips a pipe of ours
+  already standing there, else `CreateChallengeEnemyEntity_006e8ca4` puts
+  the particles on the ground (particleentry 0xB1, 0xB2 and 0xB0 1.8
+  higher; colour override by owner, 0x0096d928) and sends 6x68.
+- **Using the field pipe:** state 1 waits for its trigger (vtable 0x00b3dae0
+  +0x2c sets +0xB0); then the flash 0xB3, `6x2C {10 frames}`
+  (SendChallengeEntityPacket_006854a8), SE 0xA1, 10 frames, and the warp to
+  floor 0.
+- **The Pioneer 2 pipe** (TObjLuker 0x41, param4 owner,
+  `SinowberillMapObjectUpdateHandler_0066e3bc`): shows the owner's open pipe;
+  within 10 units a window at 0x35 (267, 130) names the area; the key of
+  binding 0xC (the left arrow by default) uses it the same way, then warps
+  to the pipe's floor; the owner's own trip closes it (0x006e8388) and sends
+  6x68.
+- **Arrival** (`GetTeleportTargetDataForPlayer_006e9630`): Pioneer 2 at the
+  spot of the client id (0x0096d8a0 Episodes 1 / 4, 0x0096d8d0 Episode 2),
+  angle 0x4000; the field at the pipe's position and angle.
+- **ASSUMED:** the field pipe is used with the Pioneer 2 pipe's key and 10
+  units (the trigger is reached through the targeting system, not
+  modelled); the pipe appears when the cast is released (the Ryuker effect
+  object's timing, 0x006a3df0, is not recovered); the colour override
+  scales the entry's colour; the flash spawns once; the area name comes from
+  the client's own table rather than unitxt; the window size.
+- **Left out:** the type-1 particle 0xB0 (gate_circle), the light made 15
+  above the pipe (0x00503450), the loop sound 0xA0. The streak particles
+  (0xB2) use the sizes of `classic/particles.ts` (half sizes of 16 x
+  opt x |step|), which make wide bars.
+
+**Checks:**
+- `tests/telepipe.test.ts`: 6x68 / 6x2C bytes, the store's 6x68 rule,
+  closing, where a pipe may open, arrival spots, the 6x70 field, the
+  Telepipe item's rule and use.
+- In Chrome against newserv (WebForce, Ryuker from `$edit tech ryuker 1`):
+  in Forest 1, Ryuker (cast through `castTechnique`) opened a pipe (6x68
+  sent, particles shown); the left arrow at it warped to Pioneer 2 at
+  (-312, 0, -113) facing 90 degrees; the TObjLuker of owner 0 showed the pipe
+  and the "Forest 1" window within 10 units; the left arrow there warped
+  back to the pipe's spot in Forest 1 and closed the pipe (floor 0). A
+  Telepipe made with `$item` and picked up opened a pipe and was used up.
+  newserv kept the connection through all of it. Another player's pipe was
+  not tried live (one account).
+
 ## 2026-10-17: Tekker
 
 **What changed:** the tekker (bb_p2_menu 6, JUDGMENT) identifies unknown

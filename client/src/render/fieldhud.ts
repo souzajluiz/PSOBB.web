@@ -21,6 +21,8 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { MENU_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
+import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
+import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
 import { createCounter, type Counter, type CounterKind } from '../classic/shop.ts';
@@ -33,6 +35,7 @@ import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const FRAME = 1 / 30;
+const PROMPT_POS = [267, 130] as const; // position table 0x00971f40 entry 0x35
 const NO_KEYS: ReadonlySet<string> = new Set();
 // newserv class_flags_for_class: bit 0x10 = android.
 const ANDROID_CLASSES = new Set([2, 4, 5, 9]);
@@ -46,6 +49,9 @@ export interface FieldHudOptions {
   // Starts a technique cast from the Technique menu (render/combat.ts
   // castTechnique); false when it cannot be cast.
   cast?: (tech: number) => boolean;
+  // Whether a telepipe can be opened here (render/telepipe.ts): the Telepipe
+  // item is greyed out otherwise.
+  telepipeAllowed?: () => boolean;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   log?: (msg: string) => void;
@@ -78,6 +84,9 @@ export class FieldHud {
   private onKey = (e: KeyboardEvent) => this.key(e);
   private hook = (dt: number) => this.frame(dt);
   private disposed = false;
+  // A one-line window at GUI position 0x35 (the Pioneer 2 pipe's area name,
+  // SinowberillMapObjectUpdateHandler_0066e3bc).
+  prompt: (() => string | null) | null = null;
 
   constructor(viewer: MapViewer, files: ClientFiles, opts: FieldHudOptions) {
     this.viewer = viewer;
@@ -160,6 +169,7 @@ export class FieldHud {
     return {
       maxTechLevel: (tech: number) => names?.pmt.maxTechLevels[tech]?.[charClass] ?? 0xff,
       maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
+      telepipe: () => this.opts.telepipeAllowed?.() ?? false,
     };
   }
 
@@ -328,6 +338,12 @@ export class FieldHud {
     ctx.imageSmoothingEnabled = true;
     if (this.palette && !this.menu.isOpen && !this.counter) {
       this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i) }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
+    }
+    const prompt = !this.menu.isOpen && !this.counter ? this.prompt?.() : null;
+    if (prompt) {
+      // Window 0x35 = (267, 130), sized to its line (ASSUMED layout).
+      const w = gameTextWidth(prompt) + 2 * INSET;
+      drawTextWindow(ctx, this.tex.skin, { x: anchorX(PROMPT_POS[0], w, extra), y: PROMPT_POS[1], w, h: LINE + 2 * INSET }, prompt);
     }
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra);
     this.counter?.draw(ctx, this.tex.skin, this.tex.menu, extra);

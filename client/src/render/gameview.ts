@@ -16,7 +16,7 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel, type MapSection } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld, type ObjectSetEntry } from '../formats/objset.ts';
-import { parseSetFile, placeEntities, type EnemySet } from '../formats/setdata.ts';
+import { parseSetFile, placeEntities, type EnemySet, type PlacedEntity } from '../formats/setdata.ts';
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
 import { GameItems } from '../net/items.ts';
@@ -32,6 +32,7 @@ import { enemySlots } from '../formats/enemyids.ts';
 import { parseEnemySets } from '../formats/setdata.ts';
 import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
 import { NpcLayer } from './npcview.ts';
+import { TelepipeLayer, type Arrival } from './telepipe.ts';
 import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -75,6 +76,10 @@ export class GameView {
   readonly items: GameItems;
   readonly floorItems: FloorItemLayer;
   readonly hud: FieldHud;
+  // Ryuker / Telepipe pipes and the Pioneer 2 pipes (render/telepipe.ts).
+  readonly telepipes: TelepipeLayer;
+  // The objects of the floor the player is on.
+  private placedObjects: PlacedEntity[] = [];
   private collision: CollisionWorld | null = null;
   private objectCounts = new Map<number, Promise<number>>();
   private enemyCounts = new Map<number, Promise<number>>();
@@ -139,8 +144,25 @@ export class GameView {
       questStarted: () => this.quest !== null,
       blocked: () => this.field.menu.open,
       cast: (t) => this.combat.castTechnique(t),
+      telepipeAllowed: () => this.telepipes.allowed(),
       log,
     });
+    this.telepipes = new TelepipeLayer(viewer, game, this.files, {
+      log,
+      area: () => this.current?.area ?? 0,
+      floor: () => this.current?.floor ?? null,
+      episode: () => this.game.info?.episode ?? 1,
+      selfPose: () => this.selfPose(),
+      ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+      roomAt: (pos) => this.roomAt(pos),
+      objects: () => this.placedObjects,
+      blocked: () => this.field.menu.open || this.busy || this.inputBlocked() || this.hud.menu.isOpen || this.hud.counterOpen,
+      areaName: (floor) => AREA_NAMES[floorToArea(this.game.info?.episode ?? 1)[floor] ?? -1] ?? `floor ${floor}`,
+      warp: (floor, arrival) => this.warpTo(floor, undefined, arrival),
+    });
+    this.hud.prompt = () => this.telepipes.prompt();
+    this.combat.telepipe = { allowed: () => this.telepipes.allowed(), open: () => this.telepipes.open() };
+    this.items.onTelepipe = () => this.telepipes.open();
     this.hud.load().catch((err) => log(`field HUD: ${(err as Error).message}`));
   }
 
@@ -251,7 +273,9 @@ export class GameView {
   // 6x21 + 6x22, load, then 6x3F / 6x1F / 6x3B / 6x23.
   // `source` picks the TObjPlayerSet group (p_return_guild uses 0, the
   // spawn in front of the Hunter's Guild).
-  async warpTo(floor: number, source?: number): Promise<void> {
+  // `arrival`: where a telepipe puts the player (GetTeleportTargetDataForPlayer
+  // _006e9630) instead of the floor's spawn point.
+  async warpTo(floor: number, source?: number, arrival?: Arrival): Promise<void> {
     const me = this.game.self;
     if (!me || this.busy || floor === me.floor) return;
     this.busy = true;
@@ -260,6 +284,7 @@ export class GameView {
       this.game.warp(floor);
       // TObjPlayerSet param4: 0 = arriving from a lower floor, 1 = returning from a higher one.
       await this.loadFloor(floor, source ?? (floor > from ? 0 : 1));
+      if (arrival) this.view?.placePlayer(this.game.selfId, arrival.x, arrival.y, arrival.z, arrival.angle);
       this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle);
     } finally {
       this.busy = false;
@@ -388,7 +413,7 @@ export class GameView {
     this.floorItems.enterFloor(floor, area, placedObjects, objectBase);
     this.floorItems.attach();
     const attacking = this.combat.isAttacking;
-    this.view.attacking = (id) => attacking(id) || (id === this.game.selfId && this.inputBlocked());
+    this.view.attacking = (id) => attacking(id) || (id === this.game.selfId && (this.inputBlocked() || this.telepipes.using));
     await this.combat.enterFloor(floor, area, enemySets, await this.combat.enemyBase(floor));
     if (this.disposed) return;
     this.combat.attach(this.view);
@@ -406,6 +431,8 @@ export class GameView {
       `floor ${floor} (${this.current.name}): ${geometry}, ${files?.objects ?? '-'} (${objects.length}), ${files?.enemies ?? '-'} (${enemyCount}), ` +
         `${mapData.spawns.size} spawn points`,
     );
+    this.placedObjects = placedObjects;
+    this.telepipes.enterFloor();
     this.onFloor(this.current);
     for (const h of this.floorHooks) h(this.current);
   }
@@ -507,6 +534,7 @@ export class GameView {
   dispose(): void {
     this.disposed = true;
     this.combat.dispose();
+    this.telepipes.dispose();
     this.hud.dispose();
     this.field.dispose();
     this.floorItems.dispose();
