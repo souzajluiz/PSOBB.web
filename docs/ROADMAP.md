@@ -1,5 +1,21 @@
 # Roadmap
 
+## Next up (queued 2026-10-18)
+Work stopped here on request; pick these up first, in order. Each was planned
+as its own commit with tests, a DEVLOG entry and a Chrome check.
+1. Area Map window (main menu; full-map HUD flag bit 1 at 0x007441a8): the
+   floor map, player and party markers.
+2. Options window (main menu): window speed (character +0x4ec bits 0x300,
+   already read by `classic/windowanim.ts`), cursor memory and the rest, saved
+   the way the client saves them.
+3. Medical center counter (`bb_p2_menu`): heal HP / TP and cure status for the
+   exe's meseta cost; the giveaway counter if cheap.
+4. The in-game main menu path to the quest board (replaces the temporary B key,
+   if the client has one).
+5. Then: Episode 1 bosses' children placement (line in Phase 5), Pan Arms /
+   Pofuilly splits, the Vol Opt seal door's .njs shape motion, Episode 2
+   enemies' FSMs, the title / login screens, water distortion.
+
 ## Phase 1: foundation ✅
 - [x] Build newserv on macOS (Apple Silicon)
 - [x] BB cipher in TS, tested against newserv
