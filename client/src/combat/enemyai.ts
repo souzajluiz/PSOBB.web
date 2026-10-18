@@ -240,6 +240,7 @@ export interface AiTarget {
   z: number;
   charClass: number;
   dead: boolean;
+  angle?: number; // heading in radians (the wolf watches where it faces)
 }
 
 // What the owner must do after a tick.
@@ -249,6 +250,22 @@ export interface AiFrame {
   z: number;
   angle: number; // radians
   hit: { clientId: number; knockback: number; mult: number } | null; // the attack landed
+  // Per-family FSMs (combat/enemyfsm.ts): a status effect landing on a player
+  // without damage (Poison Lily's scream), a projectile to launch, and the
+  // height of the model above the ground (Savage Wolf's leap).
+  status?: { clientId: number; type: number } | null;
+  projectile?: { x: number; z: number; angle: number } | null;
+  lift?: number;
+}
+
+// What render/combat.ts drives: the generic FSM below or a per-family one.
+export interface EnemyBrain {
+  state: string;
+  readonly motion: EnemyAiMotion | null;
+  tick(targets: readonly AiTarget[], animationEnded?: boolean): AiFrame;
+  onDamage(clientId: number): void;
+  resume(): string;
+  kill(): void;
 }
 
 // One enemy's behaviour. Positions are world units, angles radians; tick() is

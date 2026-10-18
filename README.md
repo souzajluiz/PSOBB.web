@@ -79,6 +79,7 @@ node tests/combat.test.ts        # damage/accuracy formulas, attack combo timing
 node tests/techniques.test.ts    # technique per-level data, TP, power, damage/heal formulas, 6x8D/6x47/6x48 bytes, cast timing
 node tests/buffs.test.ts         # Shifta/Deband/Jellen/Zalure amounts, durations, stacking, damage math with buffs, Anti/Reverser, status icons
 node tests/status.test.ts        # poison/paralysis/freeze/shock/slow/confusion slots, poison damage and period, Anti levels, Antidote/Antiparalysis, 6x0C/6x0D watcher, Ultimate melee status rolls
+node tests/enemyfsm.test.ts      # Poison Lily track/spit/bite/scream and its spit, Savage Wolf stalk/leap arc/hop back, Rag Rappy fake death, Monest Mothmant schedule and child slots
 node tests/combatdepth.test.ts   # player hit/death motions and the 6x4A-6x4F flow, enemy AI (search radius, chase, melee, recovery) and its exe tables
 node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them and their child objects
 node tests/bossrooms.test.ts     # boss warp gathering (6x6A state machine) and the boss music phases (6x15/6x19/6xA4/6xA5)

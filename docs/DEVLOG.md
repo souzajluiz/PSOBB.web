@@ -1,5 +1,77 @@
 # Devlog
 
+## 2026-10-18: Poison Lily, Savage Wolf, Rag Rappy and Monest behaviour
+
+**What changed:** four Forest / Caves families now run their own state
+machines instead of the generic walking FSM (`combat/enemyfsm.ts`, driven by
+`render/combat.ts`; `render/enemyview.ts` can build a model at run time). The
+Poison Lily tracks, spits poison and bites, and screams (paralysis) after a
+flinch; the wolves stalk, leap in an arc and hop back; a killed Rag Rappy
+lies down, gets up and runs off; a Monest spawns Mothmants into its own
+MOTHMANT entity slots.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Poison Lily** (LilyAI_Update_00527e74, table 0x009bc280): idle searches
+  250; tracking turns at 512 BAMS (0x009bc33c), refreshes its target every 20
+  frames, goes back to idle past 300 (0x00922044), bites closer than 50
+  (0x00922040) inside AttackData's angle, else spits once its frame count
+  passes 100 (0x0092203c). The spit (0x00529e68, update 0x0052a08c) leaves the
+  mouth 12 up at frame 12, flies 4.0 a frame (0x009221c4), falls 0.1 a frame
+  more from frame 18, lives 150 frames, radius 2.0, and hits with
+  {group 0x0f, 2.0} (0x009bc384): poison, no damage; a hit sets the Lily's
+  flag 2 (0x00529c78) and it switches to the satisfied row. The bite lands at
+  frame 10 (try_hit_entity 1.0, knockback 3.0) and holds 3 + 20 frames.
+  After a flinch: roll < 0.3 (0x00922084) screams; at frame 6 it locks the
+  first player within 100 (10000 squared) and at frame 25 hits it with group
+  0x10 (0x00922070): paralysis.
+- **Savage / Barbarous Wolf** (stalk 0x0051cdfc, leap 0x0051c810, hop back
+  0x0051c264, table 0x009bb860): the stalk circles at a radius easing 0.2 a
+  frame toward a random 50..80; after 45 frames it leaps when closer than 30
+  (0xa72e04 = 900), when the target faces it (below cos 0x6aaa) or with roll
+  < 0.5 every 451 frames. The leap aims with d = min(distance, 40), steps
+  d / 13.333 a frame, rises 20 - 20 (t - 15)^2 / 15^2 for 30 motion frames
+  (0xa72dfc = 15), slows by 0.8 after, hits at frame 20 with knockback 7.0
+  and ends in the hop back (1.8 a frame, turned 0x1800 by the entity parity).
+- **Rag Rappy** (update_rappy, PlayerProcessVulnerableState_00525c90): a dead
+  Rappy counts frames and gets up when nobody is within 120 or after 900
+  frames, spins a random amount every frame through animation 9 (motion 7),
+  then runs (animation 4, motion 3) at its record speed * 3.5 (0x00921be8),
+  turning 90 degrees when a player within 300 is within 0xaaa of its heading
+  (after 15 frames), and is deleted when its next step finds no ground.
+- **Monest** (monest_constructor, MothmanManageSpawnLogic_00519ad0,
+  spawn_mothmant_from_monest): total = initdata_param3 (max 30), batches of
+  2 every 120 frames, never more than 6 alive; the spawn state (animation 5,
+  motion 7) spawns at motion frame 15, 25 above the Monest (0x00920e68).
+  The first child's entity index is the Monest's + 1 (+0x3cc), +1 per spawn,
+  which is the MOTHMANT slot newserv's expandEnemySets gives it, so a killed
+  Mothmant's 6x0A / EXP request uses the right index.
+
+**Assumed:** the leap's motion speed (written at run time) is
+30 / 13.333 = 2.25 so the leap covers d; the stalk step 0.7 and the far
+logic as a straight approach; the Lily's satisfied state lasts 60 frames; the
+spit ends at the ground; the player's projectile radius 5; the Rappy runs at
+the MovementData engaged speed (fparam1 = 8 would make 28 a frame) and is
+also removed after 600 frames of running; the Monest wakes when a player is
+within 225; Mothmants fly 15 above the ground and use the generic FSM; the
+spit is drawn as a small green ball. Left out: the wolf's side dash and the
+Barbarous Wolf's howl (Zalure / Jellen), the Lily's low-HP spin, Ultimate /
+Del Lily's Megid, the Rappy's own chase states, the Mothmant's own FSM.
+
+**Tests:** `tests/enemyfsm.test.ts` (new): Lily search / track / spit timing
+/ bite / scream / satisfied, the spit's flight, the wolf's leap arc and its
+stalk -> leap -> hop -> stalk cycle, the Rappy's get-up timing and run speed,
+the Monest schedule and its MOTHMANT slots.
+
+**Checked in Chrome** (WebForce, with test HP and placement from the
+console): in Cave 1 a Poison Lily tracked, spat after ~3 s and the spit
+poisoned the player (then the satisfied row); a flinch with a forced low roll
+made it scream and the player was paralyzed (`E-118 (POISON_LILY):
+paralysis`). In Forest 1 a Savage Wolf went stalk -> leap (lift up to 19.2)
+-> hop -> stalk and its leap hit; a killed Rag Rappy got up 2.4 s after its
+death motion and ran ~200 units before it was removed; a Monest (E-15)
+spawned Mothmants E-16, E-17 ... in pairs, they attacked, and killing E-16
+was accepted by newserv (EXP granted). No console errors.
+
 ## 2026-10-18: Status effects on the player
 
 **What changed:** the local player can now be poisoned, paralyzed, frozen,

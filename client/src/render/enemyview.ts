@@ -117,6 +117,24 @@ export class EnemyLayer {
     return done;
   }
 
+  // Builds one more model at run time (a Monest's Mothmant, combat/enemyfsm.ts):
+  // the spec's archive is the floor's own, so it is in the cache already.
+  async spawn(placed: PlacedEntity, spec: EnemyModelSpec): Promise<EnemyInstance | null> {
+    const gen = this.generation;
+    const archive = await this.cache.get(spec.bml, spec.models);
+    if (gen !== this.generation || !this.root) return null;
+    const built = buildEnemy(archive, spec.parts, 0, this.cache.loadedTextures, new Map());
+    built.root.position.set(placed.world[0], placed.world[1], placed.world[2]);
+    built.root.rotation.y = placed.yaw;
+    built.root.name = `${spec.name} (spawned)`;
+    built.root.userData.entity = placed;
+    this.root.add(built.root);
+    this.animators.push(...built.animators);
+    const instance: EnemyInstance = { placed, spec, archive, root: built.root, world: null, animators: built.animators, parts: built.animatedParts };
+    this.instances.push(instance);
+    return instance;
+  }
+
   // Removes one enemy's model (render/combat.ts: the death motion ended).
   remove(instance: EnemyInstance): void {
     const i = this.instances.indexOf(instance);

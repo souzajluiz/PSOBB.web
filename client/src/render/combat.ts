@@ -30,7 +30,20 @@ import {
   movementIndex,
   type AiTarget,
   type EnemyAiMotion,
+  type EnemyAiProfile,
+  type EnemyBrain,
 } from '../combat/enemyai.ts';
+import {
+  LilyAi,
+  LilySpit,
+  MONEST,
+  MonestSpawner,
+  MOTHMANT_FLY_HEIGHT,
+  MOTHMANT_PROFILE,
+  RappyFakeDeath,
+  WolfAi,
+} from '../combat/enemyfsm.ts';
+import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
 import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
 import {
@@ -133,7 +146,11 @@ interface EnemyRuntime {
   dead: boolean;
   state: 'idle' | 'damage' | 'death';
   removeIn: number; // seconds until a dead enemy is removed
-  ai: EnemyAi | null; // combat/enemyai.ts (null: no AI profile for this class)
+  ai: EnemyBrain | null; // combat/enemyai.ts or combat/enemyfsm.ts (null: no AI)
+  lift: number; // height above the ground (a leaping wolf, a flying Mothmant)
+  monest: MonestSpawner | null; // a Monest's Mothmant spawning
+  parent: EnemyRuntime | null; // a Mothmant's Monest
+  fake: RappyFakeDeath | null; // a dead Rappy getting up and running off
   attacker: AttackerStats | null; // this enemy hitting a player
   attack: EnemyAttackData | null;
   exp: number; // BattleParamEntry exp of the enemy's stats row
@@ -407,7 +424,12 @@ export class CombatView {
       // AI record (search radius / turn rate) and MovementData speeds.
       const className = instance.spec.name;
       const profile = AI_PROFILES[className] ?? null;
-      let ai: EnemyAi | null = null;
+      let ai: EnemyBrain | null = null;
+      let monest: MonestSpawner | null = null;
+      if (className === 'TObjEneBm3FlyNest') {
+        // monest_constructor: initdata_param2 / initdata_param3.
+        monest = new MonestSpawner(head.slot.set.params[1], head.slot.set.params[2]);
+      }
       if (profile) {
         // initdata_param6 (set entry params[5]) is the subtype, as
         // formats/enemymodels.ts reads it.
@@ -415,7 +437,11 @@ export class CombatView {
         const cfg = aiConfig(className, subtype);
         const mi = params ? movementIndex(head.slot.type) : null;
         const radius = collisionRadius(className, subtype, ultimate);
-        ai = new EnemyAi({
+        const entityId = 0x1000 | head.index;
+        const at = { x: instance.placed.world[0], z: instance.placed.world[2], angle: instance.placed.yaw };
+        if (className === 'TObjEneRe2Flower') ai = new LilyAi({ ...at, attack, radius, rng: () => this.rng() });
+        else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
+        else ai = new EnemyAi({
           x: instance.placed.world[0],
           z: instance.placed.world[2],
           angle: instance.placed.yaw,
@@ -430,7 +456,9 @@ export class CombatView {
           // initdata_param2: the e.dat entry's wander radius.
           wander: Math.max(0, head.slot.set.params[1]),
         });
-        withAi++;
+        // The Monest's own states are its spawner (combat/enemyfsm.ts).
+        if (monest) ai = null;
+        else withAi++;
       }
       this.enemies.set(head.index, {
         instance,
@@ -443,6 +471,10 @@ export class CombatView {
         state: 'idle',
         removeIn: 0,
         ai,
+        lift: 0,
+        monest,
+        parent: null,
+        fake: null,
         attacker,
         attack,
         exp,
@@ -450,6 +482,7 @@ export class CombatView {
         buffs: new EntityBuffs(),
       });
     }
+    this.difficultyParams = { params, difficulty, slots, base };
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();
@@ -512,7 +545,19 @@ export class CombatView {
       }
       if (e.state === 'death') {
         e.removeIn -= dt;
-        if (ended && e.removeIn <= 0) {
+        if (ended && e.removeIn <= 0 && !e.fake && e.instance.spec.name === 'TObjEneLappy') {
+          // update_rappy: a dead Rappy fakes it (combat/enemyfsm.ts).
+          const ctx = this.difficultyParams;
+          const mi = ctx?.params ? movementIndex(e.slot.type) : null;
+          const speeds = enemySpeeds(ctx?.params && mi !== null ? ctx.params.movement(ctx.difficulty, mi) : null, 0.5);
+          const p = e.instance.root.position;
+          // The record's +4 speed is written at run time
+          // (InitRappyGlobalConfig_00527973); ASSUMED the MovementData
+          // engaged speed (fparam3; fparam1 = 8 would be 28 units a frame).
+          e.fake = new RappyFakeDeath({ x: p.x, z: p.z, angle: e.instance.root.rotation.y, moveSpeed: speeds.engagedMove, rng: () => this.rng() });
+          continue;
+        }
+        if (ended && e.removeIn <= 0 && !e.fake) {
           this.layer.remove(e.instance);
           this.enemies.delete(index);
           if (this.lockOn === e) this.lockOn = null;
@@ -600,30 +645,203 @@ export class CombatView {
       const p = this.game.players.get(id);
       if (!p) continue;
       if (id === this.game.selfId && this.damage.dead) continue;
-      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false });
+      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle });
     }
     return out;
   }
 
   private tickEnemies(): void {
     const targets = this.aiTargets();
-    for (const e of this.enemies.values()) {
-      const ai = e.ai;
-      if (!ai || e.dead || e.state !== 'idle') continue;
+    for (const e of [...this.enemies.values()]) {
       // An enemy whose wave has not spawned is not in the room yet.
-      if (!e.instance.root.visible) continue;
+      if (e.dead || e.state !== 'idle' || !e.instance.root.visible) continue;
       const ended = e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended);
+      if (e.monest) {
+        this.tickMonest(e, targets, ended);
+        continue;
+      }
+      const ai = e.ai;
+      if (!ai) continue;
+      if (ai instanceof LilyAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       const r = ai.tick(targets, ended);
       const root = e.instance.root;
-      if (r.x !== root.position.x || r.z !== root.position.z) {
-        const y = this.opts.ground?.(r.x, r.z, root.position.y + 30) ?? null;
-        root.position.set(r.x, y ?? root.position.y, r.z);
+      const lift = r.lift ?? e.lift;
+      if (r.x !== root.position.x || r.z !== root.position.z || lift !== e.lift) {
+        const y = this.opts.ground?.(r.x, r.z, root.position.y - e.lift + 30) ?? null;
+        root.position.set(r.x, (y ?? root.position.y - e.lift) + lift, r.z);
+        e.lift = lift;
       }
       root.rotation.y = r.angle;
       if (r.motion) this.playEnemyMotion(e, r.motion);
       if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult);
+      if (r.status && r.status.clientId === this.game.selfId) {
+        this.inflictStatus(r.status.type as StatusType, `E-${e.index.toString(16)} (${e.slot.type})`);
+      }
+      if (r.projectile && ai instanceof LilyAi) this.launchSpit(e, ai, r.projectile.x, r.projectile.z, r.projectile.angle);
+    }
+    this.tickSpits(targets);
+    this.tickFakeDeaths(targets);
+  }
+
+  // --- per-family behaviour (combat/enemyfsm.ts) -----------------------------
+
+  private spits: Array<{ spit: LilySpit; owner: LilyAi; baseY: number; mesh: THREE.Mesh | null }> = [];
+
+  // LilySpawnMegidProjectile_00529e68. ASSUMED look: a small green ball (the
+  // client draws g_pLilyMegidProjectileBmlData).
+  private launchSpit(e: EnemyRuntime, owner: LilyAi, x: number, z: number, angle: number): void {
+    const spit = new LilySpit(x, z, angle);
+    let mesh: THREE.Mesh | null = null;
+    try {
+      mesh = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 6), new THREE.MeshBasicMaterial({ color: 0x9be04a }));
+      this.viewer.scene.add(mesh);
+    } catch {
+      mesh = null;
+    }
+    const baseY = e.instance.root.position.y;
+    this.spits.push({ spit, owner, baseY, mesh });
+    mesh?.position.set(x, baseY + spit.height, z);
+    this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) spits`);
+  }
+
+  private tickSpits(targets: AiTarget[]): void {
+    for (const s of this.spits) {
+      const hit = s.spit.tick(targets);
+      s.mesh?.position.set(s.spit.x, s.baseY + s.spit.height, s.spit.z);
+      if (hit) {
+        s.owner.spitLanded();
+        // {group 0x0f, 2.0}: poison on the player it hit (each client
+        // resolves hits on its own player).
+        if (hit.clientId === this.game.selfId) this.inflictStatus(STATUS.poison, 'Poison Lily spit');
+      }
+    }
+    for (const s of this.spits.filter((x) => x.spit.done)) {
+      s.mesh?.removeFromParent();
+      s.mesh?.geometry.dispose();
+      (s.mesh?.material as THREE.Material | undefined)?.dispose();
+    }
+    this.spits = this.spits.filter((x) => !x.spit.done);
+  }
+
+  // spawn_mothmant_from_monest: the Monest's next MOTHMANT slot.
+  private tickMonest(e: EnemyRuntime, targets: AiTarget[], ended: boolean): void {
+    const m = e.monest!;
+    const alive = [...this.enemies.values()].filter((c) => c.parent === e && !c.dead).length;
+    const p = e.instance.root.position;
+    const near = targets.some((t) => !t.dead && (t.x - p.x) ** 2 + (t.z - p.z) ** 2 < 225 * 225);
+    const r = m.tick(alive, near, ended);
+    if (r.motion) this.playEnemyMotion(e, r.motion);
+    if (r.spawn) void this.spawnMothmant(e, m.spawned - 1);
+  }
+
+  private async spawnMothmant(monest: EnemyRuntime, n: number): Promise<void> {
+    const index = monest.index + 1 + n;
+    const ctx = this.difficultyParams;
+    const slot = ctx?.slots[index - ctx.base];
+    if (!ctx || !slot || slot.type !== 'MOTHMANT' || this.enemies.has(index)) {
+      this.opts.log(`Monest E-${monest.index.toString(16)}: no MOTHMANT slot for child ${n}`);
+      return;
+    }
+    const mp = monest.instance.root.position;
+    const placed = {
+      ...monest.instance.placed,
+      entity: { ...(monest.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [mp.x, mp.y + MONEST.height, mp.z] as [number, number, number],
+      name: 'Mothmant',
+    };
+    const spec = { ...monest.instance.spec, name: 'TObjEneBm3Fly', parts: [{ model: 0, motion: { index: 10, speed: 0.6, loop: true } }] };
+    const instance = await this.layer.spawn(placed as typeof monest.instance.placed, spec as typeof monest.instance.spec);
+    if (!instance || this.disposed) return;
+    const def = ENEMY_TYPE_PARAMS.MOTHMANT;
+    const { params, difficulty } = ctx;
+    let stats: DefenderStats = { hp: 1, maxHp: 1, evp: 0, dfp: 0 };
+    let attack: EnemyAttackData | null = null;
+    let attacker: AttackerStats | null = null;
+    let exp = 0;
+    let resist: TechResist = { efr: 0, eic: 0, eth: 0, elt: 0, edk: 0 };
+    if (params && def && def.stats.length) {
+      const st = params.stats(difficulty, def.stats[0]);
+      const rs = params.resist(difficulty, def.resist[0] ?? def.stats[0]);
+      stats = enemyDefender(st, rs);
+      resist = { efr: rs.efr, eic: rs.eic, eth: rs.eth, elt: rs.elt, edk: rs.edk };
+      attack = params.attack(difficulty, def.attack[0] ?? def.stats[0]);
+      attacker = enemyAttacker(st, attack);
+      exp = st.exp;
+    }
+    const mi = params ? movementIndex('MOTHMANT') : null;
+    const ai = new EnemyAi({
+      x: mp.x,
+      z: mp.z,
+      angle: monest.instance.root.rotation.y,
+      profile: MOTHMANT_PROFILE as unknown as EnemyAiProfile,
+      detect: 225,
+      turnRate: 1536,
+      attack,
+      speeds: enemySpeeds(params && mi !== null ? params.movement(difficulty, mi) : null, 0.5),
+      radius: collisionRadius('TObjEneBm3Fly'),
+    });
+    const runtime: EnemyRuntime = {
+      instance,
+      index,
+      slot,
+      stats,
+      motions: enemyCombatMotions('TObjEneBm3Fly', instance.archive),
+      rtIndex: def?.rt ?? 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai,
+      lift: MONEST.height,
+      monest: null,
+      parent: monest,
+      fake: null,
+      attacker,
+      attack,
+      exp,
+      resist,
+      buffs: new EntityBuffs(),
+    };
+    this.enemies.set(index, runtime);
+    // It sinks to its flying height (ASSUMED) as it starts to move.
+    runtime.lift = MONEST.height;
+    const ground = this.opts.ground?.(mp.x, mp.z, mp.y + 30) ?? mp.y;
+    instance.root.position.y = ground + MOTHMANT_FLY_HEIGHT;
+    runtime.lift = MOTHMANT_FLY_HEIGHT;
+    this.opts.log(`Monest E-${monest.index.toString(16)} spawned Mothmant E-${index.toString(16)} (${n + 1}/${monest.monest?.total ?? 0})`);
+  }
+
+  // The Rag Rappy family's fake death (RappyFakeDeath): after the death
+  // motion the Rappy lies there, gets up and runs off.
+  private tickFakeDeaths(targets: AiTarget[]): void {
+    for (const [index, e] of [...this.enemies]) {
+      const f = e.fake;
+      if (!f) continue;
+      const ended = e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended);
+      const m = f.tick(targets, ended);
+      // Table 0x009bbc20: animation 9 (motion 7) then 4 (motion 3, the run);
+      // their speeds are written at run time (ASSUMED 1.0).
+      if (m === 'getup') this.playEnemyMotion(e, { index: 7, speed: 1, loop: false });
+      if (m === 'run') this.playEnemyMotion(e, { index: 3, speed: 1, loop: true });
+      const root = e.instance.root;
+      root.rotation.y = f.angle;
+      if (f.phase === 'flee') {
+        const y = this.opts.ground?.(f.x, f.z, root.position.y + 30) ?? null;
+        // Deleted when the next step finds no ground; ASSUMED also after 600
+        // frames of running.
+        if (y === null || f.frames > 900 + 600) {
+          f.phase = 'gone';
+          this.layer.remove(e.instance);
+          this.enemies.delete(index);
+          this.opts.log(`E-${index.toString(16)} (${e.slot.type}) ran off`);
+          continue;
+        }
+        root.position.set(f.x, y, f.z);
+      }
     }
   }
+
+  // enterFloor's battle params and slots (spawned Mothmants need them).
+  private difficultyParams: { params: BattleParams | null; difficulty: number; slots: EnemySlot[]; base: number } | null = null;
 
   private playEnemyMotion(e: EnemyRuntime, m: EnemyAiMotion): void {
     for (const a of e.instance.animators) {
