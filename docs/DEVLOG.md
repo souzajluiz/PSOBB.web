@@ -1,5 +1,86 @@
 # Devlog
 
+## 2026-10-18: Camera easing, target lead and wall checks
+
+**What changed:** the player camera no longer jumps to its computed
+position. It eases toward it the way the exe's camera controller does, the
+target leads the running player, and walls stop the camera.
+`render/playercamera.ts` holds the camera; `render/lobbyview.ts` passes it
+the floor's collision and the field of view.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **One frame** of the player camera (`UpdateUnknownPlayerCamera_004d7698`,
+  vtable 0x00afca90):
+  - `UpdateCameraTargetWithCollision_004d88e8` (vtable +0x28) sets the
+    source lerp factor +0x58 to 0.67 (0x3f2b851f) and the camera mode +0x38
+    to 5 (collision + lerp);
+  - `adjust_camera_for_boss_maps_and_handle_zoom` (+0x2c) reloads the zoom
+    row and sets the turn goal +0x10c to heading + 0x8000;
+  - `ProcessCameraChaseState_004d7a1c` turns the angle +0x30;
+  - the desired source (angle) and target (heading, plus 18.0 (0x00909750)
+    times the player's last move) are computed.
+- **Chase states** (+0xf8):
+  - state 0 waits for a move of 0.5 units or more and goes to state 1;
+  - state 1 turns with `SmoothCameraAngle_004d6370`. Speed 5 x 127 BAMS,
+    or speed 2 while the camera is 23 or more from its target in XZ (529,
+    0x009096e4). It goes back to state 0 on a frame without a move, after
+    turning;
+  - state 2 (speed 3 after 250 idle frames, +0xf4) is never reached:
+    nothing in the exe increments +0xf4 (it is only ever written 0).
+- **Sight check** (`CalculateCameraTargetWithCollision_004d235c`):
+  - casts a mask-0x100 ray from the camera source to a probe at the
+    target's height, 13 (0x00908fc0) x |move| from the player toward the
+    camera;
+  - a move under 1.0 while the camera looks along the player's axis (|dot|
+    > 0.25) makes the distance 0;
+  - a hit snaps the chasing angle behind the player. When the camera is
+    within 20 (400, 0x009096e0) of the player, it turns at speed 0x16c
+    instead, with a source lerp of 0.05.
+- **Controller** (`UpdateDefaultNPCCameraState_004d3abc`):
+  - `set_global_camera_source_and_target` copies the desired points and the
+    two factors: source +0x58, target +0x5c = 0.289 (0x3e93f7cf, from
+    `MapObjectSubEntity_BaseConstructor_004d1f68`);
+  - `unknown_handle_camera_collision_with_geometry` casts a mask-0x901 ray
+    from the last safe source to the desired one. A hit keeps a safe source
+    1 unit before the wall and raises +0x174;
+  - `lerp_camera_position` moves each point toward its goal by
+    0.16 (0x00909524) x distance x factor, or by 12 (0x00909520) once that
+    step reaches 5.0 (0x00909510) (`unknown_vec3_lerp`, checked in the
+    disassembly at 0x004d63b0);
+  - `handle_camera_source_colliding_with_map_geometry`, while +0x174 is
+    up, puts the source on the first wall between the target and the
+    source.
+- **Field of view:** +0x54 is 0x36c1 (base constructor), eased toward
+  0x36c1, and goes to the projection at 0x0082ebc8 with the same math as
+  `njPerspectiveFovy`: 59.1 degrees instead of the viewer's 60.
+- **Left out:** the lock-on hold of state 1 (player +0x45c, target within
+  70); guard / freeze / death; the Pioneer 2 target height offset (eased to
+  0 there); the shake; the NPC and boss cameras; the 0x22d8 field of view
+  of mode +0x100.
+- **ASSUMED:**
+  - the camera facing used by the sight check is the horizontal direction
+    from source to target;
+  - spawns and warps show the camera at once (the controller's copy of the
+    desired points);
+  - `CollisionWorld.segmentHit` stands for
+    `cast_ray_at_map_collision_geometry`.
+
+**Checks:**
+- `tests/controls.test.ts` covers:
+  - the target lead;
+  - the two lerp factors and the 12-unit step;
+  - the first-frame snap and the easing after a run;
+  - state 0 -> 1 -> 0 and the far step;
+  - the sight ray snapping the angle;
+  - the source stopping on a wall it would cross.
+- In Chrome (WebHunter, Pioneer 2), sampled every 100 ms while holding W:
+  - the source lagged up to ~74 units behind the player (45.4 at rest);
+  - the target stayed ahead of the player;
+  - the chase state went 1 while running and 0 after the stop;
+  - after the stop, the source eased back to 45.5 behind and the target to
+    5 in front;
+  - the wall clamp was not exercised live.
+
 ## 2026-10-18: Floor item presentation from the exe
 
 **What changed:** floor items are placed, turned and drawn as the exe does

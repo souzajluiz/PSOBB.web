@@ -49,6 +49,7 @@
 
 ## Phase 5: game
 - [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)
+- [x] Player camera: zoom levels, chase turn, target lead, source / target easing and wall checks from the exe (`render/playercamera.ts`); lock-on hold, guard / death states and the NPC / boss cameras left out
 - [x] Games: create (`C1`), list (`08`), join (`10` → `64`), loading (`1D`/`8A`/`6x3F`/`6x1F`/`6F`), join sync (`6x6D`/`6x71`/`6x70`), leave (`98` + `84`) (`net/game.ts`, `tests/game.live.ts`)
 - [x] Floor maps from the `64` variations via `SetDataTableOn.rel`; Pioneer 2 and field floors with collision, player starts, enemy/object markers; warps (`6x21`/`6x22`/`6x23`) by button or area warp objects
 - [ ] Full join sync for real-client joiners (`6x6B`/`6x6C`/`6x6E` need the entity expansion, `6x6F` quest flags)

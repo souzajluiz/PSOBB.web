@@ -7,7 +7,8 @@
 // plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
 // the files are missing) a capsule stands in.
 
-import { PlayerCamera } from './playercamera.ts';
+import { CAMERA_FOV_ANGLE, PlayerCamera } from './playercamera.ts';
+import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -22,6 +23,8 @@ import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
+// The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
+const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
 const RUN_SPEED = 120; // units per second (approximate)
 const SEND_INTERVAL = 0.15; // seconds between 6x42 while moving
 const CLASS_COLORS = [
@@ -159,8 +162,11 @@ export class LobbyView {
   private get cameraYaw(): number {
     return this.camera.angle;
   }
+  // Placing the player (spawn, warps) puts the camera behind it and shows
+  // it there at once (PlayerCamera.snap).
   private set cameraYaw(v: number) {
     this.camera.angle = v;
+    this.camera.snap();
   }
   private sendTimer = 0;
   private wasMoving = false;
@@ -476,9 +482,13 @@ export class LobbyView {
       if (camKey && !this.cameraKeyHeld) this.camera.reset(mine.angle);
       this.cameraKeyHeld = camKey;
       this.cameraTicks = Math.min(this.cameraTicks + dt * 30, 30);
-      for (; this.cameraTicks >= 1; this.cameraTicks--) this.camera.tick(pos, mine.angle);
+      for (; this.cameraTicks >= 1; this.cameraTicks--) this.camera.tick(pos, mine.angle, this.collision);
       const { source, target } = this.camera.view(pos, mine.angle);
       const cam = this.viewer.camera;
+      if (cam.fov !== CAMERA_FOV) {
+        cam.fov = CAMERA_FOV;
+        cam.updateProjectionMatrix();
+      }
       cam.position.set(source.x, source.y, source.z);
       cam.lookAt(target.x, target.y, target.z);
     }
