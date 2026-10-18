@@ -1,5 +1,72 @@
 # Devlog
 
+## 2026-10-18: Floor item presentation from the exe
+
+**What changed:** floor items are placed, turned and drawn as the exe does
+it, the pickup plays its sound, and the local drop goes to the spot the
+exe's search finds. Changes are in `render/flooritems.ts`
+(`floorItemHeight`, `findDropSpot`, the pickup SE) and `net/items.ts`
+(`FloorItem.y`, `onPickedUp`, `dropSpot`, the 6x2A amount).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **There is no arc.** The 6x5F / 6x5D handlers
+  (`handle_player_dropping_item_from_stack`) build the item and call
+  `create_item_box_on_ground` (0x005c4874). It does four things:
+  - places the item at its source position. y is 0 for 6x5F / 6x5D / 6x6D,
+    because the constructor zeroes it; 6x2A carries its own y;
+  - gives it a random Y angle (`rand() / 32768 * 65536` BAMS, 0x0092bb74 /
+    0x0092bb78);
+  - calls `set_item_y_floating` (0x005c49a4), which moves the origin to the
+    ground found under y + 300 (0x0092bb70) plus 6 (0x0092bb6c). If there
+    is no ground, y stays as it was. The origin is not seated by the model's
+    bounding box;
+  - spawns the particle 0x9B when the floor is already loaded.
+- **Each frame** (`UpdateGroundItem_005c4010`) the angle grows by 0x200
+  BAMS. Nothing makes the item fall or bob.
+- **Drawing:** `render_item_box` (0x005c37c4) draws the model with fog off.
+- **Pickup:** 6x59 calls `HandlePlayerPickupSuccess_005c4c1c` for every
+  picker on our floor. It spawns the particle 0x9B and plays SE 0x571 at the
+  picker (`play_sound_effect_at_player`). Here the SE plays when the picker
+  is within 300 of us, the range at which 3D sounds are dropped.
+- **Nothing on a drop:** none of the drop paths plays a sound, and no unitxt
+  line or message window reports a find or a pickup.
+- **Local drop** (0x0068d878 -> `HandleItemAcquisition_006a43b8`, from the
+  disassembly):
+  - the search runs over rings 1..5 around the player;
+  - ring r has radius 6r (0x0093db68) and 4r spots, starting from the
+    player's facing, at centre + (sin a, cos a) x radius;
+  - the first spot with ground wins;
+  - 6x2A then carries that x / y / z, and the stack count as its amount
+    (0x005d29b0).
+- **Left out:**
+  - the 0x9B "w_itemget" particle (a type-1 effect; `classic/particles.ts`
+    only runs type 0);
+  - 3D attenuation of SE 0x571;
+  - the spot search's line-of-sight test (0x0077fffc) and the 6x2C hold
+    (900 frames) sent before a drop;
+  - the pending-pickup lock (+0x94, 900 frames).
+- **ASSUMED:**
+  - a spot's ground is probed from the player's height + 6;
+  - a failed search keeps the player's position;
+  - the web player's angle uses the exe's (sin, cos) facing.
+
+**Checks:**
+- `tests/drops.test.ts` covers:
+  - the height rule (probe heights, offset, no ground);
+  - the spot search (in front, ring 2, none);
+  - 6x2A carrying the stack count and the spot;
+  - the 6x59 pickup hook.
+- In Chrome against newserv (WebForce, Forest 1):
+  - **Drop:** the player stood at (528.8, 34.95, -5.39) facing 3.02 rad.
+    Dropping the Monofluid x4 placed it 6 units in front, at (529.53,
+    40.90, -11.34): ground 34.90 + 6, at a random angle;
+  - **Pickup:** picking it up called the pickup hook for picker 0, removed
+    the item, and gave Monofluid x4 back;
+  - **`$item 030200`:** the item came as 6x5D with no height and was placed
+    at 40.95 (ground under 300, plus 6);
+  - newserv kept the connection;
+  - the SE itself was not heard (no audio in the test browser).
+
 ## 2026-10-18: MAG feeding
 
 **What changed:** Item Pack > MAG opens the MAG window: the mags, "Give
@@ -1303,7 +1370,7 @@ lives outside this repository (`REFSRC`, by default
 **Approximations / open:**
 - The drop commands carry only x and z, so the box is placed on the collision mesh under that point; the client's own height rule was not traced.
 - The Enter radii (15 for items, 20 for boxes) are fitted; newserv refuses a pickup beyond 30. Enter is a stand-in until combat can break boxes.
-- No drop animation (the original throws the box in an arc), no "item found" HUD line or sounds, no classic Item Pack menu actions (the buttons live in the Online tab's panel), no bank, shop, tekker or mag feeding, and no partial-stack amount beyond "Drop 1".
+- No drop animation (2026-10-18: the exe has none; an item appears where it lands), no "item found" HUD line (the exe has none) or sounds, no classic Item Pack menu actions (the buttons live in the Online tab's panel), no bank, shop, tekker or mag feeding, and no partial-stack amount beyond "Drop 1".
 - Enemy drops are implemented on the receiving side only (`6x5F`); the kill requests come from the combat agent's code.
 ## 2026-10-17: basic combat (attack combo, damage, enemy death, drop request)
 

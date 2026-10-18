@@ -74,6 +74,9 @@ export interface FloorItem {
   floor: number;
   x: number;
   z: number;
+  // The height it was dropped from (6x2A carries one; 6x5F / 6x5D / 6x6D
+  // do not, and the exe's item then starts at 0: create_item_box_on_ground).
+  y?: number;
   data: ItemData;
   source: 'enemy' | 'box' | 'player' | 'sync';
   entityIndex: number; // 0xFFFF when not from an entity
@@ -628,6 +631,12 @@ export class GameItems {
   idsAssigned = false;
   onFloorItemAdded: (item: FloorItem) => void = () => {};
   onFloorItemRemoved: (item: FloorItem) => void = () => {};
+  // 6x59 took a floor item (HandlePlayerPickupSuccess_005c4c1c: particle
+  // 0x9B and SE 0x571 at the picker, render/flooritems.ts).
+  onPickedUp: (item: FloorItem, picker: number) => void = () => {};
+  // Where the local player's drop lands (the exe's spot search,
+  // render/flooritems.ts findDropSpot); null keeps the player's position.
+  dropSpot: (me: { x: number; y: number; z: number; angle: number }) => { x: number; y: number; z: number } | null = () => null;
   onInventoryChanged: () => void = () => {};
   onBoxOpened: (objectIndex: number) => void = () => {};
   // Shop lists by 6xB5 type (6xB6), kept for the rest of the game like the
@@ -769,6 +778,7 @@ export class GameItems {
         const itemId = dv.getUint32(8, true);
         const it = this.removeFloorItem(itemId);
         if (!it) break;
+        this.onPickedUp(it, picker);
         if (picker === self) {
           try {
             this.inventory?.add(it.data);
@@ -797,7 +807,7 @@ export class GameItems {
           this.log(`player ${clientId} dropped unknown item ${itemId.toString(16)}`);
           break;
         }
-        this.addFloorItem({ id: itemId, floor: dv.getUint16(6, true), x: dv.getFloat32(12, true), z: dv.getFloat32(20, true), data, source: 'player', entityIndex: 0xffff });
+        this.addFloorItem({ id: itemId, floor: dv.getUint16(6, true), x: dv.getFloat32(12, true), y: dv.getFloat32(16, true), z: dv.getFloat32(20, true), data, source: 'player', entityIndex: 0xffff });
         break;
       }
       case 0x29: {
@@ -929,9 +939,12 @@ export class GameItems {
       this.game.sendSubcommand(0xc3, buildSplitStack(this.game.selfId, itemId, amount, me.floor, x, z).subarray(4));
       return;
     }
-    this.game.sendSubcommand(0x2a, buildDropItem(this.game.selfId, itemId, me.floor, x, y, z, 1).subarray(4));
+    // 0x0068d878 -> Player_DropItem_0068f090: the spot found around the
+    // player, amount = the stack count (0x005d29b0; newserv ignores it).
+    const at = this.dropSpot({ x, y, z, angle: me.angle }) ?? { x, y, z };
+    this.game.sendSubcommand(0x2a, buildDropItem(this.game.selfId, itemId, me.floor, at.x, at.y, at.z, size).subarray(4));
     const data = inv.remove(itemId);
-    this.addFloorItem({ id: itemId, floor: me.floor, x, z, data, source: 'player', entityIndex: 0xffff });
+    this.addFloorItem({ id: itemId, floor: me.floor, x: at.x, y: at.y, z: at.z, data, source: 'player', entityIndex: 0xffff });
     this.changed();
   }
 

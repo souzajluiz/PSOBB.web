@@ -13,12 +13,32 @@
 //     +0x100/+0x102 of the effect object are taken to advance once per frame
 //     (not traced);
 //   - the Y angle turns 0x200 BAMS per frame (FUN_005c4010), 30 frames/s.
-// Fitted (not from the exe): the box rests on the floor under its drop
-// position (the drop commands only carry x and z; how the client finds the
-// height was not traced), the Enter radius for pickup (PICKUP_RADIUS; newserv
-// accepts up to 30) and for boxes (BOX_RADIUS).
+//   - placing (create_item_box_on_ground 0x005c4874): the item starts at its
+//     source position (y = 0 for 6x5F / 6x5D / 6x6D, which carry no height;
+//     the packet's y for 6x2A), takes a random Y angle (rand() / 32768 *
+//     65536 BAMS, 0x0092bb74 / 0x0092bb78) and set_item_y_floating puts its
+//     origin 6 (0x0092bb6c) above the ground found under y + 300
+//     (0x0092bb70), keeping y when there is none. There is no fall or arc:
+//     the item appears where it lands. The model is drawn with fog off
+//     (render_item_box 0x005c37c4);
+//   - picking up (6x59 -> HandlePlayerPickupSuccess_005c4c1c, any picker on
+//     our floor): SE 0x571 at the picker (play_sound_effect_at_player; a 3D
+//     sound is dropped 300 or more from the listener, docs/PROTOCOL.md);
+//     nothing plays when an item drops, and no message line is shown;
+//   - the local player's drop (0x0068d878 -> HandleItemAcquisition_006a43b8):
+//     rings 1..5 around the player, ring r of radius 6r with 4r spots, from
+//     the player's facing, spot = centre + (sin a, cos a) * radius; the
+//     first spot with ground is used (findDropSpot).
+// Left out: the particle 0x9B (w_itemget, a type-1 effect) when an item
+// appears and is picked up; the 3D attenuation of SE 0x571; the spot
+// search's line-of-sight test (0x0077fffc) and its 6x2C hold.
+// ASSUMED: the spot's ground is probed from the player's height + 6; a
+// failed search keeps the player's position. Fitted: the Enter radius for
+// pickup (PICKUP_RADIUS; newserv accepts up to 30) and for boxes
+// (BOX_RADIUS).
 
 import * as THREE from 'three';
+import { se } from '../audio/se.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import {
   floorItemLook,
@@ -42,6 +62,36 @@ export const PICKUP_RADIUS = 15; // fitted
 export const BOX_RADIUS = 20; // fitted
 const SPIN_RAD_PER_SECOND = (ITEM_SPIN_BAMS_PER_FRAME / 0x10000) * Math.PI * 2 * GAME_TICKS_PER_SECOND;
 const HEIGHT_WINDOW = 30;
+export const ITEM_GROUND_OFFSET = 6; // item_box_ground_y_offset 0x0092bb6c
+export const ITEM_GROUND_PROBE = 300; // g_ItemFloatingYOffset 0x0092bb70
+export const SE_PICKUP = 0x571; // HandlePlayerPickupSuccess_005c4c1c
+export const SE_RANGE = 300; // FUN_00814298: 3D sounds this far are dropped
+export const DROP_RING_STEP = 6; // 0x0093db68
+
+// set_item_y_floating: the height of a floor item's origin.
+export function floorItemHeight(item: { x: number; z: number; y?: number }, ground: (x: number, z: number, fromY: number) => number | null): number {
+  const y = item.y ?? 0;
+  const g = ground(item.x, item.z, y + ITEM_GROUND_PROBE);
+  return g === null ? y : g + ITEM_GROUND_OFFSET;
+}
+
+// The spot search of the local player's drop (HandleItemAcquisition_006a43b8).
+export function findDropSpot(
+  me: { x: number; y: number; z: number; angle: number },
+  ground: (x: number, z: number, fromY: number) => number | null,
+): { x: number; y: number; z: number } | null {
+  for (let r = 1; r <= 5; r++) {
+    const n = 4 * r;
+    for (let k = 0; k < n; k++) {
+      const a = me.angle + (k * Math.PI * 2) / n;
+      const x = me.x + Math.sin(a) * DROP_RING_STEP * r;
+      const z = me.z + Math.cos(a) * DROP_RING_STEP * r;
+      const g = ground(x, z, me.y + ITEM_GROUND_OFFSET);
+      if (g !== null) return { x, y: g, z };
+    }
+  }
+  return null;
+}
 
 export interface FloorItemLayerOptions {
   ground: (x: number, z: number, fromY: number) => number | null;
@@ -98,6 +148,8 @@ export class FloorItemLayer {
       });
     items.onFloorItemAdded = (it) => void this.show(it);
     items.onFloorItemRemoved = (it) => this.hide(it.id);
+    items.onPickedUp = (it, picker) => this.pickedUp(it, picker);
+    items.dropSpot = (me) => findDropSpot(me, opts.ground);
     viewer.renderer.domElement.addEventListener('keydown', this.onKey);
   }
 
@@ -144,6 +196,7 @@ export class FloorItemLayer {
       if (!(o instanceof THREE.Mesh)) return;
       const mats = (Array.isArray(o.material) ? o.material : [o.material]).map((m: THREE.Material) => {
         const c = m.clone() as THREE.MeshBasicMaterial;
+        c.fog = false; // render_item_box: FogEnable false around the draw
         if (gift) {
           // FUN_005c383c: root model with the box color, child with the ribbon color.
           const [r, g, b] = (o.parent === built.nodes[0] ? PRESENT_BOX_COLORS : PRESENT_RIBBON_COLORS)[Math.min(look.color, 5)];
@@ -161,14 +214,23 @@ export class FloorItemLayer {
     });
     const node = new THREE.Group();
     node.add(built.root);
-    const box = new THREE.Box3().setFromObject(built.root);
-    const near = this.boxes.find((b) => Math.hypot(b.x - item.x, b.z - item.z) < 1)?.y ?? this.items.game.self?.position.y ?? 0;
-    const ground = this.opts.ground(item.x, item.z, near + HEIGHT_WINDOW) ?? near;
-    node.position.set(item.x, ground - (Number.isFinite(box.min.y) ? box.min.y : 0), item.z);
+    node.position.set(item.x, floorItemHeight(item, this.opts.ground), item.z);
+    node.rotation.y = Math.random() * Math.PI * 2; // the random start angle
     node.name = `item ${item.id.toString(16)}`;
     node.userData.floorItem = item;
     this.root.add(node);
     this.shown.set(item.id, { item, node, scroll });
+  }
+
+  // HandlePlayerPickupSuccess_005c4c1c: SE 0x571 at the picker when the
+  // item was on our floor.
+  private pickedUp(item: FloorItem, picker: number): void {
+    if (item.floor !== this.floor) return;
+    const me = this.items.game.self;
+    const p = this.items.game.players.get(picker);
+    if (!me || !p) return;
+    const d = Math.hypot(p.position.x - me.position.x, p.position.y - me.position.y, p.position.z - me.position.z);
+    if (d < SE_RANGE) se(SE_PICKUP);
   }
 
   private hide(id: number): void {
