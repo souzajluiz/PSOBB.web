@@ -17,12 +17,22 @@
 //   +0x118) and added to the position (FUN_0050e618).
 //   fade = min(age / +0x58, (1 - age) / +0x5c) (1 outside those ranges);
 //   RGB = clamp(age * (+0x6c..+0x74) + (+0x7c..+0x84)) * fade.
-// Render FUN_0050e698:
-//   tex_flags (+0x88) & 4: streak along the projected step, length +0x64 *
-//   |step|, thickness +0x68 * |step| (renderer 4, rotated quad);
-//   otherwise a square sprite of half size 16 * size (renderer 3).
+// Render ParticleEffectSingleParticle_Update_0050e698:
+//   tex_flags (+0x88) & 4: width_scale = +0x64 (opt1) * |velocity|,
+//   height_scale = +0x68 (opt2) * |velocity|, angle = the screen direction
+//   of the step; otherwise width / height scale = size.
+//   The particle goes to particle_renderers[slot] (slot + 0x36 with tex_flags
+//   & 0x20), whose effect_nt_metadata entry (NT_LAYOUT) gives the half size
+//   (width / height) and the renderer:
+//   - renderer 3 (render_particle_renderer3): an axis-aligned quad of half
+//     size proj * width * width_scale by proj * height * height_scale; the
+//     angle is not used;
+//   - renderer 4 (render_particle_renderer4): the same quad turned by the
+//     angle, the width along the step.
 //   Blend SRCALPHA/ONE (additive).
-// Texture (+0x14) is a GBIX of effect_nt.xvm.
+// Texture (+0x14) is a GBIX of effect_nt.xvm; its slot is its place in the
+// file (find_effect_nt_index over effect_nt_texture_ids, which
+// load_effect_nt_data fills from the xvm in order).
 
 export interface ParticleEntry {
   id: number;
@@ -91,11 +101,38 @@ export interface Particle {
 
 export const NT_SIZE = 16; // effect_nt metadata width (see title.ts)
 
+// effect_nt_metadata (0x00a101c0, 0x28 bytes per effect_nt.xvm slot, 0x36
+// slots; the next 0x36 are the tex_flags 0x20 copies): [half size (+0x14 =
+// +0x18), renderer type (+0x24)] per slot.
+export const NT_LAYOUT: readonly (readonly [number, 3 | 4])[] = [
+  [4, 4], [16, 3], [16, 3], [16, 4], [16, 3], [16, 4], [16, 3], [16, 3], [16, 3], [16, 3],
+  [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 4], [16, 3],
+  [16, 4], [16, 4], [16, 3], [16, 3], [16, 3], [32, 4], [32, 4], [32, 4], [32, 4], [32, 4],
+  [32, 3], [32, 3], [32, 4], [32, 4], [8, 3], [32, 3], [32, 3], [32, 3], [32, 3], [32, 3],
+  [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 4], [16, 4], [16, 3], [16, 4],
+  [32, 4], [8, 4], [16, 3], [32, 4],
+];
+
+// The quad of a particle in its renderer's terms: half width / height in
+// world units at the particle (times the projection), and whether it turns
+// with the step. A slot that is not known keeps the old guess (16, turned).
+export function particleQuad(q: Particle, slot: number | undefined): { hw: number; hh: number; rotated: boolean } {
+  const d = q.e.entry;
+  const [half, renderer] = (slot !== undefined ? NT_LAYOUT[slot] : undefined) ?? [NT_SIZE, 4];
+  if (d.flags & 4) {
+    const L = Math.hypot(...q.step);
+    return { hw: half * d.streak[0] * L, hh: half * d.streak[1] * L, rotated: renderer === 4 };
+  }
+  return { hw: half * q.size, hh: half * q.size, rotated: false };
+}
+
 // Projection with the fixed camera at the origin looking down -Z
 // (FUN_004d31f4(9) + FUN_004d33c0(0, (0,0,-1)) in the connection loop) and
 // the default perspective (D = 437.44, title.ts) around the screen centre.
 export class ParticleSystem {
   emitters: Emitter[] = [];
+  // effect_nt.xvm slot of each GBIX (the file's order), for NT_LAYOUT.
+  slots = new Map<number, number>();
   private list: Particle[] = [];
   private seed = 1;
   centre: [number, number] = [320, 240];
@@ -177,24 +214,23 @@ export class ParticleSystem {
       const k = this.D / z;
       const sx = this.centre[0] + q.p[0] * k;
       const sy = this.centre[1] - q.p[1] * k;
-      if (d.flags & 4) {
-        const L = Math.hypot(...q.step);
-        if (L === 0) continue;
+      const quad = particleQuad(q, this.slots.get(d.gbix));
+      if (d.flags & 4 && quad.hw === 0 && quad.hh === 0) continue;
+      const hw = k * quad.hw;
+      const hh = k * quad.hh;
+      if (quad.rotated) {
         const e = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
         if (-e[2] < 1) continue;
         const ke = this.D / -e[2];
         const ex = this.centre[0] + e[0] * ke;
         const ey = this.centre[1] - e[1] * ke;
-        const hw = k * NT_SIZE * d.streak[0] * L;
-        const hh = k * NT_SIZE * d.streak[1] * L;
         ctx.save();
         ctx.translate(sx, sy);
         ctx.rotate(Math.atan2(ey - sy, ex - sx));
         ctx.drawImage(tinted, -hw, -hh, hw * 2, hh * 2);
         ctx.restore();
       } else {
-        const h = k * NT_SIZE * q.size;
-        ctx.drawImage(tinted, sx - h, sy - h, h * 2, h * 2);
+        ctx.drawImage(tinted, sx - hw, sy - hh, hw * 2, hh * 2);
       }
     }
     ctx.restore();

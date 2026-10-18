@@ -1,5 +1,43 @@
 # Devlog
 
+## 2026-10-18: Particle quads by effect_nt renderer (telepipe streaks)
+
+**What changed:** particles are now sized and turned the way their
+effect_nt renderer draws them. The telepipe's streaks (0xB2 gate_yurayura)
+were wide horizontal bars; they are thin vertical streaks rising from the
+pipe. `classic/particles.ts` (`NT_LAYOUT`, `particleQuad`), used by
+`render/telepipe.ts` and the "Connecting.." screen.
+
+**Details** (Ephinea `PsoBB.exe`):
+- `ParticleEffectSingleParticle_Update_0050e698`: a streak (tex_flags & 4)
+  sets width_scale = opt1 (+0x64) x |velocity|, height_scale = opt2 (+0x68)
+  x |velocity| and an angle from the projected step; a sprite uses its size.
+  The particle goes to `particle_renderers[slot]` (slot + 0x36 with
+  tex_flags & 0x20).
+- The slot is the texture's place in effect_nt.xvm (`find_effect_nt_index`
+  over `effect_nt_texture_ids`, filled in file order by
+  `load_effect_nt_data`).
+- `effect_nt_metadata` (0x00a101c0, 0x28 bytes per slot; base confirmed by
+  `unk_create_particle_renderers` 0x008016be) gives the half size (+0x14 /
+  +0x18) and the renderer type (+0x24) of each of the 54 slots.
+- `render_particle_renderer3`: an axis-aligned quad of half size proj x
+  width x width_scale by proj x height x height_scale, angle unused;
+  `render_particle_renderer4`: the same quad turned by the angle, width
+  along the step.
+- 0xB2's texture (GBIX 700420) is slot 24: half size 16, renderer 3. With
+  opt1 0.0399 and opt2 1 the streak is about 1 unit wide and 24 tall per
+  1.5 units of speed, upright. The old code turned every streak (renderer
+  4) with the width along the step, which laid it on its side.
+- **ASSUMED:** the same scale on both screen axes (the exe's x factor is
+  FOV / g_CameraFOVMultiplier, y is FOV).
+
+**Checks:**
+- `tests/telepipe.test.ts`: the 0xB2 quad (renderer 3, thin and tall, not
+  turned), a renderer-4 streak, a sprite's half size, the table.
+- In Chrome against newserv (WebForce, Forest 1): Ryuker via
+  `gameView.telepipes.open()`; the 0xB2 sprites measured about 1.5-2.3 wide
+  by 38-57 tall, rotation 0, and the pipe shows upright streaks.
+
 ## 2026-10-17: Ryuker and telepipes
 
 **What changed:** Ryuker and the Telepipe item open a pipe on a field floor;

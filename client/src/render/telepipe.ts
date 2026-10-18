@@ -35,7 +35,7 @@
 import * as THREE from 'three';
 import { se } from '../audio/se.ts';
 import { isSafeMap } from '../classic/fieldmenu.ts';
-import { parseParticleEntry, particleShade, ParticleSystem, NT_SIZE, type ParticleEntry } from '../classic/particles.ts';
+import { parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
@@ -111,6 +111,7 @@ export class TelepipeLayer {
   private files: ClientFiles;
   private host: TelepipeHost;
   private entries = new Map<number, ParticleEntry>();
+  private slots = new Map<number, number>(); // effect_nt.xvm GBIX -> slot
   private textures = new Map<number, THREE.Texture>();
   private loaded: Promise<void> | null = null;
   private visuals = new Map<string, PipeVisual>();
@@ -139,6 +140,7 @@ export class TelepipeLayer {
         const bitmaps = await textureBitmaps(nt);
         nt.forEach((t, i) => {
           if (t.gbix === undefined) return;
+          this.slots.set(t.gbix, i);
           const tex = new THREE.Texture(bitmaps[i]);
           tex.flipY = false;
           tex.colorSpace = THREE.SRGBColorSpace;
@@ -374,7 +376,7 @@ export class TelepipeLayer {
   }
 
   // Sprites for the live particles: additive, the colour times the fade,
-  // a square of half size 16 * size, or a streak along the step (flag 4).
+  // sized and turned as their effect_nt renderer draws them.
   private draw(v: PipeVisual): void {
     const live = v.particles.live;
     while (v.sprites.length < live.length) {
@@ -400,19 +402,19 @@ export class TelepipeLayer {
       s.visible = !!tex && fade > 0;
       mat.color.setRGB(rgb[0] * fade, rgb[1] * fade, rgb[2] * fade);
       s.position.set(q.p[0], q.p[1], q.p[2]);
-      if (d.flags & 4) {
-        const L = Math.hypot(...q.step);
-        if (!L) {
-          s.visible = false;
-          return;
-        }
-        s.scale.set(2 * NT_SIZE * d.streak[0] * L, 2 * NT_SIZE * d.streak[1] * L, 1);
+      // The quad of the particle's renderer (particleQuad): renderer 3 is
+      // axis-aligned on screen, renderer 4 turns with the step.
+      const quad = particleQuad(q, this.slots.get(d.gbix));
+      if (d.flags & 4 && quad.hw === 0 && quad.hh === 0) {
+        s.visible = false;
+        return;
+      }
+      s.scale.set(2 * quad.hw, 2 * quad.hh, 1);
+      if (quad.rotated) {
         const a = new THREE.Vector3(...q.p).project(cam);
         const b = new THREE.Vector3(q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]).project(cam);
         mat.rotation = Math.atan2(b.y - a.y, b.x - a.x);
       } else {
-        const h = 2 * NT_SIZE * q.size;
-        s.scale.set(h, h, 1);
         mat.rotation = 0;
       }
     });

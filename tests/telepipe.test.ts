@@ -9,6 +9,7 @@ import type { Game } from '../client/src/net/game.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import { isSafeMap } from '../client/src/classic/fieldmenu.ts';
+import { NT_LAYOUT, particleQuad } from '../client/src/classic/particles.ts';
 import {
   BOSS_AREAS,
   buildImposeHold,
@@ -102,6 +103,18 @@ eq(new DataView(buildPlayerSync(self, state, 42).buffer).getUint16(0x80, true), 
   eq([opened, sent], [0, []], 'not used in Pioneer 2');
   items.use(tp.data.id, { telepipe: () => true });
   eq([opened, sent, ch.inventory[0]?.data.data1[5]], [1, ['27'], 1], 'used: 6x27, the pipe opens, one less');
+}
+
+// --- particle quads (render_particle_renderer3 / 4, NT_LAYOUT 0x00a101c0) ---
+{
+  const streak = { e: { entry: { flags: 4, streak: [0.0399, 1] } }, step: [0, 1.5, 0], size: 0.05 } as never;
+  const q24 = particleQuad(streak, 24); // gate_yurayura's texture (GBIX 700420), renderer 3
+  eq([+q24.hw.toFixed(3), +q24.hh.toFixed(3), q24.rotated], [0.958, 24, false], '0xB2 streak: thin and tall, not turned');
+  const q5 = particleQuad(streak, 5); // renderer 4 (the title's streaks)
+  eq(q5.rotated, true, 'renderer 4 turns with the step');
+  const sprite = particleQuad({ e: { entry: { flags: 0 } }, step: [0, 0, 0], size: 0.1 } as never, 25);
+  eq([sprite.hw, sprite.hh, sprite.rotated], [3.2, 3.2, false], 'a sprite: half size x size (slot 25: 32)');
+  eq([NT_LAYOUT.length, NT_LAYOUT[24], NT_LAYOUT[0]], [54, [16, 3], [4, 4]], 'effect_nt_metadata');
 }
 
 if (failures) {

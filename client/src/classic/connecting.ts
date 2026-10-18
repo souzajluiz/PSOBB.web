@@ -50,6 +50,8 @@ export class ConnectingScreen implements Screen {
     this.assets = assets;
     this.onDone = onDone;
     this.onError = onError;
+    // effect_nt.xvm slots in file order (the map is filled in that order).
+    [...assets.effect.keys()].forEach((gbix, slot) => this.particles.slots.set(gbix, slot));
     task.then(
       () => (this.resultFrame = this.frame),
       (err) => {
