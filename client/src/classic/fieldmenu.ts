@@ -1,7 +1,7 @@
 // The main menu in the field (Home / F12, "Menu Open/Close"), on top of the
 // lobby's MainMenu (mainmenu.ts): the same panel, labels and help window, with
 // the field's availability rules and the leaf windows the web client has
-// (Item Pack > Equip, Item Pack > Items, Technique).
+// (Item Pack > Equip, Item Pack > Items, Item Pack > MAG, Technique).
 //
 // ValidateMenuItemCondition_00732620 (PsoBB.exe, Ephinea 1.25.13) replaces an
 // entry that cannot be used here by id + 1 (its "cannot be used" help text,
@@ -23,6 +23,7 @@ import { MAIN_MENU, MAIN_MENU_ANDROID, MainMenu, type MainMenuTextures, type Men
 import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
+import { MagMenu, type MagMenuEnv } from './magmenu.ts';
 import type { WindowSkin } from './stage.ts';
 
 export const SAFE_MAPS = [0x00, 0x0f, 0x12, 0x2d];
@@ -76,6 +77,7 @@ export interface FieldMenuEnv {
   itemPack: ItemPackEnv;
   equip: EquipActions;
   tech: TechMenuEnv;
+  mag: MagMenuEnv;
 }
 
 export interface FieldMenuTextures extends ItemPackTextures {
@@ -84,7 +86,7 @@ export interface FieldMenuTextures extends ItemPackTextures {
 
 export class FieldMenu {
   readonly menu: MainMenu;
-  private leaf: ItemPackMenu | EquipMenu | TechniqueMenu | null = null;
+  private leaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
   private env: FieldMenuEnv;
 
   constructor(env: FieldMenuEnv) {
@@ -126,13 +128,14 @@ export class FieldMenu {
     if (id === 9) this.leaf = new EquipMenu({ ...this.env.itemPack, equipActions: this.env.equip });
     else if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
+    else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
     else return;
     this.menu.leafOpen = true;
   }
 
   // The inventory changed (net/items.ts): rebuild the item list.
   inventoryChanged(): void {
-    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu) this.leaf.refresh();
+    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) this.leaf.refresh();
   }
 
   tick(): void {
@@ -155,7 +158,7 @@ export class FieldMenu {
   // right edge, classic/ingame.ts anchorX).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.menu.draw(ctx, skin, tex.menu);
-    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu) this.leaf.draw(ctx, skin, tex, extra);
+    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) this.leaf.draw(ctx, skin, tex, extra);
     else if (this.leaf instanceof TechniqueMenu) this.leaf.draw(ctx, skin, extra);
   }
 }

@@ -63,6 +63,7 @@
 import { maxStackSize, type ItemData } from '../formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from './charfile.ts';
 import type { Command } from './bbconnection.ts';
+import { applyMagFeed, FeedTimer, isMagFood, type FeedContext } from './magfeed.ts';
 import type { Game } from './game.ts';
 
 export const MESETA_ITEM_ID = 0xffffffff;
@@ -194,6 +195,14 @@ export function buildUnequip(clientId: number, itemId: number): Uint8Array {
 export function buildUseItem(clientId: number, itemId: number): Uint8Array {
   const { b, dv } = sub(0x27, 0x08, clientId);
   dv.setUint32(4, itemId >>> 0, true);
+  return b;
+}
+
+// G_FeedMag_6x28 (0x0C, Player_SendFeedMagPacket_0068dcf8)
+export function buildFeedMag(clientId: number, magId: number, foodId: number): Uint8Array {
+  const { b, dv } = sub(0x28, 0x0c, clientId);
+  dv.setUint32(4, magId >>> 0, true);
+  dv.setUint32(8, foodId >>> 0, true);
   return b;
 }
 
@@ -629,6 +638,11 @@ export class GameItems {
   onBank: () => void = () => {};
   // The Telepipe was used (render/telepipe.ts opens the pipe).
   onTelepipe: () => void = () => {};
+  // MAG feeding (net/magfeed.ts): the tables, the feed timers by mag item
+  // id, and a hook for the feed's sound.
+  magFeed: () => FeedContext | null = () => null;
+  private feedTimers = new Map<number, FeedTimer>();
+  onMagFed: (mag: ItemData, food: ItemData) => void = () => {};
   // The tekker's request and answer (the exe's g_ActionData_00a960d8 and
   // its "processed" flag 0x00a960ec).
   private identifySent: ItemData | null = null;
@@ -997,6 +1011,40 @@ export class GameItems {
       inv.remove(itemId, 1);
     }
     this.changed();
+  }
+
+  // --- MAG feeding ----------------------------------------------------------
+
+  feedTimer(magId: number): FeedTimer {
+    let t = this.feedTimers.get(magId);
+    if (!t) this.feedTimers.set(magId, (t = new FeedTimer()));
+    return t;
+  }
+
+  // unknown_check_if_time_to_feed_mag, once per frame for every mag.
+  tickMags(): void {
+    for (const t of this.feedTimers.values()) t.tick();
+  }
+
+  // Player_UpdateStateAndSync_0068dcc8: 6x28, one of the item used up, the
+  // feed applied here (action_feed_mag -> ExecuteMagFeed_005da00c). newserv
+  // applies the same feed to its copy and removes the item on BB.
+  feedMag(magId: number, foodId: number): boolean {
+    const inv = this.inventory;
+    const ctx = this.magFeed();
+    const mag = inv?.find(magId);
+    const food = inv?.find(foodId);
+    if (!inv || !ctx || !mag || !food || mag.data.data1[0] !== 2) return false;
+    if (!isMagFood(food.data, ctx.pmt, wrappedFlag(food.data)) || !this.feedTimer(magId).canFeed) return false;
+    this.game.sendSubcommand(0x28, buildFeedMag(this.game.selfId, magId, foodId).subarray(4));
+    const fed = { data1: food.data.data1.slice(), id: food.data.id, data2: food.data.data2.slice() };
+    inv.remove(foodId, 1);
+    if (applyMagFeed(mag.data, fed, ctx)) {
+      this.feedTimer(magId).fed();
+      this.onMagFed(mag.data, fed);
+    }
+    this.changed();
+    return true;
   }
 
   // --- ids --------------------------------------------------------------------

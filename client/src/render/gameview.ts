@@ -20,6 +20,8 @@ import { parseSetFile, placeEntities, type EnemySet, type PlacedEntity } from '.
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
 import { GameItems } from '../net/items.ts';
+import { parseMagEvolution, SE_FEED } from '../net/magfeed.ts';
+import { se } from '../audio/se.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
 import { FieldHud } from './fieldhud.ts';
@@ -163,6 +165,22 @@ export class GameView {
     this.hud.prompt = () => this.telepipes.prompt();
     this.combat.telepipe = { allowed: () => this.telepipes.allowed(), open: () => this.telepipes.open() };
     this.items.onTelepipe = () => this.telepipes.open();
+    // MAG feeding (net/magfeed.ts): ItemPMT from the item names, the
+    // evolution stages from ItemMagEdit.prs (loose, else the stream file).
+    let evolution: Uint8Array | null = null;
+    const files = this.files;
+    const combat = this.combat;
+    void (async () => {
+      const data = (await files.has('ItemMagEdit.prs')) ? await files.read('ItemMagEdit.prs') : (await combat.streamFiles()).get('ItemMagEdit.prs');
+      if (data) evolution = parseMagEvolution(data);
+    })().catch((err) => log(`MAG: no ItemMagEdit (${(err as Error).message}); mags will not evolve`));
+    this.items.magFeed = () => {
+      const pmt = this.hud.pmt;
+      const c = character.character();
+      return pmt && c ? { pmt, evolution, charClass: c.charClass, sectionId: c.sectionId } : null;
+    };
+    // ExecuteMagFeed_005da00c: SE 0x580 at the owner.
+    this.items.onMagFed = () => se(SE_FEED);
     this.hud.load().catch((err) => log(`field HUD: ${(err as Error).message}`));
   }
 

@@ -1,5 +1,83 @@
 # Devlog
 
+## 2026-10-18: MAG feeding
+
+**What changed:** Item Pack > MAG opens the MAG window: the mags, "Give
+Items", the items a MAG eats, and the feed, which sends `6x28` and applies
+the client's own feed to the mag (stats, synchro, IQ, level, evolution,
+photon blast). `net/magfeed.ts` (rules), `GameItems.feedMag` /
+`feedTimer` / `tickMags` in `net/items.ts`, `classic/magmenu.ts` (window),
+wired in `classic/fieldmenu.ts`, `render/fieldhud.ts` and
+`render/gameview.ts` (ItemPMT, ItemMagEdit.prs from the stream file, SE
+0x580).
+
+**Details** (Ephinea `PsoBB.exe`; the dump calls this window
+ChallengePlayerListWindow*):
+- **Window** (menu id 0x17 -> `0x007525bc`, states `0x007526c8`):
+  - MAG list: entry 7 (13, 256), 206 x 184, title [0x3C];
+  - the mag's window: entry 9 (395, 256);
+  - Select: entry 8 (221, 256), 172 wide, title [0x30]. It holds "Give
+    Items" [0x78], off once the feed count reaches 2.0 (0x00973e64), and
+    "Photon Blast" [0x77], off without one;
+  - Item List: entry 0xD (13, 317), 308 x 124, title [0x37]. It lists the
+    tools whose PMT item flags have bit 4 (`CheckItemEquipConditions_005d5f40`,
+    `0x0074b6f4`).
+  - After a feed, the stat levels rise one step every 30 frames
+    (0x00973e6c) with SE 0x96. A new photon blast shows "[0x77] <name>"
+    (unitxt group 9) for 90 frames (0x00973e68). Then the window returns
+    to Select.
+- **Feed** (`Player_UpdateStateAndSync_0068dcc8`): `6x28 {mag id, item
+  id}`, then one of the item removed. The local 6x28 (`action_feed_mag` ->
+  `ExecuteMagFeed_005da00c`) does the rest:
+  - the row is the tool's PMT index in the mag's feed table
+    (`pmt_get_mag_feed_item`);
+  - `mag_feed`: each stat goes up, or goes down only by less than its part
+    within the level, while the level is below 200; at level 200 a stat
+    stops at x.99. IQ is clamped to 0..200 and synchro to 0..120. The
+    level is the sum of the four stats / 100;
+  - `ProcessMagEvolution_005da254`, using the ItemMagEdit stage (root
+    +0x14):
+    - levels 10..34: stage 0 by class;
+    - levels 35..49: stage 1 (`mag_evolution_alignment` checked against the
+      exe);
+    - level 50 and up, on multiples of 5: the special evolution, else stage
+      2. These two branch tables come from newserv's port;
+  - a new mag type adds its photon blast.
+- **Feed timer:** the first feed starts it at 0x189c frames
+  (`get_mag_feed_timer`; its other value 0x1fa4 depends on a stub that
+  returns 0). Each later feed adds 1 to the count. The timer runs down 1
+  per frame and clears the count at 0. That allows three feeds, then
+  "Give Items" goes grey until the timer ends.
+- newserv applies the same feed to its copy (`apply_mag_feed_result`) and
+  removes the item on BB.
+- **ASSUMED:** the content of the mag's window (Level / Synchro / IQ
+  [0xC0..0xC2] and DEF / POW / DEX / MIND with a bar). The exe's stat
+  elements are not decoded.
+- **Left out:**
+  - the Photon Blast choice (`ListWindowObject_Initialize_0075330c`);
+  - the 0x9B particle at the mag;
+  - taking the weapon off when it no longer fits
+    (`Player_ValidateAndUnequipWeapon_0068dd44`);
+  - other players' 6x28 (their mags are not modelled).
+
+**Checks:**
+- `tests/magfeed.test.ts` covers:
+  - the 6x28 bytes and which items a MAG eats;
+  - the feed against newserv's table rows, the fall and level-200 rules,
+    and the clamps;
+  - the level-10 evolutions with their photon blast, and the stage rule;
+  - photon blast slots, the timer, the ItemMagEdit table;
+  - GameItems.feedMag and the window's flow.
+- In Chrome against newserv (WebForce, Forest 1; window opened with
+  `hud.menu.open(0x17)`, keys sent to the canvas):
+  - the Mag (Lv 5, 25%) listed Monomate x4 and Monofluid x4;
+  - one Monomate made it DEF 5.05, POW 0.40, DEX 0.05, synchro 28%, IQ 3,
+    and left Monomate x3;
+  - after three Monomates it reached Lv 6 (DEF 5.15, POW 1.20), the count
+    was 2 and "Give Items" was grey;
+  - the timer counted down at 30 per second, and newserv kept the
+    connection.
+
 ## 2026-10-18: Particle quads by effect_nt renderer (telepipe streaks)
 
 **What changed:** particles are now sized and turned the way their

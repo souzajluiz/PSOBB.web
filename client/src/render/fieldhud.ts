@@ -134,6 +134,14 @@ export class FieldHud {
         equip: (id, slot) => this.opts.items.equip(id, slot),
         unequip: (id) => this.opts.items.unequip(id),
       },
+      mag: {
+        character: () => this.opts.character(),
+        rowContext: () => this.rowContext(),
+        text: (g, i) => this.text(g, i),
+        pmt: () => this.names()?.pmt ?? null,
+        feedTimer: (id) => this.opts.items.feedTimer(id),
+        feed: (mag, food) => this.opts.items.feedMag(mag, food),
+      },
       tech: {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
@@ -157,6 +165,11 @@ export class FieldHud {
   paletteSlot(index: number): PaletteSlot | null {
     this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
     return this.palette ? (currentPalette(this.palette).slots[index] ?? null) : null;
+  }
+
+  // ItemPMT of the item names (MAG feeding, render/gameview.ts).
+  get pmt(): ItemNames['pmt'] | null {
+    return this.names()?.pmt ?? null;
   }
 
   setNames(names: () => ItemNames | null): void {
@@ -296,6 +309,7 @@ export class FieldHud {
       this.acc -= FRAME;
       this.menu.tick();
       this.paletteHud.tick();
+      this.opts.items.tickMags();
       this.counter?.tick();
     }
     this.watchInventory();

@@ -1545,7 +1545,9 @@ export class CombatView {
 
   private streamed: Promise<Map<string, Uint8Array>> | null = null;
 
-  private streamFiles(): Promise<Map<string, Uint8Array>> {
+  // The server's stream file (ItemPMT, ItemMagEdit, PlyLevelTbl, battle
+  // params), fetched once per game.
+  streamFiles(): Promise<Map<string, Uint8Array>> {
     this.streamed ??= fetchStreamFiles(this.game.conn, this.opts.log);
     return this.streamed;
   }
