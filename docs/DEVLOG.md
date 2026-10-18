@@ -1,5 +1,31 @@
 # Devlog
 
+## 2026-10-17: Counter windows over the status window
+
+**What changed:** the shop and bank counter windows and the main menu are
+drawn over the HP / TP status window instead of under it (the field HUD's
+overlay canvas sits one layer above the status HUD's, `classic/hud.ts`
+`STATUS_LAYER` / `MENU_LAYER`).
+
+**Details** (Ephinea `PsoBB.exe`, named dump):
+- Every list window, the status window included, is a child of the player's
+  UI element array (`ListWindowObject_Constructor_00710d30` ->
+  `ListWindowObject_GetUIElementArray_00719930`).
+- `base_game_object_constructor` (0x008193cc) appends a child at the tail of
+  its parent's list, and the render walk
+  (`recursive_game_object_3rd_method_caller`) goes from head to tail. The
+  status window is created with the player's HUD when the floor loads
+  (`SinowberillChallengeMenuWindow_Constructor_0071a3d0`), so the counter
+  and menu windows, created later, are drawn over it.
+- Nothing hides the status window for a counter. It closes only on bits 1 /
+  0x10 of the HUD flags (`SinowberillChallengeObjectListWindow_HandleCancel_0071a838`).
+  The full map sets bit 1 (`ChallengeMenuListWindow_UpdateSelectionColor_007441a8`)
+  and the quest board sets bit 0x10 (`ChallengePlayerListWindow_Constructor_00754294`).
+  The shop and bank constructors (`WeaponStoreDialog_Constructor_006d6980`
+  and the other `p2_special_npc_menus` entries) set neither.
+
+**Checks:** `tests/fieldhud.test.ts` (layer order).
+
 ## 2026-10-17: Pioneer 2 shops and bank
 
 **What changed:** the weapon, armor and tool shop clerks and the Check Room
@@ -63,8 +89,7 @@ functions, so the addresses are what matters; objdump where the dump fails):
   matches the weapon one; that the sell list leaves out equipped items
   (flag 0x80 of `0x006a520c`); the meseta spinner limits; the label / number
   layout of the small counter windows; no line in the bank item windows
-  (their decompilation fails); the typing speed. The field status HUD still
-  draws over the list.
+  (their decompilation fails); the typing speed.
 - **Left out:** the tekker (`6xB8` / `6xBA`, bb_p2_menu 6) stays logged.
 
 **Checks:**

@@ -68,6 +68,24 @@ import { drawGameText } from './gametext.ts';
 
 export const STATUS_WINDOW = { x: 28, y: 37, w: 228, h: 76 } as const;
 
+// Draw order of the 2D overlays (CSS z-index of their canvases). Every list
+// window, the status window included, is a child of the player's UI element
+// array (ListWindowObject_Constructor_00710d30 ->
+// ListWindowObject_GetUIElementArray_00719930); base_game_object_constructor
+// (0x008193cc) appends a child at the tail of its parent's list and the
+// render walk (recursive_game_object_3rd_method_caller) goes head to tail, so
+// a window drawn later is the one created later. The status window is created
+// with the player's HUD (SinowberillChallengeMenuWindow_Constructor_0071a3d0)
+// when the floor loads; the main menu and the shop / bank counter windows are
+// created afterwards, so they cover it. Nothing hides the status window for a
+// counter: it closes only on bits 1 / 0x10 of the HUD's flags
+// (SinowberillChallengeObjectListWindow_HandleCancel_0071a838; set by the
+// full map, ChallengeMenuListWindow_UpdateSelectionColor_007441a8, and the
+// quest board, ChallengePlayerListWindow_Constructor_00754294), and the
+// counters touch neither.
+export const STATUS_LAYER = 2;
+export const MENU_LAYER = STATUS_LAYER + 1;
+
 // Glyph table at 0x009fce80: {advance, y offset} for ASCII 0x20..0x7f.
 // prettier-ignore
 const GLYPHS: readonly (readonly [number, number])[] = [

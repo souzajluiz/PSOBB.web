@@ -19,6 +19,7 @@
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
+import { MENU_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
@@ -85,7 +86,9 @@ export class FieldHud {
     this.host = viewer.renderer.domElement;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'field-hud-overlay';
-    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none' });
+    // Above the status window (classic/hud.ts MENU_LAYER): the menu and the
+    // counter windows are created after it, so they are drawn over it.
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(MENU_LAYER) });
     this.host.parentElement?.append(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     // Capture phase on the canvas itself: runs before the movement, combat

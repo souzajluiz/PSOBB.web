@@ -14,6 +14,7 @@ import {
   levelUpText,
   MESSAGE_WINDOW,
   MessageLines,
+  STATUS_LAYER,
   StatusWindow,
   type HudTextures,
   type StatusValues,
@@ -75,7 +76,7 @@ export class PlayerHud {
     if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
     const c = document.createElement('canvas');
     c.className = 'game-hud';
-    Object.assign(c.style, { position: 'absolute', pointerEvents: 'none', zIndex: '2' });
+    Object.assign(c.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(STATUS_LAYER) });
     parent.appendChild(c);
     this.canvas = c;
     this.ctx = c.getContext('2d');

@@ -6,6 +6,7 @@
 // Run: node tests/fieldhud.test.ts
 import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
 import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
+import { MENU_LAYER, STATUS_LAYER } from '../client/src/classic/hud.ts';
 import {
   AmountSpinner,
   categoryIcon,
@@ -32,6 +33,10 @@ const eq = (a: unknown, b: unknown, what: string) => {
     console.log(`FAIL ${what}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`);
   }
 };
+
+// --- draw order: the menu / counter windows are created after the status
+// window and drawn over it (classic/hud.ts MENU_LAYER) ---
+eq(MENU_LAYER > STATUS_LAYER, true, 'menu and counter windows over the status window');
 
 // --- palette (newserv config_hunter_ranger / config_force) ---
 const hunterConfig = new Uint8Array(0xe8);
