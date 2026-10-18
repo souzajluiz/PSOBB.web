@@ -1,5 +1,52 @@
 # Devlog
 
+## 2026-10-17: Item Pack > Equip
+
+**What changed:** the field main menu now opens **Item Pack > Equip** (menu
+id 9, `classic/equipmenu.ts`).
+
+**Details** (Ephinea `PsoBB.exe`, the named dump and objdump of the update
+function `0x0074aba4`, which the dump does not cover):
+- **Constructor.** `EquipmentMenu_Constructor_0074aa48` builds three
+  windows from the position table `0x00971f40`:
+  - the slot list ("Equipment List", group 11 [0x38]) at entry 0, (13, 256),
+    308 x 184;
+  - the item description at entry 2, (324, 256), 240 x 184;
+  - on Enter, the item list ("Item List", [0x37], `0x0074ae04`) at entry 1,
+    (13, 317), 308 x 124.
+- **Slot rows** (`EquipmentMenu_UpdateSlotDisplay_0074bc00`): weapon, armor,
+  one row per unit slot of the equipped armor (its data1[5]), shield, mag.
+  - A filled slot is drawn like an Item Pack row.
+  - An empty slot shows only its category icon in 0xffaaaaaa: the weapon icon
+    by class (hunter sword, ranger gun, force cane), armor 0xB, unit 4,
+    shield 0xA, mag 3.
+- **Item list.** It shows every inventory item of the slot's kind. Items the
+  character cannot equip stay in the list but are disabled
+  (`EquipListWindow_Finalize_0074b8c4`).
+- **States.**
+  - Slot list: Enter opens the item list and shrinks the slot list to the
+    chosen row; Backspace returns to the main menu.
+  - Item list: Backspace returns to the slot list. Enter runs
+    `HandleItemEquipSwap_0074ad94`:
+    - if the item is already in that slot, it is removed;
+    - otherwise the item leaves its old slot, the slot's current item is
+      removed, and the item is equipped into the chosen slot.
+- **Network.** `GameItems.equip` takes the chosen slot, so `6x25` carries the
+  exact unit slot.
+- **Player Status (menu id 0x19)** is not opened. Its window exists
+  (`ChatShortcutMenuWindow_Constructor_00756ff4`), but it is in no menu table,
+  and no function key or call in the executable passes 0x19 (E8 scan of
+  `.text`).
+
+**Checks:**
+- `tests/fieldhud.test.ts`: slot rows, unit rows, empty icons, item lists
+  per slot, the swap rules, and a key-driven Equip flow in which the ranger
+  gun is refused for a HUmar and the Saber is removed.
+- In Chrome against newserv (Pioneer 2): Home > Item Pack > Equip shows
+  Saber / Frame / empty shield / Mag with the Saber description; Enter >
+  Enter removed the Saber (an empty sword icon is left) and Enter > Enter
+  equipped it again. The Online tab's panel followed, with no disconnect.
+
 ## 2026-10-17: support technique effects
 
 **What changed:** Shifta, Deband, Jellen, Zalure, Anti and Reverser now do

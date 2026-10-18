@@ -1,7 +1,7 @@
 // The main menu in the field (Home / F12, "Menu Open/Close"), on top of the
 // lobby's MainMenu (mainmenu.ts): the same panel, labels and help window, with
 // the field's availability rules and the leaf windows the web client has
-// (Item Pack > Items, Technique).
+// (Item Pack > Equip, Item Pack > Items, Technique).
 //
 // ValidateMenuItemCondition_00732620 (PsoBB.exe, Ephinea 1.25.13) replaces an
 // entry that cannot be used here by id + 1 (its "cannot be used" help text,
@@ -20,6 +20,7 @@
 // the menu at the same entry.
 
 import { MAIN_MENU, MAIN_MENU_ANDROID, MainMenu, type MainMenuTextures, type MenuEntry } from './mainmenu.ts';
+import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import type { WindowSkin } from './stage.ts';
@@ -73,6 +74,7 @@ export interface FieldMenuEnv {
   rules: () => MenuRules;
   android: () => boolean;
   itemPack: ItemPackEnv;
+  equip: EquipActions;
   tech: TechMenuEnv;
 }
 
@@ -82,7 +84,7 @@ export interface FieldMenuTextures extends ItemPackTextures {
 
 export class FieldMenu {
   readonly menu: MainMenu;
-  private leaf: ItemPackMenu | TechniqueMenu | null = null;
+  private leaf: ItemPackMenu | EquipMenu | TechniqueMenu | null = null;
   private env: FieldMenuEnv;
 
   constructor(env: FieldMenuEnv) {
@@ -117,9 +119,12 @@ export class FieldMenu {
     return this.env.android() ? MAIN_MENU_ANDROID : MAIN_MENU;
   }
 
-  // handle_player_menu_select.
+  // handle_player_menu_select. Player Status (0x19,
+  // ChatShortcutMenuWindow_Constructor_00756ff4) is in no menu table and no
+  // caller passes it in this build, so it is not opened here.
   private open(id: number): void {
-    if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
+    if (id === 9) this.leaf = new EquipMenu({ ...this.env.itemPack, equipActions: this.env.equip });
+    else if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
     else return;
     this.menu.leafOpen = true;
@@ -127,7 +132,7 @@ export class FieldMenu {
 
   // The inventory changed (net/items.ts): rebuild the item list.
   inventoryChanged(): void {
-    if (this.leaf instanceof ItemPackMenu) this.leaf.refresh();
+    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu) this.leaf.refresh();
   }
 
   tick(): void {
@@ -150,7 +155,7 @@ export class FieldMenu {
   // right edge, classic/ingame.ts anchorX).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.menu.draw(ctx, skin, tex.menu);
-    if (this.leaf instanceof ItemPackMenu) this.leaf.draw(ctx, skin, tex, extra);
+    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu) this.leaf.draw(ctx, skin, tex, extra);
     else if (this.leaf instanceof TechniqueMenu) this.leaf.draw(ctx, skin, extra);
   }
 }

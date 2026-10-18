@@ -735,14 +735,15 @@ export class GameItems {
     this.changed();
   }
 
-  equip(itemId: number): void {
+  // `slot`: the Equip window's slot (6x25 carries it); without one, units go
+  // to the first free unit slot and everything else uses slot 0 (the receiver
+  // picks the default slot, as for the Item Pack menu).
+  equip(itemId: number, slot?: number): void {
     const inv = this.inventory;
     const it = inv?.find(itemId);
     if (!inv || !it || !isEquippable(it.data.data1)) return;
-    // Units go to the first free unit slot; everything else uses slot 0 (the
-    // receiver picks the default slot, as for the Item Pack menu).
     const d = it.data.data1;
-    const slot = d[0] === 1 && d[1] === 3 ? inv.freeUnitSlot() : SLOT_UNKNOWN;
+    slot ??= d[0] === 1 && d[1] === 3 ? inv.freeUnitSlot() : SLOT_UNKNOWN;
     this.game.sendSubcommand(0x25, buildEquip(this.game.selfId, itemId, slot).subarray(4));
     inv.equip(itemId, slot);
     this.changed();

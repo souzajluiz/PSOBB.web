@@ -1,8 +1,10 @@
 // Classic field HUD: action palette data and icons (classic/palette.ts), the
 // main menu rules (classic/fieldmenu.ts), the Item Pack rows, actions and
-// amount spinner (classic/itempack.ts), the Technique menu (classic/techmenu.ts)
+// amount spinner (classic/itempack.ts), the Equip window (classic/equipmenu.ts),
+// the Technique menu (classic/techmenu.ts)
 // and the item command bytes the menus end in (net/items.ts).
 // Run: node tests/fieldhud.test.ts
+import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
 import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
 import {
   AmountSpinner,
@@ -150,6 +152,38 @@ press('Enter', 'ArrowDown', 'Enter', 'ArrowUp', 'ArrowUp', 'Enter'); // Monomate
 press('ArrowDown', 'Enter', 'Enter', 'ArrowLeft', 'ArrowLeft', 'ArrowUp', 'Enter'); // meseta: 101
 eq(calls, ['unequip 256', 'use 65537', 'drop 65537 3', 'meseta 101'], 'menu actions');
 eq(menu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes the list');
+
+// --- Equip window (EquipmentMenu_UpdateSlotDisplay_0074bc00, HandleItemEquipSwap_0074ad94) ---
+const frame = inv('010100000002000000000000 00020000', true); // 2 unit slots
+const unitA = inv('010300000100000000000000 00030000', true); // unit slot 2 (10)
+const unitB = inv('010300000000000000000000 00040000');
+const equipChar = { charClass: 0, meseta: 0, inventory: [saber, frame, unitA, unitB, gun] } as unknown as CharacterFile;
+eq(equipSlots(equipChar).map((s) => [s.slot, s.item?.data.id ?? null]), [[6, 0x100], [2, 0x200], [9, null], [10, 0x300], [3, null], [1, null]], 'slots: weapon, armor, its 2 units, shield, mag');
+eq(equipSlots(equipChar).map((s) => s.emptyIcon), [0, 0x0b, 4, 4, 0x0a, 3], 'empty slot icons (hunter weapon 0)');
+eq(equipSlots({ charClass: 0, meseta: 0, inventory: [] } as unknown as CharacterFile).map((s) => s.slot), [6, 2, 3, 1], 'no armor: no unit rows');
+eq(slotCandidates(equipChar, 9).map((i) => i.data.id), [0x300, 0x400], 'unit slot lists every unit');
+const swaps: string[] = [];
+const ea = { equip: (id: number, slot: number) => swaps.push(`equip ${id} ${slot}`), unequip: (id: number) => swaps.push(`unequip ${id}`) };
+equipSwap(equipChar, 9, 0x300, ea);
+equipSwap(equipChar, 10, 0x400, ea);
+equipSwap(equipChar, 6, 0x100, ea);
+eq(swaps, ['unequip 768', 'equip 768 9', 'unequip 768', 'equip 1024 10', 'unequip 256'], 'move a unit, replace a unit, remove the weapon');
+const equipCalls: string[] = [];
+const emenu = new EquipMenu({
+  character: () => equipChar,
+  rowContext: () => ctx,
+  purposeContext: () => pctx,
+  text: (g, i) => `${g}:${i}`,
+  actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0 },
+  equipActions: { equip: (id, slot) => equipCalls.push(`equip ${id} ${slot}`), unequip: (id) => equipCalls.push(`unequip ${id}`) },
+});
+const epress = (...keys: string[]) => keys.forEach((key) => emenu.key({ key } as KeyboardEvent));
+epress('Enter');
+eq(emenu.items.map((i) => i.data.id), [0x100, gun.data.id], 'weapon slot lists the weapons');
+epress('ArrowDown', 'Enter'); // the ranger gun: disabled for a HUmar
+epress('ArrowUp', 'Enter'); // the equipped Saber: removed
+eq(equipCalls, ['unequip 256'], 'disabled item refused, equipped one removed');
+eq(emenu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace on the slots closes the window');
 
 // --- technique menu ---
 const tenv = { text: (g: number, i: number) => (g === 6 && i === 0x13 ? 'Level:' : g === 7 ? '\nRequired TP: ' : g === 5 ? `T${i}` : g === 6 ? `\n\nD${i}` : ''), level: (t: number) => (t === 0 ? 3 : null), canCast: () => true };

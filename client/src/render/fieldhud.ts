@@ -114,6 +114,10 @@ export class FieldHud {
           dropMeseta: (amount) => this.opts.items.drop(MESETA_ITEM_ID, amount),
         },
       },
+      equip: {
+        equip: (id, slot) => this.opts.items.equip(id, slot),
+        unequip: (id) => this.opts.items.unequip(id),
+      },
       tech: {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
