@@ -67,6 +67,15 @@ export class InfoWindow {
     this.shown = Math.min(this.text.length, this.shown + this.speed);
   }
 
+  get shownLength(): number {
+    return this.shown;
+  }
+
+  // Shows the rest of the text at once.
+  finish(): void {
+    this.shown = this.text.length;
+  }
+
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
     const x = anchorX(this.x, this.w, extra);
     drawWindowFrame(ctx, skin.frame, x, this.y, this.w, this.h);

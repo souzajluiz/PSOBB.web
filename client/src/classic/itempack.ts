@@ -418,7 +418,7 @@ export class AmountSpinner {
   // Right edge of digit k (0 = ones) from the window's content origin: the
   // element x is width / 2 + digits * 12 / 2 + (window width - 20) / 2 - 6,
   // 12 less per digit, and the number is drawn leftwards from it.
-  digitRight(k: number, width = AMOUNT_RECT.w): number {
+  digitRight(k: number, width: number = AMOUNT_RECT.w): number {
     return 10 * 0.5 + this.digits * 12 * 0.5 + (width - 20) * 0.5 - 6 - k * 12;
   }
 }
@@ -652,31 +652,43 @@ export class ItemPackMenu {
   }
 
   private drawAmount(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, a: AmountSpinner): void {
-    const R = AMOUNT_RECT;
-    drawWindowFrame(ctx, skin.frame, R.x, R.y, R.w, R.h);
-    drawWindowTitle(ctx, skin, R.x, R.y, this.env.text(11, 0x3b));
-    const cx = R.x + INSET;
-    const y = R.y + INSET + TITLE_GAP + 18; // element y (0x009f2c24)
-    let v = a.value;
-    for (let k = 0; k < a.digits; k++) {
-      const c = 0x30 + (v % 10);
-      v = Math.trunc(v / 10);
-      const right = cx + a.digitRight(k);
-      ctx.drawImage(tex.digits, (c & 15) * 16, c & 0xf0, 10, 13, right - 10, y, 10, 13);
-      if (k === a.digit) {
-        // SinowberillUIElementListWindow_RenderScrollbar_007293e0: texture 0
-        // at u = 224 (240 once confirmed), 14 x 12 pieces at x = right - 5 - 8:
-        // texels v 0..12 at y - 15, 13..25 at y + 19, 28..40 at y + 25.
-        const ax = right - 5 - 8;
-        ctx.drawImage(tex.arrows, 224, 0, 14, 12, ax, y - 15, 14, 12);
-        ctx.drawImage(tex.arrows, 224, 13, 14, 12, ax, y + 19, 14, 12);
-        ctx.drawImage(tex.arrows, 224, 28, 14, 12, ax, y + 25, 14, 12);
-      }
+    drawAmountWindow(ctx, skin, tex, a, AMOUNT_RECT, this.env.text(11, 0x3b));
+  }
+}
+
+// The digit spinner window (CreateNumericDisplayListWindow_00728ac4), with a
+// title pill when `title` is given (the title adds 6 px of height).
+export function drawAmountWindow(
+  ctx: CanvasRenderingContext2D,
+  skin: WindowSkin,
+  tex: Pick<ItemPackTextures, 'arrows' | 'digits'>,
+  a: AmountSpinner,
+  R: { x: number; y: number; w: number; h: number },
+  title: string | null,
+): void {
+  drawWindowFrame(ctx, skin.frame, R.x, R.y, R.w, R.h);
+  if (title !== null) drawWindowTitle(ctx, skin, R.x, R.y, title);
+  const cx = R.x + INSET;
+  const y = R.y + INSET + (title !== null ? TITLE_GAP : 0) + 18; // element y (0x009f2c24)
+  let v = a.value;
+  for (let k = 0; k < a.digits; k++) {
+    const c = 0x30 + (v % 10);
+    v = Math.trunc(v / 10);
+    const right = cx + a.digitRight(k, R.w);
+    ctx.drawImage(tex.digits, (c & 15) * 16, c & 0xf0, 10, 13, right - 10, y, 10, 13);
+    if (k === a.digit) {
+      // SinowberillUIElementListWindow_RenderScrollbar_007293e0: texture 0
+      // at u = 224 (240 once confirmed), 14 x 12 pieces at x = right - 5 - 8:
+      // texels v 0..12 at y - 15, 13..25 at y + 19, 28..40 at y + 25.
+      const ax = right - 5 - 8;
+      ctx.drawImage(tex.arrows, 224, 0, 14, 12, ax, y - 15, 14, 12);
+      ctx.drawImage(tex.arrows, 224, 13, 14, 12, ax, y + 19, 14, 12);
+      ctx.drawImage(tex.arrows, 224, 28, 14, 12, ax, y + 25, 14, 12);
     }
   }
 }
 
-function drawIcon(ctx: CanvasRenderingContext2D, img: CanvasImageSource, icon: number, x: number, y: number, color: string, frame: number): void {
+export function drawIcon(ctx: CanvasRenderingContext2D, img: CanvasImageSource, icon: number, x: number, y: number, color: string, frame: number): void {
   if (icon === NO_ICON) return;
   const i = icon === 0x30 && frame & 8 ? 0x31 : icon;
   const uv = ICON_UV[i];

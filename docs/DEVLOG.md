@@ -1,5 +1,84 @@
 # Devlog
 
+## 2026-10-17: Pioneer 2 shops and bank
+
+**What changed:** the weapon, armor and tool shop clerks and the Check Room
+now open their counters (`classic/shop.ts`, hosted by `render/fieldhud.ts`,
+opened from `bb_p2_menu` 0 / 2 / 3 / 5 in `quest/town.ts`). Buying, selling,
+and depositing / taking meseta and items go through newserv
+(`net/items.ts`). The Hunter's Guild lines moved to the clerk window too.
+
+**Details** (Ephinea `PsoBB.exe`; the named dump mislabels most of these
+functions, so the addresses are what matters; objdump where the dump fails):
+- **Counters.** `p2_special_npc_menus` (0x009cf100, 5 dwords per entry: name,
+  on enter, ?, create, is open) maps 0 to `CreateWeaponStoreDialog_006d6b8c`,
+  2 to `CreateArmorStoreDialog_006d6c94`, 3 to `CreateItemStoreDialog_006d6d18`
+  and 5 to `CreateBankDialog_006d6d98`.
+- **Weapon shop states** (`0x006d65fc`, jump table 0x0096c258):
+  - 1 (`0x006d6a78`): the clerk window, the greeting [0x27] and "Money";
+  - 2 (`0x006d6820`): Buy / Sell ([4] / [6]) at 0x2d; Backspace says
+    "Thank you!" [0x2c] and closes once it is read;
+  - 3: sends `6xB5` if the list is empty, waits for `6xB6`, opens the buy
+    window; 4 opens the sell window; leaving either says [0x1a] and returns
+    to Buy / Sell (`LAB_006d4a00`); no item to sell says [0x1b] first.
+- **Buy window** (`0x006d4d64`): the list and [0xb]. Enter checks
+  (`ShopDialog_ValidateItem_006d5318`): price over meseta [0xf], no room
+  [0x19], class [0x12] or requirement [0x11] (shown with Buy / Cancel), else
+  Buy / Cancel and, after Buy, "Do you wish to equip it now?" [0x18]. The
+  purchase (`ShopDialog_HandleItemSelection_006d4de8`) takes a new item id
+  from the client's counter (`increment_item_id_for_player`), pays, sends
+  `6xB7 {id, type, index, amount}` and adds the item itself; equip removes
+  the slot's item first.
+- **Tool buy window** (`0x006d830c`): a spinner up to min(room, meseta /
+  price) when that is above 1 (`0x006d87dc`), then Buy / Cancel; the "Item
+  Quantity" window shows how many are carried.
+- **Sold out** (`0x006dc1f8`): disks, tools 09..0B, units and a fixed set of
+  weapons leave the list once bought; everything else can be bought again.
+- **Prices** (`get_item_shop_cost` 0x005d24dc, x87 truncation): the buy
+  windows recompute every price on the client (`0x006d3a10`, `0x006d54cc`)
+  rather than using the `6xB6` data2:
+  - weapons: 8 with an unidentified special, 80 if rare; else
+    trunc(stars^2 * 1000 + bonus * (grind + ATP max)^2 / (divisor * 100)),
+    bonus = 100 per slot plus attributes 1..5;
+  - armor / shields: trunc(trunc((DFP + EVP + bonuses)^2 / divisor) +
+    (level + 1) * (slots + 1) * 70); units trunc(stars +/- 1 * divisor);
+    mags trunc((data1[2] + 1) * divisor); disks (level + 1) * cost;
+    tools their cost; constants 1000 / 100 / 70 at 0x0092c4a8..b0.
+  - Selling pays cost / 8 per unit (`0x006d600c`), sends `6xC0` via 60 and
+    removes the item; a wallet over 999999 refuses ([0x1c]).
+- **Bank** (`bank_menu_handler_table` 0x009cec80): `6xBB`, wait for `6xBC`,
+  greeting [0x31] with "Money" and "Deposit" (bank meseta, entry 0x2b);
+  Deposit / Take; Meseta / Item ([0x33] / [0x32]); meseta via a spinner
+  ([0x34] / [0x3f]; [0x47], [0x37], [0x3d], [0x4a] when not possible);
+  `6xBD` deposit meseta (0x006c9c2c) and take (0x006c9eac) with the local
+  meseta moved by the client. Item deposit ([0x38], 200 items max, [0x3c]
+  when full) and take (empty [0x3e], no room [0x4b]): the list titled
+  "Check Room" [0x30], a spinner for stacks, Yes / No. Leaving: [0x48] and
+  `6xBD` action 3.
+- **Windows** (table 0x00971f40): clerk 0x2e (294, 365) 332 x 80 (immediates
+  in 0x006d6a78 / 0x006ca124 / 0x006ce004); choices and spinner 0x2d; list
+  0x28 (12, 50) 385 x 184; description 0x29 (400, 50) 240 x 184; Money 0x2a
+  226 x 27; Item Quantity 0x2c 160 x 27; bank Deposit 0x2b 160 x 27.
+- **ASSUMED:** the Guards Shop greeting [0x2b] and that its buy window
+  matches the weapon one; that the sell list leaves out equipped items
+  (flag 0x80 of `0x006a520c`); the meseta spinner limits; the label / number
+  layout of the small counter windows; no line in the bank item windows
+  (their decompilation fails); the typing speed. The field status HUD still
+  draws over the list.
+- **Left out:** the tekker (`6xB8` / `6xBA`, bb_p2_menu 6) stays logged.
+
+**Checks:**
+- `tests/shop.test.ts`: prices, sell price, sold-out rule, stack room,
+  layout, the `6xB5`..`6xC0` bytes and parsers, key-driven weapon, sell,
+  tool and bank flows.
+- In Chrome against newserv: the weapon clerk's talk thread (label 800)
+  opened the Arms Shop, the armor clerk (810) the Guards Shop and the
+  cloakroom (840) the Check Room; the Tools Shop was opened through the same
+  `bb_p2_menu` entry (`QuestTown.counter(3)`). Bought a Saber for 615 (newserv charged
+  615), sold it for 76, bought 3 Monomates for 150, deposited 101 meseta and
+  a Monomate and took the Monomate back; newserv's meseta matched the
+  client's at each step and nothing disconnected.
+
 ## 2026-10-17: Item Pack > Equip
 
 **What changed:** the field main menu now opens **Item Pack > Equip** (menu

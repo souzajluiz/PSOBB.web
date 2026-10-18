@@ -21,7 +21,11 @@
 //                    text here (the exe's width is not recovered);
 //   yes / no         the counters' confirmation (yes_no_list_constructor at GUI
 //                    position 0x2d = (266, 270), " Yes " / " No " from
-//                    unitxt_shop group 0).
+//                    unitxt_shop group 0);
+//   clerk window     the counters' lines (Hunter's Guild, shops, bank): the
+//                    ShopDialogBase window at GUI position 0x2e = (294, 365),
+//                    332 x 80 (immediates in MedicalCenterDialog_ProcessState_006ce004
+//                    and 0x006d6a78, 0x006dc794 -> 0x0073c7e8).
 //
 // Enter (the action button) moves a waiting balloon or window on; arrows and
 // Enter drive lists, Escape / Backspace cancel them.
@@ -37,6 +41,7 @@ export const QUEST_WINDOW = { x: 88, y: 120, w: 384, h: 80 }; // GUI 0xbe, 0x009
 export const QUEST_LIST_POS = [106, 120] as const; // GUI 0x39
 export const QUEST_BOARD_POS = [39, 340] as const; // GUI 0x74
 export const YES_NO_POS = [266, 270] as const; // GUI 0x2d
+export const CLERK_WINDOW = { x: 294, y: 365, w: 332, h: 80 }; // GUI 0x2e
 const LINE = 14;
 const ITEM_STEP = 20;
 const GAP = 6;
@@ -71,7 +76,7 @@ export class QuestUi {
   private skin: WindowSkin | null = null;
   private body: CanvasImageSource | null = null;
   private balloons: Balloon[] = [];
-  private window: { text: string; waiting: boolean } | null = null;
+  private window: { text: string; waiting: boolean; rect: { x: number; y: number; w: number; h: number } } | null = null;
   private board: string[] | null = null;
   private lists: ListState[] = [];
   private raf = 0;
@@ -146,8 +151,8 @@ export class QuestUi {
 
   // --- window ------------------------------------------------------------------
 
-  showWindow(text: string, waiting = true): void {
-    this.window = { text: plainText(text), waiting };
+  showWindow(text: string, waiting = true, rect = QUEST_WINDOW): void {
+    this.window = { text: plainText(text), waiting, rect };
   }
 
   closeWindow(): void {
@@ -187,9 +192,9 @@ export class QuestUi {
   }
 
   // A window message the caller waits on (counters): resolves on Enter.
-  async tell(text: string): Promise<void> {
+  async tell(text: string, rect = CLERK_WINDOW): Promise<void> {
     await new Promise<void>((resolve) => {
-      this.showWindow(text, true);
+      this.showWindow(text, true, rect);
       this.pendingTell = resolve;
     });
     this.closeWindow();
@@ -271,7 +276,7 @@ export class QuestUi {
 
     if (this.board) this.drawText(ctx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
     if (this.window) {
-      const W = QUEST_WINDOW;
+      const W = this.window.rect;
       const lines = this.window.text.split('\n');
       const hh = Math.max(W.h, lines.length * GAME_TEXT.lineHeight - 6 + BORDER);
       const x = anchorX(W.x, W.w, extra);

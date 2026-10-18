@@ -23,12 +23,17 @@
 // for the quest menu (A2; flag 1 at the government counter, newserv on_A2)
 // and loads the chosen quest (10 -> 44/13, net/quests.ts). The clerk's lines
 // are unitxt_shop group 1 (Hunter's Guild), 17 (the G-general counter) and 18
-// (the Lab counter); their window position is not recovered and uses the
-// quest window's.
+// (the Lab counter), in the clerk window at GUI position 0x2e, 332 x 80
+// (MedicalCenterDialog_ProcessState_006ce004; quest/questui.ts).
+//
+// The shop and bank counters (bb_p2_menu 0, 2, 3, 5) run in the field HUD
+// (classic/shop.ts via render/fieldhud.ts openCounter). The tekker (6) and
+// the medical center (1) are not implemented.
 
 import * as THREE from 'three';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
+import { COUNTER_MENUS } from '../classic/shop.ts';
 import { cityScriptFile, P2_MENUS, P2_MENU_GOVERNMENT, P2_MENU_GUILD } from '../formats/npcmodels.ts';
 import { buildMesetaReward, buildNpcControl, buildTeleport, NPC_PLAYER_FILE, parseNpcControl, parseNpcPlayerTemplates, type NpcPlayerTemplate } from '../formats/npcplayerchar.ts';
 import { parseQuestBin } from '../formats/questbin.ts';
@@ -290,6 +295,19 @@ export class QuestTown {
   }
 
   private async counter(menu: number): Promise<void> {
+    const kind = COUNTER_MENUS[menu];
+    if (kind) {
+      if (this.counterOpen) return;
+      this.counterOpen = true;
+      try {
+        await this.view.hud.openCounter(kind);
+      } catch (err) {
+        this.log(`counter: ${(err as Error).message}`);
+      } finally {
+        this.counterOpen = false;
+      }
+      return;
+    }
     if (menu !== P2_MENU_GUILD && menu !== P2_MENU_GOVERNMENT) {
       this.log(`counter "${P2_MENUS[menu] ?? menu}" (bb_p2_menu ${menu}) is not implemented`);
       return;

@@ -22,6 +22,7 @@ import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
+import { createCounter, type Counter, type CounterKind } from '../classic/shop.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
@@ -64,6 +65,9 @@ export class FieldHud {
   private host: HTMLCanvasElement;
   private tex: Textures | null = null;
   private groups: string[][] | null = null;
+  private shopGroups: string[][] | null = null;
+  // The open shop / bank counter (classic/shop.ts), opened by quest/town.ts.
+  private counter: Counter | null = null;
   private names: () => ItemNames | null = () => null;
   private palette: PaletteData | null = null;
   private paletteHud = new PaletteHud();
@@ -172,6 +176,45 @@ export class FieldHud {
     return (this.groups?.[group]?.[index] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, '');
   }
 
+  get counterOpen(): boolean {
+    return !!this.counter;
+  }
+
+  // Opens a Pioneer 2 counter (bb_p2_menu 0 / 2 / 3 / 5); resolves when it
+  // closes. The movement keys are off meanwhile (unknown_keyboard_enable_in_menu(0)).
+  async openCounter(kind: CounterKind): Promise<void> {
+    if (this.counter) return;
+    await this.load();
+    if (!this.shopGroups) {
+      const { data } = await this.files.readFirst(['unitxt_shop_j.prs', 'unitxt_shop_e.prs']);
+      this.shopGroups = parseUnitxt(data);
+    }
+    if (this.disposed || this.counter) return;
+    this.menu.close();
+    const counter = createCounter(
+      {
+        shopText: (i) => this.shopGroups?.[0]?.[i] ?? '',
+        text: (g, i) => this.text(g, i),
+        character: () => this.opts.character(),
+        rowContext: () => this.rowContext(),
+        pmt: () => this.names()?.pmt ?? null,
+        items: this.opts.items,
+        log: this.opts.log,
+      },
+      kind,
+    );
+    this.counter = counter;
+    this.opts.log?.(`counter: ${kind} open`);
+    await new Promise<void>((resolve) => {
+      counter.onClose = () => {
+        if (this.counter === counter) this.counter = null;
+        this.opts.log?.(`counter: ${kind} closed`);
+        resolve();
+      };
+      counter.start();
+    });
+  }
+
   async load(): Promise<void> {
     if (this.tex) return;
     const hyouji = await textureBitmaps(await this.files.textures('f256_hyouji.prs'));
@@ -194,7 +237,7 @@ export class FieldHud {
   attach(): void {
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
-      inner?.(dt, this.menu.isOpen ? NO_KEYS : keys);
+      inner?.(dt, this.menu.isOpen || this.counter ? NO_KEYS : keys);
       const cam = this.viewer.camera;
       cam.updateProjectionMatrix();
       const f = this.menu.shift;
@@ -207,7 +250,15 @@ export class FieldHud {
   }
 
   private key(e: KeyboardEvent): void {
-    if (this.disposed || this.opts.blocked()) return;
+    if (this.disposed) return;
+    if (this.counter) {
+      if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.counter.key(e);
+      return;
+    }
+    if (this.opts.blocked()) return;
     if (e.key === 'Home' || e.key === 'F12') {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -232,6 +283,7 @@ export class FieldHud {
       this.acc -= FRAME;
       this.menu.tick();
       this.paletteHud.tick();
+      this.counter?.tick();
     }
     this.watchInventory();
     this.draw();
@@ -271,19 +323,21 @@ export class FieldHud {
     const extra = Math.max(0, this.canvas.width / s - VW);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
-    if (this.palette && !this.menu.isOpen) {
+    if (this.palette && !this.menu.isOpen && !this.counter) {
       this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i) }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
     }
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra);
+    this.counter?.draw(ctx, this.tex.skin, this.tex.menu, extra);
   }
 
   // Console aid: window.gameView.hud.debug()
   debug() {
-    return { palette: this.palette, menuOpen: this.menu.isOpen };
+    return { palette: this.palette, menuOpen: this.menu.isOpen, counter: this.counter?.state() ?? null };
   }
 
   dispose(): void {
     this.disposed = true;
+    this.counter?.close();
     this.host.removeEventListener('keydown', this.onKey, true);
     this.viewer.frameHooks.delete(this.hook);
     this.canvas.remove();

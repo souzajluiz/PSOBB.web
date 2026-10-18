@@ -30,6 +30,19 @@
 //              index} (via 60), then 6xA2 {floor, rt_index 0x30, object index,
 //              x, z, room, ignore_def, area, param3..6} (via 62 to the
 //              leader); the server answers with 6x5F to everyone.
+//   shops      C->S 6xB5 {shop type} via 62 to the leader (0 tools, 1 weapons,
+//              2 armor); S->C 6xB6 {type, count, ItemData[count]} with the
+//              price in data2 (newserv price_for_item). C->S 6xB7 {new item
+//              id, type, index, amount}: the client takes the item id from its
+//              own counter, pays and adds the item itself; the server repeats
+//              6xBE to the others only. C->S 6xC0 {item id, amount} via 60:
+//              the client removes the item and adds cost / 8 per unit itself.
+//   bank       C->S 6xBB {checksum} via 62; S->C 6xBC (extended header,
+//              via 6C) {checksum, count, meseta, PlayerBankItem[count]}.
+//              C->S 6xBD {item id, meseta, action, amount, index} via 62:
+//              action 0 deposit (item id 0xFFFFFFFF = meseta), 1 take (index
+//              0xFFFF = meseta), 3 leave the counter. The client applies
+//              deposits and meseta itself; a taken item comes back as 6xBE.
 //   join sync  S->C 6x6D (BC0-compressed G_SyncItemState_6x6D: next drop
 //              number per floor, next item id per player, item count per
 //              floor, then FloorItem records), sent by newserv to a joiner
@@ -184,6 +197,63 @@ export function buildDeleteItem(clientId: number, itemId: number, amount: number
   return b;
 }
 
+// The shop / bank requests go through 62 to the leader with the client id
+// field 0xFFFF (HandleActionPacket0x62_006d7f5c, 0x006c9c2c: ~0 halves).
+function action62(code: number, size: number): { b: Uint8Array; dv: DataView } {
+  return sub(code, size, 0xffff);
+}
+
+// G_ShopContentsRequest_BB_6xB5 (8): HandleActionPacket0x62_006d7f5c.
+export function buildShopRequest(shopType: number): Uint8Array {
+  const { b, dv } = action62(0xb5, 8);
+  dv.setUint32(4, shopType, true);
+  return b;
+}
+
+// G_BuyShopItem_BB_6xB7 (0x0C): unknown_send_packet0x62_subcommand0xb7_shop_purchase.
+export function buildBuyShopItem(itemId: number, shopType: number, index: number, amount: number): Uint8Array {
+  const { b, dv } = action62(0xb7, 0x0c);
+  dv.setUint32(4, itemId >>> 0, true);
+  b[8] = shopType;
+  b[9] = index;
+  b[10] = amount;
+  return b;
+}
+
+// G_SellItemAtShop_BB_6xC0 (0x0C), via 60 with the seller's client id
+// (send_sell_item_packet).
+export function buildSellItem(clientId: number, itemId: number, amount: number): Uint8Array {
+  const { b, dv } = sub(0xc0, 0x0c, clientId);
+  dv.setUint32(4, itemId >>> 0, true);
+  dv.setUint32(8, amount, true);
+  return b;
+}
+
+// G_RequestBankContents_BB_6xBB (8). The checksum only decides whether the
+// server's copy replaces the client's; newserv always answers 6xBC.
+export function buildBankRequest(checksum = 0): Uint8Array {
+  const { b, dv } = action62(0xbb, 8);
+  dv.setUint32(4, checksum >>> 0, true);
+  return b;
+}
+
+export const BANK_DEPOSIT = 0;
+export const BANK_TAKE = 1;
+export const BANK_LEAVE = 3;
+
+// G_BankAction_BB_6xBD (0x10): deposit meseta 0x006c9c2c, take meseta
+// 0x006c9eac, deposit item Player_WithdrawMeseta_0068f344 (misnamed), leave
+// BankDialog_Callback_006c9954.
+export function buildBankAction(action: number, opts: { itemId?: number; meseta?: number; amount?: number; index?: number } = {}): Uint8Array {
+  const { b, dv } = action62(0xbd, 0x10);
+  dv.setUint32(4, (opts.itemId ?? MESETA_ITEM_ID) >>> 0, true);
+  dv.setUint32(8, opts.meseta ?? 0, true);
+  b[12] = action;
+  b[13] = opts.amount ?? 0;
+  dv.setUint16(14, opts.index ?? 0xffff, true);
+  return b;
+}
+
 // G_UpdateObjectState_6x0B (0x0C): header entity id = 0x4000 + object index.
 export function buildObjectState(objectIndex: number, flags: number): Uint8Array {
   const { b, dv } = sub(0x0b, 0x0c, 0x4000 + objectIndex);
@@ -273,6 +343,36 @@ export function parseItemSync(body: Uint8Array): ItemSync | null {
     items.push({ floor: d[o], source: 'sync', entityIndex: ddv.getUint16(o + 2, true), x: ddv.getFloat32(o + 4, true), z: ddv.getFloat32(o + 8, true), data, id: data.id });
   }
   return { nextItemIds, items };
+}
+
+// 6xB6 (G_ShopContents_BB_6xB6): {type, count, u16, ItemData[count]}.
+export interface ShopContents {
+  shopType: number;
+  items: ItemData[];
+}
+export function parseShopContents(body: Uint8Array): ShopContents | null {
+  if (body.length < 8) return null;
+  const n = Math.min(body[5], 20, Math.floor((body.length - 8) / 0x14));
+  return { shopType: body[4], items: Array.from({ length: n }, (_, i) => readItem(body, 8 + i * 0x14)) };
+}
+
+// 6xBC (G_BankContentsHeader_BB_6xBC): extended header {BC, 0, u16, u32
+// size}, then checksum, count, meseta and PlayerBankItem (ItemData, u16
+// amount, u16 present) records.
+export interface BankContents {
+  checksum: number;
+  meseta: number;
+  items: Array<{ data: ItemData; amount: number; present: number }>;
+}
+export function parseBankContents(body: Uint8Array): BankContents | null {
+  if (body.length < 0x14) return null;
+  const dv = view(body);
+  const n = Math.min(dv.getUint32(0x0c, true), 200, Math.floor((body.length - 0x14) / 0x18));
+  const items = Array.from({ length: n }, (_, i) => {
+    const o = 0x14 + i * 0x18;
+    return { data: readItem(body, o), amount: dv.getUint16(o + 0x14, true), present: dv.getUint16(o + 0x16, true) };
+  });
+  return { checksum: dv.getUint32(8, true), meseta: dv.getUint32(0x10, true), items };
 }
 
 // PlayerInventory items (count, then 0x1C-byte PlayerInventoryItem with ItemData at +8).
@@ -491,6 +591,15 @@ export class GameItems {
   onFloorItemRemoved: (item: FloorItem) => void = () => {};
   onInventoryChanged: () => void = () => {};
   onBoxOpened: (objectIndex: number) => void = () => {};
+  // Shop lists by 6xB5 type (6xB6), kept for the rest of the game like the
+  // exe's shop_type*_item_count globals; and the bank (6xBC).
+  readonly shops: Array<ItemData[] | null> = [null, null, null];
+  bank: BankContents | null = null;
+  onShop: (shopType: number) => void = () => {};
+  onBank: () => void = () => {};
+  // increment_item_id_for_player: the next id this client hands out itself
+  // (shop purchases). Follows every id of ours it sees.
+  private nextId = 0;
   private opts: GameItemsOptions;
   private pendingSplits: PendingSplit[] = [];
   private disposed = false;
@@ -541,6 +650,7 @@ export class GameItems {
     const c = this.character;
     if (!c) return;
     c.inventory.forEach((it, i) => (it.data.id = (first + i) >>> 0));
+    this.nextId = Math.max(this.nextId, first + c.inventory.length);
     this.idsAssigned = true;
     this.log(`inventory item ids ${first.toString(16)}..${(first + c.inventory.length - 1).toString(16)}`);
     this.changed();
@@ -663,6 +773,7 @@ export class GameItems {
         if (body.length < 0x18) break;
         const data = readItem(body, 4);
         if (clientId === self) {
+          this.seenId(data.id);
           try {
             this.inventory?.add(data);
           } catch (err) {
@@ -686,6 +797,24 @@ export class GameItems {
         for (const it of s.items) this.addFloorItem(it);
         if (!this.idsAssigned && self >= 0) this.assignIds(s.nextItemIds[self]);
         this.log(`6x6D: ${s.items.length} floor items, next ids ${s.nextItemIds.slice(0, 4).map((v) => v.toString(16)).join(' ')}`);
+        break;
+      }
+      case 0xb6: {
+        const shop = parseShopContents(body);
+        if (!shop || shop.shopType > 2) break;
+        this.shops[shop.shopType] = shop.items;
+        this.log(`6xB6: shop ${shop.shopType}, ${shop.items.length} items`);
+        this.onShop(shop.shopType);
+        break;
+      }
+      case 0xbc: {
+        const bank = parseBankContents(body);
+        if (!bank) break;
+        this.bank = bank;
+        const c = this.character;
+        if (c) c.bank = { meseta: bank.meseta, items: bank.items.map((i) => ({ ...i })) };
+        this.log(`6xBC: bank ${bank.items.length} items, ${bank.meseta} meseta`);
+        this.onBank();
         break;
       }
       case 0x0b: {
@@ -803,6 +932,145 @@ export class GameItems {
       inv.remove(itemId, 1);
     }
     this.changed();
+  }
+
+  // --- ids --------------------------------------------------------------------
+
+  // An id from this client's range (newserv Lobby::on_item_id_generated_externally
+  // takes 0x00010000 < id < 0x00810000, player = id >> 21).
+  private seenId(id: number): void {
+    const self = this.game.selfId;
+    if (id > 0x00010000 && id < 0x00810000 && id >>> 21 === self) this.nextId = Math.max(this.nextId, id + 1);
+  }
+
+  // increment_item_id_for_player.
+  takeItemId(): number {
+    for (const it of this.character?.inventory ?? []) this.seenId(it.data.id);
+    if (!this.nextId) this.nextId = 0x00010000 + 0x00200000 * Math.max(0, this.game.selfId);
+    return this.nextId++ >>> 0;
+  }
+
+  private send62(body: Uint8Array): void {
+    this.game.conn.send(0x62, Math.max(0, this.game.leaderId), body);
+  }
+
+  // --- shops (classic/shop.ts runs the windows) --------------------------------
+
+  // 6xB5 (HandleActionPacket0x62_006d7f5c); the answer is 6xB6 (onShop).
+  requestShop(shopType: number): void {
+    this.send62(buildShopRequest(shopType));
+  }
+
+  // unknown_shop_handling (named dump): refused when the item does not fit
+  // (can_pickup_item) or the meseta is short; otherwise pays, sends 6xB7
+  // and adds the item under a new id of ours (the local 6x5E,
+  // ProcessShopItemAcquisition_005c4edc). Returns the new id or null.
+  buy(shopType: number, index: number, item: ItemData, amount: number, unitPrice: number): number | null {
+    const c = this.character;
+    const inv = this.inventory;
+    if (!c || !inv) return null;
+    const cost = unitPrice * amount;
+    if (c.meseta < cost) return null;
+    const bought: ItemData = { data1: item.data1.slice(), id: 0, data2: new Uint8Array(4) };
+    if (maxStackSize(bought) > 1) bought.data1[5] = amount;
+    try {
+      bought.id = this.takeItemId();
+      inv.add(bought);
+    } catch (err) {
+      this.log(`buy: ${(err as Error).message}`);
+      return null;
+    }
+    c.meseta -= cost;
+    this.send62(buildBuyShopItem(bought.id, shopType, index, amount));
+    this.log(`bought ${bought.id.toString(16)} (shop ${shopType} #${index} x${amount}) for ${cost}`);
+    this.changed();
+    return bought.id;
+  }
+
+  // check_and_sell_item: refused when the wallet would pass 999999; else adds
+  // the meseta, sends 6xC0 and removes the item (its own 6xC0 handler).
+  sell(itemId: number, amount: number, price: number): boolean {
+    const c = this.character;
+    const inv = this.inventory;
+    if (!c || !inv || !inv.find(itemId)) return false;
+    if (c.meseta + price > 999999) return false;
+    c.meseta += price;
+    this.game.sendSubcommand(0xc0, buildSellItem(this.game.selfId, itemId, amount).subarray(4));
+    inv.remove(itemId, amount);
+    this.log(`sold ${itemId.toString(16)} x${amount} for ${price}`);
+    this.changed();
+    return true;
+  }
+
+  // --- bank ----------------------------------------------------------------------
+
+  // 6xBB (BankDialog_ProcessRequest_006ca240); the answer is 6xBC (onBank).
+  requestBank(): void {
+    this.bank = null;
+    this.send62(buildBankRequest());
+  }
+
+  private bankChanged(): void {
+    const c = this.character;
+    if (c && this.bank) c.bank = { meseta: this.bank.meseta, items: this.bank.items.map((i) => ({ ...i })) };
+    this.changed();
+  }
+
+  // 0x006c9c2c: 6xBD deposit with item id 0xFFFFFFFF; the caller subtracts the
+  // meseta (0x007772bc).
+  depositMeseta(amount: number): void {
+    const c = this.character;
+    if (!c || !this.bank || amount <= 0 || amount > c.meseta) return;
+    this.send62(buildBankAction(BANK_DEPOSIT, { meseta: amount }));
+    this.bank.meseta += amount;
+    c.meseta -= amount;
+    this.bankChanged();
+  }
+
+  // 0x006c9eac: 6xBD take with index 0xFFFF; 0x00770d30 adds the meseta.
+  takeMeseta(amount: number): void {
+    const c = this.character;
+    if (!c || !this.bank || amount <= 0 || amount > this.bank.meseta) return;
+    this.send62(buildBankAction(BANK_TAKE, { meseta: amount }));
+    this.bank.meseta -= amount;
+    c.meseta += amount;
+    this.bankChanged();
+  }
+
+  // Player_WithdrawMeseta_0068f344 (a deposit despite its name): 6xBD
+  // deposit, then the item leaves the inventory. The bank keeps it under the
+  // same id (newserv: a split stack keeps the inventory id too).
+  depositItem(itemId: number, amount: number): void {
+    const inv = this.inventory;
+    if (!inv || !this.bank || !inv.find(itemId)) return;
+    this.send62(buildBankAction(BANK_DEPOSIT, { itemId, amount }));
+    const data = cloneItem(inv.remove(itemId, amount));
+    data.id = itemId;
+    const n = stackSize(data);
+    const same = maxStackSize(data) > 1 ? this.bank.items.find((b) => itemKey(b.data.data1) === itemKey(data.data1)) : undefined;
+    if (same) {
+      same.data.data1[5] += n;
+      same.amount += n;
+    } else this.bank.items.push({ data, amount: n, present: 1 });
+    this.bankChanged();
+  }
+
+  // 6xBD take; the bank entry shrinks here (0x006c8d08) and the server
+  // creates the item in the inventory with 6xBE.
+  takeItem(index: number, amount: number): void {
+    const b = this.bank?.items[index];
+    if (!this.bank || !b) return;
+    this.send62(buildBankAction(BANK_TAKE, { itemId: b.data.id, amount, index }));
+    if (maxStackSize(b.data) > 1 && amount < b.amount) {
+      b.amount -= amount;
+      b.data.data1[5] -= amount;
+    } else this.bank.items.splice(index, 1);
+    this.bankChanged();
+  }
+
+  // BankDialog_Callback_006c9954: leaving the counter commits the bank.
+  leaveBank(): void {
+    this.send62(buildBankAction(BANK_LEAVE));
   }
 
   // Break a box: 6x0B (object state, flag 1) then 6xA2 to the leader.
