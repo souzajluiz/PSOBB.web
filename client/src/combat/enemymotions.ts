@@ -52,7 +52,25 @@ const TABLES: Record<string, EnemyCombatMotions> = {
   TObjEneMe3ShinowaReal: { damage: { index: 2, speed: 0.6 }, death: { index: 3, speed: 0.6 } },
   // 0x009bce00 (Canadine / Canane): row 4 flinch while closed (2, 0.7); the
   // death row was not identified (ASSUMED the archive's dead* motion).
-  TObjEneDimedian: { damage: { index: 3, speed: 1.5 }, death: { index: 5, speed: 0.6 } },
+  // 0x009bd840 (Dimenian / La / So): slot 6 damage (3, 1.0, flags 8), slot 8
+  // dead (5, 0.6).
+  TObjEneDimedian: { damage: { index: 3, speed: 1 }, death: { index: 5, speed: 0.6 } },
+  // Ruins (combat/enemyfsmruins.ts; some brains pick their own rows).
+  // 0x009bd5e0 (Delsaber): slot 6 front flinch (5, 1.0), slot 9 death A (4;
+  // its speed is not in the table, ASSUMED 0.6).
+  TObjEneSaver: { damage: { index: 5, speed: 1 }, death: { index: 4, speed: 0.6 } },
+  // 0x009bcaa0 (Dark Belra): animation 6 flinch (1, 0.8), 7 death (2, 0.8).
+  TObjEneRe7Berura: { damage: { index: 1, speed: 0.8 }, death: { index: 2, speed: 0.8 } },
+  // 0x009bcf60 (Dark Gunner): slot 5 flinch (3, 0.7), slot 7 death (4, 0.7).
+  TObjEneDarkGunner: { damage: { index: 3, speed: 0.7 }, death: { index: 4, speed: 0.7 } },
+  // 0x009bccc0 (Chaos Bringer): row 6 flinch (2, 0.7), row 10 death (3, 0.6).
+  TObjEneDf2Bringer: { damage: { index: 2, speed: 0.7 }, death: { index: 3, speed: 0.6 } },
+  // 0x009bfe80 (Chaos Sorcerer): row 5 flinch (4, 0.6), row 6 death (5, 0.5).
+  TObjEneRe4Sorcerer: { damage: { index: 4, speed: 0.6 }, death: { index: 5, speed: 0.5 } },
+  // 0x009bc680 (Bulclaw form): slot 3 flinch (7, 0.6), slot 4 death (8, 0.5).
+  TObjEneBalClawBody: { damage: { index: 7, speed: 0.6 }, death: { index: 8, speed: 0.5 } },
+  // 0x009bc7c0 (Claw): slot 3 flinch (11, 0.7), slot 4 death (12, 0.5).
+  TObjEneBalClawClaw: { damage: { index: 11, speed: 0.7 }, death: { index: 12, speed: 0.5 } },
 };
 
 export function enemyCombatMotions(className: string, archive: EnemyArchive): EnemyCombatMotions {

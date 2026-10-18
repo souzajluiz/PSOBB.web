@@ -45,6 +45,7 @@ import {
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
+import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -205,7 +206,32 @@ interface PendingTechHit {
 
 // Client classes whose behaviour is a per-family FSM without a generic AI
 // profile (combat/enemyfsmcaves.ts, combat/enemyfsmmines.ts).
-const OWN_FSM = new Set(['TObjEneNanoDrago', 'TObjEneDubchik', 'TObjEneGyaranzo', 'TObjEneMe3ShinowaReal', 'TObjEneMe1Canadin', 'TObjEneMe1CanadinLeader']);
+const OWN_FSM = new Set([
+  'TObjEneNanoDrago',
+  'TObjEneDubchik',
+  'TObjEneGyaranzo',
+  'TObjEneMe3ShinowaReal',
+  'TObjEneMe1Canadin',
+  'TObjEneMe1CanadinLeader',
+  // Ruins (combat/enemyfsmruins.ts).
+  'TObjEneBalClawBody',
+  'TObjEneBalClawClaw',
+  'TObjEneRe7Berura',
+  'TObjEneDarkGunner',
+  'TObjEneDf2Bringer',
+  'TObjEneRe4Sorcerer',
+  'TObjEneSaver',
+]);
+
+// Classes whose own target search honours confusion: the Booma handlers
+// (unknown_booma_enemy_find_target 0x0052b888: Booma, Shark, Dimenian,
+// Rappy, Hildebear-family vtables), EnemyUpdateTarget_0052ccd8's callers
+// (Bulclaw / Claw) and the Delsaber (unknown_delsaber_targeting_related).
+// The Poison Lily has no confused branch; the Dark Belra spins and throws
+// instead (combat/enemyfsmruins.ts BelraAi).
+const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver']);
+// A Bulclaw's child slots (newserv: 4 CLAW children).
+const BULCLAW_CLAWS = 4;
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -516,6 +542,18 @@ export class CombatView {
           // param1 (+0x35c): 0 in-fighter, else out-fighter (0x0053e858).
           ai = new CanadineAi({ ...at, kind: 'standalone', inFighter: setParams[0] === 0, movement, attack, radius, rng: () => this.rng() });
         else if (className === 'TObjEneMe1CanadinLeader') ai = new CananeAi({ ...at, movement, attack, radius, rng: () => this.rng() });
+        else if (className === 'TObjEneBalClawBody') ai = new BulclawAi({ ...at, movement, attack, radius, phase: head.index, rng: () => this.rng() });
+        else if (className === 'TObjEneBalClawClaw') ai = new ClawAi({ ...at, attack, radius, phase: head.index, rng: () => this.rng() });
+        else if (className === 'TObjEneRe7Berura') ai = new BelraAi({ ...at, ultimate, attack, radius, rng: () => this.rng() });
+        else if (className === 'TObjEneDarkGunner') ai = new GunnerAi({ ...at, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneDf2Bringer') ai = new BringerAi({ ...at, ultimate, movement, attack, radius, phase: head.index, rng: () => this.rng() });
+        else if (className === 'TObjEneRe4Sorcerer')
+          ai = new SorcererAi({ ...at, ultimate, episode2: this.game.info?.episode === 2, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneSaver') {
+          // AttackData [0] combo, [1] jump, [2] slash (g_DelsaberAttackStatsArray).
+          const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [attack];
+          ai = new DelsaberAi({ ...at, param1: setParams[0], movement, attacks, phase: head.index, guardDrain: (id) => this.guardDrain(id, head.index), rng: () => this.rng() });
+        }
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -561,6 +599,7 @@ export class CombatView {
       });
     }
     this.difficultyParams = { params, difficulty, slots, base };
+    this.buildGunnerGroups(slots, base);
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();
@@ -729,10 +768,25 @@ export class CombatView {
     return { ...a, atp: e.buffs.atp(a.atp), atpSpread: e.buffs.atpSpread(a.atpSpread) };
   }
 
+  // The attacker stats with another AttackData row of the enemy loaded
+  // (set_enemy_stats_from_battleparams with that row: the Delsaber's jump /
+  // slash, the Dark Belra's arm).
+  private enemyAttackerRow(e: EnemyRuntime, row: number): AttackerStats | null {
+    const ctx = this.difficultyParams;
+    const def = ENEMY_TYPE_PARAMS[e.slot.type];
+    const i = def?.attack[row];
+    if (!ctx?.params || !def || i === undefined || !def.stats.length) return this.enemyAttackerOf(e);
+    const a = enemyAttacker(ctx.params.stats(ctx.difficulty, def.stats[0]), ctx.params.attack(ctx.difficulty, i));
+    return { ...a, atp: e.buffs.atp(a.atp), atpSpread: e.buffs.atpSpread(a.atpSpread) };
+  }
+
   // An enemy's defender stats with its Zalure and the status slots' EVP
   // multipliers applied.
+  // A shielded Dark Gunner's hit box damage_reduction (iparam3) comes off a
+  // weapon hit's damage before the multiplier: the same as DFP + 5 * it.
   private enemyDefenderOf(e: EnemyRuntime): DefenderStats {
-    return { ...e.stats, dfp: e.buffs.dfp(e.stats.dfp), evp: e.status.evp(e.stats.evp) };
+    const shield = e.ai instanceof GunnerAi && e.ai.shield ? e.ai.shieldPower / 0.2 : 0;
+    return { ...e.stats, dfp: e.buffs.dfp(e.stats.dfp) + shield, evp: e.status.evp(e.stats.evp) };
   }
 
   private get ultimate(): boolean {
@@ -783,7 +837,8 @@ export class CombatView {
       const p = this.game.players.get(id);
       if (!p) continue;
       if (id === this.game.selfId && this.damage.dead) continue;
-      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle });
+      const attacking = id === this.game.selfId ? !!this.attack?.active : this.attacking.has(id);
+      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle, attacking });
     }
     return out;
   }
@@ -809,8 +864,16 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
-      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
-      const r = ai.tick(targets, ended);
+      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi)
+        ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      // Confusion (entity+0x30 & 0x10): the families' target searches widen
+      // to the other enemies (combat/enemyai.ts EnemyAi.confused,
+      // combat/enemyfsmruins.ts updateTarget).
+      const confused = e.status.has(STATUS.confusion);
+      if ('confused' in ai) ai.confused = confused;
+      if (ai instanceof GunnerAi) ai.frozenOrParalysed = e.status.has(STATUS.freeze) || e.status.has(STATUS.paralysis);
+      if (ai instanceof BulclawAi) ai.candidates = this.clawsNear(e);
+      const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
       if (r.x !== root.position.x || r.z !== root.position.z || lift !== e.lift) {
@@ -820,8 +883,19 @@ export class CombatView {
       }
       root.rotation.y = r.angle;
       if (r.motion) this.playEnemyMotion(e, r.motion);
-      if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale);
+      if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
+      else if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale, r.hit.attack);
       if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+      if (r.techHit && r.techHit.clientId === this.game.selfId) {
+        const what = `E-${e.index.toString(16)} (${e.slot.type})`;
+        const p = e.instance.root.position;
+        this.enemyTechHitsPlayer(e, r.techHit.power, p.x, p.z, what);
+        if (r.techHit.status && this.rng() <= r.techHit.status.chance) this.inflictStatus(r.techHit.status.type as StatusType, what);
+      }
+      if (r.tpDrain) this.drainTp(e, ai, r.tpDrain);
+      if (r.heal) this.enemyResta(e, r.heal.level);
+      if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
+      if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
       if (ai instanceof CananeAi && !e.ringSpawned) {
         e.ringSpawned = true;
@@ -838,6 +912,7 @@ export class CombatView {
     this.tickShots(targets);
     this.tickFakeDeaths(targets);
     this.tickRevives();
+    this.tickGunnerControls(targets);
     if (this.holdTicks > 0 && --this.holdTicks === 0) this.opts.log('hold released');
   }
 
@@ -868,8 +943,11 @@ export class CombatView {
         if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
         const fx = s.shot.effect;
         const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
-        if (fx.kind === 'tech') this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what);
-        else if (fx.kind === 'melee') this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult);
+        if (fx.kind === 'tech') this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
+        else if (fx.kind === 'melee') {
+          this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
+          if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
+        } else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what);
         else this.inflictStatus(fx.status as StatusType, what);
       }
     }
@@ -886,7 +964,7 @@ export class CombatView {
   // (jump table 0x00977ea0 -> 0x00774cc7) multiplies it by 0.2 (0x00978250),
   // truncated; no resistance, no evasion roll.
   // ASSUMED: knockback 0 (try_knockdown_player's threshold was not traced).
-  private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string): void {
+  private enemyTechHitsPlayer(e: EnemyRuntime, power: number, fromX: number, fromZ: number, what: string, knockback = 0): void {
     const view = this.view;
     if (!view || this.damage.dead) return;
     const me = view.playerPositions().get(this.game.selfId);
@@ -895,7 +973,7 @@ export class CombatView {
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
     const damage = Math.trunc((mst * 0.5 + Math.max(0, power)) * Math.fround(0.2));
     const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
-    this.damage.hit(damage, angle, 0, 0x1000 | e.index);
+    this.damage.hit(damage, angle, knockback, 0x1000 | e.index);
     if (damage >= 1) this.gainPb(damage, true);
     this.opts.log(`${what}: technique hit for ${damage}`);
   }
@@ -908,6 +986,270 @@ export class CombatView {
     this.game.sendImposeHold(h.frames, h.particle, h.x, h.z, h.radius2);
     this.view?.resetGait(this.game.selfId);
     this.opts.log(`${what}: web hold for ${h.frames} frames`);
+  }
+
+  // entity_hit_by_tech's Megid case on the local player (an enemy Megid:
+  // the Chaos Sorcerer's in Ultimate, the Del Lily's): death when rand <
+  // (power - EDK) * 0.01 (0x0097826c). ASSUMED: the player's EDK is 0 and the
+  // tech-resist roll (get_player_tech_resist_chance) is left out.
+  private enemyMegidHitsPlayer(power: number, what: string): void {
+    if (this.damage.dead) return;
+    const chance = power * 0.01;
+    if (this.rng() < chance) {
+      this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) killed you`);
+      this.damage.hit(this.damage.hp, 0, 0, 0);
+    } else this.opts.log(`${what}: Megid (${Math.round(chance * 100)}%) missed`);
+  }
+
+  // Classes whose own target search honours confusion: the Booma handlers
+  // (0x0052b888: Booma, Shark, Dimenian, Rappy ...), EnemyUpdateTarget
+  // _0052ccd8's callers (Bulclaw / Claw) and the Delsaber.
+  // The others keep targeting players (the Poison Lily has no confused
+  // branch; the Dark Belra spins and throws instead, BelraAi).
+
+  // The other live enemies as targets of a confused one (ids 0x1000 | index).
+  private enemyTargets(self: EnemyRuntime): AiTarget[] {
+    const out: AiTarget[] = [];
+    for (const o of this.enemies.values()) {
+      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable) continue;
+      const p = o.instance.root.position;
+      out.push({ clientId: 0x1000 | o.index, x: p.x, z: p.z, charClass: -1, dead: false });
+    }
+    return out;
+  }
+
+  // A confused enemy's melee on another enemy: try_hit_entity (0x007732b8)
+  // with the attacker's stats and the defender's (the hit roll ATA - EVP *
+  // 0.2, the damage formula of formulas.ts); the defender's 6x0A goes out
+  // like any hit. ASSUMED: every client resolves it (the 6x0A carries the
+  // total, so the copies agree) and no EXP is credited.
+  private enemyHitsEnemy(e: EnemyRuntime, index: number, _knockback: number, mult: number): void {
+    const d = this.enemies.get(index);
+    const attacker = this.enemyAttackerOf(e);
+    if (!d || d.dead || !attacker) return;
+    const defender = this.enemyDefenderOf(d);
+    const chance = (attacker.ata - defender.evp * 0.2) * 0.01;
+    const damage = chance > 0 && this.rng() <= chance ? rollDamage(attacker, defender, 0, this.rng, mult).damage : 0;
+    this.opts.log(`confused E-${e.index.toString(16)} (${e.slot.type}) hits E-${index.toString(16)} (${d.slot.type})`);
+    this.applyEnemyHit(d, ENEMY_BASE_FLAGS, damage, false, `E-${e.index.toString(16)}: `, false);
+  }
+
+  // The Delsaber's guard drain for a player's attack: (ATP + spread + the
+  // weapon's ATP - its own DFP) * 0.2. ASSUMED: a remote player's stats are
+  // not known, so only the local player's swing drains it.
+  private guardDrain(clientId: number, index: number): number {
+    if (clientId !== this.game.selfId || !this.game.self) return 0;
+    const a = this.attackerStats();
+    const e = this.enemies.get(index);
+    return Math.max(0, (a.atp + a.atpSpread + a.equipAtp - (e?.stats.dfp ?? 0)) * 0.2);
+  }
+
+  // The Chaos Bringer's TP drain (frame 12 of row 9): floor(TP * 0.25) from
+  // the local player when in sight (the ray is not reproduced).
+  private drainTp(e: EnemyRuntime, ai: EnemyBrain, fraction: number): void {
+    if (this.damage.dead) return;
+    const lost = Math.floor(this.tp * fraction);
+    this.tp = Math.max(0, this.tp - lost);
+    ai.drained?.(lost);
+    this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) drains ${lost} TP`);
+  }
+
+  // The Chaos Sorcerer's Resta (CreateSpecialAttackEntity_006eeeb4) on
+  // itself. ASSUMED: the player Resta's heal, MST * 0.5 + power.
+  private enemyResta(e: EnemyRuntime, level: number): void {
+    const ctx = this.difficultyParams;
+    const def = ENEMY_TYPE_PARAMS[e.slot.type];
+    const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
+    const heal = Math.round(mst * 0.5 + techPower(TECH.resta, level));
+    e.stats.hp = Math.min(e.stats.maxHp, e.stats.hp + heal);
+    this.sendEnemy(e, ENEMY_BASE_FLAGS);
+    this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) casts Resta: +${heal} HP (${e.stats.hp}/${e.stats.maxHp})`);
+  }
+
+  // --- Bulclaw / Bulk / Claw (combat/enemyfsmruins.ts) ------------------------
+
+  // Live, not absorbed Claws of the body's section (state 10 scans every rt
+  // 0x26 entity of the room).
+  private clawsNear(body: EnemyRuntime): ClawAi[] {
+    const section = (body.slot.set as EnemySet).section;
+    const out: ClawAi[] = [];
+    for (const o of this.enemies.values()) {
+      // A Claw whose wave has not spawned does not exist yet.
+      if (o.dead || !(o.ai instanceof ClawAi) || o.ai.absorbed || !o.instance.root.visible) continue;
+      if ((o.slot.set as EnemySet).section !== section) continue;
+      out.push(o.ai);
+    }
+    return out;
+  }
+
+  private runtimeOf(ai: EnemyBrain): EnemyRuntime | null {
+    for (const o of this.enemies.values()) if (o.ai === ai) return o;
+    return null;
+  }
+
+  private bulclawEvent(e: EnemyRuntime, ai: BulclawAi, ev: BulclawEvent): void {
+    const what = `E-${e.index.toString(16)} (${e.slot.type})`;
+    if (ev.kind === 'split') {
+      if (ev.first) {
+        // The first split: hp / (4 + 1) and the 4 Claws in the child slots.
+        e.stats.hp = Math.max(1, Math.trunc(e.stats.hp / (BULCLAW_CLAWS + 1)));
+        this.sendEnemy(e, ENEMY_BASE_FLAGS);
+        for (let i = 0; i < BULCLAW_CLAWS; i++) void this.spawnClaw(e, ai, i);
+        void this.swapBulclawModel(e, ai);
+        this.opts.log(`${what} splits: Bulk with ${e.stats.hp} HP and its Claws`);
+        return;
+      }
+      void this.swapBulclawModel(e, ai);
+      const back = ai.claws.filter((c) => c.absorbed);
+      const share = Math.max(1, Math.trunc(e.stats.hp / (back.length + 1)));
+      e.stats.hp = share;
+      this.sendEnemy(e, ENEMY_BASE_FLAGS);
+      back.forEach((c, i) => {
+        const at = ai.ringSlot(i);
+        c.redeploy(at.x, at.z, at.angle);
+        const rt = this.runtimeOf(c);
+        if (rt) {
+          rt.stats.hp = Math.min(rt.stats.maxHp, share);
+          this.sendEnemy(rt, ENEMY_BASE_FLAGS);
+        }
+      });
+      ai.claws = [];
+      this.opts.log(`${what} splits again: ${back.length} Claws, ${share} HP each`);
+    } else if (ev.kind === 'absorb') {
+      let gained = 0;
+      for (const c of ev.claws) {
+        const rt = this.runtimeOf(c);
+        if (!rt) continue;
+        gained += rt.stats.hp;
+        if (this.lockOn === rt) this.lockOn = null;
+      }
+      // No clamp: the absorbed Claws' HP adds to the body's.
+      e.stats.hp += gained;
+      e.stats.maxHp = Math.max(e.stats.maxHp, e.stats.hp);
+      this.sendEnemy(e, ENEMY_BASE_FLAGS);
+      this.bulclawPending.add(e);
+      this.opts.log(`${what} absorbs ${ev.claws.length} Claws (+${gained} HP): Bulclaw again`);
+    } else {
+      // The self-destruct: the Bulk sets its own dead flag. ASSUMED: no drop
+      // and no EXP (nobody killed it).
+      e.dead = true;
+      ai.kill();
+      this.sendEnemy(e, ENEMY_BASE_FLAGS | FLAG_DEAD);
+      const m = ai.deathMotion;
+      this.playMotion(e, m.index, m.speed, false);
+      e.state = 'death';
+      e.removeIn = 1;
+      this.opts.log(`${what} self-destructs`);
+    }
+  }
+
+  // ClawAction(form) also sets +0x370, the model index: form 0 (Bulk) draws
+  // model 0 (re6_b_bal_body, motions 0..5), form 1 (Bulclaw) model 1
+  // (re6_b_bcbody, motions 6..9). The instance is rebuilt with that model.
+  private bulclawPending = new Set<EnemyRuntime>();
+  private async swapBulclawModel(e: EnemyRuntime, ai: BulclawAi): Promise<void> {
+    const old = e.instance;
+    const p = old.root.position;
+    const model = ai.bulk ? 0 : 1;
+    const m = ai.motion ?? (ai.bulk ? { index: 5, speed: 0.8, loop: true } : { index: 9, speed: 0.8, loop: true });
+    const placed = { ...old.placed, world: [p.x, p.y - e.lift, p.z] as [number, number, number], yaw: old.root.rotation.y };
+    const spec = { ...old.spec, parts: [{ model, motion: m }] };
+    const instance = await this.layer.spawn(placed as typeof old.placed, spec as typeof old.spec);
+    if (!instance || this.disposed || e.instance !== old) {
+      if (instance) this.layer.remove(instance);
+      return;
+    }
+    instance.root.position.copy(old.root.position);
+    instance.root.rotation.y = old.root.rotation.y;
+    instance.root.visible = old.root.visible;
+    e.instance = instance;
+    this.layer.remove(old);
+  }
+
+  // BulclawCreateClawEntity_00535554: Claw i in the body's child slot
+  // (index + 1 + i), on the ring of 13.
+  private async spawnClaw(body: EnemyRuntime, bai: BulclawAi, i: number): Promise<void> {
+    const index = body.index + 1 + i;
+    const ctx = this.difficultyParams;
+    const slot = ctx?.slots[index - ctx.base];
+    if (!ctx || !slot || slot.type !== 'CLAW' || this.enemies.has(index)) {
+      this.opts.log(`Bulclaw E-${body.index.toString(16)}: no CLAW slot for child ${i}`);
+      return;
+    }
+    const at = bai.ringSlot(i);
+    const bp = body.instance.root.position;
+    const placed = {
+      ...body.instance.placed,
+      entity: { ...(body.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [at.x, bp.y, at.z] as [number, number, number],
+      yaw: at.angle,
+      name: 'Claw',
+    };
+    const spec = { ...body.instance.spec, name: 'TObjEneBalClawClaw', parts: [{ model: 2, motion: { index: 15, speed: 1, loop: true } }] };
+    const instance = await this.layer.spawn(placed as typeof body.instance.placed, spec as typeof body.instance.spec);
+    if (!instance || this.disposed) return;
+    const fight = this.childFightStats('CLAW');
+    const ai = new ClawAi({ x: at.x, z: at.z, angle: at.angle, attack: fight.attack, radius: collisionRadius('TObjEneBalClawClaw'), phase: index, appear: true, rng: () => this.rng() });
+    bai.claws[i] = ai;
+    this.enemies.set(index, {
+      instance,
+      index,
+      slot,
+      ...fight,
+      motions: enemyCombatMotions('TObjEneBalClawClaw', instance.archive),
+      rtIndex: ENEMY_TYPE_PARAMS.CLAW?.rt ?? 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai,
+      lift: 0,
+      monest: null,
+      parent: body,
+      fake: null,
+      buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute('CLAW')),
+    });
+  }
+
+  // --- Dark Gunner control objects (combat/enemyfsmruins.ts GunnerControl) ----
+
+  private gunnerGroups: Array<{ control: GunnerControl; key: number; section: number; members: EnemyRuntime[] }> = [];
+
+  // Each DARK_GUNNER_CONTROL slot (no model, so no instance) leads the
+  // gunners with its param1 and section, ordered by param2.
+  private buildGunnerGroups(slots: EnemySlot[], base: number): void {
+    this.gunnerGroups = [];
+    slots.forEach((slot, i) => {
+      if (slot.type !== 'DARK_GUNNER_CONTROL' || slot.child !== 0) return;
+      const set = slot.set as EnemySet;
+      const members = [...this.enemies.values()]
+        .filter((g) => g.ai instanceof GunnerAi && (g.slot.set as EnemySet).params[0] === set.params[0] && (g.slot.set as EnemySet).section === set.section)
+        .sort((a, b) => (a.slot.set as EnemySet).params[1] - (b.slot.set as EnemySet).params[1]);
+      if (!members.length) return;
+      // ASSUMED: the control's own position is the middle of its gunners
+      // (its set entry's room transform is not applied here).
+      const cx = members.reduce((t, g) => t + g.instance.root.position.x, 0) / members.length;
+      const cz = members.reduce((t, g) => t + g.instance.root.position.z, 0) / members.length;
+      this.gunnerGroups.push({ control: new GunnerControl(cx, cz, base + i), key: set.params[0], section: set.section, members });
+    });
+    if (this.gunnerGroups.length) this.opts.log(`${this.gunnerGroups.length} Dark Gunner control group(s)`);
+  }
+
+  private tickGunnerControls(targets: AiTarget[]): void {
+    for (const g of this.gunnerGroups) {
+      // Gunners whose wave has not spawned do not exist yet; the control waits.
+      if (g.members.some((m) => !m.dead) && !g.members.some((m) => !m.dead && m.instance.root.visible)) continue;
+      const live = g.members.filter((m) => !m.dead && m.instance.root.visible && m.ai instanceof GunnerAi).map((m) => m.ai as GunnerAi);
+      const before = live.map((a) => a.death);
+      g.control.tick(live, targets);
+      live.forEach((a, i) => {
+        if (a.death && !before[i]) {
+          const rt = g.members.find((m) => m.ai === a);
+          if (rt) this.opts.log(`E-${rt.index.toString(16)} is the Death Gunner`);
+        }
+      });
+    }
+    this.gunnerGroups = this.gunnerGroups.filter((g) => !g.control.gone);
   }
 
   // A Dubchic getting up again (DubchicAi.revive).
@@ -925,6 +1267,17 @@ export class CombatView {
   // LilySpawnMegidProjectile_00529e68. ASSUMED look: a small green ball (the
   // client draws g_pLilyMegidProjectileBmlData).
   private launchSpit(e: EnemyRuntime, owner: LilyAi, x: number, z: number, angle: number): void {
+    // 0x00528c38: a Del Lily (+0x3cc & 0x800, built on the tower map) and
+    // every Lily in Ultimate cast create_megid1 instead, at
+    // constrain_tech_level(MovementData iparam1).
+    if (e.slot.type === 'DEL_LILY' || this.ultimate) {
+      const ctx = this.difficultyParams;
+      const mi = ctx?.params ? movementIndex(e.slot.type) : null;
+      const iparam1 = ctx?.params && mi !== null ? ctx.params.movement(ctx.difficulty, mi).iparam[0] : 0;
+      this.launchShot(e, delLilyMegid(x, z, angle, iparam1, this.ultimate));
+      this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) casts Megid`);
+      return;
+    }
     const spit = new LilySpit(x, z, angle);
     let mesh: THREE.Mesh | null = null;
     try {
@@ -1187,10 +1540,10 @@ export class CombatView {
 
   // One enemy melee landing on a player: the hit roll and the damage of
   // FUN_00777664 / FUN_007732b8 with the attack's own multiplier.
-  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number, kbScale?: number): void {
+  private enemyHitsPlayer(e: EnemyRuntime, clientId: number, knockback: number, mult: number, kbScale?: number, attackRow?: number): void {
     if (clientId !== this.game.selfId) return; // other clients resolve their own hits
     const view = this.view;
-    const attacker = this.enemyAttackerOf(e);
+    const attacker = attackRow ? this.enemyAttackerRow(e, attackRow) : this.enemyAttackerOf(e);
     if (!view || !attacker) return;
     const from = view.playerPositions().get(clientId);
     const p = e.instance.root.position;
@@ -1210,6 +1563,7 @@ export class CombatView {
     // cause_knockback(kbScale * the damage try_hit_entity returned).
     this.damage.hit(total, angle, kbScale !== undefined ? kbScale * total : knockback, 0x1000 | e.index);
     if (landed && total >= 1) this.gainPb(total, true);
+    if (landed) e.ai?.landed?.(total);
     // The Ultimate wolves' and Mothmants' status rolls (combat/status.ts).
     const status = landed ? meleeHitStatus(e.slot.type, (this.game.info?.difficulty ?? 0) === 3, this.rng()) : null;
     if (status !== null) this.inflictStatus(status, `E-${e.index.toString(16)} (${e.slot.type})`);
@@ -1230,7 +1584,7 @@ export class CombatView {
     let best: EnemyRuntime | null = null;
     let bestSq = 220 * 220; // ASSUMED lock-on range
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible) continue;
+      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden)) continue;
       const p = e.instance.root.position;
       let diff = Math.atan2(p.x - from.x, p.z - from.z) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
@@ -1595,7 +1949,7 @@ export class CombatView {
   // One damaged (or missed) enemy: 6x0A with the new total, the number over
   // it, its reaction, and the kill flow when it died. Shared by weapon hits
   // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
-  private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string): void {
+  private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true): void {
     const me = this.game.self;
     if (e.ai?.invulnerable) {
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
@@ -1623,10 +1977,19 @@ export class CombatView {
     const p = e.instance.root.position;
     this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
     // The enemy turns on its attacker (unknown_enemy_behavior_4).
-    if (damage >= 1 && me) e.ai?.onDamage(me.clientId);
+    if (damage >= 1 && me && byPlayer) e.ai?.onDamage(me.clientId);
+    // 0x0054615c: a hit on the Death Gunner while it shoots stuns its group.
+    const groupStun = damage >= 1 && e.ai instanceof GunnerAi && e.ai.superArmor;
+    if (groupStun) {
+      const g = this.gunnerGroups.find((x) => x.members.includes(e));
+      if (g) {
+        g.control.stunGroup(g.members.filter((m) => !m.dead).map((m) => m.ai as GunnerAi));
+        this.opts.log(`Death Gunner E-${e.index.toString(16)} hit while shooting: the group is stunned`);
+      }
+    }
     // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
-    else if (damage >= 1 && !e.status.locked && !e.ai?.superArmor) this.playDamage(e);
+    else if (damage >= 1 && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );
@@ -2053,6 +2416,21 @@ export class CombatView {
   // death motion (the enemy is removed when it ends).
   private killEnemy(e: EnemyRuntime, _flags: number): void {
     e.dead = true;
+    // The form / leader decides the drop table: Bulclaw 0x28 / Bulk 0x27,
+    // Dark Gunner 0x22 / Death Gunner 0x23 (newserv remaps them).
+    if (e.ai instanceof BulclawAi || e.ai instanceof GunnerAi) e.rtIndex = e.ai.rtIndex;
+    // A Bulclaw's death kills the Claws it absorbed (state 5).
+    if (e.ai instanceof BulclawAi && !e.ai.bulk) {
+      for (const c of e.ai.claws.filter((x) => x.absorbed)) {
+        const rt = this.runtimeOf(c);
+        if (!rt) continue;
+        rt.dead = true;
+        c.kill();
+        this.sendEnemy(rt, ENEMY_BASE_FLAGS | FLAG_DEAD);
+        this.layer.remove(rt.instance);
+        this.enemies.delete(rt.index);
+      }
+    }
     // The Canane's death makes its ring self-destruct; a ring member's death
     // tells the Canane (0x00541c10).
     if (e.ai instanceof CananeAi) for (const c of e.ai.children) c.selfDestruct();
@@ -2404,16 +2782,18 @@ export class CombatView {
   }
 
   private playDamage(e: EnemyRuntime): void {
-    if (e.dead || !e.motions.damage) return;
-    this.playMotion(e, e.motions.damage.index, e.motions.damage.speed, false);
+    const m = e.ai?.flinchMotion ?? e.motions.damage;
+    if (e.dead || !m) return;
+    this.playMotion(e, m.index, m.speed, false);
     e.state = 'damage';
   }
 
   private playDeath(e: EnemyRuntime): void {
     e.state = 'death';
     e.removeIn = 0.5;
+    const m = e.ai?.deathMotion ?? e.motions.death;
     e.ai?.kill();
-    if (e.motions.death) this.playMotion(e, e.motions.death.index, e.motions.death.speed, false);
+    if (m) this.playMotion(e, m.index, m.speed, false);
   }
 
   private playIdle(e: EnemyRuntime): void {

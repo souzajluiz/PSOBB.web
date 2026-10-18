@@ -170,6 +170,11 @@ export const AI_CONFIG: Record<string, EnemyAiConfig> = {
   // the Booma handlers (base ctor 0x0052b6ec, dispatcher 0x0052b78c): no
   // behaviour of its own besides sounds and the attack trails.
   TObjEneShark: { detect: [225, 250, 300], turnRate: 1024 },
+  // 0x009bd740 + subtype * 0x1c (dimenian_constructor 0x00551d3c): Dimenian /
+  // La / So search 225 / 250 / 300, turn 1024; the Booma handlers (vtable
+  // 0x00b041e0 over the base 0x00b012e0) with its own spawn (the dark
+  // portal, 0x005ad51c), sounds and attack trails.
+  TObjEneDimedian: { detect: [225, 250, 300], turnRate: 1024 },
   // g_SavageWolfConfig @ 0x009bb9ec (savage_wolf_constructor + 0x11e).
   TObjEneBm5Wolf: { detect: [225], turnRate: 1536 },
   // 0x009bb764 (the Monest constructor at 0x005191c0 + 0x128).
@@ -195,12 +200,17 @@ export function aiConfig(className: string, subtype = 0): { detect: number; turn
 export const BOOMA_COLLISION_RADIUS = [7, 7, 8] as const;
 export const BOOMA_COLLISION_RADIUS_ULTIMATE = [10, 10, 9] as const;
 export const COLLISION_RADIUS_DEFAULT = 10;
+export const DIMENIAN_COLLISION_RADIUS = [7, 7, 8] as const;
 
 export function collisionRadius(className: string, subtype = 0, ultimate = false): number {
   if (className === 'TObjEneBeast') {
     const t = ultimate ? BOOMA_COLLISION_RADIUS_ULTIMATE : BOOMA_COLLISION_RADIUS;
     return t[Math.min(subtype, 2)];
   }
+  // 0x009bd7a0 + subtype * 0x2c: Dimenian / La 7, So 8.
+  if (className === 'TObjEneDimedian') return DIMENIAN_COLLISION_RADIUS[Math.min(subtype, 2)];
+  // Delsaber 0x009bd6f8: radius 6.
+  if (className === 'TObjEneSaver') return 6;
   return COLLISION_RADIUS_DEFAULT;
 }
 
@@ -248,6 +258,9 @@ export interface AiTarget {
   charClass: number;
   dead: boolean;
   angle?: number; // heading in radians (the wolf watches where it faces)
+  // The player is in an attack action (player +0x328 & 0xE0; the Delsaber's
+  // guard check).
+  attacking?: boolean;
 }
 
 // What the owner must do after a tick.
@@ -258,7 +271,9 @@ export interface AiFrame {
   angle: number; // radians
   // The attack landed. kbScale: cause_knockback(kbScale * the damage
   // try_hit_entity returned) instead of the fixed `knockback` (Grass Assassin).
-  hit: { clientId: number; knockback: number; mult: number; kbScale?: number } | null;
+  // attack: another AttackData row of the enemy (the index into its
+  // ENEMY_TYPE_PARAMS attack list: the Delsaber's jump and slash).
+  hit: { clientId: number; knockback: number; mult: number; kbScale?: number; attack?: number } | null;
   // Per-family FSMs (combat/enemyfsm.ts): a status effect landing on a player
   // without damage (Poison Lily's scream), a projectile to launch, and the
   // height of the model above the ground (Savage Wolf's leap).
@@ -272,6 +287,15 @@ export interface AiFrame {
   hold?: { clientId: number; frames: number; particle: number; x: number; z: number; radius2: number } | null;
   // The model is hidden (a warping Sinow: vtable +0x174 / +0x178).
   hidden?: boolean;
+  // The Chaos Bringer's TP drain: every player in sight loses floor(TP *
+  // tpDrain) (modify_tp_value); the owner reports the total back.
+  tpDrain?: number;
+  // A contact hit through entity_hit_by_tech (group 0 with this power: the
+  // Chaos Bringer's charge), optionally with a status roll.
+  techHit?: { clientId: number; power: number; status?: { type: number; chance: number } } | null;
+  // The Chaos Sorcerer's Resta: heal this enemy (null = itself) with the
+  // technique at this 0-based level.
+  heal?: { level: number } | null;
 }
 
 // What render/combat.ts drives: the generic FSM below or a per-family one.
@@ -286,12 +310,30 @@ export interface EnemyBrain {
   readonly superArmor?: boolean;
   // Hits do no damage (a crouching Grass Assassin, a cloaked Sinow ...).
   readonly invulnerable?: boolean;
+  // Whether a hit of `damage` starts the flinch (the Dark Belra's hit handler
+  // 0x00538dcc: only a hit of at least max HP / 5); absent = every hit.
+  flinches?(damage: number, maxHp: number): boolean;
+  // Flinch / death motions that depend on the brain's state (the Bulclaw /
+  // Bulk forms, the stunned Dark Gunner); absent = the class's table.
+  readonly flinchMotion?: EnemyAiMotion | null;
+  readonly deathMotion?: EnemyAiMotion | null;
+  // The owner keeps it current: confusion on this enemy (entity+0x30 & 0x10).
+  confused?: boolean;
+  // A melee hit of this enemy did `damage` (the Delsaber's shield refill).
+  landed?(damage: number): void;
+  // The players lost this much TP to the brain's tpDrain.
+  drained?(tp: number): void;
 }
 
 // One enemy's behaviour. Positions are world units, angles radians; tick() is
 // called once per game tick (30 per second).
 export class EnemyAi {
   state: AiState = 'idle';
+  // unknown_booma_enemy_find_target (0x0052b888, vtable +0x78) while
+  // confused searches every entity, not only the players: the owner then
+  // hands it the other enemies too (render/combat.ts), and the chase and the
+  // attack run unchanged against whichever is nearest.
+  confused = false;
   x: number;
   z: number;
   angle: number;

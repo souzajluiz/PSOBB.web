@@ -83,6 +83,7 @@ node tests/enemystatus.test.ts   # enemy paralysis/freeze/shock/confusion: kinds
 node tests/specials.test.ts      # weapon specials: permission, reduction, miss retry, every type's formula/chance/cost, newserv's special table
 node tests/photonblast.test.ts   # photon blast gauge gain dealt/taken, cap and 6x39/6x3A, every blast's power, 6x49/6x37 bytes
 node tests/enemyfsm.test.ts      # Poison Lily track/spit/bite/scream and its spit, Savage Wolf stalk/leap arc/hop back, Rag Rappy fake death, Monest Mothmant schedule and child slots
+node tests/enemyfsmruins.test.ts # Ruins FSMs: Bulclaw split/merge/self-destruct and Claws, Dark Belra arm/punch/dizzy/confused, Dark Gunner control cycle and stun, Chaos Bringer charge/TP drain/laser, Chaos Sorcerer cycle, Delsaber jump/guard, confused targeting, Del Lily Megid
 node tests/combatdepth.test.ts   # player hit/death motions and the 6x4A-6x4F flow, enemy AI (search radius, chase, melee, recovery) and its exe tables
 node tests/enemies.test.ts       # every free-play enemy resolves to its model archive, model and idle motion; builds them and their child objects
 node tests/bossrooms.test.ts     # boss warp gathering (6x6A state machine) and the boss music phases (6x15/6x19/6xA4/6xA5)

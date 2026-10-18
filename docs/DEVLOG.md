@@ -1,5 +1,149 @@
 # Devlog
 
+## 2026-10-18: Ruins enemies: Bulclaw / Claw, Dark Belra, Dark / Death Gunner, Chaos Bringer, Chaos Sorcerer, Delsaber; confused enemies; Del Lily's Megid
+
+**What changed:** the Ruins families run their own state machines
+(`combat/enemyfsmruins.ts`, projectiles in `combat/enemyshots.ts`, driven by
+`render/combat.ts`). A Bulclaw chases and swings (10 % poison); after two
+swings or 60 s it splits into a Bulk (model 0, 1/5 of its HP) and 4 Claws in
+its CLAW child slots; the Bulk flees, calls the section's Claws back, absorbs
+them (their HP added) and becomes a Bulclaw again, or self-destructs on its
+last attacker at low HP. The Dark Belra walks in 20-unit segments, throws its
+arms (piercing, AttackData entry 19), punches (paralysis), gets dizzy when
+circled, and spins and throws when confused. Dark Gunners run under their
+control object: fan out, drop, dash, two-shot volleys, a rotating Death
+Gunner whose hit while shooting stuns the group, and a flat shield off weapon
+damage. The Chaos Bringer appears at its spawn point, charges (confusion),
+swings, and after 5 hits drains 25 % TP and fires its laser (stronger with
+more TP drained). The Chaos Sorcerer warps around its target and casts
+attack A / attack B / Resta from its bits. The Delsaber leaps from 150, runs
+its three-hit combo, guards against a swing in front of it while its shield
+lasts and slashes to refill it when broken. Confused enemies target the
+other enemies too and hit them; Del Lilies (and every Lily in Ultimate) cast
+Megid. Code: `combat/enemyfsmruins.ts` (new), `combat/enemyshots.ts`,
+`combat/enemyai.ts`, `combat/enemymotions.ts`, `render/combat.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Bulclaw / Bulk** (factory 0x00533f90, vtable 0x00b01b40, update
+  0x00531d9c, checks 0x00533b80, states 0x00531ee4, table 0x009bc680):
+  BulclawHandleClawAction_00532960(form) switches form, rt (0x28 / 0x27) and
+  the model index +0x370 (model 1 bcbody / model 0 bal_body); speed 0.5556
+  (written at 0x00534208), attack approach 0.7, turn 1024, search 250 on
+  Stagger(30); chase bands 60 / 40 / 120 / 100 (0x009229d4..e0); the swing
+  (0x00532d44) hits at frame 10 (try_hit 1.0, knockback 3, 0.1 poison roll
+  0x00922a28) and counts hit or miss; split (0x0053235c) at +0x3dc > 1800 or
+  > 1 swing: hp / 5 the first time and the Claws (0x00535554 / 0x00535630) on
+  a 13 ring at 45 + 90 i degrees, later the absorbed Claws back and the HP
+  shared / (n + 1); flee (0x0053215c) 90 away re-picked on Stagger(90);
+  merge (0x005323ec) up to 4 Claws, 600 frames to arrive within 15, HP added
+  without a clamp, animation 11; self-destruct (0x005334d0) when a flinch
+  ends at <= iparam1 % (10 by default); idle is super armor; the Bulclaw's
+  death kills the absorbed Claws.
+- **Claw** (0x005354d4, update 0x005345dc, states 0x00534994, table
+  0x009bc7c0): bands 40 / 20 / 100 / 80, the bite at frame 8 (knockback 3),
+  starting at once (+0x3c8 is only written by the merge state), 120 frames
+  backing off at 0.6, appear / merge / absorbed (hidden, untargetable).
+- **Dark Belra** (0x00536bfc -> 0x005394ec, states 0x005372dc, table
+  0x009bcaa0): search 400, walk 0.28 in 20-unit segments with the farthest
+  player inside +-0xaaa scanned after 2 segments past 80; Ultimate stands and
+  scans every frame; the arm (0x005398b0 / 0x00539c7c): 10 a frame for 300,
+  radius scale * 5.4 (scale 1 -> 2 by 0.15), each player once, entry 19,
+  Ultimate 0.1 confusion; the punch (0x005379ec) within 30 at frame 16,
+  knockback 5, paralysis <= 1/3 (Ultimate 0.1); the dizzy spin (0x00537844)
+  after level * 180 degrees of turning, 150 * level frames; confused
+  (0x005375f4): +0x280 a frame to 0x3800, then the throw; flinch only on a
+  hit >= max HP / 5 (0x00538dcc); idle and appearing invulnerable.
+- **Dark Gunner** (0x00545e54, update 0x00543e8c, dispatcher 0x005443c4,
+  table 0x009bcf60) and its control (0x00543ab8, update 0x00543494): group =
+  same param1 and section, by param2; control states 0..6 (fan of 0x1555,
+  90 / 210 / 120 / 420 frames, the leader rotation = Death Gunner, rt 0x23);
+  dormant drop, dash at fparam1 slowing 0.2 to 0.5 for fparam2, the volley
+  (0x005449a8: iparam1 charge, 2 lasers at the nearest player within 200,
+  0x00546610: fparam4 in 3D, radius speed * 0.75, life 500 / speed, power
+  iparam4, knockback 3), stun iparam2 (0x00544518), the Death Gunner hit while
+  shooting stuns the group (0x0054615c -> 0x00543c88); the shield = iparam3
+  off weapon damage, dropped while shooting, stunned, frozen or paralysed.
+- **Chaos Bringer** (0x0053a454, dispatcher 0x0053a998, table 0x009bccc0):
+  hidden / appear (50 fade frames invulnerable, 1.2 for 20 frames) / lost /
+  chase (turn 0x300, fparam2, swing inside iparam5 within 0x1800, charge from
+  iparam6 with < 2 charges) / charge (0x0053b9fc: wind-up turning 0x280, run
+  at fparam1 along the frozen direction, group-0 tech iparam3 + 0.3333
+  confusion, brake 0.95) / pause iparam2 / swing (0x0053b64c: frames 10.8
+  (Ultimate 7.8) .. 13, push 3) / laser (0x0053ac24: frame 12 TP drain 0.25,
+  the farthest player within 300, the 10-a-frame 26-frame piercing laser,
+  iparam4 * 1.5 / * 2 past 70 / 151 TP, Ultimate 3 shots); 5 counted hits
+  (0x0053c7d8) bring the laser.
+- **Chaos Sorcerer** (0x0059d8b8, dispatcher 0x0059b718, table 0x009bfe80):
+  lurk (Rangers within 400, others 250), placement 50 / 30 / 80 / 160 with
+  +0x2aaa per placement, 50-frame warps, 60 frames before casting, the attack
+  (0x0059c844: within 100, 90-frame charge, release at frame 11: Gizonde,
+  Rafoie in Episode 2, Grants in Ultimate; then Gibarta / Megid) and the heal
+  (0x0059bd94: below max / 4, Ultimate below max) at levels iparam1..3 from
+  the bit anchors (+-15, 18 up, 0x0059c770); super armor whenever hittable.
+- **Delsaber** (0x0055018c, vtable 0x00b03fa0, the generic controller
+  0x00787a80, table 0x009bd5e0, record 0x009bd6dc): shield round(param1 +
+  100); waits hidden for a target within 200; walk fparam3 / fparam4; the
+  attack choice 0x00550ac8 (broken -> slash [2], far >= 150 -> jump within
+  r + 150 and 0xaaa, else the combo [0]); combo hits 16 / 37 / 54 with the
+  1.25 lunge, knockback = damage; the jump (0x0054eae4) at (d - 15) *
+  0.0583333 from frame 11 to the landing hit at 23 with [1]; the guard
+  (0x00550db4 / 0x0054e878): a swinging player within 30 in front facing
+  it, invulnerable to frame 28, the shield drained by (ATP + spread + weapon
+  ATP - DFP) * 0.2 (int16); the slash refills it; front / back flinch rows.
+- **Dimenian**: the Booma handlers with its own record 0x009bd740 (225 /
+  250 / 300, turn 1024), radii 7 / 7 / 8 (0x009bd7a0) and its flinch at 1.0
+  (was 1.5).
+- **Confusion**: unknown_booma_enemy_find_target 0x0052b888 searches every
+  entity while confused; EnemyUpdateTarget_0052ccd8 -> 0x0052cd2c takes the
+  closer of the nearest player and enemy but nothing without a player in
+  range; the hit is try_hit_entity 0x007732b8 on the enemy.
+- **Del Lily's Megid** (0x00528c38): a Del Lily or any Ultimate Lily casts
+  create_megid1 at constrain_tech_level(iparam1): power 27 + 3 L (42 + 2 L
+  past 14), speed 2 + trunc(L / 5) * 2; death when rand < (power - EDK) / 100.
+
+**Assumed:** the Bulk's flee point straight away from the player, the Claw's
+appear length (30), self-destruct gives no drop or EXP; the Belra's hand
+offset and its regrow length (30), the arm's push drawn as knockback 3; the
+gunner fan pointing at the player, the control's position at its gunners'
+middle; the Bringer's contact radius 7 and laser height; the technique bolts
+(enemyshots.ts TechBolt) flying straight at 4 a frame, their damage through
+the group-0 formula, the enemy Resta as MST / 2 + power; the Delsaber's
+waypoint = its target, the appear (30) and shrink (10) lengths, a remote
+player's guard drain 0; the player's EDK 0 for Megid; a confused enemy's hit
+on an enemy resolved by every client.
+**Left out:** the Sorcerer's bits as separate hittable entities (BEE_R /
+BEE_L slots: their flinch, 900-frame respawn) and its healing of other
+enemies, Gibarta's freeze; the Bringer's Ultimate weapon unequip and push
+object; the Delsaber's job-mask preference; the walls / line of sight of all
+of these; the dark-portal spawn effects; Gibbles / Goran confusion paths.
+
+**Tests:** `tests/enemyfsmruins.test.ts` (new): Dimenian record and radii;
+Bulclaw swings, poison, split, ring, flee, merge / absorb, self-destruct;
+Claw bite and back-off; Belra appear, walk speed, throw, flinch threshold,
+arm pierce / entry 19 / Ultimate confusion, punch paralysis, confused spin;
+Gunner dormant shield, control cycle, volleys, laser effect, Death Gunner
+super armor and stun; Bringer appear, charge contact and confusion, hit
+count -> laser, TP drain, laser power; Sorcerer lurk, placement, warp,
+Gizonde, Ranger range; Delsaber shield, wake, jump, guard drain and break;
+updateTarget's confused rule; Del Lily Megid level; the Bulclaw's 4 CLAW
+slots.
+
+**Checked in Chrome** (WebHunter, HP raised, enemies made visible and the
+player placed from the console): Ruins 1: a Bulclaw went chase > attack >
+split (260 -> 52 HP, model 1 -> 0, 4 Claws spawned in its slots, they bit
+and backed off) > flee; with the player far away it merged (merge, the 4
+Claws absorbed, 852 HP) and became a Bulclaw (model 1) again; a Dark Belra
+went appear > chase > dizzy > throw (the arm hit for 136) > punch
+(paralysis); a Delsaber leapt, ran combos and guarded the local player's
+swings (shield 103 draining, "is invulnerable" on the hits); a Chaos
+Sorcerer cycled lurk > appear > attack > vanish > ... > heal and its
+techniques hit for 81 / 90. Ruins 2: a Dark Gunner group dropped, dashed,
+rotated the Death Gunner and fired volleys (50 a laser on Normal); hitting
+the Death Gunner while shooting stunned the group for 120 frames; a Chaos
+Bringer appeared, charged twice (hit for 84, confused), after 5 hits drained
+TP and fired its laser, then swung; a confused La Dimenian targeted and hit
+another La Dimenian until the confusion wore off. No console errors.
+
 ## 2026-10-18: Mines enemies: Dubchic / Gillchic, Garanz, Sinow Beat / Gold, Canadine / Canane
 
 **What changed:** the Mines families run their own state machines
