@@ -8,7 +8,8 @@ import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseMapCRel } from '../client/src/formats/crel.ts';
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../client/src/formats/objset.ts';
-import { CollisionWorld, STEP_UP } from '../client/src/render/collision.ts';
+import { CollisionWorld, PLAYER_RADIUS, STEP_UP } from '../client/src/render/collision.ts';
+import { LOBBY_MAIN_RADIUS, lobbyMainBody } from '../client/src/render/lobbyview.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 const SCENE = join(DATA, 'scene');
@@ -90,6 +91,44 @@ if (lobby) {
   }
   if (!stopped) fail('lobby_01: walking +Z from spawn 0 never hit a wall');
   console.log(`lobby_01: walk +Z from spawn 0 stopped at z=${p.z.toFixed(1)}`);
+}
+
+// 4. TObjLobbyMain (0x0182) of every lobby blocks the player with its round
+//    hitbox (radius 32, 0x009c9778): walking straight at it from 120 units
+//    away stops 32 + 5 from its center.
+if (existsSync(gslPath)) {
+  const gsl = new GSLArchive(new Uint8Array(readFileSync(gslPath)));
+  let lobbies = 0;
+  let at0 = 0;
+  for (const [area, world] of worlds) {
+    if (!/^lobby_\d\d$/.test(area) || !gsl.has(`map_${area}o.dat`)) continue;
+    const rooms = parseMapNRel(new Uint8Array(readFileSync(join(SCENE, `map_${area}n.rel`)))).sections;
+    const mains = parseObjectSets(gsl.get(`map_${area}o.dat`)).filter((o) => o.type === 0x0182);
+    if (!mains.length) fail(`${area}: no TObjLobbyMain`);
+    if (!mains.length) continue;
+    if (area === 'lobby_01') at0 = mains.length;
+    const at = mains.map((m) => roomToWorld(m.position, rooms.find((r) => r.id === m.room)));
+    const [mx, my, mz] = at[0];
+    world.bodies = at.map(([x, , z]) => lobbyMainBody(x, z));
+    // Find a direction with floor 120 units out and walk in.
+    let best = -1;
+    for (let k = 0; k < 16 && best < 0; k++) {
+      const a = (k * Math.PI) / 8;
+      let p = { x: mx + Math.sin(a) * 120, y: 0, z: mz + Math.cos(a) * 120 };
+      const gy = world.groundHeight(p.x, p.z, my + 30);
+      if (gy === null) continue;
+      p.y = gy;
+      for (let i = 0; i < 100; i++) p = world.move(p.x, p.y, p.z, -Math.sin(a) * 2, -Math.cos(a) * 2);
+      const d = Math.min(...at.map(([x, , z]) => Math.hypot(p.x - x, p.z - z)));
+      if (d < 80) best = d; // reached it (not stopped by a wall on the way)
+    }
+    world.bodies = [];
+    if (best < 0) continue;
+    lobbies++;
+    if (best < LOBBY_MAIN_RADIUS + PLAYER_RADIUS - 0.01 || best > LOBBY_MAIN_RADIUS + PLAYER_RADIUS + 2.01) fail(`${area}: stopped ${best.toFixed(2)} from TObjLobbyMain`);
+  }
+  console.log(`TObjLobbyMain: ${lobbies} lobbies stop the player at 37 units (${at0} objects in lobby_01)`);
+  if (lobbies < 5) fail(`only ${lobbies} lobbies checked against TObjLobbyMain`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

@@ -18,7 +18,7 @@ import { parseMapNRel } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
 import { locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
-import { CollisionWorld, STEP_UP } from './collision.ts';
+import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
@@ -59,6 +59,21 @@ export interface LobbyMapData {
   infoCols?: Array<{ x: number; z: number; radius: number }>;
 }
 
+// The lobby objects of map_lobby_NNo.dat that collide (object factory
+// 0x00a06be0, the constructors checked for InitEnemyCollisionBoxes_007b9a88 /
+// ConstructEntityHitbox_007b9ccc): only TObjLobbyMain (0x0182, create
+// 0x00672254, constructor 0x006722d0) has a hitbox, the round box 0x009c9778:
+// center at the object, radius 32, flags 0x10003. The info counters
+// (TObjInfoCol 0x0180), the lobby warp, pigeons, butterflies, pumpkins,
+// stained glass, curtain, aquarium, particles and fish have none (the
+// counters themselves are map collision). Players run into it with the rule
+// of CollisionWorld.bodies (EnemyHandleCollisionStepUp_007b7704 through
+// MericarolProcessCollision_007b7e9c, the player-vs-object pass).
+export const LOBBY_MAIN_RADIUS = 32;
+export function lobbyMainBody(x: number, z: number): Body {
+  return { x, z, radius: LOBBY_MAIN_RADIUS };
+}
+
 // Loads the lobby's collision (scene/map_lobby_NNc.rel) and player spawn points
 // (map_lobby_NNo.dat from data.gsl, positions relative to the n.rel rooms).
 // Missing files only degrade the view, so errors are reported and swallowed.
@@ -81,6 +96,11 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
       data.spawns.set(s.clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
     }
     for (const o of sets) {
+      if (o.type === 0x0182 && data.collision) {
+        // TObjLobbyMain blocks the players with its round hitbox (lobbyMainBody).
+        const [x, , z] = roomToWorld(o.position, rooms.find((r) => r.id === o.room));
+        data.collision.bodies.push(lobbyMainBody(x, z));
+      }
       if (o.type !== 0x0180) continue;
       const [x, , z] = roomToWorld(o.position, rooms.find((r) => r.id === o.room));
       data.infoCols!.push({ x, z, radius: o.fparams[0] });
@@ -197,6 +217,7 @@ export class LobbyView {
     this.lobby = lobby;
     this.showPlayer = options.showPlayer ?? (() => true);
     this.collision = mapData.collision;
+    (globalThis as { lobbyView?: LobbyView }).lobbyView = this; // console/automation access
     this.spawns = mapData.spawns;
     this.files = mapData.files;
     // The map is unlit (vertex colors); the player materials are Lambert, lit by

@@ -1,5 +1,38 @@
 # Devlog
 
+## 2026-10-18: Lobby object collision
+
+**What changed:** the four TObjLobbyMain objects of every lobby now stop the
+player, like the client's object hitboxes do. Code: `render/lobbyview.ts`
+(`lobbyMainBody`, added to `CollisionWorld.bodies` when the lobby loads).
+
+**Details** (Ephinea `PsoBB.exe`):
+- The constructors of every object type in the lobby `o.dat` files (rows of
+  the object factory 0x00a06be0) were checked for
+  InitEnemyCollisionBoxes_007b9a88 / ConstructEntityHitbox_007b9ccc. Only
+  TObjLobbyMain (0x0182, create 0x00672254, constructor 0x006722d0) has one:
+  the round box 0x009c9778, center at the object, radius 32, flags 0x10003.
+  TObjInfoCol, TObjWarpLobby, the pigeons, butterflies, pumpkins, stained
+  glass, curtain, aquarium, particles and fish have none; the counters are
+  part of the map collision.
+- The player meets object hitboxes in MericarolProcessCollision_007b7e9c
+  (the player-vs-object pass) with the same step response as the NPCs
+  (EnemyHandleCollisionStepUp_007b7704): a move into a box within 90 degrees
+  of the heading is refused. The player's hitbox radius is 5 for every class
+  (see the entry below), so the player stops 37 units from the center.
+
+**Assumed:** the player-vs-object pass runs in the lobby as in a game (the
+player's +0x32c mode there was not traced). Left out: TObjLobbyMain's model
+(the seasonal decoration of `bm_obj_lobby_main.bml`), and round hitboxes of
+field objects other than the doors.
+
+**Tests:** `tests/collision.test.ts` section 4: in all 10 lobbies, walking
+straight at a TObjLobbyMain stops 37 units from it.
+
+**Checked in Chrome** (WebHunter, lobby 1): the four bodies load at
+(+-176, -139) and (+-175, 211); walking at the one at (-178, -139) from 70
+units stops the player 38 units away, at the edge of its octagonal pad.
+
 ## 2026-10-18: Walking townspeople and NPC collision
 
 **What changed:** the Pioneer 2 and Lab NPCs whose set entry has param6 = 1

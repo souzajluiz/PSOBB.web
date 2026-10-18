@@ -40,7 +40,8 @@
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
 - [x] Player hitbox radius from the exe: 5.0 for every class (only its height is per class)
-- [ ] Collision of lobby objects (counters, props from `o.dat`)
+- [x] Collision of lobby objects: TObjLobbyMain (0x0182) round hitbox of radius 32, the only lobby object with one
+- [ ] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`); round hitboxes of field objects other than doors
 - [ ] Real lobby spawn points and collision (`*c.rel`)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
 - [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
