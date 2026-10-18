@@ -111,7 +111,8 @@ export class BattleParams {
       fparam4: f(0x0c),
       fparam5: f(0x10),
       fparam6: f(0x14),
-      iparam: [0, 1, 2, 3, 4, 5].map((i) => this.dv.getUint32(o + 0x18 + i * 4, true)),
+      // Signed: the Garanz missile life adjust is -30 (update 0x005709e0 adds it to 150).
+      iparam: [0, 1, 2, 3, 4, 5].map((i) => this.dv.getInt32(o + 0x18 + i * 4, true)),
     };
   }
 

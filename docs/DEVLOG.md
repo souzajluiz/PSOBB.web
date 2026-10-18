@@ -1,5 +1,114 @@
 # Devlog
 
+## 2026-10-18: Mines enemies: Dubchic / Gillchic, Garanz, Sinow Beat / Gold, Canadine / Canane
+
+**What changed:** the Mines families run their own state machines
+(`combat/enemyfsmmines.ts`, projectiles in `combat/enemyshots.ts`, driven by
+`render/combat.ts`). Dubchics and Gillchics walk, punch twice and fire a
+laser volley; a Dubchic gets up again after its first four deaths. The
+Garanz walks, lays ground mines and fires homing missile barrages that grow
+with its damage phase. Sinow Beat / Gold drop from the ceiling, warp next to
+the player and strike, run a two-hit combo and warp away (the Gold casts
+after it). Canadines rise, fire lasers or dive and zap, and orbit; a Canane
+spawns its ring of 8 into its CANADINE_GROUP slots, releases the out- and
+in-fighters in turn, frees them when the ring thins out, and its death makes
+the ring self-destruct. MovementData iparams are now read signed
+(`formats/battleparams.ts`). Code: `combat/enemyfsmmines.ts` (new),
+`combat/enemyshots.ts`, `combat/enemymotions.ts`, `render/combat.ts`,
+`formats/battleparams.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Dubchic / Gillchic** (ctor 0x00556600, selector 0x005562ec, dispatcher
+  0x00554a0c, table 0x009bdbe0, record 0x009bdd40 {150, turn 1024}): aggro
+  170 / 220 by round(param1) parity, a search every 30 frames, re-acquire
+  within aggro + 50; walk 0.37037 / 0.57037 (revived: fparam3); within
+  distance_x while it has walked less than 80 the melee (hits at motion
+  frames 20 / 28, revived 34 / 54, try_hit 1.0, knockback 3.0; the Gillchic
+  slows with roll <= 1/6, 0x00924c24, group 17); past 80 a 0.35 roll fires
+  round(param1) lasers (2 when 0) at a player within 150: charge iparam2
+  frames from motion frame 2, 15 frames apart; the laser (0x005570f0 /
+  0x00556fa0) flies 7 a frame for 150 units, radius 7, group 0 with
+  iparam4; death (0x00555234): a Dubchic lies iparam1 frames and stands up
+  with full HP and the revived flag, invulnerable meanwhile; a Gillchic and
+  the 5th death are final.
+- **Garanz** (ctor 0x0056f8f4, selector 0x0056eb08, dispatcher 0x0056d8f4,
+  table 0x009be740): up to 4 players within 300 sorted by distance (padded
+  with the farthest); phase 0 walks fparam1 units at fparam2 toward
+  sorted[1], phase 1 / 2 (HP <= 1/3 / 1/4, hit handler 0x0056f1d8) walk 120
+  laying a mine every 20 (0x00926824); then the barrage (super armor 0x40000:
+  turn to within 0xe37, animation 2, frame 28): 4 / 8 / 16 missiles at the
+  heading +-0x800, pitched 22.5 / 45 degrees, speed fparam4, homing from age
+  14 with steer fparam5, life iparam2 + 150, blast 6, group 0 iparam3
+  (0x00570810 / 0x005709e0); mines (0x0056e9f8 / 0x00570128) thrown back at
+  0.5 with gravity 0.10889, crawl 0.8 for 50 after a random +-120 degree
+  turn, armed after 15 frames, contact 3, blast 5, 150 frames, iparam4;
+  iparam1 frames after the barrage it decides again.
+- **Sinow Beat / Gold** (0x0058d320, dispatcher 0x0058d93c, table 0x009bf8a0,
+  MovementData rows 6 / 0x10): wait (search 200, 30 frames), ceiling drop
+  (no flinch), chase at fparam1 turning 0x500; within 25 and +-0x1e00 the
+  combo (0x0058e8f0: lunge fparam3 on frames 0..5, hits at 9 / 19, the
+  second confuses with roll < 0.1666, hold iparam3 at frame 25); 100..150
+  away the warp-strike (0x0058eb18: hidden from frame 14 to 23 moving
+  (d - 20) / 12.857 a frame, hit at 25, slide 0.85); every 2nd combo the
+  warp away (0x0058e598: 80 units over 11.25 ticks, hidden 15..24); the
+  Gold then casts (0x0058dde4, iparam1 / iparam2); lost target 90 frames ->
+  back to its spawn point; never flinches in Ultimate (0x005900c8).
+- **Canadine / Canane** (0x0053e770 / 0x00541494 / 0x005419fc, init
+  0x005424d8, dispatcher 0x0053eee4, table 0x009bce00): heights high 45
+  (Canane 55), low 15, dive 15 + 5 r, easing 0.5 a frame; standalone ones
+  and the Canane search 200; param1 0 = in-fighter; laser (0x00540574:
+  approach 0.5 to 70, open, aim iparam1, hold iparam2, the shot 0x00542cbc
+  at 20 a frame, wait iparam3, iparam4 shots); zap dive (0x0053fe00: track
+  40 frames, dash 4 frames at 10.607 turned +-45 degrees, approach at
+  fparam1 to 18 below height 20, zap at frame 25 with try_hit 1.0 /
+  knockback 3.0 and a 0.05 shock roll on androids, 3 zaps); orbit
+  (0x0053fa3c: 31 + 8 frames, 4 times, radius 70); the ring (0x00541188:
+  40 around, ceil(8 / iparam6) out-fighters), the Canane's stages
+  (0x00541da4) with blink patterns 0x009bcf20 at 2 frames a character, the
+  child-death rule (0x00541c10: <= 4 alive frees, <= 2 leave), the ring's
+  self-destruct (0x0053f6fc: 150 frames chasing at 0.68, then the blast).
+- Enemy MovementData iparams are signed (the Garanz's -30 life adjust).
+
+**Assumed:** the Dubchic's muzzle height 12, "should_push_defender" as the
+AttackData reach and arc, its revived 6x0A without the dead flag and its HP
+refilled when it falls, slot 19's walk speed 0.7; the Garanz's launcher
+height 20 and the missiles' pitch pairing; the runtime speeds of the
+Sinow's warp rows (0.7 / 0.8, so the hidden moves cover d - 20 / 80) and of
+the combo (1.0), a vanished Sinow cannot be hit; the Canadine's eye fade
+(1 / 0.06 frames), its laser / blast record {kind 3, value, 0, 3.0, 1} as
+try_hit_entity(1.0) with knockback 3.0 and radius 3, the laser flying level
+to the point it was fired at, the leader always allowing the attack, the
+Canane's own release after the in-fighters, and members that leave (state
+11 / after the blast) disappear without EXP.
+**Left out:** the Dubwitch link (0x00555974 sets the Dubchic's permanent
+death flag through an untraced caller), the Dubchic's knockdown and limbs;
+the Garanz's armor shedding; the Sinow's mirage clones (states 8 / 14 / 15,
+the 4 child slots), the Gold's technique effect, the Ultimate charge (16);
+the Canadine flinch fall / bounce, its blink drawing, the drop over the
+laser's last 20 units, and the ring's later cycles.
+
+**Tests:** `tests/enemyfsmmines.test.ts` (new): Dubchic aggro parity, walk
+speeds, the two melee hits and the Gillchic's slow, the laser volley, range
+and effect, the revive count and the invulnerable lie-down; Garanz walk
+length, barrage counts per phase, the mine walk, mine fuse / contact, the
+missile homing; Sinow drop, warp-strike timing and stop, the combo's hits and
+confusion, the warp away, Ultimate super armor; Canadine rise, laser volley,
+zaps, the ring slots and out-fighter count, the release order, the
+free / leave rules, the CANANE + 8 CANADINE_GROUP slots.
+
+**Checked in Chrome** (WebHunter, HP raised and placement from the
+console): Mine 1: a Gillchic went idle > walk > laser > melee and its hits
+slowed the player; a Sinow Beat went wait > drop > lost > warp (hidden
+samples during warps) > chase > combo > away, its combo confused the
+player; a Canadine (in-fighter) rose to 45, zapped and orbited; the Canane
+spawned E-322..E-329 (CANADINE_GROUP), released its two out-fighters (laser,
+back to the ring) and then the in-fighters (zap); killing it made all 8
+self-destruct and leave. Mine 2: a Garanz walked, fired barrages (12 shots
+in flight), at 30% HP switched to phase 1 and laid mines; its missiles and
+mines hit for 49 / 64 (technique hits); a Dubchic killed with one hit fell
+("it will get up"), was invulnerable while down and stood up with 200/200
+HP; a Sinow Gold went combo > away > tech. No console errors.
+
 ## 2026-10-18: Caves enemies: Grass Assassin, Nano Dragon, Shark record, enemy shots
 
 **What changed:** two more Caves families run their own state machines

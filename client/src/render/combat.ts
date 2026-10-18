@@ -44,6 +44,7 @@ import {
   WolfAi,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
+import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -176,6 +177,7 @@ interface EnemyRuntime {
   monest: MonestSpawner | null; // a Monest's Mothmant spawning
   parent: EnemyRuntime | null; // a Mothmant's Monest
   fake: RappyFakeDeath | null; // a dead Rappy getting up and running off
+  ringSpawned?: boolean; // a Canane spawned its ring
   attacker: AttackerStats | null; // this enemy hitting a player
   attack: EnemyAttackData | null;
   exp: number; // BattleParamEntry exp of the enemy's stats row
@@ -203,7 +205,7 @@ interface PendingTechHit {
 
 // Client classes whose behaviour is a per-family FSM without a generic AI
 // profile (combat/enemyfsmcaves.ts, combat/enemyfsmmines.ts).
-const OWN_FSM = new Set(['TObjEneNanoDrago']);
+const OWN_FSM = new Set(['TObjEneNanoDrago', 'TObjEneDubchik', 'TObjEneGyaranzo', 'TObjEneMe3ShinowaReal', 'TObjEneMe1Canadin', 'TObjEneMe1CanadinLeader']);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -501,6 +503,19 @@ export class CombatView {
           // that 0x00786848 copies (the enrage fraction, the ambush run).
           ai = new GrassAi({ ...at, attacks, radius, fparam1: setParams[0], fparam2: setParams[1], rng: () => this.rng() });
         } else if (className === 'TObjEneNanoDrago') ai = new NanoDragonAi({ ...at, param2: setParams[1], movement, rng: () => this.rng() });
+        else if (className === 'TObjEneDubchik')
+          ai = new DubchicAi({ ...at, param1: setParams[0], gillchic: head.slot.type === 'GILLCHIC', ultimate, movement, attack, rng: () => this.rng() });
+        else if (className === 'TObjEneGyaranzo') ai = new GaranzAi({ ...at, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneMe3ShinowaReal') {
+          // The Sinow's MovementData rows are 6 (Beat) and 0x10 (Gold)
+          // (0x00928b78), not its ResistData index.
+          const gold = head.slot.type === 'SINOW_GOLD';
+          const mv = params ? params.movement(difficulty, gold ? 0x10 : 6) : null;
+          ai = new SinowAi({ ...at, gold, ultimate, movement: mv, attack, radius, rng: () => this.rng() });
+        } else if (className === 'TObjEneMe1Canadin')
+          // param1 (+0x35c): 0 in-fighter, else out-fighter (0x0053e858).
+          ai = new CanadineAi({ ...at, kind: 'standalone', inFighter: setParams[0] === 0, movement, attack, radius, rng: () => this.rng() });
+        else if (className === 'TObjEneMe1CanadinLeader') ai = new CananeAi({ ...at, movement, attack, radius, rng: () => this.rng() });
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -794,7 +809,7 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
-      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       const r = ai.tick(targets, ended);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
@@ -808,6 +823,11 @@ export class CombatView {
       if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale);
       if (r.shots) for (const s of r.shots) this.launchShot(e, s);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
+      if (ai instanceof CananeAi && !e.ringSpawned) {
+        e.ringSpawned = true;
+        for (let i = 0; i < 8; i++) void this.spawnRingCanadine(e, ai, i);
+      }
+      if (ai instanceof CanadineAi && ai.state === 'gone') this.removeQuietly(e, ai);
       if (r.hold && r.hold.clientId === this.game.selfId) this.imposeHold(r.hold, `E-${e.index.toString(16)} (${e.slot.type})`);
       if (r.status && r.status.clientId === this.game.selfId) {
         this.inflictStatus(r.status.type as StatusType, `E-${e.index.toString(16)} (${e.slot.type})`);
@@ -817,6 +837,7 @@ export class CombatView {
     this.tickSpits(targets);
     this.tickShots(targets);
     this.tickFakeDeaths(targets);
+    this.tickRevives();
     if (this.holdTicks > 0 && --this.holdTicks === 0) this.opts.log('hold released');
   }
 
@@ -887,6 +908,14 @@ export class CombatView {
     this.game.sendImposeHold(h.frames, h.particle, h.x, h.z, h.radius2);
     this.view?.resetGait(this.game.selfId);
     this.opts.log(`${what}: web hold for ${h.frames} frames`);
+  }
+
+  // A Dubchic getting up again (DubchicAi.revive).
+  private tickRevives(): void {
+    for (const e of this.enemies.values()) {
+      if (!(e.ai instanceof DubchicAi) || e.ai.state !== 'down' || e.dead) continue;
+      if (e.state === 'death' && e.instance.animators.every((a) => a.ended)) e.state = 'idle';
+    }
   }
 
   // --- per-family behaviour (combat/enemyfsm.ts) -----------------------------
@@ -1018,6 +1047,99 @@ export class CombatView {
     instance.root.position.y = ground + MOTHMANT_FLY_HEIGHT;
     runtime.lift = MOTHMANT_FLY_HEIGHT;
     this.opts.log(`Monest E-${monest.index.toString(16)} spawned Mothmant E-${index.toString(16)} (${n + 1}/${monest.monest?.total ?? 0})`);
+  }
+
+  // A Canadine leaving without a kill (state 11 / after its self-destruct):
+  // no 6x76, no EXP. ASSUMED: it just disappears.
+  private removeQuietly(e: EnemyRuntime, ai: CanadineAi): void {
+    e.dead = true;
+    ai.kill();
+    this.layer.remove(e.instance);
+    this.enemies.delete(e.index);
+    if (this.lockOn === e) this.lockOn = null;
+    if (e.parent?.ai instanceof CananeAi) e.parent.ai.childGone();
+    this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) left`);
+  }
+
+  // 0x00541188: the Canane's ring Canadine i in its CANADINE_GROUP slot
+  // (Canane + 1 + i), 40 around it.
+  private async spawnRingCanadine(leader: EnemyRuntime, lai: CananeAi, i: number): Promise<void> {
+    const index = leader.index + 1 + i;
+    const ctx = this.difficultyParams;
+    const slot = ctx?.slots[index - ctx.base];
+    if (!ctx || !slot || slot.type !== 'CANADINE_GROUP' || this.enemies.has(index)) {
+      this.opts.log(`Canane E-${leader.index.toString(16)}: no CANADINE_GROUP slot for child ${i}`);
+      return;
+    }
+    const at = lai.ringSlot(i);
+    const lp = leader.instance.root.position;
+    const placed = {
+      ...leader.instance.placed,
+      entity: { ...(leader.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [at.x, lp.y, at.z] as [number, number, number],
+      name: 'Canadine',
+    };
+    // Model 0 with model 1's texture list, like a standalone Canadine.
+    const spec = { ...leader.instance.spec, name: 'TObjEneMe1Canadin', parts: [{ model: 0, texlistOf: 1, motion: { index: 4, speed: 0.2, loop: true } }] };
+    const instance = await this.layer.spawn(placed as typeof leader.instance.placed, spec as typeof leader.instance.spec);
+    if (!instance || this.disposed) return;
+    const { params, difficulty } = ctx;
+    const mi = params ? movementIndex('CANADINE_GROUP') : null;
+    const fight = this.childFightStats('CANADINE_GROUP');
+    const ai = new CanadineAi({
+      x: at.x,
+      z: at.z,
+      angle: lai.angle,
+      kind: 'ring',
+      inFighter: at.inFighter,
+      movement: params && mi !== null ? params.movement(difficulty, mi) : null,
+      attack: fight.attack,
+      radius: collisionRadius('TObjEneMe1Canadin'),
+      rng: () => this.rng(),
+    });
+    lai.children[i] = ai;
+    this.enemies.set(index, {
+      instance,
+      index,
+      slot,
+      ...fight,
+      motions: enemyCombatMotions('TObjEneMe1Canadin', instance.archive),
+      rtIndex: ENEMY_TYPE_PARAMS.CANADINE_GROUP?.rt ?? 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai,
+      lift: 0,
+      monest: null,
+      parent: leader,
+      fake: null,
+      buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute('CANADINE_GROUP')),
+    });
+  }
+
+  // BattleParamEntry rows of a spawned child type.
+  private childFightStats(type: string) {
+    const ctx = this.difficultyParams;
+    const def = ENEMY_TYPE_PARAMS[type];
+    let stats: DefenderStats = { hp: 1, maxHp: 1, evp: 0, dfp: 0 };
+    let attack: EnemyAttackData | null = null;
+    let attacker: AttackerStats | null = null;
+    let exp = 0;
+    let esp = 0;
+    let resist: TechResist = { efr: 0, eic: 0, eth: 0, elt: 0, edk: 0 };
+    if (ctx?.params && def && def.stats.length) {
+      const { params, difficulty } = ctx;
+      const st = params.stats(difficulty, def.stats[0]);
+      esp = st.esp;
+      const rs = params.resist(difficulty, def.resist[0] ?? def.stats[0]);
+      stats = enemyDefender(st, rs);
+      resist = { efr: rs.efr, eic: rs.eic, eth: rs.eth, elt: rs.elt, edk: rs.edk };
+      attack = params.attack(difficulty, def.attack[0] ?? def.stats[0]);
+      attacker = enemyAttacker(st, attack);
+      exp = st.exp;
+    }
+    return { stats, attack, attacker, exp, esp, resist };
   }
 
   // The Rag Rappy family's fake death (RappyFakeDeath): after the death
@@ -1481,7 +1603,21 @@ export class CombatView {
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
       return;
     }
-    const flags = baseFlags | applyDamage(e.stats, damage);
+    let flags = baseFlags | applyDamage(e.stats, damage);
+    if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
+      // State 5's revive branch: the Dubchic falls, lies there and gets up
+      // with full HP; mark_enemy_as_dead (6x76, the drop and EXP requests)
+      // only runs on its final death. ASSUMED: its 6x0A goes out without the
+      // dead flag.
+      flags &= ~FLAG_DEAD;
+      this.sendEnemy(e, flags);
+      e.stats.hp = e.stats.maxHp;
+      if (e.motions.death) this.playMotion(e, e.motions.death.index, e.motions.death.speed, false);
+      e.state = 'death';
+      e.removeIn = Infinity;
+      this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) falls (death ${e.ai.deaths}), it will get up`);
+      return;
+    }
     this.sendEnemy(e, flags);
     // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
     const p = e.instance.root.position;
@@ -1917,6 +2053,13 @@ export class CombatView {
   // death motion (the enemy is removed when it ends).
   private killEnemy(e: EnemyRuntime, _flags: number): void {
     e.dead = true;
+    // The Canane's death makes its ring self-destruct; a ring member's death
+    // tells the Canane (0x00541c10).
+    if (e.ai instanceof CananeAi) for (const c of e.ai.children) c.selfDestruct();
+    if (e.ai instanceof CanadineAi && e.parent?.ai instanceof CananeAi) {
+      e.ai.state = 'dead';
+      e.parent.ai.childGone();
+    }
     this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
     const p = e.instance.root.position;
     if (e.rtIndex !== 0xff) {

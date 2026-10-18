@@ -44,6 +44,14 @@ const TABLES: Record<string, EnemyCombatMotions> = {
   TObjGrass: { damage: { index: 0, speed: 0.6 }, death: { index: 1, speed: 0.4 } },
   // 0x009befc0 (Nano Dragon): row 3 flinch (2, 0.8), row 4 death (3, 0.5).
   TObjEneNanoDrago: { damage: { index: 2, speed: 0.8 }, death: { index: 3, speed: 0.5 } },
+  // 0x009bdbe0 (Dubchic): row 3 knockdown (1, 0.7), row 4 death (1, 0.7).
+  TObjEneDubchik: { damage: { index: 1, speed: 0.7 }, death: { index: 1, speed: 0.7 } },
+  // 0x009be740 (Garanz): row 3 flinch (2, 0.8), row 4 death (3, 1.0).
+  TObjEneGyaranzo: { damage: { index: 2, speed: 0.8 }, death: { index: 3, speed: 1 } },
+  // 0x009bf8a0 (Sinow Beat / Gold): row 3 flinch (2, 0.6), row 4 death (3, 0.6).
+  TObjEneMe3ShinowaReal: { damage: { index: 2, speed: 0.6 }, death: { index: 3, speed: 0.6 } },
+  // 0x009bce00 (Canadine / Canane): row 4 flinch while closed (2, 0.7); the
+  // death row was not identified (ASSUMED the archive's dead* motion).
   TObjEneDimedian: { damage: { index: 3, speed: 1.5 }, death: { index: 5, speed: 0.6 } },
 };
 
