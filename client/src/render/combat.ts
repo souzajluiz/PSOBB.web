@@ -51,6 +51,10 @@ import {
   enemyDefender,
   FLAG_DEAD,
   playerAttacker,
+  FLAG_BIG_HIT,
+  FLAG_HIT,
+  FLAG_MISSED,
+  hitChanceWith,
   rollDamage,
   rollHit,
   type AttackerStats,
@@ -77,6 +81,16 @@ import {
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
+import {
+  canUseSpecialAttack,
+  resolveSpecial,
+  retriesOnMiss,
+  SPECIAL,
+  SPECIAL_TYPE_NAMES,
+  UNTEKKED_SPECIAL_ACCURACY,
+  weaponSpecialByte,
+} from '../combat/specials.ts';
+import { BOSS_AREAS } from '../net/telepipe.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
@@ -985,7 +999,15 @@ export class CombatView {
   private press(type: AttackType): void {
     const me = this.game.self;
     if (!me || !this.view || this.cast) return;
-
+    // is_player_allowed_to_attack: no attack while paralyzed or shocked
+    // (character flags & 0x20006).
+    if (!this.status.canAttack) return;
+    // CheckPlayerAttackPermission_006994d4: the special attack needs a weapon
+    // with a special.
+    if (type === 2 && !canUseSpecialAttack(this.equippedWeapon()?.data1 ?? null)) {
+      this.opts.log('special attack: the weapon has no special');
+      return;
+    }
     if (this.attack?.active) {
       this.attack.press(type);
       return;
@@ -1022,8 +1044,15 @@ export class CombatView {
     this.attack.begin(step, type);
   }
 
-  // Equipped weapon of the local player (first equipped 00xxxx item).
+  // Equipped weapon of the local player (first equipped 00xxxx item): the
+  // session's character file, which net/items.ts keeps in step with equips,
+  // else the join snapshot.
   private equippedWeapon(): { data1: Uint8Array } | null {
+    const char = this.opts.character?.();
+    if (char) {
+      const w = char.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 0);
+      return w ? { data1: Uint8Array.from(w.data.data1) } : null;
+    }
     const inv = this.game.selfSnapshot.inventory;
     const count = Math.min(30, inv[0]);
     for (let i = 0; i < count; i++) {
@@ -1085,6 +1114,10 @@ export class CombatView {
     this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
     for (const e of hit) {
+      if (attackType === 2) {
+        this.specialHit(e, attacker, step);
+        continue;
+      }
       let damage = 0;
       let critical = false;
       const defender = this.enemyDefenderOf(e);
@@ -1095,6 +1128,102 @@ export class CombatView {
       }
       this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '');
     }
+  }
+
+  // The special attack on one target (unknown_melee_attack_2 with attack type
+  // 2 and HandleSpecialAttack, combat/specials.ts).
+  private specialHit(e: EnemyRuntime, attacker: AttackerStats, step: number): void {
+    const me = this.game.self;
+    const w = this.equippedWeapon();
+    if (!me || !w) return;
+    const sp = weaponSpecialByte(w.data1);
+    const pmtSpecial = this.pmtSync?.specials[sp.index];
+    const type = pmtSpecial?.type ?? 0;
+    const power = pmtSpecial?.amount ?? 0;
+    const name = `${SPECIAL_TYPE_NAMES[type] ?? 'special'} (special ${sp.index}, power ${power})`;
+    // The hit check: 0.5 * combo step, or 0.1 for an unidentified weapon.
+    const comboAcc = [1.0, 1.3, 1.69][Math.min(2, step)] ?? 1;
+    const acc = sp.untekked ? UNTEKKED_SPECIAL_ACCURACY : 0.5 * comboAcc;
+    const p0 = hitChanceWith(attacker, this.enemyDefenderOf(e), acc);
+    if (!(p0 > 0 && this.rng() <= p0)) {
+      // A miss: some types roll a second, plain strike.
+      const p1 = hitChanceWith(attacker, this.enemyDefenderOf(e), 0.5 * comboAcc);
+      if (retriesOnMiss(type) && p1 > 0 && this.rng() <= p1) {
+        const r = rollDamage(attacker, this.enemyDefenderOf(e), 2, this.rng);
+        this.applyEnemyHit(e, ENEMY_BASE_FLAGS, r.damage, r.critical, `${name} missed, plain strike: `);
+      } else {
+        this.applyEnemyHit(e, ENEMY_BASE_FLAGS, 0, false, `${name} MISS: `);
+      }
+      return;
+    }
+    const char = this.opts.character?.() ?? null;
+    const p = this.progression;
+    const out = resolveSpecial(
+      {
+        type,
+        power,
+        weaponKind: w.data1[1],
+        level: p ? p.level : Math.max(0, (me.level ?? 1) - 1),
+        hp: this.damage.hp,
+        tp: this.tp,
+        maxTp: p?.maxTp ?? 0,
+        meseta: char?.meseta ?? 0,
+        android: isAndroid(me.charClass),
+      },
+      {
+        hp: e.stats.hp,
+        maxHp: e.stats.maxHp,
+        esp: e.esp,
+        efr: e.resist.efr,
+        eth: e.resist.eth,
+        edk: e.resist.edk,
+        exp: e.exp,
+        canTake: (t) => e.status.canTake(t),
+      },
+      { difficulty: this.game.info?.difficulty ?? 0, episode: this.game.info?.episode ?? 1, bossMap: BOSS_AREAS.includes(this.area), rng: this.rng },
+    );
+    const what = `${name}: ${out.note}: `;
+    if (out.miss) {
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS | (type === SPECIAL.charge ? FLAG_MISSED : 0), 0, false, `${name} MISS (${out.note}) `);
+      return;
+    }
+    // The attacker's side: 6x9A for a steal, the cost of Charge / Spirit /
+    // Berserk.
+    if (out.heal) {
+      this.game.sendEntityStat(out.heal.what === 'hp' ? 3 : 4, out.heal.amount);
+      if (out.heal.what === 'hp') this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + out.heal.amount);
+      else this.tp = Math.min(p?.maxTp ?? this.tp, this.tp + out.heal.amount);
+    }
+    if (out.cost?.what === 'meseta') {
+      this.game.sendChargeAttack(out.cost.amount);
+      if (char) char.meseta = Math.max(0, char.meseta - out.cost.amount);
+    } else if (out.cost?.what === 'tp') {
+      this.tp = Math.max(0, this.tp - out.cost.amount);
+    } else if (out.cost?.what === 'hp') {
+      this.damage.hp = Math.max(1, this.damage.hp - out.cost.amount);
+      this.game.sendSetHp(this.damage.hp);
+    }
+    if (out.status !== null) this.inflictEnemy(e, out.status, name);
+    let flags = ENEMY_BASE_FLAGS;
+    let damage = 0;
+    let critical = false;
+    if (out.kill) {
+      damage = e.stats.hp;
+    } else if (out.hpDamage > 0) {
+      damage = out.hpDamage;
+      if (out.bigHit) flags |= FLAG_BIG_HIT;
+    }
+    if (out.strikeMult !== null) {
+      const r = rollDamage(attacker, this.enemyDefenderOf(e), 2, this.rng, out.strikeMult);
+      if (out.expSteal) {
+        if (r.damage >= 1) this.game.sendStealExp(e.index);
+        else out.note += ' (strike < 1: MISS)';
+      }
+      damage += r.damage >= 1 ? r.damage : 0;
+      critical = r.critical;
+    }
+    if (damage >= 1) flags |= FLAG_HIT;
+    this.applyEnemyHit(e, flags, damage, critical, what);
   }
 
   // One damaged (or missed) enemy: 6x0A with the new total, the number over

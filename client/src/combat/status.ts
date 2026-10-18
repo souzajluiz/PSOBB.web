@@ -57,11 +57,12 @@
 //     Check_0069d6f4: left out here).
 //   slowed: apply_slow_status_effect_to_attack_speed (0x00690300 area)
 //     multiplies the player's motion frame step by 0.5 (0x0093c710).
-//   paralyzed: ASSUMED to lock movement and attacks like the freeze. No test
-//     of the paralyzed bit was found in the player's input states (the only
-//     readers of bit 2 in the player code are the 6x0C watcher below and the
-//     Antiparalysis use check); newserv describes player paralysis as
-//     indefinite and the game's manuals as "cannot move".
+//   paralyzed: is_player_allowed_to_attack (0x00699510) refuses attacks
+//     while the flags hold 0x20006 (paralyzed or shocked); that it also locks
+//     movement and techniques like the freeze is ASSUMED (newserv describes
+//     player paralysis as indefinite and the game's manuals as "cannot
+//     move").
+//   shocked: no attacks (the same check).
 //   confused: should_do_confused_movement (0x0068be00 area) changes how the
 //     movement input turns the player; left out.
 //
@@ -217,6 +218,12 @@ export class PlayerStatus {
   // movement, attacks or techniques.
   get immobile(): boolean {
     return this.has(STATUS.freeze) || this.has(STATUS.paralysis);
+  }
+
+  // is_player_allowed_to_attack (0x00699510) refuses an attack while the
+  // character flags hold 0x20006: paralyzed (2) or shocked (4).
+  get canAttack(): boolean {
+    return (this.flags & 0x06) === 0;
   }
 
   // The player's motion frame step factor (slow).

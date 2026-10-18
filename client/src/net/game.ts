@@ -853,6 +853,47 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // 6x9A (G_UpdateEntityStat_6x9A, 8): {entity id, u16 entity, u8 what, u8
+  // amount}; what 3 = add HP, 4 = add TP. HandleSpecialAttack sends it for a
+  // HP / TP steal with the attacker's client id in both fields.
+  sendEntityStat(what: number, amount: number): void {
+    const p = new Uint8Array(4);
+    const dv = new DataView(p.buffer);
+    dv.setUint16(0, this.selfId, true);
+    p[2] = what;
+    p[3] = Math.max(0, Math.min(0xff, amount));
+    this.sendSubcommand(0x9a, p);
+  }
+
+  // 6xC6 (G_StealEXP_BB_6xC6, 8): {client id} {u16 entity id, u16 enemy index}
+  // (Entity_SendAttackPacket_007772e4); newserv grants the EXP.
+  sendStealExp(enemyIndex: number): void {
+    const p = new Uint8Array(4);
+    const dv = new DataView(p.buffer);
+    dv.setUint16(0, 0x1000 | enemyIndex, true);
+    dv.setUint16(2, enemyIndex, true);
+    this.sendSubcommand(0xc6, p);
+  }
+
+  // 6xC7 (G_ChargeAttack_BB_6xC7, 8): {client id} {u32 meseta}
+  // (send_packet0x60_subcommand0xc7, the Charge special).
+  sendChargeAttack(meseta: number): void {
+    const p = new Uint8Array(4);
+    new DataView(p.buffer).setUint32(0, meseta >>> 0, true);
+    this.sendSubcommand(0xc7, p);
+  }
+
+  // 6x2F (G_ChangePlayerHP_6x2F, 0x0C): {client id} {u32 type 0 = set,
+  // i16 HP, u16 client id} (dispatch_action_player_hurt_player, after the
+  // Berserk special's cost).
+  sendSetHp(hp: number): void {
+    const p = new Uint8Array(8);
+    const dv = new DataView(p.buffer);
+    dv.setUint32(0, 0, true);
+    dv.setInt16(4, hp, true);
+    dv.setUint16(6, this.selfId, true);
+    this.sendSubcommand(0x2f, p);
+  }
 
   // A killed enemy is reported with 6x76 flags 8 (sendEntitySetFlags above).
 

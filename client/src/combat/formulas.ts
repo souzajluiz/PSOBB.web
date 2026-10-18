@@ -70,6 +70,12 @@ export function hitChance(attacker: AttackerStats, defender: DefenderStats, atta
   return (attacker.ata * acc + defender.evp * -0.2) * 0.01;
 }
 
+// The same check with an explicit accuracy factor (the special attack's
+// second roll, 0.5 * combo step, and an unidentified weapon's 0.1).
+export function hitChanceWith(attacker: AttackerStats, defender: DefenderStats, accuracy: number): number {
+  return (attacker.ata * accuracy + defender.evp * -0.2) * 0.01;
+}
+
 export function rollHit(attacker: AttackerStats, defender: DefenderStats, attackType: AttackType, comboStep: number, rng: Rng): boolean {
   const p = hitChance(attacker, defender, attackType, comboStep);
   return p > 0 && rng() <= p;

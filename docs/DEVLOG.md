@@ -1,5 +1,63 @@
 # Devlog
 
+## 2026-10-18: Weapon specials
+
+**What changed:** the palette's special attack now uses the equipped
+weapon's special. `combat/specials.ts` decodes the special from the
+weapon's data1[4] and ItemPMT's special table and runs HandleSpecialAttack's
+formulas; `render/combat.ts` does the hit check, the miss retry, applies the
+outcome (steals, costs, status, extra damage, kills) and sends `6x9A`,
+`6xC6`, `6xC7` and `6x2F`. A weapon without a special no longer starts a
+special attack, and a paralyzed or shocked player cannot attack.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Special:** data1[4] & 0x3f indexes ItemPMT's special table
+  (GetPmtItemPair_005e4cdc); ApplyPmtItemStatsToEntity_005e7a20 copies
+  {type, amount} to player +0x116 / +0x118. CheckPlayerAttackPermission_006994d4
+  needs a special byte (or item flags 0x400020) for attack type 2;
+  is_player_allowed_to_attack (0x00699510) refuses any attack with character
+  flags 0x20006.
+- **Hit** (unknown_melee_attack_2, 0x006997a0): accuracy 0.5 * combo step
+  (0.1, 0x0093dae0, for an unidentified weapon); a hit calls the enemy's
+  HandleSpecialAttack (0x007753b4). A miss shows MISS for types 4, 5, 6, 9,
+  10, 13; the others roll again with 0.5 * combo step and deal a plain
+  strike (multiplier 0.5).
+- **HandleSpecialAttack:** reduction 0.5 for swords / daggers / partisans,
+  0.33 for slicers / mechguns / shots (0x00978220 / 0x0097821c); Ultimate
+  android +30 power except fire / thunder / instant kill. HP steal
+  min(power * HP * 0.01, (difficulty + 1) * 30), TP steal min(power * max TP
+  * 0.01, (difficulty + 1) * 25), both then a strike at 0.6 and `6x9A`
+  what 3 / 4; EXP steal a strike at 0.6 then `6xC6`; Charge (200 meseta,
+  `6xC7`), Spirit (20% TP, needs 10), Berserk (25% HP, `6x2F`) strike at
+  3.0; freeze via freeze_activation_check (0x007771a0: min(c, 0.4), 0.2 in
+  Ultimate) and paralysis / confusion with c = (power - ESP) * 0.01 *
+  reduction; fire / thunder (100 - EFR / ETH) * 0.002 * (level / (5 - power)
+  + (1 + power) * 20) * 5, thunder's shock 1/15 (0.025 Ultimate,
+  0x007770d0); instant kill (power - EDK) * 0.01 * reduction, not on boss
+  maps; HP divide (1 - power * 0.01) * HP on a roll below 0.5. Values are
+  truncated (fistp with the control word | 0xc00).
+
+**Assumed:** an unidentified weapon's special still applies after its 0.1
+hit check (ApplyPmtItemStatsToEntity masks only 0x3f); the V50x boosts are
+1.0 / 0.0 (no units tracked); the two parts of a steal show as one number;
+the equipped weapon is read from the session's character file (the join
+snapshot went stale after an equip, a bug fixed here). Left out: the weapons
+with their own special routines (the item vtable's extraspecial attack:
+Lavis Blade, Twin Psychogun, Sigh of a God, ...), the special effect
+particles and sounds.
+
+**Tests:** `tests/specials.test.ts` (new): permission, reduction, the retry
+rule, every type's formula / chance / cost, the android bonus, boss maps,
+and newserv's special table rows (Burning, Hell, Demon's).
+
+**Checked in Chrome** (WebHunter, Forest 1, sabers made with `$item`, the
+first rolls forced low from the console): Arrest paralyzed a Booma (80%),
+Blizzard froze one (40%), Fill drained 11 HP (13% of 92), Burning did 101
+fire damage (level 2, EFR 0), Tempest did 101 and its shock was refused on a
+native Booma, Chaos confused one (76%), Berserk cost 25% HP for a 3x strike,
+Demon's took 57 of 77 HP, Hell killed one (83%); with real rolls Arrest
+missed, retried as a plain strike or showed MISS. No console errors.
+
 ## 2026-10-18: Status effects on enemies
 
 **What changed:** enemies can now be paralyzed, frozen, shocked and
