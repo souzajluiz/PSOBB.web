@@ -1,5 +1,65 @@
 # Devlog
 
+## 2026-10-18: Walking townspeople and NPC collision
+
+**What changed:** the Pioneer 2 and Lab NPCs whose set entry has param6 = 1
+now walk around their spawn point, the others turn back to their spawn angle
+after a talk, and every shown NPC has a round hitbox that the player cannot
+walk into. Code: `render/npcwander.ts` (pure state machine),
+`render/npcview.ts`, `render/collision.ts` (`bodies`, `bodyBlocks`),
+`render/gameview.ts`.
+
+**Details** (Ephinea `PsoBB.exe`; every humanoid NPC vtable has the same
+slots, e.g. 0x00b1ece0):
+- **Modes** (+0x32e, dispatched by EnemyObjectUpdateAnimation_00606e34 to
+  vtable +0x154..+0x160): 0 nothing, 1 0x006061ec turn back to the spawn
+  angle, 2 0x00606280 wander, 3 EnemyObjectUpdate_0060648c talk. vtable +0xf4
+  (0x00607284) picks 2 when param6 (+0x370, clamped to 0..1 by set_params
+  0x00606a34) is 1, else 1. The talk start (vtable +0x2c, 0x006072e0) sets
+  mode 3 and the walk motion, which plays while the NPC turns to the player;
+  the talk's end sets mode 0.
+- **Motion** (vtable +0x168, 0x0060c834): row 1 of the motion table (walk,
+  1.4 frames a tick) or row 0 (idle, 0.9).
+- **Wander** (mode 2, sub-state +0x330):
+  - 0: a random BAMS angle (0x007751b0 random float x 65536), the point
+    param1 (+0x35c) from the spawn point (+0x50) in that direction; taken when
+    its squared XZ distance to the NPC is above 100 (0x0092f13c), aimed at with
+    SorcererAcquireTarget_00771c8c (ground under it, no wall on the way, else
+    the old target stays), walk motion;
+  - 1: turn to the target by 0x400 a tick (0x00772358), move 0.5 a tick
+    (0x009c3eb4, written by 0x006073ec) along the new angle with the wall slide
+    (0x00771934 / 0x00771994); stop (idle) once within 0.5 + 5 of the target
+    or after touching a character (hitbox flags 0x380000);
+  - 3: wait 121 ticks (+0x2b0 up to 0x78), then 0 again.
+- **Hitboxes:** the NPC box 0x009c3ecc is round (unk2 0), radius 5, center
+  (0, 10, 0); the player's (SinowberillChallengePlayer_InitializeSpawnData
+  _00695f28, box at player +0x758) is round with radius 5.0 for every class
+  (only its height comes from the class stats), so `PLAYER_RADIUS` = 5 was
+  right. CheckTwoHitboxCollision_007b5e40 tests round boxes with
+  CheckSphereOverlap_0083dbd4 at y = 0 (XZ distance < r1 + r2).
+- **Response** (EnemyHandleCollisionStepUp_007b7704): when the mover moved
+  and the other center is within 90 degrees of its angle, a player goes back
+  to its previous position; an NPC sidesteps 0.25 (0x0097e390) at right
+  angles to the other center from its previous position.
+
+**Assumed:** the AI dispatcher calls vtable +0xf4 every tick in mode 0; +0x50
+is the set entry position; the player's heading is the direction it moves;
+the wall slide is `CollisionWorld.move`; `Math.random` stands in for the
+entity's random generator; hidden NPCs neither move nor collide; an NPC
+answers only the first body it overlaps in a tick. Left out: the footstep
+sound of the walk (vtable +0x170 on frames 1 and 15).
+
+**Tests:** `tests/npcs.test.ts` section 7 (mode selection, the wander circle,
+the 121-tick wait, the turn back in 18 ticks, a player stopping a wanderer,
+`bodyBlocks`, the seven Pioneer 2 wanderers on the real collision for 3000
+ticks, and a player stopped 10 units from an NPC).
+
+**Checked in Chrome** (WebHunter, game in Pioneer 2): the seven wanderers
+switch between walking (mode 2 sub 1, walk motion) and waiting, moving
+several units in 6 seconds and staying near their circles; walking at a
+soldier and a male NPC stops the player 11.5 / 10.5 units from them, 3.2
+with the bodies removed. No console errors.
+
 ## 2026-10-18: Remaining field objects, construct_objects and the door unlock camera
 
 **What changed:** the jungle rocks, the Ruins / Seabed trap pillars and Vol

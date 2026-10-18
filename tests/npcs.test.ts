@@ -42,6 +42,22 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { QuestVM, type QuestMessage } from '../client/src/quest/vm.ts';
 import { NodeAnimator } from '../client/src/render/enemymodel.ts';
 import { NpcAssets } from '../client/src/render/npcview.ts';
+import { bodyBlocks, CollisionWorld, PLAYER_RADIUS } from '../client/src/render/collision.ts';
+import { parseMapCRel } from '../client/src/formats/crel.ts';
+import { parseMapNRel } from '../client/src/formats/nrel.ts';
+import { parseSetFile, placeEntities } from '../client/src/formats/setdata.ts';
+import {
+  NPC_RADIUS,
+  NPC_SPEED,
+  NPC_WANDER_WAIT,
+  clampAngle,
+  npcBrain,
+  npcCollide,
+  npcTalkEnd,
+  npcTalkStart,
+  npcTick,
+  type NpcWorld,
+} from '../client/src/render/npcwander.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
@@ -252,6 +268,136 @@ check(menus.includes(P2_MENU_GUILD), `the guild clerk opens the Hunter's Guild (
 check(menus.includes(P2_MENU_GOVERNMENT), `Momoka opens the government counter (menus ${menus.join(',')})`);
 check([...vm.unimplemented.keys()].length === 0, `area script opcodes not implemented: ${[...vm.unimplemented.keys()].join(', ')}`);
 console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; ${said.length} messages, counter menus ${[...new Set(menus)].sort().join(', ')}`);
+
+// 7. Walking townspeople and NPC collision (render/npcwander.ts, from
+//    0x006061ec / 0x00606280 / 0x00607284 / 0x007b7704).
+{
+  // A seeded generator stands in for the entity's random float.
+  let seed = 12345;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) >>> 16) / 65536;
+  // param6 = 1 wanders, anything else stands (set_params clamps it to 0..1).
+  check(npcBrain(0, 0, 0, 0, [24, 0, 0, 1016, 100, 1, 0]).wanders, 'param6 1 wanders');
+  check(!npcBrain(0, 0, 0, 0, [0, 0, 0, 1011, 850, 0, 0]).wanders, 'param6 0 stands');
+  check(npcBrain(0, 0, 0, 0, [24, 0, 0, 0, 0, 5, 0]).wanders, 'param6 5 is clamped to 1');
+  check(clampAngle(0, 0x1000, 0x400) === 0x400 && clampAngle(0, 0xf000, 0x400) === 0xfc00 && clampAngle(0, 0x300, 0x400) === 0x300, 'ClampAngleDifference');
+
+  // On open ground (no collision): the first tick picks mode 2, then a point
+  // param1 away from the spawn point, walks there at 0.5 a tick turning by
+  // 0x400, stops 5.5 from it, waits 121 ticks and picks the next one.
+  const free: NpcWorld = { collision: null, rand };
+  const TURN_R = NPC_SPEED / ((2 * Math.PI) / 64);
+  const b = npcBrain(100, 0, 200, 0, [30, 0, 0, 1015, 90, 1, 0]);
+  npcTick(b, free);
+  check(b.mode === 2 && b.sub === 1 && b.motion === 1, `wanderer: mode ${b.mode} sub ${b.sub} motion ${b.motion} after the first tick`);
+  check(Math.abs(Math.hypot(b.targetX - 100, b.targetZ - 200) - 30) < 1e-6, 'the target lies param1 from the spawn point');
+  let walked = 0, maxStep = 0, waited = 0, picks = 1;
+  let prev = { x: b.x, z: b.z };
+  for (let i = 0; i < 6000; i++) {
+    const sub = b.sub;
+    npcTick(b, free);
+    const step = Math.hypot(b.x - prev.x, b.z - prev.z);
+    maxStep = Math.max(maxStep, step);
+    if (sub === 1) walked++;
+    if (sub === 3) waited++;
+    if (sub === 0 && b.sub === 1) picks++;
+    // It walks while it turns (0x400 a tick at 0.5: a turning circle of
+    // radius 0.5 / (2 pi / 64) = 5.1), so it can swing out that far.
+    check(Math.hypot(b.x - 100, b.z - 200) <= 30 + 2 * TURN_R + NPC_SPEED, `wanderer left its circle at tick ${i}`);
+    if (sub === 1 && b.sub === 3) check(Math.hypot(b.targetX - b.x, b.targetZ - b.z) < NPC_SPEED + NPC_RADIUS, 'stopped 5.5 from the target');
+    if (sub === 3 && b.sub === 0) check(b.wait === 0, 'wait reset');
+    prev = { x: b.x, z: b.z };
+  }
+  check(maxStep <= NPC_SPEED + 1e-9, `step ${maxStep} > speed`);
+  check(picks > 10 && walked > 500 && waited > 1000, `wander: ${picks} points, ${walked} walking ticks, ${waited} waiting ticks`);
+  // The wait: 121 ticks in sub-state 3 (+0x2b0 counts to 0x78, then one more).
+  const w = npcBrain(0, 0, 0, 0, [30, 0, 0, 0, 0, 1, 0]);
+  w.mode = 2;
+  w.sub = 3;
+  let n = 0;
+  while (w.sub === 3 && n < 500) {
+    npcTick(w, free);
+    n++;
+  }
+  check(n === NPC_WANDER_WAIT + 1, `wait lasts ${n} ticks`);
+
+  // A standing NPC turned by a talk turns back to its spawn angle in its walk
+  // motion, then stands idle (mode 1).
+  const s = npcBrain(0, 0, 0, 0x2000, [0, 0, 0, 1011, 850, 0, 0]);
+  npcTick(s, free);
+  check(s.mode === 1 && s.sub === 1 && s.motion === 0, 'standing NPC idles');
+  npcTalkStart(s);
+  check(s.mode === 3 && s.motion === 1, 'talk start: mode 3, walk motion');
+  s.angle = 0x6000;
+  npcTalkEnd(s);
+  let turns = 0;
+  for (; turns < 100 && !(s.sub === 1 && s.angle === 0x2000); turns++) npcTick(s, free);
+  check(s.angle === 0x2000 && s.motion === 0 && s.x === 0 && s.z === 0, `turned back to the spawn angle (${s.angle.toString(16)})`);
+  check(turns === 2 + 0x4000 / 0x400, `turned back in ${turns} ticks`);
+
+  // Character collision: a player standing in the way stops the wanderer
+  // (touching -> sub-state 3) and the sidestep keeps it out of the player.
+  const c = npcBrain(0, 0, 0, 0, [40, 0, 0, 0, 0, 1, 0]);
+  c.mode = 2;
+  c.sub = 1;
+  c.motion = 1;
+  c.targetX = 0;
+  c.targetZ = 40;
+  const player = { x: 0, z: 12, radius: PLAYER_RADIUS };
+  let stopped = -1;
+  for (let i = 0; i < 60 && stopped < 0; i++) {
+    const px = c.x, py = c.y, pz = c.z;
+    npcTick(c, free);
+    npcCollide(c, px, py, pz, [player], free);
+    if (c.sub === 3) stopped = i;
+  }
+  check(stopped >= 0, 'the wanderer stops at a player');
+  check(Math.hypot(c.x - player.x, c.z - player.z) > NPC_RADIUS + PLAYER_RADIUS - NPC_SPEED - 0.3, `the wanderer walked into the player (${Math.hypot(c.x - player.x, c.z - player.z).toFixed(2)})`);
+
+  // The player cannot walk into an NPC ahead, but can walk away from one.
+  const npc = { x: 0, z: 0, radius: NPC_RADIUS };
+  check(bodyBlocks(0, -11, 0, -9.5, 0, PLAYER_RADIUS, npc), 'walking into an NPC is refused');
+  check(!bodyBlocks(0, -9.5, 0, -11, 0x8000, PLAYER_RADIUS, npc), 'walking away from an NPC is allowed');
+  check(!bodyBlocks(0, -12, 0, -10.5, 0, PLAYER_RADIUS, npc), 'no overlap at 10.5');
+
+  // The Pioneer 2 wanderers on the real map collision: they stay on the floor
+  // within their circle, and the player is stopped at 10 units from them.
+  const scene = join(DATA, 'scene');
+  const crel = join(scene, 'map_city00_00c.rel');
+  if (existsSync(crel)) {
+    const world = new CollisionWorld(parseMapCRel(new Uint8Array(readFileSync(crel))));
+    const sections = parseMapNRel(new Uint8Array(readFileSync(join(scene, 'map_city00_00n.rel')))).sections;
+    const placed = placeEntities(parseSetFile('map_city00_00e.dat', read('map_city00_00e.dat')!), sections, 0);
+    const wanderers = placed.filter((p) => p.entity.kind === 'enemy' && p.entity.params[5] === 1);
+    check(wanderers.length === 7, `Pioneer 2 wanderers: ${wanderers.length}`);
+    const env: NpcWorld = { collision: world, rand };
+    const brains = wanderers.map((p) => npcBrain(p.world[0], p.world[1], p.world[2], Math.round((p.yaw / (Math.PI * 2)) * 0x10000), p.entity.params));
+    let moved = 0;
+    for (let t = 0; t < 3000; t++) {
+      for (const [i, br] of brains.entries()) {
+        const px = br.x, py = br.y, pz = br.z;
+        npcTick(br, env);
+        npcCollide(br, px, py, pz, brains.filter((o) => o !== br).map((o) => ({ x: o.x, z: o.z, radius: NPC_RADIUS })), env);
+        if (px !== br.x || pz !== br.z) moved++;
+        const r = br.radius + NPC_SPEED + 2 * TURN_R + NPC_RADIUS;
+        check(Math.hypot(br.x - br.homeX, br.z - br.homeZ) <= r, `wanderer ${i} left its circle (${Math.hypot(br.x - br.homeX, br.z - br.homeZ).toFixed(1)})`);
+        check(world.groundHeight(br.x, br.z, br.y + 10) !== null, `wanderer ${i} off the floor`);
+      }
+    }
+    check(moved > 3000, `Pioneer 2 wanderers moved ${moved} ticks`);
+    const target = brains[0];
+    world.bodies = [{ x: target.x, z: target.z, radius: NPC_RADIUS }];
+    let px = target.x, pz = target.z - 30, py = world.groundHeight(px, pz, target.y + 10) ?? target.y;
+    for (let i = 0; i < 40; i++) {
+      const r = world.move(px, py, pz, 0, 1);
+      px = r.x;
+      py = r.y;
+      pz = r.z;
+    }
+    check(Math.hypot(px - target.x, pz - target.z) >= NPC_RADIUS + PLAYER_RADIUS - 1, `player walked into the NPC (${Math.hypot(px - target.x, pz - target.z).toFixed(2)})`);
+    world.bodies = [];
+    console.log(`wanderers: ${brains.length} in Pioneer 2, ${moved} moving ticks; player stopped ${Math.hypot(px - target.x, pz - target.z).toFixed(2)} from an NPC`);
+  } else console.log('map_city00_00c.rel not found, skipping the Pioneer 2 wander checks');
+}
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

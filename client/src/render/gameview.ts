@@ -114,6 +114,7 @@ export class GameView {
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.npcs = new NpcLayer(viewer, this.files);
+    (globalThis as { gameView?: GameView }).gameView = this; // console/automation access
     this.objectLayer = new ObjectLayer(viewer, this.files);
     this.field = new GameField(viewer, game, this.files, {
       bgm,
@@ -428,6 +429,9 @@ export class GameView {
     });
     this.field.attach();
     this.collision = mapData.collision;
+    // The NPCs walk on the floor's collision and block the players there.
+    this.npcs.attach(mapData.collision);
+    this.npcs.players = () => this.floorPlayers();
     this.floorItems.enterFloor(floor, area, placedObjects, objectBase);
     this.floorItems.attach();
     const attacking = this.combat.isAttacking;
@@ -453,6 +457,18 @@ export class GameView {
     this.telepipes.enterFloor();
     this.onFloor(this.current);
     for (const h of this.floorHooks) h(this.current);
+  }
+
+  // Where the players on the local player's floor stand (the NPCs' collision).
+  private floorPlayers(): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    const floor = this.game.self?.floor;
+    for (const [id, p] of this.game.players) {
+      if (p.floor !== floor) continue;
+      const pose = this.view?.playerPose(id);
+      if (pose) out.push({ x: pose.x, z: pose.z });
+    }
+    return out;
   }
 
   // NPC models of the floor (render/npcview.ts); returns the entries drawn.

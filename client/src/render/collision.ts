@@ -11,6 +11,8 @@
 // FUN_007b52c4 and cleared when it opens by FUN_007b52ec) and tests them with
 // the box-vs-box check at 0x00844540; here the player is a point with its
 // radius, which is enough to stop it walking through a door.
+// `bodies` holds the round hitboxes of other characters (NPCs) that the
+// mover cannot walk into, with the client's rule (see bodyBlocks).
 // Constants were read from PsoBB.exe (.rdata) at the addresses the decomp uses.
 // Pure math, no three.js, so it runs in Node tests.
 
@@ -35,7 +37,12 @@ const SEG_FRONT_EPS = 1e-5;
 export const WALL_RAY_HEIGHT = 5; // rays are cast this far above the feet
 const WALL_RADIUS_PAD = 4; // extra culling radius for the motion ray
 const WALL_HEAD_ON_DOT = -0.87; // dot(dir, wall normal) at or below this stops the player
-export const PLAYER_RADIUS = 5; // TODO: the real per-class hitbox radius is not decoded yet
+// The player's hitbox (SinowberillChallengePlayer_InitializeSpawnData_00695f28
+// fills the box at player+0x758 and hands it to ConstructEntityHitbox_007b9ccc):
+// radius +0x764 = 5.0 for every class; only its height changes per class
+// (LoadPlayerEntityBattleParams_006960e4: y = stats +0x10 * g_HitboxZScaleFactor).
+// The wall rays of unknown_player_touching_wall_maybe use this radius.
+export const PLAYER_RADIUS = 5;
 export const STEP_UP = 10; // ground probe starts this far above the feet (client: bloodstain_z_offset)
 
 export interface GroundHit {
@@ -64,6 +71,38 @@ export interface Obstacle {
   height: number; // the client's boxes are +-50 around the box center
 }
 
+// A round hitbox in XZ (collision_box with unk2 = 0: CheckTwoHitboxCollision
+// _007b5e40 hands both boxes to CheckSphereOverlap_0083dbd4 with y = 0, so
+// only the XZ distance against the sum of the radii counts).
+export interface Body {
+  x: number;
+  z: number;
+  radius: number;
+}
+
+// The step response of EnemyHandleCollisionStepUp_007b7704 for a mover that
+// went from (px, pz) to (x, z) facing `heading` (BAMS) and now overlaps
+// `body`: when it moved at all (squared distance >= 1e-10, 0x0097e39c) and the
+// body's center lies within 90 degrees of the heading (b_minus_a(angle to the
+// body, heading) < 0x4000 or >= 0xc000), the move is refused. Players (entity
+// index < 0x1000) go back to (px, pz); enemies / NPCs sidestep instead (see
+// npcwander.ts).
+export function bodyBlocks(px: number, pz: number, x: number, z: number, heading: number, radius: number, body: Body): boolean {
+  const ox = x - body.x, oz = z - body.z;
+  const r = radius + body.radius;
+  if (ox * ox + oz * oz >= r * r) return false; // CheckSphereOverlap: dist < r1 + r2
+  const mx = x - px, mz = z - pz;
+  if (mx * mx + mz * mz < 1e-10) return false;
+  return bodyInFront(px, pz, heading, body);
+}
+
+// The body's center is within 90 degrees of `heading` seen from (px, pz).
+export function bodyInFront(px: number, pz: number, heading: number, body: Body): boolean {
+  const a = Math.trunc((Math.atan2(body.x - px, body.z - pz) * 0x10000) / (Math.PI * 2));
+  const d = (a - heading) & 0xffff;
+  return d < 0x4000 || d >= 0xc000;
+}
+
 export interface MoveResult {
   x: number;
   y: number;
@@ -75,6 +114,8 @@ export class CollisionWorld {
   readonly meshes: CollisionMesh[];
   // Object boxes that block movement (set per frame by FieldObjects).
   obstacles: Obstacle[] = [];
+  // Character hitboxes that block the player (set per frame by NpcLayer).
+  bodies: Body[] = [];
 
   constructor(collision: MapCollision) {
     this.meshes = collision.meshes;
@@ -150,8 +191,10 @@ export class CollisionWorld {
   }
 
   // Moves a character standing at (x, y, z) by (dx, dz), sliding along walls,
-  // keeping `radius` away from them and following the ground.
-  move(x: number, y: number, z: number, dx: number, dz: number, radius = PLAYER_RADIUS): MoveResult {
+  // keeping `radius` away from them and following the ground. With
+  // `bodies` (default) the move is refused when it runs into a body ahead
+  // (bodyBlocks; the heading is the direction of the motion).
+  move(x: number, y: number, z: number, dx: number, dz: number, radius = PLAYER_RADIUS, bodies = true): MoveResult {
     const stay: MoveResult = { x, y, z, blocked: true };
     let len = Math.hypot(dx, dz);
     if (len < 1e-6) return { x, y, z, blocked: false };
@@ -192,6 +235,11 @@ export class CollisionWorld {
 
     // 2b. Object boxes (closed doors) block the new position.
     if (this.blockedBy(nxp, y, nzp, radius)) return stay;
+    // 2c. Character hitboxes (NPCs) ahead refuse the move.
+    if (bodies && this.bodies.length) {
+      const heading = Math.trunc((Math.atan2(dx, dz) * 0x10000) / (Math.PI * 2)) & 0xffff;
+      for (const b of this.bodies) if (bodyBlocks(x, z, nxp, nzp, heading, radius, b)) return stay;
+    }
 
     // 3. Ground under the new position; no floor means the move is refused.
     const ny = this.groundHeight(nxp, nzp, y + STEP_UP);

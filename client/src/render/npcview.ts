@@ -11,9 +11,14 @@
 //   state 1  the talk thread starts at the NPC's label (param5) in the quest
 //            (action 100..999) or the area script (action >= 1000);
 //   state 2  waits for that thread to end, then
-//   state 3  resets (the NPC keeps facing the way it turned).
-// The NPC also carries a 20-unit collision box (0x009c3e8c); players are not
-// pushed by it here.
+//   state 3  resets: mode 0, and the next tick picks mode 1 (turn back to the
+//            spawn angle) or 2 (wander) again.
+// The talk start (vtable +0x2c, 0x006072e0) puts the NPC in mode 3 with its
+// walk motion, which it plays while it turns; facing the player it goes idle.
+// Outside the talk the NPC runs the modes of render/npcwander.ts: the walking
+// townspeople (param6 = 1) wander around their spawn point, the others stand.
+// Its round hitbox (radius 5, 0x009c3ecc) blocks the players
+// (CollisionWorld.bodies) and the other NPCs.
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -40,6 +45,8 @@ import type { PlacedEntity } from '../formats/setdata.ts';
 import { EnemyArchive, NodeAnimator, texturesFromXvm } from './enemymodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
+import type { CollisionWorld } from './collision.ts';
+import { NPC_RADIUS, npcBrain, npcCollide, npcTalkEnd, npcTalkStart, npcTick, type NpcBrain, type NpcWorld } from './npcwander.ts';
 
 const BAMS = 0x10000;
 const TWO_PI = Math.PI * 2;
@@ -150,6 +157,8 @@ export interface NpcInstance {
   height: number;
   state: NpcTalkState;
   shown: boolean;
+  brain: NpcBrain; // modes / wander (npcwander.ts)
+  motion: 0 | 1; // motion row playing: 0 idle, 1 walk
 }
 
 export interface NpcLayerHost {
@@ -182,6 +191,13 @@ export class NpcLayer {
   stats: NpcLayerStats = { placed: 0, hidden: 0, unresolved: [], errors: [], missingTextures: 0 };
   private talker: { npc: NpcInstance; target: { x: number; z: number } } | null = null;
   private hook = (dt: number) => this.frame(dt);
+  private motions: NjMotion[] = [];
+  // The floor's map collision: the wanderers walk on it, and the NPC
+  // hitboxes are handed to it as bodies that block the player.
+  private collision: CollisionWorld | null = null;
+  private world: NpcWorld = { collision: null, rand: Math.random };
+  // Where the players of the floor stand (the NPCs' collision pass).
+  players: () => readonly { x: number; z: number }[] = () => [];
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -241,6 +257,8 @@ export class NpcLayer {
           height: model.height,
           state: 'idle',
           shown: true,
+          brain: npcBrain(p.world[0], p.world[1], p.world[2], toBams(p.yaw), e.params),
+          motion: 0,
         };
         group.rotation.y = fromBams(npc.angle);
         root.add(group);
@@ -256,6 +274,7 @@ export class NpcLayer {
     this.viewer.scene.add(root);
     this.root = root;
     this.instances = instances;
+    this.motions = motions;
     this.stats = stats;
     this.updateVisibility();
     return done;
@@ -268,6 +287,7 @@ export class NpcLayer {
       n.shown = npcShown(n.params, (r) => reg?.(r) ?? 0);
       n.root.visible = n.shown;
     }
+    this.publishBodies();
   }
 
   // The NPC a player at (x, z) facing `yaw` (radians, three.js convention)
@@ -299,7 +319,32 @@ export class NpcLayer {
   startTalk(npc: NpcInstance, x: number, z: number): void {
     if (this.talker) return;
     npc.state = 'turning';
+    npcTalkStart(npc.brain);
+    this.setMotion(npc, npc.brain.motion);
     this.talker = { npc, target: { x, z } };
+  }
+
+  // The floor's map collision (null when the floor has none).
+  attach(collision: CollisionWorld | null): void {
+    if (this.collision && this.collision !== collision) this.collision.bodies = [];
+    this.collision = collision;
+    this.world.collision = collision;
+    this.publishBodies();
+  }
+
+  // Plays row `m` of the NPC's motion table (vtable +0x168, 0x0060c834).
+  private setMotion(n: NpcInstance, m: 0 | 1): void {
+    if (n.motion === m) return;
+    n.motion = m;
+    const row = NPC_MOTION_TABLES[n.cls.family][m === 1 ? 'walk' : 'idle'];
+    const motion = this.motions[row.motion];
+    if (motion) n.animator.play(motion, row.speed, true);
+  }
+
+  // The shown NPCs' hitboxes block the players (CollisionWorld.bodies).
+  private publishBodies(): void {
+    if (!this.collision) return;
+    this.collision.bodies = this.instances.filter((n) => n.shown).map((n) => ({ x: n.root.position.x, z: n.root.position.z, radius: NPC_RADIUS }));
   }
 
   // NPC whose talk action is `id` (opcode_message names the speaker this way).
@@ -313,10 +358,33 @@ export class NpcLayer {
     const ticks = Math.min(Math.floor(this.tickRemainder), 30);
     this.tickRemainder -= Math.floor(this.tickRemainder);
     for (let i = 0; i < ticks; i++) this.tick();
+    if (ticks) this.publishBodies();
+  }
+
+  // One 30 Hz tick: the modes of the NPCs nobody talks to, then the talk.
+  private tick(): void {
+    const players = this.players();
+    for (const n of this.instances) {
+      // ASSUMED: a hidden NPC (display registers) neither moves nor collides.
+      if (!n.shown || n.brain.mode === 3) continue;
+      const b = n.brain;
+      const px = b.x, py = b.y, pz = b.z;
+      npcTick(b, this.world);
+      const bodies = [
+        ...players.map((p) => ({ x: p.x, z: p.z, radius: NPC_RADIUS })),
+        ...this.instances.filter((o) => o !== n && o.shown).map((o) => ({ x: o.brain.x, z: o.brain.z, radius: NPC_RADIUS })),
+      ];
+      npcCollide(b, px, py, pz, bodies, this.world);
+      n.root.position.set(b.x, b.y, b.z);
+      n.angle = b.angle;
+      n.root.rotation.y = fromBams(n.angle);
+      this.setMotion(n, b.motion);
+    }
+    this.talkTick();
   }
 
   // One 30 Hz tick of the talk state machine.
-  private tick(): void {
+  private talkTick(): void {
     const t = this.talker;
     if (!t || t.npc.state !== 'turning') return;
     const n = t.npc;
@@ -327,18 +395,22 @@ export class NpcLayer {
     const diff = bamsDiff(n.angle, want);
     if (Math.abs(diff) < NPC_TURN_STEP) {
       n.angle = want;
+      n.brain.angle = want;
       n.root.rotation.y = fromBams(n.angle);
       n.state = 'talking';
+      this.setMotion(n, 0); // vtable +0x168(0) once it faces the player
       this.host.facePlayer?.(fromBams(want + 0x8000));
       void Promise.resolve(this.host.talk?.(n))
         .catch((err) => this.host.log?.(`npc talk: ${(err as Error).message}`))
         .finally(() => {
           n.state = 'idle';
+          npcTalkEnd(n.brain);
           if (this.talker?.npc === n) this.talker = null;
         });
       return;
     }
     n.angle = (n.angle + Math.sign(diff) * NPC_TURN_STEP) & 0xffff;
+    n.brain.angle = n.angle;
     n.root.rotation.y = fromBams(n.angle);
   }
 
@@ -351,6 +423,7 @@ export class NpcLayer {
     this.generation++;
     this.instances = [];
     this.talker = null;
+    if (this.collision) this.collision.bodies = [];
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
     const materials = new Set<THREE.Material>();

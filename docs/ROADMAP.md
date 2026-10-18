@@ -39,7 +39,8 @@
 - [x] Own movement sent via `6x42` / `6x3E`, ground-following on the map collision
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
-- [ ] Collision of lobby objects (counters, props from `o.dat`) and the real per-class hitbox radius
+- [x] Player hitbox radius from the exe: 5.0 for every class (only its height is per class)
+- [ ] Collision of lobby objects (counters, props from `o.dat`)
 - [ ] Real lobby spawn points and collision (`*c.rel`)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
 - [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
@@ -99,5 +100,6 @@
 - [x] Quest floors: the quest's designation decides the map and the variation, and its `.dat` replaces the free-play set data (`render/gameview.ts`)
 - [x] NPCs: every humanoid NPC class of the factory table (Pioneer 2, Lab, quest NPCs, the tekker by section id, the NgcBase cast per map type) with its own model and the town idle motion (`plymotionnpctown.cpt`), display registers, turning to the player and talk (`formats/npcmodels.ts`, `render/npcview.ts`, `tests/npcs.test.ts`)
 - [x] Quests: the area script (`map_city_on_e.bin`), the Hunter's Guild and government counters (quest menu, accept, result on r255/r253, reward label, cancel), quest NPC talk, `at_coords_talk`/`call`, `set_player_start_position` (`6x24`), `p_return_guild`, the meseta reward (`6xC9`), NPC players (`6x69` + `npcplayerchar.dat`), the speech balloon / window / list / quest board drawn like the exe (`quest/town.ts`, `quest/questui.ts`, `tests/questflow.test.ts`)
-- [ ] NPCs: walking townspeople (param6 = 1 wander), the talk camera movers, NPC collision, TObjNpcEnemy (0x33), the NPC Rappy / Hildebear / Dark Bringer (0x45 / 0x46 / 0xa9) and the Episode 4 quest NPC (0x118)
+- [x] NPCs: walking townspeople (param6 = 1 wander around the spawn point), turning back to the spawn angle after a talk, NPC collision (round hitbox of radius 5 that stops the player and the other NPCs, sidestep response) (`render/npcwander.ts`)
+- [ ] NPCs: the talk camera movers, TObjNpcEnemy (0x33), the NPC Rappy / Hildebear / Dark Bringer (0x45 / 0x46 / 0xa9) and the Episode 4 quest NPC (0x118)
 - [ ] Quests: NPC players' follow / attack AI (6x69 commands 1-3 are logged only), the other Pioneer 2 counters (medical center, giveaway), the in-game main menu that opens the quest board (B key for now), the text colour palette, challenge mode and Battle Arena opcodes, the enemy-parameter family, random-enemy `.dat` sections (types 4/5) and the `evt2` event format
