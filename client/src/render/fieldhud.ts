@@ -52,6 +52,8 @@ export interface FieldHudOptions {
   // Whether a telepipe can be opened here (render/telepipe.ts): the Telepipe
   // item is greyed out otherwise.
   telepipeAllowed?: () => boolean;
+  // The local player's status flags (combat/status.ts), for Antidote / Antiparalysis.
+  statusFlags?: () => number;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   log?: (msg: string) => void;
@@ -183,6 +185,7 @@ export class FieldHud {
       maxTechLevel: (tech: number) => names?.pmt.maxTechLevels[tech]?.[charClass] ?? 0xff,
       maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
       telepipe: () => this.opts.telepipeAllowed?.() ?? false,
+      statusFlags: () => this.opts.statusFlags?.() ?? 0,
     };
   }
 

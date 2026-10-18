@@ -60,7 +60,9 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
+import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
@@ -80,6 +82,7 @@ import {
   parseGiveExp,
   parseHitByEnemy,
   parsePlayerDeath,
+  parseStatusEffect,
   parseTechLevelOverride,
   type ChangeLevel,
   type Game,
@@ -257,6 +260,9 @@ export class CombatView {
   private remoteCasts = new Map<number, { tech: number; targets: number[] }>();
   // Remote players lying dead (6x4D .. 6x4F): Reverser targets.
   private deadPlayers = new Set<number>();
+  // Poison / paralysis / freeze / shock / slow / confusion on the local
+  // player (combat/status.ts).
+  readonly status: PlayerStatus;
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -275,13 +281,37 @@ export class CombatView {
       sendRevived: () => this.game.sendPlayerRevived(),
       log: (msg) => this.opts.log(msg),
     });
+    this.status = new PlayerStatus({
+      sendAdd: (type) => this.game.sendAddStatus(type),
+      sendRemove: (slot) => this.game.sendRemoveStatus(slot),
+      poisonDamage: (amount) => {
+        if (amount < 1) return;
+        this.damage.hp = Math.max(1, this.damage.hp - amount);
+        this.opts.log(`poison: -${amount} HP (${this.damage.hp}/${this.damage.maxHp})`);
+      },
+      pulse: () => {},
+      log: (msg) => this.opts.log(msg),
+    });
     game.on('subcommand', (sub, clientId, body) => this.onSubcommand(sub, clientId, body));
+  }
+
+  // A status effect on the local player (an enemy attack's vtable +0xb8 ..
+  // +0xcc entry, or a test hook).
+  inflictStatus(type: StatusType, what = ''): boolean {
+    if (this.damage.dead) return false;
+    this.status.android = isAndroid(this.game.self?.charClass ?? 0);
+    const took = this.status.inflict(type);
+    if (took) {
+      this.opts.log(`${what}${what ? ': ' : ''}${STATUS_NAME[type]}`);
+      if (this.status.immobile) this.view?.resetGait(this.game.selfId);
+    }
+    return took;
   }
 
   // True while that player is in an attack, hit or death motion (LobbyView must
   // not play a gait motion over it, and the local player must not move).
   isAttacking = (clientId: number): boolean =>
-    this.attacking.has(clientId) || this.hurt.has(clientId) || (clientId === this.game.selfId && this.damage.busy);
+    this.attacking.has(clientId) || this.hurt.has(clientId) || (clientId === this.game.selfId && (this.damage.busy || this.status.immobile));
 
   attach(view: LobbyView): void {
     this.view = view;
@@ -441,7 +471,7 @@ export class CombatView {
     const me = this.game.self;
     const view = this.view;
     if (me && view) {
-      const blocked = this.damage.busy;
+      const blocked = this.damage.busy || this.status.immobile;
       for (const [key, index] of PALETTE_KEYS) {
         const down = keys.has(key);
         if (down && !this.held.has(key) && !blocked) {
@@ -497,6 +527,7 @@ export class CombatView {
     for (let i = 0; i < ticks; i++) {
       this.tickEnemies();
       this.damage.tick();
+      this.tickStatus();
       this.tickTechHits();
       this.tickBuffs();
     }
@@ -522,8 +553,19 @@ export class CombatView {
       maxTp,
       pb: 0, // photon blasts are not implemented
       dead: this.damage.dead,
-      statusIcons: this.selfBuffs.icons(),
+      statusIcons: [...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
     };
+  }
+
+  // The status ticks of the local player (only on a field, like the player's
+  // is_player_in_unsafe_map wrappers). ASSUMED: dying ends every effect.
+  private tickStatus(): void {
+    if (this.damage.dead) {
+      if (this.status.flags) this.status.reset();
+      return;
+    }
+    if (this.area === 0) return;
+    this.status.tick(this.damage.hp, this.damage.dead, this.game.info?.difficulty ?? 0);
   }
 
   // shifta_jellen_effect_tick / deband_zalure_effect_tick, once per frame on
@@ -603,17 +645,22 @@ export class CombatView {
     const from = view.playerPositions().get(clientId);
     const p = e.instance.root.position;
     const stats = this.selfStats();
-    // Deband / Zalure move the player's DFP (+0x2d2).
-    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: stats.evp, dfp: this.selfBuffs.dfp(stats.dfp) };
+    // Deband / Zalure move the player's DFP (+0x2d2); a freeze lowers EVP.
+    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: this.status.evp(stats.evp), dfp: this.selfBuffs.dfp(stats.dfp) };
     // The generic hit check has no attack-type or combo multiplier for an
     // enemy's melee: accuracy 1.0.
     const chance = (attacker.ata - defender.evp * 0.2) * 0.01;
     let total = 0;
+    let landed = false;
     if (chance > 0 && this.rng() <= chance) {
+      landed = true;
       total = rollDamage(attacker, defender, 0, this.rng, mult).damage;
     }
     const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
     this.damage.hit(total, angle, knockback, 0x1000 | e.index);
+    // The Ultimate wolves' and Mothmants' status rolls (combat/status.ts).
+    const status = landed ? meleeHitStatus(e.slot.type, (this.game.info?.difficulty ?? 0) === 3, this.rng()) : null;
+    if (status !== null) this.inflictStatus(status, `E-${e.index.toString(16)} (${e.slot.type})`);
   }
 
   // Lock-on cursor: the nearest live enemy in front of the player
@@ -676,7 +723,8 @@ export class CombatView {
     const events: AttackEvents = {
       start: (_s, _t, motion, factor) => {
         animator.paused = false;
-        animator.play(motion, factor);
+        // apply_slow_status_effect_to_attack_speed: the frame step * 0.5.
+        animator.play(motion, factor * this.status.motionScale);
       },
       hit: (s, t) => this.resolveHit((t as AttackType) ?? 0, s),
       end: () => {
@@ -805,7 +853,7 @@ export class CombatView {
     const view = this.view;
     const name = TECH_NAMES[tech] ?? `technique ${tech}`;
     if (!me || !view || tech < 0 || tech > 18) return false;
-    if (this.cast || this.attack?.active || this.damage.busy || this.damage.dead) return false;
+    if (this.cast || this.attack?.active || this.damage.busy || this.damage.dead || this.status.immobile) return false;
     const level = this.techLevel(tech);
     if (level === null) {
       this.opts.log(`${name}: not learned`);
@@ -1085,13 +1133,23 @@ export class CombatView {
     this.opts.log(`${what}: E-${e.index.toString(16)} ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
   }
 
-  // Player_ClearStatusEffect(level): the web client has no poison, paralysis,
-  // shock, slow, confusion or freeze yet, so only the Jellen / Zalure part
-  // (level >= 5) has something to clear.
+  // Player_ClearStatusEffect(level): the status slots (combat/status.ts) and,
+  // from level 5, Jellen / Zalure.
   private applyAnti(level: number, what: string): void {
     const cures = antiCures(level);
-    const cleared = level >= 5 && this.selfBuffs.clearDebuffs();
-    this.opts.log(`${what}: cures ${cures.join(', ')}${cleared ? ' (Jellen / Zalure cleared)' : ''}; no other status effects exist yet`);
+    const cleared = this.status.anti(level).map((t) => STATUS_NAME[t]);
+    if (level >= 5 && this.selfBuffs.clearDebuffs()) cleared.push('Jellen / Zalure');
+    this.status.sync();
+    this.opts.log(`${what}: cures ${cures.join(', ')}; ${cleared.length ? `cleared ${cleared.join(', ')}` : 'nothing to clear'}`);
+  }
+
+  // Antidote / Antiparalysis (the tool's use entry calls vtable +0xdc / +0xe0).
+  useCureItem(subtype: number): boolean {
+    const type = subtype === 0 ? STATUS.poison : subtype === 1 ? STATUS.paralysis : null;
+    if (type === null || !this.status.cure(type)) return false;
+    this.status.sync();
+    this.opts.log(`${subtype === 0 ? 'Antidote' : 'Antiparalysis'}: ${STATUS_NAME[type]} cured`);
+    return true;
   }
 
   // entity_hit_by_tech on an enemy (combat/techniques.ts).
@@ -1411,6 +1469,16 @@ export class CombatView {
       if (clientId === this.game.selfId) return;
       this.deadPlayers.delete(clientId);
       this.playRemoteMotion(clientId, 'revive', 40);
+      return;
+    }
+    if (sub === 0x0c || sub === 0x0d) {
+      const st = parseStatusEffect(body);
+      if (!st || st.clientId === this.game.selfId) return;
+      this.opts.log(
+        st.add
+          ? `player ${st.clientId}: ${STATUS_NAME[st.value as StatusType] ?? `effect ${st.value}`} (6x0C)`
+          : `player ${st.clientId}: status slot ${st.value} cleared (6x0D)`,
+      );
       return;
     }
     if (sub === 0x5f) this.opts.log(`item dropped (6x5F, ${body.length} bytes)`);

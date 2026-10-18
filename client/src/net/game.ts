@@ -909,6 +909,25 @@ export class Game extends Lobby {
     this.sendSubcommand(0x4f, new Uint8Array(0));
   }
 
+  // 6x0C (G_AddStatusEffect_6x0C, 0x0C): {u32 effect type, f32 amount}, sent
+  // by vtable +0x140 (0x0068ff70) when a status slot gains an effect;
+  // combat/status.ts has the exe side.
+  sendAddStatus(type: number, amount = 0): void {
+    const p = new Uint8Array(8);
+    const dv = new DataView(p.buffer);
+    dv.setUint32(0, type >>> 0, true);
+    dv.setFloat32(4, amount, true);
+    this.sendSubcommand(0x0c, p);
+  }
+
+  // 6x0D (G_RemoveStatusEffect_6x0D, 0x0C): {u32 slot, u32 0}, sent by
+  // 0x006895d4 when a status slot emptied.
+  sendRemoveStatus(slot: number): void {
+    const p = new Uint8Array(8);
+    new DataView(p.buffer).setUint32(0, slot >>> 0, true);
+    this.sendSubcommand(0x0d, p);
+  }
+
   // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
   sendWalk(x: number, z: number, nearEnemy = false): void {
     const p = new Uint8Array(12);
@@ -1075,6 +1094,13 @@ export function parseAttack(body: Uint8Array): { clientId: number; step: number;
 }
 
 // 6x4B / 6x4C from another client.
+// 6x0C / 6x0D: {header, u32 effect type or slot, f32 amount or 0}.
+export function parseStatusEffect(body: Uint8Array): { clientId: number; add: boolean; value: number; amount: number } | null {
+  if (body.length < 0x0c || (body[0] !== 0x0c && body[0] !== 0x0d)) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), add: body[0] === 0x0c, value: dv.getUint32(4, true), amount: dv.getFloat32(8, true) };
+}
+
 export function parseHitByEnemy(body: Uint8Array): { clientId: number; heavy: boolean; angle: number; currentHp: number; vx: number; vz: number } | null {
   if (body.length < 0x10 || (body[0] !== 0x4b && body[0] !== 0x4c)) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);

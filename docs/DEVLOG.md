@@ -1,5 +1,65 @@
 # Devlog
 
+## 2026-10-18: Status effects on the player
+
+**What changed:** the local player can now be poisoned, paralyzed, frozen,
+shocked, slowed and confused. `combat/status.ts` holds the two status slots,
+the infliction rules, the ticks and the cures; `render/combat.ts` runs it on a
+field, shows the icons in the status window, locks the player while frozen or
+paralyzed, slows the attack motions, sends `6x0C` / `6x0D`, and Anti now
+really cures. Antidote / Antiparalysis can be used from the Item Pack and the
+Inventory panel while the player has that effect (`net/items.ts`).
+
+**Details** (Ephinea `PsoBB.exe`, player vtable 0x00b39460):
+- **Slots:** slot 0 (+0x25c type, +0x260 EVP multiplier, +0x264 counter)
+  holds poison (0x0f) or paralysis (0x10); slot 1 (+0x268 / +0x26c / +0x270)
+  freeze (2), shock (3), slow (0x11) or confusion (0x12). The types are
+  entity_hit_by_tech groups (0x0f..0x12 call vtable +0xb8..+0xc4, the freeze
+  roll +0xc8, Zonde +0xcc); the flags are the low six bits of +0x30.
+- **Infliction:** poison_entity (0x007788ec) and maybe_paralyze_entity
+  (0x007789c8) do nothing on an android (+0x2e8 & 4; 0x006951a0 sets it to 4
+  for class flag 0x10). Poison starts its counter at 45; a player's paralysis
+  has no EVP change and no timer; slow 0xd2 frames, confusion 300, freeze 0x96
+  with EVP -0.3 (0x0097810c) and no refreeze while frozen, shock 300.
+- **Poison damage** (poison_effect_tick): every 45 frames
+  trunc(HP * 0.0066666668) (0x00978188, fistp in truncation mode), at least
+  1, plus [0, 2, 5, 10] by difficulty (0x00978180, indexed by 0x00a9cd68);
+  an HP below 1 is put back to 1. Poison and a player's paralysis never wear
+  off on their own; slot 1 counts down and clears.
+- **Sync:** 0x006894d4 compares the flags with +0x3d8 every frame and sends
+  `6x0C {type, 0.0}` through vtable +0x140 (0x0068ff70) when a slot gains an
+  effect, `6x0D {slot}` (0x006895d4) when it empties.
+- **Cures:** Anti = Player_ClearStatusEffect (0x00779868) by level. Antidote
+  (03 06 00) and Antiparalysis (03 06 01): the tool's use entry 0x005dee9c
+  (vtable 0x00b0e5e0 +0xa8) calls vtable +0xdc (0x00779574, poison only) /
+  +0xe0 (0x007795ac, paralysis only); 0x0068be94 refuses the item without
+  that flag.
+- **Effects:** a frozen player sits in input state 0x13 (no input); slow
+  multiplies the motion step by 0.5 (0x0093c710); the HUD icons are
+  get_monster_status of +0x25c and +0x268 before the technique slots.
+- **Enemies:** in Ultimate only, a landed Savage Wolf hit slows and a
+  Barbarous Wolf hit paralyzes with roll <= 0.1 (0x00921304,
+  SavageWolfProcessStateAttack_0051c810), a Mothmant hit poisons with
+  roll < 0.05 (0x00920c0c, state function 0x0051784c). The Poison Lily's
+  spit is the next entry.
+
+**Assumed:** paralysis locks movement, attacks and techniques like the
+freeze (no test of the paralyzed bit was found in the player's input
+states); dying ends every effect. Left out: confusion's steering
+(should_do_confused_movement), the freeze button mash (+0x3e0), the
+particles and sounds of the pulses, status effects on enemies.
+
+**Tests:** `tests/status.test.ts` (new): poison damage table and period,
+paralysis never ending, every slot-1 duration with its 6x0C / 6x0D pair, the
+freeze EVP and refreeze rule, slow, android immunity, Anti levels,
+Antidote / Antiparalysis, icons, 6x0C / 6x0D parsing and the Ultimate rolls.
+
+**Checked in Chrome** (WebForce, Forest 1, inflicted with a console call):
+poison took 1 HP every ~1.5 s (28 -> 24 in 6 s), the poison icon showed next
+to the status window, `6x0C 0x0f` went out; Anti Lv7 cleared it and sent
+`6x0D 0`. A paralyzed player did not move while W was held, could not cast,
+and walked again after Anti Lv3 (`6x0C 0x10`, `6x0D 0`). No console errors.
+
 ## 2026-10-18: NPC talk cameras
 
 **What changed:** talking to an NPC now moves the camera the way the client

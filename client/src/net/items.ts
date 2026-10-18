@@ -647,6 +647,8 @@ export class GameItems {
   onBank: () => void = () => {};
   // The Telepipe was used (render/telepipe.ts opens the pipe).
   onTelepipe: () => void = () => {};
+  // Antidote (0) / Antiparalysis (1) used.
+  onCure: (subtype: number) => void = () => {};
   // MAG feeding (net/magfeed.ts): the tables, the feed timers by mag item
   // id, and a hook for the feed's sound.
   magFeed: () => FeedContext | null = () => null;
@@ -977,11 +979,22 @@ export class GameItems {
   // `maxGrind()` come from ItemPMT.
   canUse(
     it: InventoryItem,
-    rules: { maxTechLevel?: (tech: number) => number; maxGrind?: (weapon: ItemData) => number; telepipe?: () => boolean } = {},
+    rules: {
+      maxTechLevel?: (tech: number) => number;
+      maxGrind?: (weapon: ItemData) => number;
+      telepipe?: () => boolean;
+      statusFlags?: () => number;
+    } = {},
   ): boolean {
     const d = it.data.data1;
     if (wrappedFlag(it.data)) return true;
     if (d[0] !== 3) return false;
+    // SinowberillChallengePlayer_Process_0068be94: Antidote (03 06 00) needs
+    // the poisoned flag 1, Antiparalysis (03 06 01) the paralyzed flag 2.
+    if (d[1] === 6) {
+      const flags = rules.statusFlags?.() ?? 0;
+      return d[2] === 0 ? (flags & 1) !== 0 : d[2] === 1 ? (flags & 2) !== 0 : false;
+    }
     // ValidateItemForEquip_005c9e40: the Telepipe needs
     // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0.
     if (d[1] === 7) return rules.telepipe?.() ?? false;
@@ -1012,6 +1025,8 @@ export class GameItems {
     } else {
       // use_telepipe -> unknown_cast_tech(ryuker): the caster's pipe.
       if (d[1] === 7) this.onTelepipe();
+      // Antidote / Antiparalysis: the use entry 0x005dee9c (combat/status.ts).
+      if (d[1] === 6) this.onCure(d[2]);
       if (d[1] === 2) c.techLevels[d[4]] = d[2] + 1;
       if (d[1] === 0x0a) {
         const w = c.inventory.find((i) => i.equipped && i.data.data1[0] === 0)!;
