@@ -123,6 +123,7 @@ export class GameView {
       toLobby: () => this.onLobbyWarp(),
       tickQuest: (dt) => this.quest?.tick(dt),
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
+      talkCamera: () => this.npcs.talkCameraView(),
     });
     this.items = new GameItems(game, { ...character, log });
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
@@ -509,6 +510,16 @@ export class GameView {
   }
 
   // Turns the local player (an NPC talk turns the player to the NPC).
+  // The camera's current view and the default NPC talk camera
+  // (render/lobbyview.ts).
+  cameraView(): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null {
+    return this.view?.cameraView() ?? null;
+  }
+
+  talkCameraTurn(): void {
+    this.view?.talkCameraTurn();
+  }
+
   setSelfAngle(angle: number): void {
     const p = this.selfPose();
     if (p) this.view?.placePlayer(this.game.selfId, p.x, p.y, p.z, angle);

@@ -561,6 +561,47 @@ export class LobbyView {
     if (me && me.clientId === clientId) me.position = { x: pos.x, y: pos.y, z: pos.z };
   }
 
+  // The camera's current source / target (null before the first frame).
+  cameraView(): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null {
+    const c = this.camera;
+    return c.source && c.target ? { source: { ...c.source }, target: { ...c.target } } : null;
+  }
+
+  // UpdateDefaultNPCCameraOrientation_004d83f4: an NPC talk turns the camera
+  // to the player's heading + or - 0x6000 (BAMS; +0x30 is heading + 0x8000
+  // for straight behind), the one nearer the current angle first, the other
+  // when CheckCameraRaycastCollision_004d847c finds a wall (mask 0x100) from
+  // the current source to the new source or from there to the target; it
+  // stays when both are blocked. ASSUMED: the new source is the player
+  // camera's desired source at that angle (the exe offsets the player by the
+  // camera's +0xdc..+0xe4 vector).
+  talkCameraTurn(): void {
+    const me = this.lobby.self;
+    const m = me ? this.markers.get(me.clientId) : undefined;
+    if (!m) return;
+    const BAMS_RAD = (Math.PI * 2) / 0x10000;
+    const cur = this.camera.angle;
+    const diff = (a: number) => Math.abs(Math.atan2(Math.sin(a - cur), Math.cos(a - cur)));
+    let first = m.angle + 0x6000 * BAMS_RAD;
+    let second = m.angle - 0x6000 * BAMS_RAD;
+    if (diff(second) < diff(first)) [first, second] = [second, first];
+    const pos = m.group.position;
+    const blocked = (a: number): boolean => {
+      if (!this.collision || !this.camera.source || !this.camera.target) return false;
+      const saved = this.camera.angle;
+      this.camera.angle = a;
+      const d = this.camera.desired(pos, m.angle);
+      this.camera.angle = saved;
+      const s = this.camera.source, t = this.camera.target;
+      return (
+        !!this.collision.segmentHit([s.x, s.y, s.z], [d.source.x, d.source.y, d.source.z], 0x100) ||
+        !!this.collision.segmentHit([d.source.x, d.source.y, d.source.z], [t.x, t.y, t.z], 0x100)
+      );
+    };
+    if (!blocked(first)) this.camera.angle = first;
+    else if (!blocked(second)) this.camera.angle = second;
+  }
+
   // Where a player stands and faces (radians), as drawn.
   playerPose(clientId: number): { x: number; y: number; z: number; angle: number } | null {
     const m = this.markers.get(clientId);

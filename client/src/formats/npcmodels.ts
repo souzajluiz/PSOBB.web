@@ -287,6 +287,44 @@ export const NPC_TURN_STEP = 0x400;
 export const NPC_TALK_RANGE = 20;
 export const NPC_TALK_COS = 0.5;
 
+// EnemyObjectUpdate_0060648c state 0: for these talk actions the NPC does not
+// turn; the player is turned to face it at once (6x3E with the angle from the
+// player to the NPC) and the talk starts.
+// prettier-ignore
+export const NPC_TALK_NO_TURN: ReadonlySet<number> = new Set([
+  0x3e9, 0x3ea, 0x3ee, 0x3ef, 0x3f0, 0x3f1, 0x3f2, 0x3f3, 0x3f9, 0x419, 0x41a, 0x41b, 0x41f,
+  0x427, 0x428, 0x429, 0x42a, 0x42b, 0x42c, 0x42d, 1099,
+]);
+// State 1: the talk camera. These actions create a camera mover
+// (camera_mover_constructor(type) -> NpcCamera_Construct_004d6074, update
+// 0x004d5f88); the other actions of NPC_TALK_NO_TURN keep the camera as it
+// is; every other action turns the player camera aside
+// (UpdateDefaultNPCCameraOrientation_004d83f4).
+export const NPC_TALK_CAMERA_MOVERS: ReadonlyMap<number, number> = new Map([
+  [0x3e9, 7], // 1001: the Principal (TObjNpcGovernorBase, Pioneer 2)
+  [0x3ea, 9], // 1002: his secretary (TObjNpcSecretaryBase)
+  [0x41a, 0x12], // 1050: TObjNpcSoutokufu (the Lab)
+  [0x41b, 0x13], // 1051: TObjNpcHosa (the Lab)
+  [0x41f, 0x14], // 1055: the Lab's NgcBase NPC of action 1055
+]);
+// The camera mover's goal per type: 0x18-byte rows {vec3 source, vec3 target}
+// at 0x00909260 (world coordinates). Its update eases its source and target
+// toward them with unknown_vec3_lerp (lerpPoint) and a factor of 0.725
+// (0x3f39999a) every frame and hands them to SetDefaultNPCCameraView_004d33c0.
+// prettier-ignore
+export const NPC_CAMERA_MOVER_VIEWS: ReadonlyMap<number, { source: [number, number, number]; target: [number, number, number] }> = new Map([
+  [7, { source: [-4.8, 11.7, -2015.1], target: [0.4, 20, -2032.5] }],
+  [9, { source: [33.9, 12.7, -1996.6], target: [71.4, 22.4, -2006.6] }],
+  [0x12, { source: [-10000, 48, -198.4], target: [-10000, 46.5, -236.3] }],
+  [0x13, { source: [-10039.4, 43.3, -176.9], target: [-10063.5, 53.8, -212.1] }],
+  [0x14, { source: [-9953.2, 42.4, -168.1], target: [-9924, 50, -183.9] }],
+]);
+export const NPC_CAMERA_MOVER_LERP = Math.fround(0.725); // 0x3f39999a
+// UpdateDefaultNPCCameraOrientation_004d83f4: the camera angle goes to the
+// player's heading + or - 0x6000 (the one nearer the current angle first,
+// the other when a 0x100 ray to it hits a wall; unchanged when both do).
+export const NPC_TALK_CAMERA_SIDE = 0x6000;
+
 // --- the area script ---------------------------------------------------------
 
 // Pioneer 2 / Lab NPC dialogue lives in a per-map script (same .bin format as

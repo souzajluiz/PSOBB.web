@@ -21,8 +21,12 @@ import {
   cityScriptFile,
   NGC_MODELS,
   NPC_CLASSES,
+  NPC_CAMERA_MOVER_LERP,
+  NPC_CAMERA_MOVER_VIEWS,
   NPC_MOTION_TABLES,
   NPC_NODES,
+  NPC_TALK_CAMERA_MOVERS,
+  NPC_TALK_NO_TURN,
   npcClass,
   npcModelFor,
   npcParams,
@@ -46,6 +50,7 @@ import { bodyBlocks, CollisionWorld, PLAYER_RADIUS } from '../client/src/render/
 import { parseMapCRel } from '../client/src/formats/crel.ts';
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { parseSetFile, placeEntities } from '../client/src/formats/setdata.ts';
+import { lerpPoint } from '../client/src/render/playercamera.ts';
 import {
   NPC_RADIUS,
   NPC_SPEED,
@@ -397,6 +402,42 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
     world.bodies = [];
     console.log(`wanderers: ${brains.length} in Pioneer 2, ${moved} moving ticks; player stopped ${Math.hypot(px - target.x, pz - target.z).toFixed(2)} from an NPC`);
   } else console.log('map_city00_00c.rel not found, skipping the Pioneer 2 wander checks');
+}
+
+// 8. The talk camera movers (camera_mover_constructor, update 0x004d5f88): the
+//    actions that make one belong to Pioneer 2 / Lab NPCs, every mover's view
+//    looks at its NPC, and the 0.725 ease reaches the view.
+{
+  const scene = join(DATA, 'scene');
+  const where = new Map<number, { x: number; y: number; z: number; type: number }>();
+  for (const [map, dat] of [['map_city00_00n.rel', 'map_city00_00e.dat'], ['map_labo00_00n.rel', 'map_labo00_00e.dat']]) {
+    if (!existsSync(join(scene, map))) continue;
+    const sections = parseMapNRel(new Uint8Array(readFileSync(join(scene, map)))).sections;
+    for (const p of placeEntities(parseSetFile(dat, read(dat)!), sections, map.startsWith('map_city') ? 0 : 0x12)) {
+      if (p.entity.kind !== 'enemy') continue;
+      const a = npcParams(p.entity.params).action;
+      if (NPC_TALK_CAMERA_MOVERS.has(a)) where.set(a, { x: p.world[0], y: p.world[1], z: p.world[2], type: p.entity.type });
+    }
+  }
+  if (where.size) {
+    for (const [action, type] of NPC_TALK_CAMERA_MOVERS) {
+      check(NPC_TALK_NO_TURN.has(action), `camera mover action ${action} does not turn the NPC`);
+      const npc = where.get(action);
+      check(!!npc, `no NPC with talk action ${action}`);
+      if (!npc) continue;
+      const v = NPC_CAMERA_MOVER_VIEWS.get(type)!;
+      // The view's target is near the NPC, its source a few tens of units off.
+      const dt = Math.hypot(v.target[0] - npc.x, v.target[2] - npc.z);
+      const ds = Math.hypot(v.source[0] - npc.x, v.source[2] - npc.z);
+      check(dt < 40 && ds < 80, `mover ${type}: target ${dt.toFixed(1)} / source ${ds.toFixed(1)} from NPC 0x${npc.type.toString(16)} (action ${action})`);
+      // Easing from 300 units away arrives within 4 seconds.
+      let cur = { x: v.source[0] + 300, y: v.source[1], z: v.source[2] };
+      let f = 0;
+      for (; f < 120 && Math.hypot(cur.x - v.source[0], cur.z - v.source[2]) > 0.01; f++) cur = lerpPoint(cur, { x: v.source[0], y: v.source[1], z: v.source[2] }, NPC_CAMERA_MOVER_LERP);
+      check(f < 120, `mover ${type} did not settle`);
+    }
+    console.log(`talk camera movers: ${[...where].map(([a, n]) => `${a} -> NPC 0x${n.type.toString(16)}`).join(', ')}`);
+  } else console.log('scene files not found, skipping the camera mover checks');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

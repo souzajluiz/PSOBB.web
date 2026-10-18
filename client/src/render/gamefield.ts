@@ -48,6 +48,8 @@ export interface GameFieldOptions {
   warpTo: (floor: number) => Promise<void>;
   // Intra-floor warp of the local player (6x55, render/lobbyview.ts warpSelf).
   warpSelf?: (pos: { x: number; y: number; z: number }, angle: number) => void;
+  // The NPC talk's camera mover view (render/npcview.ts), if any.
+  talkCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
   toLobby: () => void;
   log: (msg: string) => void;
 }
@@ -363,6 +365,12 @@ export class GameField {
     if (view) {
       this.viewer.camera.position.set(...view.source);
       this.viewer.camera.lookAt(...view.target);
+    }
+    // So does an NPC talk's camera mover (SetDefaultNPCCameraView_004d33c0).
+    const talk = view ? null : this.opts.talkCamera?.();
+    if (talk) {
+      this.viewer.camera.position.set(talk.source.x, talk.source.y, talk.source.z);
+      this.viewer.camera.lookAt(talk.target.x, talk.target.y, talk.target.z);
     }
   }
 

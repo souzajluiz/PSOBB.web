@@ -101,6 +101,8 @@ export class QuestTown {
       questRegister: (r) => this.quest?.vm.regsI[r & 0xff] ?? 0,
       areaRegister: (r) => this.area?.vm.regsI[r & 0xff] ?? 0,
       facePlayer: (angle) => this.view.setSelfAngle(angle),
+      cameraView: () => this.view.cameraView(),
+      defaultTalkCamera: () => this.view.talkCameraTurn(),
       talk: (npc) => this.talk(npc),
     };
     const onFloor = () => void this.enterFloor();

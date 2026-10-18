@@ -26,8 +26,12 @@ import type { NjcmObject } from '../formats/njcm.ts';
 import { parseNjcmObject } from '../formats/njcm.ts';
 import type { NjMotion } from '../formats/njmotion.ts';
 import {
+  NPC_CAMERA_MOVER_LERP,
+  NPC_CAMERA_MOVER_VIEWS,
   NPC_MOTION_TABLES,
+  NPC_TALK_CAMERA_MOVERS,
   NPC_TALK_COS,
+  NPC_TALK_NO_TURN,
   NPC_TALK_RANGE,
   NPC_TOWN_MOTION_FILE,
   NPC_TURN_STEP,
@@ -46,6 +50,7 @@ import { EnemyArchive, NodeAnimator, texturesFromXvm } from './enemymodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
 import type { CollisionWorld } from './collision.ts';
+import { lerpPoint, type Vec3 } from './playercamera.ts';
 import { NPC_RADIUS, npcBrain, npcCollide, npcTalkEnd, npcTalkStart, npcTick, type NpcBrain, type NpcWorld } from './npcwander.ts';
 
 const BAMS = 0x10000;
@@ -169,6 +174,10 @@ export interface NpcLayerHost {
   talk?: (npc: NpcInstance) => Promise<void> | void;
   // Turn the local player to `angle` (radians) when the NPC starts talking.
   facePlayer?: (angle: number) => void;
+  // The camera's current source / target (a camera mover starts there).
+  cameraView?: () => { source: Vec3; target: Vec3 } | null;
+  // UpdateDefaultNPCCameraOrientation_004d83f4 (the camera turns aside).
+  defaultTalkCamera?: () => void;
   log?: (msg: string) => void;
 }
 
@@ -190,6 +199,8 @@ export class NpcLayer {
   instances: NpcInstance[] = [];
   stats: NpcLayerStats = { placed: 0, hidden: 0, unresolved: [], errors: [], missingTextures: 0 };
   private talker: { npc: NpcInstance; target: { x: number; z: number } } | null = null;
+  // The talk's camera mover (NpcCamera, update 0x004d5f88) while it lives.
+  private mover: { type: number; source: Vec3; target: Vec3 } | null = null;
   private hook = (dt: number) => this.frame(dt);
   private motions: NjMotion[] = [];
   // The floor's map collision: the wanderers walk on it, and the NPC
@@ -385,6 +396,7 @@ export class NpcLayer {
 
   // One 30 Hz tick of the talk state machine.
   private talkTick(): void {
+    this.moverTick();
     const t = this.talker;
     if (!t || t.npc.state !== 'turning') return;
     const n = t.npc;
@@ -393,18 +405,25 @@ export class NpcLayer {
     // fpatan(dx, dz) * 65536 / (2 pi) (0x0092f0f8 / 0x0092f0f0).
     const want = toBams(Math.atan2(dx, dz));
     const diff = bamsDiff(n.angle, want);
-    if (Math.abs(diff) < NPC_TURN_STEP) {
-      n.angle = want;
-      n.brain.angle = want;
-      n.root.rotation.y = fromBams(n.angle);
+    // NPC_TALK_NO_TURN: the NPC keeps its angle, the player turns to it.
+    const noTurn = NPC_TALK_NO_TURN.has(n.params.action);
+    if (noTurn || Math.abs(diff) < NPC_TURN_STEP) {
+      if (!noTurn) {
+        n.angle = want;
+        n.brain.angle = want;
+        n.root.rotation.y = fromBams(n.angle);
+      }
       n.state = 'talking';
-      this.setMotion(n, 0); // vtable +0x168(0) once it faces the player
+      this.setMotion(n, 0); // vtable +0x168(0)
       this.host.facePlayer?.(fromBams(want + 0x8000));
+      this.startTalkCamera(n);
       void Promise.resolve(this.host.talk?.(n))
         .catch((err) => this.host.log?.(`npc talk: ${(err as Error).message}`))
         .finally(() => {
           n.state = 'idle';
           npcTalkEnd(n.brain);
+          // State 3: the camera mover is flagged for deletion.
+          this.mover = null;
           if (this.talker?.npc === n) this.talker = null;
         });
       return;
@@ -412,6 +431,35 @@ export class NpcLayer {
     n.angle = (n.angle + Math.sign(diff) * NPC_TURN_STEP) & 0xffff;
     n.brain.angle = n.angle;
     n.root.rotation.y = fromBams(n.angle);
+  }
+
+  // EnemyObjectUpdate state 1: a camera mover, the default talk camera, or
+  // nothing (NPC_TALK_CAMERA_MOVERS).
+  private startTalkCamera(n: NpcInstance): void {
+    const type = NPC_TALK_CAMERA_MOVERS.get(n.params.action);
+    if (type !== undefined) {
+      const cur = this.host.cameraView?.();
+      const goal = NPC_CAMERA_MOVER_VIEWS.get(type)!;
+      const v = (a: [number, number, number]): Vec3 => ({ x: a[0], y: a[1], z: a[2] });
+      // NpcCamera_Construct_004d6074 starts from the camera's current view.
+      this.mover = { type, source: cur?.source ?? v(goal.source), target: cur?.target ?? v(goal.target) };
+      return;
+    }
+    if (!NPC_TALK_NO_TURN.has(n.params.action)) this.host.defaultTalkCamera?.();
+  }
+
+  // NpcCamera update 0x004d5f88: ease toward the type's view.
+  private moverTick(): void {
+    const m = this.mover;
+    if (!m) return;
+    const goal = NPC_CAMERA_MOVER_VIEWS.get(m.type)!;
+    m.source = lerpPoint(m.source, { x: goal.source[0], y: goal.source[1], z: goal.source[2] }, NPC_CAMERA_MOVER_LERP);
+    m.target = lerpPoint(m.target, { x: goal.target[0], y: goal.target[1], z: goal.target[2] }, NPC_CAMERA_MOVER_LERP);
+  }
+
+  // The view the talk's camera mover puts on screen (null: none).
+  talkCameraView(): { source: Vec3; target: Vec3 } | null {
+    return this.mover ? { source: this.mover.source, target: this.mover.target } : null;
   }
 
   // Head point (world) of an NPC, for the speech balloon.
@@ -423,6 +471,7 @@ export class NpcLayer {
     this.generation++;
     this.instances = [];
     this.talker = null;
+    this.mover = null;
     if (this.collision) this.collision.bodies = [];
     if (!this.root) return;
     this.viewer.scene.remove(this.root);

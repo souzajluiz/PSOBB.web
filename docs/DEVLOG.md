@@ -1,5 +1,49 @@
 # Devlog
 
+## 2026-10-18: NPC talk cameras
+
+**What changed:** talking to an NPC now moves the camera the way the client
+does: five NPCs get a camera mover that frames them from a fixed spot, the
+others turn the player camera to the side, and some NPCs no longer turn to
+the player. Code: `formats/npcmodels.ts` (tables), `render/npcview.ts`,
+`render/lobbyview.ts` (`talkCameraTurn`, `cameraView`), `render/gamefield.ts`,
+`render/gameview.ts`, `quest/town.ts`.
+
+**Details** (Ephinea `PsoBB.exe`, EnemyObjectUpdate_0060648c):
+- **State 0:** for the actions 0x3e9, 0x3ea, 0x3ee..0x3f3, 0x3f9, 0x419,
+  0x41a, 0x41b, 0x41f, 0x427..0x42d and 1099 the NPC does not turn: the
+  player is turned to face it (6x3E) and the talk starts at once.
+- **State 1, camera movers:** actions 1001 (Principal), 1002 (secretary),
+  1050, 1051 and 1055 (Lab) call camera_mover_constructor with type 7, 9,
+  0x12, 0x13 and 0x14. NpcCamera_Construct_004d6074 starts from the current
+  camera source / target; its update 0x004d5f88 eases both toward the row of
+  0x00909260 (0x18 bytes per type: source, target in world coordinates) with
+  unknown_vec3_lerp (0x004d63b0, `lerpPoint`) and a factor of 0.725
+  (0x3f39999a), and hands them to SetDefaultNPCCameraView_004d33c0. State 3
+  flags the mover for deletion and the player camera comes back.
+- **State 1, default:** UpdateDefaultNPCCameraOrientation_004d83f4 sets the
+  camera angle (+0x30) to the player's heading + or - 0x6000, the one nearer
+  the current angle first; CheckCameraRaycastCollision_004d847c (two 0x100
+  rays) makes it try the other, and both blocked leaves the angle alone.
+
+**Assumed:** the rays of the side view go to the player camera's desired
+source at the new angle (the exe uses the camera's +0xdc..+0xe4 offset);
+the view changes at once because the player's turn for the talk already
+snaps the camera. Left out: what the camera's talk flag +0x100 does to the
+player camera (field of view eased to 0x22d8, a target offset in
+CalculateCameraTargetPosition_004d86f4).
+
+**Tests:** `tests/npcs.test.ts` section 8: the five mover actions belong to
+the Principal (0x1b), the secretary (0x20) and the Lab NPCs 0xd1, 0xd2, 0xf8,
+every mover view looks at its NPC, and the ease settles.
+
+**Checked in Chrome** (WebHunter, Pioneer 2): talking to Principal Tyrell
+(started with `startTalk`) moves the camera to (-4.8, 11.7, -2015.1) and
+frames him while his balloon shows; after the dialogue the player camera is
+back. Talking to the TObjNpcExpertBase of action 1003 turns the NPC to the
+player and the camera to heading + 0x6000 (side view); after the talk the NPC
+turns back to its spawn angle 0xb000. No console errors.
+
 ## 2026-10-18: Lobby object collision
 
 **What changed:** the four TObjLobbyMain objects of every lobby now stop the
