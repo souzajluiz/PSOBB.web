@@ -31,6 +31,7 @@ import {
   StatusWindow,
 } from '../client/src/classic/hud.ts';
 import { parseNewservJson } from './lib/newservjson.ts';
+import { LEVEL_UP_COLOR, LEVEL_UP_LIGHT_FRAMES, LEVEL_UP_LIGHT_HALF, LEVEL_UP_PARTICLE, LevelUpLight, lightScale } from '../client/src/render/levelupfx.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const NEWSERV = process.env.NEWSERV ?? join(ROOT, 'vendor/newserv');
@@ -260,6 +261,26 @@ const tex = { panel: { name: 'panel' }, icons: { name: 'icons' }, font: { name: 
   check(m.visible.length === 1 && m.pending === 2, 'first line at once');
   for (let i = 0; i < 0x16; i++) m.tick();
   check(m.visible.length === 2, 'second line 0x16 frames later');
+}
+
+{
+  // The level-up light (update_lighting_of_particle_effect_on_player): 10
+  // frames, half = 5; intensities to 1.0 / 1.0 and back, the colour
+  // (1, 0.8, 0.63) then 10% per frame back to the player's own.
+  check(LEVEL_UP_PARTICLE === 0x23 && LEVEL_UP_LIGHT_FRAMES === 10 && LEVEL_UP_LIGHT_HALF === 5, 'particle 0x23, 10 frames');
+  const primary = { diffuse: 0.6, ambient: 0.3 };
+  const l = new LevelUpLight();
+  const states = [];
+  while (!l.done) states.push(l.tick(primary));
+  check(states.length === 11, `frames 0..10 (${states.length})`);
+  check(states[0].diffuse === 0.6 && states[0].ambient === 0.3, 'frame 0 = the area light');
+  check(Math.abs(states[4].diffuse - (0.8 * 0.4 + 0.6)) < 1e-9 && Math.abs(states[4].ambient - (0.8 * 0.7 + 0.3)) < 1e-9, 'frame 4: 4/5 of the way');
+  check(states[5].diffuse === 1 && states[5].ambient === 1, 'frame 5: the targets');
+  check(Math.abs(states[10].diffuse - 0.6) < 1e-9 && Math.abs(states[10].ambient - 0.3) < 1e-9, 'frame 10: back to the area light');
+  check(states[4].color.join() === LEVEL_UP_COLOR.join(), 'first half in the level-up colour');
+  check(Math.abs(states[5].color[2] - (0.63 + 0.37 * 0.1)) < 1e-9, 'then 10% per frame back to white');
+  const k = lightScale(states[5], primary);
+  check(Math.abs(k[0] - (1 + 0.5) / (0.3 + 0.3)) < 1e-6 && k[2] < k[0], 'material scale: warm, brighter than the area');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

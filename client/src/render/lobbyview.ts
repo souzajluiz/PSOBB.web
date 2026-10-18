@@ -142,6 +142,8 @@ interface Marker {
   animator: PlayerAnimator | null;
   charClass: number;
   gait: Locomotion;
+  label: THREE.Sprite | null;
+  labelText: string;
 }
 
 // Stand-in until the model is loaded.
@@ -312,8 +314,10 @@ export class LobbyView {
     const group = new THREE.Group();
     const stand = capsule(p.charClass);
     group.add(stand);
+    let label: THREE.Sprite | null = null;
+    const labelText = `${p.name}  Lv${p.level}`;
     if (this.labels) {
-      const label = nameSprite(`${p.name}  Lv${p.level}`);
+      label = nameSprite(labelText);
       label.position.y = 24;
       group.add(label);
     }
@@ -333,6 +337,8 @@ export class LobbyView {
       animator: null,
       charClass: p.charClass,
       gait: 'idle',
+      label,
+      labelText,
     };
     this.markers.set(p.clientId, marker);
     void this.loadModel(p, marker);
@@ -525,6 +531,35 @@ export class LobbyView {
   }
 
   // --- combat hooks (render/combat.ts) --------------------------------------
+
+  // Redraws a player's name tag after a level change (6x30).
+  refreshNameTag(clientId: number): void {
+    const m = this.markers.get(clientId);
+    const p = this.lobby.players.get(clientId);
+    if (!m || !m.label || !p) return;
+    const text = `${p.name}  Lv${p.level}`;
+    if (text === m.labelText) return;
+    const next = nameSprite(text);
+    next.position.copy(m.label.position);
+    m.group.remove(m.label);
+    m.label.material.map?.dispose();
+    m.label.material.dispose();
+    m.group.add(next);
+    m.label = next;
+    m.labelText = text;
+  }
+
+  // The lit (Lambert) materials of a player's model, for the level-up light
+  // (render/levelupfx.ts).
+  playerLitMaterials(clientId: number): THREE.MeshLambertMaterial[] {
+    const m = this.markers.get(clientId);
+    const out = new Set<THREE.MeshLambertMaterial>();
+    m?.model?.traverse((o) => {
+      const mat = (o as THREE.Mesh).material;
+      for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) if (x instanceof THREE.MeshLambertMaterial) out.add(x);
+    });
+    return [...out];
+  }
 
   // Motion player of a player's model (null while the model loads).
   playerAnimator(clientId: number): PlayerAnimator | null {

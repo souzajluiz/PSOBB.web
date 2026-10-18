@@ -1,5 +1,56 @@
 # Devlog
 
+## 2026-10-18: Level-up light and particle
+
+**What changed:** a level change (6x30, own or another player's) on a field
+now runs the client's DisplayLevelUpMessage: the level-up SE for the local
+player, the "Level Up" / "Level Down" text, the particle burst 0x23
+(level_up02) that follows the player, and the 10-frame level-up light on the
+player's model; the player's name tag shows the new level. Code:
+`render/levelupfx.ts` (new), `render/combat.ts`, `render/lobbyview.ts`
+(refreshNameTag, playerLitMaterials).
+
+**Details** (Ephinea `PsoBB.exe`):
+- UpdatePlayerStatsAndLevelMessage_006928e4 calls DisplayLevelUpMessage
+  _00692aa4 only on a field (is_player_in_unsafe_map): SE 0x58d when player
+  +0x32c == 1 (PlayDirectionalSoundBasedOnAction_00692bf4), the text
+  (CreateJapaneseCharacterEntity_00789758, 0x3c frames),
+  SpawnChallengeEntity_00697c14 -> ChallengeEntityObject_Constructor_00697c88
+  -> create_particle_effect_3(&player->weapon_position, 0x23, 0x10) with the
+  slot as motion index. create_particle_effect_3 sets +0x34 = 1, so
+  update_particle_effect spawns max(rate, 1) particles once and ends; flag
+  0x10 keeps each particle at its offset from the entity (the particle update
+  around FindEntityById_007b4d18).
+- The light: BaseGameObject_Constructor_006eb52c (vtable 0x00b3dd18) with
+  colour {a 1, r 1, g 0.8, b 0.63} (0x00aab48c), direction (0, -1, 0), 10
+  frames, step 0.2, targets diffuse / ambient 1.0, then
+  UpdateLightDefinition_00794984(slot, 1.0, 0.5).
+  update_lighting_of_particle_effect_on_player (0x006eb714): half =
+  round(10 * 0.5) (0x0096dacc); frames < half lerp the intensities from the
+  area's primary light (g_PrimaryLightEntry_00a9d460) to the targets by
+  i / half in the level-up colour, later frames lerp back by (i - half) /
+  half while the colour moves 10% per frame back to the entity's own; the
+  object ends after frame 10. Colours are {a, r, g, b}
+  (SetD3DLightProperties_00794a44 reads +4 / +8 / +0xc).
+
+**Assumed:** the web renderer has one scene light, so the player's light is
+drawn by scaling its Lambert materials by (a + d * c * 0.5) / (a0 + d0 *
+0.5) (a mean N.L of 0.5) and the direction is left out; the particle spawns
+at the player's position (the weapon position is not tracked); the name tag
+is the web client's own label (the exe has none in this form). The level-up
+SE / text now also need a field, like the exe.
+
+**Tests:** `tests/level.test.ts`: the light's frames (area light at 0, 4/5
+at frame 4, the targets at 5, back at 10, 11 frames), the colour and its
+10% return, the material scale.
+
+**Checked in Chrome** (WebHunter, Forest 1, a 6x30 for the own client with
+the same level pushed through the combat handler): "Level Up" over the head,
+the particle entry 0x23 "level_up02" loaded (rate 10, life 10..16) and 10
+additive sprites drawn at the player's feet, the model's materials tinted
+warm (0xfff9f0) and restored after the light; refreshNameTag turned
+"WebHunter  Lv2" into "Lv3" and back. No console errors.
+
 ## 2026-10-18: Party members' windows
 
 **What changed:** the field HUD now shows the other players' small windows

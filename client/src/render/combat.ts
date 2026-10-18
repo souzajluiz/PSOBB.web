@@ -125,6 +125,7 @@ import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
 import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
 import { PlayerHud } from './playerhud.ts';
+import { LevelUpEffects } from './levelupfx.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
@@ -276,6 +277,8 @@ export class CombatView {
   progression: PlayerProgression | null = null;
   private levelTablePromise: Promise<LevelTable | null> | null = null;
   hud: PlayerHud | null = null;
+  // DisplayLevelUpMessage_00692aa4's particle and light (render/levelupfx.ts).
+  private levelUpFx: LevelUpEffects | null = null;
   // Ryuker's pipe (render/telepipe.ts): whether one can be opened here
   // (SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0) and opening it.
   telepipe: { allowed: () => boolean; open: () => boolean } | null = null;
@@ -366,6 +369,12 @@ export class CombatView {
       this.hud = new PlayerHud(this.viewer, this.files);
       this.hud.log = this.opts.log;
     }
+    this.levelUpFx ??= new LevelUpEffects(this.viewer, this.files, {
+      position: (id) => this.view?.playerPositions().get(id) ?? null,
+      litMaterials: (id) => this.view?.playerLitMaterials(id) ?? [],
+      primary: () => ({ diffuse: this.viewer.directionalLight.intensity / Math.PI, ambient: this.viewer.ambientLight.intensity / Math.PI }),
+      log: this.opts.log,
+    });
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
       inner?.(dt, keys);
@@ -1920,7 +1929,8 @@ export class CombatView {
         this.party.stats(c.clientId, this.partyStats(other));
         if (this.area !== 0) this.party.refill(c.clientId);
       }
-      this.hud?.levelUpPopup(head(c.clientId), c.levelDown);
+      view?.refreshNameTag(c.clientId);
+      this.displayLevelUp(c, head(c.clientId));
       return;
     }
     const p = this.progression;
@@ -1937,9 +1947,21 @@ export class CombatView {
     // hp = max_hp1, tp2 = max_tp2).
     if (!this.damage.dead) this.damage.hp = this.damage.maxHp;
     this.tp = p?.maxTp ?? this.tp;
-    this.hud?.levelUpPopup(head(c.clientId), c.levelDown);
-    this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
-    this.sePlayer?.play(SE_LEVEL_UP);
+    view?.refreshNameTag(c.clientId);
+    this.displayLevelUp(c, head(c.clientId));
+  }
+
+  // DisplayLevelUpMessage_00692aa4 (only on a field, is_player_in_unsafe_map):
+  // SE 0x58d for the local player, the "Level Up" / "Level Down" text, the
+  // particle 0x23 and the light (render/levelupfx.ts).
+  private displayLevelUp(c: ChangeLevel, head: () => THREE.Vector3 | null): void {
+    if (this.area === 0) return;
+    if (c.clientId === this.game.selfId) {
+      this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+      this.sePlayer?.play(SE_LEVEL_UP);
+    }
+    this.hud?.levelUpPopup(head, c.levelDown);
+    void this.levelUpFx?.play(c.clientId);
   }
 
   // The equipped weapon's ItemPMT min ATA (the ATA the level-up message
@@ -2238,6 +2260,8 @@ export class CombatView {
     this.hpReadout?.remove();
     this.hpReadout = null;
     this.hud?.dispose();
+    this.levelUpFx?.dispose();
+    this.levelUpFx = null;
     this.hud = null;
   }
 }
