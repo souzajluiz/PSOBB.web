@@ -1,5 +1,61 @@
 # Devlog
 
+## 2026-10-18: Status effects on enemies
+
+**What changed:** enemies can now be paralyzed, frozen, shocked and
+confused. `combat/enemystatus.ts` holds an enemy's two status slots, the
+immunities by enemy kind, the durations, the EVP multipliers and the lock;
+`render/combat.ts` ticks them, stops a locked enemy (no AI, no flinch, the
+motion held), rolls Gibarta / Rabarta's freeze and the Zonde family's shock,
+and carries the status bits in `6x0A` (`6x9C` in Ultimate) both ways. The
+weapon specials that inflict them are the next entry.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Infliction**, the enemy branches of the shared entity functions:
+  maybe_paralyze_entity (0x007789c8) skips machines (+0x2e8 & 4), EVP -0.15
+  (0x00978100), 0xd2 frames; confuse_entity (0x00778be8) skips mini-bosses
+  (+0x2e8 & 0x10), 300 frames; freeze_entity (0x00778cc0) no refreeze while
+  frozen, EVP -0.3 (0x0097810c), 0x96 frames; shock_entity (0x00778e40)
+  takes only on machines, EVP -0.15 (0x0097811c), 300 frames. poison_entity
+  and slow_entity only take on entities below 0x1000 / 0x1001: never an
+  enemy.
+- **Enemy kind** (+0x2e8): the constructors and set_enemy_attribute_to_*
+  (Forest native, Caves A.beast, Mines machine, Ruins dark; Gibbles, Gi Gue,
+  Mericarol, Dorphon with the mini-boss bit).
+- **Lock:** update_enemy_control_object (0x00787a80) runs vtable +0xa0
+  (confusion tick), then +0x98 (paralysis), +0xa8 (shock), +0xa4 (freeze)
+  and stops at the first that returns 1; then the enemy only refreshes its
+  reticle and minimap icon, skipping the AI and the damage reaction. A
+  confused enemy keeps acting.
+- **Sync:** send_packet0x60_subcommand0xa (0x00787710) sends the whole flag
+  word; in Ultimate the low six bits are cleared and the new ones go first as
+  `6x9C` (0x007877bc). action_hit_enemy (0x007877e8) -> restore_enemy_status
+  calls the entry of every newly set bit (not in Ultimate);
+  handle_packet0x60_subcommand0x9c (0x007878f4) does it in Ultimate.
+- **Technique rolls** (entity_hit_by_tech, jump table 0x00977ea0): group 2
+  (Gibarta / Rabarta, 0x0077494a) c = (max(0, p - 250) * 0.025 + 5) * 0.025
+  on the hit's power argument, min 0.4, 0.2 in Ultimate above 0.2; group 3
+  (Zonde family, 0x00774760) 1/15, 0.025 in Ultimate. Barta (group 0x13)
+  has no roll.
+
+**Assumed:** the motion holds while locked; the kinds of the Dimenian
+family, Claw / Bulclaw / Bulk and the Rappies (runtime rappy_attributes)
+follow their area; the immunity bits +0x11c and the flags 0x8000 /
+0x1000000 are 0 on every enemy; the look of the effects (a tinted pulse
+instead of particles 0x26 / 0x21 / 0x24 and the ice object). Left out: what
+a confused enemy does differently.
+
+**Tests:** `tests/enemystatus.test.ts` (new): kinds, immunities, durations,
+EVP, the lock and its chain order, `6x0A` / `6x9C` bits both ways, the
+technique rolls.
+
+**Checked in Chrome** (WebHunter, Forest 1, an Arrest Saber made with
+`$item`, rolls forced low from the console): a Booma was paralyzed (210
+frames), its motion held and it did not act; the outgoing `6x0A` carried
+flags 0x20900202 (paralysis bit); after ~7 s "paralysis wore off" and it
+walked again. A Blizzard Saber froze another Booma (40%), a Tempest Saber's
+shock was refused on a native Booma. No console errors.
+
 ## 2026-10-18: Poison Lily, Savage Wolf, Rag Rappy and Monest behaviour
 
 **What changed:** four Forest / Caves families now run their own state

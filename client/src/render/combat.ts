@@ -69,12 +69,14 @@ import {
   techData,
   techDamage,
   techElement,
+  techHitPower,
   techPower,
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
+import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
@@ -91,6 +93,7 @@ import {
   parseCastTechniqueComplete,
   parseChangeLevel,
   parseEnemyState,
+  parseEnemyStatusUltimate,
   parseExpMultiplier,
   parseGiveExp,
   parseHitByEnemy,
@@ -156,6 +159,8 @@ interface EnemyRuntime {
   exp: number; // BattleParamEntry exp of the enemy's stats row
   resist: TechResist; // ResistData efr / eic / eth / elt / edk
   buffs: EntityBuffs; // Jellen / Zalure (combat/buffs.ts)
+  status: EnemyStatus; // paralysis / freeze / shock / confusion (combat/enemystatus.ts)
+  esp: number; // BattleParamEntry esp (the specials' status resistance)
 }
 
 // The local player's technique cast in progress.
@@ -409,10 +414,12 @@ export class CombatView {
       let attacker: AttackerStats | null = null;
       let attack: EnemyAttackData | null = null;
       let exp = 0;
+      let esp = 0;
       let resist: TechResist = { efr: 0, eic: 0, eth: 0, elt: 0, edk: 0 };
       if (params && def && def.stats.length) {
         const s = params.stats(difficulty, def.stats[0]);
         exp = s.exp;
+        esp = s.esp;
         const r = params.resist(difficulty, def.resist[0] ?? def.stats[0]);
         stats = enemyDefender(s, r);
         resist = { efr: r.efr, eic: r.eic, eth: r.eth, elt: r.elt, edk: r.edk };
@@ -480,6 +487,8 @@ export class CombatView {
         exp,
         resist,
         buffs: new EntityBuffs(),
+        status: new EnemyStatus(enemyAttribute(head.slot.type)),
+        esp,
       });
     }
     this.difficultyParams = { params, difficulty, slots, base };
@@ -630,9 +639,48 @@ export class CombatView {
     return { ...a, atp: e.buffs.atp(a.atp), atpSpread: e.buffs.atpSpread(a.atpSpread) };
   }
 
-  // An enemy's defender stats with its Zalure applied.
+  // An enemy's defender stats with its Zalure and the status slots' EVP
+  // multipliers applied.
   private enemyDefenderOf(e: EnemyRuntime): DefenderStats {
-    return { ...e.stats, dfp: e.buffs.dfp(e.stats.dfp) };
+    return { ...e.stats, dfp: e.buffs.dfp(e.stats.dfp), evp: e.status.evp(e.stats.evp) };
+  }
+
+  private get ultimate(): boolean {
+    return (this.game.info?.difficulty ?? 0) === 3;
+  }
+
+  // The enemy's 6x0A (send_packet0x60_subcommand0xa): its status bits ride in
+  // the flags; in Ultimate they go out as a 6x9C first (combat/enemystatus.ts).
+  private sendEnemy(e: EnemyRuntime, flags: number): void {
+    const sync = e.status.syncBits(this.ultimate);
+    if (sync.ultimateBits) this.game.sendEnemyStatusUltimate(e.index, sync.ultimateBits);
+    this.game.sendEnemyState(e.index, e.stats.maxHp - e.stats.hp, flags | sync.flags);
+  }
+
+  // An effect landed on an enemy (vtable +0xbc / +0xc4 / +0xc8 / +0xcc).
+  private inflictEnemy(e: EnemyRuntime, type: StatusType, what: string): boolean {
+    if (e.dead || !e.status.inflict(type)) {
+      this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) resists ${STATUS_NAME[type]}`);
+      return false;
+    }
+    this.statusEffect(e, type);
+    if (e.status.locked) this.lockEnemy(e, true);
+    this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) ${STATUS_NAME[type]} (${e.status.describe()})`);
+    return true;
+  }
+
+  // ASSUMED look: the client's particles (0x26 paralysis, 0x21 shock, 0x24
+  // confusion) and the freeze's ice object are drawn as a tinted pulse.
+  private statusEffect(e: EnemyRuntime, type: StatusType): void {
+    const p = e.instance.root.position;
+    const kind = type === STATUS.freeze ? 'ice' : type === STATUS.shock ? 'lightning' : type === STATUS.paralysis ? 'light' : 'dark';
+    this.overlay?.techEffect(kind, p.x, p.y, p.z, 10);
+  }
+
+  // update_enemy_control_object returns before the AI while paralysis, shock
+  // or freeze holds; ASSUMED the motion holds too.
+  private lockEnemy(e: EnemyRuntime, locked: boolean): void {
+    for (const a of e.instance.animators) a.paused = locked;
   }
 
   // Players an enemy can target: on this floor and alive.
@@ -653,8 +701,17 @@ export class CombatView {
   private tickEnemies(): void {
     const targets = this.aiTargets();
     for (const e of [...this.enemies.values()]) {
+      if (e.dead || !e.instance.root.visible) continue;
+      // The status block of update_enemy_control_object (combat/enemystatus.ts).
+      if (e.status.flags) {
+        const st = e.status.tick();
+        for (const t of st.ended) this.opts.log(`${STATUS_NAME[t]} on E-${e.index.toString(16)} wore off`);
+        if (st.pulse) this.statusEffect(e, st.pulse);
+        this.lockEnemy(e, st.locked);
+        if (st.locked) continue;
+      }
       // An enemy whose wave has not spawned is not in the room yet.
-      if (e.dead || e.state !== 'idle' || !e.instance.root.visible) continue;
+      if (e.state !== 'idle') continue;
       const ended = e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended);
       if (e.monest) {
         this.tickMonest(e, targets, ended);
@@ -758,9 +815,11 @@ export class CombatView {
     let attack: EnemyAttackData | null = null;
     let attacker: AttackerStats | null = null;
     let exp = 0;
+    let esp = 0;
     let resist: TechResist = { efr: 0, eic: 0, eth: 0, elt: 0, edk: 0 };
     if (params && def && def.stats.length) {
       const st = params.stats(difficulty, def.stats[0]);
+      esp = st.esp;
       const rs = params.resist(difficulty, def.resist[0] ?? def.stats[0]);
       stats = enemyDefender(st, rs);
       resist = { efr: rs.efr, eic: rs.eic, eth: rs.eth, elt: rs.elt, edk: rs.edk };
@@ -800,6 +859,8 @@ export class CombatView {
       exp,
       resist,
       buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute('MOTHMANT')),
+      esp,
     };
     this.enemies.set(index, runtime);
     // It sinks to its flying height (ASSUMED) as it starts to move.
@@ -924,6 +985,7 @@ export class CombatView {
   private press(type: AttackType): void {
     const me = this.game.self;
     if (!me || !this.view || this.cast) return;
+
     if (this.attack?.active) {
       this.attack.press(type);
       return;
@@ -1041,15 +1103,15 @@ export class CombatView {
   private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string): void {
     const me = this.game.self;
     const flags = baseFlags | applyDamage(e.stats, damage);
-    const total = e.stats.maxHp - e.stats.hp;
-    this.game.sendEnemyState(e.index, total, flags);
+    this.sendEnemy(e, flags);
     // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
     const p = e.instance.root.position;
     this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
     // The enemy turns on its attacker (unknown_enemy_behavior_4).
     if (damage >= 1 && me) e.ai?.onDamage(me.clientId);
+    // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
-    else if (damage >= 1) this.playDamage(e);
+    else if (damage >= 1 && !e.status.locked) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );
@@ -1347,7 +1409,7 @@ export class CombatView {
       group === GROUP.jellen && e.attacker
         ? `ATP ${e.attacker.atp} -> ${e.buffs.atp(e.attacker.atp)}`
         : `DFP ${e.stats.dfp} -> ${e.buffs.dfp(e.stats.dfp)}`;
-    if (own) this.game.sendEnemyState(e.index, e.stats.maxHp - e.stats.hp, ENEMY_BASE_FLAGS);
+    if (own) this.sendEnemy(e, ENEMY_BASE_FLAGS);
     this.opts.log(`${what}: E-${e.index.toString(16)} ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
   }
 
@@ -1382,6 +1444,17 @@ export class CombatView {
       return;
     }
     const damage = techDamage(tech, level, mst, charClass, e.resist);
+    // entity_hit_by_tech's status rolls after the damage (the local caster
+    // rolls): Gibarta / Rabarta freeze, the Zonde family shock
+    // (combat/enemystatus.ts).
+    let status: StatusType | null = null;
+    if (tech === TECH.gibarta || tech === TECH.rabarta) {
+      const c = techFreezeChance(techHitPower(tech, level, mst, charClass), this.ultimate);
+      if (this.rng() < c) status = STATUS.freeze;
+    } else if (tech === TECH.zonde || tech === TECH.gizonde || tech === TECH.razonde) {
+      if (this.rng() < techShockChance(this.ultimate)) status = STATUS.shock;
+    }
+    if (status !== null && !e.dead) this.inflictEnemy(e, status, name);
     this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `);
   }
 
@@ -1655,6 +1728,14 @@ export class CombatView {
       const e = this.enemies.get(s.enemyIndex);
       if (!e) return;
       e.stats.hp = Math.max(0, e.stats.maxHp - s.totalDamage);
+      // restore_enemy_status: the status bits that are new on this enemy.
+      if (!(s.flags & FLAG_DEAD)) {
+        for (const t of e.status.receiveFlags(s.flags, this.ultimate)) {
+          this.statusEffect(e, t);
+          this.opts.log(`E-${e.index.toString(16)} ${STATUS_NAME[t]} (6x0A from another client)`);
+        }
+        if (e.status.locked) this.lockEnemy(e, true);
+      }
       if (s.flags & FLAG_DEAD) {
         if (!e.dead) {
           e.dead = true;
@@ -1687,6 +1768,18 @@ export class CombatView {
       if (clientId === this.game.selfId) return;
       this.deadPlayers.delete(clientId);
       this.playRemoteMotion(clientId, 'revive', 40);
+      return;
+    }
+    if (sub === 0x9c) {
+      const u = parseEnemyStatusUltimate(body);
+      const e = u ? this.enemies.get(u.enemyIndex) : undefined;
+      if (!u || !e || clientId === this.game.selfId) return;
+      const t = e.status.receiveUltimate(u.bits, this.ultimate, e.dead);
+      if (t !== null) {
+        this.statusEffect(e, t);
+        if (e.status.locked) this.lockEnemy(e, true);
+        this.opts.log(`player ${clientId}: E-${e.index.toString(16)} ${STATUS_NAME[t]} (6x9C)`);
+      }
       return;
     }
     if (sub === 0x0c || sub === 0x0d) {

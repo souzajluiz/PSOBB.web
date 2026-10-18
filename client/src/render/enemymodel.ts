@@ -160,6 +160,8 @@ export class NodeAnimator {
   private loop: boolean;
   private tickRemainder = 0;
   frame = 0;
+  // Holds the motion (an enemy locked by paralysis, shock or freeze).
+  paused = false;
   // A looping motion that goes back to frame 0 instead of carrying the
   // overshoot over: 'past' once the frame is past the last one
   // (UpdateSeabedTuriganeWarpPosition_0066d28c: frame > count - 1), 'last'
@@ -220,7 +222,7 @@ export class NodeAnimator {
 
   update(dt: number): void {
     const m = this.motion;
-    if (m.frameCount <= 1) return;
+    if (m.frameCount <= 1 || this.paused) return;
     this.tickRemainder += dt * GAME_TICKS_PER_SECOND;
     const ticks = Math.min(Math.floor(this.tickRemainder), 30);
     this.tickRemainder -= Math.floor(this.tickRemainder);

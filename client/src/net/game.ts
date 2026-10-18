@@ -840,6 +840,20 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, buildEnemyState(enemyIndex, totalDamage, flags));
   }
 
+  // 6x9C (G_SetEnemyLowGameFlagsUltimate_6x9C, 8): {entity id 0x1000 | index}
+  // {u32 status bits}, sent by 0x007877bc in Ultimate before the 6x0A whose
+  // low six bits it carries (combat/enemystatus.ts).
+  sendEnemyStatusUltimate(enemyIndex: number, bits: number): void {
+    const b = new Uint8Array(8);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x9c;
+    b[1] = 2;
+    dv.setUint16(2, 0x1000 | enemyIndex, true);
+    dv.setUint32(4, bits >>> 0, true);
+    this.conn.send(0x60, 0, b);
+  }
+
+
   // A killed enemy is reported with 6x76 flags 8 (sendEntitySetFlags above).
 
   // 6x60 (G_StandardDropItemRequest_PC_V3_BB_6x60, 0x18) for a killed enemy,
@@ -1084,6 +1098,15 @@ export function parseEnemyState(body: Uint8Array): EnemyStateUpdate | null {
   if (body.length < 0x0c || body[0] !== 0x0a) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
   return { enemyIndex: dv.getUint16(4, true), totalDamage: dv.getUint16(6, true), flags: dv.getUint32(8, true) };
+}
+
+// 6x9C from another client: {entity id, u32 status bits}.
+export function parseEnemyStatusUltimate(body: Uint8Array): { enemyIndex: number; bits: number } | null {
+  if (body.length < 8 || body[0] !== 0x9c) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const id = dv.getUint16(2, true);
+  if (id < 0x1000 || id >= 0x4000) return null;
+  return { enemyIndex: id - 0x1000, bits: dv.getUint32(4, true) };
 }
 
 // 6x43 / 6x44 / 6x45 from another client.

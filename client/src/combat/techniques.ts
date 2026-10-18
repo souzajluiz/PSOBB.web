@@ -246,9 +246,14 @@ export interface TechResist {
 export function techDamage(tech: number, level: number, mst: number, charClass: number, resist: TechResist): number {
   const el = techElement(tech);
   const r = el === 'fire' ? resist.efr : el === 'ice' ? resist.eic : el === 'lightning' ? resist.eth : el === 'light' ? resist.elt : 0;
+  return f32(f32((100 - r) * TECH_DAMAGE_SCALE) * techHitPower(tech, level, mst, charClass));
+}
+
+// The power argument entity_hit_by_tech gets: (MST + power) * (1 + boost).
+// Gibarta / Rabarta's freeze roll reads it (combat/enemystatus.ts).
+export function techHitPower(tech: number, level: number, mst: number, charClass: number): number {
   const power = Math.max(0, techPower(tech, level, charClass));
-  const d = f32(f32(Math.max(0, mst) + power) * f32(techBoost(charClass, tech) + 1));
-  return f32(f32((100 - r) * TECH_DAMAGE_SCALE) * d);
+  return f32(f32(Math.max(0, mst) + power) * f32(techBoost(charClass, tech) + 1));
 }
 
 // Megid's instant-kill chance.
