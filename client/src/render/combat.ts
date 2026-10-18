@@ -134,6 +134,7 @@ import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
+import type { PillarTrap, TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -976,6 +977,37 @@ export class CombatView {
     this.damage.hit(damage, angle, knockback, 0x1000 | e.index);
     if (damage >= 1) this.gainPb(damage, true);
     this.opts.log(`${what}: technique hit for ${damage}`);
+  }
+
+  // A pillar trap (render/traps.ts) acting on the local player.
+  //   hold: TOTrapAncient02's 6x2C; release: its 6x2D when the hold time ends.
+  //   tech: TOTrapAncient02R's technique (ProcessEnemyAttackState_0063b930).
+  //     ASSUMED: it lands at once (the exe launches create_directed_foie_object
+  //     / create_gifoie / unknown_create_sorc_tech / create_megid projectiles,
+  //     Zonde hits directly) with the group-0 formula of enemyTechHitsPlayer
+  //     with MST 0 and power techPower(tech, level) (Zonde: level * 20 + 240,
+  //     0x00934144 / 0x00934148, through a vtable call not traced), and Megid
+  //     with megidChance(level, 0).
+  trapEvent(ev: TrapEvent, trap: PillarTrap): void {
+    const what = `trap 0x${trap.type.toString(16)}`;
+    if (ev.kind === 'hold') this.imposeHold({ ...ev, particle: 0 }, what);
+    else if (ev.kind === 'release') {
+      if (this.holdTicks > 0) this.game.sendReleaseHold();
+      this.holdTicks = 0;
+      this.opts.log(`${what}: hold released`);
+    } else if (ev.kind === 'tech' && ev.clientId === this.game.selfId && !this.damage.dead) {
+      if (ev.tech === 'megid') {
+        this.enemyMegidHitsPlayer(Math.max(0, techPower(TECH.megid, ev.level)), what);
+        return;
+      }
+      const power = ev.tech === 'zonde' ? ev.level * 20 + 240 : Math.max(0, techPower(TECH[ev.tech], ev.level));
+      const damage = Math.trunc(power * Math.fround(0.2));
+      const me = this.view?.playerPositions().get(this.game.selfId);
+      const angle = me ? Math.atan2(me.x - trap.x, me.z - trap.z) : 0;
+      this.damage.hit(damage, angle, 0, 0);
+      if (damage >= 1) this.gainPb(damage, true);
+      this.opts.log(`${what}: ${ev.tech} level ${ev.level + 1} hit for ${damage}`);
+    }
   }
 
   // 6x2C on the local player (a Grass Assassin's web).

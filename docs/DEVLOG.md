@@ -1,5 +1,65 @@
 # Devlog
 
+## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
+
+**What changed:** the pillar traps run their state machines: when a player
+comes within the radius the pillar rises in two segments, then
+TOTrapAncient02 holds the local player (`6x2C`, released with `6x2D` when the
+hold time ends) and TOTrapAncient02R casts its technique at the target, then
+both sink back. The model's nodes move as the exe draws them (root, child,
+spinning part) and the area's trap SE plays. Vol Opt's seal door
+(TODoorVoShip) now follows quest flags `0x2c`..`0x2f`: one lamp goes out per
+flag, the lamps pulse, and `0x2f` removes the door and its collision. Code:
+`render/traps.ts` (new), `render/gamefield.ts`, `render/fieldobjects.ts`,
+`render/objectview.ts`, `render/combat.ts`, `net/game.ts` (`6x2D`).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Objects**: TOTrapAncient02 (0x0154, create 0x0063bfd4, ctor
+  InitializeDerolleEnemyBase_0063c638, vtable 0x00b2d7c0) and 02R (0x0167,
+  create 0x0063b4e8, ctor 0x0063b5b4, vtable 0x00b2d940). Radius param1 *
+  0.5 + 30 (0x00934128 / 0x00934168, 0x00934160), hold time param4 + 30; 02R:
+  switch flag param5 (0..0xFF), technique param6 (0 Foie, 1 Zonde, 2 Grants,
+  3 Megid, 4 Gifoie), level round(1 + 2 * difficulty + param3) clamped to
+  14 (29 in Ultimate) (0x0063bf48). Free-play maps only place 02R (VR Temple,
+  Jungle, Seabed); 02 is quest-only.
+- **States** (EnemyAIUpdateState_0063a034 through vtable +0x144..+0x158):
+  idle 0x0063a3d8 / 0x0063be8c (02R waits for its switch flag): the nearest
+  player whose XZ distance (0x007a9180) is under the radius -> spring.
+  Spring 0x0063c990 / ProcessEnemyAttackState_0063b930: +0x34c to 7, +0x350
+  to 10.15 (0x0093413c), then with r = radius -/+ the player's radius: 02 sends
+  the local player's 6x2C (SnowBerillSendAttackPacket_006937c8: frames =
+  the hold counter, particle 0, the trap's x / z, r^2), 02R casts; nobody ->
+  sink. Hold 0x0063c7f4 / ProcessPlayerStunState_0063b828: the counter runs
+  down, then sink, and 02 sends 6x2D (DisablePlayerMovement_00685514).
+  UpdateTreeObject_0063cbe4: +0x354 += 0x888, SE 0x456 / 0x46b / 0x489 /
+  0x4b5 (Caves / Mines / Ruins / Spaceship).
+- **Render** (RenderSeabedPillarMapObject_0063c2bc / _0063c43c): root node +
+  0x34c, its child + 0x350, the child's second child turns by +0x354.
+- **Seal door** (ctor InitializeLabodoorMapObject_00622648, update
+  0x006224a4, render 0x00622358): seal bits 0x0e; quest flag 0x2c clears 2,
+  0x2d 4, 0x2e 8, 0x2f all and the box (ctor and every frame); the lamp
+  root's children in order are bits 4, 2, 8; the color alpha +0xdc swings by
+  0.05 (0x0093152c) between -1 and 0 under bit 0x10.
+
+**Verified:** `tests/traps.test.ts`. In Chrome (Episode 2, VR Temple Alpha):
+six 02R traps built with their params (radius 80 / 105, Foie level 3, one on
+switch flag 40); with the player placed next to one it rose (root -7 -> 0,
+child 6.3 -> 16.5, the top part spinning) and its Foie hit the player for 42.
+Vol Opt (Episode 1): after constructing the door's group, setting 0x2d, 0x2c
+and 0x2f put out lamps 1 and 2 and then removed the door and its obstacle
+(the flags were cleared again afterwards). Screenshots were not available
+(the tab's renderer did not answer capture requests).
+
+**Assumed:** EnemyGetNearestTargetInRange_007714cc is the nearest player in
+range (its body is not in the dump); the 02R's room check is left out; its
+technique lands at once with the group-0 formula, MST 0 and techPower (Zonde:
+level * 20 + 240), Megid with megidChance (the exe launches projectiles); the
+trap SE plays once when the trap springs (the exe calls it every frame of
+states 1..3); trap vision (state 1's marker, the cloaked render) is not
+drawn; the seal lamps' color as a brightness of 1 + alpha; the door's .njs
+shape motion is still left out; the 02 hold was only unit tested (no
+free-play map places one).
+
 ## 2026-10-18: Full join sync: 6x6B / 6x6C / 6x6E / 6x6F sent and applied
 
 **What changed:** when a player joins a game we lead, the web client now

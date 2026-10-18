@@ -66,7 +66,8 @@
 - [x] Map warps (intra-floor): `TObjMapWarpForest`, `TObjCityMapWarp`, `TObjMapWarpAncient`, `TObjLaboMapWarp` menus and `6x55` (sent and received)
 - [x] Pioneer 2 doors (shop, guild, Ragol warp, medical center) with their own open/close distances, the Lab's city warps and map warp, the city warp beams' real speed
 - [x] Jungle rocks, trap pillars and Vol Opt's ship door models; the lobby door 0x54 and shop generators draw nothing; `construct_objects` (delayed objects by room/group) and the door unlock camera
-- [ ] Trap behavior (TOTrapAncient02), Vol Opt ship door seal lamps and shape motion
+- [x] Pillar traps TOTrapAncient02 / 02R (rise, hold `6x2C`/`6x2D`, technique, sink) and Vol Opt's seal door lamps from quest flags `0x2c`..`0x2f` (`render/traps.ts`, `tests/traps.test.ts`)
+- [ ] Vol Opt seal door `.njs` shape motion; trap vision (cloaked traps); the 02R's technique projectiles
 - [x] Boss fight music phases (`audio/bossbgm.ts`: the track of every phase and the `6x15`/`6x19`/`6xA4`/`6xA5` triggers) and `6x6A` boss warp gathering (`render/bosswarp.ts`: confirmation, party list, 300-frame gather, warp) — `tests/bossrooms.test.ts`
 - [x] CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps (flags = param5), the jungle warp beams (color by param6, 4 frames per tick, radius 15)
 - [x] The boss warp object's beams by 6x6A state (idle / gather + warp / occupied + locked); the client has no boss-warp cutscene camera

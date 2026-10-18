@@ -37,6 +37,9 @@ import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, type WaveEnemy } from './waves.ts';
 import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
+import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
+import { PLAYER_RADIUS } from '../combat/enemyfsm.ts';
+import { se } from '../audio/se.ts';
 import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
 import { areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
@@ -52,6 +55,9 @@ export interface GameFieldOptions {
   // The NPC talk's camera mover view (render/npcview.ts), if any.
   talkCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
   toLobby: () => void;
+  // A pillar trap's hold or technique on a player (render/traps.ts); combat
+  // applies those on the local player.
+  trap?: (e: TrapEvent, trap: PillarTrap) => void;
   log: (msg: string) => void;
 }
 
@@ -106,6 +112,7 @@ export class GameField {
   private sections: MapSection[] = [];
   private enemyFirstSlot: number[] = [];
   private enemyBase = 0;
+  private traps: Array<{ index: number; trap: PillarTrap }> = []; // TOTrapAncient02 / 02R of the floor
   private battleFrames = 0; // 0x5a countdown after the room is cleared
   private battle = false;
   private frameAcc = 0;
@@ -262,6 +269,14 @@ export class GameField {
     }
     this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision, this.constructedOf(floor));
     this.objects.onSwitch = (s) => this.pressSwitch(s);
+    this.objects.questFlag = (f) => this.game.getQuestFlag(f);
+    const difficulty = this.game.info?.difficulty ?? 0;
+    this.traps = [];
+    for (const p of e.placed) {
+      const o = p.entity;
+      if (o.kind !== 'object' || (o.type !== TRAP_HOLD && o.type !== TRAP_TECH)) continue;
+      this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], z: p.world[2], params: o.params, difficulty }) });
+    }
     this.objects.onEventTrigger = (t) => {
       this.opts.log(`event trigger ${t.index}: event ${t.eventId}`);
       this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
@@ -435,6 +450,7 @@ export class GameField {
     this.frameAcc -= Math.floor(this.frameAcc);
     const w = this.waves.get(this.floor);
     for (let i = 0; i < ticks; i++) w?.frame();
+    if (ticks && this.traps.length) this.trapFrames(ticks, pos);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
@@ -451,6 +467,29 @@ export class GameField {
     if (talk) {
       this.viewer.camera.position.set(talk.source.x, talk.source.y, talk.source.z);
       this.viewer.camera.lookAt(talk.target.x, talk.target.y, talk.target.z);
+    }
+  }
+
+  // The floor's pillar traps (render/traps.ts) on the game clock. Every client
+  // runs them; a trap only acts on the local player (6x2C / 6x2D go out from
+  // combat), the others see the trap rise.
+  private trapFrames(ticks: number, pos: { x: number; y: number; z: number } | null): void {
+    const players: TrapPlayer[] = [];
+    const me = this.game.self;
+    if (me && pos) players.push({ clientId: me.clientId, x: pos.x, z: pos.z, radius: PLAYER_RADIUS });
+    for (const p of this.game.players.values()) {
+      if (p.clientId === me?.clientId || p.floor !== this.floor || p.visible === false) continue;
+      players.push({ clientId: p.clientId, x: p.position.x, z: p.position.z, radius: PLAYER_RADIUS });
+    }
+    const switchOn = (flag: number) => this.flagsOf(this.floor).has(flag);
+    for (const { index, trap } of this.traps) {
+      for (let i = 0; i < ticks; i++) {
+        for (const ev of trap.frame(players, this.game.selfId, this.area, switchOn)) {
+          if (ev.kind === 'sound') se(ev.id);
+          else this.opts.trap?.(ev, trap);
+        }
+      }
+      this.objects?.setTrapPose(index, trap.rise1, trap.rise2, trap.spin);
     }
   }
 

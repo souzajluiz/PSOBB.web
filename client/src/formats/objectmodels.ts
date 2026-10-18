@@ -521,9 +521,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // box off) are gone; while sealed it draws the door with both motions and
     // the lamp root, then each lamp child whose bit is still set, in a color
     // whose alpha +0xdc swings between -1 and 0 by 0.05 a frame (render flag
-    // 0x20). Here the door and the whole lamp model are drawn; the per-seal
-    // lamps, the swinging color, the .njs shape motion and the quest flags
-    // are left out.
+    // 0x20). The seals, lamps and color: render/traps.ts SealDoor; the .njs
+    // shape motion (+0xd0, motion 1) is still left out.
     case 0x0130:
       return spec(
         'TODoorVoShip',
@@ -711,9 +710,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // the Episode 2 towers (0x17..0x1d, 0x22, 0x23) bm_obj_seabed_pillar.bml;
     // everywhere else (the Mines, the Ruins, the Spaceship)
     // bm_fs_obj_o_torabasami.bml. Box 0x009c684c: a sphere of radius 2, 8.5
-    // up. The trap's state machine
-    // (the jaws closing on a player, its damage and sounds) is not
-    // reproduced: the model stands in its bind pose (ASSUMED).
+    // up. The state machine (rise, hold / technique, sink) and the node
+    // lifts are render/traps.ts PillarTrap.
     case 0x0154:
     case 0x0167: {
       const name = o.type === 0x0154 ? 'TOTrapAncient02' : 'TOTrapAncient02R';

@@ -939,6 +939,16 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // 6x2D (G_ReleaseHold_6x2D, 4): {u8 0x2d, u8 1, u16 client id}, as
+  // DisablePlayerMovement_00685514 builds it.
+  sendReleaseHold(): void {
+    const b = new Uint8Array(4);
+    b[0] = 0x2d;
+    b[1] = 1;
+    new DataView(b.buffer).setUint16(2, this.selfId, true);
+    this.conn.send(0x60, 0, b);
+  }
+
   // 6x9C (G_SetEnemyLowGameFlagsUltimate_6x9C, 8): {entity id 0x1000 | index}
   // {u32 status bits}, sent by 0x007877bc in Ultimate before the 6x0A whose
   // low six bits it carries (combat/enemystatus.ts).

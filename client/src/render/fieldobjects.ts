@@ -61,6 +61,7 @@ import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import type { CollisionWorld, Obstacle } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
+import { SEAL_DOOR, SealDoor } from './traps.ts';
 
 export type WarpKind = 'area' | 'boss' | 'main' | 'cca' | 'map' | 'lobby';
 
@@ -468,6 +469,9 @@ export class FieldObjects {
   private flags: Set<number>; // switch flags of this floor
   private pressed = new Set<number>(); // switches the local player stands on
   private models: ObjectLayer | null;
+  // Quest flags of the current difficulty (Vol Opt's seal door reads 0x2c..0x2f).
+  questFlag: (flag: number) => boolean = () => false;
+  private seals = new Map<number, SealDoor>();
   private collision: CollisionWorld | null;
   // The boss warp the local player is using and its 6x6A state
   // (render/bosswarp.ts); the other boss warps sit in state 0, or 4 while
@@ -584,6 +588,11 @@ export class FieldObjects {
     return d?.camera ? { source: d.camera, target: [d.x, d.y, d.z] } : null;
   }
 
+  // A pillar trap's rise and spin (render/traps.ts).
+  setTrapPose(index: number, rise1: number, rise2: number, spin: number): void {
+    this.models?.setTrapPose(index, rise1, rise2, spin);
+  }
+
   setBossWarpState(index: number | null, state: number): void {
     this.drivenWarp = index === null ? null : { index, state };
   }
@@ -624,6 +633,17 @@ export class FieldObjects {
     for (const s of this.switches) this.models?.setState(s.index, this.flags.has(s.flag) ? 'on' : 'off');
     const players = self ? [self, ...others] : others;
     for (const d of this.doors) {
+      if (d.type === SEAL_DOOR) {
+        // Not a door state machine: sealed (box on) until quest flag 0x2f.
+        let seal = this.seals.get(d.index);
+        if (!seal) this.seals.set(d.index, (seal = new SealDoor(this.questFlag)));
+        seal.frame(this.questFlag);
+        d.state = seal.sealed ? 0 : 5;
+        this.models?.setVisible(d.index, seal.sealed);
+        this.models?.setSealLamps(d.index, seal.lamps(), seal.alpha);
+        if (d.mesh) d.mesh.visible = seal.sealed;
+        continue;
+      }
       const nearest = players.reduce((m, p) => Math.min(m, dist3(d, p)), Infinity);
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
       if (d.city) stepCityDoor(d, players.reduce((m, p) => Math.min(m, Math.hypot(d.x - p.x, d.z - p.z)), Infinity), frames);

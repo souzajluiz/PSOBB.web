@@ -190,6 +190,47 @@ export class ObjectLayer {
     });
   }
 
+  // Pillar traps (render/traps.ts; RenderSeabedPillarMapObject_0063c2bc):
+  // the root node lifted by `rise1`, its child (+0x2c) by `rise2` more, the
+  // child's child drawn as it is and that one's sibling (+0x30) turned by
+  // `spin` (BAMS) about Y.
+  setTrapPose(index: number, rise1: number, rise2: number, spin: number): void {
+    const m = this.models.get(index);
+    const nodes = m?.parts[0]?.nodes;
+    if (!nodes?.length) return;
+    const set = new Set(nodes);
+    const kidsOf = (n: THREE.Object3D) => n.children.filter((c) => set.has(c));
+    const root = nodes[0];
+    const child = kidsOf(root)[0];
+    const base = (n: THREE.Object3D) => (n.userData.trapBaseY ??= n.position.y) as number;
+    root.position.y = base(root) + rise1;
+    if (!child) return;
+    child.position.y = base(child) + rise2;
+    const spinner = kidsOf(child)[1];
+    if (spinner) {
+      spinner.userData.trapBaseRot ??= spinner.rotation.y;
+      spinner.rotation.y = (spinner.userData.trapBaseRot as number) + (spin / 0x10000) * Math.PI * 2;
+    }
+  }
+
+  // TODoorVoShip (render/traps.ts SealDoor): part 1 is the lamp model; the
+  // root's children in order are the lamps; `alpha` (-1..0) darkens them
+  // (ASSUMED: the render's color {alpha, 0, 0, 0} with flag 0x20 read as a
+  // brightness of 1 + alpha).
+  setSealLamps(index: number, lit: readonly boolean[], alpha: number): void {
+    const part = this.models.get(index)?.parts[1];
+    const nodes = part?.nodes;
+    if (!part || !nodes?.length) return;
+    const set = new Set(nodes);
+    const kids = nodes[0].children.filter((c) => set.has(c));
+    kids.forEach((k, i) => (k.visible = lit[i] ?? false));
+    const v = Math.max(0, Math.min(1, 1 + alpha));
+    part.group.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) (m as THREE.MeshBasicMaterial).color?.setRGB(v, v, v);
+    });
+  }
+
   setVisible(index: number, visible: boolean): void {
     const m = this.models.get(index);
     if (m) m.root.visible = visible;

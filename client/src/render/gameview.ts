@@ -127,6 +127,7 @@ export class GameView {
       tickQuest: (dt) => this.quest?.tick(dt),
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       talkCamera: () => this.npcs.talkCameraView(),
+      trap: (ev, trap) => this.combat.trapEvent(ev, trap),
     });
     this.items = new GameItems(game, { ...character, log });
     // Join sync (net/joinsync.ts): when we lead and a player joins, the
