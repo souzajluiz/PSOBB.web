@@ -167,6 +167,15 @@ const INVISIBLE_OBJECTS = new Set([
   'TObjEvtCollision', // the volume that triggers a wave event
   'TObjRoomId',
   'TObjCamera',
+  // TObjCityDoor_Lobby (0x0054, create 0x00646874, ctor 0x006468f0): its
+  // render slot is the empty 0x0061cdb0 and, online, the update
+  // (0x00646d10) does nothing; offline the ctor adds a wall of eight
+  // triangles to the map collision.
+  'TObjCityDoor_Lobby',
+  // TShopGenerator (0x0040, create 0x006d71e4, ctor 0x006d725c, vtable
+  // 0x00b3c780): render slot 0x0061cdb0; it only clears the shop's menu
+  // flag param1 (0..8) at +0x84.
+  'TShopGenerator',
 ]);
 
 // True when the class has no model on purpose, so a missing one is not a gap.
@@ -499,8 +508,32 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return simpleDoor('TODoorLabo', 'bm_obj_door_labo.bml', DOOR_BOX_20(0x009c551c), 'obj_o_labodoor_l_red.xvm', 'obj_o_labodoor_l_grn.xvm');
     case 0x02bb:
       return simpleDoor('TODoorLaboNormal', 'bm_obj_labodoor_nrm.bml', DOOR_BOX_20(0x009c551c), 'o_labodoor_nrm_red.xvm', 'o_labodoor_nrm_green.xvm');
-    // 0x0130 TODoorVoShip (Vol Opt's room, loader FUN_00622844) is left for
-    // the boss pass: its two models do not parse as XJ or NJ chunk files yet.
+    // TODoorVoShip (Vol Opt's seal door, area 0x0d): create 0x006225cc, ctor
+    // InitializeLabodoorMapObject_00622648, loader LoadLabodoorBMLData_00622844
+    // (bm_o_door_vo_ship.bml: two NJ chunk models, fe_obj_fuuin_singo_moto and
+    // fe_obj_fuuin_doa, the door's .njm and .njs). The ctor keeps model 1 with
+    // its own texture list 1 and motion 0 (+0x34 / +0x24 / +0xbc), whose frame
+    // +0xb0 grows by 1.0 (+0xb8) and wraps at the last frame (0x0061347c: limit
+    // = frame count - 1), and model 0 with list 0 (+0xd4 / +0xd8, the seal
+    // lamps). Box 0x009c5574: 20 x 10, 20 up. The render 0x00622358 (vtable
+    // 0x00b27fc0) draws nothing once the three seal bits of +0xcc (0xe; quest
+    // flags 0x2c / 0x2d / 0x2e clear one each, 0x2f all three and turns the
+    // box off) are gone; while sealed it draws the door with both motions and
+    // the lamp root, then each lamp child whose bit is still set, in a color
+    // whose alpha +0xdc swings between -1 and 0 by 0.05 a frame (render flag
+    // 0x20). Here the door and the whole lamp model are drawn; the per-seal
+    // lamps, the swinging color, the .njs shape motion and the quest flags
+    // are left out.
+    case 0x0130:
+      return spec(
+        'TODoorVoShip',
+        'bm_o_door_vo_ship.bml',
+        [
+          { model: 1, texlistOf: 1, motion: 0, drive: 'loop-last', speed: 1 },
+          { model: 0, texlistOf: 0 },
+        ],
+        { collision: BOX(0x009c5574, 20, 10, 20) },
+      );
 
     // ---- switches ----
     // TObjDoorKey (Forest/Cave switch): create 0x00658a90, ctor FUN_00658b0c;
@@ -668,6 +701,31 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TContainerAncient01', 'bm_obj_geenest.bml', [{ model: 0 }]);
     case 0x0153:
       return spec('TOTrapAncient01', 'bm_o_trap_ancient01.bml', [{ model: 3 }]);
+    // TOTrapAncient02 (0x0154, create 0x0063bfd4, ctor
+    // InitializeDerolleEnemyBase_0063c638) and TOTrapAncient02R (0x0167,
+    // create 0x0063b4e8, ctor 0x0063b5b4 on the same base): model 0 of
+    // g_pTreeBMLData (0x00a8f1d0) and that entry's own texture list
+    // (model array +0x42c, +8 / +0xc). The loader 0x0063c08c picks the archive
+    // by map (switch table 0x00933ff4): VR Temple (0x13, 0x14)
+    // bm_obj_ruins_pillar.bml; CCA, Jungle, Mountain, Seaside, Seabed and
+    // the Episode 2 towers (0x17..0x1d, 0x22, 0x23) bm_obj_seabed_pillar.bml;
+    // everywhere else (the Mines, the Ruins, the Spaceship)
+    // bm_fs_obj_o_torabasami.bml. Box 0x009c684c: a sphere of radius 2, 8.5
+    // up. The trap's state machine
+    // (the jaws closing on a player, its damage and sounds) is not
+    // reproduced: the model stands in its bind pose (ASSUMED).
+    case 0x0154:
+    case 0x0167: {
+      const name = o.type === 0x0154 ? 'TOTrapAncient02' : 'TOTrapAncient02R';
+      const collision: ObjectCollision = { address: 0x009c684c, offset: [0, 8.5, 0], type: 0, halfX: 2, halfZ: 2 };
+      const bml =
+        area === 0x13 || area === 0x14
+          ? 'bm_obj_ruins_pillar.bml'
+          : (area >= 0x17 && area <= 0x1d) || area === 0x22 || area === 0x23
+            ? 'bm_obj_seabed_pillar.bml'
+            : 'bm_fs_obj_o_torabasami.bml';
+      return spec(name, bml, [{ model: 0, texlistOf: 0 }], { collision });
+    }
     case 0x0155:
       return spec('TOMonumentAncient01', 'bm_fs_obj_o_sekihi01.bml', [{ model: 2 }]);
     case 0x0159:
@@ -684,6 +742,24 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TOCapsuleLabo', 'bm_obj_labo_infocapsule.bml', [{ model: 0 }]);
     case 0x0228:
       return spec('TOTrapSeabed01', 'bm_obj_seabed_turigane.bml', [{ model: 0, textures: 'obj_seabed_turigane.xvm' }]);
+    // Jungle rocks: TORockJungleS01 (0x0206, create 0x00635040, ctor
+    // 0x006350b8), M01 (0x0207, 0x0063540c / 0x00635484) and L01 (0x0208,
+    // 0x006358b8 / 0x00635930) take models 0, 2 and 4 of
+    // bm_o_rock_jungle.bml (g_DerollePartBMLData_00a8f0b0; models 1 and 3
+    // are the pieces a broken rock leaves, 0x00635260 / 0x00635664) with the
+    // texture archive the loader LoadDerollePartBMLData_00635b6c picks by
+    // map: o_rock_jungle_04 in the Mountain (0x1a), o_rock_jungle_05 at the
+    // Seaside (0x1b), o_rock_jungle_123 elsewhere. Boxes: 0x009c63a0 (sphere,
+    // radius 5), 0x009c63cc (12 x 8), 0x009c63f8 (20 x 10). Breaking them
+    // is left out.
+    case 0x0206:
+    case 0x0207:
+    case 0x0208: {
+      const tex = area === 0x1a ? 'o_rock_jungle_04.xvm' : area === 0x1b ? 'o_rock_jungle_05.xvm' : 'o_rock_jungle_123.xvm';
+      if (o.type === 0x0206) return spec('TORockJungleS01', 'bm_o_rock_jungle.bml', [{ model: 0, textures: tex }], { collision: { address: 0x009c63a0, offset: [0, 0, 0], type: 0, halfX: 5, halfZ: 5 } });
+      if (o.type === 0x0207) return spec('TORockJungleM01', 'bm_o_rock_jungle.bml', [{ model: 2, textures: tex }], { collision: BOX(0x009c63cc, 12, 8, 0) });
+      return spec('TORockJungleL01', 'bm_o_rock_jungle.bml', [{ model: 4, textures: tex }], { collision: BOX(0x009c63f8, 20, 10, 0) });
+    }
     case 0x0213:
       return spec('TOJungleDesign', 'bm_obj_jungle_tree.bml', [{ model: 0, texlistOf: 0 }]);
     case 0x0090: // TOKeyGenericSw: body of DAT_00a8ee48 (the lamp of DAT_00a8ee4c is not drawn here)

@@ -28,7 +28,8 @@
 // Doors open when their switch flag is set:
 //   0x0080 TObjDoor (Forest)   ctor FUN_006573d4, update FUN_00656e28 ->
 //          FUN_00656eb4: flag = param4 & 0xff; state 0 locked until the flag
-//          is set (FUN_00816eec), 2 closed: opens when a player on the floor
+//          is set (FUN_00816eec), 1 unlock camera (param6 odd, 80 frames),
+//          2 closed: opens when a player on the floor
 //          is within 70.0 (0x00937964), 4 opening (+1.8 motion frames per
 //          frame, 0x0093795c), 5 open until nobody is within 100.0
 //          (0x0093796c), 3 closing (-1.8 per frame). The collision is on
@@ -91,7 +92,12 @@ export interface FieldDoor {
   locked: boolean; // permanently locked (flag > 0x100)
   lamps: boolean; // four-light door: lamp i waits for flags[i] (objectmodels.ts lamps)
   city: CityDoor | null; // Pioneer 2 door: opened by distance alone (stepCityDoor)
-  state: number; // FUN_00656eb4 states: 0 locked, 2 closed, 4 opening, 5 open, 3 closing
+  state: number; // FUN_00656eb4 states: 0 locked, 1 unlock camera, 2 closed, 4 opening, 5 open, 3 closing
+  // TObjDoor (0x0080) with param6 odd (ctor FUN_006573d4: +0xbc = clamp(param6 % 2, 0, 1)):
+  // on unlock the camera looks from (param1, param2, param3) at the door
+  // for 80 frames (state 1) before the door closes normally.
+  camera: [number, number, number] | null;
+  cameraCount: number; // +0xc0, 0x50 from the ctor
   frame: number; // open motion frame
   laserFrame: number; // locked laser motion frame
   mesh: THREE.Object3D | null; // stand-in panel when the model is missing
@@ -135,6 +141,8 @@ const DOOR_STEP = 1.8; // 0x0093795c / 0x00937960
 const DOOR_LASER_STEP = 1.0; // 0x00937990
 // Fallback length of the door motion when the model has none (the panel).
 const DOOR_FRAMES = 30;
+export const DOOR_CAMERA_FRAMES = 0x50; // +0xc0 in the ctor FUN_006573d4
+const DOOR_CAMERA_LOCKED = 0x3c; // render FUN_00656a50 keeps the locked look while +0xc0 >= 0x3c
 const EVENT_TRIGGER_IDLE = 3; // FUN_00659d98: +0xb4 counts down from 3
 
 // Boss warp destination by episode index (0 = Ep1, 1 = Ep2, 2 = Ep4) * 18 + floor (0x0097f380).
@@ -289,7 +297,8 @@ export function collectFieldObjects(
       default:
         if (DOOR_TYPES.has(o.type)) {
           const { flags, locked } = doorFlags(o);
-          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, state: 0, frame: 0, laserFrame: 0, mesh: null });
+          const camera = o.type === 0x0080 && Math.trunc(o.params[5]) % 2 === 1 ? ([o.params[0], o.params[1], o.params[2]] as [number, number, number]) : null;
+          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, state: 0, frame: 0, laserFrame: 0, mesh: null, camera, cameraCount: DOOR_CAMERA_FRAMES });
         } else if (BOX_TYPES.has(o.type)) {
           boxes.push({ ...base, type: o.type, yaw: p.yaw, broken: false });
         } else if (SWITCH_RADIUS[o.type] !== undefined && o.params[3] >= 0 && o.params[3] < 0x100) {
@@ -370,14 +379,29 @@ export function stepCityDoor(d: FieldDoor, nearest: number, frames: number): voi
   }
 }
 
-// One frame of a door (FUN_00656eb4 without the unlock camera of state 1).
+// Locked look of a door (laser and sign): state 0, and the first 20 frames of
+// the unlock camera (FUN_00656a50: +0xc0 >= 0x3c).
+export function lockedLook(d: FieldDoor): boolean {
+  return d.state === 0 || (d.state === 1 && d.cameraCount >= DOOR_CAMERA_LOCKED);
+}
+
+// One frame of a door (FUN_00656eb4).
 // `nearest` gives the distance of the nearest player on the floor, `frames`
 // the length of the door's open motion.
 export function stepDoor(d: FieldDoor, unlocked: boolean, nearest: number, frames = DOOR_FRAMES): void {
   switch (d.state) {
     case 0:
       d.laserFrame += DOOR_LASER_STEP;
-      if (unlocked) d.state = 2;
+      if (unlocked) d.state = d.camera ? 1 : 2;
+      break;
+    case 1:
+      // SetDefaultNpcCamera(9) + SetDefaultNPCCameraView_004d33c0 on entry
+      // (FieldObjects.unlockCameraView), then InitializeDefaultNPC() when the
+      // count runs out; the laser keeps playing while the count is above 0x3c.
+      if (--d.cameraCount <= 0) {
+        d.cameraCount = 0;
+        d.state = 2;
+      } else if (d.cameraCount > DOOR_CAMERA_LOCKED) d.laserFrame += DOOR_LASER_STEP;
       break;
     case 2:
       if (nearest < DOOR_OPEN_DISTANCE) d.state = 4;
@@ -415,12 +439,30 @@ function doorMesh(d: FieldDoor): THREE.Object3D {
   return g;
 }
 
+// Delayed objects. The floor loader (0x008129b0) skips an object whose
+// group (set entry +0x0a) is not 0, unless its set flags hold 0x01 or 0x10
+// (synced from the other clients); construct_objects (event action 08 /
+// quest construct_delayed_object, 0x00810ae8) later creates every object of
+// the floor whose room (+0x0c) and group match and whose flags have neither
+// 2 (created) nor 8, and sets flags 0x12. A boss floor's exit warp is one of
+// these: group 1, constructed by the event that ends the fight.
+export const constructKey = (room: number, group: number) => `${room}/${group}`;
+
+export function isDelayedObject(o: ObjectSet, constructed: ReadonlySet<string>): boolean {
+  return o.group !== 0 && !constructed.has(constructKey(o.section, o.group));
+}
+
 export class FieldObjects {
+  // The objects that exist now (delayed ones join once constructed).
   warps: FieldWarp[] = [];
   doors: FieldDoor[] = [];
   switches: FieldSwitch[] = [];
   triggers: FieldEventTrigger[] = [];
   boxes: FieldBox[] = [];
+  private all: ReturnType<typeof collectFieldObjects>;
+  private sets = new Map<number, ObjectSet>(); // object index -> set entry
+  private delayed = new Set<number>(); // object indices not constructed yet
+  private constructed: Set<string>;
   private viewer: MapViewer;
   private group = new THREE.Group();
   private flags: Set<number>; // switch flags of this floor
@@ -441,13 +483,20 @@ export class FieldObjects {
     flags: Set<number>,
     models: ObjectLayer | null = null,
     collision: CollisionWorld | null = null,
+    constructed: Set<string> = new Set(),
   ) {
     this.viewer = viewer;
     this.flags = flags;
     this.models = models;
     this.collision = collision;
-    Object.assign(this, collectFieldObjects(placed, ctx));
-    for (const d of this.doors) {
+    this.constructed = constructed;
+    this.all = collectFieldObjects(placed, ctx);
+    for (const p of placed) {
+      if (p.entity.kind !== 'object') continue;
+      this.sets.set(p.entity.index, p.entity);
+      if (isDelayedObject(p.entity, constructed)) this.delayed.add(p.entity.index);
+    }
+    for (const d of this.all.doors) {
       if (models?.models.has(d.index)) {
         models.setState(d.index, 'locked');
         continue;
@@ -455,9 +504,46 @@ export class FieldObjects {
       d.mesh = doorMesh(d);
       this.group.add(d.mesh);
     }
-    for (const s of this.switches) models?.setState(s.index, 'off');
+    for (const i of this.delayed) {
+      models?.setVisible(i, false);
+      const d = this.all.doors.find((x) => x.index === i);
+      if (d?.mesh) d.mesh.visible = false;
+    }
+    this.refreshLists();
+    for (const s of this.all.switches) models?.setState(s.index, 'off');
     this.group.name = 'field-objects';
     viewer.scene.add(this.group);
+  }
+
+  private refreshLists(): void {
+    const live = <T extends { index: number }>(list: T[]) => list.filter((x) => !this.delayed.has(x.index));
+    this.warps = live(this.all.warps);
+    this.doors = live(this.all.doors);
+    this.switches = live(this.all.switches);
+    this.triggers = live(this.all.triggers);
+    this.boxes = live(this.all.boxes);
+  }
+
+  isDelayed(index: number): boolean {
+    return this.delayed.has(index);
+  }
+
+  // construct_objects(room, group) on this floor: the delayed objects of that
+  // room and group appear. Returns how many did.
+  construct(room: number, group: number): number {
+    this.constructed.add(constructKey(room, group));
+    let n = 0;
+    for (const i of [...this.delayed]) {
+      const o = this.sets.get(i)!;
+      if (o.section !== room || o.group !== group) continue;
+      this.delayed.delete(i);
+      this.models?.setVisible(i, true);
+      const d = this.all.doors.find((x) => x.index === i);
+      if (d?.mesh) d.mesh.visible = true;
+      n++;
+    }
+    if (n) this.refreshLists();
+    return n;
   }
 
   unlocked(d: FieldDoor): boolean {
@@ -488,6 +574,14 @@ export class FieldObjects {
       });
     }
     return out;
+  }
+
+  // The view of a door's unlock camera (state 1): source at the door's
+  // param1..3, target at the door (FUN_00656eb4 -> SetDefaultNPCCameraView_004d33c0),
+  // or null when no door is showing its unlock.
+  unlockCameraView(): { source: [number, number, number]; target: [number, number, number] } | null {
+    const d = this.doors.find((x) => x.state === 1 && x.camera);
+    return d?.camera ? { source: d.camera, target: [d.x, d.y, d.z] } : null;
   }
 
   setBossWarpState(index: number | null, state: number): void {
@@ -535,8 +629,8 @@ export class FieldObjects {
       if (d.city) stepCityDoor(d, players.reduce((m, p) => Math.min(m, Math.hypot(d.x - p.x, d.z - p.z)), Infinity), frames);
       else stepDoor(d, this.unlocked(d), nearest, frames);
       if (this.models?.models.has(d.index)) {
-        if (d.lamps) this.models.setLamps(d.index, d.state === 0 || d.state === 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
-        else this.models.setState(d.index, d.state === 0 ? 'locked' : 'unlocked');
+        if (d.lamps) this.models.setLamps(d.index, d.state <= 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
+        else this.models.setState(d.index, lockedLook(d) ? 'locked' : 'unlocked');
         this.models.setDoorFrame(d.index, d.frame);
         this.models.setLaserFrame(d.index, d.laserFrame);
         continue;
@@ -544,7 +638,7 @@ export class FieldObjects {
       const m = d.mesh as THREE.Group | null;
       if (!m) continue;
       const panel = m.children[0] as THREE.Mesh;
-      (panel.material as THREE.MeshBasicMaterial).color.setHex(d.state === 0 ? 0xc04040 : 0x4080d0);
+      (panel.material as THREE.MeshBasicMaterial).color.setHex(lockedLook(d) ? 0xc04040 : 0x4080d0);
       panel.position.y = 15 - 30 * (d.frame / Math.max(1, frames - 1));
       panel.visible = d.state !== 5;
     }

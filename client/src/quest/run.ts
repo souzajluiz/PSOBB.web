@@ -70,7 +70,7 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       enemiesKilled: () => opts.enemiesKilled?.() ?? 0,
       questExit: () => log('quest: qexit (the quest asked to leave the game)'),
       darkFalzDead: () => false,
-      constructObjects: (floor, room, group) => log(`quest: construct_delayed_object floor ${floor} room ${room} group ${group} (not implemented)`),
+      constructObjects: (floor, room, group) => view.constructObjects(floor, room, group),
       constructEnemies: (floor, room, wave) => view.constructEnemies(floor, room, wave),
       zoneCleared: (floor, room) => view.zoneCleared(floor, room),
       getSwitchFlag: (floor, flag) => view.switchFlag(floor, flag),

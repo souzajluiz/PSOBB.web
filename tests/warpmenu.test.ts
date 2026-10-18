@@ -13,7 +13,7 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { parseUnitxt } from '../client/src/classic/charcreate_text.ts';
 import { AREA_TEXT, areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
 import { objectModelFor } from '../client/src/formats/objectmodels.ts';
-import { bossWarpFloor, CITY_DOORS, collectFieldObjects, doorFlags, doorLamps, stepCityDoor, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import { bossWarpFloor, CITY_DOORS, collectFieldObjects, constructKey, DOOR_CAMERA_FRAMES, doorFlags, doorLamps, isDelayedObject, lockedLook, stepCityDoor, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 let failures = 0;
@@ -112,6 +112,34 @@ eq(doorFlags(obj(0x1ab, 0x101, 3)), { flags: [], locked: true }, 'four-light doo
   states.push(d.state);
   eq(states, [0, 2, 4, 5, 5, 3, 2], 'door states');
 }
+{
+  // Unlock camera (FUN_00656eb4 state 1): only TObjDoor with param6 odd.
+  const placedDoor = (p6: number) => {
+    const o = { ...obj(0x80, 1), params: [10, 20, 30, 1, 0, p6] };
+    return collectFieldObjects([{ entity: o, world: [1, 2, 3], yaw: 0 } as never], { episode: 1, floor: 1, area: 1 }).doors[0];
+  };
+  eq(placedDoor(1).camera, [10, 20, 30], 'param6 = 1: unlock camera from param1..3');
+  eq(placedDoor(3).camera, [10, 20, 30], 'param6 = 3: odd = camera');
+  eq(placedDoor(2).camera, null, 'param6 = 2: no camera');
+  eq(placedDoor(-1).camera, null, 'param6 = -1: clamped to 0, no camera');
+  const d = placedDoor(1);
+  stepDoor(d, true, 0);
+  check(d.state === 1 && lockedLook(d), 'unlock enters state 1 with the locked look');
+  let n = 0;
+  while (d.state === 1 && n < 200) {
+    stepDoor(d, true, 0);
+    n++;
+    if (d.cameraCount === 0x3b) check(!lockedLook(d), 'locked look ends below 0x3c');
+  }
+  eq(n, DOOR_CAMERA_FRAMES, 'unlock camera lasts 0x50 frames');
+  eq(d.state, 2, 'then the door is closed');
+}
+{
+  const o = { ...obj(0x19, 0), group: 1, section: 4 };
+  check(isDelayedObject(o, new Set()), 'group 1 object waits for construct_objects');
+  check(!isDelayedObject(o, new Set([constructKey(4, 1)])), 'constructed room/group shows it');
+  check(!isDelayedObject(obj(0x19, 0), new Set()), 'group 0 is built at load');
+}
 
 // --- Client data: names and objects ---
 if (existsSync(join(DATA, 'data.gsl'))) {
@@ -143,6 +171,10 @@ if (existsSync(join(DATA, 'data.gsl'))) {
       console.log(`Ep${episode === 3 ? 4 : episode} floor ${String(floor).padStart(2)} area 0x${area.toString(16).padStart(2, '0')}: ${desc || '-'}; ${o.doors.length} doors, ${o.switches.length} switches`);
       if (floor === 0 && episode !== 2) check(o.warps.some((w) => w.kind === 'main'), `Ep${episode} Pioneer 2 has the Ragol teleporter`);
       if (episode === 1 && floor === 1) check(o.warps.some((w) => w.kind === 'area' && w.floor === 2) && o.doors.length > 0 && o.switches.length > 0, 'Forest 1 warp to floor 2, doors and switches');
+      if (episode === 1 && floor === 0xb) {
+        const exits = placed.filter((p) => p.entity.kind === 'object' && p.entity.group !== 0 && o.warps.some((w) => w.index === p.entity.index));
+        check(exits.length > 0, 'Dragon floor: its exit warp is a delayed object');
+      }
       if (episode === 1 && floor === 2) check(o.warps.some((w) => w.kind === 'boss' && w.floor === 0xb), 'Forest 2 boss warp to the Dragon');
       // A map warp lands next to another warp pad of the floor (the pads come
       // in pairs), which shows the destination is in floor coordinates.

@@ -526,6 +526,12 @@ export class GameView {
     this.field.constructEnemies(floor, room, wave);
   }
 
+  // construct_delayed_object (0x8A): the floor's delayed objects of a room
+  // and group appear, as an event's construct_objects action does.
+  constructObjects(floor: number, room: number, group: number): void {
+    this.field.constructObjects(floor, room, group);
+  }
+
   switchFlag(floor: number, flag: number): boolean {
     return this.field.switchFlag(floor, flag);
   }

@@ -32,7 +32,7 @@ import type { EnemySet, PlacedEntity } from '../formats/setdata.ts';
 import { floorToArea, parseSwitchFlag, type Game } from '../net/game.ts';
 import type { CollisionWorld } from './collision.ts';
 import type { EnemyLayer } from './enemyview.ts';
-import { FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
+import { constructKey, FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, FloorWaves, type WaveEnemy } from './waves.ts';
@@ -80,6 +80,7 @@ export class GameField {
   private area = 0;
   private objectBase = 0;
   private flags = new Map<number, Set<number>>(); // switch flags by floor
+  private constructed = new Map<number, Set<string>>(); // construct_objects by floor
   private suppressed = new Set<number>(); // warps cancelled until the player leaves them
   private menuWarp: FieldWarp | null = null;
   // Boss warp the player is standing in and its state machine.
@@ -158,6 +159,22 @@ export class GameField {
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
   }
 
+  // construct_objects (room/group keys) per floor, kept across visits.
+  private constructedOf(floor: number): Set<string> {
+    let s = this.constructed.get(floor);
+    if (!s) this.constructed.set(floor, (s = new Set()));
+    return s;
+  }
+
+  // An event's construct_objects action / construct_delayed_object: the
+  // floor's delayed objects of that room and group appear
+  // (render/fieldobjects.ts isDelayedObject).
+  constructObjects(floor: number, room: number, group: number): void {
+    this.constructedOf(floor).add(constructKey(room, group));
+    const n = floor === this.floor ? (this.objects?.construct(room, group) ?? 0) : 0;
+    this.opts.log(`construct_objects floor ${floor} room ${room} group ${group}: ${floor === this.floor ? `${n} objects` : 'kept for the next visit'}`);
+  }
+
   private flagsOf(floor: number): Set<number> {
     let s = this.flags.get(floor);
     if (!s) this.flags.set(floor, (s = new Set()));
@@ -182,7 +199,7 @@ export class GameField {
     this.battleFrames = 0;
     const episode = this.game.info?.episode ?? 1;
     this.enemyFirstSlot = enemySlots(e.enemySets, area).first;
-    this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision);
+    this.objects = new FieldObjects(this.viewer, e.placed, { episode, floor, area }, this.flagsOf(floor), e.objects, e.collision, this.constructedOf(floor));
     this.objects.onSwitch = (s) => this.pressSwitch(s);
     this.objects.onEventTrigger = (t) => {
       this.opts.log(`event trigger ${t.index}: event ${t.eventId}`);
@@ -221,7 +238,7 @@ export class GameField {
           if (set) f.add(flag);
           else f.delete(flag);
         },
-        constructObjects: (room, group) => this.opts.log(`construct_objects room ${room} group ${group} (not implemented)`),
+        constructObjects: (room, group) => this.constructObjects(floor, room, group),
         roomCleared: (room) => this.opts.log(`room ${room} cleared`),
         log: (m) => this.opts.log(m),
       });
@@ -340,6 +357,13 @@ export class GameField {
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
     this.objects?.setBossWarpState(this.bossWarpObject?.index ?? null, this.bossWarp.state);
+    // A door's unlock camera (FUN_00656eb4 state 1) replaces the player
+    // camera that LobbyView placed this frame.
+    const view = this.objects?.unlockCameraView();
+    if (view) {
+      this.viewer.camera.position.set(...view.source);
+      this.viewer.camera.lookAt(...view.target);
+    }
   }
 
   private updateBattleMusic(w: FloorWaves, pos: { x: number; y: number; z: number }, ticks: number): void {

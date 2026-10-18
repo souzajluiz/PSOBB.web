@@ -1,5 +1,70 @@
 # Devlog
 
+## 2026-10-18: Remaining field objects, construct_objects and the door unlock camera
+
+**What changed:** the jungle rocks, the Ruins / Seabed trap pillars and Vol
+Opt's ship door now have models; the lobby door and shop generators are
+counted as drawing nothing. Objects of a group other than 0 wait for
+`construct_objects`, and a Forest door with an odd param6 shows its unlock
+camera. Code: `formats/objectmodels.ts`, `render/fieldobjects.ts`,
+`render/gamefield.ts`, `render/gameview.ts`, `quest/run.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **TORockJungleS01 / M01 / L01** (0x206 / 0x207 / 0x208, created by
+  0x00635040 / 0x0063540c / 0x006358b8): models 0, 2 and 4 of
+  `bm_o_rock_jungle.bml`. The loader 0x00635b6c picks the textures by map:
+  `o_rock_jungle_04` in the Mountain, `_05` at the Seaside, `_123`
+  elsewhere. Collision boxes 0x009c63a0 / 0x009c63cc / 0x009c63f8.
+- **TOTrapAncient02 / 02R** (0x154 / 0x167, constructors 0x0063c638 /
+  0x0063b5b4): model 0 with its own texture list. The loader 0x0063c08c
+  (switch 0x00933ff4) uses `ruins_pillar` in the VR Temple,
+  `seabed_pillar` in the Episode 2 outdoor maps, Seabed and towers,
+  `torabasami` elsewhere. The trap's behavior is not done; the model stands
+  in its bind pose.
+- **TODoorVoShip** (0x130, constructor 0x00622648, render 0x00622358):
+  model 1 (texture list 1, motion 0 held at its last frame) and model 0,
+  box 0x009c5574. The seal lamps hidden by quest flags 0x2c-0x2f, their
+  pulse and the `.njs` shape motion are left out.
+- **Draw nothing:** TObjCityDoor_Lobby (0x54) renders through the empty
+  0x0061cdb0 and does nothing online; TShopGenerator (0x40, vtable
+  0x00b3c780) also renders through 0x0061cdb0.
+- **construct_objects:** the floor loader 0x008129b0 skips objects whose
+  group is not 0 (unless synced flags 0x11 say they exist). The event action
+  / quest opcode `construct_delayed_object` (0x8A), at 0x00810ae8, creates
+  the floor's objects of that room and group (flags without 2 or 8) and
+  sets flags 0x12. Until then they are hidden and take no part in warps,
+  doors, switches, triggers or boxes. The constructed groups are kept per
+  floor across visits. A boss floor's exit warp is one of these (group 1).
+- **Door unlock camera** (TObjDoor 0x80, update 0x00656eb4):
+  - the constructor 0x006573d4 stores clamp(param6 % 2, 0, 1) at +0xbc
+    (so -1 gives 0) and 0x50 at +0xc0;
+  - when the switch flag unlocks the door, +0xbc = 1 sends it to state 1
+    instead of 2: `SetDefaultNpcCamera(9)` and
+    `SetDefaultNPCCameraView_004d33c0` with the source at param1..3
+    (+0x68..+0x70) and the target at the door (+0x38);
+  - +0xc0 counts down; at 0 `InitializeDefaultNPC()` hands the view back
+    and the door goes to state 2. The laser keeps playing while the count
+    is above 0x3c, and the render 0x00656a50 keeps the locked look while it
+    is 0x3c or more.
+
+**Assumed:** param1..3 are world coordinates; the unlock view is placed
+directly (the NPC camera's own easing is not reproduced) and does not hold
+the player's controls.
+
+**Tests:** `tests/warpmenu.test.ts` (unlock camera states and timing, param6
+parity, delayed objects, the Dragon floor's exit warp is delayed);
+`tests/waves.test.ts` builds every new model without missing textures.
+
+**Checked in Chrome** (WebHunter, Episode 2 game):
+- Jungle North: 10 jungle rocks built and drawn with their textures;
+- VR Temple Alpha (6) and Seabed Upper (10): the trap pillars built with
+  textures;
+- Barba Ray: the exit warp (0x280, room 1 group 1) stays hidden with no
+  warp until `construct_objects 1/1`, then appears and registers as an area
+  warp to floor 0. No console errors.
+- No free-play Forest door has an odd param6, so the unlock camera only
+  shows in quests; it is covered by unit tests.
+
 ## 2026-10-18: Camera easing, target lead and wall checks
 
 **What changed:** the player camera no longer jumps to its computed
