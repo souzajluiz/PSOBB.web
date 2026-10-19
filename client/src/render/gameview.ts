@@ -162,6 +162,7 @@ export class GameView {
       cast: (t) => this.combat.castTechnique(t),
       telepipeAllowed: () => this.telepipes.allowed(),
       statusFlags: () => this.combat.status.flags,
+      send: (command, payload) => game.conn.send(command, 0, payload),
       log,
     });
     this.telepipes = new TelepipeLayer(viewer, game, this.files, {

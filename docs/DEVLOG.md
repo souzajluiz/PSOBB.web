@@ -1,5 +1,89 @@
 # Devlog
 
+## 2026-10-19: Options window from the exe
+
+**What changed:** Main menu > Options (id 6) now opens the exe's Options
+window, both in the field and in the classic lobby. It has the ten rows the
+client lists, with labels from unitxt. Deciding a row opens its settings
+window with the current value marked. The chosen value goes into the
+session's option word (character `+0x4EC`), and when the window closes the
+client sends the word to the server with `01ED`.
+- Message Speed is the speed of the list windows' animation
+  (`classic/windowanim.ts`).
+- Cursor Position switches the main menu's cursor memory per level.
+- Brightness is applied as the exe's gamma offset and kept in localStorage
+  (the registry in the exe).
+- The exe has no sound or BGM volume option here.
+
+Code: `classic/options.ts` (new), `classic/mainmenu.ts` (cursor memory),
+`classic/fieldmenu.ts`, `classic/lobby.ts`, `classic/main.ts`,
+`render/fieldhud.ts`, `render/gameview.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Window:** handle_player_menu_select case options_menu →
+  ChallengePlayerListWindow_Initialize_007536f4 (vtable 0x00b42598, states in
+  ChallengePlayerListWindow_Process_007538ec).
+  - The option list (create_list_items_for_menu_options) is a titled list
+    window (CreateListWindowObject_0073566c) at entry 0x16 = (13, 256),
+    195 wide (`UpdateScrollPosition_00736138(195.0)`), titled 11/0x3D
+    "Options", with items centred.
+  - Rows (value: label): 0 Map Direction 11/0x79, 1 Function Key Setting
+    0/6, 2 Keyboard Controls 0/9, 3 Mouse Controls 0/10, 4 Pad Button Config
+    0/0x11 (greyed with no pad, `AddListItem_00735ee0`), 5 Keyboard Config
+    0/0, 6 Cursor Position 11/0x7B, 7 Message Speed 11/0x7C, 9 Auto
+    Disconnect 11/0x81, 10 Brightness 11/0x82. Value 8 (Vibration) has a
+    settings case but no row.
+- **Settings window** (ChallengePlayerListWindow_CreateSettingsMenu_00753d84):
+  the Ship Select list window class (CreatePlayerListObject_00714ac8 →
+  0x00736988, vtable 0x00b3f4f0) at entry 0x17 = (210, 256), 302 × 148
+  (0x00973f18), titled with the row label.
+  - Cursor and chosen value (+0x88 / +0x94) start on the current setting
+    (`ChatShortcutMenuListWindow_Update_00714e5c`).
+  - Each item draws icon +0x1D of `f256_hyouji` texture 1 (0x00970b40):
+    0x14 on the chosen value, 0x15 on the others (ListWindowObject_SetText
+    _0072c548, ResetListItems_007379e4). The item x is −18 (0xc1900000) and
+    three 18 px icon slots precede the text (BaseEntity_Render_0072ae74), so
+    the icon sits where Ship Select's text starts and the text is 18 px right.
+  - Keys (ChatShortcutMenuYesNoWindow_Update_00714ba8): up / down wrap
+    (SE 0x56F); Decide makes the cursor the chosen value (SE 0x570, flags 6);
+    Cancel closes unchanged (SE 0x585).
+- **Option word** (ApplySelectedSetting_00753c70 →
+  SessionData_SetCharacterOptionBitfield_007be17c, `word & mask | value`):
+  map direction 0x1 (Fixed / Non-fixed), function keys 0x2000000 (Menu /
+  Chat Shortcuts), keyboard controls 0x1000000 (ON / OFF), mouse 0x700000
+  >> 20 (OFF / DRAG / HOLD), cursor position 0x4 (Saved / Non-Saved),
+  message speed 0x300 >> 8 (Slow / Normal / Fast / Very Fast), auto
+  disconnect 0x1C00 >> 10 (15..60 minutes). Without session data the
+  getters return 0, except the message speed (1, `_007be1d0`).
+- **Brightness:** SetExternalSettingsFlag (0..4, above 3 → 4). On close,
+  UpdateExternalSettings adds `{32, 16, 0, −16, −32}[i] << 8` (0x009006e0)
+  to the 16-bit gamma ramp (UpdateGammaRamp_00837818), and
+  ResetExternalSettings writes the registry. Here it is an SVG
+  `feComponentTransfer` intercept on the page, assuming an identity ramp.
+- **Save:** ChallengePlayerListWindow_Destructor_00753624 calls
+  send_packet0xed_subcommand1 when a row was decided (+0x24). That sends
+  `0C 00 ED 01 00 00 00 00` + u32 option_flags. newserv on_ED_BB 0x01ED
+  stores it in the character file.
+- **Cursor memory:** the main menu keeps {cursor, id, table} per level
+  (+0x28 + level × 8, PlayerMenuWindow_SetItemState_00732910, written when an
+  entry is chosen or a sub-menu is cancelled). When the menu or a sub-menu
+  opens (ChallengeMenuObject_UpdateMenuIndexFromCharacterOption_007332f8),
+  "Non-Saved" (bit 4) starts on the first entry. Otherwise
+  PlayerMenuWindow_CheckItemState_00732514 restores the kept cursor when the
+  level shows the same table.
+
+**Left out:** Keyboard Config and Pad Button Config (the key config window,
+the pad "Custom / Return to default" list and its 0xED subcommand 5) only
+mark the window as changed. Map direction, function keys, keyboard / mouse
+controls and auto disconnect are stored and saved, but nothing in the web
+client reads them yet. The player status window takes the message speed when
+the floor is attached.
+
+**Checks:** `tests/options.test.ts` (new: rows, labels against newserv's
+bb-v4 unitxt, bit packing, `01ED` payload, settings keys, brightness offsets,
+cursor memory); `tests/windowanim.test.ts`, `tests/fieldhud.test.ts`,
+`tests/sound.test.ts` and the client typecheck pass.
+
 ## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
 
 **What changed:** the pillar traps run their state machines: when a player
