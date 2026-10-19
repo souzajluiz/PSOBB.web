@@ -343,6 +343,12 @@ export function parseNjcmObject(data: Uint8Array, offset = 0): NjcmObject {
   return parseObject(new Reader(data), offset, 0);
 }
 
+// Parses one NJS_CNK_MODEL at `offset` (a model without an object, e.g. the
+// rooms of a map_*r.rel minimap, formats/minimap.ts).
+export function parseNjcmModel(data: Uint8Array, offset: number): NjcmModel {
+  return parseModel(new Reader(data), offset);
+}
+
 // NJTL data: u32 names_offset, u32 count; entry (0x0C): u32 name, u32, u32.
 export function parseNjtl(data: Uint8Array): string[] {
   const r = new Reader(data);

@@ -434,6 +434,9 @@ export class WindowShake {
   }
 }
 
+// HUD flag bits that close the status window (0x0071a838).
+export const STATUS_HIDING_FLAGS = 0x11;
+
 // The status window's state across frames (bars and their colours).
 export class StatusWindow {
   readonly hp = new BarState(BAR_COLORS.hp.normal);
@@ -443,6 +446,10 @@ export class StatusWindow {
   // with the HUD when the floor loads.
   readonly anim = new WindowAnim(true, false);
   speed = 1; // the window speed option (classic/windowanim.ts)
+  // The HUD's flags (+0x1c): with bit 1 (the full map, classic/areamap.ts) or
+  // 0x10 (the quest board) set the window closes, else it (re)opens
+  // (SinowberillChallengeObjectListWindow_HandleCancel_0071a838, each frame).
+  hudFlags = 0;
   hpText: Argb = BAR_COLORS.hp.text;
   tpText: Argb = BAR_COLORS.tp.text;
   values: StatusValues = { name: '', slot: 0, level: 1, hp: 0, maxHp: 0, tp: 0, maxTp: 0, pb: 0, dead: false };
@@ -465,7 +472,8 @@ export class StatusWindow {
     this.hp.tick();
     this.tp.tick();
     this.shake.tick(rng);
-    if (!this.anim.visible) this.anim.open(this.speed);
+    if (this.hudFlags & STATUS_HIDING_FLAGS) this.anim.close();
+    else if (!this.anim.isOpen) this.anim.open(this.speed);
     this.anim.tick(this.speed);
   }
 

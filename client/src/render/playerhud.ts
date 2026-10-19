@@ -41,6 +41,9 @@ export class PlayerHud {
   private extra = 0; // virtual units beyond 640 on a wide window
   private projected = new THREE.Vector3();
   log: (msg: string) => void = () => {};
+  // The HUD's flags (+0x1c; bit 1 = the full map is up, render/fieldhud.ts):
+  // the status window closes while bits 1 / 0x10 are set.
+  hudFlags: () => number = () => 0;
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -130,6 +133,7 @@ export class PlayerHud {
     this.ticks -= n;
     n = Math.min(n, 5);
     for (let i = 0; i < n; i++) {
+      this.status.hudFlags = this.hudFlags();
       this.status.tick(values);
       this.party.tick(party);
       this.floats.tick();

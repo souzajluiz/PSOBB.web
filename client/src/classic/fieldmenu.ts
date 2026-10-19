@@ -17,13 +17,17 @@
 // Safe maps (unknown_safe_maps 0x0097f1c8): 0 Pioneer 2, 0xF lobby, 0x12 Lab,
 // 0x2D Pioneer 2 (Episode 4).
 // handle_player_menu_select opens the leaf; Backspace in a leaf returns to
-// the menu at the same entry.
+// the menu at the same entry. Area Map (0xC) is classic/areamap.ts: a window
+// with its own open / close animation that switches the minimap to the full
+// map.
 
 import { MAIN_MENU, MAIN_MENU_ANDROID, MainMenu, type MainMenuTextures, type MenuEntry } from './mainmenu.ts';
 import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
+import { AREA_MAP_MENU_ID, AreaMapWindow, type AreaMapEnv, type AreaMapTextures } from './areamap.ts';
+import { se, SE } from '../audio/se.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
 
@@ -79,9 +83,10 @@ export interface FieldMenuEnv {
   equip: EquipActions;
   tech: TechMenuEnv;
   mag: MagMenuEnv;
+  areaMap: AreaMapEnv;
 }
 
-export interface FieldMenuTextures extends ItemPackTextures {
+export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures {
   menu: MainMenuTextures;
 }
 
@@ -99,6 +104,8 @@ export class FieldMenu {
   readonly leafAnim = new WindowAnim(true, false);
   private closingLeaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
+  // The Area Map window (open, or closing after the menu went away).
+  areaMap: AreaMapWindow | null = null;
   speed = 1;
 
   constructor(env: FieldMenuEnv) {
@@ -126,6 +133,7 @@ export class FieldMenu {
 
   close(): void {
     this.closeLeaf();
+    this.areaMap?.anim.close();
     this.menu.close();
   }
 
@@ -144,6 +152,12 @@ export class FieldMenu {
   // ChatShortcutMenuWindow_Constructor_00756ff4) is in no menu table and no
   // caller passes it in this build, so it is not opened here.
   private open(id: number): void {
+    if (id === AREA_MAP_MENU_ID) {
+      this.areaMap?.dispose();
+      this.areaMap = new AreaMapWindow(this.env.areaMap, this.speed, (id) => se(id));
+      this.menu.leafOpen = true;
+      return;
+    }
     if (id === 9) this.leaf = new EquipMenu({ ...this.env.itemPack, equipActions: this.env.equip });
     else if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
@@ -164,9 +178,26 @@ export class FieldMenu {
     this.leaf?.tick();
     this.leafAnim.tick(this.speed);
     if (!this.leafAnim.visible) this.closingLeaf = null;
+    const map = this.areaMap;
+    if (map) {
+      map.windowSpeed = this.speed;
+      map.tick();
+      if (!map.anim.visible) {
+        map.dispose();
+        this.areaMap = null;
+      }
+    }
   }
 
   key(e: KeyboardEvent): void {
+    if (this.areaMap?.anim.isOpen) {
+      if (!this.areaMap.key(e)) {
+        se(SE.cancel);
+        this.areaMap.anim.close();
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (this.leaf) {
       if (!this.leaf.key(e)) {
         this.closeLeaf();
@@ -181,6 +212,7 @@ export class FieldMenu {
   // right edge, classic/ingame.ts anchorX).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.menu.draw(ctx, skin, tex.menu);
+    this.areaMap?.draw(ctx, skin, tex);
     const leaf = this.leaf ?? this.closingLeaf;
     if (!leaf || !this.leafAnim.visible) return;
     const rects: { x: number; y: number; w: number; h: number }[] = [];
