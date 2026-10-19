@@ -62,6 +62,29 @@ built, later deploys that do not change the pinned refs skip it. If the server
 is too small even for that, build the image elsewhere, push it to a registry
 and let Dokploy only run it.
 
+## Prebuilt newserv image (skip the compile on the server)
+
+Compiling newserv is the slow, memory-hungry part of the build. The
+`newserv image` workflow (`.github/workflows/newserv-image.yml`) does it once
+on a GitHub runner and publishes just what the runtime needs as
+`ghcr.io/<owner>/psobb-newserv` (tags `latest` and the three pinned refs,
+`linux/amd64`). It runs when the pinned refs in the `Dockerfile` change, or by
+hand (Actions > newserv image > Run workflow). With that image the server only
+builds the small client stage, in a minute or two and a few hundred MB of RAM.
+
+1. Run the workflow once (the first run compiles for 10-20 minutes) and check
+   that the package `psobb-newserv` exists (your profile > Packages). It is
+   private, like the repository.
+2. Create a GitHub token (classic) with only `read:packages`, and log the
+   server's Docker in with it once: `docker login ghcr.io -u <user>` (paste the
+   token), so the build can pull the private image.
+3. In Dokploy, set the build argument `NEWSERV_IMAGE` to
+   `ghcr.io/<owner>/psobb-newserv:latest` and deploy. `BUILD_JOBS` no longer
+   matters.
+
+Without `NEWSERV_IMAGE` the build compiles newserv itself, as before. For an
+ARM server change `platforms` in the workflow.
+
 ## Environment
 
 | Variable | Default | Meaning |
