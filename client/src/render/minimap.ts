@@ -6,7 +6,8 @@
 // classic/minimap.ts.
 //
 // - Rooms: each discovered room is a flat plate translated to its position
-//   and turned by matrix_rotation_euler (X, then Y, then Z), drawn with the
+//   and turned by matrix_rotation_euler (X, then Y, then Z; done on the CPU,
+//   the floor's rooms are one merged geometry), drawn with the
 //   ground colour (0.3 grey) at the room's alpha. The material override
 //   (copy_color_to_af0370) replaces the mesh's own white diffuse; the strips
 //   ignore the light (strip flags 1).
@@ -76,13 +77,34 @@ export async function loadMinimapAssets(files: ClientFiles): Promise<MinimapAsse
   };
 }
 
+
+// Releases what loadMinimapAssets made (a HUD disposed while it loaded).
+export function disposeMinimapAssets(assets: MinimapAssets): void {
+  for (const g of Object.values(assets.models)) g.dispose();
+  for (const b of assets.compass) b.close();
+}
+
+// The rooms of a floor merged into one geometry: each room's plates are
+// transformed on the CPU and carry its colour and alpha per vertex, so the
+// floor is one draw call and a fade only rewrites the alpha of a range.
+interface RoomBatch {
+  mesh: THREE.Mesh;
+  geometry: THREE.BufferGeometry;
+  colors: THREE.BufferAttribute; // RGBA
+  ranges: { start: number; count: number }[]; // vertices per room
+  alphas: Float32Array; // last written alpha per room (-1 = hidden)
+}
+
 export class MinimapView {
   private renderer: THREE.WebGLRenderer | null = null;
+  // The last rendered image, copied out of the WebGL canvas in the same task
+  // (no preserveDrawingBuffer); redrawn only when what it shows changed.
+  private cache: HTMLCanvasElement | null = null;
+  private signature: number[] = [];
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(1, 4 / 3, 1, 10000);
-  private rooms = new THREE.Group();
-  private roomMaterials: THREE.MeshBasicMaterial[] = [];
-  private roomGeometries: THREE.BufferGeometry[] = [];
+  private roomMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+  private batch: RoomBatch | null = null;
   private discs: THREE.InstancedMesh | null = null;
   private gates: THREE.InstancedMesh | null = null;
   private arrows: THREE.InstancedMesh | null = null;
@@ -94,11 +116,6 @@ export class MinimapView {
   private color = new THREE.Color();
   private size = new THREE.Vector2();
   private viewportScale = new THREE.Matrix4();
-
-  constructor() {
-    this.camera.matrixAutoUpdate = true;
-    this.scene.add(this.rooms);
-  }
 
   setAssets(assets: MinimapAssets): void {
     this.assets = assets;
@@ -114,46 +131,88 @@ export class MinimapView {
     this.discs = make(assets.models.disc, MAX_ICONS, 1);
     this.gates = make(assets.models.gate, MAX_ICONS, 1);
     this.arrows = make(assets.models.arrow, MARKER_CAPACITY, 2);
+    this.signature = [];
   }
 
   // A floor's rooms (null: the floor has no minimap). The previous floor's
-  // geometry and materials are released.
+  // geometry is released.
   setRooms(data: MinimapData | null): void {
     this.clearRooms();
     if (!data) return;
+    const parts: Float32Array[] = [];
+    const ranges: RoomBatch['ranges'] = [];
+    const m = new THREE.Matrix4();
+    const e = new THREE.Euler();
+    const v = new THREE.Vector3();
+    let start = 0;
     for (const r of data.rooms) {
-      const g = geometryOf(r.model);
-      const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
-      m.color.setRGB(GROUND_COLOR[0], GROUND_COLOR[1], GROUND_COLOR[2], THREE.LinearSRGBColorSpace);
-      const mesh = new THREE.Mesh(g, m);
-      mesh.position.set(r.position[0], r.position[1], r.position[2]);
-      mesh.rotation.set(bamsToRad(r.rotation[0]), bamsToRad(r.rotation[1]), bamsToRad(r.rotation[2]), 'ZYX');
-      mesh.frustumCulled = false;
-      mesh.renderOrder = 0;
-      mesh.visible = false;
-      this.rooms.add(mesh);
-      this.roomGeometries.push(g);
-      this.roomMaterials.push(m);
+      const tris = modelTriangles(r.model);
+      e.set(bamsToRad(r.rotation[0]), bamsToRad(r.rotation[1]), bamsToRad(r.rotation[2]), 'ZYX');
+      m.makeRotationFromEuler(e).setPosition(r.position[0], r.position[1], r.position[2]);
+      for (let i = 0; i < tris.length; i += 3) {
+        v.set(tris[i], tris[i + 1], tris[i + 2]).applyMatrix4(m);
+        tris[i] = v.x;
+        tris[i + 1] = v.y;
+        tris[i + 2] = v.z;
+      }
+      parts.push(tris);
+      ranges.push({ start, count: tris.length / 3 });
+      start += tris.length / 3;
     }
+    const positions = new Float32Array(start * 3);
+    let o = 0;
+    for (const p of parts) {
+      positions.set(p, o);
+      o += p.length;
+    }
+    const rgba = new Float32Array(start * 4);
+    for (let i = 0; i < start; i++) rgba.set([GROUND_COLOR[0], GROUND_COLOR[1], GROUND_COLOR[2], 0], i * 4);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const colors = new THREE.BufferAttribute(rgba, 4);
+    colors.setUsage(THREE.DynamicDrawUsage);
+    geometry.setAttribute('color', colors);
+    const mesh = new THREE.Mesh(geometry, this.roomMaterial);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 0;
+    this.scene.add(mesh);
+    this.batch = { mesh, geometry, colors, ranges, alphas: new Float32Array(ranges.length).fill(0) };
+    this.signature = [];
   }
 
   private clearRooms(): void {
-    for (const g of this.roomGeometries) g.dispose();
-    for (const m of this.roomMaterials) m.dispose();
-    this.roomGeometries = [];
-    this.roomMaterials = [];
-    this.rooms.clear();
+    if (!this.batch) return;
+    this.scene.remove(this.batch.mesh);
+    this.batch.geometry.dispose();
+    this.batch = null;
   }
 
   private ensureRenderer(): THREE.WebGLRenderer {
     if (!this.renderer) {
       const canvas = document.createElement('canvas');
-      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+      this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false });
       this.renderer.setPixelRatio(1);
       this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
       this.renderer.setClearColor(0x000000, 0);
     }
     return this.renderer;
+  }
+
+  // The rooms' alpha (0 while undiscovered: the client skips those rooms).
+  private fadeRooms(state: MinimapState): void {
+    const b = this.batch;
+    if (!b) return;
+    let dirty = false;
+    state.rooms.forEach((room, i) => {
+      const range = b.ranges[i];
+      if (!range) return;
+      const a = room.flags & 1 ? 0 : room.alpha;
+      if (b.alphas[i] === a) return;
+      b.alphas[i] = a;
+      for (let k = range.start; k < range.start + range.count; k++) b.colors.setW(k, a);
+      dirty = true;
+    });
+    if (dirty) b.colors.needsUpdate = true;
   }
 
   private placeIcons(icons: readonly Icon[]): void {
@@ -211,6 +270,17 @@ export class MinimapView {
     if (arrows.instanceColor) arrows.instanceColor.needsUpdate = true;
   }
 
+  // Everything the image depends on, to skip unchanged frames.
+  private signatureOf(state: MinimapState, icons: readonly Icon[], pw: number, ph: number): number[] {
+    const c = state.camera;
+    const out = [state.type, pw, ph, c.x, c.y, c.z, c.yaw, this.assets ? 1 : 0, this.batch ? this.batch.ranges.length : -1];
+    for (const r of state.rooms) out.push(r.flags & 1 ? -1 : r.alpha);
+    for (const m of state.markers) out.push(m.x, m.z, m.heading, m.color, m.size);
+    out.push(-2);
+    for (const i of icons) out.push(i.x, i.z, i.color, i.shape, i.scale, i.heading);
+    return out;
+  }
+
   // Renders the state's current minimap and draws it into `ctx` (the 640x480
   // virtual space, `scale` device px per unit) at `dx` (the right-edge shift
   // of the radar on a wide screen).
@@ -220,20 +290,25 @@ export class MinimapView {
     // render_minimap_background.
     ctx.fillStyle = `rgba(0, 0, 0, ${BACKGROUND_ALPHA[state.type] / 255})`;
     ctx.fillRect(x, rect.y, rect.w, rect.h);
-    const r = this.ensureRenderer();
     const pw = Math.max(1, Math.round(rect.w * scale));
     const ph = Math.max(1, Math.round(rect.h * scale));
+    const icons = state.takeIcons();
+    const sig = this.signatureOf(state, icons, pw, ph);
+    const same = this.cache !== null && sig.length === this.signature.length && sig.every((v, i) => v === this.signature[i]);
+    if (!same) {
+      this.signature = sig;
+      this.render(state, icons, rect, pw, ph);
+    }
+    if (this.cache) ctx.drawImage(this.cache, x, rect.y, rect.w, rect.h);
+    this.drawCompass(ctx, state, dx);
+  }
+
+  private render(state: MinimapState, icons: readonly Icon[], rect: { w: number; h: number }, pw: number, ph: number): void {
+    const r = this.ensureRenderer();
     const size = r.getSize(this.size);
     if (size.x !== pw || size.y !== ph) r.setSize(pw, ph, false);
-    // Rooms.
-    state.rooms.forEach((room, i) => {
-      const mesh = this.rooms.children[i];
-      const mat = this.roomMaterials[i];
-      if (!mesh || !mat) return;
-      mesh.visible = !(room.flags & 1);
-      mat.opacity = room.alpha;
-    });
-    this.placeIcons(state.takeIcons());
+    this.fadeRooms(state);
+    this.placeIcons(icons);
     this.placeMarkers(state);
     // Camera (unknown_size_minimaps).
     const cam = state.camera;
@@ -250,8 +325,16 @@ export class MinimapView {
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
     r.clear();
     r.render(this.scene, this.camera);
-    ctx.drawImage(r.domElement, x, rect.y, rect.w, rect.h);
-    this.drawCompass(ctx, state, dx);
+    // Copy in the same task: the drawing buffer is not preserved.
+    const cache = (this.cache ??= document.createElement('canvas'));
+    if (cache.width !== pw || cache.height !== ph) {
+      cache.width = pw;
+      cache.height = ph;
+    }
+    const c2 = cache.getContext('2d');
+    if (!c2) return;
+    c2.clearRect(0, 0, pw, ph);
+    c2.drawImage(r.domElement, 0, 0);
   }
 
   // MinimapRenderIcon_00804b24.
@@ -261,6 +344,9 @@ export class MinimapView {
     const [pulse, needle] = COMPASS[state.type];
     const a = tex[pulse.texture];
     if (a) {
+      // unknown_set_blending_save: src alpha, dest 1 - src alpha (blend
+      // codes 8 / 6 of d3d8Dev_SetRenderState_Src_Dest_Blend); texture 1
+      // has its own alpha.
       ctx.save();
       ctx.globalAlpha *= Math.trunc(state.compassAlpha) / 255;
       ctx.drawImage(a, pulse.x + dx, pulse.y, COMPASS_SIZE, COMPASS_SIZE);
@@ -268,11 +354,15 @@ export class MinimapView {
     }
     const b = tex[needle.texture];
     if (b) {
+      // unknown_renderstate_blend_save: src alpha, dest ONE (codes 8 / 10):
+      // additive. Texture 0 (format 6) is opaque with a black ground, which
+      // the addition leaves out.
       // RenderMinimapIcon_00819f7c turns the corners by [[c, s], [-s, c]]
       // about the pivot: a canvas rotation by -angle (y down). The full map
       // draws it with heading 0.
       const heading = state.type === 1 ? 0 : state.heading;
       ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
       ctx.translate(needle.x + needle.pivotX + dx, needle.y + needle.pivotY);
       ctx.rotate(-bamsToRad(heading));
       ctx.drawImage(b, -needle.pivotX, -needle.pivotY, COMPASS_SIZE, COMPASS_SIZE);
@@ -282,14 +372,14 @@ export class MinimapView {
 
   dispose(): void {
     this.clearRooms();
+    this.roomMaterial.dispose();
     this.iconMaterial.dispose();
     for (const m of [this.discs, this.gates, this.arrows]) m?.dispose();
-    if (this.assets) {
-      for (const g of Object.values(this.assets.models)) g.dispose();
-      for (const b of this.assets.compass) b.close();
-    }
+    if (this.assets) disposeMinimapAssets(this.assets);
+    this.assets = null;
     this.renderer?.dispose();
     this.renderer?.forceContextLoss();
     this.renderer = null;
+    this.cache = null;
   }
 }

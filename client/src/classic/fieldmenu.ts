@@ -136,6 +136,15 @@ export class FieldMenu {
     else this.menu.toggle(this.entries());
   }
 
+  // The Area Map window goes away at once (a floor change destroys the
+  // field's windows): the full map ends and the menu shows its panel again.
+  closeAreaMap(): void {
+    if (!this.areaMap) return;
+    this.areaMap.dispose();
+    this.areaMap = null;
+    this.menu.leafOpen = false;
+  }
+
   close(): void {
     this.closeLeaf();
     this.areaMap?.anim.close();
