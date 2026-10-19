@@ -90,10 +90,11 @@ export class QuestTown {
     this.ui.onAdvance = () => {
       this.area?.vm.dismissMessage();
       this.quest?.vm.dismissMessage();
+      this.area?.vm.dismissBoard();
+      this.quest?.vm.dismissBoard();
     };
     this.ui.onAction = () => this.action();
     this.ui.onTick = () => this.tick();
-    this.ui.onOtherKey = (e) => this.otherKey(e);
     this.view.inputBlocked = () => this.ui.blocking || this.view.npcs.talking || this.counterOpen;
     const npcs = this.view.npcs;
     npcs.host = {
@@ -153,6 +154,9 @@ export class QuestTown {
       clientId: () => this.game.selfId,
       difficulty: () => this.game.info?.difficulty ?? 0,
       showMessage: (m) => this.show(m),
+      // The main menu holds the controls (the Quest Board window is one of
+      // its windows, classic/questboard.ts).
+      uiBlockingInput: () => this.view.hud.menu.isOpen,
       closeMessage: (k, target) => {
         if (k === 'message') this.ui.closeBalloon(target);
         else if (k === 'window') this.ui.closeWindow();
@@ -254,6 +258,9 @@ export class QuestTown {
 
   private tick(): void {
     this.area?.vm.frame();
+    // Enter may have reached the quest board text through the Quest Board
+    // window (classic/questboard.ts) instead of the overlay.
+    if (!this.area?.vm.boardWaiting && !this.quest?.vm.boardWaiting) this.ui.boardAdvanced();
     this.view.npcs.updateVisibility();
     // at_coords_call: the thread starts by itself when the player walks in.
     const me = this.view.selfPose();
@@ -270,20 +277,6 @@ export class QuestTown {
         vm.startThread(h.label);
       } else if (!inside) this.insideZones.delete(h.token);
     }
-  }
-
-  // The quest board (set_quest_board_handler items whose display register
-  // r74..r79 is 1). The exe opens it from the in-game main menu, which this
-  // client does not have yet: the B key opens it.
-  private otherKey(e: KeyboardEvent): boolean {
-    if (e.key.toLowerCase() !== 'b' || e.repeat || !this.quest) return false;
-    const vm = this.quest.vm;
-    const items = vm.questBoard.filter((it) => vm.regsI[74 + it.index] === 1);
-    if (!items.length) return false;
-    void this.ui.list(items.map((it) => it.name), { cancellable: true }).then((i) => {
-      if (i !== null && items[i]) vm.startThread(items[i].label);
-    });
-    return true;
   }
 
   // --- counters ---------------------------------------------------------------

@@ -3,10 +3,9 @@
 ## Next up (queued 2026-10-18)
 Work stopped here on request; pick these up first, in order. Each was planned
 as its own commit with tests, a DEVLOG entry and a Chrome check.
-1. The in-game main menu path to the quest board (replaces the temporary B key,
-   if the client has one).
-2. Then: Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape
-   motion, Episode 2 enemies' FSMs, the title / login screens, water distortion.
+1. Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape motion,
+   Episode 2 enemies' FSMs, the Episode 1 boss fights (where they move their
+   children), the title / login screens, water distortion.
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
@@ -129,8 +128,8 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 - [x] Quest VM: threads, registers, the arg stack, floor handlers, the map designations, quest flags (`6x75`/`6x6F`), counters, switch flags, message windows and the quest board (`quest/vm.ts`, `quest/session.ts`, `quest/run.ts`)
 - [x] Quest floors: the quest's designation decides the map and the variation, and its `.dat` replaces the free-play set data (`render/gameview.ts`)
 - [x] NPCs: every humanoid NPC class of the factory table (Pioneer 2, Lab, quest NPCs, the tekker by section id, the NgcBase cast per map type) with its own model and the town idle motion (`plymotionnpctown.cpt`), display registers, turning to the player and talk (`formats/npcmodels.ts`, `render/npcview.ts`, `tests/npcs.test.ts`)
-- [x] Quests: the area script (`map_city_on_e.bin`), the Hunter's Guild and government counters (quest menu, accept, result on r255/r253, reward label, cancel), quest NPC talk, `at_coords_talk`/`call`, `set_player_start_position` (`6x24`), `p_return_guild`, the meseta reward (`6xC9`), NPC players (`6x69` + `npcplayerchar.dat`), the speech balloon / window / list / quest board drawn like the exe (`quest/town.ts`, `quest/questui.ts`, `tests/questflow.test.ts`)
+- [x] Quests: the area script (`map_city_on_e.bin`), the Hunter's Guild and government counters (quest menu, accept, result on r255/r253, reward label, cancel), quest NPC talk, `at_coords_talk`/`call`, `set_player_start_position` (`6x24`), `p_return_guild`, the meseta reward (`6xC9`), NPC players (`6x69` + `npcplayerchar.dat`), the speech balloon / window / list / quest board text drawn like the exe (`quest/town.ts`, `quest/questui.ts`, `tests/questflow.test.ts`), the main menu's Quest Board window (`classic/questboard.ts`, `tests/questboard.test.ts`)
 - [x] NPCs: walking townspeople (param6 = 1 wander around the spawn point), turning back to the spawn angle after a talk, NPC collision (round hitbox of radius 5 that stops the player and the other NPCs, sidestep response) (`render/npcwander.ts`)
 - [x] NPCs: the talk cameras: camera movers of the Principal, his secretary and three Lab NPCs (table 0x00909260), the default side view (heading +- 0x6000), NPCs that do not turn for the talk
 - [ ] NPCs: the talk mode of the player camera (+0x100: field of view 0x22d8, target offset), TObjNpcEnemy (0x33), the NPC Rappy / Hildebear / Dark Bringer (0x45 / 0x46 / 0xa9) and the Episode 4 quest NPC (0x118)
-- [ ] Quests: NPC players' follow / attack AI (6x69 commands 1-3 are logged only), the other Pioneer 2 counters (medical center, giveaway), the in-game main menu that opens the quest board (B key for now), the text colour palette, challenge mode and Battle Arena opcodes, the enemy-parameter family, random-enemy `.dat` sections (types 4/5) and the `evt2` event format
+- [ ] Quests: NPC players' follow / attack AI (6x69 commands 1-3 are logged only), the other Pioneer 2 counters (medical center, giveaway), the text colour palette, challenge mode and Battle Arena opcodes, the enemy-parameter family, random-enemy `.dat` sections (types 4/5) and the `evt2` event format

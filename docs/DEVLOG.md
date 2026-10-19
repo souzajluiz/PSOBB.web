@@ -88,6 +88,72 @@ fullscreen timeout / cancel / late enter), `controls`, `fieldhud`, `sound`,
 `minimap` tests, client `tsc --noEmit`, `vite build`. Chrome: pending on the
 main thread.
 
+## 2026-10-19: Quest Board window from the main menu
+
+**What changed:** the quest board opens the way the exe opens it: field main
+menu > Item Pack > Quest Board (menu id 0xF of the Item Pack table
+`0x009f2f80`, enabled only while a quest runs: `g_QuestStarted`, the view's
+running quest). The temporary B key and its DOM list are gone. The window is
+`classic/questboard.ts` (`ChallengePlayerListWindow_Constructor_00754294` and
+its list window `create_quest_board_hud_menu`), opened and closed by
+`classic/fieldmenu.ts` like the Area Map, drawn on the field HUD canvas.
+`disp_msg_qb` / `add_msg` on the board text now wait for the decide key, as
+in the exe, and a board item's thread runs on the exe's second runner.
+
+**Details:**
+- `handle_player_menu_select` 0xF builds the owner object, which sets HUD
+  flag 0x10 (the status window closes, `STATUS_HIDING_FLAGS`); its destructor
+  (`ChallengePlayerListWindow_Destructor_007541f8`) clears it. The list window:
+  GUI 0x73 = (13, 256), template `0x009f4684` = 434 x 184, flags 3 (SE 0x572 /
+  0x573), title unitxt 11/0x3E, elements `0x009f4520` relative to the content
+  (window + 10, `UiTextGeometryUpdate_0071b900`): the quest name centred on x
+  204, y 6 (`0x00973f84` -0.5, `0x00973f88` 204); the selected item's name
+  right-aligned on x 379, y 53 (`QuestListWindow_SetSelectedText_00754954`,
+  `0x00973f78`); six 56 x 56 images of f256_hyouji texture 2 texel (151, 0)
+  at x 33, 97, 161, 225, 289, 386, y 91, shown when the slot's register
+  (r74 + slot, `get_quest_board_slot_enabled_007544d0`: != 0, not == 1) is set
+  at open. They grow from their centre with the opening wipe
+  (`unknown_render_sdjz_hud_icons`: reveal / (w * 3.5), capped at 0.5).
+- Selection (+0x61): the next set slot, +1 with 7 wrapping to 1 over slots
+  0..6 (r80 counts for the selection but has no image); re-run every frame
+  while the selected slot is not set. No set slot at open = bit 4: no name,
+  no decide. Keys (`QuestListWindowUpdate_0075472c`): Left / Right SE 0x56F,
+  -1 / +1 over 0..5 wrapping to set slots; decide SE 0x570
+  (`QuestListWindow_ConfirmSelection_00754998`); cancel SE 0x585
+  (`GuildCardListWindow_Cancel_0074943c`).
+- Owner states (`ChallengePlayerListWindow_Process_00754380`): cancel hands
+  the keys back to the menu (same entry) and the window closes with its
+  animation; decide starts the item's label with `CreateQuestThread_006bcdec`
+  (QuestThread3, `quest_run_thread_2`) and the board takes no keys until that
+  thread ends. Enter meanwhile goes to the VM (`dismissBoard`).
+- Drawing (`GuildCardSearchWindow_Render_007549c8`): frame, title, then while
+  the counter c >= 0 the cursor (`ChatShortcutMenuWindow_RenderButtonBackground
+  _0075afb8`: four 12 x 12 corners of texture 2 from texel (223, 0), pulled in
+  by (frame & 15) * 0.3) and an 0xFF7E00 line strip from the slot (+28, +7:
+  `0x00973f64` / `0x00973f60`) to the name's x, y + 20 (`0x00973f5c`) and
+  along under it, both fading in over 6 frames (`0x00973f6c`); then the
+  elements, texts under the wipe.
+- Board text: `opcode_disp_msg_qb` / `opcode_add_msg` set yield reason
+  `disp_msg_qb__add_msg` (5), which waits for the decide key in both runners
+  (q146 "Maximum Attack 4th Stage -1C-" shows "You currently cleared..." then
+  "<r118> enemies." on its "Number of kills" item; before, it closed at once).
+  In `quest_run_thread_2` the thread also ends, with the dialogs reset
+  (`ResetQuestDialogState_006b0ba4`), once the player's UI no longer blocks
+  input (`IsPlayerSlotUIBlockingInput_00716ba0`; here: the main menu closed).
+  The text window stays on the quest overlay canvas, now above the field HUD
+  (`QUEST_LAYER`), so it is drawn over the board.
+- Left out / approximated: key 0x12's thread abort in the board-text wait
+  (which key it is was not traced), the title's slide once open
+  (`UIElement_AddFloatToOffset_00761388`), the board text window's width (sized
+  to its text as before), the keyboard menu mode 6; a slot with no handler
+  starts no thread (the exe would run its stale entry); where the exe would
+  spin forever looking for a set slot, the selection stays.
+
+**Checks:** `tests/questboard.test.ts` (menu rule, slots by register, keys,
+SE ids, owner states, HUD flag 0x10, the menu path and its way back, q146's
+board text wait and the runner 2 abort); quests, questflow, fieldhud, minimap,
+options and windowanim tests; client `tsc --noEmit`.
+
 ## 2026-10-19: Fullscreen, mute and touch controls
 
 **What changed:** three browser conveniences that are not in PsoBB.exe and do

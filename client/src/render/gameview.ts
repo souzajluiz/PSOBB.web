@@ -165,6 +165,7 @@ export class GameView {
       items: this.items,
       area: () => this.current?.area ?? 0,
       questStarted: () => this.quest !== null,
+      quest: () => this.quest,
       blocked: () => this.field.menu.open,
       cast: (t) => this.combat.castTechnique(t),
       telepipeAllowed: () => this.telepipes.allowed(),

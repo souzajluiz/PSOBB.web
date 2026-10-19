@@ -18,7 +18,11 @@
 //                    stage.ts;
 //   quest board      `disp_msg_qb`: a text window at GUI position 0x74 =
 //                    (39, 340) (opcode_disp_msg_qb .c:604116), sized to its
-//                    text here (the exe's width is not recovered);
+//                    text here (the exe's width is not recovered); add_msg
+//                    adds a line; the thread waits for Enter meanwhile
+//                    (disp_msg_qb__add_msg) but the player is not locked. It
+//                    is mostly shown over the Quest Board window of the main
+//                    menu (classic/questboard.ts), which forwards Enter itself;
 //   yes / no         the counters' confirmation (yes_no_list_constructor at GUI
 //                    position 0x2d = (266, 270), " Yes " / " No " from
 //                    unitxt_shop group 0);
@@ -27,12 +31,16 @@
 //                    332 x 80 (immediates in MedicalCenterDialog_ProcessState_006ce004
 //                    and 0x006d6a78, 0x006dc794 -> 0x0073c7e8).
 //
-// Enter (the action button) moves a waiting balloon or window on; arrows and
-// Enter drive lists, Escape / Backspace cancel them.
+// Enter (the action button) moves a waiting balloon, window or quest board text
+// on; arrows and Enter drive lists, Escape / Backspace cancel them.
+//
+// The canvas is above the field HUD's (classic/hud.ts QUEST_LAYER): the quest's
+// windows are created after the HUD, the main menu and its Quest Board window.
 
 import * as THREE from 'three';
 import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
 import { drawGameText, gameTextWidth, GAME_TEXT } from '../classic/gametext.ts';
+import { QUEST_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawSelectBar, drawWindowFrame, textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -77,7 +85,7 @@ export class QuestUi {
   private body: CanvasImageSource | null = null;
   private balloons: Balloon[] = [];
   private window: { text: string; waiting: boolean; rect: { x: number; y: number; w: number; h: number } } | null = null;
-  private board: string[] | null = null;
+  private board: { lines: string[]; waiting: boolean } | null = null;
   private lists: ListState[] = [];
   private raf = 0;
   private last = 0;
@@ -87,20 +95,18 @@ export class QuestUi {
   // player by client id), or null when it is not on this floor.
   speakerHead: (target: number) => THREE.Vector3 | null = () => null;
   camera: () => THREE.Camera | null = () => null;
-  // Enter moved a waiting balloon or window on.
+  // Enter moved a waiting balloon, window or quest board text on.
   onAdvance: () => void = () => {};
   // Enter while nothing waits (the caller looks for an NPC to talk to).
   onAction: () => boolean = () => false;
   // Once per 30 Hz game tick (quest/town.ts runs the area script on it).
   onTick: () => void = () => {};
-  // A key the overlay did not use (quest/town.ts opens the quest board).
-  onOtherKey: (e: KeyboardEvent) => boolean = () => false;
 
   constructor(host: HTMLCanvasElement) {
     this.host = host;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'quest-ui-overlay';
-    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none' });
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(QUEST_LAYER) });
     host.parentElement?.append(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
     host.addEventListener('keydown', this.onKey, true);
@@ -161,9 +167,16 @@ export class QuestUi {
 
   // --- quest board ---------------------------------------------------------------
 
+  // disp_msg_qb (a new text) / add_msg (one more line); both wait for Enter.
   showBoard(text: string, append = false): void {
     const lines = plainText(text).split('\n');
-    this.board = append && this.board ? [...this.board, ...lines] : lines;
+    this.board = { lines: append && this.board ? [...this.board.lines, ...lines] : lines, waiting: true };
+  }
+
+  // Enter reached the quest board text some other way (the Quest Board
+  // window holds the keys while the menu is open).
+  boardAdvanced(): void {
+    if (this.board) this.board.waiting = false;
   }
 
   closeBoard(): void {
@@ -223,12 +236,13 @@ export class QuestUi {
         const r = this.pendingTell;
         this.pendingTell = null;
         r();
-      } else if (this.window?.waiting || this.balloons.some((b) => b.waiting)) {
+      } else if (this.window?.waiting || this.balloons.some((b) => b.waiting) || this.board?.waiting) {
         if (this.window) this.window.waiting = false;
         for (const b of this.balloons) b.waiting = false;
+        this.boardAdvanced();
         this.onAdvance();
       } else used = this.onAction();
-    } else used = this.onOtherKey(e);
+    } else used = false;
     if (!used) return;
     e.preventDefault();
     e.stopImmediatePropagation();
@@ -274,7 +288,7 @@ export class QuestUi {
       if (this.body) b.bubble.draw(ctx, { body: this.body, tab: this.body });
     }
 
-    if (this.board) this.drawText(ctx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
+    if (this.board) this.drawText(ctx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board.lines, extra);
     if (this.window) {
       const W = this.window.rect;
       const lines = this.window.text.split('\n');
