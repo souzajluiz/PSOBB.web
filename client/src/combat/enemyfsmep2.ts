@@ -65,7 +65,7 @@ export const BOOMA_MELEE = {
 // handlers; the families add their states and their +0xf0 / +0xf4 / +0xf8 /
 // +0x19c overrides.
 abstract class BoomaBrain<S extends string> extends BrainBase {
-  abstract state: S | 'dead';
+  abstract override state: S | 'dead';
   confused = false;
   hpFraction = 1; // the owner keeps it current
   near = false; // the guard-stance flag
@@ -544,7 +544,7 @@ export class MerilliaAi extends BoomaBrain<MerilliaState> {
     }
   }
 
-  onDamage(clientId: number): void {
+  override onDamage(clientId: number): void {
     if (this.state === 'dead') return;
     super.onDamage(clientId);
     this.sentinel = false;

@@ -265,7 +265,7 @@ export const ITEM_HEIGHT = 16; // measured: bar and text centred 7.5-8 px below 
 
 export interface MenuItem {
   label: string;
-  color?: string; // FUN_00735db8 item color (ARGB 0xffffcc33 -> #ffcc33)
+  color?: string | undefined; // FUN_00735db8 item color (ARGB 0xffffcc33 -> #ffcc33)
   selectable?: boolean;
 }
 

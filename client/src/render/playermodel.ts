@@ -382,7 +382,7 @@ export function clampAppearance(charClass: number, a: PlayerAppearance): PlayerA
   };
 }
 
-export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE, opts: { emblemSectionId?: number } = {}): PlayerModel {
+export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE, opts: { emblemSectionId?: number | undefined } = {}): PlayerModel {
   const a = clampAppearance(assets.charClass, appearance);
   const L = assets.letter;
   const lists = playerTextureLists(assets, a, opts.emblemSectionId);

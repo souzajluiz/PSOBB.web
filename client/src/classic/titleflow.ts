@@ -352,7 +352,7 @@ export type MenuResult = 'start' | 'patch' | 'exit' | 'closed' | null;
 export interface MenuRow {
   label: string;
   value: number; // -1 for the account line
-  color?: string;
+  color?: string | undefined;
   selectable: boolean;
 }
 

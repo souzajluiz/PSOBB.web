@@ -82,7 +82,6 @@ const BLEND_FACTORS: THREE.BlendingSrcFactor[] = [
 // Strip flags (NJD_FST_*).
 const STRIP_IGNORE_LIGHT = 0x01;
 const STRIP_USE_ALPHA = 0x08;
-const STRIP_DOUBLE_SIDE = 0x10;
 // Texture chunk flags.
 const TEX_FLIP_U = 0x80;
 const TEX_FLIP_V = 0x40;

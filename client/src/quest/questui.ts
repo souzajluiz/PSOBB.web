@@ -75,7 +75,7 @@ interface ListState {
   cursor: number;
   x: number;
   y: number;
-  title?: string; // a text line above the items
+  title?: string | undefined; // a text line above the items
   resolve: (i: number | null) => void;
   cancellable: boolean;
 }

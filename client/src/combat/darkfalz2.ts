@@ -144,7 +144,6 @@ export class DfForm2 extends DfEntity {
   private beamZ = 0;
   private beamSide = 1;
   private beamSign = 1;
-  private beamDone = false;
   private readonly marks: Vec3[] = [];
   private markCount = 0;
   private marksShown = false;
@@ -209,7 +208,6 @@ export class DfForm2 extends DfEntity {
         // toward the body, and the side flips every ball.
         this.anim.frame = 0;
         this.timer = F2.beamFrames;
-        this.beamDone = false;
         this.beamSign = st === F2.beamL ? 1 : -1;
         const len = Math.hypot(this.x, this.z) || 1;
         this.beamX = (this.x / len) * F2.beamRing;

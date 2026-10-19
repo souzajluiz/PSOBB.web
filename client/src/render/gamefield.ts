@@ -84,7 +84,6 @@ const HEIGHT_WINDOW = 30;
 export class GameField {
   private viewer: MapViewer;
   private game: Game;
-  private files: ClientFiles;
   private opts: GameFieldOptions;
   private music: FieldMusic | null;
   readonly menu: WarpMenuOverlay;
@@ -129,7 +128,6 @@ export class GameField {
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, opts: GameFieldOptions) {
     this.viewer = viewer;
     this.game = game;
-    this.files = files;
     this.opts = opts;
     this.music = opts.bgm ? new FieldMusic(opts.bgm) : null;
     this.menu = new WarpMenuOverlay(viewer.renderer.domElement);

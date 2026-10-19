@@ -35,7 +35,6 @@ const SEG_PARALLEL_EPS = -1e-5;
 const SEG_FRONT_EPS = 1e-5;
 // unknown_player_touching_wall_maybe
 export const WALL_RAY_HEIGHT = 5; // rays are cast this far above the feet
-const WALL_RADIUS_PAD = 4; // extra culling radius for the motion ray
 const WALL_HEAD_ON_DOT = -0.87; // dot(dir, wall normal) at or below this stops the player
 // The player's hitbox (SinowberillChallengePlayer_InitializeSpawnData_00695f28
 // fills the box at player+0x758 and hands it to ConstructEntityHitbox_007b9ccc):

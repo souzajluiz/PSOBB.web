@@ -322,15 +322,15 @@ export interface EnemyMotionSpec {
   loop: boolean;
   // A shape motion entry (.njs, relative to the first motion) drawn at the
   // motion's frame (njDrawShapeMotion); chunk models only.
-  shape?: number;
+  shape?: number | undefined;
 }
 
 export interface EnemyPartSpec {
   model: number; // model entry (BML position)
   motion?: EnemyMotionSpec | null;
-  texlistOf?: number; // draw with this model entry's texture list
-  texRemap?: number[]; // texture id i (< length) draws as texture texRemap[i] of the list
-  textureArchive?: string; // separate XVM used as the texture list (e.g. Gillchic)
+  texlistOf?: number | undefined; // draw with this model entry's texture list
+  texRemap?: number[] | undefined; // texture id i (< length) draws as texture texRemap[i] of the list
+  textureArchive?: string | undefined; // separate XVM used as the texture list (e.g. Gillchic)
   // --- child objects (formats/enemymodels.ts) -------------------------------
   // Model and motion come from this archive instead of the enemy's own
   // (Saint-Milion loads two BMLs); EnemyModelSpec.archives names it.

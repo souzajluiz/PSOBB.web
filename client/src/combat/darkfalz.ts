@@ -46,7 +46,6 @@ import {
   sinB,
   type DfEvent,
   type DfFight,
-  type DfRow,
   type DfRows,
   type Vec3,
 } from './darkfalzcommon.ts';
@@ -762,7 +761,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   }
 
   // Free every pool (the floor was left).
-  kill(): void {
+  override kill(): void {
     this.finished = true;
   }
 }

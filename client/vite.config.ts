@@ -71,7 +71,8 @@ export default defineConfig({
           const name = new URL(req.url ?? '/', 'http://dev').searchParams.get('name') ?? '';
           if (req.method !== 'POST' || !/^[a-z0-9_-]{1,40}$/.test(name)) {
             res.statusCode = 400;
-            return res.end();
+            res.end();
+            return;
           }
           const chunks: Buffer[] = [];
           req.on('data', (c: Buffer) => chunks.push(c));

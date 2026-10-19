@@ -119,7 +119,7 @@ export const F3 = {
 
 // The homing bolt of HORMING (object 0x00453030, life 0x96).
 export class HomingBolt extends EnemyShot {
-  readonly absolute = true;
+  override readonly absolute = true;
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xb060ff, size: 2.5 };
   private vx: number;
@@ -211,7 +211,6 @@ export class DfForm3 extends DfEntity {
   private slashStart = 0;
   private slashStep = 0;
   private slashLeft = 0;
-  private volleys = 0;
 
   constructor(fight: DfFight, row: Form3Row, x: number, z: number) {
     super(DF_ID.form3, row.hp);
@@ -256,7 +255,6 @@ export class DfForm3 extends DfEntity {
         this.oldFace = this.face;
         this.from = F3.above;
         this.to = F3.above;
-        this.volleys = 0;
         break;
       case F3.cut:
       case F3.cut + 1:

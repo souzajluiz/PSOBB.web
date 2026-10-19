@@ -34,7 +34,7 @@
 // implemented.
 
 import { decodeInstruction, type QuestBin, type QuestInstruction } from '../formats/questbin.ts';
-import { F_ARGS, F_CLEAR_ARGS, F_PUSH_ARG } from '../formats/questopcodes.ts';
+import { F_ARGS, F_CLEAR_ARGS } from '../formats/questopcodes.ts';
 
 export const QUEST_NUM_REGISTERS = 0x100;
 export const QUEST_NUM_FLOORS = 0x12;
@@ -56,7 +56,7 @@ export type ArgKind = 'int' | 'regAddr' | 'label' | 'string';
 export interface ArgValue {
   kind: ArgKind;
   value: number;
-  text?: string;
+  text?: string | undefined;
 }
 
 // 'board' is disp_msg_qb__add_msg (5): disp_msg_qb, or add_msg on the open
@@ -178,7 +178,7 @@ export interface QuestFloorDesignation {
 export interface QuestVMOptions {
   bin: QuestBin;
   episode?: number; // 1, 2 or 4; set_episode overrides it
-  host?: QuestVMHost;
+  host?: QuestVMHost | undefined;
   // Dismiss message boxes and answer lists automatically (tests, headless runs).
   autoAdvance?: boolean;
 }

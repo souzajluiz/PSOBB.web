@@ -842,7 +842,7 @@ export class DragonAi extends BrainBase {
 
   // --- the leader's step: UpdateDragonAiState (0x00423f74) -------------------------
 
-  private leaderStep(targets: readonly AiTarget[], send: boolean): void {
+  private leaderStep(send: boolean): void {
     if (this.cursor < DRAGON_CURSOR_B) {
       if (!(this.flags & NO_ROAR)) {
         // control_dragon_low_hp_roar (0x0042093c).
@@ -867,7 +867,7 @@ export class DragonAi extends BrainBase {
       this.forceNext(send);
       return;
     }
-    this.pick(targets, send);
+    this.pick(send);
   }
 
   // The follow-up each state's phase 9 would pick, without its test.
@@ -903,7 +903,7 @@ export class DragonAi extends BrainBase {
       this.hitFlag = false;
     }
     if (leaderNow) {
-      this.leaderStep(targets, true);
+      this.leaderStep(true);
       if (!this.dead) this.leaderPost(targets);
     } else if (++this.stall >= DRAGON_GUESS.followerWait) {
       // ASSUMED: the exe has no resync for a follower (it runs phase 0 and
@@ -911,9 +911,9 @@ export class DragonAi extends BrainBase {
       // the body stuck, a follower that has heard nothing this long takes the
       // leader's step itself, without sending.
       this.stall = 0;
-      this.leaderStep(targets, false);
+      this.leaderStep(false);
     }
-    if (!this.dead) this.frameState(targets);
+    if (!this.dead) this.frameState();
     if (this.motionDirty) {
       this.motionDirty = false;
       const s = this.motionSlot;
@@ -1344,7 +1344,7 @@ export class DragonAi extends BrainBase {
 
   // --- phase 9: pick the next state (leader) -----------------------------------------
 
-  private pick(targets: readonly AiTarget[], send: boolean): void {
+  private pick(send: boolean): void {
     const S = DRAGON_STATE;
     switch (this.sid) {
       case S.intro:
@@ -1447,7 +1447,7 @@ export class DragonAi extends BrainBase {
 
   // --- phase 0: the frame ----------------------------------------------------------
 
-  private frameState(targets: readonly AiTarget[]): void {
+  private frameState(): void {
     const S = DRAGON_STATE;
     switch (this.sid) {
       case S.intro:

@@ -16,8 +16,8 @@ import type { BgmPlayer } from './bgm.ts';
 import { bossBgm, type BossBgm } from './bossbgm.ts';
 
 export type FieldBgm =
-  | { kind: 'sl'; index: number; delayFrames?: number; minZ?: number }
-  | { kind: 'adx'; name: string; delayFrames?: number }
+  | { kind: 'sl'; index: number; delayFrames?: number | undefined; minZ?: number }
+  | { kind: 'adx'; name: string; delayFrames?: number | undefined }
   | { kind: 'city'; zones: readonly BgmZone[] }
   | { kind: 'none' };
 

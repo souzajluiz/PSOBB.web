@@ -64,7 +64,7 @@ export interface TechMenuEnv {
 export const TECH_DISABLED = '#909090';
 export const TECH_HERE = '#fd3901'; // 0xfffd3901
 
-export function techItems(type: number, env: TechMenuEnv): Array<ListItem & { color?: string }> {
+export function techItems(type: number, env: TechMenuEnv): Array<ListItem & { color?: string | undefined }> {
   return (TECH_TYPES[type] ?? []).map((t) => {
     const learned = env.level(t) !== null;
     return {
@@ -137,7 +137,7 @@ export class TechniqueMenu {
   }
 }
 
-function drawTechList(ctx: CanvasRenderingContext2D, skin: WindowSkin, items: Array<ListItem & { color?: string }>, cursor: number, active: boolean, title: string): void {
+function drawTechList(ctx: CanvasRenderingContext2D, skin: WindowSkin, items: Array<ListItem & { color?: string | undefined }>, cursor: number, active: boolean, title: string): void {
   // drawListWindow handles the disabled colour; learned techniques that
   // cannot be cast here are drawn in 0xfffd3901 over the same layout.
   drawListWindow(ctx, skin, TECH_POS.x, TECH_POS.y, TECH_POS.w, title, items, cursor, active, (it) => (it as { color?: string }).color);

@@ -405,7 +405,7 @@ export class GaranzAi extends BrainBase {
     }
   }
 
-  tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
+  tick(targets: readonly AiTarget[], _animationEnded = false): AiFrame {
     const out = this.frame();
     if (this.state === 'dead') return out;
     this.timer++;
@@ -1021,7 +1021,7 @@ export class SinowAi extends BrainBase {
   }
 
   // The death handler (+0x104, 0x005900a0) sends the clones away first.
-  kill(): void {
+  override kill(): void {
     this.dismissClones();
     super.kill();
   }
@@ -1532,7 +1532,7 @@ export class CananeAi extends CanadineAi {
     return false;
   }
 
-  tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
+  override tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     if (this.state === 'notice' && this.timer === 0) {
       this.children.forEach((c, i) => {
         if (this.targetId !== null) c.alert(this.targetId, 2 + 2 * i);

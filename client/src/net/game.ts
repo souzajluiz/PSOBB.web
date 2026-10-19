@@ -450,7 +450,7 @@ export class Game extends Lobby {
     await timeout(this.joined, 8000, 'join game (64)');
   }
 
-  handle(c: Command): void {
+  override handle(c: Command): void {
     if (!this.started) return;
     if (!this.info) {
       // Before 64: a lobby message box (01 / 0101) or large message box means the server refused.

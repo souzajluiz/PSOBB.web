@@ -22,7 +22,7 @@
 import { RESULT_WAIT_FRAMES, STATUS_POS } from './connectstatus.ts';
 import { drawGameText } from './gametext.ts';
 import { makeTinter, ParticleSystem, parseParticleEntry } from './particles.ts';
-import type { Screen, Stage } from './stage.ts';
+import type { Screen } from './stage.ts';
 
 export interface ConnectingAssets {
   particleEntries: Uint8Array; // particleentry.dat

@@ -284,7 +284,7 @@ export interface AiFrame {
   // Le swims at its own y, combat/derolle.ts).
   y?: number;
   // Projectiles of the Caves / Mines FSMs (combat/enemyshots.ts).
-  shots?: EnemyShot[];
+  shots?: EnemyShot[] | undefined;
   // A player hold (6x2C, the Grass Assassin's web): the player may not move
   // farther than sqrt(radius2) from (x, z) for `frames`.
   hold?: { clientId: number; frames: number; particle: number; x: number; z: number; radius2: number } | null;

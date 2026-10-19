@@ -281,7 +281,6 @@ function extra(bml: string): { bml: string; models: number } {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(Math.trunc(v), lo), hi);
 const loop = (index: number, speed: number): EnemyMotionSpec => ({ index, speed, loop: true });
-const once = (index: number, speed: number): EnemyMotionSpec => ({ index, speed, loop: false });
 
 function pick(base: string, ctx: EnemyModelContext): string {
   const a = BY_BML.get(base)!;

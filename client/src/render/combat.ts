@@ -54,7 +54,7 @@ import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
-import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE, SCENE_NAMES } from '../combat/darkfalz.ts';
+import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
@@ -366,7 +366,6 @@ export class CombatView {
   private params: Promise<BattleParams | null> | null = null;
   private floor = 0;
   private area = 0;
-  private base = 0;
   private held = new Set<string>();
   private disposed = false;
   private rng: () => number = Math.random;
@@ -572,7 +571,6 @@ export class CombatView {
     const token = ++this.enterToken;
     this.floor = floor;
     this.area = area;
-    this.base = base;
     this.enemies.clear();
     this.attack = null;
     this.cast = null;
@@ -1574,7 +1572,6 @@ export class CombatView {
   // passes it to the core rolls the same attack again.
   private strike: { attackType: number; step: number } | null = null;
   private voloptHeld = false;
-  private voloptPlayed = new Set<number>();
 
   // On entering the floor: the control gets the parts' enemies and is linked
   // to the body (a room without a TBoss3VoloptP02 has nothing to link; the
@@ -1898,7 +1895,7 @@ export class CombatView {
     }
   }
 
-  private voloptForm2Event(e: EnemyRuntime, ai: VoloptForm2Ai, ev: VoloptEvent): void {
+  private voloptForm2Event(e: EnemyRuntime, _ai: VoloptForm2Ai, ev: VoloptEvent): void {
     switch (ev.kind) {
       case 'partsHp': {
         const body = this.game.sendVoloptPartsHp(0x1000 | e.index, ev.hp);
@@ -2955,7 +2952,7 @@ export class CombatView {
     if (!ai.ally) for (const ev of ai.events.splice(0)) this.sinowEvent(e, ai, ev);
   }
 
-  private sinowEvent(e: EnemyRuntime, ai: SinowAi, ev: SinowEvent): void {
+  private sinowEvent(e: EnemyRuntime, _ai: SinowAi, ev: SinowEvent): void {
     const list = this.sinowClones.get(e.index) ?? [];
     this.sinowClones.set(e.index, list);
     if (ev.kind === 'dismiss') {

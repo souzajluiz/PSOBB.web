@@ -387,7 +387,7 @@ export interface HudTextures {
   panel: CanvasImageSource; // f256_hyouji.prs texture 13
   icons: CanvasImageSource; // f256_hyouji.prs texture 0
   font: CanvasImageSource; // textureenglish.xvm / texturejapanese.xvm texture 0
-  status?: CanvasImageSource; // f256_hyouji.prs texture 1 (status icons)
+  status?: CanvasImageSource | undefined; // f256_hyouji.prs texture 1 (status icons)
 }
 
 export interface StatusValues {
@@ -401,7 +401,7 @@ export interface StatusValues {
   pb: number; // photon blast gauge
   dead: boolean;
   // PlayerVisualConfig name_color (ARGB, the player's +0x948).
-  nameColor?: Argb;
+  nameColor?: Argb | undefined;
   // get_monster_status icons of the player's status slots, in slot order
   // (combat/buffs.ts statusIcon).
   statusIcons?: readonly number[];
@@ -616,7 +616,7 @@ export interface PartyValues {
   hp: number;
   maxHp: number;
   dead: boolean;
-  nameColor?: Argb;
+  nameColor?: Argb | undefined;
   statusIcons?: readonly number[];
 }
 

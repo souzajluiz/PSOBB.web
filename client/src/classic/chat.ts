@@ -261,7 +261,10 @@ export class ChatBubble {
       case 1:
         this.sizeLeft = B.sizeFrames;
         this.state = 2;
-      // falls through
+        // then runs case 2 in the same frame
+        this.grow(1, 3);
+        this.place();
+        break;
       case 2:
         this.grow(1, 3);
         this.place();
@@ -269,7 +272,10 @@ export class ChatBubble {
       case 3:
         this.state = 4;
         this.textShown = true;
-      // falls through
+        // then runs case 4 in the same frame
+        this.place();
+        if (--this.life < 0) this.state = 7;
+        break;
       case 4:
         this.place();
         if (--this.life < 0) this.state = 7;
@@ -278,7 +284,10 @@ export class ChatBubble {
         this.sizeLeft = B.sizeFrames;
         this.textShown = false;
         this.state = 6;
-      // falls through
+        // then runs case 6 in the same frame
+        if (this.grow(0.5, 1)) this.scale = 0.5;
+        this.place();
+        break;
       case 6:
         if (this.grow(0.5, 1)) this.scale = 0.5;
         this.place();
@@ -286,7 +295,9 @@ export class ChatBubble {
       case 7:
         this.textShown = false;
         this.state = 8;
-      // falls through
+        // then runs case 8 in the same frame
+        if (this.grow(0, 9)) this.scale = 0;
+        break;
       case 8:
         if (this.grow(0, 9)) this.scale = 0;
         break;

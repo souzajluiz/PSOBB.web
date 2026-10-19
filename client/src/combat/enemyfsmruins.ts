@@ -1590,7 +1590,6 @@ export class DelsaberAi extends BrainBase {
   private far = false;
   private vx = 0;
   private vz = 0;
-  private guardFrom: number | null = null;
   private lastAttacker: number | null = null;
   private seen: readonly AiTarget[] = [];
   private drainOf: (clientId: number) => number;
@@ -1675,7 +1674,6 @@ export class DelsaberAi extends BrainBase {
   }
 
   private guard(t: AiTarget): void {
-    this.guardFrom = t.clientId;
     // The shield is an int16: the float sum is truncated when stored.
     this.shield = Math.trunc(this.shield - this.drainOf(t.clientId));
     if (this.shield < 1) {

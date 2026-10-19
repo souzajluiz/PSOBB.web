@@ -239,7 +239,7 @@ export class DrlEasing {
 
 // Shots of this fight carry absolute heights (the body swims at its own y).
 abstract class DrlShot extends EnemyShot {
-  readonly absolute = true;
+  override readonly absolute = true;
 }
 
 // One area hit on the frame it is made (the beam end, a sting's blast, a
@@ -806,7 +806,7 @@ export interface DeRolLeOptions {
   hp: number;
   leader: () => boolean;
   frames: (motion: number) => number; // frame count of a body motion
-  ground?: (x: number, z: number) => number | null;
+  ground?: ((x: number, z: number) => number | null) | undefined;
   rng: () => number;
 }
 

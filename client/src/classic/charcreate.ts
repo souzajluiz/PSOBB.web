@@ -412,7 +412,7 @@ class ClassRow extends SelWidget {
     if (s.state !== 0 && typeOf(this.index) !== s.type) return this.act;
     return 0.4 * this.act + 0.6;
   }
-  tick(s: ClassSel): void {
+  override tick(s: ClassSel): void {
     super.tick(s);
     // FUN_004f5314: slides in from x = -242 to 58 with (1 - cos) / 2 easing.
     this.x = this.fade < this.end ? 58 - 300 + ((1 - bcos((this.fade / this.end) * 32768)) * 0.5) * 300 : 58;
@@ -456,7 +456,7 @@ class TypeBanner extends SelWidget {
   isActive(s: ClassSel): boolean {
     return s.state === 0 ? this.index <= 2 && this.index === s.type : this.index >= 3 && this.index - 3 === s.cls;
   }
-  tick(s: ClassSel): void {
+  override tick(s: ClassSel): void {
     super.tick(s);
     this.counter++;
   }
@@ -515,7 +515,7 @@ class Portrait extends SelWidget {
   isActive(s: ClassSel): boolean {
     return s.state === 0 ? typeOf(this.index) === s.type : s.cls === this.index;
   }
-  tick(s: ClassSel): void {
+  override tick(s: ClassSel): void {
     super.tick(s);
     this.vis = this.fade * this.act;
     const p = PORTRAITS[this.index];
@@ -891,7 +891,7 @@ class ProportionEditor extends Editor {
     else if (pad.pressed.has('ok')) this.close('ok', d);
   }
 
-  ruler(): number {
+  override ruler(): number {
     return this.fade;
   }
 
@@ -923,7 +923,7 @@ class AutoEditor extends Editor {
     this.to = copyLook(d.look);
   }
 
-  ruler(): number {
+  override ruler(): number {
     return this.fade;
   }
 
@@ -996,11 +996,11 @@ class NameEditor extends Editor {
     this.value = d.name;
   }
 
-  handlesText(): boolean {
+  override handlesText(): boolean {
     return true;
   }
 
-  text(e: KeyboardEvent): void {
+  override text(e: KeyboardEvent): void {
     if (!this.alive) return;
     if (e.key === 'Backspace') this.value = this.value.slice(0, -1);
     else if (e.key.length === 1 && this.value.length < NAME_MAX && !e.ctrlKey && !e.metaKey) this.value += e.key;

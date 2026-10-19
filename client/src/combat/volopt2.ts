@@ -107,7 +107,7 @@ export const F2 = {
 // round(fparam4) + 240 frames, a 5 unit box; entity_hit_by_tech group 0
 // (group 0x11, slow, one time in ten in Ultimate) with iparam1.
 export class VoloptMissile extends EnemyShot {
-  readonly absolute = true;
+  override readonly absolute = true;
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff7040, size: 2 };
   private vx: number;
@@ -207,11 +207,8 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   private awake = false; // the control stood it up (AI state 3)
   private active = false; // the control reached phase 2 (the minion flag 0x8000000 is gone)
   private flinch = 0;
-  private flinchPending = false;
-  private saved = 0;
   private hitMarks = [false, false, false, false];
   private sinceHp: number; // the HP the last reaction left (+0x346)
-  private hitLocal = false;
   private hitFlag = false;
   private aim = 0xffff; // +0x340
   private waves = 0;
@@ -220,7 +217,6 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   private radius = 75;
   private sweep = 0;
   private rotation = 0;
-  private waited = 0;
   private readonly anim: VoloptAnim;
   private readonly dog = new VoloptWatchdog();
   private readonly move: EnemyMovementData;
@@ -240,17 +236,11 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   private prisonTimer = 0;
   private cage: { x: number; z: number; vx: number; vz: number; life: number; target: number } | null = null;
   killedAt: Vec3 | null = null;
-  private readonly framesOf: (motion: number) => number;
-  private readonly leaderOf: () => boolean;
-  private readonly selfOf: () => number;
   private readonly out: AiFrame;
 
   constructor(opts: Form2Options) {
     super(opts.x, opts.z, opts.angle, opts.rng);
     this.ultimate = opts.ultimate;
-    this.framesOf = opts.frames;
-    this.leaderOf = opts.leader;
-    this.selfOf = opts.selfId;
     this.move = opts.movement ?? FALLBACK.move;
     this.prisonMove = opts.prison ?? FALLBACK.prison;
     this.prisonHp = Math.max(1, opts.prisonHp || 260);
@@ -395,7 +385,6 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   private go(st: number): void {
     // Leave the old state (its objects go), enter the new one at sub 0.
     this.leave(this.st);
-    this.saved = this.st;
     this.st = st;
     this.sub = 0;
     this.timer = 0;
@@ -412,12 +401,11 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
 
   // A strike by the local player at (fx, fz). Returns the part it marked
   // (0..3), 4 for the body.
-  hit(amount: number, fx: number, fz: number, byLocal: boolean): number {
+  hit(amount: number, fx: number, fz: number, _byLocal: boolean): number {
     const d = Math.max(0, Math.round(amount));
     if (d <= 0 || !this.ready) return -1;
     this.hp = Math.max(0, this.hp - d);
     this.hitFlag = true;
-    this.hitLocal = byLocal;
     // ASSUMED: the box nearest to the attacker (boxes turn with the body).
     const c = Math.cos(this.heading * BAMS);
     const s = Math.sin(this.heading * BAMS);
@@ -446,7 +434,6 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     if (hp < this.hp) {
       this.hp = hp;
       this.hitFlag = true;
-      this.hitLocal = false;
     }
   }
 
@@ -600,12 +587,13 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
 
   private tickMissiles(targets: readonly AiTarget[]): void {
     const t = this.targetOf(targets);
+    // Sub-state 0 only sets up, then sub-state 1 runs in the same frame.
+    if (this.sub === 0) {
+      this.timer = F2.missileAim;
+      this.waves = 0;
+      this.sub = 1;
+    }
     switch (this.sub) {
-      case 0:
-        this.timer = F2.missileAim;
-        this.waves = 0;
-        this.sub = 1;
-      // falls through
       case 1:
         if (t) this.turnToward(t.x, t.z);
         this.sustain(0x350);
@@ -712,6 +700,13 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   // --- state 2: the laser and the bars -----------------------------------------------
 
   private tickLaser(targets: readonly AiTarget[]): void {
+    // Sub-state 3 only sets the budget of the round, then sub-state 4 runs in the same frame.
+    if (this.sub === 3) {
+      // The budget of this round: nothing in the first one (iparam2 of the
+      // prison row, 0 in Normal), 0x1555 after it.
+      this.sweep = this.rounds === 0 ? this.prisonMove.iparam[1] * F2.laserTurn : F2.laserSweep;
+      this.sub = 4;
+    }
     switch (this.sub) {
       case 0:
         this.anim.set(2);
@@ -735,12 +730,6 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
           this.sub = 3;
         }
         break;
-      case 3:
-        // The budget of this round: nothing in the first one (iparam2 of the
-        // prison row, 0 in Normal), 0x1555 after it.
-        this.sweep = this.rounds === 0 ? this.prisonMove.iparam[1] * F2.laserTurn : F2.laserSweep;
-        this.sub = 4;
-      // falls through
       case 4: {
         this.sustain(0x350);
         this.rotation += F2.laserTurn;
@@ -848,11 +837,12 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
 
   private tickCapture(targets: readonly AiTarget[]): void {
     const t = this.targetOf(targets);
+    // Sub-state 0 only sets up, then sub-state 1 runs in the same frame.
+    if (this.sub === 0) {
+      this.anim.set(6);
+      this.sub = 1;
+    }
     switch (this.sub) {
-      case 0:
-        this.anim.set(6);
-        this.sub = 1;
-      // falls through
       case 1: {
         this.sustain(0x348);
         if (!t) {

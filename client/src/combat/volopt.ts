@@ -304,7 +304,7 @@ export type VoloptEvent =
 export const NO_HITS: AiTarget[] = [];
 
 export class VoloptBolt extends EnemyShot {
-  readonly absolute = true;
+  override readonly absolute = true;
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xa8c8ff, size: 2.5 };
   constructor(x: number, y: number, z: number, power: number) {
@@ -335,8 +335,6 @@ export class VoloptPillar extends VoloptPart {
   attacking = false; // flag 0x10000 of +0x390
   retracting = false; // flag 0x20000
   locked = false; // flag 1: the state does not change
-  private saved = 0;
-  private savedSub = 0;
   // The bar object's state (+0x20 of the object at +0x3c0): 1 lowered, 2 raised.
   bars = 1;
   private readonly anim: VoloptAnim;
@@ -389,14 +387,11 @@ export class VoloptPillar extends VoloptPart {
   }
 
   private enter(st: number): void {
-    this.saved = this.st;
-    this.savedSub = this.sub;
     this.st = st;
     this.sub = 0;
   }
 
   private goIdle(): void {
-    this.saved = this.st;
     this.st = 0;
     this.sub = 0;
   }

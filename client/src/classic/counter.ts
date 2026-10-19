@@ -46,10 +46,10 @@ interface CounterMenu {
   x: number;
   y: number;
   items: string[];
-  next?: Array<CounterMenu | null>;
+  next?: Array<CounterMenu | null> | undefined;
   // Info window text per cursor row (the episode menu), shown while this menu
   // is the top one.
-  info?: string[];
+  info?: string[] | undefined;
   // Names the menu in onChoose.
   id?: CounterMenuId;
 }

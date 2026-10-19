@@ -388,7 +388,7 @@ export interface CounterEnv {
   rowContext: () => RowContext;
   pmt: () => ItemPMT | null;
   items: CounterItems;
-  log?: (msg: string) => void;
+  log?: ((msg: string) => void) | undefined;
 }
 
 interface Choice {

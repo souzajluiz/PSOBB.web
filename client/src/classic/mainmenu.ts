@@ -50,7 +50,7 @@ import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSk
 
 export interface MenuEntry {
   id: number;
-  sub?: MenuEntry[];
+  sub?: MenuEntry[] | undefined;
 }
 
 const e = (id: number, sub?: MenuEntry[]): MenuEntry => ({ id, sub });

@@ -38,7 +38,7 @@ export interface MapStats {
   textures: number;
   skippedEntries: number;
   animations: number;
-  batch?: BatchStats; // static pieces merged into batches (render/batching.ts)
+  batch?: BatchStats | undefined; // static pieces merged into batches (render/batching.ts)
 }
 
 // "map_city00_00n.rel" -> "map_city00.xvm"; "map_forest01n.rel" -> "map_forest01.xvm"

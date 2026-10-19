@@ -117,7 +117,6 @@ interface Box {
 
 export class FloorItemLayer {
   private viewer: MapViewer;
-  private files: ClientFiles;
   private items: GameItems;
   private opts: FloorItemLayerOptions;
   private archive: Promise<EnemyArchive | null>;
@@ -134,7 +133,6 @@ export class FloorItemLayer {
 
   constructor(viewer: MapViewer, files: ClientFiles, items: GameItems, opts: FloorItemLayerOptions) {
     this.viewer = viewer;
-    this.files = files;
     this.items = items;
     this.opts = opts;
     this.root.name = 'floor-items';

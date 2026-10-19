@@ -86,7 +86,7 @@ export interface Emitter {
   acc: number;
   // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
   // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
-  tint?: number;
+  tint?: number | undefined;
 }
 
 export interface Particle {
