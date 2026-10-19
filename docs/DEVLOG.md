@@ -6,7 +6,7 @@
 "The hosted runner lost communication with the server" (CPU / memory
 starvation). The workflow assumed the 4-core / 16 GB runner, but a private
 repository's `ubuntu-latest` has 2 cores and 7 GB. It now adds 8 GB of swap,
-builds with `BUILD_JOBS=2` and has a 180-minute timeout; the Dockerfile also compiles phosg, resource_dasm and newserv at `-O1` instead of CMake's Release `-O3` (faster and lighter on memory; a game server does not need `-O3`); DEPLOY.md says the
+builds with `BUILD_JOBS=2` and has a 180-minute timeout. A try at `-O1` to compile faster failed at once: GCC reports `'float_data' may be used uninitialized [-Werror=maybe-uninitialized]` in phosg's `JSON.cc` and the projects build with `-Werror`, so the Release `-O3` flags stay; DEPLOY.md says the
 first run takes an hour or more. Not re-run yet: pushing is on hold.
 
 ## 2026-10-19: prebuilt newserv image on GHCR
