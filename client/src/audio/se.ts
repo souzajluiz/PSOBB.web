@@ -190,6 +190,12 @@ export class SePlayer {
     return slot;
   }
 
+  /** A voice of this SE id is still playing (PlaySFX_008292dc's owner check). */
+  playing(id: number): boolean {
+    const slot = id < 0x700 ? seSlot(id) : 0;
+    return this.voices.some((v) => v.slot === slot);
+  }
+
   /** Stops the voices of an SE id (FUN_00829c38). */
   stop(id: number): void {
     const slot = seSlot(id);

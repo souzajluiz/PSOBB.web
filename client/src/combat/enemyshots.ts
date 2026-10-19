@@ -44,6 +44,9 @@ export abstract class EnemyShot {
   z: number;
   done = false;
   frames = 0;
+  // y is a world height, not a height above the launch ground (De Rol Le's
+  // children, combat/derolle.ts).
+  readonly absolute: boolean = false;
   abstract readonly effect: ShotEffect;
   abstract readonly look: ShotLook;
 

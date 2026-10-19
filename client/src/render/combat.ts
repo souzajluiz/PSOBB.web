@@ -48,6 +48,7 @@ import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../c
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
+import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -136,6 +137,7 @@ import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
+import type { NodeAnimator } from './enemymodel.ts';
 import type { PillarTrap, TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -165,6 +167,19 @@ const DEFAULT_SLOTS: ReadonlyArray<{ group1: number; group2: number; disabled: b
   { group1: 2, group2: 1, disabled: false },
   { group1: 4, group2: 0, disabled: false },
 ];
+
+// What render/combat.ts keeps per De Rol Le (combat/derolle.ts): the body
+// nodes it reads, the child part groups it moves, and reused point arrays.
+interface DrlView {
+  spine: THREE.Object3D[] | null; // 11 captured nodes (null: no node tree)
+  attach: THREE.Object3D[] | null; // the 4 tentacle attach nodes
+  tentacles: (THREE.Object3D | null)[];
+  stings: (THREE.Object3D | null)[];
+  bodyAnimators: NodeAnimator[];
+  segs: Vec3[];
+  atts: Vec3[];
+  drawn: boolean; // the node matrices come from a frame that was drawn
+}
 
 interface EnemyRuntime {
   instance: EnemyInstance;
@@ -232,6 +247,8 @@ const OWN_FSM = new Set([
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
+  // Episode 1 bosses (combat/derolle.ts).
+  'TBoss2DeRolLe',
 ]);
 
 // Classes whose own target search honours confusion: the Booma handlers
@@ -484,6 +501,9 @@ export class CombatView {
     this.cast = null;
     this.techHits = [];
     this.attacking.clear();
+    this.clearDrlBeam();
+    this.drlViews.clear();
+    this.drlLastHitLocal.clear();
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
     slots.forEach((slot, i) => {
@@ -576,6 +596,38 @@ export class CombatView {
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
+        else if (className === 'TBoss2DeRolLe') {
+          // MovementData[15] holds the pools and the children's powers
+          // (g_DerolleBattleparamsAnimationSpeeds); the body's motion frame
+          // counts come from its archive.
+          const frameCounts = new Map<number, number>();
+          const nodeCount = instance.animators[0]?.nodeCount ?? 0;
+          const drl = new DeRolLeAi({
+            ...at,
+            ultimate,
+            movement,
+            hp: stats.maxHp,
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: (m) => {
+              let n = frameCounts.get(m);
+              if (n === undefined) {
+                try {
+                  n = instance.archive.motion(m, nodeCount).frameCount;
+                } catch {
+                  n = 30;
+                }
+                frameCounts.set(m, n);
+              }
+              return n;
+            },
+            ground: this.opts.ground ? (x, z) => this.opts.ground!(x, z, 60) : undefined,
+            rng: () => this.rng(),
+          });
+          // The entity's own HP is refilled after every hit; the HP that
+          // counts is the body pool (ProcessPlayerHealing_00433edc).
+          stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
+          ai = drl;
+        }
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -819,10 +871,11 @@ export class CombatView {
 
   // The enemy's 6x0A (send_packet0x60_subcommand0xa): its status bits ride in
   // the flags; in Ultimate they go out as a 6x9C first (combat/enemystatus.ts).
-  private sendEnemy(e: EnemyRuntime, flags: number): void {
+  // `damageTaken`: the 6x0A total when it is not max - hp (De Rol Le).
+  private sendEnemy(e: EnemyRuntime, flags: number, damageTaken = e.stats.maxHp - e.stats.hp): void {
     const sync = e.status.syncBits(this.ultimate);
     if (sync.ultimateBits) this.game.sendEnemyStatusUltimate(e.index, sync.ultimateBits);
-    this.game.sendEnemyState(e.index, e.stats.maxHp - e.stats.hp, flags | sync.flags);
+    this.game.sendEnemyState(e.index, damageTaken, flags | sync.flags);
   }
 
   // An effect landed on an enemy (vtable +0xbc / +0xc4 / +0xc8 / +0xcc).
@@ -905,6 +958,10 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
+      if (ai instanceof DeRolLeAi) {
+        this.tickDeRolLe(e, ai, targets);
+        continue;
+      }
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
@@ -965,6 +1022,228 @@ export class CombatView {
     if (this.holdTicks > 0 && --this.holdTicks === 0) this.opts.log('hold released');
   }
 
+  // --- De Rol Le (combat/derolle.ts) -------------------------------------------
+
+  // render_derolle's node captures (UpdateDerolleTransformationMatrix
+  // _0042a904): each shell segment slot is the midpoint of two captured
+  // draw-order nodes (0x008fcba0), the tentacles hang from draw indices
+  // 0x1d..0x20. ASSUMED: the draw order is the model's depth-first node order
+  // and the 10 slots pair the first 11 captures.
+  private static readonly DRL_SPINE = [24, 26, 28, 29, 30, 31, 34, 69, 74, 95, 96];
+  private static readonly DRL_ATTACH = [0x1d, 0x1e, 0x1f, 0x20];
+  private drlBeam: THREE.Line | null = null;
+  // Per De Rol Le (by enemy index): the node and part references, looked up
+  // once, and the point arrays the brain reads, reused every tick.
+  private drlViews = new Map<number, DrlView>();
+  // Whether the last hit on a De Rol Le was the local player's (its
+  // last_attacker, +0x2d8): that client asks for the killer's EXP.
+  private drlLastHitLocal = new Map<number, boolean>();
+
+  private drlView(e: EnemyRuntime, ai: DeRolLeAi): DrlView {
+    let v = this.drlViews.get(e.index);
+    if (v) return v;
+    const inst = e.instance;
+    const body = inst.nodes?.[0] ?? [];
+    const world = inst.world;
+    const spine = CombatView.DRL_SPINE.map((i) => body[i] ?? null);
+    const attach = CombatView.DRL_ATTACH.map((i) => body[i] ?? null);
+    v = {
+      spine: spine.every((n) => n) ? (spine as THREE.Object3D[]) : null,
+      attach: attach.every((n) => n) ? (attach as THREE.Object3D[]) : null,
+      tentacles: ai.tentacles.map((_, i) => world?.getObjectByName(`tentacle ${i}`) ?? null),
+      stings: ai.stings.map((s) => world?.getObjectByName(s.kind === 0 ? `sting ${s.index}` : `sting ring ${s.index}`) ?? null),
+      bodyAnimators: inst.animators.filter((_, k) => !inst.parts[k]?.name),
+      segs: Array.from({ length: 10 }, (): Vec3 => [0, 0, 0]),
+      atts: Array.from({ length: 4 }, (): Vec3 => [0, 0, 0]),
+      drawn: false,
+    };
+    this.drlViews.set(e.index, v);
+    return v;
+  }
+
+  private tickDeRolLe(e: EnemyRuntime, ai: DeRolLeAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const v = this.drlView(e, ai);
+    // render_derolle captures the node matrices while it draws, and the
+    // update reads them on the next frame: here the world matrices the last
+    // render left (no extra matrix update). Not before the first draw.
+    if (v.drawn && v.spine) {
+      const m = v.spine;
+      for (let i = 0; i < 10; i++) {
+        const a = m[i].matrixWorld.elements;
+        const b = m[i + 1].matrixWorld.elements;
+        const s = v.segs[i];
+        s[0] = (a[12] + b[12]) / 2;
+        s[1] = (a[13] + b[13]) / 2;
+        s[2] = (a[14] + b[14]) / 2;
+      }
+      ai.segments = v.segs;
+    }
+    if (v.drawn && v.attach) {
+      v.attach.forEach((n, i) => {
+        const a = n.matrixWorld.elements;
+        const p = v.atts[i];
+        p[0] = a[12];
+        p[1] = a[13];
+        p[2] = a[14];
+      });
+      ai.attaches = v.atts;
+    }
+    v.drawn = root.visible;
+    const r = ai.tick(targets);
+    root.position.set(r.x, r.y ?? root.position.y, r.z);
+    root.rotation.order = 'YXZ';
+    root.rotation.set(0, r.angle, (((ai.roll + 0x8000) & 0xffff) - 0x8000) * BAMS_TO_RAD);
+    // The body's motion is the brain's (+0xb8 / +0xc0): only the body part's
+    // animator plays it, held at the brain's frame.
+    for (const a of v.bodyAnimators) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`De Rol Le motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    for (const s of r.shots ?? []) this.launchShot(e, s);
+    for (const ev of ai.events.splice(0)) {
+      this.drlEvent(e, ai, ev);
+      if (ev.kind === 'remove') return;
+    }
+    this.drawDeRolLeChildren(e, ai, v);
+  }
+
+  private drawDeRolLeChildren(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
+    const shown = e.instance.root.visible && !ai.dying;
+    {
+      ai.tentacles.forEach((t, i) => {
+        const g = v.tentacles[i];
+        if (!g) return;
+        g.visible = shown;
+        const p = ai.attachAt(i);
+        g.position.set(p[0], p[1], p[2]);
+        g.rotation.order = 'YXZ';
+        // ASSUMED: +0x120 lifts the tentacle about its x axis.
+        g.rotation.set(-t.lift * BAMS_TO_RAD + t.pitch * BAMS_TO_RAD, (ai.yaw + t.yaw) * BAMS_TO_RAD, 0);
+      });
+      ai.stings.forEach((s, k) => {
+        const g = v.stings[k];
+        if (!g) return;
+        g.visible = e.instance.root.visible && s.visible;
+        g.position.set(s.x, s.y, s.z);
+        g.rotation.order = 'YXZ';
+        g.rotation.set(s.pitch * BAMS_TO_RAD, s.yaw * BAMS_TO_RAD, s.roll * BAMS_TO_RAD);
+        // The blink (bit 2 of +0x398) tints the sting; ASSUMED: drawn as a
+        // slight swell.
+        g.scale.setScalar(s.blink ? 1.15 : 1);
+      });
+    }
+    // ASSUMED look: the beam (particles 0x126 / 0x176 / 0x177 in the exe) as a line.
+    const beam = ai.beam;
+    if (!beam) {
+      this.clearDrlBeam();
+      return;
+    }
+    if (!this.drlBeam) {
+      const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+      this.drlBeam = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x80c0ff }));
+      this.viewer.scene.add(this.drlBeam);
+    }
+    const pos = this.drlBeam.geometry.getAttribute('position') as THREE.BufferAttribute;
+    pos.setXYZ(0, beam.from[0], beam.from[1], beam.from[2]);
+    pos.setXYZ(1, beam.to[0], beam.to[1], beam.to[2]);
+    pos.needsUpdate = true;
+  }
+
+  private clearDrlBeam(): void {
+    if (!this.drlBeam) return;
+    this.drlBeam.removeFromParent();
+    this.drlBeam.geometry.dispose();
+    (this.drlBeam.material as THREE.Material).dispose();
+    this.drlBeam = null;
+  }
+
+  private drlEvent(e: EnemyRuntime, ai: DeRolLeAi, ev: DrlEvent): void {
+    const what = `De Rol Le E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'state': {
+        const slot = DRL_SLOTS[ai.slotIndex];
+        this.opts.log(`${what}: state 0x${ev.state.toString(16)} (${ai.state}), sequence ${ev.cursor}, motion ${slot?.motion ?? '?'}`);
+        if (this.game.selfId === this.game.leaderId) this.game.sendBossAction(0x1000 | e.index, ev.state, ev.cursor, ev.withTarget ? (ev.target ?? 0xffff) : null);
+        return;
+      }
+      case 'se':
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        // A sustained SE (the body as its owner) only starts when no voice
+        // of it plays yet (PlaySFX_008292dc refreshes that voice instead).
+        if (ev.sustain && this.sePlayer?.playing(ev.id)) return;
+        this.sePlayer?.play(ev.id);
+        return;
+      case 'shellBroken':
+        this.opts.log(`${what}: the shell breaks (body pool ${ai.bodyHp}/${ai.bodyMax})`);
+        return;
+      case 'bgm':
+        // ASSUMED: the death track is not started here (audio/bossbgm.ts
+        // keeps the boss floor's own track).
+        this.opts.log(`${what}: ${ev.name}`);
+        return;
+      case 'killed':
+        this.deRolLeKilled(e, ev.x, ev.z);
+        return;
+      case 'remove':
+        // 0x20 deletes the body with its tree: the shots still flying go too.
+        this.clearDrlBeam();
+        for (const s of this.shots) if (s.owner === e) s.shot.done = true;
+        this.layer.remove(e.instance);
+        this.enemies.delete(e.index);
+        this.drlViews.delete(e.index);
+        this.drlLastHitLocal.delete(e.index);
+        if (this.lockOn === e) this.lockOn = null;
+        return;
+    }
+  }
+
+  // 0x1f phase 5: EnemyOnKilledHandler_0051f894 at (-55.8, 2.0, 60.29), so
+  // the drop lands there. Every client runs it when it leaves 0x1f, and its
+  // sends are gated as the exe gates them:
+  //   - set_monster_spawn_initdata_as_dead (6x76 flags 8) has no gate:
+  //     every client sends it;
+  //   - request_enemy_drop only sends on the leader (or when the leader is
+  //     on another floor) and only if the boss has a last attacker;
+  //   - handle_experience (via on_enemy_killed) sends 6xC8 for the player at +0x2da
+  //     with the killer bonus when that player is the last attacker (+0x2d8).
+  //     ASSUMED: +0x2da is the local player, so each client asks for its own
+  //     EXP, as the killer when it dealt the last hit.
+  //   No 6x0A with the dead flag is sent (phase 5 sends none).
+  private deRolLeKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.dead = true;
+    e.stats.hp = 0;
+    this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+    if (e.rtIndex !== 0xff && this.game.selfId === this.game.leaderId && this.drlLastHitLocal.has(e.index)) {
+      this.game.sendEnemyDropRequest({ floor: this.floor, rtIndex: e.rtIndex, enemyIndex: e.index, x, z, room: (e.slot.set as EnemySet).section, area: this.area });
+    }
+    const killer = this.drlLastHitLocal.get(e.index) === true;
+    this.game.sendExpRequest(e.index, killer);
+    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer, multiplier: this.expMultiplier });
+    const anchor = new THREE.Vector3(x, 22, z);
+    this.hud?.expPopup(amount, () => anchor);
+    this.opts.log(`De Rol Le E-${e.index.toString(16)} defeated${killer ? ' (last hit yours)' : ''}`);
+  }
+
+  // A 6x13 / 6x14 from the leader (SetDerolleActionState_00432a38 /
+  // ProcessEntityById_00432a74).
+  private onDeRolLeAction(sub: number, body: Uint8Array): void {
+    if (body.length < 8 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const e = this.enemies.get(dv.getUint16(2, true) - 0x1000);
+    if (!(e?.ai instanceof DeRolLeAi)) return;
+    const target = sub === 0x14 && body.length >= 12 ? dv.getUint32(8, true) & 0xffff : null;
+    e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target);
+  }
+
   // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
 
   private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime; baseY: number; mesh: THREE.Mesh | null }> = [];
@@ -979,7 +1258,7 @@ export class CombatView {
     } catch {
       mesh = null;
     }
-    const baseY = e.instance.root.position.y - e.lift;
+    const baseY = shot.absolute ? 0 : e.instance.root.position.y - e.lift;
     mesh?.position.set(shot.x, baseY + shot.y, shot.z);
     this.shots.push({ shot, owner: e, baseY, mesh });
   }
@@ -2232,6 +2511,22 @@ export class CombatView {
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
       return;
     }
+    if (e.ai instanceof DeRolLeAi) {
+      // ProcessPlayerHealing_00433edc: the shell pool, then the body pool; no
+      // flinch, no death here (the brain's death check runs on its own).
+      // The entity's HP is refilled to max after each hit, so its 6x0A
+      // (prepare_send_packet0x60_subcommand0xa: damage_taken = max - hp)
+      // carries this one hit; the other clients feed it into their pools.
+      const ai = e.ai;
+      const pool = ai.hit(damage);
+      e.stats.hp = ai.bodyHp;
+      if (damage >= 1) this.drlLastHitLocal.set(e.index, byPlayer);
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      const p = e.instance.root.position;
+      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+      this.opts.log(`${what}hit De Rol Le's ${pool} for ${Math.round(damage)}: shell ${ai.shellHp}/${ai.shellMax}, body ${ai.bodyHp}/${ai.bodyMax}`);
+      return;
+    }
     let flags = baseFlags | applyDamage(e.stats, damage);
     if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
       // State 5's revive branch: the Dubchic falls, lies there and gets up
@@ -2918,6 +3213,10 @@ export class CombatView {
     }
     // Remote HP for the party members' windows; the handlers below still run.
     this.party.receive(sub, body);
+    if (sub === 0x13 || sub === 0x14) {
+      this.onDeRolLeAction(sub, body);
+      return;
+    }
     if (sub === 0xbf) {
       const g = parseGiveExp(body);
       if (g && g.clientId === this.game.selfId) this.onGiveExp(g.amount);
@@ -2964,6 +3263,19 @@ export class CombatView {
       if (!s) return;
       const e = this.enemies.get(s.enemyIndex);
       if (!e) return;
+      if (e.ai instanceof DeRolLeAi) {
+        // restore_enemy_status sets hp = max - damage_taken and the hit flag
+        // 0x200 (vtable +0x88, 0x00777ba4) makes UpdateDerolle run the pool
+        // handler (+0x100, ProcessPlayerHealing_00433edc) on this client
+        // too. The dead flag is ignored: the brain owns its death (0x1e..0x20).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          const pool = e.ai.hit(s.totalDamage);
+          e.stats.hp = e.ai.bodyHp;
+          this.drlLastHitLocal.set(e.index, false);
+          this.opts.log(`De Rol Le's ${pool} hit for ${s.totalDamage} (6x0A from another client): shell ${e.ai.shellHp}, body ${e.ai.bodyHp}`);
+        }
+        return;
+      }
       e.stats.hp = Math.max(0, e.stats.maxHp - s.totalDamage);
       // restore_enemy_status: the status bits that are new on this enemy.
       if (!(s.flags & FLAG_DEAD)) {
