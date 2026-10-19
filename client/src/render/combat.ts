@@ -313,6 +313,8 @@ export interface CombatOptions {
   source?: DataSource;
   // Intra-floor warp of the local player (a 6x17 from the leader, Vol Opt).
   warpSelf?: (pos: { x: number; y: number; z: number }, angle: number) => void;
+  // construct_objects of a floor (unhide_object_set_no_packet).
+  constructObjects?: (floor: number, room: number, group: number) => void;
   // The boss's form changed (a 6x15 this client sent itself, Vol Opt's change
   // to form 2): the field plays that phase's music (audio/bossbgm.ts).
   bossPhase?: (phase: number) => void;
@@ -701,7 +703,7 @@ export class CombatView {
             hp: { core: hp(33), pillar: hp(34), rod: hp(36) },
             leader: () => this.game.selfId === this.game.leaderId,
             frames: this.motionFrames(instance, 'pillar 0'),
-            playerHp: (id) => this.party.get(id)?.hp ?? 0,
+            playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
             rng: () => this.rng(),
           });
         } else if (className === 'TBoss3VoloptP02') {
@@ -1476,8 +1478,13 @@ export class CombatView {
     const rows: Record<string, number> = { pillar: 34, monitor: 35, rod: 36, core: 33, prison: 38 };
     for (let i = 0; i < ai.parts.length; i++) {
       const part = ai.parts[i];
+      // Not built in Ultimate (g_VoloptDifficultyMode != 0).
+      if (part.kind === 'rod' && ai.ultimate) continue;
       const index = head.index + part.entity;
-      if (this.enemies.has(index)) continue;
+      if (this.enemies.has(index)) {
+        this.opts.log(`Vol Opt E-${head.index.toString(16)}: slot E-${index.toString(16)} (${part.kind}) is taken, that part cannot be shot`);
+        continue;
+      }
       const fight = this.rowFightStats(rows[part.kind], part.maxHp);
       const placed = {
         ...head.instance.placed,
@@ -1597,6 +1604,7 @@ export class CombatView {
       }
       case 'delays':
         this.game.sendVoloptDelays(ev.action, ev.delays);
+        ai.applyDelays(ev.action, ev.delays);
         return;
       case 'move': {
         this.game.sendEntityPosition(ev.client, ev.x, ev.y, ev.z, ev.angle);
@@ -1613,10 +1621,23 @@ export class CombatView {
         this.opts.log(`${what}: ${ai.state}`);
         // unknown_set_volopt_form2 plays vol_opt2.adx as the change begins.
         if (ev.phase === VO_AI.change) this.opts.bossPhase?.(2);
+        if (ev.phase === VO_AI.over && ai.form2?.dead) this.voloptOver();
         return;
       default:
         return;
     }
+  }
+
+  // VoloptDeathHandler (the control's state 4 sees g_VoloptIsDead): online it
+  // is set_quest_flag(0x2A) (6x75 to the server) and
+  // unhide_objects_for_volopt_death(0): unhide_object_set_no_packet for group
+  // 1 and group 3 of room 0, which is what an event's construct_objects does.
+  // Every client runs it; the flag is idempotent on the server.
+  private voloptOver(): void {
+    this.game.setQuestFlag(0x2a, true);
+    this.opts.constructObjects?.(this.floor, 0, 1);
+    this.opts.constructObjects?.(this.floor, 0, 3);
+    this.opts.log('Vol Opt defeated: quest flag 0x2a set, room 0 groups 1 and 3 appear');
   }
 
   // An order of the leader (or our own): the control's actions 0..2 and the
@@ -1757,6 +1778,10 @@ export class CombatView {
     switch (sub) {
       case 0x15:
         if (body.length >= 0x0c) this.applyVoloptAction(ai, dv.getUint16(4, true), dv.getUint16(6, true), dv.getInt16(8, true), dv.getUint16(10, true));
+        return;
+      case 0x85:
+        // Ultimate: action 0 stores three delays.
+        if (body.length >= 0x0c) ai.applyDelays(dv.getUint16(4, true), [dv.getInt16(6, true), dv.getInt16(8, true), dv.getInt16(10, true)]);
         return;
       case 0x16:
       case 0x84: {

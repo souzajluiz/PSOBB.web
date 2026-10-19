@@ -483,12 +483,14 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
       return this.tickState(targets);
     }
     if (this.hitFlag && this.st !== 5) {
-      this.hitFlag = false;
       if (this.ultimate) {
         // No reaction: the parts take the damage at once.
+        this.hitFlag = false;
         this.splitDamage();
       } else if (this.flinch === 0 && this.st !== 7) {
         // State 4: the parts take it now and the body shakes for 6 frames.
+        // A strike that lands during the shake waits for the next reaction.
+        this.hitFlag = false;
         this.splitDamage();
         this.flinch = F2.flinch;
       }
@@ -591,7 +593,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
       this.sub = 1;
     }
     this.anim.step();
-    if (this.anim.frame >= F2.standFrame || this.anim.slot !== 8) this.done();
+    if (this.anim.reached(F2.standFrame) || this.anim.slot !== 8) this.done();
   }
 
   // --- state 10: the missiles ---------------------------------------------------------
@@ -614,7 +616,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 2:
         this.anim.step();
-        if (this.anim.frame >= F2.missileLaunchFrame) {
+        if (this.anim.reached(F2.missileLaunchFrame)) {
           this.timer = F2.missileWait;
           this.sub = 3;
         }
@@ -681,7 +683,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 1:
         this.anim.step();
-        if (this.anim.frame >= F2.healFrame) {
+        if (this.anim.reached(F2.healFrame)) {
           this.timer = F2.healWait;
           this.sub = 2;
         }
@@ -721,7 +723,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 1:
         this.anim.step();
-        if (this.anim.frame >= F2.laserFrame) {
+        if (this.anim.reached(F2.laserFrame)) {
           this.timer = F2.laserCharge;
           this.sub = 2;
         }
@@ -882,7 +884,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       case 4:
         this.anim.step();
-        if (this.anim.frame >= 20) {
+        if (this.anim.reached(20)) {
           this.timer = F2.captureHold + this.move.iparam[4];
           this.sub = 5;
         }
@@ -1003,7 +1005,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
       case 3:
         this.anim.step();
         this.sustain(0x35b);
-        if (this.anim.frame >= F2.deathFrame || this.anim.atEnd) {
+        if (this.anim.reached(F2.deathFrame) || this.anim.atEnd) {
           this.killedAt = [this.x, 0, this.z];
           this.events.push({ kind: 'killed', x: this.x, y: 0, z: this.z });
           this.timer = F2.deathLeave;

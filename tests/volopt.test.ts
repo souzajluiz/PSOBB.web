@@ -389,7 +389,12 @@ const act = (log: VoloptEvent[], action: number) => log.filter((e) => e.kind ===
   eq(f.c.rodDown(), true, 'the pillars see it');
   f.c.applyPillars([1, 0, 2, 3, 4, 5], 2);
   f.log.length = 0;
-  f.until(() => f.log.some((e) => e.kind === 'action' && e.action === 2), 400, 'action 2 after the first bolt');
+  // A follower's copy of the pillar does not send the order; the leader's does.
+  f.step(600);
+  eq(act(f.log, 2), 0, 'a follower sends no action 2');
+  f.leader.on = true;
+  f.c.applyPillars([1, 0, 2, 3, 4, 5], 2);
+  f.until(() => f.log.some((e) => e.kind === 'action' && e.action === 2), 700, 'action 2 after the first bolt');
   // Every client applies it (the sender's own packet comes back as a 6x15).
   f.c.applyAction(2, 0, 0);
   check(!f.c.rod.down, 'the order stands the rod up');
@@ -780,6 +785,58 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   eq(f.c.events.length, 0, 'a quiet tick leaves no events behind');
   const bolt = new VoloptPartAi(f.c.core, f.c);
   eq(bolt.untargetable, true, 'a part\'s enemy follows the part\'s targetable flag');
+}
+
+// --- review fixes -------------------------------------------------------------------------------
+
+{
+  // Ultimate has no rod: not targetable, no proxy-worthy state, never "down".
+  const f = fight({ ultimate: true });
+  f.until(() => f.c.ai === VO_AI.fight, 600, 'intro');
+  f.step(200);
+  eq(f.c.rod.targetable, false, 'no rod to shoot in Ultimate');
+  eq(f.c.rodDown(), false, 'and none on the floor');
+}
+
+{
+  // A motion shorter than the frame an exit waits for does not stall the state.
+  const f = toPhase2({ frames: 5, targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  for (const [action, st] of [[3, 10], [5, 0xb], [4, 2]] as const) {
+    f.f2.applyAction(action, 0, 0);
+    eq(f.f2.st, st, `action ${action} starts`);
+    const n = f.until(() => f.f2.st === 0, 900, `action ${action} ends with 5-frame motions`);
+    check(n < 700, `action ${action} ended on its own, not by the watchdog (${n})`);
+  }
+  f.targets[0].x = f.f2.x + Math.sin(f.f2.facing() * Math.PI * 2 / 0x10000) * 40;
+  f.targets[0].z = f.f2.z + Math.cos(f.f2.facing() * Math.PI * 2 / 0x10000) * 40;
+  f.f2.applyAction(6, 0, 0);
+  f.until(() => f.f2.st === 0, 1500, 'capture ends with short motions');
+}
+
+{
+  // A strike during the 6-frame shake still splits its damage afterwards.
+  const f = toPhase2({ targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  f.f2.hit(100, f.f2.x, f.f2.z + 60, true);
+  f.step(1);
+  f.log.length = 0;
+  const p = f.f2.hit(100, f.f2.x, f.f2.z + 60, true);
+  f.step(2);
+  eq(f.log.some((e) => e.kind === 'partsHp'), false, 'no split yet during the shake');
+  f.step(8);
+  if (p < 4) check(f.log.some((e) => e.kind === 'partsHp'), 'the second strike is split once the shake is over');
+}
+
+{
+  // Ultimate, all four parts gone: no order, and the pick waits instead of running every frame.
+  const f = toPhase2({ ultimate: true, targets: [player(0, 0, -4900)] });
+  f.f2.applyPartsHp([0, 0, 0, 0]);
+  f.log.length = 0;
+  f.step(1);
+  check(f.c.cooldown > 20, `the director waits (${f.c.cooldown})`);
+  f.c.applyDelays(0, [3, 4, 5]);
+  eq(f.c.delays.join(','), '3,4,5', '6x85 stores its delays in Ultimate');
 }
 
 if (failures) {

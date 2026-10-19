@@ -171,6 +171,8 @@ export class VoloptAnim {
   frame = 0;
   // A holding slot (mode 3) reached its last frame.
   atEnd = false;
+  // The last step ended the slot (a once slot ran out, a loop wrapped).
+  ended = false;
   private slots: readonly VoloptSlot[];
   private frames: (motion: number) => number;
   constructor(slots: readonly VoloptSlot[], frames: (motion: number) => number) {
@@ -185,15 +187,25 @@ export class VoloptAnim {
   step(): void {
     const s = this.slots[this.slot];
     const n = Math.max(1, this.frames(s.motion));
+    this.ended = false;
     this.frame += s.speed;
     if (s.mode === 1) {
-      if (this.frame >= n) this.frame -= n;
+      if (this.frame >= n) {
+        this.frame -= n;
+        this.ended = true;
+      }
     } else if (this.frame >= n - 1) {
       if (s.mode === 3) {
         this.frame = n - 1;
         this.atEnd = true;
       } else this.set(s.next);
+      this.ended = true;
     }
+  }
+  // "elapsed >= frame" of the exe's waits, but a motion shorter than `frame`
+  // ends the wait too (the exe would wait for ever).
+  reached(frame: number): boolean {
+    return this.ended || this.frame >= frame;
   }
   get flag(): number {
     return this.slots[this.slot].flag;
@@ -242,6 +254,7 @@ export interface VoloptFight {
   retractPillars(): void;
   // The active pillar's lightning (VoloptMonitorExecuteAttack0).
   bolt(pillar: number): void;
+  leader(): boolean;
   // A sound that plays while the state does (PlayDirectionalSFX_00814630): a
   // set the owner reads each tick, nothing is allocated for it.
   sustain(id: number): void;
@@ -536,7 +549,7 @@ export class VoloptPillar extends VoloptPart {
         break;
       case 6:
         this.anim.step();
-        if (this.anim.frame >= 8) this.sub = 7;
+        if (this.anim.reached(8)) this.sub = 7;
         break;
       case 7:
         // VoloptMonitorExecuteAttack0 (normal) / the technique objects.
@@ -581,7 +594,10 @@ export class VoloptPillar extends VoloptPart {
     // The bolt reaches every live player; when the rod lies on the floor the
     // pillar tells everybody (6x15 action 2) and the round ends.
     f.bolt(this.index);
-    if (f.rodDown()) f.events.push({ kind: 'action', action: 2, target: 0, param: 0, count: 0 });
+    // The exe has every client's copy send this (VoloptMonitorExecuteAttack0
+    // 6x15 action 2); the receivers' rod reset is not idempotent (it restores
+    // HP), so only the leader's copy sends it here. ASSUMED deviation.
+    if (f.rodDown() && f.leader()) f.events.push({ kind: 'action', action: 2, target: 0, param: 0, count: 0 });
   }
 
   // player_hit_volopt_pillar (state 4).
@@ -820,8 +836,10 @@ export class VoloptRod extends VoloptPart {
     this.z = oz;
     this.y = VO_REACH_Y;
   }
+  // Not built in Ultimate (g_VoloptDifficultyMode != 0).
+  absent = false;
   get down(): boolean {
-    return this.st === 5 && this.timerDone;
+    return !this.absent && this.st === 5 && this.timerDone;
   }
   private timerDone = false;
   reset(): void {
@@ -835,6 +853,10 @@ export class VoloptRod extends VoloptPart {
     this.locked = false;
   }
   tick(): void {
+    if (this.absent) {
+      this.targetable = false;
+      return;
+    }
     if (this.st !== 5 && this.hp <= 0) {
       this.dead = true;
       this.st = 5;
@@ -1220,6 +1242,10 @@ export class VoloptAi extends BrainBase implements VoloptFight {
   // g_VoloptPillarCheckFlags: a monitor that fell (the wall's flag is its big one's).
   private readonly checked = new Uint8Array(VO_MONITORS);
   private readonly order = new Uint8Array(VO_PILLARS);
+  private readonly pickThr = new Float64Array(5);
+  private readonly pickAct = new Uint8Array(5);
+  // 6x85's three delays (SetVoloptGlobalOffsets 0x00a44bcc..); nothing else reads them here.
+  readonly delays: number[] = [0, 0, 0];
   private readonly pending: EnemyShot[] = [];
   private readonly framesOf: (motion: number) => number;
   private readonly leaderOf: () => boolean;
@@ -1264,6 +1290,7 @@ export class VoloptAi extends BrainBase implements VoloptFight {
     this.prison.dead = true;
     this.parts.push(this.prison);
     this.rod = new VoloptRod(hp.rod, this.ox, this.oz);
+    this.rod.absent = this.ultimate;
     this.parts.push(this.rod);
     this.core = new VoloptCore(hp.core, this.movement.coreSpeed, this, this.ox, this.oz);
     this.parts.push(this.core);
@@ -1319,6 +1346,9 @@ export class VoloptAi extends BrainBase implements VoloptFight {
   retractPillars(): void {
     for (let i = 0; i < this.pillars.length; i++) this.pillars[i].retract();
   }
+  leader(): boolean {
+    return this.leaderOf();
+  }
   bolt(pillar: number): void {
     const p = this.pillars[pillar];
     this.pending.push(new VoloptBolt(p.baseX, 60, p.baseZ, this.movement.bolt));
@@ -1372,6 +1402,13 @@ export class VoloptAi extends BrainBase implements VoloptFight {
       default:
         break;
     }
+  }
+
+  // 6x85 (handle_packet0x60_subcommand0x85 0x0043e7cc): Ultimate only, action
+  // 0: the three shorts are stored (SetVoloptGlobalOffsets).
+  applyDelays(action: number, delays: readonly number[]): void {
+    if (!this.ultimate || action !== 0) return;
+    for (let i = 0; i < 3; i++) this.delays[i] = delays[i] ?? 0;
   }
 
   // 6x16 / 6x84 (ClearVoloptPlayerEntities 0x0043e658 / SetVoloptPlayerEntities
@@ -1690,8 +1727,10 @@ export class VoloptAi extends BrainBase implements VoloptFight {
       return;
     }
     if (f2.dead) {
-      // ProcessEnemyAiState4: g_VoloptIsDead -> VoloptDeathHandler (quest flag
-      // 0x2a, the warp objects), the control object is done (state 5).
+      // ProcessEnemyAiState4: g_VoloptIsDead -> VoloptDeathHandler, the
+      // control object is done (state 5). render/combat.ts does the quest
+      // side on the 'phase' event: set_quest_flag(0x2a) and
+      // unhide_objects_for_volopt_death(0) (groups 1 and 3 of room 0).
       this.setAi(VO_AI.over);
       return;
     }
@@ -1748,13 +1787,14 @@ export class VoloptAi extends BrainBase implements VoloptFight {
   }
 
   private pick2(targets: readonly AiTarget[], f2: VoloptForm2Link, pause: number): void {
-    const thr: number[] = [];
-    const act: number[] = [];
+    const thr = this.pickThr;
+    const act = this.pickAct;
+    let n = 0;
     let total = 0;
-    const add = (w: number, a: number) => {
+    const add = (w: number, a: number): void => {
       total += w;
-      thr.push(total);
-      act.push(a);
+      thr[n] = total;
+      act[n++] = a;
     };
     if (f2.canAct(3)) add(0.27, 3);
     if (f2.canAct(4)) {
@@ -1763,10 +1803,15 @@ export class VoloptAi extends BrainBase implements VoloptFight {
     }
     if (f2.canAct(5)) add(0.18, 5);
     if (f2.canAct(6)) add(0.2, 6);
-    if (!thr.length) return;
+    if (n === 0) {
+      // All four parts are gone: nothing to order. The exe asks again every
+      // frame; wait the pause instead.
+      this.cooldown = pause;
+      return;
+    }
     const r = this.rng() * total;
-    let action = act[act.length - 1];
-    for (let i = 0; i < thr.length; i++) {
+    let action = act[n - 1];
+    for (let i = 0; i < n; i++) {
       if (r <= thr[i]) {
         action = act[i];
         break;
@@ -1775,17 +1820,18 @@ export class VoloptAi extends BrainBase implements VoloptFight {
     let target = 0xffff;
     if (this.picks === 0) {
       let live = 0;
-      for (const t of targets) if (!t.dead) live++;
+      for (let i = 0; i < targets.length; i++) if (!targets[i].dead) live++;
       if (live) {
         let k = Math.min(live - 1, Math.floor(this.rng() * live));
-        for (const t of targets) {
-          if (t.dead) continue;
-          if (k-- === 0) target = t.clientId;
+        for (let i = 0; i < targets.length; i++) {
+          if (targets[i].dead) continue;
+          if (k-- === 0) target = targets[i].clientId;
         }
       }
     } else {
       let best = -1;
-      for (const t of targets) {
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
         if (t.dead) continue;
         const hp = this.hpOf(t.clientId);
         if (hp > best) {
@@ -1797,11 +1843,11 @@ export class VoloptAi extends BrainBase implements VoloptFight {
     this.picks = (this.picks + 1) % 3;
     this.events.push({ kind: 'action', action, target, param: action === 7 ? Math.round(this.rng() * 40) : 0, count: 0 });
     if (action === 4) {
-      // VoloptSendRandomAction: three delays in [iparam, iparam + range].
+      // VoloptSendRandomAction (6x85).
       this.events.push({ kind: 'delays', action: 0, delays: [this.delay(), this.delay(), this.delay()] });
     }
     this.cooldown = pause;
-    this.cursor = [3, 4, 5, 6, 7].indexOf(action);
+    this.cursor = action - 3;
   }
 
   // ASSUMED range: the exe reads two floats of row 37 (+0x10, +0x14).
