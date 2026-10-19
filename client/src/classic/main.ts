@@ -29,6 +29,7 @@ import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
+import { installNoZoom } from '../ui/nozoom.ts';
 import { SoftKeyboard } from '../ui/softkeyboard.ts';
 import { Loader } from './loader.ts';
 import { installStageFit, lockLandscape } from './viewport.ts';
@@ -38,6 +39,7 @@ const canvas = document.getElementById('stage') as HTMLCanvasElement;
 const loader = new Loader();
 let softKeyboard: SoftKeyboard | null = null;
 const keyboardFocused = () => softKeyboard?.focused ?? false;
+installNoZoom();
 const fit = installStageFit({
   canvases: [canvas, document.getElementById('world') as HTMLCanvasElement],
   hint: document.getElementById('rotate') as HTMLElement,
