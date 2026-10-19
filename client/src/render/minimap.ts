@@ -73,8 +73,40 @@ export async function loadMinimapAssets(files: ClientFiles): Promise<MinimapAsse
   const frame = await files.readFirst(['RaderMapFrame.xvm', 'radermapframe.xvm']);
   return {
     models: { disc: geometryOf(model('obj_f_enemy.gj')), gate: geometryOf(model('obj_f_gate.gj')), arrow: geometryOf(model('obj_f_player.gj')) },
-    compass: await textureBitmaps(parseXvm(frame.data)),
+    compass: await additiveAsAlpha(await textureBitmaps(parseXvm(frame.data)), 0),
   };
+}
+
+// The needle (texture 0) is drawn additively by the exe: opaque colours on a
+// black ground. The 2D overlay is transparent over the WebGL view, where a
+// 'lighter' composite would add the black's alpha too and leave a black
+// square, so the texture gets alpha = its brightest channel (colour divided
+// back out) and is drawn with the normal blend instead. Close to additive for
+// a bright needle; the ground under it is darkened by 1 - alpha.
+async function additiveAsAlpha(bitmaps: ImageBitmap[], index: number): Promise<ImageBitmap[]> {
+  const src = bitmaps[index];
+  if (!src) return bitmaps;
+  const c = new OffscreenCanvas(src.width, src.height);
+  const g = c.getContext('2d');
+  if (!g) return bitmaps;
+  g.drawImage(src, 0, 0);
+  const img = g.getImageData(0, 0, src.width, src.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = Math.max(d[i], d[i + 1], d[i + 2]) * (d[i + 3] / 255);
+    if (a > 0) {
+      const k = 255 / a;
+      d[i] = Math.min(255, d[i] * k);
+      d[i + 1] = Math.min(255, d[i + 1] * k);
+      d[i + 2] = Math.min(255, d[i + 2] * k);
+    }
+    d[i + 3] = a;
+  }
+  g.putImageData(img, 0, 0);
+  const out = bitmaps.slice();
+  out[index] = await createImageBitmap(c);
+  src.close();
+  return out;
 }
 
 
@@ -356,13 +388,13 @@ export class MinimapView {
     if (b) {
       // unknown_renderstate_blend_save: src alpha, dest ONE (codes 8 / 10):
       // additive. Texture 0 (format 6) is opaque with a black ground, which
-      // the addition leaves out.
+      // the addition leaves out; the loader turned it into alpha
+      // (additiveAsAlpha), so the normal blend draws it here.
       // RenderMinimapIcon_00819f7c turns the corners by [[c, s], [-s, c]]
       // about the pivot: a canvas rotation by -angle (y down). The full map
       // draws it with heading 0.
       const heading = state.type === 1 ? 0 : state.heading;
       ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
       ctx.translate(needle.x + needle.pivotX + dx, needle.y + needle.pivotY);
       ctx.rotate(-bamsToRad(heading));
       ctx.drawImage(b, -needle.pivotX, -needle.pivotY, COMPASS_SIZE, COMPASS_SIZE);

@@ -319,6 +319,13 @@ title. The saved room flags are keyed by floor and minimap file (the
 client keys them by floor only; a quest can load another layout), and a saved
 array whose length does not match is dropped.
 
+**Compass needle on the overlay:** the exe draws texture 0 additively
+(src alpha, dest ONE) on an opaque black ground. On the transparent 2D
+overlay over the WebGL view a `'lighter'` composite adds the black's alpha
+too and left a black square, so the loader now turns that texture's
+brightness into alpha (`additiveAsAlpha` in `render/minimap.ts`) and the
+needle is drawn with the normal blend. Checked in Chrome on Forest 1.
+
 ## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
 
 **What changed:** the pillar traps run their state machines: when a player
