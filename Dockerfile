@@ -11,9 +11,13 @@
 ARG PHOSG_REF=66f8c363362e3a0d946e46ae895de337e535aa3e
 ARG RESOURCE_DASM_REF=8930baa5ae99bf41e8d70b2d21ae8423dd38e429
 ARG NEWSERV_REF=ce2273a8e48c5c6fec9e21d85c490028498d8682
+# Parallel compiler jobs. Each C++ job of resource_dasm / newserv can take
+# 1.5-2 GB of RAM, so the default is small: raise it only on a big builder.
+ARG BUILD_JOBS=2
 
 # --- newserv ----------------------------------------------------------------
 FROM ubuntu:24.04 AS newserv
+ARG BUILD_JOBS
 ARG PHOSG_REF
 ARG RESOURCE_DASM_REF
 ARG NEWSERV_REF
@@ -30,11 +34,11 @@ RUN set -eux; \
 RUN set -eux; \
     for repo in phosg resource_dasm; do \
       cmake -S "$repo" -B "$repo/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/newserv-deps -DCMAKE_PREFIX_PATH=/opt/newserv-deps; \
-      cmake --build "$repo/build" -j"$(nproc)"; \
+      cmake --build "$repo/build" -j"${BUILD_JOBS}"; \
       cmake --install "$repo/build"; \
     done; \
     cmake -S newserv -B newserv/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/newserv-deps; \
-    cmake --build newserv/build -j"$(nproc)"
+    cmake --build newserv/build -j"${BUILD_JOBS}"
 # Local-only config, as scripts/setup-newserv.sh writes it: newserv listens on
 # loopback, no DNS server, no IP/PPP stacks. Only the HTTP port leaves the
 # container; players reach newserv through the relay.

@@ -49,6 +49,19 @@ built into the image, and `bridge/server.mjs` answers 404 for any other
 `.html`. To build every page anyway (local checks), set `PSOBB_DEV_PAGES=1`
 for `npm run build`.
 
+## Build memory
+
+The first build compiles `phosg`, `resource_dasm` and newserv from source. Each
+parallel C++ job can take 1.5-2 GB of RAM, so on a small server a build with
+many jobs is killed by the kernel (the log stops, or shows `Killed`) or hits
+the builder's time limit and shows as "cancelled". The `BUILD_JOBS` build arg
+(default `2`) sets the parallel jobs; raise it on a big builder
+(`--build-arg BUILD_JOBS=8`, or in Dokploy under the build arguments) and lower
+it to `1` if it is still killed. The compile is cached: once the image is
+built, later deploys that do not change the pinned refs skip it. If the server
+is too small even for that, build the image elsewhere, push it to a registry
+and let Dokploy only run it.
+
 ## Environment
 
 | Variable | Default | Meaning |

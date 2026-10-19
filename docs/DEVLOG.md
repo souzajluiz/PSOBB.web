@@ -1,5 +1,13 @@
 # Devlog
 
+## 2026-10-19: Docker build with fewer parallel jobs
+
+**What changed:** the image build ran `cmake --build -j"$(nproc)"` for phosg,
+resource_dasm and newserv. On a small Dokploy server that many C++ jobs ran out
+of memory and the build ended "cancelled" at 54% of resource_dasm. The jobs now
+come from the `BUILD_JOBS` build arg (default 2); DEPLOY.md explains when to
+raise or lower it. Not built here (Docker is not installed on this Mac).
+
 ## 2026-10-19: client data from a Google Drive link (PSOBB_DATA_URL)
 
 **What changed:** the container can fetch the PSOBB `data/` folder itself.
