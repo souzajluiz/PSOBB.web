@@ -1,7 +1,8 @@
 // Production server: one HTTP port for everything the browser client needs
 // once the Vite dev server is gone (the Docker image, docs/DEPLOY.md).
 //
-//   /               the built client (client/dist)
+//   /               the classic client (client/dist/classic.html); no other
+//                   page of the build is served
 //   /bridge?port=N  the WebSocket <-> TCP relay to newserv (bridge.mjs does
 //                   the same on its own port in development)
 //   /keys/*.nsk     newserv's BB key files
@@ -90,7 +91,11 @@ const server = createServer((req, res) => {
     return file ? send(res, file, 'application/octet-stream') : notFound(res);
   }
 
-  const file = inside(DIST, path === '/' ? 'index.html' : path.slice(1)) ?? inside(DIST, `${path.slice(1)}.html`);
+  // Only the classic client is public: "/" opens it, and the development
+  // pages (index.html, models.html) are not served even if a build has them.
+  if (path === '/' || path === '/classic' || path === '/classic.html') return send(res, resolve(DIST, 'classic.html'));
+  if (path.endsWith('.html')) return notFound(res);
+  const file = inside(DIST, path.slice(1));
   return file ? send(res, file) : notFound(res);
 });
 

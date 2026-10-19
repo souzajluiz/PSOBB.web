@@ -26,11 +26,15 @@ const DATA_DIR = resolve(process.env.PSOBB_DATA ?? resolve(homedir(), 'Downloads
 // other pages (classic.html, the classic UI; models.html, the player model
 // viewer). Every .html at the root is an entry, which also covers pages added
 // later.
-const pages = Object.fromEntries(
+const allPages = Object.fromEntries(
   readdirSync(import.meta.dirname)
     .filter((f) => f.endsWith('.html'))
     .map((f) => [f.replace(/\.html$/, ''), resolve(import.meta.dirname, f)]),
 );
+// A production build ships only the classic client (classic.html); the
+// development pages (index.html's protocol log and map viewer, models.html)
+// stay on the dev server. PSOBB_DEV_PAGES=1 builds them all.
+const pages = process.env.PSOBB_DEV_PAGES === '1' ? allPages : { classic: allPages.classic };
 
 export default defineConfig({
   server: { host: '127.0.0.1', port: 5173 },
