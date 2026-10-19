@@ -114,6 +114,7 @@ export class GameField {
   private enemyFirstSlot: number[] = [];
   private enemyTypes: number[] = []; // set type of each e.dat entry
   private enemyBase = 0;
+  private readonly othersBuf: Array<{ x: number; y: number; z: number }> = []; // the other players' positions, refilled every frame
   private traps: Array<{ index: number; trap: PillarTrap }> = []; // TOTrapAncient02 / 02R of the floor
   private battleFrames = 0; // 0x5a countdown after the room is cleared
   private battle = false;
@@ -290,6 +291,7 @@ export class GameField {
       if (o.kind !== 'object' || (o.type !== TRAP_HOLD && o.type !== TRAP_TECH)) continue;
       this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], z: p.world[2], params: o.params, difficulty }) });
     }
+    this.objects.batchStatic(this.traps.map((t) => t.index)); // after the traps: they move their model's nodes
     this.objects.onEventTrigger = (t) => {
       this.opts.log(`event trigger ${t.index}: event ${t.eventId}`);
       this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
@@ -445,7 +447,9 @@ export class GameField {
     const me = this.game.self;
     const pos = me && !this.game.loading ? me.position : null;
     this.music?.tick(dt, pos);
-    const others = [...this.game.players.values()].filter((p) => p.clientId !== me?.clientId && p.floor === this.floor && p.visible !== false).map((p) => p.position);
+    const others = this.othersBuf;
+    others.length = 0;
+    for (const p of this.game.players.values()) if (p.clientId !== me?.clientId && p.floor === this.floor && p.visible !== false) others.push(p.position);
     this.objects?.frame(pos, others);
     // The wave state machine runs on game ticks (30/s).
     this.frameAcc += dt * 30;

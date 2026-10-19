@@ -197,6 +197,8 @@ export class FloorItemLayer {
       const mats = (Array.isArray(o.material) ? o.material : [o.material]).map((m: THREE.Material) => {
         const c = m.clone() as THREE.MeshBasicMaterial;
         c.fog = false; // render_item_box: FogEnable false around the draw
+        const wrapped = m.userData.wrapClone ? c.map : null; // the clone of a clamp / mirror texture is this item's
+        if (wrapped) c.addEventListener('dispose', () => wrapped.dispose());
         if (gift) {
           // FUN_005c383c: root model with the box color, child with the ribbon color.
           const [r, g, b] = (o.parent === built.nodes[0] ? PRESENT_BOX_COLORS : PRESENT_RIBBON_COLORS)[Math.min(look.color, 5)];

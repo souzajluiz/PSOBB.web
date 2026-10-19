@@ -195,6 +195,9 @@ export class NjcmModelBuilder {
       mat.blendSrc = BLEND_FACTORS[m.src] ?? THREE.SrcAlphaFactor;
       mat.blendDst = (BLEND_FACTORS[m.dst] ?? THREE.OneMinusSrcAlphaFactor) as THREE.BlendingDstFactor;
     }
+    // The wrapped clone is ours (the base texture is the caller's): it goes with the material.
+    const map = params.map;
+    if (map && base && map !== base) mat.addEventListener('dispose', () => map.dispose());
     this.materials.set(key, mat);
     return mat;
   }

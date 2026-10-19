@@ -64,45 +64,60 @@ function d3dColor(argb: number): { color: THREE.Color; alpha: number } {
 // Material type 7 (nrel_renderstate_set_transform): the client generates the UVs
 // from the camera-space normal and applies the texture matrix at 0x00a21800,
 // [0.5 0 / 0 -0.5 / 0.5 0.5], i.e. u = 0.5 nx + 0.5, v = -0.5 ny + 0.5 (sphere map).
-function applyEnvironmentTexgen(material: THREE.MeshBasicMaterial): void {
-  material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <uv_vertex>',
-      `#include <uv_vertex>
+export function patchEnvironmentTexgen(shader: { vertexShader: string }): void {
+  shader.vertexShader = shader.vertexShader.replace(
+    '#include <uv_vertex>',
+    `#include <uv_vertex>
       #ifdef USE_MAP
         vec3 envNormal = normalize(normalMatrix * normal);
         vMapUv = vec2(0.5 * envNormal.x + 0.5, -0.5 * envNormal.y + 0.5);
       #endif`,
-    );
-  };
+  );
+}
+
+function applyEnvironmentTexgen(material: THREE.MeshBasicMaterial): void {
+  material.onBeforeCompile = patchEnvironmentTexgen;
   material.customProgramCacheKey = () => 'xj-envmap';
 }
 
-export class MaterialCache {
-  private cache = new Map<string, THREE.Material>();
+interface MaterialStore {
+  materials: Map<string, THREE.Material>;
   // Wrap modes live on THREE.Texture, so each (texture, wrapS, wrapT) needs its own
   // Texture object. Clones share the image source.
-  private wrapped = new Map<string, THREE.Texture>();
-  private textures: TextureLookup;
+  wrapped: Map<string, THREE.Texture>;
+}
 
-  constructor(textures: TextureLookup) {
+export class MaterialCache {
+  private store: MaterialStore;
+  private textures: TextureLookup;
+  private owner: boolean;
+
+  constructor(textures: TextureLookup, store?: MaterialStore) {
     this.textures = textures;
+    this.owner = !store;
+    this.store = store ?? { materials: new Map(), wrapped: new Map() };
   }
 
-  private texture(id: number, addressU: number, addressV: number): THREE.Texture | null {
-    if (id < 0) return null;
-    const base = this.textures(id);
+  // A cache that resolves texture ids through `textures` but shares this one's
+  // materials and wrapped textures (they are keyed by the resolved texture, so
+  // two lookups that agree on a texture get the same material). Disposing the
+  // view does nothing: the cache it came from owns everything.
+  view(textures: TextureLookup): MaterialCache {
+    return new MaterialCache(textures, this.store);
+  }
+
+  private texture(base: THREE.Texture | null, addressU: number, addressV: number): THREE.Texture | null {
     if (!base) return null;
     const s = wrapMode(addressU), t = wrapMode(addressV);
     if (base.wrapS === s && base.wrapT === t) return base;
-    const key = `${id}|${s}|${t}`;
-    let tex = this.wrapped.get(key);
+    const key = `${base.uuid}|${s}|${t}`;
+    let tex = this.store.wrapped.get(key);
     if (!tex) {
       tex = base.clone();
       tex.wrapS = s;
       tex.wrapT = t;
       tex.needsUpdate = true;
-      this.wrapped.set(key, tex);
+      this.store.wrapped.set(key, tex);
     }
     return tex;
   }
@@ -112,10 +127,11 @@ export class MaterialCache {
     // the client feeds its diffuse in as the constant vertex color.
     const diffuse = vertexColors ? 0xffffffff : m.diffuse;
     const envMap = !!m.envMap && hasNormals;
-    const key = `${m.textureId}|${m.addressU}|${m.addressV}|${diffuse}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}|${envMap}`;
-    let mat = this.cache.get(key);
+    const base = m.textureId < 0 ? null : this.textures(m.textureId);
+    const key = `${base ? base.uuid : `id${m.textureId}`}|${m.addressU}|${m.addressV}|${diffuse}|${m.blendSrc}|${m.blendDst}|${alpha}|${vertexColors}|${envMap}`;
+    let mat = this.store.materials.get(key);
     if (!mat) {
-      const map = this.texture(m.textureId, m.addressU, m.addressV);
+      const map = this.texture(base, m.addressU, m.addressV);
       const { color, alpha: opacity } = d3dColor(diffuse);
       const basic = new THREE.MeshBasicMaterial({
         map,
@@ -133,19 +149,30 @@ export class MaterialCache {
         basic.blendDst = (BLEND_FACTORS[m.blendDst] ?? THREE.OneMinusSrcAlphaFactor) as THREE.BlendingDstFactor;
       }
       basic.userData.textureId = m.textureId;
-      if (envMap) applyEnvironmentTexgen(basic);
+      // A wrapped clone belongs to the cache that made it, which the models built
+      // by buildEnemy / flooritems drop without disposing: the materials that use
+      // it release it with them (a later use uploads it again).
+      if (map && map !== base) {
+        basic.userData.wrapClone = true;
+        basic.addEventListener('dispose', () => map.dispose());
+      }
+      if (envMap) {
+        applyEnvironmentTexgen(basic);
+        basic.userData.envMap = true;
+      }
       mat = basic;
-      this.cache.set(key, mat);
+      this.store.materials.set(key, mat);
     }
     return mat;
   }
 
   dispose(): void {
-    for (const m of this.cache.values()) m.dispose();
-    this.cache.clear();
+    if (!this.owner) return;
+    for (const m of this.store.materials.values()) m.dispose();
+    this.store.materials.clear();
     // Only the clones are ours; the base textures belong to the caller.
-    for (const t of this.wrapped.values()) t.dispose();
-    this.wrapped.clear();
+    for (const t of this.store.wrapped.values()) t.dispose();
+    this.store.wrapped.clear();
   }
 }
 

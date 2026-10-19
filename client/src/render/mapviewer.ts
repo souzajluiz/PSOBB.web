@@ -9,6 +9,10 @@ import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njme
 import { MapAnimator } from './mapanim.ts';
 import { TickSmoother } from './smoothrender.ts';
 import { TextureAnimator } from './texanim.ts';
+import { AdaptiveResolution, planResolution, readScreenInfo } from './resolution.ts';
+import { GroundIndex } from './groundindex.ts';
+import { TexturePool } from './texturepool.ts';
+import { extractStatic, freezeStatic, StaticBatcher, type BatchOptions, type BatchStats } from './batching.ts';
 import { parseTam, tamFileFor, type TamFile } from '../formats/tam.ts';
 import { areaForMap, type PlacedEntity } from '../formats/setdata.ts';
 import { ENTRY_NO_FOG } from '../formats/nrel.ts';
@@ -34,6 +38,7 @@ export interface MapStats {
   textures: number;
   skippedEntries: number;
   animations: number;
+  batch?: BatchStats; // static pieces merged into batches (render/batching.ts)
 }
 
 // "map_city00_00n.rel" -> "map_city00.xvm"; "map_forest01n.rel" -> "map_forest01.xvm"
@@ -61,11 +66,25 @@ const D3D_LIGHT_SCALE = Math.PI;
 const srgb = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
 const rgb24 = (c: number) => srgb(((c >>> 16) & 0xff) / 255, ((c >>> 8) & 0xff) / 255, (c & 0xff) / 255);
 
+// ?batch=off | nopool | cell=N | transparent=0: switches for comparing the static batching
+// (render/batching.ts) with the plain scene graph; the default is on.
+const searchParams = (): URLSearchParams => new URLSearchParams(globalThis.location?.search ?? '');
+function batchMode(): 'on' | 'off' | 'nopool' {
+  const v = searchParams().get('batch');
+  return v === 'off' || v === 'nopool' ? v : 'on';
+}
+function batchOverrides(): Partial<BatchOptions> {
+  const q = searchParams();
+  const cell = Number(q.get('cell'));
+  return { ...(cell > 0 ? { cellSize: cell } : {}), transparent: q.get('transparent') !== '0' };
+}
+
 interface AreaTables {
   fog: FogEntry[] | null;
   light: LightEntry[] | null;
 }
 const ONE = new THREE.Vector3(1, 1, 1);
+const DOWN = new THREE.Vector3(0, -1, 0);
 
 export class MapViewer {
   readonly renderer: THREE.WebGLRenderer;
@@ -80,6 +99,11 @@ export class MapViewer {
   private textureAnimator: TextureAnimator | null = null;
   private raycaster = new THREE.Raycaster();
   private keys = new Set<string>();
+  // Scratch vectors of the free-fly camera and the ground probe (no per-frame allocations).
+  private readonly forward = new THREE.Vector3();
+  private readonly right = new THREE.Vector3();
+  private readonly move = new THREE.Vector3();
+  private readonly probe = new THREE.Vector3();
   private clock = new THREE.Clock();
   private entityRoot: THREE.Group | null = null;
   private entityMeshes: Array<{ mesh: THREE.InstancedMesh; items: PlacedEntity[] }> = [];
@@ -97,6 +121,11 @@ export class MapViewer {
   private fogClock = 0;
   private gameFrame = 0;
   private noFogMaterials: THREE.Material[] = [];
+  private noFogCopies = new Map<THREE.Material, THREE.Material>(); // one fog-free copy per material, shared by the entries
+  private batchStats: BatchStats | undefined;
+  private texturePool: TexturePool | null = null;
+  private movingRoots: THREE.Object3D[] = []; // map entries that animate: ray cast as they are
+  private ground: GroundIndex | null = null; // built on the first groundHeight() call
   readonly sceneFog = new THREE.Fog(0x000000, 1000, 10000);
   readonly ambientLight = new THREE.AmbientLight(0xffffff, 0.3 * D3D_LIGHT_SCALE);
   readonly directionalLight = new THREE.DirectionalLight(0xffffff, D3D_LIGHT_SCALE);
@@ -117,11 +146,13 @@ export class MapViewer {
   // after the frame's logic, right before the draw, and hand the objects the
   // ticks move to the smoother; the logic poses come back after the draw.
   readonly smoother = new TickSmoother();
+  // The pixel ratio: desktop as before, a phone starts at 1.5 and adapts to the frame time (render/resolution.ts).
+  readonly resolution = new AdaptiveResolution(planResolution(readScreenInfo(), globalThis.location?.search ?? ''));
   readonly renderHooks = new Set<() => void>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.resolution.ratio);
     this.scene.background = new THREE.Color(0x0a1424);
     this.camera = new THREE.PerspectiveCamera(60, 1, 1, 20000);
     this.camera.position.set(0, 300, 600);
@@ -160,7 +191,13 @@ export class MapViewer {
 
   // WASD/QE moves camera and orbit target together.
   private frame(): void {
-    const dt = Math.min(this.clock.getDelta(), 0.1);
+    const raw = this.clock.getDelta();
+    const dt = Math.min(raw, 0.1);
+    const ratio = this.resolution.update(raw * 1000);
+    if (ratio !== null) {
+      this.renderer.setPixelRatio(ratio);
+      this.resize();
+    }
     this.mapAnimator.update(dt);
     this.textureAnimator?.update(dt);
     for (const hook of this.frameHooks) hook(dt);
@@ -171,12 +208,12 @@ export class MapViewer {
       return;
     }
     const speed = (this.keys.has('shift') ? 1200 : 300) * dt;
-    const forward = new THREE.Vector3();
+    const { forward, right, move } = this;
     this.camera.getWorldDirection(forward);
     forward.y = 0;
     forward.normalize();
-    const right = new THREE.Vector3().crossVectors(forward, this.camera.up).normalize();
-    const move = new THREE.Vector3();
+    right.crossVectors(forward, this.camera.up).normalize();
+    move.set(0, 0, 0);
     if (this.keys.has('w')) move.add(forward);
     if (this.keys.has('s')) move.sub(forward);
     if (this.keys.has('d')) move.add(right);
@@ -253,6 +290,11 @@ export class MapViewer {
     this.textureAnimator = tam ? new TextureAnimator(tam, (id) => this.textures[id] ?? null) : null;
 
     const root = new THREE.Group();
+    // Entries that never change after placement are merged into a few meshes
+    // (render/batching.ts); a motion, a .tam scroll or texture swap keeps its
+    // entry as it is.
+    const staticRoots: THREE.Object3D[] = [];
+    const moving: THREE.Object3D[] = [];
     for (const section of geometry.sections) {
       const s = new THREE.Group();
       s.position.set(...section.position);
@@ -260,19 +302,37 @@ export class MapViewer {
       for (const entry of section.entries) {
         if (!entry.rendered) continue;
         let root: THREE.Object3D;
+        let isStatic = true;
         if (entry.animated && entry.motion) {
           const built = buildObjectTreeWithNodes(entry.object, this.materials);
           this.mapAnimator.add(built.nodes, entry.motion, entry.frameStep);
           root = built.root;
+          isStatic = false;
         } else {
           root = buildObjectTree(entry.object, this.materials);
         }
         if (entry.flags & ENTRY_NO_FOG) this.disableFog(root);
+        if (this.textureAnimator && (entry.effect || entry.textureAnim)) isStatic = false;
         this.textureAnimator?.attach(entry, root);
         s.add(root);
+        (isStatic ? staticRoots : moving).push(root);
       }
       root.add(s);
     }
+    root.updateMatrixWorld(true);
+    const mode = batchMode();
+    if (mode !== 'off') {
+      this.texturePool = mode === 'nopool' ? null : new TexturePool();
+      const batcher = new StaticBatcher({ pool: this.texturePool, ...batchOverrides() });
+      extractStatic(staticRoots, batcher);
+      for (const mesh of batcher.build()) root.add(mesh);
+      this.batchStats = batcher.stats;
+    }
+    // The map is placed once: only the animated entries' nodes keep their matrix updates.
+    this.movingRoots = moving;
+    this.ground = null;
+    const live = new Set<THREE.Object3D>(moving);
+    freezeStatic(root, (o) => live.has(o));
     this.scene.add(root);
     this.mapRoot = root;
     this.frameAll();
@@ -280,13 +340,12 @@ export class MapViewer {
 
   // Entry flag 0x1: the client turns fog off while drawing the entry.
   private disableFog(root: THREE.Object3D): void {
-    const copies = new Map<THREE.Material, THREE.Material>();
     const copy = (m: THREE.Material) => {
-      let c = copies.get(m);
+      let c = this.noFogCopies.get(m);
       if (!c) {
         c = m.clone();
         (c as THREE.MeshBasicMaterial).fog = false;
-        copies.set(m, c);
+        this.noFogCopies.set(m, c);
         this.noFogMaterials.push(c);
       }
       return c;
@@ -406,11 +465,23 @@ export class MapViewer {
   }
 
   // Height of the map surface under (x, z), searching downward from `fromY`.
+  // The static part comes from a triangle grid (render/groundindex.ts), the
+  // animated entries are ray cast where they are now.
   groundHeight(x: number, z: number, fromY = 1000): number | null {
     if (!this.mapRoot) return null;
-    this.raycaster.set(new THREE.Vector3(x, fromY, z), new THREE.Vector3(0, -1, 0));
-    const hit = this.raycaster.intersectObject(this.mapRoot, true)[0];
-    return hit ? hit.point.y : null;
+    if (!this.ground) {
+      this.mapRoot.updateMatrixWorld();
+      const moving = new Set(this.movingRoots);
+      this.ground = new GroundIndex();
+      this.ground.addObjects([this.mapRoot], (o) => moving.has(o));
+    }
+    let best = this.ground.height(x, z, fromY);
+    if (this.movingRoots.length) {
+      this.raycaster.set(this.probe.set(x, fromY, z), DOWN);
+      const hit = this.raycaster.intersectObjects(this.movingRoots, true)[0];
+      if (hit && (best === null || hit.point.y > best)) best = hit.point.y;
+    }
+    return best;
   }
 
   setOrbitEnabled(enabled: boolean): void {
@@ -446,6 +517,7 @@ export class MapViewer {
       textures: this.textures.length,
       skippedEntries: g.skippedEntries.length,
       animations: this.mapAnimator.count + (this.textureAnimator?.count ?? 0),
+      batch: this.batchStats,
     };
   }
 
@@ -605,6 +677,12 @@ export class MapViewer {
     this.materials?.dispose();
     for (const m of this.noFogMaterials) m.dispose();
     this.noFogMaterials = [];
+    this.noFogCopies.clear();
+    this.batchStats = undefined;
+    this.movingRoots = [];
+    this.ground = null;
+    this.texturePool?.dispose();
+    this.texturePool = null;
     this.fogRegions = [];
     for (const t of this.textures) t.dispose();
     this.textures = [];

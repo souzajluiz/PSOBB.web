@@ -198,6 +198,8 @@ export class LobbyView {
   private wasMoving = false;
   // Walk / run of the touch pad's analog stick (input/analog.ts).
   private stickGait = new AnalogGait();
+  // Scratch vectors of the local movement (frame() runs every rendered frame).
+  private readonly moveScratch = { forward: new THREE.Vector3(), right: new THREE.Vector3(), dir: new THREE.Vector3() };
   private sentGait: 'walk' | 'run' | null = null;
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
@@ -439,9 +441,10 @@ export class LobbyView {
 
     // Local movement relative to the camera (not while attacking).
     if (me && mine && !this.attacking(me.clientId)) {
-      const forward = new THREE.Vector3(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
-      const right = new THREE.Vector3(-forward.z, 0, forward.x);
-      const dir = new THREE.Vector3();
+      const { forward, right, dir } = this.moveScratch;
+      forward.set(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
+      right.set(-forward.z, 0, forward.x);
+      dir.set(0, 0, 0);
       const stick = touchStick();
       let gait: 'walk' | 'run' = 'run';
       if (stick) {

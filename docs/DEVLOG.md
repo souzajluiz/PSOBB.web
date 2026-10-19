@@ -1,5 +1,77 @@
 # Devlog
 
+## 2026-10-19: render cost: static batching, texture pools, adaptive resolution, leaks
+
+**What changed:** a phone is limited by draw-call submission and by pixels, not by
+triangles (1074 of the 1158 meshes of a Forest 1 frame have under 200 vertices, and
+every material group is its own draw call). Four changes, all in `client/src/render/`:
+(1) **Static batching** (`batching.ts`): opaque and blended material groups of meshes
+that never change after placement are baked into world space and merged per
+(material, render order, attribute set, spatial cell of 1500 units) into a few
+geometries; the map (`MapViewer.show`) and the field objects that nothing drives
+(`ObjectLayer.batchStatic`, called by `gamefield.ts` after the traps) go through it.
+Doors, switches, warps, traps, triggers, motions, `.tam` scrolls and texture swaps,
+skinned meshes and anything hidden or state driven stay as they were; hideable
+objects (boxes, delayed objects) are merged per object under their own root so
+`setVisible` still works. Objects that never move have their matrix updates frozen.
+(2) **Texture pools** (`texturepool.ts`): the map's textures become layers of array
+textures (one per size / wrap / filter) and the merged meshes pick the layer per
+vertex, so one draw call covers every texture of a size. Same samples as before (the
+layer is constant over a triangle). (3) **Ground index** (`groundindex.ts`):
+`groundHeight` no longer ray casts the now large merged meshes, it reads a triangle
+grid (animated entries are still ray cast). (4) **Adaptive resolution**
+(`resolution.ts`): desktop keeps `min(devicePixelRatio, 2)`; a small touch screen
+starts at 1.5 and steps between 1 and 1.5 by the measured frame time (drop under ~42
+fps after 45 frames, raise after 240 fast frames, 3 s cooldown). Per-frame allocations
+in `lobbyview.ts` / `gamefield.ts` were replaced by scratch objects.
+
+**Leaks found and fixed:** a stale `show()` in `enemyview.ts` / `objectview.ts` (a
+newer call or `clear()` took over while models were being built) dropped the models
+without disposing them (`dispose.ts`: `disposeTree`, shared by the three places that
+repeated it); `texanim.ts` never disposed the material copies and texture clones its
+`attach()` made; the wrapped (clamp / mirror) texture clones of `njcmmesh.ts` and
+`flooritems.ts` now go with their material; the map viewer disposes its texture pool.
+
+**Before / after** (`tools/perfprobe.mjs`, headless Chrome 155 on SwiftShader, 120
+frames after warm-up, 1280x720, dpr 1, one run each, sequential; before = pristine
+origin/main, after = this branch; render ms are CPU submission ms of
+`renderer.render()`):
+
+| scene | draw calls | textures | render ms | updateMatrixWorld ms |
+|---|---|---|---|---|
+| Pioneer 2 | 903 -> 421 | 362 -> 87 | 3.52 -> 3.40 | 0.029 -> 0.014 |
+| Forest 1 | 1415 -> 510 | 74 -> 27 | 7.61 -> 3.46 | 0.093 -> 0.037 |
+| Caves 1 | 1037 -> 287 | 64 -> 24 | 2.73 -> 1.17 | 0.048 -> 0.018 |
+| Ruins 1 | 2014 -> 324 | 200 -> 38 | 4.42 -> 1.52 | 0.070 -> 0.024 |
+| Forest 1 + objects (109) | 4059 -> 1175 | 125 -> 49 | 12.61 -> 7.37 | 0.195 -> 0.139 |
+
+Triangles are unchanged in every row. Pixel difference of the same camera at animation
+frame 0 (`tools/imgdiff.mjs`, mean absolute channel difference of 255 / share of pixels
+off by more than 8 / maximum): Pioneer 2 0.0007 / 0.004% / 50; Forest 1 0.1532 /
+1.069% / 87; Caves 1 0.0010 / 0.008% / 33; Ruins 1 0 / 0% / 0.
+
+**Blended batching caveat:** three sorts blended meshes back to front by their centre;
+a merged blended batch is drawn in placement order at the depth of its own centre, so
+overlapping translucent pieces of one texture can blend in another order. That is the
+whole Forest 1 difference above, small but not pixel-identical.
+`?transparent=0` leaves blended groups unmerged and brings the image back to the
+reference (at the cost of their draw calls).
+
+**URL switches** (for comparing, all in `MapViewer` / `resolution.ts`): `?batch=off`
+(plain scene graph), `?batch=nopool` (merge but no array textures), `?cell=N` (cell
+size), `?transparent=0`, `?dpr=1.25` (the pixel ratio itself, adaptation off),
+`?quality=low` (1) / `high` (desktop rule) / `auto` (default). Tests:
+`tests/batching.test.ts`, `tests/resolution.test.ts`.
+
+**Measurement limits:** SwiftShader is a CPU rasteriser, so these are submission and
+scene-graph costs, not GPU time and not a phone: the effect of fewer draw calls and
+fewer texture binds on a real mobile GPU, and of the pixel ratio (which the headless
+runs hold at 1), is not measured here. One run per side; the render times of Pioneer 2 are within noise, its gain is
+in draw calls and textures. The "before" row of Forest + objects runs on the old tree,
+where `batchStatic` does not exist. The field objects are measured through the map
+viewer (`--objects`), not a live game: monsters, players, effects and the HUD are not
+in the numbers. Memory on a device was not measured (`--churn` prints the geometry / texture count trend across reloads).
+
 ## 2026-10-19: caching headers on the production relay
 
 **What changed:** the published site (checked at its sslip.io address) answered

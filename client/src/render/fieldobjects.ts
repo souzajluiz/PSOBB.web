@@ -472,6 +472,7 @@ export class FieldObjects {
   // Quest flags of the current difficulty (Vol Opt's seal door reads 0x2c..0x2f).
   questFlag: (flag: number) => boolean = () => false;
   private seals = new Map<number, SealDoor>();
+  private readonly playersBuf: Array<{ x: number; y: number; z: number }> = []; // the players frame() looks at, refilled every frame
   private collision: CollisionWorld | null;
   // The boss warp the local player is using and its 6x6A state
   // (render/bosswarp.ts); the other boss warps sit in state 0, or 4 while
@@ -517,6 +518,28 @@ export class FieldObjects {
     for (const s of this.all.switches) models?.setState(s.index, 'off');
     this.group.name = 'field-objects';
     viewer.scene.add(this.group);
+  }
+
+  // The object indices this field changes after placement through more than
+  // visibility: everything its state machines drive (doors, switches, warps,
+  // event triggers). `extra`: indices the caller drives itself (the pillar traps).
+  dynamicIndices(extra: Iterable<number> = []): Set<number> {
+    const out = new Set<number>(extra);
+    for (const list of [this.all.warps, this.all.doors, this.all.switches, this.all.triggers]) for (const x of list) out.add(x.index);
+    return out;
+  }
+
+  // The object indices that only appear and disappear: boxes (breakBox) and
+  // the delayed objects (construct).
+  hideableIndices(): Set<number> {
+    const out = new Set<number>(this.delayed);
+    for (const b of this.all.boxes) out.add(b.index);
+    return out;
+  }
+
+  // Merges the models of the objects that stay as placed (ObjectLayer.batchStatic).
+  batchStatic(extra: Iterable<number> = []): void {
+    this.models?.batchStatic(this.dynamicIndices(extra), this.hideableIndices());
   }
 
   private refreshLists(): void {
@@ -636,7 +659,10 @@ export class FieldObjects {
       }
     }
     for (const s of this.switches) this.models?.setState(s.index, this.flags.has(s.flag) ? 'on' : 'off');
-    const players = self ? [self, ...others] : others;
+    const players = this.playersBuf;
+    players.length = 0;
+    if (self) players.push(self);
+    for (const o of others) players.push(o);
     for (const d of this.doors) {
       if (d.type === SEAL_DOOR) {
         // Not a door state machine: sealed (box on) until quest flag 0x2f.
@@ -649,10 +675,16 @@ export class FieldObjects {
         if (d.mesh) d.mesh.visible = seal.sealed;
         continue;
       }
-      const nearest = players.reduce((m, p) => Math.min(m, dist3(d, p)), Infinity);
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
-      if (d.city) stepCityDoor(d, players.reduce((m, p) => Math.min(m, Math.hypot(d.x - p.x, d.z - p.z)), Infinity), frames);
-      else stepDoor(d, this.unlocked(d), nearest, frames);
+      if (d.city) {
+        let flat = Infinity;
+        for (const p of players) flat = Math.min(flat, Math.hypot(d.x - p.x, d.z - p.z));
+        stepCityDoor(d, flat, frames);
+      } else {
+        let nearest = Infinity;
+        for (const p of players) nearest = Math.min(nearest, dist3(d, p));
+        stepDoor(d, this.unlocked(d), nearest, frames);
+      }
       if (this.models?.models.has(d.index)) {
         if (d.lamps) this.models.setLamps(d.index, d.state <= 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
         else this.models.setState(d.index, lockedLook(d) ? 'locked' : 'unlocked');

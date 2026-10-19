@@ -28,6 +28,8 @@ function wrapUnits(v: number): number {
 export class TextureAnimator {
   private scrolls: ScrollTrack[] = [];
   private swaps: SwapTrack[] = [];
+  // Every material copy and texture clone attach() made: nothing else owns them.
+  private owned: Array<{ material: THREE.Material; map: THREE.Texture | null }> = [];
   private tam: TamFile;
   private lookup: (id: number) => THREE.Texture | null;
 
@@ -73,6 +75,7 @@ export class TextureAnimator {
           c.map.wrapS = c.map.wrapT = THREE.RepeatWrapping; // FUN_0081a55c forces wrap
           c.map.needsUpdate = true;
         }
+        this.owned.push({ material: c, map: c.map });
         out.push(c);
         return c;
       });
@@ -102,6 +105,13 @@ export class TextureAnimator {
 
   dispose(): void {
     for (const s of this.scrolls) for (const t of s.textures) t.dispose();
+    // The swap tracks replace a clone's map by a texture of the map's list (the
+    // viewer's), so the clones' own maps are the ones recorded here.
+    for (const { material, map } of this.owned) {
+      map?.dispose();
+      material.dispose();
+    }
+    this.owned = [];
     this.scrolls = [];
     this.swaps = [];
   }

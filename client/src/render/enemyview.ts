@@ -14,6 +14,7 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { enemyModelFor, type EnemyModelContext, type EnemyModelSpec } from '../formats/enemymodels.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { buildEnemy, EnemyArchiveCache, type EnemyArchive, type EnemyPartSpec, type NodeAnimator } from './enemymodel.ts';
+import { disposeTree } from './dispose.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 export interface EnemyLayerStats {
@@ -83,7 +84,10 @@ export class EnemyLayer {
         for (const t of spec.textures ?? []) await this.cache.textures(t);
         const extra = new Map<string, EnemyArchive>();
         for (const a of spec.archives ?? []) extra.set(a.bml, await this.cache.get(a.bml, a.models));
-        if (gen !== this.generation) return done;
+        if (gen !== this.generation) {
+          disposeTree(root); // a newer show() / clear() took over: the models built so far are nobody's
+          return done;
+        }
         // Spread the start frames so a group does not move in lockstep.
         const built = buildEnemy(archive, spec.parts, ((e.index * 0.618034) % 1 + 1) % 1, this.cache.loadedTextures, extra);
         built.root.position.set(p.world[0], p.world[1], p.world[2]);
@@ -109,7 +113,10 @@ export class EnemyLayer {
         stats.errors.push(`${p.name} (${spec.bml}): ${(err as Error).message}`);
       }
     }
-    if (gen !== this.generation) return done;
+    if (gen !== this.generation) {
+      disposeTree(root);
+      return done;
+    }
     this.viewer.scene.add(root);
     this.root = root;
     this.animators = animators;
@@ -141,19 +148,11 @@ export class EnemyLayer {
     const i = this.instances.indexOf(instance);
     if (i >= 0) this.instances.splice(i, 1);
     this.animators = this.animators.filter((a) => !instance.animators.includes(a));
-    const materials = new Set<THREE.Material>();
     for (const r of [instance.root, instance.world]) {
       if (!r) continue;
       r.removeFromParent();
-      r.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry.dispose();
-          for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
-        }
-        if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
-      });
+      disposeTree(r);
     }
-    for (const m of materials) m.dispose();
     this.byIndex.delete(instance.placed.entity.index);
     this.worldByIndex.delete(instance.placed.entity.index);
   }
@@ -191,15 +190,7 @@ export class EnemyLayer {
     this.hidden = false;
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
-    const materials = new Set<THREE.Material>();
-    this.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
-        for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
-      }
-      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
-    });
-    for (const m of materials) m.dispose();
+    disposeTree(this.root);
     this.root = null;
   }
 

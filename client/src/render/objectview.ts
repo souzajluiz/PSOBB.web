@@ -14,7 +14,10 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { isInvisibleObject, objectModelFor, type ObjectModelContext, type ObjectModelSpec, type ObjectPartSpec, type PartShow } from '../formats/objectmodels.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { buildEnemy, EnemyArchiveCache, type EnemyPartSpec, type NodeAnimator } from './enemymodel.ts';
+import { extractStatic, freezeStatic, poolMeshInPlace, StaticBatcher, type BatchStats } from './batching.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { disposeTree } from './dispose.ts';
+import { TexturePool } from './texturepool.ts';
 
 // Texture ids are per model; remapping every id to one texture is how
 // FUN_0081a588 sets the texture of all meshes of a model.
@@ -26,6 +29,10 @@ export interface ObjectPart {
   animator: NodeAnimator | null;
   drive: ObjectPartSpec['drive'];
   nodes: THREE.Object3D[]; // node tree, depth first
+  // Built on first use by the per-frame setters below (setLamps, setTrapPose,
+  // setSealLamps), which would otherwise allocate every call.
+  nodeSet?: Set<THREE.Object3D>;
+  sealMaterials?: THREE.MeshBasicMaterial[]; // the part's own copies of its materials (the originals may be shared / pooled)
 }
 
 export interface ObjectModel {
@@ -33,6 +40,7 @@ export interface ObjectModel {
   spec: ObjectModelSpec;
   root: THREE.Group;
   parts: ObjectPart[];
+  lampOf?: Map<number, number>; // node index -> lamp, for setLamps
 }
 
 export interface ObjectLayerStats {
@@ -77,6 +85,12 @@ export class ObjectLayer {
   };
   private generation = 0;
   models = new Map<number, ObjectModel>(); // by o.dat entry index
+  // Objects whose meshes went into merged batches (batchStatic): they cannot
+  // change state any more, so the state setters below ignore them.
+  private batched = new Set<number>();
+  private ownBatched = new Set<number>(); // merged per object: setVisible still works
+  private pool: TexturePool | null = null;
+  private warned = new Set<string>();
   // The pillar trap nodes setTrapPose moves on the game ticks (drawn
   // between ticks by render/smoothrender.ts).
   readonly trapNodes = new Set<THREE.Object3D>();
@@ -114,7 +128,10 @@ export class ObjectLayer {
         // the entry names, which the BML keeps (.nj / .xj vs .njm / .njs).
         const archive = await this.cache.getAuto(spec.bml);
         for (const part of spec.parts) if (part.textures) await this.cache.textures(part.textures);
-        if (gen !== this.generation) return done;
+        if (gen !== this.generation) {
+          disposeTree(root); // a newer show() / clear() took over: the models built so far are nobody's
+          return done;
+        }
         const model: ObjectModel = { entity: p, spec, root: new THREE.Group(), parts: [] };
         for (const part of spec.parts) {
           const built = buildEnemy(archive, [toEnemyPart(part)], 0, this.cache.loadedTextures);
@@ -150,7 +167,10 @@ export class ObjectLayer {
         stats.errors.push(`${p.name} (${spec.bml}): ${(err as Error).message}`);
       }
     }
-    if (gen !== this.generation) return done;
+    if (gen !== this.generation) {
+      disposeTree(root);
+      return done;
+    }
     this.viewer.scene.add(root);
     this.root = root;
     this.animators = animators;
@@ -158,10 +178,89 @@ export class ObjectLayer {
     return done;
   }
 
+  // The model of `index` if it can still change: a batched object's meshes are
+  // merged with its neighbours', so a setter that would change it is a bug of
+  // the caller (it left the index out of `dynamic`); say so once.
+  private live(index: number, what: string): ObjectModel | undefined {
+    if (!this.batched.has(index)) return this.models.get(index);
+    if (!this.warned.has(what)) {
+      this.warned.add(what);
+      console.warn(`ObjectLayer.${what}(${index}): the object was batched as static; pass its index to batchStatic`);
+    }
+    return undefined;
+  }
+
+  // Merges the objects that never change after placement into a few meshes
+  // (render/batching.ts) and freezes their transforms.
+  //  - `dynamic`: indices the caller still drives (doors, switches, warps,
+  //    triggers, traps...): left as they are.
+  //  - `hideable`: indices that only ever change through setVisible (boxes,
+  //    delayed objects): their meshes are merged per object and stay children of
+  //    the object's root, so hiding the root still hides them.
+  //  - everything else is merged across objects (spatial cells).
+  // An object is also left as it is when a part plays a motion or is only drawn
+  // in some states. Chunk models (skinned meshes) stay in their meshes.
+  // Returns the batching stats.
+  batchStatic(dynamic: ReadonlySet<number>, hideable: ReadonlySet<number> = new Set()): BatchStats | null {
+    const root = this.root;
+    if (!root) return null;
+    const shared: THREE.Object3D[] = [];
+    const sharedIndices: number[] = [];
+    const own: number[] = [];
+    const liveRoots = new Set<THREE.Object3D>();
+    for (const [index, m] of this.models) {
+      const still = !dynamic.has(index) && !m.spec.lamps && m.parts.every((p) => !p.animator && p.show === 'always');
+      if (!still) liveRoots.add(m.root);
+      else if (hideable.has(index)) own.push(index);
+      else {
+        sharedIndices.push(index);
+        for (const p of m.parts) shared.push(p.group);
+      }
+    }
+    root.updateMatrixWorld(true);
+    this.pool?.dispose();
+    const pool = (this.pool = new TexturePool());
+    const stats: BatchStats = { meshesIn: 0, groupsIn: 0, groupsKept: 0, batches: 0, vertices: 0, triangles: 0, pooled: 0 };
+    const add = (from: BatchStats) => (Object.keys(stats) as Array<keyof BatchStats>).forEach((k) => (stats[k] += from[k]));
+    const batcher = new StaticBatcher({ pool });
+    extractStatic(shared, batcher);
+    for (const mesh of batcher.build()) root.add(mesh);
+    add(batcher.stats);
+    for (const i of sharedIndices) {
+      this.batched.add(i);
+      const r = this.models.get(i)!.root;
+      if (!r.children.some((c) => c.children.length || (c as THREE.Mesh).isMesh)) r.removeFromParent(); // nothing left to draw
+    }
+    for (const i of own) {
+      const m = this.models.get(i)!;
+      const local = new StaticBatcher({ pool, cellSize: 0, space: m.root.matrixWorld.clone().invert() });
+      extractStatic(
+        m.parts.map((p) => p.group),
+        local,
+      );
+      for (const mesh of local.build()) m.root.add(mesh);
+      add(local.stats);
+      this.ownBatched.add(i);
+    }
+    // The models that stay live keep their meshes (they follow animated nodes),
+    // but a mesh with several same-size textures still becomes one draw per state.
+    for (const m of this.models.values()) {
+      if (!liveRoots.has(m.root)) continue;
+      const meshes: THREE.Mesh[] = [];
+      m.root.traverse((o) => {
+        if (o instanceof THREE.Mesh) meshes.push(o);
+      });
+      for (const mesh of meshes) if (poolMeshInPlace(mesh, pool)) stats.pooled++;
+    }
+    pool.finish();
+    freezeStatic(root, (o) => liveRoots.has(o));
+    return stats;
+  }
+
   // Shows the parts of one object for a state: doors pass 'locked' or
   // 'unlocked', switches 'on' or 'off', boss warps 'idle', 'active' or 'off'.
   setState(index: number, state: PartShow): void {
-    const m = this.models.get(index);
+    const m = this.live(index, 'setState');
     if (!m) return;
     for (const part of m.parts) part.group.visible = part.show === 'always' || part.show === state;
   }
@@ -170,16 +269,19 @@ export class ObjectLayer {
   // draws the whole door with the lit list (opening, open, closing). Parts 0
   // and 1 are the door with its own list and with the lit one.
   setLamps(index: number, lit: readonly boolean[] | null): void {
-    const m = this.models.get(index);
+    const m = this.live(index, 'setLamps');
     const lamps = m?.spec.lamps;
     if (!m || !lamps || m.parts.length < 2) return;
     const [own, green] = m.parts;
     own.group.visible = lit !== null;
     green.group.visible = true;
-    const ownSet = new Set(own.nodes);
-    const greenSet = new Set(green.nodes);
-    const lampOf = new Map<number, number>();
-    lamps.forEach((nodes, i) => nodes.forEach((n) => lampOf.set(n, i)));
+    const ownSet = (own.nodeSet ??= new Set(own.nodes));
+    const greenSet = (green.nodeSet ??= new Set(green.nodes));
+    if (!m.lampOf) {
+      m.lampOf = new Map<number, number>();
+      lamps.forEach((nodes, i) => nodes.forEach((n) => m.lampOf!.set(n, i)));
+    }
+    const lampOf = m.lampOf;
     green.nodes.forEach((node, n) => {
       const lamp = lampOf.get(n);
       const show = lit === null || (lamp !== undefined && lit[lamp]);
@@ -198,10 +300,10 @@ export class ObjectLayer {
   // child's child drawn as it is and that one's sibling (+0x30) turned by
   // `spin` (BAMS) about Y.
   setTrapPose(index: number, rise1: number, rise2: number, spin: number): void {
-    const m = this.models.get(index);
+    const m = this.live(index, 'setTrapPose');
     const nodes = m?.parts[0]?.nodes;
     if (!nodes?.length) return;
-    const set = new Set(nodes);
+    const set = (m!.parts[0].nodeSet ??= new Set(nodes));
     const kidsOf = (n: THREE.Object3D) => n.children.filter((c) => set.has(c));
     const root = nodes[0];
     const child = kidsOf(root)[0];
@@ -224,33 +326,47 @@ export class ObjectLayer {
   // (ASSUMED: the render's color {alpha, 0, 0, 0} with flag 0x20 read as a
   // brightness of 1 + alpha).
   setSealLamps(index: number, lit: readonly boolean[], alpha: number): void {
-    const part = this.models.get(index)?.parts[1];
+    const part = this.live(index, 'setSealLamps')?.parts[1];
     const nodes = part?.nodes;
     if (!part || !nodes?.length) return;
-    const set = new Set(nodes);
+    const set = (part.nodeSet ??= new Set(nodes));
     const kids = nodes[0].children.filter((c) => set.has(c));
     kids.forEach((k, i) => (k.visible = lit[i] ?? false));
     const v = Math.max(0, Math.min(1, 1 + alpha));
-    part.group.traverse((o) => {
-      if (!(o instanceof THREE.Mesh)) return;
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) (m as THREE.MeshBasicMaterial).color?.setRGB(v, v, v);
-    });
+    // The colour is this object's own: the materials may be shared (pooled), so
+    // the part takes copies the first time.
+    if (!part.sealMaterials) {
+      const list: THREE.MeshBasicMaterial[] = [];
+      part.group.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const own = (m: THREE.Material) => {
+          const c = m.clone() as THREE.MeshBasicMaterial;
+          c.onBeforeCompile = m.onBeforeCompile;
+          c.customProgramCacheKey = m.customProgramCacheKey;
+          list.push(c);
+          return c;
+        };
+        o.material = Array.isArray(o.material) ? o.material.map(own) : own(o.material);
+      });
+      part.sealMaterials = list;
+    }
+    for (const m of part.sealMaterials) m.color?.setRGB(v, v, v);
   }
 
   setVisible(index: number, visible: boolean): void {
-    const m = this.models.get(index);
+    const m = this.ownBatched.has(index) ? this.models.get(index) : this.live(index, 'setVisible');
     if (m) m.root.visible = visible;
   }
 
   // Frame of the parts driven by the door state machine.
   setDoorFrame(index: number, frame: number): void {
-    const m = this.models.get(index);
+    const m = this.live(index, 'setDoorFrame');
     if (!m) return;
     for (const part of m.parts) if (part.drive === 'door' && part.animator) part.animator.setFrame(frame);
   }
 
   setLaserFrame(index: number, frame: number): void {
-    const m = this.models.get(index);
+    const m = this.live(index, 'setLaserFrame');
     if (!m) return;
     for (const part of m.parts) if (part.drive === 'laser' && part.animator) part.animator.setFrame(frame);
   }
@@ -267,17 +383,14 @@ export class ObjectLayer {
     this.generation++;
     this.animators = [];
     this.models.clear();
+    this.batched.clear();
+    this.ownBatched.clear();
+    this.warned.clear();
+    this.pool?.dispose();
+    this.pool = null;
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
-    const materials = new Set<THREE.Material>();
-    this.root.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
-        for (const m of Array.isArray(o.material) ? o.material : [o.material]) materials.add(m);
-      }
-      if (o instanceof THREE.SkinnedMesh) o.skeleton.dispose();
-    });
-    for (const m of materials) m.dispose();
+    disposeTree(this.root);
     this.root = null;
   }
 

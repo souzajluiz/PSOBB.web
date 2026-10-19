@@ -71,6 +71,9 @@ node tests/players.test.ts       # parses and builds every player class and appe
 node tests/motions.test.ts       # decodes every player motion, plays idle/walk/run on every class
 node tests/fog.test.ts           # fogentry.dat / lightentry.bin values and the fog fade state machine
 node tests/items.test.ts         # ItemPMT parser and item names vs newserv's reference tables
+node tests/batching.test.ts      # static batching, texture pools, ground index (same pixels / ground heights as the plain scene)
+node tests/resolution.test.ts    # pixel ratio plan and the adaptive step logic
+# node tools/perfprobe.mjs --base http://127.0.0.1:5173   # draw calls / CPU ms per map in headless Chrome (needs vite running)
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement
 node tests/charfile.live.ts      # character file (E7) and inventory with item names
