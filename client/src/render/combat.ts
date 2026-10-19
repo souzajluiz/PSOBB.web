@@ -44,6 +44,7 @@ import {
   WolfAi,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
+import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
@@ -188,6 +189,8 @@ interface EnemyRuntime {
   buffs: EntityBuffs; // Jellen / Zalure (combat/buffs.ts)
   status: EnemyStatus; // paralysis / freeze / shock / confusion (combat/enemystatus.ts)
   esp: number; // BattleParamEntry esp (the specials' status resistance)
+  slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
+  splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
 }
 
 // The local player's technique cast in progress.
@@ -226,6 +229,9 @@ const OWN_FSM = new Set([
   // Episode 2 (combat/enemyfsmep2.ts).
   'TObjEneMerillLia',
   'TObjEneDolmOlm',
+  // Caves splitters (combat/enemysplits.ts).
+  'TObjEnePanarms',
+  'TObjEneSlime',
 ]);
 
 // Classes whose own target search honours confusion: the Booma handlers
@@ -237,6 +243,11 @@ const OWN_FSM = new Set([
 const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver', 'TObjEneMerillLia', 'TObjEneDolmOlm']);
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
+// A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium, a puddle
+// slime or a slime control: not on the radar, not locked on, not struck, not
+// a technique or confused-enemy target (combat/enemysplits.ts untargetable).
+const concealed = (e: { ai: EnemyBrain | null }): boolean =>
+  (e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable;
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -563,6 +574,8 @@ export class CombatView {
         // Dolmdarl), the set entry's param1..5 their chances and ranges.
         else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -609,6 +622,8 @@ export class CombatView {
     }
     this.difficultyParams = { params, difficulty, slots, base };
     this.buildGunnerGroups(slots, base);
+    await this.spawnSplitters();
+    if (this.disposed) return;
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();
@@ -858,7 +873,7 @@ export class CombatView {
   minimapEnemies(): { x: number; z: number }[] {
     const out: { x: number; z: number }[] = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || e.state === 'death' || !e.instance.root.visible) continue;
+      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
       const p = e.instance.root.position;
       out.push({ x: p.x, z: p.z });
     }
@@ -868,6 +883,10 @@ export class CombatView {
   private tickEnemies(): void {
     const targets = this.aiTargets();
     for (const e of [...this.enemies.values()]) {
+      // A splitter's children appear with their set entry's wave.
+      if ((e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi) && e.parent && this.enemies.get(e.parent.index) === e.parent) {
+        e.instance.root.visible = e.parent.instance.root.visible;
+      }
       if (e.dead || !e.instance.root.visible) continue;
       // The status block of update_enemy_control_object (combat/enemystatus.ts).
       if (e.status.flags) {
@@ -895,6 +914,9 @@ export class CombatView {
       if ('confused' in ai) ai.confused = confused;
       if (ai instanceof GunnerAi) ai.frozenOrParalysed = e.status.has(STATUS.freeze) || e.status.has(STATUS.paralysis);
       if (ai instanceof BulclawAi) ai.candidates = this.clawsNear(e);
+      if (ai instanceof PanArmsAi && (ai.state === 'split' || ai.state === 'merge')) e.stats.hp = this.panHalfHp(ai);
+      if (ai instanceof PanArmsAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof PanHalfAi) ai.hpFraction = e.stats.hp / Math.max(1, e.splitHp ?? e.stats.maxHp);
       const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
@@ -917,6 +939,11 @@ export class CombatView {
       if (r.tpDrain) this.drainTp(e, ai, r.tpDrain);
       if (r.heal) this.enemyResta(e, r.heal.level);
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
+      if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
+      if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
+        const b = ai.buff;
+        this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
+      }
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
       if (ai instanceof CananeAi && !e.ringSpawned) {
@@ -1064,7 +1091,7 @@ export class CombatView {
   private enemyTargets(self: EnemyRuntime): AiTarget[] {
     const out: AiTarget[] = [];
     for (const o of this.enemies.values()) {
-      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable) continue;
+      if (o === self || o.dead || o.state === 'death' || !o.instance.root.visible || o.ai?.invulnerable || concealed(o)) continue;
       const p = o.instance.root.position;
       out.push({ clientId: 0x1000 | o.index, x: p.x, z: p.z, charClass: -1, dead: false });
     }
@@ -1524,6 +1551,198 @@ export class CombatView {
     });
   }
 
+  // --- Pan Arms / Pofuilly Slime (combat/enemysplits.ts) ---------------------
+
+  // A child entity of a splitter in its own slot (`index`), drawn with
+  // `model` of the head's BML. Its wave visibility follows the head's.
+  private async spawnSplitChild(head: EnemyRuntime, index: number, type: string, model: number, motion: { index: number; speed: number; loop: boolean }, ai: EnemyBrain, at: { x: number; z: number }): Promise<EnemyRuntime | null> {
+    const ctx = this.difficultyParams;
+    const slot = ctx?.slots[index - ctx.base];
+    if (!ctx || !slot || slot.type !== type || this.enemies.has(index)) {
+      this.opts.log(`E-${head.index.toString(16)} (${head.slot.type}): no ${type} slot at E-${index.toString(16)}`);
+      return null;
+    }
+    const hp = head.instance.root.position;
+    const placed = {
+      ...head.instance.placed,
+      entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [at.x, hp.y - head.lift, at.z] as [number, number, number],
+    };
+    const spec = { ...head.instance.spec, parts: [{ model, motion }] };
+    const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+    if (!instance || this.disposed) return null;
+    const runtime: EnemyRuntime = {
+      instance,
+      index,
+      slot,
+      ...this.childFightStats(type),
+      motions: enemyCombatMotions(head.instance.spec.name, instance.archive),
+      rtIndex: ENEMY_TYPE_PARAMS[type]?.rt ?? 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai,
+      lift: 0,
+      monest: null,
+      parent: head,
+      fake: null,
+      buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute(type)),
+    };
+    instance.root.visible = head.instance.root.visible;
+    this.enemies.set(index, runtime);
+    return runtime;
+  }
+
+  // On entering the floor: each Pan Arms gets its hidden Hidoom / Migium
+  // (slots + 1 / + 2, models 1 / 2), each slime control its first slime.
+  private async spawnSplitters(): Promise<void> {
+    const ctx = this.difficultyParams;
+    for (const e of [...this.enemies.values()]) {
+      const at = { x: e.instance.root.position.x, z: e.instance.root.position.z, angle: e.instance.root.rotation.y };
+      const mv = (row: number) => (ctx?.params ? ctx.params.movement(ctx.difficulty, row) : null);
+      if (e.ai instanceof PanArmsAi) {
+        const pan = e.ai;
+        // MovementData rows 0x32 (Hidoom) / 0x33 (Migium); Hidoom's Resta
+        // level is Migium's iparam1.
+        const migMv = mv(0x33);
+        const hid = new PanHalfAi('hidoom', { ...at, movement: mv(0x32), restaLevel: migMv?.iparam[0] ?? 0, rng: () => this.rng() });
+        const mig = new PanHalfAi('migium', { ...at, movement: migMv, rng: () => this.rng() });
+        hid.sibling = mig;
+        mig.sibling = hid;
+        const h = await this.spawnSplitChild(e, e.index + 1, 'HIDOOM', 1, { index: 24, speed: 0.8, loop: true }, hid, at);
+        const m = await this.spawnSplitChild(e, e.index + 2, 'MIGIUM', 2, { index: 25, speed: 0.8, loop: true }, mig, at);
+        if (this.disposed) return;
+        for (const c of [h, m]) if (c) for (const part of c.instance.root.children) part.visible = false;
+        // Without both halves it never splits (PanArmsAi checks halves).
+        if (h && m) pan.halves = [hid, mig];
+        else {
+          for (const c of [h, m]) if (c) this.dropQuietly(c);
+          this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}): its halves are missing, it will not split`);
+        }
+      } else if (e.ai instanceof SlimeControl) {
+        for (const part of e.instance.root.children) part.visible = false;
+        const first = await this.spawnSlime(e, e.ai, at.x, at.z, at.angle, false);
+        if (this.disposed) return;
+        // No slime could be built: the control has nothing to wait for.
+        if (!first) this.slimeControlDone(e, true);
+      }
+    }
+  }
+
+  private async spawnSlime(control: EnemyRuntime, c: SlimeControl, x: number, z: number, angle: number, thrown: boolean): Promise<EnemyRuntime | null> {
+    const k = c.take();
+    if (k < 0) return null;
+    const ai = new SlimeAi({ x, z, angle, movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null, thrown, rng: () => this.rng() });
+    const r = await this.spawnSplitChild(control, control.index + 1 + k, 'POFUILLY_SLIME', 0, { index: 10, speed: 0.5, loop: true }, ai, { x, z });
+    if (!r) {
+      c.died(k);
+      return null;
+    }
+    r.slimeSlot = k;
+    for (const part of r.instance.root.children) part.visible = !ai.hidden;
+    return r;
+  }
+
+  // 0x00597914 / 0x005987c8: a copy of the slime is thrown out of it into the
+  // control's first free slot (none left: nothing happens).
+  private async splitSlime(e: EnemyRuntime, what: string): Promise<void> {
+    const control = e.parent;
+    if (!control || !(control.ai instanceof SlimeControl) || !control.ai.slots.includes('free')) return;
+    const p = e.instance.root.position;
+    const r = await this.spawnSlime(control, control.ai, p.x, p.z, e.instance.root.rotation.y, true);
+    if (r) this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) splits into E-${r.index.toString(16)}`);
+  }
+
+  // The Hidoom and Migium HP while split (the Pan Arms shows their sum).
+  private panHalfHp(ai: PanArmsAi): number {
+    let sum = 0;
+    for (const h of ai.halves) {
+      const r = this.runtimeOf(h);
+      if (r && !r.dead) sum += r.stats.hp;
+    }
+    return sum;
+  }
+
+  private panEvent(e: EnemyRuntime, ai: PanArmsAi, ev: PanEvent): void {
+    const what = `E-${e.index.toString(16)} (${e.slot.type})`;
+    if (ev.kind === 'emerged') {
+      this.opts.log(`${what} emerges`);
+    } else if (ev.kind === 'split') {
+      // c1 (0x00587a04): each half gets (HP + 1) / 2, truncated, and keeps it
+      // as its split HP (+0x3c4, Hidoom's call threshold).
+      const each = Math.trunc((e.stats.hp + 1) / 2);
+      for (const h of ai.halves) {
+        const r = this.runtimeOf(h);
+        if (!r || r.dead) continue;
+        r.stats.hp = each;
+        r.stats.maxHp = Math.max(r.stats.maxHp, each);
+        r.splitHp = each;
+        r.instance.root.position.copy(e.instance.root.position);
+      }
+      this.opts.log(`${what} splits into Hidoom and Migium (${each} HP each)`);
+    } else if (ev.kind === 'merged') {
+      // 0x00582ab8 / 0x005822e4: HP = the halves' HP added, with no clamp to
+      // the Pan Arms's own max (a Resta'd half can push it over).
+      e.stats.hp = Math.max(1, this.panHalfHp(ai));
+      this.sendEnemy(e, ENEMY_BASE_FLAGS);
+      this.opts.log(`${what}: Hidoom and Migium merge (${e.stats.hp}/${e.stats.maxHp} HP)`);
+    } else {
+      // Both halves died while split: the Pan Arms only sends 6x76 (no drop,
+      // no EXP) and is gone.
+      e.dead = true;
+      this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+      this.layer.remove(e.instance);
+      this.enemies.delete(e.index);
+      if (this.lockOn === e) this.lockOn = null;
+      this.opts.log(`${what}: Hidoom and Migium are dead, the set is cleared`);
+    }
+  }
+
+  // A splitter (or its child) died, by a local kill (`local`: this client
+  // sends the 6x76s) or another client's 6x0A.
+  private splitterDied(e: EnemyRuntime, local: boolean): void {
+    // The merged Pan Arms dies alone: its hidden halves are dropped.
+    if (e.ai instanceof PanArmsAi) {
+      for (const h of e.ai.halves) {
+        const r = this.runtimeOf(h);
+        if (!r) continue;
+        h.kill();
+        this.layer.remove(r.instance);
+        this.enemies.delete(r.index);
+      }
+    }
+    const control = e.parent;
+    if (e.ai instanceof SlimeAi && e.slimeSlot !== undefined && control?.ai instanceof SlimeControl) {
+      control.ai.died(e.slimeSlot);
+      if (control.ai.finished) this.slimeControlDone(control, local);
+    }
+  }
+
+  // The control's update (0x005956d4): with no slot holding a live slime it
+  // sends the set's 6x76 (set_monster_spawn_initdata_as_dead 0x008113e4) and
+  // is deleted. Every client runs it on its own slots: a split (0x00597914 ->
+  // 0x00595bc8 -> 0x00595d74) builds the copy locally and sends no
+  // subcommand, so another client never sees the copies. This client only
+  // sends the 6x76 for its own kill (`local`), so another client's kill of
+  // the last slime it knew of does not clear a set whose copies live here.
+  private slimeControlDone(control: EnemyRuntime, local: boolean): void {
+    if (control.dead) return;
+    control.dead = true;
+    if (local) this.game.sendEntitySetFlags(0x1000 | control.index, this.floor, 8);
+    this.layer.remove(control.instance);
+    this.enemies.delete(control.index);
+  }
+
+  // A child removed without a kill (no 6x76, no EXP).
+  private dropQuietly(e: EnemyRuntime): void {
+    e.dead = true;
+    e.ai?.kill();
+    this.layer.remove(e.instance);
+    this.enemies.delete(e.index);
+    if (this.lockOn === e) this.lockOn = null;
+  }
+
   // BattleParamEntry rows of a spawned child type.
   private childFightStats(type: string) {
     const ctx = this.difficultyParams;
@@ -1637,7 +1856,7 @@ export class CombatView {
     let best: EnemyRuntime | null = null;
     let bestSq = 220 * 220; // ASSUMED lock-on range
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden)) continue;
+      if (e.dead || !e.instance.root.visible || (e.ai instanceof ClawAi && e.ai.hidden) || concealed(e)) continue;
       const p = e.instance.root.position;
       let diff = Math.atan2(p.x - from.x, p.z - from.z) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
@@ -1763,7 +1982,7 @@ export class CombatView {
       if (e.dead) continue;
       // An enemy whose wave has not spawned yet is not in the room (its model
       // is hidden by render/waves.ts), so it cannot be hit.
-      if (!e.instance.root.visible) continue;
+      if (!e.instance.root.visible || concealed(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -1781,7 +2000,10 @@ export class CombatView {
     const attacker = this.attackerStats();
     for (const e of hit) {
       if (attackType === 2) {
+        const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
         this.specialHit(e, attacker, step);
+        // 0x00597914: a landed hit of attack type 2 splits a Pofuilly Slime.
+        if (e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, 'special attack');
         continue;
       }
       let damage = 0;
@@ -2159,7 +2381,7 @@ export class CombatView {
     const half = data.angleH * BAMS_TO_RAD;
     const list: Array<{ e: EnemyRuntime; d: number }> = [];
     for (const e of this.enemies.values()) {
-      if (e.dead || !e.instance.root.visible) continue;
+      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
@@ -2414,7 +2636,10 @@ export class CombatView {
       if (this.rng() < techShockChance(this.ultimate)) status = STATUS.shock;
     }
     if (status !== null && !e.dead) this.inflictEnemy(e, status, name);
+    const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
     this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `);
+    // 0x005987c8: Gibarta / Rabarta (technique group 2) split a Pofuilly Slime.
+    if ((tech === TECH.gibarta || tech === TECH.rabarta) && e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, name);
   }
 
   // Another player's 6x48: its technique object on this client hits the
@@ -2519,7 +2744,11 @@ export class CombatView {
       e.ai.state = 'dead';
       e.parent.ai.childGone();
     }
-    this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+    this.splitterDied(e, true);
+    // A Hidoom / Migium (0x00587720) and a slime (0x00598648) only run
+    // on_enemy_killed (0x00787534: EXP and the drop request); their set entry
+    // is cleared by the Pan Arms / the slime control, not by their own 6x76.
+    if (!(e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi)) this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
     const p = e.instance.root.position;
     if (e.rtIndex !== 0xff) {
       this.game.sendEnemyDropRequest({
@@ -2747,6 +2976,7 @@ export class CombatView {
       if (s.flags & FLAG_DEAD) {
         if (!e.dead) {
           e.dead = true;
+          this.splitterDied(e, false);
           this.playDeath(e);
         }
       } else if (s.flags & 0x200) {
