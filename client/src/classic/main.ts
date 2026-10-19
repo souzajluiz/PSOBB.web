@@ -21,10 +21,10 @@ import { parseUnitxt } from './charcreate_text.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { SelectPreview } from './charselect_preview.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
-import { LoginScreen } from './login.ts';
 import { CharaFiles } from './playerview.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
-import { TITLE_TUNING, TitleScreen, type TitleAssets } from './title.ts';
+import { TitleScreen, type TitleAssets } from './title.ts';
+import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls } from '../ui/webcontrols.ts';
 
 const VERSION = 'PSOBB.web';
@@ -66,8 +66,12 @@ async function main(): Promise<void> {
   const stage = new Stage(canvas);
   const tex = async (names: string[]) => textureBitmaps(await files.textures(names));
   const hyouji = await textureBitmaps(await files.textures('f256_hyouji.prs'));
+  // SinowberillInit_006fb914: an account whose AccountCtrl registry key reads
+  // "Episode4" (get_game_version() == 1) gets TitleEP4.prs and the Login menu
+  // 30 px lower; any other gets title.prs (the psobb.io reference captures).
+  const episode4 = new URLSearchParams(location.search).has('ep4');
   const titleAssets: TitleAssets = {
-    title: await textureBitmaps(await files.textures('title.prs')),
+    title: await textureBitmaps(await files.textures(episode4 ? 'TitleEP4.prs' : 'title.prs')),
     effect: await textureBitmaps(await files.textures('effect_nt.xvm')),
     skin: { frame: hyouji[1], bars: hyouji[2] },
   };
@@ -302,49 +306,69 @@ async function main(): Promise<void> {
     show(select);
   };
 
-  const startGame = () => {
-    const login = new LoginScreen(
-      title,
-      titleAssets.skin,
-      {
-        submit: async (username, password) => {
-          login.busy = true;
-          try {
-            session?.close();
-            session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
-            await session.login(username, password);
-            await loadItemNames(session);
-            credentials = { username, password };
-            try {
-              localStorage.setItem('psobb.username', username);
-            } catch {
-              // storage unavailable; nothing to remember
-            }
-            showSelect(await session.characterPreviews());
-          } catch (err) {
-            login.busy = false;
-            login.status = err instanceof Error ? err.message : String(err);
-          }
-        },
-        cancel: () => show(title),
+  // Start Game, after the title's fade-out: the login server connection runs
+  // under the "Connecting.." object (assumed to be the same connect loop as
+  // the game server's, FUN_007bd97c); errors wait for Enter, then the title.
+  const startGame = async (c: Credentials) => {
+    const task = (async () => {
+      session?.close();
+      session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
+      await session.login(c.user, c.password);
+      await loadItemNames(session);
+      credentials = { username: c.user, password: c.password };
+      try {
+        localStorage.setItem('psobb.username', c.user);
+      } catch {
+        // storage unavailable; nothing to remember
+      }
+      return session.characterPreviews();
+    })();
+    const connecting = new ConnectingScreen(
+      await loadConnectingAssets(),
+      task,
+      () => void task.then(showSelect),
+      (message) => {
+        console.error(`[classic] ${message}`);
+        session?.close();
+        session = null;
+        show(title);
       },
-      savedUser(),
     );
-    show(login);
+    show(connecting);
   };
 
+  // The Login menu's texts: unitxt group 41 (0x29).
+  const t41 = async (i: number, fallback: string) => (await text(0x29, i)) || fallback;
+  const d = DEFAULT_TEXT;
+  const menuText: MenuText = {
+    title: await t41(2, d.title),
+    items: [await t41(3, d.items[0]), await t41(4, d.items[1]), await t41(5, d.items[2]), await t41(6, d.items[3])],
+    empty: await t41(7, d.empty),
+    input: {
+      title: await t41(8, d.input.title),
+      user: await t41(9, d.input.user),
+      password: await t41(10, d.input.password),
+      confirm: await t41(1, d.input.confirm),
+      cancel: await t41(0, d.input.cancel),
+    },
+    reallyOk: await t41(12, d.reallyOk),
+    yes: d.yes,
+    no: d.no,
+  };
+
+  // The exe keeps user name and password in the registry (ACCOUNT and the
+  // encrypted password value, ChallengePlayerInfoWindow_Constructor
+  // _007617e8); here the user name is remembered and the password only for
+  // this page's lifetime.
   title = new TitleScreen(
     titleAssets,
-    [
-      { label: 'Start Game', action: startGame },
-      { label: 'Exit Game', action: () => (location.href = '/') },
-      { label: 'Patch Download', action: () => {} },
-      { label: 'Register UserID', action: () => {} },
-      // FUN_00735db8(..., flags 9, 4, 0xffffcc33): not selectable; shows
-      // "[account]" or unitxt(41,7) "Empty" (FUN_00761bc0).
-      { label: 'Empty', color: '#ffcc33', selectable: false, action: () => {} },
-    ],
-    VERSION,
+    {
+      start: (c) => void startGame(c),
+      // No patch server in the browser: back to a new title scene.
+      patch: () => show(title),
+      exit: () => (location.href = '/'),
+    },
+    { episode4, version: VERSION, text: menuText, credentials: { user: savedUser(), password: '' } },
   );
 
   let current: Screen = title;
@@ -353,7 +377,7 @@ async function main(): Promise<void> {
     stage.show(s);
     // BGM per screen, as the exe requests it: title.adx (FUN_006f8130),
     // CHARA.adx for character select/creation (FUN_004df9ec).
-    if (s instanceof TitleScreen || s instanceof LoginScreen) void bgm.play('title.adx');
+    if (s instanceof TitleScreen) void bgm.play('title.adx');
     else if (s instanceof CharSelectScreen || s instanceof CharCreateScreen) void bgm.play('CHARA.adx');
     // LOBBY.ADX in the lobby (FUN_00642c30); silence while connecting.
     else if (s instanceof ShipSelectScreen || s instanceof LobbyScreen) void bgm.play('LOBBY.ADX');
@@ -363,10 +387,18 @@ async function main(): Promise<void> {
   // ?screen=select jumps to the character list with empty slots and
   // ?screen=create to character creation, offline (layout work).
   const jump = new URLSearchParams(location.search).get('screen');
+  const frozen = Number.parseFloat(new URLSearchParams(location.search).get('t') ?? '');
+  if (Number.isFinite(frozen)) stage.freezeTime = stage.time = frozen;
   if (jump === 'select') showSelect([null, null, null, null]);
   else if (jump === 'create') await showCreate(0, [null, null, null, null]);
   else if (jump === 'connecting') show(new ConnectingScreen(await loadConnectingAssets(), new Promise(() => {}), () => {}, () => {}));
-  else show(title);
+  else if (jump === 'connecterror') show(new ConnectingScreen(await loadConnectingAssets(), Promise.reject(new Error('Connection refused.')), () => {}, () => show(title)));
+  else {
+    show(title);
+    // ?screen=menu: the Login menu already open; ?screen=input: the Input
+    // UserID window over it (layout work against captures).
+    if (jump === 'menu' || jump === 'input') title.flow.skipTo(jump);
+  }
 
   const toVirtual = (e: MouseEvent) => {
     const r = canvas.getBoundingClientRect();
@@ -390,7 +422,7 @@ async function main(): Promise<void> {
   installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas' } });
   Object.assign(window, {
     classicStage: stage,
-    TITLE_TUNING,
+    classicTitle: title,
     GAME_TEXT,
     clearGameTextCache,
     classicTime: (t: number) => (stage.time = t),

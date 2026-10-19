@@ -291,7 +291,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   };
   zone.addEventListener('pointerdown', (e) => {
     if (stick.kind === 'held') return;
-    zone.setPointerCapture(e.pointerId);
+    capture(zone, e.pointerId);
     stick = { kind: 'held', pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, startX: e.clientX, startY: e.clientY, startTime: performance.now(), maxMove: 0, keys: new Set() };
     placeStick(e.clientX, e.clientY);
     moveKnob(0, 0);
@@ -339,7 +339,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     b.addEventListener('pointerdown', (e) => {
       if (pointer !== null) return;
       pointer = e.pointerId;
-      b.setPointerCapture(e.pointerId);
+      capture(b, e.pointerId);
       b.classList.add('is-down');
       feed.down(key);
       if (REPEATING_KEYS.has(key)) {
@@ -539,4 +539,15 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       overlay.remove();
     },
   };
+}
+
+// setPointerCapture throws for a pointer the browser no longer tracks (a
+// touch that ended before the handler ran, or a synthetic event); the
+// control still works without the capture.
+function capture(el: Element, pointerId: number): void {
+  try {
+    el.setPointerCapture(pointerId);
+  } catch {
+    // ignored: see above
+  }
 }

@@ -136,6 +136,124 @@ CheckFrustumIntersectionResult_0078b208() < 3, the condition for loading
 `i.bin`, is taken as always true. Animated indirect entries with 0x400 stay
 hidden as before (the animated loop has no 0x400 branch, but no map has
 one).
+## 2026-10-19: title and login screens follow the exe
+
+**What changed:** the classic title is now the exe's title scene instead of a
+static menu. It fades in from black, takes keys only after the fade, shows
+"PRESS ENTER KEY" until Enter opens the "Login" menu, and fades out before
+the next scene. The Login menu has the exe's rows, greying and initial
+cursor. Register UserID opens the Input UserID window over it, with inline
+text editors. Start Game connects under the "Connecting.." object, and an
+error waits for Enter. The logic is pure (`classic/titleflow.ts`) and tested.
+`TITLE_TUNING` is gone.
+
+**Details (Ephinea `PsoBB.exe`):**
+- Title constructor (`construct_mainmenu_stuff`, the DEVLOG's `FUN_006f8130`):
+  - the menu child ("Sinowberill" entity, update `0x006fed04`) starts with
+    flag 4, so it is not updated;
+  - a fade-in object (`SinowbeatConstructor_007889b0`) starts at 255 and
+    adds -8 per frame (`0x0097a724`) until <= 0. That takes 32 frames. Its
+    callback `DisableMainGameMenu_006fb7e4` clears flag 4.
+- Menu child state 0 (`0x006fede0`):
+  - Alt+Backspace exits the game;
+  - Enter with no window creates the Login menu (`0x007617e8`);
+  - the cancel slot (`0xd`) destroys the window, whatever sub-window is up;
+  - window flags: 1 = Start Game / Patch Download (SE `0x420`, state 2),
+    4 = Exit Game (fade-out with the exit callback, state 3), 8 = closed.
+- "PRESS ENTER KEY":
+  - alpha (`+0x28`) = (sin(3° · (counter % 120)) + 1) / 2, with constants
+    `0x0096e424..30` (2, 1, 360, 65536 BAMS);
+  - it starts at 0, so the text appears with the first update after the
+    fade;
+  - it is drawn in state 0 only (`PrepareUIRenderState_006ff0d4`), and so
+    stays under the open window.
+- Fade-out: in state 2, `MainGameMenu_ProcessLoadingState_006f8464` creates
+  `LoadingScreenObject_Constructor_00788938`. It counts 0 → 255 by +8
+  (`0x0097a730`, max `0x0097a72c`), which also takes 32 frames. Both fades
+  draw a black 640×480 quad at z -10 (`DrawUIElementTriangleFan_00788820`).
+- Login menu (`create_main_menu_list_items`):
+  - position (210, 300). It is 330 when `SinowberillInit_006fb914` loaded
+    `TitleEP4.prs`, which happens when `get_game_version()` sees an
+    "Episode4" AccountCtrl registry value. `?ep4` selects that variant;
+    the default `title.prs` is what the psobb.io captures show;
+  - rows 41/3..6 and the account line "[%s]" (`0x00974ebc`) or 41/7 "Empty"
+    (flags 9, `0xffffcc33`);
+  - Start Game is greyed (`0xff909090`, row flag `0x10`,
+    `ListWindowObject_SetItemHighlight_0073662c`) until both fields are set;
+  - the cursor starts on Register UserID when either field is empty;
+  - the user name is stored lower case (`0x00761d94` state 4).
+- Exit Game asks 41/12 "Really OK?" at (400, 350), width 150
+  (`0x00974e3c`), with the cursor on No.
+- Input UserID (`0x00762224`, update `0x0076253c`):
+  - window (140, 330, 360, 100);
+  - the editors (`TKeyboardControl`) sit on the value column at (316, 346)
+    and (316, 366). The row's own value is blanked while editing;
+  - the user name loses its spaces and is at most 16 characters
+    (`0x00762d2c`). The password is at most 16 (`0x00762d00`) and is drawn
+    as '*' (editor flag `0x2000`);
+  - the mask after an entry is up to 31 '*', and 8 after a cancelled edit;
+  - Confirm is greyed until both fields are set; then the cursor moves to
+    it (`0x00762b14`);
+  - the caret is a 5×14 block (`0x00970fd4`/`d0`), green `0x8000ff00` /
+    `0x4000ff00` (`0x00970f68`), switching on frame bit `0x10`
+    (`TextInputCursor_Render_007307a8`).
+- "Connecting..":
+  - state 3 shows the status text at (23, 331) and waits for confirm or
+    cancel (`GameListMenuObjectStateMachine`);
+  - the text position and the group `0x36` lookups are confirmed in
+    psobb-client-source `src/FUN_004080fb.c`, `FUN_00408118.c` and
+    `FUN_00408152.c`;
+  - the exe's texts are Xbox Live leftovers, so the bridge's error message
+    is shown instead.
+  - The title and login functions themselves (0x006f…, 0x0076…) are not in
+    psobb-client-source's `src/` yet, so those values come from the Ephinea
+    dump and `tools/exedata.py`.
+- The circle's widescreen compensation is `stage.aspectFix`. The hand-tuned
+  1/1.2 was that value at 16:10.
+- The psobb.io capture shows "Empty" with the cursor on an enabled Start
+  Game. The stock exe cannot reach that state, so psobb.io's launcher
+  changes the login. Here the exe wins.
+- Dev aids:
+  - `?screen=menu` and `?screen=input` open the windows;
+  - `?screen=connecterror` shows the error state;
+  - `?t=<seconds>` freezes the animation clock
+    (`Stage.freezeTime`) for capture comparisons.
+
+**Approximated:**
+- the Yes/No window's placement under the question (the offsets at
+  `0x0073cf10` are not traced);
+- no text wipe on the Login/Input windows (only `WindowAnim` alpha and
+  scale);
+- the password is kept for the page only, not in storage as the registry
+  does;
+- Patch Download returns to the title;
+- the login connection is assumed to run under the same "Connecting.."
+  object as the game server;
+- the title's idle counter (`+0x34` against a limit of 1200 or 800 frames at
+  `+0x38`, `update_main_menus`) is not used.
+
+**SSIM:** measured with `tools/compare.sh` against the psobb.io captures.
+Renders come from headless Chrome through DevTools (1440×900 @2x, web
+controls hidden).
+
+| Screen | URL | SSIM | PSNR |
+| --- | --- | --- | --- |
+| Title + Login menu | `?screen=menu&t=30` (frame 900, circle angle 0) | 0.766 | 19.7 |
+| Title, cursor state of the capture | same, cursor forced to Start Game | 0.771 | 20.0 |
+| Login menu region (412×250 at 514,538) | same | 0.745 | 17.5 |
+| Logo region (1440×480 at 0,114) | `?screen=menu&t=30` | 0.719 | 19.0 |
+| Select character | `?screen=select`, 10 s | 0.915 | 24.5 |
+
+- A frame sweep of the title (t = 0..60 s) stays between 0.750 and 0.766,
+  so the remaining gap is not timing. It is the font rasterisation and the
+  light beam / circle glow.
+- No capture of character creation (DEVLOG's "capture 04") or of Input
+  UserID is on disk, so those two screens are not measured.
+
+**Checks:** `tests/titlescreen.test.ts` (56 checks: fades, press alpha,
+fade-in gating, menu rows / greying / cursor, editors, masks, the full
+Register → Start Game → fade-out flow, Exit Game);
+`tests/windowanim.test.ts`; client `tsc --noEmit`.
 
 ## 2026-10-19: Quest Board review fixes
 
