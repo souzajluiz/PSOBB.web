@@ -25,6 +25,7 @@ import { se } from '../audio/se.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
 import { FieldHud } from './fieldhud.ts';
+import { radToBams, type MinimapPlayer } from '../classic/minimap.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
 import { EnemyLayer } from './enemyview.ts';
@@ -169,6 +170,25 @@ export class GameView {
       telepipeAllowed: () => this.telepipes.allowed(),
       statusFlags: () => this.combat.status.flags,
       send: (command, payload) => game.conn.send(command, 0, payload),
+      minimap: {
+        self: () => this.minimapPlayer(this.game.selfId),
+        others: () => {
+          const out: MinimapPlayer[] = [];
+          const floor = this.game.self?.floor;
+          for (const p of this.game.players.values()) {
+            if (p.clientId === this.game.selfId || p.floor !== floor || p.visible === false) continue;
+            const m = this.minimapPlayer(p.clientId);
+            if (m) out.push(m);
+          }
+          return out;
+        },
+        enemies: () => this.combat.minimapEnemies(),
+        cameraYaw: () => {
+          const v = this.view?.cameraView();
+          return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
+        },
+        hidden: () => this.busy || this.inputBlocked(),
+      },
       log,
     });
     this.telepipes = new TelepipeLayer(viewer, game, this.files, {
@@ -513,6 +533,12 @@ export class GameView {
     if (this.disposed) return;
     this.combat.attach(this.view);
     this.hud.attach();
+    if (this.combat.hud) this.combat.hud.hudFlags = () => this.hud.hudFlags;
+    // The floor's minimap (map_*r.rel) and its TObjRaderCol (0x17) objects.
+    const raderCols = placedObjects
+      .filter((p) => p.entity.kind === 'object' && p.entity.type === 0x17)
+      .map((p) => ({ x: p.world[0], z: p.world[2], radius: p.entity.kind === 'object' ? p.entity.params[0] : 0, room: p.entity.kind === 'object' ? p.entity.params[3] : -1 }));
+    void this.hud.enterFloor(floor, area, geometry, (name) => this.source.read(`scene/${name}`), raderCols);
     this.current = {
       floor,
       area,
@@ -530,6 +556,13 @@ export class GameView {
     this.telepipes.enterFloor();
     this.onFloor(this.current);
     for (const h of this.floorHooks) h(this.current);
+  }
+
+  // A player's minimap marker (unknown_minimap_update_players): position and
+  // heading as drawn, coloured by client slot.
+  private minimapPlayer(clientId: number): MinimapPlayer | null {
+    const pose = this.view?.playerPose(clientId);
+    return pose ? { slot: clientId, x: pose.x, z: pose.z, heading: radToBams(pose.angle) } : null;
   }
 
   // Where the players on the local player's floor stand (the NPCs' collision).

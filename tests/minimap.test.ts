@@ -1,0 +1,254 @@
+// Minimap: the map_*r.rel rooms (formats/minimap.ts), the radar / full map
+// state (classic/minimap.ts), the Area Map window (classic/areamap.ts) and
+// its wiring into the field menu and the status window (classic/fieldmenu.ts,
+// classic/hud.ts).
+// Run: node tests/minimap.test.ts
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { minimapFileFor, modelTriangles, parseMinimapRel } from '../client/src/formats/minimap.ts';
+import {
+  cameraUp,
+  clampPan,
+  DEFAULT_HEIGHT,
+  ICON_RANGE_SQ,
+  MAX_HEIGHT,
+  MAX_ICONS,
+  MIN_HEIGHT,
+  MINIMAP_RECT,
+  MinimapFloors,
+  minimapFovy,
+  MinimapState,
+  PLAYER_COLORS,
+  ROOM_ALPHA_MAX,
+  START_DELAY,
+  unitsPerPixel,
+  type MinimapRoomInput,
+} from '../client/src/classic/minimap.ts';
+import { AREA_MAP_MENU_ID, AREA_MAP_WINDOW, AreaMapWindow, type AreaMapEnv, type AreaMapInput } from '../client/src/classic/areamap.ts';
+import { FieldMenu, validateMenuEntry, type FieldMenuEnv, type MenuRules } from '../client/src/classic/fieldmenu.ts';
+import { StatusWindow, STATUS_HIDING_FLAGS } from '../client/src/classic/hud.ts';
+
+let failures = 0;
+const eq = (a: unknown, b: unknown, what: string) => {
+  if (JSON.stringify(a) !== JSON.stringify(b)) {
+    failures++;
+    console.log(`FAIL ${what}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`);
+  }
+};
+const near = (a: number, b: number, eps: number, what: string) => {
+  if (!(Math.abs(a - b) <= eps)) {
+    failures++;
+    console.log(`FAIL ${what}: ${a} != ${b} (+-${eps})`);
+  }
+};
+
+// --- formats/minimap.ts against the client's map_forest01r.rel ---
+const SCENE = join(process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data'), 'scene');
+eq(minimapFileFor('map_forest01n.rel'), 'map_forest01r.rel', 'r.rel name of a map');
+eq(minimapFileFor('map_aancient01_00n.rel'), 'map_aancient01_00r.rel', 'r.rel name of a layout map');
+eq(minimapFileFor('map_forest01c.rel'), null, 'only n.rel names map');
+let rooms: MinimapRoomInput[] = [];
+const forest = join(SCENE, 'map_forest01r.rel');
+if (existsSync(forest)) {
+  const data = parseMinimapRel(new Uint8Array(readFileSync(forest)));
+  eq(data.rooms.length, 17, 'Forest 1: 17 rooms');
+  eq(data.textured, false, 'no texture list');
+  const r0 = data.rooms[0];
+  eq(r0.index, 2, 'first room: section 2');
+  eq(r0.flags, 1, 'stored undiscovered');
+  near(r0.position[0], -519.9, 0.1, 'room 0 x');
+  near(r0.position[2], -560, 0.1, 'room 0 z');
+  near(r0.radius, 92.576, 0.01, 'room 0 discovery radius');
+  near(r0.radius, r0.model.radius, 1e-4, 'radius = mesh radius');
+  eq(modelTriangles(r0.model).length, 0, 'room 0 has no strips');
+  const tris = modelTriangles(data.rooms[1].model);
+  eq(tris.length > 0 && tris.length % 9 === 0, true, 'room 1 triangles');
+  eq([...tris].filter((_, i) => i % 3 === 1).every((y) => y === 0), true, 'flat plates (y = 0)');
+  rooms = data.rooms;
+} else {
+  console.log(`skip: no ${forest}`);
+}
+
+// --- projection and viewport ---
+near((minimapFovy() * 180) / Math.PI, 57.5, 0.05, 'fovy of angle 0x3555');
+near(unitsPerPixel(DEFAULT_HEIGHT), 4.57, 0.01, 'units per pixel at 2000');
+eq(MINIMAP_RECT[0], { x: 480, y: 64, w: 128, h: 128 }, 'radar rect (544, 128) 128x128');
+eq(MINIMAP_RECT[1], { x: 32, y: 288, w: 448, h: 128 }, 'full map rect (256, 352) 448x128');
+const up = cameraUp(0x8000);
+near(up.x, 0, 1e-9, 'yaw 0x8000: up x');
+near(up.z, -1, 1e-9, 'yaw 0x8000: north (-z) up');
+near(cameraUp(0).z, 1, 1e-9, "yaw 0 (De Rol Le): +z up");
+
+// --- pan clamp (Minimap_ClampPlayerPosition_008058b4) ---
+const p = { x: 7000, z: -7000 };
+clampPan(1, p);
+eq(p, { x: 6000, z: -6000 }, 'Forest: +-6000');
+const w = { x: -5000, z: 5000 };
+clampPan(36, w);
+eq(w, { x: -3000, z: 3000 }, 'Wilds: x -3000..9000, z -9000..3000');
+const v = { x: 9999, z: 9999 };
+clampPan(13, v);
+eq(v, { x: 9999, z: 9999 }, 'Vol Opt: not clamped');
+
+// --- state: delay, discovery, fade, persistence ---
+const fake: MinimapRoomInput[] = rooms.length
+  ? rooms
+  : [{ index: 2, flags: 1, position: [-519.9, 0, -560], radius: 92.6, model: { center: [0.4, 0, -10] } }];
+const floors = new MinimapFloors();
+const st = new MinimapState();
+st.enterFloor(1, 1, fake, floors);
+eq(st.rooms.every((r) => r.flags & 1), true, 'first visit: all undiscovered');
+const centre = { slot: 0, x: fake[0].position[0] + fake[0].model.center[0], z: fake[0].position[2] + fake[0].model.center[2], heading: 0x4000 };
+for (let i = 0; i < START_DELAY - 1; i++) st.update(centre, [], 0);
+eq(st.ready, false, 'waits 60 frames');
+st.update(centre, [], 0);
+eq(st.rooms[0].flags & 1, 1, 'no discovery during the wait');
+st.update(centre, [{ slot: 2, x: 10, z: 20, heading: 0 }], 0);
+eq(st.ready, true, 'running after 60 frames');
+eq(st.rooms[0].flags & 1, 0, 'room under the player discovered');
+eq(st.markers.map((m) => [m.slot, m.color, m.size]), [[0, PLAYER_COLORS[0], 22], [2, PLAYER_COLORS[2], 22]], 'markers: self then others, 22 units');
+eq([st.radar.x, st.radar.z], [centre.x, centre.z], 'radar centred on the player');
+eq(st.radar.y, DEFAULT_HEIGHT, 'radar height 2000');
+eq(st.radar.yaw, 0x8000, 'radar north up');
+for (let i = 0; i < 12; i++) st.fadeRooms();
+near(st.rooms[0].alpha, ROOM_ALPHA_MAX, 1e-9, 'alpha capped at 0.8');
+st.turning = true;
+st.update(centre, [], 0x1000);
+eq([st.radar.yaw, st.full.yaw, st.heading], [0x7000, 0x8000, 0xf000], 'turning radar: yaw 0x8000 - camera, compass -camera');
+st.turning = false;
+// TObjRaderCol: a held room is not discovered by walking, only revealed.
+if (fake.length > 1) {
+  const r1 = fake[1];
+  st.holdRoom(r1.index);
+  st.discover(r1.position[0] + r1.model.center[0], r1.position[2] + r1.model.center[2]);
+  eq(st.rooms[1].flags & 1, 1, 'held room stays hidden');
+  eq(st.revealRoom(r1.index), true, 'revealed by its TObjRaderCol');
+  eq(st.rooms[1].flags & 1, 0, 'revealed room discovered');
+}
+// Leaving saves the flags; coming back restores them.
+const discovered = st.rooms.filter((r) => !(r.flags & 1)).length;
+st.enterFloor(2, 2, fake, floors);
+eq(st.rooms.filter((r) => !(r.flags & 1)).length, 0, 'another floor starts undiscovered');
+st.enterFloor(1, 1, fake, floors);
+eq(st.rooms.filter((r) => !(r.flags & 1)).length, discovered, 'floor 1 keeps its discovered rooms');
+eq(st.rooms.every((r) => r.alpha === 0), true, 'alpha restarts');
+
+// --- icons ---
+const ic = new MinimapState();
+ic.enterFloor(1, 1, fake, floors);
+eq(ic.addIcon({ x: 299, z: 0, color: 0, shape: 1, scale: 1, heading: 0 }), true, 'icon within 300');
+eq(ic.addIcon({ x: Math.sqrt(ICON_RANGE_SQ) + 1, z: 0, color: 0, shape: 1, scale: 1, heading: 0 }), false, 'icon beyond 300 dropped');
+eq(ic.addIcon({ x: 1000, z: 0, color: 0, shape: 1, scale: 1, heading: 0 }, true), true, 'forced icon kept');
+for (let i = 0; i < 200; i++) ic.addIcon({ x: 0, z: 0, color: 0, shape: 1, scale: 1, heading: 0 });
+eq(ic.takeIcons().length, MAX_ICONS, 'at most 128 icons a frame');
+eq(ic.icons.length, 0, 'icons cleared once drawn');
+
+// --- zoom / pan (MinimapZoomIn_00802b44, MinimapZoomOutZ_00802b78, MinimapMoveY_00802bac) ---
+const z = new MinimapState();
+z.enterFloor(1, 1, fake, floors);
+z.pan(10, 10);
+eq([z.full.x, z.full.z], [0, 0], 'no pan on the radar');
+z.type = 1;
+z.pan(10, -20);
+eq([z.full.x, z.full.z], [-10, 20], 'x -= dx, z -= dz');
+z.moveHeight(-5000);
+eq(z.full.y, MIN_HEIGHT, 'height floor 1200');
+z.moveHeight(5000);
+eq(z.full.y, MAX_HEIGHT, 'height ceiling 3500');
+
+// --- the Area Map window ---
+const input: AreaMapInput = { up: false, down: false, left: false, right: false, zoomIn: false, zoomOut: false, mouse: null };
+let flags = 0;
+const mm = new MinimapState();
+mm.enterFloor(1, 1, fake, floors);
+for (let i = 0; i <= START_DELAY; i++) mm.update({ slot: 0, x: 100, z: 200, heading: 0 }, [], 0);
+const env: AreaMapEnv = {
+  minimap: () => mm,
+  input: () => input,
+  setHudFlag: (bit, on) => (flags = on ? flags | bit : flags & ~bit),
+  title: () => 'Forest 1',
+  text: () => '',
+};
+const sounds: number[] = [];
+const win = new AreaMapWindow(env, 1, (id) => sounds.push(id));
+eq(sounds, [0x572], 'opens with SE 0x572');
+win.tick();
+eq(win.active, false, 'not active while opening');
+for (let i = 0; i < 4; i++) win.tick();
+eq(win.active, true, 'active once open');
+eq(mm.type, 1, 'full map');
+eq([mm.full.x, mm.full.z], [100, 200], 'centred on the player');
+eq(flags & 1, 1, 'HUD flag bit 1 set');
+input.up = true;
+win.tick();
+eq(mm.full.z, 194, 'Up: z speed +6, z -= 6');
+input.up = false;
+win.tick();
+near(mm.full.z, 194 - 4.8, 1e-9, 'speed decays by 0.8');
+input.zoomIn = true;
+const y0 = mm.full.y;
+win.tick();
+near(mm.full.y, y0 - 6, 1e-9, 'Shift: height -6 (zoom in)');
+input.zoomIn = false;
+// Drag: grab inside the window, the pan follows 3 units per pixel.
+const sx = mm.full.x;
+const sz = mm.full.z;
+input.mouse = { down: true, x: AREA_MAP_WINDOW.x + 100, y: AREA_MAP_WINDOW.y + 50 };
+win.tick();
+input.mouse = { down: true, x: AREA_MAP_WINDOW.x + 110, y: AREA_MAP_WINDOW.y + 45 };
+win.tick();
+eq([mm.full.x, mm.full.z], [sx - 30, sz + 15], 'drag: pan = grab - 3 * move');
+input.mouse = { down: false, x: 0, y: 0 };
+win.tick();
+eq(win.key({ key: 'ArrowLeft' } as KeyboardEvent), true, 'arrows belong to the map');
+eq(win.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes');
+win.anim.close();
+win.tick();
+eq([win.active, mm.type, flags & 1], [false, 0, 0], 'closing: radar again, HUD flag cleared');
+
+// --- status window closes on HUD flag bit 1 (0x0071a838) ---
+const status = new StatusWindow();
+const values = { name: 'A', slot: 0, level: 1, hp: 10, maxHp: 10, tp: 0, maxTp: 0, pb: 0, dead: false };
+for (let i = 0; i < 10; i++) status.tick(values);
+eq(status.anim.isOpen, true, 'status window open');
+status.hudFlags = 1;
+for (let i = 0; i < 10; i++) status.tick(values);
+eq(status.anim.visible, false, 'closed while the full map is up');
+eq(STATUS_HIDING_FLAGS, 0x11, 'bits 1 and 0x10');
+status.hudFlags = 0;
+for (let i = 0; i < 10; i++) status.tick(values);
+eq(status.anim.isOpen, true, 'reopens afterwards');
+
+// --- menu wiring (ValidateMenuItemCondition_00732620, handle_player_menu_select) ---
+const rules = (safe: boolean): MenuRules => ({ lobby: false, safe, online: true, questStarted: false, inTeam: false });
+eq(validateMenuEntry(AREA_MAP_MENU_ID, rules(true)), { id: 0xd, enabled: false }, 'Area Map off on a safe map');
+eq(validateMenuEntry(AREA_MAP_MENU_ID, rules(false)), { id: 0xc, enabled: true }, 'Area Map in the field');
+const menuEnv = {
+  text: () => '',
+  rules: () => rules(false),
+  android: () => false,
+  itemPack: {},
+  equip: {},
+  tech: {},
+  mag: {},
+  areaMap: env,
+  options: { text: () => '', flags: () => null, setFlags: () => {}, send: () => {}, padConnected: () => false },
+} as unknown as FieldMenuEnv;
+const fm = new FieldMenu(menuEnv);
+const press = (key: string) => fm.key({ key } as KeyboardEvent);
+fm.toggle();
+press('Enter'); // Item Pack
+for (let i = 0; i < 4; i++) press('ArrowDown'); // Equip, Items, MAG, Trade, Area Map
+press('Enter');
+eq(fm.areaMap !== null, true, 'Item Pack > Area Map opens the window');
+for (let i = 0; i < 6; i++) fm.tick();
+eq([fm.areaMap?.active, mm.type, flags & 1], [true, 1, 1], 'the menu runs it to the full map');
+press('Backspace');
+for (let i = 0; i < 10; i++) fm.tick();
+eq([fm.areaMap, mm.type, flags & 1, fm.isOpen], [null, 0, 0, true], 'Backspace: back to the menu, radar again');
+
+if (failures) {
+  console.log(`${failures} failure(s)`);
+  process.exit(1);
+}
+console.log('minimap: all checks passed');

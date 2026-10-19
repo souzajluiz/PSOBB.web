@@ -13,6 +13,11 @@
 //     classic/mainmenu.ts menuViewShift);
 //   - "Action Palette Change" (Ctrl in the default key config) flips the
 //     palette (HandlePlayerPaletteToggle_00694f0c) and lights the Ctrl tab.
+//   - the radar (minimap_type 0) and the Area Map's full map (type 1):
+//     classic/minimap.ts keeps the state, render/minimap.ts draws it on this
+//     overlay; TObjRaderCol (0x17) objects hold their room hidden until the
+//     player comes within their radius (radar_collision_update,
+//     MapObjectRadarCollisionUpdateHandler_00663250).
 // Windows use the in-game space of classic/ingame.ts: a uniform scale by
 // height, windows on the right half following the right edge.
 
@@ -35,10 +40,33 @@ import type { ItemNames } from '../formats/itemnames.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
+import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, type MinimapPlayer } from '../classic/minimap.ts';
+import type { AreaMapInput } from '../classic/areamap.ts';
+import { loadMinimapAssets, MinimapView } from './minimap.ts';
+import { AREA_TEXT } from './warpmenu.ts';
 
 const FRAME = 1 / 30;
 const PROMPT_POS = [267, 130] as const; // position table 0x00971f40 entry 0x35
 const NO_KEYS: ReadonlySet<string> = new Set();
+const RADER_COL_DELAY = 3; // radar_collision_constructor: +0x9c = 3
+
+// What the minimap needs from the game view each frame.
+export interface MinimapSource {
+  self: () => MinimapPlayer | null; // the local player (null: none / invisible)
+  others: () => MinimapPlayer[]; // the other players on this floor
+  enemies: () => readonly { x: number; z: number }[]; // live enemies on this floor
+  cameraYaw: () => number; // the camera's y_rotation (BAMS)
+  hidden: () => boolean; // a talk camera or a UI that blocks the player's input
+}
+
+// A TObjRaderCol (0x0017): radius param1, room param4.
+export interface RaderCol {
+  x: number;
+  z: number;
+  radius: number;
+  room: number;
+}
 // newserv class_flags_for_class: bit 0x10 = android.
 const ANDROID_CLASSES = new Set([2, 4, 5, 9]);
 
@@ -60,6 +88,7 @@ export interface FieldHudOptions {
   blocked: () => boolean;
   // Sends a command to the game server (the Options window's 0x01ED).
   send?: (command: number, payload: Uint8Array) => void;
+  minimap?: MinimapSource;
   log?: (msg: string) => void;
 }
 
@@ -67,6 +96,12 @@ interface Textures {
   skin: WindowSkin;
   menu: FieldMenuTextures;
   palette: PaletteTextures;
+}
+
+interface RaderColState extends RaderCol {
+  state: 0 | 1;
+  wait: number;
+  done: boolean;
 }
 
 export class FieldHud {
@@ -93,6 +128,26 @@ export class FieldHud {
   // A one-line window at GUI position 0x35 (the Pioneer 2 pipe's area name,
   // SinowberillMapObjectUpdateHandler_0066e3bc).
   prompt: (() => string | null) | null = null;
+  // The minimap (classic/minimap.ts) and its drawing; the room flags of the
+  // floors visited in this game.
+  readonly minimap = new MinimapState();
+  private minimapFloors = new MinimapFloors();
+  private minimapView = new MinimapView();
+  private minimapAssets = false;
+  private raderCols: RaderColState[] = [];
+  private floorToken = 0;
+  // The HUD's flags (+0x1c): bit 1 while the full map is up (the status
+  // window closes, classic/hud.ts STATUS_HIDING_FLAGS).
+  hudFlags = 0;
+  // Held keys and the mouse, for the Area Map (menu inputs read each frame).
+  private held = new Set<string>();
+  private mouse = { down: false, x: 0, y: 0 };
+  private onKeyUp = (e: KeyboardEvent) => this.held.delete(e.key.toLowerCase());
+  private onBlur = () => {
+    this.held.clear();
+    this.mouse.down = false;
+  };
+  private onMouse = (e: MouseEvent) => this.mouseEvent(e);
 
   constructor(viewer: MapViewer, files: ClientFiles, opts: FieldHudOptions) {
     this.viewer = viewer;
@@ -110,6 +165,10 @@ export class FieldHud {
     // and item listeners (bubble phase on the same element) and stops them
     // while a menu is open.
     this.host.addEventListener('keydown', this.onKey, true);
+    this.host.addEventListener('keyup', this.onKeyUp, true);
+    this.host.addEventListener('blur', this.onBlur);
+    for (const t of ['mousedown', 'mousemove', 'mouseup'] as const) this.host.addEventListener(t, this.onMouse, true);
+    window.addEventListener('mouseup', this.onMouse);
     viewer.frameHooks.add(this.hook);
     restoreBrightness();
     this.menu = new FieldMenu({
@@ -154,6 +213,15 @@ export class FieldHud {
         () => this.opts.fullCharacter(),
         (c, p) => this.opts.send?.(c, p),
       ),
+      areaMap: {
+        minimap: () => (this.minimap.loaded ? this.minimap : null),
+        input: () => this.areaMapInput(),
+        setHudFlag: (bit, on) => {
+          this.hudFlags = on ? this.hudFlags | bit : this.hudFlags & ~bit;
+        },
+        title: () => this.areaName(),
+        text: (g, i) => this.text(g, i),
+      },
       tech: {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
@@ -208,6 +276,106 @@ export class FieldHud {
       stats: { atp: c?.stats.atp ?? 0, mst: c?.stats.mst ?? 0, ata: c?.stats.ata ?? 0 },
       lobby: this.opts.area() === 0x0f,
     };
+  }
+
+  // unitxt_get_area_name: group 10 through area_name_map (render/warpmenu.ts
+  // AREA_TEXT); map 0xB past floor 2 reads as 0xE.
+  private areaName(): string {
+    let area = this.opts.area();
+    if (area === 0x0b && this.minimap.floor > 2) area = 0x0e;
+    return this.text(10, AREA_TEXT[area] ?? -1);
+  }
+
+  // The menu inputs of the Area Map (g_KeyboardSharedState 8..11 = the
+  // arrows, 0x10 Shift, 0x11 Ctrl; the left mouse button = mask 4).
+  private areaMapInput(): AreaMapInput {
+    const h = this.held;
+    return {
+      up: h.has('arrowup'),
+      down: h.has('arrowdown'),
+      left: h.has('arrowleft'),
+      right: h.has('arrowright'),
+      zoomIn: h.has('shift'),
+      zoomOut: h.has('control'),
+      mouse: { ...this.mouse },
+    };
+  }
+
+  // The pointer in the 640x480 screen (the Area Map window is on the left
+  // half, so it does not follow the right edge).
+  private mouseEvent(e: MouseEvent): void {
+    const r = this.host.getBoundingClientRect();
+    if (!r.height) return;
+    const s = r.height / VH;
+    this.mouse.x = (e.clientX - r.left) / s;
+    this.mouse.y = (e.clientY - r.top) / s;
+    if (e.type === 'mousedown' && e.button === 0) this.mouse.down = true;
+    if (e.type === 'mouseup' && e.button === 0) this.mouse.down = false;
+    // The full map takes the drag: the view's own mouse handlers do not see it.
+    if (e.type !== 'mouseup' && this.menu.areaMap?.active && e.currentTarget === this.host) e.stopImmediatePropagation();
+  }
+
+  // A floor loaded (render/gameview.ts): its minimap (map_*r.rel from the
+  // floor's n.rel; none on Pioneer 2 or the Lab) and its TObjRaderCol objects.
+  async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array>, raderCols: readonly RaderCol[] = []): Promise<void> {
+    const token = ++this.floorToken;
+    this.menu.areaMap?.dispose();
+    this.minimap.enterFloor(floor, map, null, this.minimapFloors);
+    this.minimapView.setRooms(null);
+    this.raderCols = raderCols.map((c) => ({ ...c, state: 0, wait: RADER_COL_DELAY, done: false }));
+    const name = geometry ? minimapFileFor(geometry) : null;
+    let data: MinimapData | null = null;
+    if (name) {
+      try {
+        data = parseMinimapRel(await read(name));
+      } catch {
+        data = null; // Pioneer 2 and the Lab have no minimap
+      }
+    }
+    if (!this.minimapAssets) {
+      this.minimapAssets = true;
+      try {
+        this.minimapView.setAssets(await loadMinimapAssets(this.files));
+      } catch (err) {
+        this.opts.log?.(`minimap: no icons (${(err as Error).message})`);
+      }
+    }
+    if (this.disposed || token !== this.floorToken) return;
+    this.minimap.enterFloor(floor, map, data?.rooms ?? null, this.minimapFloors);
+    this.minimapView.setRooms(data);
+    if (data) this.opts.log?.(`minimap: ${name}, ${data.rooms.length} rooms`);
+  }
+
+  // One frame of the radar collision objects (radar_collision_update).
+  private tickRaderCols(self: MinimapPlayer | null): void {
+    for (const c of this.raderCols) {
+      if (c.done) continue;
+      if (c.state === 0) {
+        this.minimap.holdRoom(c.room);
+        c.state = 1;
+        continue;
+      }
+      if (!self) continue;
+      if (c.wait > 0) {
+        c.wait--;
+        continue;
+      }
+      const dx = self.x - c.x;
+      const dz = self.z - c.z;
+      if (dx * dx + dz * dz < c.radius * c.radius) {
+        this.minimap.revealRoom(c.room);
+        c.done = true;
+      }
+    }
+  }
+
+  // Whether the minimap is drawn this frame (unknown_render_minimap).
+  private minimapShown(): boolean {
+    const m = this.minimap;
+    if (!m.ready || this.counter) return false;
+    if (this.menu.isOpen && m.type !== 1) return false;
+    if (this.opts.blocked() && m.type !== 1) return false;
+    return !(this.opts.minimap?.hidden() ?? false) || (this.hudFlags & 1) !== 0;
   }
 
   // unitxt string without the language markers (render/warpmenu.ts).
@@ -290,6 +458,7 @@ export class FieldHud {
 
   private key(e: KeyboardEvent): void {
     if (this.disposed) return;
+    this.held.add(e.key.toLowerCase());
     if (this.counter) {
       if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
       e.preventDefault();
@@ -327,6 +496,13 @@ export class FieldHud {
       this.paletteHud.tick();
       this.opts.items.tickMags();
       this.counter?.tick();
+      const src = this.opts.minimap;
+      if (src && this.minimap.loaded) {
+        const self = src.self();
+        this.tickRaderCols(self);
+        this.minimap.update(self, src.others(), src.cameraYaw());
+        if (this.minimapShown()) this.minimap.fadeRooms();
+      }
     }
     this.watchInventory();
     this.draw();
@@ -376,12 +552,34 @@ export class FieldHud {
       drawTextWindow(ctx, this.tex.skin, { x: anchorX(PROMPT_POS[0], w, extra), y: PROMPT_POS[1], w, h: LINE + 2 * INSET }, prompt);
     }
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra);
+    if (this.minimapShown()) {
+      // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
+      for (const e of this.opts.minimap?.enemies() ?? []) this.minimap.addIcon({ x: e.x, z: e.z, color: ENEMY_ICON_COLOR, shape: 1, scale: 1, heading: 0 });
+      // The radar follows the right edge; the full map stays in its window.
+      this.minimapView.draw(ctx, this.minimap, s, this.minimap.type === 0 ? extra : 0);
+    }
     this.counter?.draw(ctx, this.tex.skin, this.tex.menu, extra);
   }
 
   // Console aid: window.gameView.hud.debug()
   debug() {
-    return { palette: this.palette, menuOpen: this.menu.isOpen, counter: this.counter?.state() ?? null };
+    const m = this.minimap;
+    return {
+      palette: this.palette,
+      menuOpen: this.menu.isOpen,
+      counter: this.counter?.state() ?? null,
+      minimap: {
+        type: m.type,
+        loaded: m.loaded,
+        shown: this.minimapShown(),
+        rooms: m.rooms.length,
+        discovered: m.rooms.filter((r) => !(r.flags & 1)).length,
+        radar: { ...m.radar },
+        full: { ...m.full },
+        markers: m.markers.length,
+        hudFlags: this.hudFlags,
+      },
+    };
   }
 
   dispose(): void {
@@ -390,6 +588,13 @@ export class FieldHud {
     this.menu.close();
     this.counter?.close();
     this.host.removeEventListener('keydown', this.onKey, true);
+    this.host.removeEventListener('keyup', this.onKeyUp, true);
+    this.host.removeEventListener('blur', this.onBlur);
+    for (const t of ['mousedown', 'mousemove', 'mouseup'] as const) this.host.removeEventListener(t, this.onMouse, true);
+    window.removeEventListener('mouseup', this.onMouse);
+    this.menu.areaMap?.dispose();
+    this.minimap.leaveFloor(this.minimapFloors);
+    this.minimapView.dispose();
     this.viewer.frameHooks.delete(this.hook);
     this.canvas.remove();
   }

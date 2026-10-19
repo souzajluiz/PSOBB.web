@@ -844,6 +844,19 @@ export class CombatView {
     return out;
   }
 
+  // Where the live enemies of the floor stand, for their radar icons (each
+  // enemy's update calls unknown_add_minimap_icon while it is alive and
+  // constructed; render/fieldhud.ts).
+  minimapEnemies(): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    for (const e of this.enemies.values()) {
+      if (e.dead || e.state === 'death' || !e.instance.root.visible) continue;
+      const p = e.instance.root.position;
+      out.push({ x: p.x, z: p.z });
+    }
+    return out;
+  }
+
   private tickEnemies(): void {
     const targets = this.aiTargets();
     for (const e of [...this.enemies.values()]) {

@@ -160,6 +160,89 @@ bb-v4 unitxt, bit packing, `01ED` payload, settings keys, brightness offsets,
 cursor memory); `tests/windowanim.test.ts`, `tests/fieldhud.test.ts`,
 `tests/sound.test.ts` and the client typecheck pass.
 
+## 2026-10-19: Radar minimap and the Area Map window
+
+**What changed:** the field HUD has the radar in the top-right corner and
+Item Pack > Area Map opens the full map. The rooms come from the floor's
+`map_*r.rel` and appear (fading in) as the player discovers them; the
+discovered rooms are kept per floor for the whole game. The radar shows the
+player markers in the slot colours, the other players on the floor, the live
+enemies as orange discs and the compass; it turns with the camera when the
+character's option bit 0 is set. The Area Map window (610 x 188 at (13, 256),
+titled with the area name) shows the full map in its 448 x 128 strip: the
+arrows pan, Shift / Ctrl zoom, the left mouse button drags, and while it is
+up the status window closes (HUD flag bit 1). Code: `formats/minimap.ts`,
+`classic/minimap.ts`, `classic/areamap.ts` (new), `render/minimap.ts` (new),
+`classic/fieldmenu.ts` (menu id 0xC), `classic/hud.ts` (status window flags),
+`render/fieldhud.ts`, `render/playerhud.ts`, `render/gameview.ts`,
+`render/combat.ts` (enemy positions), `formats/njcm.ts` (`parseNjcmModel`).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Data** (load_minimap_data): asset prefix + `r.rel`; root {rooms, njtl,
+  count}; room 0x28 bytes {i16 section, u16 flags (1 undiscovered, 2 held by
+  a TObjRaderCol, 4 alternate mesh), xyz, BAMS rotation, alpha, discovery
+  radius, mesh container} with an NJS_CNK_MODEL of flat plates. The flags of
+  a floor are saved when it unloads (uninit_minimap_data,
+  floor_minimap_room_flags) and restored on the next visit; the first visit
+  marks every room undiscovered.
+- **Object** (Minimap_CreateObject_00804d94): minimap_type 0, camera slots
+  at 0x00aafb00 (eye height 2000 = 0x00a11460, look (0, -1, 0), yaw 0x8000),
+  a 60-frame wait (+0x90), room alpha cap 0.8 (+0x1a0), height step 80
+  (0x00a11444, x1.2 a frame toward 2000 / 3500 / 1200 by zoom mode).
+- **Update** (unknown_minimap_update): markers (unknown_minimap_update
+  _players: colours 0x0097eaa0 red / green / yellow / blue, size 22.0 or
+  15.4), the radar centre and yaw (update_minimap_center_rotation: 0x8000, 0
+  on De Rol Le, 0x8000 - camera y_rotation when turning), discovery (XZ
+  distance from room + mesh centre under the radius), the compass pulse
+  (+0x888 BAMS a frame, alpha (sin + 1) * 64 + 127).
+- **Render** (unknown_render_minimap): hidden while the menu is open unless
+  the map is the full map; background alpha 64 (0x00a11418); viewport table
+  0x00a11324: radar (544, 128) 128 x 128, full map (256, 352) 448 x 128;
+  projection = the default perspective (0x3555, 57.5 degrees) scaled by the
+  screen over the viewport (set_d3d_projection_matrix), so 4.57 units per
+  pixel at height 2000; rooms in colour {1, 0.3, 0.3, 0.3} (0x00a11450) at
+  their alpha (+0.08 a frame, 0x0097ec9c); icons within 300 units (90000,
+  0x0097ecf8), shape 1 = obj_f_enemy disc x8, colour 0xffffa24c; markers =
+  obj_f_player of obj_f_enemy.bml; compass sprites of RaderMapFrame.xvm at
+  0x00a11390 / 0x00a11398 (MinimapRenderIcon_00804b24,
+  RenderMinimapIcon_00819f7c).
+- **Area Map** (ChallengeMenuListWindow_*, 0x00743e00..0x007447c8): GUI
+  position 0x5c, template 0x009f3c64; UpdateSelectionColor_007441a8 starts
+  the full map once the window is open (centred on the player,
+  Minimap_GetPlayerPosition2D_008054fc) and sets HUD flag bit 1, which
+  closes the status window (HandleCancel_0071a838); HandleInput_00744230:
+  speeds +-6 (0x00973278 / 0x00973274) from the arrows (z / x) and Shift /
+  Ctrl (height; unitxt group 11 0x145 / 0x146), x -= vx, z -= vz (clamped
+  to +-6000, the Wilds -3000..9000 / -9000..3000, none on Vol Opt, Dark
+  Falz, Olga Flow, Tower: Minimap_ClampPlayerPosition_008058b4, table
+  0x0097f040 type 8), height 1200..3500, speeds x0.8 (0x00973270); the left
+  button (mask 4) grabs the map, pan = grab - 3.0 * mouse move (0x0097327c).
+  Arrows from HUD texture 0 at (16, 346), (484, 346), (249, 272), (249,
+  420) (RenderPhaseInfo_007445e4).
+- **TObjRaderCol** (0x17, radar_collision_constructor /
+  MapObjectRadarCollisionUpdateHandler_00663250): radius param1, room
+  param4; holds the room (flag 2) on its first frame, reveals it when the
+  local player comes within the radius after 3 frames.
+
+**Checks:** `tests/minimap.test.ts` (map_forest01r.rel: 17 rooms, room data,
+triangles; fovy and units per pixel; pan clamps; discovery, fade, the
+TObjRaderCol hold, per-floor persistence; icons; the Area Map window's
+opening, pan / zoom speeds, drag and close; the status window closing on
+flag bit 1; Item Pack > Area Map through the menu keys);
+`tests/fieldhud.test.ts`, `tests/windowanim.test.ts`, `tests/status.test.ts`,
+`tests/formats.test.ts`; `tsc --noEmit`. Not checked in Chrome by this
+change (the main thread runs the browser check).
+
+**Assumed:** `SharedInputState_IsKeyPressed` is the held state (the speeds
+grow while a key is down); the icon / marker colour replaces the models'
+material colours, as the ground colour does for the rooms; the help texts are
+placed from the window's position and fade in over the first 6 frames of the
+full map, with the arrows; the radar is hidden while a warp menu, a counter
+or an NPC talk has the input. Left out: TObjRaderHideCol, TObjRaderIcon and
+the other objects' icons (doors, boxes, bosses), battle-mode team colours,
+zoom modes 1 / 2 (nothing sets them in Blue Burst), the Challenge "Area n"
+title.
+
 ## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
 
 **What changed:** the pillar traps run their state machines: when a player
