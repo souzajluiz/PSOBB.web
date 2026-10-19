@@ -22,7 +22,10 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    Gibarta objects of Ultimate, the camera, the ending's warp objects). Vol
    Opt has no form 7, minions or hazards: the dump's "VoloptForm7*" and
    "VoloptForm2MinionMapObject" names, and the JP files of the same names, are
-   Dark Falz's. Next the Dragon and Sinow Beat, then Dark Falz.
+   Dark Falz's, and Dark Falz is done (`combat/darkfalz*.ts`; left there: the
+   cutscene objects and camera, the technique objects' own flight, Ultimate's
+   Rico scene, the players' push-out of form 1's body). Next the Dragon and
+   Sinow Beat.
 3. Classic game list and quest loading screen are done (2026-10-19; the
    "GameList" / "QuestLoading" names in the dump are mostly wrong, see the
    DEVLOG): the lobby counter's Join a PARTY list, the password prompt and the
@@ -103,7 +106,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Episode 1 bosses' children from the exe: Vol Opt's lightning rod motion (not in Ultimate) and core, De Rol Le's 5 + 3 stings and the sting attack's placement (frame 18, five floor points, ring around the target), where Dark Falz form 3 / the Dragon start (`formats/enemymodels.ts`, `tests/bossrooms.test.ts`)
 - [x] De Rol Le's fight: the body's FSM along its four corners (attack sequences 0x009a4380 / 0x009a4440, the eased corner moves, jumps, dives, the bite leap and the wall), the shell / body HP pools, the 4 tentacles, the segment rocks, the ceiling rocks, the 5 + 3 stings, the beam, the death path and the leader's 6x13 / 6x14 (`combat/derolle.ts`, `tests/derolle.test.ts`)
 - [x] Vol Opt's fight: the control's timeline (intro, phase 1, the change, phase 2), the leader's two directors, the core sweeping behind the walls and shot through the monitors, the 24 monitors, the 6 pillars with the red one's two lightning bolts, the rod, form 2's four actions with its four part HPs, the prison, the death and the kill sends, and 6x15 / 6x16 / 6x17 / 6x18 / 6x84 / 6x85 (`combat/volopt.ts`, `combat/volopt2.ts`, `tests/volopt.test.ts`)
-- [ ] Where the fight moves the children it spawns, still open: Dark Falz's forms, Belra's thrown arms, Saint-Milion's 16 spinners; the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
+- [x] Dark Falz's fight: the control's 16 scenes and 6x19 (leader / follower), the 80 Darvants and the ones form 1 spits, form 1 (spit, move, Rabarta / Rafoie beams, TENCHU), form 2 (circle, quake, beams, pauses, Resta), form 3 (slashes, glides, homing bolts, Megid, capture), the quest flags 0x32..0x37, the ending's kill send, the music (`combat/darkfalz.ts`, `darkfalz1.ts` .. `darkfalz3.ts`, `tests/darkfalz.test.ts`)
+- [ ] Where the fight moves the children it spawns, still open: Belra's thrown arms, Saint-Milion's 16 spinners; the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision

@@ -1162,6 +1162,34 @@ Entities of the fight (newserv `add_enemy_and_children` agrees): control `TBoss3
 
 Damage on any of these entities is the ordinary `6x0A` of that entity (`hp = max - damage_taken`); the brain, not the packet's dead flag, decides when a part or the body is gone. The kill of form 2 (EXP, drop, `6x76` flags 8) happens at frame 47 of its death motion on every client.
 
+## Dark Falz (area 0x0E, `combat/darkfalz.ts`, `darkfalz1.ts` .. `darkfalz3.ts`)
+
+Entities (newserv `add_enemy_and_children`): the control `TBoss4DarkFalz` 0xC8 at the set entry's index `b` (it only builds the fight when the entry has 0x200 children), the Darvants `b+1..b+0x1FD` (ids from the control's counter `+0x38C`), form 3 `b+0x1FE`, form 2 `b+0x1FF`, form 1 `b+0x200`. Battle rows 53 (Darvant), 54 / 55 / 56 (the forms), 57 (the Darvants form 1 spits). Damage is the ordinary `6x0A` of the entity.
+
+The one fight command is `6x19` (`G_DarkFalzActions`, 0x10): `{19, 04, entity = the control's}` `{u16 phase, u16 unused, u32 packed action, u32 unused}`. `phase` is the control's **scene** (0xFFFF = no change), `packed` a form's order (0xFFFFFFFF = none); both go to `HandleVoloptEntityStateTransition` `0x0044CE6C`, which changes the scene (leave / enter callbacks of the table at `0x009A5940`) and then hands `packed` to the form of the scene it is in. The sender applies it first (`checked_call_packet0x60_subcommand`); only the room leader's lead procedures send.
+
+| Scene | Name | Wait | Notes |
+|---|---|---|---|
+| 0 | EDITOR | | the leader goes to 1 |
+| 1 | WAIT_CASKET | | the leader sends 2 when a player is within 30 of (-9860, -240) |
+| 2 / 3 | DEMO_WARP0 / 1 | 120 / 30 | players on a circle of 12.5 about the origin |
+| 4 | ZAKO | | 80 Darvants; the leader sends 5 at row 53 iparam1 x party kills |
+| 5 | APP TYPE1 | 0x146 up | `dark1.adx` at 0xB9; flag 0x32 |
+| 6 | TYPE1 | | form 1; the leader sends 7 when it is in state 3 or 4 |
+| 7 | APP TYPE2 | 300 | flag 0x33, then form 2 and flag 0x34 |
+| 8 | TYPE2 | | form 2; the leader sends 9 when it is in state 3 or 2 |
+| 9 | DIE TYPE2 | 280 | flag 0x35; then 10 on Normal, else 11 |
+| 10 | GET RING | 142 | then 15 |
+| 11 / 12 | DEMO_WARP2 / 3 | 114 / 126 | `dark2.adx`; players on a circle of 250 about (10000, 0); flag 0x36 and form 3 |
+| 13 | TYPE3 | | form 3; the leader sends 14 when it is in state 3 or 2 |
+| 14 | DIE TYPE3 | 302 | flag 0x37, then 15 |
+| 15 | OL ENDING | 454 | `mark_falz_as_dead_and_request_drop` |
+
+Packed actions (bit ranges are inclusive; the state is at most 10 / 0xD / 0x10 for forms 1 / 2 / 3):
+- form 1 (`0x0045660C`): 0-3 state, 4-5 position left, 6-7 position to, 8-9 old head variant, 10-11 new variant (both below 3), 12-15 / 16-19 grid cell of the target (16 cells of 29.375 over 470 units).
+- form 2 (`0x00458018`): 0-3 state, 4-7 slot left (angle >> 12), 8-11 slot to, 12-15 / 16-19 grid cell, 20-23 a player (0xF none).
+- form 3 (`0x0045B64C`): 0-4 state, 5-9 slot left, 10-14 slot to (0x10 the middle, 0x11 above), 15-18 old facing, 19-22 new facing, 23-26 / 27-30 player aimed at / held (0xF none).
+
 ## Area fog (`fogentry.dat`)
 
 Loose file or `data.gsl`; 0x4000 bytes = 256 entries of 0x40, little endian. `FUN_005bca88` loads it (`fogentry_a.dat`, 128 entries, when `FUN_0078b220() != 0`). Parsed by `client/src/formats/fogentry.ts`.
