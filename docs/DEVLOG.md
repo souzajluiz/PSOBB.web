@@ -1,5 +1,48 @@
 # Devlog
 
+## 2026-10-19: Pan Arms / slime split fixes (review and Chrome)
+
+**What changed:** fixes from the review of the splitters and from Chrome.
+Pan Arms now leaves the ground the way the exe does. Hidoom and Migium are
+drawn once they split. Splitter children no longer send a 6x76 of their own.
+
+**Details:**
+- Buried Pan Arms (update `0x0058106c`, init `0x00583d48`): the iparam2
+  timer counts down. While it lasts, a player within iparam1 raises Pan Arms
+  facing that player. When it runs out, Pan Arms rises anyway (iparam2 0:
+  the first frame). Going back under also returns it to its spawn point.
+  `combat` logs "emerges".
+- `PanHalfAi` reports `hidden` on every frame, so a split half is drawn.
+- `untargetable` getters (Pan Arms buried / emerging / split, a hidden half,
+  a puddle slime, the control) feed `concealed()`. These enemies are left
+  out of the radar, lock-on, weapon / technique targets and confused targets.
+- Pan Arms splits only when both halves were built; otherwise the floor
+  log says so.
+- If the first slime cannot be built, the control's done path runs: 6x76 and
+  removal.
+- Child kills: a half's death (`0x00587720`) and a slime's (`0x00598648`)
+  only call `on_enemy_killed` (`0x00787534`: EXP and the drop request). The
+  6x76 (`set_monster_spawn_initdata_as_dead`, `0x008113e4`) comes from Pan
+  Arms (`0x00583a80`, or `0x005822e4` when both halves die) and from the
+  slime control (`0x005956d4`). So `killEnemy` no longer sends 6x76 for
+  halves and slimes.
+- HP, checked in the dump: a half gets `(HP + 1) / 2` truncated
+  (`0x00587a04`). The merge sets HP to the plain sum of the halves
+  (`0x00582ab8` / `0x005822e4`), with no clamp to Pan Arms's max.
+- Multiplayer: a split builds the copy locally (`0x00597914` -> `0x00595bc8`
+  -> `0x00595d74`) and sends no subcommand. Each client's control watches
+  its own slots. This client sends the control's 6x76 only for its own kill.
+- `render/waves.ts` `killedSetEntry` (moved out of `gamefield.ts`): a
+  child-slot 6x76 is ignored only for sets whose children die on their own,
+  each sending its own 6x76: Monest / Mothmant (`MothmanProcessState_0051950c`
+  calls it), slimes, Pan Arms, Bulclaw. Boss parts and forms (De Rol Le, Vol
+  Opt, Dark Falz, ...) keep the old rule (any slot clears the entry): not
+  every one of their set-dead calls was traced to its slot.
+
+**Checks:** `tests/enemysplits.test.ts` (the timer rule, no split without
+halves, a drawn half), `tests/waves.test.ts` (the 6x76 guard), every other
+unit test; client `tsc --noEmit`.
+
 ## 2026-10-19: Pan Arms and Pofuilly Slime splits
 
 **What changed:** the two Caves enemies that split now fight. Pan Arms

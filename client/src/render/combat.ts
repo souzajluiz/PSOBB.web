@@ -239,10 +239,11 @@ const OWN_FSM = new Set([
 const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver']);
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
-// A Pan Arms / Hidoom / Migium / Pofuilly Slime (or its control) that is not
-// drawn: it cannot be locked on, struck or targeted (combat/enemysplits.ts).
+// A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium, a puddle
+// slime or a slime control: not on the radar, not locked on, not struck, not
+// a technique or confused-enemy target (combat/enemysplits.ts untargetable).
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
-  (e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.hidden;
+  (e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable;
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -1601,15 +1602,22 @@ export class CombatView {
         const mig = new PanHalfAi('migium', { ...at, movement: migMv, rng: () => this.rng() });
         hid.sibling = mig;
         mig.sibling = hid;
-        pan.halves = [hid, mig];
         const h = await this.spawnSplitChild(e, e.index + 1, 'HIDOOM', 1, { index: 24, speed: 0.8, loop: true }, hid, at);
         const m = await this.spawnSplitChild(e, e.index + 2, 'MIGIUM', 2, { index: 25, speed: 0.8, loop: true }, mig, at);
         if (this.disposed) return;
         for (const c of [h, m]) if (c) for (const part of c.instance.root.children) part.visible = false;
+        // Without both halves it never splits (PanArmsAi checks halves).
+        if (h && m) pan.halves = [hid, mig];
+        else {
+          for (const c of [h, m]) if (c) this.dropQuietly(c);
+          this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}): its halves are missing, it will not split`);
+        }
       } else if (e.ai instanceof SlimeControl) {
         for (const part of e.instance.root.children) part.visible = false;
-        await this.spawnSlime(e, e.ai, at.x, at.z, at.angle, false);
+        const first = await this.spawnSlime(e, e.ai, at.x, at.z, at.angle, false);
         if (this.disposed) return;
+        // No slime could be built: the control has nothing to wait for.
+        if (!first) this.slimeControlDone(e, true);
       }
     }
   }
@@ -1650,8 +1658,11 @@ export class CombatView {
 
   private panEvent(e: EnemyRuntime, ai: PanArmsAi, ev: PanEvent): void {
     const what = `E-${e.index.toString(16)} (${e.slot.type})`;
-    if (ev.kind === 'split') {
-      // c1: each half gets (HP + 1) / 2.
+    if (ev.kind === 'emerged') {
+      this.opts.log(`${what} emerges`);
+    } else if (ev.kind === 'split') {
+      // c1 (0x00587a04): each half gets (HP + 1) / 2, truncated, and keeps it
+      // as its split HP (+0x3c4, Hidoom's call threshold).
       const each = Math.trunc((e.stats.hp + 1) / 2);
       for (const h of ai.halves) {
         const r = this.runtimeOf(h);
@@ -1663,6 +1674,8 @@ export class CombatView {
       }
       this.opts.log(`${what} splits into Hidoom and Migium (${each} HP each)`);
     } else if (ev.kind === 'merged') {
+      // 0x00582ab8 / 0x005822e4: HP = the halves' HP added, with no clamp to
+      // the Pan Arms's own max (a Resta'd half can push it over).
       e.stats.hp = Math.max(1, this.panHalfHp(ai));
       this.sendEnemy(e, ENEMY_BASE_FLAGS);
       this.opts.log(`${what}: Hidoom and Migium merge (${e.stats.hp}/${e.stats.maxHp} HP)`);
@@ -1694,14 +1707,32 @@ export class CombatView {
     const control = e.parent;
     if (e.ai instanceof SlimeAi && e.slimeSlot !== undefined && control?.ai instanceof SlimeControl) {
       control.ai.died(e.slimeSlot);
-      if (control.ai.finished && !control.dead) {
-        // ASSUMED: the set entry dies with its last slime (the control's 6x76).
-        control.dead = true;
-        if (local) this.game.sendEntitySetFlags(0x1000 | control.index, this.floor, 8);
-        this.layer.remove(control.instance);
-        this.enemies.delete(control.index);
-      }
+      if (control.ai.finished) this.slimeControlDone(control, local);
     }
+  }
+
+  // The control's update (0x005956d4): with no slot holding a live slime it
+  // sends the set's 6x76 (set_monster_spawn_initdata_as_dead 0x008113e4) and
+  // is deleted. Every client runs it on its own slots: a split (0x00597914 ->
+  // 0x00595bc8 -> 0x00595d74) builds the copy locally and sends no
+  // subcommand, so another client never sees the copies. This client only
+  // sends the 6x76 for its own kill (`local`), so another client's kill of
+  // the last slime it knew of does not clear a set whose copies live here.
+  private slimeControlDone(control: EnemyRuntime, local: boolean): void {
+    if (control.dead) return;
+    control.dead = true;
+    if (local) this.game.sendEntitySetFlags(0x1000 | control.index, this.floor, 8);
+    this.layer.remove(control.instance);
+    this.enemies.delete(control.index);
+  }
+
+  // A child removed without a kill (no 6x76, no EXP).
+  private dropQuietly(e: EnemyRuntime): void {
+    e.dead = true;
+    e.ai?.kill();
+    this.layer.remove(e.instance);
+    this.enemies.delete(e.index);
+    if (this.lockOn === e) this.lockOn = null;
   }
 
   // BattleParamEntry rows of a spawned child type.
@@ -2706,7 +2737,10 @@ export class CombatView {
       e.parent.ai.childGone();
     }
     this.splitterDied(e, true);
-    this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+    // A Hidoom / Migium (0x00587720) and a slime (0x00598648) only run
+    // on_enemy_killed (0x00787534: EXP and the drop request); their set entry
+    // is cleared by the Pan Arms / the slime control, not by their own 6x76.
+    if (!(e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi)) this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
     const p = e.instance.root.position;
     if (e.rtIndex !== 0xff) {
       this.game.sendEnemyDropRequest({

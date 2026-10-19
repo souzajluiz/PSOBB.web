@@ -16,9 +16,12 @@ const BAMS = BAMS_TO_RAD;
 //
 // Ctor 0x00582ef4 (vtable 0x00b07860), motion table 0x009bf220, state table
 // 0x009bf2e0 ({init, update} pairs). MovementData row 0x31: iparam1 the
-// emerge radius (at least 5), iparam2 the frames it waits buried (at least 0),
-// fparam2 / fparam3 the shockwave / bolt power (group-0 tech hits).
-//   1 buried: untargetable, drawn -1.2 * 33 under the ground.
+// emerge radius (at least 5), iparam2 the most frames it stays buried (at
+// least 0), fparam2 / fparam3 the shockwave / bolt power (group-0 tech hits).
+//   1 buried (init 0x00583d48, update 0x0058106c): back at the spawn point,
+//     untargetable, drawn -1.2 * 33 under the ground; the timer (+0x390 =
+//     iparam2) counts down; while it is >= 0 a player within iparam1 makes
+//     it face that player and emerge, and once it runs out it emerges anyway.
 //   2 emerge: vy 7.5, -0.5 a frame, lands -> 3.
 //   3 walk (init 0x00583c1c): the side flag (+0x394) toggles; animation 2
 //     (motion 30) on side 1, 1 (motion 29) on side 0; walks (+0x404) + 1;
@@ -132,6 +135,7 @@ export class PanArmsShot extends EnemyShot {
 export type PanState = 'buried' | 'emerge' | 'walk' | 'shock' | 'bolt' | 'spin' | 'splitting' | 'split' | 'merge' | 'rejoin' | 'dead';
 
 export type PanEvent =
+  | { kind: 'emerged' } // it rose out of the ground (owner: a log line)
   | { kind: 'split' } // the halves take over (owner: spawn / show them, HP)
   | { kind: 'merged' } // the halves are gone again (owner: HP = sum, hide them)
   | { kind: 'lost' }; // both halves died while split (owner: 6x76 only)
@@ -170,6 +174,12 @@ export class PanArmsAi extends BrainBase {
     this.wavePower = Math.max(mv?.fparam2 ?? 0, 0);
     this.boltPower = Math.max(mv?.fparam3 ?? 0, 0);
     this.current = PAN_ANIM.wait;
+    this.timer = this.buriedWait;
+  }
+
+  // Not on the radar, not locked on, not struck (render/combat.ts concealed).
+  get untargetable(): boolean {
+    return this.invulnerable;
   }
 
   get invulnerable(): boolean {
@@ -205,6 +215,12 @@ export class PanArmsAi extends BrainBase {
     else if (s === 'split') this.timer = PAN.splitTimer;
     else if (s === 'merge') this.timer = PAN.mergeFrames;
     else if (s === 'emerge') this.vy = PAN.emergeVy;
+    else if (s === 'buried') {
+      this.timer = this.buriedWait;
+      this.x = this.spawnX;
+      this.z = this.spawnZ;
+      this.lift = PAN.buriedDepth;
+    }
   }
 
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
@@ -213,11 +229,17 @@ export class PanArmsAi extends BrainBase {
     this.animFrame += this.current?.speed ?? 0;
     const t = nearest(targets, this.x, this.z, PAN.search);
     switch (this.state) {
-      case 'buried':
+      case 'buried': {
         this.lift = PAN.buriedDepth;
-        if (this.buriedWait > 0) this.buriedWait--;
-        else if (nearest(targets, this.x, this.z, this.emergeRadius)) this.enter(out, 'emerge');
+        if (--this.timer >= 0) {
+          const p = nearest(targets, this.x, this.z, this.emergeRadius);
+          if (!p) break;
+          this.angle = this.angleTo(p);
+        }
+        this.enter(out, 'emerge');
+        this.events.push({ kind: 'emerged' });
         break;
+      }
       case 'emerge':
         this.lift += this.vy;
         this.vy -= PAN.gravity;
@@ -228,12 +250,12 @@ export class PanArmsAi extends BrainBase {
         break;
       case 'walk': {
         if (!nearest(targets, this.x, this.z, PAN.leash)) {
-          this.lift = PAN.buriedDepth;
           this.enter(out, 'buried');
           this.play(out, PAN_ANIM.wait);
           break;
         }
-        if ((!this.splitOnce && this.hpFraction <= 1 / 3) || this.walks > PAN.maxWalks) {
+        // The owner gives it its two halves; without them it cannot split.
+        if (this.halves.length === 2 && ((!this.splitOnce && this.hpFraction <= 1 / 3) || this.walks > PAN.maxWalks)) {
           this.splitOnce = true;
           this.walks = 0; // ASSUMED: the split starts the count over
           this.enter(out, 'splitting');
@@ -496,6 +518,10 @@ export class PanHalfAi extends BrainBase {
     return this.state === 'hidden';
   }
 
+  get untargetable(): boolean {
+    return this.hidden;
+  }
+
   get invulnerable(): boolean {
     return this.state === 'hidden' || this.state === 'split' || this.state === 'merging';
   }
@@ -732,6 +758,7 @@ export class PanHalfAi extends BrainBase {
       case 'merging':
         break;
     }
+    out.hidden = this.hidden;
     return this.finish(out);
   }
 
@@ -936,6 +963,10 @@ export class SlimeAi extends BrainBase {
 
   get hidden(): boolean {
     return HIDDEN_STATES.has(this.state);
+  }
+
+  get untargetable(): boolean {
+    return this.hidden;
   }
 
   get invulnerable(): boolean {
@@ -1196,6 +1227,7 @@ export class SlimeControl extends BrainBase {
   state = 'control';
   readonly invulnerable = true;
   readonly hidden = true;
+  readonly untargetable = true;
   readonly slots: SlimeSlot[];
 
   constructor(opts: { x: number; z: number; angle: number; numChildren: number }) {

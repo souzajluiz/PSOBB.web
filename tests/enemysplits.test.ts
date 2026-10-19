@@ -22,14 +22,13 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
 {
   const pan = new PanArmsAi({ x: 0, z: 0, angle: 0, movement: mv({ iparam: [40, 3, 0, 0, 0, 0], fparam2: 30, fparam3: 50 }), rng: () => 0.2 });
   eq(pan.state, 'buried', 'it starts buried');
-  check(pan.invulnerable && pan.superArmor, 'buried: untargetable; hits never flinch it');
+  check(pan.invulnerable && pan.untargetable && pan.superArmor, 'buried: untargetable; hits never flinch it');
   const near = [player(0, 20)];
-  for (let i = 0; i < 3; i++) pan.tick(near);
-  eq(pan.state, 'buried', 'it waits iparam2 frames before it can emerge');
   pan.tick([player(0, 100)]);
   eq(pan.state, 'buried', 'a player outside iparam1 does not raise it');
   pan.tick(near);
-  eq(pan.state, 'emerge', 'a player within iparam1 raises it');
+  eq(pan.state, 'emerge', 'a player within iparam1 raises it (0x0058106c)');
+  eq(pan.events.splice(0), [{ kind: 'emerged' }], 'the owner hears of it');
   let n = 0;
   while (pan.state === 'emerge' && n++ < 100) pan.tick(near);
   eq(pan.state, 'walk', 'it lands and walks');
@@ -59,6 +58,25 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   for (let i = 0; i < 20 && !b.done; i++) got += b.tick([player(0, 40), player(0, 45, 1)]).length;
   eq(got, 1, 'the bolt stops at the first player');
   check(PAN_BOLT.speed === 10 && PAN_BOLT.frames === 12, 'bolt: 10 a frame, 12 frames');
+}
+
+// The buried timer (iparam2) runs out: it emerges with nobody near; iparam2 0
+// emerges on the first frame.
+{
+  const late = new PanArmsAi({ x: 0, z: 0, angle: 0, movement: mv({ iparam: [5, 3, 0, 0, 0, 0] }) });
+  const far = [player(0, 300)];
+  for (let i = 0; i < 3; i++) late.tick(far);
+  eq(late.state, 'buried', 'it waits iparam2 frames for a player');
+  late.tick(far);
+  eq(late.state, 'emerge', 'then it emerges anyway');
+  const now = new PanArmsAi({ x: 0, z: 0, angle: 0, movement: mv({ iparam: [30, 0, 0, 0, 0, 0] }) });
+  now.tick([]);
+  eq(now.state, 'emerge', 'iparam2 0: it emerges at once');
+  // Without its halves it never splits.
+  while (now.state === 'emerge') now.tick([player(0, 20)]);
+  now.hpFraction = 0.1;
+  now.tick([player(0, 20)]);
+  eq(now.state, 'walk', 'no halves: no split');
 }
 
 // Side 0 -> bolt; the first visit (odd) goes back to walking.
@@ -101,12 +119,13 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   pan.tick(near, true);
   eq(pan.state, 'split', 'then split');
   check(pan.hidden && pan.invulnerable, 'split: the Pan Arms is hidden and untargetable');
-  eq(pan.events.map((e) => e.kind), ['split'], 'the owner hears of the split');
+  eq(pan.events.map((e) => e.kind), ['emerged', 'split'], 'the owner hears of the split');
   eq([hid.state, mig.state], ['split', 'split'], 'both halves start');
   check(hid.x > 0 && mig.x < 0, 'Hidoom stands right, Migium left');
-  hid.tick(near, true);
+  const hf = hid.tick(near, true);
   mig.tick(near, true);
   eq([hid.state, mig.state], ['roam', 'roam'], 'they roam after the split animation');
+  check(hf.hidden === false && !hid.untargetable, 'a split half is drawn and can be targeted');
 
   // Hidoom at half its split HP calls; Migium runs to it; Resta at -15.
   hid.hpFraction = 0.5;
@@ -153,7 +172,7 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   for (let i = 0; i < PAN.mergeFrames; i++) pan.tick(far);
   eq(pan.state, 'rejoin', 'after 64 frames it rejoins');
   check(hid.hidden && mig.hidden, 'the halves are hidden again');
-  eq(pan.events.map((e) => e.kind), ['split', 'merged'], 'the owner hears of the merge');
+  eq(pan.events.map((e) => e.kind), ['emerged', 'split', 'merged'], 'the owner hears of the merge');
 }
 
 // Both halves dead while split: the set is lost.
