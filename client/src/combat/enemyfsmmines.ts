@@ -596,6 +596,39 @@ export const SINOW = {
   knockback: 3,
 } as const;
 
+// The mirage (the cast, state 0xe, handler 0x0058fa6c; the approach, state 8,
+// 0x0058e074; the clones' wait, state 0xf, 0x00590108): see SinowAi.
+//   - After a warp away (7), a Beat (param2 < 1) with param1 < 1 casts the
+//     mirage every other time (flag 0x20000 toggles: the exit of 0x0058e598);
+//     the cast is animation 7 (the technique's), and when it ends with a target
+//     in sight (cast_ray_from_entity_to_entity) the real body picks its slot
+//     round-down(5 * rand) of 5 and the other four slots get a clone each: the
+//     Sinow's child entities (newserv: default_num_children 4; entity id and
+//     enemy index +1 + i), at full hp, on the real body's place, in state 8.
+//   - State 8 (all five bodies): for 40 frames each takes the point at
+//     min(max(distance +- 3 toward 80), 80) * heading_cos from the target on
+//     the line from the target rotated by (slot - 2) * 0x3333 / 0x28 BAMS a
+//     frame (heading_cos 1.0, multiplied by 0.8 when the move is blocked:
+//     not reproduced), so the five spin round the target, the outer ones the
+//     fastest; then flag 0x10 (evp halved: +0x2d0 = +0x3e4 / 2) and a chase of
+//     the nearest within 200 (none: lost).
+//   - The 2nd combo's end (SpawnAlly 0x0058f784) sends the clones to state 0xf
+//     when flag 0x10 is set (evp back): 0.1 a frame down to -1.0, i.e. 10
+//     frames, then they park below the floor (y -500) until the next cast.
+export const SINOW_MIRAGE = {
+  slots: 5,
+  clones: 4,
+  frames: 0x27, // the approach ends when its counter passes this
+  engage: 80, // 0x00a7442c
+  closing: 3, // g_SinowberillAttackRadius 0x00928cb8
+  ramp: Math.fround(0.8), // g_SinowberillHeadingCosine 0x00928cc0
+  center: 2, // round(0x00928b50 = 2.5)
+  arcNum: 0x3333,
+  arcDen: 0x28,
+  pick: 200, // FindNearestEntities(this, 40000.0): a squared distance
+  hideFrames: 10,
+} as const;
+
 // Slots 2, 5 and 6 have speed 0 in the table (written at run time).
 // ASSUMED: 0.7 for the warp-strike (frames 14..23 then take 12.857 ticks, so
 // the hidden move covers distance - 20; the 0.85 slide follows), 0.8 for the
@@ -611,7 +644,13 @@ const SINOW_MOTION = {
   walk: loop(9, 0.5),
 };
 
-export type SinowState = 'wait' | 'drop' | 'chase' | 'warp' | 'combo' | 'away' | 'tech' | 'lost' | 'dead';
+export type SinowState = 'wait' | 'drop' | 'chase' | 'warp' | 'combo' | 'away' | 'tech' | 'lost' | 'cast' | 'approach' | 'hide' | 'dead';
+
+// What the owner does for the mirage (render/combat.ts): the cast makes the
+// clones appear round the real body; a dismiss sends them away.
+export type SinowEvent =
+  | { kind: 'mirage'; main: number; x: number; z: number; angle: number; targetId: number | null; tx: number; tz: number }
+  | { kind: 'dismiss' };
 
 export class SinowAi extends BrainBase {
   state: SinowState = 'wait';
@@ -629,8 +668,36 @@ export class SinowAi extends BrainBase {
   private hold = -1;
   private combos = 0;
   private dir = 0;
+  // The mirage (SINOW_MIRAGE). param1 is the set entry's: a Beat with param1 >=
+  // 1 never casts it. `cast` is flag 0x20000 (the cast happens every other
+  // warp away), `mirage` flag 0x10 (evp halved while the clones are out),
+  // `slot` the body's place in the five (+0x3dc).
+  private param1: number;
+  private cast = false;
+  mirage = false;
+  slot = 0;
+  readonly ally: boolean;
+  readonly events: SinowEvent[] = [];
+  private tx = 0;
+  private tz = 0;
+  private arc = 0;
+  private ramp = 1;
 
-  constructor(opts: { x: number; z: number; angle: number; gold: boolean; ultimate: boolean; movement: EnemyMovementData | null; attack: EnemyAttackData | null; radius: number; rng?: () => number }) {
+  constructor(opts: {
+    x: number;
+    z: number;
+    angle: number;
+    gold: boolean;
+    ultimate: boolean;
+    movement: EnemyMovementData | null;
+    attack: EnemyAttackData | null;
+    radius: number;
+    rng?: () => number;
+    param1?: number;
+    // A clone (flag 0x1000): it waits parked (state 0xf) until the real body
+    // casts the mirage.
+    ally?: boolean;
+  }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.gold = opts.gold;
     this.ultimate = opts.ultimate;
@@ -638,7 +705,64 @@ export class SinowAi extends BrainBase {
     this.reach = (opts.attack?.distanceX ?? 0) + opts.radius;
     this.spawnX = opts.x;
     this.spawnZ = opts.z;
+    this.param1 = opts.param1 ?? 0;
+    this.ally = opts.ally ?? false;
     this.current = SINOW_MOTION.wait;
+    if (this.ally) {
+      this.state = 'hide';
+      this.hidden = true;
+      this.timer = SINOW_MIRAGE.hideFrames;
+      this.current = null;
+    }
+  }
+
+  // The evp the body fights with: half while the mirage is out (+0x2d0 =
+  // +0x3e4 / 2, SinowberillSetSpecialFlag 0x0058e570).
+  get evpScale(): number {
+    return this.mirage ? 0.5 : 1;
+  }
+  // A parked clone: not in the world.
+  get dormant(): boolean {
+    return this.state === 'hide';
+  }
+
+  // SinowberillSetAllyStates (0x0058f7b8) on the real body: with the mirage
+  // out, the evp comes back and the clones leave.
+  private dismissClones(): void {
+    if (!this.mirage) return;
+    this.mirage = false;
+    this.events.push({ kind: 'dismiss' });
+  }
+
+  // The real body asks a clone to join (0x0058fa6c): it takes the body's place
+  // and goes to state 8 at its slot.
+  activate(x: number, z: number, angle: number, slot: number, targetId: number | null, targetX: number, targetZ: number): AiFrame {
+    const out = this.frame();
+    this.x = x;
+    this.z = z;
+    this.angle = angle;
+    this.slot = slot;
+    this.targetId = targetId;
+    this.tx = targetX;
+    this.tz = targetZ;
+    this.mirage = false;
+    this.beginApproach(out);
+    this.play(out, SINOW_MOTION.tech);
+    return this.finish(out);
+  }
+
+  // Parks the clone (state 0xf): 10 frames, then it is hidden.
+  dismiss(): void {
+    if (this.state === 'hide' || this.state === 'dead') return;
+    const out = this.frame();
+    this.enter(out, 'hide');
+    this.hidden = false;
+  }
+
+  private beginApproach(out: AiFrame): void {
+    this.enter(out, 'approach');
+    this.ramp = 1;
+    this.arc = Math.trunc(((this.slot - SINOW_MIRAGE.center) * SINOW_MIRAGE.arcNum) / SINOW_MIRAGE.arcDen);
   }
 
   get superArmor(): boolean {
@@ -647,7 +771,7 @@ export class SinowAi extends BrainBase {
 
   // ASSUMED: a vanished Sinow cannot be hit.
   get invulnerable(): boolean {
-    return this.hidden;
+    return this.hidden || this.state === 'hide';
   }
 
   private enter(out: AiFrame, state: SinowState): void {
@@ -667,6 +791,9 @@ export class SinowAi extends BrainBase {
       away: SINOW_MOTION.away,
       tech: SINOW_MOTION.tech,
       lost: SINOW_MOTION.lost,
+      cast: SINOW_MOTION.tech,
+      approach: null,
+      hide: null,
       dead: null,
     };
     if (state === 'wait') this.targetId = null;
@@ -701,6 +828,10 @@ export class SinowAi extends BrainBase {
         if (n) {
           this.targetId = n.clientId;
           this.enter(out, 'chase');
+        } else if (this.timer >= SINOW.lostFrames && this.ally) {
+          // ASSUMED: a clone that lost everyone leaves (the exe sends it to
+          // its parent's spawn point like the body).
+          this.dismiss();
         } else if (this.timer >= SINOW.lostFrames) {
           // State 9: it vanishes and starts over at its spawn point.
           this.x = this.spawnX;
@@ -766,9 +897,13 @@ export class SinowAi extends BrainBase {
         }
         if (this.hold < 0 && (this.frames >= SINOW.comboHold || animationEnded)) this.hold = Math.max(0, this.mv.iparam[2] ?? 0);
         if (this.hold >= 0 && this.hold-- === 0) {
+          // SpawnAlly (0x0058f784): the 2nd combo dismisses the clones and warps
+          // away; a clone's own SpawnAlly (0x005901c4) only chases.
           this.combos++;
-          this.enter(out, this.combos % 2 === 0 ? 'away' : t ? 'chase' : 'lost');
-          if ((this.state as SinowState) === 'away') this.dir = t ? wrap(this.angleTo(t) + Math.PI) : this.angle;
+          const away = !this.ally && this.combos % 2 === 0;
+          if (away) this.dismissClones();
+          this.enter(out, away ? 'away' : t ? 'chase' : 'lost');
+          if (away) this.dir = t ? wrap(this.angleTo(t) + Math.PI) : this.angle;
         }
         break;
       }
@@ -781,10 +916,42 @@ export class SinowAi extends BrainBase {
           this.z += Math.cos(this.dir) * v;
         } else this.hidden = false;
         if (animationEnded) {
-          // The Gold casts (10); the mirage split (14) is not reproduced.
-          this.enter(out, this.gold ? 'tech' : t ? 'chase' : 'lost');
-          if ((this.state as SinowState) === 'tech') this.hold = -1;
+          // 0x0058e598 phase 3: the Gold casts (10); a Beat with param1 < 1
+          // casts the mirage (0xe) every other time; else chase. (Ultimate with
+          // param1 >= 1 goes to state 0x10, not reproduced.)
+          if (this.gold) {
+            this.enter(out, 'tech');
+            this.hold = -1;
+          } else if (!this.cast && this.param1 < 1) {
+            this.cast = true;
+            this.enter(out, 'cast');
+          } else {
+            this.cast = false;
+            this.enter(out, t ? 'chase' : 'lost');
+          }
         }
+        break;
+      case 'cast':
+        // 0x0058fa6c: the technique's animation, then the clones. A clone
+        // never gets here (its handler for 0xe is a stub).
+        if (!this.ally && animationEnded) {
+          if (t) {
+            this.slot = Math.min(SINOW_MIRAGE.slots - 1, Math.floor(this.rng() * SINOW_MIRAGE.slots));
+            this.tx = t.x;
+            this.tz = t.z;
+            this.events.push({ kind: 'mirage', main: this.slot, x: this.x, z: this.z, angle: this.angle, targetId: this.targetId, tx: t.x, tz: t.z });
+            this.beginApproach(out);
+          } else {
+            this.dismissClones();
+            this.enter(out, 'chase');
+          }
+        }
+        break;
+      case 'approach':
+        this.tickApproach(out, targets, t);
+        break;
+      case 'hide':
+        if (this.timer >= SINOW_MIRAGE.hideFrames) this.hidden = true;
         break;
       case 'tech':
         // The cast (0x006eeeb4 at level iparam1, probably Resta; Shifta /
@@ -797,15 +964,71 @@ export class SinowAi extends BrainBase {
     return this.finish(out);
   }
 
+  // State 8 (0x0058e074): the body takes a point on the circle round the target
+  // each frame, from the target's line to it turned by `arc`; for 40 frames.
+  private tickApproach(out: AiFrame, targets: readonly AiTarget[], t: AiTarget | null): void {
+    if (t) {
+      this.tx = t.x;
+      this.tz = t.z;
+    }
+    const vx = this.tx - this.x;
+    const vz = this.tz - this.z;
+    const d = Math.hypot(vx, vz);
+    if (d > 0) {
+      const ux = vx / d;
+      const uz = vz / d;
+      const c = Math.cos(this.arc * BAMS_TO_RAD);
+      const s = Math.sin(this.arc * BAMS_TO_RAD);
+      // RotateVector2D_00782b64: x' = x cos + z sin, z' = z cos - x sin.
+      const rx = ux * c + uz * s;
+      const rz = uz * c - ux * s;
+      const near = SINOW_MIRAGE.engage;
+      const r = d > near ? Math.max(near, d - SINOW_MIRAGE.closing) : d < near ? Math.min(near, d + SINOW_MIRAGE.closing) : near;
+      // ASSUMED: the move is never blocked (the exe tests the point and
+      // multiplies heading_cos by 0.8 when it is), so heading_cos stays 1.
+      this.x = this.tx - rx * r * this.ramp;
+      this.z = this.tz - rz * r * this.ramp;
+      this.angle = Math.atan2(rx, rz);
+    }
+    if (this.timer > SINOW_MIRAGE.frames) {
+      // SinowberillSetSpecialFlag (0x0058e570): evp halved; then the nearest.
+      this.mirage = true;
+      const n = nearest(targets, this.x, this.z, SINOW_MIRAGE.pick);
+      if (n) this.targetId = n.clientId;
+      this.enter(out, n ? 'chase' : 'lost');
+    }
+  }
+
+  // The vtable's hit handler (+0x100): the real body sends the clones away
+  // (0x005900b4: SetAllyStates, then the flinch 0x005900c8); a clone goes to
+  // state 0xf (0x00590474) and leaves.
   onDamage(clientId: number): void {
-    if (this.state === 'dead' || this.superArmor) return;
+    if (this.state === 'dead') return;
+    if (this.ally) {
+      this.dismiss();
+      return;
+    }
+    this.dismissClones();
+    if (this.superArmor) return;
     this.targetId = clientId;
     this.hidden = false;
     this.current = null;
   }
 
+  // A clone does not flinch (it is on its way out); the body as ever.
+  flinches(): boolean {
+    return !this.ally && !this.dormant;
+  }
+
+  // The death handler (+0x104, 0x005900a0) sends the clones away first.
+  kill(): void {
+    this.dismissClones();
+    super.kill();
+  }
+
   resume(): string {
     if (this.state === 'dead') return this.state;
+    if (this.state === 'hide') return this.state;
     const out = this.frame();
     this.enter(out, this.targetId !== null ? 'chase' : 'lost');
     return this.state;

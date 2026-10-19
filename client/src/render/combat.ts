@@ -45,10 +45,11 @@ import {
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
-import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
+import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
@@ -263,7 +264,8 @@ const OWN_FSM = new Set([
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
-  // Episode 1 bosses (combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
+  // Episode 1 bosses (combat/dragon.ts, combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
+  'TBoss1Dragon',
   'TBoss2DeRolLe',
   'TBoss3Volopt',
   'TBoss3VoloptP02',
@@ -285,7 +287,8 @@ const BULCLAW_CLAWS = 4;
 // fight are hidden the same way.
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
-  ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai) && e.ai.untargetable);
+  ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
+  (e.ai instanceof SinowAi && e.ai.dormant);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -550,7 +553,13 @@ export class CombatView {
   }
 
   // Enemy slots of the floor (entity ids) and their stats.
+  // The latest enterFloor call: one that is overtaken while it awaits (a floor
+  // change while the battle params load) must not build its enemies on the new
+  // floor's models (set entry indices repeat between floors).
+  private enterToken = 0;
+
   async enterFloor(floor: number, area: number, sets: EnemySet[], base: number): Promise<void> {
+    const token = ++this.enterToken;
     this.floor = floor;
     this.area = area;
     this.base = base;
@@ -562,6 +571,11 @@ export class CombatView {
     this.clearDrlBeam();
     this.drlViews.clear();
     this.drlLastHitLocal.clear();
+    this.dragonLastHit.clear();
+    this.dragonLogged.clear();
+    this.dragonBodies.clear();
+    this.sinowClones.clear();
+    this.sinowBaseEvp.clear();
     this.voloptViews.clear();
     this.voloptBodyAnim.clear();
     this.voloptLastHit.clear();
@@ -574,7 +588,7 @@ export class CombatView {
       if (slot.child === 0) headOf.set(slot.set.index, { index: base + i, slot });
     });
     const params = await this.battleParams();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     const difficulty = this.game.info?.difficulty ?? 0;
     const ultimate = difficulty === 3;
     let withStats = 0;
@@ -637,7 +651,7 @@ export class CombatView {
           // (0x00928b78), not its ResistData index.
           const gold = head.slot.type === 'SINOW_GOLD';
           const mv = params ? params.movement(difficulty, gold ? 0x10 : 6) : null;
-          ai = new SinowAi({ ...at, gold, ultimate, movement: mv, attack, radius, rng: () => this.rng() });
+          ai = new SinowAi({ ...at, gold, ultimate, movement: mv, attack, radius, param1: setParams[0], rng: () => this.rng() });
         } else if (className === 'TObjEneMe1Canadin')
           // param1 (+0x35c): 0 in-fighter, else out-fighter (0x0053e858).
           ai = new CanadineAi({ ...at, kind: 'standalone', inFighter: setParams[0] === 0, movement, attack, radius, rng: () => this.rng() });
@@ -691,6 +705,20 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'TBoss1Dragon') {
+          // MovementData row 17 holds the breath's, fireballs' and trail's
+          // powers (g_DragonAnimationSpeedIndices 17, 18, 19); stats row 18
+          // gives the hp the clamp works on.
+          ai = new DragonAi({
+            ...at,
+            ultimate,
+            movement: params ? params.movement(difficulty, 17) : null,
+            hp: stats.maxHp,
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
+            rng: () => this.rng(),
+          });
         } else if (className === 'TBoss3Volopt') {
           // The control builds the arena: MovementData rows 33 (core), 34
           // (pillar), 35 (monitor) and the stats HP of rows 33 / 34 / 36.
@@ -772,9 +800,9 @@ export class CombatView {
     this.difficultyParams = { params, difficulty, slots, base };
     this.buildGunnerGroups(slots, base);
     await this.spawnSplitters();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     await this.spawnVolopt();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();
@@ -1065,6 +1093,10 @@ export class CombatView {
         this.tickDeRolLe(e, ai, targets);
         continue;
       }
+      if (ai instanceof DragonAi) {
+        this.tickDragon(e, ai, targets);
+        continue;
+      }
       if (ai instanceof VoloptAi) {
         this.tickVolopt(e, ai, targets);
         continue;
@@ -1109,6 +1141,7 @@ export class CombatView {
       if (r.tpDrain) this.drainTp(e, ai, r.tpDrain);
       if (r.heal) this.enemyResta(e, r.heal.level);
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
+      if (ai instanceof SinowAi) this.sinowTick(e, ai);
       if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
       if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
         const b = ai.buff;
@@ -1362,6 +1395,100 @@ export class CombatView {
     if (!(e?.ai instanceof DeRolLeAi)) return;
     const target = sub === 0x14 && body.length >= 12 ? dv.getUint32(8, true) & 0xffff : null;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target);
+  }
+
+  // --- the Dragon (combat/dragon.ts) -------------------------------------------
+  //
+  // One brain owns the body, the flames, the fireballs and the area hits; its
+  // hp is the entity's own (stats row 18) and a hit only lowers it: the brain
+  // clamps it and decides the roars and the death. The room leader's brain
+  // sends 6x12 for every step and the followers apply them (applyRemote); every
+  // client runs the kill sends when the body leaves state 0x15.
+
+  // Whether the last hit on a Dragon was the local player's (its last_attacker,
+  // +0x2d8): that client asks for the killer's EXP.
+  private dragonLastHit = new Map<number, boolean>();
+  // The state last logged per Dragon (the walk's tracking packets repeat).
+  private dragonLogged = new Map<number, number>();
+  // Per Dragon: the animators that play the body's motion.
+  private dragonBodies = new Map<number, NodeAnimator[]>();
+
+  private tickDragon(e: EnemyRuntime, ai: DragonAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const r = ai.tick(targets);
+    e.stats.hp = Math.max(0, ai.hp);
+    // The body stands on the ground under it, plus its altitude register.
+    const lift = r.lift ?? 0;
+    const gy = this.opts.ground?.(r.x, r.z, root.position.y - e.lift + 30) ?? null;
+    root.position.set(r.x, (gy ?? root.position.y - e.lift) + lift, r.z);
+    e.lift = lift;
+    root.rotation.y = r.angle;
+    let bodies = this.dragonBodies.get(e.index);
+    if (!bodies) {
+      bodies = inst.animators.filter((_, k) => !inst.parts[k]?.name);
+      this.dragonBodies.set(e.index, bodies);
+    }
+    // The body's motion is the brain's (+0xb8 / +0xc0): only the body's
+    // animators play it, held at the brain's frame.
+    for (const a of bodies) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`Dragon motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    for (const ev of ai.events.splice(0)) this.dragonEvent(e, ai, ev);
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+  }
+
+  private dragonEvent(e: EnemyRuntime, ai: DragonAi, ev: DragonEvent): void {
+    const what = `Dragon E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        if (this.dragonLogged.get(e.index) !== ev.state) {
+          this.dragonLogged.set(e.index, ev.state);
+          this.opts.log(`${what}: state 0x${ev.state.toString(16)} (${ai.state}), sequence ${ev.cursor}`);
+        }
+        this.game.sendDragonAction(0x1000 | e.index, ev.state, ev.cursor, ev.target, ev.x, ev.z);
+        return;
+      case 'se':
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        this.sePlayer?.play(ev.id);
+        return;
+      case 'bgm':
+        // ASSUMED: the track swaps (dradeath.adx at the entrance and the death,
+        // draroar.adx at a roar) are not played here (audio/bossbgm.ts keeps
+        // the boss floor's own track).
+        this.opts.log(`${what}: ${ev.name}`);
+        return;
+      case 'killed':
+        this.dragonKilled(e, ev.x, ev.z);
+        return;
+    }
+  }
+
+  // State 0x15's phase 5: EnemyOnKilledHandler_0051f894, gated as the exe gates
+  // it (see bossKilled).
+  private dragonKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.dead = true;
+    e.stats.hp = 0;
+    if (this.lockOn === e) this.lockOn = null;
+    this.bossKilled(e, x, z, this.dragonLastHit, 'Dragon');
+  }
+
+  // A 6x12 from the leader (action_dragon 0x00423b00).
+  private onDragonAction(body: Uint8Array): void {
+    if (body.length < 20 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const e = this.enemies.get(dv.getUint16(2, true) - 0x1000);
+    if (!(e?.ai instanceof DragonAi) || e.dead) return;
+    const target = dv.getUint32(8, true) & 0xffff;
+    e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
   }
 
   // --- Vol Opt (combat/volopt.ts, combat/volopt2.ts) ---------------------------
@@ -2391,6 +2518,121 @@ export class CombatView {
     });
   }
 
+  // --- Sinow Beat's mirage (combat/enemyfsmmines.ts) ------------------------------
+  //
+  // The real body casts the mirage: the 4 child slots after its own (newserv:
+  // default_num_children 4; SinowberillAllocateAllyEntity 0x0058f834 gives a
+  // clone entity id and enemy index +1 + i) each get a clone, a full Sinow Beat
+  // of the same stats that chases and fights like the body and goes away at the
+  // first hit. Every client runs its own cast (the exe sends nothing for it).
+
+  private sinowClones = new Map<number, Array<EnemyRuntime | null>>();
+  private sinowBaseEvp = new Map<number, number>();
+  // Clone slots being built (their instance is async).
+  private sinowBuilding = new Set<number>();
+
+  private sinowTick(e: EnemyRuntime, ai: SinowAi): void {
+    // +0x2d0 = +0x3e4 / 2 while the mirage is out (short division).
+    const base = this.sinowBaseEvp.get(e.index) ?? e.stats.evp;
+    this.sinowBaseEvp.set(e.index, base);
+    e.stats.evp = ai.evpScale === 1 ? base : Math.trunc(base * ai.evpScale);
+    if (!ai.ally) for (const ev of ai.events.splice(0)) this.sinowEvent(e, ai, ev);
+  }
+
+  private sinowEvent(e: EnemyRuntime, ai: SinowAi, ev: SinowEvent): void {
+    const list = this.sinowClones.get(e.index) ?? [];
+    this.sinowClones.set(e.index, list);
+    if (ev.kind === 'dismiss') {
+      for (const c of list) if (c && !c.dead && c.ai instanceof SinowAi) c.ai.dismiss();
+      this.opts.log(`Sinow E-${e.index.toString(16)}: the mirage is dispelled`);
+      return;
+    }
+    this.opts.log(`Sinow E-${e.index.toString(16)}: casts the mirage (itself in place ${ev.main})`);
+    let n = 0;
+    for (let place = 0; place < SINOW_MIRAGE.slots; place++) {
+      if (place === ev.main) continue;
+      void this.activateClone(e, list, n++, place, ev);
+    }
+  }
+
+  private async activateClone(parent: EnemyRuntime, list: Array<EnemyRuntime | null>, i: number, place: number, ev: Extract<SinowEvent, { kind: 'mirage' }>): Promise<void> {
+    let clone = list[i] ?? null;
+    if (clone?.dead) return;
+    if (!clone) clone = await this.spawnSinowClone(parent, list, i);
+    if (!clone || this.disposed || parent.dead || !(clone.ai instanceof SinowAi)) return;
+    const root = clone.instance.root;
+    const gy = this.opts.ground?.(ev.x, ev.z, parent.instance.root.position.y + 30) ?? parent.instance.root.position.y;
+    const f = clone.ai.activate(ev.x, ev.z, ev.angle, place, ev.targetId, ev.tx, ev.tz);
+    root.position.set(f.x, gy, f.z);
+    root.rotation.y = f.angle;
+    root.visible = true;
+    for (const c of root.children) c.visible = true;
+    if (f.motion) this.playEnemyMotion(clone, f.motion);
+  }
+
+  // SinowberillAllocateAllyEntity: child slot i of the body, a dormant clone.
+  private async spawnSinowClone(parent: EnemyRuntime, list: Array<EnemyRuntime | null>, i: number): Promise<EnemyRuntime | null> {
+    const index = parent.index + 1 + i;
+    const ctx = this.difficultyParams;
+    const slot = ctx?.slots[index - ctx.base];
+    if (!ctx || !slot || slot.set !== parent.slot.set || this.enemies.has(index) || this.sinowBuilding.has(index)) return list[i] ?? null;
+    this.sinowBuilding.add(index);
+    try {
+      const pp = parent.instance.root.position;
+      const placed = {
+        ...parent.instance.placed,
+        entity: { ...(parent.instance.placed.entity as EnemySet), index: -1 - index },
+        world: [pp.x, pp.y, pp.z] as [number, number, number],
+        name: 'Sinow clone',
+      };
+      const instance = await this.layer.spawn(placed as typeof parent.instance.placed, parent.instance.spec);
+      if (!instance || this.disposed) return null;
+      instance.root.visible = true;
+      for (const c of instance.root.children) c.visible = false;
+      const fight = this.childFightStats(parent.slot.type);
+      const gold = parent.slot.type === 'SINOW_GOLD';
+      const mv = ctx.params ? ctx.params.movement(ctx.difficulty, gold ? 0x10 : 6) : null;
+      const ai = new SinowAi({
+        x: pp.x,
+        z: pp.z,
+        angle: 0,
+        gold,
+        ultimate: this.ultimate,
+        movement: mv,
+        attack: fight.attack,
+        radius: collisionRadius('TObjEneMe3ShinowaReal'),
+        ally: true,
+        rng: () => this.rng(),
+      });
+      const clone: EnemyRuntime = {
+        instance,
+        index,
+        slot,
+        ...fight,
+        // The clone's kill sends the exp request of its (child) entity; the
+        // child slot has no drop table.
+        exp: 0,
+        motions: enemyCombatMotions('TObjEneMe3ShinowaReal', instance.archive),
+        rtIndex: 0xff,
+        dead: false,
+        state: 'idle',
+        removeIn: 0,
+        ai,
+        lift: 0,
+        monest: null,
+        parent,
+        fake: null,
+        buffs: new EntityBuffs(),
+        status: new EnemyStatus(enemyAttribute(parent.slot.type)),
+      };
+      this.enemies.set(index, clone);
+      list[i] = clone;
+      return clone;
+    } finally {
+      this.sinowBuilding.delete(index);
+    }
+  }
+
   // --- Pan Arms / Pofuilly Slime (combat/enemysplits.ts) ---------------------
 
   // A child entity of a splitter in its own slot (`index`), drawn with
@@ -3093,6 +3335,22 @@ export class CombatView {
       this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
       return;
     }
+    if (e.ai instanceof DragonAi) {
+      // The entity's own hp goes down (the clamp, the roars and the death are
+      // the brain's); the 6x0A carries max - hp, unclamped, as the exe sends it
+      // before its next update clamps.
+      const ai = e.ai;
+      if (damage >= 1) {
+        ai.hit(damage);
+        this.dragonLastHit.set(e.index, byPlayer);
+      }
+      e.stats.hp = ai.hp;
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      const p = e.instance.root.position;
+      this.overlay?.damage(damage, critical, p.x, p.y + 40, p.z);
+      this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
     if (e.ai instanceof DeRolLeAi) {
       // ProcessPlayerHealing_00433edc: the shell pool, then the body pool; no
       // flinch, no death here (the brain's death check runs on its own).
@@ -3599,6 +3857,11 @@ export class CombatView {
   // death motion (the enemy is removed when it ends).
   private killEnemy(e: EnemyRuntime, _flags: number): void {
     e.dead = true;
+    // The death handler (+0x104) sends the mirage clones away first.
+    if (e.ai instanceof SinowAi && !e.ai.ally) {
+      e.ai.kill();
+      for (const ev of e.ai.events.splice(0)) this.sinowEvent(e, e.ai, ev);
+    }
     // The form / leader decides the drop table: Bulclaw 0x28 / Bulk 0x27,
     // Dark Gunner 0x22 / Death Gunner 0x23 (newserv remaps them).
     if (e.ai instanceof BulclawAi || e.ai instanceof GunnerAi) e.rtIndex = e.ai.rtIndex;
@@ -3796,6 +4059,10 @@ export class CombatView {
     }
     // Remote HP for the party members' windows; the handlers below still run.
     this.party.receive(sub, body);
+    if (sub === 0x12) {
+      this.onDragonAction(body);
+      return;
+    }
     if (sub === 0x13 || sub === 0x14) {
       this.onDeRolLeAction(sub, body);
       return;
@@ -3867,6 +4134,18 @@ export class CombatView {
         return;
       }
       if (e.ai instanceof VoloptAi) return;
+      if (e.ai instanceof DragonAi) {
+        // restore_enemy_status: hp = max - damage_taken, and the hit flag makes
+        // the clamp run on this client too. The dead flag is ignored: the brain
+        // owns its death (state 0x15).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.setDamageTaken(s.totalDamage);
+          e.stats.hp = e.ai.hp;
+          this.dragonLastHit.set(e.index, false);
+          this.opts.log(`the Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
       if (e.ai instanceof DeRolLeAi) {
         // restore_enemy_status sets hp = max - damage_taken and the hit flag
         // 0x200 (vtable +0x88, 0x00777ba4) makes UpdateDerolle run the pool
@@ -3896,7 +4175,10 @@ export class CombatView {
           this.playDeath(e);
         }
       } else if (s.flags & 0x200) {
-        this.playDamage(e);
+        // The hit flag runs the hit handler (vtable +0x100) here too: the
+        // Sinow's sends its mirage clones away, a clone leaves.
+        if (e.ai instanceof SinowAi) e.ai.onDamage(clientId);
+        if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
       return;
     }

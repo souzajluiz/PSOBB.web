@@ -587,7 +587,9 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // slot 0 = stand, 0.8.
     case 0xc0:
       if (ep === 2) return spec('TBoss5Gryphon', 'bm_boss5_gryphon.bml', [{ model: 0, motion: loop(9, 0.8) }]);
-      return spec('TBoss1Dragon', pick('bm_boss1_dragon.bml', ctx), [{ model: 0, motion: loop(17, 0.5) }]);
+      // render 0x004245b0 draws the body at scale 2.0 (push 0x40000000 x3 at
+      // 0x004248a1), as the model-node height reads of the fight do.
+      return spec('TBoss1Dragon', pick('bm_boss1_dragon.bml', ctx), [{ model: 0, motion: loop(17, 0.5), scale: 2 }]);
     // De Rol Le: ctor 0x0042ad4c, body model 2 (its node chain carries the ten
     // shell segments newserv counts as DE_ROL_LE_BODY children: the area init
     // walks model_files[2].njcm child/next twelve times); the ctor starts the
