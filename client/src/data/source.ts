@@ -49,6 +49,9 @@ export class DirectorySource implements DataSource {
 export class HttpSource implements DataSource {
   readonly label = 'dev server (/psobb-data)';
   private base: string;
+  // Download progress of a read (the classic page's loader): called as the
+  // body arrives. total is 0 when the server sent no Content-Length.
+  onProgress: ((path: string, loaded: number, total: number) => void) | null = null;
 
   constructor(base = '/psobb-data') {
     this.base = base;
@@ -71,7 +74,25 @@ export class HttpSource implements DataSource {
   async read(path: string): Promise<Uint8Array> {
     const res = await fetch(`${this.base}/${path.split('/').map(encodeURIComponent).join('/')}`);
     if (!res.ok) throw new Error(`cannot read ${path}`);
-    return new Uint8Array(await res.arrayBuffer());
+    if (!this.onProgress || !res.body) return new Uint8Array(await res.arrayBuffer());
+    const total = Number(res.headers.get('content-length')) || 0;
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      this.onProgress(path, loaded, total);
+    }
+    const out = new Uint8Array(loaded);
+    let at = 0;
+    for (const c of chunks) {
+      out.set(c, at);
+      at += c.length;
+    }
+    return out;
   }
 }
 

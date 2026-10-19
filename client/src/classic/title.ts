@@ -24,8 +24,8 @@
 
 import { se } from '../audio/se.ts';
 import { drawInputWindow } from './login.ts';
-import { drawMenuWindow, drawText, inWindowSpace, type Screen, type Stage, type WindowSkin } from './stage.ts';
-import { DEFAULT_TEXT, EXIT_CONFIRM, LOGIN_MENU, TITLE_FPS, TitleFlow, yesNoRect, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
+import { drawMenuWindow, drawText, inWindowSpace, ITEM_STEP, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
+import { DEFAULT_TEXT, EXIT_CONFIRM, INPUT_WINDOW, LOGIN_MENU, TITLE_FPS, TitleFlow, yesNoRect, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
 import { withWindowAnim } from './windowanim.ts';
 
 export interface TitleAssets {
@@ -86,6 +86,14 @@ export class TitleScreen implements Screen {
   readonly flow: TitleFlow;
   // The menu is drawn in window space; main.ts maps pointer coordinates with it.
   readonly pointerSpace = 'window';
+  // The title is tapped: rows of the Login menu, the Input UserID window and
+  // the exit question (pointer()); the pad would only cover them.
+  readonly touchPad = false;
+
+  textInput(): TextInputState | null {
+    const ed = this.flow.menu?.input?.editor;
+    return ed ? { password: ed.field === 1 } : null;
+  }
 
   constructor(assets: TitleAssets, host: Omit<TitleHost, 'se'>, opts: TitleOptions) {
     this.tex = assets.title;
@@ -240,6 +248,21 @@ export class TitleScreen implements Screen {
     const m = this.flow.menu;
     if (!m) {
       if (click) this.flow.key('enter');
+      return;
+    }
+    // Input UserID window: a tap on a row selects it (UserID / Password open
+    // the editor, Confirm / Cancel act).
+    if (m.input) {
+      const w = INPUT_WINDOW;
+      const row = Math.floor((vy - (w.y + 16)) / ITEM_STEP);
+      if (click && vx >= w.x + 10 && vx <= w.x + w.w - 10 && row >= 0 && row < 4) m.input.tapRow(row);
+      return;
+    }
+    // Exit question: Yes / No.
+    if (m.exitConfirm) {
+      const r = yesNoRect(EXIT_CONFIRM);
+      const row = Math.floor((vy - (r.y + 10)) / ITEM_STEP);
+      if (click && vx >= r.x && vx <= r.x + r.w && row >= 0 && row < 2) m.tapYesNo(row);
       return;
     }
     if (!m.active || vx < LOGIN_MENU.x || vx > LOGIN_MENU.x + LOGIN_MENU.w) return;

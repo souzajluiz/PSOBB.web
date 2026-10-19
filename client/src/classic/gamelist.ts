@@ -265,6 +265,10 @@ export class CreatePartyWindow {
     return true;
   }
 
+  get editing(): boolean {
+    return this.editor !== null && !this.result;
+  }
+
   // State 1 -> 2: with a name typed the cursor goes to Registration.
   private idle(): void {
     this.step = 'rows';
@@ -428,6 +432,14 @@ export class PartyMenus {
 
   get open(): boolean {
     return this.phase !== 'closed';
+  }
+
+  // A text editor is active: the join password prompt, or the create window's
+  // name / password editor. Both draw the text as typed.
+  textInput(): { password: boolean } | null {
+    if (this.phase === 'password') return { password: false };
+    if (this.phase === 'create' && this.create?.editing) return { password: false };
+    return null;
   }
 
   // close_lobby_menus.

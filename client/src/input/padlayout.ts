@@ -49,6 +49,8 @@ export interface PadLayout {
   // Arrow diamond (3x3 buttons) and the OK / BACK column right of it.
   dpad: PxRect;
   actions: PxRect;
+  // true when the stick and buttons sit under the stage (portrait).
+  underStage: boolean;
   // Strip along the top edge for the small buttons, right-aligned.
   topStrip: PxRect;
   // HUD rectangles the pad keeps clear of (for tests / debugging).
@@ -59,7 +61,15 @@ const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-export function padLayout(width: number, height: number, insets: Insets = NO_INSETS): PadLayout {
+// A pad needs this much room (in button sizes) under the stage to move there.
+const BELOW_MIN = 4;
+
+// `below`: free CSS px under the canvas (portrait phone: the stage is a 4:3
+// box fitted to the width and the screen continues under it). With room for
+// it the stick, the arrow diamond and OK / BACK move into that space, stick at
+// the left and the buttons at the right, so the HUD is not covered; the
+// palette taps and the top strip stay over the stage. Landscape: unchanged.
+export function padLayout(width: number, height: number, insets: Insets = NO_INSETS, below = 0): PadLayout {
   const w = Math.max(1, width);
   const h = Math.max(1, height);
   const s = h / VH;
@@ -85,16 +95,21 @@ export function padLayout(width: number, height: number, insets: Insets = NO_INS
   slots.push({ key: KEYS.paletteChange, rect: { x: palette.x + CTRL_TAB.x * s, y: palette.y + CTRL_TAB.y * s, w: CTRL_TAB.w * s, h: CTRL_TAB.h * s } });
 
   // Bottom row, right to left: palette | OK/BACK | diamond.
-  const bottom = h - Math.max(gap, insets.bottom);
+  const under = below >= BELOW_MIN * button;
+  const bottom = (under ? h + below : h) - Math.max(gap, insets.bottom);
   const actionW = button * 1.25;
-  const actions: PxRect = { x: palette.x - gap - actionW, y: bottom - 2 * actionW - gap, w: actionW, h: 2 * actionW + gap };
   const dpadSize = 3 * button;
+  const actions: PxRect = under
+    ? { x: w - Math.max(gap, insets.right) - actionW, y: bottom - 2 * actionW - gap, w: actionW, h: 2 * actionW + gap }
+    : { x: palette.x - gap - actionW, y: bottom - 2 * actionW - gap, w: actionW, h: 2 * actionW + gap };
   const dpad: PxRect = { x: actions.x - gap - dpadSize, y: bottom - dpadSize, w: dpadSize, h: dpadSize };
 
-  // Stick: lower left, below the party window, left of the diamond.
+  // Stick: lower left, below the party window, left of the diamond (portrait:
+  // the whole left part of the space under the stage).
   const zoneLeft = Math.max(0, insets.left);
-  const zoneTop = party.y + party.h + gap;
-  const stickZone: PxRect = { x: zoneLeft, y: zoneTop, w: Math.max(0, Math.min(w * 0.45, dpad.x - gap) - zoneLeft), h: Math.max(0, h - zoneTop) };
+  const zoneTop = under ? h + gap : party.y + party.h + gap;
+  const zoneBottom = under ? h + below : h;
+  const stickZone: PxRect = { x: zoneLeft, y: zoneTop, w: Math.max(0, Math.min(w * 0.45, dpad.x - gap) - zoneLeft), h: Math.max(0, zoneBottom - zoneTop) };
   const stickSize = button * 2.2;
   const stickHome = {
     x: zoneLeft + Math.max(gap, insets.left) + stickSize / 2,
@@ -119,6 +134,7 @@ export function padLayout(width: number, height: number, insets: Insets = NO_INS
     dpad,
     actions,
     topStrip,
+    underStage: under,
     hud: { status, party, radar, message, palette },
   };
 }

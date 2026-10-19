@@ -1,0 +1,39 @@
+/* Hidden fields that bring up the on-screen keyboard (ui/softkeyboard.ts).
+   16px font: iOS zooms into smaller fields. At the top of the page so iOS has
+   nothing to pan to. */
+.sk-field {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  font-size: 16px;
+  color: transparent;
+  caret-color: transparent;
+  background: transparent;
+  pointer-events: none;
+  z-index: 60;
+}
+
+/* Tap target to open the keyboard again after the OS closed it. */
+.sk-button {
+  position: fixed;
+  z-index: 40;
+  transform: translateX(-100%);
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(95, 212, 255, 0.7);
+  border-radius: 8px;
+  background: rgba(2, 16, 30, 0.8);
+  color: #d8ecff;
+  font: 22px/1 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.sk-button[hidden] { display: none; }
+.sk-button:active { background: rgba(95, 212, 255, 0.45); }

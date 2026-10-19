@@ -25,7 +25,7 @@ import {
 } from './charcreate_data.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CharacterModelView } from './charcreate_model.ts';
-import { FONT, type Screen, type Stage } from './stage.ts';
+import { FONT, type Screen, type Stage, type TextInputState } from './stage.ts';
 
 export interface CharCreateAssets {
   tex: ImageBitmap[]; // ccconsole_e.xvm
@@ -1388,6 +1388,11 @@ export class CharCreateScreen implements Screen {
   }
 
   // ------------------------------------------------ input
+
+  // The name editor (step editor with text): the page raises the on-screen keyboard.
+  textInput(): TextInputState | null {
+    return this.sub === 1 && this.editor?.handlesText() ? { password: false } : null;
+  }
 
   key(e: KeyboardEvent): void {
     if (e.repeat) return;

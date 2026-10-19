@@ -327,6 +327,14 @@ export class InputUserIdWindow {
     }
   }
 
+  // A tap on a row (browser convenience): the cursor goes there and Enter
+  // follows, as the Login menu's pointer does. Not while an editor is open.
+  tapRow(row: number): void {
+    if (this.result || this.anim.animating || this.editor || row < 0 || row > 3 || !this.selectable(row)) return;
+    this.row = row;
+    this.key('enter');
+  }
+
   // Row values while not editing (the edited row is blank: the editor draws).
   values(): [string, string] {
     return [this.editor?.field === 0 ? '' : this.user, this.editor?.field === 1 ? '' : this.passwordShown];
@@ -406,6 +414,14 @@ export class LoginMenu {
       { label: t[3], value: 3, selectable: true },
       { label: this.creds.user ? `[${this.creds.user}]` : this.text.empty, value: -1, selectable: false, color: ACCOUNT_COLOR },
     ];
+  }
+
+  // A tap on the exit question's Yes (0) / No (1).
+  tapYesNo(index: number): void {
+    const x = this.exitConfirm;
+    if (this.result || this.anim.animating || !x || x.list.animating) return;
+    x.cursor = index;
+    this.key('enter');
   }
 
   // Flag 0x20 while a sub-window has the keys: no cursor bar.

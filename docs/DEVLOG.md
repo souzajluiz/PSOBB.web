@@ -1,5 +1,59 @@
 # Devlog
 
+## 2026-10-19: classic page on phones: loader, on-screen keyboard, fit and rotation
+
+**What changed:** three problems of the production page (`classic.html`), all
+browser side, no change to the game's virtual coordinates or exe layout.
+(1) **Loader.** Nothing showed while `data.gsl` (about 70 MB) downloaded. `#boot`
+is now plain HTML / CSS visible from the first paint: PSOBB logo in the title's
+dark blue / cyan, a status line pulsing like the exe's "Connecting..", a bar and
+"x MB of y MB". `classic/loadprogress.ts` (pure, weighted steps: source, archive,
+title, text, open; the bar never goes back) is fed by `HttpSource.onProgress`
+(streamed read) and `main.ts`; `classic/loader.ts` draws it and fades out two frames
+after the title is drawn. A failure shows the message and a Retry button (reload);
+a missing data folder on a browser without a folder picker says so instead of
+offering a button that cannot work; the picker button keeps its user gesture.
+(2) **Typing on a phone.** The canvas editors (Input UserID rows, character name,
+game / party name and password, lobby chat) take key events, so no keyboard
+opened. Screens now expose `textInput()`; `ui/softkeyboard.ts` focuses a hidden
+`<input>` (16 px, opacity 0, type=password for the password row, autocorrect and
+friends off) from the tap / key that starts the editor (`sync()` after
+pointerup, click, keydown) and blurs it when the editor ends. Text comes from
+`input` events diffed by `input/textproxy.ts` (Backspace for removed chars, keys for
+new ones), so IME composition, autocorrect and Android's keydown `Unidentified`
+work; Enter / Escape come from keydown or `beforeinput` (insertLineBreak). A key
+button appears if the OS closes the keyboard. Desktop never focuses the field.
+The title is tappable: Login menu rows (already), Input UserID rows and the exit
+question's Yes / No (`tapRow`, `tapYesNo`); the touch pad is hidden on the title
+(`Screen.touchPad = false`) because it covered the login windows. The old KEYS
+proxy of the web controls moved into the soft keyboard.
+(3) **Scale and rotation.** Root cause of the oversized UI: the canvas was
+`100vw x 100vh` and the 640x480 stage is stretched over the whole canvas, so a
+phone got a 390x844 or 2.16:1 stretch (and `100vh` is the tall viewport that
+hides the bottom behind the URL bar). On touch screens (`pointer: coarse`,
+`?fit=1/0` overrides) `classic/viewport.ts` now fits the stage and `#world`
+in the visual viewport minus safe-area insets: 4:3 fitted to the width in
+portrait, 4:3 to 16:9 in landscape, black bars, nothing cropped (`ui/stagefit.ts`,
+pure). Desktop keeps the full-window stretch. One place re-measures on resize,
+orientationchange, `screen.orientation`, `matchMedia(orientation)` and visual
+viewport changes, now and on two frames and after 200 ms (iOS reports the old
+size first); while the soft keyboard is up the orientation is kept unless the
+width changed. It moves both canvases, the web controls (`psobb:fit`), the key
+button and hidden fields, and the rotate hint. The pad layout switches: landscape
+as before; portrait with room under the stage puts the stick, arrows and OK /
+BACK under it (`padLayout(..., below)`), palette taps stay over the HUD icons.
+Portrait shows a dismissable "Rotate your phone for the best view"; after the
+fullscreen button, Android Chrome gets `screen.orientation.lock('landscape')`
+(try / catch, unlocked on exit; iOS has none). Viewport meta: no user zoom.
+**Verified:** `tests/mobileinput.test.ts` (new), `mobilecontrols`, `titlescreen`,
+`windowanim`, `gamelist`, `tsc --noEmit`; headless Chrome (390x844 and 844x390,
+dpr 3, touch, rotation): loader progress at 2.2 MB of 68.5 MB then fade, stage /
+overlay / pad rects match both sizes, a tap on Register UserID then the UserID
+row focuses the hidden field and typed text, Backspace and Enter reach the
+editor, rotation with an editor open. **Not verified:** real iOS and Android
+keyboards, `orientation.lock`, the visual viewport behaviour under a real iOS
+keyboard.
+
 ## 2026-10-19: PSOBB_DATA_URL: data root by data.gsl, no EXDEV
 
 **What changed:** two problems of the first real deploy of `fetch-data.mjs`.
