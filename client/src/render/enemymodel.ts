@@ -345,6 +345,7 @@ export interface EnemyPartSpec {
   place?: 'enemy' | 'world';
   offset?: readonly [number, number, number];
   yaw?: number; // extra Y rotation, radians
+  scale?: number; // uniform scale of the part's draw (De Rol Le's body: 2.0)
   // The client creates the object but only draws it in some fight states
   // (thrown arms, tentacles the boss spawns): built, not drawn.
   hidden?: boolean;
@@ -402,6 +403,7 @@ export function buildEnemy(
     if (part.name) group.name = part.name;
     if (part.offset) group.position.set(part.offset[0], part.offset[1], part.offset[2]);
     if (part.yaw) group.rotation.y = part.yaw;
+    if (part.scale) group.scale.setScalar(part.scale);
     if (part.hidden) group.visible = false;
     (part.place === 'world' ? world : root).add(group);
     let nodes: THREE.Object3D[];

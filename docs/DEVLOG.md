@@ -1,5 +1,148 @@
 # Devlog
 
+## 2026-10-19: De Rol Le's fight
+
+**What changed:** De Rol Le now fights, with its FSM reversed from PsoBB.exe.
+The body follows the exe's attack sequence around its four path corners. It
+throws rocks from its shell segments, rains rocks from the ceiling, sends
+its 4 tentacles at a player from the wall, and launches the 5 floor stings
+and the 3 ring stings (the spore mines). It also fires the beam. Damage goes
+to the shell pool first and then to the body pool. When the body pool runs
+out, the boss sinks, plays its death and sends the kill. The leader picks the
+states and sends 6x13 / 6x14; the other clients follow them. Code:
+`combat/derolle.ts` (new), wired in `render/combat.ts` like the other
+own-FSM enemies (OWN_FSM, built in enterFloor). Other changes:
+- the body is drawn at scale 2.0 (`EnemyPartSpec.scale`);
+- the tentacle and sting parts are world-placed, and there are now 4
+  tentacles (`formats/enemymodels.ts`);
+- `AiFrame.y` is a new absolute height;
+- `EnemyShot.absolute` is new;
+- `EnemyInstance.nodes` exposes the part node trees;
+- `Game.sendBossAction` sends 6x13 / 6x14.
+
+**Sources:** the Ephinea dump, plus tables read with `tools/exedata.py`.
+psobb-client-source's 17 "De Rol Le" files are mostly getters or thunks, or
+belong to other objects. Three of them match the functions used here, and
+their C agrees with the dump:
+- `FUN_00434b30.c` = `DerolleInitializeAttackState_00434a2c` (the sequence
+  cursor +0x3dc starts at 0);
+- `FUN_00439c54.c` = `0x00439b2c` (tentacle state 2 entry: +0x11c =
+  table[i], +0x120 = 0x4000);
+- `FUN_00439c94.c` = `0x00439b6c` (tentacle state 0 entry).
+
+The JP table `PTR_DAT_008fb6ec` is Ephinea `0x008fd70c` = {-2048, 2048,
+-4864, 4864}, the tentacles' home yaws. The dump's names in this range are
+mostly wrong:
+- the 4 "DerolleRockProjectile" objects (`0x00437ba4`) are the tentacles;
+- "DerollePlayerShellState" is the beam charge (0x1a);
+- "DerolleUpdate" is the death state (0x1f).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Dispatcher** `0x00433cc0` (jump table `0x008fcb00`), phases 4 / 0 / 9 /
+  8 / 6 / 5. UpdateDerolle `0x00432b4c`:
+  - the leader runs the death check (`DerolleIsActionReady`: body pool < 1
+    and flag 4 clear) or phase 9, then phases 8 and 0;
+  - a follower (+0x3fc == 1) runs phase 0 only and takes the leader's state
+    from 6x13 / 6x14;
+  - `start_drl_rock_cycle 0x0042ac2c` sends 6x14 with the target for 0x14,
+    0x15, 0x19 and 0x1b.
+- **Sequences:** `0x009a4380` (normal, 44 entries) and `0x009a4440`
+  (Ultimate, 50 entries), read through the pre-incremented cursor +0x3dc.
+  - 0x21 / 0x23 / 0x25 roll a random value in [-1, 1] against 0.0, so each
+    is 50/50.
+  - 0x22, 0x24 and 0x27..0x2b pick a variant by the lane +0x660 (the corner
+    the last move went to).
+  - 0x2c restarts the cursor at 5.
+- **Corners** (bss `0x00a43ba8`, written by `0x004341bc`): (-175, 7, 25),
+  (0, 7, 500), (175, 7, 25), and (0, 7, -250), the spawn corner.
+- **Motion slots:** table `0x009a45c0` (17 slots: mode, next, motion, speed).
+  The brain owns the frame (+0xc0); the body animator is held at it.
+- **Corner moves** `0x0042b94c`:
+  - two easing records (+0x66c x, +0x68c z), with init `0x00434ac4`, brake
+    point `0x00434a3c` and tick `0x0042c9a0`;
+  - four mode functions decide which axis eases when and write the motion
+    speed (0.3..0.9);
+  - helpers `0x0043483c` / `0x004349b4` / `0x00434934` / `0x004348b4`.
+- **States:**
+  - 1 is the entrance: 55 ticks, then (0, 7, -190), the enter motion, then a
+    walk to corner 0 at 3.0 a tick.
+  - 4 / 0xa are the side jumps `0x0042c194`.
+  - 0xd is the big jump 3 -> 1 `0x00431058`.
+  - 0xf is the dive and ceiling run `0x00430a90`: z -1200 to 360, rocks by
+    MovementData fparam5 / fparam4.
+  - 0x10 / 0x11 are the segment rocks `0x0042ce8c`. Segments 0..4 fire as
+    the body's wave passes them, along heading 0x3800 - 0x33 * i. The emitter
+    `0x00437604` uses types `0x008fd678`. The rock (`0x00437810`) falls to
+    8.7, has a hit box of 3.0, lives 120 ticks, and only hits while
+    -75 <= x <= 76. Its hit is group 0 with fparam2.
+  - 0x12 / 0x13 are the bite leap `0x0042d304`; landing raises the
+    tentacles.
+  - 0x14 / 0x15 are the wall `0x0042dd68`: every 180 ticks (Ultimate:
+    iparam4) a tentacle reaches for the target with a hold of 120 (iparam5).
+    The grab (`0x00434108`) is a try_hit with mult 1.0 and attack row 15,
+    radius 8.0.
+  - 0x16 / 0x17 are the sink and resurface `0x0042e348`.
+  - 0x18 / 0x19 are the stings `0x0042e824`, at frame 18.0.
+  - 0x1a / 0x1b / 0x1c / 0x1d are the beam: 30 longer a tick up to 500, with
+    a group 0 hit of fparam1 at its end, once per player per beam.
+  - 0x1e is the death sink. 0x1f is the death (deldeath.adx at frame 27). It
+    ends with the kill at (-55.8, 2.0, 60.29). 0x20 is the removal.
+- **HP** (`ProcessPlayerHealing_00433edc`):
+  - the entity's HP is refilled after every hit;
+  - the shell pool (MovementData[15].iparam3) takes hits until it goes below
+    0 (`0x00433fe4`: flags | 0x88, SE 0x32d);
+  - then the body pool (iparam1) takes them (SE 0x336).
+- **Stings** (`0x004369bc` / `0x004370b4`):
+  - kind 0 lob to the floor point at 10 a tick (gravity 0.2) and arm for
+    180 + 30 rand ticks;
+  - kind 1 home on their ring point (speed 8 down to 3, turn up to 3) and
+    shadow it for 240 + 60 rand ticks;
+  - both blow up 30 ticks later: radius 50.0 (`0x009a48bc`), group 1 with
+    fparam3.
+- **Ceiling rocks** (`0x00439c6c` / `0x00439e10`): kinds and offsets are at
+  `0x00a44240`, gravity is 0.3 (down to -10), and the hit test goes through
+  the player's top. Each rock bounces once.
+
+**ASSUMED:**
+- **Rendering:**
+  - The segment and tentacle points come from the body's depth-first node
+    order (draw indices `0x008fcba0` and 0x1d..0x20); with no nodes, they
+    are estimated from the body.
+  - The tentacles are drawn as one rotated model each. The chain solver
+    (`0x0078d9d0`) is not reproduced, and the sway amplitude K is a guess.
+  - The rocks and the beam are drawn as plain spheres and a line; the
+    particles and the shell debris are not drawn.
+  - The sting blink is drawn as a swell.
+- **Movement:**
+  - The enter motion's root offset (DerolleAction) is not added at the end of
+    the entrance.
+  - The ground term of the jumps (`0x00422768`) is 0.
+  - A kind-1 sting leaves upward.
+- **Hits:**
+  - The sting blast's group 1 uses the group-0 formula.
+  - The beam's hit radius is 16.
+  - The rocks and grabs do no knockback.
+  - A player is 17 tall for the ceiling rocks' top test.
+  - Every hit on the boss goes to the body handler; the 10 segments are not
+    separate targets.
+- **Data and sync:**
+  - When MovementData is missing, fallback powers and pools are used.
+  - Sub-state 4 of the entrance (the boss camera flag) passes at once.
+  - The death track is logged, not played.
+  - 6x0A carries the body pool as the HP.
+
+**Checks:**
+- `node tests/derolle.test.ts` (new): sequences, easing, the entrance and the
+  first moves, stings, rocks, ceiling rocks, tentacles, beam, pools, the
+  death path, followers, the dive;
+- `node tests/bossrooms.test.ts` (4 tentacles, scale 2.0; the boss music
+  phases and the 6x triggers unchanged);
+- enemies, waves, and `combat` with NEWSERV;
+- client `tsc --noEmit`.
+
+A simulated 8-minute fight runs the whole normal loop without leaving the
+arena, using the real motion frame counts. No Chrome check here.
+
 ## 2026-10-19: Episode 2 FSMs: Merillia / Meriltas and Dolmolm / Dolmdarl
 
 **What changed:** the first Episode 2 enemies have their own brains,

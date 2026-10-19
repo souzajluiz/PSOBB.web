@@ -14,10 +14,11 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    UserID to measure SSIM (none on disk). The other `.njs` shape motions
    (TOKurage, the Episode 4 plants, the Episode 4 slime body) only need their
    objects' draw calls looked up.
-2. Episode 1 boss fights where they move their children: De Rol Le (tentacle,
-   segments, rocks, spore mines) first, then Vol Opt's phases (core in its
-   monitor, prison bars, form 2 / form 7 hazards, minions), then the Dragon and
-   Sinow Beat, then Dark Falz.
+2. Episode 1 boss fights where they move their children: De Rol Le is done
+   (`combat/derolle.ts`; left: the tentacles' chain solver 0x0078d9d0, the
+   segments as their own hit targets, the shell debris and the particles).
+   Next Vol Opt's phases (core in its monitor, prison bars, form 2 / form 7
+   hazards, minions), then the Dragon and Sinow Beat, then Dark Falz.
 3. Classic game list menu (lobby counter's game list: entries, status text,
    background, cursor) and the quest loading screen (states, grey line
    primitives, transition to the game).
@@ -88,7 +89,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Enemy models (`bm_ene_*.bml`, boss archives) at their spawn points with their idle motions, variants by params/difficulty/season (`formats/enemymodels.ts`, `tests/enemies.test.ts`)
 - [x] Enemy child objects: Sorcerer bits, Vol Opt phase 1 (pillars, monitors, lightning rod), Belra arms, De Rol Le / Barba Ray tentacles and mines, Dark Falz forms 2–3 and Rico's ring, Saint-Milion's spinner from its second archive (`EnemyPartSpec` placement, `tests/enemies.test.ts`)
 - [x] Episode 1 bosses' children from the exe: Vol Opt's lightning rod motion (not in Ultimate) and core, De Rol Le's 5 + 3 stings and the sting attack's placement (frame 18, five floor points, ring around the target), where Dark Falz form 3 / the Dragon start (`formats/enemymodels.ts`, `tests/bossrooms.test.ts`)
-- [ ] Where the fight moves the children it spawns (needs the boss FSMs: De Rol Le's tentacle / segments / rocks, Vol Opt's core in its monitor, Dark Falz's forms, Belra's thrown arms, Saint-Milion's 16 spinners), the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
+- [x] De Rol Le's fight: the body's FSM along its four corners (attack sequences 0x009a4380 / 0x009a4440, the eased corner moves, jumps, dives, the bite leap and the wall), the shell / body HP pools, the 4 tentacles, the segment rocks, the ceiling rocks, the 5 + 3 stings, the beam, the death path and the leader's 6x13 / 6x14 (`combat/derolle.ts`, `tests/derolle.test.ts`)
+- [ ] Where the fight moves the children it spawns (needs the boss FSMs: Vol Opt's core in its monitor, Dark Falz's forms, Belra's thrown arms, Saint-Milion's 16 spinners), the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision

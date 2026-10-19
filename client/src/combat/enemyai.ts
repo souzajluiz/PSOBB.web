@@ -280,6 +280,9 @@ export interface AiFrame {
   status?: { clientId: number; type: number } | null;
   projectile?: { x: number; z: number; angle: number } | null;
   lift?: number;
+  // An absolute height instead of the ground under (x, z) plus lift (De Rol
+  // Le swims at its own y, combat/derolle.ts).
+  y?: number;
   // Projectiles of the Caves / Mines FSMs (combat/enemyshots.ts).
   shots?: EnemyShot[];
   // A player hold (6x2C, the Grass Assassin's web): the player may not move
