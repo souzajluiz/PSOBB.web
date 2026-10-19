@@ -313,6 +313,22 @@ export class Lobby {
     this.conn.send(0x06, 0, padded);
   }
 
+  // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
+  sendWalk(x: number, z: number, nearEnemy = false): void {
+    const p = new Uint8Array(12);
+    const dv = new DataView(p.buffer);
+    dv.setFloat32(0, x, true);
+    dv.setFloat32(4, z, true);
+    dv.setUint32(8, nearEnemy ? 8 : 0, true);
+    this.sendSubcommand(0x40, p);
+    const me = this.self;
+    if (me) {
+      me.position = { x, y: me.position.y, z };
+      me.moving = true;
+      me.gait = 'walk';
+    }
+  }
+
   // 6x42: running toward (x, z).
   sendRun(x: number, z: number): void {
     const p = new Uint8Array(8);
@@ -321,6 +337,7 @@ export class Lobby {
     dv.setFloat32(4, z, true);
     this.sendSubcommand(0x42, p);
     this.updateSelf(x, undefined, z, undefined, true);
+    if (this.self) this.self.gait = 'run';
   }
 
   // 6x3E: stop at (x, y, z) facing `angle` radians.

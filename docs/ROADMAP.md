@@ -29,7 +29,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
-- [ ] Touch: camera drag with a second finger, analog walk / run if the movement code gets an analog input
+- [x] Touch: camera drag with a second finger, analog stick direction with walk / run by deflection (the exe's pad thresholds: per-axis dead zone 31/128, walk above 0.1, run after 6 frames above 0.75), haptics through `navigator.vibrate` with a VIB toggle (`input/analog.ts`, `input/haptics.ts`)
 
 ## Phase 1: foundation ✅
 - [x] Build newserv on macOS (Apple Silicon)

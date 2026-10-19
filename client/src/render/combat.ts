@@ -133,6 +133,7 @@ import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.
 import { CombatOverlay } from './combatoverlay.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
+import { haptic } from '../input/haptics.ts';
 import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
@@ -390,7 +391,10 @@ export class CombatView {
       motion: (kind) => this.playSelfMotion(kind),
       push: (vx, vz) => this.view?.pushPlayer(this.game.selfId, vx, vz),
       face: (angle) => this.view?.setPlayerAngle(this.game.selfId, angle),
-      sendHit: (heavy, angle, hp, vx, vz) => this.game.sendHitByEnemy(heavy, angle, hp, vx, vz),
+      sendHit: (heavy, angle, hp, vx, vz) => {
+        haptic('damage'); // browser vibration (input/haptics.ts)
+        this.game.sendHitByEnemy(heavy, angle, hp, vx, vz);
+      },
       sendShieldAttack: () => this.game.sendShieldAttack(),
       sendDeath: (killer, flags) => this.game.sendPlayerDeath(killer, flags),
       sendRevivable: () => this.game.sendPlayerRevivable(),
@@ -2505,6 +2509,7 @@ export class CombatView {
   // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
   private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true): void {
     const me = this.game.self;
+    if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
     if (e.ai?.invulnerable) {
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
       // "0" text and do nothing.
@@ -3188,6 +3193,7 @@ export class CombatView {
     if (c.clientId === this.game.selfId) {
       this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
       this.sePlayer?.play(SE_LEVEL_UP);
+      haptic('levelup'); // browser vibration (input/haptics.ts)
     }
     this.hud?.levelUpPopup(head, c.levelDown);
     void this.levelUpFx?.play(c.clientId);

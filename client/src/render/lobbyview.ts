@@ -10,6 +10,7 @@
 import { CAMERA_FOV_ANGLE, PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
+import { AnalogGait, stickAmount, takeCameraTurn, touchStick } from '../input/analog.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
@@ -26,6 +27,9 @@ import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } fr
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
 const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
 const RUN_SPEED = 120; // units per second (approximate)
+// Walking (touch stick only, input/analog.ts). ASSUMED: run speed / the run
+// motion's frame step factor 1.5 (formats/plymotion.ts LOCOMOTION_FACTOR).
+const WALK_SPEED = RUN_SPEED / 1.5;
 const SEND_INTERVAL = 0.15; // seconds between 6x42 while moving
 const CLASS_COLORS = [
   0xd64545, 0xe0607a, 0xa83232, // HUmar, HUnewearl, HUcast
@@ -192,6 +196,9 @@ export class LobbyView {
   }
   private sendTimer = 0;
   private wasMoving = false;
+  // Walk / run of the touch pad's analog stick (input/analog.ts).
+  private stickGait = new AnalogGait();
+  private sentGait: 'walk' | 'run' | null = null;
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
   private spawns: Map<number, LobbySpawn>;
@@ -425,23 +432,40 @@ export class LobbyView {
     const mine = me ? this.markers.get(me.clientId) : undefined;
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
+    // Second-finger camera drag of the touch pad (input/analog.ts): turns the
+    // camera angle; the chase rules of render/playercamera.ts stay as they are.
+    const turn = takeCameraTurn();
+    if (turn && mine) this.camera.angle = Math.atan2(Math.sin(this.camera.angle + turn), Math.cos(this.camera.angle + turn));
+
     // Local movement relative to the camera (not while attacking).
     if (me && mine && !this.attacking(me.clientId)) {
       const forward = new THREE.Vector3(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
       const right = new THREE.Vector3(-forward.z, 0, forward.x);
       const dir = new THREE.Vector3();
-      // Move Forward / Backward / Left / Right: W / S / A / D in the BB
-      // default key config (input/keyconfig.ts); the arrows belong to the
-      // action palette and the camera.
-      if (keys.has(KEYS.moveForward)) dir.add(forward);
-      if (keys.has(KEYS.moveBackward)) dir.sub(forward);
-      if (keys.has(KEYS.moveRight)) dir.add(right);
-      if (keys.has(KEYS.moveLeft)) dir.sub(right);
+      const stick = touchStick();
+      let gait: 'walk' | 'run' = 'run';
+      if (stick) {
+        // The touch stick: analog direction, walk / run by deflection.
+        const g = this.stickGait.step(stickAmount(stick), dt * 30);
+        if (g !== 'stand') {
+          dir.addScaledVector(forward, stick.fb).addScaledVector(right, stick.lr);
+          gait = g;
+        }
+      } else {
+        this.stickGait.reset();
+        // Move Forward / Backward / Left / Right: W / S / A / D in the BB
+        // default key config (input/keyconfig.ts); the arrows belong to the
+        // action palette and the camera.
+        if (keys.has(KEYS.moveForward)) dir.add(forward);
+        if (keys.has(KEYS.moveBackward)) dir.sub(forward);
+        if (keys.has(KEYS.moveRight)) dir.add(right);
+        if (keys.has(KEYS.moveLeft)) dir.sub(right);
+      }
       const moving = dir.lengthSq() > 0;
       if (moving) {
         dir.normalize();
         const pos = mine.group.position;
-        const step = RUN_SPEED * dt;
+        const step = (gait === 'walk' ? WALK_SPEED : RUN_SPEED) * dt;
         if (this.collision) {
           // Sub-step so a long frame cannot tunnel through thin walls.
           const n = Math.max(1, Math.ceil(step / 4));
@@ -457,16 +481,21 @@ export class LobbyView {
         }
         mine.target.copy(pos);
         mine.angle = Math.atan2(dir.x, dir.z);
-        this.setGait(mine, 'run');
+        this.setGait(mine, gait);
         this.sendTimer -= dt;
-        if (this.sendTimer <= 0) {
-          this.lobby.sendRun(mine.group.position.x, mine.group.position.z);
+        // 6x40 walk / 6x42 run; a change of gait goes out at once.
+        if (this.sendTimer <= 0 || gait !== this.sentGait) {
+          const p = mine.group.position;
+          if (gait === 'walk') this.lobby.sendWalk(p.x, p.z);
+          else this.lobby.sendRun(p.x, p.z);
+          this.sentGait = gait;
           this.sendTimer = SEND_INTERVAL;
         }
       } else if (this.wasMoving) {
         const p = mine.group.position;
         this.lobby.sendStop(p.x, p.y, p.z, mine.angle);
         this.sendTimer = 0;
+        this.sentGait = null;
         this.setGait(mine, 'idle');
       }
       this.wasMoving = moving;
