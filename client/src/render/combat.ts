@@ -553,7 +553,13 @@ export class CombatView {
   }
 
   // Enemy slots of the floor (entity ids) and their stats.
+  // The latest enterFloor call: one that is overtaken while it awaits (a floor
+  // change while the battle params load) must not build its enemies on the new
+  // floor's models (set entry indices repeat between floors).
+  private enterToken = 0;
+
   async enterFloor(floor: number, area: number, sets: EnemySet[], base: number): Promise<void> {
+    const token = ++this.enterToken;
     this.floor = floor;
     this.area = area;
     this.base = base;
@@ -582,7 +588,7 @@ export class CombatView {
       if (slot.child === 0) headOf.set(slot.set.index, { index: base + i, slot });
     });
     const params = await this.battleParams();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     const difficulty = this.game.info?.difficulty ?? 0;
     const ultimate = difficulty === 3;
     let withStats = 0;
@@ -794,9 +800,9 @@ export class CombatView {
     this.difficultyParams = { params, difficulty, slots, base };
     this.buildGunnerGroups(slots, base);
     await this.spawnSplitters();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     await this.spawnVolopt();
-    if (this.disposed) return;
+    if (this.disposed || token !== this.enterToken) return;
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
     const s = this.selfStats();

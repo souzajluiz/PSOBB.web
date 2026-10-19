@@ -478,6 +478,24 @@ for (const n of [1, 2, 5]) {
   }
 }
 
+// 23. Floor 11's entry list holds exactly one Dragon entry (set type 0xC0), so
+//     one brain; a stale enterFloor (overtaken by a floor change) is dropped by
+//     render/combat.ts's enterToken, which is what once gave a Pioneer 2 NPC
+//     entry (same set index 0) the Dragon's model and a second brain.
+{
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { parseEnemySets } = await import('../client/src/formats/setdata.ts');
+  const { expandEnemySets } = await import('../client/src/formats/enemyslots.ts');
+  const file = '/Users/junior/Downloads/psobb-master/map/map_boss01e.dat';
+  const src = existsSync(file) ? file : new URL('../vendor/newserv/system/maps/xb-v3/map_boss01e.dat', import.meta.url).pathname;
+  if (existsSync(src)) {
+    const slots = expandEnemySets(parseEnemySets(new Uint8Array(readFileSync(src))), 11);
+    eq(slots.length, 1, 'floor 11 has one enemy slot');
+    eq(slots[0].type, 'DRAGON', 'and it is the Dragon');
+    eq(slots[0].set.type, 0xc0, 'set type 0xC0');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);
