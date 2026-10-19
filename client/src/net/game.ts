@@ -925,6 +925,23 @@ export class Game extends Lobby {
   // 6x2C (G_ImposeHold_6x2C, 0x14): {u8 0x2c, u8 5, u16 client id} {u16
   // frames, u16 particle type, f32 x, f32 z, f32 radius^2}, as
   // HandleHardAttackAction_0069375c builds it for the Grass Assassin's web.
+  // De Rol Le's state from the leader (start_drl_rock_cycle 0x0042ac2c):
+  // 6x13 {u8 0x13, u8 2, u16 entity, u16 state, u16 cursor}, or for the
+  // states with a target 6x14 {u8 0x14, u8 3, u16 entity, u16 state,
+  // u16 cursor, u32 target client id (+0x394)}.
+  sendBossAction(entityId: number, state: number, cursor: number, target: number | null): void {
+    const withTarget = target !== null;
+    const b = new Uint8Array(withTarget ? 12 : 8);
+    const dv = new DataView(b.buffer);
+    b[0] = withTarget ? 0x14 : 0x13;
+    b[1] = b.length / 4;
+    dv.setUint16(2, entityId & 0xffff, true);
+    dv.setUint16(4, state & 0xffff, true);
+    dv.setUint16(6, cursor & 0xffff, true);
+    if (withTarget) dv.setUint32(8, target >>> 0, true);
+    this.conn.send(0x60, 0, b);
+  }
+
   sendImposeHold(frames: number, particle: number, x: number, z: number, radius2: number): void {
     const b = new Uint8Array(0x14);
     const dv = new DataView(b.buffer);

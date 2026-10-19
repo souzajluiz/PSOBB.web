@@ -205,9 +205,11 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
   const pillar1 = vo.parts.find((p) => p.name === 'pillar 1')!;
   check(Math.abs(pillar1.offset![0] - 38) < 0.01 && Math.abs(pillar1.offset![2] - 76 * Math.sin(Math.PI / 3)) < 0.01, 'Vol Opt pillar 1: round(60 degrees in BAMS) on the 76.0 ring');
 
-  // De Rol Le: body, tentacle, 5 + 3 stings, all but the body hidden.
+  // De Rol Le: body, 4 tentacles, 5 + 3 stings, all but the body hidden.
   const drl = boss(0xc1, 0, 0x0c)!;
-  eq(drl.parts.length, 1 + 1 + 5 + 3, 'De Rol Le: body + tentacle + 8 stings');
+  eq(drl.parts.length, 1 + 4 + 5 + 3, 'De Rol Le: body + 4 tentacles + 8 stings');
+  eq(drl.parts[0].scale, 2, 'De Rol Le: the body draws at scale 2.0 (render_derolle)');
+  eq(drl.parts.filter((p) => p.model === 4 && p.place === 'world').length, 4, 'De Rol Le: 4 world-placed tentacles (0x00437ba4)');
   eq(drl.parts.filter((p) => p.model === 3 && p.hidden && p.texlistOf === 2).length, 8, 'De Rol Le: 8 hidden stings (model 3, body textures)');
   eq(drl.parts.filter((p) => !p.hidden).length, 1, 'De Rol Le: only the body at spawn');
   eq(DE_ROL_LE_STING_FRAME, 18, 'De Rol Le: stings leave at frame 18.0');

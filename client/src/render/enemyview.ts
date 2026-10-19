@@ -33,6 +33,7 @@ export interface EnemyInstance {
   world: THREE.Group | null;
   animators: NodeAnimator[];
   parts: EnemyPartSpec[]; // part of each animator
+  nodes?: THREE.Object3D[][]; // node tree of each spec part, depth first (BuiltEnemy.partNodes)
 }
 
 export class EnemyLayer {
@@ -101,7 +102,7 @@ export class EnemyLayer {
           this.worldByIndex.set(e.index, world);
         }
         animators.push(...built.animators);
-        instances.push({ placed: p, spec, archive, root: built.root, world, animators: built.animators, parts: built.animatedParts });
+        instances.push({ placed: p, spec, archive, root: built.root, world, animators: built.animators, parts: built.animatedParts, nodes: built.partNodes });
         done.add(p);
         stats.placed++;
       } catch (err) {

@@ -610,13 +610,18 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     //     at per-piece positions.
     // 1 body + 10 segments + 5 + 3 stings = the 0x13 entity ids newserv
     // reserves. None of the extra models is drawn until the fight spawns it,
-    // so they are built but hidden.
+    // so they are built but hidden. The fight (combat/derolle.ts) moves them:
+    //   - render_derolle (0x004335c4) draws the body at scale 2.0;
+    //   - the 4 objects of 0x00437ba4 (the dump's "DerolleRockProjectile")
+    //     are the tentacles, one model-4 clone each on an attach matrix of
+    //     the body's draw;
+    //   - stings and tentacles are placed in world coordinates.
     case 0xc1:
       return spec('TBoss2DeRolLe', pick('bm_boss2_de_rol_le.bml', ctx), [
-        { model: 2, motion: loop(11, 0.6) },
-        { model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, name: 'tentacle' },
-        ...Array.from({ length: 5 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, name: `sting ${i}` })),
-        ...Array.from({ length: 3 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, name: `sting ring ${i}` })),
+        { model: 2, motion: loop(11, 0.6), scale: 2 },
+        ...Array.from({ length: 4 }, (_, i): EnemyPartSpec => ({ model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, place: 'world', name: `tentacle ${i}` })),
+        ...Array.from({ length: 5 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ${i}` })),
+        ...Array.from({ length: 3 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ring ${i}` })),
       ]);
     // Barba Ray: ctor 0x004af634, body model 0; idle = slot 1 of 0x009aba20 =
     // forward, 0.6 (static init 0x004b9c00). Same shape as De Rol Le: model 1
