@@ -1,5 +1,15 @@
 # Devlog
 
+## 2026-10-19: favicon from PsoBB.exe
+
+**What changed:** the pages' favicon is the application icon of `PsoBB.exe`
+(group 101, a single 32x32 8-bit "PSO BB" image). `tools/exeicon.py` reads it
+from the PE resource tree (RT_GROUP_ICON / RT_ICON) with the standard library
+and writes an .ico; `favicon.ico` and a `favicon.png` copy are in
+`client/public/` (served at `/` by the dev server and the production relay)
+and in `site/` (the GitHub Pages page). Not upscaled: the exe has no larger
+size, so there is no apple-touch icon.
+
 ## 2026-10-19: production serves only the classic client
 
 **What changed:** a production build (`npm run build`, the Docker image)
