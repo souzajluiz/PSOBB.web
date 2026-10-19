@@ -35,7 +35,7 @@ import type { EnemyLayer } from './enemyview.ts';
 import { constructKey, FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
-import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, type WaveEnemy } from './waves.ts';
+import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, killedSetEntry, type WaveEnemy } from './waves.ts';
 import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
 import { PLAYER_RADIUS } from '../combat/enemyfsm.ts';
@@ -107,10 +107,11 @@ export class GameField {
   private pendingTriggers = new Map<number, Set<number>>(); // 6x67 for floors not loaded yet
   private pendingKills = new Map<number, Set<number>>(); // 6x76 flag 8 for floors not loaded yet (entity ids)
   private syncFloor: SyncFloor | null = null;
-  private slotBases = new Map<number, { base: number; first: number[] }>(); // enemy slots of the floors loaded so far
+  private slotBases = new Map<number, { base: number; first: number[]; types: number[] }>(); // enemy slots of the floors loaded so far
   private enemies: EnemyLayer | null = null;
   private sections: MapSection[] = [];
   private enemyFirstSlot: number[] = [];
+  private enemyTypes: number[] = []; // set type of each e.dat entry
   private enemyBase = 0;
   private traps: Array<{ index: number; trap: PillarTrap }> = []; // TOTrapAncient02 / 02R of the floor
   private battleFrames = 0; // 0x5a countdown after the room is cleared
@@ -254,7 +255,8 @@ export class GameField {
     const episode = this.game.info?.episode ?? 1;
     this.enemyFirstSlot = enemySlots(e.enemySets, area).first;
     this.syncFloor = e.sync ?? null;
-    this.slotBases.set(floor, { base: e.enemyBase, first: this.enemyFirstSlot });
+    this.enemyTypes = e.enemySets.map((s) => s.type);
+    this.slotBases.set(floor, { base: e.enemyBase, first: this.enemyFirstSlot, types: this.enemyTypes });
     if (e.sync) {
       // The floor loader (0x008129b0) builds a delayed object whose set flags
       // hold 0x01 or 0x10 (6x6E); the field keeps them as constructed keys.
@@ -384,25 +386,14 @@ export class GameField {
       set.add(entityId);
       return;
     }
-    const at = this.slotBases.get(floor) ?? { base: this.enemyBase, first: this.enemyFirstSlot };
-    const index = this.setEntryForSlot(entityId - 0x1000 - at.base, at.first);
+    const at = this.slotBases.get(floor) ?? { base: this.enemyBase, first: this.enemyFirstSlot, types: this.enemyTypes };
+    // A child slot's 6x76 of a set whose children die on their own (a
+    // Mothmant, a Claw, a Hidoom / Migium, a split slime) does not clear the
+    // entry (render/waves.ts killedSetEntry).
+    const index = killedSetEntry(entityId - 0x1000 - at.base, at.first, at.types);
     if (index < 0) return;
     w.kill(index);
     if (floor === this.floor) this.enemies?.setVisible(index, false);
-  }
-
-  // e.dat entry that owns a floor-relative enemy slot.
-  private setEntryForSlot(slot: number, first: readonly number[] = this.enemyFirstSlot): number {
-    if (slot < 0) return -1;
-    let lo = 0;
-    let hi = first.length - 1;
-    if (hi < 0 || slot < first[0]) return -1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (first[mid] <= slot) lo = mid;
-      else hi = mid - 1;
-    }
-    return lo;
   }
 
   // Room of a position: the map section whose circle contains it, nearest first

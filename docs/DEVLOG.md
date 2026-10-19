@@ -254,6 +254,91 @@ controls hidden).
 fade-in gating, menu rows / greying / cursor, editors, masks, the full
 Register → Start Game → fade-out flow, Exit Game);
 `tests/windowanim.test.ts`; client `tsc --noEmit`.
+## 2026-10-19: Pan Arms / slime split fixes (review and Chrome)
+
+**What changed:** fixes from the review of the splitters and from Chrome.
+Pan Arms now leaves the ground the way the exe does. Hidoom and Migium are
+drawn once they split. Splitter children no longer send a 6x76 of their own.
+
+**Details:**
+- Buried Pan Arms (update `0x0058106c`, init `0x00583d48`): the iparam2
+  timer counts down. While it lasts, a player within iparam1 raises Pan Arms
+  facing that player. When it runs out, Pan Arms rises anyway (iparam2 0:
+  the first frame). Going back under also returns it to its spawn point.
+  `combat` logs "emerges".
+- `PanHalfAi` reports `hidden` on every frame, so a split half is drawn.
+- `untargetable` getters (Pan Arms buried / emerging / split, a hidden half,
+  a puddle slime, the control) feed `concealed()`. These enemies are left
+  out of the radar, lock-on, weapon / technique targets and confused targets.
+- Pan Arms splits only when both halves were built; otherwise the floor
+  log says so.
+- If the first slime cannot be built, the control's done path runs: 6x76 and
+  removal.
+- Child kills: a half's death (`0x00587720`) and a slime's (`0x00598648`)
+  only call `on_enemy_killed` (`0x00787534`: EXP and the drop request). The
+  6x76 (`set_monster_spawn_initdata_as_dead`, `0x008113e4`) comes from Pan
+  Arms (`0x00583a80`, or `0x005822e4` when both halves die) and from the
+  slime control (`0x005956d4`). So `killEnemy` no longer sends 6x76 for
+  halves and slimes.
+- HP, checked in the dump: a half gets `(HP + 1) / 2` truncated
+  (`0x00587a04`). The merge sets HP to the plain sum of the halves
+  (`0x00582ab8` / `0x005822e4`), with no clamp to Pan Arms's max.
+- Multiplayer: a split builds the copy locally (`0x00597914` -> `0x00595bc8`
+  -> `0x00595d74`) and sends no subcommand. Each client's control watches
+  its own slots. This client sends the control's 6x76 only for its own kill.
+- `render/waves.ts` `killedSetEntry` (moved out of `gamefield.ts`): a
+  child-slot 6x76 is ignored only for sets whose children die on their own,
+  each sending its own 6x76: Monest / Mothmant (`MothmanProcessState_0051950c`
+  calls it), slimes, Pan Arms, Bulclaw. Boss parts and forms (De Rol Le, Vol
+  Opt, Dark Falz, ...) keep the old rule (any slot clears the entry): not
+  every one of their set-dead calls was traced to its slot.
+
+**Checks:** `tests/enemysplits.test.ts` (the timer rule, no split without
+halves, a drawn half), `tests/waves.test.ts` (the 6x76 guard), every other
+unit test; client `tsc --noEmit`.
+
+## 2026-10-19: Pan Arms and Pofuilly Slime splits
+
+**What changed:** the two Caves enemies that split now fight. Pan Arms
+rises from the ground and walks side to side. It fires shockwaves and bolt
+volleys. At a third of its HP, or after three walks, it splits into Hidoom and
+Migium. The halves attack on their own and later walk back together to merge.
+A Pofuilly Slime crawls as a puddle, rises next to a player, spits or reaches
+with an arm, and melts away after every hit. A special attack or Gibarta /
+Rabarta throws out a copy, up to four slimes per set.
+
+**Details:**
+- `combat/enemysplits.ts` (new): `PanArmsAi`, `PanHalfAi`, `PanArmsShot`,
+  `SlimeAi`, `SlimeSpit`, `SlimeArm`, `SlimeControl`, from a headless
+  decompile of the Ephinea exe: Pan Arms ctor `0x00582ef4` / states
+  `0x009bf2e0`, the halves `0x00586bf8` / `0x009bf580`, the slime
+  `0x00596000` / `0x009bfc00` and its control `0x005959fc`, the split hooks
+  `0x00597914` (a hit of attack type 2) and `0x005987c8` (technique group 2).
+  Motion tables `0x009bf220`, `0x009bf440`, `0x009bf4e0` and `0x009bfc80`
+  and the slime constants come from `tools/exedata.py`. Neither family is in
+  psobb-client-source, so nothing could be checked against the matching C.
+- `render/combat.ts`: on each floor, Hidoom and Migium are spawned hidden into
+  Pan Arms + 1 / + 2 (models 1 / 2 of its BML), and the first slime into its
+  control's slot + 1. While Pan Arms is split, its HP is the sum of the
+  halves' HP. If both halves die, Pan Arms sends only 6x76 (no drop, no EXP).
+  A merged kill drops the hidden halves. The slime split is hooked after
+  `specialHit` and in `techHitEnemy` (Gibarta / Rabarta). It only happens
+  when the hit landed (the slime's hit counter went up). The control sends
+  the set's 6x76 when its last slime dies. Migium's Jellen / Zalure reach
+  the player through `applySelfBuff`. Hidden splitters are skipped by
+  lock-on, weapon and technique targeting, confused enemies and the radar.
+- `render/gamefield.ts` `killEntity`: a 6x76 on a child slot (a Claw, a half,
+  a split slime, a Mothmant) no longer marks the whole set entry dead and
+  hides its model; only the entry's first slot does.
+- ASSUMED: the slime's puddle morphs (7 / 8) are drawn as no body, and the
+  flags `0xa000528` mean untargetable. Also ASSUMED: the emerge / burrow
+  morph lengths, the thrown hop, the arm's hit as a plain melee hit, and the
+  halves' front death motion. Only the local client splits a slime (another
+  client's 6x0A does not carry the attack type).
+
+**Checks:** `tests/enemysplits.test.ts` (new); every other unit test passes
+(newserv-backed ones run against the main checkout's vendor/). Client
+`tsc --noEmit` passes. Not checked in Chrome.
 
 ## 2026-10-19: Quest Board review fixes
 

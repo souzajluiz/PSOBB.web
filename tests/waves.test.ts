@@ -22,7 +22,7 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { OBJECT_DEFINITIONS } from '../client/src/formats/entitynames.ts';
 import { buildEnemy, EnemyArchive, texturesFromXvm } from '../client/src/render/enemymodel.ts';
 import { BmlArchive } from '../client/src/formats/bml.ts';
-import { FloorWaves, ENEMY_DEAD } from '../client/src/render/waves.ts';
+import { FloorWaves, ENEMY_DEAD, killedSetEntry, setEntryForSlot } from '../client/src/render/waves.ts';
 import { CollisionWorld } from '../client/src/render/collision.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
@@ -347,6 +347,24 @@ if (unresolved.size) {
       .map(([n, a]) => `${n} (areas ${[...a].map((x) => x.toString(16)).join(',')})`)
       .join('; ')}`,
   );
+}
+// A 6x76 on a child slot (render/gamefield.ts killEntity -> killedSetEntry):
+// entries 0 Monest (slots 0-30), 1 Booma (31), 2 Pan Arms (32-34), 3 slimes
+// (35-39), 4 Bulclaw (40-44), 5 De Rol Le (45-64).
+{
+  const first = [0, 31, 32, 35, 40, 45];
+  const types = [0x42, 0x44, 0x65, 0x64, 0xa7, 0xc1];
+  check(setEntryForSlot(33, first) === 2, 'slot 33 is the Pan Arms entry');
+  check(killedSetEntry(0, first, types) === 0, "the Monest's own 6x76 clears its entry");
+  check(killedSetEntry(5, first, types) === -1, "a Mothmant's 6x76 does not clear the Monest");
+  check(killedSetEntry(31, first, types) === 1, 'a plain enemy clears its entry');
+  check(killedSetEntry(32, first, types) === 2, 'the Pan Arms clears its entry');
+  check(killedSetEntry(33, first, types) === -1 && killedSetEntry(34, first, types) === -1, 'Hidoom / Migium do not');
+  check(killedSetEntry(35, first, types) === 3, "the slime control's 6x76 clears the slimes' entry");
+  check(killedSetEntry(37, first, types) === -1, 'a split slime does not');
+  check(killedSetEntry(42, first, types) === -1, 'a Claw does not clear the Bulclaw');
+  check(killedSetEntry(50, first, types) === 5, "a boss part keeps the old rule (De Rol Le's entry)");
+  check(killedSetEntry(-1, first, types) === -1, 'a slot before the floor is nobody');
 }
 console.log(failures ? `${failures} failures` : 'wave events and object models: all checks passed');
 process.exit(failures ? 1 : 0);

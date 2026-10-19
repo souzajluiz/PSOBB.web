@@ -54,6 +54,39 @@ export const ENEMY_DEAD = 0x08;
 
 export const BATTLE_LINGER_FRAMES = 0x5a;
 
+// The e.dat entry that owns floor-relative enemy slot `slot` (`first`: each
+// entry's first slot, ascending), or -1.
+export function setEntryForSlot(slot: number, first: readonly number[]): number {
+  if (slot < 0) return -1;
+  let lo = 0;
+  let hi = first.length - 1;
+  if (hi < 0 || slot < first[0]) return -1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (first[mid] <= slot) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+// Set types whose child slots are enemies that die on their own and send
+// their own 6x76 (set_monster_spawn_initdata_as_dead, 0x008113e4): the
+// Mothmant (MothmanProcessState_0051950c), the Pofuilly slimes, Hidoom /
+// Migium, the Claws. Their entry is cleared by its own head: the Monest, the
+// slime control (0x005956d4), the Pan Arms (0x00583a80 / 0x005822e4), the
+// Bulclaw. Every other set (the bosses' parts and forms) keeps the old rule:
+// any slot of the entry clears it.
+export const OWN_KILL_CHILDREN: ReadonlySet<number> = new Set([0x42, 0x64, 0x65, 0xa7]);
+
+// The entry a 6x76 on `slot` marks dead, or -1 (a child slot of an
+// OWN_KILL_CHILDREN set). `types`: each entry's set type.
+export function killedSetEntry(slot: number, first: readonly number[], types: readonly number[]): number {
+  const index = setEntryForSlot(slot, first);
+  if (index < 0) return -1;
+  if (slot !== first[index] && OWN_KILL_CHILDREN.has(types[index] ?? -1)) return -1;
+  return index;
+}
+
 export interface WaveEnemy {
   key: number; // set entry index on the floor
   room: number;
