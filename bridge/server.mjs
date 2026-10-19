@@ -48,8 +48,31 @@ function inside(root, rel) {
   return existsSync(target) && statSync(target).isFile() ? target : null;
 }
 
-function send(res, file, type) {
-  res.writeHead(200, { 'Content-Type': type ?? TYPES[extname(file)] ?? 'application/octet-stream' });
+// Caching: hashed build files (/assets/) never change; the game data and the
+// newserv files change only with a deploy or a new data zip, so they are
+// revalidated by ETag after a day; the pages are always revalidated. Without
+// this every visit downloads the 68 MB data.gsl again.
+function cacheControl(path) {
+  if (path.startsWith('/assets/')) return 'public, max-age=31536000, immutable';
+  if (path.endsWith('.html') || path === '/' || path === '/classic') return 'no-cache';
+  return 'public, max-age=86400';
+}
+
+function send(req, res, file, type, path = '') {
+  const st = statSync(file);
+  const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+  const headers = {
+    'Content-Type': type ?? TYPES[extname(file)] ?? 'application/octet-stream',
+    'Content-Length': st.size,
+    ETag: etag,
+    'Last-Modified': st.mtime.toUTCString(),
+    'Cache-Control': cacheControl(path),
+  };
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': headers['Cache-Control'] });
+    return res.end();
+  }
+  res.writeHead(200, headers);
   createReadStream(file).pipe(res);
 }
 
@@ -74,7 +97,7 @@ const server = createServer((req, res) => {
     if (!path.startsWith(prefix)) continue;
     const name = path.slice(prefix.length);
     const file = pattern.test(name) ? inside(dir, name) : null;
-    return file ? send(res, file, 'application/octet-stream') : notFound(res);
+    return file ? send(req, res, file, 'application/octet-stream', path) : notFound(res);
   }
 
   if (path.startsWith('/psobb-data')) {
@@ -88,15 +111,15 @@ const server = createServer((req, res) => {
       return res.end(JSON.stringify(files.sort()));
     }
     const file = inside(DATA, path.slice('/psobb-data/'.length));
-    return file ? send(res, file, 'application/octet-stream') : notFound(res);
+    return file ? send(req, res, file, 'application/octet-stream', path) : notFound(res);
   }
 
   // Only the classic client is public: "/" opens it, and the development
   // pages (index.html, models.html) are not served even if a build has them.
-  if (path === '/' || path === '/classic' || path === '/classic.html') return send(res, resolve(DIST, 'classic.html'));
+  if (path === '/' || path === '/classic' || path === '/classic.html') return send(req, res, resolve(DIST, 'classic.html'), undefined, path);
   if (path.endsWith('.html')) return notFound(res);
   const file = inside(DIST, path.slice(1));
-  return file ? send(res, file) : notFound(res);
+  return file ? send(req, res, file, undefined, path) : notFound(res);
 });
 
 // The relay: the same byte pipe as bridge.mjs, on the HTTP port.

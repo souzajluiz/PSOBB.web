@@ -1,5 +1,17 @@
 # Devlog
 
+## 2026-10-19: caching headers on the production relay
+
+**What changed:** the published site (checked at its sslip.io address) answered
+every static file with no cache headers, so each visit downloaded the 68 MB
+`data.gsl` (about 25 s) and the 8 MB `common.pac` again, with a black screen
+until the title appeared. `bridge/server.mjs` now sends `Content-Length`,
+`ETag` and `Last-Modified` and answers `If-None-Match` with 304. `Cache-Control`:
+`immutable` for the hashed `/assets/`, `no-cache` (revalidate) for the pages,
+one day for the game data and the newserv files. Checked on a local relay: 200
+with the headers, 304 on a repeat, the body intact. The loader for the wait on
+a first visit is a separate task.
+
 ## 2026-10-19: PSOBB_DATA_URL: data root by data.gsl, no EXDEV
 
 **What changed:** two problems of the first real deploy of `fetch-data.mjs`.
