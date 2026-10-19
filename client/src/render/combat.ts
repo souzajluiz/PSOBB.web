@@ -50,6 +50,9 @@ import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, Gunner
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
+import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
+import { bossPhaseOf } from '../audio/bossbgm.ts';
+import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
 import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
@@ -183,6 +186,17 @@ interface DrlView {
   drawn: boolean; // the node matrices come from a frame that was drawn
 }
 
+// What render/combat.ts keeps per Vol Opt control object: the groups of its
+// parts in the head's world root and each part's enemy (VoloptAi.parts order).
+interface VoloptView {
+  pillars: (THREE.Object3D | null)[];
+  monitors: (THREE.Object3D | null)[];
+  rod: THREE.Object3D | null;
+  core: THREE.Object3D | null;
+  proxies: (EnemyRuntime | null)[];
+  spin: number;
+}
+
 interface EnemyRuntime {
   instance: EnemyInstance;
   index: number; // enemy index of the game (entity id = 0x1000 | index)
@@ -249,8 +263,10 @@ const OWN_FSM = new Set([
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
-  // Episode 1 bosses (combat/derolle.ts).
+  // Episode 1 bosses (combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
   'TBoss2DeRolLe',
+  'TBoss3Volopt',
+  'TBoss3VoloptP02',
 ]);
 
 // Classes whose own target search honours confusion: the Booma handlers
@@ -265,8 +281,11 @@ const BULCLAW_CLAWS = 4;
 // A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium, a puddle
 // slime or a slime control: not on the radar, not locked on, not struck, not
 // a technique or confused-enemy target (combat/enemysplits.ts untargetable).
+// Vol Opt's control object, its parts that are not up and its body before the
+// fight are hidden the same way.
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
-  (e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable;
+  ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
+  ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai) && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -292,6 +311,13 @@ export interface CombatOptions {
   fullCharacter?: () => Uint8Array | null;
   // The client data folder, for the HUD's sound effects (common.pac).
   source?: DataSource;
+  // Intra-floor warp of the local player (a 6x17 from the leader, Vol Opt).
+  warpSelf?: (pos: { x: number; y: number; z: number }, angle: number) => void;
+  // construct_objects of a floor (unhide_object_set_no_packet).
+  constructObjects?: (floor: number, room: number, group: number) => void;
+  // The boss's form changed (a 6x15 this client sent itself, Vol Opt's change
+  // to form 2): the field plays that phase's music (audio/bossbgm.ts).
+  bossPhase?: (phase: number) => void;
 }
 
 // Sound of the local player's level-up (PlayDirectionalSoundBasedOnAction_00692bf4,
@@ -536,6 +562,12 @@ export class CombatView {
     this.clearDrlBeam();
     this.drlViews.clear();
     this.drlLastHitLocal.clear();
+    this.voloptViews.clear();
+    this.voloptBodyAnim.clear();
+    this.voloptLastHit.clear();
+    this.voloptHead = null;
+    this.voloptBody = null;
+    this.voloptHeld = false;
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
     slots.forEach((slot, i) => {
@@ -659,6 +691,39 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'TBoss3Volopt') {
+          // The control builds the arena: MovementData rows 33 (core), 34
+          // (pillar), 35 (monitor) and the stats HP of rows 33 / 34 / 36.
+          const mv = (row: number) => (params ? params.movement(difficulty, row) : null);
+          const hp = (row: number) => (params ? params.stats(difficulty, row).hp : 0);
+          ai = new VoloptAi({
+            ...at,
+            ultimate,
+            movement: { core: mv(33), pillar: mv(34), monitor: mv(35) },
+            hp: { core: hp(33), pillar: hp(34), rod: hp(36) },
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, 'pillar 0'),
+            playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
+            rng: () => this.rng(),
+          });
+        } else if (className === 'TBoss3VoloptP02') {
+          // Row 37 (body), 42 (the four part HPs), 38 (the prison).
+          const mv = (row: number) => (params ? params.movement(difficulty, row) : null);
+          const f2 = new VoloptForm2Ai({
+            ...at,
+            ultimate,
+            hp: stats.maxHp,
+            movement: mv(37),
+            parts: mv(42),
+            prison: mv(38),
+            prisonHp: params ? params.stats(difficulty, 38).hp : 0,
+            leader: () => this.game.selfId === this.game.leaderId,
+            selfId: () => this.game.selfId,
+            frames: this.motionFrames(instance, null),
+            rng: () => this.rng(),
+          });
+          stats = { ...stats, hp: f2.maxHp, maxHp: f2.maxHp };
+          ai = f2;
         }
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
@@ -707,6 +772,8 @@ export class CombatView {
     this.difficultyParams = { params, difficulty, slots, base };
     this.buildGunnerGroups(slots, base);
     await this.spawnSplitters();
+    if (this.disposed) return;
+    await this.spawnVolopt();
     if (this.disposed) return;
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
@@ -969,6 +1036,9 @@ export class CombatView {
   private tickEnemies(): void {
     const targets = this.aiTargets();
     for (const e of [...this.enemies.values()]) {
+      // Vol Opt's body is stood up by the control whatever its wave says (it
+      // sits in the second arena; the control waits for it).
+      if (e.ai instanceof VoloptForm2Ai && e.ai.isAwake && !e.dead) e.instance.root.visible = true;
       // A splitter's children appear with their set entry's wave.
       if ((e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi) && e.parent && this.enemies.get(e.parent.index) === e.parent) {
         e.instance.root.visible = e.parent.instance.root.visible;
@@ -995,6 +1065,16 @@ export class CombatView {
         this.tickDeRolLe(e, ai, targets);
         continue;
       }
+      if (ai instanceof VoloptAi) {
+        this.tickVolopt(e, ai, targets);
+        continue;
+      }
+      if (ai instanceof VoloptForm2Ai) {
+        this.tickVoloptForm2(e, ai, targets);
+        continue;
+      }
+      // A part's enemy is moved by the control (syncVolopt).
+      if (ai instanceof VoloptPartAi) continue;
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
@@ -1254,16 +1334,23 @@ export class CombatView {
   private deRolLeKilled(e: EnemyRuntime, x: number, z: number): void {
     e.dead = true;
     e.stats.hp = 0;
+    this.bossKilled(e, x, z, this.drlLastHitLocal, 'De Rol Le');
+  }
+
+  // The kill sends of a boss whose brain owns its death (on_enemy_killed and
+  // set_monster_spawn_initdata_as_dead), gated as the exe gates them (see
+  // deRolLeKilled). `lastHit`: enemy index -> whether the last strike was ours.
+  private bossKilled(e: EnemyRuntime, x: number, z: number, lastHit: Map<number, boolean>, name: string): void {
     this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
-    if (e.rtIndex !== 0xff && this.game.selfId === this.game.leaderId && this.drlLastHitLocal.has(e.index)) {
+    if (e.rtIndex !== 0xff && this.game.selfId === this.game.leaderId && lastHit.has(e.index)) {
       this.game.sendEnemyDropRequest({ floor: this.floor, rtIndex: e.rtIndex, enemyIndex: e.index, x, z, room: (e.slot.set as EnemySet).section, area: this.area });
     }
-    const killer = this.drlLastHitLocal.get(e.index) === true;
+    const killer = lastHit.get(e.index) === true;
     this.game.sendExpRequest(e.index, killer);
     const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer, multiplier: this.expMultiplier });
     const anchor = new THREE.Vector3(x, 22, z);
     this.hud?.expPopup(amount, () => anchor);
-    this.opts.log(`De Rol Le E-${e.index.toString(16)} defeated${killer ? ' (last hit yours)' : ''}`);
+    this.opts.log(`${name} E-${e.index.toString(16)} defeated${killer ? ' (last hit yours)' : ''}`);
   }
 
   // A 6x13 / 6x14 from the leader (SetDerolleActionState_00432a38 /
@@ -1275,6 +1362,447 @@ export class CombatView {
     if (!(e?.ai instanceof DeRolLeAi)) return;
     const target = sub === 0x14 && body.length >= 12 ? dv.getUint32(8, true) & 0xffff : null;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target);
+  }
+
+  // --- Vol Opt (combat/volopt.ts, combat/volopt2.ts) ---------------------------
+  //
+  // Phase 1 is one brain (the control object, TBoss3Volopt) that owns 6
+  // pillars, 24 monitors, the rod, the core and the prison; each of them gets
+  // an invisible enemy of its own in the slot the exe gives it (control + the
+  // VO_ID offsets) so strikes, techniques, the lock-on and the other clients'
+  // 6x0A find it by entity id. Phase 2 (TBoss3VoloptP02) is its own enemy and
+  // brain; the control links to it. Hits land on the brain's pools; the
+  // brain's states decide what a hit does (a monitor of the core's wall and
+  // the red pillar pass it to the core), and the brain owns every death.
+  //
+  // Sync, as the exe has it: the room leader's director sends 6x15 / 6x16 /
+  // 6x84 / 6x17 / 6x85 and applies them itself; every client runs every
+  // state machine from those orders and from the 6x0A of each entity (the
+  // attacker's client sends them); the form 2 reaction sends 6x18 with the four
+  // part HPs; a pillar's lightning sends 6x15 action 2 when the rod lies on
+  // the floor (every client does). Kill sends follow the exe's gating at the
+  // body's death frame (voloptKilled).
+
+  // The frame count of a motion of an enemy's archive; `part` names the part
+  // whose node tree it is for (null: the first animated one).
+  private motionFrames(instance: EnemyInstance, part: string | null): (motion: number) => number {
+    const cache = new Map<number, number>();
+    return (m) => {
+      let n = cache.get(m);
+      if (n === undefined) {
+        const k = part ? instance.parts.findIndex((p) => p.name === part) : 0;
+        const nodeCount = instance.animators[Math.max(0, k)]?.nodeCount ?? 0;
+        try {
+          n = instance.archive.motion(m, nodeCount).frameCount;
+        } catch {
+          n = 30;
+        }
+        cache.set(m, n);
+      }
+      return n;
+    };
+  }
+
+  // The control, per floor; its parts' enemies and the groups it moves (by
+  // head enemy index; filled once).
+  private voloptViews = new Map<number, VoloptView>();
+  private voloptHead: EnemyRuntime | null = null;
+  private voloptBody: EnemyRuntime | null = null;
+  // Whether the last strike on the body was ours (its last_attacker, +0x2d8),
+  // by enemy index; an entry means the body has a last attacker.
+  private voloptLastHit = new Map<number, boolean>();
+  // The strike being resolved (combat/combat.ts resolveHit): a monitor that
+  // passes it to the core rolls the same attack again.
+  private strike: { attackType: number; step: number } | null = null;
+  private voloptHeld = false;
+  private voloptPlayed = new Set<number>();
+
+  // On entering the floor: the control gets the parts' enemies and is linked
+  // to the body (a room without a TBoss3VoloptP02 has nothing to link; the
+  // control then ends its fight 2 at once instead of waiting for it).
+  private async spawnVolopt(): Promise<void> {
+    this.voloptHead = null;
+    this.voloptBody = null;
+    for (const e of this.enemies.values()) {
+      if (e.ai instanceof VoloptAi) this.voloptHead = e;
+      else if (e.ai instanceof VoloptForm2Ai) this.voloptBody = e;
+    }
+    const head = this.voloptHead;
+    if (!head || !(head.ai instanceof VoloptAi)) return;
+    head.ai.form2 = this.voloptBody?.ai instanceof VoloptForm2Ai ? this.voloptBody.ai : null;
+    await this.spawnVoloptParts(head, head.ai);
+    this.opts.log(`Vol Opt E-${head.index.toString(16)}: ${head.ai.parts.length} parts${this.voloptBody ? ', body E-' + this.voloptBody.index.toString(16) : ', no body'}`);
+  }
+
+  private voloptView(e: EnemyRuntime, ai: VoloptAi): VoloptView {
+    let v = this.voloptViews.get(e.index);
+    if (v) return v;
+    const world = e.instance.world;
+    v = {
+      pillars: ai.pillars.map((p) => world?.getObjectByName(`pillar ${p.index}`) ?? null),
+      monitors: ai.monitors.map((m) => world?.getObjectByName(`monitor ${m.index}`) ?? null),
+      rod: world?.getObjectByName('lightning rod') ?? null,
+      core: world?.getObjectByName('core') ?? null,
+      proxies: ai.parts.map((): EnemyRuntime | null => null),
+      spin: 0,
+    };
+    this.voloptViews.set(e.index, v);
+    return v;
+  }
+
+  // BattleParamEntry row of an exe entity (not newserv's guess, which maps the
+  // core to row 38): stats, resist, attack.
+  private rowFightStats(row: number, hp: number) {
+    const base = this.childFightStats('VOL_OPT_PILLAR');
+    const ctx = this.difficultyParams;
+    if (!ctx?.params) return hp > 0 ? { ...base, stats: { ...base.stats, hp, maxHp: hp } } : base;
+    const { params, difficulty } = ctx;
+    const st = params.stats(difficulty, row);
+    const rs = params.resist(difficulty, row);
+    const attack = params.attack(difficulty, row);
+    let stats = enemyDefender(st, rs);
+    if (hp > 0) stats = { ...stats, hp, maxHp: hp };
+    return {
+      stats,
+      attack,
+      attacker: enemyAttacker(st, attack),
+      exp: 0,
+      esp: st.esp,
+      resist: { efr: rs.efr, eic: rs.eic, eth: rs.eth, elt: rs.elt, edk: rs.edk } as TechResist,
+    };
+  }
+
+  // Each part's enemy, in the slot control + VO_ID.*.
+  private async spawnVoloptParts(head: EnemyRuntime, ai: VoloptAi): Promise<void> {
+    const v = this.voloptView(head, ai);
+    const rows: Record<string, number> = { pillar: 34, monitor: 35, rod: 36, core: 33, prison: 38 };
+    for (let i = 0; i < ai.parts.length; i++) {
+      const part = ai.parts[i];
+      // Not built in Ultimate (g_VoloptDifficultyMode != 0).
+      if (part.kind === 'rod' && ai.ultimate) continue;
+      const index = head.index + part.entity;
+      if (this.enemies.has(index)) {
+        this.opts.log(`Vol Opt E-${head.index.toString(16)}: slot E-${index.toString(16)} (${part.kind}) is taken, that part cannot be shot`);
+        continue;
+      }
+      const fight = this.rowFightStats(rows[part.kind], part.maxHp);
+      const placed = {
+        ...head.instance.placed,
+        entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+        world: [part.x, part.y, part.z] as [number, number, number],
+        yaw: 0,
+        name: 'Vol Opt part',
+      };
+      const spec = { ...head.instance.spec, name: 'TBoss3VoloptPart', parts: [] };
+      const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+      if (!instance || this.disposed) return;
+      instance.root.visible = false;
+      const rt: EnemyRuntime = {
+        instance,
+        index,
+        slot: head.slot,
+        ...fight,
+        motions: head.motions,
+        rtIndex: 0xff,
+        dead: false,
+        state: 'idle',
+        removeIn: 0,
+        ai: new VoloptPartAi(part, ai),
+        lift: 0,
+        monest: null,
+        parent: head,
+        fake: null,
+        buffs: new EntityBuffs(),
+        status: new EnemyStatus(enemyAttribute(head.slot.type)),
+      };
+      this.enemies.set(index, rt);
+      v.proxies[i] = rt;
+    }
+  }
+
+  private tickVolopt(e: EnemyRuntime, ai: VoloptAi, targets: AiTarget[]): void {
+    const v = this.voloptView(e, ai);
+    const r = ai.tick(targets);
+    // The events can add events (an order applied here pushes its sound).
+    for (let i = 0; i < ai.events.length; i++) this.voloptEvent(e, ai, ai.events[i]);
+    ai.events.length = 0;
+    const shots = r.shots;
+    if (shots) for (let i = 0; i < shots.length; i++) this.launchShot(e, shots[i]);
+    ai.sustained.forEach(this.playSustained);
+    this.syncVolopt(e, ai, v);
+  }
+
+  private playSustained = (id: number): void => {
+    this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+    if (!this.sePlayer?.playing(id)) this.sePlayer?.play(id);
+  };
+
+  private playSe(id: number): void {
+    this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+    this.sePlayer?.play(id);
+  }
+
+  // The parts' enemies follow their brain's point and exist for the player
+  // only while the brain says the part can be hit; the models in the world
+  // root follow the states.
+  private syncVolopt(e: EnemyRuntime, ai: VoloptAi, v: VoloptView): void {
+    const shown = e.instance.root.visible;
+    for (let i = 0; i < ai.parts.length; i++) {
+      const rt = v.proxies[i];
+      if (!rt) continue;
+      const part = ai.parts[i];
+      rt.instance.root.position.set(part.x, part.y, part.z);
+      rt.instance.root.visible = shown && part.targetable;
+      rt.stats.hp = part.hp;
+      rt.stats.maxHp = part.maxHp;
+      rt.dead = false;
+    }
+    for (let i = 0; i < ai.pillars.length; i++) {
+      const g = v.pillars[i];
+      if (!g) continue;
+      const p = ai.pillars[i];
+      g.position.y = p.yOff;
+      g.visible = p.yOff > -39;
+    }
+    for (let i = 0; i < ai.monitors.length; i++) {
+      const g = v.monitors[i];
+      // ASSUMED: a fallen monitor is not drawn (the exe swaps in the
+      // broken models of table 0x009a5230).
+      if (g) g.visible = !ai.monitors[i].dead;
+    }
+    if (v.rod) {
+      // State 1 turns it by 0x800 BAMS a tick.
+      v.spin = (v.spin + 0x800 * BAMS_TO_RAD) % (Math.PI * 2);
+      v.rod.position.y = ai.rod.y0;
+      v.rod.rotation.y = v.spin;
+      v.rod.visible = ai.ai <= 3;
+    }
+    if (v.core) {
+      v.core.visible = !ai.core.hidden && ai.ai <= 2;
+      v.core.position.set(ai.core.x, ai.core.y, ai.core.z);
+      v.core.rotation.y = -(ai.core.angle * BAMS_TO_RAD);
+    }
+  }
+
+  private voloptEvent(e: EnemyRuntime, ai: VoloptAi, ev: VoloptEvent): void {
+    const what = `Vol Opt E-${e.index.toString(16)}`;
+    const id = 0x1000 | e.index;
+    switch (ev.kind) {
+      case 'action': {
+        const body = this.game.sendVoloptAction(id, ev.action, ev.target, ev.param, ev.count);
+        const phase = bossPhaseOf(this.area, 0x15, body);
+        if (phase !== null) this.opts.bossPhase?.(phase);
+        this.applyVoloptAction(ai, ev.action, ev.target, ev.param, ev.count);
+        this.opts.log(`${what}: 6x15 action ${ev.action}${ev.target !== 0 ? ` target ${ev.target}` : ''}${ev.action === 0 ? ` from monitor ${ev.param}, ${ev.count} walls` : ''}`);
+        return;
+      }
+      case 'pillars': {
+        this.game.sendVoloptPillars(id, ev.table, ev.count, ev.technique);
+        ai.applyPillars(ev.table, ev.count);
+        this.opts.log(`${what}: ${ev.count} pillars rise, the red one is ${ev.table[0]}${ev.technique !== null ? ` (technique ${ev.technique})` : ''}`);
+        return;
+      }
+      case 'delays':
+        this.game.sendVoloptDelays(ev.action, ev.delays);
+        ai.applyDelays(ev.action, ev.delays);
+        return;
+      case 'move': {
+        this.game.sendEntityPosition(ev.client, ev.x, ev.y, ev.z, ev.angle);
+        if (ev.client === this.game.selfId) this.opts.warpSelf?.({ x: ev.x, y: ev.y, z: ev.z }, ev.angle * BAMS_TO_RAD);
+        return;
+      }
+      case 'coreHit':
+        if (ev.local) this.voloptCoreStrike(ai);
+        return;
+      case 'se':
+        this.playSe(ev.id);
+        return;
+      case 'phase':
+        this.opts.log(`${what}: ${ai.state}`);
+        // unknown_set_volopt_form2 plays vol_opt2.adx as the change begins.
+        if (ev.phase === VO_AI.change) this.opts.bossPhase?.(2);
+        if (ev.phase === VO_AI.over && ai.form2?.dead) this.voloptOver();
+        return;
+      default:
+        return;
+    }
+  }
+
+  // VoloptDeathHandler (the control's state 4 sees g_VoloptIsDead): online it
+  // is set_quest_flag(0x2A) (6x75 to the server) and
+  // unhide_objects_for_volopt_death(0): unhide_object_set_no_packet for group
+  // 1 and group 3 of room 0, which is what an event's construct_objects does.
+  // Every client runs it; the flag is idempotent on the server.
+  private voloptOver(): void {
+    this.game.setQuestFlag(0x2a, true);
+    this.opts.constructObjects?.(this.floor, 0, 1);
+    this.opts.constructObjects?.(this.floor, 0, 3);
+    this.opts.log('Vol Opt defeated: quest flag 0x2a set, room 0 groups 1 and 3 appear');
+  }
+
+  // An order of the leader (or our own): the control's actions 0..2 and the
+  // body's 3..7.
+  private applyVoloptAction(ai: VoloptAi, action: number, target: number, param: number, count: number): void {
+    if (action <= 2) ai.applyAction(action, param, count);
+    else (ai.form2 as VoloptForm2Ai | null)?.applyAction(action, target, param);
+  }
+
+  // player_hit_volopt_core: the core takes the attacker's strike through the
+  // monitor or pillar that reached it (try_hit_entity, mult 1.0). We roll it
+  // when we were the attacker; the others' clients roll theirs and send
+  // their 6x0A. ASSUMED: a strike of a technique counts as a normal one.
+  private voloptCoreStrike(ai: VoloptAi): void {
+    const v = this.voloptHead ? this.voloptViews.get(this.voloptHead.index) : null;
+    const core = v?.proxies[ai.parts.indexOf(ai.core)];
+    if (!core || ai.core.dead || !this.game.self) return;
+    const attacker = this.attackerStats();
+    const defender = this.enemyDefenderOf(core);
+    const type: AttackType = this.strike && this.strike.attackType !== 2 ? (this.strike.attackType as AttackType) : 0;
+    const step = this.strike?.step ?? 0;
+    let damage = 0;
+    let critical = false;
+    if (rollHit(attacker, defender, type, step, this.rng)) {
+      const r = rollDamage(attacker, defender, type, this.rng);
+      damage = r.damage;
+      critical = r.critical;
+    }
+    this.applyEnemyHit(core, ENEMY_BASE_FLAGS, damage, critical, 'the core takes it through the wall: ');
+  }
+
+  // A strike (or a 6x0A) on a part.
+  private voloptPartHit(e: EnemyRuntime, ai: VoloptPartAi, damage: number, critical: boolean, flags: number, local: boolean, what: string): void {
+    const part = ai.part;
+    ai.owner.damagePart(part.entity, damage, local);
+    e.stats.hp = part.hp;
+    const dead = part.hp <= 0;
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
+    const p = e.instance.root.position;
+    this.overlay?.damage(damage, critical, p.x, p.y + 10, p.z);
+    this.opts.log(`${what}hit Vol Opt ${part.kind}${part.kind === 'pillar' || part.kind === 'monitor' ? ` ${part.index}` : ''} for ${Math.round(damage)}: ${part.hp}/${part.maxHp}`);
+  }
+
+  // --- phase 2 ---------------------------------------------------------------
+
+  private voloptBodyAnim = new Map<number, { animators: NodeAnimator[]; slot: number }>();
+
+  private tickVoloptForm2(e: EnemyRuntime, ai: VoloptForm2Ai, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const r = ai.tick(targets);
+    root.position.set(r.x, root.position.y, r.z);
+    root.rotation.y = r.angle;
+    // The body's motion is the brain's slot and frame.
+    let b = this.voloptBodyAnim.get(e.index);
+    if (!b) {
+      b = { animators: inst.animators.filter((_, k) => !inst.parts[k]?.name), slot: -1 };
+      this.voloptBodyAnim.set(e.index, b);
+    }
+    const changed = b.slot !== ai.animSlot;
+    b.slot = ai.animSlot;
+    const sl = FORM2_SLOTS[ai.animSlot];
+    for (let k = 0; k < b.animators.length; k++) {
+      const a = b.animators[k];
+      if (changed) {
+        try {
+          a.play(inst.archive.motion(sl.motion, a.nodeCount), sl.speed, sl.mode === 1);
+        } catch (err) {
+          this.opts.log(`Vol Opt form 2 motion ${sl.motion}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.animFrame);
+    }
+    for (let i = 0; i < ai.events.length; i++) this.voloptForm2Event(e, ai, ai.events[i]);
+    ai.events.length = 0;
+    if (ai.removed) {
+      e.dead = true;
+      root.visible = false;
+      this.voloptBodyAnim.delete(e.index);
+      if (this.lockOn === e) this.lockOn = null;
+      return;
+    }
+    const shots = r.shots;
+    if (shots) for (let i = 0; i < shots.length; i++) this.launchShot(e, shots[i]);
+    ai.sustained.forEach(this.playSustained);
+    // The prison holds the captured player (the cage entity's 0x20000 flag and
+    // the position it sets), and lets go when the timer or the HP end it.
+    const me = this.game.selfId;
+    if (ai.captured === me && !this.voloptHeld && !this.damage.dead) {
+      this.voloptHeld = true;
+      const p = this.view?.playerPositions().get(me);
+      if (p) this.imposeHold({ frames: ai.prisonFrames, particle: 0, x: p.x, z: p.z, radius2: 25 }, `Vol Opt E-${e.index.toString(16)}'s prison`);
+    } else if (this.voloptHeld && ai.captured !== me) {
+      this.voloptHeld = false;
+      if (this.holdTicks > 0) this.game.sendReleaseHold();
+      this.holdTicks = 0;
+      this.opts.log(`Vol Opt E-${e.index.toString(16)}: the prison lets go`);
+    }
+  }
+
+  private voloptForm2Event(e: EnemyRuntime, ai: VoloptForm2Ai, ev: VoloptEvent): void {
+    switch (ev.kind) {
+      case 'partsHp': {
+        const body = this.game.sendVoloptPartsHp(0x1000 | e.index, ev.hp);
+        void body;
+        this.opts.log(`Vol Opt E-${e.index.toString(16)}: parts ${ev.hp.join('/')} (6x18)`);
+        return;
+      }
+      case 'se':
+        this.playSe(ev.id);
+        return;
+      case 'killed':
+        this.voloptKilled(e, ev.x, ev.z);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // ProcessPlayerVoloptTransition sub 3 (the death motion past frame 47):
+  // on_enemy_killed, the dead flag, set_monster_spawn_initdata_as_dead. Every
+  // client runs it, and its sends are gated as the exe gates them (the same
+  // as De Rol Le's, see deRolLeKilled).
+  private voloptKilled(e: EnemyRuntime, x: number, z: number): void {
+    // The body goes 16 frames later (the brain's last step), not now.
+    e.stats.hp = 0;
+    this.bossKilled(e, x, z, this.voloptLastHit, 'Vol Opt');
+  }
+
+  // A 6x15 / 6x16 / 6x17 / 6x18 / 6x84 / 6x85 from another client.
+  private onVoloptSub(sub: number, body: Uint8Array): void {
+    const head = this.voloptHead;
+    const ai = head?.ai;
+    if (!(ai instanceof VoloptAi) || body.length < 8) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const f2 = ai.form2 as VoloptForm2Ai | null;
+    switch (sub) {
+      case 0x15:
+        if (body.length >= 0x0c) this.applyVoloptAction(ai, dv.getUint16(4, true), dv.getUint16(6, true), dv.getInt16(8, true), dv.getUint16(10, true));
+        return;
+      case 0x85:
+        // Ultimate: action 0 stores three delays.
+        if (body.length >= 0x0c) ai.applyDelays(dv.getUint16(4, true), [dv.getInt16(6, true), dv.getInt16(8, true), dv.getInt16(10, true)]);
+        return;
+      case 0x16:
+      case 0x84: {
+        if (body.length < 0x0c) return;
+        const table: number[] = [];
+        for (let i = 0; i < 6; i++) table.push(body[4 + i]);
+        ai.applyPillars(table, dv.getUint16(10, true));
+        return;
+      }
+      case 0x17:
+        // The leader carries a player to the second arena.
+        if (body.length >= 0x14 && dv.getUint16(2, true) === this.game.selfId) {
+          this.opts.warpSelf?.({ x: dv.getFloat32(4, true), y: dv.getFloat32(8, true), z: dv.getFloat32(12, true) }, dv.getUint32(16, true) * BAMS_TO_RAD);
+        }
+        return;
+      case 0x18:
+        if (body.length >= 0x0c && f2) f2.applyPartsHp([dv.getInt16(4, true), dv.getInt16(6, true), dv.getInt16(8, true), dv.getInt16(10, true)]);
+        return;
+      default:
+        return;
+    }
   }
 
   // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
@@ -2310,6 +2838,7 @@ export class CombatView {
     if (!hit.length) return;
     this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
+    this.strike = { attackType, step };
     for (const e of hit) {
       if (attackType === 2) {
         const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
@@ -2329,6 +2858,7 @@ export class CombatView {
       this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '');
       if (damage >= 1) this.gainPb(damage, false);
     }
+    this.strike = null;
   }
 
   // The special attack on one target (unknown_melee_attack_2 with attack type
@@ -2543,6 +3073,24 @@ export class CombatView {
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
       // "0" text and do nothing.
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
+      return;
+    }
+    if (e.ai instanceof VoloptPartAi) {
+      this.voloptPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
+      return;
+    }
+    if (e.ai instanceof VoloptForm2Ai) {
+      // The body's one pool is its HP (row 37); the strike marks a hit box and
+      // the next tick's reaction splits the damage over the marked parts.
+      const ai = e.ai;
+      const me = this.view?.playerPositions().get(this.game.selfId);
+      ai.hit(damage, me?.x ?? ai.x, me?.z ?? ai.z, byPlayer);
+      if (damage >= 1) this.voloptLastHit.set(e.index, byPlayer);
+      e.stats.hp = ai.hp;
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      const p = e.instance.root.position;
+      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+      this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
       return;
     }
     if (e.ai instanceof DeRolLeAi) {
@@ -3252,6 +3800,10 @@ export class CombatView {
       this.onDeRolLeAction(sub, body);
       return;
     }
+    if (sub === 0x15 || sub === 0x16 || sub === 0x17 || sub === 0x18 || sub === 0x84 || sub === 0x85) {
+      this.onVoloptSub(sub, body);
+      return;
+    }
     if (sub === 0xbf) {
       const g = parseGiveExp(body);
       if (g && g.clientId === this.game.selfId) this.onGiveExp(g.amount);
@@ -3298,6 +3850,23 @@ export class CombatView {
       if (!s) return;
       const e = this.enemies.get(s.enemyIndex);
       if (!e) return;
+      if (e.ai instanceof VoloptPartAi) {
+        // The part's HP is max - damage_taken; the brain looks at it on its
+        // next tick (hit reaction, death). The dead flag is ignored.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0) e.ai.owner.damageTaken(e.ai.part.entity, s.totalDamage);
+        e.stats.hp = e.ai.part.hp;
+        return;
+      }
+      if (e.ai instanceof VoloptForm2Ai) {
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.setDamageTaken(s.totalDamage);
+          this.voloptLastHit.set(e.index, false);
+          e.stats.hp = e.ai.hp;
+          this.opts.log(`Vol Opt's body hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof VoloptAi) return;
       if (e.ai instanceof DeRolLeAi) {
         // restore_enemy_status sets hp = max - damage_taken and the hit flag
         // 0x200 (vtable +0x88, 0x00777ba4) makes UpdateDerolle run the pool
@@ -3548,5 +4117,10 @@ export class CombatView {
     this.levelUpFx?.dispose();
     this.levelUpFx = null;
     this.hud = null;
+    this.voloptViews.clear();
+    this.voloptBodyAnim.clear();
+    this.voloptLastHit.clear();
+    this.voloptHead = null;
+    this.voloptBody = null;
   }
 }
