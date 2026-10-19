@@ -21,6 +21,7 @@ import {
   OPTION_ROWS,
   optionFlagsPayload,
   OptionsMenu,
+  parseBrightness,
   optionValue,
   readOptionFlags,
   withOptionValue,
@@ -80,6 +81,7 @@ eq([...optionFlagsPayload(0x00040358)], [0x58, 0x03, 0x04, 0x00], 'payload: u32 
 // --- brightness (UpdateExternalSettings) ------------------------------------
 eq([0, 1, 2, 3, 4, 7].map(clampBrightness), [0, 1, 2, 3, 4, 4], 'SetExternalSettingsFlag clamp');
 eq(brightnessOffset(2), 0, 'Normal: no ramp offset');
+eq([null, '', 'x', '-1', '7', '1.5', ' 3 ', '0'].map((v) => parseBrightness(v)), [2, 2, 2, 2, 2, 2, 3, 0], 'stored brightness: bad values -> Normal');
 eq(Math.round(brightnessOffset(0) * 0xffff), 0x2000, '+2 level: +0x2000');
 eq(Math.round(brightnessOffset(4) * 0xffff), -0x2000, '-2 level: -0x2000');
 

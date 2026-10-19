@@ -97,7 +97,8 @@ interface ShownEntry extends MenuEntry {
 // PlayerMenuWindow_SetItemState_00732910 stores it when an entry is chosen).
 // A level opens on the kept cursor when it shows the same table
 // (PlayerMenuWindow_CheckItemState_00732514), or on the first entry when the
-// Cursor Position option is "Non-Saved" (character option bit 4,
+// Cursor Position option is "Non-Saved" (character option mask 0x4 set:
+// get_character_option(player, 4) != 0 in
 // ChallengeMenuObject_UpdateMenuIndexFromCharacterOption_007332f8, run when
 // the menu opens and when a sub-menu opens).
 interface KeptCursor {

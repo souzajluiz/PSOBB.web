@@ -208,11 +208,7 @@ export class LobbyScreen implements Screen {
       return;
     }
     if (this.options) {
-      if (!this.options.key(e)) {
-        this.options.dispose();
-        this.options = null;
-        this.menu.leafOpen = false;
-      }
+      if (!this.options.key(e)) this.closeOptions();
       return;
     }
     if (this.itemList) {
@@ -273,6 +269,16 @@ export class LobbyScreen implements Screen {
 
   leave(): void {
     this.keys.clear();
+    this.closeOptions();
+    this.menu.close();
+  }
+
+  // The Options window's destructor sends the option word (options.ts).
+  private closeOptions(): void {
+    if (!this.options) return;
+    this.options.dispose();
+    this.options = null;
+    this.menu.leafOpen = false;
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {

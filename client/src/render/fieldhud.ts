@@ -386,6 +386,8 @@ export class FieldHud {
 
   dispose(): void {
     this.disposed = true;
+    // Closing the menu destroys an open Options window, which saves (01ED).
+    this.menu.close();
     this.counter?.close();
     this.host.removeEventListener('keydown', this.onKey, true);
     this.viewer.frameHooks.delete(this.hook);

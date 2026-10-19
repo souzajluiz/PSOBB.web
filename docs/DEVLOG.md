@@ -59,7 +59,7 @@ Code: `classic/options.ts` (new), `classic/mainmenu.ts` (cursor memory),
   UpdateExternalSettings adds `{32, 16, 0, −16, −32}[i] << 8` (0x009006e0)
   to the 16-bit gamma ramp (UpdateGammaRamp_00837818), and
   ResetExternalSettings writes the registry. Here it is an SVG
-  `feComponentTransfer` intercept on the page, assuming an identity ramp.
+  `feComponentTransfer` intercept on every canvas (a `canvas` style rule), assuming an identity ramp; a stored value that is not 0..4 falls back to Normal.
 - **Save:** ChallengePlayerListWindow_Destructor_00753624 calls
   send_packet0xed_subcommand1 when a row was decided (+0x24). That sends
   `0C 00 ED 01 00 00 00 00` + u32 option_flags. newserv on_ED_BB 0x01ED

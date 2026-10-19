@@ -160,6 +160,7 @@ export const BRIGHTNESS_SHIFT = [32, 16, 0, -16, -32] as const; // 0x009006e0
 export const BRIGHTNESS_DEFAULT = 2; // set_default_graphics_settings
 const BRIGHTNESS_KEY = 'psobb.brightness';
 const FILTER_ID = 'psobb-brightness';
+const STYLE_ID = 'psobb-brightness-style';
 
 // SetExternalSettingsFlag: values above 3 become 4.
 export function clampBrightness(i: number): number {
@@ -177,14 +178,22 @@ export function getBrightness(): number {
   return brightness;
 }
 
+// A stored brightness: only a whole number 0..4, else the default.
+export function parseBrightness(v: string | null | undefined): number {
+  if (v === null || v === undefined || !/^\s*\d+\s*$/.test(v)) return BRIGHTNESS_DEFAULT;
+  const n = Number(v);
+  return Number.isFinite(n) && n <= 4 ? n : BRIGHTNESS_DEFAULT;
+}
+
 // The registry value (here localStorage), read once at start-up.
 export function restoreBrightness(): void {
+  let v: string | null | undefined = null;
   try {
-    const v = globalThis.localStorage?.getItem(BRIGHTNESS_KEY);
-    if (v !== null && v !== undefined) brightness = clampBrightness(Number(v) || 0);
+    v = globalThis.localStorage?.getItem(BRIGHTNESS_KEY);
   } catch {
     // no storage
   }
+  brightness = parseBrightness(v);
   applyBrightness();
 }
 
@@ -192,9 +201,11 @@ export function setBrightness(i: number): void {
   brightness = clampBrightness(i);
 }
 
-// UpdateExternalSettings + ResetExternalSettings: applies the offset to the
-// whole page (the exe's gamma ramp is the whole screen) and stores it.
-// ASSUMED: the ramp is the identity before the offset (the desktop's ramp).
+// UpdateExternalSettings + ResetExternalSettings: applies the offset to every
+// canvas of the page (the exe's gamma ramp is the whole screen; a filter on
+// a canvas has no descendants to re-anchor, unlike one on body) and stores
+// it. ASSUMED: the ramp is the identity before the offset (the desktop's
+// ramp).
 export function applyBrightness(): void {
   try {
     globalThis.localStorage?.setItem(BRIGHTNESS_KEY, String(brightness));
@@ -218,7 +229,14 @@ export function applyBrightness(): void {
     document.body.append(el);
   }
   svg.querySelectorAll('feFuncR, feFuncG, feFuncB').forEach((f) => f.setAttribute('intercept', String(off)));
-  document.body.style.filter = off ? 'url(#psobb-brightness-filter)' : '';
+  // A style rule rather than inline styles: it also covers canvases created later.
+  let style = document.getElementById(STYLE_ID);
+  if (!style) {
+    style = document.createElement('style');
+    style.id = STYLE_ID;
+    document.head.append(style);
+  }
+  style.textContent = off ? 'canvas { filter: url(#psobb-brightness-filter); }' : '';
 }
 
 // --- the window ---------------------------------------------------------------
@@ -354,7 +372,12 @@ export class OptionsMenu {
     if (!this.dirty) return;
     this.dirty = false;
     const flags = this.env.flags();
-    if (flags !== null) this.env.send(flags);
+    if (flags === null) return;
+    try {
+      this.env.send(flags);
+    } catch {
+      // the connection is gone: newserv keeps the last word it got
+    }
   }
 
   tick(): void {
@@ -399,7 +422,7 @@ export function characterOptionsEnv(
     send: (f) => send(OPTION_FLAGS_COMMAND, optionFlagsPayload(f)),
     padConnected: () => {
       try {
-        return (globalThis.navigator?.getGamepads?.() ?? []).some((p) => p !== null);
+        return (globalThis.navigator?.getGamepads?.() ?? []).some((p) => Boolean(p));
       } catch {
         return false;
       }
