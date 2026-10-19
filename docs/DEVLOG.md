@@ -156,6 +156,49 @@ rule against 0x00974e10, the question and Yes/No rects, both windows'
 SE 0x572, no Yes/No keys while it opens, `textShown` from frame 4, rows cut
 by the wipe and the row lag); `tests/windowanim.test.ts`;
 `tests/mobilecontrols.test.ts`; client `tsc --noEmit`.
+## 2026-10-19: Smooth rendering between game ticks (issue #5)
+
+**What changed:** a browser convenience, not exe behaviour. The logic still
+runs at 30 ticks a second (`GAME_TICKS_PER_SECOND`); no tick logic, timer,
+hit test or network send changed. What is drawn changed: anything a tick
+moves keeps its pose before and after the last tick, and each display frame
+draws it at the tick remainder (`render/smoothrender.ts`). Positions lerp,
+Euler angles take the shortest arc.
+
+- How: `MapViewer` runs `renderHooks` right before the draw. Each owner hands
+  its tick-moved objects to `viewer.smoother.track(object, clock)`. The
+  smoother never writes `position` / `rotation`. It composes the interpolated
+  pose into the local matrix with `matrixAutoUpdate` off, and `restore()`
+  after the draw turns it back on and rebuilds the world matrices. Logic that
+  reads `matrixWorld` between frames (De Rol Le's node captures) sees what it
+  saw before. Reused vectors / quaternion / poses: no per-frame allocation
+  per object.
+- Clocks: `TickClock` records the tick count and remainder of the loop that
+  moves the object: combat (enemies, shots, Lily spits, De Rol Le
+  tentacles / stings, the lock-on reticle follows the drawn enemy), the game
+  field (pillar trap nodes), the NPC layer (wanderers). The player camera
+  keeps its previous source / target and `view(pos, heading, alpha)` lerps
+  them (LobbyView's camera tick remainder).
+- Snaps (prev = current): first sight, hidden -> shown (wave spawns), a move
+  outside a tick (warps, 6x24, network snaps), a one-tick move over 100
+  units, and a brain's `warps` counter (a write-only render hint on
+  `BrainBase`): De Rol Le's corner teleports (dive, sink, resurface), the Pan
+  Arms going back under its spawn point, Hidoom / Migium appearing at the
+  split, a Pofuilly Slime's return and throw. `PlayerCamera.snap()` also
+  snaps the drawn view.
+- Already smooth, unchanged: the local player (moves per frame time), remote
+  players (6x3E / 6x3F / 6x40 / 6x42 targets chased per frame time), and
+  motion frames: `NodeAnimator` / the player animator apply the fractional
+  frame (`tickRemainder`) every display frame.
+- Not interpolated: particle effects (telepipe, level-up), the NPC talk and
+  door unlock cameras.
+- `?fps=30` turns it all off (the original's stepped look).
+
+**Tests:** `tests/smoothrender.test.ts` (pose lerp, shortest arc across PI,
+every snap rule, ?fps=30, TickSmoother on three.js objects leaving the logic
+pose untouched, the camera). tsc is clean; combat, enemies, derolle,
+enemysplits, every enemyfsm suite, bossrooms, mobilecontrols, npcs, traps,
+controls, collision, waves and warpmenu pass.
 
 ## 2026-10-19: De Rol Le review fixes
 

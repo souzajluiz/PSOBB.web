@@ -220,6 +220,7 @@ export class PanArmsAi extends BrainBase {
       this.x = this.spawnX;
       this.z = this.spawnZ;
       this.lift = PAN.buriedDepth;
+      this.warps++;
     }
   }
 
@@ -549,6 +550,7 @@ export class PanHalfAi extends BrainBase {
     this.x = x + Math.cos(angle) * o.right + Math.sin(angle) * o.forward;
     this.z = z - Math.sin(angle) * o.right + Math.cos(angle) * o.forward;
     this.angle = wrap(angle + (this.kind === 'hidoom' ? 1 : -1) * HALF.splitHeading * BAMS);
+    this.warps++;
     this.spawnX = this.x;
     this.spawnZ = this.z;
     this.state = 'split';
@@ -995,6 +997,7 @@ export class SlimeAi extends BrainBase {
     const a = this.rng() * Math.PI * 2;
     this.x = x;
     this.z = z;
+    this.warps++;
     this.vx = Math.sin(a);
     this.vz = Math.cos(a);
     this.vy = 2.5;
@@ -1089,6 +1092,7 @@ export class SlimeAi extends BrainBase {
           this.misses = SLIME.misses;
           this.x = this.spawnX;
           this.z = this.spawnZ;
+          this.warps++;
         }
         this.timer = this.puddleWait();
         break;

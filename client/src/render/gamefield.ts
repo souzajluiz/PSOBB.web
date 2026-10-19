@@ -43,6 +43,7 @@ import { se } from '../audio/se.ts';
 import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
 import { areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, textWindowLayout, WarpMenuOverlay } from './warpmenu.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
+import { TickClock } from './smoothrender.ts';
 
 export interface GameFieldOptions {
   bgm?: BgmPlayer | null;
@@ -117,6 +118,12 @@ export class GameField {
   private battleFrames = 0; // 0x5a countdown after the room is cleared
   private battle = false;
   private frameAcc = 0;
+  // The ticks above, for the smoother (render/smoothrender.ts; the traps).
+  private readonly tickClock = new TickClock();
+  private readonly smoothHook = () => {
+    const nodes = this.objects?.trapNodes();
+    if (nodes) for (const n of nodes) this.viewer.smoother.track(n, this.tickClock);
+  };
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, opts: GameFieldOptions) {
     this.viewer = viewer;
@@ -415,6 +422,7 @@ export class GameField {
   // viewer.onFrame; movement keys are held back while a menu is open
   // (FUN_00791748(0) disables the player's control in the exe).
   attach(): void {
+    this.viewer.renderHooks.add(this.smoothHook);
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
       inner?.(dt, this.menu.open ? NO_KEYS : keys);
@@ -441,6 +449,7 @@ export class GameField {
     this.frameAcc -= Math.floor(this.frameAcc);
     const w = this.waves.get(this.floor);
     for (let i = 0; i < ticks; i++) w?.frame();
+    this.tickClock.advance(ticks, this.frameAcc);
     if (ticks && this.traps.length) this.trapFrames(ticks, pos);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
@@ -743,6 +752,7 @@ export class GameField {
 
   dispose(): void {
     this.disposed = true;
+    this.viewer.renderHooks.delete(this.smoothHook);
     this.menu.dispose();
     this.objects?.dispose();
     this.objects = null;

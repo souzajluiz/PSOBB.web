@@ -48,6 +48,8 @@ export abstract class BrainBase implements EnemyBrain {
   z: number;
   angle: number;
   targetId: number | null = null;
+  // Render hint (EnemyBrain.warps): bumped on a teleport, read by no logic.
+  warps = 0;
   protected current: EnemyAiMotion | null = null;
   protected rng: () => number;
 

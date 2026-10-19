@@ -593,6 +593,11 @@ export class FieldObjects {
     this.models?.setTrapPose(index, rise1, rise2, spin);
   }
 
+  // The nodes the pillar traps move on the ticks.
+  trapNodes(): ReadonlySet<THREE.Object3D> | null {
+    return this.models?.trapNodes ?? null;
+  }
+
   setBossWarpState(index: number | null, state: number): void {
     this.drivenWarp = index === null ? null : { index, state };
   }
