@@ -166,6 +166,7 @@ export class GameView {
       area: () => this.current?.area ?? 0,
       questStarted: () => this.quest !== null,
       quest: () => this.quest,
+      questKey: (e) => this.questKey?.(e) ?? false,
       blocked: () => this.field.menu.open,
       cast: (t) => this.combat.castTechnique(t),
       telepipeAllowed: () => this.telepipes.allowed(),
@@ -299,6 +300,8 @@ export class GameView {
   // game's own variations, and its .dat replaces the free-play set data of the
   // floors it owns (see quest/session.ts).
   quest: QuestSession | null = null;
+  // The quest overlay's keys while the main menu holds them (quest/town.ts).
+  questKey: ((e: KeyboardEvent) => boolean) | null = null;
 
   setQuest(quest: QuestSession | null): void {
     this.quest = quest;

@@ -87,12 +87,21 @@ export class QuestTown {
     void this.ui.load(opts.files).catch((err) => this.log(`quest windows: ${(err as Error).message}`));
     this.ui.camera = () => this.view.camera;
     this.ui.speakerHead = (target) => this.speakerHead(target);
-    this.ui.onAdvance = () => {
-      this.area?.vm.dismissMessage();
-      this.quest?.vm.dismissMessage();
-      this.area?.vm.dismissBoard();
-      this.quest?.vm.dismissBoard();
+    // Only what waited moves on: a balloon / window, the board text, or both
+    // (the exe's yields each read the decide key themselves).
+    this.ui.onAdvance = ({ message, board }) => {
+      if (message) {
+        this.area?.vm.dismissMessage();
+        this.quest?.vm.dismissMessage();
+      }
+      if (board) {
+        this.area?.vm.dismissBoard();
+        this.quest?.vm.dismissBoard();
+      }
     };
+    // While the main menu holds the keys (a Quest Board item's thread runs,
+    // classic/questboard.ts), its lists and board text still take them.
+    this.view.questKey = (e) => this.ui.menuKey(e);
     this.ui.onAction = () => this.action();
     this.ui.onTick = () => this.tick();
     this.view.inputBlocked = () => this.ui.blocking || this.view.npcs.talking || this.counterOpen;
@@ -258,9 +267,9 @@ export class QuestTown {
 
   private tick(): void {
     this.area?.vm.frame();
-    // Enter may have reached the quest board text through the Quest Board
-    // window (classic/questboard.ts) instead of the overlay.
-    if (!this.area?.vm.boardWaiting && !this.quest?.vm.boardWaiting) this.ui.boardAdvanced();
+    // A thread waits on the decide key after disp_msg_qb / add_msg, with or
+    // without the text window (close_msg_qb does not end the wait).
+    this.ui.boardWait = !!(this.area?.vm.boardWaiting || this.quest?.vm.boardWaiting);
     this.view.npcs.updateVisibility();
     // at_coords_call: the thread starts by itself when the player walks in.
     const me = this.view.selfPose();
@@ -495,6 +504,7 @@ export class QuestTown {
   dispose(): void {
     for (const d of this.disposers) d();
     this.view.inputBlocked = () => false;
+    this.view.questKey = null;
     this.view.npcs.host = {};
     this.ui.dispose();
   }

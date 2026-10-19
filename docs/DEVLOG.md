@@ -1,5 +1,40 @@
 # Devlog
 
+## 2026-10-19: Quest Board review fixes
+
+**What changed:** fixes from the review of the Quest Board window. An item's
+thread that shows a `list` or the board text while the main menu is open now
+gets its keys. One Enter moves on only what was waiting. Only the board text
+is drawn above the field HUD.
+
+**Details:**
+- While the item's thread runs, the board (locked, state 4: cancel ignored as
+  in the exe) hands every key to the quest overlay (`QuestUi.menuKey`,
+  through `GameView.questKey` / `FieldHud` `questKey`). The overlay's lists
+  take the arrows / Enter / cancel. The board text takes Enter on both VMs. A
+  balloon or `window_msg` does not take Enter while the menu is open: both
+  runners check `is_menu_open` first in `window_msg__message__chat_box`, so
+  it moves on once Home closes the menu. That is the way out.
+- `QuestUi.onAdvance` now says what waited (`{ message, board }`). Town
+  dismisses only that kind, on both VMs.
+- The board text has its own canvas at `QUEST_LAYER`. Balloons, windows and
+  lists stay on the overlay canvas under the HUD as before. The board text is
+  a list window created while the Quest Board window is up, so it is drawn
+  over it.
+- Checked in the exe: `opcode_disp_msg_qb` itself sets
+  `quest_thread_yield_reason = disp_msg_qb__add_msg` (not only `add_msg`), so
+  its wait stays.
+- `opcode_close_msg_qb` and `ResetQuestDialogState_006b0ba4` only close the
+  windows. A thread in that yield keeps waiting for the decide key (the
+  runners read the key alone), so the VM does not release it there. Enter
+  still reaches it: the overlay's board wait follows `vm.boardWaiting` each
+  tick, not the window. With the text closed, a later `add_msg` speaks as a
+  `message` (`opcode_add_msg`).
+
+**Checks:** `tests/questboard.test.ts` (keys forwarded while locked, the
+wait surviving a reset), quests, questflow, fieldhud, minimap tests; client
+`tsc --noEmit`.
+
 ## 2026-10-19: Episode 1 bosses' children from the exe
 
 **What changed:** Vol Opt's lightning rod plays its own motion

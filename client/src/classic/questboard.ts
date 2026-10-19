@@ -42,10 +42,13 @@
 //          bit 1: 3;
 //   3      CreateQuestThread_006bcdec(label of the selected item): a thread
 //          on quest_run_thread_2 (QuestThread3), then 4;
-//   4      while the thread lives the board ignores its keys (bit 1 stays);
-//          the thread's disp_msg_qb / add_msg show the quest board text at
-//          GUI 0x74 (quest/questui.ts) and wait for the decide key, which this
-//          window hands to the VM; once the thread ends, 1.
+//   4      while the thread lives the board ignores its keys (bit 1 stays,
+//          cancel included); the thread's disp_msg_qb / add_msg show the
+//          quest board text at GUI 0x74 (quest/questui.ts) and wait for the
+//          decide key, and its `list` takes the arrows / decide: this window
+//          hands the keys to the quest overlay (QuestBoardEnv.questKey). A
+//          `message` / `window_msg` waits until the menu is closed (the
+//          runners check is_menu_open first); once the thread ends, 1.
 // Drawing (GuildCardSearchWindow_Render_007549c8): the frame, the title,
 // then (register_quest_board_line_primitives, while the counter c >= 0 and
 // the selected slot is set) the cursor around the selected slot
@@ -105,8 +108,6 @@ export interface QuestBoardVM {
   readonly regsI: Int32Array;
   // CreateQuestThread_006bcdec: runner 2 (quest_run_thread_2).
   startThread(label: number, runner: 2): QuestBoardThread | null;
-  readonly boardWaiting: boolean;
-  dismissBoard(): void;
 }
 
 export interface QuestBoardEnv {
@@ -114,6 +115,9 @@ export interface QuestBoardEnv {
   questName: () => string;
   text: (group: number, index: number) => string;
   setHudFlag: (bit: number, on: boolean) => void;
+  // The quest overlay's keys (its lists, the board text's decide) while the
+  // item's thread runs; true when used.
+  questKey: (e: KeyboardEvent) => boolean;
 }
 
 export interface QuestBoardTextures {
@@ -213,9 +217,8 @@ export class QuestBoardWindow {
   key(e: KeyboardEvent): boolean {
     if (this.destroyed) return false;
     if (this.locked) {
-      // The item's thread waits on the board text: the decide key moves it
-      // on (quest_run_thread_2 reads the key itself).
-      if (e.key === 'Enter' && this.state === 4) this.env.vm()?.dismissBoard();
+      // The item's thread reads the keys itself (its board text, its list).
+      if (this.state === 4) this.env.questKey(e);
       return true;
     }
     const left = e.key === 'ArrowLeft';
