@@ -954,6 +954,83 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // Vol Opt (combat/volopt.ts, PROTOCOL.md "Vol Opt"). Every one of these is
+  // sent by the client that ran the state (the room leader's director, a
+  // pillar's lightning, the body's hit reaction) and the sender applies it
+  // itself first, like checked_call_packet0x60_subcommand.
+  //
+  // 6x15 G_VolOptBossActions (0x0C): {15, 03, entity} {u16 action, u16 target,
+  // i16 param (the start monitor / radius), u16 monitor count}.
+  sendVoloptAction(entityId: number, action: number, target: number, param: number, count: number): Uint8Array {
+    const b = new Uint8Array(0x0c);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x15;
+    b[1] = 3;
+    dv.setUint16(2, entityId & 0xffff, true);
+    dv.setUint16(4, action & 0xffff, true);
+    dv.setUint16(6, target & 0xffff, true);
+    dv.setInt16(8, param, true);
+    dv.setUint16(10, count & 0xffff, true);
+    this.conn.send(0x60, 0, b);
+    return b;
+  }
+
+  // 6x16 {entity} {u8 table[6], u16 count} (0x0C) or, in Ultimate, 6x84 with a
+  // u16 technique and u16 unused (0x10).
+  sendVoloptPillars(entityId: number, table: readonly number[], count: number, technique: number | null): Uint8Array {
+    const b = new Uint8Array(technique === null ? 0x0c : 0x10);
+    const dv = new DataView(b.buffer);
+    b[0] = technique === null ? 0x16 : 0x84;
+    b[1] = b.length / 4;
+    dv.setUint16(2, entityId & 0xffff, true);
+    for (let i = 0; i < 6; i++) b[4 + i] = (table[i] ?? 0) & 0xff;
+    dv.setUint16(10, count & 0xffff, true);
+    if (technique !== null) dv.setUint16(12, technique & 0xffff, true);
+    this.conn.send(0x60, 0, b);
+    return b;
+  }
+
+  // 6x85 G_VolOptPhase2UltimateBossActions (0x14): {85, 05, unused} {u16
+  // action, i16 delays[3], 8 unused}.
+  sendVoloptDelays(action: number, delays: readonly number[]): Uint8Array {
+    const b = new Uint8Array(0x14);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x85;
+    b[1] = 5;
+    dv.setUint16(4, action & 0xffff, true);
+    for (let i = 0; i < 3; i++) dv.setInt16(6 + i * 2, delays[i] ?? 0, true);
+    this.conn.send(0x60, 0, b);
+    return b;
+  }
+
+  // 6x17 G_SetEntityPositionAndAngle (0x14): {17, 05, entity} {f32 x, y, z,
+  // u32 angle}. The leader carries the players to the second arena with it.
+  sendEntityPosition(entityId: number, x: number, y: number, z: number, angle: number): void {
+    const b = new Uint8Array(0x14);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x17;
+    b[1] = 5;
+    dv.setUint16(2, entityId & 0xffff, true);
+    dv.setFloat32(4, x, true);
+    dv.setFloat32(8, y, true);
+    dv.setFloat32(12, z, true);
+    dv.setUint32(16, angle >>> 0, true);
+    this.conn.send(0x60, 0, b);
+  }
+
+  // 6x18 G_SyncVolOpt2PartsHP (0x0C): {18, 03, entity} {i16 capture, laser,
+  // heal, missile part HP}.
+  sendVoloptPartsHp(entityId: number, hp: readonly number[]): Uint8Array {
+    const b = new Uint8Array(0x0c);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x18;
+    b[1] = 3;
+    dv.setUint16(2, entityId & 0xffff, true);
+    for (let i = 0; i < 4; i++) dv.setInt16(4 + i * 2, hp[i] ?? 0, true);
+    this.conn.send(0x60, 0, b);
+    return b;
+  }
+
   sendImposeHold(frames: number, particle: number, x: number, z: number, radius2: number): void {
     const b = new Uint8Array(0x14);
     const dv = new DataView(b.buffer);

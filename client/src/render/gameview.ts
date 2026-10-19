@@ -158,6 +158,9 @@ export class GameView {
       ...character,
       source,
       paletteSlot: (i) => this.hud?.paletteSlot(i) ?? null,
+      warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
+      bossPhase: (phase) => this.field.noteBossPhase(phase),
+      constructObjects: (floor, room, group) => this.constructObjects(floor, room, group),
     });
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
     this.hud = new FieldHud(viewer, this.files, {
