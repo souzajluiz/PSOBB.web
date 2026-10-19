@@ -1,14 +1,26 @@
 # Roadmap
 
-## Next up (queued 2026-10-18)
-Work stopped here on request; pick these up first, in order. Each was planned
-as its own commit with tests, a DEVLOG entry and a Chrome check.
-1. Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape motion,
-   the rest of the Episode 2 enemies' FSMs (Merillia / Meriltas and Dolmolm /
-   Dolmdarl are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue,
-   Sinow Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos,
-   Recobox / Recon, Epsilon / Epsigard left), the Episode 1 boss fights (where
-   they move their children), the title / login screens, water distortion.
+## Next up (reordered 2026-10-19 by psobb-client-source coverage)
+Order follows where psobb-client-source (ADR 0001) has matching C, so the work
+rests on verified code instead of the Ghidra dump alone. Counts are banked JP
+functions per area at commit f1b92b9d (527 banked, 8.7% of the live belt):
+Vol Opt 34, Game list menu 28, other menus 23, De Rol Le 17, Quest 11,
+Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
+(the Episode 2 enemies) come last and keep using the Ghidra dump.
+
+1. In progress: Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape
+   motion with water distortion, the title / login screens.
+2. Episode 1 boss fights where they move their children: De Rol Le (tentacle,
+   segments, rocks, spore mines) first, then Vol Opt's phases (core in its
+   monitor, prison bars, form 2 / form 7 hazards, minions), then the Dragon and
+   Sinow Beat, then Dark Falz.
+3. Classic game list menu (lobby counter's game list: entries, status text,
+   background, cursor) and the quest loading screen (states, grey line
+   primitives, transition to the game).
+4. The rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
+   are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
+   Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
+   Recon, Epsilon / Epsigard left).
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
