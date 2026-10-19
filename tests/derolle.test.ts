@@ -258,8 +258,8 @@ function run(ai: DeRolLeAi, targets: AiTarget[], ticks: number, until?: () => bo
 // 11. A follower takes its states from the leader's 6x13 / 6x14.
 {
   const ai = brain({ leader: () => false });
-  run(ai, [], 2000);
-  eq(ai.sid, DRL_STATE.enter, 'a follower never picks a state itself');
+  run(ai, [], 400);
+  eq(ai.sid, DRL_STATE.enter, 'a follower does not pick a state while the leader can still send it');
   ai.applyRemote(0x19, 15, 4);
   eq(ai.sid, 0x19, '6x14 sets the state');
   eq(ai.cursor, 15, 'and the cursor');
@@ -271,9 +271,85 @@ function run(ai: DeRolLeAi, targets: AiTarget[], ticks: number, until?: () => bo
 {
   const ai = brain({ leader: () => false });
   ai.setState(DRL_STATE.dive);
-  const r = run(ai, [], 3000);
+  const r = run(ai, [], 3000, () => near(ai.z, 500) && ai.h === 0);
   check(r.shots.some((s) => s instanceof DrlCeilingRock), 'ceiling rocks fall during the run');
   check(near(ai.x, 0) && near(ai.z, 500), 'it comes up at corner 1');
+}
+
+// The body motions' frame counts in bm_boss2_de_rol_le.bml (0 beam02 ..
+// 17 tloop), read from the client data.
+const REAL_FRAMES = [15, 16, 20, 26, 21, 60, 60, 150, 150, 33, 40, 34, 80, 40, 80, 40, 50, 30];
+const realFrames = (m: number) => REAL_FRAMES[m] ?? 30;
+
+// 13. The beams run to their end with the real motions (normal: sub 3 waits
+//     for beam_b, 26 frames, to end; Ultimate skips it), and the sequence
+//     goes on to the recovery.
+for (const ultimate of [false, true]) {
+  const ai = brain({ frames: realFrames, ultimate });
+  const t = player(0, 0, -100);
+  ai.cursor = ultimate ? 23 : 24; // the entry before 26 (beam charge)
+  ai.setState(DRL_STATE.beamCharge, true, [t]);
+  const seen: number[] = [];
+  run(ai, [t], 3000, () => {
+    if (seen.at(-1) !== ai.sid) seen.push(ai.sid);
+    return ai.sid === DRL_STATE.recover;
+  });
+  eq(ai.sid, DRL_STATE.recover, `${ultimate ? 'Ultimate' : 'normal'}: the beams end in the recovery 0x1c`);
+  check(seen.includes(DRL_STATE.beam), `${ultimate ? 'Ultimate' : 'normal'}: the beam state ran`);
+}
+
+// 14. A whole normal loop with the real frame counts never stalls.
+{
+  const ai = brain({ frames: realFrames });
+  const states = new Set<number>();
+  let last = ai.sid;
+  let still = 0;
+  let worst = 0;
+  for (let i = 0; i < 30 * 60 * 10; i++) {
+    ai.tick([player(0, 0, 100)]);
+    ai.events.splice(0);
+    states.add(ai.sid);
+    if (ai.sid === last) worst = Math.max(worst, ++still);
+    else still = 0;
+    last = ai.sid;
+  }
+  for (const s of [0x0d, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x04]) check(states.has(s), `the loop reaches state 0x${s.toString(16)}`);
+  check(worst < 30 * 60, `no state lasts a minute (longest ${worst} ticks)`);
+}
+
+// 15. The breaking hit's rest is lost (0x00433edc's shell branch never
+//     touches the body pool).
+{
+  const ai = brain();
+  ai.hit(1400);
+  eq(ai.hit(1000), 'shell', 'the breaking hit is a shell hit');
+  eq(ai.bodyHp, ai.bodyMax, 'the 900 past the shell are lost');
+}
+
+// 16. The dive's rumble is a sustained SE (one voice per owner).
+{
+  const ai = brain({ leader: () => false });
+  ai.setState(DRL_STATE.dive);
+  const r = run(ai, [], 400);
+  const rumble = r.events.filter((e) => e.kind === 'se' && e.id === 0x329);
+  check(rumble.length > 1 && rumble.every((e) => e.kind === 'se' && e.sustain), 'SE 0x329 every frame, as a sustained voice');
+}
+
+// 17. A follower that never hears from the leader takes the step itself,
+//     and a dead body is always removed.
+{
+  const ai = brain({ leader: () => false, frames: realFrames });
+  ai.setState(0x03);
+  run(ai, [], 3000, () => ai.sid !== 0x03);
+  eq(ai.sid, 0x18, 'after waiting, the follower moves on to the floor stings');
+  eq(ai.events.filter((e) => e.kind === 'state').length, 0, 'without sending anything');
+  ai.hit(5000);
+  ai.hit(5000);
+  const r = run(ai, [], 5000, () => r2());
+  function r2() {
+    return ai.events.some((e) => e.kind === 'remove');
+  }
+  check(r.events.some((e) => e.kind === 'remove'), 'the follower removes the dead body on its own');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

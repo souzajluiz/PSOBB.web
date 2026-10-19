@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-19: De Rol Le review fixes
+
+**What changed:** the review of the De Rol Le fight and its Chrome run found
+two soft-locks and several sync issues. Fixes, with the exe's behaviour:
+
+1. Damage from other clients feeds the shell / body pools on every client.
+   UpdateDerolle calls the pool handler `ProcessPlayerHealing_00433edc`
+   (vtable +0x100 of `0x00af4440`) on leader and followers alike when the hit
+   flag 0x200 is set (vtable +0x88, `0x00777ba4`). Each 6x0A now carries one
+   hit's damage (`sendEnemy` takes a `damageTaken`).
+2. The beam cannot hang: beam_b (body motion 3) has 26 frames, so after sub 2
+   holds frame 13, sub 3 plays on to the end. A test runs 0x1a..0x1c with the
+   real frame counts.
+3. The kill sends follow `EnemyOnKilledHandler_0051f894`. Every client sends
+   the 6x76. Only the leader sends the drop request, and only if the boss was
+   hit. Each client asks for its own EXP, as the killer only after the last
+   hit (ASSUMED: enemy +0x2da is the local player).
+4. The big jump's sign matches `0x00431058` (z = z0 - Zpos toward 500.0 at
+   `0x008fce3c`); the body overshoots to about 622 and eases back. No change.
+5. SE 0x329 during the dive is one sustained voice, as `PlaySFX_008292dc`
+   only refreshes a live voice with the same id and owner (`SePlayer.playing`).
+6. The damage past the shell on the breaking hit is lost, as in
+   `0x00433edc`'s shell branch.
+7. Followers: the exe has no resync. ASSUMED fallback: a follower that has
+   not heard from the leader for 300 ticks takes the leader's step itself,
+   without sending, so the body is always removed after its death.
+8. The children keep running through the death as in the exe (they live in
+   the body's +0x3e0 tree); 0x1f resets the tentacles, and 0x20 drops the
+   shots still in flight.
+9. A FLAG_DEAD 6x0A no longer runs the generic death on De Rol Le; its brain
+   owns the death.
+10. A per-boss `DrlView` caches the spine / attach nodes, the child groups
+    and reused point arrays: no per-frame `updateMatrixWorld` or
+    `getObjectByName`.
+
+**Tests:** derolle (beam to the end, a 10-minute loop reaching every attack
+state, shell overflow, sustained SE, follower fallback), bossrooms, combat
+(5946 checks), enemies, waves and every enemyfsm suite pass; tsc is clean.
+
 ## 2026-10-19: De Rol Le's fight
 
 **What changed:** De Rol Le now fights, with its FSM reversed from PsoBB.exe.
