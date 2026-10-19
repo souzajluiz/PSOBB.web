@@ -5,7 +5,10 @@ Work stopped here on request; pick these up first, in order. Each was planned
 as its own commit with tests, a DEVLOG entry and a Chrome check.
 1. Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape motion,
    Episode 2 enemies' FSMs, the Episode 1 boss fights (where they move their
-   children), the title / login screens, water distortion.
+   children), water distortion. Title / login: the flow is from the exe
+   (2026-10-19); left are the Exit Game Yes/No geometry (0x0073cf10 offsets),
+   the list windows' text wipe on the Login menu, and a capture of character
+   creation (capture 04 is not on disk) and of Input UserID to measure SSIM.
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
@@ -24,7 +27,7 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 - [x] Follow the `19` redirect and list character slots (`E3` → `E4`/`E5`)
 - [x] Character creation (`E5` on the data connection → `E4` approve)
 - [x] Character select → main menu (`07`/`10`) → lobby (`93` phase 4)
-- [ ] Title, login and character select screens identical to the original client
+- [ ] Title, login and character select screens identical to the original client (title flow, Login menu, Input UserID and fades from the exe; SSIM vs the psobb.io captures: title 0.771, select 0.915; creation and Input UserID have no capture to measure)
 - [x] `data/` folder picker (File System Access API) + dev-server source
 
 ## Phase 3: map viewer
