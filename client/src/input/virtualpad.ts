@@ -109,3 +109,35 @@ export function proxyKeys(value: string): ProxyKey[] {
   }
   return out;
 }
+
+// Android keyboards compose words (IME): while composing, the field holds
+// text that is not final; it is read once composition ends.
+export function proxyInput(value: string, composing: boolean): ProxyKey[] | null {
+  return composing ? null : proxyKeys(value);
+}
+
+// Browser shortcuts of ui/webcontrols.ts. Alt+Enter / Alt+M: the game binds
+// neither Alt nor M, and F1..F12 are its hotbar keys (F11 is the browser's).
+export type Shortcut = 'fullscreen' | 'mute';
+
+export function shortcutFor(e: { key: string; code: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean }): Shortcut | null {
+  if (!e.altKey || e.ctrlKey || e.metaKey) return null;
+  if (e.key === 'Enter') return 'fullscreen';
+  if (e.code === 'KeyM') return 'mute';
+  return null;
+}
+
+// Keys whose keydown a shortcut swallowed; the matching keyup is swallowed
+// too, even when Alt is released first.
+export class SwallowedKeys {
+  private readonly codes = new Set<string>();
+
+  down(code: string): void {
+    this.codes.add(code);
+  }
+
+  // true: this keyup belongs to a swallowed keydown.
+  up(code: string): boolean {
+    return this.codes.delete(code);
+  }
+}

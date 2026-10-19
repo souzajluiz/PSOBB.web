@@ -17,9 +17,14 @@ export type FullscreenEvent =
   | { type: 'toggle'; nativeAvailable: boolean }
   | { type: 'entered' } // fullscreenchange: our element is fullscreen
   | { type: 'exited' } // fullscreenchange: no fullscreen element (Esc, F11 exit, API)
-  | { type: 'failed' }; // requestFullscreen() rejected
+  | { type: 'failed' } // requestFullscreen() rejected
+  | { type: 'timeout' }; // no answer in PENDING_TIMEOUT_MS (prefixed calls return nothing)
 
-export type FullscreenAction = 'request' | 'exit' | 'fallbackOn' | 'fallbackOff' | null;
+// 'cancel' leaves a fullscreen the pending request may have reached.
+export type FullscreenAction = 'request' | 'exit' | 'cancel' | 'fallbackOn' | 'fallbackOff' | null;
+
+// How long a request may stay unanswered before the CSS fallback is used.
+export const PENDING_TIMEOUT_MS = 1500;
 
 export function fullscreenStep(state: FullscreenState, event: FullscreenEvent): { state: FullscreenState; action: FullscreenAction } {
   switch (state.mode) {
@@ -29,9 +34,9 @@ export function fullscreenStep(state: FullscreenState, event: FullscreenEvent): 
       return { state, action: null };
     case 'pending':
       if (event.type === 'entered') return { state: { mode: 'native' }, action: null };
-      if (event.type === 'failed') return { state: { mode: 'fallback' }, action: 'fallbackOn' };
+      if (event.type === 'failed' || event.type === 'timeout') return { state: { mode: 'fallback' }, action: 'fallbackOn' };
       if (event.type === 'exited') return { state: { mode: 'off' }, action: null };
-      return { state, action: null }; // a second toggle while the request runs
+      return { state: { mode: 'off' }, action: 'cancel' }; // toggled again before an answer
     case 'native':
       if (event.type === 'toggle') return { state, action: 'exit' }; // off on the change event
       if (event.type === 'exited') return { state: { mode: 'off' }, action: null };
@@ -73,11 +78,22 @@ export class FullscreenController {
   private readonly el: HTMLElement;
   private readonly listeners = new Set<(on: boolean) => void>();
 
+  private timer = 0;
+  private readonly change = () => this.dispatch(fullscreenElement() === this.el ? { type: 'entered' } : { type: 'exited' });
+
   constructor(el: HTMLElement) {
     this.el = el;
-    const change = () => this.dispatch(fullscreenElement() === this.el ? { type: 'entered' } : { type: 'exited' });
-    document.addEventListener('fullscreenchange', change);
-    document.addEventListener('webkitfullscreenchange', change);
+    document.addEventListener('fullscreenchange', this.change);
+    document.addEventListener('webkitfullscreenchange', this.change);
+  }
+
+  // Leaves fullscreen and removes the document listeners.
+  dispose(): void {
+    this.exit();
+    clearTimeout(this.timer);
+    document.removeEventListener('fullscreenchange', this.change);
+    document.removeEventListener('webkitfullscreenchange', this.change);
+    this.listeners.clear();
   }
 
   get active(): boolean {
@@ -107,6 +123,7 @@ export class FullscreenController {
     const was = this.active;
     const { state, action } = fullscreenStep(this.state, event);
     this.state = state;
+    if (state.mode !== 'pending') clearTimeout(this.timer);
     this.run(action);
     this.el.classList.toggle('is-fullscreen', this.active);
     if (this.active !== was) for (const fn of this.listeners) fn(this.active);
@@ -118,6 +135,10 @@ export class FullscreenController {
     switch (action) {
       case 'request': {
         const fail = () => this.dispatch({ type: 'failed' });
+        // Neither a change event nor a rejection (webkitRequestFullscreen
+        // returns nothing and may refuse silently): fall back after a while.
+        clearTimeout(this.timer);
+        this.timer = window.setTimeout(() => this.dispatch({ type: 'timeout' }), PENDING_TIMEOUT_MS);
         try {
           const p = el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : el.webkitRequestFullscreen?.();
           if (p instanceof Promise) p.catch(fail);
@@ -131,6 +152,12 @@ export class FullscreenController {
         if (p instanceof Promise) p.catch(() => this.dispatch({ type: 'exited' }));
         break;
       }
+      case 'cancel':
+        if (fullscreenElement() === this.el) {
+          const p = doc.exitFullscreen ? doc.exitFullscreen() : doc.webkitExitFullscreen?.();
+          if (p instanceof Promise) p.catch(() => {});
+        }
+        break;
       case 'fallbackOn':
         this.el.classList.add('is-fill-viewport');
         document.documentElement.classList.add('has-fill-viewport');
