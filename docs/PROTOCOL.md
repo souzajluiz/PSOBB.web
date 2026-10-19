@@ -1148,6 +1148,20 @@ The form changes are the boss's own and the room leader broadcasts them, so a cl
 
 Interactive music (`client/src/audio/slbgm.ts`): twelve descriptors at `0x00a16088` = `{char name[0x20] ("slbgm_forest.afs"), i32 records, i32, i32, ptr calm table, ptr battle table}`, records of five `i16` `{first, loop, count, transition, next}`. `FUN_00814c00` swaps the extension for `ogg`: `data/ogg/slbgm_forest.ogg` is a **chained Ogg Vorbis** file and every logical bitstream (link) is one segment; the streaming thread (`FUN_0086ee8c`, `FUN_0086f530`) plays queued link numbers back to back (`FUN_0086e114` → 256-entry ring at +0x708). Start (`FUN_00814c7c`): queue `calm[0].first` and `first + 1` (or `calm[next].first` for a one-link record). Each time the queue drains to the playing link (`FUN_00814f30`): in the same mode, the next link of the record until `count`, then record `next` starting at `first` the first time a record changes and at `loop` afterwards; on a mode change the record's `transition` link, then (`FUN_00815170`) `other[record].next` at its `loop` link (a transition of −1 switches at once). Battle is requested (`FUN_00814c5c`) while the player's room has an active wave event (`FUN_0069821c`, `FUN_008114b0`), calm again 0x5A frames after it is clear; the Dark Falz music ignores it. In every file the highest link the tables use is the last link of the file. Browsers decode each link separately (its own Ogg headers) and schedule them sample-accurately.
 
+## Vol Opt (area 0x0D, `combat/volopt.ts`, `combat/volopt2.ts`)
+
+Entities of the fight (newserv `add_enemy_and_children` agrees): control `TBoss3Volopt` 0xC2 at the set entry's index `b`, pillars `b+1..6`, monitors `b+7..b+0x1E` (wall `i >> 2`, shape `i & 3`), `b+0x1F/0x20` unused (the captured player's prison is `b+0x20`), the lightning rod `b+0x21`, the core `b+0x22`; phase 2 `TBoss3VoloptP02` 0xC5 is its own set entry. Rows of the BattleParamEntry MovementData / stats tables: 33 core, 34 pillar, 35 monitor, 36 rod, 37 form 2, 38 prison, 42 form 2's four part HPs (`iparam1..4` capture / laser / heal / missile); 39..41 are camera numbers.
+
+| Command | Fields (after `{cmd, size, entity id}`) | Sent by / handler |
+|---|---|---|
+| `6x15` | `u16 action, u16 target, i16 param, u16 count` | the leader's directors; `0x0043E4F8`. 0 core traverse (`param` = start wall, `count` = walls), 1 core away, 2 rod stands up and the pillars glow, 3 missiles (`target` = the player most in front), 4 laser, 5 heal, 6 capture (`target`), 7 Ultimate arm (`param` = radius - 55) |
+| `6x16` / `6x84` | `u8 table[6], u16 count` (+ `u16 technique 0..3, u16` for 6x84) | the leader; `0x0043E658` / `0x0043E6E8`: the first `count` pillars of the table rise, `table[0]` as the red one |
+| `6x17` | `f32 x, y, z, u32 angle` | the leader, to carry each player to the second arena (`0x009A4BF0`: (0, -5090), (0, -4910), (-90, -5000), (90, -5000)); `0x0043E778` |
+| `6x18` | `i16 capture, laser, heal, missile part HP` | the client whose strike marked a hit box, in form 2's hit reaction; `0x004488D8` stores the four shorts at `+0x4B4..` |
+| `6x85` | `u16 action, i16 delays[3]` | Ultimate laser delays; `0x0043E7CC` stores them |
+
+Damage on any of these entities is the ordinary `6x0A` of that entity (`hp = max - damage_taken`); the brain, not the packet's dead flag, decides when a part or the body is gone. The kill of form 2 (EXP, drop, `6x76` flags 8) happens at frame 47 of its death motion on every client.
+
 ## Area fog (`fogentry.dat`)
 
 Loose file or `data.gsl`; 0x4000 bytes = 256 entries of 0x40, little endian. `FUN_005bca88` loads it (`fogentry_a.dat`, 128 entries, when `FUN_0078b220() != 0`). Parsed by `client/src/formats/fogentry.ts`.

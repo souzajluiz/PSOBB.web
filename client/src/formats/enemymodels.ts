@@ -345,9 +345,9 @@ const rad = (angle: number) => (angle / BAMS) * Math.PI * 2;
 // VOL_OPT_1, 6 x VOL_OPT_PILLAR, 24 x VOL_OPT_MONITOR, 2 x NONE, VOL_OPT_AMP,
 // VOL_OPT_CORE, NONE (0x23 children).
 const VOLOPT_MONITOR_MODEL = [2, 5, 8, 11]; // 0x009a5210
-const VOLOPT_MONITOR_OFFSET = [-110, -110, -115, -110]; // 0x009a51e0, z of each shape
-const VOLOPT_PILLAR_RADIUS = 76; // 0x008fe56c
-const VOLOPT_ROD_Y = 80; // 0x42a00000 stored to +0x3c by 0x00440ad8
+export const VOLOPT_MONITOR_OFFSET = [-110, -110, -115, -110]; // 0x009a51e0, z of each shape
+export const VOLOPT_PILLAR_RADIUS = 76; // 0x008fe56c
+export const VOLOPT_ROD_Y = 80; // 0x42a00000 stored to +0x3c by 0x00440ad8
 
 function volOptChildren(ultimate: boolean): EnemyPartSpec[] {
   const parts: EnemyPartSpec[] = [];

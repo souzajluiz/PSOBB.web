@@ -164,12 +164,8 @@ export class GameField {
         this.opts.log(`boss warp ${w.index}: state ${state}`);
         return;
       }
-      // A boss action from the room leader can report the boss's form, which
-      // changes the music (audio/bossbgm.ts).
       const phase = bossPhaseOf(this.area, sub, body);
-      if (phase !== null && this.music?.setBossPhase(phase)) {
-        this.opts.log(`boss phase ${phase}: ${this.music.bossMusic?.name}`);
-      }
+      if (phase !== null) this.noteBossPhase(phase);
       if (sub === 0x76) {
         // G_SetEntitySetFlags_6x76: {u16 entity, u16 floor, u16 flags}
         if (body.length < 8) return;
@@ -181,6 +177,14 @@ export class GameField {
       }
     };
     game.on('subcommand', onSub); // Lobby has no off(); the handler goes idle on dispose
+  }
+
+  // The boss's form changed the music (audio/bossbgm.ts): a boss action from
+  // the room leader reports it, and the leader's own sends and Vol Opt's
+  // change to form 2 come here from render/combat.ts, since the server does
+  // not echo them.
+  noteBossPhase(phase: number): void {
+    if (this.music?.setBossPhase(phase)) this.opts.log(`boss phase ${phase}: ${this.music.bossMusic?.name}`);
   }
 
   // construct_objects (room/group keys) per floor, kept across visits.
