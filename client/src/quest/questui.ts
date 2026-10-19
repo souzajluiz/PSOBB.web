@@ -20,9 +20,11 @@
 //                    (39, 340) (opcode_disp_msg_qb .c:604116), sized to its
 //                    text here (the exe's width is not recovered); add_msg
 //                    adds a line; the thread waits for Enter meanwhile
-//                    (disp_msg_qb__add_msg) but the player is not locked. It
-//                    is mostly shown over the Quest Board window of the main
-//                    menu (classic/questboard.ts), which forwards Enter itself;
+//                    (disp_msg_qb__add_msg), even after close_msg_qb, but the
+//                    player is not locked. It is mostly shown over the Quest
+//                    Board window of the main menu (classic/questboard.ts), so
+//                    it has its own canvas above the field HUD's
+//                    (classic/hud.ts QUEST_LAYER);
 //   yes / no         the counters' confirmation (yes_no_list_constructor at GUI
 //                    position 0x2d = (266, 270), " Yes " / " No " from
 //                    unitxt_shop group 0);
@@ -32,10 +34,11 @@
 //                    and 0x006d6a78, 0x006dc794 -> 0x0073c7e8).
 //
 // Enter (the action button) moves a waiting balloon, window or quest board text
-// on; arrows and Enter drive lists, Escape / Backspace cancel them.
-//
-// The canvas is above the field HUD's (classic/hud.ts QUEST_LAYER): the quest's
-// windows are created after the HUD, the main menu and its Quest Board window.
+// on; arrows and Enter drive lists, Escape / Backspace cancel them. While the
+// main menu holds the keys (a Quest Board item's thread runs), the menu hands
+// them here (menuKey): lists and the board text take them, a balloon or
+// window does not (quest_run_thread_1 / _2 move window_msg__message__chat_box
+// on only while is_menu_open is 0; closing the menu lets it go on).
 
 import * as THREE from 'three';
 import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
@@ -85,7 +88,12 @@ export class QuestUi {
   private body: CanvasImageSource | null = null;
   private balloons: Balloon[] = [];
   private window: { text: string; waiting: boolean; rect: { x: number; y: number; w: number; h: number } } | null = null;
-  private board: { lines: string[]; waiting: boolean } | null = null;
+  private board: string[] | null = null;
+  private boardCanvas: HTMLCanvasElement;
+  private boardCtx: CanvasRenderingContext2D;
+  // A thread waits for Enter after disp_msg_qb / add_msg (quest/town.ts keeps
+  // it in step with the VMs; close_msg_qb does not end the wait).
+  boardWait = false;
   private lists: ListState[] = [];
   private raf = 0;
   private last = 0;
@@ -95,8 +103,9 @@ export class QuestUi {
   // player by client id), or null when it is not on this floor.
   speakerHead: (target: number) => THREE.Vector3 | null = () => null;
   camera: () => THREE.Camera | null = () => null;
-  // Enter moved a waiting balloon, window or quest board text on.
-  onAdvance: () => void = () => {};
+  // Enter moved a waiting balloon / window (`message`) and / or the quest
+  // board text (`board`) on.
+  onAdvance: (what: { message: boolean; board: boolean }) => void = () => {};
   // Enter while nothing waits (the caller looks for an NPC to talk to).
   onAction: () => boolean = () => false;
   // Once per 30 Hz game tick (quest/town.ts runs the area script on it).
@@ -106,9 +115,14 @@ export class QuestUi {
     this.host = host;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'quest-ui-overlay';
-    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(QUEST_LAYER) });
+    Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none' });
     host.parentElement?.append(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
+    this.boardCanvas = document.createElement('canvas');
+    this.boardCanvas.className = 'quest-board-text-overlay';
+    Object.assign(this.boardCanvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(QUEST_LAYER) });
+    host.parentElement?.append(this.boardCanvas);
+    this.boardCtx = this.boardCanvas.getContext('2d')!;
     host.addEventListener('keydown', this.onKey, true);
     const loop = (t: number) => {
       this.frame(t);
@@ -170,13 +184,8 @@ export class QuestUi {
   // disp_msg_qb (a new text) / add_msg (one more line); both wait for Enter.
   showBoard(text: string, append = false): void {
     const lines = plainText(text).split('\n');
-    this.board = { lines: append && this.board ? [...this.board.lines, ...lines] : lines, waiting: true };
-  }
-
-  // Enter reached the quest board text some other way (the Quest Board
-  // window holds the keys while the menu is open).
-  boardAdvanced(): void {
-    if (this.board) this.board.waiting = false;
+    this.board = append && this.board ? [...this.board, ...lines] : lines;
+    this.boardWait = true;
   }
 
   closeBoard(): void {
@@ -218,8 +227,19 @@ export class QuestUi {
 
   private key(e: KeyboardEvent): void {
     if (e.defaultPrevented) return; // a warp menu took it
+    if (!this.handleKey(e, false)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  // The keys while the main menu holds them (the Quest Board window, its item's
+  // thread running): true when one was used.
+  menuKey(e: KeyboardEvent): boolean {
+    return this.handleKey(e, true);
+  }
+
+  private handleKey(e: KeyboardEvent, menuOpen: boolean): boolean {
     const list = this.lists[this.lists.length - 1];
-    let used = true;
     if (list) {
       const n = list.items.length;
       if (e.key === 'ArrowUp' && n) list.cursor = (list.cursor + n - 1) % n;
@@ -230,22 +250,28 @@ export class QuestUi {
       } else if ((e.key === 'Escape' || e.key === 'Backspace') && list.cancellable) {
         this.lists.pop();
         list.resolve(null);
-      } else used = false;
-    } else if (e.key === 'Enter' && !e.repeat) {
-      if (this.pendingTell) {
-        const r = this.pendingTell;
-        this.pendingTell = null;
-        r();
-      } else if (this.window?.waiting || this.balloons.some((b) => b.waiting) || this.board?.waiting) {
+      } else return false;
+      return true;
+    }
+    if (e.key !== 'Enter' || e.repeat) return false;
+    if (this.pendingTell && !menuOpen) {
+      const r = this.pendingTell;
+      this.pendingTell = null;
+      r();
+      return true;
+    }
+    const message = !menuOpen && (!!this.window?.waiting || this.balloons.some((b) => b.waiting));
+    const board = this.boardWait;
+    if (message || board) {
+      if (message) {
         if (this.window) this.window.waiting = false;
         for (const b of this.balloons) b.waiting = false;
-        this.boardAdvanced();
-        this.onAdvance();
-      } else used = this.onAction();
-    } else used = false;
-    if (!used) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
+      }
+      if (board) this.boardWait = false;
+      this.onAdvance({ message, board });
+      return true;
+    }
+    return menuOpen ? false : this.onAction();
   }
 
   // --- drawing -------------------------------------------------------------------
@@ -261,14 +287,18 @@ export class QuestUi {
     const w = host.clientWidth;
     const h = host.clientHeight;
     const dpr = Math.min(devicePixelRatio, 2);
-    if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
-      this.canvas.width = Math.round(w * dpr);
-      this.canvas.height = Math.round(h * dpr);
+    for (const c of [this.canvas, this.boardCanvas]) {
+      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+        c.width = Math.round(w * dpr);
+        c.height = Math.round(h * dpr);
+      }
+      Object.assign(c.style, { left: `${host.offsetLeft}px`, top: `${host.offsetTop}px`, width: `${w}px`, height: `${h}px` });
     }
-    Object.assign(this.canvas.style, { left: `${host.offsetLeft}px`, top: `${host.offsetTop}px`, width: `${w}px`, height: `${h}px` });
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.boardCtx.setTransform(1, 0, 0, 1, 0, 0);
+    this.boardCtx.clearRect(0, 0, this.boardCanvas.width, this.boardCanvas.height);
     if (!this.skin || !this.canvas.height) return;
     const s = this.canvas.height / VH;
     const extra = Math.max(0, this.canvas.width / s - VW);
@@ -288,7 +318,10 @@ export class QuestUi {
       if (this.body) b.bubble.draw(ctx, { body: this.body, tab: this.body });
     }
 
-    if (this.board) this.drawText(ctx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board.lines, extra);
+    if (this.board) {
+      this.boardCtx.setTransform(s, 0, 0, s, 0, 0);
+      this.drawText(this.boardCtx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
+    }
     if (this.window) {
       const W = this.window.rect;
       const lines = this.window.text.split('\n');
@@ -330,6 +363,7 @@ export class QuestUi {
     this.balloons = [];
     this.window = null;
     this.board = null;
+    this.boardWait = false;
     for (const l of this.lists) l.resolve(null);
     this.lists = [];
     const r = this.pendingTell;
@@ -342,5 +376,6 @@ export class QuestUi {
     cancelAnimationFrame(this.raf);
     this.host.removeEventListener('keydown', this.onKey, true);
     this.canvas.remove();
+    this.boardCanvas.remove();
   }
 }

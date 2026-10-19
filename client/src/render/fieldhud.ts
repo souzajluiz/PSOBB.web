@@ -82,6 +82,9 @@ export interface FieldHudOptions {
   // The running quest's VM and name, for the Quest Board window
   // (classic/questboard.ts).
   quest?: () => { vm: QuestBoardVM; name: string } | null;
+  // The quest overlay's lists and board text while the Quest Board's item
+  // thread runs (quest/questui.ts menuKey).
+  questKey?: (e: KeyboardEvent) => boolean;
   // Starts a technique cast from the Technique menu (render/combat.ts
   // castTechnique); false when it cannot be cast.
   cast?: (tech: number) => boolean;
@@ -232,6 +235,7 @@ export class FieldHud {
       questBoard: {
         vm: () => this.opts.quest?.()?.vm ?? null,
         questName: () => this.opts.quest?.()?.name ?? '',
+        questKey: (e) => this.opts.questKey?.(e) ?? false,
         text: (g, i) => this.text(g, i),
         setHudFlag: (bit, on) => {
           this.hudFlags = on ? this.hudFlags | bit : this.hudFlags & ~bit;

@@ -57,23 +57,21 @@ class FakeVM implements QuestBoardVM {
   ];
   regsI = new Int32Array(256);
   threads: FakeThread[] = [];
-  dismissed = 0;
   startThread(label: number, runner: 2): FakeThread {
     eq(runner, 2, 'board threads run on quest_run_thread_2');
     const t = new FakeThread(label);
     this.threads.push(t);
     return t;
   }
-  get boardWaiting(): boolean {
-    return false;
-  }
-  dismissBoard(): void {
-    this.dismissed++;
-  }
 }
 const vm = new FakeVM();
 let hud = 0;
+const questKeys: string[] = [];
 const env: QuestBoardEnv = {
+  questKey: (e) => {
+    questKeys.push(e.key);
+    return true;
+  },
   vm: () => vm,
   questName: () => 'Test Quest',
   text: () => '',
@@ -114,9 +112,10 @@ w.tick(); // 2 -> 3
 w.tick(); // 3 -> start the thread, 4
 eq([w.state, vm.threads.map((t) => t.label)], [4, [11]], 'the selected item\'s label runs');
 key(w, 'ArrowRight');
-eq(w.cursor, 1, 'no moves while the thread runs');
 key(w, 'Enter');
-eq(vm.dismissed, 1, 'Enter moves the board text on (disp_msg_qb__add_msg)');
+key(w, 'Backspace');
+eq([w.cursor, w.locked, w.finished], [1, true, false], 'no moves, no cancel while the thread runs');
+eq(questKeys, ['ArrowRight', 'Enter', 'Backspace'], 'the keys go to the quest overlay (its list, the board text)');
 w.tick();
 eq(w.state, 4, 'waits for the thread');
 vm.threads[0].done = true;
@@ -243,11 +242,16 @@ if (!q146 || !existsSync(q146)) {
   blocking = false;
   qvm.frame();
   eq([t2?.done, qvm.questBoardOpen, closed.at(-1)], [true, false, 'questBoard'], 'the UI let go: the board thread ends');
-  // A runner 1 thread keeps waiting.
+  // A runner 1 thread keeps waiting, also through a dialog reset / close
+  // (only the decide key releases it).
   const t3 = qvm.startThread(0x9c, 1);
   qvm.frame();
+  qvm.resetDialogs();
   qvm.frame();
-  eq([t3?.done, t3?.yieldReason], [false, 'board'], 'runner 1 ignores the UI');
+  eq([t3?.done, t3?.yieldReason, qvm.boardWaiting], [false, 'board', true], 'runner 1 ignores the UI; still waits after the text closed');
+  qvm.dismissBoard();
+  qvm.frame();
+  eq(t3?.yieldReason, 'message', 'with the board text closed add_msg speaks instead (opcode_add_msg)');
 }
 
 if (failures) {

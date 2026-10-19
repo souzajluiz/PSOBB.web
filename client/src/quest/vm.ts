@@ -341,7 +341,8 @@ export class QuestVM {
   }
 
   // ResetQuestDialogState_006b0ba4: the window (g_QuestDialogHandle1) and
-  // the quest board text (g_QuestDialogHandle2) close.
+  // the quest board text (g_QuestDialogHandle2) close. It touches no thread's
+  // yield (quest_run_thread_2 ends its own thread after calling it).
   resetDialogs(): void {
     if (this.windowOpen) {
       this.windowOpen = false;
@@ -1003,6 +1004,9 @@ export class QuestVM {
         return;
       }
       case 'close_msg_qb':
+        // opcode_close_msg_qb only closes g_QuestDialogHandle2: a thread
+        // still in disp_msg_qb__add_msg keeps waiting for the decide key
+        // (the runners read only the key), so it is not released here.
         this.questBoardOpen = false;
         this.host.closeMessage?.('questBoard');
         return;
