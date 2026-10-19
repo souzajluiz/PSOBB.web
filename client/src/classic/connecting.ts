@@ -19,6 +19,7 @@
 //     result, and update FUN_00407c6c waits 150 frames (0x96) in state 2
 //     before showing the result (unitxt group 0x36 errors, FUN_004080ac).
 
+import { RESULT_WAIT_FRAMES, STATUS_POS } from './connectstatus.ts';
 import { drawGameText } from './gametext.ts';
 import { makeTinter, ParticleSystem, parseParticleEntry } from './particles.ts';
 import type { Screen, Stage } from './stage.ts';
@@ -29,7 +30,7 @@ export interface ConnectingAssets {
 }
 
 const FRAME = 1 / 30;
-const WAIT_AFTER_RESULT = 150; // FUN_00407c6c state 2
+const WAIT_AFTER_RESULT = RESULT_WAIT_FRAMES; // FUN_00407c6c state 2 (connectstatus.ts has the whole state machine)
 const FADE_STEP = 1 / 15; // FUN_0040a080 mode 2 (0xbd888889)
 
 export class ConnectingScreen implements Screen {
@@ -109,11 +110,12 @@ export class ConnectingScreen implements Screen {
     this.particles.draw(ctx, (g) => this.assets.effect.get(g) ?? null, this.tint);
     // GameListMenuObject_Update_00407f6c: "Connecting.." below state 3, the
     // status text (GameListMenuObject_RenderStatusText_004080ac) in state 3,
-    // both at (23, 331) (confirmed in psobb-client-source src/FUN_004080fb.c,
-    // FUN_00408118.c, FUN_00408152.c: states 8/10, 7, 5). The exe's status texts are unitxt group 0x36 (left
-    // over from the Xbox port); the bridge's error message stands in for them.
-    if (this.showingError) this.error?.split('\n').forEach((line, i) => drawGameText(ctx, line, 23, 331 + i * 20));
-    else if (!this.finished) drawGameText(ctx, 'Connecting..', 23, 331);
+    // both at (23, 331) (psobb-client-source src/FUN_004080c1.c .. FUN_0040816f.c
+    // and FUN_004081ff.c hold every case, see connectstatus.ts). The exe's
+    // status texts are unitxt group 0x36 (left over from the Xbox port); the
+    // bridge's error message stands in for them.
+    if (this.showingError) this.error?.split('\n').forEach((line, i) => drawGameText(ctx, line, STATUS_POS.x, STATUS_POS.y + i * 20));
+    else if (!this.finished) drawGameText(ctx, 'Connecting..', STATUS_POS.x, STATUS_POS.y);
     if (this.fade > 0) {
       ctx.fillStyle = `rgba(0,0,0,${this.fade})`;
       ctx.fillRect(0, 0, 640, 480);

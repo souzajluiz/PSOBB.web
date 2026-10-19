@@ -21,7 +21,8 @@
 //     move selections.
 //   - chat: word balloons and the input line (chat.ts); the chat log is only
 //     shown in the main menu's Log Window (there is no log on screen).
-//   - information counter (counter.ts).
+//   - information counter (counter.ts) and, from its Organize PARTY menu, the
+//     party game list and the party creation window (gamelist.ts).
 // Name tags over the heads: no code for them was found in PsoBB.exe; they
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
@@ -32,6 +33,7 @@ import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatBubbles, ChatInput, ChatLog, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
+import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, inGameSpace } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
@@ -56,6 +58,11 @@ export interface LobbyHud {
   infoCols: InfoCol[];
   // The session's full character data (00E7): the option word (options.ts).
   fullCharacter?: () => Uint8Array | null;
+  // The counter's party menus talk to the server through this (gamelist.ts);
+  // without it Organize PARTY only closes.
+  party?: PartyHost;
+  // g_ClientCaps_DarvantForm7Supported: the counter offers EPISODE 4.
+  episode4?: boolean;
 }
 
 export class LobbyScreen implements Screen {
@@ -71,6 +78,7 @@ export class LobbyScreen implements Screen {
   private bubbles = new ChatBubbles();
   private menu: MainMenu;
   private counter: InfoCounter;
+  private party: PartyMenus | null = null;
   private itemList: ItemListWindow | null = null;
   private options: OptionsMenu | null = null;
   private logWindow = false;
@@ -97,9 +105,19 @@ export class LobbyScreen implements Screen {
       first: [t15(0x37), t15(0x38), t15(0x56)],
       transport: [t15(0x40), t15(0x41)],
       team: [t15(0x57), t15(0x58), t15(0x5b), t15(0x5c)],
-      party: [t15(0x3b), t15(0x3c)],
+      party: [t15(T15.joinParty), t15(T15.createParty)],
+      episodes: [t15(T15.episode1), t15(T15.episode2), ...(hud.episode4 ? [t15(T15.episode4)] : [])],
+      episodeInfo: T15.createInfo.slice(0, hud.episode4 ? 3 : 2).map(t15),
     };
     this.counter = new InfoCounter(counterText);
+    if (hud.party) {
+      const party = new PartyMenus(hud.party, { t11: (i) => hud.text(0x0b, i), t15 });
+      this.party = party;
+      this.counter.onChoose = (menu, index) => {
+        if (menu === 'party' && index === 0) party.openList();
+        else if (menu === 'episode') party.openCreate((index + 1) as 1 | 2 | 3);
+      };
+    }
     // LobbyView reads the pressed keys from the viewer's frame callback;
     // feed it the keys of the stage canvas instead (none while a menu or the
     // chat input has the keyboard), then apply the main menu's view shift.
@@ -113,7 +131,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.input.open || this.menu.open || this.counter.open;
+    return this.input.open || this.menu.open || this.counter.open || !!this.party?.open;
   }
 
   get lobbyName(): string {
@@ -172,6 +190,7 @@ export class LobbyScreen implements Screen {
     this.menu.tick();
     this.options?.tick();
     this.counter.tick();
+    this.party?.tick();
     const cam = this.viewer.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
@@ -225,6 +244,12 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.party?.open) {
+      // Tab is the game list's info key, Backspace its cancel.
+      e.preventDefault();
+      this.party.key(e);
+      return;
+    }
     if (e.key === 'Home' || e.key === 'F12') {
       e.preventDefault();
       if (!this.counter.open) {
@@ -269,6 +294,7 @@ export class LobbyScreen implements Screen {
 
   leave(): void {
     this.keys.clear();
+    this.party?.close();
     this.closeOptions();
     this.menu.close();
   }
@@ -289,6 +315,7 @@ export class LobbyScreen implements Screen {
       drawLobbyNameWindow(ctx, this.hud.skin, this.lobbyName, extra);
       this.input.draw(ctx, this.frame);
       this.counter.draw(ctx, this.hud.skin, extra);
+      this.party?.draw(ctx, this.hud.skin, extra);
       this.menu.draw(ctx, this.hud.skin, this.hud.menu);
       this.itemList?.draw(ctx, this.hud.skin);
       this.options?.draw(ctx, this.hud.skin, extra);

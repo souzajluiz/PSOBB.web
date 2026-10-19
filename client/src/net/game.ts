@@ -430,6 +430,18 @@ export class Game extends Lobby {
     return parseGameList(c.data);
   }
 
+  // 09 on a game entry, answered with 11 (send_ship_info: 8 header bytes, then
+  // the details text). The classic game list shows it on Tab.
+  static async info(conn: BBConnection, entry: Pick<GameListEntry, 'menuId' | 'itemId'>): Promise<string> {
+    const body = new Uint8Array(8);
+    const dv = new DataView(body.buffer);
+    dv.setUint32(0, entry.menuId, true);
+    dv.setUint32(4, entry.itemId, true);
+    conn.send(0x09, 0, body);
+    const c = await timeout(conn.waitFor(0x11), 5000, 'game info (11)');
+    return stripMarkers(readUtf16(c.data, 8, (c.data.length - 8) >> 1)).replace(/\r/g, '');
+  }
+
   // Sends the request and waits for 64 (handled synchronously in handle()) or an error message box.
   private async request(send: () => void): Promise<void> {
     this.started = true;
