@@ -40,7 +40,6 @@ let softKeyboard: SoftKeyboard | null = null;
 const keyboardFocused = () => softKeyboard?.focused ?? false;
 const fit = installStageFit({
   canvases: [canvas, document.getElementById('world') as HTMLCanvasElement],
-  safe: document.getElementById('safe') as HTMLElement,
   hint: document.getElementById('rotate') as HTMLElement,
   keyboardFocused: () => keyboardFocused(),
   onBox: (box) => softKeyboard?.placeButton(box),

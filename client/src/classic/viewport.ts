@@ -16,11 +16,12 @@
 // after 200 ms. The on-screen keyboard also shrinks the viewport: while it is
 // up the orientation is kept unless the width changed (nextOrientation).
 
-import { fitEnabled, fitStage, keyboardOpen, nextOrientation, orientationOf, padBelow, snapBox, usableArea, type Box, type Insets, type Orientation } from '../ui/stagefit.ts';
+import { fitEnabled, keyboardOpen, nextOrientation, orientationOf, snapBox, usableArea, type Box, type Insets, type Orientation } from '../ui/stagefit.ts';
+
+const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
 export interface StageFitOptions {
   canvases: HTMLElement[];
-  safe: HTMLElement; // padding = the safe-area insets
   hint: HTMLElement; // "rotate your phone"
   // true while the on-screen keyboard has focus (ui/softkeyboard.ts).
   keyboardFocused?: () => boolean;
@@ -59,35 +60,26 @@ export function installStageFit(o: StageFitOptions): StageFit {
     o.hint.hidden = true;
   });
 
-  function insets(): Insets {
-    const cs = getComputedStyle(o.safe);
-    return { top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0, bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0 };
-  }
-
   function measure(): void {
     if (!enabled) return;
     const vv = window.visualViewport;
     const view = vv ?? { width: innerWidth, height: innerHeight, offsetLeft: 0, offsetTop: 0 };
     const layoutHeight = document.documentElement.clientHeight || innerHeight;
     const kb = keyboardOpen(layoutHeight, view.height) || (o.keyboardFocused?.() ?? false);
-    // With the keyboard up the home-bar inset is under it: use the whole rest.
-    const ins = insets();
-    const area = usableArea(view, kb ? { ...ins, bottom: 0 } : ins);
+    // Fullscreen: the stage covers the whole visual viewport, notch and home
+    // bar included. The touch controls keep their own insets (ui/webcontrols.ts).
+    const area = usableArea(view, NO_INSETS);
     // Rotation: the width changes; keyboard height changes do not count.
     state.orientation = nextOrientation(state.orientation, lastWidth, view.width, view.height, kb);
     lastWidth = view.width;
-    // Portrait: a 4:3 stage fitted to the width; landscape: 4:3 .. 16:9.
-    const box = snapBox(state.orientation === 'portrait' ? fitStage(area, 4 / 3, 4 / 3) : fitStage(area));
+    const box = snapBox(area);
     state.box = box;
-    state.below = kb ? 0 : padBelow(state.orientation, area, box);
+    state.below = 0;
     for (const c of o.canvases) {
       Object.assign(c.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
     }
-    // The hint sits in the free space under the stage; the pad is there too,
-    // so it goes above the pad.
+    // The hint sits at the bottom edge, where its CSS puts it.
     o.hint.hidden = hintDismissed || kb || state.orientation !== 'portrait';
-    o.hint.style.top = `${box.y + box.h + 6}px`;
-    o.hint.style.bottom = 'auto';
     o.onBox?.(box, state.orientation);
     window.dispatchEvent(new Event('psobb:fit'));
   }

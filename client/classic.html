@@ -10,14 +10,12 @@
       :root { color-scheme: dark; }
       html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
       /* 100vh is the tall viewport on a phone (URL bar hidden), so it crops the
-         bottom; 100dvh follows the bar. main.ts sets the exact box on touch
-         screens (ui/stagefit.ts); on a desktop window the stage fills it. */
+         bottom; 100dvh follows the bar. viewport.ts sets the exact box on touch
+         screens (fullscreen, edge to edge); on a desktop window the stage fills it. */
       #stage { position: fixed; left: 0; top: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; outline: none; touch-action: manipulation; }
       /* 3D view (ship select, lobby) under the 2D stage. */
       #world { position: fixed; left: 0; top: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; pointer-events: none; }
       #world[hidden] { display: none; }
-      /* Safe-area probe read by ui/stagefit.ts (notch, home bar). */
-      #safe { position: fixed; inset: 0; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
       #rotate { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 12px); transform: translateX(-50%); z-index: 30; width: max-content; max-width: calc(100vw - 32px); padding: 8px 14px; border: 1px solid rgba(95, 212, 255, 0.55); border-radius: 999px; background: rgba(2, 16, 30, 0.85); color: #d8ecff; font: 600 13px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif; text-align: center; }
       #rotate[hidden] { display: none; }
 
@@ -54,7 +52,6 @@
   <body>
     <canvas id="world" hidden aria-hidden="true"></canvas>
     <canvas id="stage" aria-label="PSOBB.web"></canvas>
-    <div id="safe" aria-hidden="true"></div>
     <div id="rotate" hidden>Rotate your phone for the best view</div>
     <div id="boot" class="is-indeterminate" role="status" aria-live="polite">
       <div class="boot-card">
