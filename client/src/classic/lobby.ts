@@ -38,7 +38,7 @@ import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, inGameSpace } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
-import { type Screen, type Stage, type WindowSkin } from './stage.ts';
+import { type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
 // Default key config slots 0..3 (W, S, A, D) mapped to the keys LobbyView
 // reads for its movement.
@@ -128,6 +128,12 @@ export class LobbyScreen implements Screen {
     };
     lobby.on('chat', (from, gc, text) => this.onChat(from, gc, text));
     lobby.on('playerLeft', (id) => this.heights.delete(id));
+  }
+
+  // The chat line, or the party menus' name / password editors.
+  textInput(): TextInputState | null {
+    if (this.input.open) return { password: false, chat: true };
+    return this.party?.textInput() ?? null;
   }
 
   private get busy(): boolean {

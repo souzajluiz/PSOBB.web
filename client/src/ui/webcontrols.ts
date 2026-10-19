@@ -28,8 +28,6 @@ import {
   DOM_KEYS,
   isTap,
   keyDiff,
-  proxyInput,
-  PROXY_SENTINEL,
   REPEATING_KEYS,
   repeatCount,
   REPEAT_INTERVAL,
@@ -42,6 +40,7 @@ import {
 } from '../input/virtualpad.ts';
 import { padLayout, type Insets, type PadLayout, type PxRect } from '../input/padlayout.ts';
 import { FullscreenController } from './fullscreen.ts';
+import type { SoftKeyboard } from './softkeyboard.ts';
 import './webcontrols.css';
 
 // How the Chat button reaches the game's chat.
@@ -49,8 +48,8 @@ export type ChatMode =
   // A DOM text field next to the view (the Online tab's chat form).
   | { kind: 'input'; input: HTMLInputElement }
   // The game's own canvas text input, opened with KEYS.chat (classic lobby);
-  // text from the on-screen keyboard is fed through a hidden proxy field.
-  | { kind: 'canvas' };
+  // `keyboard` raises the on-screen keyboard for it (ui/softkeyboard.ts).
+  | { kind: 'canvas'; keyboard?: SoftKeyboard };
 
 export type TouchSetting = 'auto' | 'on' | 'off';
 
@@ -65,11 +64,16 @@ export interface WebControlsOptions {
   // 'auto': shown on coarse pointers / touch screens; ?touch=1 / ?touch=0 in
   // the URL override it.
   touch?: TouchSetting;
+  // Free CSS px under the canvas box (portrait phone), see input/padlayout.ts.
+  below?: () => number;
 }
 
 export interface WebControls {
   readonly fullscreen: FullscreenController;
   setTouchVisible(on: boolean): void;
+  // true: the stick, arrows and buttons are hidden for a screen made for taps
+  // (title / login); the fullscreen and mute strip stays.
+  setPadSuppressed(on: boolean): void;
   dispose(): void;
 }
 
@@ -450,50 +454,6 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   // Chat.
   const chatButton = button('wc-key wc-small', 'CHAT', 'Chat');
   row.append(chatButton);
-  let proxy: HTMLInputElement | null = null;
-  if (chat.kind === 'canvas') {
-    const p = document.createElement('input');
-    p.className = 'wc-proxy';
-    p.setAttribute('aria-label', 'On-screen keyboard input');
-    p.autocomplete = 'off';
-    p.setAttribute('autocapitalize', 'off');
-    p.setAttribute('autocorrect', 'off');
-    p.spellcheck = false;
-    p.enterKeyHint = 'send';
-    const close = () => {
-      p.blur();
-      refocus();
-    };
-    const flush = (composing: boolean) => {
-      const keys = proxyInput(p.value, composing);
-      if (!keys) return; // IME still composing: wait for compositionend
-      for (const k of keys) feed.tap(k);
-      p.value = PROXY_SENTINEL;
-      p.setSelectionRange(p.value.length, p.value.length);
-    };
-    p.addEventListener('input', (e) => flush((e as InputEvent).isComposing));
-    p.addEventListener('compositionend', () => flush(false));
-    p.addEventListener('keydown', (e) => {
-      e.stopPropagation(); // the canvas gets the synthesized keys only
-      if (e.isComposing) return;
-      if (e.key === 'Enter' || e.key === 'Escape') {
-        e.preventDefault();
-        feed.tap(e.key === 'Enter' ? DOM_KEYS.enter : { key: 'Escape', code: 'Escape' });
-        close();
-      }
-    });
-    p.addEventListener('keyup', (e) => e.stopPropagation());
-    proxy = p;
-    const keyboardButton = button('wc-key wc-small', 'KEYS', 'On-screen keyboard (type into the game)');
-    keyboardButton.addEventListener('click', () => openProxy());
-    row.append(keyboardButton);
-  }
-  function openProxy(): void {
-    if (!proxy) return;
-    proxy.value = PROXY_SENTINEL;
-    proxy.focus({ preventScroll: true });
-    proxy.setSelectionRange(proxy.value.length, proxy.value.length);
-  }
   chatButton.addEventListener('click', () => {
     if (chat.kind === 'input') {
       // The chat field is outside the game view: leave fullscreen to show it.
@@ -502,7 +462,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       chat.input.scrollIntoView({ block: 'center' });
     } else {
       feed.tap(DOM_KEYS[KEYS.chat]); // Space opens the game's chat line
-      openProxy();
+      chat.keyboard?.sync(true); // inside this tap: the on-screen keyboard opens
     }
   });
 
@@ -526,7 +486,6 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
 
   pad.append(zone, dpad, actions, ...paletteButtons.values());
   overlay.append(pad, strip);
-  if (proxy) overlay.append(proxy);
   root.append(overlay);
 
   // --- layout ------------------------------------------------------------------
@@ -543,7 +502,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     const h = keyTarget.clientHeight;
     Object.assign(overlay.style, { left: `${keyTarget.offsetLeft}px`, top: `${keyTarget.offsetTop}px`, width: `${w}px`, height: `${h}px` });
     if (!w || !h) return;
-    const l = padLayout(w, h, insets());
+    const l = padLayout(w, h, insets(), opts.below?.() ?? 0);
     layout = l;
     overlay.style.setProperty('--wc-btn', `${l.button}px`);
     overlay.style.setProperty('--wc-gap', `${l.gap}px`);
@@ -562,6 +521,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   ro.observe(keyTarget);
   cleanups.push(() => ro.disconnect());
   listen('resize', () => relayout());
+  listen('psobb:fit', () => relayout()); // the canvas box moved (ui/stagefit.ts)
   syncFs(false);
   relayout();
 
@@ -581,7 +541,9 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   // While the pad is up the canvas must not pan or zoom the page: a pan would
   // cancel the pointers (pointercancel) under the stick and buttons.
   const touchAction = keyTarget.style.touchAction;
-  const setTouchVisible = (on: boolean) => {
+  let wanted = false;
+  let suppressed = false;
+  const applyTouch = (on: boolean) => {
     if (pad.hidden === !on) return;
     if (!on) releaseAll();
     pad.hidden = !on;
@@ -590,6 +552,14 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     overlay.classList.toggle('is-touch', on);
     keyTarget.style.touchAction = on ? 'none' : touchAction;
     relayout();
+  };
+  const setTouchVisible = (on: boolean) => {
+    wanted = on;
+    applyTouch(wanted && !suppressed);
+  };
+  const setPadSuppressed = (on: boolean) => {
+    suppressed = on;
+    applyTouch(wanted && !suppressed);
   };
   base.hidden = true;
   const setting = urlTouchSetting() ?? opts.touch ?? 'auto';
@@ -609,6 +579,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   return {
     fullscreen: fs,
     setTouchVisible,
+    setPadSuppressed,
     dispose() {
       releaseAll();
       for (const c of cleanups) c();

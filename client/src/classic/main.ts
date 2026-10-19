@@ -28,22 +28,38 @@ import { CharaFiles } from './playerview.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
-import { installWebControls } from '../ui/webcontrols.ts';
+import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
+import { SoftKeyboard } from '../ui/softkeyboard.ts';
+import { Loader } from './loader.ts';
+import { installStageFit, lockLandscape } from './viewport.ts';
 
 const VERSION = 'PSOBB.web';
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
-const boot = document.getElementById('boot') as HTMLDivElement;
+const loader = new Loader();
+let softKeyboard: SoftKeyboard | null = null;
+const keyboardFocused = () => softKeyboard?.focused ?? false;
+const fit = installStageFit({
+  canvases: [canvas, document.getElementById('world') as HTMLCanvasElement],
+  safe: document.getElementById('safe') as HTMLElement,
+  hint: document.getElementById('rotate') as HTMLElement,
+  keyboardFocused: () => keyboardFocused(),
+  onBox: (box) => softKeyboard?.placeButton(box),
+});
 
 async function dataSource(): Promise<DataSource> {
-  if (await HttpSource.available()) return new HttpSource();
-  // The folder picker needs a user gesture.
-  boot.hidden = false;
-  const button = document.createElement('button');
-  button.textContent = 'Open PSOBB folder';
-  boot.replaceChildren(button);
-  await new Promise<void>((r) => button.addEventListener('click', () => r(), { once: true }));
+  loader.step('source');
+  if (await HttpSource.available()) {
+    const http = new HttpSource();
+    http.onProgress = (_path, loaded, total) => loader.bytes(loaded, total);
+    return http;
+  }
+  // The folder picker needs a user gesture (and a browser that has one).
+  if (!('showDirectoryPicker' in window)) {
+    throw new Error('The game data was not found on this server (/psobb-data), and this browser cannot open a local folder (use Chrome or Edge on a computer).');
+  }
+  await loader.askFolder();
   const s = await pickDataFolder();
-  boot.hidden = true;
+  loader.step('source');
   return s;
 }
 
@@ -64,6 +80,10 @@ function savedUser(): string {
 async function main(): Promise<void> {
   const source = await dataSource();
   const files = new ClientFiles(source);
+  // data.gsl is read (and downloaded) with the first file lookup.
+  loader.step('archive');
+  await files.has('title.prs');
+  loader.step('title');
   const bgm = new BgmPlayer(source);
   setSePlayer(new SePlayer(source)); // common.pac + city.pac (area 0), as at start-up
   const stage = new Stage(canvas);
@@ -362,6 +382,7 @@ async function main(): Promise<void> {
   };
 
   // The Login menu's texts: unitxt group 41 (0x29).
+  loader.step('text');
   const t41 = async (i: number, fallback: string) => (await text(0x29, i)) || fallback;
   const d = DEFAULT_TEXT;
   const menuText: MenuText = {
@@ -395,10 +416,14 @@ async function main(): Promise<void> {
     { episode4, version: VERSION, text: menuText, credentials: { user: savedUser(), password: '' } },
   );
 
+  let controls: WebControls | null = null;
   let current: Screen = title;
+  loader.step('open');
   function show(s: Screen): void {
     current = s;
     stage.show(s);
+    controls?.setPadSuppressed(s.touchPad === false);
+    softKeyboard?.sync();
     // BGM per screen, as the exe requests it: title.adx (FUN_006f8130),
     // CHARA.adx for character select/creation (FUN_004df9ec).
     if (s instanceof TitleScreen) void bgm.play('title.adx');
@@ -434,6 +459,10 @@ async function main(): Promise<void> {
     if (jump === 'menu' || jump === 'input') title.flow.skipTo(jump);
   }
 
+  // Loaded: the title (or the ?screen= jump) is drawn after two frames.
+  await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+  loader.finish();
+
   const toVirtual = (e: MouseEvent) => {
     const r = canvas.getBoundingClientRect();
     const vy = ((e.clientY - r.top) / r.height) * VH;
@@ -451,9 +480,34 @@ async function main(): Promise<void> {
   canvas.addEventListener('pointermove', (e) => pointer(e, false));
   canvas.addEventListener('click', (e) => pointer(e, true));
 
+  // On-screen keyboard for the canvas text editors (phones): opened from the
+  // gesture that starts an editor (a tap, or a key such as the pad's OK).
+  const keyboard = new SoftKeyboard({
+    parent: document.body,
+    canvas,
+    editing: () => current.textInput?.() ?? null,
+    send: (k) => {
+      for (const type of ['keydown', 'keyup'] as const) {
+        canvas.dispatchEvent(new KeyboardEvent(type, { key: k.key, code: k.code, bubbles: true, cancelable: true }));
+      }
+    },
+  });
+  softKeyboard = keyboard;
+  keyboard.placeButton(fit.box);
+  for (const type of ['pointerup', 'click', 'keydown'] as const) canvas.addEventListener(type, () => keyboard.sync());
+  const keyboardTick = () => {
+    keyboard.update();
+    requestAnimationFrame(keyboardTick);
+  };
+  requestAnimationFrame(keyboardTick);
+
   referenceOverlay();
   // Fullscreen / mute buttons and the touch pad (browser conveniences).
-  installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas' } });
+  controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below });
+  controls.setPadSuppressed(current.touchPad === false);
+  // Landscape lock after the fullscreen button (Android Chrome; iOS has none).
+  if (fit.enabled) controls.fullscreen.onChange((on) => lockLandscape(on));
+  window.addEventListener('pointerdown', () => fit.refresh(), { once: true });
   Object.assign(window, {
     classicStage: stage,
     classicTitle: title,
@@ -500,7 +554,6 @@ function referenceOverlay(): void {
 }
 
 main().catch((e) => {
-  boot.hidden = false;
-  boot.textContent = `Error: ${e instanceof Error ? e.message : e}`;
+  loader.fail(e);
   console.error(e);
 });

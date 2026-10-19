@@ -14,6 +14,14 @@ export const VW = 640;
 export const VH = 480;
 export const FONT = 'Tahoma, Verdana, sans-serif';
 
+// An inline text editor of a screen (login rows, character name, game name /
+// password, chat line). The page brings up the phone's on-screen keyboard for
+// it (ui/softkeyboard.ts); the screen itself keeps reading ordinary key events.
+export interface TextInputState {
+  password: boolean; // masked on screen: the keyboard field is type=password
+  chat?: boolean; // enter key hint "send"
+}
+
 export interface Screen {
   // 'stretch': the 640x480 virtual screen fills the window (title).
   // 'left43': uniform scale by height, 4:3 area anchored left (menus such as
@@ -22,6 +30,11 @@ export interface Screen {
   // true: the canvas is cleared to transparent so a 3D view underneath shows
   // through (lobby, ship select).
   transparent?: boolean;
+  // false: the touch pad (stick, arrows, OK / BACK) is hidden on this screen,
+  // which is made for taps (title / login).
+  touchPad?: boolean;
+  // Non-null while an inline text editor is active.
+  textInput?(): TextInputState | null;
   drawFullscreen?(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage): void;
   enter?(stage: Stage): void;
   update(dt: number, stage: Stage): void;
