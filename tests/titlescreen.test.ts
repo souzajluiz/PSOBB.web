@@ -5,7 +5,10 @@
 import {
   caretColor,
   editedUser,
+  EXIT_CONFIRM,
   InputUserIdWindow,
+  listWindowHeight,
+  LOGIN_MENU,
   LoginMenu,
   mask,
   pressAlpha,
@@ -15,10 +18,11 @@ import {
   SE_TITLE_OK,
   storedUser,
   TitleFlow,
+  yesNoRect,
   type Credentials,
   type Key,
 } from '../client/src/classic/titleflow.ts';
-import { SE_WINDOW_OPEN } from '../client/src/classic/windowanim.ts';
+import { SE_WINDOW_OPEN, WindowAnim } from '../client/src/classic/windowanim.ts';
 
 let failures = 0;
 let checks = 0;
@@ -205,11 +209,18 @@ const type = (f: { key(k: Key): void }, s: string) => [...s].forEach((c) => f.ke
   t.key('enter');
   ticks(t, 10);
   t.key('down');
+  const opens = log.se.filter((id) => id === SE_WINDOW_OPEN).length;
   t.key('enter');
   check(t.menu!.exitConfirm?.cursor === 1, 'Really OK? opens on No');
+  check(log.se.filter((id) => id === SE_WINDOW_OPEN).length === opens + 2, 'question and Yes/No lists open (SE 0x572 each)');
+  t.key('up');
+  check(t.menu!.exitConfirm?.cursor === 1 && t.menu!.exitConfirm.list.animating, 'no keys while the Yes/No list opens');
+  ticks(t, 4);
+  check(!t.menu!.exitConfirm!.list.animating, 'Yes/No list open after 4 frames (counter 8 >= 7.5)');
   t.key('enter');
   check(t.menu!.exitConfirm === null && t.menu!.result === null, 'No goes back to the list');
   t.key('enter');
+  ticks(t, 4);
   t.key('up');
   t.key('enter');
   t.tick();
@@ -218,6 +229,39 @@ const type = (f: { key(k: Key): void }, s: string) => [...s].forEach((c) => f.ke
   check(log.exit === 1, 'exit after the fade-out');
   check(!log.se.includes(SE_TITLE_OK), 'no 0x420 on exit');
   check(log.se.includes(SE_CANCEL) === false, 'no cancel SE');
+}
+
+// --- window geometry and text reveal from the exe ------------------------------------
+{
+  check(listWindowHeight(5, true) === LOGIN_MENU.h && LOGIN_MENU.w === 220, 'Login menu 220 x 120 (0x00974e10) = the list height rule');
+  check(EXIT_CONFIRM.h === 34, 'Really OK? list: 1 row, no title, 34 high');
+  const yn = yesNoRect();
+  check(yn.x === 439 && yn.y === 374 && yn.w === 104 && yn.h === 54, `Yes/No at question right - 111, bottom - 10, 104 x 54 (${yn.x}, ${yn.y}, ${yn.w}, ${yn.h})`);
+
+  // Opening wipe of a list window, window speed 1 (counter += 2 per frame).
+  const a = new WindowAnim(true, false);
+  a.open(1);
+  check(!a.textShown && a.reveal(0, 0, 200) < 0, 'opening: titles hidden, first row not revealed');
+  ticks(a, 4);
+  check(a.c === 0 && a.textShown, 'title / info-counter text shown from c = 0 (frame 4)');
+  // A centred 60 px row in the 200 px Login content: x = 70.
+  const row = (i: number) => a.reveal(70, i * 20, 200);
+  check(row(0) < 60 && row(4) < 0, 'rows are cut while the wipe runs');
+  const frames = (i: number) => {
+    const b = new WindowAnim(true, false);
+    b.open(1);
+    let n = 0;
+    while (b.reveal(70, i * 20, 200) < 60 && n < 100) {
+      b.tick(1);
+      n++;
+    }
+    return n;
+  };
+  const f0 = frames(0);
+  const f4 = frames(4);
+  // Row 4 lags row 0 by (80 / 21) * 7.5 = 28.6 counts, 14.3 frames.
+  const lag = f4 - f0;
+  check(f0 > 4 && lag >= 14 && lag <= 15, `each row starts (y / 21) * 7.5 counts later (row 0: ${f0} frames, row 4: ${f4})`);
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

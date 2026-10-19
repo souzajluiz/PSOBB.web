@@ -25,7 +25,7 @@
 import { se } from '../audio/se.ts';
 import { drawInputWindow } from './login.ts';
 import { drawMenuWindow, drawText, inWindowSpace, type Screen, type Stage, type WindowSkin } from './stage.ts';
-import { DEFAULT_TEXT, EXIT_CONFIRM, LOGIN_MENU, TITLE_FPS, TitleFlow, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
+import { DEFAULT_TEXT, EXIT_CONFIRM, LOGIN_MENU, TITLE_FPS, TitleFlow, yesNoRect, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
 import { withWindowAnim } from './windowanim.ts';
 
 export interface TitleAssets {
@@ -175,16 +175,18 @@ export class TitleScreen implements Screen {
     if (!m) return;
     const win = { x: LOGIN_MENU.x, y: this.menuY, w: LOGIN_MENU.w, h: LOGIN_MENU.h, title: m.text.title };
     withWindowAnim(ctx, m.anim, win.x, win.y, win.w, win.h, () =>
-      drawMenuWindow(ctx, this.skin, win, m.rows(), m.active ? m.selected : -1),
+      drawMenuWindow(ctx, this.skin, win, m.rows(), m.active ? m.selected : -1, undefined, m.anim),
     );
     if (m.input) drawInputWindow(ctx, this.skin, m.input, m.text.input, frame);
-    if (m.exitConfirm) {
-      // The question and the Yes/No list under it. The generic sub-menu's
-      // offsets (0x0073cf10) are not traced: this placement is approximated.
-      const q = { x: EXIT_CONFIRM.x, y: EXIT_CONFIRM.y, w: EXIT_CONFIRM.w, h: 40 };
-      drawMenuWindow(ctx, this.skin, q, [{ label: m.text.reallyOk }], -1);
-      const yn = { x: q.x + q.w - 80, y: q.y + q.h + 4, w: 80, h: 60 };
-      drawMenuWindow(ctx, this.skin, yn, [{ label: m.text.yes }, { label: m.text.no }], m.exitConfirm.cursor);
+    const x = m.exitConfirm;
+    if (x) {
+      // The question, then the Yes/No list in front of it (titleflow.ts).
+      const q = EXIT_CONFIRM;
+      withWindowAnim(ctx, x.question, q.x, q.y, q.w, q.h, () => drawMenuWindow(ctx, this.skin, q, [{ label: m.text.reallyOk }], -1, undefined, x.question));
+      const yn = yesNoRect(q);
+      withWindowAnim(ctx, x.list, yn.x, yn.y, yn.w, yn.h, () =>
+        drawMenuWindow(ctx, this.skin, yn, [{ label: m.text.yes }, { label: m.text.no }], x.cursor, undefined, x.list),
+      );
     }
   }
 

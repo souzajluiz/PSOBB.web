@@ -25,6 +25,14 @@
 //   (c - (x / W + y / 21) * 7.5) * 17 px (ScrollbarObject_Render_0072a2c4
 //   0x00970adc..0x00970ae4, render_chat_bubbles_and_more 0x00970eb0..0x00970eb8;
 //   x, y relative to the content, W = the content width): the wipe;
+//   a list row's text (AutoClass2, render_chat_bubbles_and_more 0x0072d9b4)
+//   is cut at that width (text_space = min(width, reveal), x / y its offset
+//   in the content: centred x, row * 20); W is the render data's +0x18, the
+//   window width less 2 * 10;
+//   texts drawn whole once c >= 0 instead: a window's title pill text
+//   (unknown_tekker_result_text) and the label / ':' / value rows of the
+//   info-counter windows (RenderInfoCounterEntity_0072e930, e.g. Input
+//   UserID) (textShown);
 //   while closing the quads are scaled about the window centre by
 //   x (1 + 0.5111 k), y (1 - 0.2222 k) for k = the closing counter
 //   (0x00970084..0x00970090: 1 + k * 0.2222 * 2.3, 1 - k * 0.2222).
@@ -139,6 +147,11 @@ export class WindowAnim {
     const f = Math.floor(v);
     const d = v - f;
     return d > 0.5 || (d === 0.5 && f % 2 !== 0) ? f + 1 : f;
+  }
+
+  // Texts with no wipe (titles, info-counter rows) are drawn from c >= 0.
+  get textShown(): boolean {
+    return this.c >= 0;
   }
 
   // The quads' alpha (0..1).
