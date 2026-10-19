@@ -5,6 +5,9 @@
 // KEYS) on the canvas the views listen on, so held-key sets, menus and the
 // action palette all see ordinary key presses.
 //
+// The pad's controls are placed around the game's own HUD (input/padlayout.ts):
+// the action palette's slot icons are its attack buttons.
+//
 // Shortcuts (window capture phase, so the game never sees them):
 //   Alt+Enter  fullscreen (F1..F12 are game keys, F11 is the browser's)
 //   Alt+M      mute (a bare M would be typed into the canvas text inputs:
@@ -17,16 +20,19 @@ import {
   DOM_KEYS,
   isTap,
   keyDiff,
-  proxyKeys,
+  proxyInput,
   PROXY_SENTINEL,
   REPEATING_KEYS,
   repeatCount,
   REPEAT_INTERVAL,
+  shortcutFor,
   stickKeys,
+  SwallowedKeys,
   type GameKey,
   type MoveKey,
   type ProxyKey,
 } from '../input/virtualpad.ts';
+import { padLayout, type Insets, type PadLayout, type PxRect } from '../input/padlayout.ts';
 import { FullscreenController } from './fullscreen.ts';
 import './webcontrols.css';
 
@@ -147,13 +153,16 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   const { root, keyTarget, chat } = opts;
   const fs = new FullscreenController(opts.fullscreenElement ?? root);
   const feed = new KeyFeed(keyTarget);
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => void> = [() => fs.dispose()];
   const listen = <K extends keyof WindowEventMap>(type: K, fn: (e: WindowEventMap[K]) => void, capture = false) => {
     window.addEventListener(type, fn, capture);
     cleanups.push(() => window.removeEventListener(type, fn, capture));
   };
   const refocus = () => keyTarget.focus({ preventScroll: true });
 
+  // The overlay covers exactly the canvas box, like the HUD canvases
+  // (render/fieldhud.ts: offsetLeft / offsetTop / clientWidth / clientHeight),
+  // so the palette tap targets line up with the drawn palette.
   const overlay = document.createElement('div');
   overlay.className = 'wc-overlay';
   // Pressing overlay controls must not move focus off the game canvas (its
@@ -161,9 +170,12 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   overlay.addEventListener('pointerdown', (e) => e.preventDefault());
   overlay.addEventListener('contextmenu', (e) => e.preventDefault());
 
-  // --- fullscreen / mute bar ------------------------------------------------
-  const bar = document.createElement('div');
-  bar.className = 'wc-bar';
+  // --- top strip: small buttons, fullscreen, mute ------------------------------
+  const strip = document.createElement('div');
+  strip.className = 'wc-strip';
+  const row = document.createElement('div');
+  row.className = 'wc-row';
+  row.hidden = true; // touch only
   const fsButton = button('wc-bar-button', '', 'Fullscreen (Alt+Enter)');
   const muteButton = button('wc-bar-button', '', 'Mute (Alt+M)');
   const syncFs = (on: boolean) => {
@@ -172,6 +184,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     const t = on ? 'Exit fullscreen (Alt+Enter)' : 'Fullscreen (Alt+Enter)';
     fsButton.title = t;
     fsButton.setAttribute('aria-label', t);
+    requestAnimationFrame(relayout);
   };
   const syncMute = (m: boolean) => {
     muteButton.replaceChildren(icon(m ? ICON_MUTED : ICON_SOUND));
@@ -180,7 +193,6 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     muteButton.title = t;
     muteButton.setAttribute('aria-label', t);
   };
-  syncFs(false);
   syncMute(isMuted());
   cleanups.push(fs.onChange(syncFs), onMuteChange(syncMute));
   fsButton.addEventListener('click', () => {
@@ -191,27 +203,38 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     toggleMuted();
     refocus();
   });
-  bar.append(fsButton, muteButton);
+  strip.append(row, fsButton, muteButton);
 
+  // Shortcuts. The keydown is stopped in the window capture phase so the game
+  // never sees Enter / M; the matching keyup is stopped too, even when Alt is
+  // let go first.
+  const swallowed = new SwallowedKeys();
   listen(
     'keydown',
     (e) => {
-      if (!e.altKey || e.ctrlKey || e.metaKey) return;
-      const fullscreen = e.key === 'Enter';
-      const mute = e.code === 'KeyM';
-      if (!fullscreen && !mute) return;
+      if (!e.isTrusted) return; // the audio-unlock echo below
+      const shortcut = shortcutFor(e);
+      if (!shortcut) return;
       e.preventDefault();
-      e.stopImmediatePropagation(); // the game must not see Enter / M
+      e.stopImmediatePropagation();
+      swallowed.down(e.code);
+      // The audio modules start their AudioContexts on the first window
+      // keydown (audio/bgm.ts, audio/se.ts), which this one no longer
+      // reaches: echo a plain Alt keydown at the window only (no game
+      // listener reads it; the canvas listeners are not on its path).
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Alt', code: 'AltLeft', altKey: true }));
       if (e.repeat) return;
-      if (fullscreen) fs.toggle();
-      else toggleMuted();
+      if (shortcut === 'mute') toggleMuted();
+      // Only while the game view is on screen (not from the login form or the
+      // Map viewer tab), or to leave fullscreen.
+      else if (fs.active || root.getClientRects().length > 0) fs.toggle();
     },
     true,
   );
   listen(
     'keyup',
     (e) => {
-      if (e.altKey && (e.key === 'Enter' || e.code === 'KeyM')) e.stopImmediatePropagation();
+      if (swallowed.up(e.code)) e.stopImmediatePropagation();
     },
     true,
   );
@@ -221,8 +244,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   pad.className = 'wc-touch';
   pad.hidden = true;
 
-  // Stick: floats to where the finger lands in the left zone, returns home on
-  // release.
+  // Stick: floats to where the finger lands in the lower-left zone, returns
+  // home on release.
   const zone = document.createElement('div');
   zone.className = 'wc-stick-zone';
   const base = document.createElement('div');
@@ -230,24 +253,22 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   const knob = document.createElement('div');
   knob.className = 'wc-knob';
   base.append(knob);
-  zone.append(base);
+  overlay.append(base);
 
   type StickState =
     | { kind: 'idle' }
     | { kind: 'held'; pointerId: number; cx: number; cy: number; startX: number; startY: number; startTime: number; maxMove: number; keys: ReadonlySet<MoveKey> };
   let stick: StickState = { kind: 'idle' };
-  const stickRadius = () => base.offsetWidth / 2 || 48;
+  let layout: PadLayout | null = null;
+  const stickRadius = () => (layout ? layout.stickSize / 2 : 48);
   const placeStick = (x: number | null, y: number | null) => {
-    if (x === null || y === null) {
-      base.style.removeProperty('left');
-      base.style.removeProperty('top');
-      base.classList.remove('is-active');
-    } else {
-      const r = zone.getBoundingClientRect();
-      base.style.left = `${x - r.left}px`;
-      base.style.top = `${y - r.top}px`;
-      base.classList.add('is-active');
-    }
+    if (!layout) return;
+    const r = overlay.getBoundingClientRect();
+    const cx = x === null ? layout.stickHome.x : x - r.left;
+    const cy = y === null ? layout.stickHome.y : y - r.top;
+    base.style.left = `${cx}px`;
+    base.style.top = `${cy}px`;
+    base.classList.toggle('is-active', x !== null);
   };
   const moveKnob = (dx: number, dy: number) => {
     knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
@@ -303,6 +324,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
 
   // Buttons that hold a game key while pressed (multi-touch: each tracks its
   // own pointer).
+  const releasers: Array<() => void> = [];
   const holdButton = (cls: string, label: string, title: string, key: GameKey): HTMLButtonElement => {
     const b = button(`wc-key ${cls}`, label, title);
     let pointer: number | null = null;
@@ -337,23 +359,33 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     releasers.push(release);
     return b;
   };
-  const releasers: Array<() => void> = [];
 
-  // Right side: the arrows are the palette keys in the field and the cursor
-  // keys in menus (Up = camera / cursor up), as on the keyboard.
+  // The action palette window itself: its three slot icons and the Ctrl tab
+  // are tap targets for the palette keys (input/padlayout.ts).
+  const PALETTE_TITLES: Partial<Record<GameKey, string>> = {
+    [KEYS.paletteLeft]: 'Palette left (Left)',
+    [KEYS.paletteMiddle]: 'Palette middle (Down)',
+    [KEYS.paletteRight]: 'Palette right (Right)',
+    [KEYS.paletteChange]: 'Palette change (Ctrl)',
+  };
+  const paletteButtons = new Map<GameKey, HTMLButtonElement>();
+  for (const key of [KEYS.paletteLeft, KEYS.paletteMiddle, KEYS.paletteRight, KEYS.paletteChange] as const) {
+    paletteButtons.set(key, holdButton('wc-palette', '', PALETTE_TITLES[key] ?? key, key));
+  }
+
+  // Arrow diamond: Up = camera, the others are the palette keys again; in
+  // menus they are the cursor keys, as on the keyboard.
   const dpad = document.createElement('div');
   dpad.className = 'wc-dpad';
   dpad.append(
     holdButton('wc-up', '▲', 'Camera / up (Up)', KEYS.camera),
-    holdButton('wc-left', '◀', 'Palette left / left (Left)', KEYS.paletteLeft),
-    holdButton('wc-down', '▼', 'Palette middle / down (Down)', KEYS.paletteMiddle),
-    holdButton('wc-rt', '▶', 'Palette right / right (Right)', KEYS.paletteRight),
+    holdButton('wc-left', '◀', 'Left (Left)', KEYS.selectLeft),
+    holdButton('wc-down', '▼', 'Down (Down)', KEYS.selectDown),
+    holdButton('wc-rt', '▶', 'Right (Right)', KEYS.selectRight),
   );
   const actions = document.createElement('div');
   actions.className = 'wc-actions';
   actions.append(holdButton('wc-decide', 'OK', 'Decide (Enter)', KEYS.decide), holdButton('wc-cancel', 'BACK', 'Cancel (Backspace)', KEYS.cancel));
-  const row = document.createElement('div');
-  row.className = 'wc-row';
   row.append(holdButton('wc-small', 'PAL', 'Palette change (Ctrl)', KEYS.paletteChange), holdButton('wc-small', 'MENU', 'Menu (Home)', KEYS.menu));
 
   // Chat.
@@ -373,13 +405,18 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       p.blur();
       refocus();
     };
-    p.addEventListener('input', () => {
-      for (const k of proxyKeys(p.value)) feed.tap(k);
+    const flush = (composing: boolean) => {
+      const keys = proxyInput(p.value, composing);
+      if (!keys) return; // IME still composing: wait for compositionend
+      for (const k of keys) feed.tap(k);
       p.value = PROXY_SENTINEL;
       p.setSelectionRange(p.value.length, p.value.length);
-    });
+    };
+    p.addEventListener('input', (e) => flush((e as InputEvent).isComposing));
+    p.addEventListener('compositionend', () => flush(false));
     p.addEventListener('keydown', (e) => {
       e.stopPropagation(); // the canvas gets the synthesized keys only
+      if (e.isComposing) return;
       if (e.key === 'Enter' || e.key === 'Escape') {
         e.preventDefault();
         feed.tap(e.key === 'Enter' ? DOM_KEYS.enter : { key: 'Escape', code: 'Escape' });
@@ -410,14 +447,46 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     }
   });
 
-  const right = document.createElement('div');
-  right.className = 'wc-right';
-  right.append(row, dpad, actions);
-  pad.append(zone, right);
-
-  overlay.append(bar, pad);
+  pad.append(zone, dpad, actions, ...paletteButtons.values());
+  overlay.append(pad, strip);
   if (proxy) overlay.append(proxy);
   root.append(overlay);
+
+  // --- layout ------------------------------------------------------------------
+  const place = (el: HTMLElement, r: PxRect) => {
+    Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+  };
+  // Safe-area insets, read from the overlay's CSS padding (env()).
+  const insets = (): Insets => {
+    const cs = getComputedStyle(overlay);
+    return { top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0, bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0 };
+  };
+  function relayout(): void {
+    const w = keyTarget.clientWidth;
+    const h = keyTarget.clientHeight;
+    Object.assign(overlay.style, { left: `${keyTarget.offsetLeft}px`, top: `${keyTarget.offsetTop}px`, width: `${w}px`, height: `${h}px` });
+    if (!w || !h) return;
+    const l = padLayout(w, h, insets());
+    layout = l;
+    overlay.style.setProperty('--wc-btn', `${l.button}px`);
+    overlay.style.setProperty('--wc-gap', `${l.gap}px`);
+    place(strip, l.topStrip);
+    place(zone, l.stickZone);
+    place(dpad, l.dpad);
+    place(actions, l.actions);
+    for (const { key, rect } of l.palette) {
+      const b = paletteButtons.get(key);
+      if (b) place(b, rect);
+    }
+    base.style.width = base.style.height = `${l.stickSize}px`;
+    if (stick.kind === 'idle') placeStick(null, null);
+  }
+  const ro = new ResizeObserver(() => relayout());
+  ro.observe(keyTarget);
+  cleanups.push(() => ro.disconnect());
+  listen('resize', () => relayout());
+  syncFs(false);
+  relayout();
 
   // Nothing stays held when the page loses focus or the pad is hidden.
   const releaseAll = () => {
@@ -432,12 +501,20 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   document.addEventListener('visibilitychange', onVisibility);
   cleanups.push(() => document.removeEventListener('visibilitychange', onVisibility));
 
+  // While the pad is up the canvas must not pan or zoom the page: a pan would
+  // cancel the pointers (pointercancel) under the stick and buttons.
+  const touchAction = keyTarget.style.touchAction;
   const setTouchVisible = (on: boolean) => {
     if (pad.hidden === !on) return;
     if (!on) releaseAll();
     pad.hidden = !on;
+    row.hidden = !on;
+    base.hidden = !on;
     overlay.classList.toggle('is-touch', on);
+    keyTarget.style.touchAction = on ? 'none' : touchAction;
+    relayout();
   };
+  base.hidden = true;
   const setting = urlTouchSetting() ?? opts.touch ?? 'auto';
   if (setting === 'on') setTouchVisible(true);
   else if (setting === 'auto') {
@@ -458,6 +535,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     dispose() {
       releaseAll();
       for (const c of cleanups) c();
+      keyTarget.style.touchAction = touchAction;
       overlay.remove();
     },
   };

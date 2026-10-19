@@ -1,5 +1,48 @@
 # Devlog
 
+## 2026-10-19: Touch pad clear of the HUD, fullscreen / shortcut fixes
+
+**What changed:** the touch pad no longer covers the game's HUD. The action
+palette's own slot icons are now its attack buttons (tap the left / middle /
+right icon = that slot's key, the Ctrl tab = palette change); the arrow
+diamond and OK / BACK sit left of the palette, the stick takes the lower left
+below the party window, and MENU / CHAT / fullscreen / mute line the top edge
+between the status window and the radar. The overlay covers exactly the
+canvas box (the Online tab's hint paragraph moved out of `#game-view`).
+Code: `input/padlayout.ts` (new, pure), `ui/webcontrols.ts`,
+`ui/webcontrols.css`, `ui/fullscreen.ts`, `input/virtualpad.ts`,
+`index.html`, `ui/style.css`.
+
+**Details:**
+- `padLayout(width, height, insets)` works in the field HUD's space: scale =
+  height / 480, `extra` = virtual width beyond 640, right-half windows shifted
+  by it (classic/ingame.ts anchorX), with the exe's rectangles: palette
+  (484, 368) 150x107 and its slot / Ctrl-tab offsets (classic/palette.ts),
+  status (28, 37) 228x76 and party (30, 116) windows (classic/hud.ts), radar
+  (480, 64) 128x128 (classic/minimap.ts), message window (373, 203) 255x120.
+  The overlay takes the canvas's offsetLeft / offsetTop / client size like
+  the HUD canvases, so the palette targets line up with the drawn icons.
+- Fullscreen: a request with no answer (prefixed `webkitRequestFullscreen`
+  returns nothing and may refuse silently) falls back to the CSS mode after
+  1.5 s; toggling while a request is pending cancels it; a late
+  `fullscreenchange` undoes the fallback. The controller removes its document
+  listeners on dispose.
+- Shortcuts: Alt+Enter only toggles fullscreen while the game view is on
+  screen (or to leave it); the keyup of a swallowed Enter / M is swallowed even
+  when Alt is released first; a plain Alt keydown is echoed at the window so
+  the audio modules' first-keydown unlock still runs.
+- While the pad is shown the canvas gets `touch-action: none` (a page pan
+  sent pointercancel to the stick).
+- On-screen keyboard proxy: text is read only when IME composition ends
+  (Android keyboards).
+
+**Checks:** `node tests/mobilecontrols.test.ts` (layout clear of every HUD
+window at six canvas sizes, palette targets inside the palette, safe-area
+insets, shortcut matching incl. Alt+F1..F12, swallowed keyup, IME guard,
+fullscreen timeout / cancel / late enter), `controls`, `fieldhud`, `sound`,
+`minimap` tests, client `tsc --noEmit`, `vite build`. Chrome: pending on the
+main thread.
+
 ## 2026-10-19: Fullscreen, mute and touch controls
 
 **What changed:** three browser conveniences that are not in PsoBB.exe and do

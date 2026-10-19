@@ -13,8 +13,12 @@ import {
   REPEAT_DELAY,
   REPEAT_INTERVAL,
   repeatCount,
+  proxyInput,
+  shortcutFor,
   stickKeys,
+  SwallowedKeys,
 } from '../client/src/input/virtualpad.ts';
+import { intersects, padLayout, type PxRect } from '../client/src/input/padlayout.ts';
 import { loadMuted, MUTE_STORAGE_KEY, parseMuted, resolveMuted, saveMuted, serializeMuted } from '../client/src/audio/mute.ts';
 import { fullscreenStep, isFullscreen, type FullscreenEvent, type FullscreenState } from '../client/src/ui/fullscreen.ts';
 
@@ -71,6 +75,55 @@ check(!isTap(400, 0, 0) && !isTap(100, 20, 0), 'long or moved press is not a tap
 check(proxyKeys(PROXY_SENTINEL + 'hi').map((k) => k.key).join() === 'h,i', 'typed text -> one key per character');
 check(proxyKeys('')[0].key === 'Backspace', 'sentinel deleted -> Backspace');
 check(proxyKeys(PROXY_SENTINEL).length === 0, 'unchanged field -> nothing');
+
+check(proxyInput(PROXY_SENTINEL + 'abc', true) === null, 'IME composing: wait');
+check(proxyInput(PROXY_SENTINEL + 'abc', false)?.length === 3, 'composition done: keys');
+
+// --- shortcuts ---
+const ev = (key: string, code: string, mods: Partial<{ altKey: boolean; ctrlKey: boolean; metaKey: boolean }> = {}) => ({ key, code, altKey: false, ctrlKey: false, metaKey: false, ...mods });
+check(shortcutFor(ev('Enter', 'Enter', { altKey: true })) === 'fullscreen', 'Alt+Enter = fullscreen');
+check(shortcutFor(ev('µ', 'KeyM', { altKey: true })) === 'mute', 'Alt+M = mute (macOS Option+M types µ)');
+check(shortcutFor(ev('Enter', 'Enter')) === null, 'bare Enter stays the game\'s decide key');
+check(shortcutFor(ev('m', 'KeyM')) === null, 'bare M stays text input');
+check(shortcutFor(ev('Enter', 'Enter', { altKey: true, ctrlKey: true })) === null, 'Ctrl+Alt+Enter is not ours');
+for (let f = 1; f <= 12; f++) check(shortcutFor(ev(`F${f}`, `F${f}`, { altKey: true })) === null, `Alt+F${f} left to the game`);
+{
+  const sw = new SwallowedKeys();
+  sw.down('Enter');
+  check(sw.up('Enter'), 'keyup of a swallowed Enter is swallowed (Alt already released)');
+  check(!sw.up('Enter'), 'only once');
+  check(!sw.up('KeyW'), 'other keyups pass');
+}
+
+// --- pad layout: clear of the HUD, palette slots are the buttons ---
+for (const [w, h] of [[844, 390], [1000, 462], [1280, 720], [1024, 768], [2560, 1440], [667, 375]] as const) {
+  const l = padLayout(w, h);
+  const hud = l.hud;
+  const what = `${w}x${h}`;
+  const pad: Array<[string, PxRect]> = [['dpad', l.dpad], ['actions', l.actions], ['top strip', l.topStrip]];
+  for (const [name, r] of pad) {
+    for (const [hn, hr] of Object.entries(hud)) check(!intersects(r, hr), `${what}: ${name} clear of the ${hn} window`);
+    check(r.x >= 0 && r.y >= 0 && r.x + r.w <= w + 1e-6 && r.y + r.h <= h + 1e-6, `${what}: ${name} on the canvas`);
+  }
+  check(!intersects(l.stickZone, l.dpad) && !intersects(l.stickZone, hud.status) && !intersects(l.stickZone, hud.party), `${what}: stick zone clear of the diamond and the status / party windows`);
+  check(!intersects(l.dpad, l.actions), `${what}: diamond and OK / BACK apart`);
+  check(l.palette.length === 4, `${what}: three slots + Ctrl tab`);
+  for (const { key, rect } of l.palette) {
+    const p = hud.palette;
+    check(rect.x >= p.x - 1e-6 && rect.y >= p.y - 1e-6 && rect.x + rect.w <= p.x + p.w + 1e-6 && rect.y + rect.h <= p.y + p.h + 1e-6, `${what}: ${key} target inside the palette window`);
+  }
+  check(Math.abs(hud.palette.x + hud.palette.w - (484 + 150 + l.extra) * l.scale) < 1e-6, `${what}: palette right-anchored like fieldhud (anchorX)`);
+}
+{
+  const l = padLayout(844, 390);
+  const left = l.palette.find((p) => p.key === KEYS.paletteLeft)!.rect;
+  const right = l.palette.find((p) => p.key === KEYS.paletteRight)!.rect;
+  const mid = l.palette.find((p) => p.key === KEYS.paletteMiddle)!.rect;
+  check(left.x < mid.x && mid.x < right.x && mid.y > left.y, 'palette targets: left, middle (lower), right as drawn');
+  check(l.palette.some((p) => p.key === KEYS.paletteChange), 'Ctrl tab is the palette-change target');
+  const inset = padLayout(844, 390, { top: 0, right: 0, bottom: 21, left: 47 });
+  check(inset.stickZone.x >= 47 && inset.dpad.y + inset.dpad.h <= 390 - 21 + 1e-6, 'safe-area insets respected');
+}
 
 // --- mute persistence and default ---
 check(parseMuted('1') && parseMuted('true'), '"1" / "true" = muted');
@@ -133,7 +186,13 @@ check(resolveMuted({ stored: null, dev: true, soundParam: 'x' }) === true, 'unkn
   r = run([toggleNone, { type: 'exited' }, toggleNone]);
   check(r.mode === 'off' && r.actions === 'fallbackOn,fallbackOff', 'fallback ignores change events, toggles off');
   r = run([toggleNative, toggleNative]);
-  check(r.mode === 'pending' && r.actions === 'request', 'second toggle while pending does nothing');
+  check(r.mode === 'off' && r.actions === 'request,cancel', 'toggle while pending cancels (never stuck)');
+  r = run([toggleNative, { type: 'timeout' }]);
+  check(r.mode === 'fallback' && r.actions === 'request,fallbackOn', 'no answer (silent webkit refusal): CSS fallback after the timeout');
+  r = run([toggleNative, { type: 'timeout' }, { type: 'entered' }]);
+  check(r.mode === 'native' && r.actions === 'request,fallbackOn,fallbackOff', 'late fullscreenchange after the timeout: native, fallback undone');
+  r = run([toggleNative, { type: 'entered' }, { type: 'timeout' }]);
+  check(r.mode === 'native', 'a stale timeout does nothing once native');
 }
 
 if (failures) {
