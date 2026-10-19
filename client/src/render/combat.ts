@@ -2350,8 +2350,9 @@ export class CombatView {
   // PlayerRestoreHealthAndTP_0068fda4 (hp = max HP, tp = max TP), vtable +0xe4
   // = Enemy_ClearStatusEffectsAndForces_0077962c (both status slots and both
   // technique slots, Shifta / Deband included), then the took-damage and dead
-  // flags (& 0xfffff1ff; a dead player cannot reach the counter, so the HP
-  // is left alone then). The emptied status slots go out as 6x0D (sync).
+  // flags (& 0xfffff1ff; the web client keeps no such flag word, and a dead
+  // player cannot reach the counter, so the HP is left alone then). The
+  // emptied status slots go out as 6x0D (sync).
   medicalTreatment(): void {
     if (!this.damage.dead) this.damage.hp = this.damage.maxHp;
     this.tp = this.progression?.maxTp ?? this.tp;
