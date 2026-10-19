@@ -8,11 +8,13 @@
     <title>PSOBB.web Classic</title>
     <style>
       :root { color-scheme: dark; }
-      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
+      /* touch-action: none: no pinch or double-tap zoom anywhere on the page
+         (ui/nozoom.ts covers iOS Safari, which ignores this for pinch). */
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; touch-action: none; }
       /* 100vh is the tall viewport on a phone (URL bar hidden), so it crops the
          bottom; 100dvh follows the bar. viewport.ts sets the exact box on touch
          screens (fullscreen, edge to edge); on a desktop window the stage fills it. */
-      #stage { position: fixed; left: 0; top: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; outline: none; touch-action: manipulation; }
+      #stage { position: fixed; left: 0; top: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; outline: none; touch-action: none; }
       /* 3D view (ship select, lobby) under the 2D stage. */
       #world { position: fixed; left: 0; top: 0; display: block; width: 100vw; height: 100vh; height: 100dvh; pointer-events: none; }
       #world[hidden] { display: none; }
