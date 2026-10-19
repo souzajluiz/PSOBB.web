@@ -15,6 +15,9 @@ psobb-client/
 *.prs
 *.dat
 *.png
+# The native app's icons and splash screens (client/android, client/ios) are not game data.
+!client/android/**/*.png
+!client/ios/**/*.png
 client/public/ref/
 .captures/
 .claude/
