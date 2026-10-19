@@ -5,11 +5,14 @@ import { SePlayer, setSePlayer } from '../audio/se.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
+import { Game, type GameListEntry } from '../net/game.ts';
 import type { Lobby } from '../net/lobby.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
+import type { PartyHost } from './gamelist.ts';
 import { LobbyScreen, type LobbyHud } from './lobby.ts';
+import { QuestLoadingScreen } from './questloading.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
 import { ShipSelectScreen } from './shipselect.ts';
@@ -184,6 +187,24 @@ async function main(): Promise<void> {
     }
   };
 
+  // The counter's party menus talk to the server through Game (net/game.ts):
+  // 08 the list, 09 a game's info, 10 join, C1 create. The classic client has
+  // no field scene yet, so a game it entered is left at once and the lobby is
+  // shown again (the roadmap's field item).
+  const partyHost = (lobby: Lobby, shipName: string): PartyHost => {
+    const ctx = () => ({ guildCardNumber: session?.init?.guildCardNumber ?? 0, fullCharacter: () => session?.fullCharacter ?? null });
+    const back = async (game: Game) => {
+      console.log(`[classic] entered game "${game.name}"; the classic field is not implemented, back to the lobby`);
+      await enterLobby(await game.leave(), shipName);
+    };
+    return {
+      listGames: () => Game.list(lobby.conn),
+      gameInfo: (entry: GameListEntry) => Game.info(lobby.conn, entry),
+      join: async (entry, password) => back(await Game.join(lobby, ctx(), entry.itemId, password)),
+      create: async (options) => back(await Game.create(lobby, ctx(), options)),
+    };
+  };
+
   const enterLobby = async (lobby: Lobby, shipName: string) => {
     const v = world();
     showWorld(true);
@@ -191,7 +212,10 @@ async function main(): Promise<void> {
     await v.load(source, lobbyMapFile(lobby.lobbyNumber));
     const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
     lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
-    const screen = new LobbyScreen(v, lobbyView, lobby, await loadHud(mapData.infoCols ?? []), shipName);
+    const hud = await loadHud(mapData.infoCols ?? []);
+    hud.party = partyHost(lobby, shipName);
+    hud.episode4 = episode4;
+    const screen = new LobbyScreen(v, lobbyView, lobby, hud, shipName);
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
     Object.assign(window, { classicLobby: screen, classicLobbyState: lobby });
     show(screen);
@@ -384,15 +408,25 @@ async function main(): Promise<void> {
     else if (s instanceof ConnectingScreen) bgm.stop();
   }
 
-  // ?screen=select jumps to the character list with empty slots and
-  // ?screen=create to character creation, offline (layout work).
+  // ?screen=select jumps to the character list with empty slots,
+  // ?screen=create to character creation and ?screen=questloading to the quest
+  // loading screen, offline (layout work).
   const jump = new URLSearchParams(location.search).get('screen');
   const frozen = Number.parseFloat(new URLSearchParams(location.search).get('t') ?? '');
   if (Number.isFinite(frozen)) stage.freezeTime = stage.time = frozen;
   if (jump === 'select') showSelect([null, null, null, null]);
   else if (jump === 'create') await showCreate(0, [null, null, null, null]);
   else if (jump === 'connecting') show(new ConnectingScreen(await loadConnectingAssets(), new Promise(() => {}), () => {}, () => {}));
-  else if (jump === 'connecterror') show(new ConnectingScreen(await loadConnectingAssets(), Promise.reject(new Error('Connection refused.')), () => {}, () => show(title)));
+  else if (jump === 'questloading') {
+    // Layout work: a download of 1 MB at 30 KB a second, started again once done.
+    const loading = new QuestLoadingScreen();
+    let loaded = -1;
+    setInterval(() => {
+      loaded = loaded < 0 || loaded >= 1_000_000 ? 0 : loaded + 3_000;
+      loading.progress(loaded, 1_000_000);
+    }, 100);
+    show(loading);
+  } else if (jump === 'connecterror') show(new ConnectingScreen(await loadConnectingAssets(), Promise.reject(new Error('Connection refused.')), () => {}, () => show(title)));
   else {
     show(title);
     // ?screen=menu: the Login menu already open; ?screen=input: the Input
