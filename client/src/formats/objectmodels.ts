@@ -52,8 +52,10 @@ interface ObjectPartBase {
 }
 
 // A part either plays a motion and says how it is driven, or holds its bind
-// pose: a `drive` or a `speed` without a `motion` does not compile.
-type PartMotion = { motion?: never; drive?: never; speed?: never } | { motion: number; drive: PartDrive; speed?: number };
+// pose: a `drive` or a `speed` without a `motion` does not compile. `shape`
+// is a .njs entry (motion index) drawn at the motion's frame
+// (njDrawShapeMotion), so it needs a motion too.
+type PartMotion = { motion?: never; drive?: never; speed?: never; shape?: never } | { motion: number; drive: PartDrive; speed?: number; shape?: number };
 
 // The texture list is the archive entry's own, or one model entry's embedded
 // list, or a separate archive - never two of them at once.
@@ -521,14 +523,16 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // box off) are gone; while sealed it draws the door with both motions and
     // the lamp root, then each lamp child whose bit is still set, in a color
     // whose alpha +0xdc swings between -1 and 0 by 0.05 a frame (render flag
-    // 0x20). The seals, lamps and color: render/traps.ts SealDoor; the .njs
-    // shape motion (+0xd0, motion 1) is still left out.
+    // 0x20). The seals, lamps and color: render/traps.ts SealDoor. The door is
+    // drawn by NJCM_SetMinimapRenderStates_008304e0(+0x34 model, +0xbc motion
+    // 0, +0xd0 motion 1 = fe_obj_fuuin_doa.njs, +0xb0 frame): the shape motion
+    // plays at motion 0's frame (formats/njshape.ts).
     case 0x0130:
       return spec(
         'TODoorVoShip',
         'bm_o_door_vo_ship.bml',
         [
-          { model: 1, texlistOf: 1, motion: 0, drive: 'loop-last', speed: 1 },
+          { model: 1, texlistOf: 1, motion: 0, drive: 'loop-last', speed: 1, shape: 1 },
           { model: 0, texlistOf: 0 },
         ],
         { collision: BOX(0x009c5574, 20, 10, 20) },

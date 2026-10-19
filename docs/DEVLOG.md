@@ -53,6 +53,89 @@ their brains.
 mines / ruins / combat / enemystatus tests, client `tsc --noEmit`. Not
 checked in Chrome (to do: an Episode 2 game in the Online tab, Warp to
 Jungle / Seabed).
+## 2026-10-19: Vol Opt's seal door shape motion; indirect objects (map_*i.bin)
+
+**What changed:** Ninja shape motions (`.njs`, NSSM chunks) are decoded and
+played. Vol Opt's seal door (TODoorVoShip) now draws its door model with the
+`.njs` vertex keys at the frame of its node motion, as the exe does, so the
+door's 48-vertex part moves through its five keys in a 30-frame loop. For water
+and the other indirect objects, `map_*i.bin` is parsed and used the way the
+exe's map loader uses it. An indirect entry is drawn only when the table has
+its id. The distortion itself turned out to be dead code in the PC client, so
+those models stay plain. Code: `formats/njshape.ts`, `render/shapeanim.ts`,
+`formats/indirect.ts` (new), `render/njcmmesh.ts`, `render/enemymodel.ts`,
+`render/objectview.ts`, `formats/objectmodels.ts`, `render/mapviewer.ts`.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Door draw** (render 0x00622358, vtable 0x00b27fc0): the door calls
+  NJCM_SetMinimapRenderStates_008304e0(+0x34 model 1, +0xbc motion 0, +0xd0
+  motion 1 = `fe_obj_fuuin_doa.njs`, +0xb0 frame). That is njDrawShapeMotion:
+  the shape plays at the node motion's frame. That frame grows by +0xb8 = 1.0
+  a tick and wraps at the last frame (update 0x006224a4 -> 0x0061347c). The
+  door part is `shape: 1` in its object spec.
+- **Shape format** (NJCM_RenderModelRecursive_0084785c,
+  NJCM_SetMinimapMeshData_00830508, MinimapMeshContext_InitBuffers_00847830):
+  NJS_MOTION with type 0x10 vertices / 0x20 normals, N = inp_fn & 0x3f lists
+  per record. Every node without eval flag 0x80 (SHAPE_SKIP) takes the next
+  record (NJCM_FinishMeshContext_00830568 / NJCM_RenderMeshContext_00830558),
+  whether or not it has a mesh. A key is u32 frame plus a pointer to one
+  f32[3] per vertex.
+- **Interpolation** (NJCM_BeginMinimapMeshContext_008473ec,
+  NJM_InterpolateKeyframes_008474b8): only vertex chunk types 0x22..0x24 and
+  0x29..0x2c take positions, and the key array runs on across the node's
+  chunks. Types 0x29..0x2c also take normals. NJM_FindKeyframeInterval_0084ae50
+  picks the keys: the integer frame (truncated) selects A by binary search, B
+  is the next key or, past the last one, the first key. t = (frame - A) /
+  (B - A), or frame - A when B is not after A. value = B * t + A * (1 - t).
+- **Data**: seven `.njs` in data.gsl (the door, `fs_obj_kurage`, three
+  Episode 4 plants, the move / wait bodies of `bm4_ps_ma_body`). All of them
+  parse, and their key arrays tile the file for one of their BML's models.
+  The door's: 30 frames, type 0x30, the root unshaped, node 1 keys at
+  0/7/14/21/29 with 48 vertices (type 0x23 chunk) and no normal keys.
+- **Render**: NjcmModelBuilder keeps, on request, the source node and shape
+  index of every output vertex (unweighted chunks). ShapeAnimator writes the
+  sampled keys through each node's bind-pose matrix into the skinned mesh's
+  positions (and normals), and NodeAnimator.onFrame drives it with the same
+  frame.
+- **i.bin** (load_map_data, "i.bin" 0x0097f268 at 0x0080b74d, then
+  ReverseTamEndianness_0080a60c): "ind0", u32 BE count, 8-byte rows of u16 BE
+  id, stage, b3, indinfo index. MapGeometry_InitializeMeshTrees_0080a650
+  gives each 0x200 entry whose id has a row an IndTexObject
+  (IndTexObject_Constructor_00504b58), stored in the record's empty mesh slot.
+  The record also gets +8 = {0,1,2}[stage] (0x0097f11c), +0x0E = b3 and
+  +0x0F = the indinfo index.
+- **Draw gate**: map_nrel_process_chunk_static_meshes draws a static 0x200
+  entry without 0x80 / 0x400 only when that slot is set (0x80 draws plainly,
+  0x400 only calls the no-op GameCube hook). The animated loops of
+  render_map_geometry_ need the slot for every 0x200 entry. Without an i.bin,
+  no slot is set.
+- **Why there is no distortion**: ConfigureIndTexStageForMesh_00504c04 would
+  put an IndTex generator's 64x64 du/dv texture (`indirect.dat`: 12 XVR
+  textures whose low 5 bits become V8U8 du = dv; `indinfo.dat`: 64 rows of
+  mode / amplitudes / scroll / texture) on stage 0, with BUMPENVMAT00 / 01 =
+  1.0 and pixel shader 0. It only looks for generators in
+  g_IndTexActiveList_00a72b10, and nothing adds one: the list and its count
+  0x00a72b0c are only cleared (0x005036c8, ResetIndirectTexState_00504cd0),
+  and the call in the IndTexObject constructor (0x00504bc4) has an empty
+  body. The JP build matches (objdump of psobb-client-source's PsoBB.exe:
+  constructor at 0x00504baa calls the empty 0x00504bd0, list 0x00a70690 /
+  count 0x00a7068c only read or cleared). The JP decompilation has none of
+  these functions yet.
+
+**Checks:** `tests/njshape.test.ts` (key picking, all seven `.njs`, the door
+layout, and the built door's vertices following the keys at frames 7 and
+18.5) and `tests/indirect.test.ts` (all 17 `i.bin`, the draw rule, and 16 maps
+/ 571 drawn indirect entries that all keep their row, so nothing that was
+drawn before is hidden). formats, motions, traps, enemies and waves tests;
+client `tsc --noEmit`. No Chrome check (not requested here).
+
+**Assumed:** the web client samples the shape at its smoothed frame between
+ticks, while the exe draws at the tick's frame. Weighted (NF) vertices are left
+unshaped, because none of the seven files shapes one that we draw.
+CheckFrustumIntersectionResult_0078b208() < 3, the condition for loading
+`i.bin`, is taken as always true. Animated indirect entries with 0x400 stay
+hidden as before (the animated loop has no 0x400 branch, but no map has
+one).
 
 ## 2026-10-19: Quest Board review fixes
 

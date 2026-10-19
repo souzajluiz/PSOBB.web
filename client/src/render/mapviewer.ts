@@ -11,6 +11,7 @@ import { TextureAnimator } from './texanim.ts';
 import { parseTam, tamFileFor, type TamFile } from '../formats/tam.ts';
 import { areaForMap, type PlacedEntity } from '../formats/setdata.ts';
 import { ENTRY_NO_FOG } from '../formats/nrel.ts';
+import { applyIndirectTable, indirectFileFor, parseIndirectBin, type IndirectTable } from '../formats/indirect.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import {
   defaultFogForArea,
@@ -188,6 +189,15 @@ export class MapViewer {
   async load(source: DataSource, nrelName: string): Promise<MapStats> {
     const nrelData = await source.read(`scene/${nrelName}`);
     const geometry = parseMapNRel(nrelData);
+    // Indirect objects (flag 0x200) are drawn only when map_*i.bin has their
+    // id (formats/indirect.ts); without the file none of them is.
+    let indirect: IndirectTable | null = null;
+    try {
+      indirect = parseIndirectBin(await source.read(`scene/${indirectFileFor(nrelName)}`));
+    } catch {
+      indirect = null;
+    }
+    applyIndirectTable(geometry, indirect);
     let xvm: Uint8Array | null = null;
     for (const name of textureArchiveCandidates(nrelName)) {
       try {

@@ -8,8 +8,10 @@ Vol Opt 34, Game list menu 28, other menus 23, De Rol Le 17, Quest 11,
 Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 (the Episode 2 enemies) come last and keep using the Ghidra dump.
 
-1. In progress: Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape
-   motion with water distortion, the title / login screens.
+1. In progress: the title / login screens (SSIM against the captures), Pan
+   Arms / Pofuilly splits. The other `.njs` shape motions (TOKurage, the
+   Episode 4 plants, the Episode 4 slime body) only need their objects' draw
+   calls looked up.
 2. Episode 1 boss fights where they move their children: De Rol Le (tentacle,
    segments, rocks, spore mines) first, then Vol Opt's phases (core in its
    monitor, prison bars, form 2 / form 7 hazards, minions), then the Dragon and
@@ -55,7 +57,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Texture animation (`.tam`): UV-scroll effect slots and texture swaps
 - [x] Env-map texgen (material type 7: camera-space normal * matrix 0x00a21800)
 - [x] Area fog and light (`fogentry.dat`, `lightentry.bin`, fog regions from set data, fades)
-- [ ] Water/indirect distortion (`map_*i.bin`)
+- [x] Water/indirect distortion (`map_*i.bin`): rows parsed and used as the exe's draw gate; the PC client never runs the distortion itself (its IndTex generator list is never filled), so the models are drawn plainly (`formats/indirect.ts`, `tests/indirect.test.ts`)
 - [x] Verify handedness: the client is right-handed like three.js, so no mirroring is needed
 
 ## Phase 4: online
@@ -94,7 +96,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Pioneer 2 doors (shop, guild, Ragol warp, medical center) with their own open/close distances, the Lab's city warps and map warp, the city warp beams' real speed
 - [x] Jungle rocks, trap pillars and Vol Opt's ship door models; the lobby door 0x54 and shop generators draw nothing; `construct_objects` (delayed objects by room/group) and the door unlock camera
 - [x] Pillar traps TOTrapAncient02 / 02R (rise, hold `6x2C`/`6x2D`, technique, sink) and Vol Opt's seal door lamps from quest flags `0x2c`..`0x2f` (`render/traps.ts`, `tests/traps.test.ts`)
-- [ ] Vol Opt seal door `.njs` shape motion; trap vision (cloaked traps); the 02R's technique projectiles
+- [x] Vol Opt seal door `.njs` shape motion (NSSM decoding, vertex keys played at the door motion's frame: `formats/njshape.ts`, `render/shapeanim.ts`, `tests/njshape.test.ts`)
+- [ ] Trap vision (cloaked traps); the 02R's technique projectiles; shape motions of TOKurage, the Episode 4 plants and the slime body
 - [x] Boss fight music phases (`audio/bossbgm.ts`: the track of every phase and the `6x15`/`6x19`/`6xA4`/`6xA5` triggers) and `6x6A` boss warp gathering (`render/bosswarp.ts`: confirmation, party list, 300-frame gather, warp) — `tests/bossrooms.test.ts`
 - [x] CCA main-gate warp menu (0x20A), Episode 2's four-light door lamps (flags = param5), the jungle warp beams (color by param6, 4 frames per tick, radius 15)
 - [x] The boss warp object's beams by 6x6A state (idle / gather + warp / occupied + locked); the client has no boss-warp cutscene camera
