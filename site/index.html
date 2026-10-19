@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSOBB.web</title>
+<meta name="description" content="A Phantasy Star Online: Blue Burst client rebuilt for the browser in TypeScript and three.js, from the original client's reverse engineering.">
+<meta property="og:title" content="PSOBB.web">
+<meta property="og:description" content="Phantasy Star Online: Blue Burst, running in the browser.">
+<meta property="og:image" content="img/og.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #04101c; --panel: #0a2133; --line: #1d4f6e; --text: #d8ecf6; --muted: #8fb2c6; --accent: #5fd0ff; --orange: #ff8a2a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; }
+  a { color: var(--accent); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  header { position: relative; }
+  header img { display: block; width: 100%; max-height: 72vh; object-fit: cover; }
+  header .shade { position: absolute; inset: auto 0 0 0; padding: 48px 0 24px; background: linear-gradient(transparent, var(--bg)); }
+  h1 { margin: 0; font-size: clamp(2rem, 6vw, 3.4rem); font-weight: 800; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  .lead { margin: 4px 0 0; font-size: 1.15rem; color: var(--muted); }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 28px 0 8px; }
+  .btn { padding: 10px 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; font-weight: 600; }
+  .btn.primary { background: var(--orange); border-color: var(--orange); color: #1a0b00; }
+  h2 { margin: 48px 0 12px; font-size: 1.4rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  figure img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+  figure img.left { object-position: left center; }
+  figcaption { padding: 8px 12px; font-size: 0.9rem; color: var(--muted); }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  footer { margin: 56px 0 32px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <img src="img/title.jpg" alt="PSOBB.web title screen">
+  <div class="shade"><div class="wrap">
+    <h1>PSOBB<span>.web</span></h1>
+    <p class="lead">Phantasy Star Online: Blue Burst, running in the browser.</p>
+  </div></div>
+</header>
+
+<main class="wrap">
+  <p>A fan-made client for PSO Blue Burst, written in TypeScript and three.js. It reads your own game files in the browser and plays online against a <a href="https://github.com/fuzziqersoftware/newserv">newserv</a> server. Screens, menus, enemies and rules are rebuilt from the original client's code, not by eye.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/souzajluiz/PSOBB.web">GitHub</a>
+    <a class="btn" href="https://github.com/souzajluiz/PSOBB.web/blob/main/docs/ROADMAP.md">Roadmap</a>
+    <a class="btn" href="https://github.com/souzajluiz/PSOBB.web/blob/main/docs/DEVLOG.md">Devlog</a>
+  </div>
+
+  <h2>Screens</h2>
+  <div class="grid">
+    <figure><img src="img/login.jpg" alt="" loading="lazy"><figcaption>Title and Login menu</figcaption></figure>
+    <figure><img src="img/select.jpg" alt="" loading="lazy"><figcaption>Select character</figcaption></figure>
+    <figure><img src="img/create.jpg" alt="" loading="lazy"><figcaption>Character creation</figcaption></figure>
+    <figure><img src="img/lobby.jpg" alt="" loading="lazy"><figcaption>Lobby</figcaption></figure>
+    <figure><img src="img/pioneer2.jpg" alt="" loading="lazy"><figcaption>Pioneer 2</figcaption></figure>
+    <figure><img src="img/forest.jpg" alt="" loading="lazy"><figcaption>Forest: Boomas</figcaption></figure>
+    <figure><img src="img/caves.jpg" alt="" loading="lazy"><figcaption>Caves: Hidoom and Migium</figcaption></figure>
+    <figure><img class="left" src="img/mainmenu.jpg" alt="" loading="lazy"><figcaption>Main menu</figcaption></figure>
+    <figure><img class="left" src="img/ship.jpg" alt="" loading="lazy"><figcaption>Ship select</figcaption></figure>
+  </div>
+
+  <h2>How it works</h2>
+  <ul>
+    <li><strong>Browser client</strong>: parses the game's own formats (PRS, GSL, AFS, REL, XJ / NJ models, XVM textures, motions) and draws them with three.js.</li>
+    <li><strong>Online</strong>: a small bridge turns WebSocket into TCP, so the browser speaks the real Blue Burst protocol to newserv.</li>
+    <li><strong>Faithful</strong>: every value comes from the client's reverse engineering (a Ghidra dump and a byte-matching decompilation), with the address cited in the code.</li>
+  </ul>
+</main>
+
+<footer class="wrap">
+  Personal, educational project. Phantasy Star Online and all of its assets belong to SEGA; screenshots are shown for illustration, and no game files are distributed.
+</footer>
+</body>
+</html>

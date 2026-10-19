@@ -1,5 +1,7 @@
 # PSOBB.web
 
+Project page: https://souzajluiz.github.io/PSOBB.web/
+
 A **Phantasy Star Online: Blue Burst** client that runs in the browser and connects to a [newserv](https://github.com/fuzziqersoftware/newserv) server.
 
 > Personal/educational reverse-engineering and interoperability project. No game files (SEGA) are distributed here: each user points the browser at their own PSOBB installation. See [docs/LEGAL.md](docs/LEGAL.md).
