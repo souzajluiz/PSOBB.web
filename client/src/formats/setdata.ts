@@ -232,8 +232,8 @@ function lookup(defs: ReadonlyArray<readonly [number, number, string]>, type: nu
 }
 
 // Client class names, as newserv's MapFile::name_for_{object,enemy}_type with version BB.
-export const objectTypeName = (type: number, area: number | null = null) => lookup(OBJECT_DEFINITIONS, type, area);
-export const enemyTypeClassName = (type: number, area: number | null = null) => lookup(ENEMY_DEFINITIONS, type, area);
+export const objectTypeName = (type: number, area: number | null = null): string => lookup(OBJECT_DEFINITIONS, type, area);
+export const enemyTypeClassName = (type: number, area: number | null = null): string => lookup(ENEMY_DEFINITIONS, type, area);
 
 // In-game enemy name for a set entry (root enemy only; children are not listed).
 // Port of the base_type switch in newserv's Map::add_enemy_and_children.

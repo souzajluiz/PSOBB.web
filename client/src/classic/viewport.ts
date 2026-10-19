@@ -34,6 +34,8 @@ export interface StageFit {
   // Free CSS px under the stage box (portrait), where the touch pad sits.
   readonly below: number;
   refresh(): void;
+  // Removes the window listeners and the pending settle timer.
+  dispose(): void;
 }
 
 // Android Chrome only, and only in fullscreen; iOS has no lock. Never throws.
@@ -100,11 +102,12 @@ export function installStageFit(o: StageFitOptions): StageFit {
     timer = window.setTimeout(measure, 200);
   }
 
+  const portraitQuery = matchMedia('(orientation: portrait)');
   if (enabled) {
     window.addEventListener('resize', settle);
     window.addEventListener('orientationchange', settle);
     screen.orientation?.addEventListener?.('change', settle);
-    matchMedia('(orientation: portrait)').addEventListener('change', settle);
+    portraitQuery.addEventListener('change', settle);
     window.visualViewport?.addEventListener('resize', settle);
     window.visualViewport?.addEventListener('scroll', measure);
     measure();
@@ -121,5 +124,14 @@ export function installStageFit(o: StageFitOptions): StageFit {
       return state.below;
     },
     refresh: settle,
+    dispose() {
+      clearTimeout(timer);
+      window.removeEventListener('resize', settle);
+      window.removeEventListener('orientationchange', settle);
+      screen.orientation?.removeEventListener?.('change', settle);
+      portraitQuery.removeEventListener('change', settle);
+      window.visualViewport?.removeEventListener('resize', settle);
+      window.visualViewport?.removeEventListener('scroll', measure);
+    },
   };
 }

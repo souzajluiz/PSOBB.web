@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-19: stricter TypeScript
+
+**What changed:** `client/tsconfig.json` now also has `noImplicitReturns`,
+`noImplicitOverride`, `noFallthroughCasesInSwitch`, `noUnusedLocals`,
+`noUnusedParameters`, `exactOptionalPropertyTypes` and `incremental` (build info in
+`node_modules/.cache/tsc`, ignored). Errors fixed: 71 (17 `override`, 7 fallthroughs,
+~35 unused, 22 `exactOptionalPropertyTypes`, 1 implicit return in `vite.config.ts`),
+now 0. Fallthroughs: the four in `classic/chat.ts` repeat the two-line tail of the next
+case; the three in `combat/volopt2.ts` became an `if (this.sub === n)` before the
+switch (same order of operations, same frame). Dead write-only fields in `combat/`
+removed; no value or expression in exe-derived code changed. Optional properties that
+carry `undefined` are typed `| undefined`. 21 state/kind switches got
+`default: exhaustive(x)` (`src/exhaustive.ts`, no-op at run time) so a new state fails
+to compile. `ClientFiles` and `requireDataSource` lost their `!`; `installStageFit`
+returns a `dispose()` that removes its window listeners.
+**Measured** (`tsc --noEmit --extendedDiagnostics`): before 640 files, 67795 types,
+49049 instantiations, 416 MB, 2.82 s; after 641 files, 67947 types, 49178
+instantiations, 414 MB, 2.76 s; warm incremental 1.1 s, 275 MB.
+**Left alone:** `noUncheckedIndexedAccess` (1738 errors); about 110 `!` that are
+`getContext('2d')!`, `Map.get(i)!` and state invariants (a guard would change flow);
+`await` in loops (first-match fallbacks, intentionally sequential); branded ids (no
+clear mix-up); the numeric command switches in `net/` (not unions); `exhaustive` in
+switches of functions that return a value.
+**Tests:** 64 of 64 `tests/*.test.ts` pass before and after.
+
 ## 2026-10-19: render cost: static batching, texture pools, adaptive resolution, leaks
 
 **What changed:** a phone is limited by draw-call submission and by pixels, not by
