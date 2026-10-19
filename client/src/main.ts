@@ -1,6 +1,7 @@
 import { detectDevDataSource } from './data/store.ts';
 import { initMapsTab } from './ui/mapsTab.ts';
 import { initOnlineTab } from './ui/onlineTab.ts';
+import { installWebControls } from './ui/webcontrols.ts';
 import { bridgeUrl } from './net/wstransport.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -14,6 +15,12 @@ function log(msg: string): void {
 }
 
 initOnlineTab(log);
+// Fullscreen / mute buttons and the touch pad over the lobby / game view.
+installWebControls({
+  root: $('game-view'),
+  keyTarget: $('lobby-canvas'),
+  chat: { kind: 'input', input: document.querySelector<HTMLInputElement>('#chat-form input[name=text]')! },
+});
 const mapsTab = initMapsTab(log);
 
 function showTab(name: string): void {

@@ -25,6 +25,7 @@ import { LoginScreen } from './login.ts';
 import { CharaFiles } from './playerview.ts';
 import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { TITLE_TUNING, TitleScreen, type TitleAssets } from './title.ts';
+import { installWebControls } from '../ui/webcontrols.ts';
 
 const VERSION = 'PSOBB.web';
 const canvas = document.getElementById('stage') as HTMLCanvasElement;
@@ -385,6 +386,8 @@ async function main(): Promise<void> {
   canvas.addEventListener('click', (e) => pointer(e, true));
 
   referenceOverlay();
+  // Fullscreen / mute buttons and the touch pad (browser conveniences).
+  installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas' } });
   Object.assign(window, {
     classicStage: stage,
     TITLE_TUNING,

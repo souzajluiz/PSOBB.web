@@ -9,6 +9,10 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
    Pofuilly splits, the Vol Opt seal door's .njs shape motion, Episode 2
    enemies' FSMs, the title / login screens, water distortion.
 
+## Web platform (browser conveniences, not in PsoBB.exe)
+- [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
+- [ ] Touch: camera drag with a second finger, analog walk / run if the movement code gets an analog input
+
 ## Phase 1: foundation ✅
 - [x] Build newserv on macOS (Apple Silicon)
 - [x] BB cipher in TS, tested against newserv
