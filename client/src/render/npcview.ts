@@ -51,6 +51,7 @@ import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
 import type { CollisionWorld } from './collision.ts';
 import { lerpPoint, type Vec3 } from './playercamera.ts';
+import { TickClock } from './smoothrender.ts';
 import { NPC_RADIUS, npcBrain, npcCollide, npcTalkEnd, npcTalkStart, npcTick, type NpcBrain, type NpcWorld } from './npcwander.ts';
 
 const BAMS = 0x10000;
@@ -202,6 +203,12 @@ export class NpcLayer {
   // The talk's camera mover (NpcCamera, update 0x004d5f88) while it lives.
   private mover: { type: number; source: Vec3; target: Vec3 } | null = null;
   private hook = (dt: number) => this.frame(dt);
+  // The ticks of frame(), for the smoother (render/smoothrender.ts): the
+  // wanderers' steps are drawn between ticks.
+  private readonly tickClock = new TickClock();
+  private readonly smoothHook = () => {
+    for (const n of this.instances) if (n.shown) this.viewer.smoother.track(n.root, this.tickClock);
+  };
   private motions: NjMotion[] = [];
   // The floor's map collision: the wanderers walk on it, and the NPC
   // hitboxes are handed to it as bodies that block the player.
@@ -214,6 +221,7 @@ export class NpcLayer {
     this.viewer = viewer;
     this.assets = new NpcAssets(files);
     viewer.frameHooks.add(this.hook);
+    viewer.renderHooks.add(this.smoothHook);
   }
 
   // Builds the NPCs among `items` (category 'npc'); returns the entries that
@@ -369,6 +377,7 @@ export class NpcLayer {
     const ticks = Math.min(Math.floor(this.tickRemainder), 30);
     this.tickRemainder -= Math.floor(this.tickRemainder);
     for (let i = 0; i < ticks; i++) this.tick();
+    this.tickClock.advance(ticks, this.tickRemainder);
     if (ticks) this.publishBodies();
   }
 
@@ -490,6 +499,7 @@ export class NpcLayer {
   dispose(): void {
     this.clear();
     this.viewer.frameHooks.delete(this.hook);
+    this.viewer.renderHooks.delete(this.smoothHook);
     this.assets.dispose();
   }
 }

@@ -142,6 +142,7 @@ import type { NodeAnimator } from './enemymodel.ts';
 import type { PillarTrap, TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { TickClock } from './smoothrender.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 const pct = (m: number): string => `${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)}%`;
@@ -337,6 +338,11 @@ export class CombatView {
   readonly damage: PlayerDamage;
   private overlay: CombatOverlay | null = null;
   private tickRemainder = 0;
+  // The tick count and remainder of the loop above, for the smoother
+  // (render/smoothrender.ts); no logic reads it.
+  private readonly tickClock = new TickClock();
+  private readonly smoothHook = () => this.smoothDraw();
+  private readonly reticleAt = new THREE.Vector3();
   private lockOn: EnemyRuntime | null = null;
   // Remote players in a hit / death motion: LobbyView must not play their gait.
   private hurt = new Set<number>();
@@ -458,6 +464,28 @@ export class CombatView {
       inner?.(dt, keys);
       this.frame(dt, keys);
     };
+    this.viewer.renderHooks.add(this.smoothHook);
+  }
+
+  // Before the draw (render/smoothrender.ts): what the game ticks move is
+  // drawn between its last two tick poses; the logic never sees it.
+  private smoothDraw(): void {
+    if (this.disposed) return;
+    const s = this.viewer.smoother;
+    const clock = this.tickClock;
+    for (const e of this.enemies.values()) s.track(e.instance.root, clock, e.ai?.warps ?? 0);
+    for (const v of this.drlViews.values()) {
+      for (const g of v.tentacles) if (g) s.track(g, clock);
+      for (const g of v.stings) if (g) s.track(g, clock);
+    }
+    for (const x of this.shots) if (x.mesh) s.track(x.mesh, clock);
+    for (const x of this.spits) if (x.mesh) s.track(x.mesh, clock);
+    const lock = this.lockOn;
+    if (lock && this.overlay) {
+      const p = s.drawnPosition(lock.instance.root, this.reticleAt);
+      p.y += 22;
+      this.overlay.setTarget(p);
+    }
   }
 
   // The revive hint over the canvas while the local player is dead (the HUD
@@ -774,6 +802,7 @@ export class CombatView {
       this.tickTechHits();
       this.tickBuffs();
     }
+    this.tickClock.advance(ticks, this.tickRemainder);
     this.updateLockOn();
     this.overlay?.update(dt);
     this.updateHpReadout();
@@ -3508,6 +3537,7 @@ export class CombatView {
 
   dispose(): void {
     this.disposed = true;
+    this.viewer.renderHooks.delete(this.smoothHook);
     this.enemies.clear();
     this.view = null;
     this.overlay?.dispose();

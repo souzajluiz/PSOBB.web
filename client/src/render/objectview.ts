@@ -77,6 +77,9 @@ export class ObjectLayer {
   };
   private generation = 0;
   models = new Map<number, ObjectModel>(); // by o.dat entry index
+  // The pillar trap nodes setTrapPose moves on the game ticks (drawn
+  // between ticks by render/smoothrender.ts).
+  readonly trapNodes = new Set<THREE.Object3D>();
   stats: ObjectLayerStats = { placed: 0, unresolved: [], invisible: 0, errors: [] };
 
   constructor(viewer: MapViewer, files: ClientFiles) {
@@ -204,10 +207,13 @@ export class ObjectLayer {
     const child = kidsOf(root)[0];
     const base = (n: THREE.Object3D) => (n.userData.trapBaseY ??= n.position.y) as number;
     root.position.y = base(root) + rise1;
+    this.trapNodes.add(root);
     if (!child) return;
     child.position.y = base(child) + rise2;
+    this.trapNodes.add(child);
     const spinner = kidsOf(child)[1];
     if (spinner) {
+      this.trapNodes.add(spinner);
       spinner.userData.trapBaseRot ??= spinner.rotation.y;
       spinner.rotation.y = (spinner.userData.trapBaseRot as number) + (spin / 0x10000) * Math.PI * 2;
     }
