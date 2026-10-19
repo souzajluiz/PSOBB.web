@@ -130,6 +130,13 @@ export class PartyHp {
       else if (what === 3) this.addHp(id, body[7]);
       return true;
     }
+    // 6x31 (Medical Center): Player_DisableMovement_0068fd74 sets the
+    // sender's HP to its max HP (ClampEntityHP_00770b58).
+    if (sub === 0x31 && body.length >= 4) {
+      const id = dv.getUint16(2, true);
+      this.setHp(id, this.members.get(id)?.maxHp ?? 0);
+      return true;
+    }
     if (sub === 0x4d && body.length >= 4) {
       this.died(dv.getUint16(2, true));
       return true;

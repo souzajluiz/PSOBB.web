@@ -1,5 +1,69 @@
 # Devlog
 
+## 2026-10-19: Pioneer 2 Medical Center counter
+
+**What changed:** talking to the Medical Center nurse (`bb_p2_menu` 1) opens
+the counter in the field HUD like the shops: the welcome line with the Money
+window, then either "Well, you're completely fine now." or the 10-meseta offer
+with Yes / No. Yes plays the treatment SE, sends `6x31`, `6x32` and `6xC5`,
+refills HP and TP, clears the status effects and the technique effects and
+takes 10 meseta; No says "be careful". Without 10 meseta it says "Not enough
+Meseta...". A remote player's `6x31` puts their party window back at max HP.
+Code: `classic/shop.ts` (`MedicalCounter`, `COUNTER_MENUS[1]`, a
+Backspace-accepting wait in `CounterBase.read`), `combat/status.ts`
+(`medicalNeeds`), `net/items.ts` (`useMedicalCenter`, `MEDICAL_COST`),
+`render/combat.ts` (`medicalNeeds`, `medicalTreatment`), `render/gameview.ts`
+(wiring), `combat/partyhp.ts` (`6x31`), `quest/town.ts` (comment).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Entry**: `p2_special_npc_menus` (0x009cf100) entry 1 = on_menu_open
+  CreateMedicalCenterDialog_006d6c10 -> MedicalCenterDialog_Constructor_006cec20
+  (vtable 0x00b3bf10), is-open GetMedicalCenterMenuState_006d6c04. The dump
+  names many neighbours "MedicalCenter*" wrongly (0x006cafb8 is the Hunter's
+  Guild); the addresses are what matter.
+- **States** (update vtable +0x24 = 0x006ce9a4, jump table 0x0096bb18 on
+  +0x20): 0 init (0x006ce7e4) -> 1 MedicalcenterDialog_EnterState2_006cef18
+  (clerk window at GUI 0x2e, 80 high, line 0x1f, Money window) -> 2 0x006cebcc
+  once the line is read: SinowberillChallengePlayer_GetStatusFlags_0068bfe0 == 0
+  -> 6 (0x006cea8c, line 0x21), else 7 (0x006cea30, line 0x20 + Yes / No at
+  GUI 0x2d) -> 3 (0x006ceb4c): Yes -> 4, No / Backspace -> 5 (0x006ceaa4, line
+  0x24); 4 = HandleSeabedTuriganeChallengeAction_006ceabc: meseta < 10 -> line
+  0x0f; else SE 0x41f, dispatch_action_0x31 / 0x32 (0x00688f70 / 0x00688fa0),
+  SinowberillChallengePlayer_UpdateAudio_00688fd0 (particle + SE 0x41f at the
+  player), subtract_inventory_meseta(10), 6xC5 (0x0069208c), line 0x22; 5 / 6
+  -> 8 (0x006ce9fc): once read, line 0x22 -> 10 (vtable +0x2c, 0x006ce564):
+  closes on Enter or Backspace (MedicalCenterDialog_CheckMenuInput_006dc8fc).
+  Lines are unitxt_shop group 0.
+- **Cost**: a flat 10 (the `cmp eax, 0xa` at 0x006ceacb and `push 0xa` at
+  0x006ceb1a); no level dependency. newserv `on_medical_center_bb` removes 10
+  meseta on 6xC5.
+- **Needs** (0x0068bfe0): bit 1 HP < max HP (+0x334 / +0x2bc), bit 2 TP < max
+  TP (+0x336 / +0x2be), bit 4 flags +0x30 & 0x3f, Jellen (+0x274 == 0xb) or
+  Zalure (+0x280 == 0xc).
+- **Commands**: all three are `{sub, 1, client id}` via 60. Subcommand table
+  0x00a0fba0: 6x31 -> 0x00690360 -> Player_DisableMovement_0068fd74 =
+  PlayerRestoreHealthAndTP_0068fda4 (hp = max, tp = max), player vtable +0xe4
+  = Enemy_ClearStatusEffectsAndForces_0077962c (both status slots, both
+  technique slots), flags & 0xfffff1ff; it runs locally too
+  (checked_call_packet0x60_subcommand). 6x32 -> 0x006903a0 revives players in
+  state 3 (none on the local side). 6xC5 has no client handler.
+
+**Verified:** `tests/medical.test.ts` (fee, needs bits, every flow by keys,
+6x31 / 6x32 / 6xC5 bytes and order, remote 6x31 on the party HP),
+`tests/shop.test.ts`, `tests/tekker.test.ts`, `tests/fieldhud.test.ts`,
+`tests/status.test.ts`, `tests/party.test.ts`, `tests/npcs.test.ts` (the area
+script reaches menu 1), client typecheck. Not checked in Chrome in this
+change.
+
+**Left out / assumed:** the camera move to the nurse
+(move_camera_to_p2_special_npc), the treatment particle
+(SpawnParticleEffectForEntity_006a3720), the challenge-mode branch
+(0x00695388 / 0x006953f0 / 0x00695420); the two SE 0x41f plays share a slot,
+so one is played. The giveaway counter (`bb_p2_menu` 8,
+MedicalCenterDialog_Constructor_006ca84c) is the quest item exchange counter
+(quest data +0x42c tables, unitxt_shop 0x4e..0x57, server answers): not cheap,
+left for later.
+
 ## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
 
 **What changed:** the pillar traps run their state machines: when a player

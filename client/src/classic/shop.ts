@@ -44,13 +44,14 @@
 // Not recovered: the windows' typing speed (the InfoWindow's), the bank item
 // windows' messages (their decompilation fails; see BankCounter).
 //
-// The tekker (bb_p2_menu 6, JUDGMENT): see TekkerCounter.
+// The tekker (bb_p2_menu 6, JUDGMENT): see TekkerCounter; the Medical
+// Center (bb_p2_menu 1): see MedicalCounter.
 
 import { se, SE } from '../audio/se.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
 import { maxStackSize, type ItemData } from '../formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
-import { stackSize } from '../net/items.ts';
+import { MEDICAL_COST, stackSize } from '../net/items.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { anchorX, InfoWindow } from './ingame.ts';
 import { drawListWindow, drawTextWindow, drawWindowTitle, INSET, LINE, ROW, TITLE_GAP, type ListItem, type WindowRect } from './fieldwindows.ts';
@@ -93,8 +94,8 @@ export const SHOP_TOOL = 0;
 export const SHOP_WEAPON = 1;
 export const SHOP_ARMOR = 2;
 
-export type CounterKind = 'weapon' | 'armor' | 'tool' | 'bank' | 'tekker';
-export type ShopKind = Exclude<CounterKind, 'bank' | 'tekker'>;
+export type CounterKind = 'weapon' | 'armor' | 'tool' | 'bank' | 'tekker' | 'medical';
+export type ShopKind = Exclude<CounterKind, 'bank' | 'tekker' | 'medical'>;
 
 export interface ShopDef {
   shopType: number; // 6xB5 / 6xB6 type
@@ -113,7 +114,7 @@ export const SHOPS: Record<ShopKind, ShopDef> = {
 };
 
 // bb_p2_menu number -> counter (P2_MENUS in formats/npcmodels.ts).
-export const COUNTER_MENUS: Readonly<Record<number, CounterKind>> = { 0: 'weapon', 2: 'armor', 3: 'tool', 5: 'bank', 6: 'tekker' };
+export const COUNTER_MENUS: Readonly<Record<number, CounterKind>> = { 0: 'weapon', 1: 'medical', 2: 'armor', 3: 'tool', 5: 'bank', 6: 'tekker' };
 
 // unitxt_shop group 0 messages used here.
 export const MSG = {
@@ -374,6 +375,10 @@ export interface CounterItems {
   acceptIdentify(itemId: number, result: ItemData): void;
   pay(amount: number): void;
   takeItemId(): number;
+  // The Medical Center (net/items.ts): what a treatment would fix (MEDICAL_NEED
+  // bits) and the treatment itself.
+  medicalNeeds(): number;
+  useMedicalCenter(): void;
 }
 
 export interface CounterEnv {
@@ -412,6 +417,8 @@ abstract class CounterBase {
   protected env: CounterEnv;
   protected clerk = new InfoWindow(CLERK.x, CLERK.y, CLERK.w, CLERK.h);
   private waitEnter: (() => void) | null = null;
+  // The wait also takes Backspace (MedicalCenterDialog_CheckMenuInput_006dc8fc).
+  private waitCancel = false;
   protected choice: Choice | null = null;
   protected list: ItemList | null = null;
   private amount: { spinner: AmountSpinner; resolve: (v: number | null) => void } | null = null;
@@ -475,9 +482,11 @@ abstract class CounterBase {
     await this.read();
   }
 
-  // Waits for Enter on the line shown (finishing its typing first).
-  protected async read(): Promise<void> {
+  // Waits for Enter on the line shown (finishing its typing first);
+  // `cancel`: Backspace once it is typed out ends the wait too.
+  protected async read(cancel = false): Promise<void> {
     for (;;) {
+      this.waitCancel = cancel;
       await new Promise<void>((r) => (this.waitEnter = r));
       this.waitEnter = null;
       this.check();
@@ -573,6 +582,8 @@ abstract class CounterBase {
       if (e.key === 'Enter' && !e.repeat) {
         if (this.typing) this.clerk.finish();
         else this.waitEnter();
+      } else if (this.waitCancel && (e.key === 'Backspace' || e.key === 'Escape') && !e.repeat && !this.typing) {
+        this.waitEnter();
       }
       return;
     }
@@ -1247,10 +1258,88 @@ export class TekkerCounter extends CounterBase {
   }
 }
 
-export type Counter = ShopCounter | BankCounter | TekkerCounter;
+// --- the Medical Center ------------------------------------------------------------
+//
+// bb_p2_menu 1 (p2_special_npc_menus entry 1: on_menu_open
+// CreateMedicalCenterDialog_006d6c10 -> MedicalCenterDialog_Constructor_006cec20,
+// vtable 0x00b3bf10, is-open GetMedicalCenterMenuState_006d6c04). Its update
+// (vtable +0x24, 0x006ce9a4) jumps on the state (+0x20) through 0x0096bb18:
+//   0 (vtable +0x28, 0x006ce7e4): BankDialog_CheckVisibility_006dc7d4, state 1;
+//   1 (MedicalcenterDialog_EnterState2_006cef18): the clerk window at GUI
+//     position 0x2e, 80 high (0x42a00000), line 0x1f, the "Money" window
+//     (bank_meseta_inventory_count_constructor), state 2;
+//   2 (0x006cebcc) once the line is read (vtable +0x20 and
+//     ShopDialog_CheckMenuInput_006dc988): nothing to treat
+//     (SinowberillChallengePlayer_GetStatusFlags_0068bfe0 == 0, outside
+//     challenge mode) -> state 6, else state 7;
+//   7 (0x006cea30): line 0x20 and Yes / No (yes_no_list_constructor at 0x2d),
+//     state 3;
+//   3 (0x006ceb4c): Yes -> state 4; No or Backspace -> state 5;
+//   4 (HandleSeabedTuriganeChallengeAction_006ceabc): with less than 10
+//     meseta line 0x0f; else SE 0x41f, 6x31, 6x32, the particle and SE 0x41f
+//     at the player (SinowberillChallengePlayer_UpdateAudio_00688fd0),
+//     subtract_inventory_meseta(10), 6xC5, line 0x22; state 10;
+//   5 (0x006ceaa4): line 0x24, state 8;  6 (0x006cea8c): line 0x21, state 8;
+//   8 (0x006ce9fc) once read: line 0x22, state 10;
+//   10 (vtable +0x2c, 0x006ce564) once read with Enter or Backspace
+//     (MedicalCenterDialog_CheckMenuInput_006dc8fc): closes.
+// The lines are unitxt_shop group 0 (the shops' group). The cost is a plain
+// 10 (immediates at 0x006ceacb / 0x006ceb1a), whatever the level; newserv
+// takes the same 10 on 6xC5 (on_medical_center_bb).
+// Left out: the camera move to the nurse (move_camera_to_p2_special_npc), the
+// particle, and the challenge-mode branch (IsSeabedTuriganeChallengeEligible
+// _00695388 / CheckChallengeStateEligibility_006953f0).
+export const MEDICAL = {
+  welcome: 0x1f,
+  cost: 0x20,
+  fine: 0x21,
+  goodLuck: 0x22,
+  careful: 0x24,
+  notEnoughMeseta: 0x0f,
+} as const;
+export const SE_MEDICAL = 0x41f; // city.pac
+
+// What needs treatment: combat/status.ts medicalNeeds.
+export class MedicalCounter extends CounterBase {
+  protected async run(): Promise<void> {
+    const items = this.env.items;
+    // States 1 / 2.
+    await this.tell(MEDICAL.welcome);
+    if (!items.medicalNeeds()) {
+      // State 6.
+      this.say(MEDICAL.fine);
+    } else {
+      // States 7 / 3.
+      this.say(MEDICAL.cost);
+      if ((await this.choose([MSG.yes, MSG.no])) === 0) {
+        // State 4.
+        if ((this.env.character()?.meseta ?? 0) < MEDICAL_COST) {
+          this.say(MEDICAL.notEnoughMeseta);
+        } else {
+          // The first SE is 2D, the second at the player; both the same slot.
+          se(SE_MEDICAL);
+          items.useMedicalCenter();
+          this.say(MEDICAL.goodLuck);
+        }
+        // State 10.
+        await this.read(true);
+        return;
+      }
+      // State 5.
+      this.say(MEDICAL.careful);
+    }
+    // State 8, then 10.
+    await this.read();
+    this.say(MEDICAL.goodLuck);
+    await this.read(true);
+  }
+}
+
+export type Counter = ShopCounter | BankCounter | TekkerCounter | MedicalCounter;
 
 export function createCounter(env: CounterEnv, kind: CounterKind): Counter {
   if (kind === 'bank') return new BankCounter(env);
   if (kind === 'tekker') return new TekkerCounter(env);
+  if (kind === 'medical') return new MedicalCounter(env);
   return new ShopCounter(env, kind);
 }
