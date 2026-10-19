@@ -49,6 +49,7 @@ import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/en
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
@@ -263,7 +264,8 @@ const OWN_FSM = new Set([
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
-  // Episode 1 bosses (combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
+  // Episode 1 bosses (combat/dragon.ts, combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
+  'TBoss1Dragon',
   'TBoss2DeRolLe',
   'TBoss3Volopt',
   'TBoss3VoloptP02',
@@ -285,7 +287,7 @@ const BULCLAW_CLAWS = 4;
 // fight are hidden the same way.
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
-  ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai) && e.ai.untargetable);
+  ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -562,6 +564,9 @@ export class CombatView {
     this.clearDrlBeam();
     this.drlViews.clear();
     this.drlLastHitLocal.clear();
+    this.dragonLastHit.clear();
+    this.dragonLogged.clear();
+    this.dragonBodies.clear();
     this.voloptViews.clear();
     this.voloptBodyAnim.clear();
     this.voloptLastHit.clear();
@@ -691,6 +696,20 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'TBoss1Dragon') {
+          // MovementData row 17 holds the breath's, fireballs' and trail's
+          // powers (g_DragonAnimationSpeedIndices 17, 18, 19); stats row 18
+          // gives the hp the clamp works on.
+          ai = new DragonAi({
+            ...at,
+            ultimate,
+            movement: params ? params.movement(difficulty, 17) : null,
+            hp: stats.maxHp,
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
+            rng: () => this.rng(),
+          });
         } else if (className === 'TBoss3Volopt') {
           // The control builds the arena: MovementData rows 33 (core), 34
           // (pillar), 35 (monitor) and the stats HP of rows 33 / 34 / 36.
@@ -1065,6 +1084,10 @@ export class CombatView {
         this.tickDeRolLe(e, ai, targets);
         continue;
       }
+      if (ai instanceof DragonAi) {
+        this.tickDragon(e, ai, targets);
+        continue;
+      }
       if (ai instanceof VoloptAi) {
         this.tickVolopt(e, ai, targets);
         continue;
@@ -1362,6 +1385,100 @@ export class CombatView {
     if (!(e?.ai instanceof DeRolLeAi)) return;
     const target = sub === 0x14 && body.length >= 12 ? dv.getUint32(8, true) & 0xffff : null;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target);
+  }
+
+  // --- the Dragon (combat/dragon.ts) -------------------------------------------
+  //
+  // One brain owns the body, the flames, the fireballs and the area hits; its
+  // hp is the entity's own (stats row 18) and a hit only lowers it: the brain
+  // clamps it and decides the roars and the death. The room leader's brain
+  // sends 6x12 for every step and the followers apply them (applyRemote); every
+  // client runs the kill sends when the body leaves state 0x15.
+
+  // Whether the last hit on a Dragon was the local player's (its last_attacker,
+  // +0x2d8): that client asks for the killer's EXP.
+  private dragonLastHit = new Map<number, boolean>();
+  // The state last logged per Dragon (the walk's tracking packets repeat).
+  private dragonLogged = new Map<number, number>();
+  // Per Dragon: the animators that play the body's motion.
+  private dragonBodies = new Map<number, NodeAnimator[]>();
+
+  private tickDragon(e: EnemyRuntime, ai: DragonAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const r = ai.tick(targets);
+    e.stats.hp = Math.max(0, ai.hp);
+    // The body stands on the ground under it, plus its altitude register.
+    const lift = r.lift ?? 0;
+    const gy = this.opts.ground?.(r.x, r.z, root.position.y - e.lift + 30) ?? null;
+    root.position.set(r.x, (gy ?? root.position.y - e.lift) + lift, r.z);
+    e.lift = lift;
+    root.rotation.y = r.angle;
+    let bodies = this.dragonBodies.get(e.index);
+    if (!bodies) {
+      bodies = inst.animators.filter((_, k) => !inst.parts[k]?.name);
+      this.dragonBodies.set(e.index, bodies);
+    }
+    // The body's motion is the brain's (+0xb8 / +0xc0): only the body's
+    // animators play it, held at the brain's frame.
+    for (const a of bodies) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`Dragon motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    for (const ev of ai.events.splice(0)) this.dragonEvent(e, ai, ev);
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+  }
+
+  private dragonEvent(e: EnemyRuntime, ai: DragonAi, ev: DragonEvent): void {
+    const what = `Dragon E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        if (this.dragonLogged.get(e.index) !== ev.state) {
+          this.dragonLogged.set(e.index, ev.state);
+          this.opts.log(`${what}: state 0x${ev.state.toString(16)} (${ai.state}), sequence ${ev.cursor}`);
+        }
+        this.game.sendDragonAction(0x1000 | e.index, ev.state, ev.cursor, ev.target, ev.x, ev.z);
+        return;
+      case 'se':
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        this.sePlayer?.play(ev.id);
+        return;
+      case 'bgm':
+        // ASSUMED: the track swaps (dradeath.adx at the entrance and the death,
+        // draroar.adx at a roar) are not played here (audio/bossbgm.ts keeps
+        // the boss floor's own track).
+        this.opts.log(`${what}: ${ev.name}`);
+        return;
+      case 'killed':
+        this.dragonKilled(e, ev.x, ev.z);
+        return;
+    }
+  }
+
+  // State 0x15's phase 5: EnemyOnKilledHandler_0051f894, gated as the exe gates
+  // it (see bossKilled).
+  private dragonKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.dead = true;
+    e.stats.hp = 0;
+    if (this.lockOn === e) this.lockOn = null;
+    this.bossKilled(e, x, z, this.dragonLastHit, 'Dragon');
+  }
+
+  // A 6x12 from the leader (action_dragon 0x00423b00).
+  private onDragonAction(body: Uint8Array): void {
+    if (body.length < 20 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const e = this.enemies.get(dv.getUint16(2, true) - 0x1000);
+    if (!(e?.ai instanceof DragonAi) || e.dead) return;
+    const target = dv.getUint32(8, true) & 0xffff;
+    e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
   }
 
   // --- Vol Opt (combat/volopt.ts, combat/volopt2.ts) ---------------------------
@@ -3093,6 +3210,22 @@ export class CombatView {
       this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
       return;
     }
+    if (e.ai instanceof DragonAi) {
+      // The entity's own hp goes down (the clamp, the roars and the death are
+      // the brain's); the 6x0A carries max - hp, unclamped, as the exe sends it
+      // before its next update clamps.
+      const ai = e.ai;
+      if (damage >= 1) {
+        ai.hit(damage);
+        this.dragonLastHit.set(e.index, byPlayer);
+      }
+      e.stats.hp = ai.hp;
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      const p = e.instance.root.position;
+      this.overlay?.damage(damage, critical, p.x, p.y + 40, p.z);
+      this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
     if (e.ai instanceof DeRolLeAi) {
       // ProcessPlayerHealing_00433edc: the shell pool, then the body pool; no
       // flinch, no death here (the brain's death check runs on its own).
@@ -3796,6 +3929,10 @@ export class CombatView {
     }
     // Remote HP for the party members' windows; the handlers below still run.
     this.party.receive(sub, body);
+    if (sub === 0x12) {
+      this.onDragonAction(body);
+      return;
+    }
     if (sub === 0x13 || sub === 0x14) {
       this.onDeRolLeAction(sub, body);
       return;
@@ -3867,6 +4004,18 @@ export class CombatView {
         return;
       }
       if (e.ai instanceof VoloptAi) return;
+      if (e.ai instanceof DragonAi) {
+        // restore_enemy_status: hp = max - damage_taken, and the hit flag makes
+        // the clamp run on this client too. The dead flag is ignored: the brain
+        // owns its death (state 0x15).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.setDamageTaken(s.totalDamage);
+          e.stats.hp = e.ai.hp;
+          this.dragonLastHit.set(e.index, false);
+          this.opts.log(`the Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
       if (e.ai instanceof DeRolLeAi) {
         // restore_enemy_status sets hp = max - damage_taken and the hit flag
         // 0x200 (vtable +0x88, 0x00777ba4) makes UpdateDerolle run the pool

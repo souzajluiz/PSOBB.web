@@ -954,6 +954,25 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // The Dragon's state from the leader (unknown_dragon_send_0x60 0x0041a808 and the
+  // direct packets of the states, through checked_call_packet0x60_subcommand
+  // 0x008003e0): 6x12 G_DragonBossActions (0x14)
+  // {12, 05, entity} {u16 state, u16 cursor (+0x684), u32 target client id
+  // (+0x394, 0xFFFF none), f32 x, f32 z}. combat/dragon.ts.
+  sendDragonAction(entityId: number, state: number, cursor: number, target: number | null, x: number, z: number): void {
+    const b = new Uint8Array(0x14);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x12;
+    b[1] = 5;
+    dv.setUint16(2, entityId & 0xffff, true);
+    dv.setUint16(4, state & 0xffff, true);
+    dv.setUint16(6, cursor & 0xffff, true);
+    dv.setUint32(8, target === null ? 0xffff : target >>> 0, true);
+    dv.setFloat32(12, x, true);
+    dv.setFloat32(16, z, true);
+    this.conn.send(0x60, 0, b);
+  }
+
   // Vol Opt (combat/volopt.ts, PROTOCOL.md "Vol Opt"). Every one of these is
   // sent by the client that ran the state (the room leader's director, a
   // pillar's lightning, the body's hit reaction) and the sender applies it
