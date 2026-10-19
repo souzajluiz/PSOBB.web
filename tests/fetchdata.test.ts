@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { archiveKind, confirmFormUrl, driveDownloadUrl, driveFileId, fetchData } from '../docker/fetch-data.mjs';
+import { archiveKind, confirmFormUrl, driveDownloadUrl, driveFileId, fetchData, findDataRoot } from '../docker/fetch-data.mjs';
 
 let failures = 0;
 function check(ok: boolean, msg: string): void {
@@ -63,7 +63,7 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     return res.end(`<form id="download-form" action="http://127.0.0.1:${(server.address() as { port: number }).port}/data.zip" method="get"><input type="hidden" name="confirm" value="t"></form>`);
   }
-  const file = path.startsWith('/other') ? tgz : zip;
+  const file = path.startsWith('/other') ? tgz : path.startsWith('/whole') ? resolve(work, 'whole.zip') : zip;
   res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
   res.end(readFileSync(file));
 });
@@ -78,7 +78,7 @@ try {
   eq(readFileSync(resolve(target, 'a.bin'), 'utf8'), 'AAA', 'zip: file at the root after flatten');
   eq(readFileSync(resolve(target, 'sub/b.bin'), 'utf8'), 'BBBB', 'zip: nested file');
   check(!existsSync(resolve(target, '__MACOSX')) && !existsSync(resolve(target, 'data')), 'zip: junk and the data/ folder gone');
-  eq(readFileSync(resolve(target, '.fetched-from'), 'utf8').trim(), `${base}/data.zip`, 'marker holds the URL');
+  eq(readFileSync(resolve(target, '.fetched-from'), 'utf8').trim(), `${base}/data.zip layout2`, 'marker holds the URL and the layout');
 
   const before = hits;
   await fetchData(`${base}/data.zip`, target);
@@ -91,7 +91,22 @@ try {
   await fetchData(`${base}/other.tgz`, target);
   check(!existsSync(resolve(target, 'stale.bin')), 'a new URL replaces the old contents');
   eq(readFileSync(resolve(target, 'sub/b.bin'), 'utf8'), 'BBBB', 'tgz: files unpacked');
-  check(!readdirSync(work).some((n) => n.endsWith('.partial')), 'no .partial left behind');
+  check(!readdirSync(target).includes('.partial'), 'no .partial left behind');
+
+  // A zip of the whole client folder: data/ (with data.gsl) next to the exes.
+  mkdirSync(resolve(work, 'client/psobb-client/data/sub'), { recursive: true });
+  writeFileSync(resolve(work, 'client/psobb-client/PsoBB.exe'), 'exe');
+  writeFileSync(resolve(work, 'client/psobb-client/data/data.gsl'), 'GSL');
+  writeFileSync(resolve(work, 'client/psobb-client/data/sub/c.bin'), 'C');
+  check(spawnSync('zip', ['-qr', resolve(work, 'whole.zip'), 'psobb-client'], { cwd: resolve(work, 'client') }).status === 0, 'whole zip created');
+  eq(findDataRoot(resolve(work, 'client/psobb-client')), resolve(work, 'client/psobb-client/data'), 'findDataRoot finds the folder with data.gsl');
+  eq(findDataRoot(resolve(work, 'src')), null, 'findDataRoot: none without data.gsl');
+  writeFileSync(resolve(work, 'whole.copy'), readFileSync(resolve(work, 'whole.zip')));
+  const wholeTarget = resolve(work, 'whole-out');
+  await fetchData(`${base}/whole.zip`, wholeTarget);
+  eq(readFileSync(resolve(wholeTarget, 'data.gsl'), 'utf8'), 'GSL', 'whole client zip: data.gsl at the root');
+  eq(readFileSync(resolve(wholeTarget, 'sub/c.bin'), 'utf8'), 'C', 'whole client zip: nested file');
+  check(!existsSync(resolve(wholeTarget, 'PsoBB.exe')), 'whole client zip: the exe is not served');
 
   let failed = '';
   await fetchData(`${base}/data.zip?404`, resolve(work, 'x')).catch(() => {});

@@ -77,8 +77,11 @@ newer than the pinned commit must be tested with this client first.
 
 ## Client data from Google Drive
 
-1. Zip the PSOBB `data/` folder into one file (`data.zip`; the files may be at
-   the root or inside a single `data/` folder, which is unpacked in place).
+1. Zip the PSOBB `data/` folder (or the whole client folder) into one file
+   (`data.zip`). The folder that holds `data.gsl` is taken as the data root, so
+   `data/` itself, `data/` inside another folder or the whole client folder all
+   work; the exes are not served. The volume at `/data/psobb-client` needs room
+   for the archive and the unpacked files at once (about 2.5 GB for 1 GB of data).
 2. Upload it to Google Drive and share it as **anyone with the link**; copy the
    link (or just its file id).
 3. In Dokploy, set `PSOBB_DATA_URL` to that link and mount a volume at

@@ -21,6 +21,9 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 const MARKER = '.fetched-from';
+const PARTIAL = '.partial';
+// Bumped when the unpacked layout changes, so a folder made by an older version is fetched again.
+const LAYOUT = 'layout2';
 
 // The Google Drive file id of a share link (/file/d/ID/..., ?id=ID, /open?id=ID,
 // uc?id=ID) or a bare id; null for anything else.
@@ -94,30 +97,60 @@ function unpack(file, dest) {
   if (r.status !== 0) throw new Error(`${kind === 'zip' ? 'unzip' : 'tar'} failed: ${r.stderr?.toString().trim()}`);
 }
 
-// Moves a single top-level folder's contents up so the files sit at `dir`.
-function flatten(dir) {
-  for (;;) {
-    const entries = readdirSync(dir).filter((n) => n !== '__MACOSX' && n !== MARKER);
-    if (entries.length !== 1) return;
-    const only = resolve(dir, entries[0]);
-    if (!statSync(only).isDirectory()) return;
-    for (const n of readdirSync(only)) renameSync(resolve(only, n), resolve(dir, n));
-    rmSync(only, { recursive: true });
-    rmSync(resolve(dir, '__MACOSX'), { recursive: true, force: true });
+// The folder of the unpacked archive that is the client's data/: the one with
+// data.gsl (searched up to 4 levels deep, any case), so a zip of the whole
+// client folder (`psobb-client/data/...`) or of `data/` itself both work. With
+// no data.gsl, a single top-level folder is looked into, as before.
+export function findDataRoot(dir, depth = 0) {
+  const entries = readdirSync(dir, { withFileTypes: true }).filter((e) => e.name !== '__MACOSX');
+  if (entries.some((e) => e.isFile() && e.name.toLowerCase() === 'data.gsl')) return dir;
+  if (depth >= 4) return null;
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const found = findDataRoot(resolve(dir, e.name), depth + 1);
+    if (found) return found;
   }
+  return null;
+}
+
+// Moves the data folder's contents up to `dir`.
+function flatten(dir) {
+  let root = findDataRoot(dir);
+  if (!root) {
+    // No data.gsl: follow a chain of single top-level folders.
+    root = dir;
+    for (;;) {
+      const entries = readdirSync(root).filter((n) => n !== '__MACOSX');
+      if (entries.length !== 1 || !statSync(resolve(root, entries[0])).isDirectory()) break;
+      root = resolve(root, entries[0]);
+    }
+    log('warning: no data.gsl found in the archive; the client needs it for most of its textures and models');
+  }
+  if (root === dir) {
+    rmSync(resolve(dir, '__MACOSX'), { recursive: true, force: true });
+    return;
+  }
+  const staging = `${dir}.root`;
+  rmSync(staging, { recursive: true, force: true });
+  renameSync(root, staging);
+  for (const n of readdirSync(dir)) rmSync(resolve(dir, n), { recursive: true, force: true });
+  for (const n of readdirSync(staging)) renameSync(resolve(staging, n), resolve(dir, n));
+  rmSync(staging, { recursive: true, force: true });
 }
 
 export async function fetchData(source, target) {
   const marker = resolve(target, MARKER);
-  if (existsSync(marker) && readFileSync(marker, 'utf8').trim() === source && readdirSync(target).length > 1) {
+  if (existsSync(marker) && readFileSync(marker, 'utf8').trim() === `${source} ${LAYOUT}` && readdirSync(target).filter((n) => n !== PARTIAL).length > 1) {
     log(`already fetched into ${target}, nothing to do`);
     return;
   }
   const id = driveFileId(source);
   const url = id ? driveDownloadUrl(id) : source;
   mkdirSync(target, { recursive: true });
-  // Download next to the target (same volume), unpack into a fresh folder, then swap.
-  const tmp = `${target}.partial`;
+  // Work INSIDE the target: it is usually a mounted volume, and a rename
+  // between the container's filesystem and a volume fails with EXDEV. The
+  // folder needs room for the archive and the unpacked files at once.
+  const tmp = resolve(target, PARTIAL);
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   const archive = `${tmp}/archive`;
@@ -130,11 +163,11 @@ export async function fetchData(source, target) {
   rmSync(archive);
   flatten(unpacked);
   if (readdirSync(unpacked).length === 0) throw new Error('the archive is empty');
-  for (const n of readdirSync(target)) rmSync(resolve(target, n), { recursive: true, force: true });
+  for (const n of readdirSync(target)) if (n !== PARTIAL) rmSync(resolve(target, n), { recursive: true, force: true });
   for (const n of readdirSync(unpacked)) renameSync(resolve(unpacked, n), resolve(target, n));
   rmSync(tmp, { recursive: true, force: true });
-  writeFileSync(marker, `${source}\n`);
-  log(`ready: ${readdirSync(target).length - 1} entries in ${target}`);
+  writeFileSync(marker, `${source} ${LAYOUT}\n`);
+  log(`ready: ${readdirSync(target).length - 1} entries in ${target}${existsSync(resolve(target, 'data.gsl')) ? '' : ' (no data.gsl at its root)'}`);
 }
 
 if (process.argv[1] && import.meta.filename === resolve(process.argv[1])) {

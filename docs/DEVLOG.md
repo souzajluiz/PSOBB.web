@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-19: PSOBB_DATA_URL: data root by data.gsl, no EXDEV
+
+**What changed:** two problems of the first real deploy of `fetch-data.mjs`.
+(1) "none of these client files exist: f256_hyouji.prs": that texture lives
+inside `data.gsl`, and the unpacked folder had no `data.gsl` at its root (the zip
+held the whole client folder, so the files sat in `psobb-client/data/`).
+`findDataRoot` now looks for the folder with `data.gsl` (up to 4 levels, any
+case) and makes it the root, so a zip of `data/` or of the whole client folder
+both work; the exes next to it are dropped, and a missing `data.gsl` is logged
+as a warning. The marker carries a layout version (`layout2`), so a folder
+made by the older version is fetched again on the next start.
+(2) `EXDEV: cross-device link not permitted`: the working folder was a sibling
+(`/data/psobb-client.partial`) of the mounted volume `/data/psobb-client`, and a
+rename between the container filesystem and the volume fails. It now works in
+`<target>/.partial`, on the same volume (so the volume needs room for the
+archive and the unpacked files at once, about 2.5 GB for a 958 MB zip).
+`tests/fetchdata.test.ts` covers the whole-client zip and the leftover
+`.partial`.
+
 ## 2026-10-19: newserv from its official image, no compile
 
 **What changed:** compiling newserv in the image build was too heavy: a
