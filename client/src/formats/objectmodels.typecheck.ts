@@ -15,6 +15,10 @@ const doorLeaf: ObjectPartSpec = { model: 0, motion: 0, drive: 'door', show: 'lo
 const driveWithoutMotion: ObjectPartSpec = { model: 0, drive: 'loop' };
 // @ts-expect-error a speed without a motion is never read
 const speedWithoutMotion: ObjectPartSpec = { model: 0, speed: 2 };
+// A shape motion is drawn at a motion's frame.
+const shaped: ObjectPartSpec = { model: 1, motion: 0, drive: 'loop-last', shape: 1 };
+// @ts-expect-error a shape motion without a motion has no frame
+const shapeWithoutMotion: ObjectPartSpec = { model: 0, shape: 1 };
 // @ts-expect-error a motion still needs to say how it is driven
 const motionWithoutDrive: ObjectPartSpec = { model: 0, motion: 1 };
 
@@ -28,4 +32,4 @@ const twoLists: ObjectPartSpec = { model: 2, texlistOf: 0, textures: 'fe_obj_swi
 // @ts-expect-error `show` only takes the states the renderer knows
 const unknownState: ObjectPartSpec = { model: 0, show: 'sometimes' };
 
-export type ObjectModelTypeChecks = [typeof still, typeof animated, typeof doorLeaf, typeof ownList, typeof borrowedList, typeof archiveList, typeof driveWithoutMotion, typeof speedWithoutMotion, typeof motionWithoutDrive, typeof twoLists, typeof unknownState];
+export type ObjectModelTypeChecks = [typeof still, typeof animated, typeof doorLeaf, typeof ownList, typeof borrowedList, typeof archiveList, typeof driveWithoutMotion, typeof speedWithoutMotion, typeof motionWithoutDrive, typeof twoLists, typeof unknownState, typeof shaped, typeof shapeWithoutMotion];

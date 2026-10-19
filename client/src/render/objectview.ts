@@ -58,7 +58,7 @@ function toEnemyPart(p: ObjectPartSpec): EnemyPartSpec {
     texlistOf: p.texlistOf,
     textureArchive: p.textures,
     texRemap: texRemap(p),
-    motion: p.motion !== undefined ? { index: p.motion, speed: p.speed ?? 1, loop: loops(p.drive) } : null,
+    motion: p.motion !== undefined ? { index: p.motion, speed: p.speed ?? 1, loop: loops(p.drive), shape: p.shape } : null,
   };
 }
 

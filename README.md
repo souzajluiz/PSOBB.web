@@ -128,6 +128,13 @@ scripts/             newserv setup
 docs/                documentation
 ```
 
+## Contributing
+
+`main` is protected: it only takes pull requests (admins included), and force
+pushes and deletion are blocked. Work on a branch, push it, open a PR with
+`gh pr create` and merge it once the typecheck, the tests and the Chrome check
+pass.
+
 ## Deploy
 
 One Docker image runs newserv, the built client and the relay on one HTTP port; see [docs/DEPLOY.md](docs/DEPLOY.md) (Dokploy steps included).
