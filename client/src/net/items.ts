@@ -282,6 +282,9 @@ export function buildBankRequest(checksum = 0): Uint8Array {
 export const BANK_DEPOSIT = 0;
 export const BANK_TAKE = 1;
 export const BANK_LEAVE = 3;
+// The Medical Center's fee: the immediates in HandleSeabedTuriganeChallengeAction
+// _006ceabc (no level dependency); newserv on_medical_center_bb takes 10 too.
+export const MEDICAL_COST = 10;
 
 // G_BankAction_BB_6xBD (0x10): deposit meseta 0x006c9c2c, take meseta
 // 0x006c9eac, deposit item Player_WithdrawMeseta_0068f344 (misnamed), leave
@@ -649,6 +652,11 @@ export class GameItems {
   onTelepipe: () => void = () => {};
   // Antidote (0) / Antiparalysis (1) used.
   onCure: (subtype: number) => void = () => {};
+  // The Medical Center (classic/shop.ts MedicalCounter): what a treatment
+  // would fix (MEDICAL_NEED bits) and the local treatment (6x31 on our own
+  // player), both on the player in render/combat.ts.
+  medicalNeedsOf: () => number = () => 0;
+  onMedical: () => void = () => {};
   // MAG feeding (net/magfeed.ts): the tables, the feed timers by mag item
   // id, and a hook for the feed's sound.
   magFeed: () => FeedContext | null = () => null;
@@ -1170,6 +1178,30 @@ export class GameItems {
     const c = this.character;
     if (!c) return;
     c.meseta = Math.max(0, c.meseta - amount);
+    this.changed();
+  }
+
+  // --- the Medical Center -------------------------------------------------------
+
+  medicalNeeds(): number {
+    return this.medicalNeedsOf();
+  }
+
+  // HandleSeabedTuriganeChallengeAction_006ceabc: 6x31 (dispatch_action_0x31,
+  // run locally too: Player_DisableMovement_0068fd74 refills HP / TP and
+  // clears the status effects and support effects), 6x32 (revives the
+  // players in state 3; none here), subtract_inventory_meseta(10), then 6xC5
+  // (SendSeabedTuriganeChallengeAction_0069208c), on which newserv takes the
+  // 10 meseta itself (on_medical_center_bb). All three are {sub, 1, client id}.
+  useMedicalCenter(): void {
+    const c = this.character;
+    if (!c || c.meseta < MEDICAL_COST) return;
+    this.game.sendSubcommand(0x31, new Uint8Array(0));
+    this.onMedical();
+    this.game.sendSubcommand(0x32, new Uint8Array(0));
+    c.meseta -= MEDICAL_COST;
+    this.game.sendSubcommand(0xc5, new Uint8Array(0));
+    this.log(`medical center: treated for ${MEDICAL_COST} meseta`);
     this.changed();
   }
 

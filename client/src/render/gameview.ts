@@ -181,6 +181,9 @@ export class GameView {
     this.combat.telepipe = { allowed: () => this.telepipes.allowed(), open: () => this.telepipes.open() };
     this.items.onTelepipe = () => this.telepipes.open();
     this.items.onCure = (subtype) => this.combat.useCureItem(subtype);
+    // The Medical Center (classic/shop.ts MedicalCounter).
+    this.items.medicalNeedsOf = () => this.combat.medicalNeeds();
+    this.items.onMedical = () => this.combat.medicalTreatment();
     // MAG feeding (net/magfeed.ts): ItemPMT from the item names, the
     // evolution stages from ItemMagEdit.prs (loose, else the stream file).
     let evolution: Uint8Array | null = null;

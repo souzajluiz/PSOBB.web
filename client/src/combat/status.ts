@@ -390,3 +390,27 @@ export function meleeHitStatus(enemyType: string, ultimate: boolean, roll: numbe
   if (enemyType === 'MOTHMANT') return roll < MOTHMANT_POISON_CHANCE ? STATUS.poison : null;
   return null;
 }
+
+// --- the Medical Center (classic/shop.ts MedicalCounter) ---------------------------
+
+// SinowberillChallengePlayer_GetStatusFlags_0068bfe0: HP below max HP
+// (+0x334 < +0x2bc), TP below max TP (+0x336 < +0x2be), a status effect
+// (+0x30 & 0x3f) or Jellen (+0x274 == 0xb) / Zalure (+0x280 == 0xc).
+export const MEDICAL_NEED = { hp: 1, tp: 2, status: 4 } as const;
+
+export interface MedicalPlayer {
+  hp: number;
+  maxHp: number;
+  tp: number;
+  maxTp: number;
+  statusFlags: number; // PlayerStatus.flags
+  attackBuff: number; // EntityBuffs slot types (combat/buffs.ts)
+  defenseBuff: number;
+}
+
+export function medicalNeeds(p: MedicalPlayer): number {
+  let n = p.hp < p.maxHp ? MEDICAL_NEED.hp : 0;
+  if (p.tp < p.maxTp) n |= MEDICAL_NEED.tp;
+  if (p.statusFlags & 0x3f || p.attackBuff === 0x0b || p.defenseBuff === 0x0c) n |= MEDICAL_NEED.status;
+  return n;
+}

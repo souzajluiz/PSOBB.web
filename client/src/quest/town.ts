@@ -26,9 +26,9 @@
 // (the Lab counter), in the clerk window at GUI position 0x2e, 332 x 80
 // (MedicalCenterDialog_ProcessState_006ce004; quest/questui.ts).
 //
-// The shop and bank counters (bb_p2_menu 0, 2, 3, 5) run in the field HUD
-// (classic/shop.ts via render/fieldhud.ts openCounter). The tekker (6) and
-// the medical center (1) are not implemented.
+// The shop, bank, tekker and Medical Center counters (bb_p2_menu 0, 2, 3, 5,
+// 6, 1) run in the field HUD (classic/shop.ts via render/fieldhud.ts
+// openCounter). The giveaway counter (8) is not implemented.
 
 import * as THREE from 'three';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
