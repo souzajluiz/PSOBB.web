@@ -1,5 +1,48 @@
 # Devlog
 
+## 2026-10-19: Pan Arms and Pofuilly Slime splits
+
+**What changed:** the two Caves enemies that split now fight. Pan Arms
+rises from the ground and walks side to side. It fires shockwaves and bolt
+volleys. At a third of its HP, or after three walks, it splits into Hidoom and
+Migium. The halves attack on their own and later walk back together to merge.
+A Pofuilly Slime crawls as a puddle, rises next to a player, spits or reaches
+with an arm, and melts away after every hit. A special attack or Gibarta /
+Rabarta throws out a copy, up to four slimes per set.
+
+**Details:**
+- `combat/enemysplits.ts` (new): `PanArmsAi`, `PanHalfAi`, `PanArmsShot`,
+  `SlimeAi`, `SlimeSpit`, `SlimeArm`, `SlimeControl`, from a headless
+  decompile of the Ephinea exe: Pan Arms ctor `0x00582ef4` / states
+  `0x009bf2e0`, the halves `0x00586bf8` / `0x009bf580`, the slime
+  `0x00596000` / `0x009bfc00` and its control `0x005959fc`, the split hooks
+  `0x00597914` (a hit of attack type 2) and `0x005987c8` (technique group 2).
+  Motion tables `0x009bf220`, `0x009bf440`, `0x009bf4e0` and `0x009bfc80`
+  and the slime constants come from `tools/exedata.py`. Neither family is in
+  psobb-client-source, so nothing could be checked against the matching C.
+- `render/combat.ts`: on each floor, Hidoom and Migium are spawned hidden into
+  Pan Arms + 1 / + 2 (models 1 / 2 of its BML), and the first slime into its
+  control's slot + 1. While Pan Arms is split, its HP is the sum of the
+  halves' HP. If both halves die, Pan Arms sends only 6x76 (no drop, no EXP).
+  A merged kill drops the hidden halves. The slime split is hooked after
+  `specialHit` and in `techHitEnemy` (Gibarta / Rabarta). It only happens
+  when the hit landed (the slime's hit counter went up). The control sends
+  the set's 6x76 when its last slime dies. Migium's Jellen / Zalure reach
+  the player through `applySelfBuff`. Hidden splitters are skipped by
+  lock-on, weapon and technique targeting, confused enemies and the radar.
+- `render/gamefield.ts` `killEntity`: a 6x76 on a child slot (a Claw, a half,
+  a split slime, a Mothmant) no longer marks the whole set entry dead and
+  hides its model; only the entry's first slot does.
+- ASSUMED: the slime's puddle morphs (7 / 8) are drawn as no body, and the
+  flags `0xa000528` mean untargetable. Also ASSUMED: the emerge / burrow
+  morph lengths, the thrown hop, the arm's hit as a plain melee hit, and the
+  halves' front death motion. Only the local client splits a slime (another
+  client's 6x0A does not carry the attack type).
+
+**Checks:** `tests/enemysplits.test.ts` (new); every other unit test passes
+(newserv-backed ones run against the main checkout's vendor/). Client
+`tsc --noEmit` passes. Not checked in Chrome.
+
 ## 2026-10-19: Quest Board review fixes
 
 **What changed:** fixes from the review of the Quest Board window. An item's

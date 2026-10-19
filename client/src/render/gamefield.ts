@@ -385,8 +385,12 @@ export class GameField {
       return;
     }
     const at = this.slotBases.get(floor) ?? { base: this.enemyBase, first: this.enemyFirstSlot };
-    const index = this.setEntryForSlot(entityId - 0x1000 - at.base, at.first);
+    const slot = entityId - 0x1000 - at.base;
+    const index = this.setEntryForSlot(slot, at.first);
     if (index < 0) return;
+    // A child slot's 6x76 (a Claw, a Hidoom / Migium, a split slime) is not
+    // its set entry's death: only the entry's first slot clears it.
+    if (slot !== at.first[index]) return;
     w.kill(index);
     if (floor === this.floor) this.enemies?.setVisible(index, false);
   }
