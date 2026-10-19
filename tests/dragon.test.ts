@@ -465,6 +465,19 @@ eq(DRAGON_SLOTS[19].speed, 0.5, 'the run-time speed of the death motion');
   check(quiet > 40, `most frames are quiet (${quiet}/60)`);
 }
 
+// 22. Motions shorter than the frame tests (1, 2 and 5 frames) cannot hang the
+//     leader: the fight keeps moving through its states.
+for (const n of [1, 2, 5]) {
+  for (const cursor of [0, DRAGON_CURSOR_B]) {
+    const ai = brain({ frames: () => n });
+    ai.cursor = cursor;
+    const t = player(0, 120, 60);
+    const r = run(ai, [t], 30 * 60 * 20, () => false);
+    check(r.states.length > 20, `${n}-frame motions, cursor ${cursor}: the fight moves on (${r.states.length} states)`);
+    check(r.longest <= 2600, `${n}-frame motions, cursor ${cursor}: no state outlasts the watchdog (${r.longest})`);
+  }
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);

@@ -220,6 +220,7 @@ export const DRAGON_GUESS = {
   followerWait: 900,
   fallbackWait: 150,
   walkMax: 900, // the walk toward a target that keeps running away ends here
+  stateMax: 2400, // the leader leaves any state that has lasted this long (a motion shorter than a frame test)
 } as const;
 
 // MovementData row 17 (the Dragon's, g_DragonAnimationSpeedIndices 0x009a3dc8:
@@ -546,6 +547,7 @@ export class DragonAi extends BrainBase {
   private everLeader: boolean;
   private takeover = false; // (current_attack_info).horiz_dist: the leader changed
   private stall = 0; // follower ticks without a 6x12
+  private age = 0; // leader ticks in this state
   private cand: AiTarget[] = [];
   private last: readonly AiTarget[] = [];
   private opts: DragonOptions;
@@ -792,6 +794,7 @@ export class DragonAi extends BrainBase {
   setState(next: number): void {
     if (this.dead) return;
     this.leave(this.sid);
+    this.age = 0;
     this.c86c = this.c870 = this.c874 = 0;
     this.f884 = this.f888 = this.f88c = this.f890 = this.f894 = 0;
     this.i87c = this.i880 = 0;
@@ -856,7 +859,34 @@ export class DragonAi extends BrainBase {
       this.sendState(this.air !== 1 ? DRAGON_STATE.death : DRAGON_STATE.landDie, send);
       return;
     }
+    // ASSUMED: the exe has no timeout in its states (its motions are as long
+    // as the exe expects); one that is shorter than a frame test must not leave
+    // the boss stuck, so the leader leaves a state that has lasted this long.
+    if (++this.age > DRAGON_GUESS.stateMax && this.sid !== DRAGON_STATE.corpse) {
+      this.age = 0;
+      this.forceNext(send);
+      return;
+    }
     this.pick(targets, send);
+  }
+
+  // The follow-up each state's phase 9 would pick, without its test.
+  private forceNext(send: boolean): void {
+    const S = DRAGON_STATE;
+    switch (this.sid) {
+      case S.intro:
+        return this.sendRaw(S.wait, send);
+      case S.death:
+        return this.sendState(S.corpse, send);
+      case S.landCollapse:
+        return this.sendState(S.collapse, send);
+      case S.landRoar:
+        return this.sendState(S.roar, send);
+      case S.landDie:
+        return this.sendState(S.death, send);
+      default:
+        return this.pickNext(send);
+    }
   }
 
   tick(targets: readonly AiTarget[]): AiFrame {
@@ -937,6 +967,7 @@ export class DragonAi extends BrainBase {
         // 0x00423070: animation 1; +0x884 is the turn radius of the walk plus 5.
         this.setSlot(1);
         this.air = 0;
+        this.alt = 0; // EnemySinowbeat_SetupState: +0x5e0 = ground y
         this.flags &= ~0xe80;
         const c = this.walkSpeed();
         this.f884 = f32(5 + (this.ultimate ? sineScaled(Math.round(320 * c), c) : sineScaled(0x100, 0.8)));
@@ -946,6 +977,7 @@ export class DragonAi extends BrainBase {
         // 0x00422a08: the breath starts (animation 4, 2 flames' worth of delay).
         this.setSlot(4);
         this.air = 0;
+        this.alt = 0;
         this.flags &= ~0xe80;
         this.c870 = 2;
         return;
@@ -953,6 +985,7 @@ export class DragonAi extends BrainBase {
         // 0x004227dc: animation 7 with the tail's hit list live.
         this.setSlot(7);
         this.air = 0;
+        this.alt = 0;
         this.flags = (this.flags & ~0xc80) | 0x200;
         return;
       case S.flyUp:
@@ -960,6 +993,7 @@ export class DragonAi extends BrainBase {
         this.setSlot(15);
         this.animate();
         this.air = 0;
+        this.alt = 0;
         this.flags &= ~0xe80;
         this.f884 = 0;
         return;
@@ -1112,6 +1146,13 @@ export class DragonAi extends BrainBase {
         return;
       case S.dive:
         this.dug = false;
+        return;
+      case S.land:
+      case S.landCollapse:
+      case S.landRoar:
+      case S.landDie:
+        // 0x00420ee8 phase 5: EnemySinowbeat_SetupState.
+        this.alt = 0;
         return;
       default:
     }
