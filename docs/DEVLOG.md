@@ -1,5 +1,50 @@
 # Devlog
 
+## 2026-10-19: Episode 1 bosses' children from the exe
+
+**What changed:** Vol Opt's lightning rod plays its own motion
+(`fs_obj_hiraishin_a`) instead of its bind pose and is no longer built in
+Ultimate; Vol Opt's core and De Rol Le's eight stings (5 + 3, was one "mine")
+are built hidden as the exe creates them; De Rol Le's sting attack placement
+(launch frame, the five floor points, the ring around the target) is decoded
+into tested pure functions. There is still no boss fight state machine in the
+repo, so nothing moves the children yet: at spawn the exe parks every one of
+them (hidden here). Code: `formats/enemymodels.ts`, `tests/bossrooms.test.ts`.
+
+**Details:**
+- Vol Opt lightning rod: ctor `0x00440ad8` (only while
+  `g_VoloptDifficultyMode` = `is_ultimate_mode()` is 0) at
+  (`g_VoloptForm2Config`, 80.0, `g_VoloptForm2ConfigValue`) = (0, 80, 0); stat
+  init `0x004413a4`: model `+0x108` = entry 16, motion table `0x009a4f00`
+  slot 0 = motion 6 at 0.7.
+- Vol Opt core (id base+0x22, init `0x00440458`): model `+0x188` = entry 24
+  (`me5_y_all`), table `0x009a4e40` slot 0 = motion 14 (`wait_me5_y_all`),
+  0.7; flag `0x10000` of `+0x390` makes `RenderVoloptModel` squash it to 0.05
+  in z inside the monitor the fight picks, so it has no spawn place.
+- De Rol Le ctor `0x0042ad4c`: 10 segment children (`0x004351c4`, no model,
+  slots at `+0x548` parked at 10000.0), 5 kind-0 stings (`0x004369bc`) and 3
+  kind-1 stings (`0x004370b4`), all model 3 with the body's texture list
+  (`DerolleInitialize_00437368`), plus 4 ceiling rocks (`0x00437ba4`).
+  1 + 10 + 8 = newserv's 0x13 ids.
+- Sting attack (`HandleDerolleAction_0042e824` action 0): past frame 18.0 the
+  boss throws from `+0x4d8` and plays sound `0x32a`. Motion 0x18 sends the 5
+  kind-0 stings (`0x00436a50`) to `0x008fcc88` = (0,0,0), (±45, 0, ±30),
+  copied by the static init `0x004343c4` through `0x00782bb0` (floor probe
+  from 20.0 above, mask `0x16ef`), 1.0 above the floor. Other motions send the
+  3 kind-1 stings (`0x00437190`) to the target + (sin, cos)(i·`0x5555`)·20.0,
+  17.0 up (`0x00a43db4`, set at `0x004372ee`), pitch `0x4000`, yaw
+  `0x8000` / `0x6800` / `0x9800`; `0x00436e08` follows the target.
+- Dark Falz form 3 (`0x0045e4f0` → `0x0045e5a0`) starts at `0x00a458fc` =
+  (10000, −10, 0) (static init at `0x0045ec81`): off the arena until the fight
+  moves it. The Dragon (`0x00419214`) creates no drawn child (hitbox list
+  `0x004269f8`, ground follower `0x00427984`).
+
+**Checks:** `node tests/bossrooms.test.ts` (Vol Opt rod / core / Ultimate set,
+De Rol Le stings and their placement, Dark Falz and Dragon part counts),
+`node tests/enemies.test.ts` (every enemy built, 139 models),
+`node tests/combat.test.ts`, `tests/enemyfsm*.test.ts`, client
+`tsc --noEmit`.
+
 ## 2026-10-19: Touch pad clear of the HUD, fullscreen / shortcut fixes
 
 **What changed:** the touch pad no longer covers the game's HUD. The action

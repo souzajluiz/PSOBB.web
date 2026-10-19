@@ -1,8 +1,18 @@
-// Boss rooms: the boss warp's gather flow (render/bosswarp.ts, 6x6A) and the
-// boss music phases (audio/bossbgm.ts).
+// Boss rooms: the boss warp's gather flow (render/bosswarp.ts, 6x6A), the
+// boss music phases (audio/bossbgm.ts) and the Episode 1 bosses' children
+// (formats/enemymodels.ts).
 //
 // Run: node tests/bossrooms.test.ts
 import { bossBgm, bossPhaseOf } from '../client/src/audio/bossbgm.ts';
+import {
+  DE_ROL_LE_STING_FRAME,
+  DE_ROL_LE_STING_SOUND,
+  deRolLeStingFloorTarget,
+  deRolLeStingRingTarget,
+  enemyModelFor,
+  type EnemyModelContext,
+} from '../client/src/formats/enemymodels.ts';
+import type { EnemySet } from '../client/src/formats/setdata.ts';
 import { BossWarp, GATHER_FRAMES, WARP_FRAMES, type BossWarpHost, type BossWarpState } from '../client/src/render/bosswarp.ts';
 
 let failures = 0;
@@ -168,6 +178,58 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
   w.frame(t.h);
   w.frame(t.h);
   eq(w.state, 2, 'and the warp starts from state 1');
+}
+
+// Episode 1 bosses' children (formats/enemymodels.ts).
+{
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+  const boss = (type: number, difficulty: number, area: number) =>
+    enemyModelFor({ type, params: [0, 0, 0, 0, 0, 0, 0] } as unknown as EnemySet, { area, episode: 1, difficulty, event: 0 } satisfies EnemyModelContext);
+  // Vol Opt phase 1 (area 0x0d): 6 pillars, 24 monitors, the lightning rod
+  // (not in Ultimate, g_VoloptDifficultyMode) and the hidden core.
+  const vo = boss(0xc2, 0, 0x0d)!;
+  const rod = vo.parts.find((p) => p.name === 'lightning rod');
+  eq(vo.parts.length, 6 + 24 + 2, 'Vol Opt: pillars + monitors + rod + core');
+  eq(rod?.model, 16, 'Vol Opt rod: model entry 16 (+0x108)');
+  eq(rod?.motion?.index, 6, 'Vol Opt rod: table 0x009a4f00 slot 0 = motion 6');
+  eq(rod?.motion?.speed, 0.7, 'Vol Opt rod: 0.7 frames per tick');
+  eq(rod?.offset?.join(), '0,80,0', 'Vol Opt rod: (0, 80, 0) from the arena origin');
+  eq(rod?.place, 'world', 'Vol Opt rod: placed from the arena origin');
+  const core = vo.parts.find((p) => p.name === 'core');
+  eq(core?.model, 24, 'Vol Opt core: model entry 24 (+0x188, me5_y_all)');
+  eq(core?.motion?.index, 14, 'Vol Opt core: table 0x009a4e40 slot 0 = motion 14');
+  eq(core?.hidden, true, 'Vol Opt core: drawn only inside a monitor');
+  const voUlt = boss(0xc2, 3, 0x0d)!;
+  eq(voUlt.parts.some((p) => p.name === 'lightning rod'), false, 'Vol Opt Ultimate: no lightning rod');
+  eq(voUlt.parts.length, 6 + 24 + 1, 'Vol Opt Ultimate: pillars + monitors + core');
+  const pillar1 = vo.parts.find((p) => p.name === 'pillar 1')!;
+  check(Math.abs(pillar1.offset![0] - 38) < 0.01 && Math.abs(pillar1.offset![2] - 76 * Math.sin(Math.PI / 3)) < 0.01, 'Vol Opt pillar 1: round(60 degrees in BAMS) on the 76.0 ring');
+
+  // De Rol Le: body, tentacle, 5 + 3 stings, all but the body hidden.
+  const drl = boss(0xc1, 0, 0x0c)!;
+  eq(drl.parts.length, 1 + 1 + 5 + 3, 'De Rol Le: body + tentacle + 8 stings');
+  eq(drl.parts.filter((p) => p.model === 3 && p.hidden && p.texlistOf === 2).length, 8, 'De Rol Le: 8 hidden stings (model 3, body textures)');
+  eq(drl.parts.filter((p) => !p.hidden).length, 1, 'De Rol Le: only the body at spawn');
+  eq(DE_ROL_LE_STING_FRAME, 18, 'De Rol Le: stings leave at frame 18.0');
+  eq(DE_ROL_LE_STING_SOUND, 0x32a, 'De Rol Le: sting sound 0x32a');
+  eq(deRolLeStingFloorTarget(0).target.join(), '0,1,0', 'sting 0: arena centre, 1.0 up');
+  eq(deRolLeStingFloorTarget(1).target.join(), '45,1,30', 'sting 1: (45, 30)');
+  eq(deRolLeStingFloorTarget(4).target.join(), '-45,1,-30', 'sting 4: (-45, -30)');
+  eq(deRolLeStingFloorTarget(2, (x, y, z) => (eq(y, 20, 'the probe starts 20.0 above the point'), x + z - 20)).target.join(), '45,-4,-30', 'sting 2: on the probed floor');
+  const r0 = deRolLeStingRingTarget(0, [100, 5, -50]);
+  check(near(r0.target[0], 100) && near(r0.target[1], 22) && near(r0.target[2], -30), `ring sting 0: 20.0 in +z, 17.0 up (${r0.target.join()})`);
+  eq(r0.yaw, 0x8000, 'ring sting 0: yaw 0x8000');
+  eq(r0.pitch, 0x4000, 'ring sting 0: pitch 0x4000');
+  const r1 = deRolLeStingRingTarget(1, [0, 0, 0]);
+  check(near(r1.target[0], 20 * Math.sin((0x5555 / 0x10000) * Math.PI * 2)) && near(r1.target[2], 20 * Math.cos((0x5555 / 0x10000) * Math.PI * 2)), 'ring sting 1: angle 0x5555');
+  eq(r1.yaw, 0x6800, 'ring sting 1: yaw 0x6800');
+  eq(deRolLeStingRingTarget(2, [0, 0, 0]).yaw, 0x9800, 'ring sting 2: yaw 0x9800');
+
+  // Dark Falz: form 1 drawn, the later forms and Rico hidden.
+  const df = boss(0xc8, 0, 0x0e)!;
+  eq(df.parts.filter((p) => !p.hidden).length, 6, 'Dark Falz: the six form-1 entries at spawn');
+  // The Dragon has no drawn child.
+  eq(boss(0xc0, 0, 0x0b)!.parts.length, 1, 'Dragon: body only');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

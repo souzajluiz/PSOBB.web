@@ -5,9 +5,8 @@ Work stopped here on request; pick these up first, in order. Each was planned
 as its own commit with tests, a DEVLOG entry and a Chrome check.
 1. The in-game main menu path to the quest board (replaces the temporary B key,
    if the client has one).
-2. Then: Episode 1 bosses' children placement (line in Phase 5), Pan Arms /
-   Pofuilly splits, the Vol Opt seal door's .njs shape motion, Episode 2
-   enemies' FSMs, the title / login screens, water distortion.
+2. Then: Pan Arms / Pofuilly splits, the Vol Opt seal door's .njs shape
+   motion, Episode 2 enemies' FSMs, the title / login screens, water distortion.
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
@@ -70,7 +69,8 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 - [x] Full join sync: `6x6B`/`6x6C`/`6x6E`/`6x6F` sent by the leader and applied by the joiner (`net/joinsync.ts`, `tests/joinsync.test.ts`, `tests/joinsync.live.ts`); 6x6D drop numbers / floor items still zero
 - [x] Enemy models (`bm_ene_*.bml`, boss archives) at their spawn points with their idle motions, variants by params/difficulty/season (`formats/enemymodels.ts`, `tests/enemies.test.ts`)
 - [x] Enemy child objects: Sorcerer bits, Vol Opt phase 1 (pillars, monitors, lightning rod), Belra arms, De Rol Le / Barba Ray tentacles and mines, Dark Falz forms 2–3 and Rico's ring, Saint-Milion's spinner from its second archive (`EnemyPartSpec` placement, `tests/enemies.test.ts`)
-- [ ] Where the fight puts the children it spawns (tentacles, mines, thrown arms, the 16 spinners), the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
+- [x] Episode 1 bosses' children from the exe: Vol Opt's lightning rod motion (not in Ultimate) and core, De Rol Le's 5 + 3 stings and the sting attack's placement (frame 18, five floor points, ring around the target), where Dark Falz form 3 / the Dragon start (`formats/enemymodels.ts`, `tests/bossrooms.test.ts`)
+- [ ] Where the fight moves the children it spawns (needs the boss FSMs: De Rol Le's tentacle / segments / rocks, Vol Opt's core in its monitor, Dark Falz's forms, Belra's thrown arms, Saint-Milion's 16 spinners), the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision
