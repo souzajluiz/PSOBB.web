@@ -34,6 +34,9 @@ No Sega client data is in the image or in this repository.
      textures from the server. Without it each player picks their own `data/`
      folder in the browser (Chrome / Edge, File System Access API). Only mount
      data you have the right to serve.
+   - **Or download it at start:** set `PSOBB_DATA_URL` (below) to a `.zip` of
+     the `data/` folder and mount a **Volume** at `/data/psobb-client`, so it
+     is downloaded once and kept across redeploys.
 4. **Deploy.** The first build compiles newserv and takes a few minutes. The
    container is healthy once `GET /` answers.
 
@@ -52,8 +55,31 @@ for `npm run build`.
 | --- | --- | --- |
 | `PORT` | `8080` | HTTP port of `bridge/server.mjs` |
 | `PSOBB_DATA` | `/data/psobb-client` | client data served at `/psobb-data/`, if the folder exists |
+| `PSOBB_DATA_URL` | (unset) | a Google Drive share link (or file id, or any direct URL) of one `.zip` / `.tar.gz` of the `data/` folder; downloaded into `PSOBB_DATA` at start |
 | `TARGET_HOST` | `127.0.0.1` | where the relay finds newserv |
 | `ALLOWED_PORTS` | `12000`..`12008` | newserv ports the relay may open |
+
+## Client data from Google Drive
+
+1. Zip the PSOBB `data/` folder into one file (`data.zip`; the files may be at
+   the root or inside a single `data/` folder, which is unpacked in place).
+2. Upload it to Google Drive and share it as **anyone with the link**; copy the
+   link (or just its file id).
+3. In Dokploy, set `PSOBB_DATA_URL` to that link and mount a volume at
+   `/data/psobb-client`.
+
+`docker/fetch-data.mjs` runs in the background at container start: the site is
+up at once and `/psobb-data/` fills in when the download ends (the log shows
+`[fetch-data]` lines). It handles Drive's large-file confirmation page, unpacks
+the zip, drops macOS `__MACOSX` folders and a single top-level folder, and
+writes `.fetched-from` with the URL, so a restart or redeploy with the same
+URL downloads nothing and a new URL replaces the folder. A failure (link not
+shared, quota exceeded, not a zip) is logged and the page falls back to asking
+each player for a `data/` folder. Google may throttle many downloads of one
+file for a day; a private object storage bucket is steadier if that happens.
+
+`/psobb-data/` is public on the deployed site: anyone who knows the address can
+read these files. Only serve data you have the right to serve (docs/LEGAL.md).
 
 ## Without Dokploy
 

@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-19: client data from a Google Drive link (PSOBB_DATA_URL)
+
+**What changed:** the container can fetch the PSOBB `data/` folder itself.
+`PSOBB_DATA_URL` is a Google Drive share link (or file id, or any direct URL)
+of one `.zip` / `.tar.gz` of `data/`. `docker/fetch-data.mjs` (started in the
+background by `docker/entrypoint.sh`, so the site is up at once) downloads it
+into `PSOBB_DATA` (`/data/psobb-client`, a volume), follows Drive's
+large-file confirmation form, unpacks it with `unzip` / `tar`, drops
+`__MACOSX` and a single top-level folder (`data/`), and writes
+`.fetched-from`: the same URL on a restart downloads nothing, a new URL
+replaces the contents. No login is needed: the link is shared "anyone with
+the link", and `/psobb-data/` stays open like before. A failure is logged
+(`[fetch-data]`) and the page falls back to asking for a folder. The image
+gains `unzip`.
+
+**Validation:** `tests/fetchdata.test.ts` (Drive link forms, the confirmation
+page, a real zip with a `data/` folder and `__MACOSX` and a tgz from a local
+server, idempotence, URL change, unreachable URL). Not run against Google
+Drive itself or in Docker (not available here).
+
 ## 2026-10-19: favicon from PsoBB.exe
 
 **What changed:** the pages' favicon is the application icon of `PsoBB.exe`
