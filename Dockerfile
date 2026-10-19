@@ -3,7 +3,9 @@
 # newserv on a single HTTP port. See docs/DEPLOY.md (Dokploy).
 #
 # No Sega client data is built into the image: mount the PSOBB data/ folder at
-# /data/psobb-client (optional; without it the page asks for the folder).
+# /data/psobb-client, or set PSOBB_DATA_URL to a .zip (Google Drive link) that
+# docker/fetch-data.mjs downloads there at start (optional; without either the
+# page asks for the folder).
 
 # newserv and its libraries, pinned to the commits the project is tested with.
 ARG PHOSG_REF=66f8c363362e3a0d946e46ae895de337e535aa3e
@@ -57,7 +59,7 @@ RUN npm ci --omit=dev
 # --- runtime -------------------------------------------------------------------
 FROM ubuntu:24.04
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates tini \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates tini unzip \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=client /usr/local/bin/node /usr/local/bin/node
 COPY --from=newserv /opt/newserv-deps/lib /opt/newserv-deps/lib
@@ -66,6 +68,7 @@ COPY --from=newserv /src/newserv/system /app/newserv/system
 COPY --from=client /app/client/dist /app/client/dist
 COPY --from=client /app/bridge/node_modules /app/bridge/node_modules
 COPY bridge/server.mjs bridge/package.json /app/bridge/
+COPY docker/fetch-data.mjs /app/fetch-data.mjs
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 ENV LD_LIBRARY_PATH=/opt/newserv-deps/lib \

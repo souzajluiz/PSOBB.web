@@ -19,6 +19,11 @@ for d in players licenses teams; do
   fi
 done
 
+# Optional: fetch the client data folder from PSOBB_DATA_URL (a Google Drive
+# link to a .zip). It runs in the background, so the site is up at once and
+# /psobb-data/ fills in when the download ends; a failure is only logged.
+node /app/fetch-data.mjs &
+
 cd /app/newserv
 ./newserv &
 NEWSERV=$!

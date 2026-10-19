@@ -98,6 +98,7 @@ node tests/npcs.test.ts          # every NPC entry of every free-play floor and 
 node tests/questflow.test.ts     # Mop-up Operation #1 from its start to the reward in the VM; 6x24 / 6x69 / 6xC9 layouts; npcplayerchar.dat
 node tests/quest.live.ts         # the quest menu (A2/09/10), the 44/13 download, the AC barrier, then run the quest's start label
 node tests/mobilecontrols.test.ts # touch pad stick/keys, analog walk/run, second-finger camera, haptics, mute persistence and default, fullscreen state machine
+node tests/fetchdata.test.ts     # docker/fetch-data.mjs: Drive link parsing, confirmation page, zip / tgz unpack from a local server
 node tests/smoothrender.test.ts  # drawing between game ticks: pose lerp, shortest-arc angles, teleport snaps, ?fps=30, the logic pose untouched
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
