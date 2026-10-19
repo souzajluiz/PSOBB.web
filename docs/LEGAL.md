@@ -1,6 +1,7 @@
 # Legal notes
 
 - **Phantasy Star Online** and all game assets (models, textures, sounds, text, executables) are owned by SEGA. This repository **does not contain or distribute** any of them. `.gitignore` blocks the client file extensions (`.gsl`, `.afs`, `.xvm`, `.nj`, `.xj`, `.rel`, `.prs`, `.exe`).
+- The project page (`site/`, published with GitHub Pages) shows screenshots of this client running with a user's own game files, for illustration. They are not game files and are not usable as game data.
 - The web client reads files from the **user's own installation**, locally in the browser.
 - Code ported from **newserv** is under the MIT license, and each file states its origin.
 - The decompilations are used as **behavioral references** for interoperability. No pseudo-code or binaries from them are copied here.
