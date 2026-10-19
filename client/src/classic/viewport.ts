@@ -16,7 +16,7 @@
 // after 200 ms. The on-screen keyboard also shrinks the viewport: while it is
 // up the orientation is kept unless the width changed (nextOrientation).
 
-import { fitEnabled, keyboardOpen, nextOrientation, orientationOf, snapBox, usableArea, type Box, type Insets, type Orientation } from '../ui/stagefit.ts';
+import { fitEnabled, fitStage, keyboardOpen, nextOrientation, orientationOf, padBelow, snapBox, usableArea, type Box, type Insets, type Orientation } from '../ui/stagefit.ts';
 
 const NO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 
@@ -66,20 +66,26 @@ export function installStageFit(o: StageFitOptions): StageFit {
     const view = vv ?? { width: innerWidth, height: innerHeight, offsetLeft: 0, offsetTop: 0 };
     const layoutHeight = document.documentElement.clientHeight || innerHeight;
     const kb = keyboardOpen(layoutHeight, view.height) || (o.keyboardFocused?.() ?? false);
-    // Fullscreen: the stage covers the whole visual viewport, notch and home
-    // bar included. The touch controls keep their own insets (ui/webcontrols.ts).
     const area = usableArea(view, NO_INSETS);
     // Rotation: the width changes; keyboard height changes do not count.
     state.orientation = nextOrientation(state.orientation, lastWidth, view.width, view.height, kb);
     lastWidth = view.width;
-    const box = snapBox(area);
+    // Landscape: the whole screen, edge to edge (notch and home bar included;
+    // the touch controls keep their own insets, ui/webcontrols.ts). Portrait: a
+    // 4:3 stage fitted to the width, with the touch pad under it. The HUD is
+    // drawn at the uniform scale of the height (render/fieldhud.ts), so it
+    // needs at least 4:3 or its right side falls off the screen.
+    const box = snapBox(state.orientation === 'portrait' ? fitStage(area, 4 / 3, 4 / 3) : area);
     state.box = box;
-    state.below = 0;
+    state.below = kb ? 0 : padBelow(state.orientation, area, box);
     for (const c of o.canvases) {
       Object.assign(c.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
     }
-    // The hint sits at the bottom edge, where its CSS puts it.
+    // The hint sits in the free space under the stage; the pad is there too,
+    // so it goes above the pad.
     o.hint.hidden = hintDismissed || kb || state.orientation !== 'portrait';
+    o.hint.style.top = `${box.y + box.h + 6}px`;
+    o.hint.style.bottom = 'auto';
     o.onBox?.(box, state.orientation);
     window.dispatchEvent(new Event('psobb:fit'));
   }
