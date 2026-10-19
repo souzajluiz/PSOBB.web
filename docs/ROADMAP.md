@@ -6,8 +6,12 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 1. The in-game main menu path to the quest board (replaces the temporary B key,
    if the client has one).
 2. Then: Episode 1 bosses' children placement (line in Phase 5), Pan Arms /
-   Pofuilly splits, the Vol Opt seal door's .njs shape motion, Episode 2
-   enemies' FSMs, the title / login screens, water distortion.
+   Pofuilly splits, the Vol Opt seal door's .njs shape motion, the rest of
+   the Episode 2 enemies' FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
+   are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
+   Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
+   Recon, Epsilon / Epsigard left), the title / login screens, water
+   distortion.
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
@@ -106,6 +110,7 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 - [x] Combat: status effects on enemies (`combat/enemystatus.ts`: paralysis, freeze, shock, confusion with the exe's immunities by enemy kind, durations, EVP, the behaviour lock, `6x0A` / `6x9C` sync both ways, Gibarta / Rabarta freeze and Zonde shock rolls) — `tests/enemystatus.test.ts`
 - [x] Combat: weapon specials (`combat/specials.ts`: the special from data1[4] and ItemPMT, attack permission, the hit check and miss retry, HP / TP / EXP steal, Charge / Spirit / Berserk, freeze / paralysis / confusion, fire / thunder with the shock roll, instant kill, HP divide; `6x9A` / `6xC6` / `6xC7` / `6x2F`) — `tests/specials.test.ts`
 - [x] Combat: photon blasts (`combat/photonblast.ts`: the gauge from damage dealt / taken with `6x39` / `6x3A`, the HUD ring, firing from a palette slot with `6x49` / `6x37`, the six basic blasts' power and effects) — `tests/photonblast.test.ts`
+- [x] Combat: Episode 2 FSMs (`combat/enemyfsmep2.ts`) on the Booma substrate (the controller and the chase / melee handlers): Merillia / Meriltas (buried start, the wake-up radius, appear / burrow, war cry, chase, melee, the low-HP run and the poisoning pollen cloud), Dolmolm / Dolmdarl (emergence, melee, back step, the holding dance via 6x2C); VR Temple / Spaceship spawn Episode 1 classes, which already have theirs — `tests/enemyfsmep2.test.ts`. Left: Gee (flying, 18 states, spike volley, slowing dive), Ul / Zol Gibbon (20 states), Mericarol / Mericus / Merikle, Gibbles, Gi Gue, Sinow Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox / Recon, Epsilon / Epsigard; the Merillia's stroll, its run's wall ray and the cloud's node position, the Dolmolm's height test
 - [ ] Combat left to do: the telepipe's type-1 ring particle, light and loop sound, remote players' Resta heal on the local player, confusion's steering, the freeze button mash, status particles and sounds, the real technique effects and projectiles (the targeting system's tech entries are ASSUMED), joined / donated photon blasts and the blast objects, the weapons with their own special routines, hit boxes per body part, the Pan Arms split / merge, the Pofuilly Slime split, the Grass Assassin's emerge, the Nano Dragon's fly-in and power-up, the Dubwitch link, the Sinow mirage clones and the Gold's technique effect, the Canadine's later ring cycles, the rest of those FSMs (the wolf's side dash and howl, the Lily's low-HP spin, the Rappy's own chase, the Mothmant's own FSM, the Monest's wake-up state), the Sorcerer's bits as hittable entities and its healing of other enemies, the Bringer's Ultimate weapon unequip, the Delsaber's job-mask target preference and a remote player's guard drain, the Gunner control's own position, the Bulk's wall-clearance flee point, line of sight and the idle wander path, enemies attacking remote players
 - [x] Full character file (`E7`): inventory, stats, bank, techniques (`net/charfile.ts`)
 - [x] ItemPMT from the server stream file, item names and descriptions (`formats/itempmt.ts`, `formats/itemnames.ts`)

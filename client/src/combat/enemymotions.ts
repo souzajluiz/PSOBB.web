@@ -71,6 +71,11 @@ const TABLES: Record<string, EnemyCombatMotions> = {
   TObjEneBalClawBody: { damage: { index: 7, speed: 0.6 }, death: { index: 8, speed: 0.5 } },
   // 0x009bc7c0 (Claw): slot 3 flinch (11, 0.7), slot 4 death (12, 0.5).
   TObjEneBalClawClaw: { damage: { index: 11, speed: 0.7 }, death: { index: 12, speed: 0.5 } },
+  // Episode 2 (combat/enemyfsmep2.ts).
+  // 0x009bec00 (Merillia / Meriltas): row 6 damage (3, 0.8), row 8 dead (4, 0.6).
+  TObjEneMerillLia: { damage: { index: 3, speed: 0.8 }, death: { index: 4, speed: 0.6 } },
+  // 0x009bd9c0 (Dolmolm / Dolmdarl): row 6 damage (2, 0.8), row 8 dead (3, 0.7).
+  TObjEneDolmOlm: { damage: { index: 2, speed: 0.8 }, death: { index: 3, speed: 0.7 } },
 };
 
 export function enemyCombatMotions(className: string, archive: EnemyArchive): EnemyCombatMotions {

@@ -46,6 +46,7 @@ import {
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
+import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -222,6 +223,9 @@ const OWN_FSM = new Set([
   'TObjEneDf2Bringer',
   'TObjEneRe4Sorcerer',
   'TObjEneSaver',
+  // Episode 2 (combat/enemyfsmep2.ts).
+  'TObjEneMerillLia',
+  'TObjEneDolmOlm',
 ]);
 
 // Classes whose own target search honours confusion: the Booma handlers
@@ -230,7 +234,7 @@ const OWN_FSM = new Set([
 // (Bulclaw / Claw) and the Delsaber (unknown_delsaber_targeting_related).
 // The Poison Lily has no confused branch; the Dark Belra spins and throws
 // instead (combat/enemyfsmruins.ts BelraAi).
-const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver']);
+const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver', 'TObjEneMerillLia', 'TObjEneDolmOlm']);
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
 
@@ -555,6 +559,10 @@ export class CombatView {
           const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [attack];
           ai = new DelsaberAi({ ...at, param1: setParams[0], movement, attacks, phase: head.index, guardDrain: (id) => this.guardDrain(id, head.index), rng: () => this.rng() });
         }
+        // Episode 2 Booma-substrate families: param6 is the subtype (Meriltas /
+        // Dolmdarl), the set entry's param1..5 their chances and ranges.
+        else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -878,7 +886,7 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
-      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi)
+      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
       // to the other enemies (combat/enemyai.ts EnemyAi.confused,
