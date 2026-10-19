@@ -1,5 +1,64 @@
 # Devlog
 
+## 2026-10-19: Fullscreen, mute and touch controls
+
+**What changed:** three browser conveniences that are not in PsoBB.exe and do
+not change how the game behaves. A small bar in the top-right corner of the
+game view (Online tab lobby / game canvas, and the classic client) has a
+fullscreen and a mute button. On touch screens an on-screen pad covers the
+view: a floating stick on the left and, on the right, the arrow diamond (Up =
+camera, Left / Down / Right = action palette slots; the same keys move menu
+cursors), OK (Enter), BACK (Backspace), PAL (Ctrl), MENU (Home) and CHAT.
+Code: `ui/webcontrols.ts` + `ui/webcontrols.css` (DOM overlay, shortcuts,
+key feed), `input/virtualpad.ts` (pure pad logic), `ui/fullscreen.ts`
+(fullscreen state machine), `audio/mute.ts` (master mute), wired from
+`main.ts` and `classic/main.ts`; `audio/bgm.ts` and `audio/se.ts` connect
+their output gain to the master mute node instead of `ctx.destination`.
+
+**Details:**
+- Shortcuts are read in the window capture phase and stopped there, so the
+  game never sees them: Alt+Enter = fullscreen (F1..F12 are game keys, F11
+  is the browser's), Alt+M = mute (a bare M would be typed into the canvas
+  text inputs: login, character name, lobby chat).
+- Fullscreen uses the Fullscreen API on the game view's container (the
+  canvas plus its HUD overlays, not the side panels), with the webkit-prefixed
+  calls. Where the API is missing (iPhone Safari) or the request is refused,
+  the container fills the viewport with CSS instead. The renderer resizes
+  through MapViewer's ResizeObserver (setSize, camera aspect,
+  updateProjectionMatrix); the HUD overlays already re-read the canvas box and
+  offset every frame, so their 640x480 mapping follows. Esc leaves through the
+  `fullscreenchange` event.
+- Mute ramps a master gain node on each AudioContext to 0 (contexts keep
+  running, so BGM loop points are untouched) and is stored in localStorage
+  (`psobb.muted`, every access in try/catch). Default: muted under the Vite
+  dev server (`import.meta.env.DEV`), sound on in production builds; a stored
+  choice wins over that default and `?sound=1` / `?sound=0` force it for one
+  page load. The gain node is created with the resolved value before any
+  source connects, so nothing blips at start. It is separate from the Options
+  window, which has no volume settings because the exe has none.
+- The pad feeds synthesized `KeyboardEvent`s (key and code from the default
+  key config, `input/keyconfig.ts`) to the canvas the views listen on, so the
+  held-key sets and keydown handlers are unchanged. Movement in this client is
+  digital (W/A/S/D), so the stick is quantised to 8 directions with a 25%
+  dead zone; there is no walk / run split. Held arrow buttons auto-repeat
+  like a keyboard (400 ms, then every 80 ms, `repeat: true`). Each control
+  tracks its own pointer (multi-touch), the overlay has `touch-action: none`,
+  respects the safe-area insets (`viewport-fit=cover`) and releases every key
+  on window blur. A tap on the stick zone is passed to the canvas as a click.
+- Chat: on the Online tab the button leaves fullscreen if needed and focuses
+  the chat field (opening the on-screen keyboard). In the classic client it
+  presses Space (the lobby's chat line) and focuses a hidden proxy field whose
+  typed text is forwarded as key presses; KEYS opens the proxy alone (login,
+  character name).
+- The pad shows on `(pointer: coarse)` or touch-capable browsers, and on the
+  first touch; `?touch=1` / `?touch=0` force it.
+
+**Checks:** `node tests/mobilecontrols.test.ts` (stick to keys, dead zone,
+repeat, tap, keyboard proxy, mute persistence and default resolution,
+fullscreen state machine), `controls`, `fieldhud`, `sound`, `options` tests,
+client `tsc --noEmit`, `vite build`. Chrome desktop and mobile emulation:
+pending on the main thread.
+
 ## 2026-10-19: No set-data markers in a game
 
 **What changed:** the yellow / colored octahedra the map viewer draws for set

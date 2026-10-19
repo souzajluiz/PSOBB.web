@@ -12,6 +12,7 @@
 // (playInteractive): chained-Ogg links queued back to back by the sequencer.
 
 import type { DataSource } from '../data/source.ts';
+import { masterOutput } from './mute.ts';
 import { oggLinks, SlSequencer } from './slbgm.ts';
 
 interface Playing {
@@ -46,7 +47,7 @@ export class BgmPlayer {
       this.ctx = new AudioContext();
       this.gain = this.ctx.createGain();
       this.gain.gain.value = this.volume;
-      this.gain.connect(this.ctx.destination);
+      this.gain.connect(masterOutput(this.ctx)); // master mute (mute.ts)
     }
     return this.ctx;
   }

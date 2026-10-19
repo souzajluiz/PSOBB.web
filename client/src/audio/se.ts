@@ -25,6 +25,7 @@
 
 import type { DataSource } from '../data/source.ts';
 import { parseSePac, waveToFloat, type SeWave } from '../formats/sepac.ts';
+import { masterOutput } from './mute.ts';
 import { SE_AREA_BANK, SE_BANKS, SE_ID_REMAP, SE_SLOT_FLAGS } from './se_tables.ts';
 
 /** Ids the classic UI plays (callers of FUN_00814298 in PsoBB.exe). */
@@ -105,7 +106,7 @@ export class SePlayer {
     if (!this.ctx) {
       this.ctx = new AudioContext();
       this.out = this.ctx.createGain();
-      this.out.connect(this.ctx.destination);
+      this.out.connect(masterOutput(this.ctx)); // master mute (mute.ts)
     }
     return this.ctx;
   }

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>PSOBB.web</title>
     <link rel="stylesheet" href="/src/ui/style.css" />
   </head>
@@ -59,9 +59,9 @@
         <section id="lobby-panel" class="panel" hidden>
           <h2>Lobby <small id="lobby-title"></small></h2>
           <div class="lobby-layout">
-            <div>
+            <div id="game-view" class="game-view">
               <canvas id="lobby-canvas" class="viewport"></canvas>
-              <p class="hint">Click the view, then WASD to run; Up puts the camera behind you, the wheel steps the zoom. In a game, Left / Down / Right use the action palette (Ctrl switches it), Home opens the menu, Enter decides, Backspace cancels.</p>
+              <p class="hint">Click the view, then WASD to run; Up puts the camera behind you, the wheel steps the zoom. In a game, Left / Down / Right use the action palette (Ctrl switches it), Home opens the menu, Enter decides, Backspace cancels. Alt+Enter toggles fullscreen, Alt+M mutes.</p>
             </div>
             <aside class="lobby-side">
               <h3>Players</h3>

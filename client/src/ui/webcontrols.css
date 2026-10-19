@@ -1,0 +1,161 @@
+/* Fullscreen / mute bar and touch pad over the game view (ui/webcontrols.ts). */
+
+.wc-overlay {
+  --wc-btn: clamp(44px, 11vmin, 68px);
+  --wc-gap: clamp(6px, 1.6vmin, 12px);
+  --wc-edge: rgba(95, 212, 255, 0.55);
+  --wc-fill: rgba(2, 16, 30, 0.42);
+  --wc-fill-down: rgba(95, 212, 255, 0.45);
+  position: absolute;
+  inset: 0;
+  z-index: 20; /* above the HUD canvases (classic/hud.ts STATUS_LAYER, MENU_LAYER) */
+  pointer-events: none;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  font: 600 12px/1 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #d8ecff;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wc-overlay button {
+  pointer-events: auto;
+  touch-action: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--wc-edge);
+  border-radius: 6px;
+  background: var(--wc-fill);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+/* Fullscreen and mute: top right, faint until hovered. */
+.wc-bar {
+  position: absolute;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+  display: flex;
+  gap: 6px;
+}
+.wc-bar-button {
+  width: 32px;
+  height: 32px;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.wc-bar-button:hover,
+.wc-bar-button[aria-pressed='true'] { opacity: 0.9; }
+.wc-bar-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wc-overlay.is-touch .wc-bar-button { width: 40px; height: 40px; opacity: 0.75; }
+
+/* Touch pad. */
+.wc-touch[hidden] { display: none; }
+.wc-touch {
+  position: absolute;
+  inset: 0;
+  padding: inherit;
+}
+
+.wc-stick-zone {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 45%;
+  height: 65%;
+  pointer-events: auto;
+  touch-action: none;
+}
+.wc-stick {
+  position: absolute;
+  /* home position; moves under the finger while held */
+  left: calc(max(8px, env(safe-area-inset-left)) + var(--wc-btn) * 1.4);
+  top: calc(100% - max(8px, env(safe-area-inset-bottom)) - var(--wc-btn) * 1.4);
+  width: calc(var(--wc-btn) * 2.2);
+  height: calc(var(--wc-btn) * 2.2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--wc-edge);
+  background: var(--wc-fill);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.wc-stick.is-active { opacity: 0.9; }
+.wc-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44%;
+  height: 44%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: rgba(95, 212, 255, 0.5);
+  border: 2px solid rgba(216, 236, 255, 0.8);
+}
+
+.wc-right {
+  position: absolute;
+  right: max(8px, env(safe-area-inset-right));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-areas: 'row row' 'dpad actions';
+  gap: var(--wc-gap);
+  align-items: end;
+}
+.wc-row { grid-area: row; display: flex; gap: var(--wc-gap); justify-content: flex-end; }
+.wc-dpad {
+  grid-area: dpad;
+  display: grid;
+  grid-template: repeat(3, var(--wc-btn)) / repeat(3, var(--wc-btn));
+  grid-template-areas: '. up .' 'left . right' '. down .';
+}
+.wc-up { grid-area: up; }
+.wc-left { grid-area: left; }
+.wc-rt { grid-area: right; }
+.wc-down { grid-area: down; }
+.wc-actions { grid-area: actions; display: grid; gap: var(--wc-gap); }
+.wc-overlay .wc-key { width: var(--wc-btn); height: var(--wc-btn); font-size: calc(var(--wc-btn) * 0.3); }
+.wc-overlay .wc-decide,
+.wc-overlay .wc-cancel { width: calc(var(--wc-btn) * 1.25); height: calc(var(--wc-btn) * 1.25); border-radius: 50%; }
+.wc-overlay .wc-decide { border-color: rgba(126, 240, 168, 0.8); }
+.wc-overlay .wc-cancel { border-color: rgba(255, 122, 122, 0.8); }
+.wc-overlay .wc-small { width: auto; min-width: var(--wc-btn); height: calc(var(--wc-btn) * 0.7); padding: 0 8px; font-size: 11px; }
+.wc-overlay .wc-key.is-down { background: var(--wc-fill-down); }
+
+/* Portrait phones: smaller pad so the view stays visible. */
+@media (orientation: portrait) {
+  .wc-overlay { --wc-btn: clamp(40px, 10vmin, 56px); }
+  .wc-stick-zone { height: 45%; }
+}
+
+/* Hidden field that brings up the on-screen keyboard (16px: no iOS zoom). */
+.wc-proxy {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  font-size: 16px;
+  pointer-events: none;
+}
+
+/* CSS fullscreen where the Fullscreen API is missing (iPhone Safari). */
+.is-fill-viewport {
+  position: fixed !important;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  background: #000;
+}
+html.has-fill-viewport,
+html.has-fill-viewport body { overflow: hidden; }

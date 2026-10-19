@@ -1,0 +1,464 @@
+// Browser-side controls layered over the game view: fullscreen and mute
+// buttons (all devices) and, on touch screens, an on-screen pad. None of this
+// is in PsoBB.exe and none of it changes how the game behaves: the pad
+// dispatches the same KeyboardEvents a keyboard would (input/keyconfig.ts
+// KEYS) on the canvas the views listen on, so held-key sets, menus and the
+// action palette all see ordinary key presses.
+//
+// Shortcuts (window capture phase, so the game never sees them):
+//   Alt+Enter  fullscreen (F1..F12 are game keys, F11 is the browser's)
+//   Alt+M      mute (a bare M would be typed into the canvas text inputs:
+//              login, character name, lobby chat)
+
+import { isMuted, onMuteChange, toggleMuted } from '../audio/mute.ts';
+import { KEYS } from '../input/keyconfig.ts';
+import {
+  clampStick,
+  DOM_KEYS,
+  isTap,
+  keyDiff,
+  proxyKeys,
+  PROXY_SENTINEL,
+  REPEATING_KEYS,
+  repeatCount,
+  REPEAT_INTERVAL,
+  stickKeys,
+  type GameKey,
+  type MoveKey,
+  type ProxyKey,
+} from '../input/virtualpad.ts';
+import { FullscreenController } from './fullscreen.ts';
+import './webcontrols.css';
+
+// How the Chat button reaches the game's chat.
+export type ChatMode =
+  // A DOM text field next to the view (the Online tab's chat form).
+  | { kind: 'input'; input: HTMLInputElement }
+  // The game's own canvas text input, opened with KEYS.chat (classic lobby);
+  // text from the on-screen keyboard is fed through a hidden proxy field.
+  | { kind: 'canvas' };
+
+export type TouchSetting = 'auto' | 'on' | 'off';
+
+export interface WebControlsOptions {
+  // Element the overlay is mounted in (it covers it).
+  root: HTMLElement;
+  // Element put into fullscreen (default: root).
+  fullscreenElement?: HTMLElement;
+  // Element whose key listeners drive the game (the focused game canvas).
+  keyTarget: HTMLElement;
+  chat: ChatMode;
+  // 'auto': shown on coarse pointers / touch screens; ?touch=1 / ?touch=0 in
+  // the URL override it.
+  touch?: TouchSetting;
+}
+
+export interface WebControls {
+  readonly fullscreen: FullscreenController;
+  setTouchVisible(on: boolean): void;
+  dispose(): void;
+}
+
+// Feeds synthesized key events to the game canvas. Counts holders per key so
+// two sources holding the same key release it only once both let go.
+class KeyFeed {
+  private readonly target: HTMLElement;
+  private readonly held = new Map<string, number>();
+
+  constructor(target: HTMLElement) {
+    this.target = target;
+  }
+
+  private send(type: 'keydown' | 'keyup', k: ProxyKey, repeat = false): void {
+    const ctrlKey = type === 'keydown' && k.key === 'Control';
+    this.target.dispatchEvent(new KeyboardEvent(type, { key: k.key, code: k.code, repeat, ctrlKey, bubbles: true, cancelable: true }));
+  }
+
+  down(key: GameKey): void {
+    const n = this.held.get(key) ?? 0;
+    this.held.set(key, n + 1);
+    if (n === 0) this.send('keydown', DOM_KEYS[key]);
+  }
+
+  up(key: GameKey): void {
+    const n = this.held.get(key) ?? 0;
+    if (n <= 0) return;
+    if (n === 1) {
+      this.held.delete(key);
+      this.send('keyup', DOM_KEYS[key]);
+    } else this.held.set(key, n - 1);
+  }
+
+  repeat(key: GameKey): void {
+    if (this.held.has(key)) this.send('keydown', DOM_KEYS[key], true);
+  }
+
+  tap(k: ProxyKey): void {
+    this.send('keydown', k);
+    this.send('keyup', k);
+  }
+
+  releaseAll(): void {
+    for (const key of [...this.held.keys()]) {
+      this.held.delete(key);
+      this.send('keyup', DOM_KEYS[key as GameKey]);
+    }
+  }
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function icon(paths: string[]): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  for (const d of paths) {
+    const p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', d);
+    svg.append(p);
+  }
+  return svg;
+}
+const ICON_FULLSCREEN = ['M4 9V4h5', 'M15 4h5v5', 'M20 15v5h-5', 'M9 20H4v-5'];
+const ICON_EXIT_FULLSCREEN = ['M9 4v5H4', 'M20 9h-5V4', 'M15 20v-5h5', 'M4 15h5v5'];
+const ICON_SOUND = ['M4 9h4l5-4v14l-5-4H4z', 'M16 9a4 4 0 0 1 0 6', 'M18.5 6.5a8 8 0 0 1 0 11'];
+const ICON_MUTED = ['M4 9h4l5-4v14l-5-4H4z', 'M16 9l5 6', 'M21 9l-5 6'];
+
+function button(cls: string, label: string, title: string): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = cls;
+  b.tabIndex = -1; // keep keyboard focus on the game canvas
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.textContent = label;
+  return b;
+}
+
+function touchPreferred(): boolean {
+  return matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+}
+
+function urlTouchSetting(): TouchSetting | null {
+  const q = new URLSearchParams(location.search).get('touch');
+  return q === '1' ? 'on' : q === '0' ? 'off' : null;
+}
+
+export function installWebControls(opts: WebControlsOptions): WebControls {
+  const { root, keyTarget, chat } = opts;
+  const fs = new FullscreenController(opts.fullscreenElement ?? root);
+  const feed = new KeyFeed(keyTarget);
+  const cleanups: Array<() => void> = [];
+  const listen = <K extends keyof WindowEventMap>(type: K, fn: (e: WindowEventMap[K]) => void, capture = false) => {
+    window.addEventListener(type, fn, capture);
+    cleanups.push(() => window.removeEventListener(type, fn, capture));
+  };
+  const refocus = () => keyTarget.focus({ preventScroll: true });
+
+  const overlay = document.createElement('div');
+  overlay.className = 'wc-overlay';
+  // Pressing overlay controls must not move focus off the game canvas (its
+  // blur handler clears the held keys).
+  overlay.addEventListener('pointerdown', (e) => e.preventDefault());
+  overlay.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // --- fullscreen / mute bar ------------------------------------------------
+  const bar = document.createElement('div');
+  bar.className = 'wc-bar';
+  const fsButton = button('wc-bar-button', '', 'Fullscreen (Alt+Enter)');
+  const muteButton = button('wc-bar-button', '', 'Mute (Alt+M)');
+  const syncFs = (on: boolean) => {
+    fsButton.replaceChildren(icon(on ? ICON_EXIT_FULLSCREEN : ICON_FULLSCREEN));
+    fsButton.setAttribute('aria-pressed', String(on));
+    const t = on ? 'Exit fullscreen (Alt+Enter)' : 'Fullscreen (Alt+Enter)';
+    fsButton.title = t;
+    fsButton.setAttribute('aria-label', t);
+  };
+  const syncMute = (m: boolean) => {
+    muteButton.replaceChildren(icon(m ? ICON_MUTED : ICON_SOUND));
+    muteButton.setAttribute('aria-pressed', String(m));
+    const t = m ? 'Unmute (Alt+M)' : 'Mute (Alt+M)';
+    muteButton.title = t;
+    muteButton.setAttribute('aria-label', t);
+  };
+  syncFs(false);
+  syncMute(isMuted());
+  cleanups.push(fs.onChange(syncFs), onMuteChange(syncMute));
+  fsButton.addEventListener('click', () => {
+    fs.toggle();
+    refocus();
+  });
+  muteButton.addEventListener('click', () => {
+    toggleMuted();
+    refocus();
+  });
+  bar.append(fsButton, muteButton);
+
+  listen(
+    'keydown',
+    (e) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      const fullscreen = e.key === 'Enter';
+      const mute = e.code === 'KeyM';
+      if (!fullscreen && !mute) return;
+      e.preventDefault();
+      e.stopImmediatePropagation(); // the game must not see Enter / M
+      if (e.repeat) return;
+      if (fullscreen) fs.toggle();
+      else toggleMuted();
+    },
+    true,
+  );
+  listen(
+    'keyup',
+    (e) => {
+      if (e.altKey && (e.key === 'Enter' || e.code === 'KeyM')) e.stopImmediatePropagation();
+    },
+    true,
+  );
+
+  // --- touch pad -------------------------------------------------------------
+  const pad = document.createElement('div');
+  pad.className = 'wc-touch';
+  pad.hidden = true;
+
+  // Stick: floats to where the finger lands in the left zone, returns home on
+  // release.
+  const zone = document.createElement('div');
+  zone.className = 'wc-stick-zone';
+  const base = document.createElement('div');
+  base.className = 'wc-stick';
+  const knob = document.createElement('div');
+  knob.className = 'wc-knob';
+  base.append(knob);
+  zone.append(base);
+
+  type StickState =
+    | { kind: 'idle' }
+    | { kind: 'held'; pointerId: number; cx: number; cy: number; startX: number; startY: number; startTime: number; maxMove: number; keys: ReadonlySet<MoveKey> };
+  let stick: StickState = { kind: 'idle' };
+  const stickRadius = () => base.offsetWidth / 2 || 48;
+  const placeStick = (x: number | null, y: number | null) => {
+    if (x === null || y === null) {
+      base.style.removeProperty('left');
+      base.style.removeProperty('top');
+      base.classList.remove('is-active');
+    } else {
+      const r = zone.getBoundingClientRect();
+      base.style.left = `${x - r.left}px`;
+      base.style.top = `${y - r.top}px`;
+      base.classList.add('is-active');
+    }
+  };
+  const moveKnob = (dx: number, dy: number) => {
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  };
+  const setStickKeys = (next: ReadonlySet<MoveKey>) => {
+    if (stick.kind !== 'held') return;
+    const { release, press } = keyDiff(stick.keys, next);
+    for (const k of release) feed.up(k);
+    for (const k of press) feed.down(k);
+    stick = { ...stick, keys: next };
+  };
+  const endStick = (e: PointerEvent | null) => {
+    if (stick.kind !== 'held') return;
+    const s = stick;
+    setStickKeys(new Set());
+    stick = { kind: 'idle' };
+    placeStick(null, null);
+    moveKnob(0, 0);
+    if (e && e.type === 'pointerup' && isTap(performance.now() - s.startTime, s.maxMove, 0)) passTap(e.clientX, e.clientY);
+  };
+  zone.addEventListener('pointerdown', (e) => {
+    if (stick.kind === 'held') return;
+    zone.setPointerCapture(e.pointerId);
+    stick = { kind: 'held', pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, startX: e.clientX, startY: e.clientY, startTime: performance.now(), maxMove: 0, keys: new Set() };
+    placeStick(e.clientX, e.clientY);
+    moveKnob(0, 0);
+  });
+  zone.addEventListener('pointermove', (e) => {
+    if (stick.kind !== 'held' || e.pointerId !== stick.pointerId) return;
+    const radius = stickRadius();
+    const { dx, dy } = clampStick(e.clientX - stick.cx, e.clientY - stick.cy, radius);
+    stick = { ...stick, maxMove: Math.max(stick.maxMove, Math.hypot(e.clientX - stick.startX, e.clientY - stick.startY)) };
+    moveKnob(dx, dy);
+    setStickKeys(stickKeys({ dx, dy, radius }));
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+    zone.addEventListener(type, (e) => {
+      if (stick.kind === 'held' && e.pointerId === stick.pointerId) endStick(e);
+    });
+  }
+
+  // A tap on the stick zone reaches the canvas below as a click (the classic
+  // screens and the lobby take pointer input).
+  function passTap(x: number, y: number): void {
+    const under = document.elementsFromPoint(x, y).find((el) => !overlay.contains(el));
+    if (!under) return;
+    const init: PointerEventInit = { clientX: x, clientY: y, bubbles: true, cancelable: true, pointerType: 'touch', isPrimary: true };
+    under.dispatchEvent(new PointerEvent('pointermove', init));
+    under.dispatchEvent(new PointerEvent('pointerdown', init));
+    under.dispatchEvent(new PointerEvent('pointerup', init));
+    under.dispatchEvent(new MouseEvent('click', init));
+  }
+
+  // Buttons that hold a game key while pressed (multi-touch: each tracks its
+  // own pointer).
+  const holdButton = (cls: string, label: string, title: string, key: GameKey): HTMLButtonElement => {
+    const b = button(`wc-key ${cls}`, label, title);
+    let pointer: number | null = null;
+    let timer = 0;
+    const release = () => {
+      if (pointer === null) return;
+      pointer = null;
+      clearInterval(timer);
+      b.classList.remove('is-down');
+      feed.up(key);
+    };
+    b.addEventListener('pointerdown', (e) => {
+      if (pointer !== null) return;
+      pointer = e.pointerId;
+      b.setPointerCapture(e.pointerId);
+      b.classList.add('is-down');
+      feed.down(key);
+      if (REPEATING_KEYS.has(key)) {
+        const start = performance.now();
+        let sent = 0;
+        timer = window.setInterval(() => {
+          const due = repeatCount(performance.now() - start);
+          for (; sent < due; sent++) feed.repeat(key);
+        }, REPEAT_INTERVAL / 2);
+      }
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+      b.addEventListener(type, (e) => {
+        if (e.pointerId === pointer) release();
+      });
+    }
+    releasers.push(release);
+    return b;
+  };
+  const releasers: Array<() => void> = [];
+
+  // Right side: the arrows are the palette keys in the field and the cursor
+  // keys in menus (Up = camera / cursor up), as on the keyboard.
+  const dpad = document.createElement('div');
+  dpad.className = 'wc-dpad';
+  dpad.append(
+    holdButton('wc-up', '▲', 'Camera / up (Up)', KEYS.camera),
+    holdButton('wc-left', '◀', 'Palette left / left (Left)', KEYS.paletteLeft),
+    holdButton('wc-down', '▼', 'Palette middle / down (Down)', KEYS.paletteMiddle),
+    holdButton('wc-rt', '▶', 'Palette right / right (Right)', KEYS.paletteRight),
+  );
+  const actions = document.createElement('div');
+  actions.className = 'wc-actions';
+  actions.append(holdButton('wc-decide', 'OK', 'Decide (Enter)', KEYS.decide), holdButton('wc-cancel', 'BACK', 'Cancel (Backspace)', KEYS.cancel));
+  const row = document.createElement('div');
+  row.className = 'wc-row';
+  row.append(holdButton('wc-small', 'PAL', 'Palette change (Ctrl)', KEYS.paletteChange), holdButton('wc-small', 'MENU', 'Menu (Home)', KEYS.menu));
+
+  // Chat.
+  const chatButton = button('wc-key wc-small', 'CHAT', 'Chat');
+  row.append(chatButton);
+  let proxy: HTMLInputElement | null = null;
+  if (chat.kind === 'canvas') {
+    const p = document.createElement('input');
+    p.className = 'wc-proxy';
+    p.setAttribute('aria-label', 'On-screen keyboard input');
+    p.autocomplete = 'off';
+    p.setAttribute('autocapitalize', 'off');
+    p.setAttribute('autocorrect', 'off');
+    p.spellcheck = false;
+    p.enterKeyHint = 'send';
+    const close = () => {
+      p.blur();
+      refocus();
+    };
+    p.addEventListener('input', () => {
+      for (const k of proxyKeys(p.value)) feed.tap(k);
+      p.value = PROXY_SENTINEL;
+      p.setSelectionRange(p.value.length, p.value.length);
+    });
+    p.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // the canvas gets the synthesized keys only
+      if (e.key === 'Enter' || e.key === 'Escape') {
+        e.preventDefault();
+        feed.tap(e.key === 'Enter' ? DOM_KEYS.enter : { key: 'Escape', code: 'Escape' });
+        close();
+      }
+    });
+    p.addEventListener('keyup', (e) => e.stopPropagation());
+    proxy = p;
+    const keyboardButton = button('wc-key wc-small', 'KEYS', 'On-screen keyboard (type into the game)');
+    keyboardButton.addEventListener('click', () => openProxy());
+    row.append(keyboardButton);
+  }
+  function openProxy(): void {
+    if (!proxy) return;
+    proxy.value = PROXY_SENTINEL;
+    proxy.focus({ preventScroll: true });
+    proxy.setSelectionRange(proxy.value.length, proxy.value.length);
+  }
+  chatButton.addEventListener('click', () => {
+    if (chat.kind === 'input') {
+      // The chat field is outside the game view: leave fullscreen to show it.
+      if (fs.active && !root.contains(chat.input)) fs.exit();
+      chat.input.focus();
+      chat.input.scrollIntoView({ block: 'center' });
+    } else {
+      feed.tap(DOM_KEYS[KEYS.chat]); // Space opens the game's chat line
+      openProxy();
+    }
+  });
+
+  const right = document.createElement('div');
+  right.className = 'wc-right';
+  right.append(row, dpad, actions);
+  pad.append(zone, right);
+
+  overlay.append(bar, pad);
+  if (proxy) overlay.append(proxy);
+  root.append(overlay);
+
+  // Nothing stays held when the page loses focus or the pad is hidden.
+  const releaseAll = () => {
+    endStick(null);
+    for (const r of releasers) r();
+    feed.releaseAll();
+  };
+  listen('blur', releaseAll);
+  const onVisibility = () => {
+    if (document.hidden) releaseAll();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  cleanups.push(() => document.removeEventListener('visibilitychange', onVisibility));
+
+  const setTouchVisible = (on: boolean) => {
+    if (pad.hidden === !on) return;
+    if (!on) releaseAll();
+    pad.hidden = !on;
+    overlay.classList.toggle('is-touch', on);
+  };
+  const setting = urlTouchSetting() ?? opts.touch ?? 'auto';
+  if (setting === 'on') setTouchVisible(true);
+  else if (setting === 'auto') {
+    setTouchVisible(touchPreferred());
+    const mq = matchMedia('(pointer: coarse)');
+    const onMq = () => setTouchVisible(touchPreferred());
+    mq.addEventListener('change', onMq);
+    cleanups.push(() => mq.removeEventListener('change', onMq));
+    // A touch anywhere shows the pad even where detection said no.
+    listen('pointerdown', (e) => {
+      if (e.pointerType === 'touch') setTouchVisible(true);
+    });
+  }
+
+  return {
+    fullscreen: fs,
+    setTouchVisible,
+    dispose() {
+      releaseAll();
+      for (const c of cleanups) c();
+      overlay.remove();
+    },
+  };
+}
