@@ -1,6 +1,9 @@
 # Roadmap
 
 ## Next up (reordered 2026-10-19 by psobb-client-source coverage)
+Paused for the day on 2026-10-19 at 17:50; where to resume is in [HANDOFF.md](HANDOFF.md)
+(first: the second half of the player's movement port).
+
 Order follows where psobb-client-source (ADR 0001) has matching C, so the work
 rests on verified code instead of the Ghidra dump alone. Counts are banked JP
 functions per area at commit f1b92b9d (527 banked, 8.7% of the live belt):

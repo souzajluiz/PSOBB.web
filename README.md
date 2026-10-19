@@ -33,7 +33,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Pioneer 2 shops (buy / sell, client prices) and bank (meseta and items) | ✅ bought, sold, deposited and withdrew live against newserv, server meseta matches |
 | Boss rooms: enemy child objects (Vol Opt's monitors and pillars, Sorcerer bits, Belra arms, De Rol Le / Barba Ray and Saint-Milion parts), boss warp gathering (6x6A) and boss music phases | ✅ live in Chrome |
 
-Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
+Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md); where to resume: [docs/HANDOFF.md](docs/HANDOFF.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
 ## Architecture
 
