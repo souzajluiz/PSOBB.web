@@ -19,6 +19,12 @@
 // (password: '*' each, flag 0x2000) with a 5 x 14 green caret block
 // (TextInputCursor_Render_007307a8). Confirm is drawn greyed (0xff909090,
 // SetItemColorById_00738a9c) until both fields hold something.
+// The rows are info-counter entities: RenderInfoCounterEntity_0072e930 draws
+// them whole once the window's c >= 0, with no wipe (the list windows' wipe
+// is render_chat_bubbles_and_more's), and the title text waits for c >= 0 too
+// (WindowAnim.textShown; ASSUMED for this window's title: its setter
+// ChatShortcutMenuYesNoWindow_SetTitle_00738364 is not traced, the list
+// windows' title object unknown_tekker_result_text does this).
 // The window frame, title pill and selection bar are the generic renderer in
 // stage.ts.
 
@@ -34,14 +40,15 @@ export function drawInputWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin,
     const cy = y + 16;
     const style = { size: WINDOW_FONT, shadow: 'rgba(0,0,0,0.85)' };
     const values = win.values();
-    [text.user, text.password].forEach((label, i) => {
+    const shown = win.anim.textShown;
+    if (shown) [text.user, text.password].forEach((label, i) => {
       const ty = cy + i * ITEM_STEP + 7.5;
       drawText(ctx, label, cx, ty, { ...style, color: '#ffffff' });
       drawText(ctx, ':', cx + 154, ty, { ...style, color: '#ffffff' });
       drawText(ctx, values[i], cx + 166, ty, { ...style, color: '#ffffff' });
     });
     ctx.font = `bold ${WINDOW_FONT}px ${FONT}`;
-    [text.confirm, text.cancel].forEach((label, i) => {
+    if (shown) [text.confirm, text.cancel].forEach((label, i) => {
       const tw = ctx.measureText(label).width;
       const color = i === 0 && !win.confirmEnabled ? DISABLED_COLOR : '#ffffff';
       drawText(ctx, label, cx + 202.5 - tw / 2, cy + (i + 2) * ITEM_STEP + 7.5, { ...style, color });
@@ -51,7 +58,7 @@ export function drawInputWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin,
     ctx.font = `bold ${WINDOW_FONT}px ${FONT}`;
     const tw = ctx.measureText(text.title).width;
     drawTitlePill(ctx, skin.frame, x, y - 13, tw, 1);
-    drawText(ctx, text.title, x + pillWidth(tw) / 2, y - 13 + 4 + 7.5, { size: WINDOW_FONT, color: '#120400', align: 'center' });
+    if (shown) drawText(ctx, text.title, x + pillWidth(tw) / 2, y - 13 + 4 + 7.5, { size: WINDOW_FONT, color: '#120400', align: 'center' });
   });
 
   const ed = win.editor;
