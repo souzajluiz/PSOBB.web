@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-19: newserv from its official image, no compile
+
+**What changed:** compiling newserv in the image build was too heavy: a
+small server cancelled it, and two runs on a GitHub runner failed (a lost
+runner at 51 minutes, then GCC's `-Werror=maybe-uninitialized` in phosg at
+`-O1`). fuzziqersoftware publishes `ghcr.io/fuzziqersoftware/newserv`, public,
+with amd64 and arm64 builds and one `sha-<commit>` tag per commit, including
+`sha-ce2273a`, the commit this project pins. The Dockerfile now takes the
+binary (`/usr/local/bin/newserv`) and `/newserv/system` from that image (checked
+in its layers: `config.example.json`, `blueburst/keys`, `text-sets/bb-v4` and
+`maps/bb-v4` are there and the config patterns the sed rewrites still match)
+and writes `config.json` in the runtime stage. The compile stages, `BUILD_JOBS`
+and the `newserv image` workflow are gone. Not built locally (no Docker here).
+
 ## 2026-10-19: newserv image workflow: smaller runner than assumed
 
 **What changed:** the first run of `newserv image` died after 51 minutes with

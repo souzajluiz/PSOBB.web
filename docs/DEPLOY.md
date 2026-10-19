@@ -49,42 +49,21 @@ built into the image, and `bridge/server.mjs` answers 404 for any other
 `.html`. To build every page anyway (local checks), set `PSOBB_DEV_PAGES=1`
 for `npm run build`.
 
-## Build memory
+## newserv comes from its official image
 
-The first build compiles `phosg`, `resource_dasm` and newserv from source. Each
-parallel C++ job can take 1.5-2 GB of RAM, so on a small server a build with
-many jobs is killed by the kernel (the log stops, or shows `Killed`) or hits
-the builder's time limit and shows as "cancelled". The `BUILD_JOBS` build arg
-(default `2`) sets the parallel jobs; raise it on a big builder
-(`--build-arg BUILD_JOBS=8`, or in Dokploy under the build arguments) and lower
-it to `1` if it is still killed. The compile is cached: once the image is
-built, later deploys that do not change the pinned refs skip it. If the server
-is too small even for that, build the image elsewhere, push it to a registry
-and let Dokploy only run it.
+Nothing is compiled during the build. The `Dockerfile` copies newserv from
+fuzziqersoftware's public image `ghcr.io/fuzziqersoftware/newserv`, pinned to
+the tag `sha-ce2273a` (the commit this project is tested with; the image has
+linux/amd64 and arm64 builds, so the platform is picked automatically). It
+takes the binary (`/usr/local/bin/newserv`) and the data (`/newserv/system`,
+which holds the BB keys, text and maps) and writes the loopback-only config
+from `config.example.json`. The build only runs the Vite build of the client
+and installs the relay's dependencies, so it takes a minute or two and little
+memory.
 
-## Prebuilt newserv image (skip the compile on the server)
-
-Compiling newserv is the slow, memory-hungry part of the build. The
-`newserv image` workflow (`.github/workflows/newserv-image.yml`) does it once
-on a GitHub runner (2 cores / 7 GB on a private repository, so with swap and
-`BUILD_JOBS=2`, and an hour or more) and publishes just what the runtime needs as
-`ghcr.io/<owner>/psobb-newserv` (tags `latest` and the three pinned refs,
-`linux/amd64`). It runs when the pinned refs in the `Dockerfile` change, or by
-hand (Actions > newserv image > Run workflow). With that image the server only
-builds the small client stage, in a minute or two and a few hundred MB of RAM.
-
-1. Run the workflow once (the first run compiles for an hour or more) and check
-   that the package `psobb-newserv` exists (your profile > Packages). It is
-   private, like the repository.
-2. Create a GitHub token (classic) with only `read:packages`, and log the
-   server's Docker in with it once: `docker login ghcr.io -u <user>` (paste the
-   token), so the build can pull the private image.
-3. In Dokploy, set the build argument `NEWSERV_IMAGE` to
-   `ghcr.io/<owner>/psobb-newserv:latest` and deploy. `BUILD_JOBS` no longer
-   matters.
-
-Without `NEWSERV_IMAGE` the build compiles newserv itself, as before. For an
-ARM server change `platforms` in the workflow.
+To use another newserv, set the build argument `NEWSERV_IMAGE` to another image
+or tag with the same layout (for example another `sha-<commit>`); anything
+newer than the pinned commit must be tested with this client first.
 
 ## Environment
 
