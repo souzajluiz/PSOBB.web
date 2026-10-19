@@ -1,7 +1,7 @@
 // The main menu in the field (Home / F12, "Menu Open/Close"), on top of the
 // lobby's MainMenu (mainmenu.ts): the same panel, labels and help window, with
 // the field's availability rules and the leaf windows the web client has
-// (Item Pack > Equip, Item Pack > Items, Item Pack > MAG, Technique).
+// (Item Pack > Equip, Item Pack > Items, Item Pack > MAG, Technique, Options).
 //
 // ValidateMenuItemCondition_00732620 (PsoBB.exe, Ephinea 1.25.13) replaces an
 // entry that cannot be used here by id + 1 (its "cannot be used" help text,
@@ -24,8 +24,11 @@ import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
+import { cursorSaved, OptionsMenu, type OptionsEnv } from './options.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
+
+type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu;
 
 export const SAFE_MAPS = [0x00, 0x0f, 0x12, 0x2d];
 
@@ -79,6 +82,7 @@ export interface FieldMenuEnv {
   equip: EquipActions;
   tech: TechMenuEnv;
   mag: MagMenuEnv;
+  options: OptionsEnv;
 }
 
 export interface FieldMenuTextures extends ItemPackTextures {
@@ -87,7 +91,7 @@ export interface FieldMenuTextures extends ItemPackTextures {
 
 export class FieldMenu {
   readonly menu: MainMenu;
-  private leaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
+  private leaf: Leaf | null = null;
   private env: FieldMenuEnv;
   // The leaf's windows open and close with the list windows' animation
   // (classic/windowanim.ts): fade in, then the 4-frame close about the
@@ -97,7 +101,7 @@ export class FieldMenu {
   // elements' wipe is left out for the menus (their frames and text share
   // one draw path here).
   readonly leafAnim = new WindowAnim(true, false);
-  private closingLeaf: ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | null = null;
+  private closingLeaf: Leaf | null = null;
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
   speed = 1;
 
@@ -108,6 +112,7 @@ export class FieldMenu {
       (id) => this.open(id),
     );
     this.menu.validate = (id) => validateMenuEntry(id, env.rules());
+    this.menu.cursorSaved = () => cursorSaved(env.options.flags());
   }
 
   get isOpen(): boolean {
@@ -131,6 +136,7 @@ export class FieldMenu {
 
   private closeLeaf(): void {
     if (!this.leaf) return;
+    if (this.leaf instanceof OptionsMenu) this.leaf.dispose();
     this.closingLeaf = this.leaf;
     this.leaf = null;
     this.leafAnim.close();
@@ -148,6 +154,7 @@ export class FieldMenu {
     else if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
     else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
+    else if (id === 6) this.leaf = new OptionsMenu(this.env.options);
     else return;
     this.menu.leafOpen = true;
     this.closingLeaf = null;
@@ -188,7 +195,7 @@ export class FieldMenu {
     const b = this.leafBounds;
     try {
       withWindowAnim(ctx, this.leafAnim, b.x, b.y, b.w, b.h, () => {
-        if (leaf instanceof TechniqueMenu) leaf.draw(ctx, skin, extra);
+        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu) leaf.draw(ctx, skin, extra);
         else leaf.draw(ctx, skin, tex, extra);
       });
     } finally {

@@ -93,11 +93,27 @@ interface ShownEntry extends MenuEntry {
   enabled: boolean;
 }
 
+// The cursor kept per menu level (+0x28 + level * 8: cursor, id, table;
+// PlayerMenuWindow_SetItemState_00732910 stores it when an entry is chosen).
+// A level opens on the kept cursor when it shows the same table
+// (PlayerMenuWindow_CheckItemState_00732514), or on the first entry when the
+// Cursor Position option is "Non-Saved" (character option mask 0x4 set:
+// get_character_option(player, 4) != 0 in
+// ChallengeMenuObject_UpdateMenuIndexFromCharacterOption_007332f8, run when
+// the menu opens and when a sub-menu opens).
+interface KeptCursor {
+  cursor: number;
+  table: MenuEntry[];
+}
+
 export class MainMenu {
   open = false;
   // Optional ValidateMenuItemCondition_00732620 rules (the field sets them).
   validate: MenuValidate | null = null;
-  private stack: Array<{ entries: ShownEntry[]; cursor: number }> = [];
+  // Cursor Position option (classic/options.ts cursorSaved): true = "Saved".
+  cursorSaved: () => boolean = () => true;
+  private kept: KeptCursor[] = [];
+  private stack: Array<{ entries: ShownEntry[]; cursor: number; table: MenuEntry[] }> = [];
   private ages: number[] = [];
   private height = 0;
   private heightLeft = 0;
@@ -125,7 +141,7 @@ export class MainMenu {
     this.leafOpen = false;
     this.stack = [];
     this.height = TOP + BOTTOM; // FUN_00738e40: built empty, then filled
-    this.show(entries, 0);
+    this.show(entries, this.keptCursor(0, entries));
     se(SE.ok);
   }
 
@@ -135,12 +151,17 @@ export class MainMenu {
     this.stack = [];
   }
 
+  private keptCursor(level: number, table: MenuEntry[]): number {
+    const k = this.kept[level];
+    return this.cursorSaved() && k && k.table === table && k.cursor < table.length ? k.cursor : 0;
+  }
+
   private show(raw: MenuEntry[], cursor: number): void {
     const entries: ShownEntry[] = raw.map((e) => {
       const v = this.validate?.(e.id) ?? { id: e.id, enabled: true };
       return { id: v.id, sub: e.sub, enabled: v.enabled };
     });
-    this.stack.push({ entries, cursor });
+    this.stack.push({ entries, cursor, table: raw });
     this.ages = entries.map((_, i) => -2 * i);
     this.heightLeft = 8;
     this.help.set(this.helpText(entries[cursor].id));
@@ -174,11 +195,13 @@ export class MainMenu {
         return;
       }
       se(SE.ok);
-      if (it.sub) this.show(it.sub, 0);
+      this.kept[this.stack.length - 1] = { cursor: lv.cursor, table: lv.table };
+      if (it.sub) this.show(it.sub, this.keptCursor(this.stack.length, it.sub));
       else this.action(it.id);
     } else if (e.key === 'Backspace' || e.key === 'Escape') {
       se(SE.cancel);
       if (this.stack.length > 1) {
+        this.kept[this.stack.length - 1] = { cursor: lv.cursor, table: lv.table };
         this.stack.pop();
         this.ages = this.level.entries.map(() => 4);
         this.heightLeft = 8;

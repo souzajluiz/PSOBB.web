@@ -35,6 +35,7 @@ import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, inGameSpace } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
 import { type Screen, type Stage, type WindowSkin } from './stage.ts';
 
 // Default key config slots 0..3 (W, S, A, D) mapped to the keys LobbyView
@@ -53,6 +54,8 @@ export interface LobbyHud {
   // Inventory rows for the Item List window (null: no character file).
   inventory: () => string[] | null;
   infoCols: InfoCol[];
+  // The session's full character data (00E7): the option word (options.ts).
+  fullCharacter?: () => Uint8Array | null;
 }
 
 export class LobbyScreen implements Screen {
@@ -69,6 +72,7 @@ export class LobbyScreen implements Screen {
   private menu: MainMenu;
   private counter: InfoCounter;
   private itemList: ItemListWindow | null = null;
+  private options: OptionsMenu | null = null;
   private logWindow = false;
   private heights = new Map<number, number>();
   private acc = 0;
@@ -85,6 +89,8 @@ export class LobbyScreen implements Screen {
       (id) => hud.text(0x0b, id),
       (id) => this.menuAction(id),
     );
+    this.menu.cursorSaved = () => cursorSaved(readOptionFlags(hud.fullCharacter?.() ?? null));
+    restoreBrightness();
     const t15 = (i: number) => hud.text(0x0f, i);
     const counterText: CounterText = {
       info: t15(3),
@@ -136,6 +142,10 @@ export class LobbyScreen implements Screen {
     } else if (id === 0x15) {
       this.logWindow = true;
       this.menu.leafOpen = true;
+    } else if (id === 6) {
+      const full = () => this.hud.fullCharacter?.() ?? null;
+      this.options = new OptionsMenu(characterOptionsEnv(this.hud.text, full, (c, p) => this.lobby.conn.send(c, 0, p)));
+      this.menu.leafOpen = true;
     }
   }
 
@@ -160,6 +170,7 @@ export class LobbyScreen implements Screen {
   private tick(): void {
     this.frame++;
     this.menu.tick();
+    this.options?.tick();
     this.counter.tick();
     const cam = this.viewer.camera;
     const width = 640 + this.extra;
@@ -194,6 +205,10 @@ export class LobbyScreen implements Screen {
       e.preventDefault();
       const t = this.input.key(e);
       if (t) this.lobby.sendChat(t);
+      return;
+    }
+    if (this.options) {
+      if (!this.options.key(e)) this.closeOptions();
       return;
     }
     if (this.itemList) {
@@ -254,6 +269,16 @@ export class LobbyScreen implements Screen {
 
   leave(): void {
     this.keys.clear();
+    this.closeOptions();
+    this.menu.close();
+  }
+
+  // The Options window's destructor sends the option word (options.ts).
+  private closeOptions(): void {
+    if (!this.options) return;
+    this.options.dispose();
+    this.options = null;
+    this.menu.leafOpen = false;
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
@@ -266,6 +291,7 @@ export class LobbyScreen implements Screen {
       this.counter.draw(ctx, this.hud.skin, extra);
       this.menu.draw(ctx, this.hud.skin, this.hud.menu);
       this.itemList?.draw(ctx, this.hud.skin);
+      this.options?.draw(ctx, this.hud.skin, extra);
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.log);
     });
   }

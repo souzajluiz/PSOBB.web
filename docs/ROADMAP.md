@@ -5,12 +5,9 @@ Work stopped here on request; pick these up first, in order. Each was planned
 as its own commit with tests, a DEVLOG entry and a Chrome check.
 1. Area Map window (main menu; full-map HUD flag bit 1 at 0x007441a8): the
    floor map, player and party markers.
-2. Options window (main menu): window speed (character +0x4ec bits 0x300,
-   already read by `classic/windowanim.ts`), cursor memory and the rest, saved
-   the way the client saves them.
-3. The in-game main menu path to the quest board (replaces the temporary B key,
+2. The in-game main menu path to the quest board (replaces the temporary B key,
    if the client has one).
-4. Then: Episode 1 bosses' children placement (line in Phase 5), Pan Arms /
+3. Then: Episode 1 bosses' children placement (line in Phase 5), Pan Arms /
    Pofuilly splits, the Vol Opt seal door's .njs shape motion, Episode 2
    enemies' FSMs, the title / login screens, water distortion.
 
@@ -114,9 +111,10 @@ as its own commit with tests, a DEVLOG entry and a Chrome check.
 - [x] Item commands: equip/unequip/use/drop from the Inventory panel (`6x25`/`6x26`/`6x27`/`6x2A`/`6xC3`/`6x29`), pickup (`6x5A` → `6x59`), server drops (`6x5D`/`6x5F`), inventory creation (`6xBE`), join item state (`6x6D`, BC0) — `net/items.ts`
 - [x] Items on the floor with the client's own models (`item.bml` box models, present colours, spin) and item boxes broken with Enter (`6x0B` + `6xA2`) — `formats/itemmodels.ts`, `render/flooritems.ts`
 - [x] Classic field HUD (`render/fieldhud.ts`): the in-game main menu with the exe's availability rules (`classic/fieldmenu.ts`), Item Pack > Items with the client's rows, icons, colours, description, Purpose (Use / Equip / Remove / Drop) and Amount windows (`classic/itempack.ts`), the Technique menu with levels and TP costs (`classic/techmenu.ts`), the action palette from the character's config with Ctrl switching (`classic/palette.ts`) — `tests/fieldhud.test.ts`
+- [x] Main menu > Options (`classic/options.ts`, field and lobby): the exe's ten rows and their choices, the option word bits (message speed drives the window animation, cursor position drives the main menu's cursor memory), Brightness as the gamma offset, saved with `01ED` — `tests/options.test.ts`
 - [x] Field HUD: casting techniques from the palette keys and the Technique menu
 - [x] Item Pack > MAG: the MAG list, Select, the item list, feeding with `6x28` and the client's own feed (stats, sync, IQ, level, evolution, photon blast, the 0x189c-frame feed timer) (`net/magfeed.ts`, `classic/magmenu.ts`, `tests/magfeed.test.ts`)
-- [ ] Field HUD left to do: the Status window (menu id 0x19 exists in the exe but no menu or key opens it in this build), Area Map / Options windows, the MAG window's stat panel layout and its Photon Blast window, the item detail pages for equipment (requirements, attributes, mag stats), automatic / manual sort (`6xC4`), saving a switched palette (`07ED`), the scroll bar of the item list
+- [ ] Field HUD left to do: the Status window (menu id 0x19 exists in the exe but no menu or key opens it in this build), the Area Map window, Options > Keyboard Config / Pad Button Config (and the uses of map direction, function keys, keyboard / mouse controls, auto disconnect), the MAG window's stat panel layout and its Photon Blast window, the item detail pages for equipment (requirements, attributes, mag stats), automatic / manual sort (`6xC4`), saving a switched palette (`07ED`), the scroll bar of the item list
 - [x] Pioneer 2 shops (weapons, armor, tools: `6xB5`/`6xB6`/`6xB7`, sell `6xC0`, the client's `get_item_shop_cost`) and the bank (`6xBB`/`6xBC`/`6xBD`: meseta and items) with the exe's windows and flows (`classic/shop.ts`, `tests/shop.test.ts`)
 - [x] Tekker: identify an unknown weapon (`6xB8`/`6xB9`), accept (`6x29` + `6xBA`, with the equip question) or refuse, the 100-meseta fee and the section-id lines (`classic/shop.ts` TekkerCounter, `tests/tekker.test.ts`)
 - [x] Floor item presentation from the exe: no arc (an item appears where it lands, origin 6 above the ground under y + 300), a random start angle, fog off, SE 0x571 at the picker on 6x59, no drop sound or "item found" line (the exe has none), the local drop's spot search (`render/flooritems.ts`, `tests/drops.test.ts`)

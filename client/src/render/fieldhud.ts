@@ -28,6 +28,7 @@ import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldme
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
 import { createCounter, type Counter, type CounterKind } from '../classic/shop.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
+import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
 import type { ItemNames } from '../formats/itemnames.ts';
@@ -57,6 +58,8 @@ export interface FieldHudOptions {
   statusFlags?: () => number;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
+  // Sends a command to the game server (the Options window's 0x01ED).
+  send?: (command: number, payload: Uint8Array) => void;
   log?: (msg: string) => void;
 }
 
@@ -108,6 +111,7 @@ export class FieldHud {
     // while a menu is open.
     this.host.addEventListener('keydown', this.onKey, true);
     viewer.frameHooks.add(this.hook);
+    restoreBrightness();
     this.menu = new FieldMenu({
       text: (g, i) => this.text(g, i),
       rules: () => {
@@ -145,6 +149,11 @@ export class FieldHud {
         feedTimer: (id) => this.opts.items.feedTimer(id),
         feed: (mag, food) => this.opts.items.feedMag(mag, food),
       },
+      options: characterOptionsEnv(
+        (g, i) => this.text(g, i),
+        () => this.opts.fullCharacter(),
+        (c, p) => this.opts.send?.(c, p),
+      ),
       tech: {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
@@ -377,6 +386,8 @@ export class FieldHud {
 
   dispose(): void {
     this.disposed = true;
+    // Closing the menu destroys an open Options window, which saves (01ED).
+    this.menu.close();
     this.counter?.close();
     this.host.removeEventListener('keydown', this.onKey, true);
     this.viewer.frameHooks.delete(this.hook);
