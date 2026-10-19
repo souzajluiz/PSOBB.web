@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-19: prebuilt newserv image on GHCR
+
+**What changed:** the Docker build compiled newserv on the deploy server and
+was cancelled on a small one (4 GB free). The Dockerfile now has a
+`newserv-artifacts` target (a `scratch` image with only the library, the
+binary and the system folder) and an `ARG NEWSERV_IMAGE` that picks where the
+runtime copies newserv from: the local compile by default, or a prebuilt image.
+`.github/workflows/newserv-image.yml` compiles it on a GitHub runner and pushes
+`ghcr.io/<owner>/psobb-newserv:latest` (and a tag of the three pinned refs)
+when the refs change or on demand. With `NEWSERV_IMAGE` set, BuildKit skips the
+compile stage and the server builds only the client. Steps in DEPLOY.md
+(workflow run, `read:packages` token, `docker login ghcr.io`, the build arg).
+Not built locally (no Docker here); the first workflow run is the check.
+
 ## 2026-10-19: Docker build with fewer parallel jobs
 
 **What changed:** the image build ran `cmake --build -j"$(nproc)"` for phosg,

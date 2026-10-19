@@ -7,6 +7,13 @@
 # docker/fetch-data.mjs downloads there at start (optional; without either the
 # page asks for the folder).
 
+# Where the runtime stage takes newserv from. The default is the stage below
+# that compiles it inside this build (slow: tens of minutes, GBs of RAM). Set it
+# to a prebuilt image (ghcr.io/<owner>/psobb-newserv:latest, built by
+# .github/workflows/newserv-image.yml) to skip the compile: only the small
+# client stage is then built on the server. See docs/DEPLOY.md.
+ARG NEWSERV_IMAGE=newserv-artifacts
+
 # newserv and its libraries, pinned to the commits the project is tested with.
 ARG PHOSG_REF=66f8c363362e3a0d946e46ae895de337e535aa3e
 ARG RESOURCE_DASM_REF=8930baa5ae99bf41e8d70b2d21ae8423dd38e429
@@ -16,7 +23,7 @@ ARG NEWSERV_REF=ce2273a8e48c5c6fec9e21d85c490028498d8682
 ARG BUILD_JOBS=2
 
 # --- newserv ----------------------------------------------------------------
-FROM ubuntu:24.04 AS newserv
+FROM ubuntu:24.04 AS newserv-built
 ARG BUILD_JOBS
 ARG PHOSG_REF
 ARG RESOURCE_DASM_REF
@@ -48,6 +55,17 @@ RUN sed -e 's/"LocalAddress": "en0"/"LocalAddress": "127.0.0.1"/' \
         -e 's/"IPStackListen": \[5059\]/"IPStackListen": []/' \
         -e 's/"PPPStackListen": \[5058\]/"PPPStackListen": []/' \
         newserv/system/config.example.json > newserv/system/config.json
+
+# Just what the runtime needs from the compile, so a prebuilt image is small
+# (the build tree and sources stay behind). The workflow publishes this target.
+FROM scratch AS newserv-artifacts
+COPY --from=newserv-built /opt/newserv-deps/lib /opt/newserv-deps/lib
+COPY --from=newserv-built /src/newserv/build/newserv /src/newserv/build/newserv
+COPY --from=newserv-built /src/newserv/system /src/newserv/system
+
+# The stage the runtime copies from: the local compile (default) or the prebuilt
+# image named by NEWSERV_IMAGE.
+FROM ${NEWSERV_IMAGE} AS newserv
 
 # --- browser client -----------------------------------------------------------
 FROM node:24-bookworm-slim AS client
