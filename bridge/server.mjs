@@ -90,6 +90,9 @@ const NEWSERV_FILES = {
 
 const server = createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') return notFound(res, 405);
+  // The native app (Capacitor) runs from its own origin and reads the public
+  // files here: they need no credentials, so any origin may read them.
+  res.setHeader('Access-Control-Allow-Origin', '*');
   const url = new URL(req.url ?? '/', 'http://server');
   const path = decodeURIComponent(url.pathname);
 

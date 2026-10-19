@@ -3,9 +3,12 @@
 // Two sources:
 //  - DirectorySource: a folder picked with the File System Access API (Chrome).
 //    Nothing leaves the user's machine.
-//  - HttpSource: the Vite dev server exposes a local client folder at /psobb-data/
-//    (see vite.config.ts). Development only; it makes automated testing possible
-//    because the native folder picker cannot be scripted.
+//  - HttpSource: a data/ folder the server exposes at /psobb-data/ (the Docker
+//    image, docs/DEPLOY.md; in development the Vite dev server, see
+//    vite.config.ts). It makes automated testing possible because the native
+//    folder picker cannot be scripted, and it is how the native app gets the data.
+
+import { serverUrl } from '../net/server.ts';
 
 export interface DataSource {
   readonly label: string;
@@ -53,11 +56,11 @@ export class HttpSource implements DataSource {
   // body arrives. total is 0 when the server sent no Content-Length.
   onProgress: ((path: string, loaded: number, total: number) => void) | null = null;
 
-  constructor(base = '/psobb-data') {
+  constructor(base = serverUrl('/psobb-data')) {
     this.base = base;
   }
 
-  static async available(base = '/psobb-data'): Promise<boolean> {
+  static async available(base = serverUrl('/psobb-data')): Promise<boolean> {
     try {
       return (await fetch(`${base}/?list=scene`)).ok;
     } catch {

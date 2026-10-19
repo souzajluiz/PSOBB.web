@@ -5,12 +5,21 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:app": "tsc --noEmit && node scripts/app-build.mjs",
+    "app:sync": "npm run build:app && cap sync",
+    "app:android": "cap open android",
+    "app:ios": "cap open ios"
   },
   "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3",
+    "@capacitor/status-bar": "8.0.4",
     "three": "0.180.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.3",
     "@types/node": "^24.3.0",
     "@types/three": "0.180.0",
     "typescript": "5.9.3",

@@ -1,0 +1,72 @@
+name: Native app
+
+# Builds the native app (client/, Capacitor): a debug APK for Android and an
+# app for the iOS simulator. Run it by hand from the Actions tab with the https
+# address of the PSOBB.web server (docs/NATIVE.md). Store builds need signing
+# and are made on a Mac (docs/NATIVE.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_origin:
+        description: https address of the PSOBB.web server, for example https://psobb.example.com
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+        working-directory: client
+      - run: npm run build:app
+        working-directory: client
+        env:
+          VITE_SERVER_ORIGIN: ${{ inputs.server_origin }}
+      - run: npx cap sync android
+        working-directory: client
+      - run: ./gradlew assembleDebug
+        working-directory: client/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: psobb-android-debug
+          path: client/android/app/build/outputs/apk/debug/app-debug.apk
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+        working-directory: client
+      - run: npm run build:app
+        working-directory: client
+        env:
+          VITE_SERVER_ORIGIN: ${{ inputs.server_origin }}
+      - run: npx cap sync ios
+        working-directory: client
+      - run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Debug \
+            -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+        working-directory: client/ios/App
+      - uses: actions/upload-artifact@v4
+        with:
+          name: psobb-ios-simulator
+          path: client/ios/App/build/Build/Products/Debug-iphonesimulator/App.app

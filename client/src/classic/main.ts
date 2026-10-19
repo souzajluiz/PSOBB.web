@@ -30,6 +30,9 @@ import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
 import { installNoZoom } from '../ui/nozoom.ts';
+import { serverUrl } from '../net/server.ts';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar } from '@capacitor/status-bar';
 import { SoftKeyboard } from '../ui/softkeyboard.ts';
 import { Loader } from './loader.ts';
 import { installStageFit, lockLandscape } from './viewport.ts';
@@ -40,6 +43,9 @@ const loader = new Loader();
 let softKeyboard: SoftKeyboard | null = null;
 const keyboardFocused = () => softKeyboard?.focused ?? false;
 installNoZoom();
+// The native app: hide the status bar so the game is fullscreen (the web build
+// is fullscreen through the browser, ui/fullscreen.ts).
+if (Capacitor.isNativePlatform()) void StatusBar.hide().catch(() => {});
 const fit = installStageFit({
   canvases: [canvas, document.getElementById('world') as HTMLCanvasElement],
   hint: document.getElementById('rotate') as HTMLElement,
@@ -65,7 +71,7 @@ async function dataSource(): Promise<DataSource> {
 }
 
 async function loadKey(name = 'default'): Promise<Uint8Array> {
-  const res = await fetch(`/keys/${name}.nsk`);
+  const res = await fetch(serverUrl(`/keys/${name}.nsk`));
   if (!res.ok) throw new Error(`key file ${name}.nsk not found`);
   return new Uint8Array(await res.arrayBuffer());
 }
@@ -196,7 +202,7 @@ async function main(): Promise<void> {
       unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
       let text: string[][] | null = ItemNames.textMatches(pmt, unitxt) ? unitxt : null;
       if (!text) {
-        const res = await fetch('/newserv-text/unitxt_e.prs').catch(() => null);
+        const res = await fetch(serverUrl('/newserv-text/unitxt_e.prs')).catch(() => null);
         if (res?.ok) {
           const t = parseUnitxt(new Uint8Array(await res.arrayBuffer()));
           if (ItemNames.textMatches(pmt, t)) text = t;

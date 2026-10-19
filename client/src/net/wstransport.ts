@@ -1,14 +1,17 @@
 // Browser WebSocket transport to the bridge (bridge/bridge.mjs).
 
 import type { Transport } from './bbconnection.ts';
+import { SERVER_ORIGIN } from './server.ts';
 
 // ?bridge= overrides it. The dev server runs bridge.mjs on its own port; a
 // build is served by bridge/server.mjs, which relays at /bridge on its own
-// origin (the Docker image, docs/DEPLOY.md).
+// origin (the Docker image, docs/DEPLOY.md). The native app has no origin of
+// its own: it relays through VITE_SERVER_ORIGIN.
 export function bridgeUrl(): string {
   const given = new URLSearchParams(location.search).get('bridge');
   if (given) return given;
   if (import.meta.env?.DEV) return 'ws://127.0.0.1:8080';
+  if (SERVER_ORIGIN) return `${SERVER_ORIGIN.replace(/^http/, 'ws')}/bridge`;
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bridge`;
 }
 

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PSOBB</string>
+    <string name="title_activity_main">PSOBB</string>
+    <string name="package_name">app.psobbweb.client</string>
+    <string name="custom_url_scheme">app.psobbweb.client</string>
+</resources>

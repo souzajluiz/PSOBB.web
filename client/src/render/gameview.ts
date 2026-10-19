@@ -41,6 +41,7 @@ import { TelepipeLayer, type Arrival } from './telepipe.ts';
 import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { serverUrl } from '../net/server.ts';
 
 // The map viewer's set-data markers stand in for entities without a model.
 // In a game those are logic-only objects (TShopGenerator, TObjLuker,
@@ -120,7 +121,7 @@ export class GameView {
     this.source = source;
     // The game's maps come from the server's set data when the dev server has
     // it (data/clientfiles.ts), so the entity ids match newserv's.
-    this.files = new ClientFiles(source, { serverSetData: '/newserv-maps/' });
+    this.files = new ClientFiles(source, { serverSetData: serverUrl('/newserv-maps/') });
     this.log = log;
     this.enemyLayer = new EnemyLayer(viewer, this.files);
     this.npcs = new NpcLayer(viewer, this.files);
