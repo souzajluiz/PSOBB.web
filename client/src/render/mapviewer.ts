@@ -7,6 +7,7 @@ import { parseMapNRel, type MapGeometry } from '../formats/nrel.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
 import { MapAnimator } from './mapanim.ts';
+import { TickSmoother } from './smoothrender.ts';
 import { TextureAnimator } from './texanim.ts';
 import { parseTam, tamFileFor, type TamFile } from '../formats/tam.ts';
 import { areaForMap, type PlacedEntity } from '../formats/setdata.ts';
@@ -112,6 +113,11 @@ export class MapViewer {
   onFrame: ((dt: number, keys: ReadonlySet<string>) => void) | null = null;
   // Called every frame with the frame time (e.g. enemy motions).
   readonly frameHooks = new Set<(dt: number) => void>();
+  // Smooth rendering between game ticks (render/smoothrender.ts): hooks run
+  // after the frame's logic, right before the draw, and hand the objects the
+  // ticks move to the smoother; the logic poses come back after the draw.
+  readonly smoother = new TickSmoother();
+  readonly renderHooks = new Set<() => void>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -161,7 +167,7 @@ export class MapViewer {
     this.updateFog(dt);
     if (this.onFrame) {
       this.onFrame(dt, this.keys);
-      this.renderer.render(this.scene, this.camera);
+      this.draw();
       return;
     }
     const speed = (this.keys.has('shift') ? 1200 : 300) * dt;
@@ -183,7 +189,16 @@ export class MapViewer {
       this.controls.target.add(move);
     }
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.draw();
+  }
+
+  private draw(): void {
+    try {
+      if (this.smoother.enabled) for (const hook of this.renderHooks) hook();
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      this.smoother.restore();
+    }
   }
 
   async load(source: DataSource, nrelName: string): Promise<MapStats> {

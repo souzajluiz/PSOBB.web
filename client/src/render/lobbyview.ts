@@ -510,7 +510,8 @@ export class LobbyView {
       this.cameraKeyHeld = camKey;
       this.cameraTicks = Math.min(this.cameraTicks + dt * 30, 30);
       for (; this.cameraTicks >= 1; this.cameraTicks--) this.camera.tick(pos, mine.angle, this.collision);
-      const { source, target } = this.camera.view(pos, mine.angle);
+      // Drawn between its last two ticks (render/smoothrender.ts; not with ?fps=30).
+      const { source, target } = this.camera.view(pos, mine.angle, this.viewer.smoother.enabled ? this.cameraTicks : 1);
       const cam = this.viewer.camera;
       if (cam.fov !== CAMERA_FOV) {
         cam.fov = CAMERA_FOV;

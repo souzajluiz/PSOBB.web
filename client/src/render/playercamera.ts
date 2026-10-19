@@ -114,6 +114,12 @@ export interface CameraWorld {
   segmentHit(from: V3, to: V3, mask: number): { point: V3; normal: V3 } | null;
 }
 
+function lerpInto(out: Vec3, a: Vec3, b: Vec3, t: number): void {
+  out.x = a.x + (b.x - a.x) * t;
+  out.y = a.y + (b.y - a.y) * t;
+  out.z = a.z + (b.z - a.z) * t;
+}
+
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 const len3 = (x: number, y: number, z: number) => Math.hypot(x, y, z);
 const arr = (v: Vec3): V3 => [v.x, v.y, v.z];
@@ -152,6 +158,11 @@ export class PlayerCamera {
   private safe: Vec3 | null = null;
   private wallHit = false; // +0x174
   private last: Vec3 | null = null;
+  // The shown points before the last tick (render/smoothrender.ts draws the
+  // camera between them and the current ones; null: snap).
+  private prevSource: Vec3 | null = null;
+  private prevTarget: Vec3 | null = null;
+  private readonly drawn = { source: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 0 } };
 
   // Straight behind the player (camera start, Camera key, warps).
   reset(heading: number): void {
@@ -164,6 +175,7 @@ export class PlayerCamera {
   snap(): void {
     this.source = this.target = this.safe = null;
     this.last = null;
+    this.prevSource = this.prevTarget = null;
     this.chase = 0;
   }
 
@@ -191,6 +203,9 @@ export class PlayerCamera {
 
   // One game frame (30 per second).
   tick(pos: Vec3, heading: number, world: CameraWorld | null = null): void {
+    // The points are never changed in place, only replaced: keep the old ones.
+    this.prevSource = this.source;
+    this.prevTarget = this.target;
     const last = this.last ?? pos;
     this.last = { x: pos.x, y: pos.y, z: pos.z };
     const move = { x: pos.x - last.x, y: pos.y - last.y, z: pos.z - last.z };
@@ -282,8 +297,17 @@ export class PlayerCamera {
 
   // Where the camera is and what it looks at: the controller's current
   // points, or the desired ones before the first frame.
-  view(pos: Vec3, heading: number): { source: Vec3; target: Vec3 } {
-    if (this.source && this.target) return { source: this.source, target: this.target };
+  // `alpha` (render/smoothrender.ts): the fraction of a tick since the last
+  // one; below 1 the points are drawn that far from the previous tick's.
+  view(pos: Vec3, heading: number, alpha = 1): { source: Vec3; target: Vec3 } {
+    if (this.source && this.target) {
+      const ps = this.prevSource, pt = this.prevTarget;
+      if (alpha >= 1 || !ps || !pt) return { source: this.source, target: this.target };
+      const d = this.drawn;
+      lerpInto(d.source, ps, this.source, alpha);
+      lerpInto(d.target, pt, this.target, alpha);
+      return d;
+    }
     return this.desired(pos, heading);
   }
 }

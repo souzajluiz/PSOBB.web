@@ -29,6 +29,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
+- [x] Smooth rendering between game ticks (issue #5, "PSOBB in 60FPS"): the logic stays at 30 ticks a second; enemies, their children / shots, De Rol Le's tentacles and stings, NPCs, pillar traps and the player camera are drawn between their last two tick poses (shortest-arc angles, teleports snap). `?fps=30` shows the original stepped look (`render/smoothrender.ts`, `tests/smoothrender.test.ts`)
 - [ ] Touch: camera drag with a second finger, analog walk / run if the movement code gets an analog input
 
 ## Phase 1: foundation ✅

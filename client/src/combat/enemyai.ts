@@ -311,6 +311,9 @@ export interface EnemyBrain {
   kill(): void;
   // Hits do not start the damage motion (flag 0x40000, the Garanz barrage).
   readonly superArmor?: boolean;
+  // Bumped on a teleport (render/smoothrender.ts: the drawn pose snaps
+  // instead of sliding). Only the renderer reads it.
+  readonly warps?: number;
   // Hits do no damage (a crouching Grass Assassin, a cloaked Sinow ...).
   readonly invulnerable?: boolean;
   // Whether a hit of `damage` starts the flinch (the Dark Belra's hit handler

@@ -98,12 +98,15 @@ node tests/npcs.test.ts          # every NPC entry of every free-play floor and 
 node tests/questflow.test.ts     # Mop-up Operation #1 from its start to the reward in the VM; 6x24 / 6x69 / 6xC9 layouts; npcplayerchar.dat
 node tests/quest.live.ts         # the quest menu (A2/09/10), the 44/13 download, the AC barrier, then run the quest's start label
 node tests/mobilecontrols.test.ts # touch pad stick/keys, mute persistence and default, fullscreen state machine
+node tests/smoothrender.test.ts  # drawing between game ticks: pose lerp, shortest-arc angles, teleport snaps, ?fps=30, the logic pose untouched
 node tests/bot.live.ts webbot 120  # a bot player that runs around and echoes chat
 ```
 
 The format tests and the dev server look for client data in `~/Downloads/psobb-client/data` (override with `PSOBB_DATA=...`). In the **Map viewer** tab you can also pick your PSOBB folder with *Open PSOBB data folder* (Chrome/Edge); files are read locally and never uploaded.
 
 **Fullscreen, sound and touch.** Alt+Enter (or the corner button) puts the game view into fullscreen; Esc or Alt+Enter leaves it. Alt+M (or the speaker button) mutes all music and sound effects; the choice is remembered. Under the dev server (`npm run dev`) the game starts muted until you unmute it once (or open the page with `?sound=1`; `?sound=0` forces mute); production builds start with sound on. On phones and tablets an on-screen pad appears over the view, laid out around the game's HUD: the left stick moves (8 directions), tapping an action palette icon uses that slot (its Ctrl tab switches palettes), the arrow diamond next to the palette is Up = camera and moves menu cursors, OK = Enter, BACK = Backspace, and MENU (Home), CHAT, PAL (Ctrl), fullscreen and mute sit along the top edge. Play in landscape and use fullscreen (iPhone Safari has no element fullscreen; the view then fills the browser window instead). `?touch=1` / `?touch=0` force the pad on or off.
+
+**Smooth motion.** The game runs its logic at 30 ticks a second, as the original does, but on a 60 Hz or faster screen enemies, NPCs, shots, traps and the camera are drawn between ticks so they glide instead of stepping (a browser convenience; teleports still snap). `?fps=30` turns this off and shows the original's stepped motion.
 
 Player models: with the dev server running, open http://127.0.0.1:5173/models.html to view any class with a chosen costume, skin, face, head, hair and section ID.
 

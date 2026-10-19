@@ -972,6 +972,7 @@ export class DeRolLeAi extends BrainBase {
     this.z = c[2];
     this.h = 0;
     this.roll = 0;
+    this.warps++;
   }
 
   private emit(e: DrlEvent): void {
