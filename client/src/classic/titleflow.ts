@@ -65,8 +65,11 @@ export const SE_TITLE_OK = 0x420; // 0x006fede0 on flag 1
 //   0xff909090, row flag 0x10) unless both user name and password are set
 //   (ChallengePlayerInfoWindow_UpdateLoginButtonState_00762140).
 //   Initial row: 3 when either is empty, else 0.
-// The window size {220, 120} is the one the earlier port measured
-// (unknown_set_list_window_size computes it from the rows).
+// The window size {220, 120} is g_MainMenuListItemProperties (0x00974e10),
+// set by MenuListItem_InitializeProperties_00712c14; it is also what
+// listWindowHeight(5, true) gives. unknown_set_list_window_size (0x00736458)
+// only centres the rows: x = w * 0.5 - 10 - text width * 0.5 (0x009713d0,
+// 0x009713d4, 0x009713c8) from the content's left edge.
 export const LOGIN_MENU = { x: 210, y: 300, yEpisode4: 330, w: 220, h: 120 } as const;
 export const DISABLED_COLOR = '#909090'; // 0xff909090
 export const ACCOUNT_COLOR = '#ffcc33'; // 0xffffcc33
@@ -98,10 +101,36 @@ export function caretColor(frame: number): string {
   return CARET.colors[(frame & 0x10) !== 0 ? 1 : 0];
 }
 
+// The height of a list window (YesNoListMenu_UpdateRenderHeight_00736390,
+// yes_no_list_constructor 0x00735708): 0 (0x009713e8), plus 6 (0x009713e4)
+// and the text height for each row, -6 (0x009713e0), +6 with a title (flag
+// 0x40 of +0x2c, CreateListWindowObject_0073566c), +20 (0x009713dc). A
+// one-line row is 14 high (get_text_rendering_sizes_for_list_item
+// 0x0072ddf4: first line 0x00970ea4 = 14, each further line 0x00970ea0 = 20).
+export const LIST_ROW_GAP = 6;
+export const LIST_LINE_HEIGHT = 14;
+export function listWindowHeight(rows: number, title = false): number {
+  return rows * (LIST_ROW_GAP + LIST_LINE_HEIGHT) - LIST_ROW_GAP + (title ? LIST_ROW_GAP : 0) + 20;
+}
+
 // Exit Game asks unitxt(41, 12) "Really OK?" (main_menu_exit_game_sub_list,
-// 0x00762498): ChatShortcutMenuWindow_CreateSubMenuWithYesNo_0073cfec at
-// g_ExitGameMenuPosition (0x00974e3c: 400, 350), width 150, cursor on No.
-export const EXIT_CONFIRM = { x: 400, y: 350, w: 150 } as const;
+// 0x00762498): ChatShortcutMenuWindow_CreateSubMenuWithYesNo_0073cfec makes
+// an untitled one-row list at g_ExitGameMenuPosition (0x00974e3c: 400, 350),
+// width 150, height listWindowHeight(1) = 34, render order 0.5; then the
+// Yes/No list (yes_no_list_constructor: rows unitxt group 11 0x6e / 0x6f,
+// width 104 (0x00971468), height listWindowHeight(2) = 54, render order 0.45
+// (ListWindowObject_SetWidth_00712624; ASSUMED: the lower value is drawn
+// in front) at YesNoListMenu_GetRenderPosition_0073cf10: the question's
+// right edge - 111 (0x00971d44), its bottom edge - 10 (0x00971d40). The
+// cursor starts on No (ListWindowObject_SetSelectedIndex_0073d148(1)).
+// (psobb-client-source src/FUN_0073d178.c, the JP twin of
+// ListWindowObject_IsItemSelectable_0073d114, confirms the pair keeps the
+// Yes/No list at +0x24.)
+export const EXIT_CONFIRM = { x: 400, y: 350, w: 150, h: listWindowHeight(1) } as const;
+export const YES_NO = { dx: -111, dy: -10, w: 104, h: listWindowHeight(2) } as const;
+export function yesNoRect(q: { x: number; y: number; w: number; h: number } = EXIT_CONFIRM): { x: number; y: number; w: number; h: number } {
+  return { x: q.x + q.w + YES_NO.dx, y: q.y + q.h + YES_NO.dy, w: YES_NO.w, h: YES_NO.h };
+}
 
 export type Key = 'up' | 'down' | 'left' | 'right' | 'enter' | 'cancel' | 'backspace' | 'exitGame' | { char: string };
 
@@ -304,6 +333,12 @@ export class InputUserIdWindow {
   }
 }
 
+export interface ExitConfirm {
+  cursor: number;
+  question: WindowAnim;
+  list: WindowAnim;
+}
+
 export type MenuResult = 'start' | 'patch' | 'exit' | 'closed' | null;
 
 export interface MenuRow {
@@ -340,8 +375,9 @@ export class LoginMenu {
   selected: number;
   result: MenuResult = null;
   input: InputUserIdWindow | null = null;
-  // Exit Game's Yes/No (cursor 0 Yes, 1 No).
-  exitConfirm: { cursor: number } | null = null;
+  // Exit Game's question and Yes/No lists (cursor 0 Yes, 1 No). Both are
+  // created open, so each runs its own opening animation and wipe.
+  exitConfirm: ExitConfirm | null = null;
   readonly anim = new WindowAnim(false, false);
   readonly text: MenuText;
   se: (id: number) => void = () => {};
@@ -379,6 +415,10 @@ export class LoginMenu {
 
   tick(): void {
     this.anim.tick(1);
+    if (this.exitConfirm) {
+      this.exitConfirm.question.tick(1);
+      this.exitConfirm.list.tick(1);
+    }
     if (!this.input) return;
     this.input.tick();
     // State 4: the Input UserID result.
@@ -393,6 +433,9 @@ export class LoginMenu {
     if (this.input) return this.input.key(k);
     const x = this.exitConfirm;
     if (x) {
+      // ASSUMED: the Yes/No list takes keys once it is open, as the Login
+      // list does here.
+      if (x.list.animating) return;
       if (k === 'up' || k === 'down') {
         x.cursor ^= 1;
         this.se(SE_CURSOR);
@@ -425,7 +468,12 @@ export class LoginMenu {
       if (v === 0) this.result = 'start';
       else if (v === 1) {
         this.se(SE_OK);
-        this.exitConfirm = { cursor: 1 };
+        const question = new WindowAnim(false, false);
+        const list = new WindowAnim(false, false);
+        question.se = list.se = this.se;
+        question.open(1);
+        list.open(1);
+        this.exitConfirm = { cursor: 1, question, list };
       } else if (v === 2) this.result = 'patch';
       else if (v === 3) {
         this.se(SE_OK);
@@ -440,6 +488,13 @@ export class LoginMenu {
 export interface TitleHost {
   se(id: number): void;
   // After the fade-out: Start Game / Patch Download, or Exit Game.
+  // In the exe both Start Game and Patch Download go on through table
+  // 0x009d04c8 (indexed by the menu child's +0x20, entries 1..3) to
+  // SaveAndSetMainMenuType_00824860, i.e. the patch_status scene. The
+  // browser has no patch server:
+  // Start Game logs in at once and Patch Download returns to the title, and
+  // the login runs under the "Connecting.." object (ASSUMED: the
+  // patch_status scene's own screens are not traced).
   start(creds: Credentials): void;
   patch(creds: Credentials): void;
   exit(): void;
@@ -450,6 +505,11 @@ export class TitleFlow {
   state: 0 | 2 | 3 = 0;
   enabled = false; // the menu child's flag 4 cleared
   counter = 0; // menu child +0x38
+  // The scene's idle counter (+0x34, limit +0x38 = 1200, or 800 when
+  // CreateItemObject_006dc358 != 0) is not modelled: update_main_menus
+  // (0x006f8434) clears it on any key and runs the fade-out only while it is
+  // below the limit, and nothing in the title code (0x006f4000..0x006ff400)
+  // increments it, so the gate stays open (ASSUMED: nothing else does).
   press = 0; // "PRESS ENTER KEY" alpha (+0x28)
   fadeIn = new ScreenFade('in');
   fadeOut: ScreenFade | null = null;

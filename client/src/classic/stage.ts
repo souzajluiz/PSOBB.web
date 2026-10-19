@@ -8,6 +8,7 @@
 // drawRound*, which compensates for the stretch.
 
 import type { XvrTexture } from '../formats/xvm.ts';
+import { clipReveal, type WindowAnim } from './windowanim.ts';
 
 export const VW = 640;
 export const VH = 480;
@@ -259,6 +260,12 @@ export interface MenuItem {
 // FUN_0071bc28: content = window inset by 10 px, plus 6 px under the title
 // (flag 0x40 set by FUN_0073566c). The title pill sits at (x, y - 13)
 // (template 0x00974d00) with its text 4 px below the pill top, centred.
+// With `anim`, the rows are under the window's opening wipe (each row's text
+// cut at anim.reveal(x, y, content width) px, x / y its offset in the
+// content) and the title text waits for c >= 0 (classic/windowanim.ts).
+// unknown_render_text narrows the quad of the glyph that crosses the cut
+// (x_end = x + space left) without moving its UVs; here it is clipped
+// instead (ASSUMED close enough at 11 px).
 export function drawMenuWindow(
   ctx: CanvasRenderingContext2D,
   skin: WindowSkin,
@@ -266,6 +273,7 @@ export function drawMenuWindow(
   items: MenuItem[],
   selected: number,
   selectedColor = '#ffc19a',
+  anim?: WindowAnim,
 ): void {
   drawWindowFrame(ctx, skin.frame, win.x, win.y, win.w, win.h);
   const cx = win.x + 10;
@@ -274,7 +282,13 @@ export function drawMenuWindow(
   items.forEach((item, i) => {
     const top = cy + i * ITEM_STEP;
     const color = i === selected ? selectedColor : item.color ?? '#ffffff';
-    drawText(ctx, item.label, cx + cw / 2, top + 7.5, { size: WINDOW_FONT, color, align: 'center', shadow: 'rgba(0,0,0,0.85)' });
+    const draw = () => drawText(ctx, item.label, cx + cw / 2, top + 7.5, { size: WINDOW_FONT, color, align: 'center', shadow: 'rgba(0,0,0,0.85)' });
+    if (!anim) return draw();
+    ctx.font = `bold ${WINDOW_FONT}px ${FONT}`;
+    const ex = cw / 2 - ctx.measureText(item.label).width / 2;
+    ctx.save();
+    if (clipReveal(ctx, cx + ex, top, anim.reveal(ex, i * ITEM_STEP, cw), ITEM_HEIGHT)) draw();
+    ctx.restore();
   });
   if (selected >= 0 && selected < items.length) drawSelectBar(ctx, skin.bars, cx, cy + selected * ITEM_STEP, cw, ITEM_HEIGHT);
   if (win.title !== undefined) {
@@ -283,6 +297,6 @@ export function drawMenuWindow(
     const px = win.x;
     const py = win.y - 13;
     drawTitlePill(ctx, skin.frame, px, py, tw, 1);
-    drawText(ctx, win.title, px + pillWidth(tw) / 2, py + 4 + 7.5, { size: WINDOW_FONT, color: '#120400', align: 'center' });
+    if (!anim || anim.textShown) drawText(ctx, win.title, px + pillWidth(tw) / 2, py + 4 + 7.5, { size: WINDOW_FONT, color: '#120400', align: 'center' });
   }
 }

@@ -18,7 +18,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | Map viewer: n.rel (fmt2) + XJ models + XVM textures (DXT1/DXT3/565/1555) | ✅ all 175 maps parse; rendered in Chrome |
 | Character creation (E5) | ✅ live in Chrome |
 | Lobby: 3D lobby map, players, chat, running (6x42/6x3E), position sync (6x1F/6x20) | ✅ live in Chrome with a bot |
-| Original-style screens (`classic.html`): title with the original textures, matched to captures by SSIM | 🚧 title + Login menu + Input UserID from the exe (title SSIM 0.77), select character (SSIM 0.92); creation and login windows lack captures |
+| Original-style screens (`classic.html`): title with the original textures, matched to captures by SSIM | ✅ title, Login menu, Input UserID and Exit Game windows from the exe, with their open animation and text wipe (title SSIM 0.77), select character (SSIM 0.92); only captures of creation and Input UserID are missing, so those two are not measured |
 | Map collision (`c.rel`) and real lobby spawn points (`o.dat` player sets) | ✅ 175 c.rel parse; walking uses the client's collision rules |
 | Enemy/object markers from set data (`map_*e.dat` / `o.dat`) | ✅ 838 files match newserv; shown in the map viewer |
 | Character models (NJCM from `pl?nj.bml`, textures by appearance), all 12 classes | ✅ dev page `models.html` |

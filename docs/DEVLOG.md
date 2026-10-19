@@ -1,5 +1,90 @@
 # Devlog
 
+## 2026-10-19: title / login leftovers from the exe
+
+**What changed:** the last approximations of the title and Login screens are
+replaced by the exe's rules. The Exit Game question and its Yes/No list now
+have the exe's size and position, and both open with the window animation.
+The Login menu's and the Yes/No list's rows are revealed by the opening
+wipe. Window titles and the Input UserID rows appear in one go once the
+window has opened far enough.
+
+**Details (Ephinea `PsoBB.exe`):**
+- List window height (`YesNoListMenu_UpdateRenderHeight_00736390`,
+  `yes_no_list_constructor` 0x00735708): per row 6 (`0x009713e4`) + the text
+  height, then -6 (`0x009713e0`), +6 with a title, +20 (`0x009713dc`). A
+  one-line row is 14 high (`get_text_rendering_sizes_for_list_item`
+  0x0072ddf4, `0x00970ea4`). `listWindowHeight(5, true)` = 120, which is the
+  Login menu's {220, 120} from `g_MainMenuListItemProperties` (0x00974e10,
+  `MenuListItem_InitializeProperties_00712c14`). The size is no longer
+  "measured".
+- Exit Game (`main_menu_exit_game_sub_list`,
+  `ChatShortcutMenuWindow_CreateSubMenuWithYesNo_0073cfec`):
+  - "Really OK?" is an untitled one-row list at (400, 350), 150 × 34;
+  - the Yes/No list is 104 wide (`0x00971468`) and 54 high, at
+    `YesNoListMenu_GetRenderPosition_0073cf10`: the question's right edge
+    - 111 (`0x00971d44`) and its bottom edge - 10 (`0x00971d40`), so
+    (439, 374);
+  - render order 0.5 for the question and 0.45 for the list;
+  - psobb-client-source `src/FUN_0073d178.c` (the JP twin of
+    `ListWindowObject_IsItemSelectable_0073d114`) confirms that the Yes/No
+    list is the pair's +0x24.
+- Text wipe:
+  - list rows are `AutoClass2` texts drawn by `render_chat_bubbles_and_more`
+    (0x0072d9b4, vtable 0x00b40448). Each row is cut at
+    `(c - (x / W + y / 21) * 7.5) * 17` px (`0x00970eb0..b8`). x is the
+    centred offset (`unknown_set_list_window_size` 0x00736458:
+    w * 0.5 - 10 - text width * 0.5), y is row * 20, and W is the window
+    width - 20 (`UiTextGeometryUpdate_0071b900` +0x18). `drawMenuWindow`
+    takes the window's `WindowAnim` for this. Row 4 of the Login menu starts
+    about 14 frames after row 0;
+  - title pill texts (`unknown_tekker_result_text`) and the info-counter rows
+    of Input UserID (`RenderInfoCounterEntity_0072e930`, vtable 0x00b404f0)
+    have no wipe. They are drawn whole once c >= 0, 4 frames after opening at
+    window speed 1 (`WindowAnim.textShown`). So Input UserID does not wipe.
+- Start Game / Patch Download: both go through table `0x009d04c8` to
+  `SaveAndSetMainMenuType_00824860` (the patch_status scene).
+- The idle counter (+0x34) is only cleared by the title code (no increment
+  in 0x006f4000..0x006ff400), so its gate in `update_main_menus` stays open.
+
+**ASSUMED:**
+- the lower render order (0.45) draws in front, so the Yes/No list is drawn
+  over the question;
+- the Yes/No list ignores keys while it opens, like the Login list here;
+- Input UserID's title follows the list title rule (its setter
+  `ChatShortcutMenuYesNoWindow_SetTitle_00738364` is not traced);
+- the exe narrows the quad of the glyph that crosses the cut, without moving
+  its UVs; here that glyph is clipped;
+- nothing outside the title code increments the idle counter;
+- the login runs under the "Connecting.." object (the patch_status scene's
+  own screens are not traced). The password is kept for the page only,
+  and Patch Download returns to the title (no patch server). These are
+  browser choices;
+- a text editor keeps cancel to itself (the IME panel takes the keys).
+
+**SSIM** (`tools/compare.sh` against `client/public/ref`; renders with
+`classicCapture` at 2880×1800 from headless Chrome through DevTools):
+
+| Screen | URL | SSIM | PSNR |
+| --- | --- | --- | --- |
+| Title + Login menu | `?screen=menu&t=30` | 0.766 | 21.0 |
+| Title, cursor state of the capture | same, cursor forced to Start Game | 0.771 | 21.3 |
+| Login menu region (412×250 at 514,538) | same | 0.739 | 18.7 |
+| Logo region (1440×480 at 0,114) | `?screen=menu&t=30` | 0.719 | 20.3 |
+| Select character | `?screen=select` | 0.915 | 25.8 |
+
+The whole-frame SSIM is unchanged, because the windows are fully open at the
+measured frame. The menu region is 0.739 (0.745 in the previous entry) and
+the PSNR is higher. Both come from the capture path: `classicCapture`
+renders the stage alone, without the page around it. No capture of character
+creation or Input UserID exists, so those two screens are still not measured.
+
+**Checks:** `tests/titlescreen.test.ts` (66 checks; new: the list height
+rule against 0x00974e10, the question and Yes/No rects, both windows'
+SE 0x572, no Yes/No keys while it opens, `textShown` from frame 4, rows cut
+by the wipe and the row lag); `tests/windowanim.test.ts`;
+`tests/mobilecontrols.test.ts`; client `tsc --noEmit`.
+
 ## 2026-10-19: De Rol Le review fixes
 
 **What changed:** the review of the De Rol Le fight and its Chrome run found
