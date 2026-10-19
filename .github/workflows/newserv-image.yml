@@ -28,10 +28,12 @@ jobs:
       # resource_dasm starved it and the runner was lost, so: 2 jobs, plus swap.
       - name: Add swap
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # The runner already uses /swapfile; add a bigger one on /mnt.
+          df -h /mnt | tail -1
+          sudo fallocate -l 10G /mnt/extra.swap
+          sudo chmod 600 /mnt/extra.swap
+          sudo mkswap /mnt/extra.swap
+          sudo swapon /mnt/extra.swap
           free -h
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
