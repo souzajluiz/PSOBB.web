@@ -19,9 +19,16 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    segments as their own hit targets, the shell debris and the particles).
    Next Vol Opt's phases (core in its monitor, prison bars, form 2 / form 7
    hazards, minions), then the Dragon and Sinow Beat, then Dark Falz.
-3. Classic game list menu (lobby counter's game list: entries, status text,
-   background, cursor) and the quest loading screen (states, grey line
-   primitives, transition to the game).
+3. Classic game list and quest loading screen are done (2026-10-19; the
+   "GameList" / "QuestLoading" names in the dump are mostly wrong, see the
+   DEVLOG): the lobby counter's Join a PARTY list, the password prompt and the
+   party creation window (`classic/gamelist.ts`), the Connecting.. status
+   table (`classic/connectstatus.ts`) and the quest loading screen's bars,
+   lines and progress bar (`classic/questloading.ts`). Still open: the quest
+   screen's particle wipes and middle particle, the lobby / floor loading
+   screens (`current_loading_screen_type`), the field scene the classic client
+   needs to actually play a game it joined, and the counter's ship / block
+   change and team menus. No captures exist for any of it.
 4. The rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /

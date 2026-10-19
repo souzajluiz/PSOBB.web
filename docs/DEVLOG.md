@@ -1,5 +1,89 @@
 # Devlog
 
+## 2026-10-19: classic party game list, party creation and quest loading screen
+
+**What changed:** ROADMAP next-up item 3, with a correction of its premise.
+
+**The "GameList" and "QuestLoading" names are not what they say.** Looking
+the 28 GameList and 7 QuestLoading psobb-client-source files up against the
+Ephinea dump (by callees, strings and constants) shows that most of those
+names are community guesses:
+
+- `GameListMenuObject` (0x00407bf0; JP `FUN_004080c1` / `0040816f` / `00408152`
+  / `00408135` / `00408118` / `004080fb` / `004080de` / `004081ff`, the
+  `RenderStatusText` cases 0, 4..10, 0xc) is the title's "Connecting.."
+  object that `classic/connecting.ts` already draws. Its status text is the
+  unitxt group 0x36 table (Xbox Live errors) at (23, 331), its state machine
+  is 0->1->2 (0x96 frames)->3 (confirm / cancel per sub state)->4, and its
+  dark panel (`GameListMenuDrawPanel`, (0, 28) 640x84 and (0, 310) 640x136,
+  0x8f000000) is never switched on by anything. Now in
+  `classic/connectstatus.ts` (pure, tested) and `connecting.ts` uses its
+  position and wait.
+- `GameListMenuGetState` (`FUN_00409c78`) returns one global,
+  `SetGameListMenuEntryText` (`FUN_004153a0`) clears 0x100 bytes and copies
+  0x7f characters, `ResetGameListMenuEntryFields` (`FUN_00414b60`) zeroes four
+  dwords, `TerminateGameListMenuAll` (`FUN_00405760`) is a call thunk,
+  `ProcessGameListMenuUpdate` (`FUN_004149fc`) stores 1.0 / 8.0 / 1.5. None of
+  them draws or filters a game list; `CloseGameListMenu` is the generic list
+  window close.
+- `QuestLoadingScreen` `FUN_0040c1c8` / `FUN_0040c864` are the render gates
+  (nothing before the second call), `FUN_0040c884` the dispatch of the grey
+  line primitives; `FUN_0040e148` / `0040e15c` / `0040e210` / `0040e248` /
+  `004107c4` / `00410910` / `00410d68` / `00410894` are unrelated thunks.
+
+**The real game list** is the lobby menu state machine of
+`g_CurrentLobbyMenuId` (0x00797xxx..0x007a0xxx). Reproduced in
+`classic/gamelist.ts` (the file header has every address) and hooked to the
+lobby counter (`classic/counter.ts`, `classic/lobby.ts`):
+
+- Organize PARTY > Join a PARTY: the 08 request, the "Information Counter"
+  list window (18, 53) 605x184, up to 0x40 rows of icon (0x18 when the game
+  has a password) / name / episode / mode / difficulty (not for Challenge) /
+  "n/max" at the exe's columns (+18, +228, +336, +432, +558), grey rows for
+  games the character cannot join, Tab for the 09 / 11 game info (window
+  (18, 265)), Enter to join (10) or the password prompt (entry 0xd7, 16
+  characters), Backspace closing every menu (`close_lobby_menus`).
+- Organize PARTY > Create a PARTY: the EPISODE 1 / 2 / 4 menu (entry 0xc8, the
+  info text follows the cursor), then the five-row window ([11:0x60..0x64]:
+  Party Name, Password, Play Mode (Normal / Challenge / Battle / One Person),
+  Difficulty (Normal..Ultimate, greyed in Challenge), Registration (greyed
+  until a name is typed, the cursor goes to it)), sending C1 with
+  difficulty 0 for Challenge, battle = mode 2, challenge = mode 1, solo = mode
+  3. Cancel in the counter menus now closes all of them (the exe does).
+- The exe has no filter (and no sort) on this list; none was added. Entries
+  flagged "cannot join" are only greyed and the server answers the join.
+- The classic client has no field scene yet, so a game it enters (checked live
+  with two clients, `tests/gamelist.live.ts`) is left at once and the lobby is
+  shown again.
+
+**Quest loading screen:** `update_loading_screen_widget` (0x00417ccc) builds
+one of four screens by `current_loading_screen_type` (lobby burst, quest,
+floor prev / next). `classic/questloading.ts` draws the quest one: the 120
+scan-line triangles (0xff001a36), the 64 px letterbox, the two 0x77000000
+panels, the corner brackets and the letterbox lines with their diagonal jogs
+(0xff777777), and the QuestLoadingBar from `UpdateQuestLoadingBar`
+(0x007836d2): bar (473, 440) 142x8 with its pulsing colours, the m"ss.t
+estimate (nine samples, three-interval mean, 300 frame minimum, re-estimate
+every 0x4c frames) and the percentage. `?screen=questloading` shows it with a
+simulated download. Not drawn: the particle wipes and the middle particle.
+
+**ASSUMED** (in neither repository): the "Information Counter" title is the
+exe's untranslated string; the list windows have no open animation here (the
+counter's have none); a list with no rows ignores Enter; the password editor
+is not masked; the info window of a game is 342 wide; the percent format
+"%3d%" is drawn as "%3d"; the quest screen's black clear and particles; the
+widescreen centring (`extra / 2`, like the counter's menus).
+
+**Validation:** `tests/gamelist.test.ts` (122 checks: rows, list cursor and
+scrolling, the creation window, password prompt, menu flow with a mock host,
+the counter's episode menu, the status text table and state machine, the quest
+loading geometry and estimator), `tests/gamelist.live.ts` (newserv: create with
+a password, 08 list, 09 info, refused wrong password, joined with the right
+one, both back in a lobby), `tsc --noEmit`, and the titlescreen, windowanim,
+mobilecontrols, minimap, fieldhud, options, shop, tekker, questboard,
+questflow, party and level tests. No capture of the game list or the quest
+loading screen exists, so there is no SSIM; not driven in Chrome.
+
 ## 2026-10-19: client data from a Google Drive link (PSOBB_DATA_URL)
 
 **What changed:** the container can fetch the PSOBB `data/` folder itself.

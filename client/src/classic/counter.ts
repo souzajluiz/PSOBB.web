@@ -19,14 +19,23 @@
 //       Team -> "Create Team" (0x57), "Ranking" (0x58), "Master Menu" (0x5b),
 //         "Leave Team" (0x5c) (FUN_0079a288);
 //       Organize PARTY -> "Join a PARTY" (0x3b), "Create a PARTY" (0x3c)
-//         (ShowJoinOrCreatePartyMenu, assumed for this entry).
+//         (ShowJoinOrCreatePartyMenu_0079b698 region, handle_counter_menu
+//         _selection value 0); "Create a PARTY" opens "EPISODE 1" (0x47),
+//         "EPISODE 2" (0x48) and, with Episode 4, "EPISODE 4" (0x49) at
+//         entry 0xc8 = (96, 333) (ShowEpisodeDifficultySelect), the info
+//         window following the cursor with 0x11 / 0x12 / 0x13.
+//   - Cancel in any of these menus closes all of them (close_lobby_menus:
+//     handle_counter_menu_selection, HandleLobbyEpisodeSubMenuInput_0079b264
+//     and HandleGameListMenuSelection_0079a644 all do that on bit 4).
+//   - The leaves then belong to classic/gamelist.ts (the party game list and
+//     the party creation window).
 //   - size (FUN_0073608c): width = widest text + 20 (0x0097141c), height =
 //     items * (14 + 6) - 6 + 20 (0x00971424, 0x00971420); items centred
 //     (FUN_00736458: x = -0.5 * text width + width * 0.5 - 10).
 // Widescreen: psobb.io centres these menus like the title's Login menu
 // (measured on capture e01: "Transport" at x 68 + 64 on a 768-wide screen).
-// The leaf actions (ship/block change, party and team commands) are not
-// implemented: they close the menus.
+// The ship/block change and the team commands are not implemented: they
+// close the menus.
 
 import { se, SE } from '../audio/se.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -38,7 +47,18 @@ interface CounterMenu {
   y: number;
   items: string[];
   next?: Array<CounterMenu | null>;
+  // Info window text per cursor row (the episode menu), shown while this menu
+  // is the top one.
+  info?: string[];
+  // Names the menu in onChoose.
+  id?: CounterMenuId;
 }
+
+export type CounterMenuId = 'root' | 'party' | 'transport' | 'team' | 'episode';
+
+// A leaf chosen: the menu and the row (party 0 = Join, party/episode 0..2 =
+// the episode: 1, 2 or 3 for Episode 4).
+export type CounterChoice = (menu: CounterMenuId, index: number) => void;
 
 export interface CounterText {
   info: string; // 0x0F/3
@@ -46,6 +66,8 @@ export interface CounterText {
   transport: string[]; // 0x0F/0x40, 0x41
   team: string[]; // 0x0F/0x57, 0x58, 0x5b, 0x5c
   party: string[]; // 0x0F/0x3b, 0x3c
+  episodes?: string[]; // 0x0F/0x47, 0x48, (0x49 with Episode 4)
+  episodeInfo?: string[]; // 0x0F/0x11, 0x12, (0x13)
 }
 
 export class InfoCounter {
@@ -54,12 +76,28 @@ export class InfoCounter {
   private info: InfoWindow;
   private infoText: string;
   private root: CounterMenu;
+  // Called when a leaf is chosen, before the menus close.
+  onChoose: CounterChoice = () => {};
 
   constructor(text: CounterText) {
     this.infoText = text.info;
     this.info = this.newInfo();
-    const sub = (items: string[]): CounterMenu => ({ x: 82, y: 292, items });
-    this.root = { x: 68, y: 251, items: text.first, next: [sub(text.party), sub(text.transport), sub(text.team)] };
+    const sub = (id: CounterMenuId, items: string[], next?: Array<CounterMenu | null>): CounterMenu => ({ x: 82, y: 292, items, id, next });
+    const episode: CounterMenu | null = text.episodes
+      ? { x: 96, y: 333, items: text.episodes, info: text.episodeInfo, id: 'episode' } // entry 0xc8
+      : null;
+    this.root = {
+      x: 68,
+      y: 251,
+      items: text.first,
+      id: 'root',
+      next: [sub('party', text.party, [null, episode]), sub('transport', text.transport), sub('team', text.team)],
+    };
+  }
+
+  close(): void {
+    this.open = false;
+    this.stack = [];
   }
 
   begin(): void {
@@ -76,6 +114,12 @@ export class InfoCounter {
     return w;
   }
 
+  // The episode menu retypes the info window with the cursor row.
+  private showInfo(level: { menu: CounterMenu; cursor: number }): void {
+    const text = level.menu.info?.[level.cursor];
+    if (text !== undefined) this.info.set(text);
+  }
+
   tick(): void {
     if (!this.open) return;
     this.info.tick();
@@ -89,16 +133,23 @@ export class InfoCounter {
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       top.cursor = (top.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
       se(SE.cursor);
+      this.showInfo(top);
     } else if (e.key === 'Enter') {
       se(SE.ok);
       const next = top.menu.next?.[top.cursor];
-      if (next) this.stack.push({ menu: next, cursor: 0, collapse: 0 });
-      else this.open = false;
+      if (next) {
+        const level = { menu: next, cursor: 0, collapse: 0 };
+        this.stack.push(level);
+        this.showInfo(level);
+      } else {
+        const id = top.menu.id;
+        this.close();
+        if (id) this.onChoose(id, top.cursor);
+      }
     } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      // close_lobby_menus: every counter menu goes at once.
       se(SE.cancel);
-      this.stack.pop();
-      if (this.stack.length) this.stack[this.stack.length - 1].collapse = 0;
-      else this.open = false;
+      this.close();
     }
   }
 
