@@ -783,7 +783,10 @@ export type DrlEvent =
   // The leader set a state: 6x13 (or 6x14 with the target for 0x14, 0x15,
   // 0x19 and 0x1b), start_drl_rock_cycle 0x0042ac2c.
   | { kind: 'state'; state: number; cursor: number; target: number | null; withTarget: boolean }
-  | { kind: 'se'; id: number }
+  // sustain: PlayDirectionalSFX_00814630 with the body as owner, called
+  // every frame; PlaySFX_008292dc only refreshes a voice of the same id and
+  // owner that is still playing (keep-alive 5) instead of starting another.
+  | { kind: 'se'; id: number; sustain?: boolean }
   | { kind: 'shellBroken' }
   | { kind: 'bgm'; name: string } // 0x1f at frame 27: deldeath.adx (0x008fd420)
   | { kind: 'killed'; x: number; y: number; z: number } // 0x1f phase 5
@@ -810,6 +813,9 @@ export interface DeRolLeOptions {
 // MovementData fallbacks (ASSUMED: the BattleParamEntry rows are on the
 // server side of the data; these only keep the fight running without them).
 const FALLBACK = { beam: 100, rock: 60, sting: 80, spread: 60, chance: 0.15 } as const;
+// ASSUMED: how long a follower waits for the leader's 6x13 / 6x14 before it
+// takes the step itself (10 seconds).
+export const DRL_FOLLOWER_WAIT = 300;
 
 // Corner move modes (Player__UpdateMovement 0x0042b94c and its helpers
 // 0x0043483c / 0x004349b4 / 0x00434934 / 0x004348b4): sx / sz scale the eased
@@ -859,6 +865,7 @@ export class DeRolLeAi extends BrainBase {
   private opts: DeRolLeOptions;
   private ultimate: boolean;
   // Working registers of the states (named after the exe's offsets).
+  private stall = 0; // follower ticks spent waiting for the leader
   private sub = 0; // +0x6e8
   private s2 = 0; // +0x6ec
   private s3 = 0; // +0x6f0
@@ -983,9 +990,12 @@ export class DeRolLeAi extends BrainBase {
     this.sid = next;
     this.state = DRL_NAMES[next] ?? `state ${next}`;
     this.resetRegs();
+    this.stall = 0;
     this.enter(next);
+    // Phase 6 picks a target; a state from the leader's 6x14 brings its own
+    // (applyRemote passes no targets).
     if (next === DRL_STATE.wall0 || next === DRL_STATE.wall2 || next === DRL_STATE.ringStings || next === DRL_STATE.beam) {
-      if (send) this.pickTarget(targets);
+      if (targets.length) this.pickTarget(targets);
     }
     if (send) {
       const withTarget = next === DRL_STATE.ringStings || next === DRL_STATE.wall0 || next === DRL_STATE.wall2 || next === DRL_STATE.beam;
@@ -1339,25 +1349,48 @@ export class DeRolLeAi extends BrainBase {
   }
 
   // DerolleSelectNextAttackState_00433318 when the body pool is gone.
-  private dieNow(targets: readonly AiTarget[]): void {
+  private dieNow(targets: readonly AiTarget[], send: boolean): void {
     const s = this.sid;
     if (s === DRL_STATE.death || s === DRL_STATE.remove) return;
-    if (s === DRL_STATE.wall0 || s === DRL_STATE.wall2) return this.advance(targets);
+    if (s === DRL_STATE.wall0 || s === DRL_STATE.wall2) return this.advance(targets, send);
     if (s === DRL_STATE.sinkDeath) return;
-    this.setState(s === DRL_STATE.sink0 || s === DRL_STATE.sink2 ? DRL_STATE.death : DRL_STATE.sinkDeath, true, targets);
+    this.setState(s === DRL_STATE.sink0 || s === DRL_STATE.sink2 ? DRL_STATE.death : DRL_STATE.sinkDeath, send, targets);
   }
 
-  private advance(targets: readonly AiTarget[]): void {
+  private advance(targets: readonly AiTarget[], send: boolean): void {
     if (this.sid === DRL_STATE.death) {
-      this.setState(DRL_STATE.remove, true, targets);
+      this.setState(DRL_STATE.remove, send, targets);
       return;
     }
     const n = drlNextState(this.cursor, this.ultimate, this.lane, () => this.rng() * 2 - 1);
     this.cursor = n.cursor;
-    this.setState(n.state, true, targets);
+    this.setState(n.state, send, targets);
+  }
+
+  // UpdateDerolle's leader branch: the death check (DerolleIsActionReady)
+  // or phase 9, then phase 8 (0x1e: sunk below -200 -> 0x1f).
+  private leaderStep(targets: readonly AiTarget[], send: boolean): void {
+    if (this.bodyHp < 1 && (this.flags & 4) === 0) this.dieNow(targets, send);
+    else if (this.done()) this.advance(targets, send);
+    if (this.sid === DRL_STATE.sinkDeath && this.h < -200) this.setState(DRL_STATE.death, send, targets);
+  }
+
+  // Whether the leader would change the state this tick.
+  private due(): boolean {
+    if (this.bodyHp < 1 && (this.flags & 4) === 0 && this.sid < DRL_STATE.sinkDeath) return true;
+    if (this.sid === DRL_STATE.sinkDeath) return this.h < -200;
+    return this.done();
   }
 
   // --- HP (ProcessPlayerHealing_00433edc) ---------------------------------------
+  //
+  // The handler is vtable +0x100 (vtable 0x00af4440). UpdateDerolle calls it on
+  // every client, leader or not, whenever vtable +0x88 (0x00777ba4: the hit
+  // flag 0x200 of +0x30) is set. That flag and the HP come either from a local
+  // hit or from another client's 6x0A (action_hit_enemy 0x007877e8 ->
+  // restore_enemy_status: hp = max - damage_taken). The entity's HP is refilled
+  // to max after each hit, so every 6x0A carries one hit's damage, and every
+  // client feeds the same pools.
 
   // A hit on the body: the shell pool first; when it goes below 0 the shell
   // breaks (TriggerPlayerHealEffect_00433fe4: flags | 0x88, SE 0x32d); then
@@ -1368,6 +1401,8 @@ export class DeRolLeAi extends BrainBase {
     if (!this.shellBroken) {
       this.shellHp -= d;
       if (this.shellHp < 0) {
+        // The rest of the breaking hit is lost: the handler's shell branch
+        // never touches +0x6b4 (0x00433edc).
         this.shellHp = 0;
         this.flags |= 0x88;
         this.emit({ kind: 'shellBroken' });
@@ -1384,11 +1419,16 @@ export class DeRolLeAi extends BrainBase {
 
   tick(targets: readonly AiTarget[]): AiFrame {
     const out = this.frame0();
-    if (this.opts.leader() && this.sid !== DRL_STATE.remove) {
-      if (this.bodyHp < 1 && (this.flags & 4) === 0) this.dieNow(targets);
-      else if (this.done()) this.advance(targets);
-      // Phase 8 of 0x1e: once sunk below -200 the leader moves on to 0x1f.
-      if (this.sid === DRL_STATE.sinkDeath && this.h < -200) this.setState(DRL_STATE.death, true, targets);
+    if (this.sid !== DRL_STATE.remove) {
+      if (this.opts.leader()) this.leaderStep(targets, true);
+      else if (this.due() && ++this.stall >= DRL_FOLLOWER_WAIT) {
+        // ASSUMED: the exe has no resync for a follower (its UpdateDerolle
+        // runs phase 0 only and waits for 6x13 / 6x14). So that a lost packet
+        // or a late join cannot leave the body stuck (or never removed after
+        // its death), a follower that has waited this long takes the
+        // leader's step itself, without sending.
+        this.leaderStep(targets, false);
+      }
     }
     this.phase0(targets);
     this.tickChildren(targets);
@@ -1678,7 +1718,7 @@ export class DeRolLeAi extends BrainBase {
         return;
       case 2: {
         this.z += 6;
-        this.emit({ kind: 'se', id: 0x329 });
+        this.emit({ kind: 'se', id: 0x329, sustain: true });
         const chance = mv ? mv.fparam5 : FALLBACK.chance;
         const spread = mv ? mv.fparam4 : FALLBACK.spread;
         if (this.rng() <= chance) {
@@ -1984,6 +2024,12 @@ export class DeRolLeAi extends BrainBase {
     }
   }
 
+  // The children are objects under the body's +0x3e0 tree, updated by
+  // recursive_game_object_2nd_method_caller in UpdateDerolle every frame the
+  // game is not paused, whatever the body's state: nothing gates them during
+  // 0x1e / 0x1f (a sting already out can still blow up). 0x1f's phase 4
+  // resets the tentacles (+0x628[i]); 0x20 deletes the body with its tree
+  // (the owner drops the shots still flying then).
   private tickChildren(targets: readonly AiTarget[]): void {
     for (const em of this.emitters) this.pendingShots.push(...em.tick());
     this.emitters = this.emitters.filter((e) => !e.done);
