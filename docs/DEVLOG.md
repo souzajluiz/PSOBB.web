@@ -23,6 +23,55 @@ all for local checks.
 `/classic` and `/classic.html` answer 200 with the classic page, its assets
 load, and `/index.html`, `/models.html` and unknown `.html` answer 404. Headless
 Chrome on `/` shows the title screen.
+## 2026-10-19: Touch feel: analog walk / run, second-finger camera, haptics
+
+**What changed (issue #5):** three browser conveniences for the touch pad.
+None of them is PsoBB.exe behaviour on keyboard / mouse; the walk / run rule
+is the exe's own gamepad code.
+
+1. **Analog walk / run** (`input/analog.ts`, `render/lobbyview.ts`). While the
+   stick is held the player view reads its axes instead of W / A / S / D (the
+   keys are still sent, for menus). Direction is analog. Walk / run follows
+   the exe's pad code: `unknown_handle_shared_inputs` (after
+   `QuestItemSpawnHandler_007beca0`) zeroes an axis with -31 < v <= 31
+   (`0x0097e628` / `0x0097e624`) and sets movement_input_amount =
+   min(1, hypot / 128) (`0x0097e61c`, `0x0097e618`). Standing
+   (`0x0069b728`) starts walking at 0.1 (`g_MovementInputThreshold`,
+   `0x0093da84`). Walking (`0x0069bbd0`) counts frames above 0.75
+   (`0x0093da70`) and runs once the count reaches 6 (`0x0093da74`). Running
+   (`0x006a1584`) clears the count and walks again under 0.75. Walking sends
+   6x40 (`sendWalk` moved from `Game` up to `Lobby`), running 6x42.
+   ASSUMED: the stick's rim is a deflection of 128, the count is cleared on
+   stopping, and the walk speed is the run speed / 1.5 (the run motion's
+   frame step factor). The keyboard path is unchanged (it still runs at once).
+2. **Second-finger camera drag** (`ui/webcontrols.ts`). While the stick is
+   held, another touch on the canvas outside the pad's controls turns the
+   camera as it drags sideways: a full canvas width is half a turn (ASSUMED,
+   by feel). The exe has no key that turns the camera (the Camera key only
+   resets it behind the player), so the drag adds to `PlayerCamera.angle`
+   directly. The chase rules of `render/playercamera.ts` are unchanged.
+   Pushing the stick forward moves along the camera's forward, so the chase
+   goal is the dragged angle and nothing pulls it back.
+3. **Haptics** (`input/haptics.ts`). `navigator.vibrate` pulses for a pad key
+   press, a hit the player lands (`applyEnemyHit`), damage taken (longer,
+   `PlayerDamage`'s sendHit event) and a level up (a pattern,
+   `displayLevelUp`). These are one-line hooks in `render/combat.ts`. A
+   weaker pulse does not cut a stronger one still running. With no vibrate
+   (iOS Safari) every call is a no-op and the VIB button is not shown.
+   The setting is `localStorage` `psobb.haptics` (in try/catch); `?haptics=0/1`
+   overrides it for one page load.
+
+**Tests:** `tests/mobilecontrols.test.ts` checks the dead zone, the amount,
+walk vs run and the 6-frame ramp, the drag turn's sign and accumulation, the
+dragged angle against `PlayerCamera` standing and running, haptics as a
+no-op without vibrate, the toggle and its storage, `?haptics=`, and throwing
+storage.
+
+**Check in Chrome:** open the client with `?touch=1` and device emulation
+(touch) on. Push the stick a little to walk and to the rim to run (the run
+starts after 0.2 s). Hold the stick and drag a second touch on the view to
+turn the camera. Desktop Chrome has `navigator.vibrate` (the VIB button
+shows) but no motor, so check the pulses on an Android phone.
 
 ## 2026-10-19: De Rol Le review fixes
 

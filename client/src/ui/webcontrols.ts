@@ -8,6 +8,12 @@
 // The pad's controls are placed around the game's own HUD (input/padlayout.ts):
 // the action palette's slot icons are its attack buttons.
 //
+// Touch extras (input/analog.ts, input/haptics.ts): while the stick is held
+// its analog axes drive the player view (walk / run by deflection, as the
+// exe's pad code does) and a second finger dragging on the canvas turns the
+// camera; key presses on the pad, hits, damage and level ups vibrate where the
+// browser can (Android), with a VIB toggle on the top strip.
+//
 // Shortcuts (window capture phase, so the game never sees them):
 //   Alt+Enter  fullscreen (F1..F12 are game keys, F11 is the browser's)
 //   Alt+M      mute (a bare M would be typed into the canvas text inputs:
@@ -15,6 +21,8 @@
 
 import { isMuted, onMuteChange, toggleMuted } from '../audio/mute.ts';
 import { KEYS } from '../input/keyconfig.ts';
+import { addCameraTurn, dragTurn, setTouchStick, stickAxes } from '../input/analog.ts';
+import { canVibrate, haptic, hapticsEnabled, onHapticsChange, toggleHaptics } from '../input/haptics.ts';
 import {
   clampStick,
   DOM_KEYS,
@@ -285,6 +293,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     const s = stick;
     setStickKeys(new Set());
     stick = { kind: 'idle' };
+    setTouchStick(null);
+    endCameraDrag();
     placeStick(null, null);
     moveKnob(0, 0);
     if (e && e.type === 'pointerup' && isTap(performance.now() - s.startTime, s.maxMove, 0)) passTap(e.clientX, e.clientY);
@@ -293,6 +303,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     if (stick.kind === 'held') return;
     capture(zone, e.pointerId);
     stick = { kind: 'held', pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, startX: e.clientX, startY: e.clientY, startTime: performance.now(), maxMove: 0, keys: new Set() };
+    setTouchStick({ lr: 0, fb: 0 });
     placeStick(e.clientX, e.clientY);
     moveKnob(0, 0);
   });
@@ -303,11 +314,58 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     stick = { ...stick, maxMove: Math.max(stick.maxMove, Math.hypot(e.clientX - stick.startX, e.clientY - stick.startY)) };
     moveKnob(dx, dy);
     setStickKeys(stickKeys({ dx, dy, radius }));
+    setTouchStick(stickAxes(dx, dy, radius));
   });
   for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
     zone.addEventListener(type, (e) => {
       if (stick.kind === 'held' && e.pointerId === stick.pointerId) endStick(e);
     });
+  }
+
+  // Second finger: while the stick is held, a touch anywhere on the canvas
+  // outside the pad's controls turns the camera as it drags sideways. The
+  // canvas never sees that touch (window capture phase).
+  let camDrag: { pointerId: number; x: number } | null = null;
+  function endCameraDrag(): void {
+    camDrag = null;
+  }
+  const onCanvas = (e: PointerEvent): boolean => {
+    const t = e.target;
+    if (t instanceof Node && overlay.contains(t) && t !== overlay) return false;
+    const r = keyTarget.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom;
+  };
+  listen(
+    'pointerdown',
+    (e) => {
+      if (pad.hidden || stick.kind !== 'held' || camDrag || e.pointerType !== 'touch' || e.pointerId === stick.pointerId || !onCanvas(e)) return;
+      camDrag = { pointerId: e.pointerId, x: e.clientX };
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    },
+    true,
+  );
+  listen(
+    'pointermove',
+    (e) => {
+      if (!camDrag || e.pointerId !== camDrag.pointerId) return;
+      addCameraTurn(dragTurn(e.clientX - camDrag.x, keyTarget.clientWidth));
+      camDrag.x = e.clientX;
+      e.stopImmediatePropagation();
+    },
+    true,
+  );
+  for (const type of ['pointerup', 'pointercancel'] as const) {
+    listen(
+      type,
+      (e) => {
+        if (!camDrag || e.pointerId !== camDrag.pointerId) return;
+        endCameraDrag();
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      },
+      true,
+    );
   }
 
   // A tap on the stick zone reaches the canvas below as a click (the classic
@@ -341,6 +399,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       pointer = e.pointerId;
       capture(b, e.pointerId);
       b.classList.add('is-down');
+      haptic('tap');
       feed.down(key);
       if (REPEATING_KEYS.has(key)) {
         const start = performance.now();
@@ -446,6 +505,24 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       openProxy();
     }
   });
+
+  // Vibration on / off (only where the browser can vibrate).
+  if (canVibrate()) {
+    const vib = button('wc-key wc-small', 'VIB', 'Vibration');
+    const syncVib = (on: boolean) => {
+      vib.setAttribute('aria-pressed', String(on));
+      vib.title = on ? 'Vibration: on' : 'Vibration: off';
+      vib.setAttribute('aria-label', vib.title);
+      vib.classList.toggle('is-off', !on);
+    };
+    syncVib(hapticsEnabled());
+    cleanups.push(onHapticsChange(syncVib));
+    vib.addEventListener('click', () => {
+      if (toggleHaptics()) haptic('tap');
+      refocus();
+    });
+    row.append(vib);
+  }
 
   pad.append(zone, dpad, actions, ...paletteButtons.values());
   overlay.append(pad, strip);

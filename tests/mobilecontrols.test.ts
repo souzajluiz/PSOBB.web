@@ -1,6 +1,7 @@
 // Browser conveniences that are not in PsoBB.exe: the touch pad's stick and
-// key logic (input/virtualpad.ts), the master mute state (audio/mute.ts) and
-// the fullscreen state machine (ui/fullscreen.ts).
+// key logic (input/virtualpad.ts), its analog walk / run and second-finger
+// camera turn (input/analog.ts), vibration (input/haptics.ts), the master mute
+// state (audio/mute.ts) and the fullscreen state machine (ui/fullscreen.ts).
 // Run: node tests/mobilecontrols.test.ts
 import { KEYS } from '../client/src/input/keyconfig.ts';
 import {
@@ -20,6 +21,30 @@ import {
 } from '../client/src/input/virtualpad.ts';
 import { intersects, padLayout, type PxRect } from '../client/src/input/padlayout.ts';
 import { loadMuted, MUTE_STORAGE_KEY, parseMuted, resolveMuted, saveMuted, serializeMuted } from '../client/src/audio/mute.ts';
+import {
+  addCameraTurn,
+  AnalogGait,
+  AXIS_DEAD,
+  dragTurn,
+  RUN_FRAMES,
+  setTouchStick,
+  stickAmount,
+  stickAxes,
+  takeCameraTurn,
+  touchStick,
+} from '../client/src/input/analog.ts';
+import {
+  canVibrate,
+  haptic,
+  HAPTICS_STORAGE_KEY,
+  hapticsEnabled,
+  loadHaptics,
+  parseHaptics,
+  resolveHaptics,
+  saveHaptics,
+  setHapticsEnabled,
+} from '../client/src/input/haptics.ts';
+import { PlayerCamera } from '../client/src/render/playercamera.ts';
 import { fullscreenStep, isFullscreen, type FullscreenEvent, type FullscreenState } from '../client/src/ui/fullscreen.ts';
 
 let failures = 0;
@@ -193,6 +218,119 @@ check(resolveMuted({ stored: null, dev: true, soundParam: 'x' }) === true, 'unkn
   check(r.mode === 'native' && r.actions === 'request,fallbackOn,fallbackOff', 'late fullscreenchange after the timeout: native, fallback undone');
   r = run([toggleNative, { type: 'entered' }, { type: 'timeout' }]);
   check(r.mode === 'native', 'a stale timeout does nothing once native');
+}
+
+// --- analog stick: walk / run by deflection (the exe's pad code) ---
+{
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  const c = stickAxes(0, 0, 50);
+  check(c.lr === 0 && c.fb === 0 && stickAmount(c) === 0, 'centred stick: amount 0');
+  const dz = stickAxes(12, 0, 50); // 12/50 * 128 = 30.7 -> 31: inside -31 < v <= 31
+  check(dz.lr === 0 && stickAmount(dz) === 0, 'axis within the exe dead zone (|v| <= 31) is zeroed');
+  check(stickAxes(13, 0, 50).lr > AXIS_DEAD, 'just past the dead zone counts');
+  const full = stickAxes(0, -50, 50);
+  check(full.fb === 127 && full.lr === 0 && near(stickAmount(full), 127 / 128), 'rim up: forward axis 127, amount ~1');
+  check(stickAmount(stickAxes(300, -400, 50)) <= 1, 'amount clamped to 1.0');
+  const snap = stickAxes(10, -50, 50); // lr 26 is in the dead zone
+  check(snap.lr === 0 && snap.fb > 0, 'a small sideways lean is dropped (per-axis dead zone), as in the exe');
+  const diag = stickAxes(30, -40, 50);
+  const ang = Math.atan2(diag.lr, diag.fb);
+  check(Math.abs(ang - Math.atan2(30, 40)) < 0.02, 'direction is analog (not one of 8 sectors)');
+  check(stickAxes(10, 10, 0).lr === 0, 'zero radius: no axes');
+
+  const g = new AnalogGait();
+  check(g.step(0.05) === 'stand', 'below 0.1: stand');
+  check(g.step(0.5) === 'walk', 'half deflection: walk');
+  for (let i = 0; i < 20; i++) g.step(0.5);
+  check(g.gait === 'walk', 'half deflection never runs (0.75 threshold)');
+  const seq: string[] = [];
+  for (let i = 0; i < RUN_FRAMES; i++) seq.push(g.step(1));
+  check(seq.slice(0, RUN_FRAMES - 1).every((x) => x === 'walk') && seq[RUN_FRAMES - 1] === 'run', 'full deflection: walk, then run on the 6th frame above 0.75');
+  check(g.step(0.8) === 'run', 'stays running above 0.75');
+  check(g.step(0.6) === 'walk', 'back under 0.75: walk');
+  check(g.step(1) === 'walk', 'the run count was cleared: walk again first');
+  check(g.step(0.1) === 'stand', 'at 0.1 or less: stop');
+  const h = new AnalogGait();
+  h.step(1);
+  check(h.step(1, 3) === 'walk' && h.step(1, 3) === 'run', 'fractional / multi-frame steps count game frames (30 per second)');
+  check(h.step(stickAmount(stickAxes(5, 5, 50))) === 'stand', 'stick back in the dead zone: stand');
+  setTouchStick({ lr: 64, fb: -10 });
+  check(touchStick()?.lr === 64, 'touch stick state is shared with the view');
+  setTouchStick(null);
+  check(touchStick() === null, 'released stick: keyboard movement again');
+}
+
+// --- second-finger camera drag ---
+{
+  takeCameraTurn();
+  check(dragTurn(0, 800) === 0 && dragTurn(100, 0) === 0, 'no drag / no width: no turn');
+  check(dragTurn(800, 800) === -Math.PI, 'a full-width drag turns half a turn');
+  check(dragTurn(100, 800) < 0 && dragTurn(-100, 800) > 0, 'drag right lowers the angle (view turns right), drag left raises it');
+  addCameraTurn(dragTurn(100, 800));
+  addCameraTurn(dragTurn(60, 800));
+  addCameraTurn(Number.NaN);
+  check(Math.abs(takeCameraTurn() - dragTurn(160, 800)) < 1e-12, 'moves add up until the view takes them');
+  check(takeCameraTurn() === 0, 'taken once');
+  // The view adds the turn to PlayerCamera.angle. Standing (chase state 0)
+  // the exe camera keeps that angle; the source swings round the player.
+  const cam = new PlayerCamera();
+  const pos = { x: 0, y: 0, z: 0 };
+  cam.reset(0);
+  cam.tick(pos, 0);
+  cam.angle += dragTurn(-200, 800); // drag left
+  for (let i = 0; i < 30; i++) cam.tick(pos, 0);
+  check(Math.abs(cam.angle - (Math.PI + Math.PI / 4)) < 1e-9 || Math.abs(cam.angle - (-Math.PI + Math.PI / 4)) < 1e-9, 'standing: the dragged angle stays (no chase)');
+  const view = cam.desired(pos, 0).source;
+  check(Math.abs(Math.atan2(view.x, view.z) - Math.atan2(Math.sin(cam.angle), Math.cos(cam.angle))) < 1e-9, 'the camera source follows the dragged angle');
+  // Running straight ahead (the stick pushed forward) moves along the
+  // camera's forward, so the chase goal (heading + PI) is the dragged angle:
+  // the exe's chase does not pull it back.
+  const heading = Math.atan2(-Math.sin(cam.angle), -Math.cos(cam.angle));
+  const before = cam.angle;
+  let p = { ...pos };
+  for (let i = 0; i < 10; i++) {
+    p = { x: p.x + Math.sin(heading) * 4, y: 0, z: p.z + Math.cos(heading) * 4 };
+    cam.tick(p, heading);
+  }
+  check(Math.abs(Math.atan2(Math.sin(cam.angle - before), Math.cos(cam.angle - before))) < 1e-9, 'running forward after a drag: the chase keeps the dragged angle');
+}
+
+// --- haptics (navigator.vibrate) ---
+{
+  check(!canVibrate({}) && !canVibrate(null), 'no navigator.vibrate (iOS / desktop): cannot vibrate');
+  check(haptic('tap', {}) === false && haptic('damage', null) === false, 'no vibrate: haptic() is a silent no-op');
+  const calls: Array<number | number[]> = [];
+  const nav = { vibrate: (p: number | number[]) => (calls.push(p), true) };
+  check(canVibrate(nav), 'Android: can vibrate');
+  const map = new Map<string, string>();
+  const store = { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => void map.set(k, v) };
+  setHapticsEnabled(true, store);
+  check(hapticsEnabled() && haptic('tap', nav, 1000) && calls.length === 1, 'enabled: a tap vibrates');
+  check(haptic('damage', nav, 2000) && haptic('hit', nav, 2010) === false, 'a hit does not cut a damage pulse still running');
+  check(haptic('hit', nav, 2100), 'once it ended, hits vibrate again');
+  check(haptic('levelup', nav, 3000) && Array.isArray(calls[calls.length - 1]), 'level up: a pattern');
+  const n = calls.length;
+  setHapticsEnabled(false, store);
+  check(map.get(HAPTICS_STORAGE_KEY) === '0' && loadHaptics(store) === false, 'turning it off is stored (psobb.haptics = 0)');
+  check(haptic('damage', nav, 9000) === false && calls.length === n, 'off: nothing vibrates');
+  setHapticsEnabled(true, store);
+  check(map.get(HAPTICS_STORAGE_KEY) === '1' && loadHaptics(store) === true, 'turning it on is stored');
+  check(haptic('tap', { vibrate: () => { throw new Error('blocked'); } }, 20000) === false, 'a throwing vibrate is swallowed');
+  check(parseHaptics('1') === true && parseHaptics('0') === false && parseHaptics('x') === null && parseHaptics(null) === null, 'parse: 1 / 0 / no choice');
+  check(resolveHaptics(null, null) === true, 'default: on');
+  check(resolveHaptics(false, null) === false, 'stored off wins over the default');
+  check(resolveHaptics(false, '1') === true && resolveHaptics(true, '0') === false, '?haptics=1 / 0 wins over the stored choice');
+  check(resolveHaptics(false, 'yes') === false, 'unknown ?haptics= is ignored');
+  const broken = {
+    getItem: (): string | null => {
+      throw new Error('SecurityError');
+    },
+    setItem: () => {
+      throw new Error('QuotaExceededError');
+    },
+  };
+  check(loadHaptics(broken) === null && loadHaptics(null) === null, 'throwing / missing storage reads as no choice');
+  saveHaptics(true, broken); // must not throw
 }
 
 if (failures) {

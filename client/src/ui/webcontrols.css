@@ -110,6 +110,7 @@
 .wc-overlay .wc-cancel { border-color: rgba(255, 122, 122, 0.8); }
 .wc-overlay .wc-small { min-width: var(--wc-btn); height: 100%; padding: 0 8px; font-size: 11px; }
 .wc-overlay .wc-key.is-down { background: var(--wc-fill-down); }
+.wc-overlay .wc-key.is-off { opacity: 0.5; text-decoration: line-through; }
 /* Over the drawn palette icons: invisible until pressed. */
 .wc-overlay .wc-palette { background: transparent; border-color: transparent; border-radius: 8px; }
 .wc-overlay .wc-palette.is-down { background: rgba(95, 212, 255, 0.25); border-color: var(--wc-edge); }

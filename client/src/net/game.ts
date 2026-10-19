@@ -1109,22 +1109,6 @@ export class Game extends Lobby {
     this.sendSubcommand(0x0d, p);
   }
 
-  // 6x40: walking toward (x, z); flags 8 = near an enemy (slower walk).
-  sendWalk(x: number, z: number, nearEnemy = false): void {
-    const p = new Uint8Array(12);
-    const dv = new DataView(p.buffer);
-    dv.setFloat32(0, x, true);
-    dv.setFloat32(4, z, true);
-    dv.setUint32(8, nearEnemy ? 8 : 0, true);
-    this.sendSubcommand(0x40, p);
-    const me = this.self;
-    if (me) {
-      me.position = { x, y: me.position.y, z };
-      me.moving = true;
-      me.gait = 'walk';
-    }
-  }
-
   // 6x3F: set position {is_near_enemy, angle, floor, room, pos}.
   sendSetPosition(): void {
     const me = this.self;
