@@ -131,6 +131,16 @@ st.enterFloor(2, 2, fake, floors);
 eq(st.rooms.filter((r) => !(r.flags & 1)).length, 0, 'another floor starts undiscovered');
 st.enterFloor(1, 1, fake, floors);
 eq(st.rooms.filter((r) => !(r.flags & 1)).length, discovered, 'floor 1 keeps its discovered rooms');
+// Saved flags are keyed by floor and minimap file; another layout (another
+// room count) on the same floor starts over.
+if (fake.length > 1) {
+  st.enterFloor(1, 1, fake.slice(1), floors);
+  eq(st.rooms.every((r) => r.flags & 1), true, 'room count mismatch: saved flags dropped');
+  st.enterFloor(3, 1, fake, floors, '3:map_a.rel');
+  st.discover(centre.x, centre.z);
+  st.enterFloor(3, 1, fake, floors, '3:map_b.rel');
+  eq(st.rooms.every((r) => r.flags & 1), true, 'another file on the floor: own flags');
+}
 eq(st.rooms.every((r) => r.alpha === 0), true, 'alpha restarts');
 
 // --- icons ---
@@ -246,6 +256,31 @@ eq([fm.areaMap?.active, mm.type, flags & 1], [true, 1, 1], 'the menu runs it to 
 press('Backspace');
 for (let i = 0; i < 10; i++) fm.tick();
 eq([fm.areaMap, mm.type, flags & 1, fm.isOpen], [null, 0, 0, true], 'Backspace: back to the menu, radar again');
+// A floor change destroys the window: the full map must not come back.
+press('Enter');
+for (let i = 0; i < 6; i++) fm.tick();
+eq([fm.areaMap?.active, flags & 1], [true, 1], 'Area Map open again');
+fm.closeAreaMap();
+for (let i = 0; i < 6; i++) fm.tick();
+eq([fm.areaMap, mm.type, flags & 1], [null, 0, 0], 'closeAreaMap: gone, radar, flag cleared');
+const gone = new AreaMapWindow(env, 3);
+gone.dispose();
+gone.tick();
+eq([gone.active, flags & 1], [false, 0], 'a disposed window never starts the full map');
+
+// --- a bad file: rooms pointer null with a room count ---
+const bad = new Uint8Array(0x40);
+const bdv = new DataView(bad.buffer);
+bdv.setUint32(0, 0, true); // rooms = null
+bdv.setUint32(8, 3, true); // count = 3
+bdv.setUint32(bad.length - 0x10, 0, true); // root = 0
+let threw = false;
+try {
+  parseMinimapRel(bad);
+} catch {
+  threw = true;
+}
+eq(threw, true, 'null rooms pointer with rooms: rejected');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

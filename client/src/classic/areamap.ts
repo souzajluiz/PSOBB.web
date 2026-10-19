@@ -98,6 +98,7 @@ export class AreaMapWindow {
   speed = { x: 0, z: 0, y: 0 }; // +0x60 / +0x64 / +0x68
   private drag: { mouseX: number; mouseY: number; x: number; z: number } | null = null; // +0x8c, +0x78.., +0x84..
   private fade = 0;
+  private disposed = false;
   private env: AreaMapEnv;
   windowSpeed = 1;
 
@@ -119,6 +120,7 @@ export class AreaMapWindow {
 
   // ChallengeMenuListWindow_UpdateSelectionColor_007441a8.
   private updateSelection(): void {
+    if (this.disposed) return;
     const m = this.env.minimap();
     if (!this.active) {
       if (this.anim.isOpen && !this.anim.animating) {
@@ -142,7 +144,7 @@ export class AreaMapWindow {
 
   // ChallengeMenuListWindow_HandleInput_00744230.
   private handleInput(): void {
-    if (!this.active) return;
+    if (!this.active || this.disposed) return;
     const m = this.env.minimap();
     const input = this.env.input();
     const mouse = input.mouse;
@@ -173,6 +175,11 @@ export class AreaMapWindow {
     this.speed.y *= SPEED_DECAY;
   }
 
+  // The map is being dragged with the mouse (+0x8c).
+  get dragging(): boolean {
+    return this.drag !== null;
+  }
+
   // SinowberillChallengeObjectListWindow_CheckBoundsOverlap_007125c4.
   contains(x: number, y: number): boolean {
     const r = AREA_MAP_WINDOW;
@@ -184,9 +191,12 @@ export class AreaMapWindow {
     return !(e.key === 'Backspace' || e.key === 'Escape');
   }
 
-  // The window is destroyed (the menu closed under it).
+  // The window is destroyed (ChallengeMenuListWindow_Destructor_00743f60:
+  // HUD flag bit 1 cleared, minimap_type 0); it never starts the full map
+  // again.
   dispose(): void {
     this.leave();
+    this.disposed = true;
   }
 
   // The frame, title, arrows and help; the map itself is drawn by the field

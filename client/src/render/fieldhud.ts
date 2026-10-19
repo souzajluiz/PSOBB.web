@@ -43,7 +43,7 @@ import type { MapViewer } from './mapviewer.ts';
 import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
 import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, type MinimapPlayer } from '../classic/minimap.ts';
 import type { AreaMapInput } from '../classic/areamap.ts';
-import { loadMinimapAssets, MinimapView } from './minimap.ts';
+import { disposeMinimapAssets, loadMinimapAssets, MinimapView } from './minimap.ts';
 import { AREA_TEXT } from './warpmenu.ts';
 
 const FRAME = 1 / 30;
@@ -311,15 +311,22 @@ export class FieldHud {
     this.mouse.y = (e.clientY - r.top) / s;
     if (e.type === 'mousedown' && e.button === 0) this.mouse.down = true;
     if (e.type === 'mouseup' && e.button === 0) this.mouse.down = false;
-    // The full map takes the drag: the view's own mouse handlers do not see it.
-    if (e.type !== 'mouseup' && this.menu.areaMap?.active && e.currentTarget === this.host) e.stopImmediatePropagation();
+    // ChallengeMenuListWindow_HandleInput_00744230 only takes a press inside
+    // the window (CheckBoundsOverlap) and the drag that follows; those do not
+    // reach the view's own mouse handlers. Other clicks pass (the open menu
+    // already keeps them from the player, DisablePlayerInputForMenu).
+    const map = this.menu.areaMap;
+    if (!map?.active || e.currentTarget !== this.host) return;
+    if ((e.type === 'mousedown' && e.button === 0 && map.contains(this.mouse.x, this.mouse.y)) || (e.type === 'mousemove' && map.dragging)) e.stopImmediatePropagation();
   }
 
   // A floor loaded (render/gameview.ts): its minimap (map_*r.rel from the
   // floor's n.rel; none on Pioneer 2 or the Lab) and its TObjRaderCol objects.
   async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array>, raderCols: readonly RaderCol[] = []): Promise<void> {
     const token = ++this.floorToken;
-    this.menu.areaMap?.dispose();
+    // The floor change destroys the Area Map window (its destructor clears
+    // HUD flag bit 1 and minimap_type).
+    this.menu.closeAreaMap();
     this.minimap.enterFloor(floor, map, null, this.minimapFloors);
     this.minimapView.setRooms(null);
     this.raderCols = raderCols.map((c) => ({ ...c, state: 0, wait: RADER_COL_DELAY, done: false }));
@@ -335,13 +342,18 @@ export class FieldHud {
     if (!this.minimapAssets) {
       this.minimapAssets = true;
       try {
-        this.minimapView.setAssets(await loadMinimapAssets(this.files));
+        const assets = await loadMinimapAssets(this.files);
+        if (this.disposed) {
+          disposeMinimapAssets(assets);
+          return;
+        }
+        this.minimapView.setAssets(assets);
       } catch (err) {
         this.opts.log?.(`minimap: no icons (${(err as Error).message})`);
       }
     }
     if (this.disposed || token !== this.floorToken) return;
-    this.minimap.enterFloor(floor, map, data?.rooms ?? null, this.minimapFloors);
+    this.minimap.enterFloor(floor, map, data?.rooms ?? null, this.minimapFloors, `${floor}:${name ?? ''}`);
     this.minimapView.setRooms(data);
     if (data) this.opts.log?.(`minimap: ${name}, ${data.rooms.length} rooms`);
   }
@@ -480,6 +492,8 @@ export class FieldHud {
       this.menu.key(e);
       return;
     }
+    // Ctrl is also the Area Map's zoom out; HandlePlayerPaletteToggle_00694f0c
+    // does nothing while the menu (which holds the Area Map) is open, as here.
     if (e.key === 'Control' && !e.repeat && this.palette) this.paletteHud.flip(this.palette);
   }
 
@@ -592,7 +606,7 @@ export class FieldHud {
     this.host.removeEventListener('blur', this.onBlur);
     for (const t of ['mousedown', 'mousemove', 'mouseup'] as const) this.host.removeEventListener(t, this.onMouse, true);
     window.removeEventListener('mouseup', this.onMouse);
-    this.menu.areaMap?.dispose();
+    this.menu.closeAreaMap();
     this.minimap.leaveFloor(this.minimapFloors);
     this.minimapView.dispose();
     this.viewer.frameHooks.delete(this.hook);

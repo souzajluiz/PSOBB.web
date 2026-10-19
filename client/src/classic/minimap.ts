@@ -229,14 +229,22 @@ export function cameraUp(yaw: number): { x: number; z: number } {
 }
 
 // Saved room flags of every floor of the game (floor_minimap_room_flags,
-// Minimap_InitArena_00805a24: 18 floors, cleared when a game starts).
+// Minimap_InitArena_00805a24: 18 floors, cleared when a game starts). The
+// client keys them by floor; here the key is the floor's minimap file as well
+// (a quest can put another layout on the same floor), and a saved array whose
+// length does not match the rooms is dropped.
 export class MinimapFloors {
-  private saved = new Map<number, Uint16Array>();
-  load(floor: number): Uint16Array | null {
-    return this.saved.get(floor) ?? null;
+  private saved = new Map<string, Uint16Array>();
+  load(key: string, rooms: number): Uint16Array | null {
+    const flags = this.saved.get(key);
+    if (flags && flags.length !== rooms) {
+      this.saved.delete(key);
+      return null;
+    }
+    return flags ?? null;
   }
-  save(floor: number, flags: Uint16Array): void {
-    this.saved.set(floor, flags);
+  save(key: string, flags: Uint16Array): void {
+    this.saved.set(key, flags);
   }
 }
 
@@ -245,6 +253,7 @@ export class MinimapState {
   rooms: RoomState[] = [];
   map = 0;
   floor = -1;
+  private key = '';
   delay = START_DELAY; // +0x90
   turning = false; // +0x168 bit 1
   zoomMode: 0 | 1 | 2 = 0; // +0x16c
@@ -262,9 +271,11 @@ export class MinimapState {
   // visit, or every room undiscovered on the first one.
   // Minimap_CreateObject_00804d94 resets the object; the full map pan
   // (minimap2_xyz) is a global and keeps its values.
-  enterFloor(floor: number, map: number, rooms: readonly MinimapRoomInput[] | null, saved: MinimapFloors): void {
+  // `key`: the floor and its minimap file (MinimapFloors).
+  enterFloor(floor: number, map: number, rooms: readonly MinimapRoomInput[] | null, saved: MinimapFloors, key = String(floor)): void {
     this.leaveFloor(saved);
     this.floor = floor;
+    this.key = key;
     this.map = map;
     this.type = 0;
     this.delay = START_DELAY;
@@ -278,10 +289,10 @@ export class MinimapState {
     this.markers = [];
     this.icons = [];
     this.loaded = rooms !== null;
-    const flags = saved.load(floor);
+    const flags = rooms ? saved.load(key, rooms.length) : null;
     this.rooms = (rooms ?? []).map((r, i) => ({
       index: r.index,
-      flags: flags && i < flags.length ? flags[i] : r.flags | 1,
+      flags: flags ? flags[i] : r.flags | 1,
       alpha: 0,
       cx: r.position[0] + r.model.center[0],
       cz: r.position[2] + r.model.center[2],
@@ -291,7 +302,7 @@ export class MinimapState {
 
   // uninit_minimap_data: the room flags go back to the floor's array.
   leaveFloor(saved: MinimapFloors): void {
-    if (this.loaded && this.floor >= 0) saved.save(this.floor, Uint16Array.from(this.rooms.map((r) => r.flags)));
+    if (this.loaded && this.floor >= 0) saved.save(this.key, Uint16Array.from(this.rooms.map((r) => r.flags)));
     this.loaded = false;
     this.rooms = [];
   }

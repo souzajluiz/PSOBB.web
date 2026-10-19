@@ -264,7 +264,11 @@ up the status window closes (HUD flag bit 1). Code: `formats/minimap.ts`,
   0x0097ecf8), shape 1 = obj_f_enemy disc x8, colour 0xffffa24c; markers =
   obj_f_player of obj_f_enemy.bml; compass sprites of RaderMapFrame.xvm at
   0x00a11390 / 0x00a11398 (MinimapRenderIcon_00804b24,
-  RenderMinimapIcon_00819f7c).
+  RenderMinimapIcon_00819f7c): texture 1 (the pulse, own alpha) with
+  unknown_set_blending_save = src alpha / 1 - src alpha, texture 0 (the
+  needle, opaque on black) with unknown_renderstate_blend_save = src alpha /
+  ONE, i.e. additive (blend codes 8 / 6 / 10 of
+  d3d8Dev_SetRenderState_Src_Dest_Blend), which leaves its black ground out.
 - **Area Map** (ChallengeMenuListWindow_*, 0x00743e00..0x007447c8): GUI
   position 0x5c, template 0x009f3c64; UpdateSelectionColor_007441a8 starts
   the full map once the window is open (centred on the player,
@@ -275,7 +279,12 @@ up the status window closes (HUD flag bit 1). Code: `formats/minimap.ts`,
   to +-6000, the Wilds -3000..9000 / -9000..3000, none on Vol Opt, Dark
   Falz, Olga Flow, Tower: Minimap_ClampPlayerPosition_008058b4, table
   0x0097f040 type 8), height 1200..3500, speeds x0.8 (0x00973270); the left
-  button (mask 4) grabs the map, pan = grab - 3.0 * mouse move (0x0097327c).
+  button (mask 4) grabs the map, pan = grab - 3.0 * mouse move (0x0097327c);
+  only that press inside the window and its drag are kept from the view's
+  own mouse handlers. Ctrl is also Action Palette Change, but
+  HandlePlayerPaletteToggle_00694f0c returns while the menu is open.
+  The destructor clears HUD flag bit 1 and minimap_type: a floor change
+  closes the window for good (it does not restart the full map).
   Arrows from HUD texture 0 at (16, 346), (484, 346), (249, 272), (249,
   420) (RenderPhaseInfo_007445e4).
 - **TObjRaderCol** (0x17, radar_collision_constructor /
@@ -283,11 +292,17 @@ up the status window closes (HUD flag bit 1). Code: `formats/minimap.ts`,
   param4; holds the room (flag 2) on its first frame, reveals it when the
   local player comes within the radius after 3 frames.
 
+**Performance:** the floor's rooms are one merged geometry (alpha per
+vertex); the WebGL renderer has no antialias and no preserved buffer: each
+render is copied into a 2D cache canvas in the same task, and a frame whose
+camera, rooms, markers and icons did not change reuses the cache.
+
 **Checks:** `tests/minimap.test.ts` (map_forest01r.rel: 17 rooms, room data,
 triangles; fovy and units per pixel; pan clamps; discovery, fade, the
 TObjRaderCol hold, per-floor persistence; icons; the Area Map window's
 opening, pan / zoom speeds, drag and close; the status window closing on
-flag bit 1; Item Pack > Area Map through the menu keys);
+flag bit 1; Item Pack > Area Map through the menu keys; closing it on a
+floor change; saved flags per floor and file; a null rooms pointer);
 `tests/fieldhud.test.ts`, `tests/windowanim.test.ts`, `tests/status.test.ts`,
 `tests/formats.test.ts`; `tsc --noEmit`. Not checked in Chrome by this
 change (the main thread runs the browser check).
@@ -300,7 +315,9 @@ full map, with the arrows; the radar is hidden while a warp menu, a counter
 or an NPC talk has the input. Left out: TObjRaderHideCol, TObjRaderIcon and
 the other objects' icons (doors, boxes, bosses), battle-mode team colours,
 zoom modes 1 / 2 (nothing sets them in Blue Burst), the Challenge "Area n"
-title.
+title. The saved room flags are keyed by floor and minimap file (the
+client keys them by floor only; a quest can load another layout), and a saved
+array whose length does not match is dropped.
 
 ## 2026-10-18: Pillar traps (TOTrapAncient02 / 02R) and Vol Opt's seal door lamps
 

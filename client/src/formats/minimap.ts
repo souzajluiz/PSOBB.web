@@ -54,7 +54,7 @@ export function parseMinimapRel(data: Uint8Array): MinimapData {
   const roomsAt = r.ptr(r.root);
   const textured = r.u32(r.root + 4) !== 0;
   const count = r.u32(r.root + 8);
-  if (count > 0x400 || (count && roomsAt + count * ROOM_SIZE > data.length)) throw new Error(`minimap: bad room count ${count}`);
+  if (count > 0x400 || (count && (!roomsAt || roomsAt + count * ROOM_SIZE > data.length))) throw new Error(`minimap: bad room count ${count}`);
   const rooms: MinimapRoom[] = [];
   for (let i = 0; i < count; i++) {
     const o = roomsAt + i * ROOM_SIZE;
