@@ -22,14 +22,17 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    Gibarta objects of Ultimate, the camera, the ending's warp objects). Vol
    Opt has no form 7, minions or hazards: the dump's "VoloptForm7*" and
    "VoloptForm2MinionMapObject" names, and the JP files of the same names, are
-   Dark Falz's. The Dragon and Sinow Beat's mirage are done (2026-10-19;
-   `combat/dragon.ts`, `combat/enemyfsmmines.ts` SinowAi; the dump's and the JP
-   tree's "Sinowbeat*" / "Dragon*" names around 0x00419214..0x004258ac are all
-   the Dragon, see the DEVLOG). Left on the Dragon: the intro's camera and
-   particles, the model-node reads (mouth, head and feet places, the model's own
-   root height), per-part hit boxes (0x004269f8) and the flame / fireball
-   models, the pad-controlled dragon states, the ground follower's dust, and the
-   Ultimate-only Sinow state 0x10. Next Dark Falz.
+   Dark Falz's. The Dragon, Sinow Beat's mirage and Dark Falz are done
+   (2026-10-19; `combat/dragon.ts`, `combat/enemyfsmmines.ts` SinowAi,
+   `combat/darkfalz*.ts`; the dump's and the JP tree's "Sinowbeat*" / "Dragon*"
+   names around 0x00419214..0x004258ac are all the Dragon, see the DEVLOG).
+   Left on the Dragon: the intro's camera and particles, the model-node reads
+   (mouth, head and feet places, the model's own root height), per-part hit
+   boxes (0x004269f8) and the flame / fireball models, the pad-controlled
+   dragon states, the ground follower's dust, and the Ultimate-only Sinow state
+   0x10. Left on Dark Falz: the cutscene objects and camera, the technique
+   objects' own flight, Ultimate's Rico scene, the players' push-out of form
+   1's body.
 3. Classic game list and quest loading screen are done (2026-10-19; the
    "GameList" / "QuestLoading" names in the dump are mostly wrong, see the
    DEVLOG): the lobby counter's Join a PARTY list, the password prompt and the
@@ -113,7 +116,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Vol Opt's fight: the control's timeline (intro, phase 1, the change, phase 2), the leader's two directors, the core sweeping behind the walls and shot through the monitors, the 24 monitors, the 6 pillars with the red one's two lightning bolts, the rod, form 2's four actions with its four part HPs, the prison, the death and the kill sends, and 6x15 / 6x16 / 6x17 / 6x18 / 6x84 / 6x85 (`combat/volopt.ts`, `combat/volopt2.ts`, `tests/volopt.test.ts`)
 - [x] The Dragon's fight (`combat/dragon.ts`, `tests/dragon.test.ts`): the 35-state FSM from `HandleEnemySinowbeatInputState_00419b14` (the Ghidra "Sinowbeat" block is the Dragon), the Normal / Ultimate action sequences, the hit clamp and the roars at 90 % (then the second sequence for good), the flights, the dive and burrows, the fire breath, fireballs and stomps, the death at hp < 1 with the exe's kill sends, and the leader's `6x12`
 - [x] Sinow Beat's mirage (`combat/enemyfsmmines.ts`, `tests/sinowbeat.test.ts`): the cast every other warp away, 4 clones in the child slots that spin round the target for 40 frames and go at the first hit, the evp halving, the dismissals
-- [ ] Where the fight moves the children it spawns, still open: Dark Falz's forms, Belra's thrown arms, Saint-Milion's 16 spinners; the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
+- [x] Dark Falz's fight: the control's 16 scenes and 6x19 (leader / follower), the 80 Darvants and the ones form 1 spits, form 1 (spit, move, Rabarta / Rafoie beams, TENCHU), form 2 (circle, quake, beams, pauses, Resta), form 3 (slashes, glides, homing bolts, Megid, capture), the quest flags 0x32..0x37, the ending's kill send, the music (`combat/darkfalz.ts`, `darkfalz1.ts` .. `darkfalz3.ts`, `tests/darkfalz.test.ts`)
+- [ ] Where the fight moves the children it spawns, still open: Belra's thrown arms, Saint-Milion's 16 spinners; the spinner's motion sub-tree, Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision

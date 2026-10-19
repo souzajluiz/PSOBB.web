@@ -153,9 +153,14 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
   eq(bossPhaseOf(0x0d, 0x15, sub(0x15, 3, 7)), 2, '6x15 action 7');
   eq(bossPhaseOf(0x0d, 0x15, sub(0x15, 3, 8)), null, '6x15 out-of-range action');
   eq(bossPhaseOf(0x0c, 0x15, sub(0x15, 3, 0)), null, '6x15 on another floor');
-  // 6x19 carries the Dark Falz form; 0xFFFF means "no change".
-  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 2)), 1, '6x19 form 2');
-  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 3)), 2, '6x19 form 3');
+  // 6x19 carries the control's scene (combat/darkfalz.ts); 0xFFFF means "no
+  // change". dark1.adx from TYPE1 (6), dark2.adx from DEMO_WARP2 (11).
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 2)), null, '6x19 DEMO_WARP0');
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 5)), null, '6x19 APP TYPE1');
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 6)), 1, '6x19 TYPE1');
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 9)), 1, '6x19 DIE TYPE2');
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 11)), 2, '6x19 DEMO_WARP2');
+  eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 13)), 2, '6x19 TYPE3');
   eq(bossPhaseOf(0x0e, 0x19, sub(0x19, 4, 0xffff)), null, '6x19 no change');
   // Olga Flow sends one subcommand per form.
   eq(bossPhaseOf(0x1f, 0xa4, sub(0xa4, 5)), 1, '6xA4 form 1');

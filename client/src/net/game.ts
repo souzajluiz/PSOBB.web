@@ -1050,6 +1050,24 @@ export class Game extends Lobby {
     return b;
   }
 
+  // 6x19 G_DarkFalzActions (0x10): {19, 04, entity} {u16 phase (0xFFFF: no
+  // change), u16 unused, u32 packed action (0xFFFFFFFF: none), u32 unused}, as
+  // PlayerSendFootstepPacket (0x0044BF18, a scene) and
+  // PlayerAction_SendActionPacket (0x0044CF88, a form's order) build it. The
+  // entity is always the control's. Sent by the client that ran the state (the
+  // leader's decisions) and applied by the sender first.
+  sendDarkFalz(entityId: number, phase: number, packed: number): Uint8Array {
+    const b = new Uint8Array(0x10);
+    const dv = new DataView(b.buffer);
+    b[0] = 0x19;
+    b[1] = 4;
+    dv.setUint16(2, entityId & 0xffff, true);
+    dv.setUint16(4, phase & 0xffff, true);
+    dv.setUint32(8, packed >>> 0, true);
+    this.conn.send(0x60, 0, b);
+    return b;
+  }
+
   sendImposeHold(frames: number, particle: number, x: number, z: number, radius2: number): void {
     const b = new Uint8Array(0x14);
     const dv = new DataView(b.buffer);

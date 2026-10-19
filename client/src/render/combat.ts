@@ -54,6 +54,11 @@ import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
+import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE, SCENE_NAMES } from '../combat/darkfalz.ts';
+import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
+import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
+import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
+import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
 import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
@@ -269,6 +274,8 @@ const OWN_FSM = new Set([
   'TBoss2DeRolLe',
   'TBoss3Volopt',
   'TBoss3VoloptP02',
+  // Dark Falz (combat/darkfalz*.ts).
+  'TBoss4DarkFalz',
 ]);
 
 // Classes whose own target search honours confusion: the Booma handlers
@@ -288,6 +295,7 @@ const BULCLAW_CLAWS = 4;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
+  ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant);
 
 // 6x47 / 6x48 subcommand numbers.
@@ -342,6 +350,8 @@ function enemyAttacker(stats: { atp: number; ata: number; lck: number }, attack:
     isPlayer: false,
   };
 }
+
+const NO_FALZ_MARKS: readonly [number, number, number][] = [];
 
 export class CombatView {
   private viewer: MapViewer;
@@ -582,6 +592,7 @@ export class CombatView {
     this.voloptHead = null;
     this.voloptBody = null;
     this.voloptHeld = false;
+    this.resetDarkFalz();
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
     slots.forEach((slot, i) => {
@@ -753,6 +764,19 @@ export class CombatView {
           stats = { ...stats, hp: f2.maxHp, maxHp: f2.maxHp };
           ai = f2;
         }
+        else if (className === 'TBoss4DarkFalz') {
+          // The control builds the fight: BattleParamEntry rows 53..57 (Darvant,
+          // the three forms, the Darvant of form 1).
+          ai = new DarkFalzAi({
+            ...at,
+            difficulty,
+            rows: this.falzRows(params, difficulty),
+            leader: () => this.game.selfId === this.game.leaderId,
+            selfId: () => this.game.selfId,
+            partySize: () => this.game.players.size,
+            rng: () => this.rng(),
+          });
+        }
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
@@ -802,6 +826,8 @@ export class CombatView {
     await this.spawnSplitters();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnVolopt();
+    if (this.disposed || token !== this.enterToken) return;
+    await this.spawnDarkFalz();
     if (this.disposed || token !== this.enterToken) return;
     // HP follows the player across floors (a warp does not heal); it is only
     // refilled when the character's max HP is not known yet or changed.
@@ -1105,6 +1131,12 @@ export class CombatView {
         this.tickVoloptForm2(e, ai, targets);
         continue;
       }
+      if (ai instanceof DarkFalzAi) {
+        this.tickDarkFalz(e, ai, targets);
+        continue;
+      }
+      // A form's or a Darvant's enemy is moved by the control (syncDarkFalz).
+      if (ai instanceof DarkFalzPartAi) continue;
       // A part's enemy is moved by the control (syncVolopt).
       if (ai instanceof VoloptPartAi) continue;
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
@@ -1930,6 +1962,390 @@ export class CombatView {
       default:
         return;
     }
+  }
+
+  // --- Dark Falz (combat/darkfalz.ts, darkfalz1.ts .. darkfalz3.ts) -------------------
+  //
+  // TBoss4DarkFalz is one brain (the control, 16 scenes) that owns the three
+  // forms and the Darvants. Each of them gets an enemy of its own in the slot the
+  // exe gives it (control + 0x200 / 0x1FF / 0x1FE for the forms, + 1.. for the
+  // Darvants) so strikes, techniques, the lock-on and the other clients' 6x0A
+  // find it by entity id; the brain decides what a hit does and owns every death.
+  // The forms are drawn with the control's parts (form 1: the six first, form 2
+  // and form 3: the later pairs, formats/enemymodels.ts), moved to the pose the
+  // brain gives; the control's own enemy is the only one with a model.
+  //
+  // Sync, as the exe has it: every client runs every state machine; the leader's
+  // decisions go out as 6x19 (the sender applies them itself first) and the damage
+  // as each entity's 6x0A. The ending's kill sends (on_enemy_killed) follow
+  // mark_falz_as_dead_and_request_drop at the end of OL ENDING, on every client.
+
+  private falzHead: EnemyRuntime | null = null;
+  private falzProxies = new Map<number, EnemyRuntime>(); // by offset from the control
+  private falzSpawning = new Set<number>();
+  // Whether the last strike on an entity (by enemy index) was ours.
+  private falzLastHit = new Map<number, boolean>();
+  private falzDrawn: { groups: THREE.Object3D[]; ids: number[] } | null = null;
+  private falzMarkMeshes: THREE.Mesh[] = [];
+  private falzReachPoint: [number, number, number] = [0, 0, 0];
+
+  private resetDarkFalz(): void {
+    this.falzHead = null;
+    this.falzProxies.clear();
+    this.falzSpawning.clear();
+    this.falzLastHit.clear();
+    this.falzDrawn = null;
+    for (const m of this.falzMarkMeshes) {
+      m.removeFromParent();
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.falzMarkMeshes = [];
+  }
+
+  // BattleParamEntry rows 53..57 of the difficulty (the exe's
+  // get_battleparams_stats / _animation_speeds): HP, ATP and the MovementData
+  // fparam1 / iparam1..4 the fight reads. Normal's numbers when the table is not
+  // loaded.
+  private falzRows(params: BattleParams | null, difficulty: number): DfRows {
+    const fall: Array<[number, number, number, number[]]> = [
+      [125, 80, 0.38, [3, 0, 0, 0]],
+      [5900, 700, 13, [9, 6, 550, 0]],
+      [6500, 750, 5, [2, 4, 0, 0]],
+      [9000, 800, 0.3, [3, 3, 3, 20000]],
+      [250, 220, 0.5, [4, 0, 0, 0]],
+    ];
+    const row = (i: number): DfRow => {
+      if (!params) {
+        const f = fall[i - 53];
+        return { hp: f[0], atp: f[1], f1: f[2], i1: f[3][0], i2: f[3][1], i3: f[3][2], i4: f[3][3] };
+      }
+      const st = params.stats(difficulty, i);
+      const mv = params.movement(difficulty, i);
+      return { hp: st.hp, atp: st.atp, f1: mv.fparam1, i1: mv.iparam[0], i2: mv.iparam[1], i3: mv.iparam[2], i4: mv.iparam[3] };
+    };
+    return { darvant: row(53), df1: row(54), df2: row(55), df3: row(56), darvantFalz: row(57) };
+  }
+
+  // The control and the forms' enemies (the Darvants' come with their events).
+  private async spawnDarkFalz(): Promise<void> {
+    this.falzHead = null;
+    for (const e of this.enemies.values()) if (e.ai instanceof DarkFalzAi) this.falzHead = e;
+    const head = this.falzHead;
+    if (!head || !(head.ai instanceof DarkFalzAi)) return;
+    for (const entity of [DF_ID.form1, DF_ID.form2, DF_ID.form3]) await this.spawnFalzProxy(head, head.ai, entity);
+    this.opts.log(`Dark Falz E-${head.index.toString(16)}: ${this.falzProxies.size} form slots`);
+  }
+
+  // An invisible enemy for a form, or a small model for a Darvant, in the slot
+  // control + entity.
+  private async spawnFalzProxy(head: EnemyRuntime, ai: DarkFalzAi, entity: number): Promise<void> {
+    const index = head.index + entity;
+    if (this.enemies.has(index) || this.falzSpawning.has(entity)) return;
+    this.falzSpawning.add(entity);
+    const darvant = entity >= DF_ID.darvant && entity <= DF_ID.lastDarvant;
+    const part = ai.part(entity);
+    const type = darvant ? 'DARVANT' : entity === DF_ID.form1 ? 'DARK_FALZ_1' : entity === DF_ID.form2 ? 'DARK_FALZ_2' : 'DARK_FALZ_3';
+    const fight = this.childFightStats(type);
+    const hp = part?.maxHp ?? fight.stats.maxHp;
+    const stats = { ...fight.stats, hp, maxHp: hp };
+    const placed = {
+      ...head.instance.placed,
+      entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [part?.x ?? 0, part?.y ?? 0, part?.z ?? 0] as [number, number, number],
+      yaw: 0,
+      name: 'Dark Falz part',
+    };
+    // ASSUMED: a Darvant is drawn as the archive's fd_obj813 face (model 16,
+    // motion 39); the forms need no model of their own.
+    const spec = {
+      ...head.instance.spec,
+      name: 'TBoss4DarkFalzPart',
+      parts: darvant ? [{ model: 16, motion: { index: 39, speed: 0.5, loop: true } }] : [],
+    };
+    let instance = null;
+    try {
+      instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+    } catch {
+      instance = await this.layer.spawn(placed as typeof head.instance.placed, { ...spec, parts: [] } as typeof head.instance.spec);
+    }
+    this.falzSpawning.delete(entity);
+    if (!instance || this.disposed) return;
+    instance.root.visible = false;
+    const rt: EnemyRuntime = {
+      instance,
+      index,
+      slot: head.slot,
+      ...fight,
+      stats,
+      motions: head.motions,
+      rtIndex: 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai: new DarkFalzPartAi(entity, ai),
+      lift: 0,
+      monest: null,
+      parent: head,
+      fake: null,
+      buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute(head.slot.type)),
+    };
+    this.enemies.set(index, rt);
+    this.falzProxies.set(entity, rt);
+  }
+
+  private tickDarkFalz(e: EnemyRuntime, ai: DarkFalzAi, targets: AiTarget[]): void {
+    const r = ai.tick(targets);
+    for (let i = 0; i < ai.events.length; i++) this.falzEvent(e, ai, ai.events[i]);
+    ai.events.length = 0;
+    const shots = r.shots;
+    if (shots) for (let i = 0; i < shots.length; i++) this.launchShot(e, shots[i]);
+    this.syncDarkFalz(e, ai);
+    if (ai.finished) {
+      e.dead = true;
+      e.instance.root.visible = false;
+      this.falzDrawn = null;
+    }
+  }
+
+  // The proxies follow their entity and exist for the player only while the
+  // brain says it can be hit; the control's model shows the form that lives.
+  private syncDarkFalz(e: EnemyRuntime, ai: DarkFalzAi): void {
+    const me = this.view?.playerPositions().get(this.game.selfId);
+    const px = me?.x ?? 0;
+    const pz = me?.z ?? 0;
+    const py = me?.y ?? 0;
+    const reach = this.falzReachPoint;
+    for (const [entity, rt] of this.falzProxies) {
+      const part = ai.part(entity);
+      const isDarvant = entity >= DF_ID.darvant && entity <= DF_ID.lastDarvant;
+      if (!part || part.gone) {
+        // A Darvant that sank out of sight leaves the floor.
+        if (isDarvant) {
+          this.layer.remove(rt.instance);
+          this.enemies.delete(rt.index);
+          this.falzProxies.delete(entity);
+          if (this.lockOn === rt) this.lockOn = null;
+        }
+        continue;
+      }
+      const darvant = isDarvant;
+      if (!darvant && ai.reachOf(entity, px, pz, reach)) {
+        // The body offers the sphere nearest the player; its height is the player's
+        // (the exe's hit spheres are ASSUMED to be reachable from the floor).
+        rt.instance.root.position.set(reach[0], py, reach[2]);
+      } else if (darvant) {
+        const y = this.opts.ground?.(part.x, part.z, py + 30) ?? py;
+        rt.instance.root.position.set(part.x, y + part.y, part.z);
+      }
+      rt.instance.root.visible = part.targetable;
+      rt.stats.hp = part.hp;
+      rt.stats.maxHp = part.maxHp;
+      rt.dead = false;
+    }
+    this.drawDarkFalz(e, ai);
+  }
+
+  // The control's model: the groups of the form that lives, posed, and their
+  // animation frame (the exe steps frames by its own rule, combat/darkfalzcommon.ts
+  // DfAnim; the node animator is paused on the brain's frame).
+  private drawDarkFalz(e: EnemyRuntime, ai: DarkFalzAi): void {
+    const inst = e.instance;
+    if (!this.falzDrawn) {
+      const groups = inst.root.children.slice(0, 12);
+      this.falzDrawn = { groups, ids: [-1, -1, -1] };
+    }
+    const g = this.falzDrawn.groups;
+    if (g.length < 10) return;
+    const f1 = ai.form1;
+    const f2 = ai.form2;
+    const f3 = ai.form3;
+    for (let k = 0; k < 6; k++) g[k].visible = !!f1;
+    g[6].visible = g[7].visible = !!f2;
+    g[8].visible = g[9].visible = !!f3;
+    if (g.length > 11) g[10].visible = g[11].visible = false;
+    const root = inst.root;
+    if (f1) {
+      root.position.set(f1.x, this.falzGroundY(f1.x, f1.z, root.position.y), f1.z);
+      root.rotation.y = f1.yaw * BAMS_TO_RAD;
+      this.falzPlay(inst, 0, F1_ANIM_ROWS, f1.anim.id, f1.anim.frame, 0);
+    } else if (f2) {
+      root.position.set(f2.x, f2.y, f2.z);
+      root.rotation.y = f2.yaw * BAMS_TO_RAD;
+      this.falzPlay(inst, 6, F2_ANIM_ROWS, f2.anim.id, f2.anim.frame, 1, true);
+    } else if (f3) {
+      root.position.set(f3.x, f3.y, f3.z);
+      root.rotation.y = f3.yaw * BAMS_TO_RAD;
+      this.falzPlay(inst, 8, F3_ANIM_ROWS, f3.anim.id, f3.anim.frame, 2);
+    }
+    // TENCHU's marks.
+    const marks = f1 ? f1.markPoints : f2 ? f2.markPoints : NO_FALZ_MARKS;
+    const nMarks = f1 ? f1.shownMarks : f2 ? f2.shownMarks : 0;
+    for (let i = 0; i < nMarks; i++) {
+      let m = this.falzMarkMeshes[i];
+      if (!m) {
+        try {
+          m = new THREE.Mesh(new THREE.CircleGeometry(25, 16), new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.35, side: THREE.DoubleSide }));
+          m.rotation.x = -Math.PI / 2;
+          this.viewer.scene.add(m);
+          this.falzMarkMeshes[i] = m;
+        } catch {
+          continue;
+        }
+      }
+      m.position.set(marks[i][0], this.falzGroundY(marks[i][0], marks[i][2], 0) + 0.5, marks[i][2]);
+      m.visible = true;
+    }
+    for (let i = nMarks; i < this.falzMarkMeshes.length; i++) this.falzMarkMeshes[i].visible = false;
+  }
+
+  private falzGroundY(x: number, z: number, fallback: number): number {
+    return this.opts.ground?.(x, z, fallback + 30) ?? fallback;
+  }
+
+  // Plays the clip `id` of `rows` on the animators of the form's parts (first =
+  // the part index in the control's spec) when it changed and holds the frame.
+  private falzPlay(inst: EnemyInstance, first: number, rows: readonly { mode: number; motions: readonly number[] }[], id: number, frame: number, form: number, reversed = false): void {
+    const d = this.falzDrawn;
+    if (!d) return;
+    const row = rows[id];
+    if (!row) return;
+    const changed = d.ids[form] !== id;
+    d.ids[form] = id;
+    const n = row.motions.length >= 6 ? 6 : 2;
+    for (let i = 0; i < n; i++) {
+      const a = inst.animators[first + i];
+      if (!a) continue;
+      // Form 2's table lists the base's motion before the body's; the control's
+      // spec lists the body (model 8) first.
+      const motion = row.motions[reversed ? n - 1 - i : i];
+      if (changed) {
+        try {
+          a.play(inst.archive.motion(motion, a.nodeCount), 1, row.mode === 0);
+        } catch (err) {
+          this.opts.log(`Dark Falz motion ${motion}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(frame);
+    }
+  }
+
+  private falzEvent(e: EnemyRuntime, ai: DarkFalzAi, ev: DfEvent): void {
+    const what = `Dark Falz E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        this.game.sendDarkFalz(0x1000 | e.index, ev.phase, ev.packed);
+        if (ev.phase !== 0xffff) this.opts.log(`${what}: 6x19 scene ${SCENE_NAMES[ev.phase] ?? ev.phase}`);
+        return;
+      case 'scene':
+        this.opts.log(`${what}: ${SCENE_NAMES[ev.scene]}`);
+        return;
+      case 'questFlag':
+        this.game.setQuestFlag(ev.flag, true);
+        this.opts.log(`${what}: quest flag 0x${ev.flag.toString(16)}`);
+        return;
+      case 'bgm':
+        this.opts.bossPhase?.(ev.track);
+        return;
+      case 'se':
+        this.playSe(ev.id);
+        return;
+      case 'place':
+        this.falzPlace(ev.circle, ev.slots);
+        return;
+      case 'darvant':
+        void this.spawnFalzProxy(e, ai, ev.entity);
+        return;
+      case 'hit': {
+        if (ev.clientId !== this.game.selfId || this.damage.dead) return;
+        if (ev.fixed) {
+          const damage = Math.trunc(ev.power);
+          const me = this.view?.playerPositions().get(this.game.selfId);
+          this.damage.hit(damage, me ? Math.atan2(me.x - ev.x, me.z - ev.z) : 0, 0, 0x1000 | e.index);
+          if (damage >= 1) this.gainPb(damage, true);
+          this.opts.log(`${ev.what}: ${damage} damage`);
+        } else this.enemyTechHitsPlayer(e, ev.power, ev.x, ev.z, ev.what);
+        return;
+      }
+      case 'tech':
+        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyTechHitsPlayer(e, Math.max(0, techPower(TECH[ev.tech], ev.level)), ev.x, ev.z, ev.what);
+        this.overlay?.techEffect(ev.tech === 'rabarta' ? 'support' : 'light', ev.x, 0, ev.z, 20);
+        return;
+      case 'megid':
+        if (ev.clientId === this.game.selfId && !this.damage.dead) this.enemyMegidHitsPlayer(Math.max(0, techPower(TECH.megid, ev.level)), ev.what);
+        return;
+      case 'resta':
+        this.opts.log(`${what}: form 2 casts Resta (level ${ev.level})`);
+        return;
+      case 'died': {
+        const rt = this.falzProxies.get(ev.entity);
+        const part = ai.part(ev.entity);
+        if (rt) rt.stats.hp = part?.hp ?? 0;
+        // A Darvant killed by damage goes through the generic kill flow (EXP, 6x76);
+        // one that the scene ended does not.
+        if (rt && part && part.hp <= 0 && ev.entity >= DF_ID.darvant && ev.entity <= DF_ID.lastDarvant && this.falzLastHit.get(rt.index) === true) this.bossKilled(rt, part.x, part.z, this.falzLastHit, 'Darvant');
+        return;
+      }
+      case 'killed':
+        this.falzKilled(e, ev.x, ev.z);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // DistributePlayersInCircle (0x0044BF88) / RepositionPlayersInCircle (0x0044C090):
+  // the local player's slot is its rank among the party.
+  private falzPlace(circle: 'inner' | 'outer', slots: number): void {
+    const ids = [...this.game.players.keys()].sort((a, b) => a - b);
+    const k = Math.max(0, ids.indexOf(this.game.selfId));
+    const n = Math.max(1, slots);
+    const step = Math.trunc(0x10000 / n);
+    const c = circle === 'inner' ? { cx: 0, cz: 0, r: 12.5 } : { cx: 10000, cz: 0, r: 250 };
+    const a = (circle === 'inner' ? Math.trunc(step / 2) : 0) + k * step;
+    const heading = circle === 'inner' ? 0x8000 : (a + 0x8000) & 0xffff;
+    this.opts.warpSelf?.({ x: Math.sin(a * BAMS_TO_RAD) * c.r + c.cx, y: 10, z: Math.cos(a * BAMS_TO_RAD) * c.r + c.cz }, heading * BAMS_TO_RAD);
+    this.opts.log(`Dark Falz: you stand on the ${circle} circle (slot ${k} of ${n})`);
+  }
+
+  // mark_falz_as_dead_and_request_drop (0x0044C230): on_enemy_killed and
+  // set_monster_spawn_initdata_as_dead on every client. The last hit of the last
+  // form is the control's last attacker.
+  private falzKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.stats.hp = 0;
+    this.bossKilled(e, x, z, this.falzLastHit, 'Dark Falz');
+  }
+
+  // A part's enemy was struck (or a 6x0A copy of a strike).
+  private falzPartHit(e: EnemyRuntime, ai: DarkFalzPartAi, damage: number, critical: boolean, flags: number, local: boolean, what: string): void {
+    const part = ai.part;
+    if (!part) return;
+    const applied = ai.owner.damagePart(ai.entity, damage, local);
+    if (applied >= 1) this.falzLastHit.set(this.falzHead?.index ?? e.index, local);
+    if (applied >= 1 && ai.entity >= DF_ID.darvant && ai.entity <= DF_ID.lastDarvant) this.falzLastHit.set(e.index, local);
+    e.stats.hp = part.hp;
+    const dead = part.hp <= 0;
+    this.sendEnemy(e, flags | (applied >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
+    const p = e.instance.root.position;
+    this.overlay?.damage(applied, critical, p.x, p.y + 10, p.z);
+    this.opts.log(`${what}hit Dark Falz ${this.falzName(ai.entity)} for ${Math.round(applied)}: ${part.hp}/${part.maxHp}`);
+  }
+
+  private falzName(entity: number): string {
+    return entity === DF_ID.form1 ? 'form 1' : entity === DF_ID.form2 ? 'form 2' : entity === DF_ID.form3 ? 'form 3' : `Darvant ${entity}`;
+  }
+
+  // A 6x19 from the leader (HandleVoloptEntityStateTransition 0x0044CE6C).
+  private onDarkFalzSub(body: Uint8Array): void {
+    let head = this.falzHead;
+    if (!head) for (const e of this.enemies.values()) if (e.ai instanceof DarkFalzAi) head = e;
+    const ai = head?.ai;
+    if (!head || !(ai instanceof DarkFalzAi) || body.length < 0x10) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    if (dv.getUint16(2, true) !== (0x1000 | head.index)) return;
+    ai.receive(dv.getUint16(4, true), dv.getUint32(8, true));
   }
 
   // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
@@ -3321,6 +3737,10 @@ export class CombatView {
       this.voloptPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
       return;
     }
+    if (e.ai instanceof DarkFalzPartAi) {
+      this.falzPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
+      return;
+    }
     if (e.ai instanceof VoloptForm2Ai) {
       // The body's one pool is its HP (row 37); the strike marks a hit box and
       // the next tick's reaction splits the damage over the marked parts.
@@ -4067,6 +4487,10 @@ export class CombatView {
       this.onDeRolLeAction(sub, body);
       return;
     }
+    if (sub === 0x19) {
+      this.onDarkFalzSub(body);
+      return;
+    }
     if (sub === 0x15 || sub === 0x16 || sub === 0x17 || sub === 0x18 || sub === 0x84 || sub === 0x85) {
       this.onVoloptSub(sub, body);
       return;
@@ -4122,6 +4546,18 @@ export class CombatView {
         // next tick (hit reaction, death). The dead flag is ignored.
         if (s.flags & FLAG_HIT && s.totalDamage > 0) e.ai.owner.damageTaken(e.ai.part.entity, s.totalDamage);
         e.stats.hp = e.ai.part.hp;
+        return;
+      }
+      if (e.ai instanceof DarkFalzPartAi) {
+        // The part's HP is max - damage_taken; the brain looks at it on its next
+        // tick (the die hook). The dead flag is ignored: the brain owns the death.
+        const part = e.ai.part;
+        if (part && s.flags & FLAG_HIT && s.totalDamage > 0) {
+          e.ai.owner.damageTaken(e.ai.entity, s.totalDamage);
+          this.falzLastHit.set(this.falzHead?.index ?? e.index, false);
+          this.falzLastHit.set(e.index, false);
+          e.stats.hp = part.hp;
+        }
         return;
       }
       if (e.ai instanceof VoloptForm2Ai) {
@@ -4404,5 +4840,6 @@ export class CombatView {
     this.voloptLastHit.clear();
     this.voloptHead = null;
     this.voloptBody = null;
+    this.resetDarkFalz();
   }
 }

@@ -37,8 +37,8 @@
 //   6xA4 / 6xA5              Olga Flow phase 1 / phase 2 actions
 // so a client that only watches the room learns the phase from those.
 //
-// Which of dark1/dark2 belongs to which Dark Falz form is taken from the order
-// of the two calls (form 2 then form 3); the handlers are not traced further.
+// dark1.adx / dark2.adx are played by the control's own scenes (play_bgm at
+// 0x0044D716, frame 0xB9 of APP TYPE1, and at 0x0044E0DA, when DEMO_WARP2 begins).
 
 export type BossTrack = { kind: 'adx'; name: string } | { kind: 'sl'; index: number };
 
@@ -94,12 +94,16 @@ export function bossPhaseOf(area: number, sub: number, body: Uint8Array): number
     return action <= 2 ? 1 : 2;
   }
   if (area === 0x0e && sub === 0x19 && body.length >= 0x10) {
-    // G_DarkFalzActions_6x19: {19, 04, entity, u16 phase, ...}; 0xFFFF means
-    // "no change". The client's forms are 1..3 and the music changes with the
-    // second and third, so form n plays phase n - 1.
-    const phase = dv.getUint16(4, true);
-    if (phase === 0xffff) return null;
-    return Math.min(2, Math.max(0, phase - 1));
+    // G_DarkFalzActions_6x19: {19, 04, entity, u16 phase, ...}; the phase is the
+    // control's SCENE (combat/darkfalz.ts, table 0x009A5940), 0xFFFF means "no
+    // change". The fight's tracks are dark1.adx from the first form (scene 6
+    // TYPE1; the control itself starts it at frame 0xB9 of APP TYPE1, scene 5)
+    // and dark2.adx from DEMO_WARP2 (scene 11) on.
+    const scene = dv.getUint16(4, true);
+    if (scene === 0xffff) return null;
+    if (scene >= 11) return 2;
+    if (scene >= 6) return 1;
+    return null;
   }
   if (area === 0x1f && (sub === 0xa4 || sub === 0xa5)) {
     // 6xA4 is sent by Olga Flow's form 1, 6xA5 by form 2.
