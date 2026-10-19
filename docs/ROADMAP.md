@@ -91,6 +91,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Lobby: 3D lobby map, player list, chat
 - [x] Classic lobby HUD from the exe: chat input (Space), word balloons with name tab, Log Window, Home main menu (labels, help, view shift), Item List, information counter menus
 - [ ] Classic HUD: balloon overlap avoidance and off-screen docking, sub-menu transitions, Item List row format, counter/menu leaf actions, ship-select camera
+- [ ] Player movement: speeds are exe values (walk 1.0 / run 1.5 per tick, `render/playermove.ts`); the leg-based state machine (target 8 ahead, heading smoothing, keyboard ramp) is still to port, see DEVLOG 2026-10-19
 - [x] Own movement sent via `6x42` / `6x3E`, ground-following on the map collision
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
