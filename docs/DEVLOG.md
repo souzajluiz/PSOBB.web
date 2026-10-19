@@ -1,5 +1,19 @@
 # Devlog
 
+## 2026-10-19: production serves only the classic client
+
+**What changed:** a production build (`npm run build`, the Docker image)
+now has only `classic.html` as its entry, and `bridge/server.mjs` serves it at
+`/` (and `/classic`, `/classic.html`) and answers 404 for any other `.html`.
+The development pages (`index.html`: protocol log, game panel, map viewer;
+`models.html`) stay on the Vite dev server. `PSOBB_DEV_PAGES=1` builds them
+all for local checks.
+
+**Validation:** built the client and ran `server.mjs` on a spare port: `/`,
+`/classic` and `/classic.html` answer 200 with the classic page, its assets
+load, and `/index.html`, `/models.html` and unknown `.html` answer 404. Headless
+Chrome on `/` shows the title screen.
+
 ## 2026-10-19: De Rol Le review fixes
 
 **What changed:** the review of the De Rol Le fight and its Chrome run found

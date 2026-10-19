@@ -139,4 +139,4 @@ pass.
 
 ## Deploy
 
-One Docker image runs newserv, the built client and the relay on one HTTP port; see [docs/DEPLOY.md](docs/DEPLOY.md) (Dokploy steps included).
+One Docker image runs newserv, the built client and the relay on one HTTP port. In production `/` opens the classic client (`classic.html`) and the development pages are not served; see [docs/DEPLOY.md](docs/DEPLOY.md) (Dokploy steps included).

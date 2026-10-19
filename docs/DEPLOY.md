@@ -37,6 +37,15 @@ No Sega client data is in the image or in this repository.
 4. **Deploy.** The first build compiles newserv and takes a few minutes. The
    container is healthy once `GET /` answers.
 
+## What the image serves
+
+Production serves only the classic client: `/` opens `classic.html` (the
+original-style screens, from the title to the field). The development pages
+(`index.html` with its protocol log and map viewer, `models.html`) are not
+built into the image, and `bridge/server.mjs` answers 404 for any other
+`.html`. To build every page anyway (local checks), set `PSOBB_DEV_PAGES=1`
+for `npm run build`.
+
 ## Environment
 
 | Variable | Default | Meaning |
