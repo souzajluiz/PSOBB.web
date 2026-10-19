@@ -41,6 +41,12 @@ import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
 
+// The map viewer's set-data markers stand in for entities without a model.
+// In a game those are logic-only objects (TShopGenerator, TObjLuker,
+// TObjTradeCollision, ...) that the client never draws, so the markers stay
+// hidden unless the page is opened with ?markers (development aid).
+const SHOW_MARKERS = typeof location !== 'undefined' && new URLSearchParams(location.search).has('markers');
+
 export const AREA_NAMES: Record<number, string> = {
   0x00: 'Pioneer 2', 0x01: 'Forest 1', 0x02: 'Forest 2', 0x03: 'Cave 1', 0x04: 'Cave 2', 0x05: 'Cave 3',
   0x06: 'Mine 1', 0x07: 'Mine 2', 0x08: 'Ruins 1', 0x09: 'Ruins 2', 0x0a: 'Ruins 3', 0x0b: 'Dragon',
@@ -424,7 +430,7 @@ export class GameView {
       if (this.disposed) return;
       this.viewer.setEntities(placed.filter((p) => !modeled.has(p) && !objectModels.has(p)));
       this.viewer.setFogRegions(placed);
-      this.viewer.setEntitiesVisible(true);
+      this.viewer.setEntitiesVisible(SHOW_MARKERS);
     } else if (files) {
       try {
         objects = parseObjectSets(await this.files.read(files.objects));
@@ -469,7 +475,7 @@ export class GameView {
       );
       this.viewer.setEntities(placed.filter((p) => !modeled.has(p) && !objectModels.has(p)));
       this.viewer.setFogRegions(placed); // TObjFogCollision* regions switch the fog as we walk
-      this.viewer.setEntitiesVisible(true);
+      this.viewer.setEntitiesVisible(SHOW_MARKERS);
     }
 
     const me = this.game.self!;

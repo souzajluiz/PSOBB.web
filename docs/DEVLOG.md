@@ -1,5 +1,17 @@
 # Devlog
 
+## 2026-10-19: No set-data markers in a game
+
+**What changed:** the yellow / colored octahedra the map viewer draws for set
+entries without a model no longer show in a game. In Pioneer 2 they sat in
+front of the shop clerks and the nurse: those entries are TShopGenerator,
+TObjLuker and TObjTradeCollision, logic-only objects the client never draws.
+`render/gameview.ts` keeps the markers hidden unless the page is opened with
+`?markers` (development aid); the Map viewer tab is unchanged.
+
+**Checks:** Chrome, Pioneer 2 at the Medical Center counter: no markers, the
+counter still opens.
+
 ## 2026-10-19: Pioneer 2 Medical Center counter
 
 **What changed:** talking to the Medical Center nurse (`bb_p2_menu` 1) opens
