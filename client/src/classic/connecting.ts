@@ -42,6 +42,7 @@ export class ConnectingScreen implements Screen {
   private resultFrame = -1;
   private error: string | null = null;
   private finished = false;
+  private showingError = false;
   private assets: ConnectingAssets;
   private onDone: () => void;
   private onError: (message: string) => void;
@@ -84,18 +85,35 @@ export class ConnectingScreen implements Screen {
     if (this.frame === 2) this.createEffects();
     this.particles.step();
     this.fade = Math.max(0, this.fade - FADE_STEP);
-    if (this.resultFrame >= 0 && !this.finished && this.frame - this.resultFrame > WAIT_AFTER_RESULT) {
-      this.finished = true;
-      if (this.error) this.onError(this.error);
-      else this.onDone();
+    if (this.resultFrame >= 0 && !this.finished && !this.showingError && this.frame - this.resultFrame > WAIT_AFTER_RESULT) {
+      // State 3: status 0 goes on at once; any other status shows its text
+      // and waits for the confirm (Enter) or cancel key
+      // (GameListMenuObjectStateMachine, 0x00407c6c).
+      if (this.error) this.showingError = true;
+      else {
+        this.finished = true;
+        this.onDone();
+      }
     }
+  }
+
+  key(e: KeyboardEvent): void {
+    if (!this.showingError || this.finished || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+    this.finished = true;
+    this.onError(this.error ?? '');
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 640, 480);
     this.particles.draw(ctx, (g) => this.assets.effect.get(g) ?? null, this.tint);
-    if (!this.finished || this.error) drawGameText(ctx, 'Connecting..', 23, 331);
+    // GameListMenuObject_Update_00407f6c: "Connecting.." below state 3, the
+    // status text (GameListMenuObject_RenderStatusText_004080ac) in state 3,
+    // both at (23, 331) (confirmed in psobb-client-source src/FUN_004080fb.c,
+    // FUN_00408118.c, FUN_00408152.c: states 8/10, 7, 5). The exe's status texts are unitxt group 0x36 (left
+    // over from the Xbox port); the bridge's error message stands in for them.
+    if (this.showingError) this.error?.split('\n').forEach((line, i) => drawGameText(ctx, line, 23, 331 + i * 20));
+    else if (!this.finished) drawGameText(ctx, 'Connecting..', 23, 331);
     if (this.fade > 0) {
       ctx.fillStyle = `rgba(0,0,0,${this.fade})`;
       ctx.fillRect(0, 0, 640, 480);

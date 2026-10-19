@@ -8,8 +8,10 @@ Vol Opt 34, Game list menu 28, other menus 23, De Rol Le 17, Quest 11,
 Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 (the Episode 2 enemies) come last and keep using the Ghidra dump.
 
-1. In progress: the title / login screens (SSIM against the captures), Pan
-   Arms / Pofuilly splits. The other `.njs` shape motions (TOKurage, the
+1. In progress: Pan Arms / Pofuilly splits. Title / login: the flow is from
+   the exe (2026-10-19); left are the Exit Game Yes/No geometry (0x0073cf10
+   offsets), the list windows' text wipe on the Login menu, and captures of
+   character creation and Input UserID to measure SSIM (none on disk). The other `.njs` shape motions (TOKurage, the
    Episode 4 plants, the Episode 4 slime body) only need their objects' draw
    calls looked up.
 2. Episode 1 boss fights where they move their children: De Rol Le (tentacle,
@@ -41,7 +43,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Follow the `19` redirect and list character slots (`E3` → `E4`/`E5`)
 - [x] Character creation (`E5` on the data connection → `E4` approve)
 - [x] Character select → main menu (`07`/`10`) → lobby (`93` phase 4)
-- [ ] Title, login and character select screens identical to the original client
+- [ ] Title, login and character select screens identical to the original client (title flow, Login menu, Input UserID and fades from the exe; SSIM vs the psobb.io captures: title 0.771, select 0.915; creation and Input UserID have no capture to measure)
 - [x] `data/` folder picker (File System Access API) + dev-server source
 
 ## Phase 3: map viewer

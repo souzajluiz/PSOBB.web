@@ -50,6 +50,9 @@ export class Stage {
   sx = 1; // device pixels per virtual pixel
   sy = 1;
   time = 0;
+  // Development aid (?t=<seconds>): the animation clock held at one value so a
+  // frame can be compared with a capture.
+  freezeTime: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -66,7 +69,7 @@ export class Stage {
     const loop = (now: number) => {
       const dt = Math.min((now - this.last) / 1000, 0.1);
       this.last = now;
-      this.time += dt;
+      this.time = this.freezeTime ?? this.time + dt;
       this.frame(dt);
       this.raf = requestAnimationFrame(loop);
     };

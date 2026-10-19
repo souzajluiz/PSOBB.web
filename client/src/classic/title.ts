@@ -16,20 +16,30 @@
 //   FUN_006f475c  background render (tiles, flash, magic circle)
 //   FUN_006f4cc4  logo and version
 //   FUN_006fed04 / FUN_006ff0d4  title menu child: "PRESS ENTER KEY"
-//   FUN_00761c48  the "Login" menu window (text group 41 of unitxt)
+//   0x007617e8    the "Login" menu window (text group 41 of unitxt)
+// The scene's logic (fades, menu child states, Login menu, Input UserID) is
+// classic/titleflow.ts. SinowberillInit_006fb914 loads TitleEP4.prs instead of
+// title.prs for an Episode 4 account (same layout, other logo/background).
 // Coordinates are in the 640x480 virtual screen; game logic runs at 30 fps.
 
-import { se, SE } from '../audio/se.ts';
-import { drawMenuWindow, drawText, inWindowSpace, type MenuItem, type Screen, type Stage, type WindowSkin } from './stage.ts';
-
-export interface TitleMenuItem extends MenuItem {
-  action: () => void;
-}
+import { se } from '../audio/se.ts';
+import { drawInputWindow } from './login.ts';
+import { drawMenuWindow, drawText, inWindowSpace, type Screen, type Stage, type WindowSkin } from './stage.ts';
+import { DEFAULT_TEXT, EXIT_CONFIRM, LOGIN_MENU, TITLE_FPS, TitleFlow, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
+import { withWindowAnim } from './windowanim.ts';
 
 export interface TitleAssets {
-  title: ImageBitmap[]; // title.prs
+  title: ImageBitmap[]; // title.prs, or TitleEP4.prs for an Episode 4 account
   effect: ImageBitmap[]; // effect_nt.xvm
   skin: WindowSkin; // f256_hyouji.prs textures 1 and 2
+}
+
+export interface TitleOptions {
+  // get_game_version() != 0: TitleEP4.prs and the Login menu at y = 330.
+  episode4?: boolean;
+  version: string;
+  text?: MenuText;
+  credentials?: Credentials;
 }
 
 const RE = {
@@ -63,34 +73,42 @@ const RE = {
   // of texture 0. Alpha (material color) = (sin(3 deg * (frame % 120)) + 1) / 2
   // (FUN_006fede0), white.
   press: { x: 193, y: 338, w: 256, h: 32, uv: [0, 0, 255 / 256, 31 / 256] },
-  // FUN_00761c48: FUN_0073566c(&{210, 300}, 5 items, unitxt(41,2) "Login"),
-  // window size {220, 120} (0x00974e10).
-  login: { x: 210, y: 300, w: 220, h: 120 },
 };
-
-// psobb.io's widescreen patch keeps the rotating circle quads round while the
-// 4:3 layout is stretched to 16:10; 1/1.2 undoes the stretch around x=320.
-export const TITLE_TUNING = { circleAspect: 1 / 1.2 };
 
 export class TitleScreen implements Screen {
   private tex: ImageBitmap[];
   private skin: WindowSkin;
   private fx: TitleParticles;
   private tintCache = new Map<string, OffscreenCanvas>();
-  private items: TitleMenuItem[];
-  private selected = 0;
   private versionText: string;
-  title = 'Login';
+  private menuY: number;
+  private acc = 0;
+  readonly flow: TitleFlow;
+  // The menu is drawn in window space; main.ts maps pointer coordinates with it.
+  readonly pointerSpace = 'window';
 
-  constructor(assets: TitleAssets, items: TitleMenuItem[], versionText: string) {
+  constructor(assets: TitleAssets, host: Omit<TitleHost, 'se'>, opts: TitleOptions) {
     this.tex = assets.title;
     this.skin = assets.skin;
     this.fx = new TitleParticles(assets.effect);
-    this.items = items;
-    this.versionText = versionText;
+    this.versionText = opts.version;
+    this.menuY = opts.episode4 ? LOGIN_MENU.yEpisode4 : LOGIN_MENU.y;
+    this.flow = new TitleFlow({ ...host, se }, opts.credentials, opts.text ?? DEFAULT_TEXT);
   }
 
-  update(): void {}
+  // Each show() is a new title scene: fade-in again, no window.
+  enter(): void {
+    this.flow.reset();
+    this.acc = 0;
+  }
+
+  update(dt: number): void {
+    this.acc += dt;
+    while (this.acc >= 1 / TITLE_FPS) {
+      this.acc -= 1 / TITLE_FPS;
+      this.flow.tick();
+    }
+  }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
     const frame = Math.floor(stage.time * RE.fps);
@@ -99,7 +117,11 @@ export class TitleScreen implements Screen {
     }
     this.drawFlash(ctx, frame);
 
-    // Magic circle: additive, colored by the pulse.
+    // Magic circle: additive, colored by the pulse. psobb.io's widescreen
+    // patch keeps its quads round while the 4:3 layout is stretched to the
+    // window (the 1/1.2 measured on the 16:10 capture is exactly this), so
+    // x is scaled by the stage's aspect fix around x = 320. On a 4:3 window
+    // it is 1, as in the stock exe.
     const [r, g, b] = pulseColor(frame);
     const angle = ((frame % RE.framesPerTurn) / RE.framesPerTurn) * Math.PI * 2;
     const [cx, cy] = RE.center;
@@ -107,7 +129,7 @@ export class TitleScreen implements Screen {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.translate(cx, 0);
-    ctx.scale(TITLE_TUNING.circleAspect, 1);
+    ctx.scale(stage.aspectFix, 1);
     ctx.translate(-cx, 0);
     drawRotated(ctx, tinted(RE.ring.texture), RE.ring.uv, cx, cy, RE.ring.size, -angle);
     drawRotated(ctx, tinted(RE.innerRing.texture), RE.innerRing.uv, cx, cy, RE.innerRing.size, angle);
@@ -122,20 +144,48 @@ export class TitleScreen implements Screen {
     this.fx.draw(ctx, (img, key, cr, cg, cb) => this.tinted(img, key, cr, cg, cb));
     for (const [i, x, y] of RE.logo) ctx.drawImage(this.tex[i], x, y, 256, 256);
 
-    // "PRESS ENTER KEY", pulsing (title menu child, state 0).
-    const p = RE.press;
-    ctx.globalAlpha = (Math.sin(((3 * (frame % 120)) / 180) * Math.PI) + 1) / 2;
-    const t0 = this.tex[0];
-    ctx.drawImage(t0, p.uv[0] * t0.width, p.uv[1] * t0.height, (p.uv[2] - p.uv[0]) * t0.width, (p.uv[3] - p.uv[1]) * t0.height, p.x, p.y, p.w, p.h);
-    ctx.globalAlpha = 1;
-
-    inWindowSpace(ctx, stage, () =>
-      drawMenuWindow(ctx, this.skin, { ...RE.login, title: this.title }, this.items, this.selected),
-    );
+    // "PRESS ENTER KEY" (menu child render PrepareUIRenderState_006ff0d4,
+    // state 0 only; still drawn under the Login window), alpha from the
+    // child's update (titleflow.ts).
+    const flow = this.flow;
+    if (flow.state === 0 && flow.press > 0) {
+      const p = RE.press;
+      const t0 = this.tex[0];
+      ctx.globalAlpha = flow.press;
+      ctx.drawImage(t0, p.uv[0] * t0.width, p.uv[1] * t0.height, (p.uv[2] - p.uv[0]) * t0.width, (p.uv[3] - p.uv[1]) * t0.height, p.x, p.y, p.w, p.h);
+      ctx.globalAlpha = 1;
+    }
 
     ctx.letterSpacing = '1.6px';
     drawText(ctx, this.versionText, RE.version[0], RE.version[1] + 6, { size: 10.5, color: '#f4f4f4', bold: false, shadow: '#000' });
     ctx.letterSpacing = '0px';
+
+    inWindowSpace(ctx, stage, () => this.drawWindows(ctx, frame));
+
+    // Fade objects: a black 640x480 quad in front of everything.
+    const fade = flow.fadeAlpha;
+    if (fade > 0) {
+      ctx.fillStyle = `rgba(0,0,0,${fade})`;
+      ctx.fillRect(0, 0, 640, 480);
+    }
+  }
+
+  private drawWindows(ctx: CanvasRenderingContext2D, frame: number): void {
+    const m = this.flow.menu;
+    if (!m) return;
+    const win = { x: LOGIN_MENU.x, y: this.menuY, w: LOGIN_MENU.w, h: LOGIN_MENU.h, title: m.text.title };
+    withWindowAnim(ctx, m.anim, win.x, win.y, win.w, win.h, () =>
+      drawMenuWindow(ctx, this.skin, win, m.rows(), m.active ? m.selected : -1),
+    );
+    if (m.input) drawInputWindow(ctx, this.skin, m.input, m.text.input, frame);
+    if (m.exitConfirm) {
+      // The question and the Yes/No list under it. The generic sub-menu's
+      // offsets (0x0073cf10) are not traced: this placement is approximated.
+      const q = { x: EXIT_CONFIRM.x, y: EXIT_CONFIRM.y, w: EXIT_CONFIRM.w, h: 40 };
+      drawMenuWindow(ctx, this.skin, q, [{ label: m.text.reallyOk }], -1);
+      const yn = { x: q.x + q.w - 80, y: q.y + q.h + 4, w: 80, h: 60 };
+      drawMenuWindow(ctx, this.skin, yn, [{ label: m.text.yes }, { label: m.text.no }], m.exitConfirm.cursor);
+    }
   }
 
   // Flash, FUN_006f475c: gray level = low byte of trunc(255 * (1 - 0.21 k)),
@@ -178,32 +228,48 @@ export class TitleScreen implements Screen {
   }
 
   key(e: KeyboardEvent): void {
-    const n = this.selectable();
-    // FUN_006fed2c: SE 0x56f on Up/Down, 0x420 on Enter.
-    if (e.key === 'ArrowDown') this.selected = n[(n.indexOf(this.selected) + 1) % n.length];
-    else if (e.key === 'ArrowUp') this.selected = n[(n.indexOf(this.selected) + n.length - 1) % n.length];
-    else if (e.key === 'Enter') return (se(SE.titleOk), this.items[this.selected].action());
-    else return;
-    se(SE.cursor);
+    const k = toKey(e);
+    if (k) this.flow.key(k);
   }
 
-  private selectable(): number[] {
-    return this.items.flatMap((it, i) => (it.selectable === false ? [] : [i]));
-  }
-
-  // Mouse support: virtual coordinates (4:3 window space) -> menu item.
+  // Mouse (a browser convenience): hover moves the Login menu's cursor,
+  // click confirms; a click on the bare title acts as Enter.
   pointer(vx: number, vy: number, click: boolean): void {
-    const w = RE.login;
-    if (vx < w.x || vx > w.x + w.w) return;
-    const i = Math.floor((vy - (w.y + 16)) / 20);
-    if (!this.selectable().includes(i)) return;
-    if (i !== this.selected) se(SE.cursor);
-    this.selected = i;
-    if (click) (se(SE.titleOk), this.items[i].action());
+    const m = this.flow.menu;
+    if (!m) {
+      if (click) this.flow.key('enter');
+      return;
+    }
+    if (!m.active || vx < LOGIN_MENU.x || vx > LOGIN_MENU.x + LOGIN_MENU.w) return;
+    const i = Math.floor((vy - (this.menuY + 16)) / 20);
+    const rows = m.rows();
+    if (i < 0 || i >= rows.length || !rows[i].selectable) return;
+    for (let guard = 0; m.selected !== i && guard < rows.length; guard++) this.flow.key(i > m.selected ? 'down' : 'up');
+    if (click) this.flow.key('enter');
   }
+}
 
-  // The menu is drawn in window space; main.ts maps pointer coordinates with it.
-  readonly pointerSpace = 'window';
+// Keyboard -> the client's key slots (Enter, Escape = cancel slot 0xd,
+// arrows, Alt+Backspace = exit the game), or a typed character.
+export function toKey(e: Pick<KeyboardEvent, 'key' | 'altKey'>): Key | null {
+  switch (e.key) {
+    case 'ArrowUp':
+      return 'up';
+    case 'ArrowDown':
+    case 'Tab':
+      return 'down';
+    case 'ArrowLeft':
+      return 'left';
+    case 'ArrowRight':
+      return 'right';
+    case 'Enter':
+      return 'enter';
+    case 'Escape':
+      return 'cancel';
+    case 'Backspace':
+      return e.altKey ? 'exitGame' : 'backspace';
+  }
+  return e.key.length === 1 ? { char: e.key } : null;
 }
 
 // FUN_007a919c: base color, lerped to white between frames 150 -> 165 -> 180 of 300.
