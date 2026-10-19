@@ -1,5 +1,59 @@
 # Devlog
 
+## 2026-10-19: Episode 2 FSMs: Merillia / Meriltas and Dolmolm / Dolmdarl
+
+**What changed:** the first Episode 2 enemies have their own brains,
+reversed from PsoBB.exe: Merillia / Meriltas (Jungle, Mountain, Seaside)
+and Dolmolm / Dolmdarl (Seabed). Both run on the Booma substrate, so
+`combat/enemyfsmep2.ts` has one shared base for the generic controller and
+the chase / melee handlers, and the two families on top. Wired in
+`render/combat.ts` like the Episode 1 FSMs (OWN_FSM, the confusion-aware
+search, the HP fraction); flinch / death rows in `combat/enemymotions.ts`.
+VR Temple / VR Spaceship spawn the Episode 1 classes, which already run
+their brains.
+
+**Details:**
+- Controller `update_enemy_control_object` (0x00787a80): while the attack
+  flag 0x200000 is clear, find_target (0x0052b888, every 30 frames, nearest
+  within the AI record radius) then vtable +0xf0 (no target) / +0xf8 (in
+  reach) / +0xf4 (chase). Chase 0x0052afe4 (war cry row 7, then the gait at
+  MovementData fparam1 / fparam3), melee 0x0052b5f0 (rows 3 / 4 by
+  get_random_float <= 0.5, frame 7 try_hit_entity(1.0) +
+  cause_knockback(3.0), 15 frames, vtable +0x19c).
+- Merillia: ctor 0x00575e70 (vtable 0x00b066e0, dispatcher 0x005755cc),
+  table 0x009bec00, record 0x009beb00 / 0x009beb1c (search 225 / 250, turn
+  1024), radius 8 (0x009beb6c); params via SinowberillInitParameters
+  _00576194 (run chance param1 - 0.2, pollen chance param3 - 0.2, run frames
+  param4 + 300, wake radius max(param5 + 100, 15)); MovementData rows 74 /
+  75 (pushes 0x4a / 0x4b in init_merillia_subtypes_global_config). States
+  13 (0x005756e8, the 40-frame emergence effect: 0x00576c48 / 0x00576b18),
+  12 under (0x00575764), 0 appear (0x005743b0, row 11), 1 (0x00574848,
+  burrows without a wander radius), 11 burrow (0x005757e8, row 13), 4 run
+  (0x00574e38, fparam6 for param4 + 300 frames), 10 pollen (0x005758dc:
+  frame 13, MericarolCreateMegidCloud_005765a8 radius 20, power fparam5,
+  then group 0 and group 0x0f via 0x00576920); flinch end 0x0057460c ->
+  MericarolHandleRandomBehavior_0057479c below iparam1 % HP. Invulnerable
+  (0x4000000) while under / appearing / burrowing.
+- Dolmolm: ctor 0x00553c7c (vtable 0x00b04480, dispatcher 0x005528d8),
+  init 0x00553fc8 (back-step chance param3 + 0.3, dance chance param4 +
+  0.3, 0x0092491c), table 0x009bd9c0, record 0x009bdb1c (225 / 300),
+  radius 8; +0xf8 0x005538cc (the dance within fparam5, else the melee),
+  +0x19c 0x0055281c (back step), back step 0x00553084 (x4 speed, 50 units,
+  0x0092495c / 0x00924958), dance 0x00552c04 (row 12, iparam1 arc,
+  HandleHardAttackAction_0069375c for iparam2 * 30 frames, particle 2).
+- RE: the dump lacks most Episode 2 handlers, so they were decompiled with
+  Ghidra headless from the community .gzf (a scratch project) and read with
+  objdump; psobb-client-source (JP build) has no C for these functions
+  (searched by their SE ids and constants).
+- ASSUMED: the cloud on the Merillia's position (the exe uses a model node),
+  one 6x2C per dance (the exe re-imposes it each frame), flat ground for the
+  Dolmolm's height test, a player hit radius of 5 for the back step's end.
+
+**Checks:** `node tests/enemyfsmep2.test.ts` (new), enemyfsm / caves /
+mines / ruins / combat / enemystatus tests, client `tsc --noEmit`. Not
+checked in Chrome (to do: an Episode 2 game in the Online tab, Warp to
+Jungle / Seabed).
+
 ## 2026-10-19: Quest Board review fixes
 
 **What changed:** fixes from the review of the Quest Board window. An item's
