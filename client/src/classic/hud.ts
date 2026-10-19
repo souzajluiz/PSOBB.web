@@ -86,6 +86,10 @@ export const STATUS_WINDOW = { x: 28, y: 37, w: 228, h: 76 } as const;
 // counters touch neither.
 export const STATUS_LAYER = 2;
 export const MENU_LAYER = STATUS_LAYER + 1;
+// The quest's text windows (quest/questui.ts): created by the script after
+// the HUD and the menu, so the quest board text (disp_msg_qb) is drawn over
+// the main menu's Quest Board window (classic/questboard.ts).
+export const QUEST_LAYER = MENU_LAYER + 1;
 
 // Glyph table at 0x009fce80: {advance, y offset} for ASCII 0x20..0x7f.
 // prettier-ignore

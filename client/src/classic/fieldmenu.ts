@@ -19,7 +19,8 @@
 // handle_player_menu_select opens the leaf; Backspace in a leaf returns to
 // the menu at the same entry. Area Map (0xC) is classic/areamap.ts: a window
 // with its own open / close animation that switches the minimap to the full
-// map.
+// map. Quest Board (0xF) is classic/questboard.ts: the quest's board items,
+// whose threads run while it stays open.
 
 import { MAIN_MENU, MAIN_MENU_ANDROID, MainMenu, type MainMenuTextures, type MenuEntry } from './mainmenu.ts';
 import { EquipMenu, type EquipActions } from './equipmenu.ts';
@@ -28,6 +29,7 @@ import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
 import { cursorSaved, OptionsMenu, type OptionsEnv } from './options.ts';
 import { AREA_MAP_MENU_ID, AreaMapWindow, type AreaMapEnv, type AreaMapTextures } from './areamap.ts';
+import { QUEST_BOARD_MENU_ID, QuestBoardWindow, type QuestBoardEnv, type QuestBoardTextures } from './questboard.ts';
 import { se, SE } from '../audio/se.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
@@ -88,9 +90,10 @@ export interface FieldMenuEnv {
   mag: MagMenuEnv;
   options: OptionsEnv;
   areaMap: AreaMapEnv;
+  questBoard: QuestBoardEnv;
 }
 
-export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures {
+export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, QuestBoardTextures {
   menu: MainMenuTextures;
 }
 
@@ -110,6 +113,8 @@ export class FieldMenu {
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
   // The Area Map window (open, or closing after the menu went away).
   areaMap: AreaMapWindow | null = null;
+  // The Quest Board window (open, or closing).
+  questBoard: QuestBoardWindow | null = null;
   speed = 1;
 
   constructor(env: FieldMenuEnv) {
@@ -145,9 +150,18 @@ export class FieldMenu {
     this.menu.leafOpen = false;
   }
 
+  // The Quest Board window goes away at once too (floor change).
+  closeQuestBoard(): void {
+    if (!this.questBoard) return;
+    this.questBoard.close();
+    this.questBoard = null;
+    this.menu.leafOpen = false;
+  }
+
   close(): void {
     this.closeLeaf();
     this.areaMap?.anim.close();
+    this.questBoard?.close();
     this.menu.close();
   }
 
@@ -170,6 +184,12 @@ export class FieldMenu {
     if (id === AREA_MAP_MENU_ID) {
       this.areaMap?.dispose();
       this.areaMap = new AreaMapWindow(this.env.areaMap, this.speed, (id) => se(id));
+      this.menu.leafOpen = true;
+      return;
+    }
+    if (id === QUEST_BOARD_MENU_ID) {
+      this.questBoard?.close();
+      this.questBoard = new QuestBoardWindow(this.env.questBoard, this.speed, (id) => se(id));
       this.menu.leafOpen = true;
       return;
     }
@@ -203,9 +223,25 @@ export class FieldMenu {
         this.areaMap = null;
       }
     }
+    const board = this.questBoard;
+    if (board) {
+      board.windowSpeed = this.speed;
+      board.tick();
+      // State 5: the menu takes over again at the same entry and the window
+      // is destroyed (it closes with its animation).
+      if (board.finished) {
+        board.close();
+        if (this.menu.open) this.menu.leafOpen = false;
+      }
+      if (!board.anim.visible) this.questBoard = null;
+    }
   }
 
   key(e: KeyboardEvent): void {
+    if (this.questBoard?.anim.isOpen && !this.questBoard.finished) {
+      this.questBoard.key(e);
+      return;
+    }
     if (this.areaMap?.anim.isOpen) {
       if (!this.areaMap.key(e)) {
         se(SE.cancel);
@@ -229,6 +265,7 @@ export class FieldMenu {
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.menu.draw(ctx, skin, tex.menu);
     this.areaMap?.draw(ctx, skin, tex);
+    this.questBoard?.draw(ctx, skin, tex);
     const leaf = this.leaf ?? this.closingLeaf;
     if (!leaf || !this.leafAnim.visible) return;
     const rects: { x: number; y: number; w: number; h: number }[] = [];

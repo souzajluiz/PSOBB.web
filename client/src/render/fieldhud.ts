@@ -43,6 +43,7 @@ import type { MapViewer } from './mapviewer.ts';
 import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
 import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, type MinimapPlayer } from '../classic/minimap.ts';
 import type { AreaMapInput } from '../classic/areamap.ts';
+import type { QuestBoardVM } from '../classic/questboard.ts';
 import { disposeMinimapAssets, loadMinimapAssets, MinimapView } from './minimap.ts';
 import { AREA_TEXT } from './warpmenu.ts';
 
@@ -75,7 +76,12 @@ export interface FieldHudOptions {
   fullCharacter: () => Uint8Array | null;
   items: GameItems;
   area: () => number;
+  // g_QuestStarted: a quest is loaded and running (the main menu's Quest
+  // Board entry, classic/fieldmenu.ts).
   questStarted: () => boolean;
+  // The running quest's VM and name, for the Quest Board window
+  // (classic/questboard.ts).
+  quest?: () => { vm: QuestBoardVM; name: string } | null;
   // Starts a technique cast from the Technique menu (render/combat.ts
   // castTechnique); false when it cannot be cast.
   cast?: (tech: number) => boolean;
@@ -136,8 +142,9 @@ export class FieldHud {
   private minimapAssets = false;
   private raderCols: RaderColState[] = [];
   private floorToken = 0;
-  // The HUD's flags (+0x1c): bit 1 while the full map is up (the status
-  // window closes, classic/hud.ts STATUS_HIDING_FLAGS).
+  // The HUD's flags (+0x1c): bit 1 while the full map is up, 0x10 while the
+  // Quest Board window is (the status window closes, classic/hud.ts
+  // STATUS_HIDING_FLAGS).
   hudFlags = 0;
   // Held keys and the mouse, for the Area Map (menu inputs read each frame).
   private held = new Set<string>();
@@ -221,6 +228,14 @@ export class FieldHud {
         },
         title: () => this.areaName(),
         text: (g, i) => this.text(g, i),
+      },
+      questBoard: {
+        vm: () => this.opts.quest?.()?.vm ?? null,
+        questName: () => this.opts.quest?.()?.name ?? '',
+        text: (g, i) => this.text(g, i),
+        setHudFlag: (bit, on) => {
+          this.hudFlags = on ? this.hudFlags | bit : this.hudFlags & ~bit;
+        },
       },
       tech: {
         text: (g, i) => this.text(g, i),
@@ -325,8 +340,9 @@ export class FieldHud {
   async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array>, raderCols: readonly RaderCol[] = []): Promise<void> {
     const token = ++this.floorToken;
     // The floor change destroys the Area Map window (its destructor clears
-    // HUD flag bit 1 and minimap_type).
+    // HUD flag bit 1 and minimap_type) and the Quest Board window (0x10).
     this.menu.closeAreaMap();
+    this.menu.closeQuestBoard();
     this.minimap.enterFloor(floor, map, null, this.minimapFloors);
     this.minimapView.setRooms(null);
     this.raderCols = raderCols.map((c) => ({ ...c, state: 0, wait: RADER_COL_DELAY, done: false }));
@@ -445,7 +461,7 @@ export class FieldHud {
     const skin = { frame: hyouji[1], bars: hyouji[2] };
     this.tex = {
       skin,
-      menu: { menu: { panel: hyouji[13], labels: jp[2] }, icons: hyouji[1], arrows: hyouji[0], digits: jp[0] },
+      menu: { menu: { panel: hyouji[13], labels: jp[2] }, icons: hyouji[1], arrows: hyouji[0], bars: hyouji[2], digits: jp[0] },
       palette: { bg: hyouji[2], tabs: hyouji[0], icons: { 5: hyouji[5], 6: hyouji[6], 7: hyouji[7] }, digits: jp[0] },
     };
   }
@@ -607,6 +623,7 @@ export class FieldHud {
     for (const t of ['mousedown', 'mousemove', 'mouseup'] as const) this.host.removeEventListener(t, this.onMouse, true);
     window.removeEventListener('mouseup', this.onMouse);
     this.menu.closeAreaMap();
+    this.menu.closeQuestBoard();
     this.minimap.leaveFloor(this.minimapFloors);
     this.minimapView.dispose();
     this.viewer.frameHooks.delete(this.hook);

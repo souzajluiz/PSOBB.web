@@ -59,7 +59,16 @@ export interface ArgValue {
   text?: string;
 }
 
-export type YieldReason = 'none' | 'sync' | 'ret' | 'exit' | 'message' | 'list' | 'blocked';
+// 'board' is disp_msg_qb__add_msg (5): disp_msg_qb, or add_msg on the open
+// quest board text, waits for the decide key.
+export type YieldReason = 'none' | 'sync' | 'ret' | 'exit' | 'message' | 'list' | 'board' | 'blocked';
+
+// Which of the exe's two thread runners steps a thread: 1 =
+// quest_run_thread_1 (the quest's own and floor threads, QuestThread2), 2 =
+// quest_run_thread_2 (QuestThread3: a quest board item's thread,
+// CreateQuestThread_006bcdec, which also ends while waiting on the board text
+// once the player's UI no longer blocks input).
+export type QuestThreadRunner = 1 | 2;
 
 export interface QuestMessage {
   kind: 'message' | 'window' | 'questBoard';
@@ -124,6 +133,10 @@ export interface QuestVMHost {
   syncRegister?: (reg: number, value: number) => void;
   // UI.
   showMessage?: (m: QuestMessage) => void;
+  // IsPlayerSlotUIBlockingInput_00716ba0 for the local player (a menu window
+  // holds the controls); quest_run_thread_2 reads it while a thread waits on
+  // the board text. Without it the check is skipped.
+  uiBlockingInput?: () => boolean;
   closeMessage?: (kind: QuestMessage['kind'], target?: number) => void;
   showList?: (choices: string[]) => void;
   // Map and movement.
@@ -173,6 +186,7 @@ export interface QuestVMOptions {
 export class QuestThread {
   readonly id: number;
   readonly label: number;
+  readonly runner: QuestThreadRunner;
   pc = 0;
   callStack: number[] = [];
   yieldReason: YieldReason = 'none';
@@ -183,10 +197,11 @@ export class QuestThread {
   // EnemyObjectUpdate_0060648c state 2).
   onDone: (() => void) | null = null;
 
-  constructor(id: number, label: number, pc: number) {
+  constructor(id: number, label: number, pc: number, runner: QuestThreadRunner = 1) {
     this.id = id;
     this.label = label;
     this.pc = pc;
+    this.runner = runner;
   }
 }
 
@@ -274,14 +289,15 @@ export class QuestVM {
     return o === undefined || o < this.bin.header.textOffset || o >= this.codeEnd ? -1 : o;
   }
 
-  // quest_start_thread(label) (PsoBB.exe 0x006bc76c).
-  startThread(label: number): QuestThread | null {
+  // quest_start_thread(label) (PsoBB.exe 0x006bc76c); runner 2 is
+  // CreateQuestThread_006bcdec (a quest board item, classic/questboard.ts).
+  startThread(label: number, runner: QuestThreadRunner = 1): QuestThread | null {
     const pc = this.labelOffset(label);
     if (pc < 0) {
       this.log(`quest: thread at label ${label} has no code`);
       return null;
     }
-    const t = new QuestThread(this.nextThreadId++, label, pc);
+    const t = new QuestThread(this.nextThreadId++, label, pc, runner);
     this.threads.push(t);
     return t;
   }
@@ -312,6 +328,32 @@ export class QuestVM {
     for (const t of this.threads) if (t.yieldReason === 'message') t.yieldReason = 'none';
   }
 
+  // The decide key while a thread waits on the quest board text
+  // (disp_msg_qb__add_msg in quest_run_thread_1 / _2: the key moves every
+  // such thread on).
+  dismissBoard(): void {
+    for (const t of this.threads) if (t.yieldReason === 'board') t.yieldReason = 'none';
+  }
+
+  // A thread waits on the quest board text.
+  get boardWaiting(): boolean {
+    return this.threads.some((t) => t.yieldReason === 'board' && !t.done);
+  }
+
+  // ResetQuestDialogState_006b0ba4: the window (g_QuestDialogHandle1) and
+  // the quest board text (g_QuestDialogHandle2) close.
+  resetDialogs(): void {
+    if (this.windowOpen) {
+      this.windowOpen = false;
+      if (this.pendingMessage?.kind === 'window') this.pendingMessage = null;
+      this.host.closeMessage?.('window');
+    }
+    if (this.questBoardOpen) {
+      this.questBoardOpen = false;
+      this.host.closeMessage?.('questBoard');
+    }
+  }
+
   // Answer a `list` prompt with the chosen index.
   answerList(index: number): void {
     if (!this.pendingList) return;
@@ -327,6 +369,7 @@ export class QuestVM {
     if (this.autoAdvance) {
       if (this.pendingMessage) this.dismissMessage();
       if (this.pendingList) this.answerList(0);
+      this.dismissBoard();
     }
     // A thread spawned during this frame runs in the same frame, as the exe's
     // object list walk does; the snapshot keeps the loop finite.
@@ -350,7 +393,14 @@ export class QuestVM {
   }
 
   private runThread(t: QuestThread): void {
-    if (t.yieldReason === 'message' || t.yieldReason === 'list') return; // still waiting
+    if (t.yieldReason === 'board' && t.runner === 2 && this.host.uiBlockingInput && !this.host.uiBlockingInput()) {
+      // quest_run_thread_2: the player's UI let go of the controls (the menu
+      // holding the quest board closed): the dialogs close and the thread ends.
+      this.resetDialogs();
+      t.done = true;
+      return;
+    }
+    if (t.yieldReason === 'message' || t.yieldReason === 'list' || t.yieldReason === 'board') return; // still waiting
     t.yieldReason = NO_YIELD;
     let steps = 0;
     for (;;) {
@@ -890,7 +940,9 @@ export class QuestVM {
       // quest board text of `disp_msg_qb` (g_QuestDialogHandle2). add_msg
       // replaces the window's text when it is open, else adds to the quest
       // board, else speaks again as the last `message` speaker. message and
-      // window pages wait for the button (yield window_msg__message__chat_box).
+      // window pages wait for the button (yield window_msg__message__chat_box);
+      // the quest board text waits for it too (disp_msg_qb__add_msg), without
+      // locking the player (no UIState_SetLockedState_00717d68).
       case 'message': {
         this.lastMessageTarget = this.int(a, 0);
         this.pendingMessage = { kind: 'message', target: this.lastMessageTarget, pages: [this.str(a, 1)] };
@@ -915,6 +967,7 @@ export class QuestVM {
           t.yieldReason = 'message';
         } else if (this.questBoardOpen) {
           this.host.showMessage?.({ kind: 'questBoard', pages: [page], append: true });
+          t.yieldReason = 'board';
         } else {
           this.pendingMessage = { kind: 'message', target: this.lastMessageTarget, pages: [page] };
           this.host.showMessage?.(this.pendingMessage);
@@ -941,17 +994,21 @@ export class QuestVM {
         return;
       }
       case 'disp_msg_qb': {
+        // opcode_disp_msg_qb: a new text window at GUI 0x74, then the thread
+        // waits for the decide key (disp_msg_qb__add_msg).
         this.questBoardOpen = true;
         this.host.showMessage?.({ kind: 'questBoard', pages: [this.str(a, 0)] });
+        t.yieldReason = 'board';
         clearArgs();
-        return; // the quest board window does not block the thread
+        return;
       }
       case 'close_msg_qb':
         this.questBoardOpen = false;
         this.host.closeMessage?.('questBoard');
         return;
       case 'set_quest_board_handler': {
-        // The item only appears when its display register (r74..r79) is 1.
+        // The item only shows while its display register (r74 + index) is
+        // not 0 (classic/questboard.ts).
         const index = this.int(a, 0);
         const item = { index, label: this.label(a, 1), name: this.str(a, 2) };
         const at = this.questBoard.findIndex((x) => x.index === index);

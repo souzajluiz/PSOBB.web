@@ -573,8 +573,10 @@ unimplemented one still advances the program counter correctly.
 
 ### What the web client approximates
 
-- The message windows, the choice list and the quest board are plain DOM
-  overlays over the canvas, not the game's own text renderer. The `<rXX>`,
+- The message windows, the choice list and the quest board text are drawn on
+  an overlay canvas (`quest/questui.ts`) with the web client's game font, not
+  the game's own text renderer; the Quest Board window itself is a window of
+  the field main menu (`classic/questboard.ts`). The `<rXX>`,
   `<fXX>`, `<cr>`, `<hero name>`, `<hero job>`, `<time>` and `<color X>` tokens
   are interpolated; the rest of the token list (`<pl_name>`, `<last_chat>`,
   `<team_name>`, …) is stripped, not resolved.
