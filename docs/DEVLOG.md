@@ -1,5 +1,14 @@
 # Devlog
 
+## 2026-10-19: newserv image workflow: smaller runner than assumed
+
+**What changed:** the first run of `newserv image` died after 51 minutes with
+"The hosted runner lost communication with the server" (CPU / memory
+starvation). The workflow assumed the 4-core / 16 GB runner, but a private
+repository's `ubuntu-latest` has 2 cores and 7 GB. It now adds 8 GB of swap,
+builds with `BUILD_JOBS=2` and has a 180-minute timeout; DEPLOY.md says the
+first run takes an hour or more. Not re-run yet: pushing is on hold.
+
 ## 2026-10-19: prebuilt newserv image on GHCR
 
 **What changed:** the Docker build compiled newserv on the deploy server and

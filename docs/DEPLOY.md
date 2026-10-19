@@ -66,13 +66,14 @@ and let Dokploy only run it.
 
 Compiling newserv is the slow, memory-hungry part of the build. The
 `newserv image` workflow (`.github/workflows/newserv-image.yml`) does it once
-on a GitHub runner and publishes just what the runtime needs as
+on a GitHub runner (2 cores / 7 GB on a private repository, so with swap and
+`BUILD_JOBS=2`, and an hour or more) and publishes just what the runtime needs as
 `ghcr.io/<owner>/psobb-newserv` (tags `latest` and the three pinned refs,
 `linux/amd64`). It runs when the pinned refs in the `Dockerfile` change, or by
 hand (Actions > newserv image > Run workflow). With that image the server only
 builds the small client stage, in a minute or two and a few hundred MB of RAM.
 
-1. Run the workflow once (the first run compiles for 10-20 minutes) and check
+1. Run the workflow once (the first run compiles for an hour or more) and check
    that the package `psobb-newserv` exists (your profile > Packages). It is
    private, like the repository.
 2. Create a GitHub token (classic) with only `read:packages`, and log the
