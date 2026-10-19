@@ -54,11 +54,33 @@ It also carries community-curated headers and notes:
 
 Used as a **specification**. Ghidra pseudo-code is not copied.
 
-## 3. Matching decompilation of PsoBB.exe (private repository)
+## 3. psobb-client-source (gitlab.psobb.io): matching decompilation
 
-A decompilation that produces C compiling byte-for-byte to the original binary under the same VC7.1 compiler. Its stated goal is readable game logic for a port. Here it is used:
-- **As the source of truth for game logic:** rules, state machines, entities, ninja/shinobi math.
-- **As reference only.** Its README states it is private and contains SEGA's binary and a proprietary toolchain, so **nothing from it is copied or linked in this public repository**.
+https://gitlab.psobb.io/psobb/psobb-client-source
+
+A decompilation of the **Japanese** `PsoBB.exe` whose C compiles byte-for-byte
+to the original under the same VC7.1 compiler (one function per file in
+`src/`, ~5700 functions inventoried in `config/psobb/symbols.txt`, research in
+`notes/`, `analysis/` and `reverse-engineering/`). Decision and lookup order:
+[ADR 0001](adr/0001-client-reference-sources.md).
+
+- **Always consulted, after the Ghidra dump:** where a function exists here,
+  its control flow, constants and struct offsets are exact, and they win over
+  the dump's pseudo-code.
+- **Different build, different addresses:** match functions to the Ephinea
+  dump by name, callees, strings and constants. Code here keeps citing the
+  Ephinea addresses and names the JP file when a value was confirmed in it.
+- **Reference only.** It contains SEGA's binary (`assets/PsoBB.exe`) and a
+  proprietary toolchain (`tools/MSVC7.1/`), so **nothing from it is copied or
+  linked in this public repository**.
+
+Clone it next to the other one (about 2 GB), outside this repository:
+
+```sh
+cd ../refsrc
+git clone --depth 1 https://gitlab.psobb.io/psobb/psobb-client-source.git
+grep -rl "0x4ec" psobb-client-source/src | head   # find matching C by constant
+```
 
 ## Others
 

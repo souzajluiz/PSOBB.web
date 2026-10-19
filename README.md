@@ -111,7 +111,7 @@ The project builds on three sources, described in [docs/REFERENCES.md](docs/REFE
 
 1. **newserv**: server, file formats and protocol (MIT).
 2. **original-psobb-client-source**: Ghidra dump of `psobb.exe` with named functions, protocol, opcode and formula notes. **Anything that has to come from the client is looked up here first** (`tools/refsrc.sh addr 005d7ccc`); Ghidra headless is the fallback.
-3. **A matching decompilation of PsoBB.exe**: game logic proven byte-for-byte (private repository, used as reference only).
+3. **[psobb-client-source](https://gitlab.psobb.io/psobb/psobb-client-source)**: matching decompilation of the Japanese PsoBB.exe, game logic proven byte-for-byte. **Always consulted after the Ghidra dump**; where it has the function, its C wins. Reference only, nothing copied. See [ADR 0001](docs/adr/0001-client-reference-sources.md).
 
 ## Layout
 
