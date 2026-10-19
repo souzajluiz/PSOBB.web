@@ -19,6 +19,7 @@ import {
 } from './enemyai.ts';
 import type { EnemyAttackData } from '../formats/battleparams.ts';
 import { STATUS } from './status.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 export const loop = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: true });
 export const once = (index: number, speed: number): EnemyAiMotion => ({ index, speed, loop: false });
@@ -289,6 +290,8 @@ export class LilyAi extends BrainBase {
         // waits for g_LilyAnimElapsedThreshold + the motion's length).
         if (this.timer >= 60) this.enter(out, 'track');
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -583,6 +586,8 @@ export class WolfAi extends BrainBase {
           this.enter(out, t ? 'stalk' : 'idle', t);
         }
         break;
+      default:
+        exhaustive(this.state);
     }
     out.lift = this.lift;
     return this.finish(out);

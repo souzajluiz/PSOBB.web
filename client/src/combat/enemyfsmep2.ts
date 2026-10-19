@@ -46,6 +46,7 @@ import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { STATUS } from './status.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 // ATTACK_HIT_FRAME / knockback / recover of the Booma melee (0x0052b5f0).
 export const BOOMA_MELEE = {
@@ -451,6 +452,8 @@ export class MerilliaAi extends BoomaBrain<MerilliaState> {
       case 'pollen':
         this.pollenFrame(out, animationEnded);
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -723,6 +726,8 @@ export class DolmolmAi extends BoomaBrain<DolmolmState> {
         break;
       case 'idle':
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }

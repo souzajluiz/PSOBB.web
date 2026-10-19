@@ -8,6 +8,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_AIM_HEIGHT, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] };
 
@@ -282,6 +283,8 @@ export class GrassAi extends BrainBase {
         } else if (--this.wait <= 0) this.enter(out, 'idle');
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -684,6 +687,8 @@ export class NanoDragonAi extends BrainBase {
         }
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     out.lift = NANO.base + this.height;
     return this.finish(out);

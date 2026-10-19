@@ -9,6 +9,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 const BAMS = BAMS_TO_RAD;
 
@@ -338,6 +339,8 @@ export class PanArmsAi extends BrainBase {
       case 'rejoin':
         if (animationEnded) this.enter(out, 'walk');
         break;
+      default:
+        exhaustive(this.state);
     }
     out.lift = this.lift;
     out.hidden = this.hidden;
@@ -759,6 +762,8 @@ export class PanHalfAi extends BrainBase {
         break;
       case 'merging':
         break;
+      default:
+        exhaustive(this.state);
     }
     out.hidden = this.hidden;
     return this.finish(out);
@@ -1197,6 +1202,8 @@ export class SlimeAi extends BrainBase {
           this.enter(out, 'rise');
         }
         break;
+      default:
+        exhaustive(this.state);
     }
     out.lift = this.lift;
     out.hidden = this.hidden;

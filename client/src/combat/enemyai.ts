@@ -60,6 +60,7 @@
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import type { EnemyShot } from './enemyshots.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 export const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
@@ -542,6 +543,8 @@ export class EnemyAi {
           }
         }
         break;
+      default:
+        exhaustive(this.state);
     }
     out.x = this.x;
     out.z = this.z;

@@ -20,6 +20,7 @@ import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts'
 import { BelraArm, EnemyShot, GunnerLaser, TechBolt } from './enemyshots.ts';
 import { STATUS } from './status.ts';
 import { TECH, techData, techPower } from './techniques.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] };
 const BAMS = (b: number) => b * BAMS_TO_RAD;
@@ -400,6 +401,8 @@ export class BulclawAi extends BrainBase {
         }
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -1043,6 +1046,8 @@ export class BelraAi extends BrainBase {
         if (wrap(this.angle - this.turnStart) < 0 || this.timer * BELRA.confusedTurn >= BELRA.confusedSpan) this.enter(out, 'throw');
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -1340,6 +1345,8 @@ export class GunnerAi extends BrainBase {
         this.z += Math.cos(a) * v;
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     this.lift = this.hover ? Math.min(GUNNER.hoverMax, this.lift + GUNNER.hoverRise) : Math.max(0, this.lift - GUNNER.hoverRise);
     out.lift = this.lift;
@@ -1837,6 +1844,8 @@ export class DelsaberAi extends BrainBase {
         }
         if (this.sub === 1 && animationEnded) this.enter(out, 'walk');
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -2214,6 +2223,8 @@ export class BringerAi extends BrainBase {
         } else if (this.sub === 3 && this.timer > BRINGER.laserRest) this.enter(out, 'chase');
         else if (this.sub === 4) this.enter(out, 'chase');
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -2534,6 +2545,8 @@ export class SorcererAi extends BrainBase {
         this.enter(out, 'appear');
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }

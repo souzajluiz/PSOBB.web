@@ -19,9 +19,8 @@ export interface ClientFilesOptions {
 
 export class ClientFiles {
   private source: DataSource;
-  private loose: Set<string> | null = null;
   private gsl: GSLArchive | null = null;
-  private indexing: Promise<void> | null = null;
+  private indexing: Promise<ReadonlySet<string>> | null = null;
   private cache = new Map<string, Promise<Uint8Array>>();
   private opts: ClientFilesOptions;
 
@@ -38,24 +37,24 @@ export class ClientFiles {
 
   // One shared load: concurrent reads must all wait for data.gsl, not only
   // for the loose file list.
-  private index(): Promise<void> {
+  private index(): Promise<ReadonlySet<string>> {
     this.indexing ??= (async () => {
       const loose = new Set(await this.source.list(''));
       if (loose.has('data.gsl')) this.gsl = new GSLArchive(await this.source.read('data.gsl'));
-      this.loose = loose;
+      return loose;
     })();
     return this.indexing;
   }
 
   async has(name: string): Promise<boolean> {
-    await this.index();
-    return this.loose!.has(name) || !!this.gsl?.has(name);
+    const loose = await this.index();
+    return loose.has(name) || !!this.gsl?.has(name);
   }
 
   // Every file name in data/ and data.gsl (loose files first, no duplicates).
   async names(): Promise<string[]> {
-    await this.index();
-    return [...new Set([...this.loose!, ...(this.gsl?.entries.keys() ?? [])])];
+    const loose = await this.index();
+    return [...new Set([...loose, ...(this.gsl?.entries.keys() ?? [])])];
   }
 
   read(name: string): Promise<Uint8Array> {
@@ -64,8 +63,8 @@ export class ClientFiles {
       p = (async () => {
         const server = await this.serverCopy(name);
         if (server) return server;
-        await this.index();
-        if (this.loose!.has(name)) return this.source.read(name);
+        const loose = await this.index();
+        if (loose.has(name)) return this.source.read(name);
         if (this.gsl?.has(name)) return this.gsl.get(name);
         throw new Error(`client file not found: ${name}`);
       })();

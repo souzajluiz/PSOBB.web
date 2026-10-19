@@ -23,11 +23,13 @@ export function onDataSource(fn: (s: DataSource) => void): void {
 export async function requireDataSource(): Promise<DataSource> {
   if (current) return current;
   if (await HttpSource.available()) {
-    setDataSource(new HttpSource());
-    return current!;
+    const http = new HttpSource();
+    setDataSource(http);
+    return http;
   }
-  setDataSource(await pickDataFolder());
-  return current!;
+  const picked = await pickDataFolder();
+  setDataSource(picked);
+  return picked;
 }
 
 export async function detectDevDataSource(): Promise<void> {

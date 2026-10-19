@@ -13,6 +13,7 @@ import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts'
 import { DubchicLaser, EnemyShot, GaranzMine, GaranzMissile } from './enemyshots.ts';
 import { STATUS } from './status.ts';
 import { isAndroid } from './progression.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] };
 
@@ -257,6 +258,8 @@ export class DubchicAi extends BrainBase {
           this.enter(out, this.targetId !== null ? 'walk' : 'idle');
         }
         break;
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -479,6 +482,8 @@ export class GaranzAi extends BrainBase {
         }
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     return this.finish(out);
   }
@@ -959,6 +964,8 @@ export class SinowAi extends BrainBase {
         if (this.hold < 0 && animationEnded) this.hold = Math.max(0, this.mv.iparam[1] ?? 0);
         if (this.hold >= 0 && this.hold-- === 0) this.enter(out, t ? 'chase' : 'lost');
         break;
+      default:
+        exhaustive(this.state);
     }
     out.hidden = this.hidden;
     return this.finish(out);
@@ -1472,6 +1479,8 @@ export class CanadineAi extends BrainBase {
         }
         break;
       }
+      default:
+        exhaustive(this.state);
     }
     out.lift = this.alt;
     return this.finish(out);

@@ -26,6 +26,7 @@ import {
 import { se, SE } from '../audio/se.ts';
 import type { CharacterModelView } from './charcreate_model.ts';
 import { FONT, type Screen, type Stage, type TextInputState } from './stage.ts';
+import { exhaustive } from '../exhaustive.ts';
 
 export interface CharCreateAssets {
   tex: ImageBitmap[]; // ccconsole_e.xvm
@@ -1348,6 +1349,8 @@ export class CharCreateScreen implements Screen {
         this.subTimer = 0x3c;
         this.confirmFade = 0;
         break;
+      default:
+        exhaustive(ed.kind);
     }
   }
 
