@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-19: player movement values read from PsoBB.exe (partial)
+
+**What changed:** the local player's speeds now come from the exe: walk 1.0 and run
+1.5 units per game tick (30 / 45 units a second), was 80 / 120 (an approximation).
+`render/playermove.ts` holds the values and pure helpers (speed rules, keyboard ramp,
+heading smoothing), `tests/playermove.test.ts` checks them. The full state machine
+port is NOT done yet; findings below.
+
+**Exe facts (all PsoBB.exe; JP C has no player movement code):**
+- Speeds: walk `0x00a94300` = 1.0 (init `0x0069864c`), run `0x00a94324` = 1.5 (init
+  `0x0069b6f4`), leg length `0x00a94320` = 8.0 (the old note "8 units/tick" was the
+  leg length). `position += velocity` once per tick (`0x00777724`), no dt factor.
+  `0x006978a0`: slowed x0.5 (`0x0093ca20`), flag 8 of `+0x6c4` (guard stance) x0.75
+  (`0x0093ca24`), then x `+0x690` if `+0x68c` bit 0.
+- Structure (local player, every tick, `0x00689174`): poll (case 2) -> arrival check
+  (case 3) -> update (case 1, `unknown_update_player`). States: stand 1, walk 2 (6x40,
+  `0x0069bbd0` poll), run 4 (6x42, `0x006a15a0` poll). The poll only acts when
+  `+0x6c4` bit 4 (arrived) is set; a leg targets a point 8.0 ahead (`0x0069bb6c`),
+  the packet is looped back locally (`0x008003e0`) which re-enters the state and
+  clears the flag. Arrival: dist^2 < (2 x speed)^2 before the move (`0x006a1790`).
+  So direction changes only apply at leg ends and a released key keeps walking to the
+  end of the leg (walk about 8 ticks, run about 5), no slide beyond that.
+- Update tick: angle to the target; heading += diff/4 (diff/2 when over 0x3000,
+  `0x007a8cd0`); velocity direction = heading + (target - heading)/2 (`0x007a8c9c`).
+- Stand poll (`0x0069b728`): stick above 0.1 starts walking at once; keyboard: sideways
+  |lr|/128 >= 0.1 turns in place by 0x800 per tick until aligned, forward/back >= 0.1
+  starts at once. Walk poll counts ticks above 0.75 (sum of squares / 16384) and runs at
+  6 (`0x0093da74`); the counter resets at `0x69bbb2` (walk arrival stop) and in the run
+  poll below 0.75.
+- Keyboard (`0x0070a60c`): an axis ramps 32 per poll to 128 (64 when auto-walk, `0x0096ed84`),
+  released = 0; forward is negative, angle = atan2(lr, fb) + camera angle (`+0x94`).
+  `modify_direction` (`0x0068c038`) only randomises the direction when confused.
+- ASSUMED: 30 ticks/s (as elsewhere), the loopback of own 6x40/6x42 is accepted.
+
+**Left to do:** port the three polls + leg/heading update as a tick function in
+`render/playermove.ts` (the helpers are ready), drive the local player from it with
+`TickSmoother`, make remote players follow 6x40/6x42 targets the same way (they run
+the same update toward the packet target at 1.5 / 1.0 per tick), wall slide check.
+
 ## 2026-10-19: render cost: static batching, texture pools, adaptive resolution, leaks
 
 **What changed:** a phone is limited by draw-call submission and by pixels, not by

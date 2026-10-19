@@ -22,14 +22,11 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
+import { RUN_SPEED, WALK_SPEED } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
 const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
-const RUN_SPEED = 120; // units per second (approximate)
-// Walking (touch stick only, input/analog.ts). ASSUMED: run speed / the run
-// motion's frame step factor 1.5 (formats/plymotion.ts LOCOMOTION_FACTOR).
-const WALK_SPEED = RUN_SPEED / 1.5;
 const SEND_INTERVAL = 0.15; // seconds between 6x42 while moving
 const CLASS_COLORS = [
   0xd64545, 0xe0607a, 0xa83232, // HUmar, HUnewearl, HUcast
