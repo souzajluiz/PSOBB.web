@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import type { NjcmObject, NjcmPolyOp, NjcmStrip } from '../formats/njcm.ts';
+import { SHAPE_NORMAL_TYPES, SHAPE_POSITION_TYPES } from '../formats/njshape.ts';
 import { EVAL_HIDE, EVAL_UNIT_ANG, EVAL_UNIT_POS, EVAL_UNIT_SCL, EVAL_ZXY_ANG } from '../formats/xj.ts';
 
 export type NjcmTextureLookup = (id: number) => THREE.Texture | null;
@@ -28,6 +29,8 @@ export interface NjcmPartInput {
   attachTo?: number;
   // Replaces the material diffuse color (hair color).
   diffuse?: THREE.Color;
+  // Keep where each vertex came from (partShapeSources), for a shape motion.
+  shape?: boolean;
 }
 
 export interface NjcmModelStats {
@@ -41,11 +44,26 @@ export interface NjcmModelStats {
   unresolvedVertices: number;
 }
 
+// Where each vertex of a part's mesh came from, for shape motions
+// (formats/njshape.ts): the node (depth-first index in the part) whose vertex
+// chunk wrote it and the vertex's index in that node's shape key arrays
+// (-1: not one the shape motion replaces, or a weighted vertex).
+export interface NjcmShapeSources {
+  node: Int32Array;
+  position: Int32Array;
+  normal: Int32Array;
+}
+
 export interface NjcmModel {
   root: THREE.Group;
   skeleton: THREE.Skeleton;
   // Bones of each part, depth-first.
   partBones: THREE.Bone[][];
+  // Each part's mesh (null if it drew nothing), the sources of its vertices
+  // and each node's world matrix in the bind pose (model space).
+  partMeshes: (THREE.SkinnedMesh | null)[];
+  partShapeSources: (NjcmShapeSources | null)[];
+  partBindMatrices: THREE.Matrix4[][];
   stats: NjcmModelStats;
 }
 
@@ -76,6 +94,9 @@ interface Slot {
   n: THREE.Vector3;
   inf: Map<number, number>; // bone index -> weight
   color: [number, number, number, number] | null;
+  // Shape motion source: node (depth-first in the part), index in its vertex
+  // and normal key arrays; absent for weighted vertices.
+  shape?: { node: number; position: number; normal: number };
 }
 
 interface MatState {
@@ -93,6 +114,9 @@ class MeshBuilder {
   colors: number[] = [];
   skinIndex: number[] = [];
   skinWeight: number[] = [];
+  shapeNode: number[] = [];
+  shapePosition: number[] = [];
+  shapeNormal: number[] = [];
   groups = new Map<string, { indices: number[]; mat: MatState; stripFlags: number }>();
   hasColors = false;
 
@@ -105,6 +129,9 @@ class MeshBuilder {
     const c = color ?? s.color;
     if (c) this.hasColors = true;
     this.colors.push(...(c ?? [1, 1, 1, 1]));
+    this.shapeNode.push(s.shape?.node ?? -1);
+    this.shapePosition.push(s.shape?.position ?? -1);
+    this.shapeNormal.push(s.shape?.normal ?? -1);
     // Strongest 4 influences, renormalized.
     const inf = [...s.inf.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
     const total = inf.reduce((t, [, w]) => t + w, 0) || 1;
@@ -206,6 +233,9 @@ export class NjcmModelBuilder {
     // 2. Evaluate vertices and strips in node order, per part.
     let vertices = 0, triangles = 0, unresolved = 0;
     const meshes: THREE.SkinnedMesh[] = [];
+    const partMeshes: (THREE.SkinnedMesh | null)[] = parts.map(() => null);
+    const partShapeSources: (NjcmShapeSources | null)[] = parts.map(() => null);
+    const partBindMatrices = partNodes.map((list) => list.map((e) => e.bone.matrixWorld.clone()));
     parts.forEach((part, pi) => {
       const buffer: (Slot | undefined)[] = [];
       const cache = new Map<number, NjcmPolyOp[]>();
@@ -272,12 +302,19 @@ export class NjcmModelBuilder {
       };
 
       const normalMatrix = new THREE.Matrix3();
-      for (const { node, bone, index } of partNodes[pi]) {
+      partNodes[pi].forEach(({ node, bone, index }, local) => {
         const model = node.model;
-        if (!model) continue;
+        if (!model) return;
         normalMatrix.getNormalMatrix(bone.matrixWorld);
+        // Shape key array positions run on across the node's chunks.
+        let shapePos = 0;
+        let shapeNorm = 0;
         for (const chunk of model.vertices) {
           const blend = chunk.flags & 3; // 0 start/overwrite, 1 middle, 2 end
+          const posBase = SHAPE_POSITION_TYPES.has(chunk.type) ? shapePos : -1;
+          const normBase = SHAPE_NORMAL_TYPES.has(chunk.type) ? shapeNorm : -1;
+          if (posBase >= 0) shapePos += chunk.indices.length;
+          if (normBase >= 0) shapeNorm += chunk.indices.length;
           for (let i = 0; i < chunk.indices.length; i++) {
             const p = new THREE.Vector3().fromArray(chunk.positions, i * 3).applyMatrix4(bone.matrixWorld);
             const n = chunk.normals ? new THREE.Vector3().fromArray(chunk.normals, i * 3).applyMatrix3(normalMatrix) : new THREE.Vector3();
@@ -286,7 +323,8 @@ export class NjcmModelBuilder {
               : null;
             const idx = chunk.indices[i];
             if (!chunk.weights) {
-              buffer[idx] = { p, n, inf: new Map([[index, 1]]), color };
+              const shape = { node: local, position: posBase >= 0 ? posBase + i : -1, normal: normBase >= 0 ? normBase + i : -1 };
+              buffer[idx] = { p, n, inf: new Map([[index, 1]]), color, shape };
               continue;
             }
             const w = chunk.weights[i];
@@ -301,7 +339,7 @@ export class NjcmModelBuilder {
           }
         }
         if (!(node.flags & EVAL_HIDE)) runPolys(model.polys);
-      }
+      });
 
       if (!out.groups.size) return;
       const geom = new THREE.BufferGeometry();
@@ -327,6 +365,10 @@ export class NjcmModelBuilder {
       mesh.name = part.name;
       mesh.frustumCulled = false;
       meshes.push(mesh);
+      partMeshes[pi] = mesh;
+      if (part.shape) {
+        partShapeSources[pi] = { node: Int32Array.from(out.shapeNode), position: Int32Array.from(out.shapePosition), normal: Int32Array.from(out.shapeNormal) };
+      }
       vertices += out.positions.length / 3;
     });
 
@@ -339,6 +381,9 @@ export class NjcmModelBuilder {
       root,
       skeleton,
       partBones,
+      partMeshes,
+      partShapeSources,
+      partBindMatrices,
       stats: {
         bones: allBones.length,
         meshes: meshes.length,

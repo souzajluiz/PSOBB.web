@@ -28,12 +28,14 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { BmlArchive } from '../formats/bml.ts';
 import { parseNinjaChunkFile, parseNjtl, type NjcmObject } from '../formats/njcm.ts';
 import { parseNjmFile, sampleKeys, type NjMotion, type NjQuatKey } from '../formats/njmotion.ts';
+import { parseNjsFile, shapeVertexCount, type NjShapeMotion, type NjShapeNodeInput } from '../formats/njshape.ts';
 import { RelFile } from '../formats/rel.ts';
 import { EVAL_ZXY_ANG, parseNjObject, type NjObject } from '../formats/xj.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
 import { buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
+import { ShapeAnimator } from './shapeanim.ts';
 
 type EnemyModelData =
   | { kind: 'nj'; name: string; object: NjcmObject; textures: string[] }
@@ -69,6 +71,7 @@ export class EnemyArchive {
   private textures = new Map<string, THREE.Texture>();
   private models = new Map<number, EnemyModelData>();
   private motions = new Map<string, NjMotion>();
+  private shapes = new Map<number, NjShapeMotion>();
 
   constructor(name: string, data: Uint8Array, modelCount: number) {
     this.name = name;
@@ -132,6 +135,21 @@ export class EnemyArchive {
     return m;
   }
 
+  // Shape motion j (relative to the first motion entry: a .njs entry) for the
+  // chunk model `model` (formats/njshape.ts).
+  shapeMotion(j: number, model: number): NjShapeMotion {
+    let m = this.shapes.get(j * 0x10000 + model);
+    if (!m) {
+      const e = this.bml.entries[this.modelCount + j];
+      if (!e) throw new Error(`${this.name}: no motion ${j}`);
+      const data = this.model(model);
+      if (data.kind !== 'nj') throw new Error(`${this.name}: shape motion ${j} on a non-chunk model ${model}`);
+      m = parseNjsFile(this.bml.get(e.name), shapeNodeInputs(data.object));
+      this.shapes.set(j * 0x10000 + model, m);
+    }
+    return m;
+  }
+
   motionName(j: number): string | null {
     return this.bml.entries[this.modelCount + j]?.name ?? null;
   }
@@ -144,6 +162,14 @@ export class EnemyArchive {
     for (const t of this.textures.values()) t.dispose();
     this.textures.clear();
   }
+}
+
+// The shape parser's view of a chunk model's nodes, depth first.
+export function shapeNodeInputs(o: NjcmObject, out: NjShapeNodeInput[] = []): NjShapeNodeInput[] {
+  const chunks = o.model?.vertices ?? [];
+  out.push({ flags: o.flags, vertices: shapeVertexCount(chunks, 'vertices'), normals: shapeVertexCount(chunks, 'normals') });
+  for (const c of o.children) shapeNodeInputs(c, out);
+  return out;
 }
 
 // Plays one NJS_MOTION on a node tree (bones or groups in depth-first order):
@@ -162,6 +188,8 @@ export class NodeAnimator {
   frame = 0;
   // Holds the motion (an enemy locked by paralysis, shock or freeze).
   paused = false;
+  // Called with every frame applied (a shape motion drawn at the same frame).
+  onFrame: ((frame: number) => void) | null = null;
   // A looping motion that goes back to frame 0 instead of carrying the
   // overshoot over: 'past' once the frame is past the last one
   // (UpdateSeabedTuriganeWarpPosition_0066d28c: frame > count - 1), 'last'
@@ -284,6 +312,7 @@ export class NodeAnimator {
       if (k.scale) node.scale.fromArray(sampleKeys(k.scale, frame, m.frameCount, v));
       else node.scale.copy(this.bindScale[i]);
     }
+    this.onFrame?.(frame);
   }
 }
 
@@ -291,6 +320,9 @@ export interface EnemyMotionSpec {
   index: number; // motion entry, relative to the first motion of the archive
   speed: number; // frames per game tick
   loop: boolean;
+  // A shape motion entry (.njs, relative to the first motion) drawn at the
+  // motion's frame (njDrawShapeMotion); chunk models only.
+  shape?: number;
 }
 
 export interface EnemyPartSpec {
@@ -373,10 +405,18 @@ export function buildEnemy(
     if (part.hidden) group.visible = false;
     (part.place === 'world' ? world : root).add(group);
     let nodes: THREE.Object3D[];
+    let shaper: ShapeAnimator | null = null;
     if (data.kind === 'nj') {
-      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup }]);
+      const shapeIndex = part.motion?.shape;
+      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup, shape: shapeIndex !== undefined }]);
       group.add(built.root);
       nodes = built.partBones[0];
+      const mesh = built.partMeshes[0];
+      const sources = built.partShapeSources[0];
+      if (shapeIndex !== undefined && shapeIndex < own.motionCount && mesh && sources) {
+        shaper = new ShapeAnimator(own.shapeMotion(shapeIndex, part.model), mesh, sources, built.partBindMatrices[0]);
+        shaper.apply(0);
+      }
       missingTextures += built.stats.missingTextures;
       triangles += built.stats.triangles;
     } else {
@@ -391,7 +431,13 @@ export function buildEnemy(
     if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
       const motion = own.motion(part.motion.index, nodes.length);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
-      animators.push(new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0));
+      const animator = new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0);
+      if (shaper) {
+        const s = shaper;
+        animator.onFrame = (f) => s.apply(f);
+        s.apply(animator.frame);
+      }
+      animators.push(animator);
       animatedParts.push(part);
     }
   }
