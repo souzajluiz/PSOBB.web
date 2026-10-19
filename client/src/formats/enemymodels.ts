@@ -327,17 +327,29 @@ const rad = (angle: number) => (angle / BAMS) * Math.PI * 2;
 //     "dai" monitor, and 15.0 for the small ones; that array is the lock-on
 //     target, not the model's position, which keeps the table's y = 0.)
 //     The models are static (.xj, no motion table).
-//   - 1 lightning rod (ctor 0x0043... CreateVoloptMinion, id base+0x21, only
-//     while g_VoloptDifficultyMode == 0): model entry 16
-//     (fs_obj_hiraishin_a.nj) at (0, 80, 0), motion table slot 0.
+//   - 1 lightning rod (ctor 0x00440ad8, id base+0x21, only while
+//     g_VoloptDifficultyMode == 0, i.e. not in Ultimate): the ctor puts it at
+//     (g_VoloptForm2Config, 80.0, g_VoloptForm2ConfigValue) = (0, 80, 0); its
+//     stat init 0x004413a4 takes model entry 16 (+0x108 of the model table,
+//     fs_obj_hiraishin_a.nj) and the motion table 0x009a4f00
+//     (g_VoloptMinionStatsData) slot 0 = motion 6 (fs_obj_hiraishin_a), 0.7.
+//   - the core (id base+0x22, VoloptEntityConstructor, stat init 0x00440458):
+//     model entry 24 (+0x188, me5_y_all.nj), motion table 0x009a4e40 slot 0 =
+//     motion 14 (wait_me5_y_all), 0.7. The init sets flag 0x10000 of +0x390,
+//     with which RenderVoloptModel draws it squashed to 0.05 in z inside the
+//     monitor the fight picks (+0x3a0 = that monitor's angle), so it has no
+//     place of its own at spawn: built, not drawn.
+// The Dragon creates no drawn child (its ctor 0x00419214 only adds the
+// hitbox list 0x004269f8 and the shadow / ground follower 0x00427984).
 // newserv Map.cc add_enemy_and_children builds the same set for type 0xC2:
 // VOL_OPT_1, 6 x VOL_OPT_PILLAR, 24 x VOL_OPT_MONITOR, 2 x NONE, VOL_OPT_AMP,
 // VOL_OPT_CORE, NONE (0x23 children).
 const VOLOPT_MONITOR_MODEL = [2, 5, 8, 11]; // 0x009a5210
 const VOLOPT_MONITOR_OFFSET = [-110, -110, -115, -110]; // 0x009a51e0, z of each shape
 const VOLOPT_PILLAR_RADIUS = 76; // 0x008fe56c
+const VOLOPT_ROD_Y = 80; // 0x42a00000 stored to +0x3c by 0x00440ad8
 
-function volOptChildren(): EnemyPartSpec[] {
+function volOptChildren(ultimate: boolean): EnemyPartSpec[] {
   const parts: EnemyPartSpec[] = [];
   for (let i = 0; i < 6; i++) {
     const a = bams(i * 60);
@@ -363,10 +375,54 @@ function volOptChildren(): EnemyPartSpec[] {
       yaw: a,
     });
   }
-  // The lightning rod's motion table (g_VoloptMinionStatsData) is not located
-  // yet, so it is drawn in its bind pose.
-  parts.push({ model: 16, place: 'world', name: 'lightning rod', offset: [0, 80, 0] });
+  if (!ultimate) parts.push({ model: 16, motion: loop(6, 0.7), place: 'world', name: 'lightning rod', offset: [0, VOLOPT_ROD_Y, 0] });
+  parts.push({ model: 24, motion: loop(14, 0.7), place: 'world', name: 'core', hidden: true });
   return parts;
+}
+
+// De Rol Le's sting attack (HandleDerolleAction_0042e824, action 0): once the
+// attack motion passes frame 18.0 (0x41900000) the boss throws its stings from
+// its launch point (+0x4d8) and plays sound 0x32a. Motion 0x18 throws the five
+// kind-0 stings (SetDerollePositionAndHp_00436a50) at the five floor points;
+// any other attack motion throws the three kind-1 stings
+// (DerolleInitializeSpawn_00437190) at a ring around the boss's target.
+export const DE_ROL_LE_STING_FRAME = 18; // 0x41900000
+export const DE_ROL_LE_STING_SOUND = 0x32a;
+// 0x008fcc88: five points of the arena; the static init 0x004343c4 copies them
+// to g_DerolleCurrentPositions (0x00a43c64) through 0x00782bb0, which puts each
+// on the floor hit by a probe from 20.0 (0x00979ac0) above it (mask 0x16ef) and
+// keeps the point as is when the probe hits nothing.
+export const DE_ROL_LE_STING_POINTS: readonly (readonly [number, number, number])[] = [
+  [0, 0, 0],
+  [45, 0, 30],
+  [45, 0, -30],
+  [-45, 0, 30],
+  [-45, 0, -30],
+];
+export interface StingPlacement {
+  target: [number, number, number]; // +0x39c..+0x3a4: where the sting flies
+  yaw?: number; // +0x60, BAMS
+  pitch?: number; // +0x5c, BAMS
+}
+// Kind-0 sting i: the floor point, 1.0 (0x008fd5e8) above it.
+// `floor(x, y, z)` is the ground probe (null: no hit).
+export function deRolLeStingFloorTarget(i: number, floor?: (x: number, y: number, z: number) => number | null): StingPlacement {
+  const [x, y, z] = DE_ROL_LE_STING_POINTS[i];
+  const g = floor?.(x, y + 20, z) ?? y;
+  return { target: [x, g + 1, z] };
+}
+// Kind-1 sting i (0..2): 20.0 (0x008fd5a0) from the target at angle
+// i * 0x5555 (x = sin, z = cos), 17.0 (0x00a43db4, set by 0x004372ee) above
+// its feet; UpdateDerolleSpawnPosition_00436e08 follows the target while it
+// lives. The sting is pitched 0x4000 and turned 0x8000 / 0x6800 / 0x9800.
+const STING_RING_YAW = [0x8000, 0x6800, 0x9800];
+export function deRolLeStingRingTarget(i: number, target: readonly [number, number, number]): StingPlacement {
+  const a = rad(i * 0x5555);
+  return {
+    target: [target[0] + Math.sin(a) * 20, target[1] + 17, target[2] + Math.cos(a) * 20],
+    yaw: STING_RING_YAW[i] ?? 0x9800,
+    pitch: 0x4000,
+  };
 }
 
 // Lobby event -> rappy season (FUN_00527934: DAT_00921ae0[event]): 1 -> 1
@@ -539,20 +595,28 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // init 0x00434372). The other entries are the fight's own objects:
     //   - model 4 (tentacle) is cloned node by node into a writable buffer by
     //     DerolleInitializeParameters_00439444 and animated with tloop;
-    //   - model 3 (sting) is the mine object's model, nine of them
-    //     (DE_ROL_LE_MINE): DerolleInitialize_00437368 sets
-    //     +0x34 = model_files[3].njcm and +0x24 = model_files[2].njtl, so both
-    //     draw with the body's texture list;
+    //   - model 3 (sting) is the mine objects' model: the ctor creates 5 of
+    //     kind 0 (0x004369bc, kept at +0x638) and 3 of kind 1 (0x004370b4,
+    //     +0x64c); both run DerolleInitialize_00437368, which sets
+    //     +0x34 = model_files[3].njcm and +0x24 = model_files[2].njtl, so they
+    //     draw with the body's texture list. They wait unplaced until the
+    //     sting attack throws them (deRolLeStingFloorTarget /
+    //     deRolLeStingRingTarget below);
+    //   - the ten DE_ROL_LE_BODY children (0x004351c4) draw nothing of their
+    //     own: each follows a shell segment of model 2 from a slot at +0x548
+    //     that the ctor parks at (10000, 10000, 10000) (0x461c4000);
     //   - models 5 and 6 (helm_break, shell_break) are the destruction debris:
     //     0x0042a034 draws 28 children of model 5 and 0x0042a238 19 of model 6
     //     at per-piece positions.
-    // None of them is drawn until the fight spawns it, so they are built but
-    // hidden.
+    // 1 body + 10 segments + 5 + 3 stings = the 0x13 entity ids newserv
+    // reserves. None of the extra models is drawn until the fight spawns it,
+    // so they are built but hidden.
     case 0xc1:
       return spec('TBoss2DeRolLe', pick('bm_boss2_de_rol_le.bml', ctx), [
         { model: 2, motion: loop(11, 0.6) },
         { model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, name: 'tentacle' },
-        { model: 3, texlistOf: 2, hidden: true, name: 'mine' },
+        ...Array.from({ length: 5 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, name: `sting ${i}` })),
+        ...Array.from({ length: 3 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, name: `sting ring ${i}` })),
       ]);
     // Barba Ray: ctor 0x004af634, body model 0; idle = slot 1 of 0x009aba20 =
     // forward, 0.6 (static init 0x004b9c00). Same shape as De Rol Le: model 1
@@ -572,7 +636,7 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // draws model 19 (FUN_00448e40), table 0x009a5340 slot 0 =
     // wait_me5p02_y_all, 0.7.
     case 0xc2:
-      return spec('TBoss3Volopt', pick('bm_boss3_volopt.bml', ctx), volOptChildren());
+      return spec('TBoss3Volopt', pick('bm_boss3_volopt.bml', ctx), volOptChildren(ult));
     case 0xc5:
       return spec('TBoss3VoloptP02', pick('bm_boss3_volopt.bml', ctx), [{ model: 19, motion: loop(16, 0.7) }]);
     // Dark Falz: the controller (ctor 0x0044c93c) creates the phase-1 body
@@ -589,7 +653,10 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // (model 15, df_rikomiraju_body, motions ricoult1/ricoult2 = 70, 71) and
     // her ring (model 18, rico_ring3_rico_ring, motion 69) belong to the
     // Ultimate form-3 scene. They are built hidden: the controller places them
-    // when the form changes, not at spawn.
+    // when the form changes, not at spawn. Form 3's object (0x0045e4f0 ->
+    // 0x0045e5a0) starts at the static position 0x00a458fc, which the static
+    // init at 0x0045ec81 sets to (10000, -10, 0): off the arena until the
+    // fight moves it.
     case 0xc8: {
       const m = (model: number, motion: number): EnemyPartSpec => ({ model, motion: loop(motion, 0.4) });
       const later = (model: number, motion: number, name: string): EnemyPartSpec => ({ ...m(model, motion), hidden: true, name });
