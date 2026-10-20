@@ -24,6 +24,10 @@ done
 # /psobb-data/ fills in when the download ends; a failure is only logged.
 node /app/fetch-data.mjs &
 
+# Settings changed from the admin panel (docs/ADMIN.md) are mirrored to the
+# volume; put them back over the image's config.json.
+if [ -f "$STATE/config.json" ]; then cp "$STATE/config.json" "$SYSTEM/config.json"; fi
+
 cd /app/newserv
 ./newserv &
 NEWSERV=$!

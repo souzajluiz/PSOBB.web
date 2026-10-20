@@ -35,6 +35,7 @@ if [[ ! -f "$CONFIG" ]]; then
       -e 's/"DNSServerPort": 53/"DNSServerPort": 0/' \
       -e 's/"IPStackListen": \[5059\]/"IPStackListen": []/' \
       -e 's/"PPPStackListen": \[5058\]/"PPPStackListen": []/' \
+      -e 's/"HTTPListen": \[\]/"HTTPListen": ["127.0.0.1:5080"]/' \
       newserv/system/config.example.json > "$CONFIG"
 fi
 echo "newserv built: $VENDOR/newserv/build/newserv (run it from $VENDOR/newserv)"

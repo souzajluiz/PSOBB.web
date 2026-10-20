@@ -74,6 +74,33 @@ newer than the pinned commit must be tested with this client first.
 | `PSOBB_DATA_URL` | (unset) | a Google Drive share link (or file id, or any direct URL) of one `.zip` / `.tar.gz` of the `data/` folder; downloaded into `PSOBB_DATA` at start |
 | `TARGET_HOST` | `127.0.0.1` | where the relay finds newserv |
 | `ALLOWED_PORTS` | `12000`..`12008` | newserv ports the relay may open |
+| `ADMIN_PASSWORD` / `ADMIN_PASSWORD_HASH` | (unset: no admin panel) | enables `/admin` (see below and `docs/ADMIN.md`) |
+| `ADMIN_TRUST_PROXY` | off | `1` behind a TLS proxy (needed for the admin login over HTTPS) |
+| `NEWSERV_HTTP` | `127.0.0.1:5080` | newserv's HTTP API, loopback only |
+| `ADMIN_AUDIT_LOG`, `ADMIN_CONFIG_MIRROR` | on the `/data/newserv` volume | audit log, config copy |
+
+## Admin panel
+
+`/admin` serves the admin panel (accounts, characters, online players, quests,
+config, audit log; everything in `docs/ADMIN.md`). It is **off** until you set
+a password:
+
+1. In Dokploy add the environment variable `ADMIN_PASSWORD` (a long random
+   password) or `ADMIN_PASSWORD_HASH` (`printf '%s' 'password' | node
+   bridge/admin-hash.mjs`), plus `ADMIN_TRUST_PROXY=1` (Traefik terminates TLS
+   and sets `X-Forwarded-Proto` / `-For`; the login is refused over plain HTTP
+   otherwise).
+2. Redeploy and open `https://your-domain/admin`.
+
+The image sets newserv's `"HTTPListen": ["127.0.0.1:5080"]`: newserv's HTTP API
+(unauthenticated, with a shell command) is reachable **only inside the
+container**; `bridge/server.mjs` talks to it on loopback and only the panel's
+fixed routes reach it. Never publish port 5080, never add it to
+`ALLOWED_PORTS`, and never write a bare number in `HTTPListen` (that binds all
+interfaces). The audit log (`/data/newserv/admin-audit.log`), character backups
+(`players/_admin-backups`) and the config edited from the panel
+(`/data/newserv/config.json`, put back over the image's at each start) live on
+the `psobb-newserv` volume.
 
 ## Client data from Google Drive
 

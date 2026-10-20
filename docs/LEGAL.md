@@ -7,6 +7,6 @@
 - Code ported from **newserv** is under the MIT license, and each file states its origin.
 - The decompilations are used as **behavioral references** for interoperability. No pseudo-code or binaries from them are copied here.
 - **Do not expose newserv or the bridge to the internet without a security review:**
-  - newserv's HTTP API has `POST /y/shell-exec`.
+  - newserv's HTTP API has `POST /y/shell-exec`. It must listen on loopback only (`"HTTPListen": ["127.0.0.1:5080"]`); the admin panel (`docs/ADMIN.md`) is the only thing that talks to it.
   - The bridge relies on its port allowlist.
   - The local setup binds newserv's game ports on all interfaces, so use a firewall on untrusted networks.

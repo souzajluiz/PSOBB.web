@@ -11,14 +11,20 @@
 //   /psobb-data/    the PSOBB client data folder, if one is mounted
 //                   (PSOBB_DATA); without it the page asks for the folder
 //
+//   /admin          the admin panel (bridge/admin.mjs, docs/ADMIN.md); answers
+//                   404 unless ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is set.
+//                   It sends no CORS headers, unlike the public files above.
+//
 // Env: PORT (default 8080), DIST, NEWSERV_SYSTEM, PSOBB_DATA, TARGET_HOST
-// (default 127.0.0.1), ALLOWED_PORTS (as bridge.mjs).
+// (default 127.0.0.1), ALLOWED_PORTS (as bridge.mjs), plus the ADMIN_* and
+// NEWSERV_HTTP variables of docs/ADMIN.md.
 
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import net from 'node:net';
 import { extname, resolve, sep } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { createAdmin } from './admin.mjs';
 
 const here = import.meta.dirname;
 const PORT = Number(process.env.PORT ?? 8080);
@@ -29,6 +35,8 @@ const TARGET_HOST = process.env.TARGET_HOST ?? '127.0.0.1';
 const ALLOWED_PORTS = new Set(
   (process.env.ALLOWED_PORTS ?? '12000,12001,12002,12003,12004,12005,12006,12007,12008').split(',').map((p) => Number(p.trim())),
 );
+
+const admin = createAdmin({ systemDir: SYSTEM, env: process.env });
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -89,6 +97,12 @@ const NEWSERV_FILES = {
 };
 
 const server = createServer((req, res) => {
+  // Before the public-file handling below: that sets Access-Control-Allow-Origin
+  // for every response, which the admin routes must never carry.
+  if (admin.owns(req.url)) {
+    admin.handle(req, res);
+    return;
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') return notFound(res, 405);
   // The native app (Capacitor) runs from its own origin and reads the public
   // files here: they need no credentials, so any origin may read them.
