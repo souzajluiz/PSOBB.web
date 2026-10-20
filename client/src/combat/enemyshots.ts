@@ -37,6 +37,9 @@ export type ShotEffect =
 export interface ShotLook {
   color: number;
   size: number;
+  // Nothing is drawn for the shot itself: its owner's visuals come from
+  // elsewhere (combat/techlightning.ts TechShot's events).
+  hidden?: boolean;
   // The shot is a model the owner's enemy model built hidden (a part named
   // like this, placed 'world'); render/combat.ts moves it by pose() instead
   // of drawing the ball.
@@ -377,18 +380,25 @@ export class GunnerLaser extends EnemyShot {
 export class TechBolt extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook;
+  // The technique and its 0-based level when the owner casts one the client
+  // draws as the player's object (render/combat.ts launchShot swaps a Gizonde,
+  // Grants or Megid for combat/techlightning.ts' shots).
+  readonly tech: { id: number; level: number } | undefined;
+  readonly angle: number;
+  readonly range: number;
   private vx: number;
   private vz: number;
   private travelled = 0;
-  private range: number;
   private radius: number;
   private speed: number;
   private pierce: boolean;
   private struck = new Set<number>();
 
   // pierce: it flies on and hits each player once (the Chaos Bringer's laser).
-  constructor(opts: { x: number; y: number; z: number; angle: number; speed: number; range: number; radius: number; effect: ShotEffect; color: number; pierce?: boolean }) {
+  constructor(opts: { x: number; y: number; z: number; angle: number; speed: number; range: number; radius: number; effect: ShotEffect; color: number; pierce?: boolean; tech?: { id: number; level: number } }) {
     super(opts.x, opts.y, opts.z);
+    this.tech = opts.tech;
+    this.angle = opts.angle;
     this.speed = Math.max(0.5, opts.speed);
     this.vx = Math.sin(opts.angle) * this.speed;
     this.vz = Math.cos(opts.angle) * this.speed;

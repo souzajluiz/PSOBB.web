@@ -1744,6 +1744,7 @@ export class GibbonAi extends BrainBase {
         radius: GIBBON.boltRadius,
         effect,
         color: tech === TECH.megid ? 0x602080 : tech === TECH.gizonde ? 0xffff40 : tech === TECH.rafoie ? 0xff6020 : 0xff8040,
+        tech: { id: tech, level: this.level },
       }),
     );
   }

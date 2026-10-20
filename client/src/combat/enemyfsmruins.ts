@@ -2486,6 +2486,7 @@ export class SorcererAi extends BrainBase {
         radius: SORCERER.boltRadius,
         effect,
         color: tech === TECH.megid ? 0x602080 : tech === TECH.gibarta ? 0x80d0ff : tech === TECH.rafoie ? 0xff6020 : tech === TECH.grants ? 0xffffa0 : 0xffff40,
+        tech: { id: tech, level },
       }),
     );
   }
@@ -2647,5 +2648,6 @@ export function delLilyMegid(x: number, z: number, angle: number, iparam1: numbe
     radius: 4,
     effect: { kind: 'megid', power: techPower(TECH.megid, level) },
     color: 0x602080,
+    tech: { id: TECH.megid, level },
   });
 }

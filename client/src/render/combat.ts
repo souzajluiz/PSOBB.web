@@ -55,7 +55,7 @@ import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
-import type { EnemyShot } from '../combat/enemyshots.ts';
+import { PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
@@ -104,6 +104,7 @@ import {
   TechCast,
   techData,
   techDamage,
+  techBoost,
   techElement,
   techHitPower,
   techPower,
@@ -159,6 +160,8 @@ import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.
 import { CombatOverlay } from './combatoverlay.ts';
 import { FieldParticles } from './hitfx.ts';
 import { TechFire } from './techfire.ts';
+import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
+import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, iceRadius } from '../combat/hitmodels.ts';
@@ -458,6 +461,9 @@ export class CombatView {
   private levelUpFx: LevelUpEffects | null = null;
   // Hit sparks, status / death particles and the specials' effects (combat/hitfx.ts).
   private fx: FieldParticles | null = null;
+  // The technique objects of combat/techlightning.ts (render/techlightning.ts).
+  private techfx: TechEffects | null = null;
+  private techObjects: TechObjects | null = null;
   // The strike being shown is a failed accuracy roll: its number is "MISS".
   private hitMissed = false;
   // The particles on players: hits, blocks, status effects, revives and the
@@ -589,6 +595,9 @@ export class CombatView {
     this.hud.windowSpeed = WindowAnim.speedOf(full && full.length >= 0x4f0 ? new DataView(full.buffer, full.byteOffset).getUint32(0x4ec, true) : undefined);
     this.fx ??= new FieldParticles(this.viewer, this.files, this.opts.log);
     this.fx.preload();
+    this.techfx ??= new TechEffects(this.viewer, this.files, this.fx, { playSe: (f) => this.playTechSe(f) }, this.opts.log);
+    this.techfx.preload();
+    this.techObjects ??= new TechObjects(this.techfx, this.techWorld());
     this.overlay.text = (spec, x, y, z) => {
       const hud = this.hud;
       if (!hud?.ready) return false;
@@ -691,6 +700,7 @@ export class CombatView {
     this.cast = null;
     this.techHits = [];
     this.techFire.clear();
+    this.techObjects?.clear();
     this.attacking.clear();
     this.clearDrlBeam();
     this.drlViews.clear();
@@ -1098,6 +1108,7 @@ export class CombatView {
       this.tickRemoteStatus();
       this.tickTechHits();
       this.tickFire();
+      this.techObjects?.tick();
       this.tickBuffs();
     }
     this.tickClock.advance(ticks, this.tickRemainder);
@@ -1984,19 +1995,25 @@ export class CombatView {
     if (!this.sePlayer?.playing(id)) this.sePlayer?.play(id);
   };
 
-  private playSe(id: number): void {
+  private playSe(id: number, pitch?: number): void {
     this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
-    this.sePlayer?.play(id);
+    this.sePlayer?.play(id, pitch ? { pitch } : {});
   }
 
   // play_directional_sound_effect (0x00814558): a sound at a point is not
   // played at all from 300 units or more away (the cut-off 0x00980ad4; the
   // fall-off of the 3D voice below it is not modelled, ASSUMED: the player
   // stands where the listener does).
-  private playSeAt(id: number, at: THREE.Vector3): void {
+  private playSeAt(id: number, at: THREE.Vector3, pitch?: number): void {
     const me = this.game.self ? this.view?.playerPositions().get(this.game.self.clientId) : null;
     if (me && Math.hypot(me.x - at.x, me.y - at.y, me.z - at.z) >= SE_CUTOFF) return;
-    this.playSe(id);
+    this.playSe(id, pitch);
+  }
+
+  // A technique object's sound: play_directional_sound_effect + the tier's
+  // pitch command (combat/techlightning.ts).
+  private playTechSe(f: FxSound): void {
+    this.playSeAt(f.id, new THREE.Vector3(f.at.x, f.at.y, f.at.z), f.pitch || undefined);
   }
 
   // The parts' enemies follow their brain's point and exist for the player
@@ -2675,20 +2692,23 @@ export class CombatView {
 
   // ASSUMED look: a coloured ball per shot (the client's own effects and
   // models are not drawn).
-  private launchShot(e: EnemyRuntime, shot: EnemyShot): void {
+  private launchShot(e: EnemyRuntime, original: EnemyShot): void {
     // A technique object of combat/techfire.ts: particles instead of a ball.
-    if (shot instanceof FireShot) {
-      const baseY = shot.absolute ? 0 : e.instance.root.position.y - e.lift;
-      this.techFire.attach(shot, baseY);
-      this.shots.push({ shot, owner: e, baseY, mesh: null, model: null });
+    if (original instanceof FireShot) {
+      const baseY = original.absolute ? 0 : e.instance.root.position.y - e.lift;
+      this.techFire.attach(original, baseY);
+      this.shots.push({ shot: original, owner: e, baseY, mesh: null, model: null });
       return;
     }
+    // An enemy's Gizonde, Grants or Megid is the player's technique object in
+    // the exe (combat/techlightning.ts), not a ball.
+    const shot = (original instanceof TechBolt ? this.techShotFor(e, original) : null) ?? original;
     let mesh: THREE.Mesh | null = null;
     // A shot that is one of the owner's hidden world parts (the Dark Belra's
     // arm): that model moves instead of a ball.
     const model = shot.look.model ? e.instance.world?.getObjectByName(shot.look.model) ?? null : null;
     try {
-      if (!model) {
+      if (!model && !shot.look.hidden) {
         mesh = new THREE.Mesh(new THREE.SphereGeometry(shot.look.size, 8, 6), new THREE.MeshBasicMaterial({ color: shot.look.color }));
         this.viewer.scene.add(mesh);
       }
@@ -2699,6 +2719,40 @@ export class CombatView {
     mesh?.position.set(shot.x, baseY + shot.y, shot.z);
     if (model) this.poseShotModel(model, shot, baseY);
     this.shots.push({ shot, owner: e, baseY, mesh, model });
+    if (shot instanceof TechShot) this.techfx?.drainShot(shot);
+  }
+
+  // The technique object an enemy's TechBolt stands for (null: keep the
+  // flight). The player a Gizonde / Grants aims at is the one best in line
+  // with the bolt's heading (ASSUMED: the enemy's own target is not passed on).
+  private techShotFor(e: EnemyRuntime, b: TechBolt): TechShot | null {
+    const t = b.tech;
+    if (!t || !this.techfx) return null;
+    const ground = e.instance.root.position.y - e.lift;
+    const from = { x: b.x, y: ground + b.y, z: b.z };
+    const power = b.effect.kind === 'tech' || b.effect.kind === 'megid' ? b.effect.power : 0;
+    if (t.id !== TECH.megid && t.id !== TECH.gizonde && t.id !== TECH.grants) return null;
+    let best: AiTarget | null = null;
+    let bestCos = 0.95;
+    for (const p of this.aiTargets()) {
+      if (p.dead) continue;
+      const dx = p.x - b.x;
+      const dz = p.z - b.z;
+      const d = Math.hypot(dx, dz);
+      if (d === 0 || d > b.range) continue;
+      const c = (dx * Math.sin(b.angle) + dz * Math.cos(b.angle)) / d;
+      if (c > bestCos) {
+        best = p;
+        bestCos = c;
+      }
+    }
+    if (t.id === TECH.megid) {
+      const aim = best ? { x: best.x, y: ground + 10, z: best.z } : undefined;
+      return new MegidOrb(from, b.angle, t.level, techData(TECH.megid, t.level).rangeH, power, PLAYER_RADIUS, ground, aim);
+    }
+    // Gizonde with nobody in front is the Gibbon's plain bolt; Grants needs its target.
+    if (!best) return t.id === TECH.gizonde ? new PlainBolt(from, b.angle, b.range, () => this.rng()) : null;
+    return t.id === TECH.gizonde ? new GizondeStrike(from, best, t.level, power, () => this.rng(), ground) : new GrantsStrike(from, best, t.level, power, ground);
   }
 
   // The Dark Belra without the arm it threw: the exe hides the polygons of the
@@ -2737,6 +2791,7 @@ export class CombatView {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
       if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
+      if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
       if (s.model && !s.shot.done) this.poseShotModel(s.model, s.shot, s.baseY);
       for (const hit of hits) {
@@ -3868,6 +3923,21 @@ export class CombatView {
     this.attacking.add(me.clientId);
     this.game.sendAttack(step, me.angle, type);
     this.attack.begin(step, type);
+    if (type === 2) this.specialStartFx();
+  }
+
+  // The special attack's start (state 0x0069c4a0 case 2): the handler's type 0
+  // (the weapon particle of Flame / Burning / Shock / Thunder / Storm /
+  // Tempest) and SE 0x40 (combat/techlightning.ts specialStart).
+  private specialStartFx(): void {
+    const me = this.game.self;
+    const w = this.equippedWeapon();
+    const pos = me ? this.view?.playerPositions().get(me.clientId) : null;
+    if (!me || !w || !pos) return;
+    this.playSe(SE.specialStart);
+    const start = specialStart(weaponSpecialByte(w.data1).index);
+    // ASSUMED: the weapon position (+0x300) and the weapon node are 20 above the feet.
+    if (start) this.particle({ id: start.particle }, new THREE.Vector3(pos.x, pos.y + CAST_HEIGHT, pos.z));
   }
 
   // Equipped weapon of the local player (first equipped 00xxxx item): the
@@ -4335,6 +4405,11 @@ export class CombatView {
       const at = p.at === 'player' && own ? new THREE.Vector3(own.x, own.y + 20, own.z) : hit;
       this.particle(p, at);
     }
+    // Burning, Shock / Thunder and Storm / Tempest: the objects of combat/techlightning.ts.
+    const at: TechVec3 = { x: hit.x, y: hit.y, z: hit.z };
+    if (special === SPECIAL_ID.burning) this.techfx?.burning(at);
+    else if (special === SPECIAL_ID.shock || special === SPECIAL_ID.thunder) this.techfx?.shock(at, () => this.rng());
+    else if (special === SPECIAL_ID.storm || special === SPECIAL_ID.tempest) this.techfx?.storm(at, () => this.rng());
     // Flame: two spiralling emitters (combat/hitfx.ts flamePoint).
     if (special === 25) {
       const yaw = e.instance.root.rotation.y;
@@ -4505,11 +4580,24 @@ export class CombatView {
       }),
     };
     this.opts.log(`cast ${name} Lv${level + 1} (${data.tpCost} TP, ${sent.length} target(s) in 6x47)`);
+    // InstantiateTechniqueEffect_006e104c: the charge sound object (local player
+    // only) plays for charge + 0x32 + cast frames (combat/techlightning.ts).
+    const chargeSe = CHARGE_SE[tech];
+    if (chargeSe !== undefined) {
+      this.playSe(chargeSe);
+      this.chargeSe = { id: chargeSe, ticks: data.charge + CHARGE_SE_PADDING + data.cast };
+    }
     return true;
   }
 
+  private chargeSe: { id: number; ticks: number } | null = null;
+
   // One game tick of the local cast (ProcessHeavySpecialAttackState).
   private tickCast(): void {
+    if (this.chargeSe && --this.chargeSe.ticks <= 0) {
+      this.sePlayer?.stop(this.chargeSe.id);
+      this.chargeSe = null;
+    }
     const c = this.cast;
     const me = this.game.self;
     if (!c || !me) return;
@@ -4689,6 +4777,60 @@ export class CombatView {
     return best;
   }
 
+  // unknown_cast_tech through render/techlightning.ts TechObjects, for the local
+  // release and for another player's 6x48 (those draw only: their damage comes
+  // from their own client's 6x0A).
+  private castObjects(tech: number, level: number, rangeH: number, clientId: number, ids: readonly number[], damage: boolean): void {
+    const pos = this.view?.playerPositions().get(clientId);
+    if (!pos || !this.techObjects) return;
+    const local = clientId === this.game.selfId;
+    const who = local ? this.game.self : this.game.players.get(clientId);
+    this.techObjects.cast(tech, level, { id: clientId, pos: { x: pos.x, y: pos.y, z: pos.z }, angle: who?.angle ?? 0, boost: techBoost(who?.charClass ?? 0, tech), damage }, ids, rangeH);
+  }
+
+  // What the technique objects ask of the world: the live enemies as sphere
+  // targets, entities by their 6x47 id (0x1000 | enemy index, else a client id),
+  // and the damage of the local player's objects (techHitEnemy).
+  private techWorld(): TechWorld {
+    const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && e.instance.root.visible && !concealed(e);
+    const enemyOf = (id: number): EnemyRuntime | undefined => (id >= 0x1000 ? this.enemies.get(id - 0x1000) : undefined);
+    return {
+      rng: () => this.rng(),
+      enemies: () => {
+        const out = [];
+        for (const e of this.enemies.values()) {
+          if (!live(e)) continue;
+          const p = this.hitPoint(e);
+          out.push({ id: 0x1000 | e.index, x: p.x, y: p.y, z: p.z, radius: collisionRadius(e.instance.spec.name) });
+        }
+        return out;
+      },
+      origin: (id) => {
+        const e = enemyOf(id);
+        if (id >= 0x1000) return live(e) ? { x: e.instance.root.position.x, y: e.instance.root.position.y, z: e.instance.root.position.z } : null;
+        const p = this.view?.playerPositions().get(id);
+        return p ? { x: p.x, y: p.y, z: p.z } : null;
+      },
+      point: (id) => {
+        const e = enemyOf(id);
+        if (id >= 0x1000) {
+          if (!live(e)) return null;
+          const p = this.hitPoint(e);
+          return { x: p.x, y: p.y, z: p.z };
+        }
+        const p = this.view?.playerPositions().get(id);
+        return p ? { x: p.x, y: p.y + 10, z: p.z } : null;
+      },
+      hit: (id, tech, level) => {
+        const e = enemyOf(id);
+        const me = this.game.self;
+        if (!live(e) || !me) return;
+        this.techHitEnemy(tech, level, this.selfStats().mst, me.charClass, e);
+        // MegidEntity_ProcessHit plays SE 0xb0 itself (techlightning.ts); the others have none.
+      },
+    };
+  }
+
   // The release frame (0x006a0340 area): TP, 6x48, then the technique's
   // effect (action_launch_tech -> unknown_cast_tech).
   private releaseTechnique(): void {
@@ -4710,6 +4852,9 @@ export class CombatView {
       this.opts.log(`${name}: ${opened ? 'telepipe opened' : 'no new telepipe'}`);
       return;
     }
+    // The objects of combat/techlightning.ts: what the exe draws, sounds and hits
+    // for the Zonde family, Grants, Megid and the supports.
+    if (ownsTechnique(c.tech)) this.castObjects(c.tech, c.level, c.data.rangeH, me.clientId, c.sent, true);
     if (c.tech === TECH.resta) {
       const heal = restaHeal(c.level, mst, me.charClass);
       // entity_hit_by_tech: the green HP text over every other healed player.
@@ -4719,12 +4864,10 @@ export class CombatView {
       }
       const before = this.damage.hp;
       if (!this.damage.dead) this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
-      this.overlay?.techEffect('resta', from.x, from.y, from.z, c.data.rangeH);
       this.opts.log(`${name} Lv${c.level + 1}: +${heal} HP (${before} -> ${this.damage.hp}); other players heal on their own clients`);
       return;
     }
     if (techElement(c.tech) === null) {
-      this.overlay?.techEffect('support', from.x, from.y, from.z, c.tech === TECH.jellen || c.tech === TECH.zalure ? c.data.rangeH : 20);
       this.releaseSupport(c);
       return;
     }
@@ -4735,8 +4878,10 @@ export class CombatView {
         this.opts.log(`${name} Lv${c.level + 1}: the object flies${first ? ` at E-${first.index.toString(16)}` : ' straight ahead'}`);
       return;
     }
-    // Who is hit: single-target techniques take the first target, the others
-    // reach every target in range.
+    // The Zonde family, Grants and Megid run as objects (castObjects above).
+    if (ownsTechnique(c.tech)) return;
+    // Who is hit: single-target techniques take the first target, Rafoie
+    // explodes around it, the others reach every target in range.
     let hits = c.targets.filter((e) => !e.dead);
     if (c.data.targets <= 1) hits = hits.slice(0, 1);
     const element = techElement(c.tech)!;
@@ -5257,8 +5402,15 @@ export class CombatView {
       if (!t || t.clientId === this.game.selfId) return;
       const pos = this.view?.playerPositions().get(t.clientId);
       const el = techElement(t.tech);
+      const cast = this.remoteCasts.get(t.clientId);
       if (isFireTech(t.tech)) this.remoteFire(t.clientId, t.tech, t.level);
-      else if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
+      else if (ownsTechnique(t.tech)) {
+        // unknown_cast_tech on this client: the object of that technique at the caster, at the 6x47 targets.
+        if (cast && cast.tech === t.tech) {
+          const level = remoteTechLevel(t.level, this.techOverride.get(t.clientId) ?? 0);
+          this.castObjects(t.tech, level, techData(t.tech, level, this.game.players.get(t.clientId)?.charClass ?? 0).rangeH, t.clientId, cast.targets, false);
+        }
+      } else if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
       if (t.tech === TECH.resta) this.remoteResta(t.clientId, t.level);
       if (el === null) this.remoteSupport(t.clientId, t.tech, t.level);
       return;
@@ -5653,6 +5805,9 @@ export class CombatView {
     this.hud?.dispose();
     this.levelUpFx?.dispose();
     this.levelUpFx = null;
+    this.techObjects = null;
+    this.techfx?.dispose();
+    this.techfx = null;
     this.fx?.dispose();
     this.fx = null;
     for (const h of this.remoteHooks.values()) this.viewer.frameHooks.delete(h);
