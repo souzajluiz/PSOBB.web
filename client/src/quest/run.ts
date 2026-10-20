@@ -16,6 +16,7 @@ import { QuestSession } from './session.ts';
 import type { QuestBoardItem, QuestVMHost } from './vm.ts';
 import { genderOfClass, type QuestInventoryItem } from './miscops.ts';
 import type { QuestTown } from './town.ts';
+import { BattleRun } from './battlerun.ts';
 
 export interface QuestRunnerOptions {
   quest: LoadedQuest;
@@ -38,6 +39,8 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
   const log = opts.log ?? (() => {});
   const { game, view, town } = opts;
 
+  // Battle mode (quest/battlerun.ts): created when the quest's ba_start fires.
+  let battle: BattleRun | null = null;
   const session = new QuestSession(opts.quest, {
     log,
     host: buildHost(),
@@ -89,6 +92,12 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       goFloor: (clientId, floor) => {
         if (clientId === game.selfId) void view.warpTo(floor);
       },
+      battleStart: (setup) => {
+        battle ??= new BattleRun({ game, view, ui: town.ui, canvas: town.canvasElement, files: town.clientFiles, log });
+        battle.start(setup);
+      },
+      battlePlace: (i) => battle?.placeAt(i) ?? { place: 0, points: 0 },
+      battleRecord: () => battle?.records.fields ?? [0, 0, 0, 0, 0, 0, 0],
       questBoardChanged: (items) => {
         opts.onBoardSelect && items.length && log(`quest board: ${items.map((i) => i.name).join(', ')}`);
       },
@@ -121,6 +130,7 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
     dispose() {
       if (disposed) return;
       disposed = true;
+      battle?.dispose();
       town.setQuest(null);
       town.ui.clear();
       view.setQuest(null);

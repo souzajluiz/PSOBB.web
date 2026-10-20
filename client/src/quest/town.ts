@@ -70,6 +70,13 @@ export class QuestTown {
   private area: { area: number; file: string; vm: QuestVM } | null = null;
   private areaScripts = new Map<string, Promise<Uint8Array | null>>();
   quest: QuestSession | null = null;
+  // The data files and the game canvas, for the overlays other quest modules add (quest/battlerun.ts).
+  get clientFiles(): ClientFiles {
+    return this.files;
+  }
+  get canvasElement(): HTMLCanvasElement {
+    return this.opts.canvas;
+  }
   private shop: string[][] | null = null;
   private templates: NpcPlayerTemplate[] | null = null;
   private counterOpen = false;
