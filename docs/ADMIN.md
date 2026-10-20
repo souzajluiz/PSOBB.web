@@ -127,6 +127,31 @@ newserv call from validated parts (see Security).
   Credentials are stored by newserv in clear text (its design); the panel
   cannot change that.
 
+## Languages
+
+The panel is available in English (the source language), Brazilian Portuguese
+(`pt-BR`) and Latin-American Spanish (`es`). A language `<select>` sits in the
+top bar and on the login card. The choice is kept in `localStorage`
+(`psobb-admin-lang`); without one the browser language is used (`pt*` ->
+pt-BR, `es*` -> es, anything else English). `<html lang>` follows the choice,
+and changing it re-renders the current tab without ending the session (an open
+dialog or an unsaved edit in the form is lost).
+
+How it works: `bridge/admin-ui/i18n.js` (served as `/admin/static/i18n.js`)
+looks up the exact English source string in a dictionary (`DICT`) and then in
+a list of regex patterns (`PATTERNS`, for text with numbers or names such as
+`Quests (12)` and for the error messages `bridge/admin.mjs` returns, which stay
+English on the wire). `admin.js` keeps its English literals; `tr()` is called
+only in the `h()` DOM helper (text nodes and `placeholder` / `title` /
+`aria-label` / `alt`), so toasts, dialogs and table empty text are covered, and
+for `document.title`. A string with no entry is shown in English. To translate
+new text, add a row to `DICT` (`[english, pt-BR, es]`) or a pattern.
+
+Never translated: the text to type in a confirmation (account id, config key),
+anything inside an element with class `mono`, account / file / quest names,
+config keys, class / section id / technique names (they come from newserv),
+and the audit log entries (a record, written by the server in English).
+
 ## Tabs
 
 | Tab | What it does | newserv route / command |
@@ -259,5 +284,10 @@ validation, the mapping to newserv routes / commands, the audit log,
 character / bank / config editing, and the quest routes (listing, reading,
 publishing: bad names and categories, path traversal, symlinks, oversize,
 PRS bomb, invalid quests, CSRF, confirmation, backup, rollback, mirror). `node tests/admin.live.ts` runs everything
+validation, the mapping to newserv routes / commands, the audit log, and
+character / bank / config editing. `node tests/admin.i18n.test.ts` checks the
+translation dictionary (no empty or placeholder-breaking entry, pattern samples,
+English fallback, language detection) and prints a report of English literals in
+`admin.js` / `admin.mjs` that have no entry. `node tests/admin.live.ts` runs everything
 against a real `vendor/newserv/build/newserv` started on random loopback ports
 in a temporary copy of its system folder (it never touches `system/players`).

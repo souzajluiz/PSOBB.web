@@ -147,3 +147,7 @@ pre { background: rgba(0, 0, 0, .35); border: 1px solid var(--line-soft); border
   button:active { transform: none; }
 }
 a.btn { display: inline-block; text-decoration: none; }
+
+/* language switcher: top bar and login card */
+select.lang { width: auto; font-size: 13px; padding: .2rem .5rem; }
+.login select.lang { display: block; margin: .9rem auto 0; width: auto; }
