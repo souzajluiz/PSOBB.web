@@ -11,7 +11,7 @@ import type { AiTarget } from './enemyai.ts';
 
 // ASSUMED: the player's hit box radius for projectiles (the player collision
 // radius 5 of render/lobbyview.ts; same value as enemyfsm.ts PLAYER_RADIUS).
-const PLAYER_RADIUS = 5;
+export const PLAYER_RADIUS = 5;
 // ASSUMED: the height of the point a shot aims at / hits on a player.
 export const PLAYER_AIM_HEIGHT = 10;
 

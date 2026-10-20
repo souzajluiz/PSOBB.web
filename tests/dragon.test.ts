@@ -7,6 +7,9 @@
 import {
   DragonAi,
   DragonBurst,
+  DRAGON_BODY_BOXES,
+  DRAGON_NODE_TABLE,
+  DRAGON_TAIL,
   DragonFireball,
   DragonFlame,
   DragonTrapezoid,
@@ -493,6 +496,124 @@ for (const n of [1, 2, 5]) {
     eq(slots.length, 1, 'floor 11 has one enemy slot');
     eq(slots[0].type, 'DRAGON', 'and it is the Dragon');
     eq(slots[0].set.type, 0xc0, 'set type 0xC0');
+  }
+}
+
+// 24. The hit boxes: the body's seven spheres and the tail object's 17.
+{
+  eq(DRAGON_BODY_BOXES.radii.join(), '10,10,10,15,15,10,10', 'the body boxes\' radii (0x00425212..0x0042524e)');
+  eq(DRAGON_BODY_BOXES.reach, Math.max(...DRAGON_BODY_BOXES.radii), 'the body reach is its biggest box');
+  eq(DRAGON_NODE_TABLE.length, 34, 'the node table 0x008fb900 has 34 slots');
+  eq(DRAGON_NODE_TABLE.slice(15, 32).join(), '72,74,76,79,80,81,82,83,84,85,88,89,90,91,92,93,94', 'the tail boxes follow slots 15..31');
+  eq(DRAGON_TAIL.count, 17, 'seventeen tail boxes');
+  eq(DRAGON_TAIL.radius, 10, 'of radius 10');
+  eq(DRAGON_TAIL.attackRow, 1, 'attack row 20 (the second of 18, 20, 21, 22, 23)');
+
+  // recordNodes: slots below 18 always, the others only with flag 0x200; high
+  // from 30 above the body.
+  const ai = brain();
+  const asked: number[] = [];
+  const at = (y: number) => (node: number, out: [number, number, number]) => {
+    asked.push(node);
+    out[0] = node;
+    out[1] = y;
+    out[2] = -node;
+    return true;
+  };
+  ai.flags = 0;
+  ai.recordNodes(at(40), 5);
+  eq(asked.join(), '72,74,76', 'without 0x200 only the first three tail nodes are read');
+  check(ai.tailBoxes[0].x === 72 && ai.tailBoxes[0].z === -72, 'and placed at their world position');
+  check(!ai.tailBoxes[0].low, '35 above the body is high');
+  check(ai.tailBoxes[3].x === 0 && ai.tailBoxes[3].z === 0, 'the unrecorded boxes keep the ctor position');
+  asked.length = 0;
+  ai.flags = 0x200;
+  ai.recordNodes(at(34), 5);
+  eq(asked.length, 17, 'with 0x200 all 17 are read');
+  check(ai.tailBoxes[16].x === 94 && ai.tailBoxes[16].low, '29 above the body is low');
+  ai.recordNodes(at(35), 5);
+  check(!ai.tailBoxes[16].low, 'exactly 30 above is high (30.0 <= y)');
+
+  // The swipe: from the second tick, once per player until the list resets at
+  // the frame 10 and frame 23 crossings (motion 18 has 26 frames at 0.5).
+  const sw = brain({ leader: () => false });
+  sw.applyRemote(S.tail, DRAGON_CURSOR_B, null, 0, 0);
+  eq(sw.sid, S.tail, 'a follower in the tail swipe');
+  eq(sw.wantsNodes, true, 'the swipe wants the nodes');
+  const victim = player(1, 100, -100);
+  const far = player(2, 400, 400);
+  const place = (b: { x: number; y: number; z: number }) => (node: number, out: [number, number, number]) => {
+    out[0] = b.x + (node - 72) * 0.0001;
+    out[1] = b.y;
+    out[2] = b.z;
+    return true;
+  };
+  let hits: { t: number; id: number }[] = [];
+  let tick = 0;
+  for (; tick < 70 && sw.sid === S.tail; tick++) {
+    // Every box 3 above the body at the victim's feet.
+    sw.flags = 0x200;
+    sw.recordNodes(place({ x: 100, y: 3, z: -100 }), 0);
+    const f = sw.tick([victim, far]);
+    for (const s of f.shots ?? []) {
+      const b = s as DragonBurst;
+      const e = b.effect;
+      if (e.kind === 'melee') {
+        check(e.attack === 1 && e.knockback === 3, 'the swipe hits with row 20 and knockback 3');
+        hits.push({ t: tick, id: b.peek([victim, far]).map((x) => x.clientId)[0] ?? -1 });
+      }
+    }
+  }
+  eq(hits.length, 3, 'a player in the swipe is struck three times (entry, frame 10, frame 23)');
+  check(hits.every((h) => h.id === 1), 'and only the one in reach');
+  check(hits[0].t === 1, 'the first strike is on the second tick');
+  check(hits[1].t - hits[0].t > 15 && hits[2].t - hits[1].t > 15, 'the others come after the crossings (ticks ' + hits.map((h) => h.t).join(',') + ')');
+  // High boxes strike nobody.
+  const hi = brain({ leader: () => false });
+  hi.applyRemote(S.tail, DRAGON_CURSOR_B, null, 0, 0);
+  let n = 0;
+  for (let i = 0; i < 60 && hi.sid === S.tail; i++) {
+    hi.flags = 0x200;
+    hi.recordNodes(place({ x: 100, y: 120, z: -100 }), 0);
+    n += (hi.tick([victim]).shots ?? []).length;
+  }
+  eq(n, 0, 'a raised tail strikes no one');
+  hits = [];
+
+  // The real model (needs the client data): nodes 72..94 are the tail and the
+  // swipe brings it near the ground at frames 3 and 15, up at frame 9.
+  const { existsSync, readFileSync } = await import('node:fs');
+  const dir = `${process.env.HOME}/Downloads/psobb-client/data`;
+  if (existsSync(`${dir}/data.gsl`)) {
+    const { GSLArchive } = await import('../client/src/formats/archives.ts');
+    const { buildEnemy, EnemyArchive } = await import('../client/src/render/enemymodel.ts');
+    const gsl = new GSLArchive(new Uint8Array(readFileSync(`${dir}/data.gsl`)));
+    if (gsl.has('bm_boss1_dragon.bml')) {
+      const arch = new EnemyArchive('bm_boss1_dragon.bml', gsl.get('bm_boss1_dragon.bml'), 2);
+      const built = buildEnemy(arch, [{ model: 0, motion: { index: DRAGON_SLOTS[7].motion, speed: 1, loop: true }, scale: 2 }], 0, new Map(), new Map());
+      const nodes = built.partNodes[0];
+      check(nodes.length > DRAGON_NODE_TABLE[33], `the model has the ${DRAGON_NODE_TABLE[33] + 1}+ nodes the table indexes (${nodes.length})`);
+      const rec = brain();
+      rec.flags = 0x200;
+      const lows = (frame: number): number => {
+        built.animators[0].setFrame(frame);
+        built.root.updateMatrixWorld(true);
+        rec.recordNodes((node, out) => {
+          const m = nodes[node]?.matrixWorld.elements;
+          if (!m) return false;
+          out[0] = m[12];
+          out[1] = m[13];
+          out[2] = m[14];
+          return true;
+        }, 0);
+        return rec.tailBoxes.filter((b) => b.low).length;
+      };
+      check(lows(3) >= 10, `frame 3 of the swipe: most of the tail is low (${lows(3)})`);
+      eq(lows(9), 0, 'frame 9: the tail is raised');
+      check(lows(15) >= 10, `frame 15: low again (${lows(15)})`);
+      const tip = rec.tailBoxes[16];
+      check(Math.abs(tip.z) > 200, `the tail tip is more than 200 behind the body (${tip.z.toFixed(0)})`);
+    }
   }
 }
 

@@ -5516,3 +5516,56 @@ frame counts, no state hangs in 20000..40000-tick soaks, remote damage, death);
 `tests/enemyfsm*.test.ts`, `enemystatus.test.ts`, client `tsc --noEmit` (only the two
 missing @capacitor modules). Not checked in Chrome (to do: Seabed / Mines with the
 Online tab, Warp to the Sinow and Delbiter floors).
+
+## 2026-10-20: Boss leftovers: Dragon hit boxes and models
+
+**What changed:** the Dragon's two sets of hit boxes are read from the exe and the tail swipe uses
+them. `combat/dragon.ts` has `DRAGON_BODY_BOXES`, `DRAGON_NODE_TABLE`, `DRAGON_TAIL`,
+`DragonAi.recordNodes` / `wantsNodes` / `tailBoxes`; the old swipe (an area strike 70 behind the
+body with radius 45, both ASSUMED) is gone. `render/combat.ts` `tickDragon` records the tail's
+model nodes while the swipe runs, and the player's melee test (`resolveHit`) counts the Dragon from
+its body boxes' surface. `PLAYER_RADIUS` is exported from `combat/enemyshots.ts`.
+
+**What the exe says (Ephinea VAs):**
+- Body: the ctor `0x00419214` calls `0x0051ff3c` with the table `0x009a39a0`, 7 boxes of 0x2c bytes.
+  The table is bss; the static init `0x00425212..0x0042524e` writes only the radius (+0xc): 10, 10,
+  10, 15, 15, 10, 10, the file holds flags 0x8003, every position is (0, 0, 0). Nothing in
+  `0x00419000..0x00428000` calls the box movers (`0x00520068`, `0x005200e4`, `0x00520158`), so the
+  body is spheres at its origin (the biggest 15).
+- Tail: a second object built by the ctor at `+0x68c` (`0x004269f8`, the dump's
+  "DestroyGameListObject"), 17 boxes cloned from the template `0x009a3fc0` (flags 0x8003, radius
+  10.0 written by the static init `0x00426d74`, which is in the CRT init table at `0x009a205c`).
+  Its update (`0x00426ba8`, vtable +4) places box i at the world position of the Dragon's recorded
+  node array entry 15 + i, then `0x00520304(box, 30.0)` sets flag 2 (low) below 30 above the
+  Dragon's y, flag 4 (high) from 30, and runs the generic contact attack `0x00521eb8` with the
+  context {3.0, 1}, the hit list `+0xbc` and AttackData row `[0x00a4373c]` (the second of the five
+  rows 18, 20, 21, 22, 23: attack index 1). Only the tail swipe (state 4, `0x004227dc`) calls that
+  update, from its second tick; the hit list is cleared on entering and when the animation crosses
+  frames 10 and 23 (the dump's "Clear/SetChildActive" also flip a +-5 vector at `+0xc4/+0xcc`, a
+  knockback direction), so one swipe strikes a player at most three times.
+- Nodes: the model draw (`0x00424580`) calls `0x00418d5c` for every node of the model, depth
+  first, with a counter; when it equals `0x008fb900[slot]` (0, 8, 10, 40, 41, 50, 51, 54..58, 67,
+  70, 71, 72, 74, 76, 79..85, 88..94, 100, 102) it copies the node's world position to `+0x438 +
+  12 * slot`. Slots 7..11 need flag 0x80 of `+0x3c8`, slots 18..31 flag 0x200 (the swipe sets
+  it), otherwise the last values stay. Checked against `bm_boss1_dragon.bml` (124 nodes): 72..94
+  are the tail (two forks), 40/41/50/51 the feet, 54..58 the neck; during `tatk` the tail is low
+  at frames 3 and 15 and up at frame 9, which is the swipe. This also pins the foot nodes
+  (slots 3..6, array `+0x45c..+0x480`) the render reads for the steps, not used yet.
+- Flames and fireballs have no model: their vtables (`0x00af3de0`, `0x00af3e40`) have the empty
+  draw `0x0061cdb0`; the visuals are particles (the fireball's landing calls `0x0050b7a4` with
+  0x40), which is the particle item, not a model item.
+
+**ASSUMED (marked in the code):** only low boxes touch a player (the exe tests in 3D and the
+targets carry no height), the player's body is the shared 5-unit disc, the body boxes' surface
+rule for the player's melee (the repo's melee is a point test for every enemy; the exe's generic
+test was not read) and the hit box index sent in 6x0A stays 0. The tail knockback direction
+(`+0xc4/+0xcc`), the hit callback `vtable +0x50` and the mouth / head nodes are not read.
+
+**Left:** the particles of the flames and fireballs, the mouth and head places (`+0x3f0..+0x437`
+come from node 0 plus three points at `0x00a437ac`), the foot dust, the 3D player test, the
+tail's knockback.
+
+**Checks:** `node tests/dragon.test.ts` (new section 24: the tables, the record gating, three
+strikes per swipe, a raised tail strikes nobody, and with the client data the real model's tail
+low / high by frame), client `tsc --noEmit` (only the two missing @capacitor modules). Not
+checked in Chrome.
