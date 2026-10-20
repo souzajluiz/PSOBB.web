@@ -5,7 +5,7 @@
    (no license: nothing is copied from it). */
 :root {
   color-scheme: dark;
-  --bg: #0a0d14;
+  --bg: #03060f;
   --glass: rgba(255, 255, 255, .07);
   --glass-strong: rgba(255, 255, 255, .11);
   --glass-dark: rgba(10, 14, 24, .45);
@@ -28,11 +28,14 @@
 html { min-height: 100%; background: var(--bg); }
 body {
   margin: 0; min-height: 100vh; color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* The game's title screen, redrawn in CSS (no Sega art is used): a near-black
+     navy field, rows of faint "code" lines, blue haze and a cyan magic circle. */
   background:
-    radial-gradient(60rem 40rem at 8% -10%, rgba(59, 130, 246, .38), transparent 60%),
-    radial-gradient(50rem 36rem at 95% 5%, rgba(168, 85, 247, .30), transparent 60%),
-    radial-gradient(46rem 40rem at 60% 110%, rgba(20, 184, 166, .26), transparent 60%),
-    var(--bg);
+    radial-gradient(circle at 50% 46%, transparent 0 17rem, rgba(34, 170, 220, .30) 17rem 17.25rem, transparent 17.25rem 19.5rem, rgba(34, 170, 220, .22) 19.5rem 21rem, transparent 21rem 23rem, rgba(34, 170, 220, .12) 23rem 23.2rem, transparent 23.2rem),
+    radial-gradient(60rem 40rem at 12% 8%, rgba(60, 110, 200, .30), transparent 65%),
+    radial-gradient(50rem 36rem at 92% 30%, rgba(30, 80, 170, .30), transparent 65%),
+    repeating-linear-gradient(to bottom, rgba(120, 170, 255, .07) 0 2px, transparent 2px 9px),
+    linear-gradient(#050a18, #03060f);
   background-attachment: fixed;
 }
 a { color: var(--accent); }
@@ -113,7 +116,12 @@ pre { background: rgba(0, 0, 0, .35); border: 1px solid var(--line-soft); border
 .login .eyefield { display: block; margin-bottom: .6rem; }
 .login .eyefield input { margin-bottom: 0; }
 .login .eyefield .eye { width: auto; }
-.login { max-width: 22rem; margin: 12vh auto 0; border-radius: 24px; padding: 1.6rem; }
+.login { max-width: 22rem; margin: 16vh auto 0; border-radius: 18px; padding: 1.6rem 1.4rem 1.4rem; position: relative; border-color: rgba(120, 200, 220, .45);
+  background: repeating-linear-gradient(to bottom, rgba(10, 70, 80, .55) 0 2px, rgba(6, 40, 52, .55) 2px 4px); }
+.login h1 { position: absolute; top: -1.1rem; left: -.4rem; margin: 0; padding: .2rem 1.6rem; border-radius: 12px; font-size: 1rem; color: #1a0f00;
+  background: linear-gradient(#ffb54a, #f26a0a 55%, #ffb54a); border: 1px solid #ffd49a; box-shadow: 0 2px 8px rgba(0, 0, 0, .5); }
+.login button.primary { background: linear-gradient(rgba(255, 170, 70, .55), rgba(230, 90, 10, .55)); border-color: rgba(255, 200, 140, .7); }
+.login button.primary:hover { background: linear-gradient(rgba(255, 190, 100, .7), rgba(240, 110, 20, .7)); }
 .login input { width: 100%; margin-bottom: .6rem; }
 .login button { width: 100%; }
 @media (max-width: 640px) {
