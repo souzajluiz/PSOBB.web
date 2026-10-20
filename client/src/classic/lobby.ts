@@ -22,7 +22,9 @@
 //   - chat: word balloons and the input line (chat.ts); the chat log is only
 //     shown in the main menu's Log Window (there is no log on screen).
 //   - information counter (counter.ts) and, from its Organize PARTY menu, the
-//     party game list and the party creation window (gamelist.ts).
+//     party game list and the party creation window (gamelist.ts); from
+//     Transport, Change SHIP / Change BLOCK (A0 / A1, hud.transport); from Team,
+//     the team windows (teammenu.ts).
 // Name tags over the heads: no code for them was found in PsoBB.exe; they
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
@@ -34,8 +36,9 @@ import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatBubbles, ChatInput, ChatLog, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
+import { TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { drawLobbyNameWindow, inGameSpace } from './ingame.ts';
+import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
 import { type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
@@ -63,6 +66,17 @@ export interface LobbyHud {
   party?: PartyHost;
   // g_ClientCaps_DarvantForm7Supported: the counter offers EPISODE 4.
   episode4?: boolean;
+  // The counter's Team menus talk to the server through this (teammenu.ts);
+  // without it the team rows are greyed.
+  team?: TeamHost;
+  // The counter's Transport rows: A0 (Change SHIP) / A1 (Change BLOCK), then the
+  // server's menu (07) is shown by the host (the ship select screen).
+  transport?: TransportHost;
+}
+
+export interface TransportHost {
+  changeShip(): Promise<void>;
+  changeBlock(): Promise<void>;
 }
 
 export class LobbyScreen implements Screen {
@@ -79,6 +93,10 @@ export class LobbyScreen implements Screen {
   private menu: MainMenu;
   private counter: InfoCounter;
   private party: PartyMenus | null = null;
+  private team: TeamMenus | null = null;
+  // The info window [15:6] shown from Change SHIP / Change BLOCK until the
+  // server's menu replaces this screen.
+  private transporting: InfoWindow | null = null;
   private itemList: ItemListWindow | null = null;
   private options: OptionsMenu | null = null;
   private logWindow = false;
@@ -105,19 +123,30 @@ export class LobbyScreen implements Screen {
       first: [t15(0x37), t15(0x38), t15(0x56)],
       transport: [t15(0x40), t15(0x41)],
       team: [t15(0x57), t15(0x58), t15(0x5b), t15(0x5c)],
+      teamDisabled: () => (hud.team ? teamRowsDisabled(hud.team.membership()) : [true, true, true, true]),
       party: [t15(T15.joinParty), t15(T15.createParty)],
       episodes: [t15(T15.episode1), t15(T15.episode2), ...(hud.episode4 ? [t15(T15.episode4)] : [])],
       episodeInfo: T15.createInfo.slice(0, hud.episode4 ? 3 : 2).map(t15),
     };
     this.counter = new InfoCounter(counterText);
-    if (hud.party) {
-      const party = new PartyMenus(hud.party, { t11: (i) => hud.text(0x0b, i), t15 });
-      this.party = party;
-      this.counter.onChoose = (menu, index) => {
-        if (menu === 'party' && index === 0) party.openList();
-        else if (menu === 'episode') party.openCreate((index + 1) as 1 | 2 | 3);
-      };
+    const party = hud.party ? new PartyMenus(hud.party, { t11: (i) => hud.text(0x0b, i), t15 }) : null;
+    this.party = party;
+    if (hud.team) {
+      const team = new TeamMenus(hud.team, { t11: (i) => hud.text(0x0b, i), t15 });
+      team.onBack = () => this.counter.resume();
+      team.onClose = () => this.counter.close();
+      this.team = team;
     }
+    this.counter.onChoose = (menu, index) => {
+      if (menu === 'party' && index === 0) party?.openList();
+      else if (menu === 'episode') party?.openCreate((index + 1) as 1 | 2 | 3);
+      else if (menu === 'transport') this.transport(index);
+      else if (menu === 'team' && this.team) {
+        this.team.begin(index);
+        return this.team.open;
+      }
+      return false;
+    };
     // LobbyView reads the pressed keys from the viewer's frame callback;
     // feed it the keys of the stage canvas instead (none while a menu or the
     // chat input has the keyboard), then apply the main menu's view shift.
@@ -133,11 +162,27 @@ export class LobbyScreen implements Screen {
   // The chat line, or the party menus' name / password editors.
   textInput(): TextInputState | null {
     if (this.input.open) return { password: false, chat: true };
-    return this.party?.textInput() ?? null;
+    return this.team?.textInput() ?? this.party?.textInput() ?? null;
   }
 
   private get busy(): boolean {
-    return this.input.open || this.menu.open || this.counter.open || !!this.party?.open;
+    return this.input.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting;
+  }
+
+  // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
+  // menu is closed, [15:6] is typed into the info window and A0 / A1 goes out.
+  private transport(index: number): void {
+    const host = this.hud.transport;
+    if (!host) return;
+    const [x, y] = WINDOW_POS.shipInfo;
+    const info = new InfoWindow(x, y, 342, 144);
+    info.set(this.hud.text(0x0f, 6));
+    this.transporting = info;
+    this.keys.clear();
+    (index === 0 ? host.changeShip() : host.changeBlock()).catch((err) => {
+      console.error('[classic] ship / block change failed', err);
+      this.transporting = null;
+    });
   }
 
   get lobbyName(): string {
@@ -197,6 +242,8 @@ export class LobbyScreen implements Screen {
     this.options?.tick();
     this.counter.tick();
     this.party?.tick();
+    this.team?.tick();
+    this.transporting?.tick();
     const cam = this.viewer.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
@@ -250,10 +297,16 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.transporting) return; // waiting for the server's menu
     if (this.party?.open) {
       // Tab is the game list's info key, Backspace its cancel.
       e.preventDefault();
       this.party.key(e);
+      return;
+    }
+    if (this.team?.open) {
+      e.preventDefault();
+      this.team.key(e);
       return;
     }
     if (e.key === 'Home' || e.key === 'F12') {
@@ -301,6 +354,7 @@ export class LobbyScreen implements Screen {
   leave(): void {
     this.keys.clear();
     this.party?.close();
+    this.team?.close();
     this.closeOptions();
     this.menu.close();
   }
@@ -322,6 +376,8 @@ export class LobbyScreen implements Screen {
       this.input.draw(ctx, this.frame);
       this.counter.draw(ctx, this.hud.skin, extra);
       this.party?.draw(ctx, this.hud.skin, extra);
+      this.team?.draw(ctx, this.hud.skin, extra);
+      this.transporting?.draw(ctx, this.hud.skin, extra);
       this.menu.draw(ctx, this.hud.skin, this.hud.menu);
       this.itemList?.draw(ctx, this.hud.skin);
       this.options?.draw(ctx, this.hud.skin, extra);

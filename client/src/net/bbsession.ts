@@ -122,6 +122,13 @@ export class BBSession {
   fullCharacter: Uint8Array | null = null;
   // The same, parsed (net/charfile.ts); updated with every E7.
   character: CharacterFile | null = null;
+  // The Lobby of the current game-server connection (set by enterLobby /
+  // connectGameServer and replaced when a menu answer redirects to another
+  // ship, see followRedirect).
+  lobby: Lobby | null = null;
+  // What a redirect needs to log in again: the character slot and credentials
+  // of the last game-server login.
+  private gameLogin: { username: string; password: string; slot: number } | null = null;
   private opts: SessionOptions;
 
   constructor(opts: SessionOptions) {
@@ -243,6 +250,8 @@ export class BBSession {
       characterSlot: slot,
     });
     const lobby = new Lobby(conn);
+    this.lobby = lobby;
+    this.gameLogin = { username, password, slot };
     const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
     if (first.command === 0x1a || first.command === 0xd5) {
       throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
@@ -294,6 +303,8 @@ export class BBSession {
       characterSlot: slot,
     });
     const lobby = new Lobby(conn);
+    this.lobby = lobby;
+    this.gameLogin = { username, password, slot };
     const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
     if (first.command === 0x1a || first.command === 0xd5) {
       throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
@@ -302,16 +313,85 @@ export class BBSession {
   }
 
   // 10 {menu_id, item_id}; resolves with the next menu (07) or null once the
-  // lobby was joined (67).
+  // lobby was joined (67). A 19 (reconnect to another ship / block server) is
+  // followed: see followRedirect.
   async selectMenuItem(item: MenuItem): Promise<MenuItem[] | null> {
     const conn = this.requireConn();
     const sel = new Uint8Array(8);
     new DataView(sel.buffer).setUint32(0, item.menuId, true);
     new DataView(sel.buffer).setUint32(4, item.itemId, true);
     conn.send(0x10, 0, sel);
-    const r = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
-    if (r.command === 0x1a || r.command === 0xd5) throw new Error(readUtf16(r.data, 0, r.data.length >> 1));
-    return r.command === 0x07 ? parseMenu(r.data) : null;
+    return this.menuReply(conn);
+  }
+
+  // The counter's "Change SHIP" (ResetLobbyStateAndReturnToShipSelect
+  // 0x0079ac9c: handler 4 = handle_ship_block_select_packets, send_packet0xa0)
+  // and "Change BLOCK" (ExecuteLobbyJoinPartyAction 0x0079b208, send_packet0xa1).
+  // Both send {player tag, guild card, 4 zero dwords} (0x20 bytes with the
+  // header; the tag and card are the ship connection's +0x12120 / +0x12124,
+  // stored from the 04 packet). newserv answers both the
+  // same way (on_A0; "newserv doesn't have blocks"): 69 for the own client id,
+  // an empty message box, B1, the full character again (E7) and the main menu
+  // 07, so the same connection and character carry on and the ship select
+  // screen is shown again. A server with real ships / blocks answers with a 07
+  // titled "BLOCK" or a 19 (followed).
+  async changeShip(): Promise<MenuItem[] | null> {
+    return this.leaveToMenu(0xa0);
+  }
+
+  async changeBlock(): Promise<MenuItem[] | null> {
+    return this.leaveToMenu(0xa1);
+  }
+
+  private async leaveToMenu(command: 0xa0 | 0xa1): Promise<MenuItem[] | null> {
+    const conn = this.requireConn();
+    const body = new Uint8Array(0x18);
+    const dv = new DataView(body.buffer);
+    dv.setUint32(0, 0x00010000, true); // player tag
+    dv.setUint32(4, this.init?.guildCardNumber ?? 0, true);
+    conn.poll(0x07); // a stale menu must not answer this request
+    conn.send(command, 0, body);
+    return this.menuReply(conn);
+  }
+
+  // Waits for what a menu selection / A0 / A1 leads to: 07 (menu, returned),
+  // 67 (lobby joined, null), 19 (reconnect, followed) or a message box (an
+  // empty one is skipped: newserv sends it before the menu after A0; text is
+  // an error).
+  private async menuReply(conn: BBConnection): Promise<MenuItem[] | null> {
+    for (;;) {
+      const r = await conn.waitFor(0x07, 0x67, 0x19, 0x1a, 0xd5);
+      if (r.command === 0x07) return parseMenu(r.data);
+      if (r.command === 0x67) return null;
+      if (r.command === 0x19) return this.followRedirect(parseReconnect(r));
+      const text = readUtf16(r.data, 0, r.data.length >> 1);
+      if (text) throw new Error(text);
+    }
+  }
+
+  // 19 {address, port} during the game-server phase: the chosen ship / block
+  // is another server. Connect to its port (through the same transport
+  // factory, so the browser keeps going through the bridge), log in again with
+  // phase 4 and the same character slot, and continue with its menu or lobby.
+  // The new connection gets a new Lobby (session.lobby). Not exercised against
+  // a live multi-ship server (newserv never sends 19 here).
+  private async followRedirect(redirect: { address: string; port: number }): Promise<MenuItem[] | null> {
+    const init = this.init;
+    const login = this.gameLogin;
+    if (!init || !login) throw new Error('log in first');
+    this.log(`redirected to ${redirect.address}:${redirect.port}`);
+    const conn = await this.open(redirect.port);
+    conn.sendLogin({
+      username: login.username,
+      password: login.password,
+      guildCardNumber: init.guildCardNumber,
+      securityToken: init.securityToken,
+      clientConfig: init.clientConfig,
+      connectionPhase: 4,
+      characterSlot: login.slot,
+    });
+    this.lobby = new Lobby(conn);
+    return this.menuReply(conn);
   }
 
   close(): void {

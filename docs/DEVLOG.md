@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-20: Counter: Change SHIP / Change BLOCK and the Team menus
+
+**What changed:** the lobby counter's Transport rows and Team rows now work
+(`net/team.ts`, `net/bbsession.ts`, `classic/teammenu.ts`, `classic/counter.ts`,
+`classic/lobby.ts`, `classic/main.ts`). Tests: `tests/team.test.ts`,
+`tests/teammenu.test.ts` (offline), `tests/shipchange.live.ts`,
+`tests/team.live.ts` (against newserv). Nothing of the windows was seen in
+Chrome (the Node tests draw them on a stub canvas only).
+
+**Change SHIP / BLOCK (Ephinea `PsoBB.exe`):** `ResetLobbyStateAndReturnToShipSelect`
+(0x0079ac9c, row 0) and `ExecuteLobbyJoinPartyAction` (0x0079b208, row 1) close every
+counter window, type `[15:6]` ("Select a Ship you'd like to get transported to.")
+into the info window, set packet handler 4 to `handle_ship_block_select_packets`,
+send `A0` / `A1` (`send_packet0xa0/a1`: 0x20 bytes, body = player tag, guild card,
+four zero dwords: the connection's +0x12120 / +0x12124 from the 04 packet) and set
+menu id 7 / 8. newserv treats both the same (`on_A0`, "newserv doesn't have
+blocks"): `69` for the own id, an empty message box, `B1`, `E7`, then the main
+menu `07`. So the same connection and character carry on; `BBSession.changeShip()`
+/ `changeBlock()` return the menu and `main.ts` shows the ship select screen again
+("Go to lobby" -> `67`). A `19` during the menu phase is followed
+(`followRedirect`: connect to its port through the same transport factory, log in
+again with phase 4 and the same slot, `session.lobby` is the new Lobby); that path
+is not exercised by any test (newserv never sends it there).
+
+**Team menus:** the dump's names for the 0x007979xx..0x007a0bxx functions are
+wrong; the state machine was rebuilt from the `g_CurrentLobbyMenuId` numbers, the
+`send_packet0xea_subcommand*` builders (0x007f2xxx..0x007f6xxx), the handler table
+`pso_protocol_packet_ea_handler` (0x00a0f800) and unitxt group 15 0x57..0x9b. The
+full table is in the header of `classic/teammenu.ts`. Data words read from the
+exe: `g_TeamMenuListData` 0x009ff50c = (180, 80), width 0x009ff514 = 280, height
+180; entries 0xe9 (31, 118), 0xea (572), 0xeb (190, 180), 0xec (260, 120), 0xc8
+(96, 333); the 3-row name window is the party creation window's 425 x 188 at
+(181, 50) (`g_YesNoMenuData1`, 0x009715d8).
+
+**Left (ROADMAP):** Master Transfer (the exe asks the chosen player with a 6x
+message first), Buying Privileges / Team Flag Records windows, inviting a player,
+the banned team names, the team chat line, the lobby team flags; the ranking /
+master window widths and the 8 visible rows are ASSUMED.
+
 ## 2026-10-20: Episode 2 FSMs: Gibbons, Mericarol family
 
 **What changed:** Ul Gibbon / Zol Gibbon (`TObjEneBm5GibonU`) and Mericarol /

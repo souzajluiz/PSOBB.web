@@ -6,12 +6,15 @@ import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
 import { Game, type GameListEntry } from '../net/game.ts';
+import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
+import { membershipFromSave, NO_TEAM, TeamClient } from '../net/team.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
 import type { PartyHost } from './gamelist.ts';
-import { LobbyScreen, type LobbyHud } from './lobby.ts';
+import { LobbyScreen, type LobbyHud, type TransportHost } from './lobby.ts';
+import type { TeamHost } from './teammenu.ts';
 import { QuestLoadingScreen } from './questloading.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
@@ -232,6 +235,43 @@ async function main(): Promise<void> {
     };
   };
 
+  // The counter's Team menus (teammenu.ts) over the connection's TeamClient
+  // (net/team.ts): one per connection, its membership refreshed from the latest
+  // E7 save data at each lobby entry (the 12EA updates keep it current).
+  let teamClient: { conn: BBConnection; client: TeamClient } | null = null;
+  const teamHost = (lobby: Lobby): TeamHost | undefined => {
+    const s = session;
+    if (!s?.init) return undefined;
+    const gc = s.init.guildCardNumber;
+    if (teamClient?.conn !== lobby.conn) teamClient = { conn: lobby.conn, client: new TeamClient(lobby.conn, NO_TEAM, gc) };
+    const c = teamClient.client;
+    c.membership = membershipFromSave(s.fullCharacter);
+    return {
+      membership: () => c.membership,
+      selfGuildCard: () => gc,
+      createTeam: (name) => c.createTeam(name),
+      removeMember: (card) => c.removeMember(card),
+      members: () => c.members(),
+      setPrivilege: (card, privilege) => c.setPrivilege(card, privilege),
+      disband: () => c.disband(),
+      crossRanking: () => c.crossRanking(),
+    };
+  };
+
+  // The counter's Transport rows: A0 / A1, then the server's menu (07) is the
+  // ship select screen again; the connection and the character stay.
+  const transportHost = (shipName: string): TransportHost => {
+    const go = async (change: (s: BBSession) => Promise<ServerMenuItem[] | null>) => {
+      if (!session) return;
+      const menu = await change(session);
+      const lobby = session.lobby;
+      if (!lobby) return;
+      if (menu) await showShipSelect(lobby, menu);
+      else await enterLobby(lobby, shipName);
+    };
+    return { changeShip: () => go((s) => s.changeShip()), changeBlock: () => go((s) => s.changeBlock()) };
+  };
+
   const enterLobby = async (lobby: Lobby, shipName: string) => {
     const v = world();
     showWorld(true);
@@ -241,6 +281,9 @@ async function main(): Promise<void> {
     lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
     const hud = await loadHud(mapData.infoCols ?? []);
     hud.party = partyHost(lobby, shipName);
+    const team = teamHost(lobby);
+    if (team) hud.team = team;
+    hud.transport = transportHost(shipName);
     hud.episode4 = episode4;
     const screen = new LobbyScreen(v, lobbyView, lobby, hud, shipName);
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
@@ -266,8 +309,10 @@ async function main(): Promise<void> {
         screen.busy = true;
         try {
           const next = await session.selectMenuItem(items[index]);
-          if (next) await showShipSelect(lobby, next);
-          else await enterLobby(lobby, shipName);
+          // A 19 answer moved the session to another connection (a new Lobby).
+          const current = session.lobby ?? lobby;
+          if (next) await showShipSelect(current, next);
+          else await enterLobby(current, shipName);
         } catch (err) {
           console.error(err);
           screen.busy = false;

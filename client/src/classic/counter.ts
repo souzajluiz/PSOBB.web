@@ -34,10 +34,17 @@
 //     (FUN_00736458: x = -0.5 * text width + width * 0.5 - 10).
 // Widescreen: psobb.io centres these menus like the title's Login menu
 // (measured on capture e01: "Transport" at x 68 + 64 on a 768-wide screen).
-// The ship/block change and the team commands are not implemented: they
-// close the menus.
+// The leaves: Transport's two rows hand over to the lobby (A0 / A1, see
+// net/bbsession.ts changeShip: ResetLobbyStateAndReturnToShipSelect
+// 0x0079ac9c / ExecuteLobbyJoinPartyAction 0x0079b208 close every menu, show
+// [15:6] in the info window and send the packet); the Team rows stay on screen
+// collapsed to the chosen line while the team windows (teammenu.ts) are open and
+// come back with "Do you have any other business?" -> Yes
+// (ShowTeamMainMenu); greyed rows (SetItemHighlight_0073662c, 0xff909090) keep
+// the cursor and refuse Decide (ASSUMED: the buzzer).
 
 import { se, SE } from '../audio/se.ts';
+import { DISABLED } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { InfoWindow, WINDOW_POS } from './ingame.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
@@ -52,13 +59,17 @@ interface CounterMenu {
   info?: string[] | undefined;
   // Names the menu in onChoose.
   id?: CounterMenuId;
+  // Greyed rows, asked every time the menu is drawn or a row is chosen.
+  disabled?: (() => readonly boolean[]) | undefined;
 }
 
 export type CounterMenuId = 'root' | 'party' | 'transport' | 'team' | 'episode';
 
 // A leaf chosen: the menu and the row (party 0 = Join, party/episode 0..2 =
-// the episode: 1, 2 or 3 for Episode 4).
-export type CounterChoice = (menu: CounterMenuId, index: number) => void;
+// the episode: 1, 2 or 3 for Episode 4). Returning true keeps the menus on
+// screen (held, the leaf's own windows are open); resume() brings the list
+// back, close() ends it.
+export type CounterChoice = (menu: CounterMenuId, index: number) => boolean | void;
 
 export interface CounterText {
   info: string; // 0x0F/3
@@ -68,11 +79,16 @@ export interface CounterText {
   party: string[]; // 0x0F/0x3b, 0x3c
   episodes?: string[]; // 0x0F/0x47, 0x48, (0x49 with Episode 4)
   episodeInfo?: string[]; // 0x0F/0x11, 0x12, (0x13)
+  // Which rows of the team list are greyed (teamRowsDisabled).
+  teamDisabled?: () => readonly boolean[];
 }
 
 export class InfoCounter {
   open = false;
   private stack: Array<{ menu: CounterMenu; cursor: number; collapse: number }> = [];
+  // A leaf kept the menus (onChoose returned true): the top list is collapsed
+  // to its chosen line and takes no keys.
+  held = false;
   private info: InfoWindow;
   private infoText: string;
   private root: CounterMenu;
@@ -91,13 +107,22 @@ export class InfoCounter {
       y: 251,
       items: text.first,
       id: 'root',
-      next: [sub('party', text.party, [null, episode]), sub('transport', text.transport), sub('team', text.team)],
+      next: [sub('party', text.party, [null, episode]), sub('transport', text.transport), { ...sub('team', text.team), disabled: text.teamDisabled }],
     };
   }
 
   close(): void {
     this.open = false;
+    this.held = false;
     this.stack = [];
+  }
+
+  // "Do you have any other business?" -> Yes: the held list is active again.
+  resume(): void {
+    if (!this.open) return;
+    this.held = false;
+    const top = this.stack[this.stack.length - 1];
+    if (top) top.collapse = 0;
   }
 
   begin(): void {
@@ -123,11 +148,12 @@ export class InfoCounter {
   tick(): void {
     if (!this.open) return;
     this.info.tick();
-    for (let i = 0; i < this.stack.length - 1; i++) this.stack[i].collapse = Math.min(3, this.stack[i].collapse + 1);
+    const collapsing = this.held ? this.stack.length : this.stack.length - 1;
+    for (let i = 0; i < collapsing; i++) this.stack[i].collapse = Math.min(3, this.stack[i].collapse + 1);
   }
 
   key(e: KeyboardEvent): void {
-    if (!this.open) return;
+    if (!this.open || this.held) return;
     const top = this.stack[this.stack.length - 1];
     const n = top.menu.items.length;
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -135,6 +161,10 @@ export class InfoCounter {
       se(SE.cursor);
       this.showInfo(top);
     } else if (e.key === 'Enter') {
+      if (top.menu.disabled?.()[top.cursor]) {
+        se(SE.buzzer);
+        return;
+      }
       se(SE.ok);
       const next = top.menu.next?.[top.cursor];
       if (next) {
@@ -143,8 +173,11 @@ export class InfoCounter {
         this.showInfo(level);
       } else {
         const id = top.menu.id;
-        this.close();
-        if (id) this.onChoose(id, top.cursor);
+        const keep = id ? this.onChoose(id, top.cursor) === true : false;
+        if (keep) {
+          this.held = true;
+          top.collapse = 0;
+        } else this.close();
       }
     } else if (e.key === 'Backspace' || e.key === 'Escape') {
       // close_lobby_menus: every counter menu goes at once.
@@ -161,7 +194,7 @@ export class InfoCounter {
       const textW = Math.max(...menu.items.map(gameTextWidth));
       const w = textW + 20;
       const full = menu.items.length * 20 - 6 + 20;
-      const collapsed = depth < this.stack.length - 1;
+      const collapsed = depth < this.stack.length - 1 || this.held;
       // FUN_0073600c: 20 + one line (14) when collapsed, reached in 3 frames.
       const h = collapsed ? full + ((34 - full) * lv.collapse) / 3 : full;
       const x = menu.x + dx;
@@ -175,7 +208,8 @@ export class InfoCounter {
         return;
       }
       drawSelectBar(ctx, skin.bars, cx, cy + lv.cursor * 20, w - 20, 16);
-      menu.items.forEach((t, i) => drawGameText(ctx, t, cx + (w - 20 - gameTextWidth(t)) / 2, cy + i * 20 + 1, i === lv.cursor ? '#ffc19a' : '#ffffff'));
+      const grey = menu.disabled?.() ?? [];
+      menu.items.forEach((t, i) => drawGameText(ctx, t, cx + (w - 20 - gameTextWidth(t)) / 2, cy + i * 20 + 1, grey[i] ? DISABLED : i === lv.cursor ? '#ffc19a' : '#ffffff'));
     });
     this.info.draw(ctx, skin, extra);
   }

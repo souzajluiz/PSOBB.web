@@ -99,7 +99,7 @@ export function drawTextWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin, 
 // decision for the caller ('none' when the key was not for the list).
 export type ListKey = 'move' | 'decide' | 'cancel' | 'buzzer' | 'none';
 
-export function listKey(e: KeyboardEvent, items: readonly ListItem[], state: { cursor: number }): ListKey {
+export function listKey(e: { key: string }, items: readonly ListItem[], state: { cursor: number }): ListKey {
   const n = items.length;
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     if (!n) return 'none';

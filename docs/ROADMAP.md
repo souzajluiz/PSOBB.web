@@ -48,8 +48,11 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    lines and progress bar (`classic/questloading.ts`). Still open: the quest
    screen's particle wipes and middle particle, the lobby / floor loading
    screens (`current_loading_screen_type`), the field scene the classic client
-   needs to actually play a game it joined, and the counter's ship / block
-   change and team menus. No captures exist for any of it.
+   needs to actually play a game it joined. The counter's Change SHIP / BLOCK and
+   the Team menus (create, leave, ranking, promote / demote / dismiss, dissolve)
+   are done 2026-10-20 (`classic/teammenu.ts`, `net/team.ts`; not seen in Chrome);
+   left: Master Transfer (6x handshake), Buying Privileges / Flag Records windows,
+   inviting players, banned team names, team chat line. No captures exist for any of it.
 4. DONE 2026-10-20 (see HANDOFF item 2 for what is left): the rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
