@@ -5275,3 +5275,83 @@ In `models.html` (new proportion sliders): FOmar hats follow the costume colors,
 - **Bug 1, race:** `03` arrived before `BBConnection` installed its handler. The transport now queues early data.
 - **Bug 2, framing:** the cleartext `03` is not padded to 8 bytes. Only encrypted commands are padded.
 - **Result:** `E6 error_code=0`, then `19` (redirect). Login OK.
+
+## 2026-10-20: Episode 2 FSMs: Gee, Gi Gue, Gibbles
+
+**What changed:** Gee (Jungle / Mountain / Seaside), Gi Gue and Gibbles have
+their own brains in `combat/enemyfsmep2a.ts` (`GeeAi`, `GiGueAi`, `GibblesAi`,
+plus the shots `GeeSpike`, `GiGueSpit`, `GiGueBomb` and the instant
+`GroundBlast`), wired in `render/combat.ts` like the other families (OWN_FSM,
+HP fraction, remote hits fed through `onDamage`, Gi Gue's Jellen / Zalure
+through `applySelfBuff`, a blocked hit through `GiGueAi.blocked`).
+`tests/enemyfsmep2a.test.ts` drives each with several motion lengths and a
+20000-frame fuzz (targets coming and going, hits, blocked hits): no state hangs.
+No Chrome check (the Episode 2 archives are not on this machine either, so
+the motion lengths in the tests are stand-ins).
+
+**Reading the dump:** all three are mislabelled. Gee is `Sinowberill*`
+(factory 0x0055c974, vtable 0x00b051c0, dispatcher 0x0055d11c with the jump
+table 0x00925500), its spike `GiGues_*` (0x0055fecc, vtable 0x00b053c8, base
+0x007acaf8). Gibbles is `Derolle*` (ctor 0x00563200, vtable 0x00b054e0). Gi
+Gue (ctor 0x0056beb4, vtable 0x00b05a20) has its handlers named `Gibbles*`.
+They were matched by constructor, vtable and motion table (0x009bdf80 /
+0x009be180 / 0x009be5c0); the vtables, the float constants and the runtime
+globals (written by 0x005643b0, 0x00568ef0 .. 0x0056d4c0, 0x0056bba4) came from
+`objdump -d` of PsoBB.exe, which the dump does not carry.
+
+**Gee (states of enemy+0x32e):** 0 spawn (4 frames), 1 rise (the 40-frame
+emergence effect) or 2 drop (150 above the ground, down by max(1, param3 + 1))
+by param2 == 0, 3 idle (FindEnemyTarget 200 every 45 frames), 4 alert (the
+colour fade-up, 19 frames), 5 climb to 45 (61 frames), then ChooseAttack
+(0x0055c4bc): param1 == 0 only lunges (8), else 7 shoot, 7 shoot, 8 melee. 7:
+fly to within 70 at 0.5, charge MovementData iparam1 + 1 frames while the aim
+point creeps at 0.6, release at 15 frames, iparam3 + 1 frames of recovery,
+iparam4 volleys; the spike flies at 6 + param4 for 150 frames (tech power
+fparam2). 8: 41 frames of turning, 14 degree side steps (7.73 a frame, 4
+frames, invulnerable), lunge at fparam1, up to 3 stings at motion frame 10
+(try_hit_entity(1.0) + cause_knockback(3.0), slow on a roll <= 0.25). 9: four
+8-frame dashes round the player ending at radius 70 (31 frames of turning
+between), only the first invulnerable. 13: the flinch (every hit, MovementData
+iparam5 frames hold, then back to the state it left, enemy+0x380). 15: no
+target, wait 60 frames, fly home at 0.8. The drawn height is enemy+0x3fc, which
+only the rise and drop states write (SinowberillRender_0055ce54), so the
+climb to 45 changes the aim origin, not the model. Death is state 14 (a
+vanish with SE 0x250): no motion.
+
+**Gi Gue:** request protocol of GiGuesUpdate_005695ec (old state's exit with
+sub-state -1, then the new one), AI record 0x009be6e4 (search 150, turn 768,
+wander speed 0 so it only turns). Idle (walk 150 / stand 90 frames), approach
+(turn on the spot by half the turn rate until a player is within
+AttackData distance_x = 300 and half the 12288 arc; volley twice, hop the third
+time), volley (three rounds of one homing spit: speed fparam3, steering
+strength fparam4 + fparam5 a frame, doubled within 150, 90 frames, confusion
+roll against fparam6), prepare (Jellen / Zalure, level iparam3, on the players
+in the cone), barrier (iparam4 * 30 frames, blocks hits; a blocked hit is
+answered with the bomb: speed fparam2, radius 40, power iparam1), hop (60 frames
+crouch, rise to 50 at 2.2, 200 away at fparam1, drop 2.3), fall from the sky
+(param1 > 0: 150 + param3, 2.3 a frame), emergence 40 frames, flinch (a hit of
+a quarter of the HP is answered with a volley).
+
+**Gibbles:** Booma controller with the overrides at vtable +0x80 / +0x84 /
++0xf0 .. +0x100. Waits hidden until a player is within 200, drops in (40-frame
+effect, then the landing shockwave of attack row 3), walks at fparam3 = 0.8,
+triple slam (blasts at motion frames 8 / 23 / 40, hand hits on every fifth game
+frame between), a leap when the target is beyond 150 (or a roll against
+param3 every 50 walked units), a guard when an attacking player is within 30
+(100 + param1 points), then the heavy swing twice; a hit outside an attack
+staggers it, then a leap with the chance of param4.
+
+**ASSUMED (marked in the code):** the player's hit radius (5) and the shots'
+vertical extent; the muzzle / bone positions (Gee 45 above, the Gi Gue spit and
+bomb at 20, the Gibbles slams half a reach in front of it); the guard drain
+(80 per raise instead of 0.2 * (attacker ATP - DFP)); the barrier's own
+motions (20 frames each); the order of Gibbles' two last attack rows (62 = rage
+swing, 63 = landing); the flat ground and the missing line-of-sight rays; the
+retarget phase (the exe starts it at entity_index % interval).
+
+**Left:** Gee's pack states 6 / 10 (never entered by the factory's subtype 0),
+the 250-frame sink of a dead Gibbles and Gi Gue's death particles (the owner
+removes them), the Gibbles hold of the drop-in animation at frame 100, the hand
+bone hit boxes (DAT_009be10c / 009be138), Gi Gue's stomp entities
+(0x006f1eb0 / 0x006e7998) beyond the Jellen / Zalure cast, and the real motion
+frame counts of the three archives.
