@@ -12,6 +12,7 @@
 import type { Game } from '../net/game.ts';
 import type { LoadedQuest } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
+import { ChallengeRuntime } from './cmoderun.ts';
 import { QuestSession } from './session.ts';
 import type { QuestBoardItem, QuestVMHost } from './vm.ts';
 import type { QuestTown } from './town.ts';
@@ -36,10 +37,15 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
   const log = opts.log ?? (() => {});
   const { game, view, town } = opts;
 
+  // A game created with the Challenge flag runs the mode around the quest
+  // (quest/cmoderun.ts).
+  const challenge = game.info?.challenge ? new ChallengeRuntime({ game, view, town, log }) : null;
+
   const session = new QuestSession(opts.quest, {
     log,
     host: buildHost(),
   });
+  challenge?.attach(session.vm);
 
   function buildHost(): QuestVMHost {
     const player = (clientId: number) => game.players.get(clientId) ?? null;
@@ -59,7 +65,7 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       // (1) is the honest default and is what every "is the player busy" test
       // in a quest's opening expects.
       playerState: (id) => (player(id) ? 1 : 0),
-      playerDead: (id) => !player(id),
+      playerDead: (id) => !player(id) || view.combat.isPlayerDead(id),
       playerHpTp: (id) => {
         // The web client tracks only the local character's stats (net/charfile.ts
         // through the inventory panel); other players report nothing.
@@ -84,6 +90,8 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       questBoardChanged: (items) => {
         opts.onBoardSelect && items.length && log(`quest board: ${items.map((i) => i.name).join(', ')}`);
       },
+      ...(challenge ? { cmode: challenge.env } : {}),
+      resetMap: () => view.resetMap(),
     };
   }
 
@@ -109,6 +117,7 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
     dispose() {
       if (disposed) return;
       disposed = true;
+      challenge?.dispose();
       town.setQuest(null);
       town.ui.clear();
       view.setQuest(null);

@@ -674,6 +674,18 @@ export class GameField {
   // --- what the quest VM asks of the field (quest/run.ts) ---
 
   // if_zone_clear (opcode 0x88): every wave of the room has been destroyed.
+  // reset_map (PsoBB.exe .c:608900, the Challenge retry): the switch flags,
+  // the wave events, the objects construct_objects made and the 6x67 / 6x76
+  // waiting for a floor go back to their initial state; every floor loads
+  // fresh the next time the player enters it.
+  resetState(): void {
+    this.flags.clear();
+    this.constructed.clear();
+    this.waves.clear();
+    this.pendingTriggers.clear();
+    this.pendingKills.clear();
+  }
+
   zoneCleared(floor: number, room: number): boolean {
     const w = this.waves.get(floor);
     if (!w) return false;

@@ -390,12 +390,18 @@ export class Game extends Lobby {
   }
 
   // C1: create a game and enter it as its leader.
+  //
+  // A Challenge Mode game (opts.challenge, C_CreateGame_BB_C1 +0x4A) has no
+  // difficulty of its own: the party menu sends 0 for it and the quest's
+  // set_cmode_difficulty sets it (classic/gamelist.ts, newserv on_DF_BB 03DF).
+  // Episode 4 has no Challenge Mode (newserv on_C1_BB refuses it).
   static async create(lobby: Lobby, ctx: GameContext, opts: CreateGameOptions): Promise<Game> {
+    if (opts.challenge && opts.episode === 3) throw new Error('Episode 4 does not support Challenge Mode.');
     const g = new Game(lobby, ctx);
     const body = new Uint8Array(0x50);
     body.set(utf16Field(opts.name, 0x10), 0x08);
     body.set(utf16Field(opts.password ?? '', 0x10), 0x28);
-    body[0x48] = opts.difficulty ?? 0;
+    body[0x48] = opts.challenge ? 0 : (opts.difficulty ?? 0);
     body[0x49] = opts.battle ? 1 : 0;
     body[0x4a] = opts.challenge ? 1 : 0;
     body[0x4b] = opts.episode ?? 1;
@@ -1156,9 +1162,39 @@ export class Game extends Lobby {
     this.conn.send(0x62, Math.max(0, this.leaderId), buildDropRequest(req));
   }
 
+  // --- Challenge Mode (quest/cmode.ts has the layouts and the rules) ---------
+
+  // Enemies the local player killed (player->num_enemies_killed, read by the
+  // get_num_kills / reset_kills quest opcodes): handle_experience adds one
+  // when the player dealt the last hit (add_kills).
+  selfKills = 0;
+
+  // DF subcommand `sub` (C_SetChallengeMode*_BB_0NDF): the command is
+  // 0x(sub)DF, flag 0. The client sends them from the leader only.
+  sendChallengeConfig(sub: number, payload: Uint8Array): void {
+    this.conn.send(((sub & 0xff) << 8) | 0xdf, 0, payload);
+  }
+
+  // ED 08 (C_UpdateChallengeRecords_BB_08ED): the 0x140 records to save.
+  sendChallengeRecords(records: Uint8Array): void {
+    this.conn.send(0x08ed, 0, records);
+  }
+
+  // A prebuilt 6x body to every player (6x7C, 6x95, 6x97, 6x9D).
+  sendBroadcastSubcommand(body: Uint8Array): void {
+    this.conn.send(0x60, 0, body);
+  }
+
+  // A prebuilt 6x body the server handles (6xD1), addressed to the leader like
+  // the other 62 sends.
+  sendServerSubcommand(body: Uint8Array): void {
+    this.conn.send(0x62, Math.max(0, this.leaderId), body);
+  }
+
   // 6xC8 (G_EnemyEXPRequest_BB_6xC8, 0x0C): {entity id} {u16 enemy index, u16
   // requesting client id, u8 is_killer}. newserv answers 6xBF (EXP) on BB.
   sendExpRequest(enemyIndex: number, isKiller: boolean): void {
+    if (isKiller) this.selfKills++;
     const b = new Uint8Array(0x0c);
     const dv = new DataView(b.buffer);
     b[0] = 0xc8;

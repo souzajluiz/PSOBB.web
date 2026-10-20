@@ -652,6 +652,16 @@ export class GameView {
 
   // --- what the quest VM asks of the field (quest/run.ts) ---
 
+  // reset_map: floor items and the field's flags, waves and constructed
+  // objects start over (reset_floor_items_for_chl_reset and the resets after it).
+  resetMap(): void {
+    this.field.resetState();
+    for (const it of [...this.items.floorItems.values()]) {
+      this.items.floorItems.delete(it.id);
+      this.items.onFloorItemRemoved(it);
+    }
+  }
+
   roomAt(pos: { x: number; y: number; z: number }): number {
     return this.field.roomAt(pos);
   }
