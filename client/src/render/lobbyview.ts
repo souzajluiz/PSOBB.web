@@ -10,7 +10,7 @@
 import { CAMERA_FOV_ANGLE, PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
-import { AnalogGait, stickAmount, takeCameraTurn, touchStick } from '../input/analog.ts';
+import { takeCameraTurn, touchStick } from '../input/analog.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
@@ -22,7 +22,7 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
-import { RUN_SPEED, WALK_SPEED } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { PlayerMover, RUN_SPEED, rampAxis } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
@@ -192,11 +192,14 @@ export class LobbyView {
     this.camera.snap();
   }
   private sendTimer = 0;
+  private mover = new PlayerMover();
+  private drawn = new THREE.Vector3(); // what the view drew last frame
+  private logic = new THREE.Vector3(); // the tick-rate position the mover works on
+  private prevLogic = new THREE.Vector3();
+  private moveTicks = 0;
+  private keyFb = 0;
+  private keyLr = 0;
   private wasMoving = false;
-  // Walk / run of the touch pad's analog stick (input/analog.ts).
-  private stickGait = new AnalogGait();
-  // Scratch vectors of the local movement (frame() runs every rendered frame).
-  private readonly moveScratch = { forward: new THREE.Vector3(), right: new THREE.Vector3(), dir: new THREE.Vector3() };
   private sentGait: 'walk' | 'run' | null = null;
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
@@ -426,6 +429,19 @@ export class LobbyView {
     if (!p.moving) m.angle = p.angle;
   }
 
+  // One tick's move of the local player through the map collision.
+  private stepPlayer(pos: THREE.Vector3, dx: number, dz: number): { x: number; z: number } {
+    if (this.collision) {
+      const r = this.collision.move(pos.x, pos.y, pos.z, dx, dz);
+      pos.set(r.x, r.y, r.z);
+    } else {
+      const y = this.viewer.groundHeight(pos.x + dx, pos.z + dz, pos.y + 30);
+      // Only walk onto floor that is not a wall-sized step.
+      if (y !== null && Math.abs(y - pos.y) < 25) pos.set(pos.x + dx, y, pos.z + dz);
+    }
+    return { x: pos.x, z: pos.z };
+  }
+
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
@@ -436,64 +452,56 @@ export class LobbyView {
     const turn = takeCameraTurn();
     if (turn && mine) this.camera.angle = Math.atan2(Math.sin(this.camera.angle + turn), Math.cos(this.camera.angle + turn));
 
-    // Local movement relative to the camera (not while attacking).
+    // Local movement: the exe's walk / run state machine, one step per game
+    // tick (render/playermove.ts); the drawn pose is interpolated between ticks.
     if (me && mine && !this.attacking(me.clientId)) {
-      const { forward, right, dir } = this.moveScratch;
-      forward.set(-Math.sin(this.cameraYaw), 0, -Math.cos(this.cameraYaw));
-      right.set(-forward.z, 0, forward.x);
-      dir.set(0, 0, 0);
-      const stick = touchStick();
-      let gait: 'walk' | 'run' = 'run';
-      if (stick) {
-        // The touch stick: analog direction, walk / run by deflection.
-        const g = this.stickGait.step(stickAmount(stick), dt * 30);
-        if (g !== 'stand') {
-          dir.addScaledVector(forward, stick.fb).addScaledVector(right, stick.lr);
-          gait = g;
-        }
-      } else {
-        this.stickGait.reset();
-        // Move Forward / Backward / Left / Right: W / S / A / D in the BB
-        // default key config (input/keyconfig.ts); the arrows belong to the
-        // action palette and the camera.
-        if (keys.has(KEYS.moveForward)) dir.add(forward);
-        if (keys.has(KEYS.moveBackward)) dir.sub(forward);
-        if (keys.has(KEYS.moveRight)) dir.add(right);
-        if (keys.has(KEYS.moveLeft)) dir.sub(right);
+      const pos = this.logic;
+      const shown = mine.group.position;
+      // Placed from outside (spawn, warp, 6x24): the mover and the logic start there.
+      if (shown.distanceToSquared(this.drawn) > 0.0001) {
+        pos.copy(shown);
+        this.prevLogic.copy(shown);
+        this.mover.place(shown.x, shown.z, mine.angle);
       }
-      const moving = dir.lengthSq() > 0;
-      if (moving) {
-        dir.normalize();
-        const pos = mine.group.position;
-        const step = (gait === 'walk' ? WALK_SPEED : RUN_SPEED) * dt;
-        if (this.collision) {
-          // Sub-step so a long frame cannot tunnel through thin walls.
-          const n = Math.max(1, Math.ceil(step / 4));
-          for (let i = 0; i < n; i++) {
-            const r = this.collision.move(pos.x, pos.y, pos.z, (dir.x * step) / n, (dir.z * step) / n);
-            pos.set(r.x, r.y, r.z);
-          }
+      this.moveTicks += dt * 30;
+      let ticks = Math.min(Math.floor(this.moveTicks), 30);
+      this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
+      const stick = touchStick();
+      while (ticks-- > 0) {
+        this.prevLogic.copy(pos);
+        let lr: number;
+        let fb: number;
+        if (stick) {
+          lr = stick.lr;
+          fb = stick.fb;
         } else {
-          const next = pos.clone().addScaledVector(dir, step);
-          const y = this.viewer.groundHeight(next.x, next.z, pos.y + 30);
-          // Only walk onto floor that is not a wall-sized step.
-          if (y !== null && Math.abs(y - pos.y) < 25) pos.set(next.x, y, next.z);
+          // W / S / A / D of the BB default key config (input/keyconfig.ts); the
+          // exe ramps a held key 32 a poll up to 128 (0x0070a60c).
+          this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
+          this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
+          lr = this.keyLr;
+          fb = this.keyFb;
         }
-        mine.target.copy(pos);
-        mine.angle = Math.atan2(dir.x, dir.z);
+        this.mover.tick({ lr, fb, cameraYaw: this.cameraYaw, keyboard: !stick }, (dx, dz) => this.stepPlayer(pos, dx, dz));
+      }
+      const gait = this.mover.state;
+      const moving = gait !== 'stand';
+      mine.target.copy(pos);
+      shown.lerpVectors(this.prevLogic, pos, this.moveTicks);
+      this.drawn.copy(shown);
+      mine.angle = this.mover.angle;
+      if (moving) {
         this.setGait(mine, gait);
         this.sendTimer -= dt;
         // 6x40 walk / 6x42 run; a change of gait goes out at once.
         if (this.sendTimer <= 0 || gait !== this.sentGait) {
-          const p = mine.group.position;
-          if (gait === 'walk') this.lobby.sendWalk(p.x, p.z);
-          else this.lobby.sendRun(p.x, p.z);
+          if (gait === 'walk') this.lobby.sendWalk(pos.x, pos.z);
+          else this.lobby.sendRun(pos.x, pos.z);
           this.sentGait = gait;
           this.sendTimer = SEND_INTERVAL;
         }
       } else if (this.wasMoving) {
-        const p = mine.group.position;
-        this.lobby.sendStop(p.x, p.y, p.z, mine.angle);
+        this.lobby.sendStop(pos.x, pos.y, pos.z, mine.angle);
         this.sendTimer = 0;
         this.sentGait = null;
         this.setGait(mine, 'idle');

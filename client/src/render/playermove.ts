@@ -56,3 +56,118 @@ export function clampAngleStep(angle: number, target: number, max: number): numb
   if (diff <= max && diff >= -max) return target & 0xffff;
   return (angle + (diff < 0 ? -max : max)) & 0xffff;
 }
+
+// --- the local player's tick (0x00689174: poll -> arrival check -> update) ---
+
+const BAMS = 0x10000;
+const TURN_IN_PLACE = 0x800;
+const MOVE_THRESHOLD = 0.1; // 0x0093da84
+const RUN_THRESHOLD = 0.75; // 0x0093da70
+const RUN_TICKS = 6; // 0x0093da74
+const AXIS = 128;
+
+export const toBams = (rad: number): number => Math.round((rad / (Math.PI * 2)) * BAMS) & 0xffff;
+export const fromBams = (bams: number): number => (bams / BAMS) * Math.PI * 2;
+
+export type MoverState = 'stand' | 'walk' | 'run';
+
+export interface MoverInput {
+  lr: number; // right +, -128..128
+  fb: number; // forward +, -128..128
+  cameraYaw: number; // radians, the camera's chase angle (forward = -sin, -cos)
+  keyboard: boolean; // sideways-only keys turn in place instead of walking off
+}
+
+export type MoveFn = (dx: number, dz: number) => { x: number; z: number };
+
+// One player's walk / run state machine, stepped once per game tick. A leg
+// aims at a point LEG_LENGTH ahead; the poll only acts when the leg has
+// arrived, so a direction change or a release takes effect at a leg's end.
+export class PlayerMover {
+  state: MoverState = 'stand';
+  heading = 0; // BAMS
+  slowed = false;
+  guard = false;
+  private targetX = 0;
+  private targetZ = 0;
+  private arrived = true;
+  private runCount = 0;
+
+  x: number;
+  z: number;
+
+  constructor(x = 0, z = 0) {
+    this.x = x;
+    this.z = z;
+  }
+
+  get angle(): number {
+    return fromBams(this.heading);
+  }
+
+  place(x: number, z: number, angle: number): void {
+    this.x = x;
+    this.z = z;
+    this.heading = toBams(angle);
+    this.state = 'stand';
+    this.arrived = true;
+    this.runCount = 0;
+  }
+
+  private startLeg(bams: number): void {
+    const a = fromBams(bams);
+    this.targetX = this.x + Math.sin(a) * LEG_LENGTH;
+    this.targetZ = this.z + Math.cos(a) * LEG_LENGTH;
+    this.arrived = false;
+  }
+
+  private poll(input: MoverInput): void {
+    const amount = Math.min(1, Math.hypot(input.lr, input.fb) / AXIS);
+    const sumSquares = (input.lr * input.lr + input.fb * input.fb) / (AXIS * AXIS);
+    if (amount < MOVE_THRESHOLD) {
+      if (this.state !== 'stand' && this.arrived) this.state = 'stand';
+      this.runCount = 0;
+      return;
+    }
+    // forward = (-sin, -cos) of the camera yaw, right = (-forward.z, forward.x)
+    const fx = -Math.sin(input.cameraYaw);
+    const fz = -Math.cos(input.cameraYaw);
+    const dx = fx * input.fb - fz * input.lr;
+    const dz = fz * input.fb + fx * input.lr;
+    const want = toBams(Math.atan2(dx, dz));
+    if (this.state === 'stand') {
+      if (input.keyboard && Math.abs(input.fb) / AXIS < MOVE_THRESHOLD) {
+        this.heading = clampAngleStep(this.heading, want, TURN_IN_PLACE);
+        if (this.heading !== want) return;
+      }
+      this.state = 'walk';
+      this.runCount = 0;
+      this.startLeg(want);
+      return;
+    }
+    if (this.state === 'walk') {
+      if (sumSquares > RUN_THRESHOLD) this.runCount++;
+      if (this.runCount >= RUN_TICKS) this.state = 'run';
+    } else if (this.arrived && sumSquares < RUN_THRESHOLD) {
+      this.state = 'walk';
+      this.runCount = 0;
+    }
+    if (this.arrived) this.startLeg(want);
+  }
+
+  tick(input: MoverInput, move: MoveFn): void {
+    this.poll(input);
+    if (this.state === 'stand') return;
+    const base = this.state === 'run' ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
+    const speed = legSpeed(base, this.slowed, this.guard);
+    const dx = this.targetX - this.x;
+    const dz = this.targetZ - this.z;
+    if (dx * dx + dz * dz < 4 * speed * speed) this.arrived = true;
+    const toTarget = toBams(Math.atan2(dx, dz));
+    this.heading = headingStep(this.heading, toTarget);
+    const dir = fromBams(velocityAngle(this.heading, toTarget));
+    const r = move(Math.sin(dir) * speed, Math.cos(dir) * speed);
+    this.x = r.x;
+    this.z = r.z;
+  }
+}
