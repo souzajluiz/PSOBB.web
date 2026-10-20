@@ -5,6 +5,8 @@
 //
 // Run: node tests/questaudit.ts [frames] [filter]
 // Env: NEWSERV (checkout with system/quests; default vendor/newserv).
+//      FLOORS=1 also runs every floor handler the quest registered (battle quests
+//      set their rules there, not in the start label).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -48,6 +50,7 @@ for (const dir of readdirSync(root, { withFileTypes: true })) {
       const lq: LoadedQuest = { name: m[1], binFilename: f, datFilename: `${m[1]}-bb.dat`, bin, dat, binCompressedSize: 0, datCompressedSize: 0, download: false };
       const s = new QuestSession(lq, { log: () => {} });
       s.start();
+      if (process.env.FLOORS) for (let f = 0; f < s.vm.floorHandlers.length; f++) if (s.vm.floorHandlers[f]! >= 0) s.enterFloor(f);
       for (let i = 0; i < FRAMES; i++) s.vm.frame();
       for (const name of s.vm.unimplemented.keys()) {
         if (!byOpcode.has(name)) byOpcode.set(name, new Set());

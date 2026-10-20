@@ -600,7 +600,12 @@ export class Game extends Lobby {
 
   // Our own 6x0A, 6x0B and 6x5F go through here too, so the saved tables
   // follow them as the exe's senders do.
+  // Called with every state subcommand this client sends through recordSent
+  // (the battle score reads its own 6x0A damage from it, quest/battlerun.ts).
+  onSent: ((body: Uint8Array) => void) | null = null;
+
   recordSent(body: Uint8Array): void {
+    this.onSent?.(body);
     this.recordState(body[0], body, false);
   }
 

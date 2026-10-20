@@ -35,6 +35,7 @@
 
 import { decodeInstruction, type QuestBin, type QuestInstruction } from '../formats/questbin.ts';
 import { F_ARGS, F_CLEAR_ARGS } from '../formats/questopcodes.ts';
+import { BATTLE_OPCODES, BattleSetup } from './battle.ts';
 
 export const QUEST_NUM_REGISTERS = 0x100;
 export const QUEST_NUM_FLOORS = 0x12;
@@ -160,6 +161,14 @@ export interface QuestVMHost {
   // pl_add_meseta / pl_add_meseta2 (.c:605706 / .c:605737): 6xC9 for the
   // local player.
   addMeseta?: (amount: number) => void;
+  // Battle mode (quest/battle.ts, quest/battlerun.ts): ba_start fired with the
+  // rules the ba_* opcodes set; ba_get_place / ba_get_score / get_ba_record read
+  // the battle's tables (place table index, points, the local record fields).
+  battleStart?: (setup: BattleSetup) => void;
+  battlePlace?: (index: number) => { place: number; points: number };
+  battleRecord?: () => number[];
+  // ba_initial_floor: the (remapped) floor the players start on.
+  battleFloor?: (floor: number) => void;
   // at_coords_talk / at_coords_call / set_obj_param registered or removed.
   coordsChanged?: (handlers: QuestCoordsHandler[]) => void;
 }
@@ -237,6 +246,8 @@ export class QuestVM {
   areaTitle = '';
   // override_warp_dest_floor (F853): area warps go to current floor + 1.
   warpDestOverride = false;
+  // The ba_* rules, score weights and announcements (quest/battle.ts).
+  readonly battle = new BattleSetup();
   // set_ult_map (F855): the floor uses the Ultimate graphics and set data.
   ultMap = false;
   // disable_bosswarp_option (F8A0): whether a boss warp asks Yes/No.
@@ -1345,7 +1356,32 @@ export class QuestVM {
         this.host.questExit?.();
         return;
 
+      // --- Battle mode (quest/battle.ts) ---
+      case 'ba_get_place':
+      case 'ba_get_score': {
+        // The exe indexes its sorted place table with the register's value.
+        const r = this.host.battlePlace?.(R[this.reg(a, 0)]) ?? { place: 0, points: 0 };
+        R[this.reg(a, 1)] = name === 'ba_get_place' ? r.place : r.points;
+        return;
+      }
+      case 'get_ba_record': {
+        const base = this.reg(a, 0);
+        const rec = this.host.battleRecord?.() ?? [];
+        for (let i = 0; i < 7; i++) R[(base + i) & 0xff] = rec[i] ?? 0;
+        return;
+      }
+
       default:
+        if (BATTLE_OPCODES.has(name)) {
+          const ok = this.battle.apply(name, { arg: (i) => this.int(a, i), reg: (i) => this.reg(a, i), regs: R, text: (i) => this.str(a, i) });
+          if (ok && name === 'ba_initial_floor' && this.battle.initialFloor !== null) {
+            this.initialFloor = this.battle.initialFloor;
+            this.host.battleFloor?.(this.battle.initialFloor);
+          }
+          if (ok && name === 'ba_start') this.host.battleStart?.(this.battle);
+          clearArgs();
+          return;
+        }
         // Everything else: the arguments were decoded (so the PC is right) but
         // the body is not implemented. Accepted no-ops are not logged.
         if (!ACCEPTED_NO_OPS.has(name)) {

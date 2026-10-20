@@ -563,13 +563,16 @@ reaches these and nothing else:
 | Cluster | Opcodes |
 |---|---|
 | Challenge mode | `cmode_stage`, `set_cmode_difficulty`, `set_cmode_base_time`, `set_cmode_rank_threshold`, `set_cmode_rank_result`, `set_cmode_grave_rates`, `set_cmode_char_template`, `cmode_check_any_player_dead`, `exp_multiplication`, `chl_create_retry_menu`, `chl_show_dead_player_list` |
-| Battle Arena | `ba_initial_floor` and the rest of the `ba_*` family |
 | Enemies | `set_override_enemy_bp_index`, `set_enemy_movement_data`, `set_enemy_physical_data`, `set_enemy_resist_data`, `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
 | Items / player | `unequip_item`, `equip_item`, `item_create*`, `p_return_guild`, `pl_add_meseta2` |
 | Misc | `enable_keyword_detect`, `npc_coords_call`, `shift_right`, `start_battlebgm` |
 
 Nothing else is missing: the generated table covers all 528 BB opcodes, so an
 unimplemented one still advances the program counter correctly.
+
+### Battle mode
+
+`quest/battle.ts` (rules, weights, score, places, controller, payloads), `quest/battlerun.ts` (wiring) and `quest/battleui.ts` (HUD); every `ba_*` opcode is executed by `BattleSetup.apply` (the rule struct is the 0x30 bytes at `g_BaRuleId`, newserv's `BattleRules`). A battle game is `C1` with byte `0x49` = 1 (`Game.create({ battle: true })`); the quest list then is the server's battle menu. Wire: `6xCF` (leader, rules + box drop count), `6x7D` (phase / start ack / score / rematch), `6x8F`, `6xD0`, `6x9B`, `6x80`, `6x83` (see DEVLOG "Quests: Battle mode").
 
 ### What the web client approximates
 
