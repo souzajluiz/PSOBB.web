@@ -5864,3 +5864,105 @@ compare, techniques and specials, the special handlers' table, status apply / re
 `status`, `buffs`, `enemies`, client `tsc --noEmit` (only the two missing @capacitor modules).
 
 **Chrome (2026-10-20, after the merge):** Forest 1, a Booma hit through `applyEnemyHit`: the white damage number and the hit spark particles show over the enemy, no page errors. Not seen: criticals, MISS, specials / technique effects, status particles, death particles.
+## 2026-10-20: Player damage: visuals and audio
+
+**What changed:** the local player (and the remote players the local client sees) now
+show and sound what the exe does when hit, blocking, dying, revived or carrying a status
+effect. Everything below was read out of the Ephinea PsoBB.exe (the named Ghidra dump,
+plus `tools/exedata.py` reads and a capstone disassembly for the functions the dump does
+not name); `combat/playerfx.ts` documents each id and address.
+
+**What the exe does, and what existed before:**
+- *Hit state entry* (`0x0069ed10` light, `0x0069ea00` heavy): `play_sound_effect_at_player`
+  SE `0x13` / `0x14`. Nothing played before. A remote copy (player+0x32c == 2) also runs
+  `EntityProcessStatusEffectParticle_007752dc`: the attribute particle.
+- *Heavy fall*: when the motion elapsed passes 10 frames SE `0x15`, or `0x21` for a RAcast
+  (`get_player_class_footstep_sound_effect_type == 2`). The fall (slot 9) ends in stage 1; with
+  the dead flag set the dead state follows, otherwise stage 2 plays the **stand-up motion
+  (slot 10)** and ends with `get_invincibility_frames_2` = 60 ticks. Before, the heavy hit was a
+  fixed 40 ticks with no stand-up.
+- *Light hit*: ends when the motion ends (`CheckPlayerDeathOnHit_0069ecac`), with 60 ticks of
+  invulnerability. Before: a fixed 20 ticks.
+- *Lethal hit*: the flinch / fall plays out first and the dead state starts at its end
+  (`6x89` + `6x4D` are sent there, `6x4C` / `6x4B` carry HP 0 first). Before: the death
+  motion started at once.
+- *Death*: the helper object (`player_death_class_countdown_helper`, vtable `0x00b44e88`,
+  update `0x00788a64`) starts after the death motion; its counter grows by 2 per frame to 128
+  and sets the screen colour (`g_UIElementArray_00a98480[1]`) to red with that alpha, then
+  calls the return-to-Pioneer-2 routine (`0x006920ac`), which on a field creates the dead
+  prompt and sends **`6x4E`**. Before: `6x4E` went out when the death motion ended and there
+  was no fade. No sound plays in the dead state's entry.
+- *Block* (`6x4A`, `action_block` `0x0069a9c8`, evade-state entry `0x0069f498`): the motion is
+  **slot 6** (vtable `+0x4c`), not slot 10 (that table was the stand-up, mislabelled "guard"),
+  then `PlayerProcessHurtDamage_0068c8e8`: the effect entity `0x00503144` (particles 0..3,
+  `guard_a..d`) and SE `0x23`.
+- *Hit effects* (`EntityHitEntity_00773350`, the defender is the local player): the hit spark
+  entity `0x005032c8` (particles 4, 5, 6 fifteen below, `0xd`) and the defender's attribute
+  particle `0xf1` native / `0xe3` machine (`SetPlayerBattleAction_006951a0`: an android class is
+  machine, others native, a Ranger's `|0x20` matches nothing); no damage number for the local
+  player (`field_0x32c != 1` is required).
+- *Knockback* (`ClampAndDampPlayerVelocity_00694230`): each tick `v = v * 0.5`, below `1e-5`
+  zero, then the player moves. Before: 0.75 per tick (an approximation noted as such).
+- *Revive* (`6x4F`, `ForceExitSpecialState_0069db5c`, state `0x12`): invulnerability 300 (was
+  60) and, on a field, the revive entity (`0x006efc48`, update `0x006efd5c`): emitters `0x35`
+  (30 updates), `0x36` (after 35, one), `0x37` (after 45, one) at the player (the first 20
+  above) and `0x38` on the 10th update. No sound.
+- *Dead marker*: `6x4E` makes the receivers (and the local player after the fade) run
+  `TriggerDespawnEffect_00697988`: particle `0xaf` (`soul`), a continuous emitter 10 above the
+  dead player on a field, while the player is dead.
+- *Status effects*: infliction creates the particle (`0x25` poison, `0x26` paralysis,
+  `0x27` slow, `0x24` confusion, `0x21` shock) following the player; shock and freeze play their
+  SE on the infliction; every 45 frames the tick repeats the particle and the SE
+  (`0xc 0xd 0xe 0xf 0x11`); the freeze tick repeats SE `0x10` only (the freeze itself is the ice
+  block entity `CreateItemEffectHandler_00500fe8`). `PlayerStatus.pulse` was an empty callback.
+  Remote players' `6x0C` / `6x0D` now drive a `PlayerStatus` per remote player, which ticks the
+  same pulses on their position.
+- *What the exe does not have* (read, nothing found): no invulnerability blink (the invuln
+  flag `0x4000000` is only read by the attackers' hit tests), no camera shake in the player's hit
+  path (`set_camera_shake_effect` is called by enemy / boss code only), no low-HP warning sound or
+  flash (`QuickMenuStatusBarUpdateHP_007422c4` only recolours the bar and shakes the window,
+  already done in `classic/hud.ts`), no death sound in the dead state.
+
+**New / changed code:** `combat/playerfx.ts` (tables, class rules, `FxEmitter` timeline),
+`render/playerfx.ts` (`PlayerEffects`: additive particle sprites of `particleentry.dat` ids,
+following a player or fixed, delayed / bounded / unbounded emitters, as `render/levelupfx.ts`
+draws), `combat/playerdamage.ts` (states `block` / `getup`, motion-driven lengths through the
+optional `motionEnded` / `motionFrame` events, `sound` / `fx` events, the death fade,
+exact knockback damping, lethal flow), `combat/status.ts` (`pulse(type, onset)`, the freeze
+tick pulse), `render/playerhud.ts` (`tint`, the screen overlay), `render/combat.ts` (wiring, the
+remote `6x4A..6x4F` handlers with sounds, particles and motion-driven lengths, `6x4E`, the
+remote status ticks).
+
+**ASSUMED (also in the code):**
+- The hit point is 20 above the player's feet and the status particles use the same height
+  (the exe uses the hitbox position and `weapon_position`, neither tracked here); the block
+  uses 36 (the `0x24` argument of the position getter at vtable `+0x10c`).
+- Particle entries of types 1 and 2 (`0x21`, `0x24..0x26`, `0x35`, `0x37`, ...) are drawn like
+  type 0, as `render/levelupfx.ts` does; entries are only seen as names / rates here.
+- The screen overlay is drawn over the scene and under the HUD windows and stays at alpha
+  128 until the revive or the next floor.
+- The shield's own block routine (`0x68c8e8` calls the equipped shield's vtable `+0x70`) looks
+  like the no-shield one.
+- SEs have no distance attenuation or pan (`play_directional_sound_effect` is not read).
+- The local player's own soul marker is shown (the exe handles `6x4E` for the receivers; the
+  local call of the same routine after the fade is assumed to create it too).
+- A remote player's dying ends its status effects (as for the local player).
+
+**Left:** the freeze's ice block on a player, the dead prompt window the return routine opens
+(`DialogListItem_Constructor_0073f0ec`, texture `0x56` of a list not identified) and the
+return to Pioneer 2 it leads to, the dead-state camera (`UpdateDeathAnimationState_0069e1fc`
+moves a camera target 8 above the body and sets player flag `0x800`; how the camera uses it is
+not read), the critical-hit effect and SE `0x42` for an enemy's critical, remote players'
+knockback displacement from the `6x4B` / `6x4C` velocity. Every `PlayerDamage.hit` caller (melee,
+techniques, traps) draws the spark and the attribute particle; the exe draws them in
+`EntityHitEntity` and `entity_hit_by_tech`, not for the Megid death. The hit spark entity `0x005032c8` and
+the attribute particles are the same ones the exe draws on a hit enemy, so the enemy-side
+visuals can reuse `HIT_SPARK` / `ATTRIBUTE_PARTICLE`. Not checked in Chrome.
+
+**Checks:** `node tests/playerfx.test.ts` (attribute per class, landing SE, status pulses and
+their 45-frame ticks through `PlayerStatus`, the emitter tables and the revive timeline, the
+particle names `guard_*`, `hit_*`, `konran`, `poison_effect`, `mahi_effect`, `slow_effect`,
+`riverser_*`, `soul` in the client's `particleentry.dat`), `tests/combatdepth.test.ts` (the new
+slot 6 table, motion-driven states, heavy fall and stand-up, SEs, lethal flow, the death fade,
+the 0.5 knockback), `tests/status.test.ts`, client `tsc --noEmit` (only the two missing
+@capacitor modules).
