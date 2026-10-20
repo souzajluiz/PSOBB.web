@@ -216,6 +216,12 @@ instantiations, 414 MB, 2.76 s; warm incremental 1.1 s, 275 MB.
 clear mix-up); the numeric command switches in `net/` (not unions); `exhaustive` in
 switches of functions that return a value.
 **Tests:** 64 of 64 `tests/*.test.ts` pass before and after.
+## 2026-10-20: fix: the player froze against a wall (movement tick machine)
+
+**Bug (reported):** walking forward in the lobby, the player stopped and could not move on. `PlayerMover` only reads input at the end of a leg, and a leg ends when the player is within 2 steps of its point 8.0 ahead; against a wall (or the counter) the collision stopped the move short of that point, so the leg never ended: the state stayed walk / run, releasing the key did nothing and a new direction was ignored.
+**Fix:** a move that covers less than a quarter of the step ends the leg (`PlayerMover.tick`, ASSUMED: the exe's wall-touch handler was not traced). `tests/playermove.test.ts` has the wall cases. Chrome: ran into the lobby counter (z 97, still `run`), released: `stand`.
+`window.psoLobbyView` is a console aid like `gameView`.
+
 ## 2026-10-20: starting a quest from the lobby (Online tab)
 
 **What changed:** the Quests box was only shown inside a game, so nothing could be started from the lobby, and a quest picked there would arrive as an A6/A7 download that was ignored. newserv answers A2 in a lobby with "Quests are not available in lobbies" (`on_A2`, `ReceiveCommands.cc`), so a quest needs a game. The box now shows in the lobby with an episode and a difficulty select and "Start quest (new game)": it creates a game (`Game.create`), enters it and opens the quest menu (A2); the category / quest picks and the 44/13 files then run as in any game (`ui/onlineTab.ts`, `buildQuestPanel`).

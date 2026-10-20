@@ -42,6 +42,18 @@ assert.equal(k.state, 'stand');
 assert.equal(k.x, 0);
 for (let i = 0; i < 10; i++) k.tick(side, free(k));
 assert.equal(k.state, 'walk');
+// a wall: the leg ends, a released key then stands, and a new direction applies
+const wall = new PlayerMover(0, 0);
+const blocked = () => ({ x: wall.x, z: wall.z });
+for (let i = 0; i < 20; i++) wall.tick(up, i < 3 ? free(wall) : blocked);
+wall.tick(none, blocked);
+assert.equal(wall.state, 'stand', 'released against a wall stands');
+const back = { lr: 0, fb: -128, cameraYaw: Math.PI, keyboard: false };
+const w2 = new PlayerMover(0, 0);
+for (let i = 0; i < 20; i++) w2.tick(up, i < 3 ? free(w2) : () => ({ x: w2.x, z: w2.z }));
+const zWall = w2.z;
+for (let i = 0; i < 6; i++) w2.tick(back, free(w2));
+assert.ok(w2.z < zWall - 1, 'turns away from the wall');
 // a remote follower reaches its target at 1.5 a tick running, 1.0 walking, never overshooting
 const f = { x: 0, z: 0, heading: 0 };
 let n = 0;

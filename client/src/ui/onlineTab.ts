@@ -177,6 +177,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     const mapData = await loadLobbyMapData(source, l.lobbyNumber, log);
     log(`lobby collision: ${mapData.collision?.faceCount ?? 0} faces, ${mapData.spawns.size} spawn points`);
     lobbyView = new LobbyView(viewer, l, mapData);
+    Object.assign(window, { psoLobbyView: lobbyView }); // development aid (console)
     renderPlayers(l);
     games.update();
     inventory.show(session?.character ?? null);

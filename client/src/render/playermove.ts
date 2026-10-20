@@ -167,6 +167,10 @@ export class PlayerMover {
     this.heading = headingStep(this.heading, toTarget);
     const dir = fromBams(velocityAngle(this.heading, toTarget));
     const r = move(Math.sin(dir) * speed, Math.cos(dir) * speed);
+    // A wall that stops (most of) the step ends the leg, so the next poll can
+    // turn or stop: the leg's point lies behind the wall and would never be
+    // reached. ASSUMED (the exe's wall-touch handler was not traced).
+    if (Math.hypot(r.x - this.x, r.z - this.z) < 0.25 * speed) this.arrived = true;
     this.x = r.x;
     this.z = r.z;
   }
