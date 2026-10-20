@@ -30,11 +30,17 @@ import {
   type AiTarget,
 } from '../client/src/combat/enemyai.ts';
 import {
+  DEATH_FADE_MAX,
+  DEATH_FADE_STEP,
+  DEATH_FADE_TICKS,
   DEATH_FLAG_NO_DROP,
   HEAVY_HIT_FRACTION,
   hitMotion,
+  INVULN_TICKS_GETUP,
   INVULN_TICKS_HEAVY,
   INVULN_TICKS_LIGHT,
+  INVULN_TICKS_REVIVE,
+  KNOCKBACK_DAMPING,
   PlayerDamage,
   type HitMotionKind,
 } from '../client/src/combat/playerdamage.ts';
@@ -55,11 +61,12 @@ const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) <= eps;
 // --- player hit / death motions (field motion tables 0x009cbeec / 0x009cbf04)
 
 {
-  // Spot checks of the five slots read out of PsoBB.exe for motion type 0
-  // (male) and weapon class 0 (bare hands / sword).
+  // Spot checks of the slots read out of PsoBB.exe for motion type 0 (male)
+  // and weapon class 0 (bare hands / sword).
   const expect: Array<[HitMotionKind, number, number, number]> = [
+    ['block', 199, 3, 0xa0000010], // slot 6, vtable +0x4c (6x4A)
     ['heavy', 202, 1.4, 0xa0000040], // slot 9, vtable +0x58
-    ['guard', 203, 1.9, 0x20000100], // slot 10, vtable +0x5c
+    ['getup', 203, 1.9, 0x20000100], // slot 10, vtable +0x5c (the stand-up after the fall)
     ['light', 204, 3.7, 0xa0000040], // slot 11, vtable +0x60
     ['death', 205, 1, 0x80], // slot 12, vtable +0x64
     ['revive', 109, 1.3, 0x20000400], // slot 13, vtable +0x68
@@ -71,7 +78,7 @@ const near = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) <= eps;
   // Every slot plays once and holds the last frame (mode 3) for every motion
   // type and weapon class, and falls back instead of throwing.
   let rows = 0;
-  for (const kind of ['heavy', 'guard', 'light', 'death', 'revive'] as HitMotionKind[]) {
+  for (const kind of ['block', 'heavy', 'getup', 'light', 'death', 'revive'] as HitMotionKind[]) {
     for (let mt = 0; mt < 6; mt++) {
       for (let wc = 0; wc < 19; wc++) {
         const m = hitMotion(mt, wc, kind);
@@ -97,6 +104,8 @@ function damageHarness(maxHp: number) {
   const sent: Sent[] = [];
   const motions: HitMotionKind[] = [];
   const pushes: Array<[number, number]> = [];
+  const sounds: number[] = [];
+  const fx: string[] = [];
   const d = new PlayerDamage({
     motion: (k) => motions.push(k),
     push: (vx, vz) => pushes.push([vx, vz]),
@@ -107,13 +116,15 @@ function damageHarness(maxHp: number) {
     sendRevivable: () => sent.push({ kind: '6x4E', args: [] }),
     sendRevived: () => sent.push({ kind: '6x4F', args: [] }),
     log: () => {},
+    sound: (id) => sounds.push(id),
+    fx: (e) => fx.push(e.kind === 'hit' ? (e.heavy ? 'hit-heavy' : 'hit-light') : e.kind),
   });
   d.reset(maxHp);
-  return { d, sent, motions, pushes };
+  return { d, sent, motions, pushes, sounds, fx };
 }
 
 {
-  // A small hit: 6x4B, the light-hit motion, 60 ticks of invulnerability.
+  // A small hit: 6x4B, the light-hit motion, SE 0x13, 60 ticks of invulnerability.
   const h = damageHarness(200);
   h.d.hit(20, 0, ATTACK_KNOCKBACK);
   check(h.d.hp === 180, `light hit HP ${h.d.hp}`);
@@ -121,25 +132,89 @@ function damageHarness(maxHp: number) {
   check(h.sent.length === 1 && h.sent[0].kind === '6x4B', `light hit sent ${JSON.stringify(h.sent)}`);
   check(h.sent[0].args[1] === 180, '6x4B carries the current HP');
   check(h.motions[0] === 'light', `light hit motion ${h.motions[0]}`);
+  check(h.sounds.join() === '19' && h.fx.join() === 'hit-light', `light hit SE 0x13 and the hit fx: ${h.sounds} ${h.fx}`);
   check(h.d.invuln === INVULN_TICKS_LIGHT, `light invulnerability ${h.d.invuln}`);
   // A second hit inside the invulnerability window does nothing.
   h.d.hit(20, 0, ATTACK_KNOCKBACK);
-  check(h.d.hp === 180 && h.sent.length === 1, 'a hit during invulnerability is ignored');
-  // The knockback is applied once per tick and decays.
+  check(h.d.hp === 180 && h.sent.length === 1 && h.sounds.length === 1, 'a hit during invulnerability is ignored');
+  // ClampAndDampPlayerVelocity_00694230: each tick halves the velocity first,
+  // then the player moves; below 1e-5 it is zero.
   h.d.tick();
-  check(h.pushes.length === 1 && Math.abs(h.pushes[0][1] - ATTACK_KNOCKBACK) < 1e-6, `knockback ${JSON.stringify(h.pushes[0])}`);
+  check(h.pushes.length === 1 && near(h.pushes[0][1], ATTACK_KNOCKBACK * KNOCKBACK_DAMPING), `knockback ${JSON.stringify(h.pushes[0])}`);
+  h.d.tick();
+  check(near(h.pushes[1][1], ATTACK_KNOCKBACK * KNOCKBACK_DAMPING ** 2), 'the knockback halves every tick');
   for (let i = 0; i < 40; i++) h.d.tick();
   check(h.d.state === 'alive', `back to alive, got ${h.d.state}`);
+  // The light state ends when the motion ends, not after a fixed time.
+  let ended = false;
+  const dm = new PlayerDamage({
+    motion: () => {},
+    push: () => {},
+    face: () => {},
+    sendHit: () => {},
+    sendShieldAttack: () => {},
+    sendDeath: () => {},
+    sendRevivable: () => {},
+    sendRevived: () => {},
+    log: () => {},
+    motionEnded: () => ended,
+  });
+  dm.reset(200);
+  dm.hit(10, 0, 0);
+  for (let i = 0; i < 30; i++) dm.tick();
+  check(dm.state === 'light', 'the light state lasts while the motion plays');
+  ended = true;
+  dm.tick();
+  check(dm.state === 'alive', 'the light state ends with the motion');
 }
 
 {
-  // More than a quarter of max HP: 6x4C and the heavy-hit motion.
-  const h = damageHarness(200);
-  const heavy = 200 * HEAVY_HIT_FRACTION + 1;
-  h.d.hit(heavy, 0, ATTACK_KNOCKBACK);
-  check(h.sent[0].kind === '6x4C', `heavy hit sent ${h.sent[0].kind}`);
-  check(h.motions[0] === 'heavy', `heavy hit motion ${h.motions[0]}`);
-  check(h.d.invuln === INVULN_TICKS_HEAVY, `heavy invulnerability ${h.d.invuln}`);
+  // More than a quarter of max HP: 6x4C, the fall (motion 9, SE 0x14, 300
+  // ticks of invulnerability), SE 0x15 / 0x21 past frame 10, the stand-up
+  // (motion 10) and 60 ticks of invulnerability after it.
+  const sent: string[] = [];
+  const sounds: number[] = [];
+  const motions: HitMotionKind[] = [];
+  let ended = false;
+  let frame = 0;
+  const d = new PlayerDamage({
+    motion: (k) => {
+      motions.push(k);
+      ended = false;
+      frame = 0;
+    },
+    push: () => {},
+    face: () => {},
+    sendHit: (heavy) => sent.push(heavy ? '6x4C' : '6x4B'),
+    sendShieldAttack: () => {},
+    sendDeath: () => {},
+    sendRevivable: () => {},
+    sendRevived: () => {},
+    log: () => {},
+    sound: (id) => sounds.push(id),
+    landSound: () => 0x21,
+    motionEnded: () => ended,
+    motionFrame: () => frame,
+  });
+  d.reset(200);
+  d.hit(200 * HEAVY_HIT_FRACTION + 1, 0, ATTACK_KNOCKBACK);
+  check(sent[0] === '6x4C' && motions[0] === 'heavy' && sounds.join() === '20', `heavy hit ${sent} ${motions} ${sounds}`);
+  check(d.invuln === INVULN_TICKS_HEAVY, `heavy invulnerability ${d.invuln}`);
+  frame = 9;
+  d.tick();
+  check(sounds.length === 1, 'no landing SE before frame 10');
+  frame = 11;
+  d.tick();
+  check(sounds.join() === '20,33', `landing SE 0x21 (RAcast) past frame 10: ${sounds}`);
+  frame = 30;
+  d.tick();
+  check(sounds.length === 2, 'the landing SE plays once');
+  ended = true;
+  d.tick();
+  check(d.state === 'getup' && motions.at(-1) === 'getup', `stand-up after the fall: ${d.state} ${motions}`);
+  ended = true;
+  d.tick();
+  check(d.state === 'alive' && d.invuln === INVULN_TICKS_GETUP, `alive again with ${d.invuln} ticks of invulnerability`);
   // Exactly a quarter is still light.
   const l = damageHarness(200);
   l.d.hit(50, 0, 0);
@@ -147,18 +222,23 @@ function damageHarness(maxHp: number) {
 }
 
 {
-  // No damage: 6x4A and the evade motion, HP unchanged.
+  // No damage: 6x4A, the block motion (slot 6), SE 0x23 and the guard particles.
   const h = damageHarness(100);
   h.d.hit(0, 0, 0);
-  check(h.d.hp === 100 && h.sent[0].kind === '6x4A' && h.motions[0] === 'guard', `shielded hit ${JSON.stringify(h.sent)} ${h.motions[0]}`);
+  check(h.d.hp === 100 && h.sent[0].kind === '6x4A' && h.motions[0] === 'block', `blocked hit ${JSON.stringify(h.sent)} ${h.motions[0]}`);
+  check(h.sounds.join() === '35' && h.fx.join() === 'block', `block SE 0x23 and fx: ${h.sounds} ${h.fx}`);
+  check(h.d.invuln === 0, 'a block grants no invulnerability');
 }
 
 {
-  // Death: 6x4C (the killing hit is reported first), then 6x89 + 6x4D, the
-  // death motion, 6x4E when it ends, and 6x4F on revive.
+  // Death: 6x4C (the killing hit is reported first), the whole fall, then 6x89 +
+  // 6x4D and the death motion, the 64 frame red fade, 6x4E, and 6x4F on revive.
   const h = damageHarness(100);
   h.d.hit(500, 1.2, ATTACK_KNOCKBACK, 0x1003);
-  check(h.d.hp === 0 && h.d.dead, `death HP ${h.d.hp} state ${h.d.state}`);
+  check(h.d.hp === 0 && !h.d.dead && h.d.dying, `a lethal hit plays the fall first: HP ${h.d.hp} state ${h.d.state}`);
+  check(h.sent.map((s) => s.kind).join(',') === '6x4C', `death hit sends ${h.sent.map((s) => s.kind).join(',')}`);
+  for (let i = 0; i < 41; i++) h.d.tick();
+  check(h.d.dead && h.d.state === 'dead', `dead once the fall has played, got ${h.d.state}`);
   check(h.sent.map((s) => s.kind).join(',') === '6x4C,6x89+6x4D', `death sends ${h.sent.map((s) => s.kind).join(',')}`);
   const death = h.sent[1];
   check(death.args[0] === 0x1003, `6x89 killer entity 0x${death.args[0].toString(16)}`);
@@ -167,12 +247,28 @@ function damageHarness(maxHp: number) {
   // A hit while dead does nothing.
   h.d.hit(10, 0, 0);
   check(h.sent.length === 2, 'no command while dead');
-  for (let i = 0; i < 61; i++) h.d.tick();
-  check(h.d.state === 'revivable' && h.sent.at(-1)!.kind === '6x4E', `revivable after the death motion, got ${h.d.state}`);
+  // The death motion (60 ticks without a model), then the fade grows by 2 a
+  // tick to 128 and 6x4E goes out on the 64th.
+  for (let i = 0; i < 59; i++) h.d.tick();
+  check(h.d.fade === 0 && h.d.state === 'dead', 'the fade starts after the death motion');
+  h.d.tick();
+  check(h.d.fade === DEATH_FADE_STEP, `fade after one tick ${h.d.fade}`);
+  for (let i = 0; i < DEATH_FADE_TICKS - 2; i++) h.d.tick();
+  check(h.d.fade === DEATH_FADE_MAX - DEATH_FADE_STEP && h.d.state === 'dead', `fade ${h.d.fade} one tick before the end`);
+  h.d.tick();
+  check(h.d.fade === DEATH_FADE_MAX && h.d.state === 'revivable' && h.sent.at(-1)!.kind === '6x4E', `revivable after the fade, got ${h.d.state}`);
   h.d.revive();
   check(h.d.hp > 0 && h.d.state === 'reviving' && h.sent.at(-1)!.kind === '6x4F', `revive ${h.d.hp} ${h.d.state}`);
+  check(h.d.fade === 0 && h.d.invuln === INVULN_TICKS_REVIVE && h.fx.at(-1) === 'revive', 'revive clears the fade, 300 ticks of invulnerability, the revive fx');
   for (let i = 0; i < 41; i++) h.d.tick();
   check(h.d.state === 'alive' && !h.d.busy, `alive after the stand-up motion, got ${h.d.state}`);
+  // A light killing blow: the flinch plays out, then the death.
+  const l = damageHarness(1000);
+  l.d.reset(1000, 10);
+  l.d.hit(10, 0, 0);
+  check(l.d.state === 'light' && l.d.dying, 'a lethal light hit flinches first');
+  for (let i = 0; i < 21; i++) l.d.tick();
+  check(l.d.state === 'dead', `then dies, got ${l.d.state}`);
 }
 
 // --- 6x4B / 6x4C / 6x4D wire format (newserv src/CommandFormats.hh) --------

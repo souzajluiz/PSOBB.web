@@ -66,7 +66,18 @@ import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
 import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
-import { hitMotion, PlayerDamage, type HitMotionKind } from '../combat/playerdamage.ts';
+import {
+  hitMotion,
+  HEAVY_LAND_FRAME,
+  PlayerDamage,
+  SE_BLOCK,
+  SE_HIT_HEAVY,
+  SE_HIT_LIGHT,
+  type HitMotionKind,
+  type PlayerDamageFx,
+} from '../combat/playerdamage.ts';
+import { attributeFx, BLOCK_FX, heavyLandSe, HIT_SPARK, REVIVE_FX, SOUL_FX, statusFx, statusPulse, type FxSpec } from '../combat/playerfx.ts';
+import { PlayerEffects } from './playerfx.ts';
 import {
   applyDamage,
   enemyDefender,
@@ -430,6 +441,13 @@ export class CombatView {
   hud: PlayerHud | null = null;
   // DisplayLevelUpMessage_00692aa4's particle and light (render/levelupfx.ts).
   private levelUpFx: LevelUpEffects | null = null;
+  // The particles on players: hits, blocks, status effects, revives and the
+  // dead marker (render/playerfx.ts, combat/playerfx.ts).
+  private playerFx: PlayerEffects | null = null;
+  // The soul marker of every dead player (TriggerDespawnEffect_00697988).
+  private souls = new Map<number, { stop(): void }>();
+  // The status effects of the remote players (their copies tick them too).
+  private remoteStatus = new Map<number, PlayerStatus>();
   // Ryuker's pipe (render/telepipe.ts): whether one can be opened here
   // (SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0) and opening it.
   telepipe: { allowed: () => boolean; open: () => boolean } | null = null;
@@ -479,9 +497,20 @@ export class CombatView {
       },
       sendShieldAttack: () => this.game.sendShieldAttack(),
       sendDeath: (killer, flags) => this.game.sendPlayerDeath(killer, flags),
-      sendRevivable: () => this.game.sendPlayerRevivable(),
-      sendRevived: () => this.game.sendPlayerRevived(),
+      sendRevivable: () => {
+        this.game.sendPlayerRevivable();
+        this.showSoul(this.game.selfId, true);
+      },
+      sendRevived: () => {
+        this.game.sendPlayerRevived();
+        this.showSoul(this.game.selfId, false);
+      },
       log: (msg) => this.opts.log(msg),
+      sound: (id) => this.playSe(id),
+      fx: (e) => this.selfFx(e),
+      landSound: () => heavyLandSe(this.game.self?.charClass ?? 0),
+      motionEnded: () => this.selfAnimator()?.ended ?? true,
+      motionFrame: () => this.selfAnimator()?.frame ?? 0,
     });
     this.status = new PlayerStatus({
       sendAdd: (type) => this.game.sendAddStatus(type),
@@ -491,7 +520,7 @@ export class CombatView {
         this.damage.hp = Math.max(1, this.damage.hp - amount);
         this.opts.log(`poison: -${amount} HP (${this.damage.hp}/${this.damage.maxHp})`);
       },
-      pulse: () => {},
+      pulse: (type, onset) => this.statusPulse(this.game.selfId, type, onset),
       log: (msg) => this.opts.log(msg),
     });
     game.on('subcommand', (sub, clientId, body) => this.onSubcommand(sub, clientId, body));
@@ -533,6 +562,10 @@ export class CombatView {
       position: (id) => this.view?.playerPositions().get(id) ?? null,
       litMaterials: (id) => this.view?.playerLitMaterials(id) ?? [],
       primary: () => ({ diffuse: this.viewer.directionalLight.intensity / Math.PI, ambient: this.viewer.ambientLight.intensity / Math.PI }),
+      log: this.opts.log,
+    });
+    this.playerFx ??= new PlayerEffects(this.viewer, this.files, {
+      position: (id) => this.view?.playerPositions().get(id) ?? null,
       log: this.opts.log,
     });
     const inner = this.viewer.onFrame;
@@ -934,6 +967,9 @@ export class CombatView {
     if (this.disposed) return;
     const maxHp = progression?.maxHp ?? (s.hp || 1);
     this.damage.reset(maxHp, this.damage.maxHp === maxHp && !this.damage.dead ? this.damage.hp : maxHp);
+    // A new floor: no dead markers or remote status effects carry over.
+    for (const id of [...this.souls.keys()]) this.showSoul(id, false);
+    this.remoteStatus.clear();
     if (progression && this.tp === 0) this.tp = progression.maxTp;
     this.opts.log(
       `combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ` +
@@ -1018,6 +1054,7 @@ export class CombatView {
       this.tickEnemies();
       this.damage.tick();
       this.tickStatus();
+      this.tickRemoteStatus();
       this.tickTechHits();
       this.tickBuffs();
     }
@@ -1025,6 +1062,8 @@ export class CombatView {
     this.updateLockOn();
     this.overlay?.update(dt);
     this.updateHpReadout();
+    // The death fade: red, alpha growing to 0x80 (combat/playerdamage.ts).
+    if (this.hud) this.hud.tint = this.damage.fade > 0 ? ((this.damage.fade << 24) | 0xff0000) >>> 0 : 0;
     this.hud?.frame(dt, this.hudValues(), this.game.selfId, (slot) => this.partyValues(slot));
   }
 
@@ -3661,6 +3700,63 @@ export class CombatView {
     this.overlay.setTarget(best ? { x: best.instance.root.position.x, y: best.instance.root.position.y + 22, z: best.instance.root.position.z } : null);
   }
 
+  private selfAnimator() {
+    const me = this.game.self;
+    return me ? (this.view?.playerAnimator(me.clientId) ?? null) : null;
+  }
+
+  // Particles of an effect on a player (render/playerfx.ts); `follow` keeps
+  // them with the player (flag 0x10).
+  private fxOn(clientId: number, specs: readonly FxSpec[], follow = false): void {
+    if (specs.length) void this.playerFx?.play(clientId, specs, { follow });
+  }
+
+  // The look of the local player's states (combat/playerfx.ts).
+  private selfFx(e: PlayerDamageFx): void {
+    const id = this.game.selfId;
+    if (e.kind === 'hit') this.fxOn(id, [...HIT_SPARK, ...attributeFx(this.game.self?.charClass ?? 0)]);
+    else if (e.kind === 'block') this.fxOn(id, BLOCK_FX);
+    else this.fxOn(id, REVIVE_FX);
+  }
+
+  // The dead marker of a player (particle 0xaf): TriggerDespawnEffect on 6x4E,
+  // gone when the player is revived or leaves. Not on Pioneer 2
+  // (is_current_map_safe).
+  private showSoul(clientId: number, on: boolean): void {
+    const old = this.souls.get(clientId);
+    if (!on) {
+      old?.stop();
+      this.souls.delete(clientId);
+      return;
+    }
+    const fx = this.playerFx;
+    if (old || !fx || this.area === 0) return;
+    this.souls.set(clientId, { stop: () => {} });
+    void fx.play(clientId, SOUL_FX).then((h) => {
+      if (this.souls.has(clientId) && !this.disposed) this.souls.set(clientId, h);
+      else h.stop();
+    });
+  }
+
+  // A status effect pulse on a player (the infliction or a 45-frame period):
+  // its sound and particle (combat/playerfx.ts statusPulse).
+  private statusPulse(clientId: number, type: StatusType, onset: boolean): void {
+    const p = statusPulse(type, onset);
+    if (p.se !== null) this.playSe(p.se);
+    this.fxOn(clientId, statusFx(type), true);
+  }
+
+  // The ticks of the remote players' status effects (their copies run them
+  // too); the local one is PlayerStatus's own tick (tickStatus).
+  private tickRemoteStatus(): void {
+    if (this.area === 0) return;
+    for (const [id, rs] of this.remoteStatus) {
+      if (!this.game.players.has(id)) this.remoteStatus.delete(id);
+      else rs.tick(100, this.deadPlayers.has(id), this.game.info?.difficulty ?? 0);
+    }
+    for (const id of [...this.souls.keys()]) if (id !== this.game.selfId && !this.game.players.has(id)) this.showSoul(id, false);
+  }
+
   // Plays one of the player's hit / death / revive field motions.
   private playSelfMotion(kind: HitMotionKind): void {
     const me = this.game.self;
@@ -4931,24 +5027,31 @@ export class CombatView {
     // motions (combat/playerdamage.ts documents the commands).
     if (sub === 0x4a || sub === 0x4b || sub === 0x4c) {
       if (clientId === this.game.selfId) return;
-      const kind: HitMotionKind = sub === 0x4a ? 'guard' : sub === 0x4c ? 'heavy' : 'light';
+      const kind: HitMotionKind = sub === 0x4a ? 'block' : sub === 0x4c ? 'heavy' : 'light';
       const h = sub === 0x4a ? null : parseHitByEnemy(body);
       if (h && sub === 0x4c) this.view?.setPlayerAngle(clientId, h.angle);
-      this.playRemoteMotion(clientId, kind, sub === 0x4c ? 40 : 20);
+      this.playRemoteMotion(clientId, kind);
       return;
     }
     if (sub === 0x4d) {
       const d = parsePlayerDeath(body);
       if (!d || d.clientId === this.game.selfId) return;
-      this.playRemoteMotion(d.clientId, 'death', 0);
+      this.playRemoteMotion(d.clientId, 'death');
       this.deadPlayers.add(d.clientId);
+      this.remoteStatus.delete(d.clientId); // ASSUMED: dying ends every effect
       this.opts.log(`player ${d.clientId} died (6x4D flags 0x${d.deathFlags.toString(16)})`);
+      return;
+    }
+    if (sub === 0x4e) {
+      // HandlePlayerRootObjectDespawn_0069ad04: the dead marker (soul).
+      if (clientId !== this.game.selfId) this.showSoul(clientId, true);
       return;
     }
     if (sub === 0x4f) {
       if (clientId === this.game.selfId) return;
       this.deadPlayers.delete(clientId);
-      this.playRemoteMotion(clientId, 'revive', 40);
+      this.showSoul(clientId, false);
+      this.playRemoteMotion(clientId, 'revive');
       return;
     }
     if (sub === 0x9c) {
@@ -4971,32 +5074,83 @@ export class CombatView {
           ? `player ${st.clientId}: ${STATUS_NAME[st.value as StatusType] ?? `effect ${st.value}`} (6x0C)`
           : `player ${st.clientId}: status slot ${st.value} cleared (6x0D)`,
       );
+      // The remote copy of the player runs the same infliction and ticks, so
+      // its particles and sounds play here too.
+      const id = st.clientId;
+      let rs = this.remoteStatus.get(id);
+      if (!rs) {
+        rs = new PlayerStatus({
+          sendAdd: () => {},
+          sendRemove: () => {},
+          poisonDamage: () => {},
+          pulse: (type, onset) => this.statusPulse(id, type, onset),
+          log: () => {},
+        });
+        this.remoteStatus.set(id, rs);
+      }
+      if (st.add) rs.receiveAdd(st.value);
+      else rs.receiveRemove(st.value);
       return;
     }
     if (sub === 0x5f) this.opts.log(`item dropped (6x5F, ${body.length} bytes)`);
   }
 
-  // Plays a hit / death / revive motion on a remote player and keeps its gait
-  // suppressed for `ticks` ticks (0 = until it is revived).
-  private playRemoteMotion(clientId: number, kind: HitMotionKind, ticks: number): void {
+  // Plays a hit / block / death / revive motion on a remote player, with the
+  // sound and particles of the handler its copy runs (combat/playerfx.ts), and
+  // keeps its gait suppressed until the motion has ended (the heavy hit's
+  // stand-up included); a death holds until the player is revived.
+  private remoteHooks = new Map<number, (dt: number) => void>();
+  private playRemoteMotion(clientId: number, kind: HitMotionKind): void {
     const view = this.view;
     const p = this.game.players.get(clientId);
     if (!view || !p) return;
     const animator = view.playerAnimator(clientId);
     if (!animator) return;
+    const old = this.remoteHooks.get(clientId);
+    if (old) this.viewer.frameHooks.delete(old);
+    this.remoteHooks.delete(clientId);
     this.hurt.add(clientId);
     animator.paused = false;
-    animator.play(hitMotion(MOTION_TYPE[p.charClass] ?? 0, 0, kind), 1);
-    if (!ticks) return;
-    let left = ticks;
-    const hook = (dt: number) => {
-      left -= dt * GAME_TICKS_PER_SECOND;
-      if (this.disposed || left <= 0) {
-        this.viewer.frameHooks.delete(hook);
-        this.hurt.delete(clientId);
-        view.resetGait(clientId);
-      }
+    const motionType = MOTION_TYPE[p.charClass] ?? 0;
+    animator.play(hitMotion(motionType, 0, kind), 1);
+    // The entry sounds and, on a remote copy, the attribute particle.
+    if (kind === 'light' || kind === 'heavy') {
+      this.playSe(kind === 'heavy' ? SE_HIT_HEAVY : SE_HIT_LIGHT);
+      this.fxOn(clientId, attributeFx(p.charClass));
+    } else if (kind === 'block') {
+      this.playSe(SE_BLOCK);
+      this.fxOn(clientId, BLOCK_FX);
+    } else if (kind === 'revive') {
+      this.fxOn(clientId, REVIVE_FX);
+    }
+    if (kind === 'death') return;
+    let stage: HitMotionKind = kind;
+    let landed = false;
+    let age = 0;
+    const done = () => {
+      this.viewer.frameHooks.delete(hook);
+      this.remoteHooks.delete(clientId);
+      this.hurt.delete(clientId);
+      view.resetGait(clientId);
     };
+    const hook = (dt: number) => {
+      if (this.disposed) return done();
+      age += dt * GAME_TICKS_PER_SECOND;
+      if (stage === 'heavy' && !landed && animator.frame > HEAVY_LAND_FRAME) {
+        landed = true;
+        this.playSe(heavyLandSe(p.charClass));
+      }
+      if (age > 150) return done(); // a stalled motion must not hold the player
+      if (age < 1 || !animator.ended) return;
+      if (stage === 'heavy') {
+        stage = 'getup';
+        age = 0;
+        animator.play(hitMotion(motionType, 0, 'getup'), 1);
+        return;
+      }
+      done();
+    };
+    this.remoteHooks.set(clientId, hook);
     this.viewer.frameHooks.add(hook);
   }
 
@@ -5143,6 +5297,11 @@ export class CombatView {
     this.hud?.dispose();
     this.levelUpFx?.dispose();
     this.levelUpFx = null;
+    for (const h of this.remoteHooks.values()) this.viewer.frameHooks.delete(h);
+    this.remoteHooks.clear();
+    this.souls.clear();
+    this.playerFx?.dispose();
+    this.playerFx = null;
     this.hud = null;
     this.voloptViews.clear();
     this.voloptBodyAnim.clear();

@@ -49,6 +49,9 @@
 //     shock_effect_tick: frames - 1; at 0 the slot is cleared and the EVP
 //     multiplier taken back. Every 45 frames the particle / SE replays.
 //
+// The particle and the SE of every pulse (the infliction and the 45-frame ticks):
+// combat/playerfx.ts; the freeze's tick repeats SE 0x10 as frozen_effect_tick does.
+//
 // Effects while active:
 //   frozen: HandlePostEvadeDamageCheck_0069f408 / unknown_handle_defend_or_
 //     enter_special_npc_dialog put the player into input state 0x13, which
@@ -184,8 +187,9 @@ export interface StatusEvents {
   sendRemove(slot: 0 | 1): void;
   // The player loses this much HP to poison (already clamped to keep 1 HP).
   poisonDamage(amount: number): void;
-  // A particle / sound period of an effect (and the infliction itself).
-  pulse(type: StatusType): void;
+  // A particle / sound period of an effect (`onset` false) and the infliction
+  // itself (`onset` true); combat/playerfx.ts statusPulse says what each shows.
+  pulse(type: StatusType, onset: boolean): void;
   log(msg: string): void;
 }
 
@@ -257,7 +261,7 @@ export class PlayerStatus {
               : type === STATUS.freeze
                 ? FREEZE_FRAMES
                 : SHOCK_FRAMES;
-    this.events.pulse(type);
+    this.events.pulse(type, true);
     return true;
   }
 
@@ -311,7 +315,7 @@ export class PlayerStatus {
     if (s0.type === STATUS.poison) {
       const c = s0.counter + 1;
       if (c % STATUS_PERIOD === 0) {
-        this.events.pulse(STATUS.poison);
+        this.events.pulse(STATUS.poison, false);
         s0.counter = 0;
         const damage = poisonDamage(hp, difficulty);
         if (!dead) this.events.poisonDamage(Math.min(damage, Math.max(0, hp - 1)));
@@ -321,7 +325,7 @@ export class PlayerStatus {
     } else if (s0.type === STATUS.paralysis) {
       const c = s0.counter - 1;
       if (c < 1) {
-        this.events.pulse(STATUS.paralysis);
+        this.events.pulse(STATUS.paralysis, false);
         s0.counter = STATUS_PERIOD;
       } else {
         s0.counter = c;
@@ -331,7 +335,8 @@ export class PlayerStatus {
     if (s1.type) {
       const c = --s1.counter;
       if (c > 0) {
-        if (c % STATUS_PERIOD === 0 && s1.type !== STATUS.freeze) this.events.pulse(s1.type);
+        // frozen_effect_tick repeats SE 0x10 on the same 45-frame period.
+        if (c % STATUS_PERIOD === 0) this.events.pulse(s1.type, false);
       } else {
         this.events.log(`${STATUS_NAME[s1.type]} wore off`);
         this.clear(1);

@@ -41,6 +41,10 @@ export class PlayerHud {
   private extra = 0; // virtual units beyond 640 on a wide window
   private projected = new THREE.Vector3();
   log: (msg: string) => void = () => {};
+  // The screen colour overlay (g_UIElementArray_00a98480[1], ARGB; the death
+  // fade sets 0x??ff0000 with the alpha growing to 0x80). 0 = none. ASSUMED:
+  // drawn over the scene and under the windows.
+  tint = 0;
   // The HUD's flags (+0x1c; bit 1 = the full map is up, render/fieldhud.ts):
   // the status window closes while bits 1 / 0x10 are set.
   hudFlags: () => number = () => 0;
@@ -161,6 +165,11 @@ export class PlayerHud {
     Object.assign(c.style, { left: `${gl.offsetLeft}px`, top: `${gl.offsetTop}px`, width: `${cssW}px`, height: `${cssH}px` });
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    const alpha = this.tint >>> 24;
+    if (alpha > 0) {
+      ctx.fillStyle = `rgba(${(this.tint >>> 16) & 0xff},${(this.tint >>> 8) & 0xff},${this.tint & 0xff},${alpha / 255})`;
+      ctx.fillRect(0, 0, w, h);
+    }
     if (!tex) return;
     const s = h / VH;
     this.extra = Math.max(0, w / s - VW);
