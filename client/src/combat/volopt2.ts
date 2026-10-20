@@ -20,17 +20,28 @@
 // parts and the body); a hit marks the box it touched and the reaction splits
 // the damage between the marked parts.
 //
-// ASSUMED (neither the dump nor the JP C has it): the prison bar / prison cage
-// objects' update code (only their constructors and the missile's update are
-// in the dump), so the bars cost nothing and the cage is a projectile that
-// takes the first player it touches; the launch points of the missiles; which
-// part a strike touched (the nearest box to the attacker); the ability of the
-// Ultimate arm (state 0xC, only its timeline and the arc are ported).
+// The laser's bars (ConstructVoloptPrisonBarEntity, ctor 0x0044B0BC, vtable
+// 0x00AF6870, update 0x0044B1B8) and the capture's cage (the dump's
+// ConstructVoloptPrisonEntity, ctor 0x0044A54C, vtable 0x00AF6710, update
+// 0x0044A694) are read from the disassembly, because the dump names their
+// constructors only: VoloptBar and VoloptCage below. The prison the cage
+// leaves behind is the enemy of ctor 0x00449CB4 (vtable 0x00AF6560, states 7
+// rise / 1 hold / 4 hit / 5 death). The dump's "VoloptPrisonBar" pair at
+// 0x0044B84C / 0x0044BB80 is something else: 0x0044B84C is the lid of a
+// pillar's hatch (combat/volopt.ts, VoloptLid) and 0x0044BB80 the Dark Falz
+// scene's music timer.
+//
+// ASSUMED (neither the dump nor the exe's data has it): the launch points of the
+// missiles; which part a strike touched (the nearest box to the attacker); the
+// ability of the Ultimate arm (state 0xC, only its timeline and the arc are
+// ported); the player's height in the bars' and the cage's contact tests (they
+// are flat tests here), the cage's ray cast against the map (0x0077FFFC, not
+// reproduced) and the drawing of all of them (a ball per bar and per cage).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
-import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, PLAYER_AIM_HEIGHT, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { NO_HITS, VO_ID, VoloptAnim, VoloptPart, VoloptWatchdog, type Vec3, type VoloptEvent, type VoloptForm2Link, type VoloptSlot } from './volopt.ts';
 
 const BAMS = BAMS_TO_RAD;
@@ -90,8 +101,8 @@ export const F2 = {
   captureHold: 120, // + row 37 iparam5
   captureRelease: 15,
   captureAfter: 30,
-  prisonLife: 450, // + row 37 iparam5 (ProcessVoloptPlayerMoveToTarget)
-  cageReach: 12, // ASSUMED: the cage's box
+  prisonLife: 450, // + row 37 iparam5 (state 7 of 0x00449CB4 stores iparam5 + 0x1c2 at +0x394)
+  prisonRise: 6, // the prison's ticks before its hold timer runs (state 7: 1 + 5 of 5 units)
   standFrame: 38,
   flinch: 6,
   armArc: [0x31c7, 0x471c] as const,
@@ -166,6 +177,202 @@ export class VoloptMissile extends EnemyShot {
   }
 }
 
+// --- the laser's bars ---------------------------------------------------------------
+
+// One bar of the laser (ConstructVoloptPrisonBarEntity, ctor 0x0044B0BC, update
+// 0x0044B1B8, state at +0xAC, timer at +0xB4). It is built where a turning
+// point (or, in the Ultimate arm, a player) stands, 4 of them (the arm: up to
+// 4); the body's state 5 builds them and waits the same iparam6 of row 37.
+//   start height   90.0 (0x008FE9E0), or, from 60.0 (0x008FE9E4) away from the
+//                  arena origin, 90 - (distance - 60) / 3 (0x008FE9D8 / DC)
+//   state 0 / 1    wait iparam6 ticks (+0x2C of row 37): state 0 sets the timer
+//                  to iparam6 - 1 and goes on in the same tick
+//   state 2        falls 16.0 a tick (0x008FE9BC) while above 0.0 (0x008FE9D0);
+//                  the tick that reaches it lands: box on (flag 2), the sphere
+//                  (0, 18, 0) radius 5 (0x009A566C) is tested against the
+//                  players, each one inside takes entity_hit_by_tech(owner,
+//                  group 0x008FE92C = 0, power (float) iparam2 of row 37), the
+//                  particles 0x11E and the sound 0x343 follow
+//   state 3        15 ticks (0xF), the box is off
+//   state 4        rises 16.0 a tick (0x008FE9C0) and is deleted at 90.0 (0x008FE9D4)
+// Not reproduced: the three ceiling fragments built when the wait ends
+// (0x0044B4E4, DerollePartObject x3 from the model entry 14 of the BML) and the
+// knock-back direction written into the player (0x00830AA0).
+export const BAR = {
+  top: 90,
+  near: 60,
+  slope: -0.3333333432674408, // 0x008FE9D8
+  fall: -16,
+  rise: 16,
+  landed: 0,
+  hold: 15,
+  box: 5, // the sphere's radius (0x009A5678); the player's box is 5 too
+  boxY: 18, // the sphere's centre above the bar (0x009A5670)
+  landSe: 0x343,
+} as const;
+
+// The height a bar starts at, from its distance to the arena origin.
+export function barStartHeight(dist: number): number {
+  if (dist < BAR.near) return BAR.top;
+  return Math.fround(Math.fround(Math.fround(dist - BAR.near) * BAR.slope) + BAR.top);
+}
+
+export class VoloptBar extends EnemyShot {
+  override readonly absolute = true;
+  readonly effect: ShotEffect;
+  // ASSUMED look: a ball (the exe draws models 21 / 23 of the BML and a ring).
+  readonly look: ShotLook = { color: 0xb0b0ff, size: 4 };
+  state = 0;
+  timer = 0;
+  private readonly wait: number;
+  private readonly sound: (id: number) => void;
+
+  constructor(x: number, z: number, cx: number, cz: number, wait: number, power: number, sound: (id: number) => void) {
+    super(x, barStartHeight(Math.hypot(x - cx, z - cz)), z);
+    this.wait = wait;
+    this.sound = sound;
+    this.effect = { kind: 'tech', power: Math.max(0, power) };
+  }
+
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done) return NO_HITS;
+    this.frames++;
+    switch (this.state) {
+      case 0:
+        // State 0 loads the timer and counts it down in the same tick.
+        this.timer = this.wait;
+        this.state = 1;
+        if (--this.timer <= 0) this.state = 2;
+        return NO_HITS;
+      case 1:
+        if (--this.timer <= 0) this.state = 2;
+        return NO_HITS;
+      case 2:
+        this.y += BAR.fall;
+        if (this.y > BAR.landed) return NO_HITS;
+        this.timer = BAR.hold;
+        this.state = 3;
+        this.sound(BAR.landSe);
+        return this.within(targets, BAR.box);
+      case 3:
+        if (--this.timer <= 0) this.state = 4;
+        return NO_HITS;
+      default:
+        this.y += BAR.rise;
+        if (this.y >= BAR.top) this.done = true;
+        return NO_HITS;
+    }
+  }
+}
+
+// --- the capture's cage -----------------------------------------------------------------
+
+// The cage the body throws (ctor 0x0044A54C, update 0x0044A694; vtable
+// 0x00AF6710): it starts 35 units ahead of the body and 30 up (the vector
+// (0, 30, 35) turned by the body's +0x60), flies at row 38 fparam1 (the vector
+// (0, 0, speed) turned the same way) and for iparam1 ticks. Each tick it homes
+// like the missile: the vector to the target's weapon point is brought to
+// fparam2 and added to the velocity, which is brought back to fparam1; it moves;
+// a ray from the old to the new point is cast against the map (0x0077FFFC, not
+// reproduced: ASSUMED, a wall does not stop it); below 25.0 (0x008FE8E0) its
+// sphere (radius 5, 0x009A560C, set by the initialiser at 0x0044A884) is tested
+// against the players and the first one inside takes entity_hit_by_tech(owner,
+// group 0, power 0.0: 0x008FE8C8 / CC) and is handed to the body's 0x00448660
+// (the capture: the prison is built on her). The sound 0x357 plays every tick it
+// lives, 0x356 at the throw.
+export const CAGE = { ahead: 35, up: 30, ceiling: 25, box: 5, sustainSe: 0x357 } as const;
+
+function scaleTo(v: Vec3, len: number): void {
+  const n = Math.hypot(v[0], v[1], v[2]);
+  if (n < 1e-9) return;
+  v[0] = (v[0] / n) * len;
+  v[1] = (v[1] / n) * len;
+  v[2] = (v[2] / n) * len;
+}
+
+export class VoloptCage {
+  x: number;
+  y: number;
+  z: number;
+  life: number;
+  private readonly vel: Vec3;
+  private readonly speed: number;
+  private readonly pull: number;
+  readonly target: number;
+
+  constructor(bx: number, bz: number, facing: number, speed: number, pull: number, life: number, target: number) {
+    const sa = Math.sin(facing * BAMS);
+    const ca = Math.cos(facing * BAMS);
+    this.x = bx + sa * CAGE.ahead;
+    this.y = CAGE.up;
+    this.z = bz + ca * CAGE.ahead;
+    this.vel = [sa * speed, 0, ca * speed];
+    this.speed = speed;
+    this.pull = pull;
+    this.life = life;
+    this.target = target;
+  }
+
+  // One tick; the player it caught, if any (the cage is over then).
+  tick(targets: readonly AiTarget[]): AiTarget | null {
+    let hit: AiTarget | null = null;
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
+      if (t.clientId !== this.target || t.dead) continue;
+      const d: Vec3 = [t.x - this.x, PLAYER_AIM_HEIGHT - this.y, t.z - this.z];
+      scaleTo(d, this.pull);
+      this.vel[0] += d[0];
+      this.vel[1] += d[1];
+      this.vel[2] += d[2];
+      scaleTo(this.vel, this.speed);
+      break;
+    }
+    this.x += this.vel[0];
+    this.y += this.vel[1];
+    this.z += this.vel[2];
+    if (this.y < CAGE.ceiling) {
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        if (t.dead) continue;
+        if (Math.hypot(t.x - this.x, t.z - this.z) <= CAGE.box + PLAYER_RADIUS) {
+          hit = t;
+          break;
+        }
+      }
+    }
+    this.life--;
+    return hit;
+  }
+
+  get over(): boolean {
+    return this.life <= 0;
+  }
+}
+
+// What the cage's hit sends to the local player: one tech hit of power 0 at the
+// cage's place (the renderer resolves it for its own player only, like the
+// other shots). The ball is a pixel and lasts a tick.
+class VoloptCageStrike extends EnemyShot {
+  override readonly absolute = true;
+  readonly effect: ShotEffect = { kind: 'tech', power: 0 };
+  readonly look: ShotLook = { color: 0xffffff, size: 0.05 };
+  private readonly victim: AiTarget;
+  constructor(x: number, y: number, z: number, victim: AiTarget) {
+    super(x, y, z);
+    this.victim = victim;
+  }
+  tick(): AiTarget[] {
+    if (this.done) return NO_HITS;
+    this.done = true;
+    return [this.victim];
+  }
+}
+
+// The prison the cage leaves behind (ctor 0x00449CB4, vtable 0x00AF6560): it
+// starts 25.0 below the floor (0x008FE8AC), its hit sphere is (0, 18, 0) radius
+// 20 (0x009A55C0), the rise is 5.0 a tick (0x00A44C44, set at 0x0044A388).
+const PRISON = { start: -25, lift: 5, boxY: 18 } as const;
+
 export interface Form2Options {
   x: number;
   z: number;
@@ -176,6 +383,9 @@ export interface Form2Options {
   parts: EnemyMovementData | null; // row 42: iparam1..4 the part HPs
   prison: EnemyMovementData | null; // row 38
   prisonHp: number; // stats row 38
+  // g_VoloptForm2Config / -Value while phase 2 runs (0x0043E954 with 1): the
+  // bars' start height is measured from here. Default (0, -5000).
+  center?: readonly [number, number];
   leader: () => boolean;
   selfId: () => number;
   frames: (motion: number) => number;
@@ -234,7 +444,11 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   // The captured player and how long the prison holds.
   captured = 0xffff;
   private prisonTimer = 0;
-  private cage: { x: number; z: number; vx: number; vz: number; life: number; target: number } | null = null;
+  // Ticks until the prison has risen out of the floor and its hold timer runs.
+  private prisonWarm = 0;
+  private prisonBase = 0; // the prison's height above the floor while it rises
+  private cage: VoloptCage | null = null;
+  private readonly center: readonly [number, number];
   killedAt: Vec3 | null = null;
   private readonly out: AiFrame;
 
@@ -244,6 +458,7 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     this.move = opts.movement ?? FALLBACK.move;
     this.prisonMove = opts.prison ?? FALLBACK.prison;
     this.prisonHp = Math.max(1, opts.prisonHp || 260);
+    this.center = opts.center ?? [0, -5000];
     this.bindPrison(this.prison);
     this.maxHp = Math.max(1, opts.hp);
     this.hp = this.maxHp;
@@ -314,7 +529,16 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
   }
   // Frames the prison holds the captured player.
   get prisonFrames(): number {
-    return this.prisonTimer;
+    return this.prisonWarm + this.prisonTimer;
+  }
+  // Where the cage is while it flies (for drawing), or null.
+  cagePosition(out: Vec3): boolean {
+    const c = this.cage;
+    if (!c) return false;
+    out[0] = c.x;
+    out[1] = c.y;
+    out[2] = c.z;
+    return true;
   }
   get isAwake(): boolean {
     return this.awake;
@@ -760,8 +984,9 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         break;
       }
       case 5:
-        // The prison bars drop at the four points (ASSUMED: no damage, no wall).
+        // A bar is built at each of the four points (laser case 5).
         this.timer = this.move.iparam[5];
+        this.spawnBars(4);
         this.events.push({ kind: 'se', id: 0x35c });
         this.sub = 6;
         break;
@@ -828,8 +1053,23 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
         n++;
       }
       this.pointCount = n;
+      this.spawnBars(n);
       this.events.push({ kind: 'se', id: 0x35c });
       this.done();
+    }
+  }
+
+  // ConstructVoloptPrisonBarEntity for the first `n` points: each bar waits
+  // iparam6 of row 37, falls, hits the players under it with iparam2 (see
+  // VoloptBar). They outlive the state that built them.
+  private spawnBars(n: number): void {
+    const wait = this.move.iparam[5];
+    const power = this.move.iparam[1];
+    const sound = (id: number): void => {
+      this.events.push({ kind: 'se', id });
+    };
+    for (let k = 0; k < n; k++) {
+      this.pending.push(new VoloptBar(this.points[k][0], this.points[k][2], this.center[0], this.center[1], wait, power, sound));
     }
   }
 
@@ -906,59 +1146,66 @@ export class VoloptForm2Ai extends BrainBase implements VoloptForm2Link {
     }
   }
 
-  // ConstructVoloptPrisonEntity: the cage leaves at row 38
-  // fparam1 along the body's facing for iparam1 frames.
+  // ConstructVoloptPrisonEntity (see VoloptCage): the cage leaves 35 ahead
+  // and 30 up at row 38 fparam1 along the body's facing, homing with fparam2,
+  // for iparam1 ticks.
   private throwCage(t: AiTarget | null): void {
-    const face = this.facing() * BAMS;
-    const v = this.prisonMove.fparam1 || 1.24;
-    this.cage = { x: this.x, z: this.z, vx: Math.sin(face) * v, vz: Math.cos(face) * v, life: this.prisonMove.iparam[0] || 130, target: t ? t.clientId : 0xffff };
+    const pm = this.prisonMove;
+    this.cage = new VoloptCage(this.x, this.z, this.facing(), pm.fparam1 || 1.24, pm.fparam2 || 0.7, pm.iparam[0] || 130, t ? t.clientId : 0xffff);
     this.events.push({ kind: 'se', id: 0x356 });
   }
 
-  // The cage's flight, the prison's hold and its release.
+  // The cage's flight, the prison's rise, hold and release.
   private tickPrison(targets: readonly AiTarget[]): void {
     const c = this.cage;
     if (c) {
-      c.x += c.vx;
-      c.z += c.vz;
-      let caught = 0xffff;
-      for (let i = 0; i < targets.length; i++) {
-        const t = targets[i];
-        if (t.dead) continue;
-        if (Math.hypot(t.x - c.x, t.z - c.z) <= F2.cageReach) {
-          caught = t.clientId;
-          break;
-        }
-      }
-      if (caught !== 0xffff) {
-        // SetupVoloptInteraction / the prison entity: the player is held for
-        // iparam5 + 450 frames unless the prison (row 38 HP) is destroyed.
-        this.captured = caught;
+      const caught = c.tick(targets);
+      if (caught) {
+        // 0x0044A7E7: the hit (group 0, power 0) on the player, then the
+        // body's 0x00448660 builds the prison on her (ctor 0x00449CB4: 25
+        // below the floor, state 7). The player is held for iparam5 + 450
+        // ticks unless the prison (row 38 HP) is destroyed.
+        this.pending.push(new VoloptCageStrike(c.x, c.y, c.z, caught));
+        this.captured = caught.clientId;
         this.prisonTimer = F2.prisonLife + this.move.iparam[4];
+        this.prisonWarm = F2.prisonRise;
+        this.prisonBase = PRISON.start;
         this.prison.hp = this.prison.maxHp;
         this.prison.dead = false;
         this.prison.hit = false;
-        this.prison.targetable = true;
-        const p = targets.find((x) => x.clientId === caught);
-        if (p) {
-          this.prison.x = p.x;
-          this.prison.z = p.z;
-        }
-        this.prison.y = 15;
-        this.events.push({ kind: 'se', id: 0x34e });
+        this.prison.targetable = false;
+        this.prison.x = caught.x;
+        this.prison.z = caught.z;
+        this.prison.y = this.prisonBase + PRISON.boxY;
         this.cage = null;
-      } else if (--c.life < 1) {
+        return; // the prison's first update is the next tick's
+      } else if (c.over) {
         this.cage = null;
+      } else {
+        this.sustain(CAGE.sustainSe);
       }
     }
     if (this.captured !== 0xffff) {
       this.prison.hit = false;
-      if (this.prison.hp <= 0 || --this.prisonTimer < 1) this.releasePrison();
+      if (this.prisonWarm > 0) {
+        // State 7 of the prison: the first tick plays 0x344, the next five
+        // lift it 5.0 a tick (0x0044A213) up to 0.0, which starts the hold
+        // timer and makes it a target (flag 0x40000 off).
+        if (this.prisonWarm === F2.prisonRise) {
+          this.events.push({ kind: 'se', id: 0x344 });
+        } else {
+          this.prisonBase = Math.min(0, this.prisonBase + PRISON.lift);
+          this.prison.y = this.prisonBase + PRISON.boxY;
+        }
+        if (--this.prisonWarm === 0) this.prison.targetable = true;
+      } else if (this.prison.hp <= 0 || --this.prisonTimer < 1) this.releasePrison();
     }
   }
 
   private releasePrison(): void {
     this.captured = 0xffff;
+    this.prisonWarm = 0;
+    this.prisonTimer = 0;
     this.cage = null;
     this.prison.targetable = false;
     this.prison.dead = true;

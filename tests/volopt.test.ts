@@ -15,11 +15,24 @@ import {
   VO_PILLARS,
   VoloptAi,
   VoloptBolt,
+  VoloptLid,
   VoloptPartAi,
   type VoloptEvent,
   type VoloptOptions,
 } from '../client/src/combat/volopt.ts';
-import { F2, FORM2_BOXES, FORM2_SLOTS, VoloptForm2Ai, VoloptMissile, type Form2Options } from '../client/src/combat/volopt2.ts';
+import {
+  BAR,
+  CAGE,
+  F2,
+  FORM2_BOXES,
+  FORM2_SLOTS,
+  VoloptBar,
+  VoloptCage,
+  VoloptForm2Ai,
+  VoloptMissile,
+  barStartHeight,
+  type Form2Options,
+} from '../client/src/combat/volopt2.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import { bossPhaseOf } from '../client/src/audio/bossbgm.ts';
@@ -602,8 +615,20 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   eq(f.f2.captured, 0, 'the player in front is captured');
   const prison = f.c.prison;
   check(!prison.dead && prison.hp === 260, `the prison has the row's HP (${prison.hp})`);
-  check(prison.targetable, 'and can be shot');
+  // Ctor 0x00449CB4 / state 7: 25 below the floor, 6 ticks (one for the sound,
+  // five of +5.0) before it is a target and the hold timer runs.
+  check(!prison.targetable, 'it cannot be shot while it rises');
+  eq(prison.y, -25 + 18, 'it starts 25 below the floor (hit sphere 18 up)');
+  eq(f.f2.prisonFrames, F2.prisonRise + F2.prisonLife + ROW_FORM2.iparam[4], 'the hold is the rise plus iparam5 + 450');
+  f.step(F2.prisonRise);
+  check(prison.targetable, 'and can be shot once it is up');
+  eq(prison.y, 18, 'with its hit sphere 18 above the floor');
+  eq(f.f2.prisonFrames, F2.prisonLife + ROW_FORM2.iparam[4], 'the timer has not run yet');
   eq(f.f2.prisonFrames > 400, true, 'it holds for iparam5 + 450 frames');
+  check(
+    f.shots.some((s) => s instanceof Object && (s as { effect?: { kind: string; power: number } }).effect?.power === 0),
+    'the cage hit the player with a power 0 technique hit',
+  );
   // Teammates break it.
   f.c.damagePart(VO_ID.prison, 300, false);
   f.step(2);
@@ -837,6 +862,198 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   check(f.c.cooldown > 20, `the director waits (${f.c.cooldown})`);
   f.c.applyDelays(0, [3, 4, 5]);
   eq(f.c.delays.join(','), '3,4,5', '6x85 stores its delays in Ultimate');
+}
+
+// --- the laser's bars (VoloptBar, ctor 0x0044B0BC / update 0x0044B1B8) -------------------
+
+{
+  // Start height: 90 up to 60 from the origin, then 90 - (distance - 60) / 3.
+  eq(barStartHeight(0), 90, 'a bar at the origin starts at 90');
+  eq(barStartHeight(59.9), 90, 'and up to 60 away');
+  eq(barStartHeight(60), 90, 'exactly 60 away');
+  check(Math.abs(barStartHeight(120) - 70) < 1e-4, `120 away starts at 70 (${barStartHeight(120)})`);
+  check(barStartHeight(400) < 0, 'far away it starts below the floor');
+}
+
+{
+  // The timeline with a wait of 4: 4 ticks of waiting, 6 of falling (90 -> -6),
+  // the landing on the 6th, 15 held, 6 rising (-6 -> 90) and gone.
+  const sounds: number[] = [];
+  const near = player(0, 8, 0); // inside 5 + 5
+  const edge = player(1, 10, 0); // exactly on the edge
+  const out = player(2, 10.5, 0);
+  const dead = player(3, 0, 0, true);
+  const bar = new VoloptBar(0, 0, 0, 0, 4, 550, (id) => sounds.push(id));
+  const targets = [near, edge, out, dead];
+  eq(bar.y, 90, 'the bar starts at the top');
+  eq(bar.effect.kind, 'tech', 'its hit is a technique hit');
+  eq((bar.effect as { power: number }).power, 550, 'with iparam2 of row 37');
+  const hitsAt: number[] = [];
+  let ticks = 0;
+  let landed = -1;
+  while (!bar.done && ticks < 200) {
+    ticks++;
+    const hits = bar.tick(targets);
+    if (hits.length) {
+      landed = ticks;
+      for (const h of hits) hitsAt.push(h.clientId);
+    }
+  }
+  eq(landed, 4 + 6, 'it lands after the wait and six falls of 16');
+  eq(hitsAt.join(','), '0,1', 'the live players inside the sphere (5 + 5) are hit, once');
+  eq(ticks, 4 + 6 + 15 + 6, 'wait, fall, 15 held, six rising and then it is deleted');
+  eq(sounds.join(','), String(BAR.landSe), 'the landing plays 0x343 once');
+  // A wait of 1 (or 0) goes straight on to the fall in the same tick.
+  const quick = new VoloptBar(0, 0, 0, 0, 1, 1, () => {});
+  quick.tick([]);
+  eq(quick.state, 2, 'a wait of one tick is spent by the first tick');
+  const zero = new VoloptBar(0, 0, 0, 0, 0, 1, () => {});
+  zero.tick([]);
+  eq(zero.state, 2, 'a wait of zero too');
+  // From far away it starts low and lands sooner.
+  const far = new VoloptBar(120, 0, 0, 0, 1, 1, () => {});
+  let n = 0;
+  for (; n < 50 && far.state < 3; n++) far.tick([]);
+  eq(n, 1 + Math.ceil(70 / 16), 'a bar 120 away (start 70) falls five ticks');
+}
+
+{
+  // The laser builds four bars a round at the four points, each with the row's
+  // wait (iparam6) and power (iparam2), measured from phase 2's origin.
+  const f = toPhase2({ targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  f.f2.applyAction(4, 0, 0);
+  const bars = (): VoloptBar[] => f.shots.filter((s): s is VoloptBar => s instanceof VoloptBar);
+  f.until(() => bars().length >= 4, 2000, 'the first round of bars');
+  const first = bars().slice(0, 4);
+  eq(bars().length, 4, 'four bars in the first round');
+  for (const b of first) {
+    eq((b.effect as { power: number }).power, ROW_FORM2.iparam[1], 'a bar hits with iparam2');
+    check(Math.abs(Math.hypot(b.x - f.f2.x, b.z - f.f2.z) - 75) < 26, 'and stands on the points turning round the body');
+    eq(b.y, barStartHeight(Math.hypot(b.x, b.z + 5000)), 'its start height is measured from (0, -5000)');
+  }
+  // The bars that land on a player hit her; run them next to the fight.
+  const target = f.targets[0];
+  target.x = first[0].x;
+  target.z = first[0].z;
+  let hit = 0;
+  for (let i = 0; i < 400 && !first[0].done; i++) {
+    for (const b of first) {
+      const h = b.tick(f.targets);
+      if (b === first[0] && h.length) hit++;
+    }
+  }
+  eq(hit, 1, 'the bar over the player landed on her once');
+  f.until(() => f.f2.st === 0, 2000, 'laser done');
+  eq(bars().length, 12, 'three rounds of four bars');
+}
+
+{
+  // The Ultimate arm builds a bar under each player in its arc.
+  const f = toPhase2({ ultimate: true, targets: [player(0, 0, -4900)] });
+  f.leader.on = false;
+  f.f2.applyAction(7, 0, 0);
+  eq(f.f2.st, 0xc, 'the arm state');
+  f.until(() => f.f2.st === 0, 400, 'arm done');
+  const bars = f.shots.filter((s) => s instanceof VoloptBar);
+  eq(bars.length, 1, 'one bar under the one player in the arc');
+}
+
+// --- the capture's cage (VoloptCage, ctor 0x0044A54C / update 0x0044A694) --------------------
+
+{
+  // It starts 35 ahead and 30 up, flies at fparam1 along the facing, and
+  // homes with fparam2 toward the weapon point of its target.
+  const cage = new VoloptCage(0, -5000, 0, 1.24, 0.7, 130, 0);
+  eq(cage.x, 0, 'straight ahead of a body facing +z');
+  eq(cage.z, -5000 + CAGE.ahead, 'it starts 35 ahead');
+  eq(cage.y, CAGE.up, 'and 30 up');
+  const side = new VoloptCage(0, 0, 0x4000, 1, 0.5, 10, 0);
+  check(Math.abs(side.x - 35) < 1e-9 && Math.abs(side.z) < 1e-9, 'facing 0x4000 turns the offset to +x');
+  // Without a target it flies straight for iparam1 ticks and ends without a hit.
+  const blind = new VoloptCage(0, 0, 0, 1.24, 0.7, 130, 0xffff);
+  let ticks = 0;
+  while (!blind.over && ticks < 500) {
+    ticks++;
+    eq(blind.tick([player(0, 0, 5)]) === null, true, 'no target, no hit');
+  }
+  eq(ticks, 130, 'it lives iparam1 ticks');
+  check(Math.abs(blind.z - 35 - 1.24 * 130) < 1e-6 && blind.y === CAGE.up, 'on a straight line at fparam1');
+  // With a target it comes down toward her and takes her once it is below 25.
+  const me = player(0, 0, 60);
+  const homing = new VoloptCage(0, 0, 0, 1.24, 0.7, 130, 0);
+  let caught: AiTarget | null = null;
+  let t = 0;
+  let yAtHit = 99;
+  while (!homing.over && !caught && t < 200) {
+    t++;
+    caught = homing.tick([me]);
+    if (caught) yAtHit = homing.y;
+  }
+  check(caught === me, 'the cage caught the player it homed on');
+  check(yAtHit < CAGE.ceiling, `below 25 when it caught her (${yAtHit})`);
+  check(Math.hypot(homing.x - me.x, homing.z - me.z) <= CAGE.box + 5, 'inside 5 + 5');
+  // Over a player but above 25: nothing yet.
+  const high = new VoloptCage(0, 0, 0, 0.01, 0.0, 130, 0xffff);
+  high.z = 0;
+  const under = player(0, 0, 0.5);
+  eq(high.tick([under]) === null, true, 'a cage above 25 touches nobody');
+  // The first player in the list wins when two are inside.
+  const twoA = player(4, 0, 38);
+  const twoB = player(5, 0, 36);
+  const pair = new VoloptCage(0, 0, 0, 0.5, 0.0, 130, 0xffff);
+  pair.y = 20;
+  eq(pair.tick([twoA, twoB])?.clientId, 4, 'the first player in the cache order');
+}
+
+// --- the pillar's hatch lid (VoloptLid, object 0x0044B84C) --------------------------------------
+
+{
+  const lid = new VoloptLid();
+  eq(lid.state, 0, 'the lid starts idle');
+  lid.set(1);
+  lid.tick();
+  lid.tick();
+  eq(lid.state, 0, 'closing a closed hatch takes two ticks');
+  eq(lid.a + lid.b, 0, 'and moves nothing');
+  lid.set(2);
+  let n = 0;
+  while (lid.state !== 0 && n < 100) {
+    n++;
+    lid.tick();
+  }
+  eq(n, 11 + 10, 'opening: a falls 0.3 to -3 (11 ticks), then b falls 1.8 to -18 (10)');
+  eq(lid.a, -3, 'the second part ends at -3');
+  eq(lid.b, -18, 'the first part ends at -18');
+  lid.set(1);
+  n = 0;
+  while (lid.state !== 0 && n < 100) {
+    n++;
+    lid.tick();
+  }
+  eq(n, 10 + 11, 'closing: b rises 1.8 to 0 (10 ticks), then a rises 0.3 to 0 (11)');
+  eq(lid.a + lid.b, 0, 'both parts are back');
+  // Opening again before it finished starts the first step over.
+  lid.set(2);
+  for (let i = 0; i < 5; i++) lid.tick();
+  const a5 = lid.a;
+  check(a5 < 0 && a5 > -3, 'half way open');
+  lid.set(1);
+  lid.tick();
+  eq(lid.b, 0, 'the first step of closing is on b, which had not moved');
+}
+
+{
+  // A pillar's lid follows its state: open while it is up, closed otherwise.
+  const f = fight();
+  f.until(() => f.c.ai === VO_AI.fight, 600, 'intro');
+  const p = f.c.pillars[0];
+  p.start(true);
+  f.step(40);
+  eq(p.lid.a, -3, 'a rising pillar opens its hatch (second part)');
+  eq(p.lid.b, -18, 'and the first part');
+  p.retract();
+  f.until(() => p.lid.state === 0 && p.bars !== 2 && p.lid.b === 0, 600, 'the hatch closes again');
 }
 
 if (failures) {
