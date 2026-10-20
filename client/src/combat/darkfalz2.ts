@@ -40,6 +40,7 @@ import {
 } from './darkfalzcommon.ts';
 import { F1, pickWeighted } from './darkfalz1.ts';
 import { TECH, techPower } from './techniques.ts';
+import { techReach } from './techfire.ts';
 
 // Animation table 0x009A61E0 (stride 0x10: mode, next, body motion, base motion).
 export const F2_ANIM_ROWS: readonly (DfAnimRow & { readonly motions: readonly number[] })[] = [
@@ -487,9 +488,9 @@ export class DfForm2 extends DfEntity {
       this.ballCount++;
     }
     const level = rabarta ? this.row.rabarta : this.row.rafoie;
-    const reach = rabarta ? F1.rabartaReach : F1.rafoieReach;
+    const reach = techReach(rabarta ? TECH.rabarta : TECH.rafoie, level);
     for (const p of this.fight.alive()) {
-      if (Math.hypot(p.x - x, p.z - z) <= reach) {
+      if (Math.hypot(p.x - x, p.z - z) < reach) {
         this.fight.events.push({ kind: 'tech', clientId: p.clientId, tech: rabarta ? 'rabarta' : 'rafoie', level, x, z, what: `Dark Falz ${rabarta ? 'Rabarta' : 'Rafoie'}` });
       }
     }

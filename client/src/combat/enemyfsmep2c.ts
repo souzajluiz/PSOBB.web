@@ -45,8 +45,9 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, PLAYER_RADIUS, turnToward, wrap } from './enemyfsm.ts';
-import { EnemyShot, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
-import { TECH, techData, techPower } from './techniques.ts';
+import { EnemyShot, PLAYER_AIM_HEIGHT, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { enemyFire } from './techfire.ts';
+import { TECH, techData } from './techniques.ts';
 import { STATUS } from './status.ts';
 import { delLilyMegid } from './enemyfsmruins.ts';
 import { exhaustive } from '../exhaustive.ts';
@@ -380,44 +381,6 @@ export type BerillState =
   | 'gifoie'
   | 'cloak'
   | 'reveal';
-
-// Gifoie as an enemy casts it (gifoie_constructor 0x006e4720, update_gifoie
-// 0x006e4dbc, ParticleEffect_Gifoie_Update_006e50f4): a ring of spiral
-// particles flies out of the cast point at 0.55 a frame (0x0096d37c); the
-// hit body is a disc of radius 5.0 (0x0096d390) + the first particle's
-// distance, hits every player once (entity_hit_by_gifoie keeps a 32-entry
-// list) and ends when that distance reaches the technique's range_h.
-// ASSUMED: the cast point is the Sinow's own position (the exe takes the
-// origin of a model node), the player's hit box radius is 5, and the hit is
-// group 0 (no fire resistance, enemyshots.ts ShotEffect has no group 1).
-export const GIFOIE_WAVE = { speed: Math.fround(0.55), body: 5 } as const;
-
-export class GifoieWave extends EnemyShot {
-  readonly effect: ShotEffect;
-  readonly look: ShotLook = { color: 0xff6020, size: 3 };
-  private range: number;
-  private struck = new Set<number>();
-
-  constructor(x: number, z: number, level: number) {
-    super(x, 10, z);
-    this.range = techData(TECH.gifoie, level).rangeH;
-    this.effect = { kind: 'tech', power: techPower(TECH.gifoie, level) };
-  }
-
-  tick(targets: readonly AiTarget[]): AiTarget[] {
-    if (this.done) return [];
-    this.frames++;
-    const ring = Math.fround(GIFOIE_WAVE.speed * this.frames);
-    const hits = this.within(targets, GIFOIE_WAVE.body + ring).filter((t) => !this.struck.has(t.clientId));
-    for (const t of hits) this.struck.add(t.clientId);
-    if (ring >= this.range) this.done = true;
-    return hits;
-  }
-}
-
-// ASSUMED: how the Rafoie object flies (enemyshots.ts TechBolt, the same
-// values the Chaos Sorcerer uses).
-const RAFOIE = { speed: 4, radius: 4, color: 0xff6020, height: 10 } as const;
 
 export interface BerillOptions {
   x: number;
@@ -1255,25 +1218,15 @@ export class SinowBerillAi extends ExeBrain {
     }
   }
 
+  // 0x00586d00 area: Ultimate makes CreateRafoieEffectEntity_006ed87c at the target
+  // position the Sinow remembered (+0x39c), else create_gifoie at its hand node
+  // (combat/techfire.ts; ASSUMED the node is 10 above the Sinow's feet).
   private castGifoie(out: AiFrame, t: AiTarget): void {
     const level = this.techLevel2();
-    if (this.ultimate) {
-      const power = techPower(TECH.rafoie, level);
-      const d = techData(TECH.rafoie, level);
-      (out.shots ??= []).push(
-        new TechBolt({
-          x: this.x,
-          y: RAFOIE.height,
-          z: this.z,
-          angle: Math.atan2(t.x - this.x, t.z - this.z),
-          speed: RAFOIE.speed,
-          range: Math.max(d.rangeH, this.dist(t)) + 20,
-          radius: RAFOIE.radius,
-          effect: { kind: 'tech', power },
-          color: RAFOIE.color,
-        }),
-      );
-    } else (out.shots ??= []).push(new GifoieWave(this.x, this.z, level));
+    const shot = this.ultimate
+      ? enemyFire({ tech: TECH.rafoie, level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: this.angle, fixed: true, enemy: true })
+      : enemyFire({ tech: TECH.gifoie, level, x: this.x, y: 10, z: this.z, heading: this.angle, enemy: true });
+    if (shot) (out.shots ??= []).push(shot);
   }
 
   private techLevel2(): number {
@@ -1500,26 +1453,6 @@ export type ZoaState =
   | 'tech'
   | 'cloak'
   | 'reveal';
-
-// Rabarta (ultimate tech state): ASSUMED a one-frame disc of the technique's
-// range around the body.
-export class ZoaFrost extends EnemyShot {
-  readonly effect: ShotEffect;
-  readonly look: ShotLook = { color: 0x80c0ff, size: 5 };
-  private radius: number;
-
-  constructor(x: number, z: number, radius: number, power: number) {
-    super(x, 10, z);
-    this.radius = radius;
-    this.effect = { kind: 'tech', power };
-  }
-
-  tick(targets: readonly AiTarget[]): AiTarget[] {
-    if (this.done) return [];
-    this.done = true;
-    return this.within(targets, this.radius);
-  }
-}
 
 // A support technique the Zele puts on the players near it: the owner applies
 // `tech` (jellen = attack down, zalure = defense down) to the local player when
@@ -2479,27 +2412,13 @@ export class SinowZoaAi extends ExeBrain {
     return Math.abs(Math.trunc(wrap(want - this.angle) / BAMS_TO_RAD));
   }
 
-  // unknown_create_sorc_tech 0x006e38e0 / RabartaInit_006ec8ec.
+  // unknown_create_sorc_tech 0x006e38e0 (along the heading) / RabartaInit_006ec8ec
+  // (centred on the Sinow itself), combat/techfire.ts. ASSUMED: the hand node
+  // the exe casts from is the Sinow's own position, ZOA.boltHeight up.
   private castTech(out: AiFrame): void {
     const level = this.level(3);
-    if (this.ultimate) {
-      const d = techData(TECH.rabarta, level);
-      (out.shots ??= []).push(new ZoaFrost(this.x, this.z, d.rangeH, techPower(TECH.rabarta, level)));
-      return;
-    }
-    (out.shots ??= []).push(
-      new TechBolt({
-        x: this.x,
-        y: ZOA.boltHeight,
-        z: this.z,
-        angle: this.angle,
-        speed: ZOA.boltSpeed,
-        range: ZOA.boltRange,
-        radius: ZOA.boltRadius,
-        effect: { kind: 'tech', power: techPower(TECH.gibarta, level) },
-        color: 0x80d0ff,
-      }),
-    );
+    const shot = enemyFire({ tech: this.ultimate ? TECH.rabarta : TECH.gibarta, level, x: this.x, y: ZOA.boltHeight, z: this.z, heading: this.angle, enemy: true });
+    if (shot) (out.shots ??= []).push(shot);
   }
 
   // --- the owner's hooks -------------------------------------------------------
@@ -2667,10 +2586,6 @@ export const DELDEPTH = {
   bombGravity: Math.fround(-0.05),
   bombHeight: 15,
   bombSpeedBase: Math.fround(0.6),
-  // Barta: step (level / 5) * 2 + 3 a frame, hit sphere radius 5.0
-  // (collision box +0x108 of TechniqueEntity_Constructor_006efe50).
-  bartaRadius: 5,
-  bartaBaseSpeed: 3,
   // Death (0x00548d60): 34 frames (body) / 32 (disc), then 5 of fading.
   deathBody: 0x22,
   deathDisc: 0x20,
@@ -2703,52 +2618,11 @@ export type DeldepthState = 'dormant' | 'emerge' | 'retreat' | 'slide' | 'rise' 
 
 const clampLevel = (n: number): number => Math.max(0, Math.min(0x1e, Math.trunc(n)));
 
-// --- Barta wave (the cast, AntiTechEntity_Constructor_006dd85c is Barta) -----------
-//
-// TechniqueEntity_Constructor_006efe50 at the caster's position (+5 high) and
-// heading, technique data of Barta at the level (AntiTechEntity_InitEffects
-// _006ddb80); update_barta (0x006de13c) every frame: the entity moves its
-// step along the heading (BartaEntity_UpdatePhysics_006f0568), ends once the
-// distance counter passed range_h (the counter adds the step after the
-// test), and its collision sphere (radius 5.0) hits each entity once with
-// entity_hit_by_tech group 0x13. ASSUMED: ice resistance (group 0x13) and the
-// terrain following are not applied.
-export class BartaWave extends EnemyShot {
-  readonly effect: ShotEffect;
-  readonly look: ShotLook = { color: 0x80d0ff, size: 3 };
-  private dx: number;
-  private dz: number;
-  private step: number;
-  private range: number;
-  private travelled = 0;
-  private struck = new Set<number>();
-
-  constructor(x: number, z: number, angle: number, level: number) {
-    super(x, DELDEPTH.tickHeight, z);
-    const lv = clampLevel(level);
-    const d = techData(TECH.barta, lv);
-    this.step = Math.trunc(lv / 5) * 2 + d.speed;
-    this.range = d.rangeH;
-    this.dx = Math.sin(angle) * this.step;
-    this.dz = Math.cos(angle) * this.step;
-    this.effect = { kind: 'tech', power: techPower(TECH.barta, lv) };
-  }
-
-  tick(targets: readonly AiTarget[]): AiTarget[] {
-    if (this.done) return [];
-    this.frames++;
-    this.x += this.dx;
-    this.z += this.dz;
-    if (this.range < this.travelled) this.done = true;
-    else this.travelled += this.step;
-    const out: AiTarget[] = [];
-    for (const t of this.within(targets, DELDEPTH.bartaRadius)) {
-      if (this.struck.has(t.clientId)) continue;
-      this.struck.add(t.clientId);
-      out.push(t);
-    }
-    return out;
-  }
+// The Barta of a cast (AntiTechEntity_Constructor_006dd85c, update_barta) is
+// combat/techfire.ts BartaBolt: the entity starts 5 above the caster's point
+// along its heading.
+export function deldepthBarta(x: number, z: number, angle: number, level: number): EnemyShot | null {
+  return enemyFire({ tech: TECH.barta, level: clampLevel(level), x, y: 0, z, heading: angle, enemy: true });
 }
 
 // --- Rabarta bomb (DeldepthInitStateStruct_00548b1c) --------------------------------
@@ -2758,51 +2632,31 @@ export class BartaWave extends EnemyShot {
 // velocity, frame counter + 1; it explodes when the counter passed 335, when
 // the ground 5 below is missing or at or above the bomb, or when the distance
 // travelled (speed a frame) reaches 200. The explosion is RabartaInit
-// _006ec8ec at (x, y + 5, z): a sphere of Rabarta's range_h that lives
-// `cast` frames and hits each entity once (rabarta_hit_target, entity_hit_by
-// _tech group 2). ASSUMED: flat ground at the launch height; ice resistance
-// and the freeze roll of group 2 (combat/enemystatus.ts techFreezeChance) are
-// not applied.
+// _006ec8ec at (x, y + 5, z): combat/techfire.ts RabartaField (a round box of
+// Rabarta's range_h that lives `cast` frames and hits each entity once, entity
+// _hit_by_tech group 2, with its freeze roll); the bomb ends and hands it over
+// in `spawned`. ASSUMED: flat ground at the launch height.
 export class RabartaBomb extends EnemyShot {
-  readonly effect: ShotEffect;
+  readonly effect: ShotEffect = { kind: 'tech', power: 0 };
   readonly look: ShotLook = { color: 0x60c0ff, size: 2.5 };
   private vx: number;
   private vy = 0;
   private vz: number;
   private speed: number;
   private travelled = 0;
-  private phase: 'fly' | 'blast' = 'fly';
-  private left: number;
-  private radius: number;
-  private struck = new Set<number>();
+  private level: number;
 
   constructor(x: number, z: number, angle: number, param1: number, level: number) {
     super(x, DELDEPTH.bombHeight, z);
-    const lv = clampLevel(level);
+    this.level = clampLevel(level);
     const sp = Math.fround(DELDEPTH.bombSpeedBase + param1);
     this.speed = sp <= 0 ? 0 : sp;
     this.vx = Math.sin(angle) * this.speed;
     this.vz = Math.cos(angle) * this.speed;
-    const d = techData(TECH.rabarta, lv);
-    this.left = d.cast;
-    this.radius = d.rangeH;
-    this.effect = { kind: 'tech', power: techPower(TECH.rabarta, lv) };
   }
 
-  tick(targets: readonly AiTarget[]): AiTarget[] {
+  tick(_targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
-    if (this.phase === 'blast') {
-      // rabarta update (0x006ecd4c): counter + 1, hit, end after `cast`.
-      this.frames++;
-      if (this.left < this.frames) this.done = true;
-      const out: AiTarget[] = [];
-      for (const t of this.within(targets, this.radius)) {
-        if (this.struck.has(t.clientId)) continue;
-        this.struck.add(t.clientId);
-        out.push(t);
-      }
-      return out;
-    }
     this.vy = Math.fround(this.vy + DELDEPTH.bombGravity);
     this.x += this.vx;
     this.y += this.vy;
@@ -2812,9 +2666,9 @@ export class RabartaBomb extends EnemyShot {
     if (this.y <= 0) over = true; // ASSUMED flat ground
     this.travelled = Math.fround(this.travelled + this.speed);
     if (this.travelled >= DELDEPTH.bombRange || over) {
-      this.phase = 'blast';
-      this.y += DELDEPTH.tickHeight;
-      this.frames = 0;
+      this.done = true;
+      const blast = enemyFire({ tech: TECH.rabarta, level: this.level, x: this.x, y: this.y + DELDEPTH.tickHeight, z: this.z, heading: 0, enemy: true });
+      if (blast) (this.spawned ??= []).push(blast);
     }
     return [];
   }
@@ -3301,7 +3155,7 @@ export class DeldepthAi extends ExeBrain {
 
   private castTech(out: AiFrame): void {
     const level = this.mv.iparam[0] ?? 0;
-    (out.shots ??= []).push(this.ultimate ? delLilyMegid(this.x, this.z, this.angle, level, true) : new BartaWave(this.x, this.z, this.angle, level));
+    (out.shots ??= []).push(this.ultimate ? delLilyMegid(this.x, this.z, this.angle, level, true) : deldepthBarta(this.x, this.z, this.angle, level)!);
   }
 
   // The vtable +0xfc hook: an attack of a player missed it.

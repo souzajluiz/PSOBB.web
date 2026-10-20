@@ -18,7 +18,8 @@ export const PLAYER_AIM_HEIGHT = 10;
 // What a shot does to a player it hits:
 //   tech: entity_hit_by_tech with group 0 (case 0 at 0x00774cc7: damage =
 //     trunc((attacker MST * 0.5 + power) * 0.2), no resistance, no evasion
-//     roll; render/combat.ts applies it);
+//     roll; render/combat.ts applies it); `status` is a roll after the hit
+//     (the Gibarta / Rabarta freeze of combat/techfire.ts);
 //   melee: try_hit_entity(mult) + cause_knockback(knockback);
 //   status: a status effect only (combat/status.ts STATUS).
 //   megid: an enemy Megid (entity_hit_by_tech's Megid case: death when
@@ -28,7 +29,7 @@ export const PLAYER_AIM_HEIGHT = 10;
 // index into its ENEMY_TYPE_PARAMS attack list: the Dark Belra's arm uses
 // entry 19) and roll a status effect on the player it hit (`status`).
 export type ShotEffect =
-  | { kind: 'tech'; power: number; knockback?: number }
+  | { kind: 'tech'; power: number; knockback?: number; status?: { type: number; chance: number } }
   | { kind: 'melee'; mult: number; knockback: number; attack?: number; status?: { type: number; chance: number } }
   | { kind: 'status'; status: number }
   | { kind: 'megid'; power: number };
@@ -70,6 +71,10 @@ export abstract class EnemyShot {
 
   // The model's placement (only for shots with look.model).
   pose?(): ShotPose;
+
+  // Shots this one makes (a bomb's blast): the owner launches them after the
+  // tick that filled it.
+  spawned?: EnemyShot[];
 
   // One game tick; returns the players the shot hit this tick.
   abstract tick(targets: readonly AiTarget[]): AiTarget[];
