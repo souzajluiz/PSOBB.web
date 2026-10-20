@@ -171,3 +171,32 @@ export class PlayerMover {
     this.z = r.z;
   }
 }
+
+// A remote player's tick: the same update the local one runs (heading
+// smoothing, velocity half way), toward the point a 6x40 / 6x42 packet gave,
+// at 1.0 / 1.5 a tick. A point within a step is reached exactly. Returns
+// false once the player stands on the target (nothing moved).
+export interface Follower {
+  x: number;
+  z: number;
+  heading: number; // BAMS
+}
+
+export function followTick(f: Follower, targetX: number, targetZ: number, run: boolean): boolean {
+  const dx = targetX - f.x;
+  const dz = targetZ - f.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 1e-6) return false;
+  const speed = run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
+  const toTarget = toBams(Math.atan2(dx, dz));
+  f.heading = headingStep(f.heading, toTarget);
+  if (dist <= speed) {
+    f.x = targetX;
+    f.z = targetZ;
+    return true;
+  }
+  const dir = fromBams(velocityAngle(f.heading, toTarget));
+  f.x += Math.sin(dir) * speed;
+  f.z += Math.cos(dir) * speed;
+  return true;
+}

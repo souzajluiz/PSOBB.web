@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover } from '../client/src/render/playermove.ts';
+import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -42,4 +42,14 @@ assert.equal(k.state, 'stand');
 assert.equal(k.x, 0);
 for (let i = 0; i < 10; i++) k.tick(side, free(k));
 assert.equal(k.state, 'walk');
+// a remote follower reaches its target at 1.5 a tick running, 1.0 walking, never overshooting
+const f = { x: 0, z: 0, heading: 0 };
+let n = 0;
+while (followTick(f, 0, 30, true) && n < 100) n++;
+assert.ok(n >= 20 && n <= 24, 'run 30 units: ' + n);
+assert.equal(f.z, 30);
+const w = { x: 0, z: 0, heading: 0 };
+n = 0;
+while (followTick(w, 0, 30, false) && n < 100) n++;
+assert.ok(n >= 30 && n <= 34, 'walk 30 units: ' + n);
 console.log('playermove: ok');

@@ -28,7 +28,8 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
 
 ## To do next (in order)
 
-1. **Player movement, second half** (the user: "o deslocamento nao esta fiel").
+1. **Player movement, remaining** (local tick machine and remote follower are in, see DEVLOG 2026-10-20; left: two-client Chrome check, slowed / guard animation tie). Original text:
+   **Player movement, second half** (the user: "o deslocamento nao esta fiel").
    Done: walk 1.0 / run 1.5 units per tick (`render/playermove.ts`, 30 / 45 units a
    second). Open, all in the DEVLOG entry "player movement" with the exe addresses:
    - the tick function: poll (stand `0x0069b728`, walk `0x0069bbd0`, run

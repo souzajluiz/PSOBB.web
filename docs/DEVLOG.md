@@ -28,7 +28,10 @@ switches of functions that return a value.
 
 **What changed:** `PlayerMover` (`render/playermove.ts`) ports the exe's stand / walk / run poll, leg (8.0 ahead), arrival check (dist^2 < (2 x speed)^2), heading smoothing and velocity direction, one step per game tick. `render/lobbyview.ts` drives the local player from it (fixed 30 Hz accumulator, keyboard axes ramped 32 a poll to 128, touch stick axes as they are, map collision per tick) and draws the pose interpolated between ticks. Keyboard sideways-only input turns in place (0x800 a tick) before walking. Tests: `tests/playermove.test.ts` (walk 1.0, run 1.5 after 6 ticks, leg-end stop, turn in place). `tsc` clean.
 **Chrome (2026-10-20):** local lobby, held W on the canvas: the player runs forward, stops and returns to idle on release. Not measured: the exact feel of 30 / 45 units a second. newserv closed the connection by idle timeout after about 70 s without input (not from the movement code).
-**Still open:** remote players following 6x40 / 6x42 targets with the same update, the animation-speed tie-in, the 6x40 / 6x42 loop-back.
+**Remote players:** `followTick` (`render/playermove.ts`) runs the same heading / velocity update toward the 6x40 / 6x42 point at 1.0 / 1.5 a tick; `render/lobbyview.ts` steps it at 30 Hz per marker and draws between ticks (a target over 150 units away is a warp and snaps). Unit-tested; not seen with two clients in Chrome (only the local run, no console errors).
+**Animation speed:** already tied to the gait by `LOCOMOTION_FACTOR` (run 1.5); the exe's tie to the slowed / guard speed is not traced.
+**Loop-back of 6x40 / 6x42:** not needed here, `PlayerMover` re-enters its leg directly; no packet is looped.
+**Still open:** a two-client Chrome check of the remote follower, wall slide for remote players.
 
 ## 2026-10-19: player movement values read from PsoBB.exe (partial)
 

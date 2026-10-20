@@ -22,7 +22,7 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
-import { PlayerMover, RUN_SPEED, rampAxis } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { PlayerMover, followTick, fromBams, rampAxis, toBams, type Follower } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
@@ -143,6 +143,10 @@ interface Marker {
   animator: PlayerAnimator | null;
   charClass: number;
   gait: Locomotion;
+  follow: Follower; // the tick-rate state of a remote player's run toward `target`
+  moveTicks: number;
+  lastX: number; // the logic position one tick ago (for drawing between ticks)
+  lastZ: number;
   label: THREE.Sprite | null;
   labelText: string;
 }
@@ -346,6 +350,10 @@ export class LobbyView {
       animator: null,
       charClass: p.charClass,
       gait: 'idle',
+      follow: { x: 0, z: 0, heading: 0 },
+      moveTicks: 0,
+      lastX: 0,
+      lastZ: 0,
       label,
       labelText,
     };
@@ -518,19 +526,45 @@ export class LobbyView {
       }
       // Remote players run (or walk, 6x40) toward the last reported point and
       // idle once there.
-      const delta = m.target.clone().sub(m.group.position);
-      delta.y = 0;
-      const dist = delta.length();
-      if (dist > 0.5) {
-        const step = Math.min(dist, Math.max(RUN_SPEED * dt, dist * 0.2));
-        m.group.position.addScaledVector(delta.normalize(), step);
-        m.group.position.y += (m.target.y - m.group.position.y) * Math.min(1, step / dist);
-        m.angle = Math.atan2(delta.x, delta.z);
-        this.setGait(m, this.lobby.players.get(id)?.gait === 'walk' ? 'walk' : 'run');
+      const pos = m.group.position;
+      const p = this.lobby.players.get(id);
+      const run = p?.gait !== 'walk';
+      m.moveTicks += dt * 30;
+      let ticks = Math.min(Math.floor(m.moveTicks), 30);
+      m.moveTicks -= Math.floor(m.moveTicks);
+      if (Math.hypot(m.target.x - pos.x, m.target.z - pos.z) > 150) {
+        pos.set(m.target.x, m.target.y, m.target.z); // far behind: a warp, not a run
+        m.follow.heading = toBams(m.angle);
+      }
+      let moved = false;
+      // The logic position persists between frames; `pos` is only what was
+      // drawn. Placed from outside (spawn, 6x24): start from the drawn spot.
+      if (Math.hypot(m.follow.x - pos.x, m.follow.z - pos.z) > 20) {
+        m.follow.x = pos.x;
+        m.follow.z = pos.z;
+        m.follow.heading = toBams(m.angle);
+      }
+      while (ticks-- > 0) {
+        m.lastX = m.follow.x;
+        m.lastZ = m.follow.z;
+        const before = Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z);
+        if (before < 0.5 || !followTick(m.follow, m.target.x, m.target.z, run)) break;
+        moved = true;
+      }
+      if (moved || Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z) > 0.5) {
+        const dist0 = Math.hypot(m.target.x - pos.x, m.target.z - pos.z) || 1;
+        const dist1 = Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z);
+        pos.y += (m.target.y - pos.y) * Math.min(1, (dist0 - dist1) / dist0);
+        const a = this.viewer.smoother.enabled ? m.moveTicks : 1;
+        pos.x = m.lastX + (m.follow.x - m.lastX) * a;
+        pos.z = m.lastZ + (m.follow.z - m.lastZ) * a;
+        m.angle = fromBams(m.follow.heading);
+      }
+      if (Math.hypot(m.target.x - pos.x, m.target.z - pos.z) > 0.5) {
+        this.setGait(m, run ? 'run' : 'walk');
       } else {
-        m.group.position.y = m.target.y;
+        pos.y = m.target.y;
         // Arrived: face the angle of the last stop (6x3E / 6x3F / 6x20).
-        const p = this.lobby.players.get(id);
         if (p && !p.moving) m.angle = p.angle;
         this.setGait(m, 'idle');
       }
