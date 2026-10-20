@@ -31,10 +31,11 @@ const allPages = Object.fromEntries(
     .filter((f) => f.endsWith('.html'))
     .map((f) => [f.replace(/\.html$/, ''), resolve(import.meta.dirname, f)]),
 );
-// A production build ships only the classic client (classic.html); the
+// A production build ships the classic client (classic.html) and the quest
+// editor (questeditor.html, a separate page the admin panel links to); the
 // development pages (index.html's protocol log and map viewer, models.html)
 // stay on the dev server. PSOBB_DEV_PAGES=1 builds them all.
-const pages = process.env.PSOBB_DEV_PAGES === '1' ? allPages : { classic: allPages.classic };
+const pages = process.env.PSOBB_DEV_PAGES === '1' ? allPages : { classic: allPages.classic, questeditor: allPages.questeditor };
 
 export default defineConfig({
   server: { host: '127.0.0.1', port: 5173 },

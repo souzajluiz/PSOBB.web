@@ -46,6 +46,7 @@ export type EventAction =
 export interface WaveEvent {
   index: number; // position in the file
   id: number;
+  flags?: number; // entry +4 (runtime bits; kept so an edited file writes back what it read)
   type: number;
   room: number;
   wave: number;
@@ -126,6 +127,7 @@ export function parseEventFile(data: Uint8Array): EventFile {
     events.push({
       index: i,
       id: dv.getUint32(o, true),
+      flags: dv.getUint16(o + 4, true),
       type: dv.getUint16(o + 6, true),
       room: dv.getUint16(o + 8, true),
       wave: dv.getUint16(o + 0x0a, true),

@@ -1,0 +1,87 @@
+# Quest editor
+
+A quest editor in the browser, in TypeScript, reusing the client's own parsers and renderers. It is a separate page, `questeditor.html` (dev server: `http://127.0.0.1:5173/questeditor.html`; the production build ships it next to `classic.html`, it is not the page served at `/`). The admin panel links to it.
+
+The feature list follows the usual quest editors (Qedit, [phantasmal-world](https://github.com/DaanVandenBosch/phantasmal-world), whose FEATURES.md was the model for what to offer; no code was taken from it, see `REFERENCES.md`).
+
+## Opening and saving
+
+| Action | What it does |
+| --- | --- |
+| **New** | A minimal quest: a start label that sets the episode and designates one floor (`set_episode`, `bb_map_designate`, `ret`), and the player spawn point (`TObjPlayerSet`) in the .dat. |
+| **Open...** | A Blue Burst `.qst`, or a `.bin` together with its `.dat` (select both in the file dialog; PRS-compressed or not). You can also drop the files on the page, or open `questeditor.html?qst=<url>`. |
+| **Save .qst** (Ctrl+S) | Downloads a BB `.qst`. |
+| **Save .bin + .dat** | Downloads the PRS-compressed pair, the way the server stores them. |
+| **Open PSOBB data folder** | The 3D view needs the `data/` folder of a PSOBB install (nothing leaves your machine). Under the dev server `/psobb-data` is picked up automatically. Without it the editor still works on lists and numbers; the entities are drawn as markers in empty space. |
+| **Test in game** | Hands the quest to whoever embeds the editor (see below). |
+
+Undo / Redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y) cover every edit: properties, floors, entities, wave events and the script. A drag is one step. The title shows `*` while there are unsaved changes.
+
+## Quest properties and floors (left column)
+
+Episode, quest number, name (31 characters), short description (127), long description (287), players, joinable. The counts line shows the enemies, NPCs, objects and wave events of the whole quest.
+
+**Floors** is the quest's map designation (the 16 `floor_assignments` of the .bin header): for each floor the area (map), the source (`Quest set data` = this quest's .dat, the two free-play template options load the entities of that map instead, `Nothing`), and the layout / entities variation numbers. The 3D view loads the map the same way the game does (`SetDataTableOn.rel`: area, layout, then the geometry of that set). Click a floor's name to show it.
+
+The header copy is what the server reads and what the game falls back to; the game itself runs `map_designate` / `bb_map_designate` in the start script. A new quest's script has one `bb_map_designate` per floor it was created with; if you change a floor here, edit the same line in the **Script** tab (floor, area, type, layout, entities) so both agree. The assembler may also rewrite the header from the script.
+
+## The 3D view
+
+Pick a floor in the floor list. The map, the enemy / NPC / object models and one marker per entity (red enemy, green NPC, blue object) are drawn.
+
+- **Click** selects, **Shift/Ctrl-click** adds or removes, a click on empty space clears. **Drag** a selected entity (or any, it selects first) moves all selected ones in the horizontal plane of the grabbed entity. **Alt-drag** rotates about the vertical axis. **Snap to ground** keeps dragged entities on the map surface.
+- Empty-space drag orbits, wheel zooms, right-drag pans, click the view then WASD / Q / E to fly (the map viewer's controls).
+- **Delete** removes the selection, **Ctrl+D** duplicates, **Ctrl+A** selects the floor, **Esc** clears, **F** frames the selection, **[** / **]** rotate by 15 degrees.
+- **Create**: drag a type from the **Palette** (it lists the types the floor's area holds) into the view, or press `+` next to it to add it at the centre of the view. The new entity gets the nearest room and sits on the map.
+
+Positions are stored relative to a *room* (the entity's section). Dragging keeps the entity's room and changes its local coordinates; **Nearest room** in the inspector re-assigns the room whose origin is nearest and keeps the world position.
+
+## Inspector
+
+All the fields of the .dat records, as `formats/setdata.ts` decodes them: type (hex), room, position (local), rotation (degrees about X, Y, Z), enemy wave / wave 2 / children / unknown, object group / unknown, and the parameters (objects: three floats and three ints; enemies: five floats and two 16-bit ints). **Drop to ground**, **Rotate -15 / +15**, **Duplicate**, **Delete**. With several entities selected, the room and the wave can be set for all.
+
+## Wave events
+
+The **Wave events** tab edits the floor's `.evt` (inside the .dat): per event the id, type, room, wave, delay in frames and flags, the actions that run when the wave is cleared, and the spawn list (the enemies with that room and wave; **Select spawns** selects them in the view). Below, every room / wave pair of the floor's enemies with whether an event starts it, and **Create event** for the ones that no event starts.
+
+Actions are one per line:
+
+```
+construct_enemies <room> <wave>        construct_enemies_stop <room> <wave>
+construct_objects <room> <group>       set_switch_flag <n>      clear_switch_flag <n>
+trigger_event <id>                     stop        nop         raw <opcode>
+```
+
+A list that does not end in `stop` / `construct_enemies_stop` gets a `stop`. Floors using the random-wave (`evt2`) format, and the random enemy sections (.dat chunk types 4 and 5), are kept byte for byte and cannot be edited.
+
+## Script
+
+The **Script** tab shows the disassembly of the .bin. Edit it, then **Apply** (Ctrl+Enter) assembles the text and replaces the quest's script (one undo step); on an error the message is listed, and the editor jumps to the line when the message names one. **Go to label** lists the labels; Ctrl+click on a label name (or F12, or the **Definition** button) jumps to its definition, **Back** returns. Properties edited meanwhile are passed to the assembler as header options.
+
+## Test in game, for the admin panel
+
+The editor does not talk to a game server. It exposes the hook:
+
+```ts
+import { registerTestInGame, testInGame } from './questeditor/testhook.ts';
+registerTestInGame(async (pkg) => { /* pkg: name, stem, qst, bin, dat (compressed), binRaw, datRaw */ });
+```
+
+or, from another page: `window.questEditor.registerTestInGame(fn)` / `window.questEditor.buildPackage()` when embedded, and `postMessage` otherwise: send `{ type: 'questeditor:get-package' }` to the editor window and it answers `{ type: 'questeditor:package', package }`; send `{ type: 'questeditor:open', name, bytes }` to make it open a quest. When no handler is registered, the **Test in game** button posts `{ type: 'questeditor:test', package }` to the window that opened the editor (same origin only).
+
+## Code map
+
+| File | Role |
+| --- | --- |
+| `client/src/questeditor/model.ts` | The document: bin, per-floor entity / event lists, selection, history, change events. No DOM. |
+| `history.ts`, `datcodec.ts`, `binhead.ts`, `geom.ts`, `areas.ts` | Undo stack; .dat / .evt bytes from the lists; .bin header edits and the minimal new .bin; world <-> room coordinates; area names. |
+| `scene.ts` | The 3D layer over `render/mapviewer.ts` and the enemy / object / NPC layers; picking, dragging, placement. |
+| `panel_*.ts`, `dom.ts`, `main.ts`, `style.css` | The panels and the page. |
+| `io.ts`, `testhook.ts` | The only modules that use the write side (`prscompress`, `questwrite`, `qst`, `questasm`), and the test hook. |
+| `tests/questeditor.test.ts` | History, edits with undo / redo, codecs, header edits, coordinates; with a newserv checkout it also round-trips all its BB quests through the model. |
+
+## Limits
+
+- The editor writes quests; it does not run them. Use the admin panel's test hook to try one on a server.
+- NPCs that wander (parameter 6 = 1) walk in the 3D view, so their model drifts from the marker; the marker is the entity.
+- Entities are not checked against the map (an entity can float or sit inside a wall), and the defaults of a new entity's parameters are zero.
