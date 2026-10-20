@@ -191,6 +191,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Quests: the server's quest menu (`A2`/`A3`, `09`/`10`), the `44`/`13` file pair (and the `A6`/`A7` download variants) with the `AC` barrier (`net/quests.ts`)
 - [x] Quest `.bin`: BB header, label table and a bytecode decoder over all 528 BB opcodes, generated from newserv's table (`formats/questbin.ts`, `formats/questopcodes.ts`, `tools/gen-quest-opcodes.ts`)
 - [x] Quest `.dat`: the typed-chunk objects / enemies / wave events per floor (`formats/questdat.ts`)
+- [x] Quest file writers for the editor: PRS compressor, `.bin` / `.dat` serializers, `.qst` pack / parse, script assembler / disassembler, all round-tripping the 335 BB quests of newserv (`formats/prscompress.ts`, `questwrite.ts`, `qst.ts`, `questasm.ts`, `docs/QUESTFILES.md`, `tests/questwrite.test.ts`)
+- [ ] Quest writers left: decode data labels (strings, NPC stat blocks, splines) in the disassembly, download-quest `.qst` (A6/A7), an optimal PRS parser
 - [x] Quest VM: threads, registers, the arg stack, floor handlers, the map designations, quest flags (`6x75`/`6x6F`), counters, switch flags, message windows and the quest board (`quest/vm.ts`, `quest/session.ts`, `quest/run.ts`)
 - [x] Quest floors: the quest's designation decides the map and the variation, and its `.dat` replaces the free-play set data (`render/gameview.ts`)
 - [x] NPCs: every humanoid NPC class of the factory table (Pioneer 2, Lab, quest NPCs, the tekker by section id, the NgcBase cast per map type) with its own model and the town idle motion (`plymotionnpctown.cpt`), display registers, turning to the player and talk (`formats/npcmodels.ts`, `render/npcview.ts`, `tests/npcs.test.ts`)
