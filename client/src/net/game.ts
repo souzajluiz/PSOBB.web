@@ -965,6 +965,19 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, b);
   }
 
+  // Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts): 6xDC
+  // G_Episode4BossActions_BB_6xDC {DC, 02, u16 0xffff} {u16 action, u16 param}.
+  sendEpisode4BossAction(action: number, param: number): void {
+    const b = new Uint8Array(8);
+    const dv = new DataView(b.buffer);
+    b[0] = 0xdc;
+    b[1] = 2;
+    dv.setUint16(2, 0xffff, true);
+    dv.setUint16(4, action & 0xffff, true);
+    dv.setUint16(6, param & 0xffff, true);
+    this.conn.send(0x60, 0, b);
+  }
+
   // The Dragon's state from the leader (unknown_dragon_send_0x60 0x0041a808 and the
   // direct packets of the states, through checked_call_packet0x60_subcommand
   // 0x008003e0): 6x12 G_DragonBossActions (0x14)

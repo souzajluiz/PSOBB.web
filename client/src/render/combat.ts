@@ -52,9 +52,11 @@ import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
-import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { DeRolLeAi, DrlSegmentAi, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
+import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
+import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
@@ -225,6 +227,11 @@ interface DrlView {
   helmCut: THREE.Object3D[]; // the helm nodes below it, collapsed once the helm flew off
   helmDebris: DrlDebrisView | null;
   shellDebris: (DrlDebrisView | null)[];
+  // The segment entities' enemies (slots body + 1 + i), null: not spawned.
+  segProxies: (EnemyRuntime | null)[];
+  // Segment i's plate in the body model: root child i (draw index 1 + 2i,
+  // DAT_00a43c0c[i]) and its child (2 + 2i, g_DerolleRenderColorsArray[i]).
+  segPlates: THREE.Object3D[][];
 }
 
 // A debris part: its group and its node tree (node i + 1 is piece i).
@@ -331,6 +338,8 @@ const OWN_FSM = new Set([
   'TBoss2DeRolLe',
   'TBoss3Volopt',
   'TBoss3VoloptP02',
+  // Episode 4 (combat/saintmilionboss.ts).
+  'Episode4Boss',
   // Dark Falz (combat/darkfalz*.ts).
   'TBoss4DarkFalz',
 ]);
@@ -365,6 +374,9 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
+  (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
+  e.ai instanceof SaintMilionAi ||
+  (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
   ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable);
 
@@ -900,6 +912,30 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'Episode4Boss') {
+          // Rows: the boss 32 / 34 (Shambertin 36 / 38, Kondrieu 40 / 42), the
+          // tentacles 33 / 35 (37 / 39, 41 / 43).
+          const v = head.slot.type === 'KONDRIEU' ? 2 : head.slot.type === 'SHAMBERTIN' ? 1 : 0;
+          const mv = (row: number) => (params ? params.movement(difficulty, row) : null);
+          const hp = (row: number) => (params ? params.stats(difficulty, row).hp : 0);
+          const ground = this.opts.ground;
+          ai = new SaintMilionAi({
+            ...at,
+            variant: v as 0 | 1 | 2,
+            param1: head.slot.set.params[0],
+            seed: head.index + 1,
+            movement: [mv(32 + v * 4), mv(34 + v * 4)],
+            hp: [hp(32 + v * 4), hp(34 + v * 4)],
+            tentacleHp: [hp(33 + v * 4), hp(35 + v * 4)],
+            tentacleMovement: [mv(33 + v * 4), mv(35 + v * 4)],
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            tentacleFrames: this.tentacleFrames(instance),
+            ...(ground ? { ground: (x: number, z: number) => ground(x, z, 60) !== null } : {}),
+            rng: () => this.rng(),
+          });
+          // The kill gives form 2's EXP (the stats row of the last form).
+          if (params) exp = params.stats(difficulty, 34 + v * 4).exp;
         } else if (className === 'TBoss1Dragon') {
           // MovementData row 17 holds the breath's, fireballs' and trail's
           // powers (g_DragonAnimationSpeedIndices 17, 18, 19); stats row 18
@@ -1010,6 +1046,10 @@ export class CombatView {
     await this.spawnSplitters();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnVolopt();
+    if (this.disposed || token !== this.enterToken) return;
+    await this.spawnDeRolLeSegments();
+    if (this.disposed || token !== this.enterToken) return;
+    await this.spawnSaintMilion();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnDarkFalz();
     if (this.disposed || token !== this.enterToken) return;
@@ -1327,6 +1367,12 @@ export class CombatView {
         this.tickDragon(e, ai, targets);
         continue;
       }
+      if (ai instanceof SaintMilionAi) {
+        this.tickSaintMilion(e, ai, targets);
+        continue;
+      }
+      // A part's or a tentacle's enemy is moved by the body (tickSaintMilion).
+      if (ai instanceof SmChildAi) continue;
       if (ai instanceof VoloptAi) {
         this.tickVolopt(e, ai, targets);
         continue;
@@ -1343,6 +1389,8 @@ export class CombatView {
       if (ai instanceof DarkFalzPartAi) continue;
       // A part's enemy is moved by the control (syncVolopt).
       if (ai instanceof VoloptPartAi) continue;
+      // A De Rol Le segment's enemy is moved by the body (tickDeRolLe).
+      if (ai instanceof DrlSegmentAi) continue;
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
@@ -1464,6 +1512,8 @@ export class CombatView {
       helmCut: (body[77]?.children ?? []).filter((n) => body.includes(n)),
       helmDebris: this.drlDebrisView(inst, 'helm debris'),
       shellDebris: Array.from({ length: 10 }, (_, i) => this.drlDebrisView(inst, `shell debris ${i}`)),
+      segProxies: ai.segmentParts.map((): EnemyRuntime | null => null),
+      segPlates: ai.segmentParts.map((_, i) => [body[1 + 2 * i], body[2 + 2 * i]].filter((n): n is THREE.Object3D => !!n)),
     };
     // The debris pieces are the child nodes of helm_break / shell_break.
     const records = (d: DrlDebrisView | null, shell: boolean) =>
@@ -1545,6 +1595,7 @@ export class CombatView {
     // Flag 0x40: render_derolle draws the body without the helm nodes (the
     // pieces fly as the helm debris); the nodes collapse to a point.
     if (ai.helmCut) for (const n of v.helmCut) n.scale.setScalar(0.0001);
+    this.syncDeRolLeSegments(e, ai, v);
     for (const s of r.shots ?? []) this.launchShot(e, s);
     for (const ev of ai.events.splice(0)) {
       this.drlEvent(e, ai, ev);
@@ -1667,6 +1718,14 @@ export class CombatView {
       case 'segmentBroken':
         this.opts.log(`${what}: segment ${ev.index} breaks`);
         return;
+      case 'particle': {
+        // create_particle_effect_3 at the point, `back` toward the camera
+        // (the exe subtracts the camera's view direction times `back`).
+        const at = new THREE.Vector3(ev.at[0], ev.at[1] + ev.up, ev.at[2]);
+        at.addScaledVector(this.viewer.camera.getWorldDirection(this.drlCamDir), -ev.back);
+        this.particle({ id: ev.id }, at);
+        return;
+      }
       case 'bgm':
         // ASSUMED: the death track is not started here (audio/bossbgm.ts
         // keeps the boss floor's own track).
@@ -1681,11 +1740,110 @@ export class CombatView {
         for (const s of this.shots) if (s.owner === e) s.shot.done = true;
         this.layer.remove(e.instance);
         this.enemies.delete(e.index);
+        // The body's dtor deletes the segment entities with it.
+        for (const p of this.drlViews.get(e.index)?.segProxies ?? []) {
+          if (!p) continue;
+          this.layer.remove(p.instance);
+          this.enemies.delete(p.index);
+          if (this.lockOn === p) this.lockOn = null;
+        }
         this.drlViews.delete(e.index);
         this.drlLastHitLocal.delete(e.index);
         if (this.lockOn === e) this.lockOn = null;
         return;
     }
+  }
+
+  private drlCamDir = new THREE.Vector3();
+
+  // The body's ctor (0x0042ad4c) makes the ten segment entities with the ids
+  // body + 1 .. body + 10: each gets an enemy there that the player can hit
+  // (stats row 16 / attack 15 / resist 16, HP 20000, the hit box of radius
+  // 50 at the segment), as Vol Opt's parts do.
+  private async spawnDeRolLeSegments(): Promise<void> {
+    for (const head of [...this.enemies.values()]) {
+      const ai = head.ai;
+      if (!(ai instanceof DeRolLeAi)) continue;
+      const v = this.drlView(head, ai);
+      const fight = this.childFightStats('DE_ROL_LE_BODY');
+      for (let i = 0; i < ai.segmentParts.length; i++) {
+        const index = head.index + 1 + i;
+        if (this.enemies.has(index)) {
+          this.opts.log(`De Rol Le E-${head.index.toString(16)}: slot E-${index.toString(16)} (segment ${i}) is taken, that segment cannot be hit`);
+          continue;
+        }
+        const seg = ai.segmentParts[i];
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [seg.x, seg.y, seg.z] as [number, number, number],
+          yaw: 0,
+          name: 'De Rol Le segment',
+        };
+        const spec = { ...head.instance.spec, name: 'TBoss2DeRolLeSegment', parts: [] };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+        if (!instance || this.disposed) return;
+        instance.root.visible = false;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          ...fight,
+          stats: { ...fight.stats, hp: DRL_SEGMENT.hp, maxHp: DRL_SEGMENT.hp },
+          exp: 0,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: new DrlSegmentAi(ai, i),
+          lift: 0,
+          monest: null,
+          parent: head,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute('DE_ROL_LE_BODY')),
+        };
+        this.enemies.set(index, rt);
+        v.segProxies[i] = rt;
+      }
+    }
+  }
+
+  // The segment enemies stand where the body's brain put the segments and
+  // exist for the player while their hit box is on (y -60 and up, 0x00435070).
+  // A broken segment's plate has alpha 0 (DerolleSetAnimationSpeed with the
+  // colour 0); ASSUMED: alpha 0 draws nothing, so its two nodes collapse as
+  // the helm's do. Not reproduced: the hit flash (the plate's diffuse colour,
+  // DrlSegment.color), the body is one skinned mesh here.
+  private syncDeRolLeSegments(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
+    const shown = e.instance.root.visible;
+    for (let i = 0; i < ai.segmentParts.length; i++) {
+      const s = ai.segmentParts[i];
+      if (s.broken) for (const n of v.segPlates[i]) n.scale.setScalar(0.0001);
+      const rt = v.segProxies[i];
+      if (!rt) continue;
+      rt.instance.root.position.set(s.x, s.y, s.z);
+      rt.instance.root.visible = shown && s.targetable;
+      rt.stats.hp = DRL_SEGMENT.hp;
+      rt.dead = false;
+    }
+  }
+
+  // A strike on a segment's enemy: the body's brain feeds the segment pool
+  // or, once broken, the body pool. The entity's HP is refilled after each
+  // hit, so the 6x0A carries this hit's damage.
+  // ASSUMED: the body's last attacker (+0x2d8, the kill's EXP / drop gate) is
+  // not set by a segment hit (the segment's own +0x2d8 is the one written).
+  private deRolLeSegmentHit(e: EnemyRuntime, ai: DrlSegmentAi, damage: number, critical: boolean, flags: number, what: string): void {
+    const owner = ai.owner;
+    const went = owner.hitSegment(ai.index, damage);
+    if (e.parent) e.parent.stats.hp = owner.bodyHp;
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 26, p.z);
+    const s = ai.segment;
+    this.opts.log(`${what}hit De Rol Le's segment ${ai.index} (${went}) for ${Math.round(damage)}: segment ${s.pool}${s.broken ? ' (broken)' : ''}, body ${owner.bodyHp}/${owner.bodyMax}`);
   }
 
   // 0x1f phase 5: EnemyOnKilledHandler_0051f894 at (-55.8, 2.0, 60.29), so
@@ -1843,6 +2001,272 @@ export class CombatView {
     if (!(e?.ai instanceof DragonAi) || e.dead) return;
     const target = dv.getUint32(8, true) & 0xffff;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
+  }
+
+  // --- Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts) ------------------
+  //
+  // One brain owns the body, its 8 parts (ids body + 1 .. 8) and its 16
+  // tentacles (body + 9 .. 24); the parts and the tentacles are invisible
+  // enemies here (like Vol Opt's parts) so strikes, techniques, the lock-on
+  // and the other clients' 6x0A find them by id. The room leader's brain sends
+  // 6xDC and every client applies it; every client runs the deaths from the
+  // 6x0A of each part and tentacle.
+
+  // Whether the last strike on a part was ours, by child index (0 .. 7) and,
+  // under the head's index, the kill's gate.
+  private smLastHit = new Map<number, boolean>();
+  private smHeads = new Map<number, { proxies: Array<EnemyRuntime | null>; bodies: NodeAnimator[] | null }>();
+  private smVec = new THREE.Vector3();
+  private smScale = new THREE.Vector3();
+
+  // The tentacle archive's motion frame counts (bm_ene_boss09_tentacle.bml).
+  private tentacleFrames(instance: EnemyInstance): (motion: number) => number {
+    const cache = new Map<number, number>();
+    return (m) => {
+      let n = cache.get(m);
+      if (n === undefined) {
+        const k = instance.parts.findIndex((p) => p.name === 'spinner 0');
+        const nodeCount = instance.animators[Math.max(0, k)]?.nodeCount ?? 32;
+        try {
+          n = instance.archive.motion(m, nodeCount).frameCount;
+        } catch {
+          // ASSUMED stand-ins when the archive does not parse (the real counts: 31 61 3 30 110 60 30).
+          n = [31, 61, 3, 30, 110, 60, 30][m] ?? 30;
+        }
+        cache.set(m, n);
+      }
+      return n;
+    };
+  }
+
+  private async spawnSaintMilion(): Promise<void> {
+    for (const head of [...this.enemies.values()]) {
+      const ai = head.ai;
+      if (!(ai instanceof SaintMilionAi)) continue;
+      const v = ai.variant;
+      const view = { proxies: [] as Array<EnemyRuntime | null>, bodies: null as NodeAnimator[] | null };
+      this.smHeads.set(head.index, view);
+      for (let i = 0; i < SM_PART_COUNT + 16; i++) {
+        view.proxies[i] = null;
+        const index = head.index + 1 + i;
+        if (this.enemies.has(index)) {
+          this.opts.log(`Saint-Milion E-${head.index.toString(16)}: slot E-${index.toString(16)} is taken, that ${i < SM_PART_COUNT ? 'part' : 'tentacle'} cannot be hit`);
+          continue;
+        }
+        const part = i < SM_PART_COUNT;
+        const lead = !part && (i - SM_PART_COUNT) % 4 === 0;
+        const row = part ? 32 + v * 4 : (lead ? 33 : 35) + v * 4;
+        const hp = part ? ai.parts[i].maxHp : ai.field.entities[i - SM_PART_COUNT].maxHp;
+        const fight = this.rowFightStats(row, hp);
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [ai.x, 0, ai.z] as [number, number, number],
+          yaw: 0,
+          name: part ? 'Saint-Milion part' : 'Saint-Milion tentacle',
+        };
+        const spec = { ...head.instance.spec, name: 'Episode4BossChild', parts: [] };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+        if (!instance || this.disposed) return;
+        instance.root.visible = false;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          ...fight,
+          exp: 0,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: new SmChildAi(ai, i),
+          lift: 0,
+          monest: null,
+          parent: head,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute(head.slot.type)),
+        };
+        this.enemies.set(index, rt);
+        view.proxies[i] = rt;
+      }
+    }
+  }
+
+  private tickSaintMilion(e: EnemyRuntime, ai: SaintMilionAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const view = this.smHeads.get(e.index);
+    const r = ai.tick(targets);
+    // The body stands on the ground under it.
+    const gy = this.opts.ground?.(r.x, r.z, root.position.y + 30) ?? null;
+    root.position.set(r.x, gy ?? root.position.y, r.z);
+    root.rotation.y = r.angle;
+    let bodies = view?.bodies ?? null;
+    if (view && !bodies) {
+      bodies = inst.animators.filter((_, k) => !inst.parts[k]?.name);
+      view.bodies = bodies;
+    }
+    for (const a of bodies ?? []) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`Saint-Milion motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    // The model draw records the nodes the hit boxes sit on (matrix slots).
+    const tree = inst.nodes?.[0];
+    if (tree) {
+      root.updateMatrixWorld(true);
+      const v = this.smVec;
+      for (let slot = 0; slot < SM_NODES.length; slot++) {
+        const o = tree[SM_NODES[slot]];
+        if (!o) continue;
+        o.getWorldPosition(v);
+        ai.nodes[slot * 3] = v.x;
+        ai.nodes[slot * 3 + 1] = v.y;
+        ai.nodes[slot * 3 + 2] = v.z;
+      }
+      ai.nodesKnown = true;
+    }
+    for (const ev of ai.events.splice(0)) this.smEvent(e, ai, ev);
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+    this.syncSaintMilion(e, ai, view);
+  }
+
+  private smEvent(e: EnemyRuntime, ai: SaintMilionAi, ev: SmBossEvent): void {
+    const what = `Saint-Milion E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        this.game.sendEpisode4BossAction(ev.action, ev.param);
+        this.opts.log(`${what}: 6xDC action ${ev.action} param 0x${ev.param.toString(16)} (state 0x${ai.sid.toString(16)})`);
+        return;
+      case 'se':
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        this.sePlayer?.play(ev.id);
+        return;
+      case 'bgm':
+        // ASSUMED: the track swap is not played here (audio/bossbgm.ts keeps the floor's track).
+        this.opts.log(`${what}: ${ev.name}`);
+        return;
+      case 'effect':
+        // Not reproduced: the missiles, lasers, wave, storm and sand sonic.
+        this.opts.log(`${what}: ${ev.name} (not reproduced)`);
+        return;
+      case 'phase':
+        this.opts.log(`${what}: form ${ev.form}`);
+        return;
+      case 'setDead':
+        this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+        return;
+      case 'gone':
+        // The tentacle's own set_monster_spawn_initdata_as_dead.
+        this.game.sendEntitySetFlags(0x1000 | (e.index + 1 + SM_PART_COUNT + ev.slot), this.floor, 8);
+        return;
+      case 'killed': {
+        e.dead = true;
+        e.stats.hp = 0;
+        if (ev.ours === null) this.smLastHit.delete(e.index);
+        else this.smLastHit.set(e.index, ev.ours);
+        if (this.lockOn === e) this.lockOn = null;
+        this.bossKilled(e, ev.x, ev.z, this.smLastHit, 'Saint-Milion');
+        return;
+      }
+    }
+  }
+
+  // The children follow the brain: parts on their model nodes, tentacles at
+  // their spots; the tentacle models are the head's hidden world parts.
+  private syncSaintMilion(e: EnemyRuntime, ai: SaintMilionAi, view: { proxies: Array<EnemyRuntime | null> } | undefined): void {
+    const shown = e.instance.root.visible;
+    const base = e.instance.root.position.y;
+    for (let i = 0; i < SM_PART_COUNT; i++) {
+      const rt = view?.proxies[i];
+      if (!rt) continue;
+      const p = ai.parts[i];
+      const n = ai.node(5 + i);
+      rt.instance.root.position.set(n ? n[0] : ai.x, n ? n[1] : base, n ? n[2] : ai.z);
+      rt.instance.root.visible = shown && ai.partHittable(i);
+      rt.stats.hp = p.hp;
+      rt.stats.maxHp = p.maxHp;
+      rt.dead = false;
+    }
+    const world = e.instance.world;
+    ai.field.entities.forEach((t, k) => {
+      const rt = view?.proxies[SM_PART_COUNT + k];
+      const gy = this.opts.ground?.(t.x, t.z, base + 30) ?? base;
+      if (rt) {
+        rt.instance.root.position.set(t.x, gy + t.hitHeight, t.z);
+        rt.instance.root.visible = shown && t.targetable;
+        rt.stats.hp = t.hp;
+        rt.stats.maxHp = t.maxHp;
+        rt.dead = false;
+      }
+      const g = world?.getObjectByName(`spinner ${k}`);
+      if (!g) return;
+      g.visible = shown && !t.hidden && !t.gone;
+      if (!g.visible) return;
+      g.position.set(t.x, gy, t.z);
+      g.rotation.y = t.heading * BAMS_TO_RAD;
+      const idx = e.instance.parts.findIndex((p) => p.name === `spinner ${k}`);
+      const a = e.instance.animators.find((_, j) => e.instance.parts[j]?.name === `spinner ${k}`);
+      if (a) {
+        try {
+          a.play(e.instance.archive.motion(t.motion, a.nodeCount), 1, false);
+        } catch {
+          // A bad motion keeps the last pose.
+        }
+        a.paused = true;
+        a.setFrame(t.frame);
+      }
+      // The procedural pose (SaintEmilionUpdateGlobalState 0x0076d138): z slides
+      // nodes 3 and 8 along their x axis, x scales nodes 46, 49, 52 and 55.
+      const tree = e.instance.nodes?.[idx];
+      if (tree) {
+        for (const n of [3, 8]) if (tree[n]) tree[n].position.x += t.rise;
+        const [sx, sy, sz] = spinnerScale(t.shrink);
+        for (const n of SPINNER_X.scaleNodes) if (tree[n]) tree[n].scale.multiply(this.smScale.set(sx, sy, sz));
+      }
+    });
+  }
+
+  // A strike on a part or a tentacle. The entity's hp is its own; the 6x0A
+  // carries max - hp, as the exe sends it before the revive.
+  private smChildHit(e: EnemyRuntime, c: SmChildAi, damage: number, critical: boolean, flags: number, byPlayer: boolean, what: string): void {
+    const owner = c.owner;
+    let total = 0;
+    let dead = false;
+    if (c.part) {
+      owner.hitPart(c.index, damage, byPlayer);
+      total = c.part.maxHp - c.part.hp;
+      dead = c.part.hp <= 0;
+      if (damage >= 1) this.smLastHit.set(c.index, byPlayer);
+    } else if (c.entity) {
+      c.entity.hit(damage);
+      total = c.entity.maxHp - c.entity.hp;
+      dead = c.entity.hp <= 0;
+    }
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, total));
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 20, p.z);
+    this.opts.log(`${what}hit Saint-Milion's ${c.part ? 'part ' + c.index : 'tentacle ' + (c.index - SM_PART_COUNT)} for ${Math.round(damage)}`);
+  }
+
+  // A 6xDC from the leader.
+  private onSaintMilionAction(body: Uint8Array): void {
+    if (body.length < 8 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    for (const e of this.enemies.values()) {
+      if (e.ai instanceof SaintMilionAi && !e.dead) {
+        e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true));
+        return;
+      }
+    }
   }
 
   // --- Vol Opt (combat/volopt.ts, combat/volopt2.ts) ---------------------------
@@ -4022,8 +4446,12 @@ export class CombatView {
       // ASSUMED: a box counts from its surface; the Dragon's seven body boxes
       // all sit at its origin, the biggest with radius 15 (combat/dragon.ts
       // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
-      const dist = Math.hypot(dx, dz) - (e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : 0);
-      if (dist > maxDist || Math.abs(p.y - from.y) > 40) continue;
+      // A De Rol Le segment's box has radius 50 (0x009a47f0); ASSUMED: it
+      // counts from its surface in height too.
+      const seg = e.ai instanceof DrlSegmentAi;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
+      const dist = Math.hypot(dx, dz) - reach;
+      if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
       let diff = Math.atan2(dx, dz) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       if (Math.abs(diff) > halfAngle) continue;
@@ -4326,6 +4754,14 @@ export class CombatView {
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
+    if (e.ai instanceof SmChildAi) {
+      this.smChildHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
+      return;
+    }
+    if (e.ai instanceof DrlSegmentAi) {
+      this.deRolLeSegmentHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
     if (e.ai instanceof DeRolLeAi) {
@@ -4703,6 +5139,8 @@ export class CombatView {
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
   private hitRadiusOf(e: EnemyRuntime): number {
     let r = this.fireRadius.get(e);
+    if (r === undefined && e.ai instanceof DrlSegmentAi) r = DRL_SEGMENT.radius;
+    if (e.ai instanceof SmChildAi) return e.ai.entity ? e.ai.entity.hitRadius : SM_PART_RADIUS;
     if (r === undefined) {
       const sub = Math.max(0, Math.trunc(((e.slot.set as EnemySet | undefined)?.params?.[5] as number | undefined) ?? 0));
       r = collisionRadius(e.instance.spec.name, sub, this.ultimate);
@@ -5392,6 +5830,10 @@ export class CombatView {
       this.onDragonAction(body);
       return;
     }
+    if (sub === 0xdc) {
+      this.onSaintMilionAction(body);
+      return;
+    }
     if (sub === 0x13 || sub === 0x14) {
       this.onDeRolLeAction(sub, body);
       return;
@@ -5497,6 +5939,28 @@ export class CombatView {
           e.stats.hp = e.ai.hp;
           this.dragonLastHit.set(e.index, false);
           this.opts.log(`the Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof SmChildAi) {
+        // restore_enemy_status: hp = max - damage_taken, and the hit flag; the
+        // dead flag is ignored (the body's brain owns the deaths).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0) {
+          const c = e.ai;
+          if (c.part) c.owner.setPartDamageTaken(c.index, s.totalDamage);
+          else c.entity?.setDamageTaken(s.totalDamage);
+          if (c.part) this.smLastHit.set(c.index, false);
+          this.opts.log(`Saint-Milion's ${c.part ? 'part ' + c.index : 'tentacle ' + (c.index - SM_PART_COUNT)} was hit (6x0A from another client)`);
+        }
+        return;
+      }
+      if (e.ai instanceof DrlSegmentAi) {
+        // restore_enemy_status and the hit flag run the segment's +0x100
+        // (0x004354c4) on this client too: the same pools as the striker's.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0) {
+          const went = e.ai.owner.hitSegment(e.ai.index, s.totalDamage);
+          if (e.parent) e.parent.stats.hp = e.ai.owner.bodyHp;
+          this.opts.log(`De Rol Le's segment ${e.ai.index} hit for ${s.totalDamage} (${went}, 6x0A from another client): segment ${e.ai.segment.pool}, body ${e.ai.owner.bodyHp}`);
         }
         return;
       }

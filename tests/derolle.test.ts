@@ -5,6 +5,8 @@
 // Run: node tests/derolle.test.ts
 import {
   DeRolLeAi,
+  DrlSegmentAi,
+  DRL_SEGMENT,
   DrlBurst,
   DrlCeilingRock,
   DrlEasing,
@@ -617,6 +619,88 @@ for (const ultimate of [false, true]) {
   eq(seg.shells[2], null, 'segment: the others are intact');
 }
 
+// 21b. The shell segments as hit targets (the DE_ROL_LE_BODY entities,
+//      0x004351c4 / 0x004354c4 / 0x004350d4 / 0x00435070).
+{
+  eq(DRL_SEGMENT.radius, 50, 'segment: hit box radius 50 (0x009a47f0)');
+  eq(DRL_SEGMENT.minY, -60, 'segment: no hit box below -10 - 50');
+  const ai = brain();
+  eq(ai.segmentParts.length, 10, 'segment: ten entities');
+  eq(ai.segmentParts[0].pool, 400, 'segment: pool = iparam2');
+  eq(ai.segmentParts[0].y, 10000, 'segment: parked at 10000 before the first draw');
+  // The slots the draw left are copied on the tick.
+  ai.segments = Array.from({ length: 10 }, (_, i): [number, number, number] => [i * 10, 20 - i * 9, 5]);
+  run(ai, [], 1);
+  eq(ai.segmentParts[3].x, 30, 'segment: copies its slot');
+  eq(ai.segmentParts[0].color, 0xffffffff, 'segment: white when idle');
+  check(ai.segmentParts[8].targetable === true && ai.segmentParts[8].y === -52, 'segment: y -52 is hittable');
+  eq(ai.segmentParts[9].targetable, false, 'segment: y -61 has no hit box');
+  const hi = brain();
+  hi.segments = Array.from({ length: 10 }, (_, i): [number, number, number] => [0, i === 0 ? 30 : 29.9, 0]);
+  run(hi, [], 1);
+  check(hi.segmentParts[0].high && !hi.segmentParts[1].high, 'segment: flag 4 at y 30 and up (high), 2 below');
+  eq(new DrlSegmentAi(ai, 9).untargetable, true, 'segment proxy: hidden while the box is off');
+  eq(new DrlSegmentAi(ai, 3).tick().x, 30, 'segment proxy: stands at the segment');
+  // A whole segment: its own pool only, the flash.
+  ai.events.splice(0);
+  eq(ai.hitSegment(2, 150), 'segment', 'segment: the hit goes to its pool');
+  eq(ai.segmentParts[2].pool, 250, 'segment: 400 - 150');
+  check(ai.shellHp === 1500 && ai.bodyHp === 3000, 'segment: shell and body untouched');
+  eq(ai.events.length, 0, 'segment: no SE, no particle for a whole segment');
+  eq(ai.hitSegment(2, 0), 'none', 'segment: a 0 does nothing');
+  run(ai, [], 1);
+  eq(ai.segmentParts[2].color, 0xff00ffff, 'segment: the flash starts cyan');
+  run(ai, [], 1);
+  eq(ai.segmentParts[2].color, 0xff0dffff, 'segment: then fades (0.95: red 13)');
+  run(ai, [], 19);
+  eq(ai.segmentParts[2].color, 0xffffffff, 'segment: white again after 20 frames');
+  // The break: the pool reaching 0 breaks (0x004354f6 test / jle).
+  eq(ai.hitSegment(2, 250), 'broken', 'segment: 250 more breaks it at 0');
+  eq(ai.segmentParts[2].pool, 0, 'segment: pool 0');
+  check(ai.segmentParts[2].broken, 'segment: flag 1');
+  eq(ai.events.filter((e) => e.kind === 'segmentBroken').length, 1, 'segment: the break event');
+  eq(ai.shells[2], null, 'segment: no piece records, nothing flies (ASSUMED)');
+  run(ai, [], 1);
+  eq(ai.segmentParts[2].color, 0, 'segment: a broken plate has colour 0 (alpha 0)');
+  // A broken segment: half to the BODY pool even with the shell whole.
+  ai.events.splice(0);
+  eq(ai.hitSegment(2, 7), 'body', 'segment: broken -> the body');
+  eq(ai.bodyHp, 2996, 'segment: round(3.5) = 4 (x87 round to even)');
+  ai.hitSegment(2, 5);
+  eq(ai.bodyHp, 2994, 'segment: round(2.5) = 2');
+  eq(ai.shellHp, 1500, 'segment: the shell pool is never fed by a segment');
+  eq(ai.shellBroken, false, 'segment: the shell stays whole');
+  const fx = ai.events.find((e) => e.kind === 'particle');
+  check(!!fx && fx.kind === 'particle' && fx.id === 0x127 && fx.up === 15 && fx.back === 12 && fx.at[0] === 20, 'segment: particle 0x127, 15 up, 12 toward the camera, at the segment');
+  eq(ai.events.filter((e) => e.kind === 'se' && e.id === 0x336).length, 2, 'segment: SE 0x336 per hit');
+  eq(ai.hitSegment(2, 1000), 'body', 'segment: no second break');
+  eq(ai.events.filter((e) => e.kind === 'segmentBroken').length, 0, 'segment: breaks once');
+  // The striker's client and a 6x0A receiver feed the same pools.
+  const a = brain();
+  const b = brain({ leader: () => false });
+  const seq: [number, number][] = [[0, 300], [0, 200], [0, 9], [4, 50], [0, 1001], [4, 400], [4, 3]];
+  for (const [i, d] of seq) {
+    a.hitSegment(i, d);
+    b.hitSegment(i, d);
+  }
+  check(a.segmentParts.every((s, i) => s.pool === b.segmentParts[i].pool && s.broken === b.segmentParts[i].broken) && a.bodyHp === b.bodyHp, 'segment: every client ends with the same pools');
+  // The body can die through broken segments alone; the death runs to the end
+  // with the real motions, no state hangs, on the leader and on a follower
+  // that never hears from it.
+  for (const leader of [true, false]) {
+    const k = brain({ frames: realFrames, leader: () => leader });
+    k.segments = Array.from({ length: 10 }, (_, i): [number, number, number] => [i * 10, 20, 5]);
+    run(k, [], 1);
+    k.hitSegment(5, 400);
+    while (k.bodyHp > 0) k.hitSegment(5, 2000);
+    eq(k.shellBroken, false, `segment death (${leader ? 'leader' : 'follower'}): the shell was never broken`);
+    k.events.splice(0);
+    const r = run(k, [player(0, 0, 0)], 30 * 60 * 3, () => k.sid === DRL_STATE.remove);
+    eq(k.sid, DRL_STATE.remove, `segment death (${leader ? 'leader' : 'follower'}): sinks, dies and is removed (${r.ticks} ticks)`);
+    check(r.events.some((e) => e.kind === 'killed'), `segment death (${leader ? 'leader' : 'follower'}): the kill runs`);
+  }
+}
+
 // 22. The model facts the fins and the debris rely on, from the client's own
 //     archive (skipped without PSOBB_DATA / the default client folder).
 {
@@ -653,6 +737,16 @@ for (const ultimate of [false, true]) {
       eq(body.all[77].children.length, 4, `${bmlName}: node 77 has the 4 helm parts`);
       // The fin anchors are locator nodes (no model, hidden: flags & 8).
       for (const i of [26, 96]) check(body.all[i].model === null && (body.all[i].flags & 8) !== 0, `${bmlName}: node ${i} is a hidden locator`);
+      // The segment plates (the area init's walk of root->child / next, the
+      // pointers DAT_00a43c0c[i] and g_DerolleRenderColorsArray[i]): the
+      // root's first ten children are draw indices 1 + 2i, each a model node
+      // with one model child 2 + 2i.
+      const rootKids = body.all.map((_, i) => i).filter((i) => body.parent[i] === 0);
+      eq(rootKids.slice(0, 10).join(), [1, 3, 5, 7, 9, 11, 13, 15, 17, 19].join(), `${bmlName}: the segment plates are draw indices 1 + 2i`);
+      check(
+        rootKids.slice(0, 10).every((k) => body.all[k].model !== null && body.all[k].children.length === 1 && body.all[k + 1].model !== null && body.parent[k + 1] === k),
+        `${bmlName}: each plate is a model node with one model child`,
+      );
       const helmBreak = tree('boss2_b_helm_break.nj');
       const shellBreak = tree('boss2_b_shell_break.nj');
       eq(helmBreak.all.length, 29, `${bmlName}: helm_break is a root and 28 pieces`);
