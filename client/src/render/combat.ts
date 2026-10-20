@@ -48,6 +48,7 @@ import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../c
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
+import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
@@ -285,6 +286,11 @@ const OWN_FSM = new Set([
 // The Poison Lily has no confused branch; the Dark Belra spins and throws
 // instead (combat/enemyfsmruins.ts BelraAi).
 const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver', 'TObjEneMerillLia', 'TObjEneDolmOlm']);
+// Episode 2, second batch (combat/enemyfsmep2b.ts): the Mericarol family and the Gibbons.
+OWN_FSM.add('TObjEneBm9Mericarol');
+OWN_FSM.add('TObjEneBm5GibonU');
+CONFUSION_AWARE.add('TObjEneBm9Mericarol');
+CONFUSION_AWARE.add('TObjEneBm5GibonU');
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
 // A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium, a puddle
@@ -296,7 +302,8 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
-  (e.ai instanceof SinowAi && e.ai.dormant);
+  (e.ai instanceof SinowAi && e.ai.dormant) ||
+  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -566,12 +573,15 @@ export class CombatView {
   // change while the battle params load) must not build its enemies on the new
   // floor's models (set entry indices repeat between floors).
   private enterToken = 0;
+  // The Gibbons' leader / member lists (combat/enemyfsmep2b.ts), per floor.
+  private gibbonGroups = new GibbonGroups();
 
   async enterFloor(floor: number, area: number, sets: EnemySet[], base: number): Promise<void> {
     const token = ++this.enterToken;
     this.floor = floor;
     this.area = area;
     this.enemies.clear();
+    this.gibbonGroups.clear();
     this.attack = null;
     this.cast = null;
     this.techHits = [];
@@ -681,6 +691,28 @@ export class CombatView {
         // Dolmdarl), the set entry's param1..5 their chances and ranges.
         else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneBm9Mericarol')
+          ai = new MericarolAi({ ...at, subtype, params: setParams, movement, attack, ultimate, selfId: () => this.game.selfId, hp: () => stats.hp / Math.max(1, stats.maxHp), rng: () => this.rng() });
+        else if (className === 'TObjEneBm5GibonU') {
+          // The motion frame counts the strides and the roars are timed by.
+          const nodes = instance.animators[0]?.nodeCount ?? 0;
+          const counts = new Map<number, number>();
+          const motionFrames = (m: number): number => {
+            let n = counts.get(m);
+            if (n === undefined) {
+              try {
+                n = instance.archive.motion(m, nodes).frameCount;
+              } catch {
+                n = 30;
+              }
+              counts.set(m, n);
+            }
+            return n;
+          };
+          // unknown_get_tech_level_from_battleparams_stats: the stats row's level field.
+          const level = params && def ? params.stats(difficulty, def.stats[0]).level : 0;
+          ai = new GibbonAi({ ...at, subtype, params: setParams, ultimate, level, entityIndex: head.index, groups: this.gibbonGroups, motionFrames, rng: () => this.rng() });
+        }
         else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
         else if (className === 'TBoss2DeRolLe') {
@@ -4611,6 +4643,7 @@ export class CombatView {
         // The hit flag runs the hit handler (vtable +0x100) here too: the
         // Sinow's sends its mirage clones away, a clone leaves.
         if (e.ai instanceof SinowAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) e.ai.onDamage(clientId);
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
       return;

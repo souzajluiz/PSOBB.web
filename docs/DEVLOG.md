@@ -1,5 +1,104 @@
 # Devlog
 
+## 2026-10-20: Episode 2 FSMs: Gibbons, Mericarol family
+
+**What changed:** Ul Gibbon / Zol Gibbon (`TObjEneBm5GibonU`) and Mericarol /
+Merikle / Mericus (`TObjEneBm9Mericarol`) have their own brains in
+`combat/enemyfsmep2b.ts` (`GibbonAi` + `GibbonGroups`, `MericarolAi`), wired in
+`render/combat.ts` (OWN_FSM, confusion-aware search, the `concealed()` radar /
+lock-on rule, remote damage, the per-floor Gibbon groups). Neither family is
+on the Booma substrate: both are dispatchers on enemy+0x32e like the Caves /
+Ruins FSMs. The dump's names for these functions ("Derolle*", "Gibbles*",
+"Mericarol*" for the Merillia too) are wrong; every state was matched by its
+callees, and the floats come from the executable (`tools/exedata.py`).
+psobb-client-source (JP build) has no C for any of them (src/ searched by name).
+
+**Details** (Ephinea `PsoBB.exe`):
+- **vtable layout** (SetEnemyAiState_0051f62c calls vtable +0x164 with (state,
+  5) then (state, 4)): +0x174 0x0052039c invulnerable (entity 0x4000000 and
+  hit box flag 0x2000000), +0x178 clears it, +0x17c / +0x180 hit boxes on /
+  off, +0x184 0x00520504 = hide (+0x174 and +0x180, entity flags 0x4040000:
+  invulnerable, off the radar and the lock-on), +0x188 0x00520528 = show
+  again. Defender vtable +0x50 / +0x5c / +0x68 = should_push_defender /
+  try_hit_entity / cause_knockback (0x0052b5f0).
+- **Mericarol** (ctor 0x00572cd2, factory 0x00572b84, dispatcher 0x005710b8,
+  table 0x009be9a0, record 0x009beaac {225, 0, turn 512}, boxes 0x009be940
+  radius 25 / 0x009be96c radius 50; subtype +0x464 0 / 1 / 2 = Mericarol /
+  Merikle / Mericus). Set params (0x00572fa8, constants 0x00926ba0..ac):
+  param1 + 0.5 the rush chance, max(3 + param2, 1) the rush speed, param3 +
+  0.1 the swipe / cloud split; MovementData fparam1 rush power, fparam2
+  cloud power, fparam3 / fparam4 the bolt's power / speed, fparam5 the cloud
+  radius, fparam6 the cloud's real-or-bluff threshold, iparam3 hunting frames
+  before a bolt, iparam4 cloud warning frames, iparam5 swipe hold, iparam6
+  the Mericarol bolt's confusion chance. It never walks: hunt (3, 0x00572718)
+  turns 512 BAMS a frame, retargets every 20 frames to a player 30 closer,
+  loses a target beyond 300, shoots from 50 away (4, 0x00572410: motion
+  frame 10, 12 above the target's feet, 150 frames of life, group 0 /
+  Gibarta 2 for Merikle / Zonde 3 for Mericus / Megid 5 in Ultimate; a landed
+  bolt flags the owner into the recover state 8), swipes (5, 0x00572094:
+  frame 8, radius 50, then the pose frozen for iparam5), or sends a Megid
+  cloud (9, 0x0057148c: iparam4 warning frames, frame 10, group 5, radius
+  fparam5, or a bluff). A flinch in the 20..50 % HP window rolls the rush (6,
+  0x00571a60: 10 frames of windup, 200 units at the rush speed hitting each
+  player once with entity_hit_by_tech group 0 / fparam1, 0.9 deceleration for
+  10 frames), else 5 % the TP drain (7, 0x005717dc: the first live player
+  within 100 (0x00a73f20 = 10000, written at 0x00573606) at frame 6, its TP
+  set to 0 at frame 25, over at 30; invulnerable). The damage handler
+  0x0057358c skips the flinch while flag 0x440 & 0x20 is set (the attack
+  states and the charge); 0x00573570 sends a kill to state 0xb. The spawn
+  state is hidden (+0x184) for the same 40-frame emergence effect as the
+  Merillia's.
+- **Gibbons** (ctor 0x00564a64, dispatcher 0x00564ff0, update 0x005687bc,
+  table 0x009be3a0, record 0x009be53c {225, 0, turn 1536}, boxes 0x009be2e0
+  radius 8 / 0x009be30c radius 12; param6 >= 1 = Zol, the group leader). Set
+  params (0x00564e98): param1 the group, param2 < 1 SpotAppear else
+  JumpAppear (0x00925ffc), param3 + 0.4 the back-step chance (else the
+  charge), param4 + 0.3 the spell chance per 50 units walked, param5 + 0.3
+  the spell chance after the back step. Vision 350 (Zol) / 250 (Ul)
+  (0x00565eac). Run-time globals written by the static initialiser at
+  0x00568f15..: 22500 (aggro, 150), 10000 and 900 (the stalk's 100 and 30).
+  States: 0 spawn (reads the leader of its group; a Ul wanders around the
+  leader's spawn point), 1 jump in (100 back, 3.5714 a frame), 2 spot in
+  (40-frame effect), 3 wait, 5 alert, 6 roar (60 frames), 7 the leader's call
+  (alerts the group at frame 60), 8 wander (120 around the home point, speed
+  0.3..1, waits 240..360), 9 / 10 run / zigzag (stride bursts of 4.0 / 6.0 at
+  motion frame 18, a spell roll every 50 units), 0xb stalk (circles the
+  target at 0.7, attacks from behind or within 30), 0xc charge (min(dist,
+  40) / 14.667 a frame, bite at motion frame 22 with knockback 7.0, Ultimate
+  0.1 slow / paralysis), 0x13 back step (60 in 33 frames, invulnerable until
+  the stomp), 0x14 spell (turn 1536 BAMS a frame, frame 15 of the fire motion:
+  Ul Foie / Gizonde, Zol Rafoie / Megid, level = the stats row's level), 0xe
+  dodge, 0xf enrage (Deband at frame 30, Shifta at 40 on itself), 0x10
+  flinch, 0x11 death. A Zol's death gives every Gibbon of its group an
+  enrage countdown of trunc(50 * random) + 20 frames (GibblesUpdate). State
+  0xd (an arc run) has no caller in the dump and is not ported. Alert, roar,
+  call and the spawn states are hidden (+0x184); the damage handler
+  0x00568edc sends every hit to state 0x10 and the kill 0x00568ec0 to 0x11.
+- **Real motion counts** (measured with `EnemyArchive`): Gibon attack 40,
+  back 33, damage 20, dead 30, fire 25, hoe 40, run 30, wait 30, walk 30;
+  Mericarol 20 20 31 20 30 30 30 30 (the back step's 33-frame move and the
+  stomp at frame 33, the spell at 15 of 25 and the bite at 22 of 40 all fit).
+- **ASSUMED:** the bolt's start (12 ahead, 20 up; the exe takes a model
+  node) and hit radius (2 + the player's 5, no height test); group 2 / 3 hits
+  as a group-0 tech plus a freeze / shock companion with the player-caster
+  chances of `enemystatus.ts`; rows 7 / 8 of the Mericarol (loops that the exe
+  cuts at the last frame) as one-shots; the swipe hits once; the rush ignores
+  walls and the 0x600 flag it ORs into the player; the TP drain reaches only
+  the local player (`drainTp`); the Gibbon's table rows 15 / 16 (step 0 in
+  the table) run at 1.0; the animation step 1.05 * speed is set once at a
+  state's entry (no live speed channel in `AiFrame`); no wall rays or lean
+  (+0x480); the Gibbon's spell objects fly like `TechBolt`; the bite and the
+  stomp reach (body radius + 5 + 8); the cast's "aligned within 0x100"
+  reading of EnemyAI_UpdateRotation_00771858; `buffs` (Shifta / Deband) are
+  exposed but nothing applies them to the enemy. Unread: vtable +0x19c /
+  +0x1a0 (0x00568b70 / 0x00568bb4, not in the dump), the Mericarol flag
+  0x440 & 0x400 (set by a random roll in the ctor, no reader found).
+
+**Checks:** `node tests/enemyfsmep2b.test.ts` (new: constants, every state
+with the real motion frame counts, hang fuzz with 1-, real and 90-frame
+motions), client `tsc --noEmit` (only the two @capacitor modules).
+Not checked in Chrome.
+
 ## 2026-10-19: stricter TypeScript
 
 **What changed:** `client/tsconfig.json` now also has `noImplicitReturns`,
