@@ -85,8 +85,12 @@ export function maxTpFor(charClass: number, mstStat: number, level: number, tpMa
 }
 
 // The EXP number handle_experience shows over a killed enemy.
-export function killExp(enemyExp: number, opts: { episode2: boolean; killer: boolean; multiplier?: number }): number {
-  const scaled = enemyExp * (opts.episode2 ? 13 : 10) * (opts.killer ? 10 : 8);
+// `challenge` is the Challenge Mode EXP multiplier (exp_multiplication): when a
+// quest is running in a Challenge game, handle_experience (.c:762736) rounds
+// the amount times it before the division by 100.
+export function killExp(enemyExp: number, opts: { episode2: boolean; killer: boolean; multiplier?: number; challenge?: number }): number {
+  let scaled = enemyExp * (opts.episode2 ? 13 : 10) * (opts.killer ? 10 : 8);
+  if (opts.challenge !== undefined) scaled = Math.round(Math.fround(Math.fround(scaled) * Math.fround(opts.challenge)));
   return Math.trunc(scaled / 100) * (opts.multiplier ?? 1);
 }
 

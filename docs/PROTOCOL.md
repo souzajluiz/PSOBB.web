@@ -562,7 +562,6 @@ reaches these and nothing else:
 
 | Cluster | Opcodes |
 |---|---|
-| Challenge mode | `cmode_stage`, `set_cmode_difficulty`, `set_cmode_base_time`, `set_cmode_rank_threshold`, `set_cmode_rank_result`, `set_cmode_grave_rates`, `set_cmode_char_template`, `cmode_check_any_player_dead`, `exp_multiplication`, `chl_create_retry_menu`, `chl_show_dead_player_list` |
 | Battle Arena | `ba_initial_floor` and the rest of the `ba_*` family |
 | Enemies | `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
 | Enemies | `set_override_enemy_bp_index`, `set_enemy_movement_data`, `set_enemy_physical_data`, `set_enemy_resist_data`, `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
@@ -575,6 +574,36 @@ unimplemented one still advances the program counter correctly.
 ### Battle mode
 
 `quest/battle.ts` (rules, weights, score, places, controller, payloads), `quest/battlerun.ts` (wiring) and `quest/battleui.ts` (HUD); every `ba_*` opcode is executed by `BattleSetup.apply` (the rule struct is the 0x30 bytes at `g_BaRuleId`, newserv's `BattleRules`). A battle game is `C1` with byte `0x49` = 1 (`Game.create({ battle: true })`); the quest list then is the server's battle menu. Wire: `6xCF` (leader, rules + box drop count), `6x7D` (phase / start ack / score / rematch), `6x8F`, `6xD0`, `6x9B`, `6x80`, `6x83` (see DEVLOG "Quests: Battle mode").
+**Challenge Mode** (`quest/cmode.ts`, `quest/cmoderun.ts`; DEVLOG "Quests:
+Challenge mode") is implemented: `cmode_stage`, `set_cmode_char_template`,
+`set_cmode_difficulty`, `exp_multiplication`, `set_cmode_rank_result`,
+`set_cmode_rank_override`, `set_cmode_rank_threshold`, `check_rank_time`,
+`item_create_cmode`, `award_item_*`, `set_cmode_base_time`,
+`set_cmode_grave_rates`, `cmode_check_*_player_dead`, `chl_set_timerecord`,
+`chl_get_timerecord`, `chl_set_min_time_online`, `get_chl_retry_choice`,
+`chl_create_retry_menu`, `disable_retry_menu`, `chl_show_dead_player_list`,
+`get_cmode_prize_rank`, `is_there_grave_message`, `get_num_kills`,
+`reset_kills`, `reset_map`, `nop_F821` / `nop_F822`. What the client sends:
+
+| Command | Direction | Layout |
+|---|---|---|
+| `01DF` | C→S (leader) | `u32 stage` (cmode_stage, 0 when out of range) |
+| `02DF` | C→S (leader) | `u32 template index` 0..15 (set_cmode_char_template) |
+| `03DF` | C→S (leader) | `u32 difficulty` |
+| `04DF` | C→S (leader) | `f32 EXP multiplier` in [0.01, 10000] |
+| `05DF` | C→S (leader) | `u32 ARGB colour` (0xFF000000 or'd), `u16[12]` rank text, encrypted: first char ^ 0x7F, then (c - previous c) ^ 0x7F |
+| `06DF` | C→S (leader) | `u32 rank` (0 B, 1 A, 2 S), `u32 seconds`, `u32 award bitmask`; B is forced to 35999 s per stage |
+| `07DF` | C→S | `u32 prize rank`, `u32 award bitmask`, `ItemData` (0x14): a prize was created |
+| `08ED` | C→S | the player's 0x140 challenge records, after every `check_rank_time` |
+| 6x7C | broadcast | `u16 client id`, 2 unused, the 0x140 records (sent when the Challenge object is built; others keep them for graves) |
+| 6x95 | broadcast | `u32 client id`, `u32 encoded stage time`, `u32 token = (client id + 1) ^ (time - base time)`, `u32` unused (chl_set_timerecord) |
+| 6x97 | broadcast (leader) | `u32 client id`, `u32 is_retry` (the retry menu's answer) |
+| 6x9D | broadcast | `u32 client id`: appears in the dead player list |
+| 6xD1 | to the server | `u16 floor`, `u16 room`, `f32 x`, `f32 z`, `u32 item type` 0..5 (Monomate, Dimate, Trimate, Monofluid, Difluid, Trifluid): a grave's recovery item |
+
+Stage times are saved as `(mask << 16) | (mask ^ time)` with 4..12 bits in the
+mask; the records hold the 9 + 5 + 9 stage times, the three award states
+(`rank_award_flags`, encoded best rank), the grave and the rank title.
 
 ### What the web client approximates
 

@@ -95,6 +95,9 @@ export class QuestUi {
   // it in step with the VMs; close_msg_qb does not end the wait).
   boardWait = false;
   private lists: ListState[] = [];
+  // Fixed windows of a mode's HUD (the Challenge Mode timer, Area counter and
+  // result panel, quest/cmoderun.ts), keyed by name.
+  private huds = new Map<string, { x: number; y: number; lines: string[] }>();
   private raf = 0;
   private last = 0;
   private acc = 0;
@@ -190,6 +193,15 @@ export class QuestUi {
 
   closeBoard(): void {
     this.board = null;
+  }
+
+  // --- HUD windows -----------------------------------------------------------------
+
+  // A window at a fixed spot (GUI position in the 640x480 space), shown until
+  // it is cleared with null. Not interactive.
+  setHud(id: string, win: { x: number; y: number; lines: string[] } | null): void {
+    if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(plainText) });
+    else this.huds.delete(id);
   }
 
   // --- lists ---------------------------------------------------------------------
@@ -322,6 +334,7 @@ export class QuestUi {
       this.boardCtx.setTransform(s, 0, 0, s, 0, 0);
       this.drawText(this.boardCtx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
     }
+    for (const h of this.huds.values()) this.drawText(ctx, h.x, h.y, h.lines, extra);
     if (this.window) {
       const W = this.window.rect;
       const lines = this.window.text.split('\n');
@@ -364,6 +377,7 @@ export class QuestUi {
     this.window = null;
     this.board = null;
     this.boardWait = false;
+    this.huds.clear();
     for (const l of this.lists) l.resolve(null);
     this.lists = [];
     const r = this.pendingTell;

@@ -479,6 +479,10 @@ export class CombatView {
   tp = 0;
   // 6xDD: the lobby's EXP multiplier (unknown_xp_multiplier).
   expMultiplier = 1;
+  // Challenge Mode's exp_multiplication, while a quest runs in a Challenge
+  // game (handle_experience's g_ChallengeObject / g_QuestStarted test); null
+  // outside it. quest/run.ts sets it.
+  challengeExpMultiplier: number | null = null;
   private sePlayer: SePlayer | null = null;
   // The web client has no Reverser or Moon Atomizer, so this key revives the
   // local player (the real client needs another player's item or a trip back
@@ -1120,6 +1124,24 @@ export class CombatView {
     this.hud?.frame(dt, this.hudValues(), this.game.selfId, (slot) => this.partyValues(slot));
   }
 
+  // Whether a player of this game is dead (Challenge Mode's
+  // cmode_check_*_player_dead read is_player_dead for every slot).
+  isPlayerDead(clientId: number): boolean {
+    if (clientId === this.game.selfId) return this.damage.dead;
+    return this.deadPlayers.has(clientId) || (this.party.get(clientId)?.dead ?? false);
+  }
+
+  // The local character changed under the combat (a Challenge Mode template
+  // replaced it, quest/cmodeoverlay.ts): read level, EXP and stats again.
+  async reloadProgression(): Promise<void> {
+    this.progression = null;
+    const p = await this.ensureProgression();
+    if (!p) return;
+    this.damage.maxHp = p.maxHp;
+    this.damage.reset(p.maxHp, p.maxHp);
+    this.tp = p.maxTp;
+  }
+
   // What a party member's window shows (QuestListEntryUpdate_0073eb28,
   // QuickMenuClearSelection_00742430): nothing for an empty slot.
   private partyValues(slot: number): PartyValues | null {
@@ -1694,7 +1716,7 @@ export class CombatView {
     }
     const killer = lastHit.get(e.index) === true;
     this.game.sendExpRequest(e.index, killer);
-    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer, multiplier: this.expMultiplier });
+    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer, multiplier: this.expMultiplier, ...(this.challengeExpMultiplier === null ? {} : { challenge: this.challengeExpMultiplier }) });
     const anchor = new THREE.Vector3(x, 22, z);
     this.hud?.expPopup(amount, () => anchor);
     this.opts.log(`${name} E-${e.index.toString(16)} defeated${killer ? ' (last hit yours)' : ''}`);
@@ -4524,6 +4546,12 @@ export class CombatView {
       this.opts.log(`${name}: not learned`);
       return false;
     }
+    if (tech === TECH.reverser && this.game.info?.challenge) {
+      // CanPlayerCastTechnique_0069a0c4: return1_if_challenge_quest() refuses
+      // Reverser (technique 0x11) in a Challenge game.
+      this.opts.log(`${name}: not allowed in Challenge Mode`);
+      return false;
+    }
     if (tech === TECH.ryuker && !this.telepipe?.allowed()) {
       // CanPlayerCastTechnique_0069a0c4: Ryuker needs
       // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0.
@@ -5200,7 +5228,7 @@ export class CombatView {
     }
     this.game.sendExpRequest(e.index, true);
     // handle_experience: the EXP number over the enemy, on the killer's screen.
-    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer: true, multiplier: this.expMultiplier });
+    const amount = killExp(e.exp, { episode2: this.game.info?.episode === 2, killer: true, multiplier: this.expMultiplier, ...(this.challengeExpMultiplier === null ? {} : { challenge: this.challengeExpMultiplier }) });
     const anchor = e.instance.root.position.clone();
     anchor.y += 22;
     this.hud?.expPopup(amount, () => anchor);
@@ -5208,6 +5236,11 @@ export class CombatView {
   }
 
   // --- level and EXP ---------------------------------------------------------
+
+  // PlyLevelTbl, for a Challenge Mode template (quest/cmoderun.ts).
+  challengeLevelTable(): Promise<LevelTable | null> {
+    return this.levelTable();
+  }
 
   private levelTable(): Promise<LevelTable | null> {
     this.levelTablePromise ??= (async () => {

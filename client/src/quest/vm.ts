@@ -38,6 +38,7 @@ import { F_ARGS, F_CLEAR_ARGS } from '../formats/questopcodes.ts';
 import type { BattleParamKind } from '../formats/battleparams.ts';
 import { BP_OPCODES, KeywordDetector, findInventoryItem, readBattleParamRow, validBpIndex, type QuestInventoryItem } from './miscops.ts';
 import { BATTLE_OPCODES, BattleSetup } from './battle.ts';
+import { ChallengeMode, type ChallengeEnv } from './cmode.ts';
 
 export const QUEST_NUM_REGISTERS = 0x100;
 export const QUEST_NUM_FLOORS = 0x12;
@@ -64,7 +65,9 @@ export interface ArgValue {
 
 // 'board' is disp_msg_qb__add_msg (5): disp_msg_qb, or add_msg on the open
 // quest board text, waits for the decide key.
-export type YieldReason = 'none' | 'sync' | 'ret' | 'exit' | 'message' | 'list' | 'board' | 'blocked';
+// 'host' waits for something the game does (the Challenge Mode prize windows,
+// quest/cmode.ts); the host's promise lets it go.
+export type YieldReason = 'none' | 'sync' | 'ret' | 'exit' | 'message' | 'list' | 'board' | 'blocked' | 'host';
 
 // Which of the exe's two thread runners steps a thread: 1 =
 // quest_run_thread_1 (the quest's own and floor threads, QuestThread2), 2 =
@@ -171,6 +174,10 @@ export interface QuestVMHost {
   battleRecord?: () => number[];
   // ba_initial_floor: the (remapped) floor the players start on.
   battleFloor?: (floor: number) => void;
+  // Challenge Mode (quest/cmode.ts): what the mode asks of the game.
+  cmode?: ChallengeEnv;
+  // reset_map (opcode_reset_map .c:608905): clear the floors' state.
+  resetMap?: () => void;
   // at_coords_talk / at_coords_call / set_obj_param registered or removed.
   coordsChanged?: (handlers: QuestCoordsHandler[]) => void;
   // get_gender: 0 male, 1 female, 2 unknown (quest/miscops.ts genderOfClass).
@@ -211,6 +218,8 @@ export class QuestThread {
   done = false;
   // Local copy of the arg stack, as QuestThread2 keeps one (.c:602576).
   argStack: ArgValue[] = [];
+  // reset_map flagged it for removal: it ends once it yields.
+  endAfterYield = false;
   // Called once when the thread ends (an NPC's talk waits for its thread,
   // EnemyObjectUpdate_0060648c state 2).
   onDone: (() => void) | null = null;
@@ -253,6 +262,8 @@ export class QuestVM {
   areaTotal = 0;
   currentAreaNumber = 0;
   areaTitle = '';
+  // Challenge Mode state and rules (quest/cmode.ts).
+  readonly cmode: ChallengeMode;
   // override_warp_dest_floor (F853): area warps go to current floor + 1.
   warpDestOverride = false;
   // The ba_* rules, score weights and announcements (quest/battle.ts).
@@ -300,6 +311,7 @@ export class QuestVM {
   constructor(opts: QuestVMOptions) {
     this.bin = opts.bin;
     this.host = opts.host ?? {};
+    this.cmode = new ChallengeMode(this.host.cmode ?? {});
     this.autoAdvance = opts.autoAdvance ?? !opts.host;
     this.episode = opts.episode ?? 1;
     const h = opts.bin.header;
@@ -338,6 +350,7 @@ export class QuestVM {
   // (quest_start_floor_thread, PsoBB.exe .c:615128).
   enterFloor(floor: number): void {
     this.currentFloor = floor;
+    this.cmode.floorEntered(floor);
     const label = this.floorHandlers[floor] ?? -1;
     if (label < 0) return;
     this.log(`quest: floor ${floor} handler -> label ${label}`);
@@ -434,7 +447,7 @@ export class QuestVM {
       t.done = true;
       return;
     }
-    if (t.yieldReason === 'message' || t.yieldReason === 'list' || t.yieldReason === 'board') return; // still waiting
+    if (t.yieldReason === 'message' || t.yieldReason === 'list' || t.yieldReason === 'board' || t.yieldReason === 'host') return; // still waiting
     t.yieldReason = NO_YIELD;
     let steps = 0;
     for (;;) {
@@ -453,7 +466,7 @@ export class QuestVM {
       t.pc += insn.size;
       this.execute(t, insn);
     }
-    if (t.yieldReason === 'ret' || t.yieldReason === 'exit') t.done = true;
+    if (t.yieldReason === 'ret' || t.yieldReason === 'exit' || t.endAfterYield) t.done = true;
   }
 
   // --- argument access -------------------------------------------------------
@@ -1438,6 +1451,141 @@ export class QuestVM {
         for (let i = 0; i < 7; i++) R[(base + i) & 0xff] = rec[i] ?? 0;
         return;
       }
+      // --- Challenge Mode (quest/cmode.ts; the opcodes' sources are cited there) ---
+      case 'cmode_stage':
+        this.cmode.setStage(this.uint(a, 0));
+        clearArgs();
+        return;
+      case 'set_cmode_char_template':
+        this.cmode.setTemplate(this.int(a, 0));
+        clearArgs();
+        return;
+      case 'set_cmode_difficulty':
+        this.cmode.setDifficulty(this.int(a, 0));
+        clearArgs();
+        return;
+      case 'exp_multiplication': {
+        const base = this.reg(a, 0);
+        this.cmode.setExpMultiplier(R[base], R[(base + 1) & 0xff], R[(base + 2) & 0xff]);
+        return;
+      }
+      case 'cmode_check_all_players_dead':
+        R[this.reg(a, 0)] = this.cmode.allPlayersDead();
+        return;
+      case 'cmode_check_any_player_dead':
+        R[this.reg(a, 0)] = this.cmode.anyPlayerDead();
+        return;
+      case 'nop_F821':
+        // Consumes an item id (increment_item_id_for_player) and does nothing else.
+        this.cmode.env.newItemId?.();
+        return;
+      case 'nop_F822':
+        return;
+      case 'get_num_kills':
+        // opcode_get_num_kills: the player's kill count, 0 for an absent one.
+        R[this.reg(a, 1)] = Math.min(999, this.cmode.env.kills?.(R[this.reg(a, 0)]) ?? 0);
+        return;
+      case 'reset_kills':
+        this.cmode.env.resetKills?.(R[this.reg(a, 0)]);
+        return;
+      case 'set_cmode_base_time':
+        this.cmode.setBaseTime(R[this.reg(a, 0)]);
+        return;
+      case 'set_cmode_rank_result':
+        this.cmode.setRankResult(this.uint(a, 0), this.str(a, 1));
+        clearArgs();
+        return;
+      case 'set_cmode_rank_override':
+        this.cmode.addRankOverride(this.uint(a, 0), this.str(a, 1));
+        clearArgs();
+        return;
+      case 'set_cmode_rank_threshold': {
+        const base = this.reg(a, 0);
+        R[this.reg(a, 1)] = this.cmode.setRankThreshold(R[base], R[(base + 1) & 0xff], R[(base + 2) & 0xff]);
+        return;
+      }
+      case 'check_rank_time':
+        R[this.reg(a, 1)] = this.cmode.checkRankTime(R[this.reg(a, 0)]);
+        return;
+      case 'item_create_cmode': {
+        const base = this.reg(a, 0);
+        R[this.reg(a, 1)] = this.cmode.createPrize(Array.from({ length: 6 }, (_, i) => R[(base + i) & 0xff]));
+        return;
+      }
+      case 'award_item_select':
+      case 'award_item_name':
+      case 'award_item_ok': {
+        // The exe yields until the window closes (quest_thread_yield_reason =
+        // award_item_select / _name / _ok).
+        const pending = name === 'award_item_select' ? this.cmode.selectAward() : name === 'award_item_name' ? this.cmode.nameAward() : this.cmode.confirmAward();
+        if (pending) {
+          t.yieldReason = 'host';
+          const reg = name === 'award_item_ok' ? this.reg(a, 0) : -1;
+          void pending.then((v) => {
+            if (reg >= 0 && typeof v === 'number') R[reg] = v;
+            if (t.yieldReason === 'host') t.yieldReason = 'none';
+          });
+        } else if (name === 'award_item_ok') {
+          R[this.reg(a, 0)] = 0;
+        }
+        return;
+      }
+      case 'award_item_give':
+        R[this.reg(a, 0)] = this.cmode.giveAward();
+        return;
+      case 'chl_set_timerecord':
+        this.cmode.setTimeRecord(R[this.reg(a, 0)]);
+        return;
+      case 'chl_get_timerecord':
+        R[this.reg(a, 0)] = this.cmode.getTimeRecord();
+        return;
+      case 'chl_set_min_time_online':
+        this.cmode.setMinStageTime(R[this.reg(a, 0)]);
+        return;
+      case 'set_cmode_grave_rates': {
+        const base = this.reg(a, 0);
+        const num: number[] = [];
+        const den: number[] = [];
+        for (let i = 0; i < 10; i++) {
+          num.push(R[(base + 2 * i) & 0xff]);
+          den.push(R[(base + 2 * i + 1) & 0xff]);
+        }
+        this.cmode.setGraveRates(num, den);
+        return;
+      }
+      case 'get_chl_retry_choice': {
+        // opcode_disp_chl_retry_menu: the register is left alone while the
+        // leader has not chosen (the quest polls it).
+        const v = this.cmode.retryRegister;
+        if (v !== null) R[this.reg(a, 0)] = v;
+        return;
+      }
+      case 'chl_create_retry_menu':
+        this.cmode.openRetryMenu();
+        return;
+      case 'disable_retry_menu':
+        this.cmode.disableRetry();
+        return;
+      case 'chl_show_dead_player_list':
+        this.cmode.showDeadList();
+        return;
+      case 'get_cmode_prize_rank':
+        R[this.reg(a, 0)] = this.cmode.prizeRank();
+        return;
+      case 'is_there_grave_message':
+        R[this.reg(a, 0)] = this.cmode.hasGraveMessage() ? 1 : 0;
+        return;
+      case 'reset_map':
+        // opcode_reset_map (.c:608900): the registers go to 0, every quest
+        // thread is flagged for removal (the running one finishes its turn
+        // first), then the floors' state is cleared and the Challenge
+        // bookkeeping with it (clear_unknown_challenge_object).
+        R.fill(0);
+        for (const o of this.threads) if (o !== t) o.done = true;
+        t.endAfterYield = true;
+        this.cmode.resetStage();
+        this.host.resetMap?.();
+        return;
 
       default:
         if (BATTLE_OPCODES.has(name)) {
