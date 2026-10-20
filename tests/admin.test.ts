@@ -1,15 +1,20 @@
 // The admin panel backend (bridge/admin.mjs, bridge/admin-chars.mjs) against a
 // fake newserv HTTP server: authentication, lockout, session expiry, CSRF,
 // no CORS, input validation, the mapping of every action to newserv's HTTP
-// routes / shell commands, the audit log, character / bank / config editing.
+// routes / shell commands, the audit log, character / bank / config editing,
+// and quest files (list, read, publish: names, categories, traversal, size,
+// validation, backup, rollback, CSRF, confirmation).
 //
 // Run: node tests/admin.test.ts
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAdmin, hashPassword, stripSecrets } from '../bridge/admin.mjs';
+import { prsCompress } from '../client/src/formats/prscompress.ts';
+import { buildPackage } from '../client/src/questeditor/io.ts';
+import { QuestDocument } from '../client/src/questeditor/model.ts';
 import { CHAR_FILE_SIZE, applyBankPatch, applyCharacterPatch, parseCharacter } from '../bridge/admin-chars.mjs';
 
 let checks = 0;
@@ -660,6 +665,194 @@ function makeCharFile(): Buffer {
   const rf = await c.post('/config', { key: 'BBGlobalEXPMultiplier', value: 7, confirm: 'BBGlobalEXPMultiplier' });
   check(rf.status >= 400, 'a failing reload is reported');
   check(readFileSync(configFile, 'utf8').includes('"BBGlobalEXPMultiplier": 3,'), 'and the file is restored');
+}
+
+// ---- quest files: list, read, publish --------------------------------------------------------------------------------------------
+
+{
+  const questsRoot = join(systemDir, 'quests');
+  const outside = join(tmp, 'outside');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.bin'), 'TOP SECRET');
+  writeFileSync(join(outside, 'secret-bb.qst'), 'TOP SECRET');
+  for (const d of ['retrieval', 'hidden']) mkdirSync(join(questsRoot, d), { recursive: true });
+  symlinkSync(outside, join(questsRoot, 'evil'));
+  writeFileSync(join(questsRoot, 'retrieval', 'q058-bb-e.bin'), 'OLD-BIN-CONTENT-OLD');
+  writeFileSync(join(questsRoot, 'retrieval', 'q058-bb.dat'), 'OLD-DAT-CONTENT-OLD');
+  writeFileSync(join(questsRoot, 'retrieval', 'notes.txt'), 'not a quest file');
+  writeFileSync(join(questsRoot, 'retrieval', '.hidden.bin'), 'x');
+  symlinkSync(join(outside, 'secret.bin'), join(questsRoot, 'retrieval', 'link-bb-e.bin'));
+
+  const anon = new Client(m.base, m.port);
+  eq((await anon.get('/quests/files')).status, 401, 'quest file list needs a session');
+  eq((await anon.get('/quests/file/retrieval/q058-bb-e.bin')).status, 401, 'reading a quest file needs a session');
+  eq((await anon.post('/quests/publish', { category: 'retrieval', name: 'q1-bb.qst' })).status, 401, 'publishing needs a session');
+
+  // listing
+  const list = await c.get('/quests/files');
+  eq(list.status, 200, 'quest file list');
+  eq(list.json.directories.map((d: any) => d.dir), ['hidden', 'retrieval'], 'only real folders are listed (a symlinked folder is not)');
+  eq(list.json.directories[1].files.map((f: any) => f.name), ['q058-bb-e.bin', 'q058-bb.dat'], 'only safe .bin / .dat / .qst regular files are listed');
+
+  // reading
+  const got = await c.get('/quests/file/retrieval/q058-bb-e.bin');
+  eq(got.status, 200, 'read a quest file');
+  eq(got.text, 'OLD-BIN-CONTENT-OLD', 'with its bytes');
+  eq(got.headers.get('content-type'), 'application/octet-stream', 'as octet-stream');
+  eq(got.headers.get('access-control-allow-origin'), null, 'without CORS headers');
+  eq(got.headers.get('x-content-type-options'), 'nosniff', 'with nosniff');
+  eq((await c.req('POST', '/admin/api/quests/file/retrieval/q058-bb-e.bin', {})).status, 405, 'the file route is GET only');
+  eq((await c.get('/quests/file/retrieval/..%2F..%2Fconfig.json')).status, 404, 'an encoded path traversal does not match the route');
+  eq((await c.get('/quests/file/..%2Fplayers/x.bin')).status, 404, 'nor in the category');
+  eq((await c.get('/quests/file/retrieval/..bin')).status, 400, 'a name with ".." is refused');
+  eq((await c.get('/quests/file/retrieval/.hidden.bin')).status, 400, 'a dot-file is refused');
+  eq((await c.get('/quests/file/retrieval/notes.txt')).status, 400, 'other extensions are refused');
+  eq((await c.get('/quests/file/retrieval/config.json')).status, 400, 'config.json is refused');
+  eq((await c.get('/quests/file/evil/secret.bin')).status, 400, 'a symlinked category is refused');
+  eq((await c.get('/quests/file/retrieval/link-bb-e.bin')).status, 404, 'a symlinked file is refused');
+  eq((await c.get('/quests/file/nowhere/q1-bb.qst')).status, 404, 'an unknown category');
+  eq((await c.get('/quests/file/retrieval/q999-bb.qst')).status, 404, 'an unknown file');
+
+  // a real quest from the editor's own writer
+  const doc = QuestDocument.blank({ episode: 0, name: 'Admin test' });
+  const pkg = buildPackage(doc);
+  const b64 = (u: Uint8Array) => Buffer.from(u).toString('base64');
+  const pair = { category: 'retrieval', name: 'q9001-bb-e.bin', bin: b64(pkg.bin), dat: b64(pkg.dat), confirm: 'retrieval/q9001-bb-e.bin' };
+  const qstBody = { category: 'hidden', name: 'q9002-bb.qst', qst: b64(pkg.qst), confirm: 'hidden/q9002-bb.qst' };
+  const snapshot = () => ({ outside: readdirSync(outside).sort(), secret: readFileSync(join(outside, 'secret.bin'), 'utf8'), root: readdirSync(systemDir).sort() });
+  const before = snapshot();
+
+  // CSRF, origin, confirmation
+  eq((await c.post('/quests/publish', pair, { csrf: false })).status, 403, 'publish without the CSRF token');
+  eq((await c.post('/quests/publish', pair, { headers: { 'X-CSRF-Token': 'wrong' } })).status, 403, 'publish with a wrong CSRF token');
+  eq((await c.post('/quests/publish', pair, { noOrigin: true })).status, 403, 'publish without Origin');
+  eq((await c.post('/quests/publish', pair, { headers: { Origin: 'https://evil.example' } })).status, 403, 'publish from another origin');
+  eq((await c.post('/quests/publish', pair, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403, 'publish marked cross-site');
+  eq((await c.req('POST', '/admin/api/quests/publish', null, { raw: JSON.stringify(pair), headers: { 'Content-Type': 'text/plain' } })).status, 415, 'publish needs application/json');
+  const noConfirm = await c.post('/quests/publish', { ...pair, confirm: undefined });
+  eq(noConfirm.status, 409, 'publish without the confirmation');
+  eq(noConfirm.json.confirmRequired, 'retrieval/q9001-bb-e.bin', 'says what to confirm');
+  eq((await c.post('/quests/publish', { ...pair, confirm: 'retrieval' })).status, 409, 'a wrong confirmation');
+  eq(fake.shell.filter((s) => s.startsWith('reload quests')).length, 0, 'none of these reloaded');
+  eq(existsSync(join(questsRoot, 'retrieval', 'q9001-bb-e.bin')), false, 'and nothing was written');
+
+  // names and categories
+  const bad = async (patch: Record<string, unknown>, status: number, label: string) => {
+    const body: Record<string, unknown> = { ...pair, ...patch };
+    if (patch.name !== undefined || patch.category !== undefined) body.confirm = `${body.category}/${body.name}`;
+    eq((await c.post('/quests/publish', body)).status, status, label);
+  };
+  await bad({ name: '../q9001-bb-e.bin' }, 400, 'a name with ../');
+  await bad({ name: '..%2Fq-bb-e.bin' }, 400, 'an encoded traversal in the name');
+  await bad({ name: 'a/b-bb-e.bin' }, 400, 'a name with a slash');
+  await bad({ name: 'a\\b-bb-e.bin' }, 400, 'a name with a backslash');
+  await bad({ name: 'q 1-bb-e.bin' }, 400, 'a name with a space');
+  await bad({ name: 'q1-bb-e.bin\0.png' }, 400, 'a name with a NUL');
+  await bad({ name: `${'a'.repeat(70)}-bb-e.bin` }, 400, 'a name over 64 characters');
+  await bad({ name: '.q1-bb-e.bin' }, 400, 'a dot-file name');
+  await bad({ name: 'q1..2-bb-e.bin' }, 400, 'a name with ..');
+  await bad({ name: 'q1-e.bin' }, 400, 'a name without the -bb tag');
+  await bad({ name: 'q1-gc-e.bin' }, 400, 'a GameCube name');
+  await bad({ name: 'q1-bb-e.dat' }, 400, 'a .dat name (the server names the .dat)');
+  await bad({ name: 'q1-bb-e.bin.exe' }, 400, 'another extension');
+  await bad({ name: 'config.json' }, 400, 'config.json');
+  await bad({ name: 5 }, 400, 'a non-string name');
+  await bad({ category: '../..' }, 400, 'category ../..');
+  await bad({ category: 'retrieval/..' }, 400, 'category with a slash');
+  await bad({ category: '/etc' }, 400, 'an absolute category');
+  await bad({ category: '..' }, 400, 'category ..');
+  await bad({ category: 'evil' }, 400, 'a symlinked category');
+  await bad({ category: 'nowhere' }, 404, 'a category that does not exist (never created)');
+  eq(existsSync(join(questsRoot, 'nowhere')), false, 'the folder was not created');
+  await bad({ category: 5 }, 400, 'a non-string category');
+
+  // payload checks
+  eq((await c.post('/quests/publish', { ...pair, bin: 'not base64!!' })).status, 400, 'invalid base64');
+  eq((await c.post('/quests/publish', { ...pair, bin: undefined })).status, 400, 'missing bin');
+  eq((await c.post('/quests/publish', { ...pair, dat: undefined })).status, 400, 'missing dat');
+  eq((await c.post('/quests/publish', { ...pair, qst: pair.bin })).status, 400, 'bin and qst together');
+  const big = Buffer.alloc(2 * 1024 * 1024 + 4, 1).toString('base64');
+  eq((await c.post('/quests/publish', { ...pair, bin: big })).status, 413, 'a file over 2 MB');
+  eq((await c.post('/quests/publish', { ...pair, bin: 'A'.repeat(7 * 1024 * 1024) })).status, 413, 'a body over the limit');
+  eq((await c.post('/quests/publish', { ...pair, bin: b64(new Uint8Array(100).fill(7)) })).status, 422, 'bytes that are not a quest');
+  eq((await c.post('/quests/publish', { ...pair, bin: b64(pkg.bin.subarray(0, 40)) })).status, 422, 'a truncated .bin');
+  const bomb = prsCompress(new Uint8Array(5 * 1024 * 1024));
+  check(bomb.length < 1024 * 1024, `the decompression bomb is small on the wire (${bomb.length} bytes)`);
+  eq((await c.post('/quests/publish', { ...pair, bin: b64(bomb) })).status, 422, 'a PRS bomb (5 MB of zeros) is refused by the output cap');
+  eq((await c.post('/quests/publish', { ...pair, bin: pair.dat, dat: pair.bin })).status, 422, 'swapped .bin and .dat');
+  eq((await c.post('/quests/publish', { ...pair, dat: b64(new Uint8Array(64).fill(0xff)) })).status, 422, 'a .dat that does not parse');
+  eq((await c.post('/quests/publish', { category: 'hidden', name: 'q9002-bb.qst', qst: b64(pkg.qst.subarray(0, 100)), confirm: 'hidden/q9002-bb.qst' })).status, 422, 'a truncated .qst');
+  fake.shell.length = 0;
+
+  // the happy path: a pair, replacing nothing, then replacing
+  const ok = await c.post('/quests/publish', pair);
+  eq(ok.status, 200, 'publish a .bin + .dat');
+  eq(ok.json.files.map((f: any) => [f.name, f.replaced]), [['q9001-bb-e.bin', false], ['q9001-bb.dat', false]], 'the .dat is named by the server');
+  eq(ok.json.quest.name, 'Admin test', 'the answer names the quest');
+  eq(readFileSync(join(questsRoot, 'retrieval', 'q9001-bb-e.bin')).equals(Buffer.from(pkg.bin)), true, 'the .bin is on disk byte for byte');
+  eq(readFileSync(join(questsRoot, 'retrieval', 'q9001-bb.dat')).equals(Buffer.from(pkg.dat)), true, 'the .dat too');
+  eq(fake.shell, ['reload quests'], 'newserv reloads its quests');
+  eq(readdirSync(join(questsRoot, 'retrieval')).filter((n) => n.endsWith('.admin-tmp')), [], 'no temp file is left');
+
+  const q = await c.post('/quests/publish', qstBody);
+  eq(q.status, 200, 'publish a .qst');
+  eq(readFileSync(join(questsRoot, 'hidden', 'q9002-bb.qst')).equals(Buffer.from(pkg.qst)), true, 'the .qst is on disk');
+
+  // replacing: backup first
+  const doc2 = QuestDocument.blank({ episode: 0, name: 'Second' });
+  const pkg2 = buildPackage(doc2);
+  const again = await c.post('/quests/publish', { ...pair, bin: b64(pkg2.bin), dat: b64(pkg2.dat) });
+  eq(again.status, 200, 'publish over an existing quest');
+  eq(again.json.files.every((f: any) => f.replaced), true, 'it reports the replacement');
+  const backups = readdirSync(join(tmp, 'quest-backups', 'retrieval'));
+  eq(backups.length, 2, 'both replaced files are backed up outside system/quests');
+  const oldBin = backups.find((n) => n.startsWith('q9001-bb-e.bin.'));
+  eq(oldBin !== undefined && readFileSync(join(tmp, 'quest-backups', 'retrieval', oldBin)).equals(Buffer.from(pkg.bin)), true, 'with the previous bytes');
+  eq(readdirSync(questsRoot).includes('quest-backups'), false, 'the backups are not inside system/quests');
+
+  // a reload that fails puts everything back
+  const doc3 = QuestDocument.blank({ episode: 0, name: 'Third' });
+  const pkg3 = buildPackage(doc3);
+  fake.failNext.add('reload quests');
+  const rf = await c.post('/quests/publish', { ...pair, bin: b64(pkg3.bin), dat: b64(pkg3.dat) });
+  check(rf.status >= 400, 'a failing reload is reported');
+  eq(readFileSync(join(questsRoot, 'retrieval', 'q9001-bb-e.bin')).equals(Buffer.from(pkg2.bin)), true, 'and the previous .bin is restored');
+  const fresh = { category: 'retrieval', name: 'q9003-bb-e.bin', bin: b64(pkg3.bin), dat: b64(pkg3.dat), confirm: 'retrieval/q9003-bb-e.bin' };
+  fake.failNext.add('reload quests');
+  check((await c.post('/quests/publish', fresh)).status >= 400, 'a failing reload for a new quest is reported');
+  eq(existsSync(join(questsRoot, 'retrieval', 'q9003-bb-e.bin')) || existsSync(join(questsRoot, 'retrieval', 'q9003-bb.dat')), false, 'and the new files are removed again');
+
+  // the published quest can be read back through the admin route
+  const back = await fetch(`${m.base}/admin/api/quests/file/retrieval/q9001-bb.dat`, { headers: { Cookie: c.cookie } });
+  eq(Buffer.from(await back.arrayBuffer()).equals(Buffer.from(pkg2.dat)), true, 'GET returns what was published');
+
+  // nothing outside system/quests changed
+  eq(snapshot(), before, 'nothing outside system/quests was touched');
+  eq(existsSync(join(systemDir, 'quests', 'retrieval', 'notes.txt')), true, 'unrelated files are untouched');
+  eq(readFileSync(join(questsRoot, 'retrieval', 'q058-bb-e.bin'), 'utf8'), 'OLD-BIN-CONTENT-OLD', 'including quests that were not published');
+
+  // audit
+  const audit = (await c.get('/audit?limit=1000')).json.entries.filter((e: any) => e.action === 'quest.publish');
+  check(audit.some((e: any) => e.result === 'ok' && e.detail.includes('retrieval/q9001-bb-e.bin')), 'a publish is in the audit log');
+  check(audit.some((e: any) => e.result === 'denied'), 'a rejected quest is in the audit log');
+  check(audit.some((e: any) => e.result === 'error' && e.detail.includes('restored')), 'a failed reload is in the audit log');
+  const auditText = readFileSync(auditFile, 'utf8');
+  check(!auditText.includes(pair.bin.slice(0, 60)) && !auditText.includes(PASSWORD), 'the audit log holds no quest bytes');
+}
+
+// The mirror (survives a redeploy): a second panel with ADMIN_QUESTS_MIRROR.
+{
+  const mirrorDir = join(tmp, 'quests-mirror');
+  const admin2 = makeAdmin({ questsMirror: mirrorDir });
+  const m2 = await mount(admin2);
+  const c2 = new Client(m2.base, m2.port);
+  await c2.login();
+  const pkg = buildPackage(QuestDocument.blank({ episode: 0, name: 'Mirror' }));
+  const r = await c2.post('/quests/publish', { category: 'hidden', name: 'q9100-bb-e.bin', bin: Buffer.from(pkg.bin).toString('base64'), dat: Buffer.from(pkg.dat).toString('base64'), confirm: 'hidden/q9100-bb-e.bin' });
+  eq(r.status, 200, 'publish with a mirror');
+  eq(readdirSync(join(mirrorDir, 'hidden')).sort(), ['q9100-bb-e.bin', 'q9100-bb.dat'], 'the files are mirrored to the volume');
+  m2.server.close();
+  admin2.close();
 }
 
 // ---- audit log ----------------------------------------------------------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 // PRS (LZ77 variant used across PSO) decompressor.
 // Ported from newserv src/Compression.cc (prs_decompress_with_meta), MIT license.
 
-export function prsDecompress(src: Uint8Array): Uint8Array {
+// maxSize (optional) bounds the output: a PRS stream can expand about 100x, so
+// code that reads untrusted input (the admin panel's quest upload) passes one.
+export function prsDecompress(src: Uint8Array, maxSize = Infinity): Uint8Array {
   let out = new Uint8Array(Math.max(src.length * 8, 0x1000));
   let outPos = 0;
   let pos = 0;
@@ -18,6 +20,7 @@ export function prsDecompress(src: Uint8Array): Uint8Array {
     return ret;
   };
   const put = (v: number): void => {
+    if (outPos >= maxSize) throw new Error('PRS: output too large');
     if (outPos === out.length) {
       const grown = new Uint8Array(out.length * 2);
       grown.set(out);

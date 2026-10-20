@@ -4,7 +4,8 @@ A web panel to manage the server: accounts and logins, characters, connected
 players, quests, teams, a few config settings and an audit log. It is served by
 `bridge/server.mjs` at `/admin` (module `bridge/admin.mjs`, page in
 `bridge/admin-ui/`, plain JavaScript, no framework, no external resources). The
-classic client is untouched and `/` still serves only `classic.html`.
+classic client is untouched and `/` still serves only `classic.html`; the
+quest editor page is served next to it (see Quest editor: open and publish).
 
 The panel is **off** unless `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` is set:
 without one, `/admin` answers 404 and no admin code path runs.
@@ -71,7 +72,10 @@ newserv call from validated parts (see Security).
 | `ADMIN_ALLOWED_HOSTS` | any | comma list of `Host` values the panel answers to (others get 404) |
 | `ADMIN_AUDIT_LOG` | `<system>/../admin-audit.log` (`/data/newserv/admin-audit.log` in Docker) | audit log file |
 | `ADMIN_CONFIG_MIRROR` | (unset; `/data/newserv/config.json` in Docker) | copy of `config.json` written after a panel edit; the entrypoint puts it back at start, so edits survive a redeploy |
-| `NEWSERV_SYSTEM` | as `server.mjs` | newserv's `system/` folder (characters, `config.json`) |
+| `NEWSERV_SYSTEM` | as `server.mjs` | newserv's `system/` folder (characters, `config.json`, `quests`) |
+| `ADMIN_QUEST_BACKUP` | `<system>/../quest-backups` (`/data/newserv/quest-backups` in Docker) | where the previous version of a published quest file is copied (outside `system/quests`) |
+| `ADMIN_QUESTS_MIRROR` | (unset; `/data/newserv/quests-published` in Docker) | copy of every published quest file; the entrypoint copies it back over `system/quests` at start, so published quests survive a redeploy |
+| `ADMIN_FORMATS_DIR` | `<repo>/client/src/formats` (`/app/client/src/formats` in Docker) | the client's quest parsers, used to validate uploads |
 
 ## Security model
 
@@ -131,7 +135,7 @@ newserv call from validated parts (see Security).
 | Accounts | list; create (BB username + password + flags); edit flags; change password; ban (30m ... permanent) / unban; delete; kick | `GET /y/accounts`, `GET /y/clients`; `add-account flags=HEX`, `add-license ID BB USER PASS`, `update-account ID flags=HEX`, `update-account ID ban-duration=Nd` / `unban`, `delete-license` + `add-license` (no change-password command exists), `delete-account ID`, `kick 0xID` |
 | Characters | per account and slot: name, class, section id, level, EXP, meseta, 7 stats, 19 technique levels, inventory (add / remove / see equipped), bank and shared bank (meseta, add / remove items) | files: `system/players/player_<user>_<n>.psochar`, `.psobank`, `shared_bank_<user>.psobank` (online accounts refused: `GET /y/clients`) |
 | Online | players with account, class, lobby, address; kick; announcement to everyone; games | `GET /y/summary`, `GET /y/clients`, `GET /y/client/:id`, `kick`, `announce` |
-| Quests | quests by category, category listed / hidden, enabled expression, versions; reload | `GET /y/data/quests`, `reload quests` |
+| Quests | quests by category, category listed / hidden, enabled expression, versions; **Open in editor** per quest, **New quest**; reload | `GET /y/data/quests`, `reload quests`; files: `GET /quests/files`, `GET /quests/file/<folder>/<name>`, `POST /quests/publish` (see Quest editor) |
 | Teams | list (read-only); reload | `GET /y/teams`, `reload teams` |
 | Data | read-only drop tables, shop tables, level / mag tables, stack limits; reload tables | `GET /y/data/...`, `reload drop-tables level-tables item-definitions` |
 | Config | view the effective config; change a few keys | `GET /y/config`, edit of `config.json` + `reload config` |
@@ -171,6 +175,62 @@ inventory at `+0x0`, the player stats at `+0x34C`, the bank at `+0x6F8`). Rules:
 character is read back by a real BB login (level, EXP, meseta, stats and
 technique level).
 
+## Quest editor: open and publish
+
+The Quests tab has **Open in editor** on every quest that has Blue Burst files
+(`q058-bb-e.bin` + `q058-bb.dat`, or a `.qst`, found by the quest number in
+the file name) and a **New quest (editor)** link. They open
+`/questeditor.html` in a new tab (`?qst=<url>&dat=<url>`), which fetches the
+files from the panel with the admin cookie (same origin; the cookie's
+`Path=/admin` is sent to `/admin/api/...`). The editor itself is a static
+page, served publicly by `bridge/server.mjs` next to `/` (no secrets in it, it
+edits files in the browser); only its **Publish to server** button needs the
+admin session, and the button shows only when `/admin/api/session` says there
+is one.
+
+Routes (all behind the session; no CORS):
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/quests/files` | per existing category folder of `system/quests`, the `.bin` / `.dat` / `.qst` files (name, size). Symlinks and odd names are left out |
+| `GET /api/quests/file/<folder>/<name>` | the bytes of one such file (at most 8 MB), `application/octet-stream`, `nosniff`, attachment |
+| `POST /api/quests/publish` | `{ category, name, bin, dat }` or `{ category, name, qst }` (base64), plus `confirm`. See below |
+
+Publishing, in order:
+
+1. The usual POST rules (session, `X-CSRF-Token`, same-origin `Origin`, JSON).
+   The body may be up to 6 MB (each file at most 2 MB decoded).
+2. `category` must be the name of an **existing** directory directly under
+   `system/quests` (`[A-Za-z0-9_-]{1,48}`, not a symlink; never created).
+   `name` must match `^[A-Za-z0-9_.-]{1,64}$`, not start with `.` or contain
+   `..`, end in `.bin` or `.qst`, and carry the Blue Burst tag newserv reads
+   (`q9001-bb-e.bin`, `q9001-bb.qst`). For a `.bin` the server names the `.dat`
+   itself (`q9001-bb.dat`), so the pair always matches. A name for another
+   version (`-gc`, `-dc`) is refused: the panel cannot overwrite those.
+3. `confirm` must equal `<category>/<name>` (409 otherwise, like the other
+   destructive actions; the editor asks you to type it).
+4. The bytes are validated before anything is written: base64 check, size
+   limit, PRS decompression with a 4 MB output cap (a PRS stream can expand
+   about 100x), then the client's own parsers (`parseQuestBin`, `parseQuestDat`,
+   `parseQst`, loaded from `client/src/formats` through Node's type stripping):
+   a Blue Burst `.bin` with the full header, a header size that fits the file,
+   a `.dat` that parses, and a write-and-parse round trip. Failure is 422 and is
+   audit-logged as `denied`.
+5. Existing files are copied to the backup folder (outside `system/quests`;
+   newest 30 per file kept), the new files are written to `<name>.admin-tmp`
+   and renamed into place. The resolved path is checked to be a direct child of
+   the real category folder, and an existing symlink at the target is refused.
+6. `reload quests` goes through the shell proxy. If it fails, the previous
+   files are put back (new ones removed) and the error is returned.
+7. The audit log gets `quest.publish` with the target, file names and sizes,
+   quest number and name. File contents are never logged.
+
+What it does not do: delete quests, edit the quest's `.json` (category flags,
+enabled expressions) or write other game versions. Quests already loaded by
+players in a game are not changed; the menu shows the new version after the
+reload. The quest number newserv shows is the one in the file name
+(`q9001`), not the header's.
+
 ## What newserv cannot manage (so the panel does not)
 
 - **Characters** online (no command), character creation / deletion, names,
@@ -180,8 +240,9 @@ technique level).
 - **Teams** (no team commands: read-only).
 - **Quests**: no enable / disable switch; they are files under
   `system/quests` (and a quest is shown by its category flags and its
-  `EnabledExpression` in the quest's `.json`). Add or remove the files, then
-  reload.
+  `EnabledExpression` in the quest's `.json`). The panel can publish a Blue
+  Burst quest from the editor (above); removing one, or changing its flags,
+  is still done on the server, then reload.
 - **Drop and item tables** and shops: files (`system/tables`);
   the panel only reads them and reloads. EXP and drop-rate multipliers are
   in Config.
@@ -194,7 +255,9 @@ technique level).
 
 `node tests/admin.test.ts` starts the module against a fake newserv and checks
 authentication, lockout, session expiry, CSRF, the absence of CORS, input
-validation, the mapping to newserv routes / commands, the audit log, and
-character / bank / config editing. `node tests/admin.live.ts` runs everything
+validation, the mapping to newserv routes / commands, the audit log,
+character / bank / config editing, and the quest routes (listing, reading,
+publishing: bad names and categories, path traversal, symlinks, oversize,
+PRS bomb, invalid quests, CSRF, confirmation, backup, rollback, mirror). `node tests/admin.live.ts` runs everything
 against a real `vendor/newserv/build/newserv` started on random loopback ports
 in a temporary copy of its system folder (it never touches `system/players`).

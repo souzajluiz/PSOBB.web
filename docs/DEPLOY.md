@@ -77,7 +77,7 @@ newer than the pinned commit must be tested with this client first.
 | `ADMIN_PASSWORD` / `ADMIN_PASSWORD_HASH` | (unset: no admin panel) | enables `/admin` (see below and `docs/ADMIN.md`) |
 | `ADMIN_TRUST_PROXY` | off | `1` behind a TLS proxy (needed for the admin login over HTTPS) |
 | `NEWSERV_HTTP` | `127.0.0.1:5080` | newserv's HTTP API, loopback only |
-| `ADMIN_AUDIT_LOG`, `ADMIN_CONFIG_MIRROR` | on the `/data/newserv` volume | audit log, config copy |
+| `ADMIN_AUDIT_LOG`, `ADMIN_CONFIG_MIRROR`, `ADMIN_QUEST_BACKUP`, `ADMIN_QUESTS_MIRROR` | on the `/data/newserv` volume | audit log, config copy, quest backups, published quests (copied back at start) |
 
 ## Admin panel
 

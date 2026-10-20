@@ -1,5 +1,44 @@
 # Devlog
 
+## 2026-10-20: Quest editor connected to the admin panel
+
+**What changed:** The Quests tab has "Open in editor" (per quest with BB
+files) and "New quest"; the editor has "Publish to server". New
+`bridge/admin-quests.mjs` (list / read / validate / write quest files) behind
+three admin routes: `GET /quests/files`, `GET /quests/file/<folder>/<name>`,
+`POST /quests/publish`. `bridge/server.mjs` now also serves
+`/questeditor.html` (the Dockerfile already shipped the build; it also copies
+`client/src/formats` now, which the validation imports).
+
+**Why:** the user wants edited quests playable after publishing, without
+copying files by hand.
+
+**Decisions:**
+- The editor is public (static, no secrets); the quest bytes route and the
+  publish route are behind the session. The cookie has `Path=/admin`, which
+  the editor's fetches to `/admin/api/...` match, so no postMessage is needed.
+- Validation reuses the client parsers through Node type stripping (the
+  bridge stays plain `.mjs`): `prsDecompress` got an optional output cap and
+  `parseQst` caps sizes (a 5 MB PRS bomb is 422, not memory).
+- Names must carry `-bb` (so a GC/DC file cannot be overwritten) and the
+  server derives the `.dat` name from the `.bin` name. The category must
+  already exist (never created). Backups go outside `system/quests`; a failed
+  `reload quests` restores the old files.
+- Docker: published quests are mirrored to `/data/newserv/quests-published`
+  and copied back by the entrypoint (the image's `system/quests` is not a
+  volume), like the config mirror.
+- newserv shows the quest number from the file name (`q9001`), not the
+  header's (the editor's blank quest has header number 1).
+
+**Verified:** `tests/admin.test.ts` (316 checks incl. traversal, symlinks,
+bad names / categories, oversize, PRS bomb, CSRF, no confirm, unauthenticated,
+backup, rollback, mirror); `tests/admin.live.ts` (52/52): a real newserv
+loaded the quest published through the panel (260 -> 261 quests);
+`tests/questeditor.test.ts` (publish request building); tsc clean apart from
+the two @capacitor errors. **Not verified:** the editor/panel UI in a browser
+(no Chrome check was done), the Docker image build, a player actually
+starting the published quest in game.
+
 ## 2026-10-20: Episode 2 FSMs: Gibbons, Mericarol family
 
 **What changed:** Ul Gibbon / Zol Gibbon (`TObjEneBm5GibonU`) and Mericarol /

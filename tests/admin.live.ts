@@ -14,6 +14,8 @@ import net, { type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createAdmin } from '../bridge/admin.mjs';
+import { buildPackage } from '../client/src/questeditor/io.ts';
+import { QuestDocument } from '../client/src/questeditor/model.ts';
 import { BBSession } from '../client/src/net/bbsession.ts';
 import type { Transport } from '../client/src/net/bbconnection.ts';
 
@@ -239,6 +241,18 @@ try {
   const quests = await call('GET', '/quests');
   check(quests.json.total > 100 && quests.json.categories.some((c: any) => c.quests.length > 0), `quests: ${quests.json.total} quests in ${quests.json.categories.length} categories from /y/data/quests`);
   check((await call('POST', '/reload', { items: ['quests', 'accounts', 'teams'] })).status === 200, 'reload quests accounts teams (shell reload)');
+
+  // Publish a quest made by the editor's writer: the real newserv must load it after the panel's reload.
+  const qpkg = buildPackage(QuestDocument.blank({ episode: 0, name: 'Panel Published' }));
+  const b64 = (u: Uint8Array) => Buffer.from(u).toString('base64');
+  const pubDir = quests.json.categories.find((c: any) => c.directory === 'retrieval')?.directory ?? 'retrieval';
+  const pub = await call('POST', '/quests/publish', { category: pubDir, name: 'q9001-bb-e.bin', bin: b64(qpkg.bin), dat: b64(qpkg.dat), confirm: `${pubDir}/q9001-bb-e.bin` });
+  check(pub.status === 200, `publish a quest through the panel (${pub.status} ${JSON.stringify(pub.json)})`);
+  const questsAfter = await call('GET', '/quests');
+  check(questsAfter.json.total === quests.json.total + 1, `the real newserv loaded the published quest (${quests.json.total} -> ${questsAfter.json.total})`);
+  check(questsAfter.json.categories.some((c: any) => c.quests.some((x: any) => x.number === 9001 && x.name === 'Panel Published')), 'it is listed by number and name');
+  const qfiles = await call('GET', '/quests/files');
+  check(qfiles.json.directories.find((d: any) => d.dir === pubDir)?.files.some((f: any) => f.name === 'q9001-bb.dat'), 'the file list shows the published .dat');
   check((await call('GET', '/data/rare-tables')).json.data.length > 0, 'data: rare tables listed');
   check((await call('GET', '/data/common-tables')).status === 200, 'data: common tables listed');
   check((await call('GET', '/data/tekker-table')).status === 200, 'data: tekker table');

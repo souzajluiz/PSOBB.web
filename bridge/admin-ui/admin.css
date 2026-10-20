@@ -135,3 +135,4 @@ pre { background: rgba(0, 0, 0, .35); border: 1px solid var(--line-soft); border
   * { transition: none !important; }
   button:active { transform: none; }
 }
+a.btn { display: inline-block; text-decoration: none; }

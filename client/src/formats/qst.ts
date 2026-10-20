@@ -66,6 +66,11 @@ const readCString = (d: Uint8Array, offset: number, max: number): string => {
   return s;
 };
 
+// Limits for untrusted input (the admin panel's quest upload): no real quest
+// comes near them.
+const QST_MAX_COMPRESSED = 8 * 1024 * 1024;
+const QST_MAX_DECOMPRESSED = 16 * 1024 * 1024;
+
 export function parseQst(bytes: Uint8Array): ParsedQst {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   interface Pending {
@@ -112,6 +117,7 @@ export function parseQst(bytes: Uint8Array): ParsedQst {
   }
 
   const files: QstFile[] = order.map((p) => {
+    if (p.size > QST_MAX_COMPRESSED) throw new Error(`qst: ${p.filename} claims ${p.size} bytes`);
     const compressed = new Uint8Array(p.size);
     if (inOrder) {
       // Chunk indexes all zero: some tools wrote them that way. Assume order.
@@ -123,7 +129,7 @@ export function parseQst(bytes: Uint8Array): ParsedQst {
     } else {
       for (const b of p.blocks) compressed.set(b.data, b.index * QST_CHUNK_SIZE);
     }
-    return { filename: p.filename, compressed, data: prsDecompress(compressed) };
+    return { filename: p.filename, compressed, data: prsDecompress(compressed, QST_MAX_DECOMPRESSED) };
   });
   const binFile = files.find((f) => f.filename.endsWith('.bin'));
   const datFile = files.find((f) => f.filename.endsWith('.dat'));

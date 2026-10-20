@@ -421,13 +421,44 @@ views.online = async (root, _arg, select) => {
 };
 
 // Quests
+
+// The BB files of a quest: newserv names them q058-bb-e.bin + q058-bb.dat (or a
+// .qst); the number in the name is the quest number.
+function questFiles(files, number) {
+  const num = (name) => {
+    const m = /^[A-Za-z]?0*(\d+)-bb(?:-([a-z]))?\.(bin|dat|qst)$/.exec(name);
+    return m && Number(m[1]) === number ? { lang: m[2] ?? '', ext: m[3] } : null;
+  };
+  const found = files.map((f) => ({ f, m: num(f.name) })).filter((x) => x.m);
+  const qst = found.find((x) => x.m.ext === 'qst');
+  const bins = found.filter((x) => x.m.ext === 'bin').sort((a, b) => (a.m.lang === 'e' ? -1 : 0) - (b.m.lang === 'e' ? -1 : 0));
+  const dat = found.find((x) => x.m.ext === 'dat');
+  if (bins.length && dat) return { bin: bins[0].f.name, dat: dat.f.name };
+  if (qst) return { qst: qst.f.name };
+  return null;
+}
+
+// The editor opens in a new tab on the same origin, so it shares the session
+// cookie (Path=/admin) and fetches the files from the authenticated route.
+function openInEditor(dir, found) {
+  const url = (name) => `/admin/api/quests/file/${encodeURIComponent(dir)}/${encodeURIComponent(name)}`;
+  const params = found.qst ? `qst=${encodeURIComponent(url(found.qst))}` : `qst=${encodeURIComponent(url(found.bin))}&dat=${encodeURIComponent(url(found.dat))}`;
+  window.open(`/questeditor.html?${params}&admin=1`, '_blank', 'noopener');
+}
+
 views.quests = async (root, _arg, select) => {
-  const q = await api('GET', '/quests');
-  root.replaceChildren(
-    h('div', { class: 'card' }, h('h2', null, `Quests (${q.total})`), h('p', { class: 'muted' }, `Loaded from ${q.directory}. Add or remove quest files on the server, then reload. ENABLED expressions are quest-flag conditions: a quest shows in the menu only when its category is listed and its expression is true for the player.`),
-      h('button', { class: 'primary', onclick: () => run(async () => { await api('POST', '/reload', { items: ['quests'] }); toast('Quests reloaded'); select('quests'); }) }, 'Reload quests')),
+  const [q, f] = await Promise.all([api('GET', '/quests'), api('GET', '/quests/files').catch(() => ({ directories: [] }))]);
+  const filesByDir = new Map(f.directories.map((d) => [d.dir, d.files]));
+  root.append(
+    h('div', { class: 'card' }, h('h2', null, `Quests (${q.total})`), h('p', { class: 'muted' }, `Loaded from ${q.directory}. Edit a quest in the quest editor and use its Publish to server action, or add or remove the files on the server and reload. ENABLED expressions are quest-flag conditions: a quest shows in the menu only when its category is listed and its expression is true for the player.`),
+      h('button', { class: 'primary', onclick: () => run(async () => { await api('POST', '/reload', { items: ['quests'] }); toast('Quests reloaded'); select('quests'); }) }, 'Reload quests'),
+      ' ', h('a', { class: 'btn', href: '/questeditor.html?admin=1', target: '_blank', rel: 'noopener' }, 'New quest (editor)')),
     ...q.categories.map((c) => h('details', { class: 'card' }, h('summary', null, `${c.name} `, h('span', { class: 'pill' }, `${c.quests.length} quests`), h('span', { class: `pill ${c.listed ? 'ok' : 'bad'}` }, c.listed ? 'listed in menus' : 'hidden'), c.directory ? h('span', { class: 'muted mono' }, c.directory) : null),
-      table(['#', 'Name', 'Episode', 'Players', 'Enabled when', 'Drops', 'Versions'], c.quests.map((x) => [x.number, x.name, x.episode, x.maxPlayers, h('span', { class: 'mono' }, x.enabledExpression ?? 'always'), x.dropMode ?? '-', x.versions.length]), 'No quests.'))));
+      table(['#', 'Name', 'Episode', 'Players', 'Enabled when', 'Drops', 'Versions', ''], c.quests.map((x) => {
+        const found = c.directory ? questFiles(filesByDir.get(c.directory) ?? [], x.number) : null;
+        return [x.number, x.name, x.episode, x.maxPlayers, h('span', { class: 'mono' }, x.enabledExpression ?? 'always'), x.dropMode ?? '-', x.versions.length,
+          found ? h('button', { onclick: () => openInEditor(c.directory, found) }, 'Open in editor') : h('span', { class: 'muted' }, 'no BB file')];
+      }), 'No quests.'))));
   return true;
 };
 

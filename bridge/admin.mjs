@@ -6,7 +6,9 @@
 //     (add-account, update-account, add-license, kick, announce, reload ...).
 // Only character and bank files, which newserv has no command for, are edited
 // directly, offline and with a backup (admin-chars.mjs); config.json keys are
-// edited from a short allow-list followed by `reload config`.
+// edited from a short allow-list followed by `reload config`. Quest files
+// (.bin/.dat/.qst) are listed, read and published under system/quests only
+// (admin-quests.mjs: validated names, parsed before writing, backed up).
 //
 // Security (the panel is meant for a public host): disabled unless
 // ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is set; constant-time login with
@@ -25,6 +27,7 @@ import {
   CHAR_CLASSES, SECTION_IDS, TECHNIQUES, CharError, USER_RE, applyBankPatch, applyCharacterPatch, charPath, listCharacterSlots,
   loadBank, loadCharBuffer, parseCharacter, summarizeCharacter, writeBank, writeCharacter,
 } from './admin-chars.mjs';
+import { MAX_BODY_BYTES, QuestError, checkCategoryName, checkPublishName, createQuestStore } from './admin-quests.mjs';
 
 const here = import.meta.dirname;
 
@@ -180,6 +183,14 @@ export function createAdmin(options = {}) {
   const configFile = resolve(options.configFile ?? resolve(systemDir, 'config.json'));
   const configMirror = options.configMirror ?? env.ADMIN_CONFIG_MIRROR ?? null;
   const auditFile = resolve(options.auditFile ?? env.ADMIN_AUDIT_LOG ?? resolve(systemDir, '../admin-audit.log'));
+  const questStore = createQuestStore({
+    questsDir: options.questsDir ?? resolve(systemDir, 'quests'),
+    backupDir: options.questBackupDir ?? env.ADMIN_QUEST_BACKUP ?? resolve(systemDir, '../quest-backups'),
+    mirrorDir: options.questsMirror ?? env.ADMIN_QUESTS_MIRROR ?? null,
+    formatsDir: options.formatsDir ?? env.ADMIN_FORMATS_DIR ?? resolve(here, '../client/src/formats'),
+    log,
+    now: options.now,
+  });
   const uiDir = resolve(options.uiDir ?? resolve(here, 'admin-ui'));
   const adminUser = env.ADMIN_USER || 'admin';
   const password = env.ADMIN_PASSWORD || '';
@@ -355,23 +366,36 @@ export function createAdmin(options = {}) {
     'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   };
 
+  // A route may answer with raw bytes (quest files) instead of JSON.
+  class Raw {
+    constructor(bytes, type = 'application/octet-stream', name = 'file') {
+      this.bytes = bytes;
+      this.type = type;
+      this.name = name;
+    }
+  }
+
   function reply(res, status, payload, headers = {}) {
+    if (payload instanceof Raw) {
+      res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': payload.type, 'Content-Length': payload.bytes.length, 'Content-Disposition': `attachment; filename="${payload.name}"`, ...headers });
+      return res.end(payload.bytes);
+    }
     const body = Buffer.from(JSON.stringify(payload));
     res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length, ...headers });
     res.end(body);
   }
 
-  function readBody(req) {
+  function readBody(req, maxBytes = 65536) {
     return new Promise((res, rej) => {
       const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
       if (type !== 'application/json') return rej(new HttpError(415, 'Content-Type must be application/json'));
       const declared = Number(req.headers['content-length'] ?? 0);
-      if (declared > 65536) return rej(new HttpError(413, 'body too large'));
+      if (declared > maxBytes) return rej(new HttpError(413, 'body too large'));
       const chunks = [];
       let size = 0;
       req.on('data', (c) => {
         size += c.length;
-        if (size > 65536) {
+        if (size > maxBytes) {
           rej(new HttpError(413, 'body too large'));
           req.destroy();
           return;
@@ -855,6 +879,47 @@ export function createAdmin(options = {}) {
     return { directory: q.Directory, categories: [...byCat.values()].sort((a, b) => a.name.localeCompare(b.name)), total: q.Quests.length };
   });
 
+  // ---- quest files (admin-quests.mjs) ----
+  route('GET', '/quests/files', {}, async () => ({ directories: questStore.listFiles() }));
+
+  route('GET', '/quests/file/([A-Za-z0-9_-]{1,48})/([A-Za-z0-9_.-]{1,64})', {}, async ({ params }) => {
+    const bytes = questStore.readFile(params[0], params[1]);
+    return new Raw(bytes, 'application/octet-stream', params[1]);
+  });
+
+  route('POST', '/quests/publish', { maxBody: MAX_BODY_BYTES }, async ({ body, actor }) => {
+    plainObject(body, 'body');
+    const category = checkCategoryName(body.category);
+    const name = checkPublishName(body.name);
+    const target = `${category}/${name}`;
+    requireConfirm(body, target);
+    let plan;
+    try {
+      plan = await questStore.plan(body);
+    } catch (e) {
+      if (e instanceof QuestError) audit(actor, 'quest.publish', `${target} rejected: ${e.message}`, 'denied');
+      throw e;
+    }
+    let result;
+    try {
+      result = questStore.commit(plan);
+    } catch (e) {
+      audit(actor, 'quest.publish', `${target} write failed`, 'error');
+      log(`quest write failed: ${e.message}`);
+      throw new HttpError(500, 'could not write the quest files');
+    }
+    try {
+      await nsShell('reload quests');
+    } catch (e) {
+      questStore.rollback(plan, result);
+      audit(actor, 'quest.publish', `${target}: reload failed, files restored`, 'error');
+      throw e;
+    }
+    const label = String(plan.info.name).replace(/[^\x20-\x7e]/g, '?').slice(0, 40);
+    audit(actor, 'quest.publish', `${target} files=${result.files.map((f) => `${f.name}(${f.size}${f.replaced ? ',replaced' : ',new'})`).join(' ')} quest=${plan.info.questNumber} "${label}"`);
+    return { ok: true, files: result.files, quest: plan.info };
+  });
+
   route('POST', '/reload', {}, async ({ body, actor }) => {
     plainObject(body, 'body');
     need(Array.isArray(body.items) && body.items.length > 0 && body.items.length <= 14, 'items must be a list');
@@ -995,7 +1060,7 @@ export function createAdmin(options = {}) {
       } else if (!r.opts.public) {
         need(session, 'login required', 401);
       }
-      const body = r.method === 'POST' ? await readBody(req) : undefined;
+      const body = r.method === 'POST' ? await readBody(req, r.opts.maxBody) : undefined;
       const result = await r.handler({ req, res, params, query: url.searchParams, body, session, actor, ip });
       return reply(res, 200, result);
     } catch (e) {
@@ -1004,7 +1069,7 @@ export function createAdmin(options = {}) {
         const headers = extra.retryAfter ? { 'Retry-After': String(extra.retryAfter) } : {};
         return reply(res, e.status, { error: e.message, ...extra }, headers);
       }
-      if (e instanceof CharError) return reply(res, e.status, { error: e.message });
+      if (e instanceof CharError || e instanceof QuestError) return reply(res, e.status, { error: e.message });
       log(`internal error: ${e?.stack ?? e}`);
       return reply(res, 500, { error: 'internal error' });
     }
