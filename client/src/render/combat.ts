@@ -48,6 +48,7 @@ import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../c
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
+import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
@@ -285,6 +286,13 @@ const OWN_FSM = new Set([
 // The Poison Lily has no confused branch; the Dark Belra spins and throws
 // instead (combat/enemyfsmruins.ts BelraAi).
 const CONFUSION_AWARE = new Set(['TObjEneBeast', 'TObjEneShark', 'TObjEneDimedian', 'TObjEneLappy', 'TObjEneMoja', 'TObjEneBalClawBody', 'TObjEneBalClawClaw', 'TObjEneSaver', 'TObjEneMerillLia', 'TObjEneDolmOlm']);
+// Episode 2, third batch (combat/enemyfsmep2c.ts): the Sinow family, Deldepth
+// and Delbiter share the enemy base's FindDerolleTarget_00521010 (confusion
+// aware: vtable +0x194 widens the search to the other enemies).
+for (const n of ['TObjEneMe3StelthReal', 'TObjEneMe3SinowZoaReal', 'TObjEneDelDepth', 'TObjEneDellBiter']) {
+  OWN_FSM.add(n);
+  CONFUSION_AWARE.add(n);
+}
 // A Bulclaw's child slots (newserv: 4 CLAW children).
 const BULCLAW_CLAWS = 4;
 // A Pan Arms (buried, emerging, split), a hidden Hidoom / Migium, a puddle
@@ -681,6 +689,22 @@ export class CombatView {
         // Dolmdarl), the set entry's param1..5 their chances and ranges.
         else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        // Sinow Berill / Spigell: MovementData rows 6 / 0x10 (0x00929c00), not the ResistData index.
+        else if (className === 'TObjEneMe3StelthReal') {
+          const spigell = head.slot.type === 'SINOW_SPIGELL';
+          const mv = params ? params.movement(difficulty, spigell ? 0x10 : 6) : null;
+          const y0 = instance.placed.world[1];
+          const hang = Math.max(0, y0 - (this.opts.ground?.(at.x, at.z, y0 + 30) ?? y0));
+          ai = new SinowBerillAi({ ...at, params: setParams, movement: mv, attack, ultimate, hang, phase: head.index, rng: () => this.rng() });
+        }
+        // Sinow Zoa / Zele: MovementData rows 67 / 68.
+        else if (className === 'TObjEneMe3SinowZoaReal') {
+          const mv = params ? params.movement(difficulty, head.slot.type === 'SINOW_ZELE' ? 68 : 67) : null;
+          const y0 = instance.placed.world[1];
+          const hang = Math.max(0, y0 - (this.opts.ground?.(at.x, at.z, y0 + 30) ?? y0));
+          ai = new SinowZoaAi({ ...at, params: setParams, movement: mv, attack, ultimate, hang, phase: head.index, rng: () => this.rng() });
+        } else if (className === 'TObjEneDelDepth') ai = new DeldepthAi({ ...at, movement, attack, param1: setParams[0], ultimate, phase: head.index, rng: () => this.rng() });
+        else if (className === 'TObjEneDellBiter') ai = new DelbiterAi({ ...at, params: setParams, movement, attack, ultimate, phase: head.index, rng: () => this.rng() });
         else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
         else if (className === 'TBoss2DeRolLe') {
@@ -1137,6 +1161,8 @@ export class CombatView {
       if (ai instanceof DarkFalzPartAi) continue;
       // A part's enemy is moved by the control (syncVolopt).
       if (ai instanceof VoloptPartAi) continue;
+      if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
@@ -1172,6 +1198,8 @@ export class CombatView {
       if (r.heal) this.enemyResta(e, r.heal.level);
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
       if (ai instanceof SinowAi) this.sinowTick(e, ai);
+      if (ai instanceof SinowZoaAi)
+        for (const b of ai.buffs.splice(0)) if (b.clientId === this.game.selfId) this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
       if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
         const b = ai.buff;
@@ -4611,6 +4639,7 @@ export class CombatView {
         // The hit flag runs the hit handler (vtable +0x100) here too: the
         // Sinow's sends its mirage clones away, a clone leaves.
         if (e.ai instanceof SinowAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof ExeBrain) e.ai.onDamage(clientId); // the enemy base's hit handler (+0x100) runs here too
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
       return;
