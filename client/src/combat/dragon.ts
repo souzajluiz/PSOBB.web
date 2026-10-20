@@ -52,14 +52,16 @@
 // set_monster_spawn_initdata_as_dead), the exe's kill sends.
 //
 // Not reproduced: the intro's camera, particles and sounds, the model-node
-// reads (GetPlayerYPosition 0x00422768, the mouth and foot nodes), the
-// per-part hit boxes (0x004269f8), the ground follower's dust (0x00427984) and
-// the player-controlled dragon. Heights come from the altitude registers.
+// reads other than the tail's (GetPlayerYPosition 0x00422768, the mouth and
+// foot nodes), the tail boxes' direction vector (+0xc4 / +0xcc, a knockback
+// the hit callback reads), the ground follower's dust (0x00427984) and the
+// player-controlled dragon. The hit boxes are DRAGON_BODY_BOXES and
+// DRAGON_TAIL. Heights come from the altitude registers.
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
-import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 
 const BAMS = BAMS_TO_RAD;
 const TWO_PI = Math.PI * 2;
@@ -210,8 +212,6 @@ export const DRAGON_GUESS = {
   mouthHeightFlying: 40, // the head hangs below the flight altitude
   footForward: 35,
   footSide: 30,
-  tailReach: 70,
-  tailRadius: 45,
   stompKnockback: 3,
   landRadiusMin: 60,
   impactRadius: 60,
@@ -222,6 +222,67 @@ export const DRAGON_GUESS = {
   walkMax: 900, // the walk toward a target that keeps running away ends here
   stateMax: 2400, // the leader leaves any state that has lasted this long (a motion shorter than a frame test)
 } as const;
+
+// --- hit boxes ---------------------------------------------------------------
+//
+// The Dragon owns two sets of boxes (collision_box, 0x2c bytes: +0 local
+// position, +0xc radius, +0x18 flags, +0x1c world position).
+//
+// Its body: the ctor 0x00419214 loads 7 boxes from 0x009a39a0 (call
+// 0x0051ff3c, count 7). The table is bss: every position is (0, 0, 0) and the
+// radii are written by the static init 0x00425212..0x0042524e (offset +0xc of
+// each row): 10, 10, 10, 15, 15, 10, 10, flags 0x8003. Nothing in the Dragon's
+// code moves them (no call to 0x00520068 / 0x005200e4 / 0x00520158 from
+// 0x00419000..0x00428000), so the body is a stack of spheres at its origin and
+// the biggest one is 15.
+export const DRAGON_BODY_BOXES = { radii: [10, 10, 10, 15, 15, 10, 10], flags: 0x8003, reach: 15 } as const;
+
+// Its tail: a second object (ctor 0x004269f8, 0xd0 bytes, built by the Dragon's
+// ctor at +0x68c with the node array at +0x4ec) holding 17 boxes of radius 10
+// (the template 0x009a3fc0: flags 0x8003 and +0xc = 10.0, written by the
+// static init 0x00426d74), copied to boxes 1..16 by the ctor. Its update
+// (vtable +4, 0x00426ba8) places box i at the world position of model node
+// DRAGON_NODE_TABLE[15 + i] (0x008fb900), then calls
+// UpdateEntityStateFromThreshold (0x00520304, 30.0): flag 4 (high) when the
+// box is 30 or more above the Dragon's y (+0x3c), flag 2 (low) below, and
+// attacks the players (0x00521eb8 with the context {3.0, 1}, hit list +0xbc,
+// AttackData row 0x00a4373c = the second of 18, 20, 21, 22, 23). The only
+// state that calls the update is the tail swipe (0x004227dc): from its second
+// tick, every tick; the hit list is reset on entering (box active), at the
+// frame 10 crossing and at the frame 23 crossing, so a player can be struck at
+// most three times by one swipe.
+//
+// The nodes are recorded while the model is drawn (0x00424580 +
+// 0x00418d5c): the draw walks the model's nodes depth first with a counter
+// and, when it equals DRAGON_NODE_TABLE[slot], copies the node's world
+// position into the Dragon's array at +0x438 + 12 * slot. Slots 7..11 only
+// when flag 0x80 of +0x3c8 is set, slots 18..31 only when 0x200 is (the tail
+// state sets it; otherwise the last values stay). Verified against
+// bm_boss1_dragon.bml: nodes 72..94 are the tail (a chain along -z with two
+// forks), 40 / 41 / 50 / 51 the feet, 54..58 the neck.
+export const DRAGON_NODE_TABLE: readonly number[] = [
+  0, 8, 10, 40, 41, 50, 51, 54, 55, 56, 57, 58, 67, 70, 71, 72, 74, 76, 79, 80, 81, 82, 83, 84, 85, 88, 89, 90, 91, 92, 93, 94, 100, 102,
+];
+export const DRAGON_TAIL = {
+  count: 17,
+  firstSlot: 15, // box i is slot 15 + i of the node table
+  alwaysSlots: 18, // slots below this are recorded in every state, the rest with flag 0x200
+  recordFlag: 0x200,
+  radius: 10, // 0x009a3fcc, written by 0x00426d74
+  flags: 0x8003,
+  highFrom: 30, // 0x00520304's threshold, y above the Dragon
+  attackRow: 1, // index into [18, 20, 21, 22, 23]: 0x00a4373c holds row 20
+  resetFrames: [10, 23], // the hit list is cleared when the swipe passes these
+  knockback: 3, // the context's first float, 3.0 (the stomp's value too)
+} as const;
+
+export interface DragonTailBox {
+  x: number;
+  y: number;
+  z: number;
+  // The flags of 0x00520304: true is flag 2 (below 30 above the Dragon).
+  low: boolean;
+}
 
 // MovementData row 17 (the Dragon's, g_DragonAnimationSpeedIndices 0x009a3dc8:
 // 17, 18, 19): fparam1 the breath's power, fparam2 the fireballs', fparam3 the
@@ -543,6 +604,9 @@ export class DragonAi extends BrainBase {
   private readonly headProfile = new DragonTrapezoid();
   private targetTimer = 0; // +0x3b8
   private seen = new Set<number>(); // +0x690: the players the trail has hit
+  // The tail object (+0x68c): its 17 boxes and its hit list (+0xbc).
+  readonly tailBoxes: DragonTailBox[] = Array.from({ length: DRAGON_TAIL.count }, () => ({ x: 0, y: 0, z: 0, low: true }));
+  private tailSeen = new Set<number>();
   private rain = 0; // the shared rain generator (seeded from the 6x12's x / z)
   private everLeader: boolean;
   private takeover = false; // (current_attack_info).horiz_dist: the leader changed
@@ -563,6 +627,11 @@ export class DragonAi extends BrainBase {
     this.hp = this.maxHp;
     this.thr = this.threshold();
     this.everLeader = opts.leader();
+    // The ctor 0x00419214 fills the node array with the body's position.
+    for (const b of this.tailBoxes) {
+      b.x = opts.x;
+      b.z = opts.z;
+    }
     // The ctor puts the body in state 0x1d (phase 4) unless it is already dead.
     this.setState(DRAGON_STATE.intro);
   }
@@ -982,8 +1051,10 @@ export class DragonAi extends BrainBase {
         this.c870 = 2;
         return;
       case S.tail:
-        // 0x004227dc: animation 7 with the tail's hit list live.
+        // 0x004227dc: animation 7 with the tail's hit list live (phase 4 resets
+        // the list: GamelistobjectSetChildActive_00426b98).
         this.setSlot(7);
+        this.tailSeen.clear();
         this.air = 0;
         this.alt = 0;
         this.flags = (this.flags & ~0xc80) | 0x200;
@@ -1587,15 +1658,59 @@ export class DragonAi extends BrainBase {
     this.pendingShots.push(new DragonFlame(m[0], m[1], m[2], vx / len, vy / len, vz / len, this.mv.fparam1));
   }
 
-  // 0x004227dc phase 0: the tail swipe; the hit list is live from the start
-  // and again from frame 23. ASSUMED: it sweeps the ground behind the body.
+  // Whether the owner should record the model's nodes this frame (only the
+  // tail swipe reads them).
+  get wantsNodes(): boolean {
+    return this.sid === DRAGON_STATE.tail;
+  }
+
+  // The tail object's update, first half (0x00426ba8): box i goes to the world
+  // position of node DRAGON_NODE_TABLE[15 + i], as the model draw recorded it
+  // (slots from 18 on only with flag 0x200 of +0x3c8; the others keep their
+  // last value), and is low or high against 30 above the body's y.
+  // `read` writes a node's world position into `out` and says whether the
+  // model has that node.
+  recordNodes(read: (node: number, out: [number, number, number]) => boolean, y: number): void {
+    const p: [number, number, number] = [0, 0, 0];
+    for (let i = 0; i < DRAGON_TAIL.count; i++) {
+      const slot = DRAGON_TAIL.firstSlot + i;
+      if (slot >= DRAGON_TAIL.alwaysSlots && !(this.flags & DRAGON_TAIL.recordFlag)) continue;
+      if (!read(DRAGON_NODE_TABLE[slot], p)) continue;
+      const b = this.tailBoxes[i];
+      b.x = p[0];
+      b.y = p[1];
+      b.z = p[2];
+      b.low = !(DRAGON_TAIL.highFrom <= p[1] - y);
+    }
+  }
+
+  // 0x004227dc phase 0: the tail swipe. From the second tick the tail object
+  // updates every tick: its boxes strike the players they touch, once each
+  // until the hit list is reset (the frame 10 and frame 23 crossings).
   private tickTail(): void {
     this.animate();
     this.c86c++;
-    if (this.c86c === 2 || (this.c86c > 1 && this.crossed(23))) {
-      const px = this.x - sinB(this.yaw) * DRAGON_GUESS.tailReach;
-      const pz = this.z - cosB(this.yaw) * DRAGON_GUESS.tailReach;
-      this.strike(px, pz, DRAGON_GUESS.tailRadius, 0);
+    if (this.c86c <= 1) return;
+    if (this.crossed(DRAGON_TAIL.resetFrames[0]) || this.crossed(DRAGON_TAIL.resetFrames[1])) this.tailSeen.clear();
+    this.tailContact();
+  }
+
+  // 0x00521eb8 with the context {3.0, 1}. ASSUMED: only the low boxes touch a
+  // player (the exe tests in 3D and the targets carry no height; the swipe is
+  // low in frames 3..18 and the tip rises well above a player outside them),
+  // and the player's box is the shared 5-unit disc.
+  private tailContact(): void {
+    const r = DRAGON_TAIL.radius + PLAYER_RADIUS;
+    for (const t of this.last) {
+      if (t.dead || this.tailSeen.has(t.clientId)) continue;
+      for (const b of this.tailBoxes) {
+        if (!b.low || Math.hypot(t.x - b.x, t.z - b.z) > r) continue;
+        this.tailSeen.add(t.clientId);
+        this.pendingShots.push(
+          new DragonBurst(t.x, 0, t.z, 0, { kind: 'melee', mult: 1, knockback: DRAGON_TAIL.knockback, attack: DRAGON_TAIL.attackRow }, { color: 0xff6030, size: 2 }, [t.clientId]),
+        );
+        break;
+      }
     }
   }
 

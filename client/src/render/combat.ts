@@ -53,7 +53,7 @@ import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
-import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
+import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
@@ -1568,9 +1568,27 @@ export class CombatView {
       a.paused = true;
       a.setFrame(ai.mframe);
     }
+    // The model draw records the tail's nodes for the next tick's tail object
+    // (combat/dragon.ts recordNodes); only the tail swipe reads them.
+    const tree = ai.wantsNodes ? inst.nodes?.[0] : undefined;
+    if (tree) {
+      root.updateMatrixWorld(true);
+      const v = this.dragonNode;
+      ai.recordNodes((n, out) => {
+        const o = tree[n];
+        if (!o) return false;
+        o.getWorldPosition(v);
+        out[0] = v.x;
+        out[1] = v.y;
+        out[2] = v.z;
+        return true;
+      }, root.position.y);
+    }
     for (const ev of ai.events.splice(0)) this.dragonEvent(e, ai, ev);
     if (r.shots) for (const s of r.shots) this.launchShot(e, s);
   }
+
+  private readonly dragonNode = new THREE.Vector3();
 
   private dragonEvent(e: EnemyRuntime, ai: DragonAi, ev: DragonEvent): void {
     const what = `Dragon E-${e.index.toString(16)}`;
@@ -3655,7 +3673,10 @@ export class CombatView {
       const p = e.instance.root.position;
       const dx = p.x - from.x;
       const dz = p.z - from.z;
-      const dist = Math.hypot(dx, dz);
+      // ASSUMED: a box counts from its surface; the Dragon's seven body boxes
+      // all sit at its origin, the biggest with radius 15 (combat/dragon.ts
+      // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
+      const dist = Math.hypot(dx, dz) - (e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : 0);
       if (dist > maxDist || Math.abs(p.y - from.y) > 40) continue;
       let diff = Math.atan2(dx, dz) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
