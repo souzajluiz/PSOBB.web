@@ -5516,3 +5516,77 @@ frame counts, no state hangs in 20000..40000-tick soaks, remote damage, death);
 `tests/enemyfsm*.test.ts`, `enemystatus.test.ts`, client `tsc --noEmit` (only the two
 missing @capacitor modules). Not checked in Chrome (to do: Seabed / Mines with the
 Online tab, Warp to the Sinow and Delbiter floors).
+
+## Boss leftovers: Belra arms and Saint-Milion spinners
+
+Ephinea `PsoBB.exe`; the JP source tree has no matching C for either, so the dump was the
+only source.
+
+**Dark Belra's thrown arms (done).** The arm was a purple ball at an assumed hand. Now
+(`combat/enemyshots.ts` `BelraArm`, `combat/enemyfsmruins.ts` `BelraAi`, `render/combat.ts`):
+- **Drawing** (arm render 0x00539e5c, flight 0x00539c7c, position 0x00539b5c): the arm model
+  `re7_b1_larm.nj` / `re7_b1_rarm.nj` (model = arm id + 1) at the arm's ground point lifted by
+  its height above ground, at least 10 (`belra_arm_y_offset` 0x009230b4), turned by the heading
+  it was thrown with (+0x60), scaled (s, 1, s) with the same s that grows 0.15 a frame to 2.
+  The enemy model's two arm parts are now `place: 'world'` (they used to sit under the
+  body), and `launchShot` moves the part named in `ShotLook.model` through `EnemyShot.pose()`
+  instead of a ball. The state-2 tail of the arm (one frame at speed 0.2, the effect object
+  at +0xf8 with step inf) is not drawn: the arm vanishes when its flight ends.
+- **The hand** (init_belra_global_config 0x00538e28 tail, throw 0x00537e64): the node origin
+  of node 0x21 at motion 3 frame 30 (arm 0) / node 0x38 at motion 5 frame 29 (arm 1) in model
+  space, + (0, 20, -4) (`g_BelraModelYOffset` 0x00922f40, `g_BelraModelZOffset` 0x00922f44),
+  x / z turned by the heading, added to the body position. `BELRA.handNode` (and
+  `handNodeUltimate`, the `_a` model's motions put the hands elsewhere) were read off the
+  models with the project's own node walk; `tests/enemies.test.ts` re-derives them. This
+  replaces the assumed "12 to the side, 20 up", and the right arm (the first one thrown)
+  is on the model's -x side: the old sign was backwards.
+- **The body without its arm** (EnemyRender 0x00536d4c, flags 0x420 + arm * 4): bit 1 from
+  the launch to the end of the arm's flight hides the polygons of the arm's first and last node
+  (0x21 / 0x31, 0x38 / 0x48: the only two with polygons in each 17-node subtree). `BelraAi.armGone`
+  says which; `render/combat.ts` `belraTick` collapses the subtree's root bone (33 / 56) while it
+  is set, from the body animator's `onFrame`.
+- **The regrow** (+0x404, class vtable 0x00aff758): started at the launch (value 0), `+0x14`
+  (0x00512404) adds the step once a frame in the throw's sub 2 and finishes at >= 2.0
+  (0x0092057c). The step is 0.04 (0x3d23d70a, base ctor 0x0057946c) and 2 / 10 in Ultimate
+  (vtable +4 0x00512314 with 10, the ctor's tail): 51 frames in Normal, 10 in Ultimate (float32
+  sums). It was an ASSUMED 30. Leaving the throw clears the flags (exit of 0x00537e64).
+
+**Saint-Milion's 16 "spinners" (decoded, not driven).** They are the boss's 16 tentacle
+entities (`SaintEmilionEntity`, ctor 0x0076dfec, vtable 0x00b43ca0), each a full enemy
+(battle params, hit box, lock-on, minimap icon) in four groups of four: slot i & 3 == 0 leads
+(sub-id 0, starts in action 0), the other three follow (sub-id 1, action 10). All start hidden
+(flag 0x20) and wait for the boss. `combat/saintmilion.ts` holds what the exe says about them:
+the 17-row action table (0x009f78e0), the animation table (0x009f7820: motion, speed, mode;
+negative speed is played backwards by hand from the last frame), the procedural pose
+(0x0076d138: z in 0..50 moves nodes 3 and 8 along their local x, x in 0..1 scales nodes 46, 49,
+52 and 55 by 1 - 0.9 x / 1 - 0.1 x / 1 - 0.9 x, with the per-flag rates), a lead's random spot
+(0x0076e48c: angle (slot * 0x1000 + param) & 0xffff, distance 100 + rand16 * 0.0030517578125,
+x < 0 stretched 1.5) and a follower's (0x0076e5e8: 50 from the lead at ((slot & 3) * 0x5555 +
+param) & 0xffff, accepted when ground exists, no wall lies between and it is 30 from the avoided
+spot). `tests/saintmilion.test.ts` is new.
+- **The motion puzzle is solved:** the six motions after the first of
+  `bm_ene_boss09_tentacle.bml` key the first 32 of the model's 59 nodes (they parse with a node
+  count of 32, motion 0 with 59); the other nodes keep their bind pose except for the
+  procedural pose above. `EnemyMotionSpec.nodes` lets a part play such a motion
+  (`tests/enemies.test.ts`). The earlier "sub-tree through 0x009F5B20" belongs to the boss's own
+  parts, not these entities.
+- The enemy model now builds all 16 hidden parts (`spinner 0..15`, model = the boss variant)
+  instead of one. No motion is attached: which animation an entity plays is the boss's choice.
+
+**Assumed:** the ground under a flying arm is flat (its height stays the launch height); the
+particle effects 0xdd / 0x150 that trail the arm and the regrow's fade shader are not drawn
+(the arm reappears plain); the Ultimate hand set is picked by difficulty 3 like the brain's
+`ultimate`, not by "online" as `pick` does; Saint-Milion: which model an entity draws (+0x370
+comes from vtable +0x14c 0x004adce0, not in the dump; the boss variant is used), the rotation
+convention of the placements (same as the models' yaw).
+
+**Left:** the Saint-Milion boss itself (there is no brain for it: the entities are never
+woken, moved or shown; its action handlers 0x0076d2bc .. 0x0076d6d0, the per-action z / x
+rates in 0x00a9b0e0 / e4 / e8 and the battle params of the entities are not decoded), and with
+it the pose's draw hook (`SPINNER_Z` / `SPINNER_X` are data only); the other Belra effect
+objects (arm trail particles, regrow shader).
+
+**Checks:** `node tests/enemyfsmruins.test.ts` (the hand, the pose, the 51 / 10 frame regrow),
+`tests/enemies.test.ts` (hand nodes against both models, tentacle motions, the 16 parts),
+`tests/saintmilion.test.ts`, client `tsc --noEmit` (only the two missing @capacitor modules).
+Not checked in Chrome.

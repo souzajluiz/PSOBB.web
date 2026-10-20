@@ -15,6 +15,8 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { enemyKind, parseEnemySets, type EnemySet } from '../client/src/formats/setdata.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { buildEnemy, EnemyArchive, texturesFromXvm } from '../client/src/render/enemymodel.ts';
+import { BELRA } from '../client/src/combat/enemyfsmruins.ts';
+import { SPINNER_ANIMATIONS, SPINNER_COUNT, SPINNER_MOTION_NODES } from '../client/src/combat/saintmilion.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 let failures = 0;
@@ -155,6 +157,53 @@ for (const tname of ['SetDataTableOn.rel', 'SetDataTableOff.rel']) {
           }
         }
       }
+    }
+  }
+}
+
+// 3. Dark Belra's hand (BELRA.handNode): the origin of node 0x21 at motion 3 frame 30 and of
+//    node 0x38 at motion 5 frame 29, read off the model like init_belra_global_config does.
+for (const [bml, nodes] of [['bm_ene_re7_berura.bml', BELRA.handNode], ['bm_ene_re7_berura_a.bml', BELRA.handNodeUltimate]] as const) {
+  const data = read(bml);
+  check(!!data, `${bml}: missing`);
+  if (!data) continue;
+  const a = new EnemyArchive(bml, data, 3);
+  [[3, 30], [5, 29]].forEach(([motion, frame], arm) => {
+    const b = buildEnemy(a, [{ model: 0, motion: { index: motion, speed: 1, loop: false } }], 0, new Map(), new Map());
+    b.animators[0].setFrame(frame);
+    b.root.updateMatrixWorld(true);
+    const node = b.partNodes[0][BELRA.armRootNode[arm]];
+    const e = node.matrixWorld.elements;
+    for (let k = 0; k < 3; k++) check(Math.abs(e[12 + k] - nodes[arm][k]) < 1e-3, `${bml}: arm ${arm} hand ${[e[12], e[13], e[14]]} vs ${nodes[arm]}`);
+  });
+}
+
+// 4. Saint-Milion's tentacle archive: three 59-node models whose motions key the first 32 nodes
+//    (motion 0: all 59), and the animation table points at motions that exist.
+{
+  const data = read('bm_ene_boss09_tentacle.bml');
+  check(!!data, 'bm_ene_boss09_tentacle.bml: missing');
+  if (data) {
+    const a = new EnemyArchive('bm_ene_boss09_tentacle.bml', data, 3);
+    for (let m = 0; m < a.motionCount; m++) {
+      const nodes = m === 0 ? 59 : SPINNER_MOTION_NODES;
+      try {
+        const motion = a.motion(m, nodes);
+        check(motion.nodes.length === nodes, `tentacle motion ${m}: ${motion.nodes.length} keyed nodes`);
+      } catch (err) {
+        check(false, `tentacle motion ${m}: ${(err as Error).message}`);
+      }
+    }
+    for (const [i, an] of SPINNER_ANIMATIONS.entries()) check(an.motion < a.motionCount, `spinner animation ${i}: motion ${an.motion}`);
+    // A 32-node motion plays on the 59-node tree (the other nodes keep their bind pose).
+    for (const variant of [0, 1]) {
+      const spec = enemyModelFor({ kind: 'enemy', type: 0x119, index: 0, numChildren: 0, section: 0, wave: 0, wave2: 0, unknownA1: 0, params: [0, 0, 0, 0, 0, variant, 0] } as unknown as EnemySet, { area: 0x2c, episode: 3, difficulty: 0, lowModels: false, event: 0 });
+      const parts = spec?.parts.filter((p) => p.archive) ?? [];
+      check(parts.length === SPINNER_COUNT && parts.every((p, i) => p.hidden && p.name === `spinner ${i}` && p.model === variant), `Saint-Milion variant ${variant}: ${parts.length} hidden spinner parts`);
+      const part = { ...parts[0], motion: { index: 3, speed: 1, loop: true, nodes: SPINNER_MOTION_NODES } };
+      const b = buildEnemy(a, [part], 0, new Map(), new Map([['bm_ene_boss09_tentacle.bml', a]]));
+      for (let i = 0; i < 30; i++) b.animators[0].update(1 / 30);
+      check(b.animators.length === 1 && b.partNodes[0].length === 59, 'a 32-node motion drives the 59-node tentacle');
     }
   }
 }
