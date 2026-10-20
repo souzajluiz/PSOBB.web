@@ -100,6 +100,7 @@ node tests/quests.test.ts        # every BB quest newserv ships: .bin header, la
 node tests/shop.test.ts          # shop prices (get_item_shop_cost), sold-out rule, 6xB5..6xC0 bytes, shop and bank flows
 node tests/npcs.test.ts          # every NPC entry of every free-play floor and BB quest resolves; all NPC models build; the area script reaches the counters
 node tests/questflow.test.ts     # Mop-up Operation #1 from its start to the reward in the VM; 6x24 / 6x69 / 6xC9 layouts; npcplayerchar.dat
+node tests/questeditor.test.ts   # quest editor model: undo / redo, entity and event edits, .dat / .evt / .bin header codecs, coordinates; round-trips every newserv BB quest
 node tests/quest.live.ts         # the quest menu (A2/09/10), the 44/13 download, the AC barrier, then run the quest's start label
 node tests/mobilecontrols.test.ts # touch pad stick/keys, analog walk/run, second-finger camera, haptics, mute persistence and default, fullscreen state machine
 node tests/fetchdata.test.ts     # docker/fetch-data.mjs: Drive link parsing, confirmation page, zip / tgz unpack from a local server

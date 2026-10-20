@@ -87,3 +87,4 @@ grep -rl "0x4ec" psobb-client-source/src | head   # find matching C by constant
 
 - **Tethealla** (old server, GPL-3): the data files in the original `map/`, `quest/` and `drop/` folders share the same formats.
 - **Ephinea PSOBB client:** source of the `data/` files used locally for testing. Not committed.
+- **phantasmal-world** (DaanVandenBosch, MIT): https://github.com/DaanVandenBosch/phantasmal-world. A quest editor / viewer; its `FEATURES.md` and its behaviour (open / save .qst, undo / redo, area selection, 3D entity manipulation, events) were the reference for the feature list and UI of our own quest editor (`docs/QUESTEDITOR.md`, `client/src/questeditor/`). No code was ported; if some is, keep its MIT notice in that file.

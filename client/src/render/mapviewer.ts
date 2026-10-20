@@ -488,6 +488,11 @@ export class MapViewer {
     this.controls.enabled = enabled;
   }
 
+  // The point the camera orbits (the quest editor places and frames things by it).
+  get orbitTarget(): THREE.Vector3 {
+    return this.controls.target;
+  }
+
   frameAll(): void {
     if (!this.mapRoot) return;
     const box = new THREE.Box3().setFromObject(this.mapRoot);
