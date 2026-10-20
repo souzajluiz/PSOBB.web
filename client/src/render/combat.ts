@@ -48,6 +48,7 @@ import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../c
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
+import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
@@ -266,6 +267,10 @@ const OWN_FSM = new Set([
   // Episode 2 (combat/enemyfsmep2.ts).
   'TObjEneMerillLia',
   'TObjEneDolmOlm',
+  // Episode 2, part 2 (combat/enemyfsmep2a.ts).
+  'TObjEneMe1Gee',
+  'TObjEneMe1GiGue',
+  'TObjEneGibbles',
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
@@ -681,6 +686,13 @@ export class CombatView {
         // Dolmdarl), the set entry's param1..5 their chances and ranges.
         else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneMe1Gee') ai = new GeeAi({ ...at, params: setParams, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneMe1GiGue') ai = new GiGueAi({ ...at, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneGibbles') {
+          // AttackData [0] slams, then the two shockwave / swing rows (ENEMY_TYPE_PARAMS order).
+          const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : attack ? [attack] : [];
+          ai = new GibblesAi({ ...at, params: setParams, attacks, movement, rng: () => this.rng() });
+        }
         else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
         else if (className === 'TBoss2DeRolLe') {
@@ -1139,6 +1151,7 @@ export class CombatView {
       if (ai instanceof VoloptPartAi) continue;
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof GeeAi || ai instanceof GiGueAi || ai instanceof GibblesAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
       // to the other enemies (combat/enemyai.ts EnemyAi.confused,
       // combat/enemyfsmruins.ts updateTarget).
@@ -1173,6 +1186,10 @@ export class CombatView {
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
       if (ai instanceof SinowAi) this.sinowTick(e, ai);
       if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
+      // Gi Gue's Jellen / Zalure casts (combat/enemyfsmep2a.ts).
+      if (ai instanceof GiGueAi && ai.events.length)
+        for (const ev of ai.events.splice(0))
+          if (ev.clientId === this.game.selfId) this.applySelfBuff(ev.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(ev.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
         const b = ai.buff;
         this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
@@ -3725,6 +3742,8 @@ export class CombatView {
     const me = this.game.self;
     if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
     if (e.ai?.invulnerable) {
+      // Gi Gue's barrier answers a blocked hit with a bomb (combat/enemyfsmep2a.ts).
+      if (e.ai instanceof GiGueAi && me && byPlayer) e.ai.blocked(me.clientId);
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
       // "0" text and do nothing.
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
@@ -4611,6 +4630,7 @@ export class CombatView {
         // The hit flag runs the hit handler (vtable +0x100) here too: the
         // Sinow's sends its mirage clones away, a clone leaves.
         if (e.ai instanceof SinowAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof GeeAi || e.ai instanceof GiGueAi || e.ai instanceof GibblesAi) e.ai.onDamage(clientId);
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
       return;
