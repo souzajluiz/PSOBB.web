@@ -41,17 +41,25 @@ RUN sed -e 's/"LocalAddress": "en0"/"LocalAddress": "127.0.0.1"/' \
         -e 's/"DNSServerPort": 53/"DNSServerPort": 0/' \
         -e 's/"IPStackListen": \[5059\]/"IPStackListen": []/' \
         -e 's/"PPPStackListen": \[5058\]/"PPPStackListen": []/' \
+        -e 's/"HTTPListen": \[\]/"HTTPListen": ["127.0.0.1:5080"]/' \
         /app/newserv/system/config.example.json > /app/newserv/system/config.json
 COPY --from=client /app/client/dist /app/client/dist
 COPY --from=client /app/bridge/node_modules /app/bridge/node_modules
-COPY bridge/server.mjs bridge/package.json /app/bridge/
+COPY bridge/server.mjs bridge/admin.mjs bridge/admin-chars.mjs bridge/admin-hash.mjs bridge/package.json /app/bridge/
+COPY bridge/admin-ui /app/bridge/admin-ui
 COPY docker/fetch-data.mjs /app/fetch-data.mjs
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 ENV PORT=8080 \
     DIST=/app/client/dist \
     NEWSERV_SYSTEM=/app/newserv/system \
-    PSOBB_DATA=/data/psobb-client
+    PSOBB_DATA=/data/psobb-client \
+    NEWSERV_HTTP=127.0.0.1:5080 \
+    ADMIN_AUDIT_LOG=/data/newserv/admin-audit.log \
+    ADMIN_CONFIG_MIRROR=/data/newserv/config.json
+# The admin panel (docs/ADMIN.md) is off unless ADMIN_PASSWORD or
+# ADMIN_PASSWORD_HASH is set. newserv's HTTP API (port 5080) listens on
+# loopback only and is never published; EXPOSE stays 8080.
 # newserv's accounts, characters and teams live in /data/newserv (a volume).
 VOLUME ["/data/newserv"]
 EXPOSE 8080
