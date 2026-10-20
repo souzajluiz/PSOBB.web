@@ -14,6 +14,7 @@ import type { LoadedQuest } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
 import { QuestSession } from './session.ts';
 import type { QuestBoardItem, QuestVMHost } from './vm.ts';
+import { genderOfClass, type QuestInventoryItem } from './miscops.ts';
 import type { QuestTown } from './town.ts';
 
 export interface QuestRunnerOptions {
@@ -24,6 +25,7 @@ export interface QuestRunnerOptions {
   log?: (msg: string) => void;
   heroStats?: () => { hp: number; maxHp: number; tp: number; maxTp: number } | null;
   enemiesKilled?: () => number;
+  inventory?: () => readonly QuestInventoryItem[];
   onBoardSelect?: (item: QuestBoardItem) => void;
 }
 
@@ -68,6 +70,12 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
         return c ?? null;
       },
       enemiesKilled: () => opts.enemiesKilled?.() ?? 0,
+      playerGender: (id) => {
+        const p = player(id);
+        return p ? genderOfClass(p.charClass) : 2;
+      },
+      inventoryItems: () => opts.inventory?.() ?? [],
+      overrideBattleParam: (kind, index, row) => view.combat.overrideBattleParam(kind, index, row),
       questExit: () => log('quest: qexit (the quest asked to leave the game)'),
       darkFalzDead: () => false,
       constructObjects: (floor, room, group) => view.constructObjects(floor, room, group),
@@ -95,6 +103,10 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
   };
   game.on('subcommand', onSub);
   let disposed = false;
+  // Chat feeds enable_keyword_detect / check_for_keyword.
+  game.on('chat', (from, _gc, text) => {
+    if (!disposed && from) session.vm.sayKeyword(from.clientId, text);
+  });
 
   town.setQuest(session);
   view.setQuest(session);

@@ -62,12 +62,45 @@ export interface EnemyResistData {
   dfpBonus: number;
 }
 
+// The four tables a quest can override (opcode_get_physical_data / _attack_ /
+// _resist_ / _movement_data -> set_quest_bp_physical / _attack_data /
+// _resists / _animation, PsoBB.exe .c:752009..752235): each copies one whole
+// row, byte for byte, into the table the client holds.
+export type BattleParamKind = 'physical' | 'attack' | 'resist' | 'movement';
+
+export const BATTLE_PARAM_ROWS: Record<BattleParamKind, { base: number; size: number }> = {
+  physical: { base: 0, size: 0x24 },
+  attack: { base: 0x3600, size: 0x30 },
+  resist: { base: 0x7e00, size: 0x20 },
+  movement: { base: 0xae00, size: 0x30 },
+};
+
+// maybe_valid_bp_index (.c:751989): -1 < index < 0x60.
+export const BATTLE_PARAM_ROW_COUNT = 0x60;
+
 export class BattleParams {
   private dv: DataView;
+  private data: Uint8Array;
+  private owned = false;
 
   constructor(data: Uint8Array) {
     if (data.length < BATTLE_PARAM_TABLE_SIZE) throw new Error(`BattleParamEntry: ${data.length} bytes, expected 0x${BATTLE_PARAM_TABLE_SIZE.toString(16)}`);
+    this.data = data;
     this.dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  }
+
+  // A quest replaced row `index` of `kind` for `difficulty`. The table is
+  // copied on the first write so the stream file's own bytes stay intact.
+  override(kind: BattleParamKind, difficulty: number, index: number, row: Uint8Array): boolean {
+    const t = BATTLE_PARAM_ROWS[kind];
+    if (index < 0 || index >= BATTLE_PARAM_ROW_COUNT || difficulty < 0 || difficulty > 3 || row.length < t.size) return false;
+    if (!this.owned) {
+      this.data = this.data.slice();
+      this.dv = new DataView(this.data.buffer);
+      this.owned = true;
+    }
+    this.data.set(row.subarray(0, t.size), t.base + (difficulty * BATTLE_PARAM_ROW_COUNT + index) * t.size);
+    return true;
   }
 
   stats(difficulty: number, index: number): EnemyStats {

@@ -126,7 +126,7 @@ import { BOSS_AREAS } from '../net/telepipe.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
-import { BattleParams, battleParamFile, type EnemyAttackData } from '../formats/battleparams.ts';
+import { BattleParams, battleParamFile, type BattleParamKind, type EnemyAttackData } from '../formats/battleparams.ts';
 import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
 import { parseItemPMT, type ItemPMT, type WeaponRange } from '../formats/itempmt.ts';
@@ -5457,6 +5457,14 @@ export class CombatView {
       }
     })();
     return this.pmt;
+  }
+
+  // A quest's set_enemy_*_data (quest/miscops.ts): replace one battle
+  // parameter row for the game's difficulty. Enemies created afterwards read
+  // it, as the client's own table is edited in place.
+  overrideBattleParam(kind: BattleParamKind, index: number, row: Uint8Array): void {
+    const difficulty = this.game.info?.difficulty ?? 0;
+    void this.battleParams().then((p) => p?.override(kind, difficulty, index, row));
   }
 
   private battleParams(): Promise<BattleParams | null> {

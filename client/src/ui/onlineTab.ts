@@ -156,7 +156,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
     try {
       questRunner?.dispose();
       if (!questTown) throw new Error('no quest town for this game');
-      questRunner = await runQuest({ quest: q, game: g, view, town: questTown, log });
+      questRunner = await runQuest({ quest: q, game: g, view, town: questTown, log, inventory: () => session?.character?.inventory.map((i) => ({ id: i.data.id, data1: i.data.data1 })) ?? [] });
       addChat('*', `quest "${questRunner.session.name}" loaded`);
       setStatus(`Quest "${questRunner.session.name}"`, 'ok');
     } catch (err) {

@@ -564,9 +564,9 @@ reaches these and nothing else:
 |---|---|
 | Challenge mode | `cmode_stage`, `set_cmode_difficulty`, `set_cmode_base_time`, `set_cmode_rank_threshold`, `set_cmode_rank_result`, `set_cmode_grave_rates`, `set_cmode_char_template`, `cmode_check_any_player_dead`, `exp_multiplication`, `chl_create_retry_menu`, `chl_show_dead_player_list` |
 | Battle Arena | `ba_initial_floor` and the rest of the `ba_*` family |
-| Enemies | `set_override_enemy_bp_index`, `set_enemy_movement_data`, `set_enemy_physical_data`, `set_enemy_resist_data`, `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
+| Enemies | `toggle_freeze_enemies`, `unfreeze_enemies`, `animation_check`, `olga_flow_is_dead` |
 | Items / player | `unequip_item`, `equip_item`, `item_create*`, `p_return_guild`, `pl_add_meseta2` |
-| Misc | `enable_keyword_detect`, `npc_coords_call`, `shift_right`, `start_battlebgm` |
+| Misc | `npc_coords_call`, `start_battlebgm` |
 
 Nothing else is missing: the generated table covers all 528 BB opcodes, so an
 unimplemented one still advances the program counter correctly.

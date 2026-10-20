@@ -35,6 +35,8 @@
 
 import { decodeInstruction, type QuestBin, type QuestInstruction } from '../formats/questbin.ts';
 import { F_ARGS, F_CLEAR_ARGS } from '../formats/questopcodes.ts';
+import type { BattleParamKind } from '../formats/battleparams.ts';
+import { BP_OPCODES, KeywordDetector, findInventoryItem, readBattleParamRow, validBpIndex, type QuestInventoryItem } from './miscops.ts';
 
 export const QUEST_NUM_REGISTERS = 0x100;
 export const QUEST_NUM_FLOORS = 0x12;
@@ -162,6 +164,13 @@ export interface QuestVMHost {
   addMeseta?: (amount: number) => void;
   // at_coords_talk / at_coords_call / set_obj_param registered or removed.
   coordsChanged?: (handlers: QuestCoordsHandler[]) => void;
+  // get_gender: 0 male, 1 female, 2 unknown (quest/miscops.ts genderOfClass).
+  playerGender?: (clientId: number) => number;
+  // find_inventory_item / _ex: the local player's inventory.
+  inventoryItems?: () => readonly QuestInventoryItem[];
+  // set_enemy_*_data: one battle parameter row (raw bytes) replaced for the
+  // enemy type chosen with set_override_enemy_bp_index.
+  overrideBattleParam?: (kind: BattleParamKind, index: number, row: Uint8Array) => void;
 }
 
 export interface QuestFloorDesignation {
@@ -248,6 +257,13 @@ export class QuestVM {
   readonly localSwitchFlags = new Map<number, boolean>();
   // npc_text / npc_text_id: what NPCs say in each situation number.
   readonly npcText = new Map<number, string>();
+  // enable_keyword_detect / check_for_keyword (quest/miscops.ts).
+  readonly keywords = new KeywordDetector();
+  // set_override_enemy_bp_index: the battle parameter row that the following
+  // set_enemy_*_data opcodes replace (quest_bp_edit_index, 0 at start), and
+  // what they replaced, by "kind:index".
+  bpEditIndex = 0;
+  readonly bpOverrides = new Map<string, Uint8Array>();
   exited = false;
   exitCode = 0;
   // The message or list the quest is waiting on, if any.
@@ -321,6 +337,11 @@ export class QuestVM {
     return this.threads.length;
   }
 
+  // A player said `text` in chat (the keyword detector keeps it for a while).
+  sayKeyword(clientId: number, text: string): void {
+    this.keywords.say(clientId, text);
+  }
+
   // Dismiss the message box the quest is waiting on.
   dismissMessage(): void {
     if (!this.pendingMessage) return;
@@ -366,6 +387,7 @@ export class QuestVM {
   // Runs every live thread until it yields. Call once per game frame.
   frame(): void {
     this.frameCount++;
+    this.keywords.update();
     if (this.exited) return;
     if (this.autoAdvance) {
       if (this.pendingMessage) this.dismissMessage();
@@ -1336,6 +1358,52 @@ export class QuestVM {
         const at = this.coordsHandlers.findIndex((h) => h.token === token);
         if (at >= 0) this.coordsHandlers.splice(at, 1);
         this.host.coordsChanged?.(this.coordsHandlers);
+        return;
+      }
+      case 'shift_left':
+        // opcode_shift_left (.c:608860): count masked to 5 bits.
+        R[this.reg(a, 0)] = R[this.reg(a, 0)] << (R[this.reg(a, 1)] & 0x1f);
+        return;
+      case 'shift_right':
+        // opcode_shift_right (.c:608870): arithmetic shift.
+        R[this.reg(a, 0)] = R[this.reg(a, 0)] >> (R[this.reg(a, 1)] & 0x1f);
+        return;
+      case 'get_gender':
+        // opcode_get_gender (.c:608085): regA = client id, regB = 0/1/2.
+        R[this.reg(a, 1)] = this.host.playerGender?.(R[this.reg(a, 0)]) ?? 2;
+        return;
+      case 'find_inventory_item':
+      case 'find_inventory_item_ex': {
+        const base = this.reg(a, 0);
+        const want = [0, 1, 2, 3].map((i) => R[(base + i) & 0xff]);
+        R[this.reg(a, 1)] = findInventoryItem(this.host.inventoryItems?.() ?? [], want, name === 'find_inventory_item_ex') | 0;
+        return;
+      }
+      case 'enable_keyword_detect':
+        this.keywords.enable();
+        return;
+      case 'check_for_keyword':
+        // opcode_Keyword (.c:611368): args are the result register, client id, string.
+        R[this.reg(a, 0)] = this.keywords.check(this.int(a, 1), this.str(a, 2)) ? 1 : 0;
+        clearArgs();
+        return;
+      case 'set_override_enemy_bp_index':
+        this.bpEditIndex = this.int(a, 0);
+        clearArgs();
+        return;
+      case 'set_enemy_physical_data':
+      case 'set_enemy_attack_data':
+      case 'set_enemy_resist_data':
+      case 'set_enemy_movement_data': {
+        // The label's data replaces the whole row (.c:608666..608822); an
+        // index outside 0..0x5f is ignored (maybe_valid_bp_index).
+        const kind = BP_OPCODES[name];
+        const off = this.labelOffset(this.label(a, 0));
+        const row = off < 0 ? null : readBattleParamRow(this.bin.data, off, kind);
+        if (row && validBpIndex(this.bpEditIndex)) {
+          this.bpOverrides.set(`${kind}:${this.bpEditIndex}`, row);
+          this.host.overrideBattleParam?.(kind, this.bpEditIndex, row);
+        }
         return;
       }
       case 'qexit':
