@@ -563,12 +563,14 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // (re7_b1_larm.nj, re7_b1_rarm.nj) belong to the arm child object
     // (ctor 0x005398b0): the body throws one by handing the arm entity a model
     // index and a spawn offset, and the arm's render 0x00539e5c returns at once
-    // while its state (+0xb4) is 0, so at rest neither arm is drawn.
+    // while its state (+0xb4) is 0, so at rest neither arm is drawn. The arm
+    // object is placed from its own position (not the body's), so both are
+    // 'world' parts that BelraArm's pose() moves (render/combat.ts).
     case 0xa5:
       return spec('TObjEneRe7Berura', pick('bm_ene_re7_berura.bml', ctx), [
         { model: 0, motion: loop(6, 0.8) },
-        { model: 1, hidden: true, name: 'left arm' },
-        { model: 2, hidden: true, name: 'right arm' },
+        { model: 1, hidden: true, place: 'world', name: 'left arm' },
+        { model: 2, hidden: true, place: 'world', name: 'right arm' },
       ]);
     // Dimenian / La / So: ctor 0x00551d3c, FUN_005520f8 (model 2 - param6),
     // table 0x009bd840 slot 0 = stund, 0.6.
@@ -792,17 +794,18 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     //     the *second* archive the boss loads, bm_ene_boss09_tentacle.bml
     //     (descriptor 0x009f7b3c, 3 models + 7 motions): shokushu_body00..02,
     //     one per variant.
-    // The spinners' positions come from the fight's matrices, so one is built
-    // hidden here rather than sixteen at a guessed place. It is built without a
-    // motion: the model has 59 nodes but every motion of that archive except
-    // 2nd_attack covers 32, so the client animates a sub-tree of it (the part
-    // class 0x00766b20 keeps three model/texture/motion slots from the table at
-    // 0x009f5b20 = {archive 0 chunk 0, archive 0 chunk 1, archive 1 chunk 0}),
-    // which is not decoded yet.
+    // The 16 tentacle entities (combat/saintmilion.ts) are all built, hidden:
+    // they start hidden (flag 0x20) and the boss, which is not ported, moves
+    // and wakes them. Their motions key 32 of the model's 59 nodes (nodes:
+    // SPINNER_MOTION_NODES), so a part would play one with `nodes` set; none
+    // is picked here because the action that shows an entity is the boss's.
+    // These entities draw the model with the njm chunks of the table at
+    // 0x009f7820 (SaintEmilionEntity_Initialize 0x0076dfec), not through the
+    // slots of 0x009f5b20.
     case 0x119:
       return spec('Episode4Boss', 'bm_ene_boss09.bml', [
         { model: p6 & 1, motion: loop(9, 4) },
-        { model: p6 & 1, archive: 'bm_ene_boss09_tentacle.bml', hidden: true, name: 'spinner' },
+        ...Array.from({ length: 16 }, (_, i): EnemyPartSpec => ({ model: p6 & 1, archive: 'bm_ene_boss09_tentacle.bml', hidden: true, name: `spinner ${i}` })),
       ]);
   }
   return null;

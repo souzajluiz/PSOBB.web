@@ -700,7 +700,8 @@ export class ClawAi extends BrainBase {
 //     the dizzy spin (7).
 //   throw (5, 0x00537e64): no flinch; animation 3 (motion 3) / 4 (motion 5)
 //     for arm 0 / 1, at 0.8 (Ultimate 2.0, written at enter); at frame 30 /
-//     29 the arm (enemyshots.ts BelraArm) leaves from the hand; the body holds
+//     29 the arm (enemyshots.ts BelraArm) leaves from the hand (BELRA.handNode,
+//     read off the model); the body holds
 //     until the arm has finished and the +0x404 regrow effect is done, then
 //     the next arm (+0x3fc ^= 1) and back to chase.
 //   punch (6, 0x005379ec): sub 0 turns at most 0x100 a frame until facing,
@@ -749,13 +750,40 @@ export const BELRA = {
   confusedSpan: 0x3800,
   launchFrames: [30, 29],
   fadeIn: 24,
-  // ASSUMED: the +0x404 regrow effect's length (Ultimate initialises it with
-  // 10; the default was not read).
-  regrow: 30,
-  // ASSUMED: the hand's launch point (node 0x21 / 0x38 at the launch frame
-  // + (0, 20, -4), 0x00922f40 / 0x00922f44): 12 to the side, 20 up.
-  hand: 12,
-  handHeight: 20,
+  // The regrow effect (+0x404, class vtable 0x00aff758): started at the launch
+  // (value 0, vtable +0xc 0x00512348) and incremented once a frame in the
+  // throw's sub 2 (+0x14 = 0x00512404: value += step, done at >= 2.0,
+  // 0x0092057c). The step is 0.04 (0x3d23d70a, set by the base ctor
+  // 0x0057946c) and 2.0 / 10 in Ultimate (vtable +4 = 0x00512314 with 10,
+  // called by the ctor 0x00536bfc's tail), so Normal needs 51 frames and
+  // Ultimate 10 (float32 sums, see regrowFrames).
+  regrowStep: Math.fround(0.04),
+  regrowStepUltimate: Math.fround(2 / 10),
+  regrowDone: 2,
+  // The hand: init_belra_global_config (0x00538e28.. tail) walks the model's
+  // node tree at motion 3 frame 30 (arm 0, node 0x21) and motion 5 frame 29
+  // (arm 1, node 0x38) and keeps that node's origin in model space, then adds
+  // (0, 20, -4) (g_BelraModelYOffset 0x00922f40, g_BelraModelZOffset
+  // 0x00922f44). The throw turns the x / z of that vector by the heading and
+  // adds the body position (0x00537e64 .. 0x00539fbc). handNode is the node
+  // origin read off bm_ene_re7_berura.bml's re7_b_bell_body.nj by the same
+  // walk (tests/enemies.test.ts re-derives it).
+  handNode: [
+    [8.049997664296725, 22.434811215424023, 17.927436955131892],
+    [-8.298640101165915, 22.917272547851574, 17.952492213441293],
+  ],
+  // Ultimate loads bm_ene_re7_berura_a.bml (is_ultimate_mode, the same
+  // function), whose throw motions put the hands elsewhere.
+  handNodeUltimate: [
+    [8.102078358984716, 22.6365931189685, 17.472928130628873],
+    [-8.34561525780432, 23.095375622361153, 17.487641473226123],
+  ],
+  handOffset: [0, 20, -4],
+  // Body nodes the throw hides while the arm is out (flags 0x420 + arm * 4
+  // bit 1, EnemyRender_00536d4c sets the hide bit 8 on the first and last
+  // node of the arm's range 0x21..0x31 / 0x38..0x48, the only two with
+  // polygons): the root of the arm's subtree here (render/combat.ts).
+  armRootNode: [33, 56],
 } as const;
 
 const BELRA_MOTION = {
@@ -784,6 +812,9 @@ export class BelraAi extends BrainBase {
   private acc = 0;
   private arm = 1;
   private armOut: BelraArm | null = null;
+  // Arm i is off the body (thrown, not yet regrown): the body draws without its node.
+  readonly armGone: [boolean, boolean] = [false, false];
+  private regrow = 0;
   private dealt = false;
   private spin = 0;
   private spinDir = 1;
@@ -811,6 +842,19 @@ export class BelraAi extends BrainBase {
     return damage >= Math.trunc(maxHp / 5);
   }
 
+  // Where arm `i` leaves from, relative to the body (x, y above its ground,
+  // z): the hand node with (0, 20, -4) added, x / z turned by the heading
+  // (BELRA.handNode). The body's yaw is Y rotation `angle`, as drawn.
+  private hand(i: number): [number, number, number] {
+    const n = (this.ultimate ? BELRA.handNodeUltimate : BELRA.handNode)[i];
+    const o = BELRA.handOffset;
+    const lx = n[0] + o[0];
+    const lz = n[2] + o[2];
+    const c = Math.cos(this.angle);
+    const s = Math.sin(this.angle);
+    return [lx * c + lz * s, n[1] + o[1], -lx * s + lz * c];
+  }
+
   // Turns toward `want` by at most 0x100; full steps feed the accumulator.
   private turn(want: number): boolean {
     const diff = wrap(want - this.angle);
@@ -833,6 +877,8 @@ export class BelraAi extends BrainBase {
     this.timer = 0;
     this.sub = 0;
     this.dealt = false;
+    // Leaving the throw clears the arm flags (0x00537e64's exit, & ~7).
+    if (from === 'throw') this.armGone.fill(false);
     if (state === 'chase' || state === 'punch') this.resumeState = state;
     if (state === 'idle') this.play(out, BELRA_MOTION.idle);
     else if (state === 'chase') {
@@ -974,19 +1020,25 @@ export class BelraAi extends BrainBase {
       }
       case 'throw': {
         if (this.sub === 0 && this.frames >= BELRA.launchFrames[this.arm]) {
-          const side = this.arm === 0 ? -1 : 1;
-          const a = this.angle + (side * Math.PI) / 2;
-          const arm = new BelraArm(this.x + Math.sin(a) * BELRA.hand, BELRA.handHeight, this.z + Math.cos(a) * BELRA.hand, this.angle, this.ultimate);
+          const hand = this.hand(this.arm);
+          const arm = new BelraArm(this.x + hand[0], hand[1], this.z + hand[2], this.angle, this.ultimate, this.arm);
           this.armOut = arm;
+          this.armGone[this.arm] = true;
+          this.regrow = 0;
           (out.shots ??= []).push(arm as EnemyShot);
           this.sub = 1;
         } else if (this.sub === 1 && this.armOut?.done) {
+          // The arm's flight ended: its flag bit 2 clears, the body's hide bit
+          // (1) clears and the regrow bit (4) starts (0x00537e64).
           this.armOut = null;
+          this.armGone[this.arm] = false;
           this.sub = 2;
-          this.timer = 0;
-        } else if (this.sub === 2 && this.timer >= BELRA.regrow) {
-          this.arm ^= 1;
-          this.sub = 3;
+        } else if (this.sub === 2) {
+          this.regrow = Math.fround(this.regrow + (this.ultimate ? BELRA.regrowStepUltimate : BELRA.regrowStep));
+          if (this.regrow >= BELRA.regrowDone) {
+            this.arm ^= 1;
+            this.sub = 3;
+          }
         } else if (this.sub === 3) this.enter(out, this.confused ? 'confused' : 'chase');
         break;
       }

@@ -36,6 +36,18 @@ export type ShotEffect =
 export interface ShotLook {
   color: number;
   size: number;
+  // The shot is a model the owner's enemy model built hidden (a part named
+  // like this, placed 'world'); render/combat.ts moves it by pose() instead
+  // of drawing the ball.
+  model?: string;
+}
+
+// Where and how a model shot is drawn: height above the launch ground, the
+// Y rotation and the scale.
+export interface ShotPose {
+  y: number;
+  yaw: number;
+  scale: readonly [number, number, number];
 }
 
 export abstract class EnemyShot {
@@ -55,6 +67,9 @@ export abstract class EnemyShot {
     this.y = y;
     this.z = z;
   }
+
+  // The model's placement (only for shots with look.model).
+  pose?(): ShotPose;
 
   // One game tick; returns the players the shot hit this tick.
   abstract tick(targets: readonly AiTarget[]): AiTarget[];
@@ -241,19 +256,31 @@ export class GaranzMine extends EnemyShot {
 // for entity_hit_by_tech group 18, confusion). It ends after 300 units (the
 // wall ray and the map collision are not reproduced).
 // ASSUMED: the 3.0 velocity push is drawn as cause_knockback(3.0).
-export const BELRA_ARM = { speed: 10, range: 300, scaleStep: Math.fround(0.15), scaleMax: 2, radius: Math.fround(3 * 1.8), confuse: Math.fround(0.1) } as const;
+//
+// Drawn by the render at 0x00539e5c (state +0xb4 != 0): the arm model
+// re7_b1_larm / rarm (model index = the arm, 0 left, 1 right) translated to
+// the arm's ground point (+0x38) and lifted by +0xcc = its height above the
+// ground, at least 10 (belra_arm_y_offset 0x009230b4: below it the arm is
+// raised to 10), turned by the heading it was thrown with (+0x60) and scaled
+// (scale, 1, scale) by the growing scale. The ground under it is ASSUMED
+// flat (the height stays the launch height). The 0xdd / 0x150 particle
+// effects that trail it are not drawn.
+export const BELRA_ARM = { speed: 10, range: 300, scaleStep: Math.fround(0.15), scaleMax: 2, radius: Math.fround(3 * 1.8), confuse: Math.fround(0.1), minHeight: 10 } as const;
 
 export class BelraArm extends EnemyShot {
   readonly effect: ShotEffect;
-  readonly look: ShotLook = { color: 0x8040c0, size: 3 };
+  readonly look: ShotLook;
   private vx: number;
   private vz: number;
   private travelled = 0;
   private scale = 1;
   private struck = new Set<number>();
+  private yaw: number;
 
-  constructor(x: number, y: number, z: number, angle: number, ultimate: boolean) {
+  constructor(x: number, y: number, z: number, angle: number, ultimate: boolean, arm = 0) {
     super(x, y, z);
+    this.yaw = angle;
+    this.look = { color: 0x8040c0, size: 3, model: arm === 0 ? 'left arm' : 'right arm' };
     this.vx = Math.sin(angle) * BELRA_ARM.speed;
     this.vz = Math.cos(angle) * BELRA_ARM.speed;
     this.effect = { kind: 'melee', mult: 1, knockback: 3, attack: 1, ...(ultimate ? { status: { type: 0x12, chance: BELRA_ARM.confuse } } : {}) };
@@ -261,6 +288,10 @@ export class BelraArm extends EnemyShot {
 
   get radius(): number {
     return this.scale * BELRA_ARM.radius;
+  }
+
+  override pose(): ShotPose {
+    return { y: Math.max(this.y, BELRA_ARM.minHeight), yaw: this.yaw, scale: [this.scale, 1, this.scale] };
   }
 
   tick(targets: readonly AiTarget[]): AiTarget[] {

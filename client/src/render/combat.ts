@@ -46,7 +46,7 @@ import {
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
-import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
+import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
@@ -1259,6 +1259,7 @@ export class CombatView {
       if (ai instanceof RecoboxAi) for (const sp of ai.spawns.splice(0)) void this.spawnRecon(e, ai, sp);
       if ((ai instanceof ReconAi && ai.removed) || (ai instanceof EpsigardAi && ai.state === 'gone')) this.dropQuietly(e);
       if (ai instanceof SinowAi) this.sinowTick(e, ai);
+      if (ai instanceof BelraAi) this.belraTick(e, ai);
       if (ai instanceof SinowZoaAi)
         for (const b of ai.buffs.splice(0)) if (b.clientId === this.game.selfId) this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
@@ -2440,27 +2441,66 @@ export class CombatView {
 
   // --- Caves / Mines FSM projectiles (combat/enemyshots.ts) -------------------
 
-  private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime; baseY: number; mesh: THREE.Mesh | null }> = [];
+  private shots: Array<{ shot: EnemyShot; owner: EnemyRuntime; baseY: number; mesh: THREE.Mesh | null; model: THREE.Object3D | null }> = [];
 
   // ASSUMED look: a coloured ball per shot (the client's own effects and
   // models are not drawn).
   private launchShot(e: EnemyRuntime, shot: EnemyShot): void {
     let mesh: THREE.Mesh | null = null;
+    // A shot that is one of the owner's hidden world parts (the Dark Belra's
+    // arm): that model moves instead of a ball.
+    const model = shot.look.model ? e.instance.world?.getObjectByName(shot.look.model) ?? null : null;
     try {
-      mesh = new THREE.Mesh(new THREE.SphereGeometry(shot.look.size, 8, 6), new THREE.MeshBasicMaterial({ color: shot.look.color }));
-      this.viewer.scene.add(mesh);
+      if (!model) {
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(shot.look.size, 8, 6), new THREE.MeshBasicMaterial({ color: shot.look.color }));
+        this.viewer.scene.add(mesh);
+      }
     } catch {
       mesh = null;
     }
     const baseY = shot.absolute ? 0 : e.instance.root.position.y - e.lift;
     mesh?.position.set(shot.x, baseY + shot.y, shot.z);
-    this.shots.push({ shot, owner: e, baseY, mesh });
+    if (model) this.poseShotModel(model, shot, baseY);
+    this.shots.push({ shot, owner: e, baseY, mesh, model });
+  }
+
+  // The Dark Belra without the arm it threw: the exe hides the polygons of the
+  // arm's nodes while the arm is out (BELRA.armRootNode). Scaling the root of
+  // the arm's subtree down collapses every vertex weighted to it, which is all
+  // of them; the body animator reapplies the bind scale on its next frame, so
+  // the hook below keeps it down and a regrown arm comes back by itself.
+  private belraHooked = new WeakSet<object>();
+
+  private belraTick(e: EnemyRuntime, ai: BelraAi): void {
+    const inst = e.instance;
+    const bones = BELRA.armRootNode.map((i) => inst.nodes?.[0]?.[i]);
+    const hide = () => {
+      for (let i = 0; i < 2; i++) if (ai.armGone[i]) bones[i]?.scale.setScalar(1e-4);
+    };
+    if (!this.belraHooked.has(inst)) {
+      const body = inst.animators.find((_, k) => !inst.parts[k]?.name);
+      if (!body) return;
+      this.belraHooked.add(inst);
+      body.onFrame = hide;
+    }
+    hide();
+  }
+
+  private poseShotModel(model: THREE.Object3D, shot: EnemyShot, baseY: number): void {
+    const p = shot.pose?.();
+    model.position.set(shot.x, baseY + (p?.y ?? shot.y), shot.z);
+    if (p) {
+      model.rotation.y = p.yaw;
+      model.scale.set(p.scale[0], p.scale[1], p.scale[2]);
+    }
+    model.visible = true;
   }
 
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
+      if (s.model && !s.shot.done) this.poseShotModel(s.model, s.shot, s.baseY);
       for (const hit of hits) {
         if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
         const fx = s.shot.effect;
@@ -2474,6 +2514,7 @@ export class CombatView {
       }
     }
     for (const s of this.shots.filter((x) => x.shot.done)) {
+      if (s.model) s.model.visible = false;
       s.mesh?.removeFromParent();
       s.mesh?.geometry.dispose();
       (s.mesh?.material as THREE.Material | undefined)?.dispose();

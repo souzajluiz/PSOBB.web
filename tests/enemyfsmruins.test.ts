@@ -159,6 +159,63 @@ eq([0, 1, 2].map((s) => collisionRadius('TObjEneDimedian', s)), [7, 7, 8], 'Dime
   eq(c.state, 'throw', 'then it throws');
 }
 
+// --- Dark Belra: the thrown arm's hand, drawing and regrowth ------------------------
+{
+  // Runs a Belra until its first arm leaves, returning it with the state at launch.
+  const launch = (ultimate: boolean) => {
+    const b = new BelraAi({ x: 0, z: 0, angle: 0, ultimate, attack: atk(15), radius: 10, rng: () => 0.2 });
+    for (let f = 0; f < 600; f++) {
+      const r = b.tick([player(0, 200)], false);
+      const arm = r.shots?.[0];
+      if (arm instanceof BelraArm) return { b, arm, x: b.x, z: b.z, angle: b.angle };
+    }
+    throw new Error('the Belra never threw');
+  };
+  const { b, arm, x, z, angle } = launch(false);
+  eq(arm.look.model, 'right arm', 'the first arm is the right one (arm 1)');
+  check(b.armGone[1] && !b.armGone[0], 'the right arm is off the body from the launch');
+  // The hand: node origin (model space) + (0, 20, -4), x / z turned by the heading.
+  const hx = BELRA.handNode[1][0] + BELRA.handOffset[0];
+  const hz = BELRA.handNode[1][2] + BELRA.handOffset[2];
+  const uh = launch(true);
+  near(uh.arm.y, BELRA.handNodeUltimate[1][1] + 20, 'Ultimate: the hand comes from the Ultimate model');
+  near(arm.x - x, hx * Math.cos(angle) + hz * Math.sin(angle), 'the arm leaves from the right hand (x)');
+  near(arm.z - z, -hx * Math.sin(angle) + hz * Math.cos(angle), 'the arm leaves from the right hand (z)');
+  near(arm.y, BELRA.handNode[1][1] + 20, 'the arm leaves at the hand height');
+  const p0 = arm.pose();
+  eq([p0.scale[0], p0.scale[1], p0.scale[2]], [1, 1, 1], 'the arm starts at scale 1');
+  near(p0.yaw, angle, 'the arm is drawn turned by the heading it was thrown with');
+  // The flight: scale grows 0.15 a frame to 2 (x and z only), the height stays.
+  const ts = [player(0, 600)];
+  for (let f = 0; f < 3; f++) arm.tick(ts);
+  near(arm.pose().scale[0], 1.45, 'the arm grows 0.15 a frame');
+  eq(arm.pose().scale[1], 1, 'its height scale stays 1');
+  for (let f = 0; f < 10; f++) arm.tick(ts);
+  eq(arm.pose().scale[0], BELRA_ARM.scaleMax, 'the scale stops at 2');
+  while (!arm.done) arm.tick(ts);
+  // The regrow effect: 51 frames in Normal (0.04 a frame to 2.0 in float32).
+  let ticks = 0;
+  while (b.state === 'throw' && ticks < 200) {
+    b.tick([player(0, 200)], false);
+    ticks++;
+  }
+  eq(b.state, 'chase', 'after the regrow the Belra walks again');
+  eq(ticks, 1 + 51 + 1, 'Normal: the hide clears, 51 regrow frames, then the throw ends');
+  check(!b.armGone[0] && !b.armGone[1], 'both arms are back on the body');
+  // The arm model is the left / right part of the world root; below the minimum height it is lifted.
+  eq(new BelraArm(0, 3, 0, 0, false, 0).pose().y, BELRA_ARM.minHeight, 'an arm below 10 is drawn at 10');
+  eq(new BelraArm(0, 3, 0, 0, false, 0).look.model, 'left arm', 'arm 0 is the left arm');
+  // Ultimate: the effect's step is 2.0 / 10, so the regrow takes 10 frames.
+  const u = launch(true);
+  while (!u.arm.done) u.arm.tick(ts);
+  let ut = 0;
+  while (u.b.state === 'throw' && ut < 200) {
+    u.b.tick([player(0, 200)], false);
+    ut++;
+  }
+  eq(ut, 1 + 10 + 1, 'Ultimate: 10 regrow frames');
+}
+
 // --- Dark Gunner / control ----------------------------------------------------------
 {
   const m = mv([7, 100, 2.5, 6], [20, 240, 1500, 250]);

@@ -323,6 +323,10 @@ export interface EnemyMotionSpec {
   // A shape motion entry (.njs, relative to the first motion) drawn at the
   // motion's frame (njDrawShapeMotion); chunk models only.
   shape?: number | undefined;
+  // The motion keys fewer nodes than the model has (the first `nodes` in
+  // depth-first order; the others keep their bind pose): the Saint-Milion
+  // tentacle's motions key 32 of its 59 nodes.
+  nodes?: number | undefined;
 }
 
 export interface EnemyPartSpec {
@@ -431,7 +435,7 @@ export function buildEnemy(
     }
     partNodes.push(nodes);
     if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
-      const motion = own.motion(part.motion.index, nodes.length);
+      const motion = own.motion(part.motion.index, part.motion.nodes ?? nodes.length);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
       const animator = new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0);
       if (shaper) {
