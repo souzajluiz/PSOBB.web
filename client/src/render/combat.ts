@@ -618,6 +618,8 @@ export class CombatView {
     this.voloptHead = null;
     this.voloptBody = null;
     this.voloptHeld = false;
+    this.voloptCage?.removeFromParent();
+    this.voloptCage = null;
     this.resetDarkFalz();
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
@@ -1935,6 +1937,28 @@ export class CombatView {
 
   private voloptBodyAnim = new Map<number, { animators: NodeAnimator[]; slot: number }>();
 
+  // The flying cage of the capture (VoloptCage, vtable 0x00AF6710). ASSUMED
+  // look: a ball (the exe draws particles 0x11C / 0x11D at it).
+  private voloptCage: THREE.Mesh | null = null;
+  private readonly voloptCagePos: [number, number, number] = [0, 0, 0];
+  private voloptCageBall(ai: VoloptForm2Ai): void {
+    const live = ai.cagePosition(this.voloptCagePos);
+    if (!live) {
+      if (this.voloptCage) this.voloptCage.visible = false;
+      return;
+    }
+    if (!this.voloptCage) {
+      try {
+        this.voloptCage = new THREE.Mesh(new THREE.SphereGeometry(3, 8, 6), new THREE.MeshBasicMaterial({ color: 0x80c0ff }));
+        this.viewer.scene.add(this.voloptCage);
+      } catch {
+        return;
+      }
+    }
+    this.voloptCage.visible = true;
+    this.voloptCage.position.set(this.voloptCagePos[0], this.voloptCagePos[1], this.voloptCagePos[2]);
+  }
+
   private tickVoloptForm2(e: EnemyRuntime, ai: VoloptForm2Ai, targets: AiTarget[]): void {
     const inst = e.instance;
     const root = inst.root;
@@ -1974,6 +1998,7 @@ export class CombatView {
     const shots = r.shots;
     if (shots) for (let i = 0; i < shots.length; i++) this.launchShot(e, shots[i]);
     ai.sustained.forEach(this.playSustained);
+    this.voloptCageBall(ai);
     // The prison holds the captured player (the cage entity's 0x20000 flag and
     // the position it sets), and lets go when the timer or the HP end it.
     const me = this.game.selfId;

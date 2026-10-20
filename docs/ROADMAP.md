@@ -20,8 +20,10 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 2. Episode 1 boss fights where they move their children: De Rol Le and
    Vol Opt are done (`combat/derolle.ts`; left there: the tentacles' chain
    solver 0x0078d9d0, the segments as their own hit targets, the shell debris
-   and the particles. `combat/volopt.ts` / `volopt2.ts`; left there: the prison
-   bars' and the cage's update code (not in the dump), the Gizonde / Foie /
+   and the particles. `combat/volopt.ts` / `volopt2.ts`; the laser's bars, the
+   cage and the prison's rise are read from the disassembly (2026-10-20); left
+   there: drawing the bars / cage / hatch lids (balls now; the lid needs
+   `fe_obj_vo_futa_moto.nj`), the bar's ceiling fragments, the Gizonde / Foie /
    Gibarta objects of Ultimate, the camera, the ending's warp objects). Vol
    Opt has no form 7, minions or hazards: the dump's "VoloptForm7*" and
    "VoloptForm2MinionMapObject" names, and the JP files of the same names, are

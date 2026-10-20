@@ -34,7 +34,8 @@
 // What is ASSUMED is marked in place. In short: the geometry of the core
 // behind a wall (the sign of the sweep), the fade / camera waits (the exe waits
 // for an overlay object and a camera event that this client does not have),
-// the prison bars (state tracked, never drawn and no collision), the lightning
+// the hatch lids (tracked, not drawn: VoloptLid), the laser bars' and the cage's
+// look (balls, volopt2.ts), the lightning
 // of the Ultimate difficulty (a plain bolt instead of the Gizonde / Foie /
 // Gibarta objects), and the heights the hit tests use.
 
@@ -319,6 +320,65 @@ export class VoloptBolt extends EnemyShot {
   }
 }
 
+// --- the pillar's hatch lid ---------------------------------------------------
+
+// The 0x34-byte object at +0x3C0 of every pillar (ctor 0x0044B84C, vtable
+// 0x00AF68C8, update 0x0044B8C4, draw 0x0044B9A0; the dump calls it
+// VoloptPrisonBar). It is the cover of the pillar's hatch: the draw puts the
+// first node of the BML's model entry 13 (fe_obj_vo_futa_moto, +0xD8 of the
+// model table) at (0, b, 0) and its child node at (0, a, 0), turned by
+// (-60 * index - 90) degrees like the pillar. The pillar sets +0x20 (and +0x24 to
+// 0): 1 closes the hatch, 2 opens it.
+//   state 1 (0x0044B944)  sub 0: b rises 1.8 a tick (0x00A44CA4) to 0.0, sub 1:
+//                         a rises 0.3 a tick (0x00A44CA8) to 0.0, then state 0
+//   state 2 (0x0044B8E4)  sub 0: a falls 0.3 a tick to -3.0 (0x008FEA10), sub 1:
+//                         b falls 1.8 a tick to -18.0 (0x008FEA14), then state 0
+export const LID = { stepA: Math.fround(0.3), stepB: Math.fround(1.8), minA: -3, minB: -18 } as const;
+
+export class VoloptLid {
+  state = 0;
+  sub = 0;
+  a = 0; // +0x28, drawn with the child node (table 0x00A44CB4)
+  b = 0; // +0x2C, drawn with the first node (table 0x00A44CB0)
+
+  set(state: number): void {
+    this.state = state;
+    this.sub = 0;
+  }
+
+  tick(): void {
+    if (this.state === 1) {
+      if (this.sub === 0) {
+        const v = this.b + LID.stepB;
+        if (v >= 0) {
+          this.sub = 1;
+          this.b = 0;
+        } else this.b = Math.fround(v);
+      } else {
+        const v = this.a + LID.stepA;
+        if (v >= 0) {
+          this.state = 0;
+          this.a = 0;
+        } else this.a = Math.fround(v);
+      }
+    } else if (this.state === 2) {
+      if (this.sub === 0) {
+        const v = this.a - LID.stepA;
+        if (v <= LID.minA) {
+          this.sub = 1;
+          this.a = LID.minA;
+        } else this.a = Math.fround(v);
+      } else {
+        const v = this.b - LID.stepB;
+        if (v <= LID.minB) {
+          this.state = 0;
+          this.b = LID.minB;
+        } else this.b = Math.fround(v);
+      }
+    }
+  }
+}
+
 // --- pillar -----------------------------------------------------------------
 
 // States are the exe's +0x32e: 0 idle, 2 rise / attack, 4 hit, 5 dead,
@@ -335,8 +395,15 @@ export class VoloptPillar extends VoloptPart {
   attacking = false; // flag 0x10000 of +0x390
   retracting = false; // flag 0x20000
   locked = false; // flag 1: the state does not change
-  // The bar object's state (+0x20 of the object at +0x3c0): 1 lowered, 2 raised.
-  bars = 1;
+  // The hatch lid (the object at +0x3C0): its state is written like the exe
+  // does (+0x20 = n, +0x24 = 0): 1 closes the hatch, 2 opens it.
+  readonly lid = new VoloptLid();
+  get bars(): number {
+    return this.lid.state;
+  }
+  set bars(state: number) {
+    this.lid.set(state);
+  }
   private readonly anim: VoloptAnim;
   private readonly fight: VoloptFight;
   private readonly dog = new VoloptWatchdog();
@@ -461,6 +528,7 @@ export class VoloptPillar extends VoloptPart {
         this.tickRetract();
         break;
     }
+    this.lid.tick();
     this.syncPose();
   }
 
