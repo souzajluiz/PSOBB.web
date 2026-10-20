@@ -25,7 +25,7 @@
 // (start_drl_rock_cycle 0x0042ac2c, SetDerolleActionState /
 // ProcessEntityById_00432a74).
 
-import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
+import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyBrain } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -778,6 +778,111 @@ export class DrlTentacle {
   }
 }
 
+// --- the shell segments -------------------------------------------------------
+//
+// The ten DE_ROL_LE_BODY entities (ctor 0x004351c4, 0x3c4 bytes, vtable
+// 0x00af46e0; the body's ctor 0x0042ad4c makes them at +0x5e8 with the entity
+// ids body + 1 .. body + 10, the slots newserv reserves after the body). Each
+// one draws nothing of its own:
+//   - its update (0x00435294) copies its position from the body's slot
+//     +0x548 + i * 0xc (+0x398), which render_derolle fills while it draws
+//     and the ctor parks at (10000, 10000, 10000); then EnemyUpdateLoop
+//     _0052167c (the hit flag 0x200 -> vtable +0x100 = 0x004354c4), the colour
+//     (0x00435334), and vtable +0x168 = 0x00435070: below y -60 (-10 at
+//     0x008fcc10 minus 50 at 0x008fd4ec) its hit box is off
+//     (PoisonLilyDisableHitboxes_005204b0), else on, with flag 4 at or above
+//     y 30 (0x008fd4e8, 0x0052054c) and flag 2 below (0x005205a0); then
+//     enable_reticle_ (it can be locked on) and a radar icon;
+//   - one hit box (template 0x009a47e4: offset 0, flags 0x8003, radius +0xc =
+//     50.0 written by the static init 0x00435660) at its position;
+//   - stats row 16, attack row 15, resist row 16 (0x009a4820 / 0x009a4818 /
+//     0x009a4810), HP and max HP 20000 (0x004356c0); the HP is refilled after
+//     every hit, so it never dies (no 6x76, no drop, no EXP for a segment);
+//   - its pool +0x39c = MovementData[15] iparam2 (GetDerolleAnimationSpeed8
+//     _00434160: +0x1c of the row).
+// A hit (0x004354c4, on every client: the 6x0A of the striker's client sets
+// the hit flag everywhere) while the segment is whole: the hit flash
+// (+0x3b0 = 1.0 with the colour 0, 1, 1) and the pool goes down; when it is
+// below 1 it is set to 0 and vtable +0x1a8 = 0x004350d4 breaks the segment:
+// flag 1 of +0x394, stats row 16 / attack 15 / resist 16 again (0x009a4824 /
+// 0x009a481c / 0x009a4814) with HP 20000, and the shell debris
+// (InitializeSinowbeatObject_00429834 at the segment). A hit on a broken
+// segment: particle 0x127 (SpawnVisualEffectAtRelativePosition_004b96bc with
+// 15 up and 12 toward the camera) and DerolleUpdateActionTimer_0043416c
+// lowers the BODY pool +0x6b4 by round(damage * 0.5) (0x008fcd40) with
+// SE 0x336, whether the shell is broken or not; the shell pool is never fed by
+// a segment.
+export const DRL_SEGMENT = {
+  count: 10,
+  radius: 50, // 0x009a47f0
+  boxFlags: 0x8003,
+  minY: -60, // 0x008fcc10 - 0x008fd4ec
+  highY: 30, // 0x008fd4e8
+  hp: 20000, // 0x004356c0 / 0x0043514a: the entity's own HP, refilled after every hit
+  park: 10000, // 0x461c4000, the slot before the first draw
+  rows: { stats: 16, attack: 15, resist: 16 },
+  share: 0.5, // 0x008fcd40: a broken segment's hit to the body pool
+  flashStep: 0.05, // 0x008fd4c4
+  particle: { id: 0x127, up: 15, back: 12 }, // 0x00435538 -> 0x004b96bc
+} as const;
+
+const fround = Math.fround;
+// x87 fistp in round-to-nearest mode (ROUND in the dump).
+const roundEven = (x: number): number => {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+};
+
+export class DrlSegment {
+  readonly index: number;
+  pool: number; // +0x39c
+  broken = false; // +0x394 & 1
+  flash = 0; // +0x3b0
+  // ARGB the update computes (+0x3a8 via 0x00435334): white when idle, the hit
+  // flash fading from cyan, 0 once broken. render_derolle writes it into the
+  // segment's own material of the body model (DerolleSetAnimationSpeed, the
+  // node pointer +0x3a0 = DAT_00a43c0c[i]) and its alpha into its child's
+  // (+0x3a4 = g_DerolleRenderColorsArray[i]): the plate of a broken segment
+  // has alpha 0.
+  color = 0xffffffff;
+  x: number = DRL_SEGMENT.park;
+  y: number = DRL_SEGMENT.park;
+  z: number = DRL_SEGMENT.park;
+  constructor(index: number, pool: number) {
+    this.index = index;
+    this.pool = pool;
+  }
+  // 0x00435070: the hit box is on from y -60 up.
+  get targetable(): boolean {
+    return !(DRL_SEGMENT.minY > this.y);
+  }
+  // 0x00435070: flag 4 (high) at or above y 30, flag 2 (low) below.
+  get high(): boolean {
+    return this.y >= DRL_SEGMENT.highY;
+  }
+  // DerolleUpdateAnimationSpeedFromFloat (0x00435334), once a frame.
+  tickColor(): void {
+    if (this.broken) {
+      this.color = 0;
+      return;
+    }
+    const t = this.flash;
+    if (t > 0) {
+      const a = fround(t * 255);
+      const b = fround((1 - t) * 255);
+      // The flash colour (0, 1, 1) against the constants 1, 1, 1 (0x008fd4cc..).
+      const r = roundEven(0 * a + b) & 0xff;
+      const g = roundEven(a + b) & 0xff;
+      const bl = roundEven(a + b) & 0xff;
+      this.color = (0xff000000 | (r << 16) | (g << 8) | bl) >>> 0;
+      const next = fround(t - DRL_SEGMENT.flashStep);
+      this.flash = next < 0 ? 0 : next;
+      return;
+    }
+    this.color = 0xffffffff;
+  }
+}
+
 // --- the body -----------------------------------------------------------------
 
 export type DrlEvent =
@@ -794,6 +899,10 @@ export type DrlEvent =
   | { kind: 'helmBreak' }
   // A segment's own pool ran out (0x004354c4 -> 0x004350d4): its shell debris.
   | { kind: 'segmentBroken'; index: number }
+  // create_particle_effect_3(point, id, 0x40) at `at` + (0, up, 0) moved
+  // `back` toward the camera (the camera's view direction scaled, as
+  // 0x004b96bc and 0x00433edc subtract it).
+  | { kind: 'particle'; id: number; at: Vec3; up: number; back: number }
   | { kind: 'bgm'; name: string } // 0x1f at frame 27: deldeath.adx (0x008fd420)
   | { kind: 'killed'; x: number; y: number; z: number } // 0x1f phase 5
   | { kind: 'remove' }; // 0x20
@@ -876,6 +985,8 @@ export class DeRolLeAi extends BrainBase {
   pieceRecords: { helm: DrlPieceRecord[]; shell: DrlPieceRecord[] } | null = null;
   helm: DrlDebris | null = null;
   readonly shells: (DrlDebris | null)[] = Array.from({ length: 10 }, () => null);
+  // The ten DE_ROL_LE_BODY entities (enemy indices body + 1 + i).
+  readonly segmentParts: DrlSegment[];
   private emitters: DrlRockEmitter[] = [];
   private pendingShots: EnemyShot[] = [];
   private opts: DeRolLeOptions;
@@ -923,6 +1034,9 @@ export class DeRolLeAi extends BrainBase {
     this.shellMax = mv && mv.iparam[2] > 0 ? mv.iparam[2] : Math.max(1, Math.round(opts.hp / 3));
     this.bodyHp = this.bodyMax;
     this.shellHp = this.shellMax;
+    // ASSUMED fallback without MovementData: a tenth of the stats HP each.
+    const segPool = mv && mv.iparam[1] > 0 ? mv.iparam[1] : Math.max(1, Math.round(opts.hp / 10));
+    this.segmentParts = Array.from({ length: DRL_SEGMENT.count }, (_, i) => new DrlSegment(i, segPool));
     // The ctor puts the body in state 1 (ProcessDerolleCeilingRockAttack(4))
     // unless the boss is already dead (0x3c8 & 0x8000).
     this.setState(DRL_STATE.enter, false);
@@ -943,13 +1057,47 @@ export class DeRolLeAi extends BrainBase {
     return (this.flags & 0x40) !== 0;
   }
 
-  // A segment's own pool ran out: 0x004350d4 makes its shell debris at the
-  // segment's place (0x00429834). The segments are not hit targets yet, so
-  // nothing calls this until they are.
+  // A segment's own pool ran out: 0x004350d4 sets its flag 1 and makes its
+  // shell debris at the segment's place (0x00429834). ASSUMED: without the
+  // model's piece records the segment breaks but nothing flies.
   breakSegment(i: number): void {
-    if (i < 0 || i >= this.shells.length || this.shells[i] || !this.pieceRecords) return;
-    this.shells[i] = DrlDebris.shell(this.pieceRecords.shell, this.segmentAt(i), this.opts.rng);
+    const s = this.segmentParts[i];
+    if (!s || s.broken) return;
+    s.broken = true;
+    if (this.pieceRecords) this.shells[i] = DrlDebris.shell(this.pieceRecords.shell, this.segmentPoint(i), this.opts.rng);
     this.emit({ kind: 'segmentBroken', index: i });
+  }
+
+  // Where segment entity i is: its own copy of the slot (+0x38), or the
+  // estimate of segmentAt while nothing was captured.
+  private segmentPoint(i: number): Vec3 {
+    const s = this.segmentParts[i];
+    return s && s.y !== DRL_SEGMENT.park ? [s.x, s.y, s.z] : this.segmentAt(i);
+  }
+
+  // A hit on segment i (EnemyProcessDamage_004354c4, vtable +0x100 of the
+  // segment), run on every client for every 6x0A: `damage` is max_hp - hp of
+  // the segment entity, one hit's damage. Returns what it went to.
+  hitSegment(i: number, damage: number): 'segment' | 'broken' | 'body' | 'none' {
+    const s = this.segmentParts[i];
+    const d = Math.max(0, Math.round(damage));
+    if (!s || d <= 0) return 'none';
+    if (!s.broken) {
+      s.flash = 1;
+      s.pool -= d;
+      if (s.pool <= 0) {
+        s.pool = 0;
+        this.breakSegment(i);
+        return 'broken';
+      }
+      return 'segment';
+    }
+    const p = DRL_SEGMENT.particle;
+    this.emit({ kind: 'particle', id: p.id, at: [s.x, s.y, s.z], up: p.up, back: p.back });
+    // DerolleUpdateActionTimer_0043416c: the body pool, never the shell's.
+    this.bodyHp = Math.max(0, this.bodyHp - roundEven(d * DRL_SEGMENT.share));
+    this.emit({ kind: 'se', id: 0x336 });
+    return 'body';
   }
   // States 0x1e..0x20 set the entity's dead flag (UpdateDerolle).
   get invulnerable(): boolean {
@@ -1441,6 +1589,10 @@ export class DeRolLeAi extends BrainBase {
       return 'shell';
     }
     this.bodyHp = Math.max(0, this.bodyHp - d);
+    // Particle 0x127 at the first hit box's world position + 2 up, 8 toward
+    // the camera (0x00433edc). ASSUMED: box 0 (template 0x009a4520, offset 0)
+    // sits at the body's drawn position.
+    this.emit({ kind: 'particle', id: 0x127, at: [this.x, this.drawY, this.z], up: 2, back: 8 });
     this.emit({ kind: 'se', id: 0x336 });
     return 'body';
   }
@@ -1474,6 +1626,19 @@ export class DeRolLeAi extends BrainBase {
     this.fins.tick(this.finAnchors);
     this.helm?.tick();
     for (const d of this.shells) d?.tick();
+    // The segment entities' own updates (0x00435294): the slot the last draw
+    // left, then the colour.
+    const caps = this.segments;
+    for (let i = 0; i < this.segmentParts.length; i++) {
+      const s = this.segmentParts[i];
+      const c = caps?.[i];
+      if (c) {
+        s.x = c[0];
+        s.y = c[1];
+        s.z = c[2];
+      }
+      s.tickColor();
+    }
     if (this.motionDirty) {
       this.motionDirty = false;
       const s = this.motionSlot;
@@ -2100,6 +2265,41 @@ export class DeRolLeAi extends BrainBase {
   resume(): string {
     return this.state;
   }
+}
+
+// The brain of a segment entity's enemy (render/combat.ts keeps one per
+// segment in the slots body + 1 .. body + 10, as Vol Opt's part proxies): it
+// does nothing of its own, the body's brain owns the segment's state and the
+// owner moves the enemy to it.
+export class DrlSegmentAi implements EnemyBrain {
+  state = 'segment';
+  readonly motion = null;
+  readonly superArmor = true;
+  readonly owner: DeRolLeAi;
+  readonly index: number;
+  private readonly frame: AiFrame = { motion: null, x: 0, z: 0, angle: 0, hit: null };
+  constructor(owner: DeRolLeAi, index: number) {
+    this.owner = owner;
+    this.index = index;
+  }
+  get segment(): DrlSegment {
+    return this.owner.segmentParts[this.index];
+  }
+  // 0x00435070: no hit box below y -60.
+  get untargetable(): boolean {
+    return !this.segment.targetable;
+  }
+  tick(): AiFrame {
+    const s = this.segment;
+    this.frame.x = s.x;
+    this.frame.z = s.z;
+    return this.frame;
+  }
+  onDamage(): void {}
+  resume(): string {
+    return this.state;
+  }
+  kill(): void {}
 }
 
 const DRL_NAMES: Record<number, string> = {

@@ -52,7 +52,7 @@ import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
-import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { DeRolLeAi, DrlSegmentAi, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
 import { PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
@@ -225,6 +225,11 @@ interface DrlView {
   helmCut: THREE.Object3D[]; // the helm nodes below it, collapsed once the helm flew off
   helmDebris: DrlDebrisView | null;
   shellDebris: (DrlDebrisView | null)[];
+  // The segment entities' enemies (slots body + 1 + i), null: not spawned.
+  segProxies: (EnemyRuntime | null)[];
+  // Segment i's plate in the body model: root child i (draw index 1 + 2i,
+  // DAT_00a43c0c[i]) and its child (2 + 2i, g_DerolleRenderColorsArray[i]).
+  segPlates: THREE.Object3D[][];
 }
 
 // A debris part: its group and its node tree (node i + 1 is piece i).
@@ -365,6 +370,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
+  (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
   ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable);
 
@@ -1011,6 +1017,8 @@ export class CombatView {
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnVolopt();
     if (this.disposed || token !== this.enterToken) return;
+    await this.spawnDeRolLeSegments();
+    if (this.disposed || token !== this.enterToken) return;
     await this.spawnDarkFalz();
     if (this.disposed || token !== this.enterToken) return;
     // HP follows the player across floors (a warp does not heal); it is only
@@ -1343,6 +1351,8 @@ export class CombatView {
       if (ai instanceof DarkFalzPartAi) continue;
       // A part's enemy is moved by the control (syncVolopt).
       if (ai instanceof VoloptPartAi) continue;
+      // A De Rol Le segment's enemy is moved by the body (tickDeRolLe).
+      if (ai instanceof DrlSegmentAi) continue;
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
@@ -1464,6 +1474,8 @@ export class CombatView {
       helmCut: (body[77]?.children ?? []).filter((n) => body.includes(n)),
       helmDebris: this.drlDebrisView(inst, 'helm debris'),
       shellDebris: Array.from({ length: 10 }, (_, i) => this.drlDebrisView(inst, `shell debris ${i}`)),
+      segProxies: ai.segmentParts.map((): EnemyRuntime | null => null),
+      segPlates: ai.segmentParts.map((_, i) => [body[1 + 2 * i], body[2 + 2 * i]].filter((n): n is THREE.Object3D => !!n)),
     };
     // The debris pieces are the child nodes of helm_break / shell_break.
     const records = (d: DrlDebrisView | null, shell: boolean) =>
@@ -1545,6 +1557,7 @@ export class CombatView {
     // Flag 0x40: render_derolle draws the body without the helm nodes (the
     // pieces fly as the helm debris); the nodes collapse to a point.
     if (ai.helmCut) for (const n of v.helmCut) n.scale.setScalar(0.0001);
+    this.syncDeRolLeSegments(e, ai, v);
     for (const s of r.shots ?? []) this.launchShot(e, s);
     for (const ev of ai.events.splice(0)) {
       this.drlEvent(e, ai, ev);
@@ -1667,6 +1680,14 @@ export class CombatView {
       case 'segmentBroken':
         this.opts.log(`${what}: segment ${ev.index} breaks`);
         return;
+      case 'particle': {
+        // create_particle_effect_3 at the point, `back` toward the camera
+        // (the exe subtracts the camera's view direction times `back`).
+        const at = new THREE.Vector3(ev.at[0], ev.at[1] + ev.up, ev.at[2]);
+        at.addScaledVector(this.viewer.camera.getWorldDirection(this.drlCamDir), -ev.back);
+        this.particle({ id: ev.id }, at);
+        return;
+      }
       case 'bgm':
         // ASSUMED: the death track is not started here (audio/bossbgm.ts
         // keeps the boss floor's own track).
@@ -1681,11 +1702,110 @@ export class CombatView {
         for (const s of this.shots) if (s.owner === e) s.shot.done = true;
         this.layer.remove(e.instance);
         this.enemies.delete(e.index);
+        // The body's dtor deletes the segment entities with it.
+        for (const p of this.drlViews.get(e.index)?.segProxies ?? []) {
+          if (!p) continue;
+          this.layer.remove(p.instance);
+          this.enemies.delete(p.index);
+          if (this.lockOn === p) this.lockOn = null;
+        }
         this.drlViews.delete(e.index);
         this.drlLastHitLocal.delete(e.index);
         if (this.lockOn === e) this.lockOn = null;
         return;
     }
+  }
+
+  private drlCamDir = new THREE.Vector3();
+
+  // The body's ctor (0x0042ad4c) makes the ten segment entities with the ids
+  // body + 1 .. body + 10: each gets an enemy there that the player can hit
+  // (stats row 16 / attack 15 / resist 16, HP 20000, the hit box of radius
+  // 50 at the segment), as Vol Opt's parts do.
+  private async spawnDeRolLeSegments(): Promise<void> {
+    for (const head of [...this.enemies.values()]) {
+      const ai = head.ai;
+      if (!(ai instanceof DeRolLeAi)) continue;
+      const v = this.drlView(head, ai);
+      const fight = this.childFightStats('DE_ROL_LE_BODY');
+      for (let i = 0; i < ai.segmentParts.length; i++) {
+        const index = head.index + 1 + i;
+        if (this.enemies.has(index)) {
+          this.opts.log(`De Rol Le E-${head.index.toString(16)}: slot E-${index.toString(16)} (segment ${i}) is taken, that segment cannot be hit`);
+          continue;
+        }
+        const seg = ai.segmentParts[i];
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [seg.x, seg.y, seg.z] as [number, number, number],
+          yaw: 0,
+          name: 'De Rol Le segment',
+        };
+        const spec = { ...head.instance.spec, name: 'TBoss2DeRolLeSegment', parts: [] };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+        if (!instance || this.disposed) return;
+        instance.root.visible = false;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          ...fight,
+          stats: { ...fight.stats, hp: DRL_SEGMENT.hp, maxHp: DRL_SEGMENT.hp },
+          exp: 0,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: new DrlSegmentAi(ai, i),
+          lift: 0,
+          monest: null,
+          parent: head,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute('DE_ROL_LE_BODY')),
+        };
+        this.enemies.set(index, rt);
+        v.segProxies[i] = rt;
+      }
+    }
+  }
+
+  // The segment enemies stand where the body's brain put the segments and
+  // exist for the player while their hit box is on (y -60 and up, 0x00435070).
+  // A broken segment's plate has alpha 0 (DerolleSetAnimationSpeed with the
+  // colour 0); ASSUMED: alpha 0 draws nothing, so its two nodes collapse as
+  // the helm's do. Not reproduced: the hit flash (the plate's diffuse colour,
+  // DrlSegment.color), the body is one skinned mesh here.
+  private syncDeRolLeSegments(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
+    const shown = e.instance.root.visible;
+    for (let i = 0; i < ai.segmentParts.length; i++) {
+      const s = ai.segmentParts[i];
+      if (s.broken) for (const n of v.segPlates[i]) n.scale.setScalar(0.0001);
+      const rt = v.segProxies[i];
+      if (!rt) continue;
+      rt.instance.root.position.set(s.x, s.y, s.z);
+      rt.instance.root.visible = shown && s.targetable;
+      rt.stats.hp = DRL_SEGMENT.hp;
+      rt.dead = false;
+    }
+  }
+
+  // A strike on a segment's enemy: the body's brain feeds the segment pool
+  // or, once broken, the body pool. The entity's HP is refilled after each
+  // hit, so the 6x0A carries this hit's damage.
+  // ASSUMED: the body's last attacker (+0x2d8, the kill's EXP / drop gate) is
+  // not set by a segment hit (the segment's own +0x2d8 is the one written).
+  private deRolLeSegmentHit(e: EnemyRuntime, ai: DrlSegmentAi, damage: number, critical: boolean, flags: number, what: string): void {
+    const owner = ai.owner;
+    const went = owner.hitSegment(ai.index, damage);
+    if (e.parent) e.parent.stats.hp = owner.bodyHp;
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 26, p.z);
+    const s = ai.segment;
+    this.opts.log(`${what}hit De Rol Le's segment ${ai.index} (${went}) for ${Math.round(damage)}: segment ${s.pool}${s.broken ? ' (broken)' : ''}, body ${owner.bodyHp}/${owner.bodyMax}`);
   }
 
   // 0x1f phase 5: EnemyOnKilledHandler_0051f894 at (-55.8, 2.0, 60.29), so
@@ -4022,8 +4142,12 @@ export class CombatView {
       // ASSUMED: a box counts from its surface; the Dragon's seven body boxes
       // all sit at its origin, the biggest with radius 15 (combat/dragon.ts
       // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
-      const dist = Math.hypot(dx, dz) - (e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : 0);
-      if (dist > maxDist || Math.abs(p.y - from.y) > 40) continue;
+      // A De Rol Le segment's box has radius 50 (0x009a47f0); ASSUMED: it
+      // counts from its surface in height too.
+      const seg = e.ai instanceof DrlSegmentAi;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : 0;
+      const dist = Math.hypot(dx, dz) - reach;
+      if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
       let diff = Math.atan2(dx, dz) - me.angle;
       diff = Math.atan2(Math.sin(diff), Math.cos(diff));
       if (Math.abs(diff) > halfAngle) continue;
@@ -4326,6 +4450,10 @@ export class CombatView {
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
+    if (e.ai instanceof DrlSegmentAi) {
+      this.deRolLeSegmentHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
     if (e.ai instanceof DeRolLeAi) {
@@ -4703,6 +4831,7 @@ export class CombatView {
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
   private hitRadiusOf(e: EnemyRuntime): number {
     let r = this.fireRadius.get(e);
+    if (r === undefined && e.ai instanceof DrlSegmentAi) r = DRL_SEGMENT.radius;
     if (r === undefined) {
       const sub = Math.max(0, Math.trunc(((e.slot.set as EnemySet | undefined)?.params?.[5] as number | undefined) ?? 0));
       r = collisionRadius(e.instance.spec.name, sub, this.ultimate);
@@ -5497,6 +5626,16 @@ export class CombatView {
           e.stats.hp = e.ai.hp;
           this.dragonLastHit.set(e.index, false);
           this.opts.log(`the Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof DrlSegmentAi) {
+        // restore_enemy_status and the hit flag run the segment's +0x100
+        // (0x004354c4) on this client too: the same pools as the striker's.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0) {
+          const went = e.ai.owner.hitSegment(e.ai.index, s.totalDamage);
+          if (e.parent) e.parent.stats.hp = e.ai.owner.bodyHp;
+          this.opts.log(`De Rol Le's segment ${e.ai.index} hit for ${s.totalDamage} (${went}, 6x0A from another client): segment ${e.ai.segment.pool}, body ${e.ai.owner.bodyHp}`);
         }
         return;
       }
