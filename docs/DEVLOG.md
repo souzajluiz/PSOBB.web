@@ -216,6 +216,10 @@ instantiations, 414 MB, 2.76 s; warm incremental 1.1 s, 275 MB.
 clear mix-up); the numeric command switches in `net/` (not unions); `exhaustive` in
 switches of functions that return a value.
 **Tests:** 64 of 64 `tests/*.test.ts` pass before and after.
+## 2026-10-20: Chrome smoke check of the boss floors after the leftovers pass
+
+Local newserv, Episode 1 Normal, `gameView.warpTo`: Dragon (floor 11, `DragonAi`), De Rol Le (12, `DeRolLeAi`), Vol Opt (13, `VoloptAi` + `VoloptForm2Ai` + parts) all load, run their brains and render (Vol Opt's body seen), no page errors. Not checked: the new drawing (fin chains, debris, Belra's arms, Dragon tail boxes in a fight), Episode 2 floors (their enemy archives are not on this Mac) and the Dark Falz floor.
+
 ## 2026-10-20: fix: the player froze against a wall (movement tick machine)
 
 **Bug (reported):** walking forward in the lobby, the player stopped and could not move on. `PlayerMover` only reads input at the end of a leg, and a leg ends when the player is within 2 steps of its point 8.0 ahead; against a wall (or the counter) the collision stopped the move short of that point, so the leg never ended: the state stayed walk / run, releasing the key did nothing and a new direction was ignored.
