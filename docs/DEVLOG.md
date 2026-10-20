@@ -5862,3 +5862,5 @@ the hit box positions, remote players' strikes on this client. Not seen in Chrom
 compare, techniques and specials, the special handlers' table, status apply / repeat and the
 45-frame pulses of `EnemyStatus`, death families, the number rules), `enemystatus`, `combat`,
 `status`, `buffs`, `enemies`, client `tsc --noEmit` (only the two missing @capacitor modules).
+
+**Chrome (2026-10-20, after the merge):** Forest 1, a Booma hit through `applyEnemyHit`: the white damage number and the hit spark particles show over the enemy, no page errors. Not seen: criticals, MISS, specials / technique effects, status particles, death particles.
