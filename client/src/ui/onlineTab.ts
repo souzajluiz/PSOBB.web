@@ -432,7 +432,20 @@ export function initOnlineTab(log: (msg: string) => void): void {
     const info = document.createElement('p');
     info.className = 'status';
     info.style.cssText = 'white-space:pre-wrap;font-size:12px';
-    box.append(h, open, back, list, info);
+    // Quests exist only in games (newserv answers A2 in a lobby with "Quests
+    // are not available in lobbies"): from the lobby, "Start quest" creates a
+    // game of the chosen episode and difficulty and opens its quest menu.
+    const startEpisode = document.createElement('select');
+    startEpisode.setAttribute('aria-label', 'Quest episode');
+    startEpisode.append(...Object.entries(EPISODE_NAMES).map(([v, n]) => new Option(n, v)));
+    const startDifficulty = document.createElement('select');
+    startDifficulty.setAttribute('aria-label', 'Quest difficulty');
+    startDifficulty.append(...Object.entries(DIFFICULTY_NAMES).map(([v, n]) => new Option(n, v)));
+    const start = document.createElement('button');
+    start.type = 'button';
+    start.textContent = 'Start quest (new game)';
+    const lobbyControls: HTMLElement[] = [startEpisode, startDifficulty, start];
+    box.append(h, ...lobbyControls, open, back, list, info);
     side.querySelector('#leave-lobby')?.before(box);
 
     const setList = (entries: QuestMenuEntry[], onPick: (e: QuestMenuEntry) => void) => {
@@ -482,13 +495,31 @@ export function initOnlineTab(log: (msg: string) => void): void {
       void quests.selectQuest(entry);
     };
 
+    start.addEventListener('click', () => {
+      const n = `${lobby?.self?.name ?? 'web'} quest`.slice(0, 14);
+      void enterGame((l) =>
+        Game.create(l, ctx(), { name: n, password: '', difficulty: Number(startDifficulty.value), episode: Number(startEpisode.value) }),
+      )
+        .then(() => (game ? showCategories() : undefined))
+        .catch((err) => setStatus(errorText(err), 'err'));
+    });
     open.addEventListener('click', () => void showCategories().catch((err) => setStatus(errorText(err), 'err')));
     back.addEventListener('click', () => void showCategories().catch((err) => setStatus(errorText(err), 'err')));
 
     const update = () => {
       const inGame = !!game;
       // The box sets display:flex inline, which would beat the [hidden] rule.
-      box.style.display = inGame ? 'flex' : 'none';
+      box.style.display = lobby || inGame ? 'flex' : 'none';
+      for (const el of lobbyControls) {
+        el.hidden = inGame;
+        if (el instanceof HTMLButtonElement || el instanceof HTMLSelectElement) el.disabled = busy || !quests;
+      }
+      open.hidden = !inGame;
+      if (!inGame) {
+        list.replaceChildren();
+        back.hidden = true;
+        info.textContent = '';
+      }
       const running = questRunner?.session ?? null;
       h.textContent = running ? `Quest "${running.name}"` : 'Quests';
       open.disabled = !quests || busy || !!running;

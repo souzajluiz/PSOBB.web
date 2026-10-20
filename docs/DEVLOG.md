@@ -24,6 +24,12 @@ instantiations, 414 MB, 2.76 s; warm incremental 1.1 s, 275 MB.
 clear mix-up); the numeric command switches in `net/` (not unions); `exhaustive` in
 switches of functions that return a value.
 **Tests:** 64 of 64 `tests/*.test.ts` pass before and after.
+## 2026-10-20: starting a quest from the lobby (Online tab)
+
+**What changed:** the Quests box was only shown inside a game, so nothing could be started from the lobby, and a quest picked there would arrive as an A6/A7 download that was ignored. newserv answers A2 in a lobby with "Quests are not available in lobbies" (`on_A2`, `ReceiveCommands.cc`), so a quest needs a game. The box now shows in the lobby with an episode and a difficulty select and "Start quest (new game)": it creates a game (`Game.create`), enters it and opens the quest menu (A2); the category / quest picks and the 44/13 files then run as in any game (`ui/onlineTab.ts`, `buildQuestPanel`).
+**Chrome:** lobby, Start quest (Episode 1, Normal): game created, categories Retrieval / Extermination / Events / Virtual Reality, "Lost HEAT SWORD" loaded and started (floor 0 handler, Ragol warp enabled), no console errors.
+**Not done:** the classic page (`classic.html`) cannot play a game yet (no field scene), so no quest start there.
+
 ## 2026-10-20: player movement tick machine drives the local player
 
 **What changed:** `PlayerMover` (`render/playermove.ts`) ports the exe's stand / walk / run poll, leg (8.0 ahead), arrival check (dist^2 < (2 x speed)^2), heading smoothing and velocity direction, one step per game tick. `render/lobbyview.ts` drives the local player from it (fixed 30 Hz accumulator, keyboard axes ramped 32 a poll to 128, touch stick axes as they are, map collision per tick) and draws the pose interpolated between ticks. Keyboard sideways-only input turns in place (0x800 a tick) before walking. Tests: `tests/playermove.test.ts` (walk 1.0, run 1.5 after 6 ticks, leg-end stop, turn in place). `tsc` clean.
