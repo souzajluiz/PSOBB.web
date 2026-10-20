@@ -146,7 +146,10 @@ import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
 import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
 import { FieldParticles } from './hitfx.ts';
-import { CRITICAL_SE, deathParticles, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
+import { setModelOpacity } from './hitmodels.ts';
+import { DeathRun, deathPlanFor, type DeathPoint } from '../combat/deathfx.ts';
+import { Dissolve, iceRadius } from '../combat/hitmodels.ts';
+import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
 import { haptic } from '../input/haptics.ts';
@@ -173,6 +176,9 @@ const buffName = (type: number): string => ({ 9: 'Shifta', 10: 'Deband', 11: 'Je
 // 6x0A base flags of an enemy that is on the ground and engaged
 // (0x20000000 enemy, 0x00800000 on ground, 0x00100000 activated; the capture
 // GC-ForestGameRareMagFeed sends 0x20900E00 for a killing hit).
+// play_directional_sound_effect: a sound this far from the listener is dropped.
+const SE_CUTOFF = 300;
+
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 
 // Action palette keys (input/keyconfig.ts: Left / Down / Right in the BB
@@ -247,6 +253,7 @@ interface EnemyRuntime {
   esp: number; // BattleParamEntry esp (the specials' status resistance)
   slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
   splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
+  death?: { run: DeathRun; acc: number; dissolve: Dissolve | null }; // combat/deathfx.ts: the death state's steps
 }
 
 // How a hit is shown (combat/hitfx.ts): its effect family and whether the
@@ -1012,7 +1019,13 @@ export class CombatView {
       }
       if (e.state === 'death') {
         e.removeIn -= dt;
-        if (ended && e.removeIn <= 0 && !e.fake && e.instance.spec.name === 'TObjEneLappy') {
+        if (e.death && this.deathSteps(e, dt, ended)) {
+          this.dropDead(index, e);
+          continue;
+        }
+        // A death plan that has steps or a dissolve left owns the removal.
+        const planBusy = !!e.death && (!e.death.run.finished || !!e.death.dissolve);
+        if (ended && e.removeIn <= 0 && !e.fake && !planBusy && e.instance.spec.name === 'TObjEneLappy') {
           // update_rappy: a dead Rappy fakes it (combat/enemyfsm.ts).
           const ctx = this.difficultyParams;
           const mi = ctx?.params ? movementIndex(e.slot.type) : null;
@@ -1024,11 +1037,7 @@ export class CombatView {
           e.fake = new RappyFakeDeath({ x: p.x, z: p.z, angle: e.instance.root.rotation.y, moveSpeed: speeds.engagedMove, rng: () => this.rng() });
           continue;
         }
-        if (ended && e.removeIn <= 0 && !e.fake) {
-          this.layer.remove(e.instance);
-          this.enemies.delete(index);
-          if (this.lockOn === e) this.lockOn = null;
-        }
+        if (ended && e.removeIn <= 0 && !e.fake && !planBusy) this.dropDead(index, e);
       }
     }
     // Game ticks (30 per second) drive the enemy AI and the player's hit state.
@@ -1928,6 +1937,16 @@ export class CombatView {
   private playSe(id: number): void {
     this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
     this.sePlayer?.play(id);
+  }
+
+  // play_directional_sound_effect (0x00814558): a sound at a point is not
+  // played at all from 300 units or more away (the cut-off 0x00980ad4; the
+  // fall-off of the 3D voice below it is not modelled, ASSUMED: the player
+  // stands where the listener does).
+  private playSeAt(id: number, at: THREE.Vector3): void {
+    const me = this.game.self ? this.view?.playerPositions().get(this.game.self.clientId) : null;
+    if (me && Math.hypot(me.x - at.x, me.y - at.y, me.z - at.z) >= SE_CUTOFF) return;
+    this.playSe(id);
   }
 
   // The parts' enemies follow their brain's point and exist for the player
@@ -4183,7 +4202,10 @@ export class CombatView {
     const crit = critical && kind === 'weapon';
     const at = this.hitPoint(e);
     for (const p of hitParticles(kind, crit, e.status.attribute)) this.particle(p, at);
-    if (crit) this.playSe(CRITICAL_SE);
+    if (crit) {
+      this.playSe(CRITICAL_SE);
+      void this.fx?.models.flash(at);
+    }
   }
 
   // The special's own particles when it lands (weapon_special_handlers).
@@ -4195,6 +4217,22 @@ export class CombatView {
       // ASSUMED: the attacker's weapon position (+0x300) is 20 above its feet.
       const at = p.at === 'player' && own ? new THREE.Vector3(own.x, own.y + 20, own.z) : hit;
       this.particle(p, at);
+    }
+    // Flame: two spiralling emitters (combat/hitfx.ts flamePoint).
+    if (special === 25) {
+      const yaw = e.instance.root.rotation.y;
+      for (const side of [0, 1] as const) {
+        let k = 0;
+        void this.fx?.spawn(
+          { id: FLAME_PARTICLE, delay: 0, duration: FLAME_FRAMES },
+          () => {
+            const q = flamePoint(hit, yaw, side, k++);
+            return new THREE.Vector3(q.x, q.y, q.z);
+          },
+          false,
+          true,
+        );
+      }
     }
   }
 
@@ -4217,14 +4255,59 @@ export class CombatView {
     // The freeze's ice object particle (0x12e) is made once at the hit; the
     // others follow the entity (flag 0x10).
     if (f.particle) this.particle(f.particle, lockon() ?? this.hitPoint(e), kind !== 'freeze');
-    if (f.se !== null) this.playSe(f.se);
+    if (f.se !== null) this.playSeAt(f.se, e.instance.root.position);
+    // The freeze's ice block (combat/hitmodels.ts IceBlock): around the hit box,
+    // it ends with the freeze (the entity's flag 0x20) or with the enemy.
+    if (kind === 'freeze' && !tick) {
+      const sub = Math.max(0, Math.trunc((e.slot.set as EnemySet).params[5]));
+      const radius = collisionRadius(e.instance.spec.name, sub, this.ultimate);
+      this.fx?.ice({
+        center: () => (this.enemies.get(e.index) === e ? this.hitPoint(e) : null),
+        frozen: () => !e.dead && e.status.has(STATUS.freeze),
+        radius: iceRadius(radius),
+      });
+    }
   }
 
-  // The enemy's death particles by its kind (combat/hitfx.ts deathParticles).
-  private deathFx(e: EnemyRuntime): void {
-    const at = e.instance.root.position.clone();
-    at.y += 10;
-    for (const p of deathParticles(e.status.attribute)) this.particle(p, at);
+  // The steps of a dying enemy's plan (combat/deathfx.ts), once per game
+  // frame: its sounds and particles at their points, the dissolve of the dark
+  // enemies (a per-material alpha, combat/hitmodels.ts Dissolve). True when the
+  // enemy ends now.
+  private deathSteps(e: EnemyRuntime, dt: number, ended: boolean): boolean {
+    const d = e.death!;
+    d.acc += dt * GAME_TICKS_PER_SECOND;
+    let frames = Math.min(5, Math.floor(d.acc));
+    d.acc -= Math.floor(d.acc);
+    const p = e.instance.root.position;
+    const anim = e.instance.animators[0];
+    while (frames-- > 0) {
+      const act = d.run.tick(anim?.frame ?? 0, ended);
+      for (const se of act.se) this.playSeAt(se, p);
+      for (const s of act.spawn) this.particle(s.p, this.deathPoint(e, s.at));
+      if (act.dissolve) d.dissolve = new Dissolve();
+      if (act.remove) return true;
+      if (d.dissolve) {
+        const f = d.dissolve.tick();
+        setModelOpacity(e.instance.root, f.opacity);
+        if (f.done) return true;
+      }
+    }
+    return false;
+  }
+
+  // A death plan's point: the origin or the body point (26 up, ASSUMED), pushed
+  // along the heading (the exe turns its offset by the enemy's yaw).
+  private deathPoint(e: EnemyRuntime, pt: DeathPoint): THREE.Vector3 {
+    const o = e.instance.root.position;
+    const yaw = e.instance.root.rotation.y;
+    const f = pt.forward ?? 0;
+    return new THREE.Vector3(o.x + Math.sin(yaw) * f, o.y + (pt.base === 'body' ? 26 : 0) + (pt.up ?? 0), o.z + Math.cos(yaw) * f);
+  }
+
+  private dropDead(index: number, e: EnemyRuntime): void {
+    this.layer.remove(e.instance);
+    this.enemies.delete(index);
+    if (this.lockOn === e) this.lockOn = null;
   }
 
   // --- techniques -------------------------------------------------------------
@@ -4420,6 +4503,11 @@ export class CombatView {
     }
     if (c.tech === TECH.resta) {
       const heal = restaHeal(c.level, mst, me.charClass);
+      // entity_hit_by_tech: the green HP text over every other healed player.
+      for (const id of c.sent) {
+        const q = id !== me.clientId ? view.playerPositions().get(id) : null;
+        if (q) this.overlay?.float(restaFloat(heal), q.x, q.y + 26, q.z);
+      }
       const before = this.damage.hp;
       if (!this.damage.dead) this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
       this.overlay?.techEffect('resta', from.x, from.y, from.z, c.data.rangeH);
@@ -4629,6 +4717,21 @@ export class CombatView {
     }
   }
 
+  // Another player's Resta: the green "HP+n" over every healed player but this
+  // one. ASSUMED: the caster's MST is unknown here, so n is the level's power
+  // plus MST 0 (the exe uses the caster's real value).
+  private remoteResta(clientId: number, sentLevel: number): void {
+    const cast = this.remoteCasts.get(clientId);
+    if (!cast || cast.tech !== TECH.resta) return;
+    const level = remoteTechLevel(sentLevel, this.techOverride.get(clientId) ?? 0);
+    const charClass = this.game.players.get(clientId)?.charClass ?? 0;
+    const heal = restaHeal(level, 0, Math.max(0, charClass));
+    for (const id of cast.targets) {
+      const q = id !== this.game.selfId && id < 0x1000 ? this.view?.playerPositions().get(id) : null;
+      if (q) this.overlay?.float(restaFloat(heal), q.x, q.y + 26, q.z);
+    }
+  }
+
   private tickTechHits(): void {
     if (!this.techHits.length) return;
     const due = this.techHits.filter((h) => --h.ticks < 0);
@@ -4731,7 +4834,6 @@ export class CombatView {
     anchor.y += 22;
     this.hud?.expPopup(amount, () => anchor);
     this.playDeath(e);
-    this.deathFx(e);
   }
 
   // --- level and EXP ---------------------------------------------------------
@@ -4930,6 +5032,7 @@ export class CombatView {
       const pos = this.view?.playerPositions().get(t.clientId);
       const el = techElement(t.tech);
       if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
+      if (t.tech === TECH.resta) this.remoteResta(t.clientId, t.level);
       if (el === null) this.remoteSupport(t.clientId, t.tech, t.level);
       return;
     }
@@ -4998,7 +5101,18 @@ export class CombatView {
         }
         return;
       }
-      e.stats.hp = Math.max(0, e.stats.maxHp - s.totalDamage);
+      const newHp = Math.max(0, e.stats.maxHp - s.totalDamage);
+      // Another player's strike: the spark and the number over the enemy.
+      // ASSUMED: the exe makes them in EntityHitEntity on the striker's client;
+      // whether a 6x0A receiver shows them was not traced, so this follows the
+      // port's own client (the damage is the HP the packet took away).
+      const lost = e.stats.hp - newHp;
+      if (lost > 0 && !e.dead) {
+        const p = this.hitPoint(e);
+        this.hitFx(e, lost, false, { kind: 'weapon' });
+        this.overlay?.damage(lost, false, p.x, p.y, p.z);
+      }
+      e.stats.hp = newHp;
       // restore_enemy_status: the status bits that are new on this enemy.
       if (!(s.flags & FLAG_DEAD)) {
         for (const t of e.status.receiveFlags(s.flags, this.ultimate)) {
@@ -5142,6 +5256,11 @@ export class CombatView {
   private playDeath(e: EnemyRuntime): void {
     e.state = 'death';
     e.removeIn = 0.5;
+    const plan = deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
+    if (plan) {
+      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null };
+      if (plan.instant) e.instance.root.visible = false;
+    }
     const m = e.ai?.deathMotion ?? e.motions.death;
     e.ai?.kill();
     if (m) this.playMotion(e, m.index, m.speed, false);

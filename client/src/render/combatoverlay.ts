@@ -134,7 +134,8 @@ export class CombatOverlay {
     this.float(missFloat(), x, y, z);
   }
 
-  private float(spec: FloatSpec, x: number, y: number, z: number): void {
+  /** A floating text of any spec (Resta's green "HP+n"). */
+  float(spec: FloatSpec, x: number, y: number, z: number): void {
     if (this.text?.(spec, x, y, z)) return;
     const sprite = numberSprite(spec.text, spec.rgb === 0xff0000);
     sprite.position.set(x, y, z);
