@@ -1,4 +1,4 @@
-# Checklist: what is left for a 100% faithful client
+# TODO: what is left for a 100% faithful client
 
 Compiled 2026-10-20 from ROADMAP.md, HANDOFF.md and the agents' "left" lists. `[x]` means
 done and tested; nothing here counts as final until it has been seen in Chrome next to the
