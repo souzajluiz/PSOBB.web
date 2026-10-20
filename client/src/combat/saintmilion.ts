@@ -1,9 +1,9 @@
 // Saint-Milion / Shambertin / Kondrieu: the 16 tentacle entities the boss
 // creates (Ephinea PsoBB.exe; the dump calls the class SaintEmilionEntity).
-// The boss's own fight is not ported (there is no Saint-Milion brain in this
-// tree); this module holds what the entities themselves do, read from the
-// exe, so the fight can drive them: their layout, action table, animation
-// table, procedural pose and placement.
+// This module holds the data of the entities, read from the exe: their layout,
+// action table, animation table, procedural pose and placement. Their
+// behaviour is combat/saintmilionents.ts and the boss's fight
+// combat/saintmilionboss.ts.
 //
 // Layout (SaintEmilionEntityFactory_CreateEntity 0x0076f34c, constructor
 // 0x0076df6c / 0x0076dfec): the boss creates 16 of them in the global slots
@@ -31,6 +31,9 @@ export const spinnerFirstAction = (slot: number): number => (spinnerIsLead(slot)
 // +0x3c0 flags of an action (the table's last column, applied by
 // SaintEmilionEntity_SetInitialState 0x0076ef70 on entering an action).
 export const SPINNER_FLAG = {
+  // Hits do not count towards the flinch (UpdateStateMachineCounter 0x0076da04
+  // needs it clear); it is cleared again when the animation ends with 0x4.
+  invulnerable: 0x1,
   nextRequested: 0x2, // ChangeAction(next) on the next update
   nextOnAnimationEnd: 0x4, // with the animation's end flag (+0xb0 & 0x10): set nextRequested
   noMovement: 0x8, // movement_disabled is cleared when set, set when clear
@@ -102,6 +105,10 @@ export const SPINNER_ANIMATIONS: readonly SpinnerAnimation[] = [
   { motion: 2, speed: 1, loop: true },
   { motion: 0, speed: 1, loop: false },
   { motion: 0, speed: Math.fround(-0.01), loop: true },
+  // Row 10 (0x009f78c0, read 2026-10-20): the retreat of the follower's pop-up
+  // (action 13 sets +0xb8 = 10 at the end of its sink): motion 0 played
+  // backwards at -1 by hand. The table above stopped at row 9.
+  { motion: 0, speed: -1, loop: false },
 ];
 
 // The motions of bm_ene_boss09_tentacle.bml key only the first 32 of the

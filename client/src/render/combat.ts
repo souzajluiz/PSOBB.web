@@ -55,6 +55,8 @@ import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../
 import { DeRolLeAi, DrlSegmentAi, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
+import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
+import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
@@ -336,6 +338,8 @@ const OWN_FSM = new Set([
   'TBoss2DeRolLe',
   'TBoss3Volopt',
   'TBoss3VoloptP02',
+  // Episode 4 (combat/saintmilionboss.ts).
+  'Episode4Boss',
   // Dark Falz (combat/darkfalz*.ts).
   'TBoss4DarkFalz',
 ]);
@@ -371,6 +375,8 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
   (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
+  e.ai instanceof SaintMilionAi ||
+  (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
   ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable);
 
@@ -906,6 +912,30 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'Episode4Boss') {
+          // Rows: the boss 32 / 34 (Shambertin 36 / 38, Kondrieu 40 / 42), the
+          // tentacles 33 / 35 (37 / 39, 41 / 43).
+          const v = head.slot.type === 'KONDRIEU' ? 2 : head.slot.type === 'SHAMBERTIN' ? 1 : 0;
+          const mv = (row: number) => (params ? params.movement(difficulty, row) : null);
+          const hp = (row: number) => (params ? params.stats(difficulty, row).hp : 0);
+          const ground = this.opts.ground;
+          ai = new SaintMilionAi({
+            ...at,
+            variant: v as 0 | 1 | 2,
+            param1: head.slot.set.params[0],
+            seed: head.index + 1,
+            movement: [mv(32 + v * 4), mv(34 + v * 4)],
+            hp: [hp(32 + v * 4), hp(34 + v * 4)],
+            tentacleHp: [hp(33 + v * 4), hp(35 + v * 4)],
+            tentacleMovement: [mv(33 + v * 4), mv(35 + v * 4)],
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            tentacleFrames: this.tentacleFrames(instance),
+            ...(ground ? { ground: (x: number, z: number) => ground(x, z, 60) !== null } : {}),
+            rng: () => this.rng(),
+          });
+          // The kill gives form 2's EXP (the stats row of the last form).
+          if (params) exp = params.stats(difficulty, 34 + v * 4).exp;
         } else if (className === 'TBoss1Dragon') {
           // MovementData row 17 holds the breath's, fireballs' and trail's
           // powers (g_DragonAnimationSpeedIndices 17, 18, 19); stats row 18
@@ -1018,6 +1048,8 @@ export class CombatView {
     await this.spawnVolopt();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnDeRolLeSegments();
+    if (this.disposed || token !== this.enterToken) return;
+    await this.spawnSaintMilion();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnDarkFalz();
     if (this.disposed || token !== this.enterToken) return;
@@ -1335,6 +1367,12 @@ export class CombatView {
         this.tickDragon(e, ai, targets);
         continue;
       }
+      if (ai instanceof SaintMilionAi) {
+        this.tickSaintMilion(e, ai, targets);
+        continue;
+      }
+      // A part's or a tentacle's enemy is moved by the body (tickSaintMilion).
+      if (ai instanceof SmChildAi) continue;
       if (ai instanceof VoloptAi) {
         this.tickVolopt(e, ai, targets);
         continue;
@@ -1963,6 +2001,272 @@ export class CombatView {
     if (!(e?.ai instanceof DragonAi) || e.dead) return;
     const target = dv.getUint32(8, true) & 0xffff;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
+  }
+
+  // --- Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts) ------------------
+  //
+  // One brain owns the body, its 8 parts (ids body + 1 .. 8) and its 16
+  // tentacles (body + 9 .. 24); the parts and the tentacles are invisible
+  // enemies here (like Vol Opt's parts) so strikes, techniques, the lock-on
+  // and the other clients' 6x0A find them by id. The room leader's brain sends
+  // 6xDC and every client applies it; every client runs the deaths from the
+  // 6x0A of each part and tentacle.
+
+  // Whether the last strike on a part was ours, by child index (0 .. 7) and,
+  // under the head's index, the kill's gate.
+  private smLastHit = new Map<number, boolean>();
+  private smHeads = new Map<number, { proxies: Array<EnemyRuntime | null>; bodies: NodeAnimator[] | null }>();
+  private smVec = new THREE.Vector3();
+  private smScale = new THREE.Vector3();
+
+  // The tentacle archive's motion frame counts (bm_ene_boss09_tentacle.bml).
+  private tentacleFrames(instance: EnemyInstance): (motion: number) => number {
+    const cache = new Map<number, number>();
+    return (m) => {
+      let n = cache.get(m);
+      if (n === undefined) {
+        const k = instance.parts.findIndex((p) => p.name === 'spinner 0');
+        const nodeCount = instance.animators[Math.max(0, k)]?.nodeCount ?? 32;
+        try {
+          n = instance.archive.motion(m, nodeCount).frameCount;
+        } catch {
+          // ASSUMED stand-ins when the archive does not parse (the real counts: 31 61 3 30 110 60 30).
+          n = [31, 61, 3, 30, 110, 60, 30][m] ?? 30;
+        }
+        cache.set(m, n);
+      }
+      return n;
+    };
+  }
+
+  private async spawnSaintMilion(): Promise<void> {
+    for (const head of [...this.enemies.values()]) {
+      const ai = head.ai;
+      if (!(ai instanceof SaintMilionAi)) continue;
+      const v = ai.variant;
+      const view = { proxies: [] as Array<EnemyRuntime | null>, bodies: null as NodeAnimator[] | null };
+      this.smHeads.set(head.index, view);
+      for (let i = 0; i < SM_PART_COUNT + 16; i++) {
+        view.proxies[i] = null;
+        const index = head.index + 1 + i;
+        if (this.enemies.has(index)) {
+          this.opts.log(`Saint-Milion E-${head.index.toString(16)}: slot E-${index.toString(16)} is taken, that ${i < SM_PART_COUNT ? 'part' : 'tentacle'} cannot be hit`);
+          continue;
+        }
+        const part = i < SM_PART_COUNT;
+        const lead = !part && (i - SM_PART_COUNT) % 4 === 0;
+        const row = part ? 32 + v * 4 : (lead ? 33 : 35) + v * 4;
+        const hp = part ? ai.parts[i].maxHp : ai.field.entities[i - SM_PART_COUNT].maxHp;
+        const fight = this.rowFightStats(row, hp);
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [ai.x, 0, ai.z] as [number, number, number],
+          yaw: 0,
+          name: part ? 'Saint-Milion part' : 'Saint-Milion tentacle',
+        };
+        const spec = { ...head.instance.spec, name: 'Episode4BossChild', parts: [] };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+        if (!instance || this.disposed) return;
+        instance.root.visible = false;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          ...fight,
+          exp: 0,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: new SmChildAi(ai, i),
+          lift: 0,
+          monest: null,
+          parent: head,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute(head.slot.type)),
+        };
+        this.enemies.set(index, rt);
+        view.proxies[i] = rt;
+      }
+    }
+  }
+
+  private tickSaintMilion(e: EnemyRuntime, ai: SaintMilionAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const view = this.smHeads.get(e.index);
+    const r = ai.tick(targets);
+    // The body stands on the ground under it.
+    const gy = this.opts.ground?.(r.x, r.z, root.position.y + 30) ?? null;
+    root.position.set(r.x, gy ?? root.position.y, r.z);
+    root.rotation.y = r.angle;
+    let bodies = view?.bodies ?? null;
+    if (view && !bodies) {
+      bodies = inst.animators.filter((_, k) => !inst.parts[k]?.name);
+      view.bodies = bodies;
+    }
+    for (const a of bodies ?? []) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`Saint-Milion motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    // The model draw records the nodes the hit boxes sit on (matrix slots).
+    const tree = inst.nodes?.[0];
+    if (tree) {
+      root.updateMatrixWorld(true);
+      const v = this.smVec;
+      for (let slot = 0; slot < SM_NODES.length; slot++) {
+        const o = tree[SM_NODES[slot]];
+        if (!o) continue;
+        o.getWorldPosition(v);
+        ai.nodes[slot * 3] = v.x;
+        ai.nodes[slot * 3 + 1] = v.y;
+        ai.nodes[slot * 3 + 2] = v.z;
+      }
+      ai.nodesKnown = true;
+    }
+    for (const ev of ai.events.splice(0)) this.smEvent(e, ai, ev);
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+    this.syncSaintMilion(e, ai, view);
+  }
+
+  private smEvent(e: EnemyRuntime, ai: SaintMilionAi, ev: SmBossEvent): void {
+    const what = `Saint-Milion E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        this.game.sendEpisode4BossAction(ev.action, ev.param);
+        this.opts.log(`${what}: 6xDC action ${ev.action} param 0x${ev.param.toString(16)} (state 0x${ai.sid.toString(16)})`);
+        return;
+      case 'se':
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        this.sePlayer?.play(ev.id);
+        return;
+      case 'bgm':
+        // ASSUMED: the track swap is not played here (audio/bossbgm.ts keeps the floor's track).
+        this.opts.log(`${what}: ${ev.name}`);
+        return;
+      case 'effect':
+        // Not reproduced: the missiles, lasers, wave, storm and sand sonic.
+        this.opts.log(`${what}: ${ev.name} (not reproduced)`);
+        return;
+      case 'phase':
+        this.opts.log(`${what}: form ${ev.form}`);
+        return;
+      case 'setDead':
+        this.game.sendEntitySetFlags(0x1000 | e.index, this.floor, 8);
+        return;
+      case 'gone':
+        // The tentacle's own set_monster_spawn_initdata_as_dead.
+        this.game.sendEntitySetFlags(0x1000 | (e.index + 1 + SM_PART_COUNT + ev.slot), this.floor, 8);
+        return;
+      case 'killed': {
+        e.dead = true;
+        e.stats.hp = 0;
+        if (ev.ours === null) this.smLastHit.delete(e.index);
+        else this.smLastHit.set(e.index, ev.ours);
+        if (this.lockOn === e) this.lockOn = null;
+        this.bossKilled(e, ev.x, ev.z, this.smLastHit, 'Saint-Milion');
+        return;
+      }
+    }
+  }
+
+  // The children follow the brain: parts on their model nodes, tentacles at
+  // their spots; the tentacle models are the head's hidden world parts.
+  private syncSaintMilion(e: EnemyRuntime, ai: SaintMilionAi, view: { proxies: Array<EnemyRuntime | null> } | undefined): void {
+    const shown = e.instance.root.visible;
+    const base = e.instance.root.position.y;
+    for (let i = 0; i < SM_PART_COUNT; i++) {
+      const rt = view?.proxies[i];
+      if (!rt) continue;
+      const p = ai.parts[i];
+      const n = ai.node(5 + i);
+      rt.instance.root.position.set(n ? n[0] : ai.x, n ? n[1] : base, n ? n[2] : ai.z);
+      rt.instance.root.visible = shown && ai.partHittable(i);
+      rt.stats.hp = p.hp;
+      rt.stats.maxHp = p.maxHp;
+      rt.dead = false;
+    }
+    const world = e.instance.world;
+    ai.field.entities.forEach((t, k) => {
+      const rt = view?.proxies[SM_PART_COUNT + k];
+      const gy = this.opts.ground?.(t.x, t.z, base + 30) ?? base;
+      if (rt) {
+        rt.instance.root.position.set(t.x, gy + t.hitHeight, t.z);
+        rt.instance.root.visible = shown && t.targetable;
+        rt.stats.hp = t.hp;
+        rt.stats.maxHp = t.maxHp;
+        rt.dead = false;
+      }
+      const g = world?.getObjectByName(`spinner ${k}`);
+      if (!g) return;
+      g.visible = shown && !t.hidden && !t.gone;
+      if (!g.visible) return;
+      g.position.set(t.x, gy, t.z);
+      g.rotation.y = t.heading * BAMS_TO_RAD;
+      const idx = e.instance.parts.findIndex((p) => p.name === `spinner ${k}`);
+      const a = e.instance.animators.find((_, j) => e.instance.parts[j]?.name === `spinner ${k}`);
+      if (a) {
+        try {
+          a.play(e.instance.archive.motion(t.motion, a.nodeCount), 1, false);
+        } catch {
+          // A bad motion keeps the last pose.
+        }
+        a.paused = true;
+        a.setFrame(t.frame);
+      }
+      // The procedural pose (SaintEmilionUpdateGlobalState 0x0076d138): z slides
+      // nodes 3 and 8 along their x axis, x scales nodes 46, 49, 52 and 55.
+      const tree = e.instance.nodes?.[idx];
+      if (tree) {
+        for (const n of [3, 8]) if (tree[n]) tree[n].position.x += t.rise;
+        const [sx, sy, sz] = spinnerScale(t.shrink);
+        for (const n of SPINNER_X.scaleNodes) if (tree[n]) tree[n].scale.multiply(this.smScale.set(sx, sy, sz));
+      }
+    });
+  }
+
+  // A strike on a part or a tentacle. The entity's hp is its own; the 6x0A
+  // carries max - hp, as the exe sends it before the revive.
+  private smChildHit(e: EnemyRuntime, c: SmChildAi, damage: number, critical: boolean, flags: number, byPlayer: boolean, what: string): void {
+    const owner = c.owner;
+    let total = 0;
+    let dead = false;
+    if (c.part) {
+      owner.hitPart(c.index, damage, byPlayer);
+      total = c.part.maxHp - c.part.hp;
+      dead = c.part.hp <= 0;
+      if (damage >= 1) this.smLastHit.set(c.index, byPlayer);
+    } else if (c.entity) {
+      c.entity.hit(damage);
+      total = c.entity.maxHp - c.entity.hp;
+      dead = c.entity.hp <= 0;
+    }
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, total));
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 20, p.z);
+    this.opts.log(`${what}hit Saint-Milion's ${c.part ? 'part ' + c.index : 'tentacle ' + (c.index - SM_PART_COUNT)} for ${Math.round(damage)}`);
+  }
+
+  // A 6xDC from the leader.
+  private onSaintMilionAction(body: Uint8Array): void {
+    if (body.length < 8 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    for (const e of this.enemies.values()) {
+      if (e.ai instanceof SaintMilionAi && !e.dead) {
+        e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true));
+        return;
+      }
+    }
   }
 
   // --- Vol Opt (combat/volopt.ts, combat/volopt2.ts) ---------------------------
@@ -4145,7 +4449,7 @@ export class CombatView {
       // A De Rol Le segment's box has radius 50 (0x009a47f0); ASSUMED: it
       // counts from its surface in height too.
       const seg = e.ai instanceof DrlSegmentAi;
-      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : 0;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
       const dist = Math.hypot(dx, dz) - reach;
       if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
       let diff = Math.atan2(dx, dz) - me.angle;
@@ -4450,6 +4754,10 @@ export class CombatView {
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
+      return;
+    }
+    if (e.ai instanceof SmChildAi) {
+      this.smChildHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
       return;
     }
     if (e.ai instanceof DrlSegmentAi) {
@@ -4832,6 +5140,7 @@ export class CombatView {
   private hitRadiusOf(e: EnemyRuntime): number {
     let r = this.fireRadius.get(e);
     if (r === undefined && e.ai instanceof DrlSegmentAi) r = DRL_SEGMENT.radius;
+    if (e.ai instanceof SmChildAi) return e.ai.entity ? e.ai.entity.hitRadius : SM_PART_RADIUS;
     if (r === undefined) {
       const sub = Math.max(0, Math.trunc(((e.slot.set as EnemySet | undefined)?.params?.[5] as number | undefined) ?? 0));
       r = collisionRadius(e.instance.spec.name, sub, this.ultimate);
@@ -5521,6 +5830,10 @@ export class CombatView {
       this.onDragonAction(body);
       return;
     }
+    if (sub === 0xdc) {
+      this.onSaintMilionAction(body);
+      return;
+    }
     if (sub === 0x13 || sub === 0x14) {
       this.onDeRolLeAction(sub, body);
       return;
@@ -5626,6 +5939,18 @@ export class CombatView {
           e.stats.hp = e.ai.hp;
           this.dragonLastHit.set(e.index, false);
           this.opts.log(`the Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof SmChildAi) {
+        // restore_enemy_status: hp = max - damage_taken, and the hit flag; the
+        // dead flag is ignored (the body's brain owns the deaths).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0) {
+          const c = e.ai;
+          if (c.part) c.owner.setPartDamageTaken(c.index, s.totalDamage);
+          else c.entity?.setDamageTaken(s.totalDamage);
+          if (c.part) this.smLastHit.set(c.index, false);
+          this.opts.log(`Saint-Milion's ${c.part ? 'part ' + c.index : 'tentacle ' + (c.index - SM_PART_COUNT)} was hit (6x0A from another client)`);
         }
         return;
       }

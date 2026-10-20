@@ -812,18 +812,16 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     //     the *second* archive the boss loads, bm_ene_boss09_tentacle.bml
     //     (descriptor 0x009f7b3c, 3 models + 7 motions): shokushu_body00..02,
     //     one per variant.
-    // The 16 tentacle entities (combat/saintmilion.ts) are all built, hidden:
-    // they start hidden (flag 0x20) and the boss, which is not ported, moves
-    // and wakes them. Their motions key 32 of the model's 59 nodes (nodes:
-    // SPINNER_MOTION_NODES), so a part would play one with `nodes` set; none
-    // is picked here because the action that shows an entity is the boss's.
-    // These entities draw the model with the njm chunks of the table at
-    // 0x009f7820 (SaintEmilionEntity_Initialize 0x0076dfec), not through the
-    // slots of 0x009f5b20.
+    // The 16 tentacle entities (combat/saintmilion.ts) are built hidden, as
+    // world-placed parts the boss (combat/saintmilionboss.ts) moves, shows and
+    // animates; their motions key 32 of the model's 59 nodes (nodes: 32 =
+    // SPINNER_MOTION_NODES). They draw the model with the njm chunks of the
+    // table at 0x009f7820 (SaintEmilionEntity_Initialize 0x0076dfec), not
+    // through the slots of 0x009f5b20.
     case 0x119:
       return spec('Episode4Boss', 'bm_ene_boss09.bml', [
         { model: p6 & 1, motion: loop(9, 4) },
-        ...Array.from({ length: 16 }, (_, i): EnemyPartSpec => ({ model: p6 & 1, archive: 'bm_ene_boss09_tentacle.bml', hidden: true, name: `spinner ${i}` })),
+        ...Array.from({ length: 16 }, (_, i): EnemyPartSpec => ({ model: p6 & 1, archive: 'bm_ene_boss09_tentacle.bml', place: 'world', motion: { index: 3, speed: 1, loop: true, nodes: 32 }, hidden: true, name: `spinner ${i}` })),
       ]);
   }
   return null;

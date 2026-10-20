@@ -19,8 +19,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    Episode 4 slime body) only need their objects' draw calls looked up.
 2. Episode 1 boss fights where they move their children: De Rol Le and
    Vol Opt are done (`combat/derolle.ts`, `combat/derollefins.ts`; left there:
-   the segments as their own hit targets (a segment's shell debris is built and
-   tested, `DeRolLeAi.breakSegment`, and waits for them) and the particles; the
+   the segment hit tint and the beam's particles (the segments are hit targets, 2026-10-20); the
    fin chains 0x0078d9d0 and the helm / shell debris are done, 2026-10-20.
    `combat/volopt.ts` / `volopt2.ts`; the laser's bars, the
    cage and the prison's rise are read from the disassembly (2026-10-20); left
@@ -128,7 +127,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] The Dragon's fight (`combat/dragon.ts`, `tests/dragon.test.ts`): the 35-state FSM from `HandleEnemySinowbeatInputState_00419b14` (the Ghidra "Sinowbeat" block is the Dragon), the Normal / Ultimate action sequences, the hit clamp and the roars at 90 % (then the second sequence for good), the flights, the dive and burrows, the fire breath, fireballs and stomps, the death at hp < 1 with the exe's kill sends, and the leader's `6x12`
 - [x] Sinow Beat's mirage (`combat/enemyfsmmines.ts`, `tests/sinowbeat.test.ts`): the cast every other warp away, 4 clones in the child slots that spin round the target for 40 frames and go at the first hit, the evp halving, the dismissals
 - [x] Dark Falz's fight: the control's 16 scenes and 6x19 (leader / follower), the 80 Darvants and the ones form 1 spits, form 1 (spit, move, Rabarta / Rafoie beams, TENCHU), form 2 (circle, quake, beams, pauses, Resta), form 3 (slashes, glides, homing bolts, Megid, capture), the quest flags 0x32..0x37, the ending's kill send, the music (`combat/darkfalz.ts`, `darkfalz1.ts` .. `darkfalz3.ts`, `tests/darkfalz.test.ts`)
-- [ ] Where the fight moves the children it spawns, still open: Saint-Milion's 16 tentacle entities (decoded in `combat/saintmilion.ts`, waiting for the boss's brain, which does not exist; Belra's thrown arms are done); Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
+- [x] Saint-Milion / Shambertin / Kondrieu's fight (`combat/saintmilionboss.ts`, `combat/saintmilionents.ts`, `tests/saintmilionboss.test.ts`): the 31-state machine, 6xDC, the 8 parts' hp and the two forms, the 16 tentacle entities, the death and its kill sends; its attack objects (missiles, lasers, wave, storm, sand sonic) and cutscenes are not reproduced
+- [ ] Where the fight moves the children it spawns, still open: (Saint-Milion's tentacles and Belra's thrown arms are done); Deldepth's disc, Morfos's arm/wall, Recons, Pofuilly tails, Recobox orientation
 - [x] Floor music: area table, Pioneer 2 / Lab BGM zones, interactive field music (chained Ogg segments, calm/battle sequencer), boss tracks
 - [x] Warp menus (Ragol teleporter per episode, area and boss warps, lobby teleporter); door and switch logic with `6x05`
 - [x] Door, warp, switch and box models from the per-area object factory (`formats/objectmodels.ts`, `render/objectview.ts`), door motions and door collision

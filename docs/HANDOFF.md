@@ -54,12 +54,14 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
-4. **Boss leftovers** (2026-10-20 pass done: De Rol Le fin chains + helm / shell debris, Vol Opt bars /
-   cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms; see their DEVLOG entries). Still open:
-   De Rol Le's segments as hit targets (breakSegment waits for it) and particles; Vol Opt's real models and
-   lid drawing; the Dragon's flame / fireball particles, feet and mouth nodes; Saint-Milion has no brain (its 16
-   tentacles are decoded in `combat/saintmilion.ts`); Dark Falz's cutscene objects, camera and Ultimate scenes.
-   Nothing of this pass was seen in Chrome.
+4. **Boss leftovers** (2026-10-20 passes done: De Rol Le fin chains + helm / shell debris + the segments as hit
+   targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
+   brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (missiles, lasers, wave, storm,
+   sand sonic: events only), its cutscene states (they end with their animation), camera / sounds / particles;
+   De Rol Le's segment hit tint and the beam's particles; Vol Opt's real models and lid drawing; the Dragon's
+   flame / fireball particles, feet and mouth nodes; Dark Falz's cutscene objects, camera and Ultimate scenes.
+   Nothing of these passes was seen in Chrome (check the Saint-Milion arena: tentacle poses, part boxes on the
+   model nodes, the 6xDC flow with two clients).
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation
    and `screen.orientation.lock`, the adaptive resolution and the batching gain; the
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`
