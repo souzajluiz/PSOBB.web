@@ -54,10 +54,12 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
-4. **Boss leftovers** (each is listed in the ROADMAP item 2): De Rol Le's segments
-   as hit targets (the fin chains and the debris are done) and particles; Vol Opt's bar / cage / hatch-lid drawing; the Dragon's
-   hit boxes and models; Dark Falz's cutscene objects, camera and Ultimate scenes;
-   Belra's thrown arms, Saint-Milion's 16 spinners.
+4. **Boss leftovers** (2026-10-20 pass done: De Rol Le fin chains + helm / shell debris, Vol Opt bars /
+   cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms; see their DEVLOG entries). Still open:
+   De Rol Le's segments as hit targets (breakSegment waits for it) and particles; Vol Opt's real models and
+   lid drawing; the Dragon's flame / fireball particles, feet and mouth nodes; Saint-Milion has no brain (its 16
+   tentacles are decoded in `combat/saintmilion.ts`); Dark Falz's cutscene objects, camera and Ultimate scenes.
+   Nothing of this pass was seen in Chrome.
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation
    and `screen.orientation.lock`, the adaptive resolution and the batching gain; the
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`
