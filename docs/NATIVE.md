@@ -52,7 +52,17 @@ Neither is signed for a store or for a real iPhone. For that, see below.
 
 - **Android**: create a release signing key in Android Studio (Build > Generate
   Signed Bundle / APK) and upload the `.aab` to Google Play.
-- **iOS**: needs a Mac with Xcode and an Apple Developer account. Open
+- **iOS, TestFlight**: install the full Xcode (`sudo xcode-select -s
+  /Applications/Xcode.app`), sign in under Xcode > Settings > Accounts, register
+  the app in App Store Connect with the bundle id `app.psobbweb.client`, then run
+  `APPLE_TEAM_ID=... VITE_SERVER_ORIGIN=https://... client/scripts/ios-testflight.sh`
+  (build, archive, upload; `BUILD_NUMBER` must grow with each upload). The build
+  shows in TestFlight after processing; add yourself under Internal Testing (no
+  review). `Info.plist` sets `ITSAppUsesNonExemptEncryption` to false (only the
+  protocol's standard encryption), which skips the export-compliance question.
+  The script was written without Xcode on the author's Mac and is untested.
+  By hand, the steps are below.
+- **iOS** (by hand): needs a Mac with Xcode and an Apple Developer account. Open
   `client/ios/App/App.xcodeproj`, set the team and bundle id, and archive. The
   CI does not sign anything.
 
