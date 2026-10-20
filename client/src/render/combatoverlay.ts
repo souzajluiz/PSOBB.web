@@ -1,20 +1,24 @@
 // The two combat read-outs of the field screen: the damage number that pops up
 // over a hit entity and the lock-on reticle over the current target.
 //
-// From PsoBB.exe (Ephinea 1.25.13): the number is drawn by FUN_0078a5e8 with
-// round(d) of each hit box of the strike (see combat/formulas.ts), and the
-// reticle by `enable_reticle`, which every enemy AI state calls after
+// From PsoBB.exe (Ephinea 1.25.13): the number is the floating text object
+// display_floating_text_effect_numeric (0x0078a5e8) makes with round(d) of
+// each hit box of the strike (see combat/formulas.ts and combat/hitfx.ts):
+// white, never recoloured for a critical, 0x14 frames, drawn by the HUD with
+// the client's font (classic/hud.ts FloatingTexts). The "MISS" of a failed
+// accuracy roll is the same object in red. Without the HUD's font (not
+// loaded) the number falls back to a canvas sprite. The reticle is
+// `enable_reticle`, which every enemy AI state calls after
 // `SetDerolleLockonTarget_0078730c` picked the lock-on target
-// (combat/enemyai.ts). The look of both is drawn here with canvas sprites
-// rather than from the client's own textures (ASSUMED: white for an ordinary
-// hit, red for a critical one, and the float-up / fade-out timing).
+// (combat/enemyai.ts); its look is drawn here with a canvas sprite (ASSUMED).
 
 import * as THREE from 'three';
+import { damageFloat, missFloat, type FloatSpec } from '../combat/hitfx.ts';
 
 const FLOAT_SPEED = 26; // world units per second the number rises
-const LIFETIME = 0.9; // seconds
+const LIFETIME = 20 / 30; // seconds (the object lives 0x14 frames)
 
-function numberSprite(text: string, critical: boolean): THREE.Sprite {
+function numberSprite(text: string, red: boolean): THREE.Sprite {
   const canvas = document.createElement('canvas');
   const font = 'bold 40px system-ui, sans-serif';
   const ctx = canvas.getContext('2d')!;
@@ -28,7 +32,7 @@ function numberSprite(text: string, critical: boolean): THREE.Sprite {
   c.lineWidth = 5;
   c.strokeStyle = 'rgba(0, 0, 0, 0.85)';
   c.strokeText(text, 10, 27);
-  c.fillStyle = critical ? '#ff5a4a' : '#ffffff';
+  c.fillStyle = red ? '#ff5a4a' : '#ffffff';
   c.fillText(text, 10, 27);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -109,6 +113,9 @@ export class CombatOverlay {
   private numbers: Floating[] = [];
   private effects: Array<Floating & { radius: number }> = [];
   private reticle: THREE.Sprite;
+  // The HUD's floating texts (render/playerhud.ts hitPopup); false when its
+  // font is not there yet.
+  text: ((spec: FloatSpec, x: number, y: number, z: number) => boolean) | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -116,9 +123,20 @@ export class CombatOverlay {
     scene.add(this.reticle);
   }
 
-  // One hit box's number over (x, y, z).
-  damage(value: number, critical: boolean, x: number, y: number, z: number): void {
-    const sprite = numberSprite(String(Math.max(0, Math.round(value))), critical);
+  // One hit box's number over (x, y, z). `_critical` does not change the look.
+  damage(value: number, _critical: boolean, x: number, y: number, z: number): void {
+    const spec = damageFloat(value);
+    if (spec) this.float(spec, x, y, z);
+  }
+
+  // The red "MISS" of a failed accuracy roll.
+  miss(x: number, y: number, z: number): void {
+    this.float(missFloat(), x, y, z);
+  }
+
+  private float(spec: FloatSpec, x: number, y: number, z: number): void {
+    if (this.text?.(spec, x, y, z)) return;
+    const sprite = numberSprite(spec.text, spec.rgb === 0xff0000);
     sprite.position.set(x, y, z);
     this.scene.add(sprite);
     this.numbers.push({ sprite, age: 0 });

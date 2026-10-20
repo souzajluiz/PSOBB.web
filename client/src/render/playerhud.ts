@@ -10,6 +10,7 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { anchorX } from '../classic/ingame.ts';
 import {
   expText,
+  hitText,
   FloatingTexts,
   levelUpText,
   MESSAGE_WINDOW,
@@ -100,6 +101,11 @@ export class PlayerHud {
   // "EXP+n" over a killed enemy (the killer's client only).
   expPopup(amount: number, at: WorldAnchor): void {
     this.floats.add(expText(amount, () => this.project(at())));
+  }
+
+  // The number or "MISS" over a hit enemy (classic/hud.ts hitText).
+  hitPopup(text: string, rgb: number, at: WorldAnchor): void {
+    this.floats.add(hitText(text, rgb, () => this.project(at())));
   }
 
   // "Level Up" over a player's head.

@@ -5780,3 +5780,85 @@ life, the helm and shell draw matrices, the brain's 0x80 -> 0x40 and the segment
 the model facts above from the client's own archive when present), `bossrooms`
 (part counts), `enemies` (every enemy still builds, 139 models), `smoothrender`, client
 `tsc --noEmit` (only the two missing @capacitor modules).
+
+## 2026-10-20: Enemy damage: visuals and audio
+
+What PsoBB.exe (Ephinea 1.25.13) shows and sounds when an enemy is hit, traced in
+`EntityHitEntity_00773350` (the weapon strike, per hit box), `entity_hit_by_tech`
+(0x00773afc), `HandleSpecialAttack_007765a5`, `ExecuteWeaponSpecialAttack_005ce89c`, the
+status entries (`maybe_paralyze_entity`, `confuse_entity`, `freeze_entity`, `shock_entity`)
+and their ticks, and the floating text object (`FloatingTextObject_Update_0078ab74`,
+`..._Render_0078abd0`). Before: a placeholder canvas number (red for a critical, 0.9 s), a
+tinted disc as the status look, no spark, no sound, no MISS. Rules in `combat/hitfx.ts`,
+particles in `render/hitfx.ts`, wiring in `render/combat.ts` (`hitFx`, `statusFx`,
+`specialFx`, `deathFx`).
+
+**The hit (per hit box, damage >= 0 after the defense):**
+- Not critical: `AllocateAndInitializeEnemyEntity_0050325c` makes the spark entity (update
+  0x00503308, lives 60 frames): one emission of the particles 4, 5, 6 (y + DAT_0091fca0 =
+  -15) and 0xd (`hit_a`..`hit_d`).
+- Critical: `unknown_display_critical_hit_effect` (entity 0x00501478, update 0x005014e8):
+  the particles 7, 0xb, 0xc (y - 20) and 0xe (`critical_a`..`critical_d`), plus a flash model
+  (not drawn), `play_directional_sound_effect(0x42)`, and the damage multiplier.
+- Then, with the defender not hidden, by its kind (exact compare of +0x2e8, so a mini-boss'
+  0x11 / 0x12 / 0x18 has none): native 0xf1, A.beast 0xf2, machine 0xe3, dark 0x10d, flag 0x40.
+- The number: `display_floating_text_effect_numeric(pos, 0xffffffff, 0x14, n)`: white
+  (never recoloured for a critical), 0x14 frames, the damage as a short shown when >= 0; a
+  hit box that takes less than 0 shows "0" (no spark); an invulnerable defender shows "0".
+  The failed accuracy roll shows `display_attack_miss_text`: "MISS", red 0xff0000, 0x14 frames.
+  It is the same object as the EXP text: no delay, rise 1.4 per frame, each glyph fades in over
+  2 frames in sequence (5.5 frames across the string), the whole text fades over the last 8
+  frames (`classic/hud.ts` `FloatingTexts`, already exact); the damage numbers now go through
+  it (`hitText`, `PlayerHud.hitPopup`) with the client's font, the canvas sprite stays as the
+  fallback until the font loads.
+- Techniques (`entity_hit_by_tech`): Foie / Gifoie / Rafoie, Barta / Gibarta / Rabarta and
+  Grants make the spark + the kind particle + the number; the Zonde family makes
+  `EntityProcessHitEffect_00775204` (0xb9, 0xba + the kind particle) + the number; Megid the
+  spark only; Resta on another shows a green "HP" text (not drawn here); the support techniques
+  nothing. The specials: HP / TP / EXP steal, freeze, paralysis make the spark, fire the spark +
+  kind particle, thunder the Zonde effect.
+- `weapon_special_handlers` (0x009c2660, called with type 1 when a special lands): Draw..Gush
+  0x10a and Heart..Geist 0xa8 (scale 0.2 x 0.3) and Master's..King's 0xa8 at the attacker's
+  weapon position; Charge 0x66, Spirit 0x67 (0.2 x 0.3), Berserk 0x67 likewise; Freeze 0x9a and
+  Blizzard 0xbf (create_particle_effect_ex, 15 frames); Heat / Fire 0x18 (5 frames); Dim /
+  Shadow 200 + 0x101 (30 frames); Dark 0x1c5 + 0x1c8; Hell the same scaled 2; Devil's / Demon's
+  0x1ac. Ice / Frost / Bind..Arrest / Panic..Chaos have nothing on the hit; Flame, Burning and
+  the Shock / Thunder / Storm / Tempest bolts are objects (`GuisesCountdown`, `ProjectileRafoie`,
+  `GizondeVisualEffect`), not drawn.
+
+**Status on an enemy** (replaces the tinted disc): landing it makes, unless the entity is hidden,
+paralysis the particle 0x26, confusion 0x24, shock 0x21 + SE 0x11, freeze the ice object
+(`CreateItemEffectHandler_00500fe8`: the BattleMapEffect ice model + particle 0x12e) + SE 0x10;
+the particles are `create_particle_effect_3(lockon position, id, 0x50)` followed to the entity.
+Every 0x2d frames while it holds: paralysis 0x26 + SE 0xd, shock 0x21 + SE 0x11, freeze SE 0x10
+alone, confusion 0x24 + SE 0xf. `EnemyStatus.tick` now reports the confusion period too
+(`pulses`; it used to report only the locking statuses).
+
+**Death:** each enemy's own death state spawns its particles (no common routine exists); the
+dump shows four families that match the hit kinds by name: `gensei_dead` 0xe4 (native),
+`ab_dead` 0xe5 (A.beast, at the ground, 0x1e..0x46 frames), `eall_bakuhatu1/2` + `mecha_hahen`
+0xfb 0xfc 0xe3 (machine), `dark_dead` / `dark_dead2` 0xe8 0xec (dark, delayed 10 frames, plus SE
+0x202 in the ruins' dark enemies).
+
+**ASSUMED:** the hit point (the enemy origin + 26; the exe uses the hit box position);
+which kind uses which death family and its timing (the exe runs them at the end of the death
+motion, the port at the kill, 30 frames); the particle types 1 and 2 of particleentry.dat run
+with the type 0 simulation (the level-up effect already does); the particle scale fields
++0x44 / +0x48 scale the quad; the attacker's weapon position for the special effects is 20
+above the feet; confusion's tick sound is shared with the enemy (the repo's earlier reading of
+vtable +0xa0).
+
+**Not found in the exe:** a weapon-class or per-enemy hit sound in the hit path (the only sound
+in `EntityHitEntity` is the critical's 0x42); the enemies' flinch sounds live in each FSM
+(the ported ones already play theirs).
+
+**Left:** the critical flash model (`effect_nt` model, animated 7 frames), the freeze's ice
+model, the death dissolve (`InitializeEnemyState_00512458`: a 10-frame colour ramp on the model)
+and the enemy-specific death states' sounds and particles, the Flame / Burning / Shock / Thunder /
+Storm / Tempest special objects, the "HP" green text of Resta on another, particle types 1 / 2,
+the hit box positions, remote players' strikes on this client. Not seen in Chrome.
+
+**Checks:** `node tests/hitfx.test.ts` (spark and critical particle lists, the exact kind
+compare, techniques and specials, the special handlers' table, status apply / repeat and the
+45-frame pulses of `EnemyStatus`, death families, the number rules), `enemystatus`, `combat`,
+`status`, `buffs`, `enemies`, client `tsc --noEmit` (only the two missing @capacitor modules).

@@ -763,6 +763,13 @@ export function expText(amount: number, anchor: FloatingText['anchor']): Floatin
   return { text: `EXP${amount >= 0 ? '+' : ''}${amount}`, rgb: 0xff00ff, anchor, delay: 0x14, duration: 0x14, age: 0, rise: 0, kind: 'float' };
 }
 
+// The number over a hit enemy (display_floating_text_effect_numeric(pos,
+// 0xffffffff, 0x14, n)) and the red "MISS" (display_attack_miss_text,
+// 0xffff0000): no delay, 0x14 frames, the same object as the EXP text.
+export function hitText(text: string, rgb: number, anchor: FloatingText['anchor']): FloatingText {
+  return { text, rgb, anchor, delay: 0, duration: 0x14, age: 0, rise: 0, kind: 'float' };
+}
+
 // "Level Up" / "Level Down" over a player's head: DisplayLevelUpMessage_00692aa4
 // -> CreateJapaneseCharacterEntity_00789758(slot, white, 0x3c frames, text);
 // unknown_player_levelup_text_related fades it in over 6 frames (0x0097a828,
