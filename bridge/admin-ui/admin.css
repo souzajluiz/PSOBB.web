@@ -151,3 +151,7 @@ a.btn { display: inline-block; text-decoration: none; }
 /* language switcher: top bar and login card */
 select.lang { width: auto; font-size: 13px; padding: .2rem .5rem; }
 .login select.lang { display: block; margin: .9rem auto 0; width: auto; }
+
+.logo { width: 28px; height: 28px; vertical-align: middle; margin-right: .5rem; filter: drop-shadow(0 0 6px rgba(53,208,238,.6)); }
+.login h1 .logo { width: 22px; height: 22px; margin-right: .4rem; }
+.bar .brand { display: inline-flex; align-items: center; }

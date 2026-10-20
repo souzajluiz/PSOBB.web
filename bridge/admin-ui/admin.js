@@ -114,6 +114,10 @@ function table(headers, rows, empty = 'Nothing to show.') {
 // ---- login ----------------------------------------------------------------------------
 
 // A password input with an eye button that shows or hides the text.
+// Original emblem (not Sega art): a cyan magic circle with a "PSO" mark, inlined as a data URI (CSP allows img-src data:).
+const LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9ff6ff"/><stop offset="1" stop-color="#1aa7c9"/></linearGradient></defs><circle cx="32" cy="32" r="29" fill="#06222c" stroke="url(#g)" stroke-width="3"/><circle cx="32" cy="32" r="22" fill="none" stroke="#35d0ee" stroke-width="1" stroke-dasharray="3 3"/><path d="M32 6v10M32 48v10M6 32h10M48 32h10" stroke="#ff9a1f" stroke-width="3" stroke-linecap="round"/><text x="32" y="38" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700" font-size="18" fill="url(#g)">PSO</text></svg>';
+const logoImg = () => h('img', { class: 'logo', src: 'data:image/svg+xml,' + encodeURIComponent(LOGO_SVG), alt: '', width: 28, height: 28 });
+
 function eyeField(input) {
   const btn = h('button', { type: 'button', class: 'eye', title: 'Show password', 'aria-label': 'Show password' }, '\u{1F441}');
   btn.addEventListener('click', () => {
@@ -151,7 +155,7 @@ function showLogin(message) {
     }
   };
   p.addEventListener('keydown', (e) => e.key === 'Enter' && go());
-  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, 'PSOBB.web admin'), msg, u, eyeField(p), h('button', { class: 'primary', onclick: go }, 'Log in'), langSelect(rerender)));
+  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, logoImg(), 'PSOBB.web admin'), msg, u, eyeField(p), h('button', { class: 'primary', onclick: go }, 'Log in'), langSelect(rerender)));
   p.focus();
 }
 
@@ -166,7 +170,7 @@ const views = {};
 function showApp() {
   const content = h('main');
   const nav = h('nav', null, TABS.map(([id, label]) => h('button', { class: id === currentTab ? 'active' : '', onclick: () => select(id), 'data-tab': id }, label)));
-  const bar = h('div', { class: 'bar' }, h('span', { class: 'brand' }, 'PSOBB.web admin'), h('span', { class: 'muted' }, user),
+  const bar = h('div', { class: 'bar' }, h('span', { class: 'brand' }, logoImg(), 'PSOBB.web admin'), h('span', { class: 'muted' }, user),
     langSelect(rerender),
     h('button', { class: 'small', onclick: async () => { await run(() => api('POST', '/logout', {})); csrf = null; showLogin(); } }, 'Log out'));
   app.replaceChildren(bar, nav, content);
