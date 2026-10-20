@@ -53,6 +53,7 @@ import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
@@ -194,6 +195,18 @@ interface DrlView {
   segs: Vec3[];
   atts: Vec3[];
   drawn: boolean; // the node matrices come from a frame that was drawn
+  fins: (THREE.Object3D | null)[][]; // [chain][segment] part groups (combat/derollefins.ts)
+  finAt: Vec3[]; // the two fin anchors (captured nodes 26 and 96)
+  helmNode: THREE.Object3D | null; // draw index 77: the helm break captures its matrix
+  helmCut: THREE.Object3D[]; // the helm nodes below it, collapsed once the helm flew off
+  helmDebris: DrlDebrisView | null;
+  shellDebris: (DrlDebrisView | null)[];
+}
+
+// A debris part: its group and its node tree (node i + 1 is piece i).
+interface DrlDebrisView {
+  group: THREE.Object3D;
+  bones: THREE.Object3D[];
 }
 
 // What render/combat.ts keeps per Vol Opt control object: the groups of its
@@ -540,6 +553,9 @@ export class CombatView {
     for (const v of this.drlViews.values()) {
       for (const g of v.tentacles) if (g) s.track(g, clock);
       for (const g of v.stings) if (g) s.track(g, clock);
+      for (const row of v.fins) for (const g of row) if (g) s.track(g, clock);
+      if (v.helmDebris?.group.visible) for (const b of v.helmDebris.bones) s.track(b, clock);
+      for (const d of v.shellDebris) if (d?.group.visible) for (const b of d.bones) s.track(b, clock);
     }
     for (const x of this.shots) if (x.mesh) s.track(x.mesh, clock);
     for (const x of this.spits) if (x.mesh) s.track(x.mesh, clock);
@@ -1325,9 +1341,36 @@ export class CombatView {
       segs: Array.from({ length: 10 }, (): Vec3 => [0, 0, 0]),
       atts: Array.from({ length: 4 }, (): Vec3 => [0, 0, 0]),
       drawn: false,
+      fins: [0, 1].map((c) =>
+        [0, 1, 2, 3, 4].map((j) => {
+          const g = world?.getObjectByName(j === 4 ? `fin ${c} tip` : `fin ${c} ${j}`) ?? null;
+          if (g) g.rotation.order = 'YXZ';
+          return g;
+        }),
+      ),
+      finAt: [[0, 0, 0], [0, 0, 0]],
+      helmNode: body[77] ?? null,
+      // draw index 77 is the helm locator (the table's captures 0x4d..0x58
+      // are exactly the 12 nodes under it); its children are the helm.
+      helmCut: (body[77]?.children ?? []).filter((n) => body.includes(n)),
+      helmDebris: this.drlDebrisView(inst, 'helm debris'),
+      shellDebris: Array.from({ length: 10 }, (_, i) => this.drlDebrisView(inst, `shell debris ${i}`)),
     };
+    // The debris pieces are the child nodes of helm_break / shell_break.
+    const records = (d: DrlDebrisView | null, shell: boolean) =>
+      drlPieceRecords(d ? d.bones.slice(1).map((b): Vec3 => [b.position.x, b.position.y, b.position.z]) : [], shell);
+    const shellView = v.shellDebris.find((d) => d) ?? null;
+    if (v.helmDebris && shellView) ai.pieceRecords = { helm: records(v.helmDebris, false), shell: records(shellView, true) };
     this.drlViews.set(e.index, v);
     return v;
+  }
+
+  // The group and nodes of a hidden debris part (null: not in the spec).
+  private drlDebrisView(inst: EnemyInstance, name: string): DrlDebrisView | null {
+    const k = inst.spec.parts.findIndex((p) => p.name === name);
+    const group = inst.world?.getObjectByName(name) ?? null;
+    const bones = k >= 0 ? inst.nodes?.[k] : undefined;
+    return group && bones ? { group, bones } : null;
   }
 
   private tickDeRolLe(e: EnemyRuntime, ai: DeRolLeAi, targets: AiTarget[]): void {
@@ -1359,6 +1402,19 @@ export class CombatView {
       });
       ai.attaches = v.atts;
     }
+    // The fin chains' anchors are the captures 1 and 10 of the same table
+    // (nodes 26 and 96); the helm break takes the capture of node 77.
+    if (v.drawn && v.spine) {
+      for (let c = 0; c < 2; c++) {
+        const a = v.spine[c === 0 ? 1 : 10].matrixWorld.elements;
+        const p = v.finAt[c];
+        p[0] = a[12];
+        p[1] = a[13];
+        p[2] = a[14];
+      }
+      ai.finAnchors = v.finAt;
+    }
+    if (v.drawn && v.helmNode) ai.helmMatrix = v.helmNode.matrixWorld.elements;
     v.drawn = root.visible;
     const r = ai.tick(targets);
     root.position.set(r.x, r.y ?? root.position.y, r.z);
@@ -1377,6 +1433,9 @@ export class CombatView {
       a.paused = true;
       a.setFrame(ai.mframe);
     }
+    // Flag 0x40: render_derolle draws the body without the helm nodes (the
+    // pieces fly as the helm debris); the nodes collapse to a point.
+    if (ai.helmCut) for (const n of v.helmCut) n.scale.setScalar(0.0001);
     for (const s of r.shots ?? []) this.launchShot(e, s);
     for (const ev of ai.events.splice(0)) {
       this.drlEvent(e, ai, ev);
@@ -1385,7 +1444,46 @@ export class CombatView {
     this.drawDeRolLeChildren(e, ai, v);
   }
 
+  private drlMat = newMat();
+  private drlM4 = new THREE.Matrix4();
+
+  // The fin chains (0x00434d34) and the debris pieces (0x0042a034 /
+  // 0x00429bc0) as the matrices combat/derollefins.ts builds for them.
+  private drawDeRolLeFins(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
+    const fins = e.instance.root.visible && ai.fins.active;
+    for (let c = 0; c < 2; c++) {
+      for (let j = 0; j < 5; j++) {
+        const g = v.fins[c][j];
+        if (!g) continue;
+        g.visible = fins;
+        if (!fins) continue;
+        this.drlM4.fromArray(ai.fins.segmentMatrix(this.drlMat, c, j));
+        this.drlM4.decompose(g.position, g.quaternion, g.scale);
+      }
+    }
+    this.drawDrlDebris(ai.helm, v.helmDebris);
+    for (let i = 0; i < ai.shells.length; i++) this.drawDrlDebris(ai.shells[i], v.shellDebris[i] ?? null);
+  }
+
+  private drawDrlDebris(d: DrlDebris | null, view: DrlDebrisView | null): void {
+    if (!view) return;
+    const live = !!d && !d.done;
+    view.group.visible = live;
+    if (!d || !live) return;
+    for (let i = 0; i < d.count; i++) {
+      const bone = view.bones[i + 1];
+      if (!bone) continue;
+      if (!d.visible(i)) {
+        bone.scale.setScalar(0.0001);
+        continue;
+      }
+      this.drlM4.fromArray(d.pieceMatrix(this.drlMat, i));
+      this.drlM4.decompose(bone.position, bone.quaternion, bone.scale);
+    }
+  }
+
   private drawDeRolLeChildren(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
+    this.drawDeRolLeFins(e, ai, v);
     const shown = e.instance.root.visible && !ai.dying;
     {
       ai.tentacles.forEach((t, i) => {
@@ -1453,6 +1551,12 @@ export class CombatView {
         return;
       case 'shellBroken':
         this.opts.log(`${what}: the shell breaks (body pool ${ai.bodyHp}/${ai.bodyMax})`);
+        return;
+      case 'helmBreak':
+        this.opts.log(`${what}: the helm flies off${ai.helm ? '' : ' (no node capture, nothing drawn)'}`);
+        return;
+      case 'segmentBroken':
+        this.opts.log(`${what}: segment ${ev.index} breaks`);
         return;
       case 'bgm':
         // ASSUMED: the death track is not started here (audio/bossbgm.ts

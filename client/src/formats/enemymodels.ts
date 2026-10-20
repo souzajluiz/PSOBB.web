@@ -379,6 +379,10 @@ function volOptChildren(ultimate: boolean): EnemyPartSpec[] {
   return parts;
 }
 
+// Segments of one De Rol Le fin chain: the table at 0x00a43d40 (set by
+// 0x00434f54) holds 6 points per chain, so 5 segments.
+export const DE_ROL_LE_FIN_SEGMENTS = 5;
+
 // De Rol Le's sting attack (HandleDerolleAction_0042e824, action 0): once the
 // attack motion passes frame 18.0 (0x41900000) the boss throws its stings from
 // its launch point (+0x4d8) and plays sound 0x32a. Motion 0x18 throws the five
@@ -623,6 +627,20 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
         ...Array.from({ length: 4 }, (_, i): EnemyPartSpec => ({ model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, place: 'world', name: `tentacle ${i}` })),
         ...Array.from({ length: 5 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ${i}` })),
         ...Array.from({ length: 3 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ring ${i}` })),
+        // The two fin chains (combat/derollefins.ts, the object at +0x658):
+        // every segment but the last draws fin_a (model 1), the last fin_b
+        // (model 0, the tip), both with the body's textures.
+        ...[0, 1].flatMap((c) =>
+          Array.from({ length: DE_ROL_LE_FIN_SEGMENTS }, (_, j): EnemyPartSpec => {
+            const tip = j === DE_ROL_LE_FIN_SEGMENTS - 1;
+            return { model: tip ? 0 : 1, texlistOf: 2, hidden: true, place: 'world', name: tip ? `fin ${c} tip` : `fin ${c} ${j}` };
+          }),
+        ),
+        // The shell debris: the helm break (0x00429d00, model 5, 28 pieces) and
+        // one shell break (0x00429834, model 6, 19 pieces) for each of the ten
+        // segments (draw 0x0042a034 / 0x00429bc0, body textures).
+        { model: 5, texlistOf: 2, hidden: true, place: 'world', name: 'helm debris' },
+        ...Array.from({ length: 10 }, (_, i): EnemyPartSpec => ({ model: 6, texlistOf: 2, hidden: true, place: 'world', name: `shell debris ${i}` })),
       ]);
     // Barba Ray: ctor 0x004af634, body model 0; idle = slot 1 of 0x009aba20 =
     // forward, 0.6 (static init 0x004b9c00). Same shape as De Rol Le: model 1

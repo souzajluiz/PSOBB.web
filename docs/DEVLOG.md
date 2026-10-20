@@ -5516,3 +5516,101 @@ frame counts, no state hangs in 20000..40000-tick soaks, remote damage, death);
 `tests/enemyfsm*.test.ts`, `enemystatus.test.ts`, client `tsc --noEmit` (only the two
 missing @capacitor modules). Not checked in Chrome (to do: Seabed / Mines with the
 Online tab, Warp to the Sinow and Delbiter floors).
+
+## 2026-10-20: Boss leftovers: De Rol Le chain solver and shell debris
+
+**What changed:** two of De Rol Le's ROADMAP leftovers are closed. The chain solver
+`0x0078d9d0` turned out not to be the tentacles' (those are the four `0x00437ba4`
+objects, already done) but the body's two **fin chains**; the shell debris are the
+**helm break** and the **segments' shell breaks**. New file `combat/derollefins.ts` (pure:
+`DrlFins`, `DrlDebris`, the exe's matrix order), small hooks in `combat/derolle.ts`
+(`fins`, `helm`, `shells`, events `helmBreak` / `segmentBroken`, `breakSegment(i)`),
+10 + 1 + 10 + 10 hidden parts in `formats/enemymodels.ts` (case 0xc1) and the draw in
+`render/combat.ts` (`drawDeRolLeFins`, `drawDrlDebris`, the helm cut in `tickDeRolLe`).
+
+**The fin chains** (the dump calls the object "MovementTarget" `0x00434ba4` /
+"TeamFlagObject"; matched by callees and constants, the unnamed code read from the disassembly):
+- Ctor `0x00434ba4` (made by `0x0042ad4c` at body +0x658) copies two anchors and two
+  collision spheres, then builds the rest pose with `0x0078d9d0`: two chains of 6 points
+  (table `0x00a43d40`, set by `0x00434f54`: count 6, step (0, 0, -5.0), a 0xff terminator),
+  point j = anchor + j * step.
+- Anchors: body +0x40c and +0x478 = +0x400 + 12 * k for k = 1 and 10 of the draw-order
+  captures `0x008fcba0` (`0x0042a904`), i.e. the model's locator nodes 26 and 96 (the draw
+  index is the depth-first node index: the table's `0x4d..0x58` captures are exactly the 12
+  nodes under node 77, checked in `tests/derolle.test.ts` on the real model).
+- Update (vtable +4, `0x00434d00`): `0x00434c84` refreshes the anchors and the spheres
+  (radius 10.0 at the anchor + (0, -7.07, +7.07), 7.07 = `0x008fd480`), then the solver
+  `0x0078d130` with the delta (0, 0, -2.0). Per point: += delta, back at the segment length
+  (|step| = 5) from the point before, then up to 16 passes of: the sphere that penetrates
+  it deepest (radius + half a segment = 12.5, distance floor `0x00836208`) pushes it out
+  along the line from the centre, and it goes back to the segment length. A zero vector
+  reads as (0, -1, 0) (`0x0097aa94`). Two chains x two spheres.
+- Draw (vtable +8, `0x00434d34`): per segment `T(p) * Ry(yaw) * Rx(pitch) * Ry(0 - yaw) *
+  S(2.0) * Rx(-0x4000)`, yaw = atan2(-x, -z) (skipped when x = z = 0), pitch = asin(-y) of the
+  direction to the next point, both truncated to BAMS with 6.283184051513672 (`0x008fd460`).
+  The anchor's yaw slot (this+0x30, +0x40) is always 0, so the two Y turns cancel and only
+  the tilt about the axis across the heading is left (as in the generic flag draw
+  `0x0078d484`). Model = `model_files[1]` (fin_a, `0x00a43d50`) on all but the last segment,
+  `model_files[0]` (fin_b, the tip, `0x00a43d54`) on the last. The matrix helpers were
+  identified from their elements (0x0082d8bc Y, 0x0082e9e4 X, 0x00830c04 Z, all standard
+  right-handed, post-multiplied, column-major with the translation at e[12..14]: three.js'
+  layout, so `matrixWorld.elements` feed them directly).
+- Render wiring: the anchors are the captured nodes' `matrixWorld` translations (the same
+  way the spine / attach captures already work), the 10 segment groups are
+  `place: 'world'` parts decomposed from the matrix and tracked by `TickSmoother`.
+
+**The shell debris** (the dump's "Sinowbeat" / "ParticleEffect" names; both objects share the
+update code, the 28-piece `0x00429e60` and the 19-piece `0x004299ec` differ only in count):
+- Piece records come from the model object `0x00512124`: one per node that is not hidden
+  (flag 8 clear), position = the node position, direction = the xz unit of it
+  (`normalize_xz_components`, y kept). The static init edits them once: the direction is
+  scaled (1.1, 0, 1.1) (`0x0042a2dc`), the shell's positions by 2.0 (`0x0042a364`).
+  `drlPieceRecords` does it from the part's bone positions (no embedded model data).
+- Piece (0x2c bytes at +0x20): pos, vel, ax (+0x18), spin (+0x1c), ay (+0x20), alpha, state.
+  Update: age + 1, deleted at 160. State 0 falls (g = 0.2, `0x008fc740`); when the vertical
+  speed is negative and y < 1.15 (`0x008fcc18`): inside the arena box x in [-75, 76], z in
+  [-75, 76] it bounces (vy *= -0.8) and fades (state 2), outside it sinks (state 1) once
+  under -10 (`0x008fcc10`), with a particle (`0x170` / `0x171`) on every second piece. State 2
+  loses 0.05 alpha a tick and is gone (3) when it goes under 0. State 1: y += vy * 0.2,
+  z += vz. ax += spin, ay += 2 * spin in states 0 and 2.
+- Helm break (ctor `0x00429d00`, 28 pieces of model 5): `UpdateDerolle` sees flag 0x80 of
+  +0x3c8 (set with the shell break's 0x88), clears it and sets 0x40, and builds the object
+  from the matrix the body's draw captured at node 77. Position = M * node position,
+  velocity = M's rotation (scale 2 included) * direction with vy = rand * 4 + 2 and
+  vz -= rand * 4 + 1, spin = (rand - 0.5) * 2 * 3400, angles 0. Draw (`0x0042a034`):
+  `T(pos) * Rz(ay) * Rx(ax) * T(-origin) * M`. `render_derolle` with 0x40 set draws the body
+  without node 77's children (`0x004335c4`: the render param `+0x2c` points at
+  `g_DerolleRenderParam`): the port collapses those four nodes.
+- Shell break (ctor `0x00429834`, 19 pieces of model 6, made by the segment's
+  `0x004350d4` = vtable +0x1a8, which `0x004354c4` calls when the segment's own pool
+  `+0x39c` (MovementData iparam2) runs out): position = segment position + node position,
+  velocity = direction, then vy, vz as above and ax, spin, ay = rand * 65536, (rand - 0.5) *
+  2 * 3400, rand * 65536 (in that rand order). Draw (`0x00429bc0`): `T(pos) * Ry(spin) *
+  Rx(ax) * Rz(ay) * S(2.0)`.
+
+**ASSUMED (also in the code):**
+- The fin chains rest at the origin until the body has been drawn once (the capture slots
+  are taken as zero at the ctor), then follow the anchors; the first frames after a far
+  first anchor show the exe's own transient.
+- sin / cos of the BAMS angles are exact (the exe uses a 4096 entry table with a 16 step
+  interpolation, within about 1e-7).
+- Per-piece alpha (state 2 fades 20 ticks at 0.05) is not drawn: a skinned model has one
+  material, so a fading piece stays opaque and vanishes when it reaches state 3. The
+  `0x170` / `0x171` particles are not drawn (the particles stay a leftover).
+- The helm debris needs the node 77 capture; without a node tree the helm is cut and
+  nothing flies.
+- rand() is the client's own PRNG (the exe's CRT `rand() / 32768`); pieces differ between
+  clients, as they do in the exe (each client runs its own `rand`).
+
+**Left:** a segment's shell break needs the segments as their own hit targets (their pool
++0x39c, hit proxies in the slots the exe gives them, the plate going invisible through
+the dump's `DerolleSetAnimationSpeed` alpha): the debris is ready and tested
+(`DeRolLeAi.breakSegment(i)`, event `segmentBroken`, the ten `shell debris i` parts) but
+nothing calls it until that item lands. The particles. Neither is checked in Chrome.
+
+**Checks:** `node tests/derolle.test.ts` (fin rest pose, length, settling along -z, sphere
+push-out, pose angles and the matrix; debris spawn values, bounce / fade / sink, 160-tick
+life, the helm and shell draw matrices, the brain's 0x80 -> 0x40 and the segment hook;
+the model facts above from the client's own archive when present), `bossrooms`
+(part counts), `enemies` (every enemy still builds, 139 models), `smoothrender`, client
+`tsc --noEmit` (only the two missing @capacitor modules).

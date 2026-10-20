@@ -30,6 +30,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { DE_ROL_LE_STING_POINTS, deRolLeStingRingTarget } from '../formats/enemymodels.ts';
+import { DrlDebris, DrlFins, type DrlPieceRecord } from './derollefins.ts';
 
 export type Vec3 = [number, number, number];
 const BAMS = BAMS_TO_RAD;
@@ -788,6 +789,11 @@ export type DrlEvent =
   // owner that is still playing (keep-alive 5) instead of starting another.
   | { kind: 'se'; id: number; sustain?: boolean }
   | { kind: 'shellBroken' }
+  // UpdateDerolle saw flag 0x80 (set with the shell break): it set 0x40, which
+  // cuts the helm off the body's draw, and spawned the helm debris (0x00429d00).
+  | { kind: 'helmBreak' }
+  // A segment's own pool ran out (0x004354c4 -> 0x004350d4): its shell debris.
+  | { kind: 'segmentBroken'; index: number }
   | { kind: 'bgm'; name: string } // 0x1f at frame 27: deldeath.adx (0x008fd420)
   | { kind: 'killed'; x: number; y: number; z: number } // 0x1f phase 5
   | { kind: 'remove' }; // 0x20
@@ -835,7 +841,7 @@ export class DeRolLeAi extends BrainBase {
   h = 0; // +0x6ac, the vertical draw offset
   yaw = 0; // +0x60, BAMS
   roll = 0; // +0x64, BAMS
-  flags = 0; // +0x3c8: 4 no death now, 0x100 swim sound, 8 shell broken, 0x10 beam
+  flags = 0; // +0x3c8: 4 no death now, 0x100 swim sound, 8 shell broken, 0x10 beam, 0x80 helm break pending, 0x40 helm cut off
   // Motion: slot +0xb8, frame +0xc0, speed +0xc8.
   slotIndex = 0;
   mframe = 0;
@@ -860,6 +866,16 @@ export class DeRolLeAi extends BrainBase {
   // node captures); null: estimated from the body position.
   segments: Vec3[] | null = null;
   attaches: Vec3[] | null = null;
+  // The fin chains (combat/derollefins.ts, the "MovementTarget" at +0x658) and
+  // the shell debris. The owner keeps finAnchors (the captured nodes 26 and
+  // 96), helmMatrix (the capture of node 77) and pieceRecords (the positions
+  // of the helm_break / shell_break nodes) current.
+  readonly fins = new DrlFins();
+  finAnchors: Vec3[] | null = null;
+  helmMatrix: ArrayLike<number> | null = null;
+  pieceRecords: { helm: DrlPieceRecord[]; shell: DrlPieceRecord[] } | null = null;
+  helm: DrlDebris | null = null;
+  readonly shells: (DrlDebris | null)[] = Array.from({ length: 10 }, () => null);
   private emitters: DrlRockEmitter[] = [];
   private pendingShots: EnemyShot[] = [];
   private opts: DeRolLeOptions;
@@ -921,6 +937,19 @@ export class DeRolLeAi extends BrainBase {
   }
   get shellBroken(): boolean {
     return (this.flags & 8) !== 0;
+  }
+  // Flag 0x40 of +0x3c8: render_derolle draws the body without the helm nodes.
+  get helmCut(): boolean {
+    return (this.flags & 0x40) !== 0;
+  }
+
+  // A segment's own pool ran out: 0x004350d4 makes its shell debris at the
+  // segment's place (0x00429834). The segments are not hit targets yet, so
+  // nothing calls this until they are.
+  breakSegment(i: number): void {
+    if (i < 0 || i >= this.shells.length || this.shells[i] || !this.pieceRecords) return;
+    this.shells[i] = DrlDebris.shell(this.pieceRecords.shell, this.segmentAt(i), this.opts.rng);
+    this.emit({ kind: 'segmentBroken', index: i });
   }
   // States 0x1e..0x20 set the entity's dead flag (UpdateDerolle).
   get invulnerable(): boolean {
@@ -1420,6 +1449,14 @@ export class DeRolLeAi extends BrainBase {
 
   tick(targets: readonly AiTarget[]): AiFrame {
     const out = this.frame0();
+    // UpdateDerolle, first thing: flag 0x80 (the shell broke) becomes 0x40 and
+    // the helm flies off from the matrix the last draw captured (ASSUMED: with
+    // no capture or no model the helm is cut but nothing flies).
+    if (this.flags & 0x80) {
+      this.flags = (this.flags & ~0x80) | 0x40;
+      if (this.helmMatrix && this.pieceRecords) this.helm = DrlDebris.helm(this.pieceRecords.helm, this.helmMatrix, this.opts.rng);
+      this.emit({ kind: 'helmBreak' });
+    }
     if (this.sid !== DRL_STATE.remove) {
       if (this.opts.leader()) this.leaderStep(targets, true);
       else if (this.due() && ++this.stall >= DRL_FOLLOWER_WAIT) {
@@ -1433,6 +1470,10 @@ export class DeRolLeAi extends BrainBase {
     }
     this.phase0(targets);
     this.tickChildren(targets);
+    // The body's child objects run on in every state (the fins, the debris).
+    this.fins.tick(this.finAnchors);
+    this.helm?.tick();
+    for (const d of this.shells) d?.tick();
     if (this.motionDirty) {
       this.motionDirty = false;
       const s = this.motionSlot;
