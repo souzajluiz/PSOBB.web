@@ -103,6 +103,18 @@ function table(headers, rows, empty = 'Nothing to show.') {
 
 // ---- login ----------------------------------------------------------------------------
 
+// A password input with an eye button that shows or hides the text.
+function eyeField(input) {
+  const btn = h('button', { type: 'button', class: 'eye', title: 'Show password', 'aria-label': 'Show password' }, '\u{1F441}');
+  btn.addEventListener('click', () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.textContent = show ? '\u{1F648}' : '\u{1F441}';
+    btn.title = btn.ariaLabel = show ? 'Hide password' : 'Show password';
+  });
+  return h('span', { class: 'eyefield' }, input, btn);
+}
+
 function showLogin(message) {
   clearInterval(timer);
   const u = h('input', { type: 'text', autocomplete: 'username', placeholder: 'Username', value: 'admin' });
@@ -122,7 +134,7 @@ function showLogin(message) {
     }
   };
   p.addEventListener('keydown', (e) => e.key === 'Enter' && go());
-  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, 'PSOBB.web admin'), msg, u, p, h('button', { class: 'primary', onclick: go }, 'Log in')));
+  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, 'PSOBB.web admin'), msg, u, eyeField(p), h('button', { class: 'primary', onclick: go }, 'Log in')));
   p.focus();
 }
 
@@ -182,7 +194,7 @@ views.accounts = async (root, _arg, select) => {
   const createPass = h('input', { type: 'password', maxlength: 16, placeholder: 'Password (1-16)', autocomplete: 'new-password' });
   const createFlags = flagPicker(data.flagChoices, 0, []);
   const create = h('div', { class: 'card' }, h('h2', null, 'Create account'),
-    h('div', { class: 'row' }, createUser, createPass,
+    h('div', { class: 'row' }, createUser, eyeField(createPass),
       h('button', { class: 'primary', onclick: () => run(async () => {
         const r = await api('POST', '/accounts', { username: createUser.value, password: createPass.value, flags: createFlags.value() });
         toast(`Account ${r.id} created`);
@@ -236,7 +248,7 @@ function flagsDialog(a, choices, done) {
 function passwordDialog(a, done) {
   const p = h('input', { type: 'password', maxlength: 16, autocomplete: 'new-password' });
   const sel = h('select', null, a.bbUsernames.map((u) => h('option', { value: u }, u)));
-  const overlay = h('div', { class: 'overlay' }, h('div', { class: 'modal' }, h('h2', null, `New password for ${a.id}`), a.bbUsernames.length > 1 ? sel : null, h('p', null, p),
+  const overlay = h('div', { class: 'overlay' }, h('div', { class: 'modal' }, h('h2', null, `New password for ${a.id}`), a.bbUsernames.length > 1 ? sel : null, h('p', null, eyeField(p)),
     h('p', { class: 'muted' }, 'The BB license is removed and added again with the new password.'),
     h('div', { class: 'actions' }, h('button', { onclick: () => overlay.remove() }, 'Cancel'),
       h('button', { class: 'primary', onclick: () => run(async () => {

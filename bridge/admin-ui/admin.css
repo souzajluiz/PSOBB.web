@@ -68,6 +68,12 @@ pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; 
 .overlay { position: fixed; inset: 0; background: rgba(1, 4, 9, .7); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 1rem; }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.2rem; width: min(30rem, 100%); }
 .modal .actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1rem; }
+.eyefield { position: relative; display: inline-block; }
+.eyefield input { padding-right: 2.2rem; }
+.eyefield .eye { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); background: none; border: 0; padding: .2rem .4rem; cursor: pointer; font-size: 1rem; line-height: 1; }
+.login .eyefield { display: block; margin-bottom: .6rem; }
+.login .eyefield input { margin-bottom: 0; }
+.login .eyefield .eye { width: auto; }
 .login { max-width: 22rem; margin: 12vh auto 0; }
 .login input { width: 100%; margin-bottom: .6rem; }
 .login button { width: 100%; }
