@@ -1340,3 +1340,32 @@ The slot table `0x00acb3a8` has 0x700 slots of 0x20 bytes: `+0` header pointer, 
 | `0x420` | city | title menu confirm | `FUN_006fed2c`, `FUN_006fede0` |
 
 `client/src/audio/se.ts` implements this: banks through the `DataSource`, PCM copied straight into `AudioBuffer`s, volume as gain `10^(ds/2000)`, the 64-voice limit and the same-slot rule. The UI calls it through the module-level `se(id)`, which `classic/main.ts` installs.
+
+
+## Change ship / block and team commands (BB)
+
+**Change SHIP / BLOCK.** `A0` (ship) / `A1` (block), 0x20 bytes with the header: `u32 player_tag` (0x00010000), `u32 guild_card`, 4 zero dwords (PsoBB.exe `send_packet0xa0/a1`). newserv (`on_A0`; `on_A1` calls it) answers on the same connection: `69` (flag = own client id), a blank message box (`1A`), `B1`, the full character `E7`, then the main menu `07` (title entry + *Go to lobby*, *Patches*, *Disconnect*); `10` on *Go to lobby* gives `67`. A real ship / block server would answer `07` titled `BLOCK` or `19`. `BBSession.changeShip()` / `changeBlock()`; `tests/shipchange.live.ts`.
+
+**Team (EA) commands.** Command = `(subcommand << 8) | 0xEA` (exe: bytes 0xEA, sub), `flag` = result / argument. Implemented in `client/src/net/team.ts` (`tests/team.test.ts`, `tests/team.live.ts`):
+
+| Cmd | Dir | Payload / meaning |
+|---|---|---|
+| 01EA | C>S | name UTF-16[0x10] (size 0x28) create team |
+| 02EA | S>C | flag: 0 ok, 2 name in use, 1/3..7 failed |
+| 03EA / 04EA | C>S / S>C | add member (guild card) / flag 0 ok, 5 full, 1 already in a team, 6 not found |
+| 05EA / 06EA | C>S / S>C | remove member (own card = leave, also dismissal) / flag 0 ok, 1 refused |
+| 07EA | both | sender name[0x10] + zero terminated text (relayed to online members; must end with two zero bytes) |
+| 08EA / 09EA | C>S / S>C | member list: u32 n, entries 0x2C {rank, privilege, guild card, name[0x10]} |
+| 0DEA / 0EEA | C>S / S>C | team name (0x10 unused + name[0x10]) |
+| 0FEA | C>S | 0x800 bytes flag image |
+| 10EA | both | disband / flag result |
+| 11EA | both | C>S flag = 0 demote, 0x30 promote, 0x40 transfer master, body guild card; S>C flag: 0 ok, 5 "already" |
+| 12EA | S>C | u32 skip (nonzero: ignored) + `PSOBBBaseTeamMembership` (0x34: master card, team id, 2 unknown, privilege u8 @0x10, count u8, name @0x14); also the 0x315C block of `E7`. newserv does not send the leaver a 12EA after 05EA |
+| 13EA / 14EA / 15EA | | team info of lobby players (flag = count, entries 0x85C); 14EA asks (flag 1) and 15EA is also pushed unasked |
+| 18EA | both | intra-team ranking |
+| 19EA / 1AEA / 1BEA | | rewards owned / for sale / buy (flag = id) |
+| 1CEA | both | cross-team ranking: u32 n, entries 0x28 {name[0x10], points @0x20} |
+| 1DEA | S>C | reward flags in `flag` |
+| 1EEA / 1FEA | C>S / S>C | rename (name[0x10]) / result like 02EA |
+
+Privilege 0x40 master, 0x30 leader, 0 member. Window flow: header of `client/src/classic/teammenu.ts` and DEVLOG 2026-10-20.

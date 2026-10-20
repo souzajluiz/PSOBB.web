@@ -65,7 +65,10 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`
    restores it).
 6. Optional: the quest-loading particle wipes, the lobby / floor loading screens, the
-   counter's ship / block change and team menus, a field scene in `classic.html`.
+   a field scene in `classic.html`. The counter's ship / block change and team menus
+   are in (2026-10-20, not seen in Chrome: log in, walk to the counter, Transport /
+   Team); left in teammenu.ts's header (Master Transfer, Buying Privileges, Flag
+   Records, invitations, banned names).
 
 ## Lessons from the agents' reviews (apply to every new boss / enemy)
 
