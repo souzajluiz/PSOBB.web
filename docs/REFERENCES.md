@@ -7,6 +7,7 @@ https://github.com/fuzziqersoftware/newserv
 - **The server** this project talks to. Built into `vendor/` by `scripts/setup-newserv.sh`.
 - **Specification:** `src/CommandFormats.hh` (commands), `src/PSOEncryption.cc` (ciphers), `src/Compression.cc` (PRS), `src/GSLArchive.cc` and `src/AFSArchive.cc`, `src/Map.cc` (maps), `src/ReceiveCommands.cc` (server-side flow, e.g. `on_93_BB`).
 - **Test oracle:** its CLI (`encrypt-data`, `decompress-prs`, `extract-gsl`, …) produces the expected outputs for `tests/oracle.test.ts`.
+- **Quest file writers:** `src/QuestScript.cc` / `QuestScript.hh` (header, label table, opcode syntax of the assembler), `src/Quest.cc` (`encode_qst_file`, `decode_qst_data_t`: the `.qst` framing), `src/Compression.cc` (PRS stream format the encoder emits). The syntax of `formats/questasm.ts` follows its `disassemble-quest-script --reassembly` output; see `docs/QUESTFILES.md`. phantasmal-world (DaanVandenBosch, MIT) is the inspiration for the editor but no code or format notes were taken from it.
 - **Ported code:** `BBCrypt`, `prsDecompress`, `GSLArchive` and `AFSArchive`. Each file cites its origin; MIT allows this as long as the notice is kept.
 
 ## 2. original-psobb-client-source (gitlab.psobb.io): look here first
