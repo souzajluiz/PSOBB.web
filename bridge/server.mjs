@@ -1,8 +1,11 @@
 // Production server: one HTTP port for everything the browser client needs
 // once the Vite dev server is gone (the Docker image, docs/DEPLOY.md).
 //
-//   /               the classic client (client/dist/classic.html); no other
-//                   page of the build is served
+//   /               the classic client (client/dist/classic.html)
+//   /questeditor.html  the quest editor (a static tool, no secrets; it works on
+//                   files in the browser). Its "Publish to server" action only
+//                   appears with an admin session and calls /admin/api.
+//                   No other page of the build is served.
 //   /bridge?port=N  the WebSocket <-> TCP relay to newserv (bridge.mjs does
 //                   the same on its own port in development)
 //   /keys/*.nsk     newserv's BB key files
@@ -131,9 +134,10 @@ const server = createServer((req, res) => {
     return file ? send(req, res, file, 'application/octet-stream', path) : notFound(res);
   }
 
-  // Only the classic client is public: "/" opens it, and the development
+  // Only the classic client and the quest editor are public: "/" opens it, and the development
   // pages (index.html, models.html) are not served even if a build has them.
   if (path === '/' || path === '/classic' || path === '/classic.html') return send(req, res, resolve(DIST, 'classic.html'), undefined, path);
+  if (path === '/questeditor' || path === '/questeditor.html') return send(req, res, resolve(DIST, 'questeditor.html'), undefined, '/questeditor.html');
   if (path.endsWith('.html')) return notFound(res);
   const file = inside(DIST, path.slice(1));
   return file ? send(req, res, file, undefined, path) : notFound(res);

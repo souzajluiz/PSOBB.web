@@ -23,6 +23,8 @@ import { createEnemy, createEvent, createObject, QuestDocument, type Change } fr
 import { floorToArea, gameEpisode } from '../client/src/questeditor/areas.ts';
 import { errorLine, findLabels, wordAt } from '../client/src/questeditor/panel_script.ts';
 import { paletteEntries } from '../client/src/questeditor/panel_entities.ts';
+import { adminSession, buildPublishBody, defaultPublishName, listQuestDirectories, PUBLISH_NAME_RE, publishQuest, toBase64 } from '../client/src/questeditor/publish.ts';
+import { buildPackage } from '../client/src/questeditor/io.ts';
 import { parseEnemySets, parseObjectSets } from '../client/src/formats/setdata.ts';
 
 let failures = 0;
@@ -438,6 +440,42 @@ const throws = (fn: () => void, msg: string) => {
     }
     console.log(`real quests: ${quests} round-tripped`);
   }
+}
+
+// --- Publish to server (request building; the server checks everything again) ---
+{
+  check(defaultPublishName('q058-bb-e', 'pair') === 'q058-bb-e.bin' && defaultPublishName('q058-bb-e', 'qst') === 'q058-bb.qst', 'publish: default names keep the BB tag');
+  check(defaultPublishName('my quest!', 'pair') === 'my_quest_-bb-e.bin' && PUBLISH_NAME_RE.test(defaultPublishName('my quest!', 'qst')), 'publish: unsafe characters become _');
+  check(defaultPublishName('../../x', 'pair') === '_x-bb-e.bin' || PUBLISH_NAME_RE.test(defaultPublishName('../../x', 'pair')), 'publish: a traversal stem gives a valid name');
+  check(defaultPublishName('', 'pair') === 'quest-bb-e.bin', 'publish: empty stem');
+  check(!PUBLISH_NAME_RE.test('q1-e.bin') && !PUBLISH_NAME_RE.test('q1-bb-e.dat') && !PUBLISH_NAME_RE.test('../q1-bb.qst'), 'publish: the name pattern needs -bb and .bin / .qst');
+  check(toBase64(new Uint8Array(70000).fill(65)).length === Math.ceil(70000 / 3) * 4, 'publish: base64 of a large array');
+  const pkg = buildPackage(QuestDocument.blank({ episode: 0, name: 'P' }));
+  const pair = buildPublishBody(pkg, 'retrieval', 'q1-bb-e.bin');
+  check(pair.confirm === 'retrieval/q1-bb-e.bin' && typeof pair.bin === 'string' && typeof pair.dat === 'string' && pair.qst === undefined, 'publish: a .bin name sends bin + dat and the confirm text');
+  const qst = buildPublishBody(pkg, 'hidden', 'q1-bb.qst');
+  check(qst.confirm === 'hidden/q1-bb.qst' && typeof qst.qst === 'string' && qst.bin === undefined, 'publish: a .qst name sends the qst');
+  const fakeFetch = (status: number, json: unknown): typeof fetch => (async () => new Response(JSON.stringify(json), { status })) as typeof fetch;
+  check((await adminSession(fakeFetch(404, {}))) === null, 'publish: no admin panel -> no session');
+  check((await adminSession(fakeFetch(200, { authenticated: false, csrf: null }))) === null, 'publish: logged out -> no session');
+  check((await adminSession((async () => { throw new Error('offline'); }) as unknown as typeof fetch)) === null, 'publish: network error -> no session');
+  const sess = await adminSession(fakeFetch(200, { authenticated: true, csrf: 'tok', user: 'admin' }));
+  check(sess?.csrf === 'tok', 'publish: a session gives the CSRF token');
+  check((await listQuestDirectories(fakeFetch(200, { directories: [{ dir: 'a', files: [] }] }))).length === 1, 'publish: directories are listed');
+  let sent: RequestInit | undefined;
+  const spy = (async (_u: string, init: RequestInit) => {
+    sent = init;
+    return new Response(JSON.stringify({ ok: true, files: [], quest: { questNumber: 1, name: 'P' } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  await publishQuest({ csrf: 'tok', user: 'admin' }, pair, spy);
+  check(sent?.method === 'POST' && (sent.headers as Record<string, string>)['X-CSRF-Token'] === 'tok' && sent.credentials === 'same-origin', 'publish: POST with the CSRF header and same-origin credentials');
+  let message = '';
+  try {
+    await publishQuest({ csrf: 'tok', user: 'admin' }, pair, fakeFetch(422, { error: 'not a valid quest: x' }));
+  } catch (e) {
+    message = (e as Error).message;
+  }
+  check(message === 'not a valid quest: x', 'publish: the server error is shown');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

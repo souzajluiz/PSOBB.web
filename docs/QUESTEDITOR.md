@@ -13,6 +13,7 @@ The feature list follows the usual quest editors (Qedit, [phantasmal-world](http
 | **Save .qst** (Ctrl+S) | Downloads a BB `.qst`. |
 | **Save .bin + .dat** | Downloads the PRS-compressed pair, the way the server stores them. |
 | **Open PSOBB data folder** | The 3D view needs the `data/` folder of a PSOBB install (nothing leaves your machine). Under the dev server `/psobb-data` is picked up automatically. Without it the editor still works on lists and numbers; the entities are drawn as markers in empty space. |
+| **Publish to server** | Only shown with an admin session on the same origin (see below). Writes the quest into the server's `system/quests` and reloads quests. |
 | **Test in game** | Hands the quest to whoever embeds the editor (see below). |
 
 Undo / Redo (Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y) cover every edit: properties, floors, entities, wave events and the script. A drag is one step. The title shows `*` while there are unsaved changes.
@@ -58,6 +59,14 @@ A list that does not end in `stop` / `construct_enemies_stop` gets a `stop`. Flo
 
 The **Script** tab shows the disassembly of the .bin. Edit it, then **Apply** (Ctrl+Enter) assembles the text and replaces the quest's script (one undo step); on an error the message is listed, and the editor jumps to the line when the message names one. **Go to label** lists the labels; Ctrl+click on a label name (or F12, or the **Definition** button) jumps to its definition, **Back** returns. Properties edited meanwhile are passed to the assembler as header options.
 
+## Admin panel: open and publish
+
+The Quests tab of the admin panel (`docs/ADMIN.md`) has **Open in editor** per quest and **New quest (editor)**. They open `questeditor.html?qst=<url>[&dat=<url>]`; when the first URL is a `.bin` the `&dat=` URL supplies its `.dat`. The files come from the authenticated route `GET /admin/api/quests/file/<folder>/<name>` (the admin cookie is sent because the editor is on the same origin). The production server serves `questeditor.html` publicly, as a static tool: it has no secrets and works on files in the browser.
+
+**Publish to server** appears when `GET /admin/api/session` answers "authenticated" (so never on the dev server or a public visitor's page). The dialog asks for the category folder (the server's existing folders under `system/quests`; the folder the quest was opened from is preselected), the format (`.bin` + `.dat` or `.qst`) and the file name, which needs the Blue Burst tag: `q9001-bb-e.bin` (the `.dat` becomes `q9001-bb.dat`) or `q9001-bb.qst`. The dialog says whether it replaces files (the server keeps a backup) and requires you to type `category/file` before the button works. The server validates the quest again (size, PRS, the same parsers as the editor), writes it, reloads quests and answers; the editor then shows the quest number and name. `client/src/questeditor/publish.ts` builds the requests (`tests/questeditor.test.ts` covers it, `tests/admin.test.ts` and `tests/admin.live.ts` the server side; the live test publishes an editor-written quest and a real newserv lists it).
+
+Naming: newserv takes the quest number from the file name (`q9001`), the version from `-bb` and the language from `-e` / `-j`. Pick a number no other quest uses; publishing over an existing name replaces that quest.
+
 ## Test in game, for the admin panel
 
 The editor does not talk to a game server. It exposes the hook:
@@ -77,6 +86,7 @@ or, from another page: `window.questEditor.registerTestInGame(fn)` / `window.que
 | `history.ts`, `datcodec.ts`, `binhead.ts`, `geom.ts`, `areas.ts` | Undo stack; .dat / .evt bytes from the lists; .bin header edits and the minimal new .bin; world <-> room coordinates; area names. |
 | `scene.ts` | The 3D layer over `render/mapviewer.ts` and the enemy / object / NPC layers; picking, dragging, placement. |
 | `panel_*.ts`, `dom.ts`, `main.ts`, `style.css` | The panels and the page. |
+| `publish.ts` | Requests for the admin panel's publish route (base64, names, session check). |
 | `io.ts`, `testhook.ts` | The only modules that use the write side (`prscompress`, `questwrite`, `qst`, `questasm`), and the test hook. |
 | `tests/questeditor.test.ts` | History, edits with undo / redo, codecs, header edits, coordinates; with a newserv checkout it also round-trips all its BB quests through the model. |
 

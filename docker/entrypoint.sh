@@ -28,6 +28,10 @@ node /app/fetch-data.mjs &
 # volume; put them back over the image's config.json.
 if [ -f "$STATE/config.json" ]; then cp "$STATE/config.json" "$SYSTEM/config.json"; fi
 
+# Quests published from the admin panel are mirrored to the volume; put them
+# back into the image's system/quests (only those files, nothing is deleted).
+if [ -d "$STATE/quests-published" ]; then cp -a "$STATE/quests-published/." "$SYSTEM/quests/"; fi
+
 cd /app/newserv
 ./newserv &
 NEWSERV=$!

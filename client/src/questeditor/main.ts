@@ -13,6 +13,7 @@ import { createEventsPanel } from './panel_events.ts';
 import { createPropertiesPanel, type Panel } from './panel_props.ts';
 import { createScriptPanel } from './panel_script.ts';
 import { EditorScene, type Placement } from './scene.ts';
+import { adminSession, buildPublishBody, defaultPublishName, listQuestDirectories, PUBLISH_NAME_RE, publishQuest, publishTarget, type AdminSession, type PublishFormat } from './publish.ts';
 import { registerTestInGame, testInGame } from './testhook.ts';
 import { degreesToBams, wrapBams } from './geom.ts';
 
@@ -156,6 +157,76 @@ const testBtn = button('Test in game', async () => {
   }
 }, '', 'Hand the quest to the admin panel to try it on the server');
 
+// --- Publish to server (only with an admin session on this origin) ------------------------------
+let session: AdminSession | null = null;
+let publishCategory = '';
+const publishDialog = h('dialog', { class: 'qe-dialog' });
+const publishBtn = button('Publish to server', () => void openPublish(), 'primary', 'Write this quest into the server\'s quest folder and reload quests (admin panel session required)');
+publishBtn.hidden = true;
+
+async function openPublish(): Promise<void> {
+  if (!session) return;
+  let dirs;
+  try {
+    dirs = await listQuestDirectories();
+  } catch (err) {
+    say(`Cannot list the server's quest folders: ${(err as Error).message}`, 'err');
+    return;
+  }
+  const category = h('select', { 'aria-label': 'Category folder' }, ...dirs.map((d) => h('option', { value: d.dir, text: d.dir, selected: d.dir === publishCategory })));
+  const format = h('select', { 'aria-label': 'Format' }, h('option', { value: 'pair', text: '.bin + .dat' }), h('option', { value: 'qst', text: '.qst' }));
+  const name = h('input', { type: 'text', value: defaultPublishName(doc.fileName || 'quest', 'pair'), maxLength: 64, autocomplete: 'off', spellcheck: false });
+  const confirmInput = h('input', { type: 'text', autocomplete: 'off', spellcheck: false, 'aria-label': 'Confirmation' });
+  const note = h('p', { class: 'qe-hint' });
+  const go = button('Publish', () => void doPublish(), 'primary');
+  const target = (): string => publishTarget(category.value, name.value);
+  const refresh = (): void => {
+    const existing = dirs.find((d) => d.dir === category.value)?.files.map((f) => f.name) ?? [];
+    const files = name.value.endsWith('.qst') ? [name.value] : [name.value, name.value.replace(/-bb(-[a-z])?\.bin$/, '-bb.dat')];
+    const clash = files.filter((f) => existing.includes(f));
+    note.textContent = clash.length ? `Replaces ${clash.join(', ')} (a backup is kept on the server).` : 'Creates new files.';
+    go.disabled = !PUBLISH_NAME_RE.test(name.value) || confirmInput.value !== target();
+  };
+  format.addEventListener('change', () => {
+    name.value = defaultPublishName(name.value.replace(/\.(bin|qst)$/, '').replace(/-bb(-[a-z])?$/, ''), format.value as PublishFormat);
+    refresh();
+  });
+  for (const el of [category, name, confirmInput]) el.addEventListener('input', refresh);
+  async function doPublish(): Promise<void> {
+    if (!session) return;
+    go.disabled = true;
+    try {
+      const pkg = buildPackage(doc);
+      const r = await publishQuest(session, buildPublishBody(pkg, category.value, name.value));
+      publishCategory = category.value;
+      doc.markSaved();
+      publishDialog.close();
+      say(`Published ${r.files.map((f) => f.name).join(' + ')} to ${category.value}; the server reloaded its quests (quest ${r.quest.questNumber}, "${r.quest.name}").`, 'ok');
+    } catch (err) {
+      say(`Publish failed: ${(err as Error).message}`, 'err');
+      refresh();
+    }
+  }
+  publishDialog.replaceChildren(
+    h('h3', { text: 'Publish to server' }),
+    h('p', { class: 'qe-hint', text: 'Writes the quest into the server\'s quest folder (the previous file is backed up) and reloads quests. Players see it next time they open the quest menu. The file name needs the Blue Burst tag, e.g. q9001-bb-e.bin (the .dat becomes q9001-bb.dat) or q9001-bb.qst.' }),
+    h('label', { class: 'qe-field' }, h('span', { text: 'Category folder' }), category),
+    h('label', { class: 'qe-field' }, h('span', { text: 'Format' }), format),
+    h('label', { class: 'qe-field' }, h('span', { text: 'File name' }), name),
+    note,
+    h('label', { class: 'qe-field' }, h('span', { text: 'Type the target to confirm' }), confirmInput),
+    h('p', { class: 'qe-hint' }, h('code', { text: 'category/file' }), ' must match exactly.'),
+    h('div', { class: 'qe-actions' }, go, button('Cancel', () => publishDialog.close())),
+  );
+  refresh();
+  publishDialog.showModal();
+}
+
+void adminSession().then((s) => {
+  session = s;
+  publishBtn.hidden = !s;
+});
+
 const toolbar = h(
   'div',
   { class: 'qe-toolbar', role: 'toolbar', 'aria-label': 'Quest editor' },
@@ -170,6 +241,7 @@ const toolbar = h(
   dataBtn,
   dataLabel,
   h('span', { class: 'grow' }),
+  publishBtn,
   testBtn,
 );
 
@@ -234,6 +306,7 @@ app.replaceChildren(
   right,
   fileInput,
   dialog,
+  publishDialog,
 );
 
 // --- Refresh scheduling -------------------------------------------------------------------------------
@@ -319,7 +392,7 @@ document.addEventListener('keydown', (e) => {
     save('qst');
     return;
   }
-  if (typing(e.target) || dialog.open) return;
+  if (typing(e.target) || dialog.open || publishDialog.open) return;
   const key = e.key.toLowerCase();
   if (mod && key === 'z') {
     e.preventDefault();
@@ -392,13 +465,31 @@ window.addEventListener('message', (e: MessageEvent) => {
   else if (d?.type === 'questeditor:get-package') (e.source as Window | null)?.postMessage({ type: 'questeditor:package', package: buildPackage(doc) }, e.origin);
 });
 
-// ?qst=<url> opens a quest from a URL (same origin or CORS-enabled).
-const qstUrl = new URLSearchParams(location.search).get('qst');
+// ?qst=<url> opens a quest from a URL (same origin or CORS-enabled); &dat=<url>
+// adds the .dat when the first URL is a .bin. The admin panel's "Open in editor"
+// uses /admin/api/quests/file/<folder>/<name>, which needs the admin session
+// cookie (same origin, sent automatically).
+const query = new URLSearchParams(location.search);
+const qstUrl = query.get('qst');
+const datUrl = query.get('dat');
+const nameOfUrl = (u: string): string => {
+  try {
+    return decodeURIComponent(new URL(u, location.href).pathname.split('/').pop() ?? 'quest.qst');
+  } catch {
+    return 'quest.qst';
+  }
+};
+async function fetchBytes(u: string): Promise<NamedBytes> {
+  const res = await fetch(u, { credentials: 'same-origin' });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return { name: nameOfUrl(u), bytes: new Uint8Array(await res.arrayBuffer()) };
+}
 if (qstUrl) {
-  fetch(qstUrl)
-    .then(async (res) => {
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      openFiles([{ name: qstUrl.split('/').pop() ?? 'quest.qst', bytes: new Uint8Array(await res.arrayBuffer()) }]);
+  Promise.all([fetchBytes(qstUrl), datUrl ? fetchBytes(datUrl) : null])
+    .then(([first, second]) => {
+      openFiles(second ? [first, second] : [first]);
+      const m = /\/admin\/api\/quests\/file\/([^/]+)\//.exec(new URL(qstUrl, location.href).pathname);
+      if (m) publishCategory = decodeURIComponent(m[1]);
     })
     .catch((err) => say(`Cannot load ${qstUrl}: ${(err as Error).message}`, 'err'));
 }
