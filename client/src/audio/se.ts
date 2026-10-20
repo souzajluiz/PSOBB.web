@@ -48,6 +48,12 @@ export interface SePlayOptions {
   volume?: number;
   /** Loop like FUN_008144b0 voices when the wave has loop points. */
   loop?: boolean;
+  /**
+   * ProcessAudioCommand_00814664's pitch value (0x00829704: (v / 3072 - 0.1222)
+   * * 4096, 0.1222 being log2(44100 / 48000)): ASSUMED 1/256 semitone, so the
+   * playback rate is 2 ** (v / 3072).
+   */
+  pitch?: number;
 }
 
 interface Wave {
@@ -171,6 +177,7 @@ export class SePlayer {
     if (this.voices.length >= VOICES) return -1;
     const node = ctx.createBufferSource();
     node.buffer = this.buffer(w);
+    if (opts.pitch) node.playbackRate.value = 2 ** (opts.pitch / 3072);
     if (opts.loop && w.loopStart >= 0) {
       node.loop = true;
       node.loopStart = w.loopStart / w.wave.rate;

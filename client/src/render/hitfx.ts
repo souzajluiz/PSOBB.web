@@ -129,7 +129,7 @@ export class FieldParticles {
     const base = pos.clone();
     const origin = pos.clone();
     origin.y += p.dy ?? 0;
-    particles.add(e, [origin.x, origin.y, origin.z], 0);
+    particles.add(e, [origin.x, origin.y, origin.z], 0, p.tint);
     const burst: Burst = {
       particles,
       anchor: follow ? at : null,
@@ -154,6 +154,43 @@ export class FieldParticles {
         burst.emit = 1;
       }
     }
+    this.viewer.scene.add(burst.group);
+    this.bursts.push(burst);
+  }
+
+  /**
+   * One one-shot effect made at several points at once (the Zonde bolt's 13
+   * particles): the emitters share one burst, so a bolt costs one burst and
+   * the 80 burst cap is not eaten by a tier 5 Zonde.
+   */
+  async spawnMany(p: ParticleSpawn, points: ReadonlyArray<{ x: number; y: number; z: number }>): Promise<void> {
+    await this.load();
+    if (this.disposed || this.bursts.length >= MAX_BURSTS || !points.length) return;
+    const e = this.entry(p.id);
+    if (!e) return;
+    const particles = new ParticleSystem();
+    particles.slots = this.slots;
+    const dy = p.dy ?? 0;
+    const first = new THREE.Vector3(points[0].x, points[0].y, points[0].z);
+    for (const q of points) particles.add(e, [q.x, q.y + dy, q.z], 0, p.tint);
+    for (const em of particles.emitters) em.acc = Math.max(0, 1 - e.rate);
+    particles.step(true);
+    particles.emitters.length = 0;
+    const origin = first.clone();
+    origin.y += dy;
+    const burst: Burst = {
+      particles,
+      anchor: null,
+      origin,
+      base: first,
+      group: new THREE.Group(),
+      sprites: [],
+      delay: 0,
+      emit: 0,
+      scale: p.scale ?? [1, 1],
+      dy,
+      track: null,
+    };
     this.viewer.scene.add(burst.group);
     this.bursts.push(burst);
   }
@@ -187,11 +224,17 @@ export class FieldParticles {
       } else if (b.emit > 0) {
         b.emit--;
         const t = b.track?.();
-        const em = b.particles.emitters[0];
-        if (t && em) em.pos = [t.x, t.y + b.dy, t.z];
-        b.particles.step(true);
-        if (b.emit === 0) b.particles.emitters.length = 0;
-        return true;
+        if (b.track && !t) {
+          // A tracker that returns null has lost its owner: the emission stops.
+          b.emit = 0;
+          b.particles.emitters.length = 0;
+        } else {
+          const em = b.particles.emitters[0];
+          if (t && em) em.pos = [t.x, t.y + b.dy, t.z];
+          b.particles.step(true);
+          if (b.emit === 0) b.particles.emitters.length = 0;
+          return true;
+        }
       }
       b.particles.step(false);
       if (b.delay > 0 || b.emit > 0 || b.particles.count > 0) return true;

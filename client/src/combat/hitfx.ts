@@ -46,6 +46,7 @@ export interface ParticleSpawn {
   duration?: number; // frames of emission (default: the one emission of create_particle_effect)
   scale?: readonly [number, number]; // particle field +0x44 / +0x48
   at?: 'hit' | 'player'; // the hit point (default) or the attacker's weapon position
+  tint?: number; // ARGB colour override (ParticleEffectSingleParticle_SetId_00508ee4)
 }
 
 export const CRITICAL_SE = 0x42;
