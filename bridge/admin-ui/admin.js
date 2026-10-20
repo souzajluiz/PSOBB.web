@@ -2,6 +2,8 @@
 // external resources. Everything that comes from the server (player names,
 // account data) is put in the page with textContent, never as HTML.
 
+import { langSelect, tr } from './i18n.js';
+
 const app = document.getElementById('app');
 let csrf = null;
 let user = null;
@@ -10,10 +12,18 @@ let timer = null;
 
 // ---- helpers --------------------------------------------------------------------
 
+// Text nodes and the placeholder / title / aria-label / alt attributes go through
+// tr() (i18n.js); the content of a `mono` element (ids, keys, codes) never does.
+const TR_ATTRS = new Set(['placeholder', 'title', 'aria-label', 'alt']);
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
+  const literal = /\bmono\b/.test(String(attrs?.class ?? ''));
   for (const [k, v] of Object.entries(attrs ?? {})) {
     if (v === false || v === null || v === undefined) continue;
+    if (TR_ATTRS.has(k) && typeof v === 'string') {
+      el.setAttribute(k, tr(v));
+      continue;
+    }
     if (k === 'class') el.className = v;
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
     else if (k === 'value') el.value = v;
@@ -22,7 +32,7 @@ function h(tag, attrs, ...kids) {
   }
   for (const kid of kids.flat()) {
     if (kid === null || kid === undefined || kid === false) continue;
-    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    el.append(kid instanceof Node ? kid : document.createTextNode(literal ? String(kid) : tr(String(kid))));
   }
   return el;
 }
@@ -110,9 +120,16 @@ function eyeField(input) {
     const show = input.type === 'password';
     input.type = show ? 'text' : 'password';
     btn.textContent = show ? '\u{1F648}' : '\u{1F441}';
-    btn.title = btn.ariaLabel = show ? 'Hide password' : 'Show password';
+    btn.title = btn.ariaLabel = tr(show ? 'Hide password' : 'Show password');
   });
   return h('span', { class: 'eyefield' }, input, btn);
+}
+
+// A language change re-renders the current view without touching the session.
+function rerender() {
+  document.title = tr('PSOBB.web Admin');
+  if (csrf) showApp();
+  else showLogin();
 }
 
 function showLogin(message) {
@@ -129,12 +146,12 @@ function showLogin(message) {
       p.value = '';
       showApp();
     } catch (e) {
-      msg.textContent = e.message;
+      msg.textContent = tr(e.message);
       msg.hidden = false;
     }
   };
   p.addEventListener('keydown', (e) => e.key === 'Enter' && go());
-  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, 'PSOBB.web admin'), msg, u, eyeField(p), h('button', { class: 'primary', onclick: go }, 'Log in')));
+  app.replaceChildren(h('div', { class: 'card login' }, h('h1', null, 'PSOBB.web admin'), msg, u, eyeField(p), h('button', { class: 'primary', onclick: go }, 'Log in'), langSelect(rerender)));
   p.focus();
 }
 
@@ -150,6 +167,7 @@ function showApp() {
   const content = h('main');
   const nav = h('nav', null, TABS.map(([id, label]) => h('button', { class: id === currentTab ? 'active' : '', onclick: () => select(id), 'data-tab': id }, label)));
   const bar = h('div', { class: 'bar' }, h('span', { class: 'brand' }, 'PSOBB.web admin'), h('span', { class: 'muted' }, user),
+    langSelect(rerender),
     h('button', { class: 'small', onclick: async () => { await run(() => api('POST', '/logout', {})); csrf = null; showLogin(); } }, 'Log out'));
   app.replaceChildren(bar, nav, content);
   async function select(id, arg) {
@@ -449,10 +467,10 @@ views.data = async (root) => {
   const custom = h('input', { type: 'text', placeholder: 'or a path such as rare-table/rare-table-v4', class: 'wide' });
   const out = h('pre', null, 'Choose a table.');
   const load = (path) => run(async () => {
-    out.textContent = 'Loading...';
+    out.textContent = tr('Loading...');
     const d = await api('GET', `/data/${path}`);
     const text = JSON.stringify(d.data, null, 1);
-    out.textContent = text.length > 400000 ? `${text.slice(0, 400000)}\n... (truncated; ${text.length} bytes)` : text;
+    out.textContent = text.length > 400000 ? `${text.slice(0, 400000)}\n${tr(`... (truncated; ${text.length} bytes)`)}` : text;
   });
   root.replaceChildren(h('div', { class: 'card' }, h('h2', null, 'Server data tables'), h('p', { class: 'muted' }, 'Read-only views of newserv tables. Drop rates and EXP are changed in Config; the tables themselves are files on the server (reload them from here).'),
     h('div', { class: 'row' }, sel, h('button', { onclick: () => load(sel.value) }, 'Show'), custom, h('button', { onclick: () => custom.value && load(custom.value) }, 'Show path'),
@@ -494,6 +512,7 @@ views.audit = async (root, _arg, select) => {
 
 // ---- start ------------------------------------------------------------------------------
 
+document.title = tr('PSOBB.web Admin');
 (async () => {
   try {
     const s = await api('GET', '/session');

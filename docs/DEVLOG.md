@@ -1,5 +1,21 @@
 # Devlog
 
+## 2026-10-20: Admin panel in English, Portuguese and Spanish
+
+**What changed:** `bridge/admin-ui/i18n.js` (new) holds the dictionary and
+patterns; `admin.js` imports `tr` / `langSelect` and calls `tr()` only in `h()`
+and a few `textContent` sites; a language select is in the top bar and on the
+login card; `admin.mjs` serves `/admin/static/i18n.js`. Test:
+`tests/admin.i18n.test.ts`. See `docs/ADMIN.md` (Languages).
+
+**Details:**
+- Lookup by the exact English string, so the English literals in `admin.js`
+  stay and strings added later fall back to English until they get an entry.
+- Elements with class `mono` are never translated; that is what keeps the text
+  the person must type to confirm (`account <id>`, config key) intact.
+- Server error messages are translated in the browser by pattern; the audit log
+  is shown as the server wrote it.
+
 ## 2026-10-20: Episode 2 FSMs: Gibbons, Mericarol family
 
 **What changed:** Ul Gibbon / Zol Gibbon (`TObjEneBm5GibonU`) and Mericarol /
