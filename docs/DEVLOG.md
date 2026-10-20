@@ -1,5 +1,99 @@
 # Devlog
 
+## 2026-10-20: Episode 2 FSMs: Morfos, Recobox, Epsilon
+
+**What changed:** the Seabed Morfos, the Recobox with its Recons and the Tower
+Epsilon with its four Epsigards have their own brains in
+`combat/enemyfsmep2d.ts`, read from the Ephinea dump, the exe's data
+(`tools/exedata.py`) and its disassembly (capstone over the PE, scratch only).
+All are dispatchers on enemy+0x32e with the exe's four handler arguments (4
+enter, 3 transition check, 0 frame, 5 leave): the check is skipped once after a
+state change from outside (vtable +0x160) and runs before the frame. Wired in
+`render/combat.ts` (OWN_FSM, the constructors, `spawnRecon`, the Epsilon's
+Epsigards in `spawnSplitters`, the Morfos' shield in `applyEnemyHit`, the
+children dropped with their parent in `splitterDied`).
+
+**Morfos** (ctor 0x0057a134, vtable 0x00b070c0, dispatcher 0x0057a960, table
+0x009bee20, MovementData row 64; newserv's Map.cc documents the set params and
+they match InitializeEnemyBounds_0057a208): 0 -> 1 appear (the two effect
+objects, 30 and 40 float32 steps of 0.2) -> 3 the wall bulge (0.5 a frame to 12)
+-> 4 the walk (aim, turn at iparam1, crawl along the heading by param1 + 0.28
+for param2 + 20 per leg, from the second leg the farthest player within 400 in
+a +-0xaaa cone; Ultimate never crawls) -> 5 punch (turn at iparam2, arm at
+elapsed 8.0, try_hit_entity(1.0) + knockback 5.0, 50 frames) or 6 laser (back to
+the target, bolt at 6.0, twice) or 9 spin laser (flee: iparam4 frames at iparam5,
+then 3000 a frame until its back faces the player or a full turn, 4 shots, 5 on
+Very Hard / Ultimate, armoured); 7 after 61 frames without a target fades out to
+2 (hidden at its spawn point, a warp). Hits: 0x0057c6d0 flinches only from
+behind (|angle| >= 0x4000) unless armoured, a front hit rolls the shield
+(0x0057acb8, rand <= param3 + 0.1 at half HP) and the flee (0x0057ac74, param4
++ 0.1); 0x00579f98 blocks front hits while shielded (`guard`) and drops the
+shield on a hit from behind; the flinch end skips the shield roll after that.
+The bolt (0x0057d0f4 / 0x0057ce94) flies at fparam1 for 500 with radius
+1.5 * speed and group 0 power fparam2.
+
+**Recobox / Recon** (box ctor 0x0058859c, vtable 0x00b07e80, dispatcher
+0x00589a2c; Recon ctor 0x0058a2a0, vtable 0x00b08100, dispatcher 0x0058aa78,
+jump table 0x0092889c; set params from newserv: param1 hover delta, param2
+orbit radius delta, param4 alive at once, param6 floor / ceiling / wall,
+clone_count - 1 Recons at most): the box fades in (40 steps), opens (row 1)
+when a player is within 500 and at most half its Recons are alive, drops one
+Recon every 30 frames while alive < limit and spawned < total (each child index
+once), closes when a Recon is in its state 5 or no more can come. The Recon
+launches with the box's vector (floor +5, ceiling -5, wall 2 along the heading;
+displacement v * |v|^2, 0.95 drag, vertical easing that lands exactly on the
+hover height 2 * rand + 45 + param1), looks around (150 frames, then fades
+away), orbits its target at 5 * rand + 50 + param2 (angular step 65536 * v / (2
+pi r), v = 25 / 27 written by 0x0058c230, bobbing 10 at 0x380 a frame), shoots a
+bouncing bomb (turn 0x400, 16 frames, elapsed 10.0; bomb ctor 0x0058c740,
+update 0x0058c878: gravity -0.1, drag 0.95, bounce -0.5, armed after the second
+contact, blast radius fparam2 with power fparam3, life iparam1 * 30) or slashes
+with the saw (chase fparam1, wind-up iparam2, elapsed 7.0 .. 31.0 radius
+AttackData.distance_y, power atp, knockback 7.0). At most 2 Recons (4 on
+Ultimate) attack one player (0x00589acc); a Recon with no room looks for another
+player. The Recons die with their box.
+
+**Epsilon / Epsigard** (Epsilon ctor 0x005585ac, vtable 0x00b04cc0, dispatcher
+0x0055a95c, jump table 0x009252ac; Epsigard 0x0055be9c / 0x0055c1c0, vtable
+0x00b04f20, dispatcher 0x0055b798; MovementData rows 35 / 36): dormant -> appear
+-> stalk (turn param2 + 512, walk param1 + 0.5 within 22.5 degrees, a laser orb
+that creeps at fparam2 for iparam1 frames then blasts radius 40 for fparam3) ->
+after (param3 + 20) * 30 frames it places the Epsigards (the slots hold its spawn
+point), opens, releases them to orbit at radius fparam1 and is vulnerable (it
+is invulnerable while bit 2 or 0x40 is set: hits do nothing) -> every iparam3
+frames a random row of the 20-row table at 0x00925160 sets those Epsigards
+attacking (a shield that grows 10, holds iparam1, shrinks 10 frames, touch
+damage fparam4) -> after (param4 + 20) * 30 frames with all four idle it recalls
+them, closes and recolours (the element advances: foie, barta, zonde, megid
+groups 1, 2, 3, 5) -> stalk again. A hit while open runs the 17-frame flash (state
+8). The Epsigards take no damage from weapons or techniques (0x0055be2c /
+0x0055be44: only group 20 passes) and follow their Epsilon's death.
+
+**ASSUMED / not reproduced:**
+- The map rays everywhere (line of sight, walls, the crawl's wall stop), ground
+  heights (the Recon's hover height is used as a lift above the floor; the
+  exe uses it as an absolute y; a ceiling box starts 40 above the hover height,
+  a wall box at it), the Recon's muzzle (12 in front), the Morfos' muzzle (its
+  own position), the Epsigards' collision flag (nothing touches them) and
+  their touch radius (36; the exe scales a box with the shield animation).
+- `check_entity_animation_elapsed_threshold` (0x007aaa30) is a crossing event
+  (threshold < elapsed <= threshold + step); the brain also accepts the end of
+  the motion in its place so a short motion cannot hang a state.
+- The Epsilon's state 7 has no exit for a player who comes back (sub 2): here
+  it returns to state 2. The Epsilon's element weight (0x00925404) is not read
+  (uniform). The Morfos is invulnerable while hidden (state 2).
+- The motion lengths of bm_ene_morfos / recobox / epsilon are not on this Mac
+  (the Ephinea install here has no Episode 2 enemy archives): the tests
+  sweep the motion lengths 1 .. 120 instead of using the real counts.
+- Techniques / weapon specials of the Epsilon's current element are blocked in
+  `EpsilonAi.immuneToTech`, but the owner does not call it; the closed / open
+  model swap (model 0 / 1) and the Epsilon's colour fade are not drawn; no
+  Chrome check.
+
+**Checks:** `node tests/enemyfsmep2d.test.ts` (new), client `tsc --noEmit`
+(only the two missing @capacitor modules). The tests that need
+`vendor/newserv` or the item tables fail in a bare worktree as before.
+
 ## 2026-10-19: stricter TypeScript
 
 **What changed:** `client/tsconfig.json` now also has `noImplicitReturns`,

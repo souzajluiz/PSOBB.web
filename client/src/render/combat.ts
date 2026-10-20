@@ -48,6 +48,7 @@ import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../c
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
+import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DeRolLeAi, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { DragonAi, type DragonEvent } from '../combat/dragon.ts';
 import type { EnemyShot } from '../combat/enemyshots.ts';
@@ -266,6 +267,10 @@ const OWN_FSM = new Set([
   // Episode 2 (combat/enemyfsmep2.ts).
   'TObjEneMerillLia',
   'TObjEneDolmOlm',
+  // Episode 2, part d (combat/enemyfsmep2d.ts).
+  'TObjEneMorfos',
+  'TObjEneRecobox',
+  'TObjEneEpsilonBody',
   // Caves splitters (combat/enemysplits.ts).
   'TObjEnePanarms',
   'TObjEneSlime',
@@ -681,6 +686,15 @@ export class CombatView {
         // Dolmdarl), the set entry's param1..5 their chances and ranges.
         else if (className === 'TObjEneMerillLia') ai = new MerilliaAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDolmOlm') ai = new DolmolmAi({ ...at, subtype, params: setParams, attack, movement, rng: () => this.rng() });
+        else if (className === 'TObjEneMorfos') {
+          const mor = new MorfosAi({ ...at, params: setParams, movement, attack, difficulty, radius, phase: head.index, rng: () => this.rng() });
+          mor.health = () => stats.hp / Math.max(1, stats.maxHp);
+          ai = mor;
+        } else if (className === 'TObjEneRecobox')
+          // The Recons' rows: MovementData / AttackData 66 (ENEMY_TYPE_PARAMS.RECON).
+          ai = new RecoboxAi({ ...at, params: setParams, cloneCount: (head.slot.set as EnemySet).numChildren, movement: params ? params.movement(difficulty, 66) : null, attack: params ? params.attack(difficulty, 66) : null, difficulty, rng: () => this.rng() });
+        else if (className === 'TObjEneEpsilonBody')
+          ai = new EpsilonAi({ ...at, params: setParams, movement, epsigard: params ? params.movement(difficulty, 36) : null, phase: head.index, rng: () => this.rng() });
         else if (className === 'TObjEnePanarms') ai = new PanArmsAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneSlime') ai = new SlimeControl({ ...at, numChildren: (head.slot.set as EnemySet).numChildren });
         else if (className === 'TBoss2DeRolLe') {
@@ -1171,6 +1185,8 @@ export class CombatView {
       if (r.tpDrain) this.drainTp(e, ai, r.tpDrain);
       if (r.heal) this.enemyResta(e, r.heal.level);
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
+      if (ai instanceof RecoboxAi) for (const sp of ai.spawns.splice(0)) void this.spawnRecon(e, ai, sp);
+      if ((ai instanceof ReconAi && ai.removed) || (ai instanceof EpsigardAi && ai.state === 'gone')) this.dropQuietly(e);
       if (ai instanceof SinowAi) this.sinowTick(e, ai);
       if (ai instanceof PanArmsAi) for (const ev of ai.events.splice(0)) this.panEvent(e, ai, ev);
       if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
@@ -3121,6 +3137,10 @@ export class CombatView {
         if (this.disposed) return;
         // No slime could be built: the control has nothing to wait for.
         if (!first) this.slimeControlDone(e, true);
+      } else if (e.ai instanceof EpsilonAi) {
+        // epsilon_constructor builds its four Epsigards (slots + 1 .. + 4, model 2).
+        for (let i = 0; i < 4; i++) await this.spawnSplitChild(e, e.index + 1 + i, 'EPSIGARD', 2, { index: 2, speed: 1, loop: true }, e.ai.children[i], at);
+        if (this.disposed) return;
       }
     }
   }
@@ -3197,6 +3217,10 @@ export class CombatView {
   // A splitter (or its child) died, by a local kill (`local`: this client
   // sends the 6x76s) or another client's 6x0A.
   private splitterDied(e: EnemyRuntime, local: boolean): void {
+    // A Recobox's Recons die with it, an Epsilon's Epsigards go (combat/enemyfsmep2d.ts).
+    if (e.ai instanceof RecoboxAi || e.ai instanceof EpsilonAi) {
+      for (const c of [...this.enemies.values()]) if (c.parent === e) this.dropQuietly(c);
+    }
     // The merged Pan Arms dies alone: its hidden halves are dropped.
     if (e.ai instanceof PanArmsAi) {
       for (const h of e.ai.halves) {
@@ -3227,6 +3251,13 @@ export class CombatView {
     if (local) this.game.sendEntitySetFlags(0x1000 | control.index, this.floor, 8);
     this.layer.remove(control.instance);
     this.enemies.delete(control.index);
+  }
+
+  // A Recon comes out of its Recobox: slot box + 1 + child, model 0 of the box's BML.
+  private async spawnRecon(box: EnemyRuntime, ai: RecoboxAi, sp: ReconSpawn): Promise<void> {
+    const r = await this.spawnSplitChild(box, box.index + 1 + sp.child, 'RECON', 0, { index: 8, speed: 0.7, loop: true }, sp.recon, { x: sp.x, z: sp.z });
+    if (!r) ai.spawnFailed(sp.recon);
+    else this.opts.log(`Recobox E-${box.index.toString(16)} sent Recon E-${r.index.toString(16)}`);
   }
 
   // A child removed without a kill (no 6x76, no EXP).
@@ -3729,6 +3760,14 @@ export class CombatView {
       // "0" text and do nothing.
       this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) is invulnerable`);
       return;
+    }
+    // The Morfos' front shield (MorfosOnHit_00579f98) is decided on the attacker's client.
+    if (byPlayer && me && e.ai instanceof MorfosAi) {
+      const at = this.view?.playerPositions().get(me.clientId);
+      if (at && e.ai.guard(at.x, at.z)) {
+        this.opts.log(`${what}E-${e.index.toString(16)} (${e.slot.type}) blocks the hit with its shield`);
+        return;
+      }
     }
     if (e.ai instanceof VoloptPartAi) {
       this.voloptPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
@@ -4610,7 +4649,7 @@ export class CombatView {
       } else if (s.flags & 0x200) {
         // The hit flag runs the hit handler (vtable +0x100) here too: the
         // Sinow's sends its mirage clones away, a clone leaves.
-        if (e.ai instanceof SinowAi) e.ai.onDamage(clientId);
+        if (e.ai instanceof SinowAi || e.ai instanceof MorfosAi) e.ai.onDamage(clientId);
         if (e.ai?.flinches?.(0, e.stats.maxHp) ?? true) this.playDamage(e);
       }
       return;
