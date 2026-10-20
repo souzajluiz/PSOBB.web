@@ -158,6 +158,43 @@ export function specialHandlerParticles(special: number): ParticleSpawn[] {
   return [];
 }
 
+// --- the Flame special (SpawnGuisesCountdown_005cde20) ----------------------------
+//
+// weapon_special_handlers[25] (0x009c2660 + 4 * 25 -> 0x005cde20), called with
+// type 1 when the special lands on an entity (the defender: its yaw +0x60, the
+// hit position): two GuisesCountdown objects (ConstructGuisesCountdown_
+// 005cdf14, vtable 0x00b0cb28, update 0x005ce96c, no render of their own), one
+// at the defender's yaw and one turned by 0x8000. Each keeps a centre 5 ahead
+// of its yaw (sin, cos of it) on the hit position and a point on a circle of
+// radius 40 around it at the angle (yaw - 0x4000), and owns a particle
+// emitter (create_particle_effect5 at that point, particle 10 xtra_frame) that
+// is moved to the point every frame. Every update: radius -= 4, angle -=
+// 0x1999 (36 degrees), the point is recomputed; the object ends after 10
+// updates (+0x48).
+
+export const FLAME_PARTICLE = 10;
+export const FLAME_FRAMES = 10;
+export const FLAME_RADIUS = 40;
+export const FLAME_RADIUS_STEP = 4;
+export const FLAME_TURN = -0x1999; // BAMS a frame
+export const FLAME_AHEAD = 5;
+
+/**
+ * The emitter point of one Flame object after `k` updates (k = 0 is the
+ * construction). `yaw` is the defender's heading in radians (sin / cos of it
+ * point ahead, as the exe's int_sin / int_cos); `side` 0 is the object at its
+ * yaw, 1 the one turned by 0x8000.
+ */
+export function flamePoint(center: { x: number; y: number; z: number }, yaw: number, side: 0 | 1, k: number): { x: number; y: number; z: number } {
+  const bams = (2 * Math.PI) / 0x10000;
+  const heading = yaw - side * 0x8000 * bams;
+  const cx = center.x + Math.sin(heading) * FLAME_AHEAD;
+  const cz = center.z + Math.cos(heading) * FLAME_AHEAD;
+  const r = FLAME_RADIUS - FLAME_RADIUS_STEP * k;
+  const a = heading - 0x4000 * bams + FLAME_TURN * bams * k;
+  return { x: cx + Math.sin(a) * r, y: center.y, z: cz + Math.cos(a) * r };
+}
+
 // --- status effects on an enemy -----------------------------------------------
 
 export const STATUS_FX_PERIOD = 0x2d; // frames between the repeats
@@ -211,35 +248,18 @@ export function statusTickFx(kind: EnemyStatusKind): StatusFx {
   }
 }
 
-// --- enemy death -----------------------------------------------------------------
+// --- Resta on another player (entity_hit_by_tech, case resta) -------------------------
+//
+// CreateFloatingTextObject_0078a944(position, 0xff00ff00, 0x14, 0, L"HP", n)
+// (called from 0x0077447f, label at 0x008fe828): the text is the label, a "+"
+// for n >= 0 (0x0097a920) and the number, green, 0x14 frames, for an entity that
+// is not hidden (flag 0x2000000) and not the local player (+0x32c != 1).
 
-/**
- * The death particles by enemy kind. ASSUMED: the dump shows these four
- * families inside the individual enemies' death states (and no common death
- * routine): gensei_dead 0xe4 (SpawnParticleEffectEntity_00578824, native),
- * ab_dead 0xe5 (CreateEnemyDeathParticle_005787a4 at the ground point,
- * A.beast), eall_bakuhatu1 / 2 + mecha_hahen 0xfb 0xfc 0xe3
- * (SpawnEntityParticles_005787d0, machine), dark_dead / dark_dead2 0xe8 0xec
- * (SpawnDeathParticles_005787fc, delayed 10 frames, dark). The pairing with the
- * kind follows the names and the hit particles above; which enemy uses which
- * was not traced for each of them.
- */
-export function deathParticles(kind: EnemyKind): ParticleSpawn[] {
-  switch (kind & 0xf) {
-    case 1:
-      return [{ id: 0xe4, delay: 0, duration: 0x1e }];
-    case 2:
-      return [{ id: 0xe5, delay: 0, duration: 0x1e }];
-    case 4:
-      return [{ id: 0xfb }, { id: 0xfc }, { id: 0xe3 }];
-    case 8:
-      return [
-        { id: 0xe8, delay: 10, duration: 1 },
-        { id: 0xec, delay: 10, duration: 1 },
-      ];
-    default:
-      return [];
-  }
+export const FLOAT_GREEN = 0x00ff00;
+
+export function restaFloat(heal: number): FloatSpec {
+  const n = (Math.round(heal) << 16) >> 16;
+  return { text: `HP${n >= 0 ? '+' : ''}${n}`, rgb: FLOAT_GREEN };
 }
 
 // --- the floating number -----------------------------------------------------------

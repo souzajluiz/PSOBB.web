@@ -18,6 +18,7 @@ import { parseParticleEntry, particleQuad, particleShade, ParticleSystem, type P
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
+import { HitModels, type IceHost } from './hitmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const FRAME = 1 / 30;
@@ -35,6 +36,8 @@ interface Burst {
   delay: number; // frames before the first emission
   emit: number; // frames of emission left (0 = the one-shot already ran)
   scale: readonly [number, number];
+  dy: number; // the spawn's raise
+  track: (() => THREE.Vector3 | null) | null; // moves the emitter every emitting frame (create_particle_effect5: the owner sets the position)
 }
 
 export class FieldParticles {
@@ -52,11 +55,14 @@ export class FieldParticles {
   private acc = 0;
   private disposed = false;
   private hook = (dt: number) => this.frame(dt);
+  // The model effects that go with the particles (critical flash, ice block).
+  readonly models: HitModels;
 
   constructor(viewer: MapViewer, files: ClientFiles, log: (msg: string) => void) {
     this.viewer = viewer;
     this.files = files;
     this.log = log;
+    this.models = new HitModels(viewer, files, log);
     viewer.frameHooks.add(this.hook);
   }
 
@@ -81,6 +87,7 @@ export class FieldParticles {
   /** Starts loading the data so the first hit does not wait for it. */
   preload(): void {
     void this.load();
+    this.models.preload();
   }
 
   private entry(id: number): ParticleEntry | null {
@@ -107,9 +114,11 @@ export class FieldParticles {
 
   /**
    * One effect at `at` (a fixed point, or a getter followed every frame).
-   * `dy` of the spawn raises the point.
+   * `dy` of the spawn raises the point. `follow`: the particles move with the
+   * getter's point (flag 0x10); `track`: only the emitter does, the particles
+   * stay where they were made.
    */
-  async spawn(p: ParticleSpawn, at: Anchor, follow = false): Promise<void> {
+  async spawn(p: ParticleSpawn, at: Anchor, follow = false, track = false): Promise<void> {
     await this.load();
     if (this.disposed || this.bursts.length >= MAX_BURSTS) return;
     const e = this.entry(p.id);
@@ -131,6 +140,8 @@ export class FieldParticles {
       delay: p.delay ?? 0,
       emit: p.duration ?? 0,
       scale: p.scale ?? [1, 1],
+      dy: p.dy ?? 0,
+      track: track && typeof at === 'function' ? at : null,
     };
     if (p.duration === undefined) {
       // The one emission: at least one particle (the spawn loop runs while
@@ -145,6 +156,11 @@ export class FieldParticles {
     }
     this.viewer.scene.add(burst.group);
     this.bursts.push(burst);
+  }
+
+  /** The ice block of a freeze (render/hitmodels.ts), its ring particles through this system. */
+  ice(host: IceHost): void {
+    void this.models.ice(host, (p, at) => void this.spawn(p, at));
   }
 
   get active(): number {
@@ -170,6 +186,9 @@ export class FieldParticles {
         b.delay--;
       } else if (b.emit > 0) {
         b.emit--;
+        const t = b.track?.();
+        const em = b.particles.emitters[0];
+        if (t && em) em.pos = [t.x, t.y + b.dy, t.z];
         b.particles.step(true);
         if (b.emit === 0) b.particles.emitters.length = 0;
         return true;
@@ -234,6 +253,7 @@ export class FieldParticles {
 
   dispose(): void {
     this.disposed = true;
+    this.models.dispose();
     this.viewer.frameHooks.delete(this.hook);
     for (const b of this.bursts) this.remove(b);
     this.bursts = [];
