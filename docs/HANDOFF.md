@@ -54,8 +54,8 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
-4. **Boss leftovers** (each is listed in the ROADMAP item 2): De Rol Le's chain
-   solver 0x0078d9d0 and shell debris; Vol Opt's bar / cage / hatch-lid drawing; the Dragon's
+4. **Boss leftovers** (each is listed in the ROADMAP item 2): De Rol Le's segments
+   as hit targets (the fin chains and the debris are done) and particles; Vol Opt's bar / cage / hatch-lid drawing; the Dragon's
    hit boxes and models; Dark Falz's cutscene objects, camera and Ultimate scenes;
    Belra's thrown arms, Saint-Milion's 16 spinners.
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation

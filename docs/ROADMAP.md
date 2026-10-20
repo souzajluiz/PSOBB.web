@@ -18,9 +18,11 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    the other `.njs` shape motions (TOKurage, the Episode 4 plants, the
    Episode 4 slime body) only need their objects' draw calls looked up.
 2. Episode 1 boss fights where they move their children: De Rol Le and
-   Vol Opt are done (`combat/derolle.ts`; left there: the tentacles' chain
-   solver 0x0078d9d0, the segments as their own hit targets, the shell debris
-   and the particles. `combat/volopt.ts` / `volopt2.ts`; the laser's bars, the
+   Vol Opt are done (`combat/derolle.ts`, `combat/derollefins.ts`; left there:
+   the segments as their own hit targets (a segment's shell debris is built and
+   tested, `DeRolLeAi.breakSegment`, and waits for them) and the particles; the
+   fin chains 0x0078d9d0 and the helm / shell debris are done, 2026-10-20.
+   `combat/volopt.ts` / `volopt2.ts`; the laser's bars, the
    cage and the prison's rise are read from the disassembly (2026-10-20); left
    there: drawing the bars / cage / hatch lids (balls now; the lid needs
    `fe_obj_vo_futa_moto.nj`), the bar's ceiling fragments, the Gizonde / Foie /

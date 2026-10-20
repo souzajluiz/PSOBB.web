@@ -212,7 +212,11 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
 
   // De Rol Le: body, 4 tentacles, 5 + 3 stings, all but the body hidden.
   const drl = boss(0xc1, 0, 0x0c)!;
-  eq(drl.parts.length, 1 + 4 + 5 + 3, 'De Rol Le: body + 4 tentacles + 8 stings');
+  eq(drl.parts.length, 1 + 4 + 5 + 3 + 10 + 1 + 10, 'De Rol Le: body + 4 tentacles + 8 stings + 10 fin segments + helm debris + 10 shell debris');
+  eq(drl.parts.filter((p) => p.model === 1 && p.name?.startsWith('fin ')).length, 8, 'De Rol Le: 8 fin_a segments (model 1, 4 on each of the two chains, 0x00434d34)');
+  eq(drl.parts.filter((p) => p.model === 0 && p.name?.endsWith(' tip')).length, 2, 'De Rol Le: 2 fin_b tips (model 0, the last segment of each chain)');
+  eq(drl.parts.filter((p) => p.model === 5).length, 1, 'De Rol Le: one helm_break object (model 5, 28 pieces)');
+  eq(drl.parts.filter((p) => p.model === 6).length, 10, 'De Rol Le: a shell_break object (model 6, 19 pieces) for each of the 10 segments');
   eq(drl.parts[0].scale, 2, 'De Rol Le: the body draws at scale 2.0 (render_derolle)');
   eq(drl.parts.filter((p) => p.model === 4 && p.place === 'world').length, 4, 'De Rol Le: 4 world-placed tentacles (0x00437ba4)');
   eq(drl.parts.filter((p) => p.model === 3 && p.hidden && p.texlistOf === 2).length, 8, 'De Rol Le: 8 hidden stings (model 3, body textures)');

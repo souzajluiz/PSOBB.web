@@ -21,6 +21,29 @@ import {
   type DeRolLeOptions,
   type DrlEvent,
 } from '../client/src/combat/derolle.ts';
+import {
+  DRL_DEBRIS,
+  DRL_FIN,
+  DrlDebris,
+  DrlFins,
+  PIECE_FADE,
+  PIECE_FALL,
+  PIECE_GONE,
+  PIECE_SINK,
+  drlPieceRecords,
+  matIdentity,
+  matMul,
+  matRotY,
+  matScale,
+  matTranslate,
+  newMat,
+  type DrlPieceRecord,
+} from '../client/src/combat/derollefins.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { GSLArchive } from '../client/src/formats/archives.ts';
+import { BmlArchive } from '../client/src/formats/bml.ts';
+import { parseNinjaChunkFile, type NjcmObject } from '../client/src/formats/njcm.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
@@ -350,6 +373,295 @@ for (const ultimate of [false, true]) {
     return ai.events.some((e) => e.kind === 'remove');
   }
   check(r.events.some((e) => e.kind === 'remove'), 'the follower removes the dead body on its own');
+}
+
+// 18. The fin chains (derollefins.ts: 0x0078d9d0 builds, 0x0078d130 solves,
+//     0x00434d34 draws).
+{
+  const len = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const fins = new DrlFins();
+  eq(fins.active, false, 'fins: no real anchor yet');
+  for (let c = 0; c < 2; c++) {
+    for (let j = 0; j < DRL_FIN.points; j++) {
+      const p = fins.point(c, j);
+      check(p[0] === 0 && p[1] === 0 && p[2] === -5 * j, `fins: rest point ${c}.${j} = anchor + j * (0, 0, -5), got ${p}`);
+    }
+  }
+  // An anchor far from the rest pose: every segment is back at 5.0, the chain
+  // hangs from its anchor.
+  const A: [number, number, number][] = [
+    [100, 50, -20],
+    [-100, 50, -20],
+  ];
+  fins.tick(A);
+  eq(fins.active, true, 'fins: active after a captured tick');
+  for (let c = 0; c < 2; c++) {
+    const p0 = fins.point(c, 0);
+    check(p0[0] === A[c][0] && p0[1] === A[c][1] && p0[2] === A[c][2], `fins: point 0 of chain ${c} is the anchor`);
+    for (let j = 0; j < DRL_FIN.points - 1; j++) check(near(len(fins.point(c, j), fins.point(c, j + 1)), 5, 1e-3), `fins: chain ${c} segment ${j} keeps the length 5`);
+  }
+  // Left alone the delta (0, 0, -2) a tick settles the chain along -z.
+  for (let n = 0; n < 200; n++) fins.tick(A);
+  for (let c = 0; c < 2; c++) {
+    for (let j = 0; j < DRL_FIN.points; j++) {
+      const p = fins.point(c, j);
+      check(near(p[0], A[c][0], 1e-2) && near(p[1], A[c][1], 1e-2) && near(p[2], A[c][2] - 5 * j, 1e-2), `fins: chain ${c} settles along -z (point ${j} = ${p})`);
+    }
+  }
+  // The anchors move: the chain follows with the length kept.
+  fins.tick([
+    [100, 50, 40],
+    [-100, 50, -20],
+  ]);
+  check(near(len(fins.point(0, 1), [100, 50, 40]), 5, 1e-3), 'fins: chain 0 follows its anchor');
+  // A sphere (radius 10 + half a segment) pushes a point out: sphere 1 sits at
+  // anchor 1 + (0, -7.07, 7.07); with anchor 1 = (10, 7.07, -7.07) its centre is
+  // (10, 0, 0) and chain 0's first point (0, 0, -5 + delta) lies inside it.
+  const spheres = new DrlFins();
+  const B: [number, number, number][] = [
+    [0, 0, 0],
+    [10, 7.07, -7.07],
+  ];
+  spheres.tick(B);
+  const centre = [10, 7.07 - DRL_FIN.offset, -7.07 + DRL_FIN.offset];
+  const p1 = spheres.point(0, 1);
+  check(len(p1, centre) > Math.hypot(10, 5) + 0.5, `fins: the sphere pushes point 1 out (${len(p1, centre)} from its centre)`);
+  check(near(len(p1, [0, 0, 0]), 5, 1e-3), 'fins: and the length is kept');
+  // The draw: yaw atan2(-x, -z), pitch asin(-y), both truncated to BAMS.
+  const pose = new DrlFins();
+  const setSeg = (d: [number, number, number]) => {
+    pose.points[0] = pose.points[1] = pose.points[2] = 0;
+    pose.points[3] = d[0];
+    pose.points[4] = d[1];
+    pose.points[5] = d[2];
+    return pose.angles(0, 0);
+  };
+  const down = setSeg([0, -5, 0]);
+  eq(down.yaw, 0, 'pose: straight down skips the yaw');
+  eq(down.pitch, 0x4000, 'pose: straight down is pitch 0x4000');
+  const east = setSeg([5, 0, 0]);
+  eq(east.yaw, -0x4000, 'pose: +x is yaw -0x4000');
+  eq(east.pitch, 0, 'pose: and level');
+  const rest = setSeg([0, 0, -5]);
+  eq(rest.yaw, 0, 'pose: the rest direction (-z) is yaw 0');
+  eq(rest.pitch, 0, 'pose: and pitch 0');
+  const zero = setSeg([0, 0, 0]);
+  eq(zero.pitch, 0x4000, 'pose: a zero segment reads as (0, -1, 0)');
+  eq(pose.isTip(3), false, 'pose: segment 3 draws fin_a');
+  eq(pose.isTip(4), true, 'pose: the last segment draws fin_b (the tip)');
+  // The rest matrix: T(p) * S(2) * Rx(-0x4000): local y -> -z, local z -> +y.
+  setSeg([0, 0, -5]);
+  pose.points[0] = 1;
+  pose.points[1] = 2;
+  pose.points[2] = 3;
+  pose.points[3] = 1;
+  pose.points[4] = 2;
+  pose.points[5] = -2;
+  const m = pose.segmentMatrix(newMat(), 0, 0);
+  const col = (k: number) => [m[k * 4], m[k * 4 + 1], m[k * 4 + 2]].map((v) => Math.round(v * 1e6) / 1e6 + 0);
+  eq(col(0).join(), '2,0,0', 'matrix: local x stays x, scaled by 2');
+  eq(col(1).join(), '0,0,-2', 'matrix: local y lies along -z');
+  eq(col(2).join(), '0,2,0', 'matrix: local z points up');
+  eq([m[12], m[13], m[14]].join(), '1,2,3', 'matrix: translated to the point');
+  // Straight down: Rx(+0x4000) Rx(-0x4000) cancel, only the scale is left.
+  setSeg([0, -5, 0]);
+  const t = pose.segmentMatrix(newMat(), 0, 0);
+  check(near(t[0], 2) && near(t[5], 2) && near(t[10], 2) && near(t[1], 0) && near(t[4], 0) && near(t[6], 0), 'matrix: straight down cancels the two X turns (just the scale)');
+}
+
+// 19. The brain keeps the fins running once the body has been drawn.
+{
+  const ai = brain();
+  run(ai, [], 5);
+  eq(ai.fins.active, false, 'ai: the fins wait for the body to be drawn');
+  ai.finAnchors = [
+    [0, 10, 0],
+    [0, 10, 0],
+  ];
+  run(ai, [], 3);
+  eq(ai.fins.active, true, 'ai: ticks the fin chains with the captured anchors');
+  eq(ai.fins.point(0, 0)[1], 10, 'ai: the chain hangs from the anchor');
+}
+
+// 20. Piece records and the debris objects (0x00512124, 0x0042a238).
+{
+  const recs = drlPieceRecords(
+    [
+      [3, 4, 4],
+      [0, 1, 0],
+    ],
+    false,
+  );
+  check(near(recs[0].dir[0], 1.1 * 0.6) && recs[0].dir[1] === 0 && near(recs[0].dir[2], 1.1 * 0.8), 'records: dir = 1.1 * the xz unit, y 0');
+  eq(recs[0].pos.join(), '3,4,4', 'records: the helm keeps its positions');
+  eq(recs[1].dir.join(), '0,0,0', 'records: a piece on the axis has no direction');
+  eq(drlPieceRecords([[3, 4, 4]], true)[0].pos.join(), '6,8,8', 'records: the shell positions are scaled by 2.0');
+  const script = (...v: number[]) => {
+    let i = 0;
+    return () => v[i++ % v.length];
+  };
+  const shellRecs: DrlPieceRecord[] = [
+    { pos: [10, 0, 0], dir: [1.1, 0, 0] },
+    { pos: [-10, 0, 0], dir: [-1.1, 0, 0] },
+  ];
+  // vy, vz, ax, spin, ay: 0.5 0.5 0 0.5 0 per piece.
+  const sh = DrlDebris.shell(shellRecs, [0, 12, 60], script(0.5, 0.5, 0, 0.5, 0));
+  eq(sh.pos[0], 10, 'shell: piece 0 starts at the origin + its position');
+  eq(sh.pos[1], 12, 'shell: height of the origin');
+  eq(sh.vel[0], Math.fround(1.1), 'shell: the outward speed');
+  eq(sh.vel[1], 4, 'shell: vy = rand * 4 + 2');
+  eq(sh.vel[2], -3, 'shell: vz = dir.z - (rand * 4 + 1)');
+  eq(sh.ax[0], 0, 'shell: start angles come from the 3rd and 5th rand');
+  eq(sh.spin[0], 0, 'shell: spin = (rand - 0.5) * 2 * 3400');
+  eq(sh.state[0], PIECE_FALL, 'shell: falling');
+  // Draw matrix with every angle 0: T(pos) * S(2).
+  const pm = sh.pieceMatrix(newMat(), 0);
+  check(pm[0] === 2 && pm[5] === 2 && pm[10] === 2 && pm[12] === 10 && pm[13] === 12 && pm[14] === 60, 'shell: the piece is drawn at scale 2 at its position');
+  // Falls with gravity 0.2, lands in the arena (bounce -0.8, fade), is gone.
+  const seen: number[] = [];
+  let fadeTicks = 0;
+  let prevAlpha = 1;
+  let monotone = true;
+  for (let n = 1; n < DRL_DEBRIS.life; n++) {
+    sh.tick();
+    if (seen[seen.length - 1] !== sh.state[0]) seen.push(sh.state[0]);
+    if (sh.state[0] === PIECE_FADE) {
+      fadeTicks++;
+      if (sh.alpha[0] > prevAlpha) monotone = false;
+      prevAlpha = sh.alpha[0];
+    }
+  }
+  eq(seen.join(), `${PIECE_FALL},${PIECE_FADE},${PIECE_GONE}`, 'shell: piece 0 falls, fades and is gone');
+  check(monotone && fadeTicks >= 19 && fadeTicks <= 22, `shell: the fade takes about 20 ticks (${fadeTicks})`);
+  eq(sh.done, false, 'shell: alive before the 160th tick');
+  sh.tick();
+  eq(sh.done, true, 'shell: deleted at the 160th tick');
+  eq(sh.visible(0), false, 'shell: a gone piece is not drawn');
+  // Outside the arena a piece keeps falling and sinks under -10.
+  const out = DrlDebris.shell(
+    [
+      { pos: [200, 0, 0], dir: [0, 0, 0] },
+      { pos: [200, 0, 0], dir: [0, 0, 0] },
+    ],
+    [0, 30, 0],
+    script(0, 0, 0, 0.5, 0),
+  );
+  const sunk: number[] = [];
+  for (let n = 1; n < 100 && out.state[0] !== PIECE_SINK; n++) {
+    out.tick();
+    sunk.push(...out.sunk);
+  }
+  eq(out.state[0], PIECE_SINK, 'shell: outside the arena the piece sinks');
+  eq(sunk.join(), '0,1'.slice(0, sunk.length === 1 ? 1 : 3), 'shell: a particle only for an even piece');
+  check(out.pos[1] < DRL_DEBRIS.sink + 3, 'shell: it sank from under -10');
+  const y0 = out.pos[1];
+  out.tick();
+  check(out.pos[1] < y0, 'shell: a sinking piece keeps going down (vy * 0.2)');
+  // The helm: positions through the captured matrix, directions through its
+  // rotation, drawn through T(pos) Rz Rx T(-origin) M.
+  const M = matIdentity(newMat());
+  matTranslate(M, 10, 20, 30);
+  matRotY(M, 0x4000);
+  matScale(M, 2, 2, 2);
+  const helm = DrlDebris.helm([{ pos: [1, 0, 0], dir: [0, 0, 1.1] }], M, script(0, 0, 0.5));
+  // Ry(90): local x -> -z, local z -> +x; scaled by 2.
+  check(near(helm.pos[0], 10) && near(helm.pos[1], 20) && near(helm.pos[2], 28), `helm: M * (1, 0, 0) = (10, 20, 28), got ${[...helm.pos]}`);
+  check(near(helm.vel[0], 2.2), `helm: the direction goes through the rotation (${helm.vel[0]})`);
+  check(near(helm.vel[1], 2) && near(helm.vel[2], -1), 'helm: vy = 2 and vz = 0 - 1 with rand 0');
+  eq(helm.origin.join(), '10,20,30', 'helm: the origin is M * 0');
+  const hm = helm.pieceMatrix(newMat(), 0);
+  check(near(hm[0], M[0]) && near(hm[2], M[2]) && near(hm[8], M[8]) && near(hm[10], M[10]), 'helm: the piece keeps the captured turn and scale');
+  check(near(hm[12], helm.pos[0]) && near(hm[13], helm.pos[1]) && near(hm[14], helm.pos[2]), "helm: and sits at its position (T(-origin) cancels M's translation)");
+  const prod = matMul(matIdentity(newMat()), M);
+  check(near(prod[12], 10), 'matrices: multiplying by the identity keeps M');
+}
+
+// 21. The helm break through the brain: shell pool -> flag 0x80 -> 0x40, the
+//     helm debris, 160 ticks.
+{
+  const ai = brain();
+  const recs = (n: number): DrlPieceRecord[] => Array.from({ length: n }, (_, i): DrlPieceRecord => ({ pos: [i, 1, i], dir: [0.5, 0, 0.5] }));
+  ai.pieceRecords = { helm: recs(28), shell: recs(19) };
+  ai.helmMatrix = matIdentity(newMat());
+  const events: DrlEvent[] = [];
+  ai.hit(1400);
+  eq(ai.helmCut, false, 'helm: not cut before the shell breaks');
+  ai.hit(200);
+  eq(ai.flags & 0xc8, 0x88, 'helm: the break sets 0x88');
+  events.push(...run(ai, [], 1).events);
+  check(events.some((e) => e.kind === 'helmBreak'), 'helm: UpdateDerolle sees 0x80');
+  eq(ai.flags & 0xc8, 0x48, 'helm: 0x80 becomes 0x40');
+  eq(ai.helmCut, true, 'helm: the body is drawn without the helm');
+  eq(ai.helm?.count, 28, 'helm: 28 pieces');
+  run(ai, [], 100);
+  eq(ai.helm?.done, false, 'helm: still flying');
+  run(ai, [], 100);
+  eq(ai.helm?.done, true, 'helm: gone after 160 ticks');
+  eq(run(ai, [], 5).events.filter((e) => e.kind === 'helmBreak').length, 0, 'helm: breaks once');
+  // No node capture: the helm is cut but nothing flies.
+  const bare = brain();
+  bare.hit(1400);
+  bare.hit(200);
+  run(bare, [], 1);
+  eq(bare.helm, null, 'helm: without the capture nothing flies (ASSUMED)');
+  eq(bare.helmCut, true, 'helm: the body is still cut');
+  // A segment's shell break: its own debris at its place.
+  const seg = brain();
+  seg.pieceRecords = { helm: recs(28), shell: recs(19) };
+  seg.segments = Array.from({ length: 10 }, (_, i): [number, number, number] => [i * 10, 5, 0]);
+  seg.breakSegment(3);
+  seg.breakSegment(3);
+  eq(seg.events.filter((e) => e.kind === 'segmentBroken').length, 1, 'segment: breaks once');
+  eq(seg.shells[3]?.count, 19, 'segment: 19 pieces');
+  eq(seg.shells[3]?.pos[0], 30, 'segment: around the segment (piece 0 at its x)');
+  eq(seg.shells[2], null, 'segment: the others are intact');
+}
+
+// 22. The model facts the fins and the debris rely on, from the client's own
+//     archive (skipped without PSOBB_DATA / the default client folder).
+{
+  const dir = process.env.PSOBB_DATA ?? join(process.env.HOME ?? '', 'Downloads/psobb-client/data');
+  const file = join(dir, 'data.gsl');
+  if (!existsSync(file)) {
+    console.log('skip: no client data for the De Rol Le model checks');
+  } else {
+    const gsl = new GSLArchive(new Uint8Array(readFileSync(file)));
+    for (const bmlName of ['bm_boss2_de_rol_le.bml', 'bm_boss2_de_rol_le_a.bml']) {
+      const bml = new BmlArchive(gsl.get(bmlName));
+      const tree = (name: string) => {
+        const all: NjcmObject[] = [];
+        const parent: number[] = [];
+        const walk = (o: NjcmObject, p: number) => {
+          all.push(o);
+          parent.push(p);
+          const me = all.length - 1;
+          for (const c of o.children) walk(c, me);
+        };
+        walk(parseNinjaChunkFile(bml.get(name)).object!, -1);
+        return { all, parent };
+      };
+      const body = tree('boss2_b_derorure_body.nj');
+      eq(body.all.length, 176, `${bmlName}: the body has 176 nodes`);
+      // The draw index is the depth-first index: the captures 0x4d..0x58 of
+      // table 0x008fcba0 are the 12 nodes under node 77 (the helm).
+      const under = (root: number) => body.all.map((_, i) => i).filter((i) => {
+        for (let k = i; k >= 0; k = body.parent[k]) if (k === root) return true;
+        return false;
+      });
+      const helm = under(77);
+      eq(`${helm[0]}..${helm[helm.length - 1]}`, '77..88', `${bmlName}: node 77's tree is draw indices 0x4d..0x58`);
+      eq(body.all[77].children.length, 4, `${bmlName}: node 77 has the 4 helm parts`);
+      // The fin anchors are locator nodes (no model, hidden: flags & 8).
+      for (const i of [26, 96]) check(body.all[i].model === null && (body.all[i].flags & 8) !== 0, `${bmlName}: node ${i} is a hidden locator`);
+      const helmBreak = tree('boss2_b_helm_break.nj');
+      const shellBreak = tree('boss2_b_shell_break.nj');
+      eq(helmBreak.all.length, 29, `${bmlName}: helm_break is a root and 28 pieces`);
+      eq(shellBreak.all.length, 20, `${bmlName}: shell_break is a root and 19 pieces`);
+      check((helmBreak.all[0].flags & 8) !== 0 && helmBreak.all.slice(1).every((o) => (o.flags & 8) === 0 && (o.flags & 0x10) !== 0 && o.model !== null), `${bmlName}: only the pieces of helm_break are model nodes`);
+      eq(tree('boss2_b_derorure_fin_a.nj').all.length, 1, `${bmlName}: fin_a is one node`);
+      eq(tree('boss2_b_derorure_fin_b.nj').all.length, 2, `${bmlName}: fin_b is two nodes (a tip)`);
+    }
+  }
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
