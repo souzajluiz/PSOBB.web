@@ -46,7 +46,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    screens (`current_loading_screen_type`), the field scene the classic client
    needs to actually play a game it joined, and the counter's ship / block
    change and team menus. No captures exist for any of it.
-4. The rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
+4. DONE 2026-10-20 (see HANDOFF item 2 for what is left): the rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
    Recon, Epsilon / Epsigard left).

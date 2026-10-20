@@ -5448,3 +5448,71 @@ removes them), the Gibbles hold of the drop-in animation at frame 100, the hand
 bone hit boxes (DAT_009be10c / 009be138), Gi Gue's stomp entities
 (0x006f1eb0 / 0x006e7998) beyond the Jellen / Zalure cast, and the real motion
 frame counts of the three archives.
+## 2026-10-20: Episode 2 FSMs: Sinow family, Deldepth, Delbiter
+
+**What changed:** four more Episode 2 families have their own brains in
+`client/src/combat/enemyfsmep2c.ts`: Sinow Berill / Spigell, Sinow Zoa / Zele,
+Deldepth and Delbiter. They are not on the Booma substrate: they sit on the
+enemy base (`CreateEnemyInstance_005216f4`), whose per-frame update runs the
+state's transition check (handler argument 3, skipped when the state was changed from
+outside), then its frame (argument 0); a state change runs argument 5 of the old
+and 4 of the new state (`SetEnemyAiState_0051f62c`). `ExeBrain` (same file)
+reproduces the exe's animation clock (elapsed += the row's speed, a one-shot is
+ended at elapsed >= frames - 1, threshold tests `threshold < elapsed <=
+threshold + speed`, 0x007aaa30) from the real frame counts of each archive, so no
+state waits for the owner's motion to end; the target search is
+`FindEnemyTarget_00520ea0` (interval 30, called once per op, so a state that calls it
+in both ops searches every 15 frames). Wired in `render/combat.ts` (OWN_FSM,
+confusion-aware search, the remote-hit hook for `ExeBrain`, Delbiter's hpFraction,
+Zoa's frozen / shocked flag and Zele's self-buff hook). The brains hand the owner
+their own flinch / death motions, so `enemymotions.ts` is untouched.
+
+**Sinow Berill / Spigell** (TObjEneMe3StelthReal; ctor 0x0059e0a4, vtable 0x00b0a120,
+dispatcher 0x0059eb08, table 0x009bffa0; MovementData rows 6 / 0x10): 19 states
+(spawn, ground rise, cloaked idle, ceiling appear, fade-in, drop, chase, lunge,
+melee, back step, return, cast, teleport, lost, flinch, death, Gifoie, cloak,
+reveal). Constants read from the exe: the 41-update emergence effect (float32
+accumulation of 0.2 from -6.0), lunge 100..150 away sliding (d - 20) / 12.857 a
+frame (0x00a74718) and invulnerable from frame 14 to 23, melee hits at frames 15 and
+23 with a 0.1666 confusion on the Berill's second, back step 80 / 11.25 a frame
+invulnerable from frame 15 to 24, teleport to 20 units from the target at its
+heading + k * 0x4000 + 0x4000, Resta on itself, Gifoie as a disc growing 0.55 a frame
+(Rafoie in Ultimate), the engaged flag 0x10000 that blocks later lunges.
+
+**Sinow Zoa / Zele** (TObjEneMe3SinowZoaReal; create 0x005914dc, vtable 0x00b08f00,
+dispatcher 0x00591f20, rows 67 / 68): the Berill machine again (same 19 states and
+rows) with its own counters, lunge window 50..150, no frozen melee hold, 30-frame
+dissolves, Zoa's Resta / Zele's Zalure + Jellen, the sorcerer bolt 0x006e38e0 (Rabarta
+in Ultimate) and the timed cloak effect that freezing or shock ends.
+
+**Deldepth** (TObjEneDelDepth; create 0x00549900, ctor 0x005499b0, vtable 0x00b037a0,
+state table of {enter, frame} pairs at 0x009bd160): 14 states (dormant, emerge,
+retreat, disc slide, rise, tuck, aim, scan, close, cast, bomb, miss, hurt, dead):
+the disc slides in 70..100-unit bursts, rises to the body form near a player, spins,
+locks a target, creeps and casts Barta (Megid in Ultimate) or throws a lobbed Rabarta.
+
+**Delbiter** (TObjEneDellBiter; ctor 0x0054a71c, vtable 0x00b03be0, update 0x0054a864,
+ProcessState 0x0054aef8, row 13): hidden, walk-in / run-in, wait, chase, claw swing
+(frames 10.8..13), roll with the contact hits, howl that confuses within param3 + 30,
+Dorphon laser (three beams in Ultimate), flinch, charge-up below half HP.
+
+**ASSUMED / not reproduced (all marked in the code):**
+- Map tests: wall and ground probes of the lunge, back step, teleport and Deldepth's slide
+  (open ground), line-of-sight rays, terrain following, a ceiling Sinow's root-height
+  compensation while it falls (`hang` is the set height above the ground).
+- The cross-fade of a new animation is over within the tick it starts.
+- Hand / node positions of shots (Gifoie, Rafoie, bolts, bombs, lasers) are the body
+  position; the player's hit box radius is 5; techniques are group-0 `tech` hits (no
+  resistance, no Rabarta freeze roll).
+- The enemy buffs (Shifta / Deband on the Sinow in Ultimate), the Spigell / Zele weapon
+  removal, flinch knockback glides, sounds, particles, the non-advanced-effects cloak
+  branch (the setting is assumed on). A tech hit is not told from a melee hit.
+- Berill: `+0x3b4` starts at 0 so a cloaked idle Sinow goes straight to the fight.
+- Deldepth: `onMiss()` is not hooked; the disc model swap (`discForm`) is exposed, not done.
+- Delbiter: howl confusions go out one per tick; laser origin / range assumed.
+
+**Checks:** `node tests/enemyfsmep2c.test.ts` (new: every state with the real motion
+frame counts, no state hangs in 20000..40000-tick soaks, remote damage, death);
+`tests/enemyfsm*.test.ts`, `enemystatus.test.ts`, client `tsc --noEmit` (only the two
+missing @capacitor modules). Not checked in Chrome (to do: Seabed / Mines with the
+Online tab, Warp to the Sinow and Delbiter floors).

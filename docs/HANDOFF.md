@@ -45,10 +45,12 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
      animation-speed tie-in.
    Check the feel of 30 / 45 units a second first (it assumes 30 ticks a second); if
    it is wrong the fix is the constants in `playermove.ts`.
-2. **Episode 2 enemy FSMs** still open: Gee, Ul / Zol Gibbon, the Mericarol family,
-   Gibbles, Gi Gue, Sinow Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter,
-   Morfos, Recobox / Recon, Epsilon / Epsigard (Merillia / Meriltas and Dolmolm /
-   Dolmdarl are done). Use the Ghidra dump; psobb-client-source has none of them.
+2. **Episode 2 enemy FSMs: all ported** (2026-10-20, `combat/enemyfsmep2*.ts`, one file per
+   group, DEVLOG entries "Episode 2 FSMs: ..."). Left, none checked in Chrome: the Episode 2
+   enemy motion archives are not on this Mac, so animation lengths in tests are stand-ins
+   for groups a / d (b / c read real counts); no wall / ground rays; Gee states 6 / 10;
+   Gibbles sink and hand boxes; Epsilon's `immuneToTech` caller, model swap and orb visual;
+   a hidden Gibbles is not in `concealed()`. Check Seabed / Mines / Tower floors in Chrome.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
