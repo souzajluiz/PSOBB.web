@@ -112,7 +112,8 @@ const empty = (): Slot => ({ type: 0, mult: 0, frames: 0 });
 export interface EnemyStatusTick {
   locked: boolean; // +0x98 / +0xa8 / +0xa4 returned 1: the enemy skips its AI
   ended: StatusType[]; // effects that wore off this frame
-  pulse: StatusType | null; // a 45-frame particle / sound period
+  pulse: StatusType | null; // a 45-frame particle / sound period (the first of `pulses`)
+  pulses: StatusType[]; // every effect whose 45-frame period came up (confusion included)
 }
 
 // The two status slots of one enemy.
@@ -181,25 +182,29 @@ export class EnemyStatus {
   // One frame of update_enemy_control_object's status block.
   tick(): EnemyStatusTick {
     const ended: StatusType[] = [];
-    let pulse: StatusType | null = null;
-    // +0xa0 confusion_effect_tick (its result is not used for the lock).
-    if (this.slot1.type === STATUS.confusion) this.countDown(1, ended);
+    const pulses: StatusType[] = [];
+    const done = (locked: boolean): EnemyStatusTick => ({ locked, ended, pulse: pulses[0] ?? null, pulses });
+    // +0xa0 confusion_effect_tick (its result is not used for the lock; every
+    // 0x2d frames it makes the particle 0x24 and SE 0xf).
+    if (this.slot1.type === STATUS.confusion && this.countDown(1, ended) && this.slot1.frames % ENEMY_STATUS_PERIOD === 0) {
+      pulses.push(STATUS.confusion);
+    }
     // +0x98 paralysis, then +0xa8 shock, then +0xa4 freeze; the first that
     // returns 1 stops the chain.
     if (this.slot0.type === STATUS.paralysis) {
       if (this.countDown(0, ended)) {
-        if (this.slot0.frames % ENEMY_STATUS_PERIOD === 0) pulse = STATUS.paralysis;
-        return { locked: true, ended, pulse };
+        if (this.slot0.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(STATUS.paralysis);
+        return done(true);
       }
     }
     if (this.slot1.type === STATUS.shock || this.slot1.type === STATUS.freeze) {
       const t = this.slot1.type;
       if (this.countDown(1, ended)) {
-        if (this.slot1.frames % ENEMY_STATUS_PERIOD === 0) pulse = t;
-        return { locked: true, ended, pulse };
+        if (this.slot1.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(t);
+        return done(true);
       }
     }
-    return { locked: false, ended, pulse };
+    return done(false);
   }
 
   // frames - 1; true while the effect lasts, else the slot is cleared.

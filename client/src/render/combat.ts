@@ -145,6 +145,8 @@ import type { DataSource } from '../data/source.ts';
 import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
 import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
+import { FieldParticles } from './hitfx.ts';
+import { CRITICAL_SE, deathParticles, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
 import { haptic } from '../input/haptics.ts';
@@ -245,6 +247,13 @@ interface EnemyRuntime {
   esp: number; // BattleParamEntry esp (the specials' status resistance)
   slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
   splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
+}
+
+// How a hit is shown (combat/hitfx.ts): its effect family and whether the
+// accuracy roll failed.
+interface HitVisual {
+  kind?: HitFxKind;
+  miss?: boolean;
 }
 
 // The local player's technique cast in progress.
@@ -430,6 +439,10 @@ export class CombatView {
   hud: PlayerHud | null = null;
   // DisplayLevelUpMessage_00692aa4's particle and light (render/levelupfx.ts).
   private levelUpFx: LevelUpEffects | null = null;
+  // Hit sparks, status / death particles and the specials' effects (combat/hitfx.ts).
+  private fx: FieldParticles | null = null;
+  // The strike being shown is a failed accuracy roll: its number is "MISS".
+  private hitMissed = false;
   // Ryuker's pipe (render/telepipe.ts): whether one can be opened here
   // (SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0) and opening it.
   telepipe: { allowed: () => boolean; open: () => boolean } | null = null;
@@ -529,6 +542,15 @@ export class CombatView {
     // PSOBBCharacterFile option_flags (+0x4ec): the window speed.
     const full = this.opts.fullCharacter?.();
     this.hud.windowSpeed = WindowAnim.speedOf(full && full.length >= 0x4f0 ? new DataView(full.buffer, full.byteOffset).getUint32(0x4ec, true) : undefined);
+    this.fx ??= new FieldParticles(this.viewer, this.files, this.opts.log);
+    this.fx.preload();
+    this.overlay.text = (spec, x, y, z) => {
+      const hud = this.hud;
+      if (!hud?.ready) return false;
+      const at = new THREE.Vector3(x, y, z);
+      hud.hitPopup(spec.text, spec.rgb, () => at);
+      return true;
+    };
     this.levelUpFx ??= new LevelUpEffects(this.viewer, this.files, {
       position: (id) => this.view?.playerPositions().get(id) ?? null,
       litMaterials: (id) => this.view?.playerLitMaterials(id) ?? [],
@@ -1136,18 +1158,10 @@ export class CombatView {
       this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) resists ${STATUS_NAME[type]}`);
       return false;
     }
-    this.statusEffect(e, type);
+    this.statusFx(e, type, false);
     if (e.status.locked) this.lockEnemy(e, true);
     this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) ${STATUS_NAME[type]} (${e.status.describe()})`);
     return true;
-  }
-
-  // ASSUMED look: the client's particles (0x26 paralysis, 0x21 shock, 0x24
-  // confusion) and the freeze's ice object are drawn as a tinted pulse.
-  private statusEffect(e: EnemyRuntime, type: StatusType): void {
-    const p = e.instance.root.position;
-    const kind = type === STATUS.freeze ? 'ice' : type === STATUS.shock ? 'lightning' : type === STATUS.paralysis ? 'light' : 'dark';
-    this.overlay?.techEffect(kind, p.x, p.y, p.z, 10);
   }
 
   // update_enemy_control_object returns before the AI while paralysis, shock
@@ -1200,7 +1214,7 @@ export class CombatView {
       if (e.status.flags) {
         const st = e.status.tick();
         for (const t of st.ended) this.opts.log(`${STATUS_NAME[t]} on E-${e.index.toString(16)} wore off`);
-        if (st.pulse) this.statusEffect(e, st.pulse);
+        for (const t of st.pulses) this.statusFx(e, t, true);
         this.lockEnemy(e, st.locked);
         if (st.locked) continue;
       }
@@ -2051,7 +2065,7 @@ export class CombatView {
     const dead = part.hp <= 0;
     this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
     const p = e.instance.root.position;
-    this.overlay?.damage(damage, critical, p.x, p.y + 10, p.z);
+    this.num(damage, critical, p.x, p.y + 10, p.z);
     this.opts.log(`${what}hit Vol Opt ${part.kind}${part.kind === 'pillar' || part.kind === 'monitor' ? ` ${part.index}` : ''} for ${Math.round(damage)}: ${part.hp}/${part.maxHp}`);
   }
 
@@ -2567,7 +2581,7 @@ export class CombatView {
     const dead = part.hp <= 0;
     this.sendEnemy(e, flags | (applied >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
     const p = e.instance.root.position;
-    this.overlay?.damage(applied, critical, p.x, p.y + 10, p.z);
+    this.num(applied, critical, p.x, p.y + 10, p.z);
     this.opts.log(`${what}hit Dark Falz ${this.falzName(ai.entity)} for ${Math.round(applied)}: ${part.hp}/${part.maxHp}`);
   }
 
@@ -3803,13 +3817,15 @@ export class CombatView {
       }
       let damage = 0;
       let critical = false;
+      let miss = true;
       const defender = this.enemyDefenderOf(e);
       if (rollHit(attacker, defender, attackType, step, this.rng)) {
         const r = rollDamage(attacker, defender, attackType, this.rng);
         damage = r.damage;
         critical = r.critical;
+        miss = false;
       }
-      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '');
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '', true, { miss });
       if (damage >= 1) this.gainPb(damage, false);
     }
     this.strike = null;
@@ -3838,7 +3854,7 @@ export class CombatView {
         this.applyEnemyHit(e, ENEMY_BASE_FLAGS, r.damage, r.critical, `${name} missed, plain strike: `);
         if (r.damage >= 1) this.gainPb(r.damage, false);
       } else {
-        this.applyEnemyHit(e, ENEMY_BASE_FLAGS, 0, false, `${name} MISS: `);
+        this.applyEnemyHit(e, ENEMY_BASE_FLAGS, 0, false, `${name} MISS: `, true, { miss: true });
       }
       return;
     }
@@ -3870,9 +3886,11 @@ export class CombatView {
     );
     const what = `${name}: ${out.note}: `;
     if (out.miss) {
-      this.applyEnemyHit(e, ENEMY_BASE_FLAGS | (type === SPECIAL.charge ? FLAG_MISSED : 0), 0, false, `${name} MISS (${out.note}) `);
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS | (type === SPECIAL.charge ? FLAG_MISSED : 0), 0, false, `${name} MISS (${out.note}) `, true, { miss: true });
       return;
     }
+    // The special landed: its handler's particles (weapon_special_handlers).
+    this.specialFx(e, sp.index);
     // The attacker's side: 6x9A for a steal, the cost of Charge / Spirit /
     // Berserk.
     if (out.heal) {
@@ -3909,7 +3927,7 @@ export class CombatView {
       critical = r.critical;
     }
     if (damage >= 1) flags |= FLAG_HIT;
-    this.applyEnemyHit(e, flags, damage, critical, what);
+    this.applyEnemyHit(e, flags, damage, critical, what, true, { kind: out.strikeMult !== null ? 'weapon' : specialHitFx(type) });
   }
 
   // --- photon blasts (combat/photonblast.ts) ---------------------------------
@@ -4020,10 +4038,14 @@ export class CombatView {
   // One damaged (or missed) enemy: 6x0A with the new total, the number over
   // it, its reaction, and the kill flow when it died. Shared by weapon hits
   // and techniques (entity_hit_by_tech ends in the same ApplyHitEffects).
-  private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true): void {
+  private applyEnemyHit(e: EnemyRuntime, baseFlags: number, damage: number, critical: boolean, what: string, byPlayer = true, fx: HitVisual = {}): void {
     const me = this.game.self;
     if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
+    this.hitMissed = fx.miss === true;
     if (e.ai?.invulnerable) {
+      // EntityHitEntity / entity_hit_by_tech: the number 0 and nothing else.
+      const ip = e.instance.root.position;
+      this.num(0, false, ip.x, ip.y + 26, ip.z);
       // Gi Gue's barrier answers a blocked hit with a bomb (combat/enemyfsmep2a.ts).
       if (e.ai instanceof GiGueAi && me && byPlayer) e.ai.blocked(me.clientId);
       // The invulnerable flag: entity_hit_by_tech / the weapon hit show the
@@ -4039,6 +4061,7 @@ export class CombatView {
         return;
       }
     }
+    this.hitFx(e, damage, critical, fx);
     if (e.ai instanceof VoloptPartAi) {
       this.voloptPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
       return;
@@ -4057,7 +4080,7 @@ export class CombatView {
       e.stats.hp = ai.hp;
       this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
       const p = e.instance.root.position;
-      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+      this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
       return;
     }
@@ -4073,7 +4096,7 @@ export class CombatView {
       e.stats.hp = ai.hp;
       this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
       const p = e.instance.root.position;
-      this.overlay?.damage(damage, critical, p.x, p.y + 40, p.z);
+      this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
       return;
     }
@@ -4089,7 +4112,7 @@ export class CombatView {
       if (damage >= 1) this.drlLastHitLocal.set(e.index, byPlayer);
       this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
       const p = e.instance.root.position;
-      this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+      this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit De Rol Le's ${pool} for ${Math.round(damage)}: shell ${ai.shellHp}/${ai.shellMax}, body ${ai.bodyHp}/${ai.bodyMax}`);
       return;
     }
@@ -4111,7 +4134,7 @@ export class CombatView {
     this.sendEnemy(e, flags);
     // FUN_0078a5e8 shows round(d) of the hit box over the enemy.
     const p = e.instance.root.position;
-    this.overlay?.damage(damage, critical, p.x, p.y + 26, p.z);
+    this.num(damage, critical, p.x, p.y + 26, p.z);
     // The enemy turns on its attacker (unknown_enemy_behavior_4).
     if (damage >= 1 && me && byPlayer) e.ai?.onDamage(me.clientId);
     // 0x0054615c: a hit on the Death Gunner while it shoots stuns its group.
@@ -4129,6 +4152,79 @@ export class CombatView {
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );
+  }
+
+  // The number or the "MISS" over a hit (combat/hitfx.ts).
+  private num(damage: number, critical: boolean, x: number, y: number, z: number): void {
+    if (this.hitMissed) this.overlay?.miss(x, y, z);
+    else this.overlay?.damage(damage, critical, x, y, z);
+  }
+
+  // The hit point on an enemy: ASSUMED its body centre, 26 above the origin
+  // (the height of the damage number); the exe's hit box position is not
+  // modelled.
+  private hitPoint(e: EnemyRuntime): THREE.Vector3 {
+    const p = e.instance.root.position;
+    return new THREE.Vector3(p.x, p.y + 26, p.z);
+  }
+
+  // A particle effect of particleentry.dat at a point.
+  private particle(p: ParticleSpawn, at: THREE.Vector3 | (() => THREE.Vector3 | null), follow = false): void {
+    void this.fx?.spawn(p, at, follow);
+  }
+
+  // The visuals of one landed hit (EntityHitEntity / entity_hit_by_tech,
+  // combat/hitfx.ts): the spark or the critical spark and the kind particle at
+  // the hit point, SE 0x42 for a critical. A failed roll shows nothing but the
+  // MISS number; a hit that does no damage shows only its 0.
+  private hitFx(e: EnemyRuntime, damage: number, critical: boolean, fx: HitVisual): void {
+    if (fx.miss || !(damage > 0)) return;
+    const kind = fx.kind ?? 'weapon';
+    const crit = critical && kind === 'weapon';
+    const at = this.hitPoint(e);
+    for (const p of hitParticles(kind, crit, e.status.attribute)) this.particle(p, at);
+    if (crit) this.playSe(CRITICAL_SE);
+  }
+
+  // The special's own particles when it lands (weapon_special_handlers).
+  private specialFx(e: EnemyRuntime, special: number): void {
+    const hit = this.hitPoint(e);
+    const me = this.game.self;
+    const own = me ? this.view?.playerPositions().get(me.clientId) : null;
+    for (const p of specialHandlerParticles(special)) {
+      // ASSUMED: the attacker's weapon position (+0x300) is 20 above its feet.
+      const at = p.at === 'player' && own ? new THREE.Vector3(own.x, own.y + 20, own.z) : hit;
+      this.particle(p, at);
+    }
+  }
+
+  private statusKind(type: StatusType): EnemyStatusKind | null {
+    return type === STATUS.freeze ? 'freeze' : type === STATUS.shock ? 'shock' : type === STATUS.paralysis ? 'paralysis' : type === STATUS.confusion ? 'confusion' : null;
+  }
+
+  // What a status shows and sounds on an enemy (combat/hitfx.ts statusApplyFx /
+  // statusTickFx): the particles follow the enemy from its lock-on cursor
+  // position (y + 22, like the reticle); the sounds are SEs 0xd..0x11.
+  private statusFx(e: EnemyRuntime, type: StatusType, tick: boolean): void {
+    const kind = this.statusKind(type);
+    if (!kind) return;
+    const f = tick ? statusTickFx(kind) : statusApplyFx(kind);
+    const lockon = (): THREE.Vector3 | null => {
+      if (e.dead) return null;
+      const p = e.instance.root.position;
+      return new THREE.Vector3(p.x, p.y + 22, p.z);
+    };
+    // The freeze's ice object particle (0x12e) is made once at the hit; the
+    // others follow the entity (flag 0x10).
+    if (f.particle) this.particle(f.particle, lockon() ?? this.hitPoint(e), kind !== 'freeze');
+    if (f.se !== null) this.playSe(f.se);
+  }
+
+  // The enemy's death particles by its kind (combat/hitfx.ts deathParticles).
+  private deathFx(e: EnemyRuntime): void {
+    const at = e.instance.root.position.clone();
+    at.y += 10;
+    for (const p of deathParticles(e.status.attribute)) this.particle(p, at);
   }
 
   // --- techniques -------------------------------------------------------------
@@ -4482,7 +4578,7 @@ export class CombatView {
       // ASSUMED the floor is not a boss map).
       const chance = megidChance(level, e.resist.edk);
       const kill = this.rng() < chance;
-      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `);
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `, true, { kind: techHitFx(tech) });
       return;
     }
     const damage = techDamage(tech, level, mst, charClass, e.resist);
@@ -4498,7 +4594,7 @@ export class CombatView {
     }
     if (status !== null && !e.dead) this.inflictEnemy(e, status, name);
     const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
-    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `);
+    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, false, `${name} (power ${Math.round(techPower(tech, level, charClass))}) `, true, { kind: techHitFx(tech) });
     // 0x005987c8: Gibarta / Rabarta (technique group 2) split a Pofuilly Slime.
     if ((tech === TECH.gibarta || tech === TECH.rabarta) && e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, name);
   }
@@ -4635,6 +4731,7 @@ export class CombatView {
     anchor.y += 22;
     this.hud?.expPopup(amount, () => anchor);
     this.playDeath(e);
+    this.deathFx(e);
   }
 
   // --- level and EXP ---------------------------------------------------------
@@ -4905,7 +5002,7 @@ export class CombatView {
       // restore_enemy_status: the status bits that are new on this enemy.
       if (!(s.flags & FLAG_DEAD)) {
         for (const t of e.status.receiveFlags(s.flags, this.ultimate)) {
-          this.statusEffect(e, t);
+          this.statusFx(e, t, false);
           this.opts.log(`E-${e.index.toString(16)} ${STATUS_NAME[t]} (6x0A from another client)`);
         }
         if (e.status.locked) this.lockEnemy(e, true);
@@ -4957,7 +5054,7 @@ export class CombatView {
       if (!u || !e || clientId === this.game.selfId) return;
       const t = e.status.receiveUltimate(u.bits, this.ultimate, e.dead);
       if (t !== null) {
-        this.statusEffect(e, t);
+        this.statusFx(e, t, false);
         if (e.status.locked) this.lockEnemy(e, true);
         this.opts.log(`player ${clientId}: E-${e.index.toString(16)} ${STATUS_NAME[t]} (6x9C)`);
       }
@@ -5143,6 +5240,8 @@ export class CombatView {
     this.hud?.dispose();
     this.levelUpFx?.dispose();
     this.levelUpFx = null;
+    this.fx?.dispose();
+    this.fx = null;
     this.hud = null;
     this.voloptViews.clear();
     this.voloptBodyAnim.clear();
