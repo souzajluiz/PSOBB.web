@@ -54,7 +54,7 @@ export function openQuestFiles(files: NamedBytes[]): QuestDocument {
   const qst = files.find((f) => /\.qst$/i.test(f.name));
   if (qst) {
     const parsed = parseQst(qst.bytes);
-    return questFromBytes(parsed.bin, parsed.dat, stemOf(qst.name) || parsed.name);
+    return QuestDocument.fromQuest(parsed.bin, parsed.dat, stemOf(qst.name) || parsed.name);
   }
   const bin = files.find((f) => /\.bin$/i.test(f.name));
   const dat = files.find((f) => /\.dat$/i.test(f.name));
@@ -80,7 +80,7 @@ export function buildPackage(doc: QuestDocument): QuestPackage {
   return {
     name,
     stem,
-    qst: packQst(binRaw, datRaw, { name }),
+    qst: packQst(doc.toQuestBin(), doc.toQuestDat(), { name }),
     bin: prsCompress(binRaw),
     dat: prsCompress(datRaw),
     binRaw,
