@@ -192,6 +192,9 @@ export const DICT = [
   ['Address', 'Endereço', 'Dirección'],
 
   // quests
+  ['Open in editor', 'Abrir no editor', 'Abrir en el editor'],
+  ['no BB file', 'sem arquivo BB', 'sin archivo BB'],
+  ['New quest (editor)', 'Nova missão (editor)', 'Nueva misión (editor)'],
   ['Reload quests', 'Recarregar missões', 'Recargar misiones'],
   ['Quests reloaded', 'Missões recarregadas', 'Misiones recargadas'],
   ['listed in menus', 'listada nos menus', 'listada en los menús'],
@@ -373,6 +376,9 @@ export const PATTERNS = [
   ['^Players \\((\\d+)\\)$', 'Jogadores ($1)', 'Jugadores ($1)'],
   ['^Quests \\((\\d+)\\)$', 'Missões ($1)', 'Misiones ($1)'],
   ['^Teams \\((\\d+)\\)$', 'Equipes ($1)', 'Equipos ($1)'],
+  ['^Loaded from (.*)\\. Edit a quest in the quest editor and use its Publish to server action, or add or remove the files on the server and reload\\. ENABLED expressions are quest-flag conditions: a quest shows in the menu only when its category is listed and its expression is true for the player\\.$',
+    'Carregadas de $1. Edite uma missão no editor de missões e use a ação Publicar no servidor, ou adicione e remova os arquivos no servidor e recarregue. As expressões ENABLED são condições de flags de missão: uma missão só aparece no menu quando sua categoria está listada e sua expressão é verdadeira para o jogador.',
+    'Cargadas desde $1. Edita una misión en el editor de misiones y usa la acción Publicar en el servidor, o agrega y elimina los archivos en el servidor y recarga. Las expresiones ENABLED son condiciones de flags de misión: una misión solo aparece en el menú cuando su categoría está listada y su expresión es verdadera para el jugador.'],
   ['^Loaded from (.*)\\. Add or remove quest files on the server, then reload\\. ENABLED expressions are quest-flag conditions: a quest shows in the menu only when its category is listed and its expression is true for the player\\.$',
     'Carregadas de $1. Adicione ou remova arquivos de missão no servidor e depois recarregue. As expressões ENABLED são condições de flags de missão: uma missão só aparece no menu quando sua categoria está listada e sua expressão é verdadeira para o jogador.',
     'Cargadas desde $1. Agrega o elimina archivos de misión en el servidor y luego recarga. Las expresiones ENABLED son condiciones de flags de misión: una misión solo aparece en el menú cuando su categoría está listada y su expresión es verdadera para el jugador.'],
