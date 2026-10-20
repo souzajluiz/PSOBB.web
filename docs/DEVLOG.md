@@ -5966,3 +5966,5 @@ particle names `guard_*`, `hit_*`, `konran`, `poison_effect`, `mahi_effect`, `sl
 slot 6 table, motion-driven states, heavy fall and stand-up, SEs, lethal flow, the death fade,
 the 0.5 knockback), `tests/status.test.ts`, client `tsc --noEmit` (only the two missing
 @capacitor modules).
+
+**Chrome (2026-10-20, after the merge):** Forest 1, `combat.damage.hit()`: a light hit drops HP 96 -> 86 and plays the hit pose; a lethal hit goes dead -> revivable with the red full-screen fade and HP 0; no page errors. Not seen: heavy fall and stand-up, block, revive particles, status pulses, remote players, and none of the sounds can be judged from here.
