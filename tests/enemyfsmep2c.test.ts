@@ -3,19 +3,17 @@
 // motions (the brains keep the exe's animation clock themselves).
 // Run: node tests/enemyfsmep2c.test.ts
 import {
-  BartaWave,
   DELBITER,
   DELDEPTH,
   DelbiterAi,
   DelbiterContact,
   DeldepthAi,
-  GifoieWave,
+  deldepthBarta,
   RabartaBomb,
   SinowBerillAi,
   SinowZoaAi,
   ZOA,
   ZOA_FRAMES,
-  ZoaFrost,
   type BerillState,
   type DelbiterState,
   type DeldepthState,
@@ -24,7 +22,10 @@ import {
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
 import { TechBolt } from '../client/src/combat/enemyshots.ts';
+import { FireShot, GifoieRing, GibartaBolt, RabartaField, RafoieBlast } from '../client/src/combat/techfire.ts';
 import { STATUS } from '../client/src/combat/status.ts';
+import { TECH } from '../client/src/combat/techniques.ts';
+import { enemyFire } from '../client/src/combat/techfire.ts';
 
 // ===== berill =====
 // Sinow Berill / Spigell (client/src/combat/enemyfsmep2c.ts), run with the
@@ -269,21 +270,22 @@ const FX_FRAMES = 41;
   const gi = mks([2, 0, 0, 0, 0, 0], { melee: [0.1], backstep: [0.9, 0.2] }, { movement: mv({ i4: 3 }) }, 0.9);
   let wave: AiFrame['shots'];
   run(gi, [player(0, 20)], 1200, (r) => {
-    if (r.shots?.some((s) => s instanceof GifoieWave)) wave ??= r.shots;
+    if (r.shots?.some((s) => s instanceof FireShot && s.fire instanceof GifoieRing)) wave ??= r.shots;
   });
-  check(!!wave, 'the Berill casts Gifoie (a wave round itself)');
+  check(!!wave, 'the Berill casts Gifoie (a ring round itself)');
   const ult = mks([2, 0, 0, 0, 0, 0], { melee: [0.1], backstep: [0.9, 0.2] }, { movement: mv({ i4: 3 }), ultimate: true }, 0.9);
   let rafoie = false;
   run(ult, [player(0, 20)], 1200, (r) => {
-    if (r.shots?.length && !(r.shots[0] instanceof GifoieWave)) rafoie = true;
+    if (r.shots?.[0] instanceof FireShot && r.shots[0].fire instanceof RafoieBlast) rafoie = true;
   });
   check(rafoie, 'Ultimate: Rafoie instead');
-  // The wave itself.
-  const wv = new GifoieWave(0, 0, 3);
+  // The ring itself (combat/techfire.ts GifoieRing: the disc grows with the first
+  // emitter's distance + 5 and ends when that reaches range_h).
+  const wv = enemyFire({ tech: TECH.gifoie, level: 3, x: 0, y: 10, z: 0, heading: 0, enemy: true })!;
   const struck: number[] = [];
   const pl = [player(0, 20, 1), player(0, 900, 2)];
   for (let i = 0; i < 2000 && !wv.done; i++) for (const h of wv.tick(pl)) struck.push(h.clientId);
-  check(wv.done, 'the wave ends at range_h');
+  check(wv.done, 'the ring ends at range_h');
   eq(struck, [1], 'a player inside the range is hit once, one beyond it is not');
 }
 
@@ -601,13 +603,13 @@ function seeded(seed = 1): () => number {
   check(!!heal || !!shots, 'a Zoa heals itself or throws its tech within 3000 frames');
   if (heal) eq(heal, { level: 3 }, 'Resta at MovementData iparam1');
   if (shots) {
-    check(shots[0] instanceof TechBolt, 'the sorcerer bolt');
+    check(shots[0] instanceof FireShot && shots[0].fire instanceof GibartaBolt, 'the sorcerer bolt (Gibarta)');
   }
   // Ultimate: Rabarta.
   const ult = mk([2, 0, 0, 0, 0, 0], () => 0.99, { ultimate: true });
   let frost: AiFrame['shots'];
   run(ult, p, 4000, (r) => (frost ??= r.shots));
-  check(!frost || frost[0] instanceof ZoaFrost, 'Ultimate throws Rabarta');
+  check(!frost || (frost[0] instanceof FireShot && frost[0].fire instanceof RabartaField), 'Ultimate throws Rabarta');
   // A Zele puts Zalure and Jellen on the players in range.
   const zele = mk([2, 0, 0, 0, 0, 1], () => 0.1, { movement: mv({ f6: 1, i: [4, 10, 5, 5, 0, 0] }) });
   let buffs: string[] = [];
@@ -886,21 +888,19 @@ const until = (ai: DeldepthAi, targets: AiTarget[], s: DeldepthState, max = 3000
 
 // Shots.
 {
-  const w = new BartaWave(0, 0, 0, 5);
+  const w = deldepthBarta(0, 0, 0, 5)!;
   let hits = 0;
   for (let i = 0; i < 100 && !w.done; i++) hits += w.tick([player(0, 20)]).length;
   eq(hits, 1, 'Barta hits a player once');
   const b = new RabartaBomb(0, 0, 0, 1, 3);
-  let boom = false;
+  for (let i = 0; i < 400 && !b.done; i++) b.tick([player(0, 45)]);
+  check(b.done, 'the bomb explodes');
+  const blast = b.spawned?.[0];
+  check(blast instanceof FireShot && blast.fire instanceof RabartaField, 'and hands over a Rabarta field');
   let got = 0;
-  for (let i = 0; i < 400 && !b.done; i++) {
-    const h = b.tick([player(0, 45)]);
-    got += h.length;
-    if (b.y > 4 && !boom && b.frames === 0) boom = true;
-  }
-  check(boom, 'the bomb explodes');
-  check(b.done, 'the blast ends');
-  check(got <= 1, 'one hit per player');
+  for (let i = 0; i < 200 && blast && !blast.done; i++) got += blast.tick([player(blast.x, blast.z + 20)]).length;
+  check(blast?.done === true, 'the blast ends');
+  eq(got, 1, 'one hit per player');
 }
 
 if (failures) {

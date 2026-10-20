@@ -110,6 +110,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
+import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
@@ -157,6 +158,7 @@ import { parsePlyLevelTbl, type LevelTable } from '../formats/plyleveltbl.ts';
 import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.ts';
 import { CombatOverlay } from './combatoverlay.ts';
 import { FieldParticles } from './hitfx.ts';
+import { TechFire } from './techfire.ts';
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, iceRadius } from '../combat/hitmodels.ts';
@@ -366,9 +368,6 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
 const SUB_CAST_TECHNIQUE_COMPLETE = 0x48;
-// ASSUMED: Rafoie's explosion reaches enemies within this distance of its
-// target (the real object is a projectile with its own collision).
-const RAFOIE_BLAST_RADIUS = 20;
 // ASSUMED: the targeting system's height window for techniques (the weapon
 // hit uses the same).
 const TECH_HEIGHT_WINDOW = 40;
@@ -481,6 +480,16 @@ export class CombatView {
   private reviveKey = 'r';
   private cast: CastInProgress | null = null;
   private techHits: PendingTechHit[] = [];
+  // The objects of Foie, Gifoie, Rafoie, Barta, Gibarta and Rabarta in flight
+  // (combat/techfire.ts; render/techfire.ts draws them): the enemies they can
+  // hit are round boxes of the enemy's collision radius.
+  private readonly techFire = new TechFire({
+    fx: () => this.fx,
+    sound: (id, x, y, z) => this.playSeAt(id, this.fireAt.set(x, y, z)),
+  });
+  private readonly fireAt = new THREE.Vector3();
+  private fireTargets: TechTarget[] = [];
+  private fireRadius = new WeakMap<EnemyRuntime, number>();
   private castTickRemainder = 0;
   // Shifta / Deband / Jellen / Zalure on the local player (combat/buffs.ts).
   // ASSUMED: they survive a floor change (the client keeps the player object
@@ -681,6 +690,7 @@ export class CombatView {
     this.attack = null;
     this.cast = null;
     this.techHits = [];
+    this.techFire.clear();
     this.attacking.clear();
     this.clearDrlBeam();
     this.drlViews.clear();
@@ -1087,6 +1097,7 @@ export class CombatView {
       this.tickStatus();
       this.tickRemoteStatus();
       this.tickTechHits();
+      this.tickFire();
       this.tickBuffs();
     }
     this.tickClock.advance(ticks, this.tickRemainder);
@@ -2665,6 +2676,13 @@ export class CombatView {
   // ASSUMED look: a coloured ball per shot (the client's own effects and
   // models are not drawn).
   private launchShot(e: EnemyRuntime, shot: EnemyShot): void {
+    // A technique object of combat/techfire.ts: particles instead of a ball.
+    if (shot instanceof FireShot) {
+      const baseY = shot.absolute ? 0 : e.instance.root.position.y - e.lift;
+      this.techFire.attach(shot, baseY);
+      this.shots.push({ shot, owner: e, baseY, mesh: null, model: null });
+      return;
+    }
     let mesh: THREE.Mesh | null = null;
     // A shot that is one of the owner's hidden world parts (the Dark Belra's
     // arm): that model moves instead of a ball.
@@ -2718,14 +2736,17 @@ export class CombatView {
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
+      if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
       if (s.model && !s.shot.done) this.poseShotModel(s.model, s.shot, s.baseY);
       for (const hit of hits) {
         if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
         const fx = s.shot.effect;
         const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
-        if (fx.kind === 'tech') this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
-        else if (fx.kind === 'melee') {
+        if (fx.kind === 'tech') {
+          this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
+          if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
+        } else if (fx.kind === 'melee') {
           this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
         } else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what);
@@ -4452,6 +4473,9 @@ export class CombatView {
     } else if (kind === 'one') sent = targets.slice(0, 1).map((e) => ({ entityId: 0x1000 | e.index }));
     else if (kind === 'list') sent = targets.map((e) => ({ entityId: 0x1000 | e.index }));
     this.game.sendCastTechnique(tech, level, sent);
+    // The charge sound (InstantiateTechniqueEffect_006e104c: TechniqueSoundEffect,
+    // SE 0xa3 for the Foie family, 0xa4 for the Barta family; ASSUMED once, local).
+    if (isFireTech(tech)) this.playSe(tech <= TECH.rafoie ? FIRE_SE.chargeFoie : FIRE_SE.chargeBarta);
     // The enter code of input state 8 turns the caster to the first target.
     const first = targets[0];
     const from = view.playerPositions().get(me.clientId);
@@ -4513,6 +4537,7 @@ export class CombatView {
     const me = this.game.self;
     const from = me && this.view?.playerPositions().get(me.clientId);
     if (!me || !from) return [];
+    if (isFireTech(tech)) return this.pickFireTargets(data, from, me.angle);
     if (techElement(tech) === null && tech !== TECH.jellen && tech !== TECH.zalure) return [];
     const half = data.angleH * BAMS_TO_RAD;
     const list: Array<{ e: EnemyRuntime; d: number }> = [];
@@ -4538,6 +4563,94 @@ export class CombatView {
       out.unshift(lock);
     }
     return out.slice(0, Math.max(1, data.targets));
+  }
+
+  // The targeting system's pick for a technique of the Foie / Barta families
+  // (combat/techfire.ts pickTechTargets: check_enemy_is_targetable). ASSUMED: the
+  // lock-on cursor is not a manually chosen primary target, the weapon position
+  // is WEAPON_HEIGHT above the feet and an enemy's hit box is a round box of its
+  // collision radius centred AIM_HEIGHT up.
+  private pickFireTargets(data: TechniqueData, from: THREE.Vector3, heading: number): EnemyRuntime[] {
+    const cands: Candidate[] = [];
+    const byId = new Map<number, EnemyRuntime>();
+    for (const e of this.enemies.values()) {
+      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
+      const p = e.instance.root.position;
+      cands.push({ id: e.index, x: p.x, y: p.y + AIM_HEIGHT, z: p.z, radius: this.hitRadiusOf(e) });
+      byId.set(e.index, e);
+    }
+    const out: Candidate[] = [];
+    pickTechTargets(from.x, from.y + WEAPON_HEIGHT, from.z, heading, data, cands, null, out);
+    return out.map((c) => byId.get(c.id)!);
+  }
+
+  // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
+  private hitRadiusOf(e: EnemyRuntime): number {
+    let r = this.fireRadius.get(e);
+    if (r === undefined) {
+      const sub = Math.max(0, Math.trunc(((e.slot.set as EnemySet | undefined)?.params?.[5] as number | undefined) ?? 0));
+      r = collisionRadius(e.instance.spec.name, sub, this.ultimate);
+      this.fireRadius.set(e, r);
+    }
+    return r;
+  }
+
+  // The flying objects, once per game tick, against the enemies that are there.
+  private tickFire(): void {
+    if (!this.techFire.active) return;
+    const pool = this.fireTargets;
+    let n = 0;
+    for (const e of this.enemies.values()) {
+      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
+      const p = e.instance.root.position;
+      const t = pool[n] ?? (pool[n] = { id: 0, x: 0, z: 0, radius: 0 });
+      t.id = e.index;
+      t.x = p.x;
+      t.z = p.z;
+      t.radius = this.hitRadiusOf(e);
+      n++;
+    }
+    this.techFire.tick(pool, n);
+  }
+
+  // unknown_cast_tech for the Foie / Barta families: the object is made at the cast
+  // point, aimed at the first 6x47 target's hit box when there is one (its position
+  // now), straight ahead when there is none; a listed target that is gone makes
+  // nothing. Rafoie needs the target and follows it. `onHit` null: another
+  // player's copy (its damage comes with their 6x0A).
+  private spawnFire(tech: number, level: number, from: THREE.Vector3, heading: number, listed: boolean, first: EnemyRuntime | undefined, onHit: ((e: EnemyRuntime) => void) | null): boolean {
+    const name = TECH_NAMES[tech];
+    // unknown_cast_tech makes no attack technique object where is_current_map_safe
+    // is 0 (the cities: Pioneer 2).
+    if (this.area === 0) return false;
+    const aimed = tech !== TECH.gifoie && tech !== TECH.rabarta;
+    if (aimed && listed && !first) {
+      this.opts.log(`${name}: the target is gone`);
+      return false;
+    }
+    const tp = aimed && first ? first.instance.root.position : null;
+    const aim = tp ? { x: tp.x, y: tp.y + AIM_HEIGHT, z: tp.z } : null;
+    const rafoie = tech === TECH.rafoie;
+    const obj = makeFireObject({
+      tech,
+      level,
+      x: rafoie && aim ? aim.x : from.x,
+      y: rafoie && aim ? aim.y : from.y + WEAPON_HEIGHT,
+      z: rafoie && aim ? aim.z : from.z,
+      heading: aim && !rafoie ? Math.atan2(aim.x - from.x, aim.z - from.z) : heading,
+      aim: rafoie ? null : aim,
+      targetId: rafoie && first ? first.index : null,
+      ground: this.opts.ground ?? null,
+    });
+    if (!obj) {
+      this.opts.log(`${name}: no target`);
+      return false;
+    }
+    this.techFire.start(obj, onHit ? (_o, t) => {
+      const e = this.enemies.get(t.id);
+      if (e && !e.dead) onHit(e);
+    } : null);
+    return true;
   }
 
   // Party members (client ids) a support technique reaches: the caster, then
@@ -4615,14 +4728,17 @@ export class CombatView {
       this.releaseSupport(c);
       return;
     }
-    // Who is hit: single-target techniques take the first target, Rafoie
-    // explodes around it, the others reach every target in range.
+    if (isFireTech(c.tech)) {
+      const first = c.targets.find((e) => !e.dead && this.enemies.has(e.index));
+      const listed = c.targets.length > 0;
+      if (this.spawnFire(c.tech, c.level, from, first ? Math.atan2(first.instance.root.position.x - from.x, first.instance.root.position.z - from.z) : me.angle, listed, first, (e) => this.techHitEnemy(c.tech, c.level, mst, me.charClass, e)))
+        this.opts.log(`${name} Lv${c.level + 1}: the object flies${first ? ` at E-${first.index.toString(16)}` : ' straight ahead'}`);
+      return;
+    }
+    // Who is hit: single-target techniques take the first target, the others
+    // reach every target in range.
     let hits = c.targets.filter((e) => !e.dead);
     if (c.data.targets <= 1) hits = hits.slice(0, 1);
-    if (c.tech === TECH.rafoie) {
-      const t = hits[0];
-      hits = t ? [...this.enemies.values()].filter((e) => !e.dead && e.instance.root.position.distanceTo(t.instance.root.position) <= RAFOIE_BLAST_RADIUS) : [];
-    }
     const element = techElement(c.tech)!;
     if (!hits.length) {
       // No target: the object flies straight ahead and fades (unknown_cast_tech).
@@ -4811,6 +4927,20 @@ export class CombatView {
       this.damage.revive(reverserHp(this.damage.maxHp));
       this.opts.log(`${name}: revived`);
     }
+  }
+
+  // Another player's 6x48 for the Foie / Barta families: their object runs here too
+  // (action_launch_tech -> unknown_cast_tech) from their position toward the first
+  // enemy of their 6x47; it hits nothing here, their client reports the damage.
+  private remoteFire(clientId: number, tech: number, sentLevel: number): void {
+    const cast = this.remoteCasts.get(clientId);
+    const from = this.view?.playerPositions().get(clientId);
+    const p = this.game.players.get(clientId);
+    if (!cast || cast.tech !== tech || !from || !p) return;
+    const level = remoteTechLevel(sentLevel, this.techOverride.get(clientId) ?? 0);
+    const ids = cast.targets.filter((id) => id >= 0x1000).map((id) => id - 0x1000);
+    const first = ids.map((id) => this.enemies.get(id)).find((e) => e && !e.dead);
+    this.spawnFire(tech, level, from, p.angle, ids.length > 0, first, null);
   }
 
   // Another player's Resta: the green "HP+n" over every healed player but this
@@ -5127,7 +5257,8 @@ export class CombatView {
       if (!t || t.clientId === this.game.selfId) return;
       const pos = this.view?.playerPositions().get(t.clientId);
       const el = techElement(t.tech);
-      if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
+      if (isFireTech(t.tech)) this.remoteFire(t.clientId, t.tech, t.level);
+      else if (pos) this.overlay?.techEffect(el ?? (t.tech === TECH.resta ? 'resta' : 'support'), pos.x, pos.y, pos.z, 20);
       if (t.tech === TECH.resta) this.remoteResta(t.clientId, t.level);
       if (el === null) this.remoteSupport(t.clientId, t.tech, t.level);
       return;
@@ -5504,6 +5635,7 @@ export class CombatView {
   dispose(): void {
     this.disposed = true;
     this.viewer.renderHooks.delete(this.smoothHook);
+    this.techFire.clear();
     this.enemies.clear();
     this.view = null;
     this.overlay?.dispose();

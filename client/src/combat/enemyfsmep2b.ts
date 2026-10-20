@@ -45,7 +45,8 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
-import { EnemyShot, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, PLAYER_AIM_HEIGHT, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { enemyFire } from './techfire.ts';
 import { SporeCloud } from './enemyfsmep2.ts';
 import { techFreezeChance, techShockChance } from './enemystatus.ts';
 import { STATUS } from './status.ts';
@@ -1695,7 +1696,7 @@ export class GibbonAi extends BrainBase {
   private castFrame(out: AiFrame, t: AiTarget | null, animationEnded: boolean): void {
     if (this.sub === 1) {
       if (animationEnded) this.sub = 2;
-      if (this.crossed(GIBBON.castFrame)) this.fireSpell(out);
+      if (this.crossed(GIBBON.castFrame)) this.fireSpell(out, t);
     } else if (!t) {
       this.enter(out, 'wander');
       return;
@@ -1711,12 +1712,24 @@ export class GibbonAi extends BrainBase {
     if (this.sub === 2) this.enter(out, 'wander');
   }
 
-  private fireSpell(out: AiFrame): void {
+  private fireSpell(out: AiFrame, t: AiTarget | null): void {
     const x = this.x + Math.sin(this.angle) * GIBBON.castAhead;
     const z = this.z + Math.cos(this.angle) * GIBBON.castAhead;
     let tech: number;
     if (this.isLeader) tech = this.ultimate ? TECH.megid : TECH.rafoie;
     else tech = this.ultimate ? TECH.gizonde : TECH.foie;
+    // Foie and Rafoie are the real objects (combat/techfire.ts): Foie along the
+    // heading, Rafoie on the target (ASSUMED the list form that follows it).
+    if (tech === TECH.foie || tech === TECH.rafoie) {
+      const shot =
+        tech === TECH.foie
+          ? enemyFire({ tech, level: this.level, x, y: GIBBON.castHeight, z, heading: this.angle, enemy: true })
+          : t
+            ? enemyFire({ tech, level: this.level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: this.angle, targetId: t.clientId, enemy: true })
+            : null;
+      if (shot) (out.shots ??= []).push(shot);
+      return;
+    }
     const power = techPower(tech, this.level);
     const effect: ShotEffect = tech === TECH.megid ? { kind: 'megid', power } : { kind: 'tech', power };
     const d = techData(tech, this.level);

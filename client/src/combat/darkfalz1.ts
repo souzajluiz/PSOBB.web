@@ -18,8 +18,13 @@
 // closing), 8 / 9 BEAM_L / BEAM_R (Rabarta / Rafoie at the target cell, 75),
 // 10 TENCHU (the 64 marks, 150).
 //
-// ASSUMED (neither the dump nor the JP C has it): the reach of the Rabarta and
-// Rafoie objects (their own entity update was not traced), the flight and the
+// The Rabarta and Rafoie objects are combat/techfire.ts: a round box of radius
+// range_h of the technique at the row's level (rabarta_constructor 0x006ec8ec,
+// rafoie_constructor 0x006ed8f4; Dark Falz' arena makes the cut-off 250,
+// 0x006ea7c4). ASSUMED: they hit at once (the exe's Rafoie waits 10 frames, its
+// Rabarta stays `cast` frames).
+//
+// ASSUMED (neither the dump nor the JP C has it): the flight and the
 // aura of the spat Darvants (class 0xAF7EC0, only its update's skeleton was
 // read), and the sphere each head offers a strike.
 
@@ -38,6 +43,8 @@ import {
   type DfFight,
   type Vec3,
 } from './darkfalzcommon.ts';
+import { techReach } from './techfire.ts';
+import { TECH } from './techniques.ts';
 
 // Animation table 0x009A5E20 (stride 0x20: mode, next, six motions for the
 // models {waist, dodai, head, head, head, body} = chunks {7, 5, 3, 2, 4, 1}).
@@ -134,9 +141,6 @@ export const F1 = {
   beamMoveChance: 0.5,
   // After an attack the leader moves 3 times in 4 ... 0x008FFE7C = 0.75 (TENCHU).
   tenchuAttackChance: 0.75,
-  // ASSUMED reach of the technique objects.
-  rabartaReach: 40,
-  rafoieReach: 25,
 } as const;
 
 // Weights of SelectWeightedRandomOption (0x00453B6C): the loop adds the
@@ -512,9 +516,9 @@ export class DfForm1 extends DfEntity {
   // The technique object at (x, z): every player within its reach is hit
   // (entity_hit_by_tech group 0 at the tech's level).
   private techAt(x: number, z: number, level: number, rabarta: boolean): void {
-    const reach = rabarta ? F1.rabartaReach : F1.rafoieReach;
+    const reach = techReach(rabarta ? TECH.rabarta : TECH.rafoie, level);
     for (const p of this.fight.alive()) {
-      if (Math.hypot(p.x - x, p.z - z) <= reach) {
+      if (Math.hypot(p.x - x, p.z - z) < reach) {
         this.fight.events.push({ kind: 'tech', clientId: p.clientId, tech: rabarta ? 'rabarta' : 'rafoie', level, x, z, what: `Dark Falz ${rabarta ? 'Rabarta' : 'Rafoie'}` });
       }
     }

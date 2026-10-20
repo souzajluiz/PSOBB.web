@@ -17,7 +17,8 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
-import { BelraArm, EnemyShot, GunnerLaser, TechBolt } from './enemyshots.ts';
+import { BelraArm, EnemyShot, GunnerLaser, PLAYER_AIM_HEIGHT, TechBolt } from './enemyshots.ts';
+import { enemyFire } from './techfire.ts';
 import { STATUS } from './status.ts';
 import { TECH, techData, techPower } from './techniques.ts';
 import { exhaustive } from '../exhaustive.ts';
@@ -2460,6 +2461,18 @@ export class SorcererAi extends BrainBase {
     if (this.cycle === 0) tech = this.ultimate ? TECH.grants : this.episode2 ? TECH.rafoie : TECH.gizonde;
     else tech = this.ultimate ? TECH.megid : TECH.gibarta;
     const level = this.level(this.cycle === 0 ? 0 : 1);
+    // handle_sorcerer_tech_behavior (0x0059c8dc): Rafoie is the object that follows
+    // the target (create_rafoie_object with a one-entry list), Gibarta
+    // (unknown_create_sorc_tech) leaves the bit along the heading to the target;
+    // both are combat/techfire.ts.
+    if (tech === TECH.rafoie || tech === TECH.gibarta) {
+      const shot =
+        tech === TECH.rafoie
+          ? enemyFire({ tech, level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: a, targetId: t.clientId, enemy: true })
+          : enemyFire({ tech, level, x: b.x, y: b.y, z: b.z, heading: a, enemy: true });
+      if (shot) (out.shots ??= []).push(shot);
+      return;
+    }
     const d = techData(tech, level);
     const effect = tech === TECH.megid ? ({ kind: 'megid', power: techPower(tech, level) } as const) : ({ kind: 'tech', power: techPower(tech, level) } as const);
     (out.shots ??= []).push(

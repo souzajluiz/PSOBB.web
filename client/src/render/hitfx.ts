@@ -38,6 +38,7 @@ interface Burst {
   scale: readonly [number, number];
   dy: number; // the spawn's raise
   track: (() => THREE.Vector3 | null) | null; // moves the emitter every emitting frame (create_particle_effect5: the owner sets the position)
+  alive: (() => boolean) | null; // an emitter its owner kills (the destructor sets the effect's flag |= 1): stops emitting when this says false
 }
 
 export class FieldParticles {
@@ -116,9 +117,10 @@ export class FieldParticles {
    * One effect at `at` (a fixed point, or a getter followed every frame).
    * `dy` of the spawn raises the point. `follow`: the particles move with the
    * getter's point (flag 0x10); `track`: only the emitter does, the particles
-   * stay where they were made.
+   * stay where they were made. `alive` ends a long emission when its owner is
+   * gone (the technique objects of render/techfire.ts).
    */
-  async spawn(p: ParticleSpawn, at: Anchor, follow = false, track = false): Promise<void> {
+  async spawn(p: ParticleSpawn, at: Anchor, follow = false, track = false, alive: (() => boolean) | null = null): Promise<void> {
     await this.load();
     if (this.disposed || this.bursts.length >= MAX_BURSTS) return;
     const e = this.entry(p.id);
@@ -142,6 +144,7 @@ export class FieldParticles {
       scale: p.scale ?? [1, 1],
       dy: p.dy ?? 0,
       track: track && typeof at === 'function' ? at : null,
+      alive,
     };
     if (p.duration === undefined) {
       // The one emission: at least one particle (the spawn loop runs while
@@ -182,6 +185,10 @@ export class FieldParticles {
 
   private tick(): void {
     this.bursts = this.bursts.filter((b) => {
+      if (b.alive && b.emit > 0 && !b.alive()) {
+        b.emit = 0;
+        b.particles.emitters.length = 0;
+      }
       if (b.delay > 0) {
         b.delay--;
       } else if (b.emit > 0) {
