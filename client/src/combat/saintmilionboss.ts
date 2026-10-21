@@ -62,7 +62,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SmClock, SmField, SmMissile, SmRng, SmTouch, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_MISSILE, SmClock, SmField, SmMissile, SmRng, SmTouch, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -747,7 +747,8 @@ export class SaintMilionAi extends BrainBase {
   }
 
   // Missiles (0x0076b8f4 / 0x0076968c) leave the boss with the MovementData iparam3 as their blast.
-  // ASSUMED: each one aims at the nearest living player at launch (FindNearestPlayer), or along the heading.
+  // ASSUMED: each one aims at the nearest living player at launch (FindNearestPlayer), or along the heading,
+  // and flies until it is within SM_MISSILE.arrive of that point (see SmMissile).
   private launchMissiles(count: number): void {
     let best: AiTarget | null = null;
     let bestSq = Infinity;
@@ -760,7 +761,8 @@ export class SaintMilionAi extends BrainBase {
       }
     }
     const angle = best ? Math.atan2(best.x - this.x, best.z - this.z) : this.heading * BAMS;
-    for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2]));
+    const range = best ? Math.max(0, Math.sqrt(bestSq) - SM_MISSILE.arrive) : null;
+    for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2], range));
   }
 
   private burst(x: number, z: number, r: number): void {

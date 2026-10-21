@@ -226,18 +226,21 @@ export class SmTouch extends EnemyShot {
 
 // --- the missile (0x0076619c, update 0x007663d4) -----------------------------------------
 //
-// The missile flies along its launch vector at 5.0 a frame (0x00976174) and
-// lives 240 frames (`cmp [+0x68], 0xf0`, `jg` past it). Its real path is a
-// motion track the port cannot read: ASSUMED a straight line on flat ground,
-// toward the player the boss aims at at launch.
-// ASSUMED: the end of the flight is the frame count (the motion's state 4 is
-// not read), and the end explodes once at the missile's position: the exe's
-// explosion 0x0076a724 (type 3, radius 30.0 passed on) is called on the
-// motion-end path 0x007667e4; the 240-frame branch 0x00766786 reaches the kill
-// 0x007667a8 without that call.
+// The missile flies along its launch vector at 5.0 a frame (0x00976174). Its
+// model's motion (track 0 of the flags at [motion+0xa4], 0x007b5290 with
+// 0x80000) ends the flight: that is the explosion 0x007667e4 (type 3, radius
+// 30.0 passed on), then the kill 0x007667a8. The motion's length is in the
+// missile's model file, which the port does not read.
+// ASSUMED: the flight ends when the missile comes within 20.0 (0x00976190, the
+// test that sets motion state 4 in 0x00766650..0x007666f7) of the point it was
+// aimed at (the nearest player at launch); the motion's frames after state 4
+// are not read, so the blast is at that point. ASSUMED: the path is a straight
+// line on flat ground.
+// The 240-frame cap (`cmp [+0x68], 0xf0`, 0x0076661d) only removes the missile
+// (0x007667a8: the effect 0x6f7 and the dead bit): no blast on that path.
 // The blast (0x00521cf8 with the 100.0 of 0x00521cdc): every living player
 // within 100 on the XZ plane (no height test) takes iparam3 once.
-export const SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3 } as const;
+export const SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3, arrive: 20 } as const;
 // ASSUMED: the height the missile is drawn at (the player's aim height).
 const SM_MISSILE_HEIGHT = 10;
 
@@ -246,11 +249,15 @@ export class SmMissile extends EnemyShot {
   readonly look: ShotLook = { color: 0xff8040, size: 1.5 };
   private vx: number;
   private vz: number;
+  private travelled = 0;
+  private range: number | null;
 
-  constructor(x: number, z: number, angle: number, damage: number) {
+  // range: the distance the flight lasts (null: no aim, it only ends at the cap).
+  constructor(x: number, z: number, angle: number, damage: number, range: number | null) {
     super(x, SM_MISSILE_HEIGHT, z);
     this.vx = Math.sin(angle) * SM_MISSILE.speed;
     this.vz = Math.cos(angle) * SM_MISSILE.speed;
+    this.range = range;
     this.effect = { kind: 'blast', damage, knockback: SM_MISSILE.knockback };
   }
 
@@ -259,9 +266,13 @@ export class SmMissile extends EnemyShot {
     this.frames++;
     this.x += this.vx;
     this.z += this.vz;
-    if (this.frames <= SM_MISSILE.life) return [];
-    this.done = true;
-    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= SM_MISSILE.blast);
+    this.travelled += SM_MISSILE.speed;
+    if (this.range !== null && this.travelled >= this.range) {
+      this.done = true;
+      return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= SM_MISSILE.blast);
+    }
+    if (this.frames > SM_MISSILE.life) this.done = true;
+    return [];
   }
 }
 
