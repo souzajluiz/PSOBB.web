@@ -249,7 +249,7 @@ export interface SmPart {
 
 export type SmBossEvent =
   | { kind: 'send'; action: number; param: number }
-  | { kind: 'se'; id: number }
+  | { kind: 'se'; id: number; loop?: boolean }
   | { kind: 'bgm'; name: string }
   | { kind: 'effect'; name: string; state: number }
   | { kind: 'killed'; x: number; z: number; ours: boolean | null }
@@ -318,6 +318,8 @@ export class SaintMilionAi extends BrainBase {
   private dirZ = 0;
   private tdist = 0;
   private pendingShots: EnemyShot[] = [];
+  // The laser of states 19 / 20 while it lives (its sound 0x6f8 loops until it is done).
+  private laser: SmLaser | null = null;
   private targets: readonly AiTarget[] = [];
   private readonly rand: SmRng;
   private readonly contactAt = new Map<number, number>();
@@ -424,6 +426,12 @@ export class SaintMilionAi extends BrainBase {
     // The storm and the sand sonic are objects of their own: they run in whatever state the boss is in.
     if (this.storm) for (const b of this.storm.tick()) this.pendingShots.push(b);
     this.sandSonicFrame();
+    // The laser's sound loop ends with the laser (0x00765d7c's end update; seen one frame late here, when the
+    // laser is already done).
+    if (this.laser?.done) {
+      this.events.push({ kind: 'seStop', id: SM_LASER.se });
+      this.laser = null;
+    }
     // The parts and the tentacles are enemies of their own.
     this.updateParts();
     this.field.tick();
@@ -798,21 +806,20 @@ export class SaintMilionAi extends BrainBase {
     this.pendingShots.push(s);
   }
 
-  // States 19 / 20, phase 4 (0x0076b85c): one laser (SmLaser). Its sound 0x6f8 is played once here: the exe
-  // starts it on the laser's first update with child 2 flagged and stops it at the end (not reproduced).
+  // States 19 / 20, phase 4 (0x0076b85c): one laser (SmLaser). Its sound 0x6f8 is a loop started here and stopped
+  // when the laser is done (0x00765d7c starts it on the first update with child 2 flagged, ASSUMED: here at once).
   private laserEnter(): void {
-    this.events.push({ kind: 'se', id: SM_LASER.se, x: this.x, z: this.z });
-    this.pendingShots.push(
-      new SmLaser({
-        origin: () => ({ x: this.x, z: this.z }),
-        aim: (k) => this.laserAim(k),
-        damage: () => this.row.iparam[1],
-      }),
-    );
+    this.events.push({ kind: 'se', id: SM_LASER.se, x: this.x, z: this.z, loop: true });
+    this.laser = new SmLaser({
+      origin: () => ({ x: this.x, z: this.z }),
+      aim: (k) => this.laserAim(k),
+      damage: () => this.row.iparam[1],
+    });
+    this.pendingShots.push(this.laser);
   }
 
-  // ASSUMED: the laser's aim point is not read (the exe's +0x44 has no writer in the laser's own code, see
-  // DEVLOG 2026-10-21 "Saint-Milion laser"). Stand-in: the aim turns through SM_LASER.sweep (BAMS, centred on
+  // ASSUMED: the laser's aim point is not read from the exe (no writer of the laser's +0x44 found, see the
+  // comment on SM_LASER in combat/saintmilionents.ts). Stand-in: the aim turns through SM_LASER.sweep (BAMS, centred on
   // the boss's heading) over the sweep frames, at SM_LASER.reach.
   private laserAim(k: number): { x: number; z: number } {
     const turn = (k / (SM_LASER.frames - 3) - 0.5) * SM_LASER.sweep * BAMS;
