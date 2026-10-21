@@ -4660,6 +4660,12 @@ export class CombatView {
 
   private pmtSync: ItemPMT | null = null;
 
+  // The ItemPMT once itemPmt() has loaded it (null before; the held weapons
+  // of the field read it, render/heldweapon.ts).
+  get loadedItemPmt(): ItemPMT | null {
+    return this.pmtSync;
+  }
+
   // Motion class of the equipped weapon: ItemPMT's weapon kind table
   // (ASSUMED to be the motion set's weapon class; 0 = bare hands).
   private weaponClass(): number {
@@ -6498,7 +6504,7 @@ export class CombatView {
 
   // ItemPMT: a loose file in the client data folder, else the server's stream
   // file (as ui/inventoryPanel.ts does).
-  private itemPmt(): Promise<ItemPMT | null> {
+  itemPmt(): Promise<ItemPMT | null> {
     this.pmt ??= (async () => {
       try {
         const data = (await this.files.has('ItemPMT.prs')) ? await this.files.read('ItemPMT.prs') : (await this.streamFiles()).get('ItemPMT.prs');

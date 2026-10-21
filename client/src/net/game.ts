@@ -24,6 +24,7 @@ import { NO_OWNER, parseTelepipeState, readTelepipe, TelepipeStore, writeTelepip
 import type { BBConnection, Command } from './bbconnection.ts';
 import { readUtf16 } from './bbconnection.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
+import { equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { splitLevel } from '../combat/techniques.ts';
 import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
@@ -285,6 +286,11 @@ export function parsePlayerSync(body: Uint8Array, into: LobbyPlayer): void {
   into.angle = (dv.getInt32(0x20, true) & 0xffff) * BAMS_TO_RAD;
   into.floor = dv.getUint32(0x4b0, true);
   into.moving = false;
+  // PlayerInventory at 0x164 (count, then the records): the held weapon.
+  if (body.length >= 0x164 + INVENTORY_BYTES) {
+    into.inventory = body.slice(0x164, 0x164 + INVENTORY_BYTES);
+    into.weapon = equippedWeaponOf(into.inventory);
+  }
 }
 
 function blankPlayer(clientId: number, guildCardNumber: number, name: string): LobbyPlayer {

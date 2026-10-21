@@ -13,6 +13,7 @@
 
 import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
 import type { PlayerAppearance } from '../render/playermodel.ts';
+import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -37,6 +38,11 @@ export interface LobbyPlayer {
   hpStat?: number;
   hpMaterials?: number;
   nameColor?: number;
+  // The equipped weapon's ItemData data1 (12 bytes; null = none) and the
+  // PlayerInventory copy it comes from, kept in step with the 6x25 / 6x26 of
+  // this player (render/heldweapon.ts draws the weapon).
+  weapon?: Uint8Array | null;
+  inventory?: Uint8Array;
 }
 
 export interface LobbyEvents {
@@ -55,6 +61,7 @@ export interface LobbyEvents {
 
 const ENTRY_SIZE = 0x520;
 const LOBBY_DATA = 0;
+const ENTRY_INVENTORY = 0x44; // PlayerInventory within a 0x520 entry
 const DISP = 0x44 + 0x34c;
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
@@ -86,7 +93,10 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
     proportionX: dv.getFloat32(shared + 0x38, true),
     proportionY: dv.getFloat32(shared + 0x3c, true),
   };
+  const inventory = data.slice(o + ENTRY_INVENTORY, o + ENTRY_INVENTORY + INVENTORY_BYTES);
   return {
+    inventory,
+    weapon: equippedWeaponOf(inventory),
     clientId: dv.getUint32(o + LOBBY_DATA + 0x1c, true),
     guildCardNumber: dv.getUint32(o + LOBBY_DATA + 0x04, true),
     name: stripMarkers(readUtf16(data, o + LOBBY_DATA + 0x20, 0x10)),
@@ -275,6 +285,12 @@ export class Lobby {
             p.position = { x: dv.getFloat32(0x14, true), y: dv.getFloat32(0x18, true), z: dv.getFloat32(0x1c, true) };
             p.moving = false;
             this.emit('teleported', p);
+            break;
+          case 0x25: // equip {item id, slot}: the weapon is tracked (playerweapon.ts)
+          case 0x26: // unequip {item id}
+            if (p.inventory && body.length >= 8 && applyRemoteEquip(p.inventory, dv.getUint32(4, true), sub === 0x25)) {
+              p.weapon = equippedWeaponOf(p.inventory);
+            }
             break;
           case 0x40: // walk to x,z
           case 0x42: // run to x,z
