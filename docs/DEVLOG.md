@@ -6306,3 +6306,15 @@ Epsilon's element immunity is applied. `techHitEnemy` in `render/combat.ts` maps
 **Checks:** `tests/enemyfsmep2a.test.ts`, `tests/enemyfsmep2d.test.ts`, `tests/combat.test.ts` (needs the newserv data under `vendor/`), client `tsc --noEmit` clean.
 
 Not run in Chrome.
+
+## 2026-10-21: Gibbles hand hit boxes
+
+Exe (PsoBB.exe, Ephinea 1.25.13): two collision_box rows, 0x2c bytes each, radius at +0xc, flags 0x8003. 0x009be10c has radius 15.0 (bytes at 0x009be118 = 0x41700000), 0x009be138 radius 30.0 (0x009be144 = 0x41f00000). The Gibbles ctor 0x00563200 installs them with `call 0x007b9a88` (count 1) on two objects it allocates (0xac bytes): 0x009be10c on +0x3bc (0x005634b5), 0x009be138 on +0x3c0 (0x00563510).
+
+What they are: attack boxes, read only by the combo code. The hand loop at 0x00561534..0x00561737 (the code just before the state 4 handler 0x00561798; ASSUMED the same state) runs when the frame counter is a multiple of 5 (0x00561553, the 0x66666667 reciprocal). It tests the +0x3bc box's flag 0x80000 (set by the overlap pass 0x007b6894, which also places the box), then each player with vtable +0x50; a player that passes gets the vtable +0x5c / +0x60 / +0x68 calls and Gibbles' flags 0x600 and the word +0x388 = 0x10e. A hit counts only above 0x00925ab0 (0.0, the same literal as the rage swing's tech rule). The +0x3c0 box (radius 30) is never read outside the destructor (0x00560134..0x0056018e). Its use is UNCLEAR.
+
+Ported: nothing, so behaviour is unchanged. The hand bones are unknown to the port, so the box centres cannot be placed. The port's `hands()` keeps the body radius plus the attack reach, and the slams keep the half-reach centre. Both are ASSUMED as before. The comment block in `combat/enemyfsmep2a.ts` (above `GIBBLES`) now carries the addresses and the UNCLEAR points. HANDOFF item 2 drops "hand boxes".
+
+ASSUMED / UNCLEAR: the box centres (bone positions); which of the vtable +0x5c / +0x60 / +0x68 calls damages; what the 52 box is for; the hand-to-box mapping (+0x3bc is not tied to a named hand).
+
+Checks: `tests/enemyfsmep2a.test.ts`, `tests/combat.test.ts`, client `tsc --noEmit`. Not run in Chrome.

@@ -1939,8 +1939,22 @@ export class GiGueAi extends BrainBase {
 // shockwave (GibblesAttack2 -> stats[1]); ASSUMED: the names follow the table
 // order 62, 63.
 //
-// Not reproduced: the hand bone positions (the slams are centred half a reach
-// in front of the Gibbles, ASSUMED), the guard drain by the attacker's ATP
+// The hand boxes: two collision_box rows (0x2c bytes, radius at +0xc, flags
+// 0x8003): 0x009be10c radius 15.0 (0x009be118), installed on the object at
+// +0x3bc by the ctor 0x00563200 (call 0x007b9a88, count 1), and 0x009be138
+// radius 30.0 (0x009be144), installed on +0x3c0. The combo's hand loop
+// (0x00561534..0x00561737, the code before the state 4 handler; ASSUMED the
+// same state) runs every fifth frame (the frame counter
+// mod 5 at 0x00561553), tests the +0x3bc box's flag 0x80000 (set by the
+// overlap pass 0x007b6894 that places it) and then every player with the vtable
+// +0x50 test; a player it passes gets the vtable +0x5c / +0x60 / +0x68 calls
+// (UNCLEAR which one damages; the damage above 0 is the hand's tech, 0x00925ab0),
+// then Gibbles' flags 0x600 and 0x10e at +0x388 are set. Nothing outside the
+// destructor (0x00560134..0x0056018e)
+// reads the +0x3c0 box, so its use is UNCLEAR. Not reproduced: the hand bone
+// positions, which the box centres follow (the hands use the body radius plus
+// the attack reach, the slams are centred half a reach in front of the
+// Gibbles, ASSUMED), the guard drain by the attacker's ATP
 // (ASSUMED a fixed amount), the sinking of a dead Gibbles (250 frames of 0.1,
 // the owner removes it), line of sight, the pre-activation shuffle of states 0
 // and 10, and the hold of the drop-in animation at frame 100.

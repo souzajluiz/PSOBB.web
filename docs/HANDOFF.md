@@ -49,8 +49,8 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    group, DEVLOG entries "Episode 2 FSMs: ..."). Left, none checked in Chrome: the Episode 2
    enemy motion archives are not on this Mac, so animation lengths in tests are stand-ins
    for groups a / d (b / c read real counts); no wall / ground rays; Gee states 6 / 10;
-   Gibbles sink and hand boxes; Epsilon's model swap and orb visual. Check Seabed / Mines /
-   Tower floors in Chrome.
+   Gibbles sink; Epsilon's model swap and orb visual. Check Seabed / Mines / Tower floors
+   in Chrome.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
