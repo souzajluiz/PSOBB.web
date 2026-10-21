@@ -7059,3 +7059,43 @@ Not run in Chrome.
 **Checks.** `node tests/chatline.test.ts`: chatline: all checks passed (new: send on Enter, blank and Escape send nothing, log lines, balloons for a known speaker and none for an unknown one). `node tests/fieldhud.test.ts`, `minimap.test.ts`, `questboard.test.ts`, `telepipe.test.ts`, `teammenu.test.ts`: all pass (the modules they import changed). Client `tsc --noEmit`: clean (Node 24). Playwright (`PW_BASE_URL=http://127.0.0.1:5176`, a worktree Vite): `e2e/field-chat.spec.ts` (new): creates a party, enters the game; the 3D canvas is the hit at the stage's centre and the stage has no pointer events; a press moves the focus to the stage; Space opens the line, Escape sends nothing; a typed line goes out once through `game.sendChat`, and newserv's echo comes back as a log line and a balloon on the player: 1 passed (2.2 min). `e2e/party-create.spec.ts` and `e2e/party-join.spec.ts`: 2 passed (2.5 min), the lobby's chat code and the stage's pointer routing are on their path.
 
 Not run in Chrome by hand.
+
+## 2026-10-21: Dark Falz boss camera (partial: the owners and the mode; no view yet)
+
+**Exe (PsoBB.exe, Ephinea 1.25.13).** The camera calls of the fight, by owner (objdump of the .text; the callers in the reference dump's `Psobb.exe-05112026.c` name the camera functions, the Dark Falz functions have no names there):
+- The camera API: `SetCameraMode_004d31f4(mode)` (flag 0x4; it sets the mode byte 0x00A489F4 and calls the mode's vtable +0x14); `ReleaseCameraMode_004d3250` (clears flag 0x4; sets flag 0x20 unless the mode is 5; then the entity whose id is at 0x00A9C4F4 is the view's target, via 0x0068D5A8); `SetCameraSourceTarget_004d681c(source*, target*, scalar*)` (current camera struct 0x00A48A14: source +0x6C, target +0x78, the scalar's +4 at +0x88); `SetCameraRecord_004d6770(record*, time)` (time to 0x00A48B20, the record through 0x004D67A0 into +0x9C / +0x9D / +0x9E / +0xA0 / +0xA4). Modes 5 and 9 are the scripted ones (no previous-mode record in 0x004D31F4).
+- Every cutscene object's ctor pushes mode 5 and the pair, then the record. The seven objects (ctor: mode push / pair / record site; pair; record; time):
+  - 0x0044EC14: 0x44ED36 / 0x44ED47 / 0x44ED56; pair 0x00A44F34 (written at 0x0044EE74..0x0044EE88 as (0, 0, -120)); record 0x009A5B14 (flags 1, +8 = 0.5); time 0x416C. Its scene is not read (the control state at 0x0044D724 builds it from its slot +0x39C).
+  - 0x0044F4EC (APP TYPE2): 0x44F675 / 0x44F6A2 / 0x44F6B1; pair = the object's +0x100; record 0x009A5BA4 (flags 2); time 0x4000.
+  - 0x0044FA8C (DIE TYPE2): 0x44FBA8 / 0x44FBF6 / 0x44FC05; pair = +0xAC; record = the BSS pointer 0x00A44F9C; time 0x4444.
+  - 0x0044FFD8 (GET RING): 0x45014E / 0x450196 / 0x4501A5; pair = a register; record 0x009A5C10 (flags 6); time 0x1555. The same ctor writes +0xE8 = 9984.0 (0x461C4000) at 0x450520, the pair of the next object.
+  - 0x0045072C (DEMO_WARP2): 0x4508BC / 0x450903 / 0x450911; pair = +0xE8; record built at run time; time 0x416C.
+  - 0x00450FC4 (DIE TYPE3): 0x45112E / 0x451175 / 0x451183; pair = +0xD4; record built at run time; time 0x416C.
+  - 0x004513D4 (DEMO_WARP0): 0x4514CF / 0x451514 / 0x451523; pair 0x00A45068 = (-20000, 0, 0), written while bit 0 of 0x00A45064 is clear; record 0x009A5CE0 (flags 5, +8 = 0.5); time 0x392D.
+- Scene owners (the enter functions, SCENE numbers of combat/darkfalzcommon.ts): DEMO_WARP0 0x44E504 -> 0x4513D4 (0x44E51F); GET RING 0x44E0F0 -> 0x44FFD8 (0x44E108); DIE TYPE2 0x44E120 -> 0x44FA8C (0x44E1F9); APP TYPE2 0x44E2F4 -> 0x44F4EC (0x44E30F, 0x44E355); DEMO_WARP2 0x44E0B8 -> 0x45072C (0x44E0D0); DIE TYPE3 0x44DF90 -> 0x450FC4 (0x44DFC7, 0x44E07D). DEMO_WARP3 0x44E08C calls the player placement 0x44C090 (0x44C183, the 4d2fb4 of the local player) and makes no object. OL ENDING makes none.
+- The destructor 0x0044E544 (vtable 0xAF6BD8) calls 0x4D3250 at 0x44E5BB: the release is the control's teardown, not a mode apply (the DEVLOG's earlier "apply mode" label was wrong). 0x0044EE94 (vtable 0xAF6C60) and 0x00451284 (vtable 0xAF6F08) release at 0x44EF0B and 0x4512BE.
+- `UpdateCameraView_004d68a0` (the per-frame view) is NOT ported. It reads the record and the path table 0x00A48AE0 (per type, a pointer to a row of u32s), calls the spring arm 0x00830848 (a collision query on 0x00AEB4A0: it pulls the camera in at walls) and the vector helpers 0x0082DEF4 / 0x00830AA0 / 0x0082D8BC / 0x0082D990. The pairs are the same pointer twice (source == target) in all seven: the view is an orbit about that point, placed by this update, so a pair alone is not a view.
+
+**ASSUMED:**
+- Mode 5 is the boss camera (no name in the exe; inferred from every cutscene object pushing it and the release at each dtor).
+- The seven objects are the cutscene objects of the scene list above; 0x0044EC14's scene is taken as unknown.
+
+**UNCLEAR:**
+- The view itself: 0x004D68A0's path and spring arm (above), and the path tables at 0x00A48AE0 (set at run time; the writer is not read).
+- The units of the time argument (frames or ticks).
+- The pivots that are object fields (+0x100, +0xAC, +0xE8, +0xD4) and the BSS pairs (0x00A44F34, 0x00A45068, 0x00A44F9C), whose writers are only partly read (0x0044EDAC's init, the run-time record of 0x0045072C / 0x00450FC4).
+- The control state at 0x0044D724 (the 0x39C slot's scene) and the branch 0x0044E5FC.
+
+**What changed:**
+- `client/src/combat/darkfalzcamera.ts` (new): the mode, the scripted modes, the four decoded records, the seven cutscene camera objects with their call sites, the scene owners, and `bossCameraView(scene)`, which returns null for every scene until the update is ported.
+- `client/src/combat/darkfalz.ts`: `DarkFalzAi.cameraView()` (the seam; the control's current scene through `bossCameraView`).
+- `client/src/render/gamefield.ts`: the third view source `opts.bossCamera` (after the unlock and the talk camera); nothing supplies it yet, so the view does not change.
+- `tests/darkfalzcamera.test.ts` (new): the mode, the records (decoded from the exe's bytes), the seven objects' call order, the scene owners, the null seam.
+
+**Checks:**
+- `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed`.
+- `node tests/darkfalz.test.ts`: `darkfalz tests passed`.
+- `node tests/combat.test.ts` (with the vendor link; removed): `5946 checks, 0 failures`.
+- `client`: `npx tsc --noEmit` clean.
+
+Not run in Chrome.
