@@ -694,39 +694,52 @@ for (const n of [1, 2, 5]) {
   eq(U.launch, 0x209, 'Ultimate +0x1c');
   eq(DRAGON_FIRE_IDS.normal.f00, 548, 'the normal fire table +0x00');
   eq(DRAGON_FIRE_IDS.normal.f04, 550, 'the normal fire table +0x04');
-  eq(DRAGON_FIRE_IDS.normal.trail, 553, 'the normal fire table +0x08 (the trail)');
+  eq(DRAGON_FIRE_IDS.normal.f08, 553, 'the normal fire table +0x08 (the puff)');
   eq(DRAGON_FIRE_IDS.ultimate.f00, 522, 'the Ultimate fire table +0x00');
   eq(DRAGON_FIRE_IDS.ultimate.f04, 520, 'the Ultimate fire table +0x04');
-  eq(DRAGON_FIRE_IDS.ultimate.trail, 201, 'the Ultimate fire table +0x08 (particleentry.dat 0xc9)');
+  eq(DRAGON_FIRE_IDS.ultimate.f08, 201, 'the Ultimate fire table +0x08 (particleentry.dat 0xc9)');
   const inMap = (id: number) => id >= MAP_PARTICLE_FIRST && id < MAP_PARTICLE_FIRST + MAP_PARTICLE_COUNT;
-  eq(inMap(N.body) && inMap(N.mouth) && inMap(N.launch) && inMap(DRAGON_FIRE_IDS.normal.trail), true, 'the normal map ids are in the map table range');
+  eq(inMap(N.body) && inMap(N.mouth) && inMap(N.launch) && inMap(DRAGON_FIRE_IDS.normal.f08), true, 'the normal map ids are in the map table range');
   eq(inMap(U.f00) && inMap(U.f04) && inMap(U.body) && inMap(U.mouth) && inMap(U.launch), true, 'the Ultimate map ids are in the map table range');
   eq(inMap(N.stomp) || inMap(N.f00) || inMap(N.f04), false, 'the normal ids below 0x200 are particleentry.dat entries');
   eq(particleMapFile(11), 'particleentrya11.dat', 'the Dragon floor (area 0x0b) reads particleentrya11.dat');
   eq(particleMapFile(3), 'particleentrya03.dat', 'maps 0..9 use the 0-padded name');
 
-  // The trail: a flying fireball carries its table's trail id and is flying
-  // until it arrived; the arrival frame makes no trail.
-  const f = new DragonFireball([0, 0, 0], [0, 0, 60], 1000, DRAGON_FIRE_IDS.normal.trail);
-  eq(f.trailId, 553, 'the fireball carries the trail id');
-  check(f.flying, 'a new fireball is flying');
-  let frames = 0;
-  while (f.flying && frames < 50) {
-    f.tick([]);
-    frames++;
+  // The fireball's particles (0x00426790): the flight +0x00 each flying frame
+  // and on the arrival frame; the impact (counter 1) +0x04 and +0x08 with the
+  // hit; counter 2 one more +0x08; then done. The hit is on the impact frame only.
+  const fl = new DragonFireball([0, 0, 0], [0, 0, 60], 1000, DRAGON_FIRE_IDS.normal);
+  check(fl.flying, 'a new fireball is flying');
+  const per: number[][] = [];
+  const hitAt: number[] = [];
+  for (let k = 0; k < 8 && !fl.done; k++) {
+    const hits = fl.tick([player(1, 0, 60)]);
+    if (hits.length) hitAt.push(k + 1);
+    per.push(fl.drainParticles());
   }
-  eq(frames, 3, 'a 60-unit flight at 25 a frame takes 3 frames (the arrival frame is not flying)');
-  check(!f.flying, 'after the arrival it is no longer flying');
+  eq(per.map((p) => p.join('+')).join(' | '), '548 | 548 | 548 | 550+553 | 553', 'the normal fireball: flight x3, impact, puff');
+  eq(hitAt.join(), '4', 'the hit is the impact frame (the fourth tick)');
+  check(fl.done && !fl.flying, 'after counter 2 it is done');
+  const fu = new DragonFireball([0, 0, 0], [0, 0, 60], 1000, DRAGON_FIRE_IDS.ultimate);
+  const useq: string[] = [];
+  for (let k = 0; k < 4; k++) {
+    fu.tick([]);
+    useq.push(fu.drainParticles().join('+'));
+  }
+  eq(useq.join(' | '), '522 | 522 | 522 | 520+201', 'the Ultimate fireball: flight 522, impact +0x04 520 and +0x08 201');
 
   // The fights: every fireball carries its difficulty's trail; the stomps
   // make one particle per foot, with the stomp id.
   const normal = run(brain(), [player(0, 0, 200)], 4000, () => false);
   const fbN = normal.shots.filter((s) => s instanceof DragonFireball) as DragonFireball[];
   check(fbN.length > 0, `the normal fight makes fireballs (${fbN.length})`);
-  check(fbN.every((s) => s.trailId === 553), 'every normal fireball has the normal trail id 553');
+  check(fbN.every((s) => s.ids === DRAGON_FIRE_IDS.normal), 'every normal fireball carries the normal fire table');
   const parts = normal.events.filter((e) => e.kind === 'particle');
-  check(parts.length > 0, `the normal fight makes stomp particles (${parts.length})`);
-  check(parts.every((e) => e.kind === 'particle' && e.id === N.stomp && e.y === 0), 'every normal particle event is the stomp on the ground');
+  const stomps = parts.filter((e) => e.kind === 'particle' && e.id === N.stomp);
+  check(stomps.length > 0, `the normal fight makes stomp particles (${stomps.length})`);
+  check(stomps.every((e) => e.kind === 'particle' && e.y === 0), 'every stomp particle is on the ground');
+  const known = new Set<number>([N.f04, N.body, N.stomp, N.launch]);
+  check(parts.every((e) => e.kind === 'particle' && known.has(e.id)), 'every normal particle event is a wired id of its sites');
   // One particle per place of the stomp: the recorded pair (nodes 50 and 51),
   // or the one foot the fallback places in front of the body.
   const feet = brain();
@@ -748,10 +761,94 @@ for (const n of [1, 2, 5]) {
   const ult = run(brain({ ultimate: true, movement: ROW_ULTIMATE, hp: 16500 }), [player(0, 0, 200)], 4000, () => false);
   const fbU = ult.shots.filter((s) => s instanceof DragonFireball) as DragonFireball[];
   check(fbU.length > 0, `the Ultimate fight makes fireballs (${fbU.length})`);
-  check(fbU.every((s) => s.trailId === 201), 'every Ultimate fireball has the Ultimate trail id 201');
+  check(fbU.every((s) => s.ids === DRAGON_FIRE_IDS.ultimate), 'every Ultimate fireball carries the Ultimate fire table');
+  const uStomps = ult.events.filter((e) => e.kind === 'particle' && e.id === U.stomp);
+  check(uStomps.length > 0 && uStomps.every((e) => e.kind === 'particle' && e.id === U.stomp), 'the Ultimate stomps use the Ultimate stomp id 148');
+  const uKnown = new Set<number>([U.f04, U.body, U.stomp, U.launch]);
   check(
-    ult.events.filter((e) => e.kind === 'particle').every((e) => e.kind === 'particle' && e.id === U.stomp),
-    'the Ultimate stomps use the Ultimate stomp id 148',
+    ult.events.filter((e) => e.kind === 'particle').every((e) => e.kind === 'particle' && uKnown.has(e.id)),
+    'every Ultimate particle event is a wired id of its sites',
+  );
+}
+
+// 27. The particle sites read in the exe, each with its state, frame and id,
+//     in both difficulties: the land (the take-off at frame 11, the stomp's
+//     body particle on the 4th tick on the ground), the lift (frame 46), the
+//     hover roar (frame 14), and the volley's launch flash at the mouth.
+{
+  // The events of one frame of the brain in state s, with its motion at frame f
+  // (the frame's animate adds the speed, 1): the particle events only.
+  const oneFrame = (s: number, f: number, ultimate: boolean, setup: (a: DragonAi) => void = () => {}) => {
+    const ai = brain({ ultimate });
+    const p = ai as unknown as { setState(n: number): void; frameState(): void; speed: number };
+    p.setState(s);
+    setup(ai);
+    ai.mframe = f;
+    p.speed = 1;
+    ai.events.splice(0);
+    p.frameState();
+    return ai.events.splice(0).filter((e) => e.kind === 'particle');
+  };
+  const N = DRAGON_PARTICLE_IDS.normal;
+  const U = DRAGON_PARTICLE_IDS.ultimate;
+
+  // The land (0x00420ee8, phase 0; states 0x08, 0x0a, 0x0b, 0x0c): frame 11, the take-off (+0x04) at the body.
+  for (const s of [S.land, S.landCollapse, S.landRoar, S.landDie]) {
+    const n = oneFrame(s, 10, false);
+    eq(n.length, 1, `state 0x${s.toString(16)} frame 11 makes one particle`);
+    check(n.every((e) => e.kind === 'particle' && e.id === N.f04), `state 0x${s.toString(16)} frame 11 is the take-off id 76`);
+    const u = oneFrame(s, 10, true);
+    check(u.length === 1 && u[0].kind === 'particle' && u[0].id === U.f04, `state 0x${s.toString(16)} Ultimate frame 11 is id 513`);
+    eq(oneFrame(s, 9, false).length, 0, `state 0x${s.toString(16)} frame 10 makes none`);
+  }
+  // The land's stomp (0x004213b5): the 4th tick with the land's counter on the ground makes the body's +0x08.
+  const ground = (a: DragonAi) => {
+    const p = a as unknown as { c86c: number; c870: number };
+    p.c86c = 2;
+    p.c870 = 3;
+  };
+  const stompN = oneFrame(S.land, 0, false, ground);
+  check(stompN.length === 1 && stompN[0].kind === 'particle' && stompN[0].id === N.body, 'the land stomp makes the body particle 547 on the 4th tick');
+  check(stompN.length === 1 && stompN[0].kind === 'particle' && stompN[0].x === 0 && stompN[0].z === 0, 'the land stomp is at the body');
+  const stompU = oneFrame(S.land, 0, true, ground);
+  check(stompU.length === 1 && stompU[0].kind === 'particle' && stompU[0].id === U.body, 'the Ultimate land stomp makes the body particle 514');
+  eq(oneFrame(S.land, 0, false, (a) => ((a as unknown as { c86c: number; c870: number }).c86c = 2)).length, 0, 'the first ground tick makes none');
+
+  // The lift (0x00422430 phase 0): frame 46 makes the body's +0x04 (76 / 513).
+  const liftN = oneFrame(S.flyUp, 45, false);
+  check(liftN.length === 1 && liftN[0].kind === 'particle' && liftN[0].id === N.f04, 'the lift makes the take-off id 76 at frame 46');
+  const liftU = oneFrame(S.flyUp, 45, true);
+  check(liftU.length === 1 && liftU[0].kind === 'particle' && liftU[0].id === U.f04, 'the Ultimate lift makes id 513 at frame 46');
+  eq(oneFrame(S.flyUp, 44, false).length, 0, 'the lift makes nothing at frame 45');
+
+  // The hover roar (0x0042008c, state 0x0e): frame 14 makes the take-off (+0x04).
+  const hoverN = oneFrame(S.roarAir, 13, false);
+  check(hoverN.length === 1 && hoverN[0].kind === 'particle' && hoverN[0].id === N.f04, 'the hover roar makes the take-off id 76 at frame 14');
+  check(oneFrame(S.roarAir, 13, true).every((e) => e.kind === 'particle' && e.id === U.f04), 'the Ultimate hover roar makes id 513');
+
+  // The volley (0x00421494 phase 2 at frame 47): one launch flash (+0x1c) at the mouth per fireball.
+  const vb = brain();
+  const vp = vb as unknown as { setState(n: number): void; volley(): void };
+  vp.setState(S.flyShoot);
+  Object.assign(vb, { velX: 100, velZ: 0 });
+  vb.events.splice(0);
+  vp.volley();
+  const launches = vb.events.filter((e) => e.kind === 'particle');
+  eq(launches.length, 3, 'a volley makes three launch flashes');
+  const m = vb.mouth();
+  check(
+    launches.every((e) => e.kind === 'particle' && e.id === N.launch && e.x === m[0] && e.y === m[1] && e.z === m[2]),
+    'every launch flash is id 549 at the mouth',
+  );
+  const vu = brain({ ultimate: true });
+  const vup = vu as unknown as { setState(n: number): void; volley(): void };
+  vup.setState(S.flyShoot);
+  Object.assign(vu, { velX: 100, velZ: 0 });
+  vu.events.splice(0);
+  vup.volley();
+  check(
+    vu.events.filter((e) => e.kind === 'particle').every((e) => e.kind === 'particle' && e.id === U.launch),
+    'the Ultimate launch flash is id 521',
   );
 }
 

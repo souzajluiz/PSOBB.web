@@ -245,13 +245,21 @@ export const DRAGON_PARTICLE_IDS = {
 } as const;
 
 // The fireball's table (normal 0x008fc374, Ultimate 0x008fc380; chosen by
-// 0x0042693c). The trail is +0x08: create_particle_effect_3 (flag 0x40) at the
-// fireball each frame it flies (0x004267c1, the state <= 2 branch). +0x00 and
-// +0x04 are not wired: their branches (0x00426902, 0x0042688f) are UNCLEAR.
+// 0x0042693c). The fireball update (0x00426790), by its phase [+0x38]:
+// flying (phase 0): +0x00 each frame, the flight emitter (0x0050981c, the
+// handle at +0x44 made on the first flying frame, moved each frame; the exe
+// makes it once and moves it, here one emitter each frame as the trail was);
+// arrived (phase 1, counter [+0x34] 1): +0x04 at the impact (0x0042689d) and
+// +0x08 (0x004267cf); counter 2: +0x08 again; then the phase 2 countdown.
 export const DRAGON_FIRE_IDS = {
-  normal: { f00: 548, f04: 550, trail: 553 },
-  ultimate: { f00: 522, f04: 520, trail: 201 },
+  normal: { f00: 548, f04: 550, f08: 553 },
+  ultimate: { f00: 522, f04: 520, f08: 201 },
 } as const;
+export interface DragonFireIds {
+  f00: number;
+  f04: number;
+  f08: number;
+}
 
 // ASSUMED: what the exe reads from variables this port does not reproduce, and
 // the mouth / feet places when the model has no such node (the head +0x418).
@@ -480,12 +488,14 @@ export class DragonFlame extends DragonShot {
 // The fireball (ctor 0x004266b0, update 0x00426790): 25 a frame along the line
 // from the mouth to the aim point, then one area hit of radius 30 (tech, power
 // MovementData fparam2; UpdateItemDisplayTransform_00425004) on the first
-// frame after it arrived. Its trail (the particle id of its table, see
-// DRAGON_FIRE_IDS) is made each flying frame by the renderer (flying).
+// frame after it arrived. Its particles (the ids of its table, DRAGON_FIRE_IDS)
+// are queued by tick and drained by the renderer (drainParticles).
 export class DragonFireball extends DragonShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff9030, size: 4 };
-  readonly trailId: number;
+  readonly ids: DragonFireIds;
+  private queued: number[] = [];
+  private impactFrames = 0; // the exe's counter [+0x34] after the arrival
   private ox: number;
   private oy: number;
   private oz: number;
@@ -495,9 +505,14 @@ export class DragonFireball extends DragonShot {
   private length: number;
   private travelled = 0;
   private arrived = false;
-  constructor(from: readonly [number, number, number], to: readonly [number, number, number], power: number, trailId: number) {
+  constructor(
+    from: readonly [number, number, number],
+    to: readonly [number, number, number],
+    power: number,
+    ids: DragonFireIds = DRAGON_FIRE_IDS.normal,
+  ) {
     super(from[0], from[1], from[2]);
-    this.trailId = trailId;
+    this.ids = ids;
     this.ox = from[0];
     this.oy = from[1];
     this.oz = from[2];
@@ -511,9 +526,13 @@ export class DragonFireball extends DragonShot {
     this.length = len;
     this.effect = { kind: 'tech', power };
   }
-  // In the air: the trail is made this frame (the update's state <= 2 branch).
+  // In the air (phase 0 of the update, the flight emitter +0x00 each frame).
   get flying(): boolean {
     return !this.arrived && !this.done;
+  }
+  // The particle ids made since the last drain, in order.
+  drainParticles(): number[] {
+    return this.queued.splice(0);
   }
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
@@ -523,11 +542,20 @@ export class DragonFireball extends DragonShot {
       this.x = this.ox + this.dx * this.travelled;
       this.y = this.oy + this.dy * this.travelled;
       this.z = this.oz + this.dz * this.travelled;
+      // The arrival frame still makes the flight emitter (0x00426865 follows the arrival).
+      this.queued.push(this.ids.f00);
       if (this.travelled >= this.length) this.arrived = true;
       return [];
     }
+    // The impact (counter 1: the hit, +0x04, and the +0x08 puff); counter 2 is one more +0x08.
+    this.impactFrames++;
+    if (this.impactFrames === 1) {
+      this.queued.push(this.ids.f04, this.ids.f08);
+      return this.within(targets, DRAGON.fireballRadius);
+    }
+    if (this.impactFrames === 2) this.queued.push(this.ids.f08);
     this.done = true;
-    return this.within(targets, DRAGON.fireballRadius);
+    return [];
   }
 }
 
@@ -1647,6 +1675,8 @@ export class DragonAi extends BrainBase {
       case S.roarAir:
         this.animate();
         this.c86c++;
+        // 0x004201ba: the take-off helper (0x0041c768) at frame 14.
+        if (this.crossed(14)) this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.f04 : DRAGON_PARTICLE_IDS.normal.f04);
         return;
       case S.dive:
         return this.tickDive();
@@ -1821,6 +1851,8 @@ export class DragonAi extends BrainBase {
       this.air = 1;
     }
     this.animate();
+    // 0x004226b7: the body's particle (+0x04) when the lift motion passes frame 46.
+    if (this.crossed(46)) this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.f04 : DRAGON_PARTICLE_IDS.normal.f04);
     if (this.c870 === 1) {
       this.alt = this.f888;
       this.f888 += this.f884;
@@ -1950,6 +1982,7 @@ export class DragonAi extends BrainBase {
     const ux = d > 0 ? vx / d : 0;
     const uz = d > 0 ? vz / d : 0;
     const power = this.mv.fparam2;
+    this.launch(m);
     this.fireball(m, [this.velX, 0, this.velZ], power);
     for (const a of [DRAGON.volleySpread, -DRAGON.volleySpread]) {
       const c = cosB(a);
@@ -1957,14 +1990,23 @@ export class DragonAi extends BrainBase {
       // RotateVector2D: x' = x cos + z sin, z' = z cos - x sin.
       const rx = ux * c + uz * s;
       const rz = uz * c - ux * s;
+      this.launch(m);
       this.fireball(m, [rx * d + this.x, 0, rz * d + this.z], power);
     }
   }
 
+  // The launch flash of a flyShoot fireball at the mouth (0x004218eb: the
+  // mouth node +0x414 is in ebx, the table's +0x1c). ASSUMED: one flash per
+  // fireball of the volley.
+  private launch(m: readonly [number, number, number]): void {
+    const ids = this.ultimate ? DRAGON_PARTICLE_IDS.ultimate : DRAGON_PARTICLE_IDS.normal;
+    this.emit({ kind: 'particle', id: ids.launch, x: m[0], y: m[1], z: m[2] });
+  }
+
   // A fireball: its constructor plays SE 0x31f at its own place (0x00426766).
   private fireball(from: readonly [number, number, number], to: readonly [number, number, number], power: number): void {
-    const trail = this.ultimate ? DRAGON_FIRE_IDS.ultimate.trail : DRAGON_FIRE_IDS.normal.trail;
-    this.pendingShots.push(new DragonFireball(from, to, power, trail));
+    const ids = this.ultimate ? DRAGON_FIRE_IDS.ultimate : DRAGON_FIRE_IDS.normal;
+    this.pendingShots.push(new DragonFireball(from, to, power, ids));
     this.emit({ kind: 'se', id: DRAGON_SE.fireball });
   }
 
@@ -1985,9 +2027,18 @@ export class DragonAi extends BrainBase {
         this.air = 0;
       }
     } else if (sub === 2 && ++this.c870 === 4) {
+      // 0x004213b5: the body's particle (+0x08) at the stomp (the gate is the counter, not the frame).
+      this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.body : DRAGON_PARTICLE_IDS.normal.body);
       this.strike(this.x, this.z, this.mv.fparam4, 0);
       this.emit({ kind: 'se', id: 0x323 });
     }
+    // 0x00421242: the take-off helper's particle (+0x04) when the motion passes frame 11.
+    if (this.crossed(11)) this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.f04 : DRAGON_PARTICLE_IDS.normal.f04);
+  }
+
+  // create_particle_effect at the body (its +0x38 point): x, z as the body, y the height.
+  private emitBody(id: number): void {
+    this.emit({ kind: 'particle', id, x: this.x, y: this.alt, z: this.z });
   }
 
   // 0x004203cc phase 0: fall (animation 8), lie 450 ticks, get up. Only

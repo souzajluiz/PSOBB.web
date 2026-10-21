@@ -3376,8 +3376,10 @@ export class CombatView {
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
-      // The Dragon's fireball trail: one emitter each frame it flies (0x004267cf).
-      if (s.shot instanceof DragonFireball && s.shot.flying) void this.fx?.spawn({ id: s.shot.trailId }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
+      // The Dragon's fireball particles (its table, the fireball update 0x00426790): the flight, the impact.
+      if (s.shot instanceof DragonFireball) {
+        for (const id of s.shot.drainParticles()) void this.fx?.spawn({ id }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
+      }
       if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
       if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
