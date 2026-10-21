@@ -60,7 +60,7 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
    brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers: events only),
    its cutscene states (they end with their animation), camera / sounds / particles;
-   Vol Opt's real models and lid drawing; the Dragon's remaining effects (the mouth and feet nodes
+   Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
    and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /
    emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired; the particles 0x203 and 0x840 of
    0x0041b6a1 and 0x0041ec4c are not spawned, see the DEVLOG correction); Dark Falz's cutscene objects, camera and Ultimate scenes.

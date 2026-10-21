@@ -194,7 +194,7 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
   // (not in Ultimate, g_VoloptDifficultyMode) and the hidden core.
   const vo = boss(0xc2, 0, 0x0d)!;
   const rod = vo.parts.find((p) => p.name === 'lightning rod');
-  eq(vo.parts.length, 6 + 24 + 2, 'Vol Opt: pillars + monitors + rod + core');
+  eq(vo.parts.length, 6 + 6 + 24 + 24 + 2, 'Vol Opt: pillars + their lids + monitors + their broken models + rod + core');
   eq(rod?.model, 16, 'Vol Opt rod: model entry 16 (+0x108)');
   eq(rod?.motion?.index, 6, 'Vol Opt rod: table 0x009a4f00 slot 0 = motion 6');
   eq(rod?.motion?.speed, 0.7, 'Vol Opt rod: 0.7 frames per tick');
@@ -206,7 +206,7 @@ function host(warp: BossWarp, opts: { inRadius: () => boolean; gathered: () => b
   eq(core?.hidden, true, 'Vol Opt core: drawn only inside a monitor');
   const voUlt = boss(0xc2, 3, 0x0d)!;
   eq(voUlt.parts.some((p) => p.name === 'lightning rod'), false, 'Vol Opt Ultimate: no lightning rod');
-  eq(voUlt.parts.length, 6 + 24 + 1, 'Vol Opt Ultimate: pillars + monitors + core');
+  eq(voUlt.parts.length, 6 + 6 + 24 + 24 + 1, 'Vol Opt Ultimate: pillars + lids + monitors + broken models + core');
   const pillar1 = vo.parts.find((p) => p.name === 'pillar 1')!;
   check(Math.abs(pillar1.offset![0] - 38) < 0.01 && Math.abs(pillar1.offset![2] - 76 * Math.sin(Math.PI / 3)) < 0.01, 'Vol Opt pillar 1: round(60 degrees in BAMS) on the 76.0 ring');
 

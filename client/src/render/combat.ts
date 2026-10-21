@@ -270,11 +270,23 @@ interface DrlDebrisView {
 // parts in the head's world root and each part's enemy (VoloptAi.parts order).
 interface VoloptView {
   pillars: (THREE.Object3D | null)[];
+  lids: (VoloptLidView | null)[];
   monitors: (THREE.Object3D | null)[];
+  brokenMonitors: (THREE.Object3D | null)[]; // the fallen monitors' models
   rod: THREE.Object3D | null;
   core: THREE.Object3D | null;
   proxies: (EnemyRuntime | null)[];
   spin: number;
+}
+
+// A pillar's hatch lid (model 13): its group in the world root and the two nodes
+// the draw moves (the first node by b, the child by a), with their bind heights.
+interface VoloptLidView {
+  group: THREE.Object3D;
+  first: THREE.Object3D;
+  child: THREE.Object3D;
+  firstY: number;
+  childY: number;
 }
 
 interface EnemyRuntime {
@@ -2429,9 +2441,22 @@ export class CombatView {
     let v = this.voloptViews.get(e.index);
     if (v) return v;
     const world = e.instance.world;
+    // The parts' node trees, by the spec's part names (instance.nodes is in spec order).
+    const nodesOf = (name: string): THREE.Object3D[] | null => {
+      const k = e.instance.spec.parts.findIndex((p) => p.name === name);
+      return e.instance.nodes?.[k] ?? null;
+    };
     v = {
       pillars: ai.pillars.map((p) => world?.getObjectByName(`pillar ${p.index}`) ?? null),
+      lids: ai.pillars.map((p): VoloptLidView | null => {
+        const name = `pillar ${p.index} lid`;
+        const group = world?.getObjectByName(name);
+        const nodes = nodesOf(name);
+        if (!group || !nodes || nodes.length < 2) return null;
+        return { group, first: nodes[0], child: nodes[1], firstY: nodes[0].position.y, childY: nodes[1].position.y };
+      }),
       monitors: ai.monitors.map((m) => world?.getObjectByName(`monitor ${m.index}`) ?? null),
+      brokenMonitors: ai.monitors.map((m) => world?.getObjectByName(`monitor ${m.index} broken`) ?? null),
       rod: world?.getObjectByName('lightning rod') ?? null,
       core: world?.getObjectByName('core') ?? null,
       proxies: ai.parts.map((): EnemyRuntime | null => null),
@@ -2565,17 +2590,30 @@ export class CombatView {
       rt.dead = false;
     }
     for (let i = 0; i < ai.pillars.length; i++) {
-      const g = v.pillars[i];
-      if (!g) continue;
       const p = ai.pillars[i];
-      g.position.y = p.yOff;
-      g.visible = p.yOff > -39;
+      const g = v.pillars[i];
+      if (g) {
+        g.position.y = p.yOff;
+        g.visible = p.yOff > -39;
+      }
+      // The lid is drawn where the pillar is (0x0044b9a0): its first node at
+      // (0, b, 0) and its child at (0, a, 0), VoloptLid's state.
+      const lid = v.lids[i];
+      if (lid) {
+        lid.group.position.y = p.yOff;
+        lid.group.visible = p.yOff > -39;
+        lid.first.position.y = lid.firstY + p.lid.b;
+        lid.child.position.y = lid.childY + p.lid.a;
+      }
     }
     for (let i = 0; i < ai.monitors.length; i++) {
+      // A fallen monitor shows its broken model (0x00441902 swaps the model
+      // entry for table 0x009a5230's); the others show the screen.
+      const dead = ai.monitors[i].dead;
       const g = v.monitors[i];
-      // ASSUMED: a fallen monitor is not drawn (the exe swaps in the
-      // broken models of table 0x009a5230).
-      if (g) g.visible = !ai.monitors[i].dead;
+      if (g) g.visible = !dead;
+      const broken = v.brokenMonitors[i];
+      if (broken) broken.visible = dead;
     }
     if (v.rod) {
       // State 1 turns it by 0x800 BAMS a tick.
@@ -2693,7 +2731,9 @@ export class CombatView {
   private voloptBodyAnim = new Map<number, { animators: NodeAnimator[]; slot: number }>();
 
   // The flying cage of the capture (VoloptCage, vtable 0x00AF6710). ASSUMED
-  // look: a ball (the exe draws particles 0x11C / 0x11D at it).
+  // look: a ball. The exe has no model for it: its constructor 0x0044A54C only
+  // starts the particle emitters 0x11C and 0x11D (pushed at 0x0044A5B8 and
+  // 0x0044A5F7), so the ball stands in for them.
   private voloptCage: THREE.Mesh | null = null;
   private readonly voloptCagePos: [number, number, number] = [0, 0, 0];
   private voloptCageBall(ai: VoloptForm2Ai): void {

@@ -5,6 +5,12 @@
 // that no state can hang.
 //
 // Run: node tests/volopt.test.ts
+// Env: PSOBB_DATA (client data/ folder; the real-model check is skipped without it)
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { GSLArchive } from '../client/src/formats/archives.ts';
+import { enemyModelFor, VOLOPT_LID_MODEL, VOLOPT_MONITOR_BROKEN, type EnemyModelContext } from '../client/src/formats/enemymodels.ts';
+import { EnemyArchive } from '../client/src/render/enemymodel.ts';
 import {
   FORM2_SPOTS,
   PILLAR_RISE,
@@ -1054,6 +1060,96 @@ function toPhase2(over: Parameters<typeof fight>[0] = {}): Fight {
   eq(p.lid.b, -18, 'and the first part');
   p.retract();
   f.until(() => p.lid.state === 0 && p.bars !== 2 && p.lid.b === 0, 600, 'the hatch closes again');
+}
+
+{
+  // The parts the renderer draws for the control (enemymodels.ts volOptChildren):
+  // a lid per pillar on the pillar's place, a broken model per monitor (hidden
+  // until the monitor falls), and no rod in Ultimate.
+  const ctx = (difficulty: number): EnemyModelContext => ({ area: 0x0d, episode: 1, difficulty, event: 0 });
+  const set = { type: 0xc2, params: [0, 0, 0, 0, 0, 0, 0] } as unknown as Parameters<typeof enemyModelFor>[0];
+  const normal = enemyModelFor(set, ctx(0));
+  const ultimate = enemyModelFor(set, ctx(3));
+  const partNamed = (spec: typeof normal, name: string) => spec?.parts.find((p) => p.name === name);
+  eq(normal?.parts.filter((p) => p.name?.endsWith(' lid')).length, 6, 'six pillar lids');
+  eq(VOLOPT_LID_MODEL, 13, 'the lid is model 13 (fe_obj_vo_futa_moto)');
+  for (let i = 0; i < 6; i++) {
+    const lid = partNamed(normal, `pillar ${i} lid`);
+    const pillar = partNamed(normal, `pillar ${i}`);
+    eq(lid?.model, VOLOPT_LID_MODEL, `pillar ${i} lid model`);
+    eq(lid?.place, 'world', `pillar ${i} lid is placed from the arena origin`);
+    eq(lid?.yaw, pillar?.yaw, `pillar ${i} lid turns with its pillar`);
+    eq(lid?.offset?.[0], pillar?.offset?.[0], `pillar ${i} lid x`);
+    eq(lid?.offset?.[2], pillar?.offset?.[2], `pillar ${i} lid z`);
+  }
+  for (let i = 0; i < 24; i++) {
+    const broken = partNamed(normal, `monitor ${i} broken`);
+    const screen = partNamed(normal, `monitor ${i}`);
+    eq(broken?.model, VOLOPT_MONITOR_BROKEN[i & 3], `monitor ${i} broken model`);
+    eq(broken?.hidden, true, `monitor ${i} broken model is hidden until it falls`);
+    eq(broken?.offset?.[2], screen?.offset?.[2], `monitor ${i} broken model stands where the screen does`);
+  }
+  eq(VOLOPT_MONITOR_BROKEN.join(), '3,6,9,12', 'the broken models (table 0x009a5230)');
+  eq(normal?.parts.some((p) => p.name === 'lightning rod'), true, 'Normal has the rod');
+  eq(ultimate?.parts.some((p) => p.name === 'lightning rod'), false, 'Ultimate has no rod');
+  eq(ultimate?.parts.filter((p) => p.name?.endsWith(' lid')).length, 6, 'Ultimate still has the lids');
+}
+
+{
+  // The lid's drawn offsets over time (what render/combat.ts sets on the nodes):
+  // the first node follows b and the child a, from the closed hatch and back.
+  const lid = new VoloptLid();
+  lid.set(2);
+  let steps = 0;
+  // The child drops first (10 ticks to -3), then the first node (10 ticks to
+  // -18); the tick that ends a part starts the next one (a float32 sum of 0.3
+  // stops a tick short of -3, so it takes 11 ticks there).
+  while (lid.sub === 0 && lid.state !== 0 && steps < 100) {
+    lid.tick();
+    steps++;
+  }
+  check(Math.abs(lid.a + 3) < 1e-4 && lid.b === 0 && steps === 11, `opening: the child drops to -3 in 11 ticks (float32 steps), first the child (a ${lid.a})`);
+  while (lid.state !== 0 && steps < 100) {
+    lid.tick();
+    steps++;
+  }
+  check(Math.abs(lid.b + 18) < 1e-4 && Math.abs(lid.a + 3) < 1e-4, `opening: the first node ends at -18 (b ${lid.b})`);
+  eq(steps, 21, 'opening takes 21 ticks');
+  eq(lid.state, 0, 'the open hatch is idle');
+  let prev = lid.b;
+  lid.set(1);
+  steps = 0;
+  while (lid.state !== 0 && steps < 100) {
+    lid.tick();
+    steps++;
+    check(lid.b >= prev - 1e-6, 'closing: the first node only rises');
+    prev = lid.b;
+  }
+  check(Math.abs(lid.a) < 1e-4 && Math.abs(lid.b) < 1e-4, 'closed: both nodes back at their bind heights');
+  eq(steps, 21, 'closing takes 21 ticks (10 on b, then 11 on a: the tick that ends b starts a)');
+}
+
+{
+  // Real data: the model entries the lid and the broken monitors come from are in
+  // bm_boss3_volopt.bml with the shapes the code assumes.
+  const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME ?? '', 'Downloads/psobb-client/data');
+  const gslPath = join(DATA, 'data.gsl');
+  if (!existsSync(gslPath)) {
+    console.log(`skipped the real-model check: ${gslPath} not found`);
+  } else {
+    const gsl = new GSLArchive(new Uint8Array(readFileSync(gslPath)));
+    const archive = new EnemyArchive('bm_boss3_volopt.bml', gsl.get('bm_boss3_volopt.bml'), 25);
+    const lid = archive.model(VOLOPT_LID_MODEL);
+    eq(lid.name, 'fe_obj_vo_futa_moto.nj', 'model 13 is the lid');
+    eq(lid.kind, 'nj', 'the lid is a NJ model');
+    eq(lid.object.children.length, 1, 'the lid has a root and one child node');
+    eq(lid.object.children[0].children.length, 0, 'and the child has no children');
+    for (const m of VOLOPT_MONITOR_BROKEN) eq(archive.model(m).name.includes('_hakai'), true, `model ${m} is a broken monitor`);
+    eq(archive.model(17).name, 'me5p01_y_all.nj', 'model 17 is the pillar');
+    eq(archive.model(16).name, 'fs_obj_hiraishin_a.nj', 'model 16 is the rod');
+    eq(archive.model(24).name, 'me5_y_all.nj', 'model 24 is the core');
+    eq(archive.model(19).name, 'me5p02_y_all.nj', 'model 19 is the phase 2 body');
+  }
 }
 
 if (failures) {
