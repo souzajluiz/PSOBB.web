@@ -130,6 +130,7 @@ import {
   weaponSpecialByte,
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
+import { trapPaletteType, type TrapEffect } from '../quest/battletraps.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
@@ -501,6 +502,9 @@ export class CombatView {
   private floor = 0;
   private area = 0;
   private held = new Set<string>();
+  // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
+  // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
+  placeTrap: ((type: number) => void) | null = null;
   private disposed = false;
   private rng: () => number = Math.random;
   // Set when a remote player is attacking, so LobbyView keeps its motion.
@@ -1157,6 +1161,7 @@ export class CombatView {
           if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
           else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);
           else if (slot && !slot.disabled && slot.group1 === 5) this.firePhotonBlast(slot.group2);
+          else if (slot && !slot.disabled && slot.group1 === 4 && trapPaletteType(slot.group2) !== null) this.placeTrap?.(trapPaletteType(slot.group2)!);
           else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks and techniques are wired yet`);
         }
         if (down) this.held.add(key);
@@ -3457,6 +3462,28 @@ export class CombatView {
     this.damage.hit(total, angle, knockback, 0x1000 | e.index);
     if (total >= 1) this.gainPb(total, true);
     this.opts.log(`${what}: blast hit for ${total}`);
+  }
+
+  // A Battle Mode trap's blast on the local player (quest/battletraps.ts TrapEffect; the
+  // caller passes the trap's damage). The status goes through inflictStatus, the damage
+  // through damage.hit with the blast's direction. ASSUMED: no kill credit, no PB gain.
+  battleTrapHit(effect: TrapEffect, damage: number, fromX: number, fromZ: number, what: string): void {
+    if (this.damage.dead) return;
+    if (effect.kind === 'status') {
+      this.inflictStatus(effect.status, what);
+      return;
+    }
+    const total = Math.max(0, Math.trunc(damage));
+    const me = this.view?.playerPositions().get(this.game.selfId);
+    const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
+    this.damage.hit(total, angle, 0, 0);
+    this.opts.log(`${what}: blast hit for ${total}`);
+  }
+
+  // Whether the current area is a boss area (safe_create refuses a trap there). ASSUMED: the
+  // web's BOSS_AREAS list stands for the exe's current_map_is_boss_map, which was not traced.
+  inBossArea(): boolean {
+    return BOSS_AREAS.includes(this.area);
   }
 
   // A pillar trap (render/traps.ts) acting on the local player.

@@ -10,11 +10,14 @@ import {
   BattleController,
   BattleRecords,
   PlayerScore,
+  build6x80,
+  build6x83,
   build6x8F,
   build6x9B,
   build6xCF,
   build6xD0,
   build7D,
+  localRestrictions,
   parse7D,
   rankPlayers,
   type Battle7D,
@@ -23,6 +26,19 @@ import {
   type PlaceEntry,
 } from './battle.ts';
 import { BattleHud, RULES_WINDOW } from './battleui.ts';
+import {
+  TRAP_EFFECTS,
+  TrapCounters,
+  TrapField,
+  placeRequest,
+  parse6x80,
+  parse6x83,
+  trapAnnouncement,
+  trapDamage,
+  type PlaceContext,
+  type TrapEvent,
+  type TrapTarget,
+} from './battletraps.ts';
 import type { QuestUi } from './questui.ts';
 
 export interface BattleRunOptions {
@@ -51,6 +67,9 @@ export class BattleRun {
   private lastHp = -1;
   private wasDead = false;
   private enemyTotals = new Map<number, number>();
+  // Battle Mode traps (quest/battletraps.ts): the field of placed traps and the local stock.
+  readonly traps = new TrapField();
+  counters = new TrapCounters();
   private names: (i: number) => string;
   rulesText = '';
 
@@ -63,6 +82,7 @@ export class BattleRun {
     this.names = (i) => game.players.get(i)?.name || `Player ${i + 1}`;
     game.on('subcommand', (sub, clientId, body) => this.onSub(sub, clientId, body));
     game.onSent = (body) => this.onSent(body);
+    opts.view.combat.placeTrap = (type) => this.placeTrap(type);
     if (opts.canvas) {
       this.hud = new BattleHud(opts.canvas);
       if (opts.files) void this.hud.load(opts.files).catch((e) => this.log(`battle hud: ${(e as Error).message}`));
@@ -81,6 +101,8 @@ export class BattleRun {
     this.score.reset();
     this.lastHp = -1;
     this.wasDead = false;
+    this.traps.clear();
+    this.counters = new TrapCounters(); // the stock is set by applyRestrictions (trap mode ALL_PLAYERS)
     this.controller = new BattleController({
       setup,
       host: {
@@ -152,6 +174,9 @@ export class BattleRun {
     // leader's 6xCF arrives (Client::create_battle_overlay). What the web client keeps
     // locally is the lives counter and the HUD.
     if (this.hud) this.hud.state.lives = e.respawn === 2 ? e.lives : null;
+    // UNCLEAR: the stock without trap mode ALL_PLAYERS is not traced; it stays at 0 here.
+    const counts = localRestrictions(e).traps;
+    if (counts) this.counters.setFromRules(counts);
   }
 
   // One 30 Hz frame: the local player's HP and death feed the score, then the controller.
@@ -167,6 +192,7 @@ export class BattleRun {
     this.lastHp = dmg.hp;
     this.wasDead = dmg.dead;
     c.tick();
+    if (c.state === 'battle') this.tickTraps();
     if (this.hud) {
       this.hud.state.points = c.state === 'battle' ? this.points() : this.hud.state.points;
       if (c.effective.respawn === 2) this.hud.state.lives = c.livesLeft;
@@ -213,10 +239,86 @@ export class BattleRun {
     if (sub === 0x7d) {
       const m = parse7D(body);
       if (m) this.controller.receive7D(clientId, m);
+    } else if (sub === 0x83) {
+      this.onTrapPlaced(clientId, body);
+    } else if (sub === 0x80) {
+      const call = parse6x80(body);
+      if (call && this.controller.state === 'battle') this.traps.receiveCall(call);
     } else if (sub === 0x8f && body.length >= 8 && this.setup) {
       // 6x8F: the victim's client says we (client_id) hurt a player for `amount`.
       if (clientId === this.opts.game.selfId) {
         this.score.giveDamage(new DataView(body.buffer, body.byteOffset, body.byteLength).getUint16(6, true), true, this.setup.weights);
+      }
+    }
+  }
+
+  // The field context of a trap placed by `owner` (safe_create_trap_object's checks).
+  // ASSUMED: fieldMap is true (the lobby / Pioneer 2 test is not traced to a floor id).
+  private placeContext(owner: { floor: number; position: { x: number; y: number; z: number }; angle: number }): PlaceContext {
+    const me = this.opts.game.self;
+    return {
+      floor: me?.floor ?? 0,
+      bossMap: this.opts.view.combat.inBossArea(),
+      fieldMap: true,
+      ownerFloor: owner.floor,
+      ownerPos: owner.position,
+      ownerAngle: owner.angle,
+    };
+  }
+
+  // A remote player's 6x83 (its client's palette press). The local client's own placement
+  // is made in placeTrap, so its echo (if any) is skipped here.
+  private onTrapPlaced(clientId: number, body: Uint8Array): void {
+    const c = this.controller;
+    const g = this.opts.game;
+    if (!c || c.state !== 'battle' || clientId === g.selfId) return;
+    const p = parse6x83(body);
+    const owner = g.players.get(clientId);
+    if (!p || !owner) return;
+    // The owner's stock is not tracked for remote players; a throwaway counter takes the decrement.
+    const trap = this.traps.place({ clientId, type: p.type, count: p.count }, this.placeContext(owner), new TrapCounters());
+    if (trap) this.log(`battle trap ${p.type} placed by ${this.names(clientId)}`);
+  }
+
+  // The local palette press of trap type `type` (render/combat.ts placeTrap). The request
+  // carries the count before the decrement; the trap is placed here (the exe's local
+  // dispatch), then the 6x83 goes out. Nothing is sent when the placement is refused.
+  placeTrap(type: number): boolean {
+    const c = this.controller;
+    const g = this.opts.game;
+    const me = g.self;
+    if (!c || c.state !== 'battle' || !me || this.opts.view.combat.damage.dead) return false;
+    const req = placeRequest(this.counters, type, true);
+    if (!req) return false;
+    const owner = { floor: me.floor, position: me.position, angle: me.angle };
+    const trap = this.traps.place({ ...req, clientId: g.selfId }, this.placeContext(owner), this.counters);
+    if (!trap) return false;
+    g.sendSubcommand(0x83, build6x83(g.selfId, type, req.count).subarray(4));
+    this.log(`battle trap ${type} placed (stock ${req.count})`);
+    return true;
+  }
+
+  // One 30 Hz frame of the traps: the players in the game are the targets; the events
+  // become the 6x80 calls, the blasts on the local player, the announcement and the removal.
+  private tickTraps(): void {
+    const g = this.opts.game;
+    const view = this.opts.view;
+    const targets: TrapTarget[] = [];
+    for (const p of g.players.values()) {
+      const local = p.clientId === g.selfId;
+      // UNCLEAR: the remote players' death state is not tracked here (dead: false).
+      targets.push({ id: p.clientId, x: p.position.x, z: p.position.z, floor: p.floor, dead: local ? view.combat.damage.dead : false, local });
+    }
+    const events: TrapEvent[] = this.traps.tick(targets, { trapsHitOwner: this.setup?.trapsHitOwner ?? false });
+    for (const ev of events) {
+      if (ev.kind === 'send80') {
+        g.sendSubcommand(0x80, build6x80(g.selfId, ev.trap.number, ev.what).subarray(4));
+        this.log(`battle trap ${ev.trap.number}: call ${ev.what}`);
+      } else if (ev.kind === 'hit') {
+        const effect = TRAP_EFFECTS[ev.trap.type];
+        if (effect) view.combat.battleTrapHit(effect, trapDamage(this.setup?.trapDamage ?? 0), ev.trap.x, ev.trap.z, `trap ${ev.trap.type}`);
+      } else if (ev.kind === 'announce') {
+        this.hud?.showLines([trapAnnouncement(this.names(ev.trap.owner))]);
       }
     }
   }
@@ -252,6 +354,8 @@ export class BattleRun {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.opts.game.onSent = null;
+    this.opts.view.combat.placeTrap = null;
+    this.traps.clear();
     this.hud?.dispose();
   }
 }

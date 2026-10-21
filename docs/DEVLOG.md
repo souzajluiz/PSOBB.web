@@ -7591,3 +7591,58 @@ sorting).
 - `ITEMPMT=~/Downloads/psobb-master/ItemPMT.prs npx tsx tests/itemmodels.test.ts`: the held weapon checks pass (370/370, 880 weapons, 14 unbound). 11 floor-box checks (`FAIL model 2..12 ixm_box*: 0 triangles`) fail in this checkout; they use `EnemyArchive` / `item.bml` from `data.gsl`, which this change does not touch; not investigated. Without `ITEMPMT` the test needs `vendor/newserv`, which is absent in this worktree.
 - `tests/formats.test.ts` does not run under `tsx` (top-level await in a CJS transform); not changed.
 - `cd client && npx tsc --noEmit -p .`: clean.
+
+## 2026-10-21: Battle Mode traps wired (placement, 6x80, blast on the local player)
+
+**What changed:** the traps of `quest/battletraps.ts` now run in a battle. `quest/battlerun.ts`
+owns a `TrapField` and the local `TrapCounters`: the stock is set at `applyRestrictions` (trap mode
+ALL_PLAYERS, through `localRestrictions`), the field is cleared at `start`, and a 30 Hz `tickTraps`
+runs while the controller is in `battle`. A palette press of a trap slot (group 1 = 4, group 2
+0x0d..0x10) calls `placeTrap` (`render/combat.ts` `placeTrap` hook, set by the run): the trap is
+placed locally, then `6x83` goes out (payload = type, count before the decrement). A remote `6x83`
+places a trap at the sender's position; a remote `6x80` calls `receiveCall`. The events of
+`TrapField.tick` become: `6x80` sends, the blast on the local player (`CombatView.battleTrapHit`:
+`inflictStatus` for freeze / slow / confusion, `damage.hit` for damage), and the "<name> TRAP" line
+on the HUD. `render/combat.ts` also has `inBossArea()` (the web's BOSS_AREAS list).
+`quest/battletraps.ts` adds `trapPaletteType` and the count ceiling (0x15 refused).
+Not drawn: the trap models, the palette icons for the trap slots, the death particle.
+
+**Verified in PsoBB.exe (bytes from `objdump -d -M intel` of PsoBB.exe; table read with
+`tools/exedata.py read`; the dump `Psobb.exe-05112026.c` for the rest, names as the dump has them):**
+- Palette dispatch: HandlePaletteInput 0x0068aadc, switch on the action (`cmp eax, 0x10` at
+  0x0068aaed). Jump table at 0x0093c5c0: index 0x0d -> 0x0068ab3b (`push 0; call 0x006959c0`),
+  0x0e -> 0x0068ab27 (push 1), 0x0f -> 0x0068ab13 (push 2), 0x10 -> 0x0068aaff (push 3). The
+  palette slot group 1 = 4 (item) passes its group 2 to this handler (dump line 555940).
+- Special handler 0x006959c0 (dump `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0`):
+  `c6 04 24 83` (subcommand 0x83) and `c6 44 24 01 02` (size 2), client id `movzx edx, word [edi+0x1c]`
+  stored at [esp+2], the type at [esp+4], the count at [esp+6]. The count comes from 0x00698984 and
+  must be `> 0` (`test eax, eax; jg` at 0x00695a24..0x00695a26).
+- Counter read 0x00698984: `cmp edx, 0x14; jle` (0x00698990), a value below 0 or above 0x14 is written
+  back as 0. So the stock ceiling 0x14 is VERIFIED.
+- Type 1 is freeze: the trap constructor (dump 492906..492909) sets the effect group 2 and the
+  state 4 blast takes the freeze path when `initdata_param1 == 2` (dump 492665..492696).
+- Receiver: `handle_packet0x60_subcommand0x83` (dump 576670) runs `safe_create_trap_object` (dump
+  492758: boss map, `count < 0x15`, owner floor) and decrements the owner's counter. The validator
+  predicate (dump 595030, `is_packet0x60_subcommand_sent_by_self`) refuses a `6x83` the client sent
+  itself unless an action is executing, so the own echo is not placed twice (the web also skips it).
+
+**ASSUMED (kept, marked in code):** the arm / fuse frames, the radii, the damage formula (`trapDamage`,
+the module's), the "<name> TRAP" text, the death particle, `fieldMap: true` (no lobby test), the
+boss map as the web's BOSS_AREAS, the state 0 trigger rule, the trap number formula (the dump gives
+`count + owner * 0x50 + type * 0x14` at dump 492923, which matches `trapNumber`), and the blast
+without kill credit or PB gain.
+
+**UNCLEAR:**
+- The gate in the trap constructor and `safe_create` is the global 0x00a4372c == 1 (dump name
+  `gDragonControlAlwaysActive_00a4372c`, a misleading name; its setter was not found in the dump).
+  Not checked in the web; if the exe needs it for traps, battles would not place any.
+- The starting stock when the trap mode is not ALL_PLAYERS (stays at 0 in the web).
+- Whether the server echoes a `6x83` back to its sender (the web skips a self echo either way) and
+  how the exe dispatches its own send (`checked_call_packet0x60_subcommand` not traced).
+- Remote players' death state (the web uses dead: false), the palette slot icons for the trap types
+  (the palette draws an empty icon for group 2 >= 0x0d), and the trap models.
+
+**Checks:** `node --experimental-strip-types tests/battletraps.test.ts` ALL PASS (new: the palette
+mapping, the payload layout, the stock, the count ceiling); `tests/battle.test.ts` exit 0;
+`tests/combat.test.ts` exit 0 (run with a temporary link to the vendor newserv build, removed after);
+`cd client && npx tsc --noEmit` clean. Not run in Chrome: no two-client battle was driven.
