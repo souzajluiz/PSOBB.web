@@ -56,7 +56,7 @@ export interface GameFieldOptions {
   // The NPC talk's camera mover view (render/npcview.ts), if any.
   talkCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
   // Dark Falz's boss camera (combat/darkfalzcamera.ts), the third view source.
-  bossCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
+  bossCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; up?: { x: number; y: number; z: number } } | null;
   toLobby: () => void;
   // A pillar trap's hold or technique on a player (render/traps.ts); combat
   // applies those on the local player.
@@ -477,10 +477,15 @@ export class GameField {
       this.viewer.camera.lookAt(talk.target.x, talk.target.y, talk.target.z);
     }
     // And Dark Falz's boss camera (SetCameraMode 5; combat/darkfalzcamera.ts), last.
+    // Its roll is the view's up vector (MapObjectEntity_UpdateCamera_004d6BC0); the default is restored after it.
     const boss = view || talk ? null : this.opts.bossCamera?.();
+    const cam = this.viewer.camera;
     if (boss) {
-      this.viewer.camera.position.set(boss.source.x, boss.source.y, boss.source.z);
-      this.viewer.camera.lookAt(boss.target.x, boss.target.y, boss.target.z);
+      cam.up.set(boss.up?.x ?? 0, boss.up?.y ?? 1, boss.up?.z ?? 0);
+      cam.position.set(boss.source.x, boss.source.y, boss.source.z);
+      cam.lookAt(boss.target.x, boss.target.y, boss.target.z);
+    } else if (cam.up.x !== 0 || cam.up.y !== 1 || cam.up.z !== 0) {
+      cam.up.set(0, 1, 0);
     }
   }
 
