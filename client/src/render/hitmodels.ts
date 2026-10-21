@@ -11,6 +11,7 @@ import {
   FLASH_DIFFUSE,
   ICE_RING_FRAMES,
   ICE_RING_PARTICLE,
+  ICE_SHARD_MODEL,
   IceBlock,
   type FlashFrame,
   type IceStep,
@@ -20,7 +21,7 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseNjcmObject, type NjcmModel } from '../formats/njcm.ts';
 import { RelFile } from '../formats/rel.ts';
 import { BAMS_TO_RAD, type NjObject } from '../formats/xj.ts';
-import { EnemyArchive, NodeAnimator } from './enemymodel.ts';
+import { EnemyArchive, NodeAnimator, texturesFromXvm } from './enemymodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
 
@@ -80,6 +81,8 @@ interface Flash {
 export interface IceHost {
   /** The hit box centre; null once the entity is gone. */
   center(): THREE.Vector3 | null;
+  /** The entity's own position (the shatter's pieces start there: the item entity's +0x368); the centre when absent. */
+  origin?(): THREE.Vector3 | null;
   /** The entity's flag 0x20 (frozen). */
   frozen(): boolean;
   /** The target scale (the hit box radius * 0.15). */
@@ -185,7 +188,7 @@ export class HitModels {
    * frozen entity, turns, and when the freeze ends shatters (the breaking
    * block's motion). `ring` makes the particle 0x12d at a point.
    */
-  async ice(host: IceHost, ring: (p: ParticleSpawn, at: THREE.Vector3) => void): Promise<void> {
+  async ice(host: IceHost, ring: (p: ParticleSpawn, at: THREE.Vector3) => void, shards?: (at: THREE.Vector3) => void): Promise<void> {
     const archive = await this.archive();
     if (this.disposed || !archive || this.ices.length >= 8) return;
     const b = this.build(archive, 1);
@@ -196,9 +199,47 @@ export class HitModels {
     this.viewer.scene.add(group);
     this.ices.push({ host, block: new IceBlock(host.radius), group, model: b.root, cache: b.cache, archive, over: false, pieces: null });
     this.ringHook = ring;
+    this.shardHook = shards ?? null;
   }
 
   private ringHook: ((p: ParticleSpawn, at: THREE.Vector3) => void) | null = null;
+  private shardHook: ((at: THREE.Vector3) => void) | null = null;
+  private shardLoad: Promise<THREE.Mesh | null> | null = null;
+  private shardCleanup: (() => void) | null = null;
+
+  /**
+   * The ice piece (model 5 of bm_technic.bml, eff_f_ice_piece.xj: three strips
+   * of texture id 2, additive) with technic.xvm as its texture list, as one
+   * template mesh the particle system clones per piece (render/hitfx.ts).
+   * The model has no texture list of its own: the exe draws it with the
+   * current xvm (g_CurrentXvmTexture), the emitter's y field.
+   */
+  shardTemplate(): Promise<THREE.Mesh | null> {
+    this.shardLoad ??= (async () => {
+      try {
+        const archive = new EnemyArchive(ICE_SHARD_MODEL.bml, await this.files.read(ICE_SHARD_MODEL.bml), 12);
+        const list = texturesFromXvm(await this.files.read(ICE_SHARD_MODEL.textures));
+        const m = archive.model(ICE_SHARD_MODEL.model);
+        if (m.kind !== 'xj') return null;
+        const cache = new MaterialCache((id) => list[id] ?? null);
+        this.shardCleanup = () => {
+          cache.dispose();
+          for (const t of list) t.dispose();
+          archive.dispose();
+        };
+        const built = buildObjectTreeWithNodes(m.object, cache);
+        let mesh: THREE.Mesh | null = null;
+        built.root.traverse((o) => {
+          if (!mesh && o instanceof THREE.Mesh) mesh = o;
+        });
+        return mesh;
+      } catch (err) {
+        this.log(`hit effects: ice shards unavailable (${(err as Error).message})`);
+        return null;
+      }
+    })();
+    return this.shardLoad;
+  }
 
   // One game frame of an ice block.
   private stepIce(f: IceFx): void {
@@ -218,7 +259,10 @@ export class HitModels {
       const a = st.ring.angle * BAMS_TO_RAD;
       this.ringHook?.({ id: ICE_RING_PARTICLE, delay: 0, duration: ICE_RING_FRAMES }, new THREE.Vector3(center.x + Math.sin(a) * st.ring.radius, center.y, center.z + Math.cos(a) * st.ring.radius));
     }
-    if (st.shatter) this.shatter(f, f.archive, center, st.scale);
+    if (st.shatter) {
+      this.shatter(f, f.archive, center, st.scale);
+      this.shardHook?.(f.host.origin?.() ?? center);
+    }
   }
 
   // The particle 0x33 (ice_breaker): model 0 with its motion 0 at the centre
@@ -320,6 +364,8 @@ export class HitModels {
     this.flashes = [];
     for (const i of this.ices) this.dropIce(i);
     this.ices = [];
+    this.shardCleanup?.();
+    this.shardCleanup = null;
     this.geometry?.dispose();
     for (const t of this.rings) t.dispose();
     this.rings = [];

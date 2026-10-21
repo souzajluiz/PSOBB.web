@@ -150,6 +150,21 @@ export const ICE_RING_RADIUS = 10; // x the scale
 export const ICE_SPARKLE_PARTICLE = 0x12e;
 export const ICE_SHATTER_PIECES = 0x153;
 export const ICE_SHATTER_BREAK = 0x33;
+/** The pieces' emitter: HandleFlameEnemyLogic_00500e08 flags it 0x200 and gives it the model (below), no texture list of its own (the current xvm: technic.xvm), motion speed 1. */
+export const ICE_SHARD_MODEL = { bml: 'bm_technic.bml', model: 5, textures: 'technic.xvm' } as const;
+/** Pieces made by the emitter 0x153 in its one burst (rate +0x44 = 20, once: the emitter lives one update). */
+export const ICE_SHARD_COUNT = 20;
+/** The model's strips use texture id 2 of the list, additive (source alpha / one). */
+export const ICE_SHARD_TEXTURE_ID = 2;
+
+// The orientation of a model particle (ParticleEffectSingleParticle_Update_0050e698,
+// flag 0x200): Vector3f_GetAnglesZ_007a8d98 turns the step (velocity) into a Z angle
+// -atan2(vx, vy) and an X angle atan2(vz, hypot(vx, vy)); the matrix is
+// T(position) S(size) Rz(z) Rx(x) Ry(g_VelocityAngles_y: ASSUMED 0) Ry(spin angle), so the
+// model's own up axis follows the step and the particle's angle spins it about that axis.
+export function velocityAngles(vx: number, vy: number, vz: number): { z: number; x: number } {
+  return { z: -Math.atan2(vx, vy), x: Math.atan2(vz, Math.hypot(vx, vy)) };
+}
 export const ICE_FADE_STEP = f(-0.4);
 export const ICE_FADE_END = -1;
 export const ICE_DEFAULT_RADIUS = 1.5;
