@@ -14,6 +14,7 @@ import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.t
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
 import { FieldScreen } from './field.ts';
+import { FieldTown } from './townfield.ts';
 import type { PartyHost } from './gamelist.ts';
 import { LobbyScreen, type LobbyHud, type TransportHost } from './lobby.ts';
 import type { TeamHost } from './teammenu.ts';
@@ -257,6 +258,8 @@ async function main(): Promise<void> {
   // tab's GameView on the 3D canvas (classic/field.ts). A load that fails
   // shows its message on the loading screen; Enter goes back to the lobby.
   let gameView: GameView | null = null;
+  // The game's NPCs, counters and quests (classic/townfield.ts).
+  let townField: FieldTown | null = null;
   const enterGame = async (game: Game, shipName: string) => {
     game.log = (m) => console.log(`[game] ${m}`);
     const assets = await loadConnectingAssets();
@@ -268,12 +271,15 @@ async function main(): Promise<void> {
       lobbyView?.dispose();
       lobbyView = null;
       gameView?.dispose();
+      townField?.dispose();
       const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null }, {
         labels: false,
         ...(streamFile ? { streamFiles: () => streamFile! } : {}),
       });
       gameView = view;
       view.onLobbyWarp = () => void leaveGame(game, shipName);
+      townField = new FieldTown({ game, view, files, canvas: worldCanvas, character: () => session?.character ?? null, log: game.log });
+      Object.assign(window, { classicTown: townField.town });
       await view.enter();
       return view;
     })();
@@ -310,7 +316,9 @@ async function main(): Promise<void> {
       gameView.dispose();
       gameView = null;
     }
-    Object.assign(window, { classicGame: undefined });
+    townField?.dispose();
+    townField = null;
+    Object.assign(window, { classicGame: undefined, classicTown: undefined });
     const assets = await loadConnectingAssets();
     showWorld(false);
     const back = game.leave().then(async (lobby) => ({ lobby, screen: await buildLobby(lobby, shipName) }));

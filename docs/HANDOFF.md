@@ -77,8 +77,11 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    restores it).
 6. Optional: the quest-loading particle wipes, the floor loading screens. The classic
    page now enters a created / joined party behind the game-entry loading screen (the
-   warp) and plays it on the Online tab's field (2026-10-21, `classic/field.ts`); left
-   there: Pioneer 2 NPC talk / counters / quests, the chat line and the mouse in games.
+   warp) and plays it on the Online tab's field (2026-10-21, `classic/field.ts`).
+   The Pioneer 2 NPC talk, the counters (shops, bank, Medical Center, the Hunter's Guild
+   quest menu) and the quest runner are in on the classic field (2026-10-21, `classic/townfield.ts`;
+   the shops and a quest's start are not yet checked in the field, see the DEVLOG entry); left there:
+   the chat line and the mouse in games.
    Leaving a game shows the lobby warp (2026-10-21); the exe's type for a leave is probably
    the floor warp (floor_prev / floor_next), not ported (DEVLOG "loading screen when leaving a game"). The counter's ship / block change and team menus
    are in (2026-10-20, not seen in Chrome: log in, walk to the counter, Transport /
