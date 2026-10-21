@@ -219,11 +219,15 @@ export function footNodes(side: number): readonly number[] {
   return side > 0 ? DRAGON_FEET.front : DRAGON_FEET.back;
 }
 
-// The particles of the fire (particleentry.dat ids, the 0x008144b0 / 0x00814298
-// spawn calls): 0x321 per flame of the breath (0x00422cb7, 0x00422ddb), 0x31f
-// where a flame is made (its ctor 0x004264a4, 0x00426766) and 0x320 where a
-// fireball bursts (its update 0x00426790, 0x004268e5).
-export const DRAGON_FX = { breath: 0x321, flameStart: 0x31f, fireballImpact: 0x320 } as const;
+// The fire's sound effects. 0x00814298 / 0x008144b0 are the SE engine
+// (play_directional_sound_effect, audio/se.ts), not the particle spawn: the
+// breath's loop plays 0x321 every frame (0x00422cb7), its 30 frames after the
+// breath play it too (0x00422ddb, while the counter after the increment is
+// below 30), and each fireball's constructor (0x004266b0, the call at
+// 0x00426766) plays 0x31f at its own place. The Dragon's other ids in
+// 0x314..0x326 are sound effects in the same way (the burrow, dive, emerge,
+// spiral and rain ones, not wired here).
+export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f } as const;
 
 // ASSUMED: what the exe reads from variables this port does not reproduce, and
 // the mouth / feet places when the model has no such node (the head +0x418).
@@ -502,8 +506,6 @@ export type DragonEvent =
   // A 6x12 the leader sends (unknown_dragon_send_0x60 / SendDragonActionPacket).
   | { kind: 'send'; state: number; cursor: number; target: number | null; x: number; z: number }
   | { kind: 'se'; id: number }
-  // A particle at the mouth (the render puts it at the recorded place).
-  | { kind: 'particle'; id: number }
   | { kind: 'bgm'; name: string }
   // State 0x15's phase 5: EnemyOnKilledHandler_0051f894 (every client runs it).
   | { kind: 'killed'; x: number; z: number };
@@ -1692,6 +1694,8 @@ export class DragonAi extends BrainBase {
       }
     } else if (this.c86c === 2) {
       this.c870++;
+      // 0x00422dc8: the 30 frames after the breath still play 0x321 (0x00422ddb).
+      if (this.c870 < DRAGON_SE.breathAfterFrames) this.emit({ kind: 'se', id: DRAGON_SE.breath });
       if (this.ended) this.c86c = 3;
     }
   }
@@ -1708,8 +1712,6 @@ export class DragonAi extends BrainBase {
     const vz = az - m[2];
     const len = Math.hypot(vx, vy, vz) || 1;
     this.pendingShots.push(new DragonFlame(m[0], m[1], m[2], vx / len, vy / len, vz / len, this.mv.fparam1));
-    this.emit({ kind: 'particle', id: DRAGON_FX.breath });
-    this.emit({ kind: 'particle', id: DRAGON_FX.flameStart });
   }
 
   // Whether the owner should record the tail's nodes this frame (only the
@@ -1909,16 +1911,21 @@ export class DragonAi extends BrainBase {
     const ux = d > 0 ? vx / d : 0;
     const uz = d > 0 ? vz / d : 0;
     const power = this.mv.fparam2;
-    this.pendingShots.push(new DragonFireball(m, [this.velX, 0, this.velZ], power));
+    this.fireball(m, [this.velX, 0, this.velZ], power);
     for (const a of [DRAGON.volleySpread, -DRAGON.volleySpread]) {
       const c = cosB(a);
       const s = sinB(a);
       // RotateVector2D: x' = x cos + z sin, z' = z cos - x sin.
       const rx = ux * c + uz * s;
       const rz = uz * c - ux * s;
-      this.pendingShots.push(new DragonFireball(m, [rx * d + this.x, 0, rz * d + this.z], power));
+      this.fireball(m, [rx * d + this.x, 0, rz * d + this.z], power);
     }
-    this.emit({ kind: 'se', id: 0x31f });
+  }
+
+  // A fireball: its constructor plays SE 0x31f at its own place (0x00426766).
+  private fireball(from: readonly [number, number, number], to: readonly [number, number, number], power: number): void {
+    this.pendingShots.push(new DragonFireball(from, to, power));
+    this.emit({ kind: 'se', id: DRAGON_SE.fireball });
   }
 
   // 0x00420ee8 phase 0: land with the land motion; from its frame 18 the body
@@ -2281,7 +2288,7 @@ export class DragonAi extends BrainBase {
         break;
       }
     }
-    this.pendingShots.push(new DragonFireball(this.mouth(), [px, 0, pz], this.mv.fparam2));
+    this.fireball(this.mouth(), [px, 0, pz], this.mv.fparam2);
   }
 
   // 0x0041a364 phase 0 (Ultimate): hidden for 60 ticks, then a spiral from the

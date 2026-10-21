@@ -60,9 +60,10 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
    brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers: events only),
    its cutscene states (they end with their animation), camera / sounds / particles;
-   Vol Opt's real models and lid drawing; the Dragon's remaining particles (the walk's dust 0x315 and the
-   burrow / dive / emerge / rain effects; the mouth and feet nodes are in, 2026-10-21; its 0x31f / 0x320 / 0x321
-   are SEs, not particles, see the DEVLOG correction); Dark Falz's cutscene objects, camera and Ultimate scenes.
+   Vol Opt's real models and lid drawing; the Dragon's remaining effects (the mouth and feet nodes
+   and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /
+   emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired; the particles 0x203 and 0x840 of
+   0x0041b6a1 and 0x0041ec4c are not spawned, see the DEVLOG correction); Dark Falz's cutscene objects, camera and Ultimate scenes.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
    the 0x122 cue; see that DEVLOG entry.

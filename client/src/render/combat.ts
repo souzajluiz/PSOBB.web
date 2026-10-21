@@ -54,7 +54,7 @@ import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, Re
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
-import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_FX, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
+import { DragonAi, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
@@ -2059,12 +2059,6 @@ export class CombatView {
         this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
         this.sePlayer?.play(ev.id);
         return;
-      case 'particle': {
-        // At the mouth (the flame's origin); the brain's y is above the ground.
-        const [mx, my, mz] = ai.mouth();
-        this.particle({ id: ev.id }, new THREE.Vector3(mx, my + e.instance.root.position.y - e.lift, mz));
-        return;
-      }
       case 'bgm':
         // ASSUMED: the track swaps (dradeath.adx at the entrance and the death,
         // draroar.adx at a roar) are not played here (audio/bossbgm.ts keeps
@@ -3300,8 +3294,6 @@ export class CombatView {
   // of them; the body animator reapplies the bind scale on its next frame, so
   // the hook below keeps it down and a regrown arm comes back by itself.
   private belraHooked = new WeakSet<object>();
-  // The Dragon's fireballs that have burst (their particle is made once).
-  private dragonBursts = new WeakSet<object>();
 
   private belraTick(e: EnemyRuntime, ai: BelraAi): void {
     const inst = e.instance;
@@ -3331,11 +3323,6 @@ export class CombatView {
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
-      // A Dragon fireball bursts where it lands, once (particle 0x320).
-      if (s.shot instanceof DragonFireball && s.shot.done && !this.dragonBursts.has(s.shot)) {
-        this.dragonBursts.add(s.shot);
-        this.particle({ id: DRAGON_FX.fireballImpact }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
-      }
       if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
       if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);

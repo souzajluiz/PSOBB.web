@@ -8,8 +8,8 @@ import {
   DragonAi,
   DragonBurst,
   DRAGON_BODY_BOXES,
-  DRAGON_FX,
   DRAGON_MOUTH,
+  DRAGON_SE,
   DRAGON_NODE_TABLE,
   DRAGON_TAIL,
   DragonFireball,
@@ -630,9 +630,9 @@ for (const n of [1, 2, 5]) {
   eq(footNodes(-1).join(), '40,41', 'side -1 (frame 24) strikes nodes 40 and 41');
   eq(DRAGON_NODE_TABLE.indexOf(40), 3, 'node 40 is table slot 3');
   eq(DRAGON_NODE_TABLE.indexOf(51), 6, 'node 51 is table slot 6');
-  eq(DRAGON_FX.breath, 0x321, 'the breath particle 0x321');
-  eq(DRAGON_FX.flameStart, 0x31f, 'the flame start particle 0x31f');
-  eq(DRAGON_FX.fireballImpact, 0x320, 'the fireball impact particle 0x320');
+  eq(DRAGON_SE.breath, 0x321, 'the breath sound 0x321');
+  eq(DRAGON_SE.breathAfterFrames, 30, 'and 30 frames after the breath');
+  eq(DRAGON_SE.fireball, 0x31f, 'the fireball sound 0x31f');
 
   const feet = brain();
   const at = (n: number, out: [number, number, number]) => {
@@ -656,14 +656,18 @@ for (const n of [1, 2, 5]) {
   m.recordMouth(null);
   eq(m.mouth().join(), guess, 'without node 60: the ASSUMED mouth');
 
-  // Each flame is one 0x321 (the breath) and one 0x31f (the flame's start).
+  // The fire's sounds: one 0x31f per fireball (its constructor), 0x321 every
+  // frame of the breath and of the 30 frames after it (flames are every other
+  // frame, so the breath sound outnumbers them).
   const b = brain();
   const br = run(b, [player(0, 0, 200)], 4000, () => false);
   const flames = br.shots.filter((s) => s instanceof DragonFlame).length;
-  const particles = (id: number) => br.events.filter((e) => e.kind === 'particle' && e.id === id).length;
+  const fireballs = br.shots.filter((s) => s instanceof DragonFireball).length;
+  const se = (id: number) => br.events.filter((e) => e.kind === 'se' && e.id === id).length;
   check(flames > 0, `the breath makes flames (${flames})`);
-  eq(particles(0x321), flames, 'one breath particle per flame');
-  eq(particles(0x31f), flames, 'one flame start particle per flame');
+  check(fireballs > 0, `the breath's fight makes fireballs (${fireballs})`);
+  eq(se(0x31f), fireballs, 'one fireball sound per fireball');
+  check(se(0x321) > flames, `the breath sound plays every frame (${se(0x321)} for ${flames} flames)`);
 }
 
 if (failures) {
