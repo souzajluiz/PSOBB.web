@@ -902,6 +902,14 @@ export function techReach(tech: number, level: number): number {
   return techData(tech, objectLevel(level)).rangeH + PLAYER_HIT_RADIUS;
 }
 
+/** Whether a player at XZ distance `dist` from an enemy's Jellen / Zalure object is
+ * inside its area: strictly within techReach. Gi Gue's stomp and Sinow Zoa's cast
+ * both use it (the exe's probe is range_h, the player's hit box adds 5, see the
+ * DEVLOG entry "Jellen / Zalure area of an enemy cast"). */
+export function inTechReach(tech: number, level: number, dist: number): boolean {
+  return dist < techReach(tech, level);
+}
+
 /** The damage an enemy's object does to a player (entity_hit_by_tech group 1 / 2 /
  * 0x13 for a player defender: the same (MST * 0.5 + power) * (100 - resist) *
  * 0.002 as group 0 when the player's resist is 0, which is ASSUMED here). A

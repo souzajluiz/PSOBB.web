@@ -23,7 +23,7 @@ import { PLAYER_AIM_HEIGHT, EnemyShot, type ShotEffect, type ShotLook } from './
 import { BOOMA_MELEE } from './enemyfsmep2.ts';
 import { STATUS } from './status.ts';
 import { exhaustive } from '../exhaustive.ts';
-import { techReach } from './techfire.ts';
+import { inTechReach } from './techfire.ts';
 import { TECH } from './techniques.ts';
 
 const fr = Math.fround;
@@ -1741,11 +1741,10 @@ export class GiGueAi extends BrainBase {
       this.sub = 3;
       // 0x0056a48d: the Zalure object, then 0x0056a49d the Jellen object, each at
       // the Gi Gue's position; the area tick hits the players inside its reach
-      // (ASSUMED: the XZ distance, strict, as the Dark Falz technique objects).
+      // (inTechReach: the XZ distance, strict; the same rule as Sinow Zoa's cast).
       for (const tech of ['zalure', 'jellen'] as const) {
-        const reach = techReach(TECH[tech], this.level);
         for (const t of targets) {
-          if (t.dead || Math.hypot(t.x - this.x, t.z - this.z) >= reach) continue;
+          if (t.dead || !inTechReach(TECH[tech], this.level, Math.hypot(t.x - this.x, t.z - this.z))) continue;
           this.events.push({ clientId: t.clientId, tech, level: this.level });
         }
       }

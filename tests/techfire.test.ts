@@ -20,6 +20,7 @@ import {
   startEmitters,
   startPitch,
   techReach,
+  inTechReach,
   sweptBoxHits,
   circleHits,
   GIFOIE_GROUPS,
@@ -406,6 +407,9 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
 // --- Dark Falz' reach --------------------------------------------------------------
 near(techReach(TECH.rafoie, 10), techData(TECH.rafoie, 10).rangeH + 5, 'Rafoie\'s reach is range_h + the player\'s radius');
 near(techReach(TECH.rabarta, 0), 45, 'Rabarta Lv1 reaches 45');
+// Jellen / Zalure (0x006e7998 / 0x006f1eb0): the probe is range_h, the player adds 5, strict.
+check(inTechReach(TECH.jellen, 4, 54.99) && !inTechReach(TECH.jellen, 4, 55), 'Jellen at level 4: just inside 55, not 55');
+check(inTechReach(TECH.zalure, 10, 78.99) && !inTechReach(TECH.zalure, 10, 79), 'Zalure at level 10: just inside 79, not 79');
 near(techData(TECH.rafoie, 10).rangeH, 120, 'Rafoie Lv11 range_h 120');
 
 if (failures) {

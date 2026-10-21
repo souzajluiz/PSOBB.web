@@ -46,8 +46,8 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, PLAYER_RADIUS, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_AIM_HEIGHT, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
-import { enemyFire } from './techfire.ts';
-import { TECH, techData } from './techniques.ts';
+import { enemyFire, inTechReach } from './techfire.ts';
+import { TECH } from './techniques.ts';
 import { STATUS } from './status.ts';
 import { delLilyMegid } from './enemyfsmruins.ts';
 import { exhaustive } from '../exhaustive.ts';
@@ -2313,12 +2313,13 @@ export class SinowZoaAi extends ExeBrain {
       return;
     }
     if (this.ultimate) return; // Shifta + Deband on the allies: not applied
-    // Zalure (0x006f1eb0) and Jellen (0x006e7998) at its own place.
-    const range = techData(TECH.jellen, level).rangeH;
+    // Zalure (0x006f1eb0) and Jellen (0x006e7998) at its own place: their area tick
+    // reaches range_h + 5 (inTechReach), as Gi Gue's stomp.
     for (const t of this.tg) {
-      if (t.dead || Math.hypot(t.x - this.x, t.z - this.z) > range) continue;
-      this.buffs.push({ clientId: t.clientId, tech: 'zalure', level });
-      this.buffs.push({ clientId: t.clientId, tech: 'jellen', level });
+      if (t.dead) continue;
+      const dist = Math.hypot(t.x - this.x, t.z - this.z);
+      if (inTechReach(TECH.zalure, level, dist)) this.buffs.push({ clientId: t.clientId, tech: 'zalure', level });
+      if (inTechReach(TECH.jellen, level, dist)) this.buffs.push({ clientId: t.clientId, tech: 'jellen', level });
     }
   }
 

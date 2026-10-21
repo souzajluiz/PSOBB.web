@@ -425,6 +425,16 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
     eq(hits.every((e) => e.level === 10), true, 'Gi Gue: the stomp carries iparam3 = 10');
   }
 
+  // The exact edge at level 4 (range_h 50 + 5 = 55, strict): 54.5 is hit, 55 is not.
+  {
+    const g9 = new GiGueAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0, 0], attack: gigueAtk, movement: gigueMove, rng: () => 0.1 });
+    const rig9 = new Rig(g9);
+    rig9.run([player(25, 35, 0), player(0, -54.5, 1), player(0, -55, 2)], 300);
+    const edge = g9.events.splice(0);
+    check(edge.some((e) => e.clientId === 1 && e.tech === 'jellen') && edge.some((e) => e.clientId === 1 && e.tech === 'zalure'), 'Gi Gue: a player 54.5 away is inside the level 4 stomp');
+    check(!edge.some((e) => e.clientId === 2), 'Gi Gue: a player exactly 55 away is outside the stomp (strict)');
+  }
+
   // The hop: crouch 60 frames, rise to 50 at 2.2, fly 200 away at fparam1, drop 2.3 a frame.
   {
     const g7 = gigue([0, 0, 0, 0, 0], () => 0.9);

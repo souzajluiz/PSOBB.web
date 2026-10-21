@@ -619,6 +619,16 @@ function seeded(seed = 1): () => number {
     if (zele.buffs.length) buffs = zele.buffs.map((b) => b.tech);
   }
   check(buffs.includes('jellen') && buffs.includes('zalure'), 'Jellen and Zalure');
+  // The same reach as Gi Gue's stomp (range_h 50 + 5 = 55 at level 4, strict): 54.5
+  // from the Zele is hit by both, 55 is not.
+  const edge = mk([2, 0, 0, 0, 0, 1], () => 0.1, { movement: mv({ f6: 1, i: [4, 10, 5, 5, 0, 0] }) });
+  const seen = new Set<string>();
+  for (let i = 0; i < 4000; i++) {
+    edge.tick([player(edge.x, edge.z + 20, 0), player(edge.x, edge.z + 54.5, 1), player(edge.x, edge.z - 55, 2)]);
+    for (const b of edge.buffs) seen.add(`${b.clientId}:${b.tech}`);
+  }
+  check(seen.has('1:jellen') && seen.has('1:zalure'), 'Zele: a player 54.5 away gets Jellen and Zalure');
+  check(!seen.has('2:jellen') && !seen.has('2:zalure'), 'Zele: a player exactly 55 away gets neither (strict)');
 }
 
 // --- flinch, cloak, death ----------------------------------------------------------------
