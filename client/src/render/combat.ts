@@ -183,6 +183,8 @@ import { TickClock } from './smoothrender.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 const pct = (m: number): string => `${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)}%`;
+// technique_group of an element (techElement): Foie 1, Barta 2, Zonde 3, Grants 4, Megid 5.
+const TECH_GROUP_OF_ELEMENT: Partial<Record<string, number>> = { fire: 1, ice: 2, lightning: 3, light: 4, dark: 5 };
 // technique_group of a support technique and back (entity_hit_by_tech).
 const BUFF_GROUP: Partial<Record<number, BuffGroup>> = {
   [TECH.shifta]: GROUP.shifta,
@@ -378,7 +380,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
-  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi) && e.ai.untargetable);
+  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi || e.ai instanceof GibblesAi) && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -5487,6 +5489,13 @@ export class CombatView {
   // entity_hit_by_tech on an enemy (combat/techniques.ts).
   private techHitEnemy(tech: number, level: number, mst: number, charClass: number, e: EnemyRuntime): void {
     const name = TECH_NAMES[tech];
+    // Epsilon's open element blocks the technique of its group (immuneToTech,
+    // EpsigardProcessTechHit_0055aa5c): no damage, no status. Invulnerable
+    // Epsilon takes the "0" of applyEnemyHit instead.
+    if (e.ai instanceof EpsilonAi && !e.ai.invulnerable && e.ai.immuneToTech(TECH_GROUP_OF_ELEMENT[techElement(tech) ?? ''] ?? 0)) {
+      this.opts.log(`${name}: E-${e.index.toString(16)} (${e.slot.type}) is immune to the element`);
+      return;
+    }
     if (tech === TECH.megid) {
       // Instant death with chance (power - EDK) * 0.01 (no boss-map check:
       // ASSUMED the floor is not a boss map).

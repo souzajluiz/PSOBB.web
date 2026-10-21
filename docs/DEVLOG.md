@@ -6294,3 +6294,15 @@ Port: the `slowed ? 0.5 : guard ? 0.75` order matches, but both conditions are n
 **Playwright:** `client/playwright.config.ts` and `client/e2e/party-create.spec.ts` (README in `client/e2e/`): log in, stand on the counter, Organize PARTY -> Create a PARTY -> EPISODE 1, check the Play Mode and Difficulty texts at the exe's indices, register a Normal party, expect the "entered game ... back to the lobby" log. Passes against local newserv. `npm ci` was also needed in `client/` (the @capacitor packages were declared but not installed, which broke `classic.html` under Vite).
 
 **Checks:** `npx playwright test` (1 passed), `tests/gamelist.test.ts` (new: group 11 alignment), `items`, `options`, `teammenu`, `fieldhud`, `warpmenu`, client `tsc --noEmit` clean.
+
+## 2026-10-21: Gibbles concealed while hidden, Epsilon tech immunity applied
+
+**What changed:** a hidden Gibbles is now concealed like the other hidden enemies. `GibblesAi` has an `untargetable` getter (state 0 / 1, and the held drop-in: `dormant` or `arrive` below `arriveHold`), and its frame sets `out.hidden` from that same getter. `render/combat.ts` `concealed()` lists `GibblesAi`, so it is off the radar, lock-on, technique targeting and confused-enemy targeting while hidden. Gibbles stays invulnerable in those states as before (the existing `invulnerable` getter: its lie-in-wait flags are 0x6040000, which include the 0x4000000 invulnerable flag). The exe's hide flag is the same one Mericarol / Gibbon use, so no change to `invulnerable`.
+
+Epsilon's element immunity is applied. `techHitEnemy` in `render/combat.ts` maps the technique's element to its technique group (fire 1, ice 2, lightning 3, grants 4, megid 5) and, while Epsilon is not invulnerable, `EpsilonAi.immuneToTech(group)` blocks the hit: no damage, no status, and a log line. Invulnerable Epsilon keeps the existing "0" path in `applyEnemyHit`. The exe's `EpsigardProcessTechHit_0055aa5c` is only described as "blocks"; no number or effect is mirrored, so none is shown. The comment in `combat/enemyfsmep2d.ts` no longer says the owner does not apply it.
+
+**Files:** `client/src/combat/enemyfsmep2a.ts` (`GibblesAi.untargetable`, `out.hidden`), `client/src/render/combat.ts` (`concealed()`, `TECH_GROUP_OF_ELEMENT`, the immunity check in `techHitEnemy`), `client/src/combat/enemyfsmep2d.ts` (comment), `tests/enemyfsmep2a.test.ts` (Gibbles `untargetable` in the lie-in-wait state and exactly matching `hidden` across the 400-frame drop-in), `docs/HANDOFF.md` (to-do 2 list). `immuneToTech` was already checked in `tests/enemyfsmep2d.test.ts`, so that file is unchanged.
+
+**Checks:** `tests/enemyfsmep2a.test.ts`, `tests/enemyfsmep2d.test.ts`, `tests/combat.test.ts` (needs the newserv data under `vendor/`), client `tsc --noEmit` clean.
+
+Not run in Chrome.

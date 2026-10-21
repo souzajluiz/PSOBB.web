@@ -487,16 +487,20 @@ const gibLen = (long: number) => (i: number) => (i === 0 ? long : i === 4 ? 34 :
   const hidden: boolean[] = [];
   rig.run([player(0, 230)], 100, (r) => hidden.push(!!r.hidden));
   check(g.state === 'dormant' && g.invulnerable && hidden.every(Boolean), 'Gibbles: hidden and invulnerable while nobody is within 200');
+  check(g.untargetable, 'Gibbles: untargetable (off the radar and lock-on) while it lies in wait');
   const p = player(0, 150);
   const n = rig.until([p], 'arrive', 100);
   check(n >= 0, 'Gibbles: a player within 200 starts the drop-in');
   let blast: GroundBlast | undefined;
   let hiddenFor = 0;
+  let hiddenMismatch = 0;
   rig.run([p], 400, (r) => {
     if (r.hidden) hiddenFor++;
+    if (!!r.hidden !== g.untargetable) hiddenMismatch++;
     if (r.shots && !blast) blast = r.shots[0] as GroundBlast;
   });
   check(hiddenFor >= 39 && hiddenFor <= 45, `Gibbles: hidden through the 40-frame effect (${hiddenFor})`);
+  check(hiddenMismatch === 0 && !g.untargetable, `Gibbles: untargetable exactly while hidden (${hiddenMismatch} mismatched frames)`);
   check(!!blast, 'Gibbles: the landing shockwave');
   if (blast) {
     eq(blast.effect, { kind: 'tech', power: 400 }, 'Gibbles: the shockwave is the second shockwave row (minAtp)');

@@ -2107,6 +2107,12 @@ export class GibblesAi extends BrainBase {
     return this.state === 'dormant' || this.state === 'arrive' || this.immune;
   }
 
+  // Hidden (the flags of the lie-in-wait and the held drop-in: off the radar
+  // and the lock-on, see frame()).
+  get untargetable(): boolean {
+    return this.state === 'dormant' || (this.state === 'arrive' && this.timer < GIBBLES.arriveHold);
+  }
+
   // The drawn height above the ground (enemy+0x394).
   get lift(): number {
     return this.yOff;
@@ -2220,7 +2226,7 @@ export class GibblesAi extends BrainBase {
     this.stateFrame(out, targets);
     out.lift = this.yOff;
     // States 0 / 1 (flags 0x6040000) and the held drop-in: not drawn.
-    out.hidden = this.state === 'dormant' || (this.state === 'arrive' && this.timer < GIBBLES.arriveHold);
+    out.hidden = this.untargetable;
     return this.finish(out);
   }
 

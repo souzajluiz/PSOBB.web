@@ -2055,7 +2055,8 @@ export class ReconAi extends Ep2dBrain<ReconState> {
 // ASSUMED: map rays (line of sight, walls), the Epsigards' collision flag
 // (flag 0x80: nothing touches them), the model swap of the closed / open look
 // (not drawn), the colour fades (visual), the element immunities are exposed
-// (`immuneToTech`) but not applied by the owner.
+// (`immuneToTech`) and applied by the owner's techHitEnemy (render/combat.ts)
+// while Epsilon is not invulnerable.
 export const EPSILON = {
   search: 400,
   retarget: 30,
