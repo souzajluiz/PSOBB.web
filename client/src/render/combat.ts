@@ -2284,7 +2284,10 @@ export class CombatView {
         return;
       case 'se':
         this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
-        this.sePlayer?.play(ev.id);
+        this.sePlayer?.play(ev.id, ev.loop ? { loop: true } : {});
+        return;
+      case 'seStop':
+        this.sePlayer?.stop(ev.id);
         return;
       case 'bgm':
         // ASSUMED: the track swap is not played here (audio/bossbgm.ts keeps the floor's track).

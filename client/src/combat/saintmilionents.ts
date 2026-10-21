@@ -358,37 +358,49 @@ export class SmWave extends EnemyShot {
 // Made on phase 4 of state 19 or 20 (0x0076b85c: alloc 0x60, ProcessState 0x00765c68 with the boss's
 // role [+0x3cc] and +0xe94). Its model is bm_obj_ep4_boss09_laser.bml, motion 0 (sandlaser.njm), 126
 // frames, read with formats/njmotion.ts; the exe's clock is frames - 1 = 125.
-// Each update (0x00765d7c): the base update runs the children; the clock gains 1.0 (0x00976108) and the
-// laser ends when the clock reaches 125 (`fcom [+0x34]`, 0x00765d95 .. 0x00765d9e: the update of that
-// frame does not sweep; it stops its sound 0x8148d4 and sets flag 1). Otherwise, while child slot 1 is
-// flagged (the sweep's particle child), the beam is cut at the first wall (0x0077fffc, the length +0x50
-// grows 100.0 a frame, 0x00976100), and 0x00768a84 runs with type 4, the new BAMS heading (the aim's
-// direction from the origin) and the previous one (+0x58, then stored). The heading and the span are
-// the only inputs of the hit: the span is |cur - prev| (integer_angle_abs_difference 0x007a9018), the
-// heading the midpoint (angle_sum 0x007a8cb8 = cur + ((prev - cur) as int16 >> 1)), the reach L the
-// horizontal distance from the boss to the aim point (record +0x8).
-// The hit (0x00768a84 with 0x00772c08 per player): a player who is not dead or invulnerable, whose
-// line of sight from the boss is clear (0x0077fffc / cast_ray_at_map_collision_geometry, the player's
-// weapon position), is hit when its horizontal distance is below L + its box radius and its bearing from
-// the boss is within the span of the midpoint. The hit is entity_hit_by_tech group 0 with power =
-// MovementData iparam2 (the row's +0x1c, dispatcher case 4), no knockback, every frame it applies.
-// Sound 0x6f8 (0x00765d7c's `push 0x6f8; call 0x00814298` on the first update with child slot 2 flagged).
-// ASSUMED: the origin is the boss's position read every frame (the dispatcher's own origin is +0x38 of the
-// boss; the laser's +0x38 is not written by its own code), the box radius is PLAYER_RADIUS, child slots 1 and
-// 2 are flagged on every frame of the laser's life, and the line of sight is clear when no `clear` is given.
-// UNCLEAR: the aim point (+0x44). Nothing in the laser's code writes it, the spawn does not set it, and the
-// one writer found so far is the wall cut 0x0077fffc (a segment test from the origin to the aim, which
-// clips it). The brain's SM_LASER aim is a stand-in (see SaintMilionAi.laserAim). The impact particle
-// (0x00661448 group 0x10, kind 6, at the aim) follows the wall cut and is not reproduced.
+// Each update (0x00765d7c, this = the laser; the ctor sets the threshold +0x34 to 125): the base update
+// 0x00765a40 runs the children; the clock +0x30 gains 1.0 (0x00976108); at the threshold (`fcom [edi+0x34]`,
+// 0x00765d95) the update stops the sound (0x8148d4 on the handle +0x5c) and sets the dead bit (word +0x8 |= 1),
+// without a sweep. Otherwise:
+// - the sound: while the handle +0x5c is negative and child slot 2 is flagged (0x00765a90, child +0x9c bit 2),
+//   0x00814298(0x6f8, origin +0x38, 0, loop 1) starts it and the handle is stored. A LOOP, stopped by the end
+//   update. The flag test is the only start condition found.
+// - the aim: the vector aim (+0x44..+0x4c) minus origin (+0x38) (0x0082f9c4), its BAMS heading and the span to the
+//   previous heading (+0x58) feed 0x00768a84 (type 4, this = the boss object at 0x00a9b07c, the laser's owner).
+//   The heading is stored in +0x58 at once when child slot 1 is clear (0x00765e7d).
+// - the length +0x50 grows 100.0 a frame (0x00976100) while child slot 1 is flagged, and the wall cut
+//   0x0077fffc(origin +0x38, aim +0x44, mask -1) sets it to the distance to the first wall point (0x007a8c28,
+//   0x0082dc9c). The cut does NOT write the point back: its pointer arguments are only read (checked in the
+//   disassembly), the hit point goes to its own result list.
+// - the impact: when the cut hits, 0x00661448 (group 0x10, kind 6, position = the pointer to +0x44, mask 0) is
+//   spawned, so the impact sits at the unclipped aim point (the pointer is the laser's own aim slot).
+// The hit (0x00768a84, this = the boss): the span is |cur - prev| (0x007a9018), the heading the midpoint
+// (0x007a8cb8 = cur + ((prev - cur) as int16 >> 1)), and each player who is not dead, whose horizontal distance
+// from the boss is below the reach + its box radius and whose bearing is inside the span, takes entity_hit_by_tech
+// group 0 with power = MovementData iparam2 (the row's +0x1c, dispatcher case 4), no knockback, every frame.
+// The hit's own wall test (0x0077fffc with the boss's +0x38) runs only when the caller's flag (param_6) is set,
+// which the laser does not set (0).
+// WRITERS OF THE LASER'S +0x38 (origin) AND +0x44 (aim): NONE FOUND in the paths traced: the ctor 0x00765c68
+// (writes +0x0 .. +0x5c except +0x38..+0x4c), its bases 0x00765a14 / 0x008193cc (+0x0 .. +0x18), the spawner
+// 0x0076b85c (nothing after the ctor), the update 0x00765d7c (reads only), the wall cut 0x0077fffc (no store
+// through its arguments), the impact 0x00661448 (takes the pointer), the child creation 0x00765638. The allocator
+// 0x007a8a38 is a free-list one and does not zero. Not searched: the owner's loop over its children and any copy
+// from another object. So the exe's origin and aim are not written by the laser's own code, and the port keeps
+// them as ASSUMED (see SaintMilionAi.laserAim).
+// ASSUMED: the origin is the boss's position read every frame; the box radius is PLAYER_RADIUS; child slots 1 and 2
+// are flagged on every frame of the laser's life; the line of sight is clear when no `clear` is given.
+// NOT REPRODUCED: the wall cut (the length +0x50 and the impact 0x00661448), so the reach is not cut at a wall.
 export const SM_LASER = {
   // The clock's end: frames of bm_obj_ep4_boss09_laser.bml motion 0 (the laser is updated 125 times, the last one ends it).
   frames: 126,
-  // The sound of the laser (0x6f8 of boss09's sound table); the exe plays it looping, here once.
+  // The sound of the laser (0x6f8 of boss09's sound table): a loop from the first update to the end update.
   se: 0x6f8,
-  // ASSUMED: the aim's reach (the exe cuts it at the first wall, 0x0077fffc, which is not reproduced),
-  // the centre arenas' range (SM_ARENAS 3 / 4).
+  // ASSUMED: the aim's reach. The exe's reach is the distance from the origin to the aim point (+0x44, no writer
+  // found) cut at the first wall; the port has no aim source to measure, so the centre arenas' range (SM_ARENAS 3 / 4)
+  // stands in as 620.
   reach: 620,
-  // ASSUMED: the total turn of the aim over the sweep frames, centred on the boss's heading (half a circle).
+  // ASSUMED: the total turn of the aim over the sweep frames, centred on the boss's heading (half a circle). The exe
+  // has no sweep constant: the turn is whatever the aim point does, and that point has no writer found.
   sweep: 0x8000,
 } as const;
 
@@ -607,9 +619,11 @@ export class SmSandSonic extends EnemyShot {
 
 export type SmEvent =
   // play_directional_sound_effect at the tentacle.
-  | { kind: 'se'; id: number; x: number; z: number }
+  | { kind: 'se'; id: number; x: number; z: number; loop?: boolean }
   // set_monster_spawn_initdata_as_dead of a tentacle (State2 bit 0x1000: the boss is gone).
-  | { kind: 'gone'; slot: number };
+  | { kind: 'gone'; slot: number }
+  // The laser's end (0x8148d4 on its sound handle): stops the loop of that SE id.
+  | { kind: 'seStop'; id: number };
 
 export interface SmFieldOptions {
   // Frame count of a motion of bm_ene_boss09_tentacle.bml (0 .. 6).

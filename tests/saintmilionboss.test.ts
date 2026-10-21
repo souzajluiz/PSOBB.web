@@ -761,6 +761,13 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     eq(shots.length, 1, 'state 19 phase 4: one laser');
     eq(b.events.filter((e) => e.kind === 'se' && e.id === SM_LASER.se).length, 1, 'state 19 phase 4: the sound 0x6f8 once');
     eq(b.events.filter((e) => e.kind === 'effect' && e.name === 'laser').length, 0, 'no laser effect name is left');
+    // The sound is a loop (0x814298 with loop 1) and stops once the laser is done (0x8148d4 in the end update).
+    eq(b.events.filter((e) => e.kind === 'se' && e.id === SM_LASER.se && e.loop === true).length, 1, 'the laser sound loops');
+    eq(b.events.filter((e) => e.kind === 'seStop' && e.id === SM_LASER.se).length, 0, 'no stop while the laser lives');
+    for (let i = 0; i < SM_LASER.frames; i++) shots[0].tick([]);
+    eq(shots[0].done, true, 'the laser ends on its 125th update');
+    b.tick([player(1, 5000, 5000)]);
+    eq(b.events.filter((e) => e.kind === 'seStop' && e.id === SM_LASER.se).length, 1, 'the laser sound stops after the end');
   }
   // The frame count of bm_obj_ep4_boss09_laser.bml (motion 0) against the client's archive, when it is there.
   {

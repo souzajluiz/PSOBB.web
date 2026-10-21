@@ -60,7 +60,7 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
 4. **Boss leftovers** (2026-10-20 passes done: De Rol Le fin chains + helm / shell debris + the segments as hit
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
-   brain; see their DEVLOG entries). Still open: Saint-Milion's laser aim (the laser's hit, life and sound are in, 2026-10-21; its aim point is a stand-in, see the DEVLOG entry),
+   brain; see their DEVLOG entries). Still open: Saint-Milion's laser aim (the laser's hit, life and sound loop are in, 2026-10-21; no writer of its aim (+0x44) or origin (+0x38) is in the exe on the traced paths, so the sweep 0x8000 and reach 620 stay ASSUMED, and the wall cut and impact particle are not reproduced; see the two DEVLOG entries),
    its cutscene states (they end with their animation), camera / sounds / particles;
    Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
    and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /

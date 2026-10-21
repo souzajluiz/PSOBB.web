@@ -7685,13 +7685,13 @@ The same rule covers the texture-animation file: 33 of the 175 maps have no `map
 **The port.** Hit, life and the entry sound follow the exe. The aim point is a stand-in (below).
 
 **ASSUMED / UNCLEAR:**
-- **The aim point (+0x44): UNCLEAR, the decisive gap.** The laser's own code reads it and never writes it; the ctor does not set it; the spawn copies nothing into it. The wall cut 0x0077fffc takes the aim pointer, but whether it writes the clipped point back was not checked. Without an aim the wedge has zero span and nothing hits, so the port uses an ASSUMED aim: the heading turns through `SM_LASER.sweep` = 0x8000 BAMS, centred on the boss heading, over the sweep frames, at reach 620 (the centre arenas' range). Both numbers are invented.
+- **The aim point (+0x44): UNCLEAR, no writer found (correction 2026-10-21, see the entry below).** The laser's own code reads it and never writes it; the ctor, its bases, the spawner (nothing after the ctor), the update and the wall cut (0x0077fffc does NOT write its pointer args back: checked in the disassembly) store nothing into +0x44. So the port keeps an ASSUMED aim: the heading turns through `SM_LASER.sweep` = 0x8000 BAMS, centred on the boss heading, over the sweep frames, at reach 620. Both numbers are stand-ins with no exe value behind them.
 - The origin: the laser's +0x38 is not written by its code; the dispatcher uses the boss position (+0x38). The port uses the boss position read every frame.
 - The child slot flags (1 = sweep, 2 = sound) come from the child effects (table 0x009f5a9c = {0, 3, 5}, group 0x10) and their motion data. ASSUMED flagged on every frame of the life.
 - The box list (+0xa4) is not read: one box of radius PLAYER_RADIUS (ASSUMED). Invulnerability (`maybe_invuln`) is not in the port's AiTarget: only `dead` is checked.
 - The line of sight: no wall test in the port (ASSUMED clear); the `clear` option is the hook.
-- The loop and the stop of sound 0x6f8 (0x00814298 / 0x008148d4): one `se` event at entry.
-- The impact particle (0x00661448, group 0x10, kind 6) is not reproduced.
+- The loop and the stop of sound 0x6f8 (0x00814298 / 0x008148d4): wired since 2026-10-21 (the entry below): a looping `se` event at entry, `seStop` when the laser is done (one frame late: the boss sees it in its next tick). The start condition (child slot 2 flagged) is not modelled: ASSUMED at entry.
+- The impact particle (0x00661448, group 0x10, kind 6) is not reproduced: it needs the wall cut, which the port does not have (the reach is not cut at a wall).
 - The laser's drawn length (+0x50) and model are not drawn (the shot is hidden).
 - That `this` of 0x00768a84 is the boss (0xa9b07c) is inferred from the row (+0x3d0) and the heading (+0x60) it reads, not from a caller check.
 
@@ -7926,3 +7926,35 @@ opens it read-only and prints the decompiled C of each function holding an addre
 `tools/ghidra/run_any.sh` (a script that is no longer in the tree) now point here.
 First check: 0x0041fa7b sits in 0x0041f6cc and 0x0041c5b1 in 0x0041c168, as the Dragon
 pass of today reports.
+
+## 2026-10-21: Saint-Milion laser: who writes the aim (+0x44) and the origin (+0x38), and the sound loop
+
+**Verdict.** Nothing in the exe writes the laser's origin (+0x38) or aim (+0x44) on the paths traced. So the exe has no sweep or reach value to copy: the `0x8000` sweep and the reach 620 stay ASSUMED, now with the exact reason. The sound loop and its stop are wired. The impact particle is not (it sits at the wall cut, which the port does not have).
+
+**Writers checked (Ghidra decompile + objdump, `+0x38` / `+0x44` displacement scan):**
+- Ctor 0x00765c68 (called by the spawner 0x0076b85c with `this` = the new 0x60-byte object, `param_2` = `[boss+0x3cc]` (the parent: the base 0x008193cc links the laser into its child list at +0x18), `param_3` = `boss+0xe94` or 0): writes +0x0, +0x4, +0x24 .. +0x30, +0x34 (threshold), +0x50, +0x54, +0x58, +0x5c. Not +0x38 .. +0x4c.
+- Base ctors 0x00765a14 and 0x008193cc: +0x0 .. +0x18 only.
+- Spawner 0x0076b85c: after the ctor call it stores nothing into the object.
+- Update 0x00765d7c (this = the laser, `mov edi, ecx`): reads +0x38 (origin, `lea esi,[edi+0x38]` at 0x00765daf) and +0x44..+0x4c (aim, 0x00765db5..0x00765dbb), and stores only +0x30, +0x50, +0x58, +0x5c and the dead bit.
+- Wall cut 0x0077fffc (origin, aim, mask): read-only on its pointer args (disassembly: no store through them; the stores at 0x00780035..0x00780131 are stack slots). The hit goes to its own result list (`FUN_00780284` writes globals). So the cut does NOT write the clipped point back into +0x44. This corrects the entry above.
+- Impact 0x00661448 (`ecx = [0x00a9b068]`, pushed `(laser, 0x10, 6, &laser+0x44, 0)` at 0x00765e51..0x00765e5c): it takes the aim slot as a pointer, so the impact sits at the unclipped aim point.
+- Allocator 0x007a8a38 (the free-list allocation behind `alloc 0x60`): does not zero the block.
+- Child creation 0x00765638: builds the child list from table 0x009f5a9c through 0x00661448 (group, kind 0); it writes no origin or aim.
+
+Not searched: a copy from another object's memory, and the owner's loop over its children. If one exists, it is the only place the origin / aim can come from.
+
+**Exe facts now used in the port (`client/src/combat/saintmilionents.ts`, `saintmilionboss.ts`):**
+- Sound 0x6f8 is a LOOP: `0x00814298(0x6f8, origin, 0, loop 1)` at 0x00765e9d .. 0x00765eaa, handle stored at +0x5c, started when child slot 2 is flagged and the handle is negative. The end update 0x00765eba stops it with `0x008148d4(handle)`. The port emits `{kind:'se', loop:true}` at entry and `{kind:'seStop'}` once the laser is done (the boss sees it in its next tick).
+- The start condition (child slot 2 flagged, 0x00765a90 with child +0x9c bit 2) is not modelled: ASSUMED at entry.
+- Length +0x50: `+= 100.0` a frame (0x00976100) while child slot 1 is flagged, then the distance origin to the first wall point (0x0077fffc, 0x007a8c28, 0x0082dc9c). Not reproduced (no wall geometry in the laser).
+- The hit (0x00768a84, `this` = the boss at 0x00a9b07c, `param_6` = 0): the laser passes 0 as the flag, so the hit does not run its own wall test. The port's `clear` hook stays unused (ASSUMED clear).
+
+**ASSUMED, kept, with the reason:**
+- The aim (+0x44) and the origin (+0x38): no writer found, see above. The port uses the boss position as the origin and the stand-in sweep as the aim. The exe would take the aim from memory it never sets: the port cannot copy a value.
+- `SM_LASER.sweep = 0x8000` and `SM_LASER.reach = 620`: invented. No constant in the exe; the sweep is the turn of the aim point, the reach the distance to it cut at a wall.
+
+**Spot-check (the decisive fact):** `objdump -d -M intel --start-address=0x765a14 --stop-address=0x765ed8 PsoBB.exe | grep -E '\+ ?0x(38|3c|44|48|4c)\]'` shows only reads (0x00765daf `lea esi,[edi+0x38]`, 0x00765db5..0x00765dbb `mov reg,[edi+0x44..0x4c]`, 0x00765e20 `lea ebx,[edi+0x44]`, 0x00765e95 and 0x00765ea1 `lea esi,[edi+0x38]`). No store to +0x38 or +0x44 exists in the laser's ctor, its base, its update or the spawner. If a store exists, it is in another object's code writing through a pointer to the laser.
+
+**UNCLEAR:** whether the exe's aim is valid at all on a real run (the heap block is not zeroed, and no writer was found); the owner's child loop and any copy from another object were not searched.
+
+**Checks:** `node tests/saintmilionboss.test.ts`: ALL PASS (section 12 extended: the loop flag, no stop while alive, the stop after the 125th update). Client `npx tsc --noEmit -p .`: clean (Node 24).
