@@ -8358,3 +8358,13 @@ So the port's assumption holds: the view's eye and target are the cutscene objec
 **UNCLEAR.** The brain's +0x3A4 / +0x3B0 formula and which state fills them (GET RING and DEMO_WARP2 need them); the scene number of the Dark Falz object (ctor 0x0044EC14, called from FUN_0044D739); the time unit (the record's time, 0x416C / 0x4000 / 0x4444 / 0x1555 / 0x392D, goes to +0x54 and the camera's +0x19C, its unit is still unknown); the entity layout for X, Y, Z.
 
 **Decisive spot-check (for a human, in a debugger or the exe bytes).** At 0x0044E1A3..0x0044E1CC, `mov eax,[0xa44d60]` then the float stores into the brain's +0x3A4 / +0x3AC: if the brain's +0x3A4 is not the DIE TYPE2 pivot, the GET RING and DEMO_WARP2 pivots are wrong.
+
+## 2026-10-21 (Saint-Milion smoke in Chrome, Battle Mode not reached)
+
+- e2e/ep4-battle-smoke.spec.ts, test "Saint-Milion": classic page with `ep4`, EPISODE 4 party (Create a PARTY, ArrowDown x2, Enter; episode 3 in create), registered Normal, then warpTo(9) (floor 9 = area 0x2c, questeditor/areas.ts floorToArea(3)).
+- Seen: the boss spawns (SaintMilionAi, state 0 wait). Placed the player at (-50, 0, 24): the boss goes 0 -> 0x19 (intro, kind 4) -> 0x02 (tentacles, kind 2, form 1) at about 14 s, then stays in state 2 for the rest of the 60 s watched. No SmLaser shot, no 0x6f8 loop. No page errors, no failed requests.
+- Tried a 6xDC state action (game.sendEpisode4BossAction(0, 0x13), the laser state 19) from the leader: the boss did not move from state 2 in 30 s, no laser. Unclear why: sendEpisode4BossAction only sends to the server (net/game.ts), and no echo to the sender was seen, so the local boss may never run the action (the exe runs 6xDC on the sender too). Not resolved.
+- Test fails at the laser step (expect laserSeen true). This is an open finding, not a fix.
+- Battle Mode traps: not tested. A battle game needs a Battle-mode party (Difficulty row, mode popup index 2) and a b88xxx battle quest started from the Hunter's Guild counter (newserv has system/quests/battle/). Not written yet.
+- Next step: check whether 6xDC from the leader reaches the local boss (net/game.ts, render/combat.ts smEvent path); if the server only relays, drive the tentacles to death in the arena (6xDC action 2) instead, then re-run the laser step; then add the battle test.
+- Unit tests and the palette trap wiring were not touched today.

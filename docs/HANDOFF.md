@@ -1,11 +1,43 @@
 # Handoff: where to resume
 
-Written 2026-10-19 at 17:50 (-03), when the work was paused for the day. Everything
-below is committed and pushed to `main`; nothing is half-done in the tree.
+Rewritten 2026-10-21 at the end of the day (the user: "pare tudo e documente pra
+continuar amanha"). Everything is committed and pushed to `main`; no agents run, no
+worktrees are left.
+
+## Start here tomorrow (2026-10-21 leftovers, in order)
+
+1. **Dark Falz cutscene in Chrome.** The casket trigger is a position test (exe
+   0x0044d490: any player within 30 units of (-9860, -240) on x / z starts DEMO_WARP0;
+   the port matches). Extend `client/e2e/boss-smoke.spec.ts` (Dark Falz step): after
+   warpTo(14) call `classicGame.view.placePlayer(selfId, -9860, y, -240, 0)` (or walk),
+   then watch `combat.bossCameraView()` and take screenshots. This was being run when the
+   day ended; it was reverted, untested.
+2. **Dark Falz camera, the five live scenes** (APP TYPE2, DIE TYPE2 / TYPE3, GET RING,
+   DEMO_WARP2): their pivots / yaws come from live entities ([0x00A44D5C..64]+0x38 / +0x60)
+   and brain +0x3A4 / +0x3B0 (formula at 0x0044E1A3..CC not read). `cameraSourceOf`
+   returns null for them. See DEVLOG "Dark Falz camera: scene pivots" (end of file).
+3. **Saint-Milion laser in Chrome** (`client/e2e/ep4-battle-smoke.spec.ts`, WIP, FAILS
+   at the laser step): the boss goes 0 -> 0x19 -> 2 and stays in state 2; a 6xDC state
+   action 0x13 sent with `game.sendEpisode4BossAction` does not move the local boss.
+   Check whether the server echoes 6xDC to the sender / whether the leader must run the
+   action locally; or kill the tentacles first. Then the laser shot and its 0x6f8 loop.
+4. **Battle Mode traps in Chrome**: not tested (needs a Battle party plus a b88xxx quest).
+5. **REA with Ghidra**: the user's rule is to reverse-engineer with the REA skill and its
+   Ghidra provider. REA cannot start Ghidra on this Mac until the Command Line Tools are
+   updated (`sudo softwareupdate -i "Command Line Tools for Xcode-16.4"` in Terminal, by
+   the user), then restart Claude Code. Until then use `tools/ghidra/decomp.sh <addr>`
+   (project in `~/Downloads/psobb-master/ghidra`, read-only, shared by agents).
+6. Smaller leftovers of the day (each in its DEVLOG entry): particle tint 0x100 (no copy
+   of the owner's tint into the particle found; the port keeps the multiply), Saint-Milion
+   laser aim (no writer of +0x44 / +0x38 in the exe; 0x8000 / 620 stay ASSUMED), the
+   Savage Wolf / Yowie death side (velocity at the kill), the Held weapon's -1 texture ids.
 
 ## State of `main`
 
 - Local `main` == `origin/main`. No open branches, no agents running.
+- E2E: `boss-smoke.spec.ts` passes (Forest 1, the Dragon's entrance with particles, the
+  Dark Falz arena; 0 page errors, 0 failed requests). `ep4-battle-smoke.spec.ts` is WIP
+  and fails at its laser step (item 3 above).
 - `client`: `npx tsc --noEmit -p .` is clean with the stricter flags
   (`noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`,
   `noUnusedLocals`, `noUnusedParameters`, `exactOptionalPropertyTypes`).

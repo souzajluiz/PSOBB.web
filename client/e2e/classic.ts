@@ -30,8 +30,9 @@ export function consoleLog(page: Page): string[] {
   return logs;
 }
 
-export async function logIn(page: Page, user: string, password: string): Promise<void> {
-  await page.goto('/classic.html?screen=input');
+// `query`: the page's query (the Episode 4 client is `ep4`, classic/main.ts).
+export async function logIn(page: Page, user: string, password: string, query = 'screen=input'): Promise<void> {
+  await page.goto(`/classic.html?${query}`);
   await expect.poll(() => peek(page, (w) => !!w.classicTitle?.flow?.menu?.input && !w.classicTitle.flow.menu.input.anim.animating)).toBe(true);
 
   // Input UserID: rows 0 UserID, 1 Password, 2 Confirm, 3 Cancel.
