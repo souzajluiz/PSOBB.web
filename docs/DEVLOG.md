@@ -6888,3 +6888,36 @@ Not run in Chrome.
 Checks after the fix: `node tests/dragon.test.ts`: dragon: ok; `node tests/combat.test.ts`: 5946 checks, 0 failures (vendor linked); `node tests/enemies.test.ts`: ALL PASS; `node tests/sinowbeat.test.ts`: sinowbeat: ok; client `tsc --noEmit`: clean.
 
 Still not run in Chrome.
+
+## 2026-10-21: classic field: NPCs, shops and the quest counter
+
+**Question:** the classic field (`classic/field.ts`, the Online tab's `GameView` on the 3D canvas) had no NPC talk, counters or quests. What exists, and what does the Online tab wire?
+
+**What existed (not changed):**
+- `quest/town.ts` `QuestTown`: the NPC talk (`render/npcview.ts` `talkTarget`, Enter within range and in front), the area script (`map_city_on_e.bin`), the counters (`counter(menu)`): menus 0, 1, 2, 3, 5, 6 open the shops / bank / Medical Center through `view.hud.openCounter` (`classic/shop.ts` `COUNTER_MENUS`, `render/fieldhud.ts`), menus 4 and 7 (Hunter's Guild, government) run the quest menu (A2 / A3, 09 / 10 through `net/quests.ts`, the yes / no and the reward). Menu 8 (giveaway) is not implemented.
+- `quest/run.ts` `runQuest`: the quest VM and its floors. `quest/questui.ts`: the balloons, windows, lists and yes / no, with its own overlay canvas and key listeners on the 3D canvas.
+- The Online tab (`ui/onlineTab.ts`) built them per game (`QuestTown`, one `QuestClient` per lobby connection, `runQuest` in `startQuest`). The classic page built none of them.
+
+**What changed:**
+- `classic/townfield.ts` (new): `questLink(conn)` installs one `QuestClient` per connection (the game keeps the lobby's connection; `WeakMap`, as the team client in `classic/main.ts`), and routes each loaded quest to the game that runs now. `FieldTown` builds the `QuestTown` on the 3D canvas and starts quests with `runQuest` (dispose stops the runner and the town).
+- `classic/main.ts`: `enterGame` builds the `FieldTown` on the view before `view.enter()` (as the Online tab does) and sets the hook `window.classicTown`; the game's reload and `leaveGame` dispose it.
+- `classic/field.ts`: the header comment only (the town is no longer "not here yet").
+- No change to the keys: `FieldScreen` already forwards the stage's keys to the 3D canvas, where the town's listeners are.
+
+**The shops:** the same route. A talk to a shop clerk (any area-script label that calls `bb_p2_menu` 0, 1, 2, 3, 5 or 6) runs `QuestTown.counter`, which opens the field HUD's counter. Their code and tests are unchanged (`tests/shop.test.ts`, `tests/medical.test.ts`). Not checked in the field: no clerk's talk action id is traced for the e2e (the Hunter's Guild clerk is `action 1011`, `tests/npcs.test.ts`).
+
+**What remains:**
+- A shop in the classic field is wired but not seen: trace one clerk's talk action (weapon 0, medical 1, ...) and add it to the e2e.
+- A quest's start from the counter (category, quest, yes, the file download, `runQuest`) is wired (`FieldTown.start`) but not run in the classic e2e; the e2e stops at the quest menu.
+- The Online tab's quest panel ("Quest menu", "Start quest (new game)") is not on the classic page; the counter is the way in there.
+- Giveaway counter (menu 8), camera movers of the talk, and the NPC players' behaviour: as before (see the 2026-10-17 NPC entry).
+- The chat line and the mouse in games (the other agent's work).
+- The Quest Board of the field menu (`classic/fieldmenu.ts`) was already in the field HUD; not checked here.
+
+**Checks:**
+- `node tests/townfield.test.ts`: all checks passed (the link per connection, the target routing, a left game gets nothing).
+- `node tests/questflow.test.ts`: ALL PASS. `node tests/shop.test.ts`: all checks passed. `node tests/medical.test.ts`: all checks passed. `node tests/quests.test.ts`: OK. `node tests/npcs.test.ts`: ALL PASS.
+- Client `tsc --noEmit`: clean (Node 24).
+- Playwright (`PW_BASE_URL=http://127.0.0.1:5177`, a worktree Vite; `vendor/` linked for the key file and removed after): `e2e/pioneer2-counter.spec.ts` (new): log in, create a party, enter Pioneer 2, place the player in front of the guild clerk, Enter, the clerk's lines, the menu lists "Retrieval | Extermination | Events | Virtual Reality", Escape closes it and the counter is free. `e2e/party-create.spec.ts` passes with the change. `2 passed (2.0m)`. `e2e/party-join.spec.ts` was not run again.
+- The e2e reads the list through `classicTown.ui.lists`; the overlay's look (above the stage) was not checked by eye. The run logs six 404 resource errors from the page; their URLs were not identified.
+- Not checked by hand in Chrome.

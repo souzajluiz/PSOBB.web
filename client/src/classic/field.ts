@@ -5,9 +5,9 @@
 // and menu listeners are (the stage canvas holds the keyboard focus, and the
 // touch pad / soft keyboard send their keys to it).
 //
-// Not here yet (the Online tab has them): the Pioneer 2 NPC talk, counters and
-// quests (quest/town.ts, net/quests.ts), the chat line, the mouse (the 3D
-// canvas does not take pointer events under the stage).
+// The Pioneer 2 NPC talk, counters and quests are the town's (classic/townfield.ts,
+// keys on the 3D canvas). Not here yet: the chat line, the mouse (the 3D canvas
+// does not take pointer events under the stage).
 
 import type { Game } from '../net/game.ts';
 import type { GameView } from '../render/gameview.ts';
