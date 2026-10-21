@@ -665,7 +665,7 @@ export class DragonAi extends BrainBase {
   private f894 = 0;
   private i87c = 0;
   private i880 = 0;
-  private dug = false; // +0x6ac's impact has happened (the dive)
+  private dug = false; // +0x8b0: the dive's impact has happened (0x0041fa73 tests it)
   // Target position (+0x39c / +0x3a4), the direction to it (+0x3a8 / +0x3b0)
   // and its length (+0x3b4); the 6x12's x / z out (+0x698 / +0x69c) and in
   // (+0x6a0 / +0x6a4).
@@ -1920,6 +1920,8 @@ export class DragonAi extends BrainBase {
     }
     if (sub === 4) return;
     if (sub === 0) {
+      // 0x4221b0 (case 0, before the sub-state test): the take-off helper (+0x04) at frame 14.
+      if (this.crossed(14)) this.emitBody(this.pids().f04);
       this.aimVolley();
       this.c86c = 1;
       this.sign664 = turnTo(this.yaw, this.i87c) >= 0 ? 1 : -1;
@@ -2159,6 +2161,8 @@ export class DragonAi extends BrainBase {
     this.animate();
     const sub = this.c86c;
     if (sub === 0) {
+      // 0x0041ff7a (before the turn, 0x0041ffc0): the take-off helper (+0x04) at frame 14.
+      if (this.crossed(14)) this.emitBody(this.pids().f04);
       if (this.turnStep()) {
         this.m660 = 0;
         this.yaw = this.i87c;
@@ -2194,7 +2198,10 @@ export class DragonAi extends BrainBase {
         this.c86c = 4;
       }
       if (this.alt <= 0 && !this.dug) {
-        // SinowbeatLandingImpactEffect + the hit box update: the crater.
+        // 0x0041fa7b (gate: alt <= 0 and the impact not yet done, 0x0041fa5e..0x0041fa8b):
+        // the emerge / dive helper (+0x00) at the body, then SinowbeatLandingImpactEffect
+        // + the hit box update: the crater.
+        this.riseParticle();
         this.dug = true;
         this.air = 2;
         this.strike(this.x, this.z, DRAGON_GUESS.impactRadius, 0);
