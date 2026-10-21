@@ -17,6 +17,13 @@ public class Decompile extends GhidraScript {
       Address addr = toAddr(arg);
       Function fn = getFunctionContaining(addr);
       if (fn == null) {
+        // Functions reached only through a vtable are often missed by the
+        // auto-analysis: make one at the address (the project is opened
+        // read-only, so nothing is saved).
+        disassemble(addr);
+        fn = createFunction(addr, null);
+      }
+      if (fn == null) {
         System.out.println("=== " + arg + " NO FUNCTION");
         continue;
       }
