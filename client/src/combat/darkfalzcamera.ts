@@ -15,12 +15,19 @@
 //   map's table (+0x98, flags dword at +4).
 // - SetCameraTargetData_004d681c(pivot*, pivot*, scalar*): pivot to +0x6C,
 //   scalar+4 (the yaw, BAMS) to +0x88.
-// - MapObjectEntity_UpdateTransform_004d68a0 (per frame) is ported as
+// - The object's vtable is 0x00AFC8F8 (FUN_004d66d0 stores it; the earlier note used 0x00AFC8F4,
+//   one slot off). Slot 1 (+4) = MapObjectEntity_UpdateTransform_004d68a0, ported as
 //   stepCameraObject below: the motion is evaluated at the frame (NJM_UpdateModelTransform_00830848),
 //   the eye and target are built (+0x3C / +0x48), the frame advances and the
-//   path ends (clamp or loop). MapObjectEntity_UpdateCamera_004d6bc0 then
-//   turns eye/target into the view with the default NPC camera's angles and
-//   up vector: NOT ported (the port's view is eye/target, as render/gamefield.ts takes it).
+//   path ends (clamp or loop). Slot 9 (+0x24) = MapObjectEntity_UpdateCamera_004d6bc0 turns
+//   the eye/target into the view angles (+0x190 / +0x194) and the lookAt (see below).
+// - THE PER-FRAME DRIVER is FUN_004d3abc (the default camera's update, DAT_00a48a54): for the
+//   current mode object (DAT_00a48a00[DAT_00a489f4]) it calls slot 1, then FUN_004d1ff4 (copies
+//   the object's eye/target +0x3C..+0x50 into the camera's goal +0x1a0..+0x1b4 and, when the
+//   push flag DAT_00a489fc & 0xC is set (FUN_004d31f4 sets 0x4), also into the camera's
+//   current +0x178..+0x18c: this is the eye/target copy the view uses; the time +0x54 into +0x19c), then
+//   FUN_004d3e90 (current = goal, the object's +0x38 flags are 0 for mode 5), then slot 9,
+//   and last copies the camera's +0x194 into +0x94.
 //
 // Scene owners: the cutscene objects below are made by the scene enters
 // (combat/darkfalzcommon.ts SCENE numbers).
@@ -39,15 +46,40 @@
 // in the cutscene is not found). The angles it writes to the default camera (+0x190 pitch,
 // +0x194 yaw, 0x004D6448) are not read by the view and are not modelled.
 //
-// What is NOT available (so no view is produced for the scene):
-// - The run-time pivots (object +0x100 / +0xAC / +0xE8 / +0xD4 and the register of GET RING)
-//   and the yaws (the scalar's +4 in the BSS blocks). Only DEMO_WARP0's pivot is known;
-//   its yaw is ASSUMED 0 (cameraSourceOf).
+// RESOLVED (Ghidra, 2026-10-21): the eye/target reach the camera by FUN_004d1ff4 each frame
+// (see THE PER-FRAME DRIVER above): the view's +0x178 / +0x184 are the object's +0x3C / +0x48
+// of the same frame, after slot 1 and before slot 9.
 //
-// ASSUMED: mode 5 is the boss camera (nothing in the exe names it).
-// UNCLEAR: the time unit (frames or ticks), the 0x0044EC14 object's scene, the
-// BSS writers of the pivots and of the yaws, and who calls the vtable slot 10 (0x004D6BC0)
-// each frame (the object's vtable is at 0x00AFC8F4: slot 2 = 0x004D68A0, slot 10 = 0x004D6BC0).
+// The pivot and yaw sources (the scalar's +4 is the yaw; FUN_004d681c stores the pivot at
+// object +0x6C and the scalar+4 at +0x88 (BAMS)):
+// - DEMO_WARP0 (ctor 0x4513D4): pivot BSS 0x00A45068 = (-20000, 0, 0) written by the ctor; yaw
+//   BSS 0x00A45078 has NO absolute reference in the exe (the scalar 0x00A45074 is only passed):
+//   yaw 0 (BSS). Verified by the absence of writers.
+// - ctor 0x44EC14 (the Dark Falz object, vtable 0x00AF6BD8): pivot BSS 0x00A44F34 = (0, 0, -120),
+//   written by FUN_0044EDAC (no direct call found in the exe: it runs from a jump or a table; the
+//   ctor's brain is FUN_0044D739, which calls the ctor); later
+//   writes to 0x00A44F34 are none (its pushes are effect spawns); yaw 0x00A44F28 has no
+//   reference: 0. Its scene number is UNCLEAR (the brain state is not named).
+// - APP TYPE2 (0x44F4EC, caller 0x44E30F): pivot = [0x00A44D64] + 0x38 (a vec3), yaw =
+//   [0x00A44D64] + 0x60 (BAMS); the fallback (0x44E34D) is BSS 0x00A44D9C with yaw 0.
+// - DIE TYPE3 (0x450FC4, caller 0x44DFC7): pivot = [0x00A44D5C] + 0x38, yaw = [0x00A44D5C] + 0x60;
+//   fallback BSS 0x00A44D88 with yaw 0 (0x44E07D).
+// - DIE TYPE2 (0x44FA8C, caller 0x44E1F9): pivot = the brain's +0x3A4 (computed at 0x44E1A3..0x44E1CC
+//   from [0x00A44D60] and a constant at 0x00A44D98; the exact formula is UNCLEAR), yaw = [0x00A44D60] + 0x60,
+//   stored to the brain's +0x3B0 (0x44E1D6).
+// - GET RING (0x44FFD8, caller 0x44E108) and DEMO_WARP2 (0x45072C, caller 0x44E0D0): pivot =
+//   the brain's +0x3A4 and yaw = the brain's +0x3B0 (the args at the call). Their brain values
+//   are the DIE TYPE2 ones only if that state ran before (UNCLEAR).
+// So the static source has two constant scenes (DEMO_WARP0, the Dark Falz object); every other
+// scene's pivot and yaw come from live entity pointers ([0xA44D5C], [0xA44D64], [0xA44D60]) or the
+// brain: no view is produced for them (cameraSourceOf returns null).
+//
+// ASSUMED: mode 5 is the boss camera (nothing in the exe names it; the mode table entry 5 is
+// FUN_004d665c's object, DAT_00a48a00[5] = DAT_00a48a14). The entity layout (+0x38 position, +0x60
+// BAMS yaw) is taken from the field of the pivot use, not from the entity's own code.
+// UNCLEAR: the time unit (frames or ticks), the 0x0044EC14 object's scene, the brain's +0x3A4 /
+// +0x3B0 values, and the 0x100 channel: it is NOT a time: the APP TYPE2 object copies its pivot
+// (param 2) to its own +0x100 and its yaw (param 3) to +0x10C; FUN_004d681c reads them from there.
 
 import type { Vec3 } from './darkfalzcommon.ts';
 import { sampleCameraMotion, type CameraRel } from '../formats/cameramotion.ts';
@@ -100,19 +132,22 @@ export interface CutsceneCamera {
 
 export const CUTSCENE_CAMERAS: readonly CutsceneCamera[] = [
   // 0x0044EC14: the pair is 0x00A44F34 (written at 0x0044EE74..0x0044EE88 as (0, 0, -120)).
-  { object: 'ctor44ec14', ctor: 0x44ec14, modePush: 0x44ed36, pair: 0x44ed47, record: 0x44ed56, recordVa: 'r9a5b14', time: 0x416c, pivot: 'BSS 0x00A44F34 (set at run time)' },
-  // 0x0044F4EC (APP TYPE2): the pair is the object's +0x100.
-  { object: 'ctor44f4ec', ctor: 0x44f4ec, modePush: 0x44f675, pair: 0x44f6a2, record: 0x44f6b1, recordVa: 'r9a5ba4', time: 0x4000, pivot: 'object +0x100 (run time)' },
-  // 0x0044FA8C (DIE TYPE2): the pair is the object's +0xAC; the record is the BSS pointer 0x00A44F9C.
-  { object: 'ctor44fa8c', ctor: 0x44fa8c, modePush: 0x44fba8, pair: 0x44fbf6, record: 0x44fc05, recordVa: null, time: 0x4444, pivot: 'object +0xAC (run time)' },
-  // 0x0044FFD8 (GET RING): the pair is a register (run time); the record 0x009A5C10.
-  { object: 'ctor44ffd8', ctor: 0x44ffd8, modePush: 0x45014e, pair: 0x450196, record: 0x4501a5, recordVa: 'r9a5c10', time: 0x1555, pivot: 'register (run time)' },
-  // 0x0045072C (DEMO_WARP2): the pair is the object's +0xE8 (0x0044FFD8 sets it to 9984.0).
-  { object: 'ctor45072c', ctor: 0x45072c, modePush: 0x4508bc, pair: 0x450903, record: 0x450911, recordVa: null, time: 0x416c, pivot: 'object +0xE8' },
-  // 0x00450FC4 (DIE TYPE3): the pair is the object's +0xD4; the record is built at run time.
-  { object: 'ctor450fc4', ctor: 0x450fc4, modePush: 0x45112e, pair: 0x451175, record: 0x451183, recordVa: null, time: 0x416c, pivot: 'object +0xD4' },
-  // 0x004513D4 (DEMO_WARP0): the pair is 0x00A45068 = (-20000, 0, 0) (DEVLOG); the scalar 0x00A45074, its +4 the yaw (run time).
-  { object: 'ctor4513d4', ctor: 0x4513d4, modePush: 0x4514cf, pair: 0x451514, record: 0x451523, recordVa: 'r9a5ce0', time: 0x392d, pivot: 'BSS 0x00A45068 = (-20000, 0, 0)' },
+  { object: 'ctor44ec14', ctor: 0x44ec14, modePush: 0x44ed36, pair: 0x44ed47, record: 0x44ed56, recordVa: 'r9a5b14', time: 0x416c, pivot: 'BSS 0x00A44F34 = (0, 0, -120) (FUN_0044EDAC); yaw 0' },
+  // 0x0044F4EC (APP TYPE2): the ctor copies its pivot argument to its own +0x100 and the yaw argument to +0x10C.
+  // The caller passes [0x00A44D64]+0x38 and [0x00A44D64]+0x60 (BAMS), or BSS 0x00A44D9C with yaw 0.
+  { object: 'ctor44f4ec', ctor: 0x44f4ec, modePush: 0x44f675, pair: 0x44f6a2, record: 0x44f6b1, recordVa: 'r9a5ba4', time: 0x4000, pivot: 'entity [0x00A44D64] +0x38 (live; yaw +0x60)' },
+  // 0x0044FA8C (DIE TYPE2): the ctor copies the pivot argument to +0xAC and the yaw argument to +0xB8 (the scalar's +4);
+  // the record is the BSS block 0x00A44F9C (time 0x4444), built at run time: recordVa null.
+  { object: 'ctor44fa8c', ctor: 0x44fa8c, modePush: 0x44fba8, pair: 0x44fbf6, record: 0x44fc05, recordVa: null, time: 0x4444, pivot: 'brain +0x3A4 (computed from [0x00A44D60]; live)' },
+  // 0x0044FFD8 (GET RING): the caller passes the brain's +0x3A4 (pivot) and +0x3B0 (yaw); the record is 0x009A5C10.
+  { object: 'ctor44ffd8', ctor: 0x44ffd8, modePush: 0x45014e, pair: 0x450196, record: 0x4501a5, recordVa: 'r9a5c10', time: 0x1555, pivot: 'brain +0x3A4 / +0x3B0 (live)' },
+  // 0x0045072C (DEMO_WARP2): the caller passes the brain's +0x3A4 and +0x3B0 (live); the record is run time.
+  { object: 'ctor45072c', ctor: 0x45072c, modePush: 0x4508bc, pair: 0x450903, record: 0x450911, recordVa: null, time: 0x416c, pivot: 'brain +0x3A4 / +0x3B0 (live)' },
+  // 0x00450FC4 (DIE TYPE3): the caller passes [0x00A44D5C]+0x38 and [0x00A44D5C]+0x60 (live), or BSS 0x00A44D88 with yaw 0; the record is run time.
+  { object: 'ctor450fc4', ctor: 0x450fc4, modePush: 0x45112e, pair: 0x451175, record: 0x451183, recordVa: null, time: 0x416c, pivot: 'entity [0x00A44D5C] +0x38 (live; yaw +0x60)' },
+  // 0x004513D4 (DEMO_WARP0): the ctor takes no pivot; it writes (-20000, 0, 0) to BSS 0x00A45068 and passes the scalar
+  // 0x00A45074 whose +4 (0x00A45078) has no writer in the exe: yaw 0.
+  { object: 'ctor4513d4', ctor: 0x4513d4, modePush: 0x4514cf, pair: 0x451514, record: 0x451523, recordVa: 'r9a5ce0', time: 0x392d, pivot: 'BSS 0x00A45068 = (-20000, 0, 0); yaw 0' },
 ];
 
 // The scene (SCENE in combat/darkfalz.ts) -> the cutscene object its enter makes.
@@ -282,9 +317,10 @@ export function composeCameraUp(dir: Vec3, roll: number): Vec3 {
   return [-sr * ca, cr, sr * sa];
 }
 
-// The camera source for a loaded camera file (formats/cameramotion.ts). Only DEMO_WARP0's
-// pivot is known (the ctor writes (-20000, 0, 0) to 0x00A45068); its yaw is the BSS scalar's
-// +4 at run time, not read: ASSUMED 0. Every other pivot is null (no view for that scene).
+// The camera source for a loaded camera file (formats/cameramotion.ts). The two constant pivots
+// are the exe's (see the header): DEMO_WARP0 (-20000, 0, 0) with yaw 0, and the Dark Falz object
+// (0, 0, -120) with yaw 0. Every other pivot is live (an entity or the brain's fields, not read
+// here): null, so no view is produced for those scenes.
 export function cameraSourceOf(rel: CameraRel): BossCameraSource {
   return {
     motion(index, frame) {
@@ -295,6 +331,7 @@ export function cameraSourceOf(rel: CameraRel): BossCameraSource {
     },
     pivot(object) {
       if (object === 'ctor4513d4') return { pivot: [-20000, 0, 0], yaw: 0 };
+      if (object === 'ctor44ec14') return { pivot: [0, 0, -120], yaw: 0 };
       return null;
     },
   };
