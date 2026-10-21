@@ -12,7 +12,7 @@
 
 import type { BgmPlayer } from '../audio/bgm.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
-import type { DataSource } from '../data/source.ts';
+import { readIfPresent, type DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel, type MapSection } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld, type ObjectSetEntry } from '../formats/objset.ts';
@@ -589,7 +589,7 @@ export class GameView {
     const raderCols = placedObjects
       .filter((p) => p.entity.kind === 'object' && p.entity.type === 0x17)
       .map((p) => ({ x: p.world[0], z: p.world[2], radius: p.entity.kind === 'object' ? p.entity.params[0] : 0, room: p.entity.kind === 'object' ? p.entity.params[3] : -1 }));
-    void this.hud.enterFloor(floor, area, geometry, (name) => this.source.read(`scene/${name}`), raderCols);
+    void this.hud.enterFloor(floor, area, geometry, (name) => readIfPresent(this.source, `scene/${name}`), raderCols);
     this.current = {
       floor,
       area,

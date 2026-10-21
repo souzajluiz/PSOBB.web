@@ -344,7 +344,8 @@ export class FieldHud {
 
   // A floor loaded (render/gameview.ts): its minimap (map_*r.rel from the
   // floor's n.rel; none on Pioneer 2 or the Lab) and its TObjRaderCol objects.
-  async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array>, raderCols: readonly RaderCol[] = []): Promise<void> {
+  // `read` gives null for a file the data folder does not hold.
+  async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array | null>, raderCols: readonly RaderCol[] = []): Promise<void> {
     const token = ++this.floorToken;
     // The floor change destroys the Area Map window (its destructor clears
     // HUD flag bit 1 and minimap_type) and the Quest Board window (0x10).
@@ -357,9 +358,10 @@ export class FieldHud {
     let data: MinimapData | null = null;
     if (name) {
       try {
-        data = parseMinimapRel(await read(name));
+        const bytes = await read(name);
+        data = bytes ? parseMinimapRel(bytes) : null; // Pioneer 2 and the Lab have no minimap (no r.rel)
       } catch {
-        data = null; // Pioneer 2 and the Lab have no minimap
+        data = null;
       }
     }
     if (!this.minimapAssets) {
