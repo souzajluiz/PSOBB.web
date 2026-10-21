@@ -361,6 +361,25 @@ if (fs.existsSync(GSL)) {
   console.log('darkfalzcamera: data.gsl not found, the real-file checks are skipped');
 }
 
+// The static pivots (no file needed): DEMO_WARP0 and the Dark Falz object have constant pivots from the exe;
+// every scene whose pivot is an entity or the brain's field is live, so the source gives null for it.
+{
+  const stat = cameraSourceOf({ motions: [] } as never);
+  const w0 = stat.pivot('ctor4513d4');
+  nearV(w0 ? w0.pivot : [NaN], [-20000, 0, 0], 'DEMO_WARP0 pivot (BSS 0x00A45068)');
+  eq(w0 ? w0.yaw : NaN, 0, 'DEMO_WARP0 yaw 0 (no writer of 0x00A45078 in the exe)');
+  const dark = stat.pivot('ctor44ec14');
+  nearV(dark ? dark.pivot : [NaN], [0, 0, -120], 'Dark Falz object pivot (BSS 0x00A44F34, FUN_0044EDAC)');
+  eq(dark ? dark.yaw : NaN, 0, 'Dark Falz object yaw 0 (no reference to 0x00A44F28)');
+  for (const live of ['ctor44f4ec', 'ctor44fa8c', 'ctor44ffd8', 'ctor45072c', 'ctor450fc4']) {
+    eq(stat.pivot(live), null, `${live} pivot is live (no static source)`);
+  }
+  // The camera's per-frame eye/target copy is from the mode object (+0x3C / +0x48, FUN_004d1ff4): the CUTSCENE_CAMERAS
+  // record of each cutscene matches the call sites checked in the exe (pair, record, mode push).
+  eq(CUTSCENE_CAMERAS.find((c) => c.object === 'ctor4513d4')?.pair, 0x451514, 'DEMO_WARP0 pair call site');
+  eq(CUTSCENE_CAMERAS.find((c) => c.object === 'ctor44ec14')?.pivot.startsWith('BSS 0x00A44F34'), true, 'Dark Falz pivot note');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

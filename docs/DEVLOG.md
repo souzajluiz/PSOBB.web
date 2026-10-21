@@ -8236,24 +8236,24 @@ arena).
 - 0x100: out[3], an int: the motion's own time (16747 / 16383 / 14637 / 5461 in the constant tracks of bo04opcam.rel). ASSUMED: it is the time that the update uses when the UpdateCameraState time is -1 (0x004D68E3).
 - Key search (0x0084AE50): the last key with frame <= round-half-even(frame), or the first key; k1 is the next key, or k0 itself at the end, so the value HOLDS past the last key (no wrap, unlike the map's NJM rule in `njmotion.ts`). Before the first key the exe extrapolates (not reproduced beyond the search).
 
-**The composition (0x004D6BC0, no Ghidra function; the disassembly was read, objdump).** The vtable of the map object is at 0x00AFC8F4 (slot 2 = 0x004D68A0 the update, slot 10 = 0x004D6BC0 the composition). Its steps:
+**The composition (0x004D6BC0, no Ghidra function; the disassembly was read, objdump).** The vtable of the map object is at 0x00AFC8F8 (corrected 2026-10-21: FUN_004d66d0 stores that pointer; slot 1 = 0x004D68A0 the update, slot 9 = 0x004D6BC0 the composition; the earlier 0x00AFC8F4 with slots 2 and 10 was one slot off). Its steps:
 1. dir = target (+0x48) - eye (+0x3C).
 2. 0x004D6448 writes the default camera's pitch (+0x190) and yaw (+0x194) from dir (BAMS). The view does not read them: not modelled.
 3. If roll (+0x90) is not 0: the yaw a = trunc(atan2(dx, dz) * 65536 / 2pi) with 2pi as stored at 0x00909500 (6.283184051513672). The fpatan operands are dx and dz: the call to 0x0082DC9C ends in `retl $4` and its result is popped, so the reloads read the stack's dx and dz (not the sqrt). The matrix is I, then RotY(a) (0x0082D8BC), then RotZ(roll) (0x00830C04), and up = M * (0, 1, 0) (0x0082EAB8) = `(-sin(roll) cos(a), cos(roll), sin(roll) sin(a))`. Roll 0: up = (0, 1, 0).
 4. `lookAt(eye = C+0x178, centre = C+0x184, up)` (0x0082F108 -> 0x0089241D; then 0x0082F130 sets the view matrix) with C = DAT_00A48A54 (the default camera). The eye is also copied to 0x00A48780.
 
-**Field wiring.** `combat/darkfalzcamera.ts` `bossCameraView` gives `{source: eye, target: centre, up}` with eye = +0x3C and centre = +0x48 (ASSUMED that C+0x178 / C+0x184 hold these during mode 5: no exe writer of them from +0x3C / +0x48 was found, see the spot-check). The pivot is known for DEMO_WARP0 only (`cameraSourceOf`: (-20000, 0, 0) from 0x00A45068); its yaw is the BSS scalar's +4 at run time, ASSUMED 0. Every other scene returns null (no pivot): GET RING (a register), DEMO_WARP2 / DIE TYPE2 / DIE TYPE3 (run-time records or pivots), APP TYPE2 (+0x100). So only DEMO_WARP0 moves the field camera.
+**Field wiring.** `combat/darkfalzcamera.ts` `bossCameraView` gives `{source: eye, target: centre, up}` with eye = +0x3C and centre = +0x48 (the copy into C+0x178 / C+0x184 is now found, see the 2026-10-21 entry below: FUN_004d1ff4 each frame). The pivot is known for DEMO_WARP0 (`cameraSourceOf`: (-20000, 0, 0) from 0x00A45068); its yaw is 0 (no writer of 0x00A45078 in the exe). Every other scene returns null (no pivot): GET RING (a register), DEMO_WARP2 / DIE TYPE2 / DIE TYPE3 (run-time records or pivots), APP TYPE2 (+0x100). So only DEMO_WARP0 moves the field camera.
 
 **Constants read (exe bytes, `tools/exedata.py read ... b`):** 0x00909500 = 6.283184051513672 (a double; the composition's 2pi), 0x00909508 = 65536.0 (double), 0x00909570 = 5000.0 (float), 0x00909574 = 40.0 (float), 0x00909568 = 2^32 (double). 0x00AEB494 is not in an initialised section (zero: the composition's normalise flag is off, ASSUMED).
 
-**Decisive spot-check.** In PsoBB.exe, 0x004D6CB6..0x004D6CC7 is `lea 0x178(%edx),%ecx` / `add $0x184,%edx` / `call 0x82f108` (eye = the default camera's +0x178, centre = +0x184, with the camera at `DAT_00a48a54` loaded at 0x004D6CB0). The port assumes these fields are the object's +0x3C / +0x48 in mode 5. If something else writes +0x178 / +0x184 during the cutscene, the view is wrong.
+**Decisive spot-check.** In PsoBB.exe, 0x004D6CB6..0x004D6CC7 is `lea 0x178(%edx),%ecx` / `add $0x184,%edx` / `call 0x82f108` (eye = the default camera's +0x178, centre = +0x184, with the camera at `DAT_00a48a54` loaded at 0x004D6CB0). The port assumes these fields are the object's +0x3C / +0x48 in mode 5. (Resolved 2026-10-21, see below: the writers are FUN_004d1ff4 and FUN_004d3e90.)
 
 **ASSUMED.** The eye / centre mapping above; the roll is the 0x080 channel (out[2] to +0x90, by the composition's read); the 0x100 channel is the motion's own time; the DEMO_WARP0 yaw is 0; the composition's normalise flag is 0; the sin / cos are exact (the exe's table is not read); the default (absent-list) values are 0.
 
 **UNCLEAR.**
 - The DEMO_WARP0 view: the pivot (-20000, 0, 0) puts the eye about 20000 units west of the Dark Falz arena (the control's floor position is near (-9860, -240)); the yaw rotates around the pivot, so it cannot bring the eye to the arena. Whether that is the cutscene's real place (a warp view) or a wrong pivot is not known. Not checked in Chrome.
-- Who calls the composition (the vtable slot 10) each frame, and in which order against the update (slot 2).
-- The run-time yaws and pivots of the other six objects (the BSS 0x00A45078 scalar, +0x100, +0xAC, +0xE8, +0xD4, the GET RING register).
+- (Resolved 2026-10-21: FUN_004d3abc calls the update (slot 1) and then the composition (slot 9) each frame; see below.)
+- (Partly resolved 2026-10-21: the run-time pivots and yaws, see below. The yaw of DEMO_WARP0 is the BSS 0x00A45078, which nothing writes.)
 - The time unit (frames or ticks) of the record's time argument.
 - The 0x080 channel: the update's write to +0x90 is read from the composition only (the update 0x004D68A0 is ported without it, so the port's update now stores the roll).
 
@@ -8263,3 +8263,39 @@ arena).
   stays there for the 12 s watched; `bossCameraView()` stays null, since no cutscene starts
   while the player waits at the entrance. The DEMO_WARP0 view is therefore not seen in Chrome
   yet: it needs the casket trigger (walking to the arena centre), not scripted.
+
+## 2026-10-21: Dark Falz camera: the per-frame driver, the eye copy and the pivots (Ghidra)
+
+Ghidra (`tools/ghidra/decomp.sh`) and objdump on PsoBB.exe answered the open items of the entry above. Corrections to that entry are made in place.
+
+**The vtable.** The map object's vtable is 0x00AFC8F8 (FUN_004d66d0 stores `&PTR_LAB_00afc8f8`), not 0x00AFC8F4. Slot 1 (+0x04) = 0x004D68A0 (the update, MapObjectEntity_UpdateTransform), slot 9 (+0x24) = 0x004D6BC0 (the composition, MapObjectEntity_UpdateCamera). The earlier "slot 2 / slot 10" were one slot off.
+
+**Who calls them each frame: FUN_004D3ABC (the default camera's update, the camera at DAT_00A48A54).** It takes the current mode object `DAT_00a48a00[DAT_00a489f4]` and does, in order:
+1. slot 1 (the update, unless DAT_00a489fc & 0x800): the motion is sampled, +0x3C / +0x48 are built.
+2. slot 4 (0x10) with 0 or 1, by the flags 0x2 / 0x80 (not the path).
+3. FUN_004D1FF4: when DAT_00a489fc & 0xC == 0 it copies the object's eye/target (+0x3C..+0x50) into the camera's goal (+0x1A0..+0x1B4). When the push flag 0x4 is set (FUN_004D31F4 sets it for mode 5, the cutscenes) it also copies them into the camera's current +0x178..+0x18C, and the object's time (+0x54) to +0x19C (flag 0x40 when it changes). The rate (+0x58 / +0x5C) goes to +0x1B8 / +0x1BC.
+4. Mode step by the object's +0x38 flags: 0x4 -> FUN_004D3D14 (smooth toward the goal), 0x8 -> FUN_004D3C98, otherwise FUN_004D3E90 (current = goal). The mode 5 object's +0x38 is 0 (the ctor FUN_004D66D0 zeroes it), so FUN_004D3E90 runs.
+5. slot 9: the composition (the angles to +0x190 / +0x194, then lookAt(+0x178, +0x184, up)). Then `camera+0x94 = camera+0x194`.
+
+So the port's assumption holds: the view's eye and target are the cutscene object's +0x3C and +0x48 of the same frame, copied in step 3 and read in step 5 (the order is update, copy, view). The composition is called once per frame, by the camera driver, not by the scene. ASSUMED: the flag 0x4 is set for the whole cutscene (4d31f4(5) at the ctor, 4d3250 clears it at the release).
+
+**The mode table.** FUN_004D2B18 (the camera init) fills `DAT_00a48a00[0..12]` from `PTR_FUN_009ACB70` (13 entries). Entry 5 = 0x004D665C, which creates the map object (0xA8 bytes, vtable 0xAFC8F8) and calls FUN_004D66D0. So `DAT_00a48a14` (= `&DAT_00a48a00[5]`) is that object. The xref tool does not see the writes, which are indexed. The push 4d31f4(5) calls its vtable slot 5 (0x0061CDB0, a no-op here).
+
+**The yaw and the pivot writers.** FUN_004D681C stores the pivot (arg 1) at object +0x6C..+0x74 and the scalar's +4 (the yaw, BAMS) at +0x88, for the object `DAT_00a48a14`. Every cutscene ctor passes its pivot and scalar to it.
+- DEMO_WARP0 (ctor 0x004513D4, the BSS block 0x00A45064): writes `(-20000, 0, 0)` to 0x00A45068 once (flag 0x00A45064 bit 0). The scalar is 0x00A45074, whose +4 is 0x00A45078. **No instruction references 0x00A45078** (the xref has no hit, and the scalar 0x00A45074 is only passed). So the yaw is 0: verified, not assumed.
+- Dark Falz (ctor 0x0044EC14, the 0x110-byte object with vtable 0x00AF6BD8, the same vtable as its dtor 0x0044E544): the pivot BSS 0x00A44F34 = `(0, 0, -120)`, written by FUN_0044EDAC (0x00A44F34/38/3C = 0, 0, 0xC2F00000). FUN_0044EDAC has no direct caller in the exe; the brain's code that calls the ctor is FUN_0044D739. The scalar's +4 is 0x00A44F28, never referenced: yaw 0. The other writes to 0x00A44F34 in 0x44E6xx..0x44EAFx are pushes (0x814298 / 0x8144B0, the effect spawns at the boss's position), not camera writes.
+- APP TYPE2 (ctor 0x0044F4EC, 0x130 bytes, the caller 0x0044E30F): the ctor copies the pivot argument to its +0x100 and the yaw argument to +0x10C (the scalar's +4). The caller passes `[0x00A44D64] + 0x38` (pivot) and `[0x00A44D64] + 0x60` (yaw), or, if the entity is null (0x0044E34D), BSS 0x00A44D9C and yaw 0. So the "+0x100 channel" is the pivot copy, not a time.
+- DIE TYPE3 (ctor 0x00450FC4, caller 0x0044DFC7): pivot `[0x00A44D5C] + 0x38`, yaw `[0x00A44D5C] + 0x60`; if null (0x0044E07D), BSS 0x00A44D88 and yaw 0.
+- DIE TYPE2 (ctor 0x0044FA8C, 0xC4 bytes, the caller 0x0044E1F9): the pivot is the brain's +0x3A4 (computed at 0x0044E1A3..0x0044E1CC from `[0x00A44D60]`, a constant at 0x00A44D98; the formula is not read), the yaw `[0x00A44D60] + 0x60` stored to the brain's +0x3B0 (0x0044E1D6). The ctor copies the pivot to +0xAC and the yaw to +0xB8.
+- GET RING (ctor 0x0044FFD8, caller 0x0044E108) and DEMO_WARP2 (ctor 0x0045072C, caller 0x0044E0D0): the callers pass the brain's `+0x3A4` (pivot) and `+0x3B0` (yaw), the same two fields. Their values come from the DIE TYPE2 computation only if that state ran before (not checked).
+- The entities `[0x00A44D5C]` (X), `[0x00A44D64]` (Y) and `[0x00A44D60]` (Z) are set and cleared in the Dark Falz brain (stores at 0x0044BD04, 0x0044CBEF, 0x0044DB5A, 0x0044E02D, and others). Their layout (+0x38 a position, +0x60 a BAMS yaw) is ASSUMED from the pivot use, not read from the entity's code.
+
+**What the port now does (`combat/darkfalzcamera.ts`).** `cameraSourceOf` gives the constant pivots: DEMO_WARP0 (-20000, 0, 0) yaw 0, and the Dark Falz object (0, 0, -120) yaw 0. The other five pivots come from live entities or the brain: `cameraSourceOf` returns null for them, so `bossCameraView` gives no view for APP TYPE2, DIE TYPE2, DIE TYPE3, GET RING and DEMO_WARP2. The task asked for a view for every scene; it cannot be met from the exe alone, since those pivots exist only at run time. The port would need the live entity (X / Y / Z) and the brain's +0x3A4 / +0x3B0 passed in. The Dark Falz object has no scene number yet (the brain state is not named), so it is not in `SCENE_CUTSCENE_CAMERA`. Trigger logic (`combat/darkfalz.ts`) is untouched.
+
+**Checks.** `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (new: the constant pivots of DEMO_WARP0 and the Dark Falz object with yaw 0, and null for the five live pivots, with the pair call site of DEMO_WARP0). `node tests/darkfalz.test.ts`: `darkfalz tests passed`. `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+**ASSUMED.** The flag 0x4 for the whole cutscene; the entity layout (+0x38 / +0x60) for X, Y, Z; the mode 5 object is the boss camera (the table entry is the object that 4d665c makes; nothing in the exe names the boss).
+
+**UNCLEAR.** The brain's +0x3A4 / +0x3B0 formula and which state fills them (GET RING and DEMO_WARP2 need them); the scene number of the Dark Falz object (ctor 0x0044EC14, called from FUN_0044D739); the time unit (the record's time, 0x416C / 0x4000 / 0x4444 / 0x1555 / 0x392D, goes to +0x54 and the camera's +0x19C, its unit is still unknown); the entity layout for X, Y, Z.
+
+**Decisive spot-check (for a human, in a debugger or the exe bytes).** At 0x0044E1A3..0x0044E1CC, `mov eax,[0xa44d60]` then the float stores into the brain's +0x3A4 / +0x3AC: if the brain's +0x3A4 is not the DIE TYPE2 pivot, the GET RING and DEMO_WARP2 pivots are wrong.
