@@ -6888,3 +6888,18 @@ Not run in Chrome.
 Checks after the fix: `node tests/dragon.test.ts`: dragon: ok; `node tests/combat.test.ts`: 5946 checks, 0 failures (vendor linked); `node tests/enemies.test.ts`: ALL PASS; `node tests/sinowbeat.test.ts`: sinowbeat: ok; client `tsc --noEmit`: clean.
 
 Still not run in Chrome.
+
+## 2026-10-21 — Dark Falz: what is left (read-only map)
+
+A read pass over the port (`combat/darkfalz*.ts`, `render/combat.ts`, `render/gamefield.ts`) and the exe, to size the Dark Falz gaps. No code changed.
+
+**Scene table.** The control's table is at **0x009a5940**, stride 0x14 (name, enter, leave, lead, all); `SetScene` (0x0044cf3c) calls the enter at +4 and the leave at +8 (the leave is 0 in every row). Checked in the exe: row 2 (DEMO_WARP0) enter **0x0044e504**, row 3 (DEMO_WARP1) **0x0044e4d0**. The other enters as read: ZAKO 0x0044e4a4 (SE 0x369, the 80 Darvants), APP TYPE1 0x0044e474 (0x146 frames, casket object at frame 0x2d, `dark1.adx` at 0xb9), TYPE1 0x0044e360 (form 1 made at 0x0044e44a, ctor 0x00457000), APP TYPE2 0x0044e2f4 (300 frames, calls 0x0044f4ec, UNCLEAR), TYPE2 / TYPE3 0x0044e2e0, DIE TYPE2 0x0044e120 (280, flag 0x35), GET RING 0x0044e0f0 (142, Normal only), DEMO_WARP2 0x0044e0b8 (114, `dark2.adx`), DEMO_WARP3 0x0044e08c (126, flag 0x36, players to a circle of 250 about (10000, 0)), DIE TYPE3 0x0044df90 (302, flag 0x37), OL ENDING 0x0044df70 (454, then the kill event).
+
+**Ported:** the scene machine, the timers, the circle placements, the quest flags, the BGM, the kill event, the Ultimate Darvant scale (x1.25) and the Normal-only GET RING branch.
+
+**Not ported (the gaps, by size):**
+- The cutscene objects (the casket, the demo objects, the fades): large; they need the cutscene models and effects. `render/combat.ts` logs the `scene` event only.
+- The camera: medium. The exe drives it from the control and the forms: 0x004d2fb4 (at 0x0044c072, 0x0044c183), 0x004d3250 (0x0044e5bb), triplets 0x004d31f4 / 0x004d681c / 0x004d6770 (0x0044ed36 .. 0x00451523; 0x004d681c writes the source / target pair at `[0x00a48a14] + 0x6c ..`), and 0x004d85bc (look-at, in forms 1 and 3). The values and the modes were not read. The port's hook is `render/gamefield.ts` (the view override after `unlockCameraView` and `talkCamera`).
+- Ultimate: the Darvants form 2's beam makes (small) and the Rico / ring scene behind quest flag 0x97 (large, its enter not read).
+
+**UNCLEAR.** Whether any scene locks the players (0x0044bf4c / 0x0044c1a4 are not named past the tethealla label). The boss-cutscene tables at 0x009a394c / 0x009a3950: no call from the Dark Falz code was found. The exe's difficulty branches were taken from the port, not read in the exe.
