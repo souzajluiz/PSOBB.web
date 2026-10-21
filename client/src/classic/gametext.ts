@@ -7,6 +7,8 @@
 //   - a glyph advances by its own width (the byte at glyph+2), a space by a
 //     fixed 7 pixels (0x0097db7c), a newline by 20 pixels (0x0097db78);
 //   - the color is the vertex color (white, black shadow, alpha for fades).
+//   - \tC<c> escapes pick the colour per glyph (classic/textcodes.ts) and take
+//     no width.
 // The glyph shapes come from the system font (font_tahoma.reg asks for Tahoma);
 // face, size and weight are fitted to captures of the original client.
 
@@ -26,6 +28,8 @@ export const GAME_TEXT = {
   threshold: 0,
 };
 
+import { stripTextCodes, textGlyphs } from './textcodes.ts';
+
 const cache = new Map<string, OffscreenCanvas>();
 
 // Development aid: call after changing GAME_TEXT.
@@ -44,7 +48,7 @@ function advance(ch: string): number {
 // Width in virtual pixels (FUN_007ac344): the sum of the advances.
 export function gameTextWidth(text: string): number {
   let w = 0;
-  for (const ch of text) if (ch !== '\n') w += advance(ch);
+  for (const ch of text.includes('\t') ? stripTextCodes(text) : text) if (ch !== '\n') w += advance(ch);
   return w;
 }
 
@@ -53,19 +57,26 @@ function bitmap(text: string, rgb: string): OffscreenCanvas {
   const key = `${rgb}|${text}`;
   let c = cache.get(key);
   if (c) return c;
-  const lines = text.split('\n');
-  const w = Math.max(1, ...lines.map(gameTextWidth)) + 2;
+  const glyphs = textGlyphs(text, rgb);
+  const lines: Array<typeof glyphs> = [[]];
+  for (const g of glyphs) {
+    if (g.ch === '\n') lines.push([]);
+    else lines[lines.length - 1]!.push(g);
+  }
+  const w = Math.max(1, ...lines.map((l) => gameTextWidth(l.map((g) => g.ch).join('')))) + 2;
   const h = (lines.length - 1) * GAME_TEXT.lineHeight + GAME_TEXT.cell;
   c = new OffscreenCanvas(w, h);
   const g = c.getContext('2d')!;
   g.font = GAME_TEXT.font;
   g.textBaseline = 'alphabetic';
-  g.fillStyle = rgb;
   lines.forEach((line, i) => {
     let x = 0;
-    for (const ch of line) {
-      if (ch !== ' ') g.fillText(ch, x, i * GAME_TEXT.lineHeight + GAME_TEXT.baseline);
-      x += advance(ch);
+    for (const gl of line) {
+      if (gl.ch !== ' ') {
+        g.fillStyle = gl.color;
+        g.fillText(gl.ch, x, i * GAME_TEXT.lineHeight + GAME_TEXT.baseline);
+      }
+      x += advance(gl.ch);
     }
   });
   // Hard-edged glyphs, like the GDI glyph cache.

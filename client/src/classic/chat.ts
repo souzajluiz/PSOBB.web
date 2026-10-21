@@ -31,6 +31,7 @@
 import * as THREE from 'three';
 import { drawGameText, gameTextWidth, GAME_TEXT } from './gametext.ts';
 import { se } from '../audio/se.ts';
+import { activeColorEscape } from './textcodes.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
@@ -40,14 +41,23 @@ export const CHAT_MAX_LENGTH = 0x4f; // FUN_00713540 -> FUN_007312f0
 // objects break where the next glyph would cross the width, FUN_0072ff2c).
 export function wrapGameText(text: string, width: number): string[] {
   const out: string[] = [];
+  let active = ''; // the colour escape in force (it carries over wraps and newlines)
   for (const para of text.split('\n')) {
-    let line = '';
+    let line = active;
     let w = 0;
-    for (const ch of para) {
+    for (let i = 0; i < para.length; ) {
+      if (para[i] === '\t' && i + 1 < para.length) {
+        const code = para.slice(i, i + (para[i + 1] === 'C' ? 3 : 2));
+        line += code;
+        active = activeColorEscape(active + code);
+        i += code.length;
+        continue;
+      }
+      const ch = para[i++]!;
       const cw = gameTextWidth(ch);
-      if (w + cw > width && line) {
+      if (w + cw > width && w > 0) {
         out.push(line);
-        line = '';
+        line = active;
         w = 0;
       }
       line += ch;

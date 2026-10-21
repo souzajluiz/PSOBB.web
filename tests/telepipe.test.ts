@@ -9,7 +9,7 @@ import type { Game } from '../client/src/net/game.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import { isSafeMap } from '../client/src/classic/fieldmenu.ts';
-import { NT_LAYOUT, particleQuad } from '../client/src/classic/particles.ts';
+import { NT_LAYOUT, ParticleSystem, parseParticleEntry, particleQuad, particleShade } from '../client/src/classic/particles.ts';
 import {
   BOSS_AREAS,
   buildImposeHold,
@@ -115,6 +115,28 @@ eq(new DataView(buildPlayerSync(self, state, 42).buffer).getUint16(0x80, true), 
   const sprite = particleQuad({ e: { entry: { flags: 0 } }, step: [0, 0, 0], size: 0.1 } as never, 25);
   eq([sprite.hw, sprite.hh, sprite.rotated], [3.2, 3.2, false], 'a sprite: half size x size (slot 25: 32)');
   eq([NT_LAYOUT.length, NT_LAYOUT[24], NT_LAYOUT[0]], [54, [16, 3], [4, 4]], 'effect_nt_metadata');
+}
+
+// --- 0xB0 gate_circle, a type 1 ring (ParticleEffectInstance_Update_0050f3fc) ---
+{
+  const dat = new Uint8Array(0x98);
+  const dv = new DataView(dat.buffer);
+  dv.setInt32(0x10, 1, true);
+  const f = (o: number, v: number) => dv.setFloat32(o, v, true);
+  f(0x24, 0.2); f(0x28, 0.1); f(0x2c, 1); f(0x30, 1); f(0x34, 0.1); f(0x74, 2);
+  dv.setInt32(0x48, 15, true); dv.setInt32(0x4c, 4, true);
+  f(0x44, 1.5); f(0x58, 0.1); f(0x5c, 0.5); f(0x60, 10); f(0x64, 1);
+  f(0x7c, 0.4); f(0x80, 0.5); f(0x84, 1);
+  const e = parseParticleEntry(dat, 0);
+  eq([e.kind, e.ring.radius, e.ring.omega, e.ring.rise], [1, [10, 1], [1, 2], [Math.fround(0.1), 0]], 'type 1 fields');
+  const sys = new ParticleSystem();
+  sys.add(e, [100, 5, -40], 0);
+  for (let i = 0; i < 6; i++) sys.step();
+  const q = sys.live[0]!;
+  const dist = Math.hypot(q.p[0] - 100, q.p[2] + 40);
+  eq([sys.count > 0, dist >= 10 - 1e-6 && dist <= 11 + 1e-6], [true, true], 'the ring orbits at radius 10..11 around the pipe');
+  eq(+(q.p[1] - 5).toFixed(3), +(0.1 * q.age / q.dt).toFixed(3), 'it rises 0.1 per frame');
+  eq(particleShade(q).rgb[0] > 0.39 && particleShade(q).rgb[0] < 0.41, true, 'blue-white colour is the base (slopes +0x50 / +0x38 / +0x3c are 0)');
 }
 
 if (failures) {

@@ -26,14 +26,24 @@
 //
 // ASSUMED: the field pipe is used with the same key and range as the
 // Pioneer 2 one (the client reaches its trigger through the targeting
-// system, not modelled); the particle 0xB0 (gate_circle) is a type-1 effect
-// and is not drawn; the light made at 15 above the pipe (EnemyEntity
-// _Constructor_00503450) and the loop sound 0xA0 are left out; the pipe
+// system, not modelled); the particle 0xB0 (gate_circle) is a type-1 ring
+// (classic/particles.ts RingParams, ParticleEffectInstance_Update_0050f3fc);
+// the loop sound 0xA0 (SE_TELEPIPE_LOOP, net/telepipe.ts) is PlayDirectionalSFX
+// every frame of state 1 of ChallengeEntity_Update_006e88d0; the exe restarts
+// nothing: PlaySFX_008292dc refreshes the live voice (keep-alive counter 5),
+// the wave loops on its loop points, and the voice ends about 6 ticks after the
+// calls stop (ASSUMED: the countdown is per game tick). 0x008144b0 does not
+// cull id 0xA0 by distance; there are no 3D voices here, so none is applied
+// (ASSUMED). The object made 15 above the pipe
+// (EnemyEntity_Constructor_00503450, vtable 0x00afea00) is NOT drawn: its
+// update (0x00503560) sets the die flag on the first frame because its
+// lifetime parameter is 0, so it is a one-frame effect object whose rendering
+// (the 0x20-byte sub-object, type 0x1f) was not recovered; the pipe
 // appears when the cast is released (the Ryuker effect object's own timing,
 // ChallengeObject_Initialize_006a3df0, is not recovered).
 
 import * as THREE from 'three';
-import { se } from '../audio/se.ts';
+import { se, sePlaying, seStop } from '../audio/se.ts';
 import { isSafeMap } from '../classic/fieldmenu.ts';
 import { parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
@@ -48,6 +58,7 @@ import {
   PIPE_PARTICLES,
   PIPE_USE_PARTICLE,
   samePipe,
+  SE_TELEPIPE_LOOP,
   SE_TELEPIPE_OPEN,
   SE_TELEPIPE_USE,
   TELEPIPE_HOLD_FRAMES,
@@ -118,6 +129,7 @@ export class TelepipeLayer {
   private flashes: PipeVisual[] = [];
   private use: Use | null = null;
   private acc = 0;
+  private looping = false;
   private disposed = false;
   private onKey = (e: KeyboardEvent) => this.key(e);
   private hook = (dt: number) => this.frame(dt);
@@ -249,7 +261,7 @@ export class TelepipeLayer {
     const tint = PIPE_COLORS[owner & 3] || undefined;
     ids.forEach((id, i) => {
       const e = this.entries.get(id);
-      if (!e || e.id === 0xb0) return; // 0xB0 is a type-1 effect: not drawn
+      if (!e) return;
       particles.add(e, [x, gy + (i === 2 ? 1.8 : 0), z], 0, tint);
     });
     const group = new THREE.Group();
@@ -354,6 +366,15 @@ export class TelepipeLayer {
 
   private tick(): void {
     this.sync();
+    // State 1 of ChallengeEntity_Update_006e88d0 plays SE 0xA0 at the pipe
+    // every frame (PlayDirectionalSFX_00814630); a voice still playing is
+    // not restarted. ASSUMED: no distance attenuation (the engine has no 3D
+    // voices, audio/se.ts), only the pipes of this floor sound.
+    let open = false;
+    for (const key of this.visuals.keys()) if (key.startsWith('pipe:')) open = true;
+    if (open && !sePlaying(SE_TELEPIPE_LOOP)) se(SE_TELEPIPE_LOOP, { loop: true });
+    else if (!open && this.looping) seStop(SE_TELEPIPE_LOOP);
+    this.looping = open;
     for (const v of this.visuals.values()) v.particles.step();
     for (const f of this.flashes) f.particles.step(f.particles.count === 0 && f.sprites.length === 0);
     this.flashes = this.flashes.filter((f) => {
@@ -422,6 +443,7 @@ export class TelepipeLayer {
 
   dispose(): void {
     this.disposed = true;
+    if (this.looping) seStop(SE_TELEPIPE_LOOP);
     this.clearVisuals();
     this.viewer.renderer.domElement.removeEventListener('keydown', this.onKey, true);
     this.viewer.frameHooks.delete(this.hook);
