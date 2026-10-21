@@ -625,7 +625,10 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     //   - stings and tentacles are placed in world coordinates.
     case 0xc1:
       return spec('TBoss2DeRolLe', pick('bm_boss2_de_rol_le.bml', ctx), [
-        { model: 2, motion: loop(11, 0.6), scale: 2 },
+        // ownMaterials: the plate of segment i is draw node 1 + 2i (DAT_00a43c0c[i],
+        // DerolleSetAnimationSpeed 0x004355bc writes its diffuse); its strips
+        // keep a material of their own so the flash can tint them (combat/derolle.ts).
+        { model: 2, motion: loop(11, 0.6), scale: 2, ownMaterials: Array.from({ length: 10 }, (_, i) => 1 + 2 * i) },
         ...Array.from({ length: 4 }, (_, i): EnemyPartSpec => ({ model: 4, texlistOf: 2, motion: loop(17, 0.6), hidden: true, place: 'world', name: `tentacle ${i}` })),
         ...Array.from({ length: 5 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ${i}` })),
         ...Array.from({ length: 3 }, (_, i): EnemyPartSpec => ({ model: 3, texlistOf: 2, hidden: true, place: 'world', name: `sting ring ${i}` })),

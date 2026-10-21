@@ -60,12 +60,14 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
    brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers: events only),
    its cutscene states (they end with their animation), camera / sounds / particles;
-   De Rol Le's segment hit tint and the beam's particles; Vol Opt's real models and lid drawing; the Dragon's
-   remaining particles (the walk's dust 0x315 and the burrow / dive / emerge / rain effects, 0x317..0x326 minus
-   the fire's; its breath's SE 0x321 is UNCLEAR; the mouth and feet nodes and the breath / fireball particles
-   are in, 2026-10-21); Dark Falz's cutscene objects, camera and Ultimate scenes.
+   Vol Opt's real models and lid drawing; the Dragon's remaining particles (the walk's dust 0x315 and the
+   burrow / dive / emerge / rain effects; the mouth and feet nodes are in, 2026-10-21; its 0x31f / 0x320 / 0x321
+   are SEs, not particles, see the DEVLOG correction); Dark Falz's cutscene objects, camera and Ultimate scenes.
+   De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
+   0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
+   the 0x122 cue; see that DEVLOG entry.
    Nothing of these passes was seen in Chrome (check the Saint-Milion arena: tentacle poses, part boxes on the
-   model nodes, the 6xDC flow with two clients).
+   model nodes, the 6xDC flow with two clients; De Rol Le's plates flash cyan and the beam's emitter follows the muzzle).
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation
    and `screen.orientation.lock`, the adaptive resolution and the batching gain; the
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`

@@ -52,7 +52,7 @@ import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
-import { DeRolLeAi, DrlSegmentAi, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_FX, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
@@ -212,6 +212,9 @@ const DEFAULT_SLOTS: ReadonlyArray<{ group1: number; group2: number; disabled: b
   { group1: 4, group2: 0, disabled: false },
 ];
 
+// A long emission (the beam's emitter): it ends when its alive() says so.
+const BEAM_EMISSION = 1 << 20;
+
 // What render/combat.ts keeps per De Rol Le (combat/derolle.ts): the body
 // nodes it reads, the child part groups it moves, and reused point arrays.
 interface DrlView {
@@ -234,6 +237,27 @@ interface DrlView {
   // Segment i's plate in the body model: root child i (draw index 1 + 2i,
   // DAT_00a43c0c[i]) and its child (2 + 2i, g_DerolleRenderColorsArray[i]).
   segPlates: THREE.Object3D[][];
+  // The materials of segment i's plate (the strips of draw node 1 + 2i).
+  segMats: THREE.Material[][];
+}
+
+// The materials buildEnemy gave one draw node of a model (NjcmPartInput.ownMaterials).
+function plateMaterials(root: THREE.Object3D, node: number): THREE.Material[] {
+  const out: THREE.Material[] = [];
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (m.userData.node === node && !out.includes(m)) out.push(m);
+    }
+  });
+  return out;
+}
+
+// The exe writes the node's diffuse (DerolleSetAnimationSpeed 0x004355bc): the
+// colour replaces the material's colour, the texture is still multiplied in.
+function setPlateDiffuse(m: THREE.Material, argb: number): void {
+  if (!(m instanceof THREE.MeshLambertMaterial || m instanceof THREE.MeshBasicMaterial)) return;
+  m.color.setRGB(((argb >> 16) & 0xff) / 255, ((argb >> 8) & 0xff) / 255, (argb & 0xff) / 255, THREE.SRGBColorSpace);
 }
 
 // A debris part: its group and its node tree (node i + 1 is piece i).
@@ -1548,6 +1572,7 @@ export class CombatView {
       shellDebris: Array.from({ length: 10 }, (_, i) => this.drlDebrisView(inst, `shell debris ${i}`)),
       segProxies: ai.segmentParts.map((): EnemyRuntime | null => null),
       segPlates: ai.segmentParts.map((_, i) => [body[1 + 2 * i], body[2 + 2 * i]].filter((n): n is THREE.Object3D => !!n)),
+      segMats: ai.segmentParts.map((_, i) => plateMaterials(inst.root, 1 + 2 * i)),
     };
     // The debris pieces are the child nodes of helm_break / shell_break.
     const records = (d: DrlDebrisView | null, shell: boolean) =>
@@ -1702,7 +1727,7 @@ export class CombatView {
         g.scale.setScalar(s.blink ? 1.15 : 1);
       });
     }
-    // ASSUMED look: the beam (particles 0x126 / 0x176 / 0x177 in the exe) as a line.
+    // ASSUMED look: the beam as a line (its particles are the events in drlEvent).
     const beam = ai.beam;
     if (!beam) {
       this.clearDrlBeam();
@@ -1758,6 +1783,19 @@ export class CombatView {
         const at = new THREE.Vector3(ev.at[0], ev.at[1] + ev.up, ev.at[2]);
         at.addScaledVector(this.viewer.camera.getWorldDirection(this.drlCamDir), -ev.back);
         this.particle({ id: ev.id }, at);
+        return;
+      }
+      case 'beamStart': {
+        // The looping emitter (0x177) of the beam: it follows the muzzle (the
+        // emitter, not the particles) and lasts while the beam fires. ASSUMED:
+        // the exe's handle stops when the beam ends, which is when beamFiring
+        // clears.
+        const muzzle = new THREE.Vector3(ev.at[0], ev.at[1], ev.at[2]);
+        const at = (): THREE.Vector3 => {
+          const b = ai.beam;
+          return b ? muzzle.set(b.from[0], b.from[1], b.from[2]) : muzzle;
+        };
+        void this.fx?.spawn({ id: DRL_BEAM.emitter, duration: BEAM_EMISSION }, at, false, true, () => ai.beamFiring);
         return;
       }
       case 'bgm':
@@ -1848,13 +1886,16 @@ export class CombatView {
   // exist for the player while their hit box is on (y -60 and up, 0x00435070).
   // A broken segment's plate has alpha 0 (DerolleSetAnimationSpeed with the
   // colour 0); ASSUMED: alpha 0 draws nothing, so its two nodes collapse as
-  // the helm's do. Not reproduced: the hit flash (the plate's diffuse colour,
-  // DrlSegment.color), the body is one skinned mesh here.
+  // the helm's do. The hit flash: the plate's own materials (ownMaterials in
+  // buildEnemy) take DrlSegment.color as their diffuse each frame, as the exe
+  // writes the node's diffuse. The body is still one skinned mesh; the plate's
+  // strips are split out of it by node (njcmmesh.ts).
   private syncDeRolLeSegments(e: EnemyRuntime, ai: DeRolLeAi, v: DrlView): void {
     const shown = e.instance.root.visible;
     for (let i = 0; i < ai.segmentParts.length; i++) {
       const s = ai.segmentParts[i];
       if (s.broken) for (const n of v.segPlates[i]) n.scale.setScalar(0.0001);
+      for (const m of v.segMats[i]) setPlateDiffuse(m, s.color);
       const rt = v.segProxies[i];
       if (!rt) continue;
       rt.instance.root.position.set(s.x, s.y, s.z);
