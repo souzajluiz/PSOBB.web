@@ -6710,3 +6710,33 @@ Three read-only Haiku passes; the decisive instructions were checked here (one r
 **Laser (states 19 / 20, object ctor 0x00765c68, update 0x00765d7c).** It lives for [boss+0xe98] - 1 frames. Each frame its child slot 1 is flagged it calls 0x00768a84 with type 4: the second jump table 0x009768ec maps 4 to 0x00768b86, `fild [[boss+0x3d0]+0x1c]` = **iparam2**, raw. 0x00768a84 is not the explosion: it walks the players (list 0x00aad720, word +0x96 == 1), skips any whose segment from the boss (+0x38) to the player (+0x300) is blocked (`call 0x77fffc` at 0x00768c87, collision list 0x00aab3f0), then for type 4 (unless boss +0x30 & 0x4000800) tests 0x00772c08(player, boss) and on >= 0 calls the player's vtable +0x60(boss, 0, damage, 0, -1, -1): no area, no knockback argument. The beam's drawn length +0x50 grows 100 a frame and is cut at the wall hit. UNCLEAR: **0x00772c08** (reads the boss position and the player's hit boxes; probably the beam line test, without it every visible player would be hit), the aim target (+0x44, writer not found), the flagged frames.
 
 **Sand sonic (state 10 "swing", handler 0x00768628).** Phase 0 (0x0076865c): at clock 45 one object is made (ctor 0x0076c644, vtable 0x00b43ab8: update 0x0076c2e0, draw 0x0076c594), at 46 effect 0x6f0, at 50 the burst at node 4 (type 1); the arm sweep runs in the windows [12, 32] and [40, 56] (0x0097749c..90), as the port has. The object waits trunc(6 * rand) frames (0x009774ac = 6.0), then launches (0x0076c974): start = arm node 0x17 + (0, 100, 0), heading = atan2 of node 4 -> node 0x17 in XZ; it moves **20 times** (+0xb4 = 0x14) **10.0** a frame (+0xb0 = 0x41200000, both checked in the ctor at 0x0076c6c0 / 0x0076c6cd) in a straight line and dies after the 20th. After each move it calls 0x0076a788(type 2, pos, 10.1, d * π / 6, 0) with d its distance to node 4: type 2 (0x00768a12) takes the damage from `movsx [boss+0x2c4]`, the boss's **base ATP** (the field combat/buffs.ts documents), not from the row; 0x0051fd44 picks the area hit by the radius against 100. UNCLEAR: whether the area radius is d * π / 6 (about 5 to 105 over the flight) or 10.1, the per-player gate, the ground snap 0x007b4c58. boss+0xf8c = 100.0 at phase 5 counts down 1 a frame (0x0076a3e4) and offsets the body by -f8c (0x00769be2): a 100-frame sink / rise, not modelled.
+
+## 2026-10-21: Saint-Milion storm and sand sonic ported
+
+**What changed.**
+- `combat/saintmilionents.ts`: `SmBlast` (an `EnemyShot`, one explosion: the living players within max(r, 100) on XZ, once; the `blast` effect), `SM_STORM` / `SmStorm` (a plain object the boss keeps; four explosions), `SM_SAND` / `SmSandSonic` (an `EnemyShot`: waits, launches, 20 moves, one explosion per move).
+- `combat/saintmilionboss.ts`: state 23 phase 4 makes the storm (centre: the arena's origin, `SM_ARENAS[arena]`; damage iparam4 = `row.iparam[3]`); the storm is ticked on every boss frame. State 10 at the clock's 45 still emits 'sandsonic' and makes the sand sonic, which joins `out.shots` on its launch frame. New option `atp` (the boss's base ATP).
+- `render/combat.ts`: the boss gets `atp: attacker?.atp` (the stats row's ATP before Jellen).
+- `tests/saintmilionboss.test.ts`: sections 10 (storm) and 11 (sand sonic).
+- `docs/HANDOFF.md` item 4: storm and sand sonic are off the events-only list (lasers stay).
+
+**Rules and constants.**
+- Storm: T = 75 n (0x00976234 = 75.0), n = 1 on the first frame. Radii 100, 200, 400, 1000 (0x00976224 .. 0x00976230). The explosion of radius r goes off on the frame T first passes r (r < T <= r + 75): frames 2, 3, 6 and 14, then it ends.
+- Storm damage: trunc(f32(iparam4 * factor)) with the factors of types 6 .. 9 of the damage dispatcher 0x00768990 (jump table 0x009768c4): 1.0, 0.8, 0.64, 0.32 (the products of 0x0097748c, 0x00977484 and 0x00977488 = 0.5, which is an intermediate of type 9). Knockback 3.0 (0x40400000 on every type).
+- Sand sonic: made at the clock's 45 (state 10, phase 0), waits trunc(6 * rng) frames (0x009774ac = 6.0) with the boss's `SmRng`. Launch (0x0076c974): start = node 0x17 (the exe adds 100 to its height and snaps it to the ground), heading = atan2 of node 4 -> node 0x17 in XZ. Then 20 moves (+0xb4 = 0x14) of 10.0 (+0xb0 = 0x41200000) along the heading, removed after the 20th.
+- Each move explodes once at its position (0x0076c4ec -> 0x0076a788, type 2): damage = the base ATP, the int16 at [boss+0x2c4] (type 2 of 0x00768990 reads `movsx [ecx+0x2c4]`); knockback = 10.0 x 1.01 (0x00977940) = 10.1, the third argument; radius = d * 120 * g (the fourth argument, 0x0097793c = 120.0), with g the runtime global [0xa9b0a4].
+- d: the XZ distance from node 4 to the sand sonic. The point node 4 is written at +0xbc at the launch, and 0x0076c548 takes |(+0xbc) - (+0x38)| in XZ. So d is measured from node 4, not from the launch point (the earlier read said the same).
+
+**ASSUMED.**
+- Storm: active from its creation (the exe gates its update on a motion flag, not readable); it runs whatever the boss's state. Centre = `SM_ARENAS[arena]` origin (ox, oz); the exe's centre is the runtime global [0x00a9b020], not decoded.
+- Sand sonic: g = π / 720 (the runtime global [0x00a9b0a4] is not readable), so the radius is d * π / 6 (at least 100).
+- Start: node 0x17 without the +100 height and the ground snap (the port's sand sonic is at height 0). Without node data the launch is from the boss position along `swingAngle`.
+- The heading uses the fresh node positions at the launch (the same value as `swingAngle` when the nodes are known).
+- The timing: the wait counts boss frames; the sand sonic joins the shots on the frame it launches and its first move is its first shot tick (the renderer's), then one move and one explosion per tick.
+- Knockback 10.1: the exe's value; its meaning is not known (as the missile's 3.0).
+- The explosions are hidden (not drawn); the exe's effects (0x6f7, 0x6fc, 0x6fd) are not ported. The sand sonic is drawn as a ball at its position.
+- No defence is taken off a blast; each client resolves its own hit (as for the missile).
+
+**Checks.** `node tests/saintmilionboss.test.ts`: ALL PASS. `node tests/saintmilion.test.ts`: all checks passed. `node tests/combat.test.ts`: 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
+
+Not run in Chrome.

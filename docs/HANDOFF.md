@@ -56,8 +56,8 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
 4. **Boss leftovers** (2026-10-20 passes done: De Rol Le fin chains + helm / shell debris + the segments as hit
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
-   brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers, storm,
-   sand sonic: events only), its cutscene states (they end with their animation), camera / sounds / particles;
+   brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers: events only),
+   its cutscene states (they end with their animation), camera / sounds / particles;
    De Rol Le's segment hit tint and the beam's particles; Vol Opt's real models and lid drawing; the Dragon's
    flame / fireball particles, feet and mouth nodes; Dark Falz's cutscene objects, camera and Ultimate scenes.
    Nothing of these passes was seen in Chrome (check the Saint-Milion arena: tentacle poses, part boxes on the
