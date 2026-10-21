@@ -64,8 +64,20 @@ const fr = Math.fround;
 //   10 (pack only) 0x0055d8d4    12 killed 0x0055d800    13 flinch 0x0055d4e8
 //   14 vanish (vt +0x1c8 = 0x0055c840)  15 lost target 0x0055d32c
 //   17 / 18 idle fidgets (0x0055d2ac / 0x0055d220): entered by nothing here.
-// States 6 and 10 serve the pack roles (enemy+0x3cc 1 / 2; the factory sets
-// 0), so they are not reproduced.
+// States 6 and 10 are not reproduced: no Gee the factory makes reaches them
+// (checked on PsoBB.exe 1.25.13, 2026-10-21; see docs/DEVLOG.md). The role
+// field enemy+0x3cc is written only by the factory, as 0 (0x0055ca28; no set
+// parameter, and no other code the Gee runs, writes it). Entries into them:
+//   4 alert, transition (0x0055c6e5 .. 0x0055c723): push 6 only if 0x3cc == 1,
+//     else push 5 (climb). 0x3cc is 0, so it always climbs.
+//   7 shoot exit (0x0055e9e1): push 10 only if flag 0x100000 of enemy+0x3d0 is
+//     clear, else push 9 (strafe). The spawn (0x0055fa71 .. 0x0055fa81) sets
+//     0x100000 whenever 0x3cc == 0, and no code the Gee runs clears it (the
+//     masks 0xffefffff in the exe are in other families). So the exit is always
+//     9, and 10 never runs; its own exit to 6 (0x0055d959, when the float at
+//     enemy+0x3b4 is below the constant at 0x00925730) is then unreachable too.
+// The handlers are in the exe (6 at 0x0055ebb8, 10 at 0x0055d8d4) and are left
+// out: porting unreachable code would be guesswork.
 //
 // Not reproduced: the line-of-sight rays (a Gee sees a player through walls),
 // the knockback slide in the flinch (0x30c velocity), the ground height
@@ -136,7 +148,9 @@ const GEE_ANIM = {
 
 // exe ids: 0 spawn, 1 rise, 2 drop, 3 idle, 4 alert, 5 climb, 7 shoot, 8
 // melee, 9 strafe, 13 flinch, 15 lost.
-export type GeeState = 'spawn' | 'rise' | 'drop' | 'idle' | 'alert' | 'climb' | 'shoot' | 'melee' | 'strafe' | 'flinch' | 'lost';
+// No states 6 / 10 here: the exe's pack states are unreachable for a Gee (see
+// the note in the Gee section above). Only the states a Gee enters are listed.
+export type GeeState = 'spawn' |'rise' | 'drop' | 'idle' | 'alert' | 'climb' | 'shoot' | 'melee' | 'strafe' | 'flinch' | 'lost';
 
 // The Gee's spike (GiGues_Constructor_0055fecc over GiGuesProjectile
 // _Constructor_007acaf8): flies straight from the muzzle toward the aim point
