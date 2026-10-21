@@ -7394,5 +7394,38 @@ The gates: 0x007aaa30 is read as the port's `crossed(f)` (its frame passed f thi
 - The take-off helper's other callers 0x0041c5b1, 0x0041cc87, 0x0041ff7a, 0x0042197a, 0x004221b0: their functions and phases were not mapped.
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok. `node tests/combat.test.ts` (vendor linked): 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit` (Node 24): clean.
+## 2026-10-21: Dark Falz camera paths (update decoded and ported; no view yet)
+
+**What changed:** `combat/darkfalzcamera.ts` gained the per-frame update (`stepCameraObject`, the port of `MapObjectEntity_UpdateTransform_004d68a0`), the record and map-asset decode, and `bossCameraView(scene, frame, source)`, which steps a cutscene camera from its start to `frame` once a `BossCameraSource` (the motion and the pivot / yaw) is given. `combat/darkfalz.ts` `cameraView(source)` counts the frames of the scene and passes the source on. `render/combat.ts` `bossCameraView()` reads the control and `render/gameview.ts` passes it as `opts.bossCamera`. With no source (the game today) every scene is still null, so nothing moves yet.
+
+**Correction to the 2026-10-21 camera entry above:** 0x00830848 is not a spring arm. The reference dump names it `NJM_UpdateModelTransform_00830848(out, motion, out_ptrs, frame)`: it evaluates an NJM motion at a frame. 0x00A48AE0 is `g_MapObjectAssetPointers` (the loaded map assets, stride 8: type * 2), and the update's motion is that asset's array at the record's motion index (+0x9D). The dump names the object (`MapObjectEntity`, 0xA8 bytes, made by `AllocateAndInitializeObject_004d665c`), the setters (`UpdateCameraState` 0x004D6770, `MapObjectEntity_InitFromConfig_004d67a0`, `SetCameraTargetData` 0x004D681C) and the Dark Falz objects (the dump still calls them `Volopt*`, see the 2026-10-19 entry). `g_pCurrentMapObject` is 0x00A48A14, the camera time `g_CameraState_CurrentParam2` is 0x00A48B20 (set in the constructor 0x004D66F7, read by 0x004D68E4).
+
+**The record (exe bytes, `tools/exedata.py read`):** `u8 type (+0x9C) | u8 motion index (+0x9D) | u16 word (+0x9E) | float start frame (+0xA0) | float step (+0xA4)`. The four constant records: 0x009A5B14 index 1 step 0.5; 0x009A5BA4 index 2 step 0.5; 0x009A5C10 index 6 step 0; 0x009A5CE0 index 5 step 0.5 (DEMO_WARP0). All type 0.
+
+**The map asset:** map 14's type table is at 0x009ACDE8 (8-byte entries: name pointer, flags dword). Type 0 is `Bo04OpCam.rel` (name at 0x009095F0), flags **0x48** (0x009ACDEC). The map's list has 6+ entries: 1 CommonCam.rel (0x00909580), 2 Bo05OpCam.rel, 3 Bo05EnCam.rel, 4 Bo06OpCam.rel, 5 Bo07OpCam.rel.
+
+**The per-frame update (0x004D68A0..0x004D6BA7), as ported:**
+1. Evaluate the motion at the frame (+0xA0, before the step): the position (A) and the second vector (B) of `NJM_UpdateModelTransform_00830848`; the motion's frame count is `motion+4`.
+2. Time: `+0x54` = the UpdateCameraState time, or the motion's own time when that is -1 (0x004D68E3..0x004D68EB, the `je` to 0x004D6BA7).
+3. Flags 0x4 clear (type 0 = 0x48): B is normalized if its length is not 0 (`vec3_normalize`, 0x0082DF08), A and B turn by the yaw (`matrix_rotation_y` 0x0082D8BC: x' = cos x + sin z, z' = -sin x + cos z, BAMS 65536 = 360 degrees), A gets the pivot (+0x6C), `eye = A` (+0x3C), `target = A + B` (+0x48).
+   Flags 0x4 set and 0x80 clear: `eye = A`, `target = A + B`, no pivot. Flags 0x84: time forced to 0x36C1, B flattened and normalized, `eye = (A.x - 40 b.x, A.y, A.z - 40 b.z)`, `target = A + B` (the constant 40.0 at 0x00909574).
+4. Path: `frame += step` (+0xA4); if `frame <= count - 1` and `frame < 5000` (0x00909570) return; else flags 0x20 set: frame = 0 (loop); else frame = count - 1 and +0x9E bit 0 set (done). The count term adds 0 or 2^32 (0x00909568) for a negative count.
+The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` (direction turned by the default NPC camera's angles, `set_view_matrix_lookat` on the NPC camera's source / target, the roll +0x90 as an int angle) is NOT ported: the port takes eye / target directly, as `render/gamefield.ts` does for the other camera sources.
+
+**The pivots:** DEMO_WARP0's pair 0x00A45068 = (-20000, 0, 0) (the DEVLOG value, written by the ctor), its scalar 0x00A45074 gives the yaw at +4 (0x00A45078), a run-time value not read. The other pairs are object fields (+0x100, +0xAC, +0xE8, +0xD4) or registers (GET RING), and 0x00A44F34 (the first object) is written at run time. So no pivot except (perhaps) DEMO_WARP0's is known, and no yaw is known.
+
+**ASSUMED:**
+- The per-frame update as ported keeps the exe's semantics for the `done` flag (only the clamp sets it; the loop does not).
+- `bossCameraView` steps from the start: the view at `frame` is the (frame+1)th update, and the scene's own frame counter is the scene's tick count since `setScene` (the exe's frame is not known here).
+
+**UNCLEAR:**
+- The motion file. `Bo04OpCam.rel` is not in the local client (`/Users/junior/Downloads/psobb-client/data` has no camera .rel except `cam_boss09_demo.rel`, Saint-Milion's), and its NJM keyframes are needed for every frame. Without them the view is null, and the port's NJM channel mapping (the exe's `NJM_InitializeAnimationContext_008303dc` and the keyframe interpolation at 0x00847A98 / 0x00847ADC) is not read here.
+- The yaws and the object pivots (run time), the units of the time (frames or ticks), the view composition 0x004D6BC0, and the 0x0044EC14 object's scene.
+
+**Checks:**
+- `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (the records' motion indices, the type flags, the seven objects, the scene owners; the update's branches and the path's clamp / loop on synthetic fixtures; the seam with a synthetic source, the frame-4 eye at -20000 + 0.5 x 4, and the null cases).
+- `node tests/darkfalz.test.ts`: `darkfalz tests passed`.
+- `node tests/combat.test.ts` (with the vendor link, removed): `5946 checks, 0 failures`.
+- `client`: `npx tsc --noEmit` clean.
 
 Not run in Chrome.

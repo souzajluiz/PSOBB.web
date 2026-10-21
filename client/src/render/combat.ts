@@ -3019,6 +3019,20 @@ export class CombatView {
     this.falzProxies.set(entity, rt);
   }
 
+  // The Dark Falz boss camera for the field (render/gamefield.ts opts.bossCamera):
+  // the control's view for its scene (combat/darkfalzcamera.ts), null outside the
+  // cutscenes and while the camera asset is not read.
+  bossCameraView(): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null {
+    const head = this.falzHead;
+    if (!head || !(head.ai instanceof DarkFalzAi)) return null;
+    const v = head.ai.cameraView();
+    if (!v) return null;
+    return {
+      source: { x: v.source[0], y: v.source[1], z: v.source[2] },
+      target: { x: v.target[0], y: v.target[1], z: v.target[2] },
+    };
+  }
+
   private tickDarkFalz(e: EnemyRuntime, ai: DarkFalzAi, targets: AiTarget[]): void {
     const r = ai.tick(targets);
     for (let i = 0; i < ai.events.length; i++) this.falzEvent(e, ai, ai.events[i]);

@@ -52,7 +52,7 @@ import {
 import { DfForm1, F1, type Form1Row } from './darkfalz1.ts';
 import { DfForm2, F2, type Form2Row } from './darkfalz2.ts';
 import { DfForm3, F3, f3Spot, type Form3Row } from './darkfalz3.ts';
-import { bossCameraView } from './darkfalzcamera.ts';
+import { bossCameraView, type BossCameraSource } from './darkfalzcamera.ts';
 
 export { SCENE, SCENE_NAMES, DF_ID } from './darkfalzcommon.ts';
 
@@ -147,6 +147,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   readonly superArmor = true;
   scene: number = SCENE.editor;
   private sceneTimer = 0; // +0x388
+  private sceneFrames = 0; // ticks since the scene was set (the boss camera's frame; UNCLEAR, see darkfalzcamera.ts)
   private soundTimer = 0; // +0x37c
   made = 0; // +0x390
   kills = 0; // +0x394
@@ -319,14 +320,16 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   // --- scenes -------------------------------------------------------------------
 
   // The boss camera for the current scene (combat/darkfalzcamera.ts; null: the
-  // normal camera). Read by render/gamefield.ts as the third view source.
-  cameraView(): { source: Vec3; target: Vec3 } | null {
-    return bossCameraView(this.scene);
+  // normal camera). `source` supplies the motion and the pivots; null until the
+  // camera asset is read (see darkfalzcamera.ts), so the view is null.
+  cameraView(source: BossCameraSource | null = null): { source: Vec3; target: Vec3 } | null {
+    return bossCameraView(this.scene, this.sceneFrames, source);
   }
 
   private setScene(n: number): void {
     if (n < 0 || n >= 0x10) return;
     this.scene = n;
+    this.sceneFrames = 0;
     this.state = SCENE_NAMES[n];
     this.events.push({ kind: 'scene', scene: n });
     this.enterScene(n);
@@ -597,6 +600,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
 
   tick(targets: readonly AiTarget[]): AiFrame {
     const out = this.out;
+    this.sceneFrames++;
     out.motion = null;
     out.shots = undefined;
     out.hit = null;
