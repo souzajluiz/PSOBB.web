@@ -39,6 +39,7 @@ import {
   QuestLoadingBars,
 } from '../client/src/classic/questloading.ts';
 import type { CreateGameOptions, GameListEntry } from '../client/src/net/game.ts';
+import { menuTextAligned, withAlignedMenuText } from '../client/src/classic/charcreate_text.ts';
 
 let failures = 0;
 let checks = 0;
@@ -438,6 +439,27 @@ function entry(over: Partial<GameListEntry> = {}): GameListEntry {
   eq(standalone.ratio, 1, 'the ratio is capped at 1');
   for (let i = 0; i < 20; i++) standalone.step();
   check(/^rgb\(\d+,\d+,255\)$/.test(standalone.fill), 'filled part stays blue');
+}
+
+// --- group 11 alignment (charcreate_text.ts) ---------------------------------
+{
+  // A group 11 laid out as the exe reads it, and the data.gsl unitxt_e.prs
+  // one: entry 0xed ("Send to GM") missing, everything after one lower.
+  const aligned = Array.from({ length: 0x142 }, (_, i) => `t${i}`);
+  aligned[0xed] = 'Send to GM';
+  aligned[0x139] = 'Normal'; // Play Mode
+  aligned[0x13d] = 'Normal'; // Difficulty
+  aligned[0x140] = 'Ultimate';
+  const shifted = aligned.filter((_, i) => i !== 0xed);
+  const items = ['item names'];
+  const gsl = [items, ...Array.from({ length: 10 }, () => []), shifted];
+  const loose = [['other items'], ...Array.from({ length: 10 }, () => []), aligned];
+  check(menuTextAligned(loose) && !menuTextAligned(gsl), 'the 0x139 / 0x13d check tells the two layouts apart');
+  const fixed = withAlignedMenuText(gsl, [loose]);
+  eq([fixed[11][0x13d], fixed[11][0x140]], ['Normal', 'Ultimate'], 'group 11 comes from the aligned file');
+  check(fixed[0] === items, 'the other groups are kept');
+  check(withAlignedMenuText(loose, [gsl]) === loose, 'an aligned table is left alone');
+  check(withAlignedMenuText(gsl, []) === gsl, 'no aligned alternative: unchanged');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

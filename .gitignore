@@ -23,3 +23,7 @@ client/public/ref/
 .claude/
 .codegraph/
 __pycache__/
+
+# Playwright (client/e2e)
+client/test-results/
+client/playwright-report/

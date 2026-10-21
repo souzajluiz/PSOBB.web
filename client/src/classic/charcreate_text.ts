@@ -29,3 +29,26 @@ export function parseUnitxt(prs: Uint8Array): string[][] {
   }
   return out;
 }
+
+// Group 11 (the menus' text, read by 0x0079317c) as PsoBB.exe indexes it: the
+// party creation window asks for 0x139 (Play Mode "Normal", 0x00734578) and
+// 0x13d (Difficulty "Normal", 0x00734628), the same word. The unitxt_e.prs
+// inside Ephinea's data.gsl lacks group 11 entry 0xed ("Send to GM"), so from
+// there on every entry sits one index lower (0x139 "Challenge", 0x13d "Hard")
+// while the loose unitxt_j.prs and newserv's bb-v4 unitxt_e.prs line up.
+export function menuTextAligned(table: string[][]): boolean {
+  const g = table[11];
+  return !!g && !!g[0x139] && g[0x139] === g[0x13d];
+}
+
+// The table with group 11 taken from the first alternative that is aligned,
+// when the table's own group 11 is not (the other groups are kept: item names
+// and descriptions differ between the files and are checked elsewhere).
+export function withAlignedMenuText(table: string[][], alternatives: readonly string[][][]): string[][] {
+  if (menuTextAligned(table)) return table;
+  const fix = alternatives.find(menuTextAligned);
+  if (!fix) return table;
+  const out = table.slice();
+  out[11] = fix[11];
+  return out;
+}

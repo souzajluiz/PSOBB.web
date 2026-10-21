@@ -23,7 +23,7 @@ import { connectBridge } from '../net/wstransport.ts';
 import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
 import { TEXTURE_FILES } from './charcreate_data.ts';
 import { PlayerModelView } from './charcreate_model.ts';
-import { parseUnitxt } from './charcreate_text.ts';
+import { menuTextAligned, parseUnitxt, withAlignedMenuText } from './charcreate_text.ts';
 import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { SelectPreview } from './charselect_preview.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
@@ -117,13 +117,23 @@ async function main(): Promise<void> {
     playerTex: (await tex(['f256_player_tex_eng.prs', 'f256_player_tex.prs']))[0],
   };
 
+  // unitxt: unitxt_e.prs (else unitxt_j.prs), with group 11 from unitxt_j.prs
+  // when the first one's is misaligned (charcreate_text.ts withAlignedMenuText).
+  let unitxtLoad: Promise<string[][]> | null = null;
+  const loadUnitxt = (): Promise<string[][]> =>
+    (unitxtLoad ??= (async () => {
+      const table = parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+      if (menuTextAligned(table) || !(await files.has('unitxt_j.prs'))) return table;
+      return withAlignedMenuText(table, [parseUnitxt(await files.read('unitxt_j.prs'))]);
+    })());
+
   const charaFiles = new CharaFiles(files);
   let modelView: PlayerModelView | null = null;
   let createAssets: CharCreateAssets | null = null;
   const loadCreateAssets = async (): Promise<CharCreateAssets> =>
     (createAssets ??= {
       tex: await textureBitmaps(await files.textures(TEXTURE_FILES)),
-      text: parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data),
+      text: await loadUnitxt(),
     });
 
   let session: BBSession | null = null;
@@ -147,7 +157,7 @@ async function main(): Promise<void> {
   };
   let unitxt: string[][] | null = null;
   const text = async (group: number, index: number): Promise<string> => {
-    unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+    unitxt ??= await loadUnitxt();
     return (unitxt[group]?.[index] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, '');
   };
 
@@ -175,7 +185,7 @@ async function main(): Promise<void> {
       panel: hyouji[13],
       texlist: await textureBitmaps(await files.textures(['textureenglish.xvm', 'texturejapanese.xvm'])),
     };
-    unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+    unitxt ??= await loadUnitxt();
     const table = unitxt;
     return {
       skin: titleAssets.skin,
@@ -202,7 +212,7 @@ async function main(): Promise<void> {
       const pmtFile = (await files.has('ItemPMT.prs')) ? await files.read('ItemPMT.prs') : (await s.streamFiles()).get('ItemPMT.prs');
       if (!pmtFile) return;
       const pmt = parseItemPMT(pmtFile);
-      unitxt ??= parseUnitxt((await files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+      unitxt ??= await loadUnitxt();
       let text: string[][] | null = ItemNames.textMatches(pmt, unitxt) ? unitxt : null;
       if (!text) {
         const res = await fetch(serverUrl('/newserv-text/unitxt_e.prs')).catch(() => null);
