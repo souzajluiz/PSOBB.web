@@ -7,12 +7,15 @@
 //   - run speed 1.5: 0x00a94324 (init 0x0069b6f4), read by the run start
 //     (0x006a1898) and 0x006a14e0;
 //   - the target of one leg lies 8.0 ahead: 0x00a94320;
-//   - 0x006978a0: ×0.5 (0x0093ca20) when 0x00690344 is true (player+0x30 bit
-//     0x08, only while player+0x3ec is not 0 / 15 / 18 / 45), else ×0.75
-//     (0x0093ca24) when player+0x6c4 bit 0x08 is set (0x0069ba18 copies it
-//     from player+0x30 bit 0x00100000); then ×[player+0x690] when
-//     player+0x68c bit 0 is set (not ported). ASSUMED: the names `slowed` /
-//     `guard` for the two conditions; neither state was traced;
+//   - 0x006978a0: ×0.5 (0x0093ca20) when slowed (player+0x30 bit 0x08, set by
+//     slow_entity 0x00778b10) outside the hubs (0x00690344: the map id at
+//     player+0x3ec is not Pioneer 2 Ep1 / lobby / Pioneer 2 Ep2 / Ep4 = 0 /
+//     15 / 18 / 45, table 0x0097f1c8), else ×0.75 (0x0093ca24) in guard
+//     stance (player+0x30 bit 0x00100000, copied to player+0x6c4 bit 0x08 by
+//     0x0069ba18; set near a target by 0x0052ac5c: enter within 50 / leave
+//     beyond 100 units for hunters, 100 / 150 for the others, and after a
+//     light hit or an evade, 0x006a29f4); then ×[player+0x690] (0.4) when
+//     player+0x68c bit 0 is set, which no player code sets (not ported);
 //   - position += velocity once per tick (0x00777724).
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 

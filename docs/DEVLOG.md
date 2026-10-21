@@ -6318,3 +6318,12 @@ Ported: nothing, so behaviour is unchanged. The hand bones are unknown to the po
 ASSUMED / UNCLEAR: the box centres (bone positions); which of the vtable +0x5c / +0x60 / +0x68 calls damages; what the 52 box is for; the hand-to-box mapping (+0x3bc is not tied to a named hand).
 
 Checks: `tests/enemyfsmep2a.test.ts`, `tests/combat.test.ts`, client `tsc --noEmit`. Not run in Chrome.
+
+## 2026-10-21: player leg speed: the 0.5 / 0.75 conditions identified
+
+Follow-up of "player movement: slowed / flag tie traced" (a Haiku subagent traced it, the decisive writes and constants were checked here). In 0x006978a0:
+- **0.5 = slowed outside the hubs.** Bit 0x08 of player+0x30 is the slow status: `slow_entity` (0x00778b10) writes `(flags & ~0x3c) | 8` at 0x00778bc6 (the slot value 0x11 = `STATUS.slow`, 0xd2 frames). 0x00690344 applies it only when 0x0068a3fc passes, i.e. the map id at player+0x3ec is not in {0, 15, 18, 45} (table 0x0097f1c8: Pioneer 2 Ep1, lobby, Pioneer 2 Ep2, Pioneer 2 Ep4). So the slow does not slow you in the hubs.
+- **0.75 = guard stance.** Bit 0x00100000 of player+0x30 (the Ghidra enum's `in_guard_stance`; newserv calls the same flag "near enemy"), copied to player+0x6c4 bit 0x08 by 0x0069ba18. 0x0052ac5c sets / clears it by the distance to the player's target (0x00770738) with hysteresis: hunters enter within 50 (d^2 2500, 0x00922334) and leave beyond 100 (10000, 0x00922330); other classes 100 / 150 (0x0092233c / 0x00922338); no target clears it (0x0052ad36), a target id >= 0x1000 sets it (0x0052ad28). 0x006a29f4 also sets it (with a velocity reset) at the end of the light-hit and evade states, and the 6x3E / 6x3F / 6x40 handlers copy it from the packet for remote players (0x00698cb6 / 0x00698db5).
+- **[player+0x690]**: 0.4 by default (the player ctor), part of the scale block the quest opcode `set_shrink_size` writes; the gate player+0x68c bit 0 is only ever written 0 in player code, so the factor is inert in normal play.
+
+So the port's names `slowed` / `guard` are right after all (the earlier entry doubted `guard`); the hub exemption of the slow and the stance's proximity rule are not ported (`PlayerMover` is only driven in the lobby, where neither applies). `render/playermove.ts` header updated. Unverified details: the 0x006898cc proximity writer (2500 / 3600) and which handlers call 0x006a29f4 (taken from the dump's names).
