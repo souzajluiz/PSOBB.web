@@ -18,9 +18,12 @@ https://gitlab.psobb.io/psobb/original-psobb-client-source
 `src/Psobb.exe-*.c` is a full Ghidra dump of the binary (~986k lines, ~13300
 functions) whose functions are named by the community with the address kept as
 a suffix, so an address found anywhere resolves to a name and a body:
-`UpdateGroundItem_005c4010`, `InitializeItemBML_005d7ccc`. Running Ghidra
-headless (`tools/ghidra/run_any.sh`) is the fallback for what the dump leaves
-unnamed or unresolved, and for data tables, which the dump does not carry.
+`UpdateGroundItem_005c4010`, `InitializeItemBML_005d7ccc`. Use it for names;
+decompile with Ghidra (since 2026-10-21 the standing rule is: always the REA skill
+with its Ghidra provider; while REA cannot start on this Mac, `tools/ghidra/decomp.sh`
+runs Ghidra 12.1.4 headless directly: `decomp.sh import` once, then
+`decomp.sh <address>...` prints the C of the functions holding those addresses).
+The data tables are not in the dump.
 
 The dump carries the code but **not the data tables**. Most of what is missing
 is a plain read at a known address, which `tools/exedata.py` does straight out

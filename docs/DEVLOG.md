@@ -7908,3 +7908,21 @@ The `+0x08` body id in variant 3 is taken from the table of the difficulty, as t
 **Decisive spot-check.** In the exe, 0x0041bbab: `85 c0 75 0f` (test eax,eax; jne) followed by `c7 80 6c 08 00 00 01 00 00 00` at 0x0041bbb2 (`+0x86c = 1`), and `c7 80 6c 08 00 00 02 00 00 00` at 0x0041bbc6 (`+0x86c = 2`). If the Ultimate test result is not 0 or 1, or a later write of 3 exists in the intro's entry path, the variant map is wrong and the two sites above would be dead or live differently.
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 29 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. Client `npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome.
+
+## 2026-10-21: Ghidra headless decompiler (tools/ghidra/decomp.sh)
+
+The user's rule from now on: reverse engineering of PsoBB.exe goes through the REA skill
+with its Ghidra provider. On this Mac REA cannot start Ghidra yet: before launching the JVM
+it compiles a Swift helper with `xcrun swiftc`, and the installed Command Line Tools are
+broken (the compiler, swiftlang-6.1.0.110.21, rejects the SDK built with 110.5, and
+`usr/include/swift/module.modulemap` redefines `SwiftBridging`). The fix is a Command Line
+Tools reinstall or update (16.4 is offered by softwareupdate), done by the user.
+
+Until then `tools/ghidra/decomp.sh` runs Ghidra 12.1.4 headless directly. `decomp.sh import`
+imports and auto-analyses PsoBB.exe once into a project outside the repo
+(`../ghidra`, about 96 MB; the analysis took a few minutes); `decomp.sh <address>...`
+opens it read-only and prints the decompiled C of each function holding an address
+(`tools/ghidra/Decompile.java`), about 6 s a call. The older notes that pointed at
+`tools/ghidra/run_any.sh` (a script that is no longer in the tree) now point here.
+First check: 0x0041fa7b sits in 0x0041f6cc and 0x0041c5b1 in 0x0041c168, as the Dragon
+pass of today reports.

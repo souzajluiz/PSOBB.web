@@ -5,7 +5,7 @@
 # suffix (InitializeItemBML_005d7ccc), plus headers/ and notes/.
 #
 # This is the first place to look for any value, layout or rule that must come
-# from the client; running Ghidra headless (tools/ghidra/run_any.sh) is the
+# from the client; running Ghidra headless (tools/ghidra/decomp.sh) is the
 # fallback for what the dump does not name or resolve.
 #
 # The repository is not part of this one. Clone it anywhere and point REFSRC at

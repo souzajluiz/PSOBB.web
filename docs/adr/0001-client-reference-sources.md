@@ -37,7 +37,7 @@ that code in usable form, and they complement each other:
      has been decompiled there. Where the two disagree, the matching C wins,
      because it is verified against the binary byte for byte.
    - `tools/exedata.py` for data tables, and Ghidra headless
-     (`tools/ghidra/run_any.sh`) only for what neither repository resolves.
+     (`tools/ghidra/decomp.sh`) only for what neither repository resolves.
 2. Code and docs keep citing Ephinea addresses (the original-psobb-client-source
    names). When a value was confirmed in the matching decompilation, the
    comment or DEVLOG entry says so and names its JP function
