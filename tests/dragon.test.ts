@@ -8,6 +8,8 @@ import {
   DragonAi,
   DragonBurst,
   DRAGON_BODY_BOXES,
+  DRAGON_FX,
+  DRAGON_MOUTH,
   DRAGON_NODE_TABLE,
   DRAGON_TAIL,
   DragonFireball,
@@ -21,6 +23,7 @@ import {
   DRAGON_SLOTS,
   DRAGON_STATE,
   dragonNext,
+  footNodes,
   type DragonEvent,
   type DragonOptions,
 } from '../client/src/combat/dragon.ts';
@@ -615,6 +618,52 @@ for (const n of [1, 2, 5]) {
       check(Math.abs(tip.z) > 200, `the tail tip is more than 200 behind the body (${tip.z.toFixed(0)})`);
     }
   }
+}
+
+// 25. The mouth and the feet are model nodes: the stomp strikes the recorded
+//     pair (50 and 51 at frame 3, 40 and 41 at frame 24), the flame starts at
+//     the recorded mouth (node 60), and each flame emits its particles.
+{
+  eq(DRAGON_MOUTH.node, 60, 'the mouth is node 60 (the draw tracker 0x3c)');
+  eq(DRAGON_MOUTH.forward, 5, 'the point (0, 0, 5) in its space');
+  eq(footNodes(1).join(), '50,51', 'side +1 (frame 3) strikes nodes 50 and 51');
+  eq(footNodes(-1).join(), '40,41', 'side -1 (frame 24) strikes nodes 40 and 41');
+  eq(DRAGON_NODE_TABLE.indexOf(40), 3, 'node 40 is table slot 3');
+  eq(DRAGON_NODE_TABLE.indexOf(51), 6, 'node 51 is table slot 6');
+  eq(DRAGON_FX.breath, 0x321, 'the breath particle 0x321');
+  eq(DRAGON_FX.flameStart, 0x31f, 'the flame start particle 0x31f');
+  eq(DRAGON_FX.fireballImpact, 0x320, 'the fireball impact particle 0x320');
+
+  const feet = brain();
+  const at = (n: number, out: [number, number, number]) => {
+    out[0] = n;
+    out[1] = 5;
+    out[2] = -n;
+    return true;
+  };
+  eq(feet.footPlaces(1).length, 1, 'without the model: one ASSUMED foot');
+  feet.recordFeet(at);
+  eq(JSON.stringify(feet.footPlaces(1)), '[[50,-50],[51,-51]]', 'side +1: the recorded nodes 50 and 51');
+  eq(JSON.stringify(feet.footPlaces(-1)), '[[40,-40],[41,-41]]', 'side -1: the recorded nodes 40 and 41');
+  feet.recordFeet((n, out) => n !== 51 && at(n, out));
+  eq(feet.footPlaces(1).length, 1, 'a model without node 51: the ASSUMED foot');
+  eq(feet.footPlaces(-1).length, 2, 'the other pair is still recorded');
+
+  const m = brain();
+  const guess = m.mouth().join();
+  m.recordMouth([1, 2, 3]);
+  eq(m.mouth().join(), '1,2,3', 'the flame starts at the recorded mouth');
+  m.recordMouth(null);
+  eq(m.mouth().join(), guess, 'without node 60: the ASSUMED mouth');
+
+  // Each flame is one 0x321 (the breath) and one 0x31f (the flame's start).
+  const b = brain();
+  const br = run(b, [player(0, 0, 200)], 4000, () => false);
+  const flames = br.shots.filter((s) => s instanceof DragonFlame).length;
+  const particles = (id: number) => br.events.filter((e) => e.kind === 'particle' && e.id === id).length;
+  check(flames > 0, `the breath makes flames (${flames})`);
+  eq(particles(0x321), flames, 'one breath particle per flame');
+  eq(particles(0x31f), flames, 'one flame start particle per flame');
 }
 
 if (failures) {

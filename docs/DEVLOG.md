@@ -6795,3 +6795,23 @@ What stands: the laser (ctor 0x00765c68, only built by 0x0076b85c from the state
 **Checks.** `node tests/enemyfsmep2d.test.ts`: all checks passed (new: the tint function, the 30-frame colour lerp from the old element). `node tests/combat.test.ts`: 5946 checks, 0 failures (with `vendor/` linked). `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
 
 Not run in Chrome.
+
+## 2026-10-21: Dragon mouth / feet nodes and fire particles
+
+**What changed.** The Dragon's flame origin and its stomps read the model's nodes instead of the ASSUMED offsets: `combat/dragon.ts` `DragonAi.recordMouth` / `recordFeet` / `mouth()` / `footPlaces()` (the constants `DRAGON_MOUTH`, `DRAGON_FEET`, `footNodes`, `DRAGON_FX`), `render/combat.ts` `tickDragon` records them every frame from the model tree (`inst.nodes[0]`, the same tree the tail reads). The fire spawns its particles through the port's particle engine: the breath's `0x321` and the flame's start `0x31f` (one each per flame, at the mouth), the fireball's burst `0x320` (once, when it lands). No damage changed: the flame and fireball paths are the same, only their origin (and the stomp's two points) moved to the recorded nodes when the model has them.
+
+**The exe, from PsoBB.exe** (read only, `tools/exedata.py xref` and `objdump`):
+- Mouth: `0x00425334` (called from the Dragon's `0x00419130` and `0x00424cd8`) sets the draw's node tracker: the counter `0xa437dc = 0x3c` (node 60) and the point `0xa437ac = (0, 0, 5.0)`. The model walker `0x00418d5c` (the draw callback, counter `0xa437e0` against the table `0x008fb900`) transforms that point by node 60's matrix into the Dragon's `+0x3f0` (`0x82f940`). `0x00424938` copies `+0x3f0` to `+0x414 / +0x418 / +0x41c`, and the breath reads `+0x414` / `+0x41c` as its origin (`0x00422a8e`, `0x00422ab4`; the aim is origin + `0xa436fc` (115) along the yaw).
+- Feet: the walk's per-frame code (`0x00423070` area, `0x004233d8` / `0x0042339a`) calls `0x0041d504` when frame 3 is crossed (nodes 50 and 51, table slots 5 and 6 at `+0x474` / `+0x480`) and `0x0041d410` at frame 24 (nodes 40 and 41, slots 3 and 4 at `+0x45c` / `+0x468`). Each calls `0x0051fdf8` (an attack object, the context {10, 15, 8} of `0x008fb42c`, radius 15 at field 2) for both nodes of its pair, so a stomp is two points, not one.
+- Particles (the `0x00814298` / `0x008144b0` spawn, signature (id, anchor, position, 0, 0)): the breath flame `0x422c9a` / `0x422cb7` and `0x422ddb` push `0x321`; the flame ctor `0x004264a4` (`0x00426766`) pushes `0x31f` at its own position; the fireball update `0x00426790` (`0x004268e5`) pushes `0x320`. `particleentry.dat` (in data.gsl) has entries 0x314..0x326 (checked with `formats/archives.ts` and `classic/particles.ts`).
+
+**ASSUMED / UNCLEAR:**
+- The breath particle `0x321` is anchored by the exe to the Dragon object with the offset `+0x644` (the emitter position `0x00419590` writes; whether it follows the body each frame is UNCLEAR); the port puts it at the mouth. The port also emits the sound `se 0x321` in the breath (`tickFire`), the same number: UNCLEAR whether the exe plays that SE here at all, not changed.
+- The fireball's burst point and its particle timing (`0x004268e5` is in the update, after the object's hit list is cleared; the exact landing frame is not traced).
+- The walk's dust `0x315` at frames 4 and 24.5 (`0x0041d3d0`, `0x0041d403`, at `+0x644`) is cited but not spawned.
+- Not mapped to a state, so not spawned: `0x317`, `0x318`, `0x31a`, `0x31b`, `0x31d`, `0x31e`, `0x322` to `0x326` (the burrow, dive, emerge, spiral and rain effects, `0x0041a696`, `0x0041f16e`, `0x00420550`, `0x0041b0a6` and others).
+- Feet and mouth fall back to the old ASSUMED offsets when the model has no such node (`DRAGON_GUESS`); the head `+0x418` is not used.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok (new section 25: the node tables, the recorded feet and the partial pair, the recorded mouth and its fallback, one 0x321 and one 0x31f per flame). `node tests/sinowbeat.test.ts`: sinowbeat: ok. `node tests/combat.test.ts`: 5946 checks, 0 failures (with `vendor/` linked). `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
+
+Not run in Chrome.

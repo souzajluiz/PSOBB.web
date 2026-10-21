@@ -52,8 +52,8 @@
 // set_monster_spawn_initdata_as_dead), the exe's kill sends.
 //
 // Not reproduced: the intro's camera, particles and sounds, the model-node
-// reads other than the tail's (GetPlayerYPosition 0x00422768, the mouth and
-// foot nodes), the tail boxes' direction vector (+0xc4 / +0xcc, a knockback
+// reads other than the tail's, the mouth's and the feet's (GetPlayerYPosition
+// 0x00422768), the tail boxes' direction vector (+0xc4 / +0xcc, a knockback
 // the hit callback reads), the ground follower's dust (0x00427984) and the
 // player-controlled dragon. The hit boxes are DRAGON_BODY_BOXES and
 // DRAGON_TAIL. Heights come from the altitude registers.
@@ -204,8 +204,29 @@ export const DRAGON = {
   rimSlots: 12, // the emerge / dive points (0x1555 BAMS apart)
 } as const;
 
-// ASSUMED: what the exe reads from model nodes (the mouth +0x414, the head
-// +0x418, the feet) and from variables this port does not reproduce.
+// The mouth and the feet are model nodes (the draw records them, see
+// recordFeet / recordMouth). The mouth is node 60 with the point (0, 0, 5) in
+// its space: 0x00425334 sets the draw's tracker to node 0x3c (the counter of
+// 0x00418d5c) and the point 0xa437ac = (0, 0, 5.0), 0x00418d5c turns the point
+// into the Dragon's +0x3f0 with the node's matrix, and 0x00424938 copies it to
+// +0x414 (x), +0x418 (y), +0x41c (z), the flame's origin (0x00422a8e). The
+// stomps (0x0041d504 at frame 3, 0x0041d410 at frame 24) strike both nodes of a
+// pair with radius 15: 50 and 51 for side +1, 40 and 41 for side -1 (the table
+// slots 5, 6 and 3, 4 of DRAGON_NODE_TABLE).
+export const DRAGON_MOUTH = { node: 60, forward: 5 } as const;
+export const DRAGON_FEET = { front: [50, 51], back: [40, 41] } as const;
+export function footNodes(side: number): readonly number[] {
+  return side > 0 ? DRAGON_FEET.front : DRAGON_FEET.back;
+}
+
+// The particles of the fire (particleentry.dat ids, the 0x008144b0 / 0x00814298
+// spawn calls): 0x321 per flame of the breath (0x00422cb7, 0x00422ddb), 0x31f
+// where a flame is made (its ctor 0x004264a4, 0x00426766) and 0x320 where a
+// fireball bursts (its update 0x00426790, 0x004268e5).
+export const DRAGON_FX = { breath: 0x321, flameStart: 0x31f, fireballImpact: 0x320 } as const;
+
+// ASSUMED: what the exe reads from variables this port does not reproduce, and
+// the mouth / feet places when the model has no such node (the head +0x418).
 export const DRAGON_GUESS = {
   mouthForward: 70,
   mouthHeight: 75,
@@ -481,6 +502,8 @@ export type DragonEvent =
   // A 6x12 the leader sends (unknown_dragon_send_0x60 / SendDragonActionPacket).
   | { kind: 'send'; state: number; cursor: number; target: number | null; x: number; z: number }
   | { kind: 'se'; id: number }
+  // A particle at the mouth (the render puts it at the recorded place).
+  | { kind: 'particle'; id: number }
   | { kind: 'bgm'; name: string }
   // State 0x15's phase 5: EnemyOnKilledHandler_0051f894 (every client runs it).
   | { kind: 'killed'; x: number; z: number };
@@ -607,6 +630,10 @@ export class DragonAi extends BrainBase {
   // The tail object (+0x68c): its 17 boxes and its hit list (+0xbc).
   readonly tailBoxes: DragonTailBox[] = Array.from({ length: DRAGON_TAIL.count }, () => ({ x: 0, y: 0, z: 0, low: true }));
   private tailSeen = new Set<number>();
+  // The feet's nodes (x, y, z in the world) and the mouth (recordMouth); null
+  // until the model has been drawn.
+  private readonly feetNodes = new Map<number, [number, number, number]>();
+  private mouthPlace: [number, number, number] | null = null;
   private rain = 0; // the shared rain generator (seeded from the 6x12's x / z)
   private everLeader: boolean;
   private takeover = false; // (current_attack_info).horiz_dist: the leader changed
@@ -852,9 +879,38 @@ export class DragonAi extends BrainBase {
     this.pendingShots.push(new DragonBurst(x, 0, z, radius, { kind: 'tech', power }, { color: 0xff9030, size: 3 }, only));
   }
 
-  private mouth(): [number, number, number] {
+  // The flame's origin: the recorded node 60 (recordMouth), else the ASSUMED
+  // place in front of the body.
+  mouth(): [number, number, number] {
+    if (this.mouthPlace) return [this.mouthPlace[0], this.mouthPlace[1], this.mouthPlace[2]];
     const h = this.alt > 0 || this.air === 1 ? this.alt + DRAGON_GUESS.mouthHeightFlying : DRAGON_GUESS.mouthHeight;
     return [this.x + sinB(this.yaw) * DRAGON_GUESS.mouthForward, h, this.z + cosB(this.yaw) * DRAGON_GUESS.mouthForward];
+  }
+
+  // The mouth as the draw recorded it, in the brain's space (x, z as the body;
+  // y above the ground the body stands on), or null while the model has none.
+  recordMouth(p: readonly [number, number, number] | null): void {
+    this.mouthPlace = p ? [p[0], p[1], p[2]] : null;
+  }
+
+  // The feet's nodes as the draw recorded them (the table slots 3..6 are
+  // recorded in every state); a node the model lacks is forgotten.
+  recordFeet(read: (node: number, out: [number, number, number]) => boolean): void {
+    for (const n of [...DRAGON_FEET.front, ...DRAGON_FEET.back]) {
+      const p: [number, number, number] = [0, 0, 0];
+      if (read(n, p)) this.feetNodes.set(n, p);
+      else this.feetNodes.delete(n);
+    }
+  }
+
+  // The places of a stomp (side +1 at frame 3, -1 at frame 24): the x / z of
+  // the recorded pair, or the ASSUMED place of one foot in front of the body.
+  footPlaces(side: number): [number, number][] {
+    const rec = footNodes(side).map((n) => this.feetNodes.get(n));
+    if (rec.every((p) => p !== undefined)) return rec.map((p) => [p![0], p![2]]);
+    const fx = sinB(this.yaw);
+    const fz = cosB(this.yaw);
+    return [[this.x + fx * DRAGON_GUESS.footForward + fz * DRAGON_GUESS.footSide * side, this.z + fz * DRAGON_GUESS.footForward - fx * DRAGON_GUESS.footSide * side]];
   }
 
   // --- states: SetEnemyAiState_0051f62c ------------------------------------------
@@ -1603,14 +1659,10 @@ export class DragonAi extends BrainBase {
     }
   }
 
-  // InitializeSinowbeatBattleParams (2): the foot's attack object, radius 15,
-  // AttackData row 0. ASSUMED: the foot node's place.
+  // The stomp's attack objects: one per node of the pair, radius 15, AttackData
+  // row 0 (0x0041d410 / 0x0041d504 call 0x0051fdf8 for each node).
   private footStrike(side: number): void {
-    const fx = sinB(this.yaw);
-    const fz = cosB(this.yaw);
-    const px = this.x + fx * DRAGON_GUESS.footForward + fz * DRAGON_GUESS.footSide * side;
-    const pz = this.z + fz * DRAGON_GUESS.footForward - fx * DRAGON_GUESS.footSide * side;
-    this.strike(px, pz, DRAGON.stompRadius, 0);
+    for (const [px, pz] of this.footPlaces(side)) this.strike(px, pz, DRAGON.stompRadius, 0);
   }
 
   // 0x00422a08 phase 0: turn to the target (0xa0 a frame) while the breath
@@ -1656,10 +1708,12 @@ export class DragonAi extends BrainBase {
     const vz = az - m[2];
     const len = Math.hypot(vx, vy, vz) || 1;
     this.pendingShots.push(new DragonFlame(m[0], m[1], m[2], vx / len, vy / len, vz / len, this.mv.fparam1));
+    this.emit({ kind: 'particle', id: DRAGON_FX.breath });
+    this.emit({ kind: 'particle', id: DRAGON_FX.flameStart });
   }
 
-  // Whether the owner should record the model's nodes this frame (only the
-  // tail swipe reads them).
+  // Whether the owner should record the tail's nodes this frame (only the
+  // tail swipe reads them; the feet and the mouth are recorded in every state).
   get wantsNodes(): boolean {
     return this.sid === DRAGON_STATE.tail;
   }

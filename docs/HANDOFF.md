@@ -60,7 +60,9 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    brain; see their DEVLOG entries). Still open: Saint-Milion's attack objects (lasers: events only),
    its cutscene states (they end with their animation), camera / sounds / particles;
    De Rol Le's segment hit tint and the beam's particles; Vol Opt's real models and lid drawing; the Dragon's
-   flame / fireball particles, feet and mouth nodes; Dark Falz's cutscene objects, camera and Ultimate scenes.
+   remaining particles (the walk's dust 0x315 and the burrow / dive / emerge / rain effects, 0x317..0x326 minus
+   the fire's; its breath's SE 0x321 is UNCLEAR; the mouth and feet nodes and the breath / fireball particles
+   are in, 2026-10-21); Dark Falz's cutscene objects, camera and Ultimate scenes.
    Nothing of these passes was seen in Chrome (check the Saint-Milion arena: tentacle poses, part boxes on the
    model nodes, the 6xDC flow with two clients).
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation
