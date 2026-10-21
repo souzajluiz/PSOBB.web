@@ -15,6 +15,8 @@ import {
   DragonFireball,
   DragonFlame,
   DragonTrapezoid,
+  DRAGON_FIRE_IDS,
+  DRAGON_PARTICLE_IDS,
   DRAGON_CURSOR_B,
   DRAGON_SEQ_NORMAL_A,
   DRAGON_SEQ_NORMAL_B,
@@ -27,6 +29,7 @@ import {
   type DragonEvent,
   type DragonOptions,
 } from '../client/src/combat/dragon.ts';
+import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile } from '../client/src/classic/particles.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
@@ -668,6 +671,88 @@ for (const n of [1, 2, 5]) {
   check(fireballs > 0, `the breath's fight makes fireballs (${fireballs})`);
   eq(se(0x31f), fireballs, 'one fireball sound per fireball');
   check(se(0x321) > flames, `the breath sound plays every frame (${se(0x321)} for ${flames} flames)`);
+}
+
+// 26. The particle ids (the two tables of 0x008fbeec / 0x008fbf0c and the fire
+//     tables of 0x008fc374 / 0x008fc380) are the ones the sites read; the ids
+//     from 0x200 are the map's particleentrya%d.dat entries; the stomp and the
+//     fireball trail make their particles at the foot and the flying fireball.
+{
+  const N = DRAGON_PARTICLE_IDS.normal;
+  const U = DRAGON_PARTICLE_IDS.ultimate;
+  eq(N.f00, 65, 'normal +0x00 (0x0041ebf0, the 0x840 flag site)');
+  eq(N.f04, 76, 'normal +0x04 (0x0041c784)');
+  eq(N.body, 0x223, 'normal +0x08 (the body)');
+  eq(N.stomp, 240, 'normal +0x0c (the stomps)');
+  eq(N.mouth, 0x222, 'normal +0x18 (the flame mouth, 0x00421b2c)');
+  eq(N.launch, 0x225, 'normal +0x1c (the fireball launch, 0x004218eb)');
+  eq(U.f00, 0x200, 'Ultimate +0x00');
+  eq(U.f04, 0x201, 'Ultimate +0x04');
+  eq(U.body, 0x202, 'Ultimate +0x08');
+  eq(U.stomp, 148, 'Ultimate +0x0c');
+  eq(U.mouth, 0x20b, 'Ultimate +0x18');
+  eq(U.launch, 0x209, 'Ultimate +0x1c');
+  eq(DRAGON_FIRE_IDS.normal.f00, 548, 'the normal fire table +0x00');
+  eq(DRAGON_FIRE_IDS.normal.f04, 550, 'the normal fire table +0x04');
+  eq(DRAGON_FIRE_IDS.normal.trail, 553, 'the normal fire table +0x08 (the trail)');
+  eq(DRAGON_FIRE_IDS.ultimate.f00, 522, 'the Ultimate fire table +0x00');
+  eq(DRAGON_FIRE_IDS.ultimate.f04, 520, 'the Ultimate fire table +0x04');
+  eq(DRAGON_FIRE_IDS.ultimate.trail, 201, 'the Ultimate fire table +0x08 (particleentry.dat 0xc9)');
+  const inMap = (id: number) => id >= MAP_PARTICLE_FIRST && id < MAP_PARTICLE_FIRST + MAP_PARTICLE_COUNT;
+  eq(inMap(N.body) && inMap(N.mouth) && inMap(N.launch) && inMap(DRAGON_FIRE_IDS.normal.trail), true, 'the normal map ids are in the map table range');
+  eq(inMap(U.f00) && inMap(U.f04) && inMap(U.body) && inMap(U.mouth) && inMap(U.launch), true, 'the Ultimate map ids are in the map table range');
+  eq(inMap(N.stomp) || inMap(N.f00) || inMap(N.f04), false, 'the normal ids below 0x200 are particleentry.dat entries');
+  eq(particleMapFile(11), 'particleentrya11.dat', 'the Dragon floor (area 0x0b) reads particleentrya11.dat');
+  eq(particleMapFile(3), 'particleentrya03.dat', 'maps 0..9 use the 0-padded name');
+
+  // The trail: a flying fireball carries its table's trail id and is flying
+  // until it arrived; the arrival frame makes no trail.
+  const f = new DragonFireball([0, 0, 0], [0, 0, 60], 1000, DRAGON_FIRE_IDS.normal.trail);
+  eq(f.trailId, 553, 'the fireball carries the trail id');
+  check(f.flying, 'a new fireball is flying');
+  let frames = 0;
+  while (f.flying && frames < 50) {
+    f.tick([]);
+    frames++;
+  }
+  eq(frames, 3, 'a 60-unit flight at 25 a frame takes 3 frames (the arrival frame is not flying)');
+  check(!f.flying, 'after the arrival it is no longer flying');
+
+  // The fights: every fireball carries its difficulty's trail; the stomps
+  // make one particle per foot, with the stomp id.
+  const normal = run(brain(), [player(0, 0, 200)], 4000, () => false);
+  const fbN = normal.shots.filter((s) => s instanceof DragonFireball) as DragonFireball[];
+  check(fbN.length > 0, `the normal fight makes fireballs (${fbN.length})`);
+  check(fbN.every((s) => s.trailId === 553), 'every normal fireball has the normal trail id 553');
+  const parts = normal.events.filter((e) => e.kind === 'particle');
+  check(parts.length > 0, `the normal fight makes stomp particles (${parts.length})`);
+  check(parts.every((e) => e.kind === 'particle' && e.id === N.stomp && e.y === 0), 'every normal particle event is the stomp on the ground');
+  // One particle per place of the stomp: the recorded pair (nodes 50 and 51),
+  // or the one foot the fallback places in front of the body.
+  const feet = brain();
+  feet.recordFeet((n, out) => {
+    out[0] = n;
+    out[1] = 0;
+    out[2] = 10;
+    return n === 50 || n === 51;
+  });
+  (feet as unknown as { footStrike(side: number): void }).footStrike(1);
+  const pair = feet.events.filter((e) => e.kind === 'particle');
+  eq(pair.length, 2, 'a stomp on the recorded pair makes two particles');
+  check(pair.every((e) => e.kind === 'particle' && e.id === N.stomp), 'both are the normal stomp id');
+  eq(pair.map((e) => (e.kind === 'particle' ? e.x : -1)).join(), '50,51', 'at the two recorded feet');
+  const lone = brain();
+  (lone as unknown as { footStrike(side: number): void }).footStrike(-1);
+  eq(lone.events.filter((e) => e.kind === 'particle').length, 1, 'without the feet, one particle at the fallback foot');
+
+  const ult = run(brain({ ultimate: true, movement: ROW_ULTIMATE, hp: 16500 }), [player(0, 0, 200)], 4000, () => false);
+  const fbU = ult.shots.filter((s) => s instanceof DragonFireball) as DragonFireball[];
+  check(fbU.length > 0, `the Ultimate fight makes fireballs (${fbU.length})`);
+  check(fbU.every((s) => s.trailId === 201), 'every Ultimate fireball has the Ultimate trail id 201');
+  check(
+    ult.events.filter((e) => e.kind === 'particle').every((e) => e.kind === 'particle' && e.id === U.stomp),
+    'the Ultimate stomps use the Ultimate stomp id 148',
+  );
 }
 
 if (failures) {

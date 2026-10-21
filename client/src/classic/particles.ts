@@ -53,6 +53,18 @@ export interface ParticleEntry {
   flags: number;
 }
 
+// create_particle_effect (0x0050b7a4 / 0x0050981c, dump line 289655): an id
+// below 0x200 is an entry of particleentry.dat; 0x200..0x23f are entries
+// 0..0x3f of the current map's particleentrya%d.dat (0x0050d9a0 reads
+// particleentrya0%d.dat for maps 0..9); any other id makes nothing. The map is
+// taken to be the floor's area number (ASSUMED: the map number is the area).
+export const MAP_PARTICLE_FIRST = 0x200;
+export const MAP_PARTICLE_COUNT = 0x40;
+
+export function particleMapFile(map: number): string {
+  return map < 10 ? `particleentrya0${map}.dat` : `particleentrya${map}.dat`;
+}
+
 export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
   const o = id * 0x98;
   const dv = new DataView(dat.buffer, dat.byteOffset + o, 0x98);
