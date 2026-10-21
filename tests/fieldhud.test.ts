@@ -24,7 +24,7 @@ import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/class
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
-import { buildDropItem, buildEquip, buildSplitStack, buildUseItem } from '../client/src/net/items.ts';
+import { autoSortOrder, buildDropItem, buildEquip, buildSortInventory, buildSplitStack, buildUseItem, InventoryModel, sortKey } from '../client/src/net/items.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -94,7 +94,7 @@ text[3][30] = 'Health recovery fluid.';
 text[5] = ['Foie '];
 const names = new ItemNames(pmt, text);
 const ctx: RowContext = { names, charClass: 0, level: 2, stats: { atp: 50, mst: 0, ata: 50 }, lobby: false };
-const inv = (hex: string, equipped = false): InventoryItem => ({ index: 0, state: 1, flags: equipped ? 8 : 0, extensionData1: 0, extensionData2: 0, equipped, data: itemFromHex(hex) });
+const inv = (hex: string, equipped = false): InventoryItem => ({ index: 0, state: 1, flags: equipped ? 0x0c : 0, extensionData1: 0, extensionData2: 0, equipped, data: itemFromHex(hex) });
 const saber = inv('000100000000000000000000 00010000 00000000', true);
 eq(itemRow(saber, ctx), { id: 0x100, icon1: 0x0c, icon2: 0, name: 'Saber', count: '', nameColor: '#ffffff', iconColor: '#ffffff' }, 'equipped Saber row');
 eq(itemRowName(itemFromHex('000100030000000000000000'), names), 'Saber +3', 'grind format "%s +%d"');
@@ -147,6 +147,9 @@ const menu = new ItemPackMenu({
     unequip: (id) => calls.push(`unequip ${id}`),
     drop: (id, n) => calls.push(`drop ${id} ${n}`),
     dropMeseta: (n) => calls.push(`meseta ${n}`),
+    sortAuto: () => 0,
+    sortSwap: () => 0,
+    commitSort: () => 0,
   },
 });
 const press = (...keys: string[]) => keys.forEach((key) => menu.key({ key } as KeyboardEvent));
@@ -157,6 +160,65 @@ press('Enter', 'ArrowDown', 'Enter', 'ArrowUp', 'ArrowUp', 'Enter'); // Monomate
 press('ArrowDown', 'Enter', 'Enter', 'ArrowLeft', 'ArrowLeft', 'ArrowUp', 'Enter'); // meseta: 101
 eq(calls, ['unequip 256', 'use 65537', 'drop 65537 3', 'meseta 101'], 'menu actions');
 eq(menu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes the list');
+
+// --- Sort (SortAndReassignChallengeItems_006a60f4, InventorySwapLinkedItems_006a6a08, 6xC4) ---
+{
+  const mk = (hex: string, id: number, equipped = false): InventoryItem => {
+    const it = inv(hex, equipped);
+    it.data.id = id;
+    return it;
+  };
+  const tool = mk('030000000001000000000000', 10); // tool 03 00 00
+  const frame2 = mk('010100000000000000000000', 11); // armor 01 01
+  const unit = mk('010300000000000000000000', 12); // unit 01 03
+  const wep = mk('000200000000000000000000', 13); // weapon 00 02
+  const wepEq = mk('000100000000000000000000', 14, true); // weapon 00 01, equipped
+  const wepNo = mk('000100000000000000000000', 15); // weapon 00 01, not equipped
+  eq(sortKey(wepEq), 0x100, 'key: weapon 00 01 equipped');
+  eq(sortKey(wepNo), 0x10100, 'key: not equipped adds 0x10000');
+  eq(sortKey({ ...wepEq, flags: 0x08 }), 0x10100, 'key: flags 0x08 alone is not equipped (the exe needs 0x04 too)');
+  eq(sortKey(frame2), (1 << 25) | (1 << 17) | 0x10000, 'key: armor shifts data1[1] by 17');
+  eq(autoSortOrder([tool, frame2, unit, wep, wepNo, wepEq]).map((i) => i.data.id), [14, 15, 13, 11, 12, 10], 'sorted ascending by group, equipped first');
+  const c = { meseta: 0, inventory: [tool, frame2, wepNo, wep] } as unknown as CharacterFile;
+  const model = new InventoryModel(c);
+  model.sortAuto();
+  eq(c.inventory.map((i) => [i.data.id, i.index]), [[15, 0], [13, 1], [11, 2], [10, 3]], 'sortAuto reorders and reindexes');
+  eq(model.swap(15, 10), true, 'swap');
+  eq(c.inventory.map((i) => i.data.id), [10, 13, 11, 15], 'swap trades places');
+  eq(model.swap(15, 99), false, 'swap with an unknown id');
+  const pkt = buildSortInventory([10, 13, 11, 15]);
+  eq([pkt.length, pkt[0], pkt[1], pkt[2], pkt[3]], [0x7c, 0xc4, 0x1f, 0xff, 0xff], '6xC4 header');
+  eq([...new Uint32Array(pkt.buffer, 4, 6)], [10, 13, 11, 15, 0xffffffff, 0xffffffff], '6xC4 ids, -1 after the last');
+
+  // The menu: Sort > Automatically, then Manually (pick two, trade places).
+  const log: string[] = [];
+  const chr = { meseta: 10, inventory: [tool, frame2, wepNo] } as unknown as CharacterFile;
+  const m2 = new InventoryModel(chr);
+  const sortMenu = new ItemPackMenu({
+    character: () => chr,
+    rowContext: () => ctx,
+    purposeContext: () => pctx,
+    text: (g, i) => `${g}:${i}`,
+    actions: {
+      use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0,
+      sortAuto: () => (log.push('auto'), m2.sortAuto()),
+      sortSwap: (a, b) => (log.push(`swap ${a} ${b}`), m2.swap(a, b)),
+      commitSort: () => log.push('commit'),
+    },
+  });
+  const sp = (...keys: string[]) => keys.forEach((key) => sortMenu.key({ key } as KeyboardEvent));
+  sp('Enter', 'ArrowDown', 'ArrowDown', 'Enter'); // tool: Use, Drop, Sort (3rd)
+  sp('Enter'); // Automatically
+  eq(log, ['auto'], 'automatic sort called');
+  eq(chr.inventory.map((i) => i.data.id), [15, 11, 10], 'inventory sorted');
+  log.length = 0;
+  sp('Enter', 'ArrowDown', 'ArrowDown', 'Enter', 'ArrowDown', 'Enter'); // wepNo: Equip, Drop, Sort > Manually
+  sp('Enter', 'ArrowDown', 'Enter'); // pick 15, trade places with 11
+  eq(log, ['swap 11 15'], 'manual sort swaps the picked pair');
+  eq(chr.inventory.map((i) => i.data.id), [11, 15, 10], 'inventory swapped');
+  sp('Backspace');
+  eq(log.includes('commit'), true, 'closing the window sends the order');
+}
 
 // --- Equip window (EquipmentMenu_UpdateSlotDisplay_0074bc00, HandleItemEquipSwap_0074ad94) ---
 const frame = inv('010100000002000000000000 00020000', true); // 2 unit slots
@@ -179,7 +241,7 @@ const emenu = new EquipMenu({
   rowContext: () => ctx,
   purposeContext: () => pctx,
   text: (g, i) => `${g}:${i}`,
-  actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0 },
+  actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0, sortAuto: () => 0, sortSwap: () => 0, commitSort: () => 0 },
   equipActions: { equip: (id, slot) => equipCalls.push(`equip ${id} ${slot}`), unequip: (id) => equipCalls.push(`unequip ${id}`) },
 });
 const epress = (...keys: string[]) => keys.forEach((key) => emenu.key({ key } as KeyboardEvent));

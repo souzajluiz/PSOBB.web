@@ -3,7 +3,7 @@
 // menu leaves.
 //
 // Run: node tests/windowanim.test.ts
-import { CLOSE_FRAMES, OPENED, SE_WINDOW_CLOSE, SE_WINDOW_OPEN, WindowAnim } from '../client/src/classic/windowanim.ts';
+import { CLOSE_FRAMES, OPENED, SE_WINDOW_CLOSE, SE_WINDOW_OPEN, SHINE_END, WindowAnim, WindowShine } from '../client/src/classic/windowanim.ts';
 import { PartyWindows } from '../client/src/classic/hud.ts';
 
 let failures = 0;
@@ -87,6 +87,50 @@ const check = (ok: boolean, msg: string) => {
   present = false;
   for (let i = 0; i < 20; i++) p.tick(() => null, () => 0);
   check(!p.windows[0].anim.visible, 'and its window closes when it leaves');
+}
+
+
+// --- the window shine (UpdateAnimationStateMachine_00712834) -------------------
+{
+  // rng 0 -> wait 60 frames; rng just under 1 -> 119.
+  const s = new WindowShine(() => 0);
+  s.tick();
+  check(s.state === 1 && s.counter === 59, 'state 0: wait 60, counter 59 after the first call');
+  let frames = 1;
+  while (s.state === 1) {
+    s.tick();
+    frames++;
+  }
+  check(s.state === 2 && s.counter === 0 && frames === 62, `wait of 60 counts to -1, then state 2 (${frames} frames)`);
+  const hi = new WindowShine(() => 0.99999);
+  hi.tick();
+  check(hi.counter === 118, `longest wait 119 (${hi.counter})`);
+  let run = 0;
+  while (s.state === 2) {
+    s.tick();
+    run++;
+  }
+  check(s.state === 0 && run === SHINE_END && s.counter === SHINE_END, `the shine runs ${SHINE_END} frames (${run})`);
+
+  // Geometry: window y 256 -> A = round(268 / 4) = 67; x 13, w 308, h 184.
+  const g = new WindowShine(() => 0);
+  g.state = 2;
+  g.counter = 100;
+  check(g.lines(13, 256, 308, 184).length === 0, 'the band has not reached a low window yet');
+  g.counter = 140;
+  const lines = g.lines(13, 256, 308, 184);
+  // start = (140 - 134) * 5 - 1 - 13 = 16; rows = round(160 / 4) = 40
+  check(lines.length === 16 && lines[0].y === 268 && lines[0].x0 === 25 && lines[0].x2 === 309, `rows (${lines.length})`);
+  check(lines[0].x1 === 25 + 16, 'the peak is at x0 + len');
+  const f = 16 / 284;
+  check(lines[0].alpha === Math.trunc(f * 2 * 255), `alpha 2 f * 255 (${lines[0].alpha})`);
+  check(lines[1].x1 === 25 + 15 && lines[1].y === 272, 'next row: len - 1, 4 px lower');
+  g.state = 0;
+  check(g.lines(13, 256, 308, 184).length === 0, 'nothing outside state 2');
+  const low = new WindowShine(() => 0);
+  low.state = 2;
+  low.counter = SHINE_END - 1;
+  check(low.lines(13, 400, 200, 60).length === 0, 'a window below y ~372 never gets the band');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

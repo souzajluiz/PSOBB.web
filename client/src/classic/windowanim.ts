@@ -200,3 +200,132 @@ export function clipReveal(ctx: CanvasRenderingContext2D, left: number, top: num
   ctx.clip();
   return true;
 }
+
+// --- the window shine ---------------------------------------------------------
+//
+// A sheen that crosses every list window now and then. One global state
+// machine (UpdateAnimationStateMachine_00712834, run once a frame by
+// update_unknown_animation_counter -> TriggerAnimationStateMachine_0071282c;
+// g_AnimationState 0xa983e0, g_AnimationFrameCounter 0xa983dc):
+//   state 0: wait = trunc(rand / 32768 * 60 + 60) frames (0x0096f66c,
+//            0x0096f670), state 1;
+//   state 1: counts the wait down to -1, then counter = 0, state 2;
+//   state 2: counter += 1 a frame; over (state 0) once
+//            (counter + -0.2 * round(120)) * 5 >= 840 (0x0096f678,
+//            0x0096f7b4, 0x0096f674), that is at counter 192.
+// The window background (unknown_render_background_for_menus, shine part
+// 0x007116e6..0x00711986) draws while the state is 2: the window at (x, y), w x h
+// (render position +0x40..+0x4c) gets rows = int(round((h - 24) / 4)) lines,
+// row i at y + 12 + 4 i from x + 12 to x + w - 12, vertex colours 0x282828
+// with alpha 0 at both ends and the peak at x + 12 + len, where
+//   len(i) = start - i, start = (counter - 2 round((12 + y) / 4)) * 5 - 1 - x
+//   (so the band reaches the windows higher on the screen first and sweeps
+//   to the right), a row only when 0 < len < w - 24,
+//   alpha = 255 * 2 f for f <= 0.5, 255 * 2 (1 - f) above, f = len / (w - 24).
+// Element shines (RenderAnimationFrame_007129a8: the same counter drives a
+// textured quad of texture 2 / 0xd over some elements) are not ported.
+
+export const SHINE_FRAME = 1 / 30;
+export const SHINE_END = 192; // counter at which (counter - 24) * 5 >= 840
+export const SHINE_COLOR = '40, 40, 40'; // 0x282828
+export const SHINE_ROW_STEP = 4; // 0x0096f7b8
+export const SHINE_MARGIN = 12; // 0x0096f7bc
+export const SHINE_PAD = 24; // 0x0096f728
+
+export interface ShineLine {
+  y: number;
+  x0: number;
+  x1: number; // the alpha peak
+  x2: number;
+  alpha: number; // 0..255, truncated like the exe's byte
+}
+
+export class WindowShine {
+  state = 0; // g_AnimationState
+  counter = 0; // g_AnimationFrameCounter
+  private rng: () => number;
+  private last = -1;
+
+  constructor(rng: () => number = Math.random) {
+    this.rng = rng;
+  }
+
+  // One frame of UpdateAnimationStateMachine_00712834.
+  tick(): void {
+    let wait: number;
+    if (this.state === 0) {
+      wait = Math.trunc(Math.floor(this.rng() * 32768) / 32768 * 60 + 60);
+      this.state = 1;
+    } else {
+      wait = this.counter;
+      if (this.state !== 1) {
+        if (this.state !== 2) return;
+        this.counter++;
+        if ((this.counter + -0.2 * 120) * 5 >= 840) this.state = 0;
+        return;
+      }
+    }
+    if (wait >= 0) {
+      this.counter = wait - 1;
+      return;
+    }
+    this.counter = 0;
+    this.state = 2;
+  }
+
+  // Runs the frames elapsed since the last call at 30 a second (the draw
+  // path stands in for the exe's per-frame call).
+  sync(nowMs: number): void {
+    if (this.last < 0) this.last = nowMs;
+    let n = Math.floor((nowMs - this.last) / (SHINE_FRAME * 1000));
+    if (n <= 0) return;
+    this.last += n * SHINE_FRAME * 1000;
+    n = Math.min(n, 10);
+    while (n-- > 0) this.tick();
+  }
+
+  get active(): boolean {
+    return this.state > 1;
+  }
+
+  // The lines the window background draws now.
+  lines(x: number, y: number, w: number, h: number): ShineLine[] {
+    if (!this.active) return [];
+    const rows = Math.trunc(roundEven((h - SHINE_PAD) / SHINE_ROW_STEP));
+    const A = roundEven((SHINE_MARGIN + y) / SHINE_ROW_STEP);
+    let len = (A * -2 + this.counter) * 5 + (-1 - x);
+    const inner = w - SHINE_PAD;
+    if (!(len > 0) || !(len - rows < inner)) return [];
+    const out: ShineLine[] = [];
+    for (let i = 0; i < rows; i++, len -= 1) {
+      if (!(len > 0 && len < inner)) continue;
+      const f = len / inner;
+      const a = f <= 0.5 ? f * 2 * 255 : (1 - f) * 2 * 255;
+      out.push({ y: y + SHINE_MARGIN + SHINE_ROW_STEP * i, x0: x + SHINE_MARGIN, x1: x + SHINE_MARGIN + len, x2: x - SHINE_MARGIN + w, alpha: Math.trunc(a) & 0xff });
+    }
+    return out;
+  }
+}
+
+// CalculateRoundedFloat_0083c230 (fistp: halves to even).
+function roundEven(v: number): number {
+  const f = Math.floor(v);
+  const d = v - f;
+  return d > 0.5 || (d === 0.5 && f % 2 !== 0) ? f + 1 : f;
+}
+
+export const windowShine = new WindowShine();
+
+// Draws the shine over the window at (x, y, w, h).
+export function drawWindowShine(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  windowShine.sync(typeof performance !== 'undefined' ? performance.now() : Date.now());
+  for (const l of windowShine.lines(x, y, w, h)) {
+    const g = ctx.createLinearGradient(l.x0, 0, l.x2, 0);
+    const p = Math.min(1, Math.max(0, (l.x1 - l.x0) / (l.x2 - l.x0)));
+    g.addColorStop(0, `rgba(${SHINE_COLOR}, 0)`);
+    g.addColorStop(p, `rgba(${SHINE_COLOR}, ${l.alpha / 255})`);
+    g.addColorStop(1, `rgba(${SHINE_COLOR}, 0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(l.x0, l.y, l.x2 - l.x0, 1);
+  }
+}

@@ -4,7 +4,7 @@
 // Run: node tests/drops.test.ts
 
 import { DROP_RING_STEP, findDropSpot, floorItemHeight, ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP } from '../client/src/render/flooritems.ts';
-import { GameItems, type FloorItem } from '../client/src/net/items.ts';
+import { canPickUp, GameItems, PICKUP_LOCK_FRAMES, type FloorItem } from '../client/src/net/items.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import type { Game } from '../client/src/net/game.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -77,6 +77,45 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   pv.setUint32(8, 0x10, true);
   onSub(0x59, 0, p);
   eq(picked, [[0x10, 0]], 'pickup hook with the picker');
+
+  // RequestItemPickup_005c49ec / UpdateGroundItem_005c4010: one request at a
+  // time per item, released after 900 frames.
+  const fi: FloorItem = { id: 0x20, floor: 1, x: 0, z: 0, data: { ...itemFromHex('030000000001000000000000'), id: 0x20 }, source: 'enemy', entityIndex: 0xffff };
+  sent.length = 0;
+  items.pickUp(fi);
+  items.pickUp(fi);
+  eq(sent.filter((x) => x[0] === 0x5a).length, 1, 'a pending pickup ignores new requests');
+  for (let i = 0; i < PICKUP_LOCK_FRAMES; i++) items.tickPickups();
+  items.pickUp(fi);
+  eq(sent.filter((x) => x[0] === 0x5a).length, 1, 'still locked after 900 ticks');
+  items.tickPickups();
+  items.pickUp(fi);
+  eq(sent.filter((x) => x[0] === 0x5a).length, 2, 'the lock lets go on the 901st frame');
+  // The answer (6x59) releases it at once.
+  const ans = new Uint8Array(0x0c);
+  const av = new DataView(ans.buffer);
+  av.setUint16(4, 0, true);
+  av.setUint16(6, 1, true);
+  av.setUint32(8, 0x20, true);
+  onSub(0x59, 0, ans);
+  eq(items.pickupLock.has(0x20), false, '6x59 clears the lock');
+}
+
+// --- can_pickup_item ---
+{
+  const mk = (h: string, id: number): InventoryItem => ({ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: { ...itemFromHex(h), id } });
+  const mate = (n: number) => itemFromHex(`0300000000${n.toString(16).padStart(2, '0')}000000000000`);
+  const c = { meseta: 0, inventory: [mk('030000000005000000000000', 1)] } as unknown as CharacterFile;
+  eq(canPickUp(c, mate(5)), true, 'a stack with room (5 + 5 <= 10)');
+  eq(canPickUp(c, mate(6)), false, 'a stack without room');
+  c.inventory = Array.from({ length: 30 }, (_, i) => mk('000100000000000000000000', i + 1));
+  eq(canPickUp(c, itemFromHex('000200000000000000000000')), false, 'a full inventory takes no weapon');
+  c.inventory[0] = mk('030000000001000000000000', 99);
+  eq(canPickUp(c, mate(1)), true, 'but a stack it has room for');
+  c.meseta = 999999;
+  eq(canPickUp(c, itemFromHex('040000000000000000000000')), false, 'meseta at the cap');
+  c.meseta = 999998;
+  eq(canPickUp(c, itemFromHex('040000000000000000000000')), true, 'meseta below the cap');
 }
 
 if (failures) {

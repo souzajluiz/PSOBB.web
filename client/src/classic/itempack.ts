@@ -431,6 +431,12 @@ export interface ItemPackActions {
   unequip(id: number): void;
   drop(id: number, amount: number): void;
   dropMeseta(amount: number): void;
+  // Sort > Automatically (ChallengePlayer_EndChallenge_0068fb70) and the
+  // manual swap (ChallengePlayer_InitializeChallengeItems_0068fb3c); the new
+  // order is sent (6xC4) when the window is destroyed (commitSort).
+  sortAuto(): void;
+  sortSwap(a: number, b: number): void;
+  commitSort(): void;
 }
 
 export interface ItemPackTextures {
@@ -447,7 +453,7 @@ export interface ItemPackEnv {
   actions: ItemPackActions;
 }
 
-type State = 'list' | 'purpose' | 'amount' | 'sort';
+type State = 'list' | 'purpose' | 'amount' | 'sort' | 'manual';
 
 export class ItemPackMenu {
   private state: State = 'list';
@@ -455,6 +461,9 @@ export class ItemPackMenu {
   private top = 0;
   private purpose: { cursor: number; items: ListItem[] } = { cursor: 0, items: [] };
   private sortMenu = { cursor: 0 };
+  // Manual sort (states 9..0xB): the item picked first, waiting for the one
+  // it trades places with.
+  private picked: number | null = null;
   private amount: AmountSpinner | null = null;
   private frame = 0;
   rows: ItemRow[] = [];
@@ -511,6 +520,7 @@ export class ItemPackMenu {
         this.state = 'purpose';
       } else if (e.key === 'Backspace' || e.key === 'Escape') {
         se(SE.cancel);
+        this.dispose();
         return false;
       }
       return true;
@@ -525,8 +535,10 @@ export class ItemPackMenu {
       const items = this.sortItems();
       const r = listKey(e, items, this.sortMenu);
       if (r === 'cancel') this.state = 'purpose';
+      else if (r === 'decide') this.decideSort(items[this.sortMenu.cursor].value);
       return true;
     }
+    if (this.state === 'manual') return this.manualKey(e);
     if (this.state === 'amount' && this.amount) {
       const a = this.amount;
       if (e.key === 'ArrowUp') (a.up(), se(SE.cursor));
@@ -552,12 +564,62 @@ export class ItemPackMenu {
   }
 
   private sortItems(): ListItem[] {
-    // Automatic sorting (ChallengePlayer_SortAndReassignChallengeItems_006a60f4
-    // + 6xC4) and the manual mode are not ported: both are shown disabled.
     return [
-      { label: this.env.text(11, 0x70), value: 0, enabled: false },
-      { label: this.env.text(11, 0x71), value: 1, enabled: false },
+      { label: this.env.text(11, 0x70), value: 0, enabled: true },
+      { label: this.env.text(11, 0x71), value: 1, enabled: true },
     ];
+  }
+
+  // ChallengePlayer_ProcessListAction_007516f0: 0 sorts at once (state 0x16,
+  // back to the list), 1 closes the Purpose / Sort windows and the list takes
+  // the choices itself (state 10).
+  private decideSort(value: number): void {
+    if (value === 0) {
+      this.env.actions.sortAuto();
+      this.afterAction();
+    } else {
+      this.picked = null;
+      this.state = 'manual';
+    }
+  }
+
+  // States 9 and 0xB: Enter picks an item, then another one to trade places
+  // with it (the exe rebuilds the list and waits for the next pick); Backspace
+  // drops the pick, or closes the window when nothing is picked.
+  // ASSUMED: the meseta row cannot be picked (it is not an item object).
+  private manualKey(e: KeyboardEvent): boolean {
+    const n = this.rows.length;
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
+      this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+      this.clampTop();
+      se(SE.cursor);
+    } else if (e.key === 'Enter') {
+      const it = this.item();
+      if (!it || it === 'meseta') {
+        se(SE.buzzer);
+        return true;
+      }
+      se(SE.ok);
+      if (this.picked === null) this.picked = it.data.id;
+      else {
+        this.env.actions.sortSwap(it.data.id, this.picked);
+        this.picked = null;
+        this.refresh();
+      }
+    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      se(SE.cancel);
+      if (this.picked !== null) this.picked = null;
+      else {
+        this.dispose();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // The window is destroyed: a sorted inventory is sent (6xC4).
+  dispose(): void {
+    this.env.actions.commitSort();
   }
 
   // ChallengePlayer_ProcessListSelection_0075158c.
@@ -604,7 +666,7 @@ export class ItemPackMenu {
 
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0): void {
     const c = this.env.character();
-    const collapsed = this.state !== 'list';
+    const collapsed = this.state !== 'list' && this.state !== 'manual';
     const L = ITEM_LIST;
     const h = collapsed ? ROW + 14 + TITLE_GAP : L.h;
     drawWindowFrame(ctx, skin.frame, L.x, L.y, L.w, h);
@@ -616,6 +678,8 @@ export class ItemPackMenu {
     } else if (collapsed) {
       this.drawRow(ctx, tex, this.rows[this.cursor], cx, cy, cw);
     } else {
+      const mark = this.picked === null ? -1 : this.rows.findIndex((r) => r.id === this.picked);
+      if (mark >= this.top && mark < this.top + VISIBLE_ROWS) drawSelectBar(ctx, skin.bars, cx, cy + (mark - this.top) * ROW, cw, 16);
       drawSelectBar(ctx, skin.bars, cx, cy + (this.cursor - this.top) * ROW, cw, 16);
       this.rows.slice(this.top, this.top + VISIBLE_ROWS).forEach((r, i) => this.drawRow(ctx, tex, r, cx, cy + i * ROW, cw));
     }
@@ -630,7 +694,7 @@ export class ItemPackMenu {
     // The other windows are on the right half: they follow the right edge.
     ctx.save();
     ctx.translate(extra, 0);
-    if (this.state === 'list') {
+    if (this.state === 'list' || this.state === 'manual') {
       const it = this.item();
       const text = it === 'meseta' ? this.env.text(11, 0x135) : it ? itemDescription(it.data, this.env.rowContext().names) : '';
       if (this.rows.length) drawTextWindow(ctx, skin, ITEM_DETAIL, text);
