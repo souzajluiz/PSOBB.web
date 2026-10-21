@@ -8,10 +8,11 @@
 // Placing: the local palette press sends 6x83 with the owner's count BEFORE the
 // decrement. VERIFIED: handle_packet0x60_subcommand0x83 (0x00695930) copies the 8-byte
 // subcommand and runs the validator 0x006a9ea4 (type 0..3, count >= 0), then
-// safe_create_trap_object 0x0062f830 (refuses when the global at 0x009f9860 == 1, the
-// owner is missing, or the owner's floor word is 0xffff / 0x1000 or differs from the
-// current floor at 0x00aafca0), then the owner's counter at +0x89c is decremented
-// (0x00698954). The 8-byte subcommand is:
+// safe_create_trap_object 0x0062f830 (refuses unless the global at 0x009f9860 == 1, see
+// TRAP_GATE_VALUE; then refuses a boss map (current_map_is_boss_map == 1), a missing owner,
+// or an owner's floor word of 0xffff / 0x1000 or one that differs from the current floor at
+// 0x00aafca0), then the owner's counter at +0x89c is decremented (0x00698954). The 8-byte
+// subcommand is:
 //   [0] 0x83 subcommand id, [1] 2 (size in words), [2..3] client id,
 //   [4..5] trap type (i16), [6..7] count (i16).
 // VERIFIED (2026-10-21, exe bytes): the palette slot is group 1 = 4 with group 2 = 0x0d..0x10
@@ -69,7 +70,25 @@ export const TRAP_BLAST_RADIUS = 50; // ASSUMED (80 in Ultimate outside battle, 
 // 0..0x14 (the exe bytes), and safe_create_trap_object refuses a count of 0x15 or more (dump).
 // The 6x83 validator 0x006a9ea4 itself only refuses a negative count (VERIFIED).
 export const TRAP_MAX_COUNT = 0x14;
-export const TRAP_DEATH_PARTICLE = 0x47; // ASSUMED
+// The gate of the trap constructor (0x0062f9a8: `cmp edx,1; je` at 0x0062fa75..0x0062fa7e,
+// else the trap is marked inert at +8) and of safe_create_trap_object (0x0062f857..0x0062f85f,
+// `cmp eax,1; je`, else nothing is placed). VERIFIED: the global is 0x009f9860, a dword whose
+// .data image value is 1 (exedata.py read). The exe has 34 reads of it and no write: no
+// absolute store, no immediate / lea / push of its address, no displacement form (a scan of
+// the disassembly). So it stays 1 in this build (ASSUMED that no indirect writer exists).
+// The project's notes call it the online flag (formats/enemymodels.ts, docs/PROTOCOL.md).
+// NOT 0x00a4372c: the Ghidra dump's name gDragonControlAlwaysActive_00a4372c is for another
+// build; in PsoBB.exe that address is never referenced (and lies past the initialised data).
+export const TRAP_GATE_ADDRESS = 0x009f9860;
+export const TRAP_GATE_VALUE = 1;
+// The draw state: EnemyDraw_0062e014 draws the trap model only while +0x32e == 3, and
+// set_entity_stunned_by_damage (dump line 493079; its address was not traced) sets 3. A trap in
+// state 0 is not drawn by the exe's render slot.
+export const TRAP_DRAW_STATE = 3;
+// The death effect: TrapEnemyTriggerDeathEffect_0062e9e0 pushes particle 0x47 and the
+// trap's position (+0xc0, ASSUMED to be the trap's x / y / z) on the blast (update_trap
+// state 4 -> 5). VERIFIED for the id.
+export const TRAP_DEATH_PARTICLE = 0x47;
 export const TECH_DAMAGE_SCALE = 0.002; // ASSUMED (0x00978270 read not performed)
 
 // The wire / counter type (the internal trap type 0..3) and what it does. VERIFIED against
@@ -142,7 +161,8 @@ export class TrapCounters {
 
 export interface PlaceContext {
   floor: number; // the local current floor
-  bossMap: boolean; // the boss-map global (0x009f9860 == 1 in safe_create)
+  gate: number; // the global at TRAP_GATE_ADDRESS (0x009f9860); a trap is placed only when it is TRAP_GATE_VALUE
+  bossMap: boolean; // current_map_is_boss_map() (safe_create refuses when it returns 1)
   fieldMap: boolean; // not the lobby / Pioneer 2 (ASSUMED mapping of the 0xffff / 0x1000 floor test)
   ownerFloor: number;
   ownerPos: { x: number; y: number; z: number };
@@ -220,6 +240,7 @@ export class TrapField {
   // handle_packet0x60_subcommand0x83 + safe_create_trap_object. The caller has already
   // checked that the owner exists; `counters` is the owner's stock.
   place(p: PlaceTrap, ctx: PlaceContext, counters: TrapCounters): BattleTrap | null {
+    if (ctx.gate !== TRAP_GATE_VALUE) return null; // VERIFIED (0x0062f857): the global must be 1
     if (p.type < 0 || p.type > 3 || p.count < 0) return null; // VERIFIED (0x006a9ea4)
     // safe_create_trap_object (dump line 492781): the count must be below 0x15. The palette side never
     // sends more (the counter clamps to 0..0x14, 0x00698984, VERIFIED).
@@ -315,6 +336,26 @@ export class TrapField {
 
 // The "<name> TRAP" line. ASSUMED: "\tC4" + name + " TRAP\n" (Trap_CheckPlayerInBattleAndGetName).
 export const trapAnnouncement = (name: string): string => `\tC4${name} TRAP`;
+
+// --- the trap model -------------------------------------------------------------
+
+// The trap is drawn only in the draw state (TRAP_DRAW_STATE). The model is bm_o_mine.bml
+// (LoadMineTrapBMLData_006300a4, string at 0x009c6048 -> 0x00932ce0). VERIFIED from the
+// constructor's switch on the effect group: type 0 (damage) and 1 (freeze) draw the njcm /
+// njtl chunk 4 as the primary model and chunk 1 as the secondary (0x37c / 0x380); types 2
+// (slow) and 3 (confusion) draw chunks 5 and 0. ASSUMED: chunk n is model entry n of the
+// web's archive (objectmodels / enemymodel count the models first).
+export interface TrapModelParts {
+  primary: number;
+  secondary: number;
+}
+export function trapModelParts(type: number): TrapModelParts {
+  return type === 2 || type === 3 ? { primary: 5, secondary: 0 } : { primary: 4, secondary: 1 };
+}
+
+export function trapDrawn(t: BattleTrap): boolean {
+  return t.state === TRAP_DRAW_STATE;
+}
 
 // --- trap vision --------------------------------------------------------------
 

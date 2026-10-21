@@ -9,6 +9,7 @@ import { STATUS } from '../client/src/combat/status.ts';
 import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
   parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
+  TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts,
   type PlaceContext, type TrapTarget,
 } from '../client/src/quest/battletraps.ts';
 
@@ -22,7 +23,7 @@ const check = (ok: boolean, msg: string) => {
 const eq = (a: unknown, b: unknown, msg: string) => check(JSON.stringify(a) === JSON.stringify(b), `${msg}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
 
 const ctx = (over: Partial<PlaceContext> = {}): PlaceContext => ({
-  floor: 3, bossMap: false, fieldMap: true, ownerFloor: 3, ownerPos: { x: 0, y: 0, z: 0 }, ownerAngle: 0, ...over,
+  floor: 3, gate: TRAP_GATE_VALUE, bossMap: false, fieldMap: true, ownerFloor: 3, ownerPos: { x: 0, y: 0, z: 0 }, ownerAngle: 0, ...over,
 });
 const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, floor: 3, dead: false, local: false, ...over });
 
@@ -240,6 +241,35 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   const field = new TrapField();
   eq(field.place({ clientId: 1, type: 0, count: 0x15 }, ctx(), new TrapCounters()), null, 'a count of 0x15 is refused (safe_create)');
   check(field.place({ clientId: 1, type: 0, count: 0x14 }, ctx(), new TrapCounters()) !== null, 'a count of 0x14 is placed');
+}
+
+// The gate of safe_create_trap_object and the trap constructor: the global at 0x009f9860 must be 1.
+{
+  eq(TRAP_GATE_ADDRESS, 0x009f9860, 'gate address');
+  eq(TRAP_GATE_VALUE, 1, 'gate value');
+  const field = new TrapField();
+  const k = new TrapCounters();
+  eq(field.place({ clientId: 1, type: 0, count: 1 }, ctx({ gate: 0 }), k), null, 'gate 0 refused');
+  eq(field.place({ clientId: 1, type: 0, count: 1 }, ctx({ gate: 2 }), k), null, 'gate 2 refused');
+  eq(field.traps.length, 0, 'nothing placed while the gate is shut');
+  eq(k.n[0], 0, 'the stock is not decremented while the gate is shut');
+  check(field.place({ clientId: 1, type: 0, count: 1 }, ctx({ gate: TRAP_GATE_VALUE }), k) !== null, 'gate 1 places');
+}
+
+// The trap model and its draw state (EnemyDraw_0062e014 draws only at +0x32e == 3).
+{
+  eq(trapModelParts(0), { primary: 4, secondary: 1 }, 'damage trap model chunks');
+  eq(trapModelParts(1), { primary: 4, secondary: 1 }, 'freeze trap model chunks');
+  eq(trapModelParts(2), { primary: 5, secondary: 0 }, 'slow trap model chunks');
+  eq(trapModelParts(3), { primary: 5, secondary: 0 }, 'confusion trap model chunks');
+  eq(TRAP_DEATH_PARTICLE, 0x47, 'death particle');
+  const f = new TrapField();
+  const t = f.place({ clientId: 1, type: 0, count: 1 }, ctx(), new TrapCounters())!;
+  check(!trapDrawn(t), 'an armed trap (state 0) is not drawn');
+  t.state = 3;
+  check(trapDrawn(t), 'a trap in the fuse state (3) is drawn');
+  t.state = 4;
+  check(!trapDrawn(t), 'a trap in the blast state is not drawn');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
