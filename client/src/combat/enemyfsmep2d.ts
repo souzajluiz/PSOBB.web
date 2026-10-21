@@ -2054,9 +2054,12 @@ export class ReconAi extends Ep2dBrain<ReconState> {
 //   9 (0x005588dc): death: 20 frames, then it bursts.
 // ASSUMED: map rays (line of sight, walls), the Epsigards' collision flag
 // (flag 0x80: nothing touches them), the tint is a material colour (white to the
-// element colour by colourT; the exe's use of it is not read), the element immunities are exposed
-// (`immuneToTech`) and applied by the owner's techHitEnemy (render/combat.ts)
-// while Epsilon is not invulnerable.
+// element colour by colourT; the exe's use of it is not read), the element
+// immunities (`immuneToTech`, `immuneToSpecial`) are applied by the owner
+// (render/combat.ts techHitEnemy, specialHit) while Epsilon is not invulnerable.
+// The exe's special immunity has two bypasses not read here (ASSUMED never
+// set on Epsilon): this+0x30 bit 0x4000000 and the second argument's +0x18
+// bit 0x2000000 skip the element check (0x0055ab30).
 export const EPSILON = {
   search: 400,
   retarget: 30,
@@ -2107,9 +2110,14 @@ export const EPSILON_PATTERNS: readonly (readonly [number, number, number, numbe
   [1, 1, 1, 1],
 ];
 
-// The technique group an element blocks (get_epsigard_damage_type
-// 0x0055ac24): foie, barta, zonde, megid.
+// The technique group each element blocks, by colour 0..3 (0x0055aaf0 reads
+// the word table at 0x009252e0: 1, 2, 3, 5): foie, gibarta / rabarta, zonde,
+// megid. Barta is group 0x13 (techfire.ts HIT_GROUP), so it is not blocked.
 export const EPSILON_ELEMENT_GROUPS = [1, 2, 3, 5] as const;
+// The weapon special each element blocks, by colour 0..3 (0x0055ac24 reads the
+// word table at 0x009252d4: 9, 7, 10, 11): fire (9), freeze (7), thunder (10),
+// instant kill (11); the numbers are special_attack_type (combat/specials.ts).
+export const EPSILON_ELEMENT_SPECIALS = [9, 7, 10, 11] as const;
 
 export const EPSILON_ANIM = {
   closed: loop(0, 0.3),
@@ -2279,6 +2287,13 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
   // (EpsigardProcessTechHit_0055aa5c).
   immuneToTech(group: number): boolean {
     return this.invulnerable ? group !== 20 : group === EPSILON_ELEMENT_GROUPS[this.colour & 3];
+  }
+
+  // The weapon special of its element does nothing (EpsigardProcessSpecialAttack
+  // 0x0055ab30: special_attack_type equal to the element's entry; the shown
+  // "0" is the owner's, as for techniques).
+  immuneToSpecial(type: number): boolean {
+    return type === EPSILON_ELEMENT_SPECIALS[this.colour & 3];
   }
 
   // DerolleIsTargetValid_0055c0b8 on a child that still exists.
@@ -2601,6 +2616,13 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
         this.laserShown = false;
         break;
     }
+  }
+
+  // The recolour ring's scale while the recolour state runs (the exe draws model
+  // 4 while flag 0x200 is set: event 4 of state 6 sets it, 0x0055ad34 clears it;
+  // colourT is 0 outside the recolour, so the ring is then a zero scale).
+  get recolourRing(): number | null {
+    return this.state === 'recolor' ? this.colourT : null;
   }
 
   // The laser orb (for drawing): where it is while shown.
