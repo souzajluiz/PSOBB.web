@@ -7633,9 +7633,9 @@ boss map as the web's BOSS_AREAS, the state 0 trigger rule, the trap number form
 without kill credit or PB gain.
 
 **UNCLEAR:**
-- The gate in the trap constructor and `safe_create` is the global 0x00a4372c == 1 (dump name
-  `gDragonControlAlwaysActive_00a4372c`, a misleading name; its setter was not found in the dump).
-  Not checked in the web; if the exe needs it for traps, battles would not place any.
+- (Corrected 2026-10-21, see "Battle Mode traps: the gate is 0x009f9860" below: the gate is the
+  dword at 0x009f9860 (1 in the .data image), not 0x00a4372c, which this exe never references.
+  The dump's `gDragonControlAlwaysActive_00a4372c` comes from another build.)
 - The starting stock when the trap mode is not ALL_PLAYERS (stays at 0 in the web).
 - Whether the server echoes a `6x83` back to its sender (the web skips a self echo either way) and
   how the exe dispatches its own send (`checked_call_packet0x60_subcommand` not traced).
@@ -7696,3 +7696,31 @@ The same rule covers the texture-animation file: 33 of the 175 maps have no `map
 - That `this` of 0x00768a84 is the boss (0xa9b07c) is inferred from the row (+0x3d0) and the heading (+0x60) it reads, not from a caller check.
 
 **Checks:** `node tests/saintmilionboss.test.ts`: ALL PASS (section 12 included; section 12's frame count is skipped when the client data is absent). `node tests/saintmilion.test.ts`: all checks passed. `node tests/enemies.test.ts`: ALL PASS. `node tests/combat.test.ts` could not run here (no `vendor/newserv` in this worktree: ENOENT). Client `npx tsc --noEmit -p .`: clean (Node 24).
+
+## 2026-10-21: Battle Mode traps: the gate is 0x009f9860, and the trap model is drawn
+
+**Gate (corrects the entry above).** The trap constructor and `safe_create_trap_object` do not gate on 0x00a4372c. The dump's name `gDragonControlAlwaysActive_00a4372c` is from another build: in PsoBB.exe (Ephinea 1.25.13) 0x00a4372c is never referenced by any instruction and lies past the initialised data. The gate is the dword at **0x009f9860**:
+
+- `safe_create_trap_object` 0x0062f830: `a1 60 98 9f 00` (`mov eax, [0x9f9860]`), `83 f8 01` (`cmp eax, 1`), `74 10` (`je`). Anything else returns 0 before any placement. The owner / floor / boss-map / count checks come after.
+- The trap constructor (0x0062f9a8): `8b 15 60 98 9f 00` (`mov edx, [0x9f9860]`), `83 fa 01` (`cmp edx, 1`) at 0x0062fa75. A failing test sets bit 0 of +8 (the trap is inert).
+- The value: `tools/exedata.py read 009f9860 u 4` gives 1 (the initialised .data image).
+- Writers: none found. 34 absolute reads, no absolute store; no immediate, `lea` or `push` of 0x009f9860 or of a block that holds it (the only nearby static pointers are 0x009f9838, a string buffer, and 0x009f986c, a particle object). No displacement form addresses it. So it stays 1 in this build. ASSUMED: no indirect writer (a base-register store through a pointer loaded at run time) exists; this was not proven.
+- The project's older notes call this global the online flag (`formats/enemymodels.ts`, `docs/PROTOCOL.md`, Ultimate models).
+
+The web port: `TRAP_GATE_ADDRESS` / `TRAP_GATE_VALUE` (quest/battletraps.ts); `PlaceContext.gate`, checked first in `TrapField.place`; `battlerun.ts` passes `TRAP_GATE_VALUE`. The `bossMap` field now names `current_map_is_boss_map()` (safe_create refuses on 1) instead of the wrong 0x009f9860 reading.
+
+**The trap model (VERIFIED from the dump and the exe bytes).** The trap constructor (dump 492836) runs `LoadMineTrapBMLData_006300a4`, which loads `bm_o_mine.bml` (the string at 0x00932ce0, pointer 0x009c6048). The archive has 8 `.xj` entries and no motions (`data.gsl`). The draw is `EnemyDraw_0062e014` (vtable slot 2 of the trap vtable 0x00b2a5c0): it draws only while the state word +0x32e is 3, which the fuse state sets. Model choice by the effect group (+0x35c): damage and freeze take njcm/njtl chunk 4 as the primary and chunk 1 as the secondary; slow and confusion take 5 and 0. ASSUMED: chunk n is model entry n.
+
+**The death effect (VERIFIED for the id).** On the blast (`update_trap` state 4 to 5) the exe calls `TrapEnemyTriggerDeathEffect_0062e9e0`, which pushes particle 0x47 and the position at +0xc0 (ASSUMED: the trap's x / y / z).
+
+**Web changes:**
+- `render/battletrapview.ts` (new): loads `bm_o_mine.bml` through `EnemyArchiveCache`, builds the two parts with `buildEnemy` and places each trap that is in the draw state at its position (`angle` as the yaw; ASSUMED radians). The exe's extra colour / render flag of the secondary is not reproduced.
+- `render/combat.ts`: `syncBattleTraps` (created on the first trap, disposed with the view), `battleTrapBurst` (the particle 0x47).
+- `quest/battlerun.ts`: syncs the models after each trap tick and calls `battleTrapBurst` on a burst.
+- `quest/battletraps.ts`: `trapModelParts`, `trapDrawn`, `TRAP_DRAW_STATE`, the death particle constant, the gate.
+
+**Not drawn / not done:** the palette icons for the trap slots (still an empty icon for group 2 >= 0x0d); trap vision (the exe's draw rule shows a trap only in state 3, so an armed trap is hidden; any vision marker was not traced, UNCLEAR); the death particle position (ASSUMED).
+
+**UNCLEAR:** whether a trap placed by the local client is shown to the others before the trigger (the exe's draw rule says no); the secondary model's colour and render flag; the in-game look (not run in Chrome, no two-client battle).
+
+**Checks:** `node --experimental-strip-types tests/battletraps.test.ts` ALL PASS (new: the gate refuses 0 and 2 and places with 1, nothing is decremented while shut, the trap model chunks, the draw state); `tests/battle.test.ts` exit 0; `tests/combat.test.ts` exit 0 (5946 checks, with a temporary `vendor` link, removed after); `cd client && npx tsc --noEmit` clean. A Node build of the four trap models from `bm_o_mine.bml` (chunks 4/1 and 5/0): 56 to 60 triangles each, no missing textures.

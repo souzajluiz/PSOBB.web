@@ -130,7 +130,8 @@ import {
   weaponSpecialByte,
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
-import { trapPaletteType, type TrapEffect } from '../quest/battletraps.ts';
+import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect } from '../quest/battletraps.ts';
+import { BattleTrapView } from './battletrapview.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
@@ -505,6 +506,8 @@ export class CombatView {
   // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
   // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
   placeTrap: ((type: number) => void) | null = null;
+  // The Battle Mode traps in the field (render/battletrapview.ts), made on the first sync.
+  private battleTraps: BattleTrapView | null = null;
   private disposed = false;
   private rng: () => number = Math.random;
   // Set when a remote player is attacking, so LobbyView keeps its motion.
@@ -3467,6 +3470,21 @@ export class CombatView {
   // A Battle Mode trap's blast on the local player (quest/battletraps.ts TrapEffect; the
   // caller passes the trap's damage). The status goes through inflictStatus, the damage
   // through damage.hit with the blast's direction. ASSUMED: no kill credit, no PB gain.
+  // The trap models in the field: shows the traps in their draw state (see render/battletrapview.ts).
+  syncBattleTraps(traps: readonly BattleTrap[]): void {
+    if (!this.battleTraps) {
+      if (traps.length === 0) return;
+      this.battleTraps = new BattleTrapView(this.viewer, this.files);
+    }
+    this.battleTraps.sync(traps);
+  }
+
+  // A trap's blast ends: the death particle 0x47 at the trap (EnemyDraw's death effect; the
+  // position is ASSUMED to be the trap's).
+  battleTrapBurst(x: number, y: number, z: number): void {
+    this.particle({ id: TRAP_DEATH_PARTICLE, delay: 0 }, new THREE.Vector3(x, y, z));
+  }
+
   battleTrapHit(effect: TrapEffect, damage: number, fromX: number, fromZ: number, what: string): void {
     if (this.damage.dead) return;
     if (effect.kind === 'status') {
@@ -6683,6 +6701,8 @@ export class CombatView {
 
   dispose(): void {
     this.disposed = true;
+    this.battleTraps?.dispose();
+    this.battleTraps = null;
     this.viewer.renderHooks.delete(this.smoothHook);
     this.techFire.clear();
     this.enemies.clear();

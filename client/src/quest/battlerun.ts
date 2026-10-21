@@ -29,6 +29,7 @@ import { BattleHud, RULES_WINDOW } from './battleui.ts';
 import {
   TRAP_EFFECTS,
   TrapCounters,
+  TRAP_GATE_VALUE,
   TrapField,
   placeRequest,
   parse6x80,
@@ -258,6 +259,7 @@ export class BattleRun {
     const me = this.opts.game.self;
     return {
       floor: me?.floor ?? 0,
+      gate: TRAP_GATE_VALUE, // the global 0x009f9860 (TRAP_GATE_ADDRESS): 1 in the exe, never written
       bossMap: this.opts.view.combat.inBossArea(),
       fieldMap: true,
       ownerFloor: owner.floor,
@@ -319,8 +321,11 @@ export class BattleRun {
         if (effect) view.combat.battleTrapHit(effect, trapDamage(this.setup?.trapDamage ?? 0), ev.trap.x, ev.trap.z, `trap ${ev.trap.type}`);
       } else if (ev.kind === 'announce') {
         this.hud?.showLines([trapAnnouncement(this.names(ev.trap.owner))]);
+      } else if (ev.kind === 'burst') {
+        view.combat.battleTrapBurst(ev.trap.x, ev.trap.y, ev.trap.z);
       }
     }
+    view.combat.syncBattleTraps(this.traps.traps);
   }
 
   // Sent by the victim's client when a player hits it (ApplyHitEffectText); the web
@@ -356,6 +361,7 @@ export class BattleRun {
     this.opts.game.onSent = null;
     this.opts.view.combat.placeTrap = null;
     this.traps.clear();
+    this.opts.view.combat.syncBattleTraps([]);
     this.hud?.dispose();
   }
 }
