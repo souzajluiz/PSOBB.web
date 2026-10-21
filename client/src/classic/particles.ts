@@ -352,7 +352,9 @@ export class ParticleSystem {
 // (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is. The 0x100 path
 // (the tint) takes the particle's own RGB as the base instead (type 0 `fadd
 // [ebp+0x50]` at 0x0050def5, ring `fadd [esi+0x50]` at 0x0050f7b6); the port
-// multiplies the tint in instead (ASSUMED, UNCLEAR, see the DEVLOG).
+// multiplies the tint in instead (ASSUMED; the exe's instance +0x50..+0x58 is
+// zeroed by its ctor 0x00508460 and no copy of the owner's dword into it was
+// found, see the DEVLOG 2026-10-21 tint entry).
 export function particleShade(q: Particle): { fade: number; rgb: [number, number, number] } {
   const d = q.e.entry;
   const t = Math.min(q.age, 1);
