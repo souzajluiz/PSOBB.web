@@ -1022,6 +1022,79 @@ function clearZakoBoth(fi: Fight): void {
   void HomingBolt;
 }
 
+{
+  // Form 2's beam in Ultimate (0x00458E44): when the beam's timer runs out, three
+  // Darvants per living player about the body, at radius 12.5, rising from the body's
+  // height at 10/9 a frame to 6, alive while the scene is TYPE2.
+  const two = () => [player(0, CASKET.x, CASKET.z), player(1, CASKET.x + 4, CASKET.z)];
+  const fi = fight({ seed: 7, difficulty: 3, targets: two() });
+  toType2(fi);
+  const f2 = fi.c.form2!;
+  const beam = () => f2.st === F2.beamL || f2.st === F2.beamR;
+  fi.until(beam, 40000, 'a beam (Ultimate)');
+  const before = fi.c.darvants.length;
+  let px = 0;
+  let py = 0;
+  let pz = 0;
+  for (let n = 0; beam() && n < 400; n++) {
+    px = f2.x;
+    py = f2.y;
+    pz = f2.z;
+    fi.step();
+  }
+  const made = fi.c.darvants.slice(before);
+  eq(made.length, 6, 'Ultimate: three Darvants per living player (two players)');
+  eq(made.every((d) => d.kind === 'beam'), true, 'they are the beam kind');
+  eq(new Set(made.map((d) => d.entity)).size, made.length, 'each has its own id');
+  eq(made.every((d) => d.entity >= 1 && d.entity <= 0x1fd), true, 'ids in control + 1 .. 0x1fd');
+  let posOk = true;
+  made.forEach((d, i) => {
+    const [ox, oz] = DARVANT.beamOffsets[i % 3];
+    if (Math.abs(d.x - (px + ox * 12.5)) > 1e-9 || Math.abs(d.z - (pz + oz * 12.5)) > 1e-9 || d.y !== py) posOk = false;
+  });
+  check(posOk, 'at the body + (0, -12.5), (-10.75, 6.25), (10.75, 6.25), at the body height');
+  const r = made[0];
+  const y0 = r.y;
+  const t0 = fi.t;
+  fi.until(() => r.st !== DARVANT.rise, 200, 'the beam Darvant rises');
+  const frames = fi.t - t0;
+  check(Math.abs(frames - Math.ceil((DARVANT.top - y0) / DARVANT.beamRise)) <= 1, `it rises at 10/9 a frame (${frames} frames from ${y0.toFixed(1)})`);
+  eq(r.y, DARVANT.top, 'and stops at the top, 6');
+  eq(r.st, DARVANT.hover, 'and it holds (ASSUMED state, see DARVANT)');
+  // Their life: they die with TYPE2 (the update's scene check, 0x00460938).
+  fi.c.damagePart(DF_ID.form2, 1e9, true);
+  fi.until(() => fi.c.scene !== SCENE.type2, 4000, 'the end of TYPE2');
+  fi.step(1);
+  eq(made.every((d) => d.st === DARVANT.dead), true, 'the beam Darvants die when the scene leaves TYPE2');
+}
+
+{
+  // The same beam on the other difficulties makes nothing.
+  for (const d of [0, 1, 2]) {
+    const fi = fight({ seed: 7, difficulty: d });
+    toType2(fi);
+    const f2 = fi.c.form2!;
+    const beam = () => f2.st === F2.beamL || f2.st === F2.beamR;
+    fi.until(beam, 40000, `a beam (difficulty ${d})`);
+    const before = fi.c.darvants.length;
+    fi.until(() => !beam(), 400, `the beam ends (difficulty ${d})`);
+    eq(fi.c.darvants.length, before, `difficulty ${d}: a beam makes no Darvants`);
+  }
+}
+
+{
+  // Ultimate with nobody alive on the floor: the beam makes none (0x00453AB8 checks each player).
+  const fi = fight({ seed: 7, difficulty: 3 });
+  toType2(fi);
+  const f2 = fi.c.form2!;
+  const beam = () => f2.st === F2.beamL || f2.st === F2.beamR;
+  fi.until(beam, 40000, 'a beam (Ultimate, nobody alive)');
+  fi.targets[0].dead = true;
+  const before = fi.c.darvants.length;
+  fi.until(() => !beam(), 400, 'the beam ends (nobody alive)');
+  eq(fi.c.darvants.length, before, 'Ultimate with no living player: no beam Darvants');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

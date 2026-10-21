@@ -476,7 +476,12 @@ export class DfForm2 extends DfEntity {
       this.beamZ = nz;
     }
     this.blendOut(this.timer, F2.beamFrames);
-    if (--this.timer < 0) this.enter(this.row.stopState);
+    if (--this.timer < 0) {
+      // 0x00458D99 / 0x00458DB0: the beam's timer runs out; Ultimate makes its
+      // Darvants before the stop state (0x00458E44, see DfFight.spawnBeamDarvants).
+      if (this.fight.ultimate) this.fight.spawnBeamDarvants(this.x, this.y, this.z);
+      this.enter(this.row.stopState);
+    }
   }
 
   private ballAt(x: number, z: number, rabarta: boolean): void {
