@@ -167,7 +167,7 @@ export class FieldMenu {
 
   private closeLeaf(): void {
     if (!this.leaf) return;
-    if (this.leaf instanceof OptionsMenu) this.leaf.dispose();
+    if (this.leaf instanceof OptionsMenu || this.leaf instanceof ItemPackMenu) this.leaf.dispose();
     this.closingLeaf = this.leaf;
     this.leaf = null;
     this.leafAnim.close();

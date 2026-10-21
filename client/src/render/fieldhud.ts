@@ -204,6 +204,9 @@ export class FieldHud {
           unequip: (id) => this.opts.items.unequip(id),
           drop: (id, amount) => this.opts.items.drop(id, amount),
           dropMeseta: (amount) => this.opts.items.drop(MESETA_ITEM_ID, amount),
+          sortAuto: () => this.opts.items.sortAuto(),
+          sortSwap: (a, b) => this.opts.items.sortSwap(a, b),
+          commitSort: () => this.opts.items.commitSort(),
         },
       },
       equip: {
@@ -529,6 +532,7 @@ export class FieldHud {
       this.menu.tick();
       this.paletteHud.tick();
       this.opts.items.tickMags();
+      this.opts.items.tickPickups();
       this.counter?.tick();
       const src = this.opts.minimap;
       if (src && this.minimap.loaded) {

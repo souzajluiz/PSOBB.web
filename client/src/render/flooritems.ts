@@ -29,9 +29,14 @@
 //     rings 1..5 around the player, ring r of radius 6r with 4r spots, from
 //     the player's facing, spot = centre + (sin a, cos a) * radius; the
 //     first spot with ground is used (findDropSpot).
-// Left out: the particle 0x9B (w_itemget, a type-1 effect) when an item
-// appears and is picked up; the 3D attenuation of SE 0x571; the spot
-// search's line-of-sight test (0x0077fffc) and its 6x2C hold.
+//   - the particle 0x9B (w_itemget; create_particle_effect at the item's
+//     origin) when an item appears after the floor was set up (create_item_
+//     box_on_ground 0x005c4874, g_ItemInitializationState != 0: not for the
+//     items of a join sync) and in HandlePlayerPickupSuccess_005c4c1c; its
+//     type-1 entry runs with the type-0 simulation of render/hitfx.ts
+//     (ASSUMED, like the other type 1 / 2 effects).
+// Left out: the 3D attenuation of SE 0x571; the spot search's line-of-sight
+// test (0x0077fffc) and its 6x2C hold.
 // ASSUMED: the spot's ground is probed from the player's height + 6; a
 // failed search keeps the player's position. Fitted: the Enter radius for
 // pickup (PICKUP_RADIUS; newserv accepts up to 30) and for boxes
@@ -53,6 +58,7 @@ import { maxStackSize } from '../formats/itemnames.ts';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { EMPTY_BOX_TYPES, ITEM_BOX_TYPES, type FloorItem, type GameItems } from '../net/items.ts';
 import { EnemyArchive } from './enemymodel.ts';
+import { FieldParticles } from './hitfx.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
@@ -65,6 +71,7 @@ const HEIGHT_WINDOW = 30;
 export const ITEM_GROUND_OFFSET = 6; // item_box_ground_y_offset 0x0092bb6c
 export const ITEM_GROUND_PROBE = 300; // g_ItemFloatingYOffset 0x0092bb70
 export const SE_PICKUP = 0x571; // HandlePlayerPickupSuccess_005c4c1c
+export const PARTICLE_ITEMGET = 0x9b; // w_itemget
 export const SE_RANGE = 300; // FUN_00814298: 3D sounds this far are dropped
 export const DROP_RING_STEP = 6; // 0x0093db68
 
@@ -127,6 +134,7 @@ export class FloorItemLayer {
   private floor = -1;
   private frames = 0;
   private disposed = false;
+  private fx: FieldParticles;
   private onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.repeat && !this.opts.blocked()) this.interact();
   };
@@ -136,6 +144,7 @@ export class FloorItemLayer {
     this.items = items;
     this.opts = opts;
     this.root.name = 'floor-items';
+    this.fx = new FieldParticles(viewer, files, (m) => opts.log?.(m));
     viewer.scene.add(this.root);
     this.archive = files
       .read(ITEM_BML)
@@ -144,7 +153,7 @@ export class FloorItemLayer {
         opts.log?.(`floor items: ${(err as Error).message}`);
         return null;
       });
-    items.onFloorItemAdded = (it) => void this.show(it);
+    items.onFloorItemAdded = (it) => void this.show(it, it.source !== 'sync' && !items.game.loading);
     items.onFloorItemRemoved = (it) => this.hide(it.id);
     items.onPickedUp = (it, picker) => this.pickedUp(it, picker);
     items.dropSpot = (me) => findDropSpot(me, opts.ground);
@@ -179,7 +188,7 @@ export class FloorItemLayer {
     };
   }
 
-  private async show(item: FloorItem): Promise<void> {
+  private async show(item: FloorItem, appeared = false): Promise<void> {
     if (item.floor !== this.floor || this.shown.has(item.id)) return;
     const archive = await this.archive;
     if (!archive || this.disposed || item.floor !== this.floor || this.shown.has(item.id) || !this.items.floorItems.has(item.id)) return;
@@ -220,12 +229,14 @@ export class FloorItemLayer {
     node.userData.floorItem = item;
     this.root.add(node);
     this.shown.set(item.id, { item, node, scroll });
+    if (appeared) void this.fx.spawn({ id: PARTICLE_ITEMGET }, node.position.clone());
   }
 
   // HandlePlayerPickupSuccess_005c4c1c: SE 0x571 at the picker when the
   // item was on our floor.
   private pickedUp(item: FloorItem, picker: number): void {
     if (item.floor !== this.floor) return;
+    void this.fx.spawn({ id: PARTICLE_ITEMGET }, new THREE.Vector3(item.x, floorItemHeight(item, this.opts.ground), item.z));
     const me = this.items.game.self;
     const p = this.items.game.players.get(picker);
     if (!me || !p) return;
@@ -307,6 +318,7 @@ export class FloorItemLayer {
     this.disposed = true;
     this.viewer.renderer.domElement.removeEventListener('keydown', this.onKey);
     for (const id of [...this.shown.keys()]) this.hide(id);
+    this.fx.dispose();
     this.viewer.scene.remove(this.root);
     void this.archive.then((a) => a?.dispose());
   }

@@ -209,6 +209,35 @@ export function buildFeedMag(clientId: number, magId: number, foodId: number): U
   return b;
 }
 
+// G_SortInventory_BB_6xC4 (0x7C): the item ids in inventory order, -1 after
+// the last (SinowberillChallengePlayer_SyncInventory_0068fbf4: type 0xC4, size
+// 0x1F, unused 0xFFFF, 30 ids).
+export function buildSortInventory(ids: readonly number[]): Uint8Array {
+  const { b, dv } = sub(0xc4, 0x7c, 0xffff);
+  for (let i = 0; i < 30; i++) dv.setUint32(4 + i * 4, i < ids.length ? ids[i] >>> 0 : 0xffffffff, true);
+  return b;
+}
+
+// The key of the Item Pack's automatic sort
+// (ChallengePlayer_SortAndReassignChallengeItems_006a60f4): data1[0] << 25,
+// then data1[1] << 17 for armor / shields / units (group 1) or << 8 for the
+// rest, then data1[2]; an item that is not equipped adds 0x10000. The exe's
+// test is flags & 4 and flags & 8 both set (not the charfile's equipped bit alone).
+export function sortKey(it: InventoryItem): number {
+  const d = it.data.data1;
+  let k = (d[0] << 25) >>> 0;
+  k |= d[0] === 1 ? d[1] << 17 : d[1] << 8;
+  k |= d[2];
+  if ((it.flags & 0x0c) !== 0x0c) k |= 0x10000;
+  return k >>> 0;
+}
+
+// The exe's bubble sort (a swap only when the next key is smaller) is stable
+// and ascending, as Array.sort is.
+export function autoSortOrder(items: readonly InventoryItem[]): InventoryItem[] {
+  return [...items].sort((a, b) => sortKey(a) - sortKey(b));
+}
+
 // G_DeleteInventoryItem_6x29 (0x0C)
 export function buildDeleteItem(clientId: number, itemId: number, amount: number): Uint8Array {
   const { b, dv } = sub(0x29, 0x0c, clientId);
@@ -472,6 +501,23 @@ const cloneItem = (i: ItemData): ItemData => ({ data1: i.data1.slice(), id: i.id
 
 export class InventoryFullError extends Error {}
 
+export const PICKUP_LOCK_FRAMES = 900; // UpdateGroundItem_005c4010
+export const MAX_MESETA = 999999;
+
+// can_pickup_item (CanPlayerPickupItem_00687c70): meseta while below the cap;
+// a stackable item whose stack is already in the inventory needs room for it
+// in that stack; everything else needs a free slot (fewer than 30).
+export function canPickUp(c: CharacterFile, item: ItemData): boolean {
+  const d = item.data1;
+  const max = maxStackSize(item);
+  if (d[0] === 4) return c.meseta < MAX_MESETA;
+  if (max > 1) {
+    const same = c.inventory.find((i) => itemKey(i.data.data1) === itemKey(d));
+    if (same) return d[5] <= max - same.data.data1[5];
+  }
+  return c.inventory.length < 30;
+}
+
 // The operations newserv applies to the character's inventory, applied to the
 // parsed character file (CharacterFile) so the panels show the same thing.
 export class InventoryModel {
@@ -569,6 +615,24 @@ export class InventoryModel {
         }
       }
     }
+  }
+
+  // The Item Pack's automatic sort (SortAndReassignChallengeItems_006a60f4).
+  sortAuto(): void {
+    this.c.inventory.splice(0, this.c.inventory.length, ...autoSortOrder(this.c.inventory));
+    this.reindex();
+  }
+
+  // The manual sort (InventorySwapLinkedItems_006a6a08): two items trade
+  // places. False when an id is not in the inventory.
+  swap(a: number, b: number): boolean {
+    const i = this.c.inventory.findIndex((x) => x.data.id === a);
+    const j = this.c.inventory.findIndex((x) => x.data.id === b);
+    if (i < 0 || j < 0) return false;
+    const inv = this.c.inventory;
+    [inv[i], inv[j]] = [inv[j], inv[i]];
+    this.reindex();
+    return true;
   }
 
   // First free unit slot (9..12), or slot 9 when all four are taken.
@@ -708,6 +772,8 @@ export class GameItems {
     this.opts.log?.(`items: ${msg}`);
   }
 
+  private sortPending = false;
+
   private changed(): void {
     const c = this.character;
     const raw = this.opts.fullCharacter();
@@ -742,7 +808,19 @@ export class GameItems {
     this.onFloorItemAdded(item);
   }
 
+  // Pending pickup requests: item id -> frames since the request.
+  readonly pickupLock = new Map<number, number>();
+
+  // One frame of UpdateGroundItem_005c4010's lock counter.
+  tickPickups(): void {
+    for (const [id, n] of this.pickupLock) {
+      if (n >= PICKUP_LOCK_FRAMES) this.pickupLock.delete(id);
+      else this.pickupLock.set(id, n + 1);
+    }
+  }
+
   private removeFloorItem(id: number): FloorItem | undefined {
+    this.pickupLock.delete(id);
     const item = this.floorItems.get(id);
     if (!item) return undefined;
     this.floorItems.delete(id);
@@ -934,7 +1012,15 @@ export class GameItems {
   // --- actions ---
 
   // 6x5A. The server answers 6x59 when the pickup is accepted.
+  // RequestItemPickup_005c49ec: the request goes out only when the player
+  // can take the item (can_pickup_item) and none is pending for it; the item
+  // then ignores new requests until the server answers (6x59) or 900 frames
+  // pass (UpdateGroundItem_005c4010).
   pickUp(item: FloorItem): void {
+    const c = this.character;
+    if (c && !canPickUp(c, item.data)) return;
+    if (this.pickupLock.has(item.id)) return;
+    this.pickupLock.set(item.id, 0);
     this.game.sendSubcommand(0x5a, buildPickUpRequest(this.game.selfId, item.id, item.floor).subarray(4));
   }
 
@@ -987,6 +1073,28 @@ export class GameItems {
     this.game.sendSubcommand(0x26, buildUnequip(this.game.selfId, itemId).subarray(4));
     inv.unequip(itemId);
     this.changed();
+  }
+
+  // Item Pack > Sort. The exe reorders its item objects at once and sends the
+  // new order (6xC4) only when the window is destroyed with the sorted flag
+  // (this+0x2c) set, see commitSort.
+  sortAuto(): void {
+    this.inventory?.sortAuto();
+    this.sortPending = true;
+    this.changed();
+  }
+
+  sortSwap(a: number, b: number): void {
+    if (!this.inventory?.swap(a, b)) return;
+    this.sortPending = true;
+    this.changed();
+  }
+
+  commitSort(): void {
+    const inv = this.inventory;
+    if (!this.sortPending || !inv) return;
+    this.sortPending = false;
+    this.game.sendSubcommand(0xc4, buildSortInventory(inv.items.map((i) => i.data.id)).subarray(4));
   }
 
   // Whether newserv's player_use_item accepts the item (it disconnects on an

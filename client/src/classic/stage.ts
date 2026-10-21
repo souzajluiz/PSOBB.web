@@ -8,7 +8,7 @@
 // drawRound*, which compensates for the stretch.
 
 import type { XvrTexture } from '../formats/xvm.ts';
-import { clipReveal, type WindowAnim } from './windowanim.ts';
+import { clipReveal, drawWindowShine, type WindowAnim } from './windowanim.ts';
 
 export const VW = 640;
 export const VH = 480;
@@ -229,6 +229,7 @@ export function drawWindowFrame(ctx: CanvasRenderingContext2D, tex: CanvasImageS
       if (ww > 0 && hh > 0) ctx.drawImage(tex, u, v, ww, hh, xx, yy, ww, hh);
     }
   }
+  drawWindowShine(ctx, x, y, w, h);
 }
 
 // FUN_00760b85: title pill above a window, from texture 1. Left cap 40x27

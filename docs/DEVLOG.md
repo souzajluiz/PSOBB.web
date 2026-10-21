@@ -61,6 +61,72 @@ Sonar and the 6x8F PvP hit path are still open (TODO.md).
 **Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/battle.test.ts`
 ALL PASS; `node tests/combat.test.ts` 5946 checks, 0 failures;
 `cd client && npx tsc --noEmit` clean. Not run in Chrome.
+## 2026-10-21: Item Pack sort, pickup lock, window shine
+
+**What changed:** the unfinished WIP (3463c17) salvaged onto main. Item Pack > Sort is live: Automatically (sortAuto, sorts at once) and Manually (pick an
+item, then the one it trades places with; sortSwap). The new order goes out as
+6xC4 when the window is destroyed (commitSort). `net/items.ts` has
+`buildSortInventory`, `sortKey`, `autoSortOrder`, `InventoryModel.sortAuto/swap`,
+`canPickUp`, `PICKUP_LOCK_FRAMES`, `GameItems.tickPickups`. `classic/windowanim.ts`
+has `WindowShine` and `drawWindowShine`, drawn by `drawWindowFrame` in
+`stage.ts`. `render/flooritems.ts` spawns particle 0x9B on a floor item that
+appears and on a pickup. `itempack.ts` no longer says 6xC4 and manual mode are
+not ported.
+
+**Exe evidence (PsoBB.exe 1.25.13, reference dump Psobb.exe-05112026.c):**
+- Pickup lock: RequestItemPickup_005c49ec requests only when
+  CanPlayerPickupItem and the pending word (item +0x94) is -1; it sets +0x94 and
+  zeroes the counter (+0xe6). UpdateGroundItem_005c4010 releases on the frame
+  the counter is already 900, so the 901st tick. JS matches (`tickPickups` at
+  the 1/30 s field step, the exe's game frame).
+- can_pickup_item (553625): meseta below 999999; a stackable item in the
+  inventory needs room in that stack; otherwise fewer than 30 items. JS matches.
+- 6xC4 (SinowberillChallengePlayer_SyncInventory_0068fbf4): type 0xC4, size
+  0x1F, unused 0xFFFF, 30 dwords of instance ids, 0xFFFFFFFF after the last. JS
+  matches (`tests/fieldhud.test.ts`).
+- Sort (ChallengePlayer_SortAndReassignChallengeItems_006a60f4): key is
+  data1[0] << 25, data1[1] << 17 (data1[0] == 1) or << 8, | data1[2], and
+  0x10000 when not equipped; adjacent-swap bubble sort, strict less, so stable
+  ascending. JS `autoSortOrder` (stable sort) matches.
+- Swap (InventorySwapLinkedItems_006a6a08): exchanges the two list entries.
+- Shine state machine (UpdateAnimationStateMachine_00712834): 32768, 60, 840,
+  -0.2, 5, rows 4 / margin 12 / pad 24 read from the data section. The state-0
+  wait truncates (the x87 control word is set to chop, `or 0xc00`), as the JS does.
+- Particle 0x9B: HandlePlayerPickupSuccess_005c4c1c spawns it at the item when
+  the floor is ours; create_item_box_on_ground_005c4874 spawns it at the item
+  origin when g_ItemInitializationState != 0.
+
+**Fixed in review:**
+- `sortKey` used the charfile's `equipped` (flags & 8). The exe needs flags
+  & 4 and & 8 both set. The sort now tests `(flags & 0x0c) === 0x0c`; the
+  test helper's equipped items carry 0x0c, plus a case with 0x08 alone.
+- The ItemPack's list / manual Backspace call `dispose()` and FieldMenu's
+  `closeLeaf` calls it again. `commitSort` is guarded by `sortPending`, so the
+  second call is a no-op. Kept on purpose, not a double send.
+
+**ASSUMED / UNCLEAR:**
+- ASSUMED: the sorted flag is `this+0x2c` non-null in the exe's destructor
+  (GuildCardListWindow_CloseSubMenusAndDestructor_0075077c, a misnamed Ghidra
+  function). JS sends only when a sort happened (`sortPending`). The exe's
+  setter for +0x2c was not traced, so whether it is ever null after a sort is
+  unverified.
+- ASSUMED: the 6xC4 sends every inventory item id, not only the ones with a
+  slot (the exe skips a null slot). Every item in the list has one.
+- UNCLEAR: the shine's row geometry (A = round((12 + y)/4), start, alpha ramp)
+  comes from an earlier reading of unknown_render_background_for_menus; only
+  the timing constants were re-checked here. The exe's rand sequence is not
+  reproduced; only the distribution is.
+- ASSUMED: the 0x9B origin (the item's floor height in the pickup case) and the
+  appear gate (`source !== 'sync' && !game.loading`) approximate
+  g_ItemInitializationState; not traced.
+- Not verified: the server (newserv) accepting 6xC4 from a client. No e2e run.
+
+**Checks:** `node tests/drops.test.ts` (all passed); `tests/fieldhud.test.ts`
+(all passed, with the new sort-key case); `tests/windowanim.test.ts` (29/29);
+`tests/items.test.ts` (all passed); `tests/itemmodels.test.ts` (ALL PASS, 4623);
+`tests/combat.test.ts` (5946, 0 failures); `cd client && npx tsc --noEmit`
+(exit 0). Not run: the Vite e2e (opening the item pack in the field and
+sorting).
 
 ## 2026-10-20: Quest editor connected to the admin panel
 
