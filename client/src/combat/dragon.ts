@@ -110,7 +110,9 @@ export const DRAGON_SLOTS: readonly DragonSlot[] = [
   slot(2, 2, 8, 0.6), // 26 dams then nkdown
 ];
 
-// The states (+0x32e). The names are this port's.
+// The states (+0x32e). The names are this port's. Sids 0x19 (teleport, 0x0041c7f8)
+// and 0x1a (fly move, 0x0041c168) are not listed: only the pad-driven pick (phases 2
+// and 0xb) writes them, and no stock quest enables it (DEVLOG 2026-10-21, test section 31).
 export const DRAGON_STATE = {
   wait: 0x00, // 0x004258ac: picks the first action
   walk: 0x02, // 0x00423070: stomping walk toward the target
