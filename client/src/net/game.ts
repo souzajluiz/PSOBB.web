@@ -1315,7 +1315,10 @@ export class Game extends Lobby {
     new DataView(sel.buffer).setUint32(0, MENU_ID_LOBBY, true);
     new DataView(sel.buffer).setUint32(4, Math.max(1, this.lobby.blockNumber), true);
     this.conn.send(0x84, 0, sel);
-    await timeout(joinedLobby, 8000, 'lobby join (67)');
+    // newserv reads the 84 only once it has handled the 98 (it saves the
+    // character and sends E7 first); with its command logging on and two
+    // clients in the game, 8 s ran out once (classic e2e party-join).
+    await timeout(joinedLobby, 30000, 'lobby join (67)');
     return this.lobby;
   }
 }

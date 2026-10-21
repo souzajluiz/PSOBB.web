@@ -410,6 +410,10 @@ export interface CombatOptions {
   // The boss's form changed (a 6x15 this client sent itself, Vol Opt's change
   // to form 2): the field plays that phase's music (audio/bossbgm.ts).
   bossPhase?: (phase: number) => void;
+  // The stream file the session already has (the classic page reads it on the
+  // login connection after login); without it (or if it failed) the game
+  // connection is asked.
+  streamFiles?: () => Promise<Map<string, Uint8Array>>;
 }
 
 // Sound of the local player's level-up (PlayDirectionalSoundBasedOnAction_00692bf4,
@@ -6315,7 +6319,8 @@ export class CombatView {
   // The server's stream file (ItemPMT, ItemMagEdit, PlyLevelTbl, battle
   // params), fetched once per game.
   streamFiles(): Promise<Map<string, Uint8Array>> {
-    this.streamed ??= fetchStreamFiles(this.game.conn, this.opts.log);
+    const ask = () => fetchStreamFiles(this.game.conn, this.opts.log);
+    this.streamed ??= this.opts.streamFiles?.().catch(ask) ?? ask();
     return this.streamed;
   }
 

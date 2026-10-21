@@ -45,9 +45,10 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    party creation window (`classic/gamelist.ts`), the Connecting.. status
    table (`classic/connectstatus.ts`) and the quest loading screen's bars,
    lines and progress bar (`classic/questloading.ts`). Still open: the quest
-   screen's particle wipes and middle particle, the lobby / floor loading
-   screens (`current_loading_screen_type`), the field scene the classic client
-   needs to actually play a game it joined. The counter's Change SHIP / BLOCK and
+   screen's particle wipes and middle particle, the floor loading screens
+   (`current_loading_screen_type`). A created / joined party is entered behind
+   the game-entry loading screen and played on the Online tab's field
+   (2026-10-21, `classic/field.ts`; no NPC talk, quests or chat there yet). The counter's Change SHIP / BLOCK and
    the Team menus (create, leave, ranking, promote / demote / dismiss, dissolve)
    are done 2026-10-20 (`classic/teammenu.ts`, `net/team.ts`; not seen in Chrome);
    left: Master Transfer (6x handshake), Buying Privileges / Flag Records windows,

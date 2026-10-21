@@ -18,6 +18,17 @@
 //     is below 3; FUN_00408200 moves it to state 2 with the connection
 //     result, and update FUN_00407c6c waits 150 frames (0x96) in state 2
 //     before showing the result (unitxt group 0x36 errors, FUN_004080ac).
+//
+// The same warp is the loading screen of a game entry ({ status: false }):
+// handle_packet0x64 (ends 0x0079c018) sets the next floor to 0
+// (SetFloorAndMapVariant 0x00815590 on 0xac9d4c), bit 0 of the floor flags
+// 0xac9d6c (0x007bd788) and the loading flag 0xaab380 (0x007a6114); the game
+// loop (0x007bcc4c) then calls play_loading_screen_animation(floor)
+// (0x00417a9c), where get_warp_type (0x00815648) answers 2 for that bit, so the
+// screen type is lobby (0): update_loading_screen_widget (0x00417ccc) builds
+// create_lobby_burst_screen (FUN_00418794) under the fade-in, with no
+// "Connecting.." object (that one is FUN_00407b74 of the connect loop). The
+// floor loads behind it and unk_end_loading_screen ends it at once.
 
 import { RESULT_WAIT_FRAMES, STATUS_POS } from './connectstatus.ts';
 import { drawGameText } from './gametext.ts';
@@ -33,8 +44,15 @@ const FRAME = 1 / 30;
 const WAIT_AFTER_RESULT = RESULT_WAIT_FRAMES; // FUN_00407c6c state 2 (connectstatus.ts has the whole state machine)
 const FADE_STEP = 1 / 15; // FUN_0040a080 mode 2 (0xbd888889)
 
+export interface ConnectingOptions {
+  // false: no "Connecting.." object, and the screen ends as soon as the task
+  // does (the game-entry loading screen).
+  status?: boolean;
+}
+
 export class ConnectingScreen implements Screen {
   layout = 'stretch' as const;
+  private readonly status: boolean;
   private particles = new ParticleSystem();
   private tint = makeTinter();
   private frame = 0;
@@ -48,7 +66,8 @@ export class ConnectingScreen implements Screen {
   private onDone: () => void;
   private onError: (message: string) => void;
 
-  constructor(assets: ConnectingAssets, task: Promise<unknown>, onDone: () => void, onError: (message: string) => void) {
+  constructor(assets: ConnectingAssets, task: Promise<unknown>, onDone: () => void, onError: (message: string) => void, opts: ConnectingOptions = {}) {
+    this.status = opts.status ?? true;
     this.assets = assets;
     this.onDone = onDone;
     this.onError = onError;
@@ -86,7 +105,8 @@ export class ConnectingScreen implements Screen {
     if (this.frame === 2) this.createEffects();
     this.particles.step();
     this.fade = Math.max(0, this.fade - FADE_STEP);
-    if (this.resultFrame >= 0 && !this.finished && !this.showingError && this.frame - this.resultFrame > WAIT_AFTER_RESULT) {
+    const wait = this.status ? WAIT_AFTER_RESULT : 0;
+    if (this.resultFrame >= 0 && !this.finished && !this.showingError && this.frame - this.resultFrame > wait) {
       // State 3: status 0 goes on at once; any other status shows its text
       // and waits for the confirm (Enter) or cancel key
       // (GameListMenuObjectStateMachine, 0x00407c6c).
@@ -115,7 +135,7 @@ export class ConnectingScreen implements Screen {
     // status texts are unitxt group 0x36 (left over from the Xbox port); the
     // bridge's error message stands in for them.
     if (this.showingError) this.error?.split('\n').forEach((line, i) => drawGameText(ctx, line, STATUS_POS.x, STATUS_POS.y + i * 20));
-    else if (!this.finished) drawGameText(ctx, 'Connecting..', STATUS_POS.x, STATUS_POS.y);
+    else if (!this.finished && this.status) drawGameText(ctx, 'Connecting..', STATUS_POS.x, STATUS_POS.y);
     if (this.fade > 0) {
       ctx.fillStyle = `rgba(0,0,0,${this.fade})`;
       ctx.fillRect(0, 0, 640, 480);

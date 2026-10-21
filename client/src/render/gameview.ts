@@ -107,6 +107,8 @@ export class GameView {
   // While this returns true the local player cannot move, attack or pick up
   // (an NPC talk, a quest message or list waits; UIState_SetLockedState).
   inputBlocked: () => boolean = () => false;
+  // false: no name labels over the players (the classic page, classic/field.ts).
+  private labels: boolean;
 
   constructor(
     viewer: MapViewer,
@@ -115,7 +117,9 @@ export class GameView {
     log: (msg: string) => void = () => {},
     bgm: BgmPlayer | null = null,
     character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null } = { character: () => null, fullCharacter: () => null },
+    options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>> } = {},
   ) {
+    this.labels = options.labels ?? true;
     this.viewer = viewer;
     this.game = game;
     this.source = source;
@@ -162,6 +166,7 @@ export class GameView {
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       bossPhase: (phase) => this.field.noteBossPhase(phase),
       constructObjects: (floor, room, group) => this.constructObjects(floor, room, group),
+      ...(options.streamFiles ? { streamFiles: options.streamFiles } : {}),
     });
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
     this.hud = new FieldHud(viewer, this.files, {
@@ -509,7 +514,7 @@ export class GameView {
     const me = this.game.self!;
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
-    this.view = new LobbyView(this.viewer, this.game, mapData, { showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
+    this.view = new LobbyView(this.viewer, this.game, mapData, { labels: this.labels, showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
     const objectBase = await this.objectBase(floor);
     // The quest's floor handler runs on a new thread when the player arrives
     // (quest_start_floor_thread, PsoBB.exe .c:615128).

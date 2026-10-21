@@ -49,6 +49,12 @@ const MOVE_KEYS: Record<string, string> = { w: 'w', s: 's', a: 'a', d: 'd' };
 const FRAME = 1 / 30;
 const HEAD_FACTOR = 0.92; // FUN_00716204: model bound * 0.92 (0x0096fe90)
 const SE_CHAT = 0x574; // FUN_00720940
+// ping_server (0x007bd288, called by the logged-in game loop 0x007bcc4c, which
+// runs the lobby and the games): while logged in, a 1D every 900 frames
+// (g_FrameCounter % 900, the 0x91a2b3c5 division). newserv disconnects a
+// client that sent nothing for a minute (ClientIdleTimeout), so a player who
+// only stands or reads the counter's menus needs it.
+export const PING_FRAMES = 900;
 
 export interface LobbyHud {
   skin: WindowSkin;
@@ -238,6 +244,7 @@ export class LobbyScreen implements Screen {
 
   private tick(): void {
     this.frame++;
+    if (this.frame % PING_FRAMES === 0) this.lobby.conn.send(0x1d, 0);
     this.menu.tick();
     this.options?.tick();
     this.counter.tick();
