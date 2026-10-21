@@ -1154,6 +1154,26 @@ for (const n of [1, 2, 5]) {
   }
 }
 
+// 31. Sids 0x19 (teleport) and 0x1a (fly move) are not reachable in the normal fight
+//     (DEVLOG 2026-10-21 "Dragon: sids 0x19 and 0x1a are pad-only"). Their only writers
+//     are the phase 2 / 0xb handlers, which run only under the pad pick (0x00423f74 gates
+//     phase 2 on the pad flag 0x00a4377c, set by the quest opcode pad_dragon; phase 0xb
+//     on the Dragon's +0x768, set by control_dragon). The leader's pick never yields them,
+//     so the port has no state for them.
+{
+  let hit = false;
+  for (const ultimate of [false, true]) {
+    for (let c = 0; c < 0x40; c++) {
+      const r = dragonNext(c, ultimate);
+      if (r.state === 0x19 || r.state === 0x1a) hit = true;
+    }
+  }
+  check(!hit, 'the leader pick (both tables, every cursor up to 0x3f) never yields sid 0x19 or 0x1a');
+  const seqs = [DRAGON_SEQ_NORMAL_A, DRAGON_SEQ_NORMAL_B, DRAGON_SEQ_ULTIMATE_A, DRAGON_SEQ_ULTIMATE_B];
+  check(seqs.every((s) => !s.includes(0x19) && !s.includes(0x1a)), 'no action sequence holds 0x19 or 0x1a');
+  check(!Object.values(DRAGON_STATE).includes(0x19) && !Object.values(DRAGON_STATE).includes(0x1a), 'the port names no state 0x19 or 0x1a');
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);

@@ -8104,3 +8104,103 @@ ALL PASS; `telepipe`, `hitfx`, `deathfx`: all checks passed; `dragon`: ok.
 **Checks.** `node tests/deathfx.test.ts`: all checks passed; the new block covers the Dubchic (29), the Deldepth (16 and 22), the Astark (0xf2 at the kill, no sink, removal at 200) and the Yowie (the sink of 200). `cd client && npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome.
 
 **Decisive spot-check (the Booma voice, which decides four rows).** `PSOBB_EXE=... python3 tools/exedata.py read 00b02154 u 1` gives 0x00535c14, the +0x194 slot of the Booma vtable 0x00b01fc0 (its +0x174 is 0x0052b518). `objdump -d -M intel --start-address=0x00535c14 --stop-address=0x00535c26 PsoBB.exe` shows `push 0xe6` at 0x00535c1c and the call to the sound routine 0x00814298 after it. If the slot is not 0x00535c14, the voice of the Booma family is wrong and rows 9 to 14 move with it.
+
+## 2026-10-21: Dragon: sids 0x19 and 0x1a are pad-only (not ported)
+
+The question: does the Dragon (`combat/dragon.ts`) ever enter sid 0x1a (fly move, handler
+0x0041c168) or 0x19 (teleport, handler 0x0041c7f8)? Answer: not in the normal fight. Their
+only writers are the pad-driven pick, which no stock quest enables. So the two states are not
+ported, the take-off spawns at 0x0041c5b1 / 0x0041cc87 are not wired, and the port names no
+state for them. The proof follows (all VERIFIED from the exe bytes and Ghidra unless marked).
+
+**The dispatch.** `0x00419b14` switches on the sid (the second argument) through the table
+0x008fb1a0: entry 0x19 is `call 0x0041c7f8`, entry 0x1a is `call 0x0041c168` (the decompile of
+the dispatcher lists the same). The state word is +0x32e. The phase is the third argument.
+`SetEnemyAiState` (0x0051f62c) is `dispatch(old, 5); dispatch(new, 4); sid = new`. The vtable
+slot +0x164 is the dispatcher itself (0x00419b14), so `(*this)->[0x164](s, p)` is
+`dispatch(s, p)`: it runs phase p of state s and does NOT write the sid. That matters below.
+
+**The 0x19 / 0x1a sends (VERIFIED: every one is in phase 2 or 0xb).** The handlers' phase 2
+and 0xb branches are the same pick as the pad path: `dispatch(next, 6)` then a 6x packet built
+on the stack (`0x008003e0`) that carries the next state. The sites:
+
+| sid | handler | phase | site | what |
+|---|---|---|---|---|
+| 0x19 | fly move 0x0041c168 | 2 (gate +0x870 == 1) | 0x0041c646 | dispatch(0x19,6), send |
+| 0x19 | fly move 0x0041c168 | 0xb | 0x0041c64c+ / 0x0041c6b4 | dispatch(0x19,6), send |
+| 0x1a | teleport 0x0041c7f8 | 2 | 0x0041c85f | dispatch(0x1a,6), send |
+| 0x1a | teleport 0x0041c7f8 | 0xb | 0x0041cbfc | dispatch(0x1a,6), send |
+| 0x19 | emerge 0x0041e3f8 | 2 / 0xb | 0x0041e874 | dispatch(0x19,6), send |
+| 0x19 | rain 0x0041a888 | 2 / 0xb | 0x0041a9d9 | dispatch(0x19,6), send |
+| 0x19 | flyShoot 0x00421494 | 2 / 0xb | 0x00421a80 | dispatch(0x19,6), send |
+| 0x19 | flyAcross 0x00421ecc | 2 | 0x0042213c | dispatch(0x19,6), send |
+
+The fly handler's phase 2 is also gated by `+0x870 == 1` (`0x0041c168` case 2 reads
+`param_1[0x21c]`); the gate does not matter, because phase 2 itself is not reached (below).
+
+**The gates of phase 2 and 0xb (VERIFIED).** `UpdateDragonAiState` (0x00423f74) runs the pick:
+- `if (0x00a4377c != 0)` dispatches **phase 2** of the current sid (`0x00423fca` reads the flag).
+- `if (+0x768 != 0)` dispatches **phase 0xb** (the `+0x768` test in the same function).
+- otherwise phase 9 (the table pick).
+The leader's per-frame branch (0x00423d4e) also has a `+0x3e8 == 2` arm that dispatches phase 2
+(`0x00423e7e`): `+0x3e8` is written only as 0 or 1 in the Dragon's code (0x419a60, 0x419a7b,
+0x419a87, 0x423bda, 0x423bf4), so that arm is dead.
+
+- **0x00a4377c** (the pad flag): written 0 at the globals init (`0x0042577d`) and 1 only by
+  `EnableDragonControl` (`0x004250d4`, `movl $1, 0xa4377c`). Its only caller is the thunk
+  `0x006b4660` (`call 0x4250d4; ret`), and that thunk has no direct caller: its address sits in
+  the data table at VA 0x009cd304 (file offset 0x5cbf04). ASSUMED: that table is the quest
+  opcode table and the entry is `pad_dragon` (opcode 0xE0, `questopcodes.ts`; the dump's name
+  `opcode_pad_dragon` agrees).
+- **+0x768** (the phase 0xb gate): ctor 0x004198cd writes 0. It is set from the pad input in
+  `0x00425798` (`if (0xa43778 != 0) +0x768 = 1 ...`, else 0), which runs on entering the wait
+  state (`0x004258ac` case 4). The input flag 0xa43778 is set by `SetDragonControlPlayer`
+  (`0x004250e0`, called from the quest opcode `control_dragon`, `opcode_control_dragon` in the
+  dump, opcode 0xF830) and cleared by `ReleaseDragonControl` (0x00425100, opcode 0xF831). Its
+  gate, the dword 0x009f9860 (= 1, never written; see the trap entry above), is always open,
+  so the gate of these opcodes is the opcode alone.
+
+**Quest scan (VERIFIED on the repo's quests).** `pad_dragon`, `control_dragon` and
+`release_dragon` (opcodes 0xE0, 0xF830, 0xF831) occur in NO quest: a scan with the port's own
+parser (`parseQst` + `questOpcodeHistogram`) over the 142 `.qst` files of `quest/` that parse
+(3 do not parse: `ep1/recovery/lost havoc vulcan.qst`, `ep2/event/ma4-a.qst`,
+`solo/ep1/04.qst`; not checked). So no stock path raises 0xa4377c or +0x768.
+
+**Other writers of the sid (VERIFIED).**
+- Immediate stores of 0x19 or 0x1a to +0x32e: none in the Dragon's code. The one found in the
+  exe is `0x00769de3` (`movw %ax, 0x32e(%edi)` after `mov $0x1a`): it is in
+  `SaintEmilionPart_HandlePhaseTransitionLogic` (dump name, the Saint-Million part's own class,
+  0x00769d7c, not Ghidra-defined), so it is not the Dragon's writer. The earlier note that its
+  function was unidentified is closed.
+- `SetEnemyAiState` (0x0051f62c) callers inside the Dragon's range (0x00419000..0x00429000): five.
+  Their states are 8 (the intro's timeout, 0x0041b1ae), 0xc (0x004240a3), the packet's u16 (the
+  6x12 readers 0x00423a9d, 0x00423af6, 0x00423b71). None is 0x19 or 0x1a as an immediate.
+- Table values: the four sequences (normal A 0x009a3cb0, normal B 0x009a3cf0, Ultimate A 0x009a3d28,
+  Ultimate B 0x009a3d78) hold the states 2..8, 14..19 (0xe..0x13), 0x20 / 0x21 (the cursor codes) and
+  34 / 35 (0x22 / 0x23): no 0x19 and no 0x1a. The immediate 0x1a at 0x00424ed3 is followed by no
+  +0x32e store (it feeds the reads of +0x0d8 and +0x360). The constructor's sid stores (0x00419a0e:
+  0; 0x00419aa4: 0x1d) are not 0x19 / 0x1a.
+- The 6x12 packet (`action_dragon`, 0x00423b00) sets the sid from the packet's u16. A peer
+  sends only the leader's pick, which is never 0x19 / 0x1a; the pad path sends them only under
+  the flags above. ASSUMED: no generic enemy packet (other than the 6x12) names the Dragon's
+  object with a sid value; the generic SetEnemyAiState callers (562 in the exe) were not all
+  decompiled.
+
+**Decision.** Unreachable in the normal fight, so nothing is ported. The two states would be
+dead code, and the take-off spawns at 0x0041c5b1 (in fly's phase 0) and 0x0041cc87 (in
+teleport's phase 0) are dead with them. The pad path (the debug "dragon control") stays
+unported, as before. If the pad path is ever wired (a quest that runs `pad_dragon`), the two
+states must be ported: their motion, movement and transitions as in the fly and teleport
+handlers, the take-off in phase 0 at the two sites above.
+
+**Code.** `client/src/combat/dragon.ts`: a comment on `DRAGON_STATE` says why 0x19 / 0x1a are
+absent. `tests/dragon.test.ts` section 31: the leader's pick (both tables, cursors 0..0x3f)
+never yields 0x19 or 0x1a, no sequence holds them, and the port names no state with those
+values.
+
+**Decisive spot-check.** `PSOBB_EXE=... tools/exedata.py read 009cd304 u 1` must print
+7030368 (0x006b4660, the thunk to 0x4250d4). If that table is the quest opcode table and
+a quest ran `pad_dragon`, the two states come into play. The scan above is the other half.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok (section 31 is new). `node tests/enemies.test.ts`:
+ALL PASS. Client `npx tsc --noEmit -p .` (Node 24): clean.
