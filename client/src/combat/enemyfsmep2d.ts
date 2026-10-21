@@ -2110,12 +2110,12 @@ export const EPSILON_PATTERNS: readonly (readonly [number, number, number, numbe
   [1, 1, 1, 1],
 ];
 
-// The technique group each element blocks, by colour 0..3 (0x0055aaf0 reads
-// the word table at 0x009252e0: 1, 2, 3, 5): foie, gibarta / rabarta, zonde,
+// The technique group each element blocks, by colour 0..3 (0x0055aaf0 builds
+// the array on the stack from immediates: 1, 2, 3, 5): foie, gibarta / rabarta, zonde,
 // megid. Barta is group 0x13 (techfire.ts HIT_GROUP), so it is not blocked.
 export const EPSILON_ELEMENT_GROUPS = [1, 2, 3, 5] as const;
-// The weapon special each element blocks, by colour 0..3 (0x0055ac24 reads the
-// word table at 0x009252d4: 9, 7, 10, 11): fire (9), freeze (7), thunder (10),
+// The weapon special each element blocks, by colour 0..3 (0x0055ac24 builds
+// the word array on the stack from immediates: 9, 7, 10, 11): fire (9), freeze (7), thunder (10),
 // instant kill (11); the numbers are special_attack_type (combat/specials.ts).
 export const EPSILON_ELEMENT_SPECIALS = [9, 7, 10, 11] as const;
 

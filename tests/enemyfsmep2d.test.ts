@@ -764,10 +764,10 @@ const epsilon = (o: { params?: number[]; rng?: () => number } = {}) =>
 }
 {
   // The special immunity (EpsigardProcessSpecialAttack 0x0055ab30): the
-  // element's special type (0x009252d4: fire 9, ice 7, thunder 10, instant
+  // element's special type (0x0055ac24's stack array: fire 9, ice 7, thunder 10, instant
   // kill 11), by colour 0..3 (the element is read as the colour & 3).
-  eq(EPSILON_ELEMENT_SPECIALS, [9, 7, 10, 11], 'the element specials (0x009252d4)');
-  eq(EPSILON_ELEMENT_GROUPS, [1, 2, 3, 5], 'the element groups (0x009252e0)');
+  eq(EPSILON_ELEMENT_SPECIALS, [9, 7, 10, 11], 'the element specials (0x0055ac24)');
+  eq(EPSILON_ELEMENT_GROUPS, [1, 2, 3, 5], 'the element groups (0x0055aaf0)');
   for (let c = 0; c < 4; c++) {
     const e = epsilon({ rng: () => (c + 0.5) / 4 });
     eq(e.element, c, `colour ${c} from the rng`);

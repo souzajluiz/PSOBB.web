@@ -7441,8 +7441,8 @@ The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` (direction turne
 - Ring (0x0055a884): the translation (0, 0x41c00000 = 24.0, 0) after the entity position (+0x38), the scale pushes (t, 1.0, t) from +0x500, model index 4. Flag 0x200 is set by event 4 of 0x00558c84 (`or 0x242`), cleared only by the dormant entry 0x0055ad34 (`and 0xfffffdff`).
 - Laser origin (0x00558504): +0x300 = +0x38, +0x304 = +0x3c + 24.0 (float at 0x00925450 = 24.0), +0x308 = +0x40. The orb is +0x504..+0x50c (written at 0x0055a061 from a ground query, 0x007b4c58).
 - Line draw (0x0055a8fc): colour constant 0x009bde20 = 0x80ff4040; drawn with flag 0x40 from the line data pointer 0x009bde28.
-- Special immunity (0x0055ab30): flags 0x2 / 0x40 take the invulnerable path; otherwise the element special word table at 0x009252d4 (GetSpecial 0x0055ac24, index = colour & 3 from +0x446) is compared with the special type (word +0x116); equal shows the "0" (0x0077535c with 0).
-- Tech group (0x0055aa5c / 0x0055aaf0): the group table at 0x009252e0 = 1, 2, 3, 5; equal to the technique's group shows the "0". Barta's group 0x13 is from techfire.ts HIT_GROUP (not re-read in this exe pass).
+- Special immunity (0x0055ab30): flags 0x2 / 0x40 take the invulnerable path; otherwise the element special word array (GetSpecial 0x0055ac24 builds it on the stack from immediates 9, 7, 10, 11; not a table at 0x009252d4; index = colour & 3 from +0x446) is compared with the special type (word +0x116); equal shows the "0" (0x0077535c with 0).
+- Tech group (0x0055aa5c / 0x0055aaf0): the group array = 1, 2, 3, 5, built on the stack from immediates at 0x0055ab09..0x0055ab21 (not a table at 0x009252e0); equal to the technique's group shows the "0". Barta's group 0x13 is from techfire.ts HIT_GROUP (not re-read in this exe pass).
 - Special type numbers 7 freeze, 9 fire, 10 thunder, 11 instant kill: combat/specials.ts header (prior exe read).
 
 **ASSUMED / UNCLEAR.**
