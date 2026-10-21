@@ -15,6 +15,7 @@ import {
   ReconBomb,
   RecoboxAi,
   bamsOf,
+  epsilonTint,
   sweepPasses,
 } from '../client/src/combat/enemyfsmep2d.ts';
 import type { AiFrame, AiTarget, EnemyBrain } from '../client/src/combat/enemyai.ts';
@@ -700,6 +701,46 @@ const epsilon = (o: { params?: number[]; rng?: () => number } = {}) =>
   eq(e.children[0].state, 'gone', 'a dying Epsigard is gone after its burst');
 }
 
+{
+  // The tint (render/combat.ts): lerp(white, element colour, colourT), the
+  // element colour lerped from the old element to the new one by colourMix.
+  eq(epsilonTint(0, 0, 0, 0), [1, 1, 1], 'no colour: white');
+  eq(epsilonTint(0, 0, 0, 1), [1, 0, 0], 'element 0 (red) at full colour');
+  eq(epsilonTint(1, 1, 1, 1), [0, 0, 1], 'element 1 (blue) at full colour');
+  eq(epsilonTint(0, 1, 0.5, 1), [0.5, 0, 0.5], 'red to blue, halfway');
+  eq(epsilonTint(2, 2, 0, 0.5), [1, 1, 0.5], 'half colour: yellow lerped with white');
+  eq(epsilonTint(5, 5, 0, 1), epsilonTint(1, 1, 0, 1), 'the element is taken mod 4');
+}
+{
+  // The brain side of the tint: colourT rises, the element changes at its top
+  // with colourMix 0, and colourMix reaches 1 about 30 frames later.
+  const e = epsilon({ params: [0, 0, 10, -15] });
+  const gr = groupRigs(e);
+  const p = player(0, 150);
+  let prev = e.element;
+  let changes = 0;
+  let mixFrames = -1;
+  let sinceChange = -1;
+  let shownOpen = false;
+  let shownClosed = true;
+  runGroup(e, gr, [p], 3000, 30, () => {
+    if (e.open) shownOpen = true;
+    else shownClosed = true;
+    if (e.element !== prev) {
+      check(e.colourFrom === prev && e.colourMix === 0, `the recolour starts from the old element (${prev} -> ${e.element})`);
+      prev = e.element;
+      changes++;
+      sinceChange = 0;
+      mixFrames = -1;
+    } else if (sinceChange >= 0) {
+      sinceChange++;
+      if (e.colourMix >= 1 && mixFrames < 0) mixFrames = sinceChange;
+    }
+  });
+  check(changes >= 2, `the element changed (${changes} times)`);
+  check(mixFrames >= 29 && mixFrames <= 31, `the colour lerp takes 30 frames (${mixFrames})`);
+  check(shownOpen && shownClosed, 'the body is open and closed in the cycle');
+}
 {
   // The first timer: (param3 + 20, at least 5) * 30 frames of stalking before
   // the Epsigards are sent; the element advances in the recolour.

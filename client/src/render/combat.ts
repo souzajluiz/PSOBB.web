@@ -50,14 +50,14 @@ import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi,
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
-import { EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
+import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DRAGON_BODY_BOXES, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
-import { PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
+import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
 import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volopt.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
@@ -286,6 +286,17 @@ interface EnemyRuntime {
 interface HitVisual {
   kind?: HitFxKind;
   miss?: boolean;
+}
+
+// Epsilon's body: its cloned materials, their base colours and the last tint
+// inputs (epsilonTintBody).
+interface EpsilonBody {
+  mats: THREE.MeshBasicMaterial[];
+  base: THREE.Color[];
+  from: number;
+  to: number;
+  mix: number;
+  t: number;
 }
 
 // The local player's technique cast in progress.
@@ -740,6 +751,10 @@ export class CombatView {
     this.voloptHeld = false;
     this.voloptCage?.removeFromParent();
     this.voloptCage = null;
+    for (const m of this.epsilonOrbs.values()) m.removeFromParent();
+    this.epsilonOrbs.clear();
+    this.epsilonBodies.clear();
+    this.epsilonLook.clear();
     this.resetDarkFalz();
     const slots = expandEnemySets(sets, area, this.game.info?.event ?? 0);
     const headOf = new Map<number, { index: number; slot: EnemySlot }>();
@@ -1429,7 +1444,8 @@ export class CombatView {
         e.lift = lift;
       }
       root.rotation.y = r.angle;
-      if (r.motion) this.playEnemyMotion(e, r.motion);
+      // Epsilon's motion goes to the part of the look that is shown (epsilonView).
+      if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
       else if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale, r.hit.attack);
       if (r.shots) for (const s of r.shots) this.launchShot(e, s);
@@ -1461,6 +1477,7 @@ export class CombatView {
       }
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
+      if (ai instanceof EpsilonAi) this.epsilonView(e, ai, r);
       if (ai instanceof CananeAi && !e.ringSpawned) {
         e.ringSpawned = true;
         for (let i = 0; i < 8; i++) void this.spawnRingCanadine(e, ai, i);
@@ -3430,6 +3447,98 @@ export class CombatView {
     e.stats.hp = Math.min(e.stats.maxHp, e.stats.hp + heal);
     this.sendEnemy(e, ENEMY_BASE_FLAGS);
     this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) casts Resta: +${heal} HP (${e.stats.hp}/${e.stats.maxHp})`);
+  }
+
+  // --- Epsilon (combat/enemyfsmep2d.ts) ---------------------------------------
+
+  // Its two looks are two parts of one model: the closed body (part 0, motion
+  // 0) and the open one (part 1, motion 1). The exe's helper 0x005592a0 shows
+  // one, hides the other and sets the motion slot on the frame the closed flag
+  // changes; this does the same each frame from the brain's `open`.
+  private epsilonLook = new Map<EnemyRuntime, number>();
+  private epsilonBodies = new Map<EnemyRuntime, EpsilonBody>();
+  private epsilonOrbs = new Map<EnemyRuntime, THREE.Mesh>();
+
+  private epsilonView(e: EnemyRuntime, ai: EpsilonAi, r: { hidden?: boolean; motion?: EnemyAiMotion | null }): void {
+    const parts = e.instance.root.children;
+    if (parts.length < 2) return;
+    const look = ai.open ? 1 : 0;
+    parts[0].visible = !r.hidden && look === 0;
+    parts[1].visible = !r.hidden && look === 1;
+    if (this.epsilonLook.get(e) !== look) {
+      // A new look starts its own motion (the slot goes with the look).
+      this.epsilonLook.set(e, look);
+      this.playEpsilonPart(e, look, look ? EPSILON_ANIM.open : EPSILON_ANIM.closed);
+    } else if (r.motion) this.playEpsilonPart(e, look, r.motion);
+    this.epsilonTintBody(e, ai);
+    this.epsilonOrbView(e, ai, !!r.hidden || ai.isDying);
+  }
+
+  // The animators are the parts' in order (both parts have a motion).
+  private playEpsilonPart(e: EnemyRuntime, part: number, m: EnemyAiMotion): void {
+    const a = e.instance.animators[part];
+    if (!a) return;
+    try {
+      a.play(e.instance.archive.motion(m.index, a.nodeCount), m.speed, m.loop);
+    } catch (err) {
+      this.opts.log(`enemy motion ${m.index}: ${(err as Error).message}`);
+    }
+  }
+
+  // The tint: the body's materials are clones of the cache's (the other enemies
+  // keep the shared ones); colour = base colour * epsilonTint, redone only when
+  // one of its inputs changes (the recolour's 90 frames).
+  private epsilonTintBody(e: EnemyRuntime, ai: EpsilonAi): void {
+    let body = this.epsilonBodies.get(e);
+    if (!body) {
+      const made: EpsilonBody = { mats: [], base: [], from: NaN, to: NaN, mix: NaN, t: NaN };
+      e.instance.root.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const list = Array.isArray(o.material) ? o.material : [o.material];
+        const own = list.map((m) => {
+          const c = m.clone();
+          if (c instanceof THREE.MeshBasicMaterial) {
+            made.mats.push(c);
+            made.base.push(c.color.clone());
+          }
+          return c;
+        });
+        o.material = Array.isArray(o.material) ? own : own[0];
+      });
+      body = made;
+      this.epsilonBodies.set(e, body);
+    }
+    if (body.from === ai.colourFrom && body.to === ai.element && body.mix === ai.colourMix && body.t === ai.colourT) return;
+    body.from = ai.colourFrom;
+    body.to = ai.element;
+    body.mix = ai.colourMix;
+    body.t = ai.colourT;
+    const [r, g, b] = epsilonTint(ai.colourFrom, ai.element, ai.colourMix, ai.colourT);
+    const tint = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+    body.mats.forEach((m, i) => m.color.copy(body.base[i]).multiply(tint));
+  }
+
+  // The laser orb (EpsilonAi.orb while the laser is shown): a fire-coloured ball
+  // at its position, the look of the Rafoie blast (ASSUMED: the exe draws a
+  // Rafoie-family model entity here).
+  private epsilonOrbView(e: EnemyRuntime, ai: EpsilonAi, hide: boolean): void {
+    const orb = hide ? null : ai.orb;
+    let mesh = this.epsilonOrbs.get(e) ?? null;
+    if (!orb) {
+      if (mesh) mesh.visible = false;
+      return;
+    }
+    if (!mesh) {
+      try {
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(6, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff6030 }));
+        this.viewer.scene.add(mesh);
+      } catch {
+        return;
+      }
+      this.epsilonOrbs.set(e, mesh);
+    }
+    mesh.visible = true;
+    mesh.position.set(orb.x, e.instance.root.position.y - e.lift + PLAYER_AIM_HEIGHT, orb.z);
   }
 
   // --- Bulclaw / Bulk / Claw (combat/enemyfsmruins.ts) ------------------------
