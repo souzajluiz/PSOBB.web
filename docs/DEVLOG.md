@@ -7764,3 +7764,52 @@ The helper's counter (+0x6ac) is zero at the spawn (0x004197a1). The emerge and 
 **Decisive spot-check.** In the exe, 0x00421667: the flame's handle is stopped when the motion frame is above 40 (`ja` against 0x008fbc48 = 40.0), and `movl $0, 0x8b4(%edx)` drops it. If that constant or the branch is wrong, the flame's lifetime is wrong.
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 28 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/combat.test.ts` (vendor linked for the run, removed after): 5946 checks, 0 failures. Client `npx tsc --noEmit` (Node 24): clean. Not run in Chrome.
+
+## 2026-10-21: Dragon particles: the dive and the take-off callers
+
+Follows "Dragon particles: the unresolved sites". This pass resolves the dive's call of the emerge / dive helper (0x0041fa7b) and two of the four take-off callers (0x0041ff7a, 0x004221b0). Two callers (0x0041c5b1, 0x0041cc87) sit in handlers the port's brain never enters and are not spawned.
+
+**The dive gate (0x0041fa7b), decoded.** It is in the dive's sub-state 3 (`[+0x86c] == 3`: the switch at 0x0041f9f2..0x0041fa12 and the `cmp eax,3` at 0x0041fa12). The x87 sequence, exe bytes:
+
+| address | bytes | instruction | meaning |
+|---|---|---|---|
+| 0x0041fa1e | d9 82 e4 05 00 00 | fld dword [edx+0x5e4] | A = `[+0x5e4]` |
+| 0x0041fa24 | d8 a2 e8 05 00 00 | fsub dword [edx+0x5e8] | X = A - `[+0x5e8]` (the port's `alt`, ASSUMED) |
+| 0x0041fa2a | d8 15 d8 be 8f 00 | fcom dword [0x008fbed8] | constant -400.0 (the port's `undergroundAltitude`) |
+| 0x0041fa30..32 | df e0 / 9e | fnstsw ax / sahf | flags from the compare |
+| 0x0041fa33 | 77 29 | ja 0x41fa5e | X > -400: skip the underground step |
+| 0x0041fa35..0x0041fa54 | dd d8 ... c7 82 6c 08 00 00 04 00 00 00 | fstp st(0); `[+0x3c8] &= ~0x100`; `[+0x86c] = 4` | X <= -400: underground (the port's tickDive sub 3 `c86c = 4`) |
+| 0x0041fa5e | d8 1d 2c bd 8f 00 | fcomp dword [0x008fbd2c] | constant 0.0 |
+| 0x0041fa64..67 | df e0 / 9e / 77 4c | fnstsw / sahf / ja 0x41fab5 | X > 0: no impact |
+| 0x0041fa69..73 | 8b 90 b0 08 00 00 / 85 d2 / 75 40 | `[+0x8b0]` test, jne 0x41fab5 | the impact already done (`dug`) |
+| 0x0041fa75..0x0041fa7b | 8d 41 38 / push eax / e8 70 f1 ff ff | push this+0x38, call 0x0041ebf0 | the emerge / dive helper (`riseParticle`) |
+| 0x0041fa83..0x0041faab | call 0x0041ec70; `[+0x8b0] = 1`; vtable +0x174, +0x180; `[+0x3ec] = 2` | the hit box update and the air state | the impact (`strike`, `air = 2`) |
+
+So the gate is X <= 0 (0.0) and `[+0x8b0] == 0`, the port's `alt <= 0 && !dug` in tickDive sub 3. The first gate (-400) is the sub-state change the port already has. **Correction:** the DEVLOG entry before this one said the second test "reads an empty stack in one path". It does not: the fall-through path pops X with `fstp st(0)` and pushes it again with the second fld/fsub, so both paths reach `fcomp` with one value. The reference dump's block at `Psobb.exe-05112026.c` lines 162380..162442 (unnamed there) agrees: its impact test `current_attack_info.field_0xc == 0` is `[+0x8b0]`, and it calls `SinowbeatLandingImpactEffect0041ebf0` before the hit box update.
+
+**The other callers (each function's dispatcher sid from the table at 0x008fb1a0, read with `exedata.py read`; the dispatcher is 0x00419b14, `cmp edx, 0x25`):**
+
+| caller | containing function | sid (table) | phase / sub-state | gate | port state and frame |
+|---|---|---|---|---|---|
+| 0x0041ff7a | the dive, 0x0041f6cc | 0x0f (dive) | phase 0, sub-state 0 (block 0x0041ff6f, reached from 0x0041f9fa `je`) | crossed(14) (0x41600000), each tick, before the turn (0x0041ffc0) | `tickDive` sub 0, before `turnStep`: take-off (id +0x04) at the body. **SPAWNED** |
+| 0x004221b0 | flyShoot, 0x004214ac (`sub esp, 0xbc`) | 0x07 (flyShoot) | phase 0, block 0x004221a0 (Player__Animate, 0x41ebc0, then the take-off), sub-state 0 (the `jne 0x422244` at 0x004221bd) | crossed(14), before the aim | `tickFlyShoot` sub 0, before `aimVolley`: take-off (id +0x04). **SPAWNED** |
+| 0x0041c5b1 | ProcessEnemySinowbeatActionState, 0x0041c168 (`sub esp, 0xa8`; dump's `fly_move`) | 0x1a (dispatcher case at 0x00419bc9, table k=26) | phase 0 (block 0x0041c5a1: animate, 0x41ebc0, the take-off, then the turn toward `[+0x87c]` at 0x200 a tick) | crossed(14) | NOT SPAWNED: the port has no sid 0x1a (`DRAGON_STATE` and the sequences do not use it). |
+| 0x0041cc87 | ProcessEnemySinowbeatTeleportState, 0x0041c7f8 (`sub esp, 0xa0`; dump's `case 0x19`) | 0x19 (dispatcher case at 0x00419bda, table k=25) | phase 0 (block 0x0041cc77: animate, 0x41ebc0, the take-off) | crossed(14) | NOT SPAWNED: the port has no sid 0x19. |
+
+The dispatcher's table is at 0x008fb1a0: its k-th entry is the case address (k = sid), and 0x00419bc9 is entry 26. The dump's enum `input_state_dragon` does not match the port's numbering for every state (its `walk = 24` is the port's 0x02 walk), so the dump's names are not used for the sids here.
+
+**Why 0x0041c5b1 and 0x0041cc87 are not spawned.** Each is a handler the port's brain has no state for. The exe writes sid 0x1a by an immediate (`mov eax, 0x1a; mov [edi+0x32e], ax`) at 0x00769dde, in a function after 0x00769d78 that I did not identify (ASSUMED: a packet path, not the AI). No immediate store of 0x19 was found: sid 0x19 is probably set from a received value (the dump's case 2 sends packet 0x60 with `dragon_action` 0x19, so the state is shared through the packet). The port's Dragon brain never sets either sid, so there is no port state, sub-state or frame for these two takes-off. Adding them would need a sid the port does not run. UNCLEAR, not spawned.
+
+**What changed.** `combat/dragon.ts`: `tickDive` sub 0 makes the take-off at frame 14 (0x0041ff7a) before the turn; sub 3's impact calls `riseParticle()` before the `strike` (0x0041fa7b; the counter `riseCount` is now shared by the emerge and the dive, as in the exe); `tickFlyShoot` sub 0 makes the take-off at frame 14 before the aim (0x004221b0; sub 1's 0x0042197a is unchanged). The `dug` comment corrected: the flag is `[+0x8b0]`, not `+0x6ac` (the counter). `tests/dragon.test.ts`: section 29 (the impact at alt -5 with its id 65 / 512 at the body, no impact above the ground or when done, the 0.05 raise from a shared counter of 1; the dive turn's take-off at frame 14 and not at 12; the flyShoot aim's take-off at frame 14, both difficulties).
+
+**ASSUMED.**
+- `[+0x5e4] - [+0x5e8]` is the port's `alt` (the body's height above the ground). The dump names both fields as the palette slots, so the names are not used; the test values come from the port's `alt`.
+- The dive's impact point is the body (x, alt, z), as the other helper calls (the exe passes `this+0x38`, whose y is the world height; the port uses `alt`, as the emerge does).
+- The helper's flag 0x840 is one shot (unchanged); its 0x800 bit is not read.
+- The flyShoot take-off at sub 0 and the sub 1 take-off (0x42197a) can both fire in one motion; the exe has no test between them.
+
+**UNCLEAR.**
+- 0x0041c5b1 (sid 0x1a) and 0x0041cc87 (sid 0x19): whether the port's Dragon can ever enter these sids. Not spawned.
+- The intro's six (0x0041b5b3, 0x0041b98e, 0x0041b69a, 0x0041b7ea, 0x0041ba5f, 0x0041b6a7): unchanged (another agent's work; not touched).
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok (section 29 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/combat.test.ts` was not run: it spawns `vendor/newserv/build/newserv`, which this worktree does not have. Client `npx tsc --noEmit` (Node 24): clean. Not run in Chrome.

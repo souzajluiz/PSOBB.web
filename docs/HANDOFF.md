@@ -69,10 +69,12 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    take-off and stomp, the lift, the hover roar and the launch flash are in (2026-10-21, "Dragon particles from
    its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now; the
    flame's emitter, the collapse's rings, the death's two, the emerge helper and the flyShoot take-offs are in,
-   2026-10-21 "Dragon particles: the unresolved sites"). Not spawned: the intro's six (its sub-states 0x874 /
-   0x86c are not in the port: 0x41b5b3, 0x41b98e, 0x41b69a, 0x41b7ea, 0x41ba5f, 0x41b6a7), the dive's call of the
-   emerge / dive helper (0x41fa7b, its gate UNCLEAR), and the take-off helper's other callers 0x41c5b1, 0x41cc87,
-   0x41ff7a, 0x4221b0 (their functions and states are not mapped). 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
+   2026-10-21 "Dragon particles: the unresolved sites"; the dive's impact helper 0x41fa7b, the dive's turn take-off
+   0x41ff7a and flyShoot's aim take-off 0x4221b0 are in, 2026-10-21 "Dragon particles: the dive and the take-off
+   callers"). Not spawned: the intro's six (its sub-states 0x874 /
+   0x86c are not in the port: 0x41b5b3, 0x41b98e, 0x41b69a, 0x41b7ea, 0x41ba5f, 0x41b6a7), and the take-off helper's
+   callers 0x41c5b1 and 0x41cc87, which sit in the handlers of sids 0x1a and 0x19 (the port's brain never enters
+   them; their only writer of 0x1a is 0x00769de3, ASSUMED a packet path). 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
    maps the seven cutscene objects, their mode 5 pushes, records and scene owners; `bossCameraView` steps the per-frame update (2026-10-21 camera paths: the update 0x004D68A0 is ported; the record, the type flags and the motion index are decoded), and `render/gamefield.ts` gets `opts.bossCamera` from the Control, but no view yet: the motion file `Bo04OpCam.rel` (map 14, type 0) is not on this machine and its NJM keys, the run-time yaws and pivots, and the view composition 0x004D6BC0 are open. Open too: the cutscene objects' bodies and the Ultimate Rico / ring scene (flag 0x97). Dark Falz Ultimate beam Darvants are in (2026-10-21, DEVLOG "Dark Falz Ultimate beam Darvants"): their hold (the bob, the look / chase, the 260 range), HP and ATP are still ASSUMED / UNCLEAR there.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and

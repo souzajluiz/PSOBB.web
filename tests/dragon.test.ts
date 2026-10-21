@@ -990,6 +990,85 @@ for (const n of [1, 2, 5]) {
   }
 }
 
+// 29. The dive's particle sites (DEVLOG "Dragon particles: the unresolved sites",
+//     resolved in the next pass): the dive's impact calls the emerge / dive helper
+//     (0x0041fa7b, gate alt <= 0 and the impact not yet done), the take-off in the
+//     dive's turn (0x0041ff7a, frame 14) and flyShoot's aim (0x4221b0, frame 14).
+{
+  const at = (ultimate: boolean, s: number, setup: (a: DragonAi) => void = () => {}) => {
+    const ai = brain({ ultimate });
+    const p = ai as unknown as { setState(n: number): void };
+    p.setState(s);
+    Object.assign(ai, { x: 10, z: 20, yaw: 0, alt: 0 });
+    setup(ai);
+    return ai;
+  };
+  const frame = (ai: DragonAi, f: number) => {
+    const p = ai as unknown as { frameState(): void; speed: number };
+    ai.mframe = f;
+    p.speed = 1;
+    ai.events.splice(0);
+    p.frameState();
+    return ai.events.splice(0);
+  };
+  const parts = (evs: DragonEvent[]) => evs.filter((e): e is Extract<DragonEvent, { kind: 'particle' }> => e.kind === 'particle');
+  const N = DRAGON_PARTICLE_IDS.normal;
+  const U = DRAGON_PARTICLE_IDS.ultimate;
+
+  // The dive's impact (0x0041fa7b): sub-state 3 at alt <= 0 with the impact not yet
+  // done makes the helper's particle (id +0x00) at the body, once.
+  for (const ultimate of [false, true]) {
+    const ids = ultimate ? U : N;
+    const impact = (alt: number, riseCount = 0, dug = false) =>
+      at(ultimate, S.dive, (a) => {
+        a.c86c = 3;
+        a.alt = alt;
+        a.f888 = 0;
+        a.f890 = 0;
+        a.f88c = 0;
+        Object.assign(a, { dug, riseCount });
+      });
+    const hit = parts(frame(impact(-5), 0));
+    eq(hit.length, 1, `dive impact at alt -5 (${ultimate ? 'Ultimate' : 'normal'}): one helper particle`);
+    check(hit.every((e) => e.id === ids.f00 && e.x === 10 && e.z === 20), 'the impact particle is the helper id (table +0x00) at the body');
+    const high = parts(frame(impact(5), 0));
+    eq(high.length, 0, `dive above the ground (${ultimate ? 'Ultimate' : 'normal'}): no impact particle`);
+    const done = parts(frame(impact(-5, 0, true), 0));
+    eq(done.length, 0, `dive impact already done (${ultimate ? 'Ultimate' : 'normal'}): no second particle`);
+  }
+  {
+    // The helper's counter is shared with the emerge: the impact's call is the 2nd, raised 0.05.
+    const ai = at(false, S.dive, (a) => {
+      a.c86c = 3;
+      a.alt = -5;
+      a.f888 = 0;
+      a.f890 = 0;
+      a.f88c = 0;
+      Object.assign(a, { riseCount: 1 });
+    });
+    const raised = parts(frame(ai, 0));
+    check(raised.length === 1 && near(raised[0].y, -5 + 0.05), 'the impact after one earlier call raises the point 0.05');
+  }
+
+  // The dive's turn (0x0041ff7a, sub-state 0): the take-off helper (id +0x04) at frame 14.
+  {
+    const t = parts(frame(at(false, S.dive, (a) => (a.c86c = 0)), 13));
+    check(t.some((e) => e.id === N.f04 && e.x === 10 && e.z === 20), 'dive turn frame 14: the take-off id 76 at the body');
+    const before = parts(frame(at(false, S.dive, (a) => (a.c86c = 0)), 11));
+    check(!before.some((e) => e.id === N.f04), 'dive turn at frame 12: no take-off');
+    const u = parts(frame(at(true, S.dive, (a) => (a.c86c = 0)), 13));
+    check(u.some((e) => e.id === U.f04), 'Ultimate dive turn frame 14: the take-off id 513');
+  }
+
+  // flyShoot's aim (0x4221b0, sub-state 0): the take-off at frame 14 before the aim.
+  {
+    const t = parts(frame(at(false, S.flyShoot, (a) => (a.c86c = 0)), 13));
+    check(t.some((e) => e.id === N.f04 && e.x === 10 && e.z === 20), 'flyShoot aim frame 14: the take-off id 76 at the body');
+    const u = parts(frame(at(true, S.flyShoot, (a) => (a.c86c = 0)), 13));
+    check(u.some((e) => e.id === U.f04), 'Ultimate flyShoot aim frame 14: the take-off id 513');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);
