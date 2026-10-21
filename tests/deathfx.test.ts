@@ -416,6 +416,41 @@ const allSe = (acts: DeathActions[]) => acts.flatMap((a) => a.se);
   eq(ill2.findIndex((a) => a.remove), 54, 'Ill Gill: removed 2 frames after the frame-52 step');
 }
 
+{
+  // Traced 2026-10-21: the rows that were ASSUMED (see the DEVLOG).
+  // Dubchic (0x005558bc / 0x00556ed0): the counter is 30 at the first call, the explosion on the 30th, tick 29.
+  const dub = new DeathRun(deathPlanFor('TObjEneDubchik', 'DUBCHIC', ctxOf(1, 1))!);
+  const dubActs = Array.from({ length: 40 }, (_, f) => dub.tick(f, false));
+  eq(dubActs[0].spawn.map((s) => [s.p.id, s.p.duration]), [[0xf8, 30]], 'Dubchic: the 0xf8 shock for 30 frames at the kill');
+  eq(dubActs.findIndex((a) => a.remove), 29, 'Dubchic: the explosion and the removal 29 ticks after the kill');
+  // Deldepth (0x00548d60): SE 0x276 at the kill, again 16 ticks later; the purple pool and the removal 6 ticks after that.
+  const dd = new DeathRun(deathPlanFor('TObjEneDelDepth', 'DELDEPTH', ctxOf(1, 1))!);
+  const ddActs = Array.from({ length: 30 }, (_, f) => dd.tick(f, false));
+  eq(ddActs.map((a, i) => (a.se.length ? i : -1)).filter((i) => i >= 0), [0, 16], 'Deldepth: SE 0x276 at the kill and at +16');
+  eq(ddActs.findIndex((a) => a.remove), 22, 'Deldepth: the removal 22 ticks after the kill');
+  eq(ddActs[22].pools.map((p) => [p.pool, p.delay]), [['purple7_5', 0]], 'Deldepth: a purple 7.5 pool at the removal');
+  // Astark (0x005a4a64, 0x005a1f8c): the 0xf2 at the body (+0x300); no sink, the removal 200 ticks after the kill.
+  const ast = new DeathRun(deathPlanFor('Astark', 'ASTARK', ctxOf(1, 1))!);
+  const astActs = Array.from({ length: 260 }, (_, f) => ast.tick(f, false));
+  eq(astActs[0].spawn.map((s) => s.p.id), [0xf2], 'Astark: 0xf2 at the kill');
+  check(astActs.every((a) => a.sink === 0), 'Astark: nothing sinks');
+  eq(astActs.findIndex((a) => a.remove), 200, 'Astark: removed 200 ticks after the kill');
+  // Yowie (0x005af0a4): the body sinks 0.1 a frame for 200 frames from the motion's end.
+  const yw = new DeathRun(deathPlanFor('SatelliteLizardYowie', 'YOWIE_DESERT', ctxOf(41, 3))!);
+  yw.tick(0, false);
+  const yEnd = yw.tick(20, true);
+  eq([yEnd.sink, yEnd.pools.length], [0.1, 1], 'Yowie: the sink starts at the motion end, with the red 7.5 pool');
+  let ySunk = yEnd.sink;
+  let yN = 1;
+  for (let i = 0; i < 400; i++) {
+    const a = yw.tick(20, true);
+    ySunk += a.sink;
+    if (a.sink > 0) yN++;
+    if (a.remove) break;
+  }
+  check(yN === 200 && Math.abs(ySunk - 20) < 0.5, `Yowie sinks 20 units over 200 frames (${yN} frames, ${ySunk})`);
+}
+
 if (failures) {
   console.log(`deathfx: ${failures} failure(s)`);
   process.exit(1);
