@@ -1,156 +1,5 @@
 # Devlog
 
-## 2026-10-21: Battle Mode traps (module, not wired)
-
-**What changed:** `client/src/quest/battletraps.ts` (pure): the 6x83 / 6x80
-parsers, the trap effect table, `TrapCounters`, `TrapField` (place, arm,
-fuse, blast, chain hit, 6x80 calls), the hit report, the kill rule, the trap
-vision rule and `pickRespawn`. `battle.ts` `build6x83` / `build6x80` now
-write the 8-byte subcommand (they were 4 bytes and had no client id; nothing
-called them). `tests/battletraps.test.ts` covers the layouts, counters,
-placement, the state machine, chaining and the respawn pick.
-
-**Why:** Battle Mode PvP traps were unfinished WIP (commit e7e1820). Checked
-against the exe and newserv before it was tested.
-
-**Verified (exe, objdump of `.text` in PsoBB.exe; newserv read-only):**
-- 6x83 is the 8-byte subcommand `[0] 0x83, [1] 2, [2..3] client id, [4..5]
-  type, [6..7] count`. The sender (0x00695930) writes 0x83 and 2 at the head;
-  the validator 0x006a9ea4 checks type 0..3 and count >= 0; safe_create
-  (0x0062f830) refuses on the boss-map global (0x009f9860 == 1), a missing
-  owner, the owner's floor word (0xffff / 0x1000) and a floor mismatch
-  (0x00aafca0); the owner's counter is decremented after a successful create.
-- 6x80: trap number at +4, what at +6 (0x0062f2d4).
-- Trap types: newserv's `ba_set_trap_count` remap (quest arg 0 damage, 1
-  slow, 2 confuse, 3 freeze -> internal 0, 2, 3, 1). The constructor's effect
-  groups: type 0 -> group 1, type 2 -> 0x11 (slow), type 3 -> 0x12 (confusion).
-- Chain hit: a state 0 trap is stunned and its fuse is capped at 0xf
-  (0x0062f269..0x0062f274); a state 3 trap goes to state 4 and sends 6x80
-  what 2 (0x0062f280..0x0062f28c).
-- Respawn: the candidate walk stops after 5 entries (loop bound 4); the
-  index is round(count * (raw / 32768) * 0.99) with the constants 32768.0 at
-  0x0093c694 and 0.99 at 0x0093c690 (read with tools/exedata.py).
-- Trap VA layout: the constructor does not store the arm/fuse values or the
-  radii as immediates in the code it covers.
-
-**Corrected from the WIP:**
-- The 6x83 body is the whole 8-byte subcommand (the WIP said "after the 4-byte
-  header").
-- Removed the "count above 0x14 is refused" rule: the exe's validator only
-  refuses a negative count.
-- The respawn threshold at 0x0093c68c is 2500.0 (50 squared), not 0 as the
-  WIP said. Its branch sense did not decode cleanly (no `sahf` after
-  `fnstsw`), so the distance filter stays with the caller (UNCLEAR).
-- `pickRespawn` takes the raw 15-bit random value, as the exe does.
-
-**ASSUMED (not re-checked; from the earlier trace):** arm delay 0x96 and
-fuse 0x1e frames (not found as immediates in the trap code), trigger and
-blast radius 50 (80 in Ultimate), the damage formula and EFR 0, the 0x14
-count clamp, the state 0 / 3 / 4 timing and the trap number formula,
-trap vision draw rules, the announcement text, the kill-score team rule,
-the palette-side guards, and the death particle 0x47.
-
-**UNCLEAR:** the battle damage value (700.0 is newserv's documented base
-times area and level factors; the battle's value is not confirmed), the
-respawn filter's branch sense, and the 0xffff / 0x1000 floor meaning.
-
-**Not wired:** no clean seam in `quest/battle.ts` or `net/game.ts` that
-does not touch `render/combat.ts`, so the module is tested but not called.
-Sonar and the 6x8F PvP hit path are still open (TODO.md).
-
-**Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/battle.test.ts`
-ALL PASS; `node tests/combat.test.ts` 5946 checks, 0 failures;
-`cd client && npx tsc --noEmit` clean. Not run in Chrome.
-## 2026-10-21: Item Pack sort, pickup lock, window shine
-
-**What changed:** the unfinished WIP (3463c17) salvaged onto main. Item Pack > Sort is live: Automatically (sortAuto, sorts at once) and Manually (pick an
-item, then the one it trades places with; sortSwap). The new order goes out as
-6xC4 when the window is destroyed (commitSort). `net/items.ts` has
-`buildSortInventory`, `sortKey`, `autoSortOrder`, `InventoryModel.sortAuto/swap`,
-`canPickUp`, `PICKUP_LOCK_FRAMES`, `GameItems.tickPickups`. `classic/windowanim.ts`
-has `WindowShine` and `drawWindowShine`, drawn by `drawWindowFrame` in
-`stage.ts`. `render/flooritems.ts` spawns particle 0x9B on a floor item that
-appears and on a pickup. `itempack.ts` no longer says 6xC4 and manual mode are
-not ported.
-
-**Exe evidence (PsoBB.exe 1.25.13, reference dump Psobb.exe-05112026.c):**
-- Pickup lock: RequestItemPickup_005c49ec requests only when
-  CanPlayerPickupItem and the pending word (item +0x94) is -1; it sets +0x94 and
-  zeroes the counter (+0xe6). UpdateGroundItem_005c4010 releases on the frame
-  the counter is already 900, so the 901st tick. JS matches (`tickPickups` at
-  the 1/30 s field step, the exe's game frame).
-- can_pickup_item (553625): meseta below 999999; a stackable item in the
-  inventory needs room in that stack; otherwise fewer than 30 items. JS matches.
-- 6xC4 (SinowberillChallengePlayer_SyncInventory_0068fbf4): type 0xC4, size
-  0x1F, unused 0xFFFF, 30 dwords of instance ids, 0xFFFFFFFF after the last. JS
-  matches (`tests/fieldhud.test.ts`).
-- Sort (ChallengePlayer_SortAndReassignChallengeItems_006a60f4): key is
-  data1[0] << 25, data1[1] << 17 (data1[0] == 1) or << 8, | data1[2], and
-  0x10000 when not equipped; adjacent-swap bubble sort, strict less, so stable
-  ascending. JS `autoSortOrder` (stable sort) matches.
-- Swap (InventorySwapLinkedItems_006a6a08): exchanges the two list entries.
-- Shine state machine (UpdateAnimationStateMachine_00712834): 32768, 60, 840,
-  -0.2, 5, rows 4 / margin 12 / pad 24 read from the data section. The state-0
-  wait truncates (the x87 control word is set to chop, `or 0xc00`), as the JS does.
-- Particle 0x9B: HandlePlayerPickupSuccess_005c4c1c spawns it at the item when
-  the floor is ours; create_item_box_on_ground_005c4874 spawns it at the item
-  origin when g_ItemInitializationState != 0.
-
-**Fixed in review:**
-- `sortKey` used the charfile's `equipped` (flags & 8). The exe needs flags
-  & 4 and & 8 both set. The sort now tests `(flags & 0x0c) === 0x0c`; the
-  test helper's equipped items carry 0x0c, plus a case with 0x08 alone.
-- The ItemPack's list / manual Backspace call `dispose()` and FieldMenu's
-  `closeLeaf` calls it again. `commitSort` is guarded by `sortPending`, so the
-  second call is a no-op. Kept on purpose, not a double send.
-
-**ASSUMED / UNCLEAR:**
-- ASSUMED: the sorted flag is `this+0x2c` non-null in the exe's destructor
-  (GuildCardListWindow_CloseSubMenusAndDestructor_0075077c, a misnamed Ghidra
-  function). JS sends only when a sort happened (`sortPending`). The exe's
-  setter for +0x2c was not traced, so whether it is ever null after a sort is
-  unverified.
-- ASSUMED: the 6xC4 sends every inventory item id, not only the ones with a
-  slot (the exe skips a null slot). Every item in the list has one.
-- UNCLEAR: the shine's row geometry (A = round((12 + y)/4), start, alpha ramp)
-  comes from an earlier reading of unknown_render_background_for_menus; only
-  the timing constants were re-checked here. The exe's rand sequence is not
-  reproduced; only the distribution is.
-- ASSUMED: the 0x9B origin (the item's floor height in the pickup case) and the
-  appear gate (`source !== 'sync' && !game.loading`) approximate
-  g_ItemInitializationState; not traced.
-- Not verified: the server (newserv) accepting 6xC4 from a client. No e2e run.
-
-**Checks:** `node tests/drops.test.ts` (all passed); `tests/fieldhud.test.ts`
-(all passed, with the new sort-key case); `tests/windowanim.test.ts` (29/29);
-`tests/items.test.ts` (all passed); `tests/itemmodels.test.ts` (ALL PASS, 4623);
-`tests/combat.test.ts` (5946, 0 failures); `cd client && npx tsc --noEmit`
-(exit 0). Not run: the Vite e2e (opening the item pack in the field and
-sorting).
-## 2026-10-21: held weapon for party members and equip changes
-
-**Report:** the held weapon (2026-10-21 "held weapon in the field") was checked with two classic clients (`client/e2e/held-weapon.spec.ts`): A creates a party, B joins, both warp to Forest 1 (`GameView.warpTo(1)`). Each view must draw the other's weapon with the owner's key.
-
-**Found:** a party member's weapon disappeared after it warped. A player hides while it changes floors (6x22) and shows again with 6x23. The 6x22 handler (`net/game.ts`) only set `visible`. The floor check that runs on the warp's 6x21 saw the player hidden (`showPlayer` is false for an invisible player) and removed its marker; the 6x23 that shows it again did not re-check the marker, so the player (and its weapon) stayed away from the view until its next floor change. Fix: `net/game.ts` emits the new `visibilityChanged` event on 6x22 / 6x23 (`net/lobby.ts` `LobbyEvents`); `render/lobbyview.ts` re-checks the marker on it as on `floorChanged`.
-
-**Checked (no change needed):**
-- newserv forwards 6x25 / 6x26 to the others of the game (`on_equip_item` / `on_unequip_item`: `forward_subcommand`, the header's client id must be the sender's). The port's 0x25 / 0x26 handling in `net/lobby.ts` reads the item id at +4, as `G_EquipItem_6x25` / `G_UnequipItem_6x26`.
-- newserv's PlayerInventoryItem `flags` is little-endian (`PlayerInventoryItemT<false>`), so the port's byte test of 0x08 at record +4 is right.
-- 6x70 carries the PlayerInventory at 0x164 (count, then the records), as `parsePlayerSync` reads it.
-- The local equip / unequip (`GameItems.equip` / `unequip`, 6x25 / 6x26) rebuilds the local marker through the key check each frame.
-
-**Test:** `client/e2e/held-weapon.spec.ts` (two clients, the warp to Forest 1). A sees B's weapon with B's own key and a built mesh (shown); the same from B for A. B unequips: both views drop it (key `''`, mesh hidden). B equips it again: both draw it again. Dev hook: `window.classicGame.view.heldWeapons()` (`render/lobbyview.ts` `heldState()`, `render/gameview.ts`).
-
-**Not covered:** a switch to a different weapon while a second weapon is owned (the test account owns one weapon: the unequip / re-equip path is tested, the key change to another model is the same rebuild path).
-
-**UNCLEAR (not changed):** the 14 Tekker / fan weapons with fewer XVM textures than NJTL names (the entry above). Not investigated in this pass.
-
-**Checks:**
-- `npx playwright test e2e/held-weapon.spec.ts e2e/party-join.spec.ts` (Vite on 127.0.0.1:5181, newserv, webtest / webgameb): 2 passed.
-- `node --experimental-strip-types tests/itemmodels.test.ts`: `ALL PASS (4623 checks)`.
-- `tests/combat.test.ts`: `5946 checks, 0 failures`.
-- `cd client && npx tsc --noEmit`: clean.
-
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB
@@ -7479,3 +7328,154 @@ The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` (direction turne
 **Checks.** `node tests/enemyfsmep2d.test.ts` (new: the ring during a recolour, the element specials and groups, immuneToSpecial per colour), `node tests/techniques.test.ts` (new: techGroup), `node tests/combat.test.ts` (5946 checks, 0 failures, with `vendor/` linked), `node tests/enemies.test.ts` (ALL PASS), client `tsc --noEmit` (clean, Node 24).
 
 Not run in Chrome.
+
+## 2026-10-21: Battle Mode traps (module, not wired)
+
+**What changed:** `client/src/quest/battletraps.ts` (pure): the 6x83 / 6x80
+parsers, the trap effect table, `TrapCounters`, `TrapField` (place, arm,
+fuse, blast, chain hit, 6x80 calls), the hit report, the kill rule, the trap
+vision rule and `pickRespawn`. `battle.ts` `build6x83` / `build6x80` now
+write the 8-byte subcommand (they were 4 bytes and had no client id; nothing
+called them). `tests/battletraps.test.ts` covers the layouts, counters,
+placement, the state machine, chaining and the respawn pick.
+
+**Why:** Battle Mode PvP traps were unfinished WIP (commit e7e1820). Checked
+against the exe and newserv before it was tested.
+
+**Verified (exe, objdump of `.text` in PsoBB.exe; newserv read-only):**
+- 6x83 is the 8-byte subcommand `[0] 0x83, [1] 2, [2..3] client id, [4..5]
+  type, [6..7] count`. The sender (0x00695930) writes 0x83 and 2 at the head;
+  the validator 0x006a9ea4 checks type 0..3 and count >= 0; safe_create
+  (0x0062f830) refuses on the boss-map global (0x009f9860 == 1), a missing
+  owner, the owner's floor word (0xffff / 0x1000) and a floor mismatch
+  (0x00aafca0); the owner's counter is decremented after a successful create.
+- 6x80: trap number at +4, what at +6 (0x0062f2d4).
+- Trap types: newserv's `ba_set_trap_count` remap (quest arg 0 damage, 1
+  slow, 2 confuse, 3 freeze -> internal 0, 2, 3, 1). The constructor's effect
+  groups: type 0 -> group 1, type 2 -> 0x11 (slow), type 3 -> 0x12 (confusion).
+- Chain hit: a state 0 trap is stunned and its fuse is capped at 0xf
+  (0x0062f269..0x0062f274); a state 3 trap goes to state 4 and sends 6x80
+  what 2 (0x0062f280..0x0062f28c).
+- Respawn: the candidate walk stops after 5 entries (loop bound 4); the
+  index is round(count * (raw / 32768) * 0.99) with the constants 32768.0 at
+  0x0093c694 and 0.99 at 0x0093c690 (read with tools/exedata.py).
+- Trap VA layout: the constructor does not store the arm/fuse values or the
+  radii as immediates in the code it covers.
+
+**Corrected from the WIP:**
+- The 6x83 body is the whole 8-byte subcommand (the WIP said "after the 4-byte
+  header").
+- Removed the "count above 0x14 is refused" rule: the exe's validator only
+  refuses a negative count.
+- The respawn threshold at 0x0093c68c is 2500.0 (50 squared), not 0 as the
+  WIP said. Its branch sense did not decode cleanly (no `sahf` after
+  `fnstsw`), so the distance filter stays with the caller (UNCLEAR).
+- `pickRespawn` takes the raw 15-bit random value, as the exe does.
+
+**ASSUMED (not re-checked; from the earlier trace):** arm delay 0x96 and
+fuse 0x1e frames (not found as immediates in the trap code), trigger and
+blast radius 50 (80 in Ultimate), the damage formula and EFR 0, the 0x14
+count clamp, the state 0 / 3 / 4 timing and the trap number formula,
+trap vision draw rules, the announcement text, the kill-score team rule,
+the palette-side guards, and the death particle 0x47.
+
+**UNCLEAR:** the battle damage value (700.0 is newserv's documented base
+times area and level factors; the battle's value is not confirmed), the
+respawn filter's branch sense, and the 0xffff / 0x1000 floor meaning.
+
+**Not wired:** no clean seam in `quest/battle.ts` or `net/game.ts` that
+does not touch `render/combat.ts`, so the module is tested but not called.
+Sonar and the 6x8F PvP hit path are still open (TODO.md).
+
+**Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/battle.test.ts`
+ALL PASS; `node tests/combat.test.ts` 5946 checks, 0 failures;
+`cd client && npx tsc --noEmit` clean. Not run in Chrome.
+## 2026-10-21: Item Pack sort, pickup lock, window shine
+
+**What changed:** the unfinished WIP (3463c17) salvaged onto main. Item Pack > Sort is live: Automatically (sortAuto, sorts at once) and Manually (pick an
+item, then the one it trades places with; sortSwap). The new order goes out as
+6xC4 when the window is destroyed (commitSort). `net/items.ts` has
+`buildSortInventory`, `sortKey`, `autoSortOrder`, `InventoryModel.sortAuto/swap`,
+`canPickUp`, `PICKUP_LOCK_FRAMES`, `GameItems.tickPickups`. `classic/windowanim.ts`
+has `WindowShine` and `drawWindowShine`, drawn by `drawWindowFrame` in
+`stage.ts`. `render/flooritems.ts` spawns particle 0x9B on a floor item that
+appears and on a pickup. `itempack.ts` no longer says 6xC4 and manual mode are
+not ported.
+
+**Exe evidence (PsoBB.exe 1.25.13, reference dump Psobb.exe-05112026.c):**
+- Pickup lock: RequestItemPickup_005c49ec requests only when
+  CanPlayerPickupItem and the pending word (item +0x94) is -1; it sets +0x94 and
+  zeroes the counter (+0xe6). UpdateGroundItem_005c4010 releases on the frame
+  the counter is already 900, so the 901st tick. JS matches (`tickPickups` at
+  the 1/30 s field step, the exe's game frame).
+- can_pickup_item (553625): meseta below 999999; a stackable item in the
+  inventory needs room in that stack; otherwise fewer than 30 items. JS matches.
+- 6xC4 (SinowberillChallengePlayer_SyncInventory_0068fbf4): type 0xC4, size
+  0x1F, unused 0xFFFF, 30 dwords of instance ids, 0xFFFFFFFF after the last. JS
+  matches (`tests/fieldhud.test.ts`).
+- Sort (ChallengePlayer_SortAndReassignChallengeItems_006a60f4): key is
+  data1[0] << 25, data1[1] << 17 (data1[0] == 1) or << 8, | data1[2], and
+  0x10000 when not equipped; adjacent-swap bubble sort, strict less, so stable
+  ascending. JS `autoSortOrder` (stable sort) matches.
+- Swap (InventorySwapLinkedItems_006a6a08): exchanges the two list entries.
+- Shine state machine (UpdateAnimationStateMachine_00712834): 32768, 60, 840,
+  -0.2, 5, rows 4 / margin 12 / pad 24 read from the data section. The state-0
+  wait truncates (the x87 control word is set to chop, `or 0xc00`), as the JS does.
+- Particle 0x9B: HandlePlayerPickupSuccess_005c4c1c spawns it at the item when
+  the floor is ours; create_item_box_on_ground_005c4874 spawns it at the item
+  origin when g_ItemInitializationState != 0.
+
+**Fixed in review:**
+- `sortKey` used the charfile's `equipped` (flags & 8). The exe needs flags
+  & 4 and & 8 both set. The sort now tests `(flags & 0x0c) === 0x0c`; the
+  test helper's equipped items carry 0x0c, plus a case with 0x08 alone.
+- The ItemPack's list / manual Backspace call `dispose()` and FieldMenu's
+  `closeLeaf` calls it again. `commitSort` is guarded by `sortPending`, so the
+  second call is a no-op. Kept on purpose, not a double send.
+
+**ASSUMED / UNCLEAR:**
+- ASSUMED: the sorted flag is `this+0x2c` non-null in the exe's destructor
+  (GuildCardListWindow_CloseSubMenusAndDestructor_0075077c, a misnamed Ghidra
+  function). JS sends only when a sort happened (`sortPending`). The exe's
+  setter for +0x2c was not traced, so whether it is ever null after a sort is
+  unverified.
+- ASSUMED: the 6xC4 sends every inventory item id, not only the ones with a
+  slot (the exe skips a null slot). Every item in the list has one.
+- UNCLEAR: the shine's row geometry (A = round((12 + y)/4), start, alpha ramp)
+  comes from an earlier reading of unknown_render_background_for_menus; only
+  the timing constants were re-checked here. The exe's rand sequence is not
+  reproduced; only the distribution is.
+- ASSUMED: the 0x9B origin (the item's floor height in the pickup case) and the
+  appear gate (`source !== 'sync' && !game.loading`) approximate
+  g_ItemInitializationState; not traced.
+- Not verified: the server (newserv) accepting 6xC4 from a client. No e2e run.
+
+**Checks:** `node tests/drops.test.ts` (all passed); `tests/fieldhud.test.ts`
+(all passed, with the new sort-key case); `tests/windowanim.test.ts` (29/29);
+`tests/items.test.ts` (all passed); `tests/itemmodels.test.ts` (ALL PASS, 4623);
+`tests/combat.test.ts` (5946, 0 failures); `cd client && npx tsc --noEmit`
+(exit 0). Not run: the Vite e2e (opening the item pack in the field and
+sorting).
+## 2026-10-21: held weapon for party members and equip changes
+
+**Report:** the held weapon (2026-10-21 "held weapon in the field") was checked with two classic clients (`client/e2e/held-weapon.spec.ts`): A creates a party, B joins, both warp to Forest 1 (`GameView.warpTo(1)`). Each view must draw the other's weapon with the owner's key.
+
+**Found:** a party member's weapon disappeared after it warped. A player hides while it changes floors (6x22) and shows again with 6x23. The 6x22 handler (`net/game.ts`) only set `visible`. The floor check that runs on the warp's 6x21 saw the player hidden (`showPlayer` is false for an invisible player) and removed its marker; the 6x23 that shows it again did not re-check the marker, so the player (and its weapon) stayed away from the view until its next floor change. Fix: `net/game.ts` emits the new `visibilityChanged` event on 6x22 / 6x23 (`net/lobby.ts` `LobbyEvents`); `render/lobbyview.ts` re-checks the marker on it as on `floorChanged`.
+
+**Checked (no change needed):**
+- newserv forwards 6x25 / 6x26 to the others of the game (`on_equip_item` / `on_unequip_item`: `forward_subcommand`, the header's client id must be the sender's). The port's 0x25 / 0x26 handling in `net/lobby.ts` reads the item id at +4, as `G_EquipItem_6x25` / `G_UnequipItem_6x26`.
+- newserv's PlayerInventoryItem `flags` is little-endian (`PlayerInventoryItemT<false>`), so the port's byte test of 0x08 at record +4 is right.
+- 6x70 carries the PlayerInventory at 0x164 (count, then the records), as `parsePlayerSync` reads it.
+- The local equip / unequip (`GameItems.equip` / `unequip`, 6x25 / 6x26) rebuilds the local marker through the key check each frame.
+
+**Test:** `client/e2e/held-weapon.spec.ts` (two clients, the warp to Forest 1). A sees B's weapon with B's own key and a built mesh (shown); the same from B for A. B unequips: both views drop it (key `''`, mesh hidden). B equips it again: both draw it again. Dev hook: `window.classicGame.view.heldWeapons()` (`render/lobbyview.ts` `heldState()`, `render/gameview.ts`).
+
+**Not covered:** a switch to a different weapon while a second weapon is owned (the test account owns one weapon: the unequip / re-equip path is tested, the key change to another model is the same rebuild path).
+
+**UNCLEAR (not changed):** the 14 Tekker / fan weapons with fewer XVM textures than NJTL names (the entry above). Not investigated in this pass.
+
+**Checks:**
+- `npx playwright test e2e/held-weapon.spec.ts e2e/party-join.spec.ts` (Vite on 127.0.0.1:5181, newserv, webtest / webgameb): 2 passed.
+- `node --experimental-strip-types tests/itemmodels.test.ts`: `ALL PASS (4623 checks)`.
+- `tests/combat.test.ts`: `5946 checks, 0 failures`.
+- `cd client && npx tsc --noEmit`: clean.
