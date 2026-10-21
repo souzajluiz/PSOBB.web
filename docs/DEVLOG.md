@@ -8263,3 +8263,62 @@ arena).
   stays there for the 12 s watched; `bossCameraView()` stays null, since no cutscene starts
   while the player waits at the entrance. The DEMO_WARP0 view is therefore not seen in Chrome
   yet: it needs the casket trigger (walking to the arena centre), not scripted.
+
+## 2026-10-21: Dark Falz casket trigger (WAIT_CASKET -> DEMO_WARP0): the exe, the port, the probe
+
+**Stopped early.** The e2e extension (the walk into the casket, the cutscene observation and the
+screenshots) is NOT done. This entry records what was verified and what the next step is.
+
+**The trigger (exe, VERIFIED with Ghidra and objdump).** The scene table in `.data` (VA
+0x009a5940..0x009a5a10: name pointers and per-scene functions) gives the WAIT_CASKET lead
+procedure at **0x0044d490**. The dump's name `UpdateVoloptFootstepSound` for that address is
+WRONG (the Ghidra decompile and the bytes say otherwise). The procedure:
+1. Lazy init: `0xa44d84 = 900.0f` (`0x44610000`) when `0xa44d80` bit 0 is clear.
+2. For each `i` in `0 .. DAT_00aae168` (the player count), with `p = DAT_00aad720[i]` non-null (a
+   BSS pointer array of player entities): squared 2D distance (x and z only, `FUN_007a9180`) from
+   the point `(-9860, -240)` (`0xc61a1000`, `0xc3700000`) to `p + 0x300` is `<= 900` ->
+   `FUN_0044bf18(2)`, which is `FUN_008003e0(0x19, 2, -1)`: scene 2 = DEMO_WARP0. The leader's
+   scene change, sent for the whole party.
+3. Otherwise `FUN_006dc358()` is called; it is `return 0`, so it never triggers.
+Not a switch flag, not a quest opcode, not the 6x packet: a position test on the players.
+
+**The port (VERIFIED by reading, no change needed).** `client/src/combat/darkfalz.ts` `leadScene`
+case `waitCasket` tests every target (`this.targets`, from `render/combat.ts` `aiTargets()`, the
+view's `playerPositions()`) against `CASKET` (`combat/darkfalzcommon.ts`: x -9860, z -240,
+radiusSq 900) and sends `SCENE.demoWarp0` (2). The same test. The port runs `leadScene` only when
+`isLeader()` (or the failsafe `stalled()`), as the exe's leader gate (the leader check is not
+re-verified in this pass). The port matches the exe's trigger; the earlier smoke result (Dark Falz
+stays in WAIT_CASKET) is therefore correct: the player never stood within 30 units of the point.
+
+**Probe in Chrome (one classic client, webtest, floor 14; a throwaway spec, not committed).**
+- Spawn: `(x -10010.7, y 5, z 380.5)`, heading 3.14. Dark Falz `scene 1` (WAIT_CASKET), `view false`.
+  The casket is 620 units south (-z) and 150 east (+x) of the spawn.
+- Holding `w` (1 s) moved the player `-45.5` in z at heading pi, x unchanged. Holding `a`, `s` and
+  `d` for 1 s each moved and TURNED the heading (the heading is camera-relative; not mapped).
+- A 20 s hold of `w` was started but the probe's last line failed (`classicGame.view.view` is
+  undefined; the combat is `classicGame.view.combat`), so the walk's end point and any collision
+  stop are NOT known.
+
+**Next step (not done).** Fix the probe's accessors (`w.classicGame.view.combat`, `view.selfPose()`
+and `view.game.selfId` are the right ones), walk with `w` for about 14 s (about 620 units at
+45 units/s), correct x by +150 with `d` / `a` in short holds, and stop when
+`(x + 9860)^2 + (z + 240)^2 <= 900`. Then watch `DarkFalzAi.scene` go 1 -> 2 and
+`combat.bossCameraView()` become non-null, log the camera, and screenshot. If the walk is blocked
+by the arena's geometry, use `GameView.placePlayer` at a point within 30 units of
+(-9860, -240); the exe's test is a position test, so either way is the real trigger test.
+
+**Checks.** No code changed. `git status`: clean (the probe spec, the test results and the
+worktree's `node_modules` and `vendor` symlinks were removed). Vite on 5182 was stopped.
+
+**ASSUMED.** The leader gate of the lead procedure (only the leader's client runs
+0x0044d490; the exe's dispatcher is not decompiled here). The scene table's per-scene functions
+are read by adjacency (`name + 0xc`), verified for EDITOR (0x44d478) and WAIT_CASKET (0x44d490)
+only.
+
+**Decisive spot-check.** `objdump -d` of PsoBB.exe at 0x44d490 (`movl 0xaae168,%eax` ...
+`movl 0xaad720(,%edi,4),%edx`) and the scene table entry at file offset 0x5a4560 (VA 0x009a5960
+= 0x0044d490, the WAIT_CASKET name at 0x009a5954 + 0xc).
+
+**UNCLEAR.** What `DAT_00aad720` holds for a party member other than the leader (the exe's
+player list order, and whether a non-leader's entity is in it); the walk's collisions in the
+arena; the cutscene camera (still not observed in Chrome).
