@@ -132,7 +132,7 @@ export function expandEnemySets(sets: EnemySet[], area: number, event = 0): Enem
         break;
       case 0xe0:
         add(kind);
-        if (area === 0x22 || area === 0x23) {
+        if (area === 0x23) {
           childType = 'EPSIGARD';
           defaultChildren = 4;
         }

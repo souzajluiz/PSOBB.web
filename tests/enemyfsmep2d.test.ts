@@ -742,6 +742,22 @@ const epsilon = (o: { params?: number[]; rng?: () => number } = {}) =>
   check(shownOpen && shownClosed, 'the body is open and closed in the cycle');
 }
 {
+  // The sounds (exe: play_directional_sound_effect at the Epsilon): the laser
+  // starts (0x2d2) and its orb is made (0x2d3) once per laser; the recolour plays
+  // 0x2d4 on each of its frames and 0x2d5 when the colour has fallen.
+  const e = epsilon({ params: [0, 0, 10, -15] });
+  const gr = groupRigs(e);
+  const p = player(0, 150);
+  const ids: number[] = [];
+  runGroup(e, gr, [p], 3000, 30, () => {
+    for (const ev of e.events.splice(0)) ids.push(ev.id);
+  });
+  const count = (id: number) => ids.filter((x) => x === id).length;
+  check(ids.every((x) => x === 0x2d2 || x === 0x2d3 || x === 0x2d4 || x === 0x2d5), `only the Epsilon's sounds are emitted (${[...new Set(ids)].map((x) => x.toString(16))})`);
+  check(count(0x2d2) >= 1 && count(0x2d2) === count(0x2d3), `one orb per laser start (${count(0x2d2)} starts, ${count(0x2d3)} orbs)`);
+  check(count(0x2d5) >= 1 && count(0x2d4) >= 30 * count(0x2d5),`the recolour: 0x2d4 each frame (${count(0x2d4)}), 0x2d5 at the end (${count(0x2d5)})`);
+}
+{
   // The first timer: (param3 + 20, at least 5) * 30 frames of stalking before
   // the Epsigards are sent; the element advances in the recolour.
   const e = epsilon({ params: [0, 0, 10, -15] });

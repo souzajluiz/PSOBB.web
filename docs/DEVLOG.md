@@ -6795,3 +6795,38 @@ What stands: the laser (ctor 0x00765c68, only built by 0x0076b85c from the state
 **Checks.** `node tests/enemyfsmep2d.test.ts`: all checks passed (new: the tint function, the 30-frame colour lerp from the old element). `node tests/combat.test.ts`: 5946 checks, 0 failures (with `vendor/` linked). `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
 
 Not run in Chrome.
+
+## 2026-10-21: Epsilon area mapping and particle tables
+
+**Findings (PsoBB.exe, Ephinea 1.25.13).**
+- Per-area enemy table: 0x009fba60 is an array of 47 pointers, indexed by area id. Each points to rows {u32 type, u32 factory, f32 dist^2, u32 children}, ended by 0xffff.
+- Type 0xe0 rows: area 0x1c and 0x1d (table 0x009faf00) have factory 0x005914d0, Sinow Zoa / Zele, 0 children. Area 0x23 (table 0x009fae40) has factory 0x00558530 with 4 children; it calls the Epsilon ctor 0x005585ac at 0x0055858a. Area 0x22 (table 0x009fada0) has no 0xe0 row.
+- So Epsilon is area 0x23 only. The old `area === 0x22 || 0x23` checks in setdata.ts, enemyids.ts and enemyslots.ts were wrong for 0x22. enemymodels.ts (0x23 only) was right.
+- Jungle06 / jungle07 have no enemy set files in the client data (quest areas, docs/PROTOCOL.md). An Epsilon in 0x22 can only come from a quest or the server, and the exe has no row for it. **ASSUMED:** quest spawns use the same per-area table. **UNCLEAR:** which quest puts Epsilon in area 0x23.
+- The factory-to-ctor reading of 0x558530 is from disassembly (push 0x51c, call 0x5caba4, call 0x5585ac). Sinow Zoa's factory 0x005914d0 is the same shape.
+
+**Epsilon ids 0x2d2..0x2d5 are sounds, not particles.**
+- The pushes at 0x00558d7e (0x2d4), 0x00558dcc (0x2d5), 0x00558ded and 0x00558ef5 (0x2d4), 0x00559c1a (0x2d2) and 0x00559cf4 (0x2d3) are the first arguments of 0x008144b0 = play_directional_sound_effect(id, pos, volume, param4) (dump line 832038) and 0x00814298 (the SE player, FUN_00814298 in tools/gen-se-tables.py). The position is the Epsilon's +0x38.
+- Ids below 0x700 go through 0x0081443c (apply_sfx_id_substitutions, the SE remap). So the helpers the brief named are sound helpers, not particle helpers.
+- The laser sites (0x2d2, 0x2d3) are in 0x0055988c, the stalk state with the laser stages. The recolour sites (0x2d4, 0x2d5) are in 0x005585ac, the state 6 code.
+
+**Particle tables (for the record).**
+- `load_particleentry_dat` (dump line 291326) reads particleentry.dat into a 0x13000-byte buffer: 512 entries.
+- `load_map_particleentry` (dump line 291225; VA 0x0050d9a0) reads `particleentrya%d.dat` (`particleentrya0%d.dat` for maps 0..9) for `get_current_map()` into a 0x2600-byte buffer: 64 entries, indexed id - 0x200.
+- `create_particle_effect` (dump line 289655) accepts id < N (N = 512) from particleentry.dat, and N <= id < N + 0x40 from the map table. Any other id creates nothing. So 0x2d2..0x2d5 cannot be particles in the exe at all, whatever the table.
+- The port's loader (classic/particles.ts) reads one 0x98 entry at a time; no map table is loaded. Not needed for Epsilon.
+
+**What changed.**
+- `formats/setdata.ts` (`enemyKind`), `formats/enemyids.ts` (`enemySlotCount`, 4 Epsigards) and `formats/enemyslots.ts` (`expandEnemySets`): type 0xe0 is Epsilon / 4 Epsigards only for area 0x23.
+- `combat/enemyfsmep2d.ts`: `EpsilonAi.events` (`EpsilonEvent = { kind: 'se', id }`). 0x2d2 when the laser starts (stage 0 picks a player, the orb starts at the Epsilon); 0x2d3 on the first frame the orb is shown (stage 1); 0x2d4 on the recolour change frame (sub 0 to 1), on each frame of sub 1 (the 30-frame timer) and on each sub 2 frame while colourT > 0; 0x2d5 on the sub 2 to 3 change (the end of the fall).
+- `render/combat.ts`: the Epsilon's events are played with `playSeAt(id, root.position)` after the brain's tick (the existing SE player, audio/se.ts).- Tests: `tests/enemies.test.ts` (new section, areas 0..0x2e): setdata name, enemymodels, enemySlotCount, and expandEnemySets agree on Epsilon, and Epsilon is exactly area 0x23. `tests/enemyfsmep2d.test.ts`: only 0x2d2..0x2d5 are emitted; one 0x2d3 per 0x2d2; 0x2d4 at least 30 per 0x2d5.
+
+**ASSUMED.**
+- The frame of each sound follows the branch structure of the exe. The order of 0x2d2 against the orb's creation (0x006ee0d0, the same function) is not timed; the port plays 0x2d3 on the first shown frame.
+- The position is the Epsilon's root (the exe's +0x38, owner-attached).
+- The exe's sub 0 (colourT rising) plays no sound: no site was found in that path. **UNCLEAR.**
+- Epsigard ids 0x2ce..0x2d1, 0x2d6, 0x2d7 (in the Epsigard functions 0x0055adfc and 0x0055988c) are not ported.
+
+**Checks.** `node tests/enemies.test.ts`: ALL PASS. `node tests/enemyfsmep2d.test.ts`: all checks passed. `node tests/combat.test.ts`: 5946 checks, 0 failures (with `vendor/` linked). Client `tsc --noEmit`: clean (Node 24).
+
+Not run in Chrome.

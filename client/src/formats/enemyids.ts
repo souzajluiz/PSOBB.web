@@ -37,8 +37,8 @@ export function enemySlotCount(e: Pick<EnemySet, 'type' | 'numChildren'>, area: 
       return 48;
     case 0x00cc: // TBoss8Dragon: Gol Dragon + 5
       return 1 + (nc || 5);
-    case 0x00e0: // TObjEneEpsilonBody in the Tower / Seaside Night: 4 Epsigards
-      return area === 0x22 || area === 0x23 ? 1 + (nc || 4) : 1 + nc;
+    case 0x00e0: // TObjEneEpsilonBody (area 0x23 only, exe table 0x009fba60): 4 Epsigards
+      return area === 0x23 ? 1 + (nc || 4) : 1 + nc;
     case 0x0119: // Saint-Milion / Shambertin: 1 + 8 + 16
       return 25;
     default:
