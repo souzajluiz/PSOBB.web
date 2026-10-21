@@ -6584,3 +6584,34 @@ Two read-only Haiku passes; the decisive instructions were checked here. They co
 **The laser beam** (ctor 0x0076cb9c, update 0x0076ccdc): origin O = the boss-node transform of a one-frame track sample at frame 29 (0x00579de0 on `[0x00a9b080 + 4k]`, track ctor 0x005795a0 called at 0x0076b4d5 with start = end = 29.0); the source of the sample data is UNCLEAR. Each frame P = O + R_owner (amp * sin θ, 0, rate * θ) (local x sideways, local z forward; table 0x009779b8 per type {step, rate, amp} = {728, 0.00213623, -140}, {728, 0.00213623, 140}, {280, 0.00717163, -300}, {280, 0.00717163, 300}), then θ += step: about 1.56 (types 0 / 1) or 2.01 (2 / 3) units forward a frame, a lateral period of 90 / 234 frames. The ramp +0x58 grows 0.025 a frame to 1.0. The hit test 0x00780630 checks P against each entity's **own** XZ circle (record +0x4 x, +0xc z, +0x10 r; 0x00780661..0x0078067c; mask 0x16ef), not a ramp radius; the selector 0x00780874 keeps one winner; with a winner the beam calls the explosion with type 5 and radius ramp * 64 (so the 100 scan applies). **With no winner the beam sets its dead bit (0x0076ce32)**: since the list 0x00aab3f0 apparently holds more than players (floor pieces?), what it really tests is UNCLEAR. The telegraph (ctor 0x00765c68, vtable 0x00b43410) lives for the phase-4 motion and calls the dispatcher with type 4 (iparam2 × 0) each frame its child slot 1 is flagged.
 
 Earlier entries corrected: the missile's 3.0 is not a multiplier; there is no height window; the scan radius is 100 (not 30 or 64 * ramp); the laser's hit circle is the entity's. Not ported yet.
+
+## 2026-10-21: Saint-Milion missiles ported
+
+**Outcome: the missiles fly and explode now.** State 18 (row 18 of 0x009f6c60, handler 0x0076966c) launches real `SmMissile` shots instead of the event alone. The event `missiles` stays for the renderer. Built on the corrected reading of the last entry: the blast is iparam3 to the players within 100 on the XZ plane, not a height window or a radius of 30.
+
+**What changed.**
+- `combat/saintmilionents.ts`: `SmMissile` (an `EnemyShot`) and `SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3 }`.
+- `combat/enemyshots.ts`: a new `ShotEffect` kind `blast` (a fixed damage, cause_knockback, no MST formula, no roll).
+- `combat/saintmilionboss.ts`: `SM.missileFrame = 5`; state 18 phase 4 makes one missile (`launchMissiles(1)`), phase 0 makes two more on the clock's frame 5 in arenas 3 / 4 only (`missileFrame`, `arena` +0xf80). The damage is `row.iparam[2]` (iparam3) of the form being fought.
+- `render/combat.ts`: `tickShots` routes a `blast` hit to `enemyBlastHitsPlayer`, which calls `damage.hit` on the local player like the group-0 tech hit does, with the value as the damage, and gains PB like it does.
+- `tests/saintmilionboss.test.ts`: section 8 (entry and phase-0 counts per arena, 5.0 a frame, 240 frames, one blast within 100 on XZ, the living only, once).
+- `docs/HANDOFF.md` item 4: "missiles" removed from the events-only list.
+
+**Constants and addresses.**
+- 0x00976174 = 5.0: the flight speed.
+- `cmp [this+0x68], 0xf0` / `jg 0x766786` (in the update 0x007663d4): 240 frames; the port explodes when the count passes 240.
+- 0x0076b8f4: phase 4 (one missile). 0x0076968c: phase 0, `call 0x7aaa30` with 5.0 (the clock's frame 5) and `cmp [+0xf80], 3 / 4`: two missiles.
+- 0x00521cdc `push 0x42c80000` (100.0): the blast radius, the XZ scan of 0x007a9180 (no height test).
+- The damage: iparam3 of the boss's MovementData row (0x00768990 / 0x00768a00 `fild [[boss+0x3d0]+0x20]`, the boss being the explosion's `this` at 0x00a9b07c).
+- Knockback 3.0 (`SM_MISSILE.knockback`): the value passed with the blast; its meaning is unclear.
+
+**ASSUMED.**
+- The flight is a straight line on flat ground, toward the nearest living player at launch (`FindNearestPlayer`), or along the heading if nobody is alive. The two phase-0 missiles aim at that same player.
+- The end of the flight is the frame count: the motion's state 4 is not read. The blast happens at the end of the flight.
+- **Conflict with the exe:** the 240-frame branch 0x00766786 reaches the kill 0x007667a8 without the explosion call (0x007667e4 is only on the motion-end path). The port explodes at 240 anyway, as the brief asked, because the port cannot see the motion end. If the exe's 240-frame end does not explode, the blast should move to the motion-end test.
+- Phase 0 fires on the clock's frame 5 (`clock.crossed(5)`, the same test as 0x7aaa30 in the laser entry); the exe's per-frame gate was not read further.
+- The missile is a ball drawn at height 10 (`look: orange, size 1.5`); the exe draws a model.
+- The blast has no defence taken off; the knockback 3.0 goes to `damage.hit` as is.
+- The missile is the boss's own object, and the blast is the local player's (each client resolves its own hit, as for every enemy shot).
+
+**Checks.** `node tests/saintmilionboss.test.ts` ALL PASS; `node tests/saintmilion.test.ts` all checks passed; `node tests/combat.test.ts` 5946 checks, 0 failures; `node tests/enemies.test.ts` ALL PASS; `npx tsc --noEmit` (client) clean. Not run in Chrome.

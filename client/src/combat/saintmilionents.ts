@@ -224,6 +224,47 @@ export class SmTouch extends EnemyShot {
   }
 }
 
+// --- the missile (0x0076619c, update 0x007663d4) -----------------------------------------
+//
+// The missile flies along its launch vector at 5.0 a frame (0x00976174) and
+// lives 240 frames (`cmp [+0x68], 0xf0`, `jg` past it). Its real path is a
+// motion track the port cannot read: ASSUMED a straight line on flat ground,
+// toward the player the boss aims at at launch.
+// ASSUMED: the end of the flight is the frame count (the motion's state 4 is
+// not read), and the end explodes once at the missile's position: the exe's
+// explosion 0x0076a724 (type 3, radius 30.0 passed on) is called on the
+// motion-end path 0x007667e4; the 240-frame branch 0x00766786 reaches the kill
+// 0x007667a8 without that call.
+// The blast (0x00521cf8 with the 100.0 of 0x00521cdc): every living player
+// within 100 on the XZ plane (no height test) takes iparam3 once.
+export const SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3 } as const;
+// ASSUMED: the height the missile is drawn at (the player's aim height).
+const SM_MISSILE_HEIGHT = 10;
+
+export class SmMissile extends EnemyShot {
+  readonly effect: ShotEffect;
+  readonly look: ShotLook = { color: 0xff8040, size: 1.5 };
+  private vx: number;
+  private vz: number;
+
+  constructor(x: number, z: number, angle: number, damage: number) {
+    super(x, SM_MISSILE_HEIGHT, z);
+    this.vx = Math.sin(angle) * SM_MISSILE.speed;
+    this.vz = Math.cos(angle) * SM_MISSILE.speed;
+    this.effect = { kind: 'blast', damage, knockback: SM_MISSILE.knockback };
+  }
+
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done) return [];
+    this.frames++;
+    this.x += this.vx;
+    this.z += this.vz;
+    if (this.frames <= SM_MISSILE.life) return [];
+    this.done = true;
+    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= SM_MISSILE.blast);
+  }
+}
+
 // --- the shared field --------------------------------------------------------------------
 
 export type SmEvent =

@@ -3260,7 +3260,8 @@ export class CombatView {
         } else if (fx.kind === 'melee') {
           this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
-        } else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what);
+        } else if (fx.kind === 'blast') this.enemyBlastHitsPlayer(s.owner, fx.damage, s.shot.x, s.shot.z, what, fx.knockback);
+        else if (fx.kind === 'megid') this.enemyMegidHitsPlayer(fx.power, what);
         else this.inflictStatus(fx.status as StatusType, what);
       }
     }
@@ -3290,6 +3291,20 @@ export class CombatView {
     this.damage.hit(damage, angle, knockback, 0x1000 | e.index);
     if (damage >= 1) this.gainPb(damage, true);
     this.opts.log(`${what}: technique hit for ${damage}`);
+  }
+
+  // A Saint-Milion missile's blast on the local player (the defender's vtable +0x60 with the boss as
+  // attacker, 0x00521cf8): the damage is the MovementData iparam3 itself, not the group-0 formula.
+  // ASSUMED: no defence is taken off it, and cause_knockback(3.0) is the knockback (its meaning is unclear).
+  private enemyBlastHitsPlayer(e: EnemyRuntime, damage: number, fromX: number, fromZ: number, what: string, knockback: number): void {
+    const view = this.view;
+    if (!view || this.damage.dead) return;
+    const me = view.playerPositions().get(this.game.selfId);
+    const total = Math.max(0, Math.trunc(damage));
+    const angle = me ? Math.atan2(me.x - fromX, me.z - fromZ) : 0;
+    this.damage.hit(total, angle, knockback, 0x1000 | e.index);
+    if (total >= 1) this.gainPb(total, true);
+    this.opts.log(`${what}: blast hit for ${total}`);
   }
 
   // A pillar trap (render/traps.ts) acting on the local player.
