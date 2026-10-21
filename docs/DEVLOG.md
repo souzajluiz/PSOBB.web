@@ -7166,3 +7166,20 @@ Not run in Chrome. The check: floor 14, Ultimate, stand within 30 units of (-986
 **UNCLEAR.** The poly op 0xE0 and the 0x8x / 0xCx ops of these NJ objects; whether the other players' weapons follow the same visibility (the same function applies to every owner, so ASSUMED yes).
 
 **Checks.** `node tests/itemmodels.test.ts` unchanged. A probe script over `ItemModel.afs` (not committed) gave the parse counts above. No code change in this entry (the probe edit to `formats/njcm.ts` was reverted). Not run in Chrome.
+## 2026-10-21: classic lobby teleporter: response time
+
+**Report.** In a party on Pioneer 2 (classic page), choosing "Lobby" at the lobby teleporter seemed slow, and a mouse click on the item did nothing.
+
+**Measured** (Playwright, real keys, `e2e/lobby-teleporter.spec.ts`; a party created, the player placed in the teleporter's radius, ms after the teleport): menu shown 9; Enter keydown 124; `GameView.onLobbyWarp` 133; the game screen gone and the warp burst shown about 135; lobby shown 538 (a second run: 2 / 42 / 50 / 57 / 743). So Enter reaches the leave in about 10 ms and the lobby appears 0.4 to 0.7 s later, which is `buildLobby` (the lobby map load) plus `game.leave`. No multi-second stall was reproduced on the keyboard path. A click on the menu item (a `pointerdown` on the 3D canvas over the window) selects nothing and closes nothing; the menu stays open until Enter.
+
+**Mouse.** The exe does not take the mouse here either. The warp's decide poll (`vtable +0x40`, `0x00668a8c`, an unnamed function between `SeabedTuriganeMapObjectIsDownPressed_00668a44` and `MapObjectBaseInitialize_00668ad8` in the reference dump) reads only the accept key held state (`g_KeyboardSharedState[0xc]`) and the keyboard `main_palette_slot_down`. The decide (`+0x44`, `FinalizeWarpTransition_00669650`) runs after it. The other mouse reads in the dump are the lobby burst's scroll, the field's mouse controls (walk / camera), the key config and the Challenge list (`ChallengeMenuListWindow_CheckMouseClick_007447c8`). No generic list-window or warp code reads `get_mouse_coords`. So the port's warp menu with `pointerEvents: none` and no click handler matches the exe.
+
+**Cause.** Not found in the port's keyboard path. The keys are routed (stage keydown -> `FieldScreen.key` -> copy on the 3D canvas -> `WarpMenuOverlay.key`), and the menu's keydown listener runs at once. The click that does nothing is the exe's behaviour too.
+
+**Changed.** `client/e2e/lobby-teleporter.spec.ts` (new): log in, create a Normal party, stand in the lobby teleporter (floor 0 `lobby->15`), wait for the menu, Enter; asserts the menu shows, `onLobbyWarp` within 1 s of Enter and the lobby within 5 s. No game code changed.
+
+**ASSUMED.** The warp decide reads the held accept key and `main_palette_slot_down` as in the function at `0x00668a8c`, which was read from the dump's neighbouring names and the vtable address, not from a full disassembly.
+
+**UNCLEAR.** The user's "takes a long time" was not reproduced with keys. Possible sources not covered by the test: walking onto the teleporter with the real movement (the test places the player; the arrow / WASD walk probe did not move the player as expected), the server's answer to `84` with other players in the party, and a focus on a DOM control (the web controls refocus the canvas, so this was not seen). The 0.4 to 0.7 s of `buildLobby` after Enter is not shortened here.
+
+**Checks.** Playwright (`PW_BASE_URL=http://127.0.0.1:5178`, a worktree Vite): `e2e/lobby-teleporter.spec.ts` 1 passed (two runs: Enter to `onLobbyWarp` 0 to 9 ms, to the lobby 0.54 s / 0.74 s); `e2e/party-create.spec.ts` 1 passed; `e2e/field-chat.spec.ts` 1 passed. Client `tsc --noEmit`: clean (Node 24).
