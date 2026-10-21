@@ -52,6 +52,7 @@ import {
 import { DfForm1, F1, type Form1Row } from './darkfalz1.ts';
 import { DfForm2, F2, type Form2Row } from './darkfalz2.ts';
 import { DfForm3, F3, f3Spot, type Form3Row } from './darkfalz3.ts';
+import { bossCameraView } from './darkfalzcamera.ts';
 
 export { SCENE, SCENE_NAMES, DF_ID } from './darkfalzcommon.ts';
 
@@ -291,6 +292,12 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   }
 
   // --- scenes -------------------------------------------------------------------
+
+  // The boss camera for the current scene (combat/darkfalzcamera.ts; null: the
+  // normal camera). Read by render/gamefield.ts as the third view source.
+  cameraView(): { source: Vec3; target: Vec3 } | null {
+    return bossCameraView(this.scene);
+  }
 
   private setScene(n: number): void {
     if (n < 0 || n >= 0x10) return;

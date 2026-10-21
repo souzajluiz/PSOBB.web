@@ -55,6 +55,8 @@ export interface GameFieldOptions {
   warpSelf?: (pos: { x: number; y: number; z: number }, angle: number) => void;
   // The NPC talk's camera mover view (render/npcview.ts), if any.
   talkCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
+  // Dark Falz's boss camera (combat/darkfalzcamera.ts), the third view source.
+  bossCamera?: () => { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null;
   toLobby: () => void;
   // A pillar trap's hold or technique on a player (render/traps.ts); combat
   // applies those on the local player.
@@ -473,6 +475,12 @@ export class GameField {
     if (talk) {
       this.viewer.camera.position.set(talk.source.x, talk.source.y, talk.source.z);
       this.viewer.camera.lookAt(talk.target.x, talk.target.y, talk.target.z);
+    }
+    // And Dark Falz's boss camera (SetCameraMode 5; combat/darkfalzcamera.ts), last.
+    const boss = view || talk ? null : this.opts.bossCamera?.();
+    if (boss) {
+      this.viewer.camera.position.set(boss.source.x, boss.source.y, boss.source.z);
+      this.viewer.camera.lookAt(boss.target.x, boss.target.y, boss.target.z);
     }
   }
 
