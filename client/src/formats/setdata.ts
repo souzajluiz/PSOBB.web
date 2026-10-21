@@ -289,7 +289,7 @@ export function enemyKind(e: EnemySet, area: number | null): string {
     case 0xdd: return p6 > 0 ? 'DOLMDARL' : 'DOLMOLM';
     case 0xde: return 'MORFOS';
     case 0xdf: return 'RECOBOX';
-    case 0xe0: return a === 0x22 || a === 0x23 ? 'EPSILON' : p6 > 0 ? 'SINOW_ZELE' : 'SINOW_ZOA';
+    case 0xe0: return a === 0x23 ? 'EPSILON' : p6 > 0 ? 'SINOW_ZELE' : 'SINOW_ZOA';
     case 0xe1: return 'ILL_GILL';
     case 0x110: return 'ASTARK';
     case 0x111: return a <= 0x28 ? (p2 ? 'YOWIE_CRATER' : 'SATELLITE_LIZARD_CRATER') : p2 ? 'YOWIE_DESERT' : 'SATELLITE_LIZARD_DESERT';

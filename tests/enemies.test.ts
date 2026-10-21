@@ -14,6 +14,8 @@ import { ENEMY_ASSETS, enemyModelFor, NO_MODEL_TYPES, type EnemyModelContext, ty
 import { floorToArea } from '../client/src/net/game.ts';
 import { enemyKind, parseEnemySets, type EnemySet } from '../client/src/formats/setdata.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
+import { enemySlotCount } from '../client/src/formats/enemyids.ts';
+import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
 import { buildEnemy, EnemyArchive, texturesFromXvm } from '../client/src/render/enemymodel.ts';
 import { BELRA } from '../client/src/combat/enemyfsmruins.ts';
 import { SPINNER_ANIMATIONS, SPINNER_COUNT, SPINNER_MOTION_NODES } from '../client/src/combat/saintmilion.ts';
@@ -205,6 +207,25 @@ for (const [bml, nodes] of [['bm_ene_re7_berura.bml', BELRA.handNode], ['bm_ene_
       for (let i = 0; i < 30; i++) b.animators[0].update(1 / 30);
       check(b.animators.length === 1 && b.partNodes[0].length === 59, 'a 32-node motion drives the 59-node tentacle');
     }
+  }
+}
+
+// Type 0xe0 (Epsilon or Sinow Zoa / Zele) must resolve to the same enemy in the
+// set name table (setdata.ts), the model (enemymodels.ts) and the Epsigard
+// children (enemyids.ts, enemyslots.ts) for every area. The exe's per-area enemy
+// table 0x009fba60 has a 0xe0 row only for area 0x23 (factory 0x00558530, ctor
+// 0x005585ac, 4 children); area 0x22 has none, and 0x1c / 0x1d get Sinow Zoa.
+{
+  const ctx = { episode: 2, difficulty: 0, event: 0, lowModels: false };
+  const e0 = { kind: 'enemy', type: 0xe0, index: 0, numChildren: 0, section: 0, wave: 0, wave2: 0, unknownA1: 0, params: [0, 0, 0, 0, 0, 0, 0] } as unknown as EnemySet;
+  for (let area = 0; area <= 0x2e; area++) {
+    const epsilon = enemyKind(e0, area) === 'EPSILON';
+    const model = enemyModelFor(e0, { ...ctx, area })?.name === 'TObjEneEpsilonBody';
+    const children = enemySlotCount(e0, area) === 5;
+    check(epsilon === model, `area ${area.toString(16)}: setdata says EPSILON ${epsilon}, enemymodels says Epsilon ${model}`);
+    check(epsilon === children, `area ${area.toString(16)}: EPSILON ${epsilon} but ${children ? '4' : 'no'} Epsigard children`);
+    check(epsilon === (area === 0x23), `area ${area.toString(16)}: EPSILON ${epsilon}, exe table says only area 0x23`);
+    check(expandEnemySets([e0], area).length === (epsilon ? 5 : 1), `area ${area.toString(16)}: expandEnemySets slot count for 0xe0`);
   }
 }
 

@@ -2159,9 +2159,13 @@ export class EpsilonBlast extends EnemyShot {
   }
 }
 
+// Sound effects the Epsilon plays (render/combat.ts plays them at its position).
+export type EpsilonEvent = { kind: 'se'; id: number };
+
 export class EpsilonAi extends Ep2dBrain<EpsilonState> {
   state: EpsilonState | 'dead' = 'dormant';
   readonly children: EpsigardAi[] = [];
+  readonly events: EpsilonEvent[] = [];
   private speed: number; // +0x460
   private turn: number; // +0x464
   private firstPeriod: number; // +0x458
@@ -2552,12 +2556,16 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
             this.orbZ = this.z;
             this.aimX = t.x;
             this.aimZ = t.z;
+            // 0x00559c1a: the laser starts (sound 0x2d2, at the Epsilon).
+            this.events.push({ kind: 'se', id: 0x2d2 });
             this.stage = 1;
             this.stageTimer = this.chargeFrames;
           }
         } else this.sub = 1;
         break;
       case 1: {
+        // 0x00559cf4: the orb is created (sound 0x2d3) on the frame it is first shown.
+        if (!this.laserShown) this.events.push({ kind: 'se', id: 0x2d3 });
         this.laserShown = true;
         const dx = this.aimX - this.orbX;
         const dz = this.aimZ - this.orbZ;
@@ -2730,20 +2738,25 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
         this.colourFrom = this.colour;
         this.colour = (this.colour + 1) & 3;
         this.colourMix = 0;
+        this.events.push({ kind: 'se', id: 0x2d4 }); // 0x00558ef5
       }
     } else if (this.sub === 1) {
       // The colour lerps from the old element to the new one, delta / 30 a frame.
       this.colourMix = Math.min(1, f32(this.colourMix + step));
+      this.events.push({ kind: 'se', id: 0x2d4 }); // 0x00558d7e, every frame of the 90
       if (--this.timer < 1) {
         this.sub = 2;
         this.colourT = 1;
       }
     } else if (this.sub === 2) {
       const t = f32(this.colourT - step);
-      if (t > 0) this.colourT = t;
-      else {
+      if (t > 0) {
+        this.colourT = t;
+        this.events.push({ kind: 'se', id: 0x2d4 }); // 0x00558ded
+      } else {
         this.sub = 3;
         this.colourT = 0;
+        this.events.push({ kind: 'se', id: 0x2d5 }); // 0x00558dcc, the end of the fall
       }
     }
   }

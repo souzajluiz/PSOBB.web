@@ -49,9 +49,10 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    group, DEVLOG entries "Episode 2 FSMs: ..."). Left, none checked in Chrome: the Episode 2
    enemy motion archives are not on this Mac, so animation lengths in tests are stand-ins
    for groups a / d (b / c read real counts); no wall / ground rays;
-   Epsilon's particles (0x2d2..0x2d5 are not in `particleentry.dat`: find their
-   table first; its model swap, tint and orb are in). Check Seabed / Mines /
-   Tower floors in Chrome.
+   Epsilon: its ids 0x2d2..0x2d5 are sound effects, not particles (the exe passes them
+   to play_directional_sound_effect; wired in 2026-10-21 "Epsilon area mapping and
+   particle tables"; the particle tables are not needed). Epsilon is area 0x23 only (0x22
+   fixed). Check Seabed / Mines / Tower floors in Chrome.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.

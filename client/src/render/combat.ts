@@ -1477,6 +1477,7 @@ export class CombatView {
       }
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
+      if (ai instanceof EpsilonAi) for (const ev of ai.events.splice(0)) this.playSeAt(ev.id, root.position);
       if (ai instanceof EpsilonAi) this.epsilonView(e, ai, r);
       if (ai instanceof CananeAi && !e.ringSpawned) {
         e.ringSpawned = true;
