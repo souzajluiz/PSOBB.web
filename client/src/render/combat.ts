@@ -1139,7 +1139,8 @@ export class CombatView {
           e.fake = new RappyFakeDeath({ x: p.x, z: p.z, angle: e.instance.root.rotation.y, moveSpeed: speeds.engagedMove, rng: () => this.rng() });
           continue;
         }
-        if (ended && e.removeIn <= 0 && !e.fake && !planBusy) this.dropDead(index, e);
+        // A dead Gibbles goes once it has sunk (tickGibblesSink).
+        if (ended && e.removeIn <= 0 && !e.fake && !planBusy && !(e.ai instanceof GibblesAi)) this.dropDead(index, e);
       }
     }
     // Game ticks (30 per second) drive the enemy AI and the player's hit state.
@@ -1342,6 +1343,11 @@ export class CombatView {
       // A splitter's children appear with their set entry's wave.
       if ((e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi) && e.parent && this.enemies.get(e.parent.index) === e.parent) {
         e.instance.root.visible = e.parent.instance.root.visible;
+      }
+      // A dead Gibbles sinks into the ground, then goes (tickGibblesSink).
+      if (e.ai instanceof GibblesAi && e.state === 'death') {
+        this.tickGibblesSink(e, e.ai);
+        continue;
       }
       if (e.dead || !e.instance.root.visible) continue;
       // The status block of update_enemy_control_object (combat/enemystatus.ts).
@@ -4962,6 +4968,20 @@ export class CombatView {
     this.layer.remove(e.instance);
     this.enemies.delete(index);
     if (this.lockOn === e) this.lockOn = null;
+  }
+
+  // A dead Gibbles' sink (GibblesAi.tickDead), one game tick at a time: the
+  // model follows the brain's lift below the floor, and it goes at the end.
+  private tickGibblesSink(e: EnemyRuntime, ai: GibblesAi): void {
+    ai.tickDead(e.instance.animators.every((a) => a.ended));
+    const root = e.instance.root;
+    const lift = ai.lift;
+    if (lift !== e.lift) {
+      const y = this.opts.ground?.(root.position.x, root.position.z, root.position.y - e.lift + 30) ?? null;
+      root.position.y = (y ?? root.position.y - e.lift) + lift;
+      e.lift = lift;
+    }
+    if (ai.removed) this.dropDead(e.index, e);
   }
 
   // --- techniques -------------------------------------------------------------

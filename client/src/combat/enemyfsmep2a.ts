@@ -1955,9 +1955,10 @@ export class GiGueAi extends BrainBase {
 // positions, which the box centres follow (the hands use the body radius plus
 // the attack reach, the slams are centred half a reach in front of the
 // Gibbles, ASSUMED), the guard drain by the attacker's ATP
-// (ASSUMED a fixed amount), the sinking of a dead Gibbles (250 frames of 0.1,
-// the owner removes it), line of sight, the pre-activation shuffle of states 0
-// and 10, and the hold of the drop-in animation at frame 100.
+// (ASSUMED a fixed amount), line of sight, the pre-activation shuffle of states 0
+// and 10, and the hold of the drop-in animation at frame 100. The sink of a
+// dead Gibbles is GibblesAi.tickDead (0x005606d4, sub 1 / 4 / 3); its death
+// particle and sounds are not (see that method).
 export const GIBBLES = {
   search: 250,
   wander: fr(1.25), // 0x009be2b0
@@ -1997,6 +1998,8 @@ export const GIBBLES = {
   leapScale: fr(0.02692308), // 0x00a73cb4
   handEvery: 5, // g_FrameCounter % 5
   handTech: 0, // 0x00925ab0: damage above it hits as a tech (rage swing)
+  sinkStep: fr(0.1), // 0x00925b04: the sink a game tick, and the velocity's gain
+  sinkLimit: 25, // 0x00925b00: the velocity that ends the sink
 } as const;
 
 interface GibblesRow {
@@ -2087,6 +2090,9 @@ export class GibblesAi extends BrainBase {
   private wz: number;
   private roamTimer = 0;
   private touchedDown = false;
+  private sinkPhase: 'motion' | 'sink' | 'gone' | 'removed' | null = null; // enemy+0x330 once dead
+  private sinkVelocity = 0; // enemy+0x3a8
+  private sink = 0; // enemy+0x3c, how far it has gone into the ground
 
   constructor(opts: {
     x: number;
@@ -2127,9 +2133,9 @@ export class GibblesAi extends BrainBase {
     return this.state === 'dormant' || (this.state === 'arrive' && this.timer < GIBBLES.arriveHold);
   }
 
-  // The drawn height above the ground (enemy+0x394).
+  // The drawn height above the ground (enemy+0x394), less the sink of a dead one.
   get lift(): number {
-    return this.yOff;
+    return this.yOff + this.sink;
   }
 
   // The stagger and the guard are the brain's own.
@@ -2137,9 +2143,41 @@ export class GibblesAi extends BrainBase {
     return false;
   }
 
-  // Death: row 9 (motion 2, 0.7), then it sinks.
+  // Death: row 9 (motion 2, 0.7), then it sinks (tickDead).
   get deathMotion(): EnemyAiMotion {
     return GIBBLES_MOTIONS[9];
+  }
+
+  override kill(): void {
+    super.kill();
+    this.sinkPhase = 'motion';
+    this.sinkVelocity = 0;
+  }
+
+  // One game tick of a dead Gibbles, the state 9 handler 0x005606d4 (sub 1, 4,
+  // 3): the death motion runs to its last frame; then every tick it sinks a
+  // tenth of a unit (enemy+0x3c) while its velocity (enemy+0x3a8) gains a tenth,
+  // and the sink ends when the velocity passes 25, 250 ticks in (ASSUMED the
+  // same tick count as the exe's float steps). The tick after that sets the
+  // removal flag (enemy+0x8 bit 0), so `removed` is true from then on.
+  // NOT ported, on the transition tick (0x0056075d): the point 10 units behind
+  // the heading (0x00782b64 on (0, 0, -10)), 0x00578148 with 10 (0x005607a7) and
+  // the particle 0x00578778 with id 0x46 (0x005607b3). UNCLEAR what the two
+  // helpers are, so no id or sound is ported.
+  tickDead(animationEnded: boolean): void {
+    if (this.sinkPhase === 'motion') {
+      if (animationEnded) this.sinkPhase = 'sink';
+    } else if (this.sinkPhase === 'sink') {
+      this.sink = fr(this.sink - GIBBLES.sinkStep);
+      this.sinkVelocity = fr(this.sinkVelocity + GIBBLES.sinkStep);
+      if (this.sinkVelocity > GIBBLES.sinkLimit) this.sinkPhase = 'gone';
+    } else if (this.sinkPhase === 'gone') {
+      this.sinkPhase = 'removed';
+    }
+  }
+
+  get removed(): boolean {
+    return this.sinkPhase === 'removed';
   }
 
   private attack(i: number): EnemyAttackData {

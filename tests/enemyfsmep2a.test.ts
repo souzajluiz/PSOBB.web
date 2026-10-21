@@ -610,11 +610,38 @@ for (const len of [10, 34, 70]) {
   }
   check(worst < 700, `Gibbles (motions ${len}): no state hangs (${worst})`);
 }
+// The sink of a dead Gibbles (0x005606d4): the death motion runs out, then 250
+// ticks of a tenth of a unit, and it is removed on the tick after.
+{
+  const g = gibbles();
+  eq(g.lift, 0, 'Gibbles sink: level while alive');
+  g.kill();
+  eq(g.removed, false, 'Gibbles sink: not removed at death');
+  for (let i = 0; i < 20; i++) g.tickDead(false);
+  eq([g.lift, g.removed], [0, false], 'Gibbles sink: no sink while the death motion runs');
+  g.tickDead(true);
+  eq(g.lift, 0, 'Gibbles sink: the motion-end tick starts the sink without moving');
+  let removedAt = -1;
+  let liftAt250 = 0;
+  for (let k = 1; k <= 260; k++) {
+    g.tickDead(false);
+    if (k === 1) near(g.lift, -0.1, 1e-6, 'Gibbles sink: a tenth of a unit on the first tick');
+    if (k === 100) near(g.lift, -10, 1e-3, 'Gibbles sink: 10 units after 100 ticks');
+    if (k === 249) near(g.lift, -24.9, 1e-3, 'Gibbles sink: 24.9 units after 249 ticks');
+    if (k === 250) liftAt250 = g.lift;
+    if (g.removed && removedAt < 0) removedAt = k;
+  }
+  near(liftAt250, -25, 1e-3, 'Gibbles sink: 25 units after the 250th tick');
+  eq(removedAt, 251, 'Gibbles sink: removed on the tick after the 250-tick sink');
+  eq(g.lift, liftAt250, 'Gibbles sink: the sink stops once it is removed');
+}
 
 // Constants cited in the comments.
 eq([GEE.search, GEE.retarget, GEE.hover, GEE.high], [200, 45, 15, 45], 'Gee: 200 / 45 / 15 / 45');
 eq([GIGUE.search, GIGUE.turn, GIGUE.bombRadiusSq], [150, 768, 1600], 'Gi Gue: record 150 / 768, bomb radius 40');
 eq([GIBBLES.search, GIBBLES.turn, GIBBLES.dormant], [250, 1024, 200], 'Gibbles: record 250 / 1024, waits for 200');
+eq([GIBBLES.sinkLimit], [25], 'Gibbles: the sink ends past velocity 25');
+near(GIBBLES.sinkStep, 0.1, 1e-7, 'Gibbles: the sink steps 0.1');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

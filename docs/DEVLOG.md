@@ -6327,3 +6327,26 @@ Follow-up of "player movement: slowed / flag tie traced" (a Haiku subagent trace
 - **[player+0x690]**: 0.4 by default (the player ctor), part of the scale block the quest opcode `set_shrink_size` writes; the gate player+0x68c bit 0 is only ever written 0 in player code, so the factor is inert in normal play.
 
 So the port's names `slowed` / `guard` are right after all (the earlier entry doubted `guard`); the hub exemption of the slow and the stance's proximity rule are not ported (`PlayerMover` is only driven in the lobby, where neither applies). `render/playermove.ts` header updated. Unverified details: the 0x006898cc proximity writer (2500 / 3600) and which handlers call 0x006a29f4 (taken from the dump's names).
+
+## 2026-10-21: dead Gibbles sinks for 250 frames
+
+Exe (PsoBB.exe, Ephinea 1.25.13): the Gibbles death state is the state 9 handler at 0x005606d4 (the dispatcher 0x0056021c calls it for enemy+0x32e = 9). Its own sub-state is the word at enemy+0x330, which the handler switches on:
+- sub 0 (0x005607c0): `enemy+0x3a8 = 0`, sub := 1, then the call 0x00772b44 (the death motion, row 9 = motion 2, 0.7).
+- sub 1 (0x0056074c): calls 0x007aa094 (the animation update), then waits for the play-once motion to end (`test byte [edi+0xb0], 0x10`, 0x00560759). Nothing moves until then.
+- transition, on the tick the motion ends (0x0056075d): sub := 4, the call 0x00782b64 on (0, 0, -10) with the heading at +0x60 (a point 10 units behind), 0x00578148 with 10 (0x005607a7), the particle helper 0x00578778 with id 0x46 (0x005607b3). No sink on this tick.
+- sub 4 (0x00560706..0x0056071a), every game tick: `y(+0x3c) -= 0.1` (float at 0x00925b04 = 0.10000000149), then `v(+0x3a8) += 0.1` (the same constant), and if the new velocity is above 25.0 (0x00925b00) sub := 3 (0x00560720), else stays in sub 4.
+- sub 3 (0x00560731): `word [edi+0x8] |= 1` (0x00560743). The removal flag. The sweep that deletes the entity is not in this handler (UNCLEAR which pass reads that bit, and its order within the frame).
+
+The timing follows from the float steps: simulating the exe's float32 operations gives the 250th sink tick as the first one with a velocity above 25 (25.0000591), so the sink is 250 game ticks of 0.1 (25 units total, y -25.00006), and the flag is set on the 251st tick after the motion ends.
+
+Constants: `GIBBLES.sinkStep = fr(0.1)` (0x00925b04), `GIBBLES.sinkLimit = 25` (0x00925b00). Not hidden: the handler writes no hide or untargetable flag (`+0xb0` is only read). The dead entity is excluded from hits and the minimap by its `dead` flag, as before.
+
+**What changed:** `GibblesAi` (`client/src/combat/enemyfsmep2a.ts`) overrides `kill()` to start the sink, and has `tickDead(animationEnded)`, which is one game tick of sub 1 / 4 / 3. Its `lift` getter is now `yOff + sink`, and `removed` is true from the tick after the sink. `render/combat.ts` no longer lets the death-state removal take a Gibbles (`!(e.ai instanceof GibblesAi)` on the `dropDead` line in the death loop). `tickEnemies` runs `tickGibblesSink` for a dead Gibbles every game tick, instead of skipping it as a dead enemy: it calls `tickDead`, moves the model to the ground plus the brain's lift (the same ground call as a live enemy), and drops the enemy when `removed`. The removal is the only owner-side change; the other enemies keep their paths.
+
+**Not ported:** the death particle (0x00578778, id 0x46), the sound call (0x00578148, 10) and the point (0x00782b64) from the transition tick. The helpers are not named in any reference we have, so the ids and sounds are UNCLEAR and nothing is played. Gi Gue's death particles stay open.
+
+ASSUMED / UNCLEAR: the sink is relative to the floor (the exe's +0x3c is the absolute y, the port keeps the floor by the owner's ground call, so the drop is applied on top of it); the 250-tick count assumes one `tickDead` per game tick (the owner's 30 ticks a second); the removal tick is taken as the sub 3 tick, the exact sweep order is UNCLEAR; the particle and sound ids above.
+
+**Checks:** `tests/enemyfsmep2a.test.ts` (the sink timeline: the motion runs out with no sink, 0.1 on the first tick, 10 units at tick 100, 24.9 at 249, 25 at 250, removal exactly on tick 251, the sink stops after it; the constants), `tests/combat.test.ts` (needs the newserv data under `vendor/`), client `tsc --noEmit` clean.
+
+Not run in Chrome.
