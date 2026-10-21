@@ -67,11 +67,12 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired). The Dragon's particles: the stomp
    dust, the fireball's flight / impact / puff (its table; the trail was misread and is corrected), the land's
    take-off and stomp, the lift, the hover roar and the launch flash are in (2026-10-21, "Dragon particles from
-   its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now). Not
-   spawned: 12 of its 21 create_particle_effect sites, whose state or point is UNCLEAR: the intro's six (its
-   sub-states 0x874 / 0x86c are not in the port), the flame's mouth (a continuous emitter, gate mframe >= 20),
-   the collapse's two and the death's two (computed points), the emerge / dive helper (computed); the take-off
-   helper's other callers (0x41c5b1, 0x41cc87, 0x41ff7a, 0x42197a, 0x4221b0). 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
+   its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now; the
+   flame's emitter, the collapse's rings, the death's two, the emerge helper and the flyShoot take-offs are in,
+   2026-10-21 "Dragon particles: the unresolved sites"). Not spawned: the intro's six (its sub-states 0x874 /
+   0x86c are not in the port: 0x41b5b3, 0x41b98e, 0x41b69a, 0x41b7ea, 0x41ba5f, 0x41b6a7), the dive's call of the
+   emerge / dive helper (0x41fa7b, its gate UNCLEAR), and the take-off helper's other callers 0x41c5b1, 0x41cc87,
+   0x41ff7a, 0x4221b0 (their functions and states are not mapped). 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
    maps the seven cutscene objects, their mode 5 pushes, records and scene owners; `bossCameraView` steps the per-frame update (2026-10-21 camera paths: the update 0x004D68A0 is ported; the record, the type flags and the motion index are decoded), and `render/gamefield.ts` gets `opts.bossCamera` from the Control, but no view yet: the motion file `Bo04OpCam.rel` (map 14, type 0) is not on this machine and its NJM keys, the run-time yaws and pivots, and the view composition 0x004D6BC0 are open. Open too: the cutscene objects' bodies and the Ultimate Rico / ring scene (flag 0x97). Dark Falz Ultimate beam Darvants are in (2026-10-21, DEVLOG "Dark Falz Ultimate beam Darvants"): their hold (the bob, the look / chase, the 260 range), HP and ATP are still ASSUMED / UNCLEAR there.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
