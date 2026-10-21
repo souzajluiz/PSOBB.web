@@ -6327,3 +6327,34 @@ Follow-up of "player movement: slowed / flag tie traced" (a Haiku subagent trace
 - **[player+0x690]**: 0.4 by default (the player ctor), part of the scale block the quest opcode `set_shrink_size` writes; the gate player+0x68c bit 0 is only ever written 0 in player code, so the factor is inert in normal play.
 
 So the port's names `slowed` / `guard` are right after all (the earlier entry doubted `guard`); the hub exemption of the slow and the stance's proximity rule are not ported (`PlayerMover` is only driven in the lobby, where neither applies). `render/playermove.ts` header updated. Unverified details: the 0x006898cc proximity writer (2500 / 3600) and which handlers call 0x006a29f4 (taken from the dump's names).
+
+## 2026-10-21: Saint-Milion missiles
+
+**Outcome: not ported (stopped after reading the exe, as the brief allows).** The missile is a model-driven object, not a straight shot: its flight, its end and its damage go through the motion system, a vector library and an explosion routine that the port does not have. No code changed; `docs/HANDOFF.md` item 4 still lists the missiles as events only.
+
+**Where they come from.** Row 18 of `SM_STATES` (0x009f6c60 + 18 * 40, the state 0x12 row of `saintmilionboss.ts`) has handler 0x0076966c. It dispatches phase 4 to 0x0076b8f4 and phase 0 to 0x0076968c:
+```
+76966c: cmp eax, 0x4 / jne 76967d / call 0x76b8f4 / ret     ; phase 4
+76967d: test eax, eax / jne 769686 / call 0x76968c          ; phase 0
+```
+- **Entry (0x0076b8f4):** one object: `push 0xe4 / call 0x5caba4` (allocation of 0xE4 bytes), then the constructor 0x0076619c with the boss's id word (`movzx eax, [ebx+0x394]`, no offset) and target 0x27 (`call 0x768964`).
+- **Phase 0 (0x0076968c):** `call 0x7aaa30` with the float 5.0 (0x40a00000, a motion check on the boss's model: flags at +0xb0), then `cmp [ebx+0xf80], 3 / 4`. `+0xf80` is the arena index (see `saintmilionboss.ts`, `arena`), so the two missiles come only in arenas 3 and 4 (the centre arenas, range 620). They are built with id word + 2 (target 0x27) and id word + 3 (target 0x28).
+- So the exe makes 1 missile on entry and 2 more on phase-0 frames in those arenas. **UNCLEAR:** how often the phase-0 branch runs them (the gate is tested every frame; the rest of 0x007aaa30 was not read, so it may be an "exactly at frame 5" test).
+
+**The object.** Constructor 0x0076619c (args: `[owner+0x3cc]`, `[owner+0x60]`, a position pointer (`owner+0xdd4` / `+0xe14`, or 0), 0xa9b078, the id). vtable 0x00b434b8: +0 0x007660c4, +4 0x00766384 (the base update 0x00765a40, the owner's position from `[this+0x60]+0x30..0x38`, then 0x007663d4 or 0x00766800). Fields: +0x30 a cycle timer (`fld 1.0` (0x00976198) added each frame, wraps at +0x34; `1.0` steps), +0x68 a frame counter, +0x6c the id, +0x70 a motion model (built with 0x007b4b48, 0x007b9a88), +0x74 an array of four children (0x0057739c, the stride 0x1c). The constructor reads a global counter (`[0xa9b008]`) and a table at 0x00976160.
+
+**Per-frame (0x007663d4).**
+- Lifetime: `cmp [this+0x68], 0xf0 / jg 0x766786`: 240 frames, then the kill path 0x007667a8 (`call 0x661448`, effect 0x6f7 via 0x00814298).
+- The motion end test: `call 0x7b5290` with flag 0x80000 on the missile's model; when set, the explosion 0x007667e4 (`push 3; push 0x41f00000 (30.0); push &this+0x38; call 0x0076a724`: type 3, radius 30.0, at the missile) and then the kill 0x007667a8.
+- A test `call 0x0077fffc` with the missile's position and the argument -1 (**UNCLEAR:** taken as a ray / target test from its position in the code; not read).
+- The launch (0x0076681c) takes the owner's position and two normalised vectors (0x0082ddd8, 0x0082dcbc) scaled by 0x00976174 = **5.0**, into `+0x50` and `+0x58`. Its per-frame motion is then set by 0x007b52c4 / 0x007b52ec (model animation) and 0x007b5218 / 0x007b4c58 (node transforms).
+
+**Constants read:** 0x00976174 = 5.0 (launch scale), 0x00976180 = 0.08, 0x00976184 = 1.2, 0x00976188 = 1.45, 0x0097618c = 0.1, 0x00976190 = 20.0, 0x00976198 = 1.0 (the timer step), 0x00976160 = 0 and 2^32 (unsigned bias). Lifetime 240, explosion type 3 radius 30.0, arenas 3 / 4, 1 + 2 missiles.
+
+**Why it stops here.**
+- The missile is animated through its model (0x7b5290, 0x7b52c4, 0x7b52ec, 0x7b5218, 0x7b4c58, 0x7b999c), and the port has no motion object for a shot. The 0x0076a724 explosion (the damage: type, radius and the entity call) and the player choice 0x00768964 / 0x00780d3c were not read.
+- Hit radius, damage and the homing rule are not read: the code at 0x00766650 .. 0x00766700 moves the model, and the steering is not in 0x007663d4. **UNCLEAR:** whether the missile homes at all (the launch direction comes from the owner's position and a target, but the turn is not seen).
+
+**Changes:** this entry only. The events stay in `combat/saintmilionboss.ts` (state 18 at phase 4, line ~630). No constants, tests or shots were added.
+
+**Checks:** none run (docs only). Not run in Chrome.
