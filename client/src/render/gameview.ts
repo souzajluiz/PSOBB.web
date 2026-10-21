@@ -272,6 +272,11 @@ export class GameView {
     };
   }
 
+  // Development hook (e2e): the held weapons of the players in the field.
+  heldWeapons(): ReturnType<LobbyView['heldState']> {
+    return this.view?.heldState() ?? [];
+  }
+
   private async objectBase(floor: number): Promise<number> {
     let base = 0;
     for (let f = 0; f < floor; f++) {

@@ -712,7 +712,10 @@ export class Game extends Lobby {
       case 0x22:
       case 0x23: {
         const p = this.players.get(clientId);
-        if (p && clientId !== this.selfId) p.visible = sub === 0x23;
+        if (p && clientId !== this.selfId) {
+          p.visible = sub === 0x23;
+          this.emit('visibilityChanged', p);
+        }
         break;
       }
     }
