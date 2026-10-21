@@ -18,11 +18,15 @@ import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile, parseParticleE
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
+import { ICE_SHATTER_PIECES, velocityAngles } from '../combat/hitmodels.ts';
+import { BloodDecals } from './blooddecals.ts';
+import { FragmentEffects } from './fragments.ts';
 import { HitModels, type IceHost } from './hitmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const FRAME = 1 / 30;
 const MAX_BURSTS = 80;
+const BAMS_RAD = (Math.PI * 2) / 0x10000;
 
 export type Anchor = THREE.Vector3 | (() => THREE.Vector3 | null);
 
@@ -39,6 +43,8 @@ interface Burst {
   dy: number; // the spawn's raise
   track: (() => THREE.Vector3 | null) | null; // moves the emitter every emitting frame (create_particle_effect5: the owner sets the position)
   alive: (() => boolean) | null; // an emitter its owner kills (the destructor sets the effect's flag |= 1): stops emitting when this says false
+  model: THREE.Mesh | null; // a model particle's template (flag 0x200): drawn as this model per particle, not as a quad
+  pieces: THREE.Mesh[]; // the model particle's meshes, one per live particle
 }
 
 export class FieldParticles {
@@ -62,12 +68,21 @@ export class FieldParticles {
   private hook = (dt: number) => this.frame(dt);
   // The model effects that go with the particles (critical flash, ice block).
   readonly models: HitModels;
+  // The pools the dead leave on the floor (combat/blooddecals.ts).
+  readonly decals: BloodDecals;
+  // The model fragments of an exploding machine (combat/shellfragments.ts).
+  readonly fragments: FragmentEffects;
+  private pieceRotation = new THREE.Quaternion();
+  private pieceTurn = new THREE.Quaternion();
+  private pieceAxis = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 
   constructor(viewer: MapViewer, files: ClientFiles, log: (msg: string) => void) {
     this.viewer = viewer;
     this.files = files;
     this.log = log;
     this.models = new HitModels(viewer, files, log);
+    this.decals = new BloodDecals(viewer, files, log);
+    this.fragments = new FragmentEffects(viewer, log);
     viewer.frameHooks.add(this.hook);
   }
 
@@ -93,6 +108,7 @@ export class FieldParticles {
   preload(): void {
     void this.load();
     this.models.preload();
+    this.decals.preload();
   }
 
   /**
@@ -184,6 +200,8 @@ export class FieldParticles {
       dy: p.dy ?? 0,
       track: track && typeof at === 'function' ? at : null,
       alive,
+      model: null,
+      pieces: [],
     };
     if (p.duration === undefined) {
       // The one emission: at least one particle (the spawn loop runs while
@@ -233,14 +251,58 @@ export class FieldParticles {
       dy,
       track: null,
       alive: null,
+      model: null,
+      pieces: [],
     };
     this.viewer.scene.add(burst.group);
     this.bursts.push(burst);
   }
 
-  /** The ice block of a freeze (render/hitmodels.ts), its ring particles through this system. */
+  /**
+   * The pieces of an ice block's shatter: the emitter 0x153 (b_eff_koori) at
+   * `at`, one burst of its rate (20) whose particles are the ice piece model
+   * instead of a quad (the emitter's flag 0x200, HandleFlameEnemyLogic_00500e08).
+   */
+  async shards(at: THREE.Vector3): Promise<void> {
+    await this.load();
+    const template = await this.models.shardTemplate();
+    if (this.disposed || !template || this.bursts.length >= MAX_BURSTS) return;
+    const e = this.entry(ICE_SHATTER_PIECES);
+    if (!e) return;
+    const particles = new ParticleSystem();
+    particles.models = true;
+    particles.slots = this.slots;
+    particles.add(e, [at.x, at.y, at.z], 0);
+    particles.emitters[0].acc = Math.max(0, 1 - e.rate);
+    particles.step(true);
+    particles.emitters.length = 0;
+    const burst: Burst = {
+      particles,
+      anchor: null,
+      origin: at.clone(),
+      base: at.clone(),
+      group: new THREE.Group(),
+      sprites: [],
+      delay: 0,
+      emit: 0,
+      scale: [1, 1],
+      dy: 0,
+      track: null,
+      alive: null,
+      model: template,
+      pieces: [],
+    };
+    this.viewer.scene.add(burst.group);
+    this.bursts.push(burst);
+  }
+
+  /** The ice block of a freeze (render/hitmodels.ts), its ring particles and shatter pieces through this system. */
   ice(host: IceHost): void {
-    void this.models.ice(host, (p, at) => void this.spawn(p, at));
+    void this.models.ice(
+      host,
+      (p, at) => void this.spawn(p, at),
+      (at) => void this.shards(at),
+    );
   }
 
   get active(): number {
@@ -293,10 +355,54 @@ export class FieldParticles {
   private remove(b: Burst): void {
     this.viewer.scene.remove(b.group);
     for (const s of b.sprites) s.material.dispose();
+    // A model particle's meshes share the template's geometry; each owns its materials.
+    for (const p of b.pieces) for (const m of Array.isArray(p.material) ? p.material : [p.material]) m.dispose();
+  }
+
+  // The particles of a model burst as the template mesh each: T(p) S(size) Rz(z) Rx(x) Ry(angle),
+  // the colour and fade of the particle (combat/hitmodels.ts velocityAngles).
+  private drawModels(b: Burst): void {
+    const live = b.particles.live;
+    const tpl = b.model!;
+    while (b.pieces.length < live.length) {
+      const m = tpl.clone();
+      m.material = Array.isArray(tpl.material) ? tpl.material.map((x) => x.clone()) : tpl.material.clone();
+      m.frustumCulled = false;
+      b.group.add(m);
+      b.pieces.push(m);
+    }
+    const axis = this.pieceAxis;
+    b.pieces.forEach((m, i) => {
+      const q = live[i];
+      if (!q) {
+        m.visible = false;
+        return;
+      }
+      const { fade, rgb } = particleShade(q);
+      m.visible = fade > 0;
+      m.position.set(q.p[0], q.p[1], q.p[2]);
+      m.scale.setScalar(Math.max(q.size, 0.001));
+      const a = velocityAngles(q.step[0], q.step[1], q.step[2]);
+      this.pieceRotation.setFromAxisAngle(axis.z, a.z);
+      this.pieceTurn.setFromAxisAngle(axis.x, a.x);
+      this.pieceRotation.multiply(this.pieceTurn);
+      this.pieceTurn.setFromAxisAngle(axis.y, q.angle * BAMS_RAD);
+      m.quaternion.copy(this.pieceRotation.multiply(this.pieceTurn));
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        const mm = mat as THREE.MeshBasicMaterial;
+        mm.opacity = fade;
+        mm.transparent = true;
+        mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
+      }
+    });
   }
 
   // Additive sprites like render/levelupfx.ts, moved with the entity (flag 0x10).
   private draw(b: Burst): void {
+    if (b.model) {
+      this.drawModels(b);
+      return;
+    }
     if (b.anchor) {
       const now = typeof b.anchor === 'function' ? b.anchor() : b.anchor;
       if (now) b.group.position.set(now.x - b.base.x, now.y - b.base.y, now.z - b.base.z);
@@ -344,6 +450,8 @@ export class FieldParticles {
   dispose(): void {
     this.disposed = true;
     this.models.dispose();
+    this.decals.dispose();
+    this.fragments.dispose();
     this.viewer.frameHooks.delete(this.hook);
     for (const b of this.bursts) this.remove(b);
     this.bursts = [];

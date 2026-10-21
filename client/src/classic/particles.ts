@@ -47,6 +47,8 @@ export interface ParticleEntry {
   damping: number;
   gravity: number;
   fade: [number, number];
+  /** +0x60: the bounce factor (texture flag 2) / the plain spin, in the exe's `radius`. */
+  radius: number;
   streak: [number, number]; // +0x64, +0x68
   colorSlope: [number, number, number];
   colorBase: [number, number, number];
@@ -84,6 +86,7 @@ export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
     damping: f(0x50),
     gravity: f(0x54),
     fade: [f(0x58), f(0x5c)],
+    radius: f(0x60),
     streak: [f(0x64), f(0x68)],
     colorSlope: [f(0x6c), f(0x70), f(0x74)],
     colorBase: [f(0x7c), f(0x80), f(0x84)],
@@ -109,6 +112,10 @@ export interface Particle {
   size: number;
   age: number;
   dt: number;
+  /** The spin angle in BAMS (update_particle_effect_single_particle's `angle`); only kept by a `models` system. */
+  angle: number;
+  /** field47_0x6c = rand - 0.5: the spin goes one way when it is below 0, the other when not. */
+  spinSign: number;
 }
 
 export const NT_SIZE = 16; // effect_nt metadata width (see title.ts)
@@ -147,6 +154,8 @@ export class ParticleSystem {
   slots = new Map<number, number>();
   private list: Particle[] = [];
   private seed = 1;
+  /** Run the model particle extras (the spin angle, flag 2's floor): a system that draws models, not quads. */
+  models = false;
   centre: [number, number] = [320, 240];
   D = 437.44;
 
@@ -185,9 +194,12 @@ export class ParticleSystem {
   private spawn(e: Emitter): Particle {
     const d = e.entry;
     const r = () => this.rand();
+    // Texture flag 2 (a model particle's): the height is the fixed variation, not a random spread
+    // (the constructor 0x0050ec4c: y = y_variation + y).
+    const fixedY = this.models && (d.flags & 2) !== 0;
     const p: [number, number, number] = [
       e.pos[0] + (r() - 0.5) * d.variation[0],
-      e.pos[1] + (r() - 0.5) * d.variation[1],
+      fixedY ? e.pos[1] + d.variation[1] : e.pos[1] + (r() - 0.5) * d.variation[1],
       e.pos[2] + (r() - 0.5) * d.variation[2],
     ];
     const size = r() * d.size[1] + d.size[0];
@@ -195,7 +207,12 @@ export class ParticleSystem {
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
     const a = r() * Math.PI * 2;
-    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt };
+    // The spin angle starts at rand * 65536 and turns by the sign of rand - 0.5, unless the
+    // friction, gravity and vacume fields are all 0.
+    const spins = d.gravity !== 0 || d.vel0[0] !== 0 || d.vel0[1] !== 0;
+    const angle = this.models && spins ? Math.round(r() * 65536) & 0xffff : 0;
+    const spinSign = this.models && spins ? r() - 0.5 : 0;
+    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt, angle, spinSign };
   }
 
   private update(q: Particle): void {
@@ -207,6 +224,23 @@ export class ParticleSystem {
     q.step = [q.v[0], q.v[1] * c - q.v[2] * s, q.v[1] * s + q.v[2] * c];
     q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
     q.age += q.dt;
+    if (this.models) this.modelStep(q);
+  }
+
+  // The parts of update_particle_effect_single_particle (0x0050dbb8) a model particle shows:
+  // texture flag 2 makes a floor at the emitter's height, where the climb is drawn again as
+  // (rand * +0x3c + +0x34) * radius (+0x60); the spin is +0x64 * vx * vy, held to 20 degrees, in
+  // BAMS, added or taken by the sign of the particle's rand - 0.5 (0x0050e2a4..0x0050e370).
+  private modelStep(q: Particle): void {
+    const d = q.e.entry;
+    if ((d.flags & 2) !== 0 && q.p[1] < q.e.pos[1]) q.v[1] = (this.rand() * d.velRand[1] + d.vel0[1]) * d.radius;
+    if (d.gravity === 0 && d.vel0[0] === 0 && d.vel0[1] === 0) {
+      q.angle = (q.angle + Math.trunc((d.radius * 65536) / 360)) & 0xffff;
+    } else if ((d.flags & 4) === 0) {
+      const v = Math.min(Math.abs(d.streak[0] * q.v[0] * q.v[1]), 20);
+      const n = Math.trunc((v * 65536) / 360);
+      q.angle = (q.spinSign < 0 ? q.angle + n : q.angle - n) & 0xffff;
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, texture: (gbix: number) => CanvasImageSource | null, tint: (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource): void {

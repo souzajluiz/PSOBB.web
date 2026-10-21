@@ -120,6 +120,15 @@ export class BattleParams {
     };
   }
 
+  /**
+   * The f32 at +0x10 of the stats row (newserv: height; the dump:
+   * bloodstain_z_offset): how far from the corpse the enemy's blood pool
+   * lies (create_enemy_blood_stain, 0x00535b38: * 0.5, ahead of the heading).
+   */
+  bloodOffset(difficulty: number, index: number): number {
+    return this.dv.getFloat32((difficulty * 0x60 + index) * 0x24 + 0x10, true);
+  }
+
   attack(difficulty: number, index: number): EnemyAttackData {
     const o = 0x3600 + (difficulty * 0x60 + index) * 0x30;
     const s = (k: number) => this.dv.getInt16(o + k, true);

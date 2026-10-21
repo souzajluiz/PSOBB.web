@@ -7479,3 +7479,36 @@ sorting).
 - `node --experimental-strip-types tests/itemmodels.test.ts`: `ALL PASS (4623 checks)`.
 - `tests/combat.test.ts`: `5946 checks, 0 failures`.
 - `cd client && npx tsc --noEmit`: clean.
+
+## 2026-10-21: death visuals: blood pools, machine fragments, ice shatter
+
+**Salvaged** from the unfinished agent commit 703798e (old base, +1784 lines), ported onto main: `combat/blooddecals.ts` (the pool table, the growing and fade-in pools: `BloodPool`), `render/blooddecals.ts` (the pool strips), `combat/shellfragments.ts` (the machine fragments: `ShellFragments`, the three tables), `render/fragments.ts` (their meshes), `combat/deathfx.ts` (`DEATH_ROWS` and the per-enemy plans with pools, sink, fragments and `bloodForward`), `combat/hitmodels.ts` (`ICE_SHARD_*`, `velocityAngles`), `render/hitmodels.ts` and `render/hitfx.ts` (the ice shatter pieces through `FieldParticles.shards`), `classic/particles.ts` (model particles: the texture-flag-2 floor, the spin angle; off unless `models` is set, so other systems draw and consume rand as before), `formats/battleparams.ts` (`bloodOffset`, the stats row's f32 at +0x10), and `render/combat.ts` (`applyDeath` runs a plan's sounds, particles, pools, fragments, dissolve and sink; `deathPoint` adds the side offset, the blood distance and the ring). `tests/deathfx.test.ts` came with it.
+
+**Exe evidence (checked this pass, PsoBB.exe with objdump / exedata and the dump):**
+- Helpers: 0x00578778 gensei = particle 0xe4 (delay 0, the given duration); 0x005787a4 ab_dead = 0xe5; 0x005787d0 = 0xfb, 0xfc, 0xe3 at the point; 0x005787fc = 0xe8 and 0xec, delay 10, duration 1.
+- Pool creators (dump call arguments): sizes 0x41c80000 25, 0x41700000 15, 0x40200000 2.5, 0x40f00000 7.5. Red (texture 2) 0x00578148 / 0x005781d8 / 0x00578268 / 0x005782f8; fade-in purple (texture 0, EntityConstructor_0057791c) 0x005785c8 / 0x00578658 / 0x005786e8.
+- Pool update: the growing pool (0x00577760) gains 0.2 while the counter is not above the size and moves the corners once it is above 0; the fade-in pool (0x00578078) gains 0.2 the same way and the alpha 0.05 once above 0. Constants 0x00927320 0.2, 0x00927310 -0.2, 0x009272d4 0.05, 0x009272e4 0.2134560, 0x009272fc 0.5, 0x009272f4 0.35, 0x009272f0 1.2, 0x009272e8 0.2, 0x00927304 5, 0x009272ec -3, 0x00927318 22500 read from the exe.
+- Blood stain point (0x00535b38): the stats row's f32 at +0x10 times 0x00922c04 (0.5), ahead of the heading; then gensei 0x23 (35) at that point and the red 7.5 pool with delay 15 (0x005782f8, 0x0f). Up 10 (0x41200000).
+- Fragments: defaults written by ParticleEffectInstance_Initialize_00511c00 (12, 0.07, 1.5, 0.9, 0.12, 0.5, 0.5); tables 0x009bdd88 (Dubchic: 20, 0.06, 1.5, 0.9, 0.12, 0.55, 0.5), 0x0092541c (Epsilon) and 0x00920c58 (Mothmant): 20, 0.05, 1.2, 0.9, 0.12, 0.55, 0.5. Spin = round((rand/32768 - 0.5) * 2 * 5000); RNG constants 32768, 2, 5000 read from the exe. Update 0x00511e58 (vtable +0x08): alpha -= fade, ends at alpha <= 0; x += dx*speed, y += climb, z += dz*speed, climb -= gravity, angle x += spin, angle y += spin/2 (truncated), speed *= decay: matches `ShellFragments.tick`.
+- Canadine (0x0053e610 state 4): ParticleEffectInstance with the default table, SpawnEntityParticles_005787d0 at its point, EnemyOnKilledHandler, SE 0x143 at its position.
+- Dubchic (0x005558bc): SE 0x13b when `g_CurrentEpisode == 0` (Episode 1), else 0x156; the table 0x009bdd88.
+
+**ASSUMED (kept, marked in the code):**
+- The green creators' texture is 1: their argument is a mis-resolved name in the dump (`&g_ChallengeListWindowFlag`); by pattern with the red and purple ones.
+- The Canadine explosion height `up: -5`: the dump's `g_EnemySpawnRotationParams_0x20` has no value in it.
+- The pools stay until the floor changes (nothing in the entity ends them); capped at `POOL_LIMIT` = 64 in the port (no cap in the exe).
+- The ground probe and the construction (the 10 rand calls, the pull-in rule at size above 5) follow the first trace; not re-traced this pass.
+- The pool and fragment renders (0x00577884, 0x00511f1c) and the fragment opacity.
+- `ICE_SHARD_MODEL` (model 5 of bm_technic.bml, technic.xvm, texture id 2), the model-particle orientation (`velocityAngles`, 0x007a8d98, g_VelocityAngles_y = 0), and the model-particle spin / floor in `classic/particles.ts` (0x0050dbb8, 0x0050e2a4..0x0050e370): from the first trace, not re-checked here. ICE_SHARD_COUNT = 20 is the emitter 0x153's rate in the particle data (the test reads it).
+- The death rows other than those above: sounds, particle ids and timings are from the first trace, not re-traced this pass. The file header says so.
+- Dropped: none of the WIP's content was removed.
+
+**UNCLEAR:**
+- Dubchic's counter (0x344, decremented by each kill call; the SE and explosion wait 29 frames in the port): the exe's kill handler returns early until the counter passes 0, so the port's 29-frame wait is a model of it, not a trace.
+- Deldepth's counter and the Mothmant's landing point stay as the WIP had them (ASSUMED in `deathfx.ts`).
+
+**Checks:**
+- `node tests/deathfx.test.ts`: all checks passed (reads the client data for the particle entry 0x153 and the enemy models).
+- `tests/combat.test.ts`: 5946 checks, 0 failures. `tests/enemies.test.ts`: ALL PASS. `tests/combatdepth.test.ts`: 824 checks, 0 failures. `tests/dragon.test.ts`: ok. `tests/enemyfsmep2d.test.ts`: all checks passed. `tests/hitfx.test.ts`: all checks passed. `tests/formats.test.ts`: ALL PASS.
+- `cd client && npx tsc --noEmit`: exit 0.
+- Not run in Chrome.

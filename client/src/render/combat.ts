@@ -168,7 +168,7 @@ import { TechFire } from './techfire.ts';
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
 import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
-import { DeathRun, deathPlanFor, type DeathPoint } from '../combat/deathfx.ts';
+import { DeathRun, deathPlanFor, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, iceRadius } from '../combat/hitmodels.ts';
 import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
@@ -316,6 +316,7 @@ interface EnemyRuntime {
   slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
   splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
   death?: { run: DeathRun; acc: number; dissolve: Dissolve | null }; // combat/deathfx.ts: the death state's steps
+  blood?: number; // the stats row's f32 @0x10 (the blood pool's distance, formats/battleparams.ts bloodOffset)
 }
 
 // How a hit is shown (combat/hitfx.ts): its effect family and whether the
@@ -1109,6 +1110,7 @@ export class CombatView {
         buffs: new EntityBuffs(),
         status: new EnemyStatus(enemyAttribute(head.slot.type)),
         esp,
+        ...(params && def && def.stats.length ? { blood: params.bloodOffset(difficulty, def.stats[0]) } : {}),
       });
     }
     this.difficultyParams = { params, difficulty, slots, base };
@@ -5235,30 +5237,58 @@ export class CombatView {
     d.acc += dt * GAME_TICKS_PER_SECOND;
     let frames = Math.min(5, Math.floor(d.acc));
     d.acc -= Math.floor(d.acc);
-    const p = e.instance.root.position;
     const anim = e.instance.animators[0];
     while (frames-- > 0) {
-      const act = d.run.tick(anim?.frame ?? 0, ended);
-      for (const se of act.se) this.playSeAt(se, p);
-      for (const s of act.spawn) this.particle(s.p, this.deathPoint(e, s.at));
-      if (act.dissolve) d.dissolve = new Dissolve();
-      if (act.remove) return true;
+      if (this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended))) return true;
       if (d.dissolve) {
         const f = d.dissolve.tick();
         setModelOpacity(e.instance.root, f.opacity);
-        if (f.done) return true;
+        if (f.done) {
+          // The steps that wait for the dissolve (the purple pool), then it is gone.
+          this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended, true));
+          return true;
+        }
       }
     }
     return false;
   }
 
+  // One frame's actions of a death plan: sounds, particles, pools, fragments,
+  // the dissolve and the sink. True when the enemy ends now.
+  private applyDeath(e: EnemyRuntime, act: DeathActions): boolean {
+    const d = e.death!;
+    const p = e.instance.root.position;
+    for (const se of act.se) this.playSeAt(se, p);
+    for (const s of act.spawn) this.particle(s.p, this.deathPoint(e, s.at));
+    for (const q of act.pools) void this.fx?.decals.add(q.pool, q.delay, this.deathPoint(e, q.at));
+    for (const table of act.fragments) {
+      const part = e.instance.parts[0];
+      if (this.fx && part?.model !== undefined) this.fx.fragments.spawn(e.instance.archive, part.model, table, this.deathPoint(e, { base: 'body' }), e.instance.root.rotation.y, () => this.rng());
+    }
+    if (act.dissolve) d.dissolve = new Dissolve();
+    if (act.sink) p.y -= act.sink;
+    return act.remove;
+  }
+
   // A death plan's point: the origin or the body point (26 up, ASSUMED), pushed
-  // along the heading (the exe turns its offset by the enemy's yaw).
+  // along the heading (the exe turns its offset by the enemy's yaw: forward
+  // along it, side across it, the blood stain's distance from the stats row, a
+  // random spot on a ring).
   private deathPoint(e: EnemyRuntime, pt: DeathPoint): THREE.Vector3 {
     const o = e.instance.root.position;
     const yaw = e.instance.root.rotation.y;
-    const f = pt.forward ?? 0;
-    return new THREE.Vector3(o.x + Math.sin(yaw) * f, o.y + (pt.base === 'body' ? 26 : 0) + (pt.up ?? 0), o.z + Math.cos(yaw) * f);
+    let f = pt.forward ?? 0;
+    if (pt.bloodForward !== undefined) f += (e.blood ?? 0) * pt.bloodForward;
+    const side = pt.side ?? 0;
+    let x = o.x + Math.sin(yaw) * f + Math.cos(yaw) * side;
+    let z = o.z + Math.cos(yaw) * f - Math.sin(yaw) * side;
+    if (pt.ring) {
+      const r = pt.ring[0] + this.rng() * (pt.ring[1] - pt.ring[0]);
+      const a = this.rng() * Math.PI * 2;
+      x += Math.sin(a) * r;
+      z += Math.cos(a) * r;
+    }
+    return new THREE.Vector3(x, o.y + (pt.base === 'body' ? 26 : 0) + (pt.up ?? 0), z);
   }
 
   private dropDead(index: number, e: EnemyRuntime): void {
