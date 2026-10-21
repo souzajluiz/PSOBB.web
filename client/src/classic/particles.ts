@@ -248,7 +248,7 @@ export class ParticleSystem {
       };
       ring.omega = Math.round(((r() * d.ring.omega[1] + d.ring.omega[0]) * 0x10000) / 360);
       ring.rise = r() * d.ring.rise[1] + d.ring.rise[0];
-      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, ring };
+      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, angle: 0, spinSign: 0, ring };
     }
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
