@@ -990,6 +990,91 @@ for (const n of [1, 2, 5]) {
   }
 }
 
+// 29. The entrance (0x0041b220): +0x86c is the variant (1 normal, 2 Ultimate, from
+//     0x00420a44) and +0x874 the step of its chain. The real bossop motion (170
+//     frames at 0.5): each sound, particle and emitter at its motion frame, the BGM
+//     at 105 (120 in Ultimate), the flame from 105 to 150 (120 to 155), and no hang.
+{
+  // Every event with the motion frame it came in on (the frame after the tick).
+  // The ticks it took are in `ticks` (one tick is half a motion frame).
+  const timeline = (ai: DragonAi) => {
+    const out: { f: number; ev: DragonEvent }[] & { ticks?: number } = [];
+    let t = 0;
+    for (; t < 2000 && ai.sid === S.intro; t++) {
+      ai.tick([player(0, 100, 0)]);
+      for (const ev of ai.events.splice(0)) out.push({ f: ai.mframe, ev });
+    }
+    out.ticks = t;
+    return out;
+  };
+  const se = (t: { f: number; ev: DragonEvent }[]) => t.flatMap((x) => (x.ev.kind === 'se' ? [{ f: x.f, id: x.ev.id }] : []));
+  const parts = (t: { f: number; ev: DragonEvent }[]) => t.flatMap((x) => (x.ev.kind === 'particle' ? [{ f: x.f, id: x.ev.id, x: x.ev.x, y: x.ev.y, z: x.ev.z }] : []));
+  const emits = (t: { f: number; ev: DragonEvent }[]) => t.flatMap((x) => (x.ev.kind === 'emitter' ? [{ f: x.f, id: x.ev.id, handle: x.ev.handle }] : []));
+  const bgms = (t: { f: number; ev: DragonEvent }[]) => t.flatMap((x) => (x.ev.kind === 'bgm' ? [{ f: x.f, name: x.ev.name }] : []));
+
+  // Normal.
+  {
+    const ai = brain({ ultimate: false });
+    eq(ai.c86c, 1, 'the normal entrance is variant 1');
+    const t = timeline(ai);
+    const sounds = se(t);
+    eq(sounds.map((x) => x.id).join(','), [0x318, 0x322, 0x31a].join(','), 'normal entrance: sounds 318, 322 (optional), 31a');
+    check(sounds.length === 3 && sounds[0].f === 2.5 && sounds[1].f === 32.5 && sounds[2].f === 75.5, 'the normal sounds are at frames 2.5, 32.5 and 75.5');
+    const p = parts(t);
+    eq(p.map((x) => x.id).join(','), [547, 549, 549].join(','), 'normal entrance: body 547, then two launch flashes 549');
+    check(p[0].f === 35.5 && p[0].x === 0 && p[0].y === 0 && p[0].z === 0, 'the body particle is at frame 35.5 on the body');
+    check(p[1].f === 77.5 && p[2].f === 79.5, 'the launches are every 4th tick (frames 77.5 and 79.5) until frame 80');
+    check(p.slice(1).every((x) => x.x === ai.mouth()[0] && x.y === ai.mouth()[1] && x.z === ai.mouth()[2]), 'the launches are at the mouth');
+    const b = bgms(t);
+    check(b.length === 1 && b[0].name === 'dradeath.adx' && b[0].f === 105.5, 'the BGM is at frame 105.5');
+    const em = emits(t);
+    eq(em.length, 1, 'normal entrance: one flame emitter');
+    check(em.length === 1 && em[0].id === DRAGON_PARTICLE_IDS.normal.intro && em[0].f === 106, 'the flame is id 545 (the table +0x14), made at frame 106');
+    eq(em[0]?.handle.alive, false, 'the flame is stopped at frame 150');
+    check(ai.sid !== S.intro && (t.ticks ?? 0) >= 335 && (t.ticks ?? 0) < 360, `normal entrance ends with the motion (${t.ticks} ticks)`);
+  }
+  // Ultimate.
+  {
+    const ai = brain({ ultimate: true });
+    eq(ai.c86c, 2, 'the Ultimate entrance is variant 2');
+    const t = timeline(ai);
+    const sounds = se(t);
+    eq(sounds.map((x) => x.id).join(','), [0x318, 0x318, 0x322, 0x318, 0x31a].join(','), 'Ultimate entrance: sounds 318 (9, 40), 322 (62), 318 (64), 31a (92)');
+    check(sounds.map((x) => x.f).join(',') === '9.5,40.5,62.5,64.5,92.5', 'the Ultimate sounds are at frames 9.5, 40.5, 62.5, 64.5 and 92.5');
+    const p = parts(t);
+    eq(p.map((x) => x.id).join(','), [514, 521, 521, 521].join(','), 'Ultimate entrance: body 514, then three launch flashes 521');
+    check(p[0].f === 64.5 && p.slice(1).map((x) => x.f).join(',') === '94.5,96.5,98.5', 'the Ultimate body is at 64.5, the launches at 94.5, 96.5, 98.5');
+    const b = bgms(t);
+    check(b.length === 1 && b[0].f === 120.5, 'the Ultimate BGM is at frame 120.5');
+    const em = emits(t);
+    check(em.length === 1 && em[0].id === DRAGON_PARTICLE_IDS.ultimate.intro && em[0].f === 121, 'the Ultimate flame is id 524, made at frame 121');
+    eq(em[0]?.handle.alive, false, 'the Ultimate flame is stopped at frame 155');
+    check(ai.sid !== S.intro && (t.ticks ?? 0) >= 335 && (t.ticks ?? 0) < 360, `the Ultimate entrance ends with the motion (${t.ticks} ticks)`);
+  }
+  // The crossing rule: the frame that reaches the threshold (1.5 -> 2.0) does not
+  // pass it; the next one (2.0 -> 2.5) does.
+  {
+    const ai = brain({ ultimate: false });
+    const p = ai as unknown as { speed: number };
+    ai.mframe = 1.5;
+    p.speed = 0.5;
+    ai.events.splice(0);
+    ai.tick([player(0, 100, 0)]);
+    eq(ai.events.filter((e) => e.kind === 'se').length, 0, 'the 2.0 frame does not pass 2');
+    ai.tick([player(0, 100, 0)]);
+    eq(ai.events.filter((e) => e.kind === 'se').length, 1, 'the 2.5 frame passes 2');
+  }
+  // Variant 3 (no selector in the entry, see introThree): its sites 547 and 515 at 63.5.
+  {
+    const ai = brain({ ultimate: false });
+    ai.c86c = 3;
+    ai.c874 = 0;
+    const t = timeline(ai);
+    const p = parts(t);
+    check(p.some((x) => x.id === 547 && x.f === 63.5) && p.some((x) => x.id === 515 && x.f === 63.5), 'variant 3 at frame 63.5: body 547 and 515');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);

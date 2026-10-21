@@ -237,12 +237,17 @@ export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f
 // emerge / dive helper (0x0041ebf0), +0x04 the take-off helper (0x0041c784),
 // +0x08 the body (intro, landing, death), +0x0c the stomps (0x0041d410 /
 // 0x0041d504) and the collapse dust, +0x18 the flame's mouth point (flyShoot),
-// +0x1c the fireball launch (0x004218eb) and the intro. Ids 0x200..0x23f are
-// entries of the map's particleentrya%d.dat (classic/particles.ts).
+// +0x1c the fireball launch (0x004218eb) and the entrance's launch flashes
+// (0x0041b5b3 / 0x0041b98e), +0x14 the entrance's flame emitter (0x0041b9c1,
+// 0x0041b709). The entrance's body particles are +0x08 and the constant 0x203
+// (0x0041b6a7). Ids 0x200..0x23f are entries of the map's particleentrya%d.dat
+// (classic/particles.ts).
 export const DRAGON_PARTICLE_IDS = {
-  normal: { f00: 65, f04: 76, body: 547, stomp: 240, mouth: 546, launch: 549 },
-  ultimate: { f00: 512, f04: 513, body: 514, stomp: 148, mouth: 523, launch: 521 },
+  normal: { f00: 65, f04: 76, body: 547, stomp: 240, mouth: 546, launch: 549, intro: 545 },
+  ultimate: { f00: 512, f04: 513, body: 514, stomp: 148, mouth: 523, launch: 521, intro: 524 },
 } as const;
+// The entrance's constant particle (0x0041b6a7 pushes 0x203 as the id).
+export const DRAGON_INTRO_PARTICLE = 0x203;
 
 // The fireball's table (normal 0x008fc374, Ultimate 0x008fc380; chosen by
 // 0x0042693c). The fireball update (0x00426790), by its phase [+0x38]:
@@ -1338,6 +1343,10 @@ export class DragonAi extends BrainBase {
   private leave(s: number): void {
     const S = DRAGON_STATE;
     switch (s) {
+      case S.intro:
+        // 0x0041b5ca phase 5: the flame's emitter is stopped (+0x8b4 cleared).
+        this.stopMouth();
+        return;
       case S.roar:
         // 0x004201f4 phase 5: the next hp clamp, from the hp it is at.
         this.thr = this.threshold();
@@ -1654,14 +1663,7 @@ export class DragonAi extends BrainBase {
     const S = DRAGON_STATE;
     switch (this.sid) {
       case S.intro:
-        // 0x0041b220: the entrance motion runs out (the camera, sounds and
-        // particles of its sub-states are not reproduced).
-        this.animate();
-        if (this.c86c !== 4) {
-          if (this.crossed(this.ultimate ? 120 : 105)) this.emit({ kind: 'bgm', name: 'dradeath.adx' });
-          if (this.ended) this.c86c = 4;
-        }
-        return;
+        return this.tickIntro();
       case S.walk:
         return this.tickWalk();
       case S.fire:
@@ -2062,8 +2064,186 @@ export class DragonAi extends BrainBase {
   }
 
   // The particle ids of this difficulty (DRAGON_PARTICLE_IDS).
-  private pids(): { readonly f00: number; readonly f04: number; readonly body: number; readonly stomp: number; readonly mouth: number; readonly launch: number } {
+  private pids(): { readonly f00: number; readonly f04: number; readonly body: number; readonly stomp: number; readonly mouth: number; readonly launch: number; readonly intro: number } {
     return this.ultimate ? DRAGON_PARTICLE_IDS.ultimate : DRAGON_PARTICLE_IDS.normal;
+  }
+
+  // --- the entrance (0x0041b220, phase 0) ----------------------------------------
+  //
+  // Two sub-state registers: +0x86c is the variant (1 normal, 2 Ultimate: the
+  // entry tests 0x00420a44; 4 once the entrance motion has ended) and +0x874 the
+  // step of that variant's chain. +0x870 is a counter (every 4th tick). A step
+  // whose frame test is not met waits (the chain holds its step); a step with
+  // `passed` runs once, in the tick the motion frame goes past its threshold.
+  // The motion is bossop (slot 25, 170 frames at 0.5). The camera and the
+  // object the entry makes (0x0041bbf0..0x0041bc1c, 0x28 bytes) are not
+  // reproduced (UNCLEAR).
+  private tickIntro(): void {
+    if (this.c86c === 4) {
+      this.animate();
+      return;
+    }
+    const variant = this.c86c;
+    this.animate();
+    if (this.ended) {
+      // 0x0041b833 (0x0041b2df): the motion is over: +0x86c = 4 and +0xb8 = 0 (the stand).
+      // The frame counter is kept; the chain still runs this tick, as in the exe.
+      this.c86c = 4;
+      this.slotIndex = 0;
+      this.motionDirty = true;
+    }
+    if (variant === 1) this.introNormal();
+    else if (variant === 2) this.introUltimate();
+    else if (variant === 3) this.introThree();
+  }
+
+  // The crossing test of the entrance: the exe's check_entity_animation_elapsed_threshold
+  // (0x007aaa30) is `mframe > f && mframe <= f + speed` (f32, the frame after the speed
+  // is added). The port's crossed() uses `mframe >= f && mframe - speed < f`: it differs
+  // at the exact threshold (one tick), see the DEVLOG entry.
+  private passed(f: number): boolean {
+    return this.mframe > f && this.mframe <= f + this.speed;
+  }
+
+  // 0x0041b220 variant 1 (normal), by +0x874. Frames are motion frames.
+  private introNormal(): void {
+    const ids = this.pids();
+    switch (this.c874) {
+      case 0: // 0x0041ba76: sound 0x318 at 2
+        if (!this.passed(2)) return;
+        this.emit({ kind: 'se', id: 0x318 });
+        this.c874++;
+        return;
+      case 1: // 0x0041ba16: sound 0x322 at 32 (optional), the body's particle at 35 (0x0041ba5f)
+        if (this.passed(32)) this.emit({ kind: 'se', id: 0x322 });
+        if (!this.passed(35)) return;
+        this.emitBody(ids.body);
+        this.c874++;
+        return;
+      case 2: // 0x0041b9d7: sound 0x31a at 75, the counter is cleared
+        if (!this.passed(75)) return;
+        this.emit({ kind: 'se', id: 0x31a });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 3: // 0x0041b94d: the launch flashes at the mouth (0x0041b98e) every 4th tick until frame 80
+        if (this.mframe > 80) {
+          this.c874++;
+          return;
+        }
+        if ((++this.c870 & 3) === 0) this.launch(this.mouth());
+        return;
+      case 4: // 0x0041b870: the BGM at 105, the counter is cleared
+        if (!this.passed(105)) return;
+        this.emit({ kind: 'bgm', name: 'dradeath.adx' });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 5: // 0x0041b8b1: the flame (0x0041b9c1) until frame 150, then stopped
+        if (this.mframe < 150) this.introFlame(ids.intro);
+        else {
+          this.stopMouth();
+          this.c874++;
+        }
+        return;
+      default:
+    }
+  }
+
+  // 0x0041b220 variant 2 (Ultimate), by +0x874.
+  private introUltimate(): void {
+    const ids = this.pids();
+    switch (this.c874) {
+      case 0: // 0x0041b75e: sound 0x318 at 9 or 40, 0x322 at 62 (both optional), then 0x318 and the body's particle at 64 (0x0041b7ea)
+        if (this.passed(9) || this.passed(40)) this.emit({ kind: 'se', id: 0x318 });
+        if (this.passed(62)) this.emit({ kind: 'se', id: 0x322 });
+        if (!this.passed(64)) return;
+        this.emit({ kind: 'se', id: 0x318 });
+        this.emitBody(ids.body);
+        this.c874++;
+        return;
+      case 1: // 0x0041b71f: sound 0x31a at 92, the counter is cleared
+        if (!this.passed(92)) return;
+        this.emit({ kind: 'se', id: 0x31a });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 2: // 0x0041b576: the launch flashes at the mouth (0x0041b5b3) every 4th tick until frame 99
+        if (this.mframe > 99) {
+          this.c874++;
+          return;
+        }
+        if ((++this.c870 & 3) === 0) this.launch(this.mouth());
+        return;
+      case 3: // 0x0041b499: the BGM at 120, the counter is cleared
+        if (!this.passed(120)) return;
+        this.emit({ kind: 'bgm', name: 'dradeath.adx' });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 4: // 0x0041b4da: the flame (0x0041b709) until frame 155, then stopped
+        if (this.mframe < 155) this.introFlame(ids.intro);
+        else {
+          this.stopMouth();
+          this.c874++;
+        }
+        return;
+      default:
+    }
+  }
+
+  // 0x0041b220 variant 3, by +0x874 (0x0041b2ad). NOTHING SELECTS IT: the entry
+  // writes +0x86c = 1 or 2 only (0x0041bba6..0x0041bbc6, from 0x00420a44's 0 or 1),
+  // and the other writers of 3 are other states' code. Ported so its two particle
+  // sites (0x0041b69a, 0x0041b6a7) exist; the intro never runs it.
+  private introThree(): void {
+    const ids = this.pids();
+    switch (this.c874) {
+      case 0: // 0x0041b6be: sound 0x318 at 2
+        if (!this.passed(2)) return;
+        this.emit({ kind: 'se', id: 0x318 });
+        this.c874++;
+        return;
+      case 1: // 0x0041b655: sound 0x322 at 60 (optional), the body's particle and 0x203 at 63
+        if (this.passed(60)) this.emit({ kind: 'se', id: 0x322 });
+        if (!this.passed(63)) return;
+        this.emitBody(ids.body);
+        this.emitBody(DRAGON_INTRO_PARTICLE);
+        this.c874++;
+        return;
+      case 2: // 0x0041baab: sound 0x31a at 75, the counter is cleared
+        if (!this.passed(75)) return;
+        this.emit({ kind: 'se', id: 0x31a });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 3: // 0x0041b3f9: wait for frame 80, no particle
+        if (this.mframe > 80) this.c874++;
+        return;
+      case 4: // 0x0041b31c: the BGM at 105, the counter is cleared
+        if (!this.passed(105)) return;
+        this.emit({ kind: 'bgm', name: 'dradeath.adx' });
+        this.c874++;
+        this.c870 = 0;
+        return;
+      case 5: // 0x0041b35d: the flame until frame 150, then stopped
+        if (this.mframe < 150) this.introFlame(ids.intro);
+        else {
+          this.stopMouth();
+          this.c874++;
+        }
+        return;
+      default:
+    }
+  }
+
+  // The entrance's flame emitter: made when there is no handle (the exe moves it to the
+  // mouth and aims it each tick: the render follows the mouth, the aim is not reproduced, ASSUMED).
+  private introFlame(id: number): void {
+    if (this.mouthEmitter) return;
+    const handle: DragonEmitter = { alive: true };
+    this.mouthEmitter = handle;
+    this.emit({ kind: 'emitter', id, handle });
   }
 
   // The flame's emitter in flyShoot's sub-state 2 (0x00421636..0x00421674): with
