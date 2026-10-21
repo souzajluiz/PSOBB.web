@@ -42,10 +42,12 @@
 // frame (constants 65536, 360 at 0x00920470 / 0x009204ac / 0x009204a8), omega
 // = +0x30 + rand * +0x74; the radius = +0x60 + rand * +0x64; the rise per frame
 // = +0x34 + rand * +0x68 (added to the height each update); the position is
-// centre + (r cos, rise * n, r sin). ASSUMED: the colour slopes +0x50 / +0x38 /
-// +0x3c with bases +0x7c / +0x80 / +0x84 (one branch of the update, taken when
-// effect_nt flag 1 is clear and instance flag 0x100 is clear); the emitter
-// rotation (the renderer's three angles, pRendererData[0..2]) is not applied.
+// centre + (r cos, rise * n, r sin). The colour slopes are +0x50 / +0x38 /
+// +0x3c (R / G / B) with bases +0x7c / +0x80 / +0x84: VERIFIED in the exe for
+// instance flag 0x100 clear, whatever effect_nt flag 1 is (0x0050f8d6 ->
+// 0x0050f9c9: fld [ecx+0x50] ... fadd [ecx+0x7c]; G at 0x0050f9f5 (+0x38 /
+// +0x80); B at 0x0050fa1e (+0x3c / +0x84)). The emitter rotation (the
+// renderer's three angles, pRendererData[0..2]) is not applied.
 export interface RingParams {
   omega: [number, number]; // degrees per frame: +0x30 + rand * +0x74
   radius: [number, number]; // +0x60 + rand * +0x64
@@ -341,8 +343,16 @@ export class ParticleSystem {
   }
 }
 
-// A particle's fade and colour (0..1) at its age (FUN_0050dbb8), with the
-// emitter's tint.
+// A particle's fade and colour (0..1) at its age, with the emitter's tint.
+// The slope depends on the particle KIND, not on the effect flags:
+//   type 0 (update_particle_effect_single_particle, 0x0050dbb8): slope
+//     +0x6c / +0x70 / +0x74 (`fmul [ecx+0x6c]` at 0x0050df88, 0x0050dfbc, 0x0050dfeb);
+//   type 1 ring (ParticleEffectInstance_Update_0050f3fc): slope +0x50 / +0x38 / +0x3c.
+// Both use the bases +0x7c / +0x80 / +0x84 when instance flag 0x100 is clear
+// (0x0050df86 and 0x0050f9c9), whatever effect_nt flag 1 is. The 0x100 path
+// (the tint) takes the particle's own RGB as the base instead (type 0 `fadd
+// [ebp+0x50]` at 0x0050def5, ring `fadd [esi+0x50]` at 0x0050f7b6); the port
+// multiplies the tint in instead (ASSUMED, UNCLEAR, see the DEVLOG).
 export function particleShade(q: Particle): { fade: number; rgb: [number, number, number] } {
   const d = q.e.entry;
   const t = Math.min(q.age, 1);

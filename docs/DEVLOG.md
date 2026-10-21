@@ -7548,3 +7548,21 @@ sorting).
 **Open:** `particleShade` (type 0) reads its colour slopes at +0x6c..+0x74, while the exe's colour branch above reads +0x50 / +0x38 / +0x3c. Not changed here (it may be a different flag branch); whoever owns `classic/particles.ts` should check it.
 
 **Checks:** `node tests/textcodes.test.ts` (all checks passed); `node tests/telepipe.test.ts` (all checks passed, with the 0xB0 ring case); `node tests/chatline.test.ts` (all checks passed); `dragon`, `playerfx`, `techlightning`, `questboard`, `questmisc` (all pass); `tests/combat.test.ts` (5946 checks, 0 failures, with the vendor link removed afterwards); `cd client && npx tsc --noEmit` (clean). Not run: `client/e2e/field-chat.spec.ts` (Vite e2e).
+
+## 2026-10-21: Particle colour slopes by particle kind (`classic/particles.ts`)
+
+**Verdict: both are right, for different particle kinds.** The slope set follows the particle type (the entry's +0x10 kind), not the effect flags. The port already branches on it (`particleShade`: `q.ring ? d.ring.colorSlope : d.colorSlope`); the open item of 2026-10-20 was a misreading. Nothing in the slope selection was changed. The bases (+0x7c / +0x80 / +0x84) are the same for both kinds.
+
+- **Type 0** (single particle, update `update_particle_effect_single_particle` = 0x0050dbb8): RGB = clamp(age * (+0x6c, +0x70, +0x74) + (+0x7c, +0x80, +0x84)). The slopes are the `fmul [ecx+0x6c]` / `[ecx+0x70]` / `[ecx+0x74]` at 0x0050df88, 0x0050dfbc, 0x0050dfeb; the bases `fadd [ecx+0x7c]` at 0x0050df8b. The path is taken when instance flag 0x100 is clear (`test eax,eax` at 0x0050de58 / 0x0050e027, `je 0x0050df86` / `0x0050e135`), whatever effect_nt flag 1 is.
+- **Type 1 ring** (`ParticleEffectInstance_Update_0050f3fc`, factory 0x00510534): RGB = clamp(age * (+0x50, +0x38, +0x3c) + (+0x7c, +0x80, +0x84)). Slopes `fld [ecx+0x50]` at 0x0050f9cf, `fld [ecx+0x38]` at 0x0050f9f5, `fld [ecx+0x3c]` at 0x0050fa1e; bases `fadd [ecx+0x7c]` (0x0050f9d4), `[ecx+0x80]` (0x0050f9fa), `[ecx+0x84]` (0x0050fa23). Same branch: instance flag 0x100 clear (`je 0x0050f9c9` from 0x0050f8d6). ECX is the entry (`[ebp+0x20]` / `pThis[8]`), so the reads are from the entry, not the instance.
+- **Why the names differ:** +0x50 is the entry's damping for type 0 (`fmul [ecx+0x50]` on the velocity, 0x0050dd83) and the ring's R slope. Same offset, two meanings; the particle kind decides.
+- **Mode 0x100 (colour override, `ParticleEffectSingleParticle_SetId_00508ee4`):** the slopes do not change, but the base does. Type 0 with 0x100 set uses `fadd [ebp+0x50]` (0x0050def5), the instance's own value, instead of entry +0x7c; the ring uses `fadd [esi+0x50]` (0x0050f7b6), and the constant branch uses the instance's +0x50..+0x58. The port still multiplies the tint into the whole colour (`tint` in `particleShade`). **UNCLEAR:** the dump's SetId writes a dword at its `this+0x4c` and sets flag 0x100 at `+0x2c`, while the update reads floats at instance +0x50..+0x58 and the flag at +0x24. The two structs are not the same layout, so the tint base was not changed. Callers (`render/hitfx.ts`, `render/telepipe.ts`) are unaffected.
+- **Clamp:** both paths clamp to 0..1 (0.0 at 0x00920438 / 0x009204a4, 1.0 at 0x0092043c / the ring's 0x009204a0). The port's `Math.min(1, Math.max(0, ...))` matches.
+
+**Spot-check (the decisive bytes):** at 0x0050f9cf: `d9 41 50` (fld dword [ecx+0x50]) then `d8 41 7c` (fadd [ecx+0x7c]); at 0x0050df88: `d8 49 6c` (fmul [ecx+0x6c]). Disassemble with `objdump -d -M intel --start-address=0x0050f9c9 --stop-address=0x0050fa30 PsoBB.exe`.
+
+**ASSUMED / UNCLEAR:** the tint base (0x100) as above; the type 1 spin and emitter rotation (not touched here); the instance struct layout of the dump's SetId; the 0x0050e698 render path, which was not re-read for colour (it draws what the update stores).
+
+**Changes:** `client/src/classic/particles.ts` (comments only: the ring slopes are now VERIFIED for the 0x100-clear path with addresses; `particleShade` documents the kind branch and the tint's open point). `tests/particleslope.test.ts` (new: the type 0 and ring slope fields, the bases, the clamp, with decoy fields in the other kind's slots).
+
+**Checks:** `node tests/particleslope.test.ts` (all pass); `node tests/telepipe.test.ts`, `hitfx`, `deathfx`, `techlightning`, `dragon` (all pass); `cd client && npx tsc --noEmit -p .` (clean, Node 24).
