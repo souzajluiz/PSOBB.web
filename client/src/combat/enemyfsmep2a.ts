@@ -1942,7 +1942,7 @@ export class GiGueAi extends BrainBase {
 // The hand boxes: two collision_box rows (0x2c bytes, radius at +0xc, flags
 // 0x8003): 0x009be10c radius 15.0 (0x009be118), installed on the object at
 // +0x3bc by the ctor 0x00563200 (call 0x007b9a88, count 1), and 0x009be138
-// radius 52.0 (0x009be144), installed on +0x3c0. The combo's hand loop
+// radius 30.0 (0x009be144), installed on +0x3c0. The combo's hand loop
 // (0x00561534..0x00561737, the code before the state 4 handler; ASSUMED the
 // same state) runs every fifth frame (the frame counter
 // mod 5 at 0x00561553), tests the +0x3bc box's flag 0x80000 (set by the
