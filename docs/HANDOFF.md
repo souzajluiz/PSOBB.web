@@ -83,8 +83,9 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    warp) and plays it on the Online tab's field (2026-10-21, `classic/field.ts`).
    The Pioneer 2 NPC talk, the counters (shops, bank, Medical Center, the Hunter's Guild
    quest menu) and the quest runner are in on the classic field (2026-10-21, `classic/townfield.ts`;
-   the shops and a quest's start are not yet checked in the field, see the DEVLOG entry); left there:
-   the chat line and the mouse in games.
+   the shops and a quest's start are not yet checked in the field, see the DEVLOG entry).
+   The chat line (Space) and the mouse are in the field (2026-10-21 "classic field: chat
+   line and mouse"; not seen in Chrome by hand).
    Leaving a game shows the lobby warp (2026-10-21); the exe's type for a leave is probably
    the floor warp (floor_prev / floor_next), not ported (DEVLOG "loading screen when leaving a game"). The counter's ship / block change and team menus
    are in (2026-10-20, not seen in Chrome: log in, walk to the counter, Transport /

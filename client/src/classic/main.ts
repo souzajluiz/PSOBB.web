@@ -13,6 +13,7 @@ import { GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
+import type { BubbleTextures } from './chat.ts';
 import { FieldScreen } from './field.ts';
 import { FieldTown } from './townfield.ts';
 import type { PartyHost } from './gamelist.ts';
@@ -183,17 +184,21 @@ async function main(): Promise<void> {
   // TextureEnglish/texturejapanese texlist (0x00a9cd48: texture 0 = name
   // tab of the word balloons, texture 2 = main menu labels).
   let hudTextures: { panel: ImageBitmap; texlist: ImageBitmap[] } | null = null;
-  const loadHud = async (infoCols: LobbyHud['infoCols']): Promise<LobbyHud> => {
-    hudTextures ??= {
+  const loadHudTextures = async () =>
+    (hudTextures ??= {
       panel: hyouji[13],
       texlist: await textureBitmaps(await files.textures(['textureenglish.xvm', 'texturejapanese.xvm'])),
-    };
+    });
+  // The word balloons of the lobby and of the field.
+  const bubbleTextures = async (): Promise<BubbleTextures> => ({ body: hyouji[1], tab: (await loadHudTextures()).texlist[0] });
+  const loadHud = async (infoCols: LobbyHud['infoCols']): Promise<LobbyHud> => {
+    const tex = await loadHudTextures();
     unitxt ??= await loadUnitxt();
     const table = unitxt;
     return {
       skin: titleAssets.skin,
-      bubble: { body: hyouji[1], tab: hudTextures.texlist[0] },
-      menu: { panel: hudTextures.panel, labels: hudTextures.texlist[2] },
+      bubble: { body: hyouji[1], tab: tex.texlist[0] },
+      menu: { panel: tex.panel, labels: tex.texlist[2] },
       text: (g, i) => (table[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
       inventory: () => {
         const c = session?.character;
@@ -263,6 +268,7 @@ async function main(): Promise<void> {
   const enterGame = async (game: Game, shipName: string) => {
     game.log = (m) => console.log(`[game] ${m}`);
     const assets = await loadConnectingAssets();
+    const bubble = await bubbleTextures();
     // The loading screen covers the window; the 3D canvas (and the field HUD
     // sized from it) stays hidden until the floor is loaded.
     showWorld(false);
@@ -291,7 +297,7 @@ async function main(): Promise<void> {
         void load.then((view) => {
           console.log(`[classic] entered game "${game.name}"`);
           showWorld(true);
-          const field = new FieldScreen(view, worldCanvas);
+          const field = new FieldScreen(view, worldCanvas, canvas, bubble);
           Object.assign(window, { classicGame: field, classicLobby: undefined });
           show(field);
         }),
@@ -587,6 +593,10 @@ async function main(): Promise<void> {
     current = s;
     stage.show(s);
     controls?.setPadSuppressed(s.touchPad === false);
+    // The 3D canvas takes the pointer only where the screen asks (the field);
+    // elsewhere the stage gets it as before.
+    canvas.style.pointerEvents = s.worldPointer ? 'none' : '';
+    worldCanvas.style.pointerEvents = s.worldPointer ? 'auto' : '';
     softKeyboard?.sync();
     // BGM per screen, as the exe requests it: title.adx (FUN_006f8130),
     // CHARA.adx for character select/creation (FUN_004df9ec).

@@ -29,11 +29,10 @@
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
 import * as THREE from 'three';
-import { se } from '../audio/se.ts';
-import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
+import type { Lobby } from '../net/lobby.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
-import { ChatBubble, ChatBubbles, ChatInput, ChatLog, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
+import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
@@ -48,7 +47,6 @@ import { type Screen, type Stage, type TextInputState, type WindowSkin } from '.
 const MOVE_KEYS: Record<string, string> = { w: 'w', s: 's', a: 'a', d: 'd' };
 const FRAME = 1 / 30;
 const HEAD_FACTOR = 0.92; // FUN_00716204: model bound * 0.92 (0x0096fe90)
-const SE_CHAT = 0x574; // FUN_00720940
 // ping_server (0x007bd288, called by the logged-in game loop 0x007bcc4c, which
 // runs the lobby and the games): while logged in, a 1D every 900 frames
 // (g_FrameCounter % 900, the 0x91a2b3c5 division). newserv disconnects a
@@ -93,9 +91,7 @@ export class LobbyScreen implements Screen {
   private hud: LobbyHud;
   private shipName: string;
   private keys = new Set<string>();
-  private log = new ChatLog();
-  private input = new ChatInput();
-  private bubbles = new ChatBubbles();
+  private chat: ChatLine;
   private menu: MainMenu;
   private counter: InfoCounter;
   private party: PartyMenus | null = null;
@@ -161,18 +157,19 @@ export class LobbyScreen implements Screen {
       inner?.(dt, this.busy ? new Set() : this.keys);
       this.applyViewShift();
     };
-    lobby.on('chat', (from, gc, text) => this.onChat(from, gc, text));
+    this.chat = new ChatLine((text) => lobby.sendChat(text));
+    lobby.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
     lobby.on('playerLeft', (id) => this.heights.delete(id));
   }
 
   // The chat line, or the party menus' name / password editors.
   textInput(): TextInputState | null {
-    if (this.input.open) return { password: false, chat: true };
+    if (this.chat.open) return { password: false, chat: true };
     return this.team?.textInput() ?? this.party?.textInput() ?? null;
   }
 
   private get busy(): boolean {
-    return this.input.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -196,17 +193,11 @@ export class LobbyScreen implements Screen {
     return `${this.shipName}:${two(this.lobby.blockNumber)}-${two(this.lobby.lobbyNumber + 1)}`;
   }
 
-  // unknown_write_chat_message_to_logs: log line + balloon (flags 0xcb).
-  private onChat(from: LobbyPlayer | null, gc: number, text: string): void {
-    const name = from?.name ?? '';
-    this.log.add(name || `#${gc}`, text);
-    if (!from) return;
-    se(SE_CHAT);
+  // The balloon order: distance from the local player (ChatBubbles.say).
+  private distanceTo(id: number): number {
+    const p = this.lobby.players.get(id)?.position;
     const me = this.lobby.self?.position;
-    this.bubbles.say(from.clientId, from.name, text, (id) => {
-      const p = this.lobby.players.get(id)?.position;
-      return p && me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0;
-    });
+    return p && me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0;
   }
 
   private menuAction(id: number): void {
@@ -255,7 +246,7 @@ export class LobbyScreen implements Screen {
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
     const positions = this.view.playerPositions();
-    this.bubbles.tick((id) => {
+    this.chat.bubbles.tick((id) => {
       const pos = positions.get(id);
       if (!pos) return null;
       return projectHead(cam, pos, this.headHeight(id), width);
@@ -280,10 +271,8 @@ export class LobbyScreen implements Screen {
   }
 
   key(e: KeyboardEvent): void {
-    if (this.input.open) {
-      e.preventDefault();
-      const t = this.input.key(e);
-      if (t) this.lobby.sendChat(t);
+    if (this.chat.open) {
+      this.chat.key(e);
       return;
     }
     if (this.options) {
@@ -340,7 +329,7 @@ export class LobbyScreen implements Screen {
     if (e.key === ' ') {
       e.preventDefault();
       this.keys.clear();
-      this.input.begin();
+      this.chat.begin();
       return;
     }
     if (e.key === 'Enter' && this.nearCounter()) {
@@ -378,9 +367,9 @@ export class LobbyScreen implements Screen {
     inGameSpace(ctx, stage, (extra) => {
       this.extra = extra;
       this.drawNameTags(ctx, extra);
-      this.bubbles.draw(ctx, this.hud.bubble);
+      this.chat.bubbles.draw(ctx, this.hud.bubble);
       drawLobbyNameWindow(ctx, this.hud.skin, this.lobbyName, extra);
-      this.input.draw(ctx, this.frame);
+      this.chat.input.draw(ctx, this.frame);
       this.counter.draw(ctx, this.hud.skin, extra);
       this.party?.draw(ctx, this.hud.skin, extra);
       this.team?.draw(ctx, this.hud.skin, extra);
@@ -388,7 +377,7 @@ export class LobbyScreen implements Screen {
       this.menu.draw(ctx, this.hud.skin, this.hud.menu);
       this.itemList?.draw(ctx, this.hud.skin);
       this.options?.draw(ctx, this.hud.skin, extra);
-      if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.log);
+      if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);
     });
   }
 

@@ -30,6 +30,7 @@
 
 import * as THREE from 'three';
 import { drawGameText, gameTextWidth, GAME_TEXT } from './gametext.ts';
+import { se } from '../audio/se.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
@@ -537,4 +538,46 @@ export function projectHead(cam: THREE.Camera, pos: THREE.Vector3, height: numbe
   const v = p.clone().project(cam);
   const visible = v.z > -1 && v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
   return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * 480, dist, visible };
+}
+
+export const SE_CHAT = 0x574; // FUN_00720940
+
+// The chat line of the lobby and of the field (classic/lobby.ts, classic/field.ts):
+// the input line, the log and the balloons. The screen forwards its keys to
+// key() while `open`, and draws the input and the balloons in its own space.
+// unknown_write_chat_message_to_logs: a log line and, for a player the client
+// knows, a balloon over the speaker (flags 0xcb) and the chat sound.
+export class ChatLine {
+  readonly log = new ChatLog();
+  readonly input = new ChatInput();
+  readonly bubbles = new ChatBubbles();
+  private readonly send: (text: string) => void;
+
+  // send: the text Enter sends (the chat packet 06 of the lobby or the game).
+  constructor(send: (text: string) => void) {
+    this.send = send;
+  }
+
+  get open(): boolean {
+    return this.input.open;
+  }
+
+  // Space (begin_chat_input) opens the line.
+  begin(): void {
+    this.input.begin();
+  }
+
+  key(e: KeyboardEvent): void {
+    e.preventDefault();
+    const text = this.input.key(e);
+    if (text) this.send(text);
+  }
+
+  // A line from the server; `from` is null when the speaker is not a known player.
+  receive(from: { clientId: number; name: string } | null, gc: number, text: string, distanceTo: (id: number) => number): void {
+    this.log.add(from?.name || `#${gc}`, text);
+    if (!from) return;
+    se(SE_CHAT);
+    this.bubbles.say(from.clientId, from.name, text, distanceTo);
+  }
 }

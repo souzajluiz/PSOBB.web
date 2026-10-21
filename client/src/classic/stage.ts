@@ -33,6 +33,9 @@ export interface Screen {
   // false: the touch pad (stick, arrows, OK / BACK) is hidden on this screen,
   // which is made for taps (title / login).
   touchPad?: boolean;
+  // true: the 3D canvas under the stage takes the pointer (its own handlers:
+  // the field's menus, the wheel) and the stage gets none (classic/main.ts show).
+  worldPointer?: boolean;
   // Non-null while an inline text editor is active.
   textInput?(): TextInputState | null;
   drawFullscreen?(ctx: CanvasRenderingContext2D, w: number, h: number, stage: Stage): void;
