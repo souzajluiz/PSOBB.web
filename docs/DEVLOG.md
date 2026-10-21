@@ -7646,3 +7646,22 @@ without kill credit or PB gain.
 mapping, the payload layout, the stock, the count ceiling); `tests/battle.test.ts` exit 0;
 `tests/combat.test.ts` exit 0 (run with a temporary link to the vendor newserv build, removed after);
 `cd client && npx tsc --noEmit` clean. Not run in Chrome: no two-client battle was driven.
+
+## 2026-10-21: classic page 404s (map files the data does not hold)
+
+**Report:** the classic page logged resource 404s once the game was entered. Found with a Playwright run through the title, login (webtest), the lobby, a new party and the game entry (Pioneer 2), on the worktree's Vite: six failed requests, all under `/psobb-data/scene/`. The title screen and the login menu logged none. Each is a file the client asked for that the data folder does not hold, and each is fixed at the request, not by adding files:
+
+| Request (`/psobb-data/scene/...`) | Cause | Fix |
+|---|---|---|
+| `map_lobby_01i.bin` (x2, one per lobby load) | The optional indirect table of the lobby map. The exe loads `map_*i.bin` optionally ("Without an i.bin, no slot is set", 2026-10-19 entry); the data holds 17 of them, none for `map_lobby_01` or `map_city00_00`. The client fetched it and took the 404 as absence. | `MapViewer.load` reads it only when the scene listing has it (`readIfPresent`, `data/source.ts`). |
+| `map_lobby.xvm` (x2) | The texture archive of `map_lobby_01n.rel`. `textureArchiveCandidates` tried the name with `_01` stripped first (a lobby number, not a layout), which the data does not hold; `map_lobby_01.xvm` is the archive. | `load` takes the candidate the scene listing has (`firstPresent`). Checked over the 175 `map_*n.rel`: each has exactly one candidate present, so the choice is the same as the data's. |
+| `map_city00_00i.bin` | Optional indirect table, absent from the data (as above). | As `map_lobby_01i.bin`. |
+| `map_city00_00r.rel` | The minimap of Pioneer 2. The data holds no `map_*r.rel` for it (156 of the 175 floors have one); the client's rule is that Pioneer 2 and the Lab have none (`render/fieldhud.ts`). The 404 was taken as "no minimap". | `gameview` passes `readIfPresent` to the HUD; a null read is "no minimap" (the same result, no request). |
+
+The same rule covers the texture-animation file: 33 of the 175 maps have no `map_*.tam`, so every such map requested one and got a 404. `MapViewer.load` now reads the `.tam` only when it is listed.
+
+**Not a client fault:** a worktree has no `vendor/` (gitignored), so `/keys/default.nsk` and the `/newserv-text/` and `/newserv-maps/` files 404 there. For the run above `vendor/` was linked from the main checkout; the link was removed afterwards.
+
+**Open:** the run logged six 404s, not the eight the page was reported to log. The other two were not reproduced on this path (login, lobby, Pioneer 2). The title and login screens log none.
+
+**Checks:** `cd client && npx tsc --noEmit` (clean); the Playwright run above with 0 failed requests after the change; `tests/minimap.test.ts`, `tests/indirect.test.ts`, `tests/fieldhud.test.ts` (all pass).

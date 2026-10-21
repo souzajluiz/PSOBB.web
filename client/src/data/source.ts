@@ -99,6 +99,33 @@ export class HttpSource implements DataSource {
   }
 }
 
+// The file names of each directory, listed once per source. The game asks for
+// some files only when they exist (the maps' i.bin, r.rel and tam files, the
+// texture archive of a map), so checking the listing first avoids a request
+// that the server would answer with a 404.
+const listings = new WeakMap<DataSource, Map<string, Promise<ReadonlySet<string>>>>();
+
+export function directoryFiles(source: DataSource, dir: string): Promise<ReadonlySet<string>> {
+  let byDir = listings.get(source);
+  if (!byDir) listings.set(source, (byDir = new Map()));
+  let names = byDir.get(dir);
+  if (!names) byDir.set(dir, (names = source.list(dir).then((list) => new Set(list))));
+  return names;
+}
+
+// The first of `names` (file names in `dir`) that the directory holds, or null.
+export async function firstPresent(source: DataSource, dir: string, names: readonly string[]): Promise<string | null> {
+  const present = await directoryFiles(source, dir);
+  return names.find((name) => present.has(name)) ?? null;
+}
+
+// Reads `dir/name` when the directory holds it; null otherwise (no request).
+export async function readIfPresent(source: DataSource, path: string): Promise<Uint8Array | null> {
+  const cut = path.lastIndexOf('/');
+  const present = await directoryFiles(source, cut < 0 ? '' : path.slice(0, cut));
+  return present.has(path.slice(cut + 1)) ? source.read(path) : null;
+}
+
 export async function pickDataFolder(): Promise<DataSource> {
   const picker = (window as unknown as { showDirectoryPicker?: (o?: object) => Promise<FileSystemDirectoryHandle> })
     .showDirectoryPicker;

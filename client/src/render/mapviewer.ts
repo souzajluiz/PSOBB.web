@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { DataSource } from '../data/source.ts';
+import { firstPresent, readIfPresent, type DataSource } from '../data/source.ts';
 import { parseMapNRel, type MapGeometry } from '../formats/nrel.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { buildObjectTree, buildObjectTreeWithNodes, MaterialCache } from './njmesh.ts';
@@ -48,7 +48,7 @@ export function textureArchiveFor(nrel: string): string {
 
 // Layout maps share one archive ("map_city00_00n.rel" -> "map_city00.xvm"), but
 // some names end in a number that is not a layout ("map_lobby_01n.rel" ->
-// "map_lobby_01.xvm"), so try both.
+// "map_lobby_01.xvm"), so both are candidates (load() takes the one present).
 export function textureArchiveCandidates(nrel: string): string[] {
   const stripped = nrel.replace(/(_\d\d)?n\.rel$/, '.xvm');
   const plain = nrel.replace(/n\.rel$/, '.xvm');
@@ -245,25 +245,22 @@ export class MapViewer {
     // id (formats/indirect.ts); without the file none of them is.
     let indirect: IndirectTable | null = null;
     try {
-      indirect = parseIndirectBin(await source.read(`scene/${indirectFileFor(nrelName)}`));
+      const bin = await readIfPresent(source, `scene/${indirectFileFor(nrelName)}`);
+      indirect = bin ? parseIndirectBin(bin) : null;
     } catch {
       indirect = null;
     }
     applyIndirectTable(geometry, indirect);
-    let xvm: Uint8Array | null = null;
-    for (const name of textureArchiveCandidates(nrelName)) {
-      try {
-        xvm = await source.read(`scene/${name}`);
-        break;
-      } catch {
-        xvm = null;
-      }
-    }
+    // The archive's name is one of the candidates; only the one the data holds
+    // is read (the other is a 404 on every map that has it).
+    const xvmName = await firstPresent(source, 'scene', textureArchiveCandidates(nrelName));
+    const xvm: Uint8Array | null = xvmName ? await source.read(`scene/${xvmName}`) : null;
     let tam: TamFile | null = null;
     try {
-      tam = parseTam(await source.read(`scene/${tamFileFor(nrelName)}`));
+      const data = await readIfPresent(source, `scene/${tamFileFor(nrelName)}`);
+      tam = data ? parseTam(data) : null; // most maps have no texture animation file
     } catch {
-      tam = null; // most maps have no texture animation file
+      tam = null;
     }
     this.show(geometry, xvm, tam);
     const area = areaForMap(nrelName);
