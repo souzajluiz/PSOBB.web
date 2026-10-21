@@ -1,5 +1,67 @@
 # Devlog
 
+## 2026-10-21: Battle Mode traps (module, not wired)
+
+**What changed:** `client/src/quest/battletraps.ts` (pure): the 6x83 / 6x80
+parsers, the trap effect table, `TrapCounters`, `TrapField` (place, arm,
+fuse, blast, chain hit, 6x80 calls), the hit report, the kill rule, the trap
+vision rule and `pickRespawn`. `battle.ts` `build6x83` / `build6x80` now
+write the 8-byte subcommand (they were 4 bytes and had no client id; nothing
+called them). `tests/battletraps.test.ts` covers the layouts, counters,
+placement, the state machine, chaining and the respawn pick.
+
+**Why:** Battle Mode PvP traps were unfinished WIP (commit e7e1820). Checked
+against the exe and newserv before it was tested.
+
+**Verified (exe, objdump of `.text` in PsoBB.exe; newserv read-only):**
+- 6x83 is the 8-byte subcommand `[0] 0x83, [1] 2, [2..3] client id, [4..5]
+  type, [6..7] count`. The sender (0x00695930) writes 0x83 and 2 at the head;
+  the validator 0x006a9ea4 checks type 0..3 and count >= 0; safe_create
+  (0x0062f830) refuses on the boss-map global (0x009f9860 == 1), a missing
+  owner, the owner's floor word (0xffff / 0x1000) and a floor mismatch
+  (0x00aafca0); the owner's counter is decremented after a successful create.
+- 6x80: trap number at +4, what at +6 (0x0062f2d4).
+- Trap types: newserv's `ba_set_trap_count` remap (quest arg 0 damage, 1
+  slow, 2 confuse, 3 freeze -> internal 0, 2, 3, 1). The constructor's effect
+  groups: type 0 -> group 1, type 2 -> 0x11 (slow), type 3 -> 0x12 (confusion).
+- Chain hit: a state 0 trap is stunned and its fuse is capped at 0xf
+  (0x0062f269..0x0062f274); a state 3 trap goes to state 4 and sends 6x80
+  what 2 (0x0062f280..0x0062f28c).
+- Respawn: the candidate walk stops after 5 entries (loop bound 4); the
+  index is round(count * (raw / 32768) * 0.99) with the constants 32768.0 at
+  0x0093c694 and 0.99 at 0x0093c690 (read with tools/exedata.py).
+- Trap VA layout: the constructor does not store the arm/fuse values or the
+  radii as immediates in the code it covers.
+
+**Corrected from the WIP:**
+- The 6x83 body is the whole 8-byte subcommand (the WIP said "after the 4-byte
+  header").
+- Removed the "count above 0x14 is refused" rule: the exe's validator only
+  refuses a negative count.
+- The respawn threshold at 0x0093c68c is 2500.0 (50 squared), not 0 as the
+  WIP said. Its branch sense did not decode cleanly (no `sahf` after
+  `fnstsw`), so the distance filter stays with the caller (UNCLEAR).
+- `pickRespawn` takes the raw 15-bit random value, as the exe does.
+
+**ASSUMED (not re-checked; from the earlier trace):** arm delay 0x96 and
+fuse 0x1e frames (not found as immediates in the trap code), trigger and
+blast radius 50 (80 in Ultimate), the damage formula and EFR 0, the 0x14
+count clamp, the state 0 / 3 / 4 timing and the trap number formula,
+trap vision draw rules, the announcement text, the kill-score team rule,
+the palette-side guards, and the death particle 0x47.
+
+**UNCLEAR:** the battle damage value (700.0 is newserv's documented base
+times area and level factors; the battle's value is not confirmed), the
+respawn filter's branch sense, and the 0xffff / 0x1000 floor meaning.
+
+**Not wired:** no clean seam in `quest/battle.ts` or `net/game.ts` that
+does not touch `render/combat.ts`, so the module is tested but not called.
+Sonar and the 6x8F PvP hit path are still open (TODO.md).
+
+**Checks:** `node tests/battletraps.test.ts` ALL PASS; `node tests/battle.test.ts`
+ALL PASS; `node tests/combat.test.ts` 5946 checks, 0 failures;
+`cd client && npx tsc --noEmit` clean. Not run in Chrome.
+
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB

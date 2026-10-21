@@ -570,18 +570,29 @@ export function build6xD0(levels: number): Uint8Array {
 }
 export const build6x9B = (levels: number): Uint8Array => build6xD0(levels);
 
-export function build6x83(trapType: number, remaining: number): Uint8Array {
-  const b = new Uint8Array(4);
+// 6x83 place-trap subcommand (VERIFIED in PsoBB.exe handle_packet0x60_subcommand0x83):
+// [0] 0x83, [1] 2 (size in words), [2..3] client id, [4..5] trap type, [6..7] count
+// (the owner's count before the decrement).
+export function build6x83(clientId: number, trapType: number, count: number): Uint8Array {
+  const b = new Uint8Array(8);
   const dv = new DataView(b.buffer);
-  dv.setUint16(0, trapType, true);
-  dv.setUint16(2, remaining, true);
+  dv.setUint8(0, 0x83);
+  dv.setUint8(1, 2);
+  dv.setUint16(2, clientId, true);
+  dv.setInt16(4, trapType, true);
+  dv.setInt16(6, count, true);
   return b;
 }
-export function build6x80(trapNumber: number, what: number): Uint8Array {
-  const b = new Uint8Array(4);
+// 6x80 trap call: [0] 0x80, [1] 2, [2..3] client id (ASSUMED: the sender's id, not traced),
+// [4..5] trap number, [6..7] what (VERIFIED offsets in handle_packet0x60_subcommand0x80).
+export function build6x80(clientId: number, trapNumber: number, what: number): Uint8Array {
+  const b = new Uint8Array(8);
   const dv = new DataView(b.buffer);
-  dv.setUint16(0, trapNumber, true);
-  dv.setUint16(2, what, true);
+  dv.setUint8(0, 0x80);
+  dv.setUint8(1, 2);
+  dv.setUint16(2, clientId, true);
+  dv.setUint16(4, trapNumber, true);
+  dv.setUint16(6, what, true);
   return b;
 }
 // The trap number (send_packet0x60_subcommand0x80): client * 0x50 + type * 0x14 + remaining.

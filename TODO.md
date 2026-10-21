@@ -57,7 +57,7 @@ only part of them has matching C (psobb-client-source).
 ## G. Quests and modes
 - [ ] NPC players' follow / attack AI (6x69 1-3)
 - [ ] Text colour palette; random-enemy `.dat` sections (types 4 / 5), `evt2`
-- [ ] Battle: PvP hits (6x8F), traps and sonar, respawn teleport, win particles, `ba_initial_floor`
+- [ ] Battle: PvP hits (6x8F), traps and sonar, respawn teleport, win particles, `ba_initial_floor` (traps and the respawn pick are a tested module in `quest/battletraps.ts`, not wired; sonar and the PvP hit path are not started)
 - [ ] Challenge: grave model and text, stage-select counter, records window, S-rank name entry and prize, material x5 / Scape Doll / dead-player rules, in-stage sounds, ghost flow
 - [ ] Download quests (A6 / A7)
 
