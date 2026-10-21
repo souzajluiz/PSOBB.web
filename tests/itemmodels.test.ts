@@ -300,16 +300,15 @@ if (!existsSync(ITEM_MODEL_AFS) || !existsSync(ITEM_TEXTURE_AFS)) {
       if (!w || w.type >= models.entries.length) return;
       const h = decodeHeldWeapon(models.get(w.type), textures.get(w.skin));
       weapons++;
-      // Every NJTL name needs its XVM texture (the XVM's order is the NJTL's).
-      const missing = Math.max(0, (nameCount.get(w.type) ?? 0) - h.textures.length);
-      weaponTextures += h.textures.length;
-      if (missing || h.textures.some((t) => !t)) weaponBad++;
+      // The XVM's order is the NJTL's; a name past the XVM's count is unbound.
+      weaponTextures += h.textures.filter((t) => t).length;
+      if (h.unbound.length) weaponBad++;
     }),
   );
   // The 14 weapons with fewer XVM textures than NJTL names (the Tekker and fan
   // weapons: wxtZ01_z_t_tume, mxt3_fan02_*, ...) leave those texture ids
-  // unbound (UNCLEAR, DEVLOG); the others have every texture.
-  check(weapons > 800 && weaponBad === 14, `held weapons: ${weapons} ItemPMT weapons decode, ${weaponBad} with fewer XVM textures than names (expected 14)`);
+  // unbound: the exe binds no texture there (tests/heldweapontex.test.ts).
+  check(weapons > 800 && weaponBad === 14, `held weapons: ${weapons} ItemPMT weapons decode, ${weaponBad} with unbound texture ids (expected 14)`);
   console.log(`held weapons: ${weapons} ItemPMT weapons, ${weaponTextures} textures`);
 
   // A player with a held weapon: the weapon's root bone hangs from body node 48.

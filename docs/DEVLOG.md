@@ -7548,3 +7548,28 @@ sorting).
 **Open:** `particleShade` (type 0) reads its colour slopes at +0x6c..+0x74, while the exe's colour branch above reads +0x50 / +0x38 / +0x3c. Not changed here (it may be a different flag branch); whoever owns `classic/particles.ts` should check it.
 
 **Checks:** `node tests/textcodes.test.ts` (all checks passed); `node tests/telepipe.test.ts` (all checks passed, with the 0xB0 ring case); `node tests/chatline.test.ts` (all checks passed); `dragon`, `playerfx`, `techlightning`, `questboard`, `questmisc` (all pass); `tests/combat.test.ts` (5946 checks, 0 failures, with the vendor link removed afterwards); `cd client && npx tsc --noEmit` (clean). Not run: `client/e2e/field-chat.spec.ts` (Vite e2e).
+
+## 2026-10-21: held weapons: the 14 Tekker / fan models have no texture for their extra ids
+
+**Report:** 14 held weapon slots (ItemPMT weapons, 12 distinct model/skin pairs) use texture ids past their XVM's texture count: the NJTL names outnumber the XVM textures (XVMH count 1, one XVRT; 2 to 4 names). The 2026-10-21 "held weapon in the field" entry left this UNCLEAR. From PsoBB.exe it is decided: the exe binds **no texture** to those ids. The port already gave them no texture (`MaterialCache` with a null lookup), so this change makes the rule explicit and tested; it does not change what is drawn. Whether the 14 still look wrong for another reason was not checked by eye.
+
+**From PsoBB.exe** (virtual addresses; the dump is `refsrc/.../Psobb.exe-05112026.c`, names partly wrong):
+- Item files: `LoadItemAsset_005d7868` gives `ItemModel.afs[ItemPMT.model]` and `ItemTexture.afs[ItemPMT.skin]` plus the group bases `DAT_0092c53c[group]` / `DAT_0092c534[group]`. The bytes are `0x0092c534`: 0, 378, 295, 0 and `0x0092c53c`: 0, 354, 271, 0. Weapons use group 0, base 0 (ASSUMED: weapons are group 0, as the PMT's weapon table is index 0).
+- The model's NJTL is filled by `unknown_ItemLoad` (dump line 428992): every slot is set to `&g_pDefaultTexture`. Disassembly: `5d7546: c7 04 02 dc d9 a8 00  mov dword ptr [edx + eax], 0xa8d9dc`, so `g_pDefaultTexture` = **0x00a8d9dc**.
+- The texture loader (`ItemAssetLoaderStartTextureLoad_005d76b4` -> `InitializeItemAssetTextures_005d738c` -> `unknown_create_textures_from_xvm`, dump line 843973) first writes the XVM's count (XVMH `format1`, the u32 at +8) over the NJTL count word, then binds XVRT k to NJTL slot k and returns when k reaches that count. A slot past the XVM's count keeps `&g_pDefaultTexture`.
+- `0x00a8d9dc` is not in an initialised section (`tools/exedata.py read 00a8d9dc` says so): it is BSS, zero at start. Its container fields (`xvr_texture_object_container`: id +0, palette +4, texture_object +8, format1 +0x10) are therefore 0: no GBIX, no texture object. The exact-address xrefs to the object and its fields (`0x00a8d9e0`..`0x00a8d9f4`) are none; only `0x005d7549` refers to it.
+- `select_nj_texture` (dump line 855234) takes `current_njtl_textures[tex_id]` with no bound check, so the zeroed object is what the poly binds: a NULL texture on stage 0 (`set_nth_texture` skips the call only when the current id is 0 too). The weapon's list is its own: `UpdateWeaponModelTransformations_005c3568` / the `texture_maybe` slot (`ppvVar2[4]` = the NJTL at item +0x3c) feeds `unknown_try_set_texture`.
+
+**Port (`client/src/render/heldweapon.ts`):** `decodeHeldWeapon` lists one texture per NJTL name: the XVM texture of that index, or `null`, and `unbound` lists the ids past the XVM's count. Same lookup as before (`w.textures[id] ?? null`). The 14 are the entries where `names > XVM count`; no other weapon has an unbound id (880 weapons checked).
+
+**Tests:** `tests/heldweapontex.test.ts` (new, `npx tsx tests/heldweapontex.test.ts`): the 14 slots; each texture id a poly uses is inside its names; ids below the XVM count resolve to a texture, the rest are unbound (null), 15 poly uses are past the XVM count. `tests/itemmodels.test.ts` held-weapon check now counts unbound slots (14).
+
+**ASSUMED:** the zeroed object is never written (no exact xref; a write through a base register would not show); weapons are group 0; `unknown_create_textures_from_xvm` returns at the XVM's count as the dump reads it (its call address was not traced).
+
+**UNCLEAR:** how the untextured polys look next to the rest of the weapon (the exe's stage state for the NULL texture: colour op and the lighting setters are not compared here); the -1 ids (no texture setter, 189 of them) keep the exe's previously selected texture, which the port still does not do (the earlier entry's ASSUMED).
+
+**Checks:**
+- `npx tsx tests/heldweapontex.test.ts`: ALL PASS (90 checks).
+- `ITEMPMT=~/Downloads/psobb-master/ItemPMT.prs npx tsx tests/itemmodels.test.ts`: the held weapon checks pass (370/370, 880 weapons, 14 unbound). 11 floor-box checks (`FAIL model 2..12 ixm_box*: 0 triangles`) fail in this checkout; they use `EnemyArchive` / `item.bml` from `data.gsl`, which this change does not touch; not investigated. Without `ITEMPMT` the test needs `vendor/newserv`, which is absent in this worktree.
+- `tests/formats.test.ts` does not run under `tsx` (top-level await in a CJS transform); not changed.
+- `cd client && npx tsc --noEmit -p .`: clean.
