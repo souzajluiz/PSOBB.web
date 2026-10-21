@@ -116,7 +116,7 @@ import {
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
-import { slowApplies } from './playermove.ts';
+import { inUnsafeMap, slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
 import {
   canUseSpecialAttack,
@@ -4575,9 +4575,11 @@ export class CombatView {
   private press(type: AttackType): void {
     const me = this.game.self;
     if (!me || !this.view || this.cast) return;
-    // is_player_allowed_to_attack: no attack while paralyzed or shocked
-    // (character flags & 0x20006).
-    if (!this.status.canAttack) return;
+    // is_player_allowed_to_attack (0x00699510): no attack while paralyzed or
+    // shocked (character flags & 0x20006), and none in a hub: its last test is
+    // is_player_in_unsafe_map (0x0068a3fc), so the hubs refuse every attack
+    // (the palette press is dropped, nothing is sent).
+    if (!this.status.canAttack || !inUnsafeMap(this.area)) return;
     // CheckPlayerAttackPermission_006994d4: the special attack needs a weapon
     // with a special.
     if (type === 2 && !canUseSpecialAttack(this.equippedWeapon()?.data1 ?? null)) {
@@ -5234,12 +5236,14 @@ export class CombatView {
 
   // CanPlayerCastTechnique_0069a0c4 + SendCastTechPacket_0069a2f0: starts a
   // cast from the palette or the Technique menu; false when it cannot be cast.
+  // The hubs refuse a cast too (0x0069a128: is_player_in_unsafe_map).
   castTechnique(tech: number): boolean {
     const me = this.game.self;
     const view = this.view;
     const name = TECH_NAMES[tech] ?? `technique ${tech}`;
     if (!me || !view || tech < 0 || tech > 18) return false;
     if (this.cast || this.attack?.active || this.damage.busy || this.damage.dead || this.status.immobile) return false;
+    if (!inUnsafeMap(this.area)) return false;
     const level = this.techLevel(tech);
     if (level === null) {
       this.opts.log(`${name}: not learned`);

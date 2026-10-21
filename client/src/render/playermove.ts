@@ -40,13 +40,27 @@ export function legSpeed(base: number, slowed: boolean, guard: boolean): number 
   return slowed ? base * SLOWED_MULT : guard ? base * GUARD_MULT : base;
 }
 
-// The slow (player+0x30 bit 8) counts outside the hubs only: 0x00690344 tests
-// the map id at player+0x3ec against the table 0x0097f1c8 (0, 15, 18, 45:
-// Pioneer 2 Ep1, the lobby, Pioneer 2 Ep2 and Ep4). The port's `area` is that
-// map id (render/gameview.ts AREA_NAMES: 0x00 Pioneer 2, 0x12 Lab, 0x2d Pioneer 2).
-export const SLOW_EXEMPT_AREAS: readonly number[] = [0, 15, 18, 45];
+// The hub table 0x0097f1c8 (0, 15, 18, 45, -1 end): read by 0x00807d8c, which
+// returns 1 when the map id is NOT in it. The port's `area` is that map id
+// (render/gameview.ts AREA_NAMES: 0x00 Pioneer 2, 0x12 Lab, 0x2d Pioneer 2;
+// net/game.ts floorToArea gives floor 0 of Ep2 = 0x12, of Ep4 = 0x2d).
+export const HUB_AREAS: readonly number[] = [0, 15, 18, 45];
+
+// is_player_in_unsafe_map (0x0068a3fc: the map id at player+0x3ec is outside the
+// hub table). Three exe callers use it, so the port shares this one helper:
+//   - the slow (player+0x30 bit 8) counts only here (0x00690344);
+//   - attacks: is_player_allowed_to_attack (0x00699510, last test at 0x0069955f)
+//     behind CheckPlayerAttackPermission (0x006994d4);
+//   - techniques: CanPlayerCastTechnique (0x0069a0c4, call at 0x0069a128, only
+//     when the technique's level test 0x006ad158 is 0).
+// render/combat.ts press() and castTechnique() refuse outside it.
+export function inUnsafeMap(area: number): boolean {
+  return !HUB_AREAS.includes(area);
+}
+
+// The slow counts outside the hubs only (0x00690344 -> 0x0068a3fc).
 export function slowApplies(area: number): boolean {
-  return !SLOW_EXEMPT_AREAS.includes(area);
+  return inUnsafeMap(area);
 }
 
 // The guard stance's classes (0x0052ac5c): a hunter (player+0x964 & 0xe0 == 0x20:

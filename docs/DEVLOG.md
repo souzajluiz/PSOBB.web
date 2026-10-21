@@ -7059,3 +7059,29 @@ Not run in Chrome.
 **Checks.** `node tests/chatline.test.ts`: chatline: all checks passed (new: send on Enter, blank and Escape send nothing, log lines, balloons for a known speaker and none for an unknown one). `node tests/fieldhud.test.ts`, `minimap.test.ts`, `questboard.test.ts`, `telepipe.test.ts`, `teammenu.test.ts`: all pass (the modules they import changed). Client `tsc --noEmit`: clean (Node 24). Playwright (`PW_BASE_URL=http://127.0.0.1:5176`, a worktree Vite): `e2e/field-chat.spec.ts` (new): creates a party, enters the game; the 3D canvas is the hit at the stage's centre and the stage has no pointer events; a press moves the focus to the stage; Space opens the line, Escape sends nothing; a typed line goes out once through `game.sendChat`, and newserv's echo comes back as a log line and a balloon on the player: 1 passed (2.2 min). `e2e/party-create.spec.ts` and `e2e/party-join.spec.ts`: 2 passed (2.5 min), the lobby's chat code and the stage's pointer routing are on their path.
 
 Not run in Chrome by hand.
+
+## 2026-10-21: no attacks or techniques in the hubs
+
+**Left open** (the "player slow / guard speed" entry above): the port let a party member attack and cast in Pioneer 2, where the exe refuses both.
+
+**Exe (read this session).**
+- `0x0068a3fc` is `is_player_in_unsafe_map`: `pushl 0x3ec(%ecx)` (the map id at player+0x3ec), then `call 0x00807d8c`. `0x00807d8c` scans the table `0x0097f1c8` (0, 15, 18, 45, then -1 at 0x0097f1d8; read with `tools/exedata.py read`) and returns 1 when the id is NOT in it. So 0x0068a3fc is nonzero outside the hubs.
+- Attacks: `CheckPlayerAttackPermission` at `0x006994d4` (the special, type 2, also needs a weapon special) calls `is_player_allowed_to_attack` at `0x00699510`. Its tests: character flags & 0x20006 and 0x2000000, unknown_flags_2 bit 0x2 (`0x33c`), movement state & 0x548000 (`0x328`), the menu / Sinowberill challenge check when state `0x32c` is 1 (0x00689410, 0x0068aabc), and last the unsafe-map test: `call 0x0068a3fc` at `0x0069955f`, `je` to return 0. The palette press (the palette loop, `s1 == 2`) falls through when it returns 0: no attack, no packet.
+- Techniques: `CanPlayerCastTechnique` at `0x0069a0c4`: flags as above, the technique level test `0x006ad158` (`IsTechniqueLevelUnlimited`), then `call 0x0068a3fc` at `0x0069a128` (only when that test is 0), then the TP cost. The palette path (`s1 == 3`) goes through `CheckPlayerTechCastEligibility_0069a088` into it. Outside the hubs and with TP, the cast is allowed.
+- The slow uses the same test: `0x00690344` calls `0x0068a3fc` at `0x00690349` (see the playermove.ts entry above).
+
+**Port.** `render/playermove.ts`: the table is now `HUB_AREAS` (was `SLOW_EXEMPT_AREAS`, same values), and `inUnsafeMap(area)` is the one helper (the exe's is_player_in_unsafe_map); `slowApplies(area)` returns it. `render/combat.ts`: `press()` returns before the attack when `!inUnsafeMap(this.area)` (the palette press is dropped, nothing is sent); `castTechnique()` returns false in the same case. Both are reached from the palette (`frame`) and the Technique menu (`gameview.ts` `cast`), so the Online tab and the classic page share the gate.
+
+**What is blocked in a hub.** Normal, heavy and special attacks (palette slots group 2), techniques (palette slot group 3 and the Technique menu). Nothing is sent, and no log line is written. Not changed: the photon blast (`firePhotonBlast`) keeps its own `area === 0` test; the exe's photon-blast gate was not read. An attack already running when the player enters a hub is not cut (`AttackState.tick` still chains combo steps); the exe's combo continuation was not traced.
+
+**ASSUMED.**
+- The hub labels in the playermove.ts comment were "Pioneer 2 Ep2" for 18. `AREA_NAMES` (render/gameview.ts) gives 0x12 = Lab and `floorToArea` (net/game.ts) gives floor 0 of Ep2 = 0x12 and of Ep4 = 0x2d; the table is what the exe reads, so the ids are right and the names are taken from `floorToArea`.
+- The lobby (15) never reaches `combat.enterFloor`, so `this.area` there is the last field's area (0 at start). It is a hub either way, so the lobby gets no attack. Not checked in the field.
+- `is_player_allowed_to_attack` has no own address in the Ghidra dump; `0x00699510` is taken from the disassembly (the function body starts there after `CheckPlayerAttackPermission`).
+- The 0xff clause of `CanPlayerCastTechnique` (`IsTechniqueLevelUnlimited`: effective level 0xff from the cooldown, `0x006ad17c`) is not modelled: the port has no cooldown. The guard `this.cast` / cooldown semantics were not checked.
+
+**UNCLEAR.** The state 0x32c == 1 branch of `CheckPlayerTechCastEligibility` (what state 1 is) and the menu / challenge tests inside `is_player_allowed_to_attack` (0x00689410, 0x0068aabc): the port has no equivalent, so they are not ported.
+
+**Checks.** `node tests/playermove.test.ts`: playermove: ok (new: `inUnsafeMap` false for 0, 15, 18, 45 and true for the field ids). `node tests/combat.test.ts` (vendor linked): 5946 checks, 0 failures. Client `npx tsc --noEmit` (Node 24): clean. The gate in `press()` / `castTechnique()` is not unit-tested (the view class has no test seam); the table is.
+
+Not run in Chrome.

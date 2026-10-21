@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, slowApplies, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
+import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -67,6 +67,10 @@ assert.ok(n >= 30 && n <= 34, 'walk 30 units: ' + n);
 // the slow counts outside the hubs (map ids 0, 15, 18, 45 are exempt, 0x00690344)
 for (const area of [0, 15, 18, 45]) assert.equal(slowApplies(area), false, 'hub ' + area);
 for (const area of [1, 0x0d, 0x12 + 1, 0x2c, 0x2d + 1]) assert.equal(slowApplies(area), true, 'field ' + area);
+// the attack and technique gate is the same table (is_player_in_unsafe_map 0x0068a3fc):
+// no attack or technique in a hub (0, 15, 18, 45), both allowed in a field map
+for (const area of [0, 15, 18, 45]) assert.equal(inUnsafeMap(area), false, 'hub gate ' + area);
+for (const area of [1, 0x0d, 0x12 + 1, 0x2c, 0x2d + 1]) assert.equal(inUnsafeMap(area), true, 'field gate ' + area);
 // the guard stance: hunters (classes 0, 1, 2, 9) enter within 50 (d^2 2500) and leave beyond 100 (10000);
 // Rangers and Forces enter within 100 (10000) and leave beyond 150 (22500)
 assert.deepEqual([...GUARD_HUNTER_CLASSES].sort((a, b) => a - b), [0, 1, 2, 9]);
