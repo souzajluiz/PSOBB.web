@@ -569,7 +569,16 @@ export type DragonEvent =
   // State 0x15's phase 5: EnemyOnKilledHandler_0051f894 (every client runs it).
   | { kind: 'killed'; x: number; z: number }
   // create_particle_effect at a world point (the brain's x / z, y above the ground).
-  | { kind: 'particle'; id: number; x: number; y: number; z: number };
+  | { kind: 'particle'; id: number; x: number; y: number; z: number }
+  // A looping emitter (create_particle_effect_handle 0x0050981c): it lives while
+  // `handle.alive`, and follows the mouth (the brain's mouth()) while it lives.
+  | { kind: 'emitter'; id: number; handle: DragonEmitter };
+
+// The handle 0x0050981c returns; the brain clears `alive` where the exe stops
+// the emitter (its flag word at +0x08, bit 0).
+export interface DragonEmitter {
+  alive: boolean;
+}
 
 export interface DragonOptions {
   x: number;
@@ -697,6 +706,10 @@ export class DragonAi extends BrainBase {
   // until the model has been drawn.
   private readonly feetNodes = new Map<number, [number, number, number]>();
   private mouthPlace: [number, number, number] | null = null;
+  // The flame's emitter handle (+0x8b4, flyShoot sub-state 2) and the counter of
+  // the emerge / dive helper (+0x6ac, 0x0041ebf0: zero at the spawn, 0x004197a1).
+  private mouthEmitter: DragonEmitter | null = null;
+  private riseCount = 0;
   private rain = 0; // the shared rain generator (seeded from the 6x12's x / z)
   private everLeader: boolean;
   private takeover = false; // (current_attack_info).horiz_dist: the leader changed
@@ -1885,8 +1898,13 @@ export class DragonAi extends BrainBase {
     this.animate();
     const sub = this.c86c;
     if (sub === 2) {
+      // 0x0042162e: the take-off helper (+0x04) at frame 14 or 53, before the mouth.
+      if (this.crossed(14) || this.crossed(53)) this.emitBody(this.pids().f04);
+      this.tickMouth();
       if (this.crossed(47)) {
         this.volley();
+        // ASSUMED: the flame ends with the volley (the exe has no stop after sub-state 2).
+        this.stopMouth();
         this.c86c = 3;
         this.c874 = 0;
         this.flags &= ~0xc00;
@@ -1907,6 +1925,8 @@ export class DragonAi extends BrainBase {
       this.sign664 = turnTo(this.yaw, this.i87c) >= 0 ? 1 : -1;
       this.turnSetup(this.i87c);
     }
+    // 0x0042197a: the take-off helper (0x0041c768, gated on frame 14) while it turns.
+    if (sub === 1 && this.crossed(14)) this.emitBody(this.pids().f04);
     if (this.turnStep()) {
       this.yaw = this.i87c;
       this.setSlot(18);
@@ -2041,6 +2061,46 @@ export class DragonAi extends BrainBase {
     this.emit({ kind: 'particle', id, x: this.x, y: this.alt, z: this.z });
   }
 
+  // The particle ids of this difficulty (DRAGON_PARTICLE_IDS).
+  private pids(): { readonly f00: number; readonly f04: number; readonly body: number; readonly stomp: number; readonly mouth: number; readonly launch: number } {
+    return this.ultimate ? DRAGON_PARTICLE_IDS.ultimate : DRAGON_PARTICLE_IDS.normal;
+  }
+
+  // The flame's emitter in flyShoot's sub-state 2 (0x00421636..0x00421674): with
+  // no handle and motion frame >= 20 it is made (0x00421b2c: id +0x18, the mouth
+  // point, flag 0x40); with a handle, above frame 40 it is stopped (its flag bit,
+  // the handle dropped: 0x00421667), else it follows the mouth (0x00508db8). So a
+  // handle stopped at 41 is made again at 42 (the exe has no other test).
+  private tickMouth(): void {
+    if (!this.mouthEmitter) {
+      if (this.mframe >= 20) {
+        const handle: DragonEmitter = { alive: true };
+        this.mouthEmitter = handle;
+        this.emit({ kind: 'emitter', id: this.pids().mouth, handle });
+      }
+    } else if (this.mframe > 40) {
+      this.stopMouth();
+    }
+  }
+
+  private stopMouth(): void {
+    if (this.mouthEmitter) this.mouthEmitter.alive = false;
+    this.mouthEmitter = null;
+  }
+
+  // 0x0041ebf0 (the emerge and the dive, 0x0041e9a9 / 0x0041fa7b): the point is the
+  // body's, raised by 0.05 per earlier call while the counter is under 12 (the
+  // counter +0x6ac goes up by one a call); the particle is table +0x00, flag 0x840.
+  // ASSUMED: the flag's 0x800 bit is not read (one-shot as the others).
+  private riseParticle(): void {
+    let y = this.alt;
+    if (this.riseCount < 12) {
+      y = Math.fround(y + Math.fround(this.riseCount * 0.05));
+      this.riseCount++;
+    }
+    this.emit({ kind: 'particle', id: this.pids().f00, x: this.x, y, z: this.z });
+  }
+
   // 0x004203cc phase 0: fall (animation 8), lie 450 ticks, get up. Only
   // CheckDragonAttackReady reaches it, and that never fires; kept simple.
   private tickCollapse(): void {
@@ -2048,6 +2108,12 @@ export class DragonAi extends BrainBase {
     if (this.c870 === 0) {
       if (this.crossed(7)) this.strike(this.x, this.z, DRAGON_GUESS.impactRadius, 4);
       if (this.crossed(14)) this.strike(this.x, this.z, DRAGON_GUESS.impactRadius * 1.5, 4);
+      // 0x004203cc phase 0 (SinowbeatAttackStateMachine): frame 7 applies the battle
+      // params and makes no dust; else frame 14 makes the outer ring, else frame 18 the inner.
+      if (!this.crossed(7)) {
+        if (this.crossed(14)) this.collapseRing(true);
+        else if (this.crossed(18)) this.collapseRing(false);
+      }
       if (this.slotIndex !== 8) this.c870 = 1;
     } else if (this.c870 === 1) {
       if (++this.c86c > 0x1c1) {
@@ -2231,6 +2297,8 @@ export class DragonAi extends BrainBase {
         this.air = 1;
         this.strike(this.x, this.z, DRAGON_GUESS.impactRadius, 0);
         this.emit({ kind: 'se', id: 0x323 });
+        // 0x0041e9a9: the emerge's particle (0x0041ebf0, table +0x00) at the body.
+        this.riseParticle();
       }
     } else if (sub === 2) {
       if (this.alt > 110) this.c86c = sub = 3;
@@ -2284,8 +2352,14 @@ export class DragonAi extends BrainBase {
   private tickDeath(): void {
     this.animate();
     if (this.c86c === 0) {
-      if (this.crossed(57)) this.deathRing(-35, 10, 12);
-      if (this.crossed(88)) this.deathRing(-60, -20, 100);
+      if (this.crossed(57)) {
+        this.deathRing(-35, 10, 12);
+        this.deathBurst(-35, 10);
+      }
+      if (this.crossed(88)) {
+        this.deathRing(-60, -20, 100);
+        this.deathBurst(-60, -20);
+      }
       if (this.crossed(97)) {
         // ASSUMED: the two and four node places of the closing hits.
         this.deathRing(-40, 30, 15);
@@ -2309,6 +2383,25 @@ export class DragonAi extends BrainBase {
     const c = cosB(this.yaw);
     const s = sinB(this.yaw);
     this.strike(this.x + ox * c + oz * s, this.z + oz * c - ox * s, radius, 4);
+  }
+
+  // The collapse's dust ring (0x00420a58 inner at frame 18, 0x00420c74 outer at 14):
+  // one stomp-table particle (+0x0c, flag 0x40) on the ground, its point the body
+  // moved 4 back and 75 (inner) or 100 back (outer) along the heading, both
+  // from the body's x / z (the exe's int_sin / int_cos of the yaw at +0x60).
+  private collapseRing(outer: boolean): void {
+    const c = cosB(this.yaw);
+    const s = sinB(this.yaw);
+    const d = outer ? -100 : 75;
+    this.emit({ kind: 'particle', id: this.pids().stomp, x: this.x - 4 * c + d * s, y: 0, z: this.z + 4 * s + d * c });
+  }
+
+  // The death's two body particles (0x0041df9a at frame 57, 0x0041e0b9 at 88): the
+  // body's table +0x08 at the same two points as its area hits (deathRing).
+  private deathBurst(ox: number, oz: number): void {
+    const c = cosB(this.yaw);
+    const s = sinB(this.yaw);
+    this.emit({ kind: 'particle', id: this.pids().body, x: this.x + ox * c + oz * s, y: this.alt, z: this.z + oz * c - ox * s });
   }
 
   // 0x0041a888 phase 0 (Ultimate): rise, spin and rain a fireball every 4 ticks

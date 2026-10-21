@@ -7724,3 +7724,43 @@ The web port: `TRAP_GATE_ADDRESS` / `TRAP_GATE_VALUE` (quest/battletraps.ts); `P
 **UNCLEAR:** whether a trap placed by the local client is shown to the others before the trigger (the exe's draw rule says no); the secondary model's colour and render flag; the in-game look (not run in Chrome, no two-client battle).
 
 **Checks:** `node --experimental-strip-types tests/battletraps.test.ts` ALL PASS (new: the gate refuses 0 and 2 and places with 1, nothing is decremented while shut, the trap model chunks, the draw state); `tests/battle.test.ts` exit 0; `tests/combat.test.ts` exit 0 (5946 checks, with a temporary `vendor` link, removed after); `cd client && npx tsc --noEmit` clean. A Node build of the four trap models from `bm_o_mine.bml` (chunks 4/1 and 5/0): 56 to 60 triangles each, no missing textures.
+
+## 2026-10-21: Dragon particles: the unresolved sites
+
+Follows "Dragon particles: more sites" (nine of the 21 create_particle_effect sites were in). This pass resolves the flame's mouth, the collapse's two, the death's two, the emerge helper and the flyShoot take-offs. The intro's six, the dive's call of the helper and four take-off callers are still open (see UNCLEAR).
+
+**Exe (PsoBB.exe, Ephinea 1.25.13).** The reference dump names the collapse rings (`SinowbeatSpawnInnerParticleRing_00420a58`, `SinowbeatSpawnOuterParticleRing_00420c74`), the collapse phase (`SinowbeatAttackStateMachine_004203cc`) and flyShoot (`HandleSinowbeatState7_00421494`). The death (0x0041db28), the emerge / dive and the intro are read from the disassembly. `0x0050b7a4` is create_particle_effect_3 (one shot: id second, flag third). `0x0050981c` makes a looping emitter and returns its handle; it copies the point, and `0x00508db8` moves it each frame. The handle's flag word at +0x08, bit 0, is the stop (0x00421667, 0x0041de6c). `0x0041c784` is the take-off particle (the table's +0x04 at the body's +0x38, flag 0x40), and `0x0041c768` is the same gated on `crossed(14)`. `0x0041ebf0` is the emerge / dive helper.
+
+**Sites resolved** (address -> id -> point -> state; the id is the table's field, normal / Ultimate):
+
+| site | id | point | state (gate) |
+|---|---|---|---|
+| 0x00421b2c, flame | +0x18: 546 / 523 (`dra_tame` / `194_kai`), looping emitter, flag 0x40 | the mouth (+0x414), followed each frame | flyShoot sub-state 2. Made at motion frame >= 20 (0x00421b01, 0x8fbc44 = 20.0) when there is no handle. While the frame is above 40 (0x8fbc48 = 40.0, `ja` at 0x00421655..0x00421667) the handle is stopped and dropped (+0x8b4 = 0) |
+| 0x00420b30, inner ring | +0x0c: 240 / 148 (the stomp) | (x - 4 cos + 75 sin, 0, z + 4 sin + 75 cos) | collapse phase 0 (0x004203cc), frame 18, when frames 7 and 14 did not cross |
+| 0x00420d4c, outer ring | +0x0c: 240 / 148 | (x - 4 cos - 100 sin, 0, z + 4 sin - 100 cos) | collapse phase 0, frame 14, when frame 7 did not cross |
+| 0x0041df9a, death | +0x08: 547 / 514 (the body) | deathRing(-35, 10): (x - 35 cos + 10 sin, alt, z + 10 cos + 35 sin) | death phase 0 (0x0041db28), frame 57 (0x42640000) |
+| 0x0041e0b9, death | +0x08 | deathRing(-60, -20): (x - 60 cos - 20 sin, alt, z - 20 cos + 60 sin) | death phase 0, frame 88 (0x42b00000) |
+| 0x0041ec5a, emerge helper | +0x00: 65 / 512, flag 0x840 | the body (+0x38), raised 0.05 per earlier call while the count is under 12 (0x0041ec0d..0x0041ec31) | emerge sub-state 1 -> 2 (0x0041e9a9, when alt > 0) |
+| 0x0042162e, take-off in flyShoot | +0x04: 76 / 513 | the body | flyShoot sub-state 2, frame 14 or 53 (0x0042160e, 0x0042161a) |
+| 0x0042197a, take-off in flyShoot | +0x04 | the body | flyShoot sub-state 1 (the turn), frame 14 (0x41c768) |
+
+The helper's counter (+0x6ac) is zero at the spawn (0x004197a1). The emerge and the dive are its only writers.
+
+**What changed.** `combat/dragon.ts`: `DragonEvent` gains `emitter` (a looping emitter, with a `DragonEmitter` handle whose `alive` the brain clears). `tickFlyShoot` makes the take-offs (sub-states 1 and 2) and calls `tickMouth` / `stopMouth` (the flame). `tickCollapse` makes the two rings through `collapseRing`. `tickDeath` makes the two body particles through `deathBurst` (the points of its area hits). `tickEmerge` makes the helper's particle through `riseParticle` (`riseCount` is the +0x6ac counter). `pids()` gives the difficulty's table. `render/combat.ts` (`dragonEvent`): an `emitter` event is spawned as a tracked emitter (`fx.spawn` with `track`: the emitter follows the mouth and lives while `handle.alive`), the De Rol Le beam's pattern. `tests/dragon.test.ts`: section 28 (the ring points at yaw 0 and their suppression when frame 7 crosses too, the death points, the emerge's first and second call and the Ultimate id, the take-offs in both sub-states, the flame's start at frame 20, its stop above 40 and its new handle at 42, the Ultimate mouth id).
+
+**ASSUMED.**
+- The flame ends with the volley (`stopMouth` at `crossed(47)`). The exe has no stop there: a handle made in the volley's frame would stay alive in sub-state 3. The create / stop alternation at frames 41..47 (a handle dropped at 41 is made again at 42) is kept as the exe reads it.
+- `fx.spawn` reads `alive` each frame. A handle made and dropped on consecutive frames gives a short emitter; not checked in game.
+- The helper's flag 0x840 is taken as one shot like 0x40. Its 0x800 bit selects the table in 0x0050981c; 0x0050b7a4 was not read for it.
+- The counter counts the emerge only. The dive's call is not modelled, so after a dive the 0.05 steps are one call short.
+- The body's y is `alt` for the death and the take-offs (as `emitBody`). The rings are at y 0 (as the stomp).
+
+**UNCLEAR.**
+- The intro's six (0x0041b5b3, 0x0041b98e, 0x0041b69a, 0x0041b7ea, 0x0041ba5f, 0x0041b6a7): their sub-states 0x874 / 0x86c are not in the port (unchanged).
+- The dive's call 0x0041fa7b: the gate is `[+0x5e4] - [+0x5e8] <= 0` and `[+0x8b0] == 0`, on an x87 stack whose second test reads an empty stack in one path. Not resolved here.
+- The take-off's other callers 0x0041c5b1, 0x0041cc87, 0x0041ff7a: their functions are not named in the dump and their states are not mapped. 0x004221b0 is not the same block as 0x0042197a: it sits in the flyShoot function (0x00421494..0x00422a08), in the block at 0x004221a0 (c86c == 0 path), whose case is not mapped.
+- The collapse's `strike` calls at frames 7 and 14 (the port's guesses, unchanged).
+
+**Decisive spot-check.** In the exe, 0x00421667: the flame's handle is stopped when the motion frame is above 40 (`ja` against 0x008fbc48 = 40.0), and `movl $0, 0x8b4(%edx)` drops it. If that constant or the branch is wrong, the flame's lifetime is wrong.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok (section 28 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/combat.test.ts` (vendor linked for the run, removed after): 5946 checks, 0 failures. Client `npx tsc --noEmit` (Node 24): clean. Not run in Chrome.

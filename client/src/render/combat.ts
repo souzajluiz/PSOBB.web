@@ -2105,6 +2105,18 @@ export class CombatView {
         // The brain's y is above the ground the body stands on (launchShot's base).
         this.particle({ id: ev.id }, new THREE.Vector3(ev.x, e.instance.root.position.y - e.lift + ev.y, ev.z));
         return;
+      case 'emitter': {
+        // The flame's emitter (0x0050981c, flyShoot's sub-state 2): it follows the
+        // mouth (the brain's mouth(), the same base as the points above) and lives
+        // while its handle is alive. ASSUMED: the handle's flag is read each frame
+        // (fx.spawn's alive), the exe's own stop.
+        const at = (): THREE.Vector3 => {
+          const m = ai.mouth();
+          return new THREE.Vector3(m[0], e.instance.root.position.y - e.lift + m[1], m[2]);
+        };
+        void this.fx?.spawn({ id: ev.id, duration: BEAM_EMISSION }, at, false, true, () => ev.handle.alive);
+        return;
+      }
     }
   }
 

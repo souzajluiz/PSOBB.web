@@ -852,6 +852,144 @@ for (const n of [1, 2, 5]) {
   );
 }
 
+// 28. The particle sites resolved from the exe (DEVLOG "Dragon particles: the
+//     unresolved sites"): the flame's emitter (flyShoot sub-state 2), the
+//     flyShoot take-offs (sub-states 1 and 2), the collapse's two dust rings,
+//     the death's two body particles and the emerge's helper particle.
+{
+  // The brain at the origin, facing yaw 0 (sin 0, cos 1): the points below are
+  // plain offsets from (x, z).
+  const at = (ultimate: boolean, s: number, setup: (a: DragonAi) => void = () => {}) => {
+    const ai = brain({ ultimate });
+    const p = ai as unknown as { setState(n: number): void };
+    p.setState(s);
+    Object.assign(ai, { x: 10, z: 20, yaw: 0, alt: 0 });
+    setup(ai);
+    return ai;
+  };
+  // One frame at motion frame f (the frame's animate adds the speed, 1).
+  const frame = (ai: DragonAi, f: number) => {
+    const p = ai as unknown as { frameState(): void; speed: number };
+    ai.mframe = f;
+    p.speed = 1;
+    ai.events.splice(0);
+    p.frameState();
+    return ai.events.splice(0);
+  };
+  const N = DRAGON_PARTICLE_IDS.normal;
+  const U = DRAGON_PARTICLE_IDS.ultimate;
+  const parts = (evs: DragonEvent[]) => evs.filter((e): e is Extract<DragonEvent, { kind: 'particle' }> => e.kind === 'particle');
+  const emitters = (evs: DragonEvent[]) => evs.filter((e): e is Extract<DragonEvent, { kind: 'emitter' }> => e.kind === 'emitter');
+  // flyShoot in sub-state `sub` with the motion the brain runs after the turn
+  // (slot 18, the flyshot motion: 80 frames, so the frames 14 .. 53 do not clamp).
+  const flyShot = (a: DragonAi, sub: number) => {
+    (a as unknown as { setSlot(n: number): void }).setSlot(18);
+    a.c86c = sub;
+  };
+
+  // The collapse (0x004203cc phase 0): frame 14 the outer ring, frame 18 the
+  // inner, both on the ground at the stomp id (+0x0c); frame 7 makes no dust.
+  for (const ultimate of [false, true]) {
+    const ids = ultimate ? U : N;
+    const outer = parts(frame(at(ultimate, S.collapse, (a) => (a.c870 = 0)), 13));
+    eq(outer.length, 1, `collapse frame 14 (${ultimate ? 'Ultimate' : 'normal'}): one particle`);
+    check(outer.every((e) => e.id === ids.stomp && e.x === 10 - 4 && e.y === 0 && e.z === 20 - 100), 'the outer ring is the stomp id at (x - 4, 0, z - 100) with yaw 0');
+    const inner = parts(frame(at(ultimate, S.collapse, (a) => (a.c870 = 0)), 17));
+    eq(inner.length, 1, `collapse frame 18 (${ultimate ? 'Ultimate' : 'normal'}): one particle`);
+    check(inner.every((e) => e.id === ids.stomp && e.x === 10 - 4 && e.y === 0 && e.z === 20 + 75), 'the inner ring is at (x - 4, 0, z + 75) with yaw 0');
+    // Frame 7 (the battle params) crosses in the same tick as 14 and 18: no dust at all.
+    const ai = at(ultimate, S.collapse, (a) => (a.c870 = 0));
+    const p = ai as unknown as { frameState(): void; speed: number };
+    ai.mframe = 6;
+    p.speed = 20;
+    ai.events.splice(0);
+    p.frameState();
+    eq(parts(ai.events.splice(0)).length, 0, `collapse crossing 7 and 14 and 18 in one tick: no ring (${ultimate ? 'Ultimate' : 'normal'})`);
+  }
+
+  // The death (0x0041db28, phase 0): frame 57 and frame 88 each make one body
+  // particle (+0x08) at the two area-hit points: (-35, 10) and (-60, -20).
+  for (const ultimate of [false, true]) {
+    const body = ultimate ? U.body : N.body;
+    const d1 = parts(frame(at(ultimate, S.death, (a) => (a.c86c = 0)), 56));
+    eq(d1.length, 1, `death frame 57 (${ultimate ? 'Ultimate' : 'normal'}): one particle`);
+    check(d1.every((e) => e.id === body && e.x === 10 - 35 && e.y === 0 && e.z === 20 + 10), 'the death particle at frame 57 is the body id at (x - 35, z + 10)');
+    const d2 = parts(frame(at(ultimate, S.death, (a) => (a.c86c = 0)), 87));
+    eq(d2.length, 1, `death frame 88 (${ultimate ? 'Ultimate' : 'normal'}): one particle`);
+    check(d2.every((e) => e.id === body && e.x === 10 - 60 && e.z === 20 - 20), 'the death particle at frame 88 is at (x - 60, z - 20)');
+  }
+
+  // The emerge (0x0041e966, sub 1 -> 2, the body above the ground): the helper's
+  // particle (table +0x00) at the body, raised 0.05 a call for the first 12 calls.
+  {
+    const ai = at(false, S.emerge, (a) => {
+      a.c86c = 1;
+      a.alt = 5;
+    });
+    const first = parts(frame(ai, 0));
+    eq(first.length, 1, 'emerge: the sub 1 -> 2 step makes one particle');
+    check(first.every((e) => e.id === N.f00 && e.x === 10 && e.y === 5 && e.z === 20), 'the emerge particle is id 65 at the body');
+    const again = at(false, S.emerge, (a) => {
+      a.c86c = 1;
+      a.alt = 5;
+      a.riseCount = 1;
+    });
+    const second = parts(frame(again, 0));
+    check(second.length === 1 && near(second[0].y, 5.05), 'the second helper call raises the point 0.05');
+    const u = at(true, S.emerge, (a) => {
+      a.c86c = 1;
+      a.alt = 5;
+    });
+    const ue = parts(frame(u, 0));
+    check(ue.length === 1 && ue[0].id === U.f00, 'the Ultimate emerge particle is id 512');
+  }
+
+  // flyShoot's take-off (0x0042197a in sub-state 1, 0x0042162e in sub-state 2): frame 14
+  // makes the body's +0x04 particle; sub-state 2 also at frame 53.
+  for (const sub of [1, 2]) {
+    const t = parts(frame(at(false, S.flyShoot, (a) => flyShot(a, sub)), 13));
+    check(t.length >= 1 && t.some((e) => e.id === N.f04 && e.x === 10 && e.z === 20), `flyShoot sub ${sub} frame 14: the take-off id 76 at the body`);
+  }
+  {
+    const t = parts(frame(at(true, S.flyShoot, (a) => flyShot(a, 2)), 52));
+    check(t.some((e) => e.id === U.f04), 'flyShoot sub 2 frame 53: the take-off id 513 (Ultimate)');
+  }
+
+  // The flame's emitter (0x00421b2c, sub-state 2): made at frame 20 with the mouth
+  // id (+0x18), followed while the frame is at or under 40, stopped above 40 and
+  // made again at 42 (the exe has no other test).
+  {
+    const ai = at(false, S.flyShoot, (a) => flyShot(a, 2));
+    eq(emitters(frame(ai, 18)).length, 0, 'the flame has no emitter before frame 20');
+    const made = emitters(frame(ai, 19));
+    eq(made.length, 1, 'the flame is made at frame 20');
+    check(made.length === 1 && made[0].id === N.mouth, 'the flame emitter is id 546 (the table +0x18, normal)');
+    const handle = made[0]?.handle;
+    eq(handle?.alive, true, 'the emitter is alive');
+    eq(emitters(frame(ai, 29)).length, 0, 'no second emitter while the handle lives');
+    eq(handle?.alive, true, 'the emitter still lives at frame 31');
+    // A frame's tick adds 1: frame(ai, 40) runs the motion at 41 (above 40, stopped).
+    emitters(frame(ai, 40));
+    eq(handle?.alive, false, 'the emitter stops above frame 40');
+    const again = emitters(frame(ai, 41)); // frame 42: no handle, so it is made again
+    eq(again.length, 1, 'the exe makes the flame again the frame after it stops');
+  }
+  {
+    const ai = at(true, S.flyShoot, (a) => flyShot(a, 2));
+    const made = emitters(frame(ai, 19));
+    check(made.length === 1 && made[0].id === U.mouth, 'the Ultimate flame is id 523');
+  }
+
+  // The flame's emitter ends with the volley (ASSUMED): a volley at frame 48 stops it.
+  {
+    const ai = at(false, S.flyShoot, (a) => flyShot(a, 2));
+    frame(ai, 19);
+    const handle = (ai as unknown as { mouthEmitter: { alive: boolean } | null }).mouthEmitter;
+    frame(ai, 46);
+    eq(handle?.alive, false, 'the volley stops the flame');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);
