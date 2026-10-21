@@ -6406,3 +6406,52 @@ So a Gee made by the factory cannot enter 6 or 10, whatever the set file says: t
 **ASSUMED:** (a) "Nothing the Gee runs writes enemy+0x3cc / 0x3d0" is checked over the functions the Gee calls and the whole `.text` store list by pattern, not by dataflow through the owner: the owner (`render/combat.ts`) and the packet code could in principle write the object's memory in another way, not checked; (b) a generic owner path that calls the Gee's setter with 6 or 10 is not visible from the Gee range (the owner calls the Gee through its vtable, as in the port); (c) the spawn's state 1 / 2 choice by 0x2000000 is taken from the port's reading (0x0055fa94), not from the set file. UNCLEAR: the exact states 6 / 10 frame details (the sub-state numbers 0..3 and the hover constants), which are not ported and so not tested.
 
 **Left:** the states 6 / 10 themselves (if a later pass finds a writer of enemy+0x3cc or a clear of 0x00100000 for a Gee, port them from 0x0055ebb8 / 0x0055d8d4 with these notes as the start). Not run in Chrome.
+
+## 2026-10-21: Saint-Milion lasers
+
+**Outcome: not ported (findings only, as the brief allows).** The lasers are two model-driven objects with a telegraph, a sweeping beam whose origin is read from a track of the boss, and a damage call through the shared attack dispatcher. Three of those links are not read well enough for a faithful port (listed under UNCLEAR). No code, test or constant changed. `docs/HANDOFF.md` item 4 still lists the lasers as events only.
+
+**Where they come from.** States 0x13 and 0x14 (`SM_STATE` laserA / laserB, rows 19 and 20 of `SM_STATES`) share one handler, 0x007697dc (the table at 0x009f6c60 + 19 * 40 and + 20 * 40, handler word at +4 = 7772124 = 0x007697dc, the same word for both rows). The handler sends phase 4 to 0x0076b85c and phase 0 to 0x00769808:
+```
+7697dc: mov eax, [esp+4] / cmp eax, 4 / jne 7697ea / call 0x76b85c      ; phase 4
+7697f0: cmp eax, 4 / je 769802 / test eax, eax / jne 769802 / call 0x769808 ; phase 0
+```
+The port's `case 19/20: events.push({name: 'laser'})` (saintmilionboss.ts, line ~630) is the phase-4 branch only.
+
+**Phase 4 (0x0076b85c): the telegraph.** It allocates 0x60 bytes (`push 0x60 / call 0x5caba4`) and builds a different class (vtable 0x00b43410, ctor 0x00765c68 on the base 0x00765a14). Its argument is the boss's `+0xe94` (`lea eax, [ecx+0xe94]`), or 0 when `0x768964(42)` fails (the id range check, 0 .. 0x2a). The role is `[boss+0x3cc]`. **UNCLEAR:** what the telegraph draws and whether it hurts; its vtable and update were not read.
+
+**Phase 0 (0x00769808): the beam, frames 27 and 28.**
+- Frame 27 (`call 0x7aaa30` with 0x41d80000 = 27.0; 0x7aaa30 is the "the model's clock crossed this frame" test, the port's `clock.crossed`): `0x768964(42)` passes, `[boss+0xec4..0xecc]` is copied into a local point, and the effect 0x6f9 is spawned there (`call 0x814298`, push 1, 0, &point).
+- Frame 28 (0x41e00000 = 28.0): if the clock crossed, the beam's type is chosen. Arena `[boss+0xf80]` 3 or 4: `0x7751b0 >= 0.5` gives type 3, else 2. Other arenas: `>= 0.5` gives 1, else 0 (0x9773c8 = 0.5). `0x7751b0` is a turn fraction in [0, 1) of the object at `boss+0x168` (0x763498, the upper 16 bits over 0x978234); when the state is 10 it uses 0x8587a5 / 0x978230 instead. **UNCLEAR:** what the 0x168 object is (it is probably the boss's facing in its own frame).
+- Then the origin (`call 0x579de0` with 0x41e80000 = 29.0, on `[0xa9b080 + 4 * [0x9f75c8 + 8 * [0xa9b078]]]`), the point is transformed by 0x82eab8 and the beam object is built: alloc 0x60, `push type / push [boss+0x60] / push point / push [boss+0x3cc] / call 0x76cb9c`.
+- So each cast makes one telegraph (phase 4) and one beam (frame 28). The port queues 0x13 or 0x14 from the stomp (state 17, `queue(rand < 0.5 ? 0x13 : 0x14)`); that link was not checked in the exe.
+
+**The beam object (ctor 0x0076cb9c, vtable 0x00b43b60).** Arguments: role, origin point, owner `[boss+0x60]`, type. Base ctor 0x00765a14 (the same base as the missile). Fields: `+0x30` a cycle clock stepping 1.0 (`0x977a08`) and wrapping at `+0x34`; `+0x34` = frames of the motion - 1 (`fild [motion+4]`, `0x977a0c` = -1.0); `+0x38 .. +0x40` the point; `+0x50` the owner; `+0x54` an angle (BAMS, starts at 0); `+0x58` a ramp; `+0x5c` the type.
+
+**Per frame (vtable +4, 0x0076ccdc).**
+- `+0x58 = min(+0x58 + 0.025, 1.0)` (`0x9779f8`, `0x977a08`): a 40-frame ramp.
+- Angle: `+0x54 += step[type]`, with the table at 0x009779b8 (12 bytes per type: u32 step, float rate, float amplitude):
+
+| type | step (BAMS) | rate (+0x40 = angle * rate) | amplitude (+0x38 = amplitude * sin(angle)) |
+|---|---|---|---|
+| 0 | 728 | 0.00213623 | -140 |
+| 1 | 728 | 0.00213623 | +140 |
+| 2 | 280 | 0.00717163 | -300 |
+| 3 | 280 | 0.00717163 | +300 |
+
+  The sine is `0x82dcbc`, a table lookup at `0x00989560` indexed by `(angle >> 4) & 0xfff` with the quadrant fix-ups. Type bit 1 (2 / 3) is the arena 3 / 4 "long" beam, bit 0 the sweep direction. `+0x40` is the linear term as written (`fild [edi+0x54]; fmul [rate]`): the port should follow the exe here, not a circle.
+- The point goes through the owner's frame: `0x82d8bc` (owner `[+0x50]`, the transform), `0x82eab8` (the matrix on `+0x38`), `0x82da80`, `0x82ebac`. **UNCLEAR:** the exact matrix chain (only the first two were read).
+- Hit: `push 0x16ef / push &+0x38 / call 0x780630`. `0x780630` walks the 256-entry list at `[0xaab3f0] + 0x20` (the `0xa9b500` records), with a flag mask test (`[rec+0x14] & 0x16ef`) and a circle test in x / z (`(x - rec.x)^2 + (z - rec.z)^2 <= rec.r^2`, `rec` at +0x4 / +0xc / +0x10). On a hit the record's entity id goes to `+0x3c` (`mov [edi+0x3c], ebp`) and the damage call runs: `call 0x76a724` with type 5, the point, and the radius `+0x58 * 64` (`0x9779f4`). The type-5 case of 0x768990 (table 0x009768c4, entry 5 = 0x007689df) is `fild [attack+0x28]` (the attacker's `+0x3d0` record, the global `[0xa9b07c]`), radius 10.0 (`mov eax, 0x41200000` from the same case), then `0x51fdf8` / `0x51fc9c` deal the damage. Effect 0x6fa at the point (`call 0x8144b0`).
+- On a miss the word `[+0x8]` gets `or 0xffff0001`. **UNCLEAR:** whether this kills the beam or only marks the frame; the end of the beam (the base 0x765a40 and the motion end) was not read.
+
+**Why it is not ported.**
+1. The beam's origin is a motion track: `0x579de0` returns a sample index from an object's start / end / length (+0xc, +0x10, +0x14), and the object comes from `[0xa9b080]` through the global `[0xa9b078]` and the table 0x009f75c8. The port has no such object for the boss.
+2. The beam's lifetime and end (0x765a40 and the motion end flag) and the `+0x8` flag are unread.
+3. The damage's attacker `[0xa9b07c]` (its `+0x3d0` record, `+0x28`) and the damage / knockback path 0x51fdf8 are unread, so the damage row is not known.
+4. The telegraph (0x765c68, vtable 0x00b43410) is unread.
+
+**ASSUMED (none ported, so none in code).** The sweep numbers above are the exe's; the port would have to pick the origin, the lifetime and the damage row, which is where the approximations would go.
+
+**Changes:** this entry only. `docs/HANDOFF.md` item 4 keeps "lasers" (still events only).
+
+**Checks:** none run (docs only). Not run in Chrome.
