@@ -353,6 +353,118 @@ export class SmWave extends EnemyShot {
   }
 }
 
+// --- the laser (states 19 / 20: ctor 0x00765c68, update 0x00765d7c, hit 0x00768a84 type 4) ---
+//
+// Made on phase 4 of state 19 or 20 (0x0076b85c: alloc 0x60, ProcessState 0x00765c68 with the boss's
+// role [+0x3cc] and +0xe94). Its model is bm_obj_ep4_boss09_laser.bml, motion 0 (sandlaser.njm), 126
+// frames, read with formats/njmotion.ts; the exe's clock is frames - 1 = 125.
+// Each update (0x00765d7c): the base update runs the children; the clock gains 1.0 (0x00976108) and the
+// laser ends when the clock reaches 125 (`fcom [+0x34]`, 0x00765d95 .. 0x00765d9e: the update of that
+// frame does not sweep; it stops its sound 0x8148d4 and sets flag 1). Otherwise, while child slot 1 is
+// flagged (the sweep's particle child), the beam is cut at the first wall (0x0077fffc, the length +0x50
+// grows 100.0 a frame, 0x00976100), and 0x00768a84 runs with type 4, the new BAMS heading (the aim's
+// direction from the origin) and the previous one (+0x58, then stored). The heading and the span are
+// the only inputs of the hit: the span is |cur - prev| (integer_angle_abs_difference 0x007a9018), the
+// heading the midpoint (angle_sum 0x007a8cb8 = cur + ((prev - cur) as int16 >> 1)), the reach L the
+// horizontal distance from the boss to the aim point (record +0x8).
+// The hit (0x00768a84 with 0x00772c08 per player): a player who is not dead or invulnerable, whose
+// line of sight from the boss is clear (0x0077fffc / cast_ray_at_map_collision_geometry, the player's
+// weapon position), is hit when its horizontal distance is below L + its box radius and its bearing from
+// the boss is within the span of the midpoint. The hit is entity_hit_by_tech group 0 with power =
+// MovementData iparam2 (the row's +0x1c, dispatcher case 4), no knockback, every frame it applies.
+// Sound 0x6f8 (0x00765d7c's `push 0x6f8; call 0x00814298` on the first update with child slot 2 flagged).
+// ASSUMED: the origin is the boss's position read every frame (the dispatcher's own origin is +0x38 of the
+// boss; the laser's +0x38 is not written by its own code), the box radius is PLAYER_RADIUS, child slots 1 and
+// 2 are flagged on every frame of the laser's life, and the line of sight is clear when no `clear` is given.
+// UNCLEAR: the aim point (+0x44). Nothing in the laser's code writes it, the spawn does not set it, and the
+// one writer found so far is the wall cut 0x0077fffc (a segment test from the origin to the aim, which
+// clips it). The brain's SM_LASER aim is a stand-in (see SaintMilionAi.laserAim). The impact particle
+// (0x00661448 group 0x10, kind 6, at the aim) follows the wall cut and is not reproduced.
+export const SM_LASER = {
+  // The clock's end: frames of bm_obj_ep4_boss09_laser.bml motion 0 (the laser is updated 125 times, the last one ends it).
+  frames: 126,
+  // The sound of the laser (0x6f8 of boss09's sound table); the exe plays it looping, here once.
+  se: 0x6f8,
+  // ASSUMED: the aim's reach (the exe cuts it at the first wall, 0x0077fffc, which is not reproduced),
+  // the centre arenas' range (SM_ARENAS 3 / 4).
+  reach: 620,
+  // ASSUMED: the total turn of the aim over the sweep frames, centred on the boss's heading (half a circle).
+  sweep: 0x8000,
+} as const;
+
+export interface SmLaserOptions {
+  // The boss's position (the dispatcher's origin, the boss's +0x38).
+  origin: () => { x: number; z: number };
+  // The aim point of sweep frame k (0 .. frames - 4), the laser's +0x44.
+  aim: (k: number) => { x: number; z: number };
+  // MovementData iparam2 of the row being fought (read every frame, as the dispatcher does).
+  damage: () => number;
+  // The line of sight (0x0077fffc, the origin to the player); absent: clear (ASSUMED).
+  clear?: (x0: number, z0: number, x1: number, z1: number) => boolean;
+}
+
+const BAMS_UNIT = (Math.PI * 2) / 0x10000;
+// A BAMS angle of a radian value, as u16.
+const toBams = (rad: number): number => Math.round(rad / BAMS_UNIT) & 0xffff;
+// A 16-bit signed difference, as the exe's (short) casts.
+const toShort = (v: number): number => ((v & 0xffff) << 16) >> 16;
+// integer_angle_abs_difference: |(short)(a - b)|.
+const absAngleDiff = (a: number, b: number): number => Math.abs(toShort(a - b));
+
+export class SmLaser extends EnemyShot {
+  effect: ShotEffect;
+  readonly look: ShotLook = { color: 0xff3040, size: 1, hidden: true };
+  // The exe's clock +0x30 (it is updated before the end test).
+  private clock = 0;
+  // The previous frame's aim heading (+0x58, BAMS).
+  private prev = 0;
+  private readonly opts: SmLaserOptions;
+  // Reused every tick (no allocation per frame).
+  private readonly hits: AiTarget[] = [];
+
+  constructor(opts: SmLaserOptions) {
+    const o = opts.origin();
+    super(o.x, 0, o.z);
+    this.opts = opts;
+    this.effect = { kind: 'tech', power: opts.damage() };
+  }
+
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    this.hits.length = 0;
+    if (this.done) return this.hits;
+    const o = this.opts.origin();
+    this.x = o.x;
+    this.z = o.z;
+    this.frames++;
+    const power = this.opts.damage();
+    if (this.effect.kind !== 'tech' || this.effect.power !== power) this.effect = { kind: 'tech', power };
+    this.clock += 1;
+    if (this.clock >= SM_LASER.frames - 1) {
+      this.done = true;
+      return this.hits;
+    }
+    const aim = this.opts.aim(this.clock - 1);
+    const ax = aim.x - o.x;
+    const az = aim.z - o.z;
+    const reach = Math.hypot(ax, az);
+    const cur = toBams(Math.atan2(ax, az));
+    const span = absAngleDiff(cur, this.prev);
+    // angle_sum (0x007a8cb8): cur + ((prev - cur) as int16 >> 1).
+    const mid = (cur + (toShort(this.prev - cur) >> 1)) & 0xffff;
+    this.prev = cur;
+    for (const t of targets) {
+      if (t.dead) continue;
+      const tx = t.x - o.x;
+      const tz = t.z - o.z;
+      if (Math.hypot(tx, tz) >= reach + PLAYER_RADIUS) continue;
+      if (absAngleDiff(toBams(Math.atan2(tx, tz)), mid) >= span) continue;
+      if (this.opts.clear && !this.opts.clear(o.x, o.z, t.x, t.z)) continue;
+      this.hits.push(t);
+    }
+    return this.hits;
+  }
+}
+
 // --- the explosions of the storm and the sand sonic ---------------------------------------
 //
 // The explosion's area hit (0x00521cdc: 100.0 for a radius up to 100, the radius itself above

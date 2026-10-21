@@ -51,10 +51,10 @@
 //   - the cutscene states 0x19 .. 0x1c wait for a cutscene object
 //     (GetGlobalGameState); they end here when their animation has ended
 //     (0x1b waits 60 more frames);
-//   - the objects the attacks make (the missiles of state 0x12, the lasers of
-//     0x13 / 0x14) are not reproduced: they are events only; state 10's sweep
-//     and the body's contact damage are; the storm (0x17) and the sand sonic
-//     (state 10) are (see SmStorm and SmSandSonic);
+//   - the aim of the lasers (states 0x13 / 0x14, see SmLaser and laserAim) is
+//     not read from the exe: a stand-in sweep; the laser's hit, its life and
+//     its sound are; the missiles, the wave, the storm and the sand sonic are
+//     objects of their own (see SmMissile, SmWave, SmStorm and SmSandSonic);
 //   - the order of the players the followers go round and the stream of the
 //     random numbers (SmRng, see saintmilionents.ts).
 
@@ -62,7 +62,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SM_MISSILE, SM_SAND, SmClock, SmField, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_LASER, SM_MISSILE, SM_SAND, SmClock, SmField, SmLaser, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -645,8 +645,10 @@ export class SaintMilionAi extends BrainBase {
       case 19:
       case 20:
       case 21:
-        if (phase === 4) this.events.push({ kind: 'effect', name: ['laser', 'laser', 'wave'][s - 19], state: s });
-        else if (phase === 0 && s === 21) this.waveFrame();
+        if (phase === 4) {
+          if (s === 21) this.events.push({ kind: 'effect', name: 'wave', state: s });
+          else this.laserEnter();
+        } else if (phase === 0 && s === 21) this.waveFrame();
         return;
       case 23:
         if (phase === 4) {
@@ -794,6 +796,28 @@ export class SaintMilionAi extends BrainBase {
     if (start && pivot) s.launch(start[0], start[2], Math.atan2(start[0] - pivot[0], start[2] - pivot[2]), pivot[0], pivot[2]);
     else s.launch(this.x, this.z, this.swingAngle * BAMS, this.x, this.z);
     this.pendingShots.push(s);
+  }
+
+  // States 19 / 20, phase 4 (0x0076b85c): one laser (SmLaser). Its sound 0x6f8 is played once here: the exe
+  // starts it on the laser's first update with child 2 flagged and stops it at the end (not reproduced).
+  private laserEnter(): void {
+    this.events.push({ kind: 'se', id: SM_LASER.se, x: this.x, z: this.z });
+    this.pendingShots.push(
+      new SmLaser({
+        origin: () => ({ x: this.x, z: this.z }),
+        aim: (k) => this.laserAim(k),
+        damage: () => this.row.iparam[1],
+      }),
+    );
+  }
+
+  // ASSUMED: the laser's aim point is not read (the exe's +0x44 has no writer in the laser's own code, see
+  // DEVLOG 2026-10-21 "Saint-Milion laser"). Stand-in: the aim turns through SM_LASER.sweep (BAMS, centred on
+  // the boss's heading) over the sweep frames, at SM_LASER.reach.
+  private laserAim(k: number): { x: number; z: number } {
+    const turn = (k / (SM_LASER.frames - 3) - 0.5) * SM_LASER.sweep * BAMS;
+    const a = this.heading * BAMS + turn;
+    return { x: this.x + Math.sin(a) * SM_LASER.reach, z: this.z + Math.cos(a) * SM_LASER.reach };
   }
 
   // State 21, phase 0 (0x00769808): one beam on the clock's frame 28. Its type: arenas 3 / 4 -> 2 or 3,

@@ -2276,7 +2276,7 @@ export class CombatView {
         this.opts.log(`${what}: ${ev.name}`);
         return;
       case 'effect':
-        // Not reproduced: the missiles, lasers, wave, storm and sand sonic.
+        // Not reproduced: the visuals of the effect names (the shots they make are launched through out.shots).
         this.opts.log(`${what}: ${ev.name} (not reproduced)`);
         return;
       case 'phase':

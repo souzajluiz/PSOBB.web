@@ -7665,3 +7665,34 @@ The same rule covers the texture-animation file: 33 of the 175 maps have no `map
 **Open:** the run logged six 404s, not the eight the page was reported to log. The other two were not reproduced on this path (login, lobby, Pioneer 2). The title and login screens log none.
 
 **Checks:** `cd client && npx tsc --noEmit` (clean); the Playwright run above with 0 failed requests after the change; `tests/minimap.test.ts`, `tests/indirect.test.ts`, `tests/fieldhud.test.ts` (all pass).
+
+## 2026-10-21: Saint-Milion laser ported (aim point UNCLEAR)
+
+**What changed:** the states 0x13 / 0x14 (laser A / B) now make a laser object instead of an event. `combat/saintmilionents.ts` gains `SM_LASER` and `SmLaser` (an `EnemyShot`: a tech hit with iparam2, hidden, life 125 updates, the sector hit per update); `combat/saintmilionboss.ts` makes it on phase 4 (`laserEnter`) with the sound 0x6f8, and `laserAim` is the stand-in aim. `render/combat.ts` needed no change: the shot goes through `launchShot` / `tickShots` and `enemyTechHitsPlayer` like the Dragon's and De Rol Le's shots. `tests/saintmilionboss.test.ts` section 12 covers the wedge, the walls, the life, the damage read each frame, the brain's entry and the motion's frame count against the client's archive.
+
+**Exe (read; `objdump -d --start-address` on PsoBB.exe, the reference dump for names).**
+- Spawn: handler 0x007697dc (rows 19 / 20) -> phase 4 0x0076b85c: `alloc 0x60`, `0x00765c68(role = [boss+0x3cc], arg = boss+0xe94)`. The ctor loads `bm_obj_ep4_boss09_laser.bml` (loader 0x00765fdc, `g_pBoss09LaserBmlFilename`) and takes NJM chunk 0 (`sandlaser.njm`, **126 frames**, read with `formats/njmotion.ts` and checked by test section 12): `+0x34 = frames - 1 = 125`; `+0x30 = 0`, `+0x50 = 0` (drawn length), `+0x58 = 0` (previous heading), `+0x5c = -1` (sound handle). Vtable 0x00b43410, base ctor 0x00765a14.
+- Update 0x00765d7c: the base update 0x00765a40 runs the children; `clock += 1.0` (0x00976108); the end test is `fcom [+0x34]` at 0x00765d95 with `jae` to 0x00765eba: the update that reaches 125 stops the sound (0x008148d4) and sets flag 1 without sweeping.
+- Sound: `push 0x6f8; call 0x00814298` at 0x00765eaa (after `push 1, push 0, push &+0x38`), stored at `+0x5c`, when child slot 2 is flagged (0x00765a90 -> 0x007656f0, "child constructed").
+- Sweep (child slot 1 flagged): `+0x50 += 100.0` (0x00976100) and the cut 0x0077fffc (origin to aim, mask -1); on a hit the impact particle `0x00661448(this, 0x10, 6, aim)` (particle group 0x10, kind 6). Then `push 4 (type); call 0x00768a84` at 0x00765e76 with `[+0x58]` (previous heading) and the current heading, `&+0x44` (aim), 0. Then `+0x58 = current heading`.
+- Hit (0x00768a84 with `this` = the boss, `ecx = [0x00a9b07c]`; name in the dump is wrong): the boss record `+0x31c` gets L = horizontal |aim - boss| (+0x8) and span = `0x007a9018(cur, prev)` (+0xc); the boss `+0x60` is set to the midpoint `0x007a8cb8(cur, prev)`. For each targetable player (g_EntityArray) with a clear line from the boss (0x0077fffc, `cast_ray_at_map_collision_geometry`, to the weapon position): type 4 needs `flags & (invuln | dead) == 0` and `0x00772c08(player, boss) >= 0`, then `entity_hit_by_tech(player, boss, group 0, damage = row +0x1c (iparam2), NULL, ~foie, -1)`. No knockback.
+- `0x00772c08` (the sector test, read in x87): per hit box of the player (list +0xa4, count +0xa8, stride 0x2c, skipped when +0x18 has 0x2000000): the box centre (player position and heading) against the boss; hit if the horizontal distance is below L + box radius (+0xc) and `0x007a9018(bearing, boss +0x60)` is below the span.
+- `0x007a9018` = `|(short)(a - b)|`; `0x007a8cb8(a, b)` = `a + ((short)(b - a) >> 1)`.
+- Constants: 0x00976100 = 100.0, 0x00976108 = 1.0, 0x0097610c = -1.0.
+
+**Spot-check (the decisive fact):** at 0x00765d8c `d9 05 08 61 97 00` (fld 1.0) and at 0x00765d95 `d8 57 34` (fcom [edi+0x34]), with `jae` at 0x00765d9e `0f 83 16 01 00 00`: the laser ends when clock + 1 >= frames - 1, so 125 updates, the last one without a sweep.
+
+**The port.** Hit, life and the entry sound follow the exe. The aim point is a stand-in (below).
+
+**ASSUMED / UNCLEAR:**
+- **The aim point (+0x44): UNCLEAR, the decisive gap.** The laser's own code reads it and never writes it; the ctor does not set it; the spawn copies nothing into it. The wall cut 0x0077fffc takes the aim pointer, but whether it writes the clipped point back was not checked. Without an aim the wedge has zero span and nothing hits, so the port uses an ASSUMED aim: the heading turns through `SM_LASER.sweep` = 0x8000 BAMS, centred on the boss heading, over the sweep frames, at reach 620 (the centre arenas' range). Both numbers are invented.
+- The origin: the laser's +0x38 is not written by its code; the dispatcher uses the boss position (+0x38). The port uses the boss position read every frame.
+- The child slot flags (1 = sweep, 2 = sound) come from the child effects (table 0x009f5a9c = {0, 3, 5}, group 0x10) and their motion data. ASSUMED flagged on every frame of the life.
+- The box list (+0xa4) is not read: one box of radius PLAYER_RADIUS (ASSUMED). Invulnerability (`maybe_invuln`) is not in the port's AiTarget: only `dead` is checked.
+- The line of sight: no wall test in the port (ASSUMED clear); the `clear` option is the hook.
+- The loop and the stop of sound 0x6f8 (0x00814298 / 0x008148d4): one `se` event at entry.
+- The impact particle (0x00661448, group 0x10, kind 6) is not reproduced.
+- The laser's drawn length (+0x50) and model are not drawn (the shot is hidden).
+- That `this` of 0x00768a84 is the boss (0xa9b07c) is inferred from the row (+0x3d0) and the heading (+0x60) it reads, not from a caller check.
+
+**Checks:** `node tests/saintmilionboss.test.ts`: ALL PASS (section 12 included; section 12's frame count is skipped when the client data is absent). `node tests/saintmilion.test.ts`: all checks passed. `node tests/enemies.test.ts`: ALL PASS. `node tests/combat.test.ts` could not run here (no `vendor/newserv` in this worktree: ENOENT). Client `npx tsc --noEmit -p .`: clean (Node 24).

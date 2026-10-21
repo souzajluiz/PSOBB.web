@@ -21,7 +21,9 @@ import {
   type SmBossOptions,
 } from '../client/src/combat/saintmilionboss.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
-import { SM_MISSILE, SM_SAND, SM_STORM, SM_WAVE, SmBlast, SmMissile, SmRng, SmSandSonic, SmStorm, SmWave } from '../client/src/combat/saintmilionents.ts';
+import { SM_LASER, SM_MISSILE, SM_SAND, SM_STORM, SM_WAVE, SmBlast, SmLaser, SmMissile, SmRng, SmSandSonic, SmStorm, SmWave } from '../client/src/combat/saintmilionents.ts';
+import { BmlArchive } from '../client/src/formats/bml.ts';
+import { parseNjmFile } from '../client/src/formats/njmotion.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -686,6 +688,90 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     const radius = (250 * Math.PI) / 6;
     eq(sonic.tick([player(1, 0, 250 + 130), player(2, 0, 250 + 132)]).map((t) => t.clientId).join(','), '1', `move 20 (radius ${radius.toFixed(2)}): 130 in, 132 out`);
     check(sonic.done, 'removed after the 20th');
+  }
+}
+
+// 12. The laser (states 19 / 20): one object on phase 4 and its sound; 125 updates, the last one ends it without a
+//     sweep (126 frames of bm_obj_ep4_boss09_laser.bml); each update hits the living inside the wedge between the
+//     previous and the current heading (span |cur - prev|, centred on the midpoint, reach L + 5) with iparam2, only
+//     with a clear line; the damage is read every frame.
+{
+  const BAMS12 = (Math.PI * 2) / 0x10000;
+  const lasers = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmLaser => x instanceof SmLaser);
+  const at = (angle: number, r: number) => ({ x: r * Math.sin(angle * BAMS12), z: r * Math.cos(angle * BAMS12) });
+  // The aim of sweep frame k: BAMS 0x1000 * k at reach 620.
+  const aimAt = (k: number) => at(0x1000 * k, 620);
+  const mk = (over: Partial<ConstructorParameters<typeof SmLaser>[0]> = {}, dmg: () => number = () => 1000) =>
+    new SmLaser({ origin: () => ({ x: 0, z: 0 }), aim: aimAt, damage: dmg, ...over });
+  const ids = (ts: readonly AiTarget[]) => ts.map((t) => t.clientId).join(',');
+
+  // Sweep frame 5 (the sixth update): cur 0x5000, prev 0x4000, span 0x1000, midpoint 0x4800.
+  {
+    const l = mk();
+    for (let i = 0; i < 5; i++) l.tick([]);
+    const near = at(0x4800, 100);
+    const edge = at(0x4800 + 0xfff, 100);
+    const out = at(0x4800 + 0x1000, 100);
+    const back = at(0x4800 - 0x1000, 100);
+    const far = at(0x4800, 700);
+    const dead = { ...player(5, near.x, near.z), dead: true };
+    const hit = l.tick([player(1, near.x, near.z), player(2, edge.x, edge.z), player(3, out.x, out.z), player(4, back.x, back.z), player(6, far.x, far.z), dead]);
+    eq(ids(hit), '1,2', 'the sweep frame 5: the living inside the wedge (the midpoint, the edge in, the far and the dead out)');
+    eq(l.effect.kind === 'tech' ? l.effect.power : -1, 1000, 'the effect is tech with iparam2');
+  }
+  // Sweep frame 0 has span |cur - prev| = 0 (prev starts at 0): nothing is hit.
+  {
+    const l = mk();
+    eq(ids(l.tick([player(1, 0, 100)])), '', 'the first update (span 0) hits nothing');
+  }
+  // The line of sight: a wall between the boss and the player stops the hit.
+  {
+    const l = mk({ clear: () => false });
+    for (let i = 0; i < 5; i++) l.tick([]);
+    const near = at(0x4800, 100);
+    eq(ids(l.tick([player(1, near.x, near.z)])), '', 'no clear line: no hit');
+  }
+  // Life: 125 updates; the 125th ends it and does not sweep. 126 frames of the motion.
+  {
+    const l = mk();
+    const t = player(1, at(0, 100).x, at(0, 100).z);
+    for (let i = 1; i < SM_LASER.frames - 1; i++) l.tick([]);
+    check(!l.done, 'not done after 124 updates');
+    eq(l.tick([t]).length, 0, 'the 125th update hits nothing');
+    check(l.done, 'done on the 125th update');
+    eq(l.tick([t]).length, 0, 'nothing after it is done');
+  }
+  // The damage is read each frame (the form change): iparam2 of the row being fought.
+  {
+    let dmg = 1000;
+    const l = mk({}, () => dmg);
+    l.tick([]);
+    dmg = 800;
+    l.tick([]);
+    eq(l.effect.kind === 'tech' ? l.effect.power : -1, 800, 'the damage follows the row (iparam2 each frame)');
+  }
+  // The brain: phase 4 of states 19 / 20 makes one laser on the boss's position and the sound 0x6f8.
+  {
+    const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; pendingShots: EnemyShot[] };
+    const b = make(true, { x: 120, z: -40 });
+    b.tick([player(1, 5000, 5000)]);
+    const d = drive(b);
+    d.setState(19);
+    const shots = lasers(d.pendingShots);
+    eq(shots.length, 1, 'state 19 phase 4: one laser');
+    eq(b.events.filter((e) => e.kind === 'se' && e.id === SM_LASER.se).length, 1, 'state 19 phase 4: the sound 0x6f8 once');
+    eq(b.events.filter((e) => e.kind === 'effect' && e.name === 'laser').length, 0, 'no laser effect name is left');
+  }
+  // The frame count of bm_obj_ep4_boss09_laser.bml (motion 0) against the client's archive, when it is there.
+  {
+    const dir = process.env.PSOBB_DATA ?? join(process.env.HOME ?? '', 'Downloads/psobb-client/data');
+    const file = join(dir, 'bm_obj_ep4_boss09_laser.bml');
+    if (!existsSync(file)) console.log('skip: no bm_obj_ep4_boss09_laser.bml');
+    else {
+      const bml = new BmlArchive(new Uint8Array(readFileSync(file)));
+      const motion = bml.entries.find((e) => /\.njm$/i.test(e.name));
+      eq(motion ? parseNjmFile(bml.get(motion.name), 1).frameCount : -1, SM_LASER.frames, 'bm_obj_ep4_boss09_laser.bml motion 0 frames');
+    }
   }
 }
 
