@@ -20,9 +20,11 @@
 // the classes whose vtable +0x174 is the shared state 8, 0x0052b518) share the
 // death state: the class's death voice (vtable +0x194) at motion frame 0, the
 // particle 0xf3 at motion frame 16 and the class's blood hook (vtable +0x184).
-// Each class's hooks were read from its vtable (0x00a48060 Shark, 0x00a4a7c0
-// Booma, 0x00a4c9e0 Dimenian, 0x00a4cc80 Dolmolm, 0x00a4eee0 Merillia,
-// 0x00a52e80 Boota, 0x00a53740 Goran).
+// The vtable addresses an earlier pass cited for the class hooks (0x00a48060
+// Shark, 0x00a4a7c0 Booma, 0x00a4c9e0 Dimenian, 0x00a4cc80 Dolmolm, 0x00a4eee0
+// Merillia, 0x00a52e80 Boota, 0x00a53740 Goran) are not in the file: they lie in
+// the uninitialised part (0x00a3a800..0x00af2000 is .bss), so the hooks are
+// matched through their call sites instead (2026-10-21, see the rows).
 //
 // The unit of time is the game frame (30 a second). `end` = the death motion
 // ended (animation_flags & 0x10, set by Player__Animate when a play-once
@@ -37,8 +39,18 @@
 //
 // Checked against the exe (the salvage pass, 2026-10-21): the helpers' particle
 // ids and durations, the blood stain point (0x00535b38), the Canadine row and
-// the Dubchic's SE by episode. The other rows' sounds, particle ids and timings are
-// carried from the first trace and are ASSUMED until each is re-traced.
+// the Dubchic's SE by episode.
+//
+// Re-traced row by row (2026-10-21, second pass): each row's comment carries its
+// VERIFIED address (the death state, or the call that makes the sound / particle /
+// pool) or ASSUMED for the part not traced. The helper addresses used to match
+// the pools: 0x005781d8 red 15, 0x00578268 red 2.5, 0x005782f8 red 7.5, 0x00578148
+// red 25; purple 0x005785c8 25, 0x00578658 15, 0x005786e8 7.5; green 0x005784a8
+// 2.5, 0x00578388 25, 0x00578418 15, 0x00578538 7.5 (the texture argument of the
+// green ones is a mis-resolved name; ASSUMED texture 1, see the DEVLOG).
+// The death particles: 0x00578778 gensei (0xe4), 0x005787a4 ab_dead (0xe5),
+// 0x005787d0 the explosion (0xfb 0xfc 0xe3), 0x005787fc the dark burst (0xe8 0xec).
+// The per-area sound tables (Episode 4) were read entry by entry: all 11 match.
 
 import type { PoolId } from './blooddecals.ts';
 import type { ParticleSpawn } from './hitfx.ts';
@@ -125,14 +137,17 @@ function dark(se: number | undefined, point: DeathPoint, from: 'kill' | 'end'): 
 /** What the dark enemy leaves when its dissolve is done: a purple pool at its position, then it is gone. */
 const darkPool = (id: PoolId): DeathStep => ({ when: 'dissolved', pools: [pool(id, 0)], remove: true });
 
-// The Sinow family: the death motion, 20 frames after it the bits explode
-// (SpawnEntityParticles at 20 ahead) and the enemy is gone; the particle 0xf8
-// (short_test, 20 frames of emission) starts at the motion's end 10 up and 20
-// ahead.
-function sinow(killSe: number, endSe: number): DeathPlan {
+// The Sinow family (VERIFIED 2026-10-21: Berill 0x0059f3dc, Zoa 0x005926c4): the
+// first SE is played at motion frame 18 (check_entity_animation_elapsed_threshold
+// (18), or (28), once; sub-state 0), not at the kill. At the motion's end the
+// particle 0xf8 (SpawnParticleEffect_005788b8, 20 frames) starts 10 up and 20
+// ahead; 20 frames later (the counter passes 0x13) the second SE, the explosion
+// (SpawnEntityParticles_005787d0 at 20 ahead, the global 0x00929d5c = 20) and the
+// enemy is gone.
+function sinow(frame18Se: number, endSe: number): DeathPlan {
   return {
     steps: [
-      { when: 'kill', se: killSe },
+      { when: { frame: 18 }, se: frame18Se },
       { when: 'end', particles: [{ p: { id: 0xf8, delay: 0, duration: 0x14 }, at: { base: 'origin', forward: 20, up: 10 } }] },
       { when: { wait: 20 }, se: endSe, particles: at(EXPLOSION, { base: 'origin', forward: 20 }), remove: true },
     ],
@@ -203,30 +218,30 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
   const area = ctx.area;
   switch (className) {
     // --- the ruins' dark enemies (the dissolve, then a purple pool) ----------
-    case 'TObjEneBalClawBody': // Bulclaw 0x00531ee4 state 5: SE 0x202 at the kill; after the motion (sub 3) the burst and the dissolve; 0x005786e8 when done
+    case 'TObjEneBalClawBody': // Bulclaw 0x00531ee4 state 5 (VERIFIED): SE 0x202 at the kill; the burst (0x005787fc at weapon_position) when sub-state 3 starts (the port's 'end': ASSUMED timing); the dissolve; 0x005786e8 when done
       return { steps: [{ when: 'kill', se: 0x202 }, dark(undefined, BODY, 'end'), darkPool('purple7_5')] };
-    case 'TObjEneBalClawClaw': // Claw 0x00534e84: SE 0x202, the burst and the dissolve at the kill; 0x005786e8 when done
+    case 'TObjEneBalClawClaw': // Claw 0x00534e84 (VERIFIED): SE 0x202 and the burst at weapon_position at the kill, InitializeEnemyState (dissolve); 0x005786e8 when done
       return { steps: [dark(0x202, BODY, 'kill'), darkPool('purple7_5')] };
-    case 'TObjEneRe7Berura': // Dark Belra 0x00537388: the burst, the dissolve and SE 0x1f0 (0x1c5 in the temples) at the kill; 0x00578658 when done
+    case 'TObjEneRe7Berura': // Dark Belra 0x00537388 (VERIFIED): the burst at +0x300 and SE 0x1f0 (0x1c5 in the temples, the map test) at the kill, the dissolve; 0x00578658 when done
       return { steps: [dark(temple ? 0x1c5 : 0x1f0, BODY, 'kill'), darkPool('purple15')] };
-    case 'TObjEneDf2Bringer': // Chaos Bringer 0x0053aa34: SE 0x1dc, the burst and the dissolve at the kill; 0x00578658 when done
+    case 'TObjEneDf2Bringer': // Chaos Bringer 0x0053aa34 (VERIFIED): SE 0x1dc at the origin, the burst at +0x300 and the dissolve at the kill; 0x00578658 when done
       return { steps: [dark(0x1dc, BODY, 'kill'), darkPool('purple15')] };
-    case 'TObjEneDarkGunner': // Dark Gunner 0x00544634: SE 0x202, the burst and the dissolve at the kill; 0x005786e8 when done
+    case 'TObjEneDarkGunner': // Dark Gunner 0x00544634 (VERIFIED): SE 0x202 and the burst at weapon_position at the kill, the dissolve; 0x005786e8 when done
       return { steps: [dark(0x202, BODY, 'kill'), darkPool('purple7_5')] };
-    case 'TObjEneSaver': // Delsaber 0x0054e688: the burst at its feet, the dissolve and SE 0x1d2 at the kill; 0x005786e8 when done
+    case 'TObjEneSaver': // Delsaber 0x0054e688 (VERIFIED): the burst at its origin (&x) and SE 0x1d2 at the kill, the dissolve; 0x005786e8 when done
       return { steps: [dark(0x1d2, ORIGIN, 'kill'), darkPool('purple7_5')] };
-    case 'TObjEneRe4Sorcerer': // Chaos Sorcerer 0x0059bbe8: the burst, the dissolve and SE 0x1e4 at the kill; 0x00578658 when done
+    case 'TObjEneRe4Sorcerer': // Chaos Sorcerer 0x0059bbe8 (VERIFIED): SE 0x1e4 and the burst at +0x300 at the kill, the dissolve; 0x00578658 when done
       return { steps: [dark(0x1e4, BODY, 'kill'), darkPool('purple15')] };
     // --- Episode 2 --------------------------------------------------------------
-    case 'TObjEneDellBiter': // Delbiter 0x0054b144: SE 0x2e3 (the tower) or 0x26f at the kill; after the motion the burst, SE 0x285 and the dissolve; 0x00578658 when done
+    case 'TObjEneDellBiter': // Delbiter 0x0054b144 (VERIFIED): SE 0x2e3 in the tower map (tower = 35 = 0x23 in the dump's map enum) else 0x26f at the kill; at the motion's end the burst at +0x300, SE 0x285 there, the dissolve; 0x00578658 when done
       return { steps: [{ when: 'kill', se: area === TOWER ? 0x2e3 : 0x26f }, dark(0x285, BODY, 'end'), darkPool('purple15')] };
-    case 'TObjEneMorfos': // Morfos 0x0057aa0c: SE 0x27b at the kill; after the motion the burst at its feet, SE 0x285 and the dissolve; 0x00578658 when done
+    case 'TObjEneMorfos': // Morfos 0x0057aa0c (VERIFIED): SE 0x27b at the kill; at the motion's end (the 0x410 state's check, ASSUMED to be the end) the burst and SE 0x285 at its origin, the dissolve; 0x00578658 when done
       return { steps: [{ when: 'kill', se: 0x27b }, dark(0x285, ORIGIN, 'end'), darkPool('purple15')] };
-    case 'TObjEneMe3StelthReal': // Sinow Berill / Spigell 0x0059f3dc
+    case 'TObjEneMe3StelthReal': // Sinow Berill / Spigell 0x0059f3dc: SE 0x243 at motion frame 18 (was 'kill'), 0xf8 at the end, SE 0x247 + explosion 20 frames later (VERIFIED)
       return sinow(0x243, 0x247);
-    case 'TObjEneMe3SinowZoaReal': // Sinow Zoa / Zele 0x005926c4
+    case 'TObjEneMe3SinowZoaReal': // Sinow Zoa / Zele 0x005926c4: SE 0x27f at motion frame 18 (was 'kill'), SE 0x283 + explosion later (VERIFIED)
       return sinow(0x27f, 0x283);
-    case 'TObjEneMe1GiGue': // Gi Gue 0x0056b19c: dies at once, 0x205 and 0x206 40 up, SE 0x229
+    case 'TObjEneMe1GiGue': // Gi Gue 0x0056b19c (VERIFIED, GiGuesOnDeath): dies at once; 0x205 and 0x206 at y + 40 (0x009262fc), SE 0x229 at the same point
       return {
         instant: true,
         steps: [{ when: 'kill', se: 0x229, particles: at([{ id: 0x205 }, { id: 0x206 }], { base: 'origin', up: 40 }), remove: true }],
@@ -234,7 +249,7 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
     // --- the mines -----------------------------------------------------------
     case 'TObjEneMe1Canadin': // Canadine 0x0053e610: the explosion at its body point + g_EnemySpawnRotationParams_0x20 (ASSUMED -5: the global's value is not in the dump), SE 0x143 and the model fragments (the model's entry 0, default parameters), gone at once
       return { instant: true, steps: [{ when: 'kill', se: 0x143, particles: at(EXPLOSION, { base: 'body', up: -5 }), fragments: 'default', remove: true }] };
-    case 'TObjEneMe3ShinowaReal': // Sinow Beat / Gold 0x0058da40: SE 0x137 twice in the motion (13 and 25)
+    case 'TObjEneMe3ShinowaReal': // Sinow Beat / Gold 0x0058da40 (VERIFIED): SE 0x137 at motion frame 13 or 25, 0xf8 at the end, SE 0x13b and the explosion 20 frames later
       return {
         steps: [
           { when: { frame: 13 }, se: 0x137 },
@@ -243,19 +258,21 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { wait: 20 }, se: 0x13b, particles: at(EXPLOSION, { base: 'origin', forward: 20 }), remove: true },
         ],
       };
-    case 'TObjEneDubchik': // Dubchic / Gillchic 0x005558bc: the 0xf8 shock at the body for 30 frames, then SE 0x13b (Episode 1) or 0x156, the explosion and the model fragments (0x009bdd88), gone
+    case 'TObjEneDubchik': // Dubchic / Gillchic 0x005558bc (the kill handler 0x005558bc; the shock 0x00556ed0 for 0xf8 is ASSUMED 30 frames): the explosion at +0x300 and the model fragments (0x009bdd88, VERIFIED), gone
       return {
         steps: [
           { when: 'kill', particles: [{ p: { id: 0xf8, delay: 0, duration: 30 }, at: BODY }] },
+          // The SE by episode (VERIFIED, 0x005558bc: g_CurrentEpisode 0 = Episode 1 -> 0x13b, else 0x156); the wait is ASSUMED (the exe's 0x344 counter, see the DEVLOG).
           { when: { wait: 29 }, se: ctx.episode === 1 ? 0x13b : 0x156, particles: at(EXPLOSION, BODY), fragments: 'dubchic', remove: true },
         ],
       };
-    case 'TObjEneEpsilonBody': // Epsilon / Epsigard 0x005588dc: 20 frames after the kill SE 0x2d7, the explosion and the model fragments (0x0092541c)
-      return { steps: [{ when: { wait: 19 }, se: 0x2d7, particles: at(EXPLOSION, BODY), fragments: 'epsilon', remove: true }] };
+    case 'TObjEneEpsilonBody': // Epsilon / Epsigard 0x005588dc (VERIFIED): the 20th state-0 frame after the kill (0x4f0 > 0x13): SE 0x2d7 and the explosion at +0x300, the fragments (0x0092541c), gone
+      return { steps: [{ when: { wait: 20 }, se: 0x2d7, particles: at(EXPLOSION, BODY), fragments: 'epsilon', remove: true }] };
     // --- the forest and the caves ----------------------------------------------
-    case 'TObjEneRe2Flower': // Poison / Nar Lily 0x00527f20: SE 0xff (0x2c8: ASSUMED the Nar Lily) at the kill; after the motion 10 ahead
+    case 'TObjEneRe2Flower': // Poison / Nar Lily 0x00527f20 (VERIFIED): the kill SE is 0xff, or 0x2c8 when the instance flag 0x800 is set (0x00527f20 kill branch); the flag picks the variant, not the name
       if (type === 'NAR_LILY' || type === 'DEL_LILY') {
-        // ASSUMED: flag 0x800 (the dissolve variant) is the Nar Lily's.
+        // The dark variant (flag 0x800: SE 0x2e3, the dark burst and a purple 7.5 pool 50 late 10 ahead, then the dissolve; VERIFIED 0x00527f20 state 0).
+        // ASSUMED: that the Nar and Del Lilies are the flag-0x800 ones (the flag is set by the spawn, not traced).
         return {
           steps: [
             { when: 'kill', se: 0x2c8 },
@@ -269,14 +286,14 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: 'end', particles: [{ p: abDead(0x46), at: ahead(10) }], pools: [pool('green2_5', 0x32, ahead(10))], sink: sink(200) },
         ],
       };
-    case 'TObjGrass': // Grass Assassin 0x005225bc: smoke 0xf0 at motion frame 23, then at 32 SE 0xf7, ab_dead and a green 15 pool behind it
+    case 'TObjGrass': // Grass Assassin 0x005225bc (VERIFIED): 0xf0 at the origin at motion frame 23; at 32 SE 0xf7 at the origin, ab_dead (30) at the origin and a green 15 pool (CreateEnemyDropEntity_00578418, delay 10) at the origin. The (0,0,-15) point is only the derolle effect on maps 3..5 (not modelled)
       return {
         steps: [
           { when: { frame: 23 }, particles: [{ p: { id: 0xf0 }, at: ORIGIN }] },
-          { when: { frame: 32 }, se: 0xf7, particles: [{ p: abDead(0x1e), at: ahead(-15) }], pools: [pool('green15', 10, ahead(-15))] },
+          { when: { frame: 32 }, se: 0xf7, particles: [{ p: abDead(0x1e), at: ORIGIN }], pools: [pool('green15', 10, ORIGIN)] },
         ],
       };
-    case 'TObjEneNanoDrago': // Nano Dragon 0x0057e9ac: SE 0x112, smoke 0xf0 at motion frame 30, 30 frames later ab_dead and a green 7.5 pool
+    case 'TObjEneNanoDrago': // Nano Dragon 0x0057e9ac (VERIFIED): SE 0x112 at the kill, 0xf0 at motion frame 30, 30 frames later ab_dead (30) and a green 7.5 pool (0x00578538, delay 15) at the origin; the sink is a timer (map_id2 - 0.3 a frame, ASSUMED start) and the 0x1000000 variant (SE 0x10f) is not modelled
       return {
         steps: [
           { when: 'kill', se: 0x112 },
@@ -284,9 +301,9 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { wait: 30 }, particles: [{ p: abDead(0x1e), at: ORIGIN }], pools: [pool('green7_5', 15)] },
         ],
       };
-    case 'TObjEneSlime': // Pofuilly Slime 0x00598648: SE 0x108 and the particle 0xfe at its body
+    case 'TObjEneSlime': // Pofuilly Slime 0x00598648 (VERIFIED): SE 0x108 at the origin and the particle 0xfe at +0x300 when the death starts
       return { steps: [{ when: 'kill', se: 0x108, particles: [{ p: { id: 0xfe }, at: BODY }] }] };
-    case 'TObjEneMoja': // Hildebear / Hildeblue 0x00513614: SE 0xc2 at motion frame 0; at 27 SE 0xbc, 0xf0, a red 15 pool (20 frames late) and gensei (50 frames) at the blood point; it sinks 0.1 a frame from the start, 200 frames
+    case 'TObjEneMoja': // Hildebear / Hildeblue 0x00513614 (VERIFIED: the death motion, which the dump names 'Attack'; SE 0xc2 at frame 0, at 27 SE 0xbc, 0xf0 and gensei 50 at the blood point, red 15 (0x005781d8) 20 late). The kill's sink (0.1 a frame, 200) is ASSUMED: its state (not located) was not read
       return {
         steps: [
           { when: 'kill', sink: sink(200) },
@@ -294,16 +311,16 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { frame: 27 }, se: 0xbc, particles: [{ p: { id: 0xf0 }, at: BLOOD }, { p: gensei(0x32), at: BLOOD }], pools: [pool('red15', 0x14, BLOOD)] },
         ],
       };
-    case 'TObjEneBm3Fly': // Mothmant 0x00516c60 (motion slot 4, the fall): SE 0xde at the kill; where it lands (ASSUMED: at the end of the motion) a red 2.5 pool and gensei (30 frames)
+    case 'TObjEneBm3Fly': // Mothmant 0x00516c60 (VERIFIED: the dump names it Hildebear, the state is the fall): SE 0xde at the kill (origin); on landing (sub-state 0 -> 2 when the fall reaches the floor, not the motion end) gensei 30 and the red 2.5 pool (CreateEntity_00578268, delay 10) at the origin. The trigger here is 'end' (ASSUMED timing); the knock-back flight is not modelled
       return { steps: [{ when: 'kill', se: 0xde }, { when: 'end', particles: [{ p: gensei(0x1e), at: ORIGIN }], pools: [pool('red2_5', 10)] }] };
-    case 'TObjEneBm3FlyNest': // Monest 0x00519550 (slot 7): the spray 0xf1 every 4 frames and SE 0xe4 every 20 in the first 25 frames; at the end a red 15 pool, gensei (70) 10 left / 8 behind, and the sink (200 frames)
+    case 'TObjEneBm3FlyNest': // Monest 0x00519550 (VERIFIED): the spray 0xf1 every 4 frames and SE 0xe4 every 20 in the first 25 motion frames (0xc0 < 25); at the motion's end (0xb0 & 0x10) a red 15 pool (SpawnItem_005781d8, delay 50) and gensei 70 at (-10, 0, -8) rotated by the heading; the sink 0.1 a frame until the counter 0x4e0 passes 20 (200 frames)
       return {
         steps: [
           ...spray(),
           { when: 'end', particles: [{ p: gensei(0x46), at: { base: 'origin', side: -10, forward: -8 } }], pools: [pool('red15', 0x32, { base: 'origin', side: -10, forward: -8 })], sink: sink(200) },
         ],
       };
-    case 'TObjEneBm5Wolf': // Savage / Barbarous Wolf 0x0051ba20: SE 0xd6 at the kill; at the motion's end a red 7.5 pool (50 frames late) and gensei (70) 12 aside and 10 behind (ASSUMED the front death, animation 0xe); it sinks 200 frames
+    case 'TObjEneBm5Wolf': // Savage / Barbarous Wolf 0x0051ba20 (VERIFIED): SE 0xd6 at the kill; at the motion's end a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70 at (+12 or -12, 0, -10) rotated: +12 for animation 0xe, else -12 (the port keeps +12: ASSUMED branch); the sink 0.1 a frame until the 0x444 sum passes 20 (200 frames)
       return {
         steps: [
           { when: 'kill', se: 0xd6 },
@@ -311,49 +328,49 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
         ],
       };
     // --- the Booma family: the shared state 8 -----------------------------------
-    case 'TObjEneBeast': // Booma 0x00535a6c family: voice 0xe6, gensei and a red 7.5 pool
+    case 'TObjEneBeast': // Booma 0x00535a6c family: voice 0xe6 (ASSUMED: the push site 0x00535c1c is not traced to the class), the blood hook create_enemy_blood_stain (0x00535b38, VERIFIED: gensei 35 and red 7.5, 15 late)
       return boomaFamily({ voice: 0xe6, blood: goreHook(gensei(0x23), 'red7_5') });
-    case 'TObjEneShark': // Shark 0x00a48060: voice 0xf9, ab_dead and a green 7.5 pool
+    case 'TObjEneShark': // Shark 0x005125f0 hook (the ab_dead 0x005787a4 at 0x00512653 and the green 7.5 at 0x0051265f, both in it: VERIFIED structure; the delays and the voice 0xf9 are ASSUMED)
       return boomaFamily({ voice: 0xf9, blood: goreHook(abDead(0x23), 'green7_5') });
-    case 'TObjEneDimedian': // Dimenian 0x00a4c9e0: voice 0x208; the dark hook: purple 7.5, the burst, SE 0x1f0 (0x1c5 in the temples)
+    case 'TObjEneDimedian': // Dimenian 0x00a4c9e0 (the hook's pools and SE VERIFIED at 0x005517de (purple 7.5), 0x00551801 (0x1f0), 0x00551823 (0x1c5); the voice 0x208 (0x005518f1) and the burst are ASSUMED): the dark hook
       return boomaFamily({ voice: 0x208, blood: darkHook(temple ? 0x1c5 : 0x1f0) });
-    case 'TObjEneDolmOlm': // Dolmolm / Dolmdarl 0x00a4cc80: voice 0x256, ab_dead and a green 7.5 pool
+    case 'TObjEneDolmOlm': // Dolmolm / Dolmdarl (the hook at 0x00552803 ab_dead and 0x0055280f green 7.5: VERIFIED structure; voice 0x256 at 0x005528b9 ASSUMED)
       return boomaFamily({ voice: 0x256, blood: goreHook(abDead(0x23), 'green7_5') });
-    case 'TObjEneMerillLia': // Merillia / Meriltas 0x00a4eee0: voice 0x20d, ab_dead and a green 7.5 pool
+    case 'TObjEneMerillLia': // Merillia / Meriltas (the hook at 0x00574e1f ab_dead and 0x00574e2b green 7.5: VERIFIED structure; voice 0x20d at 0x0057416e ASSUMED)
       return boomaFamily({ voice: 0x20d, blood: goreHook(abDead(0x23), 'green7_5') });
-    case 'BootaFamily': // Boota / Ze Boota / Ba Boota 0x00a52e80: voice by area, gensei and a red 7.5 pool
+    case 'BootaFamily': // Boota / Ze Boota / Ba Boota (the blood hook is create_enemy_blood_stain, VERIFIED through its call sites 0x00535b9b / 0x00535ba7; the voice table 0x009c0614 VERIFIED, all 11 entries)
       return boomaFamily({ voice: areaSe(AREA_SE.bootaVoice, area), blood: goreHook(gensei(0x23), 'red7_5') });
-    case 'GoranFamily': // Goran / Pyro Goran / Goran Detonator 0x00a53740: voice by area; the dark hook with the same sound
+    case 'GoranFamily': // Goran / Pyro Goran / Goran Detonator (voice table 0x009c1114 VERIFIED; the dark hook is ASSUMED: the purple pool is not traced to the class)
       return boomaFamily({ voice: areaSe(AREA_SE.goranVoice, area), blood: darkHook(areaSe(AREA_SE.goranVoice, area)) });
     // --- Episode 2 animals ----------------------------------------------------------
-    case 'TObjEneBm9Mericarol': // Mericarol 0x00571194: SE 0x218 at the kill; at the motion's end a green 25 pool (50 late) and ab_dead (70) 10 ahead; it sinks 300 frames
+    case 'TObjEneBm9Mericarol': // Mericarol 0x00571194 (VERIFIED: the 0x218 push is at 0x005712e4 in this function, the dump's maybe_mericarol_hit): SE 0x218 at the kill; at the motion's end, 10 ahead (g_EnemyHitVectorScale: ASSUMED 10), a green 25 pool (CreateEntity_00578388, 50 late) and ab_dead (70); the sink 0.1 a frame (VERIFIED) for 300 frames (ASSUMED: the threshold g_EnemyHitStateTimerThreshold is not read)
       return {
         steps: [
           { when: 'kill', se: 0x218 },
           { when: 'end', particles: [{ p: abDead(0x46), at: ahead(10) }], pools: [pool('green25', 0x32, ahead(10))], sink: sink(300) },
         ],
       };
-    case 'TObjEneBm5GibonU': // Ul / Zol Gibbon 0x00565ecc: SE 0x233 at the kill; at the motion's end a red pool (7.5; 15 for the Zol: ASSUMED the flag) 50 frames late and gensei (70) 10 behind
+    case 'TObjEneBm5GibonU': // Ul / Zol Gibbon 0x00565ecc (VERIFIED): SE 0x233 at the kill; at the motion's end, at (0, 0, -10) by the heading: a red 15 pool (SpawnItem_005781d8) when currently_casting_tech_info.cast == 1, else a red 7.5 (CreateDropEntity_005782f8), both 50 late, and gensei 70; then the sink 0.1 a frame until 20 (200 frames). The Zol = cast 1 is ASSUMED (the type name stands in)
       return {
         steps: [
           { when: 'kill', se: 0x233 },
-          { when: 'end', particles: [{ p: gensei(0x46), at: ahead(-10) }], pools: [pool(type === 'ZOL_GIBBON' ? 'red15' : 'red7_5', 0x32, ahead(-10))] },
+          { when: 'end', particles: [{ p: gensei(0x46), at: ahead(-10) }], pools: [pool(type === 'ZOL_GIBBON' ? 'red15' : 'red7_5', 0x32, ahead(-10))], sink: sink(200) },
         ],
       };
-    case 'TObjEneIllGill': // Ill Gill 0x0052e898 (the kill 0x005310e0 makes 0xf2 at the body): SE 0x2dc at motion frame 10, 0xf0 at 30, at 52 SE 0x2e3, a purple 15 pool (10 late) and the dark burst, gone 11 frames later
+    case 'TObjEneIllGill': // Ill Gill 0x0052e898 (VERIFIED: IllgillUpdateState, state 8): the kill 0x005310e0 makes 0xf2 at +0x300; SE 0x2dc at motion frame 10, 0xf0 at 30, at 52 SE 0x2e3, the purple 15 pool (CreateEntity_00578658, 10 late) and the dark burst at the origin, then the removal 2 frames later (the counter 'last_footstep_effect_y' 1 -> 0 -> -1). ASSUMED: the state-7 handler (0x0052ea00) plays SE 0x2db at motion frame 30; not added (which state is the death is UNCLEAR)
       return {
         steps: [
           { when: 'kill', particles: [{ p: { id: 0xf2 }, at: BODY }] },
           { when: { frame: 10 }, se: 0x2dc },
           { when: { frame: 30 }, particles: [{ p: { id: 0xf0 }, at: ORIGIN }] },
           { when: { frame: 52 }, se: 0x2e3, particles: at(DARK_BURST, ORIGIN), pools: [pool('purple15', 10)] },
-          { when: { wait: 11 }, remove: true },
+          { when: { wait: 2 }, remove: true },
         ],
       };
-    case 'TObjEneDelDepth': // Deldepth 0x00548d60: SE 0x276, then 5 frames later a purple 7.5 pool and it is gone (ASSUMED: the counter before it is not traced)
+    case 'TObjEneDelDepth': // Deldepth 0x00548d60 (PARTLY VERIFIED): SE 0x276 at the state-16 start (0x00549764, the kill side); the purple 7.5 pool (CreateEntity_005786e8) at x2 and the removal come when the damage handler's counter (0x38c, set 5 after the SE 0x276 of 0x00548e61) ends: the 5 frames here are ASSUMED
       return { steps: [{ when: 'kill', se: 0x276 }, { when: { wait: 5 }, pools: [pool('purple7_5', 0)], remove: true }] };
     // --- Episode 4 ---------------------------------------------------------------
-    case 'Astark': // Astark 0x005a1f8c: kill 0xf2 at the body, voice by area at motion frame 0; at 27 the second sound, 0xf0, a green 25 pool (20 late) and ab_dead (50) at the blood point; it sinks 200 frames
+    case 'Astark': // Astark 0x005a1f8c (VERIFIED, the death state 9): the kill 0xf2 at the lock-on cursor point (0x005a4a64: BODY stands in); voice by area (table 0x009c02b4) at motion frame 0; at 27 the second sound (table 0x009c02fc), 0xf0, a green 25 pool (CreateEntity_00578388, 20 late) and ab_dead (50) at the blood point. The sink is NOT in the exe: the state removes it by its timer 0x394 (0.1 a frame to -20; start ASSUMED), so the sink stays as a stand-in (ASSUMED)
       return {
         steps: [
           { when: 'kill', particles: [{ p: { id: 0xf2 }, at: BODY }], sink: sink(200) },
@@ -361,7 +378,7 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { frame: 27 }, ...optSe(areaSe(AREA_SE.astarkBlood, area)), particles: [{ p: { id: 0xf0 }, at: BLOOD }, { p: abDead(0x32), at: BLOOD }], pools: [pool('green25', 0x14, BLOOD)] },
         ],
       };
-    case 'Dorphon': // Dorphon / Eclair 0x005a72d8: SE by area at the kill; at motion frame 28 gensei (70) at the body and the ground SE; at the end a red 25 pool
+    case 'Dorphon': // Dorphon / Eclair 0x005a72d8 (VERIFIED): SE by area (table 0x009c0b4c) at the kill; at motion frame 28 gensei (70) at +0x300, the ground SE (table 0x009c0b04) and the ground effect (0x005a8d20, not modelled); at the end a red 25 pool at the origin (CreateEntity_00578148)
       return {
         steps: [
           { when: 'kill', ...optSe(areaSe(AREA_SE.dorphonKill, area)) },
@@ -369,9 +386,9 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: 'end', pools: [pool('red25', 0)] },
         ],
       };
-    case 'Girtablulu': // Girtablulu 0x005aa2d8: SE by area at the kill; after the motion the dark burst at the body and the dissolve, then a purple 25 pool
+    case 'Girtablulu': // Girtablulu 0x005aa2d8 (VERIFIED; the dump names it DorphonProcessState9): SE by area (table 0x009c0dd8) at the kill; at the motion's end the burst at +0x300 and the dissolve (0x490 vtable), then a purple 25 pool (CreateEntity_005785c8) at the origin
       return { steps: [{ when: 'kill', ...optSe(areaSe(AREA_SE.girtabluluKill, area)) }, { when: 'end', particles: at(DARK_BURST, BODY), dissolve: true }, darkPool('purple25')] };
-    case 'Zu': // Zu / Pazuzu 0x005b..: SE by area at the kill, 0xf0 at motion frame 30, 30 frames later gensei (30) and a red 15 pool (15 late)
+    case 'Zu': // Zu / Pazuzu on_zu_killed (dump line 400585; VERIFIED): SE by area (table 0x009c17a4) at the kill; 0xf0 at the origin when the death motion reaches frame 30; 30 frames later gensei (30) and a red 15 pool (SpawnItem_005781d8, 15 late) at the origin; the removal is a timer (not modelled)
       return {
         steps: [
           { when: 'kill', ...optSe(areaSe(AREA_SE.zuKill, area)) },
@@ -379,7 +396,7 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { wait: 30 }, particles: [{ p: gensei(0x1e), at: ORIGIN }], pools: [pool('red15', 15)] },
         ],
       };
-    case 'MerissaA': // Merissa A / AA 0x005b5..: the two sounds by area at the kill; at the motion's end a green 7.5 pool (50 late)
+    case 'MerissaA': // Merissa A / AA on_merissa_dead 0x005b52ec (VERIFIED): the two sounds by area (tables 0x009c1bf8, 0x009c1c1c) at the kill; the green 7.5 pool (EnemyProcessSubEntitySpawn_005b6328, 50 late, at the origin, at the motion's end) is the Merissa's sub-entity handler: its link to the Merissa class is ASSUMED (no dump caller)
       return {
         steps: [
           { when: 'kill', ...optSe(areaSe(AREA_SE.merissaJump, area)) },
@@ -387,7 +404,7 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: 'end', pools: [pool('green7_5', 0x32)] },
         ],
       };
-    case 'SatelliteLizardYowie': // Satellite Lizard / Yowie 0x005af0a4: SE by area at the kill; at the motion's end a red 7.5 pool (50 late) and gensei (70) 12 aside, 10 behind
+    case 'SatelliteLizardYowie': // Satellite Lizard / Yowie 0x005af0a4 (VERIFIED; the dump names it GoranProcessState): SE by area (table 0x009c14a4) at the kill; at the motion's end, at (+12 for the attack-angle state 0xe, -12 for 0xf; -10), a red 7.5 pool (CreateDropEntity_005782f8, 50 late) and gensei 70; then the sink 0.1 a frame (its length ASSUMED). The port keeps the +12 branch (ASSUMED)
       return {
         steps: [
           { when: 'kill', ...optSe(areaSe(AREA_SE.yowieKill, area)) },

@@ -7521,12 +7521,12 @@ sorting).
 - The ground probe and the construction (the 10 rand calls, the pull-in rule at size above 5) follow the first trace; not re-traced this pass.
 - The pool and fragment renders (0x00577884, 0x00511f1c) and the fragment opacity.
 - `ICE_SHARD_MODEL` (model 5 of bm_technic.bml, technic.xvm, texture id 2), the model-particle orientation (`velocityAngles`, 0x007a8d98, g_VelocityAngles_y = 0), and the model-particle spin / floor in `classic/particles.ts` (0x0050dbb8, 0x0050e2a4..0x0050e370): from the first trace, not re-checked here. ICE_SHARD_COUNT = 20 is the emitter 0x153's rate in the particle data (the test reads it).
-- The death rows other than those above: sounds, particle ids and timings are from the first trace, not re-traced this pass. The file header says so.
+- The death rows other than those above: sounds, particle ids and timings are from the first trace, not re-traced this pass. The file header says so. **Corrected 2026-10-21 (later entry below):** re-traced row by row; the rows that were wrong are fixed there.
 - Dropped: none of the WIP's content was removed.
 
 **UNCLEAR:**
 - Dubchic's counter (0x344, decremented by each kill call; the SE and explosion wait 29 frames in the port): the exe's kill handler returns early until the counter passes 0, so the port's 29-frame wait is a model of it, not a trace.
-- Deldepth's counter and the Mothmant's landing point stay as the WIP had them (ASSUMED in `deathfx.ts`).
+- Deldepth's counter stays as the WIP had it (ASSUMED in `deathfx.ts`). **Corrected 2026-10-21:** the Mothmant's landing point is VERIFIED (0x00516c60: the red 2.5 pool and gensei 30 at the origin, on the fall reaching the floor); only the trigger (the motion's end) is ASSUMED.
 
 **Checks:**
 - `node tests/deathfx.test.ts`: all checks passed (reads the client data for the particle entry 0x153 and the enemy models).
@@ -7764,3 +7764,34 @@ The helper's counter (+0x6ac) is zero at the spawn (0x004197a1). The emerge and 
 **Decisive spot-check.** In the exe, 0x00421667: the flame's handle is stopped when the motion frame is above 40 (`ja` against 0x008fbc48 = 40.0), and `movl $0, 0x8b4(%edx)` drops it. If that constant or the branch is wrong, the flame's lifetime is wrong.
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 28 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/combat.test.ts` (vendor linked for the run, removed after): 5946 checks, 0 failures. Client `npx tsc --noEmit` (Node 24): clean. Not run in Chrome.
+
+## 2026-10-21: death visuals, second pass: each enemy's death re-traced against the exe
+
+**Report:** the 41 death rows of `deathPlanFor` (`client/src/combat/deathfx.ts`) were re-traced one by one: the death state (the dump's handler, matched by its `_ADDR` name suffix or by the call sites of its sound / particle / pool), its sounds, particle ids, pool creators and points, and the timings the exe checks (`check_entity_animation_elapsed_threshold`, the counters). Result: 27 rows VERIFIED, 6 fixed, 14 still ASSUMED (each row's comment names the address and what is ASSUMED). Pool creators, the red and green sizes and the per-area sound tables were read entry by entry: all match `combat/blooddecals.ts` and the port's tables.
+
+**Rows changed** (`client/src/combat/deathfx.ts`, `tests/deathfx.test.ts`):
+
+| Row (class) | Exe | Was | Now |
+|---|---|---|---|
+| Sinow Berill (`TObjEneMe3StelthReal`) | 0x0059f3dc | SE 0x243 at the kill | SE 0x243 at motion frame 18 (0x0059f50a `push 28.0`, the 18/28 branch; SE push at 0x0059f522) |
+| Sinow Zoa (`TObjEneMe3SinowZoaReal`) | 0x005926c4 | SE 0x27f at the kill | SE 0x27f at motion frame 18 |
+| Grass Assassin (`TObjGrass`) | 0x005225bc | ab_dead and green 15 at 15 behind | both at the origin (`CreateEnemyDropEntity_00578418(&x, 10)`, ab_dead at &x); the -15 point is the derolle effect on maps 3..5 only |
+| Epsilon (`TObjEneEpsilonBody`) | 0x005588dc | SE, explosion at wait 19 | wait 20: the counter 0x4f0 passes 0x13 on the 20th state-0 call |
+| Ul Gibbon (`TObjEneBm5GibonU`) | 0x00565ecc | no sink | sink 0.1 a frame for 200 frames from the motion's end (0x00925f8c 0.1, 0x00925f88 20) |
+| Ill Gill (`TObjEneIllGill`) | 0x0052e898 | removed 11 frames after frame 52 | removed 2 frames after (`last_footstep_effect_y` 1 -> 0 -> -1) |
+
+**VERIFIED (27), address of the death state or call:** Bulclaw 0x00531ee4; Claw 0x00534e84; Dark Belra 0x00537388; Chaos Bringer 0x0053aa34; Dark Gunner 0x00544634; Delsaber 0x0054e688; Chaos Sorcerer 0x0059bbe8; Delbiter 0x0054b144 (tower = 35); Morfos 0x0057aa0c; Sinow Beat 0x0058da40; Gi Gue 0x0056b19c; Poison / Nar Lily 0x00527f20; Pofuilly Slime 0x00598648; Hildebear / Hildeblue 0x00513614 (the death motion; the dump names it `Attack`); Mothmant 0x00516c60 (the fall; the dump names it `Hildebear`); Monest 0x00519550; Dorphon 0x005a72d8; Girtablulu 0x005aa2d8 (the dump names it `DorphonProcessState9`); Zu `on_zu_killed` (dump line 400585, table 0x009c17a4); Boota (the blood stain `create_enemy_blood_stain`, 0x00535b38, through its call sites, and the table 0x009c0614); Nano Dragon 0x0057e9ac. The six fixed rows are in the list above (Sinow Berill, Sinow Zoa, Epsilon, Grass, Ul Gibbon, Ill Gill) and count here as VERIFIED after the fix.
+
+**ASSUMED (14):** Canadine (the explosion height -5: the dump's global has no value); Dubchic (the 29-frame wait, the 0xf8 shock's 30 frames: 0x00556ed0 not traced); Deldepth (the 5 frames after the 0x380 cycle; SE 0x276 is VERIFIED at the state-16 start 0x00549764); Mericarol (the 10-ahead point is g_EnemyHitVectorScale, the 300-frame sink threshold; the kill SE 0x218 at 0x005712e4 is VERIFIED); Astark (the kill's 0xf2 is at the lock-on cursor point, not +0x300; the state has no sink: the exe removes it by the timer 0x394, the sink is a stand-in); Savage Wolf and Satellite Lizard / Yowie (the side of the death point is +12 for the attack-angle branch 0xe and -12 otherwise; the port keeps +12; the Yowie's sink length); Merissa A (the green 7.5 sub-entity handler 0x005b6328 has no dump caller: its link to the class is not traced); Booma family (hook VERIFIED; the voices 0xe6 / 0xf9 / 0x208 / 0x256 / 0x20d are the push sites near the class code but not traced to the class; Shark and Dolmolm and Merillia delays not traced); Dimenian (its pools and SEs 0x1f0 / 0x1c5 are VERIFIED at 0x005517de..0x00551823; the burst is ASSUMED); Goran family (the voice table 0x009c1114 VERIFIED; the dark hook is ASSUMED).
+
+**UNCLEAR:**
+- Ill Gill: the state-7 handler (0x0052ea00) plays SE 0x2db at motion frame 30; which state is the death was not settled, so it is not added.
+- Nar / Del Lily: the dark variant follows the instance flag 0x800 (SE 0x2c8 at the kill, the dark burst, a purple 7.5 50 frames late, the dissolve), not the type name; which types carry the flag is not traced.
+- Zol Gibbon: the red 15 is chosen by `currently_casting_tech_info.cast == 1` in the exe; the port uses the type name.
+- Morfos and Mothmant: the burst / landing is timed by a sub-state check, not the motion's end; the port's trigger is 'end' (ASSUMED).
+
+**Corrected in place (older entry above):** the Mothmant's landing point is VERIFIED (not ASSUMED); the line that said the rows other than Canadine and the Dubchic were from the first trace is now marked as re-traced. Also: the deathfx header said each class's hooks were read from vtables at 0x00a48060 .. 0x00a53740. Those addresses are in .bss (not in the file), so that reading could not be right; the hooks are matched by call sites now.
+
+**Spot-check (the decisive bytes):** Sinow Berill's SE 0x243 is under the 18 / 28 threshold test: `objdump -d -M intel --start-address=0x0059f4f8 --stop-address=0x0059f530 PsoBB.exe` shows `push 0x41e00000` (28.0) at 0x0059f50a, the `je` at 0x0059f518 and `push 0x243` at 0x0059f522 before the call to the sound routine 0x00814298.
+
+**Checks:** `node tests/deathfx.test.ts` (all checks passed; the Epsilon test is now 20 frames, and four checks cover the fixed rows); `cd client && npx tsc --noEmit -p .` (clean, Node 24). Not run in Chrome. The node_modules symlink in the client is removed before the commit.
