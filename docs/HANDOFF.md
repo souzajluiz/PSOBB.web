@@ -66,8 +66,11 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    and `screen.orientation.lock`, the adaptive resolution and the batching gain; the
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`
    restores it).
-6. Optional: the quest-loading particle wipes, the lobby / floor loading screens, the
-   a field scene in `classic.html`. The counter's ship / block change and team menus
+6. Optional: the quest-loading particle wipes, the floor loading screens. The classic
+   page now enters a created / joined party behind the game-entry loading screen (the
+   warp) and plays it on the Online tab's field (2026-10-21, `classic/field.ts`); left
+   there: Pioneer 2 NPC talk / counters / quests, the chat line and the mouse in games,
+   the loading screen when leaving a game. The counter's ship / block change and team menus
    are in (2026-10-20, not seen in Chrome: log in, walk to the counter, Transport /
    Team); left in teammenu.ts's header (Master Transfer, Buying Privileges, Flag
    Records, invitations, banned names).

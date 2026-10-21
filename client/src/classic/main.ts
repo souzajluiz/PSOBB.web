@@ -9,9 +9,11 @@ import { Game, type GameListEntry } from '../net/game.ts';
 import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import { membershipFromSave, NO_TEAM, TeamClient } from '../net/team.ts';
+import { GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
 import { ConnectingScreen, type ConnectingAssets } from './connecting.ts';
+import { FieldScreen } from './field.ts';
 import type { PartyHost } from './gamelist.ts';
 import { LobbyScreen, type LobbyHud, type TransportHost } from './lobby.ts';
 import type { TeamHost } from './teammenu.ts';
@@ -207,9 +209,13 @@ async function main(): Promise<void> {
   // Item names for the Item List window (ItemPMT from the stream file, as the
   // Online tab's inventory panel does).
   let itemNames: ItemNames | null = null;
-  const loadItemNames = async (s: BBSession) => {
+  // The stream file (ItemPMT, PlyLevelTbl, the battle params), read once on
+  // the login connection after login (04EB / 03EB); the game server answers it
+  // too, but slowly (seconds), and a game needs it before its floor is shown.
+  let streamFile: Promise<Map<string, Uint8Array>> | null = null;
+  const loadItemNames = async (stream: Promise<Map<string, Uint8Array>>) => {
     try {
-      const pmtFile = (await files.has('ItemPMT.prs')) ? await files.read('ItemPMT.prs') : (await s.streamFiles()).get('ItemPMT.prs');
+      const pmtFile = (await files.has('ItemPMT.prs')) ? await files.read('ItemPMT.prs') : (await stream).get('ItemPMT.prs');
       if (!pmtFile) return;
       const pmt = parseItemPMT(pmtFile);
       unitxt ??= await loadUnitxt();
@@ -228,21 +234,86 @@ async function main(): Promise<void> {
   };
 
   // The counter's party menus talk to the server through Game (net/game.ts):
-  // 08 the list, 09 a game's info, 10 join, C1 create. The classic client has
-  // no field scene yet, so a game it entered is left at once and the lobby is
-  // shown again (the roadmap's field item).
+  // 08 the list, 09 a game's info, 10 join, C1 create. Once the 64 is in, the
+  // game is entered behind its loading screen (enterGame).
   const partyHost = (lobby: Lobby, shipName: string): PartyHost => {
     const ctx = () => ({ guildCardNumber: session?.init?.guildCardNumber ?? 0, fullCharacter: () => session?.fullCharacter ?? null });
-    const back = async (game: Game) => {
-      console.log(`[classic] entered game "${game.name}"; the classic field is not implemented, back to the lobby`);
-      await enterLobby(await game.leave(), shipName);
-    };
     return {
       listGames: () => Game.list(lobby.conn),
       gameInfo: (entry: GameListEntry) => Game.info(lobby.conn, entry),
-      join: async (entry, password) => back(await Game.join(lobby, ctx(), entry.itemId, password)),
-      create: async (options) => back(await Game.create(lobby, ctx(), options)),
+      join: async (entry, password) => {
+        const game = await Game.join(lobby, ctx(), entry.itemId, password);
+        game.name ||= entry.name; // 8A brings it later
+        void enterGame(game, shipName);
+      },
+      create: async (options) => void enterGame(await Game.create(lobby, ctx(), options), shipName),
     };
+  };
+
+  // After the 64 the exe shows the warp burst as the loading screen (type
+  // lobby: get_warp_type answers 2 for the join flag, see connecting.ts),
+  // loads Pioneer 2 behind it and sends 6x3F / 6x1F / 6x3B / 6x23 / 6F once
+  // it is loaded (the game loop 0x007bcc4c). Here the field is the Online
+  // tab's GameView on the 3D canvas (classic/field.ts). A load that fails
+  // shows its message on the loading screen; Enter goes back to the lobby.
+  let gameView: GameView | null = null;
+  const enterGame = async (game: Game, shipName: string) => {
+    game.log = (m) => console.log(`[game] ${m}`);
+    const assets = await loadConnectingAssets();
+    // The loading screen covers the window; the 3D canvas (and the field HUD
+    // sized from it) stays hidden until the floor is loaded.
+    showWorld(false);
+    const v = world();
+    const load = (async () => {
+      lobbyView?.dispose();
+      lobbyView = null;
+      gameView?.dispose();
+      const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null }, {
+        labels: false,
+        ...(streamFile ? { streamFiles: () => streamFile! } : {}),
+      });
+      gameView = view;
+      view.onLobbyWarp = () => void leaveGame(game, shipName);
+      await view.enter();
+      return view;
+    })();
+    load.catch(() => {}); // reported by the loading screen
+    const loading = new ConnectingScreen(
+      assets,
+      load,
+      () =>
+        void load.then((view) => {
+          console.log(`[classic] entered game "${game.name}"`);
+          showWorld(true);
+          const field = new FieldScreen(view, worldCanvas);
+          Object.assign(window, { classicGame: field, classicLobby: undefined });
+          show(field);
+        }),
+      (message) => {
+        console.error(`[classic] game "${game.name}": ${message}`);
+        void leaveGame(game, shipName);
+      },
+      { status: false },
+    );
+    Object.assign(window, { classicGameLoading: loading });
+    show(loading);
+  };
+
+  // The lobby teleporter (or a failed load): 98 / 84, then the lobby again.
+  let leaving: Game | null = null;
+  const leaveGame = async (game: Game, shipName: string) => {
+    if (leaving === game) return;
+    leaving = game;
+    if (gameView?.game === game) {
+      gameView.dispose();
+      gameView = null;
+    }
+    Object.assign(window, { classicGame: undefined });
+    try {
+      await enterLobby(await game.leave(), shipName);
+    } catch (err) {
+      console.error('[classic] leaving the game failed', err);
+    }
   };
 
   // The counter's Team menus (teammenu.ts) over the connection's TeamClient
@@ -297,7 +368,7 @@ async function main(): Promise<void> {
     hud.episode4 = episode4;
     const screen = new LobbyScreen(v, lobbyView, lobby, hud, shipName);
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
-    Object.assign(window, { classicLobby: screen, classicLobbyState: lobby });
+    Object.assign(window, { classicLobby: screen, classicLobbyState: lobby, classicGame: undefined, classicGameLoading: undefined });
     show(screen);
   };
 
@@ -420,7 +491,10 @@ async function main(): Promise<void> {
       session?.close();
       session = new BBSession({ nsk: await loadKey(), connect: (port) => connectBridge(port) });
       await session.login(c.user, c.password);
-      await loadItemNames(session);
+      const stream = session.streamFiles();
+      stream.catch(() => {}); // a game asks the game server instead (render/combat.ts)
+      streamFile = stream;
+      await loadItemNames(stream);
       credentials = { username: c.user, password: c.password };
       try {
         localStorage.setItem('psobb.username', c.user);
