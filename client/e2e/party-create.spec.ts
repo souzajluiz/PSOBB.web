@@ -8,7 +8,7 @@
 // the screens through the development hooks classic/main.ts puts on window
 // (e2e/classic.ts).
 import { expect, test } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
 
 // The local test account of tests/login.live.ts.
 const USER = process.env.PSO_USER ?? 'webtest';
@@ -60,7 +60,21 @@ test('Create a PARTY: difficulty list, registration, loading screen and the fiel
     await expectInGame(page, logs, name);
   });
 
-  await test.step('back to the lobby', () => leaveToLobby(page));
+  await test.step('back to the lobby behind the loading screen', async () => {
+    // The return is quick: sample the loading screen's hook every 10 ms, a
+    // poll could miss the 98 / 84 window.
+    await page.evaluate(() => {
+      const hook = window as unknown as { classicLoadingSeen?: boolean };
+      hook.classicLoadingSeen = false;
+      setInterval(() => {
+        if ((window as unknown as { classicGameLoading?: unknown }).classicGameLoading) hook.classicLoadingSeen = true;
+      }, 10);
+    });
+    await peek(page, (w) => w.classicGame.view.onLobbyWarp());
+    await expect.poll(() => peek(page, (w) => w.classicLobby !== undefined && w.classicGame === undefined), { timeout: 45_000 }).toBe(true);
+    expect(await page.evaluate(() => (window as unknown as { classicLoadingSeen?: boolean }).classicLoadingSeen)).toBe(true);
+    expect(logs.some((l) => l.includes('back to the lobby'))).toBe(false);
+  });
 
   const errors = logs.filter((l) => l.startsWith('error') || l.startsWith('pageerror'));
   console.log(errors.join('\n'));

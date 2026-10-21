@@ -300,6 +300,8 @@ async function main(): Promise<void> {
   };
 
   // The lobby teleporter (or a failed load): 98 / 84, then the lobby again.
+  // The lobby loads behind the same warp burst as the game entry (the exe's
+  // unknown_init_lobby calls play_loading_screen_animation(floor) too).
   let leaving: Game | null = null;
   const leaveGame = async (game: Game, shipName: string) => {
     if (leaving === game) return;
@@ -309,11 +311,22 @@ async function main(): Promise<void> {
       gameView = null;
     }
     Object.assign(window, { classicGame: undefined });
-    try {
-      await enterLobby(await game.leave(), shipName);
-    } catch (err) {
-      console.error('[classic] leaving the game failed', err);
-    }
+    const assets = await loadConnectingAssets();
+    showWorld(false);
+    const back = game.leave().then(async (lobby) => ({ lobby, screen: await buildLobby(lobby, shipName) }));
+    const loading = new ConnectingScreen(
+      assets,
+      back,
+      () =>
+        void back.then(({ lobby, screen }) => {
+          showWorld(true);
+          showLobby(lobby, screen);
+        }),
+      (message) => console.error(`[classic] leaving the game failed: ${message}`),
+      { status: false },
+    );
+    Object.assign(window, { classicGameLoading: loading });
+    show(loading);
   };
 
   // The counter's Team menus (teammenu.ts) over the connection's TeamClient
@@ -353,9 +366,10 @@ async function main(): Promise<void> {
     return { changeShip: () => go((s) => s.changeShip()), changeBlock: () => go((s) => s.changeBlock()) };
   };
 
-  const enterLobby = async (lobby: Lobby, shipName: string) => {
+  // The lobby's screen, built but not shown: leaveGame builds it behind the
+  // loading screen and shows it when the burst is done.
+  const buildLobby = async (lobby: Lobby, shipName: string): Promise<LobbyScreen> => {
     const v = world();
-    showWorld(true);
     lobbyView?.dispose();
     await v.load(source, lobbyMapFile(lobby.lobbyNumber));
     const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
@@ -366,10 +380,16 @@ async function main(): Promise<void> {
     if (team) hud.team = team;
     hud.transport = transportHost(shipName);
     hud.episode4 = episode4;
-    const screen = new LobbyScreen(v, lobbyView, lobby, hud, shipName);
+    return new LobbyScreen(v, lobbyView, lobby, hud, shipName);
+  };
+  const showLobby = (lobby: Lobby, screen: LobbyScreen) => {
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
     Object.assign(window, { classicLobby: screen, classicLobbyState: lobby, classicGame: undefined, classicGameLoading: undefined });
     show(screen);
+  };
+  const enterLobby = async (lobby: Lobby, shipName: string) => {
+    showWorld(true);
+    showLobby(lobby, await buildLobby(lobby, shipName));
   };
 
   const showShipSelect = async (lobby: Lobby, menu: ServerMenuItem[]) => {
