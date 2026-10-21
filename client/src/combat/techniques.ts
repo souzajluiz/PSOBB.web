@@ -233,6 +233,19 @@ export function techElement(tech: number): Element {
   return null;
 }
 
+// The technique_group entity_hit_by_tech receives for an attack technique (the
+// group Epsilon's immunity compares with, EpsilonAi.immuneToTech). Barta is 0x13,
+// not the element's 2 (techfire.ts HIT_GROUP). Support techniques: 0.
+export function techGroup(tech: number): number {
+  if (tech <= TECH.rafoie) return 1;
+  if (tech === TECH.barta) return 0x13;
+  if (tech <= TECH.rabarta) return 2;
+  if (tech <= TECH.razonde) return 3;
+  if (tech === TECH.grants) return 4;
+  if (tech === TECH.megid) return 5;
+  return 0;
+}
+
 export interface TechResist {
   efr: number;
   eic: number;

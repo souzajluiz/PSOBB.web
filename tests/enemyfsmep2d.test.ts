@@ -3,6 +3,8 @@
 // Run: node tests/enemyfsmep2d.test.ts
 import {
   EPSILON,
+  EPSILON_ELEMENT_GROUPS,
+  EPSILON_ELEMENT_SPECIALS,
   EPSILON_PATTERNS,
   EpsilonAi,
   EpsigardAi,
@@ -740,6 +742,39 @@ const epsilon = (o: { params?: number[]; rng?: () => number } = {}) =>
   check(changes >= 2, `the element changed (${changes} times)`);
   check(mixFrames >= 29 && mixFrames <= 31, `the colour lerp takes 30 frames (${mixFrames})`);
   check(shownOpen && shownClosed, 'the body is open and closed in the cycle');
+}
+{
+  // The recolour ring (render/epsilonfx.ts): its scale is colourT while the
+  // recolour state runs, null in every other state.
+  const e = epsilon({ params: [0, 0, 10, -15] });
+  const gr = groupRigs(e);
+  const p = player(0, 150);
+  eq(e.recolourRing, null, 'no ring before the first recolour');
+  let ringSeen = false;
+  let ringBad = false;
+  runGroup(e, gr, [p], 3000, 30, () => {
+    const t = e.recolourRing;
+    if (e.state === 'recolor') {
+      ringSeen = true;
+      if (t === null || t < 0 || t > 1) ringBad = true;
+    } else if (t !== null) ringBad = true;
+  });
+  check(ringSeen, 'the ring is drawn during a recolour');
+  check(!ringBad, 'the ring is null outside the recolour and a 0..1 scale inside');
+}
+{
+  // The special immunity (EpsigardProcessSpecialAttack 0x0055ab30): the
+  // element's special type (0x009252d4: fire 9, ice 7, thunder 10, instant
+  // kill 11), by colour 0..3 (the element is read as the colour & 3).
+  eq(EPSILON_ELEMENT_SPECIALS, [9, 7, 10, 11], 'the element specials (0x009252d4)');
+  eq(EPSILON_ELEMENT_GROUPS, [1, 2, 3, 5], 'the element groups (0x009252e0)');
+  for (let c = 0; c < 4; c++) {
+    const e = epsilon({ rng: () => (c + 0.5) / 4 });
+    eq(e.element, c, `colour ${c} from the rng`);
+    for (const t of [1, 7, 9, 10, 11, 12]) {
+      eq(e.immuneToSpecial(t), t === EPSILON_ELEMENT_SPECIALS[c], `colour ${c} is immune to special ${t} only as its element`);
+    }
+  }
 }
 {
   // The sounds (exe: play_directional_sound_effect at the Epsilon): the laser

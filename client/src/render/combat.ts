@@ -51,6 +51,7 @@ import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
 import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
+import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
@@ -108,6 +109,7 @@ import {
   techDamage,
   techBoost,
   techElement,
+  techGroup,
   techHitPower,
   techPower,
   type TechniqueData,
@@ -184,8 +186,6 @@ import { TickClock } from './smoothrender.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 const pct = (m: number): string => `${m >= 0 ? '+' : ''}${(m * 100).toFixed(1)}%`;
-// technique_group of an element (techElement): Foie 1, Barta 2, Zonde 3, Grants 4, Megid 5.
-const TECH_GROUP_OF_ELEMENT: Partial<Record<string, number>> = { fire: 1, ice: 2, lightning: 3, light: 4, dark: 5 };
 // technique_group of a support technique and back (entity_hit_by_tech).
 const BUFF_GROUP: Partial<Record<number, BuffGroup>> = {
   [TECH.shifta]: GROUP.shifta,
@@ -798,6 +798,8 @@ export class CombatView {
     this.voloptCage = null;
     for (const m of this.epsilonOrbs.values()) m.removeFromParent();
     this.epsilonOrbs.clear();
+    for (const fx of this.epsilonFx.values()) fx.dispose();
+    this.epsilonFx.clear();
     this.epsilonBodies.clear();
     this.epsilonLook.clear();
     this.resetDarkFalz();
@@ -3581,6 +3583,7 @@ export class CombatView {
     } else if (r.motion) this.playEpsilonPart(e, look, r.motion);
     this.epsilonTintBody(e, ai);
     this.epsilonOrbView(e, ai, !!r.hidden || ai.isDying);
+    this.epsilonFxView(e, ai, !!r.hidden || ai.isDying);
   }
 
   // The animators are the parts' in order (both parts have a motion).
@@ -3648,6 +3651,29 @@ export class CombatView {
     }
     mesh.visible = true;
     mesh.position.set(orb.x, e.instance.root.position.y - e.lift + PLAYER_AIM_HEIGHT, orb.z);
+  }
+
+  // The recolour ring and the laser line (render/epsilonfx.ts), from the
+  // Epsilon's own position; the line ends at the orb sphere above.
+  private epsilonFx = new Map<EnemyRuntime, EpsilonFx>();
+  private epsilonFxView(e: EnemyRuntime, ai: EpsilonAi, hide: boolean): void {
+    let fx = this.epsilonFx.get(e) ?? null;
+    if (!fx) {
+      if (hide) return;
+      fx = new EpsilonFx(this.viewer.scene, e.instance.archive);
+      this.epsilonFx.set(e, fx);
+    }
+    const p = e.instance.root.position;
+    const feet = p.y - e.lift;
+    const orb = hide ? null : ai.orb;
+    fx.update({
+      x: p.x,
+      feet,
+      z: p.z,
+      yaw: e.instance.root.rotation.y,
+      ring: hide ? null : ai.recolourRing,
+      orb: orb ? { x: orb.x, y: feet + PLAYER_AIM_HEIGHT, z: orb.z } : null,
+    });
   }
 
   // --- Bulclaw / Bulk / Claw (combat/enemyfsmruins.ts) ------------------------
@@ -4771,6 +4797,14 @@ export class CombatView {
       }
       return;
     }
+    // EpsigardProcessSpecialAttack_0055ab30: the open Epsilon's own element
+    // special (fire / ice / thunder / instant kill) only shows the "0".
+    if (e.ai instanceof EpsilonAi && !e.ai.invulnerable && e.ai.immuneToSpecial(type)) {
+      const ip = e.instance.root.position;
+      this.num(0, false, ip.x, ip.y + 26, ip.z);
+      this.opts.log(`${name}: E-${e.index.toString(16)} (${e.slot.type}) is immune to this element`);
+      return;
+    }
     const char = this.opts.character?.() ?? null;
     const p = this.progression;
     const out = resolveSpecial(
@@ -5759,9 +5793,12 @@ export class CombatView {
   private techHitEnemy(tech: number, level: number, mst: number, charClass: number, e: EnemyRuntime): void {
     const name = TECH_NAMES[tech];
     // Epsilon's open element blocks the technique of its group (immuneToTech,
-    // EpsigardProcessTechHit_0055aa5c): no damage, no status. Invulnerable
-    // Epsilon takes the "0" of applyEnemyHit instead.
-    if (e.ai instanceof EpsilonAi && !e.ai.invulnerable && e.ai.immuneToTech(TECH_GROUP_OF_ELEMENT[techElement(tech) ?? ''] ?? 0)) {
+    // EpsigardProcessTechHit_0055aa5c): no damage, no status, a "0" (the exe
+    // calls 0x0077535c with 0 there). Invulnerable Epsilon takes the "0" of
+    // applyEnemyHit instead.
+    if (e.ai instanceof EpsilonAi && !e.ai.invulnerable && e.ai.immuneToTech(techGroup(tech))) {
+      const ip = e.instance.root.position;
+      this.num(0, false, ip.x, ip.y + 26, ip.z);
       this.opts.log(`${name}: E-${e.index.toString(16)} (${e.slot.type}) is immune to the element`);
       return;
     }

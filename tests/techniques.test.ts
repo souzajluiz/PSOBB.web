@@ -15,6 +15,7 @@ import {
   TechCast,
   techData,
   techDamage,
+  techGroup,
   techPower,
   techTpCost,
 } from '../client/src/combat/techniques.ts';
@@ -122,6 +123,17 @@ eq([releaseFrame(0, 0), releaseFrame(1, 0), releaseFrame(2, 0), releaseFrame(0, 
   // per tick to frame 8 (6 ticks) and releases.
   eq(log.slice(0, 3), ['release', 't', '12'], 'release tick');
   check(log.includes('done'), 'cast ends after the motion');
+}
+{
+  // The technique_group entity_hit_by_tech gets (Epsilon's immunity compares
+  // it with 1, 2, 3, 5; Barta is 0x13, techfire.ts HIT_GROUP).
+  eq([TECH.foie, TECH.gifoie, TECH.rafoie].map(techGroup), [1, 1, 1], 'the foie family is group 1');
+  eq(techGroup(TECH.barta), 0x13, 'Barta is group 0x13');
+  eq([TECH.gibarta, TECH.rabarta].map(techGroup), [2, 2], 'the gibarta family is group 2');
+  eq([TECH.zonde, TECH.gizonde, TECH.razonde].map(techGroup), [3, 3, 3], 'the zonde family is group 3');
+  eq(techGroup(TECH.grants), 4, 'Grants is group 4');
+  eq(techGroup(TECH.megid), 5, 'Megid is group 5');
+  eq(techGroup(TECH.resta), 0, 'a support technique has no attack group');
 }
 
 if (failures) {

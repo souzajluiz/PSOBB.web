@@ -7225,3 +7225,33 @@ Not run in Chrome. The check: floor 14, Ultimate, stand within 30 units of (-986
 - `cd client && npx tsc --noEmit`: clean.
 - Chrome (Playwright, Vite on 127.0.0.1:5180, webtest, Create a PARTY): Pioneer 2 area 0, weapon mesh hidden (`visible: false`, key `0:0`); warp to Forest 1 (area 1), weapon visible, key `0:0` (the Saber model, the character's equipped weapon). Screenshots: `client/test-results/held-weapon-pioneer2.png`, `client/test-results/held-weapon-forest1.png`, `client/test-results/held-weapon-forest1-zoom.png` (not committed; the temporary spec was removed).
 - Not run: two clients (a remote player's weapon), a live equip change (the rebuild path), and the 6x25 / 6x26 flow from another player.
+
+## 2026-10-21: Epsilon laser line, recolour ring and special immunity
+
+**What changed.**
+- Laser line (`render/epsilonfx.ts`, `EpsilonFx`): while the laser is shown (`EpsilonAi.orb`), one line from the Epsilon's (x, feet + 24, z) to the orb, colour 0x80ff4040 (red, half alpha). The orb keeps its sphere from the earlier entry (render/combat.ts `epsilonOrbView`); the line ends at the sphere's position.
+- Recolour ring (`EpsilonAi.recolourRing`, `EpsilonFx`): in the recolour state the exe's model 4 of bm_ene_epsilon is drawn at (x, feet + 24, z), turned with the Epsilon and scaled (t, 1, t) by the fade t (colourT). Outside the recolour the ring is hidden. The ring uses the body's texture list (texlistOf 0).
+- Special immunity (`EpsilonAi.immuneToSpecial`, `EPSILON_ELEMENT_SPECIALS` = 9, 7, 10, 11): the open Epsilon's weapon special of its element shows a "0" and does nothing (`specialHit`, render/combat.ts), after the hit roll, as the exe does.
+- Tech group (`techGroup` in `combat/techniques.ts`): the owner now compares the technique's entity_hit_by_tech group with Epsilon's table (1, 2, 3, 5) instead of mapping the element. **Behaviour change:** Barta is group 0x13, so a blue (ice) Epsilon no longer blocks Barta; before, the element mapping blocked it. Blocked techniques also show the "0" now (the exe calls 0x0077535c with 0 there), which the earlier entry did not do.
+- Epsilon's element group table comment (`EPSILON_ELEMENT_GROUPS`) cites 0x0055aaf0, not 0x0055ac24.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13, objdump and tools/exedata.py).**
+- Update 0x0055a3ac: state 6 with flag 0x200 calls the ring draw 0x0055a884; state 2 with flag 0x100 calls the laser 0x0055a8fc (0x0055a594 / 0x0055a5b1).
+- Ring (0x0055a884): the translation (0, 0x41c00000 = 24.0, 0) after the entity position (+0x38), the scale pushes (t, 1.0, t) from +0x500, model index 4. Flag 0x200 is set by event 4 of 0x00558c84 (`or 0x242`), cleared only by the dormant entry 0x0055ad34 (`and 0xfffffdff`).
+- Laser origin (0x00558504): +0x300 = +0x38, +0x304 = +0x3c + 24.0 (float at 0x00925450 = 24.0), +0x308 = +0x40. The orb is +0x504..+0x50c (written at 0x0055a061 from a ground query, 0x007b4c58).
+- Line draw (0x0055a8fc): colour constant 0x009bde20 = 0x80ff4040; drawn with flag 0x40 from the line data pointer 0x009bde28.
+- Special immunity (0x0055ab30): flags 0x2 / 0x40 take the invulnerable path; otherwise the element special word table at 0x009252d4 (GetSpecial 0x0055ac24, index = colour & 3 from +0x446) is compared with the special type (word +0x116); equal shows the "0" (0x0077535c with 0).
+- Tech group (0x0055aa5c / 0x0055aaf0): the group table at 0x009252e0 = 1, 2, 3, 5; equal to the technique's group shows the "0". Barta's group 0x13 is from techfire.ts HIT_GROUP (not re-read in this exe pass).
+- Special type numbers 7 freeze, 9 fire, 10 thunder, 11 instant kill: combat/specials.ts header (prior exe read).
+
+**ASSUMED / UNCLEAR.**
+- ASSUMED: the line's colour is the constant at 0x009bde20 (the line data's layout is not read).
+- ASSUMED: the ring's texture list is the body's (texlistOf 0) and its rotation is the Epsilon's yaw (0x0082d8bc not read in full).
+- ASSUMED: the orb's height is the body's height + PLAYER_AIM_HEIGHT (main's model). The exe takes the orb's y from a ground query (0x007b4c58) and the orb is a Rafoie-family model entity (0x006ee0d0).
+- ASSUMED: the ring is hidden outside the recolour state; the exe's flag 0x200 stays set until the dormant entry, but colourT is 0 there, so the ring is a zero scale.
+- UNCLEAR: two bypasses of the special immunity in 0x0055ab30 are not modelled: this+0x30 bit 0x4000000 and the second argument's +0x18 bit 0x2000000 skip the element check. No caller was found in the dump to say whether they are set on Epsilon.
+- The special immunity is only checked for an open Epsilon (not invulnerable), as the tech immunity is.
+
+**Checks.** `node tests/enemyfsmep2d.test.ts` (new: the ring during a recolour, the element specials and groups, immuneToSpecial per colour), `node tests/techniques.test.ts` (new: techGroup), `node tests/combat.test.ts` (5946 checks, 0 failures, with `vendor/` linked), `node tests/enemies.test.ts` (ALL PASS), client `tsc --noEmit` (clean, Node 24).
+
+Not run in Chrome.
