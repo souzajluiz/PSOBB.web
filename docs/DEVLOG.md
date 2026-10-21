@@ -1,5 +1,29 @@
 # Devlog
 
+## 2026-10-21: held weapon for party members and equip changes
+
+**Report:** the held weapon (2026-10-21 "held weapon in the field") was checked with two classic clients (`client/e2e/held-weapon.spec.ts`): A creates a party, B joins, both warp to Forest 1 (`GameView.warpTo(1)`). Each view must draw the other's weapon with the owner's key.
+
+**Found:** a party member's weapon disappeared after it warped. A player hides while it changes floors (6x22) and shows again with 6x23. The 6x22 handler (`net/game.ts`) only set `visible`. The floor check that runs on the warp's 6x21 saw the player hidden (`showPlayer` is false for an invisible player) and removed its marker; the 6x23 that shows it again did not re-check the marker, so the player (and its weapon) stayed away from the view until its next floor change. Fix: `net/game.ts` emits the new `visibilityChanged` event on 6x22 / 6x23 (`net/lobby.ts` `LobbyEvents`); `render/lobbyview.ts` re-checks the marker on it as on `floorChanged`.
+
+**Checked (no change needed):**
+- newserv forwards 6x25 / 6x26 to the others of the game (`on_equip_item` / `on_unequip_item`: `forward_subcommand`, the header's client id must be the sender's). The port's 0x25 / 0x26 handling in `net/lobby.ts` reads the item id at +4, as `G_EquipItem_6x25` / `G_UnequipItem_6x26`.
+- newserv's PlayerInventoryItem `flags` is little-endian (`PlayerInventoryItemT<false>`), so the port's byte test of 0x08 at record +4 is right.
+- 6x70 carries the PlayerInventory at 0x164 (count, then the records), as `parsePlayerSync` reads it.
+- The local equip / unequip (`GameItems.equip` / `unequip`, 6x25 / 6x26) rebuilds the local marker through the key check each frame.
+
+**Test:** `client/e2e/held-weapon.spec.ts` (two clients, the warp to Forest 1). A sees B's weapon with B's own key and a built mesh (shown); the same from B for A. B unequips: both views drop it (key `''`, mesh hidden). B equips it again: both draw it again. Dev hook: `window.classicGame.view.heldWeapons()` (`render/lobbyview.ts` `heldState()`, `render/gameview.ts`).
+
+**Not covered:** a switch to a different weapon while a second weapon is owned (the test account owns one weapon: the unequip / re-equip path is tested, the key change to another model is the same rebuild path).
+
+**UNCLEAR (not changed):** the 14 Tekker / fan weapons with fewer XVM textures than NJTL names (the entry above). Not investigated in this pass.
+
+**Checks:**
+- `npx playwright test e2e/held-weapon.spec.ts e2e/party-join.spec.ts` (Vite on 127.0.0.1:5181, newserv, webtest / webgameb): 2 passed.
+- `node --experimental-strip-types tests/itemmodels.test.ts`: `ALL PASS (4623 checks)`.
+- `tests/combat.test.ts`: `5946 checks, 0 failures`.
+- `cd client && npx tsc --noEmit`: clean.
+
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB

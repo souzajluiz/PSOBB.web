@@ -54,6 +54,7 @@ export interface LobbyEvents {
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
+  visibilityChanged: (p: LobbyPlayer) => void; // games: 6x22 (hidden while it changes floors) / 6x23
   // B0 (RcvEmergencyCall): server text for the player's message window
   // (handle_b0_packet -> DisplayChallengeResultToPlayer_00718350).
   serverText: (text: string) => void;

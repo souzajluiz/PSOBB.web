@@ -266,9 +266,13 @@ export class LobbyView {
     };
     for (const p of lobby.players.values()) if (p.clientId === lobby.selfId || this.showPlayer(p)) this.addMarker(p);
     lobby.on('playerJoined', sync);
-    lobby.on('floorChanged', (p) => {
+    // A player's marker follows its floor and its visibility (a player hides
+    // while it changes floors: 6x22, shows again with 6x23).
+    const recheck = (p: LobbyPlayer) => {
       if (!this.disposed && this.markers.has(p.clientId) !== this.showPlayer(p)) sync(p);
-    });
+    };
+    lobby.on('floorChanged', recheck);
+    lobby.on('visibilityChanged', recheck);
     lobby.on('playerLeft', (id) => this.removeMarker(id));
     lobby.on('moved', (p) => this.onMoved(p));
     lobby.on('teleported', (p) => {
@@ -434,6 +438,23 @@ export class LobbyView {
     } catch (err) {
       console.warn(`player model for ${p.name}: ${(err as Error).message}`);
     }
+  }
+
+  // Development hook (e2e): each marker's held weapon key, the key its model
+  // was built with, the vertex count of its mesh (0: none) and whether the mesh
+  // is drawn (visible up the parent chain).
+  heldState(): { clientId: number; key: string; weaponKey: string; vertices: number; shown: boolean }[] {
+    return [...this.markers.values()].map((m) => {
+      let shown = !!m.weapon;
+      for (let o: THREE.Object3D | null = m.weapon; o && shown; o = o.parent) shown = o.visible;
+      return {
+        clientId: m.clientId,
+        key: this.heldKey(m.clientId),
+        weaponKey: m.weaponKey,
+        vertices: m.weapon?.geometry.attributes.position?.count ?? 0,
+        shown,
+      };
+    });
   }
 
   // Each frame: the weapon shows only outside the hubs, and a player whose
