@@ -276,6 +276,83 @@ export class SmMissile extends EnemyShot {
   }
 }
 
+// --- the wave (state 21: 0x00769808, the beam 0x0076cb9c, update 0x0076ccdc) -------------
+//
+// One beam per phase-0 pass, made on the clock's frame 28 (SM.waveFrame; the effect 0x6f9 of
+// frame 27 is not drawn). Its origin O is a boss node read at frame 29 of a one-frame track,
+// whose data is not read: ASSUMED the boss's position at the spawn, and its local frame is the
+// boss's heading then.
+// Each frame P = O + R(amp * sin θ, 0, rate * θ), θ in BAMS (65536 = 360 degrees; x sideways,
+// z forward; R turns the local frame by the heading), then θ += step and ramp = min(1, ramp + 0.025).
+// The hit is a ground probe under P: with ground, an explosion of type 5 at P every frame, iparam5
+// to every living player within 100 on the XZ plane (no height test, no once-per-player gate);
+// without ground the beam dies. The probe is the boss's ground callback when it has one, else the
+// boss's arena circle (ASSUMED, see SaintMilionAi.waveFrame). ASSUMED: the life cap.
+// The 10.0 the exe passes with type 5 is the knockback, meaning not known (as the missile's 3.0).
+export const SM_WAVE = {
+  // The types 0 .. 3 (0x009779b8): the step of θ a frame (BAMS), the rate and the amp.
+  types: [
+    { step: 728, rate: 0.00213623046875, amp: -140 },
+    { step: 728, rate: 0.00213623046875, amp: 140 },
+    { step: 280, rate: 0.007171630859375, amp: -300 },
+    { step: 280, rate: 0.007171630859375, amp: 300 },
+  ],
+  rampStep: 0.025,
+  radius: 100,
+  knockback: 10,
+  // ASSUMED: the height the beam is drawn at, and its life (the exe's beam ends on the ground probe).
+  height: 10,
+  life: 600,
+} as const;
+
+export class SmWave extends EnemyShot {
+  readonly effect: ShotEffect;
+  readonly look: ShotLook = { color: 0x60c0ff, size: 1 };
+  // The exe's +0x58. No hit uses it (the blast radius is 100, not ramp * 64).
+  ramp = 0;
+  private theta = 0;
+  private readonly ox: number;
+  private readonly oz: number;
+  private readonly sin: number;
+  private readonly cos: number;
+  private readonly spec: (typeof SM_WAVE.types)[number];
+  private readonly floor: (x: number, z: number) => boolean;
+
+  // heading: BAMS. type: 0 .. 3. damage: the MovementData iparam5. floor: the ground under (x, z).
+  constructor(x: number, z: number, heading: number, type: number, damage: number, floor: (x: number, z: number) => boolean) {
+    super(x, SM_WAVE.height, z);
+    this.ox = x;
+    this.oz = z;
+    const a = heading * BAMS;
+    this.sin = Math.sin(a);
+    this.cos = Math.cos(a);
+    this.spec = SM_WAVE.types[type] ?? SM_WAVE.types[0];
+    this.floor = floor;
+    this.effect = { kind: 'blast', damage, knockback: SM_WAVE.knockback };
+  }
+
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done) return [];
+    this.frames++;
+    if (this.frames > SM_WAVE.life) {
+      this.done = true;
+      return [];
+    }
+    const t = this.theta;
+    const lx = this.spec.amp * Math.sin(t * BAMS);
+    const lz = this.spec.rate * t;
+    this.x = this.ox + lx * this.cos + lz * this.sin;
+    this.z = this.oz - lx * this.sin + lz * this.cos;
+    if (!this.floor(this.x, this.z)) {
+      this.done = true;
+      return [];
+    }
+    this.theta += this.spec.step;
+    this.ramp = Math.min(1, this.ramp + SM_WAVE.rampStep);
+    return targets.filter((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= SM_WAVE.radius);
+  }
+}
+
 // --- the shared field --------------------------------------------------------------------
 
 export type SmEvent =

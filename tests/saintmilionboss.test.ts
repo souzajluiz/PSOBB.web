@@ -21,7 +21,7 @@ import {
   type SmBossOptions,
 } from '../client/src/combat/saintmilionboss.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
-import { SM_MISSILE, SmMissile } from '../client/src/combat/saintmilionents.ts';
+import { SM_MISSILE, SM_WAVE, SmMissile, SmRng, SmWave } from '../client/src/combat/saintmilionents.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -385,6 +385,147 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
     const m = new SmMissile(0, 0, 0, 750, 0);
     const hits = m.tick([player(1, 0, 5)]);
     eq(hits.length, 1, 'an aim within 20.0 explodes at once');
+  }
+}
+
+// 9. The wave (state 21): nothing on entry; one beam on the clock's frame 28 of phase 0; its type by
+//    arena and roll; P each frame from θ = 0; the ramp; iparam5 to the living within 100 every frame.
+{
+  const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; pendingShots: EnemyShot[]; arena: number };
+  const waves = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmWave => x instanceof SmWave);
+  const row = { ...MV2, iparam: [1013, 1100, 750, 1360, 500, 0] };
+  const BAMS = (Math.PI * 2) / 0x10000;
+  // P of frame n (θ = n * step) for a beam at (ox, oz), heading h (BAMS) and type t: the spec of the table.
+  const want = (ox: number, oz: number, h: number, t: number, n: number) => {
+    const s = SM_WAVE.types[t];
+    const th = n * s.step;
+    const lx = s.amp * Math.sin(th * BAMS);
+    const lz = s.rate * th;
+    const a = h * BAMS;
+    return { x: ox + lx * Math.cos(a) + lz * Math.sin(a), z: oz - lx * Math.sin(a) + lz * Math.cos(a) };
+  };
+  // Enters state 21 in the given arena, then ticks until the beam comes (at most 60 ticks).
+  const enterWave = (b: SaintMilionAi, arena: number): { wave: SmWave | null } => {
+    b.tick([player(1, 5000, 5000)]);
+    drive(b).arena = arena;
+    drive(b).setState(21);
+    let wave: SmWave | null = null;
+    for (let i = 0; i < 60 && b.sid === 21 && !wave; i++) wave = waves(b.tick([player(1, 5000, 5000)]).shots ?? [])[0] ?? null;
+    return { wave };
+  };
+
+  // Entry: the wave event only, no beam; then one beam, made when the clock passes 28.
+  {
+    const b = make(true, { movement: [row, row] });
+    b.tick([player(1, 5000, 5000)]);
+    drive(b).arena = 3;
+    drive(b).setState(21);
+    check(b.events.some((e) => e.kind === 'effect' && e.name === 'wave'), 'state 21 entry emits the wave event');
+    eq(waves(drive(b).pendingShots).length, 0, 'nothing on entry');
+    let made = 0;
+    let at = -1;
+    for (let i = 0; i < 60 && b.sid === 21; i++) {
+      // The state's dispatch runs before the clock's step of the tick, so the crossing is read on the elapsed value
+      // the tick started with.
+      const before = b.clock.elapsed;
+      const n = waves(b.tick([player(1, 5000, 5000)]).shots ?? []);
+      made += n.length;
+      if (n.length) at = before;
+    }
+    eq(made, 1, 'one beam in state 21 phase 0');
+    // The clock's stride is SM_ANIMS[21].speed (the one-shot clock has stride 0 once it has ended).
+    check(at > 28 && at <= 28 + SM_ANIMS[21].speed, `made on the clock crossing 28 (elapsed ${at})`);
+  }
+  // The type: arenas 3 / 4 -> 2 or 3, the others 0 or 1; the higher when the roll is >= 0.5 (the boss's
+  // own stream, which the state uses for nothing else in this phase).
+  for (const arena of [0, 1, 2, 3, 4]) {
+    const seen = new Set<number>();
+    let rolled = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const { wave } = enterWave(make(true, { seed, movement: [row, row] }), arena);
+      if (!wave) {
+        check(false, `arena ${arena} seed ${seed}: no beam`);
+        continue;
+      }
+      const spec = (wave as unknown as { spec: (typeof SM_WAVE.types)[number] }).spec;
+      const type = SM_WAVE.types.indexOf(spec);
+      seen.add(type);
+      const base = arena === 3 || arena === 4 ? 2 : 0;
+      const roll = new SmRng((seed ^ 0x51d7) >>> 0).float();
+      if (type === base + (roll >= 0.5 ? 1 : 0)) rolled++;
+    }
+    const pair = arena === 3 || arena === 4 ? [2, 3] : [0, 1];
+    check([...seen].every((t) => pair.includes(t)), `arena ${arena}: types ${[...seen].join(',')} are ${pair.join(',')}`);
+    eq(seen.size, 2, `arena ${arena}: both types come up`);
+    eq(rolled, 40, `arena ${arena}: the higher type when the roll is >= 0.5`);
+  }
+  // P for frames 0 .. 3 (θ = n * step): P(0) = O, for type 0 heading 0 and type 2 heading 90 degrees.
+  for (const [t, h] of [
+    [0, 0],
+    [2, 0x4000],
+  ] as const) {
+    const w = new SmWave(100, -50, h, t, 500, () => true);
+    for (let n = 0; n < 4; n++) {
+      w.tick([]);
+      const p = want(100, -50, h, t, n);
+      check(Math.abs(w.x - p.x) < 1e-9 && Math.abs(w.z - p.z) < 1e-9, `type ${t} heading ${h}: frame ${n} at P (${w.x}, ${w.z})`);
+      if (n === 0) eq(`${w.x},${w.z}`, '100,-50', `type ${t}: P(0) is the origin`);
+    }
+  }
+  // The ramp: 0.025 a frame, 1.0 at most.
+  {
+    const w = new SmWave(0, 0, 0, 0, 1, () => true);
+    w.tick([]);
+    check(Math.abs(w.ramp - 0.025) < 1e-12, 'the ramp grows 0.025 a frame');
+    for (let i = 0; i < 39; i++) w.tick([]);
+    check(Math.abs(w.ramp - 1) < 1e-9, 'the ramp is 1.0 after 40 frames');
+    for (let i = 0; i < 5; i++) w.tick([]);
+    eq(w.ramp, 1, 'the ramp stays at 1.0');
+  }
+  // The blast: iparam5 to each living player within 100 on the XZ plane, every frame, no gate.
+  {
+    const w = new SmWave(0, 0, 0, 0, 500, () => true);
+    const near = player(1, 50, 0);
+    const edge = player(4, 0, 100);
+    const far = player(2, 0, 130);
+    const dead = { ...player(3, 0, 0), dead: true };
+    const all = [near, far, dead, edge];
+    const f1 = w.tick(all).map((t) => t.clientId).join(',');
+    eq(f1, '1,4', 'frame 1: the living within 100 (the edge counts), not the far one nor the dead');
+    const f2 = w.tick(all).map((t) => t.clientId).join(',');
+    eq(f2, '1,4', 'frame 2: the same players again (no once-per-player gate)');
+    eq(w.effect.kind === 'blast' ? w.effect.damage : -1, 500, 'the blast is iparam5');
+    eq(w.effect.kind === 'blast' ? w.effect.knockback : -1, 10, 'the knockback is 10.0');
+  }
+  // No ground under P: the beam dies on that frame with no hit (P at frame 2 is about 9.9 from the origin).
+  {
+    const w = new SmWave(0, 0, 0, 0, 500, (x, z) => Math.hypot(x, z) < 3);
+    eq(w.tick([player(1, 0, 0)]).length, 1, 'frame 1: P is the origin, on the ground, and hits');
+    eq(w.tick([player(1, 0, 0)]).length, 0, 'frame 2: no ground under P, no hit');
+    check(w.done, 'the beam dies with no ground');
+    eq(w.tick([player(1, 0, 0)]).length, 0, 'and it stays dead');
+  }
+  // The life cap (ASSUMED): with ground everywhere the beam ends after SM_WAVE.life frames.
+  {
+    const w = new SmWave(0, 0, 0, 0, 500, () => true);
+    for (let i = 1; i <= SM_WAVE.life; i++) w.tick([]);
+    check(!w.done, 'still flying at the cap');
+    w.tick([]);
+    check(w.done, 'ended after the cap');
+  }
+  // The boss's own beam with no ground callback: the arena circle (arena 3: origin (0, 0), range 620) ends it.
+  {
+    const b = make(true, { movement: [row, row] });
+    const { wave } = enterWave(b, 3);
+    if (!wave) check(false, 'arena 3 beam for the circle test');
+    else {
+      let n = 0;
+      while (!wave.done && n < SM_WAVE.life) {
+        wave.tick([]);
+        n++;
+      }
+      check(wave.done && n < SM_WAVE.life, `the arena circle ends the beam (${n} frames)`);
+    }
   }
 }
 

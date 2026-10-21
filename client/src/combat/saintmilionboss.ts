@@ -52,7 +52,7 @@
 //     (GetGlobalGameState); they end here when their animation has ended
 //     (0x1b waits 60 more frames);
 //   - the objects the attacks make (the missiles of state 0x12, the lasers of
-//     0x13 / 0x14, the wave of 0x15, the storm of 0x17, the sand sonic of
+//     0x13 / 0x14, the storm of 0x17, the sand sonic of
 //     state 10) are not reproduced: they are events only; state 10's sweep
 //     and the body's contact damage are;
 //   - the order of the players the followers go round and the stream of the
@@ -62,7 +62,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SM_MISSILE, SmClock, SmField, SmMissile, SmRng, SmTouch, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_MISSILE, SmClock, SmField, SmMissile, SmRng, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -103,7 +103,7 @@ export const SM_STATES: readonly SmStateRow[] = [
   R(3, 15, 20, 0x184, 2), // 20 laser
   R(3, 15, 21, 0x184, 2), // 21 wave
   R(3, 15, 15, 0x184, 2), // 22 tentacles round the players
-  R(3, 11, 22, 0x8a0, 2), // 23 cutscene
+  R(3, 11, 22, 0x8a0, 2), // 23 the storm
   R(3, 11, 23, 0x884, 2), // 24 the retreat
   R(4, 2, 24, 0x8a0, 2), // 25 (0x19) the introduction
   R(5, 13, 25, 0x8a0, 2), // 26 (0x1a) form 1 -> form 2
@@ -225,6 +225,8 @@ export const SM = {
   contactEvery: 30,
   // State 18: the two more missiles of phase 0 come on the clock's frame 5 (0x007aaa30 with 5.0).
   missileFrame: 5,
+  // State 21: the one beam of phase 0 comes on the clock's frame 28 (0x007aaa30; frame 27 is the effect 0x6f9).
+  waveFrame: 28,
 } as const;
 
 // --- the parts -------------------------------------------------------------------------
@@ -635,6 +637,7 @@ export class SaintMilionAi extends BrainBase {
       case 20:
       case 21:
         if (phase === 4) this.events.push({ kind: 'effect', name: ['laser', 'laser', 'wave'][s - 19], state: s });
+        else if (phase === 0 && s === 21) this.waveFrame();
         return;
       case 23:
         if (phase === 4) {
@@ -763,6 +766,17 @@ export class SaintMilionAi extends BrainBase {
     const angle = best ? Math.atan2(best.x - this.x, best.z - this.z) : this.heading * BAMS;
     const range = best ? Math.max(0, Math.sqrt(bestSq) - SM_MISSILE.arrive) : null;
     for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2], range));
+  }
+
+  // State 21, phase 0 (0x00769808): one beam on the clock's frame 28. Its type: arenas 3 / 4 -> 2 or 3,
+  // the others 0 or 1, the higher when the roll is >= 0.5 (0x009773c8). The blast is the form's iparam5.
+  // ASSUMED: with no ground callback the beam's floor is the boss's arena circle (SM_ARENAS).
+  private waveFrame(): void {
+    if (!this.clock.crossed(SM.waveFrame)) return;
+    const type = (this.arena === 3 || this.arena === 4 ? 2 : 0) + (this.rand.float() >= 0.5 ? 1 : 0);
+    const a = SM_ARENAS[this.arena] ?? SM_ARENAS[0];
+    const floor = this.opts.ground ?? ((x: number, z: number) => Math.hypot(x - a.ox, z - a.oz) <= a.range);
+    this.pendingShots.push(new SmWave(this.x, this.z, this.heading, type, this.row.iparam[4], floor));
   }
 
   private burst(x: number, z: number, r: number): void {

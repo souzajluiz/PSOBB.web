@@ -6637,3 +6637,38 @@ So the wave beam each frame: if the ground probe under P finds collision, it exp
 - 0x00661448 (the 0xf call on the 240 path) finds an entry with id 0xf in the list at [0xa9b068] and calls 0x006614cc, which allocates an 0xa0-byte object and runs 0x00660a1c on it: an effect spawn. Neither function calls a damage or hit routine; 0x00660a1c was not read. So it is not damage and is not ported.
 
 What changed: `SmMissile` takes a `range`. The ASSUMED flight ends when the missile has flown `range` = the distance from the boss to the nearest living player at launch, less 20.0 (`SM_MISSILE.arrive`), and then blasts there with iparam3 to the living within 100 (XZ). With no living player at launch (range null) it only ends at the 240-frame cap, with no blast. The 240-frame cap removes the missile with no blast. The `arrive` rule is ASSUMED: it uses the 20.0 constant of the state-4 test as the distance to the aim point, and skips the motion frames after state 4. Tests: section 8 covers the cap (no blast, even on a player), the flight end 76 frames out for a player 400 ahead (blast at 380 along, 100 XZ, once), and an aim within 20.0 (blast on the first frame).
+
+## 2026-10-21: Saint-Milion wave ported
+
+**What changed.** State 21 (the wave, 0x007697f0) now makes its beam. The phase-4 entry still only emits the 'wave' event (the exe does nothing there). On phase 0, one `SmWave` is pushed to `out.shots` on the clock's frame 28 (`SM.waveFrame`), through the same clock-crossing test the missile's frame 5 uses. The beam is a `blast` shot, so `render/combat.ts` `enemyBlastHitsPlayer` applies it with no change there.
+- `client/src/combat/saintmilionents.ts`: `SM_WAVE` (the table, ramp step, radius, knockback, height, life) and `SmWave extends EnemyShot`.
+- `client/src/combat/saintmilionboss.ts`: `waveFrame()` in phase 0 of `case 21`, `SM.waveFrame: 28`, a table comment fix (row 23 is the storm, not a cutscene), and the header list no longer names the wave as events only.
+- `tests/saintmilionboss.test.ts`: section 9.
+- `docs/HANDOFF.md` item 4: "wave" removed from the events-only list.
+
+**Rules.**
+- Type (0x009773c8): arena 3 / 4 -> base 2, the others -> base 0; `+1` when `rand.float() >= 0.5` (the higher type). The roll is the boss's own `SmRng`.
+- Table 0x009779b8, per type {step (BAMS a frame), rate, amp}: t0 {728, 0.00213623046875, -140}, t1 {728, 0.00213623046875, 140}, t2 {280, 0.007171630859375, -300}, t3 {280, 0.007171630859375, 300}.
+- Each frame: P = O + R(amp * sin θ, 0, rate * θ), θ in BAMS (65536 = 360 degrees; x sideways, z forward), then θ += step, ramp = min(1, ramp + 0.025). θ starts at 0, so the first frame's P is O. R turns the local frame by the heading, with forward = (sin, cos) as in the missile.
+- Hit: the ground probe under P. With ground, an explosion of type 5 at P: `iparam5` (`row.iparam[4]`, the form's row) to every living player within 100 on XZ (`<= 100`, no height test), every frame, no once-per-player gate, knockback 10.0. Without ground, the beam is done on that frame, with no hit.
+- The effect 0x6f9 at frame 27 is not drawn, so nothing is pushed for it.
+
+**Constants and addresses.**
+- 0x00769808 (phase 0 of state 21), 0x007aaa30 (the clock's crossing test), 0x009773c8 (the type roll), 0x009779b8 (the table), 0x0076cb9c / 0x0076ccdc (the beam's ctor / update).
+- The ramp 0.025 is the `+0x58` step; the exe's ramp scales a radius of ramp * 64 in the old reading, which is superseded: the blast is the 100 scan (0x00521cdc), so `ramp` is kept but no hit uses it.
+
+**ASSUMED.**
+- **Origin O:** the boss's position at the spawn, and the heading at spawn is the beam's frame. The exe's origin is a boss node at frame 29 of a one-frame track whose data is not read, so this is wrong by the node's offset.
+- **Height:** the beam is drawn at 10 (`SM_WAVE.height`); nothing reads it for the hit.
+- **End:** the probe is the boss's `ground` callback (`ground(x, z, 60) !== null` in render/combat.ts) when it has one. Without it, the beam's floor is the boss's arena circle (`SM_ARENAS[arena]`: origin and range; arenas 3 / 4 use (0, 0) and 620). The exe's collision probe (0x00780630 / 0x00780874) tests map collision objects, and the port cannot reproduce that exactly, so the callback is the closest stand-in.
+- **Life cap:** 600 frames (`SM_WAVE.life`); the exe's beam has no cap that was read.
+- **Knockback** 10.0 is the value the exe passes with type 5. Its meaning is unknown, as the missile's 3.0 is.
+- **Look:** a coloured ball per frame at P (0x60c0ff, size 1). The exe draws a model, which is not ported.
+
+**Checks.**
+- `node tests/saintmilionboss.test.ts`: ALL PASS (section 9: entry emits 'wave' but no beam; one beam at the clock's crossing of 28; type by arena for 40 seeds, both types in each pair, and the higher type when the roll is >= 0.5; P for frames 0 .. 3 for t0 at heading 0 and t2 at 0x4000, exact to 1e-9; ramp; iparam5 to the living within 100 on frames 1 and 2 with the edge in and the far and the dead out; no ground ends the beam with no hit; the 600-frame cap; the arena circle ends it).
+- `node tests/saintmilion.test.ts`: all checks passed.
+- `node tests/combat.test.ts`: 5946 checks, 0 failures.
+- `client`: `tsc --noEmit` clean (Node 24).
+
+Not run in Chrome.
