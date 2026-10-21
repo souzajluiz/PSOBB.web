@@ -7225,3 +7225,25 @@ Not run in Chrome. The check: floor 14, Ultimate, stand within 30 units of (-986
 - `cd client && npx tsc --noEmit`: clean.
 - Chrome (Playwright, Vite on 127.0.0.1:5180, webtest, Create a PARTY): Pioneer 2 area 0, weapon mesh hidden (`visible: false`, key `0:0`); warp to Forest 1 (area 1), weapon visible, key `0:0` (the Saber model, the character's equipped weapon). Screenshots: `client/test-results/held-weapon-pioneer2.png`, `client/test-results/held-weapon-forest1.png`, `client/test-results/held-weapon-forest1-zoom.png` (not committed; the temporary spec was removed).
 - Not run: two clients (a remote player's weapon), a live equip change (the rebuild path), and the 6x25 / 6x26 flow from another player.
+
+## 2026-10-21: classic field: a shop and a quest start checked
+
+**Question:** the 2026-10-21 "classic field: NPCs, shops and the quest counter" entry wired the shops and a quest's start but never ran them. Do they work on the classic page?
+
+**Found (the clerks):** the area script (`map_city_on_e.bin`, run in `tests/npcs.test.ts`'s way over `map_city00_00e.dat`) gives the counter menus per talk action: weapon store 0 = action 1006 (label 800), medical center 1 = action 1017 (label 860), gear store 2 = 1007 (810), item store 3 = 1008 (820), bank 5 = 1010 (840), tekker 6 = 1009 (830), Hunter's Guild 4 = 1011 (850), government 7 = 1049 (870). The e2e uses the item store (tool shop: one piece at a time, the cheapest rows first).
+
+**Run in Chrome (Playwright, Vite on 127.0.0.1:5182, webtest, newserv and the bridge up):**
+- `e2e/pioneer2-shop.spec.ts` (new): talk to the item store clerk, Buy, the list opens with 11 rows (names from `unitxt_shop`), the first affordable row is bought and the window closes. The rows the wallet cannot pay answer "Not enough Meseta..." and the list comes back (checked row by row). The first runs bought a Saber +2 (649 meseta) and a Monomate (50 meseta); newserv's log has `Player 0 purchased item 00010010 (Monomate x1) for 50 meseta`, so the server takes the 6xB7. The buy is not echoed to the buyer (newserv's `send_create_inventory_item_to_lobby` excludes the sender), so the spec checks that the game holds after the buy, and reads newserv's log when `NEWSERV_LOG` names it. The character had 1 meseta when the last run was made: that run covered the refusal path only (every row "not enough"); the buy path ran in the earlier runs (the same code, before the spec's step structure was split).
+- `e2e/pioneer2-quest.spec.ts` (new): the guild counter lists Retrieval | Extermination | Events | Virtual Reality; Retrieval, the first quest (Lost HEAT SWORD), Yes. The log has `quest "Lost HEAT SWORD" started: episode 1, 4 designated floors ...`; `QuestTown.quest` holds it, the field is loaded again (floor 0), the counter closes. The lobby teleporter leaves the game and ends the quest.
+- No code fault was found in the shop, the counter or `runQuest` in these runs, so no source change.
+
+**Checks:**
+- `e2e/pioneer2-counter.spec.ts`: passes (58 s). `e2e/party-create.spec.ts`: passes when run alone; it failed once in a sequential run with "browser.newContext: Test ended" (the Chrome launch after the previous spec), not a game failure.
+- `e2e/pioneer2-shop.spec.ts`: passes (refusal path, 1.2 min). `e2e/pioneer2-quest.spec.ts`: passes (1.2 min).
+- `node tests/shop.test.ts`: all checks passed. `node tests/questflow.test.ts`: ALL PASS. `node tests/townfield.test.ts`: all checks passed. `npx tsc --noEmit` (Node 24): clean.
+
+**Still open:**
+- The buy path is not re-run with meseta: the webtest character has 1 meseta (the runs spent it). A fresh character, or the admin panel's meseta edit (offline account), would give the buy again.
+- Quest's floor and script: the check is the started session and the reloaded floor; the quest's own dialogue and the battle are not run in the e2e.
+- The page logs 8 resource 404s on load (not identified yet; the same as the 2026-10-21 entry).
+- Not checked by eye in Chrome: the list and window pictures (the screenshots are attached to the test run only).

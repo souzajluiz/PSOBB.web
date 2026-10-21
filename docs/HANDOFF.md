@@ -87,7 +87,9 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    warp) and plays it on the Online tab's field (2026-10-21, `classic/field.ts`).
    The Pioneer 2 NPC talk, the counters (shops, bank, Medical Center, the Hunter's Guild
    quest menu) and the quest runner are in on the classic field (2026-10-21, `classic/townfield.ts`;
-   the shops and a quest's start are not yet checked in the field, see the DEVLOG entry).
+   the shops and a quest's start are checked in Chrome (2026-10-21 "classic field: a shop
+   and a quest start checked": `e2e/pioneer2-shop.spec.ts`, `e2e/pioneer2-quest.spec.ts`;
+   the buy path needs a character with meseta to run again).
    The chat line (Space) and the mouse are in the field (2026-10-21 "classic field: chat
    line and mouse"; not seen in Chrome by hand).
    Leaving a game shows the lobby warp (2026-10-21); the exe's type for a leave is probably
