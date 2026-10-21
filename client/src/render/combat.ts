@@ -1430,6 +1430,8 @@ export class CombatView {
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
       if (ai instanceof RecoboxAi) for (const sp of ai.spawns.splice(0)) void this.spawnRecon(e, ai, sp);
       if ((ai instanceof ReconAi && ai.removed) || (ai instanceof EpsigardAi && ai.state === 'gone')) this.dropQuietly(e);
+      if (ai instanceof GibbonAi)
+        for (const c of ai.casts.splice(0)) this.buffEnemy(e, c.tech === 'shifta' ? GROUP.shifta : GROUP.deband, supportPower(c.level), `E-${e.index.toString(16)} (${e.slot.type}) enrage`, false);
       if (ai instanceof SinowAi) this.sinowTick(e, ai);
       if (ai instanceof BelraAi) this.belraTick(e, ai);
       if (ai instanceof SinowZoaAi)
@@ -5425,9 +5427,10 @@ export class CombatView {
   // reports it with 6x0A (vtable +0x130, 0x00787578: unchanged total damage).
   private buffEnemy(e: EnemyRuntime, group: BuffGroup, power: number, what: string, own: boolean): void {
     if (!e.buffs.apply(group, power)) return;
-    const slot = group === GROUP.jellen ? e.buffs.attack : e.buffs.defense;
+    const attackSlot = group === GROUP.jellen || group === GROUP.shifta;
+    const slot = attackSlot ? e.buffs.attack : e.buffs.defense;
     const stat =
-      group === GROUP.jellen && e.attacker
+      attackSlot && e.attacker
         ? `ATP ${e.attacker.atp} -> ${e.buffs.atp(e.attacker.atp)}`
         : `DFP ${e.stats.dfp} -> ${e.buffs.dfp(e.stats.dfp)}`;
     if (own) this.sendEnemy(e, ENEMY_BASE_FLAGS);

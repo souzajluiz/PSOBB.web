@@ -816,8 +816,8 @@ export class MericarolAi extends BrainBase {
 //     BAMS, the sign by the entity index parity), then a target in sight
 //     -> 11 else 8.
 // Heights, the wall rays and the lean (+0x480) are not reproduced. The
-// group's Shifta / Deband are exposed as `buffs`; the owner does not apply
-// them (ASSUMED left out, no enemy stat buffs exist in the combat code).
+// group's Shifta / Deband are exposed as `buffs` and queued in `casts`, which
+// render/combat.ts applies to the enemy's own EntityBuffs.
 export const GIBBON = {
   searchUl: 250,
   searchZol: 350, // 0x00565eac
@@ -966,9 +966,11 @@ export class GibbonAi extends BrainBase {
   confused = false;
   readonly isLeader: boolean;
   readonly group: number;
-  // The group's Shifta / Deband on itself after its leader died (the owner
-  // may read them; no enemy stat buffs exist in the combat code).
+  // The group's Shifta / Deband on itself after its leader died.
   readonly buffs = { deband: false, shifta: false };
+  // The enrage's Deband / Shifta on itself, for the owner to drain and apply
+  // (render/combat.ts buffEnemy). ASSUMED: power = the stats row's level.
+  readonly casts: { tech: 'deband' | 'shifta'; level: number }[] = [];
   private readonly groups: GibbonGroups;
   private readonly search: number;
   private readonly spot: boolean;
@@ -1752,8 +1754,13 @@ export class GibbonAi extends BrainBase {
   // 0x00566468.
   private enrageFrame(out: AiFrame, animationEnded: boolean): void {
     this.n++;
-    if (this.n === GIBBON.enrageDeband && this.leader) this.buffs.deband = true;
-    else if (this.n === GIBBON.enrageShifta && this.leader) this.buffs.shifta = true;
+    if (this.n === GIBBON.enrageDeband && this.leader) {
+      this.buffs.deband = true;
+      this.casts.push({ tech: 'deband', level: this.level });
+    } else if (this.n === GIBBON.enrageShifta && this.leader) {
+      this.buffs.shifta = true;
+      this.casts.push({ tech: 'shifta', level: this.level });
+    }
     if (animationEnded) this.enter(out, 'wander');
   }
 

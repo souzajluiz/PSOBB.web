@@ -645,8 +645,10 @@ class Rig {
     check(!ul.ai.buffs.deband, 'no Deband before frame 30 (0x1e)');
     ul.rig.run([], 1);
     check(ul.ai.buffs.deband && !ul.ai.buffs.shifta, 'Deband at frame 30');
+    eq(ul.ai.casts.map((c) => c.tech).join(), 'deband', 'the Deband cast is queued for the owner');
     ul.rig.run([], 10);
     check(ul.ai.buffs.shifta, 'Shifta at frame 40 (0x28)');
+    eq(ul.ai.casts.map((c) => c.tech).join(), 'deband,shifta', 'the Shifta cast is queued after the Deband');
     check(ul.rig.until([], 'wait', 100) >= 0 || ul.ai.state === 'wander', `the enrage ends (${ul.ai.state})`);
     alien.rig.run([], 100);
     check(!alien.ai.buffs.deband, 'another group is not enraged');
