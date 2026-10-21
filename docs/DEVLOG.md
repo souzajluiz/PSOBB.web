@@ -7844,3 +7844,67 @@ The dispatcher's table is at 0x008fb1a0: its k-th entry is the case address (k =
 - The intro's six (0x0041b5b3, 0x0041b98e, 0x0041b69a, 0x0041b7ea, 0x0041ba5f, 0x0041b6a7): unchanged (another agent's work; not touched).
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 29 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. `node tests/combat.test.ts` was not run: it spawns `vendor/newserv/build/newserv`, which this worktree does not have. Client `npx tsc --noEmit` (Node 24): clean. Not run in Chrome.
+
+## 2026-10-21: Dragon particles: the entrance
+
+Follows "Dragon particles: the unresolved sites". The entrance (state 0x1d, `0x0041b220`) has its two sub-state registers ported and its six particle sites are in the code. Two of the six (0x0041b69a, 0x0041b6a7) are in a branch the entry never selects, so they are ported and never fire (see below). The entrance also has a flame emitter from the same chain, which is not one of the six (three `0x00509dc4` calls, see below).
+
+**What +0x86c and +0x874 are (VERIFIED from the bytes).**
+- `+0x86c` is the variant of the chain, not a model field. The entry (phase 4, `0x0041bb53`) calls `0x00420a44` (the Ultimate test, 0 or 1). `0x0041bbad` `75 0f` (jne) with `0x0041bbb2` `c7 80 6c 08 00 00 01` writes 1 for 0 (normal); `0x0041bbc6` `c7 80 6c 08 00 00 02` writes 2 for 1 (Ultimate). The frame (phase 0) dispatches on it: 1 normal chain, 2 Ultimate chain, 3 a chain nothing selects, 4 after the motion has ended.
+- `+0x874` is the step of the variant's chain (the switch after the ended test). `+0x870` is a counter that a launch step reads with `and 3` (every 4th tick). `+0x878` is written 1 at the entry and 0 at phase 5 and is read by no intro code.
+- The motion is bossop (slot 25, motion 0, 170 frames at speed 0.5). When it has ended (`+0xb0 & 0x10` after the animate, `0x0041b833`) the variant becomes 4, `+0xb8` is 0 (the stand) and the chain still runs that tick, as the exe does. Phase 9 then sends the wait (the existing code). Phase 5 stops the flame (`0x0041b5ca`).
+
+**Frame gates (VERIFIED).** The thresholds are motion frames (`+0xc0`) compared with float constants: 99 (0x008fbe40), 155 (0x008fbe48), 80 (0x008fbe5c), 150 (0x008fbe64). The crossing helper `0x007aaa30` returns `mframe > T && mframe <= T + speed` (the fcompp order at `0x007aaa6f..0x007aaa9d`: `ja` at `0x007aaa7c`, `jae` at `0x007aaaa4`). The port's `crossed()` is `mframe >= T && mframe - speed < T`: the two differ only when mframe is exactly T (the port fires one tick earlier). The entrance uses its own `passed()`; the shared `crossed()` is not changed (UNCLEAR for the other states that use it).
+
+**The chains (normal, variant 1; step: test -> what).**
+- 0: crossed 2 -> sound 0x318; next.
+- 1: crossed 32 -> sound 0x322 (optional); crossed 35 -> body particle; next.
+- 2: crossed 75 -> sound 0x31a; next, counter cleared.
+- 3: frame <= 80 -> launch flash every 4th tick; frame > 80 -> next.
+- 4: crossed 105 -> BGM dradeath.adx; next, counter cleared.
+- 5: frame < 150 -> flame emitter (made once, followed to the mouth); frame >= 150 -> stopped; next.
+
+**The chains (Ultimate, variant 2).**
+- 0: crossed 9 or 40 -> sound 0x318; crossed 62 -> sound 0x322 (both optional); crossed 64 -> sound 0x318 and body particle; next.
+- 1: crossed 92 -> sound 0x31a; next, counter cleared.
+- 2: frame <= 99 -> launch flash every 4th tick; frame > 99 -> next.
+- 3: crossed 120 -> BGM; next, counter cleared.
+- 4: frame < 155 -> flame emitter; frame >= 155 -> stopped; next.
+
+**Variant 3 (`0x0041b2ad`), not selected.** Its chain is the same shape with its own numbers: crossed 2 (sound 0x318), crossed 60 (sound 0x322, optional) and crossed 63 (two body particles, ids +0x08 and 0x203), crossed 75 (sound 0x31a), frame > 80 (no particle), crossed 105 (BGM), then the flame. The entry writes only 1 or 2 (above). The other writes of +0x86c = 3 (`0x0041afb3`, `0x0041e668`, `0x0041fd2c`, `0x004218f5`, `0x00422e07`) are in other states' code. So the intro never runs variant 3 unless the entry is changed, and the two sites in it never fire.
+
+**The six sites (VERIFIED: each is a `call 0x0050b7a4` with the pushes below; the port emits them through `emitBody` / `launch`).**
+
+| site | id | point | flag | variant, step (frame) |
+|---|---|---|---|---|
+| 0x0041b98e | +0x1c: 549 (normal) | the mouth (+0x414) | 0x40 | 1, 3 (every 4th tick from 76 to 80; 77.5 and 79.5 in the port's run) |
+| 0x0041ba5f | +0x08: 547 (normal) | the body (+0x38) | 0x40 | 1, 1 (crossed 35: 35.5) |
+| 0x0041b5b3 | +0x1c: 521 (Ultimate) | the mouth (+0x414) | 0x40 | 2, 2 (every 4th tick from 93 to 99; 94.5, 96.5, 98.5) |
+| 0x0041b7ea | +0x08: 514 (Ultimate) | the body (+0x38) | 0x40 | 2, 0 (crossed 64: 64.5) |
+| 0x0041b69a | +0x08: 547 (normal table) | the body (+0x38) | 0x40 | 3, 1 (crossed 63). NOT SELECTED |
+| 0x0041b6a7 | 0x203 = 515 (constant) | the body (+0x38) | 0x40 | 3, 1 (crossed 63). NOT SELECTED |
+
+The `+0x08` body id in variant 3 is taken from the table of the difficulty, as the other sites; it is not the Ultimate id unless the Dragon is Ultimate.
+
+**The flame emitter (not one of the six, same chain).** Three calls to `0x00509dc4` (the id is `[+0x780]+0x14`, the flag 0x40, the point is the mouth at `+0x414` and a second point at the aim): `0x0041b9c1` (variant 1, step 5, frames 106 to 150, id 545), `0x0041b709` (variant 2, step 4, frames 121 to 155, id 524), `0x0041b642` (variant 3, step 5). The handle is stored at `+0x8b4` (the same field as flyShoot's flame). While the handle lives the exe moves it to the mouth (`0x00508db8`) and aims it (`0x00508dd0`). The port makes the emitter (`DragonEvent` `emitter`, `pids().intro`), it follows the mouth in the render, and the aim is not reproduced. ASSUMED: `0x00509dc4` is a looping emitter with an aim point (its first pushes are the mouth and the point; its body is not read).
+
+**Web changes.**
+- `combat/dragon.ts`: `DRAGON_PARTICLE_IDS` gains `intro` (545 / 524, the table's +0x14) and `DRAGON_INTRO_PARTICLE` (0x203). `tickIntro` (replaces the old frame code), `passed` (the exe's crossing rule), `introNormal`, `introUltimate`, `introThree`, `introFlame`. `leave` stops the flame when the intro ends. `pids()` gives `intro`.
+- `tests/dragon.test.ts`: section 29 walks the whole entrance tick by tick with the real motion (170 frames): the sounds and their frames, the BGM at 105 / 120, the body and launch particles with their ids and frames, the flame's emitter from 106 / 121 and stopped, the length (within 335..360 ticks), the crossing boundary (2.0 does not pass 2, 2.5 does), and the variant 3 sites at 63.5 (set by hand).
+
+**ASSUMED.**
+- The flame's aim point is not reproduced (the render follows the mouth only).
+- Phase 5 clears the flame's handle and leaves the rest of the leave calls (`0x007b9fbc`, `0x00520e34`) alone.
+- On the motion's end the port sets the slot to 0 and keeps the frame counter (the exe writes only `+0xb8`; the frame counter is not reset in the exe's path that the port reads, ASSUMED).
+- The exe's crossing helper also returns 0 when `+0xb8 != +0xba` (the motion changed this tick). The port has no such check; on the frame the motion ends no crossing is near (the last threshold is 155), so nothing differs in the real motion.
+
+**UNCLEAR.**
+- The object the entry makes (`0x0041bbf0`: 0x28 bytes, the ctor `0x004262e0` with 0.5 and `[0x00aca37c]`): probably the entrance camera or a fade; not read. The calls `0x00717f74`, `0x00520e2c`, `0x007ba03c` at the entry are not read either.
+- `0x007a8d98` (the aim point from the body's `+0x420`) and `0x00508dd0` (the emitter's aim): not read.
+- `0x00717f38` (the motion-end helper at `0x0041b833` / `0x0041b2df`) is not read.
+- Whether variant 3 is reachable at all: only the entry writes `+0x86c` in the intro's code, and state 0x1d is set in the ctor. The writes of the state word 0x1d outside the ctor were not traced; if one exists it could enter with an old `+0x86c`, which the setter (`0x0051f62c`) does not reset.
+- The shared `crossed()` in `dragon.ts` and the other enemy files differs from the exe's rule at the exact threshold (one tick). Not changed here.
+
+**Decisive spot-check.** In the exe, 0x0041bbab: `85 c0 75 0f` (test eax,eax; jne) followed by `c7 80 6c 08 00 00 01 00 00 00` at 0x0041bbb2 (`+0x86c = 1`), and `c7 80 6c 08 00 00 02 00 00 00` at 0x0041bbc6 (`+0x86c = 2`). If the Ultimate test result is not 0 or 1, or a later write of 3 exists in the intro's entry path, the variant map is wrong and the two sites above would be dead or live differently.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok (section 29 is new). `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. Client `npx tsc --noEmit -p .` (Node 24): clean. Not run in Chrome.
