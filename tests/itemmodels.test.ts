@@ -4,7 +4,11 @@
 //     that exists in the client and builds with all its textures
 //     (formats/itemmodels.ts, decompiled from FUN_005c3a94 / FUN_005c407c);
 //   - BC0 round trip (6x6D join sync), the item subcommand sizes, and the
-//     inventory rules (stacks, meseta, equip slots) of net/items.ts.
+//     inventory rules (stacks, meseta, equip slots) of net/items.ts;
+//   - the held weapon: all 370 ItemModel.afs entries parse (vertex-buffer
+//     NJCM, formats/njcm.ts), every ItemPMT weapon decodes, a player with a
+//     weapon has it on body node 48 (render/heldweapon.ts), and the equipped
+//     weapon of an inventory copy (net/playerweapon.ts).
 // Run: node tests/itemmodels.test.ts
 // Env: PSOBB_DATA (client data/ folder), ITEMPMT (optional ItemPMT.prs)
 import { execFileSync } from 'node:child_process';
@@ -12,7 +16,12 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as THREE from '../client/node_modules/three/build/three.module.js';
-import { GSLArchive } from '../client/src/formats/archives.ts';
+import { AFSArchive, GSLArchive } from '../client/src/formats/archives.ts';
+import { prsDecompress } from '../client/src/formats/prs.ts';
+import { parseNinjaChunkFile, type NjcmObject } from '../client/src/formats/njcm.ts';
+import { decodeHeldWeapon, HAND_NODE } from '../client/src/render/heldweapon.ts';
+import { buildPlayerModel, DEFAULT_APPEARANCE, parsePlayerAssets } from '../client/src/render/playermodel.ts';
+import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from '../client/src/net/playerweapon.ts';
 import { floorItemLook, ITEM_BML, ITEM_BML_MODELS, type ItemModelTables } from '../client/src/formats/itemmodels.ts';
 import { parseItemPMT } from '../client/src/formats/itempmt.ts';
 import { ItemNames, itemFromHex, maxStackSize, type ItemData } from '../client/src/formats/itemnames.ts';
@@ -232,6 +241,113 @@ check(buildEquip(1, 2, 0).length === 0x0c && buildUseItem(1, 2).length === 8, '6
   writeCharacterInventory(c, raw);
   const rdv = new DataView(raw.buffer);
   check(raw[0] === 3 && rdv.getUint32(4 + 8 + 12, true) === 0x10000 && rdv.getUint32(0x34c + 0x20, true) === 130, 'inventory and meseta written back to the E7 layout');
+}
+
+// --- held weapon: ItemModel.afs / ItemTexture.afs (skipped without the data) ---
+// Every entry is PRS-compressed NJCM (vertex-buffer models, formats/njcm.ts).
+// The equipped weapon of a player is ItemModel[type] + ItemTexture[skin]
+// (render/heldweapon.ts, LoadItemAsset_005d7868).
+const ITEM_MODEL_AFS = join(DATA, 'ItemModel.afs');
+const ITEM_TEXTURE_AFS = join(DATA, 'ItemTexture.afs');
+if (!existsSync(ITEM_MODEL_AFS) || !existsSync(ITEM_TEXTURE_AFS)) {
+  console.log('held weapon: ItemModel.afs / ItemTexture.afs not found, skipped');
+} else {
+  const models = new AFSArchive(new Uint8Array(readFileSync(ITEM_MODEL_AFS)));
+  const textures = new AFSArchive(new Uint8Array(readFileSync(ITEM_TEXTURE_AFS)));
+  let parsed = 0, vertices = 0, strips = 0, unitNormals = 0, normals = 0, badTexture = 0, texturesChecked = 0;
+  const nameCount = new Map<number, number>(); // entry -> NJTL names
+  for (let i = 0; i < models.entries.length; i++) {
+    let f;
+    try {
+      f = parseNinjaChunkFile(prsDecompress(models.get(i)));
+    } catch (err) {
+      console.log(`  entry ${i}: ${(err as Error).message}`);
+      continue;
+    }
+    parsed++;
+    const names = f.textureNames.length;
+    nameCount.set(i, names);
+    const walk = (o: NjcmObject) => {
+      for (const c of o.model?.vertices ?? []) {
+        vertices += c.positions.length / 3;
+        for (let k = 0; c.normals && k < c.normals.length; k += 3) {
+          const l = Math.hypot(c.normals[k], c.normals[k + 1], c.normals[k + 2]);
+          normals++;
+          if (Math.abs(l - 1) < 0.02) unitNormals++;
+        }
+      }
+      for (const p of o.model?.polys ?? []) {
+        if (p.op === 'texture') {
+          texturesChecked++;
+          if (p.id !== -1 && (p.id < 0 || p.id >= names)) badTexture++;
+        }
+        if (p.op === 'strips') for (const s of p.strips) strips += s.indices.length;
+      }
+      o.children.forEach(walk);
+    };
+    walk(f.object!);
+  }
+  check(parsed === models.entries.length, `ItemModel.afs: ${parsed} of ${models.entries.length} entries parse`);
+  check(vertices > 30000 && strips > 60000, `ItemModel.afs: ${vertices} vertices, ${strips} strip indices`);
+  check(unitNormals / normals > 0.99, `ItemModel.afs: ${unitNormals} of ${normals} normals are unit length`);
+  check(badTexture === 0 && texturesChecked > 1000, `ItemModel.afs: ${texturesChecked} texture ids, ${badTexture} outside the NJTL list`);
+  console.log(`ItemModel.afs: ${parsed}/${models.entries.length} entries, ${vertices} vertices, ${strips} strip indices, ${texturesChecked} texture ids`);
+
+  // Every weapon of ItemPMT decodes with its textures (ItemModel[type], ItemTexture[skin]).
+  let weapons = 0, weaponTextures = 0, weaponBad = 0;
+  table.weapons.forEach((list) =>
+    list.forEach((w) => {
+      if (!w || w.type >= models.entries.length) return;
+      const h = decodeHeldWeapon(models.get(w.type), textures.get(w.skin));
+      weapons++;
+      // Every NJTL name needs its XVM texture (the XVM's order is the NJTL's).
+      const missing = Math.max(0, (nameCount.get(w.type) ?? 0) - h.textures.length);
+      weaponTextures += h.textures.length;
+      if (missing || h.textures.some((t) => !t)) weaponBad++;
+    }),
+  );
+  // The 14 weapons with fewer XVM textures than NJTL names (the Tekker and fan
+  // weapons: wxtZ01_z_t_tume, mxt3_fan02_*, ...) leave those texture ids
+  // unbound (UNCLEAR, DEVLOG); the others have every texture.
+  check(weapons > 800 && weaponBad === 14, `held weapons: ${weapons} ItemPMT weapons decode, ${weaponBad} with fewer XVM textures than names (expected 14)`);
+  console.log(`held weapons: ${weapons} ItemPMT weapons, ${weaponTextures} textures`);
+
+  // A player with a held weapon: the weapon's root bone hangs from body node 48.
+  const playerBml = read('plAnj.bml');
+  const playerTex = read('plAtex.afs');
+  const assets = parsePlayerAssets(0, playerBml, playerTex);
+  const saber = decodeHeldWeapon(models.get(0), textures.get(0));
+  const bare = buildPlayerModel(assets, DEFAULT_APPEARANCE);
+  const armed = buildPlayerModel(assets, DEFAULT_APPEARANCE, { weapon: saber });
+  check(bare.weapon === null && armed.weapon !== null, 'a weapon mesh only when a weapon is held');
+  const rootBone = armed.weapon?.skeleton.bones.find((b) => b.name === `weapon:${HAND_NODE}:0`);
+  check(!!rootBone && rootBone.parent === armed.partBones[0][HAND_NODE], `held weapon hangs from body node ${HAND_NODE}`);
+  check(!!armed.weapon && (armed.weapon.material as THREE.Material[]).some((m) => (m as THREE.MeshLambertMaterial).map), 'held weapon has a texture');
+  check(armed.partBones[0].length === bare.partBones[0].length, 'the body skeleton is unchanged');
+}
+
+// --- equipped weapon of a player's inventory (net/playerweapon.ts) ----------
+{
+  const inv = new Uint8Array(INVENTORY_BYTES);
+  // Record i: flags (0x08 = equipped), ItemData data1 {class, 1, sub}, item id.
+  const record = (i: number, cls: number, sub: number, id: number, equipped: boolean) => {
+    const o = 4 + i * 0x1c;
+    inv[o + 4] = equipped ? 8 : 0;
+    inv[o + 8] = cls;
+    inv[o + 9] = 1;
+    inv[o + 10] = sub;
+    new DataView(inv.buffer).setUint32(o + 20, id, true);
+  };
+  inv[0] = 3;
+  record(0, 1, 1, 0x10001, true); // armor, equipped
+  record(1, 0, 2, 0x10002, false); // weapon, sub 2
+  record(2, 0, 3, 0x10003, true); // weapon, sub 3, equipped
+  check(equippedWeaponOf(inv)?.[2] === 3, 'the equipped weapon is the weapon with the equipped flag');
+  check(applyRemoteEquip(inv, 0x10001, true) === false, 'an armor equip does not change the held weapon');
+  check(applyRemoteEquip(inv, 0x10002, true) === true && equippedWeaponOf(inv)?.[2] === 2, 'equipping a weapon unequips the other');
+  check(applyRemoteEquip(inv, 0x10003, false) === false, 'the unequipped weapon is not equipped');
+  check(applyRemoteEquip(inv, 0x10002, false) === true && equippedWeaponOf(inv) === null, 'unequipping the weapon leaves no weapon');
+  check(applyRemoteEquip(inv, 0x10002, false) === false, 'a second unequip changes nothing');
 }
 
 console.log(failures ? `${failures} FAILED (${checks} checks)` : `ALL PASS (${checks} checks)`);

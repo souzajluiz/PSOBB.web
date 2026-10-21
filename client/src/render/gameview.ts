@@ -35,7 +35,8 @@ import { enemySlots } from '../formats/enemyids.ts';
 import { parseEnemySets, type ObjectSet } from '../formats/setdata.ts';
 import { parseEventFile } from '../formats/events.ts';
 import { buildSyncLayout, type SyncFloor, type SyncLayout } from '../net/joinsync.ts';
-import { LobbyView, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
+import { LobbyView, type HeldWeaponSource, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
+import { inUnsafeMap } from './playermove.ts';
 import { NpcLayer } from './npcview.ts';
 import { TelepipeLayer, type Arrival } from './telepipe.ts';
 import * as THREE from 'three';
@@ -99,6 +100,8 @@ export class GameView {
   private busy = false;
   private disposed = false;
   current: FloorInfo | null = null;
+  // The local character file (its inventory has the equipped weapon).
+  private characterFile: () => CharacterFile | null = () => null;
   onFloor: (info: FloorInfo) => void = () => {};
   // The lobby teleporter (TObjCityAreaWarp) was used: the caller leaves the game.
   onLobbyWarp: () => void = () => {};
@@ -120,6 +123,7 @@ export class GameView {
     options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>> } = {},
   ) {
     this.labels = options.labels ?? true;
+    this.characterFile = character.character;
     this.viewer = viewer;
     this.game = game;
     this.source = source;
@@ -243,6 +247,30 @@ export class GameView {
 
   // Number of set-data objects on the floors before `floor` (object entity
   // ids count across all floors, as newserv's MapState does).
+  // What the field shows of the held weapons (render/heldweapon.ts): each
+  // player's equipped weapon as its ItemPMT entry (the local player from the
+  // character file, the others from their join data and 6x25 / 6x26), and
+  // whether weapons show (not in the hubs: render/playermove.ts).
+  private heldSource(): HeldWeaponSource {
+    // The combat view loads ItemPMT (its own file or the server's stream file).
+    void this.combat.itemPmt();
+    return {
+      equipped: (clientId) => {
+        const pmt = this.combat.loadedItemPmt;
+        let data1: Uint8Array | null | undefined;
+        if (clientId === this.game.self?.clientId) {
+          const w = this.characterFile()?.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 0);
+          data1 = w?.data.data1 ?? this.game.self?.weapon;
+        } else {
+          data1 = this.game.players.get(clientId)?.weapon;
+        }
+        const w = pmt && data1 ? pmt.getWeapon(data1[1], data1[2]) : undefined;
+        return w ? { type: w.type, skin: w.skin } : null;
+      },
+      visible: () => inUnsafeMap(this.current?.area ?? 0),
+    };
+  }
+
   private async objectBase(floor: number): Promise<number> {
     let base = 0;
     for (let f = 0; f < floor; f++) {
@@ -514,7 +542,11 @@ export class GameView {
     const me = this.game.self!;
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
-    this.view = new LobbyView(this.viewer, this.game, mapData, { labels: this.labels, showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false });
+    this.view = new LobbyView(this.viewer, this.game, mapData, {
+      labels: this.labels,
+      showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false,
+      held: this.heldSource(),
+    });
     const objectBase = await this.objectBase(floor);
     // The quest's floor handler runs on a new thread when the player arrives
     // (quest_start_floor_thread, PsoBB.exe .c:615128).

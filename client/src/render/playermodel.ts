@@ -27,6 +27,7 @@ import { parseXvr } from '../formats/xvm.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { NjcmModelBuilder, type NjcmModel, type NjcmPartInput } from './njcmmesh.ts';
 import { PLAYER_CLASS_TABLES, SMP_BASE, SMP_COUNT } from './playertables.ts';
+import { HAND_NODE, type HeldWeapon } from './heldweapon.ts';
 
 export const CLASS_NAMES = [
   'HUmar', 'HUnewearl', 'HUcast', 'RAmar', 'RAcast', 'RAcaseal',
@@ -355,6 +356,14 @@ export function morphObject(base: NjcmObject, shapes: NjcmObject[], weights: rea
 
 export interface PlayerModel extends NjcmModel {
   parts: string[];
+  // The held weapon's mesh (null without one). The caller hides it in the hubs.
+  weapon: THREE.SkinnedMesh | null;
+}
+
+export interface PlayerBuildOptions {
+  emblemSectionId?: number | undefined;
+  // The equipped weapon, in the right hand (render/heldweapon.ts).
+  weapon?: HeldWeapon | null;
 }
 
 // FUN_004e665c: a value outside 0..limit-1 (or not 0 when the limit is 0)
@@ -382,7 +391,7 @@ export function clampAppearance(charClass: number, a: PlayerAppearance): PlayerA
   };
 }
 
-export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE, opts: { emblemSectionId?: number | undefined } = {}): PlayerModel {
+export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppearance = DEFAULT_APPEARANCE, opts: PlayerBuildOptions = {}): PlayerModel {
   const a = clampAppearance(assets.charClass, appearance);
   const L = assets.letter;
   const lists = playerTextureLists(assets, a, opts.emblemSectionId);
@@ -414,6 +423,12 @@ export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppeara
     const cap = `pl${L}cap${pad2(a.hair)}.nj`;
     if (assets.parts.has(cap)) inputs.push({ name: cap, root: part(cap), textures: lookup(lists.hair), attachTo: HEAD_NODE });
   }
+  let weaponAt = -1;
+  if (opts.weapon) {
+    const w = opts.weapon;
+    weaponAt = inputs.length;
+    inputs.push({ name: `weapon:${HAND_NODE}`, root: w.object, textures: (id) => w.textures[id] ?? null, attachTo: HAND_NODE });
+  }
   const model = new NjcmModelBuilder().build(inputs);
-  return { ...model, parts: inputs.map((p) => p.name) };
+  return { ...model, parts: inputs.map((p) => p.name), weapon: weaponAt >= 0 ? (model.partMeshes[weaponAt] ?? null) : null };
 }

@@ -312,7 +312,157 @@ function parsePolyList(r: Reader, o: number): NjcmPolyOp[] {
   throw new Error('NJCM polygon list not terminated');
 }
 
+// Vertex-buffer models (the weapon and item models of ItemModel.afs). The
+// model is the exe's njcm_mesh (0x1C bytes) at the object's +4, and it is the
+// PC-baked form of a Ninja model: vertices and strips are already laid out for
+// the D3D vertex and index buffers (LoadItemAsset / prepare_mesh_buffers):
+//   +0x00 u32 vlist (0 in every item model; a classic model when not 0)
+//   +0x04 u32 vertex buffer list: njcm_vertex_buffer records of 0x10 bytes
+//         {u32 vertex_format, u32 data, u32 vertex_size, u32 vertex_count}
+//   +0x08 u32 vertex buffer count
+//   +0x0C u32 alpha index buffer table, +0x10 its count
+//   +0x14 u32 opaque index buffer table, +0x18 its count
+// Index buffer record (0x14 bytes): u32 renderargs, u32 renderargs count,
+//   u32 indices (u16 triangle strip), u32 index count, u32 vertex buffer index.
+// renderargs record (0x10 bytes, nrel_mesh_renderargs): u32 setter, i32 arg1,
+//   i32 arg2, i32 arg3. Setters of g_StandardRenderStateSetters (0x00A218C0):
+//   2 blend (arg1 src, arg2 dst, Ninja factors), 3 texture (arg1 = NJTL index),
+//   4 texture addressing, 5 material, 6 lighting (arg1 bool), 7 transform,
+//   8 material source. The alpha table is drawn with alpha blending.
+// Vertex formats: 7 = 36 bytes {f32 position[3], f32 normal[3], u32 diffuse
+// (BGRA), f32 u, v}; 6 = 28 bytes, the same without the uv.
+const VB_FORMAT_UV = 7;
+const VB_FORMAT_PLAIN = 6;
+const VB_STRIDE: Record<number, number> = { [VB_FORMAT_UV]: 0x24, [VB_FORMAT_PLAIN]: 0x1c };
+const VB_INDEX_RECORD = 0x14;
+const VB_RENDERARG_RECORD = 0x10;
+const SETTER_BLEND = 2;
+const SETTER_TEXTURE = 3;
+const SETTER_LIGHTING = 6;
+// Strip flags (NJD_FST_*) the mesh builder reads.
+const STRIP_IGNORE_LIGHT = 0x01;
+const STRIP_USE_ALPHA = 0x08;
+
+// Reads a u32 or -1 when the offset is outside the chunk (for probing).
+function probeU32(r: Reader, o: number): number {
+  return o >= 0 && o + 4 <= r.data.length ? r.dv.getUint32(o, true) : -1;
+}
+
+// True when the model at `o` is a vertex-buffer model: no classic vertex list,
+// and the first vertex buffer record has a known format and stride.
+function isVertexBufferModel(r: Reader, o: number): boolean {
+  if (probeU32(r, o) !== 0) return false;
+  const list = probeU32(r, o + 4);
+  const count = probeU32(r, o + 8);
+  if (list <= 0 || count < 1 || count > 8) return false;
+  const format = probeU32(r, list) & 0xffff;
+  const stride = VB_STRIDE[format];
+  return stride !== undefined && probeU32(r, list + 8) === stride && probeU32(r, list + 12) > 0;
+}
+
+function parseVertexBufferModel(r: Reader, o: number): NjcmModel {
+  const list = r.ptr(o + 4);
+  const count = r.u32(o + 8);
+  const chunks: NjcmVertexChunk[] = [];
+  const bases: number[] = [];
+  const uvs: Float32Array[] = []; // per vertex buffer, 2 per vertex
+  const polys: NjcmPolyOp[] = [];
+  let total = 0;
+  for (let b = 0; b < count; b++) {
+    const h = list + b * 16;
+    // The format's high half is a flag word (entry 1: 0x10006 is format 6).
+    const format = r.u32(h) & 0xffff;
+    const data = r.ptr(h + 4);
+    const size = r.u32(h + 8);
+    const n = r.u32(h + 12);
+    if (VB_STRIDE[format] !== size) throw new Error(`NJCM vertex buffer ${b}: format ${format} with size ${size}`);
+    r.check(data, n * size);
+    const positions = new Float32Array(n * 3);
+    const normals = new Float32Array(n * 3);
+    const colors = new Float32Array(n * 4);
+    const uv = new Float32Array(n * 2);
+    const indices = new Uint16Array(n);
+    for (let i = 0; i < n; i++) {
+      const p = data + i * size;
+      for (let k = 0; k < 3; k++) {
+        positions[i * 3 + k] = r.f32(p + k * 4);
+        normals[i * 3 + k] = r.f32(p + 12 + k * 4);
+      }
+      bgra(r, p + 24, colors, i * 4);
+      if (format === VB_FORMAT_UV) {
+        uv[i * 2] = r.f32(p + 28);
+        uv[i * 2 + 1] = r.f32(p + 32);
+      }
+      indices[i] = total + i;
+    }
+    bases.push(total);
+    uvs.push(uv);
+    chunks.push({ type: format, flags: 0, indexOffset: total, indices, positions, normals, colors, weights: null });
+    total += n;
+  }
+
+  const emitTable = (table: number, tableCount: number, alpha: boolean): void => {
+    for (let e = 0; e < tableCount; e++) {
+      const entry = table + e * VB_INDEX_RECORD;
+      const args = r.ptr(entry);
+      const argCount = r.u32(entry + 4);
+      const indexData = r.ptr(entry + 8);
+      const indexCount = r.u32(entry + 12);
+      const vb = r.u32(entry + 16);
+      if (vb >= count) throw new Error(`NJCM index buffer ${e}: vertex buffer ${vb} of ${count}`);
+      let blend: NjcmPolyOp = { op: 'blend', src: 1, dst: 0 };
+      let texId = -1;
+      let lit = true;
+      for (let a = 0; a < argCount; a++) {
+        const rec = args + a * VB_RENDERARG_RECORD;
+        const setter = r.u32(rec);
+        const arg1 = r.i32(rec + 4);
+        if (setter === SETTER_BLEND) blend = { op: 'blend', src: arg1, dst: r.i32(rec + 8) };
+        else if (setter === SETTER_TEXTURE) texId = arg1;
+        else if (setter === SETTER_LIGHTING) lit = arg1 !== 0;
+      }
+      const strip: NjcmStrip = { indices: [], uvs: [], colors: null, flipped: false };
+      for (let i = 0; i < indexCount; i++) {
+        const local = r.u16(indexData + i * 2);
+        if (local >= chunks[vb].indices.length) throw new Error(`NJCM index ${local} outside vertex buffer ${vb}`);
+        const v = bases[vb] + local;
+        strip.indices.push(v);
+        strip.uvs!.push(uvs[vb][local * 2], uvs[vb][local * 2 + 1]);
+      }
+      polys.push(blend);
+      polys.push({ op: 'texture', id: texId, flags: 0 });
+      polys.push({ op: 'strips', type: 64, flags: (alpha ? STRIP_USE_ALPHA : 0) | (lit ? 0 : STRIP_IGNORE_LIGHT), strips: [strip] });
+    }
+  };
+  // Opaque geometry first (the exe draws it in its own pass), then alpha.
+  emitTable(r.ptr(o + 0x14), r.u32(o + 0x18), false);
+  emitTable(r.ptr(o + 0x0c), r.u32(o + 0x10), true);
+
+  // Bounding sphere of the vertices (the record's center and radius are not
+  // stored in this layout).
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const c of chunks) {
+    for (let i = 0; i < c.positions.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        min[k] = Math.min(min[k], c.positions[i + k]);
+        max[k] = Math.max(max[k], c.positions[i + k]);
+      }
+    }
+  }
+  const center: [number, number, number] = total ? [0, 1, 2].map((k) => (min[k] + max[k]) / 2) as [number, number, number] : [0, 0, 0];
+  let radius = 0;
+  for (const c of chunks) {
+    for (let i = 0; i < c.positions.length; i += 3) {
+      const d = Math.hypot(c.positions[i] - center[0], c.positions[i + 1] - center[1], c.positions[i + 2] - center[2]);
+      radius = Math.max(radius, d);
+    }
+  }
+  return { vertices: chunks, polys, center, radius };
+}
+
 function parseModel(r: Reader, o: number): NjcmModel {
+  if (isVertexBufferModel(r, o)) return parseVertexBufferModel(r, o);
   const vlist = r.ptr(o);
   const plist = r.ptr(o + 4);
   return {

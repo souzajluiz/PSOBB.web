@@ -24,6 +24,7 @@ import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
 import { PlayerMover, followTick, fromBams, legSpeed, rampAxis, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
+import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
 const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
@@ -133,6 +134,13 @@ function nameSprite(text: string): THREE.Sprite {
   return sprite;
 }
 
+// What the field shows of the held weapon: the equipped weapon's ItemPMT model
+// (type, skin) of a player, and whether weapons show here (not in the hubs).
+export interface HeldWeaponSource {
+  equipped(clientId: number): { type: number; skin: number } | null;
+  visible(): boolean;
+}
+
 interface Marker {
   clientId: number;
   group: THREE.Group;
@@ -140,6 +148,10 @@ interface Marker {
   angle: number;
   capsule: THREE.Object3D | null;
   model: THREE.Object3D | null;
+  // The held weapon's mesh in the model (null: none) and the weapon key the
+  // model was built with ('type:skin', '' for none).
+  weapon: THREE.SkinnedMesh | null;
+  weaponKey: string;
   animator: PlayerAnimator | null;
   charClass: number;
   gait: Locomotion;
@@ -211,6 +223,8 @@ export class LobbyView {
   private files: ClientFiles | null;
   private assets = new Map<number, Promise<PlayerAssets>>();
   private motions: Promise<PlayerMotions> | null = null;
+  private held: HeldWeaponSource | null;
+  private heldFiles: HeldWeaponFiles | null = null;
   private disposed = false;
 
   // labels: false leaves the name tags to the caller (classic HUD).
@@ -228,12 +242,14 @@ export class LobbyView {
     viewer: MapViewer,
     lobby: Lobby,
     mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
-    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean } = {},
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource } = {},
   ) {
     this.labels = options.labels ?? true;
     this.viewer = viewer;
     this.lobby = lobby;
     this.showPlayer = options.showPlayer ?? (() => true);
+    this.held = options.held ?? null;
+    this.heldFiles = this.held && mapData.files ? new HeldWeaponFiles(mapData.files) : null;
     this.collision = mapData.collision;
     (globalThis as { lobbyView?: LobbyView }).lobbyView = this; // console/automation access
     this.spawns = mapData.spawns;
@@ -350,6 +366,8 @@ export class LobbyView {
       angle: spawn ? spawn.angle : p.angle,
       capsule: stand,
       model: null,
+      weapon: null,
+      weaponKey: '',
       animator: null,
       charClass: p.charClass,
       gait: 'idle',
@@ -370,16 +388,42 @@ export class LobbyView {
     return a;
   }
 
+  // The held weapon's key of a player ('type:skin', '' for none).
+  private heldKey(clientId: number): string {
+    const e = this.held?.equipped(clientId);
+    return e ? `${e.type}:${e.skin}` : '';
+  }
+
+  private heldWeapon(key: string): Promise<HeldWeapon | null> {
+    if (!key || !this.heldFiles) return Promise.resolve(null);
+    const [type, skin] = key.split(':').map(Number);
+    return this.heldFiles.load(type, skin).catch((err) => {
+      console.warn(`held weapon ${key}: ${(err as Error).message}`);
+      return null;
+    });
+  }
+
+  // Builds (or rebuilds, when the held weapon changed) a player's model. The
+  // weapon key is taken when the build starts; a build whose key went stale
+  // is dropped (syncHeld starts the one for the new key).
   private async loadModel(p: LobbyPlayer, marker: Marker): Promise<void> {
+    const key = this.heldKey(p.clientId);
+    marker.weaponKey = key;
     if (!this.files || p.charClass < 0 || p.charClass > 11) return;
     try {
       this.motions ??= this.files.read(PLAYER_MOTION_FILE).then((d) => new PlayerMotions(d));
-      const [assets, motions] = await Promise.all([this.classAssets(p.charClass), this.motions]);
-      if (this.disposed || this.markers.get(p.clientId) !== marker) return;
-      const model = buildPlayerModel(assets, p.appearance);
+      const [assets, motions, weapon] = await Promise.all([this.classAssets(p.charClass), this.motions, this.heldWeapon(key)]);
+      if (this.disposed || this.markers.get(p.clientId) !== marker || marker.weaponKey !== key) return;
+      const model = buildPlayerModel(assets, p.appearance, { weapon });
       const body = assets.parts.get(`pl${classLetter(p.charClass)}bdy00.nj`)!;
       marker.animator = new PlayerAnimator(model.partBones[0], body, motions);
+      if (marker.model) {
+        marker.group.remove(marker.model);
+        disposeObject(marker.model, false); // textures are shared
+      }
       marker.model = model.root;
+      marker.weapon = model.weapon;
+      if (marker.weapon) marker.weapon.visible = this.held?.visible() ?? false;
       if (marker.capsule) {
         marker.group.remove(marker.capsule);
         disposeObject(marker.capsule, true);
@@ -389,6 +433,18 @@ export class LobbyView {
       this.setGait(marker, marker.gait, true);
     } catch (err) {
       console.warn(`player model for ${p.name}: ${(err as Error).message}`);
+    }
+  }
+
+  // Each frame: the weapon shows only outside the hubs, and a player whose
+  // held weapon changed gets its model rebuilt with the new one.
+  private syncHeld(): void {
+    if (!this.held) return;
+    const visible = this.held.visible();
+    for (const m of this.markers.values()) {
+      if (m.weapon) m.weapon.visible = visible;
+      const p = this.lobby.players.get(m.clientId);
+      if (p && this.heldKey(m.clientId) !== m.weaponKey) void this.loadModel(p, m);
     }
   }
 
@@ -456,6 +512,7 @@ export class LobbyView {
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
+    this.syncHeld();
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
     // Second-finger camera drag of the touch pad (input/analog.ts): turns the
