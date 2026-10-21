@@ -63,6 +63,8 @@ import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volop
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
+import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
+import { parseCameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
@@ -2929,6 +2931,9 @@ export class CombatView {
   // mark_falz_as_dead_and_request_drop at the end of OL ENDING, on every client.
 
   private falzHead: EnemyRuntime | null = null;
+  // Dark Falz's cutscene camera file (bo04opcam.rel), read on the first call of bossCameraView.
+  private bossCameraSource: BossCameraSource | null = null;
+  private bossCameraLoad: Promise<void> | null = null;
   private falzProxies = new Map<number, EnemyRuntime>(); // by offset from the control
   private falzSpawning = new Set<number>();
   // Whether the last strike on an entity (by enemy index) was ours.
@@ -3046,15 +3051,28 @@ export class CombatView {
   // The Dark Falz boss camera for the field (render/gamefield.ts opts.bossCamera):
   // the control's view for its scene (combat/darkfalzcamera.ts), null outside the
   // cutscenes and while the camera asset is not read.
-  bossCameraView(): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } } | null {
+  bossCameraView(): { source: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; up: { x: number; y: number; z: number } } | null {
     const head = this.falzHead;
     if (!head || !(head.ai instanceof DarkFalzAi)) return null;
-    const v = head.ai.cameraView();
+    this.loadBossCamera();
+    const v = head.ai.cameraView(this.bossCameraSource);
     if (!v) return null;
     return {
       source: { x: v.source[0], y: v.source[1], z: v.source[2] },
       target: { x: v.target[0], y: v.target[1], z: v.target[2] },
+      up: { x: v.up[0], y: v.up[1], z: v.up[2] },
     };
+  }
+
+  // Reads bo04opcam.rel once (data.gsl; the name is matched without case, see data/clientfiles.ts).
+  private loadBossCamera(): void {
+    if (this.bossCameraLoad) return;
+    this.bossCameraLoad = (async () => {
+      if (!(await this.files.has(DARKFALZ_CAMERA_FILE))) return;
+      this.bossCameraSource = cameraSourceOf(parseCameraRel(await this.files.read(DARKFALZ_CAMERA_FILE)));
+    })().catch(() => {
+      this.bossCameraSource = null;
+    });
   }
 
   private tickDarkFalz(e: EnemyRuntime, ai: DarkFalzAi, targets: AiTarget[]): void {

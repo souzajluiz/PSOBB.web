@@ -322,7 +322,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   // The boss camera for the current scene (combat/darkfalzcamera.ts; null: the
   // normal camera). `source` supplies the motion and the pivots; null until the
   // camera asset is read (see darkfalzcamera.ts), so the view is null.
-  cameraView(source: BossCameraSource | null = null): { source: Vec3; target: Vec3 } | null {
+  cameraView(source: BossCameraSource | null = null): { source: Vec3; target: Vec3; up: Vec3 } | null {
     return bossCameraView(this.scene, this.sceneFrames, source);
   }
 

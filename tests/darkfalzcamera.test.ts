@@ -1,11 +1,15 @@
 // Dark Falz's boss camera (client/src/combat/darkfalzcamera.ts): the mode the
 // cutscene objects push, the records they pass (decoded from the exe's bytes),
 // the scene -> object owners, the per-frame update (MapObjectEntity_UpdateTransform_004d68a0),
-// and the view seam. The motion asset (Bo04OpCam.rel) is not on this machine, so
-// the view is only exercised with a synthetic motion below (test fixtures for the
-// math, not game values); the game's source is null and every scene reads null.
+// the view composition (the up vector from the roll), and the view seam. The motion
+// file is parsed by client/src/formats/cameramotion.ts: a synthetic REL with hand-computed
+// samples, and bo04opcam.rel from data.gsl when it is present (skipped otherwise). The
+// synthetic motion below is a test fixture, not a game value.
 //
 // Run: node tests/darkfalzcamera.test.ts
+import fs from 'node:fs';
+import { GSLArchive } from '../client/src/formats/archives.ts';
+import { parseCameraRel, sampleCameraMotion } from '../client/src/formats/cameramotion.ts';
 import {
   BOSS_CAMERA_MODE,
   CAMERA_FLAG,
@@ -16,6 +20,8 @@ import {
   SCENE_CUTSCENE_CAMERA,
   SCRIPTED_CAMERA_MODES,
   bossCameraView,
+  cameraSourceOf,
+  composeCameraUp,
   stepCameraObject,
   type BossCameraSource,
   type CameraObject,
@@ -95,6 +101,7 @@ const fixture = (over: Partial<CameraObject> = {}): CameraObject => ({
   yaw: 0,
   time: 0,
   done: false,
+  roll: 0,
   eye: [0, 0, 0],
   target: [0, 0, 0],
   ...over,
@@ -102,6 +109,7 @@ const fixture = (over: Partial<CameraObject> = {}): CameraObject => ({
 const sample = (over: Partial<MotionSample> = {}): MotionSample => ({
   pos: [1, 2, 3],
   dir: [0, 0, 5],
+  roll: 0,
   frames: 4,
   time: 77,
   ...over,
@@ -171,7 +179,7 @@ const sample = (over: Partial<MotionSample> = {}): MotionSample => ({
 // A synthetic source: the motion's position is its frame on x (test fixture), the pivot is
 // DEMO_WARP0's (-20000, 0, 0) from the DEVLOG, yaw 0 (not a game value: the exe's yaw is run time).
 const synthetic: BossCameraSource = {
-  motion: (index: number, frame: number) => (index === 5 ? { pos: [frame, 0, 0], dir: [0, 0, 1], frames: 100, time: 0 } : null),
+  motion: (index: number, frame: number) => (index === 5 ? { pos: [frame, 0, 0], dir: [0, 0, 1], roll: 0, frames: 100, time: 0 } : null),
   pivot: (object: string) => (object === 'ctor4513d4' ? { pivot: [-20000, 0, 0], yaw: 0 } : null),
 };
 
@@ -208,6 +216,150 @@ const rows = { darvant: EMPTY_ROW, df1: EMPTY_ROW, df2: EMPTY_ROW, df3: EMPTY_RO
 const ai = new DarkFalzAi({ x: 0, z: 0, angle: 0, difficulty: 0, rows, leader: () => true, selfId: () => 0, partySize: () => 1, rng: () => 0.5 });
 eq(ai.cameraView(), null, 'the control reports no boss view at its start');
 eq(ai.cameraView(synthetic), null, 'the control at its start (editor scene) has no view even with a source');
+
+
+// --- the view composition (MapObjectEntity_UpdateCamera_004d6BC0) ----------------
+// roll 0 keeps the up vector; the yaw is atan2(dx, dz) in BAMS (65536 a turn).
+eq(composeCameraUp([0, 0, 1], 0)[1], 1, 'roll 0: up is (0, 1, 0)');
+nearV(composeCameraUp([0, 0, 1], 16384), [-1, 0, 0], 'dir +z, roll 90 degrees: up is -x');
+nearV(composeCameraUp([1, 0, 0], 16384), [0, 0, 1], 'dir +x (yaw 90), roll 90: up is +z');
+const s2 = Math.SQRT1_2;
+nearV(composeCameraUp([1, 0, 1], 16384), [-s2, 0, s2], 'dir (1,0,1) (yaw 45), roll 90: up is (-s, 0, s)');
+{
+  // |up| = 1, and up . dir = cos(roll) * dy (the yaw cancels): checked for an arbitrary direction.
+  const d: [number, number, number] = [-72.084, 12.041, -175.723];
+  const up = composeCameraUp(d, 82);
+  near(Math.hypot(...up), 1, 'the up vector is a unit vector');
+  // The yaw is truncated to whole BAMS (one step of error at most), so the identity holds to that bound.
+  const bound = Math.hypot(d[0], d[2]) * Math.abs(Math.sin((82 * 2 * Math.PI) / 65536)) * ((2 * Math.PI) / 65536) + 1e-9;
+  check(Math.abs(up[0] * d[0] + up[1] * d[1] + up[2] * d[2] - Math.cos((82 * 2 * Math.PI) / 65536) * d[1]) <= bound, 'up . dir = cos(roll) dy (to the yaw truncation)');
+}
+
+// --- the camera file format (formats/cameramotion.ts) ---------------------------
+// A synthetic REL: root {motions, count}; motion 0 = type 0x181 (position, roll, time) with
+// the keys (0,0,0)/(10,20,30), roll 0 -> 16384 and time 100 -> 200 over frames 0 and 10;
+// motion 1 = type 0x41 (position, B = key - A) with one B key (30, 20, 10).
+function buildCameraRel(): Uint8Array {
+  const buf = new Uint8Array(0x400);
+  const dv = new DataView(buf.buffer);
+  let top = 0x20;
+  const alloc = (n: number) => {
+    const at = top;
+    top += n;
+    return at;
+  };
+  const vec = (at: number, frame: number, x: number, y: number, z: number) => {
+    dv.setUint32(at, frame, true);
+    dv.setFloat32(at + 4, x, true);
+    dv.setFloat32(at + 8, y, true);
+    dv.setFloat32(at + 12, z, true);
+  };
+  const int = (at: number, frame: number, v: number) => {
+    dv.setUint32(at, frame, true);
+    dv.setInt32(at + 4, v, true);
+  };
+  const posKeys = alloc(0x20);
+  vec(posKeys, 0, 0, 0, 0);
+  vec(posKeys + 0x10, 10, 10, 20, 30);
+  const rollKeys = alloc(0x10);
+  int(rollKeys, 0, 0);
+  int(rollKeys + 8, 10, 16384);
+  const timeKeys = alloc(0x10);
+  int(timeKeys, 0, 100);
+  int(timeKeys + 8, 10, 200);
+  const bKeys = alloc(0x10);
+  vec(bKeys, 0, 30, 20, 10);
+  // motion 0: mdata = 3 pointers then 3 counts
+  const md0 = alloc(0x18);
+  for (const [i, p] of [posKeys, rollKeys, timeKeys].entries()) dv.setUint32(md0 + i * 4, p, true);
+  for (const [i, c] of [2, 2, 2].entries()) dv.setUint32(md0 + 12 + i * 4, c, true);
+  const md1 = alloc(0x10);
+  dv.setUint32(md1, posKeys, true);
+  dv.setUint32(md1 + 4, bKeys, true);
+  dv.setUint32(md1 + 8, 2, true);
+  dv.setUint32(md1 + 12, 1, true);
+  const m0 = alloc(12);
+  dv.setUint32(m0, md0, true);
+  dv.setUint32(m0 + 4, 20, true);
+  dv.setUint16(m0 + 8, 0x181, true);
+  dv.setUint16(m0 + 10, 3, true);
+  const m1 = alloc(12);
+  dv.setUint32(m1, md1, true);
+  dv.setUint32(m1 + 4, 30, true);
+  dv.setUint16(m1 + 8, 0x41, true);
+  dv.setUint16(m1 + 10, 2, true);
+  const arr = alloc(8);
+  dv.setUint32(arr, m0, true);
+  dv.setUint32(arr + 4, m1, true);
+  const root = alloc(8);
+  dv.setUint32(root, arr, true);
+  dv.setUint32(root + 4, 2, true);
+  // the footer: relocations (none), root at len - 0x10
+  const len = (top + 0x20 + 0xf) & ~0xf;
+  const out = new Uint8Array(len);
+  out.set(buf.subarray(0, len));
+  const f = new DataView(out.buffer);
+  f.setUint32(len - 0x10, root, true);
+  return out;
+}
+{
+  const rel = parseCameraRel(buildCameraRel());
+  eq(rel.motions.length, 2, 'the synthetic file has two motions');
+  eq(rel.motions[0].frameCount, 20, 'motion 0 frame count (NJS_MOTION +4)');
+  eq(rel.motions[0].type, 0x181, 'motion 0 type');
+  eq(rel.motions[0].elements.map((e) => e.bit).join(','), `${0x1},${0x80},${0x100}`, 'motion 0 elements in storage order');
+  const at = (f: number) => sampleCameraMotion(rel.motions[0], f);
+  nearV(at(0).pos, [0, 0, 0], 'frame 0 position');
+  eq(at(0).roll, 0, 'frame 0 roll');
+  nearV(at(5).pos, [5, 10, 15], 'frame 5 position (linear between the keys)');
+  eq(at(5).roll, 8192, 'frame 5 roll (16384 / 2)');
+  eq(at(5).time, 150, 'frame 5 time (100 + 50)');
+  eq(at(3).roll, 4915, 'an int key truncates toward zero (16384 * 0.3 = 4915.2)');
+  nearV(at(2.5).pos, [2.5, 5, 7.5], 'a fractional frame: the bracket is the key at round(2.5) = 2, t = 0.25 of the span');
+  nearV(at(10).pos, [10, 20, 30], 'the last key holds');
+  nearV(at(40).pos, [10, 20, 30], 'past the last key the value holds (no wrap)');
+  eq(at(40).time, 200, 'past the last key the int holds');
+  const b = sampleCameraMotion(rel.motions[1], 0);
+  nearV(b.pos, [0, 0, 0], 'motion 1 position');
+  nearV(b.dir, [30, 20, 10], 'motion 1 B = the key minus A (A = 0)');
+  const b10 = sampleCameraMotion(rel.motions[1], 10);
+  nearV(b10.pos, [10, 20, 30], 'motion 1 position at frame 10');
+  nearV(b10.dir, [20, 0, -20], 'motion 1 B at frame 10 = key (30, 20, 10) minus A (10, 20, 30)');
+  eq(b10.roll, 0, 'a motion without the roll element has roll 0');
+}
+
+// The real file, when data.gsl is present (the same name in any case: bo04opcam.rel).
+const GSL = '/Users/junior/Downloads/psobb-client/data/data.gsl';
+if (fs.existsSync(GSL)) {
+  const gsl = new GSLArchive(new Uint8Array(fs.readFileSync(GSL)));
+  const name = [...gsl.entries.keys()].find((n) => n.toLowerCase() === 'bo04opcam.rel');
+  if (!name) check(false, 'data.gsl has bo04opcam.rel');
+  else {
+    const rel = parseCameraRel(gsl.get(name));
+    eq(rel.motions.length, 7, 'bo04opcam.rel has seven motions');
+    eq(rel.motions.map((m) => m.frameCount).join(','), '120,140,150,120,150,121,150', 'bo04opcam.rel frame counts');
+    check(rel.motions.every((m) => m.type === 0x1c1), 'every motion of bo04opcam.rel has type 0x1c1');
+    for (const [i, { roll }] of [[2, { roll: 82 }]] as const) {
+      const m = sampleCameraMotion(rel.motions[i], 10);
+      eq(m.roll, roll, `motion ${i} roll at frame 10`);
+      const up = composeCameraUp(m.dir, m.roll);
+      near(Math.hypot(...up), 1, `motion ${i} up is a unit vector`);
+      const bound = Math.hypot(m.dir[0], m.dir[2]) * Math.abs(Math.sin((roll * 2 * Math.PI) / 65536)) * ((2 * Math.PI) / 65536) + 1e-9;
+      const dot = up[0] * m.dir[0] + up[1] * m.dir[1] + up[2] * m.dir[2];
+      check(Math.abs(dot - Math.cos((roll * 2 * Math.PI) / 65536) * m.dir[1]) <= bound, `motion ${i} up . dir = cos(roll) dy (to the yaw truncation)`);
+    }
+    // The first motion's B is the key minus A: at frame 0 its eye is the first position key.
+    const m1 = sampleCameraMotion(rel.motions[1], 0);
+    nearV(m1.pos, [110.87528991699219, 157.8880157470703, 72.7130355834961], 'bo04opcam motion 1 eye at frame 0 (the first key)');
+    check(m1.dir.every(Number.isFinite), 'bo04opcam motion 1 dir is finite');
+    // The source of the seam: DEMO_WARP0 (motion 5, the pivot (-20000, 0, 0)) gives a view.
+    const v = bossCameraView(SCENE.demoWarp0, 0, cameraSourceOf(rel));
+    check(v !== null && v.up.length === 3, 'DEMO_WARP0 has a view from the real file');
+    if (v) nearV(v.up, [0, 1, 0], 'DEMO_WARP0 frame 0: roll 0, so up is (0, 1, 0)');
+  }
+} else {
+  console.log('darkfalzcamera: data.gsl not found, the real-file checks are skipped');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);

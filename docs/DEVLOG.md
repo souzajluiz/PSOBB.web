@@ -7104,7 +7104,7 @@ Not run in Chrome by hand.
 - The seven objects are the cutscene objects of the scene list above; 0x0044EC14's scene is taken as unknown.
 
 **UNCLEAR:**
-- The view itself: 0x004D68A0's path and spring arm (above), and the path tables at 0x00A48AE0 (set at run time; the writer is not read).
+- The view itself (corrected by the two later camera entries: 0x004D68A0 is ported, 0x00830848 is NJM_UpdateModelTransform and not a spring arm, the view composition 0x004D6BC0 is ported, and the motion file is in data.gsl as `bo04opcam.rel`): the path tables at 0x00A48AE0 are set at run time; the writer is not read.
 - The units of the time argument (frames or ticks).
 - The pivots that are object fields (+0x100, +0xAC, +0xE8, +0xD4) and the BSS pairs (0x00A44F34, 0x00A45068, 0x00A44F9C), whose writers are only partly read (0x0044EDAC's init, the run-time record of 0x0045072C / 0x00450FC4).
 - The control state at 0x0044D724 (the 0x39C slot's scene) and the branch 0x0044E5FC.
@@ -7112,7 +7112,7 @@ Not run in Chrome by hand.
 **What changed:**
 - `client/src/combat/darkfalzcamera.ts` (new): the mode, the scripted modes, the four decoded records, the seven cutscene camera objects with their call sites, the scene owners, and `bossCameraView(scene)`, which returns null for every scene until the update is ported.
 - `client/src/combat/darkfalz.ts`: `DarkFalzAi.cameraView()` (the seam; the control's current scene through `bossCameraView`).
-- `client/src/render/gamefield.ts`: the third view source `opts.bossCamera` (after the unlock and the talk camera); nothing supplies it yet, so the view does not change.
+- `client/src/render/gamefield.ts`: the third view source `opts.bossCamera` (after the unlock and the talk camera). (Corrected later the same day: the source is supplied from the file; see the camera entries below.)
 - `tests/darkfalzcamera.test.ts` (new): the mode, the records (decoded from the exe's bytes), the seven objects' call order, the scene owners, the null seam.
 
 **Checks:**
@@ -7282,7 +7282,7 @@ The gates: 0x007aaa30 is read as the port's `crossed(f)` (its frame passed f thi
 3. Flags 0x4 clear (type 0 = 0x48): B is normalized if its length is not 0 (`vec3_normalize`, 0x0082DF08), A and B turn by the yaw (`matrix_rotation_y` 0x0082D8BC: x' = cos x + sin z, z' = -sin x + cos z, BAMS 65536 = 360 degrees), A gets the pivot (+0x6C), `eye = A` (+0x3C), `target = A + B` (+0x48).
    Flags 0x4 set and 0x80 clear: `eye = A`, `target = A + B`, no pivot. Flags 0x84: time forced to 0x36C1, B flattened and normalized, `eye = (A.x - 40 b.x, A.y, A.z - 40 b.z)`, `target = A + B` (the constant 40.0 at 0x00909574).
 4. Path: `frame += step` (+0xA4); if `frame <= count - 1` and `frame < 5000` (0x00909570) return; else flags 0x20 set: frame = 0 (loop); else frame = count - 1 and +0x9E bit 0 set (done). The count term adds 0 or 2^32 (0x00909568) for a negative count.
-The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` (direction turned by the default NPC camera's angles, `set_view_matrix_lookat` on the NPC camera's source / target, the roll +0x90 as an int angle) is NOT ported: the port takes eye / target directly, as `render/gamefield.ts` does for the other camera sources.
+~~The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` ... is NOT ported~~ **Corrected 2026-10-21 (camera file entry below):** the composition is ported (`composeCameraUp`); the port takes the eye and the target as before and adds the up vector from the roll.
 
 **The pivots:** DEMO_WARP0's pair 0x00A45068 = (-20000, 0, 0) (the DEVLOG value, written by the ctor), its scalar 0x00A45074 gives the yaw at +4 (0x00A45078), a run-time value not read. The other pairs are object fields (+0x100, +0xAC, +0xE8, +0xD4) or registers (GET RING), and 0x00A44F34 (the first object) is written at run time. So no pivot except (perhaps) DEMO_WARP0's is known, and no yaw is known.
 
@@ -7291,7 +7291,7 @@ The view composition in `MapObjectEntity_UpdateCamera_004d6BC0` (direction turne
 - `bossCameraView` steps from the start: the view at `frame` is the (frame+1)th update, and the scene's own frame counter is the scene's tick count since `setScene` (the exe's frame is not known here).
 
 **UNCLEAR:**
-- The motion file. `Bo04OpCam.rel` is not in the local client (`/Users/junior/Downloads/psobb-client/data` has no camera .rel except `cam_boss09_demo.rel`, Saint-Milion's), and its NJM keyframes are needed for every frame. Without them the view is null, and the port's NJM channel mapping (the exe's `NJM_InitializeAnimationContext_008303dc` and the keyframe interpolation at 0x00847A98 / 0x00847ADC) is not read here.
+- ~~The motion file is missing~~ **Corrected 2026-10-21 (camera file entry below):** `Bo04OpCam.rel` is NOT missing. It is in `/Users/junior/Downloads/psobb-client/data/data.gsl` as `bo04opcam.rel` (lowercase), and its NJM channel mapping is decoded (0x008303DC, 0x00830848, the samplers 0x00842D04 / 0x00842DE4, the key search 0x0084AE50).
 - The yaws and the object pivots (run time), the units of the time (frames or ticks), the view composition 0x004D6BC0, and the 0x0044EC14 object's scene.
 
 **Checks:**
@@ -7926,3 +7926,42 @@ opens it read-only and prints the decompiled C of each function holding an addre
 `tools/ghidra/run_any.sh` (a script that is no longer in the tree) now point here.
 First check: 0x0041fa7b sits in 0x0041f6cc and 0x0041c5b1 in 0x0041c168, as the Dragon
 pass of today reports.
+
+
+## 2026-10-21: Dark Falz camera: the file, the composition and the field view
+
+**What changed:** the camera file is read and the view is ported. `formats/cameramotion.ts` (new) parses the boss cutscene camera REL (generic: every `bo0N(en|op)cam.rel` and `commoncam.rel` in data.gsl has the same layout) and samples a motion the way the exe's 0x00830848 does. `combat/darkfalzcamera.ts`: the motion sample carries the roll (`out[2]`), the update stores it (`+0x90`, ASSUMED), `composeCameraUp` is the view's up vector (the composition 0x004D6BC0), `bossCameraView` returns `{source, target, up}`, `cameraSourceOf` is the seam's source for a loaded file. `render/combat.ts` `bossCameraView()` reads the file once (lazily, on the first call) and passes it to `DarkFalzAi.cameraView`; `render/gamefield.ts` sets the field camera's `up` from it (and puts `(0, 1, 0)` back when no boss view is active). `data/clientfiles.ts`: a file name matches without case (the exe asks for `Bo04OpCam.rel`; the GSL has `bo04opcam.rel`); the exact name still wins.
+
+**Correction to the 2026-10-21 camera entries above:** `Bo04OpCam.rel` is NOT missing (it is in `data.gsl` as `bo04opcam.rel`, 27968 bytes, at 0x0335E000 in that archive), and 0x00830848 is NJM_UpdateModelTransform, not a spring arm. Those entries are corrected in place.
+
+**The file (exe and bytes).** A REL (footer root at len - 0x10). The root is `{u32 motions, u32 count}`: a pointer to an array of NJS_MOTION pointers, one per motion index. NJS_MOTION is `{u32 mdata, u32 frame_count, u16 type, u16 inp}` (the same layout as the map's NJM, `formats/njmotion.ts`). Every motion of bo04opcam.rel: type 0x1C1 (elements 0x001, 0x040, 0x080, 0x100), inp 4, one node (mdata: 4 key-list pointers, then 4 counts). Frame counts 120, 140, 150, 120, 150, 121, 150.
+
+**The evaluation (0x00830848, ported).** The elements are consumed in ascending bit order (the storage order; 0x002, 0x004, 0x010, 0x020 take a slot and are not sampled here).
+- 0x001: position A (out[0]), vector keys (stride 0x10: u32 frame, f32 x3), sampler 0x00842D04.
+- 0x040: B = the key minus A (out[1]). The B key is the target point, so `dir = target - eye` is the key minus A.
+- 0x080: out[2], an int (BAMS), the roll. Integer keys (stride 8: u32 frame, i32 value), sampler 0x00842DE4: `trunc(k0 + (int16)(k1 - k0) * t)`.
+- 0x100: out[3], an int: the motion's own time (16747 / 16383 / 14637 / 5461 in the constant tracks of bo04opcam.rel). ASSUMED: it is the time that the update uses when the UpdateCameraState time is -1 (0x004D68E3).
+- Key search (0x0084AE50): the last key with frame <= round-half-even(frame), or the first key; k1 is the next key, or k0 itself at the end, so the value HOLDS past the last key (no wrap, unlike the map's NJM rule in `njmotion.ts`). Before the first key the exe extrapolates (not reproduced beyond the search).
+
+**The composition (0x004D6BC0, no Ghidra function; the disassembly was read, objdump).** The vtable of the map object is at 0x00AFC8F4 (slot 2 = 0x004D68A0 the update, slot 10 = 0x004D6BC0 the composition). Its steps:
+1. dir = target (+0x48) - eye (+0x3C).
+2. 0x004D6448 writes the default camera's pitch (+0x190) and yaw (+0x194) from dir (BAMS). The view does not read them: not modelled.
+3. If roll (+0x90) is not 0: the yaw a = trunc(atan2(dx, dz) * 65536 / 2pi) with 2pi as stored at 0x00909500 (6.283184051513672). The fpatan operands are dx and dz: the call to 0x0082DC9C ends in `retl $4` and its result is popped, so the reloads read the stack's dx and dz (not the sqrt). The matrix is I, then RotY(a) (0x0082D8BC), then RotZ(roll) (0x00830C04), and up = M * (0, 1, 0) (0x0082EAB8) = `(-sin(roll) cos(a), cos(roll), sin(roll) sin(a))`. Roll 0: up = (0, 1, 0).
+4. `lookAt(eye = C+0x178, centre = C+0x184, up)` (0x0082F108 -> 0x0089241D; then 0x0082F130 sets the view matrix) with C = DAT_00A48A54 (the default camera). The eye is also copied to 0x00A48780.
+
+**Field wiring.** `combat/darkfalzcamera.ts` `bossCameraView` gives `{source: eye, target: centre, up}` with eye = +0x3C and centre = +0x48 (ASSUMED that C+0x178 / C+0x184 hold these during mode 5: no exe writer of them from +0x3C / +0x48 was found, see the spot-check). The pivot is known for DEMO_WARP0 only (`cameraSourceOf`: (-20000, 0, 0) from 0x00A45068); its yaw is the BSS scalar's +4 at run time, ASSUMED 0. Every other scene returns null (no pivot): GET RING (a register), DEMO_WARP2 / DIE TYPE2 / DIE TYPE3 (run-time records or pivots), APP TYPE2 (+0x100). So only DEMO_WARP0 moves the field camera.
+
+**Constants read (exe bytes, `tools/exedata.py read ... b`):** 0x00909500 = 6.283184051513672 (a double; the composition's 2pi), 0x00909508 = 65536.0 (double), 0x00909570 = 5000.0 (float), 0x00909574 = 40.0 (float), 0x00909568 = 2^32 (double). 0x00AEB494 is not in an initialised section (zero: the composition's normalise flag is off, ASSUMED).
+
+**Decisive spot-check.** In PsoBB.exe, 0x004D6CB6..0x004D6CC7 is `lea 0x178(%edx),%ecx` / `add $0x184,%edx` / `call 0x82f108` (eye = the default camera's +0x178, centre = +0x184, with the camera at `DAT_00a48a54` loaded at 0x004D6CB0). The port assumes these fields are the object's +0x3C / +0x48 in mode 5. If something else writes +0x178 / +0x184 during the cutscene, the view is wrong.
+
+**ASSUMED.** The eye / centre mapping above; the roll is the 0x080 channel (out[2] to +0x90, by the composition's read); the 0x100 channel is the motion's own time; the DEMO_WARP0 yaw is 0; the composition's normalise flag is 0; the sin / cos are exact (the exe's table is not read); the default (absent-list) values are 0.
+
+**UNCLEAR.**
+- The DEMO_WARP0 view: the pivot (-20000, 0, 0) puts the eye about 20000 units west of the Dark Falz arena (the control's floor position is near (-9860, -240)); the yaw rotates around the pivot, so it cannot bring the eye to the arena. Whether that is the cutscene's real place (a warp view) or a wrong pivot is not known. Not checked in Chrome.
+- Who calls the composition (the vtable slot 10) each frame, and in which order against the update (slot 2).
+- The run-time yaws and pivots of the other six objects (the BSS 0x00A45078 scalar, +0x100, +0xAC, +0xE8, +0xD4, the GET RING register).
+- The time unit (frames or ticks) of the record's time argument.
+- The 0x080 channel: the update's write to +0x90 is read from the composition only (the update 0x004D68A0 is ported without it, so the port's update now stores the roll).
+
+**Checks.** `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (new: the composition's hand values (roll 0, 90 degrees, yaw 45); a synthetic REL with hand-computed samples (the holds, the round-half-even bracket, the int truncation, the B = key - A); bo04opcam.rel from data.gsl (7 motions, the frame counts, type 0x1C1, the first eye, the roll and up identity to one BAMS step, DEMO_WARP0's up; skipped when the file is absent). `node tests/darkfalz.test.ts`: `darkfalz tests passed`. Client `npx tsc --noEmit -p .` (Node 24): clean. The name lookup was checked with a scratch script on the real data.gsl (`bo04opcam.rel`, `Bo04OpCam.rel` and a missing name). The parser was run on every camera file in the GSL (all parse; motions 1 to 7). Not run in Chrome.

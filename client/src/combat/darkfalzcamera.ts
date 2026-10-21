@@ -25,18 +25,32 @@
 // Scene owners: the cutscene objects below are made by the scene enters
 // (combat/darkfalzcommon.ts SCENE numbers).
 //
-// What is NOT available here (so no view is produced yet):
-// - The motion file. The map-14 type 0 asset is `Bo04OpCam.rel` (name at
-//   0x009095F0, the table at 0x009ACDE8, type 0 flags 0x48 at 0x009ACDEC); it is
-//   not in the local client data folder, and its NJM keyframes are needed for every frame.
-// - The run-time pivots (object +0x100 / +0xAC / +0xE8 / +0xD4) and the yaws
-//   (the scalar's +4 in the BSS blocks 0x00A44F24 / 0x00A45074 and the object fields).
+// The motion file: the map-14 type 0 asset is `Bo04OpCam.rel` (name at 0x009095F0,
+// the table at 0x009ACDE8, type 0 flags 0x48 at 0x009ACDEC). It is in data.gsl as
+// `bo04opcam.rel` (client/src/formats/cameramotion.ts parses it). Its record-to-motion
+// reads are checked in tests/darkfalzcamera.test.ts.
+//
+// The view composition, MapObjectEntity_UpdateCamera_004d6bc0 (no Ghidra function; the
+// disassembly of 0x004D6BC0..0x004D6CF9 was read), is ported as composeCameraUp: the
+// direction B = target - eye gives the yaw (atan2(dx, dz)) and the up vector is
+// RotY(yaw) then RotZ(roll) applied to (0, 1, 0). The view is lookAt(eye, target, up),
+// the exe's set_view_matrix_lookat on the default camera's source (+0x178) and target
+// (+0x184): ASSUMED to be this object's eye and target (the exe's writer of those fields
+// in the cutscene is not found). The angles it writes to the default camera (+0x190 pitch,
+// +0x194 yaw, 0x004D6448) are not read by the view and are not modelled.
+//
+// What is NOT available (so no view is produced for the scene):
+// - The run-time pivots (object +0x100 / +0xAC / +0xE8 / +0xD4 and the register of GET RING)
+//   and the yaws (the scalar's +4 in the BSS blocks). Only DEMO_WARP0's pivot is known;
+//   its yaw is ASSUMED 0 (cameraSourceOf).
 //
 // ASSUMED: mode 5 is the boss camera (nothing in the exe names it).
 // UNCLEAR: the time unit (frames or ticks), the 0x0044EC14 object's scene, the
-// BSS writers of the pivots, and the view composition in MapObjectEntity_UpdateCamera_004d6bc0.
+// BSS writers of the pivots and of the yaws, and who calls the vtable slot 10 (0x004D6BC0)
+// each frame (the object's vtable is at 0x00AFC8F4: slot 2 = 0x004D68A0, slot 10 = 0x004D6BC0).
 
 import type { Vec3 } from './darkfalzcommon.ts';
+import { sampleCameraMotion, type CameraRel } from '../formats/cameramotion.ts';
 
 // The mode every cutscene object pushes (0x004D31F4 with 5).
 export const BOSS_CAMERA_MODE = 5;
@@ -117,6 +131,7 @@ export const SCENE_CUTSCENE_CAMERA: Readonly<Record<number, string>> = {
 export interface MotionSample {
   pos: Vec3;
   dir: Vec3;
+  roll: number; // out[2] (BAMS int), stored at +0x90 (ASSUMED: by the update)
   frames: number;
   time: number;
 }
@@ -131,6 +146,7 @@ export interface BossCameraSource {
 export interface CameraView {
   source: Vec3; // eye (+0x3C)
   target: Vec3; // look-at (+0x48)
+  up: Vec3; // from the roll (+0x90), composeCameraUp
 }
 
 // The map object's camera fields the update reads and writes.
@@ -143,6 +159,7 @@ export interface CameraObject {
   yaw: number; // +0x88 (BAMS)
   time: number; // +0x54
   done: boolean; // +0x9E bit 0
+  roll: number; // +0x90 (BAMS)
   eye: Vec3; // +0x3C
   target: Vec3; // +0x48
 }
@@ -176,6 +193,7 @@ const FLAT_TIME = 0x36c1;
 export function stepCameraObject(o: CameraObject, sample: MotionSample, time: number): void {
   o.time = time === -1 ? sample.time : time;
   const f = o.flags;
+  o.roll = sample.roll;
   if ((f & CAMERA_FLAG.relative) === 0) {
     // Yaw about the pivot: the direction is normalized, both vectors turn by the yaw, then the eye moves to the pivot.
     const b = rotY(normalized(sample.dir), o.yaw);
@@ -230,11 +248,54 @@ export function bossCameraView(scene: number, frame: number, source: BossCameraS
     done: false,
     eye: pv.pivot,
     target: pv.pivot,
+    roll: 0,
   };
   for (let k = 0; k <= Math.max(0, Math.floor(frame)); k++) {
     const m = source.motion(rec.index, o.frame);
     if (!m) return null;
     stepCameraObject(o, m, cam.time);
   }
-  return { source: o.eye, target: o.target };
+  const dir: Vec3 = [o.target[0] - o.eye[0], o.target[1] - o.eye[1], o.target[2] - o.eye[2]];
+  return { source: o.eye, target: o.target, up: composeCameraUp(dir, o.roll) };
+}
+
+// 0x00909500 as the exe stores it (a double, 6.283184051513672: the low mantissa bits
+// are clear) and 0x00909508 = 65536 (BAMS per turn).
+const EXE_TWO_PI = 6.283184051513672;
+const BAMS_PER_TURN = 65536;
+
+// The up vector of MapObjectEntity_UpdateCamera_004d6BC0 (0x004D6BC0, the disassembly):
+// with roll 0 the up is (0, 1, 0). Otherwise the yaw is a = trunc(atan2(dx, dz) * 65536 / 2pi)
+// (fpatan of dx and dz: the sqrt in the call is popped and its argument is read again
+// from the stack, which the callee pops), the matrix is I, RotY(a) (0x0082D8BC), RotZ(roll)
+// (0x00830C04), and the up is the matrix's column 1 (0x0082EAB8 of (0, 1, 0)):
+// (-sin(roll) cos(a), cos(roll), sin(roll) sin(a)). The sin / cos are exact here (ASSUMED:
+// the exe's table is not read).
+export function composeCameraUp(dir: Vec3, roll: number): Vec3 {
+  if (roll === 0) return [0, 1, 0];
+  const a = Math.trunc((Math.atan2(dir[0], dir[2]) * BAMS_PER_TURN) / EXE_TWO_PI);
+  const turn = (bams: number) => ((bams & 0xffff) * Math.PI * 2) / BAMS_PER_TURN;
+  const ca = Math.cos(turn(a));
+  const sa = Math.sin(turn(a));
+  const cr = Math.cos(turn(roll));
+  const sr = Math.sin(turn(roll));
+  return [-sr * ca, cr, sr * sa];
+}
+
+// The camera source for a loaded camera file (formats/cameramotion.ts). Only DEMO_WARP0's
+// pivot is known (the ctor writes (-20000, 0, 0) to 0x00A45068); its yaw is the BSS scalar's
+// +4 at run time, not read: ASSUMED 0. Every other pivot is null (no view for that scene).
+export function cameraSourceOf(rel: CameraRel): BossCameraSource {
+  return {
+    motion(index, frame) {
+      const m = rel.motions[index];
+      if (!m) return null;
+      const s = sampleCameraMotion(m, frame);
+      return { pos: s.pos, dir: s.dir, roll: s.roll, frames: m.frameCount, time: s.time };
+    },
+    pivot(object) {
+      if (object === 'ctor4513d4') return { pivot: [-20000, 0, 0], yaw: 0 };
+      return null;
+    },
+  };
 }

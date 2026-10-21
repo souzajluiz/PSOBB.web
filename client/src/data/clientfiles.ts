@@ -46,9 +46,19 @@ export class ClientFiles {
     return this.indexing;
   }
 
-  async has(name: string): Promise<boolean> {
+  // The game finds a file whatever the case of its name (the exe asks for Bo04OpCam.rel,
+  // data.gsl has bo04opcam.rel). The exact name wins; else the first case-insensitive match.
+  private async resolve(name: string): Promise<string | null> {
     const loose = await this.index();
-    return loose.has(name) || !!this.gsl?.has(name);
+    if (loose.has(name) || this.gsl?.has(name)) return name;
+    const lower = name.toLowerCase();
+    for (const n of loose) if (n.toLowerCase() === lower) return n;
+    for (const n of this.gsl?.entries.keys() ?? []) if (n.toLowerCase() === lower) return n;
+    return null;
+  }
+
+  async has(name: string): Promise<boolean> {
+    return (await this.resolve(name)) !== null;
   }
 
   // Every file name in data/ and data.gsl (loose files first, no duplicates).
@@ -63,10 +73,10 @@ export class ClientFiles {
       p = (async () => {
         const server = await this.serverCopy(name);
         if (server) return server;
-        const loose = await this.index();
-        if (loose.has(name)) return this.source.read(name);
-        if (this.gsl?.has(name)) return this.gsl.get(name);
-        throw new Error(`client file not found: ${name}`);
+        const real = await this.resolve(name);
+        if (real === null) throw new Error(`client file not found: ${name}`);
+        if ((await this.index()).has(real)) return this.source.read(real);
+        return this.gsl!.get(real);
       })();
       this.cache.set(name, p);
     }
