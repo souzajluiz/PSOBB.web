@@ -6746,3 +6746,9 @@ Follow-up of the laser paragraph above (a Haiku pass; the spawn copy was checked
 **Checks.** `node tests/saintmilionboss.test.ts`: ALL PASS. `node tests/saintmilion.test.ts`: all checks passed. `node tests/combat.test.ts`: 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
 
 Not run in Chrome.
+
+## 2026-10-21: Saint-Milion laser: correction, 0x007679d0 is the boss's, not the laser's
+
+Correction of "Saint-Milion laser: the beam test (read), aim source still unknown" (a Haiku pass found it; checked here). 0x007679d0 is called with the **boss** as `this`: its caller 0x00767940 starts `mov ebp, ecx; mov edx, [ebp+0xf80]` (the arena index) and passes `ecx = ebp` to 0x007679d0 at 0x00767962; the other callers (0x0076b1ff, 0x0076ba60) pass the same boss-class `this`. So the stores at 0x00767a00..0x00767a09 set the boss's own +0x44..+0x4c = +0x38..+0x40 (its position, snapped by 0x007b4c58), not a laser's aim point; that entry's "the spawn copies the origin into the aim point" is wrong.
+
+What stands: the laser (ctor 0x00765c68, only built by 0x0076b85c from the state-19 handler 0x007697dc; the boss keeps no pointer to it) never writes its own +0x38 / +0x44 (update 0x00765d7c only reads them at 0x00765daf..0x00765dbb), its base and ctor do not set them, and its child tracks (table 0x009f5a9c = {0, 3, 5}, factory 0x00661448 / 0x006614cc, vtable 0x00b33970, update 0x00660f68) write their own target node, not the laser. The nearest lead is 0x007657f8(slot, vec) called from 0x007663b0 in 0x00766384, which copies a position from `[[this+0x60]+0x30..0x38]` into a child: a different object family, not tied to the laser yet. **Who sets the laser's origin and aim each frame is still unknown**; the laser stays unported (a port would need an ASSUMED aim, e.g. a sweep from the boss's heading).
