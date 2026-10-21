@@ -16,7 +16,15 @@
 //     beyond 100 units for hunters, 100 / 150 for the others, and after a
 //     light hit or an evade, 0x006a29f4); then ×[player+0x690] (0.4) when
 //     player+0x68c bit 0 is set, which no player code sets (not ported);
-//   - position += velocity once per tick (0x00777724).
+//   - position += velocity once per tick (0x00777724);
+//   - the walk / run motion step: the record speed * the leg speed of the
+//     state (0x006a2061 walk: base DAT_00a94300 = 1.0, 0x006a1a10 run: base
+//     DAT_00a94324 = 1.5). The exe writes record.speed * 0x6c0 (player+0x6c0,
+//     the 0x006978a0 result) to player+0xd0 every tick, and the motion tick
+//     copies it to the frame step (0x007aa094 / 0x007a9b5b). So a slowed or
+//     guarding player's legs and feet run at the same rate.
+// The local player's slow and guard are driven in the field too: render/combat.ts
+// feeds PlayerMover.slowed and the target distance (LobbyView.legState).
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 
 export const WALK_SPEED_PER_TICK = 1.0;
@@ -30,6 +38,42 @@ export const RUN_SPEED = RUN_SPEED_PER_TICK * GAME_TICKS_PER_SECOND;
 // Speed of a leg after the 0.5 / 0.75 rules of 0x006978a0 (see the header).
 export function legSpeed(base: number, slowed: boolean, guard: boolean): number {
   return slowed ? base * SLOWED_MULT : guard ? base * GUARD_MULT : base;
+}
+
+// The slow (player+0x30 bit 8) counts outside the hubs only: 0x00690344 tests
+// the map id at player+0x3ec against the table 0x0097f1c8 (0, 15, 18, 45:
+// Pioneer 2 Ep1, the lobby, Pioneer 2 Ep2 and Ep4). The port's `area` is that
+// map id (render/gameview.ts AREA_NAMES: 0x00 Pioneer 2, 0x12 Lab, 0x2d Pioneer 2).
+export const SLOW_EXEMPT_AREAS: readonly number[] = [0, 15, 18, 45];
+export function slowApplies(area: number): boolean {
+  return !SLOW_EXEMPT_AREAS.includes(area);
+}
+
+// The guard stance's classes (0x0052ac5c): a hunter (player+0x964 & 0xe0 == 0x20:
+// HUmar, HUnewearl, HUcast, HUcaseal) uses the near / far pair of hunters, the
+// others (Rangers, Forces) the wider pair. Squared distances (0x00922330..3c):
+// a hunter enters within 50 and leaves beyond 100, the others enter within 100
+// and leave beyond 150.
+export const GUARD_HUNTER_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 9]);
+export const GUARD_RANGE_SQ = {
+  hunter: { enter: 2500, leave: 10000 },
+  other: { enter: 10000, leave: 22500 },
+} as const;
+
+// The guard stance after one proximity check. `distSq` is the squared distance
+// to the target, or null with no target (the stance drops). Hysteresis: once
+// on, it stays on until the leave distance; off, it turns on inside the enter one.
+export function guardStance(on: boolean, distSq: number | null, charClass: number): boolean {
+  if (distSq === null) return false;
+  const r = GUARD_HUNTER_CLASSES.has(charClass) ? GUARD_RANGE_SQ.hunter : GUARD_RANGE_SQ.other;
+  return on ? distSq <= r.leave : distSq < r.enter;
+}
+
+// What LobbyView asks the local player's owner each frame: whether the slow
+// applies and the point the guard stance is measured to (null: no target).
+export interface LegState {
+  slowed: boolean;
+  target: { x: number; y: number; z: number } | null;
 }
 
 // The keyboard ramp (0x0070a60c): a held key moves its axis by 32 a poll up
@@ -161,6 +205,11 @@ export class PlayerMover {
       this.runCount = 0;
     }
     if (this.arrived) this.startLeg(want);
+  }
+
+  // The guard stance from the proximity check of this tick (0x0052ac5c).
+  setGuard(distSq: number | null, charClass: number): void {
+    this.guard = guardStance(this.guard, distSq, charClass);
   }
 
   tick(input: MoverInput, move: MoveFn): void {

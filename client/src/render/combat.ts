@@ -116,6 +116,7 @@ import {
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
+import { slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
 import {
   canUseSpecialAttack,
@@ -653,6 +654,12 @@ export class CombatView {
 
   attach(view: LobbyView): void {
     this.view = view;
+    // The local player's leg speed inputs (render/playermove.ts): the slow outside the
+    // hubs, and the guard stance measured to the lock-on target.
+    view.legState = () => ({
+      slowed: this.status.has(STATUS.slow) && slowApplies(this.area),
+      target: this.lockOn ? this.lockOn.instance.root.position : null,
+    });
     this.overlay ??= new CombatOverlay(this.viewer.scene);
     this.hpReadout ??= this.makeHpReadout();
     if (!this.hud) {

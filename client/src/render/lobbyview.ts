@@ -22,7 +22,7 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
-import { PlayerMover, followTick, fromBams, rampAxis, toBams, type Follower } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { PlayerMover, followTick, fromBams, legSpeed, rampAxis, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
@@ -220,6 +220,9 @@ export class LobbyView {
   // While this returns true for a player, its gait motion is not played over
   // the attack motion and the local player does not move (render/combat.ts).
   attacking: (clientId: number) => boolean = () => false;
+  // The local player's slow and guard inputs (render/combat.ts in the field;
+  // the lobby has no status effects and no target, so 0.5 / 0.75 never apply).
+  legState: () => LegState = () => ({ slowed: false, target: null });
 
   constructor(
     viewer: MapViewer,
@@ -475,8 +478,14 @@ export class LobbyView {
       let ticks = Math.min(Math.floor(this.moveTicks), 30);
       this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
       const stick = touchStick();
+      const leg = this.legState();
       while (ticks-- > 0) {
         this.prevLogic.copy(pos);
+        // The exe's per-tick checks: the slow, then the guard stance by the flat
+        // (x, z) distance to the target (0x007a9180 reads x and z only).
+        this.mover.slowed = leg.slowed;
+        const t = leg.target;
+        this.mover.setGuard(t ? (pos.x - t.x) ** 2 + (pos.z - t.z) ** 2 : null, mine.charClass);
         let lr: number;
         let fb: number;
         if (stick) {
@@ -500,6 +509,8 @@ export class LobbyView {
       mine.angle = this.mover.angle;
       if (moving) {
         this.setGait(mine, gait);
+        // The walk / run step follows the leg speed (0x006a2061 / 0x006a1a10).
+        mine.animator?.setRate(legSpeed(LOCOMOTION_FACTOR[gait], this.mover.slowed, this.mover.guard));
         this.sendTimer -= dt;
         // 6x40 walk / 6x42 run; a change of gait goes out at once.
         if (this.sendTimer <= 0 || gait !== this.sentGait) {

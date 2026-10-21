@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick } from '../client/src/render/playermove.ts';
+import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, slowApplies, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -64,4 +64,47 @@ const w = { x: 0, z: 0, heading: 0 };
 n = 0;
 while (followTick(w, 0, 30, false) && n < 100) n++;
 assert.ok(n >= 30 && n <= 34, 'walk 30 units: ' + n);
+// the slow counts outside the hubs (map ids 0, 15, 18, 45 are exempt, 0x00690344)
+for (const area of [0, 15, 18, 45]) assert.equal(slowApplies(area), false, 'hub ' + area);
+for (const area of [1, 0x0d, 0x12 + 1, 0x2c, 0x2d + 1]) assert.equal(slowApplies(area), true, 'field ' + area);
+// the guard stance: hunters (classes 0, 1, 2, 9) enter within 50 (d^2 2500) and leave beyond 100 (10000);
+// Rangers and Forces enter within 100 (10000) and leave beyond 150 (22500)
+assert.deepEqual([...GUARD_HUNTER_CLASSES].sort((a, b) => a - b), [0, 1, 2, 9]);
+for (const cls of [0, 1, 2, 9]) {
+  assert.equal(guardStance(false, 2499, cls), true, 'hunter enters inside 50 ' + cls);
+  assert.equal(guardStance(false, 2500, cls), false, 'hunter does not enter at 50 ' + cls);
+  assert.equal(guardStance(true, 10000, cls), true, 'hunter holds at 100 ' + cls);
+  assert.equal(guardStance(true, 10001, cls), false, 'hunter leaves beyond 100 ' + cls);
+  assert.equal(guardStance(true, 5000, cls), true, 'hunter holds inside 100 ' + cls);
+  assert.equal(guardStance(false, 5000, cls), false, 'hunter 70 units away stays off ' + cls);
+}
+for (const cls of [3, 4, 5, 6, 7, 8, 10, 11]) {
+  assert.equal(guardStance(false, 9999, cls), true, 'other enters inside 100 ' + cls);
+  assert.equal(guardStance(false, 10000, cls), false, 'other does not enter at 100 ' + cls);
+  assert.equal(guardStance(true, 22500, cls), true, 'other holds at 150 ' + cls);
+  assert.equal(guardStance(true, 22501, cls), false, 'other leaves beyond 150 ' + cls);
+  assert.equal(guardStance(true, null, cls), false, 'no target drops the stance ' + cls);
+}
+assert.equal(guardStance(false, 60 * 60, 0), false, 'a hunter 60 away is not on');
+assert.equal(guardStance(false, 60 * 60, 3), true, 'a ranger 60 away is on');
+// the mover: the slow and the guard set its step (walk 1.0 a tick); from rest the first tick moves the full leg speed
+{
+  const mv = new PlayerMover(0, 0);
+  mv.slowed = true;
+  mv.tick(up, free(mv));
+  assert.equal(mv.z, 0.5, 'slowed walk moves 0.5 a tick');
+  const g = new PlayerMover(0, 0);
+  g.setGuard(2000, 0);
+  assert.equal(g.guard, true);
+  g.tick(up, free(g));
+  assert.equal(g.z, 0.75, 'guard walk moves 0.75 a tick');
+  g.setGuard(null, 0);
+  assert.equal(g.guard, false, 'no target clears the guard');
+}
+// the walk / run frame step: record speed * legSpeed(LOCOMOTION_FACTOR, slowed, guard)
+assert.equal(legSpeed(1.0, false, false), 1);
+assert.equal(legSpeed(1.5, false, false), 1.5);
+assert.equal(legSpeed(1.5, true, false), 0.75);
+assert.equal(legSpeed(1.5, false, true), 1.125);
+assert.equal(legSpeed(1.0, true, true), 0.5, 'slowed beats guard');
 console.log('playermove: ok');

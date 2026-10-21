@@ -109,6 +109,12 @@ export class PlayerAnimator {
     this.apply();
   }
 
+  // Sets the step factor of the motion playing now (the walk / run tie to the
+  // leg speed, render/playermove.ts legSpeed): the record speed * stepFactor.
+  setRate(stepFactor: number): void {
+    if (this.record) this.step = this.record.speed * stepFactor;
+  }
+
   // Advances by `dt` seconds (whole game ticks; the remainder carries over).
   update(dt: number): void {
     if (!this.motion || !this.record || this.paused) return;
