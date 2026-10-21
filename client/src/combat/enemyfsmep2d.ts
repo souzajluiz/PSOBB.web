@@ -2053,8 +2053,8 @@ export class ReconAi extends Ep2dBrain<ReconState> {
 //   8 (0x00558a10): hit flash (16 frames) -> 4. Entered by a hit while open.
 //   9 (0x005588dc): death: 20 frames, then it bursts.
 // ASSUMED: map rays (line of sight, walls), the Epsigards' collision flag
-// (flag 0x80: nothing touches them), the model swap of the closed / open look
-// (not drawn), the colour fades (visual), the element immunities are exposed
+// (flag 0x80: nothing touches them), the tint is a material colour (white to the
+// element colour by colourT; the exe's use of it is not read), the element immunities are exposed
 // (`immuneToTech`) and applied by the owner's techHitEnemy (render/combat.ts)
 // while Epsilon is not invulnerable.
 export const EPSILON = {
@@ -2111,10 +2111,32 @@ export const EPSILON_PATTERNS: readonly (readonly [number, number, number, numbe
 // 0x0055ac24): foie, barta, zonde, megid.
 export const EPSILON_ELEMENT_GROUPS = [1, 2, 3, 5] as const;
 
-const EPSILON_ANIM = {
+export const EPSILON_ANIM = {
   closed: loop(0, 0.3),
   open: loop(1, 0.6),
 } as const;
+
+// The element colours (0x00925320), RGB 0..1: red, blue, yellow, magenta (the
+// 255 in front of each row is the intensity).
+export const EPSILON_COLOURS: readonly (readonly [number, number, number])[] = [
+  [1, 0, 0],
+  [0, 0, 1],
+  [1, 1, 0],
+  [1, 0, 1],
+];
+
+// The tint of the body (render/combat.ts): lerp(white, element colour, colourT),
+// the element colour lerped from `from` to `to` by `mix` during the recolour.
+export function epsilonTint(from: number, to: number, mix: number, colourT: number): [number, number, number] {
+  const a = EPSILON_COLOURS[from & 3];
+  const b = EPSILON_COLOURS[to & 3];
+  const out: [number, number, number] = [1, 1, 1];
+  for (let k = 0; k < 3; k++) {
+    const c = a[k] + (b[k] - a[k]) * mix;
+    out[k] = 1 + (c - 1) * colourT;
+  }
+  return out;
+}
 
 export type EpsilonState = 'dormant' | 'appear' | 'stalk' | 'order' | 'open' | 'recall' | 'recolor' | 'lost' | 'hit' | 'dying';
 
@@ -2169,7 +2191,11 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
   private patternTimer = 0; // +0x450
   private flash = 0; // +0x454
   private colour = 0; // +0x446
-  private colourT = 0; // +0x500
+  // The tint (epsilonTint): colourT 0..1 (+0x500), the element before the last
+  // change, and the lerp from it to `colour` (0..1).
+  colourT = 0;
+  colourFrom = 0;
+  colourMix = 1;
   // The laser (enemy+0x4f0..0x518).
   private stage = 0;
   private stageTimer = 0;
@@ -2214,6 +2240,7 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
     // The element: get_random_float * weight & 3 (the weight 0x00925404 is
     // not read: ASSUMED uniform).
     this.colour = Math.floor(f32(this.rng()) * 4) & 3;
+    this.colourFrom = this.colour;
     for (let i = 0; i < 4; i++) {
       this.slotX.push(opts.x);
       this.slotZ.push(opts.z);
@@ -2700,9 +2727,13 @@ export class EpsilonAi extends Ep2dBrain<EpsilonState> {
         this.sub = 1;
         this.timer = EPSILON.recolor;
         this.colourT = 1;
+        this.colourFrom = this.colour;
         this.colour = (this.colour + 1) & 3;
+        this.colourMix = 0;
       }
     } else if (this.sub === 1) {
+      // The colour lerps from the old element to the new one, delta / 30 a frame.
+      this.colourMix = Math.min(1, f32(this.colourMix + step));
       if (--this.timer < 1) {
         this.sub = 2;
         this.colourT = 1;

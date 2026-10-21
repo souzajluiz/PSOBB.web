@@ -761,9 +761,10 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     case 0xdf:
       return spec('TObjEneRecobox', pick('bm_ene_recobox.bml', ctx), [{ model: 1, motion: loop(1, 0.1) }]);
     // Sinow Zoa / Zele (Seabed) or Epsilon (area 0x23, ctor 0x005585ac: model 0
-    // bcbody, table 0x009bdeb8 slot 0 = body_wait, 0.3).
+    // bcbody, table 0x009bdeb8 slot 0 = body_wait, 0.3). Model 1 (bal_body, slot
+    // 1 = bal_wait, 0.6) is the open look: hidden until the brain opens it.
     case 0xe0:
-      if (ctx.area === 0x23) return spec('TObjEneEpsilonBody', 'bm_ene_epsilon.bml', [{ model: 0, motion: loop(0, 0.3) }]);
+      if (ctx.area === 0x23) return spec('TObjEneEpsilonBody', 'bm_ene_epsilon.bml', [{ model: 0, motion: loop(0, 0.3) }, { model: 1, motion: loop(1, 0.6), hidden: true }]);
       return spec('TObjEneMe3SinowZoaReal', pick('bm_ene_me3_shinowa_zoa.bml', ctx), [{ model: 0, motion: sinowGround(p[0]) ? loop(9, 0.5) : loop(0, 0.5), ...(p6 > 0 ? { texRemap: [3, 4, 5] } : {}) }]);
     // Ill Gill: ctor 0x0052e44c, table 0x009bc3e0 slot 0 = wait, 0.6.
     case 0xe1:

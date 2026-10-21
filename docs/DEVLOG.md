@@ -6775,3 +6775,23 @@ What stands: the laser (ctor 0x00765c68, only built by 0x0076b85c from the state
 - `e2e/party-create.spec.ts`: the return step now runs the teleporter and checks that the loading screen was shown (sampled every 10 ms in the page, since the 98 / 84 is quick) before the lobby is up. The `leaveToLobby` import is dropped from that spec (`classic.ts` keeps the helper for `party-join.spec.ts`).
 
 **Checks:** `tsc --noEmit` clean (client). `node tests/gamelist.test.ts` 127/127, `node tests/options.test.ts` 41 checks, 0 failures. Playwright (`PW_BASE_URL=http://127.0.0.1:5175`, a worktree Vite): `e2e/party-create.spec.ts` 1 passed (21.3 s); `e2e/party-join.spec.ts` 1 passed (29.9 s, it also leaves a game). Not checked by hand in Chrome.
+
+## 2026-10-21: Epsilon model swap, colour, particles and orb
+
+**What changed.**
+- Model swap (exe helper 0x005592a0): Epsilon (area 0x23, `formats/enemymodels.ts`) has the open look as part 1 (model 1 re6_b_bal_body, motion 1 bal_wait, 0.6), hidden by default; part 0 is the closed look (model 0, body_wait, 0.3). `render/combat.ts` `epsilonView` shows one of the two from `EpsilonAi.open` on every frame, after the hidden flag, so the look changes on the frame the closed flag does. The brain's motion is played on the shown look's animator only (the generic path would have played it on both parts). Hits are position based (no mesh tests), so they are unchanged.
+- Colour (state 6, `combat/enemyfsmep2d.ts`): the element changes at the top of the recolour with `colourMix` 0 and `colourFrom` the old element; `colourMix` rises by 1/30 a frame for 30 frames (delta / 30, 0x00925410) to 1. `epsilonTint(from, to, mix, colourT)` is lerp(white, lerp(from colour, to colour, mix), colourT), with the element colours of 0x00925320: red, blue, yellow, magenta. The body's meshes get their own clones of the cached materials on first draw (`render/njmesh.ts` cache not changed); colour = base colour * tint, redone only when one of the four inputs changes.
+- Orb: while `EpsilonAi.orb` is set (laser shown, not hidden, not dying) a sphere of radius 6 in 0xff6030 (the colour of the Rafoie blast) sits at the orb's XZ and the body's height + `PLAYER_AIM_HEIGHT`. It is hidden otherwise and removed on a floor reset.
+
+**Particles: none spawned.** Ids 0x2d2, 0x2d3, 0x2d4 and 0x2d5 do not exist in `particleentry.dat`: data.gsl's copy has 512 entries (0x000..0x1ff, 77824 bytes), and the ids are above that. The particleentrya36..46.dat files (64 entries each) were not checked for them. No spawn calls were added; the source of these ids is still open.
+
+**ASSUMED.**
+- The tint is a material colour multiplied into the base colour. How the exe applies colourT (diffuse, a light, or the vertex colour) is not read.
+- The orb is a ball, not the Rafoie-family model entity (ConstructProjectileRafoie 0x006ee0d0); its height is the body's height + 10.
+- A look restarts its own motion when it becomes shown (the exe sets the motion slot with the look; the restart is ASSUMED).
+- The death motion still plays on both parts (the generic death path).
+- Epsilon's model is only set for area 0x23 (`enemymodels.ts`), while `setdata.ts` maps 0xe0 to EPSILON for areas 0x22 and 0x23. Area 0x22 still gets the Sinow Zoa model; not changed here.
+
+**Checks.** `node tests/enemyfsmep2d.test.ts`: all checks passed (new: the tint function, the 30-frame colour lerp from the old element). `node tests/combat.test.ts`: 5946 checks, 0 failures (with `vendor/` linked). `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
+
+Not run in Chrome.
