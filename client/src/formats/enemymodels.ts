@@ -344,6 +344,13 @@ const rad = (angle: number) => (angle / BAMS) * Math.PI * 2;
 // VOL_OPT_1, 6 x VOL_OPT_PILLAR, 24 x VOL_OPT_MONITOR, 2 x NONE, VOL_OPT_AMP,
 // VOL_OPT_CORE, NONE (0x23 children).
 const VOLOPT_MONITOR_MODEL = [2, 5, 8, 11]; // 0x009a5210
+// The same monitor's broken model (table 0x009a5230): the fall swaps the
+// model entry for it (0x00441902 reads [0x9a5230 + shape * 4] into +0x34).
+export const VOLOPT_MONITOR_BROKEN = [3, 6, 9, 12];
+// The pillar's hatch lid (fe_obj_vo_futa_moto): the pillar's draw 0x0044b9a0
+// puts the first node of this model's tree at (0, b, 0) and its child at
+// (0, a, 0) (VoloptLid), under the pillar's own placement.
+export const VOLOPT_LID_MODEL = 13;
 export const VOLOPT_MONITOR_OFFSET = [-110, -110, -115, -110]; // 0x009a51e0, z of each shape
 export const VOLOPT_PILLAR_RADIUS = 76; // 0x008fe56c
 export const VOLOPT_ROD_Y = 80; // 0x42a00000 stored to +0x3c by 0x00440ad8
@@ -352,27 +359,33 @@ function volOptChildren(ultimate: boolean): EnemyPartSpec[] {
   const parts: EnemyPartSpec[] = [];
   for (let i = 0; i < 6; i++) {
     const a = bams(i * 60);
+    const offset: [number, number, number] = [VOLOPT_PILLAR_RADIUS * Math.cos(rad(a)), 0, VOLOPT_PILLAR_RADIUS * Math.sin(rad(a))];
     parts.push({
       model: 17,
       motion: loop(15, 0.7),
       place: 'world',
       name: `pillar ${i}`,
-      offset: [VOLOPT_PILLAR_RADIUS * Math.cos(rad(a)), 0, VOLOPT_PILLAR_RADIUS * Math.sin(rad(a))],
+      offset,
       yaw: rad(-0x4000 - a),
     });
+    // The hatch lid, drawn at the pillar's place (the same frame as the pillar).
+    parts.push({ model: VOLOPT_LID_MODEL, place: 'world', name: `pillar ${i} lid`, offset, yaw: rad(-0x4000 - a) });
   }
   for (let i = 0; i < 24; i++) {
     const shape = i & 3;
     const a = rad(bams((i >> 2) * 60));
     const z = VOLOPT_MONITOR_OFFSET[shape];
+    const offset: [number, number, number] = [z * Math.sin(a), 0, z * Math.cos(a)];
     parts.push({
       model: VOLOPT_MONITOR_MODEL[shape],
       place: 'world',
       name: `monitor ${i}`,
       // multiply_4x4_matrix_by_vec3f of (0, 0, z) with a Y rotation of `a`.
-      offset: [z * Math.sin(a), 0, z * Math.cos(a)],
+      offset,
       yaw: a,
     });
+    // The same place, the broken model once the monitor has fallen (hidden until then).
+    parts.push({ model: VOLOPT_MONITOR_BROKEN[shape], place: 'world', name: `monitor ${i} broken`, offset, yaw: a, hidden: true });
   }
   if (!ultimate) parts.push({ model: 16, motion: loop(6, 0.7), place: 'world', name: 'lightning rod', offset: [0, VOLOPT_ROD_Y, 0] });
   parts.push({ model: 24, motion: loop(14, 0.7), place: 'world', name: 'core', hidden: true });

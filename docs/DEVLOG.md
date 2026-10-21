@@ -6903,3 +6903,28 @@ A read pass over the port (`combat/darkfalz*.ts`, `render/combat.ts`, `render/ga
 - Ultimate: the Darvants form 2's beam makes (small) and the Rico / ring scene behind quest flag 0x97 (large, its enter not read).
 
 **UNCLEAR.** Whether any scene locks the players (0x0044bf4c / 0x0044c1a4 are not named past the tethealla label). The boss-cutscene tables at 0x009a394c / 0x009a3950: no call from the Dark Falz code was found. The exe's difficulty branches were taken from the port, not read in the exe.
+## 2026-10-21: Vol Opt real models and lid
+
+**What changed:** the pillars' hatch lids and the fallen monitors are drawn with their real models. `formats/enemymodels.ts` (`volOptChildren`) adds, per pillar, a lid part (model 13, `fe_obj_vo_futa_moto`, placed from the arena origin with the pillar's offset and yaw) and, per monitor, a hidden broken part (models 3 / 6 / 9 / 12 by shape, `VOLOPT_MONITOR_BROKEN`). `render/combat.ts` (`voloptView`, `syncVolopt`) moves the lid's first node by `VoloptLid.b` and its child by `VoloptLid.a` (the state the pillar already drove, `combat/volopt.ts`), follows the pillar's height and shows the broken model when the monitor has fallen. The cage stays a ball, the bars are the shots' balls, the prison is not drawn: the exe has no model for them (below). The rod, the monitors, the pillars, the core and phase 2's body (model 19) were already drawn with their archive models.
+
+**From PsoBB.exe** (`bm_boss3_volopt.bml`, descriptor 0x009a4dc8, `ENEMY_ASSETS`; model entry positions as `EnemyArchive.model` counts them):
+- The lid: the pillar's draw 0x0044b9a0 calls the translate 0x00830b74 with (0, [+0x2c], 0) on the node at 0x00a44cb0, then (0, [+0x28], 0) on 0x00a44cb4. Those two nodes are written by 0x0043ecd7 / 0x0043ecdd, which read the first and child node of the model at the model table of the set's +0xd8 (`[0x00a447bc] + 0x42c`), i.e. entry 13. The ctor 0x0044b84c sets the state 0 and both offsets 0, the closed hatch. The lid's state numbers are the pillar's +0x20 (1 closes, 2 opens) and its timers are in `VoloptLid` (0x008fea10 / 0x008fea14 for -3 and -18, 0x00a44ca4 / 0x00a44ca8 for the steps).
+- The broken monitors: 0x00441902 (a monitor's fall) sets the model entry to `[0x009a5230 + 4 * shape]` = {3, 6, 9, 12} (shape = `+0x370`), the screens are {2, 5, 8, 11} (0x009a5210, read by the ctor 0x0044161c at 0x0044172a) and the red ones {1, 4, 7, 10} (0x009a5220, used by the ctor 0x0044161c at 0x004418a7 / 0x004418d5; not reproduced: the port keeps the blue screen).
+- The cage: its ctor 0x0044a54c has no model; it starts the particle emitters 0x11c (pushed at 0x0044a5b8) and 0x11d (0x0044a5f7) and its destructor (0x0044a468) frees the emitter. The port keeps the ball.
+- The bars: the ctor 0x0044b0bc has no model either (the sphere 0x009a566c and a pointer 0x00a447b0); the particle 0x11e is in the update. The bars go through the shot path (`VoloptBar` is an `EnemyShot`), so they are the shots' spheres.
+- The prison: the ctor 0x00449cb4 picks no model (its base ctor 0x0052c3fc, the player lookup 0x0068d5a8, the sphere 0x009a55c0); not found in the update either.
+- The archive: 0 `fe_obj_hira_kage`, 1..12 the monitors (screen red / blue / broken, four shapes), 13 `fe_obj_vo_futa_moto` (lid), 14 / 15 `fe_obj_vo_tenjo_hahen01/02` (the ceiling fragments of the bars: not reproduced, see volopt2.ts), 16 `fs_obj_hiraishin_a` (rod), 17 `me5p01_y_all` (pillar), 18 `me5p02_y_cage`, 19 `me5p02_y_all` (body), 20 `me5p02_y_all_parts`, 21 `me5p02_y_broken01`, 22 `me5p02_y_missile`, 23 `me5p02_y_pillar`, 24 `me5_y_all` (core). Model 18 was not traced to a caller (the body's setup 0x00448e40 is long and only partly read), so it is not placed.
+
+**ASSUMED:**
+- The lid's node offsets are added to the node's bind height, the draw's translate being relative to the node's own bind pose (the exe's matrix stack is not traced).
+- The lid is placed at the pillar's origin (the same frame as the pillar, yOff included), its yaw being the pillar's (-0x4000 - angle, the pillar's own yaw).
+- The red monitor model (0x009a5220) is not used; a monitor that is red in the exe shows the blue screen here.
+- Model 18 (`me5p02_y_cage`) is not drawn: the cage is a ball, the exe's cage is particles.
+
+**Checks:**
+- `tests/volopt.test.ts`: the parts (six lids on their pillars, the broken monitor per monitor and hidden, no rod in Ultimate) from `enemyModelFor`; the lid's offsets over an opening and a closing (the child first, 11 ticks for the float32 steps, then the first node; closing 21 ticks); the real archive has model 13 with one child, the broken monitors' names, and the names of 16, 17, 19 and 24 (skipped without `PSOBB_DATA`).
+- `tests/bossrooms.test.ts`: the Vol Opt part counts now include the lids and the broken models (62 Normal, 61 Ultimate).
+- `tests/enemies.test.ts`: ALL PASS. `tests/combat.test.ts`: exit 0 (needs the vendor link). `tests/derolle.test.ts`, `tests/dragon.test.ts`, `tests/enemyfsmruins.test.ts`: pass.
+- `client`: `npx tsc --noEmit` clean.
+
+Not run in Chrome.
