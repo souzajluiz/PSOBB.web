@@ -7,8 +7,13 @@
 //   - run speed 1.5: 0x00a94324 (init 0x0069b6f4), read by the run start
 //     (0x006a1898) and 0x006a14e0;
 //   - the target of one leg lies 8.0 ahead: 0x00a94320;
-//   - slowed ×0.5 (0x0093ca20), guard stance flag ×0.75 (0x0093ca24), see
-//     0x006978a0; position += velocity once per tick (0x00777724).
+//   - 0x006978a0: ×0.5 (0x0093ca20) when 0x00690344 is true (player+0x30 bit
+//     0x08, only while player+0x3ec is not 0 / 15 / 18 / 45), else ×0.75
+//     (0x0093ca24) when player+0x6c4 bit 0x08 is set (0x0069ba18 copies it
+//     from player+0x30 bit 0x00100000); then ×[player+0x690] when
+//     player+0x68c bit 0 is set (not ported). ASSUMED: the names `slowed` /
+//     `guard` for the two conditions; neither state was traced;
+//   - position += velocity once per tick (0x00777724).
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 
 export const WALK_SPEED_PER_TICK = 1.0;
@@ -19,7 +24,7 @@ export const GUARD_MULT = 0.75;
 export const WALK_SPEED = WALK_SPEED_PER_TICK * GAME_TICKS_PER_SECOND;
 export const RUN_SPEED = RUN_SPEED_PER_TICK * GAME_TICKS_PER_SECOND;
 
-// Speed of a leg after the status rules (0x006978a0).
+// Speed of a leg after the 0.5 / 0.75 rules of 0x006978a0 (see the header).
 export function legSpeed(base: number, slowed: boolean, guard: boolean): number {
   return slowed ? base * SLOWED_MULT : guard ? base * GUARD_MULT : base;
 }
