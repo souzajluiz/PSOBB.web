@@ -215,7 +215,8 @@ const allSe = (acts: DeathActions[]) => acts.flatMap((a) => a.se);
       epsAct = a;
     }
   }
-  check(when === 19, `Epsilon explodes on its 20th frame (${when})`);
+  // The exe counts the state-0 calls after the kill (0x4f0 > 0x13): the 20th one, which is tick 20 (tick 0 is the kill).
+  check(when === 20, `Epsilon explodes on the 20th state-0 frame after the kill (${when})`);
   eq([epsAct?.se, epsAct?.fragments], [[0x2d7], ['epsilon']], 'Epsilon: SE 0x2d7 and the fragments');
   const can = new DeathRun(deathPlanFor('TObjEneMe1Canadin', 'CANADINE', ctxOf(6))!).tick(0, false);
   eq([can.se, can.fragments, can.remove], [[0x143], ['default'], true], 'Canadine: SE 0x143, the fragments, gone');
@@ -395,6 +396,24 @@ const allSe = (acts: DeathActions[]) => acts.flatMap((a) => a.se);
     check(mean[1][1] > mean[1][0] && mean[1][1] > mean[1][2] * 0.9, 'texture 1 is green');
     check(mean[2][0] > mean[2][1] * 1.5 && mean[2][0] > mean[2][2], 'texture 2 is red');
   }
+}
+
+{
+  // Re-traced rows (2026-10-21): the Sinow Berill's first SE is at motion frame 18, not the kill (0x0059f3dc).
+  const sb = frames('TObjEneMe3StelthReal', 'SINOW_BERILL', 1, 1, 30);
+  eq(sb[0].se, [], 'Sinow Berill: no SE at the kill');
+  eq(sb[18].se, [0x243], 'Sinow Berill: SE 0x243 at motion frame 18');
+  // Grass Assassin (0x005225bc): the ab_dead and the green 15 pool are at the origin, not 15 behind.
+  const gr = frames('TObjGrass', 'GRASS_ASSASSIN', 1, 1, 40);
+  eq([gr[32].se, gr[32].spawn[0]?.p.id, gr[32].pools[0]?.pool, gr[32].pools[0]?.delay], [[0xf7], 0xe5, 'green15', 10], 'Grass Assassin: SE 0xf7, ab_dead and the green 15 pool at frame 32');
+  check(gr[32].spawn[0]?.at.forward === undefined && gr[32].pools[0]?.at.forward === undefined, 'Grass Assassin: the ab_dead and the pool are at the origin');
+  // Ul Gibbon (0x00565ecc): the motion's end starts the 0.1-a-frame sink.
+  const gib = new DeathRun(deathPlanFor('TObjEneBm5GibonU', 'UL_GIBBON', ctxOf(23, 2))!);
+  eq(gib.tick(5, false).sink, 0, 'Ul Gibbon: no sink before the motion ends');
+  eq(gib.tick(6, true).sink, 0.1, 'Ul Gibbon: the sink starts at the motion end');
+  // Ill Gill (0x0052e898): the removal is 2 frames after the frame-52 step (the exe's counter 1 -> 0 -> -1).
+  const ill2 = frames('TObjEneIllGill', 'ILL_GILL', 35, 2, 80);
+  eq(ill2.findIndex((a) => a.remove), 54, 'Ill Gill: removed 2 frames after the frame-52 step');
 }
 
 if (failures) {
