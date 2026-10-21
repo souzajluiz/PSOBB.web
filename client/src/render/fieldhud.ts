@@ -128,6 +128,8 @@ export class FieldHud {
   private names: () => ItemNames | null = () => null;
   private palette: PaletteData | null = null;
   private paletteHud = new PaletteHud();
+  // Battle Mode trap stock by type 0..3 (set by quest/battlerun.ts while a battle runs).
+  trapCount: ((type: number) => number) | null = null;
   readonly menu: FieldMenu;
   private acc = 0;
   private inventoryKey = '';
@@ -583,7 +585,7 @@ export class FieldHud {
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
     if (this.palette && !this.menu.isOpen && !this.counter) {
-      this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i) }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
+      this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
     }
     const prompt = !this.menu.isOpen && !this.counter ? this.prompt?.() : null;
     if (prompt) {

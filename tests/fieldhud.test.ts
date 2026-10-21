@@ -19,7 +19,7 @@ import {
   PURPOSE,
   type RowContext,
 } from '../client/src/classic/itempack.ts';
-import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, EMPTY_ICON } from '../client/src/classic/palette.ts';
+import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
@@ -59,6 +59,22 @@ eq(paletteIcon(4, 0), { texture: 6, u: 0, v: 0 }, 'Monomate icon (0x009f1380)');
 eq(paletteIcon(4, 0x0d).texture, 7, 'item index >= 0xD uses texture 7');
 eq(paletteIcon(7, 8), { texture: 6, u: 150, v: 129 }, 'top special icon (0x009f1420)');
 eq(paletteIcon(0, 0), EMPTY_ICON, 'empty slot');
+// Battle Mode trap slots (group 1 = 4, group 2 0x0d..0x10): icon ITEM_UV[group2] on texture 7
+// (0x009f1380 entries 13..16 = (0,129), (0,0), (0,86), (0,43)); count = the trap stock of type group2 - 0xd.
+eq(paletteIcon(4, 0x0d), { texture: 7, u: 0, v: 129 }, 'trap slot 0 icon');
+eq(paletteIcon(4, 0x0e), { texture: 7, u: 0, v: 0 }, 'trap slot 1 icon');
+eq(paletteIcon(4, 0x0f), { texture: 7, u: 0, v: 86 }, 'trap slot 2 icon');
+eq(paletteIcon(4, 0x10), { texture: 7, u: 0, v: 43 }, 'trap slot 3 icon');
+{
+  const stock = [3, 0, 2, 20];
+  const st = { itemCount: () => 9, trapCount: (t: number) => stock[t] ?? 0 };
+  const slot = (g2: number) => ({ group1: 4, group2: g2, disabled: false });
+  eq([0x0d, 0x0e, 0x0f, 0x10].map((g) => slotCount(slot(g), st)), [3, 0, 2, 20], 'trap slot counts (stock by type)');
+  eq(slotCount(slot(0x11), st), 0, 'group 2 above the four trap types shows no count (ASSUMED)');
+  eq(slotCount(slot(0x0d), { itemCount: () => 9 }), 0, 'trap slot without a trap stock shows 0');
+  eq(slotCount(slot(0), st), 9, 'item slot still uses the stack count');
+  eq(slotCount({ group1: 2, group2: 0x0d, disabled: false }, st), 0, 'attack slot never shows a count');
+}
 
 // --- main menu rules (ValidateMenuItemCondition_00732620) ---
 const field: MenuRules = { lobby: false, safe: false, online: true, questStarted: false, inTeam: false };

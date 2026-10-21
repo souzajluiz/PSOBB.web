@@ -127,6 +127,12 @@ export const PALETTE_ITEMS: ReadonlyArray<readonly [number, number]> = [
 
 export const EMPTY_ICON: PaletteIcon = { texture: 7, u: 100, v: 0 }; // 0x0096f5a0 / 0x0096f59c
 
+// Battle Mode trap slots: group 1 = 4 with group 2 0x0d..0x10 (the icon is ITEM_UV[group2], texture 7).
+// The count is the player's trap stock of type group2 - 0x0d (PaletteMenu_UpdateSlotIcon_0070fde5:
+// 0x698984(player + 0x89c, group2 - 0xd), the same counter the placement reads).
+export const TRAP_SLOT_FIRST = 0x0d;
+export const TRAP_SLOT_LAST = 0x10;
+
 export function paletteIcon(group1: number, group2: number): PaletteIcon {
   const pick = (table: ReadonlyArray<readonly [number, number]>, texture: 5 | 6 | 7): PaletteIcon => {
     const uv = table[group2];
@@ -169,8 +175,21 @@ export interface PaletteHudState {
   data: PaletteData;
   // Stack count of a palette item index (0x0096f51c), 0 when none.
   itemCount: (index: number) => number;
+  // Trap stock of a trap type 0..3 (Battle Mode), 0 when none or outside a battle.
+  trapCount?: (type: number) => number;
   // Slot n (1..3) usable (Player_IsPaletteSlotEnabled_0068ce58).
   slotEnabled?: (slot: number) => boolean;
+}
+
+// The count a palette slot shows (0 = no count drawn). Item slots (group 2 < 0x0d) use the stack
+// count; trap slots (group 2 0x0d..0x10) use the trap stock of type group 2 - 0x0d.
+// ASSUMED: group 2 above 0x10 (the exe reads the counter at index group 2 - 0xd, past the four
+// types) is not drawn here.
+export function slotCount(slot: PaletteSlot, state: Pick<PaletteHudState, 'itemCount' | 'trapCount'>): number {
+  if (slot.group1 !== 4) return 0;
+  if (slot.group2 < PALETTE_ITEMS.length) return state.itemCount(slot.group2);
+  if (slot.group2 >= TRAP_SLOT_FIRST && slot.group2 <= TRAP_SLOT_LAST) return state.trapCount?.(slot.group2 - TRAP_SLOT_FIRST) ?? 0;
+  return 0;
 }
 
 // Digits of the texturejapanese.xvm font (u = (c & 15) * 16, v = c & 0xF0,
@@ -211,10 +230,8 @@ export class PaletteHud {
       const icon = slot.group1 === 0 ? EMPTY_ICON : paletteIcon(slot.group1, slot.group2);
       const enabled = !slot.disabled && (state.slotEnabled?.(i + 1) ?? true);
       drawIcon(ctx, tex.icons[icon.texture], icon, x + ex, y + ey, enabled ? 1 : 0x40 / 0xff);
-      if (slot.group1 === 4 && slot.group2 < PALETTE_ITEMS.length) {
-        const n = state.itemCount(slot.group2);
-        if (n > 0) drawDigits(ctx, tex.digits, n, x + ex + COUNT_DX + (String(n).length * DIGIT_W) / 2, y + ey + COUNT_DY);
-      }
+      const n = slotCount(slot, state);
+      if (n > 0) drawDigits(ctx, tex.digits, n, x + ex + COUNT_DX + (String(n).length * DIGIT_W) / 2, y + ey + COUNT_DY);
     });
     const top = paletteIcon(7, 8);
     drawIcon(ctx, tex.icons[top.texture], top, x + TOP_POS[0], y + TOP_POS[1], 1);

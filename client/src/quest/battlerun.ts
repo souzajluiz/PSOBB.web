@@ -84,6 +84,8 @@ export class BattleRun {
     game.on('subcommand', (sub, clientId, body) => this.onSub(sub, clientId, body));
     game.onSent = (body) => this.onSent(body);
     opts.view.combat.placeTrap = (type) => this.placeTrap(type);
+    // The palette's trap slots show the local stock (render/fieldhud.ts, classic/palette.ts slotCount).
+    opts.view.hud.trapCount = (type) => this.counters.get(type);
     if (opts.canvas) {
       this.hud = new BattleHud(opts.canvas);
       if (opts.files) void this.hud.load(opts.files).catch((e) => this.log(`battle hud: ${(e as Error).message}`));
@@ -360,6 +362,7 @@ export class BattleRun {
     cancelAnimationFrame(this.raf);
     this.opts.game.onSent = null;
     this.opts.view.combat.placeTrap = null;
+    this.opts.view.hud.trapCount = null;
     this.traps.clear();
     this.opts.view.combat.syncBattleTraps([]);
     this.hud?.dispose();

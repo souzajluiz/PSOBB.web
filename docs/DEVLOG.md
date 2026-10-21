@@ -7926,3 +7926,35 @@ opens it read-only and prints the decompiled C of each function holding an addre
 `tools/ghidra/run_any.sh` (a script that is no longer in the tree) now point here.
 First check: 0x0041fa7b sits in 0x0041f6cc and 0x0041c5b1 in 0x0041c168, as the Dragon
 pass of today reports.
+
+## 2026-10-21: Battle Mode trap slots in the action palette (icon and count)
+
+**What changed:** the palette's trap slots (group 1 = 4, group 2 0x0d..0x10) now show their trap stock. The icon was already drawn (ITEM_UV[group2] on texture 7); the count was not, because the web count only covered the item indices below 0x0d. `classic/palette.ts` gets `slotCount(slot, state)` (item stack count below 0x0d, trap stock of type group2 - 0x0d for 0x0d..0x10, 0 otherwise) and a `trapCount` hook in `PaletteHudState`. `render/fieldhud.ts` gets a `trapCount` field passed to the palette. `quest/battlerun.ts` sets `view.hud.trapCount` to its local `TrapCounters.get` in the constructor and clears it in `dispose`. Drawing is unchanged: same window, same digit font, same right-aligned position.
+
+**Correction:** the entry "Battle Mode traps (module, not wired)" and the 2026-10-21 "wired" entry say the palette draws an empty icon for group 2 >= 0x0d. That is not so: the exe draws texture 7 with the item table (verified below), and the web already did too (`paletteIcon(4, 0x0d..)` gives texture 7). The missing part was the count.
+
+**Icon (VERIFIED from the exe bytes).** `PaletteMenu_UpdateTextures_0070ff56` (the texture and UV setter):
+- `0x0070ffe4`: `83 f9 0d` (cmp ecx, 0xd) at 0x0070ffe7, `7c 09` (jl) at 0x0070ffea, else `c7 40 34 07 00 00 00` (mov [eax+0x34], 7) at 0x0070ffec. Below 0xd: texture 6 (`c7 40 34 06 00 00 00` at 0x0070fff5).
+- UV: `fld dword [8*ecx + 0x9f1380]` at 0x0070fffc (u) and `fld dword [8*ecx + 0x9f1384]` at 0x0071000d (v), the item table of 8-byte float pairs. Read with `exedata.py read 009f1380 f 36`: index 13 = (0, 129), 14 = (0, 0), 15 = (0, 86), 16 = (0, 43), 17 = (0, 0). The table in `palette.ts` `ITEM_UV` has the same values.
+- Size: `0x0096f598` = 50, `0x0096f594` = 43 (the icon's 50 x 43 texels).
+
+**Count (VERIFIED from the exe bytes and Ghidra).** `PaletteMenu_UpdateSlotIcon_0070fde5` (Ghidra `FUN_0070fde5`):
+- `0x0070fde5`: `param_1 != 4` (`83 f8 04` / `74 14` at 0x0070fdf1..f4) hides the count (`or word [edi+4], 2`).
+- Group 2 >= 0xd (`83 f8 0d` at 0x0070fe0f, `7c 2c` at 0x0070fe12 falls through to the item branch below 0xd): `call 0x0068d5a8` (player table lookup by the client id; 0 = none) at 0x0070fe19, then `add ecx, 0x89c` at 0x0070fe2c (the player's trap stock), `lea eax, [eax-0xd]` at 0x0070fe32 (type = group2 - 0xd), `call 0x00698984` at 0x0070fe36 (the counter read, one signed byte; `cmp edx, 0x14` at 0x00698990 clamps a negative or above-20 value to 0).
+- Below 0xd: `call 0x0070feb9` (item stack count) at 0x0070fe49.
+- Shown only when the count is > 0 (`test edx, edx` at 0x0070fe50, `jle` at 0x0070fe52, else the hidden flag at 0x0070fe9c). The digits are at icon (x + 25 + width / 2, y + 28): the same element as the items (`0x0096f5ac`, `0x0096f5a4`, `0x0096f5a8` as in the palette header).
+- The tint is not changed by the count: a trap slot with stock 0 keeps full brightness and no digits. The tint is the slot's disabled bit (`Player_IsPaletteSlotEnabled_0068ce58`, `test al, 1` at 0x0068ce82), as for items.
+
+**The stock is the one the placement uses (VERIFIED).** The palette type (group 2 - 0xd) is the same index as the special handler's push (0..3) and the same counter `0x00698984`. The web's `TrapCounters` is indexed by internal type, the same index as the palette type: the rules' `ba_set_trap_count` writes `TRAP_TYPE_TO_INTERNAL` (quest type 0..3 -> internal [0, 2, 3, 1]), and the palette press of group 2 0x0e (push 1) is the freeze type (internal 1). So `counters.get(group2 - 0xd)` is the right count.
+
+**ASSUMED.**
+- The count reads the player whose id is in the palette's argument (the local player in the web); outside a battle the web's stock is 0 and nothing is shown. The exe's stock outside a battle is not traced.
+- Group 2 above 0x10 (the exe reads counter index group2 - 0xd, past the four types) is not drawn (`slotCount` returns 0).
+
+**UNCLEAR.**
+- The trap stock when the trap mode is not ALL_PLAYERS (still 0 in the web, as in the battle entry).
+- Whether the palette's trap icon is tinted when the stock is 0 in the exe beyond the disabled bit (the Update function 0x0070f7a4 was not read past its icon call).
+
+**Decisive spot-check.** In the exe, `0x0070fe0f: 83 f8 0d` (cmp eax, 0xd) followed by `0x0070fe36: e8 49 8b f8 ff` (call 0x00698984) with `0x0070fe2c: 81 c1 9c 08 00 00` (add ecx, 0x89c) before it. If the call at 0x0070fe36 is not the counter read, or the add is not 0x89c, the count source is wrong. Use `objdump -d -M intel --start-address=0x0070fe0f --stop-address=0x0070fe3b PsoBB.exe`.
+
+**Checks.** `node tests/fieldhud.test.ts` (fieldhud: all checks passed; new: the four trap icons, `slotCount` for the trap stock, the item count, the 0x11 and attack cases); `node tests/battletraps.test.ts` ALL PASS; `cd client && npx tsc --noEmit` clean (Node 24). Not run in Chrome: no battle with a trap slot was driven.
