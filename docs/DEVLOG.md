@@ -8204,3 +8204,18 @@ a quest ran `pad_dragon`, the two states come into play. The scan above is the o
 
 **Checks.** `node tests/dragon.test.ts`: dragon: ok (section 31 is new). `node tests/enemies.test.ts`:
 ALL PASS. Client `npx tsc --noEmit -p .` (Node 24): clean.
+
+## 2026-10-21: Chrome smoke of the day's boss passes (e2e/boss-smoke.spec.ts)
+
+One classic client (webtest, local newserv) creates a Normal party, warps to Forest 1
+and then to the Dragon's arena (floor 11). Seen in Chrome:
+- Forest 1 draws (field, HUD, palette, the held weapon).
+- The Dragon enters its entrance (sid 0x1d) at once, holds it for about 12 s (age 0..327
+  ticks), then goes to walk (sid 2) and its first fire breath (sid 3) at about 19 s. The
+  wings spread during the entrance.
+- Particle bursts are alive during the entrance (1 or 2 at a time; peak 2) and during the
+  walk; the bursts are small and do not show in the two screenshots.
+- No page errors and no failed request (0 responses >= 400) over the whole run.
+Not checked by this run: the particles' look against the original client, the Battle Mode
+traps, the Saint-Milion laser, the trap palette counts (they need a battle or the Episode 4
+arena).
