@@ -350,6 +350,9 @@ export interface EnemyPartSpec {
   offset?: readonly [number, number, number];
   yaw?: number; // extra Y rotation, radians
   scale?: number; // uniform scale of the part's draw (De Rol Le's body: 2.0)
+  // Nodes (depth-first) that keep a material of their own, tagged userData.node
+  // (NjcmPartInput.ownMaterials): De Rol Le's segment plates are tinted per node.
+  ownMaterials?: readonly number[] | undefined;
   // The client creates the object but only draws it in some fight states
   // (thrown arms, tentacles the boss spawns): built, not drawn.
   hidden?: boolean;
@@ -414,7 +417,7 @@ export function buildEnemy(
     let shaper: ShapeAnimator | null = null;
     if (data.kind === 'nj') {
       const shapeIndex = part.motion?.shape;
-      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup, shape: shapeIndex !== undefined }]);
+      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup, shape: shapeIndex !== undefined, ownMaterials: part.ownMaterials }]);
       group.add(built.root);
       nodes = built.partBones[0];
       const mesh = built.partMeshes[0];

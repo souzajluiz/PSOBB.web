@@ -788,7 +788,7 @@ export class DrlTentacle {
 //     +0x548 + i * 0xc (+0x398), which render_derolle fills while it draws
 //     and the ctor parks at (10000, 10000, 10000); then EnemyUpdateLoop
 //     _0052167c (the hit flag 0x200 -> vtable +0x100 = 0x004354c4), the colour
-//     (0x00435334), and vtable +0x168 = 0x00435070: below y -60 (-10 at
+//     (0x00435340, called from the update at 0x00435302), and vtable +0x168 = 0x00435070: below y -60 (-10 at
 //     0x008fcc10 minus 50 at 0x008fd4ec) its hit box is off
 //     (PoisonLilyDisableHitboxes_005204b0), else on, with flag 4 at or above
 //     y 30 (0x008fd4e8, 0x0052054c) and flag 2 below (0x005205a0); then
@@ -826,6 +826,14 @@ export const DRL_SEGMENT = {
   particle: { id: 0x127, up: 15, back: 12 }, // 0x00435538 -> 0x004b96bc
 } as const;
 
+// The beam's particles (particleentry.dat; render/combat.ts spawns them). The
+// exe's beam state (the function at 0x0042f96c, sub 1 -> 2 at 0x0042ff1d):
+// create_particle_effect_3 (0x0050b7a4) of 0x126 (boss2_senkou) at the beam's
+// start; 0x177 (boss2_beam_b, 0x0050981c, kept as a handle) is the emitter that
+// lasts with the beam; 0x176 (boss2_beam_a, 0x0042fda8) is made at a point on
+// the beam (ASSUMED: the beam's end, not the exe's moving point).
+export const DRL_BEAM = { start: 0x126, emitter: 0x177, tip: 0x176 } as const;
+
 const fround = Math.fround;
 // x87 fistp in round-to-nearest mode (ROUND in the dump).
 const roundEven = (x: number): number => {
@@ -838,7 +846,7 @@ export class DrlSegment {
   pool: number; // +0x39c
   broken = false; // +0x394 & 1
   flash = 0; // +0x3b0
-  // ARGB the update computes (+0x3a8 via 0x00435334): white when idle, the hit
+  // ARGB the update computes (+0x3a8 via 0x00435340): white when idle, the hit
   // flash fading from cyan, 0 once broken. render_derolle writes it into the
   // segment's own material of the body model (DerolleSetAnimationSpeed, the
   // node pointer +0x3a0 = DAT_00a43c0c[i]) and its alpha into its child's
@@ -860,7 +868,7 @@ export class DrlSegment {
   get high(): boolean {
     return this.y >= DRL_SEGMENT.highY;
   }
-  // DerolleUpdateAnimationSpeedFromFloat (0x00435334), once a frame.
+  // DerolleUpdateAnimationSpeedFromFloat (0x00435340), once a frame.
   tickColor(): void {
     if (this.broken) {
       this.color = 0;
@@ -903,6 +911,9 @@ export type DrlEvent =
   // `back` toward the camera (the camera's view direction scaled, as
   // 0x004b96bc and 0x00433edc subtract it).
   | { kind: 'particle'; id: number; at: Vec3; up: number; back: number }
+  // The beam fires (state 0x1b, sub 2): its looping emitter (DRL_BEAM.emitter)
+  // lives while beamFiring is set, following the muzzle.
+  | { kind: 'beamStart'; at: Vec3 }
   | { kind: 'bgm'; name: string } // 0x1f at frame 27: deldeath.adx (0x008fd420)
   | { kind: 'killed'; x: number; y: number; z: number } // 0x1f phase 5
   | { kind: 'remove' }; // 0x20
@@ -1007,6 +1018,8 @@ export class DeRolLeAi extends BrainBase {
   private v720 = 0;
   private rockType = 0; // +0x6bc
   private beams = 0; // +0x6e4
+  // The beam is on (from its start to its end): the emitter's life.
+  beamFiring = false;
   private beamHit = new Set<number>(); // +0x6d0
   private beamDir: Vec3 = [0, 0, 1];
   private beamLen = 0;
@@ -1379,6 +1392,7 @@ export class DeRolLeAi extends BrainBase {
         this.beams++;
         this.flags &= ~0x10;
         this.beam = null;
+        this.beamFiring = false;
         return;
       case S.death:
         // The kill runs at (-55.8, 2.0, 60.29): EXP, the drop request and
@@ -2191,6 +2205,9 @@ export class DeRolLeAi extends BrainBase {
         this.mframe = 13;
         this.beamLen = 80;
         this.sub = 2;
+        this.beamFiring = true;
+        this.emit({ kind: 'particle', id: DRL_BEAM.start, at: muzzle, up: 0, back: 0 });
+        this.emit({ kind: 'beamStart', at: muzzle });
       }
       return;
     }
@@ -2199,6 +2216,7 @@ export class DeRolLeAi extends BrainBase {
       this.beamLen = Math.min(500, this.beamLen + 30);
       const end: Vec3 = [muzzle[0] + this.beamDir[0] * this.beamLen, -10, muzzle[2] + this.beamDir[2] * this.beamLen];
       this.beam = { from: muzzle, to: end };
+      this.emit({ kind: 'particle', id: DRL_BEAM.tip, at: end, up: 0, back: 0 });
       this.emit({ kind: 'se', id: 0x331 });
       const power = this.opts.movement ? this.opts.movement.fparam1 : FALLBACK.beam;
       // ASSUMED: field 2 (16) of the hit context is the radius.
@@ -2211,6 +2229,7 @@ export class DeRolLeAi extends BrainBase {
       if (this.beamLen >= 500) {
         this.sub = 3;
         this.beam = null;
+        this.beamFiring = false;
       }
       return;
     }

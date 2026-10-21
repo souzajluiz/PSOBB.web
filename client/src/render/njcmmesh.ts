@@ -31,6 +31,11 @@ export interface NjcmPartInput {
   diffuse?: THREE.Color;
   // Keep where each vertex came from (partShapeSources), for a shape motion.
   shape?: boolean;
+  // Nodes (depth-first, as partBones) whose strips get materials of their own,
+  // tagged userData.node, so the caller can tint one node's plate (De Rol Le's
+  // segments). A strip belongs to the node that polls it: a cached op list
+  // belongs to the node that cached it (the 'cache' op), not to the draw.
+  ownMaterials?: readonly number[] | undefined;
 }
 
 export interface NjcmModelStats {
@@ -116,7 +121,7 @@ class MeshBuilder {
   shapeNode: number[] = [];
   shapePosition: number[] = [];
   shapeNormal: number[] = [];
-  groups = new Map<string, { indices: number[]; mat: MatState; stripFlags: number }>();
+  groups = new Map<string, { indices: number[]; mat: MatState; stripFlags: number; owner: number }>();
   hasColors = false;
 
   vertex(s: Slot, u: number, v: number, color: number[] | null): number {
@@ -170,8 +175,9 @@ export class NjcmModelBuilder {
     return t;
   }
 
-  private material(part: NjcmPartInput, m: MatState, stripFlags: number): THREE.Material {
-    const key = `${part.name}|${materialKey(m, stripFlags)}`;
+  // owner: the node whose own material this is (ownMaterials), -1 for the shared ones.
+  private material(part: NjcmPartInput, m: MatState, stripFlags: number, owner: number): THREE.Material {
+    const key = `${part.name}|${owner}|${materialKey(m, stripFlags)}`;
     let mat = this.materials.get(key);
     if (mat) return mat;
     const base = m.texId >= 0 ? part.textures(m.texId) : null;
@@ -197,6 +203,7 @@ export class NjcmModelBuilder {
     // The wrapped clone is ours (the base texture is the caller's): it goes with the material.
     const map = params.map;
     if (map && base && map !== base) mat.addEventListener('dispose', () => map.dispose());
+    if (owner >= 0) mat.userData.node = owner;
     this.materials.set(key, mat);
     return mat;
   }
@@ -240,20 +247,22 @@ export class NjcmModelBuilder {
     const partBindMatrices = partNodes.map((list) => list.map((e) => e.bone.matrixWorld.clone()));
     parts.forEach((part, pi) => {
       const buffer: (Slot | undefined)[] = [];
-      const cache = new Map<number, NjcmPolyOp[]>();
+      const cache = new Map<number, { ops: NjcmPolyOp[]; owner: number }>();
       const state: MatState = { texId: -1, texFlags: 0, src: 4, dst: 5, diffuse: 0xffffffff };
       const out = new MeshBuilder();
+      const own = new Set(part.ownMaterials ?? []);
 
-      const runPolys = (ops: NjcmPolyOp[]) => {
+      // by: the node whose polys these are (its index when it is in ownMaterials).
+      const runPolys = (ops: NjcmPolyOp[], by: number) => {
         for (let k = 0; k < ops.length; k++) {
           const op = ops[k];
           switch (op.op) {
             case 'cache':
-              cache.set(op.slot, ops.slice(k + 1));
+              cache.set(op.slot, { ops: ops.slice(k + 1), owner: by });
               return;
             case 'draw': {
               const cached = cache.get(op.slot);
-              if (cached) runPolys(cached);
+              if (cached) runPolys(cached.ops, cached.owner);
               break;
             }
             case 'blend':
@@ -270,16 +279,17 @@ export class NjcmModelBuilder {
               state.texFlags = op.flags;
               break;
             case 'strips':
-              for (const strip of op.strips) emitStrip(strip, op.flags);
+              for (const strip of op.strips) emitStrip(strip, op.flags, by);
               break;
           }
         }
       };
 
-      const emitStrip = (strip: NjcmStrip, stripFlags: number) => {
-        const key = materialKey(state, stripFlags);
+      const emitStrip = (strip: NjcmStrip, stripFlags: number, by: number) => {
+        const owner = own.has(by) ? by : -1;
+        const key = `${materialKey(state, stripFlags)}${owner >= 0 ? `|node${owner}` : ''}`;
         let group = out.groups.get(key);
-        if (!group) out.groups.set(key, (group = { indices: [], mat: { ...state }, stripFlags }));
+        if (!group) out.groups.set(key, (group = { indices: [], mat: { ...state }, stripFlags, owner }));
         const ids: number[] = [];
         for (let v = 0; v < strip.indices.length; v++) {
           const slot = buffer[strip.indices[v]];
@@ -340,7 +350,7 @@ export class NjcmModelBuilder {
             }
           }
         }
-        if (!(node.flags & EVAL_HIDE)) runPolys(model.polys);
+        if (!(node.flags & EVAL_HIDE)) runPolys(model.polys, local);
       });
 
       if (!out.groups.size) return;
@@ -358,7 +368,7 @@ export class NjcmModelBuilder {
       for (const g of groups) {
         if (!g.indices.length) continue;
         geom.addGroup(indices.length, g.indices.length, mats.length);
-        mats.push(this.material(part, g.mat, g.stripFlags));
+        mats.push(this.material(part, g.mat, g.stripFlags, g.owner));
         for (const i of g.indices) indices.push(i);
       }
       geom.setIndex(indices);

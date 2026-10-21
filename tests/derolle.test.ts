@@ -6,6 +6,7 @@
 import {
   DeRolLeAi,
   DrlSegmentAi,
+  DRL_BEAM,
   DRL_SEGMENT,
   DrlBurst,
   DrlCeilingRock,
@@ -43,6 +44,8 @@ import {
 } from '../client/src/combat/derollefins.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type * as THREE from 'three';
+import { NjcmModelBuilder } from '../client/src/render/njcmmesh.ts';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { BmlArchive } from '../client/src/formats/bml.ts';
 import { parseNinjaChunkFile, type NjcmObject } from '../client/src/formats/njcm.ts';
@@ -755,7 +758,67 @@ for (const ultimate of [false, true]) {
       eq(tree('boss2_b_derorure_fin_a.nj').all.length, 1, `${bmlName}: fin_a is one node`);
       eq(tree('boss2_b_derorure_fin_b.nj').all.length, 2, `${bmlName}: fin_b is two nodes (a tip)`);
     }
+    // The plate tint (render/combat.ts): with ownMaterials, every segment plate
+    // node (1 + 2i) gets materials of its own, and no other node does.
+    const plates = Array.from({ length: 10 }, (_, i) => 1 + 2 * i);
+    const body = new BmlArchive(gsl.get('bm_boss2_de_rol_le.bml'));
+    const root = parseNinjaChunkFile(body.get('boss2_b_derorure_body.nj')).object!;
+    const built = new NjcmModelBuilder().build([{ name: 'body', root, textures: () => null, ownMaterials: plates }]);
+    const owned = (built.partMeshes[0]?.material as THREE.Material[]).map((m) => m.userData.node as number | undefined);
+    for (const k of plates) check(owned.includes(k), `real body: plate node ${k} has its own material`);
+    check(owned.every((n) => n === undefined || plates.includes(n)), 'real body: only the plates have own materials');
   }
+}
+
+// 23. The beam's particles (0x126 at its start, 0x176 at its tip every frame,
+//     the emitter 0x177 while beamFiring) and the plate tint's material split
+//     (NjcmPartInput.ownMaterials, a strip belongs to the node that caches it).
+{
+  eq(DRL_BEAM.start, 0x126, 'beam: start particle 0x126 (boss2_senkou)');
+  eq(DRL_BEAM.tip, 0x176, 'beam: tip particle 0x176 (boss2_beam_a)');
+  eq(DRL_BEAM.emitter, 0x177, 'beam: emitter 0x177 (boss2_beam_b)');
+  const ai = brain();
+  const t = player(2, 0, -100);
+  eq(ai.beamFiring, false, 'beam: not firing before the state');
+  ai.setState(DRL_STATE.beam, true, [t]);
+  const r = run(ai, [t], 400, () => ai.sid !== DRL_STATE.beam);
+  const starts = r.events.filter((e) => e.kind === 'beamStart');
+  eq(starts.length, 1, 'beam: one emitter per beam');
+  const parts = r.events.filter((e): e is Extract<DrlEvent, { kind: 'particle' }> => e.kind === 'particle');
+  eq(parts.filter((p) => p.id === DRL_BEAM.start).length, 1, 'beam: 0x126 once, at the start');
+  const tips = parts.filter((p) => p.id === DRL_BEAM.tip);
+  check(tips.length >= 10, `beam: 0x176 every firing frame (${tips.length})`);
+  check(tips.every((p) => p.up === 0 && p.back === 0), 'beam: the tip is at the point, no lift');
+  eq(ai.beamFiring, false, 'beam: not firing after its end');
+  const first = r.events.findIndex((e) => e.kind === 'beamStart');
+  check(first >= 0 && r.events.findIndex((e) => e.kind === 'particle' && e.id === DRL_BEAM.start) < r.events.findIndex((e) => e.kind === 'particle' && e.id === DRL_BEAM.tip), 'beam: the start particle before the first tip');
+}
+
+// 23b. ownMaterials on a model built from scratch: a node's strips made by the
+//      cache op of that node keep its material, the draw op of another node
+//      does not move them.
+{
+  // A node: its vertex chunks, its polys and its children (flags 0: drawn).
+  const node = (children: NjcmObject[], polys: unknown[], vertices: unknown[]): NjcmObject => ({
+    flags: 0,
+    model: { vertices, polys, center: [0, 0, 0], radius: 1 } as unknown as NjcmObject['model'],
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    children,
+  });
+  const vert = { type: 41, flags: 0, indexOffset: 0, indices: new Uint16Array([0, 1, 2]), positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), normals: null, colors: null, weights: null };
+  const tri = { indices: [0, 1, 2], uvs: null, colors: null, flipped: false };
+  // Node 1 caches its strip (slot 3) under a red material; node 2 draws slot 3.
+  const plate = node([], [{ op: 'material', src: 4, dst: 5, diffuse: 0xff0000ff, ambient: null, specular: null }, { op: 'cache', slot: 3 }, { op: 'strips', type: 0, flags: 0, strips: [tri] }], []);
+  const other = node([], [{ op: 'draw', slot: 3 }], []);
+  const top = node([plate, other], [], [vert]);
+  const mesh = new NjcmModelBuilder().build([{ name: 'probe', root: top, textures: () => null, ownMaterials: [1] }]).partMeshes[0]!;
+  const tags = (mesh.material as THREE.Material[]).map((m) => m.userData.node as number | undefined);
+  check(tags.includes(1), 'ownMaterials: the cached strips of node 1 keep node 1 (the draw in node 2 does not move them)');
+  check(!tags.includes(2), 'ownMaterials: node 2 has no own material');
+  eq(tags.length, 1, 'ownMaterials: the only strip is node 1\'s, so one material');
+  eq((mesh.material as THREE.Material[])[tags.indexOf(1)]?.userData.node, 1, 'ownMaterials: tagged with the node');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
