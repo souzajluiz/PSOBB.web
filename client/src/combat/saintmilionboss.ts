@@ -62,7 +62,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SmClock, SmField, SmRng, SmTouch, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_MISSILE, SmClock, SmField, SmMissile, SmRng, SmTouch, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -223,6 +223,8 @@ export const SM = {
   burstFrame: 50,
   burstRadius: 40,
   contactEvery: 30,
+  // State 18: the two more missiles of phase 0 come on the clock's frame 5 (0x007aaa30 with 5.0).
+  missileFrame: 5,
 } as const;
 
 // --- the parts -------------------------------------------------------------------------
@@ -624,10 +626,15 @@ export class SaintMilionAi extends BrainBase {
         if (phase === 0) this.stomp();
         return;
       case 18:
+        if (phase === 4) {
+          this.events.push({ kind: 'effect', name: 'missiles', state: s });
+          this.launchMissiles(1);
+        } else if (phase === 0) this.missileFrame();
+        return;
       case 19:
       case 20:
       case 21:
-        if (phase === 4) this.events.push({ kind: 'effect', name: ['missiles', 'laser', 'laser', 'wave'][s - 18], state: s });
+        if (phase === 4) this.events.push({ kind: 'effect', name: ['laser', 'laser', 'wave'][s - 19], state: s });
         return;
       case 23:
         if (phase === 4) {
@@ -732,6 +739,30 @@ export class SaintMilionAi extends BrainBase {
       const off = Math.abs(((a - mid + 0x8000) & 0xffff) - 0x8000);
       if (off <= half + 0x400) this.pendingShots.push(new SmTouch(this.x, 0, this.z, t));
     }
+  }
+
+  // State 18, phase 0 (0x0076968c): on the clock's frame 5, two more missiles in arenas 3 / 4 (+0xf80).
+  private missileFrame(): void {
+    if (this.clock.crossed(SM.missileFrame) && (this.arena === 3 || this.arena === 4)) this.launchMissiles(2);
+  }
+
+  // Missiles (0x0076b8f4 / 0x0076968c) leave the boss with the MovementData iparam3 as their blast.
+  // ASSUMED: each one aims at the nearest living player at launch (FindNearestPlayer), or along the heading,
+  // and flies until it is within SM_MISSILE.arrive of that point (see SmMissile).
+  private launchMissiles(count: number): void {
+    let best: AiTarget | null = null;
+    let bestSq = Infinity;
+    for (const t of this.targets) {
+      if (t.dead) continue;
+      const d = (t.x - this.x) ** 2 + (t.z - this.z) ** 2;
+      if (d < bestSq) {
+        best = t;
+        bestSq = d;
+      }
+    }
+    const angle = best ? Math.atan2(best.x - this.x, best.z - this.z) : this.heading * BAMS;
+    const range = best ? Math.max(0, Math.sqrt(bestSq) - SM_MISSILE.arrive) : null;
+    for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2], range));
   }
 
   private burst(x: number, z: number, r: number): void {

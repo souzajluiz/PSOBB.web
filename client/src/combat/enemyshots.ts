@@ -24,7 +24,9 @@ export const PLAYER_AIM_HEIGHT = 10;
 //   status: a status effect only (combat/status.ts STATUS).
 //   megid: an enemy Megid (entity_hit_by_tech's Megid case: death when
 //     rand < (power - EDK) * 0.01);
-//   heal: an enemy Resta object healing an enemy (the owner applies it).
+//   heal: an enemy Resta object healing an enemy (the owner applies it);
+//   blast: a fixed damage (the MovementData value itself, no MST formula, no
+//     roll) and cause_knockback(knockback): a Saint-Milion missile's explosion.
 // A melee effect may use another AttackData row of the enemy (`attack`, the
 // index into its ENEMY_TYPE_PARAMS attack list: the Dark Belra's arm uses
 // entry 19) and roll a status effect on the player it hit (`status`).
@@ -32,7 +34,8 @@ export type ShotEffect =
   | { kind: 'tech'; power: number; knockback?: number; status?: { type: number; chance: number } }
   | { kind: 'melee'; mult: number; knockback: number; attack?: number; status?: { type: number; chance: number } }
   | { kind: 'status'; status: number }
-  | { kind: 'megid'; power: number };
+  | { kind: 'megid'; power: number }
+  | { kind: 'blast'; damage: number; knockback: number };
 
 export interface ShotLook {
   color: number;

@@ -6598,3 +6598,42 @@ Also from that pass: storm = state 23 (handler 0x007699ac; phase 4 -> 0x0076b7a8
 Follow-up of the two entries above (a Haiku pass; the decisive constants and counts were checked here). `0x00780630(P, mask)` is a generic collision probe, not a target test: it is called from 51 sites in the exe (`grep -cP "call\t0x780630 "`), mostly with mask 0x16ef. The list `[0x00aab3f0]` (created by 0x007a7c90 at area setup, about 12 init sites; null-terminated record pointers at list+0x20) holds **map collision objects**: records added by 0x007a7b30 from the ctor of the collision-object class (vtable 0x00b33580, ctor 0x0065f9e4; record at owner+0xac: +0 mesh, +4 / +8 / +0xc position, +0x10 radius, +0x14 flags) and by the City Door (vtable 0x00b2f880); no player or enemy is ever added. 0x00780630 keeps the records whose flags & mask and whose XZ circle contains P, then 0x00780874 traces a vertical probe from (P.x, P.y - 10000, P.z) (0x009798fc = -10000.0, t limit 0x00979900 = 2.0) through their polygons (word +6 & mask) and keeps the nearest hit. The result struct holds the hit fraction t at +4, not an entity id (the earlier "+4 = entity id" is wrong), and the beam does not use the winner for damage.
 
 So the wave beam each frame: if the ground probe under P finds collision, it explodes there (type 5, iparam5 to every player within 100 XZ, every frame); if not, it sets its dead bit. In practice it runs along the arena floor and ends when it leaves it, ASSUMED that the arena's floor is among the registered collision objects (not proven). UNCLEAR: the flag bit meanings, a register oddity in 0x00780630's return path (0x007806c9), and the beam's removal after the dead bit (0x00765a40).
+
+## 2026-10-21: Saint-Milion missiles ported
+
+**Outcome: the missiles fly and explode now.** State 18 (row 18 of 0x009f6c60, handler 0x0076966c) launches real `SmMissile` shots instead of the event alone. The event `missiles` stays for the renderer. Built on the corrected reading of the last entry: the blast is iparam3 to the players within 100 on the XZ plane, not a height window or a radius of 30.
+
+**What changed.**
+- `combat/saintmilionents.ts`: `SmMissile` (an `EnemyShot`) and `SM_MISSILE = { speed: 5, life: 240, blast: 100, knockback: 3 }`.
+- `combat/enemyshots.ts`: a new `ShotEffect` kind `blast` (a fixed damage, cause_knockback, no MST formula, no roll).
+- `combat/saintmilionboss.ts`: `SM.missileFrame = 5`; state 18 phase 4 makes one missile (`launchMissiles(1)`), phase 0 makes two more on the clock's frame 5 in arenas 3 / 4 only (`missileFrame`, `arena` +0xf80). The damage is `row.iparam[2]` (iparam3) of the form being fought.
+- `render/combat.ts`: `tickShots` routes a `blast` hit to `enemyBlastHitsPlayer`, which calls `damage.hit` on the local player like the group-0 tech hit does, with the value as the damage, and gains PB like it does.
+- `tests/saintmilionboss.test.ts`: section 8 (entry and phase-0 counts per arena, 5.0 a frame, 240 frames, one blast within 100 on XZ, the living only, once).
+- `docs/HANDOFF.md` item 4: "missiles" removed from the events-only list.
+
+**Constants and addresses.**
+- 0x00976174 = 5.0: the flight speed.
+- `cmp [this+0x68], 0xf0` / `jg 0x766786` (in the update 0x007663d4): 240 frames; the port explodes when the count passes 240.
+- 0x0076b8f4: phase 4 (one missile). 0x0076968c: phase 0, `call 0x7aaa30` with 5.0 (the clock's frame 5) and `cmp [+0xf80], 3 / 4`: two missiles.
+- 0x00521cdc `push 0x42c80000` (100.0): the blast radius, the XZ scan of 0x007a9180 (no height test).
+- The damage: iparam3 of the boss's MovementData row (0x00768990 / 0x00768a00 `fild [[boss+0x3d0]+0x20]`, the boss being the explosion's `this` at 0x00a9b07c).
+- Knockback 3.0 (`SM_MISSILE.knockback`): the value passed with the blast; its meaning is unclear.
+
+**ASSUMED.**
+- The flight is a straight line on flat ground, toward the nearest living player at launch (`FindNearestPlayer`), or along the heading if nobody is alive. The two phase-0 missiles aim at that same player.
+- The end of the flight is the frame count: the motion's state 4 is not read. The blast happens at the end of the flight.
+- **Conflict with the exe:** the 240-frame branch 0x00766786 reaches the kill 0x007667a8 without the explosion call (0x007667e4 is only on the motion-end path). The port explodes at 240 anyway, as the brief asked, because the port cannot see the motion end. If the exe's 240-frame end does not explode, the blast should move to the motion-end test.
+- Phase 0 fires on the clock's frame 5 (`clock.crossed(5)`, the same test as 0x7aaa30 in the laser entry); the exe's per-frame gate was not read further.
+- The missile is a ball drawn at height 10 (`look: orange, size 1.5`); the exe draws a model.
+- The blast has no defence taken off; the knockback 3.0 goes to `damage.hit` as is.
+- The missile is the boss's own object, and the blast is the local player's (each client resolves its own hit, as for every enemy shot).
+
+**Checks.** `node tests/saintmilionboss.test.ts` ALL PASS; `node tests/saintmilion.test.ts` all checks passed; `node tests/combat.test.ts` 5946 checks, 0 failures; `node tests/enemies.test.ts` ALL PASS; `npx tsc --noEmit` (client) clean. Not run in Chrome.
+
+**Correction (same day).** The 240-frame end does not blast. `cmp [edi+0x68], 0xf0 / jg 0x766786` (0x0076661d..0x00766625) reaches 0x007667a8, which spawns effect 0x6f7 at +0x38 and sets the dead bit; it does not call 0x0076a724. The explosion is on the motion-end path only:
+- The flight update 0x007663d4 runs `call 0x7b5290` with 0x80000 on the motion at [edi+0x70] (0x00766714..0x0076671e), a flag test on track 0 of the motion's flags ([motion+0xa4], records of 0x2c bytes, flags at +0x18). When set (`je 0x766757` not taken), it calls 0x007667e4 (the explosion: type 3, radius 30.0 at +0x38) and then the kill 0x007667a8.
+- Motion state 4 is set by `call 0x7b52ec` / `0x7b52c4` on track 0 (0x007666f4..0x007666fb, 0x0076673d..0x00766752) when a 20.0 test (0x00976190, 0x007666a8..0x007666e7) passes; the motion's frames after that are not read.
+- The flight's length is not in the exe: the motion is the missile model's, in an archive the port does not read. The table at 0x009f5ae8 holds the missile's motion slot with speed 5.0 (0x40a00000) but no frame count.
+- 0x00661448 (the 0xf call on the 240 path) finds an entry with id 0xf in the list at [0xa9b068] and calls 0x006614cc, which allocates an 0xa0-byte object and runs 0x00660a1c on it: an effect spawn. Neither function calls a damage or hit routine; 0x00660a1c was not read. So it is not damage and is not ported.
+
+What changed: `SmMissile` takes a `range`. The ASSUMED flight ends when the missile has flown `range` = the distance from the boss to the nearest living player at launch, less 20.0 (`SM_MISSILE.arrive`), and then blasts there with iparam3 to the living within 100 (XZ). With no living player at launch (range null) it only ends at the 240-frame cap, with no blast. The 240-frame cap removes the missile with no blast. The `arrive` rule is ASSUMED: it uses the 20.0 constant of the state-4 test as the distance to the aim point, and skips the motion frames after state 4. Tests: section 8 covers the cap (no blast, even on a player), the flight end 76 frames out for a player 400 ahead (blast at 380 along, 100 XZ, once), and an aim within 20.0 (blast on the first frame).

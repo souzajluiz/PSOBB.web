@@ -21,6 +21,8 @@ import {
   type SmBossOptions,
 } from '../client/src/combat/saintmilionboss.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
+import { SM_MISSILE, SmMissile } from '../client/src/combat/saintmilionents.ts';
+import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
 let failures = 0;
@@ -314,6 +316,75 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
       eq(a.motionCount, table.length, `${name}: motions`);
       for (let m = 0; m < table.length; m++) eq(a.motion(m, nodes === 0 ? 0 : m === 0 ? 59 : 32).frameCount, table[m], `${name}: motion ${m}`);
     }
+  }
+}
+
+// 8. The missiles (state 18): one on entry, two more on frame 5 in arenas 3 / 4; each flies 5.0 a
+//    frame for 240 frames and then explodes once, iparam3 to the living players within 100 (XZ).
+{
+  const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; pendingShots: EnemyShot[]; arena: number };
+  const missiles = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmMissile => x instanceof SmMissile);
+  const row = { ...MV2, iparam: [1013, 1100, 750, 1360, 500, 0] };
+  // Entry (phase 4): one missile, carrying iparam3 (750) as its blast.
+  {
+    const b = make(true, { movement: [row, row] });
+    b.tick([player(1, 5000, 5000)]);
+    drive(b).arena = 0;
+    drive(b).setState(18);
+    const m = missiles(drive(b).pendingShots);
+    eq(m.length, 1, 'state 18 entry makes one missile');
+    eq(m[0]?.effect.kind === 'blast' ? m[0].effect.damage : -1, 750, 'the blast is iparam3');
+    eq(m[0]?.effect.kind === 'blast' ? m[0].effect.knockback : -1, 3, 'the blast knockback is 3.0');
+  }
+  // Phase 0: on the clock's frame 5 two more in arenas 3 and 4 only.
+  for (const arena of [0, 1, 2, 3, 4]) {
+    const b = make(true, { movement: [row, row] });
+    b.tick([player(1, 5000, 5000)]);
+    drive(b).arena = arena;
+    drive(b).setState(18);
+    drive(b).pendingShots.length = 0;
+    let extra = 0;
+    for (let i = 0; i < 12 && b.sid === 18; i++) extra += missiles(b.tick([player(1, 5000, 5000)]).shots ?? []).length;
+    eq(extra, arena === 3 || arena === 4 ? 2 : 0, `arena ${arena}: phase 0 missiles`);
+  }
+  // Flight without an aim: 5.0 a frame along the launch vector; at the 240-frame cap it is removed with no blast.
+  {
+    const m = new SmMissile(0, 0, 0, 750, null);
+    const near = player(1, 0, 1200);
+    for (let i = 1; i <= SM_MISSILE.life; i++) {
+      const hits = m.tick([near]);
+      if (i === 1) eq(m.z, 5, 'one frame is 5.0 along the launch vector');
+      eq(hits.length, 0, `no blast at frame ${i}`);
+    }
+    eq(m.z, 5 * SM_MISSILE.life, 'after 240 frames the missile is 1200 along');
+    eq(m.x, 0, 'a straight line');
+    check(!m.done, 'the missile is still flying at 240 frames');
+    eq(m.tick([near]).length, 0, 'the cap removes it with no blast, even on a player');
+    check(m.done, 'removed at the cap');
+  }
+  // Aimed at a player 400 ahead: the flight ends within 20.0 of the aim point (380 along), with the blast there.
+  {
+    const m = new SmMissile(0, 0, 0, 750, 400 - SM_MISSILE.arrive);
+    for (let i = 1; i < 76; i++) eq(m.tick([]).length, 0, `still flying at frame ${i}`);
+    // The 76th tick moves it onto the end (380 along, 20.0 short of the aim) and blasts there.
+    const at = { x: m.x, z: m.z + SM_MISSILE.speed };
+    const inside = player(1, at.x, at.z + 99);
+    const edge = player(2, at.x + 60, at.z + 80);
+    const outside = player(3, at.x, at.z + 101);
+    const dead = { ...player(4, at.x, at.z + 1), dead: true };
+    const high = player(5, at.x + 10, at.z);
+    const all = [inside, edge, outside, dead, high];
+    const hits = m.tick(all);
+    eq(m.done, true, 'the missile is spent after the blast');
+    eq(hits.map((t) => t.clientId).join(','), '1,2,5', 'the blast reaches the living within 100 on the XZ plane');
+    eq(m.tick(all).length, 0, 'it explodes once');
+    eq(hits.length, 3, 'each player once');
+  }
+  // Aimed at a player who is already within 20.0: the blast comes on the first frame.
+  {
+    const m = new SmMissile(0, 0, 0, 750, 0);
+    const hits = m.tick([player(1, 0, 5)]);
+    eq(hits.length, 1, 'an aim within 20.0 explodes at once');
   }
 }
 
