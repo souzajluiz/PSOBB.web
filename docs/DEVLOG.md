@@ -6406,3 +6406,66 @@ So a Gee made by the factory cannot enter 6 or 10, whatever the set file says: t
 **ASSUMED:** (a) "Nothing the Gee runs writes enemy+0x3cc / 0x3d0" is checked over the functions the Gee calls and the whole `.text` store list by pattern, not by dataflow through the owner: the owner (`render/combat.ts`) and the packet code could in principle write the object's memory in another way, not checked; (b) a generic owner path that calls the Gee's setter with 6 or 10 is not visible from the Gee range (the owner calls the Gee through its vtable, as in the port); (c) the spawn's state 1 / 2 choice by 0x2000000 is taken from the port's reading (0x0055fa94), not from the set file. UNCLEAR: the exact states 6 / 10 frame details (the sub-state numbers 0..3 and the hover constants), which are not ported and so not tested.
 
 **Left:** the states 6 / 10 themselves (if a later pass finds a writer of enemy+0x3cc or a clear of 0x00100000 for a Gee, port them from 0x0055ebb8 / 0x0055d8d4 with these notes as the start). Not run in Chrome.
+
+## 2026-10-21: Gi Gue stomp entities
+
+**Addresses:** the stomp is Gi Gue's prepare state (`0x0056a3cc`, sub-step 2,
+after the motion frame test `fcomp [0x926324]` = 10). Its call sites in
+`0x0056a3cc` (the prepare function; `0x0056a70c` before them is the cast flash,
+visual only):
+
+```
+56a48d: call 0x6f1eb0   ; Zalure object: push [eax+0x20] (iparam3), push edi+0x300 x2, push edi
+56a49d: call 0x6e7998   ; Jellen object, same arguments
+```
+
+- `0x6f1eb0` / `0x6e7998` are the `new` + constructor wrappers of two technique
+  objects (0x14c bytes, `new` = 0x5caba4). Zalure: ctor 0x6f1f28, vtable
+  0x00b3e770, tech 12 (`0x6ded14(12, level)`). Jellen: ctor 0x6e7a10, vtable
+  0x00b3d850, tech 11 (`0x6e7bc4 push 0xb`).
+- Position: `edi+0x300/0x304/0x308` is the entity's world position triple (the
+  same block the enemy code reads elsewhere, e.g. 0x00501229), so the objects
+  stand on Gi Gue. Level: the MovementData row 26 iparam3 (`g_GiGue_AnimSpeeds`
+  +0x20).
+- Update (vtable +4 = `0x6f2420`, Zalure; the Jellen one is the same shape): the
+  owner is looked up by the id at +0xb4 (`0x007b4d18`), no owner = dead. The
+  object has no target list (+0xec is 0 from the ctor), so it runs the area tick
+  `AoE_TechDamageTick_006deadc`, which takes candidates from
+  `AoE_TechCollisionCheck_006eb0e8` and tests each (`0x006ea71c`: word +0x96 == 1)
+  then calls its hit slot (vtable +0x10 = `0x006f24c0`), which calls the target's
+  vtable +0x60 with group 12 (Zalure) or 11 (Jellen): the debuff, no damage row.
+  Last, `or word [+8], 1` ends the object: one tick, no lifetime.
+- No knockback, no damage from an attack-data row: the stomp is a debuff only.
+
+**Changes:** the stomp now hits every living player within
+`techReach(TECH.zalure | TECH.jellen, level)` (range_h + 5, the port's AoE
+reach; level 4 = 55, level 10 = 79) of Gi Gue's position, in XZ, strictly inside,
+instead of the cone pick. Zalure is pushed first (creation order). The
+prepare gate (sub 0: a player in the cone starts the prepare) is unchanged.
+- `client/src/combat/enemyfsmep2a.ts`: stomp loop; imports `techReach`, `TECH`;
+  the GiGue header note moved the stomp out of "Not reproduced".
+- `tests/enemyfsmep2a.test.ts`: the cast test expects both in-reach players and
+  not the one 70 away; a level 10 test (reach 79, a player 70 away is hit).
+
+**ASSUMED (marked in the code):** the XZ distance and the strict `<` (the Dark
+Falz object test); no cap on the candidate count; the single tick happening in
+the stomp frame (the exe ticks on the object's first update); the power and
+duration of the debuff (`supportPower(level)` / `buffFrames` in buffs.ts, the
+callee at target vtable +0x60 not decoded).
+
+**UNCLEAR:** the exact candidate radius in `0x006eb0e8` / `0x006ea700` (a sphere
+or round box, the +5 is the port's convention); whether the exe's prepare gate
+really is the cone (kept); the vtable +0x60 arguments beyond group and level
+(the `[this+0x88]` power is `movsx word row+0x24 * level` in the ctor, not
+mapped to the port's buffs).
+
+**Not ported (visual):** the cast flash (0x56a70c), the object's effect and
+sound.
+
+**Also seen:** Zoa's Zalure / Jellen cast (`enemyfsmep2c.ts`, `SinowZoaAi.cast` (SinowzoaExecuteSpecialTech_00593268))
+uses `techData(...).rangeH` without the +5 for the same two objects. Not changed
+here (UNCLEAR which is right; the exe's Zoa path was not re-read).
+
+**Checks:** `node tests/enemyfsmep2a.test.ts`: all checks passed. `node
+tests/combat.test.ts`: 5946 checks, 0 failures. `tsc --noEmit` (client): clean.
+Not run in Chrome.

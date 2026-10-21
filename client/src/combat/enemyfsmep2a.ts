@@ -23,6 +23,8 @@ import { PLAYER_AIM_HEIGHT, EnemyShot, type ShotEffect, type ShotLook } from './
 import { BOOMA_MELEE } from './enemyfsmep2.ts';
 import { STATUS } from './status.ts';
 import { exhaustive } from '../exhaustive.ts';
+import { techReach } from './techfire.ts';
+import { TECH } from './techniques.ts';
 
 const fr = Math.fround;
 
@@ -1023,10 +1025,17 @@ export class GeeAi extends BrainBase {
 // iparam5 the minimum round length. AttackData row 26 distance_x / angle give
 // the reach and the arc (GiGuesSetSpecialAttackParams_0056c22c).
 //
-// Not reproduced: the stomp's own Jellen / Zalure entities (the debuff is
-// reported through `events`), wall rays (flat ground), the barrier's own
-// motions (ASSUMED 20 frames each), the pack-less hop direction search (the
-// three 120 degree rays: with open ground the first is taken).
+// The stomp (prepare frame 10, 0x0056a48d / 0x0056a49d): two technique objects
+// at the Gi Gue's own position, the Zalure (0x006f1eb0, tech 12) then the Jellen
+// (0x006e7998, tech 11), both at the level iparam3. They have no target list:
+// their one update is the area tick (AoE_TechDamageTick_006deadc), which hits
+// every player within the object's reach (techReach: range_h + 5). The debuff
+// is reported through `events`.
+//
+// Not reproduced: the objects' own look (the stomp's effect and sound), wall
+// rays (flat ground), the barrier's own motions (ASSUMED 20 frames each), the
+// pack-less hop direction search (the three 120 degree rays: with open ground
+// the first is taken).
 export const GIGUE = {
   search: 150, // AI record [0]
   turn: 768, // AI record [2], BAMS a frame
@@ -1730,9 +1739,15 @@ export class GiGueAi extends BrainBase {
       if (this.frames >= GIGUE.prepareFrame) this.sub = 2;
     } else if (this.sub === 2 && this.frames >= GIGUE.stompFrame) {
       this.sub = 3;
-      for (const id of this.picked) {
-        this.events.push({ clientId: id, tech: 'jellen', level: this.level });
-        this.events.push({ clientId: id, tech: 'zalure', level: this.level });
+      // 0x0056a48d: the Zalure object, then 0x0056a49d the Jellen object, each at
+      // the Gi Gue's position; the area tick hits the players inside its reach
+      // (ASSUMED: the XZ distance, strict, as the Dark Falz technique objects).
+      for (const tech of ['zalure', 'jellen'] as const) {
+        const reach = techReach(TECH[tech], this.level);
+        for (const t of targets) {
+          if (t.dead || Math.hypot(t.x - this.x, t.z - this.z) >= reach) continue;
+          this.events.push({ clientId: t.clientId, tech, level: this.level });
+        }
       }
     }
     if (this.row === 3) return;

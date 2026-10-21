@@ -403,13 +403,26 @@ const gigue = (params: number[], rng: () => number = () => 0.3) => new GiGueAi({
     const g6 = gigue([0, 0, 0, 0, 0], () => 0.1);
     const rig6 = new Rig(g6);
     // Just outside the 67 degree cone at first (35 degrees), inside it after one
-    // turn of the approach; the other player is behind.
+    // turn of the approach; the other player is behind. Both are 43 away, inside
+    // the stomp's reach (55 at level 4); the far one is 70 away and is not hit.
     const near1 = player(25, 35, 0);
     const behind = player(25, -35, 1);
-    rig6.run([near1, behind], 300);
+    const far = player(0, -70, 2);
+    rig6.run([near1, behind, far], 300);
     const events = g6.events.splice(0);
-    check(events.length >= 2 && events.every((e) => e.clientId === 0), 'Gi Gue: Jellen and Zalure on the player in front only');
-    eq(events.slice(0, 2).map((e) => [e.tech, e.level]), [['jellen', 4], ['zalure', 4]], 'Gi Gue: iparam3 is the level');
+    eq(events.map((e) => [e.clientId, e.tech]).sort(), [[0, 'jellen'], [0, 'zalure'], [1, 'jellen'], [1, 'zalure']].sort(), 'Gi Gue: the stomp hits the players within reach, not the far one');
+    eq(events.slice(0, 2).map((e) => [e.tech, e.level]), [['zalure', 4], ['zalure', 4]], 'Gi Gue: iparam3 is the level (the Zalure object first)');
+  }
+
+  // The stomp's reach follows the level: 79 at level 10 (range_h 74 + 5), so a
+  // player 70 away is hit there (not at level 4).
+  {
+    const g8 = new GiGueAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0, 0], attack: gigueAtk, movement: { ...gigueMove, iparam: [500, 250, 10, 3, 0, 0] }, rng: () => 0.1 });
+    const rig8 = new Rig(g8);
+    rig8.run([player(25, 35, 0), player(0, -70, 1)], 300);
+    const hits = g8.events.splice(0);
+    check(hits.some((e) => e.clientId === 1 && e.tech === 'jellen') && hits.some((e) => e.clientId === 1 && e.tech === 'zalure'), 'Gi Gue: the level 10 stomp reaches 70');
+    eq(hits.every((e) => e.level === 10), true, 'Gi Gue: the stomp carries iparam3 = 10');
   }
 
   // The hop: crouch 60 frames, rise to 50 at 2.2, fly 200 away at fparam1, drop 2.3 a frame.
