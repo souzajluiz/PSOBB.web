@@ -7556,12 +7556,12 @@ sorting).
 - **Type 0** (single particle, update `update_particle_effect_single_particle` = 0x0050dbb8): RGB = clamp(age * (+0x6c, +0x70, +0x74) + (+0x7c, +0x80, +0x84)). The slopes are the `fmul [ecx+0x6c]` / `[ecx+0x70]` / `[ecx+0x74]` at 0x0050df88, 0x0050dfbc, 0x0050dfeb; the bases `fadd [ecx+0x7c]` at 0x0050df8b. The path is taken when instance flag 0x100 is clear (`test eax,eax` at 0x0050de58 / 0x0050e027, `je 0x0050df86` / `0x0050e135`), whatever effect_nt flag 1 is.
 - **Type 1 ring** (`ParticleEffectInstance_Update_0050f3fc`, factory 0x00510534): RGB = clamp(age * (+0x50, +0x38, +0x3c) + (+0x7c, +0x80, +0x84)). Slopes `fld [ecx+0x50]` at 0x0050f9cf, `fld [ecx+0x38]` at 0x0050f9f5, `fld [ecx+0x3c]` at 0x0050fa1e; bases `fadd [ecx+0x7c]` (0x0050f9d4), `[ecx+0x80]` (0x0050f9fa), `[ecx+0x84]` (0x0050fa23). Same branch: instance flag 0x100 clear (`je 0x0050f9c9` from 0x0050f8d6). ECX is the entry (`[ebp+0x20]` / `pThis[8]`), so the reads are from the entry, not the instance.
 - **Why the names differ:** +0x50 is the entry's damping for type 0 (`fmul [ecx+0x50]` on the velocity, 0x0050dd83) and the ring's R slope. Same offset, two meanings; the particle kind decides.
-- **Mode 0x100 (colour override, `ParticleEffectSingleParticle_SetId_00508ee4`):** the slopes do not change, but the base does. Type 0 with 0x100 set uses `fadd [ebp+0x50]` (0x0050def5), the instance's own value, instead of entry +0x7c; the ring uses `fadd [esi+0x50]` (0x0050f7b6), and the constant branch uses the instance's +0x50..+0x58. The port still multiplies the tint into the whole colour (`tint` in `particleShade`). **UNCLEAR:** the dump's SetId writes a dword at its `this+0x4c` and sets flag 0x100 at `+0x2c`, while the update reads floats at instance +0x50..+0x58 and the flag at +0x24. The two structs are not the same layout, so the tint base was not changed. Callers (`render/hitfx.ts`, `render/telepipe.ts`) are unaffected.
+- **Mode 0x100 (colour override, `ParticleEffectSingleParticle_SetId_00508ee4`):** the slopes do not change, but the base does. Type 0 with 0x100 set uses `fadd [ebp+0x50]` (0x0050def5), the instance's own value, instead of entry +0x7c; the ring uses `fadd [esi+0x50]` (0x0050f7b6), and the constant branch uses the instance's +0x50..+0x58. The port still multiplies the tint into the whole colour (`tint` in `particleShade`). **UNCLEAR (resolved 2026-10-21, see the entry at the end):** the two objects are different classes. SetId writes the owner's `+0x4c` and `+0x2c` bit 0x100; the update reads the instance's `+0x24` and `+0x50..+0x58`. The flag does reach the instance (the spawner copies the owner's `+0x2c` into `+0x24`), but no copy of the owner's dword into the instance was found, so the tint base was not changed. Callers (`render/hitfx.ts`, `render/telepipe.ts`) are unaffected.
 - **Clamp:** both paths clamp to 0..1 (0.0 at 0x00920438 / 0x009204a4, 1.0 at 0x0092043c / the ring's 0x009204a0). The port's `Math.min(1, Math.max(0, ...))` matches.
 
 **Spot-check (the decisive bytes):** at 0x0050f9cf: `d9 41 50` (fld dword [ecx+0x50]) then `d8 41 7c` (fadd [ecx+0x7c]); at 0x0050df88: `d8 49 6c` (fmul [ecx+0x6c]). Disassemble with `objdump -d -M intel --start-address=0x0050f9c9 --stop-address=0x0050fa30 PsoBB.exe`.
 
-**ASSUMED / UNCLEAR:** the tint base (0x100) as above; the type 1 spin and emitter rotation (not touched here); the instance struct layout of the dump's SetId; the 0x0050e698 render path, which was not re-read for colour (it draws what the update stores).
+**ASSUMED / UNCLEAR:** the tint base (0x100) as above (its source is resolved at the end of this file, the base is not); the type 1 spin and emitter rotation (not touched here); the 0x0050e698 render path (re-read at the end: it tests no 0x100 and no +0x50..+0x58).
 
 **Changes:** `client/src/classic/particles.ts` (comments only: the ring slopes are now VERIFIED for the 0x100-clear path with addresses; `particleShade` documents the kind branch and the tint's open point). `tests/particleslope.test.ts` (new: the type 0 and ring slope fields, the bases, the clamp, with decoy fields in the other kind's slots).
 
@@ -7990,3 +7990,88 @@ Not searched: a copy from another object's memory, and the owner's loop over its
 **UNCLEAR:** whether the exe's aim is valid at all on a real run (the heap block is not zeroed, and no writer was found); the owner's child loop and any copy from another object were not searched.
 
 **Checks:** `node tests/saintmilionboss.test.ts`: ALL PASS (section 12 extended: the loop flag, no stop while alive, the stop after the 125th update). Client `npx tsc --noEmit -p .`: clean (Node 24).
+
+## 2026-10-21: Particle tint mode (flag 0x100): who owns the colour base
+
+Resolves the UNCLEAR of the "colour slopes follow the particle kind" entry (the struct
+mismatch). Ghidra's project has no function at the update addresses (0x0050dbb8, 0x0050f3fc,
+0x0050e698, 0x0050def5), so the bytes were read with objdump. The Ghidra decompile was used
+for the functions it names (0x00508ee4, 0x0050b7a4, 0x0050981c, 0x00508460, 0x0050ef80,
+0x0050f008, 0x00508dac).
+
+**Two classes, not one.** The mismatch is two objects, both found from the vtable pointers
+the constructors write:
+
+- **Owner** (vtable `0x00aff308`, 0xd0 bytes). Built by `0x0050b7a4` / `0x0050981c` (the
+  `create_particle_effect` pair) and by the emitter init at `0x00509642`. Fields: `+0x2c`
+  ushort = the flags argument (0x40 at the six sites); `+0x30` ushort (0xffff); `+0x4c` dword,
+  zeroed at creation (`0x00509664`..`0x00509674` zero `+0x4c..+0x58`); `+0x5c` the handle;
+  `+0x6c` position; `+0x78` rotation; `+0x20` zero; `+0x28` the entry pointer
+  (`index * 0x98 + base`).
+- **Instance** (per particle; vtable `0x00aff4a8` for the spawned ones, base class
+  `0x00aff000`, base ctor `0x00508460`). Fields: `+0x20` the entry (the ctor's `param_2`);
+  `+0x24` ushort flags; `+0x26` flags2; `+0x2c` float 1.0; `+0x4c`, `+0x50`, `+0x54`, `+0x58`
+  zeroed by the ctor (`0x005084e4`..`0x005084f9`).
+
+The update functions are the instance's virtuals: vtable `0x00aff4a8` slot 1 = `0x0050dbb8`
+(type 0, word at `0x00aff4ac`), slot 2 = `0x0050e698` (render, `0x00aff4b0`), slot 55 =
+`0x0050f3fc` (ring, `0x00aff584`). The `0x00aff308` table holds the same three words at its
+slots 105, 106, 159, so a pointer scan alone cannot tell the two tables apart; the instance
+reading is the one the update's own offsets need (`+0x20` entry, `+0x24` flags).
+
+**The copy site (VERIFIED).** The spawner `0x0050f008` (type 0 through `0x0050ec4c`; both are
+reached through the wrappers `0x0050ef80` / `0x00510534`, which first allocate 0x124 / 0x134
+bytes) does `*(ushort *)(instance + 0x24) = param_6`. Its caller passes the owner's flags word:
+at `0x00509328`, `movzwl 0x2c(%ebx), %ecx` is pushed as the fifth argument of `0x0050ef80`,
+which pushes it into `0x0050f008`. So the owner's flag 0x100 set by SetId (`or 0x100` at
+`+0x2c`, `0x00508ee8`..`0x00508ef1`) **does** reach the instance's `+0x24`, where the update
+tests it (`movzwl 0x24(%ebp)`, `and $0x100` at `0x0050de2a`). The spawner also copies the
+owner's `+0x30` into instance `+0x28` and the owner's `+0x78` rotation into `+0x9c..+0xa4`.
+
+**The tint dword is not copied (VERIFIED for the spawners; the sweep covers
+0x00508300..0x00511800).** SetId stores the dword at the owner's `+0x4c` (`0x00508ef5`).
+Nothing copies it into the instance. The only writes to the instance's `+0x4c`, `+0x50`,
+`+0x54`, `+0x58` are the zeros of the base ctor (`0x005084e4`..`0x005084f9`); the owner's own
+`+0x4c..+0x58` writes are its zeros at creation. The update only reads `+0x50`
+(`fadds 0x50(%ebp)` at `0x0050def5`, `fadds 0x50(%esi)` at `0x0050f7b6`) and `+0x4c`
+(`fmuls 0x4c(%ebp)` at `0x0050de39`, under the 0x100 test and flags2 bit 4). So in the exe's
+0x100 path the particle's base is 0 and its tint factor is 0, as far as the copies show. The
+port multiplies the tint in (`particleShade`), which the exe does not show.
+
+**Render 0x0050e698.** It tests no flag 0x100 and reads no `+0x50..+0x58` (grep of its range).
+It reads flags `+0x24`, the float `+0x2c` and the dword `+0x4c` (as an integer, `fildl`, at
+`0x0050eda8`, through a pointer local). It draws what the update stored, so it does not change
+the colour again.
+
+**What changed.** No behaviour change. `client/src/classic/particles.ts`: the `particleShade`
+comment now states the copy result. `client/node_modules` was linked to the main checkout for
+the run and is removed before finishing. No new test: there is no port rule to pin until the
+open point below is settled, and a test of the multiply would pin an ASSUMED behaviour.
+
+**Why the port keeps the multiply.** The requested change (base = tint RGB) needs a copy of
+the owner's dword into the instance's `+0x50..+0x58`, and none was found. The exe reading
+(base 0, factor 0 in 0x100 mode) would blank the tinted effects that use the flag
+(`techlightning` Shifta / Anti / Deband, `hitfx`, `telepipe`). That is a visible change that
+was not checked in Chrome, and a missing writer would make it wrong. So the multiply stays.
+
+**ASSUMED / UNCLEAR.**
+- **The open point (the decisive gap):** a writer of the instance's `+0x4c` or `+0x50..+0x58`
+  after the ctor, if one exists. The sweep covered `0x00508300`..`0x00511800`. A writer outside
+  that range (another class's code, or a call through a pointer) was not searched. If none
+  exists, the exe's 0x100 colour is the slope term alone and the port's tint is wrong.
+- The owner's `+0x30` (0xffff) and the handle `+0x5c` (the ctor's third argument) are read
+  from the spawner's code, not from a run.
+- The flags2 bit 4 gate on the `fmuls 0x4c` (`0x0050de39`) is read, not tested.
+- The Ghidra project has no function at the update addresses (`NO FUNCTION` for `0x0050dbb8`,
+  `0x0050f3fc`, `0x0050e698`), so their Ghidra decompile is missing. Re-analysing that range in
+  the project would give the Ghidra view.
+
+**Decisive spot-check.** In the exe, `0x00509328`: `0f b7 4b 2c` (`movzwl 0x2c(%ebx), %ecx`),
+then `%ecx` pushed at `0x00509337` into `0x0050ef80`. This is the flag path: the 0x100 bit
+reaches the instance. Disassemble with `objdump -d --start-address=0x509320 --stop-address=0x509340 PsoBB.exe`.
+The open point is checked by the absence of a store: `objdump -d` over `0x00508300`..`0x00511800`
+should show no `mov` / `fst` into `0x4c`, `0x50`, `0x54` or `0x58` of an instance other than the
+zeros at `0x005084e4`..`0x005084f9` and the owner's init at `0x00509664`..`0x00509674`.
+
+**Checks.** Node 24: `npx tsc --noEmit -p .` in `client/` is clean. `node tests/particleslope.test.ts`
+ALL PASS; `telepipe`, `hitfx`, `deathfx`: all checks passed; `dragon`: ok.
