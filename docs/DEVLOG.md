@@ -6888,3 +6888,37 @@ Not run in Chrome.
 Checks after the fix: `node tests/dragon.test.ts`: dragon: ok; `node tests/combat.test.ts`: 5946 checks, 0 failures (vendor linked); `node tests/enemies.test.ts`: ALL PASS; `node tests/sinowbeat.test.ts`: sinowbeat: ok; client `tsc --noEmit`: clean.
 
 Still not run in Chrome.
+
+## 2026-10-21: player slow / guard speed and animation tie in the field
+
+**Exe (PsoBB.exe, Ephinea 1.25.13).** The walk / run motion step is the speed that the leg code computes:
+- Walk state: 0x006a2061 calls the leg speed 0x006978a0 with base `[0x00a94300]` (1.0, via 0x0069788c) and then writes `flds [entry+8]` (the motion row's speed, the 16-byte row at `[player+0xd8]` indexed by `[player+0xb8] * 2`) `* [player+0x6c0]` to `[player+0xd0]` (0x006a2089 / 0x006a208f), and sets flag 0x100 in `[player+0xb0]`.
+- Run state: 0x006a1a10 does the same with base `[0x00a94324]` (1.5, 0x006a1a10 pushes it directly; 0x006a1a45 / 0x006a1a4b).
+- The motion code copies `[player+0xd0]` into the frame step `[+0xc8]` when flag 0x100 is set (0x007aa20e in the per-tick update 0x007aa094, and 0x007a9b5b when the motion changes). The frame then advances by `+0xc8` each game tick (0x007aa094 at 0x007aa0b4..0x007aa0c5: `+0xc0 += +0xc8`).
+- So **step = row.speed * legSpeed(base, slowed, guard)**, with `legSpeed` = base x 0.5 (0x0093ca20) when slowed, else base x 0.75 (0x0093ca24) in guard stance, else base. The walk and run rows are played at this rate every tick they are moving. The extra `[player+0x690]` factor (0x006978a0 at 0x006978fb) is still not ported: it is gated by `[player+0x68c] & 1`, which no player code sets.
+- Guard stance (0x0052ac5c, player+0x30 bit 0x00100000):
+  - target = 0x00770738 (the player's target); no target clears the bit (0x0052ad36).
+  - a hunter (`[player+0x964] & 0xe0 == 0x20` at 0x0052acae: classes 0, 1, 2, 9) turns on when the squared distance is below 2500 (0x00922334 = 2500, 50 units) and stays on until it is above 10000 (0x00922330, 100 units).
+  - the other classes turn on below 10000 (0x0092233c) and off above 22500 (0x00922338, 150 units).
+  - the distance is the flat (x, z) one: 0x007a9180 reads offsets 0 and 8 of the two positions, not y.
+  - not ported: a target id >= 0x1000 turns it on (0x0052ad25), and the vtable +0x44 call with 30 (0x0052ac88, its result tested at 0x0052ac8d) gates the test; the light hit / evade setter 0x006a29f4 also sets it.
+- The slow (player+0x30 bit 8, from slow_entity 0x00778b10) counts outside the hubs only: 0x00690344 returns it only when 0x0068a3fc passes, i.e. the map id at `[player+0x3ec]` is not in {0, 15, 18, 45} (table 0x0097f1c8).
+
+**Port.** `render/playermove.ts` has the rules: `SLOW_EXEMPT_AREAS` / `slowApplies(area)`, `GUARD_HUNTER_CLASSES` = {0, 1, 2, 9}, `GUARD_RANGE_SQ` (hunter 2500 / 10000, other 10000 / 22500), `guardStance(on, distSq, charClass)` (the hysteresis) and `PlayerMover.setGuard(distSq, charClass)`. `legSpeed` is unchanged; `PlayerMover.tick` already used it for the distance step.
+
+**What changed (field):**
+- `render/lobbyview.ts`: `LobbyView.legState` (a hook; the default is no slow, no target). Each game tick, before the mover's step, the mover takes `slowed` and the guard from the proximity check (the flat distance from the logic position to the target). Each frame in a moving gait, `animator.setRate(legSpeed(LOCOMOTION_FACTOR[gait], slowed, guard))`, so the walk / run step is the record speed times the leg factor.
+- `render/playeranim.ts`: `PlayerAnimator.setRate(stepFactor)` sets the step of the motion playing now (the record speed times the factor). `play()` is unchanged.
+- `render/combat.ts` `attach(view)`: `view.legState` is `slowed = status.has(slow) && slowApplies(area)` and the target is `lockOn`'s root position (null when no lock-on).
+- The lobby has no status and no target, so `slowed` / `guard` are false and the rate is `LOCOMOTION_FACTOR` as before: unchanged.
+
+**ASSUMED / UNCLEAR:**
+- The lock-on target stands in for the exe's player target (0x00770738). `lockOn` is the nearest enemy in front within 220 (its range is ASSUMED, see `updateLockOn`).
+- The guard check and the step run each game tick (30 a second), as the mover does.
+- The port's area number is the exe's map id (0x12 is "Lab", Pioneer 2 of Ep2; 0x2d is Pioneer 2 of Ep4, per `AREA_NAMES`).
+- `setRate` applies to a motion that chains (mode 2) during a walk too; the exe's +0xd0 copy does the same, but the town's walk / run records were not checked for mode 2.
+- Not ported: the 0x006a29f4 guard set after a light hit or evade, the vtable gate of 0x0052ac5c, the target id >= 0x1000 case, and the `[player+0x690]` factor.
+
+**Checks:** `tests/playermove.test.ts` (the hub exemption, the hunter and other hysteresis edges, no target, the first-tick step 0.5 slowed and 0.75 guarded), `tests/combat.test.ts` (run with `vendor/` linked to the main checkout's build, 5946 checks), `tests/combatdepth.test.ts` (824 checks), client `tsc --noEmit` clean.
+
+Not run in Chrome.

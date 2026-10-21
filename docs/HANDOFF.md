@@ -28,7 +28,7 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
 
 ## To do next (in order)
 
-1. **Player movement, remaining** (local tick machine and remote follower are in, see DEVLOG 2026-10-20; left: two-client Chrome check, slowed / guard animation tie). Original text:
+1. **Player movement, remaining** (local tick machine and remote follower are in, see DEVLOG 2026-10-20; left: two-client Chrome check; the slowed / guard speed and the animation tie are in the field since 2026-10-21, see DEVLOG "player slow / guard speed and animation tie in the field"). Original text:
    **Player movement, second half** (the user: "o deslocamento nao esta fiel").
    Done: walk 1.0 / run 1.5 units per tick (`render/playermove.ts`, 30 / 45 units a
    second). Open, all in the DEVLOG entry "player movement" with the exe addresses:
@@ -41,8 +41,10 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    - walk to run after 6 ticks above 0.75 (keyboard too), keyboard axis ramp 32 per
      poll up to 128 (`0x0070a60c`), the 6x40 / 6x42 loop-back (`0x008003e0`);
    - drive the local player from it with `TickSmoother` (render/smoothrender.ts),
-     remote players following 6x40 / 6x42 targets the same way, wall slide, the
-     animation-speed tie-in.
+     remote players following 6x40 / 6x42 targets the same way, wall slide. (The
+     animation-speed tie to the leg speed is done in the field, 2026-10-21: the slow
+     outside the hubs and the guard stance; not ported: the light-hit / evade guard
+     set 0x006a29f4 and the vtable gate of 0x0052ac5c.)
    Check the feel of 30 / 45 units a second first (it assumes 30 ticks a second); if
    it is wrong the fix is the constants in `playermove.ts`.
 2. **Episode 2 enemy FSMs: all ported** (2026-10-20, `combat/enemyfsmep2*.ts`, one file per
