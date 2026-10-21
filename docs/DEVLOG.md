@@ -6716,3 +6716,33 @@ Three read-only Haiku passes; the decisive instructions were checked here (one r
 Follow-up of the laser paragraph above (a Haiku pass; the spawn copy was checked here). **0x00772c08(player, laser)** is a sector test: in a frame translated by -laser.pos and rotated by the player's heading, each hit box of the player (list +0xa4, count +0xa8, stride 0x2c; boxes with +0x18 & 0x02000000 skipped; centre +0..+8, radius +0xc) passes when its horizontal distance is below box.r + L and |atan2(x, z) (BAMS) - laser heading| is below the half-span; y is ignored. 0x00768a84 sets those values in the record laser+0x31c for the loop only: L (+0x8) = the horizontal length origin (+0x38) -> aim point (+0x44), the span (+0xc) = |previous aim angle (+0x58) - this frame's aim angle|, and the heading +0x60 = their midpoint (0x007a8cb8); all are restored on exit. So the laser **sweeps**: each flagged frame it hits the players inside the wedge between the last frame's and this frame's aim direction, out to the aim point's distance, when the line of sight is clear (0x77fffc), with iparam2 through the player's vtable +0x60.
 
 **Aim source: UNCLEAR.** The spawn 0x007679d0 copies the origin into the aim point (0x00767a00..0x00767a09: +0x44..+0x4c = +0x38..+0x40, checked), and nothing in the laser's own code (ctor 0x00765c68, update 0x00765d7c, draw 0x00765ed8) writes +0x44 again. Read literally the wedge would have zero length and span and never hit, which does not fit the game, so something else moves the aim point (the boss's motion through the laser's child objects, or a generic writer: not found among the many `[reg+0x44]` stores). Other laser spawners: 0x00767962 (tables 0x009f75f4 / 0x009f7630 by arena), 0x0076b1ff, 0x0076ba60. The flagged-frame window (child slot 1, +0x9c bit 2) comes from motion data. Not ported.
+
+## 2026-10-21: Saint-Milion storm and sand sonic ported
+
+**What changed.**
+- `combat/saintmilionents.ts`: `SmBlast` (an `EnemyShot`, one explosion: the living players within max(r, 100) on XZ, once; the `blast` effect), `SM_STORM` / `SmStorm` (a plain object the boss keeps; four explosions), `SM_SAND` / `SmSandSonic` (an `EnemyShot`: waits, launches, 20 moves, one explosion per move).
+- `combat/saintmilionboss.ts`: state 23 phase 4 makes the storm (centre: the arena's origin, `SM_ARENAS[arena]`; damage iparam4 = `row.iparam[3]`); the storm is ticked on every boss frame. State 10 at the clock's 45 still emits 'sandsonic' and makes the sand sonic, which joins `out.shots` on its launch frame. New option `atp` (the boss's base ATP).
+- `render/combat.ts`: the boss gets `atp: attacker?.atp` (the stats row's ATP before Jellen).
+- `tests/saintmilionboss.test.ts`: sections 10 (storm) and 11 (sand sonic).
+- `docs/HANDOFF.md` item 4: storm and sand sonic are off the events-only list (lasers stay).
+
+**Rules and constants.**
+- Storm: T = 75 n (0x00976234 = 75.0), n = 1 on the first frame. Radii 100, 200, 400, 1000 (0x00976224 .. 0x00976230). The explosion of radius r goes off on the frame T first passes r (r < T <= r + 75): frames 2, 3, 6 and 14, then it ends.
+- Storm damage: trunc(f32(iparam4 * factor)) with the factors of types 6 .. 9 of the damage dispatcher 0x00768990 (jump table 0x009768c4): 1.0, 0.8, 0.64, 0.32 (the products of 0x0097748c, 0x00977484 and 0x00977488 = 0.5, which is an intermediate of type 9). Knockback 3.0 (0x40400000 on every type).
+- Sand sonic: made at the clock's 45 (state 10, phase 0), waits trunc(6 * rng) frames (0x009774ac = 6.0) with the boss's `SmRng`. Launch (0x0076c974): start = node 0x17 (the exe adds 100 to its height and snaps it to the ground), heading = atan2 of node 4 -> node 0x17 in XZ. Then 20 moves (+0xb4 = 0x14) of 10.0 (+0xb0 = 0x41200000) along the heading, removed after the 20th.
+- Each move explodes once at its position (0x0076c4ec -> 0x0076a788, type 2): damage = the base ATP, the int16 at [boss+0x2c4] (type 2 of 0x00768990 reads `movsx [ecx+0x2c4]`); knockback = 10.0 x 1.01 (0x00977940) = 10.1, the third argument; radius = d * 120 * g (the fourth argument, 0x0097793c = 120.0), with g the runtime global [0xa9b0a4].
+- d: the XZ distance from node 4 to the sand sonic. The point node 4 is written at +0xbc at the launch, and 0x0076c548 takes |(+0xbc) - (+0x38)| in XZ. So d is measured from node 4, not from the launch point (the earlier read said the same).
+
+**ASSUMED.**
+- Storm: active from its creation (the exe gates its update on a motion flag, not readable); it runs whatever the boss's state. Centre = `SM_ARENAS[arena]` origin (ox, oz); the exe's centre is the runtime global [0x00a9b020], not decoded.
+- Sand sonic: g = π / 720 (the runtime global [0x00a9b0a4] is not readable), so the radius is d * π / 6 (at least 100).
+- Start: node 0x17 without the +100 height and the ground snap (the port's sand sonic is at height 0). Without node data the launch is from the boss position along `swingAngle`.
+- The heading uses the fresh node positions at the launch (the same value as `swingAngle` when the nodes are known).
+- The timing: the wait counts boss frames; the sand sonic joins the shots on the frame it launches and its first move is its first shot tick (the renderer's), then one move and one explosion per tick.
+- Knockback 10.1: the exe's value; its meaning is not known (as the missile's 3.0).
+- The explosions are hidden (not drawn); the exe's effects (0x6f7, 0x6fc, 0x6fd) are not ported. The sand sonic is drawn as a ball at its position.
+- No defence is taken off a blast; each client resolves its own hit (as for the missile).
+
+**Checks.** `node tests/saintmilionboss.test.ts`: ALL PASS. `node tests/saintmilion.test.ts`: all checks passed. `node tests/combat.test.ts`: 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit`: clean (Node 24).
+
+Not run in Chrome.

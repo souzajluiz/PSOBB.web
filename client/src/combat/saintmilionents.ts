@@ -353,6 +353,144 @@ export class SmWave extends EnemyShot {
   }
 }
 
+// --- the explosions of the storm and the sand sonic ---------------------------------------
+//
+// The explosion's area hit (0x00521cdc: 100.0 for a radius up to 100, the radius itself above
+// it): every living player within max(radius, 100) on the XZ plane, once. The damage is the
+// value given (no formula, as the missile's blast); the knockback is cause_knockback's.
+export const SM_BLAST = { minRadius: 100 } as const;
+
+export class SmBlast extends EnemyShot {
+  readonly effect: ShotEffect;
+  readonly look: ShotLook = { color: 0xffffff, size: 1, hidden: true };
+  private readonly radius: number;
+
+  constructor(x: number, z: number, radius: number, damage: number, knockback: number) {
+    super(x, 0, z);
+    this.radius = Math.max(radius, SM_BLAST.minRadius);
+    this.effect = { kind: 'blast', damage, knockback };
+  }
+
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done) return [];
+    this.done = true;
+    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= this.radius);
+  }
+}
+
+// --- the storm (state 23: 0x0076b7a8 makes it, its update 0x00766c5c) ---------------------
+//
+// One object, made on phase 4 of state 23 and kept by the boss (it is not a shot). Its counter n
+// starts at 1 on its first frame and grows by 1 a frame; T = 75 * n (0x00976234). The explosion
+// of radius r (0x00976224: 100, 200, 400, 1000) goes off on the frame T first passes r
+// (r < T <= r + 75), so on frames 2, 3, 6 and 14. Its damage is iparam4 times the factor of
+// its type 6 .. 9 (0x00768990's jump table: 1.0, 0.8, 0.64 and 0.32, the products of 0x00977484
+// and 0x0097748c; trunc as the missile's), its knockback 3.0 (0x40400000 on every type).
+// ASSUMED: the storm is active from its creation (the exe gates the update on a motion flag the
+// port cannot read), and its centre is the arena's origin (the exe passes the runtime global
+// [0x00a9b020]; not decoded). It ends after the fourth explosion.
+export const SM_STORM = { step: 75, radii: [100, 200, 400, 1000], factors: [1, 0.8, 0.64, 0.32], knockback: 3 } as const;
+
+export class SmStorm {
+  done = false;
+  private n = 0;
+  private fired = 0;
+  private readonly x: number;
+  private readonly z: number;
+  private readonly iparam: number;
+
+  // x, z: the centre; iparam: the form's MovementData iparam4.
+  constructor(x: number, z: number, iparam: number) {
+    this.x = x;
+    this.z = z;
+    this.iparam = iparam;
+  }
+
+  // One frame: the explosions that go off on it.
+  tick(): SmBlast[] {
+    if (this.done) return [];
+    this.n++;
+    const t = SM_STORM.step * this.n;
+    const out: SmBlast[] = [];
+    while (this.fired < SM_STORM.radii.length) {
+      const r = SM_STORM.radii[this.fired];
+      if (!(r < t && t <= r + SM_STORM.step)) break;
+      const damage = Math.trunc(f32(this.iparam * f32(SM_STORM.factors[this.fired])));
+      out.push(new SmBlast(this.x, this.z, r, damage, SM_STORM.knockback));
+      this.fired++;
+    }
+    if (this.fired >= SM_STORM.radii.length) this.done = true;
+    return out;
+  }
+}
+
+// --- the sand sonic (state 10 at clock 45: 0x0076c644 makes it, 0x0076c974 launches it, its update
+// 0x0076c2e0) -------------------------------------------------------------------------------------
+//
+// It waits trunc(6 * rng) frames (0x009774ac = 6.0), then launches from the arm's tip: the start is
+// node 0x17 (the exe adds 100 to its height and snaps it to the ground: ASSUMED, the port's ground
+// is the boss's) and the heading is atan2 of node 4 -> node 0x17 in XZ (BAMS, the swing's
+// direction). It moves 20 times (+0xb4 = 20) 10.0 a frame (+0xb0) along the heading. After each
+// move it explodes once at its position (0x0076c4ec -> 0x0076a788, type 2 with the boss's base
+// ATP: the int16 at [boss+0x2c4], the damage of type 2 in 0x00768990). Its knockback is the 10.0
+// of +0xb0 times 1.01 (0x00977940) passed as the third argument: its meaning is not known, as the
+// missile's 3.0. Its radius is d * 120 * g (the fourth argument, 0x0097793c = 120.0), where d is the
+// XZ distance from node 4, the point at +0xbc fixed at the launch, to the sand sonic, and g is a
+// runtime global. ASSUMED: g = π / 720, so the radius is d * π / 6 (at least 100 by the area hit).
+// It is removed after the twentieth move.
+export const SM_SAND = { moves: 20, speed: 10, wait: 6, knockback: f32(10 * f32(1.01)), radiusPerDistance: Math.PI / 6 } as const;
+
+export class SmSandSonic extends EnemyShot {
+  readonly effect: ShotEffect;
+  readonly look: ShotLook = { color: 0xd8b060, size: 1.5 };
+  // Set by launch(): the sand sonic is a shot from then on (the boss adds it to its shots).
+  launched = false;
+  private wait: number;
+  private moves = 0;
+  private vx = 0;
+  private vz = 0;
+  private pivotX = 0;
+  private pivotZ = 0;
+
+  // delay: the frames to wait before the launch; damage: the boss's base ATP.
+  constructor(delay: number, damage: number) {
+    super(0, 0, 0);
+    this.wait = Math.max(0, Math.trunc(delay));
+    this.effect = { kind: 'blast', damage, knockback: SM_SAND.knockback };
+  }
+
+  // One frame of the wait: true while it still waits.
+  waiting(): boolean {
+    if (this.wait <= 0) return false;
+    this.wait--;
+    return true;
+  }
+
+  // The launch at (x, z), heading `angle` (radians), with the arm's base (node 4) at (pivotX, pivotZ).
+  launch(x: number, z: number, angle: number, pivotX: number, pivotZ: number): void {
+    this.x = x;
+    this.z = z;
+    this.vx = Math.sin(angle) * SM_SAND.speed;
+    this.vz = Math.cos(angle) * SM_SAND.speed;
+    this.pivotX = pivotX;
+    this.pivotZ = pivotZ;
+    this.launched = true;
+  }
+
+  // One move and its explosion: the living players within the radius of its new position.
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done || !this.launched) return [];
+    this.frames++;
+    this.moves++;
+    this.x += this.vx;
+    this.z += this.vz;
+    if (this.moves >= SM_SAND.moves) this.done = true;
+    const d = Math.hypot(this.x - this.pivotX, this.z - this.pivotZ);
+    const radius = Math.max(d * SM_SAND.radiusPerDistance, SM_BLAST.minRadius);
+    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= radius);
+  }
+}
+
 // --- the shared field --------------------------------------------------------------------
 
 export type SmEvent =

@@ -934,6 +934,8 @@ export class CombatView {
             hp: [hp(32 + v * 4), hp(34 + v * 4)],
             tentacleHp: [hp(33 + v * 4), hp(35 + v * 4)],
             tentacleMovement: [mv(33 + v * 4), mv(35 + v * 4)],
+            // The stats row's ATP, the boss's base (the sand sonic's damage).
+            atp: attacker?.atp ?? 0,
             leader: () => this.game.selfId === this.game.leaderId,
             frames: this.motionFrames(instance, null),
             tentacleFrames: this.tentacleFrames(instance),

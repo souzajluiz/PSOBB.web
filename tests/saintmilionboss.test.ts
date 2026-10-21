@@ -21,7 +21,7 @@ import {
   type SmBossOptions,
 } from '../client/src/combat/saintmilionboss.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
-import { SM_MISSILE, SM_WAVE, SmMissile, SmRng, SmWave } from '../client/src/combat/saintmilionents.ts';
+import { SM_MISSILE, SM_SAND, SM_STORM, SM_WAVE, SmBlast, SmMissile, SmRng, SmSandSonic, SmStorm, SmWave } from '../client/src/combat/saintmilionents.ts';
 import type { EnemyShot } from '../client/src/combat/enemyshots.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -526,6 +526,166 @@ function run(lead: SaintMilionAi, follow: SaintMilionAi | null, ticks: number, t
       }
       check(wave.done && n < SM_WAVE.life, `the arena circle ends the beam (${n} frames)`);
     }
+  }
+}
+
+// 10. The storm (state 23): one object on phase 4; its explosions on frames 2, 3, 6 and 14 (T = 75 n passes
+//     100, 200, 400 and 1000), the radius and the damage factor of each (iparam4 times 1.0, 0.8, 0.64, 0.32),
+//     knockback 3.0; it ends after the fourth.
+{
+  const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; storm: SmStorm | null; arena: number };
+  const blasts = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmBlast => x instanceof SmBlast);
+  const row = { ...MV2, iparam: [1013, 1100, 750, 1000, 500, 0] };
+  // The four explosions of a storm of iparam4 1000: frame, radius (the blast's stored area) and damage.
+  {
+    const st = new SmStorm(0, 0, 1000);
+    const at: Array<{ frame: number; damage: number; knock: number; radius: number }> = [];
+    for (let n = 1; n <= 20; n++) {
+      for (const b of st.tick()) {
+        const e = b.effect.kind === 'blast' ? b.effect : null;
+        at.push({ frame: n, damage: e?.damage ?? -1, knock: e?.knockback ?? -1, radius: (b as unknown as { radius: number }).radius });
+      }
+    }
+    eq(at.map((x) => x.frame).join(','), '2,3,6,14', 'the explosions on frames 2, 3, 6 and 14');
+    eq(at.map((x) => x.radius).join(','), SM_STORM.radii.join(','), 'the radii are 100, 200, 400 and 1000');
+    eq(at.map((x) => x.damage).join(','), '1000,800,640,320', 'the damage is iparam4 times 1.0, 0.8, 0.64, 0.32');
+    eq(at.every((x) => x.knock === SM_STORM.knockback), true, 'knockback 3.0');
+    eq(st.tick().length, 0, 'the storm is spent after the fourth explosion');
+    check(st.done, 'it ends after the fourth');
+  }
+  // The damage is trunc of the float product (iparam4 1360: 1088 and 870 and 435 for types 7 .. 9).
+  {
+    const st = new SmStorm(0, 0, 1360);
+    const got: number[] = [];
+    for (let n = 1; n <= 14; n++) for (const b of st.tick()) if (b.effect.kind === 'blast') got.push(b.effect.damage);
+    eq(got.join(','), '1360,1088,870,435', 'iparam4 1360 gives 1360, 1088, 870 and 435');
+  }
+  // The explosion's area: max(radius, 100) on the XZ plane, the living only, once.
+  {
+    const hit = new SmBlast(10, -20, 50, 1, 3);
+    eq(hit.tick([player(1, 110, -20)]).length, 1, 'a radius below 100 reaches 100 (the edge is in)');
+    eq(new SmBlast(0, 0, 50, 1, 3).tick([player(1, 100.5, 0)]).length, 0, 'the edge at 100.5 is out');
+    const big = new SmBlast(0, 0, 200, 1, 3);
+    const all = [player(1, 150, 0), player(2, 0, 201), { ...player(3, 0, 0), dead: true }];
+    eq(big.tick(all).map((t) => t.clientId).join(','), '1', 'a radius of 200 reaches 150 and not 201, dead out');
+    eq(big.tick(all).length, 0, 'the explosion is once');
+  }
+  // The boss: one object on phase 4, the explosions on frames 2, 3, 6 and 14 after it, and it ends after the fourth.
+  {
+    const b = make(true, { movement: [row, row] });
+    b.tick([player(1, 5000, 5000)]);
+    drive(b).arena = 3;
+    drive(b).setState(23);
+    check(drive(b).storm instanceof SmStorm, 'state 23 entry makes the storm');
+    const got: number[] = [];
+    for (let n = 1; n <= 20; n++) {
+      const k = blasts(b.tick([player(1, 5000, 5000)]).shots ?? []).length;
+      for (let i = 0; i < k; i++) got.push(n);
+    }
+    eq(got.join(','), '2,3,6,14', 'the boss makes its four explosions on frames 2, 3, 6 and 14');
+    eq(drive(b).storm?.done, true, 'the storm ends after the fourth');
+  }
+}
+
+// 11. The sand sonic (state 10 at the clock's 45): made once; launched after trunc(6 * rng) frames; then 20 moves
+//     of 10.0, one explosion per move (the base ATP, radius d * π / 6 at least 100, d from node 4); removed after the 20th.
+{
+  const drive = (ai: SaintMilionAi) => ai as unknown as { setState(s: number, first?: boolean): void; sonic: SmSandSonic | null };
+  const sonics = (shots: readonly EnemyShot[]) => shots.filter((x): x is SmSandSonic => x instanceof SmSandSonic);
+  const ATP = 777;
+  // The object alone: three frames of wait, the launch, 20 moves of 10.0 along the heading, one explosion each.
+  {
+    const s = new SmSandSonic(3, ATP);
+    eq([s.waiting(), s.waiting(), s.waiting(), s.waiting()].join(','), 'true,true,true,false', 'three frames of wait');
+    s.launch(0, 0, 0, 0, 0);
+    eq(s.launched, true, 'launched');
+    const near = player(1, 0, 0);
+    for (let i = 1; i <= SM_SAND.moves; i++) {
+      s.tick([near]);
+      eq(s.z, SM_SAND.speed * i, `move ${i} is 10.0 along the heading`);
+      eq(s.x, 0, `move ${i} is straight`);
+    }
+    check(s.done, 'removed after the twentieth move');
+    eq(s.tick([near]).length, 0, 'and it explodes no more');
+    eq(s.effect.kind === 'blast' ? s.effect.damage : -1, ATP, 'the blast is the base ATP');
+    eq(s.effect.kind === 'blast' ? s.effect.knockback : -1, SM_SAND.knockback, 'the knockback is the 10.1 the exe passes');
+  }
+  // The heading: sin along x, cos along z.
+  {
+    const s = new SmSandSonic(0, ATP);
+    s.launch(5, 7, Math.PI / 2, 5, 7);
+    s.tick([]);
+    check(Math.abs(s.x - 15) < 1e-9 && Math.abs(s.z - 7) < 1e-9, 'heading π/2 moves along +x');
+  }
+  // One explosion per move: launched at (0, 50) from the pivot (0, 0), move k is d = 50 + 10 k from the pivot, so
+  // the radius is 100 up to move 4 and then d * π / 6. A player just inside each radius is hit, just outside is not.
+  {
+    const s = new SmSandSonic(0, ATP);
+    s.launch(0, 50, 0, 0, 0);
+    let explosions = 0;
+    for (let k = 1; k <= SM_SAND.moves; k++) {
+      const z = 50 + SM_SAND.speed * k;
+      const radius = Math.max((z * Math.PI) / 6, 100);
+      const inside = player(1, 0, z + radius - 0.5);
+      const outside = player(2, 0, z + radius + 0.5);
+      const hits = s.tick([inside, outside]).map((t) => t.clientId).join(',');
+      if (hits === '1') explosions++;
+      eq(hits, '1', `move ${k}: the player inside the radius ${radius.toFixed(3)} is hit, the one outside is not`);
+    }
+    eq(explosions, SM_SAND.moves, 'one explosion per move');
+  }
+  // The boss: made at the clock's crossing of 45 and launched trunc(6 * rng) frames later, from node 0x17 with
+  // the heading from node 4, its damage the base ATP.
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const b = make(true, { seed, atp: ATP, movement: [MV2, MV2] });
+    b.tick([player(1, 5000, 5000)]);
+    b.nodesKnown = true;
+    b.nodes.fill(0);
+    b.nodes[4 * 3 + 2] = 0;
+    b.nodes[0x17 * 3 + 2] = 50;
+    drive(b).setState(10);
+    let created = -1;
+    let launched = -1;
+    let damage = -1;
+    let at: { x: number; z: number } | null = null;
+    for (let i = 0; i < 80 && launched < 0; i++) {
+      const out = b.tick([player(1, 5000, 5000)]);
+      const i45 = b.events.findIndex((e) => e.kind === 'effect' && e.name === 'sandsonic');
+      if (i45 >= 0) {
+        if (created < 0) created = i;
+        b.events.splice(0);
+      }
+      const s = sonics(out.shots ?? [])[0];
+      if (s) {
+        launched = i;
+        damage = s.effect.kind === 'blast' ? s.effect.damage : -1;
+        at = { x: s.x, z: s.z };
+      }
+    }
+    const want = Math.trunc(SM_SAND.wait * new SmRng((seed ^ 0x51d7) >>> 0).float());
+    eq(launched - created, want, `seed ${seed}: launched trunc(6 * rng) = ${want} frames after the crossing`);
+    eq(damage, ATP, `seed ${seed}: the damage is the base ATP`);
+    eq(at?.x ?? NaN, 0, `seed ${seed}: the start is node 0x17 (x)`);
+    eq(at?.z ?? NaN, 50, `seed ${seed}: the start is node 0x17 (z)`);
+  }
+  // d is measured from node 4, not from the launch: at move 20 the sand sonic is 250 from node 4 (200 from its
+  // start), so its radius is 250 * π / 6 (about 130.9): a player 130 away is hit, one 132 away is not.
+  {
+    const b = make(true, { seed: 9, atp: ATP, movement: [MV2, MV2] });
+    b.tick([player(1, 5000, 5000)]);
+    b.nodesKnown = true;
+    b.nodes.fill(0);
+    b.nodes[4 * 3 + 2] = 0;
+    b.nodes[0x17 * 3 + 2] = 50;
+    const sonic = new SmSandSonic(0, ATP);
+    (b as unknown as { sonic: SmSandSonic | null }).sonic = sonic;
+    let last: EnemyShot | null = null;
+    for (let i = 0; i < 2; i++) last = sonics(b.tick([]).shots ?? [])[0] ?? last;
+    eq(last === sonic, true, 'the sand sonic is shot once, on its launch');
+    for (let k = 1; k < SM_SAND.moves; k++) sonic.tick([]);
+    const radius = (250 * Math.PI) / 6;
+    eq(sonic.tick([player(1, 0, 250 + 130), player(2, 0, 250 + 132)]).map((t) => t.clientId).join(','), '1', `move 20 (radius ${radius.toFixed(2)}): 130 in, 132 out`);
+    check(sonic.done, 'removed after the 20th');
   }
 }
 

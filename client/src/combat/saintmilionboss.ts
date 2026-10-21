@@ -52,9 +52,9 @@
 //     (GetGlobalGameState); they end here when their animation has ended
 //     (0x1b waits 60 more frames);
 //   - the objects the attacks make (the missiles of state 0x12, the lasers of
-//     0x13 / 0x14, the storm of 0x17, the sand sonic of
-//     state 10) are not reproduced: they are events only; state 10's sweep
-//     and the body's contact damage are;
+//     0x13 / 0x14) are not reproduced: they are events only; state 10's sweep
+//     and the body's contact damage are; the storm (0x17) and the sand sonic
+//     (state 10) are (see SmStorm and SmSandSonic);
 //   - the order of the players the followers go round and the stream of the
 //     random numbers (SmRng, see saintmilionents.ts).
 
@@ -62,7 +62,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_RADIUS } from './enemyshots.ts';
-import { SM_MISSILE, SmClock, SmField, SmMissile, SmRng, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
+import { SM_MISSILE, SM_SAND, SmClock, SmField, SmMissile, SmRng, SmSandSonic, SmStorm, SmTouch, SmWave, type SmEvent, type SpinnerEntity } from './saintmilionents.ts';
 
 const BAMS = BAMS_TO_RAD;
 const f32 = Math.fround;
@@ -276,6 +276,8 @@ export interface SmBossOptions {
   ground?: (x: number, z: number) => boolean;
   // The boss was already killed in this game (saved enemy status 0x12008).
   dead?: boolean;
+  // The boss's base ATP (the stats row's atp, [boss+0x2c4]): the sand sonic's damage.
+  atp?: number;
   rng?: () => number;
 }
 
@@ -321,6 +323,9 @@ export class SaintMilionAi extends BrainBase {
   private readonly contactAt = new Map<number, number>();
   private readonly mv: [EnemyMovementData, EnemyMovementData];
   private readonly hpRows: readonly [number, number];
+  private readonly atp: number;
+  private storm: SmStorm | null = null;
+  private sonic: SmSandSonic | null = null;
   // Node positions the owner recorded: slot -> x, y, z.
   readonly nodes = new Float32Array(SM_NODES.length * 3);
   nodesKnown = false;
@@ -334,6 +339,7 @@ export class SaintMilionAi extends BrainBase {
     this.heading = Math.round(opts.angle / BAMS) & 0xffff;
     this.mv = [opts.movement[0] ?? MV_FALLBACK, opts.movement[1] ?? opts.movement[0] ?? MV_FALLBACK];
     this.hpRows = opts.hp;
+    this.atp = opts.atp ?? 0;
     this.everLeader = opts.leader();
     this.field = new SmField({
       frames: opts.tentacleFrames,
@@ -415,6 +421,9 @@ export class SaintMilionAi extends BrainBase {
       else if (this.bodyHit) this.hitReaction();
       this.dispatch(this.sid, 0);
     }
+    // The storm and the sand sonic are objects of their own: they run in whatever state the boss is in.
+    if (this.storm) for (const b of this.storm.tick()) this.pendingShots.push(b);
+    this.sandSonicFrame();
     // The parts and the tentacles are enemies of their own.
     this.updateParts();
     this.field.tick();
@@ -644,6 +653,9 @@ export class SaintMilionAi extends BrainBase {
           this.field.state2 |= 0x20;
           this.field.hideAll();
           this.events.push({ kind: 'effect', name: 'storm', state: s });
+          // The storm is centred on the arena's origin (ASSUMED, see SmStorm); iparam4 is its damage.
+          const a = SM_ARENAS[this.arena] ?? SM_ARENAS[0];
+          this.storm = new SmStorm(a.ox, a.oz, this.row.iparam[3]);
         }
         return;
       case 24:
@@ -713,7 +725,11 @@ export class SaintMilionAi extends BrainBase {
   // State 10 (0x0076865c): the swing of the arm.
   private swing(): void {
     const c = this.clock;
-    if (c.crossed(45)) this.events.push({ kind: 'effect', name: 'sandsonic', state: 10 });
+    if (c.crossed(45)) {
+      this.events.push({ kind: 'effect', name: 'sandsonic', state: 10 });
+      // The sand sonic waits trunc(6 * rng) frames (0x009774ac), then launches (sandSonicFrame).
+      this.sonic = new SmSandSonic(Math.trunc(SM_SAND.wait * this.rand.float()), this.atp);
+    }
     if (c.crossed(SM.burstFrame)) {
       const p = this.node(4);
       if (p) this.burst(p[0], p[2], SM.burstRadius);
@@ -766,6 +782,18 @@ export class SaintMilionAi extends BrainBase {
     const angle = best ? Math.atan2(best.x - this.x, best.z - this.z) : this.heading * BAMS;
     const range = best ? Math.max(0, Math.sqrt(bestSq) - SM_MISSILE.arrive) : null;
     for (let i = 0; i < count; i++) this.pendingShots.push(new SmMissile(this.x, this.z, angle, this.row.iparam[2], range));
+  }
+
+  // The sand sonic's launch (0x0076c974) once its wait is over: from node 0x17 toward node 0x17 from node 4.
+  // ASSUMED: without the nodes the launch is from the boss, along its swing angle.
+  private sandSonicFrame(): void {
+    const s = this.sonic;
+    if (!s || s.launched || s.waiting()) return;
+    const start = this.node(0x17);
+    const pivot = this.node(4);
+    if (start && pivot) s.launch(start[0], start[2], Math.atan2(start[0] - pivot[0], start[2] - pivot[2]), pivot[0], pivot[2]);
+    else s.launch(this.x, this.z, this.swingAngle * BAMS, this.x, this.z);
+    this.pendingShots.push(s);
   }
 
   // State 21, phase 0 (0x00769808): one beam on the clock's frame 28. Its type: arenas 3 / 4 -> 2 or 3,
