@@ -7225,3 +7225,46 @@ Not run in Chrome. The check: floor 14, Ultimate, stand within 30 units of (-986
 - `cd client && npx tsc --noEmit`: clean.
 - Chrome (Playwright, Vite on 127.0.0.1:5180, webtest, Create a PARTY): Pioneer 2 area 0, weapon mesh hidden (`visible: false`, key `0:0`); warp to Forest 1 (area 1), weapon visible, key `0:0` (the Saber model, the character's equipped weapon). Screenshots: `client/test-results/held-weapon-pioneer2.png`, `client/test-results/held-weapon-forest1.png`, `client/test-results/held-weapon-forest1-zoom.png` (not committed; the temporary spec was removed).
 - Not run: two clients (a remote player's weapon), a live equip change (the rebuild path), and the 6x25 / 6x26 flow from another player.
+
+## 2026-10-21: Dragon particles: more sites
+
+Follows "Dragon particles from its data tables" (the tables and the 21 sites). Nine of the 21 create_particle_effect sites are wired now (12 are not; see UNCLEAR).
+
+**Correction.** The fireball's trail was read wrong there. At 0x00426797 the flying phase ([+0x38] == 0, 0x00426805) does not reach 0x004267c1: the +0x08 (0x004267cf) is in the arrived phase, at counters [+0x34] 1 and 2. The flight's particle is +0x00 (0x0042690f): a handle made on the first flying frame, moved each frame and stopped at the impact (0x004268c0). The impact is +0x04 (0x0042689d) at counter 1, with the hit. The fire table is now `{f00, f04, f08}` (`DRAGON_FIRE_IDS`).
+
+**Sites** (fn = the function and phase; the state is the port's):
+
+| site | fn (state, phase) | call | id normal / Ultimate | where | frame / gate |
+|---|---|---|---|---|---|
+| 0x00421242 -> 0x0041c793 | land, phase 0 (0x004211c0): states 0x08, 0x0a, 0x0b, 0x0c | 0x50b7a4 +0x04 | 76 / 513 | body | crossed(11) (0x41300000) |
+| 0x004213c4 | land, phase 0, sub 2 ([+0x86c]), counter [+0x870] 4 | 0x50b7a4 +0x08 | 547 / 514 | body, with the stomp | the 4th tick on the ground (0x004213b5) |
+| 0x004226c6 | flyUp, state 0x05 (0x00422430), phase 0 | 0x50b7a4 +0x04 | 76 / 513 | body | crossed(46) (0x42380000) |
+| 0x0041c793 via 0x004201ba | roarAir, state 0x0e (the block at 0x004201a3) | 0x50b7a4 +0x04 | 76 / 513 | body | crossed(14) (0x41600000) |
+| 0x004218eb | flyShoot, after each fireball's ctor (0x004266b0) | 0x50b7a4 +0x1c | 549 / 521 | the mouth (+0x414, ebx) | each fireball of the volley |
+| 0x0042690f | fireball update, flying phase (every flying frame) | 0x0050981c +0x00 | 548 / 522 | the fireball | each flying frame, the arrival frame too |
+| 0x0042689d | fireball, arrived counter 1 (the impact, with the hit) | 0x50b7a4 +0x04 | 550 / 520 | the fireball | the impact tick |
+| 0x004267cf | fireball, arrived counters 1 and 2 | 0x50b7a4 +0x08 | 553 / 201 | the fireball | the impact tick and the next |
+| 0x0041d4f6, 0x0041d5ea | stomp (earlier) | 0x50b7a4 +0x0c | 240 / 148 | the foot | unchanged |
+
+The gates: 0x007aaa30 is read as the port's `crossed(f)` (its frame passed f this tick, the animation slot unchanged); the callers of 0x0041c768 (the gated take-off) are the same helper.
+
+**What changed.** `combat/dragon.ts`: `DRAGON_FIRE_IDS` ({f00, f04, f08}, the `DragonFireIds` type); `DragonFireball` queues its ids per tick (`drainParticles`), the `ids` replace the old `trailId`; the impact's hit is still on the impact tick, the shot is done one tick later (counter 2); `volley` makes the launch flash (`launch`); `tickLand` makes the take-off at frame 11 and the stomp's body particle; `tickFlyUp` makes the lift's particle at frame 46; `roarAir` makes the take-off at frame 14; `emitBody` puts the body particle at (x, alt, z). `render/combat.ts` (`tickShots`): the fireball's queued ids are spawned at the fireball (replaces the one trail spawn). `tests/dragon.test.ts`: the table names, the fireball's per-tick ids (both tables), the fight checks (the stomp filter and the wired ids), and section 27 (each new site: state, frame, id, both difficulties; the launch at the mouth).
+
+**ASSUMED.**
+- The land's body point is (x, alt, z) with alt the height above the ground (0 on the ground); the render adds it to the ground as for the stomp.
+- The flight emitter (0x0050981c) is a handle moved each frame; one one-shot per flying frame stands in for it (the trail was drawn the same way).
+- The launch flash is one per fireball of the volley; the count of the 0x004218eb block's ctors was not traced beyond the three of `volley`.
+- 0x0042008c is the port's roarAir (the 0x004201a3 block is in it; the function was not re-read in full). roarAir is pad-only in the port, so no sequence reaches it.
+- The lift's gate ignores the flag tests of 0x007aaa30 (0xb0 bits 4 and 1), as `crossed` does everywhere.
+
+**UNCLEAR** (12 of the 21, not spawned):
+- The intro (0x0041b220): 0x0041b5b3 and 0x0041b98e (the mouth +0x1c, every 4th frame with [+0x870] & 3 while the motion is at or under frame 99), 0x0041b69a, 0x0041b7ea, 0x0041ba5f (the body +0x08), 0x0041b6a7 (0x203, `missile_fire`, at frame 63 in sub-state 1 of [+0x874]). The port's intro has one phase (c86c 1 or 2, then 4); its sub-states 0x874 and phases 0x86c are not modelled, so the sites have no port state.
+- The flame's mouth 0x00421b2c (0x0050981c, +0x18): gate mframe >= 20 (0x008fbc44), a continuous emitter stored at [+0x8b4]; its end was not traced.
+- The collapse 0x00420b30 and 0x00420d4c (+0x0c): the point is computed in 0x00420a58 / 0x00420c74 from 0x009a3f00 and the angle of 0x0082dcbc / 0x0082ddd8; not traced.
+- The death 0x0041df9a and 0x0041e0b9 (+0x08): the point is esp+0x5c, computed.
+- The emerge / dive helper 0x0041ec5a (flag 0x840, id +0x00): the point is esp, computed.
+- The take-off helper's other callers 0x0041c5b1, 0x0041cc87, 0x0041ff7a, 0x0042197a, 0x004221b0: their functions and phases were not mapped.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok. `node tests/combat.test.ts` (vendor linked): 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. Client `tsc --noEmit` (Node 24): clean.
+
+Not run in Chrome.

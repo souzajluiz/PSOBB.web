@@ -65,10 +65,13 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
    and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /
    emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired). The Dragon's particles: the stomp
-   dust and the fireball trail are in (2026-10-21, "Dragon particles from its data tables"; the map table
-   particleentrya%d.dat is read now). Not spawned there: 17 of its 21 create_particle_effect sites, whose
-   gates or points are UNCLEAR (the intro's 0x203, the flame's mouth, the land, flyUp, the death, the emerge /
-   dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
+   dust, the fireball's flight / impact / puff (its table; the trail was misread and is corrected), the land's
+   take-off and stomp, the lift, the hover roar and the launch flash are in (2026-10-21, "Dragon particles from
+   its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now). Not
+   spawned: 12 of its 21 create_particle_effect sites, whose state or point is UNCLEAR: the intro's six (its
+   sub-states 0x874 / 0x86c are not in the port), the flame's mouth (a continuous emitter, gate mframe >= 20),
+   the collapse's two and the death's two (computed points), the emerge / dive helper (computed); the take-off
+   helper's other callers (0x41c5b1, 0x41cc87, 0x41ff7a, 0x42197a, 0x4221b0). 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
    maps the seven cutscene objects, their mode 5 pushes, records and scene owners; `bossCameraView` returns null, the
    `bossCamera` view source in render/gamefield.ts is not supplied yet. Open: the view update 0x004D68A0 (the path
    tables 0x00A48AE0 and the spring arm 0x00830848), the cutscene objects' bodies, and the Ultimate Rico / ring
