@@ -71,8 +71,8 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz (2026-10-21 camera pass: `combat/darkfalzcamera.ts`
    maps the seven cutscene objects, their mode 5 pushes, records and scene owners; `bossCameraView` returns null, the
    `bossCamera` view source in render/gamefield.ts is not supplied yet. Open: the view update 0x004D68A0 (the path
-   tables 0x00A48AE0 and the spring arm 0x00830848), the cutscene objects' bodies, and the Ultimate scenes).
-   dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz's cutscene objects, camera and the Ultimate Rico / ring scene (flag 0x97). Dark Falz Ultimate beam Darvants are in (2026-10-21, DEVLOG "Dark Falz Ultimate beam Darvants"): their hold (the bob, the look / chase, the 260 range), HP and ATP are still ASSUMED / UNCLEAR there.
+   tables 0x00A48AE0 and the spring arm 0x00830848), the cutscene objects' bodies, and the Ultimate Rico / ring
+   scene (flag 0x97)). Dark Falz Ultimate beam Darvants are in (2026-10-21, DEVLOG "Dark Falz Ultimate beam Darvants"): their hold (the bob, the look / chase, the 260 range), HP and ATP are still ASSUMED / UNCLEAR there.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
    the 0x122 cue; see that DEVLOG entry.
