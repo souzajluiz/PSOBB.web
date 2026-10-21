@@ -29,13 +29,39 @@ export const ITEM_TEXTURE_FILE = 'ItemTexture.afs';
 
 export interface HeldWeapon {
   object: NjcmObject;
+  // Indexed by the model's texture id (its NJTL name index): the XVM texture
+  // of that index, or null when the XVM has no such texture (see `unbound`).
   textures: (THREE.Texture | null)[];
+  // Texture ids the XVM does not fill (the NJTL names past the XVM's count).
+  unbound: number[];
 }
 
 // One weapon from its two archive entries.
+//
+// The exe's texture loader (ItemAssetLoaderStartTextureLoad_005d76b4 ->
+// unknown_create_textures_from_xvm, PsoBB.exe 0x005d7549 for the fill)
+// writes the XVM's texture count (XVMH format1, at +8) over the NJTL count and
+// binds XVRT k to NJTL slot k, stopping at that count. The model's own NJTL
+// fill (unknown_ItemLoad, 0x005d7546) had set every slot to &g_pDefaultTexture
+// (0x00a8d9dc), a BSS object that stays zero: no texture id, no texture object.
+// So a slot past the XVM's count has no texture: the exe draws it untextured
+// (ASSUMED: the zeroed object is never written; its interior has no exact xref).
+// The 14 Tekker / fan weapons are the entries whose NJTL names outnumber their
+// XVM textures (1 XVRT, 2 to 4 names).
 export function decodeHeldWeapon(modelEntry: Uint8Array, textureEntry: Uint8Array): HeldWeapon {
-  const object = parseNinjaChunkFile(prsDecompress(modelEntry)).object;
-  return { object: object!, textures: texturesFromXvm(prsDecompress(textureEntry)) };
+  const chunks = parseNinjaChunkFile(prsDecompress(modelEntry));
+  const xvm = texturesFromXvm(prsDecompress(textureEntry));
+  const names = chunks.textureNames.length;
+  const textures: (THREE.Texture | null)[] = [];
+  const unbound: number[] = [];
+  for (let id = 0; id < Math.max(names, xvm.length); id++) {
+    if (id < xvm.length) textures.push(xvm[id]);
+    else {
+      textures.push(null);
+      unbound.push(id);
+    }
+  }
+  return { object: chunks.object!, textures, unbound };
 }
 
 // The weapon models of the client, loaded once and decoded per (type, skin).
