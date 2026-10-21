@@ -64,6 +64,23 @@ test('boss smoke: Forest 1 and the Dragon entrance spawn particles without error
     expect(peak).toBeGreaterThan(0);
   });
 
+  await test.step('Dark Falz arena: the boss camera', async () => {
+    await page.evaluate(() => (window as any).classicGame.view.warpTo(14));
+    await expect.poll(floor, { timeout: 90_000 }).toBe(14);
+    const cam = () =>
+      peek(page, (w) => {
+        const c = w.classicGame.view.combat;
+        const v = c.bossCameraView?.();
+        const e = [...c.enemies.values()].find((x: any) => x.ai?.constructor?.name === 'DarkFalzAi');
+        return `${e ? e.ai.state : 'no falz'} view=${v ? JSON.stringify(v).slice(0, 160) : 'null'}`;
+      });
+    for (let i = 0; i < 24; i++) {
+      if (i % 3 === 0) console.log(`falz t=${i / 2}s ${await cam()}`);
+      if (i === 4 || i === 14) await page.screenshot({ path: info.outputPath(`falz-${i}.png`) });
+      await page.waitForTimeout(500);
+    }
+  });
+
   console.log(`failed requests: ${failed.length}\n${failed.join('\n')}`);
   console.log(`page errors: ${errors.length}\n${errors.join('\n')}`);
   expect(errors).toEqual([]);

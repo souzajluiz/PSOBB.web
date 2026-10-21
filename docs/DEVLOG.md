@@ -8258,3 +8258,8 @@ arena).
 - The 0x080 channel: the update's write to +0x90 is read from the composition only (the update 0x004D68A0 is ported without it, so the port's update now stores the roll).
 
 **Checks.** `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (new: the composition's hand values (roll 0, 90 degrees, yaw 45); a synthetic REL with hand-computed samples (the holds, the round-half-even bracket, the int truncation, the B = key - A); bo04opcam.rel from data.gsl (7 motions, the frame counts, type 0x1C1, the first eye, the roll and up identity to one BAMS step, DEMO_WARP0's up; skipped when the file is absent). `node tests/darkfalz.test.ts`: `darkfalz tests passed`. Client `npx tsc --noEmit -p .` (Node 24): clean. The name lookup was checked with a scratch script on the real data.gsl (`bo04opcam.rel`, `Bo04OpCam.rel` and a missing name). The parser was run on every camera file in the GSL (all parse; motions 1 to 7). Not run in Chrome.
+- (Same run, Dark Falz step added after the camera pass.) Floor 14 loads and draws (the
+  arena seen from the entrance, the obelisk), Dark Falz goes EDITOR -> WAIT_CASKET and
+  stays there for the 12 s watched; `bossCameraView()` stays null, since no cutscene starts
+  while the player waits at the entrance. The DEMO_WARP0 view is therefore not seen in Chrome
+  yet: it needs the casket trigger (walking to the arena centre), not scripted.
