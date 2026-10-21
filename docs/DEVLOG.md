@@ -6991,3 +6991,54 @@ Not run in Chrome.
 - Playwright (`PW_BASE_URL=http://127.0.0.1:5177`, a worktree Vite; `vendor/` linked for the key file and removed after): `e2e/pioneer2-counter.spec.ts` (new): log in, create a party, enter Pioneer 2, place the player in front of the guild clerk, Enter, the clerk's lines, the menu lists "Retrieval | Extermination | Events | Virtual Reality", Escape closes it and the counter is free. `e2e/party-create.spec.ts` passes with the change. `2 passed (2.0m)`. `e2e/party-join.spec.ts` was not run again.
 - The e2e reads the list through `classicTown.ui.lists`; the overlay's look (above the stage) was not checked by eye. The run logs six 404 resource errors from the page; their URLs were not identified.
 - Not checked by hand in Chrome.
+## 2026-10-21: Dragon particles from its data tables
+
+**Addresses.** The Dragon's code (0x00419000..0x00428000) has 21 calls to create_particle_effect: 19 to 0x0050b7a4 and 2 to 0x0050981c (0x00421b2c, 0x0042690f). The id is the second argument, the flag the third: every site passes 0x40 except 0x0041ec4c, which passes **0x840 as the flag**. Its id is the table's +0x00 (`pushl (%esi)` at 0x0041ec57). So the "0x840 is an id" reading in HANDOFF was wrong, and 0x203 (0x0041b6a1, the intro) is the one immediate id.
+
+**The tables.** The Dragon's struct is `[obj+0x780]`, one of two static tables, set in the spawn (0x004198fc normal = 0x008fbeec, 0x0041991a Ultimate = 0x008fbf0c) by the test 0x00420a44 (0x00520e6c: difficulty 3 with 0x009f9860 set). The fireball's table is `[0xa43800]`, set in 0x0042693c (0x00426945 normal = 0x008fc374, 0x00426955 Ultimate = 0x008fc380) and read by the fireball's ctor and update.
+
+| table | +0x00 | +0x04 | +0x08 | +0x0c | +0x18 | +0x1c |
+|---|---|---|---|---|---|---|
+| normal 0x008fbeec | 65 `hunka` | 76 `drakaze` | 547 (0x223) `dra_shogeki` | 240 `eall_smoke` | 546 (0x222) `dra_tame` | 549 (0x225) `dra_fsonic` |
+| Ultimate 0x008fbf0c | 512 (0x200) `hunka_ice` | 513 (0x201) `drakaze_ice` | 514 (0x202) `dra_shogeki_ice` | 148 `eall_smoke_ice` | 523 (0x20b) `194_kai` | 521 (0x209) `197_kai` |
+
+Fire, normal 0x008fc374: +0x00 548 (0x224) `dra_fireball`, +0x04 550 (0x226) `dra_bakuhatu`, +0x08 553 (0x229) `dra_bakuhatu2`. Ultimate 0x008fc380: 522 (0x20a) `196_kai`, 520 (0x208) `198_kai`, 201 `extra_dark02`. (The +0x10 / +0x14 fields, 544/545 and 525/524, are not read by these sites.)
+
+The names are from `particleentry.dat` (data.gsl) and `particleentrya11.dat` (data.gsl; 9728 bytes, 64 entries; the Dragon's floor is area 0x0b).
+
+**Sites** (fn = the function, by the entry points of the state comments and the call graph):
+
+| site | fn | call | id | where | done |
+|---|---|---|---|---|---|
+| 0x0041d4f6, 0x0041d5ea | stomp 0x0041d410 (frame 24), 0x0041d504 (frame 3) | 0x0050b7a4 | +0x0c | the stomp's point (edi) | spawned |
+| 0x004267cf | fireball update, the state <= 2 branch (every flying frame) | 0x0050b7a4 | fire +0x08 | the fireball | spawned |
+| 0x00420b30, 0x00420d4c | collapse helpers 0x00420a58 / 0x00420c74 | 0x0050b7a4 | +0x0c | a computed point | not spawned |
+| 0x004218eb | flyShoot, after the fireball ctor | 0x0050b7a4 | +0x1c | ebx (UNCLEAR) | not spawned |
+| 0x00421b2c | flyShoot | 0x0050981c | +0x18 | the mouth (+0x414) | not spawned (gate 0x00421b12 UNCLEAR) |
+| 0x0042689d | fireball update, the landing branch 0x0042688f | 0x0050b7a4 | fire +0x04 | the fireball | not spawned (branch UNCLEAR) |
+| 0x0042690f | fireball update, branch 0x00426902 | 0x0050981c | fire +0x00 | the fireball | not spawned (branch UNCLEAR) |
+| 0x004226c6 | flyUp | 0x0050b7a4 | +0x04 | the body (+0x38) | not spawned (gate 0x007aaa30) |
+| 0x0041c793 | helper 0x0041c784, called from 0x0041c77d (in 0x0041c768, which the roar, dive, flyShoot and flyUp code calls) and at 0x0042125c (land), 0x0042162e (flyShoot) | 0x0050b7a4 | +0x04 | the body | not spawned |
+| 0x004213c4 | land (0x00420ee8) | 0x0050b7a4 | +0x08 | the body | not spawned (gate 0x004213b5 UNCLEAR) |
+| 0x0041df9a, 0x0041e0b9 | death 0x0041db28 | 0x0050b7a4 | +0x08 | esp+0x5c (computed) | not spawned |
+| 0x0041ec5a | helper 0x0041ebf0 (emerge 0x0041e9a9, dive 0x0041fa7b) | 0x0050b7a4 flag 0x840 | +0x00 | esp (computed) | not spawned |
+| 0x0041b5b3, 0x0041b98e | intro 0x0041b220, every 4th frame (counter 0x870 & 3) | 0x0050b7a4 | +0x1c / +0x1c | the mouth (+0x414) | not spawned |
+| 0x0041b69a, 0x0041b7ea, 0x0041ba5f | intro | 0x0050b7a4 | +0x08 | the body (+0x38) | not spawned (gates 0x007aaa30) |
+| 0x0041b6a7 | intro | 0x0050b7a4 | **0x203** (`missile_fire`) | the body | not spawned |
+
+**What changed.** The fireball trail and the stomp dust are in. `combat/dragon.ts`: `DRAGON_PARTICLE_IDS` and `DRAGON_FIRE_IDS` (the tables above); `footStrike` emits a `particle` event (the stomp id) at each foot place; `DragonFireball` takes its trail id and has `flying`; `fireball()` passes the table's trail. `render/combat.ts`: the `particle` event is spawned at the body's base plus the brain's y; the fireball trail is spawned in `tickShots` while `flying`; `enterFloor` (and the particle engine's creation) sets the map. `render/hitfx.ts` (`FieldParticles`): `setMap(area)` reads `particleentrya%d.dat` once (lazily, on the first id from 0x200), ids 0x200..0x23f read its entries 0..0x3f, and a new map drops the cached entries. `classic/particles.ts`: `MAP_PARTICLE_FIRST`, `MAP_PARTICLE_COUNT`, `particleMapFile(map)` (`particleentrya0%d` for 0..9, as 0x0050d9a0). `tests/dragon.test.ts`: section 26 (the ids, the map names, the trail's flight, the stomp events with the recorded pair and the fallback foot, the two fights' trail ids and stomp ids).
+
+Side effect: `classic/deathfx.ts` uses 0x205 and 0x206 (`rafoielv5wakka`, `gate_kaminari`) for an enemy's kill. Before, `FieldParticles.entry` dropped every id past 0x1ff, so those never showed; now they spawn on a floor whose map table has them. This is the exe's behaviour (the map table of the current map), not checked in game.
+
+**ASSUMED.**
+- The map number is the floor's area (the Dragon's area 0x0b gives `particleentrya11.dat`); the exe's `get_current_map()` was not traced.
+- The Ultimate test 0x00420a44 is the port's `ultimate` option.
+- The stomp makes one emitter per foot place, on the ground (y 0). The exe's point (edi) is taken to be the foot.
+- The trail's emitter is one-shot (flag 0x40), made at the fireball's position each flying frame.
+- The names are used only for these notes; the code uses the ids.
+
+**UNCLEAR.** The gates of the 17 sites not spawned (the `0x007aaa30` and `0x00421b12` tests, the intro's counter, the land's branch 0x004213b5), the branches of the fireball's impact (0x0042688f, 0x00426902), the computed points of the death, the collapse, the emerge / dive helper (esp, ebx, the vector of 0x00520c70). The map table's 0x0050981c handles are not kept.
+
+**Checks.** `node tests/dragon.test.ts`: dragon: ok. `node tests/combat.test.ts` (vendor linked): 5946 checks, 0 failures. `node tests/enemies.test.ts`: ALL PASS. `node tests/derolle.test.ts`: ALL PASS. Client `tsc --noEmit` (Node 24): clean. The data check (a scratch script, not committed): data.gsl's `particleentrya11.dat` is 9728 bytes, entries 0x200..0x23f as listed.
+
+Not run in Chrome.

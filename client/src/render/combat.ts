@@ -54,7 +54,7 @@ import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, Re
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
-import { DragonAi, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
+import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
@@ -671,6 +671,7 @@ export class CombatView {
     this.hud.windowSpeed = WindowAnim.speedOf(full && full.length >= 0x4f0 ? new DataView(full.buffer, full.byteOffset).getUint32(0x4ec, true) : undefined);
     this.fx ??= new FieldParticles(this.viewer, this.files, this.opts.log);
     this.fx.preload();
+    this.fx.setMap(this.area);
     this.techfx ??= new TechEffects(this.viewer, this.files, this.fx, { playSe: (f) => this.playTechSe(f) }, this.opts.log);
     this.techfx.preload();
     this.techObjects ??= new TechObjects(this.techfx, this.techWorld());
@@ -770,6 +771,7 @@ export class CombatView {
     const token = ++this.enterToken;
     this.floor = floor;
     this.area = area;
+    this.fx?.setMap(area);
     this.enemies.clear();
     this.gibbonGroups.clear();
     this.attack = null;
@@ -2087,6 +2089,10 @@ export class CombatView {
       case 'killed':
         this.dragonKilled(e, ev.x, ev.z);
         return;
+      case 'particle':
+        // The brain's y is above the ground the body stands on (launchShot's base).
+        this.particle({ id: ev.id }, new THREE.Vector3(ev.x, e.instance.root.position.y - e.lift + ev.y, ev.z));
+        return;
     }
   }
 
@@ -3370,6 +3376,8 @@ export class CombatView {
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
       const hits = s.shot.tick(targets);
+      // The Dragon's fireball trail: one emitter each frame it flies (0x004267cf).
+      if (s.shot instanceof DragonFireball && s.shot.flying) void this.fx?.spawn({ id: s.shot.trailId }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
       if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
       if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);

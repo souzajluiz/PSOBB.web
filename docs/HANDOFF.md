@@ -64,8 +64,11 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    its cutscene states (they end with their animation), camera / sounds / particles;
    Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
    and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /
-   emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired; the particles 0x203 and 0x840 of
-   0x0041b6a1 and 0x0041ec4c are not spawned, see the DEVLOG correction); Dark Falz's cutscene objects, camera and Ultimate scenes.
+   emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired). The Dragon's particles: the stomp
+   dust and the fireball trail are in (2026-10-21, "Dragon particles from its data tables"; the map table
+   particleentrya%d.dat is read now). Not spawned there: 17 of its 21 create_particle_effect sites, whose
+   gates or points are UNCLEAR (the intro's 0x203, the flame's mouth, the land, flyUp, the death, the emerge /
+   dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz's cutscene objects, camera and Ultimate scenes.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
    the 0x122 cue; see that DEVLOG entry.

@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
+import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -46,6 +46,10 @@ export class FieldParticles {
   private files: ClientFiles;
   private log: (msg: string) => void;
   private dat: Uint8Array | null = null;
+  // The current map's particleentrya%d.dat (ids 0x200..0x23f), see setMap.
+  private mapFile: string | null = null;
+  private map: Uint8Array | null = null;
+  private mapLoaded: Promise<void> | null = null;
   private entries = new Map<number, ParticleEntry | null>();
   private bitmaps: ImageBitmap[] = [];
   private textures = new Map<number, THREE.Texture>();
@@ -91,11 +95,45 @@ export class FieldParticles {
     this.models.preload();
   }
 
+  /**
+   * The floor's map (its area number): ids 0x200..0x23f read that map's
+   * particleentrya%d.dat (the exe's current map). A new map drops the entries
+   * made from the old one.
+   */
+  setMap(map: number): void {
+    const file = particleMapFile(map);
+    if (file === this.mapFile) return;
+    this.mapFile = file;
+    this.map = null;
+    this.mapLoaded = null;
+    this.entries.clear();
+  }
+
+  private loadMap(): Promise<void> {
+    this.mapLoaded ??= (async () => {
+      if (!this.mapFile) return;
+      try {
+        this.map = await this.files.read(this.mapFile);
+      } catch (err) {
+        this.log(`hit effects: ${this.mapFile} unavailable (${(err as Error).message})`);
+      }
+    })();
+    return this.mapLoaded;
+  }
+
   private entry(id: number): ParticleEntry | null {
     if (this.entries.has(id)) return this.entries.get(id) ?? null;
-    const ok = this.dat && (id + 1) * 0x98 <= this.dat.length;
-    const e = ok ? parseParticleEntry(this.dat!, id) : null;
-    this.entries.set(id, e);
+    let e: ParticleEntry | null = null;
+    if (id < MAP_PARTICLE_FIRST) {
+      const ok = this.dat && (id + 1) * 0x98 <= this.dat.length;
+      e = ok ? parseParticleEntry(this.dat!, id) : null;
+    } else if (id < MAP_PARTICLE_FIRST + MAP_PARTICLE_COUNT) {
+      const i = id - MAP_PARTICLE_FIRST;
+      const ok = this.map && (i + 1) * 0x98 <= this.map.length;
+      e = ok ? parseParticleEntry(this.map!, i) : null;
+    }
+    // A map entry is not cached before the map is read (spawn waits for it).
+    if (id < MAP_PARTICLE_FIRST || this.map) this.entries.set(id, e);
     return e;
   }
 
@@ -123,6 +161,7 @@ export class FieldParticles {
   async spawn(p: ParticleSpawn, at: Anchor, follow = false, track = false, alive: (() => boolean) | null = null): Promise<void> {
     await this.load();
     if (this.disposed || this.bursts.length >= MAX_BURSTS) return;
+    if (p.id >= MAP_PARTICLE_FIRST) await this.loadMap();
     const e = this.entry(p.id);
     const pos = typeof at === 'function' ? at() : at;
     if (!e || !pos) return;

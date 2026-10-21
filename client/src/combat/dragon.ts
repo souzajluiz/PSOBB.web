@@ -229,6 +229,30 @@ export function footNodes(side: number): readonly number[] {
 // spiral and rain ones, not wired here).
 export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f } as const;
 
+// The Dragon's particle ids (create_particle_effect 0x0050b7a4 / 0x0050981c: the
+// second argument is the id, the third the flag; the 0x840 of 0x0041ec4c is the
+// flag, its id is the table's +0x00). Two tables: normal at 0x008fbeec,
+// Ultimate at 0x008fbf0c; 0x004198fc / 0x0041991a pick by 0x00420a44 (the
+// Ultimate test). Field names are the offsets the sites read: +0x00 the
+// emerge / dive helper (0x0041ebf0), +0x04 the take-off helper (0x0041c784),
+// +0x08 the body (intro, landing, death), +0x0c the stomps (0x0041d410 /
+// 0x0041d504) and the collapse dust, +0x18 the flame's mouth point (flyShoot),
+// +0x1c the fireball launch (0x004218eb) and the intro. Ids 0x200..0x23f are
+// entries of the map's particleentrya%d.dat (classic/particles.ts).
+export const DRAGON_PARTICLE_IDS = {
+  normal: { f00: 65, f04: 76, body: 547, stomp: 240, mouth: 546, launch: 549 },
+  ultimate: { f00: 512, f04: 513, body: 514, stomp: 148, mouth: 523, launch: 521 },
+} as const;
+
+// The fireball's table (normal 0x008fc374, Ultimate 0x008fc380; chosen by
+// 0x0042693c). The trail is +0x08: create_particle_effect_3 (flag 0x40) at the
+// fireball each frame it flies (0x004267c1, the state <= 2 branch). +0x00 and
+// +0x04 are not wired: their branches (0x00426902, 0x0042688f) are UNCLEAR.
+export const DRAGON_FIRE_IDS = {
+  normal: { f00: 548, f04: 550, trail: 553 },
+  ultimate: { f00: 522, f04: 520, trail: 201 },
+} as const;
+
 // ASSUMED: what the exe reads from variables this port does not reproduce, and
 // the mouth / feet places when the model has no such node (the head +0x418).
 export const DRAGON_GUESS = {
@@ -456,10 +480,12 @@ export class DragonFlame extends DragonShot {
 // The fireball (ctor 0x004266b0, update 0x00426790): 25 a frame along the line
 // from the mouth to the aim point, then one area hit of radius 30 (tech, power
 // MovementData fparam2; UpdateItemDisplayTransform_00425004) on the first
-// frame after it arrived.
+// frame after it arrived. Its trail (the particle id of its table, see
+// DRAGON_FIRE_IDS) is made each flying frame by the renderer (flying).
 export class DragonFireball extends DragonShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff9030, size: 4 };
+  readonly trailId: number;
   private ox: number;
   private oy: number;
   private oz: number;
@@ -469,8 +495,9 @@ export class DragonFireball extends DragonShot {
   private length: number;
   private travelled = 0;
   private arrived = false;
-  constructor(from: readonly [number, number, number], to: readonly [number, number, number], power: number) {
+  constructor(from: readonly [number, number, number], to: readonly [number, number, number], power: number, trailId: number) {
     super(from[0], from[1], from[2]);
+    this.trailId = trailId;
     this.ox = from[0];
     this.oy = from[1];
     this.oz = from[2];
@@ -483,6 +510,10 @@ export class DragonFireball extends DragonShot {
     this.dz = z / len;
     this.length = len;
     this.effect = { kind: 'tech', power };
+  }
+  // In the air: the trail is made this frame (the update's state <= 2 branch).
+  get flying(): boolean {
+    return !this.arrived && !this.done;
   }
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
@@ -508,7 +539,9 @@ export type DragonEvent =
   | { kind: 'se'; id: number }
   | { kind: 'bgm'; name: string }
   // State 0x15's phase 5: EnemyOnKilledHandler_0051f894 (every client runs it).
-  | { kind: 'killed'; x: number; z: number };
+  | { kind: 'killed'; x: number; z: number }
+  // create_particle_effect at a world point (the brain's x / z, y above the ground).
+  | { kind: 'particle'; id: number; x: number; y: number; z: number };
 
 export interface DragonOptions {
   x: number;
@@ -1662,9 +1695,15 @@ export class DragonAi extends BrainBase {
   }
 
   // The stomp's attack objects: one per node of the pair, radius 15, AttackData
-  // row 0 (0x0041d410 / 0x0041d504 call 0x0051fdf8 for each node).
+  // row 0 (0x0041d410 / 0x0041d504 call 0x0051fdf8 for each node). Each foot
+  // also makes the stomp's particle (0x0041d4f6 / 0x0041d5ea, +0x0c). ASSUMED:
+  // one emitter per foot, on the ground.
   private footStrike(side: number): void {
-    for (const [px, pz] of this.footPlaces(side)) this.strike(px, pz, DRAGON.stompRadius, 0);
+    const ids = this.ultimate ? DRAGON_PARTICLE_IDS.ultimate : DRAGON_PARTICLE_IDS.normal;
+    for (const [px, pz] of this.footPlaces(side)) {
+      this.strike(px, pz, DRAGON.stompRadius, 0);
+      this.emit({ kind: 'particle', id: ids.stomp, x: px, y: 0, z: pz });
+    }
   }
 
   // 0x00422a08 phase 0: turn to the target (0xa0 a frame) while the breath
@@ -1924,7 +1963,8 @@ export class DragonAi extends BrainBase {
 
   // A fireball: its constructor plays SE 0x31f at its own place (0x00426766).
   private fireball(from: readonly [number, number, number], to: readonly [number, number, number], power: number): void {
-    this.pendingShots.push(new DragonFireball(from, to, power));
+    const trail = this.ultimate ? DRAGON_FIRE_IDS.ultimate.trail : DRAGON_FIRE_IDS.normal.trail;
+    this.pendingShots.push(new DragonFireball(from, to, power, trail));
     this.emit({ kind: 'se', id: DRAGON_SE.fireball });
   }
 
