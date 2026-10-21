@@ -34,8 +34,29 @@
 // file (find_effect_nt_index over effect_nt_texture_ids, which
 // load_effect_nt_data fills from the xvm in order).
 
+// Type 1 entries (particle_type = +0x10 = 1; the spawn code picks
+// ParticleEffectInstanceFactory_00510534 -> ParticleEffectInstance_Constructor_005105bc
+// for it; update ParticleEffectInstance_Update_0050f3fc): a particle that circles its
+// spawn point. VERIFIED in the reference dump and the exe: the angle (BAMS)
+// starts at round(rand * 65536) and grows by round(omega * 65536 / 360) per
+// frame (constants 65536, 360 at 0x00920470 / 0x009204ac / 0x009204a8), omega
+// = +0x30 + rand * +0x74; the radius = +0x60 + rand * +0x64; the rise per frame
+// = +0x34 + rand * +0x68 (added to the height each update); the position is
+// centre + (r cos, rise * n, r sin). ASSUMED: the colour slopes +0x50 / +0x38 /
+// +0x3c with bases +0x7c / +0x80 / +0x84 (one branch of the update, taken when
+// effect_nt flag 1 is clear and instance flag 0x100 is clear); the emitter
+// rotation (the renderer's three angles, pRendererData[0..2]) is not applied.
+export interface RingParams {
+  omega: [number, number]; // degrees per frame: +0x30 + rand * +0x74
+  radius: [number, number]; // +0x60 + rand * +0x64
+  rise: [number, number]; // y per frame: +0x34 + rand * +0x68
+  colorSlope: [number, number, number]; // +0x50, +0x38, +0x3c
+}
+
 export interface ParticleEntry {
   id: number;
+  kind: number; // +0x10: 0 = free flying, 1 = ring
+  ring: RingParams;
   name: string;
   gbix: number;
   variation: [number, number, number];
@@ -75,6 +96,13 @@ export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
   for (let i = 0; i < 16 && dat[o + i]; i++) name += String.fromCharCode(dat[o + i]);
   return {
     id,
+    kind: dv.getInt32(0x10, true),
+    ring: {
+      omega: [f(0x30), f(0x74)],
+      radius: [f(0x60), f(0x64)],
+      rise: [f(0x34), f(0x68)],
+      colorSlope: [f(0x50), f(0x38), f(0x3c)],
+    },
     name,
     gbix: dv.getUint32(0x14, true),
     variation: [f(0x18), f(0x1c), f(0x20)],
@@ -116,6 +144,9 @@ export interface Particle {
   angle: number;
   /** field47_0x6c = rand - 0.5: the spin goes one way when it is below 0, the other when not. */
   spinSign: number;
+  // A type 1 particle: its centre, angle (BAMS), angular step (BAMS), radius,
+  // rise per frame and the height gained so far.
+  ring?: { c: [number, number, number]; ang: number; omega: number; r: number; rise: number; dy: number };
 }
 
 export const NT_SIZE = 16; // effect_nt metadata width (see title.ts)
@@ -204,6 +235,21 @@ export class ParticleSystem {
     ];
     const size = r() * d.size[1] + d.size[0];
     const dt = 1 / Math.max(1, Math.round(r() * d.life[1] + d.life[0]));
+    if (d.kind === 1) {
+      // 0x00510238: the centre is the emitter position plus the variation.
+      const c: [number, number, number] = p;
+      const ring = {
+        c,
+        ang: Math.round(r() * 0x10000),
+        omega: 0,
+        r: r() * d.ring.radius[1] + d.ring.radius[0],
+        rise: 0,
+        dy: 0,
+      };
+      ring.omega = Math.round(((r() * d.ring.omega[1] + d.ring.omega[0]) * 0x10000) / 360);
+      ring.rise = r() * d.ring.rise[1] + d.ring.rise[0];
+      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, ring };
+    }
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
     const a = r() * Math.PI * 2;
@@ -217,6 +263,18 @@ export class ParticleSystem {
 
   private update(q: Particle): void {
     const d = q.e.entry;
+    const ring = q.ring;
+    if (ring) {
+      ring.ang = (ring.ang + ring.omega) & 0xffff;
+      ring.dy += ring.rise;
+      const a = (ring.ang / 0x10000) * Math.PI * 2;
+      const next: [number, number, number] = [ring.c[0] + ring.r * Math.cos(a), ring.c[1] + ring.dy, ring.c[2] + ring.r * Math.sin(a)];
+      q.step = [next[0] - q.p[0], next[1] - q.p[1], next[2] - q.p[2]];
+      q.p = next;
+      q.size *= d.size[2];
+      q.age += q.dt;
+      return;
+    }
     q.v = [q.v[0] * d.damping, q.v[1] + d.gravity, q.v[2] * d.damping];
     q.size *= d.size[2];
     // Emitter rotation about X: y' = y cos - z sin, z' = y sin + z cos.
@@ -290,8 +348,9 @@ export function particleShade(q: Particle): { fade: number; rgb: [number, number
   const t = Math.min(q.age, 1);
   const fade = Math.min(t < d.fade[0] ? t / d.fade[0] : 1, 1 - t < d.fade[1] ? (1 - t) / d.fade[1] : 1);
   const tint = q.e.tint;
+  const slope = q.ring ? d.ring.colorSlope : d.colorSlope;
   const rgb = [0, 1, 2].map((i) => {
-    const v = Math.max(0, Math.min(1, t * d.colorSlope[i] + d.colorBase[i]));
+    const v = Math.max(0, Math.min(1, t * slope[i]! + d.colorBase[i]!));
     return tint ? v * (((tint >>> (16 - 8 * i)) & 0xff) / 255) : v;
   }) as [number, number, number];
   return { fade, rgb };

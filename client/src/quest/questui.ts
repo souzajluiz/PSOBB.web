@@ -42,6 +42,7 @@
 
 import * as THREE from 'three';
 import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
+import { activeColorEscape, stripTextCodes } from '../classic/textcodes.ts';
 import { drawGameText, gameTextWidth, GAME_TEXT } from '../classic/gametext.ts';
 import { QUEST_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
@@ -58,10 +59,16 @@ const ITEM_STEP = 20;
 const GAP = 6;
 const BORDER = 20;
 
-// Color escapes the text renderer understands (\tC0..\tC9, \tCG..): drawn in
-// white here; the palette is not recovered.
+// Language markers (\tE, \tJ) have no glyph; the \tC<c> colour escapes stay in
+// the string: classic/gametext.ts draws them in the game's palette
+// (classic/textcodes.ts).
+export function questText(s: string): string {
+  return s.replace(/\t[EJ]/g, '').replace(/<color \d+>/gi, '');
+}
+
+// The same text for the places that only compare or print it.
 export function plainText(s: string): string {
-  return s.replace(/\t[CEJ][0-9A-Za-z]?/g, '').replace(/<color \d+>/gi, '');
+  return stripTextCodes(questText(s));
 }
 
 interface Balloon {
@@ -158,7 +165,7 @@ export class QuestUi {
       this.balloons.push(b);
     }
     b.waiting = waiting;
-    b.bubble.say(plainText(text), Number.POSITIVE_INFINITY);
+    b.bubble.say(questText(text), Number.POSITIVE_INFINITY);
     // Stays until message_end (the script decides, not the timer).
     b.bubble.life = Number.POSITIVE_INFINITY;
   }
@@ -175,7 +182,7 @@ export class QuestUi {
   // --- window ------------------------------------------------------------------
 
   showWindow(text: string, waiting = true, rect = QUEST_WINDOW): void {
-    this.window = { text: plainText(text), waiting, rect };
+    this.window = { text: questText(text), waiting, rect };
   }
 
   closeWindow(): void {
@@ -186,7 +193,15 @@ export class QuestUi {
 
   // disp_msg_qb (a new text) / add_msg (one more line); both wait for Enter.
   showBoard(text: string, append = false): void {
-    const lines = plainText(text).split('\n');
+    // A colour stays on after a newline (the escape is read once per string).
+    let active = '';
+    const lines = questText(text)
+      .split('\n')
+      .map((l) => {
+        const line = active + l;
+        active = activeColorEscape(line);
+        return line;
+      });
     this.board = append && this.board ? [...this.board, ...lines] : lines;
     this.boardWait = true;
   }
@@ -200,7 +215,7 @@ export class QuestUi {
   // A window at a fixed spot (GUI position in the 640x480 space), shown until
   // it is cleared with null. Not interactive.
   setHud(id: string, win: { x: number; y: number; lines: string[] } | null): void {
-    if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(plainText) });
+    if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(questText) });
     else this.huds.delete(id);
   }
 
@@ -210,11 +225,11 @@ export class QuestUi {
   list(items: string[], opts: { x?: number; y?: number; title?: string; cancellable?: boolean; cursor?: number } = {}): Promise<number | null> {
     return new Promise((resolve) => {
       this.lists.push({
-        items: items.map(plainText),
+        items: items.map(questText),
         cursor: Math.min(Math.max(0, opts.cursor ?? 0), Math.max(0, items.length - 1)),
         x: opts.x ?? QUEST_LIST_POS[0],
         y: opts.y ?? QUEST_LIST_POS[1],
-        title: opts.title === undefined ? undefined : plainText(opts.title),
+        title: opts.title === undefined ? undefined : questText(opts.title),
         resolve,
         cancellable: opts.cancellable ?? true,
       });

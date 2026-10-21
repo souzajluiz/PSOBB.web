@@ -235,3 +235,13 @@ export function setSePlayer(p: SePlayer | null): void {
 export function se(id: number, opts?: SePlayOptions): void {
   shared?.play(id, opts);
 }
+
+/** A voice of this SE id plays on the shared player. */
+export function sePlaying(id: number): boolean {
+  return shared?.playing(id) ?? false;
+}
+
+/** Stops the voices of an SE id on the shared player. */
+export function seStop(id: number): void {
+  shared?.stop(id);
+}
