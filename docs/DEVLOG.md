@@ -6406,3 +6406,24 @@ So a Gee made by the factory cannot enter 6 or 10, whatever the set file says: t
 **ASSUMED:** (a) "Nothing the Gee runs writes enemy+0x3cc / 0x3d0" is checked over the functions the Gee calls and the whole `.text` store list by pattern, not by dataflow through the owner: the owner (`render/combat.ts`) and the packet code could in principle write the object's memory in another way, not checked; (b) a generic owner path that calls the Gee's setter with 6 or 10 is not visible from the Gee range (the owner calls the Gee through its vtable, as in the port); (c) the spawn's state 1 / 2 choice by 0x2000000 is taken from the port's reading (0x0055fa94), not from the set file. UNCLEAR: the exact states 6 / 10 frame details (the sub-state numbers 0..3 and the hover constants), which are not ported and so not tested.
 
 **Left:** the states 6 / 10 themselves (if a later pass finds a writer of enemy+0x3cc or a clear of 0x00100000 for a Gee, port them from 0x0055ebb8 / 0x0055d8d4 with these notes as the start). Not run in Chrome.
+
+## 2026-10-21: Saint-Milion missiles, flight and explosion (not ported)
+
+**Outcome: still not ported.** The flight is steered by the model's motion system, the explosion goes through a world object's vtable, and the damage rule was not reached, so per the brief nothing was added to `combat/saintmilionboss.ts`. `docs/HANDOFF.md` item 4 still lists the missiles as events only.
+
+**The explosion (0x007667e4 -> 0x0076a724).** The missile's end path at 0x007667e4 is:
+```
+7667e4: push 0x0 / add ecx, 0x38 / push 0x41f00000 / push ecx / mov ecx, [0xa9b07c] / push 0x3 / call 0x76a724
+```
+So `0x76a724(type = 3, pos = this+0x38, radius = 30.0, flag = 0)`, thiscall on the global at 0x00a9b07c (a manager; set to 0 at 0x007675fa in the owner's clean-up).
+- `0x76a724` calls `0x768990(type, out1, out2)` on the manager (`cmp eax, 9 / ja / jmp [4*eax + 0x9768c4]`). Type 3 goes to 0x00768a00: `mov eax, [ecx+0x3d0] / fild [eax+0x20] / mov eax, 0x40400000 (3.0)`, so the per-type value is the int at `[manager+0x3d0] + 0x20` times 3.0, written as `{0, float}` / `{1, int}` into the out pointers (0x00768a50 .. 0x00768a7a). The meaning of `[manager+0x3d0]` and of its +0x1c..+0x28 fields is **UNCLEAR**.
+- Then, for type 0 the code calls `0x0051fdf8`, for any other type `0x0051fc9c`, both with `(pos, out, flag)`. Both compare a float constant (0x009216cc / 0x009216d4) with `[pos+8]` and call a vtable slot (+0x30 / +0x34, or +0x3c in 0x51fdf8) of the global world object at 0x00a72eb4. That object is written at 0x005219b4 (`mov [0xa72eb4], eax`), and its class and vtable were not identified. 0x0051fd44 then writes the record `[obj+0xa4]` with `+0x18 = 0x9d03`.
+- **UNCLEAR:** who the vtable call damages, the hit shape (the radius 30.0 is passed on, not tested here), the attack's power / knockback, and whether the player is in range. The damage rule is therefore not ported.
+
+**The flight (0x00766650 .. 0x00766700, inside the update 0x007663d4).** The missile's position is copied from `[edi+0x48]` / `[edi+0x4c]` into `[ebx+0x60]` / `[ebx+0x64]`, then read and written through the model's node calls (0x007b999c, 0x007b5218, 0x007b4c58). A float test against 0x00976190 (**20.0**) compares two values from the node position; when it passes, `call 0x007b52ec` with `push 0; push 4` sets motion state 4 on `[edi+0x70]` (the end of flight, which leads to the explosion once the 0x80000 flag of 0x007b5290 is set).
+- So the path is driven by the model (keyframes or a node path, read by the engine's motion code), not by a vector the port can integrate. **ASSUMED** if ported: a straight line along the launch vector (5.0 per frame, 0x00976174), ended at 240 frames or when the model reaches the 20.0 test.
+- **UNCLEAR:** homing. No steering was seen in 0x007663d4 or 0x00766650 .. 0x00766700; the player-choice calls 0x00768964 / 0x00780d3c and the test 0x0077fffc (its frame at 0x00780000 uses the globals 0x00a9bc84 and 0x00a9b500, not read to the end) were not decoded.
+
+**Changes:** this entry only. No code, tests, shots or HANDOFF change.
+
+**Checks:** `/usr/bin/objdump -d -M intel` over 0x0076a724 .. 0x0076a8c0, 0x007667d4 .. 0x00766800, 0x00768990 .. 0x00768a7a, 0x0051fc9c .. 0x0051fd44, 0x0051fdf8 .. 0x0051fe40, 0x00766650 .. 0x00766700 and 0x0077fffc .. 0x00780020; `tools/exedata.py read 0x009768c4 u 10` (the type jump table); `tools/exedata.py xref` on 0x00a72eb4 and 0x00a9b07c. No test or typecheck was run (docs only). Not run in Chrome.
