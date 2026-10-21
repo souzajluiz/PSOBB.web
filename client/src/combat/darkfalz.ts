@@ -82,12 +82,25 @@ export const DARVANT = {
   spitSpeed: 1.2,
   spitReach: 8,
   spitLife: 600,
+  // The beam's Darvants (Ultimate only, 0x00458E44 / 0x00460D34): three per living
+  // player about the body, at radius 12.5 (0x00A45788): (0, -1), (-0.86, 0.5) and
+  // (0.86, 0.5) times the radius (constants 0x009001E0..E8). Their state 0 rises
+  // 10/9 a frame (0x00460B84, the constant 0x0A459EC) to the top 6, then they hold.
+  // ASSUMED: the hold's bob and the chase / look of 0x00460C10 are not ported (the
+  // exe's 0x0082EBAC and 0x0083173C are not read), so they hover and keep the aura.
+  beamRadius: 12.5,
+  beamOffsets: [
+    [0, -1],
+    [-0.86, 0.5],
+    [0.86, 0.5],
+  ] as readonly (readonly [number, number])[],
+  beamRise: 10 / 9,
 } as const;
 
 // One Darvant.
 export class Darvant extends DfEntity {
   st: number = DARVANT.rise;
-  kind: 'ring' | 'spit' = 'ring';
+  kind: 'ring' | 'spit' | 'beam' = 'ring';
   vx = 0;
   vz = 0;
   homeX = 0;
@@ -257,10 +270,11 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     return this.allocId();
   }
 
-  private newDarvant(kind: 'ring' | 'spit', x: number, y: number, z: number): Darvant | null {
+  private newDarvant(kind: 'ring' | 'spit' | 'beam', x: number, y: number, z: number): Darvant | null {
     const id = this.allocId();
     if (id < 0) return null;
-    const row = kind === 'ring' ? this.rows.darvant : this.rows.darvantFalz;
+    // The beam's ones share the ring's init (0x0045FBD4), so the ring's row (ASSUMED for their HP).
+    const row = kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
     const d = new Darvant(id, row.hp);
     d.kind = kind;
     d.x = x;
@@ -268,7 +282,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     d.z = z;
     d.homeX = x;
     d.homeZ = z;
-    d.speed = kind === 'ring' ? row.f1 || 0.4 : row.f1 || 0.5;
+    d.speed = kind === 'spit' ? row.f1 || 0.5 : row.f1 || 0.4;
     d.timer = 0;
     d.born = this.made;
     this.made++;
@@ -276,6 +290,17 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     this.byId.set(id, d);
     this.events.push({ kind: 'darvant', entity: id });
     return d;
+  }
+
+  // Form 2's beam ends (Ultimate only, 0x00458E44, the branch on difficulty 3 before
+  // the stop state): three Darvants per living player about the body (the form's
+  // position at the end of the beam). An id that is used up skips one (0x0044CFC0).
+  spawnBeamDarvants(x: number, y: number, z: number): void {
+    for (let p = 0; p < this.aliveCount; p++) {
+      for (const [ox, oz] of DARVANT.beamOffsets) {
+        this.newDarvant('beam', x + ox * DARVANT.beamRadius, y, z + oz * DARVANT.beamRadius);
+      }
+    }
   }
 
   // The spat Darvant of form 1's HAKILOOP (ASSUMED flight).
@@ -601,24 +626,27 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   private tickDarvants(): void {
     const keepZako = this.scene === SCENE.zako;
     const keepSpit = this.scene === SCENE.type1;
+    // The beam's ones live while the scene is TYPE2 (0x00460938: scene 8, else they die).
+    const keepBeam = this.scene === SCENE.type2;
     for (let i = 0; i < this.darvants.length; i++) {
       const d = this.darvants[i];
       if (d.gone) continue;
       if (d.st !== DARVANT.dead) {
         if (d.hp <= 0) this.killDarvant(d);
-        else if (d.kind === 'ring' ? !keepZako : !keepSpit) this.killDarvant(d);
+        else if (d.kind === 'ring' ? !keepZako : d.kind === 'spit' ? !keepSpit : !keepBeam) this.killDarvant(d);
       }
       this.stepDarvant(d);
     }
   }
 
   private stepDarvant(d: Darvant): void {
-    const row = d.kind === 'ring' ? this.rows.darvant : this.rows.darvantFalz;
+    const row = d.kind === 'spit' ? this.rows.darvantFalz : this.rows.darvant;
     d.clock++;
     switch (d.st) {
       case DARVANT.rise:
-        // State 0 (0x0045F628): up a third of a unit a frame.
-        d.y += DARVANT.riseStep;
+        // State 0 (0x0045F628): up a third of a unit a frame; the beam's ones
+        // (0x00460B84) up 10/9 a frame to the top.
+        d.y += d.kind === 'beam' ? DARVANT.beamRise : DARVANT.riseStep;
         if (d.y >= DARVANT.top) {
           d.y = DARVANT.top;
           d.st = DARVANT.hover;
@@ -627,6 +655,8 @@ export class DarkFalzAi extends BrainBase implements DfFight {
         return;
       case DARVANT.hover: {
         // State 1 (0x0045F6B4): drift home; every 60 frames look for a player.
+        // The beam's ones hold where they stand (ASSUMED, see DARVANT).
+        if (d.kind === 'beam') break;
         this.drift(d, d.homeX, d.homeZ, 0.5);
         if (--d.timer < 0) {
           let best = -1;
@@ -681,7 +711,7 @@ export class DarkFalzAi extends BrainBase implements DfFight {
     // nearest player within 8 takes the ATP.
     if (d.st !== DARVANT.rise && (d.clock & (DARVANT.auraEvery - 1)) === 0) {
       let best = -1;
-      let bd: number = d.kind === 'ring' ? DARVANT.auraReach : DARVANT.spitReach;
+      let bd: number = d.kind === 'spit' ? DARVANT.spitReach : DARVANT.auraReach;
       for (let i = 0; i < this.aliveCount; i++) {
         const p = this.aliveList[i];
         const dist = Math.hypot(p.x - d.x, p.z - d.z);

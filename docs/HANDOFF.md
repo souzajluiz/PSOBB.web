@@ -68,7 +68,7 @@ below is committed and pushed to `main`; nothing is half-done in the tree.
    dust and the fireball trail are in (2026-10-21, "Dragon particles from its data tables"; the map table
    particleentrya%d.dat is read now). Not spawned there: 17 of its 21 create_particle_effect sites, whose
    gates or points are UNCLEAR (the intro's 0x203, the flame's mouth, the land, flyUp, the death, the emerge /
-   dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz's cutscene objects, camera and Ultimate scenes.
+   dive helper); 0x840 at 0x0041ec4c is a flag, not an id. Dark Falz's cutscene objects, camera and the Ultimate Rico / ring scene (flag 0x97). Dark Falz Ultimate beam Darvants are in (2026-10-21, DEVLOG "Dark Falz Ultimate beam Darvants"): their hold (the bob, the look / chase, the 260 range), HP and ATP are still ASSUMED / UNCLEAR there.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
    the 0x122 cue; see that DEVLOG entry.
