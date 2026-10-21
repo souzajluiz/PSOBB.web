@@ -8,7 +8,7 @@ import { build6x80, build6x83, trapNumber as battleTrapNumber } from '../client/
 import { STATUS } from '../client/src/combat/status.ts';
 import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
-  parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest,
+  parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
   type PlaceContext, type TrapTarget,
 } from '../client/src/quest/battletraps.ts';
 
@@ -214,6 +214,32 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   eq(pickRespawn(pts, 16384)?.x, 2, 'raw half: 5 * 0.5 * 0.99 = 2.475 rounds to 2');
   eq(pickRespawn(pts.slice(0, 2), 32767)?.x ?? null, null, 'two candidates, high roll: 2 * 0.99 rounds to 2, past the list');
   eq(pickRespawn([], 100), null, 'no candidates');
+}
+
+{
+  // The palette slot that places a trap: group 2 0x0d..0x10 -> type 0..3 (HandlePaletteInput
+  // jump table 0x0093c5c0, entries 0x0d..0x10 push 0..3 then call 0x006959c0).
+  eq([0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11].map(trapPaletteType), [null, 0, 1, 2, 3, null], 'palette group 2 to trap type');
+}
+
+{
+  // The client's placement body (the payload after the 4-byte header, as sendSubcommand writes it)
+  // and the receiver's parse: the sender's count is the one before the decrement.
+  const counters = new TrapCounters();
+  counters.setFromRules([0, 2, 0, 0]);
+  const req = placeRequest(counters, 1, true);
+  eq(req && req.count, 2, 'palette press sends the stock before the decrement');
+  const body = build6x83(5, 1, 2);
+  const payload = body.subarray(4);
+  eq([...payload], [1, 0, 2, 0], 'payload: type 1, count 2 (little-endian i16)');
+  const parsed = parse6x83(build6x83(5, 1, 2));
+  eq(parsed && [parsed.clientId, parsed.type, parsed.count], [5, 1, 2], 'receiver parses the 6x83 sender and fields');
+  const cleared = new TrapCounters();
+  cleared.setFromRules([0, 0, 0, 0]);
+  eq(placeRequest(cleared, 0, true), null, 'no stock: no placement request');
+  const field = new TrapField();
+  eq(field.place({ clientId: 1, type: 0, count: 0x15 }, ctx(), new TrapCounters()), null, 'a count of 0x15 is refused (safe_create)');
+  check(field.place({ clientId: 1, type: 0, count: 0x14 }, ctx(), new TrapCounters()) !== null, 'a count of 0x14 is placed');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

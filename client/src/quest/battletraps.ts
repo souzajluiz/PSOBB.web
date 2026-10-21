@@ -14,8 +14,17 @@
 // (0x00698954). The 8-byte subcommand is:
 //   [0] 0x83 subcommand id, [1] 2 (size in words), [2..3] client id,
 //   [4..5] trap type (i16), [6..7] count (i16).
-// ASSUMED: the palette-side conditions (player not remote, not lobby / boss map,
-// count > 0 before sending) are from the earlier trace and were not re-checked.
+// VERIFIED (2026-10-21, exe bytes): the palette slot is group 1 = 4 with group 2 = 0x0d..0x10
+// (HandlePaletteInput 0x0068aadc, jump table 0x0093c5c0); the type is group 2 - 0x0d
+// (trapPaletteType). The special handler 0x006959c0 sends `c6 04 24 83` / `c6 44 24 01 02`
+// (0x83, 2), the client id from +0x1c, the type, and the counter read by 0x00698984 (the
+// count before the decrement); it refuses a count that is not > 0 (`test eax,eax; jg`).
+// ASSUMED: the remaining palette-side guards (not remote, not lobby / boss map) are from the
+// earlier trace and were not re-checked. The validator's predicate (dump line 595030,
+// is_packet0x60_subcommand_sent_by_self) refuses a 6x83 that the client sent itself unless
+// g_IsActionExecuting is set, so a self echo is not placed twice; the local placement runs
+// during the palette action. UNCLEAR: how the exe dispatches its own send (checked_call_
+// packet0x60_subcommand) was not traced, and the server's echo behaviour is not checked.
 //
 // The trap object (vtable 0x00b2a5c0; constructor 0x0062f9a8 with the base 0x0062ed74):
 //   VERIFIED: +0x35c effect group: type 0 -> 1 (damage), type 2 -> 0x11 (slow),
@@ -56,8 +65,9 @@ export const TRAP_FUSE_FRAMES = 0x1e; // ASSUMED
 export const TRAP_CHAIN_FUSE = 0x0f; // VERIFIED (0x0062f274)
 export const TRAP_TRIGGER_RADIUS = 50; // ASSUMED
 export const TRAP_BLAST_RADIUS = 50; // ASSUMED (80 in Ultimate outside battle, not modelled)
-// Upper bound of a trap count: ASSUMED from the rule validators (battle.ts clamps the rule
-// counts to 20). The exe's 6x83 validator only refuses a negative count (VERIFIED).
+// Upper bound of a trap count: 0x14 = 20. VERIFIED: the counter read (0x00698984) clamps
+// 0..0x14 (the exe bytes), and safe_create_trap_object refuses a count of 0x15 or more (dump).
+// The 6x83 validator 0x006a9ea4 itself only refuses a negative count (VERIFIED).
 export const TRAP_MAX_COUNT = 0x14;
 export const TRAP_DEATH_PARTICLE = 0x47; // ASSUMED
 export const TECH_DAMAGE_SCALE = 0.002; // ASSUMED (0x00978270 read not performed)
@@ -139,8 +149,16 @@ export interface PlaceContext {
   ownerAngle: number;
 }
 
+// The palette slot that places a trap: group 1 = 4 (item) and group 2 = 0x0d..0x10; the trap
+// type is group 2 - 0x0d. VERIFIED (see the header). Other item group 2 values are not traps.
+export const TRAP_PALETTE_FIRST = 0x0d;
+export function trapPaletteType(group2: number): number | null {
+  const t = group2 - TRAP_PALETTE_FIRST;
+  return t >= 0 && t <= 3 ? t : null;
+}
+
 // The local palette press: returns the 6x83 count to send, or null. The count sent is the
-// one BEFORE the decrement. ASSUMED: the palette-side guards (see the header).
+// one BEFORE the decrement. The palette-side guards are in the header.
 export function placeRequest(counters: TrapCounters, type: number, canAct: boolean): PlaceTrap | null {
   if (!canAct || type < 0 || type > 3) return null;
   const count = counters.get(type);
@@ -203,6 +221,9 @@ export class TrapField {
   // checked that the owner exists; `counters` is the owner's stock.
   place(p: PlaceTrap, ctx: PlaceContext, counters: TrapCounters): BattleTrap | null {
     if (p.type < 0 || p.type > 3 || p.count < 0) return null; // VERIFIED (0x006a9ea4)
+    // safe_create_trap_object (dump line 492781): the count must be below 0x15. The palette side never
+    // sends more (the counter clamps to 0..0x14, 0x00698984, VERIFIED).
+    if (p.count > TRAP_MAX_COUNT) return null;
     if (ctx.ownerFloor !== ctx.floor || ctx.bossMap || !ctx.fieldMap) return null; // VERIFIED shape, ASSUMED mapping
     const t = new BattleTrap(p.clientId, p.type, p.count, ctx.ownerPos.x, ctx.ownerPos.y, ctx.ownerPos.z, ctx.floor, ctx.ownerAngle);
     this.traps.push(t);
