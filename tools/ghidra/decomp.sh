@@ -8,7 +8,10 @@ set -e
 GHIDRA_INSTALL_DIR=${GHIDRA_INSTALL_DIR:-/Users/junior/Applications/ghidra_12.1.4_PUBLIC}
 PSOBB_EXE=${PSOBB_EXE:-/Users/junior/Downloads/psobb-client/PsoBB.exe}
 HERE=$(cd "$(dirname "$0")" && pwd)
-GHIDRA_PROJ=${GHIDRA_PROJ:-$(cd "$HERE/../../.." && pwd)/ghidra}
+# From a git worktree (web/.claude/worktrees/<name>) "../../.." is not next to
+# web/, so the default follows the main checkout through the shared .git.
+MAIN_WEB=$(cd "$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+GHIDRA_PROJ=${GHIDRA_PROJ:-$(cd "$MAIN_WEB/.." && pwd)/ghidra}
 HEADLESS="$GHIDRA_INSTALL_DIR/support/analyzeHeadless"
 mkdir -p "$GHIDRA_PROJ"
 
