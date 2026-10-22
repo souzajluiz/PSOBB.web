@@ -9342,3 +9342,24 @@ Summary line of the spec (the Samba's known gap is an annotation, not a failure)
 - `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts` (NEWSERV=vendor/newserv): 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
 - `cd client && npx tsc --noEmit -p .`: clean.
 - `client/e2e/barbaray-smoke.spec.ts` (Chrome, Vite 5207, webep2): passes in 2.2 min. New check: Pig Rays alive in the fight, peak 10 (the spawner runs). Part hits and the phases as before (15 changes, parts hit 3, 5, 6).
+
+## 2026-10-22: Gun speeds per kind, Samba Maracas fires bullets (combat/gunbullet.ts, objdump of PsoBB.exe)
+
+**What changed:** `GUN_BULLET_SPEED` (one value, 19) is now a per-kind table: `GUN_BULLET_SPEED_BY_KIND` = Handgun (6) 11, Shot (9) 15, Samba Maracas (0x48) 11; every other gun keeps `GUN_BULLET_SPEED_DEFAULT` = 19 (`bulletSpeed(kind)`). `planGunShot` takes the speed and `bulletFrames` runs on it; render/combat.ts `gunShot` passes `bulletSpeed(kind)`. `GUN_KINDS` gains 0x48: Samba Maracas fires bullets now (three shots per swing, damage at the arrivals).
+
+**Speed writes (objdump of `/Users/junior/Downloads/psobb-client/PsoBB.exe`, every `movl $imm, 0x208(reg)` in the weapon ctor range 0x005e9000..0x00602000 checked):**
+- 0x005e975e `movl $0x41980000` (19.0) in construct_generic_weapon 0x005e959c. Rifle (inner 0x005fb494) and Mechgun (inner 0x005f473c) call it and write nothing else: 19.0.
+- Handgun inner 0x005f3380: calls 0x005e959c at 0x005f338d, then 0x005f33ba `movl $0x41300000` (11.0).
+- Shot inner 0x005fe170: 0x005fe1d4 `movl $0x41700000` (15.0).
+- Samba inner 0x005fc2fc: 0x005fc339 `movl $0x41300000` (11.0).
+- Nothing else writes +0x208 of a weapon there (the other `movl`/`flds` hits are other objects or stack slots). The earlier note "speed 19 in construct_generic_weapon" stays right for the default.
+
+**Gate (partly proven, the rest ASSUMED):** the attack dispatch 0x006a2402..0x006a25ff is a chain of `0x007bfff8(N)` tests, N = action id: 0x007bfff8 is "N is in the byte list at 0x00a9caa0" (the list is rebuilt by 0x0078f51c from the four slots that 0x0084382c reads from the current source 0xadcdc0 / key 0xadcdc4). Action 0x1a -> vtable slot 0xc8 = begin_gun_bullet_attack. So the gun path runs when 0x1a is in that list; which weapons put it there is NOT decoded, and the writer of weapon +0xf1 is not in the ctor range (not found). Motion class is NOT the gate: ItemPMT WeaponKind (newserv `WeaponKind`, the same as weaponKinds[data1[1]]) is 6..9 for about 40 kinds with no gun callback or speed write (0x42, 0x45, 0x65, 0x6d, ...). The kept rule is the kind set GUN_KINDS = {6, 7, 8, 9, 0x48}. Samba's motion class is 8 (the Mechgun class; newserv WeaponKind of 0x48 = 8), so its three-burst swing is the Mechgun's, and its inner ctor shares the Handgun's bullet speed and particle callback (0x005e4264), which is why it is ASSUMED a gun. Rifle 7 and Mechgun 8 kinds stay ASSUMED as before.
+
+**0x005e4264 (the Handgun / Samba callback, decoded partly):** it calls 0x005e407c (allocates a 0x64-byte timed object from the entity and the float at arg +0x14, only when that float is > 0), sets the object's +0x60 flag word to 4, and makes particle 0x9f (159) at its +0x1c and +0x28 positions (flags | 0x40), storing the handle at +0x58. The default 0x005e4678 makes particle 9 at the hand (0x0050b510) and a 0x74-byte bullet object (0x005e4704). So the Handgun/Samba variant has no muzzle particle 9 and no 0x74 bullet object: it makes particle 159 and a 0x64 object. NOT PORTED: the 0x64 object's body and particle 159's look are not decoded, and the port keeps the default muzzle and trail for every gun.
+
+**Tests:** `node tests/gunbullet.test.ts` all checks passed (per-kind speeds 11/15/11, default 19, Handgun frames 5 at 60 units, Samba a gun). `node tests/mechgun.test.ts`, `node tests/rangedaim.test.ts`, `NEWSERV=.../vendor/newserv node tests/combat.test.ts` (5946 checks, 0 failures), `node tests/combatdepth.test.ts` (824 checks, 0 failures), `cd client && npx tsc --noEmit -p .` exit 0.
+
+**e2e:** `client/e2e/guns.spec.ts` (worktree Vite 5209, webgun/webgun, newserv and bridge reused): passed, 0 page errors, 0 failed requests. Samba Maracas: steps [0,1,2], bursts [3,3,3], shots [3,3,3], pellets [3,3,3], 6x46 [3,3,3], arrivals 9, damage 49, HP drops outside an arrival 0. Handgun arrivals 3 (damage 31), Shot arrivals 6 (damage 46), Rifle 3 (33), Mechgun 3 (7). The known-gap annotation for Samba is gone.
+
+**Open:** the gate (which action each weapon puts in the 0x00a9caa0 list, the +0xf1 writer); the 0x64 object and particle 159 of the Handgun/Samba callback; whether kinds 0x1c (fx 0x005e4264, speed 11, motion class 7) and 0x44 (the Handgun ctor group with 6) fire bullets in the exe.

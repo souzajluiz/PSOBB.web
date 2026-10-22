@@ -22,9 +22,9 @@
 // middle of their flight (installHooks: __gunFreezeNext / __gunFrozen) for the screenshot, then released.
 // The files go to GUN_SHOT_DIR when set, else to the test's output folder.
 //
-// Known gap: Samba Maracas (kind 0x48) is not a gun kind in the port (GUN_KINDS 6..9), so
-// it fires no bullets and its damage lands at the hit. Its three bursts (3 x 6x46 per swing)
-// are checked; the bullet checks are for the gun kinds only (an annotation records the gap).
+// Samba Maracas (kind 0x48) is a gun too (combat/gunbullet.ts GUN_KINDS, ASSUMED from its inner
+// ctor 0x005fc2fc: the Handgun's speed and particle callback): its three bursts fire three shots
+// of bullets, and its damage lands at the arrivals like the other guns.
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,7 +50,7 @@ const WEAPONS = [
   { name: 'Mechgun', kind: 8, bursts: 1, pellets: 1 },
   { name: 'Samba Maracas', kind: 0x48, bursts: 3, pellets: 1 },
 ] as const;
-const GUN_KINDS = new Set([6, 7, 8, 9]); // combat/gunbullet.ts GUN_KINDS
+const GUN_KINDS = new Set([6, 7, 8, 9, 0x48]); // combat/gunbullet.ts GUN_KINDS
 
 type Entry = { t: 'swing' | 'hit' | 'targets' | 'shot' | 'land'; step?: number; pellets?: number; dhp?: number; hp: number };
 type Swing = { step: number; hits: number; shots: number; pellets: number; targets: number; lands: number; dhp: number };
@@ -394,28 +394,15 @@ test('guns: the swings, bursts, pellets and bullet arrivals of the five weapons 
 
       expect(swings.map((s) => s.step), `${w.name}: the chain of steps`).toEqual([0, 1, 2]);
       for (const s of swings) {
-        // The bursts: one strike each, whatever the targets; a 6x46 goes with each burst that has one in reach
-        // (a Samba's bursts can kill or move its targets, so for it: at least one).
+        // The bursts: one strike each, whatever the targets; a 6x46 goes with each burst that has one in reach.
         expect(s.hits, `${w.name}: bursts of step ${s.step}`).toBe(w.bursts);
-        if (GUN_KINDS.has(w.kind)) expect(s.targets, `${w.name}: 6x46 per burst, step ${s.step}`).toBe(w.bursts);
-        else expect(s.targets, `${w.name}: 6x46 of step ${s.step}`).toBeGreaterThanOrEqual(1);
-        if (GUN_KINDS.has(w.kind)) {
-          expect(s.shots, `${w.name}: shots (bursts) of step ${s.step}`).toBe(w.bursts);
-          expect(s.pellets, `${w.name}: pellets of step ${s.step}`).toBe(w.bursts * w.pellets);
-        }
+        expect(s.targets, `${w.name}: 6x46 per burst, step ${s.step}`).toBe(w.bursts);
+        expect(s.shots, `${w.name}: shots (bursts) of step ${s.step}`).toBe(w.bursts);
+        expect(s.pellets, `${w.name}: pellets of step ${s.step}`).toBe(w.bursts * w.pellets);
       }
-      if (GUN_KINDS.has(w.kind)) {
-        expect(stray, `${w.name}: HP drops outside a bullet's arrival`).toBe(0);
-        expect(landed, `${w.name}: bullets that arrived`).toBeGreaterThan(0);
-        gunDamage += dmg; // a roll can miss: the damage is checked over all the guns
-      } else {
-        // Known gap (not a gun kind in the port: no bullets, damage at the hit). The 3 bursts
-        // above are checked; the bullet and arrival checks are for the gun kinds only.
-        info.annotations.push({
-          type: 'known-gap',
-          description: `${w.name}: the port fires no bullets for kind 0x${w.kind.toString(16)} (combat/gunbullet.ts GUN_KINDS = 6..9); HP drops at the hit, ${stray} drops at non-arrival entries`,
-        });
-      }
+      expect(stray, `${w.name}: HP drops outside a bullet's arrival`).toBe(0);
+      expect(landed, `${w.name}: bullets that arrived`).toBeGreaterThan(0);
+      gunDamage += dmg; // a roll can miss: the damage is checked over all the guns
       break;
       }
     });
