@@ -9195,3 +9195,46 @@ the dump.
 **Not done:** the whole-frame hitch comparison (30 s alone vs with the other player, in the lobby and in Forest 1), the lobby run under the same throttle, a real phone (touch and `isMobile` emulation were not used for the observer: it is a desktop window at phone size), and the model / name tag / texture work per remote player. The stutter on a phone may still be the frame rate of the field itself.
 
 **Checks:** `tests/playermove.test.ts` ok, `client` `tsc --noEmit` clean, `e2e/two-client-move.spec.ts` passes (the measurement is printed, the spec only checks the pages' errors and the flow).
+
+## 2026-10-22: Barba Ray (Episode 2 area 0x20, enemy 0xCB): brain, pools, net, wiring
+
+**Scope:** the port of `docs/bosses/barbaray-map.md` into `client/src/combat/barbaray.ts` (`BarbaRayAi`, an `EnemyBrain`), wired into `render/combat.ts` (spawn, tick, local and remote body hits, the 6x76 / EXP kill path on `killed`) and `net/game.ts` (`sendBarbaAction`, 6xA9 / 6xAA send and receive). The 10 parts are NOT hit entities yet (see Open 2), so the part pools are reached through the brain API only.
+
+**Ported (exe address in the code comment):**
+- HP 20000 (0x004afe39 root ctor, 0x004ba2e4 part init); the shell 708 / body 704 pools and the root path 0x004b947c (flag 8 -> body, else shell, break = flags |= 0x88, then |= 0x800).
+- Part pools 0x004ba120 / 0x004ba1b8: pool -= damage, pool < 1 breaks (SE 0x3f9); a broken part's hit drains the body by trunc(damage * 0.5). The exe's 0.5 conversion (0x004b9679) sets the x87 rounding control to 0xc00 = TRUNCATE, so this is not round-half-even (derolle.ts uses roundEven for its segments; Barba does not).
+- Part pool source: 0x004b98d0 reads MovementData[15] +0x1c through 0x0077a6cc (the same row as De Rol Le's segment pool).
+- Motion table 0x009aba20 (17 rows, the map's pass 3 table); anchors 0x00a47780 (10 rows).
+- Action tables: the four floor tables read from the exe (0x00906980 / 0x009066c0 / 0x00906400 / 0x009060e0, 67 / 86 / 87 / 96 codes, each ends with 0x45). Codes 0x1e / 0x1f / 0x20 / 0x21 / 0x23..0x27 / 0x45 resolve as in 0x004b8e3c; the 0x1e / 0x20 threshold 0.0 is 0x00906c84 / 0x00906c98.
+- Gate 0x004b8e1c (body pool < 1 and flag 4 clear); with the gate open the leader runs 0x004b8e3c: 0x13 / 0x14 table loop, 0x15 / 0x16 send 0x1c, else send 0x1b.
+- Enter slots (0x004b8034, 0x004b3c2c, 0x004b6d08, 0x004b6300, 0x004b4684, 0x004b5d1c, 0x004b5c98, the transitions); the dispatcher's 0x3a..0x3c spawner (9 Pig Ray slots, cooldown 5 ticks, then the table playback).
+- Finale 0x1c (0x004b5d1c): enter sets flag 4, side 3, body to anchor 3, body pool 704 = 0; event 0 cut timers at 85.0 (effect 0x20c, SE 0x3fb), 20.0 (effect 0x20f), 123.0; leaving 0x1c is the kill (`killed` event -> bossKilled: 6x76 flags 8, EXP request gated as the other bosses).
+- Death 0x1d (0x004b5c98): dead, 0x2e = 0x10, flag 4.
+- 6xA9 {a9, 02, entity @2, phase @4, cursor @6} (0x004b5150, 0x004b98fc); 6xAA {aa, 03, entity @2, phase @4, cursor @6, target u32 @8} for codes 0x13 / 0x14 / 0x18 / 0x40 / 0x41 / 0x44 (0x004b5150, 0x004b9938). The sender applies its own phase locally (0x008003e0, send-then-apply).
+- Net relay: newserv relays both to the other clients only; no HP logic on the server.
+
+**ASSUMED (tagged in the code):**
+- A. The root pool values: MovementData[15] iparam[0] (704) and iparam[2] (708). The attack record at root+0x628 that the ctor reads (+0x18 / +0x20) is not decoded; the layout matches De Rol Le's body / shell pools.
+- B. Table start cursor 0, and the floor index: DAT_00a9cd68 is .bss and not decoded; the port uses floor 0 for every fight.
+- C. The kill request (0x1c phase 0 test on FUN_004d6864) fires as soon as the cut starts: the finale ends on its first frame.
+- D. Pacing: one gate step per 30 ticks (BARBA_PACE), and a state with no decoded exit advances after 150 ticks with the table loop (BARBA_DWELL). The exe's cadence (0x1ad / 0x1b0 in 0x004b8584) is UNCLEAR. The dwell fallback never sends 0x1c, so the boss does not die without damage.
+- E. The 0x1b countdown: -2.0 a frame, re-send 0x1c below -200.0 (the comparison direction in the map text is ambiguous); countdown reset on enter; the gate does not re-enter 0x1b.
+- F. 6xAA entity at +2 and the no-target value 0xffff (the newserv struct gives phase @4, cursor @6, target @8).
+- G. Motion chains: mode 1 loops, mode 2 chains to `next` when the motion ends, mode 3 holds (from the chains, not from the player code). Slot for 0x11 / 0x12 is 7 / 8 by side with the 1 write not kept.
+- H. Spawner: the table after the count is leader-only; the Pig Ray spawn events are on every client.
+- I. The part spark is placed at the body (no bone capture); the finale effect 0x206 at 123.0 (FUN_004b60a0's effect id is not read).
+- J. Followers call bossKilled on the `killed` event too (mirrors De Rol Le; the exe runs the on-kill on every client, EXP gated by the owner).
+
+**Open (blocks a faithful fight):**
+1. Movement: the root path vectors (transitions 0x1e98 / 0x2cd0 / 0x30fc / 0x7040 / 0x7860, the per-line vectors), the 0x13 random helper and sub-states, the 0x0ee0 timers (decoded constants exist in the map, not wired), and the part rows (bone capture). The body only moves at the finale (teleport to anchor 3); the swim-in, the corner moves and the part rows are not ported.
+2. Parts as hit targets: 10 entities at body + 1..10 are not created; hit boxes (0x004ba2e4 radius) not decoded. `BarbaRayAi.hitPart` is the pool math only.
+3. Pig Ray minions (ctor 0x004ad95c, update 0x004addc0, states, death 0x004ae024) not ported: the spawn event is logged.
+4. Attack record at root+0x628 (ATP index) and the area hit manager (0x0051fc9c vt+0x30 / +0x34); the beam / ice objects (0x201, 0x208, 0x209) and their update functions (0x004bae8c, 0x004baf8c, 0x004baec4, 0x004be7c0) are not ported.
+5. The kill signal FUN_004d6864 and the cut stage (C above); FUN_004d31f4 / 0x1c71 camera calls and FUN_004b1cdc / FUN_004b60a0 are unread.
+6. The per-state dwell (E above) stands in for the phase 0x13 / 0x15 / 0x0ee0 exits.
+
+**Checks:**
+- `tests/barbaray.test.ts`: ALL PASS (action table playback across the 0x45 loop, resolve variants, part sign and truncation, break and body drain, root shell then body, gate and pacing, finale -> death with `killed` and `dead`, follower behaviour, spawner 9 in order, no-damage run never dies, 6xA9 / 6xAA codec, motion chains against the real bm_boss7_de_rol_le_c frame counts from data.gsl).
+- `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts`: 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
+- `cd client && npx tsc --noEmit -p .`: clean.
+- `client/e2e/barbaray-smoke.spec.ts` (new, Chrome channel, PW_BASE_URL 5203, webep2): passes in 1.7 min. Phases seen 1, 3, 8, 15, 40, 60, 50, 68, 57, 61, 41, 17, 63, 21; 14 phase changes over 60 s with no damage; the four parts and the shell take the test hits; 0 page errors.

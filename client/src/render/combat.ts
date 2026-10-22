@@ -55,6 +55,7 @@ import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, Re
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
+import { BARBA_HP, BarbaRayAi, type BarbaEvent, decodeBarbaMessage } from '../combat/barbaray.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
@@ -406,6 +407,7 @@ const OWN_FSM = new Set([
   // Episode 1 bosses (combat/dragon.ts, combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
   'TBoss1Dragon',
   'TBoss2DeRolLe',
+  'TBoss7DeRolLeC', // Barba Ray (combat/barbaray.ts)
   'TBoss3Volopt',
   'TBoss3VoloptP02',
   // Episode 4 (combat/saintmilionboss.ts).
@@ -1017,6 +1019,11 @@ export class CombatView {
           // counts is the body pool (ProcessPlayerHealing_00433edc).
           stats = { ...stats, hp: drl.bodyMax, maxHp: drl.bodyMax };
           ai = drl;
+        } else if (className === 'TBoss7DeRolLeC') {
+          // Barba Ray (combat/barbaray.ts). The body's HP is the ctor's 20000 (0x004afe39);
+          // the entity is refilled after each hit and the pools carry the damage.
+          ai = new BarbaRayAi({ ...at, movement, rng: () => this.rng(), leader: () => this.game.selfId === this.game.leaderId });
+          stats = { ...stats, hp: BARBA_HP, maxHp: BARBA_HP };
         } else if (className === 'Episode4Boss') {
           // Rows: the boss 32 / 34 (Shambertin 36 / 38, Kondrieu 40 / 42), the
           // tentacles 33 / 35 (37 / 39, 41 / 43).
@@ -1523,6 +1530,7 @@ export class CombatView {
       if (ai instanceof PanArmsAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof PanHalfAi) ai.hpFraction = e.stats.hp / Math.max(1, e.splitHp ?? e.stats.maxHp);
       const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
+      if (ai instanceof BarbaRayAi) this.barbaDrain(e, ai);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
       if (r.x !== root.position.x || r.z !== root.position.z || lift !== e.lift) {
@@ -2027,6 +2035,62 @@ export class CombatView {
     if (!(e?.ai instanceof DeRolLeAi)) return;
     const target = sub === 0x14 && body.length >= 12 ? dv.getUint32(8, true) & 0xffff : null;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target);
+  }
+
+  // --- Barba Ray (combat/barbaray.ts) -----------------------------------------
+  //
+  // The leader's brain steps the action table and sends 6xA9 / 6xAA for each
+  // phase (sendBarbaAction); every client applies them (onBarbaAction; the
+  // sender applies its own through its brain, send-then-apply). A hit on the
+  // body feeds the shell and body pools (hitRoot) on every client. The kill is
+  // the leave of the finale (bossKilled, EXP and 6x76 as the other bosses).
+  private barbaLastHit = new Map<number, boolean>();
+
+  private barbaDrain(e: EnemyRuntime, ai: BarbaRayAi): void {
+    for (const ev of ai.drain() as BarbaEvent[]) {
+      switch (ev.kind) {
+        case 'send':
+          if (this.game.selfId === this.game.leaderId) this.game.sendBarbaAction(0x1000 | e.index, ev.phase, ev.cursor, ev.target);
+          this.opts.log(`Barba Ray E-${e.index.toString(16)}: phase 0x${ev.phase.toString(16)} (cursor ${ev.cursor})`);
+          break;
+        case 'se':
+          this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+          this.sePlayer?.play(ev.id);
+          break;
+        case 'effect': {
+          // ASSUMED: the part's spark is placed at the body (the part boxes and bones are not captured).
+          const p = e.instance.root.position;
+          this.particle({ id: ev.id }, new THREE.Vector3(p.x, p.y + (ev.up ?? 0), p.z));
+          break;
+        }
+        case 'spawn':
+          // The Pig Rays (0x004b4e6c) are not ported yet (open in docs/bosses/barbaray-map.md).
+          this.opts.log(`Barba Ray E-${e.index.toString(16)}: Pig Ray ${ev.index} (group ${ev.group}) not ported`);
+          break;
+        case 'killed':
+          this.barbaKilled(e);
+          break;
+        case 'dead':
+          break;
+      }
+    }
+  }
+
+  private barbaKilled(e: EnemyRuntime): void {
+    const p = e.instance.root.position;
+    e.dead = true;
+    e.stats.hp = 0;
+    this.bossKilled(e, p.x, p.z, this.barbaLastHit, 'Barba Ray');
+  }
+
+  // A 6xA9 / 6xAA from the leader (0x004b98fc / 0x004b9938: the target, then the phase).
+  private onBarbaAction(body: Uint8Array): void {
+    const m = decodeBarbaMessage(body);
+    if (!m) return;
+    const e = this.enemies.get(m.entity - 0x1000);
+    if (!(e?.ai instanceof BarbaRayAi)) return;
+    e.ai.applyRemote(m.phase, m.cursor, m.target === null || m.target === 0xffff ? null : m.target);
+    this.barbaDrain(e, e.ai);
   }
 
   // --- the Dragon (combat/dragon.ts) -------------------------------------------
@@ -5306,6 +5370,20 @@ export class CombatView {
       this.deRolLeSegmentHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
+    if (e.ai instanceof BarbaRayAi) {
+      // The body's hit (combat/barbaray.ts hitRoot): the shell, then the body pool.
+      // The entity is refilled to max, so its 6x0A carries this hit's damage.
+      const ai = e.ai;
+      ai.hitRoot(damage);
+      e.stats.hp = e.stats.maxHp;
+      if (damage >= 1) this.barbaLastHit.set(e.index, byPlayer);
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      this.barbaDrain(e, ai);
+      const p = e.instance.root.position;
+      this.num(damage, critical, p.x, p.y + 26, p.z);
+      this.opts.log(`${what}hit Barba Ray for ${Math.round(damage)}: shell ${ai.shellHp}, body ${ai.bodyHp}`);
+      return;
+    }
     if (e.ai instanceof DeRolLeAi) {
       // ProcessPlayerHealing_00433edc: the shell pool, then the body pool; no
       // flinch, no death here (the brain's death check runs on its own).
@@ -6431,6 +6509,10 @@ export class CombatView {
       this.onSaintMilionAction(body);
       return;
     }
+    if (sub === 0xa9 || sub === 0xaa) {
+      this.onBarbaAction(body);
+      return;
+    }
     if (sub === 0x13 || sub === 0x14) {
       this.onDeRolLeAction(sub, body);
       return;
@@ -6558,6 +6640,17 @@ export class CombatView {
           const went = e.ai.owner.hitSegment(e.ai.index, s.totalDamage);
           if (e.parent) e.parent.stats.hp = e.ai.owner.bodyHp;
           this.opts.log(`De Rol Le's segment ${e.ai.index} hit for ${s.totalDamage} (${went}, 6x0A from another client): segment ${e.ai.segment.pool}, body ${e.ai.owner.bodyHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof BarbaRayAi) {
+        // restore_enemy_status and the hit flag: the same root pool path on this client.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.hitRoot(s.totalDamage);
+          e.stats.hp = e.stats.maxHp;
+          this.barbaLastHit.set(e.index, false);
+          this.barbaDrain(e, e.ai);
+          this.opts.log(`Barba Ray's body hit for ${s.totalDamage} (6x0A from another client): shell ${e.ai.shellHp}, body ${e.ai.bodyHp}`);
         }
         return;
       }
