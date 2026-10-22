@@ -15,7 +15,7 @@ import {
   SHOT_ANGLES_BAMS,
   targetAimPoint,
 } from '../client/src/combat/gunbullet.ts';
-import * as THREE from 'three';
+import * as THREE from '../client/node_modules/three/build/three.module.js';
 import { bulletAngles, bulletTextureIndex, GunTracers } from '../client/src/render/guntracer.ts';
 
 let failures = 0;
