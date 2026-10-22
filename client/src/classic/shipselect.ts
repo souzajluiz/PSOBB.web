@@ -34,6 +34,11 @@ const ITEM_STEP = 20;
 
 export class ShipSelectScreen implements Screen {
   transparent = true;
+  // The touch pad keeps its arrows and OK / BACK (ui/webcontrols.ts setPadMenu).
+  readonly touchMenu = true;
+  // A phone (fit mode): the tall portrait stage (stage.ts tallLayout), with the
+  // lobby drawn behind it by the 3D view.
+  readonly phoneLayout: boolean;
   private skin: WindowSkin;
   private title: string;
   private items: ShipMenuItem[];
@@ -45,10 +50,11 @@ export class ShipSelectScreen implements Screen {
   private choose: (index: number) => void;
   private cancel: () => void;
 
-  constructor(skin: WindowSkin, title: string, items: ShipMenuItem[], infoText: string, choose: (index: number) => void, cancel: () => void) {
+  constructor(skin: WindowSkin, title: string, items: ShipMenuItem[], infoText: string, choose: (index: number) => void, cancel: () => void, phone = false) {
     this.skin = skin;
     this.title = title;
     this.items = items;
+    this.phoneLayout = phone;
     this.info = new InfoWindow(WINDOW_POS.shipInfo[0], WINDOW_POS.shipInfo[1], 342, 144);
     this.info.set(infoText);
     this.choose = choose;
@@ -72,6 +78,19 @@ export class ShipSelectScreen implements Screen {
     else if (e.key === 'ArrowDown') this.cursor = (this.cursor + 1) % this.items.length;
     else if (e.key === 'Enter') this.choose(this.cursor);
     else if (e.key === 'Backspace' || e.key === 'Escape') this.cancel();
+  }
+
+  // A tap on a row moves the cursor there; a click on it chooses it.
+  pointer(vx: number, vy: number, click: boolean): void {
+    if (this.busy) return;
+    const [x, y] = WINDOW_POS.shipMenu;
+    const cx = x + 10;
+    const cy = y + 16;
+    if (vx < cx || vx > cx + MENU_W - 20 || vy < cy) return;
+    const i = Math.floor((vy - cy) / ITEM_STEP);
+    if (i >= this.items.length) return;
+    this.cursor = i;
+    if (click) this.choose(i);
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
