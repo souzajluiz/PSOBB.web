@@ -8654,3 +8654,70 @@ size; it is ASSUMED anyway) and `after-miss.png`.
 - `node tests/combat.test.ts`: `5946 checks, 0 failures`
 - `node tests/combatdepth.test.ts`: `824 checks, 0 failures`
 
+
+## 2026-10-22: Static file lookup ignores case (bridge/server.mjs)
+
+**What changed:** New `bridge/static-files.mjs`: the lookup behind every static
+root of `bridge/server.mjs` (the client build, `/psobb-data/`, `/keys/`,
+`/newserv-text/`, `/newserv-maps/`). A name is matched exactly first; if it is
+missing, the one name of the directory that differs only in case is used. The
+match is made on the directory listing (cached per directory, rebuilt when the
+directory's mtime changes), not on `existsSync`, which folds case on macOS by
+itself. Path safety is unchanged: no `.` or `..` segment, no backslash or NUL,
+and the resolved path must stay inside the root. `/psobb-data/?list=` lists a
+folder found in any case. The name patterns of `/keys/`, `/newserv-text/` and
+`/newserv-maps/` are case-insensitive. Any-case `.html` is still a 404 (the
+development pages stay private). New `tests/staticfiles.test.ts` (run with
+`node tests/staticfiles.test.ts`): exact hits, case-mismatch hits, exact-name
+precedence, missing names, traversal, folder lookups and the cache refresh.
+
+**Why:** the hypothesis was that the Linux image 404s on a name whose case
+differs from the file on disk, which macOS hides. The server did have that gap,
+so it is closed here. It does not explain the lobby or ship-select reports:
+
+- Production-like run on this Mac: the vite production build served by
+  `bridge/server.mjs` (the data folder from `PSOBB_DATA`, newserv ce2273a).
+  webtest and webtest2 reached the lobby through title, login, ship and block
+  screens; both saw two players; a party was created and joined; both reached
+  the field. 79 distinct `/psobb-data`, `/keys`, `/newserv-text` and
+  `/newserv-maps` URLs were requested, and all answered 200.
+- Each of those 79 was checked for an exact-case match on disk (readdir per
+  path segment): 0 mismatches.
+- Static audit of 608 literal data file names in `client/src` against the loose
+  files and `data.gsl`: no loose file is requested in another case. Three
+  names differ only in case, all inside `data.gsl` (`Bo04OpCam.rel`,
+  `ItemMagEdit.prs`, `RaderMapFrame.xvm`). The server never serves those
+  entries (the client parses `data.gsl` itself, `ClientFiles.resolve` matches
+  names without case), so the server rule does not reach them.
+- On a case-sensitive APFS volume, the old server answered 404 for
+  `/psobb-data/planj.bml`, `/psobb-data/scene/map_lobby_01.xvm` and
+  `/keys/DEFAULT.nsk`, and an empty list for `?list=Scene`; the new one serves
+  them (checked end to end with the old and new `server.mjs` side by side).
+
+**Not changed:** the client, and the vite dev middleware for `/psobb-data`
+(`client/vite.config.ts`). The dev middleware shares no code with the server
+and stays case-sensitive on Linux.
+
+**Client-side candidates for the production-only failures (not verified):**
+- `client/src/data/clientfiles.ts` `index()` loads `data.gsl` only when the
+  listing holds exactly `data.gsl`, while `docker/fetch-data.mjs`
+  `findDataRoot` accepts it in any case. A zip with another case of that name
+  would leave every GSL texture and model unloaded.
+- `HttpSource.available()` and the server's `?list=` answer 200 with `[]` for a
+  folder missing on disk, so a half-filled data folder counts as present.
+- `readIfPresent` and `firstPresent` check the listing exactly and skip a
+  mismatched name without a request, so such a feature would vanish silently.
+  The audit found no loose-file case mismatch, so this is not the cause here.
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`node tests/staticfiles.test.ts`: ALL PASS (22 checks on macOS; 24 on a
+case-sensitive APFS volume). `node tests/admin.test.ts`: 316/316.
+
+**ASSUMED.** The production zip is taken to have the same names as the local
+data folder; the zip and the container were not inspected. The lobby and
+ship-select failures were not reproduced here.
+
+**UNCLEAR.** Whether the production data folder has a `data.gsl` in exact case
+(`docker exec <container> ls /data/psobb-client | grep -i gsl`, or
+`curl https://<host>/psobb-data/?list=`). The mtime-based listing cache can
+miss a change made within the same mtime tick; a restart always rebuilds it.
