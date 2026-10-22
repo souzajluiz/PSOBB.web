@@ -9299,3 +9299,27 @@ Summary line of the spec (the Samba's known gap is an annotation, not a failure)
 - `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts` (NEWSERV=vendor/newserv): 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
 - `cd client && npx tsc --noEmit -p .`: clean.
 - `client/e2e/barbaray-smoke.spec.ts` (Chrome, PW_BASE_URL 5204, webep2): passes in 2.3 min. The ten part enemies spawn; the phases change 15 times over 60 s with no damage; the four parts are stood at from the outside (35 units, facing the part) and swung at with the real keys (ArrowDown normal, ArrowLeft heavy); the swings hit parts 3, 5 and 6 through applyEnemyHit -> barbaPartHit -> hitPart (the assertion: at least two different parts hit). Pools stayed at 1250 (0 rolls); no page errors.
+
+## 2026-10-22: Gun bullet in flight: gun_bullet.xj from item.bml (render/guntracer.ts)
+
+**What changed:** the ASSUMED bar trail of the gun shot is replaced by the bullet object's model. `render/guntracer.ts`: the bullet is item.bml entry 0 (gun_bullet.xj, texture list 0), built once per texture variant and cloned per shot; `render/combat.ts` creates the tracers with the item models and calls `tracers.frame(tickRemainder)` each frame. Bullet rules in `combat/gunbullet.ts` are unchanged.
+
+**Decoded (Ghidra + objdump, PsoBB.exe):**
+- Model: `+0x58 = FUN_005b8610(0)` (entry 0), texture list `+0x5c = FUN_005b8624(0)` (ctor 0x005e4704 tail).
+- Render, slot 0x08 (0x005e4924): fog off, texture index `+0x70` written into the model's texture ids, translate by `+0x1c` (position), rotate by `FUN_00830df8(&+0x28, 1)` = Y (`+0x2c`), then X (`+0x28`), then Z (`+0x30`); no scale call. Slot 0x1c (0x005e4a58) is the same without the texture write.
+- Angles, set once in the ctor (0x005e4158 then 0x005e43e8): yaw `+0x2c = atan2(x, z)`; pitch `+0x28 = -atan2(y, sqrt(x*x+z*z))` (0 when y = 0); roll `+0x30 = 0` (0x005e43e8 overwrites the base value). BAMS, rounded.
+- Motion per game tick (0x005e400c): `pos += vel` (`FUN_0082ebac` is a vector add), velocity = unit direction times dist / frames, frames `+0x34` count down, dead at <= 0 (flags = 1).
+- Texture index `+0x70`: from `FUN_005e94c8` of the shooter bytes `+0xf3`, `+0xf4`, clamped to 0..4, fixed at spawn (no animation). Port: `bulletTextureIndex`; the port's shooter bytes are not mapped yet, so variant 0 is used (ASSUMED).
+
+**Corrections to the brief:**
+- The spin `+0x6c += 0x1999` (0x005e466c, vtable slot 0x10) is written every tick, but no code in the bullet's update or render reads `+0x6c`. The exe shows no visible spin, so none is ported.
+- The roll is 0; the spin axis question does not arise.
+- Not ported: the effect object the ctor attaches at `+0x50` (`FUN_005dd76c`, a 0x50-byte effect whose id is not decoded). It may be a visible trail; open item.
+
+**Checks:**
+- `tests/gunbullet.test.ts`: all checks passed (new: orientation, texture variant, per-frame interpolation, YXZ rotation). `tests/mechgun.test.ts`: 21 checks, 0 failures. `tests/rangedaim.test.ts`: all checks passed.
+- `cd client && npx tsc --noEmit -p .`: exit 0.
+- `client/e2e/guns.spec.ts` (PW_BASE_URL 5206, newserv and bridge reused): Handgun, Rifle, Shot and Mechgun pass (steps 0,1,2; one burst each; pellets 5 for the Shot; arrivals 3/3/6/3; HP drops only at arrivals). Samba Maracas (known gap, no bullets): its step-2 6x46 check was intermittently 0 targets. The same flake appears without this change (a run on the pre-change code failed earlier, at Handgun swing 2, which never fired), so the e2e is flaky on main too. The set-up retry now also covers a swing with no 6x46 target; the assertions are unchanged. Final run with this change: 1 passed, all five weapons, 0 page errors, 0 failed requests.
+- Flight screenshots: `scratchpad/guns3/{handgun,rifle,shot,mechgun}-flight.png`. **Visibility probe** (temporary in-page probe of the frozen bullets, removed): the bullet mesh exists, its parent is the scene and is visible, its materials are transparent with opacity 1, depthTest on, and the texture is loaded; it is inside the camera frustum; its local box is about 4 x 4 x 26 units at scale 1.0. In the screenshots it reads as a green glowing orb at the reticle (e.g. `shot-flight.png`), because it points along the view. In one run terrain occluded it. So it is visible but view-aligned; the scale 1.0 is ASSUMED (the render slots set no scale).
+
+**Open:** a side-on flight screenshot (not view-aligned) to judge the look; decode the `+0x50` effect; the shooter texture variant.
