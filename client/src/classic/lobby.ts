@@ -40,7 +40,7 @@ import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
-import { type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
+import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
 // Default key config slots 0..3 (W, S, A, D) mapped to the keys LobbyView
 // reads for its movement.
@@ -106,8 +106,16 @@ export class LobbyScreen implements Screen {
   private acc = 0;
   private frame = 0;
   private extra = 0;
+  // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
+  private vh = 480;
+  // A phone in portrait: the 3D lobby fills the tall box and the HUD keeps its
+  // anchors (stage.ts phoneFill).
+  readonly phoneLayout: boolean;
+  readonly phoneFill: boolean;
 
-  constructor(viewer: MapViewer, view: LobbyView, lobby: Lobby, hud: LobbyHud, shipName: string) {
+  constructor(viewer: MapViewer, view: LobbyView, lobby: Lobby, hud: LobbyHud, shipName: string, phone = false) {
+    this.phoneLayout = phone;
+    this.phoneFill = phone;
     this.viewer = viewer;
     this.view = view;
     this.lobby = lobby;
@@ -225,7 +233,8 @@ export class LobbyScreen implements Screen {
     cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
   }
 
-  update(dt: number): void {
+  update(dt: number, stage: Stage): void {
+    this.vh = stage.vh;
     this.acc += dt;
     while (this.acc >= FRAME) {
       this.acc -= FRAME;
@@ -245,11 +254,12 @@ export class LobbyScreen implements Screen {
     const cam = this.viewer.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
+    ChatBubble.screenH = this.vh;
     const positions = this.view.playerPositions();
     this.chat.bubbles.tick((id) => {
       const pos = positions.get(id);
       if (!pos) return null;
-      return projectHead(cam, pos, this.headHeight(id), width);
+      return projectHead(cam, pos, this.headHeight(id), width, this.vh);
     });
   }
 
@@ -363,27 +373,31 @@ export class LobbyScreen implements Screen {
     this.menu.leafOpen = false;
   }
 
+  // Tall fill (stage.ts bandsOf): the lobby name, the menu and the log keep the
+  // top; the chat line, the transport info and the options the bottom; the
+  // counter, the team and the item list are centred. Desktop: all shifts are 0.
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
+    const bands = bandsOf(stage.vh, stage.fill);
     inGameSpace(ctx, stage, (extra) => {
       this.extra = extra;
-      this.drawNameTags(ctx, extra);
+      this.drawNameTags(ctx, extra, stage.vh);
       this.chat.bubbles.draw(ctx, this.hud.bubble);
       drawLobbyNameWindow(ctx, this.hud.skin, this.lobbyName, extra);
-      this.chat.input.draw(ctx, this.frame);
-      this.counter.draw(ctx, this.hud.skin, extra);
-      this.party?.draw(ctx, this.hud.skin, extra);
-      this.team?.draw(ctx, this.hud.skin, extra);
-      this.transporting?.draw(ctx, this.hud.skin, extra);
-      this.menu.draw(ctx, this.hud.skin, this.hud.menu);
-      this.itemList?.draw(ctx, this.hud.skin);
-      this.options?.draw(ctx, this.hud.skin, extra);
+      inBand(ctx, bands.bottom, () => this.chat.input.draw(ctx, this.frame));
+      inBand(ctx, bands.mid, () => this.counter.draw(ctx, this.hud.skin, extra));
+      this.party?.draw(ctx, this.hud.skin, extra, bands.bottom);
+      inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
+      inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
+      this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
+      inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);
     });
   }
 
   // Name above each player's head (fitted to the psobb.io capture: white
   // game text centred 14 px above the head point; no code found in the exe).
-  private drawNameTags(ctx: CanvasRenderingContext2D, extra: number): void {
+  private drawNameTags(ctx: CanvasRenderingContext2D, extra: number, vh: number): void {
     const cam = this.viewer.camera;
     const w = 640 + extra;
     const v = new THREE.Vector3();
@@ -393,10 +407,19 @@ export class LobbyScreen implements Screen {
       v.copy(pos).add(new THREE.Vector3(0, 22, 0)).project(cam);
       if (v.z > 1 || v.z < -1) continue;
       const x = ((v.x + 1) / 2) * w;
-      const y = ((1 - v.y) / 2) * 480;
+      const y = ((1 - v.y) / 2) * vh;
       const tw = gameTextWidth(p.name);
       drawGameText(ctx, p.name, x - tw / 2 + 1, y - 13, '#000000', 0.8);
       drawGameText(ctx, p.name, x - tw / 2, y - 14, '#ffffff');
     }
   }
+}
+
+// Runs fn shifted by dy (a band of a tall fill frame, stage.ts bandsOf; 0 on
+// the desktop).
+function inBand(ctx: CanvasRenderingContext2D, dy: number, fn: () => void): void {
+  ctx.save();
+  ctx.translate(0, dy);
+  fn();
+  ctx.restore();
 }

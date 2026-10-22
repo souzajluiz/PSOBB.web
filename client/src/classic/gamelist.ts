@@ -565,8 +565,11 @@ export class PartyMenus {
     else if (c.result === 'create') this.burst(this.host.create(c.options()));
   }
 
-  // Menus follow the counter's centring on a widescreen window.
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+  // Menus follow the counter's centring on a widescreen window. `bottom`: the
+  // shift of the bottom band of a tall fill frame (stage.ts bandsOf): the info
+  // windows sit at the bottom edge there, the game list and the create window
+  // stay at the top.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number, bottom = 0): void {
     const dx = extra / 2;
     ctx.save();
     ctx.translate(dx, 0);
@@ -574,6 +577,8 @@ export class PartyMenus {
     else if (this.phase === 'password' && this.password) this.drawPassword(ctx, skin, this.password);
     else if (this.phase === 'create' && this.create) drawCreateParty(ctx, skin, this.create, this.text, this.frame);
     ctx.restore();
+    ctx.save();
+    ctx.translate(0, bottom);
     if (this.phase === 'list' || this.phase === 'loading') {
       this.info.draw(ctx, skin, extra);
       this.details?.draw(ctx, skin, extra);
@@ -584,6 +589,7 @@ export class PartyMenus {
       w.finish();
       w.draw(ctx, skin, extra);
     }
+    ctx.restore();
   }
 
   private drawPassword(ctx: CanvasRenderingContext2D, skin: WindowSkin, p: PasswordPrompt): void {

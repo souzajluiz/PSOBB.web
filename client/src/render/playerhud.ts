@@ -22,7 +22,7 @@ import {
   type HudTextures,
   type StatusValues,
 } from '../classic/hud.ts';
-import { textureBitmap, VH, VW } from '../classic/stage.ts';
+import { bandsOf, overlayFrame, textureBitmap, VW } from '../classic/stage.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -40,6 +40,7 @@ export class PlayerHud {
   private ticks = 0;
   private disposed = false;
   private extra = 0; // virtual units beyond 640 on a wide window
+  private vh = 480; // virtual height of the frame (tall fill: the box, stage.ts overlayFrame)
   private projected = new THREE.Vector3();
   log: (msg: string) => void = () => {};
   // The screen colour overlay (g_UIElementArray_00a98480[1], ARGB; the death
@@ -99,7 +100,7 @@ export class PlayerHud {
     const v = this.projected.copy(p).project(this.viewer.camera);
     if (v.z > 1 || v.z < -1) return null;
     const width = VW + this.extra;
-    return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * VH };
+    return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * this.vh };
   }
 
   // "EXP+n" over a killed enemy (the killer's client only).
@@ -177,14 +178,20 @@ export class PlayerHud {
       ctx.fillRect(0, 0, w, h);
     }
     if (!tex) return;
-    const s = h / VH;
-    this.extra = Math.max(0, w / s - VW);
-    ctx.setTransform(s, 0, 0, s, 0, 0);
+    // Tall fill (phone portrait): 640 x vh, the top-left HUD stays at the top,
+    // the message window is centred vertically (stage.ts bandsOf).
+    const f = overlayFrame(w, h);
+    this.extra = f.extra;
+    this.vh = f.vh;
+    ctx.setTransform(f.s, 0, 0, f.s, 0, 0);
     ctx.imageSmoothingEnabled = true;
     this.status.draw(ctx, tex);
     this.party.draw(ctx, tex);
     this.floats.draw(ctx, tex.font);
+    ctx.save();
+    ctx.translate(0, bandsOf(f.vh, f.fill).mid);
     this.messages.draw(ctx, anchorX(MESSAGE_WINDOW.x, MESSAGE_WINDOW.w, this.extra));
+    ctx.restore();
   }
 
   dispose(): void {

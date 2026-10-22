@@ -261,9 +261,18 @@ export class FieldMenu {
   }
 
   // `extra`: virtual width beyond 640 (windows on the right half follow the
-  // right edge, classic/ingame.ts anchorX).
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
-    this.menu.draw(ctx, skin, tex.menu);
+  // right edge, classic/ingame.ts anchorX). `bottom`: the y shift of the bottom
+  // band of a tall fill frame (stage.ts bandsOf); the main menu stays at the top,
+  // the Area Map, the Quest Board and the leaf windows move with the bottom.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number, bottom = 0): void {
+    this.menu.draw(ctx, skin, tex.menu, bottom);
+    ctx.save();
+    ctx.translate(0, bottom);
+    this.drawBottom(ctx, skin, tex, extra);
+    ctx.restore();
+  }
+
+  private drawBottom(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.areaMap?.draw(ctx, skin, tex);
     this.questBoard?.draw(ctx, skin, tex);
     const leaf = this.leaf ?? this.closingLeaf;

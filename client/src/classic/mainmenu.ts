@@ -210,7 +210,9 @@ export class MainMenu {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: MainMenuTextures): void {
+  // `bottom`: the y shift of the bottom band of a tall fill frame (stage.ts
+  // bandsOf); the help window is anchored to the bottom edge, the menu to the top.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: MainMenuTextures, bottom = 0): void {
     if (!this.open || this.leafOpen) return;
     const { x, y } = MENU_POS;
     const h = this.height;
@@ -241,7 +243,10 @@ export class MainMenu {
       ctx.drawImage(tintLabel(tex.labels, color), u, v, 98, 16, rx, ry, 98, 16);
       ctx.restore();
     });
+    ctx.save();
+    ctx.translate(0, bottom);
     this.help.draw(ctx, skin, 0);
+    ctx.restore();
   }
 }
 

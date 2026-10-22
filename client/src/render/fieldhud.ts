@@ -35,7 +35,7 @@ import { createCounter, type Counter, type CounterKind } from '../classic/shop.t
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
-import { textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
+import { bandsOf, overlayFrame, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
 import type { ItemNames } from '../formats/itemnames.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
@@ -326,13 +326,14 @@ export class FieldHud {
   }
 
   // The pointer in the 640x480 screen (the Area Map window is on the left
-  // half, so it does not follow the right edge).
+  // half, so it does not follow the right edge; on a tall fill frame it sits in
+  // the bottom band, so its y is taken back from that band's shift).
   private mouseEvent(e: MouseEvent): void {
     const r = this.host.getBoundingClientRect();
     if (!r.height) return;
-    const s = r.height / VH;
-    this.mouse.x = (e.clientX - r.left) / s;
-    this.mouse.y = (e.clientY - r.top) / s;
+    const f = overlayFrame(r.width, r.height);
+    this.mouse.x = (e.clientX - r.left) / f.s;
+    this.mouse.y = (e.clientY - r.top) / f.s - bandsOf(f.vh, f.fill).bottom;
     if (e.type === 'mousedown' && e.button === 0) this.mouse.down = true;
     if (e.type === 'mouseup' && e.button === 0) this.mouse.down = false;
     // ChallengeMenuListWindow_HandleInput_00744230 only takes a press inside
@@ -580,12 +581,16 @@ export class FieldHud {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     if (!this.tex || !this.canvas.height) return;
-    const s = this.canvas.height / VH;
-    const extra = Math.max(0, this.canvas.width / s - VW);
+    // Tall fill (phone portrait): the palette stays at the bottom, the radar at
+    // the top, the menus and the counter centred or at the bottom (stage.ts bandsOf).
+    const f = overlayFrame(this.canvas.width, this.canvas.height);
+    const s = f.s;
+    const extra = f.extra;
+    const bands = bandsOf(f.vh, f.fill);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
     if (this.palette && !this.menu.isOpen && !this.counter) {
-      this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y);
+      this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y + bands.bottom);
     }
     const prompt = !this.menu.isOpen && !this.counter ? this.prompt?.() : null;
     if (prompt) {
@@ -593,14 +598,20 @@ export class FieldHud {
       const w = gameTextWidth(prompt) + 2 * INSET;
       drawTextWindow(ctx, this.tex.skin, { x: anchorX(PROMPT_POS[0], w, extra), y: PROMPT_POS[1], w, h: LINE + 2 * INSET }, prompt);
     }
-    this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra);
+    this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra, bands.bottom);
     if (this.minimapShown()) {
       // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
       for (const e of this.opts.minimap?.enemies() ?? []) this.minimap.addIcon({ x: e.x, z: e.z, color: ENEMY_ICON_COLOR, shape: 1, scale: 1, heading: 0 });
       // The radar follows the right edge; the full map stays in its window.
+      ctx.save();
+      ctx.translate(0, this.minimap.type === 0 ? 0 : bands.bottom);
       this.minimapView.draw(ctx, this.minimap, s, this.minimap.type === 0 ? extra : 0);
+      ctx.restore();
     }
+    ctx.save();
+    ctx.translate(0, bands.mid);
     this.counter?.draw(ctx, this.tex.skin, this.tex.menu, extra);
+    ctx.restore();
   }
 
   // Console aid: window.gameView.hud.debug()

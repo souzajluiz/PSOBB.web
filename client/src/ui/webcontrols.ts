@@ -38,7 +38,7 @@ import {
   type MoveKey,
   type ProxyKey,
 } from '../input/virtualpad.ts';
-import { padLayout, type Insets, type PadLayout, type PxRect } from '../input/padlayout.ts';
+import { padLayout, padLayoutFill, type Insets, type PadLayout, type PxRect } from '../input/padlayout.ts';
 import { FullscreenController } from './fullscreen.ts';
 import type { SoftKeyboard } from './softkeyboard.ts';
 import './webcontrols.css';
@@ -69,6 +69,10 @@ export interface WebControlsOptions {
   // true while the screen has the tall phone stage (stage.ts phoneLayout): the
   // top strip is then placed at the box's top-right corner.
   tall?: () => boolean;
+  // true while the screen's 3D view fills the tall box (stage.ts phoneFill):
+  // the stick and buttons go in the bar under the box, the small buttons in
+  // the bar above it (input/padlayout.ts padLayoutFill).
+  fill?: () => boolean;
 }
 
 export interface WebControls {
@@ -511,7 +515,9 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     const h = keyTarget.clientHeight;
     Object.assign(overlay.style, { left: `${keyTarget.offsetLeft}px`, top: `${keyTarget.offsetTop}px`, width: `${w}px`, height: `${h}px` });
     if (!w || !h) return;
-    const l = padLayout(w, h, insets(), opts.below?.() ?? 0);
+    // Tall fill: the pad lives in the bars around the box (see padLayoutFill).
+    const fillOn = !!opts.fill?.() && h > w && !menuOnly;
+    const l = fillOn ? padLayoutFill(w, h, insets(), opts.below?.() ?? 0) : padLayout(w, h, insets(), opts.below?.() ?? 0);
     layout = l;
     // Menu pad on the portrait tall stage: padLayout is sized for the field's
     // landscape window and runs off the right edge here. The arrows and OK /
@@ -534,7 +540,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     }
     overlay.style.setProperty('--wc-btn', `${button}px`);
     overlay.style.setProperty('--wc-gap', `${gap}px`);
-    if (opts.tall?.()) {
+    if (fillOn) place(strip, l.topStrip);
+    else if (opts.tall?.()) {
       // The HUD geometry of padLayout does not hold on a tall stage (no HUD
       // there): the two buttons sit in the top-right corner.
       const sw = 2 * l.button * 0.75 + l.gap;

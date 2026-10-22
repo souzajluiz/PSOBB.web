@@ -217,6 +217,8 @@ export interface BubbleTextures {
 export class ChatBubble {
   // Width of the window space (640, more on a wide window).
   static screenW = 640;
+  // Height of the frame the bubbles are placed in (480, or the tall fill's vh).
+  static screenH = 480;
   readonly clientId: number;
   readonly name: string;
   readonly color: number;
@@ -352,7 +354,7 @@ export class ChatBubble {
     if (Math.abs(len - Math.hypot(px, py)) < B.moveMin) return;
     const x = px + this.head.x - this.target.w * 0.5;
     const y = py + this.head.y - this.target.h * 0.5;
-    if (x < B.bounds.left || x > ChatBubble.screenW + B.bounds.right - w || y < B.bounds.top || y > 480 + B.bounds.bottom - h) return;
+    if (x < B.bounds.left || x > ChatBubble.screenW + B.bounds.right - w || y < B.bounds.top || y > ChatBubble.screenH + B.bounds.bottom - h) return;
     this.pos = { x, y };
   }
 
@@ -372,7 +374,7 @@ export class ChatBubble {
     let x = this.centre.x - this.size.w * 0.5;
     let y = this.centre.y - this.size.h * 0.5;
     x = Math.min(Math.max(x, B.bounds.left), ChatBubble.screenW + B.bounds.right - this.size.w * this.scale);
-    y = Math.min(Math.max(y, B.bounds.top), 480 + B.bounds.bottom - this.size.h * this.scale);
+    y = Math.min(Math.max(y, B.bounds.top), ChatBubble.screenH + B.bounds.bottom - this.size.h * this.scale);
     this.rect = { x, y };
     this.centre = { x: x + this.size.w * 0.5, y: y + this.size.h * 0.5 };
   }
@@ -542,12 +544,13 @@ export class ChatBubbles {
 
 // Head point of a player in window space: the model position plus its height
 // (FUN_00716204: model bound * 0.92, 0x0096fe90), projected with the camera.
-export function projectHead(cam: THREE.Camera, pos: THREE.Vector3, height: number, width: number): { x: number; y: number; dist: number; visible: boolean } {
+// `vh`: the frame's height (480, or the tall fill's virtual height).
+export function projectHead(cam: THREE.Camera, pos: THREE.Vector3, height: number, width: number, vh = 480): { x: number; y: number; dist: number; visible: boolean } {
   const p = pos.clone().add(new THREE.Vector3(0, height, 0));
   const dist = p.distanceTo(cam.position);
   const v = p.clone().project(cam);
   const visible = v.z > -1 && v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
-  return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * 480, dist, visible };
+  return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * vh, dist, visible };
 }
 
 export const SE_CHAT = 0x574; // FUN_00720940
