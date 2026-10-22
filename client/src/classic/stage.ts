@@ -23,6 +23,39 @@ export function tallLayout(w: number, h: number): { s: number; ox: number; oy: n
   return { s, ox: 0, oy: (h - VH * s) / 2 };
 }
 
+// Set from the page when the phone fit is on (classic/viewport.ts). Only then is
+// a portrait box a phone's: the overlays of the field (render/fieldhud.ts,
+// render/playerhud.ts) take the tall fill frame of overlayFrame.
+export const phoneFit = { on: false };
+
+// The 2D frame of an overlay canvas of w x h device px. Normal: the 640x480
+// screen scaled by the height, `extra` the width beyond 640 (right-half windows
+// follow the right edge, classic/ingame.ts anchorX). Tall fill (a phone in
+// portrait, Screen.phoneFill): scaled by the width, the frame is 640 x vh with
+// vh the box's height in virtual px (480 + the extra height the 3D view gets).
+export function overlayFrame(w: number, h: number): { s: number; extra: number; vh: number; fill: boolean } {
+  if (phoneFit.on && h > w) {
+    const s = w / VW;
+    return { s, extra: 0, vh: h / s, fill: true };
+  }
+  const s = h / VH;
+  return { s, extra: Math.max(0, w / s - VW), vh: VH, fill: false };
+}
+
+// Vertical bands of a tall fill frame. Windows keep their distance from the top
+// edge (the top band: no shift), from the bottom edge (the bottom band), or stay
+// centred (the mid band); the extra height goes to the 3D view between them.
+export interface Bands {
+  mid: number; // y shift of the centred band (extra / 2)
+  bottom: number; // y shift of the bottom band (extra)
+}
+export const NO_BANDS: Bands = { mid: 0, bottom: 0 };
+export function bandsOf(vh: number, fill: boolean): Bands {
+  if (!fill) return NO_BANDS;
+  const extra = vh - VH;
+  return { mid: extra / 2, bottom: extra };
+}
+
 // An inline text editor of a screen (login rows, character name, game name /
 // password, chat line). The page brings up the phone's on-screen keyboard for
 // it (ui/softkeyboard.ts); the screen itself keeps reading ordinary key events.
@@ -48,6 +81,11 @@ export interface Screen {
   // A phone (fit mode, classic/viewport.ts): in portrait the stage is a tall
   // box and the screen is laid out by tallLayout. Other cases are unchanged.
   phoneLayout?: boolean;
+  // true (with phoneLayout): on the phone's portrait stage the 2D frame is the
+  // whole 3:4 box, 640 wide and vh high (Stage.vh), so the 3D view under it
+  // fills the box and the HUD keeps its top / bottom anchors (classic/ingame.ts
+  // bandsOf). Without it the screen is the centred tallLayout.
+  phoneFill?: boolean;
   // Paints the screen's backdrop over the whole canvas (covering it, the bars of
   // the tall phone layout show it); called before draw, with the transform reset.
   drawBackdrop?(ctx: CanvasRenderingContext2D, w: number, h: number): void;
@@ -87,6 +125,8 @@ export class Stage {
   ox = 0; // device px of the virtual origin (tall phone layout only)
   oy = 0;
   tall = false; // the tall phone stage is up (portrait phone, phoneLayout screen)
+  fill = false; // the tall stage fills its box (Screen.phoneFill): 3D view = box
+  vh = VH; // virtual height of the frame (fill: the box height in virtual px)
   time = 0;
   // Development aid (?t=<seconds>): the animation clock held at one value so a
   // frame can be compared with a capture.
@@ -147,6 +187,19 @@ export class Stage {
   private paint(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     const screen = this.screen!;
     ctx.imageSmoothingEnabled = true;
+    if (screen.phoneLayout && h > w && screen.phoneFill) {
+      const s = w / VW;
+      [this.sx, this.sy, this.ox, this.oy] = [s, s, 0, 0];
+      this.tall = true;
+      this.fill = true;
+      this.vh = h / s;
+      ctx.setTransform(s, 0, 0, s, 0, 0);
+      ctx.globalAlpha = 1;
+      screen.draw(ctx, this);
+      return;
+    }
+    this.fill = false;
+    this.vh = VH;
     if (screen.phoneLayout && h > w) {
       const t = tallLayout(w, h);
       [this.sx, this.sy, this.ox, this.oy] = [t.s, t.s, t.ox, t.oy];
@@ -174,12 +227,12 @@ export class Stage {
 
   // Draws the current screen into another context of size w x h (no update).
   renderTo(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    const [sx, sy, ox, oy, tall] = [this.sx, this.sy, this.ox, this.oy, this.tall];
+    const [sx, sy, ox, oy, tall, fill, vh] = [this.sx, this.sy, this.ox, this.oy, this.tall, this.fill, this.vh];
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
     if (this.screen) this.paint(ctx, w, h);
     [this.sx, this.sy, this.ox, this.oy] = [sx, sy, ox, oy];
-    this.tall = tall;
+    [this.tall, this.fill, this.vh] = [tall, fill, vh];
   }
 
   // Ratio that makes a virtual-space circle look round on screen.

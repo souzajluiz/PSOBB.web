@@ -142,3 +142,68 @@ export function padLayout(width: number, height: number, insets: Insets = NO_INS
 export function intersects(a: PxRect, b: PxRect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
+
+// Tall fill (a phone in portrait, Screen.phoneFill; stage.ts overlayFrame): the
+// 2D frame is the 3:4 box itself, 640 wide and vh high, so the palette sits in
+// its bottom band (PALETTE_POS shifted by the bottom band). The pad keeps out of
+// the HUD: the stick, the arrow diamond and OK / BACK go in the bar under the box
+// (`bar` CSS px), right-aligned for the buttons; the small buttons (PAL, MENU,
+// CHAT, VIB, fullscreen, mute) go in the bar above the box, right-aligned. The
+// palette taps are the palette's slots, as on the field. Coordinates are CSS px
+// relative to the box (negative y: the bar above it).
+export function padLayoutFill(width: number, height: number, insets: Insets = NO_INSETS, bar = 0): PadLayout {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const s = w / VW;
+  const vh = h / s;
+  const dyBottom = vh - VH;
+  const px = (r: { x: number; y: number; w: number; h: number }): PxRect => ({ x: r.x * s, y: r.y * s, w: r.w * s, h: r.h * s });
+  const palette = px({ x: PALETTE_POS.x, y: PALETTE_POS.y + dyBottom, w: PALETTE_SIZE.w, h: PALETTE_SIZE.h });
+  const status = px(STATUS_WINDOW);
+  const party = px(PARTY_WINDOW);
+  const radar = px(MINIMAP_RECT[0]);
+  const message = px({ ...MESSAGE_WINDOW, y: MESSAGE_WINDOW.y + dyBottom / 2 });
+
+  const gap = 6;
+  // The bar under the box holds the stick (2.2 buttons high), the diamond (3
+  // buttons) and the OK / BACK column (2.5 buttons + gap): the button size that
+  // fits all three in the bar's height.
+  const button = clamp(Math.min((bar - 2 * gap) / 3, (bar - 3 * gap) / 2.5), 20, 60);
+  const slots = PALETTE_KEYS.map(([key, index]) => {
+    const [ex, ey] = SLOT_POS[index];
+    return { key: key as GameKey, rect: { x: palette.x + ex * s, y: palette.y + ey * s, w: ICON_W * s, h: ICON_H * s } };
+  });
+  slots.push({ key: KEYS.paletteChange, rect: { x: palette.x + CTRL_TAB.x * s, y: palette.y + CTRL_TAB.y * s, w: CTRL_TAB.w * s, h: CTRL_TAB.h * s } });
+
+  const bottom = h + bar - gap;
+  const actionW = button * 1.25;
+  const dpadSize = 3 * button;
+  const actions: PxRect = { x: w - Math.max(gap, insets.right) - actionW, y: bottom - 2 * actionW - gap, w: actionW, h: 2 * actionW + gap };
+  const dpad: PxRect = { x: actions.x - gap - dpadSize, y: bottom - dpadSize, w: dpadSize, h: dpadSize };
+  const stickSize = button * 2.2;
+  const zoneLeft = Math.max(0, insets.left);
+  const stickZone: PxRect = { x: zoneLeft, y: h, w: Math.max(0, dpad.x - gap - zoneLeft), h: bar };
+  const stickHome = { x: zoneLeft + Math.max(gap, insets.left) + stickSize / 2, y: bottom - stickSize / 2 };
+
+  // Small buttons: the bar above the box, right-aligned (the strip's width is
+  // two buttons of 0.75 and the gap, as webcontrols.ts sets it).
+  const stripH = Math.min(button * 0.75, 36);
+  const stripW = 2 * button * 0.75 + gap;
+  const topStrip: PxRect = { x: Math.max(0, w - Math.max(gap, insets.right) - stripW), y: -(stripH + gap), w: stripW, h: stripH };
+
+  return {
+    scale: s,
+    extra: 0,
+    button,
+    gap,
+    palette: slots,
+    stickZone,
+    stickSize,
+    stickHome,
+    dpad,
+    actions,
+    topStrip,
+    underStage: true,
+    hud: { status, party, radar, message, palette },
+  };
+}

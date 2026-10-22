@@ -27,6 +27,9 @@ export interface StageFitOptions {
   keyboardFocused?: () => boolean;
   // true while the current screen wants the tall portrait stage (Screen.phoneLayout).
   tall?: () => boolean;
+  // true with `tall` for a screen whose 3D view fills the box (Screen.phoneFill):
+  // the touch pad then goes in the bars above and below the box.
+  fill?: () => boolean;
   onBox?: (box: Box, orientation: Orientation) => void;
 }
 
@@ -81,10 +84,13 @@ export function installStageFit(o: StageFitOptions): StageFit {
     // centred in the area: its content is laid out by tallLayout, and the
     // touch pad it hides is not under the box.
     const tall = o.tall?.() ?? false;
+    const fill = tall && (o.fill?.() ?? false);
     const portrait = state.orientation === 'portrait';
     const box = snapBox(portrait ? (tall ? fitStage(area, 3 / 4, 3 / 4) : fitStage(area, 4 / 3, 4 / 3)) : area);
     state.box = box;
-    state.below = kb || tall ? 0 : padBelow(state.orientation, area, box);
+    // The tall fill keeps the bars above and below the box for the pad (the
+    // box is centred, so the bars are equal); the other tall screens need none.
+    state.below = kb ? 0 : fill ? Math.max(0, area.y + area.h - (box.y + box.h)) : tall ? 0 : padBelow(state.orientation, area, box);
     for (const c of o.canvases) {
       Object.assign(c.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
     }

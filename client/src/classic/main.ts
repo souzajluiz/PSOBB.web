@@ -32,7 +32,7 @@ import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { SelectPreview } from './charselect_preview.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { CharaFiles } from './playerview.ts';
-import { Stage, tallLayout, textureBitmaps, VH, VW, type Screen } from './stage.ts';
+import { phoneFit, Stage, tallLayout, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { LoginForm } from './loginform.ts';
 import { NameForm } from './nameform.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
@@ -51,8 +51,10 @@ const canvas = document.getElementById('stage') as HTMLCanvasElement;
 const loader = new Loader();
 let softKeyboard: SoftKeyboard | null = null;
 const keyboardFocused = () => softKeyboard?.focused ?? false;
-// The current screen has the tall phone layout (Screen.phoneLayout).
+// The current screen has the tall phone layout (Screen.phoneLayout), and its 3D
+// view fills the box (Screen.phoneFill: the lobby and the field).
 let stageTall = false;
+let stageFill = false;
 installNoZoom();
 // The native app: hide the status bar so the game is fullscreen (the web build
 // is fullscreen through the browser, ui/fullscreen.ts).
@@ -62,8 +64,10 @@ const fit = installStageFit({
   hint: document.getElementById('rotate') as HTMLElement,
   keyboardFocused: () => keyboardFocused(),
   tall: () => stageTall,
+  fill: () => stageFill,
   onBox: (box) => softKeyboard?.placeButton(box),
 });
+phoneFit.on = fit.enabled;
 
 async function dataSource(): Promise<DataSource> {
   loader.step('source');
@@ -303,7 +307,7 @@ async function main(): Promise<void> {
         void load.then((view) => {
           console.log(`[classic] entered game "${game.name}"`);
           showWorld(true);
-          const field = new FieldScreen(view, worldCanvas, canvas, bubble);
+          const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled);
           Object.assign(window, { classicGame: field, classicLobby: undefined });
           show(field);
         }),
@@ -401,7 +405,7 @@ async function main(): Promise<void> {
     if (team) hud.team = team;
     hud.transport = transportHost(shipName);
     hud.episode4 = episode4;
-    return new LobbyScreen(v, lobbyView, lobby, hud, shipName);
+    return new LobbyScreen(v, lobbyView, lobby, hud, shipName, fit.enabled);
   };
   const showLobby = (lobby: Lobby, screen: LobbyScreen) => {
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
@@ -633,6 +637,7 @@ async function main(): Promise<void> {
     stage.show(s);
     // The stage box follows the screen's layout (tall for the phone's title).
     stageTall = s.phoneLayout === true;
+    stageFill = s.phoneFill === true;
     fit.refresh();
     controls?.setPadSuppressed(s.touchPad === false);
     controls?.setPadMenu(s.touchMenu === true);
@@ -682,6 +687,11 @@ async function main(): Promise<void> {
 
   const toVirtual = (e: MouseEvent) => {
     const r = canvas.getBoundingClientRect();
+    if (current.phoneFill && r.height > r.width) {
+      // The tall fill: the frame is the box, 640 wide and r.height / s high.
+      const s = r.width / VW;
+      return [(e.clientX - r.left) / s, (e.clientY - r.top) / s] as const;
+    }
     if (current.phoneLayout && r.height > r.width) {
       const t = tallLayout(r.width, r.height);
       return [(e.clientX - r.left - t.ox) / t.s, (e.clientY - r.top - t.oy) / t.s] as const;
@@ -724,7 +734,7 @@ async function main(): Promise<void> {
 
   referenceOverlay();
   // Fullscreen / mute buttons and the touch pad (browser conveniences).
-  controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below, tall: () => stageTall });
+  controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below, tall: () => stageTall, fill: () => stageFill });
   controls.setPadSuppressed(current.touchPad === false);
   controls.setPadMenu(current.touchMenu === true);
   // Landscape lock after the fullscreen button (Android Chrome; iOS has none).

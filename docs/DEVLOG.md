@@ -9323,3 +9323,31 @@ Summary line of the spec (the Samba's known gap is an annotation, not a failure)
 - Flight screenshots: `scratchpad/guns3/{handgun,rifle,shot,mechgun}-flight.png`. **Visibility probe** (temporary in-page probe of the frozen bullets, removed): the bullet mesh exists, its parent is the scene and is visible, its materials are transparent with opacity 1, depthTest on, and the texture is loaded; it is inside the camera frustum; its local box is about 4 x 4 x 26 units at scale 1.0. In the screenshots it reads as a green glowing orb at the reticle (e.g. `shot-flight.png`), because it points along the view. In one run terrain occluded it. So it is visible but view-aligned; the scale 1.0 is ASSUMED (the render slots set no scale).
 
 **Open:** a side-on flight screenshot (not view-aligned) to judge the look; decode the `+0x50` effect; the shooter texture variant.
+
+## 2026-10-22: Phone portrait: lobby and field fill the tall box
+
+The lobby and the game field take the phone's tall stage in portrait too, and the 3D view fills it. Until now only the title, the character screens, Connecting and Ship / Block select were tall (`tallLayout`, the whole 640x480 screen centred in the 3:4 box with bars above and below).
+
+**Layout.** `Screen.phoneFill` (set on `LobbyScreen` and `FieldScreen` when the phone fit is on) makes the 2D frame the whole 3:4 box: `Stage.paint` scales by the width (s = w / 640), the origin is the box's top left, and `Stage.vh` = box height / s (853 on a 390 wide phone, 640 wide by 853 high). The 3D canvas is the same box, so its renderer and camera follow it on resize (`mapviewer`, `lobbyview`, `gameview`). The extra height (vh - 480) goes to the 3D view.
+
+**Anchors.** Items keep their 640x480 distance to the edge they are anchored to; the rest is centred (`bandsOf` in `classic/stage.ts`, bands `top` 0, `mid` (vh - 480) / 2, `bottom` vh - 480):
+- top: HP/TP and party windows (`render/playerhud.ts`), the radar (`render/fieldhud.ts`), the lobby name window, the main menu and its Item Pack / help text, the log window, the Information Counter list and Create PARTY.
+- bottom: the palette (484, 368), the chat line (7, 397), the Item List and Item Detail leaves, the Area Map, Quest Board, the transport info and the Options window, the help text (17, 312), the Game Info and Party Info windows, the full-map minimap.
+- mid: the message window (373, 203), the counter's menus, the Team windows, the Item List of the lobby.
+- Overlay canvases (`overlayFrame`): `FieldHud` and `PlayerHud` take the frame from their own canvas size. Chat balloons, name tags and the floating texts project with vh (`projectHead(..., vh)`, `ChatBubble.screenH`). Mouse on the Area Map maps through the bottom band.
+- The desktop and landscape frames are the old ones: every band shift is 0 there (`bandsOf` returns zero unless `fill`).
+
+**Camera FOV: vertical kept.** The exe sets the view with a vertical angle (`D3DXMatrixPerspectiveFov` fovy, 0x3555 / 0x438e in `playerview.ts`, `njPerspectiveFovy`), and three.js `PerspectiveCamera.fov` is vertical too. So the 3:4 box keeps the vertical extent of the 4:3 window and the horizontal view narrows (about 45 degrees against 57 at the 4:3 window, for the same 57.5 degree fovy). The alternative (horizontal kept) would raise fovy to about 88 degrees and distort the lobby's walls. Vertical is what the exe does and what the widescreen path already does (`fovy` fixed, the extra width shown horizontally), so nothing changes in the cameras.
+
+**Touch pad (`input/padlayout.ts` padLayoutFill, `ui/webcontrols.ts`, `classic/viewport.ts`).** In the tall fill the stage box has bars above and below it (the box is centred). The fit reports the bottom bar as `below`; `fill` tells the pad to use the bars. The stick (lower left), the arrow diamond and OK / BACK (lower right) sit in the bottom bar, sized to it (button = min((bar - 12) / 3, (bar - 18) / 2.5), clamped 20..60 CSS px). PAL / MENU / CHAT / VIB and the fullscreen and mute buttons sit in the bar above the box, right-aligned. The palette taps are the palette's slots at their bottom-band place, inside the box, as on the landscape field. Nothing covers the HUD.
+
+**Shared helpers.** The phone specs' helpers moved to `client/e2e/phone-helpers.ts` (login through the form, character creation, slot and Ship Select taps); `phone-charselect.spec.ts` imports them, unchanged in what it checks. `phone-field.spec.ts` (new) covers iPhone 13 and Pixel 7 portrait, iPhone landscape and desktop.
+
+**Checks.** `cd client && npx tsc --noEmit -p .`: exit 0. Playwright against vite 5208, newserv and bridge reused, account webtall5 (created through the phone flow):
+- `phone-field.spec.ts` iPhone 13 portrait: 1 passed (lobby fills the box, the stick walks the lobby player, party created, Forest 1 entered, stick walks the field player, MENU tap opens the menu, Item List at the bottom, PAL flips the palette; no page errors). Pixel 7 portrait lobby: passed (box 3:4, pad in bars, walk). iPhone landscape: passed (whole-window frame, `classicStage.tall` and `fill` false). Desktop 1280x720: passed.
+- `phone-login.spec.ts`: 6 passed (the iPhone character-list test passes with the webtall5 account too).
+- `phone-charselect.spec.ts`: 8 passed after the helper move (the two desktop tests needed `USER` / `PASSWORD` in the import; fixed).
+
+Screenshots: `scratchpad/mobile-field/` (`lobby-iphone.png`, `lobby-pixel-field.png`, `field-forest1-iphone.png`, `field-menu-iphone.png`, `field-itempack-iphone.png`, `field-palette-iphone.png`, `field-palette-flipped-iphone.png`, `lobby-landscape-iphone.png`, `lobby-desktop.png`). Reviewed by eye: nothing cropped, HUD and windows in their anchors, the pad clear of the HUD.
+
+**Open.** The 3:4 box leaves the bars under the browser chrome on short phones: the strip above the box is 36 px at most and falls back to the bar's room, which is 72 px on a 664 px high viewport. The Team and counter windows are centred, not anchored, because the exe's positions for them are not in the table walked here. The lobby's name tags and the balloons follow the 3D projection on the taller frame, not measured against a capture.

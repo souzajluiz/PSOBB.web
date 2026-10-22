@@ -18,7 +18,7 @@ import type { GameView } from '../render/gameview.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import type { Screen, Stage, TextInputState } from './stage.ts';
+import { bandsOf, type Screen, type Stage, type TextInputState } from './stage.ts';
 
 const FRAME = 1 / 30;
 
@@ -34,8 +34,16 @@ export class FieldScreen implements Screen {
   private acc = 0;
   private frame = 0;
   private extra = 0;
+  // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
+  private vh = 480;
+  // A phone in portrait: the 3D view fills the tall box and the HUD keeps its
+  // anchors (stage.ts phoneFill).
+  readonly phoneLayout: boolean;
+  readonly phoneFill: boolean;
 
-  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures) {
+  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures, phone = false) {
+    this.phoneLayout = phone;
+    this.phoneFill = phone;
     this.view = view;
     this.game = view.game;
     this.target = target;
@@ -55,7 +63,8 @@ export class FieldScreen implements Screen {
 
   // The field runs on the 3D canvas's own loop; here the ping_server (see
   // lobby.ts PING_FRAMES) and the balloons.
-  update(dt: number): void {
+  update(dt: number, stage: Stage): void {
+    this.vh = stage.vh;
     this.acc += dt;
     while (this.acc >= FRAME) {
       this.acc -= FRAME;
@@ -68,9 +77,10 @@ export class FieldScreen implements Screen {
     const cam = this.view.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
+    ChatBubble.screenH = this.vh;
     this.chat.bubbles.tick((id) => {
       const head = this.view.playerHead(id);
-      return head ? projectHead(cam, head, 0, width) : null;
+      return head ? projectHead(cam, head, 0, width, this.vh) : null;
     });
   }
 
@@ -81,10 +91,15 @@ export class FieldScreen implements Screen {
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
+    const bands = bandsOf(stage.vh, stage.fill);
     inGameSpace(ctx, stage, (extra) => {
       this.extra = extra;
       this.chat.bubbles.draw(ctx, this.bubble);
+      // The chat line sits at the bottom of the screen (stage.ts bandsOf).
+      ctx.save();
+      ctx.translate(0, bands.bottom);
       this.chat.input.draw(ctx, this.frame);
+      ctx.restore();
     });
   }
 
