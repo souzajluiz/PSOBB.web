@@ -306,8 +306,11 @@ tools/exedata.py reads. Correction to pass 2: +0x514 is NOT a movement target.
 The root update 0x004b903c calls 0x00520dc0(src=+0x38, dst=+0x514, k=0.3). That
 helper (disasm 0x00520dc0..0x00520e20) does dst = src - G, normalizes it and
 keeps the length, scales by length*k, then dst += G. Net: +0x514 = G + 0.3 *
-(pos - G). G = the vector at *(0x00a48a54)+0x178 (a global object, .bss, set at
-run time, writer not located; ASSUMED arena centre). Same for +0x520 = G +
+(pos - G). G = the vector at *(0x00a48a54)+0x178. 0x00a48a54 is the default camera
+(docs/DEVLOG.md "Dark Falz camera: the per-frame driver": FUN_004D3ABC updates the
+camera at DAT_00A48A54 and +0x178..+0x18C is its current eye / target), so G is
+the camera's eye (coordinator; ASSUMED until the +0x178 field is checked for
+this camera mode). +0x514 is the body pulled 30% of the way toward the camera. Same for +0x520 = G +
 0.3 * (+0x4cc - G). Velocity +0x52c..+0x534 = 0.5 * (+0x520..+0x528) (0x00906c7c
 = 0.5). Effects 0x3ea / 0x3eb (+0x630 & 0x400), 0x3ef (& 0x200) take +0x52c and
 +0x514 as their positions. So +0x514 / +0x52c are render/effect anchors, not a
