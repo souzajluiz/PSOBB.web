@@ -8536,3 +8536,53 @@ keyboard is emulated by a shorter viewport, not a real keyboard.
 **UNCLEAR.** Desktop pixel identity: HEAD does not reproduce its own
 screenshots frame by frame (the title animation is not fully frozen by `?t=`),
 so the desktop check is by code path, not by a pixel diff.
+
+## 2026-10-22: Phone character select and creation: tall stage, HTML name form
+
+**What changed:** The character list, character creation and the Connecting
+screen use the tall portrait stage of the title (`tallLayout` in
+`classic/stage.ts`) on a phone in portrait: the whole 640x480 screen is scaled
+to the 3:4 box's width, centred, and the bars are filled. The list and the
+creation fill the bars with their own background, dimmed
+(`CharSelectScreen.drawBackdrop`, `CharCreateScreen.drawBackdrop`: the list's
+tiles and backtext, the creation's `drawBackground` tiles). The Connecting
+screen's background is black, so its bars are black. A tap on a slot of the
+list is the same as Enter on it (the tap goes through `tallLayout` in
+`main.ts toVirtual`).
+
+The name of a new character is typed into an HTML form on a phone
+(`classic/nameform.ts`, styled by `loginform.css`, Name / OK / Cancel). Its
+result goes to the same `NameEditor` as the canvas editor
+(`submitForm` / `cancelForm` in `charcreate.ts`), so the dressing room takes it
+as it takes the canvas's. The form is created when the creation is first shown,
+so the login form's selectors do not see a second `.lf-root` on the title.
+
+**Decisions:**
+- The tall layout is opted in per screen (`phoneLayout`, set from `fit.enabled`
+  in `main.ts`), not by the canvas shape alone, so a narrow desktop window is
+  unchanged. Landscape keeps the whole-screen layout (the tall branch needs a
+  portrait canvas).
+- The Connecting screens of the login and the game-server connection are tall;
+  the game-entry and lobby-leave loading screens are not (the world canvas
+  follows the box, and those screens are not part of this change).
+- Ship select and Block select are NOT tall: `ingame.ts inGameSpace` scales
+  from the canvas height and ignores the tall offset, so it would be wrong.
+  Left as is; a follow-up.
+- The pad stays visible on the list and the creation (the creation has no
+  pointer input, so the pad is its only way to act); it sits in the bars.
+- The name form's labels ("Name", "OK", "Cancel") are English, not unitxt
+  texts: the creation's canvas heading is a sprite, not a string.
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`npx playwright test e2e/phone-charselect.spec.ts e2e/phone-login.spec.ts`
+(vite on 5190, newserv and bridge running, account webtall): 10 passed. The
+iPhone 13 run makes a character through the phone UI (the list tap, the class,
+the dressing room steps, the name in the form, OK) and reaches the lobby. The
+Pixel 7 run taps an empty slot and checks the name form; the landscape and
+desktop runs check the layout is the old one.
+
+**ASSUMED.** Chrome's device emulation stands in for a real phone; the soft
+keyboard is not shown (the form has its own input).
+
+**UNCLEAR.** The Connecting screen in its tall form was not screenshotted; it
+is only exercised on the way through the login and the list.

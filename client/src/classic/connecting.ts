@@ -48,10 +48,14 @@ export interface ConnectingOptions {
   // false: no "Connecting.." object, and the screen ends as soon as the task
   // does (the game-entry loading screen).
   status?: boolean;
+  // A phone (fit mode): the tall portrait stage (stage.ts tallLayout). The
+  // bars are black, the screen's own background.
+  phone?: boolean;
 }
 
 export class ConnectingScreen implements Screen {
   layout = 'stretch' as const;
+  readonly phoneLayout: boolean;
   private readonly status: boolean;
   private particles = new ParticleSystem();
   private tint = makeTinter();
@@ -68,6 +72,7 @@ export class ConnectingScreen implements Screen {
 
   constructor(assets: ConnectingAssets, task: Promise<unknown>, onDone: () => void, onError: (message: string) => void, opts: ConnectingOptions = {}) {
     this.status = opts.status ?? true;
+    this.phoneLayout = opts.phone ?? false;
     this.assets = assets;
     this.onDone = onDone;
     this.onError = onError;

@@ -25,7 +25,8 @@ import {
 } from './charcreate_data.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CharacterModelView } from './charcreate_model.ts';
-import { FONT, type Screen, type Stage, type TextInputState } from './stage.ts';
+import { FONT, VH, VW, type Screen, type Stage, type TextInputState } from './stage.ts';
+import type { NameForm } from './nameform.ts';
 import { exhaustive } from '../exhaustive.ts';
 
 export interface CharCreateAssets {
@@ -47,7 +48,7 @@ export interface CharCreateHandlers {
 }
 
 const FPS = 30;
-const NAME_MAX = 10; // 12 UTF-16 units including the "\tE" prefix (FUN_004f0c10)
+export const NAME_MAX = 10; // 12 UTF-16 units including the "\tE" prefix (FUN_004f0c10)
 // BAMS sine (FUN_0082dcbc): 0x10000 = one turn.
 const bsin = (a: number) => Math.sin((a / 0x10000) * Math.PI * 2);
 const bcos = (a: number) => Math.cos((a / 0x10000) * Math.PI * 2);
@@ -992,9 +993,21 @@ class AutoEditor extends Editor {
 // keyboard types into a field drawn at the same place.
 class NameEditor extends Editor {
   private value: string;
+  // The phone's name form answers here (submitForm / cancelForm), not by a key.
+  private formAnswer: 'ok' | 'cancel' | null = null;
   constructor(d: Dress) {
     super();
     this.value = d.name;
+  }
+
+  // The form's result: the same as Confirm / Cancel on the canvas (tick).
+  submitForm(name: string): void {
+    this.value = name.replace(/[\x00-\x1f\x7f]/g, '').slice(0, NAME_MAX);
+    this.formAnswer = 'ok';
+  }
+
+  cancelForm(): void {
+    this.formAnswer = 'cancel';
   }
 
   override handlesText(): boolean {
@@ -1012,13 +1025,13 @@ class NameEditor extends Editor {
     if (this.frame < 2) return;
     this.tickFade();
     if (!this.alive) return;
-    if (pad.pressed.has('ok')) {
+    if (pad.pressed.has('ok') || this.formAnswer === 'ok') {
       d.name = this.value.trimEnd();
       if (!nameValid(d.name)) d.name = '';
       se(d.name ? SE.back : SE.nameNg); // FUN_004f34a8: 0x573, or 0x57c for an invalid name
       this.result = 'ok';
       this.alive = false;
-    } else if (pad.pressed.has('cancel')) {
+    } else if (pad.pressed.has('cancel') || this.formAnswer === 'cancel') {
       se(SE.back);
       this.result = 'cancel';
       this.alive = false;
@@ -1049,6 +1062,12 @@ class NameEditor extends Editor {
 
 export class CharCreateScreen implements Screen {
   layout = 'left43' as const;
+  // A phone (fit mode): the tall portrait stage (stage.ts tallLayout), and the
+  // name is typed into the HTML form (nameform.ts) instead of the canvas keys.
+  readonly phoneLayout: boolean;
+  private readonly phoneForm: NameForm | null;
+  // The canvas name editor the form is open for, while it is open.
+  private formEditor: NameEditor | null = null;
   private sprites: SpriteSheet;
   private text: string[][];
   private pad = new Pad();
@@ -1087,9 +1106,11 @@ export class CharCreateScreen implements Screen {
   private readonly handlers: CharCreateHandlers;
   private readonly model: CharacterModelView | null;
 
-  constructor(assets: CharCreateAssets, handlers: CharCreateHandlers, model: CharacterModelView | null = null) {
+  constructor(assets: CharCreateAssets, handlers: CharCreateHandlers, model: CharacterModelView | null = null, phone: { form: NameForm } | null = null) {
     this.handlers = handlers;
     this.model = model;
+    this.phoneLayout = phone !== null;
+    this.phoneForm = phone?.form ?? null;
     this.sprites = new SpriteSheet(assets.tex);
     this.text = assets.text;
     this.startSelection(0, 0, 0);
@@ -1134,7 +1155,30 @@ export class CharCreateScreen implements Screen {
       this.model.setRuler(this.editor?.ruler() ?? 0);
       this.model.render(dt);
     }
+    this.syncNameForm();
     void stage;
+  }
+
+  // Phones: the name editor is the HTML form while the editor is open.
+  private syncNameForm(): void {
+    const form = this.phoneForm;
+    if (!form) return;
+    const ed = this.sub === 1 && this.editor instanceof NameEditor && this.editor.alive ? this.editor : null;
+    if (ed === this.formEditor) return;
+    if (this.formEditor) form.close();
+    this.formEditor = ed;
+    if (ed && this.dress) {
+      form.open(this.dress.name, {
+        submit: (name) => {
+          ed.submitForm(name);
+          form.close();
+        },
+        cancel: () => {
+          ed.cancelForm();
+          form.close();
+        },
+      });
+    }
   }
 
   private tick(): void {
@@ -1394,11 +1438,13 @@ export class CharCreateScreen implements Screen {
 
   // The name editor (step editor with text): the page raises the on-screen keyboard.
   textInput(): TextInputState | null {
+    if (this.formEditor) return null; // the HTML form has the keyboard
     return this.sub === 1 && this.editor?.handlesText() ? { password: false } : null;
   }
 
   key(e: KeyboardEvent): void {
     if (e.repeat) return;
+    if (this.formEditor) return; // the HTML form has the keys
     if (this.sub === 1 && this.editor?.handlesText() && !['Enter', 'Escape', 'Tab'].includes(e.key)) {
       this.editor.text(e);
       return;
@@ -1411,6 +1457,21 @@ export class CharCreateScreen implements Screen {
 
   drawFullscreen(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // The tall phone stage (stage.ts): the bars show the screen's background
+  // (drawBackground, the same tiles as draw) covering the canvas, dimmed. The
+  // 640x480 area draws its own background in draw().
+  drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const c = Math.max(w / VW, h / VH);
+    ctx.save();
+    ctx.setTransform(c, 0, 0, c, (w - VW * c) / 2, (h - VH * c) / 2);
+    const list = new DrawList(this.sprites);
+    drawBackground(list);
+    list.flush(ctx);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0, 0, w, h);
   }
 
