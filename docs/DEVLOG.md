@@ -8930,3 +8930,41 @@ main checkout for the run, removed before the commit.
 
 **ASSUMED.** The exe's 4:3 placement (model at x 506) is taken from the
 SelectPreview comment; no capture with a character confirms it.
+
+## 2026-10-22: Mechgun bursts (class 8): several shots per swing
+
+**What changed:** the Mechgun (weapon class 8) now fires a burst per crossing of its hit frame, as PsoBB.exe does, instead of one hit per swing.
+
+- `client/src/combat/attack.ts`: `MECHGUN_CLASS`, `burstCount(grind)`, `begin(step, type, grind)`, and a class 8 branch in `tick()` (`tickBursts`). Each burst calls the same `events.hit` as before (the 6x46 with the targets re-read from the reticle, and one gun shot). The last burst opens the combo window and pauses the motion; the timer then ends the swing (`finish()`). The header's "Not reproduced" list no longer names the mechgun.
+- `client/src/render/combat.ts`: `startAttack` passes the equipped weapon's `data1[3]` (grind) to `begin`. The attack's start sets `animator.frame = 0` (see the live check).
+- `tests/mechgun.test.ts` (new, 17 checks): the count, the frame-2 hit, the loop timing, the chain of three swings, a press during the bursts, the pause after the last burst.
+
+**Exe facts (PsoBB.exe, Ephinea 1.25.13; named dump `refsrc/.../Psobb.exe-05112026.c`, the dirty annotation of 0x00699058 agrees):**
+
+- `handle_player_attack_animation_damaging_part` (0x00699058, dump line 579534), class 8 branch (`GetPlayerWeaponGroup == 8`): while the done flag (`unknown_flags & 8`) is clear, at each crossing of the damaging frame (`check_entity_animation_elapsed_threshold`, `threshold < elapsed <= threshold + stride`) it calls `send_0x60_0x46_attack_end` (6x46), then `multipart_attack_step++`. When `(char)weapon->attacks_per_step <= step`, it sets flag 8, calls `HandleAttackDamageCalculation_006a2fb4` (0x006a2fb4: flag 2 = window, timer = `GetComboAttackPower`, the `DAT_00969078` table, which is the port's `COMBO_WINDOW`) and sets `+0xb0 |= 0x50` (motion ended, paused). The other classes do not take this branch.
+- The byte called `attacks_per_step` (Ghidra label) is item `+0x1f5`. `InitializeItemWeapon_005d1b50` (0x005d1b50) copies it from `compact_item_data.field3_0x3`, which is `data1[3]`. `ApplyItemStatEffect_005e93e4` (0x005e93e4) raises it toward `pmt+0x1a` (max grind). `UnknownItemFunction13_005e7b18` writes it back to `data1[3]`. So the count is the **grind**, not a separate table. Strong evidence, but the label is Ghidra's; ASSUMED until a grind-N Mechgun is compared in the exe.
+- Count: the check is `grind <= ++count`, so `max(1, grind)` bursts per swing (grind 0 and 1: one burst).
+- Damaging frame: `g_WeaponAttackDamagingFrames` at 0x00968ca0, row 8 at 0x00968d00 = 2.0, 2.0, 2.0 (`tools/exedata.py read 00968d00 f 3`). Same numbers as `HIT_FRAMES`.
+- Motion: the three steps all use rlc index 25, mode 1 (loop) (`ATTACK_MOTIONS` class 8, from the field motion table). The animator reads `frameCount` 4 for it (live).
+- Counter reset: `InitializePlayerAttackState_006a2f54` (0x006a2f54) clears `+0x14` (the count) and `+0xe` (`multihit_attack_index`) each swing.
+- Targets: `send_0x60_0x46_attack_end` calls `update_player_targeting_info` before every 6x46, so each burst re-reads the reticle's list (no spread: the same listed targets; one shot per burst for the Mechgun's kind). The 6x46 target list goes out as before; `newserv` (`ReceiveSubcommands.cc`, 6x46 = `forward_subcommand_with_entity_targets_transcode_and_track_hits_t<G_AttackFinished_Header_6x46>`) accepts one 6x46 per burst (up to 10 targets each).
+
+**Timing:** a burst is made each time the motion's frame passes 2. With the 4-frame loop and speed 0.9 (step 0), that is one burst per 4 / 0.9 = 4.4 ticks (148 ms at 30 Hz). ASSUMED: the first burst comes after the animator's 5-tick blend from the idle pose (`PlayerAnimator.tick`), so the first one is later than 2 / 0.9 ticks.
+
+**Why the 3rd swing hit nothing (before this change):** a port bug, not exe behaviour (from reading the code; the old build was not re-run live). The mechgun's motion loops (mode 1), and `AttackState` ended an attack only when the motion ended (`ended` is never true for mode 1). The exe ends the swing by its burst count (flag 8, `+0xb0 |= 0x50`). So the old port hit once, never left the swing, and every later press queued a swing that never started.
+
+**Live check (Chrome headless, webgun, Forest 1, Vite 5194, newserv and bridge 8080 reused).** A temporary spec (`client/e2e/mechgun-burst.spec.ts`, not committed) makes a solo party, warps to Forest 1, constructs room 2's wave 1, places the player 60 behind the nearest enemy facing it, and presses ArrowDown three times (press 2 in step 0's window, press 3 in step 1's). It wraps `sendAttack`, `sendAttackTargets`, `gunShot` and `landGunBullet`.
+
+- Grind 0 (before the animator reset): one burst per swing, three swings chained, each burst one 6x46 with one target (0x1017), landings dealt 10, 0 and 7 damage.
+- Grind 3 (after the reset, `equipped weapon data1[0..3] = 00 08 00 03`): every swing made 3 bursts, 3 x 6x46 (target 0x101c), 3 landings; swing steps 0, 1, 2 (6x43 x3), the chain ran through the window each time. Landed damage per swing 4, 4 and 12 (a landing of 0 is a missed roll). Burst gaps 130 to 170 ms in this slow headless render (the exe timing is 148 ms at 30 Hz). No page errors.
+
+**Found on the way:** `PlayerAnimator.play` skips a restart when the index and mode match. All three mechgun steps share motion 25, so the 2nd and 3rd swings began mid-loop. The attack's start now sets `animator.frame = 0` (ASSUMED: every attack motion starts at frame 0). The headless render runs at about 5 fps here, so a key tap of 60 ms can fall between two frames and be lost; the spec holds the key for 400 ms.
+
+**Checks.** `tests/gunbullet.test.ts`, `tests/rangedaim.test.ts`: all checks passed. `tests/combat.test.ts`: 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures. `tests/mechgun.test.ts`: 17 checks, 0 failures. `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+**ASSUMED / UNCLEAR.**
+- Grind = burst count (exe code is clear; the field name comes from Ghidra, so compare a grind-3 and a grind-0 Mechgun in the exe to close it).
+- The bullet of each burst uses the gun path from `resolveHit` (one pellet, the listed target); the exe's per-burst bullet is `TriggerWeaponAttackCallback_005e9384` (0x005e9384, the item's vtable callback at `+0x234`), not traced for the mechgun.
+- The combo timer uses the port's `COMBO_WINDOW` (= the exe's `DAT_00969078`), as before.
+- A burst with no targets sends no 6x46 (the exe sends one with count 0 if `update_player_targeting_info` returns non-zero; not traced).
+- Only the hit roll per bullet is seen live (`dhp`). The per-bullet damage formula is the existing one.
