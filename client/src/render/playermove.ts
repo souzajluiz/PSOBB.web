@@ -158,6 +158,9 @@ export class PlayerMover {
   private targetZ = 0;
   private arrived = true;
   private runCount = 0;
+  // Legs started so far: each one is one 6x40 / 6x42 (the exe sends the leg's
+  // point when the leg is set, 0x0069bb6c), so a change means a new packet.
+  legSerial = 0;
 
   x: number;
   z: number;
@@ -185,6 +188,12 @@ export class PlayerMover {
     this.targetX = this.x + Math.sin(a) * LEG_LENGTH;
     this.targetZ = this.z + Math.cos(a) * LEG_LENGTH;
     this.arrived = false;
+    this.legSerial++;
+  }
+
+  // The point the current leg aims at (the 6x40 / 6x42 point).
+  legEnd(): { x: number; z: number } {
+    return { x: this.targetX, z: this.targetZ };
   }
 
   private poll(input: MoverInput): void {
@@ -255,6 +264,36 @@ export interface Follower {
   x: number;
   z: number;
   heading: number; // BAMS
+}
+
+// The render-side follower of a remote player (not the exe's): one packet per
+// leg arrives about a latency late, so a follower that reached its leg's point
+// while the player still walks or runs carries on along the leg direction
+// until the next packet corrects it (dead reckoning). A stopped player's
+// follower is not allowed to pass the stop point: it jumps back to it instead
+// of stepping back. `dir` is the unit direction of the last leg.
+export function remoteStep(
+  f: Follower,
+  target: { x: number; z: number },
+  run: boolean,
+  moving: boolean,
+  dir: { x: number; z: number },
+): boolean {
+  const speed = run ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
+  const dist = Math.hypot(target.x - f.x, target.z - f.z);
+  if (moving) {
+    // At (or within a step before) the point, or past it: carry on ahead.
+    const along = (f.x - target.x) * dir.x + (f.z - target.z) * dir.z;
+    if (along >= -speed) return followTick(f, f.x + dir.x * LEG_LENGTH, f.z + dir.z * LEG_LENGTH, run);
+    return followTick(f, target.x, target.z, run);
+  }
+  if (dist < 0.5) return false;
+  if ((f.x - target.x) * dir.x + (f.z - target.z) * dir.z > 0) {
+    f.x = target.x;
+    f.z = target.z;
+    return true;
+  }
+  return followTick(f, target.x, target.z, run);
 }
 
 export function followTick(f: Follower, targetX: number, targetZ: number, run: boolean): boolean {

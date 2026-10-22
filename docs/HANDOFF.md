@@ -68,7 +68,7 @@ worktrees are left.
 
 ## To do next (in order)
 
-1. **Player movement, remaining** (local tick machine and remote follower are in, see DEVLOG 2026-10-20; left: two-client Chrome check; the slowed / guard speed and the animation tie are in the field since 2026-10-21, see DEVLOG "player slow / guard speed and animation tie in the field"). Original text:
+1. **Player movement, remaining** (local tick machine and remote follower are in, see DEVLOG 2026-10-20; the two-client check of the field follower is done, 2026-10-22: `e2e/two-client-move.spec.ts`, 9.3 -> 4.8 units mean lag, zero-move frames 24 -> 17 %; left: the whole-frame hitch comparison alone vs with the other player (lobby and field), the lobby under the same throttle, a real phone; the slowed / guard speed and the animation tie are in the field since 2026-10-21, see DEVLOG "player slow / guard speed and animation tie in the field"). Original text:
    **Player movement, second half** (the user: "o deslocamento nao esta fiel").
    Done: walk 1.0 / run 1.5 units per tick (`render/playermove.ts`, 30 / 45 units a
    second). Open, all in the DEVLOG entry "player movement" with the exe addresses:

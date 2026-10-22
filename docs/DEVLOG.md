@@ -9164,3 +9164,34 @@ the dump.
   then `TBoss5Gryphon` has no brain and stands still (see the "Episode 2 floors in Chrome" entry).
 
 **Checks.** No source change, so no `tsc` run for this entry.
+
+## 2026-10-22: player movement: two-client check of the remote follower (classic field)
+
+**Check:** `client/e2e/two-client-move.spec.ts` (classic.html, the production page). A and B join the same party (as `party-join.spec.ts`), both warp to Forest 1 (floor 1). A (desktop, 1280x720) taps W, holds W (run), stops, turns in place (A), holds W+D, stops. B is the observer: window 412x839 (phone layout set after the login; no `isMobile` / touch emulation), CPU throttled 4x (CDP `Emulation.setCPUThrottlingRate`) from the start of the measurement, one-way WebSocket latency 100 ms +- 40 ms (a wrapper on the page's WebSocket; Chrome's network emulation does not shape WebSocket frames). Both pages sample on every animation frame: A's own drawn pose and B's drawn copy of A's marker, on the same wall clock. Lag = distance on the ground between B's remote and A's drawn pose at the same time.
+
+**Numbers, before (the follower as it was: a 6x40 / 6x42 with the current position every 0.15 s; the remote gait idle whenever it stood within 0.5 of the packet point):**
+- lag mean 9.31, p95 21.57, max 21.94 units
+- overshoot 0, direction flips 0 / s, catch-up jumps 0
+- zero-move frames 28 of 117 moving frames (24 %)
+- A state against B's gait: 28 % of frames differ
+- B frames: median 50 ms, 60 of 232 over 50 ms (CPU x4; A median 16.7 ms, none over 50 ms)
+
+**After (the same run, same settings):**
+- lag mean 4.78, p95 13.15, max 13.45 units
+- overshoot 0, direction flips 0.09 / s, catch-up jumps 0
+- zero-move frames 15 of 89 moving frames (17 %)
+- state against gait: 26 % of frames differ; the timeline shows these are the latency windows (A stops at 4200 ms, B goes idle at 4696 ms: 100 ms latency plus the drain of the gap of about 5 units at 1 unit a tick). Not a stuck animation.
+- B frames: median 50 ms, 33 of 268 over 50 ms (noisy: the other agents' Playwright runs share the machine)
+- Two earlier after-runs with the same code: lag mean 5.02 / 7.02, zero-move 20 / 133 and 22 / 141. Run-to-run spread is about +-2 units of lag mean, so the lag drop is real but the exact numbers are not.
+- speed spread (B's per-frame speed / its mean) went from CV 0.20 to 0.27: not a regression in distance; the per-frame speed depends on B's frame timing and is noisy at 50 ms frames.
+
+**What the numbers say about the cause:** the field and the lobby use the same follower (`LobbyView`, `render/lobbyview.ts`; the classic field wraps the same `GameView`, `classic/field.ts` only adds the chat and HUD), so the difference between "smooth in the lobby" and "stutter in the field" is not the follower's code. The follower itself was stop-go: A sent its *current* position every 0.15 s, so B reached each point, waited for the next packet (and the latency jitter in it), and then idled (24 % zero-move frames), and the idle gait showed between legs.
+
+**Fixes (`render/playermove.ts`, `render/lobbyview.ts`):**
+- one 6x40 / 6x42 per leg, with the leg's point (8 units ahead), sent when the leg starts (`PlayerMover.legSerial` / `legEnd()`; the exe sends the leg's point when the leg is set, `0x0069bb6c`, the packet is looped back at `0x008003e0`, see the 2026-10-19 entry). The 0.15 s resend is gone.
+- `remoteStep` (render side, not the exe): a remote that reached its leg's point while the packet says moving carries on along the leg direction until the next packet (dead reckoning); a stopped remote that is ahead of its stop point jumps back to it instead of stepping back; the remote keeps its walk / run pose while the packet says moving (the distance rule set idle between legs).
+- Unit tests: `tests/playermove.test.ts` (dead reckoning keeps moving, stopped-ahead does not step back, stopped-behind walks up, one leg counted per 8 ticks).
+
+**Not done:** the whole-frame hitch comparison (30 s alone vs with the other player, in the lobby and in Forest 1), the lobby run under the same throttle, a real phone (touch and `isMobile` emulation were not used for the observer: it is a desktop window at phone size), and the model / name tag / texture work per remote player. The stutter on a phone may still be the frame rate of the field itself.
+
+**Checks:** `tests/playermove.test.ts` ok, `client` `tsc --noEmit` clean, `e2e/two-client-move.spec.ts` passes (the measurement is printed, the spec only checks the pages' errors and the flow).

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
+import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -111,4 +111,46 @@ assert.equal(legSpeed(1.5, false, false), 1.5);
 assert.equal(legSpeed(1.5, true, false), 0.75);
 assert.equal(legSpeed(1.5, false, true), 1.125);
 assert.equal(legSpeed(1.0, true, true), 0.5, 'slowed beats guard');
+
+// Remote follower (render side): dead reckoning while the packet says moving.
+{
+  // Moving, at the leg point: carries on along the leg direction, every tick moves.
+  const f = { x: 0, z: 0, heading: 0 };
+  const dir = { x: 0, z: 1 };
+  let moved = 0;
+  for (let i = 0; i < 40; i++) {
+    const before = f.z;
+    if (remoteStep(f, { x: 0, z: 0 }, false, true, dir)) moved++;
+    assert.ok(f.z - before > 0.5, `tick ${i} moves on: ${f.z - before}`);
+  }
+  assert.equal(moved, 40);
+  assert.ok(Math.abs(f.z - 40 * 1.0) < 1e-6, 'walks at 1.0 a tick');
+}
+{
+  // Stopped and ahead of the stop point: jumps back to it, no step backwards.
+  const f = { x: 0, z: 3, heading: 0 };
+  assert.equal(remoteStep(f, { x: 0, z: 0 }, false, false, { x: 0, z: 1 }), true);
+  assert.deepEqual([f.x, f.z], [0, 0]);
+  // Stopped on the point: nothing moves.
+  assert.equal(remoteStep(f, { x: 0, z: 0 }, false, false, { x: 0, z: 1 }), false);
+  // Stopped and behind: walks up at the normal speed.
+  const g = { x: 0, z: -5, heading: 0 };
+  assert.equal(remoteStep(g, { x: 0, z: 0 }, false, false, { x: 0, z: 1 }), true);
+  assert.ok(Math.abs(g.z - (-5 + 1.0)) < 1e-6);
+}
+{
+  // The mover's legs are counted: one 6x40 / 6x42 per leg, aimed 8 ahead.
+  const m = new PlayerMover(0, 0);
+  const pushing = { lr: 0, fb: 128, cameraYaw: 0, keyboard: true };
+  const noMove = (dx: number, dz: number) => ({ x: dx, z: dz });
+  let serial = m.legSerial;
+  m.tick(pushing, (dx, dz) => ({ x: m.x + dx, z: m.z + dz }));
+  assert.equal(m.legSerial, serial + 1, 'the first tick starts a leg');
+  const end = m.legEnd();
+  assert.ok(Math.abs(Math.hypot(end.x, end.z) - 8) < 1e-6, 'the leg point is 8 ahead');
+  void noMove;
+  serial = m.legSerial;
+  for (let i = 0; i < 3; i++) m.tick(pushing, (dx, dz) => ({ x: m.x + dx, z: m.z + dz }));
+  assert.equal(m.legSerial, serial, 'no new leg before the arrival');
+}
 console.log('playermove: ok');
