@@ -378,7 +378,9 @@ test('guns: the swings, bursts, pellets and bullet arrivals of the five weapons 
       const dmg = swings.reduce((s, x) => s + x.dhp, 0);
       // A set-up miss: no target at the first hit, or (a gun) no bullet made: a wall on the line or
       // an enemy that moved out of it. Retried once.
-      const setupMiss = (swings[0]?.targets ?? 0) === 0 || (GUN_KINDS.has(w.kind) && landed === 0);
+      // A swing with no 6x46 (no target in reach when its hit came) is a set-up miss too: an enemy walked
+      // out of the cone. The assertions below are unchanged.
+      const setupMiss = swings.length < 3 || swings.some((s) => s.targets === 0) || (GUN_KINDS.has(w.kind) && landed === 0);
       if (attempt === 0 && setupMiss) {
         console.log(`${w.name}: no target or bullet in reach (set-up); trying the placement again`);
         continue;
