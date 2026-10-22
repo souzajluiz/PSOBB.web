@@ -317,11 +317,56 @@ export function composeCameraUp(dir: Vec3, roll: number): Vec3 {
   return [-sr * ca, cr, sr * sa];
 }
 
-// The camera source for a loaded camera file (formats/cameramotion.ts). The two constant pivots
-// are the exe's (see the header): DEMO_WARP0 (-20000, 0, 0) with yaw 0, and the Dark Falz object
-// (0, 0, -120) with yaw 0. Every other pivot is live (an entity or the brain's fields, not read
-// here): null, so no view is produced for those scenes.
-export function cameraSourceOf(rel: CameraRel): BossCameraSource {
+// A live entity's pose: its position (+0x38..+0x40) and BAMS yaw (+0x60). The layout is read
+// from the exe's own uses (0x0044E162 / 0x0044E1D6 / 0x0044DFC7 / 0x0044E2F4), see the header.
+export interface EntityPose {
+  pos: Vec3;
+  yaw: number;
+}
+
+// The live inputs of the five scenes whose pivot is not constant. Each field is null when the
+// entity is gone (the exe then uses a fallback this port does not model, see cameraSourceOf).
+export interface LiveCameraInputs {
+  // [0x00A44D64] (create 0x00457000, the enemy of 0x4A4 bytes): APP TYPE2's pivot is its pos, yaw its +0x60.
+  form1?: EntityPose | null;
+  // [0x00A44D5C] (create 0x0045E4F0, the Form 3 object): DIE TYPE3's pivot is its pos, yaw its +0x60.
+  form3?: EntityPose | null;
+  // [0x00A44D60] (create 0x00459820, the enemy of 0x47C bytes): the source of the brain's DIE TYPE2 pivot.
+  dieType2Source?: EntityPose | null;
+  // The brain's +0x3A4 / +0x3B0 as the last DIE TYPE2 setup (0x0044E120) left them: GET RING and
+  // DEMO_WARP2 take these. Use brainPivotOf(dieType2Source) at that setup.
+  brain?: { pivot: Vec3; yaw: number } | null;
+}
+
+// DIE TYPE2's pivot, computed by the brain's setup 0x0044E120 (InitializeVoloptMonitorWithOffset in
+// the reference dump, with the Vol Opt names: they are Dark Falz's). Read in the exe:
+// - [0x00A44D98] is the distance 75.0 (0x42960000), stored at 0x0044E14E the first time
+//   (flag bit 0 of the byte 0x00A44D94 at 0x0044E143..0x0044E14C); the only writer.
+// - the entity's (x, 0, z) is normalized by 0x0082DF08 (K = [0x0098A420] = 1.0, a zero length
+//   is left as it is), and the pivot is the entity's position minus 75 times that unit vector:
+//   brain +0x3A4 = x - 75 x/|xz|, +0x3AC = z - 75 z/|xz|, +0x3A8 = 0 (0x0044E1CC).
+// - brain +0x3B0 = the entity's +0x60 (0x0044E1D6).
+// - with no entity (0x0044E143: [0x00A44D60] is 0) the brain's pivot and yaw are 0 (0x0044E2AF).
+export const DIE_TYPE2_PIVOT_DISTANCE = 75;
+
+export function brainPivotOf(source: EntityPose | null | undefined): { pivot: Vec3; yaw: number } {
+  if (!source) return { pivot: [0, 0, 0], yaw: 0 };
+  const [x, , z] = source.pos;
+  const len = Math.sqrt(x * x + z * z);
+  const ux = len > 0 ? x / len : 0;
+  const uz = len > 0 ? z / len : 0;
+  return {
+    pivot: [x - DIE_TYPE2_PIVOT_DISTANCE * ux, 0, z - DIE_TYPE2_PIVOT_DISTANCE * uz],
+    yaw: source.yaw,
+  };
+}
+
+// The camera source for a loaded camera file (formats/cameramotion.ts). The constant pivots are
+// the exe's (see the header): DEMO_WARP0 (-20000, 0, 0) with yaw 0, and the Dark Falz object
+// (0, 0, -120) with yaw 0. The five live pivots come from `live` (null entries give no view:
+// the exe's fallbacks, BSS 0x00A44D9C (APP TYPE2) and 0x00A44D88 (DIE TYPE3), are not read, so
+// they are UNCLEAR and not guessed).
+export function cameraSourceOf(rel: CameraRel, live: LiveCameraInputs | null = null): BossCameraSource {
   return {
     motion(index, frame) {
       const m = rel.motions[index];
@@ -332,6 +377,15 @@ export function cameraSourceOf(rel: CameraRel): BossCameraSource {
     pivot(object) {
       if (object === 'ctor4513d4') return { pivot: [-20000, 0, 0], yaw: 0 };
       if (object === 'ctor44ec14') return { pivot: [0, 0, -120], yaw: 0 };
+      if (!live) return null;
+      // APP TYPE2 (0x0044E30F): [0x00A44D64] pos and +0x60, passed by 0x0044E2F4.
+      if (object === 'ctor44f4ec') return live.form1 ? { pivot: live.form1.pos, yaw: live.form1.yaw } : null;
+      // DIE TYPE3 (0x0044DFC7): [0x00A44D5C] +0x38 and +0x60.
+      if (object === 'ctor450fc4') return live.form3 ? { pivot: live.form3.pos, yaw: live.form3.yaw } : null;
+      // DIE TYPE2 (0x0044E1F9): the brain's pivot and yaw computed from [0x00A44D60].
+      if (object === 'ctor44fa8c') return brainPivotOf(live.dieType2Source);
+      // GET RING (0x0044E108) and DEMO_WARP2 (0x0044E0D0): the brain's +0x3A4 / +0x3B0 as they stand.
+      if (object === 'ctor44ffd8' || object === 'ctor45072c') return live.brain ?? null;
       return null;
     },
   };

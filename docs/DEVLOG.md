@@ -8390,3 +8390,37 @@ So the port's assumption holds: the view's eye and target are the cutscene objec
   off the arena, so an empty frame is expected there. Not verified against the exe's picture.
 - Not checked: the leader gate (the solo test player is the leader); the scene 1 -> 2
   change was not seen by sampling (it came before the first sample).
+
+## 2026-10-22: Dark Falz camera: the live pivots of the five scenes (Ghidra + objdump)
+
+Closes the open item of the 10-21 entry: the pivots and yaws of APP TYPE2, DIE TYPE2, DIE TYPE3, GET RING and DEMO_WARP2 now have an exe source. `cameraSourceOf(rel, live)` takes the live inputs; `bossCameraView` gives a view for them when the inputs are passed.
+
+**The brain's DIE TYPE2 setup (0x0044E120, the name in the reference dump is InitializeVoloptMonitorWithOffset, Vol Opt names = Dark Falz).** Ghidra's split at 0x0044E1A3 is a fragment (x87 stack); the full routine was read from objdump at 0x0044E120..0x0044E200:
+- `[0x00A44D98]` = 75.0 (0x42960000), stored at 0x0044E14E the first time (flag bit 0 of the byte 0x00A44D94, 0x0044E143..0x0044E14C). The only writer (xref).
+- the entity Z = `[0x00A44D60]` (null: 0x0044E2AF sets brain +0x3A4/+0x3A8/+0x3AC/+0x3B0 = 0). Else its position (+0x38, +0x3C, +0x40) goes to brain +0x3A4/+0x3A8/+0x3AC, and 0x0082DF08 normalizes (x, 0, z) (K = [0x0098A420] = 1.0, epsilon [0x0098A424] = 0.0).
+- brain +0x3A4 = x - 75 x/|xz|, brain +0x3AC = z - 75 z/|xz|, brain +0x3A8 = 0 (0x0044E1CC), brain +0x3B0 = Z +0x60 (0x0044E1D6).
+- then 0x0044FA8C (DIE TYPE2 ctor) gets (brain, &brain+0x3A4, yaw, flag).
+- Same formula in the reference dump (`InitializeVoloptMonitorWithOffset`, `vec3_normalize`): matches.
+
+**The entities.** Each is an enemy object made by a spawn, read from the stores and the creators:
+- X = `[0x00A44D5C]`: CreateDarkFalzForm3Object (0x0045E4F0, 0x538 bytes, port `combat/darkfalz3.ts`). Stored at 0x0044DB5A. DIE TYPE3 (0x0044DFC7) passes `X+0x38` as the pivot and `X+0x60` as the yaw, unnormalized (objdump 0x0044DFB2..0x0044DFC7). Null: BSS 0x00A44D88, yaw 0 (not read).
+- Y = `[0x00A44D64]`: create 0x00457000 (0x4A4 bytes), which the port calls form 1 (`darkfalz1.ts`, "create 0x00457000"). Stored at 0x0044E451. APP TYPE2 (0x0044E2F4) passes `Y+0x38` and `Y+0x60`. Null: BSS 0x00A44D9C, yaw 0 (not read).
+- Z = `[0x00A44D60]`: create 0x00459820 (0x47C bytes). Stored at 0x0044D8AF. NOT matched to a port form: the port's form 2 is create 0x00457E7C. UNCLEAR which Dark Falz part it is.
+- GET RING (0x0044E108) and DEMO_WARP2 (0x0044E0D0) take the brain's +0x3A4 / +0x3B0 as they stand (objdump 0x0044E0C0..0x0044E118). So they depend on the last DIE TYPE2 setup.
+- The position and yaw layouts (+0x38, +0x60) are now read from the exe's own code (the reads above and the position stores), not only assumed. The entity class's ctor/update was not read.
+
+**The pivot application (the coordinator's question: is the pivot added, rotated, or in another space?).** The camera update 0x004D68A0, the yaw branch (flags 0x48: bit 0x4 clear, so the je at 0x004D6923 goes to 0x004D6A15) does:
+- eye = RotY(pos, yaw) + pivot (the pivot is ADDED after the rotation: 0x004D6AC9..0x004D6B1B, `fadd [ebp+0x6c]`); target = eye + RotY(normalize(dir), yaw). This matches `stepCameraObject` in the port: nothing to fix there.
+- DEMO_WARP0's pivot is (-20000, 0, 0): `mov [0x00A45068], 0xC69C4000` at 0x004514E1 (= -20000.0). Real motion (bo04opcam.rel, index 5) at frame 0 is pos (-41.7, 64.2, 46.0), so the eye is at about (-20042, 64, 46). The target is about 117 units away in the dir direction (down and toward -x), so the camera looks at the x = -20000 region, not at the origin.
+- The players of DEMO_WARP0 are placed on the inner circle at the origin (`falzPlace`, render/combat.ts: cx 0, cz 0, r 12.5), and the casket is at (-9860, -240). So the exe's own numbers put the DEMO_WARP0 eye about 20000 units from the players.
+- Conclusion: the port applies the pivot as the exe does. The dark 3D view during DEMO_WARP0 is what the exe's data give, not an update bug. It may be a fade (DEMO_WARP is a warp scene, the screen may go dark) or a far-plane / fog effect. UNCLEAR: not proven, not fixed. Next step: check whether the exe fades the screen during DEMO_WARP0 (the fade call near 0x0044E504), or read the 3D view state at that frame.
+
+**What the port now does.** `darkfalzcamera.ts`: `brainPivotOf(source)` (the DIE TYPE2 formula, null = (0,0,0) yaw 0), `EntityPose`, `LiveCameraInputs` (form1 = Y, form3 = X, dieType2Source = Z, brain = the brain's pivot and yaw), and `cameraSourceOf(rel, live = null)`. `darkfalz.ts` is NOT wired: its forms have no +0x38 pose yet (the port's Form 3 pose is a slot position in `f3Spot`, its Form 1 has no pose field), so the inputs stay null and the five scenes still give no view. Wiring needs the exe's positions for X and Y, and the identity of Z, first.
+
+**Checks.** `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed` (new: the DIE TYPE2 formula with a hand-computed case, the null branch, the zero-length case, and the five live pivots and yaws with their call sites). `node tests/darkfalz.test.ts`: `darkfalz tests passed`. `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+**ASSUMED.** The entity layouts (+0x38 position, +0x60 yaw) are read from the camera and brain code, not from the entity classes' ctors. BAMS for the yaw (as before). The float32 rounding of the brain's values is ignored (the port uses doubles). The flag 0x4 for the whole cutscene (as before).
+
+**UNCLEAR.** The identity of Z (create 0x00459820). The BSS fallbacks 0x00A44D9C / 0x00A44D88 (their values are not read: the port returns null). The time unit (as before). Why DEMO_WARP0's view is dark (above). Which state of the brain runs the DIE TYPE2 setup before GET RING / DEMO_WARP2 in each difficulty (the port must keep the brain's last pivot).
+
+**Decisive spot-check (for a human, in the exe bytes).** 0x0044E14E: `mov dword [0x00A44D98], 0x42960000` (75.0), together with the normalize-and-subtract at 0x0044E1A3..0x0044E1C6. If the brain's +0x3A4 is not the entity X minus 75 x/|xz|, the DIE TYPE2 pivot and the GET RING / DEMO_WARP2 pivots are wrong.
