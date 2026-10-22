@@ -24,7 +24,7 @@ import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
 import { ShipSelectScreen } from './shipselect.ts';
 import { connectBridge } from '../net/wstransport.ts';
-import { CharCreateScreen, type CharCreateAssets } from './charcreate.ts';
+import { CharCreateScreen, NAME_MAX, type CharCreateAssets } from './charcreate.ts';
 import { TEXTURE_FILES } from './charcreate_data.ts';
 import { PlayerModelView } from './charcreate_model.ts';
 import { menuTextAligned, parseUnitxt, withAlignedMenuText } from './charcreate_text.ts';
@@ -34,6 +34,7 @@ import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { CharaFiles } from './playerview.ts';
 import { Stage, tallLayout, textureBitmaps, VH, VW, type Screen } from './stage.ts';
 import { LoginForm } from './loginform.ts';
+import { NameForm } from './nameform.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
@@ -486,9 +487,14 @@ async function main(): Promise<void> {
         session = null;
         show(title);
       },
+      { phone: fit.enabled },
     );
     show(connecting);
   };
+
+  // The name on a phone: the HTML form (classic/nameform.ts), made when the
+  // creation is first shown (its form is not in the page before that).
+  let nameForm: NameForm | null = null;
 
   // Empty slot -> character creation; the result goes out as E5.
   const showCreate = async (slot: number, slots: Array<CharacterPreview | null>) => {
@@ -518,6 +524,7 @@ async function main(): Promise<void> {
         cancel: () => showSelect(slots),
       },
       (modelView?.dispose(), (modelView = new PlayerModelView(charaFiles))),
+      fit.enabled ? { form: (nameForm ??= new NameForm({ parent: document.body, returnFocus: canvas, maxLength: NAME_MAX })) } : null,
     );
     Object.assign(window, { classicCreate: create, classicModel: modelView });
     show(create);
@@ -534,7 +541,7 @@ async function main(): Promise<void> {
         session = null;
         show(title);
       },
-    }, new SelectPreview(charaFiles));
+    }, new SelectPreview(charaFiles), fit.enabled);
     Object.assign(window, { classicSelect: select });
     show(select);
   };
@@ -569,6 +576,7 @@ async function main(): Promise<void> {
         session = null;
         show(title);
       },
+      { phone: fit.enabled },
     );
     show(connecting);
   };

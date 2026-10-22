@@ -27,7 +27,7 @@ import { se, SE } from '../audio/se.ts';
 import type { CharacterPreview } from '../net/bbsession.ts';
 import { SelectPreview } from './charselect_preview.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { VH, VW, type Screen, type Stage } from './stage.ts';
+import { tallLayout, VH, VW, type Screen, type Stage } from './stage.ts';
 
 export interface CharSelectAssets {
   grid: ImageBitmap[]; // f256_ad_pic_2.prs (8 tiles)
@@ -168,6 +168,8 @@ export interface CharSelectHandlers {
 
 export class CharSelectScreen implements Screen {
   layout = 'left43' as const;
+  // A phone (fit mode): the tall portrait stage (stage.ts tallLayout).
+  readonly phoneLayout: boolean;
   private assets: CharSelectAssets;
   private slots: Array<CharacterPreview | null>;
   private handlers: CharSelectHandlers;
@@ -184,11 +186,12 @@ export class CharSelectScreen implements Screen {
   private iconFrames = [0, 0, 0, 0];
   private iconFlags = [false, false, false, false];
 
-  constructor(assets: CharSelectAssets, slots: Array<CharacterPreview | null>, handlers: CharSelectHandlers, preview: SelectPreview | null = null) {
+  constructor(assets: CharSelectAssets, slots: Array<CharacterPreview | null>, handlers: CharSelectHandlers, preview: SelectPreview | null = null, phone = false) {
     this.assets = assets;
     this.slots = slots;
     this.handlers = handlers;
     this.preview = preview;
+    this.phoneLayout = phone;
   }
 
   setSlots(slots: Array<CharacterPreview | null>): void {
@@ -225,6 +228,11 @@ export class CharSelectScreen implements Screen {
   // Full-window layers: the widescreen client stretches these 640x480 quads.
   drawFullscreen(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     ctx.setTransform(w / VW, 0, 0, h / VH, 0, 0);
+    this.drawBg(ctx);
+  }
+
+  // The background in virtual space (the caller sets the transform).
+  private drawBg(ctx: CanvasRenderingContext2D): void {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const [x, y, tw, th, i] of RE.tiles) ctx.drawImage(this.assets.grid[i], x, y, tw, th);
@@ -232,6 +240,23 @@ export class CharSelectScreen implements Screen {
     const tex = this.assets.backtext[Math.floor((this.frame % b.cycle) / b.hold)];
     ctx.drawImage(tex, 0, 0, b.w, b.h);
     ctx.restore();
+  }
+
+  // The tall phone stage (stage.ts): the bars show this background covering the
+  // canvas, dimmed; the 640x480 screen's own area gets it at full brightness.
+  drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const c = Math.max(w / VW, h / VH);
+    ctx.save();
+    ctx.setTransform(c, 0, 0, c, (w - VW * c) / 2, (h - VH * c) / 2);
+    this.drawBg(ctx);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, w, h);
+    const t = tallLayout(w, h);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, t.oy, w, VH * t.s);
+    ctx.setTransform(t.s, 0, 0, t.s, t.ox, t.oy);
+    this.drawBg(ctx);
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
