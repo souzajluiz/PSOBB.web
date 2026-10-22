@@ -976,6 +976,9 @@ export class Game extends Lobby {
 
   // Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts): 6xDC
   // G_Episode4BossActions_BB_6xDC {DC, 02, u16 0xffff} {u16 action, u16 param}.
+  // Network only: the server does not echo 6xDC to the sender (newserv forward_subcommand skips
+  // the sender), so the leader runs the action itself (SaintMilionAi.send, the exe's
+  // checked_call_packet0x60_subcommand). A test that calls this alone changes nothing locally.
   sendEpisode4BossAction(action: number, param: number): void {
     const b = new Uint8Array(8);
     const dv = new DataView(b.buffer);

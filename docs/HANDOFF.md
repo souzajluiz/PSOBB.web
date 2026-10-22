@@ -16,11 +16,13 @@ worktrees are left.
    DEMO_WARP2): their pivots / yaws come from live entities ([0x00A44D5C..64]+0x38 / +0x60)
    and brain +0x3A4 / +0x3B0 (formula at 0x0044E1A3..CC not read). `cameraSourceOf`
    returns null for them. See DEVLOG "Dark Falz camera: scene pivots" (end of file).
-3. **Saint-Milion laser in Chrome** (`client/e2e/ep4-battle-smoke.spec.ts`, WIP, FAILS
-   at the laser step): the boss goes 0 -> 0x19 -> 2 and stays in state 2; a 6xDC state
-   action 0x13 sent with `game.sendEpisode4BossAction` does not move the local boss.
-   Check whether the server echoes 6xDC to the sender / whether the leader must run the
-   action locally; or kill the tentacles first. Then the laser shot and its 0x6f8 loop.
+3. **Saint-Milion laser in Chrome: DONE** (DEVLOG "2026-10-22: Saint-Milion laser in
+   Chrome"). `ep4-battle-smoke.spec.ts` passes: the laser shot and its 0x6f8 loop are seen.
+   Cause of the old failure: the spec sent 6xDC with `sendEpisode4BossAction` (network
+   only); the exe runs it on the sender too (checked_call_packet0x60_subcommand 0x008003e0),
+   and newserv does not echo to the sender. The brain already does that. Real port bug
+   fixed: the area SE bank (boss09.pac for 0x2c) was never loaded (`CombatView.enterFloor`).
+   Branch `worktree-agent-a4641173c3f901521`, not pushed.
 4. **Battle Mode traps in Chrome**: not tested (needs a Battle party plus a b88xxx quest).
 5. **REA with Ghidra**: the user's rule is to reverse-engineer with the REA skill and its
    Ghidra provider. REA cannot start Ghidra on this Mac until the Command Line Tools are
@@ -36,8 +38,8 @@ worktrees are left.
 
 - Local `main` == `origin/main`. No open branches, no agents running.
 - E2E: `boss-smoke.spec.ts` passes (Forest 1, the Dragon's entrance with particles, the
-  Dark Falz arena; 0 page errors, 0 failed requests). `ep4-battle-smoke.spec.ts` is WIP
-  and fails at its laser step (item 3 above).
+  Dark Falz arena; 0 page errors, 0 failed requests). `ep4-battle-smoke.spec.ts` passes on
+  its branch (item 3 above; not yet on `main`).
 - `client`: `npx tsc --noEmit -p .` is clean with the stricter flags
   (`noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`,
   `noUnusedLocals`, `noUnusedParameters`, `exactOptionalPropertyTypes`).
