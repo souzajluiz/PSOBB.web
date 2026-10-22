@@ -9013,3 +9013,35 @@ were linked from the main checkout for the run and removed before the commit.
 - The combo timer uses the port's `COMBO_WINDOW` (= the exe's `DAT_00969078`), as before.
 - A burst with no targets sends no 6x46 (the exe sends one with count 0 if `update_player_targeting_info` returns non-zero; not traced).
 - Only the hit roll per bullet is seen live (`dhp`). The per-bullet damage formula is the existing one.
+
+## 2026-10-22: Gun e2e: the swings, bursts, bullets and arrivals in Chrome (client/e2e/guns.spec.ts)
+
+**What changed:** a new live e2e, `client/e2e/guns.spec.ts`, for the gun path of the last entries (muzzle, flight, landing; the Mechgun bursts; the primary target). No port code changed in this entry.
+
+**The check (webgun, Forest 1, solo party, local newserv, Vite 5200, headless Chrome).** For each weapon the player stands 60 units behind a visible enemy with a clear line (no wall) in the same room, faces it, and attacks three times. The hooks wrapped on the page record the 6x43 (`sendAttack`), the 6x46 (`sendAttackTargets`), each strike (`resolveHit`), each gun shot (`gunShot`: the trails it makes) and each bullet's arrival (`landGunBullet`, with the enemy HP change).
+
+Last two passing runs of the final spec (1 passed each; 0 page errors, 0 failed requests):
+
+| weapon (kind) | steps | bursts per swing | shots per swing | pellets per shot | 6x46 per swing | arrivals | HP drops only at arrivals |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Handgun (6) | 0, 1, 2 | 1 | 1 | 1 | 1 | 3 | yes; damage 13 / 31 |
+| Rifle (7) | 0, 1, 2 | 1 | 1 | 1 | 1 | 3 | yes; damage 25 / 38 |
+| Shot (9) | 0, 1, 2 | 1 | 1 | 5 | 1 | 6 | yes; damage 35 / 51 |
+| Mechgun (8) | 0, 1, 2 | 1 | 1 | 1 | 1 | 3 | yes; damage 4 / 16 |
+| Samba Maracas (0x48) | 0, 1, 2 | 3 | 0 (no gun shot) | - | 3 | 0 | **no**: HP drops at the hit (known gap) |
+
+Summary line of the spec (the Samba's known gap is an annotation, not a failure): `1 passed (58.2s)`. Earlier runs during the work failed on set-up (the reticle or a wall had no target / bullet at the first hit); the spec retries a weapon once on that set-up miss (logged). A roll can miss: the damage is checked over all the guns, not per gun.
+
+**Screenshots** (a bullet in flight, the first swing of each gun; in the session's scratchpad, not the repo): `guns/handgun-flight.png`, `guns/rifle-flight.png`, `guns/shot-flight.png`, `guns/mechgun-flight.png`. **The tracer is not visible** in any of them: the trail (a 14 x 2.5 x 2.5 bar, ASSUMED shape) is not identifiable from the hand to the target at 60 units; what shows is the muzzle and hit flash at the target. This matches the earlier report of a few pixels.
+
+**Found, not fixed (known gap):** Samba Maracas (kind 0x48) is not in the port's gun list (`GUN_KINDS` = 6..9, `combat/gunbullet.ts`), so it makes no bullets: its three bursts each hit at once and the damage lands at the hit, with no arrival. The bursts themselves (3 strikes, 3 x 6x46 per swing, the chain) match the Mechgun entry. Whether the exe gives the Samba bullets (its item vtable or `begin_gun_bullet_attack` callers) was not traced; no port change without that evidence. The e2e records the gap as an annotation and checks only the bursts for it.
+
+**Test aids (not port behaviour; each is a deviation from a plain real-key run, stated here):**
+
+- **The first swing's press is a real key** (Playwright `keyboard`, a 120 ms tap). The next two presses are sent by the page (`installHooks`): from the next strike on, a keydown/keyup pair goes to the game canvas every 60 ms while the swing's window is open and the next step is not queued. Measured: a keyboard press reached the game 70 to 240 ms after the window opened in headless Chrome, while a gun's window is 3 to 10 ticks after its motion ends (COMBO_WINDOW). The keys go through the canvas's own listeners, as the on-screen keyboard's do (`classic/main.ts`).
+- **An enemy's hit blocks the palette** (`combat.frame`: `blocked = damage.busy`, `damage.state !== 'alive'`), so a press during a flinch is dropped. The spec clears the player's reaction and tops up its HP every 20 ms: the enemies' hits are not under test. ASSUMED: the exe also refuses an attack press while flinching (not traced here).
+- **Placement:** the player is put 60 units from a target in the same room (`roomAt`) with a clear wall ray (`wallBlocks`, as `gunShot`), and the heading is set on `game.self.angle` (the reticle reads it, not the view's). The reticle and the bullet's ray are checked from the view's position once the frame has drawn the move.
+
+**Accounts:** webgun had Handgun, Rifle, Shot and a regular Mechgun already. The Samba Maracas (`004800000000000000000000`) was added offline once with `bridge/admin-chars.mjs` (`applyCharacterPatch` inventory.add, `writeCharacter`): the file was backed up first to `vendor/newserv/system/players/_admin-backups/player_webgun_0.psochar.2026-10-22T15-03-18-440Z.bak`. The spec equips each weapon in the game and puts the original Mechgun back at the end.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24): exit 0. `npx playwright test e2e/guns.spec.ts`: 1 passed in the last two runs (see above).
