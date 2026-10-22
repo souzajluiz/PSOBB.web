@@ -21,6 +21,7 @@
 import { PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents } from '../combat/attack.ts';
+import { facingOf, inWeaponCone } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
   aiConfig,
@@ -4740,6 +4741,18 @@ export class CombatView {
       this.attack.setEvents(events);
     }
     this.attacking.add(me.clientId);
+    // dispatch_action_attack_step1 (PsoBB.exe 0x006a0f58): the attack faces the
+    // primary target, the nearest one in the reticle (update_player_targeting_info
+    // and get_player_primary_target_position, 0x006a0f58 -> 0x00588704 / 0x00588769),
+    // and the heading if there is none. The 6x43 carries that angle, and our own
+    // handler then turns us to it. ASSUMED: the exe aims at the hitbox centre,
+    // the port at the enemy's origin.
+    const from = view.playerPositions().get(me.clientId);
+    const primary = from ? this.weaponTargets(type, from)[0] : undefined;
+    if (from && primary) {
+      const p = primary.instance.root.position;
+      me.angle = facingOf(p.x - from.x, p.z - from.z);
+    }
     this.game.sendAttack(step, me.angle, type);
     this.attack.begin(step, type);
     if (type === 2) this.specialStartFx();
@@ -4803,13 +4816,13 @@ export class CombatView {
     return this.pmtSync.weaponRange(w.data1[1], w.data1[2], attackType) ?? fallback;
   }
 
-  // One strike: targets in reach, hit roll, damage, and the 6x commands.
-  private resolveHit(attackType: AttackType, step: number): void {
+  // The enemies the weapon reaches from `from` inside its cone around the
+  // heading, nearest first. The exe's reticle does this for each enemy
+  // (check_enemy_is_targetable, 0x007a2b28, sorted by
+  // find_targets_for_weapons_and_techs); its first target is the primary one.
+  private weaponTargets(attackType: AttackType, from: { x: number; y: number; z: number }): EnemyRuntime[] {
     const me = this.game.self;
-    const view = this.view;
-    if (!me || !view) return;
-    const from = view.playerPositions().get(me.clientId);
-    if (!from) return;
+    if (!me) return [];
     const range = this.weaponRange(attackType);
     const maxDist = range.horizontal + range.vertical;
     const halfAngle = range.horizontalHalfAngle * BAMS_TO_RAD;
@@ -4831,13 +4844,22 @@ export class CombatView {
       const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
       const dist = Math.hypot(dx, dz) - reach;
       if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
-      let diff = Math.atan2(dx, dz) - me.angle;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      if (Math.abs(diff) > halfAngle) continue;
+      if (!inWeaponCone(dx, dz, me.angle, halfAngle)) continue;
       targets.push(e);
     }
     targets.sort((a, b) => a.instance.root.position.distanceToSquared(from) - b.instance.root.position.distanceToSquared(from));
-    const hit = targets.slice(0, Math.max(1, range.maxTargets));
+    return targets;
+  }
+
+  // One strike: targets in reach, hit roll, damage, and the 6x commands.
+  private resolveHit(attackType: AttackType, step: number): void {
+    const me = this.game.self;
+    const view = this.view;
+    if (!me || !view) return;
+    const from = view.playerPositions().get(me.clientId);
+    if (!from) return;
+    const range = this.weaponRange(attackType);
+    const hit = this.weaponTargets(attackType, from).slice(0, Math.max(1, range.maxTargets));
     if (!hit.length) return;
     this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
