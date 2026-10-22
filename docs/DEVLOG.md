@@ -8536,3 +8536,121 @@ keyboard is emulated by a shorter viewport, not a real keyboard.
 **UNCLEAR.** Desktop pixel identity: HEAD does not reproduce its own
 screenshots frame by frame (the title animation is not fully frozen by `?t=`),
 so the desktop check is by code path, not by a pixel diff.
+
+## 2026-10-22: Gun bullets: muzzle, flight, landing with the movement miss and the wall block
+
+**Before:** a gun shot did its damage at the swing: no muzzle, no bullet, no
+travel time, no miss when the target moved, no wall block.
+
+**Now:** `combat/gunbullet.ts` (pure rules) and `render/guntracer.ts` (the
+trail), wired in `render/combat.ts` (`gunShot`, `tickGunBullets`,
+`landGunBullet`); `render/gameview.ts` passes the map's wall ray
+(`wallBlocks`, `CollisionWorld.segmentHit` with mask 0x8100). Melee and the
+special attack are unchanged. Launcher and cannon are not on the bullet path
+(see UNCLEAR).
+
+**Found (PsoBB.exe, named dump `Psobb.exe-05112026.c`, objdump for the
+values; VAs):**
+
+- `begin_gun_bullet_attack` (0x005e6578), one call per pellet. Aim with a
+  listed target (6x46 index = pellet index): the hitbox centre pulled back by
+  the hitbox radius along the shot. Without one: `horizontal_distance` ahead at
+  heading + the pellet angle. The Shot's five pellets use
+  `shotgun_bullet_angles` (0x0092dffc) = 0, 2184, -2184, 4551, -4551 BAMS
+  (`unk_shoot_shotgun` 0x005fe004).
+- Wall: `cast_ray_at_map_collision_geometry(from, aim, 0x8100)` from the hand.
+  A wall on the ray means no bullet and no damage (only the effect).
+- Flight: `frame_count = ROUND(distance to the target centre / speed_maybe)`;
+  `unknown_gun_bullet_constructor` (0x005c71f8) starts a countdown
+  (`CountdownHelperConstructor` 0x005e5b88) that calls
+  `gun_bullet_collision_check` (0x005c7120) when it reaches 0.
+- Speed: `speed_maybe` = 19.0 in `construct_generic_weapon` (0x005e959c). The
+  only other writers are 7.0 (`belra_cannon_constructor` 0x005ebecc) and 10.0
+  (`InitializeWeapon0x41` 0x005f0e34, `lavis_blade_constructor` 0x005f44cc),
+  none of them guns.
+- Miss: `g_WeaponBulletCollisionRadiusSq` = 64.0 (0x0092bcb4, read with
+  `tools/exedata.py`). At arrival the target is missed when its XZ distance
+  from the shot's centre is >= 8. The miss text (`display_attack_miss_text_`,
+  0x007775c4) shows only when the target moved towards the shooter. A missed
+  bullet does no damage and sends no 6x0A.
+- Muzzle: `create_gun_bullet_particle_effect` (0x005e4678) calls
+  `create_particle_effect(hand, 9)` (0x0050b510; the signature is confirmed
+  by the call in `unk_shoot_shotgun`), then creates a 0x74-byte trail object
+  (0x005e4704, body not decoded).
+- Damage at arrival: the item's `weapon_projectile_attack_hit_entity` vtable
+  slot (the hit roll and damage). The 6x46 is sent at the attack's hit frame
+  (`attack.ts`, FUN_00699248), kept as before.
+- Guns on this path: Handgun (kind 6) and Shot (kind 9) are confirmed by the
+  ItemPMT rows in `tests/rangedaim.test.ts`. Rifle (7) and Mechgun (8) are
+  ASSUMED from the same numbering.
+
+**ASSUMED (port):**
+
+- Speed 19 per game tick, round half up for the frame count. The countdown
+  runs one tick per game frame (30 Hz).
+- The hand is the feet + `WEAPON_HEIGHT` (20); a hitbox centre is the origin +
+  `AIM_HEIGHT` (22), its radius `hitRadiusOf` (the exe uses `position2` and the
+  hitbox's `radius`, not decoded here). Only the XZ part of the miss test
+  matters, so the height does not change it.
+- The trail is a bar of 14 x 2.5 x 2.5 units from the hand to the aim point over
+  the frame count. The exe's trail object (0x005e4704) is not decoded; the shape
+  is a stand-in.
+- The wall ray origin is the hand, not `weapon_position.x/z` with `bullet_start.y`.
+- The Shot's pellets all start at the hand (the exe uses `get_weapon_position`
+  per slot, not decoded).
+
+**UNCLEAR:**
+
+- Mechgun: the exe fires several hits per motion loop (FUN_00699058 class 8).
+  Not ported: one bullet per hit step, as before.
+- Launcher (kind 10) and the cannon: their vtable (projectile path,
+  `unknown_weapon_projectile_handling`) is not traced. They keep the old
+  instant hit.
+- Whether the exe sends 6x46 before or after the bullet. Kept at the hit frame.
+- The wall-hit endpoint: the exe passes the ground object's position (`pgVar7->object`),
+  not the hit point. The port draws to the hit point.
+
+**Live check (Playwright, Chrome headless, webgun, Forest 1, Vite 5188,
+newserv and bridge reused).** A temporary spec (not committed) constructs
+Forest 1's waves, places the player 60 behind a standing enemy at a heading
+with a clear wall ray, and presses ArrowDown for 120 ms. It wraps
+`combat.landGunBullet` and `combat.gunShot` to read each landing (XZ move since
+the shot and HP lost). Results of the final run:
+
+```
+visible enemies: 4
+enemy {"id":21,"hp":118,"heading":0}
+hit0: landed [{"moved":2.08,"dhp":6}] (move 0, moved at sample -1)
+hits that did damage: 1
+miss1: landed [{"moved":10.11,"dhp":0}] (move 12, moved at sample 1)
+misses on move: 1; miss logged: true
+page errors: 0 []
+failed requests: 0 []
+1 passed (37.8s)
+```
+
+The move of 12 is applied to the shot's recorded centre (`origCentre`) right
+after the bullets are made. The enemy's AI rewrites its root position every
+tick, so moving the root did not change the outcome (observed; the first
+attempts logged `moved 0`). The hit moved 2.08 (the enemy's own walk during
+the 3-tick flight) and did 6 damage at arrival, not at the swing; the shot
+that moved 10.11 did nothing and logged the miss. Standing enemies only: a
+walking one can move 6 units in one 40 ms sample and miss on its own, which
+the rule allows.
+
+Screenshots: `/private/tmp/claude-501/-Users-junior-Downloads-psobb-master/6471789e-ff49-40d8-9214-def0e7ade813/scratchpad/gun/miss1-flight-0.png`
+(the trail is a small bar near the hand at 60 units, hard to read at this
+size; it is ASSUMED anyway) and `after-miss.png`.
+
+**Checks:**
+
+- `npx tsc --noEmit -p .` (client): exit 0.
+- `node tests/gunbullet.test.ts`: `gunbullet: all checks passed` (new: frames
+  19 -> 1, 60 -> 3, 170 -> 9; aim point minus radius; wall blocks the shot and
+  the ray runs hand -> aim point; open aim at heading and BAMS 0x4000; the
+  five shot angles; kinds 6..9; miss at 7.9 / 8.0 / diagonal 8.1; miss text
+  only when towards the shooter; trail lifetime and dispose).
+- `node tests/rangedaim.test.ts`: `rangedaim: all checks passed`
+- `node tests/combat.test.ts`: `5946 checks, 0 failures`
+- `node tests/combatdepth.test.ts`: `824 checks, 0 failures`
+

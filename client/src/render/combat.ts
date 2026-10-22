@@ -118,6 +118,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
+import { bulletMissed, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -170,6 +171,7 @@ import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.
 import { CombatOverlay } from './combatoverlay.ts';
 import { FieldParticles } from './hitfx.ts';
 import { TechFire } from './techfire.ts';
+import { GunTracers } from './guntracer.ts';
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
 import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
@@ -352,6 +354,17 @@ interface CastInProgress {
   sent: number[]; // the 6x47 target entity ids
 }
 
+// A gun bullet in flight: its target, the target's centre when the shot was
+// made (gun_bullet_collision_check's orig_target_position) and the ticks left.
+interface GunBulletRun {
+  entity: EnemyRuntime;
+  start: { x: number; y: number; z: number };
+  origCentre: { x: number; y: number; z: number };
+  ticks: number;
+  attackType: AttackType;
+  step: number;
+}
+
 // A technique's hit waiting for its object to reach the target (game ticks).
 interface PendingTechHit {
   ticks: number;
@@ -451,6 +464,9 @@ export interface CombatOptions {
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
   // Ground height under (x, z), so a walking enemy follows the floor.
   ground?: (x: number, z: number, fromY: number) => number | null;
+  // The map's wall ray (cast_ray_at_map_collision_geometry, mask 0x8100): true when a
+  // wall stands between the two points (combat/gunbullet.ts).
+  wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
   // The session's character (E7) kept in step with level / EXP / stats, like
   // net/items.ts keeps the inventory.
   character?: () => CharacterFile | null;
@@ -567,6 +583,9 @@ export class CombatView {
   private reviveKey = 'r';
   private cast: CastInProgress | null = null;
   private techHits: PendingTechHit[] = [];
+  // Gun bullets in flight (combat/gunbullet.ts): each lands after its frame count.
+  private gunBullets: GunBulletRun[] = [];
+  private tracers: GunTracers | null = null;
   // The objects of Foie, Gifoie, Rafoie, Barta, Gibarta and Rabarta in flight
   // (combat/techfire.ts; render/techfire.ts draws them): the enemies they can
   // hit are round boxes of the enemy's collision radius.
@@ -1235,6 +1254,7 @@ export class CombatView {
       this.tickStatus();
       this.tickRemoteStatus();
       this.tickTechHits();
+      this.tickGunBullets();
       this.tickFire();
       this.techObjects?.tick();
       this.tickBuffs();
@@ -4860,6 +4880,14 @@ export class CombatView {
     if (!from) return;
     const range = this.weaponRange(attackType);
     const hit = this.weaponTargets(attackType, from).slice(0, Math.max(1, range.maxTargets));
+    // A gun (ItemPMT kind 6..9) fires bullets (combat/gunbullet.ts): the shot now, the
+    // damage at the bullet's arrival (tickGunBullets). The 6x46 goes with the listed targets.
+    const kind = attackType !== 2 ? (this.equippedWeapon()?.data1[1] ?? -1) : -1;
+    if (isGunKind(kind)) {
+      if (hit.length) this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
+      this.gunShot(attackType, step, from, hit, range, kind);
+      return;
+    }
     if (!hit.length) return;
     this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
@@ -4885,6 +4913,77 @@ export class CombatView {
       this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '', true, { miss });
       if (damage >= 1) this.gainPb(damage, false);
     }
+    this.strike = null;
+  }
+
+  // A gun's shot at its hit frame: begin_gun_bullet_attack once per pellet (PsoBB.exe
+  // 0x005e6578; unk_shoot_shotgun 0x005fe004 for the Shot's five). Each pellet makes
+  // its muzzle particle 9 at the hand and its trail (create_gun_bullet_particle_effect
+  // 0x005e4678); a pellet with a listed target that no wall stops makes a bullet that
+  // lands after its frame count. A pellet without a target goes ahead at its angle.
+  private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number): void {
+    const me = this.game.self;
+    if (!me) return;
+    const trails = (this.tracers ??= new GunTracers(this.viewer.scene));
+    for (let i = 0; i < pelletCount(kind); i++) {
+      const t = hit[i];
+      // ASSUMED: the bullet starts WEAPON_HEIGHT above the feet (the exe's weapon_position, not decoded).
+      const start = { x: from.x, y: from.y + WEAPON_HEIGHT, z: from.z };
+      let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
+      if (t) {
+        const p = t.instance.root.position;
+        target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t) };
+      }
+      const shot: GunShot = planGunShot(start, { heading: me.angle, angleBams: SHOT_ANGLES_BAMS[i] ?? 0, horizontalDistance: range.horizontal }, target, (a, b) =>
+        this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false,
+      );
+      this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+      trails.spawn(start, shot.end, shot.frames);
+      if (shot.bullet && t && target) this.gunBullets.push({ entity: t, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
+    }
+  }
+
+  // The trails and the bullets, once per game tick. A bullet lands when its frames run out.
+  private tickGunBullets(): void {
+    this.tracers?.tick();
+    for (let i = this.gunBullets.length - 1; i >= 0; i--) {
+      const b = this.gunBullets[i];
+      if (--b.ticks > 0) continue;
+      this.gunBullets.splice(i, 1);
+      this.landGunBullet(b);
+    }
+  }
+
+  // gun_bullet_collision_check (PsoBB.exe 0x005c7120): a target that is gone takes
+  // nothing; one that moved 8 or more in XZ since the shot is missed (the miss text
+  // only when it moved towards the shooter); otherwise the weapon's hit roll and damage.
+  private landGunBullet(b: GunBulletRun): void {
+    const e = b.entity;
+    if (this.disposed || e.dead || !e.instance.root.visible || concealed(e)) return;
+    const p = e.instance.root.position;
+    const now = { x: p.x, y: p.y + AIM_HEIGHT, z: p.z };
+    if (bulletMissed(b.origCentre, now)) {
+      if (movedTowards(b.origCentre, now, b.start)) {
+        const at = this.hitPoint(e);
+        this.overlay?.miss(at.x, at.y, at.z);
+      }
+      this.opts.log(`gun bullet misses E-${e.index.toString(16)}: it moved`);
+      return;
+    }
+    const attacker = this.attackerStats();
+    this.strike = { attackType: b.attackType, step: b.step };
+    const defender = this.enemyDefenderOf(e);
+    let damage = 0;
+    let critical = false;
+    let miss = true;
+    if (rollHit(attacker, defender, b.attackType, b.step, this.rng)) {
+      const r = rollDamage(attacker, defender, b.attackType, this.rng);
+      damage = r.damage;
+      critical = r.critical;
+      miss = false;
+    }
+    this.applyEnemyHit(e, ENEMY_BASE_FLAGS, damage, critical, '', true, { miss });
+    if (damage >= 1) this.gainPb(damage, false);
     this.strike = null;
   }
 
@@ -6760,6 +6859,9 @@ export class CombatView {
     this.battleTraps = null;
     this.viewer.renderHooks.delete(this.smoothHook);
     this.techFire.clear();
+    this.gunBullets = [];
+    this.tracers?.dispose();
+    this.tracers = null;
     this.enemies.clear();
     this.view = null;
     this.overlay?.dispose();
