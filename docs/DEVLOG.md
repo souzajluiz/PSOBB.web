@@ -9062,3 +9062,49 @@ taken, not compared to the exe); the arming and fuse frame counts (ASSUMED in
 account's save (the default palette has no trap slot).
 
 **Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+## 2026-10-22: Episode 2 floors in Chrome (smoke run, no code change)
+
+HANDOFF to-do 2 asked for the Episode 2 enemy state machines to be checked in a browser. `client/e2e/ep2-floors-smoke.spec.ts` (new) creates an EPISODE 2 party (account `webep2`, a copy of `webtest2`'s character saved under `vendor/newserv/system/players/`, outside the repo) and warps through floors 1..17 (areas 0x13..0x23, `floorToArea(2)`). On each floor it records page errors, failed requests, console errors / warnings, the enemies the layer placed (`enemyLayer.stats`), the combat enemies and how many have a model, and for 10 s the FSM states (a state change is a tick that ran), the wave events that fired and the player's room. The player is placed on the first placed enemy so its room's waves start. Nothing is forced.
+
+**Result: `1 passed (11.0 min)`** (run 4). No page error and no throw on any floor; no hang. One screenshot per floor: `scratchpad/ep2/ep2-NN-AA.png`.
+
+| floor | area | placed / built / modeled | state changes in 10 s (distinct states) | waves fired / events | room (-1: none) | notes |
+|---|---|---|---|---|---|---|
+| 1 | 0x13 VR Temple Alpha | 94 / 94 / 94 | 0 (4) | 2 / 26 | out | enemies idle |
+| 2 | 0x14 VR Temple Beta | 119 / 119 / 119 | 6 (14) | 3 / 27 | out | |
+| 3 | 0x15 VR Spaceship Alpha | 121 / 133 / 133 | 8 (9) | 1 / 26 | 10 | the player was killed here (Dubchic, Pan Arms) |
+| 4 | 0x16 VR Spaceship Beta | 110 / 118 / 118 | 5 (10) | 1 / 27 | 11 | |
+| 5 | 0x17 Central Control Area | 28 / 28 / 28 | 0 (4) | 0 / 12 | 2 | |
+| 6 | 0x18 Jungle North | 57 / 57 / 57 | 5 (11) | 3 / 22 | 1 | |
+| 7 | 0x19 Jungle South | 58 / 58 / 58 | 0 (6) | 1 / 27 | 1 | |
+| 8 | 0x1a Mountain | 100 / 100 / 100 | 5 (12) | 3 / 35 | 2 | |
+| 9 | 0x1b Seaside | 115 / 115 / 115 | 4 (10) | 1 / 39 | 3 | |
+| 10 | 0x1c Seabed Upper | 90 / 90 / 90 | 0 (6) | 1 / 33 | out | |
+| 11 | 0x1d Seabed Lower | 85 / 85 / 85 (87 built at most) | 12 (19) | 2 / 31 | out | |
+| 12 | 0x1e Gal Gryphon | 1 / 1 / 1 | 0 (1) | 1 / 1 | 1 | boss: model only, no brain |
+| 13 | 0x1f Olga Flow | 1 / 1 / 1 | 0 (1) | 1 / 1 | 0 | boss: model only, no brain |
+| 14 | 0x20 Barba Ray | 1 / 1 / 1 | 0 (1) | 1 / 1 | 1 | boss: model only, no brain |
+| 15 | 0x21 Gol Dragon | 1 / 1 / 1 | 0 (1) | 1 / 1 | 1 | boss: model only, no brain |
+| 16 | 0x22 Seaside Night | 0 | - | - | 1 | 404 `map_jungle06_00o.dat` (x2 with the aborted request); no enemies |
+| 17 | 0x23 Tower | 0 | - | - | out | 404 `map_jungle07_00o.dat` (x2); no enemies, no Epsilon |
+
+The FSM classes that ran on floors 3..11 (states of a first, shorter run, same build): Dubchic, Wolf, Pan Arms, Delsaber, Sorcerer, Gibbon, Merillia, Sinow Berill, Gee, Gi Gue, Mericarol, Gibbles, Recobox, Recon, Dolmolm, Morfos, Delbiter, Deldepth, Sinow Zoa, Garanz, Pan Half. The counts vary between runs (the free-play set variations are random): floor 4 had 128 placed and one entry of type 0x0000 with no model in the first run, none in the last. Floor 16 and 17 render their geometry (`scene/map_jungle06_00n.rel`, `map_jungle07_00n.rel` are loose in the data folder).
+
+**Files.** No enemy archive 404s. Every `bm_ene_*` / `bm_boss*` name that `formats/enemymodels.ts` and the renderers use is in `data.gsl` (checked against its 1524 entries), so the HANDOFF note that the Episode 2 motion archives are not on this Mac is stale: the groups a / d are in the GSL too (`bm_ene_gibbles`, `bm_ene_gi_gue`, `bm_ene_me1_gee`, `bm_ene_epsilon`, `bm_ene_re8_merill_lia`, ...). The only missing files are the two object sets of Seaside Night and Tower: `map_jungle06_00o.dat` / `map_jungle07_00o.dat` are in neither `data.gsl` (it has `map_jungle06d.dat` / `map_jungle07d.dat`), the loose data folder nor newserv's `system/maps/bb-v4`. Both are quest-only areas in Episode 2, so the free-play warp reaches them only in this test. The floor loads without them (no hang, no throw). The spec allows exactly these two URLs (`KNOWN_MISSING`); any other 404 fails it.
+
+**Area mapping.** The viewer's area on each floor is the expected one (0x13..0x23, read from `field.viewer.area`). No mapping bug.
+
+**Type 0x0000 entry (VR Spaceship Beta, first run only).** `formats/entitynames.ts` has no class for type 0 and the layer reports it with no model. The exe agrees: the factory rows of area 0x16 (table 0x009fba60, then the pointer at +4 * area = 0x009fbab8, rows at 0x009fabc0 of 16 bytes, read to the 0xFFFF end) have the types 0x85, 0x80, 0x43, 0x65, 0xA0, 0xA1, 0x33 and no 0. So nothing is constructed for it, as in the port. Not changed.
+
+**Gaps (not fixed, out of this check's scope).**
+- The four Episode 2 bosses (Gal Gryphon 0x1e, Olga Flow 0x1f, Barba Ray 0x20, Gol Dragon 0x21) are placed and modeled (`TBoss5Gryphon`, `TBoss6PlotFalz`, `TBoss7DeRolLeC`, `TBoss8Dragon`) but no brain is attached in `render/combat.ts`: their state is `none`, so they stand still. The Episode 1 Dragon has its own `combat/dragon.ts`; these four have none.
+- Seaside Night and Tower: no enemies, so no Epsilon and no tower FSM was run in Chrome.
+- Floors 1, 5, 7 and 10 had no state change in 10 s: their waves had not fired (the placed player was not in a wave room). A longer watch per room would show their FSMs; not forced here.
+- No enemy was killed in the run (no player attacks), so the death path is not seen on these floors.
+
+**ASSUMED / UNCLEAR.** The room of a wave is taken as the one the player stands in (`debug().room()`); the placement is on the first placed enemy, so the wave of that enemy's room is the one that starts. The e2e's `party.create.episode` is 2 for Episode 2 (3 for Episode 4).
+
+**Checks.** `npx playwright test e2e/ep2-floors-smoke.spec.ts` (PW_BASE_URL on vite 5199, newserv restarted by hand because it had stopped, the bridge on 8080 reused): 1 passed. `npx tsc --noEmit -p .` in client: clean. The gsl check: a node script over `data.gsl` with the client's `GSLArchive`.
+
+**Files.** `client/e2e/ep2-floors-smoke.spec.ts` (new). No source change.
