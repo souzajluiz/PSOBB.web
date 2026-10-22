@@ -557,3 +557,95 @@ init 0x004ba2b0), objdump of 0x004b8b88..0x004b8d70 and of the data words.
 - Park value of the rows: 0x461c4000 = 9984.0.
 - Port: combat/barbaray.ts (barbaRows, BarbaPartAi, BARBA_PART_RADIUS),
   render/combat.ts (spawnBarbaParts, tickBarbaParts, barbaPartHit).
+
+## Pass 6: body movement (ported)
+
+Sources: objdump of 0x004b1e58, 0x004b416c, 0x004b41ac (phase 0x15), 0x004b3c2c (0x13),
+0x004b0ee0 (phases 5 / 6), 0x004b1c94, 0x004b1de4, 0x0082e900; Ghidra for structure only.
+The Ghidra `(int)` casts on the movement words are display artifacts: the asm stores
+them as floats (fstps). `int *param_1` indexes are byte offset / 4 (param_1[0x1d3] is
++0x74c, param_1[0x2c] is +0xb0). Port: combat/barbaray.ts (`BarbaRayAi.swimFrame`,
+`arcFrame`, `followerFrame`, `enterSwim` / `enterArc` / `enterFollow`, `sideEntry`,
+`teleport`, `BarbaFollower`), tests/barbaray.test.ts "body movement".
+
+Axes. x = +0x38, y = +0x3c (the teleport's middle anchor entry), z = +0x40 (third
+entry). Heading +0x64 is BAMS (ASSUMED; the port's `angle` is radians). Lift +0x6f8.
+
+Corrections to the brief and to the earlier passes:
+- 0x004b7860 (phase 0x1b path, asm 0x004b7dcf) writes +0x40 = -210 (0xc3520000): that is
+  z, not y. The side entry 0x004b416c also writes +0x40 = 10.0 (z), not y.
+- Dir (+0x750 for the swim) is -1.0 on side 0, +1.0 else (pass 4 said -4.0). The arc's dir
+  (+0x74c) is the same -1 / +1 (its enter writes the literal 0xc0800000 = -4.0 only in the
+  Ghidra int form, which reads as -0x40800000 = 0xbf800000 = -1.0; asm checked).
+- The swim's vz starts at -1.0 (0xbf800000), not -4.0.
+- Arc sub thresholds (asm 0x004b0ee0, cmp against the timer +0xc0): sub 0 -> 1 at 10
+  (0x906f9c), 1 -> 2 at 20 (0x906fa4), 2 -> 3 at 28 (0x906fa8), 3 -> 4 at 45 (0x906fb0),
+  4 -> 5 at 70 (0x906fb8), 5 -> 6 at 64 (0x906fbc, true at once). The pass 4 list
+  (25 / 45 / 70) mixed the 25 (0x906fac, the `25 - z` of the sub 3 entry) into the marks.
+- The random-direction argument is -1.85 (0xbfeccccd), not -1.2.
+- FUN_004b1de4 returns 0.0 (its local_c is never written): the arc's target height is 0.
+- 0x82e900 is fabs (asm: the sign test and fchs), not a sqrt.
+
+Swim (phase 0x15 / 0x16, 0x004b41ac). Enter (event 4): followers stop (FUN_004bd1e8),
+gate block +0x630 bit 2 set, bit 8 cleared, side entry (x = -100 / +100, z = 10, lift = 4,
+heading +0x500 / -0x500), dir = -1 / +1, vx = 0, vy = 0, vz = -1, speed = 0x500, sub 0.
+Frame, sub 0: speed = trunc(speed + 256), clamp 16384; vx += 0.08, vy += 0.2, vz += 0.1;
+x += dir * vx; z -= vy; lift -= vz; heading = trunc(-dir * speed); the 0x3ed sound once at
+speed >= 0x2200. Exit at lift < -137.0: teleport(side), lift = -137, vz = 0, slot 1,
+sub 1. Sub 1: lift += 2.0 until >= 0.0, then sub 2 (done; the table step is the leader's).
+Frame timing: speed clamps at frame 59, the exit is near frame 63 (ported test).
+Leave (event 5): bit 2 cleared only.
+
+Arc (phases 5 / 6, 0x004b0ee0). Enter (event 4): gate block set, bit 8 cleared,
+teleport(side) (asm 0x004b1e58), dir (+0x74c) = -1 / +1, slot 5 (side 0) / 6, every
+movement word zeroed, sub 0. Event 5 (leave): gate block cleared and side := the table's
+flag (+0x6cc). Frame: timer +1; sub 0 of the state waits one frame (ASSUMED: the +0xb0
+bit 2 wait is not held). Then the arc sub-states (see the thresholds above):
+- sub 0 (10): vx(+0x75c) = (65/20) * dir. Per-frame: vz -= 0.2, z += vz.
+- sub 1 (20): vx = (-90/16) * dir; vz-accel (+0x760) = ((16 + 56.67) * -vz + 270 - z) /
+  ((0.5 * 16 + 56.67) * 16). Per-frame: x += vx, z += vz.
+- sub 2 (28): vy(+0x750) = (0 - vy) / 2.5; accel (+0x754) = vy * 2 / 56.67; vx =
+  (-370 / 56.67) * dir. Per-frame: x += vx, vz += accel2, z += vz, vy = 0.
+- sub 3 (45): vx = (-30 / 2) * dir; easing = DrlEasing(7, |25 - z|, 0.2, 0.05)
+  (0x00434ac4; the decel guard at 0 is ASSUMED); vz = z. Per-frame: x += vx, timer -= 0.2,
+  lift += vy, vy -= accel, z += vz.
+- sub 4 (70): vx = ((-175 - x * dir) / 36) * dir. Per-frame: x += vx, lift pulled to 0
+  (0.4 a tick, FUN_004b1c94), easing tick, z = vz - easing.pos (0x1a4 ASSUMED to be the
+  easing's position).
+- sub 5 (64, true at once): the same writes as sub 4.
+- sub 6: the same pull and easing tick; the easing's state 3 (FUN_0042cdc0 returns 3)
+  ends the phase (sub 2 of +0x730); bit 8 of the flags set when the slot is 1.
+
+Side 0 anchor 0 is (-175, 7, 25), side 1 is anchor 1 (0, 7, 500).
+
+Followers (phase 0x13 / 0x14, 0x004b3c2c). Enter: side entry, the wait count +0x73c = 180,
+speed +0x740 = 120, sub 0, gate block bit 2 cleared (the 0x13 enter masks 0x104).
+Sub 0: 41 ticks (`+0x734 > 40`), then sub 1. Sub 1: one follower every 180 ticks
+(+0x73c): a live target (FUN_00520f04) is the target's position, else a random point
+(r = 120 * rnd, a random direction; ASSUMED form), each via FUN_004bd190 with the speed
+kept only in 1..599 (else 120). After four, sub 2: wait until all four are at state 4 or
+601 ticks, then sub 3. The root never moves in 0x13 (the body stands at the side entry).
+Followers' own motion is not decoded (ASSUMED: straight at speed / 30 a tick, arrival
+resets nothing else); they are not drawn.
+
+Not ported (open):
+1. Transition bodies: 0x004b1e98 (its per-line vectors use the ring rows 0x14e..0x16b and
+   0x194 / 0x19c / 0x1a4), 0x004b2cd0 (speed -0x3b860000 = -(a float), the 0x1e58 anchor
+   teleport at enter), 0x004b30fc (x / z velocities from 0x1d3..0x1da), 0x004b7040, and the
+   0x004b7860 pull-back to z = -210 (its condition is the flag tests on *(0x62c)+8). Their
+   teleports are not wired; the phase -> handler map for 0x03..0x0e, 0x0d and 0x11..0x12
+   is not decoded (only phases 5 / 6, 0x13 / 0x14, 0x15 / 0x16 are dispatched).
+2. The 0x201 / 0x20f / 0x20c effect spawns (0x004be7c0, 0x0050981c) and the 0x3ec / 0x3ed
+   sound timers of the arc: visual, not emitted.
+3. The side the enter uses: 0x0051f62c passes no side, so the port uses the last side
+   (BarbaRayAi.side). The 0x0ee0 leave's side := variant is decoded; the enter's
+   param_3 / param_4 source is not (the 6xA9 carries no side).
+4. The ground / arc value: FUN_0042cdc0 is ASSUMED to be the DrlEasing of the arc (its
+   state 3 = done). The z = vz - 0x1a4 assignment is taken as written.
+5. The followers' drawing, start position (ASSUMED: the origin) and speed unit.
+6. The 0x0ee0 wait bit (+0xb0 bit 2) and the motion-player meaning of vt+0x184 / 0x188.
+
+Result: the body moves in the 0x13 side entries (x = -100 / +100, z = 10, heading), the
+0x15 swim (x and z drift, the heading turns, the teleport back at the exit) and the 0x5 /
+0x6 arcs (teleport to the side anchor, x and z moves). The e2e records the body place per
+sample (barbaray-smoke.spec.ts).
