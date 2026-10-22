@@ -55,7 +55,8 @@ import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, Re
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
-import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BarbaPartAi, BarbaRayAi, type BarbaEvent, barbaRows, decodeBarbaMessage } from '../combat/barbaray.ts';
+import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BARBA_PIG_DEST, BARBA_PIG_HEADING, BarbaPartAi, BarbaRayAi, type BarbaEvent, barbaPigMode, barbaRows, decodeBarbaMessage } from '../combat/barbaray.ts';
+import { PigRayAi, type PigEvent } from '../combat/barbaminion.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
@@ -1537,6 +1538,7 @@ export class CombatView {
       if (ai instanceof PanHalfAi) ai.hpFraction = e.stats.hp / Math.max(1, e.splitHp ?? e.stats.maxHp);
       const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
       if (ai instanceof BarbaRayAi) this.barbaDrain(e, ai);
+      if (ai instanceof PigRayAi) this.pigDrain(e, ai);
       const root = e.instance.root;
       const lift = r.lift ?? e.lift;
       if (r.x !== root.position.x || r.z !== root.position.z || lift !== e.lift) {
@@ -2186,8 +2188,8 @@ export class CombatView {
           break;
         }
         case 'spawn':
-          // The Pig Rays (0x004b4e6c) are not ported yet (open in docs/bosses/barbaray-map.md).
-          this.opts.log(`Barba Ray E-${e.index.toString(16)}: Pig Ray ${ev.index} (group ${ev.group}) not ported`);
+          // The spawner (0x004b4e6c): a live count entry makes a Pig Ray.
+          if (ev.count !== 0) void this.spawnPigRay(e, ev);
           break;
         case 'killed':
           this.barbaKilled(e);
@@ -4152,6 +4154,75 @@ export class CombatView {
       buffs: new EntityBuffs(),
       status: new EnemyStatus(enemyAttribute('CLAW')),
     });
+  }
+
+  // --- Pig Ray (combat/barbaminion.ts) ----------------------------------------
+
+  // SpawnPigRay (0x004b4e6c): the Pig Ray takes the highest free child slot of
+  // the body (index + 11 + k, k 1..35; slots 1..10 are the joints, 11..46 the
+  // PIG_RAY slots of the 0xcb row) at the spawner's destination. ASSUMED: the
+  // frame count (30) and the speed term (0) are not decoded yet.
+  private async spawnPigRay(body: EnemyRuntime, ev: { group: number; index: number; count: number }): Promise<void> {
+    const ctx = this.difficultyParams;
+    if (!ctx) return;
+    let k = 35;
+    while (k > 0 && this.enemies.has(body.index + 11 + k)) k--;
+    const index = body.index + 11 + k;
+    const slot = k > 0 ? ctx.slots[index - ctx.base] : undefined;
+    const dest = BARBA_PIG_DEST[ev.group]?.[ev.index];
+    if (!slot || slot.type !== 'PIG_RAY' || !dest) {
+      this.opts.log(`Barba Ray E-${body.index.toString(16)}: no free PIG_RAY slot for Pig Ray ${ev.index}`);
+      return;
+    }
+    const mode = barbaPigMode(ev.count);
+    const angle = ((BARBA_PIG_HEADING[ev.group] ?? 0) / 65536) * Math.PI * 2; // ASSUMED BAMS
+    const placed = {
+      ...body.instance.placed,
+      entity: { ...(body.instance.placed.entity as EnemySet), index: -1 - index },
+      world: [dest[0], dest[1], dest[2]] as [number, number, number],
+      yaw: angle,
+      name: 'Pig Ray',
+    };
+    const spec = { ...body.instance.spec, parts: [{ model: mode, motion: { index: 0, speed: 1, loop: true } }] };
+    const instance = await this.layer.spawn(placed as typeof body.instance.placed, spec as typeof body.instance.spec);
+    if (!instance || this.disposed) return;
+    const fight = this.childFightStats('PIG_RAY');
+    const ai = new PigRayAi({ x: dest[0], z: dest[2], angle, mode, frames: 30, speed: 0, rng: () => this.rng() });
+    this.enemies.set(index, {
+      instance,
+      index,
+      slot,
+      ...fight,
+      motions: enemyCombatMotions(body.instance.spec.name, instance.archive),
+      rtIndex: ENEMY_TYPE_PARAMS.PIG_RAY?.rt ?? 0xff,
+      dead: false,
+      state: 'idle',
+      removeIn: 0,
+      ai,
+      lift: 0,
+      monest: null,
+      parent: body,
+      fake: null,
+      buffs: new EntityBuffs(),
+      status: new EnemyStatus(enemyAttribute('PIG_RAY')),
+    });
+  }
+
+  // The Pig Ray's events: the SE, the effects at its place, and the end of its
+  // death (the model is hidden).
+  private pigDrain(e: EnemyRuntime, ai: PigRayAi): void {
+    for (const ev of ai.drain() as PigEvent[]) {
+      if (ev.kind === 'se') {
+        this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+        this.sePlayer?.play(ev.id);
+      } else if (ev.kind === 'effect') {
+        if (ev.remove) continue;
+        const p = e.instance.root.position;
+        this.particle({ id: ev.id }, new THREE.Vector3(p.x, p.y, p.z));
+      } else {
+        e.instance.root.visible = false;
+      }
+    }
   }
 
   // --- Dark Gunner control objects (combat/enemyfsmruins.ts GunnerControl) ----
