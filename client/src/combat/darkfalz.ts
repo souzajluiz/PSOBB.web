@@ -56,6 +56,15 @@ import { bossCameraView, type BossCameraSource } from './darkfalzcamera.ts';
 
 export { SCENE, SCENE_NAMES, DF_ID } from './darkfalzcommon.ts';
 
+// DEMO_WARP0's cutscene object (exe ctor 0x004513D4, timer +0xB8): -1 at its
+// ctor, +1 per update, held at 120 (update 0x004512E0). The port's scene frames
+// count from 1 at the first tick, so the timer is frames - 1. Null outside
+// DEMO_WARP0 (the object is not drawn; ASSUMED: it is destroyed with the scene).
+export function demoWarpFrame(scene: number, sceneFrames: number): number | null {
+  if (scene !== SCENE.demoWarp0) return null;
+  return Math.min(SCENE_FRAMES.demoWarp0, sceneFrames - 1);
+}
+
 export const DARVANT = {
   // Ring spawn.
   ringCounts: [5, 15, 25, 35] as readonly number[],
@@ -324,6 +333,11 @@ export class DarkFalzAi extends BrainBase implements DfFight {
   // camera asset is read (see darkfalzcamera.ts), so the view is null.
   cameraView(source: BossCameraSource | null = null): { source: Vec3; target: Vec3; up: Vec3 } | null {
     return bossCameraView(this.scene, this.sceneFrames, source);
+  }
+
+  // The DEMO_WARP0 object's timer (demoWarpFrame), null outside DEMO_WARP0.
+  get warpFrame(): number | null {
+    return demoWarpFrame(this.scene, this.sceneFrames);
   }
 
   private setScene(n: number): void {

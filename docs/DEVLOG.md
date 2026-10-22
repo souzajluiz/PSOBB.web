@@ -8844,3 +8844,42 @@ Closes HANDOFF "Start here" item 3. `client/e2e/ep4-battle-smoke.spec.ts` now re
 - A failing account: the first runs of this account failed at login-to-lobby (`reachLobby`), because a new newserv account has no character. Fix for the test only: `vendor/newserv/system/players/player_e4lz5191_0.psochar` and `.psobank` are copies of webtest's files (made by this run, outside the repo; the account is `e4lz5191`).
 
 **UNCLEAR / not done:** the laser's aim is a stand-in (`laserAim`, ASSUMED in `saintmilionboss.ts`); the 6xDC map gate is not modelled; the exe's exact caller of the area bank swap is not pinned; `shot` damage numbers were not compared to the exe. Battle Mode (item 4) untouched.
+
+## 2026-10-22: Dark Falz DEMO_WARP0: the exe's cutscene object at the pivot (ported)
+
+**The question.** During DEMO_WARP0 the port's 3D view was empty (HUD only). The camera is the exe's (eye = RotY(pos) + pivot (-20000, 0, 0)), so the eye is 20000 units from the arena. What does the exe draw there: a fade, a fog/far change, or a scene object at the pivot?
+
+**The answer (exe).** Not a fade and not fog. The scene builds an object at the pivot.
+
+- **Entry (0x0044E504, the DEMO_WARP0 entry; the dump calls it `InitializePlayerPositionsInCircle`, a Vol Opt name).** It calls `DistributePlayersInCircle`, `CalculatePlayerCirclePosition(1)` (0x0044C674), `UpdatePlayerWeaponAnimations` (0x0048DC3C), the object ctor 0x004513D4, `UpdateBgmTrackIndex(1)` (0x00815204), `UpdateQuestBit(0x17)` (0x0077BDD8), and stores the scene timer `[0x00A44EAC]` = 120 into the brain's +0x388. No screen-fade call: the `flFadeVolume*` names are audio. No `SetD3DFogState` or fog write in the entry, the ctor, or the object's update and render.
+- **Ctor 0x004513D4 (0xBC bytes, vtable 0x00AF6F08).** Allocates the object and takes three NJCM chunks from the Dark Falz BML (`darkfalz_dat.bml`, the asset descriptor at 0x009A5900) at indices 0x009A5CC8 = 14, 16, 17, with NJM indices from 0x009A5CD4 = -1, 38, 39. It calls `SetDefaultNpcCamera(5)` (0x004D31F4, the boss camera mode), writes the pivot `(-20000, 0, 0)` to 0x00A45068 (once, flag 0x00A45064 bit 0), `SetCameraTargetData` (0x004D681C), `UpdateCameraState(0x009A5CE0, 0x392D)` (0x004D6770), sound 0x35F, and a targeting slot. Its timer +0xB8 starts at -1.0.
+- **Update 0x004512E0.** `+0xB8 += 1.0`, held at 120.0 (`0x008FF9E4` = 1.0, `0x008FF9CC` = 120.0). The frame counter +0x90 counts to `[0x00A45054]` = 120, then sets the done flags in +0x8.
+- **Render 0x00451334.** Pushes the matrix (0x0082D7B0). On the first draw (flag 0x00A45050) it writes the render-time pivot `(-20000, 0, 0)` to BSS 0x00A45058, then 0x0082D838 transforms that vector into the current matrix's translation. It draws three models with `NJCM_UpdateModel` (0x0083046C): the event tower (model 14, no motion), the face (model 16, motion 38 = `fd_obj813_face.njm`) and the flower (model 17, motion 39 = `fd_obj813_flower01.njm`), both at frame = the timer +0xB8. Then it pops the matrix.
+
+So the exe's DEMO_WARP0 view is the event tower and its two fd_obj813 parts at x = -20000, seen from the camera 42 units away. The port drew none of them. The dark view was the missing object, not a camera or fog bug.
+
+**What the port now does.**
+- `client/src/formats/enemymodels.ts`: the Dark Falz spec (type 0xC8) gains three world-placed parts (`DEMO_WARP_PARTS`: tower, face, flower) at `DEMO_WARP_PIVOT = (-20000, 0, 0)`, built hidden. The face and flower use motions 38 and 39 with speed 0; the controller sets their frame.
+- `client/src/combat/darkfalz.ts`: `demoWarpFrame(scene, sceneFrames)` (the timer: sceneFrames - 1, capped at 120, null outside DEMO_WARP0) and the `warpFrame` getter on `DarkFalzAi`.
+- `client/src/render/combat.ts`: `drawDemoWarp` (called from `drawDarkFalz`) shows the three parts only in DEMO_WARP0 and sets the face and flower frames on paused animators.
+- `tests/darkfalzwarp.test.ts` (new): the timer rule and cap, the scene bounds, the pivot, the descriptor's model and motion names (14, 16, 17, 38, 39), the spec's three parts (placement, hidden, motion speed 0) and the spec's part count (15).
+
+**Checks.**
+- `node tests/darkfalzwarp.test.ts`: `darkfalzwarp tests passed`. `node tests/darkfalz.test.ts`: `darkfalz tests passed`. `node tests/darkfalzcamera.test.ts`: `darkfalzcamera tests passed`.
+- `npx tsc --noEmit -p .` in client (Node 24): exit 0.
+- Chrome headless, `client/e2e/boss-smoke.spec.ts` against Vite on port 5195, with newserv and the bridge already running. Account `webgameb`: `falzwarp` has no character, so the test cannot reach the lobby, and `webtest` was left alone. Result: `1 passed (1.3m)`, `page errors: 0`, `failed requests: 0`. Dark Falz: scene 2 (DEMO_WARP0) has a live camera at about (-20042, 65, 47) moving on the exe's path; the tower is visible during scene 2 (the controller's world children: 3) and hidden in scenes 3 and 4; the face and flower frame runs from 0 to 118 across the scene.
+- Screenshots (not committed): `/private/tmp/claude-501/-Users-junior-Downloads-psobb-master/6471789e-ff49-40d8-9214-def0e7ade813/scratchpad/falz/warp-0.png` to `warp-3.png` (DEMO_WARP0 samples) and `after-demo-warp0.png` (the boss-smoke's DEMO_WARP0 shot). They show the tower on a stepped platform with a pillar over dark cratered ground.
+
+**ASSUMED.**
+- The object lives for the whole DEMO_WARP0 scene and is hidden when the scene leaves. The exe's destructor (0x00451260 -> 0x00451284) releases the camera mode (0x004D3250); when it runs was not traced.
+- The render's current matrix is identity at the object (the map draw loop), so the port places the parts in world space.
+- An NJM frame past the motion's frame count holds the last frame (`NodeAnimator.setFrame` clamps; the exe's `NJCM_UpdateModel` clamping was not read).
+- The timer maps to the port's `sceneFrames - 1` (the exe's first update takes -1 to 0).
+- The exe's DEMO_WARP0 draws no other objects.
+
+**UNCLEAR.**
+- What the cratered ground in the screenshots is: the tower's model, the field's floor under it, or something else the port draws there. Not checked against an exe picture (none here).
+- Bit 0 of `0x00AE6DC8` (set by 0x0082FA9C around the object's draw, cleared by 0x0082FAB4): the warp render uses it, but its meaning was not read.
+- `tools/ghidra/decomp.sh 0x004513d4` printed nothing this session, so the disassembly is from objdump and the names from the reference dump (its Vol Opt names for these functions are the mislabelled ones).
+
+**Not changed.** The camera math, the scene timers and the trigger. The object's destructor (0x00451260) is not wired: the port hides the parts when the scene ends.

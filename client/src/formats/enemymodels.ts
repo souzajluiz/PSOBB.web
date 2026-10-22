@@ -346,6 +346,12 @@ const rad = (angle: number) => (angle / BAMS) * Math.PI * 2;
 const VOLOPT_MONITOR_MODEL = [2, 5, 8, 11]; // 0x009a5210
 // The same monitor's broken model (table 0x009a5230): the fall swaps the
 // model entry for it (0x00441902 reads [0x9a5230 + shape * 4] into +0x34).
+// Dark Falz's DEMO_WARP0 object (exe 0x004513D4 ctor, 0x00451334 render): the
+// render-time pivot (-20000, 0, 0) (BSS 0x00A45058, written at the first draw
+// from the same constant as the camera pivot 0x00A45068).
+export const DEMO_WARP_PIVOT: readonly [number, number, number] = [-20000, 0, 0];
+export const DEMO_WARP_PARTS = { tower: 'DEMO_WARP0 tower', face: 'DEMO_WARP0 face', flower: 'DEMO_WARP0 flower' } as const;
+
 export const VOLOPT_MONITOR_BROKEN = [3, 6, 9, 12];
 // The pillar's hatch lid (fe_obj_vo_futa_moto): the pillar's draw 0x0044b9a0
 // puts the first node of this model's tree at (0, b, 0) and its child at
@@ -702,6 +708,16 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     case 0xc8: {
       const m = (model: number, motion: number): EnemyPartSpec => ({ model, motion: loop(motion, 0.4) });
       const later = (model: number, motion: number, name: string): EnemyPartSpec => ({ ...m(model, motion), hidden: true, name });
+      // A DEMO_WARP0 part: world-placed at the pivot, hidden until the scene.
+      // Its motion is not stepped: the controller sets its frame (speed 0).
+      const warpPart = (model: number, motion: number | null, name: string): EnemyPartSpec => ({
+        model,
+        motion: motion === null ? null : { index: motion, speed: 0, loop: false },
+        place: 'world',
+        offset: DEMO_WARP_PIVOT,
+        hidden: true,
+        name,
+      });
       return spec('TBoss4DarkFalz', 'darkfalz_dat.bml', [
         m(7, 80),
         m(5, 78),
@@ -715,6 +731,15 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
         later(ult ? 13 : 11, 85, 'form 3 wing'),
         later(15, 70, 'Rico'),
         later(18, 69, 'Rico ring'),
+        // DEMO_WARP0's cutscene object (ctor 0x004513D4, render 0x00451334,
+        // combat/darkfalzwarp.ts): the event tower (model 14, no motion) and
+        // the two fd_obj813 objects (models 16 and 17, motions 38 and 39, both
+        // driven by the object's timer +0xB8 from -1 to 120). The render
+        // translates them by the pivot (-20000, 0, 0) (BSS 0x00A45058). Built
+        // hidden: the control shows them in DEMO_WARP0 only.
+        warpPart(14, null, DEMO_WARP_PARTS.tower),
+        warpPart(16, 38, DEMO_WARP_PARTS.face),
+        warpPart(17, 39, DEMO_WARP_PARTS.flower),
       ]);
     }
     // Olga Flow: the controller (ctor 0x0048d814) creates the phase-1 beast
