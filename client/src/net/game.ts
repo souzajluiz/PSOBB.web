@@ -26,6 +26,7 @@ import { readUtf16 } from './bbconnection.ts';
 import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby.ts';
 import { equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { splitLevel } from '../combat/techniques.ts';
+import { encodeBarbaA9, encodeBarbaAA } from '../combat/barbaray.ts';
 import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
@@ -972,6 +973,13 @@ export class Game extends Lobby {
     dv.setUint16(6, cursor & 0xffff, true);
     if (withTarget) dv.setUint32(8, target >>> 0, true);
     this.conn.send(0x60, 0, b);
+  }
+
+  // Barba Ray (combat/barbaray.ts, 0x004b5150): 6xA9 {a9, 02, entity, phase, cursor}
+  // or, for the codes that name a target, 6xAA {aa, 03, entity, phase, cursor, target u32}.
+  // newserv relays both to the other clients only (the sender applies its own).
+  sendBarbaAction(entityId: number, phase: number, cursor: number, target: number | null): void {
+    this.conn.send(0x60, 0, target === null ? encodeBarbaA9(entityId, phase, cursor) : encodeBarbaAA(entityId, phase, cursor, target));
   }
 
   // Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts): 6xDC
