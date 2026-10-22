@@ -20,7 +20,9 @@ import {
   SCENE_CUTSCENE_CAMERA,
   SCRIPTED_CAMERA_MODES,
   bossCameraView,
+  brainPivotOf,
   cameraSourceOf,
+  type LiveCameraInputs,
   composeCameraUp,
   stepCameraObject,
   type BossCameraSource,
@@ -378,6 +380,40 @@ if (fs.existsSync(GSL)) {
   // record of each cutscene matches the call sites checked in the exe (pair, record, mode push).
   eq(CUTSCENE_CAMERAS.find((c) => c.object === 'ctor4513d4')?.pair, 0x451514, 'DEMO_WARP0 pair call site');
   eq(CUTSCENE_CAMERAS.find((c) => c.object === 'ctor44ec14')?.pivot.startsWith('BSS 0x00A44F34'), true, 'Dark Falz pivot note');
+}
+
+// The live pivots (0x0044E120 / 0x0044E2F4 / 0x0044DFC7 / 0x0044FA8C): with live inputs the five
+// scenes get their pivot from the entity or the brain, the DIE TYPE2 one by the 75-unit formula.
+{
+  // brainPivotOf: (300, 50, 400) has |xz| = 500, unit (0.6, 0.8): pivot = pos - 75 * unit, Y = 0.
+  const b = brainPivotOf({ pos: [300, 50, 400], yaw: 0x1234 });
+  nearV(b.pivot, [300 - 45, 0, 400 - 60], 'DIE TYPE2 pivot is the entity minus 75 along its XZ unit (0x0044E14E)');
+  eq(b.yaw, 0x1234, 'DIE TYPE2 yaw is the entity +0x60 (0x0044E1D6)');
+  // No entity: the brain's pivot and yaw are 0 (0x0044E2AF). A zero XZ length keeps the entity's XZ (0).
+  nearV(brainPivotOf(null).pivot, [0, 0, 0], 'no DIE TYPE2 entity: pivot 0 (0x0044E2AF)');
+  eq(brainPivotOf(null).yaw, 0, 'no DIE TYPE2 entity: yaw 0');
+  nearV(brainPivotOf({ pos: [0, 7, 0], yaw: 0 }).pivot, [0, 0, 0], 'zero XZ length: pivot stays at the origin, Y 0');
+  const live: LiveCameraInputs = {
+    form1: { pos: [10, 20, 30], yaw: 111 },
+    form3: { pos: [-5, 6, 7], yaw: 222 },
+    dieType2Source: { pos: [300, 50, 400], yaw: 333 },
+    brain: { pivot: [1, 2, 3], yaw: 444 },
+  };
+  const src = cameraSourceOf({ motions: [] } as never, live);
+  const p = (o: string) => src.pivot(o)!;
+  nearV(p('ctor44f4ec').pivot, [10, 20, 30], 'APP TYPE2 pivot is form1 pos (0x0044E30F)');
+  eq(p('ctor44f4ec').yaw, 111, 'APP TYPE2 yaw is form1 +0x60');
+  nearV(p('ctor450fc4').pivot, [-5, 6, 7], 'DIE TYPE3 pivot is form3 pos (0x0044DFC7)');
+  eq(p('ctor450fc4').yaw, 222, 'DIE TYPE3 yaw is form3 +0x60');
+  nearV(p('ctor44fa8c').pivot, [255, 0, 340], 'DIE TYPE2 pivot from the brain formula');
+  eq(p('ctor44fa8c').yaw, 333, 'DIE TYPE2 yaw');
+  nearV(p('ctor44ffd8').pivot, [1, 2, 3], 'GET RING takes the brain pivot (0x0044E108)');
+  eq(p('ctor44ffd8').yaw, 444, 'GET RING takes the brain yaw');
+  nearV(p('ctor45072c').pivot, [1, 2, 3], 'DEMO_WARP2 takes the brain pivot (0x0044E0D0)');
+  // Without live inputs the five stay null (the fallbacks are not modelled).
+  for (const o of ['ctor44f4ec', 'ctor450fc4', 'ctor44ffd8']) eq(cameraSourceOf({ motions: [] } as never).pivot(o), null, `${o} null without live`);
+  // A missing entity gives no view (the BSS fallback is not read).
+  eq(cameraSourceOf({ motions: [] } as never, { form1: null }).pivot('ctor44f4ec'), null, 'APP TYPE2 without its entity: null (UNCLEAR fallback)');
 }
 
 if (failures) {
