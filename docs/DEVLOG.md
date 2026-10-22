@@ -1,5 +1,75 @@
 # Devlog
 
+## 2026-10-22: Ranged attacks face their primary target; real-input check of guns
+
+**Report:** "weapon shots don't work and deal no damage" (production). Not
+reproduced on main with the auto-attack replaced by `c.press(0)` (enemies
+placed dead ahead): Handgun, Shot, Rifle and Mechgun all hit and damage
+(`e2e/ranged-repro`, webgun account, local newserv, Node 24 Playwright).
+
+**Real input (`e2e/ranged-input`, temporary, not committed):** keyboard
+ArrowDown and the touch Palette-middle button (`pointerdown` / `pointerup`
+on `[title="Palette middle (Down)"]`) both send 6x43, a 6x46 with the target,
+and the hit. Nearest enemy 60 units away, Handgun (reach 170 + 30, 10 degree
+cone):
+
+```
+case off 0 dy 0 keyboard: ... 6x43 angle(BAMS) 41050 ; 6x46 targets 1 ; hit E-69 dmg 11.3 hp 92 -> 81
+case off 0 dy 0 touch:    ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 11.7 hp 81 -> 69
+case off 8 dy 0 keyboard: ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 10.7 hp 69 -> 58
+case off 25 dy 0 keyboard: ... 6x43 angle(BAMS) 45648 (no 6x46: outside the cone)
+case off 45 dy 0 keyboard: ... 6x43 angle(BAMS) 49288 (no 6x46)
+case off 0 dy 30 keyboard: ... hit E-69 dmg 10.6 hp 58 -> 47
+case off 0 dy 60 keyboard: ... 6x43 only (outside the vertical reach)
+errors: none
+1 passed (54.3s)
+```
+
+**Found (PsoBB.exe, refsrc `Psobb.exe-05112026.c`):**
+
+- `dispatch_action_attack_step1` (0x006a0f58): the attack angle faces the
+  primary target (`get_player_primary_target_position` = the nearest reticle
+  target, `update_player_targeting_info` 0x00588704) and the heading only when
+  there is none. The port always sent the heading. **Fixed:** `startAttack`
+  turns to the primary target before the 6x43.
+- The reticle cone (`check_enemy_is_targetable`, 0x007a2b28) is centred on the
+  heading with half angle `horizontal_angle` (cos compare), so the port's 10
+  degree handgun cone matches; a lock does not widen it. An enemy 25 degrees
+  off is not a target in the exe either (ASSUMED: the cone half angle reading).
+- `check_enemy_is_targetable` adds each hitbox radius to the reach and tests
+  the weapon position (the hand), not the feet; the port uses the origin and no
+  radius for ordinary enemies. Not changed (ASSUMED; needs hitbox data).
+- The exe's vertical test uses `vertical_angle_cos` on a 3D direction; the
+  port only checks |dy| <= 40. Not changed (threshold globals not decoded).
+- A gun shot is a bullet object (`create_gun_bullet_particle_effect`,
+  0x005e4678; `unknown_gun_bullet_constructor` / `WeaponProjectileConstructor_005c731c`):
+  a muzzle particle (id 9) at the hand, then the bullet flies for
+  `frame_count` frames and hits on arrival (`gun_bullet_collision_check`).
+  Arrival misses a target that moved past `g_WeaponBulletCollisionRadiusSq`
+  from its position at the shot ("manual evasion"), and a map wall on the ray
+  stops the shot. **Not ported:** the port draws no muzzle or bullet for guns
+  (nothing in `client/src` is drawn for a gun shot; the hit is instant and
+  never misses for movement or walls). These are the likely "shots don't
+  show" and over-hit gaps; a follow-up needs the bullet model.
+- Mechgun: one hit per combo; the exe fires bursts (see attack.ts header).
+
+**Fix:** `client/src/combat/weaponaim.ts` (new: `coneOffset`, `inWeaponCone`,
+`facingOf`); `client/src/render/combat.ts`: `weaponTargets(attackType, from)`
+(the target selection of `resolveHit`, nearest first) and `startAttack` faces
+the primary target before `sendAttack`. Melee uses the same reticle path in
+the exe (`dispatch_action_attack_step1` runs for every weapon), so melee facing
+also snaps to the nearest target within its cone: not yet checked live.
+
+**Checks:**
+
+- `npx tsc --noEmit -p .` (client): exit 0.
+- `node tests/rangedaim.test.ts`: `rangedaim: all checks passed`
+- `node tests/combat.test.ts`: `5946 checks, 0 failures`
+- `node tests/combatdepth.test.ts`: `824 checks, 0 failures`
+- `node tests/specials.test.ts`: `specials: all checks passed`
+- `node tests/buffs.test.ts`: `buffs: all checks passed`
+- Live: the input run above, after the fix.
+
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB
