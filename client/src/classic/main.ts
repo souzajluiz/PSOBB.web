@@ -634,6 +634,7 @@ async function main(): Promise<void> {
     stageTall = s.phoneLayout === true;
     fit.refresh();
     controls?.setPadSuppressed(s.touchPad === false);
+    controls?.setPadMenu(s.touchMenu === true);
     // The 3D canvas takes the pointer only where the screen asks (the field);
     // elsewhere the stage gets it as before.
     canvas.style.pointerEvents = s.worldPointer ? 'none' : '';
@@ -724,6 +725,7 @@ async function main(): Promise<void> {
   // Fullscreen / mute buttons and the touch pad (browser conveniences).
   controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below, tall: () => stageTall });
   controls.setPadSuppressed(current.touchPad === false);
+  controls.setPadMenu(current.touchMenu === true);
   // Landscape lock after the fullscreen button (Android Chrome; iOS has none).
   if (fit.enabled) controls.fullscreen.onChange((on) => lockLandscape(on));
   window.addEventListener('pointerdown', () => fit.refresh(), { once: true });

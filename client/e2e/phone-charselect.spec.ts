@@ -54,9 +54,16 @@ async function stageBox(page: Page): Promise<{ x: number; y: number; w: number; 
 // (the box is 3:4 and the screen is centred in it).
 async function tapVirtual(page: Page, vx: number, vy: number): Promise<void> {
   const b = await stageBox(page);
-  const s = b.w / 640;
-  const oy = (b.h - 480 * s) / 2;
-  await page.mouse.click(b.x + vx * s, b.y + oy + vy * s);
+  // Portrait: the tall stage (whole screen, centred vertically). Otherwise the
+  // 4:3 screen is scaled by height and anchored to the box's left edge.
+  if (b.h > b.w) {
+    const s = b.w / 640;
+    const oy = (b.h - 480 * s) / 2;
+    await page.mouse.click(b.x + vx * s, b.y + oy + vy * s);
+  } else {
+    const s = b.h / 480;
+    await page.mouse.click(b.x + vx * s, b.y + vy * s);
+  }
 }
 
 async function openTitle(page: Page): Promise<void> {

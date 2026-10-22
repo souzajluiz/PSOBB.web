@@ -8883,3 +8883,50 @@ So the exe's DEMO_WARP0 view is the event tower and its two fd_obj813 parts at x
 - `tools/ghidra/decomp.sh 0x004513d4` printed nothing this session, so the disassembly is from objdump and the names from the reference dump (its Vol Opt names for these functions are the mislabelled ones).
 
 **Not changed.** The camera math, the scene timers and the trigger. The object's destructor (0x00451260) is not wired: the port hides the parts when the scene ends.
+
+## Phone portrait: model placement on select and creation, menu touch pad
+
+**Problem.** On a portrait phone the character select and creation showed the
+3D model cut off at the right edge. The preview drew the whole window in
+virtual units with the window's own aspect, so the 4:3 placement (model at
+x 506 of 640, right of the CHARACTERS box) landed off the 640x480 screen.
+The touch overlay also covered the menus: the stick and PAL / MENU / CHAT /
+VIB were shown over the list and the creation, and the D-pad and OK / BACK ran
+off the right edge (padLayout is sized for the landscape field window).
+
+**Changed.**
+- `Stage.tall` tells a screen the tall phone stage is up. `GLLayer.fit` takes a
+  `virtualFrame` flag: the 3D layer then covers the 640x480 screen only (4:3,
+  scale from the stage), so the model keeps the exe's 4:3 placement inside the
+  tall box. `SelectPreview.draw`, `PlayerModelView.draw` and the creation's
+  dressing room pass the flag. Landscape and desktop take the old path.
+- `Screen.touchMenu` (set by the character select and creation). `WebControls`
+  `setPadMenu(on)` hides the stick, PAL / MENU / CHAT / VIB and the palette keys;
+  the D-pad, OK / BACK and the fullscreen / mute strip stay. This applies in
+  every orientation on these two screens, not only portrait.
+- On the portrait tall stage the menu pad's D-pad and OK / BACK are placed in
+  the bar under the 640x480 screen, right-aligned, with a button size from that
+  bar. padLayout is unchanged for the field.
+- `e2e/phone-charselect.spec.ts`: `tapVirtual` used the tall-stage formula for
+  every orientation; landscape is the left-anchored 4:3 layout, so the landscape
+  tap missed. Fixed in the helper.
+
+**Supersedes** the earlier note that the pad "stays visible on the list and the
+creation": the menu pad stays (arrows and OK / BACK are the menu's input); the
+field-only parts are hidden.
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`npx playwright test e2e/phone-charselect.spec.ts e2e/phone-login.spec.ts`
+(vite on 5193 with PW_BASE_URL, newserv and bridge running): 10 passed on a
+fresh account. The `webtall` account was full after repeated runs (each run
+makes a character), so the runs used `PSO_TALL_USER=webtall2` / `webtall3`.
+Screenshots: the select and creation on iPhone 13 and Pixel 7 show the whole
+model in the 4:3 placement; the creation dressing room shows the full model.
+
+**Environment.** A worktree has no `vendor/`; Vite's `/keys` middleware reads
+`vendor/newserv/system/blueburst/keys` relative to the repo, so the login fails
+with "key file default.nsk not found" until `vendor` is linked. Linked from the
+main checkout for the run, removed before the commit.
+
+**ASSUMED.** The exe's 4:3 placement (model at x 506) is taken from the
+SelectPreview comment; no capture with a character confirms it.

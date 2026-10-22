@@ -42,6 +42,9 @@ export interface Screen {
   // false: the touch pad (stick, arrows, OK / BACK) is hidden on this screen,
   // which is made for taps (title / login).
   touchPad?: boolean;
+  // true: a menu (character select / creation): the touch pad keeps only its
+  // arrows and OK / BACK (ui/webcontrols.ts setPadMenu).
+  touchMenu?: boolean;
   // A phone (fit mode, classic/viewport.ts): in portrait the stage is a tall
   // box and the screen is laid out by tallLayout. Other cases are unchanged.
   phoneLayout?: boolean;
@@ -83,6 +86,7 @@ export class Stage {
   sy = 1;
   ox = 0; // device px of the virtual origin (tall phone layout only)
   oy = 0;
+  tall = false; // the tall phone stage is up (portrait phone, phoneLayout screen)
   time = 0;
   // Development aid (?t=<seconds>): the animation clock held at one value so a
   // frame can be compared with a capture.
@@ -146,6 +150,7 @@ export class Stage {
     if (screen.phoneLayout && h > w) {
       const t = tallLayout(w, h);
       [this.sx, this.sy, this.ox, this.oy] = [t.s, t.s, t.ox, t.oy];
+      this.tall = true;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       screen.drawBackdrop?.(ctx, w, h);
@@ -155,6 +160,7 @@ export class Stage {
       return;
     }
     this.ox = this.oy = 0;
+    this.tall = false;
     if (screen.layout === 'left43') {
       screen.drawFullscreen?.(ctx, w, h, this);
       this.sx = this.sy = h / VH;
@@ -168,11 +174,12 @@ export class Stage {
 
   // Draws the current screen into another context of size w x h (no update).
   renderTo(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    const [sx, sy, ox, oy] = [this.sx, this.sy, this.ox, this.oy];
+    const [sx, sy, ox, oy, tall] = [this.sx, this.sy, this.ox, this.oy, this.tall];
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
     if (this.screen) this.paint(ctx, w, h);
     [this.sx, this.sy, this.ox, this.oy] = [sx, sy, ox, oy];
+    this.tall = tall;
   }
 
   // Ratio that makes a virtual-space circle look round on screen.

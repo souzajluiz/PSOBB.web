@@ -77,6 +77,10 @@ export interface WebControls {
   // true: the stick, arrows and buttons are hidden for a screen made for taps
   // (title / login); the fullscreen and mute strip stays.
   setPadSuppressed(on: boolean): void;
+  // true: menu pad (menus such as character select / creation): only the arrow
+  // diamond and OK / BACK stay; the stick and the field-only buttons (PAL, MENU,
+  // CHAT, VIB, the palette keys) are hidden. The fullscreen and mute strip stays.
+  setPadMenu(on: boolean): void;
   dispose(): void;
 }
 
@@ -500,6 +504,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     const cs = getComputedStyle(overlay);
     return { top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0, bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0 };
   };
+  // Menu pad (setPadMenu): the parts that exist only on the field are hidden.
+  let menuOnly = false;
   function relayout(): void {
     const w = keyTarget.clientWidth;
     const h = keyTarget.clientHeight;
@@ -507,8 +513,27 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     if (!w || !h) return;
     const l = padLayout(w, h, insets(), opts.below?.() ?? 0);
     layout = l;
-    overlay.style.setProperty('--wc-btn', `${l.button}px`);
-    overlay.style.setProperty('--wc-gap', `${l.gap}px`);
+    // Menu pad on the portrait tall stage: padLayout is sized for the field's
+    // landscape window and runs off the right edge here. The arrows and OK /
+    // BACK go in the bar under the 640x480 screen (the stage is centred, so the
+    // bars above and below are equal), right-aligned.
+    const menuTall = menuOnly && h > w && !!opts.tall?.();
+    let dpadRect = l.dpad;
+    let actionsRect = l.actions;
+    let button = l.button;
+    let gap = l.gap;
+    if (menuTall) {
+      const band = (h - (480 * w) / 640) / 2; // the 640x480 screen is w wide
+      button = Math.min(60, Math.max(30, band / 3.4));
+      gap = 6;
+      const aw = button * 1.25;
+      const dsize = 3 * button;
+      const bottomY = h - gap;
+      actionsRect = { x: w - gap - aw, y: bottomY - 2 * aw - gap, w: aw, h: 2 * aw + gap };
+      dpadRect = { x: actionsRect.x - gap - dsize, y: bottomY - dsize, w: dsize, h: dsize };
+    }
+    overlay.style.setProperty('--wc-btn', `${button}px`);
+    overlay.style.setProperty('--wc-gap', `${gap}px`);
     if (opts.tall?.()) {
       // The HUD geometry of padLayout does not hold on a tall stage (no HUD
       // there): the two buttons sit in the top-right corner.
@@ -516,8 +541,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       place(strip, { x: Math.max(0, w - insets().right - l.gap - sw), y: l.topStrip.y, w: sw, h: l.topStrip.h });
     } else place(strip, l.topStrip);
     place(zone, l.stickZone);
-    place(dpad, l.dpad);
-    place(actions, l.actions);
+    place(dpad, dpadRect);
+    place(actions, actionsRect);
     for (const { key, rect } of l.palette) {
       const b = paletteButtons.get(key);
       if (b) place(b, rect);
@@ -551,12 +576,18 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   const touchAction = keyTarget.style.touchAction;
   let wanted = false;
   let suppressed = false;
+  const syncParts = () => {
+    const shown = !pad.hidden;
+    zone.hidden = menuOnly;
+    base.hidden = !shown || menuOnly;
+    row.hidden = !shown || menuOnly;
+    for (const b of paletteButtons.values()) b.hidden = menuOnly;
+  };
   const applyTouch = (on: boolean) => {
     if (pad.hidden === !on) return;
     if (!on) releaseAll();
     pad.hidden = !on;
-    row.hidden = !on;
-    base.hidden = !on;
+    syncParts();
     overlay.classList.toggle('is-touch', on);
     keyTarget.style.touchAction = on ? 'none' : touchAction;
     relayout();
@@ -568,6 +599,13 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   const setPadSuppressed = (on: boolean) => {
     suppressed = on;
     applyTouch(wanted && !suppressed);
+  };
+  const setPadMenu = (on: boolean) => {
+    if (menuOnly === on) return;
+    menuOnly = on;
+    releaseAll(); // a key held on the hidden stick or palette must not stick
+    syncParts();
+    relayout();
   };
   base.hidden = true;
   const setting = urlTouchSetting() ?? opts.touch ?? 'auto';
@@ -588,6 +626,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     fullscreen: fs,
     setTouchVisible,
     setPadSuppressed,
+    setPadMenu,
     dispose() {
       releaseAll();
       for (const c of cleanups) c();
