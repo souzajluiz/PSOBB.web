@@ -8805,3 +8805,42 @@ keyboard is not shown (the form has its own input).
 
 **UNCLEAR.** The Connecting screen in its tall form was not screenshotted; it
 is only exercised on the way through the login and the list.
+
+## 2026-10-22: Saint-Milion laser in Chrome (e2e PASS: the laser shot and its 0x6f8 loop)
+
+Closes HANDOFF "Start here" item 3. `client/e2e/ep4-battle-smoke.spec.ts` now reaches the laser by the exe's own path and passes. Branch `worktree-agent-a4641173c3f901521`, not pushed.
+
+**Q1: who runs 6xDC for the sender? (decisive fact)**
+- `checked_call_packet0x60_subcommand` @ 0x008003e0 (name per `notes/renames_queued.md`; objdump confirms the body): it first sends the packet (`calll 0x007d3f38` = send_packet0x60, when `g_pShipConnectionManager != 0`, 0x008003fd..0x008003f8), then walks `g_Packet0x60SubcommandTable` (0x00a0fba0, rows of 8 bytes: action u16 at +0, perm u16 at +2, handler at +4). The handler runs on the SENDER: `calll *0xa0fba4(,%ebx,8)` at 0x00800458. Before it, the perm check `map_action_permission_levels[map] & perm` at 0x00800444..0x00800455.
+- 6xDC handler row: `SaintEmilionPart_HandleStateTransition_0076b034` (dump line 741814), table row 180 (`notes/_dispatch_tables.tsv`), perm 0x0004.
+- Server side (newserv `src/ReceiveSubcommands.cc`): 6xDC = `on_forward_check_game` (line 5823) -> `forward_subcommand`, which sends public subcommands to every client EXCEPT the sender (line 273 `if (lc && (lc != c))` in the send loop). So the echo never reaches the sender.
+- Conclusion: the sender applies 6xDC locally AND sends it. The port's brain does this already: `SaintMilionAi.send()` (saintmilionboss.ts) calls `apply()` and pushes a `send` event; `render/combat.ts` `smEvent` then calls `game.sendEpisode4BossAction`, which is network only.
+- Root cause of the failing spec: the spec called `game.sendEpisode4BossAction(0, 0x13)` directly, which sends and does not run anything locally. So the boss could not move. This is a test-helper divergence, not a brain divergence. `net/game.ts` now says so in a comment (no logic change).
+- Map gate (not modelled by the port): `map_action_permission_levels` byte at 0xa10160 + 0x2c (Saint-Milion area 0x2c, read from the exe's .data file offset 0x60ed60 + 0x2c) is 0x04, and the 6xDC perm is 0x04, so the gate passes. ASSUMED: the `get_current_map()` index is 0x2c. UNCLEAR: whether the gate needs to be modelled for other maps.
+
+**Q2: what drives state 2 -> laser (exe brain vs port).**
+- Form 1 (kind 2): state 2 ("the tentacles") waits. A lead tentacle's death sets State2 bit 0x80 << spot (`saintmilionents.ts`, `died()`); the state 2 frame `SaintEmilionPart_UpdateAnimationAndLogic_007681a4` (dump line 739601, objdump `call 0x8003e0` at 0x00768360) sends 6xDC action 2 when `State2 & 0x380`, leader only (`unknown_is_player_the_party_leader_for_current_floor`). The port matches (`tentaclesFrame`). Each lead death cycles state 2 -> 4..6 (rise at the spot) -> 7..9 -> 10 (swing) -> 2.
+- The form change is NOT the tentacles: it is the fourth death of body parts 4..7 of form 1 (header of `saintmilionboss.ts`, from the exe; the port's `hitPart`). After it the boss goes 0x1a -> 0x0d (arrival in arena 2 at (533, -522), needs a living player within 250, `arrivalFrame`) -> 0x0f (choose, `chooseAttack`) -> attacks. Lasers are states 0x13 / 0x14 (picked by 0x0f's table or by the stomp 0x11).
+- Observed in the passing run: 0x0f -> 0x11 -> 0x14 (SmLaser shot, 0x6f8 playing), 0x14 -> 0x0f.
+
+**Q3: the divergence that the e2e found (a real port bug): the area SE bank was never loaded.**
+- `SePlayer` (`audio/se.ts`) maps the common bank and area 0 in its constructor; `setArea()` (FUN_00828d40 = `load_map_sound_data`, 0x00828d40) was never called anywhere in the port. Area 0x2c maps to bank 25, `boss09.pac` (`SE_AREA_BANK`), so 0x6f8 (the laser loop) was never mapped and `play()` returned -1.
+- Fix (`render/combat.ts`, `CombatView.enterFloor`): create the SePlayer if needed and `void this.sePlayer?.setArea(area)` on each floor entry. ASSUMED: the exe swaps the bank at the area's entry (the callers are the per-area handlers around dump lines 788629..788861; not pinned to one function).
+- Check: `tests/sound.test.ts` now asserts area 0x2c -> boss09.pac and 0x6f8 in its slots. Before the fix the e2e laser step read `laser sound 0x6f8 playing false`; after it, `playing true`.
+
+**Test-only aids (ASSUMED, not exe behaviour; kept in the spec, commented):**
+- The boss is struck through `CombatView.applyEnemyHit` (the same function a melee/photon hit runs, `ENEMY_BASE_FLAGS`) with 9999: body parts 4..7 first (form change), then lead tentacles (state 2 cycle). Only targetable/alive ones.
+- The leader's max HP is raised to 100000 and topped up: a lethal blast killed it (hp 0, revivable) and a dead player is no target, so the boss stalled in 0x0f (seen twice).
+- The leader is put back at the arena centre (arena 2 (533, -522); arenas 3 / 4 at the origin, ASSUMED from SM_ARENAS ox/oz) for states 0x0d..0x18: `chooseAttack` needs a living player near the arena; knockback otherwise left it (seen as a 0x0f stall).
+
+**Port fixes in this entry:** `render/combat.ts` (area SE bank swap on floor entry), `tests/sound.test.ts` (area bank check), `net/game.ts` (comment only), `e2e/ep4-battle-smoke.spec.ts` (forced 6xDC removed; strikes, arena keeping, laser sound checked during the laser's life).
+
+**Checks (Node 24, the exact output lines):**
+- `cd client && npx tsc --noEmit -p .`: no output (clean).
+- `node tests/saintmilion.test.ts`: `saintmilion: all checks passed`
+- `node tests/saintmilionboss.test.ts`: `ALL PASS`
+- `node tests/sound.test.ts`: `ok`
+- e2e (newserv `vendor/newserv/build/newserv` and bridge already running, Vite on 5191, `PW_BASE_URL=http://127.0.0.1:5191 PSO_USER=e4lz5191 PSO_PASSWORD=e4lz5191 npx playwright test e2e/ep4-battle-smoke.spec.ts`): `✓ 1 e2e/ep4-battle-smoke.spec.ts:112:1 › Saint-Milion: ... (2.2m)`, `1 passed (2.3m)`. Log lines of the passing run: `chunk0: shot kinds [["SmMissile",14],["SmLaser",8]]`, `chunk0: laser seen true, laser sound 0x6f8 playing true, lead strikes 12`, `failed requests: 0`, `page errors: 0`. Tick sample: `t=46s state 0x14/0x14 kind=3 form=2 laser=yes arena=2 hp=99780/alive shots=[SmLaser] se0x6f8=true`.
+- A failing account: the first runs of this account failed at login-to-lobby (`reachLobby`), because a new newserv account has no character. Fix for the test only: `vendor/newserv/system/players/player_e4lz5191_0.psochar` and `.psobank` are copies of webtest's files (made by this run, outside the repo; the account is `e4lz5191`).
+
+**UNCLEAR / not done:** the laser's aim is a stand-in (`laserAim`, ASSUMED in `saintmilionboss.ts`); the 6xDC map gate is not modelled; the exe's exact caller of the area bank swap is not pinned; `shot` damage numbers were not compared to the exe. Battle Mode (item 4) untouched.

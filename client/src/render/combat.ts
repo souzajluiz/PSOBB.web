@@ -802,6 +802,12 @@ export class CombatView {
     this.floor = floor;
     this.area = area;
     this.fx?.setMap(area);
+    // The area's SE bank (FUN_00828d40 = load_map_sound_data, 0x00828d40; SE_AREA_BANK maps the
+    // area to its bank, e.g. area 0x2c -> boss09.pac for Saint-Milion). Nothing else swaps it, so
+    // the area's sounds (0x6f8, the laser's loop) were never loaded. ASSUMED: swapped at each
+    // floor entry, as the exe's area entry handlers do.
+    this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+    void this.sePlayer?.setArea(area);
     this.enemies.clear();
     this.gibbonGroups.clear();
     this.attack = null;

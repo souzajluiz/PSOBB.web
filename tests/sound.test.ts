@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseSePac, waveToFloat } from '../client/src/formats/sepac.ts';
-import { SE_BANKS, SE_SLOT_FLAGS } from '../client/src/audio/se_tables.ts';
+import { SE_AREA_BANK, SE_BANKS, SE_SLOT_FLAGS } from '../client/src/audio/se_tables.ts';
 import { SE, seSlot, seVolume } from '../client/src/audio/se.ts';
 
 const SOUND = join(process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data'), 'sound');
@@ -47,6 +47,11 @@ for (const [name, id] of Object.entries(SE)) {
   console.log(`SE.${name.padEnd(8)} 0x${id.toString(16)} flags 0x${(SE_SLOT_FLAGS[slot] >>> 0).toString(16).padStart(8, '0')} volume ${seVolume(SE_SLOT_FLAGS[slot])}`);
 }
 check(seVolume(0) === 0 && seVolume(0x7f00) === -6400, 'volume formula end points');
+// Saint-Milion's area (0x2c) plays from boss09.pac (SE_AREA_BANK): its laser loop 0x6f8 must be
+// in that bank's slots, or the area swap (CombatView.enterFloor) would load nothing for it.
+const area = SE_AREA_BANK[0x2c];
+check(SE_BANKS[area]?.file === 'boss09.pac', `area 0x2c bank is boss09.pac (got ${SE_BANKS[area]?.file})`);
+check(SE_BANKS[area]?.slots.includes(0x6f8) === true, 'SE 0x6f8 (laser loop) in the area 0x2c bank');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
