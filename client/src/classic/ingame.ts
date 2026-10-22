@@ -20,14 +20,22 @@ export const WINDOW_POS = {
   lobbyName: [622, 37] as const, // index 0xc0, FUN_0073f510 (right edge)
 };
 
-// Runs fn in the in-game window space and returns the extra width (virtual
-// units beyond 640) available to right-side windows.
+// Runs fn in the in-game window space. fn gets the extra width (virtual units
+// beyond 640) available to right-side windows.
+// Tall phone stage (stage.ts tallLayout): the 640x480 screen is the whole
+// frame, placed by the transform stage.paint already set (offset and scale
+// from tallLayout), so the windows keep their table positions and there is no
+// extra width. Other cases scale by the canvas height from the origin.
 export function inGameSpace(ctx: CanvasRenderingContext2D, stage: Stage, fn: (extra: number) => void): void {
-  const s = stage.canvas.height / VH;
-  const extra = stage.canvas.width / s - VW;
   ctx.save();
-  ctx.setTransform(s, 0, 0, s, 0, 0);
-  fn(Math.max(0, extra));
+  if (stage.tall) {
+    fn(0);
+  } else {
+    const s = stage.canvas.height / VH;
+    const extra = stage.canvas.width / s - VW;
+    ctx.setTransform(s, 0, 0, s, 0, 0);
+    fn(Math.max(0, extra));
+  }
   ctx.restore();
 }
 

@@ -462,6 +462,7 @@ async function main(): Promise<void> {
         showWorld(false);
         show(title);
       },
+      fit.enabled,
     );
     Object.assign(window, { classicShip: screen });
     show(screen);

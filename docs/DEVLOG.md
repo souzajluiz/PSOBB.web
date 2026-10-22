@@ -8930,3 +8930,40 @@ main checkout for the run, removed before the commit.
 
 **ASSUMED.** The exe's 4:3 placement (model at x 506) is taken from the
 SelectPreview comment; no capture with a character confirms it.
+
+## Phone portrait: Ship Select and Block Select on the tall stage
+
+**Problem.** Ship Select and Block Select stayed on the 4:3 stage on a portrait
+phone. `inGameSpace` (classic/ingame.ts) scaled by the canvas height and reset
+the transform to the origin, so the tall offset of `tallLayout` was lost. The
+screen had no touch menu pad either, so the pad showed the field's stick and
+palette keys.
+
+**Changed.**
+- `inGameSpace` takes the tall path when `stage.tall` is set: it runs `fn(0)`
+  with the transform `stage.paint` already set (tallLayout scale and offset),
+  so the 640x480 window keeps its table positions and no extra width is added.
+  Landscape and desktop keep the old path. The other users (field, lobby) do
+  not run on the tall stage (no `phoneLayout`), so they are unchanged.
+- `ShipSelectScreen`: `phoneLayout` (the phone flag, set by main.ts from
+  `fit.enabled`) and `touchMenu = true`, like character select. The lobby
+  backdrop is the 3D view under the stage and fills the 3:4 box.
+- `ShipSelectScreen.pointer`: a tap on a row moves the cursor there; a click
+  chooses it (taps had no handler before). This also applies to desktop and
+  landscape mouse clicks.
+- `e2e/phone-charselect.spec.ts`: ship select checks on iPhone 13, Pixel 7,
+  iPhone landscape and desktop. The "Go to lobby" row is picked by a tap
+  (`goToLobbyByTap`), and the pad is checked to have no stick and to show the
+  D-pad.
+
+**Not changed.** The lobby itself is still 4:3 (`LobbyScreen` has no
+`phoneLayout`); after the tap the portrait phone shows the old lobby layout.
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`npx playwright test e2e/phone-charselect.spec.ts e2e/phone-login.spec.ts`
+with `PW_BASE_URL=http://127.0.0.1:5197` on account webship1: all pass.
+Screenshots of Ship Select (iPhone 13, Pixel 7, landscape, desktop) and of the
+lobby after the tap are in the session scratchpad, `mobile-ship/`.
+
+**Environment.** A worktree has no `vendor/` or `client/node_modules`; both
+were linked from the main checkout for the run and removed before the commit.

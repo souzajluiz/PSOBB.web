@@ -4,6 +4,9 @@
 // scaled to its width and centred, the bars filled with the screen's background
 // dimmed. A tap on a slot is the same as Enter on it. The character's name is
 // typed into an HTML form on a phone. Desktop and landscape keep the 4:3 layout.
+// Ship select (classic/shipselect.ts) takes the same tall stage in portrait,
+// over the lobby backdrop, with the touch menu pad under the screen; its
+// "Go to lobby" row is picked by a tap. Landscape and desktop keep their layout.
 // Phones are emulated (isMobile, hasTouch). The character is made through the
 // phone UI end to end and reaches the lobby. Screenshots go to PSO_SHOTS_DIR
 // when it is set.
@@ -197,7 +200,15 @@ async function makeCharacter(page: Page, stopAtName = false): Promise<void> {
   throw new Error('character creation did not finish');
 }
 
-// From the character list to the lobby through the chosen slot.
+// The first filled slot of the character list (a login with a character).
+async function firstFilledSlot(page: Page): Promise<number> {
+  const filled = await peek(page, (w) => w.classicSelect.slots.map((p: unknown) => p !== null));
+  const i = (filled as boolean[]).indexOf(true);
+  expect(i, 'the account has no character (run the portrait test first or use another PSO_TALL_USER)').toBeGreaterThanOrEqual(0);
+  return i;
+}
+
+// From the character list to Ship Select through the chosen slot.
 async function enterSlot(page: Page, slot: number): Promise<void> {
   for (let i = 0; i < 8; i++) {
     if ((await peek(page, (w) => w.classicSelect.selected)) === slot) break;
@@ -205,7 +216,29 @@ async function enterSlot(page: Page, slot: number): Promise<void> {
   }
   await key(page, 'Enter');
   await expect.poll(() => peek(page, (w) => !!w.classicShip || !!w.classicLobby), { timeout: 90_000 }).toBe(true);
-  if (await peek(page, (w) => !!w.classicShip)) await key(page, 'Enter');
+}
+
+// The stage mapping of a point of the 640x480 screen to the page (the stage
+// box): tall in portrait, stretched over the box otherwise (ship select).
+async function screenPoint(page: Page, vx: number, vy: number): Promise<{ x: number; y: number }> {
+  const b = await stageBox(page);
+  if (b.h > b.w) {
+    const s = b.w / 640;
+    return { x: b.x + vx * s, y: b.y + (b.h - 480 * s) / 2 + vy * s };
+  }
+  return { x: b.x + (vx * b.w) / 640, y: b.y + (vy * b.h) / 480 };
+}
+
+// Ship Select's rows (shipselect.ts): the list starts at (22, 66), 20 px apart.
+const shipRowY = (row: number) => 66 + row * 20 + 8;
+
+// Picks "Go to lobby" in Ship Select with a tap on its row, then waits for the lobby.
+async function goToLobbyByTap(page: Page): Promise<void> {
+  await expect.poll(() => peek(page, (w) => !!w.classicShip), { timeout: 90_000 }).toBe(true);
+  const row = await peek(page, (w) => w.classicShip.items.findIndex((it: { label: string }) => it.label === 'Go to lobby'));
+  expect(row, 'Ship Select lists "Go to lobby"').toBeGreaterThanOrEqual(0);
+  const p = await screenPoint(page, 100, shipRowY(row as number));
+  await page.mouse.click(p.x, p.y);
   await expect.poll(() => peek(page, (w) => !!w.classicLobby), { timeout: 90_000 }).toBe(true);
 }
 
@@ -237,7 +270,19 @@ test.describe('iPhone 13 portrait', () => {
     await expect.poll(() => slotFilled(page, slot)).toBe(true);
     await shot(page, 'select-after-iphone');
     await enterSlot(page, slot);
-    expect(await peek(page, (w) => !!w.classicLobby)).toBe(true);
+    // Ship Select: the tall stage, the 4:3 window in the 640x480 screen, and the
+    // touch menu pad (arrows and OK / BACK under the screen, no stick).
+    expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(true);
+    const shipBox = await stageBox(page);
+    expect(Math.abs(shipBox.h - (shipBox.w * 4) / 3)).toBeLessThanOrEqual(2);
+    await expect(page.locator('.wc-stick-zone')).toBeHidden();
+    await expect(page.locator('.wc-dpad')).toBeVisible();
+    await expect(page.locator('.wc-actions')).toBeVisible();
+    await sleep(1500);
+    await shot(page, 'shipselect-iphone');
+    await goToLobbyByTap(page);
+    await sleep(1500);
+    await shot(page, 'lobby-iphone');
     expect(logs.some((l) => l.startsWith('pageerror'))).toBe(false);
   });
 });
@@ -265,6 +310,21 @@ test.describe('Pixel 7 portrait', () => {
     await expect(nameRoot(page)).toBeHidden();
     await expect.poll(() => peek(page, (w) => !!w.classicCreate && w.classicCreate.sub === 0)).toBe(true);
   });
+
+  test('ship select is the tall stage with the menu pad; a tap on Go to lobby reaches the lobby', async ({ page }) => {
+    await loginPhone(page);
+    const box = await stageBox(page);
+    expect(Math.abs(box.h - (box.w * 4) / 3)).toBeLessThanOrEqual(2);
+    await enterSlot(page, await firstFilledSlot(page));
+    expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(true);
+    await expect(page.locator('.wc-stick-zone')).toBeHidden();
+    await expect(page.locator('.wc-dpad')).toBeVisible();
+    await sleep(1500);
+    await shot(page, 'shipselect-pixel');
+    await goToLobbyByTap(page);
+    await sleep(1500);
+    await shot(page, 'lobby-pixel');
+  });
 });
 
 test.describe('iPhone 13 landscape', () => {
@@ -283,6 +343,19 @@ test.describe('iPhone 13 landscape', () => {
     await sleep(1000);
     await shot(page, 'create-class-landscape');
   });
+
+  test('landscape ship select keeps the whole-screen window; a tap on Go to lobby reaches the lobby', async ({ page }) => {
+    await loginPhone(page);
+    await enterSlot(page, await firstFilledSlot(page));
+    expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(true);
+    const box = await stageBox(page);
+    expect(box).toMatchObject({ w: 664, h: 390 });
+    await sleep(1500);
+    await shot(page, 'shipselect-landscape');
+    await goToLobbyByTap(page);
+    await sleep(1000);
+    await shot(page, 'lobby-landscape');
+  });
 });
 
 test.describe('desktop', () => {
@@ -297,6 +370,20 @@ test.describe('desktop', () => {
     expect(await peek(page, (w) => w.classicSelect.phoneLayout)).toBe(false);
     await sleep(1500);
     await shot(page, 'select-desktop');
+    expect(logs.some((l) => l.startsWith('pageerror'))).toBe(false);
+  });
+
+  test('desktop ship select keeps the 4:3 window; a click on Go to lobby reaches the lobby', async ({ page }) => {
+    const logs = consoleLog(page);
+    await logIn(page, USER, PASSWORD);
+    await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+    await enterSlot(page, await firstFilledSlot(page));
+    expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(false);
+    await sleep(1500);
+    await shot(page, 'shipselect-desktop');
+    await goToLobbyByTap(page);
+    await sleep(1000);
+    await shot(page, 'lobby-desktop');
     expect(logs.some((l) => l.startsWith('pageerror'))).toBe(false);
   });
 });
