@@ -25,7 +25,8 @@
 import { se } from '../audio/se.ts';
 import { drawInputWindow } from './login.ts';
 import { drawMenuWindow, drawText, inWindowSpace, ITEM_STEP, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
-import { DEFAULT_TEXT, EXIT_CONFIRM, INPUT_WINDOW, LOGIN_MENU, TITLE_FPS, TitleFlow, yesNoRect, type Credentials, type Key, type MenuText, type TitleHost } from './titleflow.ts';
+import type { LoginForm } from './loginform.ts';
+import { DEFAULT_TEXT, EXIT_CONFIRM, INPUT_WINDOW, LOGIN_MENU, TITLE_FPS, TitleFlow, yesNoRect, type Credentials, type InputUserIdWindow, type Key, type MenuText, type TitleHost } from './titleflow.ts';
 import { withWindowAnim } from './windowanim.ts';
 
 export interface TitleAssets {
@@ -40,6 +41,10 @@ export interface TitleOptions {
   version: string;
   text?: MenuText;
   credentials?: Credentials;
+  // A phone (fit mode): the tall portrait layout, and the Input UserID window
+  // as the HTML form (classic/loginform.ts) instead of the canvas window.
+  phone?: boolean;
+  form?: LoginForm | null;
 }
 
 const RE = {
@@ -89,6 +94,11 @@ export class TitleScreen implements Screen {
   // The title is tapped: rows of the Login menu, the Input UserID window and
   // the exit question (pointer()); the pad would only cover them.
   readonly touchPad = false;
+  // A phone: the tall portrait stage (stage.ts tallLayout).
+  readonly phoneLayout: boolean;
+  private readonly form: LoginForm | null;
+  // The Input UserID window the HTML form shows, while it is open.
+  private formWin: InputUserIdWindow | null = null;
 
   textInput(): TextInputState | null {
     const ed = this.flow.menu?.input?.editor;
@@ -102,12 +112,20 @@ export class TitleScreen implements Screen {
     this.versionText = opts.version;
     this.menuY = opts.episode4 ? LOGIN_MENU.yEpisode4 : LOGIN_MENU.y;
     this.flow = new TitleFlow({ ...host, se }, opts.credentials, opts.text ?? DEFAULT_TEXT);
+    this.phoneLayout = opts.phone ?? false;
+    this.form = opts.form ?? null;
   }
 
   // Each show() is a new title scene: fade-in again, no window.
   enter(): void {
     this.flow.reset();
     this.acc = 0;
+    this.formWin = null;
+  }
+
+  leave(): void {
+    this.form?.close();
+    this.formWin = null;
   }
 
   update(dt: number): void {
@@ -116,13 +134,58 @@ export class TitleScreen implements Screen {
       this.acc -= 1 / TITLE_FPS;
       this.flow.tick();
     }
+    this.syncForm();
+  }
+
+  // Phones: the Input UserID window is the HTML form while the window is open.
+  // The form's result is the window's own (InputUserIdWindow.submitForm), so
+  // the Login menu takes it as it takes the canvas window's.
+  private syncForm(): void {
+    const form = this.form;
+    if (!form) return;
+    const win = this.flow.menu?.input ?? null;
+    if (win === this.formWin) return;
+    if (this.formWin) {
+      form.close();
+      this.formWin = null;
+    }
+    if (win && !win.result) {
+      this.formWin = win;
+      form.open(this.flow.text.input, win.user, {
+        submit: (user, password) => {
+          win.submitForm(user, password);
+          form.close();
+        },
+        cancel: () => {
+          win.cancelForm();
+          form.close();
+        },
+      });
+    }
+  }
+
+  // The background tiles (the 640x512 art), drawn in the current transform.
+  private drawTiles(ctx: CanvasRenderingContext2D): void {
+    for (const layer of [RE.baseLayer, RE.flareLayer]) {
+      for (const [x, y, w, h, i] of RE.tiles) ctx.drawImage(this.tex[layer + i], x, y, w, h);
+    }
+  }
+
+  // The tall phone layout's bars: the background covering the whole canvas,
+  // dimmed (stage.ts drawBackdrop).
+  drawBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const c = Math.max(w / 640, h / 512);
+    ctx.save();
+    ctx.setTransform(c, 0, 0, c, (w - 640 * c) / 2, (h - 512 * c) / 2);
+    this.drawTiles(ctx);
+    ctx.restore();
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, w, h);
   }
 
   draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
     const frame = Math.floor(stage.time * RE.fps);
-    for (const layer of [RE.baseLayer, RE.flareLayer]) {
-      for (const [x, y, w, h, i] of RE.tiles) ctx.drawImage(this.tex[layer + i], x, y, w, h);
-    }
+    this.drawTiles(ctx);
     this.drawFlash(ctx, frame);
 
     // Magic circle: additive, colored by the pulse. psobb.io's widescreen
@@ -185,7 +248,7 @@ export class TitleScreen implements Screen {
     withWindowAnim(ctx, m.anim, win.x, win.y, win.w, win.h, () =>
       drawMenuWindow(ctx, this.skin, win, m.rows(), m.active ? m.selected : -1, undefined, m.anim),
     );
-    if (m.input) drawInputWindow(ctx, this.skin, m.input, m.text.input, frame);
+    if (m.input && !this.formWin) drawInputWindow(ctx, this.skin, m.input, m.text.input, frame);
     const x = m.exitConfirm;
     if (x) {
       // The question, then the Yes/No list in front of it (titleflow.ts).
@@ -238,6 +301,7 @@ export class TitleScreen implements Screen {
   }
 
   key(e: KeyboardEvent): void {
+    if (this.formWin) return; // the HTML form has the keys
     const k = toKey(e);
     if (k) this.flow.key(k);
   }
@@ -245,6 +309,7 @@ export class TitleScreen implements Screen {
   // Mouse (a browser convenience): hover moves the Login menu's cursor,
   // click confirms; a click on the bare title acts as Enter.
   pointer(vx: number, vy: number, click: boolean): void {
+    if (this.formWin) return;
     const m = this.flow.menu;
     if (!m) {
       if (click) this.flow.key('enter');

@@ -14,6 +14,15 @@ export const VW = 640;
 export const VH = 480;
 export const FONT = 'Tahoma, Verdana, sans-serif';
 
+// Phone portrait, tall stage (Screen.phoneLayout): the whole 640x480 screen is
+// scaled to the box width (nothing cropped) and centred vertically in the taller
+// box; the bars above and below are filled by Screen.drawBackdrop.
+// s: device px per virtual px; ox, oy: device px of the virtual origin.
+export function tallLayout(w: number, h: number): { s: number; ox: number; oy: number } {
+  const s = w / VW;
+  return { s, ox: 0, oy: (h - VH * s) / 2 };
+}
+
 // An inline text editor of a screen (login rows, character name, game name /
 // password, chat line). The page brings up the phone's on-screen keyboard for
 // it (ui/softkeyboard.ts); the screen itself keeps reading ordinary key events.
@@ -33,6 +42,12 @@ export interface Screen {
   // false: the touch pad (stick, arrows, OK / BACK) is hidden on this screen,
   // which is made for taps (title / login).
   touchPad?: boolean;
+  // A phone (fit mode, classic/viewport.ts): in portrait the stage is a tall
+  // box and the screen is laid out by tallLayout. Other cases are unchanged.
+  phoneLayout?: boolean;
+  // Paints the screen's backdrop over the whole canvas (covering it, the bars of
+  // the tall phone layout show it); called before draw, with the transform reset.
+  drawBackdrop?(ctx: CanvasRenderingContext2D, w: number, h: number): void;
   // true: the 3D canvas under the stage takes the pointer (its own handlers:
   // the field's menus, the wheel) and the stage gets none (classic/main.ts show).
   worldPointer?: boolean;
@@ -66,6 +81,8 @@ export class Stage {
   private raf = 0;
   sx = 1; // device pixels per virtual pixel
   sy = 1;
+  ox = 0; // device px of the virtual origin (tall phone layout only)
+  oy = 0;
   time = 0;
   // Development aid (?t=<seconds>): the animation clock held at one value so a
   // frame can be compared with a capture.
@@ -126,6 +143,18 @@ export class Stage {
   private paint(ctx: CanvasRenderingContext2D, w: number, h: number): void {
     const screen = this.screen!;
     ctx.imageSmoothingEnabled = true;
+    if (screen.phoneLayout && h > w) {
+      const t = tallLayout(w, h);
+      [this.sx, this.sy, this.ox, this.oy] = [t.s, t.s, t.ox, t.oy];
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      screen.drawBackdrop?.(ctx, w, h);
+      ctx.setTransform(t.s, 0, 0, t.s, t.ox, t.oy);
+      ctx.globalAlpha = 1;
+      screen.draw(ctx, this);
+      return;
+    }
+    this.ox = this.oy = 0;
     if (screen.layout === 'left43') {
       screen.drawFullscreen?.(ctx, w, h, this);
       this.sx = this.sy = h / VH;
@@ -139,11 +168,11 @@ export class Stage {
 
   // Draws the current screen into another context of size w x h (no update).
   renderTo(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-    const [sx, sy] = [this.sx, this.sy];
+    const [sx, sy, ox, oy] = [this.sx, this.sy, this.ox, this.oy];
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
     if (this.screen) this.paint(ctx, w, h);
-    [this.sx, this.sy] = [sx, sy];
+    [this.sx, this.sy, this.ox, this.oy] = [sx, sy, ox, oy];
   }
 
   // Ratio that makes a virtual-space circle look round on screen.
@@ -199,7 +228,7 @@ export interface WindowSkin {
 export function inWindowSpace(ctx: CanvasRenderingContext2D, stage: Stage, fn: () => void): void {
   ctx.save();
   const s = stage.sy;
-  ctx.setTransform(s, 0, 0, s, (VW * stage.sx - VW * s) / 2, 0);
+  ctx.setTransform(s, 0, 0, s, stage.ox + (VW * stage.sx - VW * s) / 2, stage.oy);
   fn();
   ctx.restore();
 }

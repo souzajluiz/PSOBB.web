@@ -1,5 +1,47 @@
 # Devlog
 
+## 2026-10-22: Phone login: tall stage and an HTML form for the Input UserID window
+
+**What changed:** On a phone (fit mode, coarse pointer) the title screen is a
+3:4 box in portrait. The whole 640x480 screen is scaled to the box width
+(`tallLayout` in `classic/stage.ts`, nothing cropped), centred vertically, and
+the bars above and below are filled with the title's own background tiles,
+dimmed (`Screen.drawBackdrop`). The Input UserID window is an HTML form
+(`classic/loginform.ts`, `loginform.css`): User ID, Password (masked, 16 max,
+18 px text), Confirm and Cancel, over the title. Enter in the User ID moves to
+the password; Enter in the password submits. The form is placed in the visual
+viewport, so the on-screen keyboard does not hide it. The form's result goes
+to the same `InputUserIdWindow` as the canvas editor (`submitForm` /
+`cancelForm` in `titleflow.ts`): the Login menu and the login after it are
+unchanged. The top strip of fullscreen and mute sits at the box's top-right
+corner on the tall stage (`webcontrols.ts`, opts.tall).
+
+**Why:** on a 390 px portrait phone the stage was a 4:3 box 292 px high, so the
+Input UserID window was about 219 px wide and its text about 0.61x: too small to
+type into.
+
+**Decisions:**
+- Only the title (login flow) uses the tall stage. Character select and
+  character creation keep their `left43` layout, which is still 4:3 and small
+  on a phone in portrait. That is a follow-up, not changed here.
+- Desktop and landscape are unchanged: the tall branch needs `phoneLayout`
+  (set only with fit mode) and a portrait canvas; the form is created only in
+  fit mode.
+- The backdrop bars use the title's tiles dimmed, not a plain fill.
+- Button labels are the game's own unitxt texts ("Confirm", "Cancel").
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`npx playwright test e2e/phone-login.spec.ts` (6 tests, iPhone 13 / Pixel 7 /
+landscape / desktop emulation): 6 passed. The real login through the form
+(webtest/webtest against newserv via the bridge) reaches character select.
+
+**ASSUMED.** Chrome's device emulation stands in for a real phone; the soft
+keyboard is emulated by a shorter viewport, not a real keyboard.
+
+**UNCLEAR.** Desktop pixel identity: HEAD does not reproduce its own
+screenshots frame by frame (the title animation is not fully frozen by `?t=`),
+so the desktop check is by code path, not by a pixel diff.
+
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB

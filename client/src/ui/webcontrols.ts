@@ -66,6 +66,9 @@ export interface WebControlsOptions {
   touch?: TouchSetting;
   // Free CSS px under the canvas box (portrait phone), see input/padlayout.ts.
   below?: () => number;
+  // true while the screen has the tall phone stage (stage.ts phoneLayout): the
+  // top strip is then placed at the box's top-right corner.
+  tall?: () => boolean;
 }
 
 export interface WebControls {
@@ -506,7 +509,12 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     layout = l;
     overlay.style.setProperty('--wc-btn', `${l.button}px`);
     overlay.style.setProperty('--wc-gap', `${l.gap}px`);
-    place(strip, l.topStrip);
+    if (opts.tall?.()) {
+      // The HUD geometry of padLayout does not hold on a tall stage (no HUD
+      // there): the two buttons sit in the top-right corner.
+      const sw = 2 * l.button * 0.75 + l.gap;
+      place(strip, { x: Math.max(0, w - insets().right - l.gap - sw), y: l.topStrip.y, w: sw, h: l.topStrip.h });
+    } else place(strip, l.topStrip);
     place(zone, l.stickZone);
     place(dpad, l.dpad);
     place(actions, l.actions);

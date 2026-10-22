@@ -25,6 +25,8 @@ export interface StageFitOptions {
   hint: HTMLElement; // "rotate your phone"
   // true while the on-screen keyboard has focus (ui/softkeyboard.ts).
   keyboardFocused?: () => boolean;
+  // true while the current screen wants the tall portrait stage (Screen.phoneLayout).
+  tall?: () => boolean;
   onBox?: (box: Box, orientation: Orientation) => void;
 }
 
@@ -75,15 +77,20 @@ export function installStageFit(o: StageFitOptions): StageFit {
     // 4:3 stage fitted to the width, with the touch pad under it. The HUD is
     // drawn at the uniform scale of the height (render/fieldhud.ts), so it
     // needs at least 4:3 or its right side falls off the screen.
-    const box = snapBox(state.orientation === 'portrait' ? fitStage(area, 4 / 3, 4 / 3) : area);
+    // A tall screen (the phone's login, Screen.phoneLayout) takes a 3:4 box
+    // centred in the area: its content is laid out by tallLayout, and the
+    // touch pad it hides is not under the box.
+    const tall = o.tall?.() ?? false;
+    const portrait = state.orientation === 'portrait';
+    const box = snapBox(portrait ? (tall ? fitStage(area, 3 / 4, 3 / 4) : fitStage(area, 4 / 3, 4 / 3)) : area);
     state.box = box;
-    state.below = kb ? 0 : padBelow(state.orientation, area, box);
+    state.below = kb || tall ? 0 : padBelow(state.orientation, area, box);
     for (const c of o.canvases) {
       Object.assign(c.style, { left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` });
     }
     // The hint sits in the free space under the stage; the pad is there too,
-    // so it goes above the pad.
-    o.hint.hidden = hintDismissed || kb || state.orientation !== 'portrait';
+    // so it goes above the pad. A tall screen needs no rotation.
+    o.hint.hidden = hintDismissed || kb || tall || state.orientation !== 'portrait';
     o.hint.style.top = `${box.y + box.h + 6}px`;
     o.hint.style.bottom = 'auto';
     o.onBox?.(box, state.orientation);
