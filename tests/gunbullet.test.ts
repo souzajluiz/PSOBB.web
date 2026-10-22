@@ -15,7 +15,8 @@ import {
   SHOT_ANGLES_BAMS,
   targetAimPoint,
 } from '../client/src/combat/gunbullet.ts';
-import { GunTracers } from '../client/src/render/guntracer.ts';
+import * as THREE from 'three';
+import { bulletAngles, bulletTextureIndex, GunTracers } from '../client/src/render/guntracer.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -100,6 +101,8 @@ check(!isGunKind(1) && !isGunKind(10) && !isGunKind(11), 'melee kinds and the la
     },
   } as unknown as import('three').Scene;
   const tracers = new GunTracers(scene);
+  // A stand-in model: an empty group per bullet (the real one is gun_bullet.xj).
+  tracers.setModels({ variant: () => new THREE.Object3D(), dispose: () => {} });
   tracers.spawn(O, { x: 0, y: 0, z: 50 }, 3);
   tracers.spawn(O, { x: 0, y: 0, z: 50 }, 0);
   check(tracers.count === 2 && scene.children.length === 2, 'two trails in flight');
@@ -112,6 +115,52 @@ check(!isGunKind(1) && !isGunKind(10) && !isGunKind(11), 'melee kinds and the la
   tracers.dispose();
   tracers.spawn(O, { x: 0, y: 0, z: 50 }, 3);
   check(tracers.count === 0 && scene.children.length === 0, 'dispose removes the trails; no spawn after');
+}
+
+// Orientation (0x005e4158, 0x005e43e8): yaw = atan2(x, z), pitch = -atan2(y, horizontal), roll 0.
+{
+  const is = (a: { pitch: number; yaw: number }, pitch: number, yaw: number) => a.pitch === pitch && a.yaw === yaw;
+  check(is(bulletAngles({ x: 0, y: 0, z: 1 }), 0, 0), 'forward: no yaw, no pitch');
+  check(is(bulletAngles({ x: 1, y: 0, z: 0 }), 0, 0x4000), 'toward +x: yaw 90 degrees');
+  check(is(bulletAngles({ x: 0, y: 1, z: 1 }), -0x2000, 0), 'up 45 degrees: pitch -45 degrees');
+  check(is(bulletAngles({ x: 0, y: -1, z: 0 }), 0x4000, 0), 'straight down: pitch +90 degrees');
+}
+
+// Texture variant (FUN_005e94c8 and the ctor's clamp).
+check(bulletTextureIndex(0, 0) === 0 && bulletTextureIndex(0, 3) === 3, 'the variant is the shooter byte +0xf4');
+check(bulletTextureIndex(0, 5) === 4, 'a variant out of 0..4 is 4');
+check(bulletTextureIndex(0x14, 1) === 2 && bulletTextureIndex(0x14, 0) === 0, 'class 0x14: 2 for +0xf4 = 1');
+check(bulletTextureIndex(0xe9, 7) === 1, 'classes 0xe8..0xeb: variant 1');
+
+// Flight (0x005e400c): the position moves by the velocity each game tick; a frame
+// between two ticks moves it part of the way.
+{
+  const scene = new THREE.Scene();
+  const tr = new GunTracers(scene);
+  tr.setModels({ variant: () => new THREE.Object3D(), dispose: () => {} });
+  tr.spawn(O, { x: 0, y: 0, z: 30 }, 3, 0); // 10 units a tick
+  const z = () => scene.children[0].position.z;
+  check(scene.children.length === 1 && z() === 0, 'a bullet starts at the hand');
+  tr.frame(0.5);
+  check(near(z(), 5), 'half a tick on: z 5');
+  tr.tick();
+  check(near(z(), 10), 'one tick: z 10');
+  tr.frame(0.25);
+  check(near(z(), 12.5), 'a quarter tick on: z 12.5');
+  tr.tick();
+  tr.tick();
+  check(tr.count === 0 && scene.children.length === 0, 'it lands after 3 ticks and is removed');
+}
+
+// The model turns to the flight: yaw 90 degrees toward +x, Euler order Y X Z.
+{
+  const scene = new THREE.Scene();
+  const tr = new GunTracers(scene);
+  tr.setModels({ variant: () => new THREE.Object3D(), dispose: () => {} });
+  tr.spawn(O, { x: 10, y: 0, z: 0 }, 2, 0);
+  const m = scene.children[0];
+  check(near(m.rotation.y, Math.PI / 2) && near(m.rotation.x, 0) && m.rotation.z === 0 && m.rotation.order === 'YXZ', 'toward +x: yaw 90 degrees, Y X Z order');
+  tr.dispose();
 }
 
 if (failures) {

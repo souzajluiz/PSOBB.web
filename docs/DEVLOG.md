@@ -9270,3 +9270,27 @@ Summary line of the spec (the Samba's known gap is an annotation, not a failure)
 **Accounts:** webgun had Handgun, Rifle, Shot and a regular Mechgun already. The Samba Maracas (`004800000000000000000000`) was added offline once with `bridge/admin-chars.mjs` (`applyCharacterPatch` inventory.add, `writeCharacter`): the file was backed up first to `vendor/newserv/system/players/_admin-backups/player_webgun_0.psochar.2026-10-22T15-03-18-440Z.bak`. The spec equips each weapon in the game and puts the original Mechgun back at the end.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24): exit 0. `npx playwright test e2e/guns.spec.ts`: 1 passed in the last two runs (see above).
+
+## 2026-10-22: Gun bullet in flight: gun_bullet.xj from item.bml (render/guntracer.ts)
+
+**What changed:** the ASSUMED bar trail of the gun shot is replaced by the bullet object's model. `render/guntracer.ts`: the bullet is item.bml entry 0 (gun_bullet.xj, texture list 0), built once per texture variant and cloned per shot; `render/combat.ts` creates the tracers with the item models and calls `tracers.frame(tickRemainder)` each frame. Bullet rules in `combat/gunbullet.ts` are unchanged.
+
+**Decoded (Ghidra + objdump, PsoBB.exe):**
+- Model: `+0x58 = FUN_005b8610(0)` (entry 0), texture list `+0x5c = FUN_005b8624(0)` (ctor 0x005e4704 tail).
+- Render, slot 0x08 (0x005e4924): fog off, texture index `+0x70` written into the model's texture ids, translate by `+0x1c` (position), rotate by `FUN_00830df8(&+0x28, 1)` = Y (`+0x2c`), then X (`+0x28`), then Z (`+0x30`); no scale call. Slot 0x1c (0x005e4a58) is the same without the texture write.
+- Angles, set once in the ctor (0x005e4158 then 0x005e43e8): yaw `+0x2c = atan2(x, z)`; pitch `+0x28 = -atan2(y, sqrt(x*x+z*z))` (0 when y = 0); roll `+0x30 = 0` (0x005e43e8 overwrites the base value). BAMS, rounded.
+- Motion per game tick (0x005e400c): `pos += vel` (`FUN_0082ebac` is a vector add), velocity = unit direction times dist / frames, frames `+0x34` count down, dead at <= 0 (flags = 1).
+- Texture index `+0x70`: from `FUN_005e94c8` of the shooter bytes `+0xf3`, `+0xf4`, clamped to 0..4, fixed at spawn (no animation). Port: `bulletTextureIndex`; the port's shooter bytes are not mapped yet, so variant 0 is used (ASSUMED).
+
+**Corrections to the brief:**
+- The spin `+0x6c += 0x1999` (0x005e466c, vtable slot 0x10) is written every tick, but no code in the bullet's update or render reads `+0x6c`. The exe shows no visible spin, so none is ported.
+- The roll is 0; the spin axis question does not arise.
+- Not ported: the effect object the ctor attaches at `+0x50` (`FUN_005dd76c`, a 0x50-byte effect whose id is not decoded). It may be a visible trail; open item.
+
+**Checks:**
+- `tests/gunbullet.test.ts`: all checks passed (new: orientation, texture variant, per-frame interpolation, YXZ rotation). `tests/mechgun.test.ts`: 21 checks, 0 failures. `tests/rangedaim.test.ts`: all checks passed.
+- `cd client && npx tsc --noEmit -p .`: exit 0.
+- `client/e2e/guns.spec.ts` (PW_BASE_URL 5206, newserv and bridge reused): Handgun, Rifle, Shot and Mechgun pass (steps 0,1,2; one burst each; pellets 5 for the Shot; arrivals 3/3/6/3; HP drops only at arrivals). Samba Maracas (known gap, no bullets) fails its step-2 6x46 check (0 targets at step 2): a placement issue on the gun-free path, not touched by this change; recorded as a failure, not hidden.
+- Flight screenshots: `scratchpad/guns3/{handgun,rifle,shot,mechgun}-flight.png`. The bullet is **not identifiable** between muzzle and target in them: the muzzle glow and the hit flash show, the gun_bullet model does not. Either the model is small at 60 units (scale 1.0 is ASSUMED) or the mesh is missing; not resolved in this entry.
+
+**Open:** verify in-page that the mesh exists and its bounding box in units (is it built after the item archive loads, and is it about 1 unit?); decode the `+0x50` effect; the shooter texture variant.

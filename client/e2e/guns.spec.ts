@@ -18,12 +18,16 @@
 // kinds, the HP drops only at a bullet's arrival and bullets arrive and damage. The first
 // press is the keyboard's; the next two are armed and sent from the hit of the swing before
 // them (dispatched on the canvas, see installHooks). 0 page errors and 0 failed requests.
-// A screenshot of the first bullet in flight per gun goes to the test's output folder.
+// A screenshot of the first shot's bullets in flight per gun: the shot's bullets are held at the
+// middle of their flight (installHooks: __gunFreezeNext / __gunFrozen) for the screenshot, then released.
+// The files go to GUN_SHOT_DIR when set, else to the test's output folder.
 //
 // Known gap: Samba Maracas (kind 0x48) is not a gun kind in the port (GUN_KINDS 6..9), so
 // it fires no bullets and its damage lands at the hit. Its three bursts (3 x 6x46 per swing)
 // are checked; the bullet checks are for the gun kinds only (an annotation records the gap).
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
 
 const USER = process.env.PSO_USER ?? 'webgun';
@@ -86,6 +90,17 @@ async function installHooks(page: Page): Promise<void> {
       const r = origShot.apply(this, args as any);
       const after = this.tracers?.live?.length ?? 0;
       log.push({ t: 'shot', pellets: after - before, hp: sumHp() });
+      // Test hook for the flight screenshot: the bullets of this shot are held at the middle of
+      // their flight (their tick and frame are stopped) until the screenshot is taken.
+      const tr = this.tracers;
+      if ((window as any).__gunFreezeNext && tr) {
+        (window as any).__gunFreezeNext = false;
+        for (const t of tr.live.slice(before)) t.ticks = Math.ceil(t.total / 2);
+        tr.frame(0);
+        tr.tick = () => {};
+        tr.frame = () => {};
+        (window as any).__gunFrozen = true;
+      }
       return r;
     };
     // A press armed by arm() is sent at the swing's next hit (the last burst of a Mechgun):
@@ -227,6 +242,15 @@ async function arm(page: Page): Promise<void> {
   await page.evaluate(() => ((window as any).__gunArm = true));
 }
 
+// The flight screenshot's file: GUN_SHOT_DIR when set (created), else the test's output folder.
+function flightShot(info: TestInfo, weapon: string): string {
+  const file = `${weapon.replace(/\s+/g, '-').toLowerCase()}-flight.png`;
+  const dir = process.env.GUN_SHOT_DIR;
+  if (!dir) return info.outputPath(file);
+  mkdirSync(dir, { recursive: true });
+  return join(dir, file);
+}
+
 const swingCount = (page: Page) => page.evaluate(() => (window as any).__gun.log.filter((e: Entry) => e.t === 'swing').length as number);
 
 const idle = (page: Page) => page.evaluate(() => !((window as any).classicGame.view.combat.attack?.active ?? false));
@@ -314,16 +338,26 @@ test('guns: the swings, bursts, pellets and bullet arrivals of the five weapons 
 
       // Swing 1: the first press (the keyboard) starts step 0. The chain's presses are armed: they
       // queue steps 1 and 2 in the windows of the swings before them.
+      await page.evaluate((g: boolean) => ((window as any).__gunFreezeNext = g), GUN_KINDS.has(w.kind));
       await arm(page);
       await press(page, TAP_MS);
       await expect.poll(() => swingCount(page), { timeout: 20_000 }).toBeGreaterThanOrEqual(before + 1);
-      // A screenshot of the first bullet in flight (gun kinds). It runs beside the chain: a
-      // screenshot takes seconds in headless Chrome, and the window must not wait for it.
+      // A screenshot of the first shot's bullets in flight (gun kinds), held mid-flight by installHooks.
+      // It runs beside the chain: a screenshot takes seconds in headless Chrome, and the window must not
+      // wait for it. The bullets are released after it.
       const flight = GUN_KINDS.has(w.kind)
         ? page
-            .waitForFunction(() => ((window as any).classicGame.view.combat.tracers?.count ?? 0) > 0, undefined, { timeout: 4000, polling: 5 })
+            .waitForFunction(() => (window as any).__gunFrozen === true, undefined, { timeout: 8000, polling: 5 })
             .catch(() => undefined)
-            .then(() => page.screenshot({ path: info.outputPath(`${w.name.replace(/\s+/g, '-').toLowerCase()}-flight.png`) }))
+            .then(() => page.screenshot({ path: flightShot(info, w.name) }))
+            .then(() =>
+              page.evaluate(() => {
+                const tr = (window as any).classicGame.view.combat.tracers;
+                delete tr.tick;
+                delete tr.frame;
+                (window as any).__gunFrozen = false;
+              }),
+            )
         : null;
 
       // Swing 2: the armed press of swing 1 queued it (its hit opened the window). The enemies

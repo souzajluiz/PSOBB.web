@@ -173,7 +173,7 @@ import { killExp, levelUpLines, PlayerProgression } from '../combat/progression.
 import { CombatOverlay } from './combatoverlay.ts';
 import { FieldParticles } from './hitfx.ts';
 import { TechFire } from './techfire.ts';
-import { GunTracers } from './guntracer.ts';
+import { bulletTextureIndex, GunTracers, loadGunBulletModels } from './guntracer.ts';
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
 import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
@@ -1274,6 +1274,7 @@ export class CombatView {
       this.tickBuffs();
     }
     this.tickClock.advance(ticks, this.tickRemainder);
+    this.tracers?.frame(this.tickRemainder);
     this.updateLockOn();
     this.overlay?.update(dt);
     this.updateHpReadout();
@@ -5022,7 +5023,10 @@ export class CombatView {
   private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number): void {
     const me = this.game.self;
     if (!me) return;
-    const trails = (this.tracers ??= new GunTracers(this.viewer.scene));
+    const trails = (this.tracers ??= this.newTracers());
+    // ASSUMED: the shooter bytes +0xf3 / +0xf4 (bulletTextureIndex) are not mapped to the
+    // port's player state yet, so the bullets use variant 0 (both bytes read as 0).
+    const texture = bulletTextureIndex(0, 0);
     for (let i = 0; i < pelletCount(kind); i++) {
       const t = hit[i];
       // ASSUMED: the bullet starts WEAPON_HEIGHT above the feet (the exe's weapon_position, not decoded).
@@ -5036,9 +5040,16 @@ export class CombatView {
         this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false,
       );
       this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
-      trails.spawn(start, shot.end, shot.frames);
+      trails.spawn(start, shot.end, shot.frames, texture);
       if (shot.bullet && t && target) this.gunBullets.push({ entity: t, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
     }
+  }
+
+  // The bullet tracers of this view: gun_bullet.xj is loaded from item.bml once they are created.
+  private newTracers(): GunTracers {
+    const tracers = new GunTracers(this.viewer.scene);
+    void loadGunBulletModels(this.files, this.opts.log).then((models) => tracers.setModels(models));
+    return tracers;
   }
 
   // The trails and the bullets, once per game tick. A bullet lands when its frames run out.
