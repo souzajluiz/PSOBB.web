@@ -34,3 +34,11 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   `PSO_USER_A` / `PSO_PASSWORD_A`) creates a party and enters it; B (the test
   account) opens Join a PARTY, picks A's game and enters it; both see two
   players, then both go back to the lobby.
+- `battle-traps.spec.ts`: a Battle party (EPISODE 1, mode Battle, Normal), the Hunter's Guild's
+  Battle category (b88001 first). ba_initial_floor moves the player to Temple, whose floor handler
+  runs ba_start; then a trap from palette slot 2 (ArrowRight), the 6x83 (type 0, count 5), the
+  owner's trap (6x80 what 2) and the HP drop. It needs the account `webbattle` (`PSO_USER` /
+  `PSO_PASSWORD`): a copy of webtest's save in `vendor/newserv/system/players/`
+  (player_webbattle_0.psochar / .psobank, system_webbattle.psosys) with palette slot 2 set to a
+  trap, group 1 = 4 and group 2 = 0x0d, at file offset 0x3f8 (the palette's E7 offset 0x3f0 plus
+  the file's 8-byte header).

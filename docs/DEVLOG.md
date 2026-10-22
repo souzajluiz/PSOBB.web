@@ -9013,3 +9013,52 @@ were linked from the main checkout for the run and removed before the commit.
 - The combo timer uses the port's `COMBO_WINDOW` (= the exe's `DAT_00969078`), as before.
 - A burst with no targets sends no 6x46 (the exe sends one with count 0 if `update_player_targeting_info` returns non-zero; not traced).
 - Only the hit roll per bullet is seen live (`dhp`). The per-bullet damage formula is the existing one.
+
+## 2026-10-22: Battle Mode traps in Chrome (battle quest started, trap placed and triggered)
+
+**Bug found and fixed.** A battle quest never started in the web client. The
+Hunter's Guild started `b88001` (Battle1) and its quest sat on Pioneer 2 with "0
+designated floors". Its start label calls `ba_initial_floor 0` (floor 0x10, Temple;
+`quest/battle.ts` baInitialFloor), and the rules are set by the handler of floor
+0x10 (`set_floor_handler 0x10`, `label0001`), which ends with `ba_start` (opcode
+0xF81C, `vm.ts` BATTLE_OPCODES). The player never entered 0x10, so `ba_start` never
+ran and `BattleRun` was never created. The VM called `host.battleFloor` for
+`ba_initial_floor`, but no host set it: the hook was not wired (`quest/run.ts`
+buildHost had only `goFloor`). The DEVLOG of the battle port listed "`ba_initial_floor`
+placement" among the unported parts; this is it.
+
+**Fix** (`client/src/quest/run.ts`, buildHost, `battleFloor`): the local player is
+moved to the initial floor (`view.warpTo(floor)`, the same call as `goFloor`). Each
+client does this for itself, as each client runs the quest VM.
+**ASSUMED:** the exe warps the player at this point too (the exe's warp is not traced
+here; newserv's 0xF945 `initial_floor` comment says "the floor where the players will
+start", and newserv does no warp itself, so the client must). The exe address of
+`opcode_ba_initial_floor` is `.c:606737` (DEVLOG 2026-10-21 battle entry).
+Side effect: any Challenge quest with `ba_initial_floor` now moves its player too.
+
+**The test** `client/e2e/battle-traps.spec.ts` (account `webbattle`, a copy of
+webtest's save with palette slot 2 set to a trap, see `e2e/README.md`):
+1. Battle party: EPISODE 1, mode row = Battle (MODES index 2), Difficulty Normal, entered.
+2. Hunter's Guild: the Battle category, `Battle1`; log `quest "Battle1" started`.
+3. The counter closes; log `battle: start` (the battle runs; `placeTrap` set).
+4. ArrowRight held (slot 2 = `group1 4, group2 0x0d` = trap type 0; PALETTE_KEYS index
+   2, render/combat.ts frame). Log `battle trap 0 placed (stock 5)`. Sent subcommand
+   `0x83` payload `[0, 0, 5, 0]` (type 0, count before the decrement), the 8-byte
+   6x83 of quest/battle.ts build6x83 minus its header. Stock drops to 4.
+5. The trap arms (ASSUMED delay 0x96 frames), `ba_set_trapself` is on in
+   `label0001` (`BA_Show_Self_Traps` / `ba_set_trapself` at 0x00B3), so the owner is
+   hit. The fuse ends and `6x80` `[5, 0, 2, 0]` (trap number 5 = count + client * 0x50 +
+   type * 0x14, what 2 = blast) is sent. Log `trap 0: blast hit for 80`; HP 96 -> 16.
+   80 = `ba_set_dmgtrap 400` (label0001 at 0x01CE) * 0.2 (`trapDamage`, the ASSUMED
+   entity_hit_by_tech scale).
+
+**Result (Chrome, Vite on 5196, newserv and bridge running):** `1 passed (1.2m)`,
+`failed requests: 0`, `page errors: 0`.
+
+**Not checked.** The trap's model and particles on screen (the screenshots were
+taken, not compared to the exe); the arming and fuse frame counts (ASSUMED in
+`quest/battletraps.ts`); other players (one client only: the remote side of 6x83 and
+6x80 is not run); the palette key path is driven with a palette patched in the
+account's save (the default palette has no trap slot).
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
