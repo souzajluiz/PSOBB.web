@@ -297,7 +297,192 @@ leader-side phase change is not), 2 PARTIAL, 3 RESOLVED (receive path), 4 PARTIA
    0x004baec4, 0x004be7c0.
 6. Particle / SE ids beyond the ones listed here.
 
-Ready to port the brain: NO. Motion ids (archive, slot table, phase -> slot), the
-anchor table, the receive path and the on-kill call chain are known. Speeds and
-paths (item 2), the 6x76 gate (item 4) and the hit boxes (item 5) are still
-partial, and the port would ship without them.
+Ready to port the brain: NO (pass 3). Pass 4 below closes most of items 1-3.
+
+## Pass 4 (speeds, paths, 6x76 gate, hit objects)
+
+Sources: Ghidra decompiles (tools/ghidra/decomp.sh), objdump of the call sites,
+tools/exedata.py reads. Correction to pass 2: +0x514 is NOT a movement target.
+The root update 0x004b903c calls 0x00520dc0(src=+0x38, dst=+0x514, k=0.3). That
+helper (disasm 0x00520dc0..0x00520e20) does dst = src - G, normalizes it and
+keeps the length, scales by length*k, then dst += G. Net: +0x514 = G + 0.3 *
+(pos - G). G = the vector at *(0x00a48a54)+0x178 (a global object, .bss, set at
+run time, writer not located; ASSUMED arena centre). Same for +0x520 = G +
+0.3 * (+0x4cc - G). Velocity +0x52c..+0x534 = 0.5 * (+0x520..+0x528) (0x00906c7c
+= 0.5). Effects 0x3ea / 0x3eb (+0x630 & 0x400), 0x3ef (& 0x200) take +0x52c and
++0x514 as their positions. So +0x514 / +0x52c are render/effect anchors, not a
+chase target.
+
+### 1. Speeds and paths
+
+Writers of the part rows (root+0x538 = 0x14e, rows i at 0x14e + 3i, 10 rows,
+0x14e..0x16b; part i reads its row from part+0x3c8):
+- 0x004b8584 (root per-frame update), gated by root+0x7b4 (param_1[0x1ed]) != 0.
+  Row 0 = 0.5 * (+0x3f4 model vec after matrix op), row 1 (stored at 0x151) =
+  0.5 * (+0x460 after the matrix op), rows 2..9 = 0.5 * (+0x478 + 12i after the
+  matrix op). Each is the body's own model node pointed at by the model, so the
+  parts sit ON the skeleton (no spline, no delay, no chain solver). ASSUMED: the
+  0.5 is the model-to-world scale; the add operand of 0x0082ebac in that branch
+  is not decoded (UNCLEAR, the call sites are past the objdump window I checked).
+- Init 9984.0 (0x461c4000) in the root ctor parks each row until the first frame.
+- 0x004b8584 also runs the 3-point trail (DAT_009abc5c / 009abc50 offsets, Y
+  = -5.0) and the 6-slot emitter list at root+0x7a8 (0x004be78c): trail /
+  effect plumbing, not the body.
+- 0x004ba0ac (part update, vt+0x164/0x168 around it): copies row -> part+0x38
+  (x,y,z at +0x38/+0x3c/+0x40), then 0x0080575c effect when owner+0x18 bit0.
+
+Root movement per phase (0x0051f62c runs the phase switch; the enter events
+call 0x004b1e58(anchor) or 0x004b416c):
+- Anchor table 0x00a47780 (10 x 3 floats, .bss): written by the static init
+  0x004b99d3 (objdump 0x004b99fc..0x004b9b1e; decoded values as in pass 3).
+  FUN_004b1e58(i) teleports the root to anchor i and zeroes +0x6f8 and +0x64.
+  Indices used: side 0/1 -> anchors 0 (-175,7,25) and 2 (175,7,25) on the
+  0x0ee0 / 0x1e98 entries (ASSUMED that side picks these, from the +0x1b2 side
+  flag), 3 (0,7,-250) on the 0x17 / 0x18 / 0x19 / 0x1c / 0x1d enters.
+- 0x004b416c (side entry, used by 0x13 and 0x15): x = -100 (0xc2c80000) if
+  root+0x6c8 == 0, else +100; +0x64 = +0x500 or -0x500; y = 10.0; +0x6f8 = 4.0
+  (0x00a47a90).
+- 0x004b41ac (phase 0x15, exits to state 1 when +0x6f8 < -137.0 = 0x00a47a94):
+  per frame: speed +0x744 (int) += 256 (0x00906e48) from 0x500, clamped to
+  0x4000 at >= 16384 (0x00906e40 / 0x00906e44); effect 0x3ed once when speed >=
+  0x21ff (SE). vx(+0x74c) += 0.08 (0x00906e4c) from 0; x += (0.08 + vx) * dir,
+  dir = +0x750 (-4.0 on side 0, +1.0 else). vy(+0x754) += 0.2 (0x00906f64);
+  z -= vy. vz(+0x758) starts -4.0, += 0.1 (0x00906e5c); +0x6f8 -= vz. Yaw +0x64
+  = round(-dir * speed-ratio). This is the "swim in" arc; y never changes.
+- 0x004b3c2c (phase 0x13): the root does not move. Four path followers at
+  root+0x6e4..0x6f4 are the movers: FUN_004bd190(follower, vec, speed) sets the
+  follower's target (follower+0x14c..+0x154) and speed (+0x168, default 120 =
+  0x00906e70 when outside 1..599). Sub-state 1 chooses vec = player pos (root
+  +0x398 target, its +0x38) when FUN_00520f04 says so, else a random point:
+  120 * FUN_007751b0 (rand) and two angle helpers (0x0082dcbc, 0x0082ddd8,
+  coefficient -1.2 = 0xbfeccccd), then 0x00782bb0 (normalize). Sub-state 2 waits
+  until all four followers return FUN_004bd220 (their +0x30 == 4) or 601 ticks.
+- 0x004b0ee0 (phase 5 / 6 by side; +0x32e = 5 or 6 on enter, +0x1b2 = side): the
+  richest path. Sub-state at +0x1ce (0..6), timer +0xc0 (float, +1 per frame
+  via FUN_007aa094). Constants read from the decompile (ASSUMED meaning of each
+  step, the vector formulas are decoded but the names are not):
+  - sub 0 waits until +0xc0 >= 10.0 (0x00906f9c), then sub 1: vx(+0x75c) =
+    (65 / 20) * dir (0x00906fd8 / 0x00a47a78), dir = +0x74c (+-1.0).
+  - sub 1 until 20.0 (0x00906fa4): vx = (-90 / 16) * dir (0x00a47a74); a second
+    rate from 0x00a47a70 (56.67); spawn 0x20f via 0x0050981c at root+0x7bc
+    (+0x7b8 handle).
+  - sub 2 until 28.0 (0x00906fa8): height target from FUN_004b1de4(), a step
+    of (target - y) / 2.5 (0x00906fec), then 2.0 (0x00906fe8) / 56.67.
+    Sub 3 until 25.0 (0x00906fac): arc through FUN_00434ac4 (the DrlEasing init
+    of the De Rol Le port, args 7.0, dist, 0.2, 0.05).
+  - sub 4 until 45.0 (0x00906fb0), sub 5 until 70.0 (0x00906fb8): descent with
+    FUN_004b1c94 and FUN_0042cdc0 (ground follow; y is set from +0x1a4).
+  - sub 6: FUN_0042cdc0 returns 3 -> +0x1cc = 2 (done, return to the table).
+  - 0x201 spawns (FUN_004be7c0) when +0xc0 is in the 41.0 / 46.0 band or the
+    24.0 / 32.0 band (0x00906f80 / 0x00906f7c / 0x00906f98 / 0x00906f94).
+- 0x004b1e98 / 0x004b2cd0 / 0x004b30fc / 0x004b7040 / 0x004b7860: the transitions
+  write (x,y,z) = (+0x1d3..) * scale + base, with per-phase vectors from +0x1d4,
+  +0x1d5, +0x1d6 and the ring rows at 0x14e..0x16b (0x004b0ee0 scan). 0x004b7860
+  sets y = -210 (0xc3520000) and +0x64 = 0. Constants are in the 0x0090xxxx
+  and 0x00a47a.. ranges (table below). Not each decoded line by line: PARTIAL.
+- Table of .bss constants (static init 0x004b99d3..0x004b9bce, addr = value):
+  a47a68 36.0, a47a6c 2.0, a47a70 56.67 (17/0.3), a47a74 16.0, a47a78 20.0,
+  a47a7c 0.3, a47a80 5.0, a47a84 7.0, a47a88 12.0, a47a8c 7.0, a47a90 4.0,
+  a47a94 -137.0, a47a98 30.77 (6/0.195), a47a9c 18.33, a47aa0 0.195,
+  a47ab0 1.0, a47ab4 8.0, a47ab8 1.5, a47abc 7.0, a47ac0 23.33, a47aa4/a8/ac
+  2.5, a47af0 0.4. .data constants (exedata): 906c7c 0.5, 906e40/44 16384, 906e48
+  256, 906e4c 0.08, 906e50 2.0, 906e5c 0.1, 906e70 120, 906f64 0.2, 906f68 0.5,
+  906f6c 60, 906f70 10, 906f74 20, 906f78 20, 906f7c 46, 906f80 41, 906f88 70,
+  906f9c 10, 906fa4 20, 906fa8 28, 906fac 25, 906fb0 45, 906fb8 70, 906fbc 64,
+  906fd8 65, 906fdc 0.5, 906fe0 -90, 906fe4 -370, 906fe8 2.0, 906fec 2.5,
+  906ff0 -0.5, 907000 -30, 906d2c 80, 906d30 30, 906d34 3, 906d38 14, 906d3c 10,
+  906d4c 12, 906d50 13, 906d58 -200, 906d5c 2.0, 906ccc 500, 906cd0 180.
+- Timers: 0x17 (0x004b6d08) uses +0xc0 (param_1[0x30]) in the band 10.0
+  (0x906d3c) .. 14.0 (0x906d38) and a counter >= 3 (0x906d34) to spawn 0x201 at
+  (x + 30*rnd, -5.0, z + 80) (0x906d30 / 0x906d2c). 0x18 (0x004b6300) sets
+  +0xc0 = 13.0 (0x41500000) at its sub 1 end and spawns 0x208 / 0x209 with
+  FUN_004ba894 (types 6 / 0xf).
+
+Pass 2 read of "the path/speed numbers are not decoded" is now answered for
+0x41ac, 0x3c2c, 0x0ee0 and 0x903c. Still open: the transitions' per-line
+vectors and the 0x1e98 side targets.
+
+### 2. 6x76 gate root+0x80 (PARTIAL, writer not found)
+
+- 0x008113e4 (the on-kill call, reached from 0x0051f894 and from 0x004b8584 when
+  root+0x18c bit 0x8000): if root+0x80 != 0 -> 0x008003e0(0x76, DAT_00aafca0),
+  return 1. So +0x80 is a non-null pointer tested for "this enemy has a set entry".
+- Barba ctor 0x004af634 has no store to +0x80 (checked: no `0x80(%reg)` store in
+  0x004af5b8..0x004afe80). The base chain 0x005216f4 -> 0x00521738 -> 0x007865e8
+  -> 0x00770748 -> 0x007a9e5c has no +0x80 store either. 0x0051f760 copies the
+  spawn record's u16 +0x28 / +0x2a into the enemy, so the spawn record is the
+  candidate; the spawner that stores +0x80 after the factory is NOT located.
+- Factory table: u32 0x004af5b8 is at VA 0x009fc860 (type 0xcb record). The
+  caller that indexes it is not found by a direct call search (no `call
+  0x4af5b8`). ASSUMED: the spawner (set-table) writes +0x80 = set record.
+- Port side: client/src/net/game.ts sendEntitySetFlags(0x1000|index, floor, 8) is
+  sent for every boss kill (render/combat.ts 2009 / 2334 / 4488 / 4530 /
+  6250). That already matches the exe when +0x80 != 0, which is the normal case
+  for quest-spawned bosses. UNCLEAR for a boss with no set record.
+
+### 3. Hit objects (PARTIAL)
+
+- Effects 0x201 / 0x20c / 0x20f / 0x206 / 0x207 / 0x20a / 0x177 / 0x127: visual.
+  Effect records are 0x98 bytes at 0x00a72cd0 + id*0x98 (ids < 0x200) or
+  0x00a72ccc - 0x13000 + id*0x98 (0x200..0x23f), 0x0050cd1c. 0x004be7d8 (the
+  0x201 path) allocs 0xd0, 0x00508c34 (emitter, flag 0x40), then start vt+4 and
+  ages its sub-node +0x48 by -5.0. No hit test, no damage write. 0x0050ac1c
+  (0x20c, args 0,0,0xa0,0x40) and 0x0050981c (0x20f) are the same family
+  (ASSUMED, not read line by line).
+- SE ids (boss07.pac, se_tables.ts): 0x3ec at the 10.0 / 0x41200000 test, 0x3ed
+  at 8.0 and at 9216 ticks, 0x3ee, 0x3ef, 0x3f6 / 0x3f7 (0x18 start / 13.0), 0x3f9
+  break, 0x3fa hit, 0x3fb kill 85.0. These are sounds, not hits.
+- Objects 0x208 (type 6) and 0x209 (type 0xf): FUN_004ba894(root, type, id)
+  builds the object (vtable 0x00afafe8: slot 0 0x004baaec, slot 1 0x004ba6c8 =
+  the 20-point trail update, +0x164 via base). Two states: 1 = flight
+  (0x004bacc0: timer +0x4c += 0x00907220 per frame, direction from +0x2c via
+  fpatan, emits 0x206 / 0x207 through 0x0050bd5c, ends at 0x00907218 -> state
+  2, releases 0x44 / 0x48). 0x004baec4 launches (0x20a via 0x0050b7a4, 0x177
+  via 0x0050981c). The vtable slots that would be hit tests (+0x100, +0x104,
+  ...) are the base 0x0061cdb0 no-op. So these objects deal NO damage in their
+  own code.
+- The damage template: phase 0x18 event 0 (0x004b6300) calls FUN_0051fc9c(
+  object+0x1e0 pos, &rec, param_1[0x1c8]). rec = { 0.0, *(root+0x628) (the
+  attack record pointer), 0.0, 20.0 (0x009abbb0), 1 }, read from 0x009abba4..
+  0x009abbb4 (decoded as 0.0, [*], 0.0, 20.0, 1). 0x0051fc9c calls the global
+  manager DAT_00a72eb4 vt+0x30 (when rec+8 > 0x009216d4) or vt+0x34, UNCLEAR.
+  So the damage object is created through the same area-hit path De Rol Le uses
+  (DrlBurst, client/src/combat/derolle.ts:248, "0x0051fc9c's {group, power,
+  radius}"). The attack index (ATP / BattleParam) is the value at *(root+0x628):
+  NOT decoded. Radius: ASSUMED 20.0 (0x009abbb0). The 120.0 at 0x009abba8 is
+  not in that record.
+- Body / parts / minions: the part hit box is set in part init 0x004b9ff0 ->
+  0x004ba2e4 (generic; same as De Rol Le's segment boxes) and in base 0x0051f760.
+  Radii and offsets NOT decoded. Minion (Pig Ray) boxes unchanged from pass 1.
+
+### Port reuse
+
+- client/src/combat/derolle.ts: DrlEasing (line ~190) is the same 0x00434ac4 /
+  0x00434afc movement-target easing that 0x004b0ee0 uses. Reuse for the arc
+  and descent. DrlBurst (line ~248) is the 0x0051fc9c area hit: reuse for the
+  ice / beam hit with radius 20 (ASSUMED) and the attack record from the
+  BattleParam row. DrlSegment / DrlSegmentAi (lines 844 / 2293): the same
+  "body owns, part follows" pattern as the Barba rows, but the port has no
+  model node capture (DeRolLeAi.segmentAt is ASSUMED: trails the head 20 apart).
+  Barba needs the node capture first (read the model's bones into the 10 rows
+  at 0.5 * (node) each frame). Fix the De Rol Le segments the same way.
+- client/src/combat/derollefins.ts (follow-the-leader chain): NOT Barba's
+  mechanism. Barba parts are bone-driven, so do not reuse the chain solver.
+
+### Open after pass 4 (blocks the port)
+
+1. G (the centre at *(0x00a48a54)+0x178) writer, and the vector add operand in
+   0x004b8584 (row build). Model node capture (bone positions) in the port.
+2. Transition vectors in 0x1e98 / 0x2cd0 / 0x30fc / 0x7040 / 0x7860, and the
+   random helper values for 0x13 sub-state 1.
+3. The attack record at *(root+0x628) (ATP / BattleParam index), and the
+   manager DAT_00a72eb4 vt+0x30 / +0x34 (the area-hit dispatch).
+4. Who stores root+0x80 (spawn set record) and whether the Barba spawn always
+   sets it.
+5. Part hit box radii (0x004ba2e4) and the minion boxes.
+
+Ready to port the brain: NO. The movement math for 0x15, 0x13 and 0x0ee0 is
+decoded and the anchors / constants are known, so a port could start on the
+phase logic with the 0x0ee0 timers, but it would ship with ASSUMED targets
+(G, side -> anchor), an undecoded attack record, and no part hit boxes.
+Items 1 and 3 are PARTIAL; item 2 is PARTIAL (writer not found).
