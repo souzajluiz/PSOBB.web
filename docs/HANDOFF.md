@@ -82,13 +82,23 @@ worktrees are left.
    Check the feel of 30 / 45 units a second first (it assumes 30 ticks a second); if
    it is wrong the fix is the constants in `playermove.ts`.
 2. **Episode 2 enemy FSMs: all ported** (2026-10-20, `combat/enemyfsmep2*.ts`, one file per
-   group, DEVLOG entries "Episode 2 FSMs: ..."). Left, none checked in Chrome: the Episode 2
-   enemy motion archives are not on this Mac, so animation lengths in tests are stand-ins
-   for groups a / d (b / c read real counts); no wall / ground rays;
-   Epsilon: its ids 0x2d2..0x2d5 are sound effects, not particles (the exe passes them
-   to play_directional_sound_effect; wired in 2026-10-21 "Epsilon area mapping and
-   particle tables"; the particle tables are not needed). Epsilon is area 0x23 only (0x22
-   fixed). Check Seabed / Mines / Tower floors in Chrome.
+   group, DEVLOG entries "Episode 2 FSMs: ..."). Checked in Chrome 2026-10-22 (DEVLOG "Episode 2
+   floors in Chrome", `client/e2e/ep2-floors-smoke.spec.ts`, passes): floors 1..15 load, every
+   placed enemy gets a model, FSM states change on 12 floors, no page error, no hang; the two
+   quest-only floors (Seaside Night 0x22, Tower 0x23) miss their object sets (`map_jungle0{6,7}_00o.dat`,
+   in no data source here), so they load with no enemies. Open:
+   - the Episode 2 bosses (Gal Gryphon, Olga Flow, Barba Ray, Gol Dragon) have models but no brain
+     (state `none`, they stand still);
+   - Tower / Epsilon not seen in Chrome (no enemies there);
+   - floors 1, 5, 7, 10 saw no state change in 10 s (their waves did not fire); a longer watch
+     per room is needed to see their FSMs;
+   - the enemy motion archives ARE in `data.gsl` (the earlier "not on this Mac" note is stale), so
+     the animation lengths of groups a / d are still stand-ins in the tests, not from the files
+     (checked: every `bm_ene_*` / `bm_boss*` name the port uses is in the GSL); no wall / ground rays;
+   - Epsilon: its ids 0x2d2..0x2d5 are sound effects, not particles (the exe passes them
+     to play_directional_sound_effect; wired in 2026-10-21 "Epsilon area mapping and
+     particle tables"; the particle tables are not needed). Epsilon is area 0x23 only (0x22
+     fixed).
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
