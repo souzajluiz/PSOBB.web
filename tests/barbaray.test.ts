@@ -9,13 +9,20 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BARBA_ANCHORS,
+  BARBA_CAPTURE_COUNT,
+  BARBA_CAPTURE_OFFSETS,
   BARBA_HP,
   BARBA_PACE,
+  BARBA_PART_COUNT,
+  BARBA_PART_RADIUS,
   BARBA_PHASE,
+  BARBA_ROW_PARK,
   BARBA_SLOTS,
   BARBA_TABLES,
+  BarbaPartAi,
   BarbaRayAi,
   barbaResolve,
+  barbaRows,
   decodeBarbaMessage,
   encodeBarbaAA,
   encodeBarbaA9,
@@ -265,6 +272,59 @@ eq(barbaResolve(0x28, 0, 0).phase, 0x28, 'an unlisted code is sent as it is');
   striker.hitPart(2, 500);
   follower.hitPart(2, 500);
   eq(follower.parts[2]!.pool, striker.parts[2]!.pool, 'remote part damage: the follower has the same part pool');
+}
+
+// --- part positions (root update 0x004b8584: rows = midpoints of the captures) ----------
+
+{
+  // The capture operands: 0x3f4, 0x460, then 0x478 + 12 * j for the nine that follow.
+  eq(BARBA_CAPTURE_COUNT, 11, 'capture count: 11 captures make 10 rows');
+  eq(BARBA_CAPTURE_OFFSETS.length, BARBA_CAPTURE_COUNT, 'capture offset table length');
+  eq(BARBA_CAPTURE_OFFSETS[0], 0x3f4, 'capture 0 is root+0x3f4');
+  eq(BARBA_CAPTURE_OFFSETS[1], 0x460, 'capture 1 is root+0x460');
+  let stepped = true;
+  for (let k = 3; k < BARBA_CAPTURE_COUNT; k++) if (BARBA_CAPTURE_OFFSETS[k] !== 0x478 + 12 * (k - 2)) stepped = false;
+  check(stepped, 'captures 2..10 are root+0x478 + 12 * (k - 2)');
+  eq(BARBA_CAPTURE_OFFSETS[2], 0x478, 'capture 2 is root+0x478');
+  eq(BARBA_PART_COUNT, 10, 'ten rows / parts');
+  eq(BARBA_ROW_PARK, 9984, 'rows park at 9984.0 (0x461c4000)');
+
+  // Row r is the midpoint of captures r and r + 1 (0.5 * (C[r] + C[r+1])).
+  const caps: [number, number, number][] = Array.from({ length: BARBA_CAPTURE_COUNT }, (_, k) => [k * 10, k * 4, -k]);
+  const rows: [number, number, number][] = Array.from({ length: BARBA_PART_COUNT }, () => [0, 0, 0]);
+  barbaRows(caps, rows);
+  for (let r = 0; r < BARBA_PART_COUNT; r++) {
+    const want = [(r * 10 + (r + 1) * 10) / 2, (r * 4 + (r + 1) * 4) / 2, (-r - (r + 1)) / 2];
+    check(rows[r]!.every((v, j) => Math.abs(v - want[j]!) < 1e-9), `row ${r} is the midpoint of captures ${r} and ${r + 1}`);
+  }
+  // No allocation: the same arrays are filled in place.
+  const keep = rows[4];
+  barbaRows(caps, rows);
+  check(rows[4] === keep, 'barbaRows writes in place');
+
+  // The brain's rows start parked and barbaRows fills them.
+  const b = brain();
+  eq(b.rows.length, BARBA_PART_COUNT, 'brain: ten rows');
+  eq(b.rows[0]![0], BARBA_ROW_PARK, 'brain: rows park at 9984');
+}
+
+// --- part hit targets (render/combat.ts routes a part's strike to hitPart) ----------------
+
+{
+  eq(BARBA_PART_RADIUS, 50, 'part box radius 50.0 (0x004ba2d8)');
+  const b = brain();
+  const part = new BarbaPartAi(b, 3);
+  check(!part.untargetable, 'a part is targetable while the body lives');
+  b.rows[3] = [12, 34, -56];
+  const f = part.tick();
+  eq(f.x, 12, 'a part stands at its row (x)');
+  eq(f.z, -56, 'a part stands at its row (z)');
+  const before = b.parts[3]!.pool;
+  eq(part.hit(500), 'part', 'a part hit goes to the part pool');
+  eq(b.parts[3]!.pool, before - 500, 'a part hit takes its damage off the part pool');
+  eq(b.parts[2]!.pool, before, 'a part hit leaves the other parts alone');
+  b.kill();
+  check(part.untargetable, 'a part is not a target once the body is dead');
 }
 
 // --- motion chains against the real frame counts --------------------------------------------
