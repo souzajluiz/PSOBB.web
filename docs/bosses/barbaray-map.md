@@ -1,8 +1,8 @@
 # Barba Ray: exe map (partial)
 
 First mapping pass, 2026-10-22; second pass the same day resolves most of the
-"Open" list below. No brain is ported yet: the HP sign convention and the exact
-writer of the hit delta are still open, so a port is not yet safe.
+"Open" list below; the coordinator then resolved the HP sign. No brain is ported
+yet: speeds / paths, the 6xAA receive side, death rewards and motion ids are open.
 Addresses are PsoBB.exe VAs. "dump" is the named Ghidra dump in
 original-psobb-client-source (names often wrong). Tags: ASSUMED, UNCLEAR.
 
@@ -23,7 +23,7 @@ original-psobb-client-source (names often wrong). Tags: ASSUMED, UNCLEAR.
 
 ## Body HP and damage (pass 2)
 
-- HP fields are shorts: cur at +0x2bc (Ghidra "+700"), prev at +0x334. Max 20000
+- HP fields are shorts: +0x2bc = max, +0x334 = current (see "SIGN RESOLVED" below). 20000
   (0x4e20): set in root ctor 0x004afe78, part init 0x004ba2e4, part reset
   0x004ba230 (= 0x004ba1b8). Same convention in De Rol Le ctor 0x0042ad4c
   (0x004350d4 too), so this is the shared enemy-HP layout.
@@ -46,11 +46,16 @@ original-psobb-client-source (names often wrong). Tags: ASSUMED, UNCLEAR.
   Barba range (0x004b8584..0x004bxxxx). Writers found outside it: 0x004cede4
   (another enemy's ctor), 0x00520c98 (save/restore of 700/334/2be/336 around a
   call), 0x00618ae4 (swap helper). The receive-side damage code is still open.
-- SIGN UNCLEAR: both delta updaters do counter -= (cur - prev). With HP falling on
-  damage, the pool and root+0x704 would go UP on hits, which contradicts "< 1 =
-  broken" and "root+0x704 < 1 = advance". Either the drop is written as an
-  increase, or the convention is inverted. Needs a runtime or a second writer
-  check before a port. Do not port the sign from this doc alone.
+- SIGN RESOLVED (coordinator, objdump 0x004ba124..0x004ba185): the field names
+  above are swapped. The shared enemy layout (client/src/combat/formulas.ts) is
+  +0x2bc = max HP, +0x334 = current HP. The part delta loads edx = [+0x2bc],
+  ebp = [+0x334], computes ebp = max - hp (the damage since the last call),
+  does pool -= damage, then writes +0x334 = +0x2bc (HP back to max). So every
+  hit drains the pool (+0x3cc) or, once broken, root+0x704 by round(damage * 0.5),
+  and the part's own HP never falls. The root delta 0x004b947c is read the same
+  way (damage = max - hp). This matches "< 1 = broken" and "root+0x704 < 1 =
+  advance". The 6x0A total_damage reaches +0x334 through the generic enemy hit
+  path, as for every other enemy.
 - Newserv relays 6xA9 / 6xAA with no HP logic (ReceiveSubcommands.cc:5772-5773,
   forward_subcommand_with_entity_id_transcode_t): the server does not own boss HP.
 
