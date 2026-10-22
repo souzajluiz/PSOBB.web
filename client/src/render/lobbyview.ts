@@ -22,13 +22,12 @@ import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator } from './playeranim.ts';
-import { PlayerMover, followTick, fromBams, legSpeed, rampAxis, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { PlayerMover, fromBams, legSpeed, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 
 // The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
 const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
-const SEND_INTERVAL = 0.15; // seconds between 6x42 while moving
 const CLASS_COLORS = [
   0xd64545, 0xe0607a, 0xa83232, // HUmar, HUnewearl, HUcast
   0x3f86d6, 0x2f5fa8, 0x4fa3c9, // RAmar, RAcast, RAcaseal
@@ -156,6 +155,7 @@ interface Marker {
   charClass: number;
   gait: Locomotion;
   follow: Follower; // the tick-rate state of a remote player's run toward `target`
+  legDir: { x: number; z: number }; // unit direction of the player's last leg (dead reckoning)
   moveTicks: number;
   lastX: number; // the logic position one tick ago (for drawing between ticks)
   lastZ: number;
@@ -207,7 +207,7 @@ export class LobbyView {
     this.camera.angle = v;
     this.camera.snap();
   }
-  private sendTimer = 0;
+  private sentLeg = -1; // the mover's leg serial of the last 6x40 / 6x42
   private mover = new PlayerMover();
   private drawn = new THREE.Vector3(); // what the view drew last frame
   private logic = new THREE.Vector3(); // the tick-rate position the mover works on
@@ -376,6 +376,7 @@ export class LobbyView {
       charClass: p.charClass,
       gait: 'idle',
       follow: { x: 0, z: 0, heading: 0 },
+      legDir: { x: 0, z: 1 },
       moveTicks: 0,
       lastX: 0,
       lastZ: 0,
@@ -522,6 +523,11 @@ export class LobbyView {
     const y = p.moving ? (this.ground(p.position.x, p.position.z, m.group.position.y + STEP_UP) ?? m.group.position.y) : p.position.y;
     m.target.set(p.position.x, y, p.position.z);
     if (!p.moving) m.angle = p.angle;
+    // The leg's direction: from the follower toward its new point (kept when that is too short).
+    const lx = p.position.x - m.follow.x;
+    const lz = p.position.z - m.follow.z;
+    const len = Math.hypot(lx, lz);
+    if (len > 0.5) m.legDir = { x: lx / len, z: lz / len };
   }
 
   // One tick's move of the local player through the map collision.
@@ -596,18 +602,19 @@ export class LobbyView {
         this.setGait(mine, gait);
         // The walk / run step follows the leg speed (0x006a2061 / 0x006a1a10).
         mine.animator?.setRate(legSpeed(LOCOMOTION_FACTOR[gait], this.mover.slowed, this.mover.guard));
-        this.sendTimer -= dt;
-        // 6x40 walk / 6x42 run; a change of gait goes out at once.
-        if (this.sendTimer <= 0 || gait !== this.sentGait) {
-          if (gait === 'walk') this.lobby.sendWalk(pos.x, pos.z);
-          else this.lobby.sendRun(pos.x, pos.z);
+        // One 6x40 / 6x42 per leg, with the leg's point (the exe sends it when
+        // the leg starts); a change of gait goes out at once too.
+        if (gait !== this.sentGait || this.mover.legSerial !== this.sentLeg) {
+          const end = this.mover.legEnd();
+          if (gait === 'walk') this.lobby.sendWalk(end.x, end.z);
+          else this.lobby.sendRun(end.x, end.z);
           this.sentGait = gait;
-          this.sendTimer = SEND_INTERVAL;
+          this.sentLeg = this.mover.legSerial;
         }
       } else if (this.wasMoving) {
         this.lobby.sendStop(pos.x, pos.y, pos.z, mine.angle);
-        this.sendTimer = 0;
         this.sentGait = null;
+        this.sentLeg = -1;
         this.setGait(mine, 'idle');
       }
       this.wasMoving = moving;
@@ -643,8 +650,7 @@ export class LobbyView {
       while (ticks-- > 0) {
         m.lastX = m.follow.x;
         m.lastZ = m.follow.z;
-        const before = Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z);
-        if (before < 0.5 || !followTick(m.follow, m.target.x, m.target.z, run)) break;
+        if (!remoteStep(m.follow, m.target, run, !!p?.moving, m.legDir)) break;
         moved = true;
       }
       if (moved || Math.hypot(m.target.x - m.follow.x, m.target.z - m.follow.z) > 0.5) {
@@ -656,7 +662,9 @@ export class LobbyView {
         pos.z = m.lastZ + (m.follow.z - m.lastZ) * a;
         m.angle = fromBams(m.follow.heading);
       }
-      if (Math.hypot(m.target.x - pos.x, m.target.z - pos.z) > 0.5) {
+      // The pose follows the packets: a walking or running player keeps its gait while
+      // the follower waits for the next packet (no idle between the legs).
+      if (p?.moving || Math.hypot(m.target.x - pos.x, m.target.z - pos.z) > 0.5) {
         this.setGait(m, run ? 'run' : 'walk');
       } else {
         pos.y = m.target.y;
