@@ -25,9 +25,10 @@
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import net from 'node:net';
-import { extname, resolve, sep } from 'node:path';
+import { extname, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createAdmin } from './admin.mjs';
+import { createResolver } from './static-files.mjs';
 
 const here = import.meta.dirname;
 const PORT = Number(process.env.PORT ?? 8080);
@@ -52,11 +53,12 @@ const TYPES = {
   '.woff2': 'font/woff2',
 };
 
-// A file under `root`, or null when the path leaves it or does not exist.
+// A file under `root`, or null when the path leaves it or does not exist. A
+// name in another case than on disk matches too (bridge/static-files.mjs): the
+// Linux image must serve what a macOS checkout serves.
+const files = createResolver();
 function inside(root, rel) {
-  const target = resolve(root, rel);
-  if (target !== root && !target.startsWith(root + sep)) return null;
-  return existsSync(target) && statSync(target).isFile() ? target : null;
+  return files.file(root, rel);
 }
 
 // Caching: hashed build files (/assets/) never change; the game data and the
@@ -93,10 +95,11 @@ function notFound(res, code = 404) {
 }
 
 // name -> [directory, allowed name pattern]
+// The name patterns are case-insensitive: the lookup below matches case.
 const NEWSERV_FILES = {
-  '/keys/': [resolve(SYSTEM, 'blueburst/keys'), /^[a-z0-9]+\.nsk$/],
-  '/newserv-text/': [resolve(SYSTEM, 'text-sets/bb-v4'), /^unitxt_[a-z]+\.prs$/],
-  '/newserv-maps/': [resolve(SYSTEM, 'maps/bb-v4'), /^(map_[a-z0-9_]+\.(dat|evt)|SetDataTable[A-Za-z]*\.rel)$/],
+  '/keys/': [resolve(SYSTEM, 'blueburst/keys'), /^[a-z0-9]+\.nsk$/i],
+  '/newserv-text/': [resolve(SYSTEM, 'text-sets/bb-v4'), /^unitxt_[a-z]+\.prs$/i],
+  '/newserv-maps/': [resolve(SYSTEM, 'maps/bb-v4'), /^(map_[a-z0-9_]+\.(dat|evt)|SetDataTable[A-Za-z]*\.rel)$/i],
 };
 
 const server = createServer((req, res) => {
@@ -124,11 +127,12 @@ const server = createServer((req, res) => {
     if (!DATA || !existsSync(DATA)) return notFound(res);
     const list = url.searchParams.get('list');
     if (list !== null) {
-      const dir = resolve(DATA, list);
-      if (dir !== DATA && !dir.startsWith(DATA + sep)) return notFound(res, 403);
-      const files = existsSync(dir) ? readdirSync(dir).filter((f) => statSync(resolve(dir, f)).isFile()) : [];
+      if (list.split('/').some((s) => s === '..') || list.includes('\\')) return notFound(res, 403);
+      // A folder in another case than the request's (the client lists "scene") lists too.
+      const dir = files.directory(DATA, list);
+      const names = dir ? readdirSync(dir).filter((f) => statSync(resolve(dir, f)).isFile()) : [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(files.sort()));
+      return res.end(JSON.stringify(names.sort()));
     }
     const file = inside(DATA, path.slice('/psobb-data/'.length));
     return file ? send(req, res, file, 'application/octet-stream', path) : notFound(res);
@@ -138,7 +142,9 @@ const server = createServer((req, res) => {
   // pages (index.html, models.html) are not served even if a build has them.
   if (path === '/' || path === '/classic' || path === '/classic.html') return send(req, res, resolve(DIST, 'classic.html'), undefined, path);
   if (path === '/questeditor' || path === '/questeditor.html') return send(req, res, resolve(DIST, 'questeditor.html'), undefined, '/questeditor.html');
-  if (path.endsWith('.html')) return notFound(res);
+  // Any case of the extension: the lookup below matches names in any case, so
+  // INDEX.HTML must not reach the development pages either.
+  if (/\.html$/i.test(path)) return notFound(res);
   const file = inside(DIST, path.slice(1));
   return file ? send(req, res, file, undefined, path) : notFound(res);
 });
