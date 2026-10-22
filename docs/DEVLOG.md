@@ -9404,3 +9404,21 @@ The body (root) now moves. `combat/barbaray.ts` decodes and ports the movement o
 Ghidra's `(int)` casts on the movement words are display only (the asm stores floats). `int *param_1` indexes are byte offsets / 4 (param_1[0x1d3] is +0x74c).
 
 Checks: `tests/barbaray.test.ts` ALL PASS (new "body movement": teleports for all 10 anchors, the side entries, the followers' timing / random point / player target / speed clamp, the swim's first frame numbers, speed clamp at frame 59, exit near frame 63, the rise, the side 1 swim, the gate flag, the arc's sub-states and the side 1 anchor). `tests/derolle.test.ts` ALL PASS, `NEWSERV=... node tests/combat.test.ts` ALL PASS, `tests/combatdepth.test.ts` 824 checks 0 failures, `cd client && npx tsc --noEmit -p .` exit 0. E2E `client/e2e/barbaray-smoke.spec.ts` (Chrome, Vite 5210, newserv and the bridge reused, webep2): passed in 2.2 min; 14 phase changes, the body moved 7 times over 7 places (from the spawn point to anchor 0), 0 page errors. The spec now asserts the body moves across the phases.
+
+## 2026-10-22: Gol Dragon: partial port (combat/goldragon.ts), states 0x01..0x07 and 0x10/0x11 re-read
+
+Ported (`client/src/combat/goldragon.ts`, wired in `render/combat.ts` in its own Gol blocks and in `net/game.ts`):
+- The brain frame: the leader step (roar at the hit clamp, death below cursor 0x32, the phase 9 pick once the state's gates pass), the hit clamp at +0x682 (cursor below 0x32), the follower's applyRemote and the stall guard, the motion slots (28 rows, table 0x009abf60).
+- The sequence cursor: table A (0..0x31), table B (0x32..), sentinels 0x21 (restart table A at 0) and 0x22 (jump to 0x32), the read after a sentinel as the exe does. Table C is kept but unused (flag 0x40 is the derived extras).
+- 6xA8 (24 bytes, header a8 06): encodeGolA8 / decodeGolA8; game.sendGolAction; combat onGolAction on subcommand 0xa8 (handler 0x004cbe80).
+- Kill on the leave of 0x15 (bossKilled, the same EXP / drop gating as the Dragon).
+- States with an exe-proven gate: 0x00, 0x02, 0x03, 0x04, 0x05, 0x06 (lunge profile), 0x07 (3-fireball volley, the Dragon's fireball object), 0x0d, 0x0e, 0x15, 0x16, 0x17 (no exit), 0x1e (the entrance: the ctor starts the singleton there).
+- Hit boxes: 7 body boxes, radii 10, 10, 10, 15, 15, 10, 10 (static init 0x004cd532..0x004cd564, table 0x009ac120, stride 0x2c).
+
+Re-read (decompile): 0x01..0x07 and the body of 0x004c42a8 (sids 0x10 / 0x11, see the map). Corrections to the map: 0x1e is the ENTRANCE (the ctor's singleton state; slot 26 = bossopgc), not a death cinematic; 0x01 has no phase 9 pick (pad-only); 0x07 enters slot 0x10 (not 0x12); 0x04 clears 0x34; the motion table has 28 rows and the archive names are verified by file name; the roar threshold is +0x682 (the clamp), +0x680 is a second value with no reader found.
+
+ASSUMED: the roar share f = 90 (the runtime DAT_00a48508+8 is not read); the lunge's dist and vmax; the death slot's speed (table 0, port 0.5); the body box flags (0x8003); the 6xA8 variant byte's use; the walk's step; the fireball ids and power (the Dragon's); the 120-tick fallback for states not modelled.
+
+Open: the derived extras (vtable 0x00afbc20, ctor 0x004cede4, flag 0x40, sequence C in use, the 5 extra entities); the 4 child objects at +0x6e4 (0x17 holds with no exit); the breath area hit (FUN_004cfc08 at +0x38, radius 100) and its flames; the pad / dragon control (+0x1d7, DAT_00a485f8); the kill gate +0x12008 (table DAT_00ab02b8); the reward internals (0x0051f894); the Gol's MovementData row and the model nodes.
+
+Checks: `node tests/goldragon.test.ts` ok (sequence incl. sentinels, clamp, roar, death and the kill, 6xA8 codec, follower, the 26 motion frame counts against data.gsl, a whole fight with the real frame counts). `tests/dragon.test.ts` ok, `tests/combat.test.ts` 5946 checks 0 failures, `tests/combatdepth.test.ts` 824 checks 0 failures, `npx tsc --noEmit -p .` clean. E2e `client/e2e/goldragon-smoke.spec.ts` (Episode 2 party, warp to floor 15): passed, the states change 9 times in 60 s (entrance, then the sequence), a key attack logs a hit on the Gol Dragon (the roll was 0), no page errors.

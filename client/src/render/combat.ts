@@ -59,6 +59,7 @@ import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BAR
 import { PigRayAi, type PigEvent } from '../combat/barbaminion.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
+import { GoldDragonAi, GOL_BODY_BOXES, decodeGolA8, type GolEvent } from '../combat/goldragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
@@ -407,6 +408,7 @@ const OWN_FSM = new Set([
   'TObjEneSlime',
   // Episode 1 bosses (combat/dragon.ts, combat/derolle.ts, combat/volopt.ts, combat/volopt2.ts).
   'TBoss1Dragon',
+  'TBoss8Dragon', // Gol Dragon (combat/goldragon.ts)
   'TBoss2DeRolLe',
   'TBoss7DeRolLeC', // Barba Ray (combat/barbaray.ts)
   'TBoss3Volopt',
@@ -446,6 +448,7 @@ const BULCLAW_CLAWS = 4;
 const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
+  (e.ai instanceof GoldDragonAi && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
   (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
   (e.ai instanceof BarbaPartAi && e.ai.untargetable) ||
@@ -1066,6 +1069,21 @@ export class CombatView {
             playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
             rng: () => this.rng(),
           });
+        } else if (className === 'TBoss8Dragon') {
+          // The Gol Dragon (combat/goldragon.ts). ASSUMED: its MovementData row is
+          // not read yet (null); stats row 18 gives the hp. A fresh spawn is the
+          // singleton that starts in the entrance (ctor 0x004cb480).
+          ai = new GoldDragonAi({
+            ...at,
+            ultimate,
+            movement: null,
+            hp: stats.maxHp,
+            singleton: true,
+            leader: () => this.game.selfId === this.game.leaderId,
+            frames: this.motionFrames(instance, null),
+            playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
+            rng: () => this.rng(),
+          });
         } else if (className === 'TBoss3Volopt') {
           // The control builds the arena: MovementData rows 33 (core), 34
           // (pillar), 35 (monitor) and the stats HP of rows 33 / 34 / 36.
@@ -1492,6 +1510,10 @@ export class CombatView {
       }
       if (ai instanceof DragonAi) {
         this.tickDragon(e, ai, targets);
+        continue;
+      }
+      if (ai instanceof GoldDragonAi) {
+        this.tickGol(e, ai, targets);
         continue;
       }
       if (ai instanceof SaintMilionAi) {
@@ -2357,6 +2379,86 @@ export class CombatView {
     if (!(e?.ai instanceof DragonAi) || e.dead) return;
     const target = dv.getUint32(8, true) & 0xffff;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
+  }
+
+  // --- the Gol Dragon (combat/goldragon.ts) -------------------------------------
+  //
+  // The same shape as the Dragon: the brain owns the body and its fireballs and
+  // area hits; the leader's brain sends a 6xA8 for every state it picks and every
+  // client applies it (onGolAction). Each client runs the kill when it leaves
+  // state 0x15 (bossKilled: the EXP request, and the drop from the leader).
+
+  // Whether the last hit on a Gol Dragon was the local player's (its last_attacker).
+  private golLastHit = new Map<number, boolean>();
+  // The state last logged per Gol Dragon.
+  private golLogged = new Map<number, number>();
+  // Per Gol Dragon: the animators that play the body's motion.
+  private golBodies = new Map<number, NodeAnimator[]>();
+
+  private tickGol(e: EnemyRuntime, ai: GoldDragonAi, targets: AiTarget[]): void {
+    const inst = e.instance;
+    const root = inst.root;
+    const r = ai.tick(targets);
+    e.stats.hp = Math.max(0, ai.hp);
+    const lift = r.lift ?? 0;
+    const gy = this.opts.ground?.(r.x, r.z, root.position.y - e.lift + 30) ?? null;
+    root.position.set(r.x, (gy ?? root.position.y - e.lift) + lift, r.z);
+    e.lift = lift;
+    root.rotation.y = r.angle;
+    let bodies = this.golBodies.get(e.index);
+    if (!bodies) {
+      bodies = inst.animators.filter((_, k) => !inst.parts[k]?.name);
+      this.golBodies.set(e.index, bodies);
+    }
+    for (const a of bodies) {
+      if (r.motion) {
+        try {
+          a.play(inst.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+        } catch (err) {
+          this.opts.log(`Gol Dragon motion ${r.motion.index}: ${(err as Error).message}`);
+        }
+      }
+      a.paused = true;
+      a.setFrame(ai.mframe);
+    }
+    for (const ev of ai.drainEvents()) this.golEvent(e, ev);
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+  }
+
+  private golEvent(e: EnemyRuntime, ev: GolEvent): void {
+    const what = `Gol Dragon E-${e.index.toString(16)}`;
+    switch (ev.kind) {
+      case 'send':
+        if (this.golLogged.get(e.index) !== ev.state) {
+          this.golLogged.set(e.index, ev.state ?? -1);
+          this.opts.log(`${what}: state 0x${(ev.state ?? 0).toString(16)}, sequence ${ev.cursor}`);
+        }
+        this.game.sendGolAction(0x1000 | e.index, ev.state ?? 0, ev.cursor ?? 0, ev.target ?? null, ev.x ?? 0, ev.z ?? 0, ev.variant ?? 0);
+        return;
+      case 'killed':
+        this.golKilled(e, ev.x ?? 0, ev.z ?? 0);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // State 0x15's leave: EnemyOnKilledHandler_0051f894 (every client runs it).
+  private golKilled(e: EnemyRuntime, x: number, z: number): void {
+    e.dead = true;
+    e.stats.hp = 0;
+    if (this.lockOn === e) this.lockOn = null;
+    this.bossKilled(e, x, z, this.golLastHit, 'Gol Dragon');
+  }
+
+  // A 6xA8 from the leader (handler 0x004cbe80, the sender applies its own).
+  private onGolAction(body: Uint8Array): void {
+    if (this.game.selfId === this.game.leaderId) return;
+    const m = decodeGolA8(body);
+    if (!m) return;
+    const e = this.enemies.get(m.entity - 0x1000);
+    if (!(e?.ai instanceof GoldDragonAi) || e.dead) return;
+    e.ai.applyRemote(m.state, m.cursor, m.target, m.x, m.z);
   }
 
   // --- Saint-Milion / Shambertin / Kondrieu (combat/saintmilionboss.ts) ------------------
@@ -5155,7 +5257,7 @@ export class CombatView {
       // counts from its surface in height too.
       // A Barba Ray part's box has radius 50 (BARBA_PART_RADIUS, 0x004ba2d8); ASSUMED: its height window is De Rol Le's.
       const seg = e.ai instanceof DrlSegmentAi || e.ai instanceof BarbaPartAi;
-      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof GoldDragonAi ? GOL_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
       const dist = Math.hypot(dx, dz) - reach;
       if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
       if (!inWeaponCone(dx, dz, me.angle, halfAngle)) continue;
@@ -5554,6 +5656,20 @@ export class CombatView {
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
+      return;
+    }
+    if (e.ai instanceof GoldDragonAi) {
+      // The Gol Dragon (combat/goldragon.ts): the same contract as the Dragon.
+      const ai = e.ai;
+      if (damage >= 1) {
+        ai.hit(damage);
+        this.golLastHit.set(e.index, byPlayer);
+      }
+      e.stats.hp = ai.hp;
+      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      const p = e.instance.root.position;
+      this.num(damage, critical, p.x, p.y + 40, p.z);
+      this.opts.log(`${what}hit the Gol Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
       return;
     }
     if (e.ai instanceof DragonAi) {
@@ -6720,6 +6836,10 @@ export class CombatView {
       this.onDragonAction(body);
       return;
     }
+    if (sub === 0xa8) {
+      this.onGolAction(body);
+      return;
+    }
     if (sub === 0xdc) {
       this.onSaintMilionAction(body);
       return;
@@ -6824,6 +6944,16 @@ export class CombatView {
         return;
       }
       if (e.ai instanceof VoloptAi) return;
+      if (e.ai instanceof GoldDragonAi) {
+        // restore_enemy_status (6x0A from another client), as the Dragon's.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.ai.setDamageTaken(s.totalDamage);
+          e.stats.hp = e.ai.hp;
+          this.golLastHit.set(e.index, false);
+          this.opts.log(`the Gol Dragon was hit (6x0A from another client): ${e.ai.hp}/${e.ai.maxHp}`);
+        }
+        return;
+      }
       if (e.ai instanceof DragonAi) {
         // restore_enemy_status: hp = max - damage_taken, and the hit flag makes
         // the clamp run on this client too. The dead flag is ignored: the brain

@@ -27,6 +27,7 @@ import { Lobby, parseLobbyPlayer, stripMarkers, type LobbyPlayer } from './lobby
 import { equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { splitLevel } from '../combat/techniques.ts';
 import { encodeBarbaA9, encodeBarbaAA } from '../combat/barbaray.ts';
+import { encodeGolA8 } from '../combat/goldragon.ts';
 import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
@@ -1015,6 +1016,12 @@ export class Game extends Lobby {
     dv.setFloat32(12, x, true);
     dv.setFloat32(16, z, true);
     this.conn.send(0x60, 0, b);
+  }
+
+  // The Gol Dragon's state from the leader (combat/goldragon.ts, handler 0x004cbe80):
+  // 6xA8 {a8, 06, entity, state, cursor, target, x, z, variant} (24 bytes).
+  sendGolAction(entityId: number, state: number, cursor: number, target: number | null, x: number, z: number, variant: number): void {
+    this.conn.send(0x60, 0, encodeGolA8({ entity: entityId, state, cursor, target, x, z, variant }));
   }
 
   // Vol Opt (combat/volopt.ts, PROTOCOL.md "Vol Opt"). Every one of these is

@@ -6,12 +6,29 @@ no brain is attached (`render/combat.ts`). "dump" is `original-psobb-client-sour
 (names often wrong). Tags: ASSUMED, UNCLEAR. Offsets `+N` are byte offsets from the
 entity (`param_1[N/4]` in the decompile); `+0xb8` = short motion slot at `+0x2e`.
 
-## Ready to port: NO
+## Port status (2026-10-22, client/src/combat/goldragon.ts)
 
-Blockers (top): hit boxes not mapped; the derived "+5" entity class (vtable 0x00afbc20)
-not mapped; kill/reward internals only pointed at (0x0051f894, see below); motion names
-and the enter-motion meaning are ASSUMED; the 4 child objects (`+0x6e4`, stride 0x1c)
-have an unmapped vtable; sids 0x10 / 0x11 share a body (0x004c42a8) not in the dump.
+Ported: the brain frame (leader step, roar, death, the phase 9 pick), the sequence
+cursor with the 0x21 / 0x22 sentinels, the hit clamp at +0x682, the 6xA8 codec and the
+follower's applyRemote, the 7 body boxes, the motion slots (28 rows), the kill on the
+leave of 0x15, and the states 0x00, 0x02, 0x03, 0x04, 0x05, 0x06 (lunge profile),
+0x07 (the 3-fireball volley), 0x0d, 0x0e, 0x15, 0x16, 0x17, 0x1e (entrance).
+The other states use the ASSUMED fallback (plays its slot, 120 ticks, then the pick).
+
+ASSUMED: the roar share f (DAT_00a48508+8, runtime) = 90; the lunge's dist / vmax;
+the death motion speed (table 0); the body box flags (0x8003); the 6xA8 variant byte's
+use; the walk's step; the fireball ids / power (the Dragon's).
+
+OPEN (not ported): the derived extras (vtable 0x00afbc20, flag 0x40, sequence C in use,
+ctor 0x004cede4); the 4 child objects (+0x6e4, the 0x17 state drives them, so 0x17 holds
+with no exit); the breath area hit (FUN_004cfc08 at +0x38, radius 100) and its flames;
+the pad / dragon control (+0x1d7, DAT_00a485f8) states 0x01 and the phase 2 / 0xb sends;
++0x680 (the 90 % loop: written by the ctor, its reader not found); the kill's gate
++0x12008 (ctor, table DAT_00ab02b8); the rewards internals (0x0051f894); MovementData
+row of the Gol (not read).
+
+Blockers resolved since the first map: hit boxes (below), sids 0x10 / 0x11 (below),
+states 0x01..0x07 (re-read below), the motion names (verified against the archive).
 
 ## Identity and object model
 
@@ -111,8 +128,29 @@ wait-out. Entering writes `+0x32e` through `FUN_0051f62c` (leave old, enter new)
 ## States (every handler read; partial where noted)
 
 Confidence note: 0x00, 0x08-0x0f, 0x12-0x2b were decoded from the decompile by three
-passes and spot-checked against constants. 0x01-0x07 were skimmed by the author only:
-treat their timers, branches and sends as PARTIAL / UNVERIFIED until re-read.
+passes and spot-checked against constants. 0x01-0x07 were re-read on 2026-10-22 (Ghidra
+decompile, `tools/ghidra/decomp.sh` headless). Corrections to the text below:
+- 0x01 (`0x004c0408`) has NO phase 9 handler (cases 0, 2 / 0xb, 4 only): it never picks
+  in normal play (pad-only, like the Dragon's 1). Phase 2 / 0xb sends 3 / 5 / 0x19 (pad).
+- 0x02: sequence pick when `+0x217 > 299`, or (`>= 150` and `+0xe6 != 0`) and
+  (`+0xed < +0x21d` or `FUN_004c09ec` or `> 599`). Enter `+0x21d = 0x009088f4 + FUN_00782a34`.
+- 0x03 (`0x004c1070`): sub 0 turns to the heading and waits for `+0x2c & 0x10` (the motion
+  end); sub 1 runs 120 ticks (`+0x219 < 0x78`) with SE 0x40e and three emitters from the
+  descriptor `+0x14 / +0x18 / +0x1c`; sub 2 runs 30 ticks (SE 0x40e); sub 3 is the pick.
+- 0x04 (`0x004c1730`): enter `+0x2e = 7`, `f2 = (f2 & ~0x34) | 2` (not `~0x36`), SE 0x40a
+  at 12.0; 10.0 / 23.0 frame crossings call `FUN_00426b88 / FUN_00426b98`. Pick on `+0x2c & 0x10`.
+- 0x05 (`0x004ca610`): enter `+0x2e = 0xf`, sub 0 turns `f2 |= 0x30`, `+0xfb = 1` at
+  35.0; sub 1 counts `+0x218` (SE / emitter `FUN_007be6b8`); pick at `+0x218 > 39`.
+- 0x06 (`0x004c197c`): enter `+0x2e = 0x10`; sub 0 is the approach (`FUN_00783444(0.1,
+  -0.1, ...)` in enter, `FUN_00783444(16, -16, dist, vmax)` after the turn), sub 1 the
+  lunge (`FUN_004c0fcc`), pick at sub 2 (phase 9 `+0x217 == 2`). Attack 0x1a (pad).
+- 0x07 (`0x004c1f9c`): enter `+0x2e = 0x10` (NOT 0x12); sub 0 scans the 12 players
+  (`FUN_0068d5a8`, distance >= `0x00a4850c`), sub 1 sets the heading and `+0x2e = 0x12`
+  (`+0x21b`), `f2 |= 0x30`; sub 2 is the volley (SE 0x405 at 0x40000000, 0x40b at
+  0x42340000, `FUN_004c1f34`, three `FUN_005caba4(0x58)` objects with `FUN_004cf34c`
+  at the spread `0x1000`, `FUN_0050b7a4`), `+0x219 = 0`, `f2 &= ~0x30`; sub 3 counts
+  `+0x219` to 11, then sub 4; pick at sub 4. Attack 0x1a at sub 3 (pad).
+- The ported state table is `GOL_STATES` in `client/src/combat/goldragon.ts`.
 
 Motion slot = the value written to `+0x2e` on enter. "none" means the handler
 does not write it (the slot is inherited; UNCLEAR).
@@ -191,8 +229,21 @@ does not write it (the slot is inherited; UNCLEAR).
   sub 6, `+0xf2 &= ~1`. Attack 2: send `0x1c` at sub 6; attack 0xb: send `0x25` at sub 6.
   Phase 9 at sub 6: sequence pick. Phase 6 fills a 12-entry ring `+0x1aa` with
   `FUN_00520c08(100.0, 220.0)`. Partial (`FUN_007aaa30` semantics and the spline are ASSUMED).
-- **0x10 / 0x11** (thunks to `0x004c42a8`): the body is not in the dump; the sid is the
-  second argument. UNCLEAR.
+- **0x10 / 0x11** (thunks to `0x004c42a8`, decompiled 2026-10-22; the sid is the second
+  argument, `param_3`): enter (phase 4) `vt+0x188`, `+0xfb = 2`, `FUN_004c473c`,
+  `+0xf2 = (f2 & ~7) | 0x30`, `vt+0x174`, `vt+0x180`. Sid 0x10 resets the counter
+  `+0x1b6` to 0, sid 0x11 adds 1; the flame list `+0x1a2` is cleared; `+0x21e` =
+  `float(+0x1b6) * 0x0090892c + 0x00908930`; `+0x21d = 0`, `+0x217 = 0`, `+0x218 = 0`.
+  No `+0x2e` write (the motion is inherited). Frame sub 0 (`+0x217 == 0`): the counter
+  `+0x218` to `0x009086b8` (60.0), then sub 1: heading `atan2(+0x38, +0x40)` (the
+  direction from the arena's centre) to `+0x18` through `FUN_007a8c74`, velocity
+  `+0xea / +0xec` from `FUN_0082dcbc / FUN_0082ddd8`. Sub 1: the walk along the velocity by
+  `+0x21d` (accumulated by `0x009086bc`, capped at `+0x21e`), SE `0x412` every frame,
+  `FUN_0041a874` each 11 ticks (`+0x218 > 10`). Phase 2 / 0xb: send `0x1c` (pad only).
+  Phase 9 (leader): `+0x22c != 0` forces the pick; sub 1 picks when `FUN_007828e4`
+  (distance) is under `0x009086c0` (value UNCLEAR, the rest of the pick is not read).
+  The entrance-free states 0x10/0x11 are the walk-in burrow of the Gol's sequence
+  (ASSUMED name). Partial: the pick distance and `FUN_0041a874` are not read.
 - **0x12** (`0x004c4764`, approach / chase): enter `vt+0x188`, `+0xfb = 2`, `FUN_004c473c`,
   `+0xf2 = (f2 & ~7) | 0x30`, `vt+0x174`, `vt+0x180`, `+0x21e = float(+0x1b6)*4.0 + 4.0`
   (0x90892c, 0x908930), `+0x217 = 0`, `+0x218 = 0`. Frame: heading (`FUN_007a8c74` at
@@ -261,7 +312,9 @@ does not write it (the slot is inherited; UNCLEAR).
   `+0x21d` path accumulator (`FUN_0082dc9c`). Phase 8 timer as 0x19 (sets `+0x218 = 1` or
   retargets). Attack 2/0xb: `+0x218 == 1` -> send `0x1c`; `&4` -> send `0x13`. Phases
   6/7: `FUN_004c7670` / `FUN_004c7644`. Partial (`FUN_0082dc9c` is ASSUMED path length).
-- **0x1e** (`0x004c5eb0`, the death-cinematic): enter `+0x2e = 0x1a`, `+0x868 = 1`,
+- **0x1e** (`0x004c5eb0`, the ENTRANCE, not a death: the ctor 0x004cb480 starts the
+  singleton in it, `*(short*)(+0x32e) = 0x1e` when `this == DAT_00a485cc`; slot 26 is
+  `bossopgc`, motion 1, 169 frames). Enter `+0x2e = 0x1a`, `+0x868 = 1`,
   clear `+0x8a4`, `+0x85c/+0x860/+0x864 = 0`, `FUN_005caba4(0x28)`, `FUN_004cecbc(
   DAT_00aca37c, 0.5, +0x868)`. Sub `+0x85c == 0`: waits for `+0xb0 & 0x10`, then sub 1,
   `+0x2e = 0`; timer `+0x864` steps: SE `0x405` at 2.0, SE `0x40f` at 60.0, a point
@@ -350,9 +403,14 @@ Each is the sid of the state it enters (`FUN_004c3074` and every explicit send c
 
 ## Hit boxes
 
-Not mapped. The Dragon's boxes (`DRAGON_BODY_BOXES`, `DRAGON_TAIL`) come from the model
-nodes; the Gol Dragon's node table is UNCLEAR. The per-child boxes (4 children at
-`+0x6e4`, stride 0x1c) are not mapped (their vtable is unknown).
+Body (decoded 2026-10-22): the ctor 0x004cb480 calls `FUN_0051ff3c(&DAT_009ac120, 7)`:
+7 boxes, stride 0x2c (`+0xc` the radius). The static init 0x004cd532..0x004cd564 writes
+the radii `0x009ac12c = 10, 0x009ac158 = 10, 0x009ac184 = 10, 0x009ac1b0 = 15,
+0x009ac1dc = 15, 0x009ac208 = 10, 0x009ac234 = 10` (exe). The flags are not written
+by that init (ASSUMED 0x8003, the Dragon's). The positions are not moved by any state
+read so far (ASSUMED: at the origin). The tail / node table is not mapped (the Gol's
+model nodes are not read; the port uses the body only). The per-child boxes (4
+children at `+0x6e4`) are OPEN.
 
 ## Particles and SE (observed ids)
 
@@ -380,8 +438,14 @@ nodes; the Gol Dragon's node table is UNCLEAR. The per-child boxes (4 children a
   fire 27, fly 44, flyshot 80, kiri 30, tobidasi 50, tukomi 44, wgwalk 40, wing 27.
   (Script: `scratchpad/gol_motions.ts`, not committed; ASSUMED until checked in the
   motion player.)
-- Motion table 0x009abf60, 24 rows (slot, mode, next, motion, speed, from
-  `tools/exedata.py motions`): 0 (1,0,11,0.5) stand; 1 (1,0,13,0.5) walk-ish; 2 (3,0,10,0.7);
+- Motion table 0x009abf60, 28 rows (0x10 each, to 0x009ac11f; the earlier "24 rows"
+  was a read limit). Archive names VERIFIED (`bm_boss8_dragon.bml`, motions 0..25 by
+  file name, in archive order: 0 dead, 1 bossopgc, 2 down, 3 frin, 4 frloop, 5 frout,
+  6 land, 7 lift, 8 nkdown, 9 nkup, 10 nobi, 11 stand, 12 tatk, 13 walk, 14 wngclose,
+  15 wngopn, 16 daml, 17 dams, 18 fire, 19 fly, 20 flyshot, 21 kiri, 22 tobidasi,
+  23 tukomi, 24 wgwalk, 25 wing). Rows 24..27: 24 (2,16,22,0.5),
+  25 (3,0,23,1), 26 (3,0,1,0.5 bossopgc), 27 (2,8,17,0.6). Row 19 (dead) speed 0 in the
+  table (ASSUMED 0.5 in the port). Row 0: (1,0,11,0.5) stand; 1 (1,0,13,0.5) walk-ish; 2 (3,0,10,0.7);
   3 (3,0,18,0.9) fire; 4 (3,0,3,0.5) frin; 5 (1,0,4,0.4); 6 (3,0,5,0.5); 7 (3,0,12,0.5) tatk;
   8 (2,9,8,0.5) nkdown; 9 (1,0,2,0.3) down; 10 (3,0,9,0.3) nkup; 11 (3,0,17,0.6) dams;
   12 (3,0,16,0.5) daml; 13 (3,0,15,0.5) wngopn; 14 (3,0,14,0.5) wngclose; 15 (3,0,7,1)
