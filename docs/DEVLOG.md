@@ -8721,3 +8721,37 @@ ship-select failures were not reproduced here.
 (`docker exec <container> ls /data/psobb-client | grep -i gsl`, or
 `curl https://<host>/psobb-data/?list=`). The mtime-based listing cache can
 miss a change made within the same mtime tick; a restart always rebuilds it.
+
+## 2026-10-22: Lobby console logs for production reports (classic client)
+
+**What changed:** Always-on `[lobby]` console logs (info level, no per-frame or
+per-movement lines) to find why players do not see each other in the lobby.
+Each `Lobby` gets a sequence number (`lobby#N`) so a log line can be tied to
+the object that produced it.
+
+- `client/src/net/lobby.ts`: 67 logs the lobby number, block, our client id
+  and the player list (id and name, count). 68 logs the arriving player and the
+  count after it. 69 logs the leaving player. 65 is now named in the switch and
+  logs that it is ignored, with its player count. A change of lobby number is
+  logged. A command whose handling throws logs its command id, then rethrows
+  (the same error path as before).
+- `client/src/render/lobbyview.ts`: marker added / removed with the client id
+  and the marker count after the change. A failed player model build logs the
+  error with the client id and name. `markerIds()` is a read-only accessor.
+- `client/src/classic/main.ts`: `buildLobby` logs the lobby (number, player
+  count, marker ids) its view is built from. `showLobby` logs the lobby shown.
+  `window.psoLobbyDebug()` returns `{lobbyNumber, selfId, players, markers}` for
+  the shown lobby, or `null` before the first lobby.
+- `README.md` ("Support: collecting lobby logs") tells how to collect them.
+
+**Not changed:** behavior. The only new code paths are logs, the 65 case (which
+was already ignored), the rethrowing wrapper and the window helper.
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`node tests/lobby.live.ts` against the running newserv and bridge: ALL PASS,
+with the `[lobby#N]` lines printed for the two clients. Not run: a browser
+session of the classic client (the helper and the view lines were checked by
+typecheck only).
+
+**UNCLEAR.** The cause of the production report is not known yet; these logs
+are for collecting evidence from production consoles.

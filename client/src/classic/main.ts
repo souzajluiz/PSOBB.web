@@ -152,6 +152,7 @@ async function main(): Promise<void> {
   const worldCanvas = document.getElementById('world') as HTMLCanvasElement;
   let viewer: MapViewer | null = null;
   let lobbyView: LobbyView | null = null;
+  let shownLobby: Lobby | null = null;
   const world = (): MapViewer => (viewer ??= new MapViewer(worldCanvas));
   const showWorld = (on: boolean) => (worldCanvas.hidden = !on);
   let connectingAssets: ConnectingAssets | null = null;
@@ -392,6 +393,7 @@ async function main(): Promise<void> {
     await v.load(source, lobbyMapFile(lobby.lobbyNumber));
     const mapData = await loadLobbyMapData(source, lobby.lobbyNumber, (m) => console.log(`[classic] ${m}`));
     lobbyView = new LobbyView(v, lobby, mapData, { labels: false });
+    console.info(`[lobby#${lobby.seq}] lobby view built: lobby ${lobby.lobbyNumber}, ${lobby.players.size} players, markers [${lobbyView.markerIds()}]`);
     const hud = await loadHud(mapData.infoCols ?? []);
     hud.party = partyHost(lobby, shipName);
     const team = teamHost(lobby);
@@ -402,9 +404,25 @@ async function main(): Promise<void> {
   };
   const showLobby = (lobby: Lobby, screen: LobbyScreen) => {
     lobby.conn.onClose = () => console.warn('[classic] disconnected from the lobby server');
+    shownLobby = lobby;
+    console.info(`[lobby#${lobby.seq}] showing lobby ${lobby.lobbyNumber} (${lobby.players.size} players)`);
     Object.assign(window, { classicLobby: screen, classicLobbyState: lobby, classicGame: undefined, classicGameLoading: undefined });
     show(screen);
   };
+  // Support aid (read-only): the lobby being shown and the players and markers
+  // of its LobbyView. Used from the browser console: psoLobbyDebug().
+  Object.assign(window, {
+    psoLobbyDebug: () => {
+      const lobby = shownLobby;
+      if (!lobby) return null;
+      return {
+        lobbyNumber: lobby.lobbyNumber,
+        selfId: lobby.selfId,
+        players: [...lobby.players.values()].map((p) => ({ id: p.clientId, name: p.name })),
+        markers: lobbyView?.markerIds() ?? [],
+      };
+    },
+  });
   const enterLobby = async (lobby: Lobby, shipName: string) => {
     showWorld(true);
     showLobby(lobby, await buildLobby(lobby, shipName));

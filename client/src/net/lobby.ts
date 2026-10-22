@@ -65,6 +65,8 @@ const LOBBY_DATA = 0;
 const ENTRY_INVENTORY = 0x44; // PlayerInventory within a 0x520 entry
 const DISP = 0x44 + 0x34c;
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
+// Numbers each Lobby object for the [lobby] console logs (lobby#N).
+let lobbySeq = 0;
 
 export function stripMarkers(s: string): string {
   // PSO text uses \tE / \tJ language markers and \tC<x> color escapes.
@@ -130,13 +132,20 @@ export class Lobby {
   // handled by net/game.ts). attach() makes it handle the next 67 again.
   active = true;
   private listeners = new Map<keyof LobbyEvents, Array<(...args: never[]) => void>>();
+  readonly seq = ++lobbySeq;
 
   constructor(conn: BBConnection) {
     this.conn = conn;
     const prev = conn.onCommand;
     conn.onCommand = (c) => {
       prev(c);
-      if (this.active) this.handle(c);
+      if (!this.active) return;
+      try {
+        this.handle(c);
+      } catch (err) {
+        console.warn(`[lobby#${this.seq}] command 0x${c.command.toString(16).padStart(2, '0')} failed to parse: ${(err as Error).message}`);
+        throw err;
+      }
     };
   }
 
@@ -186,9 +195,15 @@ export class Lobby {
       case 0x68:
         this.onJoin(c);
         break;
+      case 0x65:
+        // Not handled: the 67 that follows carries the lobby list.
+        console.info(`[lobby#${this.seq}] ignored 0x65 (${c.flag} players)`);
+        break;
       case 0x69: {
         const id = c.flag;
+        const name = this.players.get(id)?.name ?? '?';
         this.players.delete(id);
+        console.info(`[lobby#${this.seq}] player left: client ${id} "${name}" (now ${this.players.size})`);
         this.emit('playerLeft', id);
         break;
       }
@@ -215,6 +230,7 @@ export class Lobby {
       this.players.clear();
       this.selfId = d[0];
       this.leaderId = d[1];
+      if (d[3] !== this.lobbyNumber) console.info(`[lobby#${this.seq}] lobby number ${this.lobbyNumber} -> ${d[3]}`);
       this.lobbyNumber = d[3];
       this.blockNumber = d[4];
     }
@@ -228,11 +244,19 @@ export class Lobby {
       added.push(p);
     }
     if (c.command === 0x67) {
+      const list = [...this.players.values()].map((p) => `${p.clientId} "${p.name}"`).join(', ');
+      console.info(
+        `[lobby#${this.seq}] joined lobby ${this.lobbyNumber} block ${this.blockNumber}: self client ${this.selfId}, ` +
+          `${this.players.size} players [${list}]`,
+      );
       this.emit('joined', added);
       // Ask the others where they are (they answer with 6x20 / 6x3F).
       this.sendSubcommand(0x1f, new Uint8Array(4));
     } else {
-      for (const p of added) this.emit('playerJoined', p);
+      for (const p of added) {
+        console.info(`[lobby#${this.seq}] player arrived: client ${p.clientId} "${p.name}" (now ${this.players.size})`);
+        this.emit('playerJoined', p);
+      }
     }
   }
 

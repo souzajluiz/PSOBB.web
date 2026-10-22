@@ -140,6 +140,23 @@ scripts/             newserv setup
 docs/                documentation
 ```
 
+## Support: collecting lobby logs
+
+When players report not seeing each other in the lobby, the classic client
+logs its lobby state to the browser console, always on and at low volume:
+
+1. Open the game, press F12 and go to the Console tab.
+2. Type `[lobby]` in the filter box (or `lobby#` to show one lobby object).
+3. Reproduce the problem, then copy the lines.
+4. Also run `psoLobbyDebug()` in the console: it returns the lobby number, our
+   client id, the players the client knows (`id`, `name`) and the ids that have
+   a 3D marker. A player missing from `markers` but present in `players` points
+   to the view, a missing `players` entry points to the server packets.
+
+The lines cover the join list (67), players arriving (68) and leaving (69),
+ignored 65 lists, lobby number changes, commands that fail to parse, marker
+add / remove and model build failures.
+
 ## Contributing
 
 `main` is protected: it only takes pull requests (admins included), and force

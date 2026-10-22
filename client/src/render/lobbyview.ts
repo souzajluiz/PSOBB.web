@@ -383,7 +383,13 @@ export class LobbyView {
       labelText,
     };
     this.markers.set(p.clientId, marker);
+    console.info(`[lobby#${this.lobby.seq}] marker added: client ${p.clientId} "${p.name}" (markers ${this.markers.size})`);
     void this.loadModel(p, marker);
+  }
+
+  // Ids of the players with a marker (support: window.psoLobbyDebug()).
+  markerIds(): number[] {
+    return [...this.markers.keys()];
   }
 
   private classAssets(charClass: number): Promise<PlayerAssets> {
@@ -436,7 +442,7 @@ export class LobbyView {
       marker.group.add(model.root);
       this.setGait(marker, marker.gait, true);
     } catch (err) {
-      console.warn(`player model for ${p.name}: ${(err as Error).message}`);
+      console.warn(`[lobby#${this.lobby.seq}] player model failed: client ${p.clientId} "${p.name}": ${(err as Error).message}`);
     }
   }
 
@@ -485,6 +491,7 @@ export class LobbyView {
     this.viewer.scene.remove(m.group);
     for (const child of m.group.children) disposeObject(child, child !== m.model);
     this.markers.delete(id);
+    console.info(`[lobby#${this.lobby.seq}] marker removed: client ${id} (markers ${this.markers.size})`);
   }
 
   // Puts a player's model at a spot at once (intra-floor warps, 6x55).
