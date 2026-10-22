@@ -23,7 +23,13 @@ worktrees are left.
    and newserv does not echo to the sender. The brain already does that. Real port bug
    fixed: the area SE bank (boss09.pac for 0x2c) was never loaded (`CombatView.enterFloor`).
    Branch `worktree-agent-a4641173c3f901521`, not pushed.
-4. **Battle Mode traps in Chrome**: not tested (needs a Battle party plus a b88xxx quest).
+4. **Battle Mode traps in Chrome: DONE** (DEVLOG "2026-10-22: Battle Mode traps in Chrome").
+   `client/e2e/battle-traps.spec.ts` passes: the Battle party, b88001 from the guild counter,
+   a trap from the palette (6x83 type 0 count 5), the owner's trap (6x80 what 2), HP 96 -> 16.
+   Real port bug fixed: `ba_initial_floor` never moved the player, so no battle quest started
+   (`battleFloor` was not wired, `quest/run.ts`). The account `webbattle` is a copy of webtest's
+   save with a trap in palette slot 2 (see `client/e2e/README.md`). Not checked: the trap's look
+   on screen, the arming and fuse frames (ASSUMED), a second player.
 5. **REA with Ghidra**: the user's rule is to reverse-engineer with the REA skill and its
    Ghidra provider. REA cannot start Ghidra on this Mac until the Command Line Tools are
    updated (`sudo softwareupdate -i "Command Line Tools for Xcode-16.4"` in Terminal, by

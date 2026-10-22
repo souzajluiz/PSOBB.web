@@ -98,6 +98,13 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
       goFloor: (clientId, floor) => {
         if (clientId === game.selfId) void view.warpTo(floor);
       },
+      // ba_initial_floor (quest/battle.ts, vm.ts): the floor the players start on. Each client
+      // moves its own player there, and that floor's handler (set_floor_handler) runs the
+      // quest's ba_start. Without the move a battle quest never starts (its floor 0x10 is
+      // never entered). ASSUMED: the exe warps at this point too (its warp is not traced here).
+      battleFloor: (floor) => {
+        if (game.self) void view.warpTo(floor);
+      },
       battleStart: (setup) => {
         battle ??= new BattleRun({ game, view, ui: town.ui, canvas: town.canvasElement, files: town.clientFiles, log });
         battle.start(setup);
