@@ -9238,3 +9238,32 @@ the dump.
 - `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts`: 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
 - `cd client && npx tsc --noEmit -p .`: clean.
 - `client/e2e/barbaray-smoke.spec.ts` (new, Chrome channel, PW_BASE_URL 5203, webep2): passes in 1.7 min. Phases seen 1, 3, 8, 15, 40, 60, 50, 68, 57, 61, 41, 17, 63, 21; 14 phase changes over 60 s with no damage; the four parts and the shell take the test hits; 0 page errors.
+
+## 2026-10-22: Barba Ray: part rows from the bone captures, part hit targets
+
+**Decoded (exe, Ghidra and objdump; VAs):**
+- Row build in the root update 0x004b8584 (asm 0x004b8c1e..0x004b8d58): row r = 0.5 * (C[r] + C[r+1]), r = 0..9. The add operand of 0x0082ebac (vector add) is the next capture: C0 = root+0x3f4, C1 = +0x460, C2..C10 = +0x478 + 12 * (k - 2). Rows are floats (fstps), not truncated.
+- Part hit box: radius 50.0 (0x42480000 written to 0x009abc90 by 0x004ba2d8, copied to part+0x3a0 by the part init 0x004ba2e4). Centre words zero. Part stats rows 16 / 15 / 16, HP 20000 (the same rows as De Rol Le's segment).
+- Row park value 9984.0 (0x461c4000, root ctor).
+
+**Port:**
+- `combat/barbaray.ts`: `barbaRows` (midpoints, no allocation), `BARBA_CAPTURE_OFFSETS`, `BARBA_PART_RADIUS`, `BarbaPartAi` (a part's enemy brain: row as position, `hit` -> `BarbaRayAi.hitPart`, untargetable once the body is dead), `BarbaRayAi.rows`.
+- `render/combat.ts`: `spawnBarbaParts` (ten enemies at body + 1 .. body + 10, the De Rol Le segment pattern: placed, hidden until the body is drawn, stats rows 16 / 15 / 16 with HP 20000); `tickBarbaParts` (captures from the spine nodes' matrixWorld as the last draw left them, then `barbaRows`, then each part follows its row); `barbaPartHit` (the strike goes to `hitPart`, the 6x0A carries the damage of this hit, the drain of a broken part goes through `barbaDrain`); remote 6x0A to a part feeds `hitPart` on every client; `barbaPartsGone` on the kill and on the dead event; the part is a target in `weaponTargets` (radius 50, the De Rol Le height window) and `hitRadiusOf`, and excluded by `concealed` once untargetable.
+
+**ASSUMED (tagged in the code):**
+- A. The capture nodes: the De Rol Le spine (`CombatView.DRL_SPINE`: draw-order nodes 24, 26, 28 .. 96 of the same body model, bm_boss7_de_rol_le_c model 0). The Barba draw (0x004b9224 -> 0x0083046c) sets no node callback (De Rol Le's capture is 0x0042a904 via 0x0082fac4), so the writer of root+0x3f4.. is not found. The port reads the matrices instead.
+- B. The part's height window (|dy| - 50 > 40 excludes) is De Rol Le's; the exe's part box y range is not read.
+- C. The part's entity HP refills to 20000 after each hit, as De Rol Le's segments, so its 6x0A carries the hit's damage. The brain's part pool itself is `barbaPartPool` (MovementData[15] iparam[1], ASSUMED; 1250 in the e2e data, fallback 20000).
+- D. Parts are not drawn (the part models are not placed, only the body and the tentacles).
+
+**Open:**
+1. The capture writer (above). Until it is found the node list is the De Rol Le spine.
+2. Body movement (the corner moves, the swim-in) is still not ported: only the finale teleport moves the body.
+3. The body's own hit radius and the shell box are not wired (no decoded value for them yet).
+4. Damage against the parts: the e2e character's swings roll 0 against the parts (the defence of DE_ROL_LE_BODY row 16, the same row as the De Rol Le segments), so the part pools did not drop in the run; routing is proven, the balance is the game's.
+
+**Checks:**
+- `tests/barbaray.test.ts`: ALL PASS (new: capture offsets, the row midpoints in place, row park, part tick at its row, part hit -> part pool, part untargetable after the body dies).
+- `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts` (NEWSERV=vendor/newserv): 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
+- `cd client && npx tsc --noEmit -p .`: clean.
+- `client/e2e/barbaray-smoke.spec.ts` (Chrome, PW_BASE_URL 5204, webep2): passes in 2.3 min. The ten part enemies spawn; the phases change 15 times over 60 s with no damage; the four parts are stood at from the outside (35 units, facing the part) and swung at with the real keys (ArrowDown normal, ArrowLeft heavy); the swings hit parts 3, 5 and 6 through applyEnemyHit -> barbaPartHit -> hitPart (the assertion: at least two different parts hit). Pools stayed at 1250 (0 rolls); no page errors.

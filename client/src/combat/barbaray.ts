@@ -15,7 +15,7 @@
 // 6xA9 / 6xAA for each step; followers apply the same steps (applyRemote).
 // Everything the map leaves ASSUMED or open is tagged in the comments below.
 import { BrainBase } from './enemyfsm.ts';
-import type { AiFrame, AiTarget } from './enemyai.ts';
+import type { AiFrame, AiTarget, EnemyBrain } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 
 // --- constants --------------------------------------------------------------
@@ -25,6 +25,23 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 export const BARBA_HP = 20000;
 export const BARBA_PART_COUNT = 10;
 // The loop 0x004afd1a..0x004afdd9 creates the 10 parts (cmp 0xa).
+
+// Part positions (0x004b8584, the root update, every frame while root+0x7b4 is
+// set). The update reads 11 node captures and writes 10 rows at root+0x538:
+//   row r = 0.5 * (C[r] + C[r + 1]),  r = 0 .. 9
+// The capture operands are root+0x3f4 (C0), +0x460 (C1) and +0x478 + 12 * (k - 2)
+// for k = 2 .. 10 (the add operand of 0x0082ebac, decoded from the disassembly
+// at 0x004b8c24..0x004b8d58). The captures are the model's draw-order nodes; the
+// node list is ASSUMED to be the De Rol Le spine (combat/derolle.ts DRL_SPINE /
+// render/combat.ts DRL_SPINE, the same body model, bm_boss7_de_rol_le_c model 0).
+// Part i copies row i (0x004ba0ac). Init park value 9984.0 (0x461c4000, root ctor).
+export const BARBA_CAPTURE_COUNT = 11;
+export const BARBA_CAPTURE_OFFSETS: readonly number[] = [0x3f4, 0x460, 0x478, 0x484, 0x490, 0x49c, 0x4a8, 0x4b4, 0x4c0, 0x4cc, 0x4d8];
+export const BARBA_ROW_PARK = 9984;
+// The part's hit box radius: 50.0 (0x42480000 written to 0x009abc90 by 0x004ba2d8;
+// 0x004ba2e4 copies the box at 0x009abc84.. to part+0x394.. so the radius is
+// part+0x3a0). The box is centred on the part (its offset words are zero).
+export const BARBA_PART_RADIUS = 50;
 
 // The motion slots (table 0x009aba20, 16-byte rows, see the map's pass 3).
 // mode 1 loops, 2 plays once and goes on to `next`, 3 plays once and holds
@@ -191,6 +208,20 @@ export function barbaResolve(code: number, flag: number, roll: number): BarbaSte
   }
 }
 
+// Row r = 0.5 * (C[r] + C[r + 1]) (0x004b8584). `out` has BARBA_PART_COUNT rows,
+// `captures` BARBA_CAPTURE_COUNT positions; no allocation.
+export function barbaRows(captures: readonly (readonly [number, number, number])[], out: [number, number, number][]): void {
+  for (let r = 0; r < out.length; r++) {
+    const a = captures[r];
+    const b = captures[r + 1];
+    const o = out[r];
+    if (!a || !b || !o) return;
+    o[0] = (a[0] + b[0]) * 0.5;
+    o[1] = (a[1] + b[1]) * 0.5;
+    o[2] = (a[2] + b[2]) * 0.5;
+  }
+}
+
 // --- events the render layer reads ----------------------------------------
 
 export type BarbaEvent =
@@ -263,6 +294,8 @@ export class BarbaRayAi extends BrainBase {
   private readonly out: AiFrame = { motion: null, x: 0, z: 0, angle: 0, hit: null };
   dead = false;
   readonly superArmor = true;
+  // The part rows (root+0x538, barbaRows): part i stands at rows[i].
+  readonly rows: [number, number, number][] = Array.from({ length: BARBA_PART_COUNT }, () => [BARBA_ROW_PARK, BARBA_ROW_PARK, BARBA_ROW_PARK]);
 
   constructor(opts: BarbaRayOptions) {
     super(opts.x, opts.z, opts.angle, opts.rng);
@@ -647,6 +680,44 @@ export class BarbaRayAi extends BrainBase {
     this.state = 'dead';
     this.current = null;
   }
+}
+
+// A part's enemy (the bone node i, enemy slot body + 1 + i). The render layer
+// moves it to rows[i] (barbaRows) and sends its hits here (hit -> hitPart). It
+// stays a target while the body lives (the broken part drains the body, hitPart).
+export class BarbaPartAi implements EnemyBrain {
+  state = 'part';
+  readonly motion = null;
+  readonly superArmor = true;
+  readonly owner: BarbaRayAi;
+  readonly index: number;
+  private readonly frame: AiFrame = { motion: null, x: 0, z: 0, angle: 0, hit: null };
+  constructor(owner: BarbaRayAi, index: number) {
+    this.owner = owner;
+    this.index = index;
+  }
+  get untargetable(): boolean {
+    return this.owner.dead;
+  }
+  // The part's centre (the row).
+  get row(): readonly [number, number, number] {
+    return this.owner.rows[this.index] ?? [BARBA_ROW_PARK, BARBA_ROW_PARK, BARBA_ROW_PARK];
+  }
+  // A hit on this part (damage as the 6x0A carries it): the brain's part pool.
+  hit(damage: number): 'part' | 'broken' | 'drain' | 'none' {
+    return this.owner.hitPart(this.index, damage);
+  }
+  tick(): AiFrame {
+    const r = this.row;
+    this.frame.x = r[0];
+    this.frame.z = r[2];
+    return this.frame;
+  }
+  onDamage(): void {}
+  resume(): string {
+    return this.state;
+  }
+  kill(): void {}
 }
 
 // --- network (6xA9 / 6xAA, newserv CommandFormats.hh:5464 / 5473) ---------------

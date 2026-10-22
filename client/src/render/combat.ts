@@ -55,7 +55,7 @@ import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, Re
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
-import { BARBA_HP, BarbaRayAi, type BarbaEvent, decodeBarbaMessage } from '../combat/barbaray.ts';
+import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BarbaPartAi, BarbaRayAi, type BarbaEvent, barbaRows, decodeBarbaMessage } from '../combat/barbaray.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
@@ -447,6 +447,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
   (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
+  (e.ai instanceof BarbaPartAi && e.ai.untargetable) ||
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
@@ -1163,6 +1164,7 @@ export class CombatView {
     await this.spawnVolopt();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnDeRolLeSegments();
+    await this.spawnBarbaParts();
     if (this.disposed || token !== this.enterToken) return;
     await this.spawnSaintMilion();
     if (this.disposed || token !== this.enterToken) return;
@@ -1514,6 +1516,9 @@ export class CombatView {
       if (ai instanceof VoloptPartAi) continue;
       // A De Rol Le segment's enemy is moved by the body (tickDeRolLe).
       if (ai instanceof DrlSegmentAi) continue;
+      // A Barba Ray part is moved by the body's rows (tickBarbaParts).
+      if (ai instanceof BarbaPartAi) continue;
+      if (ai instanceof BarbaRayAi) this.tickBarbaParts(e, ai);
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
       if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
@@ -2045,6 +2050,122 @@ export class CombatView {
   // body feeds the shell and body pools (hitRoot) on every client. The kill is
   // the leave of the finale (bossKilled, EXP and 6x76 as the other bosses).
   private barbaLastHit = new Map<number, boolean>();
+  // Per Barba Ray (by enemy index): the part enemies (slots body + 1 + i, null:
+  // not spawned) and the captures the rows are built from (same node list as De
+  // Rol Le's spine: CombatView.DRL_SPINE, ASSUMED, see combat/barbaray.ts).
+  private barbaParts = new Map<number, (EnemyRuntime | null)[]>();
+  private barbaCaptures = Array.from({ length: BARBA_CAPTURE_COUNT }, (): [number, number, number] => [0, 0, 0]);
+  private barbaDrawn = new Map<number, boolean>();
+
+  // The part enemies: the body's ctor makes them at body + 1 .. body + 10 (the
+  // same ids as De Rol Le's segments). Each is a target: the box of radius 50
+  // (BARBA_PART_RADIUS, 0x004ba2d8), stats row 16 / 15 / 16 as the exe's part init
+  // (0x004ba2e4, the same rows as De Rol Le's segment: childFightStats DE_ROL_LE_BODY).
+  private async spawnBarbaParts(): Promise<void> {
+    for (const head of [...this.enemies.values()]) {
+      const ai = head.ai;
+      if (!(ai instanceof BarbaRayAi)) continue;
+      const fight = this.childFightStats('DE_ROL_LE_BODY');
+      const parts: (EnemyRuntime | null)[] = [];
+      this.barbaParts.set(head.index, parts);
+      for (let i = 0; i < BARBA_PART_COUNT; i++) {
+        parts.push(null);
+        const index = head.index + 1 + i;
+        if (this.enemies.has(index)) {
+          this.opts.log(`Barba Ray E-${head.index.toString(16)}: slot E-${index.toString(16)} (part ${i}) is taken, that part cannot be hit`);
+          continue;
+        }
+        const row = ai.rows[i]!;
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [row[0], row[1], row[2]] as [number, number, number],
+          yaw: 0,
+          name: 'Barba Ray part',
+        };
+        const spec = { ...head.instance.spec, name: 'TBoss7DeRolLeCPart', parts: [] };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, spec as typeof head.instance.spec);
+        if (!instance || this.disposed) return;
+        instance.root.visible = false;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          ...fight,
+          stats: { ...fight.stats, hp: BARBA_HP, maxHp: BARBA_HP },
+          exp: 0,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: new BarbaPartAi(ai, i),
+          lift: 0,
+          monest: null,
+          parent: head,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute('DE_ROL_LE_BODY')),
+        };
+        this.enemies.set(index, rt);
+        parts[i] = rt;
+      }
+    }
+  }
+
+  // The root update's rows (barbaRows) from the body's spine nodes as the last
+  // draw left them (render_derolle's capture, the same as De Rol Le's segments),
+  // then each part follows its row. Parts show while the body is drawn.
+  private tickBarbaParts(e: EnemyRuntime, ai: BarbaRayAi): void {
+    const parts = this.barbaParts.get(e.index);
+    const body = e.instance.nodes?.[0];
+    const spine = CombatView.DRL_SPINE.map((i) => body?.[i] ?? null);
+    const drawn = this.barbaDrawn.get(e.index) ?? false;
+    if (drawn && spine.every((n) => n)) {
+      for (let i = 0; i < BARBA_CAPTURE_COUNT; i++) {
+        const a = spine[i]!.matrixWorld.elements;
+        const c = this.barbaCaptures[i]!;
+        c[0] = a[12];
+        c[1] = a[13];
+        c[2] = a[14];
+      }
+      barbaRows(this.barbaCaptures, ai.rows);
+    }
+    this.barbaDrawn.set(e.index, e.instance.root.visible);
+    if (!parts) return;
+    for (let i = 0; i < parts.length; i++) {
+      const rt = parts[i];
+      if (!rt) continue;
+      const row = ai.rows[i]!;
+      rt.instance.root.position.set(row[0], row[1], row[2]);
+      rt.instance.root.visible = e.instance.root.visible && !ai.dead && drawn;
+    }
+  }
+
+  // The parts go with the body (0x1d / the kill): they stop being targets.
+  private barbaPartsGone(e: EnemyRuntime): void {
+    for (const rt of this.barbaParts.get(e.index) ?? []) {
+      if (!rt) continue;
+      rt.dead = true;
+      rt.instance.root.visible = false;
+    }
+  }
+
+  // A hit on a part: the brain's part pool (hitPart: a broken part drains the
+  // body 704 by half). The entity is refilled to max, so its 6x0A carries this
+  // hit's damage, as De Rol Le's segments do.
+  private barbaPartHit(e: EnemyRuntime, ai: BarbaPartAi, damage: number, critical: boolean, flags: number, byPlayer: boolean, what: string): void {
+    const owner = ai.owner;
+    const parent = e.parent;
+    const went = ai.hit(damage);
+    e.stats.hp = BARBA_HP;
+    if (parent && damage >= 1) this.barbaLastHit.set(parent.index, byPlayer);
+    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    if (parent) this.barbaDrain(parent, owner);
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 26, p.z);
+    this.opts.log(`${what}hit Barba Ray's part ${ai.index} (${went}) for ${Math.round(damage)}: body ${owner.bodyHp}`);
+  }
 
   private barbaDrain(e: EnemyRuntime, ai: BarbaRayAi): void {
     for (const ev of ai.drain() as BarbaEvent[]) {
@@ -2071,6 +2192,7 @@ export class CombatView {
           this.barbaKilled(e);
           break;
         case 'dead':
+          this.barbaPartsGone(e);
           break;
       }
     }
@@ -2080,6 +2202,7 @@ export class CombatView {
     const p = e.instance.root.position;
     e.dead = true;
     e.stats.hp = 0;
+    this.barbaPartsGone(e);
     this.bossKilled(e, p.x, p.z, this.barbaLastHit, 'Barba Ray');
   }
 
@@ -4958,8 +5081,9 @@ export class CombatView {
       // DRAGON_BODY_BOXES). Every other enemy keeps the point test.
       // A De Rol Le segment's box has radius 50 (0x009a47f0); ASSUMED: it
       // counts from its surface in height too.
-      const seg = e.ai instanceof DrlSegmentAi;
-      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
+      // A Barba Ray part's box has radius 50 (BARBA_PART_RADIUS, 0x004ba2d8); ASSUMED: its height window is De Rol Le's.
+      const seg = e.ai instanceof DrlSegmentAi || e.ai instanceof BarbaPartAi;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
       const dist = Math.hypot(dx, dz) - reach;
       if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
       if (!inWeaponCone(dx, dz, me.angle, halfAngle)) continue;
@@ -5368,6 +5492,10 @@ export class CombatView {
     }
     if (e.ai instanceof DrlSegmentAi) {
       this.deRolLeSegmentHit(e, e.ai, damage, critical, baseFlags, what);
+      return;
+    }
+    if (e.ai instanceof BarbaPartAi) {
+      this.barbaPartHit(e, e.ai, damage, critical, baseFlags, byPlayer, what);
       return;
     }
     if (e.ai instanceof BarbaRayAi) {
@@ -5804,6 +5932,7 @@ export class CombatView {
   private hitRadiusOf(e: EnemyRuntime): number {
     let r = this.fireRadius.get(e);
     if (r === undefined && e.ai instanceof DrlSegmentAi) r = DRL_SEGMENT.radius;
+    if (r === undefined && e.ai instanceof BarbaPartAi) r = BARBA_PART_RADIUS;
     if (e.ai instanceof SmChildAi) return e.ai.entity ? e.ai.entity.hitRadius : SM_PART_RADIUS;
     if (r === undefined) {
       const sub = Math.max(0, Math.trunc(((e.slot.set as EnemySet | undefined)?.params?.[5] as number | undefined) ?? 0));
@@ -6640,6 +6769,16 @@ export class CombatView {
           const went = e.ai.owner.hitSegment(e.ai.index, s.totalDamage);
           if (e.parent) e.parent.stats.hp = e.ai.owner.bodyHp;
           this.opts.log(`De Rol Le's segment ${e.ai.index} hit for ${s.totalDamage} (${went}, 6x0A from another client): segment ${e.ai.segment.pool}, body ${e.ai.owner.bodyHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof BarbaPartAi) {
+        // The same part pool as the striker's (restore_enemy_status and the hit flag).
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          const went = e.ai.hit(s.totalDamage);
+          e.stats.hp = BARBA_HP;
+          if (e.parent) this.barbaDrain(e.parent, e.ai.owner);
+          this.opts.log(`Barba Ray's part ${e.ai.index} hit for ${s.totalDamage} (${went}, 6x0A from another client)`);
         }
         return;
       }

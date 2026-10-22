@@ -489,3 +489,24 @@ decoded and the anchors / constants are known, so a port could start on the
 phase logic with the 0x0ee0 timers, but it would ship with ASSUMED targets
 (G, side -> anchor), an undecoded attack record, and no part hit boxes.
 Items 1 and 3 are PARTIAL; item 2 is PARTIAL (writer not found).
+
+## Pass 5 (part rows, part hit boxes)
+
+Sources: Ghidra (the root update 0x004b8584, the part init 0x004ba2e4, the static
+init 0x004ba2b0), objdump of 0x004b8b88..0x004b8d70 and of the data words.
+
+- Row build (0x004b8584, asm 0x004b8c1e..0x004b8d58): row r = 0.5 * (C[r] + C[r+1]),
+  r = 0..9. The add operand of 0x0082ebac (vector add, dst += src) is the next
+  capture: C0 = root+0x3f4, C1 = +0x460, C2..C10 = +0x478 + 12 * (k - 2). Rows are
+  stored as floats (fstps), not truncated.
+- The captures' writer (the draw-order node callback) is NOT found. The De Rol Le
+  one is 0x0042a904 (DAT_00ae6dc0, set by 0x0082fac4 before 0x0083046c); the Barba
+  draw 0x004b9224 sets no callback, so its capture path is still open. The node
+  list is ASSUMED to be De Rol Le's spine (11 draw-order nodes, the same body model
+  bm_boss7_de_rol_le_c model 0). The port reads the matrixWorld of those nodes.
+- Part box radius 50.0: 0x004ba2d8 writes 0x42480000 to 0x009abc90; 0x004ba2e4
+  copies the box 0x009abc84.. to part+0x394.. (radius at +0x3a0, centre words
+  zero). Part stats: rows 16 / 15 / 16, HP 20000 (0x004ba2e4), as De Rol Le's segment.
+- Park value of the rows: 0x461c4000 = 9984.0.
+- Port: combat/barbaray.ts (barbaRows, BarbaPartAi, BARBA_PART_RADIUS),
+  render/combat.ts (spawnBarbaParts, tickBarbaParts, barbaPartHit).
