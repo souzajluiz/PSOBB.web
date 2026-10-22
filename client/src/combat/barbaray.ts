@@ -15,7 +15,8 @@
 // 6xA9 / 6xAA for each step; followers apply the same steps (applyRemote).
 // Everything the map leaves ASSUMED or open is tagged in the comments below.
 import { BrainBase } from './enemyfsm.ts';
-import type { AiFrame, AiTarget, EnemyBrain } from './enemyai.ts';
+import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyBrain } from './enemyai.ts';
+import { DrlEasing } from './derolle.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 
 // --- constants --------------------------------------------------------------
@@ -226,6 +227,78 @@ export function barbaResolve(code: number, flag: number, roll: number): BarbaSte
   }
 }
 
+// --- body movement (decoded from the exe, asm checked) -----------------------
+// Words: x +0x38, y +0x3c (the teleport's middle anchor entry, 7 or -100), z +0x40
+// (the teleport's third entry, the arena depth), heading +0x64 (BAMS), lift +0x6f8.
+// Correction to the brief: 0x004b7860 writes +0x40 = -210 (z), not y.
+// Side entry 0x004b416c (the 0x13 and 0x15 enters): x = -100 (side 0) or +100,
+// z = 10.0 (0x41200000), lift = 4.0 (DAT_00a47a90), heading +0x500 / -0x500.
+export const BARBA_SIDE_ENTRY = { x: 100, z: 10, lift: 4, yaw: 0x500 } as const;
+// Swim, phases 0x15 / 0x16 (0x004b41ac). Speed +0x744 gains 256 a frame (0x906e48)
+// from 0x500 and clamps to 16384 (0x906e40 / 0x906e44). vx += 0.08 (0x906e4c),
+// vy += 0.2 (0x906f64), vz += 0.1 (0x906e5c); x += dir * vx, z -= vy, lift -= vz.
+// dir (+0x750) is -1 on side 0, else +1; vz starts at -1.0. Sub 1 raises the lift
+// by 2.0 (0x906e50) until 0.0 (0x906e60). Sub 0 exits at lift < -137.0 (0x00a47a94).
+export const BARBA_SWIM = { speed0: 0x500, speedStep: 256, speedMax: 16384, vx: 0.08, vy: 0.2, vz: 0.1, vz0: -1, exitLift: -137, rise: 2, speedSe: 0x2200 } as const;
+// Path followers of phase 0x13 / 0x14 (0x004b3c2c): the four objects at root+0x6e4..
+// 0x6f4 each get a target (FUN_004bd190) once every 180 ticks (+0x73c); speed 120
+// (0x906e70, the default for a value outside 1..599). The wait is 41 ticks (sub 0,
+// +0x734 > 40); sub 2 waits for all four to arrive (state 4) or 601 ticks.
+export const BARBA_FOLLOW = { wait: 40, interval: 180, speed0: 120, limit: 600, count: 4, radius: 120 } as const;
+// Lift pull (FUN_004b1c94, used by the arc): 0.4 a tick toward 0 (0x906f5c / 0x906f60).
+const LIFT_STEP = 0.4;
+
+// One of the four path followers (root+0x6e4..0x6f4). Their own update is not
+// decoded: ASSUMED to move straight at speed / 30 a tick and to arrive (state 4) on
+// reaching the target. They are not drawn (ASSUMED: no model; not in the e2e).
+export class BarbaFollower {
+  x = 0;
+  y = 0;
+  z = 0;
+  tx = 0;
+  ty = 0;
+  tz = 0;
+  speed: number = BARBA_FOLLOW.speed0;
+  // +0x30 == 4 (FUN_004bd220). Reset when a new target is set (ASSUMED).
+  arrived = false;
+  // +0x3c bit 1 / +0x34: moving toward the target (FUN_004bd190 / FUN_004bd1d4 set it,
+  // FUN_004bd1e8 clears it).
+  moving = false;
+  // FUN_004bd190(this, vec, speed): the speed is kept only in 1..599, else 120.
+  set(tx: number, ty: number, tz: number, speed: number): void {
+    this.tx = tx;
+    this.ty = ty;
+    this.tz = tz;
+    this.speed = speed >= 1 && speed < BARBA_FOLLOW.limit ? speed : BARBA_FOLLOW.speed0;
+    this.arrived = false;
+    this.moving = true;
+  }
+  // FUN_004bd1e8: stop (state 5).
+  stop(): void {
+    this.moving = false;
+  }
+  step(): void {
+    if (!this.moving) return;
+    const dx = this.tx - this.x;
+    const dy = this.ty - this.y;
+    const dz = this.tz - this.z;
+    const d = Math.hypot(dx, dy, dz);
+    const s = this.speed / 30; // ASSUMED: speed in units a second
+    if (d <= s) {
+      this.x = this.tx;
+      this.y = this.ty;
+      this.z = this.tz;
+      this.moving = false;
+      this.arrived = true;
+      return;
+    }
+    const k = s / d;
+    this.x += dx * k;
+    this.y += dy * k;
+    this.z += dz * k;
+  }
+}
+
 // Row r = 0.5 * (C[r] + C[r + 1]) (0x004b8584). `out` has BARBA_PART_COUNT rows,
 // `captures` BARBA_CAPTURE_COUNT positions; no allocation.
 export function barbaRows(captures: readonly (readonly [number, number, number])[], out: [number, number, number][]): void {
@@ -305,6 +378,30 @@ export class BarbaRayAi extends BrainBase {
   spawned = 0;
   spawnCount = 0;
   spawnCooldown = 0;
+  // Body position: x (+0x38), y (+0x3c), z (+0x40); lift (+0x6f8); heading (+0x64, BAMS).
+  y = 0;
+  lift = 0;
+  yaw = 0;
+  // The movement words, by exe offset (the phases share them; see each handler).
+  // +0x730 sub-state, +0x734 counter, +0x738 follower index / arc sub-state,
+  // +0x73c count, +0x740 follower speed, +0x744 swim speed, +0x74c vx (swim) / dir (arc),
+  // +0x750 dir (swim) / vy (arc), +0x754 vy (swim) / its accel (arc), +0x758 vz / z-vel,
+  // +0x75c arc vx, +0x760 arc z accel.
+  moveSub = 0;
+  private moveCounter = 0;
+  private arcSub = 0;
+  private moveCount = 0;
+  private followSpeed = 0;
+  f744 = 0;
+  f74c = 0;
+  f750 = 0;
+  f754 = 0;
+  f758 = 0;
+  f75c = 0;
+  f760 = 0;
+  // The arc's easing (0x00434ac4, DrlEasing) from phase 5 / 6 sub 3.
+  arc: DrlEasing | null = null;
+  readonly followers: BarbaFollower[] = Array.from({ length: BARBA_FOLLOW.count }, () => new BarbaFollower());
   readonly parts: BarbaPart[];
   // Two buffers swapped by drain(), so a tick allocates nothing.
   private events: BarbaEvent[] = [];
@@ -440,9 +537,10 @@ export class BarbaRayAi extends BrainBase {
         return this.side === 0 ? 7 : 8; // ASSUMED: the write of 1 first, then the side (order not traced)
       case 0x0d:
         return 4; // 0x004b7040: 1, then 4 (the 1 is not kept)
-      case 3:
       case 5:
       case 6:
+        return this.side === 0 ? 5 : 6; // 0x004b0ee0 enter (asm: 5 on side 0, else 6)
+      case 3:
       case 8:
       case 9:
       case 0x0b:
@@ -485,6 +583,9 @@ export class BarbaRayAi extends BrainBase {
     this.dwell = 0;
     const s = this.slotOnEnter(phase);
     if (s !== null) this.setSlot(s);
+    if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) this.enterFollow();
+    else if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2) this.enterSwim();
+    else if (phase === 5 || phase === 6) this.enterArc();
     if (phase === BARBA_PHASE.finale) this.enterFinale();
     else if (phase === BARBA_PHASE.dead) this.enterDead();
     else if (phase === BARBA_PHASE.timed) this.countdown = 0; // ASSUMED: the 0x1be start is not traced
@@ -499,6 +600,12 @@ export class BarbaRayAi extends BrainBase {
   private leave(phase: number): void {
     // The kill is the leave of 0x1c (0x0051f894: EXP and drops, 6x76 on the owner).
     if (phase === BARBA_PHASE.finale) this.events.push({ kind: 'killed' });
+    // Event 5 of 0x13 / 0x14 stops the four followers (0x004b3d1f).
+    if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) for (const f of this.followers) f.stop();
+    // Event 5 of 0x15 / 0x16 and of 0x0ee0 clears the gate block (+0x630 bit 2); the
+    // 0x0ee0 leave also takes the table's flag as the side (asm 0x004b0f26).
+    if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2 || phase === 5 || phase === 6) this.flags &= ~4;
+    if (phase === 5 || phase === 6) this.side = this.variant;
   }
 
   // 0x1c enter (0x004b5d1c, param 4): the state is 0x10, the side 3, the body
@@ -522,13 +629,285 @@ export class BarbaRayAi extends BrainBase {
     this.events.push({ kind: 'dead' });
   }
 
-  // FUN_004b1e58(i): the body moves to anchor i.
+  // FUN_004b1e58(i) (asm 0x004b1e58): the body moves to anchor i (x, y, z), the lift
+  // and the heading are zeroed.
   teleport(i: number): void {
     const a = BARBA_ANCHORS[i];
     if (!a) return;
     this.x = a[0];
+    this.y = a[1];
     this.z = a[2];
+    this.lift = 0;
+    this.setYaw(0);
     this.warps++;
+  }
+
+  // +0x64 (BAMS) is the heading; the brain's angle is radians.
+  private setYaw(v: number): void {
+    this.yaw = v;
+    this.angle = v * BAMS_TO_RAD;
+  }
+
+  // FUN_004b416c: the side entry. side 0 starts at x = -100 heading +0x500, side 1 at
+  // x = +100 heading -0x500; z = 10, lift = 4.
+  private sideEntry(): void {
+    const s0 = this.side === 0;
+    this.x = s0 ? -BARBA_SIDE_ENTRY.x : BARBA_SIDE_ENTRY.x;
+    this.z = BARBA_SIDE_ENTRY.z;
+    this.lift = BARBA_SIDE_ENTRY.lift;
+    this.setYaw(s0 ? BARBA_SIDE_ENTRY.yaw : -BARBA_SIDE_ENTRY.yaw);
+  }
+
+  // Phase 0x13 / 0x14 enter (0x004b3c2c, event 4): side entry, the wait (+0x73c 180,
+  // speed 120), the sub-state 0. The root does not move after the entry.
+  private enterFollow(): void {
+    this.flags &= ~0x104;
+    this.sideEntry();
+    this.moveCount = BARBA_FOLLOW.interval;
+    this.followSpeed = BARBA_FOLLOW.speed0;
+    this.moveSub = 0;
+    this.moveCounter = 0;
+    this.arcSub = 0;
+  }
+
+  // Phase 0x15 / 0x16 enter (0x004b41ac, event 4): the four followers stop, the side
+  // entry, dir = -1 on side 0 else +1, vz = -1, speed 0x500, sub-state 0.
+  private enterSwim(): void {
+    for (const f of this.followers) f.stop();
+    this.flags |= 4;
+    this.flags &= ~0x100;
+    this.sideEntry();
+    this.f750 = this.side === 0 ? -1 : 1;
+    this.f74c = 0;
+    this.f754 = 0;
+    this.f758 = BARBA_SWIM.vz0;
+    this.f744 = BARBA_SWIM.speed0;
+    this.moveSub = 0;
+    this.moveCounter = 0;
+    this.flags &= ~0x200;
+  }
+
+  // Phase 5 / 6 enter (0x004b0ee0, event 4): the body moves to anchor `side`, dir
+  // (+0x74c) = -1 on side 0 else +1, every movement word zeroed, sub-state 0.
+  private enterArc(): void {
+    this.flags |= 4;
+    this.flags &= ~0x100;
+    this.teleport(this.side);
+    this.f74c = this.side === 0 ? -1 : 1;
+    this.f750 = 0;
+    this.f754 = 0;
+    this.f758 = 0;
+    this.f75c = 0;
+    this.f760 = 0;
+    this.moveSub = 0;
+    this.moveCounter = 0;
+    this.arcSub = 0;
+    this.moveCount = 0;
+    this.arc = null;
+  }
+
+  // Event 0 of 0x13 / 0x14 (asm 0x004b3d3a): the wait, then one follower target every
+  // 180 ticks (the random point or the player), then the wait for the arrivals.
+  private followerFrame(targets: readonly AiTarget[]): void {
+    this.timer += 1;
+    switch (this.moveSub) {
+      case 0:
+        this.moveCounter += 1;
+        if (this.moveCounter > BARBA_FOLLOW.wait) {
+          this.moveSub = 1;
+          this.moveCounter = 0;
+          this.arcSub = 0;
+        }
+        return;
+      case 1: {
+        this.moveCounter += 1;
+        if (this.moveCounter < this.moveCount) return;
+        this.moveCounter = 0;
+        const f = this.followers[this.arcSub];
+        if (!f) return;
+        // FUN_00520f04: a live target sends the follower to its position (ASSUMED y = 0).
+        const t = this.target(targets);
+        if (t) {
+          f.set(t.x, 0, t.z, this.followSpeed);
+        } else {
+          // ASSUMED: the exe's random point (FUN_0082dcbc / FUN_0082ddd8) is a random
+          // direction at a random distance up to 120 from the arena centre.
+          const r = this.rng() * BARBA_FOLLOW.radius;
+          const a = this.rng() * Math.PI * 2;
+          f.set(Math.cos(a) * r, 0, Math.sin(a) * r, this.followSpeed);
+        }
+        this.arcSub += 1;
+        if (this.arcSub < BARBA_FOLLOW.count) return;
+        this.moveCounter = 0;
+        this.moveSub = 2;
+        return;
+      }
+      case 2: {
+        this.moveCounter += 1;
+        if (this.followers.every((f) => f.arrived)) {
+          this.moveSub = 3;
+          return;
+        }
+        if (this.moveCounter > BARBA_FOLLOW.limit) this.moveSub = 3;
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  // Event 0 of 0x15 / 0x16 (asm 0x004b41ac): sub 0 swims, sub 1 rises to the water line.
+  private swimFrame(): void {
+    this.timer += 1;
+    if (this.moveSub === 0) {
+      // +0x744 += 256, truncated; clamped to 16384 (the speed compare, then the store).
+      const next = Math.trunc(this.f744 + BARBA_SWIM.speedStep);
+      const sp = next < BARBA_SWIM.speedMax ? next : BARBA_SWIM.speedMax;
+      this.f744 = sp;
+      this.f74c += BARBA_SWIM.vx;
+      this.f754 += BARBA_SWIM.vy;
+      this.f758 += BARBA_SWIM.vz;
+      this.x += this.f750 * this.f74c;
+      this.z -= this.f754;
+      this.lift -= this.f758;
+      this.setYaw(Math.trunc(-this.f750 * sp));
+      if (this.moveCounter === 0 && sp >= BARBA_SWIM.speedSe) {
+        this.moveCounter = 1; // 0x734: the 0x3ed sound once
+        this.events.push({ kind: 'se', id: 0x3ed });
+      }
+      if (this.lift < BARBA_SWIM.exitLift) {
+        // Exit: back to the side anchor, the lift at -137, sub-state 1.
+        this.moveSub = 1;
+        this.teleport(this.side);
+        this.lift = BARBA_SWIM.exitLift;
+        this.f758 = 0;
+        this.setSlot(1);
+        this.flags = (this.flags & ~4) | 0x100;
+      }
+      return;
+    }
+    if (this.moveSub === 1) {
+      // The rise: lift += 2.0 until 0.0, then sub 2 (done).
+      const next = this.lift + BARBA_SWIM.rise;
+      if (next < 0) {
+        this.lift = next;
+      } else {
+        this.moveSub = 2;
+        this.lift = 0;
+      }
+    }
+  }
+
+  // FUN_004b1c94: the lift returns to 0 by 0.4 a tick.
+  private pullLift(): void {
+    if (this.lift > LIFT_STEP) this.lift -= LIFT_STEP;
+    else if (this.lift < -LIFT_STEP) this.lift += LIFT_STEP;
+    else this.lift = 0;
+  }
+
+  // Event 0 of 0x0ee0 (asm 0x004b0ee0): sub-state 0 waits one frame (ASSUMED: the
+  // +0xb0 bit 2 wait is not held), then the arc sub-states 0..6 by the timer marks.
+  private arcFrame(): void {
+    this.timer += 1;
+    if (this.moveSub === 0) {
+      this.moveSub = 1;
+      return;
+    }
+    switch (this.arcSub) {
+      case 0:
+        if (this.timer >= 10) {
+          this.arcSub = 1;
+          this.f75c = (65 / 20) * this.f74c; // 0x906fd8 / 0xa47a78
+        }
+        break;
+      case 1:
+        if (this.timer >= 20) {
+          this.arcSub = 2;
+          this.f75c = (-90 / 16) * this.f74c; // 0x906fe0 / 0xa47a74
+          // 0x906fa0 = 270, the z term of the second velocity.
+          this.f760 = ((16 + 56.67) * -this.f758 + 270 - this.z) / ((0.5 * 16 + 56.67) * 16);
+        }
+        break;
+      case 2:
+        if (this.timer >= 28) {
+          this.arcSub = 3;
+          // FUN_004b1de4 is 0.0 (its local_c is never written): the target height is 0.
+          const t = (0 - this.f750) / 2.5;
+          this.f750 = t;
+          this.f754 = (t * 2) / 56.67;
+          this.f75c = (-370 / 56.67) * this.f74c; // 0x906fe4 / 0xa47a70
+          this.moveCounter = 0;
+        }
+        break;
+      case 3:
+        if (this.timer >= 45) {
+          this.arcSub = 4;
+          this.f75c = (-30 / 2) * this.f74c; // 0x907000 / 0xa47a6c
+          // FUN_00434ac4(7.0, |25 - z|, 0.2, 0.05): the arc's easing (ASSUMED decel guard).
+          this.arc = new DrlEasing(7, Math.max(Math.abs(25 - this.z), 1e-3), 0.2, 0.05);
+          this.f758 = this.z;
+        }
+        break;
+      case 4:
+        if (this.timer >= 70) {
+          this.arcSub = 5;
+          this.f75c = ((-175 - this.x * this.f74c) / 36) * this.f74c; // 0x906fb4 / 0xa47a68
+        }
+        break;
+      case 5:
+        if (this.timer >= 64) this.arcSub = 6; // 0x906fbc
+        break;
+      default:
+        break;
+    }
+    // The per-sub writes (after the switch, as the exe).
+    switch (this.arcSub) {
+      case 0:
+        this.f758 -= BARBA_SWIM.vy; // 0x906f64 = 0.2
+        this.z += this.f758;
+        break;
+      case 1:
+        this.x += this.f75c;
+        this.z += this.f758;
+        break;
+      case 2: {
+        const old = this.f758;
+        this.x += this.f75c;
+        this.f758 = old + this.f760;
+        this.z = this.z + (old + this.f760);
+        this.f750 = 0;
+        break;
+      }
+      case 3:
+        this.x += this.f75c;
+        this.timer -= 0.5 - 0.3; // 0x906f68 - 0xa47a7c = 0.2
+        this.lift += this.f750;
+        this.f750 -= this.f754;
+        this.z += this.f758;
+        break;
+      case 4:
+      case 5:
+        this.x += this.f75c;
+        this.pullLift();
+        this.arcStep();
+        this.z = this.f758 - (this.arc?.pos ?? 0);
+        break;
+      case 6: {
+        this.pullLift();
+        const st = this.arcStep();
+        if (st === 3) this.moveSub = 2; // FUN_0042cdc0 returns 3: done, the table goes on
+        this.z = this.f758 - (this.arc?.pos ?? 0);
+        if (this.slot === 1) this.flags |= 0x100;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // One tick of the arc's easing (FUN_0042cdc0, ASSUMED to be the DrlEasing); 0 without it.
+  private arcStep(): number {
+    return this.arc ? this.arc.tick() : 0;
   }
 
   // Event 0 of 0x1c (the frame): the cut timers (FUN_007aaa30 is a timer
@@ -625,14 +1004,27 @@ export class BarbaRayAi extends BrainBase {
     this.applyPhase(phase, null);
   }
 
-  // The state's own frame (event 0). Decoded: 0x1c, 0x1d, 0x1b, the spawner.
-  private stateFrame(): void {
+  // The state's own frame (event 0). Decoded: 0x1c, 0x1d, 0x1b, the spawner, and the
+  // movement of 0x13 / 0x14, 0x15 / 0x16 and 0x5 / 0x6.
+  private stateFrame(targets: readonly AiTarget[]): void {
     switch (this.phase) {
       case BARBA_PHASE.finale:
         this.finaleFrame();
         return;
       case BARBA_PHASE.timed:
         this.timedFrame();
+        return;
+      case BARBA_PHASE.run0:
+      case BARBA_PHASE.run2:
+        this.followerFrame(targets);
+        return;
+      case BARBA_PHASE.wall0:
+      case BARBA_PHASE.wall2:
+        this.swimFrame();
+        return;
+      case 5:
+      case 6:
+        this.arcFrame();
         return;
       default:
         if (this.phase >= BARBA_PHASE.spawn0 && this.phase <= BARBA_PHASE.spawn2) this.spawnFrame();
@@ -650,12 +1042,12 @@ export class BarbaRayAi extends BrainBase {
   // exit advance after BARBA_DWELL ticks with the table loop (ASSUMED), so
   // the brain never hangs. Followers only apply the leader's messages.
   tick(targets: readonly AiTarget[], animationEnded?: boolean): AiFrame {
-    void targets;
     const frame = this.out;
     frame.motion = null;
     if (this.dead) return this.finish(frame);
     const before = this.current;
-    this.stateFrame();
+    this.stateFrame(targets);
+    for (const f of this.followers) f.step();
     if (this.leader() && !this.dead) {
       if (this.phase === BARBA_PHASE.finale) {
         this.doneCheck();

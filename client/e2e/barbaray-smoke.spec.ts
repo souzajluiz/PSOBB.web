@@ -149,6 +149,10 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
   const hitParts = new Set<number>();
   // The Pig Rays (combat/barbaminion.ts) alive at each sample; the spawner's first count is 5.
   let pigsMax = 0;
+  // The body's place (the root's x / z) per sample: the movement of 0x15 / 0x0ee0 and the 0x13 side entries.
+  let bodyMoves = 0;
+  const bodyPlaces = new Set<string>();
+  let prevPlace = `${b0.x.toFixed(1)},${b0.z.toFixed(1)}`;
   let last = b0;
   // ~60 s, half a second apart: no damage for the first 30 s, then the parts are struck.
   for (let i = 0; i < 120; i++) {
@@ -162,6 +166,10 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
     slots.add(s.slot);
     if (s.phase !== prev) phaseChanges++;
     prev = s.phase;
+    const place = `${s.x.toFixed(1)},${s.z.toFixed(1)}`;
+    bodyPlaces.add(place);
+    if (place !== prevPlace) bodyMoves++;
+    prevPlace = place;
     if (i === 60 && !struck) {
       struck = true;
       for (let p = 0; p < 4; p++) for (const q of await strikePart(page, b0, p, logs)) hitParts.add(q);
@@ -170,10 +178,14 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
   }
   console.log(`barbaray ${JSON.stringify({ phases: [...phases], slots: [...slots], phaseChanges, last: { ...last, parts: last.parts.slice(0, 4) } })}`);
   console.log(`barbaray b0 ${JSON.stringify({ shell: b0.shell, body: b0.body, parts: b0.parts.slice(0, 4) })}`);
+  console.log(`barbaray body ${JSON.stringify({ moves: bodyMoves, places: bodyPlaces.size, first: [b0.x, b0.z], last: [last.x, last.z] })}`);
   await page.screenshot({ path: info.outputPath('barbaray-floor14.png') });
 
   const damaged = last.parts.filter((p, i) => p < b0.parts[i]!).length;
   expect(phaseChanges, 'the phases change with no damage over ~60 s').toBeGreaterThan(1);
+  // The body moves (the side entries, the swim and the arc change x / z) while the phases change.
+  expect(bodyMoves, 'the body position changes across the phases').toBeGreaterThan(0);
+  expect(bodyPlaces.size, 'the body is in more than one place over the fight').toBeGreaterThan(1);
   // The spawner's Pig Rays appear (the minion's kill and body movement are not yet checked).
   console.log(`barbaray pigs ${JSON.stringify({ pigsMax })}`);
   expect(pigsMax, 'the spawner brings Pig Rays into the fight').toBeGreaterThan(0);

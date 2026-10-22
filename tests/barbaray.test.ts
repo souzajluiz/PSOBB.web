@@ -21,8 +21,12 @@ import {
   barbaPigMode,
   BARBA_PHASE,
   BARBA_ROW_PARK,
+  BARBA_FOLLOW,
+  BARBA_SIDE_ENTRY,
   BARBA_SLOTS,
+  BARBA_SWIM,
   BARBA_TABLES,
+  BarbaFollower,
   BarbaPartAi,
   BarbaRayAi,
   barbaResolve,
@@ -474,6 +478,227 @@ const pigEvents = (b: PigRayAi, out: PigEvent[]) => out.push(...b.drain());
   eq(p.dead, true, 'pig: dead after the death countdown');
   eq(ev.filter((e) => e.kind === 'dead').length, 1, 'pig: one dead event');
   check(ev.some((e) => e.kind === 'effect' && e.id === PIG_FX.deathA) && ev.some((e) => e.kind === 'effect' && e.id === PIG_FX.deathB), 'pig: death sparks 0x20d / 0x20e');
+}
+
+// --- body movement (asm 0x004b1e58, 0x004b416c, 0x004b41ac, 0x004b3c2c, 0x004b0ee0) ---
+
+const near = (a: number, b: number, msg: string) => check(Math.abs(a - b) < 1e-6, `${msg}: got ${a}, want ${b}`);
+const finite = (b: BarbaRayAi) => Number.isFinite(b.x) && Number.isFinite(b.z) && Number.isFinite(b.lift) && Number.isFinite(b.yaw);
+const runTicks = (b: BarbaRayAi, n: number) => {
+  for (let i = 0; i < n; i++) b.tick([]);
+};
+{
+  // Teleports: every anchor lands at its (x, y, z); the lift and heading reset; inside the arena.
+  const b = brain({ leader: false });
+  for (let i = 0; i < BARBA_ANCHORS.length; i++) {
+    const w = b.warps;
+    b.teleport(i);
+    const a = BARBA_ANCHORS[i]!;
+    eq(b.x, a[0], `teleport ${i}: x`);
+    eq(b.y, a[1], `teleport ${i}: y`);
+    eq(b.z, a[2], `teleport ${i}: z`);
+    eq(b.warps, w + 1, `teleport ${i}: warps`);
+    check(Math.abs(b.x) <= 205 && Math.abs(b.z) <= 528, `teleport ${i}: inside the arena`);
+  }
+  b.lift = 9;
+  b.teleport(0);
+  eq(b.lift, 0, 'teleport zeroes the lift');
+  eq(b.yaw, 0, 'teleport zeroes the heading');
+}
+{
+  // Side entry (0x004b416c) from the 0x13 enter: side 0 at x -100 heading +0x500, side 1 at +100 heading -0x500.
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(BARBA_PHASE.run0, null);
+  eq(b.x, -BARBA_SIDE_ENTRY.x, '0x13 side 0: x -100');
+  eq(b.z, BARBA_SIDE_ENTRY.z, '0x13 side 0: z 10');
+  eq(b.lift, BARBA_SIDE_ENTRY.lift, '0x13 side 0: lift 4');
+  eq(b.yaw, 0x500, '0x13 side 0: heading +0x500');
+  eq(b.slot, 9, '0x13 side 0: slot 9');
+  const c = brain();
+  c.side = 1;
+  c.applyPhase(BARBA_PHASE.run2, null);
+  eq(c.x, BARBA_SIDE_ENTRY.x, '0x14 side 1: x +100');
+  eq(c.yaw, -0x500, '0x14 side 1: heading -0x500');
+  eq(c.slot, 10, '0x14 side 1: slot 10');
+  // The root stands still while the followers work (0x13 moves no body).
+  const x0 = b.x;
+  runTicks(b, 60);
+  eq(b.x, x0, '0x13: the body does not move in the wait');
+}
+{
+  // Path followers (0x13): 41 wait ticks, then one target every 180 ticks, then the arrival wait.
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(BARBA_PHASE.run0, null);
+  runTicks(b, 40);
+  eq(b.moveSub, 0, 'followers: the wait holds for 41 ticks');
+  runTicks(b, 1);
+  eq(b.moveSub, 1, 'followers: sub 1 after the 41-tick wait');
+  runTicks(b, 179);
+  eq(b.followers[0]!.moving, false, 'followers: no target before the 180-tick interval');
+  runTicks(b, 1);
+  check(b.followers[0]!.moving && b.followers[0]!.speed === 120, 'followers: follower 0 sent at 180 ticks, speed 120');
+  eq(b.arcSub, 1, 'followers: the next index');
+  // rng 0.5: the random point is 60 out at angle pi, i.e. (-60, 0, ~0), within 120 of the centre.
+  near(b.followers[0]!.tx, -60, 'followers: random point x (120 * 0.5, angle pi)');
+  check(Math.hypot(b.followers[0]!.tx, b.followers[0]!.tz) <= BARBA_FOLLOW.radius + 1e-9, 'followers: random point within 120');
+  runTicks(b, 180 * 3);
+  eq(b.moveSub, 2, 'followers: all four sent, then the arrival wait');
+  runTicks(b, 30);
+  check(b.followers.every((f) => f.arrived), 'followers: all four arrive');
+  runTicks(b, 1);
+  eq(b.moveSub, 3, 'followers: sub 3 once they arrive');
+}
+{
+  // A live player target takes the followers to its position (FUN_00520f04).
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.targetId = 2;
+  b.applyPhase(BARBA_PHASE.run0, null);
+  const targets = [{ clientId: 2, x: 50, z: -30, charClass: 0, dead: false }];
+  for (let n = 0; n < 41 + 180; n++) b.tick(targets);
+  eq(b.followers[0]!.tx, 50, 'followers: the player target x');
+  eq(b.followers[0]!.tz, -30, 'followers: the player target z');
+}
+{
+  // Follower speed: 1..599 is kept, anything else is 120 (FUN_004bd190).
+  const f = new BarbaFollower();
+  f.set(0, 0, 0, 0);
+  eq(f.speed, 120, 'follower speed 0 -> 120');
+  f.set(0, 0, 0, 600);
+  eq(f.speed, 120, 'follower speed 600 -> 120');
+  f.set(0, 0, 0, 599);
+  eq(f.speed, 599, 'follower speed 599 kept');
+}
+{
+  // Swim (0x15, side 0): the first frame's numbers from the asm.
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(BARBA_PHASE.wall0, null);
+  eq(b.f750, -1, 'swim side 0: dir -1');
+  eq(b.f758, BARBA_SWIM.vz0, 'swim: vz starts at -1');
+  eq(b.f744, BARBA_SWIM.speed0, 'swim: speed 0x500');
+  check((b.flags & 4) !== 0, 'swim: gate block on');
+  b.tick([]);
+  eq(b.f744, 1536, 'swim frame 1: speed +256');
+  near(b.f74c, 0.08, 'swim frame 1: vx += 0.08');
+  near(b.f754, 0.2, 'swim frame 1: vy += 0.2');
+  near(b.f758, -0.9, 'swim frame 1: vz += 0.1');
+  near(b.x, -100.08, 'swim frame 1: x += dir * vx');
+  near(b.z, 9.8, 'swim frame 1: z -= vy');
+  near(b.lift, 4.9, 'swim frame 1: lift -= vz');
+  eq(b.yaw, 1536, 'swim frame 1: heading -dir * speed');
+  eq(b.y, 0, 'swim: the height (+0x3c) is not touched');
+}
+{
+  // Swim bounds: the speed clamps at 16384, the body leaves by a teleport at lift < -137,
+  // the rise brings the lift back to 0.
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(BARBA_PHASE.wall0, null);
+  let exitAt = -1;
+  let speedAt = -1;
+  for (let n = 1; n <= 150; n++) {
+    const w = b.warps;
+    b.tick([]);
+    if (speedAt < 0 && b.f744 === BARBA_SWIM.speedMax) speedAt = n;
+    check(b.f744 <= BARBA_SWIM.speedMax, `swim: speed <= 16384 at frame ${n}`);
+    check(finite(b), `swim: finite at frame ${n}`);
+    if (b.warps > w && exitAt < 0) {
+      exitAt = n;
+      eq(b.x, BARBA_ANCHORS[0]![0], 'swim exit: teleported to anchor 0 (x)');
+      eq(b.z, BARBA_ANCHORS[0]![2], 'swim exit: teleported to anchor 0 (z)');
+      eq(b.lift, BARBA_SWIM.exitLift, 'swim exit: lift at -137 after the teleport');
+      eq(b.slot, 1, 'swim exit: slot 1 (idle)');
+      eq(b.moveSub, 1, 'swim exit: sub 1 (rise)');
+    }
+  }
+  eq(speedAt, 59, 'swim: speed reaches the 16384 clamp at frame 59');
+  check(exitAt > 55 && exitAt < 70, `swim: lift falls below -137 around frame 63 (got ${exitAt})`);
+  eq(b.moveSub, 2, 'swim: the rise ends (sub 2)');
+  eq(b.lift, 0, 'swim: lift back at 0 after the rise');
+}
+{
+  // Side 1 swim: dir +1, the body goes to +x, the heading is negative.
+  const b = brain({ leader: false });
+  b.side = 1;
+  b.applyPhase(BARBA_PHASE.wall2, null);
+  eq(b.f750, 1, 'swim side 1: dir +1');
+  eq(b.x, BARBA_SIDE_ENTRY.x, 'swim side 1: starts at +100');
+  eq(b.slot, 10, 'swim side 1: slot 10');
+  b.tick([]);
+  near(b.x, 100.08, 'swim side 1: x += dir * vx');
+  eq(b.yaw, -1536, 'swim side 1: heading -1536');
+}
+{
+  // Leave of the swim clears the gate block (+0x630 bit 2).
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(BARBA_PHASE.wall0, null);
+  check((b.flags & 4) !== 0, 'swim enter sets the gate block');
+  b.applyPhase(BARBA_PHASE.run0, null);
+  eq(b.flags & 4, 0, 'swim leave clears the gate block');
+}
+{
+  // Arc (phase 5, side 0, asm 0x004b0ee0): the enter teleports to anchor 0; the sub-states
+  // follow the timer marks 10 / 20 / 28 / 45 / 70 (64 is already past at sub 5).
+  const b = brain({ leader: false });
+  b.side = 0;
+  b.applyPhase(5, null);
+  eq(b.slot, 5, 'arc side 0: slot 5');
+  eq(b.f74c, -1, 'arc side 0: dir -1');
+  eq(b.x, BARBA_ANCHORS[0]![0], 'arc enter: anchor 0 x');
+  eq(b.z, BARBA_ANCHORS[0]![2], 'arc enter: anchor 0 z');
+  b.tick([]);
+  eq(b.moveSub, 1, 'arc: the wait is one frame');
+  let n = 0;
+  while (b.arcSub === 0 && n < 50) {
+    b.tick([]);
+    n++;
+  }
+  eq(b.arcSub, 1, 'arc: sub 1 at timer 10');
+  near(b.f75c, (65 / 20) * -1, 'arc sub 1: vx = (65/20) * dir');
+  while (b.arcSub === 1 && n < 80) {
+    b.tick([]);
+    n++;
+  }
+  eq(b.arcSub, 2, 'arc: sub 2 at timer 20');
+  near(b.f75c, (-90 / 16) * -1, 'arc sub 2: vx = (-90/16) * dir');
+  while (b.arcSub === 2 && n < 120) {
+    b.tick([]);
+    n++;
+  }
+  eq(b.arcSub, 3, 'arc: sub 3 at timer 28');
+  while (b.arcSub === 3 && n < 160) {
+    b.tick([]);
+    n++;
+  }
+  eq(b.arcSub, 4, 'arc: sub 4 at timer 45');
+  check(b.arc !== null, 'arc sub 4: the easing (0x00434ac4) is set');
+  near(b.f75c, (-30 / 2) * -1, 'arc sub 4: vx = (-30/2) * dir');
+  while (b.arcSub === 4 && n < 220) {
+    b.tick([]);
+    n++;
+    check(finite(b), `arc: finite at tick ${n}`);
+  }
+  eq(b.arcSub, 5, 'arc: sub 5 at timer 70');
+  while (b.moveSub === 1 && n < 400) {
+    b.tick([]);
+    n++;
+    check(Math.abs(b.x) < 1000 && Math.abs(b.z) < 2000, `arc: bounded at tick ${n}`);
+  }
+  eq(b.moveSub, 2, 'arc: done (sub 6 returns 3) after the timer passes 70');
+}
+{
+  // Arc on side 1 teleports to anchor 1 (0, 7, 500) and runs dir +1.
+  const b = brain({ leader: false });
+  b.side = 1;
+  b.applyPhase(6, null);
+  eq(b.slot, 6, 'arc side 1: slot 6');
+  eq(b.f74c, 1, 'arc side 1: dir +1');
+  eq(b.x, BARBA_ANCHORS[1]![0], 'arc side 1: anchor 1 x');
+  eq(b.z, BARBA_ANCHORS[1]![2], 'arc side 1: anchor 1 z');
 }
 
 void BARBA_PHASE;
