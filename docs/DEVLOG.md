@@ -1,75 +1,5 @@
 # Devlog
 
-## 2026-10-22: Ranged attacks face their primary target; real-input check of guns
-
-**Report:** "weapon shots don't work and deal no damage" (production). Not
-reproduced on main with the auto-attack replaced by `c.press(0)` (enemies
-placed dead ahead): Handgun, Shot, Rifle and Mechgun all hit and damage
-(`e2e/ranged-repro`, webgun account, local newserv, Node 24 Playwright).
-
-**Real input (`e2e/ranged-input`, temporary, not committed):** keyboard
-ArrowDown and the touch Palette-middle button (`pointerdown` / `pointerup`
-on `[title="Palette middle (Down)"]`) both send 6x43, a 6x46 with the target,
-and the hit. Nearest enemy 60 units away, Handgun (reach 170 + 30, 10 degree
-cone):
-
-```
-case off 0 dy 0 keyboard: ... 6x43 angle(BAMS) 41050 ; 6x46 targets 1 ; hit E-69 dmg 11.3 hp 92 -> 81
-case off 0 dy 0 touch:    ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 11.7 hp 81 -> 69
-case off 8 dy 0 keyboard: ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 10.7 hp 69 -> 58
-case off 25 dy 0 keyboard: ... 6x43 angle(BAMS) 45648 (no 6x46: outside the cone)
-case off 45 dy 0 keyboard: ... 6x43 angle(BAMS) 49288 (no 6x46)
-case off 0 dy 30 keyboard: ... hit E-69 dmg 10.6 hp 58 -> 47
-case off 0 dy 60 keyboard: ... 6x43 only (outside the vertical reach)
-errors: none
-1 passed (54.3s)
-```
-
-**Found (PsoBB.exe, refsrc `Psobb.exe-05112026.c`):**
-
-- `dispatch_action_attack_step1` (0x006a0f58): the attack angle faces the
-  primary target (`get_player_primary_target_position` = the nearest reticle
-  target, `update_player_targeting_info` 0x00588704) and the heading only when
-  there is none. The port always sent the heading. **Fixed:** `startAttack`
-  turns to the primary target before the 6x43.
-- The reticle cone (`check_enemy_is_targetable`, 0x007a2b28) is centred on the
-  heading with half angle `horizontal_angle` (cos compare), so the port's 10
-  degree handgun cone matches; a lock does not widen it. An enemy 25 degrees
-  off is not a target in the exe either (ASSUMED: the cone half angle reading).
-- `check_enemy_is_targetable` adds each hitbox radius to the reach and tests
-  the weapon position (the hand), not the feet; the port uses the origin and no
-  radius for ordinary enemies. Not changed (ASSUMED; needs hitbox data).
-- The exe's vertical test uses `vertical_angle_cos` on a 3D direction; the
-  port only checks |dy| <= 40. Not changed (threshold globals not decoded).
-- A gun shot is a bullet object (`create_gun_bullet_particle_effect`,
-  0x005e4678; `unknown_gun_bullet_constructor` / `WeaponProjectileConstructor_005c731c`):
-  a muzzle particle (id 9) at the hand, then the bullet flies for
-  `frame_count` frames and hits on arrival (`gun_bullet_collision_check`).
-  Arrival misses a target that moved past `g_WeaponBulletCollisionRadiusSq`
-  from its position at the shot ("manual evasion"), and a map wall on the ray
-  stops the shot. **Not ported:** the port draws no muzzle or bullet for guns
-  (nothing in `client/src` is drawn for a gun shot; the hit is instant and
-  never misses for movement or walls). These are the likely "shots don't
-  show" and over-hit gaps; a follow-up needs the bullet model.
-- Mechgun: one hit per combo; the exe fires bursts (see attack.ts header).
-
-**Fix:** `client/src/combat/weaponaim.ts` (new: `coneOffset`, `inWeaponCone`,
-`facingOf`); `client/src/render/combat.ts`: `weaponTargets(attackType, from)`
-(the target selection of `resolveHit`, nearest first) and `startAttack` faces
-the primary target before `sendAttack`. Melee uses the same reticle path in
-the exe (`dispatch_action_attack_step1` runs for every weapon), so melee facing
-also snaps to the nearest target within its cone: not yet checked live.
-
-**Checks:**
-
-- `npx tsc --noEmit -p .` (client): exit 0.
-- `node tests/rangedaim.test.ts`: `rangedaim: all checks passed`
-- `node tests/combat.test.ts`: `5946 checks, 0 failures`
-- `node tests/combatdepth.test.ts`: `824 checks, 0 failures`
-- `node tests/specials.test.ts`: `specials: all checks passed`
-- `node tests/buffs.test.ts`: `buffs: all checks passed`
-- Live: the input run above, after the fix.
-
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB
@@ -8494,3 +8424,115 @@ Closes the open item of the 10-21 entry: the pivots and yaws of APP TYPE2, DIE T
 **UNCLEAR.** The identity of Z (create 0x00459820). The BSS fallbacks 0x00A44D9C / 0x00A44D88 (their values are not read: the port returns null). The time unit (as before). Why DEMO_WARP0's view is dark (above). Which state of the brain runs the DIE TYPE2 setup before GET RING / DEMO_WARP2 in each difficulty (the port must keep the brain's last pivot).
 
 **Decisive spot-check (for a human, in the exe bytes).** 0x0044E14E: `mov dword [0x00A44D98], 0x42960000` (75.0), together with the normalize-and-subtract at 0x0044E1A3..0x0044E1C6. If the brain's +0x3A4 is not the entity X minus 75 x/|xz|, the DIE TYPE2 pivot and the GET RING / DEMO_WARP2 pivots are wrong.
+
+## 2026-10-22: Ranged attacks face their primary target; real-input check of guns
+
+**Report:** "weapon shots don't work and deal no damage" (production). Not
+reproduced on main with the auto-attack replaced by `c.press(0)` (enemies
+placed dead ahead): Handgun, Shot, Rifle and Mechgun all hit and damage
+(`e2e/ranged-repro`, webgun account, local newserv, Node 24 Playwright).
+
+**Real input (`e2e/ranged-input`, temporary, not committed):** keyboard
+ArrowDown and the touch Palette-middle button (`pointerdown` / `pointerup`
+on `[title="Palette middle (Down)"]`) both send 6x43, a 6x46 with the target,
+and the hit. Nearest enemy 60 units away, Handgun (reach 170 + 30, 10 degree
+cone):
+
+```
+case off 0 dy 0 keyboard: ... 6x43 angle(BAMS) 41050 ; 6x46 targets 1 ; hit E-69 dmg 11.3 hp 92 -> 81
+case off 0 dy 0 touch:    ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 11.7 hp 81 -> 69
+case off 8 dy 0 keyboard: ... 6x43 angle(BAMS) 41096 ; 6x46 targets 1 ; hit E-69 dmg 10.7 hp 69 -> 58
+case off 25 dy 0 keyboard: ... 6x43 angle(BAMS) 45648 (no 6x46: outside the cone)
+case off 45 dy 0 keyboard: ... 6x43 angle(BAMS) 49288 (no 6x46)
+case off 0 dy 30 keyboard: ... hit E-69 dmg 10.6 hp 58 -> 47
+case off 0 dy 60 keyboard: ... 6x43 only (outside the vertical reach)
+errors: none
+1 passed (54.3s)
+```
+
+**Found (PsoBB.exe, refsrc `Psobb.exe-05112026.c`):**
+
+- `dispatch_action_attack_step1` (0x006a0f58): the attack angle faces the
+  primary target (`get_player_primary_target_position` = the nearest reticle
+  target, `update_player_targeting_info` 0x00588704) and the heading only when
+  there is none. The port always sent the heading. **Fixed:** `startAttack`
+  turns to the primary target before the 6x43.
+- The reticle cone (`check_enemy_is_targetable`, 0x007a2b28) is centred on the
+  heading with half angle `horizontal_angle` (cos compare), so the port's 10
+  degree handgun cone matches; a lock does not widen it. An enemy 25 degrees
+  off is not a target in the exe either (ASSUMED: the cone half angle reading).
+- `check_enemy_is_targetable` adds each hitbox radius to the reach and tests
+  the weapon position (the hand), not the feet; the port uses the origin and no
+  radius for ordinary enemies. Not changed (ASSUMED; needs hitbox data).
+- The exe's vertical test uses `vertical_angle_cos` on a 3D direction; the
+  port only checks |dy| <= 40. Not changed (threshold globals not decoded).
+- A gun shot is a bullet object (`create_gun_bullet_particle_effect`,
+  0x005e4678; `unknown_gun_bullet_constructor` / `WeaponProjectileConstructor_005c731c`):
+  a muzzle particle (id 9) at the hand, then the bullet flies for
+  `frame_count` frames and hits on arrival (`gun_bullet_collision_check`).
+  Arrival misses a target that moved past `g_WeaponBulletCollisionRadiusSq`
+  from its position at the shot ("manual evasion"), and a map wall on the ray
+  stops the shot. **Not ported:** the port draws no muzzle or bullet for guns
+  (nothing in `client/src` is drawn for a gun shot; the hit is instant and
+  never misses for movement or walls). These are the likely "shots don't
+  show" and over-hit gaps; a follow-up needs the bullet model.
+- Mechgun: one hit per combo; the exe fires bursts (see attack.ts header).
+
+**Fix:** `client/src/combat/weaponaim.ts` (new: `coneOffset`, `inWeaponCone`,
+`facingOf`); `client/src/render/combat.ts`: `weaponTargets(attackType, from)`
+(the target selection of `resolveHit`, nearest first) and `startAttack` faces
+the primary target before `sendAttack`. Melee uses the same reticle path in
+the exe (`dispatch_action_attack_step1` runs for every weapon), so melee facing
+also snaps to the nearest target within its cone: not yet checked live.
+
+**Checks:**
+
+- `npx tsc --noEmit -p .` (client): exit 0.
+- `node tests/rangedaim.test.ts`: `rangedaim: all checks passed`
+- `node tests/combat.test.ts`: `5946 checks, 0 failures`
+- `node tests/combatdepth.test.ts`: `824 checks, 0 failures`
+- `node tests/specials.test.ts`: `specials: all checks passed`
+- `node tests/buffs.test.ts`: `buffs: all checks passed`
+- Live: the input run above, after the fix.
+
+## 2026-10-22: Phone login: tall stage and an HTML form for the Input UserID window
+
+**What changed:** On a phone (fit mode, coarse pointer) the title screen is a
+3:4 box in portrait. The whole 640x480 screen is scaled to the box width
+(`tallLayout` in `classic/stage.ts`, nothing cropped), centred vertically, and
+the bars above and below are filled with the title's own background tiles,
+dimmed (`Screen.drawBackdrop`). The Input UserID window is an HTML form
+(`classic/loginform.ts`, `loginform.css`): User ID, Password (masked, 16 max,
+18 px text), Confirm and Cancel, over the title. Enter in the User ID moves to
+the password; Enter in the password submits. The form is placed in the visual
+viewport, so the on-screen keyboard does not hide it. The form's result goes
+to the same `InputUserIdWindow` as the canvas editor (`submitForm` /
+`cancelForm` in `titleflow.ts`): the Login menu and the login after it are
+unchanged. The top strip of fullscreen and mute sits at the box's top-right
+corner on the tall stage (`webcontrols.ts`, opts.tall).
+
+**Why:** on a 390 px portrait phone the stage was a 4:3 box 292 px high, so the
+Input UserID window was about 219 px wide and its text about 0.61x: too small to
+type into.
+
+**Decisions:**
+- Only the title (login flow) uses the tall stage. Character select and
+  character creation keep their `left43` layout, which is still 4:3 and small
+  on a phone in portrait. That is a follow-up, not changed here.
+- Desktop and landscape are unchanged: the tall branch needs `phoneLayout`
+  (set only with fit mode) and a portrait canvas; the form is created only in
+  fit mode.
+- The backdrop bars use the title's tiles dimmed, not a plain fill.
+- Button labels are the game's own unitxt texts ("Confirm", "Cancel").
+
+**Checks.** `npx tsc --noEmit -p .` in client (Node 24): clean.
+`npx playwright test e2e/phone-login.spec.ts` (6 tests, iPhone 13 / Pixel 7 /
+landscape / desktop emulation): 6 passed. The real login through the form
+(webtest/webtest against newserv via the bridge) reaches character select.
+
+**ASSUMED.** Chrome's device emulation stands in for a real phone; the soft
+keyboard is emulated by a shorter viewport, not a real keyboard.
+
+**UNCLEAR.** Desktop pixel identity: HEAD does not reproduce its own
+screenshots frame by frame (the title animation is not fully frozen by `?t=`),
+so the desktop check is by code path, not by a pixel diff.

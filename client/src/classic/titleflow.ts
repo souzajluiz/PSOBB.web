@@ -335,6 +335,25 @@ export class InputUserIdWindow {
     this.key('enter');
   }
 
+  // The phone's HTML form (classic/loginform.ts) hands over its fields: the same
+  // fields the editors would give (spaces dropped, printable ASCII, 16 max),
+  // then Confirm / Cancel as the canvas does.
+  submitForm(user: string, password: string): void {
+    if (this.result) return;
+    this.user = editedUser(user);
+    this.password = [...password].filter((c) => c >= ' ' && c <= '~').join('').slice(0, MAX_PASSWORD);
+    this.passwordShown = mask(this.password.length, MASK_ENTERED);
+    if (!this.confirmEnabled) return;
+    this.result = 'ok';
+    this.se(SE_OK);
+  }
+
+  cancelForm(): void {
+    if (this.result) return;
+    this.result = 'cancel';
+    this.se(SE_CANCEL);
+  }
+
   // Row values while not editing (the edited row is blank: the editor draws).
   values(): [string, string] {
     return [this.editor?.field === 0 ? '' : this.user, this.editor?.field === 1 ? '' : this.passwordShown];

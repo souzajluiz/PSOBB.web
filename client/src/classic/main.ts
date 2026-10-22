@@ -32,7 +32,8 @@ import { CharSelectScreen, type CharSelectAssets } from './charselect.ts';
 import { SelectPreview } from './charselect_preview.ts';
 import { clearGameTextCache, GAME_TEXT } from './gametext.ts';
 import { CharaFiles } from './playerview.ts';
-import { Stage, textureBitmaps, VH, VW, type Screen } from './stage.ts';
+import { Stage, tallLayout, textureBitmaps, VH, VW, type Screen } from './stage.ts';
+import { LoginForm } from './loginform.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
@@ -49,6 +50,8 @@ const canvas = document.getElementById('stage') as HTMLCanvasElement;
 const loader = new Loader();
 let softKeyboard: SoftKeyboard | null = null;
 const keyboardFocused = () => softKeyboard?.focused ?? false;
+// The current screen has the tall phone layout (Screen.phoneLayout).
+let stageTall = false;
 installNoZoom();
 // The native app: hide the status bar so the game is fullscreen (the web build
 // is fullscreen through the browser, ui/fullscreen.ts).
@@ -57,6 +60,7 @@ const fit = installStageFit({
   canvases: [canvas, document.getElementById('world') as HTMLCanvasElement],
   hint: document.getElementById('rotate') as HTMLElement,
   keyboardFocused: () => keyboardFocused(),
+  tall: () => stageTall,
   onBox: (box) => softKeyboard?.placeButton(box),
 });
 
@@ -583,7 +587,15 @@ async function main(): Promise<void> {
       patch: () => show(title),
       exit: () => (location.href = '/'),
     },
-    { episode4, version: VERSION, text: menuText, credentials: { user: savedUser(), password: '' } },
+    {
+      episode4,
+      version: VERSION,
+      text: menuText,
+      credentials: { user: savedUser(), password: '' },
+      // A phone (fit mode): the Input UserID window is the HTML form.
+      phone: fit.enabled,
+      form: fit.enabled ? new LoginForm({ parent: document.body, returnFocus: canvas }) : null,
+    },
   );
 
   let controls: WebControls | null = null;
@@ -592,6 +604,9 @@ async function main(): Promise<void> {
   function show(s: Screen): void {
     current = s;
     stage.show(s);
+    // The stage box follows the screen's layout (tall for the phone's title).
+    stageTall = s.phoneLayout === true;
+    fit.refresh();
     controls?.setPadSuppressed(s.touchPad === false);
     // The 3D canvas takes the pointer only where the screen asks (the field);
     // elsewhere the stage gets it as before.
@@ -639,6 +654,10 @@ async function main(): Promise<void> {
 
   const toVirtual = (e: MouseEvent) => {
     const r = canvas.getBoundingClientRect();
+    if (current.phoneLayout && r.height > r.width) {
+      const t = tallLayout(r.width, r.height);
+      return [(e.clientX - r.left - t.ox) / t.s, (e.clientY - r.top - t.oy) / t.s] as const;
+    }
     const vy = ((e.clientY - r.top) / r.height) * VH;
     const left43 = (current as { layout?: string }).layout === 'left43';
     const windowSpace = (current as { pointerSpace?: string }).pointerSpace === 'window';
@@ -677,7 +696,7 @@ async function main(): Promise<void> {
 
   referenceOverlay();
   // Fullscreen / mute buttons and the touch pad (browser conveniences).
-  controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below });
+  controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below, tall: () => stageTall });
   controls.setPadSuppressed(current.touchPad === false);
   // Landscape lock after the fullscreen button (Android Chrome; iOS has none).
   if (fit.enabled) controls.fullscreen.onChange((on) => lockLandscape(on));

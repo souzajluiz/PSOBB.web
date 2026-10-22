@@ -1,0 +1,128 @@
+/* The phone's "Input UserID" form (classic/loginform.ts). Large targets and
+   18px text: the inputs are 16px or more (iOS does not zoom into them). The
+   colours are the Login window's: teal panel, orange title pill. */
+.lf-root {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100vh;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+  font-family: Tahoma, Verdana, sans-serif;
+}
+.lf-root[hidden] {
+  display: none;
+}
+
+.lf-panel {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 30px 18px 18px;
+  border: 2px solid #7fd8e0;
+  border-radius: 10px;
+  background: linear-gradient(#0d4650, #06222a);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+
+.lf-title {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  margin: 0;
+  padding: 5px 20px;
+  border-radius: 18px;
+  background: linear-gradient(#ffb347, #e8650f);
+  color: #120400;
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.lf-row {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.lf-row input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 48px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid #4fb6c2;
+  border-radius: 6px;
+  background: #03141a;
+  color: #fff;
+  font: 18px Tahoma, Verdana, sans-serif;
+  caret-color: #8cff8c;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.lf-row input:focus {
+  outline: 2px solid #8cff8c;
+  outline-offset: 1px;
+}
+
+.lf-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.lf-buttons button {
+  height: 52px;
+  margin: 0;
+  border: 0;
+  border-radius: 26px;
+  font: bold 18px Tahoma, Verdana, sans-serif;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+.lf-ok {
+  background: linear-gradient(#ffb347, #e8650f);
+  color: #120400;
+}
+
+.lf-ok.lf-off {
+  background: linear-gradient(#8a8a8a, #5c5c5c);
+  color: #d8d8d8;
+}
+
+.lf-buttons .lf-cancel {
+  background: linear-gradient(#3a6f7a, #1d3d45);
+  color: #fff;
+  border: 1px solid #7fd8e0;
+}
+
+.lf-buttons button:active {
+  filter: brightness(0.85);
+}
+
+.lf-buttons button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
