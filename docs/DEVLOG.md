@@ -9108,3 +9108,59 @@ The FSM classes that ran on floors 3..11 (states of a first, shorter run, same b
 **Checks.** `npx playwright test e2e/ep2-floors-smoke.spec.ts` (PW_BASE_URL on vite 5199, newserv restarted by hand because it had stopped, the bridge on 8080 reused): 1 passed. `npx tsc --noEmit -p .` in client: clean. The gsl check: a node script over `data.gsl` with the client's `GSLArchive`.
 
 **Files.** `client/e2e/ep2-floors-smoke.spec.ts` (new). No source change.
+
+## 2026-10-22: Gal Gryphon brain: exe map (partial, no code change)
+
+Task: port the Episode 2 boss Gal Gryphon (area 0x1e, class TBoss5Gryphon, set type 0xc0) brain.
+This pass mapped the exe only. The brain is NOT ported: no `combat/` file, no wiring in
+`render/combat.ts`, no tests, no e2e. The map below lets the next pass start without re-reading
+the dump.
+
+**Verified (Ghidra on PsoBB.exe, raw analyzeHeadless with `tools/ghidra/Decompile.java`;
+`tools/ghidra/decomp.sh` printed nothing in this worktree).**
+- Constructor `0x004a67c0` (the `enemymodels.ts` comment agrees). It calls the shared Episode 2
+  enemy base ctor `0x005216f4` (the base of the Gee / Gibbles / Mericarol brains) and sets the
+  vtable `0x00af9d40`. The motion table is `0x009a7c80` (`this+0x144`). The ctor sets the state
+  (+0x32e) to 4 and calls that state's enter, so the fight starts in state 4.
+- Vtable `0x00af9d40` (the slots used here): +0x00 dtor `0x004a05fc`, +0x04 frame update
+  `0x004a70e0`, +0x100 flinch hook `0x0061cdb0` (no-op), +0x154 base update `0x0052164c`,
+  +0x15c transition `0x0051f5bc`, +0x164 ProcessState `0x004a85f0`, +0x168 per-frame hook
+  `0x004a0990`.
+- The dispatcher `0x004a85f0` calls `table[state](phase)`. The table is `0x009a7e40`: 35 entries
+  of `{fn, adj}` (8 bytes, adj always 0). State n uses handler: 0 `0x004a8e34` (empty),
+  1 `0x004a0d8c`, 2 `0x004a0dd8`, 3 `0x004a2744`, 4 `0x004a22b0`, 5 `0x004a2008`, 6 `0x004a1368`,
+  7 `0x004a1678`, 8 `0x004a19c8`, 9 `0x004a1a64`, 10 `0x004a1be0`, 11 `0x004a1d3c`,
+  12 `0x004a27c8`, 13 `0x004a2ae0`, 14 `0x004a344c`, 15 `0x004a36e4`, 16 `0x004a38f8`,
+  17 `0x004a3c08`, 18 `0x004a3f20`, 19 `0x004a4170`, 20 `0x004a4468`, 21 `0x004a44d0`,
+  22 `0x004a487c`, 23 `0x004a4a08`, 24 `0x004a4b9c`, 25 `0x004a4c20`, 26 `0x004a4cd8`,
+  27 `0x004a4d6c`, 28 `0x004a5530`, 29 `0x004a55c8`, 30 `0x004a5734`, 31 `0x004a5eec`,
+  32 `0x004a606c`, 33 `0x004a6120`, 34 `0x004a61bc`. Phase 4 = enter, 5 = leave, 0 = frame.
+- Frame update `0x004a70e0`: a flinch-busy flag (`+0x132 & 1`) returns early; then, on the
+  leader (`+0x13a == 1`), phase 0 of the state; otherwise phase 8 and then phase 0. Then the
+  vtable +0xac / +0xb0, the base update (+0x154), the hook (+0x168). The exact leader test
+  (`FUN_00520db8` / `FUN_00694cc8`) is not decoded yet.
+- Enter writes the animation id at `+0xb8` (short) and busy bits at `+0x132`. Observed:
+  state 1 anim 0; state 2 anim 1, busy 0x10; state 3 anim 0 and a counter at +0x6e4 that goes to
+  state 0xb after more than 0x96 frames while `FUN_0068d5a8` finds a player (ASSUMED: a player in
+  range); state 4 (the entrance, the initial state) anim 0x19, +0x4ec = 1; state 5 anim 0x1a,
+  flags 0xc4, plays `dradeath.adx` (`0x008fc30c`), sets +0x3c = 180.0, and its leave calls
+  `FUN_0051f894` (the on-killed handler the Dragon's death also uses, combat/dragon.ts) and SE
+  0x52. ASSUMED: state 5 is the boss's death. State 0x13 and 0x16 play SE 0x3a7 / particles
+  (`FUN_007be6b8`). The rest are the flight, dive and lightning states (not read).
+- Dump names: `handle_galgryphon_behavior` (`src/Psobb.exe-5-10-2026.c:227319`) is the
+  dispatcher 0x004a85f0. The JP source has no Gryphon C.
+
+**Not done (open).**
+- States 6..34 in detail, about 40 helpers (`func_0x004a15ac` the heading, `FUN_004a15fc`,
+  `func_0x004a1a48`, `func_0x004a1b84`, `FUN_004a4814`, `FUN_004a9174`, `FUN_004a91fc`,
+  `FUN_004a7e20` the state change, `FUN_004a7360` / `FUN_004a7b58`, `FUN_004a7c44` ..
+  `FUN_004a7e74`, `FUN_004a8a24` / `FUN_004a8a88`, `FUN_004aa4b0`, the lightning code).
+- The float constants (`DAT_` / `_DAT_` in the decompile, about 150): to be batched with
+  `tools/exedata.py read` from a script.
+- Hit boxes, HP pools, the damage clamp, the death sends (6x76 / EXP / drop gating), the
+  6x subcommands, the motion frame counts (`bm_boss5_gryphon.bml` in `data.gsl`).
+- Particles / SEs: only the ids above are seen; the rest are open.
+- The brain, `tests/galgryphon.test.ts`, the e2e spec and the `render/combat.ts` wiring. Until
+  then `TBoss5Gryphon` has no brain and stands still (see the "Episode 2 floors in Chrome" entry).
+
+**Checks.** No source change, so no `tsc` run for this entry.
