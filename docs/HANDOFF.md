@@ -1,5 +1,29 @@
 # Handoff: where to resume
 
+## 2026-10-22: what was done (details in the DEVLOG entries of that date)
+
+- Done: Dark Falz casket e2e and DEMO_WARP0 tower object; Dark Falz live camera pivots
+  (not wired: forms lack the exe pose); Saint-Milion laser e2e + area SE banks now load;
+  Battle Mode traps (ba_initial_floor warps); Episode 2 floors smoke (all 17 load).
+- Guns: attacks face the primary target; bullets fly (gun_bullet.xj) and hit at arrival
+  (movement miss, wall block); per-weapon speed (19 / Handgun 11 / Shot 15 / Samba 11);
+  Mechgun bursts = attacks_per_step (1, or 3 for Samba / Psychogun / Guld Milla / Mille
+  Marteaux); guns e2e. Open: the exe's rule for which weapons fire bullets (the port lists
+  6..9 + 0x48), the Handgun / Samba effect 0x005e4264 (particle 159), side-on bullet check.
+- Remote players: one 6x40 / 6x42 per leg + dead reckoning (stutter on phones). Not
+  measured on a real phone.
+- Phones (portrait): tall stage for title, login (HTML form), character select / create
+  (name form), Connecting, ship / block select, lobby and field (HUD anchored to the
+  edges, vertical FOV kept). Phone e2e specs: phone-login, phone-charselect, phone-field.
+- Server: bridge/server.mjs looks files up ignoring case. Lobby logs `[lobby]` +
+  `psoLobbyDebug()` for the production "players don't see each other" report (not
+  reproduced locally; waiting for a production console log).
+- Episode 2 bosses: Barba Ray ported (brain, 10 parts as hit targets, Pig Ray minions;
+  body movement open; map in docs/bosses/barbaray-map.md). Gal Gryphon mapped only
+  (docs/bosses/galgryphon-*.md; blocked on the state-record source and the HP gate).
+  Olga Flow and Gol Dragon not started.
+- tools/ghidra/decomp.sh now works from git worktrees.
+
 Rewritten 2026-10-21 at the end of the day (the user: "pare tudo e documente pra
 continuar amanha"). Everything is committed and pushed to `main`; no agents run, no
 worktrees are left.
