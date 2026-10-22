@@ -112,9 +112,10 @@ export class SelectPreview {
     this.actor.setLook(null);
   }
 
-  draw(ctx: CanvasRenderingContext2D): void {
+  // virtualFrame: drawn in the 640x480 screen's own frame (tall phone stage).
+  draw(ctx: CanvasRenderingContext2D, virtualFrame = false): void {
     if (this.state !== 3) return;
-    const { vw, w, h } = this.gl.fit(ctx);
+    const { vw, w, h } = this.gl.fit(ctx, virtualFrame);
     const r = this.gl.renderer;
     r.setViewport(0, 0, w, h);
     r.clear();

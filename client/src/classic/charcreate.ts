@@ -1062,6 +1062,7 @@ class NameEditor extends Editor {
 
 export class CharCreateScreen implements Screen {
   layout = 'left43' as const;
+  readonly touchMenu = true;
   // A phone (fit mode): the tall portrait stage (stage.ts tallLayout), and the
   // name is typed into the HTML form (nameform.ts) instead of the canvas keys.
   readonly phoneLayout: boolean;
@@ -1475,13 +1476,13 @@ export class CharCreateScreen implements Screen {
     ctx.fillRect(0, 0, w, h);
   }
 
-  draw(ctx: CanvasRenderingContext2D): void {
+  draw(ctx: CanvasRenderingContext2D, stage: Stage): void {
     const list = new DrawList(this.sprites);
     drawBackground(list);
     this.heading.draw(list);
     for (const w of this.selWidgets) w.draw(list, this.sel);
     for (const t of this.infoTexts) t.draw(list);
-    if (this.dress) this.drawDress(list);
+    if (this.dress) this.drawDress(list, stage.tall);
     this.help.draw(list, this.sprites);
     // Scene wipe (FUN_004ec3c8 / FUN_004ebfc4): opaque for 3 frames, then fades.
     const wipe = this.intro > 0 ? (this.intro < 4 ? 1 : 1 - (18 - this.intro - 3) / 15) : this.outro >= 0 ? 1 - this.outro / 10 : 0;
@@ -1489,10 +1490,10 @@ export class CharCreateScreen implements Screen {
     list.flush(ctx);
   }
 
-  private drawDress(list: DrawList): void {
+  private drawDress(list: DrawList, virtualFrame: boolean): void {
     const d = this.dress!;
     const model = this.model;
-    if (model) list.add(-100, (ctx) => model.draw(ctx));
+    if (model) list.add(-100, (ctx) => model.draw(ctx, virtualFrame));
     // Floor line (FUN_004ef530, colors 0x009b90d4): y 416..419, transparent
     // at x = 275 to 50% #c7c7c7 at 400, then solid to 640.
     const a = this.menuFade;

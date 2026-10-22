@@ -234,8 +234,22 @@ export class GLLayer {
   // Matches the 2D context the layer is drawn into: returns the window width
   // in virtual units (480 lines high) and resizes the GL canvas to the
   // context's pixels (capped).
-  fit(ctx: CanvasRenderingContext2D): { vw: number; w: number; h: number } {
+  // virtualFrame: the layer covers the 640x480 screen only (the tall phone
+  // stage): vw is 640 and the GL canvas is 4:3 at the context's scale, so the
+  // model keeps the 4:3 placement of the exe instead of the window's shape.
+  fit(ctx: CanvasRenderingContext2D, virtualFrame = false): { vw: number; w: number; h: number } {
     const scale = ctx.getTransform().a || 1;
+    if (virtualFrame) {
+      const k = Math.min(1, 2048 / (480 * scale));
+      const w = Math.max(1, Math.round(640 * scale * k));
+      const h = Math.max(1, Math.round(480 * scale * k));
+      if (this.canvas.width !== w || this.canvas.height !== h) {
+        this.canvas.width = w;
+        this.canvas.height = h;
+        this.renderer.setSize(w, h, false);
+      }
+      return { vw: 640, w, h };
+    }
     const vw = ctx.canvas.width / scale;
     const k = Math.min(1, 2048 / ctx.canvas.height);
     const w = Math.max(1, Math.round(ctx.canvas.width * k));

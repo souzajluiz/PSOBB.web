@@ -168,6 +168,7 @@ export interface CharSelectHandlers {
 
 export class CharSelectScreen implements Screen {
   layout = 'left43' as const;
+  readonly touchMenu = true;
   // A phone (fit mode): the tall portrait stage (stage.ts tallLayout).
   readonly phoneLayout: boolean;
   private assets: CharSelectAssets;
@@ -269,7 +270,7 @@ export class CharSelectScreen implements Screen {
     drawLines(ctx, LINES.panel, f);
     drawLines(ctx, LINES.box, f);
     this.drawIcons(ctx);
-    this.preview?.draw(ctx);
+    this.preview?.draw(ctx, stage.tall);
     this.drawMessage(ctx, f, ctx.canvas.width / stage.sx);
     drawLines(ctx, LINES.footer, f);
     this.drawCursor(ctx);

@@ -53,7 +53,7 @@ export interface CharacterModelView {
   setVisible(alpha: number): void; // 0..1, the model's fade-in
   setRuler(alpha: number): void; // 0..1, the PROPORTION / AUTO editor fade
   render(dt: number): void; // advances the camera and the motion
-  draw(ctx: CanvasRenderingContext2D): void; // over the whole window, in virtual units
+  draw(ctx: CanvasRenderingContext2D, virtualFrame?: boolean): void; // over the whole window, in virtual units (virtualFrame: the 640x480 screen only)
   dispose(): void;
 }
 
@@ -176,10 +176,10 @@ export class PlayerModelView implements CharacterModelView {
     else this.shift = Math.max(this.shift, 1 - this.ruler);
   }
 
-  draw(ctx: CanvasRenderingContext2D): void {
+  draw(ctx: CanvasRenderingContext2D, virtualFrame = false): void {
     if (this.alpha <= 0 && this.ruler <= 0) return;
     this.actor.sync();
-    const { vw, w, h } = this.gl.fit(ctx);
+    const { vw, w, h } = this.gl.fit(ctx, virtualFrame);
     const r = this.gl.renderer;
     r.setViewport(0, 0, w, h);
     r.setScissorTest(false);
