@@ -8368,3 +8368,25 @@ So the port's assumption holds: the view's eye and target are the cutscene objec
 - Battle Mode traps: not tested. A battle game needs a Battle-mode party (Difficulty row, mode popup index 2) and a b88xxx battle quest started from the Hunter's Guild counter (newserv has system/quests/battle/). Not written yet.
 - Next step: check whether 6xDC from the leader reaches the local boss (net/game.ts, render/combat.ts smEvent path); if the server only relays, drive the tentacles to death in the arena (6xDC action 2) instead, then re-run the laser step; then add the battle test.
 - Unit tests and the palette trap wiring were not touched today.
+
+## 2026-10-22: Dark Falz casket trigger in Chrome (boss-smoke: PASS)
+
+- `client/e2e/boss-smoke.spec.ts`, Dark Falz step (replaces the old 12 s observation): after
+  warpTo(14), wait for the Dark Falz scene 1 (WAIT_CASKET), read `selfPose().y`, then
+  `placePlayer(selfId, -9860, y, -240, 0)`. Then sample scene and `combat.bossCameraView()` every
+  250 ms for 15 s, logging changes only.
+- Run: Node 24, newserv (`vendor/newserv/build/newserv`), bridge (`bridge/bridge.mjs`), Vite on
+  5183 with `PW_BASE_URL=http://127.0.0.1:5183`, Playwright headless (channel chrome).
+- Seen: player placed at `(-9860, 5, -240)`. Transitions:
+  `t=0s scene=2 view=live`, `t=3.75s scene=3 view=null`, `t=4.75s scene=4 view=null`.
+  DEMO_WARP0 (scene 2) lasted about 3.75 s (the port's 120-tick timer), the camera was live
+  for the whole scene. The trigger fired at once: the player's standing point was enough,
+  no walk needed.
+- Output: `1 passed (1.5m)`; `page errors: 0`; `failed requests: 0`. The Dragon step ran
+  first in the same test: `dragon arena: particle peak 2`.
+- Screenshots (test output folder, not committed): `falz-0-wait-casket.png`,
+  `falz-1-demo-warp0.png`, `falz-2-after.png`. In `falz-1` only the HUD is visible; the 3D
+  view is dark. The port's DEMO_WARP0 camera is the constant pivot (-20000, 0, 0), which is
+  off the arena, so an empty frame is expected there. Not verified against the exe's picture.
+- Not checked: the leader gate (the solo test player is the leader); the scene 1 -> 2
+  change was not seen by sampling (it came before the first sample).
