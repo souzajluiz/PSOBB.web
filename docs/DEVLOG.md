@@ -8967,3 +8967,49 @@ lobby after the tap are in the session scratchpad, `mobile-ship/`.
 
 **Environment.** A worktree has no `vendor/` or `client/node_modules`; both
 were linked from the main checkout for the run and removed before the commit.
+
+## 2026-10-22: Mechgun bursts (class 8): several shots per swing
+
+**What changed:** the Mechgun (weapon class 8) now fires a burst per crossing of its hit frame, as PsoBB.exe does, instead of one hit per swing.
+
+- `client/src/combat/attack.ts`: `MECHGUN_CLASS`, `burstCount(kind, variant)`, `begin(step, type, bursts)`, and a class 8 branch in `tick()` (`tickBursts`). Each burst calls the same `events.hit` as before (the 6x46 with the targets re-read from the reticle, and one gun shot). The last burst opens the combo window and pauses the motion; the timer then ends the swing (`finish()`). The header's "Not reproduced" list no longer names the mechgun.
+- `client/src/render/combat.ts`: `startAttack` passes `burstCount(data1[1], data1[2])` of the equipped weapon to `begin`. The attack's start sets `animator.frame = 0` (see the live check).
+- `tests/mechgun.test.ts` (new, 21 checks): the count per item, the frame-2 hit, the loop timing, one burst for a regular Mechgun, the chain of three swings, a press during the bursts, the pause after the last burst.
+
+**Exe facts (PsoBB.exe, Ephinea 1.25.13; named dump `refsrc/.../Psobb.exe-05112026.c`, the dirty annotation of 0x00699058 agrees):**
+
+- `handle_player_attack_animation_damaging_part` (0x00699058, dump line 579534), class 8 branch (`GetPlayerWeaponGroup == 8`): while the done flag (`unknown_flags & 8`) is clear, at each crossing of the damaging frame (`check_entity_animation_elapsed_threshold`, `threshold < elapsed <= threshold + stride`) it calls `send_0x60_0x46_attack_end` (6x46), then `multipart_attack_step++`. When `(char)weapon->attacks_per_step <= step`, it sets flag 8, calls `HandleAttackDamageCalculation_006a2fb4` (0x006a2fb4: flag 2 = window, timer = `GetComboAttackPower`, the `DAT_00969078` table, which is the port's `COMBO_WINDOW`) and sets `+0xb0 |= 0x50` (motion ended, paused). The other classes do not take this branch.
+- **The count is `attacks_per_step`, item `+0x1f4` (a signed byte), not the grind.** The swing's check reads `movsbl 0x1f4(%esi)` at 0x006990c4 (class 8 branch): the swing ends when `(char)[+0x1f4] <= ++count`. The grind is a different byte: the generic ctor writes `movb $0x1,0x1f4(%esi)` at 0x005e9660 (default 1) and `movb %bl,0x1f5(%esi)` (`data1[3]`, the grind) at 0x005e9679. The earlier entry read `+0x1f5` from a Ghidra label and was wrong.
+- Writers of 3 (named dump `Psobb.exe-05112026.c`, factory = the `g_PlayingSFX` table at 0x009c2240 indexed by `data1[1]` (`GetWeaponCreationFunction_005caa30`); the table is `init_item_weapon_N` pointers, verified by the names below):
+  - kind 0x48 Samba Maracas: `samba_maracas_constructor` (factory `init_item_weapon_56` at 0x005fc268), `attacks_per_step = 3` unconditional.
+  - kind 0x83 Psychogun (all 17 variants share the name): `es_psychogun_constructor` (factory `init_item_weapon_101` at 0x005f85bc), `attacks_per_step = 3` unconditional.
+  - kind 0x4b Guld Milla (variant 0) and Dual Bird (variant 1): `guld_milla_dual_bird_constructor` (factory `init_item_weapon_59` at 0x005ec354, the ctor at 0x005ec3e8), `attacks_per_step = 3` only when `group_idx < 2`.
+  - kind 0xb0 Mille Marteaux: `MilleMarteauxExecuteAttack_005f527c` (0x005f527c) writes `attacks_per_step = 3` at run time, every time it runs (`ExecuteWeaponType0x88Attack_005f518c`, param 0). Its factory `init_item_weapon_130` is at 0x005f5398 and its ctor leaves 1. ASSUMED: the 3 is in place when the swing's check runs; which vtable call of `ExecuteWeaponType0x88Attack` runs at the swing's start was not traced.
+- Names: the kinds came from `ItemPMT.prs` (`parseItemPMT`) and `unitxt_e.prs`: kind 72 is SAMBA MARACAS, 75 GULD MILLA / DUAL BIRD (variants 0 and 1, grind 9 and 21), 131 PSYCHOGUN, 176 MILLE MARTEAUX. The names confirm the factory indices. Kind 8 is the regular Mechgun (8 variants; also kind 119 MECHGUN, 17 variants; both default 1).
+- Count: `burstCount(kind, variant)` gives 1 for every kind not listed above, so a regular Mechgun makes one burst per swing (one 6x46 per swing), and the 3-burst items make three.
+- Note for later: the exe's other multi-part branch in the same function (`(char)attacks_per_step` with `multipart_attack_step % 3`, for `group_2` 0x14/2, 0x42/1, 0x43/1) is not the Mechgun and was not ported.
+- Damaging frame: `g_WeaponAttackDamagingFrames` at 0x00968ca0, row 8 at 0x00968d00 = 2.0, 2.0, 2.0 (`tools/exedata.py read 00968d00 f 3`). Same numbers as `HIT_FRAMES`.
+- Motion: the three steps all use rlc index 25, mode 1 (loop) (`ATTACK_MOTIONS` class 8, from the field motion table). The animator reads `frameCount` 4 for it (live).
+- Counter reset: `InitializePlayerAttackState_006a2f54` (0x006a2f54) clears `+0x14` (the count) and `+0xe` (`multihit_attack_index`) each swing.
+- Targets: `send_0x60_0x46_attack_end` calls `update_player_targeting_info` before every 6x46, so each burst re-reads the reticle's list (no spread: the same listed targets; one shot per burst for the Mechgun's kind). The 6x46 target list goes out as before; `newserv` (`ReceiveSubcommands.cc`, 6x46 = `forward_subcommand_with_entity_targets_transcode_and_track_hits_t<G_AttackFinished_Header_6x46>`) accepts one 6x46 per burst (up to 10 targets each).
+
+**Timing:** a burst is made each time the motion's frame passes 2. With the 4-frame loop and speed 0.9 (step 0), that is one burst per 4 / 0.9 = 4.4 ticks (148 ms at 30 Hz). ASSUMED: the first burst comes after the animator's 5-tick blend from the idle pose (`PlayerAnimator.tick`), so the first one is later than 2 / 0.9 ticks.
+
+**Why the 3rd swing hit nothing (before this change):** a port bug, not exe behaviour (from reading the code; the old build was not re-run live). The mechgun's motion loops (mode 1), and `AttackState` ended an attack only when the motion ended (`ended` is never true for mode 1). The exe ends the swing by its burst count (flag 8, `+0xb0 |= 0x50`). So the old port hit once, never left the swing, and every later press queued a swing that never started.
+
+**Live check (Chrome headless, webgun, Forest 1, Vite 5194, newserv and bridge 8080 reused).** A temporary spec (`client/e2e/mechgun-burst.spec.ts`, not committed) makes a solo party, warps to Forest 1, constructs room 2's wave 1, places the player 60 behind the nearest enemy facing it, and presses ArrowDown three times (press 2 in step 0's window, press 3 in step 1's). It wraps `sendAttack`, `sendAttackTargets`, `gunShot` and `landGunBullet`.
+
+**Superseded:** this live run was made with the grind model (`data1[3]` as the count). Its "grind 3 = 3 bursts" result used a regular Mechgun (`data1 = 00 08 00 03`, kind 8), which the corrected model makes one burst. The run was not repeated after the correction (no browser run in this change), so the live numbers do not check the final behaviour. Kept for the chain and the frame reset, which the correction does not touch: grind 0 gave one burst per swing, three swings chained, each burst one 6x46 with one target (0x1017).
+
+**Found on the way:** `PlayerAnimator.play` skips a restart when the index and mode match. All three mechgun steps share motion 25, so the 2nd and 3rd swings began mid-loop. The attack's start now sets `animator.frame = 0` (ASSUMED: every attack motion starts at frame 0). The headless render runs at about 5 fps here, so a key tap of 60 ms can fall between two frames and be lost; the spec holds the key for 400 ms.
+
+**Checks.** `tests/gunbullet.test.ts`, `tests/rangedaim.test.ts`: all checks passed. `tests/combat.test.ts`: 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures. `tests/mechgun.test.ts`: 21 checks, 0 failures. `npx tsc --noEmit -p .` in client (Node 24): clean.
+
+**ASSUMED / UNCLEAR.**
+- The item-to-factory match uses the dump's address-less names and a bracket on the named neighbours (0x005fc268, 0x005f85bc, 0x005f5398 are the only table slots in those brackets). The names of the resolved kinds match the expected items, which is the cross-check.
+- Mille Marteaux's 3 comes from a run-time write, so it is ASSUMED to be in place for its first swing (the port uses 3 from the start).
+- The Psychogun kind 0x83 covers all 17 variants because the factory is per kind; the PMT names of its variants are all PSYCHOGUN, so which variant is the ES one is not seen.
+- The bullet of each burst uses the gun path from `resolveHit` (one pellet, the listed target); the exe's per-burst bullet is `TriggerWeaponAttackCallback_005e9384` (0x005e9384, the item's vtable callback at `+0x234`), not traced for the mechgun.
+- The combo timer uses the port's `COMBO_WINDOW` (= the exe's `DAT_00969078`), as before.
+- A burst with no targets sends no 6x46 (the exe sends one with count 0 if `update_player_targeting_info` returns non-zero; not traced).
+- Only the hit roll per bullet is seen live (`dhp`). The per-bullet damage formula is the existing one.

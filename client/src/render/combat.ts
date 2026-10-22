@@ -20,7 +20,7 @@
 
 import { PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import { AttackState, type AttackEvents } from '../combat/attack.ts';
+import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
 import { facingOf, inWeaponCone } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
@@ -4774,6 +4774,10 @@ export class CombatView {
     const events: AttackEvents = {
       start: (_s, _t, motion, factor) => {
         animator.paused = false;
+        // ASSUMED: every attack motion starts at frame 0. The Mechgun's three steps
+        // share one looping motion (index 25), and play() would otherwise keep it
+        // running from where the last swing stopped.
+        animator.frame = 0;
         // apply_slow_status_effect_to_attack_speed: the frame step * 0.5.
         animator.play(motion, factor * this.status.motionScale);
       },
@@ -4802,7 +4806,9 @@ export class CombatView {
       me.angle = facingOf(p.x - from.x, p.z - from.z);
     }
     this.game.sendAttack(step, me.angle, type);
-    this.attack.begin(step, type);
+    // The weapon's attacks_per_step sets the Mechgun's bursts (combat/attack.ts burstCount).
+    const weapon = this.equippedWeapon();
+    this.attack.begin(step, type, weapon ? burstCount(weapon.data1[1], weapon.data1[2]) : 1);
     if (type === 2) this.specialStartFx();
   }
 

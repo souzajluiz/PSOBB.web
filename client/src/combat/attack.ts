@@ -30,10 +30,18 @@
 //   attack is queued: flags |= 1, step = min(step + 1, 2), queued type.
 // Exit (FUN_006a1000): motion ended (+0xb0 & 0x10) and "done": step 0 -> back
 //   to idle, step 1 / 2 -> the next attack (6x44 / 6x45).
+// Mechgun (class 8, FUN_00698fa8 phase 3 -> handle_player_attack_animation_damaging_part
+//   0x00699058, class 8 branch): the motion loops (mode 1) and each time its
+//   frame passes the hit frame (2) the swing sends a 6x46 with the targets
+//   re-read from the reticle and fires one burst. The count is attacks_per_step
+//   (item +0x1f4, a signed byte): the swing ends when (char)[+0x1f4] <= ++count
+//   (0x006990c4, class 8 branch). The grind (+0x1f5 = data1[3]) is NOT the count.
+//   After the last burst the burst flag 8 is set, the combo window opens
+//   (HandleAttackDamageCalculation 0x006a2fb4) and the motion counts as ended
+//   (+0xb0 |= 0x50), so the timer runs out in the exit path (CheckAttackStateFlag
+//   0x006a3180). See burstCount / the class 8 branch of tick().
 // Not reproduced: the forward step at the start of a combo (+0xd4 = 0.5 /
-// 0.2, FUN_006a2d44), mechgun / multi-shot weapons (several hits per motion
-// loop, FUN_00699058 class 8), the class 15 alternate table (flag from
-// FUN_0068c470).
+// 0.2, FUN_006a2d44), the class 15 alternate table (flag from FUN_0068c470).
 //
 // Motion class (FUN_006a7b80, the motion set's weapon class 0..18): ItemPMT's
 // weapon kind table (weaponKinds[data1[1]]), ASSUMED to be what sets it;
@@ -211,12 +219,32 @@ export function comboWindow(weaponClass: number, step: number): number {
   return COMBO_WINDOW[weaponClass]?.[step] ?? 1;
 }
 
+// Weapon class of the Mechgun (multi-burst swings, see the header).
+export const MECHGUN_CLASS = 8;
+// Bursts of a Mechgun swing = the item's attacks_per_step (+0x1f4). Default 1: the
+// generic ctor writes it (construct_generic_weapon 0x005e959c, movb $1,0x1f4 at 0x005e9660).
+// Items whose constructor or attack writes 3 (exe address of the writer; kind = data1[1],
+// names from ItemPMT.prs + unitxt_e, the factory from the g_PlayingSFX table at 0x009c2240,
+// index = kind):
+//   kind 0x48 Samba Maracas: samba_maracas_constructor, factory init_item_weapon_56 (0x005fc268).
+//   kind 0x83 Psychogun (all 17 variants): es_psychogun_constructor, init_item_weapon_101 (0x005f85bc).
+//   kind 0x4b Guld Milla (variant 0) / Dual Bird (variant 1): guld_milla_dual_bird_constructor,
+//     init_item_weapon_59 (0x005ec354, calls the ctor at 0x005ec3e8), only when group_idx < 2.
+//   kind 0xb0 Mille Marteaux: MilleMarteauxExecuteAttack_005f527c (0x005f527c) writes 3 at run
+//     time (the item's constructor leaves 1). ASSUMED: the 3 is in place when the swing ends.
+// Every other weapon, and any variant not listed, is 1 (ASSUMED for the kinds not traced).
+export function burstCount(kind: number, variant: number): number {
+  if (kind === 0x4b) return variant < 2 ? 3 : 1;
+  return kind === 0x48 || kind === 0x83 || kind === 0xb0 ? 3 : 1;
+}
+
 export const HEAVY_SPEED_FACTOR = 1.25; // DAT_0093db24
 export const CHARGE_PAUSE_TICKS = 6; // +0x8bc, phase 2 ends when it drops below 0
 
 const F_DONE = 1;
 const F_WINDOW = 2;
 const F_LOST = 4;
+const F_BURSTS_DONE = 8; // the Mechgun's last burst was made (unknown_flags & 8)
 
 export interface AttackEvents {
   start(step: number, type: number, motion: MotionRecord, stepFactor: number): void; // play the motion
@@ -239,6 +267,7 @@ export class AttackState {
   private timer = 0;
   private pause = 0;
   private hits = 0;
+  private bursts = 1; // Mechgun: bursts in this swing (burstCount of the weapon)
   private queued: number | null = null;
   private lastFrame = 0;
   readonly weaponClass: number;
@@ -257,13 +286,15 @@ export class AttackState {
   }
 
   // Enters attack `step` (0..2) with `type` (0 normal, 1 heavy, 2 special).
-  begin(step: number, type: number): void {
+  // `bursts` is the weapon's attacks_per_step (burstCount); only the Mechgun reads it.
+  begin(step: number, type: number, bursts = 1): void {
     this.active = true;
     this.step = step;
     this.type = type;
     this.flags = 0;
     this.timer = 0;
     this.hits = 0;
+    this.bursts = bursts;
     this.queued = null;
     this.lastFrame = 0;
     this.phase = type === 0 ? 3 : 1;
@@ -272,8 +303,11 @@ export class AttackState {
   }
 
   // True while the motion must not advance (heavy / special charge pause).
+  // A Mechgun's motion stops once its last burst is made (+0xb0 |= 0x40).
   get paused(): boolean {
-    return this.active && (this.phase === 1 || this.phase === 2);
+    if (!this.active) return false;
+    if (this.weaponClass === MECHGUN_CLASS && this.flags & F_BURSTS_DONE) return true;
+    return this.phase === 1 || this.phase === 2;
   }
 
   // A palette attack button was pressed during the attack (FUN_006a31b0).
@@ -290,6 +324,43 @@ export class AttackState {
     return true;
   }
 
+  // The Mechgun's phase 3 (handle_player_attack_animation_damaging_part, class 8):
+  // each crossing of the hit frame is one burst (the 6x46 with the re-read targets
+  // and the shot, through `hit`). A looping motion wraps, so a crossing may
+  // be a pass over the wrap. After the last burst the window opens, and the
+  // timer runs out in the exit path (CheckAttackStateFlag_006a3180).
+  private tickBursts(frame: number): AttackTick {
+    if (this.flags & F_BURSTS_DONE) {
+      if (--this.timer < 0) this.flags |= F_DONE;
+    } else {
+      const h = hitFrame(this.weaponClass, this.step, 0);
+      const crossed = frame < this.lastFrame ? h <= frame || h > this.lastFrame : this.lastFrame < h && h <= frame;
+      if (h > 0 && crossed) {
+        this.events.hit(this.step, this.type, this.hits);
+        this.hits++;
+        if (this.hits >= this.bursts) {
+          this.flags |= F_BURSTS_DONE | F_WINDOW;
+          this.timer = comboWindow(this.weaponClass, this.step);
+        }
+      }
+    }
+    this.lastFrame = frame;
+    if (this.flags & F_DONE) return this.finish();
+    return { next: null, idle: false };
+  }
+
+  // The attack is over: the queued attack starts, or the combo ends.
+  private finish(): AttackTick {
+    if (this.queued !== null) {
+      const next = { step: this.step + 1, type: this.queued };
+      this.queued = null;
+      return { next, idle: false };
+    }
+    this.active = false;
+    this.events.end();
+    return { next: null, idle: true };
+  }
+
   // One game tick. `frame` is the motion frame after this tick's advance,
   // `ended` whether the motion reached its last frame.
   tick(frame: number, ended: boolean): AttackTick {
@@ -302,6 +373,7 @@ export class AttackState {
       if (--this.pause < 0) this.phase = 3;
       return { next: null, idle: false };
     }
+    if (this.weaponClass === MECHGUN_CLASS) return this.tickBursts(frame);
     for (;;) {
       const h = hitFrame(this.weaponClass, this.step, this.hits);
       if (!(h > 0 && this.lastFrame < h && h <= frame)) break;
@@ -315,16 +387,7 @@ export class AttackState {
       if (this.weaponClass === 0) this.flags |= F_DONE;
       else if (--this.timer < 0) this.flags |= F_DONE;
     }
-    if (ended && this.flags & F_DONE) {
-      if (this.queued !== null) {
-        const next = { step: this.step + 1, type: this.queued };
-        this.queued = null;
-        return { next, idle: false };
-      }
-      this.active = false;
-      this.events.end();
-      return { next: null, idle: true };
-    }
+    if (ended && this.flags & F_DONE) return this.finish();
     return { next: null, idle: false };
   }
 }
