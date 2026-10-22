@@ -29,7 +29,8 @@
 // 37 and 14: no sequence reaches them). SetEnemyAiState (0x0051f62c) runs
 // phase 5 on the old state, then phase 4 on the new one.
 //
-// OlgaUpdateMainLoop (0x00423b7c, vtable +0x04) runs, on the leader
+// The per-frame update 0x00423b7c (vtable +0x04; the dump names it OlgaUpdateMainLoop,
+// but it is the Dragon's, not Olga Flow's) runs, on the leader
 // (+0x3e8 == 0, recomputed every frame from the party leader): the hit clamp,
 // UpdateDragonAiState (0x00423f74), phase 8 and phase 0; a follower only the
 // clamp and phase 0. Everything the leader decides goes out as a 6x12
