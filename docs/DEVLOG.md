@@ -9323,3 +9323,22 @@ Summary line of the spec (the Samba's known gap is an annotation, not a failure)
 - Flight screenshots: `scratchpad/guns3/{handgun,rifle,shot,mechgun}-flight.png`. **Visibility probe** (temporary in-page probe of the frozen bullets, removed): the bullet mesh exists, its parent is the scene and is visible, its materials are transparent with opacity 1, depthTest on, and the texture is loaded; it is inside the camera frustum; its local box is about 4 x 4 x 26 units at scale 1.0. In the screenshots it reads as a green glowing orb at the reticle (e.g. `shot-flight.png`), because it points along the view. In one run terrain occluded it. So it is visible but view-aligned; the scale 1.0 is ASSUMED (the render slots set no scale).
 
 **Open:** a side-on flight screenshot (not view-aligned) to judge the look; decode the `+0x50` effect; the shooter texture variant.
+
+## 2026-10-22: Barba Ray: Pig Ray minions and the spawner
+
+**Decoded (Ghidra and exedata; VAs):** the minion update 0x004addc0 (a killed entity goes to state 4, then 5), states 0..5 at 0x004ae918 / 0x004ae748 / 0x004ae398 / 0x004ae10c / 0x004ae024 / 0x004adfac, the death sparks 0x20d / 0x20e (0x004adfe8), and the spawner 0x004b4e6c. The spawner's count is 0x00905f60 + row * 0x24 (9 u32; 0 none, 1 mode 0, 2 mode 1), its destinations 0x009abbc8[group] (9 vec3) and headings 0x009abbb8[group] (BAMS 0xC000 / 0x4000 / 0x8000 / 0). The minion's slot is the highest free child k in 1..35 at body index + 11 + k. The stats row is BattleParam 8 (PIG_RAY).
+
+**Port:**
+- `combat/barbaminion.ts` (new): `PigRayAi`, an EnemyBrain with the exe's states 0..5, the appear timer (motion frames - 10), the aim, the advance with the x <= 75 clamp, the hold, the latch list of 4 targets (mode 1 attacks on latch), the dying and the death effects.
+- `combat/barbaray.ts`: `BARBA_PIG_COUNT`, `BARBA_PIG_DEST`, `BARBA_PIG_HEADING`, `barbaPigMode`; the spawn event carries the count (the 9 attempts and their cooldown are unchanged).
+- `render/combat.ts`: `spawnPigRay` (the highest free PIG_RAY slot, the destination, the mode's model) and `pigDrain` (SE, effects, hide on death); the spawn event no longer logs "not ported".
+
+**ASSUMED (tagged in the code and the map):** the minion's frame count (30) and speed term (0) in the render spawn; the attack values; the death countdown; the random aim; the wall test; the BAMS conversion of the heading; row 0 of the count table for every group.
+
+**Open:** the body movement (brief B) is not ported (the transitions 0x004b1e98 / 0x004b0ee0 / 0x004b2cd0 / 0x004b30fc / 0x004b7040 / 0x004b7860 are not decoded in this pass). The minion kill path and the minion's death rewards are not exercised. The motion frame count and the speed are not read from the BML / BattleParam.
+
+**Checks:**
+- `tests/barbaray.test.ts`: ALL PASS (new: count row, destinations and headings, the spawner's live indexes 0,2,4,6,8, appear timer 21 ticks at frames 30, mode 0 / mode 1 shouts, advance and aura, the x clamp to hold, latch and mode 0 no attack, kill to dying to dead with the sparks).
+- `tests/derolle.test.ts`: ALL PASS. `tests/combat.test.ts` (NEWSERV=vendor/newserv): 5946 checks, 0 failures. `tests/combatdepth.test.ts`: 824 checks, 0 failures.
+- `cd client && npx tsc --noEmit -p .`: clean.
+- `client/e2e/barbaray-smoke.spec.ts` (Chrome, Vite 5207, webep2): passes in 2.2 min. New check: Pig Rays alive in the fight, peak 10 (the spawner runs). Part hits and the phases as before (15 changes, parts hit 3, 5, 6).

@@ -155,6 +155,24 @@ export const BARBA_DWELL = 150; // ASSUMED
 // Spawner: 9 Pig Rays per 0x3a enter, one every 6 ticks (cooldown 5, 0x004b0910).
 export const BARBA_SPAWN = { count: 9, cooldown: 5 } as const; // count: 0x004b0910 at enter (event 4, param 4); cooldown ASSUMED from the 0x738 test
 
+// The spawner's tables (0x004b4e6c). The count row is 0x00905f60 + row * 0x24
+// (9 u32 per row; ASSUMED row 0: the 0x3a..0x3c records carry 0 in the floor 0
+// table at 0x00906980). 0 = no Pig Ray at this index, 1 = mode 0 (+0x35c 0.0),
+// 2 = mode 1 (+0x35c 1.0). Destinations: 0x009abbc8[group] (9 vec3, stride 12),
+// headings 0x009abbb8[group] (9 u32, BAMS, read as raw here).
+export const BARBA_PIG_COUNT: readonly number[] = [1, 0, 1, 0, 1, 0, 1, 0, 1];
+export const BARBA_PIG_DEST: readonly (readonly (readonly [number, number, number])[])[] = [
+  [[72, 12, 60], [65, 12, 45], [72, 12, 30], [65, 12, 15], [72, 12, 0], [65, 12, -15], [72, 12, -30], [65, 12, -45], [72, 12, -60]],
+  [[-72, 12, 60], [-65, 12, 45], [-72, 12, 30], [-65, 12, 15], [-72, 12, 0], [-65, 12, -15], [-72, 12, -30], [-65, 12, -45], [-72, 12, -60]],
+  [[50, 12, 75], [37.5, 12, 65], [25, 12, 75], [12.5, 12, 65], [0, 12, 75], [-12.5, 12, 65], [-25, 12, 75], [-37.5, 12, 65], [-50, 12, 75]],
+  [[50, 12, -95], [37.5, 12, -85], [25, 12, -95], [12.5, 12, -85], [0, 12, -95], [-12.5, 12, -85], [-25, 12, -95], [-37.5, 12, -85], [-50, 12, -95]],
+];
+export const BARBA_PIG_HEADING: readonly number[] = [0xc000, 0x4000, 0x8000, 0];
+// The minion's mode from its count value (0x004ad95c's +0x35c: 1 -> 0.0, else 1.0).
+export function barbaPigMode(count: number): 0 | 1 {
+  return count === 1 ? 0 : 1;
+}
+
 // Corner moves of the 0x004b1e98 transitions (from, to) by phase. ASSUMED
 // meaning of the sides: 0..3 are the anchors 0..3 (see BARBA_ANCHORS).
 export const BARBA_MOVES: Readonly<Record<number, readonly [number, number]>> = {
@@ -228,7 +246,7 @@ export type BarbaEvent =
   | { kind: 'send'; phase: number; cursor: number; target: number | null }
   | { kind: 'se'; id: number }
   | { kind: 'effect'; id: number; part: number | null; up?: number; back?: number }
-  | { kind: 'spawn'; group: number; index: number }
+  | { kind: 'spawn'; group: number; index: number; count: number }
   | { kind: 'killed' }
   | { kind: 'dead' };
 
@@ -539,7 +557,10 @@ export class BarbaRayAi extends BrainBase {
   private spawnFrame(): void {
     if (this.spawned < this.spawnCount) {
       if (this.spawnCooldown < 1) {
-        this.events.push({ kind: 'spawn', group: this.phase - BARBA_PHASE.spawn0, index: this.spawned });
+        const index = this.spawned;
+        // count 0 = no Pig Ray at this index (the 0x00905f60 row); 1 / 2 pick the minion's mode.
+        const count = BARBA_PIG_COUNT[index] ?? 0;
+        this.events.push({ kind: 'spawn', group: this.phase - BARBA_PHASE.spawn0, index, count });
         this.spawned++;
         this.spawnCooldown = BARBA_SPAWN.cooldown;
       } else {

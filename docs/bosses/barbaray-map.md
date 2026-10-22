@@ -113,7 +113,54 @@ original-psobb-client-source (names often wrong). Tags: ASSUMED, UNCLEAR.
 - 6x76 / EXP / drops: not located yet (the 0x004b5d1c path only calls FUN_004bff28,
   FUN_00717f74, FUN_004d3250 which are unexplored).
 
-## Minion and spawner (pass 1, unchanged)
+## Minion and spawner (pass 6: decoded, ported as a brain)
+
+Sources: Ghidra (0x004ad95c, 0x004addc0, 0x004ae918, 0x004ae748, 0x004ae398,
+0x004ae10c, 0x004ae024, 0x004adfac, 0x004adfe8, 0x004ae724, 0x004add2c,
+0x004b4e6c), exedata for the constants and tables.
+
+- Minion update 0x004addc0: the state at +0x32e. A killed entity (+0x30 & 0x800)
+  moves to state 4 (dying) unless it is already 5. State 4 plays SE 0x3f5 and sets
+  the animation code +0xb8 = 1, then state 5. State 3 sets +0xb8 = 4.
+- State 0 (appear, 0x004ae918): timer +0x3d0 = motion frames (+0x3a8 +0x18) - 10,
+  counted down; below 0 it goes to state 1 (SE 0x3f1 mode 0 / 0x3f2 mode 1 at 9.0).
+- State 1 (aim, 0x004ae748): a random direction (FUN_0082dcbc / FUN_0082ddd8,
+  scaled by 1 + the motion's first float), heading = atan2(x, z), then state 2.
+- State 2 (advance, 0x004ae398): +0xc8 = (1 + f) * 0.1; the velocity is scaled by
+  (1 + f) each tick; the move (FUN_004add2c) is refused when the old x is past 75.0
+  (0x00904850); a refused move goes to state 3 (ASSUMED meaning of the x test).
+  The latch loop runs here and in state 3: alive targets not yet latched join the
+  list (4 at most). Mode 1 sends the attack (0x60 on the target, value 100.0);
+  mode 0 does not (0x50 / 0x5c). Aura 0x20b on entry, removed on leaving.
+- State 3 (hold, 0x004ae10c): SE 0x3f4 and the death sparks at 8.0; the latch
+  loop; it stays until the kill.
+- State 4 / 5 (0x004ae024 / 0x004adfac): the death sparks 0x20d / 0x20e at 14.0
+  (0x004adfe8), and the dead bit (+8 bit 0) once the float +0xc8 is 0.
+- Spawner 0x004b4e6c (phases 0x3a / 0x3b / 0x3c = group 0 / 1 / 2, index 0..8):
+  the count is 0x00905f60 + row * 0x24 (9 u32); 0 = no minion, 1 = mode 0, 2 =
+  mode 1. Row 0 is used (ASSUMED: the 0x3a..0x3c records have 0 in the second
+  word of the floor 0 table at 0x00906980). Destinations 0x009abbc8[group] (9 vec3,
+  stride 12): group 0 x = +72 / +65 (z 60..-60), group 1 x = -72 / -65, group 2 z =
+  75 / 65 (x 50..-50), group 3 z = -95 / -85 (unused). Headings 0x009abbb8[group]
+  (u32 BAMS): 0xC000, 0x4000, 0x8000, 0.
+- Slot: the free child with the highest k in 1..35 (k = 0 is never used; the
+  test is `0 < sVar7`) at body index + 11 + k (the 0xcb row's 36 PIG_RAY slots).
+  The scan is 0x004b5013; a taken slot makes no spawn.
+- Stats: PIG_RAY = BattleParam row 8 (entitynames.ts: stats [8], attack [8],
+  resist [8]); the ctor reads 0x0077a684/0x0077a6cc with 8 (mode 0) or 9.
+
+Port: combat/barbaminion.ts (PigRayAi, states 0..5, the latch list), combat/barbaray.ts
+(BARBA_PIG_COUNT, BARBA_PIG_DEST, BARBA_PIG_HEADING, barbaPigMode; the spawn event
+carries the count), render/combat.ts (spawnPigRay, pigDrain).
+
+ASSUMED / open for the minion: the motion frame count (30 in the port, the real
+record is not read), the speed term (0), the attack values (knockback 0, mult 1),
+the death countdown (PIG_DEATH_TICKS, the exe gates it on +0xc8), the random aim,
+the wall test (no ground test in the spawner's path), the minion's move speed, and
+the kill path (the generic enemy death calls ai.kill(); not exercised in the e2e).
+The minion's network sync is the generic enemy one (its own entity ids); the
+6xA9 / 6xAA are the body's only.
+
 
 - Pig Ray minion ctor 0x004ad95c, update 0x004addc0, states 0..5 at 0x004ae918,
   0x004ae748, 0x004ae398, 0x004ae10c, 0x004ae024, 0x004adfac. Minion vtable

@@ -147,6 +147,8 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
   let prev = b0.phase;
   let struck = false;
   const hitParts = new Set<number>();
+  // The Pig Rays (combat/barbaminion.ts) alive at each sample; the spawner's first count is 5.
+  let pigsMax = 0;
   let last = b0;
   // ~60 s, half a second apart: no damage for the first 30 s, then the parts are struck.
   for (let i = 0; i < 120; i++) {
@@ -154,6 +156,8 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
     const s = await barbaState(page);
     if (!s) break;
     last = s;
+    const pigs = await peek(page, (w) => [...w.classicGame.view.combat.enemies.values()].filter((x: any) => x.ai?.constructor?.name === 'PigRayAi' && !x.dead).length);
+    pigsMax = Math.max(pigsMax, pigs);
     phases.add(s.phase);
     slots.add(s.slot);
     if (s.phase !== prev) phaseChanges++;
@@ -170,6 +174,9 @@ test('Barba Ray: the brain runs in Chrome, its phases change, its pools take hit
 
   const damaged = last.parts.filter((p, i) => p < b0.parts[i]!).length;
   expect(phaseChanges, 'the phases change with no damage over ~60 s').toBeGreaterThan(1);
+  // The spawner's Pig Rays appear (the minion's kill and body movement are not yet checked).
+  console.log(`barbaray pigs ${JSON.stringify({ pigsMax })}`);
+  expect(pigsMax, 'the spawner brings Pig Rays into the fight').toBeGreaterThan(0);
   console.log(`barbaray parts ${JSON.stringify({ hit: [...hitParts].sort(), damaged, pools: last.parts.slice(0, 4), start: b0.parts.slice(0, 4) })}`);
   // The swings reach the parts through applyEnemyHit -> barbaPartHit -> hitPart. The
   // damage is the game's roll: this character's rolls against the parts were 0 (the

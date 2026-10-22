@@ -15,6 +15,10 @@ import {
   BARBA_PACE,
   BARBA_PART_COUNT,
   BARBA_PART_RADIUS,
+  BARBA_PIG_COUNT,
+  BARBA_PIG_DEST,
+  BARBA_PIG_HEADING,
+  barbaPigMode,
   BARBA_PHASE,
   BARBA_ROW_PARK,
   BARBA_SLOTS,
@@ -28,6 +32,7 @@ import {
   encodeBarbaA9,
   type BarbaEvent,
 } from '../client/src/combat/barbaray.ts';
+import { PIG_DEATH_TICKS, PIG_FX, PIG_SE, PIG_STATE, PigRayAi, type PigEvent } from '../client/src/combat/barbaminion.ts';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { EnemyArchive } from '../client/src/render/enemymodel.ts';
 
@@ -365,6 +370,110 @@ eq(barbaResolve(0x28, 0, 0).phase, 0x28, 'an unlisted code is sent as it is');
   b.slot = 4; // fjump, mode 2 -> 1
   b.tick([], true);
   eq(b.slot, 1, 'mode 2 chain: fjump ends into forward (slot 1)');
+}
+
+// --- spawner tables and the Pig Ray minion (client/src/combat/barbaminion.ts) -----------------
+
+eq(BARBA_PIG_COUNT.length, 9, 'spawner count row: 9 indexes');
+eq(BARBA_PIG_COUNT.filter((c) => c !== 0).length, 5, 'spawner row 0: five live indexes (0,2,4,6,8)');
+eq(barbaPigMode(1), 0, 'count 1 -> mode 0');
+eq(barbaPigMode(2), 1, 'count 2 -> mode 1');
+eq(BARBA_PIG_DEST.length, 4, 'four destination groups');
+eq(BARBA_PIG_DEST[0]!.length, 9, 'group 0: nine destinations');
+eq(BARBA_PIG_DEST[0]![0]!.join(), '72,12,60', 'group 0 index 0 at (72, 12, 60)');
+eq(BARBA_PIG_HEADING[0], 0xc000, 'group 0 heading 0xC000 (BAMS)');
+{
+  const b = brain();
+  b.applyRemote(0x3a, 0, null);
+  const live: number[] = [];
+  for (let n = 0; n < 80; n++) {
+    b.tick([], false);
+    for (const e of b.drain()) if (e.kind === 'spawn' && e.count !== 0) live.push(e.index);
+  }
+  eq(live.join(), '0,2,4,6,8', 'spawner: only the nonzero count indexes spawn');
+}
+
+const pig = (over: Partial<ConstructorParameters<typeof PigRayAi>[0]> = {}) =>
+  new PigRayAi({ x: 0, z: 0, angle: 0, mode: 1, frames: 30, speed: 0, rng: () => 0, ...over });
+const pigEvents = (b: PigRayAi, out: PigEvent[]) => out.push(...b.drain());
+
+{
+  // Appear: timer = frames - 10 = 20; it leaves appear when the timer goes below 0 (tick 21).
+  const p = pig();
+  let aimTick = -1;
+  for (let n = 1; n <= 30 && aimTick < 0; n++) {
+    p.tick([]);
+    if (p.phase === PIG_STATE.aim) aimTick = n;
+  }
+  eq(aimTick, 21, 'pig appear: aim at tick 21 (frames 30 - 10 = 20 timer)');
+  const ev: PigEvent[] = [];
+  pigEvents(p, ev);
+  check(ev.some((e) => e.kind === 'se' && e.id === PIG_SE.appearMode1), 'pig appear: mode 1 shout (0x3f2)');
+}
+{
+  // Mode 0 shouts 0x3f1 on leaving appear.
+  const p = pig({ mode: 0, frames: 10 });
+  const ev: PigEvent[] = [];
+  for (let n = 0; n < 12; n++) {
+    p.tick([]);
+    pigEvents(p, ev);
+  }
+  check(ev.some((e) => e.kind === 'se' && e.id === PIG_SE.appearMode0), 'pig mode 0: shout 0x3f1');
+}
+{
+  // Advance: heading east (rng 0, speed 0 -> velocity (1, 0)); the aura starts on entry.
+  const p = pig();
+  const ev: PigEvent[] = [];
+  for (let n = 0; n < 25; n++) {
+    p.tick([]);
+    pigEvents(p, ev);
+  }
+  eq(p.phase, PIG_STATE.advance, 'pig: advancing after aim');
+  check(p.x > 0 && Math.abs(p.z) < 1e-9, 'pig: the velocity moves it along x');
+  check(ev.some((e) => e.kind === 'effect' && e.id === PIG_FX.aura), 'pig: aura on advance (0x20b)');
+}
+{
+  // The clamp: old x past 75 refuses the move, the pig holds.
+  const p = pig({ x: 80, frames: 0 });
+  for (let n = 0; n < 4; n++) p.tick([]);
+  eq(p.phase, PIG_STATE.hold, 'pig: x past 75 refuses the move -> hold');
+  eq(p.anim, 4, 'pig: hold sets the animation code 4');
+}
+{
+  // Latch: mode 1 hits the first alive target once; mode 0 never hits; the dead are skipped.
+  const targets = [
+    { clientId: 1, x: 0, z: 0, charClass: 0, dead: true },
+    { clientId: 2, x: 0, z: 0, charClass: 0, dead: false },
+  ];
+  // Latching runs in advance (2) and hold (3): the pig is driven to advance first.
+  const m1 = pig({ frames: 0 });
+  for (let n = 0; n < 3; n++) m1.tick([]);
+  eq(m1.phase, PIG_STATE.advance, 'pig latch: reached advance');
+  const first = m1.tick(targets);
+  eq(m1.latched.join(), '2', 'pig latch: the dead target is skipped');
+  eq(first.hit?.clientId, 2, 'pig mode 1: the latch attacks the new target');
+  eq(m1.tick(targets).hit, null, 'pig latch: a latched target is not hit again');
+  const m0 = pig({ frames: 0, mode: 0 });
+  for (let n = 0; n < 3; n++) m0.tick([]);
+  check(m0.tick(targets).hit === null, 'pig mode 0: no attack');
+  eq(m0.latched.join(), '2', 'pig mode 0 still latches');
+}
+{
+  // Kill: dying (SE 0x3f5, anim 1), then dead after PIG_DEATH_TICKS with the death effects.
+  const p = pig({ frames: 0 });
+  p.kill();
+  const ev: PigEvent[] = [];
+  p.tick([]);
+  pigEvents(p, ev);
+  eq(p.anim, 1, 'pig kill: animation code 1 (dying)');
+  check(ev.some((e) => e.kind === 'se' && e.id === PIG_SE.death), 'pig kill: death SE 0x3f5');
+  for (let n = 0; n < PIG_DEATH_TICKS + 4; n++) {
+    p.tick([]);
+    pigEvents(p, ev);
+  }
+  eq(p.dead, true, 'pig: dead after the death countdown');
+  eq(ev.filter((e) => e.kind === 'dead').length, 1, 'pig: one dead event');
+  check(ev.some((e) => e.kind === 'effect' && e.id === PIG_FX.deathA) && ev.some((e) => e.kind === 'effect' && e.id === PIG_FX.deathB), 'pig: death sparks 0x20d / 0x20e');
 }
 
 void BARBA_PHASE;
