@@ -6,7 +6,8 @@
 import {
   bulletFrames,
   bulletMissed,
-  GUN_BULLET_SPEED,
+  GUN_BULLET_SPEED_DEFAULT,
+  bulletSpeed,
   isGunKind,
   movedTowards,
   openAimPoint,
@@ -30,8 +31,16 @@ const O = { x: 0, y: 0, z: 0 };
 const noWall = () => false;
 const wall = () => true;
 
-// Speed: the item speed_maybe of a gun is 19 (construct_generic_weapon 0x005e959c).
-check(GUN_BULLET_SPEED === 19, 'gun bullet speed is 19');
+// Speed: the item speed_maybe of a gun is 19 by default (construct_generic_weapon 0x005e959c),
+// and each gun's inner ctor writes its own (objdump): Handgun 11, Shot 15, Samba 11.
+check(GUN_BULLET_SPEED_DEFAULT === 19, 'default gun bullet speed is 19');
+check(bulletSpeed(6) === 11 && bulletSpeed(9) === 15 && bulletSpeed(0x48) === 11, `per-kind speeds: Handgun 11, Shot 15, Samba 11 (${bulletSpeed(6)}, ${bulletSpeed(9)}, ${bulletSpeed(0x48)})`);
+check(bulletSpeed(7) === 19 && bulletSpeed(8) === 19, `Rifle and Mechgun keep the default 19 (${bulletSpeed(7)}, ${bulletSpeed(8)})`);
+check(bulletFrames(60, bulletSpeed(6)) === 5 && bulletFrames(60, bulletSpeed(9)) === 4, `frames per kind: 60 units -> Handgun 5 (60/11), Shot 4 (60/15) (${bulletFrames(60, bulletSpeed(6))}, ${bulletFrames(60, bulletSpeed(9))})`);
+{
+  const shot = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, bulletSpeed(6));
+  check(shot.bullet && shot.frames === 5, `Handgun shot at a target 60 away: 5 frames (${shot.frames})`);
+}
 check(bulletFrames(19) === 1 && bulletFrames(60) === 3 && bulletFrames(170) === 9, `frames = ROUND(distance / 19): 19 -> 1, 60 -> 3, 170 -> 9 (${bulletFrames(19)}, ${bulletFrames(60)}, ${bulletFrames(170)})`);
 check(bulletFrames(0) === 0, 'a target at the hand arrives on the next tick (0 frames)');
 check(bulletFrames(60, 10) === 6, 'speed is a parameter (60 / 10 = 6)');
@@ -75,7 +84,7 @@ check(bulletFrames(60, 10) === 6, 'speed is a parameter (60 / 10 = 6)');
 // Shot: five pellets at the exe's angles (shotgun_bullet_angles 0x0092dffc); only kind 9 has five.
 check(SHOT_ANGLES_BAMS.length === 5 && SHOT_ANGLES_BAMS[0] === 0 && SHOT_ANGLES_BAMS[1] === 2184 && SHOT_ANGLES_BAMS[3] === 4551, 'five shot angles 0, 2184, -2184, 4551, -4551');
 check(pelletCount(9) === 5 && pelletCount(6) === 1 && pelletCount(7) === 1, 'the Shot fires five pellets, the other guns one');
-check(isGunKind(6) && isGunKind(7) && isGunKind(8) && isGunKind(9), 'Handgun, Rifle, Mechgun, Shot are guns');
+check(isGunKind(6) && isGunKind(7) && isGunKind(8) && isGunKind(9) && isGunKind(0x48), 'Handgun, Rifle, Mechgun, Shot, Samba Maracas are guns');
 check(!isGunKind(1) && !isGunKind(10) && !isGunKind(11), 'melee kinds and the launcher are not on the bullet path');
 
 // Movement miss: at 8 or more in XZ since the shot (64 = g_WeaponBulletCollisionRadiusSq).

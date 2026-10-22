@@ -120,7 +120,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { bulletMissed, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, type GunShot } from '../combat/gunbullet.ts';
+import { bulletMissed, bulletSpeed, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -5160,8 +5160,12 @@ export class CombatView {
         const p = t.instance.root.position;
         target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t) };
       }
-      const shot: GunShot = planGunShot(start, { heading: me.angle, angleBams: SHOT_ANGLES_BAMS[i] ?? 0, horizontalDistance: range.horizontal }, target, (a, b) =>
-        this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false,
+      const shot: GunShot = planGunShot(
+        start,
+        { heading: me.angle, angleBams: SHOT_ANGLES_BAMS[i] ?? 0, horizontalDistance: range.horizontal },
+        target,
+        (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
+        bulletSpeed(kind),
       );
       this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
       trails.spawn(start, shot.end, shot.frames, texture);
