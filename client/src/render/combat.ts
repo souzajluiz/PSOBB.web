@@ -64,6 +64,7 @@ import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volop
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
+import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
 import { parseCameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
@@ -3156,6 +3157,7 @@ export class CombatView {
   // DfAnim; the node animator is paused on the brain's frame).
   private drawDarkFalz(e: EnemyRuntime, ai: DarkFalzAi): void {
     const inst = e.instance;
+    this.drawDemoWarp(inst, ai);
     if (!this.falzDrawn) {
       const groups = inst.root.children.slice(0, 12);
       this.falzDrawn = { groups, ids: [-1, -1, -1] };
@@ -3202,6 +3204,26 @@ export class CombatView {
       m.visible = true;
     }
     for (let i = nMarks; i < this.falzMarkMeshes.length; i++) this.falzMarkMeshes[i].visible = false;
+  }
+
+  // DEMO_WARP0's cutscene object (exe 0x004513D4 / 0x00451334, combat/darkfalz.ts
+  // demoWarpFrame): the event tower and the two fd_obj813 parts are world parts
+  // at the pivot (formats/enemymodels.ts), shown in that scene only. The face and the flower play
+  // their motions at the object's timer (paused, the frame set each tick).
+  private drawDemoWarp(inst: EnemyInstance, ai: DarkFalzAi): void {
+    const frame = ai.warpFrame;
+    const shown = frame !== null;
+    for (const name of Object.values(DEMO_WARP_PARTS)) {
+      const g = inst.world?.getObjectByName(name);
+      if (g) g.visible = shown;
+    }
+    if (frame === null) return;
+    for (const name of [DEMO_WARP_PARTS.face, DEMO_WARP_PARTS.flower]) {
+      const a = inst.animators[inst.parts.findIndex((p) => p.name === name)];
+      if (!a) continue;
+      a.paused = true;
+      a.setFrame(Math.max(0, frame));
+    }
   }
 
   private falzGroundY(x: number, z: number, fallback: number): number {
