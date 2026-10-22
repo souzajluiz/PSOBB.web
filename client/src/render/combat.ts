@@ -20,7 +20,7 @@
 
 import { PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import { AttackState, type AttackEvents } from '../combat/attack.ts';
+import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
 import { facingOf, inWeaponCone } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
@@ -4806,8 +4806,9 @@ export class CombatView {
       me.angle = facingOf(p.x - from.x, p.z - from.z);
     }
     this.game.sendAttack(step, me.angle, type);
-    // The grind (data1[3]) sets the Mechgun's bursts (combat/attack.ts burstCount).
-    this.attack.begin(step, type, this.equippedWeapon()?.data1[3] ?? 0);
+    // The weapon's attacks_per_step sets the Mechgun's bursts (combat/attack.ts burstCount).
+    const weapon = this.equippedWeapon();
+    this.attack.begin(step, type, weapon ? burstCount(weapon.data1[1], weapon.data1[2]) : 1);
     if (type === 2) this.specialStartFx();
   }
 

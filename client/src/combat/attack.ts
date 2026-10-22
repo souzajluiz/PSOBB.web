@@ -33,10 +33,10 @@
 // Mechgun (class 8, FUN_00698fa8 phase 3 -> handle_player_attack_animation_damaging_part
 //   0x00699058, class 8 branch): the motion loops (mode 1) and each time its
 //   frame passes the hit frame (2) the swing sends a 6x46 with the targets
-//   re-read from the reticle and fires one burst. The count is the weapon's grind
-//   (item +0x1f5 = data1[3], copied at InitializeItemWeapon 0x005d1b50, capped
-//   by the PMT max grind in ApplyItemStatEffect 0x005e93e4): after `grind`
-//   bursts (at least one) the burst flag 8 is set, the combo window opens
+//   re-read from the reticle and fires one burst. The count is attacks_per_step
+//   (item +0x1f4, a signed byte): the swing ends when (char)[+0x1f4] <= ++count
+//   (0x006990c4, class 8 branch). The grind (+0x1f5 = data1[3]) is NOT the count.
+//   After the last burst the burst flag 8 is set, the combo window opens
 //   (HandleAttackDamageCalculation 0x006a2fb4) and the motion counts as ended
 //   (+0xb0 |= 0x50), so the timer runs out in the exit path (CheckAttackStateFlag
 //   0x006a3180). See burstCount / the class 8 branch of tick().
@@ -221,10 +221,21 @@ export function comboWindow(weaponClass: number, step: number): number {
 
 // Weapon class of the Mechgun (multi-burst swings, see the header).
 export const MECHGUN_CLASS = 8;
-// Bursts of a Mechgun swing: the exe's check is `grind <= ++count`, so the swing
-// ends at the first burst when the grind is 0 or 1 (ASSUMED: the item byte is data1[3]).
-export function burstCount(grind: number): number {
-  return Math.max(1, grind);
+// Bursts of a Mechgun swing = the item's attacks_per_step (+0x1f4). Default 1: the
+// generic ctor writes it (construct_generic_weapon 0x005e959c, movb $1,0x1f4 at 0x005e9660).
+// Items whose constructor or attack writes 3 (exe address of the writer; kind = data1[1],
+// names from ItemPMT.prs + unitxt_e, the factory from the g_PlayingSFX table at 0x009c2240,
+// index = kind):
+//   kind 0x48 Samba Maracas: samba_maracas_constructor, factory init_item_weapon_56 (0x005fc268).
+//   kind 0x83 Psychogun (all 17 variants): es_psychogun_constructor, init_item_weapon_101 (0x005f85bc).
+//   kind 0x4b Guld Milla (variant 0) / Dual Bird (variant 1): guld_milla_dual_bird_constructor,
+//     init_item_weapon_59 (0x005ec354, calls the ctor at 0x005ec3e8), only when group_idx < 2.
+//   kind 0xb0 Mille Marteaux: MilleMarteauxExecuteAttack_005f527c (0x005f527c) writes 3 at run
+//     time (the item's constructor leaves 1). ASSUMED: the 3 is in place when the swing ends.
+// Every other weapon, and any variant not listed, is 1 (ASSUMED for the kinds not traced).
+export function burstCount(kind: number, variant: number): number {
+  if (kind === 0x4b) return variant < 2 ? 3 : 1;
+  return kind === 0x48 || kind === 0x83 || kind === 0xb0 ? 3 : 1;
 }
 
 export const HEAVY_SPEED_FACTOR = 1.25; // DAT_0093db24
@@ -256,7 +267,7 @@ export class AttackState {
   private timer = 0;
   private pause = 0;
   private hits = 0;
-  private bursts = 1; // Mechgun: bursts in this swing (burstCount of the grind)
+  private bursts = 1; // Mechgun: bursts in this swing (burstCount of the weapon)
   private queued: number | null = null;
   private lastFrame = 0;
   readonly weaponClass: number;
@@ -275,15 +286,15 @@ export class AttackState {
   }
 
   // Enters attack `step` (0..2) with `type` (0 normal, 1 heavy, 2 special).
-  // `grind` is the weapon's grind (data1[3]); only the Mechgun reads it.
-  begin(step: number, type: number, grind = 0): void {
+  // `bursts` is the weapon's attacks_per_step (burstCount); only the Mechgun reads it.
+  begin(step: number, type: number, bursts = 1): void {
     this.active = true;
     this.step = step;
     this.type = type;
     this.flags = 0;
     this.timer = 0;
     this.hits = 0;
-    this.bursts = burstCount(grind);
+    this.bursts = bursts;
     this.queued = null;
     this.lastFrame = 0;
     this.phase = type === 0 ? 3 : 1;
