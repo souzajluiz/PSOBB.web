@@ -40,6 +40,7 @@ import {
   type TrapEvent,
   type TrapTarget,
 } from './battletraps.ts';
+import { isPlayerEntity, parse6x8F } from '../combat/pvp.ts';
 import type { QuestUi } from './questui.ts';
 
 export interface BattleRunOptions {
@@ -84,6 +85,8 @@ export class BattleRun {
     game.on('subcommand', (sub, clientId, body) => this.onSub(sub, clientId, body));
     game.onSent = (body) => this.onSent(body);
     opts.view.combat.placeTrap = (type) => this.placeTrap(type);
+    // A strike of a remote player that hit us is reported as 6x8F (combat/pvp.ts).
+    opts.view.combat.onPvpHit = (attackerId, damage) => this.reportPlayerHit(attackerId, damage);
     // The palette's trap slots show the local stock (render/fieldhud.ts, classic/palette.ts slotCount).
     opts.view.hud.trapCount = (type) => this.counters.get(type);
     // The minimap's team colours and the teammates' markers (classic/minimap.ts teamColour).
@@ -188,6 +191,8 @@ export class BattleRun {
   private tick(): void {
     const c = this.controller;
     const w = this.setup?.weights;
+    // Player versus player is on while the battle phase runs (render/combat.ts).
+    this.opts.view.combat.battlePvp = !!c && c.state === 'battle';
     if (!c || !w) return;
     const dmg = this.opts.view.combat.damage;
     if (c.state === 'battle') {
@@ -249,10 +254,12 @@ export class BattleRun {
     } else if (sub === 0x80) {
       const call = parse6x80(body);
       if (call && this.controller.state === 'battle') this.traps.receiveCall(call);
-    } else if (sub === 0x8f && body.length >= 8 && this.setup) {
-      // 6x8F: the victim's client says we (client_id) hurt a player for `amount`.
-      if (clientId === this.opts.game.selfId) {
-        this.score.giveDamage(new DataView(body.buffer, body.byteOffset, body.byteLength).getUint16(6, true), true, this.setup.weights);
+    } else if (sub === 0x8f && this.setup) {
+      // 6x8F (victim's client, header = the attacker): a player was hurt by the attacker
+      // (ApplyHitEffectText_006917a4). The attacker is credited with the damage it dealt.
+      const h = parse6x8F(body);
+      if (h && h.attacker === this.opts.game.selfId && isPlayerEntity(h.target)) {
+        this.score.giveDamage(h.amount, true, this.setup.weights);
       }
     }
   }
@@ -332,16 +339,15 @@ export class BattleRun {
     view.combat.syncBattleTraps(this.traps.traps);
   }
 
-  // Sent by the victim's client when a player hits it (ApplyHitEffectText); the web
-  // client has no player-versus-player attacks yet, so nothing calls this.
+  // 6x8F, sent by the victim's client when a remote player's strike hurt it (render/combat.ts
+  // onRemoteStrikeTargets -> onPvpHit): {header = the attacker, u16 victim, u16 amount}.
   reportPlayerHit(attackerId: number, amount: number): void {
     const g = this.opts.game;
-    const payload = build6x8F(g.selfId, amount);
     const body = new Uint8Array(8);
     body[0] = 0x8f;
     body[1] = 2;
     new DataView(body.buffer).setUint16(2, attackerId, true); // the header names the attacker
-    body.set(payload, 4);
+    body.set(build6x8F(g.selfId, amount), 4);
     g.conn.send(0x60, 0, body);
   }
 
@@ -368,6 +374,8 @@ export class BattleRun {
     this.opts.view.hud.battleTeam = null;
     this.traps.clear();
     this.opts.view.combat.syncBattleTraps([]);
+    this.opts.view.combat.battlePvp = false;
+    this.opts.view.combat.onPvpHit = null;
     this.hud?.dispose();
   }
 }

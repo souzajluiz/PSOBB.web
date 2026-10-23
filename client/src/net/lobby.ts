@@ -13,6 +13,7 @@
 
 import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
 import type { PlayerAppearance } from '../render/playermodel.ts';
+import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 
 export interface LobbyPlayer {
@@ -43,6 +44,9 @@ export interface LobbyPlayer {
   // this player (render/heldweapon.ts draws the weapon).
   weapon?: Uint8Array | null;
   inventory?: Uint8Array;
+  // PlayerStats of the last 6x70 (atp, evp, dfp, ata, lck): the Battle mode hit check
+  // of a strike on the local player (combat/pvp.ts).
+  combatStats?: CombatStats;
 }
 
 export interface LobbyEvents {
