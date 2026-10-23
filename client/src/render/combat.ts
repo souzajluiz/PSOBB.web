@@ -128,7 +128,7 @@ import {
   type TechResist,
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
-import { boxTargetable, enemyBoxTable, slotSetType } from '../formats/enemyboxes.ts';
+import { boxTargetable, enemyBoxTable, slotSetType, slotVariant } from '../formats/enemyboxes.ts';
 import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
@@ -6863,7 +6863,7 @@ export class CombatView {
   private enemyBoxHits(e: EnemyRuntime): EnemyBoxHit[] {
     const root = e.instance.root;
     const { x, z } = root.position;
-    const b = enemyBoxTable(slotSetType(e.slot), this.area);
+    const b = enemyBoxTable(slotSetType(e.slot), this.area, slotVariant(e.slot));
     if (!b) return [{ x, z, targetable: true }];
     const c = Math.cos(root.rotation.y);
     const s = Math.sin(root.rotation.y);
@@ -6994,7 +6994,7 @@ export class CombatView {
   // The height an enemy is aimed at: the centre of its hit box (combat/techfire.ts
   // enemyAimHeight, from the type's box table; AIM_HEIGHT where it is not known).
   private aimHeightOf(e: EnemyRuntime): number {
-    return enemyAimHeight(slotSetType(e.slot), this.area);
+    return enemyAimHeight(slotSetType(e.slot), this.area, slotVariant(e.slot));
   }
 
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
