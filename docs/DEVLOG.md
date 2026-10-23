@@ -13186,3 +13186,23 @@ Ports the Trade Window on top of the 2026-10-23 protocol entry (`net/trade.ts`).
 - the exe's offer list rendering (CreateNumericDisplayListWindow rows) and the second list (0xf8..0x1e8);
 - newserv's meseta id (above) before a meseta offer can be tried on a real server;
 - the Quit window x (above).
+
+## 2026-10-23: player movement vs the exe: move-start tick ported, forward update matches
+
+**Report:** the screen recording (classic client, Pioneer 2) shows the body facing a different way from its travel and the character drifting across the screen. Checked the port's walk / run against the exe.
+
+**Exe (PsoBB.exe, dump `Psobb.exe-05112026.c`):**
+- Forward update `UpdateForwardMovement` (dump line 587290): delta = `int_angle_between(pos, leg end)`; heading = `Vector3f_Scale_007a8cd0(heading, delta)` (a quarter of the way, half when 0x3000 or more away) and stored at once; velocity = `angle_sum(new heading, delta)` (half way). `UpdateBackwardMovement` (587660) is the same. The port's `PlayerMover.tick` (heading step, then `velocityAngle`) matches this order.
+- Leg: `CalculatePositionFromHeading_0069bb6c` (dump 581687) sets the leg end 8.0 ahead of the position along `next_frame_heading_delta` (`_DAT_00a94320`). Port: `startLeg`. Matches.
+- Move-start tick `UpdatePlayerVelocity_0069babc` (dump 581618 region, called from the start state): velocity = `ApplyPlayerRotation` scale times `int_sin` / `int_cos` of `next_frame_heading_delta` in full, and the heading is not touched on that tick. The port smoothed the heading and used the half-way velocity on the launch tick too.
+- Camera chase (`ProcessCameraChaseState_004d7a1c`, speed 5, 2 when at least 23 units away, goal heading + 0x8000): the constants in `render/playercamera.ts` match the comments of that file; nothing changed there.
+
+**Port change:** `render/playermove.ts` `PlayerMover`: a walk started from a stand (the stick poll, or the keyboard's turn in place completing) moves the full step along the leg on that tick and leaves the heading as it was (`launch`, `step`). Later ticks are unchanged. Test: `tests/playermove.test.ts` (east launch moves 1.0, heading stays 0; the next tick's heading is 0x2000 and it moves along 0x3000).
+
+**Not changed (checked, matches):** the walk / run speeds, the leg length, the heading smoothing, the arrival check, the chase camera steps.
+
+**Open (not fixed, not reproduced):** the recording's drift and late camera. `render/lobbyview.ts` calls `camera.tick` once per camera tick with the drawn player position; the camera's `move` is therefore the drawn delta between camera ticks, while the exe samples the logic position once per game tick. Not changed here: the sampling needs a Chrome run to confirm (no Playwright in this pass).
+
+**ASSUMED:** the sign of the keyboard forward mapping (`fx = -sin(yaw)`) against the exe's `g_pDefaultNPCCameraState->field_0x94` was not re-checked this pass; the port's mapping has been used in the Chrome checks since 2026-10-20.
+
+**Tests:** `node tests/playermove.test.ts` ok; `tsc --noEmit -p client` clean.
