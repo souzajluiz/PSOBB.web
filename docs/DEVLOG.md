@@ -9608,3 +9608,14 @@ Question (HANDOFF): is the egg (particle 0x9f, renderer 3) too small in Chrome b
 **ASSUMED / open:** the Mechgun's two begin positions (0x240 / 0x24c) and their flag; 0x5e90b0's meaning for 0x45; the 0x6d hook's indirect callees; the Rifle hook's 0x5fec70 effect and the 0x65 muzzle condition (the port spawns one muzzle for 'none'); the Shot's sixth pellet is the same ray as pellet 0. Rifle group_idx 13 and 0x45 group_idx 1 now take the non-gun path (an immediate hit), which the exe does not do either; the projectile is not modelled. The class-3 kinds listed above, other than the traced ones, are not traced. The 0x20000 bit only decides melee against gun here; the port's non-gun path does not read it.
 
 **Checks:** `node tests/gunbullet.test.ts`: all checks passed. `node tests/mechgun.test.ts`: 21 checks, 0 failures. `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome.
+## 2026-10-23: Gol Dragon smoke: the key attack never hit (spec key holds, not a port bug)
+
+**Symptom:** `client/e2e/goldragon-smoke.spec.ts` failed at "a key attack hits the Gol Dragon" (0 hit lines in 16 presses). Two runs failed, one passed, before any change.
+
+**Diagnosis:** the Gol's states and the breath were the same in every run. Per-swing probes (player z 275, Gol z 240, facing PI, weapon range 14 + 18, cone and reach 15 all in) showed `damage.state` back to `alive`, `canAttack` true, no key held, and palette slot 0 = group1 2 (a normal attack), yet no attack started. The cause is the spec's `key()` helper: `page.keyboard.press` releases at once. The port reads the palette keys once per frame: `MapViewer.keys` (render/mapviewer.ts, keydown / keyup) is polled in `CombatView.frame` (`keys.has(key)` and the `held` edge set). A press released before a frame never reaches the palette, so only the rare presses that straddle a frame attack. This is the port's frame polling of a real key state (a human press lasts many frames); the exe reads the keys per frame too. The guns spec already holds its presses for this reason (`TAP_MS`).
+
+**Fix (spec only):** each attack press is held 120 ms (`keyboard.down`, wait, `keyboard.up`), with the reason in a comment. The assertion is unchanged. No combat code changed: the attack path, the weapon cone and the Gol's hit path were all correct.
+
+**Also seen, not changed:** the first hit of this character rolls 0 (the log line "hit the Gol Dragon for 0" counts as a reached swing, as before). After the breath hit the player was in `getup` at the first probe and `alive` from the next one, so the flinch (`damage.busy`) is short and does not explain the miss.
+
+Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node tests/dragon.test.ts` ok, `goldragon-smoke.spec.ts` passed (2 runs with the fix).
