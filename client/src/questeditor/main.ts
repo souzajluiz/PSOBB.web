@@ -10,6 +10,7 @@ import { buildPackage, openQuestFiles, scriptHost, type NamedBytes } from './io.
 import { createEnemy, createObject, QuestDocument, type Change } from './model.ts';
 import { createEntityListPanel, createInspectorPanel, createPalettePanel, PALETTE_MIME, type PaletteEntry } from './panel_entities.ts';
 import { createEventsPanel } from './panel_events.ts';
+import { createRandomPanel } from './panel_random.ts';
 import { createOverviewPanel } from './panel_overview.ts';
 import { createPropertiesPanel, type Panel } from './panel_props.ts';
 import { createScriptPanel } from './panel_script.ts';
@@ -73,6 +74,7 @@ const inspector = createInspectorPanel(doc, {
   frame: () => scene.frameSelection(),
 });
 const events = createEventsPanel(doc);
+const random = createRandomPanel(doc);
 let scriptPanel: Panel | null = null;
 
 // --- Toolbar -------------------------------------------------------------------------------
@@ -269,18 +271,20 @@ const viewBar = h(
 const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, Delete removes. Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
 const viewScript = h('div', { class: 'qe-view', hidden: true });
 const viewEvents = h('div', { class: 'qe-view scroll', hidden: true }, events.el);
+const viewRandom = h('div', { class: 'qe-view scroll', hidden: true }, random.el);
 
-type Tab = '3d' | 'script' | 'events';
+type Tab = '3d' | 'script' | 'events' | 'random';
 let tab: Tab = '3d';
-const tabButtons = (['3d', 'script', 'events'] as const).map((t) =>
-  button(t === '3d' ? '3D view' : t === 'script' ? 'Script' : 'Wave events', () => showTab(t), 'tab'),
+const tabButtons = (['3d', 'script', 'events', 'random'] as const).map((t) =>
+  button(t === '3d' ? '3D view' : t === 'script' ? 'Script' : t === 'events' ? 'Wave events' : 'Random waves', () => showTab(t), 'tab'),
 );
 function showTab(t: Tab): void {
   tab = t;
-  tabButtons.forEach((b, i) => b.classList.toggle('active', ['3d', 'script', 'events'][i] === t));
+  tabButtons.forEach((b, i) => b.classList.toggle('active', ['3d', 'script', 'events', 'random'][i] === t));
   view3d.hidden = t !== '3d';
   viewScript.hidden = t !== 'script';
   viewEvents.hidden = t !== 'events';
+  viewRandom.hidden = t !== 'random';
   if (t === 'script') {
     if (!scriptPanel) {
       try {
@@ -293,13 +297,14 @@ function showTab(t: Tab): void {
     scriptPanel?.refresh();
   }
   if (t === 'events') events.refresh();
+  if (t === 'random') random.refresh();
   flush(['all']);
 }
 
 // --- Layout -----------------------------------------------------------------------------------------
 const left = h('aside', { class: 'qe-left' }, props.el, overview.el);
 const right = h('aside', { class: 'qe-right' }, palette.el, entityList.el, inspector.el);
-const center = h('main', { class: 'qe-center' }, h('nav', { class: 'qe-main-tabs', role: 'tablist' }, ...tabButtons), view3d, viewScript, viewEvents);
+const center = h('main', { class: 'qe-center' }, h('nav', { class: 'qe-main-tabs', role: 'tablist' }, ...tabButtons), view3d, viewScript, viewEvents, viewRandom);
 app.replaceChildren(
   h('header', { class: 'qe-top' }, h('div', { class: 'qe-brand' }, 'PSOBB', h('span', { text: '.web' }), ' Quest editor'), title, message),
   toolbar,
@@ -312,7 +317,7 @@ app.replaceChildren(
 );
 
 // --- Refresh scheduling -------------------------------------------------------------------------------
-type Part = 'props' | 'palette' | 'list' | 'inspector' | 'events' | 'script' | 'toolbar' | 'floors' | 'all';
+type Part = 'props' | 'palette' | 'list' | 'inspector' | 'events' | 'random' | 'script' | 'toolbar' | 'floors' | 'all';
 const pending = new Set<Part>();
 let scheduled = false;
 
@@ -345,6 +350,7 @@ function flush(parts: Part[]): void {
     if (has('list')) entityList.refresh();
     if (has('inspector')) inspector.refresh();
     if (has('events') && tab === 'events') events.refresh();
+    if (has('random') && tab === 'random') random.refresh();
     if (has('script') && tab === 'script') scriptPanel?.refresh();
     if (has('toolbar')) {
       undoBtn.disabled = !doc.history.canUndo;
@@ -367,7 +373,7 @@ doc.onChange((c: Change) => {
       flush(['props', 'palette', 'floors', 'script', 'toolbar', 'list']);
       break;
     case 'floor':
-      flush(['props', 'palette', 'floors', 'list', 'inspector', 'events']);
+      flush(['props', 'palette', 'floors', 'list', 'inspector', 'events', 'random']);
       break;
     case 'entities':
       flush(['props', 'list', 'inspector', 'events', 'floors']);
@@ -377,6 +383,9 @@ doc.onChange((c: Change) => {
       break;
     case 'events':
       flush(['props', 'events', 'floors']);
+      break;
+    case 'random':
+      flush(['random', 'floors']);
       break;
     case 'selection':
       flush(['list', 'inspector']);

@@ -10,42 +10,68 @@
 
 import { parseActions, type EventAction, type WaveEvent } from '../formats/events.ts';
 import { QUEST_DAT_CHUNK_HEADER_SIZE, QuestDatChunkType } from '../formats/questdat.ts';
-import { ENEMY_SET_SIZE, OBJECT_SET_SIZE, type EnemySet, type ObjectSet } from '../formats/setdata.ts';
+import { ENEMY_SET_SIZE, OBJECT_SET_SIZE, parseEnemySets, parseObjectSets, type EnemySet, type ObjectSet } from '../formats/setdata.ts';
+
+// The record writers. A record read from the file (SetEntryBase.raw) starts from
+// its own bytes, and a field is written only when its value differs from the
+// one the record was read with, so the bytes the editor does not model (the
+// unknown u16s of the 0x44 and 0x48 records) survive an edit. A new record
+// starts from zeros. The floor is compared with the chunk floor the record was
+// read under (homeFloor): the record's own floor field is not always filled in.
+type FieldKind = 'u8' | 'u16' | 'i16' | 'i32' | 'f32';
+
+function putField(dv: DataView, off: number, kind: FieldKind, value: number, base: number | undefined): void {
+  if (base !== undefined && Object.is(value, base)) return;
+  if (kind === 'u8') dv.setUint8(off, value);
+  else if (kind === 'u16') dv.setUint16(off, value, true);
+  else if (kind === 'i16') dv.setInt16(off, value, true);
+  else if (kind === 'i32') dv.setInt32(off, value, true);
+  else dv.setFloat32(off, value, true);
+}
+
+function recordBase<T>(raw: Uint8Array | undefined, size: number, parse: (data: Uint8Array) => T[]): { out: Uint8Array; base: T | undefined } {
+  if (raw && raw.length === size) return { out: raw.slice(), base: parse(raw)[0] };
+  return { out: new Uint8Array(size), base: undefined };
+}
 
 export function serializeObjectSet(o: ObjectSet): Uint8Array {
-  const out = new Uint8Array(OBJECT_SET_SIZE);
+  const { out, base } = recordBase(o.raw, OBJECT_SET_SIZE, parseObjectSets);
   const dv = new DataView(out.buffer);
-  dv.setUint16(0x00, o.type, true);
-  dv.setUint16(0x06, o.floor, true);
-  dv.setUint16(0x0a, o.group, true);
-  dv.setUint16(0x0c, o.section, true);
-  dv.setUint16(0x0e, o.unknownA3, true);
+  const b = base as ObjectSet | undefined;
+  const floorBase = o.homeFloor ?? b?.floor;
+  putField(dv, 0x00, 'u16', o.type, b?.type);
+  putField(dv, 0x06, 'u16', o.floor, floorBase);
+  putField(dv, 0x0a, 'u16', o.group, b?.group);
+  putField(dv, 0x0c, 'u16', o.section, b?.section);
+  putField(dv, 0x0e, 'u16', o.unknownA3, b?.unknownA3);
   for (let i = 0; i < 3; i++) {
-    dv.setFloat32(0x10 + i * 4, o.position[i], true);
-    dv.setInt32(0x1c + i * 4, o.rotation[i] | 0, true);
-    dv.setFloat32(0x28 + i * 4, o.params[i], true);
-    dv.setInt32(0x34 + i * 4, o.params[3 + i] | 0, true);
+    putField(dv, 0x10 + i * 4, 'f32', o.position[i], b?.position[i]);
+    putField(dv, 0x1c + i * 4, 'i32', o.rotation[i] | 0, b?.rotation[i]);
+    putField(dv, 0x28 + i * 4, 'f32', o.params[i], b?.params[i]);
+    putField(dv, 0x34 + i * 4, 'i32', o.params[3 + i] | 0, b?.params[3 + i]);
   }
   return out;
 }
 
 export function serializeEnemySet(e: EnemySet): Uint8Array {
-  const out = new Uint8Array(ENEMY_SET_SIZE);
+  const { out, base } = recordBase(e.raw, ENEMY_SET_SIZE, parseEnemySets);
   const dv = new DataView(out.buffer);
-  dv.setUint16(0x00, e.type, true);
-  dv.setUint16(0x06, e.numChildren, true);
-  dv.setUint16(0x08, e.floor, true);
-  dv.setUint16(0x0c, e.section, true);
-  dv.setUint16(0x0e, e.wave, true);
-  dv.setUint16(0x10, e.wave2, true);
-  dv.setUint16(0x12, e.unknownA1, true);
+  const b = base as EnemySet | undefined;
+  const floorBase = e.homeFloor ?? b?.floor;
+  putField(dv, 0x00, 'u16', e.type, b?.type);
+  putField(dv, 0x06, 'u16', e.numChildren, b?.numChildren);
+  putField(dv, 0x08, 'u16', e.floor, floorBase);
+  putField(dv, 0x0c, 'u16', e.section, b?.section);
+  putField(dv, 0x0e, 'u16', e.wave, b?.wave);
+  putField(dv, 0x10, 'u16', e.wave2, b?.wave2);
+  putField(dv, 0x12, 'u16', e.unknownA1, b?.unknownA1);
   for (let i = 0; i < 3; i++) {
-    dv.setFloat32(0x14 + i * 4, e.position[i], true);
-    dv.setInt32(0x20 + i * 4, e.rotation[i] | 0, true);
+    putField(dv, 0x14 + i * 4, 'f32', e.position[i], b?.position[i]);
+    putField(dv, 0x20 + i * 4, 'i32', e.rotation[i] | 0, b?.rotation[i]);
   }
-  for (let i = 0; i < 5; i++) dv.setFloat32(0x2c + i * 4, e.params[i], true);
-  dv.setInt16(0x40, e.params[5], true);
-  dv.setInt16(0x42, e.params[6], true);
+  for (let i = 0; i < 5; i++) putField(dv, 0x2c + i * 4, 'f32', e.params[i], b?.params[i]);
+  putField(dv, 0x40, 'i16', e.params[5], b?.params[5]);
+  putField(dv, 0x42, 'i16', e.params[6], b?.params[6]);
   return out;
 }
 
@@ -256,10 +282,23 @@ export interface DatFloorContent {
   floor: number;
   objects: readonly ObjectSet[];
   enemies: readonly EnemySet[];
-  // The events payload to write: serializeEvents(...) of the edited events, or
-  // the original bytes when they cannot be edited (the 'evt2' format).
+  // The events payload to write (type 3): serializeEvents(...) or
+  // serializeEvt2File(...) of the edited events, or the original bytes when
+  // they are unchanged. null when the floor has no events chunk.
   events: Uint8Array | null;
-  extra: readonly RawChunk[]; // random-wave sections (types 4 / 5) and unknown chunks, untouched
+  // The random-wave payloads (type 4 locations, type 5 definitions), null when
+  // the floor has no such chunk.
+  randomLocations: Uint8Array | null;
+  randomDefinitions: Uint8Array | null;
+  extra: readonly RawChunk[]; // unknown chunk types, untouched
+}
+
+// One chunk of the file, in file order: the quest .dat's chunk list is
+// (type, floor) pairs, and the writer keeps that order so an unchanged file
+// comes back byte for byte.
+export interface ChunkSlot {
+  type: number;
+  floor: number;
 }
 
 function chunk(type: number, floor: number, payload: Uint8Array, align = false): Uint8Array {
@@ -275,13 +314,73 @@ function chunk(type: number, floor: number, payload: Uint8Array, align = false):
   return out;
 }
 
-export function buildQuestDatBytes(floors: readonly DatFloorContent[]): Uint8Array {
+// The payload of a known chunk of a floor, or null when the floor has none to
+// write. A chunk that the layout lists is written even when empty (the file had
+// it); a chunk the layout does not list is written only when it has content.
+function payloadOf(type: number, f: DatFloorContent, listed: boolean): Uint8Array | null {
+  switch (type) {
+    case QuestDatChunkType.Objects:
+      return f.objects.length || listed ? serializeObjects(f.objects) : null;
+    case QuestDatChunkType.Enemies:
+      return f.enemies.length || listed ? serializeEnemies(f.enemies) : null;
+    case QuestDatChunkType.Events:
+      return f.events;
+    case QuestDatChunkType.RandomEnemyLocations:
+      return f.randomLocations;
+    case QuestDatChunkType.RandomEnemyDefinitions:
+      return f.randomDefinitions;
+    default:
+      return null;
+  }
+}
+
+const KNOWN_TYPES = new Set<number>([QuestDatChunkType.Objects, QuestDatChunkType.Enemies, QuestDatChunkType.Events, QuestDatChunkType.RandomEnemyLocations, QuestDatChunkType.RandomEnemyDefinitions]);
+const ALIGNED_TYPES = new Set<number>([QuestDatChunkType.Events]); // the events payload is padded to 4 bytes
+
+// Writes the .dat. The chunks come out in `layout` order (the order the file had
+// them); what the layout does not name follows, by floor then type. A known
+// chunk's first occurrence in the layout gets the floor's content; a later
+// occurrence of the same (type, floor) is folded into it.
+export function buildQuestDatBytes(floors: readonly DatFloorContent[], layout: readonly ChunkSlot[] = []): Uint8Array {
+  const byFloor = new Map<number, DatFloorContent>();
+  for (const f of floors) byFloor.set(f.floor, f);
+  const sorted = [...floors].sort((a, b) => a.floor - b.floor);
+  const listed = new Set(layout.map((s) => `${s.type}:${s.floor}`));
+  const extras = new Map<string, RawChunk[]>();
+  for (const f of sorted) {
+    for (const x of f.extra) {
+      const k = `${x.type}:${f.floor}`;
+      extras.set(k, [...(extras.get(k) ?? []), x]);
+    }
+  }
   const parts: Uint8Array[] = [];
-  for (const f of [...floors].sort((a, b) => a.floor - b.floor)) {
-    if (f.objects.length) parts.push(chunk(QuestDatChunkType.Objects, f.floor, serializeObjects(f.objects)));
-    if (f.enemies.length) parts.push(chunk(QuestDatChunkType.Enemies, f.floor, serializeEnemies(f.enemies)));
-    if (f.events) parts.push(chunk(QuestDatChunkType.Events, f.floor, f.events, true));
-    for (const x of f.extra) parts.push(chunk(x.type, f.floor, x.data));
+  const done = new Set<string>();
+  const emitKnown = (type: number, floor: number, isListed: boolean): void => {
+    const key = `${type}:${floor}`;
+    const f = byFloor.get(floor);
+    if (done.has(key) || !f) return;
+    const payload = payloadOf(type, f, isListed);
+    if (!payload) return;
+    done.add(key);
+    parts.push(chunk(type, floor, payload, ALIGNED_TYPES.has(type)));
+  };
+  for (const s of layout) {
+    if (KNOWN_TYPES.has(s.type)) {
+      emitKnown(s.type, s.floor, true);
+    } else {
+      const queue = extras.get(`${s.type}:${s.floor}`);
+      const x = queue?.shift();
+      if (x) parts.push(chunk(x.type, s.floor, x.data));
+    }
+  }
+  // Content the layout did not name: known chunks, then the unknown ones left over.
+  for (const f of sorted) for (const type of [QuestDatChunkType.Objects, QuestDatChunkType.Enemies, QuestDatChunkType.Events, QuestDatChunkType.RandomEnemyLocations, QuestDatChunkType.RandomEnemyDefinitions]) {
+    emitKnown(type, f.floor, listed.has(`${type}:${f.floor}`));
+  }
+  for (const f of sorted) for (const x of f.extra) {
+    const queue = extras.get(`${x.type}:${f.floor}`);
+    const left = queue?.shift();
+    if (left) parts.push(chunk(left.type, f.floor, left.data));
   }
   parts.push(new Uint8Array(QUEST_DAT_CHUNK_HEADER_SIZE)); // type 0: end
   return concat(parts);

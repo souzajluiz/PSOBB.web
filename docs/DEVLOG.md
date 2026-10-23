@@ -11933,3 +11933,64 @@ Step 1 of the lobby Guild Card leaf (the card book). Client side in `client/src/
 **Fix:** the spec reads each target's enemy (`'enemy' in t ? t.enemy : t`) in the freeze and egg-loop hooks. The checks are unchanged. No port change.
 
 **Checks:** `guns.spec.ts` passes 3 runs in a row (Node 24, Vite 5175); `cd client && npx tsc --noEmit -p .` clean; `tests/combat.test.ts`, `combatdepth`, `gunbullet`, `mechgun`, `pvp` pass (Node 24 binary; the default `node` in this shell is 16, which cannot load the `.ts` tests).
+
+## 2026-10-23: quest editor: random-wave sections (types 4 / 5, evt2) parsed, edited, written back byte-exact
+
+Format work, not an exe port: the layouts come from newserv, the same code the server uses to
+write these sections. The exe side was not re-read for this change (ASSUMED: the exe reads the
+same layout, as the generator in `formats/randomenemies.ts` already assumes).
+
+**Source evidence** (`vendor/newserv/src/Map.hh`, `Map.cc`):
+- Type 4 (`RandomEnemyLocationsHeader` 0x0C, `RandomEnemyRoom` 8, `RandomEnemyLocation` 0x1C):
+  Map.hh:305-333. Type 5 (`RandomEnemyDefinitionsHeader` 0x10, `RandomEnemyDefinition` 0x20,
+  `RandomEnemyWeight` 4): Map.hh:335-370. evt2 `Event2Entry` 0x18: Map.hh:288-303.
+- The writer, `MapFile::serialize`: Map.cc:4385-4402 (type 4: header, room table at 0x0C, the
+  entries after the rooms; type 5: header, definitions, weights) and the events section
+  (Map.cc:4370-4383). The generator is `materialize_random_sections` (Map.cc:3823), already
+  ported in `randomenemies.ts`.
+- The unmodelled fields newserv names `unknown_a9` / `unknown_a10` (location, 0x18 / 0x1A),
+  `unknown_a1` (definition, 0x1A) and `unknown_a4` (weight, 0x03). Among the 42 type 4/5
+  sections of the corpus (9 quests), 11676 locations carry non-zero `unknown_a9` / `unknown_a10`,
+  so the editor keeps them.
+
+**Finding, before this change:** no quest of the corpus (0 of 333) wrote back byte for byte
+through the editor. Two causes: each object and enemy record lost its unmodelled u16s (the
+first diff of `b88001-bb.dat` is at payload 0x04, an object's unknown field), and the chunks
+were re-ordered to floor / type order. Types 4 and 5 were passed through raw, so the random
+sections were already exact; the rest was not.
+
+**What changed:**
+- `formats/randomenemies.ts`: the parser keeps the unmodelled fields; `serializeRandomLocations`
+  and `serializeRandomDefinitions` write the newserv layout (room offsets are running sums).
+- `formats/events.ts`: `serializeEvt2File` (header, entries, action stream).
+- `questeditor/datcodec.ts`: object and enemy records start from their own bytes and write a
+  field only when it differs from the value read (so NaN payloads and unmodelled bytes survive);
+  `buildQuestDatBytes` writes the chunks in the file's order (`QuestDocument.layout`).
+- `questeditor/model.ts`: random sections and evt2 entries are lists with undo / redo and merge
+  keys (typed values are one undo step); an unedited events or random-section chunk is written
+  as read (`rawEvents`, `rawRandom`), an edited one is re-serialized.
+- `questeditor/panel_random.ts`, a "Random waves" tab in `main.ts`: rooms with their locations
+  (add / delete, six numbers each), definitions, weights, evt2 entries. Rebuilt only when the
+  floor's shape changes, so a focused field keeps its focus.
+
+**Tests:** `tests/questeditor.test.ts` (1424 checks, `NEWSERV=.../vendor/newserv`): all 333
+corpus `.dat` files written by an unedited document equal the decompressed file; the 42 type 4/5
+sections and the evt2 sections of the 9 random-wave quests re-serialize to their bytes (the test
+visits each once per `.bin` variant: 84 floor visits); on one random floor, a moved location,
+an added and a deleted location, a definition, a weight and an evt2 field each change what they
+name, keep the unmodelled bytes, and undo back to the file's bytes; keyed edits undo as one step.
+`tests/questwrite.test.ts`, `randomenemies.test.ts`, `quests.test.ts`, `questflow.test.ts`,
+`admin.test.ts`, `setdata.test.ts` pass. `tsc` shows no error in the touched modules.
+
+**Not verified:** the panel in a browser (Playwright is not run for this task; the panel only
+passes the typecheck). `enemies`, `waves`, `npcs`, `objectcollision`, `bossrooms`, `combat` tests
+need the `three` package, which is not installed in this checkout (the main checkout's `tsc` also
+reports it missing), so they were not run.
+
+**ASSUMED:**
+- The exe reads type 4 / 5 and evt2 with the newserv layout (not re-checked here).
+- Location `pos` / `angle` and definition params are edited as the parsed numbers; the panel's
+  step (0.5 for positions, 1 for angles) is a UI choice, not a format rule.
+
+**Next step:** a browser pass of the Random waves tab on a challenge quest (`c88101`), then a
+rotation gizmo for the locations (the rest of the editor's left-to-do list is in ROADMAP).

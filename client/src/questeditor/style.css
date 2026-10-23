@@ -157,6 +157,9 @@ textarea { resize: vertical; }
 .qe-wave-row .tag { font-size: 11px; color: var(--ok); }
 .qe-wave-row.missing { border-color: #8a6a1c; }
 .qe-wave-row.missing .tag { color: var(--warn); }
+.qe-random-body { display: grid; gap: 12px; }
+.qe-random-room, .qe-random-row { border: 1px solid var(--edge-soft); border-radius: 5px; padding: 6px; display: grid; gap: 6px; }
+.qe-random-row > .tag, .qe-random-room > strong { font-size: 12px; }
 
 .qe-dialog { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; color: var(--text); padding: 16px; min-width: 280px; }
 .qe-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
