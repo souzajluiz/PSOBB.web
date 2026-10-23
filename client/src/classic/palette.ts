@@ -47,6 +47,8 @@
 // The switch: "Action Palette Change" (Ctrl in the default key config)
 // toggles is_palette_flipped (HandlePlayerPaletteToggle_00694f0c).
 
+import { drawElementShine } from './windowanim.ts';
+
 export const PALETTE_POS = { x: 484, y: 368 } as const; // table entry 0x20
 export const PALETTE_SIZE = { w: 150, h: 107 } as const; // 0x009f1630
 export const ICON_W = 50; // 0x0096f598
@@ -224,6 +226,10 @@ export class PaletteHud {
   draw(ctx: CanvasRenderingContext2D, tex: PaletteTextures, state: PaletteHudState, x: number, y: number): void {
     if (!this.visible) return;
     ctx.drawImage(tex.bg, 0, 0, PALETTE_SIZE.w, PALETTE_SIZE.h, x, y, PALETTE_SIZE.w, PALETTE_SIZE.h);
+    // render_main_palette_bg: the element shine over the background (texture 2,
+    // texels (0,0)-(150,107)). Its element has no inset (flags 0xB20, bit 0x800),
+    // so the gate and the band use the window's own x and width (windowanim.ts).
+    drawElementShine(ctx, tex.bg, x, y, PALETTE_SIZE.w, PALETTE_SIZE.h, [0, 0, PALETTE_SIZE.w, PALETTE_SIZE.h]);
     const pal = currentPalette(state.data);
     pal.slots.forEach((slot, i) => {
       const [ex, ey] = SLOT_POS[i];

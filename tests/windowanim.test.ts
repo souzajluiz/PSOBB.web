@@ -231,5 +231,50 @@ const check = (ok: boolean, msg: string) => {
   check(w.tp.color === BAR_COLORS.tp.low && w.tpText === BAR_COLORS.tp.lowText, 'TP 5 of 29 fades to the low colour');
 }
 
+// --- the field palette's element shine (render_main_palette_bg) -----------------
+// Its element: x 484, 150 wide, flags 0xB20 (bit 0x800: no inset), so the gate
+// and the band use the window's own x and width; texture 2, texels (0,0)-(150,107).
+{
+  const saved = windowShine.state;
+  const savedCounter = windowShine.counter;
+  const calls: Array<{ a: number; dx: number; sh: number }> = [];
+  let alpha = 1;
+  const ctx = {
+    save() {},
+    restore() {},
+    globalCompositeOperation: 'source-over',
+    get globalAlpha() {
+      return alpha;
+    },
+    set globalAlpha(v: number) {
+      alpha = v;
+    },
+    drawImage(_src: unknown, _sx: number, _sy: number, _sw: number, sh: number, dx: number) {
+      calls.push({ a: alpha, dx, sh });
+    },
+    createLinearGradient() {
+      return { addColorStop() {} };
+    },
+    fillRect() {},
+  } as unknown as CanvasRenderingContext2D;
+  // b = counter * 5 - 100 = 500 at counter 120: inside 484..634 at t = 16 / 150.
+  windowShine.state = 2;
+  windowShine.counter = 120;
+  windowShine.last = performance.now();
+  drawElementShine(ctx, {} as CanvasImageSource, 484, 368, 150, 107, [0, 0, 150, 107]);
+  check(calls.length === 150 && calls.every((c) => c.sh === 107), `palette band: one column per texel, 107 high (${calls.length})`);
+  check(calls[0].a === 0 || calls[0].a < 0.01, 'palette: left edge clear');
+  // The band sits at column 16: alpha rises to the peak there, then falls.
+  const peak = calls.reduce((m, c) => (c.a > m.a ? c : m), calls[0]);
+  check(Math.abs(peak.dx - (484 + 16)) <= 1, `palette: peak near the band (${peak.dx})`);
+  // Outside the window's span there is no band (the palette only shows while in state 2).
+  calls.length = 0;
+  windowShine.counter = 60; // b = 200 < 484
+  drawElementShine(ctx, {} as CanvasImageSource, 484, 368, 150, 107, [0, 0, 150, 107]);
+  check(calls.length === 0, 'palette: no band before the element');
+  windowShine.state = saved;
+  windowShine.counter = savedCounter;
+}
+
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures) process.exit(1);

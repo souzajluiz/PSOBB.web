@@ -11098,3 +11098,32 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: HUD field palette shine and the Item Pack's later windows (element wipe and quick-menu shine not ported)
+
+**What changed:** the field palette (`classic/palette.ts`) draws the element shine over its background; the Item Pack's later windows (the description, Purpose, Sort and Amount) run their own list window animation (`classic/itempack.ts`: detailAnim, purposeAnim, sortAnim, amountAnim; `classic/fieldmenu.ts` passes the window speed). Not done: the element wipe inside the field menus, the Equip / MAG leaves' later windows, and the shine of `QuickMenuRenderTextBackground_00742a6c`.
+
+**Exe evidence (PsoBB.exe 1.25.13, dump `Psobb.exe-05112026.c` and Ghidra):**
+- Palette object: CreateSinowberillChallengeObjectListItem_0070f6bc builds it on table 0x009f1630 (150.0, 107.0 floats; the flags word at +0x10 is 2848 = 0xB20). MenuListItem_Initialize_00712c44 copies the flags to +0x2c, so bit 0x800 is set. Bits 1 / 2 are clear: the palette is not a list window with its own open.
+- render_main_palette_bg (dump line 672153, called from SinowberillChallengeObject_RenderUI_007100ec): background from texture 2, texels (0,0)-(150,107) (0.5859375 / 0.41796875 of 256); then `IsAnimationFrameInWindow_00712914(elem, elem+4, elem+6)` gates the band; `SelectAnimationFrameTexture_00712964(2)` and `RenderAnimationFrame_007129a8(quad, elem)`.
+- Render data (UiTextGeometryUpdate_0071b900, Ghidra FUN_0071b900): [0],[1] the element's top-left, [2],[3] its size, [4],[5],[6],[7] an inner box inset by `_DAT_009700c0` = 10.0 (0.0 when flags & 0x800 = bit 0x800: `_DAT_009700bc` = 0.0), so the gate is the inner box (x + inset < b < x + inset + (w - 2 inset)), and [0] / [2] the full element, which sets t = (b - [0]) / [2].
+- RenderAnimationFrame_007129a8: band x = quad.x0 + (quad.x1 - quad.x0) t; alpha 0 at the quad's edges, trunc(160 * 2t) to t = 0.5, then trunc(160 (1 - t) 2) (0x0096f658 = 160, 0x0096f650 = 2); the band b = counter * 5 - 100 (0x0096f668 / 0x0096f664).
+- For the palette the inset is 0, so the gate and t use the window's own x and 150. `drawElementShine` (already in `windowanim.ts`) draws it with texture 2 over the quad.
+- Item Pack windows: each list window is created by its constructor (MenuListItem_Initialize_00712c44): counter 0 unless the speed threshold says open at once (0x1000000), flags |= 3, SE 0x572 unless flag 0x20. Close is play_sfx_for_closing_list_menu (windowanim.ts header): counter from 0, 4.5 frames, scale. The port's WindowAnim already has all of this; the Item Pack uses it per window: Purpose opens at 0 on Enter, description closes at the same time; Backspace on Purpose closes Purpose and reopens the description (a reopen while closing is held, as the exe does, bit 0x4); the Amount window opens when Drop asks for an amount; leaving it closes it; a Sort decide "Manually" closes Purpose / Sort and reopens the description.
+- QuickMenuRenderTextElement_00742a48 (dump 713157) calls QuickMenuRenderTextBackground_00742a6c, which draws the 36 x 35 corner from texture 13 texels (190,80)-(226,115) at the inner box + (6, 2) and the gauge from `currently_casting_tech_info` (+0xc0). That function has no direct code xref in the PE (tools/exedata.py xref finds none). A scan of the PE for the pointer 0x00742a48 finds one data word at VA 0x00741688, slot 0 of an otherwise unnamed table (slot 1 = 0x0061cdb0, the pure virtual). The class owning that table is not located.
+
+**ASSUMED:**
+- The later windows are silent: the menu's cursor / decide / cancel sounds play as before (the flags of the Purpose, Sort and Amount windows are not decoded: the constructor's flag word comes from a caller's global, not from the table 0x009f1630).
+- The list's own height grows back at once when the action window closes (the exe's ListWindowObject_AdjustSelectedLinePosition timing is not decoded here).
+- The palette's shine is drawn before its icons (the exe's render_main_palette_bg runs after render_text_in_chat_bubble_and_more in SinowberillChallengeObject_RenderUI_007100ec; the icon / count placement against the background is not traced here).
+
+**UNCLEAR / open:**
+- The status window's gate (render_player_hud_bg uses the same RenderAnimationFrame_007129a8 with the render data of its own element): the port's gate is the full window (x, w). Its flags are not decoded, so an inset of 10 (as the palette's default) would move the gate 10 px in. The 2026-10-23 "HUD TP use" entry marked the mapping ASSUMED; this check did not change it.
+- The palette's split-screen shift (the `this+0x74` factor in UIElement_UpdateRenderData: 1.0 for one player, 0.7 for two, 0.5 for three or four, from CreateSinowberillChallengeObjectListItem_0070f6bc) is not applied to the palette's position, which is single-player only in the port.
+
+**NOT PORTED:**
+- The element wipe inside the field menus: the leaves (`classic/itempack.ts`, `equipmenu.ts`, `magmenu.ts`, `techmenu.ts`, `options.ts`) draw their rows, bars and texts without the per-element reveal (`WindowAnim.reveal`) that the list windows get through `drawMenuWindow`. The leaves need their element offsets in content coordinates; `FieldMenu` has only the leaf's whole-window fade and close (`leafAnim`).
+- The Equip / MAG leaves' later windows (equipmenu.ts's item list, magmenu.ts's item list and PB window): one animation each, as the Item Pack has.
+- The shine of `QuickMenuRenderTextBackground_00742a6c`: its owner (the table at 0x00741688) is not found; the port has no element for it.
+
+**Tests:** `tests/windowanim.test.ts` (54/54: new cases for the palette's band over 150 columns at the peak near x 500, nothing before the element); `tests/fieldhud.test.ts` (new block: Purpose opens at counter 0 and the description closes, the counter 8 open, Backspace closes Purpose with its 4-frame close and reopens the description, the meseta Amount window opens and closes while Purpose stays). Also `tsc --noEmit` clean (Node 24); `party`, `level`, `minimap`, `questboard`, `options`, `controls`, `battletraps`, `titlescreen` pass. Not run: Playwright / Chrome (per the brief).

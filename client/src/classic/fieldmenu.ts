@@ -103,11 +103,12 @@ export class FieldMenu {
   private env: FieldMenuEnv;
   // The leaf's windows open and close with the list windows' animation
   // (classic/windowanim.ts): fade in, then the 4-frame close about the
-  // centre. ASSUMED: one animation for all the windows of a leaf (the client
-  // runs one per window, opened together) about the bounds of its frames,
-  // silent (the menu's own cursor / decide / cancel sounds play), and the
-  // elements' wipe is left out for the menus (their frames and text share
-  // one draw path here).
+  // centre. ASSUMED: one animation for the leaf's first window about the
+  // bounds of its frames, silent (the menu's own cursor / decide / cancel
+  // sounds play), and the elements' wipe is left out for the menus (their
+  // frames and text share one draw path here). The Item Pack's later windows
+  // (description, Purpose, Sort, Amount) run their own animations inside
+  // ItemPackMenu (detailAnim, purposeAnim, ...), driven by `speed` below.
   readonly leafAnim = new WindowAnim(true, false);
   private closingLeaf: Leaf | null = null;
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
@@ -200,7 +201,10 @@ export class FieldMenu {
       return;
     }
     if (id === 9) this.leaf = new EquipMenu({ ...this.env.itemPack, equipActions: this.env.equip });
-    else if (id === 0xb) this.leaf = new ItemPackMenu(this.env.itemPack);
+    else if (id === 0xb) {
+      this.leaf = new ItemPackMenu(this.env.itemPack);
+      this.leaf.speed = this.speed;
+    }
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
     else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
     else if (id === 6) this.leaf = new OptionsMenu(this.env.options);
@@ -217,6 +221,7 @@ export class FieldMenu {
 
   tick(): void {
     this.menu.tick();
+    if (this.leaf instanceof ItemPackMenu) this.leaf.speed = this.speed;
     this.leaf?.tick();
     this.leafAnim.tick(this.speed);
     if (!this.leafAnim.visible) this.closingLeaf = null;
