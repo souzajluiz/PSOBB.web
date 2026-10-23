@@ -173,7 +173,7 @@ export class PadConfigMenu {
       this.prev = null;
       return;
     }
-    const before = this.prev ?? { buttons: 0, analog: [] };
+    const before: Pick<PadSample, 'buttons' | 'analog'> = this.prev ?? { buttons: 0, analog: [] };
     this.prev = s;
     const row = PAD_ROWS[this.list.cursor];
     if (row.analog) {
