@@ -9608,3 +9608,16 @@ Question (HANDOFF): is the egg (particle 0x9f, renderer 3) too small in Chrome b
 **ASSUMED / open:** the Mechgun's two begin positions (0x240 / 0x24c) and their flag; 0x5e90b0's meaning for 0x45; the 0x6d hook's indirect callees; the Rifle hook's 0x5fec70 effect and the 0x65 muzzle condition (the port spawns one muzzle for 'none'); the Shot's sixth pellet is the same ray as pellet 0. Rifle group_idx 13 and 0x45 group_idx 1 now take the non-gun path (an immediate hit), which the exe does not do either; the projectile is not modelled. The class-3 kinds listed above, other than the traced ones, are not traced. The 0x20000 bit only decides melee against gun here; the port's non-gun path does not read it.
 
 **Checks:** `node tests/gunbullet.test.ts`: all checks passed. `node tests/mechgun.test.ts`: 21 checks, 0 failures. `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome.
+
+## 2026-10-23: player movement state machine: checked against the exe, tests extended
+
+**What changed:** nothing in the movement code. The 2026-10-19 "still to port" note was stale: `PlayerMover` (`render/playermove.ts`) already holds the stand / walk / run poll, the leg (8.0 ahead), the arrival check, heading smoothing and the velocity direction, and `render/lobbyview.ts` drives the local player from it (see 2026-10-20). Re-checked against the exe:
+- Leg target 8 ahead: `CalculatePositionFromHeading_0069bb6c` (named dump, `Psobb.exe-05112026.c` line 581687) gives `pos + 0x00a94320 * (sin, cos)(heading)`. Port: `PlayerMover.startLeg`, same form.
+- Heading smoothing: `Vector3f_Scale_007a8cd0` (dump line 790109) is `step = diff >> 1`, minus `diff >> 2` when `-0x3000 < diff < 0x3000`, added to the heading, `& 0xffff`. Port: `headingStep`, same, including the 16-bit `diff`.
+- Keyboard ramp: NOT confirmed. The 05112026 dump's `get_input_movement_speed` (line 667077, the function at 0x0070a60c in the DEVLOG 2026-10-19 notes; its `LAB_0070a744` is inside it) does not ramp an axis by 32 to 128. Its keyboard path accumulates `g_InputMoveAmount_ForwardsBackwards` by `input_turn_speed` and clamps it to `move_speed` (`player_run_speed` / `player_walk_speed`), with deadzone accel globals (`g_InputDeadzoneAccelLeft/Right`). The globals' init values are not in the dump (no address comments), so the port's 32 / 128 is still the DEVLOG 2026-10-19 reading and is ASSUMED here. Not changed: a change needs the init stores of those globals read with `tools/exedata.py` first.
+
+**Tests:** `tests/playermove.test.ts` adds the heading step for a negative diff and across the 16-bit wrap (`headingStep(0, 0xf000) = 0xfc00`, `headingStep(0xfff0, 0x0010) = 0xfff8`). The leg-8 and leg-end checks were already there.
+
+**Checks:** `node tests/playermove.test.ts`: playermove: ok. Client `npx tsc --noEmit -p .` (Node 24): see the commit. Not run in Chrome.
+
+**Open:** the keyboard ramp values (above). Two-client remote check and wall slide for remote players, as before.
