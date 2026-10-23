@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import {
-  areaForMap, enemyDisplayName, enemyTypeClassName, objectTypeName, parseSetFile, parseSetFileName,
+  areaForMap, enemyDisplayName, enemyTypeClassName, entityParamLabels, objectTypeName, parseEnemySets, parseObjectSets, parseSetFile, parseSetFileName,
   placeEntities, sectionToWorld, setVariantsForMap, type SetEntity,
 } from '../client/src/formats/setdata.ts';
 
@@ -217,6 +217,29 @@ check(near(sectionToWorld({ id: 0, position: [0, 0, 0], rotation: [0, Math.PI / 
 const wolf = parseSetFile('map_forest01_00e.dat', gsl.get('map_forest01_00e.dat')).find((e) => e.type === 0x43);
 check(!!wolf && /Wolf$/.test(enemyDisplayName(wolf as never, 1)), 'forest wolf name');
 check(objectTypeName(0x88, 1) === 'TObjContainerItem', 'object name');
+
+// Parameter labels: newserv's names (generated) and the port's enemy decodings,
+// "Param n" for the rest.
+{
+  const one = (size: number, type: number) => {
+    const buf = new Uint8Array(size);
+    new DataView(buf.buffer).setUint16(0, type, true);
+    return buf;
+  };
+  const [player] = parseObjectSets(one(0x44, 0x0000));
+  const labels = entityParamLabels(player, 1);
+  check(labels.length === 6 && labels[0] === 'Client ID (param 1)' && labels[3] === 'Source type (param 4)', `object params named from newserv: ${labels.join(' | ')}`);
+  check(labels[1] === 'Param 2 (f)' && labels[4] === 'Param 5 (i)', 'undocumented object params keep the Param n form');
+  const [unknown] = parseEnemySets(one(0x48, 0xfff0));
+  const plain = entityParamLabels(unknown, 1);
+  check(plain.length === 7 && plain[0] === 'Param 1 (f)' && plain[4] === 'Param 5 (f)' && plain[5] === 'Param 6 (i16)' && plain[6] === 'Param 7 (i16)', `unknown enemy params: ${plain.join(' | ')}`);
+  const [barb] = parseEnemySets(one(0x48, 0x0043));
+  barb.params[1] = 1;
+  const wolfLabels = entityParamLabels(barb, 1);
+  check(wolfLabels[1] === 'Barbarous if >= 1 (param 2)', `port label for a wolf param: ${wolfLabels[1]}`);
+  const [booma] = parseEnemySets(one(0x48, 0x0044));
+  check(/^Variant: 0 Booma/.test(entityParamLabels(booma, 1)[5]), 'port label for a Booma variant');
+}
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

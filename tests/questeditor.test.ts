@@ -23,6 +23,7 @@ import { createEnemy, createEvent, createObject, QuestDocument, type Change } fr
 import { floorToArea, gameEpisode } from '../client/src/questeditor/areas.ts';
 import { errorLine, findLabels, wordAt } from '../client/src/questeditor/panel_script.ts';
 import { paletteEntries } from '../client/src/questeditor/panel_entities.ts';
+import { adjacentRoom, floorSummaries, roomEntities, roomSummaries } from '../client/src/questeditor/overview.ts';
 import { adminSession, buildPublishBody, defaultPublishName, listQuestDirectories, PUBLISH_NAME_RE, publishQuest, toBase64 } from '../client/src/questeditor/publish.ts';
 import { buildPackage } from '../client/src/questeditor/io.ts';
 import { parseEnemySets, parseObjectSets } from '../client/src/formats/setdata.ts';
@@ -440,6 +441,37 @@ const throws = (fn: () => void, msg: string) => {
     }
     console.log(`real quests: ${quests} round-tripped`);
   }
+}
+
+// --- Floors overview and room navigation -------------------------------------------------------------
+{
+  const doc = QuestDocument.blank({ episode: 0 });
+  const before = floorSummaries(doc).find((s) => s.floor === 1)!;
+  check(before.objects >= 1 && before.enemies === 0 && before.events === 0, 'overview: the blank floor has its spawn only');
+  doc.addEntity(1, createEnemy(0x43, 1, 4));
+  doc.addEntity(1, createEnemy(0x43, 1, 4));
+  doc.addEntity(1, createObject(0x0000, 1, 9));
+  doc.addEvent(1, createEvent(1, 4, 0));
+  const after = floorSummaries(doc).find((s) => s.floor === 1)!;
+  check(after.enemies === 2 && after.objects === before.objects + 1 && after.events === 1, 'overview: counts of the floor');
+  check(floorSummaries(doc).every((s, i, all) => i === 0 || all[i - 1].floor < s.floor), 'overview: floors ascending');
+  check(floorSummaries(doc).every((s) => doc.designatedFloors().includes(s.floor)), 'overview: only designated or populated floors');
+  const rooms = roomSummaries(doc, 1);
+  check(rooms.length === 3 && rooms[0].room === 0 && rooms[1].room === 4 && rooms[1].enemies === 2 && rooms[2].room === 9 && rooms[2].objects === 1, 'overview: room counts sorted by room id');
+  check(roomEntities(doc, 1, 4).length === 2 && roomEntities(doc, 1, 4).every((e) => e.section === 4), 'overview: entities of a room');
+  check(roomEntities(doc, 1, 77).length === 0 && roomSummaries(doc, 3).length === 0, 'overview: an empty room or floor has no entities');
+  const ids = [0, 4, 9];
+  const at = (rs: number[]) => rs.map((r) => ({ room: r, enemies: 0, npcs: 0, objects: 0 }));
+  const list = at(ids);
+  check(adjacentRoom(list, null, 1)?.room === 0 && adjacentRoom(list, null, -1)?.room === 9, 'rooms: no current room starts at the first or last');
+  check(adjacentRoom(list, 4, 1)?.room === 9 && adjacentRoom(list, 9, 1)?.room === 0, 'rooms: next wraps around');
+  check(adjacentRoom(list, 0, -1)?.room === 9 && adjacentRoom(list, 4, -1)?.room === 0, 'rooms: previous wraps around');
+  check(adjacentRoom(list, 5, 1)?.room === 0, 'rooms: a room not in the list starts over');
+  check(adjacentRoom([], null, 1) === null, 'rooms: no room, no step');
+  doc.patchEntity(doc.floors.get(1)!.enemies[0], { section: 9 }, undefined, 'Change room');
+  eq(roomSummaries(doc, 1).find((r) => r.room === 9)?.enemies, 1, 'overview: a room change moves the count');
+  doc.undo();
+  eq(roomSummaries(doc, 1).find((r) => r.room === 4)?.enemies, 2, 'overview: undo moves it back');
 }
 
 // --- Publish to server (request building; the server checks everything again) ---

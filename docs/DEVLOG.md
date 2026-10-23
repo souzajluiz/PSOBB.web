@@ -11098,3 +11098,20 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: Quest editor: named entity parameters, floors overview and room navigation
+
+**What changed:** The inspector names the parameters of each entity instead of "Param 1..7". The names come from newserv's comments on its entity tables (`vendor/newserv/src/Map.cc`, the comment block above each entry), which `tools/gen-entity-names.ts` now reads into `ENEMY_PARAM_NAMES` / `OBJECT_PARAM_NAMES` (`client/src/formats/entitynames.ts`, regenerated: 164 object and 40 enemy rows with names). A label is the description cut at its first parenthesis, colon, semicolon or period; labels over 50 characters or with a TODO stay out. The enemies the port already decodes by type (wolves, Booma, Dimenian, Gibbon, Boota, Goran and the like, `PORT_ENEMY_PARAMS` in `formats/setdata.ts`) fill the gaps. A parameter nobody names keeps `Param n (f)` / `(i)` / `(i16)`. The field caption reads `Name (param n)`.
+
+The new **Overview** panel (left column) lists the designated floors and the floors that hold data, with area and counts (enemies, NPCs, objects, wave events); a click shows the floor. Under it, **Rooms of this floor** lists the rooms that hold entities with their counts; a click selects the room's entities and frames them, and Previous / Next room step through the list with wrap-around. The counting and the navigation are pure functions in `questeditor/overview.ts`; the panel is `questeditor/panel_overview.ts`, refreshed with the floor list.
+
+**Files:** `tools/gen-entity-names.ts`, `client/src/formats/entitynames.ts` (generated), `client/src/formats/setdata.ts` (`entityParamLabels`), `client/src/questeditor/overview.ts` (new), `client/src/questeditor/panel_overview.ts` (new), `client/src/questeditor/panel_entities.ts`, `client/src/questeditor/main.ts`, `client/src/questeditor/style.css`, `tests/questeditor.test.ts`, `tests/setdata.test.ts`, `docs/QUESTEDITOR.md`, `docs/ROADMAP.md`.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/questeditor.test.ts` 1149/1149 (new: floor counts, ascending floors, room counts and sorting, room entities, adjacent-room wrap, a room change and its undo moving the counts); `node tests/setdata.test.ts` ALL PASS (new: newserv names for an object, `Param n` for an unknown enemy, the port's wolf and Booma labels); `node tests/admin.test.ts` 316/316; `node tests/setdatatable.test.ts` ALL PASS. No browser check (the editor was not run in Chrome or Playwright).
+
+**ASSUMED (not traced):**
+- newserv's comments are the meanings of the params; the port's enemy decodings are as its own code reads them (`enemyKind`, `enemymodels.ts`), not checked against the exe.
+- Labels are cut at the first `(`, `:`, `;` or `.`, so a cut label may lose a qualifier; the generated file shows each one for review.
+- The room list does not show empty rooms of the map (only rooms with entities), so an empty room cannot be navigated to.
+
+**Left:** labels for the enemies newserv does not document beyond the port's decodings; empty map rooms in the room list (needs the n.rel section ids in the panel); a keyboard shortcut for the room steps.
