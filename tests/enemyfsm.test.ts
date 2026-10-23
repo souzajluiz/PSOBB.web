@@ -12,7 +12,11 @@ import {
   RappyFakeDeath,
   SPIT,
   WOLF,
+  WOLF_DASH,
+  WOLF_PACK_HOWL,
+  WOLF_ROAM,
   WolfAi,
+  armPackHowl,
   wolfLeapHeight,
 } from '../client/src/combat/enemyfsm.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
@@ -206,6 +210,87 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(v.state, 'dash', 'startDash works with no target');
   v.tick([]);
   eq(v.state, 'idle', 'the dash ends at once with no target');
+}
+{
+  // The dash's hit check: the speed lerps 0.2 a frame toward 1.6 and the step is
+  // along a heading turned by at most 0x500 BAMS toward the aim.
+  const w = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1005, rng: () => 0.9 });
+  const g = w as unknown as { speed: number };
+  w.startDash(player(-50, 0));
+  const a0 = w.angle;
+  w.tick([player(-50, 0)]);
+  near(g.speed, WOLF_DASH.lerp, 'the first dash frame lerps the speed to 0.2');
+  check(Math.abs(w.angle - a0) <= (WOLF_DASH.turn * Math.PI) / 32768 + 1e-6, 'the heading turns by at most 0x500 BAMS');
+  check(w.x > 0, 'the step goes to the cross side');
+  w.tick([player(-50, 0)]);
+  near(g.speed, 2 * WOLF_DASH.lerp, 'the second frame lerps to 0.4');
+}
+{
+  // The dash's speed test: a goal nearer than the threshold 0x43c goes to the stalk.
+  const w = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1005, rng: () => 0.9 });
+  (w as unknown as { arriveAt: number }).arriveAt = 200;
+  w.startDash(player(-50, 0));
+  w.tick([player(-50, 0)]);
+  eq(w.state, 'stalk', 'the dash goes to the stalk when the goal is inside the threshold');
+}
+{
+  // The roam (state 7): the idle walks to a goal up to 120 from the spawn on a
+  // random heading, the speed ramps 0.05 a frame toward 0.3 + 0.7 r, the arrival
+  // goes to the slow-down, then a rest of 240..360 frames and a new goal.
+  const w = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1007, rng: () => 0.5 });
+  const g = w as unknown as { goalX: number; goalZ: number; speed: number; roamPhase: number; wantSpeed: number };
+  const r0 = w.tick([]);
+  eq(w.state, 'idle', 'with no target the wolf roams (state 7)');
+  eq(r0.motion?.index, 13, 'the walk plays the stalk motion (13)');
+  // rng 0.5: heading 32768 BAMS (180 degrees), distance 60.
+  near(g.goalX, 0, 'the goal x for rng 0.5');
+  near(g.goalZ, -60, 'the goal z for rng 0.5');
+  near(g.wantSpeed, 0.65, 'the walk speed 0.3 + 0.7 * 0.5');
+  near(g.speed, WOLF_ROAM.up, 'the first walk frame ramps the speed by 0.05');
+  let phase1At = -1;
+  let phase2At = -1;
+  let restMotion = -1;
+  let back0At = -1;
+  let maxDist = 0;
+  for (let i = 1; i <= 1200 && back0At < 0; i++) {
+    const before = g.roamPhase;
+    const r = w.tick([]);
+    maxDist = Math.max(maxDist, Math.hypot(w.x, w.z));
+    if (before === 0 && g.roamPhase === 1 && phase1At < 0) phase1At = i;
+    if (before === 1 && g.roamPhase === 2 && phase2At < 0) {
+      phase2At = i;
+      restMotion = r.motion?.index ?? -1;
+    }
+    if (before === 2 && g.roamPhase === 0) back0At = i;
+  }
+  check(phase1At > 0 && phase1At < 200, `the walk arrives (phase 1 at ${phase1At})`);
+  eq(restMotion, 12, 'the rest plays the wait motion (12)');
+  const rest = back0At - phase2At;
+  check(rest >= 240 && rest <= 361, `the rest is 240..360 frames (${rest})`);
+  check(maxDist < WOLF_ROAM.radius + 10, `the wolf stays about within 120 of the spawn (${maxDist.toFixed(1)})`);
+}
+{
+  // The howl's trigger (DerolleProcessState_0051ba20, state 0x10 entry): a
+  // Barbarous Wolf's death arms each live packmate (the same pack) with the
+  // countdown 20 + round(50 r); the dead, the other packs and a non-Barbarous
+  // death arm nobody.
+  const mk = (pack: number, barbarous: boolean, id: number) =>
+    new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: id, pack, barbarous, rng: () => 0.5 });
+  const dead = mk(7, true, 0x1010);
+  const mate = mk(7, false, 0x1011);
+  const other = mk(8, false, 0x1012);
+  const gone = mk(7, false, 0x1013);
+  gone.kill();
+  eq(armPackHowl(dead, [dead, mate, other, gone], () => 0.5), 1, 'one live packmate is armed');
+  let howlAt = -1;
+  for (let i = 1; i <= 60 && howlAt < 0; i++) {
+    mate.tick([]);
+    if (mate.state === 'howl') howlAt = i;
+  }
+  eq(howlAt, WOLF_PACK_HOWL.base + Math.round(WOLF_PACK_HOWL.range * 0.5), 'the packmate howls after 20 + round(50 * 0.5) = 45 frames');
+  for (let i = 0; i < 60; i++) other.tick([]);
+  check(other.state !== 'howl', 'a wolf of another pack is not armed');
+  eq(armPackHowl(mate, [mate, dead], () => 0.5), 0, 'a non-Barbarous death arms nobody');
 }
 
 // --- Rag Rappy fake death ----------------------------------------------------
