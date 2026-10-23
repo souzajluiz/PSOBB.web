@@ -14224,3 +14224,25 @@ Scope: the 10-hexagon bar along the bottom of the field, from the exe trace in t
 2. Text chat's cooldown (the same timer, `send_chat_message_text` path) and the Shift+F shortcut sends (`use_chat_shortcut`), which the port does not have yet.
 3. The per-frame tick's real guard: the `+0x38` panel of the quick menu object.
 4. The Home leaf's option list and item window (states 5..9) and the capture window, as before.
+## 2026-10-23: Zonde family: the Gizonde chain's return and the Razonde caster emitter
+
+**What changed.** The Zonde / Gizonde / Razonde objects were already ported (2026-10-20, "Technique visuals: Zonde, Grants, Megid, supports, special objects"). Re-traced against PsoBB.exe, two things differed and are fixed:
+- **Gizonde's chain** (`combat/techlightning.ts gizondeStrike`, `render/techlightning.ts` case gizonde): the exe's return value decides the hit. A later pair with a missing entity, at zero distance, or both dead and flagged makes the visuals return 0, so the bolts drawn before that pair stay and **nothing** is hit. The port used to skip the pair and hit every target. A missing entity in the 6x47 list also no longer shifts the others up: the list keeps its order (null for a missing one).
+- **Razonde's caster emitter** (`razondeStrike`): table[1]'s 60 frame emitter is at the caster's weapon position (`caster + 0x300`, the feet with the bloodstain offset ASSUMED zero), not the hand 20 above it.
+- Player hit point (`render/combat.ts` `techWorld().point`): the player's point is the feet, not feet + 10. Gizonde's bolts and sparks and Megid's aim use it (the 2026-10-23 hit point entry: the player's box is the embedded one, position1 zero, so its centre is the feet). Megid's aim point moves 10 down with it.
+
+**Exe evidence** (Ghidra dump `refsrc/.../Psobb.exe-05112026.c` names; asm from `objdump -d -M intel PsoBB.exe`):
+- Zonde: `ZalureEffectEntity_Update_006f2840` (vtable 0x00b3e880). Constants 0x0096e050..0x0096e060. 14 points around the first target only, bolts to its origin (`+0x18` hit), SE 0x8f at its origin. No model constructor and no per-frame effect after the first update: nothing else to port.
+- Gizonde: `TechniqueEffectEntity_Constructor_006e5520` (SE 0x90 + pitch by tier, asm-checked), `update_gizonde` 0x006e5890 (the hit loop: constructed and `is_npc_targetable`), `UpdateGizondeTechniqueVisuals_006e5954`. Tier thickness table at 0x006e5954 cases 0..5 (0.5, 0.6, 0.7, 0.6, 0.7, 5 + 0.5 + 0.5). Chain at asm 0x006e6021..0x006e6148: the vector is `box_{i+1}[idx_i].position2 - box_i[idx_{i+1}].position2` (the box indices are crossed; 0x2c per box, position2 at +0x1c), `call 0x6ea700` (constructed) on both, the flagged/targetable/dead test at 0x006e6082..0x006e60c1 (`jne 0x6e66b3`), the zero test against 0x0096d480 (= 0.0) at 0x006e613c..0x006e6148 (`je 0x6e66b3`). `0x6e66b3` is `return 0`.
+- Razonde: `RafoieEffectEntity_Constructor_006ee674` (named Rafoie in the dump; `RafoieEffectEntity_Create_006ee600` is its creator). Step by level at asm 0x006ee767..0x006ee7a4: < 15 -> 5.4 (0x0096ddd8), 15..24 -> 8.1 (0x0096ddd0), 25..29 -> 10.8 (0x0096ddd4), >= 30 -> 5.4. Angle `+= 0x2aaa` per point, radius accumulates. 7 bolts of 5.0 (hold 6), tier 5 adds 0.5 ones. The caster-side particles in `RazondeEffectEntity_Update_006eeae0`: `create_particle_effect` at the caster's node for each table entry, and `create_particle_effect_ex(caster + 0x300, table[1], 0, 0x3c)`. No model in either function.
+- The exe has no model entity for Zonde, Gizonde or Razonde (the "models" left in the Foie entry do not apply to this family).
+
+**ASSUMED:**
+- The Razonde table's other particles stay at the hand (the exe puts them at `pbVar1[0xe]`'s node, not decoded).
+- `world.point` for a dead enemy returns null (the port's `live` test); the exe still draws a bolt to a constructed dead target and only the pair rule of both-dead stops the chain. Only the single-dead case differs.
+- The chain uses one point per target; the exe's per-box indices (`idx` from the 6x47 entries) are not used, so multi-box targets' chain ends differ (no multi-box target is in a Gizonde's chain as far as the port knows).
+- The exe runs the Gizonde visuals on the object's first update, one frame after the release; the port draws at once.
+
+**Checks:** `node tests/techlightning.test.ts` (Gizonde: no target, zero distance, a bad pair in the middle and at the end (bolts kept, no hit), a clean chain of three, a missing first target; Razonde: caster emitter at the weapon position), `techfire`, `techniques`, `hitfx` pass; `tests/combat.test.ts` needs `vendor/newserv/build/newserv` (not built in this worktree, not run); client `tsc --noEmit` clean. Not run in Chrome.
+
+**Left:** the Gizonde chain's per-box positions (the 6x47 box index) and the dead-target point; the Razonde table's non-first particles' node; the one-frame delay of the Gizonde visuals; the Zonde / Gizonde / Razonde casts' charge light (the cast light list is in techlightning.ts, not drawn).

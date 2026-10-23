@@ -561,23 +561,16 @@ export class TechObjects {
         return;
       }
       case TECH.gizonde: {
-        const points: Vec3[] = [];
-        const ids: number[] = [];
-        for (const id of targets) {
-          const p = this.world.point(id);
-          if (p) {
-            points.push(p);
-            ids.push(id);
-          }
-        }
+        // The list keeps its order: a missing entity is null, not dropped (the exe's chain).
         if (!targets.length) return;
+        const points = targets.map((id) => this.world.point(id));
         const plan = gizondeStrike(level, hand, points, rng);
         this.play(plan);
-        if (caster.damage && plan.hits) this.later(0, () => ids.forEach((id) => this.world.hit(id, tech, level)));
+        if (caster.damage && plan.hits) this.later(0, () => targets.forEach((id) => this.world.hit(id, tech, level)));
         return;
       }
       case TECH.razonde: {
-        const plan = razondeStrike(level, hand, rng, caster.id < 12 ? hand : null);
+        const plan = razondeStrike(level, hand, rng, caster.id < 12 ? { hand, weapon: caster.pos } : null);
         this.play(plan);
         if (caster.id < 12) this.later(0, () => plan.casterParticles.forEach((p) => this.fx.particle(p)));
         if (caster.damage) {

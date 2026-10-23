@@ -366,34 +366,48 @@ export function zondeStrike(level: number, target: Vec3, rng: Rng): StrikePlan {
 // first update: UpdateGizondeTechniqueVisuals_006e5954 draws a bolt from the
 // cast point to the first target's hit box position (thickness 0.5 / 0.6 / 0.7 /
 // 0.6 / 0.7 by tier, tier 5: 5.0 plus two of 0.5), the particle 0x19f at that
-// hit box and, from tier 3, 0x188; then for each consecutive pair of targets a
-// bolt from the first one's hit box to the second's (the same thicknesses; a
-// pair with a dead or missing entity, or at zero distance, is skipped). It
-// returns 0 (no hit at all) when the first target is missing or at zero
-// distance; otherwise every target of the list is hit (group 3, tech
-// gizonde) and the object ends.
+// hit box and, from tier 3, 0x188; then one chain bolt per consecutive pair of
+// targets, from the first one's hit box to the second's (the same thicknesses).
+//
+// The exe's return value decides the hit (asm 6e5a08..6e6148, 6e60c1, 6e605f):
+//   - the first target missing, or at zero distance from the cast point: return
+//     0, nothing is drawn and nothing is hit;
+//   - a later pair with a missing entity, at zero distance (0x6e6148 against
+//     g_GizondeTechnicleHitboxRadius = 0.0), or with both flagged, targetable
+//     and dead (0x6e60c1): `goto` the return 0 label. The bolts drawn before
+//     that pair stay, and NOTHING is hit;
+//   - otherwise return 1: update_gizonde hits every target of the list that is
+//     constructed and targetable (group 3, tech gizonde) and the object ends.
+// The chain's end points use each target's hit box at the 6x47 box index,
+// crossed in the exe (direction = box[i+1][idx_i] - box[i][idx_i+1]); the port
+// keeps one point per target, the same for single-box targets (ASSUMED for the
+// multi-box ones).
 
 export const GIZONDE_HIT_PARTICLES = [0x19f, 0x19f, 0x19f, 0x19f, 0x19f, 0x19f];
 export const GIZONDE_EXTRA_PARTICLE = 0x188; // tiers 3..5
 const GIZONDE_THICKNESS = [[0.5], [0.6], [0.7], [0.6], [0.7], [5, 0.5, 0.5]];
 
-export function gizondeStrike(level: number, cast: Vec3, targets: readonly Vec3[], rng: Rng): StrikePlan & { hits: boolean } {
+/**
+ * The strike of a Gizonde. `targets` is the 6x47 list in order, each one's hit
+ * box point, or null when that entity is not constructed here. `hits` is the
+ * exe's return value: true when every target of the list is hit.
+ */
+export function gizondeStrike(level: number, cast: Vec3, targets: readonly (Vec3 | null)[], rng: Rng): StrikePlan & { hits: boolean } {
   const tier = effectTier(level);
   const plan: StrikePlan & { hits: boolean } = { tier, bolts: [], particles: [], sounds: [techSound(SE.gizonde, cast, tier)], hits: false };
   const first = targets[0];
   if (!first) return plan;
-  const { length } = unitFrom(cast, first);
-  if (length === 0) return plan;
-  plan.hits = true;
+  if (unitFrom(cast, first).length === 0) return plan;
   for (const t of GIZONDE_THICKNESS[tier]) plan.bolts.push(boltBetween(cast, first, t, rng));
   plan.particles.push({ id: GIZONDE_HIT_PARTICLES[tier], at: first });
   if (tier >= 3) plan.particles.push({ id: GIZONDE_EXTRA_PARTICLE, at: first });
   for (let i = 0; i + 1 < targets.length; i++) {
     const a = targets[i];
     const b = targets[i + 1];
-    if (unitFrom(a, b).length === 0) continue;
+    if (!a || !b || unitFrom(a, b).length === 0) return plan; // return 0: the chain stops, no hit at all
     for (const t of GIZONDE_THICKNESS[tier]) plan.bolts.push(boltBetween(a, b, t, rng));
   }
+  plan.hits = true;
   return plan;
 }
 
@@ -449,7 +463,12 @@ export interface RazondePlan extends StrikePlan {
   casterParticles: FxParticle[];
 }
 
-export function razondeStrike(level: number, cast: Vec3, rng: Rng, caster: Vec3 | null): RazondePlan {
+/**
+ * `caster`: a player caster's hand (the table's other particles, ASSUMED) and
+ * weapon position (the feet, +0x300: table[1]'s 0x3c frame emitter, exe
+ * update_razonde `create_particle_effect_ex(caster + 0x300, ..., 0x3c)`).
+ */
+export function razondeStrike(level: number, cast: Vec3, rng: Rng, caster: { hand: Vec3; weapon: Vec3 } | null): RazondePlan {
   const tier = effectTier(level);
   const spiral = razondeSpiral(cast, level);
   const bolts: LightningBolt[] = [];
@@ -460,7 +479,7 @@ export function razondeStrike(level: number, cast: Vec3, rng: Rng, caster: Vec3 
   const table = RAZONDE_PARTICLES[tier];
   const particles = table.map((id, k) => ({ id, at: spiral[k] }));
   const casterParticles: FxParticle[] = [];
-  if (caster) table.forEach((id, k) => casterParticles.push(k === 1 ? { id, at: caster, delay: 0, duration: RAZONDE_CASTER_DURATION } : { id, at: caster }));
+  if (caster) table.forEach((id, k) => casterParticles.push(k === 1 ? { id, at: caster.weapon, delay: 0, duration: RAZONDE_CASTER_DURATION } : { id, at: caster.hand }));
   return { tier, bolts, particles, sounds: [techSound(SE.razonde, cast, tier)], spiral, casterParticles };
 }
 

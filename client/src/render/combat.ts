@@ -7309,8 +7309,10 @@ export class CombatView {
           const p = this.hitPoint(e);
           return { x: p.x, y: p.y, z: p.z };
         }
+        // A player's hit box is the embedded one (position1 0, radius 5), so its
+        // point is the feet: the Gizonde's bolts and sparks use it (DEVLOG 2026-10-23).
         const p = this.view?.playerPositions().get(id);
-        return p ? { x: p.x, y: p.y + 10, z: p.z } : null;
+        return p ? { x: p.x, y: p.y, z: p.z } : null;
       },
       hit: (id, tech, level) => {
         const e = enemyOf(id);
