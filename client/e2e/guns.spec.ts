@@ -106,6 +106,9 @@ async function installHooks(page: Page): Promise<void> {
       const tr = this.tracers;
       if ((window as any).__gunFreezeNext) {
         (window as any).__gunFreezeNext = false;
+        // gunShot's targets are strike targets ({ enemy, player }, render/combat.ts StrikeTarget): the
+        // enemy of each is read here (the shot's first target, a remote player's has no enemy).
+        const hitEnemies = (args[3] as any[]).map((t) => (t && 'enemy' in t ? t.enemy : t));
         if (tr) {
           for (const t of tr.live.slice(before)) t.ticks = Math.ceil(t.total / 2);
           tr.frame(0);
@@ -115,7 +118,7 @@ async function installHooks(page: Page): Promise<void> {
         const eggs = (this.shotEffects ?? []).slice(effectsBefore);
         for (const e of eggs) {
           const v = Math.hypot(e.vel.x, e.vel.y, e.vel.z) || 1;
-          const to = (args[3] as any[])[0];
+          const to = hitEnemies[0];
           const span = to ? Math.hypot(to.instance.root.position.x - args[2].x, to.instance.root.position.z - args[2].z) : 60;
           const n = Math.max(0, Math.round(span / v) - 1);
           for (let k = 0; k < n; k++) e.tick(true);
@@ -133,7 +136,7 @@ async function installHooks(page: Page): Promise<void> {
         // The side-on view for the screenshot: the camera stands across the flight, 120 units to
         // one side of its midpoint, looking at it (the follow camera is wrapped in sideOn()).
         const me = args[2];
-        const target = (args[3] as any[])[0];
+        const target = hitEnemies[0];
         if (target) {
           const tp = target.instance.root.position;
           const dx = tp.x - me.x;
