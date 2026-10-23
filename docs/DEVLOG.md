@@ -9810,3 +9810,24 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - The 0x8144b0 path (looping / owner-keyed positional voices, the telepipe loop exemption 0xa0) is not ported here; no caller uses it yet for a pickup.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/drops.test.ts`, `node tests/items.test.ts` (with `vendor` linked for the newserv build, removed afterwards), `node tests/sound.test.ts` (new cases: the 0x571 flag bits and attenuation, `positionalMode` for the 2 / 300 / exempt-area / near-band / kind rules, `seDistance`, `seGain3d`, `sePan`), `node tests/hitfx.test.ts` all pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: lerpPoint cutoff checked: the port's 5.0 is right (comment only)
+
+**Report:** the suspected bug is not one. `0x00909510` is a double, not a float. The compare at 0x004d63f7 is `dc 15` = `fcoml m64fp`, which reads 8 bytes at 0x00909510: `00 00 00 00 00 00 14 40` = 5.0. A float read (`tools/exedata.py read 00909510 f 1`) gives the low dword, 0.0, and that is what the earlier note (line 9745) took for the value. `tools/exedata.py read 00909510 d 1` gives 5.0. Ghidra's decompile of 0x004d63b0 agrees (`if (_DAT_00909510 <= fVar2) fVar2 = _DAT_00909520`, with the cutoff as a double). `lerpPoint` in `render/playercamera.ts` is unchanged except for a comment that records the double read.
+
+**From PsoBB.exe** (`objdump -d`, Ghidra headless for the decompile):
+- `unknown_vec3_lerp` 0x004d63b0 (`vec3_lerp_clamped` in the dirty DB), args `P` (esi, arg1, moved), `Q` (edi, arg2, goal), `factor` (arg3, float):
+  - `d = |P - Q|` (call 0x0083173c, sqrt of the squared sum).
+  - `t = 0.16 * d * factor` (0x00909524 = 0.16f).
+  - `if (!(t < d))`: `Q := P` (the goal is overwritten with the current point), return 1. `P` does not move.
+  - else `step = (5.0 <= t) ? 12.0 : t` (0x00909520 = 12.0f). Call 0x007a8f28 (`P`, `Q`, `step`, out = `P`), return 0.
+- `vec3_lerp_toward` 0x007a8f28 (args cur, des, step, out): `dist = |des - cur|`. If `step < dist` and `dist != 0`, `out = cur + unit(des - cur) * step` (unit via helper 0x0082df08). Else `out = des` (snap).
+- Net: the point moves by the absolute distance `step` toward the goal, and snaps to the goal when within `step`. `t` is a distance, not a fraction. For a positive factor the first branch only fires at factor >= 6.25 (or d = 0), so in practice the move is `min(t, 12)` for `t < 5` and `12` for `t >= 5`, and `t` is `0.16 * d * factor`.
+
+**Callers** (the exe's six call sites, 0x004d3d08, 0x004d3d47, 0x004d3d60, 0x004d5fac, 0x004d5fd0, 0x0050dbf7): the player camera (0x004d3c98 lerps `this+0x184` toward `this+0x1ac` with factor `this+0x1bc`), the NPC camera mover (0x004d5fac, factor 0x3f39999a = 0.725, the port's `NPC_CAMERA_MOVER_LERP`), and the camera controller (0x0050dbf7). The port's two player-camera calls (source with LERP_SOURCE / LERP_SOURCE_NEAR_WALL, target with LERP_TARGET = 0.289) use the same function; the exe's 0x004d3c98 shows one lerp call with factor `+0x1bc`. How the target factor is set is not re-checked here.
+
+**ASSUMED / UNCLEAR:**
+- The goal side effect (`Q := P` in the copy branch) is not ported. The port's `want` values are rebuilt each frame; the exe's goal buffers (`this+0x1ac`, the NPC table entries) are assumed to be rewritten before the next read. Not traced.
+- The player-camera target factor (0.289 vs the exe's `+0x1bc`) is not re-checked against 0x004d3c98 here.
+
+**Checks:** comment-only change in `client/src/render/playercamera.ts`; no logic changed, so no test or tsc run is needed for this entry. Not run: Playwright / Chrome (per the brief).
