@@ -13322,3 +13322,34 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: root Z of the walk / run motions (the exe zeroes it)
+
+**Report:** holding W in Pioneer 2 the logic position moves smoothly, but the drawn body surges ~25 units ahead and snaps back each loop. The body root (bone 0) local Z goes 0.2 to 25 over a run cycle and back to 1..4 (the motion's own root Z keys).
+
+**Exe (PsoBB.exe, Ghidra via `tools/ghidra/decomp.sh`, pointer tables read with `tools/exedata.py`):**
+- Start and change of a player motion: `FUN_007aa4c8` (start) and `FUN_007a9a6c` (change) read the record's flags (the u32 at record + 0xc). When the bit `0x20000000` is set they call `FUN_007a98fc`, which does `*(u16*)(motion + 0xa) |= 0x80`: the NJS_MOTION's inp_fn gets the user-function bit, on the motion object now playing. Nothing clears it, and the motion objects are shared per archive entry (sticky).
+- The NJM evaluator takes the position interpolator from table `0x00a2271c` indexed by `(inp_fn & 0xc0) >> 6` (`NJM_InitializeAnimationContext` 0x008303dc sets `unk_func1`; the position keyframe reader `0x00847a98` calls it, and `NJM_MotionUpdate` 0x00830364 assigns that reader when the motion type has bit 1). Index 0 is `0x00842d04` (plain lerp), 1 the spline `0x0084303c`, **2 is `0x00842d7c`** (the user function), 3 `0x00842e50`.
+- `FUN_00842d7c`: `param[0]` = the lerp of X, `param[1]` = the lerp of Y, `param[2] = 0.0`. So the root's forward Z is dropped; X (sway) and Y (bob) stay. It is not a subtraction of the root, not a movement delta, and not "Y only".
+- The flagged rows are the field walk and run rows (flags `0x20000002`, `formats/plymotion.ts` FIELD_LOCOMOTION_TABLE; the weapon columns 1..18 differ). The town walk / run rows carry the same bit, but their node 0 has no Z keys (all classes), so the town path never showed it. The idle rows (`0x1`) keep their Z keys, which are 0 in every idle motion.
+- Measured with node: field HUmar weapon 1 walk 104 has root Z keys 0..13.6, run 111 0..25.9; weapon 2 walk 119 0..13.6; type 1 weapon 1 run 342 0..23.5. The position keys of these motions are on node 0 only.
+
+**Port:** `client/src/render/playeranim.ts`:
+- `FLAG_ROOT_Z_OFF = 0x20000000`; `PlayerAnimator.play()` adds the motion object to a module `WeakSet` (`rootZOff`) when the record has the bit (the exe's sticky `|= 0x80`). `apply()` sets the sampled position's Z to 0 for every keyed node of a flagged motion (X and Y untouched). The flag is per NJS_MOTION object (the cache in `PlayerMotions`), so a later unflagged record on the same motion keeps Z = 0, as the exe does.
+- No change to enemies, NPC nodes (`NodeAnimator`) or the classic character screen (its records have flags 0).
+- The quest NPC's player body uses `PlayerAnimator` with the same town records, so it takes the same rule (the exe's player motion code).
+
+**Chrome check** (`client/e2e/camera-walk.spec.ts` with the rb sampler and the backSteps metric, copied from the checkout's uncommitted edit; `PSO_DUMP=w`, Vite on its own port, newserv and the bridge already running):
+- Before: `FRAME rb` z 0 -> 24.6 -> 0.6 each cycle (the reported loop).
+- After: rb z = 0 on every frame; rb y still bobs (-1.32 .. -0.04 in the run); rb x sways within -0.22 .. +0.03. The camera numbers are unchanged (W: screen-x median 0, facing 0, lag 0; A and D: camera lag 1.45 as before). `backSteps` reads 0 before and after: it measures the logic position against the heading and cannot see the drawn root's surge, so it is not evidence for this bug.
+
+**Tests:** `node tests/motions.test.ts` (new block 4c: the unflagged control keeps Z 13.5 on walk 104; the flagged walk and run have Z exactly 0 with the bob kept (range 0.45); the sticky rule; every flagged field / town walk and run of the 12 classes has Z 0). `tsc --noEmit -p client` clean; `emotes`, `npcs`, `controls`, `playermove`, `playerfx` pass.
+
+**ASSUMED:**
+- Table `0x00a2271c` is the position channel: the struct offset (+0x24 = `unk_func1`) is inferred from `0x00847a98`'s reads, not from a writer trace.
+- The field table's record flags are the exe's flags (copied from the table in the port's `plymotion.ts`, not re-read from the rlc tables in this entry).
+- The rule applies to every keyed node of a flagged motion (only node 0 has keys in the walk and run rows, so this only matters for other motions).
+
+**Left:**
+- The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
+- `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.

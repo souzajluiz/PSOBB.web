@@ -25,6 +25,23 @@ export const GAME_TICKS_PER_SECOND = 30;
 const BLEND_STEP = 0.2; // DAT_0097d970
 const FLAG_NO_BLEND_IN = 0x80000000;
 const FLAG_NO_BLEND_OUT = 0x40000000;
+// Record flag 0x20000000 (the walk and run rows of the field tables, and the
+// town walk / run): the motion's position channel drops its Z (root) keys.
+// PsoBB.exe: FUN_007aa4c8 (start) and FUN_007a9a6c (change) call FUN_007a98fc
+// when the record has the bit, which ORs 0x80 into the NJS_MOTION's inp_fn
+// (+0xa) of the motion now playing: `*(u16*)(motion + 0xa) |= 0x80`. The NJM
+// evaluator (NJM_MotionUpdate 0x00830364 / NJM_InitializeAnimationContext
+// 0x008303dc) takes the position interpolator from table 0x00a2271c by
+// (inp_fn & 0xc0) >> 6, and index 2 is FUN_00842d7c: X and Y are interpolated
+// from the keys, Z is set to 0.0 (`param_4[2] = 0.0`). The flag is never
+// cleared, so every later use of that NJS_MOTION object (the motion objects
+// are shared per archive entry) keeps Z = 0. Verified: the field walk / run
+// motions (e.g. 104, 111, 350) key node 0's Z from 0 to ~25 (the forward root
+// travel), and this rule drops it; the model's bob (Y) and sway (X) stay.
+export const FLAG_ROOT_Z_OFF = 0x20000000;
+// Motions (the NJS_MOTION objects) that had a flagged record start. Keyed by
+// object, so the cached motion of PlayerMotions is flagged for every user.
+const rootZOff = new WeakSet<NjMotion>();
 
 interface BoneState {
   bone: THREE.Bone;
@@ -110,6 +127,7 @@ export class PlayerAnimator {
     }
     const prev = this.record;
     this.motion = this.motions.get(record.index);
+    if (record.flags & FLAG_ROOT_Z_OFF) rootZOff.add(this.motion);
     this.recordForSlot = slots ?? this.recordForSlot;
     const fade = prev !== null && !(record.flags & FLAG_NO_BLEND_IN) && !(prev.flags & FLAG_NO_BLEND_OUT);
     if (fade) {
@@ -177,11 +195,15 @@ export class PlayerAnimator {
     else if (this.record?.mode === 1) frame = (frame + this.step * sub) % m.frameCount;
     else frame = Math.min(frame + this.step * sub, m.frameCount - 1);
     const v = this.tmp;
+    const zOff = rootZOff.has(m);
     for (let i = 0; i < this.bones.length && i < m.nodes.length; i++) {
       const b = this.bones[i];
       const n = m.nodes[i];
-      if (n.position) b.bone.position.fromArray(sampleKeys(n.position, frame, m.frameCount, v));
-      else b.bone.position.copy(b.bindPos);
+      if (n.position) {
+        sampleKeys(n.position, frame, m.frameCount, v);
+        if (zOff) v[2] = 0; // FUN_00842d7c: the position's Z is 0.0 (see FLAG_ROOT_Z_OFF)
+        b.bone.position.fromArray(v);
+      } else b.bone.position.copy(b.bindPos);
       if (n.rotation) {
         sampleKeys(n.rotation, frame, m.frameCount, v, m.shortAngles);
         b.bone.quaternion.setFromEuler(this.euler.set(v[0], v[1], v[2], b.order));
