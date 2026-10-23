@@ -52,6 +52,16 @@ import { killExp } from '../client/src/combat/progression.ts';
 import { parsePlyLevelTbl } from '../client/src/formats/plyleveltbl.ts';
 import { applyOverlay, buildChallengeOverlay, challengeTemplate, writeOverlayRaw } from '../client/src/quest/cmodeoverlay.ts';
 import { graveDropPoints, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
+import {
+  decodeGraveDate,
+  formatGraveDate,
+  graveFadeStep,
+  graveHeading,
+  graveLines,
+  GRAVE_FADE_IN,
+  GRAVE_FADE_OUT,
+  GRAVE_MODEL_BML,
+} from '../client/src/quest/cmodegrave.ts';
 import type { CharacterFile } from '../client/src/net/charfile.ts';
 import { QuestSession } from '../client/src/quest/session.ts';
 
@@ -554,6 +564,45 @@ if (newserv) {
       check(s.vm.cmode.thresholds.every((t) => t.seconds > 0), `${name}: all three thresholds set`);
     }
   }
+}
+
+// --- grave text, fade and heading (quest/cmodegrave.ts, exe 004dedfc / 004df408 / 004de164) ---------
+
+{
+  // Six lines; line 0 needs the owner's name, line 1 the count, line 2 the party name.
+  eq(graveLines({ owner: 'Ragol ', deaths: 2, team: 'Party', message: '', defeatedBy: null, date: null }), ['< Ragol >', 'Number of times failed : 2', 'Party Name : Party', '', '', ''], 'owner, count and party name; trailing spaces of the name go');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: 'Booma', date: null })[0], '', 'no owner in the slot: line 0 empty');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: 'Booma', date: null })[3], 'Defeated by Booma.', 'the killer line');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: 'gg', defeatedBy: null, date: null })[4], '"gg"', 'the message in quotes');
+  // Date: the exe's packing (2014-10-20 13:45 -> year-2000 in the top 4 bits; 15 is the refused cap).
+  const packed = ((((((14 << 4) | 10) << 8) | 20) << 8 | 13) << 8 | 45) >>> 0;
+  eq(decodeGraveDate(packed), { year: 2014, month: 10, day: 20, hour: 13, minute: 45 }, 'the packed date decodes');
+  eq(formatGraveDate(decodeGraveDate(packed)!, 0), '2014/10/20 13:45', 'locale 0: year first');
+  eq(formatGraveDate(decodeGraveDate(packed)!, 1), '10/20/2014 13:45', 'other locales: month first');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: null, date: packed })[5], '2014/10/20 13:45', 'the timestamp line');
+  eq(decodeGraveDate(((15 << 28) | (10 << 24) | (20 << 16)) >>> 0), null, 'year 15 (2015 and later, as the exe saves them) is refused');
+  eq(decodeGraveDate(0), null, 'a zero date is refused');
+  // The record's date is the one saveGrave writes; a grave saved now shows no date (the exe's 2015 cap).
+  const rec = new ChallengeRecords(new Uint8Array(0x140));
+  saveGrave(rec, { episodeIndex: 0, stage: 0, floor: 1, x: 0, y: 0, z: 0, team: 'P', defeatedByRt: 0xffffffff, date: new Date(2026, 9, 23, 10, 0) });
+  const g = recordGrave(rec)!;
+  eq(decodeGraveDate(g.date), null, 'a grave saved in 2026 carries year 15 and shows no date');
+  eq(g.defeatedBy, 0xffffffff, 'no killer recorded');
+  // Fade: in while the local player is within 50 and nearest to this grave; out otherwise; clamped 0..1.
+  check(Math.abs(graveFadeStep(0, 20, 50, false) - GRAVE_FADE_IN) < 1e-6, 'a fade-in from 0 is one step');
+  eq(Math.round(graveFadeStep(0.5, 20, 50, false) * 1000), Math.round((0.5 + GRAVE_FADE_IN) * 1000), 'in by 0.1333');
+  eq(Math.round(graveFadeStep(0.5, 60, 50, false) * 1000), Math.round((0.5 + GRAVE_FADE_OUT) * 1000), 'out by 0.0444 past 50');
+  eq(graveFadeStep(0.95, 10, 50, true), 1, 'the fade-in stops at 1');
+  eq(graveFadeStep(0.02, null, 50, false), 0, 'no local player: the fade floors at 0');
+  eq(graveFadeStep(0.5, 20, 5, false) < 0.5, true, 'another grave nearer to the local player fades this one out');
+  eq(graveFadeStep(0.5, 10, 10, true) > 0.5, true, 'an equal distance to its own grave stays in');
+  eq(graveFadeStep(0.5, 10, 10, false) < 0.5, true, 'an equal distance to someone else\'s grave fades out');
+  eq(graveHeading(2), 0x4000, 'the heading of slot 2 is 2 << 13');
+  eq(graveHeading(3), 0x6000, 'the heading of slot 3 is 3 << 13');
+  check(GRAVE_MODEL_BML === 're_b_mark_base.bml', 'the model archive name from the exe');
+  // The drop fan starts from the grave's own heading (ProcessGraveChallengePlayerLogic_004ddcbc).
+  const fan = graveDropPoints(0, 0, graveHeading(1), 1);
+  check(Math.abs(fan[0]!.x - 7.5 * Math.cos(Math.PI / 4)) < 1e-6 && Math.abs(fan[0]!.z - 7.5 * Math.sin(Math.PI / 4)) < 1e-6, 'the fan starts at the grave heading (slot 1 = 0x2000 = 45 degrees)');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');

@@ -41,12 +41,23 @@ import {
   type ChallengeMode,
 } from './cmode.ts';
 import { applyOverlay, buildChallengeOverlay, writeOverlayRaw } from './cmodeoverlay.ts';
+import { graveFadeStep, graveHeading, graveLines, GRAVE_DRAW_RANGE, GRAVE_NEAREST_START, GRAVE_TICK_MS, GRAVE_TEXT_HEIGHT } from './cmodegrave.ts';
 import type { QuestTown } from './town.ts';
 import type { QuestVM } from './vm.ts';
 
 const RECORDS_OFFSET = 0x2cb8; // PSOBBCharacterFile.challenge_records
 const HINT_TEXT = ['In Challenge Mode,', 'some stage areas', "require other user's", 'help to proceed.'];
 const S_RANK_TYPES = [...Array.from({ length: 0x89 - 0x70 }, (_, i) => 0x70 + i), ...Array.from({ length: 0xaa - 0xa5 }, (_, i) => 0xa5 + i)];
+
+// A grave on this floor: the record it came from, its position and its text fade.
+interface GraveLabel {
+  owner: number;
+  x: number;
+  y: number;
+  z: number;
+  g: NonNullable<ReturnType<typeof recordGrave>>;
+  fade: number;
+}
 
 export interface ChallengeRuntimeOptions {
   game: Game;
@@ -69,7 +80,9 @@ export class ChallengeRuntime {
   private graveArmed = true;
   private wasDead = false;
   private readonly firedGraves = new Set<number>();
-  private graves: { owner: number; x: number; y: number; z: number }[] = [];
+  private graves: GraveLabel[] = [];
+  private readonly graveHudIds = new Set<string>();
+  private lastGraveAt = 0;
   private lastArea = '';
 
   private readonly o: ChallengeRuntimeOptions;
@@ -105,6 +118,7 @@ export class ChallengeRuntime {
     if (this.poll) clearInterval(this.poll);
     for (const t of this.timers) clearTimeout(t);
     for (const d of this.disposers) d();
+    this.clearGraveLabels();
     const ui = this.o.town.ui;
     for (const id of ['cmode-timer', 'cmode-area', 'cmode-result', 'cmode-hint', 'cmode-dead', 'cmode-wait']) ui.setHud(id, null);
     this.o.view.combat.challengeExpMultiplier = null;
@@ -311,10 +325,11 @@ export class ChallengeRuntime {
     const stage = this.cm?.stage ?? -1;
     const ep = game.info?.episode === 2 ? 1 : 0;
     const sources: Array<[number, ChallengeRecords | null]> = [[game.selfId, this.records()], ...this.others];
+    this.clearGraveLabels();
     for (const [owner, rec] of sources) {
       const g = rec ? recordGrave(rec) : null;
       if (g && g.episodeIndex === ep && g.stage === stage && g.floor === cur.floor && this.present().includes(owner)) {
-        this.graves.push({ owner, x: g.x, y: g.y, z: g.z });
+        this.graves.push({ owner, x: g.x, y: g.y, z: g.z, g, fade: 0 });
       }
     }
     // One player on a field floor: the "needs help" window for 300 ticks.
@@ -347,6 +362,54 @@ export class ChallengeRuntime {
     if (dead && !this.wasDead && this.graveArmed && cm.retryAllowed) this.recordDeath();
     this.wasDead = dead;
     this.graveDrops();
+    this.graveLabels();
+  }
+
+  // The text over each grave on this floor (UpdateGraveChallengeSubPanel_004de304):
+  // faded per game tick by the local player's distance (graveFadeStep), drawn
+  // while that distance is within GRAVE_DRAW_RANGE. The lines are the record's
+  // (the date only for the local player's own grave); the killer is not tracked
+  // yet, so the "Defeated by" line stays empty. The message (0xA4) is not stored.
+  private graveLabels(): void {
+    const { game } = this.o;
+    const now = performance.now();
+    const steps = this.lastGraveAt ? Math.max(1, Math.round((now - this.lastGraveAt) / GRAVE_TICK_MS)) : 1;
+    this.lastGraveAt = now;
+    const local = game.players.get(game.selfId)?.position;
+    const ids = new Set<string>();
+    this.graves.forEach((gr, i) => {
+      let nearestOther = GRAVE_NEAREST_START;
+      if (local) {
+        this.graves.forEach((o, j) => {
+          if (j !== i) nearestOther = Math.min(nearestOther, Math.hypot(local.x - o.x, local.z - o.z));
+        });
+      }
+      const dist = local ? Math.hypot(local.x - gr.x, local.z - gr.z) : null;
+      for (let k = 0; k < steps; k++) gr.fade = graveFadeStep(gr.fade, dist, nearestOther, gr.owner === game.selfId);
+      const id = `cmode-grave-${gr.owner}`;
+      if (gr.fade > 0 && (dist ?? Infinity) <= GRAVE_DRAW_RANGE) {
+        const lines = graveLines({
+          owner: game.players.get(gr.owner)?.name ?? null,
+          deaths: gr.g.deaths,
+          team: gr.g.team,
+          message: '',
+          defeatedBy: null,
+          date: gr.owner === game.selfId ? gr.g.date : null,
+        });
+        this.o.town.ui.setWorldHud(id, { x: gr.x, y: gr.y + GRAVE_TEXT_HEIGHT, z: gr.z, lines, alpha: gr.fade });
+        ids.add(id);
+      } else {
+        this.o.town.ui.setWorldHud(id, null);
+      }
+    });
+    for (const id of this.graveHudIds) if (!ids.has(id)) this.o.town.ui.setWorldHud(id, null);
+    this.graveHudIds.clear();
+    for (const id of ids) this.graveHudIds.add(id);
+  }
+
+  private clearGraveLabels(): void {
+    for (const id of this.graveHudIds) this.o.town.ui.setWorldHud(id, null);
+    this.graveHudIds.clear();
   }
 
   private recordDeath(): void {
@@ -392,7 +455,7 @@ export class ChallengeRuntime {
       if (!drop) return;
       const room = view.roomAt({ x: g.x, y: g.y, z: g.z });
       const floor = view.current?.floor ?? 0;
-      for (const pt of graveDropPoints(g.x, g.z, 0, drop.count)) {
+      for (const pt of graveDropPoints(g.x, g.z, graveHeading(this.graves[i]!.owner), drop.count)) {
         game.sendServerSubcommand(buildGraveRecoveryRequest(game.selfId, floor, room, pt.x, pt.z, drop.type));
       }
       this.o.log(`Challenge Mode: grave drop, ${drop.count} x item type ${drop.type}`);

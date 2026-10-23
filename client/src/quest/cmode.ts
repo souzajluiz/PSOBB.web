@@ -1063,7 +1063,7 @@ export function graveDropPoints(x: number, z: number, heading: number, count: nu
 }
 
 // The grave a record describes (online_grave_*): null when the player never died.
-export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage: number; floor: number; deaths: number; x: number; y: number; z: number; team: string } | null {
+export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage: number; floor: number; deaths: number; x: number; y: number; z: number; team: string; date: number; defeatedBy: number } | null {
   const deaths = r.graveDeaths;
   if (deaths <= 0 || deaths > 9999) return null;
   const dv = new DataView(r.raw.buffer, r.raw.byteOffset, r.raw.byteLength);
@@ -1073,7 +1073,18 @@ export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage:
     if (!c) break;
     team += String.fromCharCode(c);
   }
-  return { episodeIndex: r.raw[0x60]!, stage: r.raw[0x61]!, floor: r.raw[0x62]!, deaths, x: dv.getFloat32(0x70, true), y: dv.getFloat32(0x74, true), z: dv.getFloat32(0x78, true), team };
+  return {
+    episodeIndex: r.raw[0x60]!,
+    stage: r.raw[0x61]!,
+    floor: r.raw[0x62]!,
+    deaths,
+    x: dv.getFloat32(0x70, true),
+    y: dv.getFloat32(0x74, true),
+    z: dv.getFloat32(0x78, true),
+    team,
+    date: dv.getUint32(0x68, true),
+    defeatedBy: dv.getUint32(0x6c, true),
+  };
 }
 
 // SaveChallengeEntityProgressOnDeath_004d9a60: the record of a player who just
