@@ -84,11 +84,48 @@
 // (seven 0x124-byte entries, the menu's text list row 0x67). The port keeps that list
 // in GuildCardClient.recent (addRecent); its window (row 0x67) is not ported yet.
 //
-// NOT ported (logged no-ops, the menu stays open): row 0x65 (state 3: sub-list
-// 0x68 / 0x69), row 0x67 (state 0x1d: the g_GuildCardList text list, which is the
-// recent search list above), the card info window 0x89 / 0x7c that the exe opens
-// for the card book's and the search's highlighted card (GuildCardMenu_Factory_00715654),
-// and the send packet 0xc0.
+// ROW 0x67 (state 0x1d, the recent search list): CreateGuildCardTextListWindow_007478a8
+// (716557) at get_gui_position(0x8c) = (194, 256), title unitxt(11, 0x34), 8 rows. Each
+// row is an entry of g_GuildCardList (0x124 bytes: +0 card number, +4 the entry id that
+// is the row's value, +8 the 16-wchar name). The name is the book's card of that number
+// when the book has one (GuildCard_FindById, +4 of the record), else the reply's name
+// (+0xe4). Empty -> the greyed row unitxt(11, 0xf2). Choosing a row opens the search
+// result info window 0x8d and the option list 0x8e (states 0x1f / 0x20: unitxt 0x6a
+// -> state 0x21, 0x6b -> state 0x25); NOT ported: the row reports state 0x1f.
+//
+// ROW 0x65 (state 3, the sub-list): CreateGuildCardSubListWindow_00747480 (716334) at
+// get_gui_position(0x85) = (402, 256), title unitxt(11, 0x31), rows unitxt(11, 0x68) =
+// value 5 (state 5) and unitxt(11, 0x69) = value 9 (state 9). Cancel -> the menu.
+//   - 0x68 (state 5): the lobby players at get_gui_position(0x86) = (402, 315), title
+//     unitxt(11, 0x32), the other players (slot != the current one, invincibility 3 / 6
+//     skipped), none -> unitxt(11, 0xf1) greyed. Cancel -> the sub-list. A player ->
+//     state 6: GuildCard_Sprintf_0078193c -> TeamQuest_SendPacket_008005b0 ->
+//     send_packet0x62 (the target player's slot, not traced further), then the title
+//     window 0x87 (unitxt 0x4b) until a key is held (state 8) -> state 3. NOT ported:
+//     the 0x62 send (reported as state 6) and the title window.
+//   - 0x69 (state 9): the keyboard (CreateGuildCardKeyboardInput_00747548) for the own
+//     card's name; accepting calls GuildCard_SetName_007814bc on g_pPlayerSessionData and
+//     sends 06E8 (send_packet0xe8_subcommand6, 0x110 bytes). NOT ported: reported as state 9.
+//   - state 3 also creates the own card's info window at 0x84 = (194, 256)
+//     (GuildCardMenu_GetOrCreateInstance_007153e0 on g_pPlayerSessionData): NOT drawn.
+//
+// CARD INFO WINDOW 0x89 (GuildCardMenu_CreateAtGuiPosition_00747d84 -> the factory
+// GuildCardMenu_Factory_00715654 (676434) -> GuildCardMenu_InitializeListWindow_00715494
+// -> GuildCardUI_UpdateListItemText_00715518 (676343..676460)). get_gui_position(0x89) =
+// (419, 256). The window's text items are the card's name (+4), the card number (+0,
+// shown when not 0 and the byte +0x104 bit 2 is clear, ASSUMED), the class (+0x107,
+// unitxt_get_class_name: unitxt + 0x20, group 8, ASSUMED), the section (+0x106,
+// unitxt_get_sectionid_name: unitxt + 0x120, group 72, the same group the port's
+// charcreate uses), the team (+0x34) and the description (+0x54). The language (+0x105)
+// is the exe's static list PTR_u_Jpn__009f1e60 and is not drawn. The window is created in
+// the add-from-card-book list (state 0x41, its highlighted card) and in the card list
+// (states 0xb / 0x1b). The port draws it in the add-from-card-book list only: the card
+// list's comment box is at the same position (419, 256) in the exe too and the port's
+// comment box stays where it was (overlap not resolved, see ASSUMED).
+//
+// NOT ported (logged no-ops, the menu stays open): the search result window 0x8d and
+// its option list 0x8e (row 0x67's choice), the row 0x65 sub-list's 0x62 send and rename,
+// the own card's window 0x84, and the send packet 0xc0.
 //
 // ASSUMED (not traced):
 //   - the page keys are ArrowLeft / ArrowRight (the exe reads g_KeyboardSharedState
@@ -117,9 +154,23 @@
 //     0x12120 / 0x12124 are passed to send_packet0x40, not traced further);
 //   - the book is synced once per session (BBSession.startGuildCardSync); a menu
 //     opened before the sync shows the empty row.
+//   - row 0x67: the recent row's name is the book's card name for that number when
+//     the book has one, else the reply's name; the row value is the list index (the
+//     exe's value is the entry id, +4); the window is rebuilt on each opening;
+//   - row 0x65: the sub-list stays drawn under the player list (the exe calls
+//     ListWindowObject_Hide on it at state 3, not traced); the own card's window
+//     0x84 is not drawn;
+//   - the card info window's class text is unitxt group 8 and its section text is
+//     unitxt group 72 (the exe's unitxt + 0x20 / + 0x120 table offsets, read as
+//     4 bytes per group); the host supplies them (GuildCardHost.unitxt);
+//   - the card info window's number is hidden when the card number is 0 (the exe
+//     also hides it on the byte +0x104 bit 2, not modelled);
+//   - the card info window and the card list's comment box both sit at (419, 256) in
+//     the exe; the port draws the info window only in the add-from-card-book list, so
+//     the overlap in the card list is not decided (which one the exe keeps there is not traced).
 
 import { se, SE } from '../audio/se.ts';
-import type { GuildCard, GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { GuildCard, GuildCardBook, GuildCardClient, GuildCardSearchResult } from '../net/guildcard.ts';
 import { wrapGameText } from './chat.ts';
 import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -139,6 +190,10 @@ export const GUILD_CARD_POS = {
   keyboard: { x: 331, y: 266 }, // 0xcf (the comment editor)
   blockList: { x: 194, y: 256 }, // 0x93 (the Block list: unblock / add)
   blocked: { x: 194, y: 256 }, // 0x94 (the blocked senders)
+  textList: { x: 194, y: 256 }, // 0x8c (the recent search list, row 0x67)
+  sub: { x: 402, y: 256 }, // 0x85 (the row 0x65 sub-list)
+  playerPick: { x: 402, y: 315 }, // 0x86 (the lobby players of the sub-list's first row)
+  cardInfo: { x: 419, y: 256 }, // 0x89 (the card info window of the highlighted card)
   addSource: { x: 429, y: 256 }, // 0x96 (card book / lobby player / entity)
   playerList: { x: 194, y: 256 }, // 0x97 (the lobby players)
   entityList: { x: 194, y: 256 }, // 0x98 (the entities)
@@ -182,7 +237,16 @@ export const T11_GUILD = {
   entityTitle: 0x41,
   noEntities: 0xf0,
   noPlayers: 0xf1,
+  subTitle: 0x31,
+  pickTitle: 0x32,
+  textTitle: 0x34,
+  subShowCard: 0x68,
+  subRename: 0x69,
+  noRecent: 0xf2,
 } as const;
+
+// unitxt groups of the card info window's class and section names (unitxt + 0x20 and + 0x120).
+export const UNITXT_GROUP = { className: 8, sectionName: 72 } as const;
 
 // unitxt group 11 texts of the menu's cursor rows (DAT_00973414, the description box).
 export const GUILD_DESCRIPTION = [0x5a, 0x5b, 0x5c, 0x118] as const;
@@ -196,6 +260,12 @@ export const GUILD_ACTION = { search: 0x0f, view: 0x11, comment: 0x13, swap: 0x1
 // The exe's state codes of the Block list rows and of the add sources.
 export const GUILD_BLOCK_STATE = { blockRemove: 0x3b, blockAdd: 0x3f } as const;
 export const GUILD_ADD_STATE = { card: 0x41, player: 0x45, entity: 0x4a } as const;
+
+// The row 0x65 sub-list's values (state 5: the players, state 9: the rename) and the
+// state a recent row or a player reports (ported as logged no-ops).
+export const GUILD_SUB_STATE = { players: 5, rename: 9 } as const;
+export const GUILD_TEXT_OPEN_STATE = 0x1f;
+export const GUILD_PLAYER_SEND_STATE = 6;
 
 // A lobby player as the add-from-player path reads it (the lobby record's fields).
 export interface LobbyPlayerCard {
@@ -217,6 +287,8 @@ export interface GuildCardHost {
   lobbyPlayers(): LobbyPlayerCard[];
   // The scene is logged_in (the lobby always is); 0x117 and search are greyed otherwise.
   loggedIn: boolean;
+  // unitxt text of any group (the card info window's class and section names).
+  unitxt?: (group: number, index: number) => string;
 }
 
 // What a key press asked for that the port does not do yet (the caller logs it).
@@ -309,6 +381,39 @@ export function guildCardFromPlayer(p: LobbyPlayerCard): GuildCard | null {
   };
 }
 
+// The recent search list rows (row 0x67; CreateGuildCardTextListWindow_007478a8 and the
+// state 0x1d fill loop). The name is the book's card name for that number when the book
+// has the card (GuildCard_FindById), else the reply's name. Value: the list index (ASSUMED,
+// the exe's value is the entry id). Empty -> the greyed row.
+export function recentRows(recent: readonly GuildCardSearchResult[], book: GuildCardBook | null, emptyLabel: string): ListItem[] {
+  if (!recent.length) return [{ label: emptyLabel, value: -1, enabled: false }];
+  const cards = book ? book.cards() : [];
+  return recent.map((r, i) => {
+    const known = cards.find((c) => c.guildCardNumber === r.guildCardNumber);
+    return { label: (known ? known.name : r.name).replace(/\n/g, ' '), value: i, enabled: true };
+  });
+}
+
+// The row 0x65 sub-list (CreateGuildCardSubListWindow_00747480): the players and the rename.
+export function subRows(text: Text): ListItem[] {
+  return [
+    { label: text(T11_GUILD.subShowCard), value: GUILD_SUB_STATE.players, enabled: true },
+    { label: text(T11_GUILD.subRename), value: GUILD_SUB_STATE.rename, enabled: true },
+  ];
+}
+
+// The card info window's lines (GuildCardUI_UpdateListItemText_00715518): name, number
+// (not 0), class, section, team, description. The language is not drawn (see the header).
+export function cardInfoLines(card: GuildCard, unitxt: (group: number, index: number) => string): string[] {
+  const lines = [card.name];
+  if (card.guildCardNumber) lines.push(String(card.guildCardNumber));
+  lines.push(unitxt(UNITXT_GROUP.className, Math.min(card.charClass, 0xc)));
+  lines.push(unitxt(UNITXT_GROUP.sectionName, Math.min(card.sectionId, 10)));
+  if (card.teamName) lines.push(card.teamName);
+  if (card.description) lines.push(card.description);
+  return lines.map((l) => l.replace(/\n/g, ' ')).filter((l) => l.length > 0);
+}
+
 export function menuRows(text: Text, loggedIn: boolean): ListItem[] {
   return [
     { label: text(T11_GUILD.sublist), value: GUILD_MENU_STATE.sublist, enabled: true },
@@ -338,7 +443,12 @@ function windowWidth(items: readonly ListItem[], title: string | null): number {
 // A text box: the frame at (x, y) and the wrapped text, the Question's layout (14 for
 // the first line, 20 for each further line, plus a 20 frame).
 function drawTextBox(ctx: CanvasRenderingContext2D, skin: WindowSkin, x: number, y: number, text: string): void {
-  const lines = wrapGameText(text, CARD_TEXT_WIDTH - 2 * INSET);
+  drawTextLines(ctx, skin, x, y, [text]);
+}
+
+// The same box with several paragraphs, each wrapped on its own (the card info window's lines).
+function drawTextLines(ctx: CanvasRenderingContext2D, skin: WindowSkin, x: number, y: number, paragraphs: readonly string[]): void {
+  const lines = paragraphs.flatMap((p) => wrapGameText(p, CARD_TEXT_WIDTH - 2 * INSET));
   const h = 14 + 20 * Math.max(0, lines.length - 1) + 20;
   drawWindowFrame(ctx, skin.frame, x, y, CARD_TEXT_WIDTH, h);
   lines.forEach((line, i) => drawGameText(ctx, line, x + INSET, y + INSET + i * 20));
@@ -361,6 +471,9 @@ export type GuildCardPhase =
   | 'addPlayer'
   | 'addEntity'
   | 'addAsk'
+  | 'text'
+  | 'sub'
+  | 'subPlayers'
   | 'closed';
 
 const PAGE_KEYS: Readonly<Record<string, -1 | 1>> = { ArrowLeft: -1, ArrowRight: 1 };
@@ -492,6 +605,25 @@ export class GuildCardMenu {
     this.phase = 'addPlayer';
   }
 
+  private openSub(): void {
+    this.sub = subRows(this.text);
+    this.subState.cursor = 0;
+    this.phase = 'sub';
+  }
+
+  // The recent search list (row 0x67): the rows of GuildCardClient.recent.
+  private openText(): void {
+    this.list = recentRows(this.host.client()?.recent ?? [], this.host.book(), this.text(T11_GUILD.noRecent));
+    this.listState.cursor = 0;
+    this.phase = 'text';
+  }
+
+  private openSubPlayers(): void {
+    this.list = playerRows(this.host.lobbyPlayers(), this.text(T11_GUILD.noPlayers));
+    this.listState.cursor = 0;
+    this.phase = 'subPlayers';
+  }
+
   private openAddEntity(): void {
     // The port has no entity with a guild card: the list holds only the greyed row.
     this.list = [{ label: this.text(T11_GUILD.noEntities), value: -1, enabled: false }];
@@ -546,6 +678,12 @@ export class GuildCardMenu {
       case 'addEntity':
         this.addEntityKey(e);
         return null;
+      case 'text':
+        return this.textKey(e);
+      case 'sub':
+        return this.subKey(e);
+      case 'subPlayers':
+        return this.subPlayersKey(e);
       default:
         return null;
     }
@@ -564,7 +702,52 @@ export class GuildCardMenu {
       this.openBlock();
       return null;
     }
+    if (row.value === GUILD_MENU_STATE.sublist) {
+      this.openSub();
+      return null;
+    }
+    if (row.value === GUILD_MENU_STATE.textList) {
+      this.openText();
+      return null;
+    }
     return { state: row.value, card: -1 };
+  }
+
+  // Row 0x67: a recent row opens the search result window (state 0x1f), not ported; the list stays.
+  private textKey(e: MenuKey): UnportedAction | null {
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return null;
+    }
+    if (r !== 'decide') return null;
+    return { state: GUILD_TEXT_OPEN_STATE, card: this.list[this.listState.cursor]!.value };
+  }
+
+  // Row 0x65: the sub-list. The players (state 5) open the player list; the rename (state 9) is not ported.
+  private subKey(e: MenuKey): UnportedAction | null {
+    const r = listKey(e, this.sub, this.subState);
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return null;
+    }
+    if (r !== 'decide') return null;
+    if (this.sub[this.subState.cursor]!.value === GUILD_SUB_STATE.players) {
+      this.openSubPlayers();
+      return null;
+    }
+    return { state: GUILD_SUB_STATE.rename, card: -1 };
+  }
+
+  // The lobby players (state 5): a player sends 0x62 (state 6), not ported; the list stays.
+  private subPlayersKey(e: MenuKey): UnportedAction | null {
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') {
+      this.phase = 'sub';
+      return null;
+    }
+    if (r !== 'decide') return null;
+    return { state: GUILD_PLAYER_SEND_STATE, card: this.list[this.listState.cursor]!.value };
   }
 
   private listPhaseKey(e: MenuKey): UnportedAction | null {
@@ -871,6 +1054,30 @@ export class GuildCardMenu {
     if (this.phase === 'addSource') {
       const s = GUILD_CARD_POS.addSource;
       drawListWindow(ctx, skin, s.x, s.y, windowWidth(this.sub, title), title, this.sub, this.subState.cursor, true);
+    }
+    if (this.phase === 'text') {
+      const t = GUILD_CARD_POS.textList;
+      const textTitle = this.text(T11_GUILD.textTitle);
+      drawListWindow(ctx, skin, t.x, t.y, windowWidth(this.list, textTitle), textTitle, this.list, this.listState.cursor, true);
+    }
+    if (this.phase === 'sub' || this.phase === 'subPlayers') {
+      const s = GUILD_CARD_POS.sub;
+      const subTitle = this.text(T11_GUILD.subTitle);
+      drawListWindow(ctx, skin, s.x, s.y, windowWidth(this.sub, subTitle), subTitle, this.sub, this.subState.cursor, this.phase === 'sub');
+    }
+    if (this.phase === 'subPlayers') {
+      const p = GUILD_CARD_POS.playerPick;
+      const pickTitle = this.text(T11_GUILD.pickTitle);
+      drawListWindow(ctx, skin, p.x, p.y, windowWidth(this.list, pickTitle), pickTitle, this.list, this.listState.cursor, true);
+    }
+    // The card info window 0x89 for the highlighted card of the add-from-card-book list (state 0x41 / 0x42).
+    if (this.phase === 'addCard' || (this.phase === 'addAsk' && this.askBack === 'addCard')) {
+      const row = this.list[this.listState.cursor];
+      const entry = row && row.value >= 0 ? this.host.book()?.view().entries[row.value] : undefined;
+      if (entry && entry.card.present) {
+        const i = GUILD_CARD_POS.cardInfo;
+        drawTextLines(ctx, skin, i.x, i.y, cardInfoLines(entry.card, this.host.unitxt ?? (() => '')));
+      }
     }
     // Under a question the list it came from stays drawn (its cursor is not active).
     const under = this.phase === 'addAsk' ? this.askBack : this.phase === 'unblockAsk' ? 'blocked' : this.phase;
