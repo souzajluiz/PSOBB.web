@@ -5,7 +5,7 @@
 // are plausible stand-ins (a run with several lengths guards against a state
 // that waits on a length: nothing may hang).
 // Run: node tests/enemyfsmep2a.test.ts
-import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueSpit, GroundBlast, type GeeState } from '../client/src/combat/enemyfsmep2a.ts';
+import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueBomb, GiGueSpit, GroundBlast, type GeeState } from '../client/src/combat/enemyfsmep2a.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 
@@ -677,6 +677,21 @@ near(GIBBLES.sinkStep, 0.1, 1e-7, 'Gibbles: the sink steps 0.1');
   // yaw 0 flies 4 along +z in the first step: the target 4 out on z puts the spit 0.5 above its weapon point.
   const onWeapon: AiTarget = { clientId: 1, x: 0, z: 4, charClass: 0, dead: false, y: 0 };
   eq(spit(0.5).tick([onWeapon]).length, 1, 'a spit 0.5 above the weapon point (within the speed): hit');
+}
+
+// --- Gi Gue bomb hit (GiGuesAIUpdate_007acee8, dump 793420): the player's round box (radius 5)
+// against the bomb's rectangle (half width 1 across, half length 5 along the travel), centred on
+// the step's midpoint.
+{
+  // From (0, 20, 0) aimed along +z at the feet: after one step of speed 3 the midpoint is z 1.5.
+  const bombHits = (x: number, z: number): number => new GiGueBomb(0, 20, 0, 0, 0, 100, 3, 10).tick([player(x, z, 1, { y: 0 })]).length;
+  eq(bombHits(3.5, 1.5), 1, 'bomb: 3.5 across the travel (2.5 past the 1-wide strip) is inside radius 5');
+  eq(bombHits(6, 1.5), 0, 'bomb: 6 across (5 past the strip edge): no hit');
+  eq(bombHits(0, 1.5 + 4.9), 1, 'bomb: 4.9 along the travel (inside the 5 half length): hit');
+  eq(bombHits(0, 1.5 + 10.1), 0, 'bomb: 10.1 along the travel: no hit (the old XZ-within-10 test hit it)');
+  const b = new GiGueBomb(0, 20, 0, 0, 0, 100, 3, 10);
+  b.tick([]);
+  check(b.y < 20, 'bomb: flies down toward the feet aim (y 0)');
 }
 
 if (failures) {

@@ -443,6 +443,14 @@ export const SPIT = { speed: 4, dropAfter: 18, gravity: Math.fround(0.1), life: 
 // ASSUMED: the player's hit box radius for projectiles (the player collision
 // radius 5 of render/lobbyview.ts).
 export const PLAYER_RADIUS = 5;
+// The spit's update (LilySpawnMegidProjectile_00529e68 vtable 0x00b011e0; update 0x0052a08c, found by the
+// vtable 0x00b011e0 +0x38 / +0x30 chain: 0x00521e8c -> 0x00521cdc -> 0x00529f9c, then
+// FUN_007b8618 / FUN_007b8980 for the box test): the spit's proximity is the XZ squared
+// distance (FUN_007a9180 reads x and z only) and the vertical gate is
+// |spit y - the target's y (+0x304)| <= 30 (0x009221bc = 30.0, FUN_0082e900 is fabs).
+// The box test (FUN_007b5318) is XZ (CheckTwoHitboxCollision's rule); the spit's box is
+// ASSUMED a sphere of radius 2.0 (the group struct 0x009bc384: group 15, 2.0 at 0x009bc388).
+export const SPIT_Y_GATE = 30;
 
 export class LilySpit {
   x: number;
@@ -453,11 +461,14 @@ export class LilySpit {
   private vy = 0;
   private frames = 0;
   done = false;
+  /** The Lily's feet (world y): the spit's world y is this + height. */
+  private readonly baseY: number;
 
-  constructor(x: number, z: number, angle: number) {
+  constructor(x: number, z: number, angle: number, baseY = 0) {
     this.x = x;
     this.z = z;
     this.height = LILY.mouth;
+    this.baseY = baseY;
     this.vx = Math.sin(angle) * SPIT.speed;
     this.vz = Math.cos(angle) * SPIT.speed;
   }
@@ -477,9 +488,14 @@ export class LilySpit {
       this.done = true;
       return null;
     }
+    const y = this.baseY + this.height;
     for (const t of targets) {
       if (t.dead) continue;
-      if (Math.hypot(t.x - this.x, t.z - this.z) <= SPIT.radius + PLAYER_RADIUS) {
+      if (Math.abs(y - (t.y ?? 0)) > SPIT_Y_GATE) continue;
+      const dx = t.x - this.x;
+      const dz = t.z - this.z;
+      const r = SPIT.radius + PLAYER_RADIUS;
+      if (dx * dx + dz * dz < r * r) {
         this.done = true;
         return t;
       }

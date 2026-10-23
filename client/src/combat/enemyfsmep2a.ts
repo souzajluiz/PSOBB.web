@@ -19,7 +19,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
-import { PLAYER_AIM_HEIGHT, EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { BOOMA_MELEE } from './enemyfsmep2.ts';
 import { STATUS } from './status.ts';
 import { exhaustive } from '../exhaustive.ts';
@@ -1217,10 +1217,35 @@ export class GiGueSpit extends EnemyShot {
   }
 }
 
+/** Sphere (the player's round box, radius 5) against the bomb's rectangle in XZ: the rectangle
+ * centred at (cx, cz), half width 1 across the yaw's travel and half length 5 along it. The
+ * local frame of matrix_rotation_y: forward (sin yaw, cos yaw), side (cos yaw, -sin yaw). */
+function rectSphereXZ(cx: number, cz: number, yaw: number, x: number, z: number): boolean {
+  const dx = x - cx;
+  const dz = z - cz;
+  const along = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+  const across = dx * Math.cos(yaw) - dz * Math.sin(yaw);
+  const ex = across - Math.max(-GIGUE_BOMB_HALF_WIDTH, Math.min(GIGUE_BOMB_HALF_WIDTH, across));
+  const ez = along - Math.max(-GIGUE_BOMB_HALF_LENGTH, Math.min(GIGUE_BOMB_HALF_LENGTH, along));
+  return ex * ex + ez * ez < GIGUE_BOMB_PLAYER_RADIUS * GIGUE_BOMB_PLAYER_RADIUS;
+}
+
 // The bomb (GiGuesSpawnProjectile_0056d174 over the base projectile): flies
 // straight to the player's position at fparam2 a frame and explodes on the
 // first player or the floor, hurting every player within 40 (1600 squared,
 // 0x00a73dd4) with entity_hit_by_tech power iparam1.
+// The bomb's aim is the player's weapon_position (the Gi Gue's bomb state, dump 353053 calls
+// GiGuesCreateProjectile_0056d0f8 with `&ppVar2->weapon_position`), i.e. the feet, not the box centre.
+// Its hit (GiGuesAIUpdate_007acee8, dump 793300-793470, mode 1): the object sits at the midpoint
+// of the step (+0x38 = (pos + prev) / 2) with heading = the travel yaw; its collision box is
+// type 1 (unk2 = 1; GiGuesProjectile_Constructor_007acaf8, dump 793135: radius 5.0, unk1 1.0) so an
+// oriented rectangle of half width 1 (across the travel) and half length 5 (along it), and
+// the player's box is the round radius 5 at the feet. CheckTwoHitboxCollision_007b5e40 hands
+// both centres with y = 0, so the test is in XZ: sphere (radius 5) against the rectangle.
+const GIGUE_BOMB_HALF_WIDTH = 1; // unk1 (0x3f800000 at projectile +0x4c)
+const GIGUE_BOMB_HALF_LENGTH = 5; // radius (0x40a00000 at projectile +0x48)
+const GIGUE_BOMB_PLAYER_RADIUS = 5; // PLAYER_RADIUS (collision.ts; the player's round box)
+
 export class GiGueBomb extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff6030, size: 2 };
@@ -1229,12 +1254,14 @@ export class GiGueBomb extends EnemyShot {
   private vz: number;
   private travelled = 0;
   private speed: number;
+  private readonly yaw: number;
 
-  constructor(x: number, y: number, z: number, toX: number, toZ: number, speed: number, power: number) {
+  constructor(x: number, y: number, z: number, toX: number, toY: number, toZ: number, speed: number, power: number) {
     super(x, y, z);
     const dx = toX - x;
-    const dy = PLAYER_AIM_HEIGHT - y;
+    const dy = toY - y;
     const dz = toZ - z;
+    this.yaw = Math.atan2(dx, dz);
     const len = Math.hypot(dx, dy, dz) || 1;
     this.vx = (dx / len) * speed;
     this.vy = (dy / len) * speed;
@@ -1246,11 +1273,12 @@ export class GiGueBomb extends EnemyShot {
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     this.frames++;
+    const px = this.x;
+    const pz = this.z;
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    // ASSUMED: the bomb's direct contact is the XZ test within 10 (no height window).
-    const direct = targets.some((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= 10);
+    const direct = targets.some((t) => !t.dead && rectSphereXZ((px + this.x) / 2, (pz + this.z) / 2, this.yaw, t.x, t.z));
     if (this.travelled > GIGUE.bombRange || this.y <= 0 || direct) {
       this.done = true;
       return targets.filter((t) => !t.dead && (t.x - this.x) ** 2 + (t.z - this.z) ** 2 <= GIGUE.bombRadiusSq);
@@ -1718,7 +1746,7 @@ export class GiGueAi extends BrainBase {
         if (this.frames >= GIGUE.bombFrameA) this.sub = 2;
       } else if (this.sub === 2 && this.frames >= GIGUE.bombFrame) {
         // ASSUMED: the bomb leaves from the middle of the body (node 0x2a).
-        out.shots = [new GiGueBomb(this.x, 20, this.z, t.x, t.z, this.bombSpeed, this.bombPower)];
+        out.shots = [new GiGueBomb(this.x, 20, this.z, t.x, t.y ?? 0, t.z, this.bombSpeed, this.bombPower)];
         this.sub = 3;
       }
       this.angle = this.angleTo(t);

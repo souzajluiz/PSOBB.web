@@ -45,7 +45,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, once, turnToward, wrap } from './enemyfsm.ts';
-import { EnemyShot, PLAYER_AIM_HEIGHT, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { enemyFire } from './techfire.ts';
 import { SporeCloud } from './enemyfsmep2.ts';
 import { techFreezeChance, techShockChance } from './enemystatus.ts';
@@ -1731,35 +1731,31 @@ export class GibbonAi extends BrainBase {
     const x = this.x + Math.sin(this.angle) * GIBBON.castAhead;
     const z = this.z + Math.cos(this.angle) * GIBBON.castAhead;
     let tech: number;
-    if (this.isLeader) tech = this.ultimate ? TECH.megid : TECH.rafoie;
+    // Leader, non-ultimate floor: field_0x10 == 1 calls unknown_create_sorc_tech (dump
+    // 349660, the else of g_CurrentFloor == ultimate), which is Gibarta
+    // (techfire.ts: 0x006e38e0, the heading form). It always flies along the heading.
+    if (this.isLeader) tech = this.ultimate ? TECH.megid : TECH.gibarta;
     else tech = this.ultimate ? TECH.gizonde : TECH.foie;
-    // Foie and Rafoie are the real objects (combat/techfire.ts). unknown_gibbon_
+    // Foie and Gibarta are the real objects (combat/techfire.ts). unknown_gibbon_
     // behavior2 (dump 349686, the non-ultimate else): with a target (+0x398) and
     // the turn to it below max_y_angle / 2, create_directed_foie_object takes the
     // target's +0x300 (its feet); else create_foie_object1 flies along the heading.
     // The angle is the post-turn difference of EnemyAI_UpdateRotation_00771858
     // (dump 746368: integer_angle_abs_difference); here the difference before the
     // fire-frame turn (ASSUMED: the exe's extra turn by the record's rate is not
-    // ported). Rafoie is on the target (ASSUMED the list form that follows it).
-    if (tech === TECH.foie || tech === TECH.rafoie) {
-      let shot: EnemyShot | null = null;
-      if (tech === TECH.rafoie) {
-        shot = t
-          ? enemyFire({ tech, level: this.level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: this.angle, targetId: t.clientId, enemy: true })
-          : null;
-      } else {
-        const aimed = t !== null && this.aimedAtTarget(t);
-        shot = enemyFire({
-          tech,
-          level: this.level,
-          x,
-          y: GIBBON.castHeight,
-          z,
-          heading: this.angle,
-          aim: aimed && t ? { x: t.x, y: t.y ?? 0, z: t.z } : null,
-          enemy: true,
-        });
-      }
+    // ported). The Gibarta never takes the aim (the sorc tech has no target form here).
+    if (tech === TECH.foie || tech === TECH.gibarta) {
+      const aimed = tech === TECH.foie && t !== null && this.aimedAtTarget(t);
+      const shot = enemyFire({
+        tech,
+        level: this.level,
+        x,
+        y: GIBBON.castHeight,
+        z,
+        heading: this.angle,
+        aim: aimed && t ? { x: t.x, y: t.y ?? 0, z: t.z } : null,
+        enemy: true,
+      });
       if (shot) (out.shots ??= []).push(shot);
       return;
     }

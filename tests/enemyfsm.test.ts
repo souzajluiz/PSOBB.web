@@ -118,6 +118,13 @@ const attack = { distanceX: 12, angle: 0x1c71 } as never;
   // 12 high, falling 0.1 more per frame from frame 18.
   check(n > 18 && n < 40, `the spit lands after ${n} frames`);
   check(far.z > 18 * SPIT.speed, 'it flies straight for 18 frames first');
+  // The vertical gate (0x0052a08c's FUN_0082e900 test, 0x009221bc = 30): the spit's world y (the Lily's
+  // feet + 12 at the mouth, 4 units ahead in the first step) against the target's feet.
+  const spitHitsAt = (ty: number): boolean => new LilySpit(0, 0, 0, 0).tick([{ ...player(0, 4), y: ty }]) !== null;
+  check(spitHitsAt(0), 'spit: a target at the spit height hits');
+  check(spitHitsAt(40), 'spit: 28 below the spit (within 30): hits');
+  check(!spitHitsAt(43), 'spit: 31 below the spit: no hit (the y gate)');
+  check(!spitHitsAt(-20), 'spit: 32 under the spit: no hit');
 }
 
 // --- Poison Lily low-HP spin (state 8) --------------------------------------
