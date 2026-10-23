@@ -24,6 +24,9 @@ import {
   unitsPerPixel,
   type MinimapRoomInput,
   doorIcon,
+  enemyIconRule,
+  komoVariant6Icon,
+  teamColour,
   ICON_GREEN,
   ICON_RED,
   raderHideInside,
@@ -320,6 +323,43 @@ eq(raderHideInside(hide, { x: 6, y: 0, z: 6 }), true, 'TObjRaderHideCol: squared
 eq(raderHideInside(hide, { x: 10, y: 0, z: 0 }), false, 'TObjRaderHideCol: exactly the radius is outside (d^2 < r^2)');
 eq(raderHideInside(hide, { x: 0, y: 9, z: 0 }), true, 'TObjRaderHideCol: the distance is 3D (height counts)');
 eq(raderHideInside(hide, { x: 0, y: 9, z: 5 }), false, 'TObjRaderHideCol: height and XZ together outside');
+
+// --- battle team colours (MinimapCheckBattleOrSpawnItem_00803180; dump lines 817265-817415) ---
+eq([teamColour(1), teamColour(2), teamColour(0), teamColour(3)], [0xffff0000, 0xff00ff00, 0xffffff00, 0xffffff00], 'battle: team 1 red, team 2 green, others yellow');
+{
+  const m = new MinimapState();
+  m.enterFloor(0, 0, [], new MinimapFloors());
+  m.delay = 0;
+  const me = { slot: 0, x: 5, z: 5, heading: 0 };
+  const mate = { slot: 1, x: 6, z: 6, heading: 0, team: 1 };
+  const foe = { slot: 2, x: 7, z: 7, heading: 0, team: 2 };
+  m.update(me, [mate, foe], 0x8000, null);
+  eq(m.markers.map((x) => [x.slot, x.color]), [[0, PLAYER_COLORS[0]], [1, PLAYER_COLORS[1]], [2, PLAYER_COLORS[2]]], 'battle off: the slot colours, every player drawn');
+  m.update(me, [mate, foe], 0x8000, 1);
+  eq(m.markers.map((x) => [x.slot, x.color]), [[0, 0xffff0000], [1, 0xffff0000]], 'battle team 1: the self and the teammate red, the other team hidden');
+  m.update(me, [mate, foe], 0x8000, 0);
+  eq(m.markers.map((x) => x.slot), [0], 'battle team 0: no other marker is drawn');
+  m.update(me, [mate, foe], 0x8000, 2);
+  eq(m.markers.map((x) => [x.slot, x.color]), [[0, 0xff00ff00], [2, 0xff00ff00]], 'battle team 2: green for the same team only');
+}
+// --- enemy icon rules: the Olga Flow phase 1 is forced at 5.0 (icon3 flag 1), the rest are plain ---
+eq(enemyIconRule('OLGA_FLOW_1'), { scale: 5, color: 0xffffa24c, forced: true }, 'boss icon: Olga Flow phase 1 is forced at scale 5.0');
+eq(enemyIconRule('HILDEBLUE'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: the plain icon, range checked');
+{
+  const m = new MinimapState();
+  m.enterFloor(0, 0, [], new MinimapFloors());
+  m.delay = 0;
+  m.update({ slot: 0, x: 0, z: 0, heading: 0 }, [], 0x8000, null);
+  const far = { x: 1000, z: 0, color: 0xffffa24c, shape: 1 as const, scale: 5, heading: 0 };
+  eq(m.addIcon(far, false), false, 'icon: a plain icon beyond the radar range is not added');
+  eq(m.addIcon(far, true), true, 'icon: a forced icon beyond the radar range is added');
+}
+// --- Komo variant 6 icons (MapObjectKomoVariant6Update_0065d89c, Episode 2) ---
+const komoA = komoVariant6Icon(3, 0, 0x4000, { x: 1, z: 2 });
+eq([komoA.shape, komoA.color, komoA.scale, komoA.heading], [3, 0xffff0000, 1, 0x4000], 'Komo variant 6: shape 3, red while active, odd value is scale 1, heading yrot');
+eq(komoVariant6Icon(-3, 1, 0, { x: 0, z: 0 }).scale, -1, 'Komo variant 6: a negative odd value is scale -1');
+eq(komoVariant6Icon(4, 1, 0, { x: 0, z: 0 }).scale, 0, 'Komo variant 6: an even value is scale 0');
+eq(komoVariant6Icon(0, 1, 0, { x: 0, z: 0 }).color, ICON_GREEN, 'Komo variant 6: green at state 1 (idle)');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

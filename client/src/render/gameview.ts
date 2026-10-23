@@ -206,10 +206,11 @@ export class GameView {
           for (const p of this.game.players.values()) {
             if (p.clientId === this.game.selfId || p.floor !== floor || p.visible === false) continue;
             const m = this.minimapPlayer(p.clientId);
-            if (m) out.push(m);
+            if (m) out.push({ ...m, team: this.hud.battleTeam?.(p.clientId) ?? null });
           }
           return out;
         },
+        battle: () => this.hud.battleTeam?.(this.game.selfId) ?? null,
         enemies: () => this.combat.minimapEnemies(),
         switchOn: (flag) => this.fieldObjects?.switchOn(flag) ?? false,
         doorIcons: () => this.doorMinimapIcons(),

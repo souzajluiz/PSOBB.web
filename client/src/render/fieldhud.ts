@@ -42,7 +42,7 @@ import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
-import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, raderHideInside, raderIconIcon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
+import { enemyIconRule, MinimapFloors, MinimapState, raderHideInside, raderIconIcon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
 import type { AreaMapInput } from '../classic/areamap.ts';
 import type { Icon } from '../classic/minimap.ts';
 import type { QuestBoardVM } from '../classic/questboard.ts';
@@ -58,11 +58,12 @@ const RADER_COL_DELAY = 3; // radar_collision_constructor: +0x9c = 3
 export interface MinimapSource {
   self: () => MinimapPlayer | null; // the local player (null: none / invisible)
   others: () => MinimapPlayer[]; // the other players on this floor
-  enemies: () => readonly { x: number; z: number }[]; // live enemies on this floor
+  enemies: () => readonly { x: number; z: number; type: string }[]; // live enemies on this floor (type: the newserv name, the icon rule)
   cameraYaw: () => number; // the camera's y_rotation (BAMS)
   hidden: () => boolean; // a talk camera or a UI that blocks the player's input
   switchOn: (flag: number) => boolean; // a switch flag of this floor (TObjRaderIcon colour)
   doorIcons: () => readonly Icon[]; // the doors' icons (TObjDoor, this floor)
+  battle: () => number | null; // the local player's battle team while battle mode runs (null: not in battle)
 }
 
 // A TObjRaderCol (0x0017): radius param1, room param4.
@@ -141,6 +142,8 @@ export class FieldHud {
   private paletteHud = new PaletteHud();
   // Battle Mode trap stock by type 0..3 (set by quest/battlerun.ts while a battle runs).
   trapCount: ((type: number) => number) | null = null;
+  // Battle Mode team of a client slot (set by quest/battlerun.ts while a battle runs; null: none).
+  battleTeam: ((clientId: number) => number | null) | null = null;
   readonly menu: FieldMenu;
   private acc = 0;
   private inventoryKey = '';
@@ -609,7 +612,7 @@ export class FieldHud {
       if (src && this.minimap.loaded) {
         const self = src.self();
         this.tickRaderCols(self);
-        this.minimap.update(self, src.others(), src.cameraYaw());
+        this.minimap.update(self, src.others(), src.cameraYaw(), src.battle());
         if (this.minimapShown()) this.minimap.fadeRooms();
       }
     }
@@ -667,7 +670,10 @@ export class FieldHud {
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra, bands.bottom);
     if (this.minimapShown()) {
       // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
-      for (const e of this.opts.minimap?.enemies() ?? []) this.minimap.addIcon({ x: e.x, z: e.z, color: ENEMY_ICON_COLOR, shape: 1, scale: 1, heading: 0 });
+      for (const e of this.opts.minimap?.enemies() ?? []) {
+        const rule = enemyIconRule(e.type);
+        this.minimap.addIcon({ x: e.x, z: e.z, color: rule.color, shape: 1, scale: rule.scale, heading: 0 }, rule.forced);
+      }
       // The TObjRaderIcon switches and the doors (their own update adds them).
       const src = this.opts.minimap;
       for (const r of this.raderIcons) this.minimap.addIcon(raderIconIcon(r, (f) => src?.switchOn(f) ?? false));
