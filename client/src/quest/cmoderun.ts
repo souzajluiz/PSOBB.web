@@ -36,6 +36,8 @@ import {
   resultLines,
   RECORDS_SIZE,
   saveGrave,
+  sRankChoices,
+  srankNameFromInput,
   timerText,
   type ChallengeEnv,
   type ChallengeMode,
@@ -47,7 +49,6 @@ import type { QuestVM } from './vm.ts';
 
 const RECORDS_OFFSET = 0x2cb8; // PSOBBCharacterFile.challenge_records
 const HINT_TEXT = ['In Challenge Mode,', 'some stage areas', "require other user's", 'help to proceed.'];
-const S_RANK_TYPES = [...Array.from({ length: 0x89 - 0x70 }, (_, i) => 0x70 + i), ...Array.from({ length: 0xaa - 0xa5 }, (_, i) => 0xa5 + i)];
 
 // A grave on this floor: the record it came from, its position and its text fade.
 interface GraveLabel {
@@ -484,16 +485,24 @@ export class ChallengeRuntime {
 
   // --- the S rank prize (award_item_*) ----------------------------------------------------------------------
 
+  // award_item_select: the episode's rows (sRankChoices), named by unitxt group 1;
+  // the title is unitxt group 12 0x46 "Choose the type of reward.".
   private async pickAward(): Promise<number> {
-    const names = S_RANK_TYPES.map((t) => `S-Rank 0x${t.toString(16).toUpperCase()}`);
-    const i = await this.o.town.ui.list(names, { title: 'Choose the type of reward.', cancellable: false });
-    return S_RANK_TYPES[i ?? 0] ?? 0x70;
+    const text = this.o.view.hud.itemNames?.text ?? null;
+    const choices = sRankChoices(this.o.game.info?.episode === 2 ? 1 : 0);
+    const labels = choices.map((c) => text?.[1]?.[c.name] || `S-Rank 0x${c.type.toString(16).toUpperCase()}`);
+    const title = text?.[12]?.[0x46] || 'Choose the type of reward.';
+    const i = await this.o.town.ui.list(labels, { title, cancellable: false });
+    return choices[i ?? 0]?.type ?? 0x70;
   }
 
+  // award_item_name: the name window's label is unitxt group 12 0x47
+  // "You can put your name on this reward."; the exe's keyboard is not ported, a
+  // prompt stands in for it (ASSUMED: the typed name starts empty).
   private async askAwardName(): Promise<string> {
-    // The name window of the exe is a text input; a prompt stands in for it.
-    const typed = typeof prompt === 'function' ? prompt('You can put your name on this reward (8 letters).', 'RAGOL') : null;
-    return (typed ?? 'RAGOL').replace(/[^A-Za-z]/g, '').slice(0, 8).toUpperCase();
+    const label = this.o.view.hud.itemNames?.text?.[12]?.[0x47] || 'You can put your name on this reward.';
+    const typed = typeof prompt === 'function' ? prompt(label, '') : null;
+    return srankNameFromInput(typed ?? '');
   }
 
   private async confirmAward(): Promise<number> {

@@ -415,6 +415,39 @@ export function buildSRankWeapon(type: number, name: string, id = 0xffffffff): U
   return item;
 }
 
+// --- the S-rank prize choices (award_item_select, QuestThread5Constructor_006bd0f8) --------------
+//
+// The list has one row per S-rank weapon the episode can give: the row's name is
+// unitxt group 1 entry `name` (unitxt_get_item_name) and its value is the weapon
+// type (GetQuestThread5SelectedItemID_006bd288 reads the second word). The rows
+// are two -1 ended tables in the exe's data: g_QuestThread5ItemIDs_Episode0 at
+// 0x009ce920 (Episode 1, read with `tools/exedata.py read 009ce920 u 40`) and
+// g_QuestThread5ItemIDs_EpisodeOther at 0x009ce9a0 (Episode 2 and 4).
+export interface SRankChoice {
+  name: number; // unitxt group 1 index (the item name)
+  type: number; // the S-rank weapon type, 0x70.. (maybe_put_srank_name_data_into_item)
+}
+
+const S_RANK_CHOICES_EPISODE_1: readonly SRankChoice[] = Array.from({ length: 14 }, (_, i) => ({ name: 386 + i, type: 0x70 + i }));
+
+const S_RANK_CHOICES_OTHER: readonly SRankChoice[] = [
+  ...Array.from({ length: 11 }, (_, i) => ({ name: 400 + i, type: 0x7e + i })),
+  ...Array.from({ length: 5 }, (_, i) => ({ name: 484 + i, type: 0xa5 + i })),
+];
+
+// The rows of the episode (0 = Episode 1, anything else the other table).
+export function sRankChoices(episodeIndex: number): readonly SRankChoice[] {
+  return episodeIndex === 0 ? S_RANK_CHOICES_EPISODE_1 : S_RANK_CHOICES_OTHER;
+}
+
+// The name window (award_item_name, QuestThread4Constructor_006bcf6c): a keyboard
+// of 8 characters (TKeyboardControl(.., 8, ..)). What is typed is the name written
+// into the weapon: letters only (the 5-bit table of maybe_put_srank_name_data_into_item).
+export const S_RANK_NAME_MAX = 8;
+export function srankNameFromInput(typed: string): string {
+  return typed.replace(/[^A-Za-z]/g, '').slice(0, S_RANK_NAME_MAX).toUpperCase();
+}
+
 // --- the state a Challenge game keeps ------------------------------------------------------
 
 export interface RankThreshold {
