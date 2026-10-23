@@ -350,7 +350,10 @@ export class LobbyScreen implements Screen {
       const raw = this.hud.fullCharacter?.() ?? null;
       const entries = raw ? parseCharacterFile(raw).symbolChats : [];
       const rows = symbolChatRows(entries, (g, i) => this.hud.text(g, i));
-      this.symbolList = new SymbolChatList('home', this.hud.text(11, SYMBOL_TEXT.title), rows, (row) => this.previewSymbol(row));
+      this.symbolList = new SymbolChatList('home', this.hud.text(11, SYMBOL_TEXT.title), rows, (row) => {
+        this.previewSymbol(row);
+        return false; // the Home leaf's window stays open
+      });
       this.menu.leafOpen = true;
     } else if (id === 0x16) {
       // handle_player_menu_select info_board_menu (0x16): the Info Board window (classic/infoboard.ts,
@@ -430,10 +433,10 @@ export class LobbyScreen implements Screen {
 
   // The preview of a saved chat: its picture over our own head, with the chat's sound (the exe's
   // ProcessChatMessageType_0077d880 plays the sound; the balloon is ASSUMED).
+  // ProcessChatMessageType_0077d880 (state 2 of the Home leaf): the row's sound only.
+  // Nothing is sent and no balloon is shown (the exe's leaf sends from its option list, not ported).
   private previewSymbol(row: SymbolRow): void {
-    if (!row.chat) return;
-    const id = this.lobby.selfId;
-    this.chat.receiveSymbol(id, this.lobby.players.get(id)?.name ?? '', row.chat, (x) => this.distanceTo(x));
+    if (row.sound !== null) se(row.sound);
   }
 
   private applyViewShift(): void {

@@ -34,6 +34,9 @@ import {
   faceCell,
   faceColour,
   FACE_SIZE,
+  CHAT_COOLDOWN_FRAMES,
+  chatCooldownOver,
+  chatCooldownTick,
   SYMBOL_CHAT_FRAMES,
   SYMBOL_COLOURS,
   SYMBOL_PLATE,
@@ -242,7 +245,10 @@ check('6x07 subcommand is 0x44 bytes', 4 + 4 + SYMBOL_CHAT_SIZE === 0x44);
   // The list: Enter on an invalid row buzzes; in 'home' a valid row previews and the window stays open.
   applyKeyConfig(defaultKeyConfig());
   const decided: number[] = [];
-  const home = new SymbolChatList('home', 'Symbol Chat', rows, (r) => decided.push(r.index));
+  const home = new SymbolChatList('home', 'Symbol Chat', rows, (r) => {
+    decided.push(r.index);
+    return false;
+  });
   home.key({ key: KEYS.decide }); // row 0 is valid
   check('home: Enter on a valid row previews it', decided.length === 1 && decided[0] === 0);
   check('home: the window stays open after a preview', home.open);
@@ -253,9 +259,38 @@ check('6x07 subcommand is 0x44 bytes', 4 + 4 + SYMBOL_CHAT_SIZE === 0x44);
   check('home: Cancel closes', !home.open);
 
   const sent: number[] = [];
-  const chatList = new SymbolChatList('chat', 'Symbol Chat', rows, (r) => sent.push(r.index));
+  const chatList = new SymbolChatList('chat', 'Symbol Chat', rows, (r) => {
+    sent.push(r.index);
+    return true;
+  });
   chatList.key({ key: KEYS.decide });
   check('chat: Enter sends the row and closes', sent.length === 1 && !chatList.open);
+  const waiting = new SymbolChatList('chat', 'Symbol Chat', rows, (r) => {
+    sent.push(r.index);
+    return false;
+  });
+  waiting.key({ key: KEYS.decide });
+  check('chat: a row that waits for the cooldown keeps the window open', waiting.open && sent.length === 2);
+  waiting.close();
+  check('chat: close() closes the window', !waiting.open);
+
+  // The chat cooldown (dump 679808 is_chat_message_cooldown_over, 679819 timer 0x2d).
+  check('cooldown: the timer is 0x2d after a send', CHAT_COOLDOWN_FRAMES === 0x2d);
+  check('cooldown: a timer of 1 or more is not over', !chatCooldownOver(1) && !chatCooldownOver(CHAT_COOLDOWN_FRAMES));
+  check('cooldown: 0 is over', chatCooldownOver(0));
+  let t = CHAT_COOLDOWN_FRAMES;
+  let frames = 0;
+  while (!chatCooldownOver(t)) {
+    t = chatCooldownTick(t);
+    frames++;
+  }
+  check('cooldown: it ends 45 ticks after a send', frames === CHAT_COOLDOWN_FRAMES && t === 0);
+  check('cooldown: a tick at 0 stays 0', chatCooldownTick(0) === 0);
+
+  // Home previews play the row's sound only when the present bit (bit 0) is set (ProcessChatMessageType_0077d880).
+  check('row sound: a present row plays its spec sound', rows[0].sound === symbolSoundId(HELLO.chat.spec) && rows[0].sound === 1399);
+  check('row sound: a chosen-only row (bit 1) plays nothing', rows[3].sound === null);
+  check('row sound: an empty row plays nothing', rows[1].sound === null);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

@@ -121,11 +121,28 @@ export function isSymbolChatValid(entry: SymbolChatEntry): boolean {
   return (entry.present & 3) !== 0;
 }
 
+// The chat send cooldown (dump 679808 is_chat_message_cooldown_over, 679819
+// set_chat_message_cooldown_timer): the timer is a short on the quick-menu object
+// (g_pUITextColorTable + 0x22), set to 0x2d on each send, and a send waits while
+// it is 1 or more. The exe ticks it down in QuickmenuobjectHandleSelection (677732)
+// only while the quick menu's chat panel (+0x38) is up (ASSUMED: the port ticks it
+// in the field, every 30 Hz frame).
+export const CHAT_COOLDOWN_FRAMES = 0x2d;
+export function chatCooldownOver(timer: number): boolean {
+  return timer < 1;
+}
+export function chatCooldownTick(timer: number): number {
+  return timer > 0 ? timer - 1 : timer;
+}
+
 export interface SymbolRow {
   index: number;
   label: string;
   valid: boolean;
   chat: SymbolChat | null;
+  // The directional sound a Home preview plays (ProcessChatMessageType_0077d880:
+  // only when the present bit 0 is set); null otherwise.
+  sound: number | null;
 }
 
 // The 12 rows of a symbol chat list (GetChatMessageStringId_0077d910 for each slot).
@@ -134,9 +151,10 @@ export function symbolChatRows(entries: readonly SymbolChatEntry[], text: (group
   for (let i = 0; i < SYMBOL_CHAT_COUNT; i++) {
     const e = entries[i];
     if (!e || !isSymbolChatValid(e)) {
-      rows.push({ index: i, label: text(11, SYMBOL_TEXT.invalid), valid: false, chat: null });
+      rows.push({ index: i, label: text(11, SYMBOL_TEXT.invalid), valid: false, chat: null, sound: null });
     } else {
-      rows.push({ index: i, label: e.name || text(11, SYMBOL_TEXT.unnamed), valid: true, chat: e.chat });
+      const sound = (e.present & 1) !== 0 ? symbolSoundId(e.chat.spec) : null;
+      rows.push({ index: i, label: e.name || text(11, SYMBOL_TEXT.unnamed), valid: true, chat: e.chat, sound });
     }
   }
   return rows;
