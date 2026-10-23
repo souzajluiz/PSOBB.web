@@ -130,6 +130,8 @@ export class BBSession {
   // The guild card book (net/guildcard.ts), downloaded once per session on the
   // game server (startGuildCardSync); null until that sync is done.
   guildCards: GuildCardBook | null = null;
+  // The E8 sender of the same connection: the Guild Card menu's add / comment / swap / delete.
+  guildCardClient: GuildCardClient | null = null;
   private guildCardSync: Promise<GuildCardBook | null> | null = null;
   // What a redirect needs to log in again: the character slot and credentials
   // of the last game-server login.
@@ -288,7 +290,9 @@ export class BBSession {
   // logged (the Guild Card menu then shows its empty row).
   startGuildCardSync(conn: BBConnection): void {
     if (this.guildCardSync) return;
-    this.guildCardSync = new GuildCardClient(conn)
+    const client = new GuildCardClient(conn);
+    this.guildCardClient = client;
+    this.guildCardSync = client
       .sync(null)
       .then((book) => {
         this.guildCards = book;

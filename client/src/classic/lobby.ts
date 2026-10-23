@@ -29,7 +29,7 @@
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
 import * as THREE from 'three';
-import type { GuildCardBook } from '../net/guildcard.ts';
+import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
@@ -85,6 +85,8 @@ export interface LobbyHud {
   transport?: TransportHost;
   // The session's guild card book (net/guildcard.ts), null until its sync is done.
   guildCards?: () => GuildCardBook | null;
+  // The session's guild card sender (null before the login sync).
+  guildCardClient?: () => GuildCardClient | null;
 }
 
 export interface TransportHost {
@@ -256,7 +258,11 @@ export class LobbyScreen implements Screen {
       this.logWindow = true;
       this.menu.leafOpen = true;
     } else if (id === 0xe) {
-      const host: GuildCardHost = { book: () => this.hud.guildCards?.() ?? null, loggedIn: true };
+      const host: GuildCardHost = {
+        book: () => this.hud.guildCards?.() ?? null,
+        client: () => this.hud.guildCardClient?.() ?? null,
+        loggedIn: true,
+      };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
     } else if (id === 6) {
