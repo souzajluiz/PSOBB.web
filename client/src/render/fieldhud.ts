@@ -296,6 +296,11 @@ export class FieldHud {
     return this.names()?.pmt ?? null;
   }
 
+  // The item names the HUD draws with (null until setNames gives them).
+  get itemNames(): ItemNames | null {
+    return this.names();
+  }
+
   setNames(names: () => ItemNames | null): void {
     this.names = names;
   }

@@ -39,6 +39,7 @@ import type { BattleParamKind } from '../formats/battleparams.ts';
 import { BP_OPCODES, KeywordDetector, findInventoryItem, readBattleParamRow, validBpIndex, type QuestInventoryItem } from './miscops.ts';
 import { BATTLE_OPCODES, BattleSetup } from './battle.ts';
 import { ChallengeMode, type ChallengeEnv } from './cmode.ts';
+import type { MomokaExchangeRequest } from './giveaway.ts';
 
 export const QUEST_NUM_REGISTERS = 0x100;
 export const QUEST_NUM_FLOORS = 0x12;
@@ -160,6 +161,9 @@ export interface QuestVMHost {
   // p_talk_guild (menu 4): open a Pioneer 2 counter menu (formats/npcmodels.ts
   // P2_MENUS).
   p2Menu?: (menu: number) => void;
+  // bb_replace_item (F95B, opcode_unknownF95B .c:611678): the Momoka item
+  // exchange's 6xD9, sent for the local player (quest/giveaway.ts).
+  momokaExchange?: (req: MomokaExchangeRequest) => void;
   // p_return_guild (opcode_p_return_guild .c:605491): back to the Hunter's
   // Guild on Pioneer 2 (SinowberillChallenge_HandlePlayerFloorChange_00693598).
   returnToGuild?: () => void;
@@ -1354,6 +1358,21 @@ export class QuestVM {
         this.host.p2Menu?.(this.int(a, 0));
         clearArgs();
         return;
+      case 'bb_replace_item': {
+        // The arguments are the two packed items (argItemBytes), the two
+        // tokens (xored with the sender's slot, as the exe does) and the labels.
+        const slot = this.host.clientId?.() ?? 0;
+        this.host.momokaExchange?.({
+          find: this.int(a, 0) >>> 0,
+          replace: this.int(a, 1) >>> 0,
+          token1: (this.int(a, 2) ^ slot) >>> 0,
+          token2: (this.int(a, 3) ^ slot) >>> 0,
+          label1: this.label(a, 4),
+          label2: this.label(a, 5),
+        });
+        clearArgs();
+        return;
+      }
       case 'p_talk_guild':
         // CreateMedicalCenterDialog_006cafb8 for that player: the guild menu.
         if (this.int(a, 0) === (this.host.clientId?.() ?? 0)) this.host.p2Menu?.(4);

@@ -74,6 +74,7 @@ export class FieldTown {
       quests: () => this.link.client,
       heroName: () => opts.character()?.name ?? '',
       heroClass: () => opts.character()?.charClass ?? 0,
+      itemNames: () => opts.view.hud.itemNames,
       log,
     });
   }

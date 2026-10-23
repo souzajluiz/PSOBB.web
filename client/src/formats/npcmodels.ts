@@ -371,3 +371,4 @@ export const P2_MENUS = [
 ] as const;
 export const P2_MENU_GUILD = 4;
 export const P2_MENU_GOVERNMENT = 7;
+export const P2_MENU_PRESENT = 8; // GIVEAWAY: the Present Counter (quest/giveaway.ts)

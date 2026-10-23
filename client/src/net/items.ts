@@ -345,6 +345,25 @@ export function buildBankAction(action: number, opts: { itemId?: number; meseta?
   return b;
 }
 
+// G_MomokaItemExchange_BB_6xD9 (0x38): the Present Counter's exchange and the
+// quest opcode F95B (bb_replace_item). item1 = the item given, item2 = the
+// item received (data1[0..2] and data2 = the count, as the exe's
+// send_packet0x60_subcommand0xd9 .c:624905 and opcode_unknownF95B .c:611678
+// build them); token1 / token2 are sent as given (the caller xors them with the
+// slot); the labels are 0 from the counter. The exe leaves the size byte
+// uninitialised; the fixed 0x38 here is what newserv's MomokaItemExchangeFix
+// patch expects. The server answers with 0x23 (newserv on_momoka_item_exchange_bb).
+export function buildMomokaExchange(clientId: number, find: ItemData, replace: ItemData, token1: number, token2: number, label1 = 0, label2 = 0): Uint8Array {
+  const { b, dv } = sub(0xd9, 0x38, clientId);
+  writeItemData(b, 4, find);
+  writeItemData(b, 0x18, replace);
+  dv.setUint32(0x2c, token1 >>> 0, true);
+  dv.setUint32(0x30, token2 >>> 0, true);
+  dv.setUint16(0x34, label1, true);
+  dv.setUint16(0x36, label2, true);
+  return b;
+}
+
 // G_UpdateObjectState_6x0B (0x0C): header entity id = 0x4000 + object index.
 export function buildObjectState(objectIndex: number, flags: number): Uint8Array {
   const { b, dv } = sub(0x0b, 0x0c, 0x4000 + objectIndex);

@@ -212,6 +212,7 @@ export function initOnlineTab(log: (msg: string) => void): void {
         quests: () => quests,
         heroName: () => session?.character?.name ?? '',
         heroClass: () => session?.character?.charClass ?? 0,
+        itemNames: () => view.hud.itemNames,
         log,
       });
       Object.assign(window, { psoQuestTown: questTown });

@@ -28,13 +28,18 @@
 //
 // The shop, bank, tekker and Medical Center counters (bb_p2_menu 0, 2, 3, 5,
 // 6, 1) run in the field HUD (classic/shop.ts via render/fieldhud.ts
-// openCounter). The giveaway counter (8) is not implemented.
+// openCounter). The Present Counter (8, the Momoka item exchange) runs here
+// with the quest's create-item table (quest/giveaway.ts).
 
 import * as THREE from 'three';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { COUNTER_MENUS } from '../classic/shop.ts';
-import { cityScriptFile, P2_MENUS, P2_MENU_GOVERNMENT, P2_MENU_GUILD } from '../formats/npcmodels.ts';
+import { cityScriptFile, P2_MENUS, P2_MENU_GOVERNMENT, P2_MENU_GUILD, P2_MENU_PRESENT } from '../formats/npcmodels.ts';
+import { itemRowName } from '../classic/itempack.ts';
+import type { ItemNames } from '../formats/itemnames.ts';
+import { buildMomokaExchange } from '../net/items.ts';
+import { argItemBytes, PRESENT_TEXT, PRESENT_TIMEOUT_MS, presentItem, presentOffer, presentTokens, type MomokaExchangeRequest } from './giveaway.ts';
 import { buildMesetaReward, buildNpcControl, buildTeleport, NPC_PLAYER_FILE, parseNpcControl, parseNpcPlayerTemplates, type NpcPlayerTemplate } from '../formats/npcplayerchar.ts';
 import { parseQuestBin } from '../formats/questbin.ts';
 import { CLASS_NAMES } from '../net/bbsession.ts';
@@ -57,6 +62,8 @@ export interface QuestTownOptions {
   quests: () => QuestClient | null;
   heroName?: () => string;
   heroClass?: () => number;
+  // The item names of the Item Pack (the Present Counter's item names).
+  itemNames?: () => ItemNames | null;
   log?: (msg: string) => void;
 }
 
@@ -82,6 +89,7 @@ export class QuestTown {
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
   private insideZones = new Set<number>();
+  private momokaWaiter: ((code: number) => void) | null = null;
   private disposers: Array<() => void> = [];
 
   constructor(opts: QuestTownOptions) {
@@ -126,6 +134,12 @@ export class QuestTown {
     const onFloor = () => void this.enterFloor();
     this.view.floorHooks.add(onFloor);
     this.disposers.push(() => this.view.floorHooks.delete(onFloor));
+    // S->C 0x23: the Momoka exchange's answer (flag = result), see present().
+    this.game.on('momokaResult', (code) => {
+      const waiter = this.momokaWaiter;
+      this.momokaWaiter = null;
+      waiter?.(code);
+    });
     // Another player's 6x69 makes the same NPC player here.
     this.game.on('subcommand', (sub, clientId, body) => {
       if (sub === 0x69 && clientId !== this.game.selfId) {
@@ -184,6 +198,7 @@ export class QuestTown {
         void this.ui.list(choices, { cancellable: false }).then((i) => vm?.answerList(i ?? 0));
       },
       p2Menu: (n) => void this.counter(n),
+      momokaExchange: (req) => this.momokaExchange(req),
       addMeseta: (amount) => {
         this.log(`quest reward: ${amount} meseta (6xC9)`);
         this.game.conn.send(0x62, Math.max(0, this.game.leaderId), buildMesetaReward(amount));
@@ -320,6 +335,19 @@ export class QuestTown {
       }
       return;
     }
+    if (menu === P2_MENU_PRESENT) {
+      if (this.counterOpen) return;
+      this.counterOpen = true;
+      try {
+        await this.present();
+      } catch (err) {
+        this.log(`counter: ${(err as Error).message}`);
+      } finally {
+        this.ui.closeWindow();
+        this.counterOpen = false;
+      }
+      return;
+    }
     if (menu !== P2_MENU_GUILD && menu !== P2_MENU_GOVERNMENT) {
       this.log(`counter "${P2_MENUS[menu] ?? menu}" (bb_p2_menu ${menu}) is not implemented`);
       return;
@@ -334,6 +362,86 @@ export class QuestTown {
       this.ui.closeWindow();
       this.counterOpen = false;
     }
+  }
+
+  // The Present Counter (CreateMedicalCenterDialog_006ca84c and its states,
+  // quest/giveaway.ts): welcome, the offer list, Is that OK?, then the 6xD9
+  // and its answer. Texts: unitxt_shop group 0.
+  private async present(): Promise<void> {
+    const shop = await this.shopText();
+    const text = (i: number, name = '') => this.interpolate(shop[0]?.[i] ?? '').replace('%s', name);
+    const bin = this.quest?.vm.bin;
+    await this.ui.tell(text(PRESENT_TEXT.welcome));
+    const offer = bin ? presentOffer(bin.data, bin.header.hasFullHeader) : null;
+    // ASSUMED: with no table the exe opens an empty list; here the counter closes.
+    if (!offer) return;
+    const names = this.opts.itemNames?.() ?? null;
+    const find = presentItem(offer.find, offer.findCount);
+    const findName = itemRowName(find, names);
+    const rewards = offer.rewards.map((r) => presentItem(r, offer.rewardCount));
+    const rewardNames = rewards.map((r) => itemRowName(r, names));
+    const yes = shop[0]?.[0] ?? ' Yes ';
+    const no = shop[0]?.[1] ?? ' No ';
+    for (;;) {
+      await this.ui.tell(text(PRESENT_TEXT.offer, findName));
+      const pick = await this.ui.list(rewardNames, { title: text(PRESENT_TEXT.title) });
+      if (pick === null) {
+        await this.ui.tell(text(PRESENT_TEXT.reminder, findName));
+        return;
+      }
+      this.ui.showWindow(text(PRESENT_TEXT.ok), false);
+      const ok = await this.ui.yesNo(yes, no);
+      this.ui.closeWindow();
+      if (!ok) {
+        await this.ui.tell(text(PRESENT_TEXT.changed));
+        continue;
+      }
+      const slot = this.game.selfId;
+      const { token1, token2 } = presentTokens(offer.rewardCount, slot);
+      this.log(`present counter: ${findName} for ${rewardNames[pick]}`);
+      const wait = this.momokaResult(PRESENT_TIMEOUT_MS);
+      this.sendMomoka(buildMomokaExchange(slot, find, rewards[pick], token1, token2));
+      const code = await wait;
+      if (code === null) {
+        await this.ui.tell(text(PRESENT_TEXT.timeout));
+        return;
+      }
+      const lines = code === 0 ? PRESENT_TEXT.thanks : code === 1 ? PRESENT_TEXT.missing : code === 2 ? PRESENT_TEXT.full : null;
+      if (lines === null) {
+        await this.ui.tell(text(PRESENT_TEXT.failed));
+        return;
+      }
+      await this.ui.tell(text(lines, findName));
+      await this.ui.tell(text(PRESENT_TEXT.reminder, findName));
+      return;
+    }
+  }
+
+  // F95B (bb_replace_item): the same 6xD9 from a quest script, with its labels.
+  private momokaExchange(req: MomokaExchangeRequest): void {
+    const slot = this.game.selfId;
+    const find = presentItem(argItemBytes(req.find), 0);
+    const replace = presentItem(argItemBytes(req.replace), 0);
+    this.log(`quest: bb_replace_item (6xD9) ${req.find.toString(16)} -> ${req.replace.toString(16)}`);
+    this.sendMomoka(buildMomokaExchange(slot, find, replace, req.token1, req.token2, req.label1, req.label2));
+  }
+
+  private sendMomoka(body: Uint8Array): void {
+    this.game.sendSubcommand(0xd9, body.subarray(4));
+  }
+
+  // The answer to the 6xD9 (S->C 0x23 flag), or null after the timeout.
+  private momokaResult(ms: number): Promise<number | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.momokaWaiter = null;
+        resolve(null);
+      }, ms);
+      this.momokaWaiter = (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      };
+    });
   }
 
   private async guild(government: boolean): Promise<void> {
