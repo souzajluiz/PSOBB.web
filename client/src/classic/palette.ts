@@ -250,6 +250,23 @@ function drawIcon(ctx: CanvasRenderingContext2D, img: CanvasImageSource, icon: P
   drawTinted(ctx, img, icon.u, icon.v, ICON_W, ICON_H, x, y, bright);
 }
 
+// A texel rect drawn at (dw, dh) (the hotbar's scaled icons), multiplied by a grey vertex colour.
+export function drawTintedRect(ctx: CanvasRenderingContext2D, img: CanvasImageSource, u: number, v: number, w: number, h: number, x: number, y: number, dw: number, dh: number, bright: number): void {
+  if (bright >= 1) {
+    ctx.drawImage(img, u, v, w, h, x, y, dw, dh);
+    return;
+  }
+  const c = tintCanvas(w, h);
+  const g = c.getContext('2d')!;
+  g.globalCompositeOperation = 'source-over';
+  g.clearRect(0, 0, w, h);
+  g.drawImage(img, u, v, w, h, 0, 0, w, h);
+  g.globalCompositeOperation = 'source-atop';
+  g.fillStyle = `rgba(0,0,0,${1 - bright})`;
+  g.fillRect(0, 0, w, h);
+  ctx.drawImage(c, 0, 0, w, h, x, y, dw, dh);
+}
+
 // A texel rect multiplied by a grey vertex colour (bright = r = g = b).
 function drawTinted(ctx: CanvasRenderingContext2D, img: CanvasImageSource, u: number, v: number, w: number, h: number, x: number, y: number, bright: number): void {
   if (bright >= 1) {

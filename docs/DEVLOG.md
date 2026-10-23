@@ -14131,3 +14131,46 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+
+## 2026-10-23: bottom hotbar ported (keys 1..0, draw at (0, 442))
+
+Scope: the 10-hexagon bar along the bottom of the field, from the exe trace in the entry above. Client code and tests; no server, no save packet.
+
+**Exe evidence (addresses from the trace entry above).**
+- Window: GUI entry 0x21 = (0, 442) (table 0x00971f40); built by `SinowberillChallengeObjectListWindow_Constructor_007104bc` (dump 672339); drawn by `SinowberillChallengeObjectListWindow_Render_00731a40` (dump 699098); y 443 normal, 342 with the main panel (dump 682072).
+- Slots: `PaletteMenu_HandleInput_0071050c` (dump 672361), palette indices 4..13 = hotbar_slots[0..9] of the current palette (`classic/palette.ts` parsePalette, base + 16 + 4i).
+- Keys: `unknown_handle_palette_inputs` (dump 555862), palette_bar_slot_1.._0 (keyconfig bindings 35..44, enum at dump 86193); skipped while Shift, Alt or Ctrl is held.
+- Item use: `SinowberillChallengePlayer_HandlePaletteInput_0068aadc` (dump 556202) maps group 2 to a tool (`PALETTE_ITEMS`), then 6x27 with the inventory id (`buildUseItem`, net/items.ts).
+- Hotbar data: the window descriptor at 0x009f15d4 holds floats 966.7 / 66.7 and then the palette's 0x009f15e8.. UV table, so it is NOT the hexagon layout; the hexagon texture and per-slot UVs are still not traced (see ASSUMED).
+
+**Ported.**
+- `input/keyconfig.ts`: `HOTBAR_KEYS` (10 keys, bindings 35..44, rewritten by `applyKeyConfig`, lower-cased like KEYS).
+- `classic/hotbar.ts` (new, pure + draw): `HOTBAR_POS`, `hotbarY`, `hexCenter`, `hotbarLabel` (1..9, 0), `hotbarAction` (slot -> none / attack / technique / item / trap / photon / quest), `hotbarUsable` (grey when disabled or an item has no stock), `drawHotbar` (hexagons, icons from the palette textures, stack counts, digit labels).
+- `classic/palette.ts`: `drawTintedRect` exported (scaled tinted icon); nothing else changed there.
+- `render/combat.ts`: the hotbar loop in `frame()` after the three-slot loop, skipped while Shift, Alt or Ctrl is held and while input is blocked; `pressHotbar` dispatches through `hotbarAction`; `useSlotItem` is the item path (not dead or busy, `inUnsafeMap` gate = the exe's is_current_map_safe test). The three-slot palette's group 4 items now use the same path (previously logged as not wired).
+- `render/fieldhud.ts`: `hotbarSlot(i)`, `useHotbarItem(group2)` (refused in the lobby and on a safe map; looks the bag item up by PALETTE_ITEMS, then `GameItems.use`, which applies canUse), drawing of the row next to the three-slot palette (hidden with the menus or counter, like the palette).
+- `render/gameview.ts`: `hotbarSlot` and `useItem` options to CombatView.
+- `tests/hotbar.test.ts` (new): keys default and rebound, labels, slot -> action mapping, usable/grey rules, window positions and y, parsePalette hotbar offsets.
+- `client/e2e/hotbar.spec.ts` (new): Forest 1, slot 1 = Monomate, hold '1' 150 ms, one 6x27 expected, field screenshot to test-results. NOT RUN (see Checks).
+
+**ASSUMED.**
+- Hexagon look: a flat-top dark outline with a cyan stroke, not the exe's texture. The row's texture and per-slot UVs are not traced.
+- Geometry from the reference screenshot (barrier.png, 512 wide): pitch 43 px at 640, hexagon 40 x 36, first centre at x 86, centre y 19 inside the window. Measured by eye, not in the exe.
+- Icon scale 0.7 inside the hexagon.
+- The y of 342 (main interactive panel) is not modelled: the port has no such flag, so the bar stays at 443 whenever it is shown.
+- The empty-bag grey is the port's own rule (no stock = grey); the exe's test is not traced.
+- The Shift / Alt / Ctrl skip uses the held key names 'shift', 'alt', 'control' (the views' names, as fieldhud.ts reads them).
+- The item gate also refuses while dead or busy (the exe's CanPerformAction_0068aa8c tests only "menu closed, player active, not a safe map"; "player active" read as not dead and not busy).
+- The two gates before the hotbar loop (`PlayerHasPaletteSlotEquipped_006a7c24`, `GetCharacterKeyIndex*`) are still not traced; the port assumes they pass for a normal hunter.
+
+**Left.**
+- Assignment UI and its save packet (the exe's palette edit); the bar only shows what the character file holds.
+- Group 6 (quest function `activate_palette_button_quest_function`): logs only.
+- The 342 y and the hexagon texture (above).
+- The Pioneer 2 "not in the bag" grey and the greyed slot for a disabled trap (not traced).
+
+**Checks.**
+- `node tests/hotbar.test.ts`: passes.
+- `node tests/fkeys.test.ts`: passes (unchanged file, run as a regression of the same module set).
+- `cd client && node_modules/typescript/bin/tsc --noEmit -p .`: clean (node_modules linked from the main checkout for the run, removed before the commit).
+- `client/e2e/hotbar.spec.ts`: written, NOT run. The brief says do not run Playwright in this worktree; the spec waits for a run by the owner. Screenshot comparison with barrier.png is therefore not done.

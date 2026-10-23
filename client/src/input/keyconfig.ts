@@ -317,6 +317,12 @@ export const PALETTE_KEYS: [string, number][] = [
   ['', 2],
 ];
 
+// The bottom hotbar's keys 1..0 (bindings 35..44, palette_bar_slot_1.._0 at dump 86193):
+// HOTBAR_KEYS[i] is the key of hotbar slot i (hotbar_slots[i], key i + 1, key 0 = slot 10).
+// Rewritten in place by applyKeyConfig; '' when the binding has no key.
+export const HOTBAR_BINDING_FIRST = 35;
+export const HOTBAR_KEYS: string[] = Array.from({ length: 10 }, () => '');
+
 let active: Uint8Array = defaultKeyConfig();
 
 // The config in use (a copy).
@@ -336,6 +342,7 @@ export function applyKeyConfig(cfg: Uint8Array | null | undefined): Uint8Array {
   PALETTE_KEYS[0] = [KEYS.paletteLeft, 1];
   PALETTE_KEYS[1] = [KEYS.paletteMiddle, 0];
   PALETTE_KEYS[2] = [KEYS.paletteRight, 2];
+  for (let i = 0; i < HOTBAR_KEYS.length; i++) HOTBAR_KEYS[i] = keyOf(HOTBAR_BINDING_FIRST + i);
   return currentKeyConfig();
 }
 
