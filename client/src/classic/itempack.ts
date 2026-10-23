@@ -79,6 +79,7 @@ import { SPECIAL_STARS_BEGIN_INDEX } from '../formats/itempmt.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
+import { ATTRIBUTE_HEADING, attributeRows, attributeText, LEVEL_LABEL, IQ_LABEL, SYNCHRO_LABEL, detailPages, magRows, nextPage, requirementRows, VALUE_COLOR, type DetailPage } from './itemdetail.ts';
 
 export const ITEM_LIST = { x: 13, y: 256, w: 308, h: 184 } as const; // entry 3, 0x00973ca0
 export const ITEM_DETAIL = { x: 324, y: 256, w: 240, h: 184 } as const; // entry 2, 0x009f2b58
@@ -451,6 +452,9 @@ export interface ItemPackEnv {
   purposeContext: () => PurposeContext;
   text: (group: number, index: number) => string;
   actions: ItemPackActions;
+  // The character's attribute values, types 1..5 (Native..Hit). Not in the
+  // character file here: zeros when absent (ASSUMED).
+  attributes?: () => readonly number[];
 }
 
 type State = 'list' | 'purpose' | 'amount' | 'sort' | 'manual';
@@ -466,6 +470,9 @@ export class ItemPackMenu {
   private picked: number | null = null;
   private amount: AmountSpinner | null = null;
   private frame = 0;
+  // Index into the selected item's detail pages (itemdetail.ts); reset when
+  // the cursor moves.
+  private detail = 0;
   rows: ItemRow[] = [];
   private env: ItemPackEnv;
 
@@ -507,7 +514,18 @@ export class ItemPackMenu {
         if (n) {
           this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
           this.clampTop();
+          this.detail = 0;
           se(SE.cursor);
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // Detail pages of the selected item (ASSUMED keys, itemdetail.ts).
+        const it = this.item();
+        if (it && it !== 'meseta') {
+          const pages = detailPages(it.data).length;
+          if (pages > 1) {
+            this.detail = nextPage(this.detail, pages, e.key);
+            se(SE.cursor);
+          }
         }
       } else if (e.key === 'Enter') {
         const it = this.item();
@@ -696,8 +714,10 @@ export class ItemPackMenu {
     ctx.translate(extra, 0);
     if (this.state === 'list' || this.state === 'manual') {
       const it = this.item();
-      const text = it === 'meseta' ? this.env.text(11, 0x135) : it ? itemDescription(it.data, this.env.rowContext().names) : '';
-      if (this.rows.length) drawTextWindow(ctx, skin, ITEM_DETAIL, text);
+      if (this.rows.length) {
+        if (it && it !== 'meseta') this.drawDetail(ctx, skin, it);
+        else drawTextWindow(ctx, skin, ITEM_DETAIL, it === 'meseta' ? this.env.text(11, 0x135) : '');
+      }
     } else {
       const P = PURPOSE_POS;
       drawListWindow(ctx, skin, P.x, P.y, P.w, this.env.text(11, 0x39), this.purpose.items, this.purpose.cursor, this.state === 'purpose');
@@ -705,6 +725,63 @@ export class ItemPackMenu {
       if (this.state === 'amount' && this.amount) this.drawAmount(ctx, skin, tex, this.amount);
     }
     ctx.restore();
+  }
+
+  // The item description window: the info page is the old text; the
+  // equipment pages and the mag page are rows of label and value (itemdetail.ts).
+  private drawDetail(ctx: CanvasRenderingContext2D, skin: WindowSkin, it: InventoryItem): void {
+    const names = this.env.rowContext().names;
+    const pages = detailPages(it.data);
+    const page: DetailPage = pages[this.detail % pages.length];
+    const R = ITEM_DETAIL;
+    if (page === 'info' || !names) {
+      drawTextWindow(ctx, skin, R, itemDescription(it.data, names));
+      return;
+    }
+    drawWindowFrame(ctx, skin.frame, R.x, R.y, R.w, R.h);
+    const x0 = R.x + INSET;
+    const xr = R.x + R.w - INSET;
+    const white = '#ffffff';
+    const text = (group: number, index: number) => this.env.text(group, index);
+    let y = R.y + INSET;
+    if (page === 'requirements') {
+      const ctxRow = this.env.rowContext();
+      for (const row of requirementRows(it.data, names.pmt, { atp: ctxRow.stats.atp, ata: ctxRow.stats.ata, mst: ctxRow.stats.mst, level: ctxRow.level })) {
+        drawGameText(ctx, `${text(11, row.label)}:`, x0, y, white);
+        const v = String(row.value);
+        drawGameText(ctx, v, xr - gameTextWidth(v), y, row.unmet ? DISABLED : white);
+        y += ROW;
+      }
+    } else if (page === 'attributes') {
+      drawGameText(ctx, text(11, ATTRIBUTE_HEADING), x0, y, white);
+      y += ROW;
+      const equipped = it.equipped;
+      for (const row of attributeRows(it.data, this.env.attributes?.() ?? [0, 0, 0, 0, 0], equipped)) {
+        drawGameText(ctx, `${text(11, row.label)}:`, x0, y, white);
+        const cur = attributeText(row.current);
+        if (row.item === null) {
+          drawGameText(ctx, cur, xr - gameTextWidth(cur), y, white);
+        } else {
+          const item = `→ ${attributeText(row.item)}`;
+          drawGameText(ctx, item, xr - gameTextWidth(item), y, row.color);
+          drawGameText(ctx, cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), y, white);
+        }
+        y += ROW;
+      }
+    } else if (page === 'mag') {
+      const m = magRows(it.data);
+      const line = (label: string, value: string, color = white) => {
+        drawGameText(ctx, label, x0, y, white);
+        drawGameText(ctx, value, xr - gameTextWidth(value), y, color);
+        y += ROW;
+      };
+      line(`${text(11, LEVEL_LABEL)}:`, `${m.level}`);
+      line(`${text(11, SYNCHRO_LABEL)}:`, m.synchro);
+      line(`${text(11, IQ_LABEL)}:`, m.iq);
+      for (const s of m.stats) line(`${s.name}:`, s.text);
+      const pb = m.photonBlasts.filter((p): p is number => p !== null).map((p) => text(9, p));
+      if (pb.length) line(`${text(11, 0x77)}:`, pb.join(', '), VALUE_COLOR.same);
+    }
   }
 
   private drawRow(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, r: ItemRow, x: number, y: number, w: number): void {
