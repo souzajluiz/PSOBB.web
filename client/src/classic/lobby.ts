@@ -30,7 +30,10 @@
 
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { CharacterFile } from '../net/charfile.ts';
 import type { Lobby } from '../net/lobby.ts';
+import { TRADE_STATUS } from '../net/trade.ts';
+import { TradeMenu, type TradeEnv } from './trade.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
@@ -72,6 +75,8 @@ export interface LobbyHud {
   infoCols: InfoCol[];
   // The session's full character data (00E7): the option word (options.ts).
   fullCharacter?: () => Uint8Array | null;
+  // The character file (the Trade Window reads the offers and the meseta from it).
+  character?: () => CharacterFile | null;
   // The counter's party menus talk to the server through this (gamelist.ts);
   // without it Organize PARTY only closes.
   party?: PartyHost;
@@ -129,6 +134,8 @@ export class LobbyScreen implements Screen {
   private itemList: ItemListWindow | null = null;
   // Home menu > Guild Card (0xe): the Guild Card menu and its card list (guildcardmenu.ts).
   private guildCard: GuildCardMenu | null = null;
+  // Home menu > Trade Window (0x1a, classic/trade.ts); also opened by a partner's proposal.
+  private trade: TradeMenu | null = null;
   private options: OptionsMenu | null = null;
   // Quit Game's Yes / No (QuitMenu_Constructor_0074bf30).
   private quit: Question | null = null;
@@ -151,6 +158,15 @@ export class LobbyScreen implements Screen {
     this.view = view;
     this.lobby = lobby;
     this.hud = hud;
+    // The trade's host: the offers come from the character, the session's notices open
+    // the Trade Window's text (net/trade.ts TRADE_TEXT).
+    lobby.tradeHost = {
+      character: () => hud.character?.() ?? null,
+      notify: (textId) => {
+        if (this.trade) this.trade.notify(textId);
+        else console.info(`[classic] trade notice 0x${textId.toString(16)} (no Trade Window open)`);
+      },
+    };
     this.shipName = shipName;
     this.menu = new MainMenu(
       (id) => hud.text(0x0b, id),
@@ -210,7 +226,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard || !!this.trade;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -249,6 +265,27 @@ export class LobbyScreen implements Screen {
     this.transport(0);
   }
 
+  // The Trade Window's environment (classic/trade.ts): the session, the partners in the
+  // lobby (not self), the character's offers and meseta.
+  private tradeEnv(): TradeEnv {
+    const rows = () => this.hud.inventory() ?? [];
+    const full = () => this.hud.character?.() ?? null;
+    return {
+      session: this.lobby.trade,
+      text: (g, i) => this.hud.text(g, i),
+      partners: () => [...this.lobby.players.values()].filter((p) => p.clientId !== this.lobby.selfId).map((p) => ({ id: p.clientId, name: p.name })),
+      rows,
+      count: (id) => {
+        const c = full();
+        if (!c) return 0;
+        return c.inventory.find((i) => i.data.id === id)?.data.data1[5] ?? 0;
+      },
+      // The item's name from the Item List rows (a partner's item the local list lacks is shown by id).
+      itemName: (id) => rows().find((r) => r.id === id)?.name ?? `item ${id.toString(16)}`,
+      meseta: () => full()?.meseta ?? 0,
+    };
+  }
+
   private menuAction(id: number): void {
     if (id === 0xb) {
       const rows = this.hud.inventory();
@@ -264,6 +301,13 @@ export class LobbyScreen implements Screen {
         loggedIn: true,
       };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
+      this.menu.leafOpen = true;
+    } else if (id === 0x1a) {
+      // handle_player_menu_select trade_invite_menu1 (classic/trade.ts). The lobby has no
+      // window check of its own (ValidateMenuItemCondition_00732620 allows 0x1a in a safe
+      // online map, the lobby is one); newserv refuses 6xA6 / D0..D4 outside a game, so
+      // the proposal gets no answer there (see the DEVLOG entry of 2026-10-23).
+      this.trade = new TradeMenu(this.tradeEnv());
       this.menu.leafOpen = true;
     } else if (id === 6) {
       const full = () => this.hud.fullCharacter?.() ?? null;
@@ -304,6 +348,16 @@ export class LobbyScreen implements Screen {
     if (this.frame % PING_FRAMES === 0) this.lobby.conn.send(0x1d, 0);
     this.menu.tick();
     this.options?.tick();
+    // The session's timers run whether or not a window is open (a partner's proposal
+    // arrives with no window). A proposal with no window opens the accept prompt (ASSUMED:
+    // the exe's trade_invite_menu2/3 window, not traced).
+    this.lobby.trade.tick();
+    if (!this.trade && this.lobby.trade.status === TRADE_STATUS.requested) this.trade = new TradeMenu(this.tradeEnv());
+    this.trade?.tick();
+    if (this.trade && !this.trade.open) {
+      this.trade = null;
+      this.menu.leafOpen = false;
+    }
     this.counter.tick();
     this.party?.tick();
     this.team?.tick();
@@ -349,6 +403,14 @@ export class LobbyScreen implements Screen {
     if (this.itemList) {
       if (!this.itemList.key(e)) {
         this.itemList = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
+    if (this.trade) {
+      e.preventDefault();
+      if (!this.trade.key(e)) {
+        this.trade = null;
         this.menu.leafOpen = false;
       }
       return;
@@ -429,6 +491,7 @@ export class LobbyScreen implements Screen {
   keyUp(e: KeyboardEvent): void {
     const k = MOVE_KEYS[e.key.toLowerCase()];
     if (k) this.keys.delete(k);
+    this.trade?.keyUp(e);
   }
 
   blur(): void {
@@ -439,6 +502,7 @@ export class LobbyScreen implements Screen {
     this.keys.clear();
     this.quit = null;
     this.guildCard = null;
+    this.trade = null;
     this.party?.close();
     this.team?.close();
     this.closeOptions();
@@ -471,6 +535,7 @@ export class LobbyScreen implements Screen {
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);

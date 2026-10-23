@@ -23,6 +23,10 @@ import {
   type TradeIO,
 } from '../client/src/net/trade.ts';
 import type { Packet } from '../client/src/net/guildcard.ts';
+import { removeTradeOffer, tradeCompactItem, tradeIO } from '../client/src/net/tradeio.ts';
+import { Lobby } from '../client/src/net/lobby.ts';
+import type { CharacterFile } from '../client/src/net/charfile.ts';
+import { MESETA_ITEM_ID } from '../client/src/net/items.ts';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -349,6 +353,68 @@ function tickAll(relay: Relay, ids: number[], frames: number): void {
 {
   // The meseta pseudo item (exe -0xff) is the id the offer list uses.
   check('meseta offer id is 0xffffff01', TRADE_MESETA_ID === 0xffffff01);
+}
+
+// ---- The IO over the connection and the character (net/tradeio.ts) ---------
+
+{
+  const sword = { data1: Uint8Array.from([0x03, 0x01, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0]), id: 0x00010203, data2: Uint8Array.from([9, 8, 7, 6]) };
+  const c = {
+    meseta: 500,
+    inventory: [{ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: sword }],
+  } as unknown as CharacterFile;
+  const item = tradeCompactItem(c, 0x00010203, 2);
+  check('a compact item is the ItemData (20 bytes), the offered quantity at data1[5]', !!item && item.length === 20 && item[5] === 2 && item[0] === 0x03 && item[12] === 0x03 && item[13] === 0x02 && item[16] === 9);
+  check('a compact item not in the inventory is null', tradeCompactItem(c, 0x1234, 1) === null);
+  const meseta = tradeCompactItem(c, TRADE_MESETA_ID, 200);
+  check(
+    'the meseta offer is the pseudo item 0xffffff01 with the amount in data2 (ASSUMED layout)',
+    !!meseta && meseta[0] === 4 && meseta[12] === 0x01 && meseta[13] === 0xff && meseta[14] === 0xff && meseta[15] === 0xff && meseta[16] === 200,
+  );
+  removeTradeOffer(c, TRADE_MESETA_ID, 200);
+  check('the completed meseta offer is taken from the character (the port keeps meseta under 0xffffffff)', c.meseta === 300, String(c.meseta));
+  check('MESETA_ITEM_ID (items.ts) is the port id the trade maps to', MESETA_ITEM_ID === 0xffffffff);
+
+  // The IO's presence and host plumbing: a send goes out as given; a notice reaches the host.
+  const sent: Packet[] = [];
+  const notes: number[] = [];
+  const io = tradeIO({
+    send: (p) => sent.push(p),
+    host: () => ({ character: () => c, notify: (id) => notes.push(id) }),
+    isPresent: (id) => id === 2,
+  });
+  io.send(tradeCompletePacket(true));
+  io.message(TRADE_TEXT.success, 2);
+  check('tradeIO forwards sends and notices to the host', sent.length === 1 && notes[0] === TRADE_TEXT.success && io.playerPresent(2) && !io.playerPresent(3));
+}
+
+// A lobby receives a partner's 6xA6 through its connection (the 0x62 relay) and the D4 result.
+{
+  const sent: Array<{ command: number; flag: number; data: Uint8Array }> = [];
+  const conn = {
+    onCommand: (() => {}) as ((c: { command: number; flag: number; data: Uint8Array }) => void) | null,
+    send: (command: number, flag: number, data: Uint8Array) => sent.push({ command, flag, data }),
+  };
+  const lobby = new Lobby(conn as unknown as ConstructorParameters<typeof Lobby>[0]);
+  lobby.selfId = 1;
+  const propose = tradeSubcommand(2, TRADE_WHAT.propose, TRADE_RESULT.ok, { amount: 0 });
+  conn.onCommand!({ command: 0x62, flag: 1, data: propose });
+  check('a partner proposal in a 0x62 reaches the lobby session (status requested)', lobby.trade.status === TRADE_STATUS.requested && lobby.trade.partner === 2);
+  const accept = lobby.trade;
+  check('the session is kept while the self id is the same', lobby.trade === accept);
+  lobby.trade.reject();
+  check('reject answers what 0 result 3 through the connection', sent.some((p) => p.command === 0x62 && p.data[4] === TRADE_WHAT.propose && p.data[5] === TRADE_RESULT.reject));
+  // A trade open (proposal, accept), then D4 flag 1 = done (0x10a): the host hears the text.
+  const notes: number[] = [];
+  lobby.tradeHost = { character: () => null, notify: (id) => notes.push(id) };
+  conn.onCommand!({ command: 0x62, flag: 1, data: tradeSubcommand(2, TRADE_WHAT.propose, TRADE_RESULT.ok, { amount: 0 }) });
+  lobby.trade.accept(0);
+  check('the accepted trade is open', lobby.trade.status === TRADE_STATUS.open);
+  conn.onCommand!({ command: 0xd4, flag: 1, data: new Uint8Array(0) });
+  check('D4 flag 1 completes the trade with text 0x10a', notes[0] === TRADE_TEXT.success && lobby.trade.status === TRADE_STATUS.none, String(notes));
+  // D1 with no trade in the list state does nothing (exe ExecuteTradeAction_00826394: status 7 only).
+  conn.onCommand!({ command: 0xd1, flag: 0, data: new Uint8Array(0) });
+  check('D1 without a list state sends nothing', !sent.some((p) => p.command === 0xd2));
 }
 
 console.log(failures ? `${failures} FAILED` : 'all trade checks passed');

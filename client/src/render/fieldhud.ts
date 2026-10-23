@@ -30,7 +30,9 @@ import { anchorX } from '../classic/ingame.ts';
 import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
-import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
+import { equipProblems, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
+import type { TradeEnv } from '../classic/trade.ts';
+import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
 import { createCounter, type Counter, type CounterKind, type CounterModel, type CounterMusic } from '../classic/shop.ts';
 import { TekkerItemView } from './tekkeritem.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
@@ -111,6 +113,10 @@ export interface FieldHudOptions {
   starTargets?: () => readonly number[] | null;
   // The local echo of a sent 6x33 / 6x66 (render/combat.ts atomizerEcho).
   atomizerEcho?: (packet: Uint8Array) => void;
+  // The player trade (net/trade.ts): the session and the other players of the game the
+  // Trade Window offers; null when the game has no session. The session's timers run
+  // each frame, and a partner's proposal opens the accept prompt (classic/trade.ts).
+  trade?: () => { session: TradeSession; partners: () => { id: number; name: string }[] } | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // Sends a command to the game server (the Options window's 0x01ED).
@@ -268,6 +274,7 @@ export class FieldHud {
         title: () => this.areaName(),
         text: (g, i) => this.text(g, i),
       },
+      trade: () => this.tradeEnv(),
       questBoard: {
         vm: () => this.opts.quest?.()?.vm ?? null,
         questName: () => this.opts.quest?.()?.name ?? '',
@@ -328,6 +335,31 @@ export class FieldHud {
       starTargets: () => this.opts.starTargets?.() ?? null,
       atomizerEcho: (packet: Uint8Array) => this.opts.atomizerEcho?.(packet),
     };
+  }
+
+  // The Trade Window's environment (classic/trade.ts): the offers are the Item Pack's rows
+  // (itemRows, the meseta row last) of the character, the names the same rows.
+  private tradeEnv(): TradeEnv | null {
+    const t = this.opts.trade?.();
+    if (!t) return null;
+    const rows = () => {
+      const c = this.opts.character();
+      return c ? itemRows(c, this.rowContext(), this.text(12, 0)) : [];
+    };
+    return {
+      session: t.session,
+      text: (g, i) => this.text(g, i),
+      partners: t.partners,
+      rows,
+      count: (id) => this.opts.character()?.inventory.find((i) => i.data.id === id)?.data.data1[5] ?? 0,
+      itemName: (id) => rows().find((r) => r.id === id)?.name ?? `item ${id.toString(16)}`,
+      meseta: () => this.opts.character()?.meseta ?? 0,
+    };
+  }
+
+  // A trade notice from the session (net/trade.ts TRADE_TEXT): the open Trade Window shows it.
+  notifyTrade(textId: number): void {
+    if (this.menu.trade) this.menu.trade.notify(textId);
   }
 
   private rowContext(): RowContext {
@@ -658,6 +690,13 @@ export class FieldHud {
     while (this.acc >= FRAME) {
       this.acc -= FRAME;
       this.menu.tick();
+      // The trade session's timers run with no window open; a partner's proposal opens
+      // the accept prompt (classic/trade.ts, ASSUMED: the exe's trade_invite_menu2/3).
+      const trade = this.opts.trade?.() ?? null;
+      if (trade) {
+        trade.session.tick();
+        if (trade.session.status === TRADE_STATUS.requested && !this.menu.trade) this.menu.openTrade(true);
+      }
       this.paletteHud.tick();
       this.opts.items.tickMags();
       this.opts.items.tickPickups();
