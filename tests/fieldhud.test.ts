@@ -21,6 +21,7 @@ import {
 } from '../client/src/classic/itempack.ts';
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
+import { attributeRows, attributeText, detailPages, magRows, magStatText, nextPage, requirementRows, VALUE_COLOR } from '../client/src/classic/itemdetail.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -284,6 +285,54 @@ eq(hex(buildEquip(0, 0x10000, 0)), '250300000000010000000000', '6x25 equip');
 eq(hex(buildUseItem(1, 0x10001)), '2702010001000100', '6x27 use');
 eq(hex(buildDropItem(0, 0x10002, 1, 0, 0, 0, 1)), '2a0600000100010002000100000000000000000000000000', '6x2A drop');
 eq(hex(buildSplitStack(0, 0x10001, 3, 1, 0, 0)), 'c30600000100000000000000000000000100010003000000', '6xC3 split');
+
+// --- item detail pages (classic/itemdetail.ts) ---
+pmt.weapons[3] = [{ id: 40, usabilityFlags: 0xff, atpRequired: 50, mstRequired: 5, ataRequired: 20 } as never];
+const detailStats = { atp: 40, ata: 50, mst: 0, level: 1 };
+eq(detailPages(itemFromHex('000300000000000000000000')), ['info', 'requirements', 'attributes'], 'weapon pages');
+eq(detailPages(itemFromHex('010100000000000000000000')), ['info', 'requirements', 'attributes'], 'armour pages');
+// A mag: level 5, DEF 300 / POW 100 / DEX 400 / MIND 42 (hundredths), synchro 28, IQ 3.
+const MAG_HEX = '020105002c01640090012a00' + '00000000' + '1c030000'; // data1, id, data2 (synchro 28, IQ 3)
+eq(detailPages(itemFromHex(MAG_HEX)), ['info', 'mag'], 'mag pages');
+eq(detailPages(itemFromHex('030000000004000000000000')), ['info'], 'tool: info only');
+eq(
+  requirementRows(itemFromHex('000300000000000000000000'), pmt, detailStats),
+  [
+    { label: 0x9c, value: 50, unmet: true },
+    { label: 0x9e, value: 5, unmet: true },
+    { label: 0x9f, value: 20, unmet: false },
+  ],
+  'weapon requirements ATP / MST / ATA with the unmet flags',
+);
+eq(requirementRows(itemFromHex('010100000000000000000000'), pmt, { ...detailStats, level: 0 }), [{ label: 0xc0, value: 1, unmet: true }], 'armour level = requiredLevel + 1');
+eq(requirementRows(itemFromHex('030000000004000000000000'), pmt, detailStats), [], 'tool has no requirement');
+// Native +5 and Machine +2 as candidate values (data1[6..11] = type, value pairs).
+const bonusWeapon = itemFromHex('0003000000000105030200000001000000000000');
+eq(
+  attributeRows(bonusWeapon, [3, 0, 4, 0, 0], false).map((r) => [r.label, r.current, r.item, r.color]),
+  [
+    [0xb5, 3, 5, VALUE_COLOR.higher],
+    [0xb6, 0, 0, VALUE_COLOR.same],
+    [0xb7, 4, 2, VALUE_COLOR.lower],
+    [0xb8, 0, 0, VALUE_COLOR.same],
+    [0xb9, 0, 0, VALUE_COLOR.same],
+  ],
+  'candidate attributes: Native up, Machine down, equal rows white',
+);
+eq(attributeRows(bonusWeapon, [3, 0, 4, 0, 0], true).map((r) => r.item), [null, null, null, null, null], 'equipped item shows no candidate values');
+eq(attributeRows(itemFromHex('000300000000000000000000'), [0, 0, 0, 0, 0], false)[0].item, 0, 'candidate with no pairs: every row shows 0');
+eq(attributeText(12), '12%', 'attribute value with %');
+eq([magStatText(300), magStatText(150), magStatText(105), magStatText(42)], ['3', '1.5', '1.05', '0.42'], 'mag stat text: level, then the part');
+const mag = magRows(itemFromHex(MAG_HEX));
+eq(
+  [mag.level, mag.synchro, mag.iq, mag.stats.map((s) => `${s.name} ${s.text}`)],
+  [5, '28%', '3', ['DEF 3', 'POW 1', 'DEX 4', 'MIND 0.42']],
+  'mag page: level, synchro, IQ, DEF / POW / DEX / MIND',
+);
+eq(nextPage(0, 3, 'ArrowRight'), 1, 'Right: next page');
+eq(nextPage(0, 3, 'ArrowLeft'), 2, 'Left wraps to the last page');
+eq(nextPage(2, 3, 'ArrowRight'), 0, 'Right wraps to the first page');
+eq(nextPage(0, 1, 'ArrowRight'), 0, 'one page: no move');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
