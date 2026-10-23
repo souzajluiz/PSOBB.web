@@ -1839,12 +1839,14 @@ export class MonestSpawner {
 // 4 swoop (HildebearProcessState_0051738c), 5 hover (HildebearProcessState_00517200),
 // 6 flinch (HildebearProcessState_00516fbc), 7 the ground kill
 // (00516ed8), 8 the fall (00516c60), 9 the dead flag (EnemySetStateFlag_00516c2c).
-// The death states are not run here: the kill and the fall are deathfx.ts /
-// the owner's (EnemyOnKilledHandler_0051f894).
+// The death states 7 / 8 run in beginDeath / deathTick (below); their plans and
+// sounds are combat/deathfx.ts mothmantDeathPlan. EnemyOnKilledHandler_0051f894
+// is the owner's kill (render/combat.ts killEnemy).
 // The Mothmant's vtable is 0x00AFFD20 (see the Monest header). Its slots:
 // 0x100 = 0x00589ab0 (the hit that does not kill: `if state != 6, SetEnemyAiState(6)`,
 // the flinch, from any state); 0x104 = 0x005187a0 (the dead flag: state 7 when
-// the body is flying (+0x2e0 & 2, 0x0051f8a8), else 8; not in 7 / 8 / 9); 0x164 =
+// +0x2e0 & 2 (0x0051f8a8: set by a landed melee hit, see noteMeleeHit), else 8;
+// not in 7 / 8 / 9); 0x164 =
 // 0x00516b9c (this dispatcher); 0x154 = 0x0052164c (EnemyUpdateLoop, 0x0052167c,
 // after the target clear); 0x98 / 0xa4 / 0xa8 are the shared status tests.
 //
@@ -1899,6 +1901,41 @@ const MOTHMANT_MOTION = {
   strike: once(0, 1), // the attack motion (the profile's attack row)
   flinch: once(3, 1), // animation 3 (HildebearProcessState_00516fbc, enter)
 };
+
+export type MothmantDeathKind = 'ground' | 'fall';
+
+/** The Mothmant's lethal death (MothmantAi.beginDeath). */
+interface MothmantFall {
+  kind: MothmantDeathKind;
+  /** +0x3c8: the state's counter (update frames; the fall's landing sets 2). */
+  count: number;
+  /** +0x1000: the fall's vertical velocity. */
+  timer: number;
+  /** +0x3ec: the horizontal speed, decays by 0.98 a tick. */
+  speed: number;
+  dirX: number;
+  dirZ: number;
+}
+
+export interface MothmantDeathFrame {
+  /** The move this tick (the caller adds it to the root). */
+  dx: number;
+  dy: number;
+  dz: number;
+  /** The fall reached the floor this tick (deathfx 'land'). */
+  landed: boolean;
+  /** The body is gone now (state 9). */
+  dead: boolean;
+}
+
+// The fall's constants (dump floats at 0x00920c78 .. 0x00920ccc).
+export const MOTHMANT_FALL = {
+  floor: Math.fround(1.2), // 0x00920ccc
+  gravity: Math.fround(-0.1), // 0x00920c8c
+  sink: Math.fround(0.1), // 0x00920c78
+  sinkLimit: -20, // 0x00920c7c
+  bounceDamp: Math.fround(0.98), // 0x00920c84
+} as const;
 
 export type MothmantState = 'launch' | 'wander' | 'chase' | 'attack' | 'swoop' | 'hover' | 'flinch' | 'dead';
 
@@ -2014,6 +2051,105 @@ export class MothmantAi extends BrainBase {
     this.pendingFlinch = true;
   }
   private pendingFlinch = false;
+
+  // The lethal death (0x005187a0, the dead flag 0x104). +0x2e0 bit 2 (0x0051f8a8)
+  // is set by the melee accuracy roll that lands on the body (dump 747267,
+  // `|= 2` with set_last_attacker_idx_; the tech hit sets bit 4 instead). The
+  // bit is never cleared on a live body, so it is sticky. Set: state 7 (the
+  // ground kill, 0x00516ed8). Clear: state 8 (the fall, 0x00516c60).
+  private meleeLanded = false;
+  private death: MothmantFall | null = null;
+
+  /** A landed melee (weapon) hit on this body: the exe's +0x2e0 |= 2. */
+  noteMeleeHit(): void {
+    this.meleeLanded = true;
+  }
+
+  get dying(): boolean {
+    return this.death !== null;
+  }
+
+  /**
+   * The lethal kill: the body enters state 7 or 8 (its death plan is
+   * combat/deathfx.ts mothmantDeathPlan). Returns the kind; the brain's AI is
+   * over (`kill`), its motion is the death motion of the caller.
+   */
+  beginDeath(): MothmantDeathKind {
+    const kind: MothmantDeathKind = this.meleeLanded ? 'ground' : 'fall';
+    const speed = Math.hypot(this.vx, this.vz);
+    this.death = {
+      kind,
+      count: 0,
+      timer: 0,
+      speed: Math.fround(speed),
+      dirX: speed > 0 ? this.vx / speed : 0, // HildebearUpdateMovement's direction (+0x438 / +0x440, normalized)
+      dirZ: speed > 0 ? this.vz / speed : 0,
+    };
+    this.kill();
+    return kind;
+  }
+
+  /**
+   * One game tick of the death state (the update, then the state's check).
+   * `ended` is whether the death motion ended. Returns the body's move this
+   * tick (the caller adds it to the root) and the events: `landed` (the fall
+   * reached the floor, the 'land' step) and `dead` (the body is gone, the
+   * state 9 transition). ASSUMED: the body's +0x434 is the height above the
+   * floor (`lift`), the floor is the ground at 1.2 (0x00920ccc), and the move
+   * is the port's velocity (vx, vz), whose length decays by 0.98 a tick.
+   */
+  deathTick(ended: boolean): MothmantDeathFrame | null {
+    const d = this.death;
+    if (!d) return null;
+    const out: MothmantDeathFrame = { dx: 0, dy: 0, dz: 0, landed: false, dead: false };
+    if (d.kind === 'ground') {
+      // HildebearProcessState_00516ed8: the update counts (+0x3c8); the check is `count > 1`.
+      d.count++;
+      out.dead = d.count > 1;
+      return out;
+    }
+    // HildebearProcessState_00516c60 (the fall). Update while count < 2.
+    if (d.count < 2) {
+      const dx = d.dirX * d.speed;
+      const dz = d.dirZ * d.speed;
+      this.x += dx;
+      this.z += dz;
+      out.dx = dx;
+      out.dz = dz;
+      d.timer = Math.fround(d.timer + MOTHMANT_FALL.gravity); // 0x00920c8c = -0.1
+      const y = Math.fround(this.lift + d.timer);
+      if (y >= MOTHMANT_FALL.floor) {
+        // Airborne (0x00920ccc = 1.2 is the floor above the ground).
+        const before = this.lift;
+        this.lift = y;
+        out.dy = y - before;
+      } else {
+        const before = this.lift;
+        this.lift = MOTHMANT_FALL.floor;
+        out.dy = this.lift - before;
+        if (d.count === 0 && !ended) {
+          // The first touch while the motion runs: a bounce (0.5 up), the speed * 0.98 (0x00920c84).
+          d.speed = Math.fround(d.speed * MOTHMANT_FALL.bounceDamp);
+          d.count = 1;
+          d.timer = 0.5;
+        } else {
+          // The landing: the body is on the floor (count 2), its speed is gone.
+          d.count = 2;
+          d.speed = 0;
+          out.landed = true;
+        }
+      }
+    } else {
+      // Sinks 0.1 a tick (0x00920c78) with the counter (+0x3cc) going up.
+      const before = this.lift;
+      this.lift = Math.fround(this.lift - MOTHMANT_FALL.sink);
+      out.dy = this.lift - before;
+    }
+    d.speed = Math.fround(d.speed * MOTHMANT_FALL.bounceDamp);
+    // The check (state 9 at once): +0x434 - +0x3c < -20 (0x00920c7c), the ground being +0x3c.
+    out.dead = this.lift < MOTHMANT_FALL.sinkLimit;
+    return out;
+  }
 
   private distTo(p: { x: number; z: number }): number {
     return Math.hypot(p.x - this.x, p.z - this.z);

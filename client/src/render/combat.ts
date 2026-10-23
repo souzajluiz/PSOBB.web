@@ -191,7 +191,7 @@ import { bulletTextureIndex, GunTracers, loadGunBulletModels } from './guntracer
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
 import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
-import { DeathRun, deathPlanFor, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
+import { DeathRun, deathPlanFor, mothmantDeathPlan, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
 import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
@@ -6424,6 +6424,8 @@ export class CombatView {
         this.opts.log(`Death Gunner E-${e.index.toString(16)} hit while shooting: the group is stunned`);
       }
     }
+    // A landed melee hit sets the Mothmant's +0x2e0 bit 2 before the kill picks its death state (0x005187a0).
+    if (e.ai instanceof MothmantAi && fx.kind === 'weapon' && baseFlags & FLAG_HIT) e.ai.noteMeleeHit();
     // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
     else if (e.monest) {
@@ -6556,7 +6558,16 @@ export class CombatView {
     while (frames-- > 0) {
       // The slime's fade starts on the frame after its kill (0x00597594 runs in the death state).
       const fading = d.fade;
-      if (this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended))) return true;
+      // A Mothmant's own death state moves the body (the fall) and reports its landing and its end.
+      const mf = e.ai instanceof MothmantAi ? e.ai.deathTick(ended) : null;
+      if (mf) {
+        const p = e.instance.root.position;
+        p.x += mf.dx;
+        p.y += mf.dy;
+        p.z += mf.dz;
+      }
+      if (this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended, false, mf?.landed ?? false))) return true;
+      if (mf?.dead) return true;
       if (fading && e.ai instanceof SlimeAi && e.ai.stepDeathFade()) return true;
       if (d.dissolve) {
         const f = d.dissolve.tick();
@@ -8201,7 +8212,9 @@ export class CombatView {
   private playDeath(e: EnemyRuntime): void {
     e.state = 'death';
     e.removeIn = 0.5;
-    const plan = deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
+    // A Mothmant's lethal kill picks its death state: 7 the ground kill, 8 the fall (MothmantAi.beginDeath).
+    const mothKind = e.ai instanceof MothmantAi ? e.ai.beginDeath() : null;
+    const plan = mothKind ? mothmantDeathPlan(mothKind) : deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
     if (plan) {
       e.death = { run: new DeathRun(plan), acc: 0, dissolve: null, fade: false };
       if (plan.instant) e.instance.root.visible = false;
@@ -8212,7 +8225,7 @@ export class CombatView {
       armPackHowl(e.ai, wolves, () => this.rng());
     }
     const m = e.ai?.deathMotion ?? e.motions.death;
-    e.ai?.kill();
+    if (!mothKind) e.ai?.kill();
     if (m) this.playMotion(e, m.index, m.speed, false);
   }
 

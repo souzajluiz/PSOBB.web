@@ -31,8 +31,8 @@
 // (check_entity_animation_elapsed_threshold); `{ wait }` = frames after the
 // step before it; `dissolved` = the dissolve finished.
 //
-// NOT modelled (named in the DEVLOG): the knock-back flight of the Mothmant's
-// fall, the ground effect of the Dorphon (0x005a8d20),
+// NOT modelled (named in the DEVLOG): the Mothmant's state 7 particle and SE
+// 0xf1 (mothmantDeathPlan), the ground effect of the Dorphon (0x005a8d20),
 // the tilt angle the Delsaber's state halves (0x7a8cb8), the Canadine that
 // dies open (0x0053f5ec); see `UNTRACED`.
 //
@@ -55,7 +55,7 @@ import type { PoolId } from './blooddecals.ts';
 import type { ParticleSpawn } from './hitfx.ts';
 import type { FragmentTable } from './shellfragments.ts';
 
-export type DeathWhen = 'kill' | 'end' | 'dissolved' | { frame: number } | { wait: number };
+export type DeathWhen = 'kill' | 'end' | 'land' | 'dissolved' | { frame: number } | { wait: number };
 
 /** Where a death particle or pool is made. `body` is ASSUMED to be the origin raised by 26 (the exe's +0x300 position). */
 export interface DeathPoint {
@@ -129,6 +129,23 @@ const pool = (id: PoolId, delay: number, point: DeathPoint = ORIGIN): DeathPool 
 
 /** The sink of the death states that lower the corpse by 0.1 a frame until a counter passes a limit (0x0092xxxx pairs: 0.1 and 20 / 30 / 15). */
 const sink = (frames: number): { perFrame: number; frames: number } => ({ perFrame: 0.1, frames });
+
+/**
+ * The Mothmant's lethal death (combat/enemyfsm.ts MothmantAi.beginDeath picks
+ * the kind by the 0x2e0 bit 2 test, 0x005187a0). Both states play SE 0xde at
+ * the kill (HildebearProcessState_00516ed8 / 00516c60 enter).
+ * - 'ground' (state 7, 0x00516ed8): no landing; the body is dead after two
+ *   update frames (its state 9 test is `count > 1`), so the removal waits for
+ *   the death motion's end. The state's particle (ParticleEffectInstance on
+ *   0x00920c58) and SE 0xf1 are not decoded: ASSUMED none.
+ * - 'fall' (state 8, 0x00516c60): the fall lands on the floor (the 'land'
+ *   step: gensei 30 and the red 2.5 pool, delay 10, at the origin), then the
+ *   body sinks 0.1 a frame until it is 20 under the floor (MothmantAi.deathTick).
+ */
+export function mothmantDeathPlan(kind: 'ground' | 'fall'): DeathPlan {
+  if (kind === 'ground') return { steps: [{ when: 'kill', se: 0xde }] };
+  return { steps: [{ when: 'kill', se: 0xde }, { when: 'land', particles: [{ p: gensei(0x1e), at: ORIGIN }], pools: [pool('red2_5', 10)] }] };
+}
 
 /** A dark enemy's death: the burst and the dissolve (on the kill, or after the motion). */
 function dark(se: number | undefined, point: DeathPoint, from: 'kill' | 'end'): DeathStep {
@@ -312,8 +329,8 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { frame: 27 }, se: 0xbc, particles: [{ p: { id: 0xf0 }, at: BLOOD }, { p: gensei(0x32), at: BLOOD }], pools: [pool('red15', 0x14, BLOOD)] },
         ],
       };
-    case 'TObjEneBm3Fly': // Mothmant 0x00516c60 (VERIFIED: the dump names it Hildebear, the state is the fall): SE 0xde at the kill (origin); on landing (sub-state 0 -> 2 when the fall reaches the floor, not the motion end) gensei 30 and the red 2.5 pool (CreateEntity_00578268, delay 10) at the origin. The trigger here is 'end' (ASSUMED timing); the knock-back flight is not modelled
-      return { steps: [{ when: 'kill', se: 0xde }, { when: 'end', particles: [{ p: gensei(0x1e), at: ORIGIN }], pools: [pool('red2_5', 10)] }] };
+    case 'TObjEneBm3Fly': // Mothmant: the lethal death's two states (mothmantDeathPlan)
+      return mothmantDeathPlan('fall');
     case 'TObjEneBm3FlyNest': // Monest 0x00519550 (VERIFIED): the spray 0xf1 every 4 frames and SE 0xe4 every 20 in the first 25 motion frames (0xc0 < 25); at the motion's end (0xb0 & 0x10) a red 15 pool (SpawnItem_005781d8, delay 50) and gensei 70 at (-10, 0, -8) rotated by the heading; the sink 0.1 a frame until the counter 0x4e0 passes 20 (200 frames)
       return {
         steps: [
@@ -621,15 +638,15 @@ export class DeathRun {
     return this.i >= this.plan.steps.length && this.sinkLeft <= 0;
   }
 
-  /** One game frame; `motionFrame` is the death motion's elapsed frames, `ended` whether it ended, `dissolved` whether the dissolve is done. */
-  tick(motionFrame: number, ended: boolean, dissolved = false): DeathActions {
+  /** One game frame; `motionFrame` is the death motion's elapsed frames, `ended` whether it ended, `dissolved` whether the dissolve is done, `landed` whether a Mothmant's fall reached the floor this frame (the 'land' step). */
+  tick(motionFrame: number, ended: boolean, dissolved = false, landed = false): DeathActions {
     const out: DeathActions = { se: [], spawn: [], pools: [], fragments: [], dissolve: false, sink: 0, remove: false, fade: false };
     // Several steps may fall due in the same frame (kill + a motion that is already past a frame).
     while (this.i < this.plan.steps.length) {
       const s = this.plan.steps[this.i];
       const w = s.when;
       // A motion that has ended has passed every frame, so a frame step behind a short motion still fires.
-      const due = w === 'kill' ? true : w === 'end' ? ended : w === 'dissolved' ? dissolved : 'frame' in w ? motionFrame >= w.frame || ended : this.t - this.last >= w.wait;
+      const due = w === 'kill' ? true : w === 'end' ? ended : w === 'land' ? landed : w === 'dissolved' ? dissolved : 'frame' in w ? motionFrame >= w.frame || ended : this.t - this.last >= w.wait;
       if (!due) break;
       this.i++;
       this.last = this.t;
