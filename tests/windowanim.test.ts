@@ -12,9 +12,12 @@ import {
   SE_WINDOW_CLOSE,
   SE_WINDOW_OPEN,
   SHINE_END,
+  titleTextShown,
+  wipeElement,
   WindowAnim,
   WindowShine,
   windowShine,
+  withElementWipe,
 } from '../client/src/classic/windowanim.ts';
 import { BAR_COLORS, BAR_HOLD_FRAMES, PartyWindows, StatusWindow } from '../client/src/classic/hud.ts';
 
@@ -274,6 +277,78 @@ const check = (ok: boolean, msg: string) => {
   check(calls.length === 0, 'palette: no band before the element');
   windowShine.state = saved;
   windowShine.counter = savedCounter;
+}
+
+// --- the element wipe of a leaf window (withElementWipe / wipeElement) ----------
+// The leaves' rows, bars and texts are revealed per element: an element at
+// (x, y) of a content at (cx, cy) of width cw shows reveal(x - cx, y - cy, cw)
+// px from its left edge, drawn whole with no scope at all.
+{
+  const log: string[] = [];
+  const ctx = {
+    save() {
+      log.push('save');
+    },
+    restore() {
+      log.push('restore');
+    },
+    beginPath() {
+      log.push('begin');
+    },
+    rect(x: number, y: number, w: number, h: number) {
+      log.push(`rect ${x} ${y} ${w} ${h}`);
+    },
+    clip() {
+      log.push('clip');
+    },
+  } as unknown as CanvasRenderingContext2D;
+  const drawn = () => log.filter((l) => l === 'drawn').length;
+  const draw = () => log.push('drawn');
+
+  // No scope: the element is drawn whole, nothing clipped.
+  log.length = 0;
+  wipeElement(ctx, 40, 40, 20, draw);
+  check(drawn() === 1 && !log.includes('clip'), 'wipe: no scope draws whole');
+  check(titleTextShown(), 'wipe: no scope shows the title');
+
+  // A window still at counter 0 (just opened, c = -8): no element shows.
+  const shut = new WindowAnim(true, true);
+  shut.counter = 0;
+  log.length = 0;
+  withElementWipe(shut, 0, 0, 150, () => {
+    wipeElement(ctx, 10, 10, 20, draw);
+    check(!titleTextShown(), 'wipe: the title waits for c >= 0');
+  });
+  check(drawn() === 0, 'wipe: a window not yet opened draws no element');
+
+  // An open window (counter well past the wipe): the element is drawn whole.
+  const open = new WindowAnim(true, true);
+  open.counter = OPENED;
+  log.length = 0;
+  withElementWipe(open, 0, 0, 150, () => wipeElement(ctx, 10, 10, 20, draw));
+  check(drawn() === 1 && titleTextShown(), 'wipe: opened window draws the element and its title');
+  check(!log.includes('clip'), 'wipe: a fully revealed element is not clipped');
+
+  // Mid-wipe: the element at the content's start shows reveal px from its left
+  // edge (x = 0, y = 0: reveal = (c - 0) * 17 with c = 3 gives 51 px).
+  const mid = new WindowAnim(true, true);
+  mid.counter = 10.5; // c = round(10.5 - 7.5) = 3
+  log.length = 0;
+  withElementWipe(mid, 100, 50, 150, () => wipeElement(ctx, 100, 50, 20, draw));
+  check(log.includes('rect 100 46 51 28') && drawn() === 1, `wipe: element at the content origin shows 51 px (${log.join(',')})`);
+  // The same mid-wipe element further down the content is hidden (y / 21 pushes its reveal below 0).
+  log.length = 0;
+  withElementWipe(mid, 100, 50, 150, () => wipeElement(ctx, 100, 50 + 5 * 20, 20, draw));
+  check(drawn() === 0, 'wipe: an element five rows down is not yet shown');
+  // Scopes nest and restore: outside the inner scope the outer one is back.
+  log.length = 0;
+  withElementWipe(open, 0, 0, 150, () => {
+    withElementWipe(undefined, 0, 0, 150, () => wipeElement(ctx, 10, 10, 20, draw));
+    wipeElement(ctx, 10, 10, 20, draw);
+  });
+  check(drawn() === 2, 'wipe: undefined anim draws whole inside an outer scope');
+  // Outside any scope again, the title shows whatever the old scope said.
+  check(titleTextShown(), 'wipe: scope restored after the call');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

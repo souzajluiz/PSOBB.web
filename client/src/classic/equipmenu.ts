@@ -38,6 +38,7 @@ import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { SLOT_ARMOR, SLOT_MAG, SLOT_SHIELD, SLOT_UNIT_1, SLOT_WEAPON } from '../net/items.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawTextWindow, drawWindowTitle, INSET, ROW, TITLE_GAP } from './fieldwindows.ts';
+import { wipeElement, WindowAnim, withElementWipe } from './windowanim.ts';
 import { equipProblems, ICON_UV, isWrapped, itemDescription, itemRow, type ItemPackEnv, type ItemPackTextures, type ItemRow } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 
@@ -207,7 +208,8 @@ export class EquipMenu {
     return true;
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0): void {
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): the elements of each window are revealed by its wipe.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
     const rc = this.env.rowContext();
     const L = SLOT_LIST;
     const cx = L.x + INSET;
@@ -215,14 +217,17 @@ export class EquipMenu {
     const cw = L.w - 2 * INSET;
     const browsing = this.state === 'slots';
     drawWindowFrame(ctx, skin.frame, L.x, L.y, L.w, browsing ? L.h : ROW + 14 + TITLE_GAP);
-    if (browsing) {
-      drawSelectBar(ctx, skin.bars, cx, cy + this.slotCursor * ROW, cw, 16);
-      this.slots.forEach((s, i) => this.drawSlot(ctx, tex, s, cx, cy + i * ROW, cw));
-    } else {
-      const s = this.slots[this.slotCursor];
-      if (s) this.drawSlot(ctx, tex, s, cx, cy, cw);
-    }
-    drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x38));
+    withElementWipe(wipe, cx, cy, cw, () => {
+      if (browsing) {
+        const bar = cy + this.slotCursor * ROW;
+        wipeElement(ctx, cx, bar, 16, () => drawSelectBar(ctx, skin.bars, cx, bar, cw, 16));
+        this.slots.forEach((s, i) => this.drawSlot(ctx, tex, s, cx, cy + i * ROW, cw));
+      } else {
+        const s = this.slots[this.slotCursor];
+        if (s) this.drawSlot(ctx, tex, s, cx, cy, cw);
+      }
+      drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x38));
+    });
 
     let shown: InventoryItem | null = this.slots[this.slotCursor]?.item ?? null;
     if (!browsing) {
@@ -231,32 +236,43 @@ export class EquipMenu {
       const ix = I.x + INSET;
       const iy = I.y + INSET + TITLE_GAP;
       const iw = I.w - 2 * INSET;
-      if (!this.items.length) drawGameText(ctx, this.env.text(11, 0xee), ix, iy + 1, DISABLED);
-      else {
-        drawSelectBar(ctx, skin.bars, ix, iy + (this.itemCursor - this.itemTop) * ROW, iw, 16);
-        this.items.slice(this.itemTop, this.itemTop + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
-      }
-      drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
+      withElementWipe(wipe, ix, iy, iw, () => {
+        if (!this.items.length) {
+          const none = this.env.text(11, 0xee);
+          wipeElement(ctx, ix, iy + 1, ROW, () => drawGameText(ctx, none, ix, iy + 1, DISABLED));
+        } else {
+          const bar = iy + (this.itemCursor - this.itemTop) * ROW;
+          wipeElement(ctx, ix, bar, 16, () => drawSelectBar(ctx, skin.bars, ix, bar, iw, 16));
+          this.items.slice(this.itemTop, this.itemTop + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
+        }
+        drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
+      });
       shown = this.items[this.itemCursor] ?? null;
     }
 
     ctx.save();
     ctx.translate(extra, 0);
-    drawTextWindow(ctx, skin, EQUIP_DETAIL, shown ? itemDescription(shown.data, rc.names) : '');
+    withElementWipe(wipe, EQUIP_DETAIL.x + INSET, EQUIP_DETAIL.y + INSET, EQUIP_DETAIL.w - 2 * INSET, () =>
+      drawTextWindow(ctx, skin, EQUIP_DETAIL, shown ? itemDescription(shown.data, rc.names) : ''),
+    );
     ctx.restore();
   }
 
   private drawSlot(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, s: EquipSlot, x: number, y: number, w: number): void {
     if (s.item) return this.drawRow(ctx, tex, itemRow(s.item, this.env.rowContext()), x, y, w);
-    drawIcon(ctx, tex.icons, s.emptyIcon, x + ICON, y, EMPTY_ICON_COLOR);
+    wipeElement(ctx, x + ICON, y, ICON, () => drawIcon(ctx, tex.icons, s.emptyIcon, x + ICON, y, EMPTY_ICON_COLOR));
   }
 
   private drawRow(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, r: ItemRow, x: number, y: number, w: number): void {
     const alpha = r.iconColor === '#ffffff' ? 1 : EMPTY_ICON_COLOR;
-    drawIcon(ctx, tex.icons, r.icon1 === 0x30 && this.frame & 8 ? 0x31 : r.icon1, x, y, alpha);
-    drawIcon(ctx, tex.icons, r.icon2, x + ICON, y, alpha);
-    if (r.name) drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor);
-    if (r.count) drawGameText(ctx, r.count, x + w - gameTextWidth(r.count), y, r.nameColor);
+    const icon1 = r.icon1 === 0x30 && this.frame & 8 ? 0x31 : r.icon1;
+    wipeElement(ctx, x, y, ICON, () => drawIcon(ctx, tex.icons, icon1, x, y, alpha));
+    wipeElement(ctx, x + ICON, y, ICON, () => drawIcon(ctx, tex.icons, r.icon2, x + ICON, y, alpha));
+    if (r.name) wipeElement(ctx, x + 2 * ICON, y, ROW, () => drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor));
+    if (r.count) {
+      const nx = x + w - gameTextWidth(r.count);
+      wipeElement(ctx, nx, y, ROW, () => drawGameText(ctx, r.count, nx, y, r.nameColor));
+    }
   }
 }
 

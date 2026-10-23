@@ -4,6 +4,7 @@
 // the Technique menu (classic/techmenu.ts)
 // and the item command bytes the menus end in (net/items.ts).
 // Run: node tests/fieldhud.test.ts
+import { WindowAnim, withElementWipe } from '../client/src/classic/windowanim.ts';
 import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
 import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
 import { MENU_LAYER, STATUS_LAYER } from '../client/src/classic/hud.ts';
@@ -12,6 +13,7 @@ import {
   categoryIcon,
   classCanUse,
   hasBonuses,
+  drawItemRow,
   ItemPackMenu,
   itemRow,
   itemRows,
@@ -20,6 +22,7 @@ import {
   PURPOSE,
   spinnerKeyDown,
   spinnerKeyUp,
+  type ItemRow,
   type RowContext,
 } from '../client/src/classic/itempack.ts';
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
@@ -416,4 +419,37 @@ if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);
 }
+// --- the field menus' element wipe (classic/windowanim.ts withElementWipe) ---
+// An Item Pack row's icons are elements of the leaf's opening wipe: at counter
+// 0 (c = -8) nothing of the row shows; the open window draws both icons.
+{
+  let drawn = 0;
+  const rctx = new Proxy({} as Record<string, unknown>, {
+    get: (t, k) => {
+      if (k === 'drawImage') return () => drawn++;
+      if (k === 'save' || k === 'restore' || k === 'beginPath' || k === 'rect' || k === 'clip') return () => {};
+      return t[k as string];
+    },
+    set: (t, k, v) => {
+      t[k as string] = v;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+  const icons = {} as CanvasImageSource;
+  const row: ItemRow = { icon1: 0x0c, icon2: 5, name: '', count: '', nameColor: '#ffffff', iconColor: '#ffffff' };
+  const closedAt0 = new WindowAnim(true, true);
+  closedAt0.counter = 0;
+  drawn = 0;
+  withElementWipe(closedAt0, 0, 0, 200, () => drawItemRow(rctx, icons, row, 0, 0, 0, 200));
+  eq(drawn, 0, 'a row at the wipe start (counter 0) draws nothing');
+  drawn = 0;
+  const open = new WindowAnim(true, true);
+  open.counter = 0x1000000;
+  withElementWipe(open, 0, 0, 200, () => drawItemRow(rctx, icons, row, 0, 0, 0, 200));
+  eq(drawn, 2, 'an open window draws both icons of the row');
+  drawn = 0;
+  drawItemRow(rctx, icons, row, 0, 0, 0, 200);
+  eq(drawn, 2, 'no scope: the row draws whole, as the HUD and the main menu do');
+}
+
 console.log('fieldhud: all checks passed');

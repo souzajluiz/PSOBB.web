@@ -72,7 +72,7 @@ import { drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_G
 import { anchorX } from './ingame.ts';
 import { drawIcon } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
-import { WindowAnim, withWindowAnim } from './windowanim.ts';
+import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 
 export const OPTIONS_LIST = { x: 13, y: 256, w: 195 } as const; // entry 0x16, 195.0
 export const SETTINGS_RECT = { x: 210, y: 256, w: 302, h: 148 } as const; // entry 0x17, 0x00973f18
@@ -387,9 +387,12 @@ export class OptionsMenu {
   }
 
   // `extra`: virtual width beyond 640 (the settings window is on the right half).
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0): void {
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim) for the list; the settings window has its own.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0, wipe?: WindowAnim): void {
     const L = OPTIONS_LIST;
-    drawListWindow(ctx, skin, L.x, L.y, L.w, this.env.text(11, 0x3d), this.items, this.list.cursor);
+    withElementWipe(wipe, L.x + INSET, L.y + INSET + TITLE_GAP, L.w - 2 * INSET, () =>
+      drawListWindow(ctx, skin, L.x, L.y, L.w, this.env.text(11, 0x3d), this.items, this.list.cursor),
+    );
     const s = this.settings ?? this.closing;
     if (!s) return;
     const R = SETTINGS_RECT;
@@ -398,13 +401,17 @@ export class OptionsMenu {
       drawWindowFrame(ctx, skin.frame, x, R.y, R.w, R.h);
       const cx = x + INSET;
       const cy = R.y + INSET + TITLE_GAP;
-      drawSelectBar(ctx, skin.bars, cx, cy + s.cursor * ROW, R.w - 2 * INSET, 16);
-      s.items.forEach((it, i) => {
-        const y = cy + i * ROW;
-        drawIcon(ctx, skin.frame, i === s.chosen ? ICON_CHOSEN : ICON_OTHER, cx, y, '#ffffff', this.frame);
-        drawGameText(ctx, it.label, cx + ICON, y + 1, i === s.cursor ? SELECTED : '#ffffff');
+      withElementWipe(this.settingsAnim, cx, cy, R.w - 2 * INSET, () => {
+        const bar = cy + s.cursor * ROW;
+        wipeElement(ctx, cx, bar, 16, () => drawSelectBar(ctx, skin.bars, cx, bar, R.w - 2 * INSET, 16));
+        s.items.forEach((it, i) => {
+          const y = cy + i * ROW;
+          wipeElement(ctx, cx, y, ICON, () => drawIcon(ctx, skin.frame, i === s.chosen ? ICON_CHOSEN : ICON_OTHER, cx, y, '#ffffff', this.frame));
+          const tx = cx + ICON;
+          wipeElement(ctx, tx, y + 1, ROW, () => drawGameText(ctx, it.label, tx, y + 1, i === s.cursor ? SELECTED : '#ffffff'));
+        });
+        drawWindowTitle(ctx, skin, x, R.y, this.env.text(...s.row.label));
       });
-      drawWindowTitle(ctx, skin, x, R.y, this.env.text(...s.row.label));
     });
   }
 }
