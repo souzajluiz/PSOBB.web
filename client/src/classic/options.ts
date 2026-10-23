@@ -58,9 +58,11 @@
 //                       {32, 16, 0, -16, -32}[i] << 8 (0x009006e0) to the
 //                       16-bit gamma ramp (UpdateGammaRamp_00837818) and
 //                       ResetExternalSettings stores it in the registry.
-// Pad Button Config (4) opens a "Custom" / "Return to default" list and
-// Keyboard Config (5) opens the key config window (classic/keyconfig.ts); the
-// Pad Button Config list is not ported.
+// Pad Button Config (4) opens a "Return to default." / "Custom" list (values 0 /
+// 1; the confirm 0x56 for the default writes the default block, clears option
+// 0x800000 and sends 0x05ED); Custom opens the pad window (classic/padconfig.ts,
+// input/padconfig.ts). Keyboard Config (5) opens the key config window
+// (classic/keyconfig.ts).
 // Cancel on the option list returns to the main menu. When the window is
 // destroyed after any row was decided (+0x24), the client sends the option
 // word to the server (ChallengePlayerListWindow_Destructor_00753624 ->
@@ -76,6 +78,14 @@ import { drawIcon } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { KeyConfigMenu, type KeyConfigEnv } from './keyconfig.ts';
 import { applyKeyConfig, keyConfigFromCharacter, writeKeyConfigToCharacter } from '../input/keyconfig.ts';
+import { PadConfigMenu, type PadConfigEnv } from './padconfig.ts';
+import {
+  applyPadConfig,
+  defaultPadConfig,
+  padConfigFromCharacter,
+  writePadConfigToCharacter,
+} from '../input/padconfig.ts';
+import { sampleGamepad } from '../input/padinput.ts';
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 
 export const OPTIONS_LIST = { x: 13, y: 256, w: 195 } as const; // entry 0x16, 195.0
@@ -95,7 +105,7 @@ type Text = readonly [group: number, index: number];
 export type OptionField =
   | { kind: 'bits'; mask: number; shift: number } // the character option word
   | { kind: 'brightness' } // SetExternalSettingsFlag
-  | { kind: 'padConfig' } // not ported
+  | { kind: 'padConfig' } // classic/padconfig.ts (env.padConfig)
   | { kind: 'keyConfig' }; // classic/keyconfig.ts (env.keyConfig)
 
 export interface OptionRow {
@@ -142,6 +152,13 @@ export function cursorSaved(flags: number | null): boolean {
 
 // Command 0x04ED (send_packet0xed_subcommand4): the 364-byte key config.
 export const KEY_CONFIG_COMMAND = 0x04ed;
+// The list of row 4: value 0 "Return to default." (unitxt 0x55), value 1 "Custom" (0x54).
+const PAD_LIST_ITEMS = [0x55, 0x54] as const;
+// Command 0x05ED (send_packet0xed_subcommand5): the 56-byte pad config (newserv
+// on_ED_BB case 5 stores it as joystick_config).
+export const PAD_CONFIG_COMMAND = 0x05ed;
+// Option 0x800000 (exe get_character_option(..., 0x800000)): the 5 / 6 swap of the pad window.
+export const PAD_SWAP_OPTION = 0x800000;
 
 // The body of command 0x01ED (C_UpdateOptionFlags_BB_01ED).
 export function optionFlagsPayload(flags: number): Uint8Array {
@@ -259,6 +276,9 @@ export interface OptionsEnv {
   padConnected: () => boolean;
   // Keyboard Config (row 5): the window's load / commit (absent: row 5 does nothing).
   keyConfig?: KeyConfigEnv;
+  // Pad Button Config (row 4): the window's load / commit / pad, and the
+  // "Return to default" write (absent: row 4 does nothing).
+  padConfig?: PadConfigEnv & { reset: () => void };
 }
 
 interface SettingsWindow {
@@ -275,6 +295,11 @@ export class OptionsMenu {
   private settings: SettingsWindow | null = null;
   // Keyboard Config (row 5) while it is open.
   private keyWindow: KeyConfigMenu | null = null;
+  // Pad Button Config (row 4): the Custom / Return to default list, its
+  // confirm, and the window.
+  private padList: { cursor: number } | null = null;
+  private padConfirm: { cursor: number } | null = null;
+  private padWindow: PadConfigMenu | null = null;
   private closing: SettingsWindow | null = null;
   // The settings window's own list window animation.
   readonly settingsAnim = new WindowAnim(false, false);
@@ -317,6 +342,18 @@ export class OptionsMenu {
       if (!this.keyWindow.key(e)) this.keyWindow = null;
       return true;
     }
+    if (this.padWindow) {
+      if (!this.padWindow.key(e)) this.padWindow = null;
+      return true;
+    }
+    if (this.padConfirm) {
+      this.padConfirmKey(e);
+      return true;
+    }
+    if (this.padList) {
+      this.padListKey(e);
+      return true;
+    }
     const s = this.settings;
     if (s) {
       const n = s.items.length;
@@ -343,10 +380,53 @@ export class OptionsMenu {
         const row = OPTION_ROWS[this.list.cursor];
         if (row.choices.length) this.openSettings(row);
         else if (row.field.kind === 'keyConfig' && this.env.keyConfig) this.keyWindow = new KeyConfigMenu(this.env.keyConfig);
+        else if (row.field.kind === 'padConfig' && this.env.padConfig && this.env.padConnected()) this.padList = { cursor: 0 };
         return true;
       }
       default:
         return true;
+    }
+  }
+
+  // ChallengePlayerListWindow state 6: item 0 "Return to default." (value 0),
+  // item 1 "Custom" (value 1). Custom opens the window; the default asks first.
+  private padListKey(e: KeyboardEvent): void {
+    const l = this.padList!;
+    const r = listKey(e, PAD_LIST_ITEMS.map((t, i) => ({ label: this.env.text(0, t), value: i, enabled: true })), l);
+    if (r === 'cancel') {
+      se(SE.cancel);
+      this.padList = null;
+    } else if (r === 'decide') {
+      se(SE.ok);
+      if (l.cursor === 0) this.padConfirm = { cursor: 0 };
+      else {
+        this.padWindow = new PadConfigMenu(this.env.padConfig!);
+        this.padList = null;
+      }
+    }
+  }
+
+  // State 8: the confirm (0x56). Yes (item 0) writes the default, clears option
+  // 0x800000 and sends 0x05ED; No (item 1) goes back to the list.
+  private padConfirmKey(e: KeyboardEvent): void {
+    const c = this.padConfirm!;
+    const items = [0, 1].map((i) => ({ label: this.env.text(11, 0x6e + i), value: i, enabled: true }));
+    const r = listKey(e, items, c);
+    if (r === 'cancel') {
+      se(SE.cancel);
+      this.padConfirm = null;
+    } else if (r === 'decide') {
+      se(SE.ok);
+      this.padConfirm = null;
+      if (c.cursor === 0) {
+        this.padList = null;
+        const flags = this.env.flags();
+        if (flags !== null) {
+          this.env.setFlags((flags & ~PAD_SWAP_OPTION) >>> 0);
+          this.dirty = true;
+        }
+        this.env.padConfig!.reset();
+      }
     }
   }
 
@@ -387,6 +467,10 @@ export class OptionsMenu {
     this.settings = null;
     if (this.keyWindow) this.keyWindow.dispose();
     this.keyWindow = null;
+    if (this.padWindow) this.padWindow.dispose();
+    this.padWindow = null;
+    this.padList = null;
+    this.padConfirm = null;
     if (!this.dirty) return;
     this.dirty = false;
     const flags = this.env.flags();
@@ -400,6 +484,7 @@ export class OptionsMenu {
 
   tick(): void {
     this.frame++;
+    this.padWindow?.tick();
     this.settingsAnim.tick(this.speed());
     if (!this.settingsAnim.visible) this.closing = null;
   }
@@ -411,6 +496,10 @@ export class OptionsMenu {
     // two overlap, and the exe's list is not drawn under it).
     if (this.keyWindow) {
       this.keyWindow.draw(ctx, skin);
+      return;
+    }
+    if (this.padWindow) {
+      this.padWindow.draw(ctx, skin);
       return;
     }
     const L = OPTIONS_LIST;
@@ -457,6 +546,33 @@ export function characterOptionsEnv(
       } catch {
         return false;
       }
+    },
+    padConfig: {
+      text,
+      load: () => padConfigFromCharacter(full()),
+      // Closing the window: the config goes live, into the character record and to the server.
+      commit: (cfg) => {
+        writePadConfigToCharacter(full(), cfg);
+        applyPadConfig(cfg);
+        try {
+          send(PAD_CONFIG_COMMAND, cfg);
+        } catch {
+          // the connection is gone: the live config still applies
+        }
+      },
+      pad: () => sampleGamepad(),
+      swap56: () => ((readOptionFlags(full()) ?? 0) & PAD_SWAP_OPTION) !== 0,
+      // Return to default: the default block, live and on the server.
+      reset: () => {
+        const cfg = defaultPadConfig();
+        writePadConfigToCharacter(full(), cfg);
+        applyPadConfig(cfg);
+        try {
+          send(PAD_CONFIG_COMMAND, cfg);
+        } catch {
+          // the connection is gone: the live config still applies
+        }
+      },
     },
     keyConfig: {
       text,

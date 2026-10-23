@@ -53,6 +53,23 @@ import {
   writeKeyConfigToCharacter,
 } from '../client/src/input/keyconfig.ts';
 import { DOM_KEYS, stickKeys } from '../client/src/input/virtualpad.ts';
+import { PadConfigMenu } from '../client/src/classic/padconfig.ts';
+import {
+  ANALOG_NONE,
+  analogOpposite,
+  buttonOf,
+  CONTROL_ROLES,
+  defaultPadConfig,
+  JOYSTICK_IN_CHARACTER,
+  JOYSTICK_SIZE,
+  MUST_BIND,
+  normalizePadConfig,
+  padConfigFromCharacter,
+  PAD_ROWS,
+  sameAnalogAxis,
+  writePadConfigToCharacter,
+} from '../client/src/input/padconfig.ts';
+import { controlsHeld, PadKeyFeed, padSampleOf, type PadSample } from '../client/src/input/padinput.ts';
 
 let failures = 0;
 let checks = 0;
@@ -418,6 +435,162 @@ function keyWindowEnv(start: Uint8Array | null) {
 }
 applyKeyConfig(null);
 
+// --- Pad Button Config (input/padconfig.ts, input/padinput.ts, classic/padconfig.ts) --
+if (typeof globalThis.KeyboardEvent === 'undefined') {
+  // The feed builds KeyboardEvents; Node has none.
+  (globalThis as unknown as { KeyboardEvent: unknown }).KeyboardEvent = class {
+    type: string;
+    key: string;
+    code: string;
+    constructor(type: string, init: { key: string; code: string }) {
+      this.type = type;
+      this.key = init.key;
+      this.code = init.code;
+    }
+  };
+}
+{
+  // newserv's DEFAULT_JOYSTICK_CONFIG (SaveFileFormats.cc): the exe's default block at 0x0097bab4.
+  const newservDefault = [
+    0x00, 0x01, 0xff, 0xff, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x08, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+    0x20, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+  ];
+  eq(Array.from(defaultPadConfig()), newservDefault, 'the default pad block is newserv / exe default (56 bytes)');
+  eq(JOYSTICK_SIZE, 0x38, 'the pad block is 0x38 bytes');
+  eq(JOYSTICK_IN_CHARACTER, 0x3124, '00E7: joystick_config at 0x3124 (system file 0x2EA4 + 0x280)');
+  const rec = new Uint8Array(0x3994);
+  const pc = defaultPadConfig();
+  pc[0] = 2;
+  writePadConfigToCharacter(rec, pc);
+  eq(Array.from(padConfigFromCharacter(rec) ?? []), Array.from(pc), 'the pad block round-trips through the 00E7 record');
+  const badMarker = defaultPadConfig();
+  badMarker[0x34] = 2;
+  eq(Array.from(normalizePadConfig(badMarker)), newservDefault, 'a marker other than 1 gives the default');
+  const badButton = defaultPadConfig();
+  new DataView(badButton.buffer).setUint32(4, 0x123, true);
+  eq(Array.from(normalizePadConfig(badButton)), newservDefault, 'an unknown button value gives the default');
+  eq(normalizePadConfig(null).length, JOYSTICK_SIZE, 'no saved block: the default');
+  eq([analogOpposite(0), analogOpposite(6), analogOpposite(7), analogOpposite(13)], [7, 13, 0, 6], 'analog sides: + 7 / - 7');
+  eq(analogOpposite(ANALOG_NONE), 6, 'exe quirk: 0xFF counts as below 7 (signed compare), opposite 6');
+  eq(sameAnalogAxis(3, 10), true, 'X rotate + and - are the same axis');
+  eq(CONTROL_ROLES[0], ['selectUp'], 'control 0 is Select Up');
+  eq(CONTROL_ROLES[5], ['cancel', 'paletteRight'], 'control 5 is Cancel and Action Palette Right');
+  eq(MUST_BIND.has(7), false, 'only control 7 may be left empty');
+  // The sample: buttons as bits, the d-pad as POV bits, axes as codes.
+  const pressed = (on: number[]) => Array.from({ length: 16 }, (_, i) => ({ pressed: on.includes(i) }));
+  eq(padSampleOf({ buttons: pressed([0, 2]), axes: [] }), { buttons: 0x5, analog: [] }, 'buttons 0 and 2 are PAD BUTTON1 and 3');
+  eq(padSampleOf({ buttons: pressed([12]), axes: [] })?.buttons, 0x10000, 'd-pad up is POV(Y)+');
+  eq(padSampleOf({ buttons: pressed([14]), axes: [] })?.buttons, 0x40000, 'd-pad left is POV(X)+');
+  eq(padSampleOf({ buttons: pressed([]), axes: [0.9, -0.9, 0, 0.1] })?.analog, [0, 8], 'X + and Y -: codes 0 and 8');
+  eq(padSampleOf(null), null, 'no gamepad: no sample');
+  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x10000, analog: [] })], [0], 'POV(Y)+ holds control 0 by default');
+  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x1, analog: [] })], [4], 'PAD BUTTON1 holds control 4 (Decide) by default');
+}
+{
+  // The window: Decide waits; the first rising pad input is set on the row; a holder swaps.
+  const sample: { s: PadSample | null } = { s: null };
+  const commits: Uint8Array[] = [];
+  const menu = new PadConfigMenu({
+    text: (g, i) => `${g}:${i}`,
+    load: () => null,
+    commit: (c) => commits.push(c),
+    pad: () => sample.s,
+    swap56: () => false,
+  });
+  eq(menu.key(key('Enter')), true, 'Decide on row 0 (analog) waits');
+  sample.s = { buttons: 0, analog: [2] };
+  menu.tick();
+  sample.s = { buttons: 0, analog: [] };
+  menu.tick();
+  sample.s = { buttons: 0, analog: [2] };
+  menu.tick();
+  eq(menu.current()[0], 2, 'the analog Z+ is set on row 0');
+  for (let i = 0; i < 4; i++) menu.key(key('ArrowDown'));
+  menu.key(key('Enter'));
+  sample.s = { buttons: 0, analog: [] };
+  menu.tick();
+  sample.s = { buttons: 0x4, analog: [] };
+  menu.tick();
+  // Row 4 is Select Up (control 0, POV(Y)+); BUTTON3 (0x4) was control 5's, which takes the old value.
+  eq(buttonOf(menu.current(), 0), 0x4, 'Select Up is BUTTON3');
+  eq(buttonOf(menu.current(), 5), 0x10000, 'control 5 takes Select Up\'s old POV(Y)+');
+  menu.key(key('Enter'));
+  menu.key(key('Delete'));
+  eq(buttonOf(menu.current(), 0), 0x4, 'Delete on a required control is refused');
+  menu.key(key('Enter'));
+  menu.key(key('Backspace'));
+  eq(buttonOf(menu.current(), 0), 0x4, 'Backspace leaves the wait without a change');
+  // Row 11 is control 7 (Action Palette Top), the one control that can be cleared.
+  for (let i = 0; i < 7; i++) menu.key(key('ArrowDown'));
+  menu.key(key('Enter'));
+  menu.key(key('Delete'));
+  eq(buttonOf(menu.current(), 7), 0, 'Action Palette Top can be cleared');
+  eq(commits.length, 0, 'nothing committed while open');
+  eq(menu.key(key('Backspace')), false, 'Cancel on the list closes the window');
+  eq(commits.length, 1, 'closing commits once');
+  eq(buttonOf(commits[0], 0), 0x4, 'the committed block has the new Select Up');
+  eq(buttonOf(commits[0], 7), 0, 'and Action Palette Top is cleared');
+}
+{
+  // The pad feed: a held control is a key down on the target, released when it lets go.
+  const events: string[] = [];
+  const target = { dispatchEvent: (e: { type: string; key: string }) => (events.push(`${e.type}:${e.key}`), true) } as unknown as HTMLElement;
+  applyKeyConfig(null);
+  let s: PadSample | null = { buttons: 0x10000, analog: [] };
+  const feed = new PadKeyFeed(target, () => s, () => defaultPadConfig());
+  feed.tick(0);
+  feed.tick(10);
+  s = { buttons: 0, analog: [] };
+  feed.tick(20);
+  eq(events, ['keydown:ArrowUp', 'keyup:ArrowUp'], 'Select Up (POV(Y)+) is ArrowUp with the default keys');
+  events.length = 0;
+  s = { buttons: 0x4, analog: [] };
+  feed.tick(30);
+  eq(events[0], 'keydown:Backspace', 'control 5 (BUTTON3) feeds Backspace (Cancel) first');
+  feed.releaseAll();
+}
+{
+  // Options row 4: Return to default (0x55, item 0) asks first; Yes writes the default and
+  // clears option 0x800000; Custom (item 1) opens the window, and closing it commits and sends 0x05ED.
+  let flagsWord = 0x800000;
+  const resets: number[] = [];
+  const commits: Uint8Array[] = [];
+  const env: OptionsEnv = {
+    text: (g, i) => `${g}:${i}`,
+    flags: () => flagsWord,
+    setFlags: (f) => {
+      flagsWord = f;
+    },
+    send: () => {},
+    padConnected: () => true,
+    padConfig: {
+      text: (g, i) => `${g}:${i}`,
+      load: () => null,
+      commit: (c) => commits.push(c),
+      pad: () => null,
+      swap56: () => false,
+      reset: () => resets.push(1),
+    },
+  };
+  const m = new OptionsMenu(env);
+  for (let i = 0; i < 4; i++) m.key(key('ArrowDown'));
+  eq(m.cursor, 4, 'row 4 is Pad Button Config');
+  m.key(key('Enter'));
+  m.key(key('Enter'));
+  eq(resets.length, 0, 'the default asks first');
+  m.key(key('Enter'));
+  eq(resets.length, 1, 'Yes writes the default');
+  eq(flagsWord & 0x800000, 0, 'and clears option 0x800000');
+  m.key(key('Enter'));
+  m.key(key('ArrowDown'));
+  m.key(key('Enter'));
+  eq(m.key(key('Backspace')), true, 'the pad window is open and takes Cancel');
+  eq(commits.length, 1, 'closing the pad window commits once');
+  eq(commits[0].length, JOYSTICK_SIZE, 'the commit carries the 56-byte block');
+  eq(m.key(key('Backspace')), false, 'after the window, the option list is back and Cancel closes it');
+}
+
 if (!process.env.NO_TEXT) {
   const ROOT = resolve(import.meta.dirname, '..');
   const path = join(process.env.NEWSERV ?? join(ROOT, 'vendor/newserv'), 'system/text-sets/bb-v4/unitxt_e.prs');
@@ -442,6 +615,13 @@ if (!process.env.NO_TEXT) {
       ['Decide', 'Cancel', 'Menu Open/Close', 'Input Start', 'Action Palette Change', 'Select Up', 'Select Down', 'Select Left', 'Select Right'],
     ], 'key config rows (unitxt)');
     eq(s([0, 0x50]) + '|' + s([0, 0x54]), 'Default1|Custom', 'key config top list');
+    // Pad Button Config: the title, the rows (the analog four, then the select keys) and the list.
+    eq(s([0, 0x11]), 'Pad Button Config', 'pad config title');
+    eq(PAD_ROWS.slice(0, 4).map((r) => s([0, r.label])), ['Move Left/Right', 'Move Forward/Backward', 'Right Analog Left/Right', 'Right Analog Forward/Backward'], 'pad analog rows (unitxt)');
+    eq(PAD_ROWS.slice(4, 8).map((r) => s([0, r.label])), ['Select Up', 'Select Down', 'Select Left', 'Select Right'], 'pad select rows (unitxt)');
+    eq(PAD_ROWS.slice(8, 9).map((r) => s([0, r.label])), ['Action Palette Middle / Decide'], 'pad palette middle row (unitxt)');
+    eq(s([0, 0x55]) + '|' + s([0, 0x54]), 'Return to default.|Custom', 'pad config list (item 0 is Return to default)');
+    eq(s([0, 0x4b]), 'Please select item to change.', 'pad config idle message');
   } else console.log(`info: ${path} missing, labels not checked`);
 }
 
