@@ -26,6 +26,10 @@ import {
   doorIcon,
   enemyIconRule,
   komoVariant6Icon,
+  falz3Icons,
+  falz3TargetColor,
+  fadeColor,
+  FALZ3_DEFAULT_COLOR,
   teamColour,
   ICON_GREEN,
   ICON_RED,
@@ -347,6 +351,9 @@ eq([teamColour(1), teamColour(2), teamColour(0), teamColour(3)], [0xffff0000, 0x
 // --- enemy icon rules: the Olga Flow phase 1 is forced at 5.0 (icon3 flag 1), the rest are plain ---
 eq(enemyIconRule('OLGA_FLOW_1'), { scale: 5, color: 0xffffa24c, forced: true }, 'boss icon: Olga Flow phase 1 is forced at scale 5.0');
 eq(enemyIconRule('HILDEBLUE'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: the plain icon, range checked');
+eq(enemyIconRule('OLGA_FLOW_2'), { scale: 4, color: 0xffffa24c, forced: true }, 'boss icon: Olga Flow phase 2 is forced at scale 4.0 (unknown_olga_related)');
+eq(enemyIconRule('DE_ROL_LE'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: De Rol Le is forced at scale 2.0 (UpdateDerolle)');
+eq(enemyIconRule('GAL_GRYPHON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: Gal Gryphon is forced at scale 2.0 (update_gal_gryphon)');
 {
   const m = new MinimapState();
   m.enterFloor(0, 0, [], new MinimapFloors());
@@ -363,6 +370,28 @@ eq(komoVariant6Icon(-3, 1, 0, { x: 0, z: 0 }).scale, -1, 'Komo variant 6: a nega
 eq(komoVariant6Icon(4, 1, 0, { x: 0, z: 0 }).scale, 0, 'Komo variant 6: an even value is scale 0');
 eq(komoVariant6Icon(0, 1, 0, { x: 0, z: 0 }).color, ICON_GREEN, 'Komo variant 6: green at state 1 (idle)');
 
+// --- Dark Falz form 3 body (dark_falz_form3_minimap_icons, dump 198990) ---
+eq(FALZ3_DEFAULT_COLOR, 0xffffa24c, 'Dark Falz form 3: the body starts at 0xffffa24c (ctor, dump 200031)');
+eq(falz3TargetColor(-1), 0xffffa24c, 'Dark Falz form 3: nobody held fades toward the default colour');
+eq(falz3TargetColor(1), 0xff00ff00, 'Dark Falz form 3: slot 1 fades toward the table colour (green)');
+eq(falz3TargetColor(4), null, 'Dark Falz form 3: a slot above 3 draws nothing (dump 199013)');
+eq(fadeColor(0xffffa24c, 0xffff0000), 0xffff923c, 'fade: blue (76) steps down to 60, green (162) to 146, red at its target stays');
+eq(fadeColor(0xffffa24c, 0xff00ff00), 0xffefb23c, 'fade: red (255) steps down to 239, green (162) up to 178, blue down to 60');
+eq(fadeColor(0xff000005, 0xff000000), 0xff000000, 'fade: a channel stops at its target');
+eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) step down to 239, red at its target stays');
+{
+  const body = falz3Icons({ x: 10, z: 20 }, 0xffffa24c, -1, null);
+  eq(body.length, 1, 'Dark Falz form 3: nobody held draws only the body');
+  eq([body[0].shape, body[0].scale, body[0].color, body[0].x, body[0].z], [1, 5, 0xffffa24c, 10, 20], 'Dark Falz form 3: the body is shape 1 at 5.0 in the current colour');
+  eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, -1, null, true)[0].color, 0xffffffff, 'Dark Falz form 3: white while the scale is 0 with flag 4');
+  eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 4, null).length, 0, 'Dark Falz form 3: a slot above 3 draws nothing');
+  const near = falz3Icons({ x: 0, z: 0 }, 0xff0000ff, 2, { x: 60, z: 0 });
+  eq(near.length, 1 + 2, 'Dark Falz form 3: a prisoner 60 away gets 2 trail icons (round(60 / 25))');
+  eq([near[1].x, near[1].z, near[1].scale, near[1].color], [25, 0, 2.5, 0xffffff00], 'Dark Falz form 3: the trail is 2.5 in the prisoner colour, 25 along toward the prisoner');
+  const far = falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 0, z: 1000 });
+  eq(far.length, 1 + 14, 'Dark Falz form 3: the trail stops at 14 icons (360 / 25)');
+  eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 5, z: 0 }).length, 1, 'Dark Falz form 3: a prisoner within 25 draws no trail');
+}
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

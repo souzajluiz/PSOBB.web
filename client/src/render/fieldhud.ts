@@ -63,6 +63,7 @@ export interface MinimapSource {
   self: () => MinimapPlayer | null; // the local player (null: none / invisible)
   others: () => MinimapPlayer[]; // the other players on this floor
   enemies: () => readonly { x: number; z: number; type: string }[]; // live enemies on this floor (type: the newserv name, the icon rule)
+  forcedIcons?: () => readonly Icon[]; // icons added forced (the Dark Falz form 3 body and its trail)
   cameraYaw: () => number; // the camera's y_rotation (BAMS)
   hidden: () => boolean; // a talk camera or a UI that blocks the player's input
   switchOn: (flag: number) => boolean; // a switch flag of this floor (TObjRaderIcon colour)
@@ -729,6 +730,7 @@ export class FieldHud {
         const rule = enemyIconRule(e.type);
         this.minimap.addIcon({ x: e.x, z: e.z, color: rule.color, shape: 1, scale: rule.scale, heading: 0 }, rule.forced);
       }
+      for (const ic of this.opts.minimap?.forcedIcons?.() ?? []) this.minimap.addIcon(ic, true);
       // The TObjRaderIcon switches and the doors (their own update adds them).
       const src = this.opts.minimap;
       for (const r of this.raderIcons) this.minimap.addIcon(raderIconIcon(r, (f) => src?.switchOn(f) ?? false));

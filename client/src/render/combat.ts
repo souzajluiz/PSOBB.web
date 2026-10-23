@@ -76,6 +76,7 @@ import { parseCameraRel } from '../formats/cameramotion.ts';
 import { F1_ANIM_ROWS } from '../combat/darkfalz1.ts';
 import { F2_ANIM_ROWS } from '../combat/darkfalz2.ts';
 import { F3_ANIM_ROWS } from '../combat/darkfalz3.ts';
+import type { Icon } from '../classic/minimap.ts';
 import type { DfEvent, DfRow, DfRows } from '../combat/darkfalzcommon.ts';
 import * as THREE from 'three';
 import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymotions.ts';
@@ -1596,8 +1597,22 @@ export class CombatView {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
+      // Dark Falz form 3's body has its own icons (minimapIcons).
+      if (e.ai instanceof DarkFalzPartAi && e.ai.entity === DF_ID.form3) continue;
       const p = e.instance.root.position;
       out.push({ x: p.x, z: p.z, type: e.slot.type });
+    }
+    return out;
+  }
+
+  // The forced icons of the Dark Falz form 3 body and its prisoner trail
+  // (combat/darkfalz3.ts minimapIcons), drawn while its part is on the field.
+  minimapIcons(): Icon[] {
+    const out: Icon[] = [];
+    for (const e of this.enemies.values()) {
+      if (!(e.ai instanceof DarkFalzPartAi) || e.ai.entity !== DF_ID.form3) continue;
+      if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
+      out.push(...(e.ai.owner.form3?.minimapIcons() ?? []));
     }
     return out;
   }

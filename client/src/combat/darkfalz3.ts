@@ -44,6 +44,7 @@ import {
   type Vec3,
 } from './darkfalzcommon.ts';
 import { TECH, techPower } from './techniques.ts';
+import { FALZ3_DEFAULT_COLOR, fadeColor, falz3Icons, falz3TargetColor, type Icon } from '../classic/minimap.ts';
 
 // Animation table 0x009A6440 (stride 0x14: mode, next, body, wing, wing 1).
 export const F3_ANIM_ROWS: readonly (DfAnimRow & { readonly motions: readonly number[] })[] = [
@@ -428,7 +429,19 @@ export class DfForm3 extends DfEntity {
 
   // --- the frame ----------------------------------------------------------------
 
+  // The minimap body's colour (dark_falz_form3_minimap_icons, +0x3cc), faded once a frame.
+  minimapColour: number = FALZ3_DEFAULT_COLOR;
+
+  // The icons of the body and the prisoner trail (render/minimap.ts draws them).
+  minimapIcons(): Icon[] {
+    const held = this.held;
+    const p = held >= 0 ? this.fight.alive().find((q) => q.clientId === held) : undefined;
+    return falz3Icons({ x: this.x, z: this.z }, this.minimapColour, held, p ?? null);
+  }
+
   tick(): void {
+    const target = falz3TargetColor(this.held);
+    if (target !== null) this.minimapColour = fadeColor(this.minimapColour, target);
     const f = this.fight;
     // A prisoner that left or died is let go.
     if (this.held >= 0 && !f.alive().some((p) => p.clientId === this.held)) {
