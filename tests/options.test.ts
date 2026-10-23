@@ -29,6 +29,27 @@ import {
   type OptionsEnv,
 } from '../client/src/classic/options.ts';
 import { WindowAnim } from '../client/src/classic/windowanim.ts';
+import { CATEGORIES, KeyConfigMenu, type KeyConfigEnv } from '../client/src/classic/keyconfig.ts';
+import {
+  applyKeyConfig,
+  BINDING,
+  CONFIG_IN_CHARACTER,
+  CONFIG_SIZE,
+  codeOfDomKey,
+  currentKeyConfig,
+  defaultKeyConfig,
+  domEventOf,
+  domKeyOfCode,
+  KEYS,
+  keyCaption,
+  keyConfigFromCharacter,
+  normalizeKeyConfig,
+  PALETTE_KEYS,
+  readBinding,
+  writeBinding,
+  writeKeyConfigToCharacter,
+} from '../client/src/input/keyconfig.ts';
+import { DOM_KEYS, stickKeys } from '../client/src/input/virtualpad.ts';
 
 let failures = 0;
 let checks = 0;
@@ -186,6 +207,161 @@ const env: OptionsEnv = {
   eq(opened.slice(3), [0x17, 0x17], 'Item Pack sub-menu reopens on MAG');
 }
 
+// --- Keyboard Config (input/keyconfig.ts, classic/keyconfig.ts) ----------------
+// The 0x16C config: 45 bindings and a marker (ValidateAndApplyKeyboardConfig_007917c0);
+// the default is newserv's DEFAULT_KEY_CONFIG.
+const dkey = (k: string, code = '') => ({ key: k, code }) as KeyboardEvent;
+const defaults = defaultKeyConfig();
+eq(defaults.length, CONFIG_SIZE, 'key config size 0x16C');
+eq(CONFIG_SIZE + 8, 0x174, 'the 04ED packet: 8-byte header + key config = 0x174 (send_packet0xed_subcommand4)');
+eq(new DataView(defaults.buffer).getUint32(360, true), 1, 'the marker (u32 at 360) is 1');
+eq(
+  [0, 1, 2, 3, 6, 7, 8, 9, 10, 14, 18, 19].map((i) => readBinding(defaults, i).code),
+  [0x26, 0x22, 0x10, 0x13, 0x61, 0x50, 0x06, 0x59, 0x5e, 0x07, 0x56, 0x5e],
+  'default codes (newserv DEFAULT_KEY_CONFIG)',
+);
+eq(readBinding(defaults, 20).code, 0x40, 'F1 is binding 20');
+eq(readBinding(defaults, 35).code, 0x2a, 'hotbar 1 is binding 35');
+eq(
+  KEYS,
+  {
+    moveForward: 'w', moveBackward: 's', moveLeft: 'a', moveRight: 'd', decide: 'enter', cancel: 'backspace', menu: 'home',
+    chat: ' ', symbolChat: 'end', selectUp: 'arrowup', selectDown: 'arrowdown', selectLeft: 'arrowleft', selectRight: 'arrowright',
+    paletteMiddle: 'arrowdown', paletteLeft: 'arrowleft', paletteRight: 'arrowright', paletteChange: 'control', camera: 'arrowup',
+  },
+  'KEYS from the default config',
+);
+eq(PALETTE_KEYS, [['arrowleft', 1], ['arrowdown', 0], ['arrowright', 2]], 'PALETTE_KEYS from the default config');
+eq(normalizeKeyConfig(null).length, CONFIG_SIZE, 'a missing config is the default');
+const badType = defaults.slice();
+writeBinding(badType, 3, { type: 2, code: 0x13 });
+eq(normalizeKeyConfig(badType), defaults, 'a type above 1 resets to the default');
+const badMarker = defaults.slice();
+badMarker[360] = 0;
+eq(normalizeKeyConfig(badMarker), defaults, 'a bad marker resets to the default');
+
+// The config inside the 00E7 record (PSOBBBaseSystemFile.key_config at 0x2FB8).
+eq(CONFIG_IN_CHARACTER, 0x2fb8, 'key config offset in 00E7');
+const rec = new Uint8Array(0x3994);
+eq(normalizeKeyConfig(keyConfigFromCharacter(rec)), defaults, 'a zero record (no marker) normalizes to the default');
+writeKeyConfigToCharacter(rec, defaults);
+eq(keyConfigFromCharacter(rec), defaults, 'key config round trip in the character record');
+eq(keyConfigFromCharacter(new Uint8Array(0x100)), null, 'a short record has no key config');
+
+// Key names and DOM names.
+eq(domKeyOfCode(0x26), 'w', 'W code');
+eq(domKeyOfCode(0x40), 'f1', 'F1 code');
+eq(domKeyOfCode(0x5e), 'arrowup', 'Up arrow code');
+eq(codeOfDomKey('w'), 0x26, 'DOM w -> code');
+eq(codeOfDomKey('Escape'), 0x4c, 'DOM Escape -> ESC code');
+eq(codeOfDomKey('Shift'), 0x54, 'DOM Shift -> L SHIFT');
+eq(codeOfDomKey('1'), 0x2a, 'DOM 1 -> code 0x2A');
+eq(codeOfDomKey('0'), 0x33, 'DOM 0 -> code 0x33');
+eq(codeOfDomKey('F13'), null, 'a key the table does not have');
+eq(keyCaption(0x26), ': w', 'caption of W (the exe text ": w")');
+eq(keyCaption(0), '', 'an unbound key has no caption');
+eq(domEventOf('w'), { key: 'w', code: 'KeyW' }, 'DOM event of a letter');
+eq(DOM_KEYS.enter, { key: 'Enter', code: 'Enter' }, 'DOM event of Enter');
+
+// applyKeyConfig: the live keys follow the config, in place.
+const alt = defaults.slice();
+writeBinding(alt, BINDING.moveRight, { type: 0, code: 0x10 }); // A
+applyKeyConfig(alt);
+eq(KEYS.moveRight, 'a', 'a rebound move key is the live key');
+eq([...stickKeys({ dx: 1, dy: 0, radius: 1 })], ['a'], 'the stick reads the live keys');
+eq(currentKeyConfig(), alt, 'the config in use is the one applied');
+applyKeyConfig(null);
+eq(KEYS.moveRight, 'd', 'the default restores the key');
+
+// The window (classic/keyconfig.ts): Custom, then a category, a row, a key.
+function keyWindowEnv(start: Uint8Array | null) {
+  const commits: Uint8Array[] = [];
+  const env: KeyConfigEnv = { text: (g, i) => `${g}:${i}`, load: () => start, commit: (c) => commits.push(c) };
+  return { env, commits };
+}
+{
+  // Move Forward (row 0 of Config of Movement) = K (0x1A), which no row holds: no swap.
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  eq(w.key(dkey('Enter')), true, 'Custom opens the category list');
+  eq(w.key(dkey('Enter')), true, 'Move Forward is decided (waits for a key)');
+  eq(w.key(dkey('k')), true, 'the key is taken');
+  eq(w.key(dkey('Backspace')), true, 'Cancel goes back to the top list');
+  eq(w.key(dkey('Backspace')), false, 'Cancel on the top list closes the window');
+  eq(commits.length, 1, 'closing commits once');
+  eq(readBinding(commits[0], 0), { type: 0, code: 0x1a }, 'Move Forward is K');
+  eq(readBinding(commits[0], 1), { type: 0, code: 0x22 }, 'Move Backward untouched');
+}
+{
+  // Move Forward = A: A is Move Left's key, so Move Left takes W (Move Forward's old key).
+  // Then Move Backward = W: W is now Move Left's, so Move Left takes S (Move Backward's old key).
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  w.key(dkey('Enter'));
+  w.key(dkey('Enter'));
+  w.key(dkey('a'));
+  w.key(dkey('ArrowDown'));
+  w.key(dkey('Enter'));
+  w.key(dkey('w'));
+  w.key(dkey('Backspace'));
+  w.key(dkey('Backspace'));
+  eq(readBinding(commits[0], 0), { type: 0, code: 0x10 }, 'swap: Move Forward is A');
+  eq(readBinding(commits[0], 1), { type: 0, code: 0x26 }, 'swap: Move Backward is W');
+  eq(readBinding(commits[0], 2), { type: 0, code: 0x22 }, 'swap: Move Left took S');
+}
+{
+  // ESC, Shift, Ctrl are refused (the wait goes on); J is set; the Cancel row is not changeable.
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  w.key(dkey('Enter'));
+  w.key(dkey('Enter'));
+  w.key(dkey('Escape'));
+  w.key(dkey('Shift', 'ShiftLeft'));
+  w.key(dkey('Control'));
+  w.key(dkey('j'));
+  w.key(dkey('ArrowRight'));
+  w.key(dkey('ArrowRight'));
+  w.key(dkey('ArrowDown'));
+  w.key(dkey('Enter'));
+  w.key(dkey('j'));
+  w.key(dkey('Backspace'));
+  w.key(dkey('Backspace'));
+  eq(readBinding(commits[0], 0), { type: 0, code: 0x19 }, 'J is set after the refused keys');
+  eq(readBinding(commits[0], BINDING.cancel), { type: 0, code: 0x50 }, 'Cancel is not changed');
+}
+{
+  // Left wraps from the first category to the last.
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  w.key(dkey('Enter'));
+  eq(w.key(dkey('ArrowLeft')), true, 'Left from the first category wraps');
+  w.key(dkey('Backspace'));
+  eq(w.key(dkey('Backspace')), false, 'closed');
+  eq(commits.length, 1, 'one commit');
+}
+// Options > Keyboard Config (row 5) opens the window; its Cancel returns to the option list.
+{
+  const commits: Uint8Array[] = [];
+  const env: OptionsEnv = {
+    text: (g, i) => `${g}:${i}`,
+    flags: () => 0,
+    setFlags: () => {},
+    send: () => {},
+    padConnected: () => false,
+    keyConfig: { text: (g, i) => `${g}:${i}`, load: () => null, commit: (c) => commits.push(c) },
+  };
+  const menu = new OptionsMenu(env);
+  for (let i = 0; i < 5; i++) menu.key(key('ArrowDown'));
+  eq(menu.cursor, 5, 'row 5 is Keyboard Config');
+  menu.key(key('Enter'));
+  eq(commits.length, 0, 'the window is open, nothing committed yet');
+  menu.key(key('Backspace'));
+  eq(commits.length, 1, 'closing the key config window commits');
+  eq(commits[0].length, CONFIG_SIZE, 'the commit carries the 364-byte config');
+  eq(menu.key(key('Backspace')), false, 'the option list is still open and closes on Cancel');
+}
+applyKeyConfig(null);
+
 if (!process.env.NO_TEXT) {
   const ROOT = resolve(import.meta.dirname, '..');
   const path = join(process.env.NEWSERV ?? join(ROOT, 'vendor/newserv'), 'system/text-sets/bb-v4/unitxt_e.prs');
@@ -201,6 +377,15 @@ if (!process.env.NO_TEXT) {
     eq(OPTION_ROWS[7].choices.map(s), ['Slow', 'Normal', 'Fast', 'Very Fast'], 'Message Speed choices');
     eq(OPTION_ROWS[9].choices.map(s), ['+2 level', '+1 level', 'Normal', '-1 level', '-2 level'], 'Brightness choices');
     eq(OPTION_ROWS[6].choices.map(s), ['Saved', 'Non-Saved'], 'Cursor Position choices');
+    // Keyboard Config: the category headers and the rows (the label is the second word of each
+    // exe label-table pair; the binding is the first; see input/keyconfig.ts).
+    eq(CATEGORIES.map((c) => s([0, c.name])), ['Config of Movement', 'Config of Action Palette', 'Setting improper item'], 'key config category headers');
+    eq(CATEGORIES.map((c) => c.rows.map((r) => s([0, r.label]))), [
+      ['Move Forward', 'Move Backward', 'Move Left', 'Move Right', 'Lock Move Forward', 'Lock Walk Forward'],
+      ['Action Palette Left', 'Action Palette Middle', 'Action Palette Right', 'Symbol Chat Open', 'Camera'],
+      ['Decide', 'Cancel', 'Menu Open/Close', 'Input Start', 'Action Palette Change', 'Select Up', 'Select Down', 'Select Left', 'Select Right'],
+    ], 'key config rows (unitxt)');
+    eq(s([0, 0x50]) + '|' + s([0, 0x54]), 'Default1|Custom', 'key config top list');
   } else console.log(`info: ${path} missing, labels not checked`);
 }
 

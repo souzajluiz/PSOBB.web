@@ -20,7 +20,7 @@
 //              login, character name, lobby chat)
 
 import { isMuted, onMuteChange, toggleMuted } from '../audio/mute.ts';
-import { KEYS } from '../input/keyconfig.ts';
+import { isRepeatingKey, KEYS } from '../input/keyconfig.ts';
 import { addCameraTurn, dragTurn, setTouchStick, stickAxes } from '../input/analog.ts';
 import { canVibrate, haptic, hapticsEnabled, onHapticsChange, toggleHaptics } from '../input/haptics.ts';
 import {
@@ -28,7 +28,6 @@ import {
   DOM_KEYS,
   isTap,
   keyDiff,
-  REPEATING_KEYS,
   repeatCount,
   REPEAT_INTERVAL,
   shortcutFor,
@@ -416,7 +415,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
       b.classList.add('is-down');
       haptic('tap');
       feed.down(key);
-      if (REPEATING_KEYS.has(key)) {
+      if (isRepeatingKey(key)) {
         const start = performance.now();
         let sent = 0;
         timer = window.setInterval(() => {

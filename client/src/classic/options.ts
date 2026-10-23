@@ -59,7 +59,8 @@
 //                       16-bit gamma ramp (UpdateGammaRamp_00837818) and
 //                       ResetExternalSettings stores it in the registry.
 // Pad Button Config (4) opens a "Custom" / "Return to default" list and
-// Keyboard Config (5) the key config window: neither is ported.
+// Keyboard Config (5) opens the key config window (classic/keyconfig.ts); the
+// Pad Button Config list is not ported.
 // Cancel on the option list returns to the main menu. When the window is
 // destroyed after any row was decided (+0x24), the client sends the option
 // word to the server (ChallengePlayerListWindow_Destructor_00753624 ->
@@ -72,6 +73,8 @@ import { drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_G
 import { anchorX } from './ingame.ts';
 import { drawIcon } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
+import { KeyConfigMenu, type KeyConfigEnv } from './keyconfig.ts';
+import { applyKeyConfig, keyConfigFromCharacter, writeKeyConfigToCharacter } from '../input/keyconfig.ts';
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 
 export const OPTIONS_LIST = { x: 13, y: 256, w: 195 } as const; // entry 0x16, 195.0
@@ -92,7 +95,7 @@ export type OptionField =
   | { kind: 'bits'; mask: number; shift: number } // the character option word
   | { kind: 'brightness' } // SetExternalSettingsFlag
   | { kind: 'padConfig' } // not ported
-  | { kind: 'keyConfig' }; // not ported
+  | { kind: 'keyConfig' }; // classic/keyconfig.ts (env.keyConfig)
 
 export interface OptionRow {
   value: number; // the list item's value (the switch case)
@@ -135,6 +138,9 @@ export function withOptionValue(flags: number, field: Extract<OptionField, { kin
 export function cursorSaved(flags: number | null): boolean {
   return flags === null || (flags & 0x4) === 0;
 }
+
+// Command 0x04ED (send_packet0xed_subcommand4): the 364-byte key config.
+export const KEY_CONFIG_COMMAND = 0x04ed;
 
 // The body of command 0x01ED (C_UpdateOptionFlags_BB_01ED).
 export function optionFlagsPayload(flags: number): Uint8Array {
@@ -250,6 +256,8 @@ export interface OptionsEnv {
   send: (flags: number) => void;
   // get_num_dinput_controllers() != 0.
   padConnected: () => boolean;
+  // Keyboard Config (row 5): the window's load / commit (absent: row 5 does nothing).
+  keyConfig?: KeyConfigEnv;
 }
 
 interface SettingsWindow {
@@ -264,6 +272,8 @@ export class OptionsMenu {
   private items: ListItem[];
   private list = { cursor: 0 };
   private settings: SettingsWindow | null = null;
+  // Keyboard Config (row 5) while it is open.
+  private keyWindow: KeyConfigMenu | null = null;
   private closing: SettingsWindow | null = null;
   // The settings window's own list window animation.
   readonly settingsAnim = new WindowAnim(false, false);
@@ -302,6 +312,10 @@ export class OptionsMenu {
 
   // False when the window closed (Cancel on the option list).
   key(e: KeyboardEvent): boolean {
+    if (this.keyWindow) {
+      if (!this.keyWindow.key(e)) this.keyWindow = null;
+      return true;
+    }
     const s = this.settings;
     if (s) {
       const n = s.items.length;
@@ -327,6 +341,7 @@ export class OptionsMenu {
         this.dirty = true;
         const row = OPTION_ROWS[this.list.cursor];
         if (row.choices.length) this.openSettings(row);
+        else if (row.field.kind === 'keyConfig' && this.env.keyConfig) this.keyWindow = new KeyConfigMenu(this.env.keyConfig);
         return true;
       }
       default:
@@ -369,6 +384,8 @@ export class OptionsMenu {
   dispose(): void {
     if (this.settings?.row.field.kind === 'brightness') applyBrightness();
     this.settings = null;
+    if (this.keyWindow) this.keyWindow.dispose();
+    this.keyWindow = null;
     if (!this.dirty) return;
     this.dirty = false;
     const flags = this.env.flags();
@@ -389,6 +406,12 @@ export class OptionsMenu {
   // `extra`: virtual width beyond 640 (the settings window is on the right half).
   // `wipe`: the leaf's opening animation (FieldMenu's leafAnim) for the list; the settings window has its own.
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0, wipe?: WindowAnim): void {
+    // The key config window replaces the option list on screen (ASSUMED: the
+    // two overlap, and the exe's list is not drawn under it).
+    if (this.keyWindow) {
+      this.keyWindow.draw(ctx, skin);
+      return;
+    }
     const L = OPTIONS_LIST;
     withElementWipe(wipe, L.x + INSET, L.y + INSET + TITLE_GAP, L.w - 2 * INSET, () =>
       drawListWindow(ctx, skin, L.x, L.y, L.w, this.env.text(11, 0x3d), this.items, this.list.cursor),
@@ -433,6 +456,21 @@ export function characterOptionsEnv(
       } catch {
         return false;
       }
+    },
+    keyConfig: {
+      text,
+      // The saved config (00E7), or null: the window starts from the default.
+      load: () => keyConfigFromCharacter(full()),
+      // Closing the window: the config goes live, into the character record and to the server.
+      commit: (cfg) => {
+        writeKeyConfigToCharacter(full(), cfg);
+        applyKeyConfig(cfg);
+        try {
+          send(KEY_CONFIG_COMMAND, cfg);
+        } catch {
+          // the connection is gone: the live config still applies
+        }
+      },
     },
   };
 }
