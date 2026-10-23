@@ -473,7 +473,8 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   e.ai instanceof SaintMilionAi ||
   (e.ai instanceof SmChildAi && e.ai.untargetable) ||
   (e.ai instanceof SinowAi && e.ai.dormant) ||
-  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi || e.ai instanceof GibblesAi) && e.ai.untargetable);
+  ((e.ai instanceof MericarolAi || e.ai instanceof GibbonAi || e.ai instanceof GibblesAi) && e.ai.untargetable) ||
+  (e.ai instanceof NanoDragonAi && e.ai.untargetable);
 
 // 6x47 / 6x48 subcommand numbers.
 const SUB_CAST_TECHNIQUE = 0x47;
@@ -942,7 +943,7 @@ export class CombatView {
           // ASSUMED: the set entry's param1 / param2 are the fparam1 / fparam2
           // that 0x00786848 copies (the enrage fraction, the ambush run).
           ai = new GrassAi({ ...at, attacks, radius, fparam1: setParams[0], fparam2: setParams[1], rng: () => this.rng() });
-        } else if (className === 'TObjEneNanoDrago') ai = new NanoDragonAi({ ...at, param2: setParams[1], movement, rng: () => this.rng() });
+        } else if (className === 'TObjEneNanoDrago') ai = new NanoDragonAi({ ...at, param2: setParams[1], flyIn: Math.round(setParams[0]) === 1, movement, rng: () => this.rng() });
         else if (className === 'TObjEneDubchik')
           ai = new DubchicAi({ ...at, param1: setParams[0], gillchic: head.slot.type === 'GILLCHIC', ultimate, movement, attack, rng: () => this.rng() });
         else if (className === 'TObjEneGyaranzo') ai = new GaranzAi({ ...at, movement, rng: () => this.rng() });
@@ -3973,7 +3974,13 @@ export class CombatView {
         const fx = s.shot.effect;
         const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
         if (fx.kind === 'tech') {
+          const wasDying = this.damage.dying;
           this.enemyTechHitsPlayer(s.owner, fx.power, s.shot.x, s.shot.z, what, fx.knockback ?? 0);
+          // A Nano Dragon hit that kills its target starts the power-up
+          // (EnemyAI_Projectile hit 0x00580380 / breath 0x0057fed6: the victim's
+          // flag 0x800 is set by the hit). ASSUMED: only the local player's
+          // death is seen here.
+          if (!wasDying && this.damage.dying && s.owner.ai instanceof NanoDragonAi) s.owner.ai.powerUp();
           if (fx.status && this.rng() < fx.status.chance) this.inflictStatus(fx.status.type as StatusType, what);
         } else if (fx.kind === 'melee') {
           this.enemyHitsPlayer(s.owner, hit.clientId, fx.knockback, fx.mult, undefined, fx.attack);

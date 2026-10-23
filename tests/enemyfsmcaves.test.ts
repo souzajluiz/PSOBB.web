@@ -175,6 +175,36 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   d.tick([]);
   run();
   eq([d.state, d.atpBonus], ['idle', 32], 'the refused charge changes nothing');
+  // A kill during a charge is refused (bit 0 of +0x390 is set); the charge's end clears the latch, so the next kill charges again.
+  const k = new NanoDragonAi({ x: 0, z: 0, angle: 0, param2: 50, movement: mv, rng: () => 0.5 });
+  check(k.powerUp() === true, 'a kill starts a charge');
+  eq(k.powerUp(), false, 'a second kill during the charge is refused');
+  k.tick([]);
+  for (let f = 0; f < 10 && k.state === 'charge'; f++) k.tick([], f === 2);
+  eq([k.state, k.powers], ['idle', 1], 'the charge ends');
+  eq(k.powerUp(), true, 'the next kill charges again');
+  near(NANO_POWER.grow, 0.0016, 'the scale grows 0x3ad1b718 a frame');
+}
+
+// --- Nano Dragon fly-in (set param1 == 1, nanodragon_constructor 0x0057f6b0) ---
+{
+  const mv = { fparam1: 2, fparam2: 3, fparam3: 2, fparam4: 0.1, fparam5: 0.01, fparam6: 0, iparam: [40, 25, 0, 0, 0, 0] };
+  const plain = new NanoDragonAi({ x: 0, z: 0, angle: 0, param2: 50, movement: mv, rng: () => 0.5 });
+  eq([plain.hidden, plain.untargetable], [false, false], 'a set without param1 == 1 is not hidden');
+  const f = new NanoDragonAi({ x: 0, z: 0, angle: 0, param2: 0.5, movement: mv, rng: () => 0.5, flyIn: true });
+  eq([f.hidden, f.untargetable], [true, true], 'the fly-in is hidden and untargetable until released');
+  eq((f as unknown as { wanderRadius: number }).wanderRadius, 50, 'a param2 under 1.0 becomes 50');
+  let o = f.tick([player(0, 200)]);
+  eq([f.hidden, o.hidden], [true, true], 'no player within 150: still hidden');
+  o = f.tick([player(0, 100)]);
+  eq([f.hidden, f.state, o.hidden, o.motion?.index], [false, 'takeoff', false, 9], 'a player within 150 releases it into the take-off');
+  let maxH = 0;
+  for (let i = 0; i < 600 && f.state === 'takeoff'; i++) {
+    f.tick([player(0, 100)], i === 25);
+    maxH = Math.max(maxH, f.height);
+  }
+  eq(maxH, NANO.cruise, 'after the release it rises to 50');
+  eq([f.state, f.height], ['idle', 0], 'and flies at the player, then lands');
 }
 
 if (failures) {

@@ -415,6 +415,8 @@ export const NANO = {
   arrive: 10,
   flyTurn: 1536,
   relocate: 200,
+  // The fly-in's wander radius when the set gives less than 1 (0x0057f9d7).
+  flyInRadius: 50,
   breathRange: 500,
   shotLife: 90,
   shotNear: 150,
@@ -434,9 +436,10 @@ export const NANO_POWER = {
   atp: 8,
   scale: Math.fround(0.6), // 0x3f19999a in the constructor (+0x68)
   step: Math.fround(0.1), // 0x009279ac
-  // ASSUMED: the scale's growth a frame (g_DAT_00a74158 is written at run
-  // time, not in the image).
-  grow: 0.01,
+  // The scale's growth a frame: g_DAT_00a74158 = 0x3ad1b718 (written by
+  // init_nanodragon_global_config at 0x0057fabe; the charge's 0x0057d790 end
+  // clamps to the target).
+  grow: Math.fround(0.0016),
   sound: 0x111,
   particle: 0xfa,
   motion: 6,
@@ -565,17 +568,53 @@ export class NanoDragonAi extends BrainBase {
   sounds: number[] = [];
   effects: Array<{ id: number; dy: number }> = [];
 
-  constructor(opts: { x: number; z: number; angle: number; param2: number; movement: EnemyMovementData | null; rng?: () => number }) {
+  // The fly-in (set param1 == 1): hidden until released (+0x390 0x40000).
+  hidden = false;
+
+  // flyIn: the set's param1 is 1 (nanodragon_constructor 0x0057f6b0: flags
+  // 0x40000 and 0x4000000, and a param2 under g_NanoDragonDefaultParam (1.0,
+  // 0x009278e8) becomes 50).
+  constructor(opts: { x: number; z: number; angle: number; param2: number; movement: EnemyMovementData | null; rng?: () => number; flyIn?: boolean }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.mv = opts.movement ?? EMPTY_MV;
     this.spawnX = this.wanderX = opts.x;
     this.spawnZ = this.wanderZ = opts.z;
-    this.wanderRadius = Math.max(0, opts.param2);
+    let param2 = opts.param2;
+    if (opts.flyIn) {
+      this.hidden = true;
+      if (param2 < 1) param2 = NANO.flyInRadius;
+    }
+    this.wanderRadius = Math.max(0, param2);
     this.current = loop(11, 0.8);
   }
 
   get airborne(): boolean {
     return this.height > 5; // 0x009279b4
+  }
+
+  // Not on the radar, not locked on, not struck while hidden (the render's
+  // concealed list).
+  get untargetable(): boolean {
+    return this.hidden;
+  }
+
+  // The fly-in's release (EnemyProcessTargeting 0x0057f3b8 radius, ASSUMED as
+  // the release): a live player within the search range. The Nano rises from
+  // the ground and flies at the player (the take-off's sub 0 / 1), then lands.
+  private release(out: AiFrame, targets: readonly AiTarget[]): void {
+    const n = nearest(targets, this.x, this.z, NANO.search);
+    if (!n) return;
+    this.hidden = false;
+    out.hidden = false;
+    this.state = 'takeoff';
+    this.timer = 0;
+    this.frames = 0;
+    this.sub = 0;
+    this.height = 0;
+    this.destX = n.x;
+    this.destZ = n.z;
+    this.targetId = n.clientId;
+    this.play(out, once(9, 0.9));
   }
 
   private pickWander(): void {
@@ -630,6 +669,15 @@ export class NanoDragonAi extends BrainBase {
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     const out = this.frame();
     if (this.state === 'dead') return out;
+    if (this.hidden) {
+      // The fly-in waits (no targeting, no shots) until a release.
+      this.release(out, targets);
+      if (this.hidden) {
+        out.hidden = true;
+        out.lift = NANO.base + this.height;
+        return this.finish(out);
+      }
+    }
     this.timer++;
     this.frames += this.current?.speed ?? 0;
     const t = this.target(targets);
@@ -783,9 +831,12 @@ export class NanoDragonAi extends BrainBase {
     return this.finish(out);
   }
 
-  // The power-up (state 0xc): enters the charge; its first tick adds the
-  // charge, or cancels it at the cap of 4 (as in the exe). Returns whether a
-  // charge will be added.
+  // The power-up (state 0xc, MorfosInitializeStateFlags_0057d31c): called when
+  // one of the Nano's hits kills its target (the victim's flag 0x800 is set by
+  // the hit, render/combat.ts tickShots). It is refused while a charge runs:
+  // bit 0 of +0x390 is set until the charge's end clears it (0x0057d790 with
+  // -1, which also clears 0x20000), so a later kill powers up again. The HP is
+  // not changed. Returns whether a charge will be added.
   powerUp(out: AiFrame = this.frame()): boolean {
     if (this.state === 'dead' || this.state === 'charge') return false;
     this.enter(out, 'charge');
