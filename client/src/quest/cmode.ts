@@ -200,6 +200,20 @@ export class ChallengeRecords {
     return stage < 0 || stage >= CM_STAGE_COUNT[e]! ? 0 : validTime(this.timeRaw(e, stage));
   }
 
+  // The rank of the record: the title dword's high half, decoded (0 = none). The stage list's
+  // first column shows its letter (the exe's entry+4, the record's first dword, ASSUMED).
+  get rank(): number {
+    return decodeRank(this.dv.getUint32(R_TITLE_COLOR, true));
+  }
+
+  // The sum of the episode's stage times without the "any missing" rule (the stage list's
+  // total, UpdateChallengeStageListWindowContent_004dc6ac's loop over ValidateDecryptedChallengeTime).
+  sumTimes(e: number): number {
+    let sum = 0;
+    for (let s = 0; s < CM_STAGE_COUNT[e]!; s++) sum += this.time(e, s);
+    return sum;
+  }
+
   // GetChallengeTotalTime_004da47c: the sum of the episode's stage times, 0
   // when any stage has none.
   total(e: number): number {
@@ -1144,6 +1158,11 @@ export function saveGrave(r: ChallengeRecords, g: { episodeIndex: number; stage:
 // --- the result window text (ChallengeObjectUIPanel_UpdateLabel_004dd29c) --------------------
 
 const pad2 = (n: number): string => String(Math.trunc(n)).padStart(2, '0');
+// %02d'%02d"%02d: the total's hours (clamped to 99), minutes and seconds (two digits each).
+const hmsTotal = (t: number): string => {
+  const { h, m, s } = formatHms(t);
+  return `${pad2(h)}'${pad2(m)}"${pad2(s)}`;
+};
 
 // FormatTimeToHoursMinutesSeconds_004da01c: hours capped at 99, "h'mm\"ss".
 export function formatHms(t: number): { h: number; m: number; s: number } {
@@ -1251,10 +1270,11 @@ export function validStageCount(records: ChallengeRecords, e: number): number {
 }
 
 // The window's lines (UpdateChallengeStageListWindow_004dc350 / ..Content_004dc6ac), or null for
-// index 0 or an index out of range. The per-player first column of a completed stage (the stage
-// name and its total, the exe's "%02d'%02d\"%02d %s" at 0x00909a04, and the 12-space
-// "failed" text) is not ported: its stack slots in the disassembly were not traced, so that
-// column is left out (see the DEVLOG).
+// index 0 or an index out of range. A completed stage (its time is set) has a first column: the
+// episode's total (the sum of its stage times, the exe's stack slot E+0x64 passed to
+// FormatTimeToHoursMinutesSeconds_004da01c) and the rank letter `CM_RANK_LETTERS[rank]` in the
+// exe's "%02d'%02d\"%02d %s" (0x00909a04). A rank of 0 leaves 12 spaces (0x009099dc). The exe
+// reads the rank as (&g_ChallengeStageNames)[n]; the table at 0x009b0ff4 holds "", "B", "A", "S".
 export function stageListLines(
   index: number,
   players: readonly { name: string; records: ChallengeRecords }[],
@@ -1277,7 +1297,13 @@ export function stageListLines(
     for (const p of players) {
       text += `${p.name}\n  `;
       const t = p.records.time(e, k);
-      text += t === 0 ? `      ${s.noRecord}\n` : `  ${hmsText(t)}\n`;
+      if (t === 0) {
+        text += `      ${s.noRecord}\n`;
+        continue;
+      }
+      const rank = p.records.rank;
+      const first = rank === 0 ? ' '.repeat(12) : `${hmsTotal(p.records.sumTimes(e))} ${CM_RANK_LETTERS[rank] ?? ''}`;
+      text += `${first}  ${hmsText(t)}\n`;
     }
   }
   const lines = text.split('\n');
