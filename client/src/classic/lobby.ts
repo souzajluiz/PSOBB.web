@@ -38,6 +38,7 @@ import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
+import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
 import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
@@ -87,6 +88,22 @@ export interface TransportHost {
   changeBlock(): Promise<void>;
 }
 
+// The main menu's availability rules in the lobby (map 0x0F, a safe map):
+// Customize (0), Equip (9) and MAG (0x17) are not used here (replaced by id + 1,
+// "cannot be used"); Quit Game reads "Disconnect" online (8); Trade is on (safe,
+// online); Technique, Area Map and the Quest Board are off; the Team rows need
+// a team. The rules are validateMenuEntry's (fieldmenu.ts, PsoBB.exe
+// ValidateMenuItemCondition_00732620). The lobby is always online.
+export function lobbyMenuRules(inTeam: boolean): MenuRules {
+  return { lobby: true, safe: true, online: true, questStarted: false, inTeam };
+}
+
+// The team membership says whether the player is in a team: teamRowsDisabled's
+// second row is "no team" (greyed Create Team), so the opposite is in a team.
+function teamMember(hud: LobbyHud): boolean {
+  return !teamRowsDisabled(hud.team!.membership())[1];
+}
+
 export class LobbyScreen implements Screen {
   transparent = true;
   private lobby: Lobby;
@@ -130,6 +147,8 @@ export class LobbyScreen implements Screen {
       (id) => this.menuAction(id),
     );
     this.menu.cursorSaved = () => cursorSaved(readOptionFlags(hud.fullCharacter?.() ?? null));
+    // ValidateMenuItemCondition_00732620 with the lobby's rules (see lobbyMenuRules).
+    this.menu.validate = (id) => validateMenuEntry(id, lobbyMenuRules(!!hud.team && teamMember(hud)));
     restoreBrightness();
     const t15 = (i: number) => hud.text(0x0f, i);
     const counterText: CounterText = {
