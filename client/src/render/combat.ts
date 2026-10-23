@@ -1398,6 +1398,21 @@ export class CombatView {
     this.tp = p.maxTp;
   }
 
+  // Material use (03 0B xx, combat/materials.ts), the item use's check and
+  // change. The progression owns the stats; storeProgression writes them back.
+  materialUsable(kind: number): boolean {
+    return this.progression?.materialUsable(kind) ?? false;
+  }
+
+  // The max HP / TP follow the bonus; the current HP and TP are not refilled
+  // (ASSUMED, see combat/materials.ts).
+  useMaterial(kind: number, challenge: boolean): void {
+    const p = this.progression;
+    if (!p || !p.useMaterial(kind, challenge)) return;
+    this.damage.maxHp = p.maxHp;
+    this.storeProgression();
+  }
+
   // After the return to Pioneer 2 (GameView.returnToPioneer2): the warp's
   // floor load already refilled the HP of a dead player (enterFloor). The TP
   // is refilled too (ASSUMED: PlayerRestoreHealthAndTP_0068fda4, full HP and TP).
@@ -7361,6 +7376,8 @@ export class CombatView {
       stats: { atp: st.atp, mst: st.mst, evp: st.evp, hp: st.hp, dfp: st.dfp, ata: st.ata, lck: st.lck },
       hpMaterials: inv[1] ?? 0,
       tpMaterials: inv[2] ?? 0,
+      // The counters: extension_data2 of the raw slots 8..12 (combat/materials.ts).
+      materialCounts: [0, 1, 2, 3, 4].map((t) => inv[4 + (8 + t) * 0x1c + 3] ?? 0),
     });
     const p = this.progression;
     this.opts.log(`level ${p.level + 1}, ${p.exp} EXP (next level at ${p.nextExp ?? '-'}), ${p.maxHp} HP / ${p.maxTp} TP`);
@@ -7382,11 +7399,28 @@ export class CombatView {
     };
     write(this.game.selfSnapshot.disp, 0);
     write(this.opts.fullCharacter?.(), 0x34c);
+    // The material bonuses (bytes 1 / 2) and counters (raw slots 8..12) in the
+    // join snapshot (6x70 reads bytes 1 / 2) and the raw save (the bytes are u8).
+    const writeMaterials = (inv: Uint8Array | null | undefined) => {
+      if (!inv || inv.length < 0x34c) return;
+      inv[1] = p.hpMaterials & 0xff;
+      inv[2] = p.tpMaterials & 0xff;
+      p.materialCounts.forEach((n, t) => (inv[4 + (8 + t) * 0x1c + 3] = n));
+    };
+    writeMaterials(this.game.selfSnapshot.inventory);
+    writeMaterials(this.opts.fullCharacter?.());
     const c = this.opts.character?.();
     if (c) {
       c.level = p.level + 1;
       c.exp = p.exp;
       Object.assign(c.stats, p.stats);
+      c.hpFromMaterials = p.hpMaterials;
+      c.tpFromMaterials = p.tpMaterials;
+      c.materialCounts = [...p.materialCounts];
+      p.materialCounts.forEach((n, t) => {
+        const it = c.inventory[8 + t];
+        if (it) it.extensionData2 = n;
+      });
     }
     const me = this.game.self;
     if (me) me.level = p.level + 1;

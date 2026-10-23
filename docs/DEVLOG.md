@@ -11098,3 +11098,34 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: Material use (03 0B xx): the use check, the counters, the Challenge x5
+
+**Finding:** the port's use of a material only added 2 to the stat (`net/items.ts` `use`), with no check, no counter, no HP / TP bonus, no cap and no Challenge rule. The exe has all of it. The named dump is `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; the decompile (Ghidra `tools/ghidra/decomp.sh`) confirms the apply side.
+
+**Exe (addresses are VAs):**
+- Kind: data1[2] of 03 0B xx (0 Power, 1 Mind, 2 Evade, 3 HP, 4 TP, 5 Defense, 6 Luck). The apply `ApplyMaterialToItem` (0x005df458) switches on the item's +0xf4 kind, the owner is +0xf8, and calls the player's vtable +0x12c after it (the total-stats refresh).
+- Use check (the 03 0B branch at 0x005d6268 (joined label), in the function at 0x005d4c38; the dump's name `handle_item_set_bonus` does not fit it, ASSUMED to be the use check): stat kinds usable when the stat is below the class maximum (`g_ClassMaxStats` 0x00968560, 0x24 bytes a row, read with `tools/exedata.py`) and the material total is below the cap (`can_use_material` 0x006a6e74, `get_max_material_count` 0x006a6ed1); HP usable when the HP bonus is below 0xfa (`CalculateEffectiveHP` 0x005c55b0, the units' HP specials not read, ASSUMED 0); TP usable when the TP bonus (+0x2c2) is below 0xfa (`CalculateEffectiveDEF` 0x005c5630, its name is wrong). No class check in the use check.
+- Cap: 0x96 (150) for classes 1, 2, 4, 5, 7, 8, 9 (HUnewearl, HUcast, RAcast, RAcaseal, FOnewm, FOnewearl, HUcaseal); 0xfa (250) for the rest. So the newmans are 150, not 250. The total is the five stat counters only (`get_material_count`), HP and TP are not in it.
+- Apply, amount 2 each: `add_power_material` 0x00691b74, `add_mind_material` 0x00691be0, `add_evasion_material` 0x00691c54, `add_defense_material` 0x00691cc4, `add_luck_materaial` 0x00691d34: stat += 2 clamped to the class maximum (`ClampAndApplyStatIncrement` 0x0069320e), counter += 1 (`check_and_add_materials` 0x006a6ef4). HP: `Player_AddHp` 0x00770ba4 += 2 (no counter). TP: `Player_ModifyTp` 0x00770c18 += 2 (no counter).
+- Androids (`class_check(player, 0xd7)` at 0x005ca3d0 is 1 for HUcast, RAcast, RAcaseal, HUcaseal): Mind and TP apply only when it is 0. The use check does not stop them, so an android's Mind or TP material is used up with no effect (the item is still removed, ASSUMED from the code path).
+- Challenge (`return1_if_challenge_quest` 0x00688b8c): x5 (10) for all five stat materials (the Ghidra decompile of `add_mind_material` shows the x5 that the JP decompile dropped), and for the HP and TP apply (`ApplyHpIncreaseMaterialToPlayer` 0x00691da4, `ApplyTpIncreaseMaterialToPlayer` 0x00691dd0). The counters still go up by 1. The DEVLOG's earlier "x5 for the power material" is the same rule.
+- The save: the bonuses are the raw bytes 1 (HP) and 2 (TP) of the inventory header, the counters the extension_data2 of the raw slots 8..12 (`PSOBBCharacterFile::get_material_usage` in newserv, and the layout note in `refsrc/.../notes/_psobb_save_format.md`).
+
+**newserv (`vendor/newserv/src/Items.cc` `player_use_item`):** the server applies the same effects to its copy: stat +2 (Mind, Evade, Def, Luck, Power), HP / TP usage +1 (HP and TP counted as `hp_from_materials >> 1`), the counter +1, and removes the item on BB. newserv has no cap, no class rule and no Challenge x5. So the client is the one that enforces the exe's rules; the server only trusts the 6x27.
+
+**Port:**
+- `combat/materials.ts` (new, pure): the kinds, `CLASS_MAX_STATS` (the twelve rows read from the exe), `materialCap`, `materialUsable(kind, holder)`, `applyMaterial(kind, holder, challenge)`, `clampStatIncrement`. The ASSUMED parts are in the header.
+- `combat/progression.ts`: `PlayerProgression` gains `materialCounts` (from the raw slots), `materialUsable(kind)`, `useMaterial(kind, challenge)`. The stats, bonuses and counters are the progression's, so the max HP / TP follow.
+- `render/combat.ts`: `materialUsable(kind)` and `useMaterial(kind, challenge)` (the max HP follows, the current HP and TP are not refilled, ASSUMED), `storeProgression` writes the bonuses, the counters, the stats to the character file, the join snapshot (`selfSnapshot.inventory` bytes 1 / 2 are what 6x70 sends) and the raw save. `ensureProgression` reads the counters.
+- `net/charfile.ts`: `CharacterFile.materialCounts` (the extension_data2 of raw slots 8..12, read whatever the item count is).
+- `net/items.ts`: `canUse` for 03 0B xx asks `rules.material.canUse(kind)`; `use` sends 6x27 then calls `rules.material.use(kind)` (the old direct `+2` is gone); `writeCharacterInventory` writes the bonus bytes and the counters into the raw save.
+- `ui/onlineTab.ts`: the rules pass `material` (the Challenge flag is `game.info.challenge` with the quest runner running, ASSUMED to match `return1_if_challenge_quest`'s `g_QuestStarted == 1` and room type 1).
+
+**Refusals:** an unusable material has no Use button (`ui/inventoryPanel.ts`), nothing is sent. The exe's refusal path plays SE 0x17 (the Sinowberill items, the entry above); a material refusal sound is not wired here (ASSUMED the same path, not checked for materials).
+
+**Stat display:** the status values are the progression's, written back in `storeProgression`; whether the Status window redraws at once is not checked in Chrome.
+
+**ASSUMED:** the use check is the function at 0x005d4c38 (the dump's name is wrong); the HP / TP cap ignores the units' HP / TP specials (`CalculateSpecialAttackPower`); the current HP and TP are not refilled by a material; the item is removed when an android uses a Mind or TP material with no effect; the Challenge flag; the bonus bytes are stored as u8 (a value over 255 wraps in the file, the progression keeps it).
+
+**Checks:** `node tests/materials.test.ts` (50 checks: the class table and caps, the use check per kind, the clamp, the x5, the androids, the cap accounting, `PlayerProgression` max HP / stats, the 6x27 and the removal with and without the rules, the raw save's bytes and slots). `node tests/items.test.ts`, `level.test.ts`, `returnprompt.test.ts` (98), `buffs.test.ts`, `cmode.test.ts`, `combat.test.ts` (5946) pass; client `npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.
