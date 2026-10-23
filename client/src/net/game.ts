@@ -954,6 +954,18 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, buildCastTechniqueComplete(this.selfId, tech, splitLevel(level).sent));
   }
 
+  // 6x47 / 6x48 of an NPC player this client owns (quest/npcai.ts): the exe's
+  // HandlePlayerTechCastState_007b2bc0 sends cast_tech with B's own client id
+  // (B +0x8a, .c:797258..797270) through checked_call_packet0x60_subcommand. No 6x8D:
+  // the level override is the local player's.
+  sendNpcCastTechnique(npcId: number, tech: number, level: number, targets: Array<{ entityId: number }>): void {
+    this.conn.send(0x60, 0, buildCastTechnique(npcId, tech, splitLevel(level).sent, targets));
+  }
+
+  sendNpcCastTechniqueComplete(npcId: number, tech: number, level: number): void {
+    this.conn.send(0x60, 0, buildCastTechniqueComplete(npcId, tech, splitLevel(level).sent));
+  }
+
   // 6x0A (G_UpdateEnemyState_6x0A, 0x0C): {entity id 0x1000 | index} {u16
   // index, u16 total damage, u32 game flags}. Flags: 0x20000000 enemy,
   // 0x200 hit, 0x400 big hit, 0x800 dead, 0x100 missed (see combat/formulas.ts).
