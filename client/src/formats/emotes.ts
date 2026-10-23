@@ -1,0 +1,148 @@
+// Emotes: the symbol-chat keys that play a motion, the 6x58 packet that tells
+// the other players, and the motion each key plays (PsoBB.exe, Ephinea build,
+// VAs).
+//
+// Trigger: a chat line with `{key}` in it queues the key (process_chat_message
+// 0x0077cbf3..0x0077cd1b, names in emote_key_names, the queue of 10 entries
+// `num_queued_emotes < 10`, the text lower-cased, at most 16 characters between
+// the braces). The queue head is played when the player is in the idle or
+// move state: ProcessPlayerEmote_0077cec0 maps the key to the motion set's
+// getter (vtable +off) and that getter's value is the emote id, which is the
+// motion slot of the set (plymotion.ts).
+//
+// Wire (6x58, `G_LobbyAnimation_6x58` in newserv, 8 bytes): u8 0x58, u8 2
+// (size in dwords), u16 client id, u16 emote id (the slot), u16 flags (bit 0
+// = the character option 0x80000 is set, newserv "use opposite gender's
+// animation"). The sender is dispatch_action_emote 0x0069c74c; the receiver
+// FUN_0069b2d4 stores the emote into the player's +0x3cc and sets the state
+// 0x17 (handle_input_state_emote) with the emote as its motion slot.
+//
+// Emote slots: the getter values of the set. Town (lobby, vtable 0x00b3a040)
+// and field (vtable 0x00b39ec0) differ, so the sender's emote id follows its
+// map (EMOTE_SLOTS.town in the lobby, .field in a game); both ends are in the
+// same map kind, so a slot means the same motion for the receiver.
+
+import { MOTION_TYPE, townMotion, type MotionRecord } from './plymotion.ts';
+import { FIELD_EMOTE_FLAGS, FIELD_EMOTE_ROWS, FIELD_EMOTE_SLOTS } from './plyemotedata.ts';
+
+export const EMOTE_OPCODE = 0x58;
+export const EMOTE_QUEUE_MAX = 10; // process_chat_message: num_queued_emotes < 10
+export const EMOTE_NAME_MAX = 16; // the name buffer of process_chat_message (local_24[16])
+
+// The 46 symbol-chat emote keys (emote_key_names / szEmote_* 0x0097957c..0x00979660).
+export const EMOTE_KEYS: readonly string[] = [
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+  'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'v', 'w', 'x', 'y', 'z',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+];
+
+// Key -> emote slot. Town: the getter of vtable 0x00b3a040 (+0x4c, +0x58, ...,
+// 0x6a7584..0x6a7704 return the constant). Field: vtable 0x00b39ec0 (0x6a7584..).
+export const EMOTE_SLOTS: { readonly town: Readonly<Record<string, number>>; readonly field: Readonly<Record<string, number>> } = {
+  town: {
+    f1: 6, f2: 7, f3: 8, f4: 9, f5: 10, f6: 11, f7: 12, f8: 13, f9: 14, f10: 15, f11: 16, f12: 17,
+    a: 42, b: 26, c: 36, d: 37, e: 43, f: 38, g: 39, h: 25, j: 30, k: 32, l: 47, m: 18,
+    n: 28, o: 27, p: 41, q: 29, r: 31, s: 34, t: 35, v: 46, w: 33, x: 45, y: 40, z: 44,
+    '1': 50, '2': 51, '3': 52, '4': 53, '5': 19, '6': 20, '7': 21, '8': 22, '9': 23, '0': 24,
+  },
+  field: {
+    f1: 9, f2: 11, f3: 13, f4: 6, f5: 26, f6: 27, f7: 28, f8: 29, f9: 30, f10: 31, f11: 32, f12: 33,
+    a: 58, b: 42, c: 52, d: 53, e: 59, f: 54, g: 55, h: 41, j: 46, k: 48, l: 63, m: 12,
+    n: 44, o: 43, p: 57, q: 45, r: 47, s: 50, t: 51, v: 62, w: 49, x: 61, y: 56, z: 60,
+    '1': 66, '2': 67, '3': 68, '4': 69, '5': 35, '6': 36, '7': 37, '8': 38, '9': 39, '0': 40,
+  },
+};
+
+// The emote keys named by a chat line, in order (process_chat_message): each
+// `{` starts a name that runs to the next `}` (lower-cased, 16 characters at
+// most, no check when the cap or the end of the line comes first). A name that
+// is one of EMOTE_KEYS is an emote.
+export function parseEmoteKeys(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf('{', i);
+    if (open < 0) break;
+    let name = '';
+    let j = open + 1;
+    let closed = false;
+    while (j < text.length && name.length < EMOTE_NAME_MAX) {
+      if (text[j] === '}') {
+        closed = true;
+        break;
+      }
+      name += text[j].toLowerCase();
+      j++;
+    }
+    if (closed && (EMOTE_KEYS as readonly string[]).includes(name)) {
+      out.push(name);
+      i = j + 1;
+    } else {
+      i = open + 1;
+    }
+  }
+  return out;
+}
+
+// The emote slot of a key in the lobby (field = false) or a game (field = true).
+export function emoteSlot(key: string, field: boolean): number | undefined {
+  return (field ? EMOTE_SLOTS.field : EMOTE_SLOTS.town)[key];
+}
+
+// The motion record of an emote slot for a character class. Lobby: the town
+// set's slot. Field: the field table's row of the motion type, the slot and the
+// held weapon's column (weaponClass 0..18, else column 0).
+export function emoteRecord(charClass: number, weaponClass: number, slot: number, field: boolean): MotionRecord {
+  if (!field) return townMotion(charClass, slot);
+  const type = MOTION_TYPE[charClass] ?? 0;
+  const s = FIELD_EMOTE_SLOTS.indexOf(slot);
+  if (s < 0) throw new Error(`no field emote slot ${slot}`);
+  const w = weaponClass >= 0 && weaponClass < 19 ? weaponClass : 0;
+  const [index, speed, flags] = FIELD_EMOTE_ROWS[type][s][w];
+  return { index, mode: 3, next: -1, speed, flags: FIELD_EMOTE_FLAGS[flags] };
+}
+
+// The 6x58 body: u8 0x58, u8 2, u16 client id (sendSubcommand fills the id), u16
+// emote, u16 flags. `opposite` is flag bit 0.
+export function emotePayload(slot: number, opposite: boolean): Uint8Array {
+  const out = new Uint8Array(4);
+  const dv = new DataView(out.buffer);
+  dv.setUint16(0, slot & 0xffff, true);
+  dv.setUint16(2, opposite ? 1 : 0, true);
+  return out;
+}
+
+// A received 6x58: body = the whole subcommand (header included).
+export function parseEmoteSubcommand(body: Uint8Array): { clientId: number; slot: number; opposite: boolean } | null {
+  if (body.length < 8 || body[0] !== EMOTE_OPCODE) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const flags = dv.getUint16(6, true);
+  return { clientId: dv.getUint16(2, true), slot: dv.getUint16(4, true), opposite: (flags & 1) !== 0 };
+}
+
+// The chat queue (chat_emote_queue): up to EMOTE_QUEUE_MAX keys, played in order.
+export class EmoteQueue {
+  private keys: string[] = [];
+
+  get length(): number {
+    return this.keys.length;
+  }
+
+  // A chat line's keys; the entries past the cap are dropped (the exe checks
+  // `num_queued_emotes < 10` before each one).
+  push(keys: readonly string[]): void {
+    for (const k of keys) if (this.keys.length < EMOTE_QUEUE_MAX) this.keys.push(k);
+  }
+
+  head(): string | undefined {
+    return this.keys[0];
+  }
+
+  shift(): string | undefined {
+    return this.keys.shift();
+  }
+
+  clear(): void {
+    this.keys = [];
+  }
+}

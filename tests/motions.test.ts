@@ -18,6 +18,7 @@ import {
   townMotion,
 } from '../client/src/formats/plymotion.ts';
 import { PlayerAnimator } from '../client/src/render/playeranim.ts';
+import { EMOTE_KEYS, EMOTE_SLOTS, emoteRecord } from '../client/src/formats/emotes.ts';
 import { CharaMotions, charaMotionRecord } from '../client/src/classic/playerview.ts';
 import { buildPlayerModel, CLASS_NAMES, classLetter, DEFAULT_APPEARANCE, parsePlayerAssets } from '../client/src/render/playermodel.ts';
 
@@ -197,6 +198,35 @@ for (let cls = 0; cls < 12; cls++) {
     }
   }
   console.log(`charamakingmot.bml: 9 records decoded (${keys} keys), played on FOmar/FOmarl/HUnewearl`);
+}
+
+// 4c. Emotes (formats/emotes.ts): every key's town record is a town slot inside
+//     the archive, every field record (plyemotedata.ts) is a play-once hold inside
+//     the archive for all classes and weapon columns; the 6x58 emote plays on the
+//     archive's motions.
+{
+  for (const key of EMOTE_KEYS) {
+    const t = emoteRecord(0, 0, EMOTE_SLOTS.town[key], false);
+    if (t.index < 0 || t.index >= motions.count) fail(`emote ${key} town: entry ${t.index} out of range`);
+  }
+  for (let cls = 0; cls < 12; cls++) {
+    for (let w = 0; w < 19; w++) {
+      for (const key of EMOTE_KEYS) {
+        const r = emoteRecord(cls, w, EMOTE_SLOTS.field[key], true);
+        if (r.index < 0 || r.index >= motions.count) fail(`emote ${key} field ${CLASS_NAMES[cls]} weapon ${w}: entry ${r.index} out of range`);
+        if (r.mode !== 3 || r.next !== -1) fail(`emote ${key} field ${CLASS_NAMES[cls]} weapon ${w}: mode ${r.mode} next ${r.next}, expected a hold`);
+        if (!(r.speed > 0)) fail(`emote ${key} field ${CLASS_NAMES[cls]} weapon ${w}: speed ${r.speed}`);
+      }
+    }
+  }
+  const L = classLetter(11);
+  const assets = parsePlayerAssets(11, new Uint8Array(readFileSync(join(DATA, `pl${L}nj.bml`))), new Uint8Array(readFileSync(join(DATA, `pl${L}tex.afs`))));
+  const model = buildPlayerModel(assets, DEFAULT_APPEARANCE);
+  const anim = new PlayerAnimator(model.partBones[0], assets.parts.get(`pl${L}bdy00.nj`)!, motions);
+  anim.play(emoteRecord(11, 0, EMOTE_SLOTS.field.f1, true), 1);
+  for (let i = 0; i < 400 && !anim.ended; i++) anim.update(1 / 30);
+  if (!anim.ended) fail('field emote F1 never reached its last frame (mode 3 holds)');
+  console.log('emotes: 46 keys, town and field records in range, field F1 holds on the last frame');
 }
 
 if (failures) {

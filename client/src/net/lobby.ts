@@ -15,6 +15,7 @@ import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
 import type { PlayerAppearance } from '../render/playermodel.ts';
 import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
+import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand } from '../formats/emotes.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -55,6 +56,8 @@ export interface LobbyEvents {
   playerLeft: (clientId: number) => void;
   moved: (p: LobbyPlayer) => void;
   teleported: (p: LobbyPlayer) => void; // 6x55: placed at once, no walk
+  // 6x58: another player's emote (slot in the map of the session's kind; opposite = flag 1).
+  emote: (p: LobbyPlayer, slot: number, opposite: boolean) => void;
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
@@ -127,6 +130,9 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
 export class Lobby {
   readonly conn: BBConnection;
   players = new Map<number, LobbyPlayer>();
+  // The local player's chat emote keys ({key} in a sent line, formats/emotes.ts);
+  // the view plays and sends them (render/lobbyview.ts).
+  readonly emoteQueue = new EmoteQueue();
   selfId = -1;
   leaderId = -1;
   lobbyNumber = 0;
@@ -331,6 +337,11 @@ export class Lobby {
             p.moving = false;
             this.emit('teleported', p);
             break;
+          case 0x58: { // emote {u16 emote slot, u16 flags} (formats/emotes.ts; the player plays it)
+            const e = parseEmoteSubcommand(body);
+            if (e) this.emit('emote', p, e.slot, e.opposite);
+            break;
+          }
           case 0x25: // equip {item id, slot}: the weapon is tracked (playerweapon.ts)
           case 0x26: // unequip {item id}
             if (p.inventory && body.length >= 8 && applyRemoteEquip(p.inventory, dv.getUint32(4, true), sub === 0x25)) {
@@ -364,6 +375,8 @@ export class Lobby {
   }
 
   sendChat(text: string): void {
+    // process_chat_message on the sent line: its emote keys queue for this player.
+    this.emoteQueue.push(parseEmoteKeys(text));
     const s = `\tE${text}`;
     const body = new Uint8Array(8 + (s.length + 1) * 2 + 2);
     const dv = new DataView(body.buffer);
