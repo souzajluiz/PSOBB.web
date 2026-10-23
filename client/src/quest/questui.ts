@@ -48,6 +48,7 @@ import { QUEST_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawSelectBar, drawWindowFrame, textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
+import { GRAVE_LINE_STEP } from './cmodegrave.ts';
 
 export const QUEST_WINDOW = { x: 88, y: 120, w: 384, h: 80 }; // GUI 0xbe, 0x00971d18
 export const QUEST_LIST_POS = [106, 120] as const; // GUI 0x39
@@ -106,6 +107,10 @@ export class QuestUi {
   // Fixed windows of a mode's HUD (the Challenge Mode timer, Area counter and
   // result panel, quest/cmoderun.ts), keyed by name.
   private huds = new Map<string, { x: number; y: number; lines: string[] }>();
+  // Labels pinned to a world point (a grave's text, quest/cmodegrave.ts): drawn
+  // with no frame, centred on the projected point, lines going down, at `alpha`;
+  // dropped while the point is behind the camera.
+  private worldHuds = new Map<string, { pos: THREE.Vector3; lines: string[]; alpha: number }>();
   private raf = 0;
   private last = 0;
   private acc = 0;
@@ -218,6 +223,13 @@ export class QuestUi {
   setHud(id: string, win: { x: number; y: number; lines: string[] } | null): void {
     if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(questText) });
     else this.huds.delete(id);
+  }
+
+  // A label at a world point (x, y, z), or null to drop it. The lines are drawn
+  // from the projected point down, GRAVE_LINE_STEP apart in the 640x480 space.
+  setWorldHud(id: string, label: { x: number; y: number; z: number; lines: string[]; alpha: number } | null): void {
+    if (label && label.alpha > 0) this.worldHuds.set(id, { pos: new THREE.Vector3(label.x, label.y, label.z), lines: label.lines.map(questText), alpha: label.alpha });
+    else this.worldHuds.delete(id);
   }
 
   // --- lists ---------------------------------------------------------------------
@@ -351,6 +363,18 @@ export class QuestUi {
       this.drawText(this.boardCtx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
     }
     for (const h of this.huds.values()) this.drawText(ctx, h.x, h.y, h.lines, extra);
+    if (cam) {
+      for (const w of this.worldHuds.values()) {
+        const p = projectHead(cam, w.pos, 0, VW + extra);
+        if (!p.visible) continue;
+        ctx.save();
+        ctx.globalAlpha = w.alpha;
+        w.lines.forEach((l, i) => {
+          if (l !== '') drawGameText(ctx, l, p.x - gameTextWidth(l) / 2, p.y + i * GRAVE_LINE_STEP, '#ffffff');
+        });
+        ctx.restore();
+      }
+    }
     if (this.window) {
       const W = this.window.rect;
       const lines = this.window.text.split('\n');
@@ -394,6 +418,7 @@ export class QuestUi {
     this.board = null;
     this.boardWait = false;
     this.huds.clear();
+    this.worldHuds.clear();
     for (const l of this.lists) l.resolve(null);
     this.lists = [];
     const r = this.pendingTell;
