@@ -274,7 +274,7 @@ export class QuestTown {
     const vm = npc.params.script === 'quest' ? this.quest?.vm : this.area?.vm;
     if (!vm) return Promise.resolve();
     const t: QuestThread | null = vm.startThread(npc.params.label);
-    this.log(`NPC ${npc.cls.name} (action ${npc.params.action}) talks: ${npc.params.script} label ${npc.params.label}${t ? '' : ' (no code)'}`);
+    this.log(`NPC ${npc.cls?.name ?? '__QUEST_NPC__'} (action ${npc.params.action}) talks: ${npc.params.script} label ${npc.params.label}${t ? '' : ' (no code)'}`);
     if (!t) return Promise.resolve();
     return new Promise((resolve) => (t.onDone = resolve));
   }
