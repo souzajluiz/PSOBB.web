@@ -152,6 +152,8 @@ export interface QuestVMHost {
   goFloor?: (clientId: number, floor: number) => void;
   npcCreated?: (npc: QuestNpcRequest) => void;
   npcKilled?: (clientId: number) => void;
+  // npc_play: 6x69 command 2 (the NPC players follow that client).
+  npcPlay?: (clientId: number) => void;
   questBoardChanged?: (items: QuestBoardItem[]) => void;
   random?: () => number; // [0, 1)
   // set_player_start_position (opcode_p_setpos .c:605051): sends 6x24 and
@@ -1129,6 +1131,11 @@ export class QuestVM {
         this.log(`quest: ${name} client ${npc.clientId}, template ${npc.template}, state ${npc.state} at ${npc.position.join(',')}`);
         return;
       }
+      case 'npc_play': {
+        this.host.npcPlay?.(this.int(a, 0));
+        clearArgs();
+        return;
+      }
       case 'npc_kill': {
         const id = this.int(a, 0);
         const at = this.npcs.findIndex((n) => n.clientId === id);
@@ -1666,7 +1673,7 @@ const ACCEPTED_NO_OPS = new Set([
   'disable_movement1', 'disable_movement2', 'enable_movement1', 'enable_movement2',
   'bgm', 'sound_effect', 'sound_effect_pos', 'create_bgmctrl', 'turn_off_bgm_p2', 'turn_on_bgm_p2',
   'particle', 'particle2', 'particle_id', 'particle_pos', 'add_color_overlay', 'scroll_text',
-  'chat_box', 'chat_bubble', 'npc_talk_on', 'npc_talk_off', 'npc_stop', 'npc_play', 'npc_nont',
+  'chat_box', 'chat_bubble', 'npc_talk_on', 'npc_talk_off', 'npc_stop', 'npc_nont',
   'p_look_at', 'p_look', 'pl_walk', 'pl_walk_V3', 'p_disablewarp', 'p_enablewarp', 'warp_on', 'warp_off',
   'winset_time', 'window_time', 'winend_time', 'prevent_item_select', 'keyword_detect',
   'quest_name', 'set_area_title_number', 'mesend', 'nop',
