@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
-import { enemyModelFor, type EnemyModelContext, type EnemyModelSpec } from '../formats/enemymodels.ts';
+import { enemyModelFor, NPC_ENEMY_TYPES, type EnemyModelContext, type EnemyModelSpec } from '../formats/enemymodels.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { buildEnemy, EnemyArchiveCache, type EnemyArchive, type EnemyPartSpec, type NodeAnimator } from './enemymodel.ts';
 import { disposeTree } from './dispose.ts';
@@ -48,6 +48,8 @@ export class EnemyLayer {
   private generation = 0;
   private byIndex = new Map<number, THREE.Object3D>(); // e.dat entry index -> model root
   private worldByIndex = new Map<number, THREE.Object3D>(); // -> its world-placed children
+  // Quest NPCs the enemy factories build (NPC_ENEMY_TYPES): always shown, even in a game.
+  private npcIndices = new Set<number>();
   private hidden = false; // hideAll() was called for the current floor
   startHidden = false; // games: every floor starts with all enemies hidden (waves show them)
   stats: EnemyLayerStats = { placed: 0, unresolved: [], errors: [] };
@@ -64,6 +66,7 @@ export class EnemyLayer {
   async show(items: PlacedEntity[], ctx: EnemyModelContext): Promise<Set<PlacedEntity>> {
     this.clear();
     this.hidden = this.startHidden;
+    this.npcIndices.clear();
     const gen = ++this.generation;
     const root = new THREE.Group();
     root.name = 'enemies';
@@ -73,7 +76,8 @@ export class EnemyLayer {
     const instances: EnemyInstance[] = [];
     for (const p of items) {
       const e = p.entity;
-      if (e.kind !== 'enemy' || p.category !== 'enemy') continue;
+      const isNpc = p.category === 'npc' && NPC_ENEMY_TYPES.has(e.type);
+      if (e.kind !== 'enemy' || (p.category !== 'enemy' && !isNpc)) continue;
       const spec = enemyModelFor(e, ctx);
       if (!spec) {
         stats.unresolved.push(p.name);
@@ -94,14 +98,15 @@ export class EnemyLayer {
         built.root.rotation.y = p.yaw;
         built.root.name = `${spec.name} #${e.index}`;
         built.root.userData.entity = p;
-        built.root.visible = !this.hidden;
+        built.root.visible = !this.hidden || isNpc;
+        if (isNpc) this.npcIndices.add(e.index);
         this.byIndex.set(e.index, built.root);
         root.add(built.root);
         // World-placed children sit at the arena origin, not under the entry.
         const world = built.world.children.length ? built.world : null;
         if (world) {
           world.name = `${spec.name} #${e.index} children`;
-          world.visible = !this.hidden;
+          world.visible = !this.hidden || isNpc;
           root.add(world);
           this.worldByIndex.set(e.index, world);
         }
@@ -160,8 +165,8 @@ export class EnemyLayer {
   // Hides every enemy (models built later start hidden too) until setVisible().
   hideAll(): void {
     this.hidden = true;
-    for (const r of this.byIndex.values()) r.visible = false;
-    for (const r of this.worldByIndex.values()) r.visible = false;
+    for (const [i, r] of this.byIndex) if (!this.npcIndices.has(i)) r.visible = false;
+    for (const [i, r] of this.worldByIndex) if (!this.npcIndices.has(i)) r.visible = false;
   }
 
   // Shows or hides the enemy of e.dat entry `index` (wave spawns and deaths).
