@@ -13652,3 +13652,52 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+## 2026-10-23: symbol chat picture, End-key picker and the Home leaf list
+
+**What changed:** the three parts of the symbol chat that the 6x07 wire needed. The picture over the speaker (`classic/symbolchat.ts` for the art and the list rows, `classic/chat.ts` ChatBubble.sayParts / ChatBubbles.saySymbol / ChatLine.receiveSymbol); the End-key picker in the field (`classic/field.ts`); the Home leaf 0x12 list (`classic/symbolchatlist.ts`, opened from `classic/lobby.ts` menuAction 0x12, 'home' mode: a decided row previews it). `net/game.ts`: `playerName(clientId)` (the balloon's name tab). `classic/main.ts`: the bubble textures carry hyouji 9..12. Tests: `tests/symbolchat.test.ts` (the art cells, the sound and colour lookups, the 12 rows, drawSymbolParts on a recording context, the list's keys in both modes).
+
+**Premise corrections:**
+- The symbol art is not a loose file in `~/Downloads/psobb-client/data`. It is in `data.gsl`: `f256_hyouji.prs` (15 textures, 256 x 256). The corner sheets are textures 9..12 (8 x 8 cells of 32 texels, the sheet index is the object's bits 6-7), the face cells come from the same archive (see ASSUMED). `symbolchat.dat` (the default chats, 1344 bytes, the exe reads 0x4E0) is also in `data.gsl`; the port does not need it, the character file carries the chats.
+- The exe's 6x07 sender is not the End key's handler (not traced, see Left). What is traced: `send_chat_message_symbol_chat` (dump 754781) builds the subcommand from the chat's entry +0x2C..+0x68 (the 0x3C SymbolChatT, copied unchanged) with the sender's `g_CurrentPlayerSlotIndex` as the client id, then `checked_call_packet0x60_subcommand`, which also runs it on the sender. So the sender's own balloon is shown, as the port now does.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump lines):
+- `ChatBubbleEntity_RenderChatParts_00720b34` (686361): life `*(short*)(this+0x88) = 0x5a` (90 frames), parts through `symbol_chat_parts_render` (675593), `PlayDirectionalSound_0077d89c(spec >> 5 & 0xf)`.
+- `SnowBerill_UpdatePlayerInteractionState_00718554` (679891): the balloon of the speaker (the entity id at +0x8a), a new one when none is open; `action_symbol_chat` (754836) calls it with flags 2 for a received 6x07.
+- `symbol_chat_parts_render` (675593): corners (u16 at SymbolChatT + 4 + 2i) and faces (4 bytes at SymbolChatT + 0xC + 4i: type, x, y, flags); a face type 0xFF is no part (`UIElement_UpdatePositionAndRender` with -1).
+- `UpdateListWindowElementRenderState_007141a4` (675213): the corner's object is the low byte Z (`!= 0xff` is the none test); the cell is `(Z & 7) * 32, (Z >> 3 & 7) * 32` (`_DAT_0096fc20` = 32.0) on sheet `(Z >> 6 & 3) + 9`. The swap flags (the callee's stack arguments 6 and 7) are the H / V flips.
+- Face ids 0x00..0x2F: the element table at 0x0096F920 (8-byte stride; x = first float, y = second) gives 16-texel cells on a 128 x 96 grid (`(id & 7) * 16`, `(id >> 3) * 16`, read with `tools/exedata.py read 0096f920 f 256`).
+- Colours: DAT_0096F900 = DWORD_0096FB68 (8 ARGB: cfcfcf, f3503c, ffa32f, dffd04, 79fd79, 87acfa, d58bf6, 787878). `ListWindowObject_SetElementVisualState_007146d5` (reached from 007146b9) sets the list window element's colour from `DWORD_0096fb68[(spec >> 2) & 7]`: that is the plate element, not a face.
+- Sounds: DAT_00979670 = 1398..1405, 1416 (`PlayDirectionalSoundEffect_0077d8a0` returns above index 8).
+- Home leaf: `ChatShortcutMenuWindow_Process_00758900` (728631): state 1 builds 12 rows (`GetChatMessageStringId_0077d910`: invalid = unitxt(11, 0xEA), an empty name = unitxt(11, 0xEB)), title unitxt(11, 0x44), width 220; state 2 on a chosen row calls `ProcessChatMessageType_0077d880` (the sound) and goes on to the option list (state 5), the item window (6..9) and the close (4). Those states are not ported.
+- Validity: `ChatMessage_IsValid_0077d948`; `ChatMessage_InitializeStruct_0077defc` (754882) sets the empty corners to 0xFF and the empty face types to 0xFF.
+- `InitializeChatGroups_0077dfb4` (754945) loads `symbolchat.dat` (0x4E0 bytes) as the session's default chats (6 with the present bit, names from unitxt group 11 from 0xE4). The character file carries them in the port, so this is not ported.
+- Chat sender dispatch: `SendChatMessageDispatcher_0077d710` (754225) and `send_chat_message` (754259): chat type 3 (`symbol_chat`) with the slot index at +4 goes to `send_chat_message_symbol_chat`. Who builds type 3 in the in-game key path was not found in this pass.
+
+**newserv evidence:** `DEFAULT_SYMBOL_CHATS` (`vendor/newserv/src/SaveFileFormats.cc`, line 31) uses 0xFFFF for an empty corner, so the object test must be the low byte (as the port does), not the whole word.
+
+**Ported:**
+- The picture: 4 corner cells (32 texels, hyouji 9..12, colour multiply, H / V flips) and up to 12 face cells (16 texels from texture 12, H flip from flags bit 0), on a 64 px plate centred on the balloon. The balloon lives 90 frames and is in the grow / shrink states of a text balloon. The speaker's directional sound plays when the spec gives an index 0..8.
+- End key (the key config's Symbol Chat role, `KEYS.symbolChat`): opens the 12-row list in 'chat' mode; a decided valid row goes to `Game.sendSymbolChat` and to the sender's own balloon; Cancel closes. The field's input is blocked while the list is open.
+- Home leaf 0x12: the same 12 rows in 'home' mode; a decided valid row shows its picture over the player's own head (the sound too). Cancel closes.
+- 6x07 receive: the field draws the picture over the sender (name from `Game.playerName`).
+
+**ASSUMED** (marked in the code too):
+- The corner colour index is bits 8-10 and the flips are bits 11 / 12. The exe's caller passes these as the callee's stack arguments, and the dump drops the pushes; the bit layout is newserv's.
+- The plate: a 64 px square centred on the balloon; corner i at the plate's TL / TR / BL / BR quarter. The exe's offsets (31 / 30 texels, the frame pieces at 0x0096F8E0) are not reproduced; the shape presets (0x0096FB88 / 0x0096FB8C, 2 / 66 and 130 / 194) are ignored.
+- The face sheet is hyouji texture 12 (the 16-texel grid fits its top-left area; the element's texture id is set at construction and was not traced).
+- Face parts take flags bit 0 only (the exe's `& 1` at the call); bit 1 is not drawn.
+- The balloon's size is the plate plus the text pad (84 px).
+- The Home leaf's window is 220 wide (exe), 8 rows visible, placed at (16, 40); the height 188 is the exe's second float (not confirmed).
+- The End key opens the same list as the Home leaf's; the exe's End path (the "symbol chat quickmenu" the dump mentions at 701678) is not traced.
+- The Home leaf's decided row previews; the sender's own balloon on a preview is ASSUMED too (the exe's ProcessChatMessageType plays the sound only).
+- The sender's client id is the port's `selfId` (the exe uses `g_CurrentPlayerSlotIndex`; these are the lobby id in BB).
+
+**Tests:** `node tests/symbolchat.test.ts`: ALL PASS (the earlier checks plus the new art, sound, row and list checks). `tsc --noEmit -p client` with the main checkout's `client/node_modules/.bin/tsc`: no new errors (only the existing missing `three`, `@capacitor/*`, `ImportMeta.env`, vite and OrbitControls ones). The other unit tests fail in this worktree for the same environment reasons as before (no `three` package, no `vendor/newserv/system` tables); the ones that need `three` could not be run, so `classic/chat.ts`, `classic/lobby.ts`, `classic/field.ts` and `net/game.ts` changes are checked by tsc only. Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The Home leaf's option list (state 5: the rows of `CreateOptionList_00759e10`), the item window (states 6..9: the icon editor, `ChatShortcutMenuWindow_CreateChatItemWindow_00759ee8`) and the capture window (`ToggleCaptureWindow_00759fcc`). Their unitxt rows are not read.
+2. The capture picture: `action_symbol_chat` (754836) stores a chat with spec bit 9 (0x200) into a single global slot (`_DAT_00a9b3cc`); the capture art (0xF942 / 0xF943) is not kept.
+3. The in-game End key's exe path: find the code that builds chat type 3 (`send_chat_message` with `symbol_chat`) and the quick menu (701678 comment).
+4. The chat cooldown (`is_chat_message_cooldown_over` 679808 / `send_chat_message_with_cooldown` 754191) is not applied to the picker's send.
+5. The plate's real shape and offsets (the presets, the frame pieces at 0x0096F8E0, the element sizes of 0x0096F920 for ids 0x30..0x3B), and the face sheet's texture id.
+6. Lobby receive: no 6x07 reaches the lobby (the server sends it in a game only), so the lobby only previews.

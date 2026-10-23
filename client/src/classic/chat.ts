@@ -33,6 +33,8 @@ import { drawGameText, gameTextWidth, GAME_TEXT } from './gametext.ts';
 import { se } from '../audio/se.ts';
 import { activeColorEscape } from './textcodes.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
+import { drawSymbolParts, symbolSoundId, SYMBOL_CHAT_FRAMES, SYMBOL_PLATE, type TintFn } from './symbolchat.ts';
+import type { SymbolChat } from '../net/symbolchat.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
 export const CHAT_MAX_LENGTH = 0x4f; // FUN_00713540 -> FUN_007312f0
@@ -214,7 +216,30 @@ const toBams = (y: number, x: number) => Math.round((Math.atan2(y, x) * 0x10000)
 export interface BubbleTextures {
   body: CanvasImageSource; // f256_hyouji.prs texture 1 (white rounded block at 98..194 x 0..96)
   tab: CanvasImageSource; // texturejapanese.xvm texture 0 (name tab at v 237..256)
+  // f256_hyouji.prs textures 9..12: the symbol chat's corner sheets (classic/symbolchat.ts).
+  symbol: readonly CanvasImageSource[];
 }
+
+// Colour multiply of a sheet, cached per image and colour (the balloon's tint, as `tinted`).
+const symbolTintCache = new WeakMap<object, Map<number, OffscreenCanvas>>();
+const symbolTint: TintFn = (img, colour) => {
+  let m = symbolTintCache.get(img as object);
+  if (!m) symbolTintCache.set(img as object, (m = new Map()));
+  let c = m.get(colour);
+  if (c) return c;
+  const w = (img as { width: number }).width;
+  const h = (img as { height: number }).height;
+  c = new OffscreenCanvas(w, h);
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = 'multiply';
+  g.fillStyle = rgb(colour & 0xffffff);
+  g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = 'destination-in';
+  g.drawImage(img, 0, 0);
+  m.set(colour, c);
+  return c;
+};
 
 // The projected head (window space): `dist` from the camera, `front` in front of it.
 export interface BubbleHead {
@@ -264,6 +289,8 @@ export class ChatBubble {
   docked = false; // flag 0x200 (and 0x85 bit 0): on a dock slot
   slot = -1; // 0x87: the dock slot, -1 none
   tailOn = false; // flag 0x20: the tail to the head
+  // The symbol chat drawn instead of the text (sayParts), null for a text balloon.
+  symbol: SymbolChat | null = null;
 
   constructor(clientId: number, name: string) {
     this.clientId = clientId;
@@ -280,11 +307,26 @@ export class ChatBubble {
   // `wrap`: width limit; quest balloons (flag 4, ChatBubbleEntity_UpdateText
   // AndSize_00720954) pass Infinity and keep the text's own line breaks.
   say(text: string, wrap: number = B.wrap): void {
+    this.symbol = null;
     this.lines = wrapGameText(text, wrap);
     this.textW = Math.max(...this.lines.map(gameTextWidth));
     const textH = this.lines.length * GAME_TEXT.lineHeight - 6;
     this.target = { w: this.textW + B.pad, h: textH + B.pad };
     this.life = Math.round(text.length * B.lifeA + B.lifeB);
+    this.textShown = false;
+    if (this.state !== 0) this.state = 5;
+  }
+
+  // ChatBubbleEntity_RenderChatParts_00720b34: a symbol chat in place of the text.
+  // The balloon is the plate's size (ASSUMED: the text pad added), it lives
+  // SYMBOL_CHAT_FRAMES frames (`*(short*)(this+0x88) = 0x5a`) and it goes through
+  // the same grow / shrink states as a new text (state 5 when open).
+  sayParts(chat: SymbolChat): void {
+    this.symbol = chat;
+    this.lines = [];
+    this.textW = 0;
+    this.target = { w: SYMBOL_PLATE + B.pad, h: SYMBOL_PLATE + B.pad };
+    this.life = SYMBOL_CHAT_FRAMES;
     this.textShown = false;
     if (this.state !== 0) this.state = 5;
   }
@@ -551,9 +593,18 @@ export class ChatBubble {
     ctx.restore();
     if (this.tailOn) this.drawTail(ctx, rgb(this.color), 0, 0);
     if (!this.textShown) return;
-    const tx = this.rect.x + 10;
-    const ty = this.rect.y + 10;
-    this.lines.forEach((l, i) => drawGameText(ctx, l, tx, ty + i * GAME_TEXT.lineHeight, '#000000'));
+    if (this.symbol) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(s, s);
+      ctx.translate(-cx, -cy);
+      drawSymbolParts(ctx, this.symbol, tex.symbol, cx, cy, symbolTint);
+      ctx.restore();
+    } else {
+      const tx = this.rect.x + 10;
+      const ty = this.rect.y + 10;
+      this.lines.forEach((l, i) => drawGameText(ctx, l, tx, ty + i * GAME_TEXT.lineHeight, '#000000'));
+    }
     this.drawNameTab(ctx, tex.tab);
   }
 
@@ -667,7 +718,8 @@ export class ChatBubbles {
   // C rand(): 0..32767 (FUN_0071f0c0 retries). Tests may replace it.
   rand: () => number = () => Math.floor(Math.random() * 32768);
 
-  say(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
+  // The balloon of a speaker: the one open for it, else a new one (the farthest is replaced when all four are taken).
+  private balloonFor(clientId: number, name: string, distanceTo: (id: number) => number): ChatBubble {
     let b = this.list.find((x) => x.clientId === clientId && x.alive);
     if (!b) {
       if (this.list.length >= B.maxBubbles) {
@@ -681,7 +733,19 @@ export class ChatBubbles {
       b = new ChatBubble(clientId, name);
       this.list.push(b);
     }
-    b.say(text);
+    return b;
+  }
+
+  say(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
+    this.balloonFor(clientId, name, distanceTo).say(text);
+  }
+
+  // A symbol chat (6x07, or the sender's own): the balloon shows the picture and
+  // the speaker's directional sound plays (ChatBubbleEntity_RenderChatParts_00720b34).
+  saySymbol(clientId: number, name: string, chat: SymbolChat, distanceTo: (id: number) => number): void {
+    this.balloonFor(clientId, name, distanceTo).sayParts(chat);
+    const snd = symbolSoundId(chat.spec);
+    if (snd !== null) se(snd);
   }
 
   // One game frame; head(id) gives the projected head point.
@@ -788,5 +852,10 @@ export class ChatLine {
     if (!from) return;
     se(SE_CHAT);
     this.bubbles.say(from.clientId, from.name, text, distanceTo);
+  }
+
+  // A symbol chat from a player (6x07). No log line: action_symbol_chat (dump 754836) writes none.
+  receiveSymbol(clientId: number, name: string, chat: SymbolChat, distanceTo: (id: number) => number): void {
+    this.bubbles.saySymbol(clientId, name, chat, distanceTo);
   }
 }

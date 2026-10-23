@@ -205,14 +205,14 @@ async function main(): Promise<void> {
       texlist: await textureBitmaps(await files.textures(['textureenglish.xvm', 'texturejapanese.xvm'])),
     });
   // The word balloons of the lobby and of the field.
-  const bubbleTextures = async (): Promise<BubbleTextures> => ({ body: hyouji[1], tab: (await loadHudTextures()).texlist[0] });
+  const bubbleTextures = async (): Promise<BubbleTextures> => ({ body: hyouji[1], tab: (await loadHudTextures()).texlist[0], symbol: hyouji.slice(9, 13) });
   const loadHud = async (infoCols: LobbyHud['infoCols']): Promise<LobbyHud> => {
     const tex = await loadHudTextures();
     unitxt ??= await loadUnitxt();
     const table = unitxt;
     return {
       skin: titleAssets.skin,
-      bubble: { body: hyouji[1], tab: tex.texlist[0] },
+      bubble: { body: hyouji[1], tab: tex.texlist[0], symbol: hyouji.slice(9, 13) },
       menu: { panel: tex.panel, labels: tex.texlist[2] },
       text: (g, i) => (table[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
       itemIcons: hyouji[1],
@@ -314,7 +314,11 @@ async function main(): Promise<void> {
         void load.then((view) => {
           console.log(`[classic] entered game "${game.name}"`);
           showWorld(true);
-          const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled);
+          const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled, {
+            skin: titleAssets.skin,
+            symbolChats: () => session?.character?.symbolChats ?? [],
+            text: (g, i) => (unitxt?.[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
+          });
           Object.assign(window, { classicGame: field, classicLobby: undefined });
           show(field);
         }),

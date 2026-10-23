@@ -620,10 +620,15 @@ export class Game extends Lobby {
     void rest();
   }
 
-  // Sends one symbol chat to the room (6x07, symbolchat.ts). Only the wire part is
-  // ported: the in-game symbol chat window that picks the chat is not.
+  // Sends one symbol chat to the room (6x07, symbolchat.ts). The End-key picker is
+  // classic/symbolchatlist.ts; the sender's own balloon is the screen's.
   sendSymbolChat(chat: SymbolChat): void {
     this.sendSubcommand(SYMBOL_CHAT_SUBCOMMAND, symbolChatSubcommandPayload(this.selfId, chat));
+  }
+
+  // The name of a player in the game (the symbol chat's balloon tab); '' when unknown.
+  playerName(clientId: number): string {
+    return this.players.get(clientId)?.name ?? '';
   }
 
   // Our own 6x0A, 6x0B and 6x5F go through here too, so the saved tables
@@ -675,7 +680,7 @@ export class Game extends Lobby {
         break;
       case 0x07: {
         // 6x07 symbol chat (G_SymbolChat_6x07): the server forwards it from the
-        // sender in this room. The bubble is not drawn yet (symbolchat.ts).
+        // sender in this room; the screen draws the picture over the sender (classic/chat.ts).
         const sc = parseSymbolChatSubcommand(body);
         if (sc) this.emit('symbolChat', sc.clientId, sc.chat);
         break;
