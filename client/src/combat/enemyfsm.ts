@@ -17,6 +17,7 @@ import {
   type AiState,
   type AiTarget,
   type EnemyAiMotion,
+  type EnemyAiProfile,
   type EnemyBrain,
 } from './enemyai.ts';
 import type { EnemyAttackData } from '../formats/battleparams.ts';
@@ -1146,6 +1147,325 @@ export class RappyFakeDeath {
       this.z += Math.cos(this.angle) * this.speed;
     }
     return null;
+  }
+}
+
+// --- Rag Rappy / Al Rappy: its own alive FSM ----------------------------------
+//
+// update_rappy (0x005258e0, the entity's update slot, rappy_vtable +0x04)
+// dispatches on +0x32e: 0 wander (RappyProcessMovementAndAnimation_00526708), 1
+// chase (RappyProcessState_00526008: +0x380 0 chase, 1 engaged chase, 3 the
+// get-up spin, 4 the run-away), 2 the lunge (RappyProcessState_00525d94), 3 the
+// recovery (RappyProcessState_00525d2c), 4 vulnerable (PlayerUpdateState_Combat),
+// 5 standard. The animation rows are the table 0x009bbc20: 0 wait (motion 6, 0.9
+// loop), 3 walk (9, loop), 4 run (3, loop), 5 attack (0, once), 9 get-up (7).
+//
+// Writers (byte scan of PsoBB.exe for disp32 0x32e stores, 2026-10-23): inside
+// update_rappy's tree the only store is the get-up's, PlayerProcessVulnerableState_00525c90
+// (0x00525cf4, word 1). Nothing in the wander, chase, lunge or recovery code writes
+// 0x32e, so the alive entries (wander -> chase on a player, chase -> lunge in reach,
+// lunge -> recovery) have no exe writer found: ASSUMED here.
+//
+// The vtable +0x44 test called with 30 is a think gate, not a notice test: the
+// function at 0x007713a4 returns (g_FrameCounter % 30) == (entity +0x1c word) % 30,
+// so each Rappy thinks once every 30 ticks at its own phase (the wander's home test
+// runs only then; the chase and the lunge run every tick).
+//
+// Constants: the record 0x009bc144 (g_RappyMaxAttackRange) gives the range 150 and
+// the turn rate; _DAT_00921bcc = 10000 (100 squared) is the notice distance, the
+// engaged chase drops out past _DAT_00921bd8 = 22500 (150 squared); _DAT_00921bf4
+// 1.0 and _DAT_00921bf8 0.95 are the lunge's launch speed and drag; _DAT_00921bfc
+// 11.0, 14.0, the lunge's wait 0x1e and the recovery 0xf (ctor +0x342 / +0x344).
+export const RAPPY_ALIVE = {
+  gate: 30, // vtable +0x44(0x1e)
+  notice: 100, // _DAT_00921bcc = 10000 (squared distance)
+  lose: 150, // _DAT_00921bd8 = 22500 (squared); also the record's range 150
+  turnFrames: 11, // lunge: check_entity_animation_elapsed_threshold(11.0)
+  hitFrame: 14, // lunge: the hit at elapsed 14.0 (try_hit 1.0, knockback 3.0)
+  lungeWait: 30, // +0x344 = 0x1e after the hit
+  lungeSpeed: 1, // _DAT_00921bf4 (1.0) times the record speed
+  lungeDrag: 0.95, // _DAT_00921bf8 (0.95) on each launch step
+  knockback: 3, // cause_knockback(3.0) = 0x40400000
+  damageMult: 1, // try_hit_entity(1.0)
+  recoverTicks: 15, // +0x342 / +0x344 = 0xf
+  strollDistance: 30, // current_target_idx = 0x41f00000 (30.0) in the walk sub-state
+  sfxIdle: 0xc4, // the wander's pause end (episode 0 / 1; episode 2's table not traced)
+  sfxHit: 0xc6, // the lunge's hit (episode 0 / 1; episode 2's table not traced)
+} as const;
+
+export type RappyState = 'wander' | 'chase' | 'lunge' | 'recover' | 'dead';
+type RappyWanderSub = 'idle' | 'stroll' | 'home';
+type RappyLungeSub = 'turn' | 'launch' | 'wait' | 'coast';
+
+export class RappyAi extends BrainBase {
+  state: RappyState = 'wander';
+  // Sound effects for render/combat.ts to play at the Rappy.
+  sounds: number[] = [];
+  private profile: EnemyAiProfile;
+  private speed: number; // the record's move speed (358[1]), per tick
+  private turn: number; // radians per tick (358[2])
+  private detect: number; // acquisition radius (AI_CONFIG, ASSUMED to match the exe's target lookup)
+  private reach: number;
+  private reachAngle: number;
+  private leash: number; // ASSUMED: the e.dat wander radius + the collision radius (the generic AI's rule)
+  private home: { x: number; z: number };
+  private entityId: number;
+  private clock = 0;
+  private engaged = false; // +0x380 == 1: the engaged chase
+  private wanderSub: RappyWanderSub = 'idle';
+  private timer = 0;
+  private stroll = 0;
+  private strollHeading = 0;
+  private lungeSub: RappyLungeSub = 'turn';
+  private elapsed = 0;
+  private vx = 0;
+  private vz = 0;
+
+  constructor(opts: {
+    x: number;
+    z: number;
+    angle: number;
+    profile: EnemyAiProfile;
+    detect: number;
+    turnRate: number; // BAMS per tick
+    attack: EnemyAttackData | null;
+    speed: number;
+    radius: number;
+    wander: number;
+    entityId: number;
+    rng: () => number;
+  }) {
+    super(opts.x, opts.z, opts.angle, opts.rng);
+    this.profile = opts.profile;
+    this.detect = opts.detect;
+    this.speed = opts.speed;
+    this.turn = opts.turnRate * BAMS_TO_RAD;
+    this.leash = opts.wander + opts.radius;
+    this.home = { x: opts.x, z: opts.z };
+    this.entityId = opts.entityId;
+    this.reach = opts.attack && opts.attack.distanceX > 0 ? opts.attack.distanceX : 0;
+    this.reachAngle = ((opts.attack?.angle ?? 0x2000) & 0xffff) * BAMS_TO_RAD;
+    this.timer = this.pauseTicks();
+    this.current = this.profile.idle;
+  }
+
+  // ASSUMED: the wander's pause (the exe draws g_EnemyAnimBaseDuration + r and
+  // scales it by runtime globals not traced); 30 to 60 ticks here.
+  private pauseTicks(): number {
+    return 30 + Math.floor(this.rng() * 30);
+  }
+
+  private walkMotion(): EnemyAiMotion | null {
+    return this.profile.walk ?? this.profile.idle;
+  }
+
+  private motionFor(): EnemyAiMotion | null {
+    switch (this.state) {
+      case 'wander':
+        return this.wanderSub === 'idle' ? this.profile.idle : this.walkMotion();
+      case 'chase':
+        return this.walkMotion();
+      case 'lunge':
+        return this.profile.attacks[0] ?? null;
+      default:
+        return null;
+    }
+  }
+
+  override get motion(): EnemyAiMotion | null {
+    return this.current;
+  }
+
+  private setMotion(out: AiFrame, m: EnemyAiMotion | null): void {
+    if (m === this.current) return;
+    this.current = m;
+    out.motion = m;
+  }
+
+  private distSq(t: AiTarget): number {
+    return (t.x - this.x) ** 2 + (t.z - this.z) ** 2;
+  }
+
+  private step(toward: number): void {
+    this.angle = turnToward(this.angle, toward, this.turn);
+    this.x += Math.sin(this.angle) * this.speed;
+    this.z += Math.cos(this.angle) * this.speed;
+  }
+
+  tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
+    const out = this.frame();
+    if (this.state === 'dead') return this.finish(out);
+    this.clock++;
+    switch (this.state) {
+      case 'wander':
+        this.wanderTick(out, targets, this.clock % RAPPY_ALIVE.gate === this.entityId % RAPPY_ALIVE.gate);
+        break;
+      case 'chase':
+        this.chaseTick(out, targets);
+        break;
+      case 'lunge':
+        this.lungeTick(out, targets, animationEnded);
+        break;
+      case 'recover':
+        // update_rappy's recovery (0x00525d2c): count +0x344 down from 15, and
+        // on the tick it is already negative it leaves. Leaves to the chase
+        // (ASSUMED: the exe sets no state here).
+        if (this.timer >= 0) {
+          this.timer--;
+          break;
+        }
+        this.state = this.targetId !== null ? 'chase' : 'wander';
+        this.setMotion(out, this.motionFor());
+        break;
+    }
+    return this.finish(out);
+  }
+
+  private wanderTick(out: AiFrame, targets: readonly AiTarget[], gate: boolean): void {
+    // ASSUMED entry: a player within the detect radius starts the chase.
+    const near = nearest(targets, this.x, this.z, this.detect);
+    if (near) {
+      this.targetId = near.clientId;
+      this.state = 'chase';
+      this.engaged = false;
+      this.setMotion(out, this.walkMotion());
+      return;
+    }
+    // RappyProcessMovementAndAnimation_00526708: on the think tick, out of the
+    // leash the Rappy walks home (animation 3); back inside it wanders again.
+    if (gate) {
+      const dh = Math.hypot(this.x - this.home.x, this.z - this.home.z);
+      if (dh > this.leash) {
+        this.wanderSub = 'home';
+      } else if (this.wanderSub === 'home') {
+        this.wanderSub = 'idle';
+        this.timer = this.pauseTicks();
+      }
+    }
+    if (this.wanderSub === 'home') {
+      const want = Math.atan2(this.home.x - this.x, this.home.z - this.z);
+      this.step(want);
+    } else if (this.wanderSub === 'stroll') {
+      this.step(this.strollHeading);
+      this.stroll -= this.speed;
+      if (this.stroll <= 0) {
+        this.wanderSub = 'idle';
+        this.timer = this.pauseTicks();
+      }
+    } else {
+      // The pause (exe sub 0 / 1): its end plays 0xc4 and starts the 30-unit walk.
+      this.timer--;
+      if (this.timer < 0) {
+        this.sounds.push(RAPPY_ALIVE.sfxIdle);
+        this.wanderSub = 'stroll';
+        this.stroll = RAPPY_ALIVE.strollDistance;
+        this.strollHeading = this.rng() * Math.PI * 2; // ASSUMED: the exe steers with unknown_enemy_behavior_wanderer
+      }
+    }
+    this.setMotion(out, this.motionFor());
+  }
+
+  private chaseTick(out: AiFrame, targets: readonly AiTarget[]): void {
+    const t = this.target(targets);
+    if (!t) {
+      // No target: back to the wander (the exe's mode 0 wanderer, ASSUMED to be the wander).
+      this.state = 'wander';
+      this.engaged = false;
+      this.wanderSub = 'idle';
+      this.timer = this.pauseTicks();
+      this.setMotion(out, this.motionFor());
+      return;
+    }
+    const d2 = this.distSq(t);
+    // Mode 0 -> 1: a player closer than 100 (_DAT_00921bcc) is engaged.
+    if (!this.engaged && d2 < RAPPY_ALIVE.notice * RAPPY_ALIVE.notice) this.engaged = true;
+    this.step(Math.atan2(t.x - this.x, t.z - this.z));
+    // Engaged and past 150 (_DAT_00921bd8): back to mode 0.
+    if (this.engaged && d2 > RAPPY_ALIVE.lose * RAPPY_ALIVE.lose) this.engaged = false;
+    // ASSUMED lunge entry: engaged, within the attack's reach and its angle.
+    // Tested before the drop so a player inside the step distance is still lunged at.
+    if (this.engaged && this.reach > 0 && d2 <= this.reach * this.reach) {
+      const off = Math.abs(wrap(Math.atan2(t.x - this.x, t.z - this.z) - this.angle));
+      if (off < this.reachAngle) {
+        this.state = 'lunge';
+        this.lungeSub = 'turn';
+        this.elapsed = 0;
+        this.setMotion(out, this.motionFor());
+        return;
+      }
+    }
+    // Drop the target past the range (150 squared) or nearer than the speed squared.
+    if (d2 > RAPPY_ALIVE.lose * RAPPY_ALIVE.lose || d2 < this.speed * this.speed) {
+      this.targetId = null;
+      this.state = 'wander';
+      this.engaged = false;
+      this.wanderSub = 'idle';
+      this.timer = this.pauseTicks();
+    }
+    this.setMotion(out, this.motionFor());
+  }
+
+  private lungeTick(out: AiFrame, targets: readonly AiTarget[], animationEnded: boolean): void {
+    this.elapsed++;
+    const t = this.target(targets);
+    if (this.lungeSub === 'turn') {
+      // RappyProcessState_00525d94 sub 0: turn to the target; at 11 frames the
+      // launch: the record speed (x 1.0) along the heading, y cleared.
+      if (t) this.angle = turnToward(this.angle, Math.atan2(t.x - this.x, t.z - this.z), this.turn);
+      if (this.elapsed >= RAPPY_ALIVE.turnFrames) {
+        const v = this.speed * RAPPY_ALIVE.lungeSpeed;
+        this.vx = Math.sin(this.angle) * v;
+        this.vz = Math.cos(this.angle) * v;
+        this.lungeSub = 'launch';
+      }
+    } else if (this.lungeSub === 'launch') {
+      // sub 1: move by the velocity, drag 0.95 on each step; the hit at 14.
+      this.x += this.vx;
+      this.z += this.vz;
+      this.vx *= RAPPY_ALIVE.lungeDrag;
+      this.vz *= RAPPY_ALIVE.lungeDrag;
+      if (this.elapsed >= RAPPY_ALIVE.hitFrame) {
+        // ASSUMED: the target still in reach takes the hit (the exe's
+        // unknown_enemy_attack_should_push_defender test is not traced).
+        if (t) out.hit = { clientId: t.clientId, knockback: RAPPY_ALIVE.knockback, mult: RAPPY_ALIVE.damageMult };
+        this.sounds.push(RAPPY_ALIVE.sfxHit);
+        this.lungeSub = 'wait';
+        this.timer = RAPPY_ALIVE.lungeWait;
+      }
+    } else if (this.lungeSub === 'wait') {
+      // sub 2: 30 ticks standing, then the coast.
+      this.timer--;
+      if (this.timer < 0) this.lungeSub = 'coast';
+    } else {
+      // sub 3: coast on the velocity until the attack animation ends.
+      this.x += this.vx;
+      this.z += this.vz;
+      if (animationEnded) {
+        this.vx = 0;
+        this.vz = 0;
+        this.state = 'recover';
+        this.timer = RAPPY_ALIVE.recoverTicks;
+        this.setMotion(out, this.motionFor());
+      }
+    }
+  }
+
+  onDamage(clientId: number): void {
+    if (this.state === 'dead') return;
+    this.targetId = clientId;
+    // ASSUMED: a hit on a wandering Rappy starts the chase (mode 0); the exe's
+    // hit handler (0x00773afc) does not write +0x32e.
+    if (this.state === 'wander') {
+      this.state = 'chase';
+      this.engaged = false;
+    }
+    this.current = null; // the owner is playing the damage motion
+  }
+
+  resume(): string {
+    if (this.state === 'dead') return this.state;
+    this.current = this.motionFor();
+    return this.state;
   }
 }
 

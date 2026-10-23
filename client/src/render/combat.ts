@@ -40,6 +40,7 @@ import {
   MonestSpawner,
   MOTHMANT_FLY_HEIGHT,
   MothmantAi,
+  RappyAi,
   RappyFakeDeath,
   WolfAi,
   armPackHowl,
@@ -1200,7 +1201,25 @@ export class CombatView {
           const speed = enemySpeeds(movement, 0.5).engagedMove;
           ai = new MothmantAi({ ...at, turnRate: cfg.turnRate, speed, attack, radius, siblingsOn: (id, self) => this.countMothmantTargets(null, id, self), rng: () => this.rng() });
         }
-        else if (profile) ai = new EnemyAi({
+        else if (className === 'TObjEneLappy' && profile) {
+          // The alive Rag / Al Rappy's own FSM (combat/enemyfsm.ts RappyAi). Its
+          // speed is the engaged move, ASSUMED as the fake death's (the record's
+          // +4 speed is written at run time).
+          ai = new RappyAi({
+            x: at.x,
+            z: at.z,
+            angle: at.angle,
+            profile,
+            detect: cfg.detect,
+            turnRate: cfg.turnRate,
+            attack,
+            speed: enemySpeeds(movement, 0.5).engagedMove,
+            radius,
+            wander: Math.max(0, setParams[1]),
+            entityId,
+            rng: () => this.rng(),
+          });
+        } else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
           z: instance.placed.world[2],
           angle: instance.placed.yaw,
@@ -1708,6 +1727,8 @@ export class CombatView {
         for (const ev of ai.events.splice(0))
           if (ev.clientId === this.game.selfId) this.applySelfBuff(ev.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(ev.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       // The Barbarous Wolf's howl: its sound at the wolf, and Jellen / Zalure on this player.
+      // The alive Rappy's wander pause and lunge hit sounds (combat/enemyfsm.ts RappyAi).
+      if (ai instanceof RappyAi) for (const id of ai.sounds.splice(0)) this.playSeAt(id, root.position);
       if (ai instanceof WolfAi) {
         for (const id of ai.sounds.splice(0)) this.playSeAt(id, root.position);
         for (const c of ai.casts.splice(0))
