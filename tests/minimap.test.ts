@@ -23,6 +23,13 @@ import {
   START_DELAY,
   unitsPerPixel,
   type MinimapRoomInput,
+  doorIcon,
+  ICON_GREEN,
+  ICON_RED,
+  raderHideInside,
+  raderIconColour,
+  raderIconIcon,
+  raderIconObject,
 } from '../client/src/classic/minimap.ts';
 import { AREA_MAP_MENU_ID, AREA_MAP_WINDOW, AreaMapWindow, type AreaMapEnv, type AreaMapInput } from '../client/src/classic/areamap.ts';
 import { FieldMenu, validateMenuEntry, type FieldMenuEnv, type MenuRules } from '../client/src/classic/fieldmenu.ts';
@@ -281,6 +288,38 @@ try {
   threw = true;
 }
 eq(threw, true, 'null rooms pointer with rooms: rejected');
+
+// --- object icons: TObjRaderIcon (0x27), TObjDoor icons, TObjRaderHideCol (0x1f) ---
+const pos = { x: 10, y: 0, z: -20 };
+const allOn = () => true;
+const someOff = (f: number) => f !== 0x42;
+// Params as the object sees them: [param1 scale, p2, p3, param4 mode, param5 (count << 16 | base), param6 colour].
+const sw = raderIconObject([2.5, 0, 0, 0, (2 << 16) | 0x41, 0], pos, 0x4000);
+eq(sw.mode, 0, 'TObjRaderIcon: param4 0 is the switch mode');
+eq([sw.count, sw.base], [2, 0x41], 'TObjRaderIcon: switch count and first flag from param5');
+eq(sw.scale, 2.5, 'TObjRaderIcon: scale is param1');
+eq(sw.heading, 0x4000, 'TObjRaderIcon: heading is the yrot');
+eq(raderIconColour(sw, allOn), ICON_GREEN, 'TObjRaderIcon: green while its switches are set');
+eq(raderIconColour(sw, someOff), ICON_RED, 'TObjRaderIcon: red while one of its switches is not set');
+const noSw = raderIconObject([1, 0, 0, 0, 0, 0], pos, 0);
+eq(raderIconColour(noSw, () => false), ICON_GREEN, 'TObjRaderIcon: no switch range is green');
+const big = raderIconObject([1, 0, 0, 0, (20 << 16) | 0xf0, 0], pos, 0);
+eq([big.count, big.base], [12, 0xf0], 'TObjRaderIcon: count clamps to 12, base to 0xff - count');
+const col = raderIconObject([1, 0, 0, 3, 0, 0xffff00ff], pos, 0);
+eq([col.mode, raderIconColour(col, someOff)], [1, 0xffff00ff], 'TObjRaderIcon: a positive param4 is mode 1, its colour is param6');
+eq(raderIconObject([-4, 0, 0, 0, 0, 0], pos, 0).scale, 0, 'TObjRaderIcon: a scale at or below 0 is 0.0');
+const rIcon = raderIconIcon(sw, allOn);
+eq([rIcon.shape, rIcon.scale, rIcon.x, rIcon.z, rIcon.color], [0, 2.5, 10, -20, ICON_GREEN], 'TObjRaderIcon: a shape 0 icon at its position');
+eq(doorIcon(1, 2, 0x100, true).color, ICON_RED, 'TObjDoor: red while locked');
+eq(doorIcon(1, 2, 0x100, false).color, ICON_GREEN, 'TObjDoor: green once unlocked');
+eq([doorIcon(1, 2, 0x100, true).shape, doorIcon(1, 2, 0x100, true).scale, doorIcon(1, 2, 0x100, true).heading], [0, 1, 0x100], 'TObjDoor: shape 0, scale 1, the door heading');
+const hide = { x: 0, y: 0, z: 0, radius: 10, inside: false };
+eq(raderHideInside(hide, { x: 6, y: 0, z: 7 }), true, 'TObjRaderHideCol: squared distance 85 is inside radius 10');
+eq(raderHideInside(hide, { x: 8, y: 0, z: 7 }), false, 'TObjRaderHideCol: squared distance 113 is outside');
+eq(raderHideInside(hide, { x: 6, y: 0, z: 6 }), true, 'TObjRaderHideCol: squared distance 72 is inside');
+eq(raderHideInside(hide, { x: 10, y: 0, z: 0 }), false, 'TObjRaderHideCol: exactly the radius is outside (d^2 < r^2)');
+eq(raderHideInside(hide, { x: 0, y: 9, z: 0 }), true, 'TObjRaderHideCol: the distance is 3D (height counts)');
+eq(raderHideInside(hide, { x: 0, y: 9, z: 5 }), false, 'TObjRaderHideCol: height and XZ together outside');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

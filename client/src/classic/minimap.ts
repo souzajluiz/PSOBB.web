@@ -209,6 +209,7 @@ export interface Icon {
 export interface MinimapPlayer {
   slot: number;
   x: number;
+  y?: number; // the height (TObjRaderHideCol's distance is 3D)
   z: number;
   heading: number; // BAMS
 }
@@ -456,4 +457,91 @@ export class MinimapState {
     this.full.z = z;
     clampPan(this.map, this.full);
   }
+}
+
+// ---- Object icons and the radar hide volume ----
+// Icon colours of the exe's unknown_add_minimap_icon4 calls: 0xffff0000 red,
+// 0xff00ff00 green (ARGB).
+export const ICON_RED = 0xffff0000;
+export const ICON_GREEN = 0xff00ff00;
+
+// TObjRaderIcon (0x0027): create Variant2 (CreateMapObjectRadarCollisionVariant2_006635d8),
+// render MapObjectRadarCollisionRender_00663468, which adds one icon a frame
+// (unknown_add_minimap_icon2, range checked, shape 0 = the switch box, scale
+// = param1, heading = yrot). Param4 (initdata +0x84): mode = 1 when > 0, else
+// 0. Param5: high word = switch count (0..12), low word = first switch flag,
+// at most 0xff - count. Param6: the colour of mode 1.
+// The scale is param1 when it is above 0, else 0.0 (0x00939070).
+export interface RaderIconObject {
+  x: number;
+  y: number;
+  z: number;
+  heading: number; // BAMS
+  scale: number;
+  mode: 0 | 1;
+  count: number;
+  base: number;
+  colour: number; // ARGB, mode 1
+}
+
+export function raderIconObject(params: readonly number[], pos: { x: number; y: number; z: number }, heading: number): RaderIconObject {
+  const p1 = params[0];
+  const p4 = params[3] | 0;
+  const p5 = params[4] >>> 0;
+  const p6 = params[5] >>> 0;
+  let count = (p5 >>> 16) & 0xffff;
+  if (count > 0xb) count = 0xc;
+  const lo = p5 & 0xffff;
+  const base = lo <= 0xff - count ? lo : 0xff - count;
+  return {
+    x: pos.x,
+    y: pos.y,
+    z: pos.z,
+    heading,
+    scale: p1 > 0 ? p1 : 0,
+    mode: p4 > 0 ? 1 : 0,
+    count,
+    base,
+    colour: p6,
+  };
+}
+
+// The colour of a TObjRaderIcon: mode 1 its colour; mode 0 green while every
+// switch flag of its range is set on this floor (no range: green), else red.
+export function raderIconColour(o: RaderIconObject, isSwitchOn: (flag: number) => boolean): number {
+  if (o.mode === 1) return o.colour;
+  for (let i = 0; i < o.count; i++) if (!isSwitchOn(o.base + i)) return ICON_RED;
+  return ICON_GREEN;
+}
+
+export function raderIconIcon(o: RaderIconObject, isSwitchOn: (flag: number) => boolean): Icon {
+  return { x: o.x, z: o.z, color: raderIconColour(o, isSwitchOn), shape: 0, scale: o.scale, heading: o.heading };
+}
+
+// TObjDoor (0x0080, UpdatePlayerActionState_00656e28): one icon a frame at the
+// door (icon4, shape 0, scale 1, range checked, heading = the door's yaw),
+// red while its state is 0 (locked), green after.
+export function doorIcon(x: number, z: number, heading: number, locked: boolean): Icon {
+  return { x, z, color: locked ? ICON_RED : ICON_GREEN, shape: 0, scale: 1, heading };
+}
+
+// TObjRaderHideCol (0x001f): MapObjectRadarCollisionBaseConstructor_00663370,
+// update FUN_00663400: radius param1 (+0x90); while the local player is
+// within the radius (3D, squared distance below radius^2) the minimap object
+// is hidden (FUN_008055e4: flag 0x10 set, player pointer +0x184 cleared),
+// and it is shown again when the player leaves (FUN_008055c0). The calls
+// happen on the change only (flag +0x94 bit 0).
+export interface RaderHide {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  inside: boolean;
+}
+
+export function raderHideInside(h: RaderHide, p: { x: number; y?: number; z: number }): boolean {
+  const dx = h.x - p.x;
+  const dy = h.y - (p.y ?? 0);
+  const dz = h.z - p.z;
+  return dx * dx + dy * dy + dz * dz < h.radius * h.radius;
 }
