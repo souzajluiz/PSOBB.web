@@ -760,8 +760,11 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // the Episode 2 towers (0x17..0x1d, 0x22, 0x23) bm_obj_seabed_pillar.bml;
     // everywhere else (the Mines, the Ruins, the Spaceship)
     // bm_fs_obj_o_torabasami.bml. Box 0x009c684c: a sphere of radius 2, 8.5
-    // up. The state machine (rise, hold / technique, sink) and the node
-    // lifts are render/traps.ts PillarTrap.
+    // up, flags 0x38003, set by InitializeDerolleEnemyBase_0063c638
+    // (UpdateCollisionBoxPosition only rotates it by the yaw and adds the
+    // entity origin; no pillar code writes its flags or position), so it is
+    // on in every state. The state machine (rise, hold / technique, sink) and
+    // the node lifts are render/traps.ts PillarTrap.
     case 0x0154:
     case 0x0167: {
       const name = o.type === 0x0154 ? 'TOTrapAncient02' : 'TOTrapAncient02R';
