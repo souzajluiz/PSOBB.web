@@ -412,6 +412,7 @@ async function main(): Promise<void> {
     hud.transport = transportHost(shipName);
     hud.guildCards = () => session?.guildCards ?? null;
     hud.guildCardClient = () => session?.guildCardClient ?? null;
+    hud.infoBoardClient = () => session?.infoBoardClient ?? null;
     hud.episode4 = episode4;
     return new LobbyScreen(v, lobbyView, lobby, hud, shipName, fit.enabled);
   };

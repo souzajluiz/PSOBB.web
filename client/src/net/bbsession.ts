@@ -10,6 +10,7 @@ import { BBConnection, readAscii, readUtf16, type Command, type Transport } from
 import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient } from './guildcard.ts';
+import { InfoBoardClient } from './infoboard.ts';
 import { applyKeyConfig, keyConfigFromCharacter } from '../input/keyconfig.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
@@ -133,6 +134,8 @@ export class BBSession {
   guildCards: GuildCardBook | null = null;
   // The E8 sender of the same connection: the Guild Card menu's add / comment / swap / delete.
   guildCardClient: GuildCardClient | null = null;
+  // The Info Board sender (net/infoboard.ts), set with the lobby's connection.
+  infoBoardClient: InfoBoardClient | null = null;
   private guildCardSync: Promise<GuildCardBook | null> | null = null;
   // What a redirect needs to log in again: the character slot and credentials
   // of the last game-server login.
@@ -295,6 +298,7 @@ export class BBSession {
     if (this.guildCardSync) return;
     const client = new GuildCardClient(conn);
     this.guildCardClient = client;
+    this.infoBoardClient = new InfoBoardClient(conn);
     this.guildCardSync = client
       .sync(null)
       .then((book) => {

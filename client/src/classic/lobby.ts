@@ -31,6 +31,7 @@
 import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { InfoBoardClient } from '../net/infoboard.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import type { Lobby } from '../net/lobby.ts';
 import { TRADE_STATUS } from '../net/trade.ts';
@@ -43,6 +44,8 @@ import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
+import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
+import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
@@ -94,6 +97,8 @@ export interface LobbyHud {
   guildCards?: () => GuildCardBook | null;
   // The session's guild card sender (null before the login sync).
   guildCardClient?: () => GuildCardClient | null;
+  // The Info Board sender (net/infoboard.ts), null before the lobby's connection.
+  infoBoardClient?: () => InfoBoardClient | null;
 }
 
 export interface TransportHost {
@@ -136,6 +141,10 @@ export class LobbyScreen implements Screen {
   private itemList: ItemListWindow | null = null;
   // Home menu > Guild Card (0xe): the Guild Card menu and its card list (guildcardmenu.ts).
   private guildCard: GuildCardMenu | null = null;
+  // Home menu > Simple Mail / Info Board: the Info Board window (infoboard.ts). infoOwn is the
+  // text the keyboard accepted this session (the character's own board until then).
+  private infoBoard: InfoBoardMenu | null = null;
+  private infoOwn: string | null = null;
   // Home menu > Trade Window (0x1a, classic/trade.ts); also opened by a partner's proposal.
   private trade: TradeMenu | null = null;
   private options: OptionsMenu | null = null;
@@ -228,7 +237,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard || !!this.trade;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.trade;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -310,6 +319,29 @@ export class LobbyScreen implements Screen {
         unitxt: (group, index) => this.hud.text(group, index),
       };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
+      this.menu.leafOpen = true;
+    } else if (id === 0x16) {
+      // handle_player_menu_select info_board_menu (0x16): the Info Board window (classic/infoboard.ts,
+      // the exe's state machine FUN_007501e0). Needs the lobby's connection for its packets.
+      const client = this.hud.infoBoardClient?.() ?? null;
+      if (!client) {
+        console.info('[classic] Info Board: no lobby connection yet');
+        return;
+      }
+      const full = () => this.hud.fullCharacter?.() ?? null;
+      const host: InfoBoardHost = {
+        client,
+        inLobby: () => true,
+        own: () => {
+          if (this.infoOwn !== null) return this.infoOwn;
+          const raw = full();
+          return raw ? parseCharacterFile(raw).infoBoard : '';
+        },
+        setOwn: (text) => {
+          this.infoOwn = text;
+        },
+      };
+      this.infoBoard = new InfoBoardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
     } else if (id === 0x1a) {
       // handle_player_menu_select trade_invite_menu1 (classic/trade.ts). The lobby has no
@@ -434,6 +466,15 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.infoBoard) {
+      e.preventDefault();
+      this.infoBoard.key(e);
+      if (!this.infoBoard.open) {
+        this.infoBoard = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (this.logWindow) {
       if (menuKeyOf(e) === 'cancel' || menuKeyOf(e) === 'decide') {
         this.logWindow = false;
@@ -511,6 +552,7 @@ export class LobbyScreen implements Screen {
     this.keys.clear();
     this.quit = null;
     this.guildCard = null;
+    this.infoBoard = null;
     this.trade = null;
     this.party?.close();
     this.team?.close();
@@ -544,6 +586,7 @@ export class LobbyScreen implements Screen {
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));

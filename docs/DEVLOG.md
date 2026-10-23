@@ -13322,3 +13322,31 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: Home menu Info Board (0x16) ported; Simple Mail still open
+
+**Trace (PsoBB.exe, dump Psobb.exe-05112026.c):** `handle_player_menu_select` (700118) takes `info_board_menu` (0x16) to the constructor `ChallengePlayerInfoWindowListWindow_Constructor_00750184` (722905, size 0x11e8). The dump's names for this window are wrong: its vtable at 0x00b42210 (slot 0 = deleting dtor 0x750088, slot 1 = the state handler 0x7501e0) carries the `GuildCardListWindow_*` names. The state machine FUN_007501e0 was read with `tools/ghidra/decomp.sh`; the rows and the strings were checked with the port's unitxt reader (`unitxt_j.prs`, group 11).
+
+**Exe evidence:**
+- Menu FUN_00750690: title unitxt(11, 0x30) "Select" at get_gui_position(0xab) = (13, 256); row 0x141 "View the board" (value 3, enabled when FUN_007a61a4() == 0xb), row 0x142 "Board: Write" (value 9).
+- View (state 3 / 4 / 6): FUN_0078e0b0 opens the request; FUN_007d79f4 sends 00D8 (size 8, flag 0). The answer is FUN_0078e11c (`HandleGuildCardDataReceive_0078e11c`, 767946): it copies the packet (8-byte BB header, 0x1A28 bytes) when no answer is in yet; count at +4 (the BB header flag), entries at +8, 0x178 each: name at +0 (0x20 bytes), message at +0x20. Empty list: greyed row unitxt(11, 0xf1) "No Player". List at get_gui_position(0xad) = (194, 256). The highlighted player's message goes to the box at 0xae = (419, 256) (FUN_007505e8 / FUN_00750634).
+- Cancel while waiting: FUN_007c1160 path plays SE 0x585 (= `SE.cancel` in audio/se.ts) and goes back to the menu.
+- Write (state 9 / 10): keyboard at 0xcf = (331, 266) (FUN_00750514), started with the own board text (FUN_0078e050 -> the character's board). FUN_0078e000 stores at most 0xab units; FUN_0078e070 sends 00D9 (FUN_007d7aa4: `_wcsncpy(…, 0xac)`, size `(2 * units + 13) & ~3`, text UTF-16LE). Cancel (FUN_0078ed20) sends nothing. Both -> the menu.
+- Table 0x00971f40 + 8 * id (tools/exedata.py): 0xab (13, 256), 0xac (435, 256), 0xad (194, 256), 0xae (419, 256).
+
+**Port changes:**
+- `client/src/net/infoboard.ts` (new): `infoBoardRequestPacket`, `infoBoardWritePacket` (the exe's size rule), `parseInfoBoardList` (count from the flag, 0x178 entries, at most 17 = the exe buffer), `InfoBoardClient` (fetch drains stale 00D8 answers, then waits; write sends 00D9).
+- `client/src/classic/infoboard.ts` (new): `InfoBoardMenu`, the menu / loading / list / write phases, the message box, the keyboard (TextEditor, max 0xab). Values 3 and 9 are the exe's next states.
+- `client/src/classic/lobby.ts`: row 0x16 opens the window (needs the lobby's connection; logs and does nothing without it); key routing, draw, leave and the open test as for the Guild Card window. The own text is the save's 0x2B44 board (`parseCharacterFile`) until the keyboard accepts a new one (kept in the lobby for the session).
+- `client/src/net/bbsession.ts` / `client/src/classic/main.ts`: `infoBoardClient` is set with the guild card client (after the lobby join) and handed to the HUD.
+- `tests/infoboard.test.ts` (new): packet bytes and sizes (including every length 0..172), the answer parse (count, clamp, name terminator), the fetch with stale answers, the menu's greyed row, view -> list -> message, write -> 00D9 -> own text, Escape sends nothing, the No Player row, close.
+
+**ASSUMED:**
+- The state 0 lobby test (FUN_007a61a4() == 0xb) is taken as "in the lobby", so the View row is enabled whenever the window opens (the port's lobby).
+- Entries with an empty message use the FUN_00735ee0 row variant in the exe; the port draws them as plain rows (the difference was not decoded).
+- The keyboard keys (Enter accepts, Escape cancels, Backspace) are the guild card comment editor's.
+- The Info Board's own text is read from the save's 0x2B44 board; the exe reads its in-memory copy at character +0x2668 (the same text, offset not checked against the 0xE7 layout).
+
+**Checks:** `node tests/infoboard.test.ts` (all pass); `tests/guildcardmenu.test.ts`, `tests/guildcard.test.ts`, `tests/lobbymain.test.ts`, `tests/controls.test.ts` pass; `tsc --noEmit -p client` shows no errors in the touched files (the worktree had no `node_modules`; it was linked from the main checkout for the run). Playwright not run (per the brief).
+
+**Left:** Simple Mail (0x13): `ChatShortcutMenu_Constructor_007558a0` (dump 727318, size 100, state 0x10) is traced only as far as the constructor; its mail list, the compose keyboard and the 0x81 send/receive (newserv `C/S_SimpleMail_BB_81`, 0x454 bytes: from name 0x0f UTF-16, to guild card, date 0x13, text 0x1ff) are not ported. The Info Board's rendering was not checked in Chrome.
