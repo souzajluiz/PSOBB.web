@@ -122,7 +122,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { bulletMissed, bulletSpeed, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, type GunShot } from '../combat/gunbullet.ts';
+import { bulletMissed, bulletSpeed, EGG_PARTICLE, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -593,6 +593,8 @@ export class CombatView {
   private techHits: PendingTechHit[] = [];
   // Gun bullets in flight (combat/gunbullet.ts): each lands after its frame count.
   private gunBullets: GunBulletRun[] = [];
+  // The egg shots' effect objects (combat/gunbullet.ts ShotEffect, shot callback 0x005e4264).
+  private shotEffects: ShotEffect[] = [];
   private tracers: GunTracers | null = null;
   // The objects of Foie, Gifoie, Rafoie, Barta, Gibarta and Rabarta in flight
   // (combat/techfire.ts; render/techfire.ts draws them): the enemies they can
@@ -5313,14 +5315,17 @@ export class CombatView {
   }
 
   // A gun's shot at its hit frame: begin_gun_bullet_attack once per pellet (PsoBB.exe
-  // 0x005e6578; unk_shoot_shotgun 0x005fe004 for the Shot's five). Each pellet makes
-  // its muzzle particle 9 at the hand and its trail (create_gun_bullet_particle_effect
-  // 0x005e4678); a pellet with a listed target that no wall stops makes a bullet that
-  // lands after its frame count. A pellet without a target goes ahead at its angle.
+  // 0x005e6578; unk_shoot_shotgun 0x005fe004 for the Shot's five). The pellet's shot
+  // callback (the item's +0x238, shotVisualOf) makes the visual: the default 0x005e4678 a
+  // muzzle particle 9 at the hand and the gun_bullet.xj trail; the egg callback 0x005e4264
+  // the egg effect object (ShotEffect) with particle 0x9f on it, and no muzzle or model.
+  // Either way, a pellet with a listed target that no wall stops makes a bullet that lands
+  // after its frame count (the damage is unchanged). A pellet without a target goes ahead at its angle.
   private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number): void {
     const me = this.game.self;
     if (!me) return;
-    const trails = (this.tracers ??= this.newTracers());
+    const visual = shotVisualOf(kind);
+    const trails = visual === 'default' ? (this.tracers ??= this.newTracers()) : null;
     // ASSUMED: the shooter bytes +0xf3 / +0xf4 (bulletTextureIndex) are not mapped to the
     // port's player state yet, so the bullets use variant 0 (both bytes read as 0).
     const texture = bulletTextureIndex(0, 0);
@@ -5340,10 +5345,25 @@ export class CombatView {
         (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
         bulletSpeed(kind),
       );
-      this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
-      trails.spawn(start, shot.end, shot.frames, texture);
+      if (trails) {
+        this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+        trails.spawn(start, shot.end, shot.frames, texture);
+      } else {
+        this.eggShot(start, shot);
+      }
       if (shot.bullet && t && target) this.gunBullets.push({ entity: t, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
     }
+  }
+
+  // create_particle_effect 0x005e4264 -> 0x005e407c: the egg object at the hand, flying to the
+  // callback's point (ShotEffect), and its particle 0x9f emitting from it while it lives
+  // (track: the emitter follows the object; the particles stay where they were made).
+  private eggShot(start: { x: number; y: number; z: number }, shot: GunShot): void {
+    const effect = ShotEffect.make(start, shot.dir, shot.flight);
+    if (!effect) return;
+    this.shotEffects.push(effect);
+    const at = () => new THREE.Vector3(effect.pos.x, effect.pos.y, effect.pos.z);
+    void this.fx?.spawn({ id: EGG_PARTICLE, duration: Infinity }, at, false, true, () => effect.alive);
   }
 
   // The bullet tracers of this view: gun_bullet.xj is loaded from item.bml once they are created.
@@ -5356,6 +5376,10 @@ export class CombatView {
   // The trails and the bullets, once per game tick. A bullet lands when its frames run out.
   private tickGunBullets(): void {
     this.tracers?.tick();
+    // The egg objects: the shooter's presence is their owner check (0x005c57ac).
+    const owner = this.game.self != null;
+    for (const effect of this.shotEffects) effect.tick(owner);
+    this.shotEffects = this.shotEffects.filter((effect) => effect.alive);
     for (let i = this.gunBullets.length - 1; i >= 0; i--) {
       const b = this.gunBullets[i];
       if (--b.ticks > 0) continue;
@@ -7342,6 +7366,7 @@ export class CombatView {
     this.viewer.renderHooks.delete(this.smoothHook);
     this.techFire.clear();
     this.gunBullets = [];
+    this.shotEffects = [];
     this.tracers?.dispose();
     this.tracers = null;
     this.enemies.clear();
