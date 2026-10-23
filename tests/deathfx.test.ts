@@ -49,7 +49,8 @@ function simulate(plan: DeathPlan, ticks = 1500): { acts: DeathActions[]; finish
   let removedAt = -1;
   for (let f = 0; f < ticks; f++) {
     const dissolved = dissolveAt >= 0 && f >= dissolveAt + 20;
-    const a = run.tick(Math.min(f, 40), f >= 40, dissolved);
+    // The 'land' step (a Mothmant's fall) fires at frame 20 in this harness.
+    const a = run.tick(Math.min(f, 40), f >= 40, dissolved, f >= 20);
     acts.push(a);
     if (a.dissolve) dissolveAt = f;
     if (a.remove) {

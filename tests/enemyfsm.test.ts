@@ -612,6 +612,39 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   f0.tick([], false);
   eq(f0.state, 'flinch', 'a landed hit flinches a Mothmant still in its launch');
   eq(f0.motion?.index, 3, 'the flinch plays animation 3 (motion 3)');
+  // The lethal death (0x005187a0): state 7 (the ground kill) when a landed melee
+  // hit set +0x2e0 bit 2, else state 8 (the fall). The fall lands on the floor
+  // (1.2 over the ground), bounces once while the motion runs, then sinks to
+  // 20 under the floor and goes (0x00516c60 check); the ground kill is dead
+  // after two update frames (0x00516ed8, `count > 1`).
+  const fallM = make2();
+  landed(fallM);
+  fallM.tick([near]);
+  eq(fallM.beginDeath(), 'fall', 'a Mothmant with no landed melee hit falls (state 8)');
+  eq([fallM.dying, fallM.state], [true, 'dead'], 'the fall starts the death state and ends the AI');
+  let landedAt = -1;
+  let deadAt = -1;
+  let lift0 = fallM.lift;
+  for (let f = 0; f < 1000 && deadAt < 0; f++) {
+    const r = fallM.deathTick(f >= 60);
+    if (!r) break;
+    if (r.landed && landedAt < 0) landedAt = f;
+    if (r.dead) deadAt = f;
+  }
+  check(landedAt > 0, 'the fall reaches the floor (the land step)');
+  check(deadAt > landedAt + 200 && deadAt < landedAt + 240, `the fall's sink takes about 212 ticks after the landing (got ${deadAt - landedAt})`);
+  check(fallM.lift < lift0, 'the fall moves the body down');
+  const meleeM = make2();
+  landed(meleeM);
+  meleeM.tick([near]);
+  meleeM.noteMeleeHit();
+  eq(meleeM.beginDeath(), 'ground', 'a Mothmant with a landed melee hit goes to the ground kill (state 7)');
+  eq(meleeM.deathTick(false)?.dead, false, 'the ground kill is not dead after one update frame');
+  eq(meleeM.deathTick(false)?.dead, true, 'the ground kill is dead after two update frames');
+  const techM = make2();
+  landed(techM);
+  techM.tick([near]);
+  eq(techM.beginDeath(), 'fall', 'a tech kill (bit 4 only) falls');
   // Flinch out of the attack: the attack goes on when fewer than 2 siblings are on the player.
   sib = 0;
   const f2 = make2();
