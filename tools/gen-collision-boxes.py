@@ -225,6 +225,378 @@ def stack_args(site):
     return int(table_op[1:], 16), count
 
 
+# --- indexed tables: a linear walk of the constructor ------------------------
+#
+# A constructor can pick its table by an index it copied from the spawn record:
+# `table = base + stride * [this+off]` (Booma 0x44, ctor 0x00535f1c: `leal
+# 0x9bc8e0(%ebx,%ebx)` with edx = [this+0x33c], which the vtable slot 0x00786848 filled from
+# its argument's s16 at +0x3c; 0x00536001..0x00536089). The walk below follows a function
+# from its entry to the init call with linear forms. A value is (constant, ((leaf, coeff), ...)).
+# Leaves: ('arg', k) (the k-th stack argument, 1-based), ('this',) (ECX at entry), ('M', addr
+# terms, addr constant, width, signed) (a load no store of the walk reaches) and ('G', addr,
+# width, signed) (an absolute load). A store of unknown value or address is kept as unknown or
+# dropped (ASSUMED: no alias). A call whose target is constant (a vtable slot read from the
+# exe, or a global function pointer) is walked into, depth 2, so its stores to the object count;
+# any other call is opaque (eax, ecx, edx unknown). Branches are not followed: the walk is
+# straight-line from the entry (ASSUMED: the path to the call is the one that matters).
+
+ESP_ENTRY = 0x10000
+STK = ("STK",)
+THIS = ("this",)
+INLINE_DEPTH = 2
+REG_NAMES = {"ax": "eax", "al": "eax", "bx": "ebx", "bl": "ebx", "cx": "ecx", "cl": "ecx",
+             "dx": "edx", "dl": "edx", "si": "esi", "di": "edi", "bp": "ebp", "sp": "esp"}
+MEM_RE = re.compile(r"^(-?0x[0-9a-f]+|-?\d+)?\((%\w+)?(?:,(%\w+)(?:,(\d))?)?\)$")
+
+
+class Unwalkable(Exception):
+    pass
+
+
+def L_const(c):
+    return (c, ())
+
+
+def L_add(a, b, k=1):
+    if a is None or b is None:
+        return None
+    d = dict(a[1])
+    for leaf, c in b[1]:
+        d[leaf] = d.get(leaf, 0) + k * c
+    return (a[0] + k * b[0], tuple(sorted(((x, c) for x, c in d.items() if c), key=repr)))
+
+
+def L_scale(a, k):
+    if a is None:
+        return None
+    return (a[0] * k, tuple(sorted(((x, c * k) for x, c in a[1] if c * k), key=repr)))
+
+
+def split_ops(ops):
+    return [p.strip() for p in re.split(r",(?![^()]*\))", ops) if p.strip()]
+
+
+def sext(v, width):
+    bits = width * 8
+    v &= (1 << bits) - 1
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
+class Walk:
+    def __init__(self, depth=0):
+        self.regs = {r: None for r in ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp")}
+        self.mem = {}
+        self.depth = depth
+        self.branches = 0
+
+    def entry(self, nargs=4):
+        self.regs["esp"] = (ESP_ENTRY, ((STK, 1),))
+        self.regs["ecx"] = (0, ((THIS, 1),))
+        self.mem[("S", ESP_ENTRY, 4)] = None  # the return address
+        for k in range(1, nargs + 1):
+            self.mem[("S", ESP_ENTRY + 4 * k, 4)] = (0, ((("arg", k), 1),))
+
+    def operand(self, op):
+        """(kind, value-or-address): ('imm', n), ('reg', name, width), ('mem', addr, width), ('bad', None)."""
+        op = op.strip()
+        if op.startswith("$"):
+            return ("imm", int(op[1:], 0))
+        if op.startswith("%") and ":" not in op:
+            r = op[1:]
+            if r in ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"):
+                return ("reg", r, 4)
+            if r in REG_NAMES:
+                return ("reg", REG_NAMES[r], 2 if r in ("ax", "bx", "cx", "dx", "si", "di", "bp", "sp") else 1)
+            return ("bad", None)
+        if ":" in op or op.startswith("*"):
+            return ("bad", None)
+        m = MEM_RE.match(op)
+        if m:
+            disp = int(m.group(1), 0) if m.group(1) else 0
+            return ("mem", (disp, m.group(2)[1:] if m.group(2) else None, m.group(3)[1:] if m.group(3) else None, int(m.group(4) or 1)))
+        if re.match(r"^-?0x[0-9a-f]+$", op):
+            return ("mem", (int(op, 0), None, None, 1))
+        return ("bad", None)
+
+    def addr_of(self, parts):
+        disp, base, index, scale = parts
+        v = L_const(disp)
+        if base:
+            v = L_add(v, self.regs.get(base))
+        if index:
+            v = L_add(v, L_scale(self.regs.get(index), scale))
+        return v
+
+    @staticmethod
+    def key(addr, width):
+        if addr is None:
+            return None
+        c, terms = addr
+        if terms == ():
+            return ("A", c, width)
+        if terms == ((STK, 1),):
+            return ("S", c, width)
+        return ("H", terms, c, width)
+
+    @staticmethod
+    def span(key):
+        """(space, base, lo, hi) of a memory key: keys overlap when the spans do."""
+        if key[0] == "H":
+            return ("H", key[1], key[2], key[2] + key[3])
+        return (key[0], None, key[1], key[1] + key[2])
+
+    def store(self, addr, width, value):
+        key = self.key(addr, width)
+        if key is None:
+            return
+        sp = self.span(key)
+        for k in list(self.mem):
+            if k == key:
+                continue
+            s2 = self.span(k)
+            if s2[0] == sp[0] and s2[1] == sp[1] and s2[2] < sp[3] and sp[2] < s2[3]:
+                del self.mem[k]
+        self.mem[key] = value
+
+    def load(self, addr, width, signed=False):
+        key = self.key(addr, width)
+        if key is None:
+            return None
+        if key in self.mem:
+            v = self.mem[key]
+            if v is None or width == 4:
+                return v
+            if v[1] != ():
+                return None
+            return L_const(sext(v[0], width) if signed else v[0] & ((1 << width * 8) - 1))
+        if key[0] == "A":
+            leaf = ("G", key[1], width, signed)
+        elif key[0] == "S":
+            leaf = ("U", key[1], width, signed)
+        else:
+            leaf = ("M", addr[1], addr[0], width, signed)
+        return (0, ((leaf, 1),))
+
+    def read(self, kind, val, width, signed=False):
+        if kind == "imm":
+            return L_const(val)
+        if kind == "reg":
+            return self.regs[val] if width == 4 else None
+        if kind == "mem":
+            return self.load(self.addr_of(val), width, signed)
+        return None
+
+    def write(self, kind, val, width, value):
+        if kind == "reg":
+            self.regs[val] = value if width == 4 else None
+        elif kind == "mem":
+            self.store(self.addr_of(val), width, value)
+
+    def push(self, value):
+        esp = L_add(self.regs["esp"], L_const(-4))
+        self.regs["esp"] = esp
+        self.store(esp, 4, value)
+
+    def pop(self):
+        v = self.load(self.regs["esp"], 4)
+        self.regs["esp"] = L_add(self.regs["esp"], L_const(4))
+        return v
+
+
+def walk_function(start, stop, depth, info, text_fn):
+    """Walks the function at start up to stop (the call to the init). Returns the Walk."""
+    w = Walk(depth)
+    w.entry()
+    insns = text_fn(start, stop)
+    for addr, mnem, ops in insns:
+        if addr >= stop:
+            break
+        if mnem.startswith(("j", "loop")):
+            w.branches += 1
+            continue
+        if mnem.startswith("ret"):
+            if mnem == "retl" and ops:
+                n = int(ops.strip().lstrip("$"), 0)
+            else:
+                n = 0
+            w.regs["esp"] = L_add(w.regs["esp"], L_const(4 + n))
+            return w
+        step(w, mnem, ops, info, text_fn)
+    return w
+
+
+def step(w, mnem, ops, info, text_fn):
+    args = split_ops(ops) if ops else []
+    if mnem in ("movl", "movw", "movb"):
+        width = {"movl": 4, "movw": 2, "movb": 1}[mnem]
+        s, d = w.operand(args[0]), w.operand(args[1])
+        v = w.read(s[0], s[1], width) if s[0] in ("imm", "reg", "mem") else None
+        if d[0] == "reg":
+            w.write("reg", d[1], width, v if width == 4 else None)
+        elif d[0] == "mem":
+            w.write("mem", d[1], width, v)
+        return
+    if mnem in ("movzwl", "movswl", "movzbl", "movsbl"):
+        width = 2 if mnem[4] == "w" else 1  # movzwl / movswl / movzbl / movsbl
+        signed = mnem[3] == "s"
+        s, d = w.operand(args[0]), w.operand(args[1])
+        v = w.read("mem", s[1], width, signed) if s[0] == "mem" else None
+        if d[0] == "reg":
+            w.write("reg", d[1], 4, v)
+        return
+    if mnem == "leal":
+        s, d = w.operand(args[0]), w.operand(args[1])
+        v = w.addr_of(s[1]) if s[0] == "mem" else None
+        if d[0] == "reg":
+            w.write("reg", d[1], 4, v)
+        return
+    if mnem in ("addl", "subl"):
+        s, d = w.operand(args[0]), w.operand(args[1])
+        sv = w.read(s[0], s[1], 4) if s[0] in ("imm", "reg", "mem") else None
+        dv = w.read(d[0], d[1], 4) if d[0] in ("reg", "mem") else None
+        v = L_add(dv, sv, 1 if mnem == "addl" else -1)
+        w.write(d[0], d[1], 4, v) if d[0] in ("reg", "mem") else None
+        return
+    if mnem == "xorl" and len(args) == 2 and args[0] == args[1]:
+        d = w.operand(args[1])
+        if d[0] == "reg":
+            w.write("reg", d[1], 4, L_const(0))
+        return
+    if mnem == "shll" and len(args) == 2:
+        s, d = w.operand(args[0]), w.operand(args[1])
+        if s[0] == "imm" and d[0] == "reg":
+            w.write("reg", d[1], 4, L_scale(w.regs[d[1]], 1 << s[1]))
+            return
+    if mnem == "imull" and len(args) in (2, 3):
+        s = w.operand(args[0])
+        dst = w.operand(args[-1])
+        if s[0] == "imm" and dst[0] == "reg":
+            src = w.operand(args[-2]) if len(args) == 3 else dst
+            if src[0] == "reg":
+                w.write("reg", dst[1], 4, L_scale(w.regs[src[1]], s[1]))
+                return
+    if mnem == "pushl":
+        s = w.operand(args[0])
+        w.push(w.read(s[0], s[1], 4) if s[0] in ("imm", "reg", "mem") else None)
+        return
+    if mnem == "popl":
+        d = w.operand(args[0])
+        v = w.pop()
+        if d[0] == "reg":
+            w.write("reg", d[1], 4, v)
+        return
+    if mnem == "calll":
+        # The walk stops at the init call itself (step never sees it); other calls come here.
+        return call(w, args[0] if args else "", info, text_fn)
+    if mnem in ("testl", "cmpl", "nop", "nopw", "nopl", "cmpw", "testw"):
+        return
+    # Anything else writes its last operand, if it is a register or memory: unknown.
+    if args:
+        d = w.operand(args[-1])
+        if d[0] == "reg":
+            w.write("reg", d[1], 4, None)
+        elif d[0] == "mem" and mnem not in ("cmpw", "testw"):
+            w.store(w.addr_of(d[1]), 4, None)
+
+
+def call(w, target_op, info, text_fn):
+    """A call: an indirect call with a constant target is walked into (depth 2), else opaque."""
+    target = None
+    if target_op.startswith("*"):
+        t = w.operand(target_op[1:])
+        if t[0] == "reg":
+            v = w.regs[t[1]]
+        elif t[0] == "mem":
+            a = w.addr_of(t[1])
+            # A constant address is read from the exe: a vtable slot or a global function pointer.
+            v = (u32(a[0]), ()) if a is not None and a[1] == () and u32(a[0]) is not None else None
+        else:
+            v = None
+        if v is not None and v[1] == ():
+            target = v[0]
+    else:
+        target = int(target_op.split("<")[0].strip(), 16)
+    text_lo, text_hi = info["text"]
+    indirect = target_op.startswith("*")
+    inlined = indirect and target is not None and text_lo <= target < text_hi and w.depth < INLINE_DEPTH
+    if inlined:
+        sub = Walk(w.depth + 1)
+        sub.regs = dict(w.regs)
+        sub.mem = w.mem  # the callee's stores land in the caller's memory
+        sub.regs["esp"] = L_add(w.regs["esp"], L_const(-4))
+        sub.store(sub.regs["esp"], 4, None)
+        insns = text_fn(target, target + 0x200)
+        for addr, mnem, ops in insns:
+            if mnem.startswith("ret"):
+                n = int(ops.strip().lstrip("$"), 0) if mnem == "retl" and ops else 0
+                w.regs["esp"] = L_add(sub.regs["esp"], L_const(4 + n))
+                w.regs["eax"] = sub.regs["eax"]
+                w.regs["ebx"] = sub.regs["ebx"]
+                w.regs["esi"] = sub.regs["esi"]
+                w.regs["edi"] = sub.regs["edi"]
+                w.regs["ebp"] = sub.regs["ebp"]
+                w.regs["ecx"] = None
+                w.regs["edx"] = None
+                return
+            if mnem.startswith("j"):
+                raise Unwalkable("branch in callee")
+            step(sub, mnem, ops, info, text_fn)
+        raise Unwalkable("callee has no ret")
+    for r in ("eax", "ecx", "edx"):
+        w.regs[r] = None
+    # An opaque callee pops its own stack arguments when it is stdcall (`retl $n`); cdecl callers
+    # pop them after the call, so n is the callee's pop count (None when unknown).
+    n = callee_pops(target, info, text_fn) if target is not None else None
+    w.regs["esp"] = None if n is None else L_add(w.regs["esp"], L_const(n))
+
+
+def callee_pops(target, info, text_fn):
+    """The bytes a function pops on return (`retl $n`): the first ret in its code (ASSUMED: the
+    straight-line path; branches before it are not followed). None when there is no ret nearby."""
+    for _, mnem, ops in text_fn(target, target + 0x1000):
+        if mnem.startswith("ret"):
+            return int(ops.strip().lstrip("$"), 0) if mnem == "retl" and ops else 0
+    return None
+
+
+def indexed_site(site, func, info, text_fn):
+    """The index of an init call whose table is base + stride * (a load), or None.
+
+    Returns {'base', 'stride', 'index': leaf, 'count'} for the table argument, else None."""
+    try:
+        w = walk_function(func, site, 0, info, text_fn)
+    except Unwalkable:
+        return None
+    esp = w.regs["esp"]
+    if esp is None or esp[1] != ((STK, 1),):
+        return None
+    table = w.load(esp, 4)
+    count = w.load(L_add(esp, L_const(4)), 4)
+    if table is None or count is None or count[1] != () or table[1] == ():
+        return None
+    if len(table[1]) != 1:
+        return None
+    leaf, stride = table[1][0]
+    if not (isinstance(leaf, tuple) and leaf[0] == "M"):
+        return None
+    return {"base": table[0], "stride": stride, "index": leaf, "count": count[0],
+            "branches": w.branches}
+
+
+def text_fn(start, stop):
+    """(VA, mnemonic, operands) of the instructions from start up to stop (objdump, comments cut)."""
+    out = subprocess.run(
+        ["objdump", "-d", "--no-show-raw-insn", f"--start-address={start:#x}", f"--stop-address={stop:#x}", PATH],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    rows = []
+    for line in out.splitlines():
+        m = LINE.match(line)
+        if m:
+            rows.append((int(m.group(1), 16), m.group(2), m.group(3).split("#")[0].strip()))
+    return rows
+
+
 # --- boxes -------------------------------------------------------------------
 
 def box_rows(table, count):
@@ -292,6 +664,41 @@ def call_tree(root, graph, depth_limit):
     return depth_of
 
 
+MAX_VARIANTS = 16  # an indexed table is read up to this many rows (ASSUMED bound)
+
+
+def row_is_set(r):
+    """A plausible box row: finite, bounded numbers, shape 0 or 1, and a flag or a radius set."""
+    nums = [*r["offset"], r["radius"], r["halfX"]]
+    if any(v != v or abs(v) > 1e4 for v in nums):  # NaN or far outside the room
+        return False
+    return r["shape"] in (0, 1) and bool(r["flags"] or r["radius"])
+
+
+def table_key(s):
+    if s["table"] is not None:
+        return s["table"]
+    idx = s["indexed"]
+    return ("indexed", idx["base"], idx["stride"], idx["index"])
+
+
+def variants_text(v):
+    if not v:
+        return "null"
+    return "{ " + ", ".join(f"{k}: 0x{t:08x}" for k, t in sorted(v.items())) + " }"
+
+
+def index_text(idx):
+    if idx is None:
+        return "null"
+    leaf = idx["index"]  # ("M", ((("arg", k), 1),), disp, width, signed)
+    arg = leaf[1][0][0][1]
+    disp = leaf[2]
+    rec = f"{disp + 4:#x}" if arg == 2 else "null"
+    return ("{ arg: %d, disp: 0x%x, width: %d, signed: %s, base: 0x%08x, stride: %d, recordOffset: %s }" % (
+        arg, disp, leaf[3], "true" if leaf[4] else "false", idx["base"], idx["stride"], rec))
+
+
 def wrapper_sites(init_sites, func_of, calls, dynamic_funcs):
     """Constant-argument calls to a helper that passes its own table on to InitEnemyCollisionBoxes.
 
@@ -350,13 +757,18 @@ def main(argv):
 
     init_sites = sorted({s for s, t in calls if t == INIT})
 
+    info = {"text": (TEXT_LO, TEXT_HI)}
     sites = []  # direct: the init call has constant arguments
     dynamic = []
     for s in init_sites:
         args = stack_args(s)
         f = func_of(s)
         if args is None:
-            dynamic.append((s, f))
+            idx = indexed_site(s, f, info, text_fn) if f is not None else None
+            if idx is not None:  # table = base + stride * [field]: one row set per variant
+                sites.append({"site": s, "func": f, "table": None, "count": idx["count"], "via": None, "indexed": idx})
+            else:
+                dynamic.append((s, f))
             continue
         table, count = args
         sites.append({"site": s, "func": f, "table": table, "count": count, "via": None})
@@ -367,6 +779,21 @@ def main(argv):
 
     tables = {}
     for s in sites:
+        if s["table"] is None:
+            # Indexed: the variants are the rows base + stride * v, v = 0 up to the first row that holds
+            # no box (ASSUMED: an index past the array's boxes reads no box).
+            idx = s["indexed"]
+            idx["variants"] = {}
+            for v in range(MAX_VARIANTS):
+                t = idx["base"] + idx["stride"] * v
+                if offset(t) is None or offset(t + ROW * s["count"] - 4) is None:
+                    break
+                rows = box_rows(t, s["count"])
+                if not any(row_is_set(r) for r in rows):
+                    break
+                idx["variants"][v] = t
+                tables[t] = rows
+            continue
         if s["table"] not in tables:
             tables[s["table"]] = box_rows(s["table"], s["count"])
 
@@ -403,20 +830,35 @@ def main(argv):
         pool = own or pair or cands
         link = {"factory": fac, "areas": sorted(factories[t][fac]), "shared": bool(cands) and not own and not pair}
         if not pool:
-            link.update({"table": None, "func": None, "depth": None, "via": None, "ambiguous": False})
+            link.update({"table": None, "func": None, "depth": None, "via": None, "ambiguous": False,
+                         "indexed": None, "variants": None})
         else:
             dmin = min(d for d, _ in pool)
             best = [s for d, s in pool if d == dmin]
-            best_tables = sorted({s["table"] for s in best})
+            best_tables = sorted({table_key(s) for s in best}, key=repr)
             pick = max((s for s in best), key=lambda s: s["site"])  # the last call in the constructor
+            idx = pick.get("indexed")
             link.update({"table": pick["table"], "func": pick["func"], "depth": dmin, "via": pick["via"],
-                         "ambiguous": len(best_tables) > 1})
+                         "ambiguous": len(best_tables) > 1, "indexed": idx,
+                         "variants": idx["variants"] if idx else None})
         links[t].append(link)
 
+    if "--dynamic" in argv:
+        reach_by_func = collections.defaultdict(set)
+        for (t, fac), depth_of in trees.items():
+            for g in depth_of:
+                reach_by_func[g].add(t)
+        for s_va, f in dynamic:
+            print(f"site {s_va:#010x} func {f:#010x} set types {sorted(reach_by_func.get(f, ()))}")
+        return 0
     if summary_only:
-        own_types = {t for t in links if any(l["table"] is not None and not l["shared"] for l in links[t])}
-        any_types = {t for t in links if any(l["table"] is not None for l in links[t])}
-        print(f"sites {len(init_sites)} direct {len(sites) - len(wrappers)} wrappers {len(wrappers)} unresolved {unresolved}")
+        def has_box(l):
+            return l["table"] is not None or bool(l["variants"])
+        own_types = {t for t in links if any(has_box(l) and not l["shared"] for l in links[t])}
+        any_types = {t for t in links if any(has_box(l) for l in links[t])}
+        indexed = sum(1 for s in sites if s["table"] is None)
+        print(f"sites {len(init_sites)} direct {len(sites) - len(wrappers) - indexed} indexed {indexed} "
+              f"wrappers {len(wrappers)} unresolved {unresolved}")
         print(f"distinct tables {len(tables)} enemy set types {len(links)} own table {len(own_types)} "
               f"shared only {len(any_types - own_types)} none {len(links) - len(any_types)}")
         return 0
@@ -433,6 +875,7 @@ def main(argv):
     lines.append("// that only this type reaches, or that exactly two types reach with a constant helper argument")
     lines.append("// (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.")
     lines.append(f"// {unresolved} init sites are not decoded: their table or count is computed at run time.")
+    lines.append("// Indexed sites (table = base + stride * [field], e.g. Booma 0x44) have one row set per variant.")
     lines.append("")
     lines.append("export interface CollisionBoxRow {")
     lines.append("  offset: readonly [number, number, number];")
@@ -442,10 +885,20 @@ def main(argv):
     lines.append("  flags: number;")
     lines.append("}")
     lines.append("")
+    lines.append("export interface CollisionIndex {")
+    lines.append("  base: number; // the array's exe address (variant 0)")
+    lines.append("  stride: number; // bytes per variant row")
+    lines.append("  arg: number; // the constructor's stack argument the index is read from (1-based)")
+    lines.append("  disp: number; // the field's offset in that argument")
+    lines.append("  width: number; // 1, 2 or 4 bytes")
+    lines.append("  signed: boolean;")
+    lines.append("  recordOffset: number | null; // the offset in the set record (factory argument = record + 4; arg 2 only)")
+    lines.append("}")
+    lines.append("")
     lines.append("export interface CollisionBoxSite {")
     lines.append("  site: number;")
     lines.append("  func: number;")
-    lines.append("  table: number;")
+    lines.append("  table: number | null; // null for an indexed site")
     lines.append("  via: number | null;")
     lines.append("}")
     lines.append("")
@@ -457,12 +910,14 @@ def main(argv):
     lines.append("export interface EnemyCollisionLink {")
     lines.append("  factory: number;")
     lines.append("  areas: readonly number[];")
-    lines.append("  table: number | null;")
+    lines.append("  table: number | null; // null for an indexed link (see index and variants)")
     lines.append("  func: number | null;")
     lines.append("  depth: number | null;")
     lines.append("  via: number | null;")
     lines.append("  shared: boolean;")
     lines.append("  ambiguous: boolean;")
+    lines.append("  index: CollisionIndex | null;")
+    lines.append("  variants: Readonly<Record<number, number>> | null; // set record variant -> table VA")
     lines.append("}")
     lines.append("")
     lines.append("// Box tables keyed by their exe address (InitEnemyCollisionBoxes table argument).")
@@ -481,7 +936,8 @@ def main(argv):
     lines.append("export const COLLISION_SITES: readonly CollisionBoxSite[] = [")
     for s in sites:
         via = "null" if s["via"] is None else f"0x{s['via']:08x}"
-        lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: 0x{s['table']:08x}, via: {via} }},")
+        table = "null" if s["table"] is None else f"0x{s['table']:08x}"
+        lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: {table}, via: {via} }},")
     lines.append("];")
     lines.append("")
     lines.append("// Enemy .dat set type -> its factory links (one per factory; areas where it is used).")
@@ -496,7 +952,8 @@ def main(argv):
             via = "null" if l["via"] is None else f"0x{l['via']:08x}"
             parts.append(
                 f"{{ factory: 0x{l['factory']:08x}, areas: {areas}, table: {table}, func: {func}, depth: {depth}, "
-                f"via: {via}, shared: {'true' if l['shared'] else 'false'}, ambiguous: {'true' if l['ambiguous'] else 'false'} }}")
+                f"via: {via}, shared: {'true' if l['shared'] else 'false'}, ambiguous: {'true' if l['ambiguous'] else 'false'}, "
+                f"index: {index_text(l['indexed'])}, variants: {variants_text(l['variants'])} }}")
         lines.append(f"  0x{t:04x}: [{', '.join(parts)}],")
     lines.append("};")
     lines.append("")
@@ -519,8 +976,10 @@ def main(argv):
                     reach[f][t] = d
     by_type = collections.defaultdict(list)
     for s in sites:
+        tabs = list(s["indexed"]["variants"].values()) if s["table"] is None else [s["table"]]
         for t, d in sorted(reach.get(s["func"], {}).items()):
-            by_type[t].append((s["table"], d))
+            for tab in tabs:
+                by_type[t].append((tab, d))
     lines.append("// Factory type id -> the box tables its constructor reaches (only types that reach a site).")
     lines.append("export const TYPE_COLLISION_TABLES: Readonly<Record<number, readonly CollisionTableLink[]>> = {")
     for t in sorted(by_type):

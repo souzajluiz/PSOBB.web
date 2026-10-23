@@ -64,9 +64,10 @@ export const AIM_HEIGHT = 22;
 // (formats/enemyboxes.ts enemyBoxTable, from the .dat set type and the area); an enemy
 // whose table is not resolved (a box set through a vtable, or only by a shared helper)
 // falls back. ASSUMED: the first enabled row of the table (a multi-box enemy has no per-box
-// pick here, the lock-on cursor's box is not modelled).
-export function enemyAimHeight(type: number | null, area: number | null = null): number {
-  const b = enemyBoxTable(type, area);
+// pick here, the lock-on cursor's box is not modelled). An indexed table (Booma) needs the
+// variant (formats/enemyboxes.ts slotVariant).
+export function enemyAimHeight(type: number | null, area: number | null = null, variant: number | null = null): number {
+  const b = enemyBoxTable(type, area, variant);
   if (!b) return AIM_HEIGHT;
   const row = b.rows.find((r) => (r.flags & 1) !== 0);
   return row ? row.offset[1] : AIM_HEIGHT;

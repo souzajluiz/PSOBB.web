@@ -13961,3 +13961,57 @@ Follow-up to "trade follow-up" above: the traced windows are ported. Code: `clie
 4. The chat cooldown (`is_chat_message_cooldown_over` 679808 / `send_chat_message_with_cooldown` 754191) is not applied to the picker's send.
 5. The plate's real shape and offsets (the presets, the frame pieces at 0x0096F8E0, the element sizes of 0x0096F920 for ids 0x30..0x3B), and the face sheet's texture id.
 6. Lobby receive: no 6x07 reaches the lobby (the server sends it in a game only), so the lobby only previews.
+
+## 2026-10-23: indexed enemy boxes (Booma's variant rows, 48 -> 55 of 123); the bosses' box init search
+
+Follow-up to the 2026-10-23 "enemy boxes: vtable calls, the shared-pair rule, Booma's variant table" entry. That entry left Booma and the bosses open. Booma's box is an indexed row now; the bosses still have no link.
+
+**Booma 0x44: the index is the spawn record's s16 at +0x40 (exe).**
+- Ctor 0x00535f1c takes (arg1 = the 0x20-byte object, arg2 = the factory argument). The factory 0x00535e50 pushes its own arg1 as the ctor's arg2 (0x00535ee8, then the call at 0x00535ef2).
+- The ctor calls the vtable slot 0x00786848 with arg2 (0x00535f95). The slot copies `movswl 0x3c(%eax)` into `this+0x370` (0x007868b1..0x007868b5), so the slot reads s16 at arg2 + 0x3c.
+- `this+0x33c = this+0x370` (0x00536001..0x00536007). The table is `0x009bc8e0 + 0x2c * [this+0x33c]` (0x0053607a..0x00536089), count 1, `calll 0x007b9a88` (0x00536091).
+- The spawner passes `record + 4` as the factory argument (0x00810fcb: `leal 0x4(%ebx), %eax; pushl %eax; calll *%edx`, with ebx the set record, its base type at +0 and wave at +0xe). So arg2 + 0x3c = record + 0x40, which is the enemy .dat's param6 (`EnemySet.params[5]`, the variant label "Variant: 0 Booma, 1 Gobooma, 2 Gigobooma" in setdata.ts). The spawner's identity as the enemy loader is ASSUMED (it matches on the set type at +0 and reads the wave at +0xe).
+- Rows (read with tools/exedata.py): variant 0 at 0x009bc8e0 and variant 1 at 0x009bc90c are the same box, centre (0, 12.5, 0), radius 7, sphere, flags 0x8003; variant 2 at 0x009bc938 is centre (0, 15, 0), radius 8, flags 0x8003; the row at 0x009bc964 is zero.
+- The earlier DEVLOG text said "the variant from the spawn record through the vtable slot" and "UNCLEAR: where the slot's argument comes from". It is the factory argument, i.e. the set record + 4.
+
+**Generator: the indexed-table pattern (`tools/gen-collision-boxes.py`).**
+- `walk_function` / `step` / `call`: a linear walk of a function from its entry to the init call. A value is a linear form over leaves (`('arg', k)`, `('this',)`, a load of an unstored field, an absolute load). Stack addresses are tracked by the emulated esp. An indirect call with a constant target (a vtable slot read from the exe's data, or a global function pointer) is walked into (depth 2), so its stores to the object count. Any other call is opaque: eax, ecx and edx are unknown, and it pops the callee's `retl $n` (`callee_pops`, the first ret in its code: ASSUMED straight-line path).
+- `indexed_site`: an init call whose table is `base + stride * [load]` and whose count is constant. The walk does not follow branches (ASSUMED: the path to the call is the one that matters); the branch count is not reported yet.
+- Each indexed site gets its variants: rows `base + stride * v` for v = 0, 1, ... up to the first row that is not a plausible box (finite numbers within 1e4, shape 0 or 1, a flag or a radius set; `MAX_VARIANTS` 16).
+- `ENEMY_COLLISION_LINKS` gets `index` (the array, stride, the leaf: arg, disp, width, sign, and `recordOffset` = disp + 4 for arg 2) and `variants` (index value -> table). `TYPE_COLLISION_TABLES` lists every variant table of an indexed site.
+- `--dynamic` lists the init sites that stay undecoded, with the set types whose factory trees reach them.
+- Result: 243 init sites, 199 direct, 15 indexed, 32 via helpers, 28 undecoded (was 43 before the indexed rule; 0 of them is a boss factory's). 7 enemy set types link to variant rows, with variants 0 to 2: Booma 0x44 (`0x009bc8e0`), Shark 0x63 (`0x009bb260`), 0xa6 (`0x009bd7a0`), 0xd5 (`0x009beb60`), 0xdd (`0x009bd960`), Boota 0x115 (`0x009c0500`), Goran 0x117 (`0x009c1020`). The variant labels in setdata.ts name the same types ("Variant: ..." for 0x44, 0x63, 0xa6, 0x115, 0x117; "if > 0" for 0xd5 and 0xdd), which is the check that the rule finds the right fields.
+- Coverage: `--summary` own table 55 of 123 enemy set types (was 48), shared only 60, none 8 (was 15); distinct tables 243.
+
+**The bosses 0xc2 / 0xc8 / 0xca / 0xcb: the init is not in their factory trees (exe).**
+- All 243 init calls are E8 direct calls (`grep calll 0x7b9a88`), so the boss box is set through some other path. Their factories (0x0043e338, 0x0044c88c, 0x0048d764, 0x004af5b8) call the constructors and a vtable slot or the global pointer `*0xaf568c` (0x00786848, the copy slot; no box). The "per-boss" constructors are 0x0043e3b0 (vtable 0xaf5540), 0x0044c93c (0xaf6a20), 0x0048d814 (0xaf9240), 0x004af634 (0xafab60).
+- Probe (`tools/gen-collision-boxes.py` graph, a script in the scratchpad): the constructor's vtable slots reach an init call within depth 3 for two bosses only.
+  - 0xc2: vtable 0xaf5540 slot 0x4 -> 0x0043c5d4 -> 0x0043c680 -> 0x0044161c, the init site 0x004417e5. Its table: `0x009a5100 + 0x2c * ([arg4] & 3)` (`movl 0x370(%ebx)`, the stack argument 4 of 0x44161c masked with 3, 0x004416bb..0x004417e5), count 1. The index is a caller's argument, not a spawn field: not a record field, so not linked.
+  - 0xc8: vtable 0xaf6a20 slots 0x1b8 / 0x1bc -> 0x0044e544 -> 0x004589bc -> 0x00460d34 -> 0x0045fb24, the init site 0x0045fca0, table 0x009a67c8 (constant). The path starts at 0x0044e544, which the DEVLOG above (Dark Falz) names as another class's dtor, so this is probably not the boss's own box. Not linked.
+  - 0xca and 0xcb: no slot reaches an init within depth 3.
+- A probe with ctor-to-slot edges for every stored vtable (`--slot-edges`, not kept) cut the own-table count from 55 to 51 and added shared-only links; it is not used.
+
+**Ported.**
+- `tools/gen-collision-boxes.py`: the walk, `indexed_site`, the variant rows, the `index` / `variants` fields, `--dynamic`, `callee_pops`.
+- `client/src/formats/collisionboxes.gen.ts`: regenerated (numbers only): `CollisionIndex`, `EnemyCollisionLink.index` / `variants`, the indexed sites with `table: null`, the variant tables.
+- `client/src/formats/enemyboxes.ts`: `enemyBoxTable(setType, area, variant)` picks `link.variants[variant]` for an indexed link (null without a variant or past the rows); `slotVariant(slot)` = `set.params[5]` for a root slot; `isTargetable` takes the variant.
+- `client/src/combat/techfire.ts` `enemyAimHeight(type, area, variant)` and `client/src/render/combat.ts` (`aimHeightOf`, `enemyBoxHits`) pass `slotVariant(e.slot)`. Booma's aim is 12.5 (variant 0 and 1) or 15 (variant 2), was 22 (fallback).
+- `tests/techfire.test.ts`: Booma variants 0 / 1 / 2 aim at 12.5 / 12.5 / 15, variant 3 and no variant fall back.
+- `tests/objectcollision.test.ts`: the Booma variant links (0x009bc8e0, 0x009bc90c, 0x009bc938), the out-of-range rules, the index fields, `slotVariant`.
+- `docs/ROADMAP.md`: the enemy box item (28 undecoded sites, Booma done, bosses open).
+
+**ASSUMED:**
+- The factory argument is record + 4 (the spawner 0x00810fcb), and the spawner is the enemy set loader.
+- The index field at arg2 + 0x3c is the record's param6 (sign-extended s16), as the slot's `movswl`.
+- The straight-line walk: branches are not followed (none is on the Booma path; the boss path has a `jmp` diamond before the index).
+- Opaque calls pop their callee's `retl $n` (the first ret of the callee).
+- An indexed variant past the box rows has no box (fallback, not the exe's read of the next memory).
+- The 7 indexed types link their variants to the same box rows the exe builds (the table is built by the constructor, not by a helper on another path).
+- The boss candidates above are not evidence of the boss's own box.
+
+**Tests.** `node tests/techfire.test.ts` ok (Booma variant checks added); `node tests/objectcollision.test.ts` all checks passed (Booma variant links, the index, `slotVariant`); `node tests/npcai.test.ts` ok. Also `enemyfsm`, `enemystatus`, `dragon`, `barbaray`, `derolle`, `npcs` pass under Node 24. `npx tsc --noEmit -p client` clean. `client/node_modules` is a symlink to the main checkout's (git-ignored, not committed). Not run in Chrome, no Playwright.
+
+**Left:**
+- The bosses: the 0xc2 init (`[arg4] & 3`, a caller's value: the walk needs `andl $imm` as a leaf and the caller's argument, and the link needs the vtable-slot path). The 0xc8 candidate is probably wrong (the Dark Falz dtor). 0xca and 0xcb: their init is not found within depth 3 of the constructor's slots; the next step is the state / update functions their FSM calls.
+- The 28 undecoded sites (none of them a boss factory's tree), the 60 shared-only types, the 8 types with no table, child slots.
+- The walker follows no branches; a variant index behind a branch would be missed (the Booma and the 7 types were checked straight-line).

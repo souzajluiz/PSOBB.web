@@ -424,7 +424,11 @@ near(techData(TECH.rafoie, 10).rangeH, 120, 'Rafoie Lv11 range_h 120');
 check(enemyAimHeight(0x42) === 0, `Monest aims at its own box (got ${enemyAimHeight(0x42)})`);
 check(enemyAimHeight(0x40) === 20, `Hildebear aims at its box centre (got ${enemyAimHeight(0x40)})`);
 check(enemyAimHeight(0xa2) === 3.5, `Dark Gunner aims at its box (got ${enemyAimHeight(0xa2)})`);
-check(enemyAimHeight(0x44) === AIM_HEIGHT, 'Booma (box set through a vtable, not reached) falls back to AIM_HEIGHT');
+check(enemyAimHeight(0x44) === AIM_HEIGHT, 'Booma without its variant falls back to AIM_HEIGHT (the index is the set record +0x40)');
+check(enemyAimHeight(0x44, null, 0) === 12.5, `Booma variant 0 aims at its box centre 12.5 (got ${enemyAimHeight(0x44, null, 0)})`);
+check(enemyAimHeight(0x44, null, 1) === 12.5, `Gobooma (variant 1) aims at 12.5 (got ${enemyAimHeight(0x44, null, 1)})`);
+check(enemyAimHeight(0x44, null, 2) === 15, `Gigobooma (variant 2) aims at its box centre 15 (got ${enemyAimHeight(0x44, null, 2)})`);
+check(enemyAimHeight(0x44, null, 3) === AIM_HEIGHT, 'a Booma variant with no box row set falls back to AIM_HEIGHT');
 check(enemyAimHeight(null) === AIM_HEIGHT, 'no type falls back to AIM_HEIGHT');
 check(enemyAimHeight(0xfff0) === AIM_HEIGHT, 'a type with no table falls back');
 

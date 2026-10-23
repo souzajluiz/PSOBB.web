@@ -16,7 +16,7 @@ import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAY
 import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
-import { boxTargetable, enemyBoxTable, isTargetable, slotSetType } from '../client/src/formats/enemyboxes.ts';
+import { boxTargetable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -141,7 +141,12 @@ check(spotHitsBody({ x: 0, y: 0, z: 0 }, { x: 10, z: 0, yaw: 0, halfX: 9, halfZ:
 // table found (its box is set through a vtable), so it is not targetable by table and aims at the fallback.
 check(ENEMY_COLLISION_LINKS[0x42]?.[0]?.table === 0x009bb780, 'Monest links to its own box table 0x009bb780');
 check(enemyBoxTable(0x40, null)?.table === 0x009bb58c, 'Hildebear links to its box table 0x009bb58c');
-check(enemyBoxTable(0x44, null) === null, 'Booma has no resolved box table');
+check(enemyBoxTable(0x44, null) === null, 'Booma without a variant has no box table (the index is the record +0x40)');
+check(enemyBoxTable(0x44, null, 0)?.table === 0x009bc8e0 && enemyBoxTable(0x44, null, 1)?.table === 0x009bc90c, 'Booma variants 0 and 1 link to rows 0x009bc8e0 and 0x009bc90c (base + 0x2c * variant)');
+check(enemyBoxTable(0x44, null, 2)?.table === 0x009bc938 && enemyBoxTable(0x44, null, 2)?.rows[0].radius === 8, 'Gigobooma (variant 2) links to 0x009bc938, radius 8');
+check(enemyBoxTable(0x44, null, 3) === null && enemyBoxTable(0x44, null, -1) === null, 'a variant past the rows, or negative, has no table');
+check(ENEMY_COLLISION_LINKS[0x44]?.[0]?.index?.recordOffset === 0x40 && ENEMY_COLLISION_LINKS[0x44]?.[0]?.index?.arg === 2, 'the Booma index is the factory argument +0x3c = record +0x40');
+check(slotVariant({ set: { params: [0, 0, 0, 0, 0, 2, 0] } as never, child: 0 }) === 2 && slotVariant({ set: { params: [0, 0, 0, 0, 0, 2, 0] } as never, child: 1 }) === null, 'a root slot reads its variant from params[5]; a child has none');
 // Canadine 0x83 and Canane 0x84 both reach the shared constructor 0x005424d8, which passes the
 // constant table 0x009bcecc (count 1) to 0x0051ff3c: each gets that box (ASSUMED: the pair's other
 // constructors do not overwrite it). The Pofuilly slime 0x64 table is 0x009bfd68 (the init is 4 deep).
