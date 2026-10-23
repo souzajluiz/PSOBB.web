@@ -268,6 +268,7 @@ export class LobbyScreen implements Screen {
             .filter((p) => p.clientId !== this.lobby.selfId)
             .map((p) => ({ slot: p.clientId, name: p.name, guildCardNumber: p.guildCardNumber, sectionId: p.sectionId, charClass: p.charClass })),
         loggedIn: true,
+        unitxt: (group, index) => this.hud.text(group, index),
       };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;

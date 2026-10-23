@@ -16,6 +16,9 @@ import {
   playerRows,
   guildCardFromPlayer,
   blockRows,
+  cardInfoLines,
+  recentRows,
+  subRows,
   T11_GUILD,
   type LobbyPlayerCard,
 } from '../client/src/classic/guildcardmenu.ts';
@@ -148,8 +151,9 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   check('starts open on the menu', menu.open && menu.phase === 'menu');
 
   const sub = menu.key(key('Enter'));
-  check('row 0x65 (sub-list) is reported as not ported', sub?.state === 3 && sub.card === -1, JSON.stringify(sub));
-  check('reporting an unported row keeps the menu open', menu.phase === 'menu');
+  check('row 0x65 opens the sub-list (phase sub), nothing reported', sub === null && menu.phase === 'sub', JSON.stringify(sub));
+  menu.key(key('Backspace'));
+  check('Backspace in the sub-list returns to the menu', menu.phase === 'menu' && menu.open);
 
   menu.key(key('ArrowDown'));
   const opened = menu.key(key('Enter'));
@@ -489,6 +493,96 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   check('a repeated result moves to the end (no duplicate)', client.recent.map((r) => r.guildCardNumber).join(',') === '1,2,4,5,6,7,3');
   client.addRecent(res(8));
   check('the eighth result drops the oldest', client.recent.length === 7 && client.recent[0]!.guildCardNumber === 2 && client.recent[6]!.guildCardNumber === 8);
+}
+
+// 19. Row 0x65: the sub-list (players 5, rename 9); the players open the player list; a player reports state 6 (0x62 not ported).
+{
+  const book = bookWith([card(7, 'Ann')]);
+  const players: LobbyPlayerCard[] = [{ slot: 2, name: 'Pat', guildCardNumber: 77, sectionId: 3, charClass: 1 }];
+  const { menu } = menuFor(book, true, players);
+  menu.key(key('Enter'));
+  check('the sub-list rows are 5 (players) and 9 (rename)', subRows(text).map((r) => r.value).join(',') === '5,9');
+  menu.key(key('Enter'));
+  check('the players row opens the player list (phase subPlayers)', menu.phase === 'subPlayers');
+  const picked = menu.key(key('Enter'));
+  check('a player reports state 6 with the player slot', picked?.state === 6 && picked.card === 2, JSON.stringify(picked));
+  check('the player list stays open after the report', menu.phase === 'subPlayers');
+  menu.key(key('Backspace'));
+  check('Backspace in the player list returns to the sub-list', menu.phase === 'sub');
+  menu.key(key('ArrowDown'));
+  const rename = menu.key(key('Enter'));
+  check('the rename row reports state 9 and stays in the sub-list', rename?.state === 9 && rename.card === -1 && menu.phase === 'sub', JSON.stringify(rename));
+}
+
+// 20. Row 0x65 with no other player: the greyed row buzzes (no report, no phase change).
+{
+  const { menu } = menuFor(bookWith([card(7, 'Ann')]));
+  menu.key(key('Enter'));
+  menu.key(key('Enter'));
+  check('no other players: the player list opens with the greyed row', menu.phase === 'subPlayers');
+  const r = menu.key(key('Enter'));
+  check('the greyed row reports nothing', r === null && menu.phase === 'subPlayers');
+}
+
+// 21. Row 0x67: the recent list. Empty: the greyed row. Results: the book's name when the book has the card, else the reply's name; a row reports state 0x1f.
+{
+  const res = (n: number, name: string) => ({ searcher: 1, guildCardNumber: n, address: 0, port: 0, location: '', menuId: 0, itemId: 0, name });
+  const book = bookWith([card(7, 'Ann')]);
+  const empty = menuFor(book);
+  empty.menu.key(key('ArrowDown'));
+  empty.menu.key(key('ArrowDown'));
+  empty.menu.key(key('Enter'));
+  check('row 0x67 opens the recent list (phase text)', empty.menu.phase === 'text');
+  check('empty recent list: the greyed row', recentRows([], book, 'EMPTY')[0]!.enabled === false);
+  const nothing = empty.menu.key(key('Enter'));
+  check('the greyed row of an empty list reports nothing', nothing === null && empty.menu.phase === 'text');
+  empty.menu.key(key('Backspace'));
+  check('Backspace in the recent list returns to the menu', empty.menu.phase === 'menu');
+
+  const { client } = menuFor(book);
+  client.addRecent(res(7, 'Reply7'));
+  client.addRecent(res(9, 'Reply9'));
+  const labels = recentRows(client.recent, book, 'EMPTY').map((r) => r.label).join('|');
+  check('rows: the book name for 7, the reply name for 9', labels === 'Ann|Reply9', labels);
+  check('rows are valued by their index', recentRows(client.recent, book, 'EMPTY').map((r) => r.value).join(',') === '0,1');
+
+  const filled = menuFor(book);
+  filled.client.addRecent(res(9, 'Reply9'));
+  filled.menu.key(key('ArrowDown'));
+  filled.menu.key(key('ArrowDown'));
+  filled.menu.key(key('Enter'));
+  const opened = filled.menu.key(key('Enter'));
+  check('a recent row reports state 0x1f (the result window is not ported), the list stays', opened?.state === 0x1f && opened.card === 0 && filled.menu.phase === 'text', JSON.stringify(opened));
+}
+
+// 22. The card info lines: name, number (not 0), class and section names from the host, team and description (empty ones left out).
+{
+  const bo = { guildCardNumber: 9, name: 'Bo', teamName: 'T', description: 'hi', present: true, language: 0, sectionId: 3, charClass: 20 };
+  const unitxt = (g: number, i: number) => `g${g}.${i}`;
+  check('the lines are name, number, class (clamped to 0xc), section, team, description', cardInfoLines(bo, unitxt).join('|') === 'Bo|9|g8.12|g72.3|T|hi', cardInfoLines(bo, unitxt).join('|'));
+  const none = { ...bo, guildCardNumber: 0, teamName: '', description: '' };
+  check('number 0, no team and no description are left out', cardInfoLines(none, unitxt).join('|') === 'Bo|g8.12|g72.3', cardInfoLines(none, unitxt).join('|'));
+}
+
+// 23. The card info window draws in the add-from-card-book list (state 0x42) without throwing.
+{
+  const book = bookWith([card(7, 'Ann'), card(9, 'Bo')]);
+  const { menu } = menuFor(book);
+  menu.key(key('ArrowDown'));
+  menu.key(key('ArrowDown'));
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // 0x117
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the add row
+  menu.key(key('Enter')); // the card book source
+  check('the add-from-card-book list is open', menu.phase === 'addCard');
+  let threw = false;
+  try {
+    menu.draw(ctx, skin);
+  } catch {
+    threw = true;
+  }
+  check('drawing the add list with the card info window does not throw', !threw);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

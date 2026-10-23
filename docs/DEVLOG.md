@@ -12777,3 +12777,42 @@ So 0x33, 0x45, 0x46, 0xa9 and 0x118 are the same NPC objects as the humanoid NPC
 **Not ported (logged no-ops):** row 0x65 (state 3: sub-list 0x68 / 0x69), row 0x67 (state 0x1d: the recent list, now filled by the search), the entity add (0x4a, no entity guild cards in the port), the send packet 0xc0.
 
 **Left:** rows 0x65 and 0x67 (0x67 needs only the window over `GuildCardClient.recent`); the card info window 0x89; the entity add (needs the game's guest / entity records with a guild card number); a Chrome check of the Block list placement (not run; no Playwright).
+
+## 2026-10-23: Guild Card leaves: row 0x67 (recent search list), row 0x65 (sub-list), the card info window 0x89
+
+**What changed:** the Home menu's Guild Card menu (`classic/guildcardmenu.ts`) gets the two menu rows that were logged no-ops and the card info window of the card-book add. Row 0x65 opens its sub-list (0x85) with the players (state 5, the player list 0x86) and the rename (state 9). Row 0x67 opens the recent search list (0x8c) from `GuildCardClient.recent`. The card info window (0x89) shows the highlighted card in the add-from-card-book list. The unported parts report back as before (menu stays open). Code: `client/src/classic/guildcardmenu.ts` (`recentRows`, `subRows`, `cardInfoLines`, phases `text` / `sub` / `subPlayers`, `drawTextLines`), `client/src/classic/lobby.ts` (host `unitxt`). Tests: `tests/guildcardmenu.test.ts` (ALL PASS; test 3 now checks the sub-list opens, tests 19..23 are new).
+
+**Premise check (the brief's three items, against the exe):**
+- Row 0x67 is state 0x1d = `CreateGuildCardTextListWindow_007478a8` (716557) at `get_gui_position(0x8c)`, not 0x88. The rows are `g_GuildCardList` entries (0x124 bytes each; the same list `addRecent` keeps).
+- Row 0x65 (state 3) is not a 0x68/0x69 row pair with one meaning. It opens the sub-list at 0x85 (title 0x31). Its two rows are the lobby-player path (0x68 = state 5, the player list 0x86 at (402, 315), title 0x32) and the own-name rename (0x69 = state 9, the keyboard, then 06E8). Picking a player goes to state 6, which calls `send_packet0x62` through `TeamQuest_SendPacket_008005b0` (the name is misleading; the packet's meaning is not traced).
+- "Text 0x7c" is not a GUI index. Table entry 0x7c is the chat item window (`ChatShortcutMenuWindow_CreateChatItemWindow_00759ee8`). The `+0x7c` in the state handler is the state object's slot for the info window pointer, and `GuildCardMenu_Factory_00715654` builds the window at the table entry 0x89. The brief's "0x89 / 0x7c" is therefore 0x89 only.
+- The card info window does not show a comment. It shows name, number, class, section, team and description (`GuildCardUI_UpdateListItemText_00715518`). The comment goes to the card list's secondary text (`SetGuildCardField_00747758`, the box at 0x9c).
+
+**Exe evidence (PsoBB.exe dump lines; GUI table 0x00971f40, read with `tools/exedata.py`):**
+- Positions: 0x85 = (402, 256), 0x86 = (402, 315), 0x87 = (402, 304), 0x89 = (419, 256), 0x8c = (194, 256), 0x8d = (194, 256), 0x8e = (439, 256), 0x84 = (194, 256).
+- Card info (`GuildCardMenu_CreateAtGuiPosition_00747d84`, 716864, -> `GuildCardMenu_Factory_00715654`, 676434): the entry is the book record at `CalculateListOffset_00781dd4(slot)` = base + slot * 0x1bc. Its texts: name (+4), number (+0; hidden when 0 or byte +0x104 bit 2), class (+0x107, `unitxt_get_class_name` = unitxt + 0x20), section (+0x106, `unitxt_get_sectionid_name` = unitxt + 0x120), team (+0x34), description (+0x54). The language (+0x105, the static list `PTR_u_Jpn__009f1e60`) is not drawn.
+- Created in state 0x41 (716036, then state 0x42 is the card list) and in the card list (states 0xb at 714941 and 0x1b at 715143).
+- Recent list entry (`GuildCardEntry_Initialize_00828044`, 841435): +0 card number, +4 entry id (the row value), +8 the name (16 wchars, the book's name when `GuildCard_FindById` finds the card, else the reply's name at +0xe4).
+- Row 0x67 choice: state 0x1f creates the search-result window 0x8d (`GuildCardListWindow_Constructor_00762dcc`) and the option list 0x8e (unitxt 0x30: 0x6a -> state 0x21, 0x6b -> state 0x25). Not ported.
+- Row 0x65 sub-list: state 3 (715xxx at 714791) creates the own-card info window 0x84 (`GuildCardMenu_GetOrCreateInstance_007153e0`, the session's own card) and the sub-list (`CreateGuildCardSubListWindow_00747480`, 716334). State 4 reads its selection: 5 -> state 5, 9 -> state 9.
+- State 5 (714830..): the players other than the current one (invincibility 3 and 6 skipped), 0x86, title 0x32; none -> unitxt 0xf1 greyed. State 6: `GuildCard_Sprintf_0078193c` (758193) -> `TeamQuest_SendPacket_008005b0` (815213) -> `send_packet0x62`. State 7 creates the title window 0x87 (unitxt 0x4b), state 8 waits for a held key (0xc / 0xd), then state 3.
+- State 9 (714900..): closes the windows, `CreateGuildCardKeyboardInput_00747548`, state 10 accepts with `GuildCard_SetName_007814bc` on `g_pPlayerSessionData_00a9c0ec` and `send_packet0xe8_subcommand6` (814226, 0x110 bytes).
+
+**ASSUMED:**
+- The class name uses unitxt group 8 (from `unitxt + 0x20`, 4 bytes per group; the port's charcreate uses group 72 for sections, which matches `unitxt + 0x120`). Group 8 is not checked against a real text file.
+- The recent row's value is the list index (the exe uses the entry id, +4); the window is rebuilt on each opening (the exe builds it at the state 0x1d).
+- The number of the info window is hidden when 0. The exe's byte +0x104 bit 2 is not modelled.
+- The sub-list stays drawn under the player list (the exe calls `ListWindowObject_Hide` on it at state 3; not traced).
+- The info window is drawn only in the add-from-card-book list. The exe also creates it in the card list (states 0xb / 0x1b), where the comment box also sits at (419, 256). Which one the exe keeps there is not traced, so the port keeps the comment box and does not draw the info window in the card list.
+- The lobby player list skips nothing extra (the exe's invincibility skip is the existing one).
+
+**Not ported (logged no-ops, the menu stays open):** the search-result window 0x8d and its option list 0x8e (row 0x67's choice; `UnportedAction` state 0x1f), the state 6 send (`send_packet0x62`, reported with the player's slot), the rename (state 9), the own-card info window 0x84 (not drawn), the title window 0x87, the send packet 0xc0.
+
+**Tests run:** `node tests/guildcardmenu.test.ts` (ALL PASS, with the new tests 19..23), `node tests/guildcard.test.ts` (ALL PASS), `lobbymain`, `lobbymenu`, `teammenu`, `warpmenu` (all pass). `tsc --noEmit -p client` clean. The worktree had no `node_modules`: `client/node_modules` is a symlink to the main checkout's (not committed). Not run in Chrome or Playwright (per the brief).
+
+**Left:**
+- The search-result window 0x8d and its option list 0x8e (states 0x1f..0x25), which needs the states 0x21 (the keyboard, `CreateKeyboardControl_00756ab0`) and 0x25 traced.
+- The 0x62 send (state 6): the packet's meaning and its target (`send_packet0x62`, the caller's slot) need a trace; the port reports it.
+- The rename (state 9): the keyboard panel is the comment editor's (the port's `TextEditor`); not ported.
+- The own card info window 0x84 and the card list's 0x89 / 0x9c overlap in the card list.
+- A Chrome check of the sub-list and the recent list placement (not run).
