@@ -329,3 +329,75 @@ export function drawWindowShine(ctx: CanvasRenderingContext2D, x: number, y: num
     ctx.fillRect(l.x0, l.y, l.x2 - l.x0, 1);
   }
 }
+
+// --- the element shine --------------------------------------------------------
+//
+// The HUD windows with their own textured background (the status window,
+// render_player_hud_bg 0x00743b60; the party members' windows,
+// QuestListEntry_Render_0073eb60 0x0073eb60) draw the same band once more over
+// that background (RenderAnimationFrame_007129a8, after the background and
+// before their elements). The band position is b = counter * 5 - 100
+// (g_AnimationFrameScale 0x0096f668 = 5, g_AnimationFrameOffset 0x0096f664 =
+// 100). IsAnimationFrameInWindow_00712914 draws it only while x < b < x + w
+// (the element's [4] / [6]; ASSUMED equal to the quad's x and width). Then
+// t = (b - x) / w (the element's [0] / [2], ASSUMED the same) places the band
+// at x + w t on the quad, and a triangle strip of six vertices gives it:
+// alpha 0 at the quad's left and right edges, alpha(t) at the band, with
+//   alpha(t) = trunc(160 * 2 t)        for t <= 0.5   (0x0096f658 = 160,
+//   alpha(t) = trunc(160 * (1 - t) * 2) for t > 0.5    0x0096f650 = 2, the
+//                                                      fistp under chop),
+// colour 0xffffff, and the texture's u / v stretched over the quad as usual.
+// Texture 13 (0xd) for these windows. ASSUMED: the blend is additive (the
+// exe's texture stage / alpha state is set by SetupTextureBlendState_007a9570
+// and D3D8_SetAlphaState_0082b13c(1), not decoded), so the band brightens the
+// background; a plain alpha blend would not change a background drawn under it.
+export const ELEMENT_SHINE_SCALE = 5; // 0x0096f668
+export const ELEMENT_SHINE_OFFSET = 100; // 0x0096f664
+export const ELEMENT_SHINE_PEAK = 160; // 0x0096f658
+
+// The band's alpha (0..255) at position t in 0..1 (the strip's middle vertices).
+export function elementShineAlpha(t: number): number {
+  const a = t <= 0.5 ? ELEMENT_SHINE_PEAK * (t + t) : ELEMENT_SHINE_PEAK * (1 - t) * 2;
+  return Math.trunc(a) & 0xff;
+}
+
+// The band across an element at x of width w, or null when the band is not in
+// it (or the shine is not running: state 2 only).
+export function elementShine(x: number, w: number): { t: number; alpha: number } | null {
+  if (!windowShine.active || !(w > 0)) return null;
+  const b = windowShine.counter * ELEMENT_SHINE_SCALE - ELEMENT_SHINE_OFFSET;
+  if (!(x < b && b < x + w)) return null;
+  const t = (b - x) / w;
+  return { t, alpha: elementShineAlpha(t) };
+}
+
+// Draws the band over the quad (x, y, w, h) of texture `tex`, sampling the
+// texels (u0, v0)-(u1, v1) (one column at a time: the band is a linear ramp
+// across x, so each column gets its own alpha).
+export function drawElementShine(
+  ctx: CanvasRenderingContext2D,
+  tex: CanvasImageSource,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  uv: readonly [number, number, number, number],
+): void {
+  windowShine.sync(typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const s = elementShine(x, w);
+  if (!s) return;
+  const peak = s.alpha / 255;
+  const band = w * s.t;
+  const [u0, v0, u1, v1] = uv;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let c = 0; c < w; c++) {
+    const px = c + 0.5;
+    const a = px < band ? peak * (px / band) : peak * ((w - px) / (w - band));
+    if (a <= 0) continue;
+    ctx.globalAlpha = a;
+    const su = u0 + Math.floor((c * (u1 - u0)) / w);
+    ctx.drawImage(tex, su, v0, 1, v1 - v0, x + c, y, 1, h);
+  }
+  ctx.restore();
+}

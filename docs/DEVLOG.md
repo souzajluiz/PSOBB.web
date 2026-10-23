@@ -10248,3 +10248,76 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The requirement rows (172 / 192 / 212 / 232) are not ported (the rows went with the pages).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` passes. Playwright: `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test item-panel.spec.ts --workers=1 --reporter=line`, 2 runs, both passed (~51 s each). Vite on 5175 was started for the runs and stopped after.
+## 2026-10-23: HUD TP use and the window shine (element shine on the status and party windows)
+
+**What changed:** the window shine's geometry is now checked against the exe
+(its rows, margin, alpha and the state machine), and the HUD windows get the
+exe's element shine: the status window (render_player_hud_bg) and the party
+members' windows (QuestListEntry_Render) draw the band once more over their
+own textured background while the shine runs. TP use needed no new code: the
+exe has no TP-specific HUD reaction, the drain is the bar's own animation, and
+the port's `BarState` already runs it. Code: `classic/windowanim.ts`
+(`elementShineAlpha`, `elementShine`, `drawElementShine`), `classic/hud.ts`
+(StatusWindow.draw, PartyWindow.draw). `tests/windowanim.test.ts` (50/50).
+
+**Exe evidence (PsoBB.exe 1.25.13):**
+- Shine state machine: UpdateAnimationStateMachine_00712834 (unchanged, see the
+  2026-10-21 entry). Band position: RenderAnimationFrame_007129a8 and
+  IsAnimationFrameInWindow_00712914 use g_AnimationFrameScale 0x0096f668 = 5 and
+  g_AnimationFrameOffset 0x0096f664 = 100: b = counter * 5 - 100.
+- Window shine (unknown_render_background_for_menus, 0x007116e6..0x00711986,
+  read by disassembly; the dump's names for g_Float1 / g_Float32 are off, the
+  constants are 0x0096f7b8 = 4, 0x0096f7bc = 12, 0x0096f728 = 24,
+  0x0096f714 = 1, 0x0096f720 = -2, 0x0096f7b4 = 5, 0x0096f718 = 255,
+  0x0096f710 = 2): rows = round((h - 24) / 4); A = round((12 + y) / 4); start
+  = (counter - 2A) * 5 - 1 - x; row i at y + 12 + 4 i, one pixel step left per
+  row; alpha = trunc(2 f * 255) for f <= 0.5, trunc((1 - f) * 2 * 255) above.
+  The port already had this (2026-10-21); it now matches the disassembly.
+- Element shine: the callers are render_player_hud_bg (0x00743b60, texture 13,
+  quad (x, y)-(x + 228, y + 76) on texels (0, 0)-(228, 76), constants
+  0x00973154 = 228, 0x00973150 = 76), QuestListEntry_Render_0073eb60 (texture 13,
+  quad of 114 x 46 on texels (0, 180)-(114, 226), 0x00971f14 / 0x00971f10),
+  render_main_palette_bg (texture 2) and QuickMenuRenderTextBackground_00742a6c.
+  RenderAnimationFrame_007129a8 draws six vertices: alpha 0 at the quad's
+  left and right edges, alpha at the band; the alpha is trunc(160 * 2 t) for
+  t <= 0.5 and trunc(160 * (1 - t) * 2) above (0x0096f658 = 160, 0x0096f650 =
+  2), colour 0xffffff, the band at x0 + (x1 - x0) t with t = (b - x) / w.
+- TP use: HandleHeavySpecialAttackUnsafeMap (the release; the port's note
+  says 0x006a0340 area, not re-checked) does tp2 = max(0, tp2 - tp_cost);
+  modify_tp_value (dump line 749664) is the same rule for other drains;
+  QuickMenuTPBarUpdate_00742378 only copies max_tp2 / tp2 into the bar and
+  picks the colour (low under 20 %, 0xffffc114; normal 0xff008cfc, fade
+  11.1 frames). UiElement_UpdateAnimation_00729fa4 then holds the old width
+  0x24 frames and moves 2 per frame (UpdatePosition_00729924), the gap in the
+  damage colour on a drop (ScrollbarObject_Render_0072a2c4). The colour
+  constants 0xff008dee and 0xffff2924 are in the exe's data next to the HP
+  ones (file offsets 0x5f1aac / 0x5f1ab0, not virtual addresses). No TP flash or sound exists in the
+  bar code.
+
+**Ported:** the element shine on the status window (after its background,
+before its elements) and on the party windows (after their background). The
+band is drawn one column at a time with `globalCompositeOperation = 'lighter'`.
+
+**ASSUMED / UNCLEAR:**
+- ASSUMED: the blend is additive. SetupTextureBlendState_007a9570(3,3,3,3) and
+  D3D8_SetAlphaState_0082b13c(1) are not decoded; a plain alpha blend would
+  not show the sheen over a background drawn under it.
+- ASSUMED: the element's [4] / [6] (the gate) and [0] / [2] (the band) are the
+  quad's x and width. The disassembly reads them from the element's render
+  data; for these two windows the quad uses [0] (status) and [4] (party), so
+  the mapping is by the quad, not decoded.
+- ASSUMED: the band is clipped by the window's opening wipe like the rest of
+  the window (`withWindowAnim`).
+- NOT PORTED: the field palette's element shine (render_main_palette_bg,
+  texture 2) and QuickMenuRenderTextBackground_00742a6c. Their element
+  structure was not read; they stay without a shine.
+- UNCLEAR: whether the exe's rand sequence matters for the sheen (the state
+  machine's wait uses rand; the port uses Math.random, as before).
+
+**Tests:** `tests/windowanim.test.ts` (50/50, new cases: the element shine's
+alpha ramp, the gate before / inside / past the element, nothing outside
+state 2, the per-column drawing with the peak at the band; the TP drop: the
+held width for 0x24 frames, the 2-per-frame slide to 10 / 29, no shake, the
+low colour under 20 %). Also `tsc --noEmit` clean; `tests/fieldhud.test.ts`,
+`tests/level.test.ts` (98/98, with vendor linked), `tests/party.test.ts` and
+`tests/minimap.test.ts` pass. Not run: Playwright / Chrome (per the brief).
