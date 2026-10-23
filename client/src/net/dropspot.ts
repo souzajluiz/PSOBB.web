@@ -20,9 +20,22 @@
 //     y + 10 (FUN_007b4c58, 0x0097e3e4), or the player's own y, plus 6.
 // The spot's y is the ground + 6 (0x0093db84): the 6x2A carries it.
 //
-// Not ported: FUN_007b5318, the test that rejects a spot where a player's
-// body stands (the 0x00aad720 list; its shapes were not read).
+// Then the body test (FUN_006a44fc after the wall test, 0x006a4780..0x006a4850):
+// the spot is a sphere of radius 3 (0x009cba5c = 3.0, flags 0x31f03) in the
+// list g_pItemGroundCheckData (0x009cba38, count 1). It is tested against every
+// entity g_EntityArray[PlayerEntityCount + NumEntities .. Total) (0x00aad720,
+// globals 0x00aae164 / 0x00aae168 / 0x00aae16c), i.e. the objects that are
+// neither players (indices below PlayerEntityCount) nor enemies, that have a
+// collision list (+0xa4) and no flag 0x800 (+0x30), with the xz distance to the
+// spot (vec3_xz_distance_sq, FUN_007a9180) below 10000 (0x0093db88). FUN_007b5318
+// then rejects the spot on any overlap: the sphere against each box of the
+// entity (FUN_0083d2fc, the box's +-50 faces); both centres are handed over
+// with y = 0 (the 0x0083d2fc / 0x0083dbd4 calls pass 0 as y), so the test is
+// in XZ. The port has no entity list: `bodies` is the object boxes that block
+// the player (render/collision.ts `obstacles`, the closed doors), ASSUMED to be
+// the same set.
 // ASSUMED: sin for x and cos for z (the tables 0x0098b560 / 0x0098c560).
+// ASSUMED: the box's rotation is its yaw, as render/collision.ts `blockedBy`.
 // Quirk kept on purpose: the search checks `ring < 6` before it steps the ring,
 // so the first spot of ring 6 is tried and then the search fails.
 
@@ -31,6 +44,8 @@ export const DROP_GROUND_OFFSET = 6; // 0x0093db84
 export const DROP_EYE_PROBE = 10; // 0x0097e3e4
 export const DROP_EYE_HEIGHT = 6; // 0x0093db84 again, applied to the eye point
 export const DROP_HOLD_FRAMES = 900; // 6x2C from 0x0068d878
+export const DROP_SPOT_RADIUS = 3; // 0x009cba5c, set by the search each time
+export const DROP_BODY_RANGE_SQ = 10000; // 0x0093db88 (compared with the squared xz distance)
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
 export interface DropPoint {
@@ -41,11 +56,39 @@ export interface DropPoint {
 
 export type DropStep = { status: 'searching' } | { status: 'found'; at: DropPoint } | { status: 'failed' };
 
+// A box of an entity that blocks a drop: its centre in XZ, its yaw, and its
+// half extents (the exe's collision_box: unk1 = halfX, radius = halfZ).
+export interface DropBody {
+  x: number;
+  z: number;
+  yaw: number;
+  halfX: number;
+  halfZ: number;
+}
+
 export interface DropSearchOptions {
   // The ground under (x, z), probed from fromY; null when there is none.
   ground: (x: number, z: number, fromY: number) => number | null;
   // True when a wall lies on the segment (cast_ray_at_map_collision_geometry).
   wallBlocks: (from: DropPoint, to: DropPoint) => boolean;
+  // The entities' boxes the spot must stay clear of (FUN_007b5318); none when absent.
+  bodies?: (() => readonly DropBody[]) | undefined;
+}
+
+// FUN_007b5318 for the spot sphere against one box, in XZ: the nearest point
+// of the rotated rectangle to the spot's centre lies within the spot radius.
+export function spotHitsBody(spot: DropPoint, b: DropBody): boolean {
+  const dx = spot.x - b.x;
+  const dz = spot.z - b.z;
+  const c = Math.cos(-b.yaw);
+  const s = Math.sin(-b.yaw);
+  const lx = dx * c - dz * s;
+  const lz = dx * s + dz * c;
+  const nx = Math.max(-b.halfX, Math.min(b.halfX, lx));
+  const nz = Math.max(-b.halfZ, Math.min(b.halfZ, lz));
+  const ex = lx - nx;
+  const ez = lz - nz;
+  return ex * ex + ez * ez < DROP_SPOT_RADIUS * DROP_SPOT_RADIUS;
 }
 
 export class DropSearch {
@@ -93,7 +136,19 @@ export class DropSearch {
     if (g === null) return this.reject();
     const at = { x, y: g + DROP_GROUND_OFFSET, z };
     if (this.opts.wallBlocks(this.eye(), at)) return this.reject();
+    if (this.bodyUnder(at)) return this.reject();
     return { status: 'found', at };
+  }
+
+  // FUN_006a44fc's loop over the object entities (see the header).
+  private bodyUnder(at: DropPoint): boolean {
+    for (const b of this.opts.bodies?.() ?? []) {
+      const dx = at.x - b.x;
+      const dz = at.z - b.z;
+      if (dx * dx + dz * dz >= DROP_BODY_RANGE_SQ) continue;
+      if (spotHitsBody(at, b)) return true;
+    }
+    return false;
   }
 
   private reject(): DropStep {

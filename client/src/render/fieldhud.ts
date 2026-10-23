@@ -31,7 +31,8 @@ import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
-import { createCounter, type Counter, type CounterKind, type CounterMusic } from '../classic/shop.ts';
+import { createCounter, type Counter, type CounterKind, type CounterModel, type CounterMusic } from '../classic/shop.ts';
+import { TekkerItemView } from './tekkeritem.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
@@ -527,6 +528,7 @@ export class FieldHud {
         pmt: () => this.names()?.pmt ?? null,
         items: this.opts.items,
         picture: (item) => this.itemPicture(item),
+        model3d: (item) => this.itemModel3d(item),
         ...(this.opts.music ? { music: this.opts.music } : {}),
         log: this.opts.log,
       },
@@ -542,6 +544,21 @@ export class FieldHud {
       };
       counter.start();
     });
+  }
+
+  // The item's 3D object at the description window (render/tekkeritem.ts):
+  // weapons only; null for the other kinds and when the model does not load.
+  private async itemModel3d(item: ItemData): Promise<CounterModel | null> {
+    const view = new TekkerItemView(this.files);
+    const ok = await view.load(item.data1, this.names()?.pmt ?? null).catch((err: unknown) => {
+      this.opts.log?.(`tekker item: ${(err as Error).message}`);
+      return false;
+    });
+    if (!ok) {
+      view.dispose();
+      return null;
+    }
+    return view;
   }
 
   // The item's picture (ItemKTep4.afs, formats/itemkt.ts) as a bitmap, or
