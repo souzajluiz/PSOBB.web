@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import type { NjcmObject } from '../formats/njcm.ts';
-import { sampleKeys, type NjMotion } from '../formats/njmotion.ts';
+import { hasRootZOff, markRootZOff, sampleKeys, type NjMotion } from '../formats/njmotion.ts';
 import { EVAL_BREAK, EVAL_ZXY_ANG } from '../formats/xj.ts';
 import type { MotionRecord } from '../formats/plymotion.ts';
 
@@ -39,9 +39,6 @@ const FLAG_NO_BLEND_OUT = 0x40000000;
 // motions (e.g. 104, 111, 350) key node 0's Z from 0 to ~25 (the forward root
 // travel), and this rule drops it; the model's bob (Y) and sway (X) stay.
 export const FLAG_ROOT_Z_OFF = 0x20000000;
-// Motions (the NJS_MOTION objects) that had a flagged record start. Keyed by
-// object, so the cached motion of PlayerMotions is flagged for every user.
-const rootZOff = new WeakSet<NjMotion>();
 
 interface BoneState {
   bone: THREE.Bone;
@@ -127,7 +124,7 @@ export class PlayerAnimator {
     }
     const prev = this.record;
     this.motion = this.motions.get(record.index);
-    if (record.flags & FLAG_ROOT_Z_OFF) rootZOff.add(this.motion);
+    if (record.flags & FLAG_ROOT_Z_OFF) markRootZOff(this.motion);
     this.recordForSlot = slots ?? this.recordForSlot;
     const fade = prev !== null && !(record.flags & FLAG_NO_BLEND_IN) && !(prev.flags & FLAG_NO_BLEND_OUT);
     if (fade) {
@@ -195,7 +192,7 @@ export class PlayerAnimator {
     else if (this.record?.mode === 1) frame = (frame + this.step * sub) % m.frameCount;
     else frame = Math.min(frame + this.step * sub, m.frameCount - 1);
     const v = this.tmp;
-    const zOff = rootZOff.has(m);
+    const zOff = hasRootZOff(m);
     for (let i = 0; i < this.bones.length && i < m.nodes.length; i++) {
       const b = this.bones[i];
       const n = m.nodes[i];

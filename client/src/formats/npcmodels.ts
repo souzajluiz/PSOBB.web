@@ -51,10 +51,19 @@ export type NpcMotionFamily = 'female' | 'male' | 'hfw';
 
 // Motion tables of the three base constructors: [idle, walk] NJS_ACTION
 // indices into plymotionnpctown.cpt with their frames-per-tick speed.
-export const NPC_MOTION_TABLES: Record<NpcMotionFamily, { table: number; idle: { motion: number; speed: number }; walk: { motion: number; speed: number } }> = {
-  female: { table: 0x0092f470, idle: { motion: 0, speed: 0.9 }, walk: { motion: 2, speed: 1.4 } },
-  male: { table: 0x0092f79c, idle: { motion: 0, speed: 0.9 }, walk: { motion: 1, speed: 1.4 } },
-  hfw: { table: 0x0092f5a4, idle: { motion: 0, speed: 0.9 }, walk: { motion: 3, speed: 1.4 } },
+// `rootZ`: the row's animation record has 0x20000000 (PsoBB.exe rows read with
+// tools/exedata.py motions: 0x0092f470 slot 1 flags 0x20000002, 0x0092f79c and
+// 0x0092f5a4 likewise; idle slot 0 flags 0x1). Playing the row marks its motion
+// (formats/njmotion.ts markRootZOff, Enemy__SetNjmFactorFlag), so the position
+// Z is 0. ASSUMED: the NPC's motion switch (vtable +0x168, 0x0060c834) starts
+// the row through Player__StartNpcAnimation, whose weapon_anim_data is this table.
+export const NPC_MOTION_TABLES: Record<
+  NpcMotionFamily,
+  { table: number; idle: { motion: number; speed: number; rootZ: boolean }; walk: { motion: number; speed: number; rootZ: boolean } }
+> = {
+  female: { table: 0x0092f470, idle: { motion: 0, speed: 0.9, rootZ: false }, walk: { motion: 2, speed: 1.4, rootZ: true } },
+  male: { table: 0x0092f79c, idle: { motion: 0, speed: 0.9, rootZ: false }, walk: { motion: 1, speed: 1.4, rootZ: true } },
+  hfw: { table: 0x0092f5a4, idle: { motion: 0, speed: 0.9, rootZ: false }, walk: { motion: 3, speed: 1.4, rootZ: true } },
 };
 
 // LoadNpcTownMotion_00607418: LoadAndProcessRelAsset_005b9568 reads it as a

@@ -24,7 +24,7 @@ import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { NjcmObject } from '../formats/njcm.ts';
 import { parseNjcmObject } from '../formats/njcm.ts';
-import type { NjMotion } from '../formats/njmotion.ts';
+import { markRootZOff, type NjMotion } from '../formats/njmotion.ts';
 import {
   NPC_CAMERA_MOVER_LERP,
   NPC_CAMERA_MOVER_VIEWS,
@@ -509,7 +509,9 @@ export class NpcLayer {
     if (!n.cls) return;
     const row = NPC_MOTION_TABLES[n.cls.family][m === 1 ? 'walk' : 'idle'];
     const motion = this.motions[row.motion];
-    if (motion) n.animator.play(motion, row.speed, true);
+    if (!motion) return;
+    if (row.rootZ) markRootZOff(motion); // the flagged row (formats/npcmodels.ts)
+    n.animator.play(motion, row.speed, true);
   }
 
   // The shown NPCs' hitboxes block the players (CollisionWorld.bodies).

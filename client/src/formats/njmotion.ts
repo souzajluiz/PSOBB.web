@@ -66,6 +66,23 @@ export interface NjMotionOptions {
   shortAngles?: boolean;
 }
 
+// Motions whose NJS_MOTION got the user-function bit (inp_fn |= 0x80) at run
+// time: the exe's Enemy__SetNjmFactorFlag (`current_njm->wUnk_0x0a |= 0x80`),
+// called when the animation record has 0x20000000 (player and NPC motion
+// code, Enemy__InitAnimation and Player__StartNpcAnimation). The NJM evaluator
+// then takes the position interpolator FUN_00842d7c from table 0x00a2271c
+// (index 2), which keeps X and Y and sets Z to 0.0 (NJM_InitializeAnimationContext
+// 0x008303dc). The bit is never cleared, and the motion object is shared per
+// archive entry, so the mark is per object (render/playeranim.ts, the NPC walk
+// in render/npcview.ts, FLAG_ROOT_Z_OFF).
+const rootZOff = new WeakSet<NjMotion>();
+export function markRootZOff(m: NjMotion): void {
+  rootZOff.add(m);
+}
+export function hasRootZOff(m: NjMotion): boolean {
+  return rootZOff.has(m);
+}
+
 // Quaternion keys (0x14): u32 frame, f32[4].
 function readQuatKeys(rel: RelFile, p: number, n: number): NjQuatKey[] {
   if (p + n * 0x14 > rel.data.length) throw new Error(`quaternion keys at 0x${p.toString(16)} (${n}) out of range`);

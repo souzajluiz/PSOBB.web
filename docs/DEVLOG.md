@@ -13773,3 +13773,37 @@ Follow-up to "trade follow-up" above: the traced windows are ported. Code: `clie
 - The form 1 ring is drawn whenever the form 1 part is on the field (no state check), as the dump's update draws it every frame.
 
 **Checks:** `node tests/minimap.test.ts` (new: the form 1 icon count, colour and shape, the body and the heads' order, the ring at 38 / 76 / 114 on the cardinal points at yaw 0, the missing fourth icon at 114, a quarter turn; the form 3 trail off on a frame with bit 0 set, and white with the trail off). `node tests/darkfalz.test.ts` (new: the scale animation's climb in states 2 / 3, the counter's 120 / 150 / 270 / 300 breakpoints, the falls and climbs' clamps, the reset). `node tests/volopt.test.ts`, `tests/darkfalzwarp.test.ts`, `tests/fieldhud.test.ts` pass. `cd client && npx tsc --noEmit -p .` (Node 24) clean. The worktree has no `node_modules`; `tests/minimap.test.ts` needs `three` (through `quest/questui.ts`), so the run symlinked the main checkout's `client/node_modules` and removed the link afterwards. Not run in Chrome or Playwright (per the brief).
+## 2026-10-23: NPC and enemy root Z (the NPC walk rows drop it; the enemies keep it)
+
+**Report:** the follow-up asked whether enemies and enemy-built NPCs take the player's 0x80 / interpolator 2 (root Z zeroed), and whether the enemy walk and run motions surge. Per the exe, the enemies do not get the bit; the NPC walk rows do.
+
+**Exe (PsoBB.exe dump `Psobb.exe-05112026.c`, `tools/exedata.py motions`):**
+- Every writer of `motion +0xa |= 0x80` in the enemy and NPC code is `Enemy__SetNjmFactorFlag` (dump 790832: `current_njm->wUnk_0x0a |= 0x80`). Its callers: `Enemy__InitAnimation` (791374, when `field_0xb4 & 0x20000000`; field_0xb4 is the record's u32 at +0xc) and `Player__StartNpcAnimation` (791051 and 791070, when `animation_flags & 0x20000000`; animation_flags is the record's flags). The other `|= 0x80` writes are `Player__InitWeaponAnimation` (553748, player weapon motion, on the record bit) and the challenge player (463566, 463680, unconditional, player only). No enemy code writes it directly.
+- The enemy record is `unknown_enemy_animation_data` (dump 2896): 16 bytes, `u16 mode, u16 next, i32 motion, f32 speed, u32 flags`, flags at +0xc. The NPC rows use the same shape (`Player__StartNpcAnimation` reads `weapon_anim_data`).
+- Enemy tables: about 60 table addresses (the ones in `formats/enemymodels.ts` comments and the `+0xd8` immediates in the exe). Every real row has a small flag word (0x0, 0x1, 0x20, 0x2d, 0x4d, 0x51, 0x8000, ...). None has 0x20000000. The rows that show bit 29 in a scan are float words or the end of the table (0xffffffff, 0x3f800000). NOT read: the `g_*AnimationData` tables (dump names only, no address): Barbaray, Hildebear default, Mothman, Savage Wolf, Bulclaw, Dark Gunner, Epsigard, Sinowbeat, Sinowberill, Merissa, Booma, Derolle. Also not read: the enemy child spawn path (dump 330143, `animation_flags = param_4[1]` from the spawn record).
+- NPC rows (`NPC_MOTION_TABLES`, tables 0x0092f470 female, 0x0092f79c male, 0x0092f5a4 hfw): slot 0 (idle, motion 0) flags 0x1; slot 1 (walk: female motion 2, male 1, hfw 3) flags **0x20000002**. So the NPC walk plays with the bit and the exe zeroes its root Z. ASSUMED: the NPC motion switch (vtable +0x168, 0x0060c834) starts the row through `Player__StartNpcAnimation`; the function itself is not traced.
+- `DAT_00ae6dc8` is `g_NJUpdateActiveFlag_00aeb530`. Bit 0 is set by `SetBit0ForAe6dc8_0082fa9c` (0082fa9c) and cleared by `UnsetBit0ForAe6dc8_0082fab4`. The setters are the Vol Opt render helpers (`RenderVoloptForm7Entity` 196270, `RenderVoloptForm7Hazard` 197228, `RenderVoloptForm2MinionMapObjectVariant` 198845, and two unnamed helpers at 193620 / 193675 in the dump). Not the player body: the premise was wrong. With the bit set, `g_pNJM_RotationInterpolator` / `unk_func2` are `g_InterpolateVector3`, which replaces the record's rotation reader.
+- The two rotation readers: `InterpolateVector3_00842e50` (dump 863013) and `InterpolateVector3_00842f3c` (dump 863034). Both take the shortest way round through a 16-bit subtraction `(short)(b - a)` and round to an integer BAMS. They differ in the key read: 0x842e50 goes through `NJM_FindKeyframeInterval_0084ae50` with stride 0x10 and int reads, 0x842f3c reads 8-byte short keys. The player and the enemies use the 8-byte short keys. ASSUMED: `g_InterpolateVector3` = 0x00842f3c (its assignment is not in the dump). The port's `shortAngles` path (`sampleKeys` with `wrapAngles`) is the same shortest-way lerp without the whole-BAMS rounding (0.5 / 65536 turn at most). Not ported.
+
+**Port:**
+- `formats/njmotion.ts`: `markRootZOff(m)` / `hasRootZOff(m)`, a WeakSet of NJS_MOTION objects (sticky per object, as `*(u16*)(motion + 0xa) |= 0x80`). `render/playeranim.ts` now uses it (the player behaviour is unchanged; `tests/motions.test.ts` 4c still passes).
+- `render/enemymodel.ts` `NodeAnimator.apply`: a marked motion's position Z is 0 on every keyed node (X and Y kept), as the player's.
+- `formats/npcmodels.ts` `NPC_MOTION_TABLES`: each row has `rootZ` (walk true, idle false; the flags above). `render/npcview.ts` `setMotion` marks the walk motion before it plays.
+- Enemies: no change. No enemy motion gets the mark.
+
+**Measured** (`tests/enemies.test.ts`, `tests/motions.test.ts` 4d):
+- Enemy walk / run motions: 116 read (4 not read: the Pan Arms motions key fewer nodes than the model), 111 key node 0's Z. Before and after: the same, unmarked. Examples: Savage Wolf run b Z -3.32..12.25 (the test checks the peak 12.25); Nano Dragon walk Z 3.10..4.13; Dragon walk 2.33 (constant); Pofuilly walk 7.65..8.38; Shinowa walk 1.72..2.58. These keep their Z in the exe too, so if an enemy surges in game the cause is not this bit.
+- NPC walk rows (female 2, male 1, hfw 3): 16 node-0 position keys each, all with Z 0. The mark changes no pose (the port already had Z 0 there). Before and after: Z 0 on every frame. The 4d test checks the rule with a synthetic motion too: unmarked Z = key lerp (13.33 at frame 10), marked Z = 0, X and Y kept.
+- Player field walk 104 (from the previous entry): unchanged.
+
+**Checks.** `node tests/motions.test.ts` OK; `node tests/enemies.test.ts` ALL PASS (235 floor variations, 24306 entries, 140 models); `node tests/npcs.test.ts` ALL PASS; `node tests/emotes.test.ts` and `node tests/playermove.test.ts` pass; `tsc --noEmit -p client` clean. The tests import three through `client/node_modules` (a symlink made in this worktree; gitignored).
+
+**ASSUMED:**
+- The NPC walk's motion switch runs through `Player__StartNpcAnimation` (0x0060c834 not traced).
+- `g_InterpolateVector3` = 0x00842f3c.
+- The enemy `g_*AnimationData` tables (names only) carry no 0x20000000 record; checked only through the tables with an address.
+
+**Left:**
+- Enemy child spawn records (dump 330143, `animation_flags = param_4[1]`): their flags source is not traced; a record with the bit would get the mark there.
+- Address of the `g_*AnimationData` tables (Barbaray, Hildebear, Mothman, Savage Wolf, Bulclaw, Dark Gunner, Epsigard, Sinowbeat, Sinowberill, Merissa, Booma, Derolle) to read their flags.
+- Pan Arms motions (bm7_s_paa_body.bml, `run_bm7_s_pal_body.njm` etc.) fail to parse with the node count the census passes (ASSUMED cause: the spec's own count; not traced); the census skips them.
