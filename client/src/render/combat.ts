@@ -212,6 +212,8 @@ const buffName = (type: number): string => ({ 9: 'Shifta', 10: 'Deband', 11: 'Je
 // GC-ForestGameRareMagFeed sends 0x20900E00 for a killing hit).
 // play_directional_sound_effect: a sound this far from the listener is dropped.
 const SE_CUTOFF = 300;
+// The Moon Atomizer's object range (FUN_0069a1e0: 0x41200000 = 10.0).
+const ATOMIZER_RANGE = 10;
 
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 
@@ -6201,7 +6203,7 @@ export class CombatView {
     const kind = targetListKind(tech);
     let sent: Array<{ entityId: number }> = [];
     if (tech === TECH.reverser) {
-      const dead = this.reverserTarget(data);
+      const dead = this.reverserTarget(data.rangeH);
       sent = dead === null ? [] : [{ entityId: dead }];
     } else if (tech === TECH.resta || tech === TECH.anti || tech === TECH.shifta || tech === TECH.deband) {
       sent = this.playerTargets(data).map((id) => ({ entityId: id }));
@@ -6421,13 +6423,13 @@ export class CombatView {
 
   // Reverser's one 6x47 target: the nearest party member lying dead within
   // range_h (ASSUMED: the targeting system's entry for the 6x4E particle).
-  private reverserTarget(data: TechniqueData): number | null {
+  private reverserTarget(rangeH: number): number | null {
     const me = this.game.self;
     const positions = this.view?.playerPositions();
     const from = me && positions?.get(me.clientId);
     if (!me || !positions || !from) return null;
     let best: number | null = null;
-    let bestD = data.rangeH;
+    let bestD = rangeH;
     for (const id of this.deadPlayers) {
       const p = positions.get(id);
       if (!p) continue;
@@ -6438,6 +6440,13 @@ export class CombatView {
       }
     }
     return best;
+  }
+
+  // The Moon Atomizer's 6x33 target (items.ts use): the Reverser's pick at the
+  // object's range 10 (FUN_0069a1e0 / 0x41200000; ASSUMED: the record (4,9) of
+  // FUN_007a401c is this nearest-dead pick, its filler not traced).
+  atomizerTarget(): number | null {
+    return this.reverserTarget(ATOMIZER_RANGE);
   }
 
   // unknown_cast_tech through render/techlightning.ts TechObjects, for the local

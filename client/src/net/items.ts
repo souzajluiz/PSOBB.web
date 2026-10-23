@@ -202,6 +202,14 @@ export function buildUseItem(clientId: number, itemId: number): Uint8Array {
   return b;
 }
 
+// 6x33 (G_RevivePlayer_6x33, 8; FUN_0069a18c SendPacket0x60Subcommand0x33): the
+// Moon Atomizer's revive. The sender's id at +2, the revived player at +4, 0 at +6.
+export function buildRevivePlayer(clientId: number, target: number): Uint8Array {
+  const { b, dv } = sub(0x33, 0x08, clientId);
+  dv.setUint16(4, target, true);
+  return b;
+}
+
 // G_FeedMag_6x28 (0x0C, Player_SendFeedMagPacket_0068dcf8)
 export function buildFeedMag(clientId: number, magId: number, foodId: number): Uint8Array {
   const { b, dv } = sub(0x28, 0x0c, clientId);
@@ -1147,6 +1155,8 @@ export class GameItems {
       maxGrind?: (weapon: ItemData) => number;
       telepipe?: () => boolean;
       statusFlags?: () => number;
+      // The Moon Atomizer's target (the nearest dead party member in range), null when none.
+      atomizerTarget?: () => number | null;
     } = {},
   ): boolean {
     const d = it.data.data1;
@@ -1161,6 +1171,9 @@ export class GameItems {
     // ValidateItemForEquip_005c9e40: the Telepipe needs
     // SinowberillChallengePlayer_IsTelepipeEnabled_0068bfa0.
     if (d[1] === 7) return rules.telepipe?.() ?? false;
+    // Subclass 4 (03 04 00, Moon Atomizer): FUN_0068be94 (case 4) needs the
+    // targeting record (4,9) with a target; without one the use is refused.
+    if (d[1] === 4) return (rules.atomizerTarget?.() ?? null) !== null;
     if (d[1] < 0x0a && d[1] !== 2) return true;
     if (d[1] === 2) {
       const max = rules.maxTechLevel?.(d[4]);
@@ -1186,6 +1199,12 @@ export class GameItems {
     if (wrappedFlag(it.data)) {
       unwrap(it.data);
     } else {
+      // The Moon Atomizer's 6x33 follows the 6x27 (the exe sends it from the 6x27
+      // echo, action_use_item -> FUN_005deb74), to the target of record (4,9).
+      if (d[1] === 4) {
+        const target = rules.atomizerTarget?.() ?? null;
+        if (target !== null) this.game.sendSubcommand(0x33, buildRevivePlayer(this.game.selfId, target).subarray(4));
+      }
       // use_telepipe -> unknown_cast_tech(ryuker): the caster's pipe.
       if (d[1] === 7) this.onTelepipe();
       // Antidote / Antiparalysis: the use entry 0x005dee9c (combat/status.ts).

@@ -9,6 +9,9 @@ import { wrapGameText } from '../client/src/classic/chat.ts';
 import { pioneer2ReturnArrival } from '../client/src/net/telepipe.ts';
 import { reviveRestore, reverserHp } from '../client/src/combat/buffs.ts';
 import { parseRevivePlayer } from '../client/src/net/game.ts';
+import { buildRevivePlayer, buildUseItem, GameItems } from '../client/src/net/items.ts';
+import { itemFromHex } from '../client/src/formats/itemnames.ts';
+import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 
 // A stub canvas for the text measure (gametext.ts): every glyph is 7 px wide.
 (globalThis as unknown as { OffscreenCanvas: unknown }).OffscreenCanvas = class {
@@ -167,6 +170,38 @@ check(wrapGameText(QUESTION, RETURN_POS.w - 20).length === 3, 'the question is t
   check(sent.length === 1, 'the revive sends one 6x4F');
   dmg.revive(50);
   check(sent.length === 1, 'a second revive while alive sends nothing');
+}
+
+{
+  // The Moon Atomizer's send side (tool 03 04 00; FUN_005deb74 -> FUN_0069a18c):
+  // the 6x27 use, then the 6x33 {sender, target} to the nearest dead teammate.
+  const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(' ');
+  check(hex(buildRevivePlayer(2, 1)) === '33 02 02 00 01 00 00 00', 'buildRevivePlayer: 6x33 bytes (sender +2, target +4)');
+  const sent: Array<[number, string]> = [];
+  const game = {
+    on: () => {},
+    conn: { onCommand: () => {}, send: () => {} },
+    info: null,
+    players: new Map(),
+    selfId: 2,
+    active: true,
+    sendSubcommand: (sub: number, body: Uint8Array) => sent.push([sub, hex(body)]),
+  } as never;
+  const inv = (h: string, id: number): InventoryItem => ({ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: { ...itemFromHex(h), id } });
+  const atomizer = inv('03040000 00000000 00000000 00000000 00000000', 0x10);
+  const ch = { meseta: 0, inventory: [atomizer], techLevels: [], stats: {}, charClass: 0, sectionId: 0 } as unknown as CharacterFile;
+  const items = new GameItems(game, { character: () => ch, fullCharacter: () => null } as never);
+  const none = { atomizerTarget: () => null };
+  check(!items.canUse(atomizer, none), 'Moon Atomizer: no dead teammate in range, not usable');
+  items.use(0x10, none);
+  check(sent.length === 0 && ch.inventory.length === 1, 'no target: nothing sent, the item is not used up');
+  const one = { atomizerTarget: () => 1 };
+  check(items.canUse(atomizer, one), 'Moon Atomizer: a dead teammate in range, usable');
+  items.use(0x10, one);
+  check(sent.length === 2 && sent[0][0] === 0x27 && sent[1][0] === 0x33, 'use: 6x27 first, then 6x33');
+  check(sent[1][1] === '01 00 00 00', 'use: the 6x33 body carries the target (packet +4)');
+  check(hex(buildUseItem(2, 0x10)).startsWith('27 02 02 00'), '6x27 keeps its sender id');
+  check(ch.inventory.length === 0, 'use: the Atomizer is used up');
 }
 
 console.log(`${checks - failures}/${checks} checks passed${failures ? `, ${failures} FAILED` : ' ALL PASS'}`);
