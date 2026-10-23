@@ -45,7 +45,7 @@ RUN sed -e 's/"LocalAddress": "en0"/"LocalAddress": "127.0.0.1"/' \
         /app/newserv/system/config.example.json > /app/newserv/system/config.json
 COPY --from=client /app/client/dist /app/client/dist
 COPY --from=client /app/bridge/node_modules /app/bridge/node_modules
-COPY bridge/server.mjs bridge/admin.mjs bridge/admin-chars.mjs bridge/admin-items.mjs bridge/admin-quests.mjs bridge/admin-hash.mjs bridge/package.json /app/bridge/
+COPY bridge/*.mjs bridge/package.json /app/bridge/
 COPY bridge/admin-ui /app/bridge/admin-ui
 # The quest upload validates files with the client's own parsers (Node strips the types).
 COPY client/src/formats /app/client/src/formats
