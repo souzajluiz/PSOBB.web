@@ -220,6 +220,7 @@ export class GameView {
         },
         battle: () => this.hud.battleTeam?.(this.game.selfId) ?? null,
         enemies: () => this.combat.minimapEnemies(),
+        forcedIcons: () => this.combat.minimapIcons(),
         switchOn: (flag) => this.fieldObjects?.switchOn(flag) ?? false,
         doorIcons: () => this.doorMinimapIcons(),
         cameraYaw: () => {

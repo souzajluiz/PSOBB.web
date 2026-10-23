@@ -11743,3 +11743,24 @@ worktree.
 - The exe's `CheckPlayerCollisionWithEntities` may also check the trap's `+0x30` bits set by the ctor (`0x60000000`); none of them is in 0x80000800, so the step test is not affected (traced from the ctor, not the step filter in full).
 
 **Checks:** `node tests/objectcollision.test.ts` (new section 3b: the pillar sphere, 6 units blocks, 8 does not, step toward / away); `cd client && tsc --noEmit -p .` clean. Also pass: `collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`. Not run in Chrome (the brief).
+
+## 2026-10-23: Minimap: the forced boss icons (Olga Flow 2, De Rol Le, Gal Gryphon, Dark Falz form 3)
+
+**What changed:** the boss icons the radar and the Area Map still lacked. Olga Flow phase 2 is a forced 4.0 icon at its root; De Rol Le and Gal Gryphon are forced 2.0 icons at their roots; the Dark Falz form 3 body is a forced 5.0 icon whose colour fades toward the prisoner's colour, with a forced 2.5 trail of icons from the body toward a held player. Code: `classic/minimap.ts` (`BOSS_ICON_RULES`, `FALZ3_COLORS`, `fadeColor`, `falz3TargetColor`, `falz3Icons`), `combat/darkfalz3.ts` (`minimapColour`, `minimapIcons`, the fade at the top of `tick`), `render/combat.ts` (`minimapEnemies` skips the form 3 part, `minimapIcons`), `render/fieldhud.ts` (`MinimapSource.forcedIcons`), `render/gameview.ts` (the wiring).
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`, `unknown_add_minimap_icon3(pos, colour, scale, shape, flags)`, flags 1 = forced):
+- **Olga Flow 2**: `unknown_olga_related` (dump 218236; the Olga 2 update) calls icon3 at `&x2` with `0x40800000` (4.0), colour 0xffffa24c, shape 1, after `enable_reticle` (dump 218366).
+- **De Rol Le**: `UpdateDerolle` (dump 175033) calls icon3 at `&x2` with `0x40000000` (2.0), unconditional after `enable_reticle_` (dump 175250).
+- **Gal Gryphon**: `update_gal_gryphon` (dump 226140) calls icon3 at `&x2` with `0x40000000` (2.0), unconditional after `enable_reticle_` (dump 226217).
+- **Dark Falz form 3 body**: `dark_falz_form3_minimap_icons` (dump 198990; the call in `VoloptForm7EntityUpdate0045ad6c`, dump 198703, which is the port's `DfForm3`, update 0x0045AD6C). The held slot is `+0x3c2` (the port's `held`). Colour: slot > 3 draws nothing and does not fade (199013); 0xffff (nobody) targets 0xffffa24c; else `g_DarkFalzForm3MinimapIconColors[slot]` (`DAT_009a6428`, read from the exe: 0xffff0000, 0xff00ff00, 0xffffff00, 0xff0000ff). The current colour is `+0x3cc`, set to 0xffffa24c in the ctor (dump 200031), and each channel moves 16 toward the target per frame (199018-199060). The body is icon3 at 5.0, forced (199068). Trail (199073-199126): with the slot's player alive, icons 2.5 forced every 25 units (`g_DarkFalzMinimapStepSize` 25.0) from the body toward the prisoner, at most round(360 / 25) = 14 (`_DAT_00a45820` 360.0), in the slot's colour (not faded). White 0xffffffff replaces the colour while `+0x3b8` is 0 and `+0x3c8` bit 2 is set (199061-199064).
+
+**Not ported, and why:** the white override needs `+0x3b8`, the form's scale animation (`Voloptform7updatescaleanimation0045b9b8`, dump 199138; a 0..1 scale that the state's timer drives), which the port does not model, so the port passes white = false. The Dark Falz hazard icons (5.0 x4 and the ring of 5.0 icons in `UpdateVoloptForm7Behavior`, dump 195879-195998, and the forced 2.5 in `UpdateVoloptForm7Hazard`, dump 197587 at 197706) are not traced to a port entity: the dump's name `VoloptForm7` is the Vol Opt family's hazard set, so the Dark Falz link is not confirmed. The Gal Gryphon minion (1.5, dump 229625) and Sinow Berill (2.0, dump 231675) are not bosses; left open.
+
+**ASSUMED:**
+- Olga Flow 2, De Rol Le and Gal Gryphon: `&x2` is the root the port draws (as for phase 1). The port's DE_ROL_LE is the `UpdateDerolle` entity (the body and mine types are other updates).
+- The form 3 body's position is the port's form position (the dump's `+0x300` and `+0x38` are equal at the ctor, dump 199956 and 199936).
+- The prisoner's slot is the port's `clientId` (the dump's `+0x3c2` is the player slot, `GetPlayer_0068d5a8`).
+- The trail's flag (`+0x3c8` bit 0) is clear whenever the port draws a trail; the bit's writers were not traced.
+- The fade runs once per `DfForm3.tick` (the entity's update).
+
+**Checks:** `node tests/minimap.test.ts` (new: the Olga 2 / De Rol Le / Gal Gryphon rules; the fade's channel steps and clamps; the table targets, the slot above 3, the default; the body's shape, scale and colour; the white override; the trail's count, spacing, colour, the 14 cap, and no trail within 25). `tests/darkfalz.test.ts`, `tests/darkfalzwarp.test.ts`, `tests/fieldhud.test.ts`, `tests/bossrooms.test.ts` pass. The client `tsc --noEmit` shows only the missing `three` types in this worktree (no installed dependencies here; the errors are in files not touched). Not run in Chrome or Playwright (per the brief).

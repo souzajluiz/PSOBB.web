@@ -128,8 +128,19 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // Olga1ObjectUpdate_00492a84 calls icon3 at its position with scale 0x40a00000
 // (5.0), colour 0xffffa24c, flags 1 (exe 0x00492d95). ASSUMED: the position is
 // the enemy's root (the dump passes param_1[1].field_0x144).
+// OLGA_FLOW_2 (unknown_olga_related, dump 218236): icon3 at the root (&x2) with
+// scale 0x40800000 (4.0), colour 0xffffa24c, flags 1 (dump 218366), straight
+// after enable_reticle. ASSUMED: x2 is the root, as for phase 1.
+// DE_ROL_LE (UpdateDerolle, dump 175033): icon3 at &x2 with scale 0x40000000
+// (2.0), flags 1 (dump 175250). ASSUMED: the port's DE_ROL_LE is this update
+// (the body and mine types are other updates).
+// GAL_GRYPHON (update_gal_gryphon, dump 226140): icon3 at &x2 with scale 2.0,
+// flags 1 (dump 226217), unconditional after enable_reticle.
 export const BOSS_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
+  OLGA_FLOW_2: { scale: 4, color: ENEMY_ICON_COLOR, forced: true },
+  DE_ROL_LE: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
 };
 export function enemyIconRule(type: string): EnemyIconRule {
   return BOSS_ICON_RULES[type] ?? ENEMY_ICON_RULE;
@@ -146,6 +157,75 @@ export function komoVariant6Icon(value: number, state: 0 | 1, yrot: number, pos:
   const v = Math.trunc(value);
   const odd = Math.abs(v) & 1;
   return { x: pos.x, z: pos.z, color: state === 0 ? ICON_RED : ICON_GREEN, shape: 3, scale: v < 0 ? -odd : odd, heading: yrot };
+}
+
+// Dark Falz form 3 (dark_falz_form3_minimap_icons, dump 198990; called from
+// VoloptForm7EntityUpdate 0045ad6c, dump 198703). The body's icon is forced at
+// 5.0 (icon3 flags 1, dump 199068); its colour is the prisoner's table entry
+// DAT_009a6428 (g_DarkFalzForm3MinimapIconColors, read from the exe: red,
+// green, yellow, blue), or 0xffffa24c when nobody is held (0xffff). The colour
+// is kept at +0x3cc (the ctor sets 0xffffa24c, dump 200031) and moves toward
+// its target by 16 a channel a frame. A held slot above 3 draws nothing and
+// does not fade (dump 199013).
+export const FALZ3_COLORS: readonly number[] = [0xffff0000, 0xff00ff00, 0xffffff00, 0xff0000ff];
+export const FALZ3_DEFAULT_COLOR = 0xffffa24c;
+export const FALZ3_FADE_STEP = 0x10;
+// The trail: forced 2.5 icons (icon3 0x40200000, dump 199121) every 25 units
+// (g_DarkFalzMinimapStepSize = 25.0, dump 199087) from the body toward the
+// prisoner, at most round(360 / 25) = 14 of them (span 360 at 0x00a45820, dump
+// 199083 and 199092), in the prisoner's colour (not faded).
+export const FALZ3_TRAIL_STEP = 25;
+export const FALZ3_TRAIL_SPAN = 360;
+export const FALZ3_TRAIL_SCALE = 2.5;
+
+// One channel-wise step of the colour fade (dark_falz_form3_minimap_icons,
+// dump 199018-199060): each of the three colour bytes moves toward the target
+// by 16 and stops at it; the alpha is 0xff.
+export function fadeColor(cur: number, target: number): number {
+  let out = 0xff000000;
+  for (let sh = 0; sh < 24; sh += 8) {
+    const a = (cur >>> sh) & 0xff;
+    const t = (target >>> sh) & 0xff;
+    const v = t > a ? Math.min(a + FALZ3_FADE_STEP, t) : t < a ? Math.max(a - FALZ3_FADE_STEP, t) : a;
+    out |= v << sh;
+  }
+  return out >>> 0;
+}
+
+// The colour the body fades toward for a prisoner slot (-1 for none), or null
+// when the exe draws nothing (a slot above 3, dump 199013).
+export function falz3TargetColor(held: number): number | null {
+  if (held < 0) return FALZ3_DEFAULT_COLOR;
+  return held <= 3 ? FALZ3_COLORS[held] : null;
+}
+
+// The body's icon and the trail toward the prisoner (player: the prisoner's
+// position, null when none). White (0xffffffff) overrides the colour while the
+// scale +0x3b8 is 0 with flag 4; the scale animation is not ported, so the
+// caller passes white = false. ASSUMED: the trail's flag (+0x3c8 bit 0) is clear,
+// as it is whenever the port draws a trail.
+export function falz3Icons(
+  pos: { x: number; z: number },
+  colour: number,
+  held: number,
+  player: { x: number; z: number } | null,
+  white = false,
+): Icon[] {
+  if (falz3TargetColor(held) === null) return [];
+  const out: Icon[] = [{ x: pos.x, z: pos.z, color: white ? 0xffffffff : colour, shape: 1, scale: 5, heading: 0 }];
+  if (held < 0 || !player) return out;
+  const dx = player.x - pos.x;
+  const dz = player.z - pos.z;
+  const len = Math.hypot(dx, dz);
+  if (len < FALZ3_TRAIL_STEP) return out;
+  const count = Math.min(Math.round(len / FALZ3_TRAIL_STEP), Math.round(FALZ3_TRAIL_SPAN / FALZ3_TRAIL_STEP));
+  const ux = (dx / len) * FALZ3_TRAIL_STEP;
+  const uz = (dz / len) * FALZ3_TRAIL_STEP;
+  const trail = FALZ3_COLORS[held];
+  for (let k = 1; k <= count; k++) {
+    out.push({ x: pos.x + ux * k, z: pos.z + uz * k, color: trail, shape: 1, scale: FALZ3_TRAIL_SCALE, heading: 0 });
+  }
+  return out;
 }
 
 // Full-map pan bounds (Minimap_ClampPlayerPosition_008058b4, filled in by the
