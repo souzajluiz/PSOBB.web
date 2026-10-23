@@ -406,6 +406,7 @@ async function main(): Promise<void> {
     const team = teamHost(lobby);
     if (team) hud.team = team;
     hud.transport = transportHost(shipName);
+    hud.guildCards = () => session?.guildCards ?? null;
     hud.episode4 = episode4;
     return new LobbyScreen(v, lobbyView, lobby, hud, shipName, fit.enabled);
   };

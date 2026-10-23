@@ -9,6 +9,7 @@
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
 import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
+import { GuildCardBook, GuildCardClient } from './guildcard.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
 
@@ -126,6 +127,10 @@ export class BBSession {
   // connectGameServer and replaced when a menu answer redirects to another
   // ship, see followRedirect).
   lobby: Lobby | null = null;
+  // The guild card book (net/guildcard.ts), downloaded once per session on the
+  // game server (startGuildCardSync); null until that sync is done.
+  guildCards: GuildCardBook | null = null;
+  private guildCardSync: Promise<GuildCardBook | null> | null = null;
   // What a redirect needs to log in again: the character slot and credentials
   // of the last game-server login.
   private gameLogin: { username: string; password: string; slot: number } | null = null;
@@ -273,7 +278,28 @@ export class BBSession {
       await conn.waitFor(0x67);
     }
     this.log(`joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}, client id ${lobby.selfId}`);
+    this.startGuildCardSync(conn);
     return lobby;
+  }
+
+  // Guild card book after login (the exe's 01E8 checksum, then the 01DC / 03DC /
+  // 02DC download when the server's copy differs; net/guildcard.ts). Once per
+  // session and not awaited: the lobby does not wait for it, and a failure is
+  // logged (the Guild Card menu then shows its empty row).
+  startGuildCardSync(conn: BBConnection): void {
+    if (this.guildCardSync) return;
+    this.guildCardSync = new GuildCardClient(conn)
+      .sync(null)
+      .then((book) => {
+        this.guildCards = book;
+        this.log(`guild cards: ${book.cards().length} in the book`);
+        return book;
+      })
+      .catch((err: unknown) => {
+        this.log(`guild card sync failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.guildCardSync = null;
+        return null;
+      });
   }
 
   // BB stream file (data-server connection, after login): 04EB asks for the

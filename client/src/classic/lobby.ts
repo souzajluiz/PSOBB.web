@@ -29,6 +29,7 @@
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
 import * as THREE from 'three';
+import type { GuildCardBook } from '../net/guildcard.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
@@ -37,6 +38,7 @@ import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
+import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
@@ -81,6 +83,8 @@ export interface LobbyHud {
   // The counter's Transport rows: A0 (Change SHIP) / A1 (Change BLOCK), then the
   // server's menu (07) is shown by the host (the ship select screen).
   transport?: TransportHost;
+  // The session's guild card book (net/guildcard.ts), null until its sync is done.
+  guildCards?: () => GuildCardBook | null;
 }
 
 export interface TransportHost {
@@ -121,6 +125,8 @@ export class LobbyScreen implements Screen {
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
   private itemList: ItemListWindow | null = null;
+  // Home menu > Guild Card (0xe): the Guild Card menu and its card list (guildcardmenu.ts).
+  private guildCard: GuildCardMenu | null = null;
   private options: OptionsMenu | null = null;
   // Quit Game's Yes / No (QuitMenu_Constructor_0074bf30).
   private quit: Question | null = null;
@@ -202,7 +208,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -248,6 +254,10 @@ export class LobbyScreen implements Screen {
       this.menu.leafOpen = true;
     } else if (id === 0x15) {
       this.logWindow = true;
+      this.menu.leafOpen = true;
+    } else if (id === 0xe) {
+      const host: GuildCardHost = { book: () => this.hud.guildCards?.() ?? null, loggedIn: true };
+      this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
     } else if (id === 6) {
       const full = () => this.hud.fullCharacter?.() ?? null;
@@ -337,6 +347,16 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.guildCard) {
+      e.preventDefault();
+      const action = this.guildCard.key(e);
+      if (action) console.info(`[classic] Guild Card: state 0x${action.state.toString(16)} (row ${action.card}) not ported yet`);
+      if (!this.guildCard.open) {
+        this.guildCard = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (this.logWindow) {
       if (e.key === 'Backspace' || e.key === 'Escape' || e.key === 'Enter') {
         this.logWindow = false;
@@ -412,6 +432,7 @@ export class LobbyScreen implements Screen {
   leave(): void {
     this.keys.clear();
     this.quit = null;
+    this.guildCard = null;
     this.party?.close();
     this.team?.close();
     this.closeOptions();
@@ -443,6 +464,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
+      inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);

@@ -12094,3 +12094,29 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **ASSUMED:** the vtable slot [1] is the per-frame update; the retarget runs once per AI tick; the stat row index is the template; the first two floats of each row are unused.
 
 **Checks:** `node tests/npcai.test.ts` (new cases: stat rows, nearest-box pick and strict range, the retarget cadence and the no-target case); `questflow`, `quests`, `npcs`, `questmisc` pass with Node 24. `cd client && tsc --noEmit -p .` clean. Not run in Chrome.
+## 2026-10-23: lobby Home menu: Guild Card menu window and card list (step 3)
+
+**What changed:** the lobby's Home menu entry 0xe (Guild Card) opens the Guild Card menu window and, from its Card list row, the card list. The card book is synced once per session after the game-server login. Code: `client/src/classic/guildcardmenu.ts` (`GuildCardMenu`, `cardRows`, `menuRows`, `GUILD_CARD_POS`), `client/src/classic/lobby.ts` (menu id 0xe, key / draw / busy / leave), `client/src/net/bbsession.ts` (`startGuildCardSync`, `guildCards`, called after the lobby join), `client/src/classic/main.ts` (`hud.guildCards`). Tests: `tests/guildcardmenu.test.ts` (ALL PASS). `tests/guildcard.test.ts`, `lobbymenu`, `teammenu`, `warpmenu`, `lobbymain` still pass.
+
+**Premise check (the brief named 716316 as the card list):** the exe says otherwise. `CreateGuildCardListWindow_0074744c` (716316) is a text setter: it adds `unitxt(11, DAT_00973414[param])` (ids 90, 91, 92, 280 by the menu's selection) to the window at `this+0x74`. The card names list is the window at get_gui_position(0x88) = (194, 256), built by `GuildCardListWindow_AllocateAndConstruct_00747ef4` (716964) -> `GuildCardListWindow_Constructor_00747f74` -> `GuildCardListWindow_PopulateItems_00748430` (717161). The window at 0x9b (`CreateGuildCardListWindow_00747728`, 716465) is the one-line description window (width 50090.0 as a fixed field); not ported.
+
+**Exe evidence (PsoBB.exe 1.25.13 via `tools/exedata.py`; dump line numbers):**
+- GUI table 0x00971f40, 8-byte stride (two floats): 0x82 = (13, 256) (the menu), 0x83 = (435, 256) (the confirm dialog), 0x84 = (194, 256), 0x85 = (402, 256), 0x87 = (402, 304), 0x88 = (194, 256) (the card list; read as 0x00972380 = 194.0, 0x00972384 = 256.0).
+- Menu (`CreateGuildCardMenuWindow_0074736c`, 716268): title unitxt(11, 0x30), rows unitxt(11, 0x65) (value state 3), 0x66 (0xb), 0x67 (0x1d), 0x117 (0x39, enabled when the scene is logged_in, else greyed); scroll 178.75.
+- State handler (714652..716264): states 0 / 1 build the menu, 2 shows it (flag 2 = chosen -> the state of the row; flag 4 = cancel -> state 0x4f, the leaf closes). State 0xb: the card list (0x88), chosen -> state 0xc (the card's text), flag 4 -> state 1 (the menu again; the menu window stays open). State 0xd: the card action menu (0x8a at get_gui_position(0x8a), rows unitxt 0x6c / 0x120 / 0x121 / 0x76 / 0x6d). State 3: the 0x68 / 0x69 sub-list (0x85); state 0x1d: a list built from `g_GuildCardList` (stride 0x49), not the card book.
+- The card list rows (PopulateItems 717161): the present cards (flag byte +0x104 & 1) in slot order from the 0x1bc-stride file entries (the name at +4, `\n` replaced by a space), the loop stops at the first empty slot; no card gives the empty row unitxt(11, 0xf3) (flag 4; greyed here, ASSUMED); the page is 7 rows (`item_index = page * 7`, `< 7`).
+
+**Sync (ported):** `BBSession.startGuildCardSync` runs `GuildCardClient.sync(null)` on the lobby connection right after the join (01E8 with checksum 0, the 01DC / 03DC / 02DC download, the CRC check, 3 tries; `net/guildcard.ts`). It is not awaited, and a failure is logged. The card list shows the empty row until the sync is done.
+
+**ASSUMED:**
+- The card list shows all cards in one scrolling list, not the exe's 7-row pages (the page scroll bar and the page index byte at +0x9c are not ported).
+- Window widths are the widest row plus the inset (the exe's width comes from the constructor and the scroll bar); the card list has no title (the constructor's title argument was not traced).
+- The empty-row text is unitxt(11, 0xf3) (from the PopulateItems branch on +0xac == 0; the 0xf1 branch is the other value).
+- The Guild Card menu's rows are drawn in the lobby's mid band, as the Item List is.
+- The book is synced once per session on the game server; a menu opened before the sync finishes shows the empty row (the exe's behaviour here was not traced).
+
+**Not ported (logged no-ops, the menu stays open):** the card action menu (state 0xd, a card chosen in the list), row 0x65 (state 3: sub-list 0x68 / 0x69, then the lobby player picker or keyboard entry), row 0x67 (state 0x1d: `g_GuildCardList` text list), row 0x117 (state 0x39), the add / delete / block / comment / swap packets (04E8..0AE8, `net/guildcard.ts` has them, the windows do not call them yet), the search (0040 / 0041) and the send (0xc0 path), and the confirm dialog at 0x83 that state 0 opens (the table at 0x0097340c holds floats, not text; its rows were not traced). The leaf is therefore partial: "menu window + card list" is ported, the rest of the leaf is open, and the rule "a leaf is ported whole or not at all" is not met for Guild Card yet.
+
+**Tests:** `node tests/guildcardmenu.test.ts` (ALL PASS: the menu rows and values, the greyed search row, the card rows and the first-empty-slot stop, the key flow menu -> list -> card -> menu -> closed, the unported actions, a drawing smoke test). `tsc --noEmit` clean for the client when `client/node_modules` is linked (this worktree has none of its own; the link is untracked). Not run in Chrome; no Playwright.
+
+**Left:** the card action menu (0xd) and its packets; row 0x65 (sub-list) and its picker / keyboard entry; row 0x67 (`g_GuildCardList` list); row 0x117 (state 0x39); the 7-row paging; the 0x83 confirm dialog's rows; the search and send windows; a Chrome check of the menu's placement in the mid band.
