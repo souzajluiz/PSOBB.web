@@ -1316,3 +1316,95 @@ export function parseStageListIndex(b: Uint8Array): number | null {
   if (b.length < 8) return null;
   return new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(4, true);
 }
+
+// The 6x8A the leader sends (exec_packet0x60_subcommand0x8a, 0x004db990): bytes 0x8a, 2 (dwords),
+// 0, 0, then the index as the u32 at +4. checked_call_packet0x60_subcommand (0x008003e0) sends it
+// and then runs the same handler locally, so the leader's own window follows.
+export function buildStageListIndex(index: number): Uint8Array {
+  return sixX(0x8a, u32(index));
+}
+
+// --- the Pioneer 2 challenge quest dialog and the leader's 6x8A sender --------------------------
+// g_pChallengeQuestDialogWindow (0x00a96180) is the QuestSelectionDialog (vtable 0x00b3c080,
+// QuestSelectionDialog_Constructor_006cfde8). GameListMenu_EnterCreatePartyState_006cd2d4 builds it
+// when the Hunter's Guild counter (CreateMedicalCenterDialog_006cafb8 -> MedicalCenterDialog_
+// Constructor_006cd830, the leader in a logged-in scene) enters its state 8. Its own state machine
+// (the input that moves +0x78, the list builders) is NOT ported: only the fields below, which the
+// sender reads, are modelled, and the port has no code that opens the dialog yet.
+export interface ChallengeQuestDialog {
+  // +0x38 != 0: the dialog is built (the window state reads this, the progress does not).
+  built: boolean;
+  // +0x78: 0 = the episode choice (window state 1), 1 / 2 = a quest choice (window state 2, or 3
+  // while g_ChallengeQuestSelectionState is 1). The writers are not ported.
+  state: number;
+  // +0x40 != 0: the quest header is read. The header is MedicalCenterDialogDataBuffer_00a96080
+  // (0x248 bytes, copied by HandleChallengeMenuUpdate_006ccaa8).
+  headerRead: boolean;
+  // *(0x00a96080) + 4: the quest number in that header (ASSUMED: 0x33..0x3b = Episode 1 stages
+  // 1..9, 0x3d..0x41 = Episode 2 stages 1..5, from the ranges the sender tests).
+  quest: number;
+}
+
+// get_challenge_quest_window_state (0x006d0584). selection = g_ChallengeQuestSelectionState
+// (0x00a96168, written 0 / 1 at 0x006d02cc..0x006d02e9). Returns 0 closed, 1 episode choice,
+// 2 quest choice, 3 quest choice with the selection flag.
+export function challengeWindowState(d: ChallengeQuestDialog | null, selection: number): number {
+  if (!d || !d.built) return 0;
+  if (d.state === 0) return 1;
+  if (d.state < 0 || d.state > 2) return 0;
+  return selection === 1 ? 3 : 2;
+}
+
+// GetChallengeEntityProgress_006cb310 -> 0x006d0524: the quest number when the header is read,
+// -1 otherwise. The dialog's +0x38 is not tested here.
+export function challengeQuestProgress(d: ChallengeQuestDialog | null): number {
+  return d && d.headerRead ? d.quest : -1;
+}
+
+export interface ChallengeSenderStep {
+  // The entity's 30-tick counter (+0x2c) after this step.
+  counter: number;
+  // The index to send with 6x8A, or null for no send.
+  send: number | null;
+}
+
+// UpdateChallengeEntityProgress_004d9848 (0x004d9848), one step. Only the leader runs it
+// (g_CurrentPlayerSlotIndex == g_PartyLeaderIdx). windowState / progress are the two getters
+// above; selected is maybe_currently_selected_challenge_stage_window (0x00a48c28).
+//   window 2: index 1, or progress - 0x30 when progress is 0x33..0x3b;
+//   window 3: index 2, or progress - 0x31 when progress is 0x3d..0x41;
+//   a window 2 / 3 with no match: the counter is set to 30 and the index stays 1 / 2;
+//   any other window: index 0 and the counter counts down, clamped at 0.
+// The send is (counter < 1 || index != 0) && index != selected (the asm at 0x004d98bf..c7).
+// Where the index is nonzero the counter does not matter, so the send is index != selected.
+export function challengeSenderStep(counter: number, leader: boolean, windowState: number, progress: number, selected: number): ChallengeSenderStep {
+  if (!leader) return { counter, send: null };
+  let index = 0;
+  let next = counter;
+  let value: number; // the eax the asm tests at 0x004d98bf
+  let matched = false;
+  if (windowState === 2) {
+    index = 1;
+    if (progress >= 0x33 && progress <= 0x3b) {
+      index = progress - 0x30;
+      matched = true;
+    }
+  } else if (windowState === 3) {
+    index = 2;
+    if (progress >= 0x3d && progress <= 0x41) {
+      index = progress - 0x31;
+      matched = true;
+    }
+  }
+  if (matched) {
+    value = progress;
+  } else if (windowState === 2 || windowState === 3) {
+    next = 30;
+    value = 30;
+  } else {
+    next = Math.max(0, counter - 1);
+    value = next;
+  }
+  const send = (value < 1 || index !== 0) && index !== selected;
+  return { counter: next, send: send ? index : null };
+}

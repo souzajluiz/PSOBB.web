@@ -25,6 +25,11 @@ import {
   buildChallengeRecords,
   buildDeadFlag,
   buildGraveRecoveryRequest,
+  buildStageListIndex,
+  challengeQuestProgress,
+  challengeSenderStep,
+  challengeWindowState,
+  type ChallengeQuestDialog,
   ChallengeRecords,
   GRAVE_TRIGGER_DISTANCE,
   graveDropPoints,
@@ -90,6 +95,12 @@ export class ChallengeRuntime {
   private lastArea = '';
   // maybe_currently_selected_challenge_stage_window (0 when none).
   private stageListIndex = 0;
+  // The leader's sender: the entity's 30-tick counter (+0x2c), g_ChallengeQuestSelectionState
+  // (0x00a96168, 0 at start) and the challenge quest dialog (null while closed).
+  private senderCounter = 0;
+  private questSelection = 0;
+  private challengeDialog: ChallengeQuestDialog | null = null;
+  private senderPoll: ReturnType<typeof setInterval> | null = null;
 
   private readonly o: ChallengeRuntimeOptions;
 
@@ -108,6 +119,7 @@ export class ChallengeRuntime {
     if (full) o.game.sendBroadcastSubcommand(buildChallengeRecords(game.selfId, this.records()?.raw ?? new Uint8Array(RECORDS_SIZE)));
     o.view.combat.challengeExpMultiplier = 1;
     this.poll = setInterval(() => this.tick(), 250);
+    this.senderPoll = setInterval(() => this.stageSenderTick(), 1000 / 30);
   }
 
   attach(vm: QuestVM): void {
@@ -122,6 +134,7 @@ export class ChallengeRuntime {
     if (!this.alive) return;
     this.alive = false;
     if (this.poll) clearInterval(this.poll);
+    if (this.senderPoll) clearInterval(this.senderPoll);
     for (const t of this.timers) clearTimeout(t);
     for (const d of this.disposers) d();
     this.clearGraveLabels();
@@ -326,10 +339,10 @@ export class ChallengeRuntime {
   // SetChallengeStageSelectionWindow_004d9d1c: the window changes only when the index does, and
   // 0 closes it. The Pioneer 2 Challenge object (g_ChallengeObject) only exists in a Challenge game.
   private showStageList(index: number | null): void {
-    if (index === null || index < 0 || index > CM_STAGE_LIST_MAX || index === this.stageListIndex) return;
-    this.stageListIndex = index;
     const { game, town } = this.o;
     if (!game.info?.challenge) return;
+    if (index === null || index < 0 || index > CM_STAGE_LIST_MAX || index === this.stageListIndex) return;
+    this.stageListIndex = index;
     const players = this.present()
       .sort((a, b) => a - b)
       .map((id) => ({
@@ -338,6 +351,34 @@ export class ChallengeRuntime {
       }));
     const lines = stageListLines(index, players);
     town.ui.setHud('cmode-stages', lines ? { x: 388, y: 177, lines } : null);
+  }
+
+  // --- the leader's stage-list sender (UpdateChallengeEntityProgress_004d9848) ------------------------
+
+  // The Pioneer 2 challenge quest dialog the sender reads (g_pChallengeQuestDialogWindow); null
+  // while it is not open. Nothing in the port opens it yet (see cmode.ts ChallengeQuestDialog).
+  setChallengeQuestDialog(d: ChallengeQuestDialog | null): void {
+    this.challengeDialog = d;
+  }
+
+  // One 30 Hz step of the challenge entity while Pioneer 2 runs (HandleChallengeEntityCompletion_004d97a4
+  // state 1: logged in, not the lobby, and no quest started; ASSUMED: "no quest" is no challenge
+  // stage running, and the port's game is never in the lobby). Sends 6x8A and applies it locally.
+  private stageSenderTick(): void {
+    const { game } = this.o;
+    if (!this.alive || !game.info?.challenge || this.cm?.active) return;
+    const step = challengeSenderStep(
+      this.senderCounter,
+      game.selfId === game.leaderId,
+      challengeWindowState(this.challengeDialog, this.questSelection),
+      challengeQuestProgress(this.challengeDialog),
+      this.stageListIndex,
+    );
+    this.senderCounter = step.counter;
+    if (step.send === null) return;
+    // checked_call_packet0x60_subcommand sends first, then runs the handler here.
+    game.sendBroadcastSubcommand(buildStageListIndex(step.send));
+    this.showStageList(step.send);
   }
 
   // --- HUD and per-tick duties -------------------------------------------------------------------------
