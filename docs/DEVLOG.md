@@ -13322,3 +13322,36 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: enemy boxes: vtable calls, the shared-pair rule, Booma's variant table (42 -> 48 of 123)
+
+Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" entry. The brief's premise for Booma was partly wrong, see (1).
+
+**(1) Booma 0x44: the vtable slot does not set the box.** Factory 0x00535e50 allocates a 0x20-byte object (base ctor 0x00787a4c, vtable 0x00b44ca0, call at 0x00535ea8) and a 0x428-byte Booma, then calls the Booma ctor 0x00535f1c with (factory arg 1, the 0x20 object). The ctor stores its vtable `movl $0x00b01fc0, (%eax)` (0x00535f68), calls base 0x0052b6ec, then `calll *0x14c(%ebx)` (0x00535f95): the slot is 0x00786848. That function copies fields from its argument into the object (the s16 at arg+0x3c becomes `this+0x370`, 0x00786862..0x007868b5), then calls only 0x0084c390, a table fill with no calls (not a box). So the slot does not call InitEnemyCollisionBoxes. The box init is in the ctor itself, after the slot: `this+0x33c = this+0x370` (0x00536007), `pushl $1` (count, 0x00536064), table `0x009bc8e0 + 0x2c * [this+0x33c]` (lea and add arithmetic, 0x0053607a..0x00536089), `calll 0x007b9a88` (0x00536091). So Booma's box is row `variant` of a 0x009bc8e0 array with count 1. The generator has no indexed-table rule, so Booma stays unresolved (fallback 22).
+- UNCLEAR: where the slot's argument comes from. The factory passes the 0x20-byte object, and the slot reads it up to +0x3e, past its size. Not ported.
+- The same slot 0x00786848 is the value the global pointer 0x00af568c holds (its initial value), called by the Gal Gryphon factory 0x0043e338 (`calll *0xaf568c`, 0x0043e407). It sets no box.
+
+**(2) The vtable rule in the generator.** `tools/gen-collision-boxes.py` `vtable_calls()`: a `movl $V, (%reg)` (C7 /0, mod 00) followed in the same function (within 0x400 bytes) by `calll *disp32(%reg)` (FF /2, mod 10) is an edge to the slot u32 at V + disp, when the slot points into .text. 124 pairs in the exe. The register is not matched (ASSUMED: the nearest store is the object's vtable). The pairs enter the call graph only, not the init sites (a virtual call never gets the constant-argument caller rule).
+
+**(3) Function starts: the E8 scan misread.** `e8_calls` scans bytes, so a byte pair inside an instruction can read as a call. In the Claw factory 0x00535408 the bytes at 0x00535485 (`e8 1a 57 09 00`) give a call target 0x00535486 inside that instruction, and that start split the factory, so the real constructor 0x005354d4 (`calll 0x5354d4` at 0x005354aa) was not reached. `entry_like()`: a call target starts a function only when the byte before it is padding (0xCC / 0x90), a `ret` (0xC3), or the byte three back is `ret imm16` (0xC2). This changes the trees of many types (the object TYPE map too). 0xa8 Claw now reaches its ctor, but its helper 0x00535818 is reached by three or more set types, so it stays shared.
+
+**(4) Shared-pair rule.** Canadine 0x83 and Canane 0x84 both reach the shared constructor 0x005424d8 (callers 0x0053e834 and 0x00541ac3; a third caller 0x00541577 is another type). 0x005424d8 calls the base helper 0x0051ff3c with `pushl $1; pushl $0x9bcecc` (0x00542515..0x0054251c): constant in the helper, so each caller gets the same box. The generator now accepts a helper reached by exactly two set types through a constant helper argument (`pair`, not `shared`). Both get table 0x009bcecc (ASSUMED: the pair's other constructors do not overwrite it). The same rule gives Chaos Bringer 0xa4 table 0x009bcc20 (site 0x0053cd8f in 0x0053cd38, via 0x0051ff3c). The object TYPE map's 0x84 entry (0x009c86fc, site 0x0065edae) is in the object id space, not Canane's box.
+
+**Coverage.** `tools/gen-collision-boxes.py --summary`: own table 48 of 123 enemy set types (was 42), shared only 60, none 15. Gained: 0x62 (table 0x009bef60, depth 1), 0x64 Pofuilly slime (0x009bfd68, depth 4, ASSUMED: the deepest link kept), 0x65 (0x009bf60c, depth 2), 0x83 Canadine and 0x84 Canane (0x009bcecc, pair), 0xa4 Chaos Bringer (0x009bcc20, pair), 0xa9 (0x009c3f00, depth 1). Lost: 0xd7 (0x009be30c): the start filter changed the fan-in of its helper, which is now reached by three or more set types, so it is shared. Net +6. Still unresolved: Booma 0x44 (indexed), the bosses 0xc2 / 0xc8 / 0xca / 0xcb (their factories' trees, depth 8, contain no init site: 62 to 549 functions each, so the box is set elsewhere, not found), and the 60 shared-only types.
+
+**Ported.**
+- `tools/gen-collision-boxes.py`: `vtable_calls`, `entry_like`, the pair rule, and the summary counts.
+- `client/src/formats/collisionboxes.gen.ts` regenerated (numbers only).
+- `client/src/formats/enemyboxes.ts`: header comment (the pair rule and the vtable note).
+- `tests/objectcollision.test.ts`: Canadine and Canane link to 0x009bcecc; Pofuilly slime links to 0x009bfd68.
+- `docs/ROADMAP.md`: the enemy box line (Booma's variant table, the bosses).
+
+**ASSUMED:**
+- The vtable store is the object's own vtable (the register is not matched).
+- The pair rule: the pair's other constructors do not overwrite the helper's table.
+- The entry-like filter: a start needs padding, `ret`, or `ret imm16` before it. A real function entry without one of these would be missed (none found in the trees checked).
+- 0x64 at depth 4 and the new own links 0x62 / 0x65 / 0xa9 are checked only by their init sites (the table push), not by a behaviour test.
+
+**Tests.** `node tests/techfire.test.ts` ok; `node tests/objectcollision.test.ts` all checks passed (3 new checks); `node tests/npcai.test.ts` ok; `enemyfsm`, `enemystatus`, `dragon`, `goldragon`, `barbaray`, `derolle`, `npcs` pass under Node 24; `tests/combat.test.ts` 5948 checks, 0 failures (NEWSERV = the main checkout's `vendor/newserv/build/newserv`; the worktree has no build). `npx tsc --noEmit -p .` clean. `client/node_modules` is a symlink to the main checkout's (ignored, not committed). Not run in Chrome, no Playwright.
+
+**Left:** Booma: an indexed-table rule in the generator (a `count 1` site whose table is `base + stride * [reg + off]`) and the variant's source (the factory's argument object, see (1)). The bosses: find their own init calls (the global-pointer calls, e.g. 0x00af568c, and the per-boss state code that is not in the factories' trees). The 60 shared-only types and the 15 with no table.
