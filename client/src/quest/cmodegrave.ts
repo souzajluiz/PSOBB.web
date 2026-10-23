@@ -79,7 +79,131 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   DIMENIAN: 41,
   LA_DIMENIAN: 42,
   SO_DIMENIAN: 43,
+  // The Rappy family: the ids are the monster name indices (equal to each kind's rt). The
+  // episode / seasonal / rare table is RAPPY_UNITXT_IDS (below), the kinds' rows follow it.
+  RAG_RAPPY: 5,
+  AL_RAPPY: 6,
+  LOVE_RAPPY: 51,
+  SAINT_RAPPY: 79,
+  HALLO_RAPPY: 80,
+  EGG_RAPPY: 81,
+  SAND_RAPPY_CRATER: 104,
+  SAND_RAPPY_DESERT: 104,
+  DEL_RAPPY_CRATER: 105,
+  DEL_RAPPY_DESERT: 105,
+  // garanz_constructor (0x56f8f4): push 0x19 at 0x56faa6, setter call 0x56fb06, unconditional.
+  GARANZ: 25,
+  // CananeConstructor_00541ae0: push 0x1d, then 0x520390 (the id forwarder) at 0x541b44.
+  CANANE: 29,
+  // The Chaos Sorcerer (0x59d8b8): push 0x1f at 0x59d956, forwarder call 0x59d958, unconditional.
+  CHAOS_SORCERER: 31,
+  // The Pofuilly (0x5997c8): [this+0x3fc] (the rare flag) == 0 -> push 0x13 (0x599984),
+  // else push 0x14 (0x59998f).
+  POFUILLY_SLIME: 19,
+  POUILLY_SLIME: 20,
+  // InitializeEnemyBase_00535818 (the Claw): push 0x26 at 0x53588b, setter 0x5358c0, unconditional.
+  CLAW: 38,
+  // BulclawHandleClawAction_00532960: param_2 == 1 -> push 0x28 (0x532ceb), else 0x27 (0x532975).
+  BULK: 39,
+  BULCLAW: 40,
+  // The Vol Opt parts: 0x2e in six straight-line setter sites (0x44050a, 0x442186, 0x443f99,
+  // 0x44927e, 0x449d8b, 0x441477; the first five checked in the disassembly).
+  VOL_OPT_2: 46,
+  VOL_OPT_1: 46,
+  VOL_OPT_AMP: 46,
+  VOL_OPT_CORE: 46,
+  VOL_OPT_MONITOR: 46,
+  VOL_OPT_PILLAR: 46,
+  // Dark Falz forms 2 / 3: 0x2f, unconditional, at 0x457259, 0x459a7b, 0x45e743 (the phase 1 writer is not traced).
+  DARK_FALZ_2: 47,
+  DARK_FALZ_3: 47,
+  // Olga Flow (both forms): 0x4e, unconditional, at 0x497719 (form 1) and 0x49d495 (form 2).
+  OLGA_FLOW_1: 78,
+  OLGA_FLOW_2: 78,
+  // Gal Gryphon (0x4a6971 via 0x520390, unconditional).
+  GAL_GRYPHON: 77,
+  // Epsilon (0x558627), Epsigard (0x55c26c, via 0x520390), Astark (0x5a41b1): unconditional.
+  EPSILON: 84,
+  EPSIGARD: 87,
+  ASTARK: 88,
+  // Yowie / Satellite Lizard (0x5ae848): [this+0x3ec] != 0 -> 89 (Yowie) at 0x5ae98b, else 90 at 0x5ae994.
+  // ASSUMED: +0x3ec is the variant flag set at spawn (its source is not traced).
+  YOWIE_CRATER: 89,
+  YOWIE_DESERT: 89,
+  SATELLITE_LIZARD_CRATER: 90,
+  SATELLITE_LIZARD_DESERT: 90,
+  // Merissa (0x5b6ebc): [this+0x380] != 0 -> 92 (AA), else 91 (A). ASSUMED: +0x380 is the variant.
+  MERISSA_A: 91,
+  MERISSA_AA: 92,
+  // Zu / Pazuzu (0x5b4884): the ctor's esi != 0 -> 95 (Pazuzu) at 0x5b4ae0, else 94 (Zu) at 0x5b4aeb.
+  // ASSUMED: esi is the Pazuzu flag from the spawn (its source is not traced).
+  ZU_CRATER: 94,
+  ZU_DESERT: 94,
+  PAZUZU_CRATER: 95,
+  PAZUZU_DESERT: 95,
+  // Dorphon (0x5a9c58): [this+0x4d8] != 0 -> 100 (Eclair) at 0x5a9d71, else 99 at 0x5a9d7c.
+  // The flag is set in the Dorphon's init (0x5a6eff: 1 or 0, from the branch at 0x5a6ee0).
+  DORPHON: 99,
+  DORPHON_ECLAIR: 100,
+  // Goran family (0x5adf28): the subtype (+0x33c, clamped to >= 0): 2 -> 102 (0x5adf59),
+  // 1 -> 103 (0x5adf70), else 101 (0x5adf82).
+  GORAN: 101,
+  GORAN_DETONATOR: 102,
+  PYRO_GORAN: 103,
+  // Sinow Zoa / Zele (0x591c48): [this+0x408] > 0 -> 70 (Zele) at 0x591c60, else 69 (Zoa) at 0x591c86.
+  SINOW_ZOA: 69,
+  SINOW_ZELE: 70,
+  // Sinow Spigell / Berill (0x59e844): [this+0x3f8] > 0 -> 63 (Spigell) at 0x59e858, else 62 (Berill) at 0x59e882.
+  SINOW_SPIGELL: 63,
+  SINOW_BERILL: 62,
+  // The Sorcerer's bees (0x59ae6c): [this+0x3d0] == 1 -> 32 (Bee L) at 0x59af88, else 33 (Bee R) at 0x59aee9.
+  BEE_L: 32,
+  BEE_R: 33,
+  // Gee (0x55fc5c, unconditional), Gi Gue (0x56c188, unconditional).
+  GEE: 54,
+  GI_GUE: 55,
+  // Mericarol family (0x572c00): [this+0x464] 0 -> 56 (0x572ddb), 1 -> 57 (Merikle, 0x572dbe), 2 -> 58 (Mericus, 0x572dcf).
+  MERICAROL: 56,
+  MERIKLE: 57,
+  MERICUS: 58,
+  // Gibbon family (0x564a64): the flag eax (not traced, ASSUMED) != 0 -> 60 (Zol Gibbon, 0x564c15), else 59 (Ul Gibbon).
+  ZOL_GIBBON: 60,
+  UL_GIBBON: 59,
+  // Gibbles (0x563200, unconditional).
+  GIBBLES: 61,
+  // Merillia family (0x576240): the subtype (+0x33c, clamped to >= 0) == 1 -> 53 (Merilltas, 0x576271), else 52 (Merillia, 0x576283).
+  MERILLIA: 52,
+  MERILTAS: 53,
+  // Delbiter (0x54d8c8, unconditional at 0x54d9a2).
+  DELBITER: 72,
+  // Ill Gill (0x52e4b3, unconditional).
+  ILL_GILL: 82,
+  // Morfos (0x57c96c, unconditional), Recobox (0x5886e5, unconditional).
+  MORFOS: 66,
+  RECOBOX: 67,
+  // Boota family (0x5a602c): the variant (eax) == 1 -> 97 (Ze Boota, 0x5a6074), else 96 (Boota, 0x5a6086).
+  // ASSUMED: eax is the Ze flag (its source is not traced).
+  BOOTA: 96,
+  ZE_BOOTA: 97,
 };
+
+// The Rappy family's unitxt ids (the exe's `rappy_unitxt_ids`, 24 int32 at 0x00921a00 in .data,
+// read with tools/exedata.py). init_ragrappy_global_config_bp (0x005279e8) copies
+// index 8 * episode + 2 * seasonal + rare into rappy_loaded_unitxt_ids (0x00a72f54 + 4 * rare),
+// and ragrappy_constructor names the enemy with rappy_loaded_unitxt_ids[rare].
+// episode: 0 Ep1, 1 Ep2, 2 Ep4. seasonal: 0 outside the lobby; in the lobby (scene logged_in,
+// InitRappyGlobalConfig_00527973 at 0x00527973) null_ARRAY_00921ae0[g_SeasonalEvent], which the
+// exe holds as 0, 1, 0, 0, 2, 3 (ASSUMED: the field load's seasonal index is 0).
+export const RAPPY_UNITXT_IDS: readonly number[] = [
+  5, 6, 5, 6, 5, 6, 5, 6, // Ep1: Rag Rappy / Al Rappy (rare)
+  5, 51, 5, 79, 5, 81, 5, 80, // Ep2: Rag / Love (rare), Rag / Saint, Rag / Egg, Rag / Hallo
+  104, 105, 104, 105, 104, 105, 104, 105, // Ep4: Sand Rappy / Del Rappy (rare)
+];
+
+// The unitxt id of a Rappy: rare is the enemy's param6 / is_monster_rare flag.
+export function rappyKillerId(episode: number, seasonal: number, rare: boolean): number {
+  return RAPPY_UNITXT_IDS[8 * episode + 2 * seasonal + (rare ? 1 : 0)] ?? GRAVE_NO_KILLER;
+}
 
 // The monster id of a killer kind (GRAVE_NO_KILLER when the kind has none).
 export function graveKillerId(enemyType: string | null): number {
@@ -87,11 +211,15 @@ export function graveKillerId(enemyType: string | null): number {
   return GRAVE_KILLER_INDEX[enemyType] ?? GRAVE_NO_KILLER;
 }
 
-// The port's name of a monster id: the first kind with that id in ENEMY_TYPE_NAMES
-// (the same in-game names the quest editor shows). Null when no kind has it.
+// The port's name of a monster id: the first kind with that id in ENEMY_TYPE_NAMES, without
+// its variant in brackets ("Yowie (crater)" -> "Yowie"; unitxt names carry no variant, the
+// exe's monster name is the same for the crater and desert forms). Null when no kind has it.
+export function graveKillerBaseName(kind: string): string {
+  return ENEMY_TYPE_NAMES[kind]![0].replace(/ \([^)]*\)$/, '');
+}
 const KILLER_NAME_BY_ID = new Map<number, string>();
 for (const [key, id] of Object.entries(GRAVE_KILLER_INDEX)) {
-  if (!KILLER_NAME_BY_ID.has(id)) KILLER_NAME_BY_ID.set(id, ENEMY_TYPE_NAMES[key]![0]);
+  if (!KILLER_NAME_BY_ID.has(id)) KILLER_NAME_BY_ID.set(id, graveKillerBaseName(key));
 }
 
 // The killer's name, null when there is none (the exe shows the line only for id > 0).

@@ -75,11 +75,14 @@ import {
   formatGraveDate,
   graveFadeStep,
   graveHeading,
+  graveKillerBaseName,
   graveKillerId,
   graveKillerName,
   graveLines,
   GRAVE_KILLER_INDEX,
   GRAVE_NO_KILLER,
+  RAPPY_UNITXT_IDS,
+  rappyKillerId,
   GRAVE_FADE_IN,
   GRAVE_FADE_OUT,
   GRAVE_MODEL_BML,
@@ -540,7 +543,7 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
   eq(id, 4, 'Monest is the exe index 4 (the monest ctor forwards 4)');
   eq(graveKillerName(id), 'Monest', 'the killer line names the enemy');
   eq(graveKillerId('NOT_AN_ENEMY'), GRAVE_NO_KILLER, 'an unknown type is no killer');
-  eq(graveKillerId('RAG_RAPPY'), GRAVE_NO_KILLER, 'a kind without a decoded index shows no killer');
+  eq(graveKillerId('DUBWITCH'), GRAVE_NO_KILLER, 'a kind without a decoded index shows no killer');
   eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: graveKillerName(id), date: null })[3], 'Defeated by Monest.', 'the killer line of the grave');
   eq(graveKillerName(0xffffffff), null, 'the exe id 0xffffffff is no killer');
   eq(graveKillerName(999), null, 'an id no kind has names nobody');
@@ -549,12 +552,17 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
 // The killer table (GRAVE_KILLER_INDEX): every id is the exe's (1..0x7f), ids are unique,
 // each kind names itself through ENEMY_TYPE_NAMES, and the id round-trips to the name.
 {
-  const ids = Object.values(GRAVE_KILLER_INDEX);
-  eq(new Set(ids).size, ids.length, 'no two kinds share an exe monster id');
+  // Kinds may share an id (the Vol Opt parts are all 46, the Dark Falz forms 47), but one id has one name.
+  const namesById = new Map<number, Set<string>>();
+  for (const [kind, id] of Object.entries(GRAVE_KILLER_INDEX)) {
+    if (!namesById.has(id)) namesById.set(id, new Set());
+    namesById.get(id)!.add(graveKillerBaseName(kind));
+  }
+  for (const [id, names] of namesById) eq(names.size, 1, `id ${id} has one name`);
   for (const [kind, id] of Object.entries(GRAVE_KILLER_INDEX)) {
     check(kind in ENEMY_TYPE_NAMES, `${kind} is a port enemy type`);
     check(id >= 1 && id <= 0x7f, `${kind} has a unitxt monster id in range`);
-    eq(graveKillerName(id), ENEMY_TYPE_NAMES[kind]![0], `${kind} names its id`);
+    eq(graveKillerName(id), graveKillerBaseName(kind), `${kind} names its id`);
     eq(graveKillerId(kind), id, `${kind} gives its id`);
   }
   eq(graveKillerId('HILDEBLUE'), 2, 'the rare Hildebear is 2 (InitializeHildebearResources)');
@@ -562,6 +570,51 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
   eq(graveKillerId('DEL_LILY'), 83, 'the tower lily is 83 (0x53)');
   eq(graveKillerId('GILLCHIC'), 50, 'Gillchic is 50 (gilchic_constructor)');
   eq(graveKillerId('DIMENIAN'), 41, 'Dimenian is 41 (SetDimenianDifficulty)');
+}
+
+// The exe-decoded kinds of the second pass (2026-10-23): each id is the immediate pushed before
+// its setter / forwarder call (objdump, the call site in the comment), and the kind names it.
+{
+  const cases: Array<[string, number]> = [
+    ['GARANZ', 25], ['CANANE', 29], ['CHAOS_SORCERER', 31], ['POFUILLY_SLIME', 19], ['POUILLY_SLIME', 20],
+    ['CLAW', 38], ['BULK', 39], ['BULCLAW', 40],
+    ['VOL_OPT_1', 46], ['VOL_OPT_2', 46], ['VOL_OPT_CORE', 46], ['VOL_OPT_MONITOR', 46], ['VOL_OPT_PILLAR', 46], ['VOL_OPT_AMP', 46],
+    ['DARK_FALZ_2', 47], ['DARK_FALZ_3', 47], ['OLGA_FLOW_1', 78], ['OLGA_FLOW_2', 78], ['GAL_GRYPHON', 77],
+    ['EPSILON', 84], ['EPSIGARD', 87], ['ASTARK', 88], ['YOWIE_CRATER', 89], ['SATELLITE_LIZARD_DESERT', 90],
+    ['MERISSA_A', 91], ['MERISSA_AA', 92], ['ZU_CRATER', 94], ['PAZUZU_DESERT', 95], ['DORPHON', 99], ['DORPHON_ECLAIR', 100],
+    ['GORAN', 101], ['GORAN_DETONATOR', 102], ['PYRO_GORAN', 103], ['SINOW_ZOA', 69], ['SINOW_ZELE', 70],
+    ['SINOW_SPIGELL', 63], ['SINOW_BERILL', 62], ['BEE_L', 32], ['BEE_R', 33], ['GEE', 54], ['GI_GUE', 55],
+    ['MERICAROL', 56], ['MERIKLE', 57], ['MERICUS', 58], ['UL_GIBBON', 59], ['ZOL_GIBBON', 60], ['GIBBLES', 61],
+    ['MERILLIA', 52], ['MERILTAS', 53], ['DELBITER', 72], ['ILL_GILL', 82], ['MORFOS', 66], ['RECOBOX', 67],
+    ['BOOTA', 96], ['ZE_BOOTA', 97],
+  ];
+  for (const [kind, id] of cases) eq(graveKillerId(kind), id, `${kind} is exe id ${id}`);
+  eq(graveKillerName(graveKillerId('YOWIE_DESERT')), 'Yowie', 'a variant name drops its bracket');
+  eq(graveKillerName(46), 'Vol Opt', 'the Vol Opt name');
+  eq(graveKillerName(104), 'Sand Rappy', 'the Sand Rappy name');
+  eq(graveKillerName(graveKillerId('DUBWITCH')), null, 'the Dubwitch: no decoded id, no line');
+  eq(graveKillerId('DARK_FALZ_1'), GRAVE_NO_KILLER, 'Dark Falz phase 1: not traced');
+}
+
+// The Rappy family: rappy_unitxt_ids (0x00921a00, read from PsoBB.exe) by (episode, seasonal, rare).
+{
+  eq(RAPPY_UNITXT_IDS.length, 24, 'the table is 3 episodes x 4 seasonal x 2 rare');
+  eq(RAPPY_UNITXT_IDS.join(','), '5,6,5,6,5,6,5,6,5,51,5,79,5,81,5,80,104,105,104,105,104,105,104,105', 'the exe values at 0x00921a00');
+  eq(rappyKillerId(0, 0, false), 5, 'Ep1 normal: Rag Rappy');
+  eq(rappyKillerId(0, 3, true), 6, 'Ep1 rare: Al Rappy, every seasonal index');
+  eq(rappyKillerId(1, 0, false), 5, 'Ep2 normal: Rag Rappy');
+  eq(rappyKillerId(1, 0, true), 51, 'Ep2 rare, seasonal 0: Love Rappy');
+  eq(rappyKillerId(1, 1, true), 79, 'Ep2 rare, seasonal 1: Saint Rappy');
+  eq(rappyKillerId(1, 2, true), 81, 'Ep2 rare, seasonal 2: Egg Rappy');
+  eq(rappyKillerId(1, 3, true), 80, 'Ep2 rare, seasonal 3: Hallo Rappy');
+  eq(rappyKillerId(2, 0, false), 104, 'Ep4 normal: Sand Rappy');
+  eq(rappyKillerId(2, 2, true), 105, 'Ep4 rare: Del Rappy');
+  eq(rappyKillerId(3, 0, false), GRAVE_NO_KILLER, 'no episode 3');
+  // The Rappy kinds carry the same ids (the kinds the port draws for each cell).
+  eq(graveKillerId('RAG_RAPPY'), 5, 'RAG_RAPPY is 5');
+  eq(graveKillerId('AL_RAPPY'), 6, 'AL_RAPPY is 6');
+  eq(graveKillerId('LOVE_RAPPY'), 51, 'LOVE_RAPPY is 51');
+  eq(graveKillerId('DEL_RAPPY_DESERT'), 105, 'DEL_RAPPY_DESERT is 105');
 }
 
 // --- the character template (needs PlyLevelTbl.prs) ----------------------------------------------------

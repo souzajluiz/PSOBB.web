@@ -14405,3 +14405,58 @@ bit was ever set, so every field trade would be cancelled. newserv (`Map.cc`, TO
 documents the object as disabling the Trade Window near it, so `TradeZone` now reads the bits only
 once the floor has run a collision object check; a floor without one is permissive. ASSUMED: the
 bits' default outside the city was not traced in the exe.
+## 2026-10-23: Challenge mode: the grave's killer ids, second pass (Rappy, Volopt, Ep2 variants)
+
+**Report:** the first pass decoded 29 kinds. This pass decodes the Rappy family, GARANZ, CANANE, CHAOS_SORCERER, POFUILLY / POUILLY, CLAW, BULK / BULCLAW, the Volopt parts, and the Ep2 kinds whose conditions were left open. DUBWITCH is still not decoded. Each id was read from the exe (objdump), with the immediate pushed before the setter or forwarder call and the branch that guards it.
+
+**Premise, checked:** the killer id is the monster name index (the classic PSO enemy list number, `unitxt_get_monster_name`). For every kind decoded here whose `ENEMY_TYPE_PARAMS.rt` is not 0xff, the id equals rt. The 0xff kinds (Epsigard, the bees, the Volopt parts, Dark Falz 1, Olga Flow 1) were not in that table; their ids come from the exe.
+
+**Exe, verified (PsoBB.exe at ~/Downloads/psobb-client; `objdump -d -M intel`, `tools/exedata.py read`):**
+- Rappy family. `init_ragrappy_global_config_bp` (0x005279e8) copies `rappy_unitxt_ids[8 * episode + 2 * seasonal + rare]` into `rappy_loaded_unitxt_ids[rare]` (0x00a72f54 + 4 * rare; the loop at 0x00527c70..0x00527ce0). The source table is at 0x00921a00 (24 int32 in .data, not 8 as the dump's `int[8]` says): Ep1 `5,6` for every seasonal; Ep2 normal 5, rare 51 / 79 / 81 / 80 for seasonal 0 / 1 / 2 / 3; Ep4 normal 104 (Sand), rare 105 (Del). `ragrappy_constructor` names the enemy with `rappy_loaded_unitxt_ids[param6_is_rare]`, and the forwarder at 0x00526d90 reads the same table. The seasonal index is `null_ARRAY_00921ae0[g_SeasonalEvent]` (0x00921ae0 = 0, 1, 0, 0, 2, 3) only when the scene is `logged_in` (InitRappyGlobalConfig_00527973, 0x00527973); otherwise 0.
+- GARANZ: `push 0x19` at 0x0056faa6, setter call 0x0056fb06 (in the creator 0x0056f8f4). Unconditional. 25.
+- CANANE: `push 0x1d` at 0x00541b06, `call 0x00520390` (id forwarder: `push [esp+4]; call 0x00787550; ret 4`) at 0x00541b44. Unconditional. 29.
+- CHAOS_SORCERER: `push 0x1f` at 0x0059d956, `call 0x00520390` at 0x0059d958, in 0x0059d8b8. Unconditional. 31.
+- POFUILLY_SLIME / POUILLY_SLIME (0x005997c8): `edx = [this+0x3fc]`, `test edx, edx` at 0x0059997e; `push 0x13` (0x00599984, setter 0x00599986) when it is 0, `push 0x14` (0x0059998f, setter 0x00599991) otherwise. 19 / 20. (`+0x3fc` is `is_monster_rare`, set in `PofuillySlimeInitialize_005999fb`; the order of the two is not traced: ASSUMED.)
+- CLAW: `InitializeEnemyBase_00535818` (the claw's init, vtable `g_pClawVtable`): `push 0x26` at 0x0053588b, setter 0x005358c0. Unconditional. 38.
+- BULCLAW / BULK (`BulclawHandleClawAction_00532960`): `param_2 == 1` -> `or [this+0x390], 0x1000000; push 0x28` (0x00532ceb, setter 0x00532d00) = 40 (BULCLAW); else `and [this+0x390], 0xfeffffff; push 0x27` (0x00532975, setter 0x0053298a) = 39 (BULK). The id follows the claw action state, so a BULCLAW that is in state 0 names itself BULK.
+- Volopt: six setter sites push 0x2e (46): callsites 0x0044050a, 0x00442186, 0x00443f99, 0x0044927e, 0x00449d8b (checked straight-line, no branch), 0x00441477. The Volopt parts all name 46. The form-7 hazard and the Dark Falz forms write 47 (below).
+- Dark Falz (47 = 0x2f): unconditional `push 0x2f` at 0x00457257 (callsite 0x00457259), 0x00459a79 (callsite 0x00459a7b), 0x0045e741 (callsite 0x0045e743). Which of the three is form 2 / form 3 / the hazard is ASSUMED (the dump names them the Volopt hazard and `InitializeDarkFalzForm3`).
+- Olga Flow: `push 0x4e` (78) at 0x00497717 (form 1, callsite 0x00497719) and at 0x0049d493 (form 2, callsite 0x0049d495). Unconditional. The Olga entity init 0x0048a4b0 writes 85 (0x55) or 86 (0x56) by `eax == 1` (0x0048a661); no port kind has those ids: left.
+- Gal Gryphon 77 (0x004a6971 via 0x520390, unconditional). Epsilon 84 (0x00558627, unconditional). Epsigard 87 (0x0055c26c via 0x520390, unconditional). Astark 88 (0x005a41b1, unconditional).
+- Yowie 89 / Satellite Lizard 90 (0x005ae848): `test eax, eax` on `[this+0x3ec]` at 0x005ae985; nonzero -> 89 (push at 0x005ae989), else 90 (0x005ae992). ASSUMED: `+0x3ec` is a variant flag from the spawn (its source is not traced).
+- Merissa A 91 / AA 92 (0x005b6ebc): `[this+0x380] != 0` -> 92 else 91. ASSUMED: +0x380 is the variant.
+- Zu 94 / Pazuzu 95 (0x005b4884): `test esi, esi; je` -> 94 else 95 (pushes at 0x005b4ae7 / 0x005b4adc). ASSUMED: esi is the Pazuzu flag from the spawn.
+- Dorphon 99 / Dorphon Eclair 100 (0x005a9c58): `[this+0x4d8] != 0` -> 100 (push 0x64 at 0x005a9d6f), else 99 (push at 0x005a9d7a). The flag is set by 0x005a6ee0 (`mov [ebp+0x4d8], 1 / 0` at 0x005a6eff / 0x005a6f10, and the pushes 100 / 99 at 0x005a6f20 / 0x005a6f2b).
+- Goran 101 / Goran Detonator 102 / Pyro Goran 103 (0x005adf28): the subtype `[this+0x33c]` clamped to >= 0 (0x005adf38..0x005adf40): 2 -> 102 (push 0x66, 0x005adf57), 1 -> 103 (push 0x67, 0x005adf6e), else 101 (push 0x65, 0x005adf80).
+- Sinow Zoa 69 / Zele 70 (0x00591c48): `[this+0x408] > 0` -> 70 (push 0x46, 0x00591c5c) else 69 (push 0x45, 0x00591c76). ASSUMED: +0x408 is the Zele flag.
+- Sinow Spigell 63 / Berill 62 (0x0059e844): `[this+0x3f8] > 0` -> 63 (push 0x3f, 0x0059e858) else 62 (push 0x3e; the setter call 0x0059e882 is in the same function). ASSUMED: +0x3f8 is the Spigell flag.
+- Bee L 32 / Bee R 33 (0x0059ae6c): `[this+0x3d0] == 1` -> 32 (push 0x20, 0x0059af84) else 33 (push 0x21, 0x0059aee5).
+- Gee 54 (push 0x36 at 0x0055fc57, forwarder call 0x0055fc5c), Gi Gue 55 (push 0x37 at 0x0056c178, setter 0x0056c188), Gibbles 61 (push 0x3d at 0x00563317, setter 0x0056332f): unconditional.
+- Mericarol family (0x00572c00): `[this+0x464]` 0 -> 56 (push 0x38, 0x00572dd9 path), 1 -> 57 (push 0x39, 0x00572dbc), 2 -> 58 (push 0x3a, 0x00572dcd).
+- Gibbon family (0x00564a64): `eax != 0` -> 60 Zol Gibbon (push 0x3c, 0x00564c09), else 59 Ul Gibbon (push 0x3b, 0x00564c13). ASSUMED: eax is the Zol flag (its source is not traced).
+- Merillia family (0x00576240): subtype clamped to >= 0; `== 1` -> 53 Merilltas (push 0x35 at 0x0057626f), else 52 Merillia (push 0x34 at 0x00576281).
+- Delbiter 72 (0x0054d8c8 via 0x520390 at 0x0054d9a2, unconditional). Ill Gill 82 (0x0052e4b3, unconditional). Morfos 66 (0x0057c96c, unconditional). Recobox 67 (0x005886e5, unconditional).
+- Boota family (0x005a602c): `eax == 1` -> 97 Ze Boota (push 0x61, 0x005a6072), else 96 Boota (push 0x60, 0x005a6084). ASSUMED: eax is the Ze flag. The `push 0x62` (98, Ba Boota) at 0x005a605a is not read: left.
+
+**Port:** `quest/cmodegrave.ts`: `GRAVE_KILLER_INDEX` has the new rows (98 kinds in all, each with its exe cite, the condition's branch, and ASSUMED where the flag's source is not traced). New `RAPPY_UNITXT_IDS` (the 24 values, with the episode / seasonal / rare layout) and `rappyKillerId(episode, seasonal, rare)`. `graveKillerBaseName(kind)`: the name without its bracket, so "Yowie (crater)" is "Yowie" (the exe names a monster by its unitxt name, no variant); `graveKillerName(id)` uses it. Kinds may now share an id (the Vol Opt parts, the Dark Falz forms, the Sand / Del Rappies); one id has one name, which the test checks.
+
+**Corrections to the first pass:** the first pass listed 0x20 / 0x21 as Zoa / Zele and 0x54 as Spigell: 0x20 / 0x21 are the Bees (Bee L / R), 0x54 is Epsilon, and Spigell is 63 (0x3f). The Zoa / Zele ids are 0x45 / 0x46 (69 / 70).
+
+**Left (ids not decoded, the kind shows no killer line):**
+- DUBWITCH: no setter for it in the dump's named functions (only `g_Dubwitch*` globals), and the Dubwitch constructor was not located in the exe. ASSUMED: it never writes +0x378, so no killer line.
+- Dark Falz phase 1 (rt 0xff): not traced.
+- Ba Boota 98 (0x005a605a): the branch that pushes 98 was not read.
+- Ids 85 / 86 (the Olga entity writer 0x0048a4b0): no port kind has those ids.
+- Dolmolm 64 / Dolmdarl 65 (dump name `InitializeRappyEntity_00553fc8`, sets 0x40 / 0x41), Mothmant 3, Hidoom / Migium 22 / 23, Girtablulu 93 (no site found), Dark Gunner Control (no killer per the first pass): not traced in this pass.
+- The flag sources behind the variant kinds (+0x3ec, +0x380, esi, +0x4d8's init, +0x3f8, +0x408, +0x3d0, +0x464, the Gibbon / Boota eax): the branches are decoded, the meaning is ASSUMED.
+- The port's `rt` is 0xff for Epsigard, the bees, the Volopt parts, Dark Falz 1 and Olga Flow 1: the port's enemy table could take these ids (not changed here).
+- The English text: the exe's monster names are the unitxt strings, not in the local data; the port's names are the ENEMY_TYPE_NAMES labels with the bracket dropped.
+
+**ASSUMED:**
+- The killer id is the monster name index, as the port's rt is (checked for every decoded kind with rt != 0xff).
+- The Rappy `episode` is 0 Ep1, 1 Ep2, 2 Ep4, and the seasonal index is 0 in the field (the lobby sets it, the field load keeps it).
+- Dark Falz 47 writers: which of the three sites is form 2, form 3 or the hazard.
+- The variant flags listed in "Left" above.
+- The Volopt parts are all 46 (the part identity is not traced).
+
+**Checks:** `node tests/cmode.test.ts` (OK: the 98-row table, the one-name-per-id check, a case per decoded kind, the Rappy table cell by cell, the names). Client `tsc --noEmit -p .` clean (the worktree had no `client/node_modules`; it was linked from the main checkout for the run and removed before the commit). Not run in Chrome.
