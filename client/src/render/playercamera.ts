@@ -71,9 +71,18 @@
 // (0xc0400000) with the scalar ease of 004d64d8 (factor 1.4 = 0x3fb33333,
 // step 0.16 * factor of the distance). Other floors do not ease it.
 //
+// Dead camera (UpdateUnknownPlayerCamera_004d7698 calls, for a player whose
+// character_flags has `dead` = 0x800 and no guard / freeze flag, not the chase
+// state 004d7a1c but UpdateDefaultNPCCameraRotation_004d7c04): the camera does
+// not follow the heading; the stick turns it (orbit below). The dead flag is
+// set by PlayerDieAction_0069ac2c (+0x30 |= 0x800) on every tick of the dead
+// state (handle_input_state_dead) and cleared by Player_ResumeMovement_0069046c
+// (character_flags & 0xfffff1ff). Zoom, field of view and the controller
+// (source / target smoothing, walls) are the same as alive.
+//
 // Left out: the lock-on check of state 1 (no turn while the player's target
-// is within 70 units, player +0x45c), guard / freeze / death states, the
-// camera shake, and the NPC / boss cameras.
+// is within 70 units, player +0x45c), guard / freeze states, the camera shake,
+// and the NPC / boss cameras.
 
 export interface CameraZoomLevel {
   sourceY: number;
@@ -117,9 +126,25 @@ export const CAMERA_TALK_FOV_ANGLE = 0x22d8; // +0x54 in the NPC talk (+0x100)
 const CAMERA_FOV_STEP = 0xb6; // 007a8c74 step per frame
 export const CAMERA_TALK_HEIGHT = -3; // 0xc0400000 target height offset in the talk
 const CAMERA_HEIGHT_FACTOR = Math.fround(1.4); // 0x3fb33333 (004d64d8)
+// UpdateDefaultNPCCameraRotation_004d7c04 (the dead camera's stick turn): the
+// input amount must be above 0.2 (0x00909788, float); 2.5 (0x00909784) times
+// the amount is truncated to whole degrees (fistp with the chop mode 0xc00),
+// then truncated to BAMS by 65536 (0x00909780) / 360 (0x0090977c).
+export const ORBIT_DEADZONE = Math.fround(0.2);
+const ORBIT_SCALE = Math.fround(2.5);
+const BAMS_PER_TURN = 65536;
+const DEGREES_PER_TURN = 360;
 
 export type Vec3 = { x: number; y: number; z: number };
 type V3 = [number, number, number];
+
+// What the view knows about the player this frame. `dead`: the player's dead
+// flag (the camera orbits instead of chasing); `stick`: the stick's
+// movement_input_amount (0..1) and left-right axis (right +; ASSUMED sign).
+export interface CameraInput {
+  dead?: boolean;
+  stick?: { amount: number; lr: number };
+}
 
 // The map collision the camera rays use (render/collision.ts CollisionWorld,
 // segmentHit = cast_ray_at_map_collision_geometry).
@@ -238,8 +263,19 @@ export class PlayerCamera {
     };
   }
 
+  // One dead-camera turn (UpdateDefaultNPCCameraRotation_004d7c04). A
+  // left-right of 0 or less turns it the other way (the exe's `< 1` test).
+  orbit(amount: number, leftRight: number): void {
+    const a = Math.fround(amount);
+    if (a <= ORBIT_DEADZONE) return;
+    const degrees = Math.trunc(ORBIT_SCALE * a);
+    const bams = Math.trunc((degrees * BAMS_PER_TURN) / DEGREES_PER_TURN);
+    const step = bams * BAMS;
+    this.angle = wrap(leftRight < 1 ? this.angle - step : this.angle + step);
+  }
+
   // One game frame (30 per second).
-  tick(pos: Vec3, heading: number, world: CameraWorld | null = null): void {
+  tick(pos: Vec3, heading: number, world: CameraWorld | null = null, input: CameraInput = {}): void {
     // UpdateUnknownPlayerCamera_004d7698: the field of view, and the target
     // height on Pioneer 2 (004d7d40).
     this.fovAngle = easeBams(this.fovAngle, this.talk ? CAMERA_TALK_FOV_ANGLE : CAMERA_FOV_ANGLE, CAMERA_FOV_STEP);
@@ -273,7 +309,10 @@ export class PlayerCamera {
     // ProcessCameraChaseState_004d7a1c.
     const moving = move.x * move.x + move.y * move.y + move.z * move.z >= CHASE_MOVE_SQ;
     const goal = heading + Math.PI;
-    if (this.chase === 0) {
+    if (input.dead) {
+      // The dead camera: no chase (the chase state stays as it is); the stick turns it.
+      if (input.stick) this.orbit(input.stick.amount, input.stick.lr);
+    } else if (this.chase === 0) {
       if (moving) this.chase = 1;
     } else {
       if (!blocked) this.angle = smoothAngle(this.angle, goal, far ? CHASE_STEP_FAR : CHASE_STEP);

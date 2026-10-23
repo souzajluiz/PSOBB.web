@@ -12,6 +12,7 @@ import {
   CHASE_STEP_FAR,
   DEFAULT_ZOOM,
   lerpPoint,
+  ORBIT_DEADZONE,
   LERP_SOURCE,
   LERP_TARGET,
   PlayerCamera,
@@ -154,6 +155,51 @@ if (existsSync(file)) {
   console.log('(no vendor/newserv; skipping the key config file check)');
 }
 check(PALETTE_KEYS.map(([k, s]) => `${k}:${s}`).join(' ') === 'arrowleft:1 arrowdown:0 arrowright:2', 'palette keys -> palette_slots');
+
+// --- dead camera (UpdateDefaultNPCCameraRotation_004d7c04; dead flag 0x800) ---
+{
+  const BAMS = (Math.PI * 2) / 0x10000;
+  near(ORBIT_DEADZONE, 0.2, 'orbit deadzone 0.2 (0x00909788)');
+  const orbitOnce = (amount: number, lr: number) => {
+    const c = new PlayerCamera();
+    c.angle = 0;
+    c.orbit(amount, lr);
+    return c.angle;
+  };
+  near(orbitOnce(1, 127), 364 * BAMS, 'full stick right: 2.5 -> 2 degrees -> 364 BAMS');
+  near(orbitOnce(0.5, 1), 182 * BAMS, 'amount 0.5: 1.25 -> 1 degree -> 182 BAMS');
+  near(orbitOnce(0.4, 1), 182 * BAMS, 'amount 0.4: 1.0 -> 1 degree (fround)');
+  check(orbitOnce(0.3, 1) === 0, 'amount 0.3: 0.75 truncates to 0 degrees, no turn');
+  check(orbitOnce(0.2, 1) === 0 && orbitOnce(0.1, 1) === 0, 'amount at or under the 0.2 deadzone: no turn');
+  near(orbitOnce(1, 0), -364 * BAMS, 'left-right 0 or less turns the other way (the exe test is < 1)');
+  near(orbitOnce(1, -100), -364 * BAMS, 'stick left turns the camera left');
+
+  // Dead: a running player's camera does not chase; the stick turns it.
+  const c = new PlayerCamera();
+  c.reset(0);
+  c.zoom = 0;
+  const heading = Math.PI / 2; // the player faces +X
+  let x = 0;
+  const deadTick = (stick?: { amount: number; lr: number }) => c.tick({ x, y: 0, z: 0 }, heading, null, { dead: true, stick });
+  deadTick();
+  for (let i = 0; i < 60; i++) {
+    x += 3;
+    deadTick();
+  }
+  check(c.chase === 0, 'dead: the chase state stays 0 while the player runs');
+  near(c.angle, Math.PI, 'dead: the camera does not follow the heading (alive it turns to -PI/2)');
+  deadTick({ amount: 1, lr: 127 });
+  const turned = Math.PI + 364 * BAMS; // wrapped to (-PI, PI] by the camera
+  near(c.angle, Math.atan2(Math.sin(turned), Math.cos(turned)), 'dead: the stick turns the camera one step per tick');
+  const before = c.angle;
+  deadTick();
+  near(c.angle, before, 'dead: no stick, no turn');
+  check(Number.isFinite(c.source!.x) && Number.isFinite(c.target!.z), 'dead: the controller still places the camera');
+
+  // Revived / back in town: the flag is off and the chase starts on the next moving frame.
+  c.tick({ x: (x += 3), y: 0, z: 0 }, heading, null, { dead: false });
+  check(c.chase === 1, 'alive again: a moving player starts the chase');
+}
 
 console.log(failures ? `${failures} failures` : 'camera and controls: all checks passed');
 process.exit(failures ? 1 : 0);

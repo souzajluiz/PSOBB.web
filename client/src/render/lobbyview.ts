@@ -7,10 +7,10 @@
 // plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
 // the files are missing) a capsule stands in.
 
-import { PlayerCamera } from './playercamera.ts';
+import { PlayerCamera, type CameraInput } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
-import { takeCameraTurn, touchStick } from '../input/analog.ts';
+import { stickAmount, takeCameraTurn, touchStick } from '../input/analog.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
@@ -232,6 +232,8 @@ export class LobbyView {
   // While this returns true for a player, its gait motion is not played over
   // the attack motion and the local player does not move (render/combat.ts).
   attacking: (clientId: number) => boolean = () => false;
+  // The local player is dead or revivable (the dead camera orbits; set by GameView).
+  dead: () => boolean = () => false;
   // The local player's slow and guard inputs (render/combat.ts in the field;
   // the lobby has no status effects and no target, so 0.5 / 0.75 never apply).
   legState: () => LegState = () => ({ slowed: false, target: null });
@@ -683,7 +685,19 @@ export class LobbyView {
       if (camKey && !this.cameraKeyHeld) this.camera.reset(mine.angle);
       this.cameraKeyHeld = camKey;
       this.cameraTicks = Math.min(this.cameraTicks + dt * 30, 30);
-      for (; this.cameraTicks >= 1; this.cameraTicks--) this.camera.tick(pos, mine.angle, this.collision);
+      const dead = this.dead();
+      for (; this.cameraTicks >= 1; this.cameraTicks--) {
+        // The move loop is off while the player is dead, so a dead player's
+        // keys are ramped here, once per game tick like the move loop does.
+        const stick = touchStick();
+        if (dead && !stick) {
+          this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
+          this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
+        }
+        const axes = stick ?? { lr: this.keyLr, fb: this.keyFb };
+        const input: CameraInput = { dead, stick: { amount: stickAmount(axes), lr: axes.lr } };
+        this.camera.tick(pos, mine.angle, this.collision, input);
+      }
       // Drawn between its last two ticks (render/smoothrender.ts; not with ?fps=30).
       const { source, target } = this.camera.view(pos, mine.angle, this.viewer.smoother.enabled ? this.cameraTicks : 1);
       const cam = this.viewer.camera;

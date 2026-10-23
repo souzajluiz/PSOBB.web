@@ -9955,3 +9955,32 @@ So the solo case: spring -> captured -> hold for counter ticks -> the trap's on-
 - Hit type 4 (vtable 0x10 = 0x63ed14, which releases and kills the trap) is not decoded: the attack that makes it is not traced. Not ported.
 
 **Checks (follow-up 2):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all pass (sections 1-8). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+
+## 2026-10-23: The dead-state camera: no chase, the stick orbits (supersedes "not ported" in the dead prompt entry)
+
+**Report:** a dead local player's camera kept the chase of a living one. The exe's camera update has a dead branch: the player camera does not follow the heading, the stick turns it. Ported in `render/playercamera.ts` (`orbit`, `tick(..., input)`), wired from `render/lobbyview.ts` and `render/gameview.ts`.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13 dump, Ghidra decompiles and objdump):**
+- `UpdateUnknownPlayerCamera_004d7698` (dump line 255377): after the field of view and the target height, `if ((character_flags & (in_guard_stance|frozen)) == 0)`, then `if ((character_flags & dead) == 0)` -> `ProcessCameraChaseState_004d7a1c`, **else** `*(+0xf4) = 0; UpdateDefaultNPCCameraRotation_004d7c04(this)`. Then the desired source / target (`update_desired_camera_*`) run in both cases. The camera key (+0x104 block) runs before this check, so it still puts the camera behind the player when dead.
+- `dead` = `character_flags` (+0x30) bit 0x800 (enum `character_flags`, dump line 70186). Set by `PlayerDieAction_0069ac2c` (`param_1[0xc] |= 0x800`, dump line 580931), which `HandlePlayerInputAndState_0069e458` calls on every tick (dump line 580280). Cleared by `Player_ResumeMovement_0069046c` (`character_flags &= 0xfffff1ff`, dump line 571842, also clears 0x200 and 0x400) and `PlayerResetDeadState_0068fdc8` (`&= ~dead`, dump line 571414). The exe's exact caller of `Player_ResumeMovement` on revive / return is not traced (no direct name in the dump); ASSUMED that the end of the dead state is the flag clearing.
+- `UpdateDefaultNPCCameraRotation_004d7c04` (ghidra `FUN_004d7c04`, asm checked with objdump): if `amount > 0.2` (0x00909788 = 0.2, float; asm `fcoms` + `jbe`), `local = trunc(2.5 * amount)` (0x00909784 = 2.5; `fistpl` under chop mode 0xc00), `step = trunc(local * 65536 / 360)` (0x00909780 = 65536.0, 0x0090977c = 360.0), then `angle -= step` when `left_right <= 0` (asm `jle` to the subtract at 0x4d7cb5), else `angle += step`, `& 0xffff`. The gate `g_GamepadSlotMap * 0x50 != -0xaae75c` is `slot_address != 0`, always true for a valid slot (asm `testl %edx,%edx`).
+- `amount` = `movement_input_amount` = min(1, hypot(lr, fb) / 128) after the axis dead zone of 31 (the input writer, dump line 806880+). The port's `stickAmount` already has this rule (`input/analog.ts`).
+- Not found in the player camera: no rise, no look-down, no zoom change, no FOV change, no distance change for the dead state (checked: the only other `dead` / 0x800 uses in 0x4d3a..0x4d8a are the NPC camera's menu flags and the enemy / boss writers). The zoom level, the FOV (0x36c1) and the target height work as alive.
+- Input: the dead handler (`handle_input_state_dead`, `update_movement_speed` case) keeps the movement off unless `movement_disabled` is clear; the port's `busy` already stops the move loop for a dead player (`combat.isAttacking`), so the only input the dead camera reads is the stick / keys for the orbit.
+
+**Ported:**
+- `client/src/render/playercamera.ts`: `ORBIT_DEADZONE` (fround 0.2), `orbit(amount, leftRight)` (the exe's step, truncations and sign), `CameraInput { dead, stick }`, `tick(pos, heading, world, input)`: when `dead`, the chase block is skipped (the chase state 0 / 1 is kept) and the stick orbits once per tick; the controller (smoothing, walls, FOV, target height) is unchanged.
+- `client/src/render/lobbyview.ts`: `dead: () => boolean` (default false); the camera ticks read it. While dead the move loop is off, so the keys are ramped per camera tick (`rampAxis`, the same as the move loop); the stick (`touchStick`) wins when the pad is held (`stickAmount`).
+- `client/src/render/gameview.ts`: `this.view.dead = () => this.combat.damage.dead` (state `dead` or `revivable`, the flag's span).
+- The end: the state leaves `dead` on revive (6x4F -> `reviving`) and on the return to Pioneer 2 (`combat.returnedToCity` -> `damage.reset`), so the chase resumes on the next moving frame.
+
+**ASSUMED / UNCLEAR:**
+- The stick's left-right sign: the port's `lr` (right +) is taken as the exe's `movement_input_left_right` sign (the exe's test is `< 1` to subtract). Not checked against the pad's axis reading.
+- Keyboard: the port's key ramp (32 per poll up to 128, DEVLOG 2026-10-19 ASSUMED) feeds the same amount / left-right rule.
+- The exe's angle is BAMS (int); the port keeps radians, so the step is `trunc(...) * 2pi / 65536`.
+- The dead end is the flag clearing (`Player_ResumeMovement` / `PlayerResetDeadState`); the callers are not traced.
+- A left-right of 0 (forward only) turns the dead camera to the left by the exe's `< 1` test. Faithful to the decompile, not checked in Chrome.
+
+**Not ported (open):** the critical-hit effect (the remaining "Player damage left" item) was not looked at: the exe evidence was not quick, so it stays open in ROADMAP.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/controls.test.ts` (new section: the orbit steps 364 / 182 / 0 BAMS, the deadzone, the left sign, dead = no chase with the stick turn, no stick = no turn, alive again starts the chase), `node tests/npcs.test.ts`, `node tests/playerfx.test.ts`, `node tests/returnprompt.test.ts`, `node tests/smoothrender.test.ts`, `node tests/mobilecontrols.test.ts`, `node tests/mobileinput.test.ts` pass. Not run: Playwright / Chrome (per the brief).
