@@ -90,6 +90,16 @@ export const MARKER_SIZE_SMALL = 15.4; // mode 2
 export const COMPASS_STEP = 0x888;
 // unknown_minimap_player_colors (0x0097eaa0), ARGB by client slot.
 export const PLAYER_COLORS = [0xffff0000, 0xff00ff00, 0xffffff00, 0xff0000ff] as const;
+// Battle mode (MinimapCheckBattleOrSpawnItem_00803180 true): the markers take
+// the team colours of the minimap's marker loop (dump lines 817265-817415):
+// team 1 red (1, 0, 0), team 2 green (0, 1, 0), any other team yellow
+// (1, 1, 0). The local player's marker is always drawn; the others are drawn
+// only when they are on the local player's team, and a local team 0 draws no
+// other marker.
+export const TEAM_COLORS = { 1: 0xffff0000, 2: 0xff00ff00 } as const;
+export function teamColour(team: number): number {
+  return team === 1 ? TEAM_COLORS[1] : team === 2 ? TEAM_COLORS[2] : 0xffffff00;
+}
 
 // Icons (unknown_add_minimap_icon*: at most 128 a frame; unless forced, only
 // within 300 units (90000 = 0x0097ecf8, squared, XZ) of the radar centre).
@@ -102,6 +112,41 @@ export const CIRCLE_SIZE = 8;
 // Shape 0 (switches, TObjRaderIcon): the gate box scaled 13.6 x 8 x 5.6
 // (0x0097ec90 / 0x0097ec94) times the icon scale.
 export const SWITCH_SIZE = [13.6, 5.6] as const;
+
+// The enemies' icon rules. The default is the plain icon (unknown_add_minimap_icon,
+// scale 1, range checked). The boss updates call unknown_add_minimap_icon3
+// (vec3f, colour, scale float, shape, flags) with the flag 1 (forced: no
+// range check) and a bigger scale; the scale is the icon's size (the bosses'
+// icons are drawn at 4.0 or 5.0). Keyed by the enemy's newserv type name.
+export interface EnemyIconRule {
+  scale: number;
+  color: number;
+  forced: boolean;
+}
+export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLOR, forced: false };
+// OLGA_FLOW_1 (the phase-1 beast, ctor 0x00497580): the update of
+// Olga1ObjectUpdate_00492a84 calls icon3 at its position with scale 0x40a00000
+// (5.0), colour 0xffffa24c, flags 1 (exe 0x00492d95). ASSUMED: the position is
+// the enemy's root (the dump passes param_1[1].field_0x144).
+export const BOSS_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
+  OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
+};
+export function enemyIconRule(type: string): EnemyIconRule {
+  return BOSS_ICON_RULES[type] ?? ENEMY_ICON_RULE;
+}
+
+// Komo variant 6 (MapObjectKomoVariant6Update_0065d89c, Episode 2 only): one
+// icon2 a frame at the object, shape 3, flags 0 (range checked), heading =
+// yrot. The colour is red while its state is 0 (active, 0xffff0000) and green
+// at 1 (idle). The scale is the parity of the object's +0x8c value, negative
+// when the value is: the dump's `(((v ^ s) - s) & 1 ^ s) - s` with s = v >> 31
+// (logical shift, so s is 0 or 1) gives an odd value 1 (or -1 when negative)
+// and an even one 0 (dump line 524053).
+export function komoVariant6Icon(value: number, state: 0 | 1, yrot: number, pos: { x: number; z: number }): Icon {
+  const v = Math.trunc(value);
+  const odd = Math.abs(v) & 1;
+  return { x: pos.x, z: pos.z, color: state === 0 ? ICON_RED : ICON_GREEN, shape: 3, scale: v < 0 ? -odd : odd, heading: yrot };
+}
 
 // Full-map pan bounds (Minimap_ClampPlayerPosition_008058b4, filled in by the
 // static initializer 0x008059dc / data 0x00a11434): {min x, max x, min z,
@@ -212,6 +257,7 @@ export interface MinimapPlayer {
   y?: number; // the height (TObjRaderHideCol's distance is 3D)
   z: number;
   heading: number; // BAMS
+  team?: number | null; // the battle team (battle mode only; see teamColour)
 }
 
 // The camera of the slot drawn this frame.
@@ -337,8 +383,9 @@ export class MinimapState {
 
   // unknown_minimap_update. `self`: the local player (null = none or
   // invisible); `others`: the other players on this floor; `cameraYaw`: the
-  // camera's y_rotation (BAMS).
-  update(self: MinimapPlayer | null, others: readonly MinimapPlayer[], cameraYaw: number): void {
+  // camera's y_rotation (BAMS); `battle`: the local player's battle team
+  // while battle mode runs (null = not in battle mode: the slot colours).
+  update(self: MinimapPlayer | null, others: readonly MinimapPlayer[], cameraYaw: number, battle: number | null = null): void {
     if (!this.loaded) return;
     if (this.delay > 0) {
       this.delay--;
@@ -346,8 +393,14 @@ export class MinimapState {
     }
     this.markers = [];
     const size = this.zoomMode === 2 ? MARKER_SIZE_SMALL : MARKER_SIZE;
-    if (self) this.markers.push({ slot: self.slot, x: self.x, z: self.z, heading: self.heading, color: PLAYER_COLORS[self.slot & 3], size });
-    for (const p of others) this.markers.push({ slot: p.slot, x: p.x, z: p.z, heading: p.heading, color: PLAYER_COLORS[p.slot & 3], size });
+    if (self) this.markers.push({ slot: self.slot, x: self.x, z: self.z, heading: self.heading, color: battle === null ? PLAYER_COLORS[self.slot & 3] : teamColour(battle), size });
+    for (const p of others) {
+      if (battle === null) {
+        this.markers.push({ slot: p.slot, x: p.x, z: p.z, heading: p.heading, color: PLAYER_COLORS[p.slot & 3], size });
+      } else if (battle !== 0 && p.team === battle) {
+        this.markers.push({ slot: p.slot, x: p.x, z: p.z, heading: p.heading, color: teamColour(battle), size });
+      }
+    }
     // update_minimap_center_rotation.
     if (self) {
       this.radar.x = self.x;

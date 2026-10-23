@@ -86,6 +86,8 @@ export class BattleRun {
     opts.view.combat.placeTrap = (type) => this.placeTrap(type);
     // The palette's trap slots show the local stock (render/fieldhud.ts, classic/palette.ts slotCount).
     opts.view.hud.trapCount = (type) => this.counters.get(type);
+    // The minimap's team colours and the teammates' markers (classic/minimap.ts teamColour).
+    opts.view.hud.battleTeam = (clientId) => (this.controller?.slots[clientId]?.present ? this.controller.slots[clientId]!.team : null);
     if (opts.canvas) {
       this.hud = new BattleHud(opts.canvas);
       if (opts.files) void this.hud.load(opts.files).catch((e) => this.log(`battle hud: ${(e as Error).message}`));
@@ -363,6 +365,7 @@ export class BattleRun {
     this.opts.game.onSent = null;
     this.opts.view.combat.placeTrap = null;
     this.opts.view.hud.trapCount = null;
+    this.opts.view.hud.battleTeam = null;
     this.traps.clear();
     this.opts.view.combat.syncBattleTraps([]);
     this.hud?.dispose();
