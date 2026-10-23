@@ -21,7 +21,8 @@ import { locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, t
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
-import { PlayerAnimator } from './playeranim.ts';
+import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
+import type { WeaponNodeRef } from '../combat/weaponorigin.ts';
 import { PlayerMover, fromBams, legSpeed, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
@@ -150,6 +151,10 @@ interface Marker {
   weapon: THREE.SkinnedMesh | null;
   weaponKey: string;
   animator: PlayerAnimator | null;
+  // The body's bones (depth-first, the model's partBones[0]); null until the model loads.
+  body: THREE.Bone[] | null;
+  // The held weapon's bones in the exe's walk order (playermodel.ts weaponBones), or null.
+  weaponBones: THREE.Bone[] | null;
   charClass: number;
   gait: Locomotion;
   follow: Follower; // the tick-rate state of a remote player's run toward `target`
@@ -374,6 +379,8 @@ export class LobbyView {
       weapon: null,
       weaponKey: '',
       animator: null,
+      body: null,
+      weaponBones: null,
       charClass: p.charClass,
       gait: 'idle',
       follow: { x: 0, z: 0, heading: 0 },
@@ -429,6 +436,8 @@ export class LobbyView {
       const model = buildPlayerModel(assets, p.appearance, { weapon });
       const body = assets.parts.get(`pl${classLetter(p.charClass)}bdy00.nj`)!;
       marker.animator = new PlayerAnimator(model.partBones[0], body, motions);
+      marker.body = model.partBones[0];
+      marker.weaponBones = model.weaponBones;
       if (marker.model) {
         marker.group.remove(marker.model);
         disposeObject(marker.model, false); // textures are shared
@@ -868,6 +877,13 @@ export class LobbyView {
       this.cameraYaw = angle + Math.PI;
       this.lobby.sendStop(x, gy, z, angle);
     }
+  }
+
+  // The world point of a gun's attach node of a player (combat/weaponorigin.ts): a weapon
+  // walk entry or a body node of the skeleton; false when the player has no model yet.
+  weaponOriginOf(clientId: number, ref: WeaponNodeRef, out: { x: number; y: number; z: number }): boolean {
+    const m = this.markers.get(clientId);
+    return skeletonNodePosition(ref.part === 'body' ? m?.body : m?.weaponBones, ref.node, out);
   }
 
   // World position of each player (for 2D overlays such as name tags).

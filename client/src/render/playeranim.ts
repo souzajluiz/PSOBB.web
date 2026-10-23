@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { NjcmObject } from '../formats/njcm.ts';
 import { sampleKeys, type NjMotion } from '../formats/njmotion.ts';
-import { EVAL_ZXY_ANG } from '../formats/xj.ts';
+import { EVAL_BREAK, EVAL_ZXY_ANG } from '../formats/xj.ts';
 import type { MotionRecord } from '../formats/plymotion.ts';
 
 // Where motions come from: plymotiondata.rlc (PlayerMotions) or the
@@ -40,6 +40,22 @@ export function depthFirstNodes(root: NjcmObject): NjcmObject[] {
     for (const c of n.children) walk(c);
   };
   walk(root);
+  return out;
+}
+
+// The order the exe's node walk visits a model in (UpdateWeaponModelTransformations_005c3568,
+// unk_apply_weapon_model_transforms_from_nj): pre-order, and a node with EVAL_BREAK takes no
+// children. Returns the depth-first index (as depthFirstNodes) of each visited node, in the
+// walk's order: entry k is the node whose matrix the exe writes to unk_matrix_array + k.
+export function exeWalkIndices(root: NjcmObject): number[] {
+  const out: number[] = [];
+  let full = 0;
+  const walk = (n: NjcmObject, visited: boolean) => {
+    const self = full++;
+    if (visited) out.push(self);
+    for (const c of n.children) walk(c, visited && !(n.flags & EVAL_BREAK));
+  };
+  walk(root, true);
   return out;
 }
 
@@ -179,4 +195,20 @@ export class PlayerAnimator {
       }
     }
   }
+}
+
+const boneTmp = new THREE.Vector3();
+
+// The world point of body node `node` (the bone of the same depth-first index, the exe's
+// unk_matrix_array + node) into `out`; false when the skeleton has no such node. The chain's
+// world matrices are refreshed first, so the point is the current pose (no allocation).
+export function skeletonNodePosition(bones: readonly THREE.Object3D[] | null | undefined, node: number, out: { x: number; y: number; z: number }): boolean {
+  const bone = bones?.[node];
+  if (!bone) return false;
+  bone.updateWorldMatrix(true, false);
+  bone.getWorldPosition(boneTmp);
+  out.x = boneTmp.x;
+  out.y = boneTmp.y;
+  out.z = boneTmp.z;
+  return true;
 }
