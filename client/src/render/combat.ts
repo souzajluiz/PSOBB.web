@@ -665,6 +665,7 @@ export class CombatView {
       },
       log: (msg) => this.opts.log(msg),
       sound: (id) => this.playSe(id),
+      shielded: () => this.equippedShield(),
       fx: (e) => this.selfFx(e),
       landSound: () => heavyLandSe(this.game.self?.charClass ?? 0),
       motionEnded: () => this.selfAnimator()?.ended ?? true,
@@ -5379,9 +5380,14 @@ export class CombatView {
   // session's character file, which net/items.ts keeps in step with equips,
   // else the join snapshot.
   private equippedWeapon(): { data1: Uint8Array } | null {
+    return this.equippedItem((d1) => d1[0] === 0);
+  }
+
+  // The first equipped item whose data1 matches (the equip flag 8 of the same two sources).
+  private equippedItem(match: (data1: Uint8Array) => boolean): { data1: Uint8Array } | null {
     const char = this.opts.character?.();
     if (char) {
-      const w = char.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 0);
+      const w = char.inventory.find((i) => (i.flags & 8) !== 0 && match(i.data.data1));
       return w ? { data1: Uint8Array.from(w.data.data1) } : null;
     }
     const inv = this.game.selfSnapshot.inventory;
@@ -5391,9 +5397,15 @@ export class CombatView {
       const flags = new DataView(inv.buffer, inv.byteOffset).getUint32(o + 4, true);
       if (!(flags & 8)) continue;
       const data1 = inv.subarray(o + 8, o + 8 + 12);
-      if (data1[0] === 0) return { data1 };
+      if (match(data1)) return { data1 };
     }
     return null;
+  }
+
+  // A shield (armour class 1, subtype 2: items.ts slotMatches SLOT_SHIELD) in the
+  // shield slot: the 6x4A block then runs the shield's empty do_attack.
+  private equippedShield(): boolean {
+    return this.equippedItem((d1) => d1[0] === 1 && d1[1] === 2) !== null;
   }
 
   private pmtSync: ItemPMT | null = null;

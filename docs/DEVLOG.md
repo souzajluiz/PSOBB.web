@@ -10099,3 +10099,27 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The mag's DEF / POW / DEX / MIND labels stay plain text (no group 11 label; ASSUMED, as before).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` (all passed), `node tests/items.test.ts` (98/98), `node tests/itemmodels.test.ts` (all pass), `node tests/shop.test.ts`, `node tests/tekker.test.ts`, `node tests/magfeed.test.ts`, `node tests/medical.test.ts`, `node tests/level.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: The shield's own block routine: a shielded 6x4A shows the motion only
+
+**Report:** the local player's block (6x4A, `PlayerDamage.hit` with damage < 1) now checks the shield slot. With a shield equipped the block plays the block motion (slot 6) and sends 6x4A, with no SE 0x23 and no guard particles; without one it does what it did before (particles 0..3 and SE 0x23). The EVP / ATA roll that decides the block was already the exe's (`enemyHitsPlayer`, FUN_00777664 form) and is unchanged.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; named dump `Psobb.exe-05112026.c`, Ghidra for the bodies):**
+- `handle_input_state_evade_attack` entry 0x0069f498 (`case 6`, arg 6 plays the block motion), then `FUN_0068c8e8` = PlayerProcessHurtDamage (dump line 557599). It looks up `get_equipment_slot(&param_1->equipment, shield)`; with a shield it calls `(*vtable->do_attack)()` and returns. Without one it calls `vtable->field67_0x10c` (the position getter, the 0x24 height) and `CreateEnemyEffectEntity_005030bc`.
+- `CreateEnemyEffectEntity_005030bc` (0x005030bc): if `FUN_005caba4(0x74)` passes it creates the effect entity 0x00503144 (particles); then `FUN_00814298(0x23, pos, 0, 0)`, the SE, always.
+- The shield item: `group_idx 0x4f` goes to `CreateArmorInstance_005e3200` (0x005e3200, vtable `PTR_LAB_00b0fb60`); `group_idx 0x4d` (armour) to `CreateArmorInstance_005e3374` (vtable `PTR_LAB_00b0fc80`). Both are `do_attack` (+0x70) = 0x0061cdb0, which Ghidra shows as an empty `return;` (`FUN_0061cdb0`). So the shield's own routine is empty.
+- The `do_attack` slot is +0x70: `item_instance_vtable` lists `field27_0x6c` then `do_attack` (dump line 74695), and DEVLOG 9520 reads the weapons' slot there too.
+
+**Ported:**
+- `client/src/combat/playerdamage.ts`: `PlayerDamageEvents.shielded?()` (default false = no shield). The block branch plays SE 0x23 and the block fx only when not shielded. The motion and 6x4A are sent either way.
+- `client/src/render/combat.ts`: `shielded: () => this.equippedShield()`. `equippedWeapon` became `equippedItem(match)` (the same two sources: the character file and the snapshot, equip flag 8); a shield is data1 `[0] = 1`, `[1] = 2` (`net/items.ts` SLOT_SHIELD).
+- `client/src/combat/playerfx.ts`: the block note now gives the exe's answer (it was ASSUMED before).
+- `tests/combatdepth.test.ts`: `damageHarness(maxHp, shielded)`; new block: a shielded block (motion, 6x4A, HP kept, no SE / fx, the block state ends) and a shielded light hit (SE 0x13, hit fx unchanged).
+- `docs/ROADMAP.md`: the "Player damage left" line drops the shield item.
+
+**ASSUMED / UNCLEAR:**
+- The shield's vtable is the one the `CreateArmorInstance_005e3200` constructor writes (0x00b0fb60); nothing later in the dump rewrites it. Not checked at run time.
+- Remote players: the client does not track their shield, so a remote 6x4A keeps the no-shield look (SE and particles). The exe's remote copy would use the remote player's own shield slot.
+- The shield's barrier specials (the barrier entities, `ConstructArmorBarrierInstance_005d145c`) are a separate effect; not part of the 6x4A routine and not touched here.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/combatdepth.test.ts` 831 checks 0 failures (6 new), `node tests/playerfx.test.ts` all passed, `node tests/specials.test.ts` all passed, `node tests/combat.test.ts` (with `vendor/newserv` linked) 5946 checks 0 failures, `node tests/returnprompt.test.ts` 46/46.
