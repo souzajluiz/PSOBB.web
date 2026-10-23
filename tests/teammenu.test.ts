@@ -11,9 +11,15 @@ import {
   memberColor,
   TEAM_LIST_POS,
   TEAM_POS,
+  TEAM_INFO_POINTS_POS,
+  TEAM_INFO_POS,
+  TEAM_INFO_REWARDS_POS,
+  TeamInfoWindow,
   TeamMemberListWindow,
   TeamMenus,
   teamRowsDisabled,
+  T11_TEAM_INFO,
+  T11_TEAM_LOG,
   T15_TEAM,
   type TeamHost,
 } from '../client/src/classic/teammenu.ts';
@@ -630,6 +636,102 @@ async function openMaster(h: TeamHost) {
   failing.show();
   await tick();
   check(failing.open && failing.rows.length === 0, 'failed request: window open, no rows');
+}
+
+// --- Home menu > Team > Team Info (0x2b): 18EA points, 19EA rewards, Cancel -------------------
+{
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  eq(TEAM_INFO_POS, { x: 13, y: 256 }, 'the list at get_gui_position(3) (ASSUMED static)');
+  eq(TEAM_INFO_POINTS_POS, { x: 299, y: 256 }, 'the points window at get_gui_position(0x1a)');
+  eq(TEAM_INFO_REWARDS_POS, { x: 13, y: 296, w: 400, h: 140 }, 'the reward list at (3) + (0, 40), 400 x 140');
+  eq([T11_TEAM_INFO.pointInfo, T11_TEAM_INFO.earnedPrivileges, T11_TEAM_INFO.none], [0x170, 0x171, 0xee], 'row and empty strings (group 11)');
+  eq(T11_TEAM_LOG, { title: 0x157, rows: [0x158, 0x159] }, 'Team Log labels (group 11, not ported)');
+
+  const calls = { intra: 0, rewards: [] as boolean[] };
+  const ranking = {
+    rankingPoints: 1200,
+    pointsRemaining: 300,
+    entries: [
+      { rank: 1, privilege: PRIVILEGE.master, guildCard: 900, name: 'Boss', points: 700 },
+      { rank: 2, privilege: PRIVILEGE.member, guildCard: 902, name: 'Rook', points: 500 },
+    ],
+  };
+  const rewardList = [
+    { name: 'Reward A', description: 'First', teamPoints: 10, rewardId: 1 },
+    { name: 'Reward B', description: 'Second line', teamPoints: 20, rewardId: 2 },
+  ];
+  const mk = (o: { fail?: boolean; empty?: boolean } = {}): TeamHost =>
+    ({
+      membership: () => team(PRIVILEGE.master),
+      selfGuildCard: () => 777,
+      members: async () => [],
+      intraRanking: async () => {
+        calls.intra++;
+        if (o.fail) throw new Error('no 18EA');
+        return o.empty ? { ...ranking, entries: [] } : ranking;
+      },
+      rewards: async (owned: boolean) => {
+        calls.rewards.push(owned);
+        if (o.fail) throw new Error('no 19EA');
+        return o.empty ? [] : rewardList;
+      },
+    }) as unknown as TeamHost;
+
+  const w = new TeamInfoWindow(mk(), t11);
+  eq(w.open, false, 'closed before the menu opens it');
+  w.show();
+  eq([w.open, w.state], [true, 'list'], 'open on the two rows');
+  w.draw(ctx, skin, 0);
+  // Row 0 (Point Information): 18EA at once, the points window after the answer.
+  check(w.key(k('Enter')) && w.state === 'waiting', 'Enter on row 0 waits for 18EA');
+  eq(calls.intra, 1, 'one 18EA sent');
+  w.draw(ctx, skin, 0);
+  await tick();
+  eq(w.state, 'points', 'the 18EA answer opens the points window');
+  eq(w.subRows?.map((r) => r.label), ['<0001> Boss 700', '<0002> Rook 500'], 'points rows: rank, name, points');
+  w.draw(ctx, skin, 0);
+  check(w.key(k('Escape')) && w.state === 'list' && w.open, 'Cancel in the points window goes back to the list');
+  // Row 1 (Earned Privileges List): 19EA (owned) and the reward names; the cursor row's description.
+  w.key(k('ArrowDown'));
+  w.key(k('Enter'));
+  eq(w.state, 'waiting', 'Enter on row 1 waits for 19EA');
+  eq(calls.rewards, [true], 'one 19EA (owned rewards) sent');
+  await tick();
+  eq(w.state, 'rewards', 'the 19EA answer opens the reward list');
+  eq(w.subRows?.map((r) => r.label), ['Reward A', 'Reward B'], 'reward names');
+  eq(w.currentDescription, 'First', 'the cursor row\'s description');
+  w.draw(ctx, skin, 0);
+  w.key(k('ArrowDown'));
+  eq(w.currentDescription, 'Second line', 'the description follows the cursor');
+  check(w.key(k('Escape')) && w.state === 'list', 'Cancel in the reward list goes back to the list');
+  check(!w.key(k('Escape')) && !w.open, 'Cancel on the list closes the window');
+
+  // Empty answers: one greyed row with the group 11 string.
+  const empty = new TeamInfoWindow(mk({ empty: true }), t11);
+  empty.show();
+  empty.key(k('Enter'));
+  await tick();
+  eq(empty.subRows?.map((r) => [r.label, r.enabled]), [['T11[ee]', false]], 'no points: one greyed row (11, 0xee)');
+  empty.key(k('Escape'));
+  empty.key(k('ArrowDown'));
+  empty.key(k('Enter'));
+  await tick();
+  eq(empty.subRows?.map((r) => [r.label, r.enabled]), [['T11[ee]', false]], 'no rewards: one greyed row (11, 0xee)');
+
+  // A failed request (no answer) goes back to the list.
+  const failing = new TeamInfoWindow(mk({ fail: true }), t11);
+  failing.show();
+  failing.key(k('Enter'));
+  await tick();
+  eq([failing.state, failing.open], ['list', true], 'a failed 18EA keeps the window on the list');
+
+  // A late answer after closing is dropped.
+  const late = new TeamInfoWindow(mk(), t11);
+  late.show();
+  late.key(k('Enter'));
+  late.close();
+  await tick();
+  eq([late.state, late.subRows], ['list', null], 'answer after close is dropped');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

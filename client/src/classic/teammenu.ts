@@ -75,7 +75,7 @@
 
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
-import { memberRowLabel, PRIVILEGE, inTeam, type TeamMember, type TeamMembership, type TeamRank } from '../net/team.ts';
+import { memberRowLabel, PRIVILEGE, inTeam, type IntraRanking, type TeamMember, type TeamMembership, type TeamRank, type TeamReward } from '../net/team.ts';
 import { wrapGameText } from './chat.ts';
 import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -137,6 +137,9 @@ export interface TeamHost {
   // The Guild Card search (0040 / 0041, net/guildcard.ts) of one member: true when the
   // member answers (the exe's Enter on a member row, dump 720824 states 3, 0xf, 0x10).
   searchMember?(guildCard: number): Promise<boolean>;
+  // Team Info (0x2b, see TeamInfoWindow below): 18EA and 19EA / 1AEA answers.
+  intraRanking?(): Promise<IntraRanking>;
+  rewards?(owned: boolean): Promise<TeamReward[]>;
 }
 
 export interface TeamText {
@@ -942,6 +945,199 @@ export class TeamMemberListWindow {
       const labels = this.actions.items.map((i) => gameTextWidth(i.label));
       const aw = Math.max(gameTextWidth(this.actionTitle), ...labels) + 2 * INSET;
       drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, aw, this.actionTitle, this.actions.visible, this.actions.cursor - this.actions.top, true);
+    }
+    ctx.restore();
+  }
+}
+
+// --- Home menu > Team > Team Info (0x2b) ----------------------------------------------------
+//
+// ChallengePlayerInfoWindow_Constructor_0074c23c (dump 720228; the dump's name fits the
+// constructor, its window is the team info one). The constructor makes a two-row list at
+// get_gui_position(3) (CreateListWindow_0074c2d4, rows unitxt (11, 0x170) "Point Information"
+// with value 0 and (11, 0x171) "Earned Privileges List" with value 1) and sets
+// g_GuildCardMenu_IsOpen to itself. Its process FUN_0074c364 (vtable 0x00b41e08 slot 1; state
+// byte at +0x1c):
+//   state 1 (list): a decided row sends 18EA (row 0: FUN_007f67e0, size 8, sub 0x18, flag 0)
+//        or 19EA (row 1: FUN_007f6810, size 8, sub 0x19, flag 0) and goes to state 2 / 4.
+//   The answers come through the EA table (0x00a0f800: sub 0x18 -> 0x007c4ef4, sub 0x19 ->
+//        0x007c4f10), which calls the window (through g_GuildCardMenu_IsOpen):
+//        18EA -> SetState(3) and the points window ChallengePlayer_CreateGuildCardSearchWindow_0074fa2c
+//        (FUN_0074faa4 copies the answer; its count is the answer's num_entries at +0x14, pages of 7,
+//        GUI 0x1a = (299, 256) static); state 3 leaves on Cancel back to state 0 (= the list).
+//        19EA -> ShowSubmenu_0074c608 -> state 5: a list at get_gui_position(3) + (0, 40) of
+//        width 400 and height 140 (ListWindowObject_Initialize_007361d0), one row per reward
+//        name (record +0, 0x188 bytes, the count at the answer's +8 is num_entries); the cursor
+//        row's description (record +0x80) is added to the list at GUI 0x8a; no record -> one
+//        row with unitxt (11, 0xee). Cancel in state 5 goes back to the list.
+//   Cancel in state 1 closes the window (state 6 -> the owner's callback).
+// ASSUMED: the list's static position (13, 256) is the member list's (get_gui_position(3) and
+// (0x15) share the static value); the points window's rows (rank, name, points, not the exe's
+// columns: its header strings are not identified); the description box at (419, 256) 260 wide;
+// the reward list is a PickList (8 rows, not 7); no timeout (a late answer after a close is dropped).
+// NOT traced: the points window's own key handling (paging) and its draw layout (vtable 0x00b421b0),
+// the in-game "%s%d pt" notice FUN_0079f534 (state 0x4d), and the 18EA header numbers.
+export const TEAM_INFO_POS = { x: 13, y: 256 } as const; // get_gui_position(3), static 0x00971f58
+export const TEAM_INFO_POINTS_POS = { x: 299, y: 256 } as const; // get_gui_position(0x1a), static 0x00972010
+export const TEAM_INFO_REWARDS_POS = { x: 13, y: 296, w: 400, h: 140 } as const; // (3) + (0, 40), 400 x 140
+export const TEAM_INFO_DESC_POS = { x: 419, y: 256, w: 260 } as const; // ASSUMED (get_gui_position(0x8a))
+export const T11_TEAM_INFO = { pointInfo: 0x170, earnedPrivileges: 0x171, none: 0xee } as const;
+// Team Log (0x27, not ported): FUN_0074d618 titles its list with unitxt (11, 0x157) at
+// get_gui_position(0x16) = (13, 256) static, and its rows are (11, 0x158) and (11, 0x159).
+export const T11_TEAM_LOG = { title: 0x157, rows: [0x158, 0x159] } as const;
+
+export type TeamInfoPhase = 'list' | 'waiting' | 'points' | 'rewards';
+
+export class TeamInfoWindow {
+  private visible = false;
+  private epoch = 0;
+  private phase: TeamInfoPhase = 'list';
+  private readonly list: PickList;
+  private sub: PickList | null = null;
+  private description = '';
+  private rewards: TeamReward[] = [];
+  private readonly host: TeamHost;
+  private readonly text: Text;
+
+  constructor(host: TeamHost, text: Text) {
+    this.host = host;
+    this.text = text;
+    this.list = new PickList([
+      { label: text(T11_TEAM_INFO.pointInfo), value: 0, enabled: true },
+      { label: text(T11_TEAM_INFO.earnedPrivileges), value: 1, enabled: true },
+    ]);
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  show(): void {
+    this.visible = true;
+    this.phase = 'list';
+    this.sub = null;
+    this.description = '';
+    this.list.cursor = 0;
+    this.list.top = 0;
+  }
+
+  close(): void {
+    this.epoch++;
+    this.visible = false;
+    this.phase = 'list';
+    this.sub = null;
+  }
+
+  get state(): TeamInfoPhase {
+    return this.phase;
+  }
+
+  // The sub-list's rows (the points or the reward names) and the cursor row's description.
+  get subRows(): readonly ListItem[] | null {
+    return this.sub?.items ?? null;
+  }
+
+  get currentDescription(): string {
+    return this.description;
+  }
+
+  // Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    const k = menuKeyOf(e);
+    switch (this.phase) {
+      case 'list': {
+        if (k === 'cancel') {
+          this.close();
+          return false;
+        }
+        this.list.key(e);
+        const r = this.list.result;
+        this.list.result = null;
+        if (r === 'decide') {
+          const row = this.list.selected;
+          if (row?.enabled) this.ask(row.value === 0 ? 'points' : 'rewards');
+        }
+        return true;
+      }
+      case 'waiting':
+        return true; // the exe ignores keys while the answer is pending (ASSUMED: Cancel too)
+      case 'points':
+      case 'rewards': {
+        if (k === 'cancel') {
+          this.epoch++;
+          this.phase = 'list';
+          this.sub = null;
+          this.description = '';
+          return true;
+        }
+        if (!this.sub) return true;
+        this.sub.key(e);
+        this.sub.result = null;
+        if (this.phase === 'rewards') this.description = this.rewardDescription();
+        return true;
+      }
+    }
+  }
+
+  // 18EA (points) or 19EA (rewards): the answer opens the sub-list; a failed request goes back.
+  private ask(what: 'points' | 'rewards'): void {
+    const epoch = ++this.epoch;
+    this.phase = 'waiting';
+    const answer = what === 'points' ? this.host.intraRanking?.() : this.host.rewards?.(true);
+    if (!answer) {
+      this.phase = 'list';
+      return;
+    }
+    answer.then(
+      (data) => {
+        if (epoch !== this.epoch || !this.visible) return;
+        if (what === 'points') {
+          const r = data as IntraRanking;
+          this.sub = new PickList(
+            r.entries.length
+              ? r.entries.map((e, i) => ({ label: `${memberRowLabel(e)} ${e.points}`, value: i, enabled: true }))
+              : [{ label: this.text(T11_TEAM_INFO.none), value: -1, enabled: false }],
+          );
+          this.phase = 'points';
+        } else {
+          const rewards = data as TeamReward[];
+          this.rewards = rewards;
+          this.sub = new PickList(
+            rewards.length ? rewards.map((r, i) => ({ label: r.name, value: i, enabled: true })) : [{ label: this.text(T11_TEAM_INFO.none), value: -1, enabled: false }],
+          );
+          this.description = this.rewardDescription();
+          this.phase = 'rewards';
+        }
+      },
+      () => {
+        if (epoch !== this.epoch || !this.visible) return;
+        this.phase = 'list';
+        this.sub = null;
+      },
+    );
+  }
+
+  private rewardDescription(): string {
+    const row = this.sub?.selected;
+    if (!row || typeof row.value !== 'number' || row.value < 0) return '';
+    return this.rewards[row.value]?.description ?? '';
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    this.list.draw(ctx, skin, TEAM_INFO_POS.x, TEAM_INFO_POS.y, null);
+    if (this.phase === 'points' && this.sub) {
+      this.sub.draw(ctx, skin, TEAM_INFO_POINTS_POS.x, TEAM_INFO_POINTS_POS.y, null);
+    }
+    if (this.phase === 'rewards' && this.sub) {
+      this.sub.draw(ctx, skin, TEAM_INFO_REWARDS_POS.x, TEAM_INFO_REWARDS_POS.y, null, TEAM_INFO_REWARDS_POS.w);
+      if (this.description) {
+        const lines = wrapGameText(this.description, TEAM_INFO_DESC_POS.w - 2 * INSET).map((label) => ({ label, value: 0, enabled: false }));
+        drawListWindow(ctx, skin, TEAM_INFO_DESC_POS.x, TEAM_INFO_DESC_POS.y, TEAM_INFO_DESC_POS.w, null, lines, -1, false);
+      }
     }
     ctx.restore();
   }

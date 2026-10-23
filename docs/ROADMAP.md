@@ -53,8 +53,10 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    are done 2026-10-20 (`classic/teammenu.ts`, `net/team.ts`; not seen in Chrome);
    Home menu > Team > Team Member List (0x25) is done 2026-10-23 (rows, colours; Enter on a
    row searches the member (0040 / 0041), then the action list; its three leaves are logged
-   no-ops). Left: the action leaves (Send Mail, Sent Item, Meet the User), Team Info (0x2b:
-   Point Information 18EA / Earned Privileges 19EA), Team Log (0x27), Point Regist (0x2d),
+   no-ops). Team Info (0x2b) is done 2026-10-23 (`classic/teammenu.ts` TeamInfoWindow: row 0 sends 18EA
+   with the points window, row 1 sends 19EA with the reward names and descriptions; the points window's
+   header and layout are not traced, see DEVLOG). Left: the action leaves (Send Mail, Sent Item, Meet the
+   User), Team Log (0x27: its labels are unitxt group 11 0x157..0x159, the answer is not traced), Point Regist (0x2d),
    Master Transfer (6x handshake), Buying Privileges / Flag Records windows, Invite (0x29:
    sends a 6x62 C1 17 peer message, not 03EA; DEVLOG 2026-10-23), banned team names, team
    chat line. No captures exist for any of it.
