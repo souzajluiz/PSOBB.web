@@ -191,7 +191,7 @@ import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { NodeAnimator } from './enemymodel.ts';
-import { parseHoldPacket, type PillarTrap, type TrapEvent } from './traps.ts';
+import { holdCountdown, parseHoldPacket, type PillarTrap, type TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { TickClock } from './smoothrender.ts';
@@ -4044,7 +4044,7 @@ export class CombatView {
         if (this.holdTicks > 0) this.opts.log('hold released by another client');
         this.holdTicks = 0;
       } else if (!this.damage.dead) {
-        this.holdTicks = h.frames;
+        this.holdTicks = holdCountdown(h.frames);
         this.view?.resetGait(this.game.selfId);
       }
       return;
@@ -4069,7 +4069,7 @@ export class CombatView {
   private holdTicks = 0;
   private imposeHold(h: { frames: number; particle: number; x: number; z: number; radius2: number }, what: string): void {
     if (this.damage.dead) return;
-    this.holdTicks = h.frames;
+    this.holdTicks = holdCountdown(h.frames);
     this.game.sendImposeHold(h.frames, h.particle, h.x, h.z, h.radius2);
     this.view?.resetGait(this.game.selfId);
     this.opts.log(`${what}: web hold for ${h.frames} frames`);

@@ -20,6 +20,7 @@ import {
   captureSpeed,
   captureTrapCloaked,
   HOLD_UNTIL_RELEASED,
+  holdCountdown,
   captureTrapDraw,
   hasTrapVision,
   PillarTrap,
@@ -300,6 +301,50 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   check(parseHoldPacket(0x2d, pkt(0x2d, 5))?.clientId === 5 && parseHoldPacket(0x2d, pkt(0x2d, 5))?.frames === 0, 'a received 6x2D names the client (no frames)');
   check(parseHoldPacket(0x2c, pkt(0x2c, 1, 0xffff))?.frames === 0xffff, 'a received 6x2C carries the frames at 4');
   check(parseHoldPacket(0x2a, pkt(0x2d, 5)) === null && parseHoldPacket(0x2d, new Uint8Array(2)) === null, 'other subcommands and short bodies are not hold packets');
+}
+
+// 8. The timed hold: the counter (param4 clamped 1..60, x 30 ticks) ends it through the trap's own hit path
+// (the on-interact), so a solo player is released without a teammate. The 6x2C's 0xffff has no self countdown.
+{
+  const none: (VisionPlayer | null)[] = [null, null, null, null];
+  const at = (x: number, z: number, clientId: number): CapturePlayer => ({ clientId, x, z, radius: 5 });
+  // Spring a trap with param4 = p4 on the held client `held` (8 away); returns the trap at state 3.
+  const held = (p4: number, held: number) => {
+    const ct = new CaptureTrap([1, 0, 0, p4, 0, 0], 28, { x: 0, y: 0, z: 0 });
+    ct.frame({ slots: none, room: 0, players: [at(0, 14, held)], selfId: 0, springFrames: 1 });
+    ct.frame({ slots: none, room: 0, players: [at(0, 8, held)], selfId: 0, springFrames: 1 });
+    return ct;
+  };
+  // Ticks until the first release (nobody else in the field), with the events of every tick.
+  const untilRelease = (ct: CaptureTrap, players: CapturePlayer[]) => {
+    const all: TrapEvent[] = [];
+    for (let n = 1; n <= 5000; n++) {
+      const evs = ct.frame({ slots: none, room: 0, players, selfId: 0, springFrames: 1 });
+      all.push(...evs);
+      if (evs.some((e) => e.kind === 'release')) return { n, evs: all };
+    }
+    return { n: -1, evs: all };
+  };
+  const solo = held(1, 0);
+  const r1 = untilRelease(solo, [at(0, 8, 0)]);
+  check(r1.n === 31, 'param4 1: the solo hold ends on tick 31 (30 counter ticks + the first below 0)');
+  check(r1.evs.some((e) => e.kind === 'release' && e.clientId === 0), 'the release names the held client (0)');
+  check(solo.captured === null && untilRelease(solo, [at(0, 8, 0)]).n === -1, 'the record is cleared: no second release');
+  check(r1.evs.filter((e) => e.kind === 'sound').length === 1, 'the SE starts once for the hold');
+
+  check(untilRelease(held(0, 0), [at(0, 8, 0)]).n === 31, 'param4 0 is clamped to 1 (30 ticks)');
+  check(untilRelease(held(60, 0), [at(0, 8, 0)]).n === 1801, 'param4 60: 60 x 30 counter ticks + 1');
+  check(untilRelease(held(99, 0), [at(0, 8, 0)]).n === 1801, 'param4 above 60 is clamped to 60');
+  check(untilRelease(held(1, 2), [at(0, 8, 2)]).evs.some((e) => e.kind === 'release' && e.clientId === 2), 'a remote held client is released by this run too (its own client sends the 6x2D)');
+
+  // No one held (the spring found nobody at its end): no release at all.
+  const nobody = new CaptureTrap([1, 0, 0, 1, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  nobody.frame({ slots: none, room: 0, players: [at(0, 14, 0)], selfId: 0, springFrames: 1 });
+  nobody.frame({ slots: none, room: 0, players: [at(0, 40, 0)], selfId: 0, springFrames: 1 });
+  check(nobody.state === 3 && untilRelease(nobody, []).n === -1, 'no target at the spring end: nothing is held or released');
+
+  // 6x2C 0xffff is no self countdown; any other frames count down as they are.
+  check(holdCountdown(0xffff) === Infinity && holdCountdown(90) === 90, 'holdCountdown: 0xffff has no timer, other frames count');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');

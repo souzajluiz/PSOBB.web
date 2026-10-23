@@ -310,10 +310,10 @@ export class SealDoor {
 // Init (ApplyDerolleTrapInitData_0063ea98, VERIFIED): +0x68 (param1) = 0.1 (0x00934514) when
 // below 0.1, else min(param1, 10) (0x00934508); the animation speed +0xc8 is that same value.
 // +0x33c (the idle's radius) and +0x340 = 15.0 (0x41700000). +0x84 (param4) clamped 1..60, +0x350 =
-// it x 30 (not read by the handlers traced here). +0x88 (param5) clamped 0..1, +0x354 = 1 when
+// it x 30 (the hold counter of state 3). +0x88 (param5) clamped 0..1, +0x354 = 1 when
 // it is above 0 (the cloak). +0x6c clamped to >= 0, +0x35c = that x the difficulty's factor
 // (1, 2, 3, 6, DAT_00a9cd68; not read here). +0x8c (param6) clamped 0..5, +0x358 = it.
-// +0xc0 (the spring's motion frame) = 0; +0x348 (the hit counter) = 1 (InitializeBaseMapObject).
+// +0xc0 (the spring's motion frame) = 0; +0x350 (the hold counter, = param4 x 30 with param4 clamped 1..60).
 //
 // Cloak: +0x354 != 0 selects the cloak pass in render_capturetrap (recursively_render_capture_
 // trap_njm, unknown_set_advanced_effect_cloaked). VERIFIED.
@@ -346,10 +346,12 @@ export class SealDoor {
 //   jungle SE, positional at the trap) and SnowBerillSendAttackPacket_006937c8 with the player as
 //   its `this`: 6x2C {client id, frames 0xffff, particle 0, the trap's x / z, r^2}. 0xffff is the
 //   frames value: the hold has no timer (the release is 6x2D, see below).
-//   3 hold (SawMapObjectHandleHit): the counter (+0x348) drops by 1 a tick. While it is 0 or more
-//   the SE plays (SawMapObjectPlaySound); below 0 the exe hits the target with vtable try_hit_entity
-//   (1.0) and unknown_melee_attack_2 every tick (damage UNCLEAR, not ported). Nothing in these
-//   handlers sets the state back: the trap stays in 3.
+//   3 hold (SawMapObjectHandleHit 0x63e72c): the counter (+0x350, = param4 clamped 1..60 x 30 from
+//   ApplyDerolleTrapInitData) drops by 1 a tick. While it is 0 or more the SE plays; below 0 the
+//   trap calls its own try_hit (the on-interact, slot 0x5c) on the target, which releases it (6x2D).
+//   So the timed hold ends by the trap, not by a teammate, after param4 seconds (VERIFIED: the
+//   6x2C handler 0x68d734 stores the frames at +0x808 with a countdown in unknown_update_player that
+//   skips -1 (0xffff) and sends 6x2D at 0; 0x68d830 clears movement_disabled = bit 1 of +0x33c).
 //   Release: the trap's on-interact (vtable +0x5c = SawMapObjectOnInteract_0063ed78) is called by
 //   the collision step of an entity that touches the trap (the caller's +0x50 gate, 0x0063a00c, is
 //   "entity != the trap's target"). It runs SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0:
@@ -375,7 +377,9 @@ export const CAPTURE_RADIUS = 15; // +0x33c (idle radius) and +0x340 (0x41700000
 export const VIEW_DISTANCE = 400; // vtable +0x24 arg 0x43c80000 (400.0); its mesh radius 0x42c80000 (100.0) is not used here
 export const CAPTURE_SPEED_MIN = Math.fround(0.1); // 0x00934514 (and 0x0093450c)
 export const CAPTURE_SPEED_MAX = 10; // 0x00934508
-export const HOLD_UNTIL_RELEASED = 0xffff; // 6x2C frames argument of the capture hold (EnemyAcquireTargetAndAttack)
+// 6x2C frames of the capture hold (EnemyAcquireTargetAndAttack): 0xffff = the short -1, which the player's own
+// countdown (unknown_update_player) skips, so the hold ends by the trap's counter (CaptureTrap.counter).
+export const HOLD_UNTIL_RELEASED = 0xffff;
 // The trap's collision: a sphere of radius 14 at y + 20 (DerolleTrapCollisionBoxData 0x009c6b04: +0x0c = 14.0,
 // +0x04 = 20.0, the layout of the pillar's box 0x009c684c, read with exedata.py).
 export const CAPTURE_BOX_RADIUS = 14;
@@ -490,8 +494,11 @@ export class CaptureTrap {
   anim = 0;
   // +0x340: EnemyAcquireTargetAndAttack rewrites it (r -= the player's radius) on each call.
   private reach = CAPTURE_RADIUS;
-  // +0x348: the hit counter of SawMapObjectHandleHit (1 at construction, never reset here).
-  private counter = 1;
+  // +0x350 (bitfield_palette_slots_disabled in the player layout): the hold counter of SawMapObjectHandleHit,
+  // set by ApplyDerolleTrapInitData to param4 (clamped 1..60) x 30 ticks. It counts down in state 3;
+  // below 0 the trap's own try_hit (the on-interact) releases the held client.
+  private counter: number;
+  private soundStarted = false;
   // The client id held by the spring's hit (EnemyGetNearestTargetInRange's target at the spring's
   // end), null when nobody is held. Set on every client (the trap runs on each), not only for the local player.
   captured: number | null = null;
@@ -503,6 +510,8 @@ export class CaptureTrap {
     this.x = at.x;
     this.y = at.y;
     this.z = at.z;
+    // ApplyDerolleTrapInitData_0063ea98: param4 clamped to 1..60 (0x3c), then x 30 (0x1e) ticks.
+    this.counter = Math.max(1, Math.min(60, Math.trunc(params[3] ?? 0))) * 30;
   }
 
   // One AI tick (EnemyAIUpdateState_0063a034). The returned events are the exe's calls out: the
@@ -572,20 +581,37 @@ export class CaptureTrap {
     }
   }
 
-  // SawMapObjectHandleHit_0063e72c: the counter drops; while it is 0 or more the SE plays. Below 0
-  // the exe calls unknown_melee_attack_2 and then try_hit_entity(target, 1.0) on the trap's own vtable
-  // slot 0x5c (`call *0x5c(%edx)` in the asm: the on-interact, so the release of the target with no
-  // touch gate). NOT ported: the counter's field (+0x348) is ASSUMED and the flag it needs is not traced;
-  // if both hold, the release would come two ticks after the spring (open question, see the DEVLOG).
+  // SawMapObjectHandleHit_0063e72c (asm: unknown_melee_attack_2 `call *0x114`, then try_hit on the
+  // trap's own slot 0x5c, `call *0x5c(%edx)`, with the target). The release by the counter: the exe's hit path (below 0) calls try_hit on the target, which is the
+  // on-interact (SawMapObjectDisablePlayerMovementOnVisibility): 6x2D for the held client. The
+  // hold therefore lasts param4 (1..60) seconds + 1 tick for a 6x2C whose frames are 0xffff (no
+  // self countdown). ASSUMED: the SE is started once for the hold (the exe calls it every tick, its
+  // handle is kept at +0x360, read as a looping sound).
   private hold(out: TrapEvent[]): void {
     this.counter -= 1;
-    if (this.counter >= 0 && this.sound !== null) out.push({ kind: 'sound', id: this.sound });
+    if (this.counter >= 0) {
+      if (!this.soundStarted && this.sound !== null) {
+        this.soundStarted = true;
+        out.push({ kind: 'sound', id: this.sound });
+      }
+      return;
+    }
+    if (this.captured !== null) {
+      out.push(this.release(this.captured));
+      this.captured = null;
+    }
   }
 
   // The 6x2D for `clientId` (DisablePlayerMovement_00685514). The state is not changed by it in the exe.
   release(clientId: number): TrapEvent {
     return { kind: 'release', clientId };
   }
+}
+
+// The player's own hold countdown for a 6x2C's frames (+0x808, a short): 0xffff is -1, which the
+// countdown skips (unknown_update_player), so the hold has no timer: Infinity here.
+export function holdCountdown(frames: number): number {
+  return frames === HOLD_UNTIL_RELEASED ? Infinity : frames;
 }
 
 // An incoming 6x2C / 6x2D (u8 sub, u8 size, u16 client id at 2; 6x2C's u16 frames at 4).

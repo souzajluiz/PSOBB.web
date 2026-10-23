@@ -9866,3 +9866,31 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - Hit type 4 (vtable slot 0x10 = 0x0063ed14) also runs the release and then kills the trap; the attack that makes a hit of type 4 is not decoded.
 
 **Checks (follow-up):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-7). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+
+**Follow-up 2 (same day): the hold is timed; the solo player is released by the trap.** This supersedes the open question of follow-up 1 and corrects two earlier claims: the state-3 counter is at +0x350, not +0x348, and the hit path does release the target (a timed hold, not a 2-tick grab).
+
+**The 6x2C receiver (VERIFIED).** The 0x60 action table `g_Packet0x60SubcommandTable` is at 0x00a0fba0 (stride 8: u16 type, u16 permission, u32 handler; read with `exedata.py`). Entry 0x2c = 0x0068d734, entry 0x2d = 0x0068d830 (Ghidra decompiles):
+- 0x68d734 (6x2C; the payload start is param_1): frames = u16 at +4 -> the player's +0x808 (a short countdown); particle = u16 at +6 -> +0x80a; x / z / radius^2 (+8, +0xc, +0x10) -> +0x814 / +0x818 / +0x810; `+0x33c |= 1` (the flag `movement_disabled` = 1 in the `unknown_player_flags` enum, dump line 2760); then the hold effect (FUN_0077d578, FUN_00578eb0).
+- 0x68d830 (6x2D): `+0x33c &= ~1`, i.e. clears movement_disabled. Nothing else.
+- Where the countdown is read: `unknown_update_player` (dump line 554850, every player update) calls `SinowberillChallengePlayer_UpdateState_00689440`, which, while movement_disabled is set and the short countdown is >= 0, decrements it and calls DisablePlayerMovement (6x2D) when it goes below 0. The short -1 (0xffff) is skipped: **0xffff in the 6x2C means "no self timer"**. That is what the capture trap's 6x2C sends.
+- The one other writer of +0x808 is the reset to 0 (552277, 555080 region). The per-tick countdown is the only decrement.
+
+**The counter of the state-3 hold (corrected).** The state-3 handler (SawMapObjectHandleHit 0x63e72c) decrements `bitfield_palette_slots_disabled`, which is at +0x350 (the player layout: palette_buttons_enabled_bitfield +0x348, field421..424 +0x34c, then it). ApplyDerolleTrapInitData writes `param_1[0xd4] = clamp(param4, 1, 60) * 30` to +0x350 (`0x1e` = 30, decompile line 503195 region). So the counter is the hold time in ticks, and +0x348 was wrong (its init 1 belongs to InitializeBaseMapObject's other field).
+
+**The release by the counter (decided).** In state 3 each tick the counter drops by 1; while it is 0 or more the SE plays; below 0 the handler runs `unknown_melee_attack_2` and `try_hit_entity(target, 1.0)`, which the asm shows as `call *0x5c(%edx)` on the trap's own vtable: the on-interact. That runs SawMapObjectDisablePlayerMovementOnVisibility (0x63e3b0) for the target, which sends 6x2D when the target's movement_disabled is set (the sender's own client for its own player, in the port). So the hold is a timed grab of param4 (1..60) seconds, released by the trap itself, and a solo player is never stuck. The hit path does no damage (the on-interact only releases).
+
+So the solo case: spring -> captured -> hold for counter ticks -> the trap's on-interact releases it. The 0xffff frames means the player's own countdown does not end the hold; the trap's counter does.
+
+**Ported (follow-up 2):**
+- `render/traps.ts` CaptureTrap: `counter = clamp(params[3], 1, 60) * 30` at construction; `hold()` decrements; SE once at the hold's start (ASSUMED: the exe calls it every tick, its handle at +0x360 reads as looping); below 0, release for the captured client (once; `captured = null`).
+- `holdCountdown(frames)`: 0xffff -> Infinity (no self timer); other frames unchanged. `combat.ts` uses it for the 6x2C paths (imposeHold, incoming 6x2C for self), so the local hold does not count down on its own.
+- The teammate touch release (follow-up 1) stays; it is the faster release when another player is near.
+- Tests: section 8 (solo release on tick 31 for param4 1 and 0; 1801 for 60 and above 60; the held client named; no second release; SE once; a remote held client released by this run; no target -> no hold, no release; holdCountdown). Sections 1-7 still pass.
+
+**ASSUMED / UNCLEAR:**
+- The SE is started once (the exe may replay it each tick).
+- `unknown_flags_invincibility == 1` is taken to be the normal state for the countdown (the countdown's gate). Not traced further.
+- The 6x2D's sender: the port's held client sends its own. The exe's authority branch (CreateItemObject == 1) can send for any target; not traced.
+- Hit type 4 (vtable 0x10 = 0x63ed14, which releases and kills the trap) is not decoded: the attack that makes it is not traced. Not ported.
+
+**Checks (follow-up 2):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all pass (sections 1-8). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
