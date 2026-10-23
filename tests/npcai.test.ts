@@ -9,6 +9,9 @@ import {
   NpcAi,
   NpcAttackAi,
   NpcAttackGate,
+  NpcHeadChooser,
+  type HeadChooseInput,
+  headStatusFlags,
   NPC_FLAG_CREATED,
   NPC_TECH_ANTI,
   NPC_TECH_RESTA,
@@ -164,6 +167,75 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(aiGone.target === 0x1005, 'planner: the target is locked');
   const gone = aiGone.tick({ row, npc: { x: 40, z: 0 }, leader: { x: 0, z: 0 }, enemies: [], targetPos: () => null });
   check(gone === false && aiGone.target === null, 'planner: a dead or gone target is dropped (no enemies left, no target)');
+}
+
+// --- the head's status flags and action chooser (exe: SinowberillCheckHeadRotation_007af694 .c:795008,
+// SinowberillHead_AIProcessState_007b0a7c .c:795871)
+{
+  const full = { hp: 100, hpMax: 100, tp: 100, tpMax: 100, stateFlags30: 0 };
+  check(headStatusFlags(full).f90 === 0 && headStatusFlags(full).f8c === 0, 'full HP and TP: no status flags');
+  const half = headStatusFlags({ ...full, hp: 50 });
+  check(half.f90 === 0x8 && half.f8c === 0x4, 'HP 50%: need heal (0x8, need 4), not critical');
+  const crit = headStatusFlags({ ...full, hp: 10 });
+  check(crit.f90 === 0x808 && crit.f8c === 0x4, 'HP 10% (<= 0.1): also 0x800');
+  check(headStatusFlags({ ...full, tp: 20 }).f90 === 0x10, 'TP 20% (<= 0.2): 0x10');
+  check(headStatusFlags({ ...full, tpMax: 0, tp: 0 }).f90 === 0, 'a zero TP max sets no TP flag');
+  check(headStatusFlags({ ...full, stateFlags30: 0x1 }).f90 === 0x2, 'state 0x30 & 0x13 sets 0x2');
+
+  const base: HeadChooseInput = {
+    owner90: 0,
+    owner8c: 0,
+    npc90: 0,
+    npc8c: 0,
+    head34: 0,
+    head84: 0,
+    hasTarget: false,
+    hasItem: () => false,
+    canCast: () => true,
+    lockedInRadius: () => false,
+  };
+  const ch = () => new NpcHeadChooser();
+  check(!ch().choose(1, base).attack && !ch().choose(0, base).attack, 'nobody needs anything: no attack');
+  const ownerHalf = { ...base, owner90: 0x8, owner8c: 0x4 };
+  check(!ch().choose(1, ownerHalf).attack, 'owner at 50%: Resta is not cast (only at 10% or less)');
+  const ownerCrit = { ...base, owner90: 0x808, owner8c: 0x4 };
+  const r1 = ch().choose(1, ownerCrit);
+  check(r1.attack && r1.action === 0 && !r1.item, 'owner at 10%: action 0 (Resta on the owner), no item');
+  check(!ch().choose(1, { ...ownerCrit, head34: 0x40 }).attack, 'head flag 0x40 holds the action back');
+  check(!ch().choose(1, { ...ownerCrit, canCast: (t) => t !== 0xf }).attack, 'no Resta eligibility: no action 0');
+  const r2 = ch().choose(1, { ...base, owner90: 0x2, owner8c: 0x4, canCast: (t) => t === 0x10 });
+  check(r2.attack && r2.action === 2, 'owner with status 0x2: Anti (action 2)');
+  check(!ch().choose(1, { ...base, owner90: 0x10, owner8c: 0x4 }).attack, 'owner low TP alone: no cast (no 0x2 / 0x800 for the owner)');
+  check(!ch().choose(1, { ...ownerCrit, head84: 5 }).attack, 'a second target (head +0x84) keeps the owner branch off');
+
+  const npcHeal = { ...base, npc90: 0x8, npc8c: 0x4 };
+  const it = ch().choose(0, { ...npcHeal, hasItem: (s) => s === 0 });
+  check(it.attack && it.action === 0 && it.item, 'NPC at 50% with item 0: action 0 as an item use (flag 0x20)');
+  const tech = ch().choose(0, npcHeal);
+  check(tech.attack && tech.action === 0 && !tech.item, 'NPC at 50%, no item, Resta eligible: action 0 as the tech');
+  check(!ch().choose(0, { ...npcHeal, canCast: () => false }).attack, 'NPC at 50%, no item, no eligibility: nothing');
+  const tp = ch().choose(0, { ...base, npc90: 0x10, npc8c: 0x4, hasItem: (s) => s === 1 });
+  check(tp.attack && tp.action === 1 && tp.item, 'NPC low TP with item 1: action 1 (item only)');
+  check(!ch().choose(0, { ...base, npc90: 0x10, npc8c: 0x4 }).attack, 'NPC low TP without item 1: nothing');
+  const st = ch().choose(0, { ...base, npc90: 0x2, npc8c: 0x4 });
+  check(st.attack && st.action === 2 && !st.item, 'NPC with status 0x2: Anti (action 2) when eligible');
+
+  // Mode 1 retarget: the locked target in the radius returns on the 30th call (counter +0x66 at 0x1e), with no write to the action.
+  const hc = ch();
+  const withTarget = { ...base, owner90: 0x8, owner8c: 0x4, hasTarget: true, lockedInRadius: () => true };
+  const seq: boolean[] = [];
+  for (let i = 0; i < 30; i++) seq.push(hc.choose(1, withTarget).attack);
+  check(seq.slice(0, 29).every((x) => !x) && seq[29] === true, `retarget: attack on the 30th call only (got ${seq.indexOf(true) + 1})`);
+  check(hc.action === 0, 'retarget attack does not write the action');
+
+  // The exe writes action 0, 1 or 2 only (3 is never written in SinowberillHead_AIProcessState_007b0a7c).
+  let seen3 = false;
+  const bits = [0, 0x2, 0x8, 0x10, 0x800, 0x808, 0x18];
+  for (const o90 of bits) for (const n90 of bits) for (const o8c of [0, 4]) for (const n8c of [0, 2, 4, 6]) {
+    const c = new NpcHeadChooser().choose(1, { ...base, owner90: o90, owner8c: o8c, npc90: n90, npc8c: n8c, hasItem: () => true, canCast: () => true, hasTarget: true, lockedInRadius: () => false });
+    if (c.action === 3) seen3 = true;
+  }
+  check(!seen3, 'the chooser never writes action 3');
 }
 
 if (failures) {
