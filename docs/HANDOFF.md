@@ -1,5 +1,16 @@
 # Handoff: where to resume
 
+## 2026-10-23: open after the day's merges
+
+- `goldragon-smoke.spec.ts` fails at "a key attack hits the Gol Dragon" (0 hits). It
+  fails the same way on 1a61ee0 (before the Gol Dragon copies merge), so it is not a
+  regression of that merge; cause not found yet.
+- `guns.spec.ts`: the Samba Maracas step still flakes (fewer bursts when the enemy
+  walks out of range); passes on a rerun.
+- Egg shot (Handgun group 8 / Samba / 0x1c): colour ramp, size, texture slot 35 and
+  blend all match the exe; the "small purple ball" look is not explained yet (spawn
+  offset sign, sprite size vs the exe's focal length; see DEVLOG).
+
 ## 2026-10-22: what was done (details in the DEVLOG entries of that date)
 
 - Done: Dark Falz casket e2e and DEMO_WARP0 tower object; Dark Falz live camera pivots
