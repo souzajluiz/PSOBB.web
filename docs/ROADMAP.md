@@ -145,7 +145,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Wave events: the floor's `.evt` (`formats/events.ts`), the wave state machine (`render/waves.ts`), `6x67` / `6x76` sync, enemies appearing per wave, battle music while a wave of the room is alive
 - [x] Laser fences and their switches, the recovery ring and the second boss warp class; the volumes that draw nothing (fog, events, room ids, sounds, camera) are counted as invisible instead of missing
 - [x] Map warps (intra-floor): `TObjMapWarpForest`, `TObjCityMapWarp`, `TObjMapWarpAncient`, `TObjLaboMapWarp` menus and `6x55` (sent and received)
-- [x] Pioneer 2 doors (shop, guild, Ragol warp, medical center) with their own open/close distances, the Lab's city warps and map warp, the city warp beams' real speed
+- [x] Pioneer 2 doors (shop, guild, Ragol warp, medical center) with their own open/close distances, the Lab's city warps and map warp, the city warp beams' real speed (2026-10-23: the Medical Center door's two leaves swing: its motion 11 has 16-byte angle keys, DEVLOG 2026-10-23 Medical Center door)
 - [x] Jungle rocks, trap pillars and Vol Opt's ship door models; the lobby door 0x54 and shop generators draw nothing; `construct_objects` (delayed objects by room/group) and the door unlock camera
 - [x] Pillar traps TOTrapAncient02 / 02R (rise, hold `6x2C`/`6x2D`, technique, sink) and Vol Opt's seal door lamps from quest flags `0x2c`..`0x2f` (`render/traps.ts`, `tests/traps.test.ts`)
 - [x] Vol Opt seal door `.njs` shape motion (NSSM decoding, vertex keys played at the door motion's frame: `formats/njshape.ts`, `render/shapeanim.ts`, `tests/njshape.test.ts`)
