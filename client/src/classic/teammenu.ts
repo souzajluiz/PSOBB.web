@@ -732,8 +732,17 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
 //     state 0x11 waits for a key.
 //   Action rows: Send Mail (11, 0x15c, always) -> state 0xb; Sent Item (11, 0x15d,
 //     enabled only with the trade-state flag and another member) -> state 0x15; Meet
-//     the User (11, 0x15e, enabled in the lobby) -> state 0x12. Their windows are not
-//     ported: a chosen enabled row is recorded (lastLeaf) and the action list stays.
+//     the User (11, 0x15e, enabled in the lobby) -> state 0x12.
+//   Send Mail (states 0xb..0xe, ChallengePlayerInfoWindow_SendActionError_0074e154):
+//     the action list hides, the keyboard (TKeyboardControl, 0xb7 units) takes the
+//     mail, Enter asks "Are you sure?" (the 0xa4 confirm, Yes = value 0); Yes sends the
+//     0x81 to the searched card (+0x24) through FUN_008136f0 and returns to the action
+//     list; No goes back to the keyboard; Escape (state 4) returns too. The lobby runs
+//     the keyboard (classic/simplemail.ts MailCompose) while phase is 'mail'.
+//   Meet the User (state 0x12): ProcessPhaseLabel_0074f028 (the 0x41 reply's embedded
+//     0x19 goes to the connection, then the reconnect to the reply's address and port;
+//     not ported, see the DEVLOG), 450 frames (MEET_FRAMES), then the owner callback
+//     (vtable +0x1c) closes the list.
 //   The confirm list Sort (11, 0x3a) with By Number / By Rank (11, 0x15f / 0x160) is
 //     state 7, which only SetState_0074e9f4(3) enters; this list has no row 3, so the
 //     member list does not reach it. Not ported.
@@ -751,7 +760,14 @@ export const TEAM_SEARCH_MSG_POS = { x: 418, y: 344, w: 206 } as const; // the s
 export const T11_TEAM_LIST = { title: 0x156, action: 0x30, notFound: 0x15b, sendMail: 0x15c, sentItem: 0x15d, meetUser: 0x15e } as const;
 export const T12_TEAM_LIST = { pressX: 0x4b } as const;
 
-export type MemberPhase = 'list' | 'searching' | 'notFound' | 'actions';
+export type MemberPhase = 'list' | 'searching' | 'notFound' | 'actions' | 'mail' | 'meet';
+
+// The action rows' values (memberActionRows).
+export const MEMBER_LEAF = { sendMail: 0, sentItem: 1, meetUser: 2 } as const;
+// Meet the User (exe state 0x12 -> 0x13, dump 720824 at 0x0074da79): the phase runs while the
+// frame counter (+0x28) is 450 or less; the entry tick sets it to 1, so the window closes on
+// the 451st tick and calls the owner (vtable +0x1c, the Home menu's close).
+export const MEET_FRAMES = 450;
 
 // The action list's rows (CreateMenuList_0074ea28): Send Mail always; Sent Item only
 // with the trade-state flag and not on the own card ((iVar5 != 1) || bVar1 greys it);
@@ -781,6 +797,9 @@ export class TeamMemberListWindow {
   private phase: MemberPhase = 'list';
   private actions: PickList | null = null;
   private leaf: number | null = null;
+  // The searched member's card (+0x24): the Send Mail target and the Meet the User card.
+  private target: number | null = null;
+  private frames = 0;
   private readonly title: string;
   private readonly actionTitle: string;
   private readonly pressX: string;
@@ -813,6 +832,7 @@ export class TeamMemberListWindow {
     this.list = new PickList([]);
     this.phase = 'list';
     this.actions = null;
+    this.target = null;
     this.host
       .members()
       .then((members) => {
@@ -865,10 +885,19 @@ export class TeamMemberListWindow {
           this.phase = 'list';
         } else if (r === 'decide') {
           const row = this.actions.selected;
-          if (row?.enabled) this.leaf = row.value as number;
+          if (!row?.enabled) return true;
+          this.leaf = row.value as number;
+          if (row.value === MEMBER_LEAF.sendMail) this.phase = 'mail';
+          else if (row.value === MEMBER_LEAF.meetUser) {
+            this.phase = 'meet';
+            this.frames = 0;
+          }
         }
         return true;
       }
+      case 'mail':
+      case 'meet':
+        return true; // the keyboard (the lobby) or the phase label takes the keys
     }
   }
 
@@ -891,6 +920,7 @@ export class TeamMemberListWindow {
     if (found) {
       const self = target === this.host.selfGuildCard();
       this.actions = new PickList(memberActionRows(this.actionText, { tradeState: this.rules.tradeState, self, lobby: this.rules.lobby }));
+      this.target = target;
       this.phase = 'actions';
     } else {
       this.phase = 'notFound';
@@ -903,6 +933,24 @@ export class TeamMemberListWindow {
     this.visible = false;
     this.phase = 'list';
     this.actions = null;
+    this.target = null;
+  }
+
+  // The lobby's frame tick: Meet the User's phase label, then the owner callback (close).
+  tick(): void {
+    if (this.phase !== 'meet' || !this.visible) return;
+    this.frames++;
+    if (this.frames > MEET_FRAMES) this.close();
+  }
+
+  // Send Mail: the card the mail goes to while the keyboard runs (null otherwise).
+  get mailTarget(): number | null {
+    return this.phase === 'mail' ? this.target : null;
+  }
+
+  // The keyboard is done (sent or cancelled): the action list comes back (state 4).
+  mailDone(): void {
+    if (this.phase === 'mail') this.phase = 'actions';
   }
 
   // The rows as the answer gave them (test and draw helpers).
@@ -927,6 +975,11 @@ export class TeamMemberListWindow {
     return this.leaf;
   }
 
+  // The Meet the User wait, in frames (test helper).
+  get meetFrames(): number {
+    return this.frames;
+  }
+
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
     if (!this.visible) return;
     const w = Math.max(0, gameTextWidth(this.title), ...this.list.items.map((i) => gameTextWidth(i.label))) + 2 * INSET;
@@ -938,7 +991,7 @@ export class TeamMemberListWindow {
       const rows = lines.map((label) => ({ label, value: 0, enabled: true }));
       drawListWindow(ctx, skin, TEAM_SEARCH_MSG_POS.x, TEAM_SEARCH_MSG_POS.y, TEAM_SEARCH_MSG_POS.w, null, rows, -1, false);
     }
-    if (this.phase === 'actions' && this.actions) {
+    if ((this.phase === 'actions' || this.phase === 'meet') && this.actions) {
       const labels = this.actions.items.map((i) => gameTextWidth(i.label));
       const aw = Math.max(gameTextWidth(this.actionTitle), ...labels) + 2 * INSET;
       drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, aw, this.actionTitle, this.actions.visible, this.actions.cursor - this.actions.top, true);

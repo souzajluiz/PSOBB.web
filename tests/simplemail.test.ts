@@ -29,7 +29,7 @@ const measure = { measureText: () => ({ width: 7 }), getImageData: () => ({ data
     return measure;
   }
 };
-const { MAIL_POS, MAIL_TEXT, SimpleMailMenu } = await import('../client/src/classic/simplemail.ts');
+const { MAIL_POS, MAIL_TEXT, MAIL_TEXT_MAX, MailCompose, SimpleMailMenu } = await import('../client/src/classic/simplemail.ts');
 type SimpleMailHost = Parameters<typeof SimpleMailMenu.prototype.constructor>[1];
 
 let failures = 0;
@@ -332,6 +332,36 @@ const sentOf = (link: { sent: Array<{ command: number; flag: number; payload: Ui
 // Layout: the top window is at exe 0xa0 and the keyboard at 0xcf (table 0x00971f40).
 check('positions: top 0xa0 (8, 256), keyboard 0xcf (331, 266)', MAIL_POS.top.x === 8 && MAIL_POS.top.y === 256 && MAIL_POS.keyboard.x === 331 && MAIL_POS.keyboard.y === 266);
 check('text: Send Mail is unitxt 0x6a, Answer Service 0x12b', MAIL_TEXT.sendMail === 0x6a && MAIL_TEXT.answerService === 0x12b);
+
+// The member list's Send Mail (MailCompose): Escape cancels; Enter asks; No goes back to the
+// keyboard with the text kept; Yes sends the text once and ends.
+{
+  const sent: string[] = [];
+  let cancels = 0;
+  const c = new MailCompose(text, (t) => sent.push(t), () => cancels++);
+  check('compose: opens at the keyboard, open', c.open && c.value === '');
+  for (const ch of 'Hi there') c.key(key(ch));
+  c.key(key('Backspace'));
+  check('compose: typing and backspace', c.value === 'Hi ther');
+  c.key(key('Enter'));
+  c.key(key('Enter'));
+  check('compose: No (the default cursor) goes back to the keyboard, text kept', c.open && sent.length === 0 && c.value === 'Hi ther');
+  c.key(key('Enter'));
+  c.key(key('ArrowUp'));
+  c.key(key('Enter'));
+  check('compose: Yes sends the text and ends', !c.open && sent.length === 1 && sent[0] === 'Hi ther' && cancels === 0);
+  c.key(key('Enter'));
+  check('compose: a closed compose ignores keys', sent.length === 1);
+
+  const cut = new MailCompose(text, (t) => sent.push(t), () => cancels++);
+  for (let i = 0; i < MAIL_TEXT_MAX + 5; i++) cut.key(key('x'));
+  check('compose: the text stops at the keyboard limit', cut.value.length === MAIL_TEXT_MAX);
+  cut.key(key('Escape'));
+  check('compose: Escape cancels (no send)', !cut.open && cancels === 1 && sent.length === 1);
+  const confirm = new MailCompose(text, (t) => sent.push(t), () => cancels++);
+  confirm.key(key('Enter'));
+  check('compose: the confirm is open', confirm.open);
+}
 
 console.log(failures === 0 ? '\nall simplemail checks pass' : `\n${failures} failure(s)`);
 if (failures) process.exitCode = 1;

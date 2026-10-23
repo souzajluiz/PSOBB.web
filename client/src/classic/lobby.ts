@@ -46,7 +46,7 @@ import { Question, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamH
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
-import { SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
+import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { se, SE } from '../audio/se.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
@@ -144,6 +144,8 @@ export class LobbyScreen implements Screen {
   private team: TeamMenus | null = null;
   // Home menu > Team > Team Member List (0x25, teammenu.ts TeamMemberListWindow).
   private teamList: TeamMemberListWindow | null = null;
+  // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list (simplemail.ts MailCompose).
+  private teamMail: MailCompose | null = null;
   // The info window [15:6] shown from Change SHIP / Change BLOCK until the
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
@@ -260,7 +262,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList || !!this.teamMail;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -460,6 +462,14 @@ export class LobbyScreen implements Screen {
     if (this.frame % PING_FRAMES === 0) this.lobby.conn.send(0x1d, 0);
     this.menu.tick();
     this.options?.tick();
+    // Meet the User's 450 frames end in the owner callback, which closes the list (teammenu.ts tick).
+    if (this.teamList) {
+      this.teamList.tick();
+      if (!this.teamList.open) {
+        this.teamList = null;
+        this.menu.leafOpen = false;
+      }
+    }
     // The session's timers run whether or not a window is open (a partner's proposal
     // arrives with no window). A proposal with no window opens the accept prompt (ASSUMED:
     // the exe's trade_invite_menu2/3 window, not traced).
@@ -594,12 +604,18 @@ export class LobbyScreen implements Screen {
       this.team.key(e);
       return;
     }
+    if (this.teamMail) {
+      e.preventDefault();
+      this.teamMail.key(e);
+      if (!this.teamMail.open) this.teamMail = null;
+      return;
+    }
     if (this.teamList) {
       e.preventDefault();
       if (!this.teamList.key(e)) {
         this.teamList = null;
         this.menu.leafOpen = false;
-      }
+      } else this.openTeamMail();
       return;
     }
     if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
@@ -645,6 +661,33 @@ export class LobbyScreen implements Screen {
     this.keys.clear();
   }
 
+  // Team Member List > Send Mail: the keyboard opens for the searched member's card. The mail
+  // goes through the session's Simple Mail sender (net/simplemail.ts send, the exe's 0x81); the
+  // list's action rows come back when the keyboard ends (sent or cancelled).
+  private openTeamMail(): void {
+    const list = this.teamList;
+    const to = list?.mailTarget ?? null;
+    if (!list || to === null || this.teamMail) return;
+    const box = this.hud.mailbox?.() ?? null;
+    const finish = () => {
+      this.teamMail = null;
+      list.mailDone();
+    };
+    if (!box) {
+      console.info('[classic] Team Send Mail: no lobby connection yet');
+      finish();
+      return;
+    }
+    this.teamMail = new MailCompose(
+      (i) => this.hud.text(11, i),
+      (text) => {
+        box.send({ guildCard: this.lobby.self?.guildCardNumber ?? 0, name: this.lobby.self?.name ?? '' }, to, text);
+        finish();
+      },
+      finish,
+    );
+  }
+
   leave(): void {
     this.keys.clear();
     this.quit = null;
@@ -661,6 +704,7 @@ export class LobbyScreen implements Screen {
     this.party?.close();
     this.team?.close();
     this.teamList = null;
+    this.teamMail = null;
     this.symbolList = null;
     this.closeOptions();
     this.menu.close();
@@ -689,6 +733,7 @@ export class LobbyScreen implements Screen {
       this.party?.draw(ctx, this.hud.skin, extra, bands.bottom);
       inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
       inBand(ctx, bands.mid, () => this.teamList?.draw(ctx, this.hud.skin, extra));
+      inBand(ctx, bands.mid, () => this.teamMail?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));

@@ -159,6 +159,16 @@ function windowWidth(items: readonly ListItem[], title: string | null): number {
   return widest + 2 * INSET;
 }
 
+// A keyboard's frame, text and caret (the Simple Mail keyboards and the member list's Send Mail).
+function drawEditorBox(ctx: CanvasRenderingContext2D, skin: WindowSkin, at: { x: number; y: number }, ed: TextEditor | null): void {
+  if (!ed) return;
+  drawWindowFrame(ctx, skin.frame, at.x, at.y, KEYBOARD_WIDTH, 34);
+  const shown = ed.shown;
+  drawGameText(ctx, shown, at.x + INSET, at.y + INSET + 1);
+  ctx.fillStyle = caretColor(0);
+  ctx.fillRect(at.x + INSET + gameTextWidth(shown), at.y + INSET, CARET.w, CARET.h);
+}
+
 function drawLines(ctx: CanvasRenderingContext2D, skin: WindowSkin, x: number, y: number, width: number, lines: readonly string[]): void {
   const shown = lines.flatMap((l) => wrapGameText(l, width - 2 * INSET));
   const h = 14 + 20 * Math.max(0, shown.length - 1) + 20;
@@ -643,13 +653,7 @@ export class SimpleMailMenu {
 
   // The keyboard's frame and text (the caret at the end).
   private drawKeyboard(ctx: CanvasRenderingContext2D, skin: WindowSkin, at: { x: number; y: number }): void {
-    const ed = this.editor;
-    if (!ed) return;
-    drawWindowFrame(ctx, skin.frame, at.x, at.y, KEYBOARD_WIDTH, 34);
-    const shown = ed.shown;
-    drawGameText(ctx, shown, at.x + INSET, at.y + INSET + 1);
-    ctx.fillStyle = caretColor(0);
-    ctx.fillRect(at.x + INSET + gameTextWidth(shown), at.y + INSET, CARET.w, CARET.h);
+    drawEditorBox(ctx, skin, at, this.editor);
   }
 
   // The detail boxes of the highlighted mail: the date (unitxt 0x181 and the date) at 0xaa,
@@ -666,5 +670,74 @@ export class SimpleMailMenu {
   // The window is closed from outside (the lobby leaves): the close actions run once.
   dispose(): void {
     if (this.open) this.closeWindow();
+  }
+}
+
+// The member list's Send Mail (exe states 0xb..0xe of the member window, dump 720824): the
+// keyboard (MAIL_TEXT_MAX units) at get_gui_position(0xcf); Enter asks "Are you sure?"
+// (the confirm at 0xa4, the keyboard moves to 0xd0). Yes ends with onSend(text) and No goes
+// back to the keyboard. Escape ends with onCancel(). The mail's recipient is the caller's
+// (the searched member's card); the send itself is the caller's (net/simplemail.ts send).
+export class MailCompose {
+  private phase: 'compose' | 'confirm' | 'closed' = 'compose';
+  private readonly text: Text;
+  private readonly editor = new TextEditor('', MAIL_TEXT_MAX, false);
+  private question: Question | null = null;
+  private readonly onSend: (text: string) => void;
+  private readonly onCancel: () => void;
+
+  constructor(text: Text, onSend: (text: string) => void, onCancel: () => void) {
+    this.text = text;
+    this.onSend = onSend;
+    this.onCancel = onCancel;
+  }
+
+  get open(): boolean {
+    return this.phase !== 'closed';
+  }
+
+  key(e: MenuKey): void {
+    if (this.phase === 'closed') return;
+    if (this.phase === 'compose') {
+      if (e.key === 'Escape') {
+        se(SE.cancel);
+        this.finish(null);
+      } else if (e.key === 'Enter') {
+        se(SE.ok);
+        this.question = new Question(this.text(MAIL_TEXT.sendAsk), { x: MAIL_POS.sendConfirm.x, y: MAIL_POS.sendConfirm.y, w: BOX_WIDTH });
+        this.phase = 'confirm';
+      } else if (e.key === 'Backspace') this.editor.backspace();
+      else if (e.key.length === 1) this.editor.type(e.key);
+      return;
+    }
+    const q = this.question;
+    if (!q) return;
+    q.key(e);
+    if (!q.result) return;
+    this.question = null;
+    if (q.result === 'yes') this.finish(this.editor.text);
+    else this.phase = 'compose';
+  }
+
+  private finish(text: string | null): void {
+    this.phase = 'closed';
+    this.question = null;
+    if (text === null) this.onCancel();
+    else this.onSend(text);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+    if (this.phase === 'closed') return;
+    if (this.phase === 'compose') {
+      drawEditorBox(ctx, skin, MAIL_POS.keyboard, this.editor);
+      return;
+    }
+    drawEditorBox(ctx, skin, MAIL_POS.keyboardAside, this.editor);
+    this.question?.draw(ctx, skin, this.text(MAIL_TEXT.yes), this.text(MAIL_TEXT.no));
+  }
+
+  // The text the keyboard holds (test helper).
+  get value(): string {
+    return this.editor.text;
   }
 }

@@ -13906,7 +13906,7 @@ Follow-up to "trade follow-up" above: the traced windows are ported. Code: `clie
 **Not checked:** a Chrome view of the search box and the action list (the brief says no Playwright); a real search against newserv.
 
 **Left:**
-- The leaves: Send Mail (state 0xb: the keyboard panel 0x44 and the list 0x3c from `ChatShortcutMenu_CreateWindow_00756a58`), Sent Item (state 0x15, `ChallengePlayerInfoWindow_SetupGuildCardSearch_0074e394`; the name is misleading, it builds the windows 0x30 / 0x48 / 0x50 and was not traced further), Meet the User (state 0x12: `ProcessPhaseLabel_0074f028`, 450 frames, then the owner callback at vtable +0x1c).
+- The leaves: Send Mail (state 0xb: the keyboard panel 0x44 and the list 0x3c from `ChatShortcutMenu_CreateWindow_00756a58`), Sent Item (state 0x15, `ChallengePlayerInfoWindow_SetupGuildCardSearch_0074e394`; the name is misleading, it builds the windows 0x30 / 0x48 / 0x50 and was not traced further), Meet the User (state 0x12: `ProcessPhaseLabel_0074f028`, 450 frames, then the owner callback at vtable +0x1c). (2026-10-23, next entry: Send Mail and Meet the User are ported. Corrections there: Send Mail is the member keyboard and confirm, not the 0x13 window; Meet the User's phase label also reconnects.)
 - Invite (0x29): the 6x62 C1 17 sender, the answer flags, the invitee's window and the packet that fills the list.
 - Team Info: the 18EA / 19EA answer lists (the port has `intraRanking` in `net/team.ts`, not in `TeamHost`).
 - Team Log (0x27) and Point Regist (0x2d): the table behind `FUN_0079317c`, the Team Log answer, and the meaning of the Point Regist count.
@@ -14131,3 +14131,38 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+
+## 2026-10-23: Team Member List: Send Mail and Meet the User ported (Sent Item left)
+
+**Premise checked against the exe.** Two corrections to the entry above:
+- **Send Mail is not the Simple Mail window (0x13).** The member's leaf is a short state run of `ChallengePlayerInfoWindow_ProcessState_0074d9ac` (dump 720824): state 0xb (line 720975) takes the text keyboard `CreateKeyboardControl_00756ab0` (dump 727622, `TKeyboardControl` with 0xb7 units, at get_gui_position(0xcf)); state 0xd (721010) moves it to 0xd0 and opens the confirm `ChatShortcutMenu_CreateWindow_00756a58` (dump 727577: title unitxt (11, 0x33), text (11, 0x52) "Are you sure?", at 0xa4, width 205). State 0xe (721018) decides: a cancelled confirm goes back to the keyboard (0xb); a decided one with value 0 calls `ChallengePlayerInfoWindow_SendActionError_0074e154` (dump 721260), which passes the searched card (+0x24) and the keyboard text to `SendPlayerSessionErrorMessage_008136f0` (dump 831429). That function is the 0x81 builder the Simple Mail DEVLOG describes (its first argument is the to-card, the text is cut at 0xab units). The dump's names for both are wrong (an "error" that sends mail); the bodies are the send. Any other value, or a Cancel, returns to the action list (state 4). So the port sends through the Simple Mail sender (`SimpleMailBox.send`), not through the 0x13 window.
+- **Meet the User also reconnects.** State 0x12 (dump 721093) calls `ChallengePlayerInfoWindow_ProcessPhaseLabel_0074f028` (dump 722132). That function takes the 0x41 reply's location (the text at packet +0x24, cut at 0x44 units), keeps the last `,`-separated token (`DAT_00973b80` = 0x2c, `tools/exedata.py read 00973b80 u 1`) as `g_SinowberillChallengePhaseLabel` (dump 562747), and then calls `ShipConnectionManager_HandlePacket0x19_007d7640` (dump 812031) with the reply's embedded 0x19 (packet +0x14), which sends it on the connection and reconnects to the reply's address and port (packet +0x1c / +0x20). The 450-frame wait and the owner callback are as the earlier entry said.
+
+**Exe evidence (PsoBB.exe, Psobb.exe-05112026.c; `tools/exedata.py`):**
+- Window: `TeamMemberListMenu_Constructor_0074d8f4` (dump 720781), vtable 0x00b41fe0 (`tools/exedata.py read 00b41fe0 u 8`: slot 1 = 0x0074d9ac, the state handler). The owner (constructor argument 1) is stored at +0x2c; its vtable +0x1c is the close (states 2 and 0x12 both call it).
+- Reply: `handle_ship_packet0x41` (dump 809943) copies the 0x41 into `ChallengePlayerInfoWindowListWindow_UpdateContent_0074ef0c` (dump 722063), which sets bit 1 of the list's +0x94 (the phase label's "ready" flag). The copy is the packet from its header: the embedded 0x19 at +0x14, the location at +0x24, the 0x19 data (0x84 bytes) at +0xac.
+- Wait: state 0x12 sets the counter (+0x28) to 1 and state 0x13 adds one per tick; `0x1c2 < counter` (dump 721107, 0x1c2 = 450) ends it, then the owner callback and state 0x1c.
+- Send Mail as above; `SendActionError` and the keyboard both take the list's own state (+0x44 keyboard, +0x24 card).
+
+**Port:**
+- `client/src/classic/teammenu.ts`: `MEMBER_LEAF` (0 Send Mail, 1 Sent Item, 2 Meet the User), `MEET_FRAMES` = 450; phases `mail` and `meet` added. The search answer keeps the card (`target`). Enter on Send Mail sets phase `mail` (the action list hidden, as state 0xb closes it); `mailTarget` is the card, `mailDone()` brings the action list back (state 4). Enter on Meet the User sets phase `meet`: `tick()` counts frames and closes the window on the 451st (entry tick counted, as the exe). The action list stays drawn during `meet`. A chosen enabled row still sets `lastLeaf`.
+- `client/src/classic/simplemail.ts`: `MailCompose` (the keyboard with `MAIL_TEXT_MAX` units, Enter asks the confirm, Yes calls `onSend(text)`, No returns to the keyboard, Escape calls `onCancel()`). The keyboard drawing is `drawEditorBox`, shared with `SimpleMailMenu`.
+- `client/src/classic/lobby.ts`: `teamMail` (the compose) is opened after a list key when the row was Send Mail (`openTeamMail`); its keys go first; the send is `hud.mailbox` `.send(self, card, text)` and then `mailDone()`. The list's `tick()` runs in the lobby tick, and a closed list clears `menu.leafOpen`. The compose draws over the list; `busy`, `leave()` clear it.
+- `tests/teammenu.test.ts` (129 checks; Send Mail sets `mail` and the card, the list returns after `mailDone`, the Meet wait is 450 frames and the 451st tick closes, keys are ignored in `meet`, Cancel in the action list, the compose draws over the list); `tests/simplemail.test.ts` (compose: typing and the limit, No keeps the text, Yes sends once, Escape cancels).
+
+**ASSUMED:**
+- The confirm's Yes is value 0 (the `SendActionError` branch is `GetSelectedValue == 0`); the port's `Question` cursor starts on No, as the Simple Mail's does. The confirm's default cursor was not traced.
+- Escape in the keyboard returns to the action list (state 4, the IsLocked branch of state 0xc); the exact flags of the list were not decoded.
+- The 450-frame count starts with the entry tick, as the exe's counter does; 30 frames per second, as elsewhere in the port.
+- The owner callback closes the Team Member List and the Home menu leaf; the owner's own close handler was not traced.
+- The mail text's name filter (`ProcessEntityNameWithShopItems_00813a78`, in `SendActionError`) is not applied, as in Simple Mail.
+- The keyboard's cap is 0xab units (the send's copy size). The exe's keyboard is 0xb7 units; not checked, as in the Simple Mail DEVLOG.
+- Send Mail and Meet the User are offered in the lobby only (`memberActionRows`'s rules, as before).
+
+**Not ported (left):**
+- **Meet the User's reconnect.** The embedded 0x19 is not sent and the port does not connect to the reply's address and port: the port stays on its block and the list just closes after 450 frames. The ship connection's vtable slots (0x10 / 0x14 / 0x18, used by `HandlePacket0x19`) are not named in the dump, and a move to another block needs the bridge to reach that address: this is the largest gap in Meet the User.
+- The phase label (`g_SinowberillChallengePhaseLabel`) is not drawn: its only reader in the dump is the Sinowberill challenge timer (`BuildPhaseTimerString_0077ba70`, dump 752612), which the port does not have.
+- **Sent Item (state 0x15)**: `ChallengePlayer_CreateGuildCardSearchWindow_0075198c` with the item list (`ChallengePlayer_CreateItemList_00751ae0`, enabled and disabled passes `00751bd4` / `00751c80`) is a trade item window and was not traced further. It stays greyed (no trade state in the port).
+- Not run in Chrome (the brief says no Playwright); a real Send Mail to a live newserv not run.
+
+**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 129 checks), `node tests/simplemail.test.ts` (all pass), `node tests/lobbymenu.test.ts`, `node tests/lobbymain.test.ts`, `node tests/team.test.ts`, `node tests/guildcardmenu.test.ts` pass. `client` `tsc --noEmit -p .` clean (Node 24; the worktree's `client/node_modules` is a symlink to the main checkout's, removed before the commit).

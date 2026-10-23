@@ -18,6 +18,7 @@ import {
   type TeamHost,
 } from '../client/src/classic/teammenu.ts';
 import { yesNoRect } from '../client/src/classic/titleflow.ts';
+import { MailCompose } from '../client/src/classic/simplemail.ts';
 import { NO_TEAM, PRIVILEGE, type TeamMember, type TeamMembership } from '../client/src/net/team.ts';
 
 // A stub canvas: every glyph is 7 px wide and drawing does nothing.
@@ -566,6 +567,21 @@ async function openMaster(h: TeamHost) {
   check(!w.key(k('Escape')) && !w.open, 'Cancel closes');
   w.draw(ctx, skin, 0);
 
+  // Send Mail's keyboard drawn over the list (the confirm too); Meet the User's wait drawn.
+  const mailTo = host(team(PRIVILEGE.master), { found: true });
+  const mw = new TeamMemberListWindow(mailTo.host, text);
+  mw.show();
+  await tick();
+  mw.key(k('Enter'));
+  await tick();
+  mw.key(k('Enter'));
+  const compose = new MailCompose(t11, () => {}, () => {});
+  for (const c of 'Ok') compose.key(k(c));
+  compose.draw(ctx, skin);
+  compose.key(k('Enter'));
+  compose.draw(ctx, skin);
+  check(compose.open && mw.state === 'mail', 'the keyboard and its confirm draw over the member list');
+
   // Found: the action list (Send Mail always; Sent Item greyed without the trade state; Meet the User in the lobby).
   const found = host(team(PRIVILEGE.master), { found: true });
   const fw = new TeamMemberListWindow(found.host, text);
@@ -580,14 +596,32 @@ async function openMaster(h: TeamHost) {
   eq(fw.actionRows?.map((r) => r.enabled), [true, false, true], 'Sent Item greyed (trade state not set), Meet the User in the lobby');
   fw.draw(ctx, skin, 0);
   fw.key(k('Enter'));
-  eq(fw.lastLeaf, 0, 'Send Mail chosen (its window is not ported)');
+  eq(fw.lastLeaf, 0, 'Send Mail chosen');
+  eq([fw.state, fw.mailTarget], ['mail', 901], 'Send Mail: the keyboard runs (action list hidden), to the searched card');
+  fw.draw(ctx, skin, 0);
+  fw.mailDone();
+  eq(fw.state, 'actions', 'the keyboard is done: the action list comes back');
   fw.key(k('ArrowDown'));
   fw.key(k('Enter'));
   eq(fw.lastLeaf, 0, 'a greyed row records nothing');
   fw.key(k('ArrowDown'));
   fw.key(k('Enter'));
-  eq(fw.lastLeaf, 2, 'Meet the User chosen');
-  check(fw.key(k('Escape')) && fw.state === 'list' && fw.open, 'Cancel in the action list goes back to the member list');
+  eq([fw.lastLeaf, fw.state], [2, 'meet'], 'Meet the User chosen: the phase label starts');
+  check(fw.key(k('Escape')) && fw.state === 'meet', 'keys are ignored during the phase label');
+  for (let i = 0; i < 450; i++) fw.tick();
+  check(fw.open && fw.meetFrames === 450, 'the phase label lasts 450 frames');
+  fw.tick();
+  check(!fw.open, 'the 451st frame calls the owner (the list closes)');
+  fw.tick();
+  check(!fw.open, 'a closed window ignores the tick');
+
+  const cancelled = new TeamMemberListWindow(host(team(PRIVILEGE.master), { found: true }).host, text);
+  cancelled.show();
+  await tick();
+  cancelled.key(k('ArrowDown'));
+  cancelled.key(k('Enter'));
+  await tick();
+  check(cancelled.key(k('Escape')) && cancelled.state === 'list' && cancelled.open, 'Cancel in the action list goes back to the member list');
 
   // Trade state set and not on the own card: Sent Item enabled; on the own card it stays greyed.
   const tr = new TeamMemberListWindow(host(team(PRIVILEGE.master), { found: true }).host, text, { tradeState: true, lobby: false });
