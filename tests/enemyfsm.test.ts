@@ -19,11 +19,13 @@ import {
   WOLF_DASH,
   WOLF_PACK_HOWL,
   WOLF_ROAM,
+  RAPPY_ALIVE,
+  RappyAi,
   WolfAi,
   armPackHowl,
   wolfLeapHeight,
 } from '../client/src/combat/enemyfsm.ts';
-import type { AiTarget } from '../client/src/combat/enemyai.ts';
+import { AI_PROFILES, type AiTarget, type EnemyAiProfile } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
 import type { EnemySet } from '../client/src/formats/setdata.ts';
@@ -468,6 +470,101 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(b.state, 'swoop', 'two siblings on the player send it to the swoop');
   eq(MOTHMANT.leash, 450, 'the leash 450 (0x920cc4)');
   eq(MOTHMANT.detect, 200, 'the search radius 200 (0x920c08)');
+}
+
+// --- Rag Rappy: its own alive FSM (RappyAi) ----------------------------------
+{
+  const rappy = (over: Partial<ConstructorParameters<typeof RappyAi>[0]> = {}) =>
+    new RappyAi({
+      x: 0,
+      z: 0,
+      angle: 0,
+      profile: AI_PROFILES.TObjEneLappy as EnemyAiProfile,
+      detect: 150,
+      turnRate: 1024,
+      attack: { distanceX: 20, angle: 0x2000 } as unknown as import('../client/src/formats/battleparams.ts').EnemyAttackData,
+      speed: 1,
+      radius: 10,
+      wander: 0,
+      entityId: 7,
+      rng: () => 0.5,
+      ...over,
+    });
+  eq(RAPPY_ALIVE.gate, 30, 'the think gate is vtable +0x44(30)');
+  eq(RAPPY_ALIVE.lose, 150, 'the range 150 (0x009bc144 / _DAT_00921bd8 = 150 squared)');
+  eq(RAPPY_ALIVE.hitFrame, 14, 'the lunge hits at elapsed 14');
+  eq(RAPPY_ALIVE.recoverTicks, 15, 'the recovery is 15 ticks (+0x344 = 0xf)');
+
+  // The leash test runs only on the think tick of this entity: tick 7 (7 % 30), not tick 6.
+  const leash = rappy({ wander: 0, radius: 10 });
+  leash.x = 50; // far outside the leash of 10 (the spawn at 0, 0)
+  let motionAt6 = null as number | null;
+  let motionAt7 = null as number | null;
+  for (let t = 1; t <= 7; t++) {
+    const out = leash.tick([]);
+    if (t === 6) motionAt6 = out.motion?.index ?? motionAt6;
+    if (t === 7) motionAt7 = out.motion?.index ?? motionAt7;
+  }
+  eq(motionAt6, null, 'no motion change on a non-think tick (the pause keeps the idle motion)');
+  eq(motionAt7, 9, 'the think tick sends the Rappy home on the walk (motion 9)');
+  check(leash.x < 50, 'the walk home moves toward the spawn');
+
+  // Acquisition inside 150 starts the chase; past 150 nothing is acquired.
+  const far = rappy();
+  far.tick([{ clientId: 0, x: 0, z: 200, charClass: 0, dead: false }]);
+  eq(far.state, 'wander', 'a player beyond 150 is not acquired');
+  const near = rappy();
+  near.tick([{ clientId: 0, x: 0, z: 60, charClass: 0, dead: false }]);
+  eq(near.state, 'chase', 'a player within 150 starts the chase (ASSUMED entry)');
+
+  // Lunge timing: the target dead ahead at 12. Entry on tick 2 (engaged, in reach 20).
+  const lunge = rappy();
+  const foe = { clientId: 0, x: 0, z: 12, charClass: 0, dead: false };
+  lunge.tick([foe]); // tick 1: wander -> chase
+  lunge.tick([foe]); // tick 2: engaged (144 < 100 squared? no: 144 < 10000) and in reach -> lunge
+  eq(lunge.state, 'lunge', 'an engaged Rappy in reach lunges');
+  const hitTicks: number[] = [];
+  let hitAt: { knockback: number; mult: number } | null = null;
+  for (let t = 3; t <= 16; t++) {
+    const out = lunge.tick([foe], false);
+    if (out.hit) {
+      hitTicks.push(t);
+      hitAt = { knockback: out.hit.knockback, mult: out.hit.mult };
+    }
+  }
+  eq(hitTicks, [16], 'the lunge hits on its 14th elapsed tick (tick 2 + 14)');
+  eq(hitAt, { knockback: 3, mult: 1 }, 'the hit knocks back 3.0 and tries 1.0');
+  eq(lunge.sounds.includes(RAPPY_ALIVE.sfxHit), true, 'the hit plays 0xc6');
+  // Wait 30 ticks after the hit, then the coast until the animation ends.
+  for (let t = 17; t <= 59; t++) lunge.tick([foe], false);
+  eq(lunge.state, 'lunge', 'the coast waits for the animation to end');
+  lunge.tick([foe], true);
+  eq(lunge.state, 'recover', 'the animation ends into the recovery');
+  // +0x344 = 15 counts down over 16 ticks (15..0, the 16th ends at -1); the 17th leaves.
+  for (let t = 0; t < 16; t++) lunge.tick([foe], false);
+  eq(lunge.state, 'recover', 'the recovery holds through its 16 counted ticks');
+  lunge.tick([foe], false);
+  eq(lunge.state, 'chase', 'the 17th tick leaves (ASSUMED: back to the chase)');
+
+  // Dropping: engaged, the player walks past 150 -> no target, back to the wander.
+  const drop = rappy();
+  drop.tick([{ clientId: 0, x: 0, z: 100, charClass: 0, dead: false }]);
+  drop.tick([{ clientId: 0, x: 0, z: 160, charClass: 0, dead: false }]);
+  eq(drop.targetId, null, 'a target past 150 is dropped');
+  drop.tick([{ clientId: 0, x: 0, z: 160, charClass: 0, dead: false }]);
+  eq(drop.state, 'wander', 'with no target the Rappy wanders');
+
+  // The pause ends with the 0xc4 sound and a 30-unit walk.
+  const pause = rappy();
+  for (let t = 0; t < 70; t++) pause.tick([]);
+  check(pause.sounds.includes(RAPPY_ALIVE.sfxIdle), 'the pause end plays 0xc4');
+
+  // A hit on a wandering Rappy starts the chase on the attacker.
+  const hurt = rappy();
+  hurt.onDamage(4);
+  eq(hurt.state, 'chase', 'a hit starts the chase');
+  eq(hurt.targetId, 4, 'the attacker is the target');
+  eq(hurt.resume(), 'chase', 'resume keeps the chase');
 }
 
 if (failures) {
