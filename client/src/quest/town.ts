@@ -45,7 +45,8 @@ import { parseQuestBin } from '../formats/questbin.ts';
 import { CLASS_NAMES } from '../net/bbsession.ts';
 import type { Game } from '../net/game.ts';
 import type { LobbyPlayer } from '../net/lobby.ts';
-import type { QuestClient, QuestMenuEntry } from '../net/quests.ts';
+import { parseQuestInfoText, type QuestClient, type QuestMenuEntry } from '../net/quests.ts';
+import { ChallengeQuestSelectionDialog } from './challengedialog.ts';
 import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
@@ -96,6 +97,10 @@ export class QuestTown {
   private readonly npcHeads = new Map<number, NpcHeadChooser>();
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
+  // The leader's challenge quest dialog while it is open (quest/challengedialog.ts), and who
+  // follows it (ChallengeRuntime: its sender reads the dialog).
+  private challengeDlg: ChallengeQuestSelectionDialog | null = null;
+  private readonly challengeSubs = new Set<(d: ChallengeQuestSelectionDialog | null) => void>();
   private insideZones = new Set<number>();
   private momokaWaiter: ((code: number) => void) | null = null;
   private disposers: Array<() => void> = [];
@@ -507,6 +512,14 @@ export class QuestTown {
       return;
     }
     const client = this.opts.quests();
+    // The leader of a challenge game gets the Pioneer 2 challenge quest dialog
+    // (ASSUMED trigger: the exe opens it from this counter's menu state 8 when the party
+    // can start; the port opens it here for challenge games, see challengedialog.ts).
+    const game = this.opts.game;
+    if (client && game.info?.challenge && game.selfId === game.leaderId) {
+      await this.challengeQuestDialog(client);
+      return;
+    }
     if (!client) {
       await pages(1);
       return;
@@ -536,6 +549,99 @@ export class QuestTown {
     }
     client.closeMenu();
     await pages(12);
+  }
+
+  // Subscribes to the open challenge quest dialog (null while closed); calls fn at once.
+  subscribeChallengeDialog(fn: (d: ChallengeQuestSelectionDialog | null) => void): () => void {
+    this.challengeSubs.add(fn);
+    fn(this.challengeDlg);
+    return () => {
+      this.challengeSubs.delete(fn);
+    };
+  }
+
+  private setChallengeDialog(d: ChallengeQuestSelectionDialog | null): void {
+    this.challengeDlg = d;
+    for (const fn of [...this.challengeSubs]) fn(d);
+  }
+
+  // GameListMenu state 8 (the challenge quest dialog, challengedialog.ts): the A2 request
+  // with flag 0 (ASSUMED), the list, the level picks, the description and the yes / no.
+  private async challengeQuestDialog(client: QuestClient): Promise<void> {
+    const dlg = new ChallengeQuestSelectionDialog(
+      {
+        requestMenu: (flag) => client.sendMenuRequest(flag),
+        chooseCategory: (entry, stage) => client.sendChoice(entry, stage),
+        requestInfo: (entry) => client.sendInfoRequest(entry),
+        startQuest: (entry) => client.sendChoice(entry, 0),
+        startable: () => this.challengeStartable(),
+        // ASSUMED: GetCurrentChallengeStage_006d040c needs the challenge object's records,
+        // which the town does not hold; 0 is sent.
+        stage: () => 0,
+      },
+      0,
+    );
+    const off = client.onPacket((c) => {
+      if (c.command === 0xa2) dlg.receiveList(c.data, c.flag);
+      else if (c.command === 0xa3) dlg.receiveInfo(c.flag, parseQuestInfoText(c.data));
+    });
+    this.setChallengeDialog(dlg);
+    try {
+      dlg.open();
+      await this.runChallengeDialog(dlg);
+    } finally {
+      off();
+      this.setChallengeDialog(null);
+    }
+    // A cancelled dialog tells the server the menu closed (send_packet0xa9); a started one does not.
+    if (!dlg.started) client.closeMenu();
+  }
+
+  // The dialog's UI loop: the list while the dialog waits on a pick, the yes / no while the
+  // confirm is open, and otherwise the server's next packet.
+  private async runChallengeDialog(dlg: ChallengeQuestSelectionDialog): Promise<void> {
+    const shop = await this.shopText();
+    const yes = shop[0]?.[0] ?? ' Yes ';
+    const no = shop[0]?.[1] ?? ' No ';
+    for (;;) {
+      if (dlg.closed || dlg.started) return;
+      if (dlg.confirming) {
+        this.ui.showWindow(dlg.description.replace(/\t[CEJ][0-9A-Za-z]?/g, ''), false);
+        const ok = await this.ui.yesNo(yes, no, 1);
+        this.ui.closeWindow();
+        dlg.answer(ok);
+        continue;
+      }
+      if (dlg.proc === 3 && dlg.built) {
+        const i = await this.ui.list(dlg.names());
+        if (i === null) {
+          dlg.cancelList();
+          return;
+        }
+        dlg.pick(i);
+        continue;
+      }
+      await dlg.nextChange();
+    }
+  }
+
+  // unknown_maybe_num_players_to_start_quest (the party's start check, PsoBB.exe ~0x006cf...).
+  // ASSUMED port of it: a challenge game with one player gives 2; otherwise 1 when every other
+  // player is within 50 units (xz) of the leader (g_MaxStartDistanceSquared = 2500, 0x0096b9f0,
+  // read from the exe), else 0.
+  private challengeStartable(): number {
+    const { game } = this.opts;
+    const players = [...game.players.entries()].filter(([, p]) => p.npcTemplate === undefined);
+    if (game.info?.challenge && players.length === 1) return 2;
+    const leader = game.players.get(game.leaderId);
+    if (!leader) return 0;
+    for (const [id, p] of players) {
+      if (id === game.leaderId) continue;
+      const dx = p.position.x - leader.position.x;
+      const dz = p.position.z - leader.position.z;
+      if (dx * dx + dz * dz > 2500) return 0;
+    }
+    return 1;
   }
 
   // Runs a label to its end (the reward), the counter waiting on it.
@@ -748,6 +854,7 @@ export class QuestTown {
   }
 
   dispose(): void {
+    this.challengeDlg?.abort();
     for (const d of this.disposers) d();
     this.view.inputBlocked = () => false;
     this.view.questKey = null;

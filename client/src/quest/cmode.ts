@@ -1328,9 +1328,9 @@ export function buildStageListIndex(index: number): Uint8Array {
 // g_pChallengeQuestDialogWindow (0x00a96180) is the QuestSelectionDialog (vtable 0x00b3c080,
 // QuestSelectionDialog_Constructor_006cfde8). GameListMenu_EnterCreatePartyState_006cd2d4 builds it
 // when the Hunter's Guild counter (CreateMedicalCenterDialog_006cafb8 -> MedicalCenterDialog_
-// Constructor_006cd830, the leader in a logged-in scene) enters its state 8. Its own state machine
-// (the input that moves +0x78, the list builders) is NOT ported: only the fields below, which the
-// sender reads, are modelled, and the port has no code that opens the dialog yet.
+// Constructor_006cd830, the leader in a logged-in scene) enters its state 8. The dialog's state
+// machine is quest/challengedialog.ts (ChallengeQuestSelectionDialog, which implements this
+// interface); quest/town.ts opens it for the leader of a challenge game and cmoderun.ts reads it.
 export interface ChallengeQuestDialog {
   // +0x38 != 0: the dialog is built (the window state reads this, the progress does not).
   built: boolean;
@@ -1343,6 +1343,9 @@ export interface ChallengeQuestDialog {
   // *(0x00a96080) + 4: the quest number in that header (ASSUMED: 0x33..0x3b = Episode 1 stages
   // 1..9, 0x3d..0x41 = Episode 2 stages 1..5, from the ranges the sender tests).
   quest: number;
+  // g_ChallengeQuestSelectionState (0x00a96168) as the dialog holds it: 1 = Episode 2's
+  // list (window 3). Optional for the callers that only model the fields above.
+  selection?: number;
 }
 
 // get_challenge_quest_window_state (0x006d0584). selection = g_ChallengeQuestSelectionState

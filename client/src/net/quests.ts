@@ -62,6 +62,11 @@ export interface QuestMenuEntry {
   isCategory: boolean;
 }
 
+// A3 / A5 payload: plain UTF-16 text (no fixed size), markers stripped.
+export function parseQuestInfoText(data: Uint8Array): string {
+  return stripMarkers(readUtf16(data, 0, data.length >> 1));
+}
+
 // S_QuestMenuEntry_BB_A2_A4 (0x13C): menu_id, item_id, utf16 name[0x20],
 // utf16 short_description[0x78], u8 disabled, 3 unused.
 export function parseQuestMenu(data: Uint8Array): QuestMenuEntry[] {
@@ -141,6 +146,9 @@ export class QuestClient {
   private files = new Map<string, Incoming>();
   private menuWaiters: Array<(e: QuestMenuEntry[]) => void> = [];
   private infoWaiters: Array<(s: string) => void> = [];
+  // Every command the client sees, for the challenge dialog (quest/challengedialog.ts),
+  // which needs the raw A2 / A3 with their header flags.
+  private readonly packetListeners = new Set<(c: Command) => void>();
   private questWaiters: Array<(q: LoadedQuest) => void> = [];
   // The last menu the server sent, so the UI can re-render without asking again.
   lastMenu: QuestMenuEntry[] = [];
@@ -162,7 +170,14 @@ export class QuestClient {
     this.opts.log?.(msg);
   }
 
+  // Calls fn for every command the connection delivers; returns the unsubscribe.
+  onPacket(fn: (c: Command) => void): () => void {
+    this.packetListeners.add(fn);
+    return () => this.packetListeners.delete(fn);
+  }
+
   private handle(c: Command): void {
+    for (const fn of [...this.packetListeners]) fn(c);
     switch (c.command) {
       case 0xa2: // quest menu (in a game)
       case 0xa4: // download quest menu (in a lobby)
@@ -172,7 +187,7 @@ export class QuestClient {
         return;
       case 0xa3: // quest information (same format as 1A/D5: plain UTF-16)
       case 0xa5: {
-        const text = stripMarkers(readUtf16(c.data, 0, c.data.length >> 1));
+        const text = parseQuestInfoText(c.data);
         for (const w of this.infoWaiters.splice(0)) w(text);
         return;
       }
@@ -228,9 +243,28 @@ export class QuestClient {
   // file pair. Resolves once both files are in and decompressed.
   selectQuest(entry: QuestMenuEntry): Promise<LoadedQuest> {
     const p = new Promise<LoadedQuest>((resolve) => this.questWaiters.push(resolve));
-    this.files.clear();
-    this.conn.send(0x10, 0, menuSelection(entry));
+    this.sendChoice(entry, 0);
     return p;
+  }
+
+  // C->S 10 with a header flag and no waiter: the challenge dialog's choices
+  // (quest/challengedialog.ts). flags = the challenge stage for an episode
+  // (CHOOSE at level 0), 0 for the start. The start's files arrive as in selectQuest.
+  sendChoice(entry: QuestMenuEntry, flags: number): void {
+    this.files.clear();
+    this.conn.send(0x10, flags, menuSelection(entry));
+  }
+
+  // C->S A2 with a flag and no waiter (the challenge dialog's state 0). The
+  // answer is delivered to onPacket listeners.
+  sendMenuRequest(flag: number): void {
+    this.conn.send(0xa2, flag);
+  }
+
+  // C->S 09 with no waiter (the challenge dialog's level 1); the A3 answer is
+  // delivered to onPacket listeners.
+  sendInfoRequest(entry: QuestMenuEntry): void {
+    this.conn.send(0x09, 0, menuSelection(entry));
   }
 
   // Waits for a quest the server starts on its own (another player picked it).
