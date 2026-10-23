@@ -64,6 +64,7 @@ export interface DropBody {
   yaw: number;
   halfX: number;
   halfZ: number;
+  sphere?: boolean; // a type 0 entity: halfX is its radius (XZ circle)
 }
 
 export interface DropSearchOptions {
@@ -77,9 +78,15 @@ export interface DropSearchOptions {
 
 // FUN_007b5318 for the spot sphere against one box, in XZ: the nearest point
 // of the rotated rectangle to the spot's centre lies within the spot radius.
+// A sphere body (FUN_0083dbd4) overlaps when the centres are closer than the
+// two radii.
 export function spotHitsBody(spot: DropPoint, b: DropBody): boolean {
   const dx = spot.x - b.x;
   const dz = spot.z - b.z;
+  if (b.sphere) {
+    const r = DROP_SPOT_RADIUS + b.halfX;
+    return dx * dx + dz * dz < r * r;
+  }
   const c = Math.cos(-b.yaw);
   const s = Math.sin(-b.yaw);
   const lx = dx * c - dz * s;
