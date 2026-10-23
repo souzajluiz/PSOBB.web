@@ -95,10 +95,9 @@ export class ChallengeRuntime {
   private lastArea = '';
   // maybe_currently_selected_challenge_stage_window (0 when none).
   private stageListIndex = 0;
-  // The leader's sender: the entity's 30-tick counter (+0x2c), g_ChallengeQuestSelectionState
-  // (0x00a96168, 0 at start) and the challenge quest dialog (null while closed).
+  // The leader's sender: the entity's 30-tick counter (+0x2c) and the challenge quest dialog
+  // (null while closed; its `selection` is g_ChallengeQuestSelectionState, 0x00a96168).
   private senderCounter = 0;
-  private questSelection = 0;
   private challengeDialog: ChallengeQuestDialog | null = null;
   private senderPoll: ReturnType<typeof setInterval> | null = null;
 
@@ -120,6 +119,8 @@ export class ChallengeRuntime {
     o.view.combat.challengeExpMultiplier = 1;
     this.poll = setInterval(() => this.tick(), 250);
     this.senderPoll = setInterval(() => this.stageSenderTick(), 1000 / 30);
+    // The dialog the town opens (the leader's Hunter's Guild counter); the current one at once.
+    this.disposers.push(o.town.subscribeChallengeDialog((d) => this.setChallengeQuestDialog(d)));
   }
 
   attach(vm: QuestVM): void {
@@ -356,7 +357,8 @@ export class ChallengeRuntime {
   // --- the leader's stage-list sender (UpdateChallengeEntityProgress_004d9848) ------------------------
 
   // The Pioneer 2 challenge quest dialog the sender reads (g_pChallengeQuestDialogWindow); null
-  // while it is not open. Nothing in the port opens it yet (see cmode.ts ChallengeQuestDialog).
+  // while it is not open. quest/town.ts opens the leader's dialog (challengedialog.ts) and
+  // reports it through subscribeChallengeDialog, which the constructor subscribes to.
   setChallengeQuestDialog(d: ChallengeQuestDialog | null): void {
     this.challengeDialog = d;
   }
@@ -370,7 +372,7 @@ export class ChallengeRuntime {
     const step = challengeSenderStep(
       this.senderCounter,
       game.selfId === game.leaderId,
-      challengeWindowState(this.challengeDialog, this.questSelection),
+      challengeWindowState(this.challengeDialog, this.challengeDialog?.selection ?? 0),
       challengeQuestProgress(this.challengeDialog),
       this.stageListIndex,
     );

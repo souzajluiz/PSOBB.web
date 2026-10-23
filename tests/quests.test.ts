@@ -21,7 +21,7 @@ import { QuestVM } from '../client/src/quest/vm.ts';
 import { prsCompress } from '../client/src/formats/prscompress.ts';
 import type { BBConnection, Command } from '../client/src/net/bbconnection.ts';
 import { downloadQuestStore, downloadQuestToQst, memoryDownloadQuestStore, recordForQuest } from '../client/src/net/downloadquests.ts';
-import { QuestClient, type LoadedQuest } from '../client/src/net/quests.ts';
+import { parseQuestInfoText, QuestClient, type LoadedQuest } from '../client/src/net/quests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAIN_ROOT = (() => {
@@ -305,6 +305,47 @@ if (NEWSERV_BIN) {
   await broken.put(recordForQuest(q));
   check((await broken.list()).length === 1, 'a failing IndexedDB falls back to memory');
   check((await downloadQuestStore(undefined).list()).length === 0, 'no IndexedDB: an empty memory store');
+}
+
+// --- the challenge dialog's hooks: raw packets to onPacket, the sends without waiters -----
+{
+  // Records the payload too: the 8-byte menu body and the header flag of each send.
+  const sent: Array<{ command: number; flag: number; body: Uint8Array }> = [];
+  const conn = {
+    send: (command: number, flag: number, body: Uint8Array = new Uint8Array(0)) => void sent.push({ command, flag, body }),
+    onCommand: (_c: Command) => {},
+  };
+  const client = new QuestClient(conn as unknown as BBConnection, {});
+  const seen: Command[] = [];
+  const off = client.onPacket((c) => seen.push(c));
+  const entry = {
+    menuId: 0x42,
+    itemId: 0x21,
+    name: 'Quest B',
+    shortDescription: '',
+    disabled: false,
+    episodeByte: 0x42,
+    iconByte: 0,
+    isCategory: false,
+  };
+  client.sendMenuRequest(0);
+  check(sent.length === 1 && sent[0].command === 0xa2 && sent[0].flag === 0, 'sendMenuRequest: A2 with the flag, no body');
+  client.sendChoice(entry, 3);
+  const choice = sent[1];
+  check(choice.command === 0x10 && choice.flag === 3, 'sendChoice: 10 with the stage as the header flag');
+  const dvc = new DataView(choice.body.buffer, choice.body.byteOffset, choice.body.byteLength);
+  check(dvc.getUint32(0, true) === 0x42 && dvc.getUint32(4, true) === 0x21, 'sendChoice: the menu and item ids');
+  client.sendInfoRequest(entry);
+  check(sent[2].command === 0x09 && sent[2].flag === 0, 'sendInfoRequest: 09');
+  // The server's A3 reaches the listeners (with its flag) and the chained onCommand.
+  const info = new Uint8Array(4);
+  new DataView(info.buffer).setUint16(0, 0x41, true);
+  conn.onCommand({ command: 0xa3, flag: 0x35, data: info });
+  check(seen.length === 1 && seen[0].flag === 0x35, 'onPacket sees the A3 with its header flag');
+  check(parseQuestInfoText(seen[0].data) === 'A', 'parseQuestInfoText reads the UTF-16 text');
+  off();
+  conn.onCommand({ command: 0xa3, flag: 0x36, data: info });
+  check(seen.length === 1, 'after the unsubscribe nothing more is delivered');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');

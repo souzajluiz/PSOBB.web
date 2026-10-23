@@ -68,6 +68,7 @@ import {
   type ChallengeQuestDialog,
 } from '../client/src/quest/cmode.ts';
 import { graveDropPoints, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
+import { ChallengeQuestSelectionDialog, type ChallengeDialogHost } from '../client/src/quest/challengedialog.ts';
 import {
   decodeGraveDate,
   formatGraveDate,
@@ -723,6 +724,89 @@ if (newserv) {
   eq(step(0, true, 0, 0, 3), { counter: 0, send: 0 }, 'closed dialog with a selection: 0 closes it');
   eq(step(5, true, 0, 0, 3), { counter: 4, send: null }, 'closed dialog: the counter counts down, no send while it is above 0');
   eq(step(0, true, 1, 0, 0), { counter: 0, send: null }, 'the episode choice (window 1) is index 0 too');
+
+  // --- the dialog's states (QuestSelectionDialog_ProcessState_006cfe74) driven by the packets ---
+  // A2 records are 0x13c bytes: menu_id (episode byte at +0), item_id, the name at +8.
+  const rec = (menuId: number, item: number, name: string): Uint8Array => {
+    const b = new Uint8Array(0x13c);
+    const dv = new DataView(b.buffer);
+    dv.setUint32(0, menuId, true);
+    dv.setUint32(4, item, true);
+    for (let i = 0; i < name.length; i++) dv.setUint16(8 + 2 * i, name.charCodeAt(i), true);
+    return b;
+  };
+  const body = (recs: Uint8Array[]): Uint8Array => {
+    const out = new Uint8Array(recs.length * 0x13c);
+    recs.forEach((r, i) => out.set(r, i * 0x13c));
+    return out;
+  };
+  const sent: string[] = [];
+  let startCode = 1;
+  const host: ChallengeDialogHost = {
+    requestMenu: (f) => void sent.push(`A2 ${f}`),
+    chooseCategory: (e, s) => void sent.push(`10 ${e.itemId} stage ${s}`),
+    requestInfo: (e) => void sent.push(`09 ${e.itemId}`),
+    startQuest: (e) => void sent.push(`10 start ${e.itemId}`),
+    startable: () => startCode,
+    stage: () => 3,
+  };
+  const d = new ChallengeQuestSelectionDialog(host, 0);
+  d.open();
+  eq(sent, ['A2 0'], 'state 0: the A2 request goes out with the menu flag');
+  eq(d.proc, 0xc, 'then the dialog waits (0xc)');
+  eq(challengeWindowState(d, d.selection), 0, 'no list yet: window 0');
+  d.receiveList(body([rec(0x01, 0x10, 'Episode 1'), rec(0x02, 0x11, 'Episode 2')]), 2);
+  eq([d.built, d.proc, d.level], [true, 3, 0], 'the A2 list is built (+0x38), state 3, level 0');
+  eq(d.names(), ['Episode 1', 'Episode 2'], 'the list shows the entry names');
+  eq(challengeWindowState(d, d.selection), 1, 'level 0: the episode choice (window 1)');
+  d.pick(1);
+  eq(sent[sent.length - 1], '10 17 stage 3', 'level 0: 10 with the entry ids and the stage as the flags');
+  eq([d.selection, d.level, d.built], [1, 1, false], 'Episode 2 sets selection 1, level 1, the list closes');
+  eq(challengeWindowState(d, d.selection), 0, 'between the lists: window 0');
+  d.receiveList(body([rec(0x42, 0x20, 'Quest A'), rec(0x42, 0x21, 'Quest B')]), 2);
+  eq(challengeWindowState(d, d.selection), 3, 'level 1 with selection 1: window 3');
+  d.pick(0);
+  eq([sent[sent.length - 1], d.level, d.proc], ['09 32', 2, 0xc], 'level 1: 09 for the entry, level 2, waiting for A3');
+  d.receiveInfo(0x33, 'Quest A text');
+  eq([d.headerRead, d.quest, d.proc], [true, 0x33, 3], 'A3: the description window (+0x40), the quest number is the flag');
+  eq(challengeQuestProgress(d), 0x33, 'the sender reads the quest number from the header');
+  eq(challengeWindowState(d, d.selection), 3, 'level 2 keeps the window');
+  d.pick(0);
+  eq([d.confirming, d.proc], [true, 8], 'level 2: the yes / no opens (state 8)');
+  d.answer(false);
+  eq([d.confirming, d.level, d.headerRead, d.proc], [false, 1, false, 3], 'no: back to the quest list (level 1), the header closes');
+  eq(challengeQuestProgress(d), -1, 'with the header closed the progress is -1');
+  eq(challengeWindowState(d, d.selection), 3, 'back at level 1: window 3');
+  d.pick(1);
+  d.receiveInfo(0x34, 'Quest B text');
+  d.pick(1);
+  startCode = 2;
+  d.answer(true);
+  eq([d.started, d.proc, d.menuCodes.at(-1)], [false, 8, 0x10], 'a party that cannot start: the message (0x10), the yes / no stays');
+  startCode = 1;
+  d.answer(true);
+  eq([d.started, d.proc, sent[sent.length - 1]], [true, 0xc, '10 start 33'], 'a startable party: 10 with flags 0 for Quest B, then waits for the files');
+  eq(d.menuCodes.at(-1), 0x14, 'the menu is told the quest starts (0x14)');
+
+  // The list's cancel closes the dialog (state 9); an empty list closes it too (state 0xb).
+  const c1 = new ChallengeQuestSelectionDialog(host, 0);
+  c1.open();
+  c1.receiveList(body([rec(0x01, 0x10, 'Episode 1')]), 1);
+  c1.cancelList();
+  eq([c1.closed, c1.proc, c1.built], [true, 9, false], 'a cancel on the list closes the dialog (state 9)');
+  const c2 = new ChallengeQuestSelectionDialog(host, 0);
+  c2.open();
+  c2.receiveList(body([]), 0);
+  eq([c2.closed, c2.proc], [true, 0xb], 'an empty A2 list closes the dialog (state 0xb)');
+  eq(challengeWindowState(c2, 0), 0, 'a closed dialog gives window 0');
+  // A subscriber sees each change, and the unsubscribe stops it.
+  const c3 = new ChallengeQuestSelectionDialog(host, 0);
+  let seen = 0;
+  const off = c3.subscribe(() => (seen += 1));
+  c3.open();
+  off();
+  c3.receiveList(body([rec(0x01, 0x10, 'Episode 1')]), 1);
+  eq(seen, 1, 'open() notifies once; after the unsubscribe nothing more');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');
