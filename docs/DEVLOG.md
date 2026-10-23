@@ -11098,3 +11098,21 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: Download quests (A6 / A7): receive, storage, .qst
+
+**Evidence (newserv, `vendor/newserv/src`):** a BB client never gets a download quest. `on_A2` answers a lobby client with "Quests are not available in lobbies" (`ReceiveCommands.cc`, `on_A2`), so the A4 download menu is not sent to BB, and the lobby `10` pick reaches `create_download_quest`, which throws `PSOBB does not support download quests` for `BB_V4` (`Quest.cc`). newserv's download encoding (`encode_download_quest_data`: 8-byte header, PSO V2 encrypted PRS) is for DC / PC / GC / XB. `CommandFormats.hh`: the A6 open file has the BB shape (0x50, `S_OpenFile_BB_44_A6`) and A7 the 0x414 chunk (`S_WriteFile_13_A7`), the same as 44 / 13.
+
+**Exe (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):** the file receive is `HandleQuestFileHeader_006ccbce` (0x21) and `receive_quest_chunk` (0x22). Both take the 44 / 13 layout, and `decompress_received_quest_files` (0x006d0174) PRS-decompresses the `.bin` and `.dat` with no decrypt. The only decrypt is `DecryptAndUnshuffleQuestData_006be204`, on the offline quest data. No code path sets `g_CurrentQuestType` to `maybe_download_quest_actually` (3), and no A6 / A7 dispatch was found in the dump (not searched in the disassembly).
+
+**Ported:**
+- `formats/qst.ts`: `parseQst` takes A6 / A7 like 44 / 13 and sets `download`; a stream that mixes the two is rejected. `packQst(..., { download: true })` writes A6 / A7. The generic writer `packQstFiles` takes PRS bytes.
+- `net/downloadquests.ts` (new): `recordForQuest` (PRS-compresses the decoded files), `downloadQuestToQst`, and a store keyed by quest name: IndexedDB with a memory fallback (every request wrapped; a failure keeps the store in memory).
+- `ui/onlineTab.ts`: a received download quest (`LoadedQuest.download`) is saved and logged with the count instead of started. A download-quest menu is not built (the port had none), so Download Quests is data only.
+- `net/quests.ts` is unchanged: the A6 / A7 receive (open, ack with the same command, chunks, completion, no AC barrier) was already there.
+
+**Checks:** `node tests/quests.test.ts` (new block: a stand-in connection delivers A6 / A7, checks the files, the acks and no AC; the store; the `.qst` command numbers and length; the fallback) and `node tests/questwrite.test.ts` (A6 / A7 `.qst` round trip over the 333 quests with a `.dat`, mixed-command rejection) pass, Node 24. `questmisc` passes. `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome.
+
+**ASSUMED:** the BB A6 / A7 bytes are plain PRS (no decrypt), as the exe's receive path reads them; no server sends them to BB, so this is untested against a live server. The download-quest menu is not built; the `.qst` for the non-BB download format is not decoded.
+
+**Not done:** the optimal PRS parser (not quick; left open in the ROADMAP).

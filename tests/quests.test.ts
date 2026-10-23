@@ -18,6 +18,10 @@ import { decodeFunction, parseQuestBin, questEpisode, questOpcodeHistogram } fro
 import { parseQuestDat, QuestDatChunkType } from '../client/src/formats/questdat.ts';
 import { QUEST_OPCODES, questOpcodeByName } from '../client/src/formats/questopcodes.ts';
 import { QuestVM } from '../client/src/quest/vm.ts';
+import { prsCompress } from '../client/src/formats/prscompress.ts';
+import type { BBConnection, Command } from '../client/src/net/bbconnection.ts';
+import { downloadQuestStore, downloadQuestToQst, memoryDownloadQuestStore, recordForQuest } from '../client/src/net/downloadquests.ts';
+import { QuestClient, type LoadedQuest } from '../client/src/net/quests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MAIN_ROOT = (() => {
@@ -66,6 +70,7 @@ console.log(`${quests.length} Blue Burst quest files in ${root}`);
 check(quests.length > 100, `expected over 100 BB quest files, found ${quests.length}`);
 
 const load = (path: string): Uint8Array => prsDecompress(new Uint8Array(readFileSync(path)));
+const same = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
 
 // --- The opcode table --------------------------------------------------------
 check(QUEST_OPCODES.length === 528, `expected 528 BB opcodes in the generated table, got ${QUEST_OPCODES.length}`);
@@ -220,6 +225,86 @@ if (NEWSERV_BIN) {
   }
 } else {
   console.log('SKIP newserv binary cross-check (no build/newserv)');
+}
+
+// --- download quests: A6 / A7 receive, storage, .qst -----------------------------
+{
+  // A stand-in connection: QuestClient only sends through send() and chains onCommand.
+  // The client's acks are recorded as [command, flag]; server commands are delivered by hand.
+  const sent: Array<[number, number]> = [];
+  const conn = { send: (command: number, flag: number) => void sent.push([command, flag]), onCommand: (_c: Command) => {} };
+  const got: LoadedQuest[] = [];
+  new QuestClient(conn as unknown as BBConnection, { onQuest: (q) => got.push(q) });
+  const frame = (command: number, flag: number, body: Uint8Array): Command => ({ command, flag, data: body });
+  const ascii = (s: string, n: number): Uint8Array => {
+    const b = new Uint8Array(n);
+    for (let i = 0; i < Math.min(s.length, n - 1); i++) b[i] = s.charCodeAt(i);
+    return b;
+  };
+  const openBody = (filename: string, size: number): Uint8Array => {
+    const b = new Uint8Array(0x50);
+    new DataView(b.buffer).setUint32(0x34, size, true);
+    b.set(ascii(filename, 0x10), 0x24);
+    b.set(ascii('PSO/Test Download', 0x18), 0x38);
+    return b;
+  };
+  const chunkBody = (filename: string, data: Uint8Array): Uint8Array => {
+    const b = new Uint8Array(0x414);
+    b.set(ascii(filename, 0x10), 0);
+    b.set(data, 0x10);
+    new DataView(b.buffer).setUint32(0x410, data.length, true);
+    return b;
+  };
+  const binPlain = new Uint8Array(0x900).map((_, i) => (i * 7) & 0xff);
+  const datPlain = new Uint8Array(0x400).map((_, i) => (i * 13 + 5) & 0xff);
+  const binPrs = prsCompress(binPlain);
+  const datPrs = prsCompress(datPlain);
+  const feed = (c: Command): void => conn.onCommand(c);
+  feed(frame(0xa6, 0, openBody('q1.bin', binPrs.length)));
+  feed(frame(0xa6, 0, openBody('q1.dat', datPrs.length)));
+  // Chunks in order, the last one shorter than 0x400 (the completion rule).
+  let chunkCount = 0;
+  const chunks = (name: string, data: Uint8Array): void => {
+    for (let z = 0, i = 0; z < data.length; z += 0x400, i++) {
+      feed(frame(0xa7, i, chunkBody(name, data.subarray(z, z + 0x400))));
+      chunkCount++;
+    }
+  };
+  chunks('q1.bin', binPrs);
+  chunks('q1.dat', datPrs);
+  check(got.length === 1, `A6/A7 download delivers one quest (got ${got.length})`);
+  const q = got[0];
+  check(!!q && q.download === true, 'A6/A7 quest is marked download');
+  check(!!q && same(q.bin, binPlain) && same(q.dat, datPlain), 'A6/A7 files decompress to the sent quest');
+  check(!!q && q.name.includes('Test Download'), `A6/A7 keeps the quest name (${q?.name})`);
+  const acks = sent.map(([command]) => command);
+  check(acks.filter((c) => c === 0xa6).length === 2, 'A6 open files are confirmed with A6');
+  check(acks.filter((c) => c === 0xa7).length === chunkCount, 'every A7 chunk is acknowledged with A7');
+  check(!acks.includes(0xac), 'a download quest sends no AC barrier');
+
+  // Storage: the record keeps the received bytes and exports to A6/A7 .qst.
+  const store = memoryDownloadQuestStore();
+  await store.put(recordForQuest(q));
+  const listed = await store.list();
+  check(listed.length === 1 && listed[0].name === q.name, 'download quest is listed after put');
+  const qst = downloadQuestToQst(listed[0]);
+  const qdv = new DataView(qst.buffer, qst.byteOffset, qst.byteLength);
+  check(qdv.getUint16(2, true) === 0xa6 && new DataView(qst.buffer, qst.byteOffset).getUint16(0, true) === 0x58, 'stored quest exports A6 open-file commands');
+  check(qst.length % 8 === 0, 'stored quest .qst is 8-aligned');
+  // Two packs of the same bytes are the same file.
+  check(same(downloadQuestToQst(listed[0]), qst), 'exporting a stored quest twice gives the same bytes');
+
+  // A store whose IndexedDB request fails keeps working in memory.
+  const broken = downloadQuestStore({
+    open() {
+      const req: { error: unknown; onerror?: () => void; onsuccess?: () => void } = { error: new Error('blocked') };
+      queueMicrotask(() => req.onerror?.());
+      return req as unknown as IDBOpenDBRequest;
+    },
+  } as unknown as IDBFactory);
+  await broken.put(recordForQuest(q));
+  check((await broken.list()).length === 1, 'a failing IndexedDB falls back to memory');
+  check((await downloadQuestStore(undefined).list()).length === 0, 'no IndexedDB: an empty memory store');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');
