@@ -13186,3 +13186,34 @@ Ports the Trade Window on top of the 2026-10-23 protocol entry (`net/trade.ts`).
 - the exe's offer list rendering (CreateNumericDisplayListWindow rows) and the second list (0xf8..0x1e8);
 - newserv's meseta id (above) before a meseta offer can be tried on a real server;
 - the Quit window x (above).
+
+## 2026-10-23: Medical Center door swings (the leaves had no motion)
+
+**Report:** a screen recording of Pioneer 2 showed the Medical Center door (0x0049) as a shut panel in the open plaza with the player and an NPC walking through it. The box was off (the door was open by distance) but the leaves never moved. The cause is the motion's key size, not the object's placement or visibility.
+
+**Exe (PsoBB.exe, Ghidra dump via `tools/ghidra/decomp.sh`):**
+- Class `TObjCityDoor_Med`: vtable 0x00b2f820. Slots: +0x34 closed (0x00645eb0), +0x38 closing (0x00645eec), +0x3c opening (0x00646410), +0x40 open (0x00645f5c), +0x50 the render gate (0x00645fec, which calls the culling test 0x007ba468: distance / view range, not a hide flag).
+- Create 0x006466f4: `FUN_005caba4(0xbc)` is a heap allocation (`FUN_007a8a38`), not a flag test; the ctor 0x00646770 calls the shared door ctor `FUN_006460d8` with the data block 0x00935a54 and sets the frame limit from motion 11 (`FUN_00645b00(0xb)`, +4 frames, minus one).
+- Data block 0x00935a54: step 1.0, open 3600.0 (60^2), close 6400.0 (80^2), radius 4.0, unk1 25.0. The port's `CITY_DOORS` compares plain distances (60, 80), the same test.
+- Render 0x00646804: model 20 with motion 11 at the door frame (+0xb4), 30 frames.
+- Set data (`map_city00_00o.dat`, Pioneer 2, object 17, type 0x49): at world (193.5, 0, -93.5), yaw 315 degrees. Nothing in the set or the ctor hides it by default.
+
+**Why the leaves stayed shut:** `fe_obj_o_medical_door01l.njm` (motion 11 of `bm_obj_city_common.bml`) has 2 nodes with 30 angle keys each, consecutive frames 0..29: node 0 turns to -3094 BAMS and node 1 to +6189 BAMS (two leaves, opposite ways). `EnemyArchive.motion` read every object motion with the 8-byte short angle keys (`shortAngles: true`, the enemies' form). Read that way the file gives one key per node (frame 0, all zero), so the rotation never changes. The shop and Guild doors have no angle keys (position only), so they were not affected.
+
+**Port changes:**
+- `client/src/render/enemymodel.ts`: `EnemyArchive.motion(j, nodes, keys16 = false)` (the cache key carries the form); `EnemyMotionSpec.keys16`; `buildEnemy` passes it.
+- `client/src/formats/objectmodels.ts`: `ObjectPartSpec` motion may set `keys16: true`; the Medical Center door (0x0049) sets it.
+- `client/src/render/objectview.ts`: `toEnemyPart` carries `keys16`.
+- `tests/warpmenu.test.ts`: the Medical door's motion decodes to 30 frames on both leaves, leaf 1 ends at +6189 BAMS; the short form is kept as the failing case.
+
+**ASSUMED:**
+- The exe's angle key size is per motion. The header (`type` 3, `inp` 2) is the same as the short-form enemy motions, so the choice is not in the header. Only the Medical door uses 16-byte keys here; the other object motions with angle keys (the warp beams, type 7) keep the short form, which they were already given. Those were not checked against the exe.
+- The door opens by the leaves' rotation, with the leaves' pivots at the model's own nodes (no separate pivot offset).
+
+**Checks:** `node tests/warpmenu.test.ts` (new block: 16-byte keys, leaf end angle, short form as the bug), `node tests/townfield.test.ts`, `node tests/waves.test.ts`, `node tests/objectcollision.test.ts`, `node tests/lobbymain.test.ts`, `node tests/collision.test.ts` all pass. Client `tsc --noEmit -p .` clean.
+
+**Not checked:** the Chrome / Playwright view (not run, per the brief). The door looks like a free-standing slab in the recording: the wall of the Medical Center building is not in the port's geometry at (193.5, -93.5) (`map_city00_00n.rel` section 10 / `c.rel` were not compared with the building). The exe's walls there are unverified.
+
+**Left:**
+- Confirm the placement in a real Pioneer 2 render (the wall next to the door, the door's section and rotation).
+- The angle key size of the other object motions (beams, the Forest and Ruins doors' `bm_obj_*` motions): the exe rule, not decided here.

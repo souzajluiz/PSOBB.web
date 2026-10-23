@@ -57,7 +57,8 @@ interface ObjectPartBase {
 // pose: a `drive` or a `speed` without a `motion` does not compile. `shape`
 // is a .njs entry (motion index) drawn at the motion's frame
 // (njDrawShapeMotion), so it needs a motion too.
-type PartMotion = { motion?: never; drive?: never; speed?: never; shape?: never } | { motion: number; drive: PartDrive; speed?: number; shape?: number };
+// keys16: the motion's angle keys are the 16-byte form (render/enemymodel.ts motion()).
+type PartMotion = { motion?: never; drive?: never; speed?: never; shape?: never; keys16?: never } | { motion: number; drive: PartDrive; speed?: number; shape?: number; keys16?: true };
 
 // The texture list is the archive entry's own, or one model entry's embedded
 // list, or a separate archive - never two of them at once.
@@ -403,8 +404,15 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
         ],
         { collision: BOX(0x009c7114, 6.5, 50, 0), door: true },
       );
+    // The Medical Center door's motion 11 (fe_obj_o_medical_door01l.njm, 30
+    // frames, two leaves) has 16-byte angle keys: 30 consecutive frames on each
+    // of its 2 nodes (node 0 turns to -3094 BAMS, node 1 to +6189 BAMS by frame
+    // 29). Read as the short form it keeps only frame 0, so the leaves never
+    // swing while the box is already off (the player walks through a shut-looking
+    // door). ASSUMED: the exe's key size per motion (the same header as the
+    // short-form enemy motions); the other object motions are unchanged.
     case 0x0049:
-      return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door' }], {
+      return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door', keys16: true }], {
         collision: BOX(0x00935a54, 25, 4, 0),
         door: true,
       });

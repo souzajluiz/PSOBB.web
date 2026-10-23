@@ -13,6 +13,7 @@ import { floorToArea } from '../client/src/net/game.ts';
 import { parseUnitxt } from '../client/src/classic/charcreate_text.ts';
 import { AREA_TEXT, areaWarpLayout, CCA_WARP, ccaWarpLayout, mainWarpItems, mainWarpLayout, mainWarpMask } from '../client/src/render/warpmenu.ts';
 import { objectModelFor } from '../client/src/formats/objectmodels.ts';
+import { EnemyArchive } from '../client/src/render/enemymodel.ts';
 import { bossWarpFloor, CITY_DOORS, collectFieldObjects, constructKey, DOOR_CAMERA_FRAMES, doorFlags, doorLamps, isDelayedObject, lockedLook, stepCityDoor, stepDoor, type FieldDoor } from '../client/src/render/fieldobjects.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
@@ -190,6 +191,16 @@ if (existsSync(join(DATA, 'data.gsl'))) {
   }
   console.log(`map warps: ${mapWarpsNearPad} of ${mapWarps} land within 100 of another warp`);
   check(mapWarps > 0 && mapWarpsNearPad / mapWarps > 0.8, 'map warp destinations are floor coordinates');
+
+  // The Medical Center door (0x0049) motion 11 of bm_obj_city_common.bml: its
+  // angle keys are the 16-byte form, 30 frames on each of the 2 leaf nodes.
+  // The short form reads one key per node, so the leaves never swing.
+  const city = new EnemyArchive('bm_obj_city_common.bml', gsl.get('bm_obj_city_common.bml'), 22);
+  const med16 = city.motion(11, city.nodeCount(20), true);
+  eq([med16.frameCount, med16.nodes.map((n) => n.rotation?.length ?? 0)], [30, [30, 30]], 'Medical door keys (16-byte)');
+  const leaf = med16.nodes[1].rotation!;
+  check(Math.abs(leaf[leaf.length - 1].value[1] - 6189 * (2 * Math.PI / 65536)) < 1e-3, 'Medical door leaf 1 turns to +6189 BAMS at frame 29');
+  eq(city.motion(11, city.nodeCount(20)).nodes.map((n) => n.rotation?.length ?? 0), [1, 1], 'short form reads one key (the bug)');
 } else {
   console.log(`(no ${DATA}; skipping the client data checks)`);
 }

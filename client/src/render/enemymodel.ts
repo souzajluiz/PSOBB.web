@@ -123,13 +123,17 @@ export class EnemyArchive {
   }
 
   // Motion j (relative to the first motion entry) for a tree of `nodes` nodes.
-  motion(j: number, nodes: number): NjMotion {
-    const key = `${j}:${nodes}`;
+  // keys16: the angle keys are the 16-byte NJS_MKEY_A form (frame u32, three
+  // i32 angles) instead of the 8-byte short form the enemies use. The Pioneer 2
+  // Medical Center door (fe_obj_o_medical_door01l.njm) is one: its 30 keys per
+  // node are consecutive frames only when read this way.
+  motion(j: number, nodes: number, keys16 = false): NjMotion {
+    const key = `${j}:${nodes}:${keys16 ? 16 : 8}`;
     let m = this.motions.get(key);
     if (!m) {
       const e = this.bml.entries[this.modelCount + j];
       if (!e) throw new Error(`${this.name}: no motion ${j}`);
-      m = parseNjmFile(this.bml.get(e.name), nodes, { shortAngles: true });
+      m = parseNjmFile(this.bml.get(e.name), nodes, { shortAngles: !keys16 });
       this.motions.set(key, m);
     }
     return m;
@@ -323,6 +327,8 @@ export interface EnemyMotionSpec {
   // A shape motion entry (.njs, relative to the first motion) drawn at the
   // motion's frame (njDrawShapeMotion); chunk models only.
   shape?: number | undefined;
+  // 16-byte angle keys (EnemyArchive.motion keys16); the enemies' motions are the short form.
+  keys16?: boolean | undefined;
   // The motion keys fewer nodes than the model has (the first `nodes` in
   // depth-first order; the others keep their bind pose): the Saint-Milion
   // tentacle's motions key 32 of its 59 nodes.
@@ -438,7 +444,7 @@ export function buildEnemy(
     }
     partNodes.push(nodes);
     if (part.motion && part.motion.index >= 0 && part.motion.index < own.motionCount) {
-      const motion = own.motion(part.motion.index, part.motion.nodes ?? nodes.length);
+      const motion = own.motion(part.motion.index, part.motion.nodes ?? nodes.length, part.motion.keys16 ?? false);
       const start = motion.frameCount > 1 ? phase * (motion.frameCount - 1) : 0;
       const animator = new NodeAnimator(nodes, flagsDepthFirst(data.object), motion, part.motion.speed, part.motion.loop, part.motion.loop ? start : 0);
       if (shaper) {
