@@ -327,6 +327,8 @@ export class PlayerStatus {
   // press was under FREEZE_MASH_WINDOW game ticks ago; every press restarts the
   // window). `controlled` is the control state +0x32c == 1. Returns true when the
   // press took frames off the freeze. ASSUMED: the press is a key down this frame.
+  // The stick's flick is the same event (input/analog.ts StickFlick, the exe's
+  // stick branch of FUN_007c11d0 sets the same frame slot).
   mash(controlled: boolean): boolean {
     if (!controlled || this.slot1.type !== STATUS.freeze) return false;
     const counted = this.clock - this.lastMash < FREEZE_MASH_WINDOW;

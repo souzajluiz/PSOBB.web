@@ -98,6 +98,11 @@ export interface FxSpec {
 // Heights above the player's feet. HIT_POINT_DY / BODY_DY are ASSUMED (see
 // the header); the others are read: 36 = the block's 0x24, 20 and 10 from the
 // revive entity (0x0096de80) and TriggerDespawnEffect (0x0093ca1c).
+// The exe's hit point is the centre (+0x1c..+0x24, collision_box position2) of
+// the hit box that was flagged this frame (EntityHitEntity_00773350 / FUN_007732b8,
+// the loop over entity+0xa4 with stride 0x2c), not a fixed height: a box's centre
+// is the entity's position plus RotY(heading) * position1 (UpdateObjectMatrix_0051ffdc).
+// The player's own box height is not located (ASSUMED 20).
 export const HIT_POINT_DY = 20;
 export const BODY_DY = 20;
 export const BLOCK_DY = 36;

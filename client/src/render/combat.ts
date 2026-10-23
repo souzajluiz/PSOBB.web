@@ -188,6 +188,7 @@ import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitP
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
 import { haptic } from '../input/haptics.ts';
+import { StickFlick, touchStick } from '../input/analog.ts';
 import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
@@ -548,6 +549,9 @@ export class CombatView {
   private held = new Set<string>();
   // The movement keys down last frame (the freeze mash counts their new presses).
   private heldMove = new Set<string>();
+  // The stick's flicks (CheckMovementInput_007c11d0's stick branch): a flick is a
+  // mash like a new movement key press.
+  private stickFlick = new StickFlick();
   // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
   // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
   placeTrap: ((type: number) => void) | null = null;
@@ -1237,11 +1241,13 @@ export class CombatView {
     if (this.disposed) return;
     const me = this.game.self;
     const view = this.view;
-    // The freeze mash (combat/status.ts mash): a movement key newly down this frame.
+    // The freeze mash (combat/status.ts mash): a movement key newly down this frame,
+    // or a flick of the touch stick (the exe's stick branch of the same check).
     const moveDown = MOVE_KEYS.filter((k) => keys.has(k));
     const moved = moveDown.some((k) => !this.heldMove.has(k));
     this.heldMove = new Set(moveDown);
-    if (moved && this.area !== 0 && !this.damage.dead) this.status.mash(true);
+    const flicked = this.stickFlick.step(touchStick());
+    if ((moved || flicked) && this.area !== 0 && !this.damage.dead) this.status.mash(true);
     if (me && view) {
       const blocked = this.damage.busy || this.status.immobile;
       for (const [key, index] of PALETTE_KEYS) {

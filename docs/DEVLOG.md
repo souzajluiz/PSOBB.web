@@ -10248,3 +10248,28 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The requirement rows (172 / 192 / 212 / 232) are not ported (the rows went with the pages).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` passes. Playwright: `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test item-panel.spec.ts --workers=1 --reporter=line`, 2 runs, both passed (~51 s each). Vite on 5175 was started for the runs and stopped after.
+
+## 2026-10-23: The freeze mash counts stick flicks; the hit point and the gun's start are still ASSUMED
+
+**Report:** the touch stick now counts for the freeze mash like a movement key press (`input/analog.ts` `StickFlick`, `render/combat.ts` frame). The hit point and weapon heights stay ASSUMED: the exe's mechanism is now known, but the player's box height and the writer of `weapon_position` (+0x300) were not located.
+
+**Exe evidence (PsoBB.exe, named dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, `tools/ghidra/decomp.sh`, `tools/exedata.py`):**
+- Freeze mash: `CheckMovementInput_007c11d0` (dump line 808588), called from `InputState0x13InvincibilityCheck_0069d6f4` (dump line 583355). Stick branch: with the shared input state at tracker +0x08, the direction is turned by `(prev - cur) & 0xffff`; a flick is `0x5000 < d < 0xb000` while the movement amount (+0x24) is over `g_MovementSpeedThreshold` = 0.5 (`0x0097e614`, read as 0.5). The flick sets the frame slot as a key press does, and it counts when the previous press or flick was under 8 ticks before. Keyboard branch: unchanged (`was_input_pressed` on the four movement bindings).
+- Stick direction: `unknown_handle_shared_inputs` (dump line 807029): `unknown_camera_input_amount_1 = ROUND(fpatan(lr, fb) * 65536 / 2pi) & 0xffff`, with 2pi at `0x0097e5e8` (the double 0x401921FB54442D18) and 65536 at `0x0097e5f0`. The dead zone (+-31, `0x0097e624` / `0x0097e628`) and the amount `min(1, hypot / 128)` (`0x0097e61c` = 128, `0x0097e618` = 1) are the port's `analog.ts` values.
+- Hit point: `EntityHitEntity_00773350` (Ghidra `FUN_007732b8`, decompiled at `0x00773350`): for each hit box with flag `0x4000000` (`+0x18`), the effect point is `h+0x1c..+0x24` (position2), the centre. Box layout (dump `struct collision_box`): position1 +0x00, radius +0x0c, unk1 +0x10, unk2 +0x14, flags +0x18, position2 +0x1c, damage_reduction +0x28; stride 0x2c, list at entity +0xa4, count at +0xa8. Centre = entity position + RotY(heading) * position1 (`UpdateObjectMatrix_0051ffdc`, dump line 303543).
+- Gun start / aim: `FUN_005e6578` (begin_gun_bullet_attack, `0x005e6578`). The line test starts at (`player+0x300`, origin.y, `player+0x308`); with a lock-on target the aim is the target's box `+0x1c` (position2), pulled back by the distance minus `+0xc` (radius). Without a target, the caller's point. `weapon_position` (player+0x300, the struct's field): writer not located (the dump's copies at 177028, 196121, 198980 are other entity types).
+- The player's box: `SinowberillChallengePlayer_InitializeSpawnData_00695f28` (dump line 576993) builds a round box at +0x758 with radius 5.0 and position1 zero; the DEVLOG's per-class height is not decoded. The normal player's box list (+0xa4) is filled by no constructor the dump names.
+- Earlier entries that say "20 above the feet" (the hit point, the cast point) remain ASSUMED: nothing read sets the 20.
+
+**Ported:**
+- `client/src/input/analog.ts`: `stickAngleBams`, `StickFlick` (the flick test), `FLICK_MIN_BAMS` / `FLICK_MAX_BAMS` / `FLICK_AMOUNT`.
+- `client/src/render/combat.ts`: the freeze mash counts a stick flick (`touchStick()`) with the movement keys; one mash per frame.
+- Comments: `client/src/combat/playerfx.ts` (HIT_POINT_DY: the exe's centre of the hit box, height ASSUMED), `client/src/combat/techfire.ts` (WEAPON_HEIGHT: the line test, the writer), `client/src/combat/status.ts` (mash).
+- `tests/stickflick.test.ts` (new): the BAMS of the directions, the flick window, a half-strength flick (refused), a slow sweep, the wrap, release.
+
+**ASSUMED / UNCLEAR:**
+- The flick is tested once per render frame (the exe: once per game tick, 30 per second), and the tracker starts at direction 0.
+- The gamepad: the port reads no gamepad (`navigator.getGamepads` is only probed in `classic/options.ts`); only the touch stick is ported.
+- HIT_POINT_DY (20), BODY_DY, WEAPON_HEIGHT (20), AIM_HEIGHT (22): UNCLEAR. Next step: the player's box centre (the normal player's box list at +0xa4 and its position1.y) and the caller of `FUN_005e6578` for the origin, then `weapon_position`'s writer (a Ghidra xref to player+0x300 in the player update).
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/gunbullet.test.ts`, `rangedaim`, `playerfx`, `status`, `combatdepth` (842 checks, 0 failures), `mobilecontrols`, `mobileinput`, and the new `node tests/stickflick.test.ts` all pass. No Playwright.

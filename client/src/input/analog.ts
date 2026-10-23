@@ -54,6 +54,39 @@ export function stickAmount({ lr, fb }: StickAxes): number {
   return Math.min(1, Math.hypot(deadZone(lr), deadZone(fb)) / AXIS_MAX);
 }
 
+// The stick's direction in BAMS (0x10000 = a full turn, 0 = forward), the
+// exe's unknown_handle_shared_inputs (named dump, after QuestItemSpawnHandler_007beca0):
+//   unknown_camera_input_amount_1 = ROUND(fpatan(lr, fb) * 65536 / 2pi) & 0xffff
+// with 2pi at 0x0097e5e8 (_g_InputDeadzoneParams) and 65536 at 0x0097e5f0
+// (_deadzone_y). A stick at rest is 0.
+export const BAMS_FULL = 0x10000; // 0x0097e5f0
+export function stickAngleBams(axes: StickAxes | null): number {
+  if (!axes) return 0;
+  return Math.round((Math.atan2(axes.lr, axes.fb) * BAMS_FULL) / (Math.PI * 2)) & 0xffff;
+}
+
+// CheckMovementInput_007c11d0's stick branch (the freeze mash, combat/status.ts
+// mash). Each call stores the direction (the exe's tracker +0x00) and reports a
+// flick: the direction turned by more than 0x5000 and less than 0xb000 BAMS
+// since the last call (112.5 to 247.5 degrees) while the stick is deflected
+// past g_MovementSpeedThreshold = 0.5 (0x0097e614, against the shared
+// movement_input_amount +0x24).
+// ASSUMED: the exe runs the check every game tick (30 per second); here every
+// render frame, and the tracker starts at direction 0.
+export const FLICK_MIN_BAMS = 0x5000; // exclusive
+export const FLICK_MAX_BAMS = 0xb000; // exclusive
+export const FLICK_AMOUNT = 0.5; // g_MovementSpeedThreshold 0x0097e614
+export class StickFlick {
+  private last = 0;
+
+  step(axes: StickAxes | null): boolean {
+    const cur = stickAngleBams(axes);
+    const turned = (this.last - cur) & 0xffff;
+    this.last = cur;
+    return turned > FLICK_MIN_BAMS && turned < FLICK_MAX_BAMS && stickAmount(axes ?? { lr: 0, fb: 0 }) > FLICK_AMOUNT;
+  }
+}
+
 export type Gait = 'stand' | 'walk' | 'run';
 
 // The stand / walk / run states of the stick, stepped once per game frame
