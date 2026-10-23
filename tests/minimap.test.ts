@@ -28,6 +28,8 @@ import {
   komoVariant6Icon,
   falz3Icons,
   falz3TargetColor,
+  F1_MINIMAP_COLOUR,
+  form1Icons,
   fadeColor,
   FALZ3_DEFAULT_COLOR,
   teamColour,
@@ -391,6 +393,31 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
   const far = falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 0, z: 1000 });
   eq(far.length, 1 + 14, 'Dark Falz form 3: the trail stops at 14 icons (360 / 25)');
   eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 5, z: 0 }).length, 1, 'Dark Falz form 3: a prisoner within 25 draws no trail');
+}
+// --- Dark Falz form 1 (UpdateVoloptForm7Behavior, dump 195879; the update 0x00454838) ---
+{
+  const body = { x: 100, z: 200 };
+  const heads = [[1, 25, 2], [3, 25, 4], [5, 25, 6]] as const;
+  const yaw0 = form1Icons(body, heads, 0, 1);
+  eq(yaw0.length, 4 + 4 + 4 + 3, 'Dark Falz form 1: body, three heads, then 4 + 4 + 3 ring icons (11)');
+  eq(yaw0.every((ic) => ic.color === F1_MINIMAP_COLOUR && ic.scale === 5 && ic.shape === 1), true, 'Dark Falz form 1: every icon is 5.0 in 0xffffa24c, shape 1');
+  eq([yaw0[0].x, yaw0[0].z], [100, 200], 'Dark Falz form 1: the first icon is the body');
+  eq([yaw0[1].x, yaw0[1].z, yaw0[2].x, yaw0[2].z, yaw0[3].x, yaw0[3].z], [1, 2, 3, 4, 5, 6], 'Dark Falz form 1: the three heads are the given points, in order');
+  // Yaw 0: the ring at 38 is the four cardinal points, at 76 and 114 likewise.
+  const ring = yaw0.slice(4);
+  const at = (x: number, z: number) => ring.some((ic) => Math.abs(ic.x - x) < 1e-6 && Math.abs(ic.z - z) < 1e-6);
+  eq(at(100 - 38, 200) && at(100, 200 + 38) && at(100 + 38, 200) && at(100, 200 - 38), true, 'Dark Falz form 1: the ring at radius 38 sits on the four cardinal points at yaw 0');
+  eq(at(100 - 76, 200) && at(100 + 76, 200) && at(100, 200 - 76), true, 'Dark Falz form 1: the ring steps to radius 76 (ROUND(37.5 + 38))');
+  eq(at(100 - 114, 200) && at(100, 200 + 114) && at(100 + 114, 200) && !at(100, 200 - 114), true, 'Dark Falz form 1: the last ring is radius 114 (ROUND(37.5 + 76)) with three icons (no fourth, dump iVar6 < 2)');
+  eq(ring.length, 11, 'Dark Falz form 1: the ring holds 11 icons');
+  // Yaw 0x4000 (a quarter turn): the ring's points rotate with the body.
+  const q = form1Icons(body, heads, 1, 0);
+  eq(Math.abs(q[4].x - 100) < 1e-6 && Math.abs(q[4].z - 238) < 1e-6, true, 'Dark Falz form 1: a quarter turn (0x4000) puts the first ring icon at (body.x, body.z + 38)');
+}
+// Dark Falz form 3: white and the trail's frame flag (the frame counter +0x3c8).
+{
+  eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, -1, null, false, false).length, 1, 'Dark Falz form 3: the trail is off on a frame with bit 0 set');
+  eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 60, z: 0 }, true, false)[0].color, 0xffffffff, 'Dark Falz form 3: white with the trail off on the same frame');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);

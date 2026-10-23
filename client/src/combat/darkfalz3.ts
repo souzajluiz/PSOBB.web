@@ -189,6 +189,32 @@ export function f3Spot(slot: number, out: Vec3): Vec3 {
   return out;
 }
 
+// The scale animation (Voloptform7updatescaleanimation0045b9b8, dump 199138): the
+// body's +0x3b8 (scale) and +0x3bc (counter). In the states 2 (WAITKILL) and 3
+// (DEAD) the scale climbs by 0.1 a frame to 1.0 and stops there. Otherwise the
+// counter runs: below 120 the scale is 1; 120..149 it falls by 1/30 a frame to 0;
+// 150..269 it is 0; 270..299 it climbs by 1/30 to 1; from 300 it is 1 and the
+// counter returns to 0. The step constants are the exe's floats (0x009002BC
+// 0.1, 0x009002C0 -1/30, 0x009002C4 1/30; 0x00900460 0.0, 0x00900464 1.0).
+// The sound effects of its transitions (0x38C, 0x38D) are not played.
+// ASSUMED: the form 3 state `st` is the exe's +0x37c (the port's F3 numbers
+// match the table's: waitKill 2, dead 3).
+export function advanceScale(scale: number, count: number, climbing: boolean): { scale: number; count: number } {
+  if (climbing) return { scale: Math.min(scale + 0.1, 1), count };
+  const n = count + 1;
+  if (n < 120) return { scale: 1, count: n };
+  if (n < 150) {
+    const v = scale - 1 / 30;
+    return v >= 0 ? { scale: v, count: n } : { scale: 0, count: n };
+  }
+  if (n < 270) return { scale: 0, count: n };
+  if (n < 300) {
+    const v = scale + 1 / 30;
+    return v <= 1 ? { scale: v, count: n } : { scale: 1, count: n };
+  }
+  return { scale: 1, count: 0 };
+}
+
 export class DfForm3 extends DfEntity {
   st: number = F3.appear;
   timer = 0;
@@ -431,17 +457,33 @@ export class DfForm3 extends DfEntity {
 
   // The minimap body's colour (dark_falz_form3_minimap_icons, +0x3cc), faded once a frame.
   minimapColour: number = FALZ3_DEFAULT_COLOR;
+  // The frame counter of the minimap (+0x3c8, stepped once a frame): bit 2 makes
+  // the body white while the scale is 0, bit 0 clear draws the trail.
+  private minimapFrame = 0;
+  private minimapWhite = false;
+  private minimapTrail = true;
+  // +0x3b8 (scale, ctor 1.0) and +0x3bc (its counter, ctor 0), advanced by advanceScale.
+  scale = 1;
+  private scaleCount = 0;
 
-  // The icons of the body and the prisoner trail (render/minimap.ts draws them).
+  // The icons of the body and the prisoner trail (render/combat.ts draws them).
   minimapIcons(): Icon[] {
     const held = this.held;
     const p = held >= 0 ? this.fight.alive().find((q) => q.clientId === held) : undefined;
-    return falz3Icons({ x: this.x, z: this.z }, this.minimapColour, held, p ?? null);
+    return falz3Icons({ x: this.x, z: this.z }, this.minimapColour, held, p ?? null, this.minimapWhite, this.minimapTrail);
   }
 
   tick(): void {
     const target = falz3TargetColor(this.held);
     if (target !== null) this.minimapColour = fadeColor(this.minimapColour, target);
+    // dark_falz_form3_minimap_icons reads the scale before this frame's animation
+    // and the counter before it steps (dump 199061, 199064, 199070, 199130).
+    this.minimapWhite = this.scale === 0 && (this.minimapFrame & 4) !== 0;
+    this.minimapTrail = (this.minimapFrame & 1) === 0;
+    this.minimapFrame += 1;
+    const next = advanceScale(this.scale, this.scaleCount, this.st === F3.waitKill || this.st === F3.dead);
+    this.scale = next.scale;
+    this.scaleCount = next.count;
     const f = this.fight;
     // A prisoner that left or died is let go.
     if (this.held >= 0 && !f.alive().some((p) => p.clientId === this.held)) {
