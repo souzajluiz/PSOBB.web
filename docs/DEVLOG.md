@@ -10129,3 +10129,27 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The heading of a remote after the slide is the packet heading; the arrival rule (`m.angle = p.angle` at the last stop) can still reset it when the remote moves again.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/combatdepth.test.ts` (837 checks, 0 failures, the new knockback block included), `node tests/players.test.ts` (ALL PASS), `node tests/playerfx.test.ts` and `node tests/smoothrender.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+## 2026-10-23: The text colour palette checked against the exe; the quest `<color N>` tag draws its colour
+
+**Report:** the palette and the escape rules in `classic/textcodes.ts` already matched the exe; this pass read the table back from PsoBB.exe, checked the parser's branches, and found that the quest message tag `<color N>` was dropped instead of becoming the colour escape. The fix is in. The ROADMAP's "text colour palette" item is closed.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `src/Psobb.exe-05112026.c`):**
+- Table: `g_TextColorTable` (`DAT_0097da10`, indexed by the character code, so '0' = 0x30 sits at 0x0097dad0). `tools/exedata.py read 0x0097dad0 u 10` gives 0xff000000, 0xff0000ff, 0xff00ff00, 0xff00ffff, 0xffff0000, 0xffff00ff, 0xffffff00, 0xffffffff, 0xffff8080, 0xff8080ff (4-byte words, read as `u`). These are the D3DCOLOR words the vertex stage takes, the same form as the 'G' default.
+- Parser, `unknown_render_text3` (0x007ab554, dump line 792027): `\t` + `J` / `E` skip 2; `\t` + `C` + one char skips 3; a digit (`0x2f < c < 0x3a`) takes `DAT_0097da10 + c*4`; `G` takes `g_pUITextColorTable + 0x24`, or 0xffffea00 when that table is not loaded; other characters keep the colour. The colour is kept over a newline.
+- `string_parse_locale_and_color_prefix` (dump line 792795) does the same for the leading prefix and copies the dword. Its `struct rgba8888 {r,g,b,a}` names bytes in memory order, which is the same dword.
+- `unknown_render_text` (dump line 684278, the text objects of windows, balloons and the board) calls the parser before every glyph, so a mid-string escape colours the glyphs after it. The port's `textGlyphs` does the same.
+- Quest tag `<color N>` (interpolation, dump lines 603000-603120): `quest_get_string_tag_color` scans `"color %d"` (`0x00969a1c`); `quest_color_to_string` prints `"\tC%d"` (`0x00969a30`) into the message buffer, so the message gets the colour escape.
+
+**Ported:**
+- `client/src/classic/textcodes.ts`: `expandColorTags` (`<color N>` to `\tC<N>`; the literal is case-sensitive and trailing text is ignored, as swscanf does). The palette comment cites the verification and the struct byte-order note.
+- `client/src/quest/questui.ts`: `questText` expands the tag (it used to delete it), so every quest text path (balloons, window, board, lists, HUD windows) gets the colour.
+- `tests/textcodes.test.ts`: the tag cases (the colour, no glyph, the case rule).
+- `docs/ROADMAP.md`: the palette removed from the four open Quests lines; a [x] line added before each of them.
+
+**ASSUMED / UNCLEAR:**
+- `quest_color_to_string(void)` loses its argument in the decompile; the printed number is taken to be the N that the scan read (ASSUMED).
+- `\tCG` with the UI table loaded reads `g_pUITextColorTable + 0x24` (the quick-menu object). Its constructor zeroes that field (dump line 677407) and no writer was found by grep, so a loaded value is UNCLEAR. The port keeps the default #ffea00 (ASSUMED).
+- `RenderText3D_007ac12c`, `render_text3_`, `render_text3_at_xy_with_white_color`, and the grave and name labels call `unknown_render_text3` with `colorsEnabled = 0`: their `\tC` escapes are skipped with no colour change, while the port's `drawGameText` colours them. Not changed: the port's callers were not mapped to these exe paths (UNCLEAR); quest text uses the text-object path, which colours.
+- The text objects' `maybe_ignore_color_prefix` flag (the 5th argument of `unknown_render_text`) is not modelled; no quest path was found that uses it.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/textcodes.test.ts`, `tests/chatline.test.ts`, `tests/quests.test.ts`, `tests/questmisc.test.ts`, `tests/questflow.test.ts`, `tests/questboard.test.ts` pass. Not run: Playwright / Chrome (per the brief).

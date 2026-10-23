@@ -15,8 +15,13 @@
 
 // g_TextColorTable is rgba8888[58] indexed by the character code (DAT_0097da10
 // in unknown_render_text3, 0x007ab554): '0' = 0x30 sits at 0x0097dad0. Ten
-// 0xAARRGGBB words read from the exe there (VERIFIED: the words are the
-// colours as D3DCOLOR, the same form as the 0xffffea00 constant below), as CSS.
+// 0xAARRGGBB words read from the exe there (VERIFIED 2026-10-23 with
+// `tools/exedata.py read 0x0097dad0 u 10`: ff000000 ff0000ff ff00ff00 ff00ffff
+// ffff0000 ffff00ff ffffff00 ffffffff ffff8080 ff8080ff; the words are the
+// colours as D3DCOLOR, the same form as the 0xffffea00 constant below, as CSS).
+// The dump's `struct rgba8888 {r,g,b,a}` (string_parse_locale_and_color_prefix,
+// Psobb.exe-05112026.c line 792795) names the bytes in memory order, so it copies
+// the same dword; the colour the vertex stage sees is that dword (unknown_render_text3).
 export const TEXT_COLORS: readonly string[] = [
   '#000000', // \tC0  0xff000000
   '#0000ff', // \tC1  0xff0000ff
@@ -65,6 +70,16 @@ export function textGlyphs(text: string, base = '#ffffff'): Glyph[] {
     i++;
   }
   return out;
+}
+
+// The quest message tag <color N> (the exe's string interpolation,
+// quest_get_string_tag_color 0x006b15da: swscanf "color %d"; quest_color_to_string
+// 0x006b1605: swprintf "\tC%d", the N it was given). The tag becomes the colour
+// escape, so a message's colour is the palette's (ASSUMED: N is the value the
+// scan read; the decompile loses the argument of quest_color_to_string).
+// The literal "color" is matched case-sensitively, as swscanf does.
+export function expandColorTags(text: string): string {
+  return text.replace(/<color\s*(-?\d+)[^>]*>/g, (_, n: string) => `\tC${Number(n)}`);
 }
 
 // `text` without any escape.
