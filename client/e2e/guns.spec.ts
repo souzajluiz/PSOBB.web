@@ -46,7 +46,9 @@ const HOLD_MS = 50; // the in-page presses of the chain (installHooks): a few fr
 const WEAPONS = [
   { name: 'Handgun', kind: 6, bursts: 1, pellets: 1 },
   { name: 'Rifle', kind: 7, bursts: 1, pellets: 1 },
-  { name: 'Shot', kind: 9, bursts: 1, pellets: 5 },
+  // The Shot's ctor writes 0 to the shot callback +0x238 (0x005fe19c) and begin_gun_bullet_attack
+  // skips a null callback (0x005e695d), so its six pellets draw no trail: 0 visible pellets.
+  { name: 'Shot', kind: 9, bursts: 1, pellets: 0 },
   { name: 'Mechgun', kind: 8, bursts: 1, pellets: 1 },
   { name: 'Samba Maracas', kind: 0x48, bursts: 3, pellets: 1 },
 ] as const;
