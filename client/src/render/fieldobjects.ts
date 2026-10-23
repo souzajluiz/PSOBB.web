@@ -555,6 +555,11 @@ export class FieldObjects {
     return this.delayed.has(index);
   }
 
+  // A switch flag of this floor is set (IsSwitchUnlockedOnCurrentFloor_00816eec).
+  switchOn(flag: number): boolean {
+    return this.flags.has(flag);
+  }
+
   // construct_objects(room, group) on this floor: the delayed objects of that
   // room and group appear. Returns how many did.
   construct(room: number, group: number): number {

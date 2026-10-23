@@ -41,8 +41,9 @@ import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
-import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, type MinimapPlayer } from '../classic/minimap.ts';
+import { ENEMY_ICON_COLOR, MinimapFloors, MinimapState, raderHideInside, raderIconIcon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
 import type { AreaMapInput } from '../classic/areamap.ts';
+import type { Icon } from '../classic/minimap.ts';
 import type { QuestBoardVM } from '../classic/questboard.ts';
 import { disposeMinimapAssets, loadMinimapAssets, MinimapView } from './minimap.ts';
 import { AREA_TEXT } from './warpmenu.ts';
@@ -59,6 +60,8 @@ export interface MinimapSource {
   enemies: () => readonly { x: number; z: number }[]; // live enemies on this floor
   cameraYaw: () => number; // the camera's y_rotation (BAMS)
   hidden: () => boolean; // a talk camera or a UI that blocks the player's input
+  switchOn: (flag: number) => boolean; // a switch flag of this floor (TObjRaderIcon colour)
+  doorIcons: () => readonly Icon[]; // the doors' icons (TObjDoor, this floor)
 }
 
 // A TObjRaderCol (0x0017): radius param1, room param4.
@@ -146,6 +149,8 @@ export class FieldHud {
   private minimapView = new MinimapView();
   private minimapAssets = false;
   private raderCols: RaderColState[] = [];
+  private raderHides: RaderHide[] = [];
+  private raderIcons: readonly RaderIconObject[] = [];
   private floorToken = 0;
   // The HUD's flags (+0x1c): bit 1 while the full map is up, 0x10 while the
   // Quest Board window is (the status window closes, classic/hud.ts
@@ -348,7 +353,7 @@ export class FieldHud {
   // A floor loaded (render/gameview.ts): its minimap (map_*r.rel from the
   // floor's n.rel; none on Pioneer 2 or the Lab) and its TObjRaderCol objects.
   // `read` gives null for a file the data folder does not hold.
-  async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array | null>, raderCols: readonly RaderCol[] = []): Promise<void> {
+  async enterFloor(floor: number, map: number, geometry: string | null, read: (name: string) => Promise<Uint8Array | null>, raderCols: readonly RaderCol[] = [], raderHides: readonly RaderHide[] = [], raderIcons: readonly RaderIconObject[] = []): Promise<void> {
     const token = ++this.floorToken;
     // The floor change destroys the Area Map window (its destructor clears
     // HUD flag bit 1 and minimap_type) and the Quest Board window (0x10).
@@ -357,6 +362,8 @@ export class FieldHud {
     this.minimap.enterFloor(floor, map, null, this.minimapFloors);
     this.minimapView.setRooms(null);
     this.raderCols = raderCols.map((c) => ({ ...c, state: 0, wait: RADER_COL_DELAY, done: false }));
+    this.raderHides = raderHides.map((h) => ({ ...h, inside: false }));
+    this.raderIcons = raderIcons;
     const name = geometry ? minimapFileFor(geometry) : null;
     let data: MinimapData | null = null;
     if (name) {
@@ -386,6 +393,13 @@ export class FieldHud {
     if (data) this.opts.log?.(`minimap: ${name}, ${data.rooms.length} rooms`);
   }
 
+  // One frame of the TObjRaderHideCol objects (FUN_00663400): the local player
+  // inside the radius hides the minimap, leaving shows it again.
+  private tickRaderHides(self: MinimapPlayer | null): void {
+    if (!self) return;
+    for (const h of this.raderHides) h.inside = raderHideInside(h, self);
+  }
+
   // One frame of the radar collision objects (radar_collision_update).
   private tickRaderCols(self: MinimapPlayer | null): void {
     for (const c of this.raderCols) {
@@ -413,6 +427,7 @@ export class FieldHud {
   private minimapShown(): boolean {
     const m = this.minimap;
     if (!m.ready || this.counter) return false;
+    if (this.raderHides.some((h) => h.inside)) return false;
     if (this.menu.isOpen && m.type !== 1) return false;
     if (this.opts.blocked() && m.type !== 1) return false;
     return !(this.opts.minimap?.hidden() ?? false) || (this.hudFlags & 1) !== 0;
@@ -541,6 +556,7 @@ export class FieldHud {
       this.opts.items.tickDrops();
       this.counter?.tick();
       const src = this.opts.minimap;
+      if (src) this.tickRaderHides(src.self());
       if (src && this.minimap.loaded) {
         const self = src.self();
         this.tickRaderCols(self);
@@ -603,6 +619,10 @@ export class FieldHud {
     if (this.minimapShown()) {
       // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
       for (const e of this.opts.minimap?.enemies() ?? []) this.minimap.addIcon({ x: e.x, z: e.z, color: ENEMY_ICON_COLOR, shape: 1, scale: 1, heading: 0 });
+      // The TObjRaderIcon switches and the doors (their own update adds them).
+      const src = this.opts.minimap;
+      for (const r of this.raderIcons) this.minimap.addIcon(raderIconIcon(r, (f) => src?.switchOn(f) ?? false));
+      for (const ic of src?.doorIcons() ?? []) this.minimap.addIcon(ic);
       // The radar follows the right edge; the full map stays in its window.
       ctx.save();
       ctx.translate(0, this.minimap.type === 0 ? 0 : bands.bottom);

@@ -25,7 +25,7 @@ import { se } from '../audio/se.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
 import { FieldHud } from './fieldhud.ts';
-import { radToBams, type MinimapPlayer } from '../classic/minimap.ts';
+import { doorIcon, raderIconObject, radToBams, type Icon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
 import { EnemyLayer } from './enemyview.ts';
@@ -203,6 +203,8 @@ export class GameView {
           return out;
         },
         enemies: () => this.combat.minimapEnemies(),
+        switchOn: (flag) => this.fieldObjects?.switchOn(flag) ?? false,
+        doorIcons: () => this.doorMinimapIcons(),
         cameraYaw: () => {
           const v = this.view?.cameraView();
           return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
@@ -595,7 +597,16 @@ export class GameView {
     const raderCols = placedObjects
       .filter((p) => p.entity.kind === 'object' && p.entity.type === 0x17)
       .map((p) => ({ x: p.world[0], z: p.world[2], radius: p.entity.kind === 'object' ? p.entity.params[0] : 0, room: p.entity.kind === 'object' ? p.entity.params[3] : -1 }));
-    void this.hud.enterFloor(floor, area, geometry, (name) => readIfPresent(this.source, `scene/${name}`), raderCols);
+    // TObjRaderHideCol (0x1f: radius param1) and TObjRaderIcon (0x27) of the floor.
+    const raderHides: RaderHide[] = [];
+    const raderIcons: RaderIconObject[] = [];
+    for (const p of placedObjects) {
+      if (p.entity.kind !== 'object') continue;
+      const pos = { x: p.world[0], y: p.world[1], z: p.world[2] };
+      if (p.entity.type === 0x1f) raderHides.push({ ...pos, radius: p.entity.params[0], inside: false });
+      else if (p.entity.type === 0x27) raderIcons.push(raderIconObject(p.entity.params, pos, radToBams(p.yaw)));
+    }
+    void this.hud.enterFloor(floor, area, geometry, (name) => readIfPresent(this.source, `scene/${name}`), raderCols, raderHides, raderIcons);
     this.current = {
       floor,
       area,
@@ -619,7 +630,13 @@ export class GameView {
   // heading as drawn, coloured by client slot.
   private minimapPlayer(clientId: number): MinimapPlayer | null {
     const pose = this.view?.playerPose(clientId);
-    return pose ? { slot: clientId, x: pose.x, z: pose.z, heading: radToBams(pose.angle) } : null;
+    return pose ? { slot: clientId, x: pose.x, y: pose.y, z: pose.z, heading: radToBams(pose.angle) } : null;
+  }
+
+  // The doors of the floor as minimap icons (TObjDoor: red while locked).
+  private doorMinimapIcons(): Icon[] {
+    const doors = this.fieldObjects?.doors ?? [];
+    return doors.filter((d) => !d.city).map((d) => doorIcon(d.x, d.z, radToBams(d.yaw), d.state === 0));
   }
 
   // Where the players on the local player's floor stand (the NPCs' collision).
