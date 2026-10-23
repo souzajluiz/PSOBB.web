@@ -4937,7 +4937,7 @@ export class CombatView {
     e.removeIn = 0;
     const plan = deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
     if (plan) {
-      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null };
+      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null, fade: false };
       if (plan.instant) e.instance.root.visible = false;
     }
   }
