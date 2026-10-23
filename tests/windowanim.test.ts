@@ -3,8 +3,20 @@
 // menu leaves.
 //
 // Run: node tests/windowanim.test.ts
-import { CLOSE_FRAMES, OPENED, SE_WINDOW_CLOSE, SE_WINDOW_OPEN, SHINE_END, WindowAnim, WindowShine } from '../client/src/classic/windowanim.ts';
-import { PartyWindows } from '../client/src/classic/hud.ts';
+import {
+  CLOSE_FRAMES,
+  drawElementShine,
+  elementShine,
+  elementShineAlpha,
+  OPENED,
+  SE_WINDOW_CLOSE,
+  SE_WINDOW_OPEN,
+  SHINE_END,
+  WindowAnim,
+  WindowShine,
+  windowShine,
+} from '../client/src/classic/windowanim.ts';
+import { BAR_COLORS, BAR_HOLD_FRAMES, PartyWindows, StatusWindow } from '../client/src/classic/hud.ts';
 
 let failures = 0;
 let checks = 0;
@@ -131,6 +143,92 @@ const check = (ok: boolean, msg: string) => {
   low.state = 2;
   low.counter = SHINE_END - 1;
   check(low.lines(13, 400, 200, 60).length === 0, 'a window below y ~372 never gets the band');
+}
+
+// --- the element shine (RenderAnimationFrame_007129a8) ------------------------
+{
+  // alpha: 160 * 2 t up to the middle, then down; trunc, one byte.
+  check(elementShineAlpha(0.25) === 80 && elementShineAlpha(0.5) === 160, 'alpha ramps up to 160 at t = 0.5');
+  check(elementShineAlpha(0.75) === 80, 'alpha ramps down after 0.5');
+  // Band b = counter * 5 - 100 over an element at x 28, w 228.
+  const saved = windowShine.state;
+  const savedCounter = windowShine.counter;
+  windowShine.state = 2;
+  windowShine.counter = 40; // b = 100, t = 72 / 228
+  const s = elementShine(28, 228);
+  check(!!s && Math.abs(s.t - 72 / 228) < 1e-9 && s.alpha === elementShineAlpha(72 / 228), `band at 100 over x 28..256 (${s?.t})`);
+  windowShine.counter = 10; // b = -50: before the element
+  check(elementShine(28, 228) === null, 'no band before the element');
+  windowShine.counter = 30; // b = 50
+  check(elementShine(28, 228) !== null, 'band inside from b > x');
+  windowShine.counter = 70; // b = 250 < 256
+  check(elementShine(28, 228) !== null, 'band still inside near the right edge');
+  windowShine.counter = 72; // b = 260 > 256
+  check(elementShine(28, 228) === null, 'no band past the right edge');
+  windowShine.state = 1;
+  windowShine.counter = 40;
+  check(elementShine(28, 228) === null, 'nothing unless the shine runs (state 2)');
+  windowShine.state = saved;
+  windowShine.counter = savedCounter;
+
+  // Drawing: one 1-px column per texel with a ramped alpha; the band's column
+  // at the peak.
+  const calls: Array<{ a: number; sx: number; dx: number; sy: number; sh: number }> = [];
+  let alpha = 1;
+  const ctx = {
+    save() {},
+    restore() {},
+    globalCompositeOperation: 'source-over',
+    get globalAlpha() {
+      return alpha;
+    },
+    set globalAlpha(v: number) {
+      alpha = v;
+    },
+    drawImage(_src: unknown, sx: number, sy: number, _sw: number, sh: number, dx: number) {
+      calls.push({ a: alpha, sx, dx, sy, sh });
+    },
+  } as unknown as CanvasRenderingContext2D;
+  windowShine.state = 2;
+  windowShine.counter = 40; // b = 100: the band at column 72 of x 28, w 228
+  windowShine.last = performance.now();
+  drawElementShine(ctx, {} as CanvasImageSource, 28, 37, 228, 76, [0, 0, 228, 76]);
+  windowShine.state = saved;
+  windowShine.counter = savedCounter;
+  check(calls.length === 228, `one column per texel (${calls.length})`);
+  check(calls[0].a < 0.01, 'left edge is clear');
+  const peak = calls.reduce((m, c) => Math.max(m, c.a), 0);
+  check(Math.abs(peak - elementShineAlpha(72 / 228) / 255) < 0.01, `peak alpha at the band (${peak})`);
+  check(calls.every((c) => c.sy === 0 && c.sh === 76), 'texel rows 0..76');
+  check(calls[227].dx === 28 + 227 && calls[227].sx === 227, 'columns map 1:1');
+}
+
+// --- TP use: the status window's TP bar drains like the exe's bar ---------------
+{
+  // QuickMenuTPBarUpdate_00742378 reads tp2 each frame; a technique's cost is
+  // taken from tp2 at its release (HandleHeavySpecialAttackUnsafeMap), and
+  // nothing else touches the bar: the drain is the bar's own hold and slide.
+  const w = new StatusWindow();
+  const v = { name: 'A', slot: 0, level: 1, hp: 40, maxHp: 40, tp: 29, maxTp: 29, pb: 0, dead: false };
+  const rng = () => 0.5;
+  w.tick(v, rng);
+  for (let i = 0; i < 200; i++) w.tick(v, rng);
+  check(w.tp.shown === 120 && w.shake.frames === 0, 'full TP bar, no shake');
+  // Spend 19 TP (29 -> 10): the bar keeps its width for 0x24 frames.
+  const spent = { ...v, tp: 10 };
+  w.tick(spent, rng);
+  check(w.tp.shown === 120, 'TP drop: the drawn width is held');
+  for (let i = 0; i < BAR_HOLD_FRAMES - 1; i++) w.tick(spent, rng);
+  check(w.tp.shown === 120, 'still held after 0x24 frames');
+  w.tick(spent, rng);
+  check(w.tp.shown === 118, 'then the bar slides 2 a frame');
+  for (let i = 0; i < 100; i++) w.tick(spent, rng);
+  check(Math.abs(w.tp.shown - (120 * 10) / 29) < 1e-9, `settles at 10 / 29 (${w.tp.shown})`);
+  check(w.shake.frames === 0, 'a TP drop does not shake the window (only HP does)');
+  check(w.tp.color === BAR_COLORS.tp.normal && w.tpText === BAR_COLORS.tp.text, 'TP 10 of 29 is not low');
+  const low = { ...v, tp: 5 };
+  for (let i = 0; i < 20; i++) w.tick(low, rng);
+  check(w.tp.color === BAR_COLORS.tp.low && w.tpText === BAR_COLORS.tp.lowText, 'TP 5 of 29 fades to the low colour');
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);

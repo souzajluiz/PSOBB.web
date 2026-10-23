@@ -65,7 +65,7 @@
 // 0x00973084), and the HP / TP texts take the same colour (white otherwise).
 
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { clipReveal, WindowAnim, withWindowAnim } from './windowanim.ts';
+import { clipReveal, drawElementShine, WindowAnim, withWindowAnim } from './windowanim.ts';
 
 export const STATUS_WINDOW = { x: 28, y: 37, w: 228, h: 76 } as const;
 
@@ -494,6 +494,8 @@ export class StatusWindow {
       drawPbGauge(ctx, wx, wy, v.pb);
       drawModulated(ctx, tex.panel, 118, 80, 69, 80, 0, 0, 69, 80);
       drawModulated(ctx, tex.panel, 0, 0, 228, 76, wx, wy, 228, 76);
+      // The element shine over the background (render_player_hud_bg, 0x00743b60).
+      drawElementShine(ctx, tex.panel, wx, wy, STATUS_WINDOW.w, STATUS_WINDOW.h, [0, 0, 228, 76]);
       // Elements in list order.
       drawModulated(ctx, tex.icons, 34 * (v.slot & 3), 202, 34, 29, wx + 27, wy + 16, 34, 29);
       // Name: the player's name colour (+0x948), red while dead
@@ -690,6 +692,8 @@ export class PartyWindow {
     const text = (ex: number, ey: number, left: number, draw: () => void) => wiped(ctx, a, W, ex, ey, wx + left, wy + ey, draw);
     withWindowAnim(ctx, a, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h, () => {
       drawModulated(ctx, tex.panel, 0, 180, 114, 46, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h);
+      // The element shine over the background (QuestListEntry_Render_0073eb60).
+      drawElementShine(ctx, tex.panel, wx, wy, PARTY_WINDOW.w, PARTY_WINDOW.h, [0, 180, 114, 226]);
       drawModulated(ctx, tex.icons, 34 * (this.slot & 3), 202, 34, 29, wx + 7, wy + 7, 34, 29);
       text(45, 40, 45, () => drawGlyphText(ctx, tex.font, v.name, wx + 45, wy + 40, v.dead ? 0xffff0000 : (v.nameColor ?? 0xffffffff)));
       text(100, 19, 100 - numberWidth(v.level), () => drawGlyphNumber(ctx, tex.font, v.level, wx + 100, wy + 19));
