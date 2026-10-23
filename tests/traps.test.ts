@@ -3,9 +3,32 @@
 //     local player only, the hold time, the release (6x2D), the sink, idle;
 //  2. TOTrapAncient02R: switch flag gate, technique and level, sink;
 //  3. TODoorVoShip: the seal bits from quest flags 0x2c..0x2f, the lamp
-//     order, the alpha swing.
+//     order, the alpha swing;
+//  4. TOTrapSeabed01 (0x0228, the Seabed capture trap): the cloak flag from
+//     param5, the trap vision bit (0x10000) and the same-room check of
+//     IsPlayerVisibleToPartTrap, the sticky reveal, the view distance and the
+//     draw modes of render_capturetrap.
 // Run: node tests/traps.test.ts
-import { PillarTrap, RISE_1, RISE_2, SealDoor, TRAP_HOLD, TRAP_TECH, trapSe, type TrapEvent, type TrapPlayer } from '../client/src/render/traps.ts';
+import {
+  CAPTURE_RADIUS,
+  CaptureTrap,
+  captureTrapCloaked,
+  captureTrapDraw,
+  hasTrapVision,
+  PillarTrap,
+  RISE_1,
+  RISE_2,
+  SealDoor,
+  TRAP_CAPTURE,
+  TRAP_HOLD,
+  TRAP_TECH,
+  trapSe,
+  trapVisionSeen,
+  withinViewDistance,
+  type TrapEvent,
+  type TrapPlayer,
+  type VisionPlayer,
+} from '../client/src/render/traps.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -93,6 +116,41 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   check(!d.sealed, 'flag 0x2f opens the seal');
   const e = new SealDoor((f) => f === 0x2e);
   check(e.lamps().join() === 'true,true,false', 'the ctor already reads the flags (0x2e: bit 8)');
+}
+
+// 4. Seabed capture trap (0x0228) and trap vision.
+{
+  check(TRAP_CAPTURE === 0x0228 && CAPTURE_RADIUS === 15, 'TOTrapSeabed01 id 0x0228, radius 15');
+  check(captureTrapCloaked([0, 0, 0, 0, 1, 0]) && captureTrapCloaked([0, 0, 0, 0, 2.9, 0]), 'param5 above 0 cloaks');
+  check(!captureTrapCloaked([0, 0, 0, 0, 0, 0]) && !captureTrapCloaked([0, 0, 0, 0, -1, 0]), 'param5 0 or below: not cloaked');
+  check(!captureTrapCloaked([]) && !captureTrapCloaked([0, 0, 0, 0, 0.5, 0]), 'missing param5 is not cloaked; 0.5 truncates to 0');
+  check(hasTrapVision(0x10000) && !hasTrapVision(0x20000) && !hasTrapVision(0xffff), 'the trap vision bit is 0x10000 only');
+
+  const room = 7;
+  const seeing: (VisionPlayer | null)[] = [null, { room: 3, flags: 0 }, { room, flags: 0x10000 }, null];
+  check(trapVisionSeen(room, seeing), 'a player in the trap room with the bit reveals it');
+  check(!trapVisionSeen(8, seeing), 'a player with the bit in another room does not');
+  check(!trapVisionSeen(room, [{ room, flags: 0x20000 }]), 'other flags do not');
+  check(!trapVisionSeen(room, [null, null, null, null, { room, flags: 0x10000 }]), 'only the four player slots count');
+
+  const ct = new CaptureTrap([0, 0, 0, 0, 1, 0]);
+  check(ct.cloaked && ct.radius === 15 && ct.state === 0, 'a new cloaked capture trap is idle');
+  ct.frame([{ room, flags: 0 }], room);
+  check(ct.state === 0 && !ct.revealed, 'no trap vision: stays idle');
+  ct.frame(seeing, room);
+  check(ct.revealed && ct.state === 1, 'trap vision in the room: state 1');
+  ct.frame([], room);
+  check(ct.revealed, 'the reveal is sticky (nothing sets state 0 again)');
+
+  check(withinViewDistance(0) && withinViewDistance(-400) && !withinViewDistance(-400.5) && !withinViewDistance(1), 'view distance 400 in front of the camera');
+
+  // The draw does not read the reveal: a cloaked trap draws the same before and after.
+  const before = captureTrapDraw(true, true, true, false);
+  check(before === 'cloak' && captureTrapDraw(true, true, true, false) === before, 'cloaked, advanced effects on: the cloak pass');
+  check(captureTrapDraw(true, false, true, false) === 'hidden', 'cloaked, advanced effects off: not drawn while idle or revealed');
+  check(captureTrapDraw(false, false, true, false) === 'plain', 'not cloaked: the plain model');
+  check(captureTrapDraw(true, false, true, true) === 'plain', 'sprung (state 2+): the active draw has no cloak check');
+  check(captureTrapDraw(true, true, false, false) === 'hidden', 'out of the view distance: hidden');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');
