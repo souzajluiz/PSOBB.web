@@ -42,7 +42,7 @@ import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
-import { Question, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
+import { Question, TeamInfoWindow, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
@@ -144,6 +144,8 @@ export class LobbyScreen implements Screen {
   private team: TeamMenus | null = null;
   // Home menu > Team > Team Member List (0x25, teammenu.ts TeamMemberListWindow).
   private teamList: TeamMemberListWindow | null = null;
+  // Home menu > Team > Team Info (0x2b, teammenu.ts TeamInfoWindow): 18EA / 19EA answers.
+  private teamInfo: TeamInfoWindow | null = null;
   // The info window [15:6] shown from Change SHIP / Change BLOCK until the
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
@@ -260,7 +262,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.teamInfo || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -412,6 +414,11 @@ export class LobbyScreen implements Screen {
         t15: (i) => this.hud.text(0x0f, i),
       });
       this.teamList.show();
+      this.menu.leafOpen = true;
+    } else if (id === 0x2b && this.hud.team) {
+      // handle_player_menu_select team_info_menu (classic/teammenu.ts TeamInfoWindow).
+      this.teamInfo = new TeamInfoWindow(this.hud.team, (i) => this.hud.text(0x0b, i));
+      this.teamInfo.show();
       this.menu.leafOpen = true;
     } else if (id === 6) {
       const full = () => this.hud.fullCharacter?.() ?? null;
@@ -602,6 +609,14 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.teamInfo) {
+      e.preventDefault();
+      if (!this.teamInfo.key(e)) {
+        this.teamInfo = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
       e.preventDefault();
       if (!this.counter.open) {
@@ -661,6 +676,7 @@ export class LobbyScreen implements Screen {
     this.party?.close();
     this.team?.close();
     this.teamList = null;
+    this.teamInfo = null;
     this.symbolList = null;
     this.closeOptions();
     this.menu.close();
@@ -689,6 +705,7 @@ export class LobbyScreen implements Screen {
       this.party?.draw(ctx, this.hud.skin, extra, bands.bottom);
       inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
       inBand(ctx, bands.mid, () => this.teamList?.draw(ctx, this.hud.skin, extra));
+      inBand(ctx, bands.mid, () => this.teamInfo?.draw(ctx, this.hud.skin, extra));
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));

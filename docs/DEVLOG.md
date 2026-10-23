@@ -14131,3 +14131,41 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+## 2026-10-23: Team Info (0x2b) ported; Team Log labels identified
+
+**Premise checked.** The brief said Team Info sends 18EA for "Point Information" and 19EA for "Earned Privileges List". The exe agrees: `FUN_0074c364` (process, vtable 0x00b41e08 slot 1) sends 18EA (`FUN_007f67e0`: size 8, sub 0x18, flag 0) for row 0 and 19EA (`FUN_007f6810`: size 8, sub 0x19, flag 0) for row 1. The rows are unitxt (11, 0x170) and (11, 0x171). The packets already exist in `net/team.ts` (`intraRanking`, `rewards(owned)`) and match newserv (`SendCommands.cc` `send_intra_team_ranking` / `send_team_reward_list`, `CommandFormats.hh` S_IntraTeamRanking_BB_18EA and S_TeamRewardList_BB_19EA_1AEA): no port change was needed there.
+
+**Exe evidence** (Ghidra via `tools/ghidra/decomp.sh`, dump lines in `refsrc/.../Psobb.exe-05112026.c`):
+- Constructor `FUN_0074c23c` (dump 720228): `CreateListWindow_0074c2d4` at get_gui_position(3) (static 0x00971f58 = (13, 256)); rows `FUN_0079317c(0x170)` / `(0x171)` with value 0 / 1 and flags has_cursor | unk2; the constructor also sets `g_GuildCardMenu_IsOpen = this` (the dump's name for that global is misleading: it is the open Team Info window here).
+- EA handler table (`pso_protocol_packet_ea_handler`, 0x00a0f800, 8-byte pairs (sub, handler), read with `tools/exedata.py read 0x00a0f800 u 66`): sub 0x18 -> 0x007c4ef4, sub 0x19 -> 0x007c4f10.
+- 0x007c4ef4 calls `0x0074c5b0` (dump name GuildCardMenu_UpdateHandler) then `0x0079f534` (reads answer +0x10 = num points remaining; shows "%s%d pt" only in state 0x4d, not ported). 0x0074c5b0 -> `SetState_0074c5c4`: state byte +0x1c = 3, and the points window `ChallengePlayer_CreateGuildCardSearchWindow_0074fa2c` (0x2608 bytes, `FUN_0074faa4`: copies the answer into the window at +0x70, count read at +0x84 = answer +0x14 = num_entries, pages of 7, GUI 0x1a = (299, 256) static 0x00972010). Its process is `FUN_0074fc00`, draw `FUN_0074fd8c`: not traced further.
+- 0x007c4f10 calls `0x0074c5f4` -> `ChallengePlayerInfoWindow_ShowSubmenu_0074c608` (state 5): a list at get_gui_position(3) + (0, `DAT_009739c0` = 40), `ListWindowObject_Initialize_007361d0(400, 140)`; rows are the names at record +0 (count at answer +8 = num_entries of 0x188 records, names at packet +0xc); no record -> unitxt (11, 0xee). The cursor row's description (record +0x80) is added by `AddListItem_0074c564` to the list returned by `GetListItemAtScreenY_0074c748` (get_gui_position(0x8a) = (419, 256), y 180).
+- State machine `FUN_0074c364`: state 0 -> 1 (list); state 1: Cancel closes (state 6), a decided row sends (row 0 -> 2, row 1 -> 4); state 3 and 5: Cancel -> state 0 (the list again).
+- Dispatch of the team leaves (`handle_player_menu_select`, dump 700380..700426) is unchanged from the DEVLOG of 2026-10-23 (Member List).
+
+**Team Log (0x27) labels, identified.** `FUN_0079317c(i)` is `*(DAT_00a9cd50 + 0x2c + 4 * i)`, the same as the dump's `unitxt_get_group_11_String(i)` (`*(unitxt + 0x2c + 4 * i)`, dump 772855): DAT_00a9cd50 is the `unitxt` global. So the earlier "not unitxt group 11" note was wrong. `FUN_0074d618` (Team Log, `GameListMenu_Constructor_0074d5e8`, get_gui_position(0x16) = (13, 256) static 0x00971ff0): the title is (11, 0x157) (`FUN_00737ae4`), rows (11, 0x158) value 0 and (11, 0x159) value 1 (`FUN_00714d34`). Its answer (state 2) is not traced: no window is ported.
+
+**Port changes:**
+- `client/src/classic/teammenu.ts`: `TeamInfoWindow` (list, points / rewards sub-lists, Cancel, the late-answer drop), constants `TEAM_INFO_POS`, `TEAM_INFO_POINTS_POS`, `TEAM_INFO_REWARDS_POS`, `TEAM_INFO_DESC_POS`, `T11_TEAM_INFO`, `T11_TEAM_LOG`. `TeamHost` gets optional `intraRanking()` and `rewards(owned)`.
+- `client/src/classic/main.ts`: `teamHost` passes `intraRanking` and `rewards` from the session's `TeamClient`.
+- `client/src/classic/lobby.ts`: Home menu 0x2b opens `TeamInfoWindow` (when in a team); keys, close and draw wired like the Member List.
+- `tests/teammenu.test.ts`: a Team Info block (24 checks): the constants, the 18EA rows and the Cancel path, the 19EA names and the description following the cursor, the empty answers (one greyed row), a failed request back to the list, a late answer after Cancel dropped.
+- `docs/ROADMAP.md`: the Team line says what is done and what is left.
+
+**ASSUMED:**
+- The list's position (13, 256) is the static table value of get_gui_position(3) (the Member List uses the same value; the table is not checked against a runtime write).
+- The points window at (299, 256) (GUI 0x1a static) and its rows: `<rank> name points`, not the exe's columns. Its header numbers (ranking points, points remaining) are NOT drawn: the labels are not identified.
+- The reward sub-list at (13, 296), 400 wide, drawn as a PickList (8 rows; the exe's pages are not traced).
+- The description box at (419, 256), 260 wide (the exe's GUI 0x8a is used for the description, but the box's size is not traced).
+- No timeout beyond the TeamClient's 5 s (a timeout goes back to the list).
+- Keys are ignored while the answer is pending (the exe's state 2 / 4 handling of keys is not traced).
+
+**Not checked:** a Chrome view of the windows (the brief says no Playwright); a real 18EA / 19EA against newserv (`tests/team.live.ts` covers the wire).
+
+**Left:**
+- The points window: its header labels and numbers, its layout and paging (vtable 0x00b421b0 draw / process, `FUN_0074fc00` / `FUN_0074fd8c`, the list object at +0x24).
+- The 18EA handler's notice `FUN_0079f534` ("%s%d pt", state 0x4d).
+- Team Log (0x27): the answer's handler (`FUN_0074d618` state 2, `FUN_00751c44`) and what each of its two rows opens.
+- The action leaves (Send Mail, Sent Item, Meet the User), Invite (0x29), Point Regist (0x2d): unchanged from the 2026-10-23 Member List entry.
+
+**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 146 checks), `tests/team.test.ts`, `tests/lobbymenu.test.ts`, `tests/lobbymain.test.ts`, `tests/guildcardmenu.test.ts` pass with Node 24. `client` `npx tsc --noEmit -p .` clean.
