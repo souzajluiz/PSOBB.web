@@ -12160,3 +12160,32 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Tests:** `tests/windowanim.test.ts` (64/64: the scope with no anim draws whole, a window at counter 0 draws no element and no title, an open window draws everything, the mid-wipe reveal of 51 px at the content origin, a row five steps down is hidden, nested scopes restore); `tests/fieldhud.test.ts` (an Item Pack row's icons under the wipe: none at counter 0, both when open, both with no scope). The earlier suites `party`, `level`, `questboard`, `minimap`, `options`, `controls`, `battletraps`, `titlescreen` pass. `tsc --noEmit -p .` (Node 24) shows no error in the touched files; the worktree has no `node_modules`, so the run used the main checkout's `three` (symlinked into `client/node_modules/three` for the test run only). Not run in Chrome (per the brief).
 
 **Left (ROADMAP line stays open):** the Equip / MAG later windows' own animations; the shine of `QuickMenuRenderTextBackground_00742a6c` (its owner is not located); a visual check of the leaves' wipe in the browser.
+## 2026-10-23: Monest death path (set_monest_dead, hit reaction, flinch, kill); Mothmant flinch trigger not in the exe
+
+**What changed:** `combat/enemyfsm.ts` `MonestSpawner` has the hit reaction (state 7), the flinch (4), the kill (8) and the dead rule. `hit(ultimate)` is a non-lethal hit; `die()` is a killing hit, and `tick()` applies the dead rule on every tick while the Monest is dead (not active: flinch; active: kill). `render/combat.ts`: a non-lethal hit on a Monest plays its hit reaction instead of the generic flinch; `killEnemy` and the remote 6x0A dead flag call `die()` and the body is removed when the kill state is entered (`tickMonest` -> `playDeath`). The wire is unchanged: 6x0A with the dead flag, 6x76, the drop request and the EXP request still go out at the killing hit. newserv (`on_update_enemy_state`, ReceiveSubcommands.cc:3470) stores and relays the flags without a Monest model, so no server change.
+
+**Exe evidence (PsoBB.exe, dump lines 299432 / 298682 / 298914 / 298593):**
+- The Monest and the Mothmant share one vtable: `g_Mothman_vtable` = 0x00AFFFE0 (stored by `monest_constructor` 0x005191c0 at 0x0051920c). Slot 0x88 = `flags & 0x200` (enemy was hit), slot 0x8c = `flags & 0x800` (dead) (code at 0x00777ba4 / 0x00777bb0).
+- `EnemyUpdateLoop_0052167c`: dead -> slot 0x104, return 1; else hit -> slot 0x100, return 2.
+- Slot 0x100 = `MothmanProcessState_0051a8dc`: in Ultimate a spawning Monest (state 3) ignores the hit; otherwise a state other than 4 and 7 goes to state 7.
+- Slot 0x104 = 0x0051a8ac (the dump's `set_monest_dead`, matched by the code): state not 9, 8 or 4: +0x3b0 == 0 -> flinch (4), else kill (8).
+- Monest hit reaction (state 7, 0x005197a0): enter animation 6 when active, else animation 2 with 0x4b8 = -6. Check at the animation end: active -> hover (5); not active: HP at 0x334 <= max (0x2bc) / 2 -> flinch (4), else back to the state in +0x380.
+- Monest flinch (state 4, 0x00519b6c): animation 3, +0x380 = 5; check at the animation end -> hover (5).
+- Monest kill (state 8, 0x00519550): enter animation 7, `on_enemy_killed` (EXP and drop), timers; the check goes to 9 later.
+- Hover (5) enter sets +0x3b0 = 1 (the arming). The dead rule runs before every check, so an inactive dead Monest is flinched, hovers for one tick (arming the nest), then dies in state 8 on the next tick.
+
+**Port:** the Monest's own states are the spawner's (no generic flinch, no generic death). The killing hit's wire messages stay where they were (the newserv relay is unchanged), the local body is kept alive through the flinch and hover.
+
+**ASSUMED:**
+- Motion indices by 12 - animation as the other Monest rows: flinch 9, inactive hit 10, active hit 6, kill 5. Speeds 1.
+- The hit reaction's resume state is the state before the hit (the writer of +0x380 in SetEnemyAiState not traced).
+- The Monest's height change (0x4b8 = -6) is not drawn.
+- The EXP and drop go out at the killing hit, as before. The exe runs `on_enemy_killed` when the kill state is entered, a few ticks later for an inactive Monest; the wire timing was kept.
+- `FLAG_HIT` (0x200) on every landed hit, as the port sends it.
+
+**Mothmant flinch (state 6), not wired:** no Mothmant-family code writes state 6. The literal `SetEnemyAiState(..., 6)` writers in the dump are the Monest's own spawn-one entry (0x00519a30, a Monest state), De Rol / Derolle, Lily and other families. The Mothmant's hit path (slot 0x100, above) sends it to state 7 = `HildebearProcessState_00516ed8`, whose enter runs `on_enemy_killed` and the dead initdata. So in the exe a Mothmant's landed hit is a ground kill, not a flinch, and `MothmanAi.flinch()` stays uncalled. ASSUMED / open: this needs a check of the Mothmant's HP (a landed hit kills it on the exe). The port does not change Mothmant behaviour for this.
+
+**Tests:** `node tests/enemyfsm.test.ts` (new Monest block: the inactive kill chain flinch -> hover -> kill, the active kill, the non-lethal hit reaction, the low-HP flinch, the Ultimate spawn hit, a hit ignored in the flinch) passes. `node tests/combatdepth.test.ts` 842 checks pass. `client tsc`: no new errors (the `three` package is missing from this checkout, its errors are unchanged). `tests/enemies.test.ts` needs `three` and was not run. Not run in Chrome.
+
+**Left:** the Mothmant's flinch trigger and its HP check (above); the Monest's status-lock wake (vtable 0x154 == 4); the kill state's own timer (0x4e0) and the dead flag (state 9) are replaced by the death motion and the removal.
+

@@ -1525,10 +1525,14 @@ const MONEST_MOTION = {
   wake: loop(11, 0.3), // animation 1 (ASSUMED motion 11 = 12 - animation)
   hover: loop(8, 0.3), // animation 4
   spawn: once(7, 0.7), // animation 5
+  flinch: once(9, 1), // animation 3 (MothmanProcessState_00519b6c, enter; ASSUMED motion 9 = 12 - animation)
+  hitActive: once(6, 1), // animation 6 (MothmanProcessState_005197a0, enter while active; ASSUMED motion 6)
+  hitInactive: once(10, 1), // animation 2 (the same, while not yet active; ASSUMED motion 10)
+  kill: once(5, 1), // animation 7 (MothmanProcessState_00519550, enter; ASSUMED motion 5)
 };
 
-type MonestStateName = 'intro' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover';
-type MonestOut = { motion: EnemyAiMotion | null; spawn: boolean };
+type MonestStateName = 'intro' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover' | 'flinch' | 'hit' | 'kill';
+type MonestOut = { motion: EnemyAiMotion | null; spawn: boolean; killed?: boolean };
 
 export class MonestSpawner {
   total: number;
@@ -1559,6 +1563,14 @@ export class MonestSpawner {
   private wakeMotionEnded = false;
   private batch: number = 1;
   private interval: number = MONEST_DORMANT.interval;
+  // The hit and death states. `hitPrev` is the state a hit reaction returns to
+  // (+0x380, ASSUMED: the state before the hit). `dying` is set by a killing
+  // hit (set_monest_dead, vtable 0x104): it runs on every tick while the
+  // enemy is dead, before the state's check. `killedNow` is set when the kill
+  // state (8) is entered: the body's death (on_enemy_killed) is then due.
+  private hitPrev: MonestStateName = 'dormant';
+  private dying = false;
+  private killedNow = false;
 
   constructor(param2: number, param3: number) {
     this.total = Math.max(0, Math.min(MONEST.maxTotal, Math.round(param3)));
@@ -1578,6 +1590,12 @@ export class MonestSpawner {
       case 'spawn':
       case 'spawnHover':
         return MONEST_MOTION.spawn;
+      case 'flinch':
+        return MONEST_MOTION.flinch;
+      case 'hit':
+        return this.active ? MONEST_MOTION.hitActive : MONEST_MOTION.hitInactive;
+      case 'kill':
+        return MONEST_MOTION.kill;
     }
   }
 
@@ -1585,6 +1603,7 @@ export class MonestSpawner {
     this.state = state;
     this.frames = 0;
     this.fired = false;
+    if (state === 'kill') this.killedNow = true;
     if (state === 'intro') {
       this.height = MONEST_INTRO.start;
       this.angle = 0;
@@ -1614,11 +1633,26 @@ export class MonestSpawner {
   // One frame. `alive` is the number of its live Mothmants; `animationEnded`
   // is the current animation's end (animation_flags & 0x10). Returns the motion
   // to start (when it changed) and whether a Mothmant is spawned this frame.
-  tick(alive: number, animationEnded: boolean): MonestOut {
+  // `hpLow` is hp <= max / 2 (the hit reaction's test: the HP at 0x334 against
+  // the max at 0x2bc, halved).
+  tick(alive: number, animationEnded: boolean, hpLow = false): MonestOut {
+    this.killedNow = false;
     let motion: EnemyAiMotion | null = null;
+    // set_monest_dead (EnemyUpdateLoop, vtable 0x104) runs while the enemy is dead:
+    // not yet active goes to the flinch, active goes to the kill.
+    if (this.dying && this.state !== 'flinch' && this.state !== 'kill') {
+      motion = this.enter(this.active ? 'kill' : 'flinch');
+    }
     // Check (event 3).
     if (this.state === 'intro' && this.introPhase === 2 && animationEnded) {
       motion = this.enter('wake');
+    } else if (this.state === 'hit' && animationEnded) {
+      // MothmanProcessState_005197a0 check: active goes to hover, else a low
+      // HP goes to the flinch and anything else back to the state it had.
+      motion = this.enter(this.active ? 'hover' : hpLow ? 'flinch' : this.hitPrev);
+    } else if (this.state === 'flinch' && animationEnded) {
+      // MothmanProcessState_00519b6c check: to hover (5).
+      motion = this.enter('hover');
     } else if (this.state === 'wake' && this.wakeSub === 3) {
       // The next state is +0x394 (ASSUMED dormant, state 2). The exe reads it
       // and tests 2 (dormant), 5 (hover) and 9; no writer of it was found in
@@ -1631,7 +1665,27 @@ export class MonestSpawner {
     }
     // Update (event 0) of the state the check left.
     const out = this.update(alive, animationEnded);
-    return { motion: out.motion ?? motion, spawn: out.spawn };
+    return { motion: out.motion ?? motion, spawn: out.spawn, killed: this.killedNow };
+  }
+
+  // A hit that does not kill (the enemy was hit flag, vtable 0x100 =
+  // MothmanProcessState_0051a8dc): nothing in the flinch, hit or kill states,
+  // and nothing on a spawn in Ultimate; otherwise the hit reaction (7).
+  hit(ultimate: boolean): EnemyAiMotion | null {
+    if (this.state === 'flinch' || this.state === 'hit' || this.state === 'kill') return null;
+    if (this.state === 'spawn' && ultimate) return null;
+    this.hitPrev = this.state;
+    return this.enter('hit');
+  }
+
+  // A killing hit (vtable 0x104 = set_monest_dead). The Monest is dead on the
+  // wire already; its own state follows in tick().
+  die(): void {
+    this.dying = true;
+  }
+
+  get isDying(): boolean {
+    return this.dying;
   }
 
   private update(alive: number, animationEnded: boolean): MonestOut {
@@ -1640,6 +1694,10 @@ export class MonestSpawner {
         return this.introUpdate();
       case 'wake':
         return this.wakeUpdate(alive, animationEnded);
+      case 'flinch':
+      case 'hit':
+      case 'kill':
+        return { motion: null, spawn: false };
       case 'dormant':
       case 'hover':
         if (!this.armed) {

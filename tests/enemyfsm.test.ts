@@ -451,6 +451,80 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   const slots = expandEnemySets([set], 1);
   eq([slots[0].type, slots[1].type, slots[30].type, slots.length], ['MONEST', 'MOTHMANT', 'MOTHMANT', 31], 'Monest + 30 MOTHMANT slots');
 }
+// --- Monest: hit reaction, flinch, the killing hit (set_monest_dead) ---------
+// Vtable 0x100 (a hit that does not kill) -> state 7; vtable 0x104 (set_monest_dead,
+// every tick while dead): not active -> flinch (4), active -> kill (8). The
+// flinch's end goes to hover (5), which arms the nest, so a dead inactive
+// Monest is revived for one flinch and dies in the tick after its hover.
+{
+  // Runs the Monest to dormant (state 2) and returns it.
+  const dormant = (): MonestSpawner => {
+    const m = new MonestSpawner(2, 30);
+    while (m.state !== 'dormant') m.tick(0, true);
+    return m;
+  };
+  // Ticks until the state changes (or the cap), with the animation ended.
+  const untilState = (m: MonestSpawner, s: string, cap = 50): number => {
+    for (let f = 1; f <= cap; f++) {
+      m.tick(0, true);
+      if (m.state === s) return f;
+    }
+    return -1;
+  };
+
+  // A killing hit on an inactive Monest: flinch, then hover (active), then kill.
+  const k = dormant();
+  eq(k.active, false, 'a dormant Monest that was never hovered is not active');
+  k.die();
+  const k1 = k.tick(0, false);
+  eq([k.state, k1.motion?.index], ['flinch', 9], 'a killing hit on an inactive Monest goes to the flinch (animation 3, motion 9)');
+  check(untilState(k, 'hover') > 0, 'the flinch ends in hover (5) once its animation ends');
+  eq(k.active, true, 'the hover arms the nest (+0x3b0 = 1)');
+  const kill = k.tick(0, false);
+  eq([k.state, kill.killed], ['kill', true], 'the dead Monest goes to the kill (8) on the tick after its hover and reports the kill');
+  eq(k.tick(0, false).killed, false, 'the kill is reported once');
+
+  // A killing hit on an active Monest: the kill at once.
+  const a = dormant();
+  a.hit(false); // the hit reaction, dormant state, HP above half: back to dormant
+  for (let f = 0; f < 3; f++) a.tick(0, false);
+  eq(a.state, 'hit', 'a hit that does not kill starts the hit reaction (7)');
+  a.tick(0, true);
+  eq(a.state, 'dormant', 'a hit reaction above half HP returns to the previous state');
+  // Activate through a low-HP hit: the hit reaction goes to the flinch, then hover.
+  const b = dormant();
+  b.hit(false);
+  b.tick(0, true, true);
+  eq(b.state, 'flinch', 'a hit that leaves the Monest at most half HP goes to the flinch (4)');
+  b.tick(0, true);
+  eq(b.state, 'hover', 'the flinch ends in hover');
+  b.die();
+  b.tick(0, false);
+  eq(b.state, 'kill', 'an active Monest that is killed goes straight to the kill (8)');
+}
+{
+  // A non-lethal hit on an inactive Monest uses animation 2 (motion 10); on an
+  // active one animation 6 (motion 6).
+  const m = new MonestSpawner(2, 30);
+  while (m.state !== 'dormant') m.tick(0, true);
+  const h = m.hit(false);
+  eq(h?.index, 10, 'a non-lethal hit on an inactive Monest plays animation 2 (motion 10)');
+  // Ultimate: a spawn in progress ignores a hit (the 0x100 handler's state 3 test).
+  const s = new MonestSpawner(2, 30);
+  while (s.state !== 'dormant') s.tick(0, true);
+  for (let f = 0; f < 200 && s.state !== 'spawn'; f++) s.tick(0, false);
+  eq(s.state, 'spawn', 'an armed dormant Monest starts a spawn');
+  eq(s.hit(true), null, 'in Ultimate a hit on a spawning Monest is ignored');
+  check(s.hit(false) !== null, 'outside Ultimate the same hit starts the hit reaction');
+  // A hit is ignored while the flinch or the kill runs.
+  const f = new MonestSpawner(2, 30);
+  while (f.state !== 'dormant') f.tick(0, true);
+  f.die();
+  f.tick(0, false);
+  eq(f.hit(false), null, 'a hit during the flinch is ignored');
+  // A dying Monest stays dying: set_monest_dead runs each tick (no kill while the flinch lasts).
+  eq(f.state, 'flinch', 'the flinch holds while dying');
+}
 
 // --- Mothmant ----------------------------------------------------------------
 {
