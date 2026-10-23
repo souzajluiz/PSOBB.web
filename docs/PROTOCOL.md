@@ -306,6 +306,10 @@ Enemy entity ids are 0x1000 + the enemy slot counted over all floors: one `e.dat
 
 **Battle music** (`FUN_0069821c` → `FUN_008114b0`): battle while an enemy of the local player's room is built and not dead; after the last one dies the calm music returns 90 frames (0x5A) later. The player's room is the one on the player object (+0x28); the web client resolves it from the map sections the position falls into.
 
+### Emotes (`6x58`, symbol chat keys)
+
+Body (8 bytes, newserv `G_LobbyAnimation_6x58`): `u8 0x58, u8 2, u16 client id, u16 emote slot, u16 flags` (flag bit 0 = "use the opposite gender's animation", from the character option 0x80000). Sender `dispatch_action_emote` @ `0x0069C74C` (skipped while the player's `+0x32C` is 2); receiver `FUN_0069B2D4` stores the slot at `+0x3CC`, the flag bit 0x10000 sets `+0x33C` 0x8000000 (`FUN_00691B30` picks `+0xDC` by gender) and the state 0x17 starts (`handle_input_state_emote` @ `0x0069C6C0`: enter `0x0069C7DC`, send 5, reset 6, defend / NPC 7). The slot is the motion-set slot of the emote (`formats/emotes.ts`): a chat line's `{key}` (`process_chat_message`, the queue of 10, 16 characters at most, lower case) queues the key; `ProcessPlayerEmote_0077CEC0` returns the getter value of the set (town vtable `0x00B3A040`, field `0x00B39EC0`, getters `0x006A7584`..`0x006A7704`). Town and field values differ (`EMOTE_SLOTS`). Town slots 48 / 49 are Alt+U / Alt+I (`handle_player_emote_input`); the field has no such getters (`0x006A6F78`, -1). Sit is not ported: its keys are not in the port's key config.
+
 ## Quests
 
 Implemented in `client/src/net/quests.ts` (menus and the file transfer),

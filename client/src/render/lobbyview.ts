@@ -19,7 +19,8 @@ import { parseMapNRel } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
-import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
+import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion, type MotionRecord } from '../formats/plymotion.ts';
+import { EMOTE_OPCODE, emotePayload, emoteRecord, emoteSlot } from '../formats/emotes.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -251,6 +252,9 @@ export class LobbyView {
   // While this returns true for a player, its gait motion is not played over
   // the attack motion and the local player does not move (render/combat.ts).
   attacking: (clientId: number) => boolean = () => false;
+  // The emotes playing (formats/emotes.ts): a player's emote holds its motion to the
+  // last frame (mode 3) and stops the local player; the gait resumes after it.
+  private emotes = new Map<number, { record: MotionRecord }>();
   // The local player is dead or revivable (the dead camera orbits; set by GameView).
   dead: () => boolean = () => false;
   // The local player's slow and guard inputs (render/combat.ts in the field;
@@ -305,6 +309,10 @@ export class LobbyView {
     lobby.on('moved', (p) => this.onMoved(p));
     lobby.on('teleported', (p) => {
       if (p.clientId !== this.lobby.selfId) this.place(p.clientId, p.position, p.angle);
+    });
+    // 6x58: another player's emote (the local player's own is played in frame()).
+    lobby.on('emote', (p, slot) => {
+      if (p.clientId !== this.lobby.selfId) this.playEmote(p.clientId, slot);
     });
 
     this.placeSelfOnGround();
@@ -513,7 +521,7 @@ export class LobbyView {
     if (m.gait === gait && !force) return;
     m.gait = gait;
     if (!m.animator) return;
-    if (this.attacking(m.clientId)) return;
+    if (this.attacking(m.clientId) || this.emoting(m.clientId)) return;
     const cls = m.charClass;
     if (this.fieldMotions) {
       // Field: the weapon's column of the field tables (loop records, no chain).
@@ -581,10 +589,54 @@ export class LobbyView {
     return { x: pos.x, z: pos.z };
   }
 
+  // Whether a player is in an emote (its motion is the emote's, not the gait's).
+  emoting(clientId: number): boolean {
+    return this.emotes.has(clientId);
+  }
+
+  // Plays an emote slot on a player (the lobby's map or the field's, by the view).
+  // The field record takes the held weapon's column (the same as the gait).
+  playEmote(clientId: number, slot: number): void {
+    const m = this.markers.get(clientId);
+    if (!m || !m.animator || this.attacking(clientId)) return;
+    const weaponClass = this.fieldMotions ? this.held?.motionClass?.(clientId) ?? 0 : 0;
+    let record: MotionRecord;
+    try {
+      record = emoteRecord(m.charClass, weaponClass, slot, this.fieldMotions);
+    } catch (err) {
+      console.warn(`emote ${slot}: ${(err as Error).message}`);
+      return;
+    }
+    this.emotes.set(clientId, { record });
+    m.animator.play(record, 1);
+  }
+
+  // Each frame: an emote that reached its last frame ends (the gait returns); the
+  // local player sends the queued chat emote when no emote or attack is running.
+  private emoteTick(me: LobbyPlayer | null): void {
+    for (const [id] of this.emotes) {
+      const m = this.markers.get(id);
+      if (!m || !m.animator || m.animator.ended) {
+        this.emotes.delete(id);
+        if (m) this.setGait(m, m.gait, true);
+      }
+    }
+    if (!me || this.emoting(me.clientId) || this.attacking(me.clientId) || this.dead()) return;
+    const key = this.lobby.emoteQueue.head();
+    if (key === undefined) return;
+    this.lobby.emoteQueue.shift();
+    const slot = emoteSlot(key, this.fieldMotions);
+    if (slot === undefined) return;
+    // The exe sends the emote whether or not the model is up (dispatch_action_emote).
+    this.playEmote(me.clientId, slot);
+    this.lobby.sendSubcommand(EMOTE_OPCODE, emotePayload(slot, false));
+  }
+
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
     this.syncHeld();
+    this.emoteTick(me ?? null);
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
     // Second-finger camera drag of the touch pad (input/analog.ts): turns the
@@ -594,7 +646,7 @@ export class LobbyView {
 
     // Local movement: the exe's walk / run state machine, one step per game
     // tick (render/playermove.ts); the drawn pose is interpolated between ticks.
-    if (me && mine && !this.attacking(me.clientId)) {
+    if (me && mine && !this.attacking(me.clientId) && !this.emoting(me.clientId)) {
       const pos = this.logic;
       const shown = mine.group.position;
       // Placed from outside (spawn, warp, 6x24): the mover and the logic start there.
