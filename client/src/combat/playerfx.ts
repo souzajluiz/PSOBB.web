@@ -75,9 +75,8 @@
 //   player is invisible) is set. Infliction of poison / paralysis / slow /
 //   confusion plays no sound.
 //
-// ASSUMED (not readable): the heights above the player's feet of the hit
-// point and of the "weapon position" the status particles use (HIT_POINT_DY /
-// BODY_DY); that particle entries of types 1 and 2 are drawn like type 0 (as
+// ASSUMED (not readable): the status particles' height above the feet (BODY_DY);
+// that particle entries of types 1 and 2 are drawn like type 0 (as
 // render/levelupfx.ts does); that SEs have no distance attenuation here
 // (play_directional_sound_effect's distance model is not read).
 
@@ -95,15 +94,20 @@ export interface FxSpec {
   dy?: number;
 }
 
-// Heights above the player's feet. HIT_POINT_DY / BODY_DY are ASSUMED (see
-// the header); the others are read: 36 = the block's 0x24, 20 and 10 from the
-// revive entity (0x0096de80) and TriggerDespawnEffect (0x0093ca1c).
+// Heights above the player's feet. The others are read: 36 = the block's 0x24,
+// 20 and 10 from the revive entity (0x0096de80) and TriggerDespawnEffect (0x0093ca1c).
 // The exe's hit point is the centre (+0x1c..+0x24, collision_box position2) of
-// the hit box that was flagged this frame (EntityHitEntity_00773350 / FUN_007732b8,
-// the loop over entity+0xa4 with stride 0x2c), not a fixed height: a box's centre
-// is the entity's position plus RotY(heading) * position1 (UpdateObjectMatrix_0051ffdc).
-// The player's own box height is not located (ASSUMED 20).
-export const HIT_POINT_DY = 20;
+// the hit box that was flagged this frame (EntityHitEntity_00773350, dump 747464,
+// the loop over entity+0xa4 with stride 0x2c, flag 0x4000000 cleared there).
+// A player's box is embedded in the player at +0x758 (ConstructEntityHitbox_007b9ccc
+// from SinowberillChallengePlayer_InitializeSpawnData_00695f28, dump 576993): its
+// position1 is zero at spawn (+0x758..+0x763 = 0), radius 5, and position2 =
+// origin + RotY * position1 (UpdateCollisionBoxPosition_007b999c), so the hit
+// point is the feet at rest (dy 0). PlayerActionDispatch (dump 232924) writes the
+// same slots as scratch during some actions (dump 233861..233876); not modelled.
+export const HIT_POINT_DY = 0;
+// ASSUMED: the status particles' anchor (EntityProcessStatusEffectParticle_007752dc,
+// dump 747965) is not traced; kept at the old guess.
 export const BODY_DY = 20;
 export const BLOCK_DY = 36;
 export const REVIVE_DY = 20;

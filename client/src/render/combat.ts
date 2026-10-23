@@ -5928,9 +5928,10 @@ export class CombatView {
         const p = t.enemy.instance.root.position;
         target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t.enemy) };
       } else if (t) {
-        // A remote player: the point at its feet + AIM_HEIGHT (ASSUMED: the player's box is not decoded, the reach is a point too, combat/pvp.ts).
+        // A remote player: its hit box centre, which is the feet at rest (the player's
+        // embedded box has position1 = 0, combat/playerfx.ts HIT_POINT_DY). Radius 0 as before (combat/pvp.ts).
         const p = this.view?.playerPositions().get(t.player);
-        if (p) target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: 0 };
+        if (p) target = { centre: { x: p.x, y: p.y, z: p.z }, radius: 0 };
       }
       const shot: GunShot = planGunShot(
         start,
