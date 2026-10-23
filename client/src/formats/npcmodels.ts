@@ -224,6 +224,32 @@ export function npcModelFor(type: number, ctx: NpcModelContext): { cls: NpcClass
   return { cls, source: cls.model };
 }
 
+// --- the Episode 4 quest NPC (set type 0x118) ----------------------------------
+//
+// Factory 0x00602a14 -> CreateEnemyObject_00602ae0 (dump .c:463396, a 0x508-byte
+// object; the dump's name for the state dispatcher, ChallengeEntityStateDispatcher_
+// 00602c1c (.c:463444), is misleading). The set entry's u16 at +0x3c (param6) holds
+// the flags in bit 0 (the walk-around flag of the other NPCs) and the NPC index in
+// bits 8..13; the object keeps the index at +0x3c0. The dispatcher sets
+// emote_id = index * 0x70 + g_ChallengeEntityEmoteIdBase (.c:463494; 0x70 = the
+// npcplayerchar.dat record size, formats/npcplayerchar.ts) and loads the object's BML
+// as g_ChallengeEntityBMLAssetPointers[GetChallengeValue_004e6f24(emote_id)] (.c:463504).
+// That table (0x009b1620, 23 pointers to bml_asset_file_info) starts with the player
+// body sets planj.bml .. pllnj.bml (exedata.py read 009b1620 p / the struct's name),
+// and GetChallengeValue returns the record's class byte +0x31 (.c:263785) for a record
+// without the challenge flags (ASSUMED: this NPC's flags are clear; the other branch
+// reads the quest state). So the model is the player class's own body set
+// (`pl<letter>nj.bml`, the same file the player models load), dressed with the
+// record's appearance (ASSUMED: the dispatcher's texture setup is not traced; the NPC
+// players of 6x69 use the same appearance). The motion row (idle / walk) of the
+// dispatcher is not traced: the town idle / walk of the class stands in (ASSUMED).
+export const QUEST_NPC_TYPE = 0x118;
+
+// The npcplayerchar.dat record of a 0x118 entry (6 bits of param6's u16 from bit 8).
+export function questNpcTemplate(param6: number): number {
+  return ((param6 & 0xffff) >> 8) & 0x3f;
+}
+
 // --- set entry parameters -----------------------------------------------------
 
 export interface NpcParams {

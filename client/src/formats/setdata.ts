@@ -306,7 +306,7 @@ export function enemyKind(e: EnemySet, area: number | null): string {
     case 0x117: return pick(['GORAN', 'PYRO_GORAN', 'GORAN_DETONATOR']);
     case 0x119: return p6 & 1 ? 'SHAMBERTIN' : 'SAINT_MILION';
   }
-  if ((e.type >= 0x01 && e.type <= 0x33) || e.type === 0x45 || e.type === 0x46 || e.type === 0xa9 ||
+  if ((e.type >= 0x01 && e.type <= 0x33) || e.type === 0x45 || e.type === 0x46 || e.type === 0xa9 || e.type === 0x118 ||
       (e.type >= 0xd0 && e.type <= 0xd3) || (e.type >= 0xf0 && e.type <= 0x100)) return 'NON_ENEMY_NPC';
   return 'UNKNOWN';
 }

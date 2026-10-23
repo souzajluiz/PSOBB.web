@@ -34,6 +34,8 @@ import {
   P2_MENU_GOVERNMENT,
   P2_MENU_GUILD,
   parseNpcTownMotions,
+  QUEST_NPC_TYPE,
+  questNpcTemplate,
   TEKKER_MODELS,
   type NpcModelSource,
 } from '../client/src/formats/npcmodels.ts';
@@ -41,7 +43,8 @@ import { prsDecompress } from '../client/src/formats/prs.ts';
 import { parseQuestBin } from '../client/src/formats/questbin.ts';
 import { parseQuestDat } from '../client/src/formats/questdat.ts';
 import { enemyKind, parseEnemySets, type EnemySet } from '../client/src/formats/setdata.ts';
-import { enemyModelFor, NPC_ENEMY_TYPES } from '../client/src/formats/enemymodels.ts';
+import { enemyModelFor, NPC_ENEMY_TYPES, stageNpcIds, stageNpcModel, stageNpcSlotId } from '../client/src/formats/enemymodels.ts';
+import { NPC_PLAYER_COUNT } from '../client/src/formats/npcplayerchar.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { floorToArea } from '../client/src/net/game.ts';
 import { QuestVM, type QuestMessage } from '../client/src/quest/vm.ts';
@@ -89,13 +92,10 @@ const source: DataSource = {
 };
 const files = new ClientFiles(source);
 
-// Classes the set data uses that this client does not draw yet (see
-// docs/ROADMAP.md): TObjNpcEnemy (0x33, the model is a stage NPC slot) and the
-// Episode 4 quest NPC (0x118, an NPC player of npcplayerchar.dat).
-const NOT_YET = new Set([0x33, 0x118]);
 // Every NPC type of the per-area factory table 0x009fba60 (dumped from the
-// exe: the humanoid classes plus the ones above).
-const NPC_FACTORY_TYPES = new Set([...NPC_CLASSES.map((c) => c.type), ...NOT_YET, ...NPC_ENEMY_TYPES]);
+// exe): the humanoid classes, the enemy factories' NPCs (NPC_ENEMY_TYPES, 0x33
+// included) and the Episode 4 quest NPC (0x118, an NPC player of npcplayerchar.dat).
+const NPC_FACTORY_TYPES = new Set([...NPC_CLASSES.map((c) => c.type), QUEST_NPC_TYPE, ...NPC_ENEMY_TYPES]);
 
 // 1. The town motions: four NJS_ACTIONs of 64 nodes; the three motion tables
 //    point into them.
@@ -145,21 +145,32 @@ const visit = (e: EnemySet, area: number, where: string) => {
   if (NPC_ENEMY_TYPES.has(e.type)) {
     for (const episode of [1, 2, 3]) for (const difficulty of [0, 3]) {
       const spec = enemyModelFor(e, { area, episode, difficulty, event: 0 });
+      if (e.type === 0x33) {
+        // A stage NPC slot: drawn exactly when its id is one the port models.
+        const id = stageNpcSlotId(area, (Math.trunc(e.rotation[0]) << 16) >> 16);
+        const drawn = id !== null && stageNpcModel(id, episode) !== null;
+        check(!!spec === drawn, `${where}: NPC 0x33 slot ${e.rotation[0]} (id ${id}) drawn ${!!spec}, expected ${drawn} (episode ${episode})`);
+        continue;
+      }
       check(!!spec, `${where}: NPC 0x${e.type.toString(16)} has no enemy model (episode ${episode}, difficulty ${difficulty})`);
     }
     seen.set(`enemy model 0x${e.type.toString(16)}`, (seen.get(`enemy model 0x${e.type.toString(16)}`) ?? 0) + 1);
+    return;
+  }
+  if (e.type === QUEST_NPC_TYPE) {
+    // The quest NPC is an NPC player: its record must exist in npcplayerchar.dat (64 records).
+    const t = questNpcTemplate(e.params[5]);
+    check(t < NPC_PLAYER_COUNT, `${where}: quest NPC template ${t} is outside npcplayerchar.dat`);
+    const k = `quest NPC (npcplayerchar record ${t})`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
     return;
   }
   const cls = npcClass(e.type);
   if (!cls) {
     // Types no area factory table (0x009fba60) constructs are skipped by the
     // client as well (q068 has a 0x14).
-    if (!NOT_YET.has(e.type)) {
-      seen.set(`no factory 0x${e.type.toString(16)}`, (seen.get(`no factory 0x${e.type.toString(16)}`) ?? 0) + 1);
-      check(!NPC_FACTORY_TYPES.has(e.type), `${where}: NPC type 0x${e.type.toString(16)} has a factory but no class`);
-      return;
-    }
-    seen.set(`not drawn 0x${e.type.toString(16)}`, (seen.get(`not drawn 0x${e.type.toString(16)}`) ?? 0) + 1);
+    seen.set(`no factory 0x${e.type.toString(16)}`, (seen.get(`no factory 0x${e.type.toString(16)}`) ?? 0) + 1);
+    check(!NPC_FACTORY_TYPES.has(e.type), `${where}: NPC type 0x${e.type.toString(16)} has a factory but no class`);
     return;
   }
   const r = npcModelFor(e.type, { area, sectionId: 0 });
@@ -519,8 +530,28 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   const hm = hilde?.parts[0]?.motion;
   check(hm?.index === 0 && Math.abs(hm.speed - 0.5) < 1e-6 && hm.loop === true, `Hildebear NPC motion row 0: motion 0 at 0.5 (${hm?.index}, ${hm?.speed})`);
   check(enemyModelFor(npc(0x46), ctx(1, 3, 0))?.bml === 'bm_ene_bm2_moja_a.bml', 'Hildebear NPC ultimate takes the _a BML');
-  for (const t of [0x33, 0x118]) check(enemyModelFor(npc(t), ctx(1, 0, 0)) === null, `NPC 0x${t.toString(16)} has no enemy model (not ported)`);
-  console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Hildebear ${hilde?.bml} (motion ${hm?.index} at ${hm?.speed}), Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed})`);
+  // TObjNpcEnemy (0x33): angle.x is the rank of the area's registered id (STAGE_NPC_LISTS).
+  // Forest 2 (0x02): 01..0B, 32, 33, 34, 3C, 3D; slot 12 is 0x33 (Hildebear), slot 1 is 0x02 (Booma).
+  check(stageNpcIds(0x02)?.length === 16 && stageNpcSlotId(0x02, 12) === 0x33 && stageNpcSlotId(0x02, 16) === null, 'Forest 2 stage NPC list: slot 12 = 0x33');
+  check(stageNpcSlotId(0x0b, 1) === null && stageNpcSlotId(0x0b, 0) === 0x01, 'Dragon: only the box (slot 0), slot 1 empty');
+  check(stageNpcSlotId(0x99, 0) === null, 'an unknown area has no stage NPC list');
+  const slotNpc = (slot: number, p6 = 0): EnemySet => ({ ...npc(0x33, p6), rotation: [slot, 0, 0] });
+  const forest2 = (difficulty = 0) => ({ area: 0x02, episode: 1, difficulty, event: 0, online: true });
+  const booma33 = enemyModelFor(slotNpc(1), forest2());
+  check(booma33?.name === 'TObjNpcEnemy' && booma33.bml === 'bm_ene_re8_b_beast.bml' && booma33.parts[0]!.model === 0, `0x33 slot 1 (0x02 Booma, set 0x44 variant 0): ${booma33?.bml}`);
+  const hilde33 = enemyModelFor(slotNpc(12), forest2());
+  check(hilde33?.name === 'TObjNpcEnemy' && hilde33.bml === 'bm_ene_bm2_moja.bml' && hilde33.parts[0]!.model === 1, `0x33 slot 12 (Hildebear): ${hilde33?.name} ${hilde33?.bml} model ${hilde33?.parts[0]?.model}`);
+  check(enemyModelFor(slotNpc(12), forest2(3))?.bml === 'bm_ene_bm2_moja_a.bml', '0x33 slot 12 ultimate takes the _a BML');
+  const hildeblue33 = enemyModelFor(slotNpc(13), forest2());
+  check(hildeblue33?.parts[0]!.model === 2, `slot 13 (0x34 Hildeblue) is set type 0x40 with param6 1: model ${hildeblue33?.parts[0]?.model}`);
+  check(enemyModelFor(slotNpc(14), { area: 0x02, episode: 1, difficulty: 0, event: 0, online: true }) === null, 'slot 14 (0x3C, a map object) draws nothing');
+  check(enemyModelFor(slotNpc(-1), { area: 0x02, episode: 1, difficulty: 0, event: 0, online: true }) === null, 'a negative slot (angle.x) is empty');
+  // Episode 4 Desert (0x29): the list starts 05 (Rappy); its sandlappy is the Rappy's BML.
+  check(enemyModelFor(slotNpc(0), { area: 0x29, episode: 3, difficulty: 0, event: 0, online: true })?.bml === 'bm_ene_sandlappy.bml', 'Desert slot 0 (0x05 Rappy) takes sandlappy on Episode 4');
+  // The quest NPC (0x118): an NPC player, not an enemy model; its record is param6 bits 8..13.
+  check(enemyModelFor(npc(QUEST_NPC_TYPE, 0x0500), ctx(3, 0, 0)) === null, 'quest NPC 0x118 is not an enemy model');
+  check(questNpcTemplate(0x0500) === 5 && questNpcTemplate(0x4201) === 2 && questNpcTemplate(-1) === 63, 'quest NPC template = param6 bits 8..13 (flag bit 0 ignored)');
+  console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Hildebear ${hilde?.bml} (motion ${hm?.index} at ${hm?.speed}), Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed}); stage NPC 0x33 slot 12 ${hilde33?.bml}; quest NPC records ${NPC_PLAYER_COUNT}`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
