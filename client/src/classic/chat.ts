@@ -178,6 +178,8 @@ const B = {
   tab: { dx: -11, dy: -18, cap: 16, h: 25, minText: 20, textDx: 6, textDy: 3 },
   tabFade: 6, // alpha = open frames * 255 / 6 (0x009703dc)
   maxBubbles: 4, // UI table + 0x90..0x9c
+  dockMargin: -50, // 0x0097051c: the margin of a docked balloon (0x00970520 = 0 otherwise)
+  farSq: 14400, // 0x00970518: squared distance limit (0x00970514 = 40 per margin unit)
 };
 
 const bams = (a: number) => (a / 0x10000) * Math.PI * 2;
@@ -214,6 +216,27 @@ export interface BubbleTextures {
   tab: CanvasImageSource; // texturejapanese.xvm texture 0 (name tab at v 237..256)
 }
 
+// The projected head (window space): `dist` from the camera, `front` in front of it.
+export interface BubbleHead {
+  x: number;
+  y: number;
+  dist: number;
+  visible: boolean;
+  front: boolean;
+}
+
+// The dock slot bits shared by the balloons (table + 0x1c, 0x40 << slot).
+export interface DockState {
+  taken: number;
+}
+
+// What a balloon reads each frame: the other balloons, the dock bits, rand().
+interface BubbleEnv {
+  peers: ChatBubble[];
+  dock: DockState;
+  rand: () => number;
+}
+
 export class ChatBubble {
   // Width of the window space (640, more on a wide window).
   static screenW = 640;
@@ -236,7 +259,11 @@ export class ChatBubble {
   private pos = { x: 0, y: 0 }; // +0x30 / +0x34: placed top-left
   private centre = { x: 0, y: 0 }; // +0x9c / +0xa0
   private rect = { x: 0, y: 0 }; // +0x40 / +0x44: drawn top-left
-  private head: { x: number; y: number; dist: number; visible: boolean } = { x: 0, y: 0, dist: 1, visible: false };
+  private head: BubbleHead = { x: 0, y: 0, dist: 1, visible: false, front: false };
+  private prevHead: BubbleHead | null = null; // the head of the last frame
+  docked = false; // flag 0x200 (and 0x85 bit 0): on a dock slot
+  slot = -1; // 0x87: the dock slot, -1 none
+  tailOn = false; // flag 0x20: the tail to the head
 
   constructor(clientId: number, name: string) {
     this.clientId = clientId;
@@ -262,8 +289,13 @@ export class ChatBubble {
     if (this.state !== 0) this.state = 5;
   }
 
-  // One game frame. `head` is the projected head point (window space).
-  tick(head: { x: number; y: number; dist: number; visible: boolean }): void {
+  // One game frame. `head` is the projected head point (window space); `env`
+  // holds the other balloons and the dock slots. The state switch is the
+  // exe's: dd20 (FUN_0071dd20) runs the states, the render's placement runs in
+  // states 2, 4 and 6 and the hide in state 8 (render_chat_bubbles_related).
+  // `env` defaults to the quest balloons' own dock state (questui.ts ticks
+  // a balloon alone; the exe's dock table is shared, so one state serves).
+  tick(head: BubbleHead, env: BubbleEnv = soloEnv): void {
     this.head = head;
     switch (this.state) {
       case 0: // FUN_0071e084 case 0: centred on the head
@@ -276,21 +308,21 @@ export class ChatBubble {
         this.state = 2;
         // then runs case 2 in the same frame
         this.grow(1, 3);
-        this.place();
+        this.place(head, env);
         break;
       case 2:
         this.grow(1, 3);
-        this.place();
+        this.place(head, env);
         break;
       case 3:
         this.state = 4;
         this.textShown = true;
         // then runs case 4 in the same frame
-        this.place();
+        this.place(head, env);
         if (--this.life < 0) this.state = 7;
         break;
       case 4:
-        this.place();
+        this.place(head, env);
         if (--this.life < 0) this.state = 7;
         break;
       case 5:
@@ -299,25 +331,34 @@ export class ChatBubble {
         this.state = 6;
         // then runs case 6 in the same frame
         if (this.grow(0.5, 1)) this.scale = 0.5;
-        this.place();
+        this.place(head, env);
         break;
       case 6:
         if (this.grow(0.5, 1)) this.scale = 0.5;
-        this.place();
+        this.place(head, env);
         break;
       case 7:
         this.textShown = false;
         this.state = 8;
         // then runs case 8 in the same frame
         if (this.grow(0, 9)) this.scale = 0;
+        this.placeHide(head, env);
         break;
       case 8:
         if (this.grow(0, 9)) this.scale = 0;
+        this.placeHide(head, env);
         break;
     }
+    this.prevHead = head;
     if (this.textShown) this.openFrames++;
     else this.openFrames = 0;
     this.animate();
+  }
+
+  // Placed states of the exe's list (flag 0x100 is set in states 1..6 and
+  // cleared when the hide starts).
+  get placed(): boolean {
+    return this.state >= 1 && this.state <= 6;
   }
 
   // scale += (to - scale) * 0.47 until the step is below 0.011.
@@ -332,30 +373,138 @@ export class ChatBubble {
     return true;
   }
 
-  // FUN_0071f0c0: place the balloon around the head (no overlap avoidance
-  // between balloons yet, see DEVLOG).
-  private place(): void {
-    const { w, h } = this.size.w ? this.size : this.target;
-    const m = B.tailNear / Math.max(1, this.head.dist);
-    const dx = w * 0.5 - this.head.x + this.pos.x;
-    const dy = h * 0.5 - this.head.y + this.pos.y;
+  // UIElementMover_UpdatePosition (flags 0x400 clear): off the frame, the
+  // balloon docks; on it, the head offset is kept (UpdatePositionFromEntity),
+  // then the angle placement (FUN_0071f0c0) wins when it succeeds.
+  private place(head: BubbleHead, env: BubbleEnv): void {
+    if (this.offscreen(head)) {
+      this.dockAt(env);
+      return;
+    }
+    this.undock(env.dock);
+    const old = this.prevHead ?? head;
+    const ent = this.clampBounds({ x: this.pos.x + head.x - old.x, y: this.pos.y + head.y - old.y });
+    const entOk = !this.overlaps(ent, env);
+    const tgt = this.targetPlace(head, ent, env);
+    if (tgt) this.pos = tgt;
+    else if (entOk) this.pos = ent;
+  }
+
+  // ChatBubbleObject_UpdatePositionAndVisibility (state 8): docked when off the
+  // frame, else centred on the head (no overlap test).
+  private placeHide(head: BubbleHead, env: BubbleEnv): void {
+    if (this.offscreen(head)) {
+      this.dockAt(env);
+      return;
+    }
+    this.undock(env.dock);
+    this.pos = { x: head.x - this.target.w * 0.5, y: head.y - this.target.h * 0.5 };
+  }
+
+  // ChatBubbleObject_UpdateVisibility (1 = docked): the head is off the frame
+  // (50 px in once docked, 0 otherwise), behind the camera, or more than 120
+  // units away (dist^2 > 14400 + margin * 40). The tail (flag 0x20) is on
+  // while it is not.
+  private offscreen(head: BubbleHead): boolean {
+    const m = this.docked ? B.dockMargin : 0;
+    const off =
+      head.x < -m || head.y < -m || ChatBubble.screenW + m < head.x || ChatBubble.screenH + m < head.y || !head.front || head.dist * head.dist > B.farSq + m * 40;
+    this.tailOn = !off;
+    return off;
+  }
+
+  // The balloon's top-left clamped to the frame (UpdatePositionFromEntity and
+  // UIElementMover_UpdatePosition: 20 / 40 from the edges, 0x0097045c..50).
+  private clampBounds(p: { x: number; y: number }): { x: number; y: number } {
+    const { w, h } = this.size;
+    const { bounds } = B;
+    const x = Math.min(Math.max(p.x, bounds.left), ChatBubble.screenW + bounds.right - w);
+    const y = Math.min(Math.max(p.y, bounds.top), ChatBubble.screenH + bounds.bottom - h);
+    return { x, y };
+  }
+
+  // The fit test of FUN_0071f0c0 before the overlap test: inside the bounds.
+  private inBounds(p: { x: number; y: number }): boolean {
+    const { w, h } = this.size;
+    const { bounds } = B;
+    return p.x >= bounds.left && p.x <= ChatBubble.screenW + bounds.right - w && p.y >= bounds.top && p.y <= ChatBubble.screenH + bounds.bottom - h;
+  }
+
+  // UIElement_CheckBounds (FUN_00712498): does the box at p (the target size)
+  // overlap a placed balloon? Two docked balloons may overlap. The x test
+  // reads the other balloon's placed x and its drawn x (0x30, 0x40) as the exe.
+  private overlaps(p: { x: number; y: number }, env: BubbleEnv): boolean {
+    const { w, h } = this.target;
+    for (const o of env.peers) {
+      if (o === this || !o.placed) continue;
+      if (this.docked && o.docked) continue;
+      if (p.x < o.pos.x + o.target.w && o.rect.x < w + p.x && p.y < o.target.h + o.pos.y && o.pos.y < h + p.y) return true;
+    }
+    return false;
+  }
+
+  // The offset of the balloon centre on the ellipse at angle a, pushed out by
+  // the tail m (FUN_0071f830, then the tail of FUN_0071f0c0).
+  private candidateAt(a: number, m: number): [number, number] {
+    const o = offsetFromAngle(a, this.target.w, this.target.h);
+    const t = Math.atan2(o[1], o[0]);
+    return [o[0] + Math.cos(t) * m, o[1] + Math.sin(t) * m];
+  }
+
+  // FUN_0071f0c0: the balloon on the ellipse around the head, pushed out by
+  // 1000 / distance, at the angle of the reference offset ref. When the spot
+  // overlaps another balloon: retry A lerps toward the reference by rand/32768;
+  // retry B takes the head angle - 0x4000 + rand; retry C a random angle. The
+  // result is null where the exe returns 0 (no placement this frame).
+  private targetPlace(head: BubbleHead, ref: { x: number; y: number }, env: BubbleEnv): { x: number; y: number } | null {
+    const m = B.tailNear / Math.max(1, head.dist);
+    const dx = this.size.w * 0.5 - head.x + ref.x;
+    const dy = this.size.h * 0.5 - head.y + ref.y;
     const len = Math.hypot(dx, dy);
     let a = B.defaultAngle;
     if (len >= 3) {
       const a0 = bams(toBams(dy, dx));
-      const fx = (dx - Math.cos(a0) * m) / (20 + w);
-      const fy = (dy - Math.sin(a0) * m) / (10 + h);
+      const fx = (dx - Math.cos(a0) * m) / (20 + this.size.w);
+      const fy = (dy - Math.sin(a0) * m) / (10 + this.size.h);
       a = toBams(fy, fx);
     }
-    let [px, py] = offsetFromAngle(a, w, h);
-    const a2 = Math.atan2(py, px);
-    px += Math.cos(a2) * m;
-    py += Math.sin(a2) * m;
-    if (Math.abs(len - Math.hypot(px, py)) < B.moveMin) return;
-    const x = px + this.head.x - this.target.w * 0.5;
-    const y = py + this.head.y - this.target.h * 0.5;
-    if (x < B.bounds.left || x > ChatBubble.screenW + B.bounds.right - w || y < B.bounds.top || y > ChatBubble.screenH + B.bounds.bottom - h) return;
-    this.pos = { x, y };
+    const base = offsetFromAngle(a, this.target.w, this.target.h);
+    const headAng = toBams(base[1], base[0]);
+    const tailed = this.candidateAt(a, m);
+    if (Math.abs(len - Math.hypot(tailed[0], tailed[1])) < B.moveMin) return null;
+    const at = (o: [number, number]) => ({ x: o[0] + head.x - this.target.w * 0.5, y: o[1] + head.y - this.target.h * 0.5 });
+    const c0 = at(tailed);
+    if (!this.inBounds(c0)) return null;
+    if (!this.overlaps(c0, env)) return c0;
+    const r = env.rand() / 32768;
+    const c1 = at([tailed[0] + (dx - tailed[0]) * r, tailed[1] + (dy - tailed[1]) * r]);
+    if (!this.overlaps(c1, env)) return c1;
+    const c2 = at(this.candidateAt(Math.round(headAng - 0x4000 + env.rand()), m));
+    if (!this.inBounds(c2)) return null;
+    if (!this.overlaps(c2, env)) return c2;
+    const c3 = at(this.candidateAt(Math.round((env.rand() / 32768) * 0x10000), m));
+    if (!this.inBounds(c3)) return null;
+    if (this.overlaps(c3, env)) return null;
+    return c3;
+  }
+
+  // The docked balloon: its centre on the dock point of its slot, clamped
+  // (UIElementMover_UpdatePosition's docked branch, 0x00970538 = -0.5).
+  private dockAt(env: BubbleEnv): void {
+    if (!this.docked) {
+      this.docked = true;
+      this.slot = nearestDockSlot(env.dock, this.rect.x + this.size.w * 0.5, this.rect.y + this.size.h * 0.5);
+    }
+    const p = dockPoint(this.slot);
+    this.pos = this.clampBounds({ x: p.x - this.target.w * 0.5, y: p.y - this.target.h * 0.5 });
+  }
+
+  // LockSlot (FUN_00717c78): the slot is free again.
+  undock(dock: DockState): void {
+    if (!this.docked) return;
+    dock.taken &= ~(0x40 << this.slot);
+    this.docked = false;
+    this.slot = -1;
   }
 
   // FUN_0071fbac: smooth the centre, lerp the size, clamp to the screen.
@@ -393,14 +542,14 @@ export class ChatBubble {
     ctx.translate(-cx, -cy);
     this.drawBody(ctx, black);
     ctx.restore();
-    if (this.head.visible) this.drawTail(ctx, '#000000', B.shadow[0] * s, B.shadow[1] * s);
+    if (this.tailOn) this.drawTail(ctx, '#000000', B.shadow[0] * s, B.shadow[1] * s);
     ctx.save();
     ctx.translate(cx, cy);
     ctx.scale(s, s);
     ctx.translate(-cx, -cy);
     this.drawBody(ctx, body);
     ctx.restore();
-    if (this.head.visible) this.drawTail(ctx, rgb(this.color), 0, 0);
+    if (this.tailOn) this.drawTail(ctx, rgb(this.color), 0, 0);
     if (!this.textShown) return;
     const tx = this.rect.x + 10;
     const ty = this.rect.y + 10;
@@ -508,8 +657,15 @@ function tinted(img: CanvasImageSource, color: number): CanvasImageSource {
 
 // Up to four balloons (UI table + 0x90..0x9c); one per speaker; when all are
 // taken the one farthest from the local player is replaced (FUN_00718b74).
+// The list holds the balloons' shared state: the dock slots (table + 0x1c)
+// and the rand() of the placement retries.
+const soloEnv: BubbleEnv = { peers: [], dock: { taken: 0 }, rand: () => Math.floor(Math.random() * 32768) };
+
 export class ChatBubbles {
   list: ChatBubble[] = [];
+  readonly dock: DockState = { taken: 0 };
+  // C rand(): 0..32767 (FUN_0071f0c0 retries). Tests may replace it.
+  rand: () => number = () => Math.floor(Math.random() * 32768);
 
   say(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
     let b = this.list.find((x) => x.clientId === clientId && x.alive);
@@ -519,6 +675,7 @@ export class ChatBubbles {
         this.list.forEach((x, i) => {
           if (distanceTo(x.clientId) >= distanceTo(this.list[far].clientId)) far = i;
         });
+        this.list[far].undock(this.dock);
         this.list.splice(far, 1);
       }
       b = new ChatBubble(clientId, name);
@@ -528,11 +685,13 @@ export class ChatBubbles {
   }
 
   // One game frame; head(id) gives the projected head point.
-  tick(head: (id: number) => { x: number; y: number; dist: number; visible: boolean } | null): void {
+  tick(head: (id: number) => BubbleHead | null): void {
+    for (const b of this.list) if (!b.alive) b.undock(this.dock);
     this.list = this.list.filter((b) => b.alive);
+    const env: BubbleEnv = { peers: this.list, dock: this.dock, rand: this.rand };
     for (const b of this.list) {
       const h = head(b.clientId);
-      if (h) b.tick(h);
+      if (h) b.tick(h, env);
       else b.state = 9;
     }
   }
@@ -542,15 +701,52 @@ export class ChatBubbles {
   }
 }
 
+// The dock points of the slots: get_gui_position(0x45 + slot) (table
+// 0x00971f40, 0x00972168..0x00972188), the balloon's centre. Slot 3 is the
+// fallback when the first three are taken. In the 640 x 480 window space.
+const DOCK_POINTS: readonly (readonly [number, number])[] = [
+  [320, 140],
+  [140, 300],
+  [500, 300],
+  [320, 240],
+];
+
+function dockPoint(slot: number): { x: number; y: number } {
+  const [x, y] = DOCK_POINTS[slot];
+  return { x: (x * ChatBubble.screenW) / 640, y: (y * ChatBubble.screenH) / 480 };
+}
+
+// QuickMenuObject_FindNearestInteractiveElement (FUN_00717aec): the nearest
+// free slot of the first three (bits 0x40 << slot), else slot 3. Marks it taken.
+function nearestDockSlot(dock: DockState, cx: number, cy: number): number {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < 3; i++) {
+    if (dock.taken & (0x40 << i)) continue;
+    const p = dockPoint(i);
+    const d = (cx - p.x) ** 2 + (cy - p.y) ** 2;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best === -1) best = 3;
+  dock.taken |= 0x40 << best;
+  return best;
+}
+
 // Head point of a player in window space: the model position plus its height
 // (FUN_00716204: model bound * 0.92, 0x0096fe90), projected with the camera.
-// `vh`: the frame's height (480, or the tall fill's virtual height).
-export function projectHead(cam: THREE.Camera, pos: THREE.Vector3, height: number, width: number, vh = 480): { x: number; y: number; dist: number; visible: boolean } {
+// `vh`: the frame's height (480, or the tall fill's virtual height). `front`:
+// the point is in front of the camera (the exe's dot test, FUN_0071e70c).
+export function projectHead(cam: THREE.Camera, pos: THREE.Vector3, height: number, width: number, vh = 480): BubbleHead {
   const p = pos.clone().add(new THREE.Vector3(0, height, 0));
   const dist = p.distanceTo(cam.position);
   const v = p.clone().project(cam);
   const visible = v.z > -1 && v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
-  return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * vh, dist, visible };
+  const fwd = cam.getWorldDirection(new THREE.Vector3());
+  const front = p.clone().sub(cam.position).dot(fwd) > 0;
+  return { x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * vh, dist, visible, front };
 }
 
 export const SE_CHAT = 0x574; // FUN_00720940

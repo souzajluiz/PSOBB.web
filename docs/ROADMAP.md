@@ -104,7 +104,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Lobby: 3D lobby map, player list, chat
 - [x] Classic lobby HUD from the exe: chat input (Space), word balloons with name tab, Log Window, Home main menu (labels, help, view shift), Item List, information counter menus
 - [x] Item List row format: the lobby Item List draws the Item Pack's rows (icons 0x0C / 0x2A / 0x2B / 0x13 / 0x19, colours, "×n", the meseta row, "????" for untekked rares) through `drawItemRow`, not the old "E " text (DEVLOG 2026-10-23)
-- [ ] Classic HUD: balloon overlap avoidance and off-screen docking, sub-menu transitions, counter/menu leaf actions, ship-select camera
+- [ ] Classic HUD: sub-menu transitions, counter/menu leaf actions, ship-select camera (balloon overlap avoidance and off-screen docking are ported, DEVLOG 2026-10-23)
 - [ ] Player movement: speeds are exe values (walk 1.0 / run 1.5 per tick, `render/playermove.ts`); the leg state machine (target 8 ahead, heading smoothing, 6x40/6x42 legs) is ported (DEVLOG 2026-10-20 and 2026-10-23); open: the keyboard ramp values (32 a poll to 128) are not confirmed against the exe, see DEVLOG 2026-10-23
 - [x] Own movement sent via `6x42` / `6x3E`, ground-following on the map collision
 - [x] Other players from incoming `6x20/3E/3F/40/42`, `6x1F` answered with `6x20`
