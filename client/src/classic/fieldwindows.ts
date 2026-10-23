@@ -17,6 +17,7 @@
 import { se, SE } from '../audio/se.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSkin } from './stage.ts';
+import { titleTextShown, wipeElement } from './windowanim.ts';
 
 export const ROW = 20; // FUN_00735c90
 export const LINE = 14; // one text line (glyph cell)
@@ -43,10 +44,11 @@ export function listWindowHeight(items: number, titled: boolean): number {
 }
 
 // Title pill with the game font, text centred in the pill 4 px below its top.
+// The text waits for the window's opening (titleTextShown, windowanim.ts).
 export function drawWindowTitle(ctx: CanvasRenderingContext2D, skin: WindowSkin, x: number, y: number, title: string, state = 1): void {
   const tw = gameTextWidth(title);
   drawTitlePill(ctx, skin.frame, x, y - 13, tw, state);
-  drawGameText(ctx, title, x + (pillWidth(tw) - tw) / 2, y - 13 + 4 + 1, '#120400');
+  if (titleTextShown()) drawGameText(ctx, title, x + (pillWidth(tw) - tw) / 2, y - 13 + 4 + 1, '#120400');
 }
 
 // A pill of f256_hyouji.prs texture 1 with a middle of `mid` px
@@ -78,11 +80,13 @@ export function drawListWindow(
   drawWindowFrame(ctx, skin.frame, x, y, w, h);
   const cx = x + INSET;
   const cy = y + INSET + (title !== null ? TITLE_GAP : 0);
-  if (showCursor && cursor >= 0 && cursor < items.length) drawSelectBar(ctx, skin.bars, cx, cy + cursor * ROW, w - 2 * INSET, 16);
+  if (showCursor && cursor >= 0 && cursor < items.length) wipeElement(ctx, cx, cy + cursor * ROW, 16, () => drawSelectBar(ctx, skin.bars, cx, cy + cursor * ROW, w - 2 * INSET, 16));
   items.forEach((it, i) => {
     const tw = gameTextWidth(it.label);
     const color = !it.enabled ? DISABLED : (colorOf?.(it) ?? (showCursor && i === cursor ? SELECTED : '#ffffff'));
-    drawGameText(ctx, it.label, x + (w - tw) / 2, cy + i * ROW + 1, color);
+    const tx = x + (w - tw) / 2;
+    const ty = cy + i * ROW + 1;
+    wipeElement(ctx, tx, ty, ROW, () => drawGameText(ctx, it.label, tx, ty, color));
   });
   if (title !== null) drawWindowTitle(ctx, skin, x, y, title);
   return { x, y, w, h };
@@ -90,9 +94,13 @@ export function drawListWindow(
 
 // Plain text window (FUN_0073aa40 / ListWindowObject_AddItem_0073ae38): the
 // text starts 10 px inside the frame, 20 px per line.
+// Each line is its own element of the opening wipe (20 px apart).
 export function drawTextWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin, r: WindowRect, text: string, color = '#ffffff'): void {
   drawWindowFrame(ctx, skin.frame, r.x, r.y, r.w, r.h);
-  drawGameText(ctx, text, r.x + INSET, r.y + INSET, color);
+  text.split('\n').forEach((line, i) => {
+    const y = r.y + INSET + i * ROW;
+    wipeElement(ctx, r.x + INSET, y, ROW, () => drawGameText(ctx, line, r.x + INSET, y, color));
+  });
 }
 
 // Cursor over a list: arrows wrap, Enter / Backspace report. Returns the

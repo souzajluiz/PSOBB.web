@@ -80,7 +80,7 @@ import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
-import { WindowAnim, withWindowAnim } from './windowanim.ts';
+import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 
 export const ITEM_LIST = { x: 13, y: 256, w: 308, h: 184 } as const; // entry 3, 0x00973ca0
 export const ITEM_DETAIL = { x: 324, y: 256, w: 240, h: 184 } as const; // entry 2, 0x009f2b58
@@ -778,7 +778,9 @@ export class ItemPackMenu {
     this.refresh();
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0): void {
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim); its rows, bars
+  // and texts are revealed by the element wipe (windowanim.ts withElementWipe).
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
     const c = this.env.character();
     const collapsed = this.state !== 'list' && this.state !== 'manual';
     const L = ITEM_LIST;
@@ -787,23 +789,31 @@ export class ItemPackMenu {
     const cx = L.x + INSET;
     const cy = L.y + INSET + TITLE_GAP;
     const cw = L.w - 2 * INSET;
-    if (!this.rows.length) {
-      drawGameText(ctx, this.env.text(11, 0xee), cx, cy + 1, DISABLED);
-    } else if (collapsed) {
-      this.drawRow(ctx, tex, this.rows[this.cursor], cx, cy, cw);
-    } else {
-      const mark = this.picked === null ? -1 : this.rows.findIndex((r) => r.id === this.picked);
-      if (mark >= this.top && mark < this.top + VISIBLE_ROWS) drawSelectBar(ctx, skin.bars, cx, cy + (mark - this.top) * ROW, cw, 16);
-      drawSelectBar(ctx, skin.bars, cx, cy + (this.cursor - this.top) * ROW, cw, 16);
-      this.rows.slice(this.top, this.top + VISIBLE_ROWS).forEach((r, i) => this.drawRow(ctx, tex, r, cx, cy + i * ROW, cw));
-    }
-    drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x37));
+    withElementWipe(wipe, cx, cy, cw, () => {
+      if (!this.rows.length) {
+        const none = this.env.text(11, 0xee);
+        wipeElement(ctx, cx, cy + 1, ROW, () => drawGameText(ctx, none, cx, cy + 1, DISABLED));
+      } else if (collapsed) {
+        this.drawRow(ctx, tex, this.rows[this.cursor], cx, cy, cw);
+      } else {
+        const mark = this.picked === null ? -1 : this.rows.findIndex((r) => r.id === this.picked);
+        if (mark >= this.top && mark < this.top + VISIBLE_ROWS) {
+          const my = cy + (mark - this.top) * ROW;
+          wipeElement(ctx, cx, my, 16, () => drawSelectBar(ctx, skin.bars, cx, my, cw, 16));
+        }
+        const sy = cy + (this.cursor - this.top) * ROW;
+        wipeElement(ctx, cx, sy, 16, () => drawSelectBar(ctx, skin.bars, cx, sy, cw, 16));
+        this.rows.slice(this.top, this.top + VISIBLE_ROWS).forEach((r, i) => this.drawRow(ctx, tex, r, cx, cy + i * ROW, cw));
+      }
+      drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x37));
+    });
     // "n/30" pill.
     const count = `${c?.inventory.length ?? 0}/${MAX_ITEMS}`;
     const px = L.x + 158;
     const py = L.y - 13;
     drawPill(ctx, skin.frame, px, py, 80 - 60, 0);
-    drawGameText(ctx, count, px + 50 - gameTextWidth(count) / 2, py + 4 + 1, '#ffffff');
+    // The count sits in the title's row: it waits for the window's opening, as the title text does.
+    if (!wipe || wipe.textShown) drawGameText(ctx, count, px + 50 - gameTextWidth(count) / 2, py + 4 + 1, '#ffffff');
 
     // The other windows are on the right half: they follow the right edge.
     ctx.save();
@@ -814,16 +824,24 @@ export class ItemPackMenu {
     if (this.rows.length) {
       const text = it && it !== 'meseta' ? itemDescription(it.data, this.env.rowContext().names) : it === 'meseta' ? this.env.text(11, 0x135) : '';
       const D = ITEM_DETAIL;
-      withWindowAnim(ctx, this.detailAnim, D.x, D.y, D.w, D.h, () => drawTextWindow(ctx, skin, D, text));
+      withWindowAnim(ctx, this.detailAnim, D.x, D.y, D.w, D.h, () =>
+        withElementWipe(this.detailAnim, D.x + INSET, D.y + INSET, D.w - 2 * INSET, () => drawTextWindow(ctx, skin, D, text)),
+      );
     }
     const P = PURPOSE_POS;
     const purposeTitle = this.env.text(11, 0x39);
     withWindowAnim(ctx, this.purposeAnim, P.x, P.y, P.w, listWindowHeight(this.purpose.items.length, true), () =>
-      drawListWindow(ctx, skin, P.x, P.y, P.w, purposeTitle, this.purpose.items, this.purpose.cursor, this.state === 'purpose'),
+      withElementWipe(this.purposeAnim, P.x + INSET, P.y + INSET + TITLE_GAP, P.w - 2 * INSET, () =>
+        drawListWindow(ctx, skin, P.x, P.y, P.w, purposeTitle, this.purpose.items, this.purpose.cursor, this.state === 'purpose'),
+      ),
     );
     const S = SORT_POS;
     const sortTitle = this.env.text(11, 0x3a);
-    withWindowAnim(ctx, this.sortAnim, S.x, S.y, S.w, listWindowHeight(2, true), () => drawListWindow(ctx, skin, S.x, S.y, S.w, sortTitle, this.sortItems(), this.sortMenu.cursor));
+    withWindowAnim(ctx, this.sortAnim, S.x, S.y, S.w, listWindowHeight(2, true), () =>
+      withElementWipe(this.sortAnim, S.x + INSET, S.y + INSET + TITLE_GAP, S.w - 2 * INSET, () =>
+        drawListWindow(ctx, skin, S.x, S.y, S.w, sortTitle, this.sortItems(), this.sortMenu.cursor),
+      ),
+    );
     const amount = this.amount;
     if (amount) withWindowAnim(ctx, this.amountAnim, AMOUNT_RECT.x, AMOUNT_RECT.y, AMOUNT_RECT.w, AMOUNT_RECT.h, () => this.drawAmount(ctx, skin, tex, amount));
     ctx.restore();
@@ -834,29 +852,37 @@ export class ItemPackMenu {
     this.panelDrawn = null;
     if (SHOW_EQUIP_PANEL && (this.state === 'list' || this.state === 'manual')) {
       const it = this.item();
-      if (it && it !== 'meseta' && this.rows.length) this.drawPanel(ctx, skin, it);
+      if (it && it !== 'meseta' && this.rows.length) this.drawPanel(ctx, skin, it, wipe);
     }
   }
 
   // The equipment stat panel (entry 0xC) of a weapon / armour / shield, or the
   // mag rows, drawn on the left under the list (itemdetail.ts).
-  private drawPanel(ctx: CanvasRenderingContext2D, skin: WindowSkin, it: InventoryItem): void {
+  private drawPanel(ctx: CanvasRenderingContext2D, skin: WindowSkin, it: InventoryItem, wipe?: WindowAnim): void {
     const rc = this.env.rowContext();
-    const names = rc.names;
-    if (!names || (!hasEquipPanel(it.data) && it.data.data1[0] !== 2)) return;
+    if (!rc.names || (!hasEquipPanel(it.data) && it.data.data1[0] !== 2)) return;
     const R = EQUIP_PANEL;
     drawWindowFrame(ctx, skin.frame, R.x, R.y, R.w, R.h);
     this.panelDrawn = { x: R.x, y: R.y, w: R.w, h: R.h, kind: it.data.data1[0] === 2 ? 'mag' : 'equip' };
     const x0 = R.x + INSET;
     const xr = R.x + R.w - INSET;
+    const y0 = R.y + INSET;
+    withElementWipe(wipe, x0, y0, R.w - 2 * INSET, () => this.drawPanelRows(ctx, it, rc, x0, xr, y0));
+  }
+
+  // The panel's lines (the mag rows, or the equipment stat rows); each text is an element of the wipe.
+  private drawPanelRows(ctx: CanvasRenderingContext2D, it: InventoryItem, rc: RowContext, x0: number, xr: number, y0: number): void {
+    const names = rc.names;
+    if (!names) return;
     const white = '#ffffff';
     const text = (group: number, index: number) => this.env.text(group, index);
-    let y = R.y + INSET;
+    const t = (s: string, x: number, y: number, color: string) => wipeElement(ctx, x, y, ROW, () => drawGameText(ctx, s, x, y, color));
+    let y = y0;
     if (it.data.data1[0] === 2) {
       const m = magRows(it.data);
       const line = (label: string, value: string) => {
-        drawGameText(ctx, label, x0, y, white);
-        drawGameText(ctx, value, xr - gameTextWidth(value), y, white);
+        t(label, x0, y, white);
+        t(value, xr - gameTextWidth(value), y, white);
         y += ROW;
       };
       line(`${text(11, MAG_LEVEL_LABEL)}:`, `${m.level}`);
@@ -881,11 +907,11 @@ export class ItemPackMenu {
     const problems = equipProblems(it.data, rc);
     const rows = equipStatRows(current, it.data, old && old !== it ? old.data : null, names.pmt, equipped, problems === 0);
     for (const row of rows) {
-      drawGameText(ctx, `${text(11, row.label)}:`, x0, y, white);
+      t(`${text(11, row.label)}:`, x0, y, white);
       const cur = String(row.current);
       const item = `→ ${row.item}`;
-      drawGameText(ctx, item, xr - gameTextWidth(item), y, row.color);
-      drawGameText(ctx, cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), y, white);
+      t(item, xr - gameTextWidth(item), y, row.color);
+      t(cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), y, white);
       y += ROW;
     }
   }
@@ -913,7 +939,10 @@ export class ItemPackMenu {
   }
 
   private drawAmount(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, a: AmountSpinner): void {
-    drawAmountWindow(ctx, skin, tex, a, AMOUNT_RECT, this.env.text(11, 0x3b));
+    const R = AMOUNT_RECT;
+    withElementWipe(this.amountAnim, R.x + INSET, R.y + INSET + TITLE_GAP, R.w - 2 * INSET, () =>
+      drawAmountWindow(ctx, skin, tex, a, R, this.env.text(11, 0x3b)),
+    );
   }
 }
 
@@ -936,15 +965,18 @@ export function drawAmountWindow(
     const c = 0x30 + (v % 10);
     v = Math.trunc(v / 10);
     const right = cx + a.digitRight(k, R.w);
-    ctx.drawImage(tex.digits, (c & 15) * 16, c & 0xf0, 10, 13, right - 10, y, 10, 13);
+    // Each digit is an element of the wipe (under the window's scope, if any).
+    wipeElement(ctx, right - 10, y, 13, () => ctx.drawImage(tex.digits, (c & 15) * 16, c & 0xf0, 10, 13, right - 10, y, 10, 13));
     if (k === a.digit) {
       // SinowberillUIElementListWindow_RenderScrollbar_007293e0: texture 0
       // at u = 224 (240 once confirmed), 14 x 12 pieces at x = right - 5 - 8:
       // texels v 0..12 at y - 15, 13..25 at y + 19, 28..40 at y + 25.
       const ax = right - 5 - 8;
-      ctx.drawImage(tex.arrows, 224, 0, 14, 12, ax, y - 15, 14, 12);
-      ctx.drawImage(tex.arrows, 224, 13, 14, 12, ax, y + 19, 14, 12);
-      ctx.drawImage(tex.arrows, 224, 28, 14, 12, ax, y + 25, 14, 12);
+      wipeElement(ctx, ax, y - 15, 52, () => {
+        ctx.drawImage(tex.arrows, 224, 0, 14, 12, ax, y - 15, 14, 12);
+        ctx.drawImage(tex.arrows, 224, 13, 14, 12, ax, y + 19, 14, 12);
+        ctx.drawImage(tex.arrows, 224, 28, 14, 12, ax, y + 25, 14, 12);
+      });
     }
   }
 }
@@ -954,10 +986,13 @@ export function drawAmountWindow(
 // right-aligned to the window's right edge in the name's colour. Nothing clips
 // the name (no truncation in the render path).
 export function drawItemRow(ctx: CanvasRenderingContext2D, icons: CanvasImageSource, r: ItemRow, frame: number, x: number, y: number, w: number): void {
-  drawIcon(ctx, icons, r.icon1, x, y, r.iconColor, frame);
-  drawIcon(ctx, icons, r.icon2, x + ICON, y, r.iconColor, frame);
-  if (r.name) drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor);
-  if (r.count) drawGameText(ctx, r.count, x + w - gameTextWidth(r.count), y, r.nameColor);
+  wipeElement(ctx, x, y, ICON, () => drawIcon(ctx, icons, r.icon1, x, y, r.iconColor, frame));
+  wipeElement(ctx, x + ICON, y, ICON, () => drawIcon(ctx, icons, r.icon2, x + ICON, y, r.iconColor, frame));
+  if (r.name) wipeElement(ctx, x + 2 * ICON, y, ROW, () => drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor));
+  if (r.count) {
+    const nx = x + w - gameTextWidth(r.count);
+    wipeElement(ctx, nx, y, ROW, () => drawGameText(ctx, r.count, nx, y, r.nameColor));
+  }
 }
 
 export function drawIcon(ctx: CanvasRenderingContext2D, img: CanvasImageSource, icon: number, x: number, y: number, color: string, frame: number): void {

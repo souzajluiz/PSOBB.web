@@ -31,8 +31,9 @@
 
 import { se, SE } from '../audio/se.ts';
 import { techTpCost } from '../combat/techniques.ts';
-import { drawListWindow, drawTextWindow, listKey, type ListItem } from './fieldwindows.ts';
+import { drawListWindow, drawTextWindow, INSET, listKey, type ListItem, TITLE_GAP } from './fieldwindows.ts';
 import type { WindowSkin } from './stage.ts';
+import { withElementWipe, type WindowAnim } from './windowanim.ts';
 
 export const TYPE_POS = { x: 13, y: 256, w: 179 } as const; // entry 0x12
 export const TECH_POS = { x: 200, y: 256, w: 179 } as const; // entry 0x13
@@ -125,14 +126,21 @@ export class TechniqueMenu {
     return true;
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0): void {
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): each window's elements are revealed by its wipe.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0, wipe?: WindowAnim): void {
     const items = techItems(this.type.cursor, this.env);
-    drawListWindow(ctx, skin, TYPE_POS.x, TYPE_POS.y, TYPE_POS.w, this.env.text(11, 0x42), this.typeItems(), this.type.cursor, this.state === 'type');
-    drawTechList(ctx, skin, items, this.tech.cursor, this.state === 'tech', this.env.text(11, 0x43));
+    const T = TYPE_POS;
+    withElementWipe(wipe, T.x + INSET, T.y + INSET + TITLE_GAP, T.w - 2 * INSET, () =>
+      drawListWindow(ctx, skin, T.x, T.y, T.w, this.env.text(11, 0x42), this.typeItems(), this.type.cursor, this.state === 'type'),
+    );
+    withElementWipe(wipe, TECH_POS.x + INSET, TECH_POS.y + INSET + TITLE_GAP, TECH_POS.w - 2 * INSET, () =>
+      drawTechList(ctx, skin, items, this.tech.cursor, this.state === 'tech', this.env.text(11, 0x43)),
+    );
     if (this.state === 'tech') {
       const it = items[this.tech.cursor];
       // On the right half: follows the right edge (classic/ingame.ts anchorX).
-      drawTextWindow(ctx, skin, { ...INFO_RECT, x: INFO_RECT.x + extra }, it ? techInfo(it.value, this.env) : '');
+      const R = { ...INFO_RECT, x: INFO_RECT.x + extra };
+      withElementWipe(wipe, R.x + INSET, R.y + INSET, R.w - 2 * INSET, () => drawTextWindow(ctx, skin, R, it ? techInfo(it.value, this.env) : ''));
     }
   }
 }

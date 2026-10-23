@@ -40,6 +40,7 @@ import { isMagFood, photonBlasts, SE_MAG_LEVEL, type FeedTimer } from '../net/ma
 import type { ItemPMT } from '../formats/itempmt.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
+import { wipeElement, WindowAnim, withElementWipe } from './windowanim.ts';
 import { ICON_UV, isWrapped, itemRow, type ItemPackTextures, type ItemRow, type RowContext } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 
@@ -236,7 +237,8 @@ export class MagMenu {
     this.state = 'rising';
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0): void {
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): the elements of each window are revealed by its wipe.
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
     const rc = this.env.rowContext();
     const L = MAG_LIST;
     const cx = L.x + INSET;
@@ -244,20 +246,27 @@ export class MagMenu {
     const cw = L.w - 2 * INSET;
     const browsing = this.state === 'mags';
     drawWindowFrame(ctx, skin.frame, L.x, L.y, L.w, browsing ? L.h : ROW + 14 + TITLE_GAP);
-    if (browsing) {
-      if (!this.mags.length) drawGameText(ctx, this.env.text(11, 0xee), cx, cy + 1, DISABLED);
-      else {
-        drawSelectBar(ctx, skin.bars, cx, cy + (this.cursor - this.top) * ROW, cw, 16);
-        this.mags.slice(this.top, this.top + LIST_ROWS).forEach((m, i) => this.drawRow(ctx, tex, itemRow(m, rc), cx, cy + i * ROW, cw));
+    withElementWipe(wipe, cx, cy, cw, () => {
+      if (browsing) {
+        if (!this.mags.length) {
+          const none = this.env.text(11, 0xee);
+          wipeElement(ctx, cx, cy + 1, ROW, () => drawGameText(ctx, none, cx, cy + 1, DISABLED));
+        } else {
+          const bar = cy + (this.cursor - this.top) * ROW;
+          wipeElement(ctx, cx, bar, 16, () => drawSelectBar(ctx, skin.bars, cx, bar, cw, 16));
+          this.mags.slice(this.top, this.top + LIST_ROWS).forEach((m, i) => this.drawRow(ctx, tex, itemRow(m, rc), cx, cy + i * ROW, cw));
+        }
+      } else {
+        const m = this.mags[this.cursor];
+        if (m) this.drawRow(ctx, tex, itemRow(m, rc), cx, cy, cw);
       }
-    } else {
-      const m = this.mags[this.cursor];
-      if (m) this.drawRow(ctx, tex, itemRow(m, rc), cx, cy, cw);
-    }
-    drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x3c));
+      drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x3c));
+    });
 
     if (this.state === 'select') {
-      drawListWindow(ctx, skin, MAG_SELECT.x, MAG_SELECT.y, MAG_SELECT.w, this.env.text(11, 0x30), this.select.items, this.select.cursor);
+      withElementWipe(wipe, MAG_SELECT.x + INSET, MAG_SELECT.y + INSET + TITLE_GAP, MAG_SELECT.w - 2 * INSET, () =>
+        drawListWindow(ctx, skin, MAG_SELECT.x, MAG_SELECT.y, MAG_SELECT.w, this.env.text(11, 0x30), this.select.items, this.select.cursor),
+      );
     }
     if (this.state === 'items' || this.busy) {
       const I = MAG_ITEMS;
@@ -265,36 +274,50 @@ export class MagMenu {
       const ix = I.x + INSET;
       const iy = I.y + INSET + TITLE_GAP;
       const iw = I.w - 2 * INSET;
-      if (!this.foods.length) drawGameText(ctx, this.env.text(11, 0xee), ix, iy + 1, DISABLED);
-      else {
-        drawSelectBar(ctx, skin.bars, ix, iy + (this.item.cursor - this.item.top) * ROW, iw, 16);
-        this.foods.slice(this.item.top, this.item.top + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
-      }
-      drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
+      withElementWipe(wipe, ix, iy, iw, () => {
+        if (!this.foods.length) {
+          const none = this.env.text(11, 0xee);
+          wipeElement(ctx, ix, iy + 1, ROW, () => drawGameText(ctx, none, ix, iy + 1, DISABLED));
+        } else {
+          const bar = iy + (this.item.cursor - this.item.top) * ROW;
+          wipeElement(ctx, ix, bar, 16, () => drawSelectBar(ctx, skin.bars, ix, bar, iw, 16));
+          this.foods.slice(this.item.top, this.item.top + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
+        }
+        drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
+      });
     }
 
     ctx.save();
     ctx.translate(extra, 0);
     const mag = this.mags[this.cursor];
-    if (mag) this.drawStatus(ctx, skin, mag);
+    if (mag) this.drawStatus(ctx, skin, mag, wipe);
     if (this.state === 'pb') {
       const w = gameTextWidth(this.pbLine) + 2 * INSET;
       drawWindowFrame(ctx, skin.frame, MAG_PB.x, MAG_PB.y, w, 14 + 2 * INSET);
-      drawGameText(ctx, this.pbLine, MAG_PB.x + INSET, MAG_PB.y + INSET, '#ffffff');
+      withElementWipe(wipe, MAG_PB.x + INSET, MAG_PB.y + INSET, w - 2 * INSET, () =>
+        wipeElement(ctx, MAG_PB.x + INSET, MAG_PB.y + INSET, ROW, () => drawGameText(ctx, this.pbLine, MAG_PB.x + INSET, MAG_PB.y + INSET, '#ffffff')),
+      );
     }
     ctx.restore();
   }
 
   // ASSUMED layout (see the header).
-  private drawStatus(ctx: CanvasRenderingContext2D, skin: WindowSkin, mag: InventoryItem): void {
+  private drawStatus(ctx: CanvasRenderingContext2D, skin: WindowSkin, mag: InventoryItem, wipe?: WindowAnim): void {
     const S = MAG_STATUS;
     drawWindowFrame(ctx, skin.frame, S.x, S.y, S.w, S.h);
+    withElementWipe(wipe, S.x + INSET, S.y + INSET, S.w - 2 * INSET, () => this.drawStatusRows(ctx, mag));
+  }
+
+  // The status window's rows and stat bars (each text and bar is an element of the wipe).
+  private drawStatusRows(ctx: CanvasRenderingContext2D, mag: InventoryItem): void {
+    const S = MAG_STATUS;
     const d = mag.data.data1;
     const x = S.x + INSET;
     let y = S.y + INSET;
+    const t = (s: string, tx: number, ty: number) => wipeElement(ctx, tx, ty, ROW, () => drawGameText(ctx, s, tx, ty, '#ffffff'));
     const line = (label: string, value: string) => {
-      drawGameText(ctx, label, x, y, '#ffffff');
-      drawGameText(ctx, value, S.x + S.w - INSET - gameTextWidth(value), y, '#ffffff');
+      t(label, x, y);
+      t(value, S.x + S.w - INSET - gameTextWidth(value), y);
       y += ROW;
     };
     line(this.env.text(11, 0xc0), String(d[2]));
@@ -306,15 +329,17 @@ export class MagMenu {
       const shown = this.shown?.[i] ?? real[i];
       // RefreshItemStatDisplay_00726294: a bar still below its level is full.
       const part = shown < real[i] ? 100 : v % 100;
-      drawGameText(ctx, label, x, y, '#ffffff');
+      t(label, x, y);
       const bx = x + 50;
       const bw = S.w - 2 * INSET - 50 - 30;
-      ctx.fillStyle = '#203040';
-      ctx.fillRect(bx, y + 4, bw, 6);
-      ctx.fillStyle = '#ffd040';
-      ctx.fillRect(bx, y + 4, (bw * part) / 100, 6);
+      wipeElement(ctx, bx, y + 4, 6, () => {
+        ctx.fillStyle = '#203040';
+        ctx.fillRect(bx, y + 4, bw, 6);
+        ctx.fillStyle = '#ffd040';
+        ctx.fillRect(bx, y + 4, (bw * part) / 100, 6);
+      });
       const lv = String(shown);
-      drawGameText(ctx, lv, S.x + S.w - INSET - gameTextWidth(lv), y, '#ffffff');
+      t(lv, S.x + S.w - INSET - gameTextWidth(lv), y);
       y += ROW;
     });
   }
@@ -322,9 +347,12 @@ export class MagMenu {
   private drawRow(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, r: ItemRow, x: number, y: number, w: number): void {
     for (const [icon, ox] of [[r.icon1, 0], [r.icon2, ICON]] as const) {
       const uv = ICON_UV[icon];
-      if (uv) ctx.drawImage(tex.icons, uv[0], uv[1], ICON, ICON, x + ox, y, ICON, ICON);
+      if (uv) wipeElement(ctx, x + ox, y, ICON, () => ctx.drawImage(tex.icons, uv[0], uv[1], ICON, ICON, x + ox, y, ICON, ICON));
     }
-    if (r.name) drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor);
-    if (r.count) drawGameText(ctx, r.count, x + w - gameTextWidth(r.count), y, r.nameColor);
+    if (r.name) wipeElement(ctx, x + 2 * ICON, y, ROW, () => drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor));
+    if (r.count) {
+      const nx = x + w - gameTextWidth(r.count);
+      wipeElement(ctx, nx, y, ROW, () => drawGameText(ctx, r.count, nx, y, r.nameColor));
+    }
   }
 }

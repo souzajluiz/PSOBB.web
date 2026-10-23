@@ -201,6 +201,58 @@ export function clipReveal(ctx: CanvasRenderingContext2D, left: number, top: num
   return true;
 }
 
+// --- the element wipe of a leaf window (the field menus) ----------------------
+//
+// The field menus' leaves (Item Pack, Equip, MAG, Technique, Options) draw
+// their rows, bars and texts one element at a time. Each window of a leaf is
+// drawn inside withElementWipe(anim, content x, content y, content w, ...): the
+// element offsets are relative to that content (the same x / y / W as the list
+// windows above), and every element drawn through wipeElement shows only its
+// part of reveal(). Outside a scope (the HUD, the shop, the game list) wipeElement
+// draws the element whole, so the shared helpers stay unchanged there.
+// A window's title text waits for c >= 0 (textShown), as in drawMenuWindow.
+// ASSUMED: the leaves' windows use the element offsets of their own content
+// (the exe's per-window wipe), with the leaf's one animation (FieldMenu's
+// leafAnim) or the later window's own animation.
+interface ElementScope {
+  anim: WindowAnim;
+  x: number;
+  y: number;
+  w: number;
+}
+let elementScope: ElementScope | null = null;
+
+// Runs `body` with the wipe of `anim` for the content at (x, y) of width w.
+// `anim` undefined: no wipe.
+export function withElementWipe(anim: WindowAnim | undefined, x: number, y: number, w: number, body: () => void): void {
+  const prev = elementScope;
+  elementScope = anim ? { anim, x, y, w } : null;
+  try {
+    body();
+  } finally {
+    elementScope = prev;
+  }
+}
+
+// Draws one element at (x, y), h px tall (absolute, in the window's space),
+// under the wipe of the current scope.
+export function wipeElement(ctx: CanvasRenderingContext2D, x: number, y: number, h: number, draw: () => void): void {
+  const s = elementScope;
+  if (!s) return draw();
+  const r = s.anim.reveal(x - s.x, y - s.y, s.w);
+  ctx.save();
+  try {
+    if (clipReveal(ctx, x, y, r, h)) draw();
+  } finally {
+    ctx.restore();
+  }
+}
+
+// Whether the current scope's window title text is shown (no scope: yes).
+export function titleTextShown(): boolean {
+  return !elementScope || elementScope.anim.textShown;
+}
+
 // --- the window shine ---------------------------------------------------------
 //
 // A sheen that crosses every list window now and then. One global state

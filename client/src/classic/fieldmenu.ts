@@ -298,8 +298,9 @@ export class FieldMenu {
     const b = this.leafBounds;
     try {
       withWindowAnim(ctx, this.leafAnim, b.x, b.y, b.w, b.h, () => {
-        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu) leaf.draw(ctx, skin, extra);
-        else leaf.draw(ctx, skin, tex, extra);
+        // The leaf's rows, bars and texts take the element wipe of the same animation.
+        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu) leaf.draw(ctx, skin, extra, this.leafAnim);
+        else leaf.draw(ctx, skin, tex, extra, this.leafAnim);
       });
     } finally {
       windowFrames.record = null;
