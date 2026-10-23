@@ -210,6 +210,14 @@ export function buildRevivePlayer(clientId: number, target: number): Uint8Array 
   return b;
 }
 
+// 6x66 (G_UseStarAtomizer_6x66, 0x0C; FUN_005de664 -> checked_call): the header
+// (+2 unused), then the caster (+4) and the three others (+6..+10, 0xFFFF = none).
+export function buildStarAtomizer(list: readonly number[]): Uint8Array {
+  const { b, dv } = sub(0x66, 0x0c, 0);
+  for (let i = 0; i < 4; i++) dv.setUint16(4 + i * 2, list[i] ?? 0xffff, true);
+  return b;
+}
+
 // G_FeedMag_6x28 (0x0C, Player_SendFeedMagPacket_0068dcf8)
 export function buildFeedMag(clientId: number, magId: number, foodId: number): Uint8Array {
   const { b, dv } = sub(0x28, 0x0c, clientId);
@@ -1157,6 +1165,10 @@ export class GameItems {
       statusFlags?: () => number;
       // The Moon Atomizer's target (the nearest dead party member in range), null when none.
       atomizerTarget?: () => number | null;
+      // The Star Atomizer's 6x66 list (the caster, then the three others), null when no targeting record.
+      starTargets?: () => readonly number[] | null;
+      // The local dispatch of a 6x33 / 6x66 the sender made (checked_call -> the table handler).
+      atomizerEcho?: (packet: Uint8Array) => void;
     } = {},
   ): boolean {
     const d = it.data.data1;
@@ -1203,7 +1215,21 @@ export class GameItems {
       // echo, action_use_item -> FUN_005deb74), to the target of record (4,9).
       if (d[1] === 4) {
         const target = rules.atomizerTarget?.() ?? null;
-        if (target !== null) this.game.sendSubcommand(0x33, buildRevivePlayer(this.game.selfId, target).subarray(4));
+        if (target !== null) {
+          const packet = buildRevivePlayer(this.game.selfId, target);
+          this.game.sendSubcommand(0x33, packet.subarray(4));
+          rules.atomizerEcho?.(packet);
+        }
+      }
+      // The Star Atomizer's 6x66 (FUN_005de664 on record (4,10)): the caster and the
+      // three others in range; no record, nothing sent.
+      if (d[1] === 5) {
+        const list = rules.starTargets?.() ?? null;
+        if (list) {
+          const packet = buildStarAtomizer(list);
+          this.game.sendSubcommand(0x66, packet.subarray(4));
+          rules.atomizerEcho?.(packet);
+        }
       }
       // use_telepipe -> unknown_cast_tech(ryuker): the caster's pipe.
       if (d[1] === 7) this.onTelepipe();

@@ -259,6 +259,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
       maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
       statusFlags: () => view.combat.status.flags,
       atomizerTarget: () => view.combat.atomizerTarget(),
+      starTargets: () => view.combat.starTargets(),
+      atomizerEcho: (packet: Uint8Array) => view.combat.atomizerEcho(packet),
     };
     view.items.onInventoryChanged = () => inventory.show(session?.character ?? null);
     view.hud.setNames(() => inventory.names); // classic Item Pack (render/fieldhud.ts)

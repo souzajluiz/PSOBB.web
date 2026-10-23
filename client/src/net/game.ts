@@ -1514,6 +1514,14 @@ export function parseRevivePlayer(body: Uint8Array): { clientId: number; target:
   return { clientId: dv.getUint16(2, true), target: dv.getUint16(4, true) };
 }
 
+// 6x66 (G_UseStarAtomizer_6x66, 0x0C; FUN_005de5a4): four client ids at +4..+10, the
+// caster first, then the three others the Star Atomizer reaches (0xFFFF = none).
+export function parseStarAtomizer(body: Uint8Array): number[] | null {
+  if (body.length < 12 || body[0] !== 0x66) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return [0, 1, 2, 3].map((i) => dv.getUint16(4 + i * 2, true));
+}
+
 // 6x46: the entity ids a strike hit.
 export function parseAttackTargets(body: Uint8Array): { clientId: number; targets: number[] } | null {
   if (body.length < 8 || body[0] !== 0x46) return null;

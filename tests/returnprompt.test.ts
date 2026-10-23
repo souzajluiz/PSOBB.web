@@ -7,9 +7,9 @@ import { ReturnPrompt, RETURN_POS, RETURN_TEXT, RETURN_YES, RETURN_NO } from '..
 import { PlayerDamage, DEATH_FADE_TICKS } from '../client/src/combat/playerdamage.ts';
 import { wrapGameText } from '../client/src/classic/chat.ts';
 import { pioneer2ReturnArrival } from '../client/src/net/telepipe.ts';
-import { reviveRestore, reverserHp } from '../client/src/combat/buffs.ts';
-import { parseRevivePlayer } from '../client/src/net/game.ts';
-import { buildRevivePlayer, buildUseItem, GameItems } from '../client/src/net/items.ts';
+import { nearbyAtomizerList, NO_CLIENT, reviveRestore, reverserHp } from '../client/src/combat/buffs.ts';
+import { parseRevivePlayer, parseStarAtomizer } from '../client/src/net/game.ts';
+import { buildRevivePlayer, buildStarAtomizer, buildUseItem, GameItems } from '../client/src/net/items.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 
@@ -202,6 +202,58 @@ check(wrapGameText(QUESTION, RETURN_POS.w - 20).length === 3, 'the question is t
   check(sent[1][1] === '01 00 00 00', 'use: the 6x33 body carries the target (packet +4)');
   check(hex(buildUseItem(2, 0x10)).startsWith('27 02 02 00'), '6x27 keeps its sender id');
   check(ch.inventory.length === 0, 'use: the Atomizer is used up');
+}
+
+{
+  // The Star Atomizer (tool 03 05 00; the use FUN_005df314 -> FUN_005de664): the 6x66 on
+  // record (4,10), 12 bytes, the caster at +4 and three others at +6..+10 (newserv G_UseStarAtomizer_6x66).
+  const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(' ');
+  check(hex(buildStarAtomizer([2, 0, 1, 0xffff])) === '66 03 00 00 02 00 00 00 01 00 ff ff', 'buildStarAtomizer: 6x66 bytes (caster +4, targets +6..+10, 0xFFFF none)');
+  const star = parseStarAtomizer(buildStarAtomizer([2, 0, 1, 0xffff]));
+  check(star !== null && star.join(',') === '2,0,1,65535', 'parseStarAtomizer: the four client ids back');
+  check(parseStarAtomizer(new Uint8Array(10).fill(0).map((_, i) => (i === 0 ? 0x66 : 0))) === null, 'parseStarAtomizer: shorter than 12 bytes is rejected');
+  check(parseStarAtomizer(buildRevivePlayer(2, 1)) === null, 'parseStarAtomizer: a 6x33 is not a 6x66');
+  // The send-side list: the caster, then the other client ids in range (client id order), 0xFFFF when absent or out of range.
+  const at = (m: Record<number, { x: number; z: number }>) => (id: number) => m[id];
+  check(nearbyAtomizerList(2, at({ 2: { x: 0, z: 0 }, 0: { x: 3, z: 4 }, 3: { x: 20, z: 0 } }), 10)?.join(',') === '2,0,65535,65535', 'nearby list: self first, client 0 in range (dist 5), 1 absent, 3 out of range');
+  check(nearbyAtomizerList(2, at({ 0: { x: 0, z: 0 } }), 10) === null, 'nearby list: no position for the caster, no list');
+  check(NO_CLIENT === 0xffff, 'NO_CLIENT is 0xFFFF');
+  const sentStar: Array<[number, string]> = [];
+  const echoStar: string[] = [];
+  const gameStar = {
+    on: () => {},
+    conn: { onCommand: () => {}, send: () => {} },
+    info: null,
+    players: new Map(),
+    selfId: 2,
+    active: true,
+    sendSubcommand: (sub: number, body: Uint8Array) => sentStar.push([sub, hex(body)]),
+  } as never;
+  const inv = (h: string, id: number): InventoryItem => ({ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: { ...itemFromHex(h), id } });
+  const starItem = inv('03050000 00000000 00000000 00000000 00000000', 0x11);
+  const chStar = { meseta: 0, inventory: [starItem], techLevels: [], stats: {}, charClass: 0, sectionId: 0 } as unknown as CharacterFile;
+  const itemsStar = new GameItems(gameStar, { character: () => chStar, fullCharacter: () => null } as never);
+  const noRecord = { starTargets: () => null };
+  check(itemsStar.canUse(starItem, noRecord), 'Star Atomizer: usable without a targeting record (no target check in the exe)');
+  itemsStar.use(0x11, noRecord);
+  check(sentStar.length === 1 && sentStar[0][0] === 0x27, 'Star Atomizer, no record: the 6x27 only (FUN_0068be94 has no check for subclass 5), no 6x66');
+  check(chStar.inventory.length === 0, 'Star Atomizer, no record: used up');
+  const starItem2 = inv('03050000 00000000 00000000 00000000 00000000', 0x13);
+  chStar.inventory.push(starItem2);
+  itemsStar.use(0x13, { starTargets: () => [2, 0, 1, 0xffff], atomizerEcho: (p: Uint8Array) => echoStar.push(hex(p)) });
+  check(sentStar.length === 3 && sentStar[1][0] === 0x27 && sentStar[2][0] === 0x66, 'Star Atomizer: 6x27 first, then 6x66');
+  check(sentStar[2][1] === '02 00 00 00 01 00 ff ff', 'Star Atomizer: the 6x66 body is the four ids (caster first)');
+  check(echoStar.length === 1 && echoStar[0].startsWith('66 03'), 'Star Atomizer: the sender runs its own 6x66 (local echo)');
+  check(chStar.inventory.length === 0, 'Star Atomizer: used up');
+  // The Moon Atomizer's local echo: the 6x33 packet, once.
+  const echoMoon: string[] = [];
+  const sentMoon: Array<[number, string]> = [];
+  const gameMoon = { ...(gameStar as object), sendSubcommand: (sub: number, body: Uint8Array) => sentMoon.push([sub, hex(body)]) } as never;
+  const moon = inv('03040000 00000000 00000000 00000000 00000000', 0x12);
+  const chMoon = { meseta: 0, inventory: [moon], techLevels: [], stats: {}, charClass: 0, sectionId: 0 } as unknown as CharacterFile;
+  new GameItems(gameMoon, { character: () => chMoon, fullCharacter: () => null } as never).use(0x12, { atomizerTarget: () => 1, atomizerEcho: (p: Uint8Array) => echoMoon.push(hex(p)) });
+  check(echoMoon.length === 1 && echoMoon[0] === '33 02 02 00 01 00 00 00', 'Moon Atomizer: the sender runs its own 6x33 (local echo, the 6x33 bytes)');
+  check(sentMoon.length === 2 && sentMoon[1][0] === 0x33, 'Moon Atomizer: 6x27 then 6x33 still');
 }
 
 console.log(`${checks - failures}/${checks} checks passed${failures ? `, ${failures} FAILED` : ' ALL PASS'}`);
