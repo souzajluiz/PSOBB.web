@@ -330,7 +330,7 @@ export class FieldMenu {
   private drawBottom(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.areaMap?.draw(ctx, skin, tex);
     this.questBoard?.draw(ctx, skin, tex);
-    this.trade?.draw(ctx, skin);
+    this.trade?.draw(ctx, skin, tex.icons);
     const leaf = this.leaf ?? this.closingLeaf;
     if (!leaf || !this.leafAnim.visible) return;
     const rects: { x: number; y: number; w: number; h: number }[] = [];

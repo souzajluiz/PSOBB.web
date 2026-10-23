@@ -20,6 +20,8 @@ export interface TradeLink {
   host(): TradeHost | null;
   // The player is in the game / lobby (exe GetPlayer_0068d5a8 != null).
   isPresent(playerId: number): boolean;
+  // The trade zone bit of a player (net/tradezone.ts); absent: the permissive reading.
+  inTradeZone?(playerId: number): boolean;
 }
 
 // The compact item of the D0 list: the ItemData as it is stored (data1 12 bytes, id le
@@ -58,9 +60,9 @@ export function tradeIO(link: TradeLink): TradeIO {
     message: (textId, partner) => link.host()?.notify(textId, partner),
     compactItem: (itemId, amount) => tradeCompactItem(link.host()?.character() ?? null, itemId, amount),
     removeOffer: (itemId, amount) => removeTradeOffer(link.host()?.character() ?? null, itemId, amount),
-    // ASSUMED: the trade zone (TObjTradeCollision, DerolleMapObjectVisibilityCheck_00667bb5)
-    // is not modelled by the port yet, so the partner is always in the zone.
-    inTradeZone: () => true,
+    // The zone bits of the field's TObjTradeCollision objects (net/tradezone.ts); the lobby
+    // has none loaded, so the trade keeps the permissive reading there (ASSUMED).
+    inTradeZone: (id) => link.inTradeZone?.(id) ?? true,
     playerPresent: (id) => link.isPresent(id),
   };
 }

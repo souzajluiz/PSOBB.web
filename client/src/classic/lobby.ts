@@ -761,7 +761,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.mail?.draw(ctx, this.hud.skin));
-      inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);

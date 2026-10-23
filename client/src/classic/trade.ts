@@ -46,6 +46,11 @@
 // and, for the meseta pseudo id 0xffffff01, UIElementSetIntText (dump 694971: the number
 // then the unitxt meseta string). The digit sprites are not used for the offers; they
 // belong to the amount spinner only (CreateNumericDisplayListWindow_00728ac4, dump 692115).
+// The exe's window (QuickMenuWindow_CreateTradeWindow_00760468) is filled from the partner's
+// list (g_TradeWindowItems, what 1 / 2 from the partner, dump 838544 / 838682); the local
+// offers are the other list (g_QuickMenuSlotData, dump 839525). The port draws both sides in
+// this one window (ASSUMED layout). A partner's item the local inventory lacks has no
+// icon here (the exe's populate looks the id up in the local inventory, dump 719699).
 //
 // ASSUMED (see the DEVLOG entry 2026-10-23 "trade window"):
 //   - the keys: Enter opens the item list from the window (the exe's slot list), Space
@@ -56,15 +61,14 @@
 //     30 frames; the port keeps the button down itself), the second Yes the second;
 //   - the accept prompt's Yes is the first row (cursor 0), its Yes / No value order is
 //     the YesNoListMenu's (ASSUMED: the window's SetState is not traced);
-//   - the offer lines of the trade window are plain text lines (ASSUMED: the item rows
-//     with icons are not drawn; the meseta line keeps the port's label);
+//   - both sides' offers share the trade window (ASSUMED, see above), in local-then-partner order;
 //   - the amount is a spinner (AmountSpinner) in a box at (341, 256);
 //   - the notice (the session's TRADE_TEXT) is drawn in that same box when no other
 //     dialog is up.
 
 import { se, SE } from '../audio/se.ts';
-import { AmountSpinner, spinnerKeyDown, spinnerKeyUp, type ItemRow } from './itempack.ts';
-import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
+import { AmountSpinner, drawItemRow, ICON, mesetaRow, NO_ICON, spinnerKeyDown, spinnerKeyUp, type ItemRow } from './itempack.ts';
+import { drawListWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import type { MenuKey } from './gamelist.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
@@ -126,6 +130,17 @@ function windowWidth(items: readonly ListItem[], title: string | null): number {
   return widest + 2 * INSET;
 }
 
+// The width of an offer row: two icons, the name and the count (ASSUMED: the exe's
+// window width is the digit count's, CreateNumericDisplayListWindow_00728ac4).
+function offerRowWidth(r: ItemRow): number {
+  return 2 * ICON + gameTextWidth(r.name) + (r.count ? gameTextWidth(r.count) + 8 : 0);
+}
+
+function offerWindowWidth(rows: readonly ItemRow[], title: string): number {
+  const widest = Math.max(0, ...rows.map(offerRowWidth), gameTextWidth(title));
+  return widest + 2 * INSET;
+}
+
 export class TradeMenu {
   phase: TradePhase;
   // The last notice of the session (a TRADE_TEXT), drawn until another dialog opens.
@@ -138,6 +153,7 @@ export class TradeMenu {
   private readonly itemState = { cursor: 0 };
   private spinner: AmountSpinner | null = null;
   private spinnerId = -1;
+  private frame = 0;
   private question: Question | null = null;
   // The confirm is held by the window (see ASSUMED above): the flag it set.
   private holding = 0;
@@ -446,17 +462,44 @@ export class TradeMenu {
     return this.phase !== 'closed';
   }
 
-  // Offers and partner lines of the trade window (both sides, the exe's two lists).
-  private windowLines(): ListItem[] {
+  // The offer rows (exe ListWindowObject_PopulateItemsFromData_0074b7ac, dump 719699): an item
+  // row with its icons, name and offered count (UIElement_AppendStackableQuantity), the meseta
+  // row as the amount and the meseta word (UIElementSetIntText). The local side's rows take the
+  // icons from the local inventory rows; a partner's item the inventory lacks has no icon.
+  private offerRows(): ItemRow[] {
     const s = this.env.session;
-    const lines: ListItem[] = [];
+    const inventory = this.env.rows();
+    const word = this.env.text(0x0c, 0);
+    const rows: ItemRow[] = [];
     for (const o of [...s.local, ...s.remote]) {
-      if (o.itemId !== -1) lines.push({ label: `${this.env.itemName(o.itemId)}  x${o.amount}`, value: -1, enabled: false });
+      if (o.itemId === -1) continue;
+      if (o.itemId === TRADE_MESETA_ID) {
+        rows.push(mesetaRow(o.amount, word));
+        continue;
+      }
+      const own = inventory.find((r) => r.id === o.itemId);
+      if (own) rows.push({ ...own, count: own.count.startsWith('×') ? `×${o.amount}` : own.count });
+      else rows.push({ id: o.itemId, icon1: NO_ICON, icon2: NO_ICON, name: this.env.itemName(o.itemId), count: o.amount > 0 ? `×${o.amount}` : '', nameColor: '#ffffff', iconColor: '#ffffff' });
     }
-    return lines;
+    return rows;
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+  // The trade window with its offer rows (fieldwindows.ts list geometry: 20 px rows, the title pill).
+  private drawOffers(ctx: CanvasRenderingContext2D, skin: WindowSkin, icons: CanvasImageSource, title: string): void {
+    const rows = this.offerRows();
+    const pos = TRADE_POS.window;
+    const w = offerWindowWidth(rows, title);
+    const h = listWindowHeight(Math.max(1, rows.length), true);
+    drawWindowFrame(ctx, skin.frame, pos.x, pos.y, w, h);
+    const cx = pos.x + INSET;
+    const cy = pos.y + INSET + TITLE_GAP;
+    rows.forEach((r, i) => drawItemRow(ctx, icons, r, this.frame, cx, cy + i * ROW, w - 2 * INSET));
+    drawWindowTitle(ctx, skin, pos.x, pos.y, title);
+  }
+
+  // icons: f256_hyouji.prs texture 1 (the Item Pack's row icons; the offers' rows).
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, icons: CanvasImageSource): void {
+    this.frame++;
     const pos = TRADE_POS;
     if (this.phase === 'partner') {
       const title = this.text(T11_TRADE.partnerTitle);
@@ -475,9 +518,7 @@ export class TradeMenu {
       this.question.draw(ctx, skin, this.text(T11_TRADE.yes), this.text(T11_TRADE.no));
     }
     if (this.phase === 'window' || this.phase === 'items' || this.phase === 'amount' || this.phase === 'confirm' || this.phase === 'cancel') {
-      const title = this.text(T11_TRADE.windowTitle);
-      const lines = this.windowLines();
-      drawListWindow(ctx, skin, pos.window.x, pos.window.y, windowWidth(lines, title), title, lines, 0, false);
+      this.drawOffers(ctx, skin, icons, this.text(T11_TRADE.windowTitle));
     }
     if (this.phase === 'items') {
       const title = this.text(T11_TRADE.windowTitle);
