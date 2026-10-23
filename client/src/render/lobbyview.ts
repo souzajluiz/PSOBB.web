@@ -7,7 +7,7 @@
 // plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
 // the files are missing) a capsule stands in.
 
-import { PlayerCamera, type CameraInput } from './playercamera.ts';
+import { PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import { stickAmount, takeCameraTurn, touchStick } from '../input/analog.ts';
@@ -219,7 +219,6 @@ export class LobbyView {
   // The client's player camera (render/playercamera.ts): five zoom levels,
   // chasing behind the player while it runs.
   private camera = new PlayerCamera();
-  private cameraTicks = 0;
   private cameraKeyHeld = false;
   private get cameraYaw(): number {
     return this.camera.angle;
@@ -723,46 +722,58 @@ export class LobbyView {
     const turn = takeCameraTurn();
     if (turn && mine) this.camera.angle = Math.atan2(Math.sin(this.camera.angle + turn), Math.cos(this.camera.angle + turn));
 
-    // Local movement: the exe's walk / run state machine, one step per game
-    // tick (render/playermove.ts); the drawn pose is interpolated between ticks.
-    if (me && mine && !this.attacking(me.clientId) && !this.emoting(me.clientId)) {
-      const pos = this.logic;
-      const shown = mine.group.position;
-      // Placed from outside (spawn, warp, 6x24): the mover and the logic start there.
-      if (shown.distanceToSquared(this.drawn) > 0.0001) {
-        pos.copy(shown);
-        this.prevLogic.copy(shown);
-        this.mover.place(shown.x, shown.z, mine.angle);
+    // The local player's logic position and its camera step together, once per
+    // game tick (30 a second). The exe's order is the walk / run state machine
+    // (render/playermove.ts), then the camera controller (render/playercamera.ts,
+    // ProcessCameraChaseState_004d7a1c reads the logic position of that tick). The
+    // drawn pose is interpolated between the ticks afterwards. The camera used to
+    // sample the drawn pose once per camera tick: a frame's extra ticks saw no move,
+    // so the chase stopped and restarted and lagged behind the player.
+    const shown = mine?.group.position;
+    const pos = this.logic;
+    // Placed from outside (spawn, warp, 6x24): the mover and the logic start there.
+    if (mine && shown && shown.distanceToSquared(this.drawn) > 0.0001) {
+      pos.copy(shown);
+      this.prevLogic.copy(shown);
+      this.mover.place(shown.x, shown.z, mine.angle);
+    }
+    const moveOn = !!me && !!mine && !this.attacking(me.clientId) && !this.emoting(me.clientId);
+    const dead = mine ? this.dead() : false;
+    if (mine) {
+      const camKey = keys.has(KEYS.camera);
+      if (camKey && !this.cameraKeyHeld) this.camera.reset(mine.angle);
+      this.cameraKeyHeld = camKey;
+    }
+    this.moveTicks += dt * 30;
+    let ticks = Math.min(Math.floor(this.moveTicks), 30);
+    this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
+    const stick = touchStick();
+    const leg = moveOn ? this.legState() : undefined;
+    for (; ticks > 0 && mine; ticks--) {
+      this.prevLogic.copy(pos);
+      // A held key ramps its axis once per game tick (0x0070a60c): in the move
+      // loop, and while dead (the move loop is off then, the camera still turns).
+      if (!stick && (moveOn || dead)) {
+        this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
+        this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
       }
-      this.moveTicks += dt * 30;
-      let ticks = Math.min(Math.floor(this.moveTicks), 30);
-      this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
-      const stick = touchStick();
-      const leg = this.legState();
-      while (ticks-- > 0) {
-        this.prevLogic.copy(pos);
+      const lr = stick ? stick.lr : this.keyLr;
+      const fb = stick ? stick.fb : this.keyFb;
+      if (moveOn && leg) {
         // The exe's per-tick checks: the slow, then the guard stance by the flat
         // (x, z) distance to the target (0x007a9180 reads x and z only).
         this.mover.slowed = leg.slowed;
         const t = leg.target;
         this.mover.setGuard(t ? (pos.x - t.x) ** 2 + (pos.z - t.z) ** 2 : null, mine.charClass);
-        let lr: number;
-        let fb: number;
-        if (stick) {
-          lr = stick.lr;
-          fb = stick.fb;
-        } else {
-          // W / S / A / D of the BB default key config (input/keyconfig.ts); the
-          // exe ramps a held key 32 a poll up to 128 (0x0070a60c).
-          this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
-          this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
-          lr = this.keyLr;
-          fb = this.keyFb;
-        }
         // Confusion steering (modify_direction): a random heading per tick in the field.
         const steer = leg.confused ? (heading: number) => modifyDirection(heading, true, () => Math.floor(Math.random() * (RAND_MAX_C + 1))) : undefined;
         this.mover.tick({ lr, fb, cameraYaw: this.cameraYaw, keyboard: !stick, steer }, (dx, dz) => this.stepPlayer(pos, dx, dz));
+        mine.angle = this.mover.angle;
       }
+      // The camera's tick: this game tick's logic position and heading.
+      this.camera.tick(pos, mine.angle, this.collision, { dead, stick: { amount: stickAmount({ lr, fb }), lr } });
+    }
+    if (me && mine && shown && moveOn) {
       const gait = this.mover.state;
       const moving = gait !== 'stand';
       mine.target.copy(pos);
@@ -847,29 +858,10 @@ export class LobbyView {
       m.animator?.update(dt);
     }
 
-    // The player camera: the Camera key puts it behind the player, it chases
-    // the heading while the player runs (one step per game frame).
+    // The player camera is drawn between its last two ticks (render/smoothrender.ts;
+    // not with ?fps=30). Its ticks ran above, on the logic position.
     if (mine) {
-      const pos = mine.group.position;
-      const camKey = keys.has(KEYS.camera);
-      if (camKey && !this.cameraKeyHeld) this.camera.reset(mine.angle);
-      this.cameraKeyHeld = camKey;
-      this.cameraTicks = Math.min(this.cameraTicks + dt * 30, 30);
-      const dead = this.dead();
-      for (; this.cameraTicks >= 1; this.cameraTicks--) {
-        // The move loop is off while the player is dead, so a dead player's
-        // keys are ramped here, once per game tick like the move loop does.
-        const stick = touchStick();
-        if (dead && !stick) {
-          this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
-          this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
-        }
-        const axes = stick ?? { lr: this.keyLr, fb: this.keyFb };
-        const input: CameraInput = { dead, stick: { amount: stickAmount(axes), lr: axes.lr } };
-        this.camera.tick(pos, mine.angle, this.collision, input);
-      }
-      // Drawn between its last two ticks (render/smoothrender.ts; not with ?fps=30).
-      const { source, target } = this.camera.view(pos, mine.angle, this.viewer.smoother.enabled ? this.cameraTicks : 1);
+      const { source, target } = this.camera.view(this.logic, mine.angle, this.viewer.smoother.enabled ? this.moveTicks : 1);
       const cam = this.viewer.camera;
       const fov = njPerspectiveFovy(this.camera.fovAngle);
       if (cam.fov !== fov) {

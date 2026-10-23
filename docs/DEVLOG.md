@@ -13298,3 +13298,27 @@ Ports the Trade Window on top of the 2026-10-23 protocol entry (`net/trade.ts`).
 **Left:**
 - Render check (Chrome or Playwright, not run here) of the door in the Medical Center wall, and whether the facade is visible next to it (see the open item above).
 - The collision box's placement relative to the moved panel (exe `InitEnemyCollisionBoxes` offset) is not traced.
+
+## 2026-10-23: field camera samples the logic position per game tick; keyboard direction checked against the exe
+
+**Report:** screen recording (Pioneer 2): the body drifts across the screen while running, the camera catches up late, the body faces sideways to its travel.
+
+**Exe (PsoBB.exe, dump Psobb.exe-05112026.c):**
+- Keyboard direction, `unknown_handle_gamepad_input_move` (line 587209): target heading = camera yaw + fpatan(lr, fb). `get_input_movement_speed` (line 667077): move_forwards sets the forward value to -move_speed, move_left the negative lr, move_right the positive. So the exe's fb is negative for forward; the port's fb is forward-positive, which is the exe's fb with the sign flipped. Check: the port's direction equals the exe's for all tested yaws and key pairs (new test in tests/playermove.test.ts). Forward runs away from the camera, right is screen right. No sign change was needed.
+- Camera yaw: `g_pDefaultNPCCameraState->field_0x94` is y_rotation, from `apply_camera_angle_rotations` (line 254525), the direction from the camera target to its source. The camera source sits at R(camera_angle) (matrix_rotation_y, row-vector convention checked at 849420), so y_rotation equals the port's camera angle.
+- Camera chase: `SmoothCameraAngle_004d6370` (line 254481) steps speed * 127 BAMS toward the goal. The port's CHASE_STEP matches; a strafe lags the goal by about 1.4 rad over a 2 s hold, which is the exe's rate, not a bug.
+
+**Port change:** `render/lobbyview.ts` `frame()`: the local mover and the player camera run in one game-tick loop. The camera gets the LOGIC position and the current heading on each tick. Before, it got the drawn (interpolated) pose once per camera tick, so a frame's extra ticks saw no move, the chase stopped and restarted, and the target lead (18 * move) changed with the frame rate. The drawn pose is still lerped between ticks, and the camera is still drawn between its ticks (smoothrender). The key ramp runs once per game tick in the move loop and, while dead, for the camera.
+
+**Chrome check:** `client/e2e/camera-walk.spec.ts` (new): a fresh account in Pioneer 2, real W / A / D holds of 2 s (PSO_HOLD_MS), a sample per animation frame. Results, HEAD vs this change:
+- W: screen-x median 0 / 0, body-vs-away 0 / 0, camera lag 0 / 0, screen-x jitter p95 0 / 0.
+- A: screen-x median 0.006 / 0.003, camera lag median 1.453 / 1.452 (the exe's chase rate), jitter 0 / 0.
+- D: same pattern.
+
+So the sampling change is exe-faithful but does not change any measured number in held-key runs. The recording's drift was NOT reproduced here. Likely candidates left open: turns mid-run, wall probes (the near-wall snap), and recording-side latency.
+
+**Tests:** `node tests/playermove.test.ts` (new block: the exe keyboard mapping over 5 yaws x 6 key pairs), `node tests/controls.test.ts` (new block: a logic-tick chase ends behind a player walking 1.0 a tick). `tests/smoothrender`, `npcs` pass. `tsc --noEmit -p client` clean. Failing in this worktree, unrelated: combat, items, itemmodels, magfeed, oracle, rangedaim, specials, weaponorigin (they spawn vendor/newserv, which is absent in a fresh worktree).
+
+**ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
+
+**Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
