@@ -1,24 +1,5 @@
 # Devlog
 
-## 2026-10-23: Trap vision (the Seabed capture trap's cloak and reveal), logic only
-
-**What changed:** `render/traps.ts` gained the logic of TOTrapSeabed01 (0x0228), the Seabed capture trap: `captureTrapCloaked` (param5), `hasTrapVision` / `trapVisionSeen` (the bit 0x10000 of the player's flags, the same-room check over the four player slots), `CaptureTrap` (the sticky reveal of state 0 to 1), `withinViewDistance` (400 in front of the camera) and `captureTrapDraw` (hidden / plain / cloak). `tests/traps.test.ts` section 4. The field does not use them yet: the model stays a plain static object, the cloak shader, the reticle and the spring are not ported. ROADMAP line 147 says so.
-
-**Why:** the ROADMAP item "Trap vision (cloaked traps)". The pillar-trap entry (2026-10-18) left the state 1 marker and the cloaked render open.
-
-**Verified (PsoBB.exe, Ghidra dump names, `tools/ghidra/decomp.sh` read-only, `tools/exedata.py`, a byte scan of the exe):**
-- Which object: the o.dat type table (rows of type, creator at VA 0x00a084e4 and its copies) pairs 0x0228 with CreateDerolleTrapEntity 0x0063ee10. The same scan pairs the pillar types 0x0154 / 0x0167 with their own creators, so the row layout is right. Built by InitializeDerolleTrapEntity 0x0063ec24 on DerolleEnemyVTable3 (0x00b2df80), which calls ApplyDerolleTrapInitData 0x0063ea98.
-- Cloak: ApplyDerolleTrapInitData clamps param5 (+0x88) to 0..1 into +0x354; render_capturetrap reads "+0x354 != 0" as cloaked.
-- Reveal: EnemyAIUpdateState 0x0063a034 in state 0 calls vtable +0x154 = IsPlayerVisibleToPartTrap 0x0063a208 (the vtable slot found by byte scan at 0xb2e0d4 = 0xb2df80 + 0x154). It loops the four player slots for the same room id and `unknown_flags_2 & has_trap_vision` (0x10000); no distance. State 1 handler: vtable +0x148 = DerollePartObjectEnableReticle 0x0063a3bc (enable_reticle, then the idle at +0x144 = DerollePartObjectUpdateTarget 0x0063a3d8). No handler sets state 0 again.
-- The bit: player `unknown_flags_2` is at +0x33c (the offsets of the struct fields in the dump). FUN_00695b48 sets 0x10000 when `player+0x964 & 0x10`; FUN_005e60c0 clears it when that bit is clear. The value of +0x964 is never stored with a displacement write in the exe (only loads and a `test` at 0x005e2808), so its source is UNCLEAR.
-- Draw: render_capturetrap (dump line 503294, its address not read) runs the view test (vtable +0x24 = GiGuesGetViewDistance 0x007ba468 with 400.0 and 100.0), then state < 2 -> render_inactive_capture_trap (cloaked: returns when the advanced-effects setting is off, else each mesh through the cloak pass), state 2..3 -> render_active_capturetrap (no cloak check). The reveal does not change the draw: a cloaked trap is drawn as a cloak in states 0 and 1 with the setting on, whether or not anyone has trap vision. The vision only sets the reticle and the state. No fade: the cloak setup animates texture matrices, not alpha; the trap has no timer for it.
-
-**ASSUMED:** the radius of the idle is the float 0x41700000 = 15.0 at +0x33c (the dump types the slot as an int); the advanced-effects setting is on (as in the Berill port); the frustum's screen bounds are left to three.js culling; the spring of 0x0228 (states 2 and 3, handlers 0x0063e7a4 / 0x0063e72c) is not read.
-
-**UNCLEAR:** where the has-trap-vision bit of +0x964 comes from (androids, the Trap Vision tool), and the Trap Vision duration. newserv documents permanent for androids and temporary after the tool (`src/ReceiveSubcommands.cc`, the flag table) without a duration. The web has no local vision source, so the module takes the players' flags as input.
-
-**Checks:** `node tests/traps.test.ts` ALL PASS (the old pillar and seal cases plus section 4); `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome (no field wiring to see).
-
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB
@@ -9764,6 +9745,25 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **Found, not changed:** `lerpPoint` (`render/playercamera.ts`, the vec3 lerp 0x004d63b0) takes its 5.0 cutoff from 0x00909510, but `tools/exedata.py read 0x00909510 f 1` reads 0.0, and the decompile of 0x004d63b0 tests `0x00909510 <= t` before it sets the step to 12.0 (0x00909520, which reads 12.0). If the read is right, the exe always moves a fixed 12 units when the lerp is short of the goal, and the port's 5.0 rule is wrong; the NPC camera movers and the player camera both use it. Not changed here (shared with the verified mover ease).
 
 **Tests:** `tests/npcs.test.ts` section 9: the BAMS ease wraps and snaps; the talk field of view reaches 0x22d8 within 30 frames and returns to 0x36c1; outside Pioneer 2 the height does not move; on Pioneer 2 it reaches -3.0 and returns to 0, and the desired target carries it. `npx tsc --noEmit -p .` (client, Node 24) clean. Not run in Chrome (no Playwright for this change).
+
+## 2026-10-23: Trap vision (the Seabed capture trap's cloak and reveal), logic only
+
+**What changed:** `render/traps.ts` gained the logic of TOTrapSeabed01 (0x0228), the Seabed capture trap: `captureTrapCloaked` (param5), `hasTrapVision` / `trapVisionSeen` (the bit 0x10000 of the player's flags, the same-room check over the four player slots), `CaptureTrap` (the sticky reveal of state 0 to 1), `withinViewDistance` (400 in front of the camera) and `captureTrapDraw` (hidden / plain / cloak). `tests/traps.test.ts` section 4. The field does not use them yet: the model stays a plain static object, the cloak shader, the reticle and the spring are not ported. ROADMAP line 147 says so.
+
+**Why:** the ROADMAP item "Trap vision (cloaked traps)". The pillar-trap entry (2026-10-18) left the state 1 marker and the cloaked render open.
+
+**Verified (PsoBB.exe, Ghidra dump names, `tools/ghidra/decomp.sh` read-only, `tools/exedata.py`, a byte scan of the exe):**
+- Which object: the o.dat type table (rows of type, creator at VA 0x00a084e4 and its copies) pairs 0x0228 with CreateDerolleTrapEntity 0x0063ee10. The same scan pairs the pillar types 0x0154 / 0x0167 with their own creators, so the row layout is right. Built by InitializeDerolleTrapEntity 0x0063ec24 on DerolleEnemyVTable3 (0x00b2df80), which calls ApplyDerolleTrapInitData 0x0063ea98.
+- Cloak: ApplyDerolleTrapInitData clamps param5 (+0x88) to 0..1 into +0x354; render_capturetrap reads "+0x354 != 0" as cloaked.
+- Reveal: EnemyAIUpdateState 0x0063a034 in state 0 calls vtable +0x154 = IsPlayerVisibleToPartTrap 0x0063a208 (the vtable slot found by byte scan at 0xb2e0d4 = 0xb2df80 + 0x154). It loops the four player slots for the same room id and `unknown_flags_2 & has_trap_vision` (0x10000); no distance. State 1 handler: vtable +0x148 = DerollePartObjectEnableReticle 0x0063a3bc (enable_reticle, then the idle at +0x144 = DerollePartObjectUpdateTarget 0x0063a3d8). No handler sets state 0 again.
+- The bit: player `unknown_flags_2` is at +0x33c (the offsets of the struct fields in the dump). FUN_00695b48 sets 0x10000 when `player+0x964 & 0x10`; FUN_005e60c0 clears it when that bit is clear. The value of +0x964 is never stored with a displacement write in the exe (only loads and a `test` at 0x005e2808), so its source is UNCLEAR.
+- Draw: render_capturetrap (dump line 503294, its address not read) runs the view test (vtable +0x24 = GiGuesGetViewDistance 0x007ba468 with 400.0 and 100.0), then state < 2 -> render_inactive_capture_trap (cloaked: returns when the advanced-effects setting is off, else each mesh through the cloak pass), state 2..3 -> render_active_capturetrap (no cloak check). The reveal does not change the draw: a cloaked trap is drawn as a cloak in states 0 and 1 with the setting on, whether or not anyone has trap vision. The vision only sets the reticle and the state. No fade: the cloak setup animates texture matrices, not alpha; the trap has no timer for it.
+
+**ASSUMED:** the radius of the idle is the float 0x41700000 = 15.0 at +0x33c (the dump types the slot as an int); the advanced-effects setting is on (as in the Berill port); the frustum's screen bounds are left to three.js culling; the spring of 0x0228 (states 2 and 3, handlers 0x0063e7a4 / 0x0063e72c) is not read.
+
+**UNCLEAR:** where the has-trap-vision bit of +0x964 comes from (androids, the Trap Vision tool), and the Trap Vision duration. newserv documents permanent for androids and temporary after the tool (`src/ReceiveSubcommands.cc`, the flag table) without a duration. The web has no local vision source, so the module takes the players' flags as input.
+
+**Checks:** `node tests/traps.test.ts` ALL PASS (the old pillar and seal cases plus section 4); `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome (no field wiring to see).
 
 ## 2026-10-23: Trap vision wired into the field (Seabed capture trap 0x0228)
 
