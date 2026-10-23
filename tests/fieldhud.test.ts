@@ -6,6 +6,7 @@
 // Run: node tests/fieldhud.test.ts
 import { WindowAnim, withElementWipe } from '../client/src/classic/windowanim.ts';
 import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
+import { MagMenu } from '../client/src/classic/magmenu.ts';
 import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
 import { MENU_LAYER, STATUS_LAYER } from '../client/src/classic/hud.ts';
 import {
@@ -450,6 +451,88 @@ if (failures) {
   drawn = 0;
   drawItemRow(rctx, icons, row, 0, 0, 0, 200);
   eq(drawn, 2, 'no scope: the row draws whole, as the HUD and the main menu do');
+}
+
+// --- the Equip / MAG leaves' later windows: each its own object with its own animation ---
+// Equip: the description opens with the menu (EquipmentMenu_Constructor_0074aa48);
+// the item list is made fresh on each open (SetupEquipListWindow_0074ad50).
+{
+  const em = new EquipMenu({
+    character: () => equipChar,
+    rowContext: () => ctx,
+    purposeContext: () => pctx,
+    text: (g, i) => `${g}:${i}`,
+    actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0, sortAuto: () => 0, sortSwap: () => 0, commitSort: () => 0 },
+    equipActions: { equip: () => {}, unequip: () => {} },
+  });
+  eq([em.detailAnim.visible, em.itemsAnim.visible], [false, false], 'Equip: no window before the leaf opens');
+  em.speed = 1;
+  em.start();
+  eq([em.detailAnim.isOpen, em.detailAnim.counter], [true, 0], 'Equip: the description opens at counter 0 with the menu');
+  em.tick();
+  em.tick();
+  eq(em.detailAnim.animating, true, 'Equip: the description is still opening after 2 frames (counter 4 < 7.5)');
+  em.tick();
+  em.tick();
+  eq([em.detailAnim.isOpen, em.detailAnim.animating], [true, false], 'Equip: the description is open at counter 8 after 4 frames (speed 1 adds 2)');
+  em.key({ key: 'Enter' } as KeyboardEvent); // slots -> items: the item list is a fresh window
+  eq([em.itemsAnim.visible, em.itemsAnim.counter, em.itemsAnim.isOpen], [true, 0, true], 'Equip: the item list opens at counter 0 on Enter');
+  em.tick();
+  em.tick();
+  eq(em.itemsAnim.animating, true, 'Equip: the item list still opening after 2 frames');
+  em.tick();
+  em.tick();
+  eq([em.itemsAnim.isOpen, em.itemsAnim.animating], [true, false], 'Equip: the item list open after 4 frames at speed 1');
+  em.key({ key: 'Backspace' } as KeyboardEvent); // items -> slots
+  em.key({ key: 'Enter' } as KeyboardEvent); // the next open restarts the window at counter 0
+  eq([em.itemsAnim.counter, em.itemsAnim.isOpen], [0, true], 'Equip: a re-opened item list is a fresh object at counter 0');
+  const slow = new EquipMenu({
+    character: () => equipChar,
+    rowContext: () => ctx,
+    purposeContext: () => pctx,
+    text: (g, i) => `${g}:${i}`,
+    actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0, sortAuto: () => 0, sortSwap: () => 0, commitSort: () => 0 },
+    equipActions: { equip: () => {}, unequip: () => {} },
+  });
+  slow.speed = 3; // window speed 3: the 0x1000000 threshold (already open at once)
+  slow.start();
+  slow.tick();
+  eq([slow.detailAnim.isOpen, slow.detailAnim.animating], [true, false], 'Equip: at window speed 3 the description is open at once');
+}
+
+// MAG: the status window opens with the menu; Select, the item list and the PB line are
+// fresh windows on each open and close with their own animation (ChallengePlayerListWindow_HandleInput_007526c8).
+{
+  const mchar = { charClass: 0, inventory: [inv(MAG_HEX)], meseta: 0 } as unknown as CharacterFile;
+  const mm = new MagMenu({
+    character: () => mchar,
+    rowContext: () => ctx,
+    text: (g, i) => `${g}:${i}`,
+    pmt: () => null,
+    feedTimer: () => ({ canFeed: true }) as never,
+    feed: () => false,
+  });
+  mm.speed = 1;
+  mm.start();
+  eq([mm.statusAnim.isOpen, mm.statusAnim.counter], [true, 0], 'MAG: the status window opens with the menu');
+  eq(mm.selectAnim.visible, false, 'MAG: no Select window in the list');
+  mm.key({ key: 'Enter' } as KeyboardEvent); // list -> Select: a fresh window
+  eq([mm.selectAnim.visible, mm.selectAnim.counter], [true, 0], 'MAG: Select opens at counter 0');
+  for (let i = 0; i < 4; i++) mm.tick();
+  eq(mm.selectAnim.isOpen, true, 'MAG: Select open after 4 frames');
+  mm.key({ key: 'Enter' } as KeyboardEvent); // "Give Items" (value 1, feed allowed): Select closes, the item list opens
+  eq([mm.selectAnim.animating, mm.selectAnim.isOpen], [true, false], 'MAG: Select closes with its own animation');
+  eq([mm.itemsAnim.visible, mm.itemsAnim.counter], [true, 0], 'MAG: the item list opens at counter 0');
+  for (let i = 0; i < 4; i++) mm.tick();
+  eq(mm.selectAnim.animating, true, 'MAG: Select still closing after 4 frames');
+  mm.tick();
+  eq(mm.selectAnim.visible, false, 'MAG: Select is gone after its close');
+  eq(mm.itemsAnim.isOpen, true, 'MAG: the item list stays open');
+  mm.key({ key: 'Backspace' } as KeyboardEvent); // items -> Select: the item list closes, a fresh Select opens
+  eq([mm.itemsAnim.animating, mm.selectAnim.visible, mm.selectAnim.counter], [true, true, 0], 'MAG: back to Select: the item list closes, Select reopens at 0');
+  mm.key({ key: 'Backspace' } as KeyboardEvent); // Select -> list: Select closes
+  eq(mm.selectAnim.animating, true, 'MAG: Select closes on the way back to the list');
+  eq(mm.statusAnim.isOpen, true, 'MAG: the status window is open through all of it');
 }
 
 console.log('fieldhud: all checks passed');

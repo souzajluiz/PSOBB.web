@@ -108,7 +108,8 @@ export class FieldMenu {
   // sounds play), and the elements' wipe is left out for the menus (their
   // frames and text share one draw path here). The Item Pack's later windows
   // (description, Purpose, Sort, Amount) run their own animations inside
-  // ItemPackMenu (detailAnim, purposeAnim, ...), driven by `speed` below.
+  // ItemPackMenu (detailAnim, purposeAnim, ...), and the Equip / MAG leaves'
+  // later windows inside EquipMenu / MagMenu (start / speed); `speed` below.
   readonly leafAnim = new WindowAnim(true, false);
   private closingLeaf: Leaf | null = null;
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
@@ -209,6 +210,11 @@ export class FieldMenu {
     else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
     else if (id === 6) this.leaf = new OptionsMenu(this.env.options);
     else return;
+    // The Equip / MAG leaves' own windows open with the leaf (speed first).
+    if (this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) {
+      this.leaf.speed = this.speed;
+      this.leaf.start();
+    }
     this.menu.leafOpen = true;
     this.closingLeaf = null;
     this.leafAnim.open(this.speed);
@@ -221,7 +227,7 @@ export class FieldMenu {
 
   tick(): void {
     this.menu.tick();
-    if (this.leaf instanceof ItemPackMenu) this.leaf.speed = this.speed;
+    if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) this.leaf.speed = this.speed;
     this.leaf?.tick();
     this.leafAnim.tick(this.speed);
     if (!this.leafAnim.visible) this.closingLeaf = null;

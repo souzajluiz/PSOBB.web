@@ -39,8 +39,8 @@ import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { isMagFood, photonBlasts, SE_MAG_LEVEL, type FeedTimer } from '../net/magfeed.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
-import { wipeElement, WindowAnim, withElementWipe } from './windowanim.ts';
+import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
+import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { ICON_UV, isWrapped, itemRow, type ItemPackTextures, type ItemRow, type RowContext } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 
@@ -100,11 +100,46 @@ export class MagMenu {
   private pbLine = '';
   mags: InventoryItem[] = [];
   foods: InventoryItem[] = [];
+  // The later windows are objects of their own, each with its own counter
+  // (classic/windowanim.ts). The status window (entry 9) is made with the menu
+  // and opens with it (start). Select (entry 8), the item list (entry 0xD) and
+  // the photon blast line (entry 0xE) are made fresh each time they open
+  // (ChallengePlayerListWindow_HandleInput_007526c8 states 3 / 5 create them
+  // when the pointer is null) and close with their close animation
+  // (CloseGameListMenu, which nulls the pointer). `speed`: the field menu's window speed.
+  speed = 1;
+  statusAnim = new WindowAnim(true, false);
+  selectAnim = new WindowAnim(true, false);
+  itemsAnim = new WindowAnim(true, false);
+  pbAnim = new WindowAnim(true, false);
   private env: MagMenuEnv;
 
   constructor(env: MagMenuEnv) {
     this.env = env;
     this.refresh();
+  }
+
+  start(): void {
+    this.statusAnim.open(this.speed);
+  }
+
+  // Changes the state and the windows it opens / closes.
+  private setState(to: State): void {
+    const from = this.state;
+    if (from === to) return;
+    const fresh = (): WindowAnim => {
+      const a = new WindowAnim(true, false);
+      a.open(this.speed);
+      return a;
+    };
+    if (to === 'select') this.selectAnim = fresh();
+    if (to === 'items') this.itemsAnim = fresh();
+    if (to === 'pb') this.pbAnim = fresh();
+    if (from === 'select') this.selectAnim.close();
+    // Back to the Select window: the item list closes (state 3's CloseGameListMenu on +0x38).
+    if (to === 'select' && from !== 'mags') this.itemsAnim.close();
+    if (from === 'pb') this.pbAnim.close();
+    this.state = to;
   }
 
   refresh(): void {
@@ -132,6 +167,10 @@ export class MagMenu {
 
   tick(): void {
     this.frame++;
+    this.statusAnim.tick(this.speed);
+    this.selectAnim.tick(this.speed);
+    this.itemsAnim.tick(this.speed);
+    this.pbAnim.tick(this.speed);
     const mag = this.mags[this.cursor];
     if (this.state === 'rising' && mag && this.shown && ++this.wait > LEVEL_STEP_FRAMES) {
       // ApplyItemMagData_0072610c: each stat shown below its level goes up 1.
@@ -142,7 +181,7 @@ export class MagMenu {
       if (up) se(SE_MAG_LEVEL);
       else this.afterRise(mag);
     } else if (this.state === 'pb' && ++this.wait > PB_FRAMES) {
-      this.state = 'select';
+      this.setState('select');
       this.refresh();
     }
   }
@@ -152,12 +191,12 @@ export class MagMenu {
     this.shown = null;
     const pbs = photonBlasts(mag.data);
     if (pbs.length === this.pbCount) {
-      this.state = 'select';
+      this.setState('select');
       this.refresh();
       return;
     }
     this.pbLine = `${this.env.text(11, 0x77)} ${this.env.text(9, pbs[this.pbCount])}${this.env.text(11, 0x5f)}`;
-    this.state = 'pb';
+    this.setState('pb');
     this.wait = 0;
   }
 
@@ -177,7 +216,7 @@ export class MagMenu {
           return true;
         }
         se(SE.ok);
-        this.state = 'select';
+        this.setState('select');
         this.select.cursor = 0;
         this.refresh();
       } else if (back) {
@@ -189,9 +228,9 @@ export class MagMenu {
     if (this.state === 'select') {
       const r = listKey(e, this.select.items, this.select);
       if (r === 'cancel') {
-        this.state = 'mags';
+        this.setState('mags');
       } else if (r === 'decide' && this.select.items[this.select.cursor].value === 1) {
-        this.state = 'items';
+        this.setState('items');
         this.item = { cursor: 0, top: 0 };
         this.refresh();
       }
@@ -214,7 +253,7 @@ export class MagMenu {
       this.feed(mag, food);
     } else if (back) {
       se(SE.cancel);
-      this.state = 'select';
+      this.setState('select');
       this.refresh();
     }
     return true;
@@ -225,7 +264,7 @@ export class MagMenu {
     const before = statLevels(mag.data.data1);
     this.pbCount = photonBlasts(mag.data).length;
     if (!this.env.feed(mag.data.id, food.data.id)) {
-      this.state = 'select';
+      this.setState('select');
       this.refresh();
       return;
     }
@@ -234,7 +273,7 @@ export class MagMenu {
     if (now) this.cursor = this.mags.indexOf(now);
     this.shown = before;
     this.wait = LEVEL_STEP_FRAMES; // the first step comes at once
-    this.state = 'rising';
+    this.setState('rising');
   }
 
   // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): the elements of each window are revealed by its wipe.
@@ -263,18 +302,25 @@ export class MagMenu {
       drawWindowTitle(ctx, skin, L.x, L.y, this.env.text(11, 0x3c));
     });
 
-    if (this.state === 'select') {
-      withElementWipe(wipe, MAG_SELECT.x + INSET, MAG_SELECT.y + INSET + TITLE_GAP, MAG_SELECT.w - 2 * INSET, () =>
-        drawListWindow(ctx, skin, MAG_SELECT.x, MAG_SELECT.y, MAG_SELECT.w, this.env.text(11, 0x30), this.select.items, this.select.cursor),
+    // Select and the item list are drawn while open or closing, each under its own animation.
+    if (this.state === 'select' || this.selectAnim.visible) {
+      const S = MAG_SELECT;
+      const sa = this.selectAnim;
+      withWindowAnim(ctx, sa, S.x, S.y, S.w, listWindowHeight(this.select.items.length, true), () =>
+        withElementWipe(sa, S.x + INSET, S.y + INSET + TITLE_GAP, S.w - 2 * INSET, () =>
+          drawListWindow(ctx, skin, S.x, S.y, S.w, this.env.text(11, 0x30), this.select.items, this.select.cursor),
+        ),
       );
     }
-    if (this.state === 'items' || this.busy) {
+    if (this.state === 'items' || this.busy || this.itemsAnim.visible) {
       const I = MAG_ITEMS;
-      drawWindowFrame(ctx, skin.frame, I.x, I.y, I.w, I.h);
+      const ia = this.itemsAnim;
+      withWindowAnim(ctx, ia, I.x, I.y, I.w, I.h, () => drawWindowFrame(ctx, skin.frame, I.x, I.y, I.w, I.h));
       const ix = I.x + INSET;
       const iy = I.y + INSET + TITLE_GAP;
       const iw = I.w - 2 * INSET;
-      withElementWipe(wipe, ix, iy, iw, () => {
+      withWindowAnim(ctx, ia, I.x, I.y, I.w, I.h, () =>
+        withElementWipe(ia, ix, iy, iw, () => {
         if (!this.foods.length) {
           const none = this.env.text(11, 0xee);
           wipeElement(ctx, ix, iy + 1, ROW, () => drawGameText(ctx, none, ix, iy + 1, DISABLED));
@@ -284,28 +330,36 @@ export class MagMenu {
           this.foods.slice(this.item.top, this.item.top + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
         }
         drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
-      });
+        }),
+      );
     }
 
     ctx.save();
     ctx.translate(extra, 0);
     const mag = this.mags[this.cursor];
-    if (mag) this.drawStatus(ctx, skin, mag, wipe);
-    if (this.state === 'pb') {
+    if (mag) this.drawStatus(ctx, skin, mag);
+    if (this.state === 'pb' || this.pbAnim.visible) {
       const w = gameTextWidth(this.pbLine) + 2 * INSET;
-      drawWindowFrame(ctx, skin.frame, MAG_PB.x, MAG_PB.y, w, 14 + 2 * INSET);
-      withElementWipe(wipe, MAG_PB.x + INSET, MAG_PB.y + INSET, w - 2 * INSET, () =>
-        wipeElement(ctx, MAG_PB.x + INSET, MAG_PB.y + INSET, ROW, () => drawGameText(ctx, this.pbLine, MAG_PB.x + INSET, MAG_PB.y + INSET, '#ffffff')),
-      );
+      const P = MAG_PB;
+      const pa = this.pbAnim;
+      withWindowAnim(ctx, pa, P.x, P.y, w, 14 + 2 * INSET, () => {
+        drawWindowFrame(ctx, skin.frame, P.x, P.y, w, 14 + 2 * INSET);
+        withElementWipe(pa, P.x + INSET, P.y + INSET, w - 2 * INSET, () =>
+          wipeElement(ctx, P.x + INSET, P.y + INSET, ROW, () => drawGameText(ctx, this.pbLine, P.x + INSET, P.y + INSET, '#ffffff')),
+        );
+      });
     }
     ctx.restore();
   }
 
   // ASSUMED layout (see the header).
-  private drawStatus(ctx: CanvasRenderingContext2D, skin: WindowSkin, mag: InventoryItem, wipe?: WindowAnim): void {
+  private drawStatus(ctx: CanvasRenderingContext2D, skin: WindowSkin, mag: InventoryItem): void {
     const S = MAG_STATUS;
-    drawWindowFrame(ctx, skin.frame, S.x, S.y, S.w, S.h);
-    withElementWipe(wipe, S.x + INSET, S.y + INSET, S.w - 2 * INSET, () => this.drawStatusRows(ctx, mag));
+    const a = this.statusAnim;
+    withWindowAnim(ctx, a, S.x, S.y, S.w, S.h, () => {
+      drawWindowFrame(ctx, skin.frame, S.x, S.y, S.w, S.h);
+      withElementWipe(a, S.x + INSET, S.y + INSET, S.w - 2 * INSET, () => this.drawStatusRows(ctx, mag));
+    });
   }
 
   // The status window's rows and stat bars (each text and bar is an element of the wipe).
