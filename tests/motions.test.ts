@@ -17,7 +17,7 @@ import {
   TOWN_SLOTS,
   townMotion,
 } from '../client/src/formats/plymotion.ts';
-import { PlayerAnimator } from '../client/src/render/playeranim.ts';
+import { FLAG_ROOT_Z_OFF, PlayerAnimator } from '../client/src/render/playeranim.ts';
 import { EMOTE_KEYS, EMOTE_SLOTS, emoteRecord } from '../client/src/formats/emotes.ts';
 import { CharaMotions, charaMotionRecord } from '../client/src/classic/playerview.ts';
 import { buildPlayerModel, CLASS_NAMES, classLetter, DEFAULT_APPEARANCE, parsePlayerAssets } from '../client/src/render/playermodel.ts';
@@ -173,6 +173,62 @@ for (let cls = 0; cls < 12; cls++) {
     if (model.partBones[0].some((b) => b.matrixWorld.elements.some((v) => !Number.isFinite(v)))) fail(`field RAmarl weapon ${w}: bone not finite`);
   }
   console.log('field locomotion: 12 classes x 19 weapon columns, column 0 = town set, weapon columns differ');
+}
+
+// 4c. Root Z (FLAG_ROOT_Z_OFF, PsoBB.exe FUN_007a98fc / FUN_00842d7c): a
+//     record with flag 0x20000000 drops the Z of the motion's position keys,
+//     so the body root (bone 0) does not travel forward with the motion; X and
+//     Y (the sway and the bob) stay. The flag is sticky on the motion object
+//     (a later record with no flag on the same object keeps Z = 0). A fresh
+//     PlayerMotions gives fresh motion objects, so the unflagged check runs first.
+{
+  const fresh = new PlayerMotions(gsl.get(PLAYER_MOTION_FILE));
+  const L0 = classLetter(0);
+  const assets0 = parsePlayerAssets(0, new Uint8Array(readFileSync(join(DATA, `pl${L0}nj.bml`))), new Uint8Array(readFileSync(join(DATA, `pl${L0}tex.afs`))));
+  const model0 = buildPlayerModel(assets0, DEFAULT_APPEARANCE);
+  const root = model0.partBones[0][0];
+  // Plays a record for `frames` game ticks; returns the root's Z and Y ranges and the largest |Z|.
+  const run = (anim: PlayerAnimator, rec: { index: number; mode: number; next: number; speed: number; flags: number }, frames: number) => {
+    anim.play(rec, 1);
+    let zMax = 0;
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (let t = 0; t < frames; t++) {
+      anim.update(1 / 30);
+      zMax = Math.max(zMax, Math.abs(root.position.z));
+      yMin = Math.min(yMin, root.position.y);
+      yMax = Math.max(yMax, root.position.y);
+    }
+    return { zMax, yRange: yMax - yMin };
+  };
+  const bodyAnim = (m: PlayerMotions) => new PlayerAnimator(model0.partBones[0], assets0.parts.get(`pl${L0}bdy00.nj`)!, m);
+  // Field HUmar, weapon column 1: the walk (104) and run (111) rows carry the flag and have Z keys to ~14 / ~26.
+  const walk = fieldLocomotion(0, 1, 'walk');
+  const run2 = fieldLocomotion(0, 1, 'run');
+  if ((walk.flags & FLAG_ROOT_Z_OFF) === 0 || (run2.flags & FLAG_ROOT_Z_OFF) === 0) fail('field HUmar weapon 1 walk / run: root-Z flag missing from the table');
+  // Unflagged control on a fresh object: the same motion keeps its Z keys.
+  const control = run(bodyAnim(fresh), { index: walk.index, mode: 1, next: -1, speed: walk.speed, flags: 0 }, 60);
+  if (control.zMax < 5) fail(`control: unflagged walk ${walk.index} keeps no Z (${control.zMax.toFixed(2)})`);
+  const flagged = new PlayerMotions(gsl.get(PLAYER_MOTION_FILE));
+  const animF = bodyAnim(flagged);
+  const got = run(animF, walk, 60);
+  if (got.zMax !== 0) fail(`flagged walk: root Z ${got.zMax} (expected 0)`);
+  if (got.yRange < 0.3) fail(`flagged walk: root bob ${got.yRange.toFixed(2)} too small (the Y keys must stay)`);
+  const gotRun = run(animF, run2, 60);
+  if (gotRun.zMax !== 0) fail(`flagged run: root Z ${gotRun.zMax} (expected 0)`);
+  // Sticky: the same object, now an unflagged record: Z still 0 (the exe never clears 0x80).
+  const sticky = run(animF, { index: walk.index, mode: 1, next: -1, speed: walk.speed, flags: 0 }, 60);
+  if (sticky.zMax !== 0) fail(`sticky: a later unflagged record on motion ${walk.index} has Z ${sticky.zMax}`);
+  // Every town / field walk and run of the 12 classes: the root Z is 0 on the flagged rows.
+  for (let cls = 0; cls < 12; cls++) {
+    for (const r of [fieldLocomotion(cls, 1, 'walk'), fieldLocomotion(cls, 1, 'run'), townMotion(cls, locomotionSlot(cls, 'run'))]) {
+      if (!(r.flags & FLAG_ROOT_Z_OFF)) continue;
+      const m = new PlayerMotions(gsl.get(PLAYER_MOTION_FILE));
+      const a = bodyAnim(m);
+      if (run(a, r, 30).zMax !== 0) fail(`${CLASS_NAMES[cls]} motion ${r.index}: root Z not dropped`);
+    }
+  }
+  console.log(`root Z: field HUmar walk ${walk.index} keeps Z ${control.zMax.toFixed(1)} unflagged, ${got.zMax} flagged (bob ${got.yRange.toFixed(2)}); run ${run2.index} ${gotRun.zMax}`);
 }
 
 // Character screens: charamakingmot.bml (NMDM chunks), the 9 motion records

@@ -60,7 +60,7 @@ async function startSampler(page: Page): Promise<void> {
         if (m && cam) {
           const p = m.group.position;
           const head = project(cam, p.x, p.y + 10, p.z);
-          s.rec.push({ t: now, phase: s.phase, x: p.x, z: p.z, a: m.angle, ca: lv.camera.angle, sx: head.x, sy: head.y, st: lv.mover.state });
+          const rb = m.animator?.bones?.[0]?.bone?.position; s.rec.push({ t: now, phase: s.phase, rbx: rb?.x, rby: rb?.y, rbz: rb?.z, x: p.x, z: p.z, a: m.angle, ca: lv.camera.angle, sx: head.x, sy: head.y, st: lv.mover.state });
         }
       }
       requestAnimationFrame(loop);
@@ -90,8 +90,22 @@ async function summarise(frames: Frame[], phase: string): Promise<Record<string,
     const dir = Math.atan2(q.x - p.x, q.z - p.z);
     travel.push(Math.abs(wrap(dir - q.a)));
   }
+  // Frames whose drawn pose stepped back against the run (the "walks and comes back" loop).
+  let backSteps = 0;
+  let backMax = 0;
+  for (let i = 1; i < held.length; i++) {
+    const p = held[i - 1]!;
+    const q = held[i]!;
+    const along = (q.x - p.x) * Math.sin(q.a) + (q.z - p.z) * Math.cos(q.a);
+    if (along < -0.01) {
+      backSteps++;
+      backMax = Math.max(backMax, -along);
+    }
+  }
   return {
     frames: held.length,
+    backSteps,
+    backMax: round(backMax),
     screenXMedian: round(median(dx.map(Math.abs))),
     screenXP95: round(pct(dx.map(Math.abs), 0.95)),
     screenYMedian: round(median(dy.map(Math.abs))),
@@ -131,7 +145,7 @@ test('holding W, A and D: the player stays near the centre and the body faces wh
   const report: Record<string, Record<string, number>> = {};
   for (const k of phases) report[k] = await summarise(frames, k);
   console.log('CAMERA_WALK ' + JSON.stringify(report));
-  if (process.env.PSO_DUMP) for (const f of frames.filter((r) => r.phase === process.env.PSO_DUMP).filter((_, i) => i % 6 === 0)) console.log('FRAME ' + JSON.stringify({ x: round(f.x), z: round(f.z), a: round(f.a), ca: round(f.ca), st: f.st, sx: round(f.sx) }));
+  if (process.env.PSO_DUMP) for (const f of frames.filter((r) => r.phase === process.env.PSO_DUMP).filter((_, i) => i % 2 === 0)) console.log('FRAME ' + JSON.stringify({ rb: [(f as any).rbx, (f as any).rby, (f as any).rbz].map((v: number) => round(v ?? 0)), x: round(f.x), z: round(f.z), a: round(f.a), ca: round(f.ca), st: f.st, sx: round(f.sx) }));
 
   // The forward run: centred on screen (the body faces away from the camera, the camera follows).
   const w = report.w!;
