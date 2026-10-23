@@ -165,3 +165,18 @@ export function parseCharacterFile(data: Uint8Array): CharacterFile {
     teamName: data.length >= team + 0x34 ? name(team + 0x14, 0x10) : '',
   };
 }
+
+// The auto reply (Simple Mail answer service) in the save: 0xAC units at 0x29EC (newserv's
+// PSOBBCharacterFile; the exe keeps it at character +0x2510 in memory, the same +0x4DC
+// offset as the info board's 0x2B44 / +0x2668). Written into the raw E7 copy so the save
+// that the session holds carries the text (the port does not send E7 upstream yet).
+export const AUTO_REPLY_OFFSET = 0x29ec;
+export const AUTO_REPLY_UNITS = 0xac;
+
+export function writeAutoReply(raw: Uint8Array, text: string): void {
+  if (raw.length < AUTO_REPLY_OFFSET + AUTO_REPLY_UNITS * 2) return;
+  const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  for (let i = 0; i < AUTO_REPLY_UNITS; i++) {
+    dv.setUint16(AUTO_REPLY_OFFSET + i * 2, i < text.length ? text.charCodeAt(i) : 0, true);
+  }
+}
