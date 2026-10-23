@@ -11,6 +11,7 @@ import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient } from './guildcard.ts';
 import { InfoBoardClient } from './infoboard.ts';
+import { SimpleMailBox } from './simplemail.ts';
 import { applyKeyConfig, keyConfigFromCharacter } from '../input/keyconfig.ts';
 import { applyPadConfig, padConfigFromCharacter } from '../input/padconfig.ts';
 
@@ -137,6 +138,8 @@ export class BBSession {
   guildCardClient: GuildCardClient | null = null;
   // The Info Board sender (net/infoboard.ts), set with the lobby's connection.
   infoBoardClient: InfoBoardClient | null = null;
+  // The Simple Mail store and answer service (net/simplemail.ts), set with the lobby's connection.
+  mailbox: SimpleMailBox | null = null;
   private guildCardSync: Promise<GuildCardBook | null> | null = null;
   // What a redirect needs to log in again: the character slot and credentials
   // of the last game-server login.
@@ -302,6 +305,7 @@ export class BBSession {
     const client = new GuildCardClient(conn);
     this.guildCardClient = client;
     this.infoBoardClient = new InfoBoardClient(conn);
+    this.mailbox = new SimpleMailBox(conn);
     this.guildCardSync = client
       .sync(null)
       .then((book) => {

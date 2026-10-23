@@ -32,6 +32,7 @@ import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
 import type { InfoBoardClient } from '../net/infoboard.ts';
+import type { SimpleMailBox } from '../net/simplemail.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import type { Lobby } from '../net/lobby.ts';
 import { TRADE_STATUS } from '../net/trade.ts';
@@ -45,6 +46,8 @@ import { Question, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamH
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
+import { SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
+import { se, SE } from '../audio/se.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
@@ -101,6 +104,8 @@ export interface LobbyHud {
   guildCardClient?: () => GuildCardClient | null;
   // The Info Board sender (net/infoboard.ts), null before the lobby's connection.
   infoBoardClient?: () => InfoBoardClient | null;
+  // The Simple Mail store and answer service (net/simplemail.ts), null before the lobby's connection.
+  mailbox?: () => SimpleMailBox | null;
 }
 
 export interface TransportHost {
@@ -151,6 +156,8 @@ export class LobbyScreen implements Screen {
   // text the keyboard accepted this session (the character's own board until then).
   private infoBoard: InfoBoardMenu | null = null;
   private infoOwn: string | null = null;
+  // Home menu > Simple Mail (0x13): the window (classic/simplemail.ts); its store is the session's mailbox.
+  private mail: SimpleMailMenu | null = null;
   // Home menu > Trade Window (0x1a, classic/trade.ts); also opened by a partner's proposal.
   private trade: TradeMenu | null = null;
   private options: OptionsMenu | null = null;
@@ -235,6 +242,11 @@ export class LobbyScreen implements Screen {
     lobby.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
     lobby.on('playerLeft', (id) => this.heights.delete(id));
     // A guild card sent by a player (6x06): the book takes a known card; others wait (ASSUMED: no window).
+    // A Simple Mail (0x81): stored whatever window is open; the arrival sound on a kept mail (FUN_0081386c).
+    lobby.on('simpleMail', (body) => {
+      const box = this.hud.mailbox?.() ?? null;
+      if (box && box.receive(body) === 'stored') se(SE.newMail);
+    });
     lobby.on('guildCardSent', (body) => {
       const r = this.hud.guildCardClient?.()?.receiveSent(body);
       if (r === 'received' || r === 'dropped') console.info(`[classic] Guild Card received: ${r} (its window is not ported)`);
@@ -248,7 +260,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.trade || !!this.symbolList;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -362,6 +374,28 @@ export class LobbyScreen implements Screen {
         },
       };
       this.infoBoard = new InfoBoardMenu((i) => this.hud.text(11, i), host);
+      this.menu.leafOpen = true;
+    } else if (id === 0x13) {
+      // handle_player_menu_select simple_mail_menu1 (0x13): the Simple Mail window (classic/simplemail.ts,
+      // the exe's state handler FUN_0075596c). Needs the lobby's connection for its packets.
+      const box = this.hud.mailbox?.() ?? null;
+      if (!box) {
+        console.info('[classic] Simple Mail: no lobby connection yet');
+        return;
+      }
+      const host: SimpleMailHost = {
+        box,
+        book: () => this.hud.guildCards?.() ?? null,
+        client: () => this.hud.guildCardClient?.() ?? null,
+        self: () => ({ guildCard: this.lobby.self?.guildCardNumber ?? 0, name: this.lobby.self?.name ?? '' }),
+        unitxt: (group, index) => this.hud.text(group, index),
+        // The window's destructor: the answer service packets (C7 / C8) and the unread bits.
+        onClose: () => {
+          box.closeWindow();
+          box.store.clearUnread();
+        },
+      };
+      this.mail = new SimpleMailMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
     } else if (id === 0x1a) {
       // handle_player_menu_select trade_invite_menu1 (classic/trade.ts). The lobby has no
@@ -512,6 +546,15 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.mail) {
+      e.preventDefault();
+      this.mail.key(e);
+      if (!this.mail.open) {
+        this.mail = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (this.infoBoard) {
       e.preventDefault();
       this.infoBoard.key(e);
@@ -607,6 +650,13 @@ export class LobbyScreen implements Screen {
     this.quit = null;
     this.guildCard = null;
     this.infoBoard = null;
+    // The close actions send the answer packets; the connection may be gone by now.
+    try {
+      this.mail?.dispose();
+    } catch {
+      // ignored: nothing to send on a closed connection
+    }
+    this.mail = null;
     this.trade = null;
     this.party?.close();
     this.team?.close();
@@ -645,6 +695,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.symbolList?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.mail?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));

@@ -51,6 +51,7 @@ export const SE = {
   buzzer: 0x575, // not allowed (FUN_004f0b80 with an invalid name, menus 0x7351ac)
   nameNg: 0x57c, // name entry closed with an invalid name (FUN_004f34a8)
   cancel: 0x585, // window / character select cancel (0x412e4e, 0x7388d0)
+  newMail: 0x586, // a Simple Mail arrived (FUN_0081386c calls FUN_00814298(0x586) after the store)
   titleOk: 0x420, // title menu confirm (FUN_006fed2c, FUN_006fede0), from city.pac
 } as const;
 

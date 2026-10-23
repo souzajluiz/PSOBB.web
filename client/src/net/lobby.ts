@@ -72,6 +72,8 @@ export interface LobbyEvents {
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   // 6x06: a guild card another player sent (the 0x108 card at +4; exe handle_packet0x60_subcommand0x6).
   guildCardSent: (body: Uint8Array) => void;
+  // S->C 0x81: a Simple Mail (net/simplemail.ts; the body is the 0x454 bytes after the header).
+  simpleMail: (body: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
   visibilityChanged: (p: LobbyPlayer) => void; // games: 6x22 (hidden while it changes floors) / 6x23
   // S->C 0x23: the Momoka item exchange's answer (flag 0 ok, 1 no item, 2 full inventory; other = failed), newserv on_momoka_item_exchange_bb.
@@ -276,6 +278,9 @@ export class Lobby {
         break;
       case 0x06:
         this.onChat(c);
+        break;
+      case 0x81:
+        this.emit('simpleMail', c.data);
         break;
       case 0xb0:
         // Same format as 01: 8 bytes, then the text.
