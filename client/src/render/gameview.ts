@@ -461,7 +461,8 @@ export class GameView {
   async enter(): Promise<void> {
     await this.loadFloor(0, 0);
     const me = this.game.self!;
-    this.game.finishLoading(me.position.x, me.position.y, me.position.z, me.angle);
+    // 6x3F room: get_player_room_id is 0 on Pioneer 2 (dump 803432), the first floor here.
+    this.game.finishLoading(me.position.x, me.position.y, me.position.z, me.angle, { guard: false, room: 0 });
     this.items.ensureIds();
   }
 
@@ -506,7 +507,8 @@ export class GameView {
       // TObjPlayerSet param4: 0 = arriving from a lower floor, 1 = returning from a higher one.
       await this.loadFloor(floor, source ?? (floor > from ? 0 : 1));
       if (arrival) this.view?.placePlayer(this.game.selfId, arrival.x, arrival.y, arrival.z, arrival.angle);
-      this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle);
+      // The guard stance is off on a fresh floor (ASSUMED); the room is the field's zone at the position.
+      this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle, { guard: false, room: this.roomAt(me.position) });
     } finally {
       this.busy = false;
     }

@@ -731,12 +731,12 @@ export class Game extends Lobby {
   }
 
   // The floor is loaded and the player placed: 6x3F, 6x1F, 6x3B, then 6F.
-  finishLoading(x: number, y: number, z: number, angle: number): void {
+  finishLoading(x: number, y: number, z: number, angle: number, state?: SetPositionState): void {
     const me = this.self;
     if (!me) return;
     me.position = { x, y, z };
     me.angle = angle;
-    this.sendSetPosition();
+    this.sendSetPosition(state);
     this.sendSubcommand(0x1f, int32(me.floor));
     this.sendSubcommand(0x3b, new Uint8Array(0));
     this.conn.send(0x6f, 0);
@@ -752,12 +752,12 @@ export class Game extends Lobby {
     me.floor = floor;
   }
 
-  finishWarp(x: number, y: number, z: number, angle: number): void {
+  finishWarp(x: number, y: number, z: number, angle: number, state?: SetPositionState): void {
     const me = this.self;
     if (!me) return;
     me.position = { x, y, z };
     me.angle = angle;
-    this.sendSetPosition();
+    this.sendSetPosition(state);
     this.sendSubcommand(0x1f, int32(me.floor));
     this.sendSubcommand(0x3b, new Uint8Array(0));
     this.sendSubcommand(0x23, new Uint8Array(0));
@@ -1336,17 +1336,10 @@ export class Game extends Lobby {
   }
 
   // 6x3F: set position {is_near_enemy, angle, floor, room, pos}.
-  sendSetPosition(): void {
+  sendSetPosition(state: SetPositionState = { guard: false, room: 0 }): void {
     const me = this.self;
     if (!me) return;
-    const p = new Uint8Array(0x14);
-    const dv = new DataView(p.buffer);
-    dv.setUint16(2, RAD_TO_BAMS(me.angle), true);
-    dv.setInt16(4, me.floor, true);
-    dv.setFloat32(8, me.position.x, true);
-    dv.setFloat32(12, me.position.y, true);
-    dv.setFloat32(16, me.position.z, true);
-    this.sendSubcommand(0x3f, p);
+    this.sendSubcommand(0x3f, setPositionBody(me, state));
   }
 
   // 98 (leave game, with our character data), then 84 (choose lobby). Resolves
@@ -1449,6 +1442,31 @@ export function parseCastTechniqueComplete(body: Uint8Array): { clientId: number
   if (body.length < 8 || body[0] !== 0x48) return null;
   const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
   return { clientId: dv.getUint16(2, true), tech: dv.getUint16(4, true), level: dv.getUint16(6, true) };
+}
+
+// The 6x3F body (the 20 bytes after the 4-byte subcommand header; the header is
+// added by sendSubcommand). Exe: dispatch_action_0x3f_ (dump 583247) writes the
+// action 0x3f, size 6 dwords, then player idx (+2), guard flag (+4, u16 of
+// `character_flags & in_guard_stance` 0x100000, dump 70188), floor (+8), room
+// (+0xa, get_player_room_id), xyz (+0xc). The exe leaves +6 unwritten; the port
+// keeps the angle there (newserv names it `angle`; ASSUMED the exe's +6 is not a
+// real field). newserv G_SetPosition_6x3F (vendor/newserv CommandFormats.hh).
+export interface SetPositionState {
+  guard: boolean; // the guard stance (is_near_enemy in newserv)
+  room: number;
+}
+
+export function setPositionBody(me: { angle: number; floor: number; position: { x: number; y: number; z: number } }, state: SetPositionState): Uint8Array {
+  const p = new Uint8Array(0x14);
+  const dv = new DataView(p.buffer);
+  dv.setUint16(0, state.guard ? 1 : 0, true);
+  dv.setUint16(2, RAD_TO_BAMS(me.angle), true);
+  dv.setInt16(4, me.floor, true);
+  dv.setInt16(6, state.room, true);
+  dv.setFloat32(8, me.position.x, true);
+  dv.setFloat32(12, me.position.y, true);
+  dv.setFloat32(16, me.position.z, true);
+  return p;
 }
 
 export function buildDropRequest(req: { floor: number; rtIndex: number; enemyIndex: number; x: number; z: number; room: number; area: number }): Uint8Array {

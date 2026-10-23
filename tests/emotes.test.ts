@@ -4,6 +4,7 @@
 // G_LobbyAnimation_6x58) and the field records (plyemotedata.ts, generated from
 // the field tables 0x009cbeec / 0x009cbf04).
 // Run: node tests/emotes.test.ts
+import { setPositionBody } from '../client/src/net/game.ts';
 import {
   ALT_EMOTE_ORDER,
   altEmoteKey,
@@ -137,6 +138,14 @@ eq(threw, true, 'a slot that is not a field emote slot throws');
   eq([emoteSlot(altEmoteKey((k) => k === 'f1') ?? '', true), emoteSlot('f1', false)], [9, 6], 'Alt+F1 slots');
   eq(sitEndKey(false), 'u', 'Alt+U ends the plain sit');
   eq(sitEndKey(true), 'i', 'Alt+I ends the chair sit');
+  // 6x3F body (dispatch_action_0x3f_, dump 583247; newserv G_SetPosition_6x3F): guard flag +4,
+  // floor +8, room +0xa, xyz +0xc. The body starts after the 4-byte header.
+  const body = setPositionBody({ angle: 0, floor: 3, position: { x: 1, y: 2, z: 3 } }, { guard: true, room: 7 });
+  const bdv = new DataView(body.buffer);
+  eq([bdv.getUint16(0, true), bdv.getInt16(4, true), bdv.getInt16(6, true), bdv.getFloat32(8, true), bdv.getFloat32(12, true), bdv.getFloat32(16, true)], [1, 3, 7, 1, 2, 3], '6x3F guard, floor, room, xyz');
+  const plain = setPositionBody({ angle: 0, floor: 0, position: { x: 0, y: 0, z: 0 } }, { guard: false, room: 0 });
+  eq(new DataView(plain.buffer).getUint16(0, true), 0, '6x3F guard off');
+  eq(plain.length, 0x14, '6x3F body is 20 bytes');
 }
 
 if (failures) {

@@ -60,6 +60,8 @@ export interface LobbyEvents {
   emote: (p: LobbyPlayer, slot: number, opposite: boolean) => void;
   // 6xAB: another player's sit (chair = flag 2, slot 49 instead of 48; opposite = flag 1).
   sit: (p: LobbyPlayer, chair: boolean, opposite: boolean) => void;
+  // 6x3E: another player stopped (move_stop); a sitting player stands up on it (ASSUMED: the receiver's move-stop transition, dump 0x698b74 path not fully traced).
+  stopped: (p: LobbyPlayer) => void;
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
@@ -317,13 +319,14 @@ export class Lobby {
             p.moving = false;
             this.emit('moved', p);
             break;
-          case 0x3e: // stop at position
+          case 0x3e: // stop at position (the sender's move_stop: dispatch_action_move_stop, dump 587490): also ends a remote sit (stopped)
           case 0x3f: // set position
             p.angle = dv.getUint16(6, true) * BAMS_TO_RAD;
             p.floor = dv.getInt16(8, true);
             p.position = { x: dv.getFloat32(12, true), y: dv.getFloat32(16, true), z: dv.getFloat32(20, true) };
             p.moving = false;
             this.emit('moved', p);
+            if (sub === 0x3e) this.emit('stopped', p);
             break;
           case 0x24: // G_TeleportPlayer_6x24 (buildTeleport): {u32 angle, f32 x, y, z}; the battle respawn and set_player_start_position
             if (body.length < 0x14) break;
