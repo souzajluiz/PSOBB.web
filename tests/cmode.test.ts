@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prsDecompress } from '../client/src/formats/prs.ts';
+import { ENEMY_TYPE_NAMES } from '../client/src/formats/entitynames.ts';
 import {
   CHALLENGE_FORCE_TEMPLATES,
   CHALLENGE_HUNTER_TEMPLATES,
@@ -77,6 +78,7 @@ import {
   graveKillerId,
   graveKillerName,
   graveLines,
+  GRAVE_KILLER_INDEX,
   GRAVE_NO_KILLER,
   GRAVE_FADE_IN,
   GRAVE_FADE_OUT,
@@ -534,11 +536,32 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
   eq(graveKillerName(GRAVE_NO_KILLER), null, 'no killer id: no line');
   eq(graveKillerName(0), null, 'id 0: no line');
   eq(graveKillerName(graveKillerId(null)), null, 'a null type: no killer');
-  const id = graveKillerId('AL_RAPPY');
-  check(id > 0 && id < 0x1000, 'a known enemy type gets a positive id');
-  eq(graveKillerName(id), 'Al Rappy', 'the killer line names the enemy');
+  const id = graveKillerId('MONEST');
+  eq(id, 4, 'Monest is the exe index 4 (the monest ctor forwards 4)');
+  eq(graveKillerName(id), 'Monest', 'the killer line names the enemy');
   eq(graveKillerId('NOT_AN_ENEMY'), GRAVE_NO_KILLER, 'an unknown type is no killer');
-  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: graveKillerName(id), date: null })[3], 'Defeated by Al Rappy.', 'the killer line of the grave');
+  eq(graveKillerId('RAG_RAPPY'), GRAVE_NO_KILLER, 'a kind without a decoded index shows no killer');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: graveKillerName(id), date: null })[3], 'Defeated by Monest.', 'the killer line of the grave');
+  eq(graveKillerName(0xffffffff), null, 'the exe id 0xffffffff is no killer');
+  eq(graveKillerName(999), null, 'an id no kind has names nobody');
+}
+
+// The killer table (GRAVE_KILLER_INDEX): every id is the exe's (1..0x7f), ids are unique,
+// each kind names itself through ENEMY_TYPE_NAMES, and the id round-trips to the name.
+{
+  const ids = Object.values(GRAVE_KILLER_INDEX);
+  eq(new Set(ids).size, ids.length, 'no two kinds share an exe monster id');
+  for (const [kind, id] of Object.entries(GRAVE_KILLER_INDEX)) {
+    check(kind in ENEMY_TYPE_NAMES, `${kind} is a port enemy type`);
+    check(id >= 1 && id <= 0x7f, `${kind} has a unitxt monster id in range`);
+    eq(graveKillerName(id), ENEMY_TYPE_NAMES[kind]![0], `${kind} names its id`);
+    eq(graveKillerId(kind), id, `${kind} gives its id`);
+  }
+  eq(graveKillerId('HILDEBLUE'), 2, 'the rare Hildebear is 2 (InitializeHildebearResources)');
+  eq(graveKillerId('EVIL_SHARK'), 16, 'the shark subtypes are 16..18');
+  eq(graveKillerId('DEL_LILY'), 83, 'the tower lily is 83 (0x53)');
+  eq(graveKillerId('GILLCHIC'), 50, 'Gillchic is 50 (gilchic_constructor)');
+  eq(graveKillerId('DIMENIAN'), 41, 'Dimenian is 41 (SetDimenianDifficulty)');
 }
 
 // --- the character template (needs PlyLevelTbl.prs) ----------------------------------------------------
