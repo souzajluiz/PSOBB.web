@@ -10,6 +10,7 @@ import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { exhaustive } from '../exhaustive.ts';
+import { bamsSin } from './derollefins.ts';
 
 const BAMS = BAMS_TO_RAD;
 
@@ -933,6 +934,62 @@ const SLIME_ANIM = {
   hurt: once(3, 0.8), // animation 5
 };
 
+// The body's transform (PsoBB.exe 0x00596264, the slime's draw, vtable +0x08):
+// +0x3a8 the alpha (nothing is drawn at or below 0, blended below 1), +0x3ac the
+// height added to y, +0x3b0 / +0x3b4 / +0x3b8 the scale x / y / z. The rise
+// (0x0059670c) and the sink (0x00596884) write one curve from the progress t
+// (+0x3a0) and the wobble sin(count << 12) (count = +0x398, one step a frame):
+// height -2.5 (1 - t), sy = t, sx = (2.5 - 1.5 t)(1 + w), sz = (2.5 - 1.5 t)(1 - w),
+// w = sin * f * k with f = 1, or (1 - t) / 0.2 above t = 0.8, and k = 0.1 (rise)
+// or 0.15 (sink); alpha = 2t below t = 0.5, else 1. Constants: 0x00929564 -2.5,
+// 0x00929558 2.5, 0x00929570 -1.5, 0x009292d0 / 0x009292dc 0.8, 0x0092956c /
+// 0x00929548 0.2, 0x009292cc 0.1, 0x009292d8 0.15, 0x00929568 / 0x00929544 2.0,
+// 0x009292c8 0.5. The rise steps t by 1/30 (0x00a7453c), the sink by -1/90 (0x00a74544).
+export const SLIME_XF = {
+  low: -2.5, // the height under the ground (the rise and puddle entries)
+  scaleBase: 2.5,
+  scaleSlope: -1.5,
+  edge: 0.8,
+  edgeDiv: 0.2,
+  alphaCut: 0.5,
+  riseWobble: 0.1,
+  sinkWobble: 0.15,
+} as const;
+
+export interface SlimeXf {
+  alpha: number;
+  height: number;
+  sx: number;
+  sy: number;
+  sz: number;
+}
+
+export interface SlimeView extends SlimeXf {
+  morph: number;
+  tail: boolean;
+}
+
+// The sub-object's animation id (+4, set by 0x00599c7c in each state's entry)
+// picks the meshes drawn (0x00599ef0): 0..6 the body, 7 and 8 one model, 9..11
+// the body and the tail (a second part). The rise has no entry write: it keeps
+// the puddle's 7 (the value is the same from the thrown landing).
+export const SLIME_MORPH: Readonly<Record<SlimeState, number>> = {
+  puddle: 7,
+  rise: 7,
+  sink: 7,
+  crawl: 8,
+  emerge: 9,
+  burrow: 10,
+  search: 1,
+  confused: 1,
+  approach: 0,
+  spit: 3,
+  arm: 0,
+  flinch: 5,
+  thrown: 7,
+  dead: 5,
+};
+
 const HIDDEN_STATES: ReadonlySet<SlimeState> = new Set(['sink', 'crawl', 'thrown']);
 // DAT_009bfda0[rare]: the puddle morph's BML motion (exe 0x00597b0c -> 0x00599c7c(7)).
 export const PUDDLE_MOTION = { normal: 4, rare: 5 } as const;
@@ -963,6 +1020,11 @@ export class SlimeAi extends BrainBase {
   private vx = 0;
   private vz = 0;
   private vy = 0;
+  // The body transform (SLIME_XF), the sub-object form (SLIME_MORPH) and the
+  // wobble step (+0x398). The puddle's entry values are the defaults.
+  private xf: SlimeXf = { alpha: 0, height: SLIME_XF.low, sx: 0, sy: 0, sz: 0 };
+  private morph = SLIME_MORPH.puddle;
+  private count = 0;
 
   private readonly puddleMotion: number;
 
@@ -990,6 +1052,12 @@ export class SlimeAi extends BrainBase {
 
   get invulnerable(): boolean {
     return UNTARGETABLE.has(this.state);
+  }
+
+  // What render/combat.ts draws (slimeView): the body's transform and alpha,
+  // and the tail part in the forms 9..11 (0x00599ef0).
+  get view(): SlimeView {
+    return { ...this.xf, morph: this.morph, tail: this.morph >= 9 };
   }
 
   get flinchMotion() {
@@ -1020,6 +1088,9 @@ export class SlimeAi extends BrainBase {
     this.vy = 2.5;
     this.lift = SLIME.throwHeight;
     this.state = 'thrown';
+    // 0x00598740 (state 14): height -2.5, scale 0, alpha 0, morph 7.
+    this.xf = { alpha: 0, height: SLIME_XF.low, sx: 0, sy: 0, sz: 0 };
+    this.morph = SLIME_MORPH.thrown;
   }
 
   private enter(out: AiFrame, s: SlimeState, targets: readonly AiTarget[] = []): void {
@@ -1027,15 +1098,26 @@ export class SlimeAi extends BrainBase {
     this.fired = false;
     switch (s) {
       case 'puddle':
+        // 0x00597b0c: height -2.5, scale 0, alpha 0, morph 7 (the puddle is
+        // not drawn: the body draw returns at alpha 0, 0x00596264).
+        this.xf = { alpha: 0, height: SLIME_XF.low, sx: 0, sy: 0, sz: 0 };
+        this.morph = SLIME_MORPH.puddle;
         this.timer = this.puddleWait();
         this.play(out, { index: this.puddleMotion, speed: PUDDLE_SPEED, loop: true });
         break;
       case 'rise':
+        // 0x00597ba0: t = 0, height -2.5. ASSUMED: the wobble count starts at
+        // 0 (the puddle's timer ran out at 0; the thrown landing keeps its own).
         this.level = 0;
+        this.count = 0;
+        this.xf.height = SLIME_XF.low;
         this.timer = SLIME.riseFrames;
         break;
       case 'sink':
+        // 0x00597bec: t = 1, height 0, morph 7.
         this.level = 1;
+        this.xf.height = 0;
+        this.morph = SLIME_MORPH.sink;
         this.timer = SLIME.sinkFrames;
         break;
       case 'crawl': {
@@ -1056,10 +1138,15 @@ export class SlimeAi extends BrainBase {
         this.budget = this.rng() * SLIME.crawlRand + SLIME.crawlBase;
         this.speed = 0;
         this.angle = Math.atan2(this.goalX - this.x, this.goalZ - this.z);
+        // 0x00597c3c (after its no-target and near exits): alpha 1, morph 8.
+        // The crawl is drawn (the body is not hidden while it crawls).
+        this.xf.alpha = 1;
+        this.morph = SLIME_MORPH.crawl;
         break;
       }
       case 'emerge':
       case 'burrow':
+        this.morph = s === 'emerge' ? SLIME_MORPH.emerge : SLIME_MORPH.burrow;
         this.timer = SLIME.morphFrames;
         this.play(out, SLIME_ANIM.wait);
         break;
@@ -1069,29 +1156,53 @@ export class SlimeAi extends BrainBase {
         this.timer = Infinity;
         this.turnDir = this.rng() > 0.5 ? -1 : 1;
         this.sweep = Math.round(4 * this.rng()) * 0x10000 + 0x40000;
+        this.morph = SLIME_MORPH.search;
         this.play(out, SLIME_ANIM.look);
         break;
       case 'confused':
         this.turnDir = this.rng() > 0.5 ? -1 : 1;
         this.timer = Math.round(30 * this.rng()) + 30;
+        this.morph = SLIME_MORPH.confused;
         this.play(out, SLIME_ANIM.look);
         break;
       case 'approach':
         this.timer = Math.round(30 * this.rng()) + 30;
+        this.morph = SLIME_MORPH.approach;
         this.play(out, SLIME_ANIM.wait);
         break;
       case 'spit':
         this.timer = SLIME.spitFrames;
+        this.morph = SLIME_MORPH.spit;
         this.play(out, SLIME_ANIM.spit);
         break;
       case 'arm':
         this.timer = SLIME.armFrames;
+        this.morph = SLIME_MORPH.arm;
         this.play(out, SLIME_ANIM.wait);
         break;
       case 'flinch':
+        // 0x005985c4: scale 1, morph 5.
+        this.xf.sx = this.xf.sy = this.xf.sz = 1;
+        this.morph = SLIME_MORPH.flinch;
         this.play(out, SLIME_ANIM.hurt);
         break;
     }
+  }
+
+  // The rise (k = 0.1) and the sink (k = 0.15) frames (0x0059670c, 0x00596884):
+  // the curves of SLIME_XF from the progress before its step, then the wobble
+  // count steps (+0x398).
+  private curves(k: number): void {
+    const t = this.level;
+    const f = t > SLIME_XF.edge ? (1 - t) / SLIME_XF.edgeDiv : 1;
+    const w = bamsSin(this.count << 12) * f * k;
+    const z = SLIME_XF.scaleBase + SLIME_XF.scaleSlope * t;
+    this.xf.sx = z * (1 + w);
+    this.xf.sz = z * (1 - w);
+    this.xf.sy = t;
+    this.xf.height = SLIME_XF.low * (1 - t);
+    this.xf.alpha = t < SLIME_XF.alphaCut ? 2 * t : 1;
+    this.count++;
   }
 
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
@@ -1114,10 +1225,12 @@ export class SlimeAi extends BrainBase {
         this.timer = this.puddleWait();
         break;
       case 'rise':
+        this.curves(SLIME_XF.riseWobble);
         this.level += 1 / SLIME.riseFrames;
         if (--this.timer <= 0) this.enter(out, nearest(targets, this.x, this.z, SLIME.near) ? 'crawl' : 'sink', targets);
         break;
       case 'sink':
+        this.curves(SLIME_XF.sinkWobble);
         this.level -= 1 / SLIME.sinkFrames;
         if (--this.timer < 0) this.enter(out, 'puddle');
         break;
@@ -1229,6 +1342,9 @@ export class SlimeAi extends BrainBase {
     if (this.state !== 'flinch') {
       this.state = 'flinch';
       this.current = SLIME_ANIM.hurt;
+      // 0x005985c4 (the flinch entry): scale 1, morph 5.
+      this.xf.sx = this.xf.sy = this.xf.sz = 1;
+      this.morph = SLIME_MORPH.flinch;
     }
   }
 

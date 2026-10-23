@@ -523,9 +523,18 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     case 0x63:
       return spec('TObjEneShark', pick('bm_ene_bm1_shark.bml', ctx), [{ model: [2, 0, 1][clamp(p6, 0, 2)], motion: loop(9, 0.6) }]);
     // Pofuilly Slime: spawner 0x0059594c, slime ctor 0x00596000 / FUN_005997c8:
-    // model 0x009bfbf0[rare] = 0; table 0x009bfc80 slot 0 = BML motion 10 (wait2), 0.5.
-    case 0x64:
-      return spec('TObjEneSlime', 'bm4_ps_ma_body.bml', [{ model: 0, motion: loop(10, 0.5) }]);
+    // body model 0x009bfbf0[rare] = 0 (normal) / 2 (rare, DAT_009bfbf4); table
+    // 0x009bfc80 slot 0 = BML motion 10 (wait2), 0.5. The tail (forms 9..11,
+    // 0x00599ef0's second part) is the next model of the BML (ma_tail / mar_tail;
+    // ASSUMED from the names, the exe's index is not traced). Both parts are
+    // placed by render/combat.ts slimeView.
+    case 0x64: {
+      const rare = (p6 & 1) !== 0;
+      return spec('TObjEneSlime', 'bm4_ps_ma_body.bml', [
+        { model: rare ? 2 : 0, motion: loop(10, 0.5), name: 'Slime body' },
+        { model: rare ? 3 : 1, motion: loop(10, 0.5), name: 'Slime tail', hidden: true },
+      ]);
+    }
     // Pan Arms (combined): ctor 0x00582ef4, model 0, table 0x009bf220 slot 0 = wait, 0.7.
     case 0x65:
       return spec('TObjEnePanarms', 'bm7_s_paa_body.bml', [{ model: 0, motion: loop(23, 0.7) }]);
