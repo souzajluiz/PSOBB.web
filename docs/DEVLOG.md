@@ -11466,3 +11466,27 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - The field's Home menu gets the same delay and slide (one window in the exe); the field's Quit is not changed.
 
 **Checks:** `client` `npx tsc --noEmit -p .` clean (Node 24). `tests/lobbymenu.test.ts` (new cases: the 2-frame delay and its re-open, the header's 8-frame slide to row 0 and its back-step, Quit reaching the action as 8 in the lobby), `tests/fieldhud.test.ts`, `tests/teammenu.test.ts`, `tests/chatline.test.ts` pass. Three field / option tests (`tests/minimap.test.ts`, `tests/questboard.test.ts`, `tests/options.test.ts`) pressed keys on the frame the menu opened; they now tick 2 frames first (the delay). `medical`, `telepipe` pass. Not run in Chrome or against newserv.
+
+## 2026-10-23: admin character editor: level -> EXP / stats, class techniques, item picker, mag editor
+
+**What changed:** the admin panel's character editor (`bridge/admin-ui/admin.js`, `bridge/admin-chars.mjs`, new `bridge/admin-items.mjs`, routes in `bridge/admin.mjs`):
+- Level (or class) change writes the EXP threshold of the level and recomputes the class's stats; the page previews them (`GET /accounts/:id/characters/:n/level-preview?level=&charClass=`), typed stats / EXP still win.
+- Techniques: only those the class can learn, with the cap in the label; the server refuses the rest (400).
+- Give items: a picker (`GET /items/catalog`): search by name, then weapon grind / special / 3 attributes, armor slots / DFP / EVP, shield DFP / EVP, unit -2..+2, mag, tool count, tech disk, meseta. Raw hex is kept under "Advanced". Same picker in the bank editor. Inventory and bank rows show item names.
+- Mag editor for any inventory mag: type, DEF / POW / DEX / MIND level + progress, synchro, IQ, colour, 3 photon blasts.
+- Safety unchanged and reused: `requireOffline` (`GET /y/clients`), confirmation with the account id, backup in `players/_admin-backups`, atomic write.
+
+**Data sources (read at run time from newserv's `system/tables`, nothing committed; `ADMIN_TABLES_DIR` overrides):** `level-table-v4.json` (BB PlyLevelTbl), `item-parameter-table-bb-v4.json` (BB ItemPMT: MaxGrind, DFPRange / EVPRange, unit ModifierAmount, MaxTechLevels), `names-v4.json` (item names). newserv's JSON has comments and hex numbers: `parseNewservJson`.
+
+**Rules copied from newserv's source:** `LevelTable::advance_to_level` + `PSOBBCharacterFile::recompute_stats` (what `$edit level` runs): base stats + deltas of levels 1..L-1, LCK deltas ignored, EXP = delta[L-1].EXP, then +2 per POWER / MIND / EVADE / DEF / LUCK material (items[8..12].extension_data2), HP materials not added. `Items.cc` tech disk use (MaxTechLevels 0-based, 0xFF = cannot). `ItemData.hh` quick format, `assign_mag_stats` (stats masked 0x7FFE, data2 = synchro, IQ, flags, colour), `add_mag_photon_blast` / `mag_photon_blast_for_slot` (left PB = index among unused), `ItemCreator::generate_common_unit_variances` (modifier = step x ModifierAmount), `DEFAULT_TOOL_LIMITS_V3_V4`, special / mag colour / PB names from `ItemNameIndex.cc` / `StaticGameData.cc`.
+
+**Checks of the formula on real files:** the local `player_webtest_0.psochar` (HUmar level 9, levelled in game through newserv) has exactly the recomputed stats (ATP 87, MST 65, EVP 89, HP 40, DFP 23, ATA 86, LCK 10); `tests/admin.live.ts` (real newserv + a real BB session) reads back level 42 with the preview's MST / HP, a picker Saber +7 Charge Machine 25% and an edited mag.
+
+**ASSUMED:**
+- Weapon attribute percent limited to -100..100 (no table gives the bound).
+- Mag synchro 0-120 and IQ 0-200 (the game's usual caps; newserv does not check them).
+- Mag type vs level (evolution) is not checked; any named mag type can be set.
+- Without a level table the editor keeps the old behaviour (level written alone).
+- A class change recomputes the stats at the current level (newserv has no class-change command to copy).
+
+**Tests:** `node tests/admin-items.test.ts` 92/92 (new); `tests/admin.test.ts` 316/316; `tests/admin.i18n.test.ts` 3239/3239 (new strings in pt-BR / es); `tests/admin.live.ts` 58/58 (character now a HUnewearl: Foie 18 is under its cap of 20; a cap refusal, the preview, picker weapon and mag added). Chrome: `client/e2e/admin-characters.spec.ts` (`npx playwright test -c playwright.admin.config.ts`, own newserv + `bridge/server.mjs`, fresh account, copy of a local character) passes 7 runs in a row (one earlier run flaked on the toast check, made strict on "Saved:"). Fixed on the way: the Characters tab printed "null" above the list when the account was offline.

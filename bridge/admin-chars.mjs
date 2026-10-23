@@ -11,6 +11,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
+import { ItemError, checkTechLevel, decodeItem, encodeItem, encodeMagInto, itemName, readMaterials, statsForLevel, toolStackLimit } from './admin-items.mjs';
 
 export const CHAR_FILE_SIZE = 0x399c;
 const H = 8;
@@ -118,12 +119,28 @@ export function itemKind(d1) {
   }
 }
 
-function itemView(d1buf, id, d2buf) {
-  return { data1: hex(d1buf, 0, 12), id, data2: hex(d2buf, 0, 4), kind: itemKind(d1buf) };
+function itemView(d1buf, id, d2buf, gd = null) {
+  const v = { data1: hex(d1buf, 0, 12), id, data2: hex(d2buf, 0, 4), kind: itemKind(d1buf) };
+  const name = itemName(gd, d1buf);
+  if (name) v.name = name;
+  if (d1buf[0] === 2) v.mag = decodeItem(Buffer.from(d1buf), Buffer.from(d2buf)).mag;
+  return v;
 }
 
-function parseItemInput(item, what) {
+const asCharError = (e, what) => (e instanceof ItemError ? new CharError(`${what}: ${e.message}`, e.status) : e);
+
+// An item is either raw ({ data1, data2 } hex) or a picker description
+// ({ spec: { kind, code, ... } }, encoded by admin-items.mjs encodeItem).
+function parseItemInput(item, what, gd = null) {
   if (!item || typeof item !== 'object') throw new CharError(`${what}: item object expected`);
+  if (item.spec !== undefined) {
+    try {
+      const { d1, d2, amount } = encodeItem(gd, item.spec);
+      return { d1, d2, amount, spec: item.spec };
+    } catch (e) {
+      throw asCharError(e, what);
+    }
+  }
   const { data1, data2 } = item;
   if (typeof data1 !== 'string' || !/^[0-9a-fA-F]{24}$/.test(data1)) throw new CharError(`${what}: data1 must be 24 hex digits (12 bytes)`);
   const d2 = data2 === undefined ? '00000000' : data2;
@@ -150,17 +167,17 @@ function decodeName(buf) {
   return s.replace(/^\t[A-Za-z]/, '').replace(/[\u0000-\u001f]/g, '');
 }
 
-export function readBankSection(buf, off, slots) {
+export function readBankSection(buf, off, slots, gd = null) {
   const num = Math.min(buf.readUInt32LE(off), slots);
   const items = [];
   for (let i = 0; i < num; i++) {
     const o = off + 8 + i * BANK_ITEM;
-    items.push({ ...itemView(buf.subarray(o, o + 12), buf.readUInt32LE(o + 12), buf.subarray(o + 16, o + 20)), amount: buf.readUInt16LE(o + 20), present: buf.readUInt16LE(o + 22) });
+    items.push({ ...itemView(buf.subarray(o, o + 12), buf.readUInt32LE(o + 12), buf.subarray(o + 16, o + 20), gd), amount: buf.readUInt16LE(o + 20), present: buf.readUInt16LE(o + 22) });
   }
   return { meseta: buf.readUInt32LE(off + 4), items };
 }
 
-export function parseCharacter(buf) {
+export function parseCharacter(buf, gd = null) {
   const techs = {};
   for (let i = 0; i < TECHNIQUES.length; i++) {
     const v1 = buf[DISP + 0x17c + i];
@@ -171,7 +188,7 @@ export function parseCharacter(buf) {
   for (let i = 0; i < num; i++) {
     const o = INV + 4 + i * INV_ITEM;
     const flags = buf.readUInt32LE(o + 4);
-    items.push({ slot: i, state: buf[o], equipped: (flags & 8) !== 0, flags, ...itemView(buf.subarray(o + 8, o + 20), buf.readUInt32LE(o + 20), buf.subarray(o + 24, o + 28)) });
+    items.push({ slot: i, state: buf[o], equipped: (flags & 8) !== 0, flags, ...itemView(buf.subarray(o + 8, o + 20), buf.readUInt32LE(o + 20), buf.subarray(o + 24, o + 28), gd) });
   }
   const sec = buf[DISP + 0x54];
   const cls = buf[DISP + 0x55];
@@ -187,8 +204,9 @@ export function parseCharacter(buf) {
     className: CHAR_CLASSES[cls] ?? 'Unknown',
     playTimeSeconds: buf.readUInt32LE(PLAY_TIME),
     techniques: techs,
+    materials: readMaterials(buf, INV),
     inventory: items,
-    bankInCharacterFile: readBankSection(buf, BANK, BANK_SLOTS),
+    bankInCharacterFile: readBankSection(buf, BANK, BANK_SLOTS, gd),
   };
 }
 
@@ -205,9 +223,18 @@ function intIn(v, lo, hi, what) {
 }
 
 // Applies a validated patch to a copy of the file buffer; returns { buf, changes }.
-export function applyCharacterPatch(orig, patch) {
+// `gd` is the game data of admin-items.mjs loadGameData (null: raw mode, the
+// old behaviour: no stat recompute, technique levels 1-30 for every class, raw
+// items only).
+//
+// Order: section / class, then level (with the level table: EXP threshold and
+// stats recomputed for the class with the materials kept, as newserv's
+// `$edit level`; a class change recomputes too), then explicit exp / meseta /
+// stats overrides, techniques (checked against the class's limits), inventory
+// (set, remove, add), then mag edits.
+export function applyCharacterPatch(orig, patch, gd = null) {
   if (!patch || typeof patch !== 'object') throw new CharError('patch object expected');
-  const known = new Set(['level', 'exp', 'meseta', 'stats', 'sectionId', 'charClass', 'techniques', 'inventory']);
+  const known = new Set(['level', 'exp', 'meseta', 'stats', 'sectionId', 'charClass', 'techniques', 'inventory', 'mags']);
   for (const k of Object.keys(patch)) if (!known.has(k)) throw new CharError(`unknown field: ${k}`);
   const buf = Buffer.from(orig);
   const changes = [];
@@ -218,31 +245,52 @@ export function applyCharacterPatch(orig, patch) {
       changes.push(`${label} ${before} -> ${v}`);
     }
   };
-  if (patch.level !== undefined) set32(DISP + 0x18, intIn(patch.level, 1, 200, 'level') - 1, 'level(0-based)');
-  if (patch.exp !== undefined) set32(DISP + 0x1c, intIn(patch.exp, 0, 999_999_999, 'exp'), 'exp');
-  if (patch.meseta !== undefined) set32(DISP + 0x20, intIn(patch.meseta, 0, 999_999, 'meseta'), 'meseta');
-  if (patch.stats !== undefined) {
-    if (typeof patch.stats !== 'object' || patch.stats === null) throw new CharError('stats must be an object');
-    for (const [k, v] of Object.entries(patch.stats)) {
-      const i = STAT_KEYS.indexOf(k);
-      if (i < 0) throw new CharError(`unknown stat: ${k}`);
-      intIn(v, 0, 9999, k);
-      const before = buf.readUInt16LE(DISP + i * 2);
-      if (before !== v) {
-        buf.writeUInt16LE(v, DISP + i * 2);
-        changes.push(`${k} ${before} -> ${v}`);
-      }
+  const setStat = (k, v) => {
+    const i = STAT_KEYS.indexOf(k);
+    const before = buf.readUInt16LE(DISP + i * 2);
+    if (before !== v) {
+      buf.writeUInt16LE(v, DISP + i * 2);
+      changes.push(`${k} ${before} -> ${v}`);
     }
-  }
+  };
   if (patch.sectionId !== undefined) {
     intIn(patch.sectionId, 0, 9, 'sectionId');
     if (buf[DISP + 0x54] !== patch.sectionId) changes.push(`section ${buf[DISP + 0x54]} -> ${patch.sectionId}`);
     buf[DISP + 0x54] = patch.sectionId;
   }
+  let classChanged = false;
   if (patch.charClass !== undefined) {
     intIn(patch.charClass, 0, 11, 'charClass');
-    if (buf[DISP + 0x55] !== patch.charClass) changes.push(`class ${buf[DISP + 0x55]} -> ${patch.charClass}`);
+    if (buf[DISP + 0x55] !== patch.charClass) {
+      changes.push(`class ${buf[DISP + 0x55]} -> ${patch.charClass}`);
+      classChanged = true;
+    }
     buf[DISP + 0x55] = patch.charClass;
+  }
+  const cls = buf[DISP + 0x55];
+  if (patch.level !== undefined) intIn(patch.level, 1, 200, 'level');
+  if (gd?.levelTable && (patch.level !== undefined || classChanged)) {
+    const level = patch.level ?? buf.readUInt32LE(DISP + 0x18) + 1;
+    let r;
+    try {
+      r = statsForLevel(gd, cls, level, readMaterials(buf, INV));
+    } catch (e) {
+      throw asCharError(e, 'level');
+    }
+    set32(DISP + 0x18, level - 1, 'level(0-based)');
+    set32(DISP + 0x1c, r.exp, 'exp');
+    for (const k of STAT_KEYS) setStat(k, r.stats[k]);
+  } else if (patch.level !== undefined) {
+    set32(DISP + 0x18, patch.level - 1, 'level(0-based)');
+  }
+  if (patch.exp !== undefined) set32(DISP + 0x1c, intIn(patch.exp, 0, 999_999_999, 'exp'), 'exp');
+  if (patch.meseta !== undefined) set32(DISP + 0x20, intIn(patch.meseta, 0, 999_999, 'meseta'), 'meseta');
+  if (patch.stats !== undefined) {
+    if (typeof patch.stats !== 'object' || patch.stats === null) throw new CharError('stats must be an object');
+    for (const [k, v] of Object.entries(patch.stats)) {
+      if (!STAT_KEYS.includes(k)) throw new CharError(`unknown stat: ${k}`);
+      setStat(k, intIn(v, 0, 9999, k));
+    }
   }
   if (patch.techniques !== undefined) {
     if (typeof patch.techniques !== 'object' || patch.techniques === null) throw new CharError('techniques must be an object');
@@ -255,6 +303,11 @@ export function applyCharacterPatch(orig, patch) {
         buf[ext] = 0;
       } else {
         intIn(level, 1, 30, `technique ${name}`);
+        try {
+          checkTechLevel(gd, cls, name, level);
+        } catch (e) {
+          throw asCharError(e, 'technique');
+        }
         const zero = level - 1;
         buf[DISP + 0x17c + i] = Math.min(zero, 0x0e);
         buf[ext] = Math.max(0, zero - 0x0e);
@@ -281,7 +334,8 @@ export function applyCharacterPatch(orig, patch) {
     };
     for (const s of inv.set ?? []) {
       const slot = intIn(s?.slot, 0, n - 1, 'inventory slot');
-      const { d1, d2 } = parseItemInput(s, `inventory slot ${slot}`);
+      const { d1, d2 } = parseItemInput(s, `inventory slot ${slot}`, gd);
+      if (d1[0] === 4 && s.spec !== undefined) throw new CharError('meseta cannot sit in an inventory slot');
       const o = INV + 4 + slot * INV_ITEM + 8;
       d1.copy(buf, o);
       d2.copy(buf, o + 16);
@@ -295,8 +349,33 @@ export function applyCharacterPatch(orig, patch) {
       changes.push(`inventory remove slot ${slot}`);
     }
     for (const item of inv.add ?? []) {
+      const { d1, d2, amount } = parseItemInput(item, 'inventory add', gd);
+      if (d1[0] === 4 && item.spec !== undefined) {
+        // Meseta from the picker goes to the character's meseta (as a pickup does).
+        const before = buf.readUInt32LE(DISP + 0x20);
+        if (before + amount > 999_999) throw new CharError(`meseta would exceed 999999 (has ${before})`);
+        set32(DISP + 0x20, before + amount, 'meseta');
+        continue;
+      }
+      // A stackable tool from the picker joins the stack of the same tool, as
+      // newserv's PSOBBCharacterFile::add_item does.
+      const max = d1[0] === 3 && item.spec !== undefined ? toolStackLimit(d1[1]) : 1;
+      if (max > 1) {
+        let merged = false;
+        for (let i = 0; i < n; i++) {
+          const o = INV + 4 + i * INV_ITEM + 8;
+          if (buf[o] === d1[0] && buf[o + 1] === d1[1] && buf[o + 2] === d1[2]) {
+            const total = buf[o + 5] + d1[5];
+            if (total > max) throw new CharError(`inventory add: the stack in slot ${i} would hold ${total} (max ${max})`);
+            changes.push(`inventory[${i}] stack ${buf[o + 5]} -> ${total}`);
+            buf[o + 5] = total;
+            merged = true;
+            break;
+          }
+        }
+        if (merged) continue;
+      }
       if (n >= INV_SLOTS) throw new CharError('inventory is full (30 items)');
-      const { d1, d2 } = parseItemInput(item, 'inventory add');
       const o = INV + 4 + n * INV_ITEM;
       buf[o] = 1; // in inventory, not equipped
       buf.writeUInt32LE(0, o + 4);
@@ -304,9 +383,31 @@ export function applyCharacterPatch(orig, patch) {
       buf.writeUInt32LE((0x00200000 + n) >>> 0, o + 20); // newserv re-assigns item ids when the game starts
       d2.copy(buf, o + 24);
       n++;
-      changes.push(`inventory add ${d1.toString('hex')}`);
+      changes.push(`inventory add ${d1.toString('hex')}${d2.readUInt32LE(0) ? ` ${d2.toString('hex')}` : ''}`);
     }
     buf[INV] = n;
+  }
+  if (patch.mags !== undefined) {
+    if (!Array.isArray(patch.mags)) throw new CharError('mags must be a list');
+    const n = Math.min(buf[INV], INV_SLOTS);
+    for (const m of patch.mags) {
+      const slot = intIn(m?.slot, 0, n - 1, 'mag slot');
+      const o = INV + 4 + slot * INV_ITEM + 8;
+      if (buf[o] !== 2) throw new CharError(`inventory slot ${slot} is not a mag`);
+      const d1 = Buffer.from(buf.subarray(o, o + 12));
+      const d2 = Buffer.from(buf.subarray(o + 16, o + 20));
+      const { slot: _slot, ...mag } = m;
+      try {
+        encodeMagInto(gd, d1, d2, mag);
+      } catch (e) {
+        throw asCharError(e, `mag in slot ${slot}`);
+      }
+      const before = `${buf.subarray(o, o + 12).toString('hex')}/${buf.subarray(o + 16, o + 20).toString('hex')}`;
+      d1.copy(buf, o);
+      d2.copy(buf, o + 16);
+      const after = `${d1.toString('hex')}/${d2.toString('hex')}`;
+      if (before !== after) changes.push(`mag[${slot}] ${before} -> ${after}`);
+    }
   }
   return { buf, changes };
 }
@@ -315,18 +416,18 @@ export function applyCharacterPatch(orig, patch) {
 
 // Effective bank of a character (or the shared one): the .psobank wins over the
 // bank inside the .psochar, as newserv does (Client::bank_file).
-export function loadBank(playersDir, user, target) {
+export function loadBank(playersDir, user, target, gd = null) {
   const file = bankPath(playersDir, user, target);
   if (existsSync(file)) {
     const buf = readFileSync(file);
     if (buf.length < 8) throw new CharError('bank file is truncated');
     const num = buf.readUInt32LE(0);
     if (num > BANK_SLOTS || buf.length < 8 + num * BANK_ITEM) throw new CharError('bank file is malformed');
-    return { source: 'psobank', ...readBankSection(buf, 0, BANK_SLOTS) };
+    return { source: 'psobank', ...readBankSection(buf, 0, BANK_SLOTS, gd) };
   }
   if (target !== 'shared') {
     const cf = charPath(playersDir, user, target);
-    if (existsSync(cf)) return { source: 'psochar', ...readBankSection(loadCharBuffer(cf), BANK, BANK_SLOTS) };
+    if (existsSync(cf)) return { source: 'psochar', ...readBankSection(loadCharBuffer(cf), BANK, BANK_SLOTS, gd) };
   }
   return { source: 'none', meseta: 0, items: [] };
 }
@@ -346,7 +447,7 @@ function encodeBank(bank) {
   return out;
 }
 
-export function applyBankPatch(bank, patch) {
+export function applyBankPatch(bank, patch, gd = null) {
   if (!patch || typeof patch !== 'object') throw new CharError('patch object expected');
   for (const k of Object.keys(patch)) if (!['meseta', 'remove', 'add'].includes(k)) throw new CharError(`unknown field: ${k}`);
   const out = { meseta: bank.meseta, items: bank.items.map((i) => ({ ...i })) };
@@ -362,8 +463,16 @@ export function applyBankPatch(bank, patch) {
   }
   for (const item of patch.add ?? []) {
     if (out.items.length >= BANK_SLOTS) throw new CharError('bank is full (200 items)');
-    const { d1, d2 } = parseItemInput(item, 'bank add');
-    const amount = item.amount === undefined ? 1 : intIn(item.amount, 1, 999, 'amount');
+    const { d1, d2, amount: specAmount } = parseItemInput(item, 'bank add', gd);
+    if (d1[0] === 4 && item.spec !== undefined) {
+      // Picker meseta goes to the bank's meseta.
+      if (out.meseta + specAmount > 999_999) throw new CharError(`bank meseta would exceed 999999 (has ${out.meseta})`);
+      out.meseta += specAmount;
+      changes.push(`bank meseta +${specAmount}`);
+      continue;
+    }
+    // A picker tool keeps its stack size in data1[5]; `amount` follows it.
+    const amount = item.amount !== undefined ? intIn(item.amount, 1, 999, 'amount') : item.spec !== undefined ? specAmount : 1;
     out.items.push({ data1: d1.toString('hex'), id: (0x00300000 + out.items.length) >>> 0, data2: d2.toString('hex'), amount, present: 1 });
     changes.push(`bank add ${d1.toString('hex')} x${amount}`);
   }

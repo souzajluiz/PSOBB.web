@@ -27,6 +27,7 @@ import {
   CHAR_CLASSES, SECTION_IDS, TECHNIQUES, CharError, USER_RE, applyBankPatch, applyCharacterPatch, charPath, listCharacterSlots,
   loadBank, loadCharBuffer, parseCharacter, summarizeCharacter, writeBank, writeCharacter,
 } from './admin-chars.mjs';
+import { ItemError, gameDataStatus, itemCatalog, loadGameData, statsForLevel, techLimitsForClass } from './admin-items.mjs';
 import { MAX_BODY_BYTES, QuestError, checkCategoryName, checkPublishName, createQuestStore } from './admin-quests.mjs';
 
 const here = import.meta.dirname;
@@ -192,6 +193,11 @@ export function createAdmin(options = {}) {
     now: options.now,
   });
   const uiDir = resolve(options.uiDir ?? resolve(here, 'admin-ui'));
+  // newserv's own tables (level table, ItemPMT, item names), read at run time
+  // for the character editor (admin-items.mjs); never copied into the repo.
+  const tablesDir = resolve(options.tablesDir ?? env.ADMIN_TABLES_DIR ?? resolve(systemDir, 'tables'));
+  let gameData = null;
+  const gd = () => (gameData ??= loadGameData(tablesDir));
   const adminUser = env.ADMIN_USER || 'admin';
   const password = env.ADMIN_PASSWORD || '';
   const passwordHash = env.ADMIN_PASSWORD_HASH || '';
@@ -768,10 +774,33 @@ export function createAdmin(options = {}) {
     const a = await findAccount(params[0]);
     const user = pickBbUser(a, query.get('username') ?? undefined);
     const slot = Number(params[1]);
-    const ch = parseCharacter(loadCharBuffer(charPath(playersDir, user, slot)));
-    const bank = loadBank(playersDir, user, slot);
+    const ch = parseCharacter(loadCharBuffer(charPath(playersDir, user, slot)), gd());
+    const bank = loadBank(playersDir, user, slot, gd());
     const { bankInCharacterFile: _ignored, ...rest } = ch;
-    return { username: user, slot, ...rest, bank, online: (await onlineAccountIds().catch(() => new Set())).has(a.AccountID) };
+    return {
+      username: user, slot, ...rest, bank, gameData: gameDataStatus(gd()), techLimits: techLimitsForClass(gd(), ch.charClass),
+      online: (await onlineAccountIds().catch(() => new Set())).has(a.AccountID),
+    };
+  });
+
+  // What a level (and class) gives this character: EXP threshold and stats with
+  // its materials (the save recomputes the same way).
+  route('GET', '/accounts/([0-9A-Fa-f]{1,8})/characters/([0-9]{1,2})/level-preview', {}, async ({ params, query }) => {
+    const a = await findAccount(params[0]);
+    const user = pickBbUser(a, query.get('username') ?? undefined);
+    const ch = parseCharacter(loadCharBuffer(charPath(playersDir, user, Number(params[1]))));
+    const level = Number(query.get('level'));
+    const cls = query.get('charClass') === null ? ch.charClass : Number(query.get('charClass'));
+    need(Number.isInteger(cls) && cls >= 0 && cls <= 11, 'charClass must be 0-11');
+    const materials = { ...ch.materials };
+    return { ...statsForLevel(gd(), cls, level, materials), materials, techLimits: techLimitsForClass(gd(), cls) };
+  });
+
+  // The item picker's list (names-v4.json + ItemPMT ranges), class technique limits.
+  route('GET', '/items/catalog', {}, async () => {
+    const data = gd();
+    const techLimits = Object.fromEntries(CHAR_CLASSES.map((c, i) => [c, techLimitsForClass(data, i)]));
+    return { ...itemCatalog(data), techLimits, gameData: gameDataStatus(data) };
   });
 
   route('POST', '/accounts/([0-9A-Fa-f]{1,8})/characters/([0-9]{1,2})', {}, async ({ params, body, actor }) => {
@@ -783,7 +812,7 @@ export function createAdmin(options = {}) {
     await requireOffline(a);
     const file = charPath(playersDir, user, Number(params[1]));
     const orig = loadCharBuffer(file);
-    const { buf, changes } = applyCharacterPatch(orig, body.patch);
+    const { buf, changes } = applyCharacterPatch(orig, body.patch, gd());
     need(changes.length > 0, 'nothing to change');
     const backup = writeCharacter(playersDir, file, buf);
     audit(actor, 'character.edit', `id=${id} user=${user} slot=${params[1]}: ${changes.join('; ')} (backup ${backup ? 'yes' : 'no'})`);
@@ -793,7 +822,7 @@ export function createAdmin(options = {}) {
   route('GET', '/accounts/([0-9A-Fa-f]{1,8})/bank/(shared|[0-9]{1,2})', {}, async ({ params, query }) => {
     const a = await findAccount(params[0]);
     const user = pickBbUser(a, query.get('username') ?? undefined);
-    return { username: user, target: params[1], bank: loadBank(playersDir, user, params[1] === 'shared' ? 'shared' : Number(params[1])) };
+    return { username: user, target: params[1], bank: loadBank(playersDir, user, params[1] === 'shared' ? 'shared' : Number(params[1]), gd()) };
   });
 
   route('POST', '/accounts/([0-9A-Fa-f]{1,8})/bank/(shared|[0-9]{1,2})', {}, async ({ params, body, actor }) => {
@@ -804,7 +833,7 @@ export function createAdmin(options = {}) {
     const user = pickBbUser(a, body.username);
     await requireOffline(a);
     const target = params[1] === 'shared' ? 'shared' : Number(params[1]);
-    const { bank, changes } = applyBankPatch(loadBank(playersDir, user, target), body.patch);
+    const { bank, changes } = applyBankPatch(loadBank(playersDir, user, target), body.patch, gd());
     need(changes.length > 0, 'nothing to change');
     const backup = writeBank(playersDir, user, target, bank);
     audit(actor, 'bank.edit', `id=${id} user=${user} bank=${params[1]}: ${changes.join('; ')} (backup ${backup ? 'yes' : 'no (new file)'})`);
@@ -926,6 +955,7 @@ export function createAdmin(options = {}) {
     const items = [...new Set(body.items)];
     for (const i of items) need(typeof i === 'string' && RELOAD_ITEMS.has(i), `cannot reload: ${String(i).slice(0, 30)}`);
     await nsShell(shellLine('reload', ...items));
+    gameData = null; // the character editor re-reads the tables too
     audit(actor, 'reload', items.join(' '));
     return { ok: true, items };
   });
@@ -1069,7 +1099,7 @@ export function createAdmin(options = {}) {
         const headers = extra.retryAfter ? { 'Retry-After': String(extra.retryAfter) } : {};
         return reply(res, e.status, { error: e.message, ...extra }, headers);
       }
-      if (e instanceof CharError || e instanceof QuestError) return reply(res, e.status, { error: e.message });
+      if (e instanceof CharError || e instanceof QuestError || e instanceof ItemError) return reply(res, e.status, { error: e.message });
       log(`internal error: ${e?.stack ?? e}`);
       return reply(res, 500, { error: 'internal error' });
     }

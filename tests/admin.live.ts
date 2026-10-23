@@ -188,7 +188,7 @@ try {
   await withTimeout(s1.login('paneluser', 'NewPass9', portA));
   check(true, 'the new password logs in');
   await withTimeout(s1.characterPreviews());
-  await withTimeout(s1.createCharacter(0, { name: 'PanelHero', charClass: 4 }));
+  await withTimeout(s1.createCharacter(0, { name: 'PanelHero', charClass: 1 }));
   const lobby = await withTimeout(s1.enterLobby('paneluser', 'NewPass9', 0, portA));
   check(!!lobby, 'the player entered a lobby');
 
@@ -210,9 +210,22 @@ try {
   const c0 = chars.json.characters?.[0];
   check(c0?.name === 'PanelHero' && c0.level === 1, 'character listed from the real .psochar (name PanelHero, level 1)');
   const detail = await call('GET', `/accounts/${id}/characters/0`);
-  check(detail.json.inventory.length >= 0 && detail.json.className === 'RAcast', 'character detail parses class from the real file');
+  check(detail.json.inventory.length >= 0 && detail.json.className === 'HUnewearl', 'character detail parses class from the real file');
+  const magSlot: number | undefined = detail.json.inventory.find((i: any) => i.mag)?.slot;
+  check(magSlot !== undefined, 'the new character has a mag');
 
-  const patch = { level: 42, exp: 123456, meseta: 98765, stats: { atp: 777 }, techniques: { Foie: 18 } };
+  // Level 42 recomputes EXP / stats from the level table, then exp / atp are overridden; HUnewearl's Foie cap is 20;
+  // a picker weapon and a mag edit must be accepted by the real server at the next login.
+  const refused = await call('POST', `/accounts/${id}/characters/0`, { patch: { techniques: { Foie: 21 } }, confirm: id });
+  check(refused.status === 400 && /limited to level 20/.test(refused.json?.error ?? ''), `technique above the class cap refused (${refused.json?.error})`);
+  const preview = await call('GET', `/accounts/${id}/characters/0/level-preview?level=42`);
+  check(preview.status === 200 && preview.json.exp > 0, `level preview (${preview.json?.exp} EXP)`);
+  const mag = { slot: magSlot, type: 0, def: { level: 5, progress: 0 }, pow: { level: 10, progress: 20 }, dex: { level: 3, progress: 0 }, mind: { level: 0, progress: 0 }, synchro: 90, iq: 60, color: 1, photonBlasts: [1, 4, null] };
+  const patch = {
+    level: 42, exp: 123456, meseta: 98765, stats: { atp: 777 }, techniques: { Foie: 18 },
+    inventory: { add: [{ spec: { kind: 'weapon', code: '000100', grind: 7, special: 12, attributes: [{ type: 3, amount: 25 }] } }] },
+    mags: [mag],
+  };
   const edit = await call('POST', `/accounts/${id}/characters/0`, { patch, confirm: id });
   check(edit.status === 200, `character edit through the panel (${edit.json?.error ?? 'ok'})`);
   check(readdirSync(join(sys, 'players', '_admin-backups')).length === 1, 'a backup copy of the character was made');
@@ -224,6 +237,11 @@ try {
   const ch = s2.character;
   check(!!ch && ch.level === 42 && ch.exp === 123456 && ch.meseta === 98765 && ch.stats.atp === 777, `the game reads the edited character (level ${ch?.level}, exp ${ch?.exp}, meseta ${ch?.meseta}, atp ${ch?.stats.atp})`);
   check(ch?.techLevels[0] === 18, `and the technique level (Foie ${ch?.techLevels[0]})`);
+  check(ch?.stats.mst === preview.json.stats.mst && ch?.stats.hp === preview.json.stats.hp, `and the recomputed stats (MST ${ch?.stats.mst} / ${preview.json.stats.mst}, HP ${ch?.stats.hp} / ${preview.json.stats.hp})`);
+  const hexOf = (b: Uint8Array) => Buffer.from(b).toString('hex');
+  check(!!ch?.inventory.some((i) => hexOf(i.data.data1) === '000100070c00031900000000'), 'and the picker weapon (Saber +7 Charge, Machine 25%)');
+  const m = ch?.inventory.find((i) => i.data.data1[0] === 2);
+  check(!!m && m.data.data1[2] === 18 && hexOf(m.data.data2) === '5a3c0301', `and the edited mag (level ${m?.data.data1[2]}, data2 ${m ? hexOf(m.data.data2) : '-'})`);
   s2.close();
   await new Promise((r) => setTimeout(r, 1000));
 
