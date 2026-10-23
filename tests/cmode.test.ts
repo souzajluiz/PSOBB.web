@@ -663,13 +663,22 @@ if (newserv) {
   // Stage windows: 3..11 are Episode 1 stages 1..9, 12..16 are Episode 2 stages 1..5.
   eq(
     stageListLines(3, [{ name: 'Me', records: mine }, { name: 'Other', records: other }]),
-    ['< Stage 1 >', 'Me', '    0\'02"05', 'Other', '        No Record'],
-    'stage 1 of Episode 1: a time and a missing one',
+    ['< Stage 1 >', 'Me', '                0\'02"05', 'Other', '        No Record'],
+    'stage 1 of Episode 1: a time with no rank (12 spaces) and a missing one',
   );
+  // A rank (the title dword's high half, here 3 = S) shows the episode total and the letter:
+  // 125 + 3725 = 3850 s = 01'04"10.
+  const ranked = new ChallengeRecords();
+  ranked.setTimeRaw(0, 0, encodeStageTime(125, rnd));
+  ranked.setTimeRaw(0, 1, encodeStageTime(3725, rnd));
+  new DataView(ranked.raw.buffer).setUint32(0, encodeChallengeTime(3, rnd), true);
+  eq(ranked.rank, 3, 'the rank is read from the title dword');
+  eq(ranked.sumTimes(0), 3850, 'the stage sum of Episode 1 (missing stages add 0)');
+  eq(stageListLines(3, [{ name: 'Me', records: ranked }])!.at(-1), '  01\'04"10 S  0\'02"05', 'the first column is the total and the rank letter');
   eq(stageListLines(11, [{ name: 'Me', records: mine }])![0], '< Stage 9 >', 'index 11 is Episode 1 stage 9');
   const ep2Stage3 = new ChallengeRecords();
   ep2Stage3.setTimeRaw(1, 2, encodeStageTime(65, rnd));
-  eq(stageListLines(14, [{ name: 'Me', records: ep2Stage3 }]), ['< Stage 3 >', 'Me', '    0\'01"05'], 'index 14 is Episode 2 stage 3');
+  eq(stageListLines(14, [{ name: 'Me', records: ep2Stage3 }]), ['< Stage 3 >', 'Me', '                0\'01"05'], 'index 14 is Episode 2 stage 3');
   eq(stageListLines(16, [{ name: 'Me', records: ep2 }])![0], '< Stage 5 >', 'index 16 is Episode 2 stage 5');
   // The 6x8A body: the index is the u32 at +4.
   eq(parseStageListIndex(Uint8Array.of(0x8a, 2, 0, 0, 3, 0, 0, 0)), 3, 'the index is read at +4');
