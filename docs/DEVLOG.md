@@ -11205,3 +11205,26 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - The room list does not show empty rooms of the map (only rooms with entities), so an empty room cannot be navigated to.
 
 **Left:** labels for the enemies newserv does not document beyond the port's decodings; empty map rooms in the room list (needs the n.rel section ids in the panel); a keyboard shortcut for the room steps.
+
+## 2026-10-23: Quests: random enemies and random waves (evt2, types 4 / 5)
+
+**What changed:**
+- `formats/questdat.ts` keeps the type 4 and type 5 payloads per floor (`randomLocations`, `randomDefinitions`); `randomEnemies` is unchanged.
+- `formats/events.ts`: `parseEvt2File` reads the 0x18-byte Event2Entry list and the action stream (`parseEventFile` still returns no events for evt2, as the editor relies on).
+- `formats/randomenemies.ts` (new): `parseRandomEnemySections`, `materializeEvt2` and `materializeQuestDat(dat, seed)`. It is newserv's `MapFile::materialize_random_sections` (`vendor/newserv/src/Map.cc:3823`): one PSOV2 stream from the seed, a second one (seed 0) for the location shuffle, the same draw order, `rand_int_biased` in float32, the chained waves (`trigger_event` 0x0C with `event_id + wave + 10000`). Output: a 0x48-byte enemy list parsed by `parseEnemySets` and an evt1 events section parsed by `parseEventFile`, so the rest of the port (gamefield, gameview, join sync layout) takes them unchanged.
+- `quest/session.ts`: `QuestSession` takes `randomSeed`; `quest/run.ts` passes the game's join seed (`game.info.randomSeed`). Without a seed the random floors stay empty and the log says so.
+- `tests/randomenemies.test.ts` (new): determinism, evt1 output, and against `build/newserv materialize-map --bb --seed=12345678 --disassemble` when built.
+
+**Evidence:**
+- newserv comparison, seed 0x12345678, every random floor of c88101 (floors 1, 2), c88102 (floors 3..7) and c88109 (floors 1..5): enemy type, room, wave and child count, and event id, room, wave, delay and action offset are identical (48 + 49 + 61 + 21 + 87 + 70 + 93 + 111 + 58 + 124 + 36 + 119 enemies on those floors). Positions of room 2 of c88101 floor 1 (table offset 0) match newserv's too; the other rooms' positions were not compared.
+- The exe: `HandleQuestDat` (0x006ba0da, refsrc dump) handles only types 1..3; the random sections go to `handle_dat_tables_challenge` (dump line 612602) and `Ep1cmDatTablesSetup_0080de90` (0x0080de90), which generates with `unknown_ep1cm_spawn_generator_for_floor` (dump line 826420) and `ep1cm_shuffle_spawn_list_for_section` / `ep1cm_copy_spawn_point` (dump lines 827090 / 827045). The challenge RNG is seeded from the join packet's rand_seed (`handle_packet0x64`, dump line 780096), the same value newserv uses. The exe's `ep1cm_` spawn list starts at the room's own section, which is why the port follows the room offset.
+- The enemy-parameter family (`set_enemy_*_data`, `set_override_enemy_bp_index`) is already in `quest/miscops.ts` (DEVLOG above); the ROADMAP line is updated.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/quests.test.ts` OK; `questflow`, `waves`, `setdata`, `setdatatable`, `questeditor` (1149/1149), `questwrite` all pass; `node tests/randomenemies.test.ts` ALL PASS with the newserv comparison run. No browser check (no Playwright, no Chrome).
+
+**ASSUMED (not traced):**
+- The exe's generator produces the same numbers as newserv's: the exe rounds with `ROUND(...)` and a float correction table (`unknown_ep1cm_random_table`), newserv floors; and the exe's `get_random_int` stream equals newserv's PSOV2 stream. Both are the same family, but I did not compare the exe's init_rng bit by bit or read `g_ep1cm_rng_normalization_constant`. The newserv comparison above is the evidence that the port matches the server, which is what kill sync needs.
+- Spawn positions of a room whose table offset is not 0 follow the exe's section (newserv reads from the start of the table). Only placement differs; enemy ids and wave events do not.
+- `spawnPoint` assumes a 0x1C stride for the spawn records (newserv's struct); the exe's record size was not read from the decompile.
+
+**Left:** the materialized enemies are not yet checked against the challenge runtime's own kill counting (`quest/cmode*.ts`) in a live game; no live join was run. The rooms with a table offset (only the room 2 of c88101 floor 1 was compared for positions) are placed at the exe's section start, not newserv's.

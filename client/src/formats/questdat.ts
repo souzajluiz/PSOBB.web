@@ -22,9 +22,11 @@
 // events payload is byte-for-byte an .evt file (formats/events.ts), with its
 // offsets relative to the start of the payload.
 //
-// Types 4 and 5 only appear in quests that place enemies randomly (the 'evt2'
-// event format goes with them). They are recorded here but not parsed: the web
-// client has no random-wave machinery yet.
+// Types 4 and 5 only appear in the challenge quests that place enemies randomly
+// (the 'evt2' event format goes with them; newserv Map.hh RandomEnemyLocations /
+// RandomEnemyDefinitions). Their payloads are kept per floor here and turned
+// into enemies and wave events by formats/randomenemies.ts once the game's
+// random seed is known.
 
 import { parseEventFile, type EventFile } from './events.ts';
 import { ENEMY_SET_SIZE, OBJECT_SET_SIZE, parseEnemySets, parseObjectSets, type EnemySet, type ObjectSet } from './setdata.ts';
@@ -71,6 +73,9 @@ export interface QuestDatFloor {
   enemyBytes: Uint8Array;
   eventData: Uint8Array | null;
   randomEnemies: boolean; // a type 4 / 5 chunk is present
+  // The random enemy sections' payloads (formats/randomenemies.ts reads them).
+  randomLocations: Uint8Array | null; // type 4
+  randomDefinitions: Uint8Array | null; // type 5
 }
 
 export interface QuestDat {
@@ -104,7 +109,7 @@ export function parseQuestDatChunks(data: Uint8Array): QuestDatChunk[] {
 function floorOf(floors: Map<number, QuestDatFloor>, floor: number): QuestDatFloor {
   let f = floors.get(floor);
   if (!f) {
-    floors.set(floor, (f = { floor, objects: [], enemies: [], events: null, objectBytes: EMPTY, enemyBytes: EMPTY, eventData: null, randomEnemies: false }));
+    floors.set(floor, (f = { floor, objects: [], enemies: [], events: null, objectBytes: EMPTY, enemyBytes: EMPTY, eventData: null, randomEnemies: false, randomLocations: null, randomDefinitions: null }));
   }
   return f;
 }
@@ -150,10 +155,18 @@ export function parseQuestDat(data: Uint8Array): QuestDat {
         }
         break;
       }
-      case QuestDatChunkType.RandomEnemyLocations:
-      case QuestDatChunkType.RandomEnemyDefinitions:
-        floorOf(floors, c.floor).randomEnemies = true;
+      case QuestDatChunkType.RandomEnemyLocations: {
+        const f = floorOf(floors, c.floor);
+        f.randomEnemies = true;
+        f.randomLocations = c.data;
         break;
+      }
+      case QuestDatChunkType.RandomEnemyDefinitions: {
+        const f = floorOf(floors, c.floor);
+        f.randomEnemies = true;
+        f.randomDefinitions = c.data;
+        break;
+      }
       default:
         warnings.push(`${where}: unknown chunk type ${c.type}`);
     }

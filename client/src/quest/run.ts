@@ -49,6 +49,9 @@ export async function runQuest(opts: QuestRunnerOptions): Promise<QuestRunner> {
   const session = new QuestSession(opts.quest, {
     log,
     host: buildHost(),
+    // The lobby's seed: the challenge random enemies are generated from it, and
+    // the server numbers them from the same seed.
+    randomSeed: game.info?.randomSeed,
   });
   challenge?.attach(session.vm);
 
