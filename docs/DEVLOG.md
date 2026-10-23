@@ -9471,3 +9471,24 @@ Kill gate and rewards: the Gol's kill is the same bossKilled path as the other b
 Notes: the xref tool in tools/exedata.py matches small immediates loosely (0x6e4 and 0x4cede4 gave false hits); use the `calls` action or a byte scan for exact references. The walk velocity is a float store (fstp), not the int the Ghidra text suggests.
 
 Checks: `node tests/goldragon.test.ts` ok (new: lattice rings and steps, the breath's cells and reach, the breath on the 50th tick, the burrow's aim 0xc000 and its pick, the 0x17 exit at tick 200..202 with no kill, the gone spawn, the derived sequence and clamp). `tests/dragon.test.ts` ok, `tests/combat.test.ts` 5946 checks 0 failures, `tests/combatdepth.test.ts` 824 checks 0 failures, `npx tsc --noEmit -p .` clean. E2e `client/e2e/goldragon-smoke.spec.ts` extended with a breath step (the player 15 units from the body; waits for states 0x08..0x0c and a "technique hit" from the Gol): passed, breath hit logged; the 0x17 exit is not in the e2e (it needs the Gol killed; the e2e roll does 0 damage).
+
+## 2026-10-23: Which guns fire a bullet: the exe's gate (combat/gunbullet.ts GUN_KINDS, shotVisualOf, bulletSpeed)
+
+**What changed:** the hard-coded gun list (6..9 + 0x48) is now the exe's rule, applied to the kinds it reaches. Kinds 0x1c, 0x44, 0xaf and 0xe8 fire now. The egg visual and the Handgun's 11.0 speed depend on the Handgun's group_idx (data1[2]), as the Handgun ctor does. Kind 0x8b is not a bullet.
+
+**The gate (PsoBB.exe, Ephinea VAs; named dump Psobb.exe-05112026.c and the exe bytes via tools/exedata.py xref / a vtable scan):**
+- Every weapon's do_attack (vtable +0x70) is PerformItemAttack 0x005e8908 for the base item vtable 0x00b10200, the Handgun vtable 0x00b15640 and the 0x1c vtable 0x00b14580 (slot read from the image).
+- PerformItemAttack calls the extraspecial hook (+0xcc) first. The default hook is 0x0061cdb0, a no-op for shots. Then, on the item flags at +0x1dc: bit 0x2 set means no regular shot; bit 0x8000 means the launcher projectile; neither means begin_gun_bullet_attack (0x005e6578, +0xc8), once per pellet.
+- Bit 0x20000 ('ranged', the melee branch) is never set. UpdateItemFlagBasedOnStatus 0x005e9578 sets it from bit 0 of 0x005e93c8's result, which is the caller's EBP (ASSUMED: an even stack address, so 0x10000 is set instead).
+- Factory: the table at 0x009c2244 is indexed by kind - 1 (Handgun at index 5 = kind 6; Samba at 71 = 0x48; the 0x1c ctor and the 0x8b ctor at 27 and 138). The Handgun factory CreateWeaponHandgun 0x005f32ec serves kinds 6, 0x44, 0xaf and 0xe8 (indices 5, 67, 174, 231).
+- Kinds with flags 0 on the Handgun or 0x1c vtable take the regular shot: 6, 0x44, 0xaf, 0xe8 (handguns_constructor writes no flags) and 0x1c (FUN_005f1188 writes no flags).
+- Samba (0x48) shoots from its own hook 0x005fc348, which calls begin_gun_bullet_attack (+0xc8) itself (flags 0x203, so the regular path is skipped).
+- Kind 0x8b (ctor 0x005eb05c, flags 0x2, hook 0x005eae08) calls 0x005e6df8 / 0x005e7014 (projectile helpers, vtable +0xe8) and never begin_gun_bullet_attack. Its egg callback (group_idx 3) is written but has no caller on its path, so it is not a bullet.
+
+**The visual and the speed (the Handgun branch, 0x005f3380):** the ctor reads item +0xf3 (group_2 = kind) and +0xf4 (group_idx = data1[2]). Only kind 6 with group_idx 8 gets the egg callback 0x005e4264 and the speed 0x41300000 (11.0). Other Handguns, including 0x44 / 0xaf / 0xe8 (group_2 is not 6), keep the default callback 0x005e4678 and speed 19.0. Samba (0x005fc2fc) and the 0x1c ctor (0x005f1188) write the egg callback and 11.0 unconditionally. Before this entry the port gave the egg and speed 11 to every kind-6 Handgun and to 0x44 / 0xaf / 0xe8 / 0x8b. **This changes the existing 54367e6 behaviour** for Handguns other than group_idx 8, and for 0x44 / 0xaf / 0xe8 (now a default visual, speed 19).
+
+**Changes:** `client/src/combat/gunbullet.ts` (GUN_KINDS = 6, 7, 8, 9, 0x1c, 0x44, 0x48, 0xaf, 0xe8; bulletSpeed(kind, variant); shotVisualOf(kind, variant); the header gate), `client/src/render/combat.ts` (gunShot takes the variant, data1[2] of the equipped weapon), `client/e2e/guns.spec.ts` (GUN_KINDS), `tests/gunbullet.test.ts`.
+
+**ASSUMED (also in the code):** Mechgun (8) and Rifle (7) fire through the regular or a similar hook (not traced); the other class 6..9 kinds with no gun callback (0x42, 0x45, 0x65, 0x6d) are not checked and stay off the list; 0x20000 is never set (the EBP reading above); the Handgun group_idx 8 is the variant the exe names (the port's bytes: group_idx = data1[2]).
+
+**Checks:** `node tests/gunbullet.test.ts`: all checks passed. `node tests/mechgun.test.ts`: 21 checks, 0 failures. `tests/rangedaim.test.ts` needs `vendor/newserv/build/newserv`, which this worktree does not have (not run here). `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome (guns.spec.ts not run).

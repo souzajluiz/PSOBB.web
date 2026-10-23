@@ -5289,12 +5289,13 @@ export class CombatView {
     if (!from) return;
     const range = this.weaponRange(attackType);
     const hit = this.weaponTargets(attackType, from).slice(0, Math.max(1, range.maxTargets));
-    // A gun (ItemPMT kind 6..9) fires bullets (combat/gunbullet.ts): the shot now, the
+    // A gun (GUN_KINDS: 6..9, 0x1c, 0x44, 0x48, 0xaf, 0xe8) fires bullets (combat/gunbullet.ts): the shot now, the
     // damage at the bullet's arrival (tickGunBullets). The 6x46 goes with the listed targets.
-    const kind = attackType !== 2 ? (this.equippedWeapon()?.data1[1] ?? -1) : -1;
+    const weapon = attackType !== 2 ? this.equippedWeapon() : undefined;
+    const kind = weapon?.data1[1] ?? -1;
     if (isGunKind(kind)) {
       if (hit.length) this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
-      this.gunShot(attackType, step, from, hit, range, kind);
+      this.gunShot(attackType, step, from, hit, range, kind, weapon?.data1[2] ?? -1);
       return;
     }
     if (!hit.length) return;
@@ -5332,10 +5333,10 @@ export class CombatView {
   // the egg effect object (ShotEffect) with particle 0x9f on it, and no muzzle or model.
   // Either way, a pellet with a listed target that no wall stops makes a bullet that lands
   // after its frame count (the damage is unchanged). A pellet without a target goes ahead at its angle.
-  private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number): void {
+  private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number, variant: number): void {
     const me = this.game.self;
     if (!me) return;
-    const visual = shotVisualOf(kind);
+    const visual = shotVisualOf(kind, variant);
     const trails = visual === 'default' ? (this.tracers ??= this.newTracers()) : null;
     // ASSUMED: the shooter bytes +0xf3 / +0xf4 (bulletTextureIndex) are not mapped to the
     // port's player state yet, so the bullets use variant 0 (both bytes read as 0).
@@ -5354,7 +5355,7 @@ export class CombatView {
         { heading: me.angle, angleBams: SHOT_ANGLES_BAMS[i] ?? 0, horizontalDistance: range.horizontal },
         target,
         (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
-        bulletSpeed(kind),
+        bulletSpeed(kind, variant),
       );
       if (trails) {
         this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
