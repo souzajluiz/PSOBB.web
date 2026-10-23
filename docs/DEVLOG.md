@@ -11189,3 +11189,21 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 **ASSUMED:** the BB A6 / A7 bytes are plain PRS (no decrypt), as the exe's receive path reads them; no server sends them to BB, so this is untested against a live server. The download-quest menu is not built; the `.qst` for the non-BB download format is not decoded.
 
 **Not done:** the optimal PRS parser (not quick; left open in the ROADMAP).
+
+## 2026-10-23: lobby main menu availability; sub-menu transition traced (partial)
+
+**What changed:** the lobby's Home menu now applies the exe's `ValidateMenuItemCondition_00732620` rules. Before, `LobbyScreen` never set `MainMenu.validate`, so Customize, Equip and MAG were enabled in the lobby and Quit Game read "Quit" online instead of "Disconnect". `lobbyMenuRules(inTeam)` (classic/lobby.ts) feeds the field's `validateMenuEntry` (classic/fieldmenu.ts, not edited) with the lobby's rules: safe map, online, no quest, team from the membership. `tests/lobbymenu.test.ts` (new) checks the rules; `tests/fieldhud.test.ts` and `tests/teammenu.test.ts` pass; `npx tsc --noEmit -p .` clean (Node 24).
+
+**Exe evidence (named dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump line numbers):**
+- `YesNoMenuConfirmSelection_00739418` (705436) is not the transition. It sets bit 1 ("chosen") of the menu's +0x60 flags and plays 0x570; when the selected item has flag 0x2 (disabled) it plays 0x575 instead. `YesNoMenuCancelSelection_00739468` (705455) sets bit 2 and plays 0x585. `YesNoMenuHandleInput_0073916c` (705333) is the key handler: repeat (6, 5), wrapping cursor, SE 0x56f.
+- The transition is in `handle_player_menu_inputs` (699686): on a chosen item with a sub-table (the entry's +4 pointer) it saves the cursor (`PlayerMenuWindow_SetItemState_00732910`), pushes the table and calls `ChatShortcutMenuYesNoWindow_Show_00733320` (700453). A chosen leaf closes the panel (`TeamFlagObject_ClosePrimaryListWindow`, `MenuObject_UpdateYesNoMenu`) and calls `handle_player_menu_select`. A cancel at depth >= 1 steps back (`+0x50` counter) and rebuilds the list at the kept cursor.
+- `Show` (700453) reuses the same window. `ProcessYesNoMenuSelectionTransition_00739e28` (705918) clears all ten item slots, creates one transition item from the selected row (`UpdateYesNoMenuItemState_00739cfc`, age 8, so it moves over 8 frames), sets window flag 4 (input blocked) and bumps the transition counter at +0x62. `FindOrCreateItem_00739ad4` (705707) clears flag 4 again. Each new row is created with age -2 per row (`CreateYesNoMenuItemState_00739d14`), the fade-in the port already has. `UpdateYesNoMenuTotalHeight_00738f70` sets the 8-frame height change (`+0x50 = 8`), as the port does.
+- `ValidateMenuItemCondition_00732620` (699843) is the availability table the field already ports (`validateMenuEntry`).
+
+**Not done (open):**
+- Sub-menu slide: `MainMenu.show()` clears the rows at once and fades the new ones in. The exe keeps the selected row as one moving item (age 8, flag 4 gate). Its render (`ChatShortcutMenuYesNoWindow_Render_0073950c`, 705495, and `ChatShortcutMenuYesNoWindow_UpdateRenderState_007399ec`) was not decoded, so the slide is not ported (ASSUMED: no slide).
+- Back-step ages: the port sets them to 4 (no fade); the exe reruns the list at the kept cursor (`PlayerMenuWindow_UpdateItemList_00732534`, 699789), so existing rows keep their state. Not checked.
+- Input delay: the exe ignores keys for a while after a menu opens (the `+100` counter in `YesNoMenuHandleInput_0073916c`, 705354). Not ported.
+- Leaves: Customize, Technique, Trade, Shortcut, Symbol Chat, Guild Card, Simple Mail, Info Board, the Team rows and Quit (Disconnect) still do nothing in the lobby. Their exe handlers were not traced in this pass (`handle_player_menu_select` at 700118 is the next read).
+- Ship select camera: not decoded. Leads: the field-style default NPC camera (`UpdateDefaultNPCCameraState_004d2fb4` 251939, `UpdateCameraStateFromNPC` 252033, `SetDefaultNpcCamera`, called with indices 5 and 9 by several scenes). `create_lobby_burst_screen` (157525) and `UpdateMenuCameraPosition` (157313) are the game-list menu's mouse-scroll camera, not the Ship Select orbit. The circling path in `classic/shipselect.ts` remains fitted.
+- Not checked in Chrome (no browser run in this change).
