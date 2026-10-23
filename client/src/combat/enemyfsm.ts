@@ -10,6 +10,8 @@
 // and 4 on the new one). The enemy's resume state after a flinch is +0x380.
 
 import {
+  ATTACK_DAMAGE_MULT,
+  ATTACK_KNOCKBACK,
   BAMS_TO_RAD,
   type AiFrame,
   type AiState,
@@ -939,42 +941,75 @@ export class RappyFakeDeath {
   }
 }
 
-// --- Monest: spawning Mothmants ---------------------------------------------
+// --- Monest: the wake-up and the Mothmant spawns ----------------------------
 //
-// monest_constructor (0x005191c0 area): the total it may ever spawn is
-// initdata_param3 clamped to 0..30 (MothmanSetTarget_0051a1fc, +0x39c), the
-// "wave" threshold initdata_param2 clamped to 1..6 (+0x358 slot of the
-// target field). Its first child's entity index is its own + 1 (+0x3cc),
-// then +1 per spawn; newserv's expandEnemySets gives a Monest the next 30
-// (or num_children) slots as MOTHMANT, so the n-th spawn is the slot
-// Monest + 1 + n.
-//   hover (state 5, animation 4 = motion 8, 0.3, loop): the first time it
-//     sets the batch size 2 (+0x4c8) and the interval 120 frames (+0x4cc).
-//     MothmanManageSpawnLogic_00519ad0: while not armed it arms itself when
-//     the live children are at most param2 / 2 (or it was activated); armed,
-//     a counter runs to 120 and then sets the count to spawn to
-//     min(2, 6 - alive, total - spawned). Any count left -> spawn state.
-//   spawn (state 6, animation 5 = motion 7, 0.7): at motion frame 15
-//     spawn_mothmant_from_monest (nothing while more than 6 are alive) puts
-//     one at the Monest + 25 up (0x00920e68), SE 0xe0; the count drops; back
-//     to hover when the motion ends.
-// ASSUMED: the Monest wakes up (state 1 -> 5) when a player is within its
-// search radius 225 (the record 0x009bb764); state 1 was not traced.
+// handle_monest_behavior (dump 0x00519xxx, the Monest's dispatcher on +0x32e):
+// 0 intro (MothmanProcessState_00519e20: six orbit pieces, the nest drops
+// and rises), 1 wake-up (MonestProcessState_0051ae9c), 2 dormant
+// (MothmanProcessState_00519d98), 3 spawn one (MothmanProcessState_00519d08),
+// 4 flinch (00519b6c), 5 hover (00519a30), 6 spawn one (005198b4), 7 hit
+// reaction (005197a0), 8 (00519550), 9 the fall (sub-entities).
+//
+// monest_constructor (0x005191c0) sets: the wake threshold initdata_param2
+// clamped to 0..6 (MothmanSetTarget_0051a1fc: +0x398, 6 when above 5), the
+// total initdata_param3 clamped to 0..30 (+0x39c), its first child's entity
+// index (+0x3cc = own + 1) and the spawned count (+0x3bc).
+//
+// Wake-up (state 1, 0x0051ae9c): entered from the intro. Animation 0 (motion
+// 14) for 61 ticks, then animation 1 (motion 11, ASSUMED 12 - animation) and
+// every 10 ticks counted from the start of the state (ticks 70, 80, ...)
+// spawn_mothmant_from_monest puts one Mothmant at Monest + 25 up (0x00920e68)
+// until the wake count reaches the threshold; then the next state is +0x394,
+// which the constructor leaves at 2 (dormant). spawn_mothmant_from_monest
+// does nothing while more than 6 children are alive.
+//
+// Dormant (state 2, 0x00519d98): animation 0; MothmanManageSpawnLogic_00519ad0
+// with batch 1 and interval 150 (0x96). Spawn one (state 3, 0x00519d08):
+// animation 1, the spawn at animation frame 15, back to dormant when the
+// animation ends. Hover (state 5, 0x00519a30): batch 2 and interval 120
+// (0x78), set only the first time (+0x3b0 == 0); state 6 spawns one at
+// animation 5 (motion 7) frame 15.
+//
+// MothmanManageSpawnLogic_00519ad0: while not armed it arms itself when the
+// live children are at most threshold / 2 (C integer division) or when the
+// hover state has been entered (+0x3b0); armed, a counter runs past the
+// interval and then the pending count becomes min(batch, 6 - alive,
+// total - spawned).
+//
+// ASSUMED: the Monest wakes up (wait -> wake) when a player is within the
+// search radius 225 (the record 0x009bb764). The intro's six-piece motion is
+// not modelled (deathfx / the renderer only see the nest's motion).
 export const MONEST = { batch: 2, interval: 120, maxAlive: 6, spawnFrame: 15, height: 25, maxTotal: 30 } as const;
+// The dormant interval and batch (state 2).
+export const MONEST_DORMANT = { batch: 1, interval: 150 } as const;
+// The wake-up: 61 idle ticks, then one spawn every 10 ticks.
+export const MONEST_WAKE = { idleTicks: 61, every: 10 } as const;
 
-const MONEST_MOTION = { wait: loop(14, 0.3), hover: loop(8, 0.3), spawn: once(7, 0.7) };
+const MONEST_MOTION = {
+  wait: loop(14, 0.3), // animation 0
+  wake: loop(11, 0.3), // animation 1 (ASSUMED motion 11 = 12 - animation, as the hover / spawn rows)
+  hover: loop(8, 0.3), // animation 4
+  spawn: once(7, 0.7), // animation 5
+};
 
 export class MonestSpawner {
   total: number;
   threshold: number;
   spawned = 0;
+  // Whether the hover state (5) was ever entered: +0x3b0, the arming test.
   active = false;
-  state: 'wait' | 'hover' | 'spawn' = 'wait';
+  state: 'wait' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover' = 'wait';
   private armed = false;
   private counter = 0;
   private pending = 0;
   private frames = 0;
   private fired = false;
+  // Ticks since the wake-up started (+0x4d0).
+  private wakeTicks = 0;
+  // Mothmants the wake-up put out (+0x4d4).
+  private wakeSpawned = 0;
+  private batch: number = 1;
+  private interval: number = MONEST_DORMANT.interval;
 
   constructor(param2: number, param3: number) {
     this.total = Math.max(0, Math.min(MONEST.maxTotal, Math.round(param3)));
@@ -983,42 +1018,78 @@ export class MonestSpawner {
   }
 
   get motion(): EnemyAiMotion {
-    return this.state === 'wait' ? MONEST_MOTION.wait : this.state === 'hover' ? MONEST_MOTION.hover : MONEST_MOTION.spawn;
+    switch (this.state) {
+      case 'wait':
+      case 'dormant':
+        return MONEST_MOTION.wait;
+      case 'wake':
+        return MONEST_MOTION.wake;
+      case 'hover':
+        return MONEST_MOTION.hover;
+      case 'spawn':
+      case 'spawnHover':
+        return MONEST_MOTION.spawn;
+    }
+  }
+
+  private enter(state: MonestSpawner['state']): EnemyAiMotion {
+    this.state = state;
+    this.frames = 0;
+    this.fired = false;
+    if (state === 'dormant') {
+      this.batch = MONEST_DORMANT.batch;
+      this.interval = MONEST_DORMANT.interval;
+    }
+    if (state === 'hover' && !this.active) {
+      this.active = true;
+      this.batch = MONEST.batch;
+      this.interval = MONEST.interval;
+    }
+    return this.motion;
   }
 
   // One frame. `alive` is the number of its live Mothmants. Returns the motion
   // to start (when it changed) and whether a Mothmant is spawned this frame.
   tick(alive: number, playerNear: boolean, animationEnded: boolean): { motion: EnemyAiMotion | null; spawn: boolean } {
-    let motion: EnemyAiMotion | null = null;
-    let spawn = false;
     if (this.state === 'wait') {
-      if (playerNear) {
-        this.state = 'hover';
-        this.active = true;
-        motion = MONEST_MOTION.hover;
-      }
-      return { motion, spawn };
+      if (!playerNear) return { motion: null, spawn: false };
+      this.wakeTicks = 0;
+      this.wakeSpawned = 0;
+      this.enter('wake');
+      return { motion: MONEST_MOTION.wait, spawn: false };
     }
-    if (this.state === 'hover') {
+    if (this.state === 'wake') {
+      this.wakeTicks++;
+      if (this.wakeTicks <= MONEST_WAKE.idleTicks) return { motion: null, spawn: false };
+      if (this.wakeTicks === MONEST_WAKE.idleTicks + 1) return { motion: MONEST_MOTION.wake, spawn: false };
+      if (this.wakeTicks % MONEST_WAKE.every !== 0) return { motion: null, spawn: false };
+      if (this.wakeSpawned >= this.threshold) {
+        // The next state is +0x394, the dormant state (2).
+        return { motion: this.enter('dormant'), spawn: false };
+      }
+      this.wakeSpawned++;
+      const spawn = alive <= MONEST.maxAlive;
+      if (spawn) this.spawned++;
+      return { motion: null, spawn };
+    }
+    if (this.state === 'dormant' || this.state === 'hover') {
       if (!this.armed) {
         if (alive <= Math.trunc(this.threshold / 2) || this.active) {
           this.armed = true;
           this.counter = 0;
         }
-      } else if (++this.counter > MONEST.interval) {
+      } else if (++this.counter > this.interval) {
         this.counter = 0;
-        this.pending = Math.min(MONEST.batch, MONEST.maxAlive - alive, this.total - this.spawned);
+        this.pending = Math.min(this.batch, MONEST.maxAlive - alive, this.total - this.spawned);
       }
       if (this.pending > 0) {
-        this.state = 'spawn';
-        this.frames = 0;
-        this.fired = false;
-        motion = MONEST_MOTION.spawn;
+        return { motion: this.enter(this.state === 'hover' ? 'spawnHover' : 'spawn'), spawn: false };
       }
-      return { motion, spawn };
+      return { motion: null, spawn: false };
     }
-    // spawn
+    // spawn / spawnHover: one child at animation frame 15, then back.
     this.frames += MONEST_MOTION.spawn.speed;
+    let spawn = false;
     if (!this.fired && this.frames >= MONEST.spawnFrame) {
       this.fired = true;
       this.pending--;
@@ -1028,26 +1099,315 @@ export class MonestSpawner {
       }
     }
     if (animationEnded && this.fired) {
-      this.state = 'hover';
-      motion = MONEST_MOTION.hover;
+      const next = this.state === 'spawnHover' ? 'hover' : 'dormant';
+      return { motion: this.enter(next), spawn };
     }
-    return { motion, spawn };
+    return { motion: null, spawn };
+  }
+}
+
+// --- Mothmant: its own state machine ----------------------------------------
+//
+// unknown_handle_mothmant_behavior (dump 0x00516xxx..0x00518xxx, the
+// Mothmant's dispatcher on +0x32e): 0 launch (HildebearProcessState_0051845c),
+// 1 wander (HildebearProcessState_00518144), 2 chase
+// (HildebearProcessState_00517b28), 3 attack (HildebearProcessState_0051784c),
+// 4 swoop (HildebearProcessState_0051738c), 5 hover (HildebearProcessState_00517200),
+// 6 flinch (HildebearProcessState_00516fbc), 7 the ground kill
+// (00516ed8), 8 the fall (00516c60), 9 the dead flag (EnemySetStateFlag_00516c2c).
+// The death states are not run here: the kill and the fall are deathfx.ts /
+// the owner's (EnemyOnKilledHandler_0051f894).
+//
+// Constructor (Mothman_Constructor_00518bfc): state 0 is entered at once.
+// Distances are world units and angles BAMS in the dump; the constants below
+// are the float / integer literals of those functions (addresses in the
+// comments; exedata.py reads the float32 values).
+export const MOTHMANT = {
+  detect: 200, // 0x00920c08: FindEnemyTarget_00520ea0(200) in wander and hover
+  leash: 450, // 0x00920cc4: the chase and attack give up beyond this
+  attackRange: 100, // 0x00920bf0: the chase decides attack / swoop inside it
+  launchFrames: 41, // 0x29 = 0x0051845c: state 0 flies this many ticks first
+  launchDrag: Math.fround(0.9), // 0x00920bd8: the launch velocity's decay
+  gravity: Math.fround(0.1), // 0x00921680 = -0.1 added to the vertical velocity
+  accel: Math.fround(0.1), // 0x00920bdc: the approach speed ramps by this per tick
+  approachMax: Math.fround(2), // 0x00920bd0: the approach speed stops at 2.0
+  bob: Math.fround(10), // 0x00920be4: the wander / hover height sine amplitude
+  wanderRandom: 512, // 0x00920be8: the wander phase offset is random +-512 BAMS
+  height: 15, // 0x00920ba0 + 2 * random (0x0051735c / 0x00518bfc): flying height
+  heightJitter: 2, // 0x00920ba4 / 0x00920b9c
+  strikeFrame: 9, // 9.0 (0x0051784c): the strike lands at animation frame 9
+  strikes: 4, // 0x448 < 4: four strikes per attack
+  // ASSUMED: the wind-up before a strike is g_MothmantAnimSpeedParams+0x1c
+  // (a battleparams row not decoded); 20 ticks is the placeholder.
+  windup: 20,
+  // ASSUMED: the ring around the spawn point (g_HildebearSwordMoveAmplitude,
+  // a global set from the battleparams that was not decoded).
+  ringRadius: 20,
+  swoopArc: 0x8000, // the swoop ends after half a turn (+0x3d4 > 0x8000, BAMS)
+} as const;
+
+const MOTHMANT_MOTION = {
+  fly: loop(10, 0.6), // animation 1 / 0 fly
+  strike: once(0, 1), // the attack motion (the profile's attack row)
+  flinch: once(3, 1),
+};
+
+export type MothmantState = 'launch' | 'wander' | 'chase' | 'attack' | 'swoop' | 'hover' | 'dead';
+
+// The Mothmant's own states. The brain sees its siblings through `siblingsOn`:
+// HildebearCheckEntityCount_0051a924 counts the live children of the same
+// Monest that already target a player (fewer than 2, or 4 in Ultimate, may
+// attack that player).
+export class MothmantAi extends BrainBase {
+  state: MothmantState = 'launch';
+  private detect: number;
+  private turn: number;
+  private reach: number;
+  private speed: number;
+  private home: { x: number; z: number };
+  private phase: number;
+  private hover: number;
+  private timer = 0;
+  private approach = 0;
+  private vx = 0;
+  private vy = 0;
+  private vz = 0;
+  private height: number;
+  private strike = 0;
+  private sub: 'idle' | 'windup' | 'strike' = 'idle';
+  private sweep = 0;
+  private sweepStep = 0;
+  private siblingsOn: (clientId: number, self: MothmantAi) => number;
+  private hitDone = false;
+  lift = 0;
+
+  constructor(opts: {
+    x: number;
+    z: number;
+    angle: number;
+    detect?: number;
+    turnRate: number;
+    speed: number;
+    attack: EnemyAttackData | null;
+    radius: number;
+    siblingsOn?: (clientId: number, self: MothmantAi) => number;
+    rng?: () => number;
+    // The height above the ground at spawn (a Monest's child: 25 above it).
+    spawnLift?: number;
+  }) {
+    super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
+    this.detect = opts.detect ?? MOTHMANT.detect;
+    this.turn = opts.turnRate * BAMS_TO_RAD;
+    this.speed = opts.speed;
+    this.reach = (opts.attack?.distanceX ?? 0) + opts.radius;
+    this.home = { x: opts.x, z: opts.z };
+    this.phase = this.rng() * Math.PI * 2;
+    this.hover = MOTHMANT.height + (this.rng() * 2 - 1) * MOTHMANT.heightJitter;
+    this.height = opts.spawnLift ?? MOTHMANT.height;
+    this.lift = this.height;
+    this.siblingsOn = opts.siblingsOn ?? (() => 0);
+    // create_mothmant's launch velocity is not decoded: ASSUMED a random
+    // sideways throw that the launch decays.
+    this.vx = (this.rng() * 2 - 1) * 1;
+    this.vz = (this.rng() * 2 - 1) * 1;
+    this.vy = 0.5;
+    this.current = MOTHMANT_MOTION.fly;
+  }
+
+  private enter(out: AiFrame, state: MothmantState, t: AiTarget | null): void {
+    this.state = state;
+    this.timer = 0;
+    this.sub = 'idle';
+    this.hitDone = false;
+    if (state === 'wander') {
+      this.targetId = null;
+      this.approach = 0;
+      this.phase = wrap(this.phase + this.rng() * 0.5);
+    } else if (state === 'hover') {
+      this.targetId = null;
+    } else if (state === 'chase') {
+      this.approach = 0;
+      if (t) this.angle = this.angleTo(t);
+    } else if (state === 'attack') {
+      this.strike = 0;
+    } else if (state === 'swoop') {
+      this.sweep = 0;
+      // sub 0 of the swoop picks the sweep rate: +- 65536 * speed / 439.82 BAMS
+      // (0x00920c28 / 0x00920c24, the half of the coin in 0x00920c2c).
+      const dv = Math.round((65536 * this.speed) / 439.8228759765625) * (this.rng() <= 0.5 ? 1 : -1);
+      this.sweepStep = dv * BAMS_TO_RAD;
+    }
+    this.play(out, MOTHMANT_MOTION.fly);
+  }
+
+  tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
+    const out = this.frame();
+    if (this.state === 'dead') return out;
+    this.timer++;
+    switch (this.state) {
+      case 'launch': {
+        // 0x0051845c sub 0: the throw decays for 41 ticks (vx, vz * 0.9, vy - 0.1).
+        if (this.timer <= MOTHMANT.launchFrames) {
+          this.x += this.vx;
+          this.z += this.vz;
+          this.height += this.vy;
+          this.vx *= MOTHMANT.launchDrag;
+          this.vz *= MOTHMANT.launchDrag;
+          this.vy -= MOTHMANT.gravity;
+          this.lift = this.height;
+          break;
+        }
+        // sub 1: fly to the ring point at the spawn (accelerating by 0.1 to 2.0),
+        // sub 2 arrives and the wander starts.
+        const ang = this.phase;
+        const gx = this.home.x + Math.sin(ang) * MOTHMANT.ringRadius;
+        const gz = this.home.z + Math.cos(ang) * MOTHMANT.ringRadius;
+        const dx = gx - this.x;
+        const dz = gz - this.z;
+        const d = Math.hypot(dx, dz);
+        this.approach = Math.min(MOTHMANT.approachMax, this.approach + MOTHMANT.accel);
+        if (d <= this.approach) {
+          this.x = gx;
+          this.z = gz;
+          this.enter(out, 'wander', null);
+          break;
+        }
+        this.angle = Math.atan2(dx, dz);
+        this.x += (dx / d) * this.approach;
+        this.z += (dz / d) * this.approach;
+        this.lift = this.hover;
+        break;
+      }
+      case 'wander': {
+        const t = nearest(targets, this.x, this.z, this.detect);
+        if (t) {
+          this.targetId = t.clientId;
+          this.enter(out, 'chase', t);
+          break;
+        }
+        this.phase = wrap(this.phase + 0.02);
+        this.x = this.home.x + Math.sin(this.phase) * MOTHMANT.ringRadius;
+        this.z = this.home.z + Math.cos(this.phase) * MOTHMANT.ringRadius;
+        this.angle = wrap(this.phase + Math.PI / 2);
+        this.lift = this.hover + Math.sin(this.timer * 0.1) * MOTHMANT.bob * 0.1;
+        break;
+      }
+      case 'hover': {
+        const t = nearest(targets, this.x, this.z, this.detect);
+        if (t) {
+          this.targetId = t.clientId;
+          this.enter(out, 'chase', t);
+          break;
+        }
+        this.lift = this.hover + Math.sin(this.timer * 0.1) * MOTHMANT.bob * 0.1;
+        if (this.timer > 300) this.enter(out, 'wander', null);
+        break;
+      }
+      case 'chase': {
+        const t = this.target(targets);
+        if (!t || this.dist(t) > MOTHMANT.leash) {
+          this.enter(out, 'hover', null);
+          break;
+        }
+        const d = this.dist(t);
+        if (d < MOTHMANT.attackRange) {
+          // The attack needs fewer than 2 siblings on this player; otherwise
+          // the swoop takes it around (ASSUMED: the retarget loop is not run).
+          this.enter(out, this.siblingsOn(t.clientId, this) < 2 ? 'attack' : 'swoop', t);
+          break;
+        }
+        this.angle = turnToward(this.angle, this.angleTo(t), this.turn);
+        this.approach = Math.min(this.speed, this.approach + MOTHMANT.accel);
+        this.x += Math.sin(this.angle) * this.approach;
+        this.z += Math.cos(this.angle) * this.approach;
+        this.lift = this.hover;
+        break;
+      }
+      case 'attack': {
+        const t = this.target(targets);
+        if (!t) {
+          this.enter(out, 'hover', null);
+          break;
+        }
+        this.angle = turnToward(this.angle, this.angleTo(t), this.turn);
+        if (this.sub === 'idle') {
+          if (this.dist(t) < MOTHMANT.attackRange) {
+            this.sub = 'windup';
+            this.timer = 0;
+          }
+        } else if (this.sub === 'windup') {
+          if (this.timer >= MOTHMANT.windup) {
+            this.sub = 'strike';
+            this.timer = 0;
+            this.hitDone = false;
+            this.play(out, MOTHMANT_MOTION.strike);
+          }
+        } else if (!this.hitDone && this.timer >= MOTHMANT.strikeFrame) {
+          this.hitDone = true;
+          if (this.dist(t) <= this.reach) {
+            out.hit = { clientId: t.clientId, knockback: ATTACK_KNOCKBACK, mult: ATTACK_DAMAGE_MULT };
+          }
+        }
+        if (this.sub === 'strike' && animationEnded) {
+          this.strike++;
+          this.sub = 'idle';
+          this.timer = 0;
+          if (this.strike >= MOTHMANT.strikes) this.enter(out, 'swoop', t);
+          else this.play(out, MOTHMANT_MOTION.fly);
+        }
+        break;
+      }
+      case 'swoop': {
+        // A half turn around the target at the approach speed (ASSUMED: the
+        // dive's three sub-steps are not decoded beyond the arc).
+        const t = this.target(targets);
+        if (!t) {
+          this.enter(out, 'hover', null);
+          break;
+        }
+        this.sweep += Math.abs(this.sweepStep);
+        const side = this.sweepStep < 0 ? -1 : 1;
+        this.angle = turnToward(this.angle, this.angleTo(t) + side * Math.PI / 2, this.turn);
+        this.x += Math.sin(this.angle) * this.speed;
+        this.z += Math.cos(this.angle) * this.speed;
+        this.lift = this.hover;
+        if (this.sweep >= MOTHMANT.swoopArc * BAMS_TO_RAD) this.enter(out, 'chase', t);
+        break;
+      }
+      default:
+        exhaustive(this.state);
+    }
+    out.lift = this.lift;
+    return this.finish(out);
+  }
+
+  onDamage(clientId: number): void {
+    if (this.state === 'dead') return;
+    this.targetId = clientId;
+    this.lift = this.hover;
+    this.current = null;
+  }
+
+  resume(): string {
+    if (this.state === 'dead') return this.state;
+    const out = this.frame();
+    this.enter(out, this.targetId !== null ? 'chase' : 'wander', null);
+    return this.state;
   }
 }
 
 // Mothmant (MothmanConstructor_005168a4 -> 0x00518bfc, table 0x009bb5c0,
-// record 0x009bb614: search 225, turn 1536): its own FSM (the state
-// functions around 0x0051784c) is not reproduced; it uses the generic FSM
-// with these rows: 0 fly (motion 10, 0.6, loop), 2 the attack (0, 1.0) whose
-// hit lands at frame 9 there (7 in the generic FSM: ASSUMED close enough).
+// record 0x009bb614: search 225, turn 1536). The generic FSM uses these rows
+// for the Mothmants the Monest spawned before MothmantAi.
 export const MOTHMANT_PROFILE = {
   idle: loop(10, 0.6),
   walk: loop(10, 0.6),
   notice: null,
   attacks: [once(0, 1)],
 } as const;
-// ASSUMED: the height a Mothmant flies at above the ground (it spawns 25
-// above the Monest).
+// ASSUMED: the height a Mothmant flies at above the ground (0x00920ba0 = 15
+// plus a random 2 (0x00920ba4) in the constructor; which state reads it was
+// not traced).
 export const MOTHMANT_FLY_HEIGHT = 15;
 
 export type { AiState };

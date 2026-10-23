@@ -8,6 +8,10 @@ import {
   LilyAi,
   LilySpit,
   MONEST,
+  MONEST_DORMANT,
+  MONEST_WAKE,
+  MOTHMANT,
+  MothmantAi,
   MonestSpawner,
   RappyFakeDeath,
   SPIT,
@@ -286,33 +290,99 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
 }
 
 // --- Monest ------------------------------------------------------------------
+// The wake-up (state 1): 61 idle ticks, then one Mothmant every 10 ticks from
+// tick 70 until the threshold (param2) is reached; then dormant (state 2).
 {
   const m = new MonestSpawner(2, 30);
   eq([m.total, m.threshold], [30, 2], 'param3 total, param2 threshold');
   eq(m.tick(0, false, false).motion, null, 'waits for a player');
-  eq(m.tick(0, true, false).motion?.index, 8, 'wakes up hovering (motion 8)');
-  let spawned = 0;
-  const times: number[] = [];
+  eq(m.tick(0, true, false).motion?.index, 14, 'wakes up on the wait motion (animation 0)');
+  const spawnTicks: number[] = [];
+  let dormantTick = -1;
+  for (let f = 1; f <= 120; f++) {
+    const r = m.tick(0, true, false);
+    if (r.spawn) spawnTicks.push(f);
+    if (r.motion?.index === 14 && dormantTick < 0 && f > 1) dormantTick = f;
+  }
+  eq(spawnTicks, [70, 80], 'the wake-up spawns at wake ticks 70 and 80');
+  eq(m.state, 'dormant', 'then dormant (state 2)');
+  eq(MONEST_WAKE.idleTicks, 61, 'the wake-up idles 61 ticks');
+  eq(new MonestSpawner(0, 9).tick(0, true, false).motion?.index, 14, 'threshold 0 still wakes');
+  const none = new MonestSpawner(0, 9);
+  none.tick(0, true, false);
+  let anySpawn = false;
+  for (let f = 0; f < 200; f++) anySpawn ||= none.tick(0, true, false).spawn;
+  check(!anySpawn, 'threshold 0 wakes and spawns nothing in the wake-up');
+  eq(new MonestSpawner(9, 99).total, 30, 'param3 is clamped to 30');
+  eq(new MonestSpawner(9, 99).threshold, 6, 'param2 above 5 is 6');
+  // Dormant: armed while the live children are at most threshold / 2; one
+  // child per pending batch (batch 1, interval 150).
+  const d = new MonestSpawner(2, 30);
+  d.tick(0, true, false);
+  for (let f = 0; f < 80; f++) d.tick(0, true, false);
+  const dormantSpawns: number[] = [];
   let alive = 0;
-  let animEnd = false;
   for (let f = 0; f < 600; f++) {
-    const r = m.tick(alive, true, animEnd);
-    animEnd = m.state === 'spawn' && !animEnd && f % 20 === 19;
+    const r = d.tick(alive, true, false);
     if (r.spawn) {
-      spawned++;
+      dormantSpawns.push(f);
       alive++;
-      times.push(f);
     }
   }
-  eq(times.slice(0, 2).length, 2, 'two per batch');
-  check(times[0] >= MONEST.interval, `the first batch after the 120-frame interval (${times[0]})`);
+  check(dormantSpawns.length >= 1, 'the dormant Monest spawns once it is armed');
+  check(dormantSpawns.length <= 600 / MONEST_DORMANT.interval + 1, 'at most one child per 150-tick interval');
   check(alive <= MONEST.maxAlive, 'never more than 6 alive');
-  eq(new MonestSpawner(9, 99).total, 30, 'param3 is clamped to 30');
   // The n-th spawn is the slot Monest + 1 + n: the MOTHMANT slots that
   // expandEnemySets gives the Monest.
   const set = { type: 0x42, index: 0, params: [0, 0, 0, 0, 0, 0, 0], numChildren: 0, section: 0, wave: 0 } as unknown as EnemySet;
   const slots = expandEnemySets([set], 1);
   eq([slots[0].type, slots[1].type, slots[30].type, slots.length], ['MONEST', 'MOTHMANT', 'MOTHMANT', 31], 'Monest + 30 MOTHMANT slots');
+}
+
+// --- Mothmant ----------------------------------------------------------------
+{
+  const noop = () => 0;
+  const make = (over: Partial<ConstructorParameters<typeof MothmantAi>[0]> = {}) =>
+    new MothmantAi({ x: 0, z: 0, angle: 0, turnRate: 1536, speed: 2, attack: null, radius: 10, siblingsOn: noop, rng: () => 0.5, spawnLift: 25, ...over });
+  // Launch: 41 ticks of throw, then the approach to the ring point, then wander.
+  const m = make();
+  eq([m.state, m.lift], ['launch', 25], 'a Mothmant starts launching at its spawn height');
+  for (let f = 0; f < 41; f++) m.tick([]);
+  eq(m.state, 'launch', 'still launching after the 41-tick throw');
+  for (let f = 0; f < 400 && m.state === 'launch'; f++) m.tick([]);
+  eq(m.state, 'wander', 'then flies to its ring point and wanders');
+  // Wander -> chase inside 200; chase gives up beyond 450 (hover).
+  const near = { clientId: 1, x: 150, z: 0, charClass: 0, dead: false };
+  const settle = (x: MothmantAi) => {
+    for (let f = 0; f < 400 && x.state === 'launch'; f++) x.tick([]);
+  };
+  const r = m.tick([near]);
+  eq(m.state, 'chase', 'a player within 200 starts the chase');
+  check(r.motion !== null, 'the chase starts its flight motion');
+  const far = { clientId: 1, x: 600, z: 0, charClass: 0, dead: false };
+  m.tick([far]);
+  eq(m.state, 'hover', 'a target beyond 450 sends it to hover');
+  // Attack: inside 100 with fewer than 2 siblings on the player.
+  const a = make({ attack: null, radius: 10, rng: () => 0.5 });
+  settle(a);
+  a.tick([near]);
+  for (let f = 0; f < 200 && a.state === 'chase'; f++) a.tick([{ ...near, x: 40 }]);
+  eq(a.state, 'attack', 'inside 100 with no sibling on the player it attacks');
+  // The strike lands at animation frame 9 after the 20-tick wind-up (ASSUMED).
+  let hits = 0;
+  for (let f = 0; f < 60; f++) {
+    const out = a.tick([{ ...near, x: a.x + 5, z: a.z }], f > 0 && f % 30 === 0);
+    if (out.hit) hits++;
+  }
+  check(hits >= 1, `the strike hits a player within reach (${hits})`);
+  // Two siblings on the player: the swoop instead of the attack.
+  const b = make({ siblingsOn: () => 2 });
+  settle(b);
+  b.tick([near]);
+  for (let f = 0; f < 200 && b.state === 'chase'; f++) b.tick([{ ...near, x: 40 }]);
+  eq(b.state, 'swoop', 'two siblings on the player send it to the swoop');
+  eq(MOTHMANT.leash, 450, 'the leash 450 (0x920cc4)');
+  eq(MOTHMANT.detect, 200, 'the search radius 200 (0x920c08)');
 }
 
 if (failures) {
