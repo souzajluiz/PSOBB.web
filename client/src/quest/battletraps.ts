@@ -420,3 +420,19 @@ export function pickRespawn(points: readonly SpawnPoint[], rnd: number): SpawnPo
   const i = roundEven(Math.fround(Math.fround(list.length * Math.fround(Math.fround(rnd) / 32768)) * Math.fround(0.99)));
   return list[i] ?? null;
 }
+
+// The candidates of SendTeleportRequestToPlayer (0x00695444): the floor's player spawns in
+// their list order, skipping a spawn that a player other than the one respawning stands within
+// the threshold of (xz distance squared below 2500, the constant at 0x0093c68c, VERIFIED), and
+// stopping at 5 candidates. The dead player's own position is not in `others`.
+export const RESPAWN_PLAYER_DISTANCE_SQ = 2500;
+
+export function respawnCandidates(points: readonly SpawnPoint[], others: readonly { x: number; z: number }[]): SpawnPoint[] {
+  const out: SpawnPoint[] = [];
+  for (const p of points) {
+    if (out.length >= 5) break;
+    const near = others.some((o) => (o.x - p.x) ** 2 + (o.z - p.z) ** 2 < RESPAWN_PLAYER_DISTANCE_SQ);
+    if (!near) out.push(p);
+  }
+  return out;
+}

@@ -27,6 +27,8 @@ import {
 } from './battle.ts';
 import { BattleHud, RULES_WINDOW } from './battleui.ts';
 import {
+  pickRespawn,
+  respawnCandidates,
   TRAP_EFFECTS,
   TrapCounters,
   TRAP_GATE_VALUE,
@@ -41,6 +43,7 @@ import {
   type TrapTarget,
 } from './battletraps.ts';
 import { isPlayerEntity, parse6x8F } from '../combat/pvp.ts';
+import { buildTeleport } from '../formats/npcplayerchar.ts';
 import type { QuestUi } from './questui.ts';
 
 export interface BattleRunOptions {
@@ -225,8 +228,25 @@ export class BattleRun {
       if (r.levelUp > 0) this.opts.game.sendSubcommand(0xd0, build6xD0(r.levelUp));
       if (r.techLevelUp > 0) this.opts.game.sendSubcommand(0x9b, build6x9B(r.techLevelUp));
       // The revive itself is the player's (render/combat.ts: the revive key).
+      this.respawnTeleport();
     }
     c.sendOwnScore();
+  }
+
+  // The death teleport (unknown_dead_player_return_to_p2_related -> SendTeleportRequestToPlayer_00695444):
+  // a random floor spawn that no other player stands near (quest/battletraps.ts respawnCandidates,
+  // pickRespawn). The local player moves there and 6x24 tells the others. When no candidate is
+  // left the player stays where it died (the exe's fallback is its own position).
+  // ASSUMED: the teleport runs only when the battle controller grants a respawn.
+  private respawnTeleport(): void {
+    const g = this.opts.game;
+    const others = [...g.players.values()].filter((p) => p.clientId !== g.selfId).map((p) => p.position);
+    const spawn = pickRespawn(respawnCandidates(this.opts.view.respawnPoints(), others), Math.floor(Math.random() * 32768));
+    if (!spawn) return;
+    this.opts.view.placePlayer(g.selfId, spawn.x, spawn.y, spawn.z, spawn.angle);
+    const bams = Math.round((((spawn.angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * (0x10000 / (Math.PI * 2))) & 0xffff;
+    g.conn.send(0x60, 0, buildTeleport(g.selfId, bams, spawn.x, spawn.y, spawn.z));
+    this.log(`battle respawn at ${spawn.x.toFixed(0)}, ${spawn.z.toFixed(0)}`);
   }
 
   // Our own 6x0A: the growth of an enemy's total damage is damage we dealt; 0x800 is its death.
@@ -260,6 +280,8 @@ export class BattleRun {
       const h = parse6x8F(body);
       if (h && h.attacker === this.opts.game.selfId && isPlayerEntity(h.target)) {
         this.score.giveDamage(h.amount, true, this.setup.weights);
+        // ASSUMED: the attacker's PB gauge follows the credit (the hit roll ran on the victim).
+        this.opts.view.combat.pvpDealt(h.amount);
       }
     }
   }

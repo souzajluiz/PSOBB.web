@@ -5,7 +5,19 @@
 //
 // Run: node tests/pvp.test.ts
 import { build6x8F } from '../client/src/quest/battle.ts';
-import { isPlayerEntity, parse6x8F, parseCombatStats, pvpKnockback, pvpStrike, remoteAttacker, type CombatStats } from '../client/src/combat/pvp.ts';
+import {
+  applyHpModification,
+  isPlayerEntity,
+  nearestTargets,
+  parse6x8F,
+  parseCombatStats,
+  pvpInReach,
+  pvpKnockback,
+  pvpStrike,
+  remoteAttacker,
+  type CombatStats,
+} from '../client/src/combat/pvp.ts';
+import { pickRespawn, respawnCandidates } from '../client/src/quest/battletraps.ts';
 import { parseAttackTargets } from '../client/src/net/game.ts';
 import { ATTACK_DAMAGE_MULT, type DefenderStats } from '../client/src/combat/formulas.ts';
 
@@ -100,6 +112,52 @@ const never = () => 0.999999; // above any hit chance below 1
   dv.setUint16(12, 0x1005, true);
   dv.setUint16(14, 0, true);
   eq(parseAttackTargets(body), { clientId: 2, targets: [0, 0x1005] }, '6x46 targets of client 2');
+}
+
+
+// Our strike on a remote player: the reach (cone, range, height window).
+{
+  const me = { x: 0, y: 0, z: 0 };
+  const front = { x: 0, y: 0, z: 100 };
+  eq(pvpInReach(me, front, 0, 0.5, 200), true, 'a player straight ahead within range is in reach');
+  eq(pvpInReach(me, { x: 0, y: 0, z: -100 }, 0, 0.5, 200), false, 'a player behind is out of the cone');
+  eq(pvpInReach(me, { x: 0, y: 0, z: 300 }, 0, 0.5, 200), false, 'a player past the weapon range is out');
+  eq(pvpInReach(me, { x: 0, y: 60, z: 100 }, 0, 0.5, 200), false, 'a player 60 above is out of the height window');
+}
+
+// 6x2F: the exe's mode 0 sets (clamped), 1 adds (clamped), 2 adds the max; a negative amount or an unknown mode is refused.
+{
+  eq(applyHpModification(50, 300, 0, 120), 120, '6x2F set 120');
+  eq(applyHpModification(50, 300, 0, 900), 300, '6x2F set clamps to max');
+  eq(applyHpModification(250, 300, 1, 100), 300, '6x2F add clamps to max');
+  eq(applyHpModification(50, 300, 1, 30), 80, '6x2F add 30');
+  eq(applyHpModification(50, 300, 2, 0), 300, '6x2F mode 2 restores max');
+  eq(applyHpModification(50, 300, 1, -5), null, '6x2F negative amount refused');
+  eq(applyHpModification(50, 300, 3, 5), null, '6x2F mode 3 refused');
+}
+
+// Nearest targets: enemies and players in one list, the strike's count cut.
+{
+  const picked = nearestTargets(
+    [
+      { d: 9, value: 'enemy-a' },
+      { d: 1, value: 'player-1' },
+      { d: 4, value: 'enemy-b' },
+    ],
+    2,
+  );
+  eq(picked, ['player-1', 'enemy-b'], 'nearest two of mixed targets');
+}
+
+// Respawn candidates (SendTeleportRequestToPlayer): a spawn with a player within 50 is skipped, 5 at most.
+{
+  const spawn = (x: number, z: number) => ({ x, y: 0, z, angle: 0 });
+  const points = [spawn(0, 0), spawn(100, 0), spawn(200, 0), spawn(300, 0), spawn(400, 0), spawn(500, 0)];
+  const cands = respawnCandidates(points, [{ x: 100, z: 10 }]);
+  eq(cands.map((c) => c.x), [0, 200, 300, 400, 500], 'spawn 100 skipped by a player 10 away');
+  eq(respawnCandidates(points, []).length, 5, 'at most 5 candidates');
+  eq(pickRespawn(cands, 0), cands[0], 'pickRespawn index 0 takes the first candidate');
+  eq(pickRespawn([], 100), null, 'no candidates: the player stays');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

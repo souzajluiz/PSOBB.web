@@ -310,6 +310,13 @@ export class Lobby {
             p.moving = false;
             this.emit('moved', p);
             break;
+          case 0x24: // G_TeleportPlayer_6x24 (buildTeleport): {u32 angle, f32 x, y, z}; the battle respawn and set_player_start_position
+            if (body.length < 0x14) break;
+            p.angle = dv.getUint32(4, true) * BAMS_TO_RAD;
+            p.position = { x: dv.getFloat32(8, true), y: dv.getFloat32(12, true), z: dv.getFloat32(16, true) };
+            p.moving = false;
+            this.emit('teleported', p);
+            break;
           case 0x55: // G_IntraMapWarp_6x55: {u32 angle, from xyz, to xyz}
             if (body.length < 0x20) break;
             p.angle = dv.getUint32(4, true) * BAMS_TO_RAD;
