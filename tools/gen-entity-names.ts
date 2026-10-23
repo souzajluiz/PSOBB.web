@@ -48,6 +48,44 @@ const parseTable = (name: string): Array<[number, number, string]> => {
 
 const objects = parseTable('dat_object_definitions');
 const enemies = parseTable('dat_enemy_definitions');
+
+// Parameter names: newserv documents each entity's params in the comment block
+// above its first table entry ("//   param4 = switch flag number"). The label is
+// the description cut at the first parenthesis, colon, semicolon or period.
+// Params without a description stay null (the client shows "Param n").
+const paramNames = (name: string): Array<[string, Array<string | null>]> => {
+  const out = new Map<string, Array<string | null>>();
+  let block = new Map<number, string>();
+  let last = '';
+  for (const line of tableBody(name).split('\n')) {
+    const c = /^\s*\/\/ {3}param(\d)\s*=\s*(.*)$/.exec(line);
+    if (c) {
+      if (last !== 'param' && last !== 'comment') block = new Map();
+      block.set(Number(c[1]), c[2]);
+      last = 'param';
+      continue;
+    }
+    const e = /^\s*\{(0x[0-9A-F]{4}), ([^,]+), (.+), "([^"]+)"\},/.exec(line);
+    if (e) {
+      if (block.size && !out.has(e[4])) {
+        const labels: Array<string | null> = Array.from({ length: 7 }, () => null);
+        for (const [i, text] of block) {
+          const cut = text.split(/[(:;.]/)[0].replace(/\s+$/, '').trim();
+          // Long descriptions do not fit a field caption: they stay "Param n".
+          if (cut && cut.length <= 50 && !/TODO/.test(cut) && i >= 1 && i <= 7) labels[i - 1] = cut.charAt(0).toUpperCase() + cut.slice(1);
+        }
+        out.set(e[4], labels);
+      }
+      block = new Map();
+      last = 'entry';
+      continue;
+    }
+    last = /^\s*\/\//.test(line) ? 'comment' : '';
+  }
+  return [...out];
+};
+const objectParamNames = paramNames('dat_object_definitions');
+const enemyParamNames = paramNames('dat_enemy_definitions');
 const enemyNames: Array<[string, string, string | null]> = [];
 for (const m of enemyTypeCc.matchAll(/\{EnemyType::(\w+),.*"(\w+)",\s*"([^"]*)",\s*(nullptr|"[^"]*")\}/g)) {
   enemyNames.push([m[2], m[3], m[4] === 'nullptr' ? null : m[4].slice(1, -1)]);
@@ -68,6 +106,14 @@ for (const m of enemyTypeCc.matchAll(
   enemyParams.push([m[1], m[2] === 'NONE' ? 0xff : Number(m[2]), idxList(m[3]), idxList(m[4]), idxList(m[5])]);
 }
 
+const fmtNames = (rows: Array<[string, Array<string | null>]>) =>
+  rows
+    .map(([n, ps]) => {
+      const last = ps.reduce((k, p, i) => (p ? i + 1 : k), 0);
+      return `  ${JSON.stringify(n)}: [${ps.slice(0, last).map((p) => (p ? JSON.stringify(p) : 'null')).join(', ')}],`;
+    })
+    .join('\n');
+
 const fmt = (rows: Array<[number, number, string]>) =>
   rows.map(([t, a, n]) => `  [0x${t.toString(16).padStart(4, '0')}, 0x${a.toString(16)}, ${JSON.stringify(n)}],`).join('\n');
 
@@ -87,6 +133,17 @@ export const ENEMY_DEFINITIONS: ReadonlyArray<readonly [number, number, string]>
 ${fmt(enemies)}
 ];
 
+// Parameter labels by client class name (newserv's comments in Map.cc): entry i
+// is param(i+1); null = not documented. Trailing nulls are left out. An entity
+// without a row has no documented parameters.
+export const OBJECT_PARAM_NAMES: Readonly<Record<string, ReadonlyArray<string | null>>> = {
+${fmtNames(objectParamNames)}
+};
+
+export const ENEMY_PARAM_NAMES: Readonly<Record<string, ReadonlyArray<string | null>>> = {
+${fmtNames(enemyParamNames)}
+};
+
 // newserv EnemyType enum name -> [in-game name, Ultimate name or null]
 export const ENEMY_TYPE_NAMES: Readonly<Record<string, readonly [string, string | null]>> = {
 ${enemyNames.map(([e, n, u]) => `  ${e}: [${JSON.stringify(n)}, ${JSON.stringify(u)}],`).join('\n')}
@@ -100,4 +157,4 @@ ${enemyParams.map(([e, rt, st, at, rs]) => `  ${e}: { rt: 0x${rt.toString(16)}, 
 `;
 const target = join(repo, 'client/src/formats/entitynames.ts');
 writeFileSync(target, out);
-console.log(`wrote ${target}: ${objects.length} object rows, ${enemies.length} enemy rows, ${enemyNames.length} enemy types`);
+console.log(`wrote ${target}: ${objects.length} object rows, ${enemies.length} enemy rows, ${enemyNames.length} enemy types, ${objectParamNames.length} object and ${enemyParamNames.length} enemy param rows`);

@@ -10,6 +10,7 @@ import { buildPackage, openQuestFiles, scriptHost, type NamedBytes } from './io.
 import { createEnemy, createObject, QuestDocument, type Change } from './model.ts';
 import { createEntityListPanel, createInspectorPanel, createPalettePanel, PALETTE_MIME, type PaletteEntry } from './panel_entities.ts';
 import { createEventsPanel } from './panel_events.ts';
+import { createOverviewPanel } from './panel_overview.ts';
 import { createPropertiesPanel, type Panel } from './panel_props.ts';
 import { createScriptPanel } from './panel_script.ts';
 import { EditorScene, type Placement } from './scene.ts';
@@ -65,6 +66,7 @@ canvasWrap.addEventListener('drop', (e) => {
 const props = createPropertiesPanel(doc);
 const palette = createPalettePanel(doc, { addAtCenter: (entry) => addEntity(entry, scene.centerPoint()) });
 const entityList = createEntityListPanel(doc);
+const overview = createOverviewPanel(doc, { frame: () => scene.frameSelection() });
 const inspector = createInspectorPanel(doc, {
   snapSection: (e) => scene.reassignSection(e),
   dropToGround: (e) => scene.groundedPosition(e),
@@ -295,7 +297,7 @@ function showTab(t: Tab): void {
 }
 
 // --- Layout -----------------------------------------------------------------------------------------
-const left = h('aside', { class: 'qe-left' }, props.el);
+const left = h('aside', { class: 'qe-left' }, props.el, overview.el);
 const right = h('aside', { class: 'qe-right' }, palette.el, entityList.el, inspector.el);
 const center = h('main', { class: 'qe-center' }, h('nav', { class: 'qe-main-tabs', role: 'tablist' }, ...tabButtons), view3d, viewScript, viewEvents);
 app.replaceChildren(
@@ -335,7 +337,10 @@ function flush(parts: Part[]): void {
     const has = (p: Part) => all || pending.has(p);
     pending.clear();
     if (has('props')) props.refresh();
-    if (has('floors')) floorOptions();
+    if (has('floors')) {
+      floorOptions();
+      overview.refresh();
+    }
     if (has('palette')) palette.refresh();
     if (has('list')) entityList.refresh();
     if (has('inspector')) inspector.refresh();
@@ -368,10 +373,10 @@ doc.onChange((c: Change) => {
       flush(['props', 'list', 'inspector', 'events', 'floors']);
       break;
     case 'fields':
-      flush(['inspector', 'list', 'events']);
+      flush(['inspector', 'list', 'events', 'floors']);
       break;
     case 'events':
-      flush(['props', 'events']);
+      flush(['props', 'events', 'floors']);
       break;
     case 'selection':
       flush(['list', 'inspector']);

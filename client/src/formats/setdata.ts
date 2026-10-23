@@ -24,7 +24,7 @@
 //                                         40 i16 param6, param7
 //                                         44 u32 (client pointer)
 
-import { ENEMY_DEFINITIONS, ENEMY_TYPE_NAMES, OBJECT_DEFINITIONS } from './entitynames.ts';
+import { ENEMY_DEFINITIONS, ENEMY_PARAM_NAMES, ENEMY_TYPE_NAMES, OBJECT_DEFINITIONS, OBJECT_PARAM_NAMES } from './entitynames.ts';
 
 export const OBJECT_SET_SIZE = 0x44;
 export const ENEMY_SET_SIZE = 0x48;
@@ -316,6 +316,57 @@ export function enemyDisplayName(e: EnemySet, area: number | null): string {
 
 export function entityName(e: SetEntity, area: number | null): string {
   return e.kind === 'enemy' ? enemyDisplayName(e, area) : objectTypeName(e.type, area);
+}
+
+// --- Parameter names -----------------------------------------------------------------
+
+// Labels for the params of an entity, in .dat order: objects have param1..6 (3
+// floats, 3 ints), enemies param1..7 (5 floats, 2 int16). newserv's comments
+// name most of them (ENTITY_PARAM_NAMES in entitynames.ts, generated). The
+// enemies that enemyKind / enemymodels.ts decode fill the gaps here, by base
+// type. A parameter nobody documents is "Param n (f)", "(i)" or "(i16)".
+const PORT_ENEMY_PARAMS: Readonly<Record<number, Readonly<Record<number, string>>>> = {
+  0x40: { 6: 'Hildeblue if >= 1' },
+  0x41: { 6: 'Rare if odd' },
+  0x43: { 2: 'Barbarous if >= 1' },
+  0x44: { 6: 'Variant: 0 Booma, 1 Gobooma, 2 Gigobooma' },
+  0x63: { 6: 'Variant: 0 Evil, 1 Pal, 2 Guil Shark' },
+  0x80: { 6: 'Gillchic if nonzero' },
+  0x82: { 2: 'Gold if >= 1' },
+  0xa6: { 6: 'Variant: 0 Dimenian, 1 La, 2 So' },
+  0xd4: { 1: 'Ground if < 1 or in [2, 3)', 6: 'Spigell if > 0' },
+  0xd5: { 6: 'Meriltas if > 0' },
+  0xd6: { 6: 'Variant: 0 Mericarol, 1 Merikle, 2 Mericus' },
+  0xd7: { 6: 'Zol Gibbon if > 0' },
+  0xdd: { 6: 'Dolmdarl if > 0' },
+  0x115: { 6: 'Variant: 0 Boota, 1 Ze Boota, 2 Ba Boota' },
+  0x117: { 6: 'Variant: 0 Goran, 1 Pyro Goran, 2 Goran Detonator' },
+  0x119: { 6: 'Shambertin if odd' },
+};
+
+// The client class name of a type (newserv's name in the definition tables), the
+// key of the generated labels. Null when the rows for the type disagree.
+function classNameOf(defs: ReadonlyArray<readonly [number, number, string]>, type: number, area: number | null): string | null {
+  const rows = defs.filter((d) => d[0] === type);
+  const hit = area !== null ? rows.find((d) => hasArea(d[1], area)) : undefined;
+  if (hit) return hit[2];
+  const names = new Set(rows.map((d) => d[2]));
+  return names.size === 1 ? [...names][0] : null;
+}
+
+export function entityParamLabels(e: SetEntity, area: number | null): string[] {
+  const isEnemy = e.kind === 'enemy';
+  const count = isEnemy ? 7 : 6;
+  const cls = classNameOf(isEnemy ? ENEMY_DEFINITIONS : OBJECT_DEFINITIONS, e.type, area);
+  const documented = (cls && (isEnemy ? ENEMY_PARAM_NAMES : OBJECT_PARAM_NAMES)[cls]) || [];
+  const port = isEnemy ? (PORT_ENEMY_PARAMS[e.type] ?? {}) : {};
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const named = port[i + 1] ?? documented[i];
+    const kind = isEnemy ? (i < 5 ? 'f' : 'i16') : i < 3 ? 'f' : 'i';
+    out.push(named ? `${named} (param ${i + 1})` : `Param ${i + 1} (${kind})`);
+  }
+  return out;
 }
 
 // --- World placement -----------------------------------------------------------

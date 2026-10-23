@@ -114,6 +114,10 @@ textarea { resize: vertical; }
 .qe-entity-row { cursor: pointer; flex-wrap: wrap; }
 .qe-entity-row .detail { flex-basis: 100%; }
 .qe-entity-row:hover { background: #0d2744; }
+.qe-overview-rows { display: grid; gap: 2px; }
+.qe-overview-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 3px 6px; border-radius: 4px; }
+.qe-overview-row.current { background: rgba(95, 212, 255, 0.07); }
+.qe-overview-row .detail { color: var(--muted); font-size: 11px; }
 .qe-entity-row.selected { background: #17436e; box-shadow: inset 3px 0 0 var(--warn); }
 .qe-entity-row.enemy .name { color: #ff9d90; }
 .qe-entity-row.npc .name { color: #8cffb4; }

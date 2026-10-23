@@ -2,7 +2,7 @@
 // floor and the inspector of the selection.
 
 import { ENEMY_DEFINITIONS, OBJECT_DEFINITIONS } from '../formats/entitynames.ts';
-import { enemyDisplayName, entityName, type EnemySet, type ObjectSet, type SetEntity } from '../formats/setdata.ts';
+import { enemyDisplayName, entityName, entityParamLabels, type EnemySet, type ObjectSet, type SetEntity } from '../formats/setdata.ts';
 import { bamsToDegrees, degreesToBams, wrapBams } from './geom.ts';
 import { button, h, hex, numberField, section, type Field } from './dom.ts';
 import { createEnemy, createObject, type EntityPatch, type QuestDocument } from './model.ts';
@@ -155,11 +155,6 @@ export interface InspectorHost {
   frame(): void;
 }
 
-const PARAM_NAMES = {
-  object: ['Param 1 (f)', 'Param 2 (f)', 'Param 3 (f)', 'Param 4 (i)', 'Param 5 (i)', 'Param 6 (i)'],
-  enemy: ['Param 1 (f)', 'Param 2 (f)', 'Param 3 (f)', 'Param 4 (f)', 'Param 5 (f)', 'Param 6 (i16)', 'Param 7 (i16)'],
-};
-
 export function createInspectorPanel(doc: QuestDocument, host: InspectorHost): Panel {
   const root = h('div', { class: 'qe-panel' });
   let shownFor: readonly SetEntity[] = [];
@@ -198,7 +193,7 @@ export function createInspectorPanel(doc: QuestDocument, host: InspectorHost): P
           { step: 1 },
         ),
       );
-    const params = (e.kind === 'object' ? PARAM_NAMES.object : PARAM_NAMES.enemy).map((l, i) =>
+    const params = entityParamLabels(e, area).map((l, i) =>
       add(
         numberField(
           l,
