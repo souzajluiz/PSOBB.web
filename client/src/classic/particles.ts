@@ -256,6 +256,8 @@ export class ParticleSystem {
     }
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
+    // FUN_007829f4 turns (vx, vy, 0) about Y: x and z (indices 0 and 2) by the BAMS angle
+    // 2 * rand, vy is kept (0x0050ec4c, the call at 0x0050ee9c).
     const a = r() * Math.PI * 2;
     // The spin angle starts at rand * 65536 and turns by the sign of rand - 0.5, unless the
     // friction, gravity and vacume fields are all 0.

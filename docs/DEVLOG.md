@@ -9632,3 +9632,21 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **Checks:** `node tests/playermove.test.ts`: playermove: ok. Client `npx tsc --noEmit -p .` (Node 24): see the commit. Not run in Chrome.
 
 **Open:** the keyboard ramp values (above). Two-client remote check and wall slide for remote players, as before.
+
+## 2026-10-23: Particle spawn velocity rotation traced: the port already matches the exe (no behaviour change); the flagged "(vx, vy) 2D rotation" was a misread
+
+**Question (flagged 2026-10-23 entry):** does the exe rotate (field36, field37) = (vx, vy) as a 2D vector with FUN_007829f4, unlike the port, which rotates vx in x-z and keeps vy?
+
+**Exe evidence (FUN_0050ec4c, the constructor):**
+- The velocity is set at +0x40 (field36 = vx) and +0x44 (field37 = vy): `rand/32768 * speed_x + vacume` and `rand/32768 * cr_rt + gravity` (named dump, the lines after the `_rand()` for the spin). The next slot, +0x48 (field38), is written 0 (0x0050ee50, `movl $0x0, 0x48(%edx)`).
+- `RotateVector2D_007829f4(float *in, float *out)` (named dump, 759286) reads `in[0]` and `in[2]`, and writes `out[2] = cos*in[2] - sin*in[0]`, `out[0] = in[0]*cos + in[2]*sin`. It does not touch index 1. So on the 3-vector (vx, vy, 0) at +0x40, the rotation acts on x = vx and z = field38 = 0: the result is x = vx cos a, z = -vx sin a, and vy (field37) is untouched.
+- The angle is the third stack argument: the caller pushes the ROUND of the `_rand()` result (0x0050ee57..0x0050ee9c: `call _rand`, `fistpl` under RC = 0xc00, `push eax; push edx; push edx; call 0x007829f4`). The constants are 0x00920404 = 360.0 and 0x00920400 = 65536.0 (exedata read), so the angle is ROUND(rand/32768 * 360 * 65536 / 360) = 2 * rand BAMS. int_sin / int_cos index a BAMS table (`_X >> 4 & 0xfff`, 0x10000 = one turn; named dump 846871), so a = rand/32768 * 2 pi. The second rotation site (0x0050f2a6, the other constructor path, the same fields) uses the same constants (0x009203b8 = 65536, 0x009203bc = 360).
+- The rand is the MSVC LCG (0x343fd, 0x269ec3, `& 0x7fff`, named dump 876800); the port's `rand()` is the same generator.
+
+**Port (client/src/classic/particles.ts spawn):** `v = [vx cos a, vy, -vx sin a]` with `a = rand * 2 pi`, draws in the same order (x, z, y, size, life, vx, vy, angle). This is the exe's result exactly: the BAMS angle 2 * rand is `rand / 32768` of a turn, so no quantisation is lost. Nothing was wrong in the port. The "2D (vx, vy)" reading came from the field names, not the function's indices.
+
+**Changes:** comment only in `client/src/classic/particles.ts` spawn (the rotation and its BAMS angle, with the call site). New test `tests/particlespawn.test.ts`: replays the exe's LCG draws for the first particle and checks v = (vx cos a, vy, -vx sin a) with vy = -1.5 kept, horizontal speed kept, and the angle spread over the circle over 200 spawns. This test pins the behaviour, not a fix.
+
+**ASSUMED / not checked:** int_sin / int_cos table interpolation (the port uses Math.cos / Math.sin; the difference is below the table's own precision); the spin angle's ROUND (the port's `Math.round` for the model spin, which the exe does with RC 0xc00 = truncation: exact for 2 * rand, so no visible difference, not changed).
+
+**Checks:** `node tests/particlespawn.test.ts` ALL PASS; `node tests/particleslope.test.ts` ALL PASS; `deathfx`, `hitfx`, `telepipe`, `playerfx`, `techlightning`, `dragon`: pass. `npx tsc --noEmit -p .` (client, Node 24): clean. Not run in Chrome.
