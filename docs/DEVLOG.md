@@ -13266,3 +13266,35 @@ Ports the Trade Window on top of the 2026-10-23 protocol entry (`net/trade.ts`).
 **Left:**
 - Confirm the placement in a real Pioneer 2 render (the wall next to the door, the door's section and rotation).
 - The angle key size of the other object motions (beams, the Forest and Ruins doors' `bm_obj_*` motions): the exe rule, not decided here.
+
+## 2026-10-23: Medical Center door in the wall (the render's -80 translate)
+
+**Report:** the Medical Center door (0x0049) swung but stood free-standing in the open plaza (recording frames f_004 to f_006). The set point and the wall agree, so the offset is in the door's model, not in the placement.
+
+**Exe (PsoBB.exe, Ghidra via `tools/ghidra/decomp.sh`):**
+- Render `FUN_00646804` (the door's vtable draw, the Medical Center's own render): after the object's transform it calls `FUN_00830b74(0, 0, 0xc2a00000)` (0xc2a00000 = -80.0f), then `FUN_00645ae8(0x14)` (model 20) and `FUN_00645b00(0xb)` (motion 11), then `FUN_0083bd00` (the node draw).
+- `FUN_00830b74` adds `M * (x, y, z)` to the translation of the current matrix: a translate in the object's own frame (its basis vectors), not its world position.
+- The shop render `FUN_006461f8`, the guild render `FUN_00646360` and the Ragol warp render `FUN_00646670` make no such call.
+
+**Why the port was off:** model 20 (`fe_obj_o_medical_door01l.xj`, 2 leaves, each 23.6 wide, 50 tall) sits at local z 75.3..81.6 in the model (its nodes have no position keys, so the motion does not move it). The port drew it at the object's origin, so the panel stood 78 units out along the door's own normal. With the set yaw 315 deg that is about (-55, +55) from the set point: (138, -38), in the plaza. The shop, guild and warp shutter models are centred on their origins (z -2..2, -50..50), so only this one needed the translate.
+
+**Placement check (decode, no render):** the door's set entry is section 10 (local (-34.5, 0, -384.5), section 10 at (228, 0, 291), no rotation) = world (193.5, 0, -93.5). Section 40's front block (`map_city00_00n.rel` section 40 entry 4, x 100..325) ends at z -95.9. With the -80 translate the panel centre lands at about (195.8, -95.8): on that face. Section sets and transforms are unchanged (all 6 sections are drawn: 23, 76, 45, 13, 19, 9 entries, none skipped).
+
+**Port changes:**
+- `client/src/formats/objectmodels.ts`: `ObjectPartSpec.offset` (a translate in the object's frame); the Medical door (0x0049) model 20 sets `offset: [0, 0, -80]`.
+- `client/src/render/objectview.ts`: `toEnemyPart` passes `offset` to the enemy part (`EnemyPartSpec.offset`, the group inside the object's yaw-turned root).
+- `tests/warpmenu.test.ts`: the Medical door spec has the (0, 0, -80) offset, and the translated panel is centred within 4 units of the set point's plane.
+
+**ASSUMED:**
+- The translate is in the door's frame, so it turns with the yaw. The port's yaw convention (`rotation.y`) is the same one the other objects use; the exe's matrix convention was read from `FUN_00830b74`'s arithmetic, not from a yaw test.
+- The collision box (`BOX(0x00935a54, 25, 4, 0)`) stays at the object origin. The exe's translate only touches the render matrix, so the collision is not checked against the panel.
+
+**Not checked:** a Chrome / Playwright view was not run (the brief says not to run Playwright, although the request asked for a screenshot).
+
+**Open (the wall itself):** the n.rel has few triangles on the plane z -100..-90 at x 100..325. Only sliver faces: section 40 entries 2 and 3 (about 10 each) and entry 4 (1), with vertices at (191.7..194.6, 50..99, -91.7..-94.6). From an eye at (193.5, 15, -20) a ray grid over that plane finds no front face at x 110..190, y 0..40, so the facade may be open there. The port draws the same n.rel as the exe, so the exe may also show it open unless another entry (or a canopy) covers it. A render check is needed to say whether the wall is missing.
+
+**Checks:** `node tests/warpmenu.test.ts` (the new offset and centre checks), `node tests/townfield.test.ts`, `node tests/lobbymain.test.ts`, `node tests/waves.test.ts`, `node tests/setdata.test.ts` all pass. Client `tsc --noEmit -p .` clean.
+
+**Left:**
+- Render check (Chrome or Playwright, not run here) of the door in the Medical Center wall, and whether the facade is visible next to it (see the open item above).
+- The collision box's placement relative to the moved panel (exe `InitEnemyCollisionBoxes` offset) is not traced.

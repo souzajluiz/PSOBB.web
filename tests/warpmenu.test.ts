@@ -201,6 +201,15 @@ if (existsSync(join(DATA, 'data.gsl'))) {
   const leaf = med16.nodes[1].rotation!;
   check(Math.abs(leaf[leaf.length - 1].value[1] - 6189 * (2 * Math.PI / 65536)) < 1e-3, 'Medical door leaf 1 turns to +6189 BAMS at frame 29');
   eq(city.motion(11, city.nodeCount(20)).nodes.map((n) => n.rotation?.length ?? 0), [1, 1], 'short form reads one key (the bug)');
+  // The render (FUN_00646804) translates model 20 by (0, 0, -80) in the door's
+  // frame: the leaves sit at local z 75..82 in the model, so the translated
+  // panel is centred on the set point (the Medical Center wall), like the
+  // shop and guild doors (model z -2..2).
+  const medSpec = objectModelFor(obj(0x49, 0), { area: 0, episode: 1 });
+  eq(medSpec?.parts[0]?.offset, [0, 0, -80], 'Medical door model is translated by (0, 0, -80)');
+  const medZ = Array.from(city.model(20).object.model!.vertices!.positions).filter((_, i) => i % 3 === 2);
+  const zc = (Math.min(...medZ) + Math.max(...medZ)) / 2 - 80;
+  check(Math.abs(zc) < 4 && Math.max(...medZ) - 80 < 4, `Medical door panel is centred on the set point (z centre ${zc.toFixed(1)})`);
 } else {
   console.log(`(no ${DATA}; skipping the client data checks)`);
 }
