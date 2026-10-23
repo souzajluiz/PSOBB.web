@@ -256,6 +256,7 @@ export interface AiTarget {
   clientId: number;
   x: number;
   z: number;
+  y?: number; // height (the Pofuilly Slime's arm window, 0x00598f1c); 0 when not given
   charClass: number;
   dead: boolean;
   angle?: number; // heading in radians (the wolf watches where it faces)

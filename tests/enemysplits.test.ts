@@ -3,7 +3,7 @@
 // and Resta, merge); the Pofuilly Slime's puddle / rise / crawl cycle, its
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
-import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SPIT } from '../client/src/combat/enemysplits.ts';
+import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -15,7 +15,7 @@ const check = (ok: boolean, what: string) => {
   }
 };
 const eq = (a: unknown, b: unknown, what: string) => check(JSON.stringify(a) === JSON.stringify(b), `${what}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`);
-const player = (x: number, z: number, clientId = 0): AiTarget => ({ clientId, x, z, charClass: 0, dead: false, angle: 0 });
+const player = (x: number, z: number, clientId = 0, y?: number): AiTarget => ({ clientId, x, y, z, charClass: 0, dead: false, angle: 0 });
 const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0], ...o });
 
 // --- Pan Arms ----------------------------------------------------------------------
@@ -243,6 +243,53 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   const hits: number[] = [];
   for (let i = 1; i <= 45; i++) if (arm.tick([player(0, 2)]).length) hits.push(i);
   eq(hits, [17], 'the arm hits once, from frame 17');
+}
+
+// The arm's hit (0x00598f1c): the nearest player within 25, hit when it is not
+// the lock, within 5 in height and 7.5 in XZ; the hit sets the lock. Frames 17..30.
+{
+  const armAt = (frame: number, y = 0) => {
+    const a = new SlimeArm(0, 0, y);
+    for (let i = 1; i < frame; i++) a.tick([]);
+    return a;
+  };
+  const a1 = armAt(17);
+  eq(a1.tick([player(0, 8, 1)]).length, 0, 'a player 8 away is out of the 7.5 reach');
+  eq(a1.tick([player(0, 7, 2)]).map((t) => t.clientId), [2], 'at 7 the frame-18 hit lands');
+  const a2 = armAt(17);
+  eq(a2.tick([player(0, 1, 3, 20)]).length, 0, 'a player 20 above is out of the height window');
+  eq(a2.tick([player(0, 1, 3, 0)]).map((t) => t.clientId), [3], 'the same player level with the arm hits');
+  // The lock: the nearest player is hit once; a different nearest one is hit, and the first again after it.
+  const a3 = armAt(17);
+  const seq = [
+    a3.tick([player(0, 2, 7)]).map((t) => t.clientId),
+    a3.tick([player(0, 2, 7)]).map((t) => t.clientId),
+    a3.tick([player(0, 2, 7), player(0, 1, 8)]).map((t) => t.clientId),
+    a3.tick([player(0, 2, 7)]).map((t) => t.clientId),
+  ];
+  eq(seq, [[7], [], [8], [7]], 'a player is hit once per change of the lock id');
+  const far = armAt(17);
+  eq(far.tick([player(0, 26, 4)]).length, 0, 'the nearest player beyond 25 is not in range');
+  eq(armAt(31).tick([player(0, 1, 5)]).length, 0, 'nothing after frame 30');
+}
+
+// The death fade (0x00597594): the death entry (0x00598648) sets the scale to 1 and
+// the counter to 5; the alpha drops 0.2 a frame (floored at 0) and the slime is
+// removed when the counter is spent, on the 5th frame.
+{
+  const s = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+  (s as unknown as { xf: { alpha: number } }).xf.alpha = 1;
+  s.kill();
+  eq(s.view.morph, SLIME_MORPH.dead, 'the death pose (morph 5)');
+  eq([s.view.sx, s.view.sy, s.view.sz], [1, 1, 1], 'the death entry sets the scale to 1');
+  const alphas: number[] = [];
+  let removed = -1;
+  for (let i = 1; i <= 5; i++) {
+    if (s.stepDeathFade() && removed < 0) removed = i;
+    alphas.push(Math.round(s.view.alpha * 10) / 10);
+  }
+  eq(alphas, [0.8, 0.6, 0.4, 0.2, 0], 'the alpha drops 0.2 a frame to 0');
+  eq(removed, 5, 'removed on the 5th frame');
 }
 
 // The control: four slots at most, never reused.
