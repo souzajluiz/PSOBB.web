@@ -570,9 +570,16 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
     return this.bulgeValue;
   }
 
-  // The second mesh's stream value: trunc(bulge / 2.0) (0x0057a314).
+  // The second stream's value: trunc(bulge / 2.0) (0x0057a314). The second
+  // mesh is kabe_wall (model_files[2]), not the arm: the name is historical.
   get armBulge(): number {
     return Math.trunc(this.bulgeValue / MORFOS.armBulgeScale);
+  }
+
+  // The arm sub-entity is out (CreateMorfosSubEntity_0057cbc4 at the punch's
+  // swing, 0x0057bb5c sub 1). ASSUMED: it is gone when the swing ends.
+  get armOut(): boolean {
+    return this.state === 'punch' && this.sub === 1;
   }
 
   // SetEnemyAiState_0051f62c: leave the old state (event 5), enter the new one (event 4).

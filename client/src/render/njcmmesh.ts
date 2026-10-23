@@ -36,6 +36,11 @@ export interface NjcmPartInput {
   // segments). A strip belongs to the node that polls it: a cached op list
   // belongs to the node that cached it (the 'cache' op), not to the draw.
   ownMaterials?: readonly number[] | undefined;
+  // Texture ids whose UV the caller shifts (the Morfos' wall stream,
+  // EnemyPartSpec.uvDrive): the texture of that id repeats (the exe's
+  // ProcessCommandStream clears the clamp bits) and its UV offset is this
+  // vector, which the caller sets each frame.
+  uvOffsets?: ReadonlyMap<number, THREE.Vector2> | undefined;
 }
 
 export interface NjcmModelStats {
@@ -175,6 +180,19 @@ export class NjcmModelBuilder {
     return t;
   }
 
+  // A texture whose UV offset the caller drives. The clone is ours and reads the
+  // caller's offset vector at every draw (three.js updates the texture matrix
+  // from `offset` each frame); it repeats, as the shifted strips may leave the
+  // texture's edge.
+  private driven(base: THREE.Texture, offset: THREE.Vector2): THREE.Texture {
+    const t = base.clone();
+    t.wrapS = THREE.RepeatWrapping;
+    t.wrapT = THREE.RepeatWrapping;
+    t.offset = offset;
+    t.needsUpdate = true;
+    return t;
+  }
+
   // owner: the node whose own material this is (ownMaterials), -1 for the shared ones.
   private material(part: NjcmPartInput, m: MatState, stripFlags: number, owner: number): THREE.Material {
     const key = `${part.name}|${owner}|${materialKey(m, stripFlags)}`;
@@ -182,12 +200,14 @@ export class NjcmModelBuilder {
     if (mat) return mat;
     const base = m.texId >= 0 ? part.textures(m.texId) : null;
     if (m.texId >= 0 && !base) this.missing++;
+    const drive = base && m.texId >= 0 ? part.uvOffsets?.get(m.texId) : undefined;
+    const map = base ? (drive ? this.driven(base, drive) : this.texture(base, m.texFlags)) : null;
     const color = part.diffuse
       ? part.diffuse.clone()
       : new THREE.Color().setRGB(((m.diffuse >> 16) & 0xff) / 255, ((m.diffuse >> 8) & 0xff) / 255, (m.diffuse & 0xff) / 255, THREE.SRGBColorSpace);
     const alpha = !!(stripFlags & STRIP_USE_ALPHA);
     const params = {
-      map: base ? this.texture(base, m.texFlags) : null,
+      map,
       color,
       side: THREE.DoubleSide,
       transparent: alpha,
@@ -201,7 +221,6 @@ export class NjcmModelBuilder {
       mat.blendDst = (BLEND_FACTORS[m.dst] ?? THREE.OneMinusSrcAlphaFactor) as THREE.BlendingDstFactor;
     }
     // The wrapped clone is ours (the base texture is the caller's): it goes with the material.
-    const map = params.map;
     if (map && base && map !== base) mat.addEventListener('dispose', () => map.dispose());
     if (owner >= 0) mat.userData.node = owner;
     this.materials.set(key, mat);

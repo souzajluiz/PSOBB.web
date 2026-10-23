@@ -1762,6 +1762,7 @@ export class CombatView {
       }
       if (ai instanceof DeldepthAi) this.deldepthView(e, ai);
       if (ai instanceof SlimeAi) this.slimeView(e, ai);
+      if (ai instanceof MorfosAi) this.morfosView(e, ai, !!r.hidden);
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
@@ -4475,6 +4476,36 @@ export class CombatView {
   // 0) and the open one (part 1, motion 1). The exe's helper 0x005592a0 shows
   // one, hides the other and sets the motion slot on the frame the closed flag
   // changes; this does the same each frame from the brain's `open`.
+  // Morfos (combat/enemyfsmep2d.ts MorfosAi, formats/enemymodels.ts): the body's
+  // child mesh is shifted by the bulge (its u), the wall by trunc(bulge / 2) (its
+  // v): ProcessCommandStream_0081a2b0 adds the stream value to the strips' u / v
+  // of the texture group (texture 2 of the body's child, texture 0 of the wall),
+  // in the UVN units (/255) of those strips. The arm (the punch's sub-entity) is
+  // drawn while the swing runs, from its own attack_kabe_arm motion, once.
+  private morfosArmStarted = new Set<EnemyRuntime>();
+  private morfosView(e: EnemyRuntime, ai: MorfosAi, hidden: boolean): void {
+    for (const child of e.instance.root.children) {
+      if (child.name === 'Morfos body') child.userData.uvOffsets?.get(2)?.set(ai.wallBulge / 255, 0);
+      else if (child.name === 'Morfos wall') child.userData.uvOffsets?.get(0)?.set(0, ai.armBulge / 255);
+      else if (child.name === 'Morfos arm') {
+        const armOut = ai.armOut && !hidden;
+        child.visible = armOut;
+        if (armOut && !this.morfosArmStarted.has(e)) {
+          this.morfosArmStarted.add(e);
+          const i = e.instance.parts.findIndex((p) => p.name === 'Morfos arm');
+          const a = e.instance.animators[i];
+          if (a) {
+            try {
+              a.play(e.instance.archive.motion(0, a.nodeCount), 0.7, false);
+            } catch (err) {
+              this.opts.log(`morfos arm motion: ${(err as Error).message}`);
+            }
+          }
+        } else if (!armOut) this.morfosArmStarted.delete(e);
+      }
+    }
+  }
+
   private epsilonLook = new Map<EnemyRuntime, number>();
   private epsilonBodies = new Map<EnemyRuntime, EpsilonBody>();
   private epsilonOrbs = new Map<EnemyRuntime, THREE.Mesh>();
@@ -5545,7 +5576,8 @@ export class CombatView {
   private difficultyParams: { params: BattleParams | null; difficulty: number; slots: EnemySlot[]; base: number } | null = null;
 
   private playEnemyMotion(e: EnemyRuntime, m: EnemyAiMotion): void {
-    for (const a of e.instance.animators) {
+    for (const [i, a] of e.instance.animators.entries()) {
+      if (e.instance.parts[i]?.ownMotion) continue; // the view plays it (the Morfos' arm)
       try {
         a.play(e.instance.archive.motion(m.index, a.nodeCount), m.speed, m.loop);
       } catch (err) {

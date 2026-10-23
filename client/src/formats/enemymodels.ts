@@ -935,10 +935,20 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // 0x009bd9c0 slot 0 = wait, 0.8.
     case 0xdd:
       return spec('TObjEneDolmOlm', pick('bm_ene_abgc01_wola_body.bml', ctx), [{ model: p6 < 1 ? 0 : 1, motion: loop(5, 0.8) }]);
-    // Morfos: ctor 0x0057a134, body model 1 (arm and wall are separate parts),
-    // table 0x009bee20 slot 0 = wait_kabe_body, 0.5.
+    // Morfos: ctor 0x0057a134, table 0x009bee20 slot 0 = wait_kabe_body, 0.5.
+    // The descriptor's model_files (0x009bee9c) are kabe_arm (0), kabe_body (1)
+    // and kabe_wall (2): the body is model 1 with the motion, the wall model 2
+    // is static (its root sits 20 units up in the wall), the arm model 0 is the
+    // punch's sub-entity (CreateMorfosSubEntity_0057cbc4, motion 0 attack_kabe_arm,
+    // drawn by the view). The body's child mesh (texture 2) and the wall (texture 0)
+    // are shifted each frame by the stream bulge (ProcessCommandStream_0081a2b0,
+    // EnemyUpdateRoutine_0057a2a0): body u by the bulge, wall v by trunc(bulge / 2).
     case 0xde:
-      return spec('TObjEneMorfos', pick('bm_ene_morfos.bml', ctx), [{ model: 1, motion: loop(5, 0.5) }]);
+      return spec('TObjEneMorfos', pick('bm_ene_morfos.bml', ctx), [
+        { model: 1, motion: loop(5, 0.5), name: 'Morfos body', uvDrive: [2] },
+        { model: 2, name: 'Morfos wall', uvDrive: [0] },
+        { model: 0, motion: { index: 0, speed: 0.7, loop: false }, name: 'Morfos arm', hidden: true, ownMotion: true },
+      ]);
     // Recobox: ctor 0x0058859c, box model 1, table 0x009bf680 slot 0 =
     // close_only, 0.1 (floor/ceiling/wall orientation from param6 not decoded).
     case 0xdf:
