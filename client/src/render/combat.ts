@@ -59,7 +59,8 @@ import { BARBA_CAPTURE_COUNT, BARBA_HP, BARBA_PART_COUNT, BARBA_PART_RADIUS, BAR
 import { PigRayAi, type PigEvent } from '../combat/barbaminion.ts';
 import { type DrlDebris, drlPieceRecords, newMat } from '../combat/derollefins.ts';
 import { DragonAi, DragonFireball, DRAGON_BODY_BOXES, DRAGON_MOUTH, type DragonEvent } from '../combat/dragon.ts';
-import { GoldDragonAi, GOL_BODY_BOXES, decodeGolA8, type GolEvent } from '../combat/goldragon.ts';
+import { GoldDragonAi, GOL_BODY_BOXES, GOL_EXTRA, decodeGolA8, type GolEvent, type GolExtraPlacement } from '../combat/goldragon.ts';
+import { shareMeshResources } from './dispose.ts';
 import { SaintMilionAi, SmChildAi, SM_NODES, SM_PART_COUNT, SM_PART_RADIUS, type SmBossEvent } from '../combat/saintmilionboss.ts';
 import { SPINNER_X, spinnerScale } from '../combat/saintmilion.ts';
 import { PLAYER_AIM_HEIGHT, PLAYER_RADIUS, TechBolt, type EnemyShot } from '../combat/enemyshots.ts';
@@ -1085,6 +1086,8 @@ export class CombatView {
             frames: this.motionFrames(instance, null),
             playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
             rng: () => this.rng(),
+            // The 0x2b phase 9 waits while the copies' slots hold living entities (FUN_004ce970).
+            extrasFree: () => this.golExtrasFree(head.index),
           });
         } else if (className === 'TBoss3Volopt') {
           // The control builds the arena: MovementData rows 33 (core), 34
@@ -2451,6 +2454,10 @@ export class CombatView {
         e.instance.root.visible = false;
         this.opts.log(`${what}: removed (state 0x17 children expired)`);
         return;
+      case 'extras':
+        // The 0x2b leave (exe 0x004cea04): the copies on the ring around the body.
+        void this.spawnGolExtras(e, ev.extras ?? []);
+        return;
       default:
         return;
     }
@@ -2461,7 +2468,94 @@ export class CombatView {
     e.dead = true;
     e.stats.hp = 0;
     if (this.lockOn === e) this.lockOn = null;
+    // A copy leaves the room when it dies (the derived update's flag 8 branch: 6x76 and removal).
+    if (e.ai instanceof GoldDragonAi && e.ai.derived) e.instance.root.visible = false;
     this.bossKilled(e, x, z, this.golLastHit, 'Gol Dragon');
+  }
+
+  // The copies of a Gol Dragon (exe 0x004cea04): slots body + 1 .. body + 5. A slot holding a living
+  // entity, or a copy still being built, is taken, so the 0x2b phase 9 waits (FUN_004ce970).
+  private golExtrasPending = new Set<number>();
+  private golExtrasFree(index: number): boolean {
+    if (this.golExtrasPending.has(index)) return false;
+    for (let k = 1; k <= GOL_EXTRA.count; k++) {
+      const other = this.enemies.get(index + k);
+      if (other && !other.dead) return false;
+    }
+    return true;
+  }
+
+  // Builds the copies of a 0x2b leave (exe 0x004cea04 -> 0x004cede4): the same model as the body (its
+  // geometry and materials are shared, see shareMeshResources), a derived brain (flag 0x40, no clamp).
+  // ASSUMED: a copy's hp is the body's maximum and it has no drop (rtIndex 0xff).
+  private async spawnGolExtras(head: EnemyRuntime, placements: readonly GolExtraPlacement[]): Promise<void> {
+    if (!(head.ai instanceof GoldDragonAi)) return;
+    const body = head.ai;
+    this.golExtrasPending.add(head.index);
+    try {
+      for (let k = 0; k < placements.length; k++) {
+        const index = head.index + 1 + k;
+        const p = placements[k]!;
+        const taken = this.enemies.get(index);
+        if (taken && !taken.dead) {
+          this.opts.log(`Gol Dragon E-${head.index.toString(16)}: slot E-${index.toString(16)} is taken, no copy`);
+          continue;
+        }
+        const placed = {
+          ...head.instance.placed,
+          entity: { ...(head.instance.placed.entity as EnemySet), index: -1 - index },
+          world: [p.x, head.instance.placed.world[1], p.z] as [number, number, number],
+          yaw: p.yaw * BAMS_TO_RAD,
+          name: 'Gol Dragon copy',
+        };
+        const instance = await this.layer.spawn(placed as typeof head.instance.placed, head.instance.spec);
+        if (!instance || this.disposed) return;
+        shareMeshResources(head.instance.root, instance.root);
+        const hp = body.maxHp;
+        const copy = new GoldDragonAi({
+          x: p.x,
+          z: p.z,
+          angle: placed.yaw,
+          ultimate: this.ultimate,
+          movement: null,
+          hp,
+          singleton: false,
+          derived: true,
+          leader: () => this.game.selfId === this.game.leaderId,
+          frames: this.motionFrames(instance, null),
+          playerHp: (id) => (id === this.game.selfId ? this.damage.hp : (this.party.get(id)?.hp ?? 0)),
+          rng: () => this.rng(),
+        });
+        copy.yaw = p.yaw;
+        const rt: EnemyRuntime = {
+          instance,
+          index,
+          slot: head.slot,
+          stats: { ...head.stats, hp, maxHp: hp },
+          exp: head.exp,
+          attacker: head.attacker,
+          attack: head.attack,
+          resist: head.resist,
+          esp: head.esp,
+          motions: head.motions,
+          rtIndex: 0xff,
+          dead: false,
+          state: 'idle',
+          removeIn: 0,
+          ai: copy,
+          lift: 0,
+          monest: null,
+          parent: null,
+          fake: null,
+          buffs: new EntityBuffs(),
+          status: new EnemyStatus(enemyAttribute(head.slot.type)),
+        };
+        this.enemies.set(index, rt);
+        this.opts.log(`Gol Dragon E-${head.index.toString(16)}: copy E-${index.toString(16)} spawned at (${p.x.toFixed(0)}, ${p.z.toFixed(0)})`);
+      }
+    } finally {
+      this.golExtrasPending.delete(head.index);
+    }
   }
 
   // A 6xA8 from the leader (handler 0x004cbe80, the sender applies its own).

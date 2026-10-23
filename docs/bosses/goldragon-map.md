@@ -31,10 +31,17 @@ Session 2026-10-23 (items of the open list):
   (case 4). The port removes the body after ~200 ticks (ASSUMED: the timers start at 0; the ctor's reset
   0x0057739c is not read). The render keeps ticking the brain after the kill until this removal.
 - Derived extras: ctor 0x004cede4 (base ctor 0x004cb480, vtable 0x00afbc20, flag 0x40, +0x682 = 0xffff
-  = no hit clamp, +0x2bc and +0x334 = the spawn's hp). Spawned by 0x004cea04 (the 0x2b leave, a fan of up
-  to 5 around the target, step 0x10000 / (n+1)). Their update 0x004cee30 differs from the base frame
-  (the pad control +0x1d7, the flag 8 branch: 6x76 and removal). Ported: the brain option `derived`
-  (sequence C, flag 0x40, no clamp). OPEN: the spawn, the render of the 5 bodies, the update's pad path.
+  = no hit clamp, +0x2bc and +0x334 = the spawn's hp). Spawned by 0x004cea04 from the 0x2b leave (case 5 of
+  0x004cb19c: `FUN_004cea04(+0xa48500 +0x28, +0xa48500 +0x24, +0x86c)`), a ring of radius 320 (0x00908a10)
+  around the centre: the body moves to angle h (+0x38 / +0x40 sin / cos, +0x60 = h + 0x8000), copy k
+  takes h + k * (0x10000 / (n+1)) with the same facing; ids body + k, only into free slots (FUN_00786b3c).
+  Their update 0x004cee30 differs from the base frame (the pad control +0x1d7, the flag 8 branch: 6x76 and
+  removal). Ported (2026-10-23): the brain option `derived` (sequence C, flag 0x40, no clamp), the 0x2b state
+  (phase 9 gate FUN_004ce970: the picks wait while body + 1..5 hold living entities), the leave's ring and
+  the copies' spawn (render/combat.ts spawnGolExtras, model geometry and materials shared with the body).
+  ASSUMED: count 5, the seed (the port derives it from the cursor), the copies' hp (= the body's max), no
+  drop, a copy dies at hp < 1 (its kill is bossKilled, the copy's model is hidden). OPEN: the pad path of
+  0x004cee30 (+0x1d7, DAT_00a485f8), the copies' own 0x004cee30 motion picks.
 - Kill gate 0x12008: the ctor reads the area table (DAT_00ab02b8, runtime, not readable) at the spawn's
   index (+0x2c short, stride 0xc); the bits 0x12008 all set put +0xf2 |= 8 (the entrance is skipped and
   the frame removes the body after 6x76). The leave of 0x15 sets the body's own +0xc = 0x12008 (in memory).
@@ -58,9 +65,9 @@ box flags (0x8003); the 6xA8 variant byte's use; the walk's step; the fireball i
 the cell life and power of the breath; the children's start timers; the 120-tick fallback for the states
 not modelled; the 0x08 breath's gates (50 + 400 frames, the exe's 450 total).
 
-OPEN (not ported): the derived extras' spawn and render (see above); the 4 children's other callers (the
+OPEN (not ported): the derived extras' pad path and their own frame (see above); the 4 children's other callers (the
 0x29 / 0x2a rates 0.08 / 0.00803 and the 0x27 / 0x28 busy checks); the other states of the table (0x01 pad,
-0x09, 0x0f, 0x12, 0x13, 0x18..0x1d, 0x1f..0x2b: fallback); the pad / dragon control (+0x1d7, DAT_00a485f8);
+0x09, 0x0f, 0x12, 0x13, 0x18..0x1d, 0x1f..0x2a: fallback); the pad / dragon control (+0x1d7, DAT_00a485f8);
 +0x680 (the 90 % loop, its reader not found); the rewards internals beyond 0x0051f894; the MovementData row
 and the model nodes; the breath table after ring 3.
 
@@ -418,7 +425,8 @@ does not write it (the slot is inherited; UNCLEAR).
   `+0xfb = 2`, `FUN_004c473c`, `+0xf2 = (f2 & ~7) | 0x30`, `vt+0x174`, `vt+0x180`; no
   `+0x2e` write. Leave: `FUN_004cea04`, `vt+0x178`, `vt+0x17c`. Phase 6:
   `FUN_004c7670(rand seed)`. Phase 7: `FUN_004c7644(+0x86c)`. Phase 9: if
-  `FUN_004ce970() != 0`, sequence pick (UNCLEAR gate). Partial.
+  `FUN_004ce970() != 0` (the slots body + 1..5 are free, decoded 2026-10-23), sequence pick.
+  Ported 2026-10-23 (gate 'extras', the leave's ring and copies). Partial.
 
 Action (send) codes seen: 0x03, 0x04, 0x05, 0x08, 0x09, 0x0d, 0x0f, 0x13, 0x15, 0x16,
 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x25, 0x26 (plus the sequence codes above).

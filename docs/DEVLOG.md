@@ -9490,3 +9490,25 @@ Question: the egg dot (particle 0x9f, egg_bullet) looks small and purple in Chro
 - effect_nt metadata for slot 35 (blend flags +0x0, frame count +0xc, UV list +0x10, per-axis half size +0x14 / +0x18) is built at run time, not read from the file. If its frame count is above 1, the exe draws one UV frame per particle, cycling by age (texture_flags 0x10 clear), and the port draws the whole 64 x 64 texture. Not checked.
 - The spawn offset: the exe spawn is `(rand / g_ParticleRandomNorm + g_ParticleRandomOffset) * variation + pos`, and the .data values read at 0x920440 / 0x920444 are 32768 and +0.5. The port uses `(rand - 0.5) * variation`. The egg has variation 0, so it does not affect this effect. ASSUMED: the addresses are right; the sign was not confirmed in another read.
 - Sprite path (render/hitfx.ts, `FieldParticles.draw`): the sprite is sized in world units (2 x half x size), and the on-screen size depends on the viewer camera (60 degrees vertical in render/mapviewer.ts), not on the exe focal D = 437.44. Not compared in Chrome.
+## 2026-10-23 - Gol Dragon: the extras (copies) spawn at the 0x2b leave and render
+
+Decoded from PsoBB.exe (Ghidra decompile of 0x004cb154 / 0x004cb19c / 0x004cea04 / 0x004cede4 / 0x004cee30 / 0x004ce35c / 0x004ce970, objdump of the 0x2b case, `tools/exedata.py calls`); the JP decomp (`dirty_functions.jsonl`, names `SpawnSinowberillSubEntities` / `SinowberillSubEntity_Constructor`) matches by callees and constants. The names there are community guesses; the code is the Gol's.
+
+Exe evidence:
+- The 0x2b state (sequence B, cursor 0x35). Its leave (case 5 of 0x004cb19c) calls `FUN_004cea04(count, hp, seed)` with count = `[+0xa48500 +0x28]`, hp = `[+0xa48500 +0x24]`, seed = `[body +0x86c]`. The phase 9 pick runs only while `FUN_004ce970() != 0`, i.e. while the slots body + 1..5 hold no entity.
+- Placement (0x004cea04): the body (`FUN_00786b3c(body id)`) takes sin / cos of h times 320 (`_DAT_00908a10`) into +0x38 / +0x40 and yaw h + 0x8000 into +0x60. Copy k takes h + k * (0x10000 / (count + 1)), the same facing, y = the body's. Each goes through `FUN_004ce35c` (its id body + k must be free) and the derived ctor 0x004cede4 (base ctor 0x004cb480, vtable 0x00afbc20, flag 0x40, +0x682 = 0xffff, hp at +0x2bc and +0x334).
+- The derived update 0x004cee30: the flag 8 branch runs 6x76 (`FUN_008113e4`) and removes the copy. The pad path (+0x1d7) is not ported.
+
+Ported (`client/src/combat/goldragon.ts`):
+- State 0x2b: gate `extras` (passes while the copies' slots are free), leave emits `extras` (the ring, `golExtraRing`) and moves the body onto it.
+- Copies: `GoldDragonAi` with `derived` (sequence C, no clamp), a copy dies at hp < 1 (one `killed`), then it is hidden.
+
+Ported (`client/src/render/combat.ts`, `render/dispose.ts`):
+- `spawnGolExtras`: each copy is built by `layer.spawn` with the body's spec, its geometry and materials are shared with the body (`shareMeshResources`, the copy's own are released), it is an enemy at body + k with the body's stats and model; the copies are dropped with the floor (the enemy layer clears its root).
+- `golExtrasFree` feeds the 0x2b gate; pending copies also hold the gate.
+
+ASSUMED: count 5 (the exe's fan cap and the 1 + 5 slots of enemyids.ts), the seed (the exe draws it on the leader in 0x2b phase 6; the port derives it from the cursor so the clients match), the copies' hp (= the body's max), no drop (rtIndex 0xff), the copy's kill (bossKilled), the copies' own motion picks, and the h-to-BAMS mapping of the seed (the exe takes it from a random 16-bit draw). UNCLEAR: the pad path of 0x004cee30 and whether the body's death removes its copies (not decoded).
+
+Not verified in the browser: the e2e (`client/e2e/goldragon-smoke.spec.ts`) was not extended (the 0x2b state comes at sequence cursor 0x35, too late for the smoke run's time limit).
+
+Checks: `node tests/goldragon.test.ts` ok (new: the ring radius, yaw and step; the 0x2b hold, the leave's single emit and the body on the ring; a copy's death once). `tests/dragon.test.ts` ok, `tests/combat.test.ts` 5946 checks 0 failures (with `vendor/newserv` linked), `tests/combatdepth.test.ts` 824 checks 0 failures, `npx tsc --noEmit -p .` clean.

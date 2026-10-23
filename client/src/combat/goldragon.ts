@@ -96,6 +96,7 @@ export const GOL_STATE = {
   death: 0x15,
   corpse: 0x16,
   children: 0x17,
+  attack2b: 0x2b,
   entrance: 0x1e,
   dash: 0x26,
   flank: 0x27,
@@ -107,7 +108,16 @@ export const GOL_STATE = {
 // when the lunge's profile is done, 'never' holds the state (no transition).
 // 'near' passes when the body is within r of the arena centre (the phase 9 pick of 0x10 / 0x11,
 // exe 0x004c42a8 case 9: FUN_007828e4 < 50.0).
-export type GolGate = { kind: 'now' } | { kind: 'frames'; n: number } | { kind: 'motion' } | { kind: 'dash' } | { kind: 'never' } | { kind: 'near'; r: number } | { kind: 'children' };
+// 'extras' passes while the 5 extra slots (body + 1 .. 5) are free (the phase 9 of 0x2b: FUN_004ce970 != 0).
+export type GolGate =
+  | { kind: 'now' }
+  | { kind: 'frames'; n: number }
+  | { kind: 'motion' }
+  | { kind: 'dash' }
+  | { kind: 'never' }
+  | { kind: 'near'; r: number }
+  | { kind: 'children' }
+  | { kind: 'extras' };
 
 export interface GolStateDef {
   readonly name: string;
@@ -161,6 +171,9 @@ export const GOL_STATES: Readonly<Record<number, GolStateDef>> = {
   // 0x004c5dd4: enter motion 0x13 (slot 19), the 4 children's rates 0.005; no pick. The exit is the children's
   // timers (frameState): the first child that expires sets the body's +8 bit 0 (removed, see GolChild).
   0x17: D('children', 19, [{ kind: 'children' }], 'none', 'exe', 0x136),
+  // 0x004cb19c case 4 (enter: f2 = f2 & ~7 | 0x30), case 5 (leave: the extras, see extraRing), phase 9 gated by
+  // the free extra slots (FUN_004ce970). Sequence B holds it at cursor 0x35.
+  0x2b: D('attack 2/0xb', null, [{ kind: 'extras' }], 'seq', 'exe', 0x30, 0x07),
   0x1e: D('entrance', 26, [{ kind: 'motion' }, { kind: 'frames', n: 1 }], 0, 'map'), // 0x004c5eb0: slot 26 = bossopgc; sub 1 sends 0 (the map's death-cinematic name is wrong)
   0x26: D('dash', 2, [{ kind: 'frames', n: 60 }], 'seq', 'ASSUMED'), // 0x004c99dc (map): profile ends at +0x878 >= 680 (ASSUMED 60 frames)
 };
@@ -175,7 +188,7 @@ function stateDef(sid: number): GolStateDef {
 }
 
 // The sequences (exe): A at cursor 0..0x31 (table 0x009088c0), B at 0x32.. (0x00908160),
-// C (0x009080e0) only with the derived extras (flag 0x40, not ported: unused here).
+// C (0x009080e0) only with the derived copies (flag 0x40, see golNext's derived flag).
 export const GOL_SEQ_A: readonly number[] = [3, 39, 40, 41, 42, 3, 5, 6, 35, 8, 0x21];
 export const GOL_SEQ_B: readonly number[] = [5, 6, 15, 43, 19, 8, 39, 40, 3, 5, 6, 35, 8, 3, 2, 41, 42, 39, 40, 3, 5, 6, 35, 8, 39, 40, 3, 2, 0x22];
 export const GOL_SEQ_C: readonly number[] = [19, 8, 39, 40, 3, 39, 40, 3, 2, 3, 39, 40, 5, 6, 35, 8, 3, 5, 6, 35, 8, 2, 3, 5, 6, 15, 22, 0x21];
@@ -309,6 +322,33 @@ export class GolChild {
 }
 export const GOL_CHILD_RATE = 0.005;
 
+// --- the derived extras (exe 0x004cb19c case 5 -> 0x004cea04 -> 0x004cede4) -----------
+
+// The 0x2b leave: the body and its copies go on a ring of radius 320 (0x00908a10) around the arena centre.
+// The body takes the seed's angle h (sin / cos of the BAMS angle into +0x38 / +0x40, yaw h + 0x8000 into +0x60);
+// the copy k (1..count) takes h + k * (0x10000 / (count + 1)) (the exe's int step) and the same facing.
+// ASSUMED: count 5 (the exe caps the fan at 5 and enemyids.ts reserves body + 1..5 for the Gol entry), the
+// seed is the port's deterministic value (the exe draws it on the leader in 0x2b phase 6, not sent).
+export const GOL_EXTRA = { count: 5, radius: 320 } as const;
+export interface GolExtraPlacement {
+  x: number;
+  z: number;
+  // BAMS, as the body's yaw.
+  yaw: number;
+}
+export function golExtraRing(seed: number, count = GOL_EXTRA.count): { body: GolExtraPlacement; extras: GolExtraPlacement[] } {
+  const h0 = seed & 0xffff;
+  const step = Math.trunc(0x10000 / (count + 1));
+  const at = (h: number, r: number): GolExtraPlacement => ({ x: sinB(h) * r, z: cosB(h) * r, yaw: (h + 0x8000) & 0xffff });
+  const extras: GolExtraPlacement[] = [];
+  let h = h0;
+  for (let k = 0; k < count; k++) {
+    h += step;
+    extras.push(at(h, GOL_EXTRA.radius));
+  }
+  return { body: at(h0, GOL_EXTRA.radius), extras };
+}
+
 // --- the breath (exe 0x004cab30 sub 0 -> 0x004cfc08 -> flame object 0x004d02a4 / vtable 0x00afc0c8) --------
 
 // The lattice of the flame (exe 0x00908c00, read in full): one ring of (z index, x index) pairs per frame, the
@@ -378,7 +418,9 @@ export class GolBreath extends EnemyShot {
 export interface GolEvent {
   // The 6xA8 the leader sends (sendGolAction) or a sound.
   // 'gone': the body is removed (the children's exit, or a gone spawn); 'effect': FUN_0041a874's effect 0xe0 at the body.
-  kind: 'send' | 'se' | 'killed' | 'particle' | 'emitter' | 'gone' | 'effect';
+  // 'extras': the 0x2b leave's copies (the renderer spawns them, see extras).
+  kind: 'send' | 'se' | 'killed' | 'particle' | 'emitter' | 'gone' | 'effect' | 'extras';
+  extras?: GolExtraPlacement[];
   state?: number;
   variant?: number;
   cursor?: number;
@@ -408,6 +450,8 @@ export interface GolOptions {
   gone?: boolean;
   // The derived extras (ctor 0x004cede4, vtable 0x00afbc20): flag 0x40 (sequence C), no hit clamp (+0x682 = 0xffff).
   derived?: boolean;
+  // The phase 9 gate of 0x2b (FUN_004ce970): true while the copies' slots are free. Default: free.
+  extrasFree?: () => boolean;
 }
 
 // Flag bits of +0xf2 the port reads: 0x10 (the roar gate below cursor 0x32), 0x20 (the
@@ -444,6 +488,9 @@ export class GoldDragonAi extends BrainBase {
   private walkVz = 0;
   // The body is removed (+8 bit 0): the children expired, or the spawn is gone.
   private removed = false;
+  // The 0x2b seed (the exe's +0x86c, drawn in phase 6 of 0x2b), and whether the death kill of a copy went out.
+  private extraSeed = 0;
+  private killedCopy = false;
   // ASSUMED from the area table (see GolOptions.gone): the body is removed on its first tick.
   private readonly gone: boolean;
   private hitFlag = false;
@@ -569,6 +616,9 @@ export class GoldDragonAi extends BrainBase {
       this.burrowTick = 0;
     }
     if (sid === GOL_STATE.children) for (const c of this.children) c.rate = GOL_CHILD_RATE;
+    // ASSUMED seed: the exe's phase 6 draws it on the leader (FUN_004c7670); the port derives it from the
+    // sequence cursor so every client builds the same ring.
+    if (sid === GOL_STATE.attack2b) this.extraSeed = (Math.imul(this.cursor, 0x9e37) ^ 0x5a5a) & 0xffff;
     if (d.slot !== null) this.setSlot(d.slot);
     if (d.f2set !== undefined) this.flags |= d.f2set;
     if (d.f2clear !== undefined) this.flags &= ~d.f2clear;
@@ -584,6 +634,15 @@ export class GoldDragonAi extends BrainBase {
     if (sid === GOL_STATE.death && !this.killedSent) {
       this.killedSent = true;
       this.emit({ kind: 'killed', x: this.x, z: this.z });
+    }
+    // Phase 5 of 0x2b (exe 0x004cb19c case 5): FUN_004cea04(+0xa48500 +0x28 count, +0x24 hp, seed). The body
+    // takes its ring place (FUN_004cea04 writes the body's +0x38 / +0x40 / +0x60) and the copies are spawned.
+    if (sid === GOL_STATE.attack2b) {
+      const ring = golExtraRing(this.extraSeed);
+      this.x = ring.body.x;
+      this.z = ring.body.z;
+      this.yaw = ring.body.yaw;
+      this.emit({ kind: 'extras', extras: ring.extras });
     }
   }
 
@@ -729,6 +788,9 @@ export class GoldDragonAi extends BrainBase {
       case 'near':
         pass = Math.hypot(this.x, this.z) < g.r;
         break;
+      case 'extras':
+        pass = this.opts.extrasFree ? this.opts.extrasFree() : true;
+        break;
       case 'children':
         pass = this.removed;
         break;
@@ -824,6 +886,14 @@ export class GoldDragonAi extends BrainBase {
     this.last = targets;
     if (this.gone && !this.dead) this.remove();
     if (this.dead) return this.finish0(out);
+    // A copy (derived) has no clamp, so it dies at hp < 1 (ASSUMED: the exe's generic death of a hit entity, flag 8,
+    // then the derived update's 6x76 and removal, 0x004cee30). The kill is the same bossKilled path as the body's.
+    if (this.derived && this.hp < 1 && !this.killedCopy) {
+      this.killedCopy = true;
+      this.dead = true;
+      this.emit({ kind: 'killed', x: this.x, z: this.z });
+      return this.finish0(out);
+    }
     const leaderNow = this.opts.leader();
     // The hit clamp (update 0x004cbf68, exe): while the cursor is below 0x32 a hit
     // cannot take hp under the clamp (+0x682).
