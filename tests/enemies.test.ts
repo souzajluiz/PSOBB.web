@@ -247,6 +247,13 @@ for (const [bml, nodes] of [['bm_ene_re7_berura.bml', BELRA.handNode], ['bm_ene_
     check(!!byName('Morfos body') && !!byName('Morfos wall') && !!byName('Morfos arm'), 'Morfos: body, wall and arm groups');
     check(byName('Morfos arm')?.visible === false, 'Morfos: the arm starts hidden');
     check(b.animators.length === 2 && b.animatedParts[1]?.ownMotion === true, 'Morfos: the arm has its own animator (ownMotion)');
+    // The arm's place (0x00579f3c): body node 10 is read from the body's node list,
+    // which counts every object of kabe_body.nj depth first (45 objects).
+    const bodyNodes = b.partNodes[0] ?? [];
+    check(bodyNodes.length === 45, `Morfos: body node list ${bodyNodes.length} (want 45, depth first)`);
+    check(!!bodyNodes[6] && !!bodyNodes[10], 'Morfos: body nodes 6 (muzzle) and 10 (arm) exist');
+    // The tree shape the dump gave: 10 under 8, 8 under 7, 7 under 6 (6 under the root).
+    check(bodyNodes[10]?.parent === bodyNodes[8] && bodyNodes[8]?.parent === bodyNodes[7] && bodyNodes[7]?.parent === bodyNodes[6], 'Morfos: node 10 hangs under 8, 7 and 6 (depth first)');
     const uvBody = byName('Morfos body')?.userData.uvOffsets as Map<number, { x: number; y: number }> | undefined;
     const uvWall = byName('Morfos wall')?.userData.uvOffsets as Map<number, { x: number; y: number }> | undefined;
     check(!!uvBody?.get(2) && uvBody.get(2)!.x === 0 && uvBody.get(2)!.y === 0, 'Morfos: body texture 2 has a zero UV handle');

@@ -53,7 +53,7 @@ import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi,
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
-import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
+import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
@@ -4490,6 +4490,7 @@ export class CombatView {
       else if (child.name === 'Morfos arm') {
         const armOut = ai.armOut && !hidden;
         child.visible = armOut;
+        if (armOut) this.morfosArmPlace(e, child);
         if (armOut && !this.morfosArmStarted.has(e)) {
           this.morfosArmStarted.add(e);
           const i = e.instance.parts.findIndex((p) => p.name === 'Morfos arm');
@@ -4504,6 +4505,29 @@ export class CombatView {
         } else if (!armOut) this.morfosArmStarted.delete(e);
       }
     }
+  }
+
+  private readonly morfosVec = new THREE.Vector3();
+
+  // The arm's place (0x0057cd3c: its +0x38 is the parent's +0x4ac, which the
+  // body's draw writes: 0x00579f3c stores the world origin of body node 10
+  // (MORFOS.armNode, counted depth first over the body's objects, the body
+  // being the enemy's first part) into the parent's +0x4ac while it draws).
+  // The capture happens in the draw, so the arm takes the pose of the previous
+  // frame: morfosView runs before this frame's motion is applied. The arm's
+  // root is the enemy root's child, so the world point goes to the root's
+  // local space; the arm's yaw is the root's (0x0057cc3c / 0x0057cd9c: translate
+  // to the point, turn by the parent's yaw). ASSUMED: the capture reaches the
+  // arm through the same frame order the port uses.
+  private morfosArmPlace(e: EnemyRuntime, arm: THREE.Object3D): void {
+    const node = e.instance.nodes?.[0]?.[MORFOS.armNode];
+    if (!node) return;
+    const root = e.instance.root;
+    root.updateMatrixWorld(true);
+    const v = this.morfosVec;
+    node.getWorldPosition(v);
+    root.worldToLocal(v);
+    arm.position.copy(v);
   }
 
   private epsilonLook = new Map<EnemyRuntime, number>();
