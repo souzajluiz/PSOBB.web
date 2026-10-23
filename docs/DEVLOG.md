@@ -10099,3 +10099,40 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The mag's DEF / POW / DEX / MIND labels stay plain text (no group 11 label; ASSUMED, as before).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` (all passed), `node tests/items.test.ts` (98/98), `node tests/itemmodels.test.ts` (all pass), `node tests/shop.test.ts`, `node tests/tekker.test.ts`, `node tests/magfeed.test.ts`, `node tests/medical.test.ts`, `node tests/level.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+## 2026-10-23: The Star Atomizer (6x66: a full heal of the living, not a revive) and the 0x1d object (the Reverser's TechniqueEntity)
+
+**Report:** the Star Atomizer (03 05 00) now sends its 6x66 and receives one. The exe's 6x66 does not revive: it heals each listed player that is alive to its max HP (the dead are skipped). The 0x1d object of the 6x33 is the Reverser's TechniqueEntity (the same constructor and data), so it is drawn with the Reverser's visual (a draw-only object, no hit). The 6x66 does not make a 0x1d object; it plays the particles 0x19 and 0xc2.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13 dump; Ghidra via `tools/ghidra/decomp.sh`, names from `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, byte checks with `exedata.py`, call sites with objdump):**
+- Use: the item's use thunk at `0x005df314` (`pushl 0xf8(%ecx)`: the owner, then `call 0x005de664`; the item's vtable entry, the Moon's is `0x005deb74`). `SinowberillChallengePlayer_Process_0068be94` (`0x0068be94`) has no branch for subclass 5 (the chain tests 0, 1, 6, 3, 4, 7), so it returns 1: the 6x27 is sent for the Star with no record check (the Moon's case 4 is the only one with a record).
+- `0x005de664` (the dump names it `HandlePlayerUnequipAction_005de664`; the body is the Star's send): the local player only (`FUN_007ba9d8`: owner +0x1c == `DAT_00a9c4f4`), owner +0x45c != 0, `FUN_007a401c(4,10)`; then `checked_call(move_start|unequip_item = 0x40|0x26 = 0x66, size 3)` with `[0x66, 3, 0, player_idx, +0xa0, +0xac, +0xb8]` (the record's three targets, the named dump's `local_a/local_8/local_6`). No target check: a record with -1 targets still sends. No record: nothing sent (the 6x27 is sent first and the item is used up).
+- The packet is newserv's `G_UseStarAtomizer_6x66` (`vendor/newserv/src/CommandFormats.hh:4589`, 0x0C bytes: the header, then `target_client_ids[4]` at +4..+10). The caster is target 0.
+- 6x66 receive: handler `0x005de5a4` (table entry type 0x66, perm 6; `g_Packet0x60SubcommandTable` at `0x00a0fba0`). It needs `FUN_0068d5a8(list[0])` (the caster) valid, then for the four slots: a valid player, `is_dead()` (player_vtable slot 35, offset 0x8c) == 0 (alive), and the same `+0x3f0` as the caster (the area). Then `ClampEntityHP_00770b58(player, max_hp)` (`max_hp` = `+0x2bc`, `battle.h`): HP = max. Then `FUN_00807d60` (the current map is not in {0, 15, 18, 45}, the hubs of table `0x0097f1c8`: an unsafe map) gates `create_particle_effect` (`FUN_0050b510`): 0x19 on slot 0 (the caster), then 0xc2 on each.
+- 0x33 receive `FUN_0069a1e0` (unchanged from the earlier entry): `CreateTechniqueEntity_006ef8a4(sender, sender + 0x38, [target, 0xffff ...], 0x1d)`. The constructor `TechniqueEntity_Constructor_006ef91c` always reads `technique_data_array[0x11]` (17 = Reverser, `TECH.reverser`), and its last argument goes to `AccumulateEffectParams_006de5d4` (`0x006de5d4`: power += the level). So 0x1d is the level 29 of the Reverser's own object, not an effect-table index (the earlier entry's reading was wrong). The Reverser's own cast passes `CalculateEffectiveTechniqueLevel` through the same constructor, so the object is shared.
+- `NotifyNearbyPlayersUnequip_005de6d8` builds the same 0x66 shape (the caster first, then the other client ids in order, 0xFFFF when absent or out of range, by squared XZ distance; its wrapper `0x005ddfe0` pushes 10000.0 = 100 units). Its item is not identified; it does not fill record (4,10), so it is only the shape.
+
+**Ported:**
+- `client/src/net/items.ts`: `buildStarAtomizer(list)` (6x66, 12 bytes; the caster at +4 and the three others at +6..+10); `use` on subclass 5 sends 6x66 after the 6x27 when the rules give a list (`starTargets`), no list = nothing sent (the item is still used up, as the exe's Process does not refuse it). `use` on subclass 4 also runs the local echo of its 6x33 (`atomizerEcho`).
+- `client/src/net/game.ts`: `parseStarAtomizer(body)` (the four ids, 12 bytes, type 0x66).
+- `client/src/combat/buffs.ts`: `nearbyAtomizerList(self, pos, range)` (the caster first, then the other client ids in order, `NO_CLIENT` for absent / out of range; null with no position for the caster).
+- `client/src/render/combat.ts`:
+  - `starTargets()` (the list at range `ATOMIZER_RANGE` = 10), `atomizerEcho(packet)` (the sender's own 6x33 / 6x66, as the exe's checked_call runs the table handler for the sender).
+  - `receiveAtomizer(packet)`: the one place for 6x33 and 6x66, from the wire and the echo.
+  - `onRevivePlayer(sender, target)`: a valid sender and target make the object (`castObjects(TECH.reverser, 0x1d, 10, sender, [target], false)`: the Reverser's visual, draw only); the target that is this client and dead is revived (`reviveSelf`, as before).
+  - `onStarAtomizer(list)`: the caster valid; each listed player that is present and not dead gets HP = max (self: `damage.hp`; a remote player: `party.refill`); on an unsafe map 0x19 (slot 0) and 0xc2 at the body (`CAST_HEIGHT` above the position).
+- `render/fieldhud.ts`, `render/gameview.ts`, `ui/onlineTab.ts`: the `starTargets` and `atomizerEcho` rules.
+- `tests/returnprompt.test.ts` (62/62): the 6x66 bytes, `parseStarAtomizer`, `nearbyAtomizerList`, the Star's send (6x27 then 6x66 with the four ids, the local echo), no record (6x27 only, used up), the Moon's local echo (the 6x33 bytes, once).
+
+**The 0x1d visual:** the port's Reverser visual (`render/techlightning.ts` `support`, the 'reverser' case) is the SE 0x99 at the caster and no particle, so the 0x1d object shows that and nothing more. The exe's TechniqueEntity model (the Reverser's `PhysicalEffectEntity` draw) was not decoded: not ported.
+
+**ASSUMED / UNCLEAR:**
+- The record (4,10)'s filler: self plus the three others in range 10, in client id order (the `NotifyNearbyPlayersUnequip` shape). The filler and its radius were not traced; the 10000 (100 units) of that wrapper was not attributed to the Star, so it is not used.
+- The same-area test (`+0x3f0`) holds for every listed player (the port has one game's players); the particle height (`CAST_HEIGHT`) is the port's, not the exe's `+0xc0` point.
+- The local echo: the sender runs its own 6x33 / 6x66 effects (the exe's checked_call). The server is not expected to echo the sender's own packet, so the port does not get it twice.
+- The 6x33 object's gate: the shield flag (`+0x33c & 4`) is not read (the port has no such state); the object is made for any present sender and target.
+- The item is used up on the Star as on the other tools (the consumption path not traced).
+- The 6x66 "dead skipped" test is `is_dead()` (vtable +0x8c); the dead player's revive is not done by the Star (no 6x4F, no revive state).
+
+**Corrections to the earlier entries:** the 6x66 is not a revive and does not spawn 0x1d (the Moon's 6x33 does); the Star's sending side is ported above; the 0x1d argument is the Reverser's level 29, not an effect-table index.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/returnprompt.test.ts` 62/62, `node tests/items.test.ts` (with the worktree's `vendor` linked to the main checkout's, for the newserv tables) all pass, `node tests/techniques.test.ts`, `node tests/combatdepth.test.ts` (826 checks), `node tests/party.test.ts` (28/28), `node tests/fieldhud.test.ts`, `node tests/playerfx.test.ts`, `node tests/buffs.test.ts` pass. Not run: Playwright / Chrome (per the brief).

@@ -125,7 +125,7 @@ import {
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
-import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { inUnsafeMap, slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
@@ -164,6 +164,7 @@ import {
   parseGiveExp,
   parseHitByEnemy,
   parsePlayerDeath,
+  parseStarAtomizer,
   parseRevivePlayer,
   parseStatusEffect,
   parseTechLevelOverride,
@@ -214,6 +215,14 @@ const buffName = (type: number): string => ({ 9: 'Shifta', 10: 'Deband', 11: 'Je
 const SE_CUTOFF = 300;
 // The Moon Atomizer's object range (FUN_0069a1e0: 0x41200000 = 10.0).
 const ATOMIZER_RANGE = 10;
+// The 6x33 object: CreateTechniqueEntity_006ef8a4(sender, pos, [target], 0x1d). The
+// constructor takes the Reverser's data (technique_data_array[0x11]) whatever the
+// caller, and 0x1d is the level AccumulateEffectParams adds to its power (29).
+const ATOMIZER_OBJECT_LEVEL = 0x1d;
+// The 6x66 particles (FUN_005de5a4 -> FUN_0050b510 create_particle_effect): 0x19 on
+// the caster, 0xc2 on each player it heals; on an unsafe map only (FUN_00807d60).
+const STAR_CASTER_PARTICLE = 0x19;
+const STAR_TARGET_PARTICLE = 0xc2;
 
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 
@@ -6460,6 +6469,68 @@ export class CombatView {
     return this.reverserTarget(ATOMIZER_RANGE);
   }
 
+  // The Star Atomizer's 6x66 list (FUN_005de664 on record (4,10)): the caster,
+  // then the three others in range (ASSUMED filler, combat/buffs.ts). Null when
+  // there is no position for the caster.
+  starTargets(): number[] | null {
+    const positions = this.view?.playerPositions();
+    if (!positions) return null;
+    return nearbyAtomizerList(this.game.selfId, (id) => positions.get(id), ATOMIZER_RANGE);
+  }
+
+  // The local dispatch of a 6x33 / 6x66 this client sent (checked_call_packet0x60_subcommand
+  // runs the table handler for the sender too): the same effects as a received one.
+  atomizerEcho(packet: Uint8Array): void {
+    this.receiveAtomizer(packet);
+  }
+
+  // Whether a client id is a player of this game (self included).
+  private isPresent(id: number): boolean {
+    return id === this.game.selfId ? !!this.view?.playerPositions().get(id) : this.game.players.has(id);
+  }
+
+  // 6x33 (FUN_0069a1e0): a valid sender and target make a Reverser-type object
+  // (0x1d) at the sender with the target as its one target; the target that is
+  // this client, while dead, is revived (the object's hit is the Reverser's revive,
+  // ASSUMED). The object is drawn as the Reverser's (castObjects, draw only).
+  private onRevivePlayer(sender: number, target: number): void {
+    if (!this.isPresent(sender) || !this.isPresent(target)) return;
+    this.castObjects(TECH.reverser, ATOMIZER_OBJECT_LEVEL, ATOMIZER_RANGE, sender, [target], false);
+    if (target === this.game.selfId && this.damage.dead) this.reviveSelf(`player ${sender}'s Moon Atomizer`);
+  }
+
+  // 6x66 (FUN_005de5a4): the caster (list[0]) must be a player. Each listed player
+  // that is not dead gets its HP set to its max (ClampEntityHP_00770b58 with max_hp1:
+  // a full heal, not a revive: the dead are skipped). On an unsafe map the caster
+  // gets 0x19 and each healed player 0xc2 (create_particle_effect at its body).
+  // ASSUMED: the same-area test (+0x3f0) holds for every listed player.
+  private onStarAtomizer(list: readonly number[]): void {
+    const caster = list[0];
+    if (caster === undefined || caster === NO_CLIENT || !this.isPresent(caster)) return;
+    const unsafe = inUnsafeMap(this.area);
+    list.slice(0, 4).forEach((id, i) => {
+      if (id === NO_CLIENT || !this.isPresent(id) || this.isPlayerDead(id)) return;
+      if (id === this.game.selfId) this.damage.hp = this.damage.maxHp;
+      else this.party.refill(id);
+      const p = this.view?.playerPositions().get(id);
+      if (!unsafe || !p) return;
+      const at = new THREE.Vector3(p.x, p.y + CAST_HEIGHT, p.z);
+      if (i === 0) this.particle({ id: STAR_CASTER_PARTICLE }, at);
+      this.particle({ id: STAR_TARGET_PARTICLE }, at);
+    });
+  }
+
+  // The Atomizers' packets (6x33 and 6x66), from a received subcommand or the local echo.
+  private receiveAtomizer(packet: Uint8Array): void {
+    const revive = parseRevivePlayer(packet);
+    if (revive) {
+      this.onRevivePlayer(revive.clientId, revive.target);
+      return;
+    }
+    const list = parseStarAtomizer(packet);
+    if (list) this.onStarAtomizer(list);
+  }
+
   // unknown_cast_tech through render/techlightning.ts TechObjects, for the local
   // release and for another player's 6x48 (those draw only: their damage comes
   // from their own client's 6x0A).
@@ -7320,12 +7391,9 @@ export class CombatView {
       if (clientId !== this.game.selfId) this.showSoul(clientId, true);
       return;
     }
-    // 6x33 (Moon Atomizer): FUN_0069a1e0 spawns a Reverser-type object at the
-    // sender with the revived player as its one target (range 10); its hit on the
-    // target is the Reverser's revive. ASSUMED: the object's hit is that revive.
-    if (sub === 0x33) {
-      const r = parseRevivePlayer(body);
-      if (r && r.target === this.game.selfId && this.damage.dead) this.reviveSelf(`player ${r.clientId}'s Moon Atomizer`);
+    // 6x33 (Moon Atomizer) and 6x66 (Star Atomizer): see receiveAtomizer.
+    if (sub === 0x33 || sub === 0x66) {
+      this.receiveAtomizer(body);
       return;
     }
     if (sub === 0x4f) {

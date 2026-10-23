@@ -99,6 +99,10 @@ export interface FieldHudOptions {
   statusFlags?: () => number;
   // The Moon Atomizer's target (render/combat.ts atomizerTarget), null when none.
   atomizerTarget?: () => number | null;
+  // The Star Atomizer's 6x66 list (render/combat.ts starTargets), null when none.
+  starTargets?: () => readonly number[] | null;
+  // The local echo of a sent 6x33 / 6x66 (render/combat.ts atomizerEcho).
+  atomizerEcho?: (packet: Uint8Array) => void;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // Sends a command to the game server (the Options window's 0x01ED).
@@ -302,6 +306,8 @@ export class FieldHud {
       telepipe: () => this.opts.telepipeAllowed?.() ?? false,
       statusFlags: () => this.opts.statusFlags?.() ?? 0,
       atomizerTarget: () => this.opts.atomizerTarget?.() ?? null,
+      starTargets: () => this.opts.starTargets?.() ?? null,
+      atomizerEcho: (packet: Uint8Array) => this.opts.atomizerEcho?.(packet),
     };
   }
 

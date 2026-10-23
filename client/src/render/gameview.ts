@@ -197,6 +197,8 @@ export class GameView {
       telepipeAllowed: () => this.telepipes.allowed(),
       statusFlags: () => this.combat.status.flags,
       atomizerTarget: () => this.combat.atomizerTarget(),
+      starTargets: () => this.combat.starTargets(),
+      atomizerEcho: (packet) => this.combat.atomizerEcho(packet),
       send: (command, payload) => game.conn.send(command, 0, payload),
       minimap: {
         self: () => this.minimapPlayer(this.game.selfId),

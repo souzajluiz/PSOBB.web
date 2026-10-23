@@ -190,6 +190,25 @@ export function reviveRestore(maxHp: number, maxTp: number, opts: { quest: boole
   return { hp: Math.max(1, maxHp), tp: maxTp };
 }
 
+// The Star Atomizer's 6x66 targets (FUN_005de664 on the targeting record (4,10):
+// its +0xa0 / +0xac / +0xb8 slots after the caster). The packet's four u16 slots
+// at +4..+10 are the caster, then up to three other players, 0xFFFF when none.
+// ASSUMED: the record's filler is the nearby pick of NotifyNearbyPlayersUnequip_005de6d8
+// (the caster first, then the other client ids in order, 0xFFFF when absent or
+// out of range), at the Atomizers' range of 10 (the filler's radius is not traced).
+export const NO_CLIENT = 0xffff;
+export function nearbyAtomizerList(self: number, pos: (id: number) => { x: number; z: number } | undefined, range: number): number[] | null {
+  const me = pos(self);
+  if (!me) return null;
+  const list = [self];
+  for (let id = 0; id < 4; id++) {
+    if (id === self) continue;
+    const p = pos(id);
+    list.push(p && Math.hypot(p.x - me.x, p.z - me.z) < range ? id : NO_CLIENT);
+  }
+  return list;
+}
+
 // The level a remote technique object runs at (action_launch_tech): the 6x48
 // level, plus the last 6x8D level_upgrade when it is 14.
 export function remoteTechLevel(sent: number, override: number): number {
