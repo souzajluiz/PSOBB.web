@@ -154,7 +154,7 @@ import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
-import { pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
+import { applyHpModification, nearestTargets, pvpInReach, pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import {
   parseAttack,
@@ -5681,6 +5681,25 @@ export class CombatView {
     return targets;
   }
 
+  // Battle Mode: the remote players a melee strike reaches (combat/pvp.ts pvpInReach, the
+  // enemies' cone and range), nearest first with their squared distance. None outside the battle
+  // phase (no friendly fire in the field), and not a dead remote (its death marker is up).
+  private pvpTargetsInReach(attackType: AttackType, from: { x: number; y: number; z: number }): Array<{ id: number; d: number }> {
+    const me = this.game.self;
+    const view = this.view;
+    if (!this.battlePvp || !me || !view) return [];
+    const range = this.weaponRange(attackType);
+    const maxDist = range.horizontal + range.vertical;
+    const halfAngle = range.horizontalHalfAngle * BAMS_TO_RAD;
+    const out: Array<{ id: number; d: number }> = [];
+    for (const [id, p] of view.playerPositions()) {
+      if (id === this.game.selfId || !this.game.players.has(id) || this.souls.has(id)) continue;
+      if (!pvpInReach(from, p, me.angle, halfAngle, maxDist)) continue;
+      out.push({ id, d: (p.x - from.x) ** 2 + (p.y - from.y) ** 2 + (p.z - from.z) ** 2 });
+    }
+    return out.sort((a, b) => a.d - b.d);
+  }
+
   // One strike: targets in reach, hit roll, damage, and the 6x commands.
   private resolveHit(attackType: AttackType, step: number): void {
     const me = this.game.self;
@@ -5689,19 +5708,34 @@ export class CombatView {
     const from = view.playerPositions().get(me.clientId);
     if (!from) return;
     const range = this.weaponRange(attackType);
-    const hit = this.weaponTargets(attackType, from).slice(0, Math.max(1, range.maxTargets));
+    const cap = Math.max(1, range.maxTargets);
+    const enemies = this.weaponTargets(attackType, from);
     // A gun (GUN_KINDS, firesGunBullet) fires bullets (combat/gunbullet.ts): the shot now, the
     // damage at the bullet's arrival (tickGunBullets). The 6x46 goes with the listed targets.
     const weapon = attackType !== 2 ? this.equippedWeapon() : undefined;
     const kind = weapon?.data1[1] ?? -1;
     const variant = weapon?.data1[2] ?? -1;
     if (firesGunBullet(kind, variant)) {
+      const hit = enemies.slice(0, cap); // ASSUMED: a gun's shot does not reach a remote player yet
       if (hit.length) this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
       this.gunShot(attackType, step, from, hit, range, kind, variant);
       return;
     }
+    // Battle Mode: the remote players in reach are targets of the strike too. The nearest
+    // `cap` of both kinds go in the 6x46 (player entity ids are client ids); the victim
+    // rolls the hit on its own copy (onRemoteStrikeTargets), so only the enemies are hit here.
+    const players = this.pvpTargetsInReach(attackType, from);
+    const picked = nearestTargets<{ enemy: EnemyRuntime | null; player: number }>(
+      [
+        ...enemies.map((e) => ({ d: e.instance.root.position.distanceToSquared(from), value: { enemy: e, player: -1 } })),
+        ...players.map((p) => ({ d: p.d, value: { enemy: null, player: p.id } })),
+      ],
+      cap,
+    );
+    const hit = picked.flatMap((t) => (t.enemy ? [t.enemy] : []));
+    if (!hit.length && !picked.length) return;
+    this.game.sendAttackTargets(picked.map((t) => (t.enemy ? { entityId: 0x1000 | t.enemy.index } : { entityId: t.player })));
     if (!hit.length) return;
-    this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
     const attacker = this.attackerStats();
     this.strike = { attackType, step };
     for (const e of hit) {
@@ -7408,6 +7442,16 @@ export class CombatView {
       if (h && p) this.party.stats(h.clientId, { ...this.partyStats(p), hpStat: h.hpStat, hpMaterials: h.hpMaterials, level: h.level }, h.hp);
       return;
     }
+    // 6x2F names its player by the inner client id (HandlePlayerHPModification_006933c0 reads
+    // get_player_optcall(+0x0A), the dump's version; Ghidra's FUN_006933c0 reads the local player,
+    // the asm at 0x006933c0 agrees with the dump). The local player's own HP takes it here.
+    if (sub === 0x2f && body.length >= 0x0c) {
+      const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+      if (dv.getUint16(0x0a, true) === this.game.selfId && !this.damage.dead) {
+        const hp = applyHpModification(this.damage.hp, this.damage.maxHp, dv.getUint32(4, true), dv.getInt16(8, true));
+        if (hp !== null) this.damage.hp = hp;
+      }
+    }
     // Remote HP for the party members' windows; the handlers below still run.
     this.party.receive(sub, body);
     if (sub === 0x2c || sub === 0x2d) {
@@ -7824,8 +7868,15 @@ export class CombatView {
     // The direction from the attacker to the local player (the enemyHitsPlayer convention).
     const angle = Math.atan2(me.position.x - from.x, me.position.z - from.z);
     this.damage.hit(r.damage, angle, pvpKnockback(type, r.damage), clientId, r.critical);
+    this.gainPb(r.damage, true);
     this.onPvpHit?.(clientId, r.damage);
     this.opts.log(`hit by ${remote?.name ?? `player ${clientId + 1}`} for ${r.damage}: ${this.damage.hp}/${this.damage.maxHp}`);
+  }
+
+  // Battle Mode: the local player's PvP strike was credited by the victim's 6x8F (quest/battlerun.ts).
+  // ASSUMED: the attacker's PB gauge takes that damage as dealt.
+  pvpDealt(damage: number): void {
+    if (damage >= 1) this.gainPb(damage, false);
   }
 
   private remoteAttack(clientId: number, step: number, angle: number): void {

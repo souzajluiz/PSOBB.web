@@ -41,6 +41,7 @@ import { NpcLayer } from './npcview.ts';
 import { TelepipeLayer, type Arrival } from './telepipe.ts';
 import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
+import type { SpawnPoint } from '../quest/battletraps.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { serverUrl } from '../net/server.ts';
 import { pioneer2ReturnArrival } from '../net/telepipe.ts';
@@ -83,6 +84,8 @@ export class GameView {
   private log: (msg: string) => void;
   private table: Promise<SetDataTable | null> | null = null;
   private view: LobbyView | null = null;
+  // Every TObjPlayerSet of the floor in world space (angle in radians): the battle respawn's candidates.
+  private floorSpawns: SpawnPoint[] = [];
   readonly enemyLayer: EnemyLayer;
   // NPCs of the floor (render/npcview.ts); quest/town.ts drives their talk.
   readonly npcs: NpcLayer;
@@ -590,6 +593,7 @@ export class GameView {
       this.viewer.setEntitiesVisible(SHOW_MARKERS);
     }
 
+    this.floorSpawns = allSpawnPoints(objects, sections);
     const me = this.game.self!;
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
@@ -724,6 +728,11 @@ export class GameView {
     return new THREE.Vector3(p.x, p.y + (this.view?.playerHeight(clientId) ?? 16) * 0.92, p.z);
   }
 
+  // The floor's player spawns (battle respawn, quest/battletraps.ts pickRespawn).
+  respawnPoints(): readonly SpawnPoint[] {
+    return this.floorSpawns;
+  }
+
   // Moves a player at once (6x24 / set_player_start_position), radians.
   placePlayer(clientId: number, x: number, y: number, z: number, angle: number): void {
     this.view?.placePlayer(clientId, x, y, z, angle);
@@ -834,6 +843,15 @@ export class GameView {
 }
 
 // TObjPlayerSet entries of the floor (param1 = client id, param4 = arrival source).
+// Every TObjPlayerSet of the floor, in the object list's order (SendTeleportRequestToPlayer walks that list).
+function allSpawnPoints(objects: ObjectSetEntry[], sections: MapSection[]): SpawnPoint[] {
+  return playerSpawns(objects).map((s) => {
+    const room = sections.find((r) => r.id === s.room);
+    const [x, y, z] = roomToWorld(s.position, room);
+    return { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) };
+  });
+}
+
 function spawnsFor(objects: ObjectSetEntry[], sections: MapSection[], source: number): Map<number, LobbySpawn> {
   const out = new Map<number, LobbySpawn>();
   const sets = playerSpawns(objects);

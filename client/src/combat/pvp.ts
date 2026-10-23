@@ -33,6 +33,7 @@
 // exe's EntityHitEntity has none); knockback only for a heavy strike, of its damage.
 
 import { playerAttacker, rollDamage, rollHit, type AttackerStats, type AttackType, type DefenderStats, type Rng } from './formulas.ts';
+import { inWeaponCone } from './weaponaim.ts';
 
 // PlayerStats of a 6x70 (BB, little endian) at 0x140: atp, mst, evp, hp, dfp, ata, lck.
 export interface CombatStats {
@@ -105,4 +106,49 @@ export const PLAYER_ENTITY_LIMIT = 4;
 
 export function isPlayerEntity(id: number): boolean {
   return id < PLAYER_ENTITY_LIMIT;
+}
+
+// --- our strikes on a remote player (Battle mode) -----------------------------------
+//
+// The attacker's side of a melee strike names the remote players in reach in its 6x46
+// (the same list as the enemies; the victim runs the hit roll on its own copy, see
+// render/combat.ts onRemoteStrikeTargets). The reach test is the enemies' cone test with
+// a point at the player's origin (ASSUMED: the player's hit box is not decoded), and the
+// same 40-unit height window as an enemy (ASSUMED).
+export const PVP_BODY_REACH = 0;
+export const PVP_HEIGHT_WINDOW = 40;
+
+export interface Point3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+// A remote player's body is in the weapon's reach: `heading` and `halfAngle` in radians,
+// `maxDist` = horizontal + vertical range (the weapon's table, as for enemies).
+export function pvpInReach(from: Point3, target: Point3, heading: number, halfAngle: number, maxDist: number): boolean {
+  const dx = target.x - from.x;
+  const dz = target.z - from.z;
+  if (Math.hypot(dx, dz) - PVP_BODY_REACH > maxDist) return false;
+  if (Math.abs(target.y - from.y) > PVP_HEIGHT_WINDOW) return false;
+  return inWeaponCone(dx, dz, heading, halfAngle);
+}
+
+// The player's HP after a 6x2F (HandlePlayerHPModification_006933c0, PsoBB.exe): mode 0 sets
+// the HP (ClampEntityHP_00770b58), 1 adds the amount (add_player_hp), 2 adds the max HP.
+// The exe's validation (ValidateEntityForHPModification_006a9a34) refuses a mode above 2 and
+// a negative amount (the short is read as signed); those, and a dead player, change nothing.
+export function applyHpModification(hp: number, maxHp: number, mode: number, amount: number): number | null {
+  if (amount < 0 || amount > 0x7fff || mode < 0 || mode > 2) return null;
+  if (mode === 0) return Math.min(amount, maxHp);
+  if (mode === 1) return Math.min(maxHp, hp + amount);
+  return maxHp;
+}
+
+// The nearest `max` items by squared distance (the strike's target count; the sort is stable).
+export function nearestTargets<T>(items: ReadonlyArray<{ d: number; value: T }>, max: number): T[] {
+  return [...items]
+    .sort((a, b) => a.d - b.d)
+    .slice(0, Math.max(0, max))
+    .map((i) => i.value);
 }
