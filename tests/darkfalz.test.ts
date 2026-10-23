@@ -12,7 +12,7 @@
 import { DARVANT, DarkFalzAi, DarkFalzPartAi, Darvant, DF_ID, SCENE, SCENE_NAMES } from '../client/src/combat/darkfalz.ts';
 import { DfForm1, F1, F1_ANIM_ROWS, pickWeighted } from '../client/src/combat/darkfalz1.ts';
 import { DfForm2, F2, F2_ANIM_ROWS } from '../client/src/combat/darkfalz2.ts';
-import { DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
+import { advanceScale, DfForm3, F3, F3_ANIM_ROWS, HomingBolt, f3Spot } from '../client/src/combat/darkfalz3.ts';
 import { CASKET, CIRCLE, DfAnim, NO_PACKED, SCENE_FRAMES, STALL_TICKS, angDiff, ease, type DfEvent, type DfRow } from '../client/src/combat/darkfalzcommon.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import { bossPhaseOf } from '../client/src/audio/bossbgm.ts';
@@ -1095,6 +1095,36 @@ function clearZakoBoth(fi: Fight): void {
   eq(fi.c.darvants.length, before, 'Ultimate with no living player: no beam Darvants');
 }
 
+// --- Dark Falz form 3's scale animation (Voloptform7updatescaleanimation0045b9b8, dump 199138) ---
+{
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  // Climbing states (2 WAITKILL, 3 DEAD): +0.1 a frame, stopped at 1.0, the counter untouched.
+  let a = advanceScale(0.25, 77, true);
+  check(near(a.scale, 0.35) && a.count === 77, 'form 3 scale: WAITKILL / DEAD climb 0.1 a frame and keep the counter');
+  a = advanceScale(0.95, 77, true);
+  eq(a.scale, 1, 'form 3 scale: the climb stops at 1.0');
+  // Counter schedule: 1.0 until the counter reaches 120.
+  a = advanceScale(1, 118, false);
+  eq(a.count, 119, 'form 3 scale: the counter steps once a frame');
+  a = advanceScale(0.5, 118, false);
+  eq(a.scale, 1, 'form 3 scale: 1.0 while the counter is below 120');
+  // 120..149: falls by 1/30 a frame, to 0 (then holds at 0).
+  a = advanceScale(1, 120, false);
+  check(near(a.scale, 1 - 1 / 30) && a.count === 121, 'form 3 scale: falls by 1/30 from 120');
+  a = advanceScale(0.01, 140, false);
+  eq(a.scale, 0, 'form 3 scale: a fall past 0 stops at 0');
+  // 150..269: held at 0.
+  a = advanceScale(0, 200, false);
+  eq(a.scale, 0, 'form 3 scale: 0 from 150 to 269');
+  // 270..299: climbs by 1/30 a frame to 1.
+  a = advanceScale(0, 270, false);
+  check(near(a.scale, 1 / 30) && a.count === 271, 'form 3 scale: climbs by 1/30 from 270');
+  a = advanceScale(0.99, 280, false);
+  eq(a.scale, 1, 'form 3 scale: a climb past 1 stops at 1');
+  // From 300 the scale is 1 and the counter returns to 0.
+  a = advanceScale(0.5, 299, false);
+  check(a.scale === 1 && a.count === 0, 'form 3 scale: from 300 the scale is 1 and the counter resets');
+}
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

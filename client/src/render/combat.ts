@@ -1622,22 +1622,35 @@ export class CombatView {
     const out: { x: number; z: number; type: string }[] = [];
     for (const e of this.enemies.values()) {
       if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
-      // Dark Falz form 3's body has its own icons (minimapIcons).
-      if (e.ai instanceof DarkFalzPartAi && e.ai.entity === DF_ID.form3) continue;
+      // Dark Falz forms 1 and 3 have their own forced icons (minimapIcons).
+      if (e.ai instanceof DarkFalzPartAi && (e.ai.entity === DF_ID.form3 || e.ai.entity === DF_ID.form1)) continue;
       const p = e.instance.root.position;
       out.push({ x: p.x, z: p.z, type: e.slot.type });
     }
     return out;
   }
 
-  // The forced icons of the Dark Falz form 3 body and its prisoner trail
-  // (combat/darkfalz3.ts minimapIcons), drawn while its part is on the field.
+  // The forced icons of the Dark Falz form 1 body, heads and ring
+  // (combat/darkfalz1.ts minimapIcons) and of the form 3 body and its prisoner
+  // trail (combat/darkfalz3.ts minimapIcons), drawn while the part is on the field.
   minimapIcons(): Icon[] {
     const out: Icon[] = [];
+    // One set of icons per form and fight (the parts share their owner).
+    const seen = new Set<string>();
     for (const e of this.enemies.values()) {
-      if (!(e.ai instanceof DarkFalzPartAi) || e.ai.entity !== DF_ID.form3) continue;
+      if (!(e.ai instanceof DarkFalzPartAi)) continue;
+      if (e.ai.entity !== DF_ID.form3 && e.ai.entity !== DF_ID.form1) continue;
       if (e.dead || e.state === 'death' || !e.instance.root.visible || concealed(e)) continue;
-      out.push(...(e.ai.owner.form3?.minimapIcons() ?? []));
+      const owner = e.ai.owner;
+      if (e.ai.entity === DF_ID.form1) {
+        if (seen.has('f1')) continue;
+        seen.add('f1');
+        out.push(...(owner.form1?.minimapIcons() ?? []));
+      } else {
+        if (seen.has('f3')) continue;
+        seen.add('f3');
+        out.push(...(owner.form3?.minimapIcons() ?? []));
+      }
     }
     return out;
   }

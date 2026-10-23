@@ -43,6 +43,7 @@ import {
   type DfFight,
   type Vec3,
 } from './darkfalzcommon.ts';
+import { form1Icons, type Icon } from '../classic/minimap.ts';
 import { techReach } from './techfire.ts';
 import { TECH } from './techniques.ts';
 
@@ -576,6 +577,11 @@ export class DfForm1 extends DfEntity {
 
   get shownMarks(): number {
     return this.marksShown ? this.markCount : 0;
+  }
+
+  // The radar icons of the body, the heads and the ring (form1Icons).
+  minimapIcons(): Icon[] {
+    return form1Icons({ x: this.x, z: this.z }, this.heads, sinB(this.yaw), cosB(this.yaw));
   }
 
   // The three hit spheres in the world: the heads turn with the yaw.

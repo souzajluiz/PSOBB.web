@@ -201,19 +201,21 @@ export function falz3TargetColor(held: number): number | null {
 
 // The body's icon and the trail toward the prisoner (player: the prisoner's
 // position, null when none). White (0xffffffff) overrides the colour while the
-// scale +0x3b8 is 0 with flag 4; the scale animation is not ported, so the
-// caller passes white = false. ASSUMED: the trail's flag (+0x3c8 bit 0) is clear,
-// as it is whenever the port draws a trail.
+// scale +0x3b8 is 0 with flag 4 (the caller's `white`, from the frame's counter
+// +0x3c8, see combat/darkfalz3.ts). The trail is drawn only on frames where
+// +0x3c8 bit 0 is clear (`trail`; the counter steps once a frame, so every
+// other frame).
 export function falz3Icons(
   pos: { x: number; z: number },
   colour: number,
   held: number,
   player: { x: number; z: number } | null,
   white = false,
+  trail = true,
 ): Icon[] {
   if (falz3TargetColor(held) === null) return [];
   const out: Icon[] = [{ x: pos.x, z: pos.z, color: white ? 0xffffffff : colour, shape: 1, scale: 5, heading: 0 }];
-  if (held < 0 || !player) return out;
+  if (!trail || held < 0 || !player) return out;
   const dx = player.x - pos.x;
   const dz = player.z - pos.z;
   const len = Math.hypot(dx, dz);
@@ -221,9 +223,38 @@ export function falz3Icons(
   const count = Math.min(Math.round(len / FALZ3_TRAIL_STEP), Math.round(FALZ3_TRAIL_SPAN / FALZ3_TRAIL_STEP));
   const ux = (dx / len) * FALZ3_TRAIL_STEP;
   const uz = (dz / len) * FALZ3_TRAIL_STEP;
-  const trail = FALZ3_COLORS[held];
+  const trailColour = FALZ3_COLORS[held];
   for (let k = 1; k <= count; k++) {
-    out.push({ x: pos.x + ux * k, z: pos.z + uz * k, color: trail, shape: 1, scale: FALZ3_TRAIL_SCALE, heading: 0 });
+    out.push({ x: pos.x + ux * k, z: pos.z + uz * k, color: trailColour, shape: 1, scale: FALZ3_TRAIL_SCALE, heading: 0 });
+  }
+  return out;
+}
+
+// The form's radar icons (UpdateVoloptForm7Behavior, dump 195879; the update
+// 0x00454838 in the exe, the vtable 0x00AF75A0 of the form 1 ctor): four forced
+// 5.0 icons in 0xffffa24c, at the body and at the three heads (dump 195973-195992),
+// then a ring of forced 5.0 icons round the body. The ring's radii are
+// ROUND(step), ROUND(step + r), ... with step 150 / 4.0 = 37.5 (the exe's
+// g_VoloptForm7HazardRadiusDivided, _DAT_008fff14 = 4.0), so 38, 76, 114: at each
+// radius, four icons (the last radius three) at the body's cardinal points turned
+// by the yaw (dump 196000-196050). ASSUMED: the head icons use the port's head
+// points (`heads`, ASSUMED in darkfalz1.ts), and ROUND is round-to-nearest.
+export const F1_MINIMAP_COLOUR = 0xffffa24c;
+export const F1_RING_STEP = 150 / 4;
+export function form1Icons(body: { x: number; z: number }, heads: readonly (readonly number[])[], sin: number, cos: number): Icon[] {
+  const out: Icon[] = [];
+  const add = (x: number, z: number) => out.push({ x, z, color: F1_MINIMAP_COLOUR, shape: 1, scale: 5, heading: 0 });
+  add(body.x, body.z);
+  for (const h of heads) add(h[0], h[2]);
+  const s = sin;
+  const c = cos;
+  let r = Math.round(F1_RING_STEP);
+  for (let i = 0; i < 3; i++) {
+    add(body.x - r * c, body.z + r * s);
+    add(body.x + r * s, body.z + r * c);
+    add(body.x + r * c, body.z - r * s);
+    if (i < 2) add(body.x - r * s, body.z - r * c);
+    r = Math.round(F1_RING_STEP + r);
   }
   return out;
 }
