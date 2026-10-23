@@ -261,6 +261,12 @@ export class LobbyScreen implements Screen {
       const host: GuildCardHost = {
         book: () => this.hud.guildCards?.() ?? null,
         client: () => this.hud.guildCardClient?.() ?? null,
+        selfGuildCard: () => this.lobby.self?.guildCardNumber ?? null,
+        // The other players of the lobby (the add-from-player list; the record's guild card number, name, section, class).
+        lobbyPlayers: () =>
+          [...this.lobby.players.values()]
+            .filter((p) => p.clientId !== this.lobby.selfId)
+            .map((p) => ({ slot: p.clientId, name: p.name, guildCardNumber: p.guildCardNumber, sectionId: p.sectionId, charClass: p.charClass })),
         loggedIn: true,
       };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);

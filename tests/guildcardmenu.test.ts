@@ -13,7 +13,11 @@ import {
   GUILD_CARD_POS,
   GUILD_MENU_STATE,
   menuRows,
+  playerRows,
+  guildCardFromPlayer,
+  blockRows,
   T11_GUILD,
+  type LobbyPlayerCard,
 } from '../client/src/classic/guildcardmenu.ts';
 import { GuildCardBook, GuildCardClient, GC_CMD, GC_FILE, type GuildCard } from '../client/src/net/guildcard.ts';
 
@@ -66,7 +70,7 @@ interface Sent {
   command: number;
   payload: Uint8Array;
 }
-function menuFor(book: GuildCardBook | null, loggedIn = true): { menu: GuildCardMenu; sent: Sent[] } {
+function menuFor(book: GuildCardBook | null, loggedIn = true, players: LobbyPlayerCard[] = [], self: number | null = 1000): { menu: GuildCardMenu; sent: Sent[]; client: GuildCardClient } {
   const sent: Sent[] = [];
   const link = {
     send: (command: number, _flag: number, payload: Uint8Array = new Uint8Array()) => {
@@ -79,8 +83,13 @@ function menuFor(book: GuildCardBook | null, loggedIn = true): { menu: GuildCard
   };
   const client = new GuildCardClient(link);
   client.book = book;
-  const menu = new GuildCardMenu(text, { book: () => book, client: () => client, loggedIn });
-  return { menu, sent };
+  const menu = new GuildCardMenu(text, { book: () => book, client: () => client, selfGuildCard: () => self, lobbyPlayers: () => players, loggedIn });
+  return { menu, sent, client };
+}
+// The target of the last 0040 sent (searchPacket: tag, searcher, target), or -1.
+function lastSearchTarget(sent: Sent[]): number {
+  const hits = sent.filter((s) => s.command === GC_CMD.search);
+  return hits.length ? le32(hits[hits.length - 1]!.payload, 8) : -1;
 }
 const le32 = (b: Uint8Array, at = 0): number => new DataView(b.buffer, b.byteOffset).getUint32(at, true);
 // From the menu: opens the card list (row 0x66) and moves the list cursor to `slot` (a fresh menu).
@@ -257,28 +266,28 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   check('9 cards are 2 pages; no book is 1 page', cardPageCount(book) === 2 && cardPageCount(null) === 1 && cardPageCount(new GuildCardBook()) === 1);
   check('page 1 shows slots 7 and 8', cardRows(book, 'EMPTY', 1).map((r) => r.value).join(',') === '7,8');
 
-  const { menu } = menuFor(book);
+  const { menu, sent } = menuFor(book);
   openCardList(menu, 0);
   menu.key(key('ArrowRight'));
   check('ArrowRight shows the second page (the list stays open)', menu.phase === 'list');
   menu.key(key('Enter'));
   const onPage1 = chooseAction(menu, GUILD_ACTION.search);
-  check('the first row of page 1 is slot 7 (the search row reports it)', onPage1?.state === 0x0f && onPage1.card === 7, JSON.stringify(onPage1));
+  check('the first row of page 1 is slot 7 (search sends 0040 for card 107)', onPage1 === null && lastSearchTarget(sent) === 107, `target ${lastSearchTarget(sent)}`);
 
   const wrapped = menuFor(book);
   openCardList(wrapped.menu, 0);
   wrapped.menu.key(key('ArrowLeft'));
   wrapped.menu.key(key('Enter'));
-  const last = chooseAction(wrapped.menu, GUILD_ACTION.search);
-  check('ArrowLeft from page 0 wraps to the last page (slot 7)', last?.card === 7, JSON.stringify(last));
+  chooseAction(wrapped.menu, GUILD_ACTION.search);
+  check('ArrowLeft from page 0 wraps to the last page (slot 7, card 107)', lastSearchTarget(wrapped.sent) === 107, `target ${lastSearchTarget(wrapped.sent)}`);
 
   const back = menuFor(book);
   openCardList(back.menu, 0);
   back.menu.key(key('ArrowRight'));
   back.menu.key(key('ArrowRight'));
   back.menu.key(key('Enter'));
-  const first = chooseAction(back.menu, GUILD_ACTION.search);
-  check('ArrowRight from the last page wraps to page 0 (slot 0)', first?.card === 0, JSON.stringify(first));
+  chooseAction(back.menu, GUILD_ACTION.search);
+  check('ArrowRight from the last page wraps to page 0 (slot 0, card 100)', lastSearchTarget(back.sent) === 100, `target ${lastSearchTarget(back.sent)}`);
 }
 
 // 11. Description box: the menu's cursor row picks the text (90 / 91 / 92 / 280), drawn beside the menu.
@@ -302,10 +311,10 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
 
 // 12. The action not ported: search (0x0f) is reported and the leaf goes back to the card list.
 {
-  const { menu } = menuFor(bookWith([card(7, 'Ann')]));
+  const { menu, sent } = menuFor(bookWith([card(7, 'Ann')]));
   openActionFor(menu, 0);
   const r = chooseAction(menu, GUILD_ACTION.search);
-  check('search is reported as state 0x0f with its slot', r?.state === 0x0f && r.card === 0, JSON.stringify(r));
+  check('search sends 0040 for the card (target 7) and nothing is reported', r === null && lastSearchTarget(sent) === 7, `target ${lastSearchTarget(sent)}`);
   check('search returns to the card list', menu.phase === 'list');
 }
 
@@ -347,6 +356,139 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
     console.log(err);
   }
   check('draws the list, view, action, delete, comment and swap phases without error', !threw);
+}
+
+// 14. The Block list (row 0x117, state 0x39): the unblock and add rows; the add row is greyed with no free slot.
+{
+  const full = new GuildCardBook();
+  for (let i = 0; i < GC_FILE.blockedCount; i++) full.blockAdd(card(500 + i, `B${i}`));
+  check('block rows are 0x119 (unblock, 0x3b) and 0x11a (add, 0x3f), add greyed with no free slot', blockRows(text, false).map((r) => r.value).join(',') === '59,63' && blockRows(text, false)[0]!.enabled && !blockRows(text, false)[1]!.enabled && blockRows(text, true)[1]!.enabled);
+  check('the menu row 0x117 is the Block row (state 0x39)', GUILD_MENU_STATE.block === 0x39 && menuRows(text, true)[3]!.value === 0x39);
+
+  const { menu, sent } = menuFor(bookWith([card(7, 'Ann')]));
+  menu.key(key('ArrowUp'));
+  const opened = menu.key(key('Enter'));
+  check('row 0x117 opens the Block list without an unported report', opened === null && menu.phase === 'block', JSON.stringify(opened));
+  menu.key(key('Escape'));
+  check('Escape in the Block list goes back to the menu', menu.phase === 'menu' && sent.length === 0);
+
+  const full2 = menuFor(full);
+  full2.menu.key(key('ArrowUp'));
+  full2.menu.key(key('Enter'));
+  full2.menu.key(key('ArrowDown'));
+  full2.menu.key(key('Enter'));
+  check('a greyed add row does not open the source list', full2.menu.phase === 'block', full2.menu.phase);
+}
+
+// 15. Unblock: the blocked list (value = slot); Yes sends 08E8 with the blocked number; No keeps it.
+{
+  const book = bookWith([]);
+  book.blockAdd(card(41, 'Ann'));
+  book.blockAdd(card(42, 'Bo'));
+  const { menu, sent } = menuFor(book);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter')); // the Block list
+  menu.key(key('Enter')); // unblock row -> the blocked list
+  check('the unblock row opens the blocked list', menu.phase === 'blocked');
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the second sender (42)
+  check('choosing a sender asks first (unblockAsk), nothing sent', menu.phase === 'unblockAsk' && sent.length === 0);
+  menu.key(key('Enter')); // the question starts on No
+  check('No keeps the sender (back to the blocked list)', menu.phase === 'blocked' && sent.length === 0 && book.isBlocked(42));
+  menu.key(key('Escape'));
+  check('Escape in the blocked list goes back to the Block list', menu.phase === 'block');
+  menu.key(key('Escape'));
+  check('Escape in the Block list goes back to the menu', menu.phase === 'menu');
+
+  const yes = menuFor(book);
+  yes.menu.key(key('ArrowUp'));
+  yes.menu.key(key('Enter'));
+  yes.menu.key(key('Enter'));
+  yes.menu.key(key('ArrowDown'));
+  yes.menu.key(key('Enter'));
+  yes.menu.key(key('ArrowUp')); // onto Yes
+  yes.menu.key(key('Enter'));
+  const unblock = yes.sent.find((s) => s.command === GC_CMD.blockDelete);
+  check('Yes sends 08E8 with the blocked number 42', unblock !== undefined && le32(unblock.payload, 0) === 42, JSON.stringify(unblock && [...unblock.payload]));
+  check('Yes returns to the menu and removes 42 from the copy', yes.menu.phase === 'menu' && !book.isBlocked(42) && book.isBlocked(41));
+}
+
+// 16. Add from the card book: 07E8 (block add) with the card; an already-blocked card sends nothing.
+{
+  const book = bookWith([card(7, 'Ann'), card(9, 'Bo')]);
+  const { menu, sent } = menuFor(book);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter')); // the Block list
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the add row (enabled: free slots)
+  check('the add row opens the source list (0x40)', menu.phase === 'addSource');
+  menu.key(key('Enter')); // card book
+  check('the card book list opens (0x41)', menu.phase === 'addCard');
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // card 9
+  check('a card asks first (0x43), nothing sent', menu.phase === 'addAsk' && sent.length === 0);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter'));
+  const block = sent.find((s) => s.command === GC_CMD.blockAdd);
+  check('Yes sends 07E8 (block add) and no 04E8', block !== undefined && sent.every((s) => s.command !== GC_CMD.add));
+  check('the 07E8 carries card 9 first', block !== undefined && le32(block.payload, 0) === 9, JSON.stringify(block && [...block.payload.slice(0, 8)]));
+  check('the blocked copy holds card 9 and the menu comes back', book.isBlocked(9) && menu.phase === 'menu');
+
+  const again = menuFor(book);
+  again.menu.key(key('ArrowUp'));
+  again.menu.key(key('Enter'));
+  again.menu.key(key('ArrowDown'));
+  again.menu.key(key('Enter'));
+  again.menu.key(key('Enter'));
+  again.menu.key(key('ArrowDown'));
+  again.menu.key(key('Enter'));
+  again.menu.key(key('ArrowUp'));
+  again.menu.key(key('Enter'));
+  check('an already blocked card sends nothing', again.sent.length === 0 && again.menu.phase === 'menu', `${again.sent.length} sent, phase ${again.menu.phase}`);
+}
+
+// 17. Add from a lobby player: the other players as rows (their slots), the card from the record, 07E8.
+{
+  const players: LobbyPlayerCard[] = [
+    { slot: 1, name: 'Cy', guildCardNumber: 77, sectionId: 3, charClass: 5 },
+    { slot: 2, name: 'Dee', guildCardNumber: 0, sectionId: 0, charClass: 0 },
+  ];
+  check('player rows are the other players (slot values), greyed when none', playerRows(players, 'NONE').map((r) => r.value).join(',') === '1,2' && !playerRows([], 'NONE')[0]!.enabled);
+  const card77 = guildCardFromPlayer(players[0]!);
+  check('a player card carries the guild card number, name, section and class', card77?.guildCardNumber === 77 && card77.name === 'Cy' && card77.sectionId === 3 && card77.charClass === 5 && card77.present);
+  check('a player without a guild card number gives no card', guildCardFromPlayer(players[1]!) === null);
+
+  const { menu, sent } = menuFor(bookWith([]), true, players);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter')); // the Block list
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the add row
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the source list: a lobby player
+  check('the lobby player list opens (0x46)', menu.phase === 'addPlayer');
+  menu.key(key('Enter')); // Cy
+  check('a player asks first (0x48), nothing sent', menu.phase === 'addAsk' && sent.length === 0);
+  menu.key(key('ArrowUp'));
+  menu.key(key('Enter'));
+  const block = sent.find((s) => s.command === GC_CMD.blockAdd);
+  check('Yes sends 07E8 with the player card 77', block !== undefined && le32(block.payload, 0) === 77, JSON.stringify(block && [...block.payload.slice(0, 8)]));
+  check('the menu comes back after the add', menu.phase === 'menu');
+}
+
+// 18. The search result (0041) goes to the recent list: a repeat moves to the end; the list holds 7 (the oldest goes).
+{
+  const link = {
+    send: () => {},
+    waitFor: async () => ({ command: GC_CMD.searchResult, flag: 0, data: new Uint8Array(0x128) }),
+    poll: () => null,
+  };
+  const client = new GuildCardClient(link);
+  const res = (n: number) => ({ searcher: 1, guildCardNumber: n, address: 0, port: 0, location: '', menuId: 0, itemId: 0, name: `N${n}` });
+  for (let n = 1; n <= 7; n++) client.addRecent(res(n));
+  client.addRecent(res(3));
+  check('a repeated result moves to the end (no duplicate)', client.recent.map((r) => r.guildCardNumber).join(',') === '1,2,4,5,6,7,3');
+  client.addRecent(res(8));
+  check('the eighth result drops the oldest', client.recent.length === 7 && client.recent[0]!.guildCardNumber === 2 && client.recent[6]!.guildCardNumber === 8);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

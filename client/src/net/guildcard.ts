@@ -406,6 +406,18 @@ export class GuildCardBook {
     return false;
   }
 
+  // GuildCard_CopyDataWithFlags_00781534 (the card book -> block path): the number is already
+  // in the blocked list before its first free slot (the exe stops there and sends nothing).
+  isBlocked(guildCardNumber: number): boolean {
+    for (let i = 0; i < GC_FILE.blockedCount; i++) {
+      const o = GC_FILE.blockedOffset + i * GC_FILE.cardSize;
+      const cur = parseGuildCard(this.raw, o);
+      if (!cur.present) return false;
+      if (cur.guildCardNumber === guildCardNumber) return true;
+    }
+    return false;
+  }
+
   // 08E8: removes the blocked card and shifts the rest up.
   blockDelete(guildCardNumber: number): boolean {
     for (let i = 0; i < GC_FILE.blockedCount; i++) {
@@ -429,6 +441,8 @@ export class GuildCardClient {
   book: GuildCardBook | null = null;
   private readonly link: CommandLink;
   private readonly timeoutMs: number;
+  // The recent search results (the exe's g_GuildCardList, 7 entries, the menu's text list 0x67).
+  recent: GuildCardSearchResult[] = [];
 
   constructor(link: CommandLink, timeoutMs = 5000) {
     this.link = link;
@@ -496,6 +510,17 @@ export class GuildCardClient {
       if (e instanceof GuildCardError) return null;
       throw e;
     }
+  }
+
+  // A 0041 result with no player-info window open goes to the recent list
+  // (GuildCardList_AddOrMoveToFront_00827f58, 827f48 is its handler): an entry with the
+  // same card number is removed first, the list holds 7 (the oldest goes) and the new
+  // result is last (ASSUMED: the order is the list's index order).
+  addRecent(result: GuildCardSearchResult): void {
+    const i = this.recent.findIndex((r) => r.guildCardNumber === result.guildCardNumber);
+    if (i >= 0) this.recent.splice(i, 1);
+    if (this.recent.length >= 7) this.recent.shift();
+    this.recent.push(result);
   }
 
   // The list commands: sent to the server and applied to the local copy the same way.

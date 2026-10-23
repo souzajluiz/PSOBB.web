@@ -1,6 +1,7 @@
 // The lobby Home menu's Guild Card leaf (main menu entry 0xe), as PsoBB.exe
 // (Ephinea 1.25.13) runs it: the Guild Card menu window, the card list, the
-// card action menu and its actions. The card book itself is net/guildcard.ts.
+// card action menu and its actions, the Block list. The card book itself is
+// net/guildcard.ts.
 //
 // Decoded from the dump (Psobb.exe-05112026.c, names of the windows trusted only
 // where the code agrees with them):
@@ -26,9 +27,10 @@
 //     rows unitxt(11, 0x6c) = 0x0f (search, greyed unless logged_in), 0x120 = 0x11
 //     (view), 0x121 = 0x13 (comment), 0x76 = 0x1b (swap), 0x6d = 0x15 (delete).
 //     Cancel -> state 0xb (the card list again).
-//   - 0x0f -> search (send_packet0x40 via ShipConnectionManager_SendPacket_00827f28):
-//     NOT ported (the 0040 / 0041 result path is not traced); the leaf goes back
-//     to the card list as the exe does (state 0x10 -> 0xb).
+//   - 0x0f (search): HandleGuildCardMenuSelection_0074770c (716451) sends 0040 for
+//     the card (ShipConnectionManager_SendPacket_00827f28, 841367) and the leaf goes
+//     to the card list (state 0x10 -> 0xb). The 0041 answer has no window of its own
+//     (see SEARCH below).
 //   - 0x11 (view): the comment box is shown; any key of [0xc] / [0xd] goes back to
 //     the card list (state 0x12 -> 0xb).
 //   - 0x13 (comment): the list closes and the keyboard opens with the comment as
@@ -42,14 +44,51 @@
 //   - 0x15 (delete): the yes / no sub-window at get_gui_position(0x8b) = (419, 314),
 //     width 205, cursor on No; Yes -> HandleGuildCardMenuData_00781c3c sends 05E8
 //     (the card number) and removes the entry -> state 1; No or cancel -> state 0xd.
+//   - 0x117 (state 0x39, the Block list): CreateGuildCardApplyListWindow_00747b38
+//     (716706) at get_gui_position(0x93) = (194, 256), title unitxt(11, 0x117). Rows:
+//     0x119 (unblock, state 0x3b) and 0x11a (add, state 0x3f). The add row is greyed
+//     when the blocked list has no free slot (CheckForAvailableGuildCardSlot_00782640).
+//       - Unblock (0x3b, 0x3c): the blocked list at 0x94 = (194, 256),
+//         CreateGuildCardListWindow_00747bd0 (0x1c entries). Choosing an entry opens the
+//         yes / no at 0x99 = (419, 256), width 213, text unitxt(11, 0x11b) (0x3d, the
+//         cursor on No). Yes -> RemoveGuildCardSlot_007825ec sends 08E8 with the blocked
+//         card's number and shifts the list (state 1); No -> back to the blocked list.
+//         Cancel in the blocked list -> state 0x39.
+//       - Add (0x3f): the source list at 0x96 = (429, 256), title unitxt(11, 0x30),
+//         rows 0x11c (card book, state 0x41), 0x11d (a lobby player, 0x45), 0x11e
+//         (an entity, 0x4a). Cancel -> state 0x39.
+//         * Card book (0x41, 0x42): the card list at 0x88, paged like the menu's card
+//           list. Cancel -> state 1. A card -> the confirm at 0x9a = (419, 256), width
+//           213, text unitxt(11, 0x11f) (0x43, cursor on No). Yes ->
+//           HandleGuildCardMenuData_007824d4: when the number is already in the blocked
+//           list nothing is sent (GuildCard_CopyDataWithFlags_00781534 returns 1);
+//           otherwise the card is copied to the blocked list and 07E8 is sent
+//           (send_packet0xe8_subcommand7, dump 814338: byte 7, command 0x07E8, the
+//           card as 0x110 bytes). The card-book add sends 07E8, not 04E8.
+//         * Lobby player (0x45, 0x46): the list at 0x97 = (194, 256), title unitxt(11,
+//           0x40), the other players of the lobby (slot != the current one) with their
+//           names; none -> the greyed row unitxt(11, 0xf1). A player -> the same confirm
+//           (0x48); Yes -> HandleGuildCardMenuStackData_0078253c: GuildCard_UpdateFromPlayer_0078175c
+//           copies the player's name, class, slot and guild card number (its
+//           player_guildcard; 0 means nothing is copied), then the same block copy and
+//           07E8 as the card book path.
+//         * Entity (0x4a, 0x4b): the list at 0x98 = (194, 256), title unitxt(11, 0x41),
+//           the entities of the game (GetEntityByIndex); none -> the greyed row
+//           unitxt(11, 0xf0). The port has no entity with a guild card, so only the empty row.
+//
+// SEARCH (0x0f, 0040 -> 0041): the exe's 0041 handler (handle_ship_packet0x41, 809943)
+// gives the reply to the player-info list window (g_pChallengePlayerInfoWindowList),
+// which is never created in the dump (CreateChallengePlayerInfoWindowListWindow_0074ec58
+// has no caller), so the reply goes to unknown_packet_handlers[0x18] =
+// GuildCardList_AddOrMoveToFront_00827f48 (776274): the recent list g_GuildCardList
+// (seven 0x124-byte entries, the menu's text list row 0x67). The port keeps that list
+// in GuildCardClient.recent (addRecent); its window (row 0x67) is not ported yet.
 //
 // NOT ported (logged no-ops, the menu stays open): row 0x65 (state 3: sub-list
-// 0x68 / 0x69), row 0x67 (state 0x1d: the g_GuildCardList text list), row 0x117
-// (state 0x39: the Block list window at 0x93 = (194, 256): unblock (0x3b, 08E8) and
-// the add choices 0x3f: from the card book (0x41), a lobby player (0x45) or an
-// entity (0x4a), which send 04E8 / 07E8 through HandleGuildCardMenuData_007824d4
-// and the player / guest copies), search (0x0f) and the send packet (0xc0).
-// Block is NOT on the card action menu: its adds are under row 0x117.
+// 0x68 / 0x69), row 0x67 (state 0x1d: the g_GuildCardList text list, which is the
+// recent search list above), the card info window 0x89 / 0x7c that the exe opens
+// for the card book's and the search's highlighted card (GuildCardMenu_Factory_00715654),
+// and the send packet 0xc0.
 //
 // ASSUMED (not traced):
 //   - the page keys are ArrowLeft / ArrowRight (the exe reads g_KeyboardSharedState
@@ -59,19 +98,28 @@
 //     the exe passes for the 0x83 box in DAT_0097340c, 188.0), wrapped to lines;
 //   - the list's cursor is shown only when the list is the active window;
 //   - the Yes / No labels are unitxt(11, 0x6e) / (11, 0x6f) (as the lobby's quit
-//     question) and the question text is unitxt(11, 0x4c) (the 0x33 sub-list title
-//     is not drawn);
+//     question); the delete question is unitxt(11, 0x4c), the add and unblock
+//     questions unitxt(11, 0x11f) / (11, 0x11b); the 0x33 sub-list title is not drawn;
 //   - the comment editor is drawn at (331, 266) (the keyboard position 0xcf) as a
 //     plain box; the exe's keyboard panel is not ported;
 //   - the card list's page count is computed from the book's present cards
 //     (GetNextAvailableGuildCardIndex counts the same entries);
-//   - the exe's 0x7c card info window (GuildCardMenu_Factory at 0x89) that opens
-//     with a swap or search is not drawn;
+//   - the exe's 0x7c card info window that opens with a swap or search is not drawn;
+//   - the Block list's add row is recomputed each time the list opens (the exe builds
+//     the window once and keeps its greyed flag);
+//   - the blocked list shows the empty row unitxt(11, 0xf3) when empty;
+//   - a lobby player's card: name, guild card number, section and class from the
+//     lobby record, the player's slot in the language byte (+0x105, the exe's player id);
+//     the team name and description are empty (the exe clears the record);
+//   - the lobby player list lists every other player (the exe skips the players in
+//     the invincibility states 3 and 6, not modelled);
+//   - the searcher is the own guild card number (the exe's ship connection fields
+//     0x12120 / 0x12124 are passed to send_packet0x40, not traced further);
 //   - the book is synced once per session (BBSession.startGuildCardSync); a menu
 //     opened before the sync shows the empty row.
 
 import { se, SE } from '../audio/se.ts';
-import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { GuildCard, GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
 import { wrapGameText } from './chat.ts';
 import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -89,6 +137,13 @@ export const GUILD_CARD_POS = {
   description: { x: 435, y: 256 }, // 0x83 (the menu's description box)
   cardText: { x: 419, y: 256 }, // 0x9c (the card comment box in the card list)
   keyboard: { x: 331, y: 266 }, // 0xcf (the comment editor)
+  blockList: { x: 194, y: 256 }, // 0x93 (the Block list: unblock / add)
+  blocked: { x: 194, y: 256 }, // 0x94 (the blocked senders)
+  addSource: { x: 429, y: 256 }, // 0x96 (card book / lobby player / entity)
+  playerList: { x: 194, y: 256 }, // 0x97 (the lobby players)
+  entityList: { x: 194, y: 256 }, // 0x98 (the entities)
+  unblockAsk: { x: 419, y: 256 }, // 0x99 (the unblock yes / no)
+  addAsk: { x: 419, y: 256 }, // 0x9a (the add yes / no)
 } as const;
 
 // Width of the description and comment boxes (ASSUMED: DAT_0097340c = 188.0).
@@ -97,6 +152,8 @@ export const CARD_TEXT_WIDTH = 188;
 export const CARDS_PER_PAGE = 7;
 // The longest comment: GuildCard_SetName_00781e68 copies at most 0x57 characters.
 export const MAX_COMMENT = 0x57;
+// The blocked list holds 0x1c senders (GetGuildCardArrayElementOffset, DAT_0000001c).
+export const BLOCKED_MAX = 0x1c;
 
 // unitxt group 11 indices used here.
 export const T11_GUILD = {
@@ -104,7 +161,7 @@ export const T11_GUILD = {
   sublist: 0x65,
   cardList: 0x66,
   textList: 0x67,
-  search: 0x117,
+  block: 0x117,
   empty: 0xf3,
   actionSearch: 0x6c,
   actionView: 0x120,
@@ -114,21 +171,50 @@ export const T11_GUILD = {
   question: 0x4c,
   yes: 0x6e,
   no: 0x6f,
+  blockRemove: 0x119,
+  blockAdd: 0x11a,
+  unblockQuestion: 0x11b,
+  addCard: 0x11c,
+  addPlayer: 0x11d,
+  addEntity: 0x11e,
+  addQuestion: 0x11f,
+  playerTitle: 0x40,
+  entityTitle: 0x41,
+  noEntities: 0xf0,
+  noPlayers: 0xf1,
 } as const;
 
 // unitxt group 11 texts of the menu's cursor rows (DAT_00973414, the description box).
 export const GUILD_DESCRIPTION = [0x5a, 0x5b, 0x5c, 0x118] as const;
 
 // The exe's state codes of the menu rows (the value of each row).
-export const GUILD_MENU_STATE = { sublist: 0x03, cardList: 0x0b, textList: 0x1d, search: 0x39 } as const;
+export const GUILD_MENU_STATE = { sublist: 0x03, cardList: 0x0b, textList: 0x1d, block: 0x39 } as const;
 
 // The exe's state codes of the card action menu rows (the value of each row).
 export const GUILD_ACTION = { search: 0x0f, view: 0x11, comment: 0x13, swap: 0x1b, delete: 0x15 } as const;
+
+// The exe's state codes of the Block list rows and of the add sources.
+export const GUILD_BLOCK_STATE = { blockRemove: 0x3b, blockAdd: 0x3f } as const;
+export const GUILD_ADD_STATE = { card: 0x41, player: 0x45, entity: 0x4a } as const;
+
+// A lobby player as the add-from-player path reads it (the lobby record's fields).
+export interface LobbyPlayerCard {
+  // The player's slot (the exe's player index, the list's value).
+  slot: number;
+  name: string;
+  guildCardNumber: number;
+  sectionId: number;
+  charClass: number;
+}
 
 export interface GuildCardHost {
   book(): GuildCardBook | null;
   // The E8 sender of the game-server connection (null before the login sync).
   client(): GuildCardClient | null;
+  // The own guild card number (the search's sender); null before the login.
+  selfGuildCard(): number | null;
+  // The other players of the lobby (the current player is not in the list).
+  lobbyPlayers(): LobbyPlayerCard[];
   // The scene is logged_in (the lobby always is); 0x117 and search are greyed otherwise.
   loggedIn: boolean;
 }
@@ -169,12 +255,66 @@ export function cardPageCount(book: GuildCardBook | null): number {
   return Math.max(1, Math.ceil(n / CARDS_PER_PAGE));
 }
 
+// The blocked list's rows (the value is the slot in the blocked array), stopping at the first empty slot.
+export function blockedRows(book: GuildCardBook | null, emptyLabel: string): ListItem[] {
+  const rows: ListItem[] = [];
+  if (book) {
+    const blocked = book.view().blocked;
+    for (let slot = 0; slot < Math.min(blocked.length, BLOCKED_MAX); slot++) {
+      const c = blocked[slot]!;
+      if (!c.present) break;
+      rows.push({ label: c.name.replace(/\n/g, ' '), value: slot, enabled: true });
+    }
+  }
+  return rows.length ? rows : [{ label: emptyLabel, value: -1, enabled: false }];
+}
+
+// The Block list (CreateGuildCardApplyListWindow_00747b38): unblock always, add only when
+// the blocked list has a free slot (ASSUMED: recomputed at each opening).
+export function blockRows(text: Text, hasFreeSlot: boolean): ListItem[] {
+  return [
+    { label: text(T11_GUILD.blockRemove), value: GUILD_BLOCK_STATE.blockRemove, enabled: true },
+    { label: text(T11_GUILD.blockAdd), value: GUILD_BLOCK_STATE.blockAdd, enabled: hasFreeSlot },
+  ];
+}
+
+// The add source rows (GuildCardUI_GetItemData_00747ce0).
+export function addSourceRows(text: Text): ListItem[] {
+  return [
+    { label: text(T11_GUILD.addCard), value: GUILD_ADD_STATE.card, enabled: true },
+    { label: text(T11_GUILD.addPlayer), value: GUILD_ADD_STATE.player, enabled: true },
+    { label: text(T11_GUILD.addEntity), value: GUILD_ADD_STATE.entity, enabled: true },
+  ];
+}
+
+// The lobby players' rows (the value is the player's slot), the greyed row when none.
+export function playerRows(players: readonly LobbyPlayerCard[], emptyLabel: string): ListItem[] {
+  if (!players.length) return [{ label: emptyLabel, value: -1, enabled: false }];
+  return players.map((p) => ({ label: p.name.replace(/\n/g, ' '), value: p.slot, enabled: true }));
+}
+
+// The card a lobby player adds to the block list (GuildCard_UpdateFromPlayer_0078175c):
+// nothing when the player has no guild card number (the exe copies nothing).
+export function guildCardFromPlayer(p: LobbyPlayerCard): GuildCard | null {
+  if (!p.guildCardNumber) return null;
+  return {
+    guildCardNumber: p.guildCardNumber,
+    name: p.name,
+    teamName: '',
+    description: '',
+    present: true,
+    language: p.slot & 0xff,
+    sectionId: p.sectionId,
+    charClass: p.charClass,
+  };
+}
+
 export function menuRows(text: Text, loggedIn: boolean): ListItem[] {
   return [
     { label: text(T11_GUILD.sublist), value: GUILD_MENU_STATE.sublist, enabled: true },
     { label: text(T11_GUILD.cardList), value: GUILD_MENU_STATE.cardList, enabled: true },
     { label: text(T11_GUILD.textList), value: GUILD_MENU_STATE.textList, enabled: true },
-    { label: text(T11_GUILD.search), value: GUILD_MENU_STATE.search, enabled: loggedIn },
+    { label: text(T11_GUILD.block), value: GUILD_MENU_STATE.block, enabled: loggedIn },
   ];
 }
 
@@ -204,7 +344,24 @@ function drawTextBox(ctx: CanvasRenderingContext2D, skin: WindowSkin, x: number,
   lines.forEach((line, i) => drawGameText(ctx, line, x + INSET, y + INSET + i * 20));
 }
 
-export type GuildCardPhase = 'menu' | 'list' | 'view' | 'action' | 'delete' | 'comment' | 'swapMark' | 'swapTarget' | 'closed';
+export type GuildCardPhase =
+  | 'menu'
+  | 'list'
+  | 'view'
+  | 'action'
+  | 'delete'
+  | 'comment'
+  | 'swapMark'
+  | 'swapTarget'
+  | 'block'
+  | 'blocked'
+  | 'unblockAsk'
+  | 'addSource'
+  | 'addCard'
+  | 'addPlayer'
+  | 'addEntity'
+  | 'addAsk'
+  | 'closed';
 
 const PAGE_KEYS: Readonly<Record<string, -1 | 1>> = { ArrowLeft: -1, ArrowRight: 1 };
 
@@ -214,13 +371,21 @@ export class GuildCardMenu {
   private readonly host: GuildCardHost;
   private readonly menu: ListItem[];
   private readonly menuState = { cursor: 0 };
+  // The card list and the other list windows (blocked, players, entities).
   private list: ListItem[] = [];
   private readonly listState = { cursor: 0 };
   private page = 0;
+  // The small menus: the Block list and the add sources.
+  private sub: ListItem[] = [];
+  private readonly subState = { cursor: 0 };
   private action: ListItem[] = [];
   private readonly actionState = { cursor: 0 };
   // The slot the card action menu was opened for (0x2c).
   private slot = -1;
+  // The value of the row an add / unblock question is about (a slot or a player's slot).
+  private askValue = -1;
+  // The list an add question came from (0x42 or 0x45).
+  private askBack: GuildCardPhase = 'addCard';
   private question: Question | null = null;
   private editor: TextEditor | null = null;
   // The slot marked for a swap (0x8c selected_line), -1 for none.
@@ -243,12 +408,12 @@ export class GuildCardMenu {
     if (this.listState.cursor >= this.list.length) this.listState.cursor = 0;
   }
 
-  // The card list opens (state 0xb): page 0, cursor on the top row.
-  private openList(): void {
+  // The card list opens (state 0xb, or the add-from-card-book list 0x41): page 0, cursor on the top row.
+  private openCards(phase: 'list' | 'addCard'): void {
     this.page = 0;
     this.listState.cursor = 0;
     this.buildList();
-    this.phase = 'list';
+    this.phase = phase;
   }
 
   // A page key (ChatShortcutMenu_HandleInput): the page wraps; the cursor goes to the top.
@@ -264,6 +429,12 @@ export class GuildCardMenu {
   private cardNumber(slot: number): number | null {
     const e = this.host.book()?.view().entries[slot];
     return e && e.card.present ? e.card.guildCardNumber : null;
+  }
+
+  // The blocked card number in a slot of the blocked array (RemoveGuildCardSlot's guard: slot < 0x1c).
+  private blockedNumber(slot: number): number | null {
+    const c = this.host.book()?.view().blocked[slot];
+    return c && c.present ? c.guildCardNumber : null;
   }
 
   private openAction(slot: number): void {
@@ -286,6 +457,46 @@ export class GuildCardMenu {
   private startDelete(): void {
     this.question = new Question(this.text(T11_GUILD.question), { x: GUILD_CARD_POS.question.x, y: GUILD_CARD_POS.question.y, w: 205 });
     this.phase = 'delete';
+  }
+
+  // The yes / no at the given position (the Block list's unblock and the add confirms, width 213).
+  private startAsk(at: { x: number; y: number }, text: number, back: GuildCardPhase, value: number): void {
+    this.askBack = back;
+    this.askValue = value;
+    this.question = new Question(this.text(text), { x: at.x, y: at.y, w: 213 });
+    this.phase = back === 'blocked' ? 'unblockAsk' : 'addAsk';
+  }
+
+  private openBlock(): void {
+    const book = this.host.book();
+    this.sub = blockRows(this.text, !!book && book.view().blocked.some((c) => !c.present));
+    this.subState.cursor = 0;
+    this.phase = 'block';
+  }
+
+  private openBlocked(): void {
+    this.list = blockedRows(this.host.book(), this.text(T11_GUILD.empty));
+    this.listState.cursor = 0;
+    this.phase = 'blocked';
+  }
+
+  private openAddSource(): void {
+    this.sub = addSourceRows(this.text);
+    this.subState.cursor = 0;
+    this.phase = 'addSource';
+  }
+
+  private openAddPlayer(): void {
+    this.list = playerRows(this.host.lobbyPlayers(), this.text(T11_GUILD.noPlayers));
+    this.listState.cursor = 0;
+    this.phase = 'addPlayer';
+  }
+
+  private openAddEntity(): void {
+    // The port has no entity with a guild card: the list holds only the greyed row.
+    this.list = [{ label: this.text(T11_GUILD.noEntities), value: -1, enabled: false }];
+    this.listState.cursor = 0;
+    this.phase = 'addEntity';
   }
 
   // One key. Returns the action the port does not have (the menu stays open or the leaf
@@ -313,6 +524,28 @@ export class GuildCardMenu {
       case 'swapMark':
       case 'swapTarget':
         return this.swapKey(e);
+      case 'block':
+        this.blockKey(e);
+        return null;
+      case 'blocked':
+        this.blockedKey(e);
+        return null;
+      case 'unblockAsk':
+      case 'addAsk':
+        this.askKey(e);
+        return null;
+      case 'addSource':
+        this.addSourceKey(e);
+        return null;
+      case 'addCard':
+        this.addCardKey(e);
+        return null;
+      case 'addPlayer':
+        this.addPlayerKey(e);
+        return null;
+      case 'addEntity':
+        this.addEntityKey(e);
+        return null;
       default:
         return null;
     }
@@ -324,7 +557,11 @@ export class GuildCardMenu {
     if (r !== 'decide') return null;
     const row = this.menu[this.menuState.cursor]!;
     if (row.value === GUILD_MENU_STATE.cardList) {
-      this.openList();
+      this.openCards('list');
+      return null;
+    }
+    if (row.value === GUILD_MENU_STATE.block) {
+      this.openBlock();
       return null;
     }
     return { state: row.value, card: -1 };
@@ -354,9 +591,10 @@ export class GuildCardMenu {
     if (r !== 'decide') return null;
     switch (this.action[this.actionState.cursor]!.value) {
       case GUILD_ACTION.search:
-        // 0040 is not ported: the exe sends it and returns to the card list.
+        // HandleGuildCardMenuSelection_0074770c: 0040 for the card; the leaf goes back to the list.
+        this.search(this.cardNumber(this.slot));
         this.phase = 'list';
-        return { state: GUILD_ACTION.search, card: this.slot };
+        return null;
       case GUILD_ACTION.view:
         this.phase = 'view';
         return null;
@@ -373,6 +611,20 @@ export class GuildCardMenu {
       default:
         return null;
     }
+  }
+
+  // 0040 (send_packet0x40): the answer 0041 goes to the recent list (GuildCardClient.addRecent).
+  // Nothing is sent before the login (no own number) or for an empty slot.
+  private search(target: number | null): void {
+    const c = this.host.client();
+    const me = this.host.selfGuildCard();
+    if (c === null || me === null || target === null) return;
+    c.search(me, target).then(
+      (r) => {
+        if (r) c.addRecent(r);
+      },
+      () => {},
+    );
   }
 
   private deleteKey(e: MenuKey): null {
@@ -450,9 +702,139 @@ export class GuildCardMenu {
     return null;
   }
 
+  // The Block list (state 0x39): unblock (0x3b) or add (0x3f); cancel -> the menu (state 1).
+  private blockKey(e: MenuKey): void {
+    const r = listKey(e, this.sub, this.subState);
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return;
+    }
+    if (r !== 'decide') return;
+    if (this.sub[this.subState.cursor]!.value === GUILD_BLOCK_STATE.blockRemove) this.openBlocked();
+    else this.openAddSource();
+  }
+
+  // The blocked list (0x3b / 0x3c): cancel -> the Block list (0x39); a sender -> the unblock question.
+  private blockedKey(e: MenuKey): void {
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') {
+      this.phase = 'block';
+      return;
+    }
+    if (r !== 'decide') return;
+    const slot = this.list[this.listState.cursor]!.value;
+    if (slot < 0) return;
+    this.startAsk(GUILD_CARD_POS.unblockAsk, T11_GUILD.unblockQuestion, 'blocked', slot);
+  }
+
+  // The unblock question (0x3d / 0x3e): Yes sends 08E8 and goes to the menu; No back to the blocked list.
+  // The add question (0x43 / 0x44, 0x48 / 0x49): Yes adds the card and goes to the menu; No back to its list.
+  private askKey(e: MenuKey): void {
+    if (!this.question) {
+      this.phase = this.askBack;
+      return;
+    }
+    this.question.key(e);
+    const r = this.question.result;
+    if (!r) return;
+    this.question = null;
+    if (r !== 'yes') {
+      this.phase = this.askBack;
+      return;
+    }
+    if (this.askBack === 'blocked') {
+      const num = this.blockedNumber(this.askValue);
+      if (num !== null) this.host.client()?.unblock(num);
+    } else if (this.askBack === 'addCard') {
+      this.addFromBook(this.askValue);
+    } else {
+      this.addFromPlayer(this.askValue);
+    }
+    this.phase = 'menu';
+  }
+
+  // HandleGuildCardMenuData_007824d4: a card already in the blocked list sends nothing.
+  private addFromBook(slot: number): void {
+    const book = this.host.book();
+    const entry = book?.view().entries[slot];
+    const c = this.host.client();
+    if (!book || !entry || !entry.card.present || !c) return;
+    if (book.isBlocked(entry.card.guildCardNumber)) return;
+    c.block(entry.card);
+  }
+
+  // HandleGuildCardMenuStackData_0078253c: the player's card, then the same copy and 07E8.
+  private addFromPlayer(slot: number): void {
+    const book = this.host.book();
+    const p = this.host.lobbyPlayers().find((x) => x.slot === slot);
+    const card = p ? guildCardFromPlayer(p) : null;
+    const c = this.host.client();
+    if (!book || !card || !c) return;
+    if (book.isBlocked(card.guildCardNumber)) return;
+    c.block(card);
+  }
+
+  // The add source list (state 0x40): cancel -> the Block list (0x39); a source -> its list.
+  private addSourceKey(e: MenuKey): void {
+    const r = listKey(e, this.sub, this.subState);
+    if (r === 'cancel') {
+      this.phase = 'block';
+      return;
+    }
+    if (r !== 'decide') return;
+    switch (this.sub[this.subState.cursor]!.value) {
+      case GUILD_ADD_STATE.card:
+        this.openCards('addCard');
+        return;
+      case GUILD_ADD_STATE.player:
+        this.openAddPlayer();
+        return;
+      case GUILD_ADD_STATE.entity:
+        this.openAddEntity();
+        return;
+    }
+  }
+
+  // The card book list for the add (state 0x42): paged; cancel -> the menu (state 1).
+  private addCardKey(e: MenuKey): void {
+    const dir = PAGE_KEYS[e.key];
+    if (dir) {
+      this.turnPage(dir);
+      return;
+    }
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return;
+    }
+    if (r !== 'decide') return;
+    const slot = this.list[this.listState.cursor]!.value;
+    if (slot < 0) return;
+    this.startAsk(GUILD_CARD_POS.addAsk, T11_GUILD.addQuestion, 'addCard', slot);
+  }
+
+  // The lobby player list (state 0x46): cancel -> the menu; a player -> the add question.
+  private addPlayerKey(e: MenuKey): void {
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') {
+      this.phase = 'menu';
+      return;
+    }
+    if (r !== 'decide') return;
+    const slot = this.list[this.listState.cursor]!.value;
+    if (slot < 0) return;
+    this.startAsk(GUILD_CARD_POS.addAsk, T11_GUILD.addQuestion, 'addPlayer', slot);
+  }
+
+  // The entity list (state 0x4b): nothing to choose; cancel -> the menu.
+  private addEntityKey(e: MenuKey): void {
+    const r = listKey(e, this.list, this.listState);
+    if (r === 'cancel') this.phase = 'menu';
+  }
+
   // The menu window at (13, 256) is always drawn while the leaf is open; the
   // description box beside it in the menu, the card list / comment / action windows
-  // in the card phases.
+  // in the card phases, the Block list windows in the block phases.
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
     const title = this.text(T11_GUILD.title);
     const m = GUILD_CARD_POS.menu;
@@ -461,7 +843,8 @@ export class GuildCardMenu {
       const d = GUILD_CARD_POS.description;
       drawTextBox(ctx, skin, d.x, d.y, this.text(GUILD_DESCRIPTION[this.menuState.cursor] ?? GUILD_DESCRIPTION[0]));
     }
-    const cardPhase = this.phase === 'list' || this.phase === 'view' || this.phase === 'action' || this.phase === 'delete' || this.phase === 'swapMark' || this.phase === 'swapTarget';
+    const cardPhase =
+      this.phase === 'list' || this.phase === 'view' || this.phase === 'action' || this.phase === 'delete' || this.phase === 'swapMark' || this.phase === 'swapTarget';
     if (cardPhase && this.phase !== 'action' && this.phase !== 'delete') {
       // The comment of the highlighted card (SetGuildCardField) at (419, 256); none on the empty row.
       const row = this.list[this.listState.cursor];
@@ -471,16 +854,40 @@ export class GuildCardMenu {
         drawTextBox(ctx, skin, c.x, c.y, entry.comment);
       }
     }
-    if (cardPhase) {
+    if (cardPhase || this.phase === 'addCard' || (this.phase === 'addAsk' && this.askBack === 'addCard')) {
       const l = GUILD_CARD_POS.list;
-      const active = this.phase === 'list' || this.phase === 'swapMark' || this.phase === 'swapTarget';
+      const active = this.phase === 'list' || this.phase === 'swapMark' || this.phase === 'swapTarget' || this.phase === 'addCard';
       drawListWindow(ctx, skin, l.x, l.y, windowWidth(this.list, null), null, this.list, this.listState.cursor, active);
     }
     if (this.phase === 'action' || this.phase === 'delete') {
       const a = GUILD_CARD_POS.action;
       drawListWindow(ctx, skin, a.x, a.y, windowWidth(this.action, title), title, this.action, this.actionState.cursor, this.phase === 'action');
     }
-    if (this.phase === 'delete' && this.question) {
+    if (this.phase === 'block') {
+      const b = GUILD_CARD_POS.blockList;
+      const blockTitle = this.text(T11_GUILD.block);
+      drawListWindow(ctx, skin, b.x, b.y, windowWidth(this.sub, blockTitle), blockTitle, this.sub, this.subState.cursor, true);
+    }
+    if (this.phase === 'addSource') {
+      const s = GUILD_CARD_POS.addSource;
+      drawListWindow(ctx, skin, s.x, s.y, windowWidth(this.sub, title), title, this.sub, this.subState.cursor, true);
+    }
+    // Under a question the list it came from stays drawn (its cursor is not active).
+    const under = this.phase === 'addAsk' ? this.askBack : this.phase === 'unblockAsk' ? 'blocked' : this.phase;
+    const asking = under !== this.phase;
+    if (under === 'blocked') {
+      const b = GUILD_CARD_POS.blocked;
+      drawListWindow(ctx, skin, b.x, b.y, windowWidth(this.list, null), null, this.list, this.listState.cursor, !asking);
+    }
+    if (under === 'addPlayer') {
+      const p = GUILD_CARD_POS.playerList;
+      drawListWindow(ctx, skin, p.x, p.y, windowWidth(this.list, this.text(T11_GUILD.playerTitle)), this.text(T11_GUILD.playerTitle), this.list, this.listState.cursor, !asking);
+    }
+    if (this.phase === 'addEntity') {
+      const en = GUILD_CARD_POS.entityList;
+      drawListWindow(ctx, skin, en.x, en.y, windowWidth(this.list, this.text(T11_GUILD.entityTitle)), this.text(T11_GUILD.entityTitle), this.list, this.listState.cursor, true);
+    }
+    if ((this.phase === 'delete' || this.phase === 'unblockAsk' || this.phase === 'addAsk') && this.question) {
       this.question.draw(ctx, skin, this.text(T11_GUILD.yes), this.text(T11_GUILD.no));
     }
     if (this.phase === 'comment' && this.editor) {
