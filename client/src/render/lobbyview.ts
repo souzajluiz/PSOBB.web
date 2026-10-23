@@ -320,7 +320,15 @@ export class LobbyView {
     });
     // 6xAB: another player's sit (the field has no sit slots: its getters are -1).
     lobby.on('sit', (p, chair) => {
-      if (p.clientId !== this.lobby.selfId && !this.fieldMotions) this.playEmote(p.clientId, chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN);
+      // The sit holds (state 0xab, FUN_0069b378 sets 0x10000000 for the chair) until the stop (6x3E) below.
+      if (p.clientId !== this.lobby.selfId && !this.fieldMotions) this.playEmote(p.clientId, chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN, { chair });
+    });
+    // 6x3E from another player: its move_stop ends a remote sit (the sit is held until then).
+    lobby.on('stopped', (p) => {
+      if (p.clientId === this.lobby.selfId || !this.emotes.get(p.clientId)?.sit) return;
+      this.emotes.delete(p.clientId);
+      const m = this.markers.get(p.clientId);
+      if (m) this.setGait(m, m.gait, true);
     });
 
     this.placeSelfOnGround();
