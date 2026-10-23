@@ -14397,3 +14397,11 @@ Follow-up to "trade windows: the ask, the held cancel, the accept prompt, the ab
 - the trade zone's object update rate and the floor-change reset (needs a trace of the object's update call site, the vtable slot);
 - the exe's accept window end to end (`ChallengePlayerInfoWindow_ProcessState_0074d9ac`, states 0x16..0x1a), as in the entry above;
 - a real-game check of the zone: stand inside and outside a trade collision (a field that has one), and confirm a trade inside is cancelled as traced.
+
+## 2026-10-23: trade zone, floors without a TObjTradeCollision stay permissive
+
+Merge review of the trade zone port (`net/tradezone.ts`): with no type-0x57 object on the floor no
+bit was ever set, so every field trade would be cancelled. newserv (`Map.cc`, TObjTradeCollision)
+documents the object as disabling the Trade Window near it, so `TradeZone` now reads the bits only
+once the floor has run a collision object check; a floor without one is permissive. ASSUMED: the
+bits' default outside the city was not traced in the exe.

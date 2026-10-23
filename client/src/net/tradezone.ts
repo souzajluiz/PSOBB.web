@@ -83,10 +83,15 @@ export function tradeZoneCheck(flags: number, obj: TradeZoneObject, world: Trade
 export class TradeZone {
   flags = 0;
   private inField = false;
+  // Whether the floor has a TObjTradeCollision (0x57). newserv (Map.cc) documents the object as
+  // disabling the Trade Window near it; where no such object exists the port stays permissive
+  // (ASSUMED: the bits' default outside the city was not traced).
+  private hasObject = false;
 
   // A field floor is loaded: the bits are driven by its collision objects.
   enterField(): void {
     this.inField = true;
+    this.hasObject = false;
   }
 
   leaveField(): void {
@@ -95,11 +100,12 @@ export class TradeZone {
 
   // IsTradeStateFlagSet_00825ac0 for a slot. Outside a field the port keeps the permissive reading.
   inZone(slot: number): boolean {
-    if (!this.inField) return true;
+    if (!this.inField || !this.hasObject) return true;
     return ((this.flags >> slot) & 1) === 1;
   }
 
   check(obj: TradeZoneObject, world: TradeZoneWorld): void {
+    this.hasObject = true;
     this.flags = tradeZoneCheck(this.flags, obj, world);
   }
 }

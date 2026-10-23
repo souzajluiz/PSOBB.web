@@ -59,7 +59,7 @@ check('radius 0: any distance is outside', tradeZoneCheck(0, { ...ORIGIN, radius
 const zone = new TradeZone();
 check('outside a field the zone is permissive (lobby: no collision objects loaded)', zone.inZone(0) && zone.inZone(3));
 zone.enterField();
-check('in a field with no bits set, the trade is cancelled (inZone false)', !zone.inZone(0) && !zone.inZone(1));
+check('in a field with no TObjTradeCollision the zone stays permissive (ASSUMED, newserv Map.cc)', zone.inZone(0) && zone.inZone(1));
 zone.check(ORIGIN, world([far[0]!, near[1]!, far[2]!, null]));
 check('check: slot 0 outside (set), slot 1 inside (clear)', zone.inZone(0) && !zone.inZone(1));
 check('check: slot 2 outside (set), slot 3 empty (clear)', zone.inZone(2) && !zone.inZone(3));
