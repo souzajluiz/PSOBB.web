@@ -28,6 +28,7 @@ import {
   SealDoor,
   TRAP_CAPTURE,
   TRAP_HOLD,
+  parseHoldPacket,
   TRAP_TECH,
   trapSe,
   trapVisionSeen,
@@ -252,6 +253,53 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   quiet.frame({ slots: none, room: 0, players: [at(0, 1, 1)], selfId: 0, springFrames: 1 });
   check(quiet.sound === null && quiet.state === 3, 'an area without the SE: the hold still runs silently');
   check(near.release(0).kind === 'release' && near.release(3).kind === 'release' && (near.release(3) as { clientId: number }).clientId === 3, 'release: a release event for the client');
+}
+
+// 7. The release: the trap's on-interact (0x63ed78) runs when another entity touches it; the held
+// player cannot release itself (the +0x50 gate 0x63a00c). Incoming 6x2C / 6x2D (parseHoldPacket).
+{
+  const none: (VisionPlayer | null)[] = [null, null, null, null];
+  const at = (x: number, z: number, clientId: number): CapturePlayer => ({ clientId, x, z, radius: 5 });
+  // Hold the player (client 0, the local one) at 8 from the trap at the origin.
+  const holdOn = (target: number, extra: CapturePlayer[] = []) => {
+    const ct = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+    ct.frame({ slots: none, room: 0, players: [at(0, 14, target), ...extra], selfId: 0, springFrames: 1 });
+    ct.frame({ slots: none, room: 0, players: [at(0, 8, target), ...extra], selfId: 0, springFrames: 1 });
+    return ct;
+  };
+  const rel = (evs: TrapEvent[]) => evs.filter((e) => e.kind === 'release');
+
+  const ct = holdOn(0);
+  check(ct.state === 3 && ct.captured === 0, 'the spring holds client 0 (the target is recorded)');
+  check(rel(ct.frame({ slots: none, room: 0, players: [at(0, 8, 0)], selfId: 0, springFrames: 1 })).length === 0, 'the held player alone near the trap does not release it');
+  const touched = rel(ct.frame({ slots: none, room: 0, players: [at(0, 8, 0), at(0, 18, 1)], selfId: 0, springFrames: 1 }));
+  check(touched.length === 1 && touched[0].kind === 'release' && touched[0].clientId === 0, 'a teammate 18 away (under 14 + 5) releases the held client 0');
+  check(ct.captured === null, 'the release clears the record');
+  check(rel(ct.frame({ slots: none, room: 0, players: [at(0, 8, 0), at(0, 18, 1)], selfId: 0, springFrames: 1 })).length === 0, 'no second release');
+
+  const far = holdOn(0);
+  check(rel(far.frame({ slots: none, room: 0, players: [at(0, 8, 0), at(0, 20, 1)], selfId: 0, springFrames: 1 })).length === 0, 'a teammate 20 away does not touch the trap');
+
+  // Another client held: this client's trap run releases it when this client's player touches the trap.
+  const remote = holdOn(2, [at(0, 18, 3)]);
+  check(remote.captured === 2 && remote.state === 3, 'the spring holds client 2 (a remote player) on this run too');
+  const remoteRel = rel(remote.frame({ slots: none, room: 0, players: [at(0, 8, 2), at(0, 18, 3)], selfId: 0, springFrames: 1 }));
+  check(remoteRel.length === 1 && remoteRel[0].kind === 'release' && remoteRel[0].clientId === 2, 'a touch by client 3 releases client 2 (the event names the held client)');
+  check(remote.release(2).kind === 'release', 'release() names the client it is given');
+
+  // The 6x2C / 6x2D bodies as the wire has them: u8 sub, u8 size, u16 client id, u16 frames.
+  const pkt = (sub: number, id: number, frames = 0) => {
+    const b = new Uint8Array(sub === 0x2c ? 0x14 : 4);
+    const dv = new DataView(b.buffer);
+    b[0] = sub;
+    b[1] = b.length / 4;
+    dv.setUint16(2, id, true);
+    if (sub === 0x2c) dv.setUint16(4, frames, true);
+    return b;
+  };
+  check(parseHoldPacket(0x2d, pkt(0x2d, 5))?.clientId === 5 && parseHoldPacket(0x2d, pkt(0x2d, 5))?.frames === 0, 'a received 6x2D names the client (no frames)');
+  check(parseHoldPacket(0x2c, pkt(0x2c, 1, 0xffff))?.frames === 0xffff, 'a received 6x2C carries the frames at 4');
+  check(parseHoldPacket(0x2a, pkt(0x2d, 5)) === null && parseHoldPacket(0x2d, new Uint8Array(2)) === null, 'other subcommands and short bodies are not hold packets');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');

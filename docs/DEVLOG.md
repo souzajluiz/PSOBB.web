@@ -9846,3 +9846,23 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - Not ported: the reticle (state 1 handler enable_reticle 0x0063a3bc: each player's lock-on targeting list, check_enemy_is_targetable); the Trap Vision tool's temporary bit (UNCLEAR, as before); the cloak is still the ASSUMED translucent shader.
 
 **Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/traps.test.ts` all checks pass: sections 4 and 5 moved to the `frame(input)` API, and new section 6 (trigger edge, spring end and reach, 6x2C fields, other client, no motion, speed clamp, SE by area, hold counter, release event). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts` and `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+**Follow-up (same day): the release is wired.** Written after the coordinator's review; it supersedes the "UNCLEAR, blocking" release item above.
+
+- The trap's on-interact is vtable slot 0x5c. The exe calls slot 0x5c from collision loops: an entity whose collision step touches a map object (object +0x96 == 1) calls `(*obj+0x50)(entity, 1.0)` and, when that is true, `(*obj+0x5c)(entity, 1.0)` (dump line 390595 and the asm `call *0x5c(%edx)` sites). The +0x50 gate for the capture trap is 0x0063a00c: `GetTargetableNPC(trap) != entity`. So the held (target) player cannot release itself; any other entity that touches the trap does (VERIFIED from the decompiles of 0x63a00c, 0x63ed78, 0x63e3b0).
+- The on-interact (SawMapObjectOnInteract 0x63ed78) runs SawMapObjectDisablePlayerMovementOnVisibility (0x63e3b0): the trap's target gets DisablePlayerMovement (6x2D) when its movement_disabled flag is set. The sender's own client sends it for its own player (the port: the held client).
+- The box: DerolleTrapCollisionBoxData (0x009c6b04) is a sphere of radius 14 at y + 20 (+0x0c = 14.0, +0x04 = 20.0, read with exedata.py; same layout as the pillar's 0x009c684c). The touch distance is 14 + the player radius 5 = 19, XZ (ASSUMED).
+
+**Ported (follow-up):**
+- `render/traps.ts` CaptureTrap: `captured` (the spring's target client id, set on every client). In state 3, `touch()` releases when another entity is within CAPTURE_TOUCH_RADIUS (19); one release, then `captured = null`. The held client itself is excluded (the 0x63a00c gate).
+- `parseHoldPacket(sub, body)`: the 6x2C / 6x2D body (u16 client id at 2, u16 frames at 4 for 6x2C).
+- `render/combat.ts`: `captureTrapEvent` sends 6x2D only when the released client is the local one (`holdTicks` cleared). `onSubcommand` handles incoming 6x2C / 6x2D: a 6x2D for the local client clears the local hold (released by another client); a 6x2C for it sets `holdTicks` to its frames; other clients' holds go to `remoteHolds` (6x2C adds, 6x2D removes; their movement still comes from their own packets).
+- `tests/traps.test.ts` section 7: a teammate 18 away releases the held local client; the held player alone does not; 20 away does not; a second release does not fire; a touch by client 3 releases client 2 (remote); `release()`; `parseHoldPacket` for 6x2C / 6x2D and rejects.
+
+**Open (not ported, decision for the coordinator):**
+- The state-3 hit path (SawMapObjectHandleHit 0x63e72c, counter <0). The asm: `call *0x114(%eax)` (unknown_melee_attack_2) then `call *0x5c(%edx)` on the trap's own slot with the target: that is the on-interact again, so it is the release (no touch gate), and it has no damage. The counter is +0x348, initialised to 1 in InitializeBaseMapObject, and the handler runs every state-3 tick: the release would come about two ticks after the spring, if the target's movement_disabled flag is set by the 6x2C (not traced). This contradicts the intended hold, so it is not ported. Decide after checking the 6x2C receive path in the exe.
+- The try_hit's damage: none; the slot is the on-interact, not a damage routine.
+- Not traced: the 6x2C receiver that sets movement_disabled; the authority branch of 0x63e3b0 (CreateItemObject == 1) that sends 6x2D for any target (the port sends only for the held client).
+- Hit type 4 (vtable slot 0x10 = 0x0063ed14) also runs the release and then kills the trap; the attack that makes a hit of type 4 is not decoded.
+
+**Checks (follow-up):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-7). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.

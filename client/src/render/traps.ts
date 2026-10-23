@@ -350,11 +350,16 @@ export class SealDoor {
 //   the SE plays (SawMapObjectPlaySound); below 0 the exe hits the target with vtable try_hit_entity
 //   (1.0) and unknown_melee_attack_2 every tick (damage UNCLEAR, not ported). Nothing in these
 //   handlers sets the state back: the trap stays in 3.
-//   Release: the trap's on-interact (vtable +0x5c = SawMapObjectOnInteract_0063ed78) runs
-//   SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0: the captured player (the nearest of
-//   the trap's target, by client slot) with the movement_disabled flag gets DisablePlayerMovement_
-//   00685514, i.e. 6x2D (the release). UNCLEAR: which input the on-interact is driven by; the web
-//   has no object interaction key (switches are stood on), so the release is not wired.
+//   Release: the trap's on-interact (vtable +0x5c = SawMapObjectOnInteract_0063ed78) is called by
+//   the collision step of an entity that touches the trap (the caller's +0x50 gate, 0x0063a00c, is
+//   "entity != the trap's target"). It runs SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0:
+//   the trap's target with the movement_disabled flag gets DisablePlayerMovement_00685514, 6x2D.
+//   So a teammate (or any other entity) that touches the trap releases the held player; the held
+//   player cannot release itself. VERIFIED (decompile of 0x63a00c / 0x63ed78 / 0x63e3b0; the
+//   collision loop of the enemy-side code at dump line 390595 calls (*obj+0x50) then (*obj+0x5c)).
+//   ASSUMED: the touch distance (touch()).
+//   Hit type 4 (vtable +0x10 = 0x0063ed14) also runs the release (FUN_0063e3b0) and then kills the
+//   trap (flag 1, FUN_008113bc); the attack that hits it is not decoded here (not ported).
 //
 // Reticle (state 1): enable_reticle (dump 575550) makes the trap a lock-on target for each
 // player's weapon targeting list (check_enemy_is_targetable); the drawing is not ported.
@@ -371,8 +376,13 @@ export const VIEW_DISTANCE = 400; // vtable +0x24 arg 0x43c80000 (400.0); its me
 export const CAPTURE_SPEED_MIN = Math.fround(0.1); // 0x00934514 (and 0x0093450c)
 export const CAPTURE_SPEED_MAX = 10; // 0x00934508
 export const HOLD_UNTIL_RELEASED = 0xffff; // 6x2C frames argument of the capture hold (EnemyAcquireTargetAndAttack)
+// The trap's collision: a sphere of radius 14 at y + 20 (DerolleTrapCollisionBoxData 0x009c6b04: +0x0c = 14.0,
+// +0x04 = 20.0, the layout of the pillar's box 0x009c684c, read with exedata.py).
+export const CAPTURE_BOX_RADIUS = 14;
 // ASSUMED: a player's hitboxes->radius (the pillar traps' PLAYER_RADIUS, combat/enemyfsm.ts).
 export const CAPTURE_PLAYER_RADIUS = 5;
+// ASSUMED: a touch is the other entity inside the box plus its own radius (CAPTURE_PLAYER_RADIUS), in XZ.
+export const CAPTURE_TOUCH_RADIUS = CAPTURE_BOX_RADIUS + CAPTURE_PLAYER_RADIUS;
 
 // The cloak flag: param5 (+0x88), an int clamped to 0..1 (ApplyDerolleTrapInitData).
 export function captureTrapCloaked(params: readonly number[]): boolean {
@@ -482,6 +492,9 @@ export class CaptureTrap {
   private reach = CAPTURE_RADIUS;
   // +0x348: the hit counter of SawMapObjectHandleHit (1 at construction, never reset here).
   private counter = 1;
+  // The client id held by the spring's hit (EnemyGetNearestTargetInRange's target at the spring's
+  // end), null when nobody is held. Set on every client (the trap runs on each), not only for the local player.
+  captured: number | null = null;
 
   constructor(params: readonly number[], area = 0, at: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }) {
     this.cloaked = captureTrapCloaked(params);
@@ -505,9 +518,29 @@ export class CaptureTrap {
     } else if (this.state === 2) {
       this.spring(input, out);
     } else {
+      this.touch(input.players, out);
       this.hold(out);
     }
     return out;
+  }
+
+  // The release (SawMapObjectOnInteract_0063ed78 -> SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0).
+  // The trap's on-interact is called when an entity's collision touches the trap (the caller checks the
+  // +0x50 gate first: 0x0063a00c is "the entity is not the trap's target", so the held player cannot
+  // release itself; any other entity does). The release sends 6x2D for the held player.
+  // ASSUMED: "touches" is the entity within the box radius plus the player radius, in XZ.
+  private touch(players: readonly CapturePlayer[], out: TrapEvent[]): void {
+    if (this.captured === null) return;
+    for (const p of players) {
+      if (p.clientId === this.captured) continue;
+      const dx = p.x - this.x;
+      const dz = p.z - this.z;
+      if (dz * dz + dx * dx < CAPTURE_TOUCH_RADIUS * CAPTURE_TOUCH_RADIUS) {
+        out.push(this.release(this.captured));
+        this.captured = null;
+        return;
+      }
+    }
   }
 
   // DerollePartObjectUpdateTarget_0063a3d8: a player within the radius -> spring.
@@ -530,6 +563,7 @@ export class CaptureTrap {
     const dz = target.z - this.z;
     if (dz * dz + dx * dx < this.reach * this.reach) {
       const r2 = Math.fround(this.reach * this.reach);
+      this.captured = target.clientId;
       // SnowBerillSendAttackPacket_006937c8 is sent for the target; the packet goes out for the local player.
       if (target.clientId === input.selfId) {
         out.push({ kind: 'hold', clientId: target.clientId, frames: HOLD_UNTIL_RELEASED, x: this.x, z: this.z, radius2: r2 });
@@ -539,15 +573,27 @@ export class CaptureTrap {
   }
 
   // SawMapObjectHandleHit_0063e72c: the counter drops; while it is 0 or more the SE plays. Below 0
-  // the exe hits the target every tick (damage not ported, UNCLEAR).
+  // the exe calls unknown_melee_attack_2 and then try_hit_entity(target, 1.0) on the trap's own vtable
+  // slot 0x5c (`call *0x5c(%edx)` in the asm: the on-interact, so the release of the target with no
+  // touch gate). NOT ported: the counter's field (+0x348) is ASSUMED and the flag it needs is not traced;
+  // if both hold, the release would come two ticks after the spring (open question, see the DEVLOG).
   private hold(out: TrapEvent[]): void {
     this.counter -= 1;
     if (this.counter >= 0 && this.sound !== null) out.push({ kind: 'sound', id: this.sound });
   }
 
-  // The local player's release (6x2D; SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0). The
-  // input that calls it is UNCLEAR (not wired); the state is not changed by it in the exe.
+  // The 6x2D for `clientId` (DisablePlayerMovement_00685514). The state is not changed by it in the exe.
   release(clientId: number): TrapEvent {
     return { kind: 'release', clientId };
   }
+}
+
+// An incoming 6x2C / 6x2D (u8 sub, u8 size, u16 client id at 2; 6x2C's u16 frames at 4).
+export function parseHoldPacket(sub: number, body: Uint8Array): { sub: 0x2c | 0x2d; clientId: number; frames: number } | null {
+  if (sub !== 0x2c && sub !== 0x2d) return null;
+  if (body.length < 4) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const clientId = dv.getUint16(2, true);
+  const frames = sub === 0x2c && body.length >= 6 ? dv.getUint16(4, true) : 0;
+  return { sub, clientId, frames };
 }
