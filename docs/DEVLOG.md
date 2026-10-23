@@ -11640,3 +11640,35 @@ the back key (the state handler's close path) are not traced in full.
 in `net/`, check newserv's support), then the state handler's list and confirm rows; (2)
 Symbol Chat: the symbol art store (0xF942 / 0xF943 and the character file's capture area)
 before the list; (3) Chat > Shortcut (0x11) with the same phrase list as Symbol Chat.
+## 2026-10-23: Deldepth's disc (the disc part and its emerge / retreat curves)
+
+**What changed:** Deldepth draws its disc (model 1 of `bm_ene_del_depth.bml`) as a second part of the enemy, placed with the disc transform each tick: height +0x3a4, scale (+0x3a8, +0x3ac, +0x3b0), alpha +0x3a0. The curves are the brain's (`combat/enemyfsmep2c.ts` DeldepthAi.`transform`), per frame. The body and the disc are both placed with the same transform, as the exe's sub-object draw does, and each is drawn only in its form. Code: `combat/enemyfsmep2c.ts` (`DELDEPTH_XF`, `riseCurves`, `DeldepthXf`, `discShown` / `bodyShown`, `resetScale`, the dormant / emerge / retreat / slide / miss / hurt / dead entries and frames), `formats/enemymodels.ts` (case 0xdb: parts `Deldepth body` = model 0, `Deldepth disc` = model 1 hidden), `render/combat.ts` (`deldepthView`, called from the enemy tick). Tests: `tests/enemyfsmep2c.test.ts` (the Deldepth block: dormant entry, emerge and retreat curves per frame, rise / tuck write none, aim, the death fade, the wiring).
+
+**Correction to the entry above (2026-10-23, Deldepth trace):** the states 4 and 5 do not write the curves. The rise frame (0x005483b8) and the tuck frame (0x00548404) are only the transition checks, and the rise / tuck entries (0x005493f8, 0x00549460) write only the animation id and the flags. The float writes are: the dormant entry (0x00549148: +0x3a4 = -2.5, +0x3a8 / +0x3ac / +0x3b0 = 0, +0x3a0 = 0), the emerge entry (0x005491dc: +0x3a4 = -2.5), the emerge frame (0x00547b70), the retreat entry (0x00549228: +0x3a4 = 0), the retreat frame (0x00547cfc), the slide entry (0x00549278: +0x3a0 = 1.0), the miss / hurt / dead entries (0x00549704, 0x00549764, 0x005497fc: scale = 1.0) and the dead frame (0x00548d60: the fade). The other frames (0x00547e44 slide, 0x00548450 aim, ...) write none of these offsets.
+
+**Exe evidence** (PsoBB.exe 1.25.13; objdump for the call sites and the stack order, Ghidra for the bodies, `tools/exedata.py` for the constants):
+- The draw 0x0054781c (the enemy's render, after the vtable +0x24 view test with radius 0x41a00000 = 20 and the scale global 0x00a738a4 = 500): nothing is drawn while +0x3a0 <= 0 (0x00923f10 = 0). Then 0x0054793c: if `DAT_00aca300 & 0x20` it draws the sub-object through 0x0054a38c and returns 1 (the body path is skipped), else returns 0 and the body path draws the same sub-object with the alpha blend (0x005479cc / 0x00547a54, when alpha < 1.0 = 0x00923f08).
+- The transform (0x0054793c): translate (+0x38, +0x3c + +0x3a4, +0x40) (`fadd [ebx+0x3a4]` at 0x00547978), yaw +0x60 (`FUN_0082d8bc`, edx = +0x60, ecx = 0), scale (FUN_0083c0a0 with edx = &+0x3a8: the three scales on the matrix columns), then FUN_0054a38c(+0x384).
+- FUN_0054a38c (the sub-object's draw, by its animation id at +4): ids 0..5 the body (model table entry 0 through FUN_007aa668), 6..9 one model (+8, motion +0x10, frame +0x28: the disc), 10 / 11 both (+8 and +0x14). Ids 6..9 are the disc form, 10 / 11 the transformations.
+- Emerge (0x00547b70, `DeldepthUpdateState1_00547b70`), with t = +0x394 before its step (0x00a73870 = 1/30), count = +0x38c:
+  - +0x3a8 = 2.5 - 1.5 t; +0x3b0 = 2.5 - 1.5 t (0x00923ed8, 0x00923ef0, 0x00923ee0); +0x3a4 = -2.5 (1 - t) (0x00923ee4); +0x3ac = t.
+  - f = t > 0.8 ? (1 - t) / 0.2 : 1 (0x00923d2c, 0x00923eec); s = sin(count << 12 BAMS) (0x0082dcbc, the exe's table); the count increments after it.
+  - +0x3a8 *= 1 + 0.1 f s; +0x3b0 *= 1 - 0.1 f s (0x00923d28 = 0.1).
+  - +0x3a0 = t < 0.5 ? 2 t : 1 (0x00923d24, 0x00923ee8). Then t += 1/30; t > 1 -> retreat (nobody near) or slide, as the port had it.
+- Retreat (0x00547cfc): the same curves with spin 0.15 (0x00923d34), the threshold 0.8 and the divisor 0.2 (0x00923d38, 0x00923ec8), alpha 2t below 0.5 (0x00923d30, 0x00923ec4), t += -1/90 (0x00a73878 = -0.011111111); t < 0 -> the dormant entry (state 0).
+- The death fade (0x00548d60, dead frame): for the 5 frames of the fade, +0x3a0 += -0.2 (0x00923d58), or 0 when the sum would be below 0 (0x00923e78 = 0). The scale is 1.0 from the dead entry on.
+
+**Port:** the disc part with the entry's order: the emerge and retreat curves are computed from the same progress and spin the exe uses (the wobble's sine is `bamsSin` from `combat/derollefins.ts`, the port's BAMS sine), the transform is applied per tick in `deldepthView` (`position.y`, `scale`), the visibility by the form (`bodyShown`: ids 0..5 and 10 / 11; `discShown`: ids 6..11), and the alpha is the material opacity through `setModelOpacity` (the body and the disc, drawn only while alpha > 0). The sum sx + sz = 2 (2.5 - 1.5 t) is exact for every frame (the wobble scales them opposite ways).
+
+**ASSUMED:**
+- The disc's draw has the same alpha as the body. The exe's disc path (0x0054793c) takes no alpha; the body path (0x0054781c) blends below 1.0. The port applies alpha to both (the brief asked for the disc's alpha).
+- The pass flag `DAT_00aca300 & 0x20` is set in the normal frame (the exe never writes it in code; the value is not traced). The port draws the sub-object once.
+- The wrapper of 0x0054793c: 0x00505a3c pushes a matrix about the aim point +0x3ec (set every 5th frame, 0x00547728) with the direction (0, 1, 0), mirrored in Z (0x0082fa0c), and pops it in 0x00505bf8. It runs only when `DAT_00a72b8c` is set, a word written to 0 by the render-state constructors (0x005059dc, 0x00505c92). The writers 0x00505dfb / 0x00505f3a are not traced. ASSUMED 0 in the normal pass, so the port has no wrapper.
+- The disc's own motion: the disc part has no motion (static pose). Its motion frames (ids 6..9 play the disc model's own motions) are not mapped to the BML's motion list; the body's stand-in motions stay on the body part.
+- The initial values of the constructor (0x005499b0) are the dormant entry's (the port runs it, as its dormant state already did). The alpha is 0 until the emerge, so nothing is drawn before.
+- Float precision: the exe's x87 intermediates are double here, rounded at each store (Math.fround); the per-frame match is within 1e-3 (the test's tolerance).
+- The frame count of the death fade: the 5 fade frames are the last 5 of the port's death countdown (`deathLeft` <= 5); the exe's split of its countdown (0x20 / 0x22 frames, then 5) is the one the port already had.
+
+**Not done:** Morfos's arm / wall and the Pofuilly tails (ROADMAP line stays open for them). Not run in Chrome (per the brief); the disc view is untested in a browser.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `tests/enemyfsmep2`, `enemyfsmep2a`, `enemyfsmep2b`, `enemyfsmep2c` (new Deldepth cases), `enemyfsmep2d`, `enemies`, `combatdepth`, `deathfx` pass.

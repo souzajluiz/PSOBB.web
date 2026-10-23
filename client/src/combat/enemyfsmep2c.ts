@@ -43,6 +43,7 @@
 // plus Ghidra on the same build (the community .gzf, scratch project).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
+import { bamsSin } from './derollefins.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, PLAYER_RADIUS, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, PLAYER_AIM_HEIGHT, TechBolt, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -2597,6 +2598,48 @@ export const DELDEPTH = {
 // Frames of the real motions (see the header).
 const DELDEPTH_FRAMES = { attack: 30, attack2: 20, changea: 20, changeb: 20, damage: 18, dead: 20, wait: 20 } as const;
 
+// The disc transform (the sub-object's +0x3a0 alpha, +0x3a4 height, +0x3a8 /
+// +0x3ac / +0x3b0 scale): the sub-object is drawn at (x, y + 0x3a4, z) with the
+// heading (+0x60) and this scale (0x0054793c, 0x0054781c, both paths). Written by
+// the emerge and retreat frames (0x00547b70, 0x00547cfc), the entries (the
+// dormant 0x00549148, emerge 0x005491dc, retreat 0x00549228, slide 0x00549278,
+// miss 0x00549704, hurt 0x00549764, dead 0x005497fc) and the death fade
+// (0x00548d60). Rise (0x005493f8) and tuck (0x00549460) write none.
+export interface DeldepthXf {
+  y: number; // +0x3a4
+  sx: number; // +0x3a8
+  sy: number; // +0x3ac
+  sz: number; // +0x3b0
+  alpha: number; // +0x3a0 (drawn when > 0)
+}
+const DELDEPTH_XF = {
+  sink: -2.5, // 0xc0200000: the dormant, emerge and retreat entries' height (the emerge curve's start)
+  drop: -2.5, // 0x00923ee4: the emerge / retreat curve's height, -2.5 * (1 - t)
+  base: 2.5, // 0x00923ed8 (x) and 0x00923ee0 (z)
+  slope: -1.5, // 0x00923ef0 (emerge) and 0x00923ecc (retreat)
+  knee: 0.8, // 0x00923d2c / 0x00923d38: the wobble starts above t = 0.8
+  span: 0.2, // 0x00923eec / 0x00923ec8: the wobble fades over (1 - t) / 0.2
+  emergeSpin: 0.1, // 0x00923d28
+  retreatSpin: 0.15, // 0x00923d34
+  alphaKnee: 0.5, // 0x00923d24 / 0x00923d30
+  alphaSlope: 2, // 0x00923ee8 / 0x00923ec4
+  fade: -0.2, // 0x00923d58: the death fade, a frame
+} as const;
+
+// The emerge (spin 0.1) and retreat (spin 0.15) curves: t is the progress before
+// its step, count the spin phase (+0x38c, BAMS count << 12) before its increment.
+function riseCurves(xf: DeldepthXf, t: number, count: number, spin: number): void {
+  const C = DELDEPTH_XF;
+  xf.sx = Math.fround(C.base + C.slope * t);
+  xf.sz = Math.fround(C.slope * t + C.base);
+  xf.y = Math.fround(C.drop * (1 - t));
+  xf.sy = Math.fround(t);
+  const wobble = (t > C.knee ? Math.fround((1 - t) / C.span) : 1) * bamsSin(count * 0x1000) * spin;
+  xf.sx = Math.fround((wobble + 1) * xf.sx);
+  xf.sz = Math.fround((1 - wobble) * xf.sz);
+  xf.alpha = Math.fround(t < C.alphaKnee ? C.alphaSlope * t : 1);
+}
+
 // Body motion rows used for each animation id. Ids 6..9 (the disc's own
 // motions) have no body counterpart: ASSUMED wait_swim_body.
 const WAIT = row(11, 0.5, DELDEPTH_FRAMES.wait, true);
@@ -2705,6 +2748,7 @@ export class DeldepthAi extends ExeBrain {
   private hitBox = false; // +0x3f8
   private animId = 6; // the sub-object's animation id (+4)
   private t = 0; // +0x394: the emerge / retreat progress, the slide's distance left
+  private xf: DeldepthXf = { y: 0, sx: 0, sy: 0, sz: 0, alpha: 0 };
   private count = 0; // +0x38c
   private count2 = 0; // +0x390
   private spin = 0; // +0x3c4
@@ -2741,6 +2785,27 @@ export class DeldepthAi extends ExeBrain {
     return this.animId >= 6 && this.animId < 10;
   }
 
+  // What the sub-object draws (0x0054a38c): ids 0..5 the body (model 0), 6..9 the
+  // disc (model 1), 10 / 11 the transformations draw both.
+  get discShown(): boolean {
+    return this.animId >= 6;
+  }
+  get bodyShown(): boolean {
+    return this.animId < 6 || this.animId >= 10;
+  }
+
+  // The disc transform of this frame (height, scale, alpha).
+  get transform(): Readonly<DeldepthXf> {
+    return this.xf;
+  }
+
+  // Miss, hurt and death set the scale back to 1.0 (0x00549704, 0x00549764, 0x005497fc).
+  private resetScale(): void {
+    this.xf.sx = 1;
+    this.xf.sy = 1;
+    this.xf.sz = 1;
+  }
+
   // Entity flag 0x4000000 or the disabled hit box (+0x3f8 == 0).
   get invulnerable(): boolean {
     return this.invuln || !this.hitBox;
@@ -2767,13 +2832,16 @@ export class DeldepthAi extends ExeBrain {
         this.hitBox = false;
         this.invuln = false;
         this.t = 0;
+        this.xf.y = DELDEPTH_XF.sink;
         break;
       case 'retreat': // 0x00549228
         this.t = 1;
+        this.xf.y = 0;
         this.hitBox = false;
         this.anim(out, 6);
         break;
-      case 'slide':
+      case 'slide': // 0x00549278 (alpha 1.0: the disc is no longer fading)
+        this.xf.alpha = 1;
         this.spawnLogic(out);
         break;
       case 'rise': // 0x005493f8
@@ -2822,12 +2890,14 @@ export class DeldepthAi extends ExeBrain {
         this.hitBox = true;
         break;
       case 'miss': // 0x00549704
+        this.resetScale();
         this.invuln = false;
         this.count2 = 0;
         this.anim(out, 3);
         this.hitBox = true;
         break;
       case 'hurt': // 0x00549764
+        this.resetScale();
         this.invuln = false;
         if (this.animId < 6) this.anim(out, 4);
         else {
@@ -2837,6 +2907,7 @@ export class DeldepthAi extends ExeBrain {
         this.hitBox = false;
         break;
       case 'dead': // 0x005497fc
+        this.resetScale();
         if (this.animId < 6) {
           this.count = DELDEPTH.deathBody;
           this.anim(out, 5);
@@ -2854,6 +2925,8 @@ export class DeldepthAi extends ExeBrain {
 
   // 0x00549148: the state 0 entry (also run by the constructor).
   private enterDormant(): void {
+    // 0x00549148: height -2.5, scale 0, alpha 0 (nothing is drawn).
+    this.xf = { y: DELDEPTH_XF.sink, sx: 0, sy: 0, sz: 0, alpha: 0 };
     this.hitBox = false;
     this.invuln = true;
     this.tries = 0;
@@ -2971,6 +3044,7 @@ export class DeldepthAi extends ExeBrain {
       }
       case 'emerge':
         // 0x00547b70.
+        riseCurves(this.xf, this.t, this.count, DELDEPTH_XF.emergeSpin);
         this.count++;
         this.t = Math.fround(this.t + DELDEPTH.emergeStep);
         if (this.t > 1) {
@@ -2980,6 +3054,7 @@ export class DeldepthAi extends ExeBrain {
         return;
       case 'retreat':
         // 0x00547cfc.
+        riseCurves(this.xf, this.t, this.count, DELDEPTH_XF.retreatSpin);
         this.count++;
         this.t = Math.fround(this.t + DELDEPTH.retreatStep);
         if (this.t < 0) this.enter(out, 'dormant');
@@ -3036,7 +3111,12 @@ export class DeldepthAi extends ExeBrain {
         }
         return;
       case 'dead':
-        // 0x00548d60: the countdown, 5 frames of fading, then it is removed.
+        // 0x00548d60: the countdown, 5 frames of fading (alpha -0.2 a frame, 0 once
+        // it would go below), then it is removed.
+        if (this.deathLeft <= DELDEPTH.deathFade) {
+          const a = Math.fround(DELDEPTH_XF.fade + this.xf.alpha);
+          this.xf.alpha = a >= 0 ? a : 0;
+        }
         if (this.deathLeft > 0) this.deathLeft--;
         return;
       default:

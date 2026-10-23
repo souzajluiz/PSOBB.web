@@ -1714,6 +1714,7 @@ export class CombatView {
         root.rotation.order = 'YXZ';
         root.rotation.x = ai.tiltX;
       }
+      if (ai instanceof DeldepthAi) this.deldepthView(e, ai);
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
@@ -4422,6 +4423,23 @@ export class CombatView {
   private epsilonLook = new Map<EnemyRuntime, number>();
   private epsilonBodies = new Map<EnemyRuntime, EpsilonBody>();
   private epsilonOrbs = new Map<EnemyRuntime, THREE.Mesh>();
+
+  // Deldepth (combat/enemyfsmep2c.ts DeldepthAi): the body and the disc are both
+  // placed with the disc transform (height +0x3a4, scale +0x3a8..0x3b0; the
+  // yaw is the root's) and drawn only in the sub-object's form (bodyShown /
+  // discShown, 0x0054a38c). Alpha (+0x3a0) is the material opacity; nothing is
+  // drawn at 0 (0x0054781c).
+  private deldepthView(e: EnemyRuntime, ai: DeldepthAi): void {
+    const xf = ai.transform;
+    for (const child of e.instance.root.children) {
+      const body = child.name === 'Deldepth body';
+      if (!body && child.name !== 'Deldepth disc') continue;
+      child.position.set(0, xf.y, 0);
+      child.scale.set(xf.sx, xf.sy, xf.sz);
+      child.visible = xf.alpha > 0 && (body ? ai.bodyShown : ai.discShown);
+      if (child.visible) setModelOpacity(child, xf.alpha);
+    }
+  }
 
   private epsilonView(e: EnemyRuntime, ai: EpsilonAi, r: { hidden?: boolean; motion?: EnemyAiMotion | null }): void {
     const parts = e.instance.root.children;
