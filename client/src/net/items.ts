@@ -65,6 +65,7 @@ import type { CharacterFile, InventoryItem } from './charfile.ts';
 import type { Command } from './bbconnection.ts';
 import { applyMagFeed, FeedTimer, isMagFood, type FeedContext } from './magfeed.ts';
 import type { Game } from './game.ts';
+import { DROP_HOLD_FRAMES, DropSearch } from './dropspot.ts';
 
 export const MESETA_ITEM_ID = 0xffffffff;
 export const PICKUP_SERVER_RANGE = 30; // newserv: dist^2 > 900 is refused
@@ -701,9 +702,15 @@ export class GameItems {
   // 6x59 took a floor item (HandlePlayerPickupSuccess_005c4c1c: particle
   // 0x9B and SE 0x571 at the picker, render/flooritems.ts).
   onPickedUp: (item: FloorItem, picker: number) => void = () => {};
-  // Where the local player's drop lands (the exe's spot search,
-  // render/flooritems.ts findDropSpot); null keeps the player's position.
-  dropSpot: (me: { x: number; y: number; z: number; angle: number }) => { x: number; y: number; z: number } | null = () => null;
+  // The local player's drop spot search (net/dropspot.ts; render/flooritems.ts
+  // supplies the ground and the walls). Null drops at the player's feet.
+  dropSearch: ((me: { x: number; y: number; z: number; angle: number }) => DropSearch) | null = null;
+  // The drop's hold on the local player (6x2C sent here; the combat view
+  // stops the player's movement): imposed when a drop starts, released when
+  // the spot is found (6x2D).
+  onDropHold: (frames: number) => void = () => {};
+  onDropRelease: () => void = () => {};
+  private pendingDrops: Array<{ itemId: number; size: number; floor: number; search: DropSearch }> = [];
   onInventoryChanged: () => void = () => {};
   onBoxOpened: (objectIndex: number) => void = () => {};
   // Shop lists by 6xB5 type (6xB6), kept for the rest of the game like the
@@ -1044,12 +1051,43 @@ export class GameItems {
       this.game.sendSubcommand(0xc3, buildSplitStack(this.game.selfId, itemId, amount, me.floor, x, z).subarray(4));
       return;
     }
-    // 0x0068d878 -> Player_DropItem_0068f090: the spot found around the
-    // player, amount = the stack count (0x005d29b0; newserv ignores it).
-    const at = this.dropSpot({ x, y, z, angle: me.angle }) ?? { x, y, z };
-    this.game.sendSubcommand(0x2a, buildDropItem(this.game.selfId, itemId, me.floor, at.x, at.y, at.z, size).subarray(4));
+    // 0x0068d878: 6x2C holds the player and the drop object searches a spot
+    // (net/dropspot.ts); the 6x2A amount is the stack count (0x005d29b0;
+    // newserv ignores it).
+    if (!this.dropSearch) {
+      this.placeDrop(itemId, size, me.floor, { x, y, z });
+      return;
+    }
+    this.game.sendImposeHold(DROP_HOLD_FRAMES, 0, x, z, 0);
+    this.onDropHold(DROP_HOLD_FRAMES);
+    this.pendingDrops.push({ itemId, size, floor: me.floor, search: this.dropSearch({ x, y, z, angle: me.angle }) });
+  }
+
+  // One spot search step per game frame for each drop in progress
+  // (FUN_006a44fc via FUN_006a4820). A found spot gets 6x2A, then 6x2D.
+  // A failed search sends nothing; its hold runs down on its own.
+  tickDrops(): void {
+    for (const d of [...this.pendingDrops]) {
+      const r = d.search.search();
+      if (r.status === 'searching') continue;
+      this.pendingDrops = this.pendingDrops.filter((p) => p !== d);
+      if (r.status === 'failed') {
+        this.log(`drop ${d.itemId.toString(16)}: no spot`);
+        continue;
+      }
+      this.placeDrop(d.itemId, d.size, d.floor, r.at);
+      this.game.sendReleaseHold();
+      this.onDropRelease();
+    }
+  }
+
+  // 6x2A at the spot (Player_DropItem_0068f090), then the item is ours on the floor.
+  private placeDrop(itemId: number, size: number, floor: number, at: { x: number; y: number; z: number }): void {
+    const inv = this.inventory;
+    if (!inv || !inv.find(itemId)) return;
+    this.game.sendSubcommand(0x2a, buildDropItem(this.game.selfId, itemId, floor, at.x, at.y, at.z, size).subarray(4));
     const data = inv.remove(itemId);
-    this.addFloorItem({ id: itemId, floor: me.floor, x: at.x, y: at.y, z: at.z, data, source: 'player', entityIndex: 0xffff });
+    this.addFloorItem({ id: itemId, floor, x: at.x, y: at.y, z: at.z, data, source: 'player', entityIndex: 0xffff });
     this.changed();
   }
 

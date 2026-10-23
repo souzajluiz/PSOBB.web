@@ -538,6 +538,7 @@ export class FieldHud {
       this.paletteHud.tick();
       this.opts.items.tickMags();
       this.opts.items.tickPickups();
+      this.opts.items.tickDrops();
       this.counter?.tick();
       const src = this.opts.minimap;
       if (src && this.minimap.loaded) {

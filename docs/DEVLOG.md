@@ -9650,3 +9650,27 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **ASSUMED / not checked:** int_sin / int_cos table interpolation (the port uses Math.cos / Math.sin; the difference is below the table's own precision); the spin angle's ROUND (the port's `Math.round` for the model spin, which the exe does with RC 0xc00 = truncation: exact for 2 * rand, so no visible difference, not changed).
 
 **Checks:** `node tests/particlespawn.test.ts` ALL PASS; `node tests/particleslope.test.ts` ALL PASS; `deathfx`, `hitfx`, `telepipe`, `playerfx`, `techlightning`, `dragon`: pass. `npx tsc --noEmit -p .` (client, Node 24): clean. Not run in Chrome.
+(Correction of the 2026-10-18 entry: the spot search is rings 1..5 plus the first spot of ring 6, and the spot's y is ground + 6; see below.)
+
+## 2026-10-23: Drop spot: 6x2C hold, line-of-sight ray, one spot a frame; pending-pickup lock re-checked
+
+**What changed:** the local drop no longer picks its spot at once. `net/dropspot.ts` (`DropSearch`) is the exe's search; `net/items.ts` `drop()` sends the 6x2C hold and queues the search, `tickDrops()` (called from the field tick with `tickPickups`) runs one spot per frame, sends 6x2A at the first spot found and then 6x2D. A search that runs out sends nothing. `render/flooritems.ts` `findDropSpot` is gone: its ground and walls come from `FloorItemLayerOptions` (`wallBlocks` = `CollisionWorld.segmentHit`, mask -1). `render/combat.ts` `holdLocal` / `releaseLocalHold` stop the player while the hold is on (`gameview.ts` wires them). The spot's y is now ground + 6, so 6x2A carries the exe's y. The pickup lock (`pickupLock`, `tickPickups`) was already in place from 10-21; this pass re-checked it, no code change.
+
+**Exe evidence** (PsoBB.exe 1.25.13; named dump `Psobb.exe-05112026.c`, Ghidra for the unnamed ones):
+- 0x0068d878 (named ChallengePlayer_UseItem_0068d878): `FUN_008003e0(0x2c, 900, x, z, 0)` = the 6x2C {900 frames, particle 0, x, z, r^2 0} at the player's position (+0x38 / +0x40), not when +0x32c == 2; then `FUN_006a43b8` (HandleItemAcquisition, named dump undecompilable) -> `FUN_006a40c0` the drop object (+0x1d ring = 1 via 006a6e00).
+- Drop object vtable 0x00b39d04, slot 1 = 0x006a4820 (update): `FUN_006a44fc` is the search, one call per frame. Return 0 = keep searching, 1 = found (state 1: `FUN_0068f090` = 6x2A at +0x44 with the stack count, then `DisablePlayerMovement_00685514` = 6x2D, the release; 0x00685514 skips it at +0x32c == 2), 2 = give up (no send, no release).
+- 006a6e00: count 4r (+0x1f), radius 6r (+0x34, 0x0093db68 = 6.0), step 0x10000 / 4r BAMS (+0x2c), angle starts at the heading (+0x28 -> +0x30).
+- Per spot (006a44fc): `FUN_00780630(spot, 0x41)` ground, none -> reject; spot y = ground + 6 (0x0093db84); the eye = `FUN_007b4c58` on the player (ground probed from y + 10, 0x0097e3e4), + 6; `FUN_0077fffc(eye, spot, -1)` non-null (a wall) -> reject; reject = angle += step, index++.
+- Quirk: `if (ring < 6)` is tested before the ring steps, so ring 6 gets its first spot and the next call fails: 61 spots in all.
+- Pickup: RequestItemPickup_005c49ec (413539): request only if CanPlayerPickupItem and +0x94 == -1; sets +0x94 = the picker's client id, +0xe6 = 0, sends 6x5A. UpdateGroundItem_005c4010 (412835): counter == 900 -> +0x94 = -1 (the 901st frame), else counter++. action_pick_up_dropped_item (6x59, 413574): the local-inventory branch sets +0x94 = -1; the floor branch removes the floor item (ProcessItemAction_005c4bd4 -> RemoveItemFromFloor) when the picker can take it.
+
+**ASSUMED / not ported:**
+- ASSUMED: sin for x and cos for z of the spot (the tables 0x0098b560 / 0x0098c560 were not read).
+- ASSUMED: the probe for the spot's ground starts at the player's y (the exe's +0x48 = +0x3c); the port's `ground()` takes that as fromY.
+- ASSUMED: the 0x32c == 2 gate and the item-creation gates of 0x68d878 (FUN_0082c204 / FUN_006dc358, sound 0x575) are not modelled; they are taken as passing.
+- Not ported: FUN_007b5318, the test that rejects a spot where a player's body stands (the 0x00aad720 list); a spot under another player can be picked.
+- UNCLEAR: whether the 6xC3 split and meseta drops also run this search in the exe (the port keeps them at the player's feet with no search).
+- Divergence kept on purpose: a floor item that the picker could not take stays on the floor in the exe until its lock runs out; the port removes it on any 6x59, because newserv has already removed it.
+- Not ported: the 0xffff reset of RequestItemPickup (no caller in the dump).
+
+**Checks:** `node tests/drops.test.ts`: all checks passed (new: the search order, ring 2, the failure after 62 calls, the wall, the eye, the heading, the 6x2C / 6x2D pairing). `node tests/items.test.ts`: all passed. `node tests/itemmodels.test.ts`: ALL PASS (4623). `node tests/fieldhud.test.ts`, `tests/telepipe.test.ts`, `tests/shop.test.ts`: all passed. `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome; no live test.

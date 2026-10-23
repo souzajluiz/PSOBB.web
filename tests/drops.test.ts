@@ -3,8 +3,9 @@
 // the pickup hook of 6x59 and the 6x2A height / amount.
 // Run: node tests/drops.test.ts
 
-import { DROP_RING_STEP, findDropSpot, floorItemHeight, ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP } from '../client/src/render/flooritems.ts';
+import { floorItemHeight, ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP } from '../client/src/render/flooritems.ts';
 import { canPickUp, GameItems, PICKUP_LOCK_FRAMES, type FloorItem } from '../client/src/net/items.ts';
+import { DropSearch, DROP_HOLD_FRAMES, DROP_RING_STEP } from '../client/src/net/dropspot.ts';
 import { itemFromHex } from '../client/src/formats/itemnames.ts';
 import type { Game } from '../client/src/net/game.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -30,20 +31,47 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   eq(floorItemHeight({ x: 1, z: 2, y: 7 }, () => null), 7, 'no ground: y kept');
 }
 
-// --- the drop's spot search ---
+// --- the drop's spot search (net/dropspot.ts, FUN_006a44fc) ---
 {
+  const run = (me: { x: number; y: number; z: number; angle: number }, ground: (x: number, z: number, fromY: number) => number | null, wallBlocks = (): boolean => false) => {
+    const s = new DropSearch(me, { ground, wallBlocks });
+    for (let steps = 1; steps <= 200; steps++) {
+      const r = s.search();
+      if (r.status !== 'searching') return { status: r.status, steps, at: r.status === 'found' ? r.at : null };
+    }
+    return { status: 'stuck', steps: 200, at: null };
+  };
   const me = { x: 10, y: 0, z: 10, angle: 0 };
-  eq(r3(findDropSpot(me, () => 0)), [10, 0, 16], 'first spot: 6 in front (sin, cos)');
-  // Only ground beyond 10 units: ring 2 (12 units), first spot in front.
+  eq(DROP_HOLD_FRAMES, 900, '6x2C hold 900 frames');
+  const first = run(me, () => 0);
+  eq([first.status, first.steps, r3(first.at)], ['found', 1, [10, 6, 16]], 'first spot: 6 in front (sin, cos), y = ground + 6');
+  // Only ground beyond 10 units: ring 2 (12 units) after the four spots of ring 1.
   const far = (x: number, z: number) => (Math.hypot(x - 10, z - 10) > 10 ? 3 : null);
-  eq(r3(findDropSpot(me, far)), [10, 3, 22], 'ring 2 when ring 1 has no ground');
-  eq(findDropSpot(me, () => null), null, 'no spot within ring 5');
+  const ring2 = run(me, far);
+  eq([ring2.status, ring2.steps, r3(ring2.at)], ['found', 5, [10, 9, 22]], 'ring 2 when ring 1 has no ground');
+  // No ground at all: rings 1..5 (60 spots), the first spot of ring 6, then the failure.
+  eq([run(me, () => null).status, run(me, () => null).steps], ['failed', 62], 'no ground: 61 spots, then failed');
+  // The wall on the first spot's line: the second spot (90 degrees, x + 6) is taken.
+  const walled = run(me, () => 0, () => true);
+  eq(walled.status, 'failed', 'a wall on every line: failed');
+  const wall16 = run(me, () => 0, (_a, b) => b.z === 16);
+  eq([wall16.status, wall16.steps, r3(wall16.at)], ['found', 2, [16, 6, 10]], 'a blocked spot goes to the next one');
+  // The eye: ground under the player probed from y + 10, plus 6.
+  let eye: { x: number; y: number; z: number } | null = null;
+  const probes: number[] = [];
+  run(me, (_x, _z, fromY) => (probes.push(fromY), fromY === 10 ? 4 : 0), (a) => ((eye = a), false));
+  eq(eye && [eye.x, eye.y, eye.z], [10, 10, 10], 'the eye is the ground under the player + 6');
+  eq(probes.includes(10), true, 'the eye probe starts at the player + 10');
+  // Heading 90 degrees (BAMS 0x4000): ring 1 starts at x + 6.
+  eq(r3(run({ ...me, angle: Math.PI / 2 }, () => 0).at), [16, 6, 10], 'the first angle is the player heading');
 }
 
 // --- GameItems: 6x59 hook, 6x2A height, our drop ---
 {
   const sent: Array<[number, Uint8Array]> = [];
   let onSub: (sub: number, clientId: number, body: Uint8Array) => void = () => {};
+  const holds: number[][] = [];
+  let releases = 0;
   const self = { clientId: 0, floor: 1, position: { x: 0, y: 0, z: 0 }, angle: 0 };
   const game = {
     on: (ev: string, f: never) => {
@@ -56,6 +84,8 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
     selfId: 0,
     active: true,
     sendSubcommand: (sub: number, body: Uint8Array) => sent.push([sub, body]),
+    sendImposeHold: (frames: number, particle: number, x: number, z: number, r2: number) => holds.push([frames, particle, x, z, r2]),
+    sendReleaseHold: () => (releases += 1),
   } as unknown as Game;
   const inv = (h: string, id: number): InventoryItem => ({ index: 0, state: 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped: false, data: { ...itemFromHex(h), id } });
   const ch = { meseta: 0, inventory: [inv('030000000005000000000000', 0x10)], techLevels: [], stats: {} } as unknown as CharacterFile;
@@ -64,11 +94,18 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   const picked: Array<[number, number]> = [];
   items.onFloorItemAdded = (it) => added.push(it);
   items.onPickedUp = (it, p) => picked.push([it.id, p]);
-  items.dropSpot = () => ({ x: 1, y: 2, z: 3 });
+  const holdsOn: number[] = [];
+  let released = 0;
+  items.onDropHold = (f) => holdsOn.push(f);
+  items.onDropRelease = () => (released += 1);
+  items.dropSearch = (me) => new DropSearch(me, { ground: () => 2, wallBlocks: () => false });
   items.drop(0x10);
+  eq([holds, holdsOn, sent.length], [[[900, 0, 0, 0, 0]], [900], 0], '6x2C hold at the player; nothing sent until the spot');
+  items.tickDrops();
   const b = new DataView(sent[0][1].buffer, sent[0][1].byteOffset);
-  eq([sent[0][0], b.getUint16(0, true), b.getFloat32(8, true), b.getFloat32(12, true), b.getFloat32(16, true)], [0x2a, 5, 1, 2, 3], '6x2A: the stack count and the spot');
-  eq([added[0].x, added[0].y, added[0].z], [1, 2, 3], 'our floor item at the spot');
+  eq([sent[0][0], b.getUint16(0, true), b.getFloat32(8, true), b.getFloat32(12, true), b.getFloat32(16, true)], [0x2a, 5, 0, 8, 6], '6x2A: the stack count and the spot (ground + 6)');
+  eq([added[0].x, added[0].y, added[0].z], [0, 8, 6], 'our floor item at the spot');
+  eq([releases, released], [1, 1], '6x2D after the 6x2A');
   // 6x59 {picker, floor, item id}
   const p = new Uint8Array(0x0c);
   const pv = new DataView(p.buffer);
@@ -99,6 +136,15 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   av.setUint32(8, 0x20, true);
   onSub(0x59, 0, ans);
   eq(items.pickupLock.has(0x20), false, '6x59 clears the lock');
+
+  // No spot: nothing is sent, no release, the item stays ours (the hold runs down).
+  ch.inventory.length = 0;
+  ch.inventory.push(inv('030000000005000000000000', 0x11));
+  items.dropSearch = (me) => new DropSearch(me, { ground: () => null, wallBlocks: () => false });
+  sent.length = 0;
+  items.drop(0x11);
+  for (let i = 0; i < 70; i++) items.tickDrops();
+  eq([sent.length, releases, holds.length, ch.inventory.some((i) => i.data.id === 0x11)], [0, 1, 2, true], 'no spot: no 6x2A, no 6x2D, the item stays');
 }
 
 // --- can_pickup_item ---

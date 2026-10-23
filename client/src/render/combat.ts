@@ -4016,6 +4016,18 @@ export class CombatView {
     }
   }
 
+  // The local hold of an item drop (0x0068d878's 6x2C; the packet is sent by
+  // GameItems, net/items.ts). 6x2D releases it (releaseLocalHold).
+  holdLocal(frames: number): void {
+    if (this.damage.dead) return;
+    this.holdTicks = frames;
+    this.view?.resetGait(this.game.selfId);
+  }
+
+  releaseLocalHold(): void {
+    this.holdTicks = 0;
+  }
+
   // 6x2C on the local player (a Grass Assassin's web).
   private holdTicks = 0;
   private imposeHold(h: { frames: number; particle: number; x: number; z: number; radius2: number }, what: string): void {
