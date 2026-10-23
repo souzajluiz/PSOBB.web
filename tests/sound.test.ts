@@ -65,6 +65,12 @@ check(positionalMode(0x571, 0, 50, 1) === '2d', 'a slot without flag 0x8000 is 2
 check(positionalMode(0x90, 0x8000, 10, 1) === '2d' && positionalMode(0x90, 0x8000, 17, 1) === '3d', 'slot 0x90 is 2D within 16 only');
 check(positionalMode(0x88, 0x8000, 10, 1) === '3d', 'slot 0x88 stays 3D within 16');
 check(positionalMode(0x90, 0x8000 | (10 << 24), 50, 1) === '3d' && positionalMode(0x90, 0x8000 | (3 << 24), 50, 1) === '2d', 'kinds 0 and 10 are 3D, other kinds 2D');
+// The telepipe loop, SE 0xA0 (FUN_008144b0: `iVar5 != 0xa0` guards the 2D zeroing; the cull still applies).
+const f0a0 = SE_SLOT_FLAGS[seSlot(0xa0)];
+check(((f0a0 >>> 15) & 1) === 1 && ((f0a0 & 0x0f000000) >>> 24) === 0, `SE 0xa0 flags 0x${f0a0.toString(16)}: 3D bit, kind 0`);
+check(positionalMode(0xa0, f0a0, 0, 1) === '3d' && positionalMode(0xa0, f0a0, 2, 1) === '3d' && positionalMode(0xa0, f0a0, 10, 1) === '3d', 'SE 0xa0 is never 2D (within 2 or the 16 band)');
+check(positionalMode(0xa0, f0a0, 299.9, 1) === '3d' && positionalMode(0xa0, f0a0, 300, 1) === 'cull', 'SE 0xa0 is culled at 300 outside the exempt areas');
+check(positionalMode(0xa0, f0a0, 900, 0x1f) === '3d', 'SE 0xa0 in area 0x1f is not culled');
 check(seDistance([3, 4, 0], [0, 0, 0]) === 5 && seDistance([0.1, 0, 0], [0, 0, 0]) === 0, 'distance: 3-4-5, and under 0.025 squared is 0');
 check(seGain3d(50) === 1 && seGain3d(80) === 1 && seGain3d(160) === 0.5 && seGain3d(900) === 80 / 500, 'DS3D gain: 1 to min 80, min / d, clamped at max 500');
 const lis = { pos: [0, 0, 0] as const, front: [0, 0, -1] as const };

@@ -100,6 +100,23 @@ export function samePipe(s: TelepipeState | undefined, floor: number, x: number,
   return !!s && s.floor === floor && Math.hypot(s.x - x, s.z - z) < SAME_PIPE_RANGE;
 }
 
+// The pipe whose loop sound (SE 0xA0) the local player hears: the nearest of
+// the open field pipes to the listener (ASSUMED: the exe plays one loop per
+// owner, the port keeps one voice and moves it to the nearest pipe). Returns
+// the index into `pipes`, or -1 for none.
+export function nearestPipe(pipes: readonly { x: number; z: number }[], me: { x: number; z: number } | null): number {
+  let best = -1;
+  let bestD = Infinity;
+  pipes.forEach((p, i) => {
+    const d = me ? Math.hypot(p.x - me.x, p.z - me.z) : 0;
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
 // SinowberillChallengePlayer_UpdateTelepipeState_00688b4c; `safe`: the area
 // is in the safe map list (classic/fieldmenu.ts isSafeMap).
 export function telepipeAllowed(area: number, safe: boolean, opts: { battle?: boolean; challenge?: boolean } = {}): boolean {

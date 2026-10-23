@@ -15,6 +15,7 @@ import {
   buildImposeHold,
   buildTelepipeState,
   NO_OWNER,
+  nearestPipe,
   noTelepipe,
   parseTelepipeState,
   pioneer2Arrival,
@@ -137,6 +138,19 @@ eq(new DataView(buildPlayerSync(self, state, 42).buffer).getUint16(0x80, true), 
   eq([sys.count > 0, dist >= 10 - 1e-6 && dist <= 11 + 1e-6], [true, true], 'the ring orbits at radius 10..11 around the pipe');
   eq(+(q.p[1] - 5).toFixed(3), +(0.1 * q.age / q.dt).toFixed(3), 'it rises 0.1 per frame');
   eq(particleShade(q).rgb[0] > 0.39 && particleShade(q).rgb[0] < 0.41, true, 'blue-white colour is the base (slopes +0x50 / +0x38 / +0x3c are 0)');
+}
+
+// The loop voice (SE 0xA0) goes to the open pipe nearest the local player.
+{
+  const pipes = [
+    { x: 0, z: 0 },
+    { x: 30, z: 0 },
+    { x: 8, z: 3 },
+  ];
+  eq(nearestPipe(pipes, { x: 9, z: 3 }), 2, 'the loop voice is at the nearest pipe');
+  eq(nearestPipe(pipes, { x: 29, z: 1 }), 1, 'the voice moves when another pipe is nearer');
+  eq(nearestPipe([], { x: 0, z: 0 }), -1, 'no open pipe, no loop');
+  eq(nearestPipe(pipes, null), 0, 'without a listener the first pipe is taken');
 }
 
 if (failures) {
