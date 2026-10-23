@@ -4,6 +4,10 @@
 // 6x0C / 6x0D watcher, the HUD icons and the Ultimate melee status rolls.
 // Run: node tests/status.test.ts
 import {
+  modifyDirection,
+  PlayerMover,
+} from '../client/src/render/playermove.ts';
+import {
   antiClears,
   CONFUSION_FRAMES,
   FREEZE_FRAMES,
@@ -217,6 +221,44 @@ eq(meleeHitStatus('BARBAROUS_WOLF', true, 0.05), STATUS.paralysis, 'Gulgus-gue p
 eq(meleeHitStatus('BARBAROUS_WOLF', true, 0.11), null, 'wolf roll above 0.1');
 eq(meleeHitStatus('MOTHMANT', true, 0.049), STATUS.poison, 'Mothvert poisons (roll < 0.05)');
 eq(meleeHitStatus('MOTHMANT', true, Math.fround(0.05)), null, 'Mothvert roll at 0.05');
+
+// --- confusion: 300 frames, the steering (modify_direction) on the field ---
+{
+  const { s } = harness();
+  s.inflict(STATUS.confusion);
+  eq(s.slot1.counter, CONFUSION_FRAMES, 'confusion lasts 300 frames');
+  let ticks = 0;
+  for (; s.has(STATUS.confusion) && ticks < 1000; ticks++) s.tick(100, false, 0);
+  eq(ticks, CONFUSION_FRAMES, 'confusion wears off after 300 ticks (no mash)');
+  // Freeze mash does not shorten confusion: only the freeze's frames take the presses.
+  s.inflict(STATUS.confusion);
+  check(!s.mash(true), 'mash does nothing while confused');
+  eq(s.slot1.counter, CONFUSION_FRAMES, 'confusion unchanged by presses');
+}
+// modify_direction: unchanged when not confused (no rand call), a random BAMS heading when confused.
+{
+  let calls = 0;
+  const rand = () => (calls++, 1000);
+  eq(modifyDirection(0x4000, false, rand), 0x4000, 'not confused: heading kept');
+  eq(calls, 0, 'not confused: no rand call');
+  eq(modifyDirection(0x4000, true, rand), 2000, 'confused: ROUND(1000 / 32768 * 65536) BAMS');
+  eq(modifyDirection(0x4000, true, () => 32767), 0xfffe, 'confused: rand max -> 0xfffe BAMS');
+  eq(modifyDirection(0x4000, true, () => 0), 0, 'confused: rand 0 -> heading 0');
+}
+// PlayerMover: a confused walk heads where the steer says, not the stick.
+{
+  const move = (dx: number, dz: number) => ({ x: dx, z: dz });
+  const seen: number[] = [];
+  const steered = new PlayerMover(0, 0);
+  steered.tick({ lr: 0, fb: 128, cameraYaw: 0, keyboard: true, steer: (h) => (seen.push(h), 0x2000) }, move);
+  eq(seen, [0x8000], 'steer gets the stick heading (forward = -z, 0x8000)');
+  const sTarget = steered.legEnd();
+  check(sTarget.x > 0 && sTarget.z > 0, `steered leg heads 45 degrees, got ${JSON.stringify(sTarget)}`);
+  const plain = new PlayerMover(0, 0);
+  plain.tick({ lr: 0, fb: 128, cameraYaw: 0, keyboard: true }, move);
+  const pTarget = plain.legEnd();
+  check(Math.abs(pTarget.x) < 1e-6 && pTarget.z < 0, `no steer: the leg heads forward, got ${JSON.stringify(pTarget)}`);
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);

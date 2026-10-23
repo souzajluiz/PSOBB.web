@@ -11672,3 +11672,51 @@ before the list; (3) Chat > Shortcut (0x11) with the same phrase list as Symbol 
 **Not done:** Morfos's arm / wall and the Pofuilly tails (ROADMAP line stays open for them). Not run in Chrome (per the brief); the disc view is untested in a browser.
 
 **Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `tests/enemyfsmep2`, `enemyfsmep2a`, `enemyfsmep2b`, `enemyfsmep2c` (new Deldepth cases), `enemyfsmep2d`, `enemies`, `combatdepth`, `deathfx` pass.
+
+## 2026-10-23: confusion steering on the local player (modify_direction)
+
+**What the exe does (dump `refsrc/.../Psobb.exe-05112026.c`):**
+- `modify_direction` (line 556981): `if (should_do_confused_movement(this))` replaces the
+  incoming heading with `ROUND(((float)rand() / g_RandomDirectionNormalizationFactor) *
+  g_360Degrees * g_DirectionChangeScaleFactor / g_360Degrees)`. Constants read from the exe:
+  0x0093c750 = 32768.0, 0x0093c74c = 360.0, 0x0093c748 = 65536.0. So the new heading is
+  `2 * rand()` BAMS, uniform over the full circle, drawn anew every call.
+- `should_do_confused_movement` (line 557000): `is_player_in_unsafe_map(this) &&
+  (character_flags & confused)`. Only the outside-the-hub maps steer.
+- Callers on the movement path: `unknown_handle_gamepad_input_move` (line ~586800..587263):
+  the stick branch (`camera_amount`) and the keyboard branch (`atan2(lr, fb)` plus the camera
+  yaw) both go through `modify_direction`, and only after the movement threshold test.
+- `confuse_entity` (line 750740, enemies): confusion sets slot 1 type 0x12 and `+0x270 = 300`.
+  The player's `confuse_entity` path (`status.ts` `CONFUSION_FRAMES`) is the same 300 frames.
+
+**Ported:**
+- `render/playermove.ts`: `modifyDirection(heading, confused, rand)` (the exe formula,
+  rand only called when confused); `MoverInput.steer` is applied to the poll's aim heading
+  before the stand-turn and the leg start, so a confused walk heads where the random says.
+  `LegState.confused` added.
+- `render/combat.ts` `attach`: `confused: status.has(confusion) && inUnsafeMap(area)`.
+- `render/lobbyview.ts`: the field's tick passes `steer` when the leg says confused; the rand
+  is `Math.floor(Math.random() * 32768)` (C `rand()`, 0..32767).
+- The random is per tick, so a confused walk jitters rather than curving smoothly. That
+  follows from the exe calling `modify_direction` once per movement poll.
+
+**Freeze mash:** already ported before this entry (ROADMAP line 161, `combat/status.ts`
+`PlayerStatus.mash`, `tests/status.test.ts`). Not re-traced here; the ROADMAP's open list no
+longer names it. The gamepad part of the mash is still open (ROADMAP line 160).
+
+**ASSUMED:**
+- C `rand()` is the uniform 0..32767 the port reproduces with `Math.random`, not the MSVC
+  sequence. The exact sequence is not reproducible in the web client.
+- The steer is called once per tick with a movement input over threshold, same cadence as
+  the exe's branches (not traced per frame).
+
+**Not ported:** the attack and technique headings the exe also steers (`dispatch_action_attack_step1..3`
+and the palette attack path near dump line 557161, plus the camera-driven calls around
+586320..587263). The port's attack heading is set in `render/combat.ts` and needs its own pass.
+
+**Tests:** `tests/status.test.ts` (confusion 300 frames, not shortened by mash; `modifyDirection`
+off / on, the rand bounds; a `PlayerMover` walk turned by `steer`, and without it).
+`tests/playermove.test.ts`, `tests/playerfx.test.ts`, `tests/enemystatus.test.ts`,
+`tests/combatdepth.test.ts` pass. `npx tsc --noEmit -p .` in `client/` is clean.
+`tests/combat.test.ts` was not run: it needs `vendor/newserv/build/newserv`, absent in this
+worktree.

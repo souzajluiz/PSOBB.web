@@ -767,6 +767,8 @@ export class CombatView {
     view.legState = () => ({
       slowed: this.status.has(STATUS.slow) && slowApplies(this.area),
       target: this.lockOn ? this.lockOn.instance.root.position : null,
+      // should_do_confused_movement: confused (flag 0x10) in an unsafe map.
+      confused: this.status.has(STATUS.confusion) && inUnsafeMap(this.area),
     });
     this.overlay ??= new CombatOverlay(this.viewer.scene);
     this.hpReadout ??= this.makeHpReadout();
