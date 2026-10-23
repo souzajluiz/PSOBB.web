@@ -481,8 +481,19 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   check(untilState(k, 'hover') > 0, 'the flinch ends in hover (5) once its animation ends');
   eq(k.active, true, 'the hover arms the nest (+0x3b0 = 1)');
   const kill = k.tick(0, false);
-  eq([k.state, kill.killed], ['kill', true], 'the dead Monest goes to the kill (8) on the tick after its hover and reports the kill');
-  eq(k.tick(0, false).killed, false, 'the kill is reported once');
+  eq([k.state, kill.motion?.index], ['kill', 5], 'the dead Monest goes to the kill (8) on the tick after its hover, animation 7 (motion 5)');
+  // The kill plays its animation, then the body sinks 0.1 a tick until +0x4e0
+  // reaches 20 (about 200 ticks); the dead state (9) then removes it once no
+  // child is alive. A live child keeps the body.
+  let sunk = 0;
+  let f = 0;
+  for (; f < 400 && k.state !== 'dead'; f++) sunk += k.tick(1, true).sink ?? 0;
+  check(f >= 200 && f <= 203, `the kill sinks for about 200 ticks before the dead state (${f})`);
+  // The first tick ends the animation (no sink), the last one runs the check (no sink).
+  check(Math.abs(sunk - 0.1 * (f - 2)) < 1e-3, `the body sinks 0.1 a tick (${sunk.toFixed(2)})`);
+  eq(k.tick(1, true).removed ?? false, false, 'the dead Monest with a live child is not removed');
+  eq(k.tick(0, true).removed, true, 'the dead state removes the body once no child is alive');
+  eq(k.tick(0, true).removed ?? false, false, 'the removal is reported once');
 
   // A killing hit on an active Monest: the kill at once.
   const a = dormant();
@@ -594,6 +605,13 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(f1.state, 'flinch', 'the flinch holds until its animation ends');
   f1.tick([], true);
   eq(f1.state, 'wander', 'then back to the state it came from');
+  // A landed hit flinches from any state, the launch included (vtable 0x100 of
+  // the Mothmant, 0x00589ab0: `if state != 6, SetEnemyAiState(6)`).
+  const f0 = make2();
+  f0.flinch();
+  f0.tick([], false);
+  eq(f0.state, 'flinch', 'a landed hit flinches a Mothmant still in its launch');
+  eq(f0.motion?.index, 3, 'the flinch plays animation 3 (motion 3)');
   // Flinch out of the attack: the attack goes on when fewer than 2 siblings are on the player.
   sib = 0;
   const f2 = make2();

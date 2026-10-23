@@ -74,6 +74,17 @@ eq(enemyAttribute('GIBBLES') & ENEMY_ATTR.miniboss, ENEMY_ATTR.miniboss, 'Gibble
   eq(s.inflict(STATUS.freeze), true, 'frozen again after it ended');
 }
 {
+  // 0x00521920 calls the paralysis, shock and freeze tests every frame (no short
+  // circuit): a freeze counts down while the enemy is also paralysed.
+  const s = new EnemyStatus(ENEMY_ATTR.native);
+  s.inflict(STATUS.paralysis);
+  s.inflict(STATUS.freeze);
+  for (let i = 0; i < ENEMY_FREEZE_FRAMES; i++) s.tick();
+  eq(s.has(STATUS.freeze), false, 'the freeze wears off during the paralysis');
+  eq(s.has(STATUS.paralysis), true, 'the paralysis is still on');
+  eq(s.locked, true, 'the enemy stays locked by the paralysis');
+}
+{
   const s = new EnemyStatus(ENEMY_ATTR.native);
   s.inflict(STATUS.confusion);
   eq(s.slot1.frames, ENEMY_CONFUSION_FRAMES, 'confusion 300 frames');
@@ -89,13 +100,14 @@ eq(enemyAttribute('GIBBLES') & ENEMY_ATTR.miniboss, ENEMY_ATTR.miniboss, 'Gibble
   eq(s.evp(200), 170, 'shock EVP -0.15');
   eq(s.tick().locked, true, 'shock locks');
 }
-// The chain stops at paralysis: slot 1 does not count down meanwhile.
+// No chain stop at paralysis: 0x00521920 calls the paralysis, shock and freeze
+// tests every frame and ORs them, so slot 1 counts down while paralysis holds.
 {
   const s = new EnemyStatus(ENEMY_ATTR.native);
   s.inflict(STATUS.paralysis);
   s.inflict(STATUS.freeze);
   s.tick();
-  eq([s.slot0.frames, s.slot1.frames], [ENEMY_PARALYSIS_FRAMES - 1, ENEMY_FREEZE_FRAMES], 'freeze waits while paralysis holds');
+  eq([s.slot0.frames, s.slot1.frames], [ENEMY_PARALYSIS_FRAMES - 1, ENEMY_FREEZE_FRAMES - 1], 'freeze counts down while paralysis holds');
 }
 
 // 4. Sync: 6x0A carries the bits; Ultimate sends them once as 6x9C.

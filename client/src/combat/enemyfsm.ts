@@ -1478,6 +1478,11 @@ export class RappyAi extends BrainBase {
 // (00519a30), 6 spawn one (005198b4), 7 hit reaction (005197a0), 8 the kill
 // (00519550), 9 the dead flag (0051950c). The second argument is the event:
 // 4 enter, 3 check (the transitions), 0 update, 5 exit.
+// The Monest's vtable is g_Mothman_vtable = 0x00AFFFE0 (monest_constructor,
+// 0x005191c0). The Mothmant's is 0x00AFFD20 (MothmanConstructor, 0x005168a4,
+// `movl $0xaffd20,(%ecx)`): its own slots (0x100 = 0x00589ab0, 0x104 =
+// 0x005187a0, 0x164 = 0x00516b9c) are the Mothmant FSM below. The two do not
+// share a vtable, so the Monest's slot 0x100 is not the Mothmant's.
 //
 // monest_constructor (0x005191c0) sets: the wake threshold initdata_param2
 // clamped to 0..6 (MothmanSetTarget_0051a1fc: +0x398, 6 when above 5), the
@@ -1531,8 +1536,13 @@ const MONEST_MOTION = {
   kill: once(5, 1), // animation 7 (MothmanProcessState_00519550, enter; ASSUMED motion 5)
 };
 
-type MonestStateName = 'intro' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover' | 'flinch' | 'hit' | 'kill';
-type MonestOut = { motion: EnemyAiMotion | null; spawn: boolean; killed?: boolean };
+type MonestStateName = 'intro' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover' | 'flinch' | 'hit' | 'kill' | 'dead';
+// `removed`: the dead state's check found no live child (its +0x8 |= 1, the
+// body goes); `sink`: the body's drop this tick (+0x3c -= 0.1 while sinking).
+type MonestOut = { motion: EnemyAiMotion | null; spawn: boolean; removed?: boolean; sink?: number };
+// The kill's sink: +0x4e0 (a float) gains 0.1 a tick and the state 9 check runs
+// once it reaches 20 (0x00920e44). Float32 steps, as the exe's FPU stores them.
+export const MONEST_SINK = { step: Math.fround(0.1), until: 20 } as const;
 
 export class MonestSpawner {
   total: number;
@@ -1566,11 +1576,16 @@ export class MonestSpawner {
   // The hit and death states. `hitPrev` is the state a hit reaction returns to
   // (+0x380, ASSUMED: the state before the hit). `dying` is set by a killing
   // hit (set_monest_dead, vtable 0x104): it runs on every tick while the
-  // enemy is dead, before the state's check. `killedNow` is set when the kill
-  // state (8) is entered: the body's death (on_enemy_killed) is then due.
+  // enemy is dead, before the state's check. The kill (8): `killSub` 0 plays
+  // its animation (+0x4d8), 1 sinks the body (+0x4e0 is `sinkTimer`); the
+  // dead state (9) removes the body once no child is alive (`removedNow`,
+  // once).
   private hitPrev: MonestStateName = 'dormant';
   private dying = false;
-  private killedNow = false;
+  private killSub: 0 | 1 = 0;
+  private sinkTimer = 0;
+  private removedNow = false;
+  private removedDone = false;
 
   constructor(param2: number, param3: number) {
     this.total = Math.max(0, Math.min(MONEST.maxTotal, Math.round(param3)));
@@ -1595,15 +1610,23 @@ export class MonestSpawner {
       case 'hit':
         return this.active ? MONEST_MOTION.hitActive : MONEST_MOTION.hitInactive;
       case 'kill':
+      case 'dead':
         return MONEST_MOTION.kill;
     }
   }
 
-  private enter(state: MonestStateName): EnemyAiMotion {
+  private enter(state: MonestStateName): EnemyAiMotion | null {
     this.state = state;
     this.frames = 0;
     this.fired = false;
-    if (state === 'kill') this.killedNow = true;
+    if (state === 'kill') {
+      // MothmanProcessState_00519550, enter: animation 7, timers +0x4d8 = 0, +0x4e0 = 0.
+      this.killSub = 0;
+      this.sinkTimer = 0;
+    }
+    // State 9's enter (0x00520504) starts no animation: the kill's last frame
+    // holds. It only sets the dead bits (vtable 0x174 / 0x180 not decoded).
+    if (state === 'dead') return null;
     if (state === 'intro') {
       this.height = MONEST_INTRO.start;
       this.angle = 0;
@@ -1636,15 +1659,25 @@ export class MonestSpawner {
   // `hpLow` is hp <= max / 2 (the hit reaction's test: the HP at 0x334 against
   // the max at 0x2bc, halved).
   tick(alive: number, animationEnded: boolean, hpLow = false): MonestOut {
-    this.killedNow = false;
+    this.removedNow = false;
     let motion: EnemyAiMotion | null = null;
-    // set_monest_dead (EnemyUpdateLoop, vtable 0x104) runs while the enemy is dead:
-    // not yet active goes to the flinch, active goes to the kill.
-    if (this.dying && this.state !== 'flinch' && this.state !== 'kill') {
+    // set_monest_dead (EnemyUpdateLoop, vtable 0x104) runs while the enemy is dead
+    // (not in the flinch, kill or dead states, 9 / 8 / 4): not yet active goes
+    // to the flinch, active goes to the kill.
+    if (this.dying && this.state !== 'flinch' && this.state !== 'kill' && this.state !== 'dead') {
       motion = this.enter(this.active ? 'kill' : 'flinch');
     }
     // Check (event 3).
-    if (this.state === 'intro' && this.introPhase === 2 && animationEnded) {
+    if (this.state === 'kill' && this.killSub === 1 && Math.fround(this.sinkTimer) >= MONEST_SINK.until) {
+      // MothmanProcessState_00519550 check: 20 (0x00920e44) <= +0x4e0 -> state 9.
+      motion = this.enter('dead');
+    } else if (this.state === 'dead' && !this.removedDone && alive === 0) {
+      // MothmanProcessState_0051950c check: no child left (+0x3b8 == 0):
+      // set_monster_spawn_initdata_as_dead and +0x8 |= 1 (the body is removed).
+      // +0x3b8 is read as the live children (ASSUMED: the list is pruned).
+      this.removedDone = true;
+      this.removedNow = true;
+    } else if (this.state === 'intro' && this.introPhase === 2 && animationEnded) {
       motion = this.enter('wake');
     } else if (this.state === 'hit' && animationEnded) {
       // MothmanProcessState_005197a0 check: active goes to hover, else a low
@@ -1665,14 +1698,14 @@ export class MonestSpawner {
     }
     // Update (event 0) of the state the check left.
     const out = this.update(alive, animationEnded);
-    return { motion: out.motion ?? motion, spawn: out.spawn, killed: this.killedNow };
+    return { motion: out.motion ?? motion, spawn: out.spawn, removed: this.removedNow, sink: out.sink ?? 0 };
   }
 
   // A hit that does not kill (the enemy was hit flag, vtable 0x100 =
-  // MothmanProcessState_0051a8dc): nothing in the flinch, hit or kill states,
-  // and nothing on a spawn in Ultimate; otherwise the hit reaction (7).
+  // MothmanProcessState_0051a8dc): nothing in the flinch, hit, kill or dead
+  // states, and nothing on a spawn in Ultimate; otherwise the hit reaction (7).
   hit(ultimate: boolean): EnemyAiMotion | null {
-    if (this.state === 'flinch' || this.state === 'hit' || this.state === 'kill') return null;
+    if (this.state === 'flinch' || this.state === 'hit' || this.state === 'kill' || this.state === 'dead') return null;
     if (this.state === 'spawn' && ultimate) return null;
     this.hitPrev = this.state;
     return this.enter('hit');
@@ -1696,8 +1729,19 @@ export class MonestSpawner {
         return this.wakeUpdate(alive, animationEnded);
       case 'flinch':
       case 'hit':
-      case 'kill':
+      case 'dead':
         return { motion: null, spawn: false };
+      case 'kill': {
+        // Sub 0 plays the animation; the sub-state turns to 1 when it ends
+        // (the check and the sink are not run in the same tick).
+        if (this.killSub === 0) {
+          if (animationEnded) this.killSub = 1;
+          return { motion: null, spawn: false };
+        }
+        // Sub 1: +0x4e0 += 0.1 and +0x3c -= 0.1 (the body sinks), each tick.
+        this.sinkTimer = Math.fround(this.sinkTimer + MONEST_SINK.step);
+        return { motion: null, spawn: false, sink: MONEST_SINK.step };
+      }
       case 'dormant':
       case 'hover':
         if (!this.armed) {
@@ -1797,6 +1841,12 @@ export class MonestSpawner {
 // (00516ed8), 8 the fall (00516c60), 9 the dead flag (EnemySetStateFlag_00516c2c).
 // The death states are not run here: the kill and the fall are deathfx.ts /
 // the owner's (EnemyOnKilledHandler_0051f894).
+// The Mothmant's vtable is 0x00AFFD20 (see the Monest header). Its slots:
+// 0x100 = 0x00589ab0 (the hit that does not kill: `if state != 6, SetEnemyAiState(6)`,
+// the flinch, from any state); 0x104 = 0x005187a0 (the dead flag: state 7 when
+// the body is flying (+0x2e0 & 2, 0x0051f8a8), else 8; not in 7 / 8 / 9); 0x164 =
+// 0x00516b9c (this dispatcher); 0x154 = 0x0052164c (EnemyUpdateLoop, 0x0052167c,
+// after the target clear); 0x98 / 0xa4 / 0xa8 are the shared status tests.
 //
 // Constructor (Mothman_Constructor_00518bfc): state 0 is entered at once.
 // Distances are world units and angles BAMS in the dump; the constants below
@@ -1955,8 +2005,10 @@ export class MothmantAi extends BrainBase {
     this.play(out, state === 'flinch' ? MOTHMANT_MOTION.flinch : MOTHMANT_MOTION.fly);
   }
 
-  // The flinch (state 6). Its trigger is not located: the exe's writer of
-  // AI state 6 is not in the Mothmant code (ASSUMED: the caller decides).
+  // The flinch (state 6), the Mothmant's vtable 0x100 (0x00589ab0): a hit that
+  // lands and does not kill sends it here from any state (the port calls this
+  // from render/combat.ts on a landed, unlocked, non-lethal hit). A lethal hit
+  // never reaches it (EnemyUpdateLoop tests the dead flag first).
   flinch(): void {
     if (this.state === 'dead' || this.state === 'flinch') return;
     this.pendingFlinch = true;
