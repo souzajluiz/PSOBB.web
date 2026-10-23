@@ -39,6 +39,7 @@ import { TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
@@ -60,8 +61,11 @@ export interface LobbyHud {
   menu: MainMenuTextures;
   // unitxt lookup (group, index), language markers removed.
   text: (group: number, index: number) => string;
-  // Inventory rows for the Item List window (null: no character file).
-  inventory: () => string[] | null;
+  // Inventory rows for the Item List window (null: no character file), built
+  // as the Item Pack builds them (itempack.ts itemRows).
+  inventory: () => ItemRow[] | null;
+  // f256_hyouji.prs texture 1: the Item List row icons.
+  itemIcons: CanvasImageSource;
   infoCols: InfoCol[];
   // The session's full character data (00E7): the option word (options.ts).
   fullCharacter?: () => Uint8Array | null;
@@ -211,7 +215,7 @@ export class LobbyScreen implements Screen {
   private menuAction(id: number): void {
     if (id === 0xb) {
       const rows = this.hud.inventory();
-      this.itemList = new ItemListWindow(this.hud.text(0x0b, 0x37), rows ?? []);
+      this.itemList = new ItemListWindow(this.hud.text(0x0b, 0x37), rows ?? [], this.hud.text(11, 0xee));
       this.menu.leafOpen = true;
     } else if (id === 0x15) {
       this.logWindow = true;
@@ -389,7 +393,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
-      inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);
     });

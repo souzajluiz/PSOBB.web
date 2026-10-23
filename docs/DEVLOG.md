@@ -10173,3 +10173,26 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 **Files:** `client/src/combat/status.ts` (`FREEZE_MASH_FRACTION`, `FREEZE_MASH_WINDOW`, `PlayerStatus.mash`, the step at infliction, the clock in `tick`), `client/src/render/combat.ts` (`MOVE_KEYS`, the press detection in `frame`, `playerIce` from `statusPulse` on a freeze onset), `client/src/combat/playerfx.ts` (comment), `tests/status.test.ts` (new cases: -15 step, window, control, mashing ends the freeze), `docs/ROADMAP.md`, `TODO.md`.
 
 **Checks:** `tsc --noEmit -p .` (client, Node 24) clean. `node tests/status.test.ts`, `enemystatus`, `playerfx`, `combatdepth` pass (826 checks). Not run: Playwright / Chrome (per the brief).
+## 2026-10-23: Item List row format
+
+**What changed:** the lobby Item List (Home > Item Pack > Items, `classic/mainmenu.ts` `ItemListWindow`) now draws the Item Pack's rows instead of plain names with an "E " prefix. `classic/itempack.ts` gets `drawItemRow` (the row draw, extracted from `ItemPackMenu.drawRow`; the field draw is unchanged). `classic/main.ts` builds the lobby rows with `itemRows` (the same builder the field uses: inventory in slot order, meseta row last when there is any). `classic/lobby.ts` takes `ItemRow[]` and `itemIcons` (f256_hyouji texture 1) through `LobbyHud`. The empty state shows unitxt 0x0B/0xEE in grey, as the field does. The list rows are 20 px apart from INSET 10 / TITLE_GAP 6 (`fieldwindows.ts`), so the text and icons sit where the field's do.
+
+**Exe evidence (Ephinea 1.25.13 dump, `PsoBB.exe`):**
+- Rows: `ChallengePlayer_StateMachine_00750954` (`0x00750954`, state 0 / 1) calls `ChallengePlayer_CreateItemList_00751ae0`, which fills the list from the inventory.
+- Row init: `InitializeItemObject_0072bdd4`:
+  - the icon 2 slot (this+0x1D) comes from `UIElement_SetItemAnimationState_0072b9d0` (`0x0072b9d0`): `0x1D` = category icon (weapon kind 0 / 1 / 2, unit 4, armour 0xB, shield 0xA, mag 3, tool 5..8, technique 6, ...);
+  - the name is the item vtable +0x28 string;
+  - the stack count is appended by `UIElement_AppendStackableQuantity_0072bd30` when `can_item_stack` (group 4, or group 3 except disks and group_2 0x9..0xF, 0x11) and quantity > 0, as `×` (WCHAR 0x00970cf0) + number;
+  - colours by `ItemEntity_UpdateColoring_0072c045` (`0x0072c045`).
+- Icon 1 (this+0x1C) by `ItemEntity_UpdateColoring_0072c045`: equipped 0x0C; undroppable (`GetItemAttackData` bit 0x10) 0x2A, equipped 0x2B; untekked rare 0x19; unusable 0x13; else 0x36 (none). The "E" is icon 0x0C, not text.
+- Colours (`0x0072c045`): untekked 0xff00fffc (icon none); unusable 0xff909090 with icon 0xffaaaaaa; S-rank 0xfffe3c28; rare 0xffffea00 (star value > 8); bonus 0xff61e853; else white.
+- Draw (`BaseEntity_Render_0072ae74`, `0x0072ae74`): icon 1, icon 2, then the name right after the two icons, then the count right-aligned in the name's colour (this+0x34 = this+0x30). The render path has no clip, so nothing truncates a name there.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/fieldhud.test.ts` (all passed, with new lobby row cases: the equipped mark is icon 0x0C with no "E " text, the `×4` stack, the `300Meseta` row, no meseta row at 0). `node tests/items.test.ts` (all passed), `node tests/itemmodels.test.ts` (ALL PASS, 4623 checks), `node tests/shop.test.ts` (passed). Not run: Playwright / Chrome (per the brief).
+
+**Approximations and open items (ASSUMED):**
+- The `0x400` flag (`IsItemFlag0x400Set_005c443c`, which the exe colours as "no colour") is not modelled; the web inventory does not set it (ASSUMED never set on these rows).
+- The final `0x10000` fallback of `ItemEntity_UpdateColoring` (grey when `CheckItemEquipConditions` returns `0x10008`) is not ported; the equip check that drives the grey colour (`equipProblems`) is.
+- No truncation of names (ASSUMED: the exe does not clip in the render path; the field does not either).
+- The lobby list builds its rows when it opens (the field rebuilds on each inventory change). The selected row keeps its row colour (the field's rule); the old lobby colour `#ffc19a` was not in the exe dump (ASSUMED removed).
+- Not touched: the equipment stat panel (`itemdetail.ts`, `drawPanel`), the description window.

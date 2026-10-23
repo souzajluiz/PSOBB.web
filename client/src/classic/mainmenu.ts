@@ -45,6 +45,8 @@
 
 import { se, SE } from '../audio/se.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
+import { DISABLED, INSET, ROW as LIST_ROW, TITLE_GAP } from './fieldwindows.ts';
+import { drawItemRow, type ItemRow } from './itempack.ts';
 import { InfoWindow } from './ingame.ts';
 import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSkin } from './stage.ts';
 
@@ -283,22 +285,26 @@ export function menuViewShift(f: number): { ox: number; oy: number; s: number } 
 // Item List window (main menu > Item Pack > Items, id 0xb): FUN_0075086c ->
 // FUN_0075198c(table entry 3 = (13, 256), size 308 x 184 (0x00973ca0), 0x24
 // rows) -> FUN_00751a10, the list window class of Ship Select (FUN_00736988)
-// titled unitxt 0x0B/0x37 "Item List". Rows 20 px apart, 8 visible.
-// The row text format of the client (FUN_00750954) is not decoded yet: rows
-// show the item names from formats/itemnames.ts, equipped items marked "E".
+// titled unitxt 0x0B/0x37 "Item List". Rows 20 px apart, 8 visible. The rows
+// are the Item Pack's (ChallengePlayer_CreateItemList_00751ae0, itempack.ts
+// itemRows) and are drawn the same way (drawItemRow), so the equipped mark is
+// icon 0x0C, not text.
 // ---------------------------------------------------------------------------
 
 export const ITEM_LIST = { x: 13, y: 256, w: 308, h: 184, visible: 8 };
 
 export class ItemListWindow {
-  rows: string[] = [];
+  rows: ItemRow[] = [];
   cursor = 0;
   private top = 0;
+  private frame = 0;
   title: string;
+  empty: string;
 
-  constructor(title: string, rows: string[]) {
+  constructor(title: string, rows: ItemRow[], empty = '') {
     this.title = title;
     this.rows = rows;
+    this.empty = empty;
   }
 
   key(e: KeyboardEvent): boolean {
@@ -317,14 +323,20 @@ export class ItemListWindow {
     return true;
   }
 
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+  // icons: f256_hyouji.prs texture 1 (the Item Pack's row icons).
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, icons: CanvasImageSource): void {
+    this.frame++;
     const { x, y, w, h } = ITEM_LIST;
     drawWindowFrame(ctx, skin.frame, x, y, w, h);
-    const cx = x + 10;
-    const cy = y + 16;
-    const shown = this.rows.slice(this.top, this.top + ITEM_LIST.visible);
-    if (this.rows.length) drawSelectBar(ctx, skin.bars, cx, cy + (this.cursor - this.top) * 20, w - 20, 16);
-    shown.forEach((r, i) => drawGameText(ctx, r, cx, cy + i * 20 + 1, this.top + i === this.cursor ? '#ffc19a' : '#ffffff'));
+    const cx = x + INSET;
+    const cy = y + INSET + TITLE_GAP;
+    const cw = w - 2 * INSET;
+    if (!this.rows.length) {
+      if (this.empty) drawGameText(ctx, this.empty, cx, cy + 1, DISABLED);
+    } else {
+      drawSelectBar(ctx, skin.bars, cx, cy + (this.cursor - this.top) * LIST_ROW, cw, 16);
+      this.rows.slice(this.top, this.top + ITEM_LIST.visible).forEach((r, i) => drawItemRow(ctx, icons, r, this.frame, cx, cy + i * LIST_ROW, cw));
+    }
     const tw = gameTextWidth(this.title);
     drawTitlePill(ctx, skin.frame, x, y - 13, tw, 1);
     drawGameText(ctx, this.title, x + (pillWidth(tw) - tw) / 2, y - 13 + 4 + 1, '#120400');
