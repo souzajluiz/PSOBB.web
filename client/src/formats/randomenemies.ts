@@ -51,6 +51,7 @@ export interface RandomEnemyDefinition {
   param7: number; // i16 at 0x14 (the struct's order is switched; see materialize)
   param6: number; // i16 at 0x16
   entryIndex: number;
+  unknownA1: number; // u16 at 0x1A, not used by the generator; kept for the writer
   minChildren: number;
   maxChildren: number;
 }
@@ -59,6 +60,7 @@ export interface RandomEnemyWeight {
   baseTypeIndex: number;
   defEntryIndex: number;
   weight: number;
+  unknownA4: number; // u8 at 0x03, kept for the writer
 }
 
 export interface RandomEnemyRoom {
@@ -70,6 +72,8 @@ export interface RandomEnemyRoom {
 export interface RandomEnemyLocation {
   pos: [number, number, number];
   angle: [number, number, number];
+  unknownA9: number; // u16 at 0x18, not used by the generator; kept for the writer
+  unknownA10: number; // u16 at 0x1A
 }
 
 export interface RandomEnemySections {
@@ -97,6 +101,8 @@ export function parseRandomEnemySections(locations: Uint8Array, definitions: Uin
     locs.push({
       pos: [lv.getFloat32(o, true), lv.getFloat32(o + 4, true), lv.getFloat32(o + 8, true)],
       angle: [lv.getInt32(o + 0x0c, true), lv.getInt32(o + 0x10, true), lv.getInt32(o + 0x14, true)],
+      unknownA9: lv.getUint16(o + 0x18, true),
+      unknownA10: lv.getUint16(o + 0x1a, true),
     });
   }
 
@@ -113,6 +119,7 @@ export function parseRandomEnemySections(locations: Uint8Array, definitions: Uin
       param7: dv.getInt16(o + 0x14, true),
       param6: dv.getInt16(o + 0x16, true),
       entryIndex: dv.getUint16(o + 0x18, true),
+      unknownA1: dv.getUint16(o + 0x1a, true),
       minChildren: dv.getUint16(o + 0x1c, true),
       maxChildren: dv.getUint16(o + 0x1e, true),
     });
@@ -121,11 +128,73 @@ export function parseRandomEnemySections(locations: Uint8Array, definitions: Uin
   let weightTotal = 0;
   for (let i = 0; i < weightCount; i++) {
     const o = weightsOffset + i * WEIGHT_SIZE;
-    const w = { baseTypeIndex: dv.getUint8(o), defEntryIndex: dv.getUint8(o + 1), weight: dv.getUint8(o + 2) };
+    const w = { baseTypeIndex: dv.getUint8(o), defEntryIndex: dv.getUint8(o + 1), weight: dv.getUint8(o + 2), unknownA4: dv.getUint8(o + 3) };
     weights.push(w);
     weightTotal += w.weight;
   }
   return { rooms, locations: locs, definitions: defs, weights, definitionCount: defCount, weightTotal };
+}
+
+// The inverse of parseRandomEnemySections for the layout newserv writes
+// (MapFile::serialize, Map.cc:4389 and :4399): the header, the room table, then
+// the entries; the room offsets are the running sums of the room counts, so
+// `locations` must be in room order. The result is byte-exact for every section
+// of the shipped quests that has that layout (checked by the tests).
+export function serializeRandomLocations(rooms: readonly RandomEnemyRoom[], locations: readonly RandomEnemyLocation[]): Uint8Array {
+  const roomsAt = 0x0c;
+  const entriesAt = roomsAt + rooms.length * ROOM_SIZE;
+  const out = new Uint8Array(entriesAt + locations.length * LOCATION_SIZE);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, roomsAt, true);
+  dv.setUint32(4, entriesAt, true);
+  dv.setUint32(8, rooms.length, true);
+  let offset = 0;
+  rooms.forEach((r, i) => {
+    const o = roomsAt + i * ROOM_SIZE;
+    dv.setUint16(o, r.roomId, true);
+    dv.setUint16(o + 2, r.count, true);
+    dv.setUint32(o + 4, offset, true);
+    offset += r.count * LOCATION_SIZE;
+  });
+  locations.forEach((l, i) => {
+    const o = entriesAt + i * LOCATION_SIZE;
+    for (let k = 0; k < 3; k++) {
+      dv.setFloat32(o + k * 4, l.pos[k], true);
+      dv.setInt32(o + 0x0c + k * 4, l.angle[k], true);
+    }
+    dv.setUint16(o + 0x18, l.unknownA9, true);
+    dv.setUint16(o + 0x1a, l.unknownA10, true);
+  });
+  return out;
+}
+
+export function serializeRandomDefinitions(definitions: readonly RandomEnemyDefinition[], weights: readonly RandomEnemyWeight[]): Uint8Array {
+  const entriesAt = 0x10;
+  const weightsAt = entriesAt + definitions.length * DEFINITION_SIZE;
+  const out = new Uint8Array(weightsAt + weights.length * WEIGHT_SIZE);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, entriesAt, true);
+  dv.setUint32(4, weightsAt, true);
+  dv.setUint32(8, definitions.length, true);
+  dv.setUint32(0x0c, weights.length, true);
+  definitions.forEach((d, i) => {
+    const o = entriesAt + i * DEFINITION_SIZE;
+    for (let k = 0; k < 5; k++) dv.setFloat32(o + k * 4, d.params[k], true);
+    dv.setInt16(o + 0x14, d.param7, true);
+    dv.setInt16(o + 0x16, d.param6, true);
+    dv.setUint16(o + 0x18, d.entryIndex, true);
+    dv.setUint16(o + 0x1a, d.unknownA1, true);
+    dv.setUint16(o + 0x1c, d.minChildren, true);
+    dv.setUint16(o + 0x1e, d.maxChildren, true);
+  });
+  weights.forEach((w, i) => {
+    const o = weightsAt + i * WEIGHT_SIZE;
+    dv.setUint8(o, w.baseTypeIndex);
+    dv.setUint8(o + 1, w.defEntryIndex);
+    dv.setUint8(o + 2, w.weight);
+    dv.setUint8(o + 3, w.unknownA4);
+  });
+  return out;
 }
 
 // newserv MapFile::RandomState. The location shuffle has its own stream (seeded

@@ -39,6 +39,11 @@ interface SetEntryBase {
   section: number; // "room" in newserv; matches MapSection.id in the n.rel
   position: Vec3; // relative to the section
   rotation: Vec3; // raw BAMS (0x10000 = 360 degrees)
+  // Set by the quest editor only (questeditor/model.ts): the record's bytes as
+  // they were read, and the chunk floor they were read under, so a write can
+  // keep the fields the editor does not model. Absent for new entries.
+  raw?: Uint8Array;
+  homeFloor?: number;
 }
 
 export interface ObjectSet extends SetEntryBase {

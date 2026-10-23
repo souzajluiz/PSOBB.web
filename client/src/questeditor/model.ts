@@ -11,12 +11,21 @@
 // (formats/questwrite.ts) always agree with the bytes.
 
 import { questEpisode, type QuestBin, type QuestFloorAssignment } from '../formats/questbin.ts';
-import { parseQuestDat, QuestDatChunkType, type QuestDat } from '../formats/questdat.ts';
-import type { WaveEvent } from '../formats/events.ts';
-import { enemyKind, type EnemySet, type ObjectSet, type SetEntity } from '../formats/setdata.ts';
+import { parseQuestDat, QuestDatChunkType, type QuestDat, type QuestDatFloor } from '../formats/questdat.ts';
+import { isEvt2, parseEvt2File, serializeEvt2File, type Event2Entry, type WaveEvent } from '../formats/events.ts';
+import { ENEMY_SET_SIZE, enemyKind, OBJECT_SET_SIZE, type EnemySet, type ObjectSet, type SetEntity } from '../formats/setdata.ts';
+import {
+  parseRandomEnemySections,
+  serializeRandomDefinitions,
+  serializeRandomLocations,
+  type RandomEnemyDefinition,
+  type RandomEnemyLocation,
+  type RandomEnemyRoom,
+  type RandomEnemyWeight,
+} from '../formats/randomenemies.ts';
 import { floorToArea, gameEpisode, MAX_AREA, NUM_QUEST_FLOORS } from './areas.ts';
 import { applyHeader, newQuestBin, type EditableHeader, type NewQuestOptions } from './binhead.ts';
-import { buildQuestDatBytes, serializeEvents, type DatFloorContent, type RawChunk } from './datcodec.ts';
+import { buildQuestDatBytes, serializeEvents, type ChunkSlot, type DatFloorContent, type RawChunk } from './datcodec.ts';
 import { History, type Command } from './history.ts';
 
 export type ChangeKind =
@@ -27,6 +36,7 @@ export type ChangeKind =
   | 'entities' // entities were added or removed on `floor`
   | 'fields' // fields of `entities` changed
   | 'events' // wave events of `floor` changed
+  | 'random' // random-wave sections (types 4 / 5) or evt2 entries of `floor` changed
   | 'selection'
   | 'history';
 
@@ -36,17 +46,75 @@ export interface Change {
   entities?: readonly SetEntity[];
 }
 
+// The random-wave sections of a floor (quest .dat types 4 and 5, newserv
+// Map.hh RandomEnemyLocationsHeader / RandomEnemyDefinitionsHeader) as lists.
+// `locations` are in room order, the order the room table's offsets count.
+export interface RandomWaveSections {
+  rooms: RandomEnemyRoom[];
+  locations: RandomEnemyLocation[];
+  definitions: RandomEnemyDefinition[];
+  weights: RandomEnemyWeight[];
+  hasLocations: boolean; // a type 4 chunk is written
+  hasDefinitions: boolean; // a type 5 chunk is written
+}
+
+// The bytes the two random sections had when the file was read, and the key of
+// their lists at that time: unchanged lists are written back as these bytes.
+export interface RawRandomWave {
+  locations: Uint8Array | null;
+  definitions: Uint8Array | null;
+  key: string;
+}
+
+export interface Evt2Section {
+  entries: Event2Entry[];
+  actionStream: Uint8Array;
+}
+
 export interface FloorEdit {
   floor: number;
   objects: ObjectSet[];
   enemies: EnemySet[];
   events: WaveEvent[];
-  // The event chunk cannot be edited when it is in the 'evt2' (random wave)
-  // format or does not parse; its bytes are written back as they were.
+  // The event chunk cannot be edited as wave events when it is in the 'evt2'
+  // (random wave) format or does not parse; its bytes are then written back as
+  // they were, unless the evt2 entries are edited (`evt2`, see setEvt2Entry).
   eventsEditable: boolean;
-  rawEvents: Uint8Array | null;
+  rawEvents: Uint8Array | null; // the event chunk's bytes as read
+  rawEventsKey: string; // eventsKey() at read time: unchanged events are written as rawEvents
   hasEventChunk: boolean; // write an event chunk even when the list is empty
-  extra: RawChunk[]; // random-wave sections and unknown chunks, untouched
+  evt2: Evt2Section | null; // the random-wave events, when the chunk is in evt2 format
+  random: RandomWaveSections | null; // both random sections parsed; null when they are not (or not both there)
+  rawRandom: RawRandomWave | null; // the random sections' bytes as read
+  extra: RawChunk[]; // unknown chunk types, untouched
+}
+
+// The state of a floor's events that decides whether its bytes are reused.
+function eventsKey(f: FloorEdit): string {
+  if (f.evt2) return JSON.stringify(f.evt2.entries);
+  return JSON.stringify(f.events.map((e) => ({ ...e, index: 0 })));
+}
+
+function randomKey(r: RandomWaveSections): string {
+  return JSON.stringify(r);
+}
+
+function cloneRandom(r: RandomWaveSections | null): RandomWaveSections | null {
+  return r ? structuredClone(r) : null;
+}
+
+function cloneEvt2(s: Evt2Section | null): Evt2Section | null {
+  return s ? { entries: s.entries.map((e) => ({ ...e })), actionStream: s.actionStream.slice() } : null;
+}
+
+// What a random-wave edit changes on a floor, as copies of the state before and after.
+interface RandomSnapshot {
+  random: RandomWaveSections | null;
+  evt2: Evt2Section | null;
+}
+interface RandomSpan {
+  from: RandomSnapshot;
+  to: RandomSnapshot;
 }
 
 type Fields = Record<string, unknown>;
@@ -110,6 +178,7 @@ export class QuestDocument {
   readonly history = new History<ModelCommand>();
   fileName = 'quest';
   warnings: string[] = [];
+  layout: ChunkSlot[] = []; // the .dat's chunks in file order (buildQuestDatBytes keeps it)
   private current = 0;
   private selected: SetEntity[] = [];
   private listeners = new Set<(c: Change) => void>();
@@ -125,25 +194,17 @@ export class QuestDocument {
     doc.fileName = fileName;
     if (dat) {
       doc.warnings = [...dat.warnings];
-      for (const f of dat.floors.values()) {
-        const fe = doc.floorEdit(f.floor);
-        fe.objects = f.objects.map((o) => cloneEntity(o));
-        fe.enemies = f.enemies.map((e) => cloneEntity(e));
-        if (f.eventData) {
-          fe.hasEventChunk = true;
-          if (f.events && f.events.format === 'evt1') fe.events = f.events.events.map((e) => ({ ...e, actions: e.actions.map((a) => ({ ...a })) }));
-          else {
-            fe.eventsEditable = false;
-            fe.rawEvents = f.eventData.slice();
-          }
-        }
-      }
+      doc.layout = dat.chunks.map((c) => ({ type: c.type, floor: c.floor }));
+      for (const f of dat.floors.values()) loadFloor(doc.floorEdit(f.floor), f);
       for (const c of dat.chunks) {
-        if (c.type === QuestDatChunkType.Objects || c.type === QuestDatChunkType.Enemies || c.type === QuestDatChunkType.Events) continue;
+        if (KNOWN_CHUNK_TYPES.has(c.type)) continue;
         doc.floorEdit(c.floor).extra.push({ type: c.type, data: c.data.slice() });
       }
     }
-    for (const f of doc.floors.values()) reindex(f);
+    for (const f of doc.floors.values()) {
+      reindex(f);
+      f.rawEventsKey = eventsKey(f);
+    }
     doc.current = doc.designatedFloors()[0] ?? 0;
     return doc;
   }
@@ -224,7 +285,20 @@ export class QuestDocument {
   floorEdit(floor: number): FloorEdit {
     let f = this.floors.get(floor);
     if (!f) {
-      f = { floor, objects: [], enemies: [], events: [], eventsEditable: true, rawEvents: null, hasEventChunk: false, extra: [] };
+      f = {
+        floor,
+        objects: [],
+        enemies: [],
+        events: [],
+        eventsEditable: true,
+        rawEvents: null,
+        rawEventsKey: '',
+        hasEventChunk: false,
+        evt2: null,
+        random: null,
+        rawRandom: null,
+        extra: [],
+      };
       this.floors.set(floor, f);
     }
     return f;
@@ -553,18 +627,174 @@ export class QuestDocument {
 
   // --- Output ----------------------------------------------------------------------------
 
+  // --- Random-wave sections and evt2 entries ---------------------------------------------
+
+  // Edits of a floor's random sections and evt2 entries share one command: the
+  // floor's state before and after is kept as a copy, so undo and redo restore it.
+  // The commands with a mergeKey fold together (a number field typed into
+  // several times is one undo step), as patchEvent's do.
+  private randomEdit(floor: number, label: string, edit: (fe: FloorEdit) => void, mergeKey?: string): void {
+    const fe = this.floorEdit(floor);
+    const from: RandomSnapshot = { random: cloneRandom(fe.random), evt2: cloneEvt2(fe.evt2) };
+    const scratch = { ...fe, random: cloneRandom(fe.random), evt2: cloneEvt2(fe.evt2) } as FloorEdit;
+    edit(scratch);
+    const to: RandomSnapshot = { random: scratch.random, evt2: scratch.evt2 };
+    this.exec(this.randomCommand(floor, label, { from, to }, mergeKey));
+  }
+
+  private randomCommand(floor: number, label: string, span: RandomSpan, mergeKey?: string): ModelCommand & { span: RandomSpan } {
+    const apply = (s: RandomSnapshot) => {
+      const fe = this.floorEdit(floor);
+      fe.random = cloneRandom(s.random);
+      fe.evt2 = cloneEvt2(s.evt2);
+    };
+    return {
+      label,
+      changes: [{ kind: 'random', floor }],
+      span,
+      redo: () => apply(span.to),
+      undo: () => apply(span.from),
+      ...(mergeKey !== undefined
+        ? {
+            mergeKey,
+            merge: (next: Command) => {
+              const n = next as Partial<{ span: RandomSpan }>;
+              return n.span ? this.randomCommand(floor, label, { from: span.from, to: n.span.to }, mergeKey) : null;
+            },
+          }
+        : {}),
+    };
+  }
+
+  private requireRandom(fe: FloorEdit): RandomWaveSections {
+    if (!fe.random) throw new Error(`floor ${fe.floor} has no editable random-wave sections (both types 4 and 5 must parse)`);
+    return fe.random;
+  }
+
+  // The room block a flat location index falls in: [room, first index, count].
+  private roomBlockOf(r: RandomWaveSections, index: number): { room: RandomEnemyRoom; start: number } | null {
+    let start = 0;
+    for (const room of r.rooms) {
+      if (index >= start && index < start + room.count) return { room, start };
+      start += room.count;
+    }
+    return null;
+  }
+
+  // Moves one location (its position, angle or the two unmodelled u16s).
+  setRandomLocation(floor: number, index: number, patch: Partial<RandomEnemyLocation>, mergeKey?: string): void {
+    this.randomEdit(
+      floor,
+      'Edit random location',
+      (fe) => {
+        const r = this.requireRandom(fe);
+        const loc = r.locations[index];
+        if (!loc) throw new Error(`random location ${index} is out of range`);
+        Object.assign(loc, { ...patch, pos: patch.pos ? [...patch.pos] : loc.pos, angle: patch.angle ? [...patch.angle] : loc.angle });
+      },
+      mergeKey,
+    );
+  }
+
+  // Adds a location at the end of a room's block. The room must exist (its
+  // number is the room id of the section, as in the .dat's room table).
+  addRandomLocation(floor: number, roomId: number, loc: RandomEnemyLocation): void {
+    this.randomEdit(floor, 'Add random location', (fe) => {
+      const r = this.requireRandom(fe);
+      const at = r.rooms.findIndex((x) => x.roomId === roomId);
+      if (at < 0) throw new Error(`room ${roomId} has no random-location table in floor ${floor}`);
+      const blockStart = r.rooms.slice(0, at).reduce((n, x) => n + x.count, 0);
+      r.locations.splice(blockStart + r.rooms[at].count, 0, { ...loc, pos: [...loc.pos], angle: [...loc.angle] });
+      r.rooms[at].count++;
+    });
+  }
+
+  // Removes a location from its room's block.
+  removeRandomLocation(floor: number, index: number): void {
+    this.randomEdit(floor, 'Delete random location', (fe) => {
+      const r = this.requireRandom(fe);
+      const block = this.roomBlockOf(r, index);
+      if (!block) throw new Error(`random location ${index} is out of range`);
+      r.locations.splice(index, 1);
+      block.room.count--;
+    });
+  }
+
+  setRandomDefinition(floor: number, index: number, patch: Partial<RandomEnemyDefinition>, mergeKey?: string): void {
+    this.randomEdit(
+      floor,
+      'Edit random enemy definition',
+      (fe) => {
+        const d = this.requireRandom(fe).definitions[index];
+        if (!d) throw new Error(`random enemy definition ${index} is out of range`);
+        Object.assign(d, { ...patch, params: patch.params ? [...patch.params] : d.params });
+      },
+      mergeKey,
+    );
+  }
+
+  setRandomWeight(floor: number, index: number, patch: Partial<RandomEnemyWeight>, mergeKey?: string): void {
+    this.randomEdit(
+      floor,
+      'Edit random enemy weight',
+      (fe) => {
+        const w = this.requireRandom(fe).weights[index];
+        if (!w) throw new Error(`random enemy weight ${index} is out of range`);
+        Object.assign(w, patch);
+      },
+      mergeKey,
+    );
+  }
+
+  // Edits an evt2 entry's fields (the wave count, enemy counts, delays, room).
+  // The action stream is kept as it was.
+  setEvt2Entry(floor: number, index: number, patch: Partial<Event2Entry>, mergeKey?: string): void {
+    this.randomEdit(
+      floor,
+      'Edit random wave event',
+      (fe) => {
+        const e = fe.evt2?.entries[index];
+        if (!fe.evt2 || !e) throw new Error(`evt2 entry ${index} is out of range`);
+        Object.assign(e, patch);
+      },
+      mergeKey,
+    );
+  }
+
+  private randomBytes(f: FloorEdit): { locations: Uint8Array | null; definitions: Uint8Array | null } {
+    const raw = f.rawRandom;
+    if (!f.random) return { locations: raw?.locations ?? null, definitions: raw?.definitions ?? null };
+    if (raw && randomKey(f.random) === raw.key) return { locations: raw.locations, definitions: raw.definitions };
+    return {
+      locations: f.random.hasLocations ? serializeRandomLocations(f.random.rooms, f.random.locations) : null,
+      definitions: f.random.hasDefinitions ? serializeRandomDefinitions(f.random.definitions, f.random.weights) : null,
+    };
+  }
+
+  private eventsBytes(f: FloorEdit): Uint8Array | null {
+    if (f.rawEvents && eventsKey(f) === f.rawEventsKey) return f.rawEvents;
+    if (f.evt2) return serializeEvt2File(f.evt2.entries, f.evt2.actionStream);
+    if (!f.eventsEditable) return f.rawEvents;
+    return f.events.length || f.hasEventChunk ? serializeEvents(f.events) : null;
+  }
+
   private datContent(): DatFloorContent[] {
-    return [...this.floors.values()].map((f) => ({
-      floor: f.floor,
-      objects: f.objects,
-      enemies: f.enemies,
-      events: f.eventsEditable ? (f.events.length || f.hasEventChunk ? serializeEvents(f.events) : null) : f.rawEvents,
-      extra: f.extra,
-    }));
+    return [...this.floors.values()].map((f) => {
+      const random = this.randomBytes(f);
+      return {
+        floor: f.floor,
+        objects: f.objects,
+        enemies: f.enemies,
+        events: this.eventsBytes(f),
+        randomLocations: random.locations,
+        randomDefinitions: random.definitions,
+        extra: f.extra,
+      };
+    });
   }
 
   toDatBytes(): Uint8Array {
-    return buildQuestDatBytes(this.datContent());
+    return buildQuestDatBytes(this.datContent(), this.layout);
   }
 
   // The .dat as the parsed object the writer takes.
@@ -583,6 +813,7 @@ export class QuestDocument {
     for (const [k, v] of other.floors) this.floors.set(k, v);
     this.fileName = other.fileName;
     this.warnings = other.warnings;
+    this.layout = other.layout;
     this.current = other.current;
     this.selected = [];
     this.history.clear();
@@ -593,6 +824,54 @@ export class QuestDocument {
 
 export function cloneEntity<T extends SetEntity>(e: T): T {
   return { ...e, position: [...e.position], rotation: [...e.rotation], params: [...e.params] } as T;
+}
+
+const KNOWN_CHUNK_TYPES = new Set<number>([
+  QuestDatChunkType.Objects,
+  QuestDatChunkType.Enemies,
+  QuestDatChunkType.Events,
+  QuestDatChunkType.RandomEnemyLocations,
+  QuestDatChunkType.RandomEnemyDefinitions,
+]);
+
+// Fills a floor from its parsed .dat chunks. Every entity keeps its record bytes
+// (SetEntryBase.raw) so the writer can keep the fields the editor does not model.
+function loadFloor(fe: FloorEdit, f: QuestDatFloor): void {
+  fe.objects = f.objects.map((o, i) => ({ ...cloneEntity(o), raw: f.objectBytes.slice(i * OBJECT_SET_SIZE, (i + 1) * OBJECT_SET_SIZE), homeFloor: f.floor }));
+  fe.enemies = f.enemies.map((e, i) => ({ ...cloneEntity(e), raw: f.enemyBytes.slice(i * ENEMY_SET_SIZE, (i + 1) * ENEMY_SET_SIZE), homeFloor: f.floor }));
+  if (f.eventData) {
+    fe.hasEventChunk = true;
+    fe.rawEvents = f.eventData.slice();
+    if (isEvt2(f.eventData)) {
+      const evt2 = parseEvt2File(f.eventData);
+      fe.evt2 = { entries: evt2.entries.map((e) => ({ ...e })), actionStream: evt2.actionStream.slice() };
+      fe.eventsEditable = false;
+    } else if (f.events && f.events.format === 'evt1') {
+      fe.events = f.events.events.map((e) => ({ ...e, actions: e.actions.map((a) => ({ ...a })) }));
+    } else {
+      fe.eventsEditable = false;
+    }
+  }
+  if (f.randomLocations || f.randomDefinitions) {
+    fe.rawRandom = { locations: f.randomLocations?.slice() ?? null, definitions: f.randomDefinitions?.slice() ?? null, key: '' };
+    if (f.randomLocations && f.randomDefinitions) {
+      try {
+        const s = parseRandomEnemySections(f.randomLocations, f.randomDefinitions);
+        fe.random = {
+          rooms: s.rooms,
+          locations: s.locations,
+          definitions: s.definitions,
+          weights: s.weights,
+          hasLocations: true,
+          hasDefinitions: true,
+        };
+        fe.rawRandom.key = randomKey(fe.random);
+      } catch {
+        // Kept as bytes: the chunks are written back unchanged.
+        fe.random = null;
+      }
+    }
+  }
 }
 
 function reindex(f: FloorEdit): void {

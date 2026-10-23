@@ -59,7 +59,11 @@ construct_objects <room> <group>       set_switch_flag <n>      clear_switch_fla
 trigger_event <id>                     stop        nop         raw <opcode>
 ```
 
-A list that does not end in `stop` / `construct_enemies_stop` gets a `stop`. Floors using the random-wave (`evt2`) format, and the random enemy sections (.dat chunk types 4 and 5), are kept byte for byte and cannot be edited.
+A list that does not end in `stop` / `construct_enemies_stop` gets a `stop`. The ordinary wave events of a floor that uses the random-wave (`evt2`) format are kept byte for byte and cannot be edited there.
+
+**Random waves** (the "Random waves" tab, one floor at a time). The random enemy sections (.dat chunk types 4 and 5, `formats/randomenemies.ts`) list each room's locations (position and angle), the enemy definitions (five float parameters, two i16 parameters, the children range) and their weights. The evt2 entries (`formats/events.ts`, `serializeEvt2File`) list each template's event id, room, wave number, delay range, enemy count range and wave count. Every field is editable and each change is one undo step. A location can be added to a room or deleted. A floor whose two random sections do not both parse is kept byte for byte.
+
+**Byte-exact writes.** A document that is not edited writes back exactly the bytes it was read from, for every quest of the local corpus (`tests/questeditor.test.ts`). Each object and enemy record keeps its bytes (the fields the editor does not model are not lost), each chunk keeps its place in the file, and an unedited events or random-section chunk is written as read.
 
 ## Script
 

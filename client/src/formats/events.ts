@@ -204,3 +204,34 @@ export function parseEvt2File(data: Uint8Array): Event2File {
   }
   return { entries: out, actionStream: data.subarray(actionStream) };
 }
+
+// The inverse of parseEvt2File: the 0x10 header (action stream offset, entries
+// at 0x10, count, 'evt2' big-endian at 0x0C), the 0x18-byte entries, then the
+// action stream. Layout from newserv Map.hh Event2Entry and the
+// EventsSectionHeader written by MapFile::serialize (Map.cc:4370).
+export function serializeEvt2File(entries: readonly Event2Entry[], actionStream: Uint8Array): Uint8Array {
+  const entriesAt = 0x10;
+  const actionAt = entriesAt + entries.length * EVT2_ENTRY_SIZE;
+  const out = new Uint8Array(actionAt + actionStream.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0x00, actionAt, true);
+  dv.setUint32(0x04, entriesAt, true);
+  dv.setUint32(0x08, entries.length, true);
+  dv.setUint32(0x0c, EVT2, false);
+  entries.forEach((e, i) => {
+    const o = entriesAt + i * EVT2_ENTRY_SIZE;
+    dv.setUint32(o, e.eventId, true);
+    dv.setUint16(o + 4, e.flags, true);
+    dv.setUint16(o + 6, e.eventType, true);
+    dv.setUint16(o + 8, e.room, true);
+    dv.setUint16(o + 0x0a, e.waveNumber, true);
+    dv.setUint16(o + 0x0c, e.minDelay, true);
+    dv.setUint16(o + 0x0e, e.maxDelay, true);
+    dv.setUint8(o + 0x10, e.minEnemies);
+    dv.setUint8(o + 0x11, e.maxEnemies);
+    dv.setUint16(o + 0x12, e.maxWaves, true);
+    dv.setUint32(o + 0x14, e.actionOffset, true);
+  });
+  out.set(actionStream, actionAt);
+  return out;
+}

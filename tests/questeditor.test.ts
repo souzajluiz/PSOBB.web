@@ -12,8 +12,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prsDecompress } from '../client/src/formats/prs.ts';
 import { parseQuestBin } from '../client/src/formats/questbin.ts';
-import { parseQuestDat } from '../client/src/formats/questdat.ts';
-import { parseEventFile } from '../client/src/formats/events.ts';
+import { parseQuestDat, parseQuestDatChunks } from '../client/src/formats/questdat.ts';
+import { isEvt2, parseEvt2File, parseEventFile, serializeEvt2File } from '../client/src/formats/events.ts';
+import { parseRandomEnemySections, serializeRandomDefinitions, serializeRandomLocations } from '../client/src/formats/randomenemies.ts';
 import { sectionToWorld } from '../client/src/formats/setdata.ts';
 import { applyHeader, newQuestBin, upgradeToFullHeader } from '../client/src/questeditor/binhead.ts';
 import { buildQuestDatBytes, encodeActions, formatActions, parseActionText, serializeEnemySet, serializeEvents, serializeObjectSet } from '../client/src/questeditor/datcodec.ts';
@@ -508,6 +509,163 @@ const throws = (fn: () => void, msg: string) => {
     message = (e as Error).message;
   }
   check(message === 'not a valid quest: x', 'publish: the server error is shown');
+}
+
+// --- Byte-exact writes and the random-wave sections (newserv Map.cc:4370-4420 layouts) -------------
+{
+  const HERE = dirname(fileURLToPath(import.meta.url));
+  const mainRoot = (() => {
+    try {
+      return dirname(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: HERE, encoding: 'utf8' }).trim());
+    } catch {
+      return join(HERE, '..');
+    }
+  })();
+  const newserv = [process.env.NEWSERV, join(HERE, '../vendor/newserv'), join(mainRoot, 'vendor/newserv')].find((d) => d && existsSync(join(d, 'system/quests')));
+  const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (!newserv) console.log('SKIP byte-exact quest writes (no newserv checkout with system/quests)');
+  else {
+    const root = join(newserv, 'system/quests');
+    let total = 0;
+    let exact = 0;
+    let randomFloors = 0;
+    let evt2Floors = 0;
+    let sample: { label: string; datBytes: Uint8Array; bin: ReturnType<typeof parseQuestBin>; floor: number } | null = null;
+    for (const dir of readdirSync(root, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const files = readdirSync(join(root, dir.name));
+      for (const f of files) {
+        const m = /^(.+)-bb-([a-z])\.bin$/.exec(f);
+        if (!m || !files.includes(`${m[1]}-bb.dat`)) continue;
+        const label = `${dir.name}/${m[1]}-bb`;
+        const datBytes = prsDecompress(new Uint8Array(readFileSync(join(root, dir.name, `${m[1]}-bb.dat`))));
+        const bin = parseQuestBin(prsDecompress(new Uint8Array(readFileSync(join(root, dir.name, f)))));
+        const dat = parseQuestDat(datBytes);
+        // An unchanged document writes the file it was read from, byte for byte.
+        const out = QuestDocument.fromQuest(bin, dat, m[1]).toDatBytes();
+        total++;
+        if (sameBytes(out, datBytes)) exact++;
+        else {
+          let at = 0;
+          while (at < Math.min(out.length, datBytes.length) && out[at] === datBytes[at]) at++;
+          check(false, `${label}.dat: unchanged document writes different bytes (first at 0x${at.toString(16)}, ${out.length} vs ${datBytes.length})`);
+        }
+        for (const fl of dat.floors.values()) {
+          if (fl.randomLocations && fl.randomDefinitions) {
+            randomFloors++;
+            // Both sections re-serialize to the bytes they were read from.
+            const s = parseRandomEnemySections(fl.randomLocations, fl.randomDefinitions);
+            check(sameBytes(serializeRandomLocations(s.rooms, s.locations), fl.randomLocations), `${label} floor ${fl.floor}: type 4 re-serializes differently`);
+            check(sameBytes(serializeRandomDefinitions(s.definitions, s.weights), fl.randomDefinitions), `${label} floor ${fl.floor}: type 5 re-serializes differently`);
+            if (!sample) sample = { label, datBytes, bin, floor: fl.floor };
+          }
+          if (fl.eventData && isEvt2(fl.eventData)) {
+            evt2Floors++;
+            const e2 = parseEvt2File(fl.eventData);
+            check(sameBytes(serializeEvt2File(e2.entries, e2.actionStream), fl.eventData), `${label} floor ${fl.floor}: evt2 re-serializes differently`);
+          }
+        }
+      }
+    }
+    check(total > 100, `expected over 100 BB quests with a .dat, found ${total}`);
+    check(exact === total, `${exact}/${total} quest .dat files write back byte for byte`);
+    check(randomFloors > 0 && evt2Floors > 0 && sample !== null, 'the corpus has random-wave floors');
+    console.log(`${exact}/${total} quest .dat files write back byte for byte; ${randomFloors} random-wave floors, ${evt2Floors} evt2 floors`);
+
+    // Edits on one random-wave floor: each one changes exactly what it names, the
+    // other bytes stay, and undo returns to the file.
+    if (sample) {
+      const { datBytes, bin, floor, label } = sample;
+      const dat = parseQuestDat(datBytes);
+      const fl = dat.floors.get(floor)!;
+      const before = parseRandomEnemySections(fl.randomLocations!, fl.randomDefinitions!);
+      const doc = QuestDocument.fromQuest(bin, dat, 'sample');
+      const sectionsOf = (bytes: Uint8Array) => {
+        const again = parseQuestDat(bytes).floors.get(floor)!;
+        return parseRandomEnemySections(again.randomLocations!, again.randomDefinitions!);
+      };
+
+      doc.setRandomLocation(floor, 0, { pos: [1.5, -2, 3], unknownA10: 7 });
+      doc.seal();
+      let now = sectionsOf(doc.toDatBytes());
+      eq(now.locations[0].pos, [1.5, -2, 3], `${label}: moved location 0`);
+      check(now.locations[0].unknownA10 === 7 && now.locations[0].unknownA9 === before.locations[0].unknownA9, `${label}: unmodelled fields of location 0 kept`);
+      eq(now.locations.slice(1), before.locations.slice(1), `${label}: other locations unchanged`);
+      eq(now.definitions, before.definitions, `${label}: definitions unchanged by a location edit`);
+
+      const roomId = before.rooms[0].roomId;
+      const count = before.rooms[0].count;
+      doc.addRandomLocation(floor, roomId, { pos: [4, 5, 6], angle: [0, 0, 0], unknownA9: 1, unknownA10: 2 });
+      doc.seal();
+      now = sectionsOf(doc.toDatBytes());
+      eq(now.rooms[0].count, count + 1, `${label}: the room gained a location`);
+      eq(now.locations.length, before.locations.length + 1, `${label}: one more location in total`);
+      eq(now.locations[count].pos, [4, 5, 6], `${label}: the new location is at the end of its room's block`);
+
+      doc.setRandomDefinition(floor, 0, { minChildren: 3, maxChildren: 5, unknownA1: 9 });
+      doc.seal();
+      doc.setRandomWeight(floor, 0, { weight: 200 });
+      doc.seal();
+      now = sectionsOf(doc.toDatBytes());
+      eq([now.definitions[0].minChildren, now.definitions[0].maxChildren, now.definitions[0].unknownA1], [3, 5, 9], `${label}: definition 0 edited`);
+      eq(now.weights[0].weight, 200, `${label}: weight 0 edited`);
+      eq(now.weights[0].unknownA4, before.weights[0].unknownA4, `${label}: weight 0 keeps its unmodelled byte`);
+
+      const evt2 = parseEvt2File(fl.eventData!);
+      doc.setEvt2Entry(floor, 0, { maxWaves: evt2.entries[0].maxWaves + 1 });
+      doc.seal();
+      const reread = parseEvt2File(parseQuestDat(doc.toDatBytes()).floors.get(floor)!.eventData!);
+      eq(reread.entries[0].maxWaves, evt2.entries[0].maxWaves + 1, `${label}: evt2 entry 0 edited`);
+      eq(reread.actionStream, evt2.actionStream, `${label}: evt2 action stream kept`);
+
+      // Undo everything: the file comes back byte for byte.
+      while (doc.undo());
+      check(sameBytes(doc.toDatBytes(), datBytes), `${label}: undo of every edit restores the file bytes`);
+      // Redo the first edit only.
+      doc.redo();
+      eq(sectionsOf(doc.toDatBytes()).locations[0].pos, [1.5, -2, 3], `${label}: redo restores the first edit`);
+
+      // Values typed under one merge key are one undo step.
+      const settled = doc.toDatBytes();
+      doc.setRandomLocation(floor, 1, { pos: [1, 0, 0] }, 'typing');
+      doc.setRandomLocation(floor, 1, { pos: [2, 0, 0] }, 'typing');
+      doc.seal();
+      doc.undo();
+      check(sameBytes(doc.toDatBytes(), settled), `${label}: keyed edits undo as one step`);
+      doc.redo();
+
+      // A location added and then deleted leaves the sections as they were.
+      const added = before.rooms[0].count;
+      const beforeAdd = doc.toDatBytes();
+      doc.addRandomLocation(floor, before.rooms[0].roomId, { pos: [7, 7, 7], angle: [0, 0, 0], unknownA9: 0, unknownA10: 0 });
+      doc.seal();
+      check(sectionsOf(doc.toDatBytes()).locations[added].pos.join() === '7,7,7', `${label}: the added location is at the end of room 0`);
+      doc.removeRandomLocation(floor, added);
+      doc.seal();
+      check(sameBytes(doc.toDatBytes(), beforeAdd), `${label}: add then delete writes the same bytes as before the add`);
+    }
+
+    // An object record keeps its unmodelled bytes when the object is moved: the
+    // bytes at 0x02..0x05 and 0x08 are not in the editor's model.
+    if (newserv) {
+      const dir = join(newserv, 'system/quests/battle');
+      const bytes = prsDecompress(new Uint8Array(readFileSync(join(dir, 'b88001-bb.dat'))));
+      const bin = parseQuestBin(prsDecompress(new Uint8Array(readFileSync(join(dir, 'b88001-bb-e.bin')))));
+      const doc = QuestDocument.fromQuest(bin, parseQuestDat(bytes), 'b88001');
+      const floor = doc.designatedFloors().find((n) => (doc.floors.get(n)?.objects.length ?? 0) > 0);
+      const obj = floor !== undefined ? doc.floors.get(floor)!.objects[0] : undefined;
+      if (obj && obj.raw) {
+        const original = obj.raw.slice();
+        doc.patchEntity(obj, { position: [9, 8, 7] });
+        doc.seal();
+        const edited = parseQuestDat(doc.toDatBytes()).floors.get(floor!)!.objects[0];
+        eq(edited.position, [9, 8, 7], 'object: moved');
+        const moved = serializeObjectSet(obj);
+        check(moved[0x02] === original[0x02] && moved[0x04] === original[0x04] && moved[0x08] === original[0x08], 'object: unmodelled u16s copied from the record');
+        check(!sameBytes(moved, original), 'object: the moved record differs from the original');
+      }
+    }
+  }
 }
 
 console.log(`${checks - failures}/${checks} checks passed`);
