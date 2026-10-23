@@ -3,7 +3,7 @@
 // For ~60 s the spec samples the brain's state (+0x32e) and its hp every half
 // second: the states must change (the entrance, then the sequence) with no page
 // error. Then the spec stands the player in front of the body and attacks with
-// the real keys (ArrowDown = the palette's slot 0, a normal attack) until the
+// the real keys, each held ~120 ms (ArrowDown = the palette's slot 0, a normal attack) until the
 // render layer logs a hit on the Gol Dragon (applyEnemyHit -> the Gol branch). The
 // damage is the game's roll: this character's roll was 0 in the last run (as on the
 // Barba Ray), so the hp is reported, not asserted. Against a local newserv
@@ -127,7 +127,11 @@ test('Gol Dragon: the brain runs in Chrome, its states change, a key attack hits
   await page.waitForTimeout(400);
   const mark = hitLines().length;
   for (let n = 0; n < 16 && hitLines().length === mark; n++) {
-    await key(page, 'ArrowDown');
+    // A held press: the palette reads the keys once a frame (MapViewer.keys, combat.frame), so a press
+    // released at once is lost unless a frame falls between its down and up (guns.spec.ts TAP_MS).
+    await page.keyboard.down('ArrowDown');
+    await page.waitForTimeout(120);
+    await page.keyboard.up('ArrowDown');
     await page.waitForTimeout(700);
   }
   const after = await golState(page);

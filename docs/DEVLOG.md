@@ -9559,3 +9559,15 @@ Slots with flags 2 in the file: 0, 2, 4, 41, 51, 53. The rest are flags 1.
 **Open:** the egg's look in Chrome is still unexplained by slot metadata; the earlier open items in the 2026-10-23 egg entry (spawn offset sign, sprite size vs the exe focal length) remain.
 
 Checks: `tools/exedata.py read` on 0x00a101c0 + n*0x28 for all 54 slots; Ghidra decompile of 0x00501c4c, 0x00501804, 0x00800f4c, 0x00801dd0, 0x00801df8, 0x00801034, 0x0050864c, 0x008013bc, 0x007a902c/905c/9044/9074, 0x0082acfc, 0x0082b440, 0x00837468, 0x00508460. Named source read: render_particle_renderer3 (Psobb.exe-05112026.c:816525).
+
+## 2026-10-23: Gol Dragon smoke: the key attack never hit (spec key holds, not a port bug)
+
+**Symptom:** `client/e2e/goldragon-smoke.spec.ts` failed at "a key attack hits the Gol Dragon" (0 hit lines in 16 presses). Two runs failed, one passed, before any change.
+
+**Diagnosis:** the Gol's states and the breath were the same in every run. Per-swing probes (player z 275, Gol z 240, facing PI, weapon range 14 + 18, cone and reach 15 all in) showed `damage.state` back to `alive`, `canAttack` true, no key held, and palette slot 0 = group1 2 (a normal attack), yet no attack started. The cause is the spec's `key()` helper: `page.keyboard.press` releases at once. The port reads the palette keys once per frame: `MapViewer.keys` (render/mapviewer.ts, keydown / keyup) is polled in `CombatView.frame` (`keys.has(key)` and the `held` edge set). A press released before a frame never reaches the palette, so only the rare presses that straddle a frame attack. This is the port's frame polling of a real key state (a human press lasts many frames); the exe reads the keys per frame too. The guns spec already holds its presses for this reason (`TAP_MS`).
+
+**Fix (spec only):** each attack press is held 120 ms (`keyboard.down`, wait, `keyboard.up`), with the reason in a comment. The assertion is unchanged. No combat code changed: the attack path, the weapon cone and the Gol's hit path were all correct.
+
+**Also seen, not changed:** the first hit of this character rolls 0 (the log line "hit the Gol Dragon for 0" counts as a reached swing, as before). After the breath hit the player was in `getup` at the first probe and `alive` from the next one, so the flinch (`damage.busy`) is short and does not explain the miss.
+
+Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node tests/dragon.test.ts` ok, `goldragon-smoke.spec.ts` passed (2 runs with the fix).
