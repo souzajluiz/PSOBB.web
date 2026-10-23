@@ -359,6 +359,13 @@ export interface EnemyPartSpec {
   // Nodes (depth-first) that keep a material of their own, tagged userData.node
   // (NjcmPartInput.ownMaterials): De Rol Le's segment plates are tinted per node.
   ownMaterials?: readonly number[] | undefined;
+  // Texture ids whose UVs the brain shifts each frame (the Morfos' wall stream,
+  // formats/enemymodels.ts): each gets an offset vector, on the part's group as
+  // userData.uvOffsets (Map<texture id, Vector2>); the view writes it.
+  uvDrive?: readonly number[] | undefined;
+  // The view plays this part's motion itself (the Morfos' arm): the generic
+  // enemy motion skips it.
+  ownMotion?: boolean | undefined;
   // The client creates the object but only draws it in some fight states
   // (thrown arms, tentacles the boss spawns): built, not drawn.
   hidden?: boolean;
@@ -419,11 +426,13 @@ export function buildEnemy(
     if (part.scale) group.scale.setScalar(part.scale);
     if (part.hidden) group.visible = false;
     (part.place === 'world' ? world : root).add(group);
+    const drives = part.uvDrive?.length ? new Map(part.uvDrive.map((id): [number, THREE.Vector2] => [id, new THREE.Vector2()])) : undefined;
+    if (drives) group.userData.uvOffsets = drives;
     let nodes: THREE.Object3D[];
     let shaper: ShapeAnimator | null = null;
     if (data.kind === 'nj') {
       const shapeIndex = part.motion?.shape;
-      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup, shape: shapeIndex !== undefined, ownMaterials: part.ownMaterials }]);
+      const built = new NjcmModelBuilder().build([{ name: data.name, root: data.object, textures: lookup, shape: shapeIndex !== undefined, ownMaterials: part.ownMaterials, uvOffsets: drives }]);
       group.add(built.root);
       nodes = built.partBones[0];
       const mesh = built.partMeshes[0];

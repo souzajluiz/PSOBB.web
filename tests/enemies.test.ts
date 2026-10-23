@@ -229,6 +229,43 @@ for (const [bml, nodes] of [['bm_ene_re7_berura.bml', BELRA.handNode], ['bm_ene_
   }
 }
 
+// 5. Morfos (0xde): the descriptor's model_files are kabe_arm (0), kabe_body (1), kabe_wall (2)
+//    (0x009bee9c; the exe's stream reads model_files[1] child = body, [2] = wall). The body is
+//    built with the wait motion, the wall static, the arm its own (ownMotion, hidden until the
+//    punch). The stream shifts texture 2 of the body and texture 0 of the wall: those parts
+//    carry a UV offset handle, and it is zero at build.
+{
+  const data = read('bm_ene_morfos.bml');
+  check(!!data, 'bm_ene_morfos.bml: missing');
+  if (data) {
+    const a = new EnemyArchive('bm_ene_morfos.bml', data, 3);
+    const e0 = { kind: 'enemy', type: 0xde, index: 0, numChildren: 0, section: 0, wave: 0, wave2: 0, unknownA1: 0, params: [0, 0, 0, 0, 0, 0, 0] } as unknown as EnemySet;
+    const spec = enemyModelFor(e0, { area: 0x0e, episode: 2, difficulty: 0, event: 0 });
+    check(spec?.parts.map((p) => p.model).join() === '1,2,0', `Morfos parts ${spec?.parts.map((p) => p.model).join()} (want 1,2,0)`);
+    const b = buildEnemy(a, spec?.parts ?? [], 0, new Map(), new Map());
+    const byName = (n: string) => b.root.children.find((c) => c.name === n);
+    check(!!byName('Morfos body') && !!byName('Morfos wall') && !!byName('Morfos arm'), 'Morfos: body, wall and arm groups');
+    check(byName('Morfos arm')?.visible === false, 'Morfos: the arm starts hidden');
+    check(b.animators.length === 2 && b.animatedParts[1]?.ownMotion === true, 'Morfos: the arm has its own animator (ownMotion)');
+    const uvBody = byName('Morfos body')?.userData.uvOffsets as Map<number, { x: number; y: number }> | undefined;
+    const uvWall = byName('Morfos wall')?.userData.uvOffsets as Map<number, { x: number; y: number }> | undefined;
+    check(!!uvBody?.get(2) && uvBody.get(2)!.x === 0 && uvBody.get(2)!.y === 0, 'Morfos: body texture 2 has a zero UV handle');
+    check(!!uvWall?.get(0) && uvWall.get(0)!.x === 0 && uvWall.get(0)!.y === 0, 'Morfos: wall texture 0 has a zero UV handle');
+    // The handle is the texture's offset: a driven texture repeats and reads it.
+    const body = byName('Morfos body');
+    let driven = 0;
+    // three.js is not resolvable from tests/: duck-typed (RepeatWrapping = 1000).
+    body?.traverse((o) => {
+      const mesh = o as { isMesh?: boolean; material?: { map?: { offset: unknown; wrapS: number } | null } | { map?: { offset: unknown; wrapS: number } | null }[] };
+      if (!mesh.isMesh || !mesh.material) return;
+      for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (mat.map && mat.map.offset === uvBody?.get(2) && mat.map.wrapS === 1000) driven++;
+      }
+    });
+    check(driven > 0, 'Morfos: a body material uses the driven texture');
+  }
+}
+
 for (const [k, n] of [...seen].sort()) console.log(`  ${k} (${n})`);
 console.log(`${floors} floor variations, ${enemies} enemy entries, ${built.size} distinct models built`);
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

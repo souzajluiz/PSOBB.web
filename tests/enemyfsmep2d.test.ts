@@ -171,6 +171,20 @@ const morfos = (o: { params?: number[]; rng?: () => number; difficulty?: number;
   run(r, [p], 200, 20, (f) => (hitF ??= f.hit));
   check(!!hitF, 'the punch lands');
   eq(hitF && [hitF.knockback, hitF.mult], [MORFOS.punchKnockback, 1], 'try_hit_entity(1.0) + cause_knockback(5.0)');
+  // The arm sub-entity (CreateMorfosSubEntity_0057cbc4) is out only during the
+  // swing (punch sub 1), never in another state.
+  const pm = morfos({ rng: () => 0.9 });
+  const rp = rig(pm);
+  let armFrames = 0;
+  let armOutside = 0;
+  run(rp, [player(0, 20)], 200, 20, () => {
+    if (pm.armOut) {
+      armFrames++;
+      if (pm.state !== 'punch') armOutside++;
+    }
+  });
+  check(armFrames > 0, `the arm is out during the punch swing (${armFrames} frames)`);
+  eq(armOutside, 0, 'the arm is out only in the punch state');
   const l = morfos({ rng: () => 0.1 });
   const rl = rig(l);
   let bolt: EnemyShot | undefined;
