@@ -153,6 +153,7 @@ export class GameView {
       warpTo: (f) => this.warpTo(f),
       toLobby: () => this.onLobbyWarp(),
       tickQuest: (dt) => this.quest?.tick(dt),
+      questStarted: () => this.quest !== null,
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       talkCamera: () => this.npcs.talkCameraView(),
       bossCamera: () => this.combat.bossCameraView(),

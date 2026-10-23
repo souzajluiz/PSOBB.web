@@ -29,8 +29,9 @@
 // handler table row for row, which the test checks.
 //
 // Not ported here (the window and the map): the quick menu's windows and timers, the
-// partner pick, the TObjTradeCollision zone bits (the exe's per-player flags 0..3 are
-// read through the io callbacks), and the inventory side (6x29 / 6xBE are the caller's).
+// partner pick, and the inventory side (6x29 / 6xBE are the caller's). The TObjTradeCollision
+// zone bits (the exe's per-player flags 0..3) are read through the io callbacks; net/tradezone.ts
+// drives them from the field's collision objects.
 //
 // ASSUMED (see the DEVLOG entry of 2026-10-23 "player trade"): the meaning of the
 // flags 0x10 / 0x80 as the local confirm buttons; the target of the busy reply

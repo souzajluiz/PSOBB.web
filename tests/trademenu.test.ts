@@ -36,6 +36,8 @@ class FakeCanvas {
 (globalThis as unknown as { OffscreenCanvas: unknown }).OffscreenCanvas = FakeCanvas;
 const deep: unknown = new Proxy(function () {}, { get: () => deep, apply: () => deep });
 const skin = deep as Parameters<TradeMenu['draw']>[1];
+// The icon texture (f256_hyouji.prs texture 1 in the game; a marker object here).
+const icons = { icon: 'f256_hyouji texture 1' } as unknown as CanvasImageSource;
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -289,25 +291,49 @@ check(
   const r = rig();
   const phases: TradePhase[] = [];
   const draw = () => phases.push(phase(r.menu));
-  r.menu.draw(ctx, skin);
+  r.menu.draw(ctx, skin, icons);
   draw();
   r.menu.key(key('Enter'));
-  r.menu.draw(ctx, skin);
+  r.menu.draw(ctx, skin, icons);
   draw();
   r.menu.key(key('ArrowUp'));
   r.menu.key(key('Enter'));
-  r.menu.draw(ctx, skin);
+  r.menu.draw(ctx, skin, icons);
   draw();
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   for (const k of ['Enter', 'Enter', 'Enter', 'Backspace', ' ', 'Escape']) {
     r.menu.key(key(k));
-    r.menu.draw(ctx, skin);
+    r.menu.draw(ctx, skin, icons);
     draw();
   }
   r.menu.notify(0x10b);
-  r.menu.draw(ctx, skin);
+  r.menu.draw(ctx, skin, icons);
   check('the menu draws in every phase it reaches (' + [...new Set(phases)].join(', ') + ')', phases.length > 0);
+}
+
+// ---- The offer rows: item rows with icons (exe ListWindowObject_PopulateItemsFromData_0074b7ac) --
+
+{
+  // The window with one offered sword: its row draws the icons from the icon texture.
+  const r = rig();
+  r.menu.key(key('Enter'));
+  r.menu.key(key('ArrowUp'));
+  r.menu.key(key('Enter'));
+  r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
+  r.menu.tick();
+  check('the window opens for the icon check', phase(r.menu) === 'window', phase(r.menu));
+  r.session.offerItem(SWORD, 2);
+  const sources: unknown[] = [];
+  const spy = new Proxy(
+    {},
+    {
+      get: (_t, prop) => (prop === 'drawImage' ? (img: unknown) => sources.push(img) : prop === 'measureText' ? () => ({ width: 7 }) : prop === 'getImageData' ? () => ({ data: new Uint8ClampedArray(64) }) : noop),
+      set: () => true,
+    },
+  ) as unknown as CanvasRenderingContext2D;
+  r.menu.draw(spy, skin, icons);
+  check('an offered item row draws its two icons from the icon texture', sources.filter((s) => s === icons).length >= 2, `${sources.length} draws`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'all trademenu checks passed');

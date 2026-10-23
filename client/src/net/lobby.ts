@@ -20,6 +20,7 @@ import type { SetPositionState } from './game.ts';
 import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
 import type { SymbolChat } from './symbolchat.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
+import { TradeZone } from './tradezone.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -171,6 +172,8 @@ export class Lobby {
   // on first use (6xA6 / D1 / D4 may arrive before any window is open).
   tradeHost: TradeHost | null = null;
   private tradeSession: TradeSession | null = null;
+  // The trade zone bits (net/tradezone.ts); the field drives them from its collision objects.
+  readonly tradeZone = new TradeZone();
   get trade(): TradeSession {
     if (!this.tradeSession || this.tradeSession.self !== this.selfId) {
       this.tradeSession = new TradeSession(
@@ -179,6 +182,7 @@ export class Lobby {
           send: (p) => this.conn.send(p.command, p.flag, p.payload),
           host: () => this.tradeHost,
           isPresent: (id) => id === this.selfId || this.players.has(id),
+          inTradeZone: (id) => this.tradeZone.inZone(id),
         }),
       );
     }

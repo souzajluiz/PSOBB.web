@@ -94,8 +94,8 @@ export const SORT_POS = { x: 324, y: 318, w: 224 } as const; // entry 6
 const SHOW_EQUIP_PANEL = false;
 export const MAX_ITEMS = 30; // 0x1e
 export const VISIBLE_ROWS = 8;
-const ICON = 18; // 0x00970d98
-const NO_ICON = 0x36;
+export const ICON = 18; // 0x00970d98
+export const NO_ICON = 0x36;
 
 // --- icons ---------------------------------------------------------------
 

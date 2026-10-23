@@ -42,6 +42,7 @@ import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
 import { CaptureTrap, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type CapturePlayer, type VisionPlayer } from './traps.ts';
 import { isAndroid } from '../combat/progression.ts';
+import { TRADE_COLLISION_TYPE, tradeZoneObject, type TradeZoneObject, type TradeZoneWorld } from '../net/tradezone.ts';
 import * as THREE from 'three';
 import { PLAYER_RADIUS } from '../combat/enemyfsm.ts';
 import { se } from '../audio/se.ts';
@@ -68,6 +69,8 @@ export interface GameFieldOptions {
   trap?: (e: TrapEvent, trap: PillarTrap) => void;
   // A Seabed capture trap's hold (6x2C) or release (6x2D) on the local player (render/traps.ts CaptureTrap).
   captureTrap?: (e: TrapEvent) => void;
+  // Whether a quest is running (g_QuestStarted): the trade zone bits clear while it runs.
+  questStarted?: () => boolean;
   log: (msg: string) => void;
 }
 
@@ -126,6 +129,8 @@ export class GameField {
   private traps: Array<{ index: number; trap: PillarTrap }> = []; // TOTrapAncient02 / 02R of the floor
   // TOTrapSeabed01 (0x0228) of the floor: the sticky trap-vision reveal and the draw (render/traps.ts CaptureTrap).
   private captures: Array<{ index: number; x: number; y: number; z: number; trap: CaptureTrap }> = [];
+  // The floor's TObjTradeCollision objects (net/tradezone.ts), empty when the floor has none.
+  private tradeObjects: TradeZoneObject[] = [];
   private battleFrames = 0; // 0x5a countdown after the room is cleared
   private battle = false;
   private frameAcc = 0;
@@ -308,6 +313,13 @@ export class GameField {
       if (o.kind !== 'object' || (o.type !== TRAP_HOLD && o.type !== TRAP_TECH)) continue;
       this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], z: p.world[2], params: o.params, difficulty }) });
     }
+    // The floor's trade collision objects (entity type 0x57) drive the trade zone bits.
+    this.tradeObjects = [];
+    for (const p of e.placed) {
+      const o = p.entity;
+      if (o.kind === 'object' && o.type === TRADE_COLLISION_TYPE) this.tradeObjects.push(tradeZoneObject(p.world, o.params));
+    }
+    this.game.tradeZone.enterField();
     this.captures = [];
     for (const p of e.placed) {
       const o = p.entity;
@@ -474,6 +486,7 @@ export class GameField {
     for (let i = 0; i < ticks; i++) w?.frame();
     this.tickClock.advance(ticks, this.frameAcc);
     if (ticks && this.traps.length) this.trapFrames(ticks, pos);
+    if (ticks && this.tradeObjects.length) this.tradeZoneFrame();
     if (ticks && this.captures.length) this.captureTicks(ticks, pos);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
@@ -571,6 +584,22 @@ export class GameField {
       this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, sprung));
       if (sprung) this.objects.setCaptureFrame(c.index, c.trap.anim);
     }
+  }
+
+  // The trade zone bits (net/tradezone.ts): each collision object checks the four slots on
+  // the game clock (exe DerolleMapObjectVisibilityCheck_00667bb5, dump 531369).
+  private tradeZoneFrame(): void {
+    const me = this.game.self;
+    const world: TradeZoneWorld = {
+      floor: this.floor,
+      counts: !this.opts.questStarted?.(),
+      player: (slot) => {
+        if (me && slot === me.clientId) return { x: me.position.x, z: me.position.z, floor: me.floor };
+        const p = this.game.players.get(slot);
+        return p ? { x: p.position.x, z: p.position.z, floor: p.floor } : null;
+      },
+    };
+    for (const o of this.tradeObjects) this.game.tradeZone.check(o, world);
   }
 
   // The floor's pillar traps (render/traps.ts) on the game clock. Every client
@@ -867,6 +896,7 @@ export class GameField {
 
   dispose(): void {
     this.disposed = true;
+    this.game.tradeZone.leaveField();
     this.viewer.renderHooks.delete(this.smoothHook);
     this.menu.dispose();
     this.objects?.dispose();
