@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
+import { toBams, RUN_SPEED, WALK_SPEED, legSpeed, rampAxis, headingStep, velocityAngle, clampAngleStep, PlayerMover, followTick, remoteStep, slowApplies, inUnsafeMap, guardStance, GUARD_HUNTER_CLASSES } from '../client/src/render/playermove.ts';
 
 assert.equal(RUN_SPEED, 45);
 assert.equal(WALK_SPEED, 30);
@@ -157,3 +157,19 @@ assert.equal(legSpeed(1.0, true, true), 0.5, 'slowed beats guard');
   assert.equal(m.legSerial, serial, 'no new leg before the arrival');
 }
 console.log('playermove: ok');
+
+// The move-start tick (UpdatePlayerVelocity_0069babc, dump line 581618): a walk from
+// a stand moves the full step along the input direction and leaves the heading as
+// it was; the next tick smooths the heading toward the leg (half of the turn when
+// it is 0x3000 or more away) and moves half way round.
+{
+  const s = new PlayerMover(0, 0);
+  const east = { lr: 0, fb: 128, cameraYaw: -Math.PI / 2, keyboard: false }; // forward = +x
+  s.tick(east, free(s));
+  assert.equal(s.state, 'walk');
+  assert.ok(Math.abs(s.x - 1.0) < 1e-9 && Math.abs(s.z) < 1e-9, 'launch tick moves 1.0 along the input');
+  assert.equal(s.heading, 0, 'launch tick does not smooth the heading');
+  s.tick(east, free(s));
+  assert.equal(s.heading, 0x2000, 'second tick: heading half way to the leg (0x4000)');
+  assert.ok(Math.abs(s.x - (1.0 + Math.sin((0x3000 / 0x10000) * Math.PI * 2))) < 1e-9, 'second tick moves along the half-way angle');
+}

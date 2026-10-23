@@ -189,6 +189,8 @@ export class PlayerMover {
   private targetZ = 0;
   private arrived = true;
   private runCount = 0;
+  // Set on the tick a walk starts from a stand (the exe's move-start tick).
+  private launch: number | null = null;
   // Legs started so far: each one is one 6x40 / 6x42 (the exe sends the leg's
   // point when the leg is set, 0x0069bb6c), so a change means a new packet.
   legSerial = 0;
@@ -250,6 +252,7 @@ export class PlayerMover {
       this.state = 'walk';
       this.runCount = 0;
       this.startLeg(want);
+      this.launch = want;
       return;
     }
     if (this.state === 'walk') {
@@ -272,13 +275,27 @@ export class PlayerMover {
     if (this.state === 'stand') return;
     const base = this.state === 'run' ? RUN_SPEED_PER_TICK : WALK_SPEED_PER_TICK;
     const speed = legSpeed(base, this.slowed, this.guard);
+    if (this.launch !== null) {
+      // The move-start tick (UpdatePlayerVelocity_0069babc, dump line 581618): the
+      // velocity is the input direction in full (ApplyPlayerRotation scale times
+      // sin / cos of next_frame_heading_delta), and the heading is not smoothed
+      // on this tick (no UpdateForwardMovement yet). Heading smoothing and the
+      // half-way velocity start with the next tick.
+      const dir = fromBams(this.launch);
+      this.launch = null;
+      this.step(move(Math.sin(dir) * speed, Math.cos(dir) * speed), speed);
+      return;
+    }
     const dx = this.targetX - this.x;
     const dz = this.targetZ - this.z;
     if (dx * dx + dz * dz < 4 * speed * speed) this.arrived = true;
     const toTarget = toBams(Math.atan2(dx, dz));
     this.heading = headingStep(this.heading, toTarget);
     const dir = fromBams(velocityAngle(this.heading, toTarget));
-    const r = move(Math.sin(dir) * speed, Math.cos(dir) * speed);
+    this.step(move(Math.sin(dir) * speed, Math.cos(dir) * speed), speed);
+  }
+
+  private step(r: { x: number; z: number }, speed: number): void {
     // A wall that stops (most of) the step ends the leg, so the next poll can
     // turn or stop: the leg's point lies behind the wall and would never be
     // reached. ASSUMED (the exe's wall-touch handler was not traced).
