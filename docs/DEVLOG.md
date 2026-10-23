@@ -12068,3 +12068,24 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Left (ROADMAP line stays open):** find the player's hit box writer (the +0xa4 list and its position2 per frame; start from the object created by `CreatePlayerEntity_0063b4e8` / `InitializePlayerEntity_0063b5b4`, dump 501072 / 501122); decide whether the player's weapon position feeds any port path (the port has none beyond the gun fallback); then replace HIT_POINT_DY / BODY_DY with the box centre.
 
 **Tests:** existing `tests/weaponorigin.test.ts` and `tests/playerfx.test.ts` cover the current constants (no change). Not run in Chrome.
+
+## 2026-10-23 - player hit point: the player's own hit box (exe trace, HIT_POINT_DY 20 -> 0)
+
+**What changed:** `HIT_POINT_DY` 20 -> 0 (`client/src/combat/playerfx.ts`), so the hit spark, the critical spark and the attribute particle sit at the feet. The remote-player gun aim point in `client/src/render/combat.ts` drops its `+ AIM_HEIGHT` and uses the box centre, which is the feet. `BODY_DY`, `AIM_HEIGHT` and `PLAYER_AIM_HEIGHT` are unchanged and stay ASSUMED.
+
+**Exe evidence (PsoBB.exe; dump `refsrc/.../Psobb.exe-05112026.c`):**
+- The player's box is embedded in the player object at +0x758, not allocated. `SinowberillChallengePlayer_InitializeSpawnData_00695f28` (dump 576993) writes the box: position1 +0x758..0x760 = 0, radius +0x764 = 5.0 (0x40a00000), unk1 +0x768 = 5.0, unk2 +0x76c = 0, flags +0x770 by class (0x200b / 0x2003 / 0x604b / 0x6043 / 0x16043; class 7 sets none), damage reduction +0x780 = 0, origin copied to position2 +0x774..0x77c. It then calls `ConstructEntityHitbox_007b9ccc` (dump 802686), which sets the box list pointer (+0xa4 = this+0x758) and count (+0xa8 = 1).
+- Live path: `player_constructor` (dump 552506) -> `SinowberillChallengePlayer_SetChallengeType_00686984` (dump 552703, calls 00695f28 at 552728 after mapping the class to +0x32c). `SinowberillChallengePlayer_Constructor_006859cc` and `SinowberillChallengePlayer_Initialize_00686aa0` also call it (552339, 552938).
+- Per frame, `UpdateCollisionBoxPosition_007b999c` (dump 802533) sets position2 = origin + RotY(y_rot) * position1. With position1 zero, position2 = origin = the feet. So the hit point is the feet at rest.
+- The hit: `EntityHitEntity_00773350` (dump 747464) finds the box flagged 0x4000000 (set by the attacker, e.g. `handle_derolle_hit_player_with_rocks` dump 176132, `volopt2_hit_by_*`), clears the flag, and uses its position2 as `local_54` for the sparks and damage numbers (dump 747595..747673).
+- `CreatePlayerEntity_0063b4e8` / `InitializePlayerEntity_0063b5b4` (dump 501072 / 501122) are not the live player: nothing in the dump calls them, and they build a 0x374-byte Derolle-base object with its own table at 0x009c684c (position1.y 8.5, radius 2.0).
+- `InitEnemyCollisionBoxes_007b9a88` (dump 802579) is the enemy box allocator and is not on the player's path.
+
+**Caveat (not modelled):** `PlayerAction4_Execution` (dump 233546, from `PlayerActionDispatch`, dump 232924) writes float scratch into +0x758, +0x75c and +0x760 during some action states (dump 233861..233876), which are the box's position1 slots. The box offset is not constant while those actions run. The port keeps the rest value.
+
+**ASSUMED, still open:**
+- `BODY_DY` 20 (status particles): the anchor `EntityProcessStatusEffectParticle_007752dc` (dump 747965) is not traced.
+- `AIM_HEIGHT` 22 is used only for enemy targets (`render/combat.ts` lock-on and fire candidates). The exe's enemy boxes come from per-type tables (`InitEnemyCollisionBoxes_007b9a88` callers), so a flat +22 is a guess; not changed.
+- `PLAYER_AIM_HEIGHT` 10 (`combat/enemyshots.ts`, `techlightning.ts`): the enemy shot aim point is not traced.
+
+**Tests:** `node tests/playerfx.test.ts`, `combatdepth`, `enemyfsmmines`, `enemyfsmruins`, `enemyfsmcaves`, `enemyfsmep2c`, `enemyfsmep2d`, `pvp`, `techfire` pass. `tests/weaponorigin.test.ts` cannot run in the worktree (it needs `vendor/newserv/build/newserv`, not built here). There is no `playerdamage` test file. `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
