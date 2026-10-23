@@ -13,6 +13,7 @@
 //   /newserv-maps/  newserv's bb-v4 set data (entity ids, data/clientfiles.ts)
 //   /psobb-data/    the PSOBB client data folder, if one is mounted
 //                   (PSOBB_DATA); without it the page asks for the folder
+//   /psobb-exe      the client's PsoBB.exe, if PSOBB_EXE names it (the pointer)
 //
 //   /admin          the admin panel (bridge/admin.mjs, docs/ADMIN.md); answers
 //                   404 unless ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is set.
@@ -35,6 +36,7 @@ const PORT = Number(process.env.PORT ?? 8080);
 const DIST = resolve(process.env.DIST ?? resolve(here, '../client/dist'));
 const SYSTEM = resolve(process.env.NEWSERV_SYSTEM ?? resolve(here, '../vendor/newserv/system'));
 const DATA = process.env.PSOBB_DATA ? resolve(process.env.PSOBB_DATA) : null;
+const EXE = process.env.PSOBB_EXE ? resolve(process.env.PSOBB_EXE) : null;
 const TARGET_HOST = process.env.TARGET_HOST ?? '127.0.0.1';
 const ALLOWED_PORTS = new Set(
   (process.env.ALLOWED_PORTS ?? '12000,12001,12002,12003,12004,12005,12006,12007,12008').split(',').map((p) => Number(p.trim())),
@@ -121,6 +123,12 @@ const server = createServer((req, res) => {
     const name = path.slice(prefix.length);
     const file = pattern.test(name) ? inside(dir, name) : null;
     return file ? send(req, res, file, 'application/octet-stream', path) : notFound(res);
+  }
+
+  // The client's own PsoBB.exe, only when PSOBB_EXE names it: the page reads its
+  // mouse pointer from its resources (client/src/data/pecursor.ts). Nothing else.
+  if (path === '/psobb-exe') {
+    return EXE && existsSync(EXE) ? send(req, res, EXE, 'application/octet-stream', path) : notFound(res);
   }
 
   if (path.startsWith('/psobb-data')) {

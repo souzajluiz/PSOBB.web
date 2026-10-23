@@ -14,15 +14,26 @@ export interface DataSource {
   readonly label: string;
   list(dir: string): Promise<string[]>;
   read(path: string): Promise<Uint8Array>;
+  // The client's PsoBB.exe (its pointer is read from its resources,
+  // classic/cursor.ts), or null when the exe is not reachable from here.
+  readExe?(): Promise<Uint8Array | null>;
 }
 
 export class DirectorySource implements DataSource {
   readonly label: string;
   private root: FileSystemDirectoryHandle;
+  // The install folder's PsoBB.exe, when the picked folder was the install folder.
+  private exe: FileSystemFileHandle | null;
 
-  constructor(root: FileSystemDirectoryHandle) {
+  constructor(root: FileSystemDirectoryHandle, exe: FileSystemFileHandle | null = null) {
     this.root = root;
     this.label = root.name;
+    this.exe = exe;
+  }
+
+  async readExe(): Promise<Uint8Array | null> {
+    if (!this.exe) return null;
+    return new Uint8Array(await (await this.exe.getFile()).arrayBuffer());
   }
 
   private async dir(path: string): Promise<FileSystemDirectoryHandle> {
@@ -65,6 +76,16 @@ export class HttpSource implements DataSource {
       return (await fetch(`${base}/?list=scene`)).ok;
     } catch {
       return false;
+    }
+  }
+
+  // The server's /psobb-exe: the exe named by its PSOBB_EXE setting (bridge/server.mjs), or 404.
+  async readExe(): Promise<Uint8Array | null> {
+    try {
+      const res = await fetch(serverUrl('/psobb-exe'));
+      return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -131,6 +152,13 @@ export async function pickDataFolder(): Promise<DataSource> {
     .showDirectoryPicker;
   if (!picker) throw new Error('This browser does not support folder access (use Chrome or Edge)');
   let root = await picker({ id: 'psobb-data', mode: 'read' });
+  // The install folder keeps PsoBB.exe (the pointer, classic/cursor.ts).
+  let exe: FileSystemFileHandle | null = null;
+  try {
+    exe = await root.getFileHandle('PsoBB.exe');
+  } catch {
+    // not the install folder
+  }
   // Accept either the install folder or its data/ subfolder.
   try {
     root = await root.getDirectoryHandle('data');
@@ -138,5 +166,5 @@ export async function pickDataFolder(): Promise<DataSource> {
     // already the data folder
   }
   await root.getDirectoryHandle('scene');
-  return new DirectorySource(root);
+  return new DirectorySource(root, exe);
 }

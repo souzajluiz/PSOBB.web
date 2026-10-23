@@ -13206,3 +13206,33 @@ Ports the Trade Window on top of the 2026-10-23 protocol entry (`net/trade.ts`).
 **ASSUMED:** the sign of the keyboard forward mapping (`fx = -sin(yaw)`) against the exe's `g_pDefaultNPCCameraState->field_0x94` was not re-checked this pass; the port's mapping has been used in the Chrome checks since 2026-10-20.
 
 **Tests:** `node tests/playermove.test.ts` ok; `tsc --noEmit -p client` clean.
+## 2026-10-23: the game pointer is PsoBB.exe's blue arrow (resource 102), now the browser's cursor
+
+**Exe evidence (PsoBB.exe, sha256 f4d4bd46...):**
+- Imports: `LoadCursorA` IAT 0x008f837c, `SetCursor` 0x008f8364, `ShowCursor` 0x008f8334, `GetCursorPos` 0x008f8330, `SetCursorPos` 0x008f8344 (parsed with a small import reader; `objdump -p` lists the names only).
+- Load at start-up (exe 0x0082cdab, the function with the `ProcessMouseInput` globals): `LoadCursorA(hInstance, 0x66)` -> `g_hCursorDefault` (0xacbed4); `LoadCursorA(0, 0x7f00)` -> 0xacbed0; `LoadCursorA(0, 0x7f84)` -> 0xacbecc; `LoadCursorA(0, 0x7f85)` -> 0xacbec8. Also `LoadIconA(hInstance, 0x65)`.
+- Resources (`.rsrc`, lang 1041/1033): RT_GROUP_CURSOR 102 (20 bytes, one entry: 32 x 64 double height, 2220 bytes, RT_CURSOR id 2); RT_CURSOR 2 = 32 x 32, 8 bpp indexed with a 256-entry palette, XOR rows then a 1 bpp AND mask. The drawn arrow is a light-blue pointer with its tip at the top-left; the other pixels are black with AND 1 (transparent). RT_GROUP_ICON 101 and RT_ICON 1 are the icon.
+- WM_SETCURSOR (WindowProc, named dump line ~845649): `g_IsMouseInputEnabled == 0` -> `SetCursor(g_hCursorDefault)` (the blue arrow). Enabled: state 1 -> 0x7f84, state 2 -> 0x7f85, else 0x7f00 (the system arrow). The state comes from WM_NCHITTEST: HTCLIENT (1) disables the mouse input, so the blue arrow is the pointer over the client area. HTCAPTION / the borders give the system arrow and the resize cursors. The dump's names for 0x7f00 / 0x7f84 / 0x7f85 (AppStarting / Help / Hand) are wrong: the ids are IDC_ARROW (32512), IDC_SIZEWE (32644) and IDC_SIZENS (32645).
+- Hiding: `ShowCursor(0)` only in `ProcessMouseInput` (dump 666537, scene outside 10..11) and `HandleMouseMode1` (667003), each guarded by `g_IsWindowMode == 0` (fullscreen). `HandleMouseMode2` and the mouse-drag path show it (`ShowCursor(1)`). In windowed mode the pointer is never hidden by these paths.
+- Own sprite: none found. No draw call uses `GetCursorPos`; the menu moves the real pointer (`move_mouse_cursor_for_menu_openclose`, `SetCursorPos`), and the list cursor (`render_cursor_for_list_menu`) is the keyboard selection, not the pointer. So the exe shows the Windows pointer and does not draw its own.
+- The D3D8 `SetCursorProperties` / `ShowCursor` calls (dump 851476..851478) are the model-buffer code, not the pointer.
+
+**Port:**
+- `client/src/data/pecursor.ts` (new): `findPeResource` (PE32 / PE32+ `.rsrc` tree, numeric ids), `parseCursorGroup`, `decodeCursorResource` (1/4/8/24/32 bpp, AND mask: a set AND bit makes the pixel transparent; a non-black XOR under AND 1 would invert the screen, which a browser cursor cannot do, so it is dropped), `loadPeCursor(exe, 102)`.
+- `client/src/classic/cursor.ts` (new): `applyGamePointer(source, canvases)` reads `source.readExe()`, decodes group 102, puts the image in a canvas, `toDataURL('image/png')`, and sets `style.cursor = url(...) hx hy, default` on the stage and the 3D world canvas (the world canvas takes the pointer in the field, `Screen.worldPointer`). Called once in `classic/main.ts` after `new Stage(canvas)`, not awaited.
+- `client/src/data/source.ts`: `DataSource.readExe?()`. `DirectorySource` keeps the install folder's `PsoBB.exe` handle when the picked folder is the install folder (the data/ subfolder cannot reach the exe). `HttpSource.readExe` fetches `/psobb-exe`.
+- `bridge/server.mjs`: `/psobb-exe` serves the file named by `PSOBB_EXE` (404 when unset); the data folder itself is unchanged.
+- Screens: the same pointer on the title, the menus and the field (one canvas style; the exe does not change it per screen in windowed mode).
+
+**Tests:** `node tests/pecursor.test.ts` passes: a synthetic PE (group -> cursor, the 1033 leaf, lookups, decode of palette, AND and row order), and the user's PsoBB.exe when present (32 x 32, hotspot 0,0, opaque tip, transparent corner). `tsc --noEmit -p client` shows no new errors (the worktree has no node_modules; checked with the main checkout's TypeScript; the remaining errors are missing `three` / `@capacitor` modules). `tests/chatline.test.ts` cannot run in the worktree for the same reason. Not run: Playwright, Chrome.
+
+**ASSUMED:**
+- The hotspot is (0, 0) from the RT_CURSOR header. The group entry says (1, 8) (its wPlanes / wBitCount fields); Windows' choice is not traced. The arrow tip is at (0, 0), so the header is used.
+- The pixels that are not drawn (AND 1, XOR black) are transparent; the exe's inverted-screen pixels do not occur in this cursor (checked).
+- Windowed mode is assumed for the browser: `g_IsWindowMode` is 0 only in fullscreen, so the pointer stays visible. Fullscreen hiding and the mouse-look warp (modes 1 and 2) are not ported; the browser has no SetCursorPos.
+- The browser's CSS cursor size: the image is 32 x 32 (under the 128 px limit).
+
+**Left:**
+- The mouse-look modes (the warp to the menu centre, the drag) are not ported; the page has no pointer lock.
+- The dump's cursor names (AppStarting / Help / Hand) should be fixed in the reference dump.
+- In the browser, `readExe` finds the exe only in the picked install folder or with `PSOBB_EXE` on the server. Nothing else reads it.
