@@ -1097,20 +1097,40 @@ export class ChallengeMode {
 export const GRAVE_TRIGGER_DISTANCE = 10;
 export const GRAVE_DROP_RADIUS = 7.5;
 
-// The first `count` points of the fan: it starts at heading - (count - 1) *
-// 0x1000 and steps 0x2000 (BAMS, 0x10000 = a turn).
-export function graveDropPoints(x: number, z: number, heading: number, count: number): { x: number; z: number }[] {
+// The ground test's probe lift (0x00909c80 = 10.0, the MinDistance the exe adds
+// to the fan point's y before the test, and again to the hit) and the probe's
+// own height (g_GroundCheckHeightOffset, 0x0097e3e4 = 10.0): the probe starts at
+// the grave's y + 20 and goes down. The drop request carries only x and z.
+export const GRAVE_DROP_LIFT = 10;
+export const GRAVE_GROUND_CHECK_HEIGHT = 10;
+
+// The points of the fan that stand on the ground, up to `count` of them. The
+// fan starts at heading - (count - 1) * 0x1000 and steps 0x2000 (BAMS, 0x10000 =
+// a turn); the exe tests all 8 angles in order and keeps the first `count` that
+// pass Enemygetgroundinfo_007b4c58 (mask 0x55: a player's entity bits are 0), so a
+// point off the floor is skipped, not dropped. `ground` returns the ground's y
+// under (x, z) probed down from fromY, null when there is none. ASSUMED: the
+// ground hit's x and z equal the probe's (the exe copies the hit object's x / z).
+export function graveDropPoints(
+  g: { x: number; y: number; z: number },
+  heading: number,
+  count: number,
+  ground: (x: number, z: number, fromY: number) => number | null,
+): { x: number; z: number }[] {
   const out: { x: number; z: number }[] = [];
+  const fromY = g.y + GRAVE_DROP_LIFT + GRAVE_GROUND_CHECK_HEIGHT;
   let a = heading - (count - 1) * 0x1000;
   for (let i = 0; i < 8 && out.length < count; i++, a += 0x2000) {
     const r = (a & 0xffff) * ((Math.PI * 2) / 0x10000);
-    out.push({ x: x + GRAVE_DROP_RADIUS * Math.cos(r), z: z + GRAVE_DROP_RADIUS * Math.sin(r) });
+    const x = g.x + GRAVE_DROP_RADIUS * Math.cos(r);
+    const z = g.z + GRAVE_DROP_RADIUS * Math.sin(r);
+    if (ground(x, z, fromY) !== null) out.push({ x, z });
   }
   return out;
 }
 
 // The grave a record describes (online_grave_*): null when the player never died.
-export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage: number; floor: number; deaths: number; x: number; y: number; z: number; team: string; date: number; defeatedBy: number } | null {
+export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage: number; floor: number; deaths: number; x: number; y: number; z: number; team: string; date: number; defeatedBy: number; message: string } | null {
   const deaths = r.graveDeaths;
   if (deaths <= 0 || deaths > 9999) return null;
   const dv = new DataView(r.raw.buffer, r.raw.byteOffset, r.raw.byteLength);
@@ -1120,7 +1140,15 @@ export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage:
     if (!c) break;
     team += String.fromCharCode(c);
   }
+  // The message (0xA4, 0x20 UTF-16 units, NUL-ended) is the grave's last line.
+  let message = '';
+  for (let i = 0; i < 0x20; i++) {
+    const c = dv.getUint16(0xa4 + i * 2, true);
+    if (!c) break;
+    message += String.fromCharCode(c);
+  }
   return {
+    message,
     episodeIndex: r.raw[0x60]!,
     stage: r.raw[0x61]!,
     floor: r.raw[0x62]!,
@@ -1137,7 +1165,21 @@ export function recordGrave(r: ChallengeRecords): { episodeIndex: number; stage:
 // SaveChallengeEntityProgressOnDeath_004d9a60: the record of a player who just
 // died (the grave stays until the next death): episode, stage, floor, one more
 // death (capped at 9999), the date, the party name, where it happened.
-export function saveGrave(r: ChallengeRecords, g: { episodeIndex: number; stage: number; floor: number; x: number; y: number; z: number; team: string; defeatedByRt: number; date: Date }): void {
+// The grave's message (SaveChallengeEntityProgressOnDeath_004d9a60, 0x004d9a60 .. 0x004d9bc0):
+// the local player's last chat line (g_LastChatMessage_009b1048, 0x5f units at most).
+// Under 0x20 units it is kept up to 0x1f units; from 0x20 on it is "... " and the
+// first 0x1b units (the exe's "..." at 0x00909850 plus NormalizeTextForUI's output,
+// one stack buffer, so the copy runs on into it). ASSUMED: the normalisation keeps
+// the text as it is, and the tag the exe adds to a chat line sent without Enter
+// (a "\tJ" or "\tE" prefix, append_to_chat_log) is not modelled.
+export function graveMessage(sent: string): string {
+  const raw = sent.slice(0, 0x5f);
+  if (raw.length === 0) return '';
+  if (raw.length < 0x20) return raw.slice(0, 0x1f);
+  return '... ' + raw.slice(0, 0x1b);
+}
+
+export function saveGrave(r: ChallengeRecords, g: { episodeIndex: number; stage: number; floor: number; x: number; y: number; z: number; team: string; defeatedBy: number; message: string; date: Date }): void {
   const dv = new DataView(r.raw.buffer, r.raw.byteOffset, r.raw.byteLength);
   r.raw[0x60] = g.episodeIndex;
   r.raw[0x61] = g.stage;
@@ -1147,12 +1189,13 @@ export function saveGrave(r: ChallengeRecords, g: { episodeIndex: number; stage:
   const y = g.date.getFullYear();
   const yy = Math.floor(y / 100) === 20 ? Math.min(15, y % 100) : 15;
   dv.setUint32(0x68, ((((((yy << 4) | (g.date.getMonth() + 1)) << 8) | g.date.getDate()) << 8) | g.date.getHours()) * 256 + g.date.getMinutes() >>> 0, true);
-  dv.setUint32(0x6c, g.defeatedByRt >>> 0, true);
+  dv.setUint32(0x6c, g.defeatedBy >>> 0, true);
   dv.setFloat32(0x70, g.x, true);
   dv.setFloat32(0x74, g.y, true);
   dv.setFloat32(0x78, g.z, true);
   for (let i = 0; i < 0x14; i++) dv.setUint16(0x7c + i * 2, i < g.team.length && i < 0x13 ? g.team.charCodeAt(i) : 0, true);
-  for (let i = 0; i < 0x20; i++) dv.setUint16(0xa4 + i * 2, 0, true);
+  const msg = graveMessage(g.message);
+  for (let i = 0; i < 0x20; i++) dv.setUint16(0xa4 + i * 2, i < msg.length ? msg.charCodeAt(i) : 0, true);
 }
 
 // --- the result window text (ChallengeObjectUIPanel_UpdateLabel_004dd29c) --------------------

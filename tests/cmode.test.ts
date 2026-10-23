@@ -67,14 +67,17 @@ import {
   challengeWindowState,
   type ChallengeQuestDialog,
 } from '../client/src/quest/cmode.ts';
-import { graveDropPoints, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
+import { graveDropPoints, graveMessage, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
 import { ChallengeQuestSelectionDialog, type ChallengeDialogHost } from '../client/src/quest/challengedialog.ts';
 import {
   decodeGraveDate,
   formatGraveDate,
   graveFadeStep,
   graveHeading,
+  graveKillerId,
+  graveKillerName,
   graveLines,
+  GRAVE_NO_KILLER,
   GRAVE_FADE_IN,
   GRAVE_FADE_OUT,
   GRAVE_MODEL_BML,
@@ -480,21 +483,62 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
 
 // --- graves -------------------------------------------------------------------------------------------
 {
-  const pts = graveDropPoints(100, 200, 0, 3);
+  const grave = { x: 100, y: 0, z: 200 };
+  const flat = (): number | null => 0;
+  const pts = graveDropPoints(grave, 0, 3, flat);
   eq(pts.length, 3, 'a fan of three points');
   check(pts.every((p) => Math.abs(Math.hypot(p.x - 100, p.z - 200) - 7.5) < 1e-6), 'each 7.5 from the grave');
   const a0 = Math.atan2(pts[0]!.z - 200, pts[0]!.x - 100);
   eq(Math.round(((a0 * 0x10000) / (Math.PI * 2) + 0x10000) % 0x10000), 0x10000 - 0x2000, 'the fan starts at heading - (count - 1) * 0x1000');
-  eq(graveDropPoints(0, 0, 0, 1).length, 1, 'one point');
+  eq(graveDropPoints(grave, 0, 1, flat).length, 1, 'one point');
+  // The ground test (ProcessGraveChallengePlayerLogic_004ddcbc): each angle is probed from the
+  // grave's y + 20 and a point with no ground under it is skipped; the first `count` that pass are kept.
+  const probes: Array<[number, number, number]> = [];
+  const noGroundAtFirst = (x: number, z: number, fromY: number): number | null => {
+    probes.push([x, z, fromY]);
+    return probes.length === 1 ? null : 0;
+  };
+  const skipped = graveDropPoints(grave, 0, 2, noGroundAtFirst);
+  eq(probes.length, 3, 'the angles are tested in order until count points pass');
+  eq(skipped.length, 2, 'two points pass after the first angle fails');
+  eq(probes[0]![2], 20, 'the probe starts 20 above the grave (y + 10 + 10)');
+  eq(graveDropPoints(grave, 0, 3, () => null), [], 'no ground under any angle: nothing drops');
+  eq(graveDropPoints(grave, 0, 3, (x, z) => (x > 100 ? 0 : null)).every((p) => p.x > 100), true, 'a point off the floor is never kept');
   const rec = new ChallengeRecords();
   eq(recordGrave(rec), null, 'no grave before a death');
-  saveGrave(rec, { episodeIndex: 1, stage: 3, floor: 5, x: 1, y: 2, z: 3, team: 'Party', defeatedByRt: 0x44, date: new Date(2026, 9, 20, 13, 45) });
+  saveGrave(rec, { episodeIndex: 1, stage: 3, floor: 5, x: 1, y: 2, z: 3, team: 'Party', defeatedBy: 0x44, message: 'hi there', date: new Date(2026, 9, 20, 13, 45) });
   const g = recordGrave(rec)!;
   eq([g.episodeIndex, g.stage, g.floor, g.deaths, g.x, g.y, g.z, g.team], [1, 3, 5, 1, 1, 2, 3, 'Party'], 'grave fields');
   eq(new DataView(rec.raw.buffer).getUint32(0x68, true), 0xfa140d2d, 'packed date: the year caps at 15 (2015), then month 10, day 20, hour 13, minute 45');
   eq(new DataView(rec.raw.buffer).getUint32(0x6c, true), 0x44, 'defeated-by enemy');
-  saveGrave(rec, { episodeIndex: 1, stage: 3, floor: 5, x: 1, y: 2, z: 3, team: 'Party', defeatedByRt: 0xffffffff, date: new Date(2026, 9, 20) });
+  eq(recordGrave(rec)!.message, 'hi there', 'the message is read back from 0xA4');
+  saveGrave(rec, { episodeIndex: 1, stage: 3, floor: 5, x: 1, y: 2, z: 3, team: 'Party', defeatedBy: GRAVE_NO_KILLER, message: '', date: new Date(2026, 9, 20) });
+  eq(recordGrave(rec)!.message, '', 'no message: 0xA4 is cleared');
   eq(recordGrave(rec)!.deaths, 2, 'a second death counts');
+}
+
+// The grave's message (SaveChallengeEntityProgressOnDeath_004d9a60): up to 0x1f units, or "... " and 0x1b units from 0x20 on.
+{
+  eq(graveMessage(''), '', 'no chat line: no message');
+  eq(graveMessage('gg'), 'gg', 'a short line as it is');
+  eq(graveMessage('a'.repeat(0x1f)).length, 0x1f, 'under 0x20 units: up to 0x1f kept');
+  eq(graveMessage('a'.repeat(0x20)), '... ' + 'a'.repeat(0x1b), 'from 0x20 units: "... " and 0x1b units');
+  eq(graveMessage('b'.repeat(0x80)).length, 4 + 0x1b, 'the line is first cut at 0x5f units');
+  const rec = new ChallengeRecords();
+  saveGrave(rec, { episodeIndex: 0, stage: 0, floor: 1, x: 0, y: 0, z: 0, team: 'P', defeatedBy: 0xffffffff, message: 'x'.repeat(0x30), date: new Date(2026, 9, 23) });
+  eq(recordGrave(rec)!.message, '... ' + 'x'.repeat(0x1b), 'the stored message is read back');
+}
+
+// The killer: the enemy type's id in the record (0 and 0xffffffff are "no killer").
+{
+  eq(graveKillerName(GRAVE_NO_KILLER), null, 'no killer id: no line');
+  eq(graveKillerName(0), null, 'id 0: no line');
+  eq(graveKillerName(graveKillerId(null)), null, 'a null type: no killer');
+  const id = graveKillerId('AL_RAPPY');
+  check(id > 0 && id < 0x1000, 'a known enemy type gets a positive id');
+  eq(graveKillerName(id), 'Al Rappy', 'the killer line names the enemy');
+  eq(graveKillerId('NOT_AN_ENEMY'), GRAVE_NO_KILLER, 'an unknown type is no killer');
+  eq(graveLines({ owner: null, deaths: 1, team: '', message: '', defeatedBy: graveKillerName(id), date: null })[3], 'Defeated by Al Rappy.', 'the killer line of the grave');
 }
 
 // --- the character template (needs PlyLevelTbl.prs) ----------------------------------------------------
@@ -617,7 +661,7 @@ if (newserv) {
   eq(decodeGraveDate(0), null, 'a zero date is refused');
   // The record's date is the one saveGrave writes; a grave saved now shows no date (the exe's 2015 cap).
   const rec = new ChallengeRecords(new Uint8Array(0x140));
-  saveGrave(rec, { episodeIndex: 0, stage: 0, floor: 1, x: 0, y: 0, z: 0, team: 'P', defeatedByRt: 0xffffffff, date: new Date(2026, 9, 23, 10, 0) });
+  saveGrave(rec, { episodeIndex: 0, stage: 0, floor: 1, x: 0, y: 0, z: 0, team: 'P', defeatedBy: 0xffffffff, message: '', date: new Date(2026, 9, 23, 10, 0) });
   const g = recordGrave(rec)!;
   eq(decodeGraveDate(g.date), null, 'a grave saved in 2026 carries year 15 and shows no date');
   eq(g.defeatedBy, 0xffffffff, 'no killer recorded');
@@ -634,7 +678,7 @@ if (newserv) {
   eq(graveHeading(3), 0x6000, 'the heading of slot 3 is 3 << 13');
   check(GRAVE_MODEL_BML === 're_b_mark_base.bml', 'the model archive name from the exe');
   // The drop fan starts from the grave's own heading (ProcessGraveChallengePlayerLogic_004ddcbc).
-  const fan = graveDropPoints(0, 0, graveHeading(1), 1);
+  const fan = graveDropPoints({ x: 0, y: 0, z: 0 }, graveHeading(1), 1, () => 0);
   check(Math.abs(fan[0]!.x - 7.5 * Math.cos(Math.PI / 4)) < 1e-6 && Math.abs(fan[0]!.z - 7.5 * Math.sin(Math.PI / 4)) < 1e-6, 'the fan starts at the grave heading (slot 1 = 0x2000 = 45 degrees)');
 }
 

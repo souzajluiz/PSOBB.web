@@ -832,6 +832,12 @@ export class GameView {
     }
   }
 
+  // The ground under (x, z) probed down from fromY with a collision mask (the grave's
+  // drop test uses 0x55, Enemygetgroundinfo_007b4c58 for an entity with no entity bits).
+  groundProbe(x: number, z: number, fromY: number, mask = 0x55): number | null {
+    return this.collision ? this.collision.groundHeight(x, z, fromY, mask) : this.viewer.groundHeight(x, z, fromY);
+  }
+
   roomAt(pos: { x: number; y: number; z: number }): number {
     return this.field.roomAt(pos);
   }

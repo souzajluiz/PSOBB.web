@@ -2,6 +2,8 @@
 // heading (PsoBB.exe, Ephinea 1.25.13 Ghidra dump names; VAs are the exe's).
 // Pure: no DOM, no three.js (quest/cmoderun.ts places the text, quest/questui.ts
 // draws it).
+
+import { ENEMY_TYPE_NAMES } from '../formats/entitynames.ts';
 //
 // The grave is a ChallengeEntityProgress object, one per player whose record
 // (quest/cmode.ts `saveGrave`) matches this stage and floor:
@@ -15,6 +17,29 @@
 //                                                  CanProcessGraveChallenge_004de810 (the
 //                                                  distance b0 <= 500, 0x00909cc0)
 //   UpdateChallengePlayerGraveDistance_004de164    the fade (object +0xb4)
+
+// The killer (SaveChallengeEntityProgressOnDeath_004d9a60 stores the last attacker
+// enemy's enemy_name_unitxt_index, +0x378, as the monster id; "Defeated by %s." is
+// unitxt_get_monster_name(id) when id > 0). The port has no unitxt monster-name
+// table, so the id is the enemy type's position in formats/entitynames.ts
+// ENEMY_TYPE_NAMES plus one (ASSUMED: not the exe's index; only port clients read it).
+// 0xffffffff is "no killer", as the exe writes it.
+const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPE_NAMES);
+export const GRAVE_NO_KILLER = 0xffffffff;
+
+export function graveKillerId(enemyType: string | null): number {
+  if (enemyType === null) return GRAVE_NO_KILLER;
+  const i = ENEMY_TYPE_KEYS.indexOf(enemyType);
+  return i < 0 ? GRAVE_NO_KILLER : i + 1;
+}
+
+// The killer's name, null when there is none (the exe shows the line only for id > 0).
+export function graveKillerName(id: number): string | null {
+  const sid = id | 0;
+  if (sid <= 0) return null;
+  const key = ENEMY_TYPE_KEYS[sid - 1];
+  return key === undefined ? null : ENEMY_TYPE_NAMES[key]![0];
+}
 
 // The grave's model: the tomb / rebirth-mark archive the object loader reads
 // (LoadBML_005b7a84 with g_pRebirthMarkBaseBMLPath, 0x005089ec "re_b_mark_base.bml";
