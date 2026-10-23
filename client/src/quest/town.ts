@@ -629,7 +629,7 @@ export class QuestTown {
     if (!me || !combat) return;
     const enemies = combat.npcEnemies();
     const at = new Map(enemies.map((e) => [e.id, e] as const));
-    const candidates: EnemyCandidate[] = enemies.map((e) => ({ slot: e.id, hitboxes: [{ x: e.x, z: e.z, targetable: true }] }));
+    const candidates: EnemyCandidate[] = enemies.map((e) => ({ slot: e.id, hitboxes: e.boxes }));
     const owner = headStatusFlags(combat.npcOwnerStatus());
     for (const slot of this.npcAi.slots()) {
       const st = this.npcAi.get(slot);

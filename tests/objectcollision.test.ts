@@ -15,7 +15,8 @@ import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
 import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
-import { COLLISION_SITES, COLLISION_TABLES, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { boxTargetable, enemyBoxTable, isTargetable, slotSetType } from '../client/src/formats/enemyboxes.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -133,6 +134,18 @@ const sphereBody = { x: 10, z: 0, yaw: 0, halfX: 9, halfZ: 9, sphere: true };
 check(spotHitsBody({ x: 0, y: 0, z: 0 }, sphereBody), 'a spot 10 from a sphere of radius 9 is hit (3 + 9 = 12)');
 check(!spotHitsBody({ x: 0, y: 0, z: 0 }, { ...sphereBody, x: 12.5 }), 'a spot 12.5 from the same sphere is clear');
 check(spotHitsBody({ x: 0, y: 0, z: 0 }, { x: 10, z: 0, yaw: 0, halfX: 9, halfZ: 9 }), 'a box body still uses the rounded rectangle');
+
+// 5. Enemy boxes (formats/enemyboxes.ts): the table of each .dat set type, from its own factory.
+// Monest 0x42 is set by its constructor 0x005191c0 (table 0x009bb780: one box at the origin, flags
+// 0x8003, so targetable); Hildebear 0x40 (table 0x009bb58c: one box at y 20); Booma 0x44 has no
+// table found (its box is set through a vtable), so it is not targetable by table and aims at the fallback.
+check(ENEMY_COLLISION_LINKS[0x42]?.[0]?.table === 0x009bb780, 'Monest links to its own box table 0x009bb780');
+check(enemyBoxTable(0x40, null)?.table === 0x009bb58c, 'Hildebear links to its box table 0x009bb58c');
+check(enemyBoxTable(0x44, null) === null, 'Booma has no resolved box table');
+check(isTargetable(0x44) === true, 'an enemy with no known table is targetable (ASSUMED)');
+check(isTargetable(0x42) === true, 'Monest has a box with flag 0x8000');
+check(boxTargetable({ flags: 0x8003 }) && !boxTargetable({ flags: 0x30003 }), 'flag 0x8000 makes a box targetable');
+check(slotSetType({ set: { type: 0x42 } as never, child: 0 }) === 0x42 && slotSetType({ set: { type: 0x42 } as never, child: 1 }) === null, 'a child slot has no set type of its own');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
