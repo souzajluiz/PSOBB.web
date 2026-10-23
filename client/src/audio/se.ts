@@ -22,7 +22,9 @@
 // set by FUN_00814168 from the local player, see setSeListener):
 //   d >= 300 is dropped (0x00980af4), unless the area is 0xe / 0x1f / 0x2c (FUN_00814498);
 //   d <= 2 (0x00980afc), or d <= 16 (0x00980af8) for slots 0x87..0xa7 other than
-//   0x88 0x8a 0x8f 0x93 0x94 0xa1, plays 2D (no position);
+//   0x88 0x8a 0x8f 0x93 0x94 0xa1, plays 2D (no position). Slot 0xa0 (the
+//   telepipe loop) is never made 2D: FUN_008144b0 tests `iVar5 != 0xa0` before
+//   it zeroes the position (dump 0x008144b0, VERIFIED);
 //   otherwise a 3D buffer when the slot's flags have bit 0x8000 and kind 0 / 10
 //   (FUN_00829130): CTRL3D, min distance 80 and max 500 (0x42a00000 / 0x43fa0000,
 //   FUN_00828e4c), position (x, y, -z). The distance does not change the volume
@@ -84,6 +86,8 @@ export const SE_3D_MAX = 500;
 const CULL_EXEMPT_AREAS = new Set([0x0e, 0x1f, 0x2c]);
 /** Slots that stay 3D within 16 of the listener (FUN_00814298's exceptions to the 2D band 0x87..0xa7). */
 const NEAR_BAND_EXEMPT = new Set([0x88, 0x8a, 0x8f, 0x93, 0x94, 0xa1]);
+/** The slot of SE 0xA0, the telepipe loop (`iVar5 != 0xa0` in FUN_008144b0): never 2D. */
+const TELEPIPE_LOOP_SLOT = 0xa0;
 
 /** The 3D listener (DAT_00acb39c position, DAT_00ab59cc front), see setSeListener. */
 export interface SeListener {
@@ -138,7 +142,7 @@ export function sePan(at: readonly number[], l: SeListener): number {
 export function positionalMode(slot: number, flags: number, d: number, area: number): 'cull' | '2d' | '3d' {
   if (!CULL_EXEMPT_AREAS.has(area) && d >= SE_CULL_DISTANCE) return 'cull';
   const kind = (flags & 0x0f000000) >>> 24;
-  const near = d <= SE_NEAR || (d <= 16 && slot > 0x86 && slot < 0xa8 && !NEAR_BAND_EXEMPT.has(slot));
+  const near = slot !== TELEPIPE_LOOP_SLOT && (d <= SE_NEAR || (d <= 16 && slot > 0x86 && slot < 0xa8 && !NEAR_BAND_EXEMPT.has(slot)));
   return !near && (kind === 0 || kind === 10) && (flags & 0x8000) !== 0 ? '3d' : '2d';
 }
 
