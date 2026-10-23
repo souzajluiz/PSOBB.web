@@ -553,24 +553,11 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
       return spec('TObjEneSaver', 'bm_ene_df1_saver.bml', [{ model: 0, motion: loop(9, 1) }]);
     // Chaos Sorcerer: ctor 0x0059b220, body model 0, table 0x009bfe80 slot 0 =
     // wait, 0.6; the render (0x0059b63c) draws the body 22.0 above the entity.
-    // The two bits are child entities (newserv: BEE_R and BEE_L): their stat
-    // init 0x0059ae6c takes model entry 1 (re4_b_bit.nj) with model 0's
-    // texture list (init_sorcererbee_global_config caches model_files[1].njcm
-    // and model_files[0].njtl) and no motion of their own, and
-    // SorcererUpdateChargePositionOffsets_0059c770 puts them at
-    // +-15.0 (0x00929948) along (cos yaw, -sin yaw) and 18.0 (0x00929944)
-    // above the body.
-    case 0xa1: {
-      const bit = (side: 1 | -1): EnemyPartSpec => ({
-        model: 1,
-        texlistOf: 0,
-        place: 'enemy',
-        name: side > 0 ? 'bit R' : 'bit L',
-        // The enemy's own yaw turns the offset, so it is given unrotated.
-        offset: [side * 15, 18, 0],
-      });
-      return spec('TObjEneRe4Sorcerer', pick('bm_ene_re4_sorcerer.bml', ctx), [{ model: 0, motion: loop(7, 0.6), offset: [0, 22, 0] }, bit(1), bit(-1)]);
-    }
+    // The two bits are entities of their own (BEE_R / BEE_L, render/combat.ts
+    // spawnSorcererBits, combat/enemyfsmruins.ts SorcererBitAi): their model
+    // is entry 1 (re4_b_bit.nj) with model 0's texture list.
+    case 0xa1:
+      return spec('TObjEneRe4Sorcerer', pick('bm_ene_re4_sorcerer.bml', ctx), [{ model: 0, motion: loop(7, 0.6), offset: [0, 22, 0] }]);
     // Dark Gunner: factory 0x00545e54, model 1 (FUN_005b8610(1)), table
     // 0x009bcf60 slot 0 = wait, 1.0.
     case 0xa2:
