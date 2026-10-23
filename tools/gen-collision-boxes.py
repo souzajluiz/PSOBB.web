@@ -98,6 +98,57 @@ def function_starts(blob):
     return starts
 
 
+def entry_like(blob, i):
+    """True when the byte(s) before offset i look like the end of the previous function."""
+    if i < 3 or i >= len(blob):
+        return False
+    return blob[i - 1] in (0xCC, 0x90, 0xC3) or blob[i - 3] == 0xC2
+
+
+def section_of(va):
+    for name, start, size, _, rawsize in SECTIONS:
+        if start <= va < start + size:
+            return name
+    return None
+
+
+def vtable_calls(blob, func_of, starts_va, window=0x400):
+    """(call VA, slot target VA, vtable VA) for virtual calls whose vtable is stored in the same function.
+
+    The store is `C7 /0 imm32` with mod 00 (movl $V, (%reg)); the call is `FF /2` with mod 10
+    and disp32 (calll *disp32(%reg), rm != 4). The slot is the u32 at V + disp32 in the exe's
+    .rdata / .data, when it points into .text. Example: Booma 0x44, its ctor 0x00535f1c stores
+    0x00b01fc0 and calls *0x14c(%ebx) (slot 0x00786848)."""
+    stores = []
+    for m in re.finditer(rb"\xc7[\x00\x01\x02\x03\x06\x07]", blob):
+        pos = m.start()
+        if pos + 6 > len(blob):
+            continue
+        imm, = struct.unpack_from("<I", blob, pos + 2)
+        if section_of(imm) in (None, ".text"):
+            continue
+        stores.append((TEXT_LO + pos, imm))
+    store_vas = [s for s, _ in stores]
+    out = []
+    for m in re.finditer(rb"\xff[\x90\x91\x92\x93\x95\x96\x97]", blob):
+        pos = m.start()
+        if pos + 6 > len(blob):
+            continue
+        call_va = TEXT_LO + pos
+        disp, = struct.unpack_from("<I", blob, pos + 2)
+        i = bisect.bisect_left(store_vas, call_va) - 1
+        if i < 0:
+            continue
+        s_va, vtable = stores[i]
+        if call_va - s_va > window or func_of(s_va) != func_of(call_va):
+            continue
+        slot = u32(vtable + disp)
+        if slot is None or not (TEXT_LO <= slot < TEXT_HI):
+            continue
+        out.append((call_va, slot, vtable))
+    return out
+
+
 def e8_calls(blob):
     """(site VA, target VA) for every E8 rel32 call inside .text."""
     out = []
@@ -269,17 +320,32 @@ def main(argv):
     # enemy base helper 0x0051ff3c follows a `ret $4`, not padding), and so is an enemy
     # factory, which the per-area table reaches through a pointer, not a call.
     factories = enemy_factory_rows()
-    starts_va = sorted({TEXT_LO + s for s in starts} | {t for _, t in calls if TEXT_LO <= t < TEXT_HI}
+    # The E8 scan is not instruction-aligned: a byte pair inside an instruction can read as a call.
+    # A call target is a function start only when the bytes before it look like an entry (padding,
+    # a `ret`, or `ret imm16`); the rest are misreads (0x00535486 split the Claw factory 0x00535408).
+    starts_va = sorted({TEXT_LO + s for s in starts}
+                       | {t for _, t in calls if TEXT_LO <= t < TEXT_HI and entry_like(blob, t - TEXT_LO)}
                        | {f for facs in factories.values() for f in facs})
 
     def func_of(va):
         i = bisect.bisect_right(starts_va, va) - 1
         return starts_va[i] if i >= 0 else None
 
+    # Virtual calls: a ctor stores its vtable (movl $V, (%reg)) and later calls *disp32(%reg)
+    # (FF /2). The target is the slot read from the exe's vtable V (ASSUMED: the nearest store
+    # in the same function is the object's vtable; the register is not matched).
+    vt_calls = vtable_calls(blob, func_of, starts_va)
+    slot_targets = {t for _, t, _ in vt_calls}
+    starts_va = sorted(set(starts_va) | slot_targets)
+
     callees = collections.defaultdict(set)
     for site, target in calls:
         f = func_of(site)
         if f is not None and TEXT_LO <= target < TEXT_HI:
+            callees[f].add(func_of(target) or target)
+    for site, target, _ in vt_calls:
+        f = func_of(site)
+        if f is not None:
             callees[f].add(func_of(target) or target)
 
     init_sites = sorted({s for s, t in calls if t == INIT})
@@ -328,9 +394,14 @@ def main(argv):
         # A function that several set types reach is a shared helper: the constructor that sets
         # this type's table is one that only this type reaches (ASSUMED: a shared helper is used
         # only when nothing else is found).
+        # A pair (fan-in 2) is the one case that is resolved: two set types whose constructors call
+        # the same helper with a constant table (Canadine 0x83 and Canane 0x84 both reach 0x005424d8,
+        # which passes table 0x009bcecc, count 1, to 0x0051ff3c; the constant is in the helper, so each
+        # caller gets the same box). ASSUMED: the pair's other factories do not overwrite it.
         own = [c for c in cands if fan_in[c[1]["func"]] <= 1]
-        pool = own if own else cands
-        link = {"factory": fac, "areas": sorted(factories[t][fac]), "shared": bool(cands) and not own}
+        pair = [c for c in cands if fan_in[c[1]["func"]] == 2 and c[1]["via"] is not None]
+        pool = own or pair or cands
+        link = {"factory": fac, "areas": sorted(factories[t][fac]), "shared": bool(cands) and not own and not pair}
         if not pool:
             link.update({"table": None, "func": None, "depth": None, "via": None, "ambiguous": False})
         else:
@@ -343,9 +414,11 @@ def main(argv):
         links[t].append(link)
 
     if summary_only:
-        found = sum(1 for t in links for l in links[t] if l["table"] is not None)
+        own_types = {t for t in links if any(l["table"] is not None and not l["shared"] for l in links[t])}
+        any_types = {t for t in links if any(l["table"] is not None for l in links[t])}
         print(f"sites {len(init_sites)} direct {len(sites) - len(wrappers)} wrappers {len(wrappers)} unresolved {unresolved}")
-        print(f"distinct tables {len(tables)} enemy set types {len(links)} with a box table {found}")
+        print(f"distinct tables {len(tables)} enemy set types {len(links)} own table {len(own_types)} "
+              f"shared only {len(any_types - own_types)} none {len(links) - len(any_types)}")
         return 0
 
     lines = []
@@ -356,8 +429,9 @@ def main(argv):
     lines.append("// constant table, and the calls to the helpers that pass their own table on (via).")
     lines.append("// ENEMY_COLLISION_LINKS maps an enemy .dat set type to its factory (per area, 0x009fba60)")
     lines.append("// and the box table its constructor sets: the shallowest site reached from the factory")
-    lines.append("// down the call graph (depth 4) in a function that only this type reaches (shared: only")
-    lines.append("// shared helpers were reached; ASSUMED), the last such call when it is ambiguous.")
+    lines.append("// down the call graph (depth 4; virtual calls resolved through the stored vtable) in a function")
+    lines.append("// that only this type reaches, or that exactly two types reach with a constant helper argument")
+    lines.append("// (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.")
     lines.append(f"// {unresolved} init sites are not decoded: their table or count is computed at run time.")
     lines.append("")
     lines.append("export interface CollisionBoxRow {")

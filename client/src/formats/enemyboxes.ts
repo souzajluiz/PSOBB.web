@@ -8,8 +8,11 @@
 // ENEMY_COLLISION_LINKS (generated, tools/gen-collision-boxes.py) gives, per set type and
 // factory, the box table that the enemy's constructor passes to
 // InitEnemyCollisionBoxes_007b9a88 (directly, or through a helper that passes its own
-// table on, 0x0051ff3c). A link reached only through a shared helper is not used
-// (ASSUMED: the helper's table belongs to the other enemies that reach it).
+// table on, 0x0051ff3c). A link reached only through a helper that three or more set types
+// reach is not used (ASSUMED: the helper's table belongs to the other enemies that reach it).
+// A helper reached by exactly two set types with a constant table (Canadine 0x83 and Canane 0x84,
+// 0x005424d8) is used for both (ASSUMED). A constructor's vtable call is followed through the
+// vtable the ctor stores (Booma 0x44 slot 0x14c, 0x00786848, sets no box: see the DEVLOG).
 
 import { COLLISION_TABLES, ENEMY_COLLISION_LINKS, type CollisionBoxRow, type EnemyCollisionLink } from './collisionboxes.gen.ts';
 import type { EnemySlot } from './enemyslots.ts';

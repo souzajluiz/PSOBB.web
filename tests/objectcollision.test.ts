@@ -142,6 +142,11 @@ check(spotHitsBody({ x: 0, y: 0, z: 0 }, { x: 10, z: 0, yaw: 0, halfX: 9, halfZ:
 check(ENEMY_COLLISION_LINKS[0x42]?.[0]?.table === 0x009bb780, 'Monest links to its own box table 0x009bb780');
 check(enemyBoxTable(0x40, null)?.table === 0x009bb58c, 'Hildebear links to its box table 0x009bb58c');
 check(enemyBoxTable(0x44, null) === null, 'Booma has no resolved box table');
+// Canadine 0x83 and Canane 0x84 both reach the shared constructor 0x005424d8, which passes the
+// constant table 0x009bcecc (count 1) to 0x0051ff3c: each gets that box (ASSUMED: the pair's other
+// constructors do not overwrite it). The Pofuilly slime 0x64 table is 0x009bfd68 (the init is 4 deep).
+check(enemyBoxTable(0x83, null)?.table === 0x009bcecc && enemyBoxTable(0x84, null)?.table === 0x009bcecc, 'Canadine and Canane link to the shared constructor table 0x009bcecc');
+check(enemyBoxTable(0x64, null)?.table === 0x009bfd68, 'Pofuilly slime links to its table 0x009bfd68 (depth 4)');
 check(isTargetable(0x44) === true, 'an enemy with no known table is targetable (ASSUMED)');
 check(isTargetable(0x42) === true, 'Monest has a box with flag 0x8000');
 check(boxTargetable({ flags: 0x8003 }) && !boxTargetable({ flags: 0x30003 }), 'flag 0x8000 makes a box targetable');
