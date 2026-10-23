@@ -35,6 +35,7 @@
 //     on_enemy_exp_request_bb).
 
 import { MAX_LEVEL, type BaseStats, type LevelTable } from '../formats/plyleveltbl.ts';
+import { applyMaterial, materialUsable, type MaterialHolder } from './materials.ts';
 
 // Class flags (player +0x964, newserv class_flags_for_class): 0x10 android,
 // 0x20 hunter, 0x40 ranger, 0x80 force.
@@ -123,15 +124,18 @@ export interface ProgressionState {
   stats: CharacterStats7;
   hpMaterials: number;
   tpMaterials: number;
+  // power, mind, evade, defense, luck (combat/materials.ts); zeros when omitted.
+  materialCounts?: readonly number[];
 }
 
-export class PlayerProgression implements ProgressionState {
+export class PlayerProgression implements ProgressionState, MaterialHolder {
   charClass: number;
   level: number;
   exp: number;
   stats: CharacterStats7;
   hpMaterials: number;
   tpMaterials: number;
+  materialCounts: number[];
   readonly table: LevelTable;
 
   constructor(table: LevelTable, s: ProgressionState) {
@@ -142,6 +146,19 @@ export class PlayerProgression implements ProgressionState {
     this.stats = { ...s.stats };
     this.hpMaterials = s.hpMaterials;
     this.tpMaterials = s.tpMaterials;
+    this.materialCounts = [0, 1, 2, 3, 4].map((i) => s.materialCounts?.[i] ?? 0);
+  }
+
+  // Material use (combat/materials.ts): the check and the change, on the stats,
+  // the bonuses and the counters of this progression.
+  materialUsable(kind: number): boolean {
+    return materialUsable(kind, this);
+  }
+
+  useMaterial(kind: number, challenge: boolean): boolean {
+    if (!materialUsable(kind, this)) return false;
+    applyMaterial(kind, this, challenge);
+    return true;
   }
 
   get maxHp(): number {

@@ -262,6 +262,11 @@ export function initOnlineTab(log: (msg: string) => void): void {
       atomizerTarget: () => view.combat.atomizerTarget(),
       starTargets: () => view.combat.starTargets(),
       atomizerEcho: (packet: Uint8Array) => view.combat.atomizerEcho(packet),
+      // The materials: return1_if_challenge_quest is a Challenge game with its quest running.
+      material: {
+        canUse: (kind: number) => view.combat.materialUsable(kind),
+        use: (kind: number) => view.combat.useMaterial(kind, !!game?.info?.challenge && questRunner !== null),
+      },
     };
     view.items.onInventoryChanged = () => inventory.show(session?.character ?? null);
     view.hud.setNames(() => inventory.names); // classic Item Pack (render/fieldhud.ts)

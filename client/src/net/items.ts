@@ -705,6 +705,13 @@ export function writeCharacterInventory(c: CharacterFile, raw: Uint8Array): void
     writeItemData(raw, o + 8, it.data);
   });
   dv.setUint32(0x34c + 0x20, c.meseta, true);
+  // The material bonuses (bytes 1 / 2) and the counters (extension_data2 of the
+  // raw slots 8..12, after the items, which they share).
+  if (c.materialCounts) {
+    raw[1] = c.hpFromMaterials;
+    raw[2] = c.tpFromMaterials;
+    c.materialCounts.forEach((n, t) => (raw[4 + (8 + t) * 0x1c + 3] = n));
+  }
 }
 
 // --- Game item state ----------------------------------------------------------
@@ -1188,6 +1195,9 @@ export class GameItems {
       starTargets?: () => readonly number[] | null;
       // The local dispatch of a 6x33 / 6x66 the sender made (checked_call -> the table handler).
       atomizerEcho?: (packet: Uint8Array) => void;
+      // The materials (03 0B xx, combat/materials.ts): the use check and the
+      // change, applied by the combat view (the owner of the stats).
+      material?: { canUse: (kind: number) => boolean; use: (kind: number) => void };
     } = {},
   ): boolean {
     const d = it.data.data1;
@@ -1215,7 +1225,7 @@ export class GameItems {
       const max = w ? rules.maxGrind?.(w.data) : undefined;
       return !!w && d[2] <= 2 && max !== undefined && w.data.data1[3] < max;
     }
-    if (d[1] === 0x0b) return d[2] <= 6;
+    if (d[1] === 0x0b) return rules.material?.canUse(d[2]) ?? false;
     return false;
   }
 
@@ -1259,10 +1269,8 @@ export class GameItems {
         const w = c.inventory.find((i) => i.equipped && i.data.data1[0] === 0)!;
         w.data.data1[3] = Math.min(w.data.data1[3] + d[2] + 1, rules.maxGrind?.(w.data) ?? 0xff);
       }
-      if (d[1] === 0x0b) {
-        const stat = ['atp', 'mst', 'evp', null, null, 'dfp', 'lck'][d[2]] as keyof CharacterFile['stats'] | null;
-        if (stat) c.stats[stat] += 2;
-      }
+      // Material (03 0B xx): ApplyMaterialToItem, applied by the combat view.
+      if (d[1] === 0x0b) rules.material?.use(d[2]);
       inv.remove(itemId, 1);
     }
     this.changed();

@@ -62,6 +62,9 @@ export interface CharacterFile {
   stats: CharacterStats;
   hpFromMaterials: number;
   tpFromMaterials: number;
+  // Power, Mind, Evade, Defense, Luck material counts: the extension_data2 of
+  // the raw slots 8..12 (PSOBBCharacterFile::get_material_usage). Zeros when absent.
+  materialCounts?: number[];
   inventory: InventoryItem[];
   bank: { meseta: number; items: BankItem[] };
   // Learned level per technique (1-based), null if not learned.
@@ -138,6 +141,7 @@ export function parseCharacterFile(data: Uint8Array): CharacterFile {
     meseta: u32(disp + 0x20),
     hpFromMaterials: data[1],
     tpFromMaterials: data[2],
+    materialCounts: [0, 1, 2, 3, 4].map((t) => rawItems[8 + t].extensionData2),
     inventory,
     bank: { meseta: u32(bankOff + 4), items: bankItems },
     techLevels,
