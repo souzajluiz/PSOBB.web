@@ -22,7 +22,7 @@ import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase } from './enemyfsm.ts';
 import { DragonFireball, DragonTrapezoid, DRAGON_FIRE_IDS, type DragonEmitter } from './dragon.ts';
-import type { EnemyShot } from './enemyshots.ts';
+import { EnemyShot, PLAYER_RADIUS, type ShotEffect, type ShotLook } from './enemyshots.ts';
 
 const BAMS = BAMS_TO_RAD;
 
@@ -105,7 +105,9 @@ export const GOL_STATE = {
 // leader picks (phase 9). 'now' passes at once, 'frames' after n ticks, 'motion'
 // when the body's motion ends (a loop passes after one loop, see tick), 'dash'
 // when the lunge's profile is done, 'never' holds the state (no transition).
-export type GolGate = { kind: 'now' } | { kind: 'frames'; n: number } | { kind: 'motion' } | { kind: 'dash' } | { kind: 'never' };
+// 'near' passes when the body is within r of the arena centre (the phase 9 pick of 0x10 / 0x11,
+// exe 0x004c42a8 case 9: FUN_007828e4 < 50.0).
+export type GolGate = { kind: 'now' } | { kind: 'frames'; n: number } | { kind: 'motion' } | { kind: 'dash' } | { kind: 'never' } | { kind: 'near'; r: number } | { kind: 'children' };
 
 export interface GolStateDef {
   readonly name: string;
@@ -142,15 +144,23 @@ export const GOL_STATES: Readonly<Record<number, GolStateDef>> = {
   0x05: D('charge', 15, [{ kind: 'frames', n: 40 }], 'seq', 'exe', 0x30, 0x36), // 0x004ca610: +0x218 > 39
   0x06: D('lunge', 16, [{ kind: 'dash' }], 'seq', 'exe', 0, 0x36), // 0x004c197c: phase 9 at +0x217 == 2 (the profile)
   0x07: D('volley', 16, [{ kind: 'frames', n: 1 }, { kind: 'frames', n: 11 }], 'seq', 'exe', 0x30, 0x36), // 0x004c1f9c: sub 2 volley, sub 3 counter 11
-  0x0a: D('breath', 17, [{ kind: 'frames', n: 450 }], 9, 'ASSUMED'), // 0x004cab30 shared: sub 1 > 449 frames (map); 0x0a -> send 9
-  0x0b: D('land roar', 17, [{ kind: 'frames', n: 450 }], 0x0d, 'ASSUMED'), // 0x0b -> send 0xd (map)
-  0x0c: D('land die', 17, [{ kind: 'frames', n: 450 }], 0x15, 'ASSUMED'), // 0x0c -> send 0x15 (map)
-  0x08: D('breath first', 17, [{ kind: 'frames', n: 450 }], 'seq', 'map'), // shared body: sub 1 > 449 (map)
+  // The breath family (0x004cab30): sub 0 counts to 50 (the breath: the flame object, see GolBreath), then sub 1
+  // until the counter passes 449 (the 400 frames left).
+  0x0a: D('breath', 17, [{ kind: 'frames', n: 50 }, { kind: 'frames', n: 400 }], 9, 'ASSUMED'), // 0x0a -> send 9
+  0x0b: D('land roar', 17, [{ kind: 'frames', n: 50 }, { kind: 'frames', n: 400 }], 0x0d, 'ASSUMED'), // 0x0b -> send 0xd (map)
+  0x0c: D('land die', 17, [{ kind: 'frames', n: 50 }, { kind: 'frames', n: 400 }], 0x15, 'ASSUMED'), // 0x0c -> send 0x15 (map)
+  0x08: D('breath first', 17, [{ kind: 'frames', n: 50 }, { kind: 'frames', n: 400 }], 'seq', 'exe'), // sub 0 breath at 50.0 (exe 0x004cab30)
+  // The walk-in burrow (0x004c42a8, sids 0x10 / 0x11): sub 0 counts 60 and aims at the centre (+0x60 = atan2 + 0x8000),
+  // sub 1 walks along the heading, the pick waits for the body within 50.0 of the centre.
+  0x10: D('burrow first', null, [{ kind: 'frames', n: 60 }, { kind: 'near', r: 50 }], 'seq', 'exe', 0x30, 0x07),
+  0x11: D('burrow next', null, [{ kind: 'frames', n: 60 }, { kind: 'near', r: 50 }], 'seq', 'exe', 0x30, 0x07),
   0x0d: D('roar', 2, [{ kind: 'motion' }], 'seq', 'exe', 0x30, 0x06), // 0x004c36e4 (map flags)
   0x0e: D('hover roar', 16, [{ kind: 'frames', n: 60 }], 'seq', 'exe', 0x30, 0x06), // 0x004c38dc: +0x217 > 59
   0x15: D('death', 19, [{ kind: 'motion' }, { kind: 'frames', n: 50 }], 0x17, 'exe', 0x36), // 0x004c5408: sub 1 counter 49, then send 0x17 (the kill runs on leave)
   0x16: D('corpse', null, [{ kind: 'frames', n: 6 }], 0x17, 'exe', 0xb6), // 0x004c5ba4: +0x217 > 5 -> send 0x17
-  0x17: D('children', null, [{ kind: 'never' }], 'none', 'map', 0x136), // 0x004c5dd4: no transitions (the children are OPEN)
+  // 0x004c5dd4: enter motion 0x13 (slot 19), the 4 children's rates 0.005; no pick. The exit is the children's
+  // timers (frameState): the first child that expires sets the body's +8 bit 0 (removed, see GolChild).
+  0x17: D('children', 19, [{ kind: 'children' }], 'none', 'exe', 0x136),
   0x1e: D('entrance', 26, [{ kind: 'motion' }, { kind: 'frames', n: 1 }], 0, 'map'), // 0x004c5eb0: slot 26 = bossopgc; sub 1 sends 0 (the map's death-cinematic name is wrong)
   0x26: D('dash', 2, [{ kind: 'frames', n: 60 }], 'seq', 'ASSUMED'), // 0x004c99dc (map): profile ends at +0x878 >= 680 (ASSUMED 60 frames)
 };
@@ -279,13 +289,96 @@ function variantOf(rng: () => number): number {
   return Math.round((Math.floor(rng() * GOL.randDivisor) / GOL.randDivisor) * GOL.randScale) & 0xff;
 }
 
+// --- the children (exe 0x004c5dd4, 0x005794d8) ----------------------------------------
+
+// The 4 children at +0x6e4 (stride 0x1c, ctor 0x0057713c, vtable 0x00b06aa8). Their update 0x005794d8 counts
+// `timer` down by `rate` and returns true once it is <= -1.0 (then latches -1.0). The state 0x17 runs them in
+// order and the first expired one sets the body's +8 bit 0 (the object is removed). The rate is 0.005 on the
+// state's entry (0x004c5dd4 case 4); the timers start at 0 (ASSUMED: the ctor's reset 0x0057739c is not read).
+export class GolChild {
+  timer = 0;
+  rate = 0;
+  update(): boolean {
+    if (this.timer <= -1) {
+      this.timer = -1;
+      return true;
+    }
+    this.timer -= this.rate;
+    return false;
+  }
+}
+export const GOL_CHILD_RATE = 0.005;
+
+// --- the breath (exe 0x004cab30 sub 0 -> 0x004cfc08 -> flame object 0x004d02a4 / vtable 0x00afc0c8) --------
+
+// The lattice of the flame (exe 0x00908c00, read in full): one ring of (z index, x index) pairs per frame, the
+// rings 0..3 (1 + 6 + 12 + 18 cells). The world step is x 37.5 (0x00a486e8), z 43.3 (0x00a486ec), an odd x index
+// is shifted by -21.65 in z (0x00a486f0): the four floats are the immediates of 0x004d046c..0x004d048c. The table
+// goes on with float data after ring 3 (no sentinel): the port stops at ring 3 (UNCLEAR, see the map).
+export const GOL_FLAME_RINGS: readonly (readonly [number, number])[][] = [
+  [[0, 0]],
+  [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1]],
+  [[2, 0], [-2, 0], [-1, 1], [-1, -1], [2, 1], [2, -1], [-1, 2], [-1, -2], [0, 2], [0, -2], [1, 2], [1, -2]],
+  [[3, 0], [-3, 0], [-2, 1], [-2, -1], [3, 1], [3, -1], [2, 2], [2, -2], [-2, 2], [-2, -2], [-1, 3], [-1, -3], [0, 3], [0, -3], [1, 3], [1, -3], [2, 3], [2, -3]],
+];
+export const GOL_FLAME = {
+  stepX: 37.5, // 0x00a486e8
+  stepZ: 43.3, // 0x00a486ec (43.300003)
+  oddShift: -21.65, // 0x00a486f0
+  reach: 373, // 0x00908d74 (398.0) - 0x00a486e4 (25.0): a cell is made only inside this radius of the centre
+  cellRadius: 25, // 0x00a486dc (25.0): the hit radius of a cell (FUN_004cd344)
+  frames: 51, // the flame ends after 50 ticks (0x004d0300: +0x28 > 0x32)
+  cellFrames: 30, // ASSUMED: a cell's life (its effect's frame count is not read)
+} as const;
+
+// One breath: spawned at the body (+0x38 / +0x40), a cell of the ring k appears at frame k and hits each player
+// within 25 of it once. The damage is a 'tech' effect with the power of the attack (ASSUMED: the Dragon's fireball power).
+export class GolBreath extends EnemyShot {
+  readonly effect: ShotEffect;
+  readonly look: ShotLook = { color: 0xff8030, size: 3 };
+  private cells: { x: number; z: number; age: number }[] = [];
+  private hitIds = new Set<number>();
+  private ring = 0;
+  constructor(x: number, z: number, power: number) {
+    super(x, 0, z);
+    this.effect = { kind: 'tech', power };
+  }
+  tick(targets: readonly AiTarget[]): AiTarget[] {
+    if (this.done) return [];
+    this.frames++;
+    if (this.ring < GOL_FLAME_RINGS.length) {
+      for (const [zi, xi] of GOL_FLAME_RINGS[this.ring]) {
+        const px = this.x + xi * GOL_FLAME.stepX;
+        const pz = this.z + zi * GOL_FLAME.stepZ + (xi & 1 ? GOL_FLAME.oddShift : 0);
+        if (Math.hypot(px, pz) <= GOL_FLAME.reach) this.cells.push({ x: px, z: pz, age: 0 });
+      }
+      this.ring++;
+    }
+    const hits: AiTarget[] = [];
+    for (const t of this.inCells(targets)) {
+      if (this.hitIds.has(t.clientId)) continue;
+      this.hitIds.add(t.clientId);
+      hits.push(t);
+    }
+    for (const c of this.cells) c.age++;
+    this.cells = this.cells.filter((c) => c.age < GOL_FLAME.cellFrames);
+    if (this.frames >= GOL_FLAME.frames && this.cells.length === 0) this.done = true;
+    return hits;
+  }
+  // The live players within reach of a cell (the base within() tests the shot's own spot, the cells are elsewhere).
+  private inCells(targets: readonly AiTarget[]): AiTarget[] {
+    return targets.filter((t) => !t.dead && this.cells.some((c) => Math.hypot(t.x - c.x, t.z - c.z) <= GOL_FLAME.cellRadius + PLAYER_RADIUS));
+  }
+}
+
 // --- shots ---------------------------------------------------------------------
 // The fireball is the Dragon's object (dragon.ts DragonFireball): the Gol's fireball
 // table is not read, so the ids and the power are ASSUMED to match the Dragon's.
 
 export interface GolEvent {
   // The 6xA8 the leader sends (sendGolAction) or a sound.
-  kind: 'send' | 'se' | 'killed' | 'particle' | 'emitter';
+  // 'gone': the body is removed (the children's exit, or a gone spawn); 'effect': FUN_0041a874's effect 0xe0 at the body.
+  kind: 'send' | 'se' | 'killed' | 'particle' | 'emitter' | 'gone' | 'effect';
   state?: number;
   variant?: number;
   cursor?: number;
@@ -311,6 +404,10 @@ export interface GolOptions {
   // ASSUMED: true when the entrance spawns (the singleton, ctor 0x004cb480's
   // DAT_00a485cc check); the ctor then starts in 0x1e.
   singleton?: boolean;
+  // ASSUMED from the area table (0x004cb480: bits 0x12008 of the spawn's entry): the body is gone at once.
+  gone?: boolean;
+  // The derived extras (ctor 0x004cede4, vtable 0x00afbc20): flag 0x40 (sequence C), no hit clamp (+0x682 = 0xffff).
+  derived?: boolean;
 }
 
 // Flag bits of +0xf2 the port reads: 0x10 (the roar gate below cursor 0x32), 0x20 (the
@@ -331,7 +428,24 @@ export class GoldDragonAi extends BrainBase {
   readonly maxHp: number;
   // The hit clamp (+0x682) = ROUND(max * f / 100), the roar threshold: at or below
   // it the leader roars (hp = clamp, cursor = 0x32).
-  readonly clamp: number;
+  clamp: number;
+  // The derived extras (flag 0x40): sequence C, and the clamp is off.
+  readonly derived: boolean;
+  // The 4 children at +0x6e4 (state 0x17).
+  readonly children = [new GolChild(), new GolChild(), new GolChild(), new GolChild()];
+  // The walk-in burrow (0x10 / 0x11): +0x1b6 (reset by 0x10, +1 by 0x11), the sub 1 effect counter (+0x218).
+  private burrowCount = 0;
+  private burrowTick = 0;
+  // Set on the tick the aim is taken: the walk starts on the next tick (the exe runs one sub per tick).
+  private aimed = false;
+  private walkStep = 0;
+  private walkCap = 4;
+  private walkVx = 0;
+  private walkVz = 0;
+  // The body is removed (+8 bit 0): the children expired, or the spawn is gone.
+  private removed = false;
+  // ASSUMED from the area table (see GolOptions.gone): the body is removed on its first tick.
+  private readonly gone: boolean;
   private hitFlag = false;
   // Motion: slot +0x2e, frame +0x2c-ish, speed.
   slotIndex = 26;
@@ -361,6 +475,12 @@ export class GoldDragonAi extends BrainBase {
     this.maxHp = Math.max(1, Math.trunc(opts.hp));
     this.hp = this.maxHp;
     this.clamp = Math.round((this.maxHp * GOL.clampShareAssumed) / GOL.clampDivisor);
+    this.derived = !!opts.derived;
+    this.gone = !!opts.gone;
+    if (this.derived) {
+      this.flags |= 0x40;
+      this.clamp = -1; // *(short*)(+0x682) = 0xffff
+    }
     // The ctor puts a fresh singleton in the entrance (0x1e), other spawns in wait.
     this.setState(opts.singleton === false ? GOL_STATE.wait : GOL_STATE.entrance);
   }
@@ -440,6 +560,15 @@ export class GoldDragonAi extends BrainBase {
   // Phase 4 (enter) of a state: the slot and the flags of the state's definition.
   private enter(sid: number): void {
     const d = stateDef(sid);
+    if (sid === GOL_STATE.burrowFirst) this.burrowCount = 0;
+    else if (sid === GOL_STATE.burrowNext) this.burrowCount++;
+    if (sid === GOL_STATE.burrowFirst || sid === GOL_STATE.burrowNext) {
+      this.air = 2; // +0xfb = 2
+      this.walkStep = 0;
+      this.walkCap = 4 + 4 * this.burrowCount; // +0x21e = (+0x1b6) * 4 + 4
+      this.burrowTick = 0;
+    }
+    if (sid === GOL_STATE.children) for (const c of this.children) c.rate = GOL_CHILD_RATE;
     if (d.slot !== null) this.setSlot(d.slot);
     if (d.f2set !== undefined) this.flags |= d.f2set;
     if (d.f2clear !== undefined) this.flags &= ~d.f2clear;
@@ -500,7 +629,7 @@ export class GoldDragonAi extends BrainBase {
 
   // The table walk of phase 9 (pickNext): the state the sequence names, and the cursor.
   private pickNext(send: boolean): void {
-    const n = golNext(this.cursor);
+    const n = golNext(this.cursor, this.derived);
     this.cursor = n.cursor;
     this.sendPick(n.state, send);
   }
@@ -544,6 +673,42 @@ export class GoldDragonAi extends BrainBase {
     this.sendPick(d.next, send);
   }
 
+  // The sub 0 end of the states that do something at it: the burrow's aim (0x004c42a8 case 0: heading
+  // atan2(x, z) + 0x8000, velocity sin / cos of it) and the breath (0x004cab30: FUN_004cfc08 at the body).
+  private onGateZero(): void {
+    const s = this.sid;
+    if (s === GOL_STATE.burrowFirst || s === GOL_STATE.burrowNext) {
+      const h = (Math.round((Math.atan2(this.x, this.z) * 65536) / (Math.PI * 2)) + 0x8000) & 0xffff;
+      this.yaw = h;
+      this.walkVx = sinB(h);
+      this.walkVz = cosB(h);
+      this.aimed = true;
+    } else if (s === GOL_STATE.breathA || s === GOL_STATE.breathB || s === GOL_STATE.landRoar || s === GOL_STATE.landDie) {
+      this.pendingShots.push(new GolBreath(this.x, this.z, GOL.fireballPower));
+    }
+  }
+
+  // The burrow's walk (0x004c42a8 case 0 sub 1): the step grows 0.1 a tick up to the cap (+0x21e), the body moves
+  // along the heading by the step, and FUN_0041a874 (effect 0xe0) every 11 ticks.
+  private burrowWalk(): void {
+    this.walkStep = Math.min(this.walkStep + 0.1, this.walkCap);
+    this.x += this.walkVx * this.walkStep;
+    this.z += this.walkVz * this.walkStep;
+    this.burrowTick++;
+    if (this.burrowTick > 10) {
+      this.emit({ kind: 'effect', id: 0xe0, x: this.x, z: this.z });
+      this.burrowTick = 0;
+    }
+  }
+
+  // The removal (+8 bit 0 in the exe): the body is gone and the brain stops.
+  private remove(): void {
+    if (this.dead) return;
+    this.removed = true;
+    this.dead = true;
+    this.emit({ kind: 'gone' });
+  }
+
   // The gate machine, run once per tick by the leader and the follower alike (phase 0).
   private advanceGates(): void {
     const d = stateDef(this.sid);
@@ -561,6 +726,12 @@ export class GoldDragonAi extends BrainBase {
       case 'motion':
         pass = this.ended;
         break;
+      case 'near':
+        pass = Math.hypot(this.x, this.z) < g.r;
+        break;
+      case 'children':
+        pass = this.removed;
+        break;
       case 'dash':
         pass = this.dashProfile.done(this.dashCount);
         break;
@@ -569,6 +740,7 @@ export class GoldDragonAi extends BrainBase {
         break;
     }
     if (pass) {
+      if (this.gateIndex === 0) this.onGateZero();
       this.gateIndex++;
       this.gateCount = 0;
       this.ended = false;
@@ -622,6 +794,16 @@ export class GoldDragonAi extends BrainBase {
   private frameState(): void {
     const s = this.sid;
     if (s === GOL_STATE.lunge) this.tickDash();
+    if ((s === GOL_STATE.burrowFirst || s === GOL_STATE.burrowNext) && this.gateIndex === 1 && !this.aimed) this.burrowWalk();
+    // 0x17 (exe 0x004c5dd4 case 0): the children in order; the first expired one removes the body.
+    if (s === GOL_STATE.children) {
+      for (const c of this.children) {
+        if (c.update()) {
+          this.remove();
+          break;
+        }
+      }
+    }
     if (s === GOL_STATE.volley && this.gateIndex === 1 && this.gateCount === 1) this.volley();
     if (s === GOL_STATE.walk) {
       // ASSUMED: the walk steps toward the body's heading at the walk speed (MovementData unread).
@@ -640,6 +822,7 @@ export class GoldDragonAi extends BrainBase {
   tick(targets: readonly AiTarget[]): AiFrame {
     const out = this.frame0();
     this.last = targets;
+    if (this.gone && !this.dead) this.remove();
     if (this.dead) return this.finish0(out);
     const leaderNow = this.opts.leader();
     // The hit clamp (update 0x004cbf68, exe): while the cursor is below 0x32 a hit
@@ -659,6 +842,7 @@ export class GoldDragonAi extends BrainBase {
     this.age++;
     this.animate();
     this.frameState();
+    this.aimed = false;
     if (this.motionDirty) {
       this.motionDirty = false;
       const s = this.motionSlot;

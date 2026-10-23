@@ -6,29 +6,63 @@ no brain is attached (`render/combat.ts`). "dump" is `original-psobb-client-sour
 (names often wrong). Tags: ASSUMED, UNCLEAR. Offsets `+N` are byte offsets from the
 entity (`param_1[N/4]` in the decompile); `+0xb8` = short motion slot at `+0x2e`.
 
-## Port status (2026-10-22, client/src/combat/goldragon.ts)
+## Port status (2026-10-23, client/src/combat/goldragon.ts)
 
-Ported: the brain frame (leader step, roar, death, the phase 9 pick), the sequence
-cursor with the 0x21 / 0x22 sentinels, the hit clamp at +0x682, the 6xA8 codec and the
-follower's applyRemote, the 7 body boxes, the motion slots (28 rows), the kill on the
-leave of 0x15, and the states 0x00, 0x02, 0x03, 0x04, 0x05, 0x06 (lunge profile),
-0x07 (the 3-fireball volley), 0x0d, 0x0e, 0x15, 0x16, 0x17, 0x1e (entrance).
-The other states use the ASSUMED fallback (plays its slot, 120 ticks, then the pick).
+Ported: the brain frame (leader step, roar, death, the phase 9 pick), the sequence cursor with the
+0x21 / 0x22 sentinels, the hit clamp at +0x682, the 6xA8 codec and the follower's applyRemote, the 7
+body boxes, the motion slots (28 rows), the kill on the leave of 0x15 (bossKilled, as the Dragon's
+kill without a quest flag), and the states 0x00, 0x02..0x07, 0x08 / 0x0a / 0x0b / 0x0c (the breath
+family: sub 0 to 50 ticks, then the flame), 0x0d, 0x0e, 0x10 / 0x11 (the burrow walk and its pick),
+0x15, 0x16, 0x17 (the children's exit: the body is removed), 0x1e (entrance). The other states use
+the ASSUMED fallback (plays its slot, 120 ticks, then the pick).
 
-ASSUMED: the roar share f (DAT_00a48508+8, runtime) = 90; the lunge's dist / vmax;
-the death motion speed (table 0); the body box flags (0x8003); the 6xA8 variant byte's
-use; the walk's step; the fireball ids / power (the Dragon's).
+Session 2026-10-23 (items of the open list):
+- Breath: FUN_004cfc08 -> flame object (ctor 0x004d02a4, vtable 0x00afc0c8, update 0x004d0300): the
+  hex lattice of table 0x00908c00 (rings 0..3 = 1 + 6 + 12 + 18 cells, one ring per frame), world step
+  37.5 / 43.3, odd x columns -21.65 (immediates at 0x004d046c..0x004d048c), a cell is made inside 373
+  (0x00908d74 - 0x00a486e4). Each cell is a damage object (ctor 0x004cfff4, vtable 0x00afc068, update
+  0x004d0080) with the hit test FUN_004cd344 (radius 25 = 0x00a486dc, immediate 0x004d0174). Ported as
+  GolBreath (a 'tech' shot per cell). ASSUMED: the cell life (30 ticks), the damage power (the Dragon's
+  fireball power), the sid -> BattleParam map. OPEN: the table after ring 3 is float data with no sentinel
+  (the exe's loop runs on past it from frame 4; not reproduced), the damage path inside FUN_0051fc9c.
+- Children (+0x6e4, stride 0x1c, ctor 0x0057713c, vtable 0x00b06aa8): update 0x005794d8 counts the
+  timer by the rate and returns true at <= -1.0 (latches -1). State 0x17's frame (0x004c5dd4 case 0)
+  runs them in order; the first expired one sets the body's +8 bit 0 (removed). Enter 0x17: rates 0.005
+  (case 4). The port removes the body after ~200 ticks (ASSUMED: the timers start at 0; the ctor's reset
+  0x0057739c is not read). The render keeps ticking the brain after the kill until this removal.
+- Derived extras: ctor 0x004cede4 (base ctor 0x004cb480, vtable 0x00afbc20, flag 0x40, +0x682 = 0xffff
+  = no hit clamp, +0x2bc and +0x334 = the spawn's hp). Spawned by 0x004cea04 (the 0x2b leave, a fan of up
+  to 5 around the target, step 0x10000 / (n+1)). Their update 0x004cee30 differs from the base frame
+  (the pad control +0x1d7, the flag 8 branch: 6x76 and removal). Ported: the brain option `derived`
+  (sequence C, flag 0x40, no clamp). OPEN: the spawn, the render of the 5 bodies, the update's pad path.
+- Kill gate 0x12008: the ctor reads the area table (DAT_00ab02b8, runtime, not readable) at the spawn's
+  index (+0x2c short, stride 0xc); the bits 0x12008 all set put +0xf2 |= 8 (the entrance is skipped and
+  the frame removes the body after 6x76). The leave of 0x15 sets the body's own +0xc = 0x12008 (in memory).
+  No quest flag in the Gol's leave (the Dragon's set_quest_flag(0x17) is not here). Port: the server's
+  entity flag 8 (bossKilled, as the other bosses) and the brain option `gone` (ASSUMED: the removal on the
+  first tick, no kill). The rewards: 0x0051f894 = FUN_00787534 (EXP, drop) + FUN_008113e4 (6x76), the
+  same calls as the Dragon's kill (not re-decoded here).
+- FUN_0041a874 = FUN_006ff738(+0x38, 0xe0, body): an effect queue of 16 records (table 0x00a96980,
+  record 0x18); the port emits the event 'effect' 0xe0 every 11 ticks of the burrow walk (not drawn).
+- The pick distance of 0x004c42a8 (sids 0x10 / 0x11, phase 9, sub 1): FUN_007828e4(x, 0, z) < 50.0
+  (0x009086c0), the length of the position on the XZ plane. Sub 0: 60 ticks (0x009086b8); the aim (case
+  0): heading = ROUND(atan2(x, z)) + 0x8000 into +0x60 (the yaw), velocity (+0x3a8 / +0x3b0) = sin / cos
+  of the heading (FUN_0082dcbc / FUN_0082ddd8, float). Sub 1: step += 0.1 (0x009086bc) up to +0x21e =
+  4 + 4 * (count) (count reset by 0x10, +1 by 0x11), position += velocity * step.
+- Roar share DAT_00a48508+8 (f = 90, ASSUMED): the global is read at 0x004caa49, 0x004cb823, 0x004cbd3b,
+  0x004cbd46 and never stored by an absolute address (no `mov [abs]` to 0x00a48508 in .text): the writer is
+  an indirect store or the loader; still UNCLEAR.
 
-OPEN (not ported): the derived extras (vtable 0x00afbc20, flag 0x40, sequence C in use,
-ctor 0x004cede4); the 4 child objects (+0x6e4, the 0x17 state drives them, so 0x17 holds
-with no exit); the breath area hit (FUN_004cfc08 at +0x38, radius 100) and its flames;
-the pad / dragon control (+0x1d7, DAT_00a485f8) states 0x01 and the phase 2 / 0xb sends;
-+0x680 (the 90 % loop: written by the ctor, its reader not found); the kill's gate
-+0x12008 (ctor, table DAT_00ab02b8); the rewards internals (0x0051f894); MovementData
-row of the Gol (not read).
+ASSUMED: the roar share f = 90; the lunge's dist / vmax; the death motion speed (table 0, port 0.5); the body
+box flags (0x8003); the 6xA8 variant byte's use; the walk's step; the fireball ids / power (the Dragon's);
+the cell life and power of the breath; the children's start timers; the 120-tick fallback for the states
+not modelled; the 0x08 breath's gates (50 + 400 frames, the exe's 450 total).
 
-Blockers resolved since the first map: hit boxes (below), sids 0x10 / 0x11 (below),
-states 0x01..0x07 (re-read below), the motion names (verified against the archive).
+OPEN (not ported): the derived extras' spawn and render (see above); the 4 children's other callers (the
+0x29 / 0x2a rates 0.08 / 0.00803 and the 0x27 / 0x28 busy checks); the other states of the table (0x01 pad,
+0x09, 0x0f, 0x12, 0x13, 0x18..0x1d, 0x1f..0x2b: fallback); the pad / dragon control (+0x1d7, DAT_00a485f8);
++0x680 (the 90 % loop, its reader not found); the rewards internals beyond 0x0051f894; the MovementData row
+and the model nodes; the breath table after ring 3.
 
 ## Identity and object model
 
@@ -461,12 +495,13 @@ children at `+0x6e4`) are OPEN.
 ## Death and rewards
 
 - Death: the 0x15 handler plays the death cinematic (sub 0 / 1) and its leave calls
-  `FUN_0051f894` (the on-kill as in `barbaray-map.md` section 4: 6x76 / EXP / drop via
-  0x00787534, 0x005c973c, 0x008113e4). Who runs the kill on each client was not traced
-  in this pass (UNCLEAR, like the Barba Ray). The 0x1e handler is a second death-style
+  `FUN_0051f894` (= FUN_00787534 EXP / drop + FUN_008113e4 6x76, decoded 2026-10-23). The port
+  runs it on every client through bossKilled (the same as the other bosses). No quest flag here.
+  After the leave the body stays until state 0x17's children expire and remove it. The 0x1e handler is a second death-style
   sequence (`dradeath.adx`) that does not call the kill.
 - Derived extras (vtable 0x00afbc20, flag 0x40, ctor 0x004cede4): the 5 extra entities
-  of the type count. Their death and rewards are UNCLEAR.
+  of the type count, spawned by 0x004cea04 (the 0x2b leave). Their death is the derived update
+  0x004cee30 (flag 8 branch: 6x76 and removal). Rewards: not re-decoded (see Port status).
 
 ## Reuse from the Dragon (dragon.ts)
 
@@ -484,8 +519,9 @@ children at `+0x6e4`) are OPEN.
   - Motion slots: `DragonSlot` (`DRAGON_SLOTS`, line 76) with the Gol table above.
   - Movement helpers: `DragonTrapezoid` (line 378) fits the dive / charge (0x13) and the
     dash (0x26) ASSUMED; the circle (0x24) and the steering (0x28) need their own code.
-  - Breath / fire: `DragonFlame`, `DragonFireball` (500 / 464) for 0x1c-like attacks
-    (ASSUMED match, not verified against the Gol particles).
+  - Breath / fire: NOT the Dragon's `DragonFlame` (a moving projectile). The Gol's breath is
+    stationary cells on a hex lattice (GolBreath in goldragon.ts, decoded 2026-10-23). `DragonFireball`
+    stays ASSUMED for the 0x07 volley and the 0x1c-like attacks.
 - Not reusable: hit boxes (`DRAGON_BODY_BOXES`, `DRAGON_TAIL`), the mouth and feet nodes,
   and the Dragon's particle and SE ids.
 

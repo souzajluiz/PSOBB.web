@@ -1486,6 +1486,12 @@ export class CombatView {
         this.tickGibblesSink(e, e.ai);
         continue;
       }
+      // The Gol Dragon after its kill (state 0x15 leave): its brain still runs state 0x17 (the children's
+      // timers) until the body is removed, so the exit of 0x17 happens on this client too.
+      if (e.ai instanceof GoldDragonAi && e.dead && !e.ai.dead && e.instance.root.visible) {
+        this.tickGol(e, e.ai, targets);
+        continue;
+      }
       if (e.dead || !e.instance.root.visible) continue;
       // The status block of update_enemy_control_object (combat/enemystatus.ts).
       if (e.status.flags) {
@@ -2437,6 +2443,11 @@ export class CombatView {
         return;
       case 'killed':
         this.golKilled(e, ev.x ?? 0, ev.z ?? 0);
+        return;
+      case 'gone':
+        // The children's exit of state 0x17 (exe: the body's +8 bit 0): the body leaves the room.
+        e.instance.root.visible = false;
+        this.opts.log(`${what}: removed (state 0x17 children expired)`);
         return;
       default:
         return;
