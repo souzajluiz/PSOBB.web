@@ -1,0 +1,73 @@
+// Shared steps of the e2e tests that need a character in a party field on a fresh account:
+// log in, make the character (slot 0) when the account has none, optionally fund it while the
+// account is offline (bridge/admin-chars.mjs), then reach the lobby, create a party and enter it.
+import { fileURLToPath } from 'node:url';
+import { expect, type Page } from '@playwright/test';
+import { applyCharacterPatch, charPath, loadCharBuffer, parseCharacter, writeCharacter } from '../../bridge/admin-chars.mjs';
+import { cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { makeCharacter, slotFilled } from './phone-helpers.ts';
+
+// newserv's players folder: the worktree's vendor/newserv/system (NEWSERV_SYSTEM overrides it, as
+// bridge/admin.mjs does).
+export const playersDir = (): string =>
+  process.env.NEWSERV_SYSTEM
+    ? `${process.env.NEWSERV_SYSTEM.replace(/\/+$/, '')}/players`
+    : fileURLToPath(new URL('../../vendor/newserv/system/players', import.meta.url));
+
+// A new account name (newserv registers an unknown user on its first login). Letters and
+// digits only, within admin-chars.mjs's username rule.
+export const freshUser = (prefix: string): string => `${prefix}${Date.now().toString(36).slice(-7)}`;
+
+// Sets the meseta of slot 0's character while the account is offline. The page leaves the server
+// first (newserv saves a character when its client goes away, so the save must come before the
+// write); the file is read back after a pause, so a late save cannot undo the write.
+export async function fundOffline(page: Page, user: string, meseta: number): Promise<void> {
+  await page.goto('about:blank');
+  await page.waitForTimeout(2000);
+  const dir = playersDir();
+  const file = charPath(dir, user, 0);
+  const { buf } = applyCharacterPatch(loadCharBuffer(file), { meseta });
+  writeCharacter(dir, file, buf); // a backup of the file is kept under system/players/_admin-backups
+  await page.waitForTimeout(2000);
+  expect(parseCharacter(loadCharBuffer(file)).meseta).toBe(meseta);
+}
+
+// From the login to a party field (Pioneer 2, floor 0). `meseta`: fund the character first.
+// PSO_USER / PSO_PASSWORD override the account (then it is not fresh: `meseta` still applies).
+export async function enterFreshField(page: Page, logs: string[], opts: { prefix: string; meseta?: number }): Promise<{ user: string; name: string }> {
+  const user = process.env.PSO_USER ?? freshUser(opts.prefix);
+  const password = process.env.PSO_PASSWORD ?? user;
+  const name = `ps${Date.now() % 100000}`;
+
+  await logIn(page, user, password);
+  await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+  if (!(await slotFilled(page, 0))) {
+    await key(page, 'Enter'); // the empty slot 0: the creation
+    await makeCharacter(page);
+    await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
+  }
+  if (opts.meseta !== undefined) {
+    await fundOffline(page, user, opts.meseta);
+    await logIn(page, user, password);
+    await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+  }
+  await reachLobby(page);
+
+  // Create a PARTY (1) -> EPISODE 1 (0), the name, Difficulty Normal, Registration.
+  await openPartyMenu(page);
+  await key(page, 'ArrowDown');
+  await key(page, 'Enter');
+  await key(page, 'Enter');
+  await expect.poll(() => peek(page, (w) => w.classicLobby.party?.phase)).toBe('create');
+  await key(page, 'Enter');
+  await page.keyboard.type(name, { delay: 30 });
+  await key(page, 'Enter');
+  await cursorTo(page, (w) => w.classicLobby.party.create.row, 3);
+  await key(page, 'Enter');
+  await expect.poll(() => peek(page, (w) => w.classicLobby.party.create.step)).toBe('difficulty');
+  await key(page, 'Enter');
+  await cursorTo(page, (w) => w.classicLobby.party.create.row, 4);
+  await key(page, 'Enter');
+  await expectInGame(page, logs, name);
+  return { user, name };
+}

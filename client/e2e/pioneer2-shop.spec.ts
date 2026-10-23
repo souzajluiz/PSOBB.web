@@ -6,18 +6,19 @@
 // The walk is not under test: the player is placed in front of the clerk.
 //
 // Against a local newserv, like the other classic e2e tests (e2e/classic.ts).
+// The account is fresh per run and its character is funded offline with FUND meseta before the
+// shop step (fresh-field.ts fundOffline, bridge/admin-chars.mjs): the wallet then pays the cheap
+// rows and the buy branch runs. Rows dearer than FUND answer "not enough meseta" and the list
+// comes back. PSO_USER / PSO_PASSWORD override the account.
 // NEWSERV_LOG (optional): newserv's log file, checked for the purchase line.
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
-import { makeCharacter, slotFilled } from './phone-helpers.ts';
+import { consoleLog, key, leaveToLobby, peek } from './classic.ts';
+import { enterFreshField } from './fresh-field.ts';
 
-// A fresh account per run (newserv registers an unknown user on its first login): the wallet is
-// not left over from earlier runs, which spend the meseta of a shared account (the wallet had 1
-// meseta, so no row could be bought and the window's close was never reached through a buy).
-// PSO_USER / PSO_PASSWORD override it.
-const USER = process.env.PSO_USER ?? `wsh${Date.now().toString(36).slice(-7)}`;
-const PASSWORD = process.env.PSO_PASSWORD ?? USER;
+// The meseta the character is funded with: the buy stays within it (the bought item costs at
+// most this much).
+const FUND = 200;
 
 // The counter's window state (classic/shop.ts state(), render/fieldhud.ts debug().counter).
 type CounterState = { message: string; choice: string[] | null; list: string[] | null; cursor: number; amount: number | null } | null;
@@ -27,46 +28,31 @@ async function counterState(page: Page): Promise<CounterState> {
   return s && { ...s, choice: s.choice?.map((t) => t.trim()) ?? null, message: s.message.trim() };
 }
 
-// The bag and the wallet: the item ids (with their data) and the meseta.
+// The bag and the wallet: the items (id and data1) and the meseta.
 const bag = (page: Page) =>
   peek(page, (w) => {
     const c = w.classicGame.view.items.inventory?.c;
-    return c ? { meseta: c.meseta as number, items: c.inventory.map((i: any) => `${i.data.id.toString(16)}:${Array.from(i.data.data1 as Uint8Array).join(',')}`) as string[] } : null;
+    return c ? { meseta: c.meseta as number, items: c.inventory.map((i: any) => ({ id: i.data.id as number, data1: Array.from(i.data.data1 as Uint8Array) as number[] })) } : null;
   });
+
+// Items by kind: the data1 bytes without the stack count (byte 5), and the count held. Tools
+// (class 3) stack; any other item counts once.
+type Bag = NonNullable<Awaited<ReturnType<typeof bag>>>;
+function holdings(b: Bag): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const it of b.items) {
+    const key = it.data1.map((v, i) => (i === 5 ? 0 : v)).join(',');
+    const n = it.data1[0] === 3 ? it.data1[5] || 1 : 1;
+    out.set(key, (out.get(key) ?? 0) + n);
+  }
+  return out;
+}
 
 test('the item store counter sells a cheap item on the classic field', async ({ page }) => {
   const logs = consoleLog(page);
-  const name = `ps${Date.now() % 100000}`;
 
-  await test.step('log in, make the character (a new account has none)', async () => {
-    await logIn(page, USER, PASSWORD);
-    await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
-    if (!(await slotFilled(page, 0))) {
-      await key(page, 'Enter'); // the empty slot 0: the creation
-      await makeCharacter(page);
-      await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
-    }
-  });
-  await test.step('reach the lobby', () => reachLobby(page));
-
-  await test.step('create a party and enter it', async () => {
-    await openPartyMenu(page);
-    // Create a PARTY (1) -> EPISODE 1 (0), the name, Difficulty Normal, Registration.
-    await key(page, 'ArrowDown');
-    await key(page, 'Enter');
-    await key(page, 'Enter');
-    await expect.poll(() => peek(page, (w) => w.classicLobby.party?.phase)).toBe('create');
-    await key(page, 'Enter');
-    await page.keyboard.type(name, { delay: 30 });
-    await key(page, 'Enter');
-    await cursorTo(page, (w) => w.classicLobby.party.create.row, 3);
-    await key(page, 'Enter');
-    await expect.poll(() => peek(page, (w) => w.classicLobby.party.create.step)).toBe('difficulty');
-    await key(page, 'Enter');
-    await cursorTo(page, (w) => w.classicLobby.party.create.row, 4);
-    await key(page, 'Enter');
-    await expectInGame(page, logs, name);
-  });
+  await test.step('a fresh account: the character, funded offline, and a party field', () =>
+    enterFreshField(page, logs, { prefix: 'wsh', meseta: FUND }));
 
   await test.step('the item store clerk is on the field', async () => {
     expect(await peek(page, (w) => w.classicGame.view.npcs.byAction(1008) !== null)).toBe(true);
@@ -74,6 +60,7 @@ test('the item store counter sells a cheap item on the classic field', async ({ 
 
   const before = await bag(page);
   expect(before).not.toBeNull();
+  expect(before!.meseta).toBe(FUND);
 
   await test.step('talk to the item store clerk and open Buy', async () => {
     await peek(page, (w) => {
@@ -185,7 +172,12 @@ test('the item store counter sells a cheap item on the classic field', async ({ 
     await expect.poll(async () => (await bag(page))?.meseta ?? 0, { timeout: 30_000 }).toBeLessThan(before!.meseta);
     const after = await bag(page);
     console.log(`meseta ${before!.meseta} -> ${after!.meseta}, bag ${before!.items.length} -> ${after!.items.length}`);
-    expect(after!.items.join('|')).not.toBe(before!.items.join('|'));
+    // The item appears: a kind the bag did not hold, or a stack that grew.
+    const had = holdings(before!);
+    const now = holdings(after!);
+    const grew = [...now].filter(([k, n]) => n > (had.get(k) ?? 0));
+    console.log(`bag grew by: ${grew.map(([k, n]) => `[${k.slice(0, 12)}] ${had.get(k) ?? 0} -> ${n}`).join(', ')}`);
+    expect(grew.length).toBeGreaterThan(0);
   });
 
   if (canBuy) await test.step('the server takes the buy', async () => {

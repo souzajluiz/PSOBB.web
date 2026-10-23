@@ -9696,3 +9696,13 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **Not covered:** a fresh character could not pay any row of the Tools Shop in the runs ("Not enough Meseta" on all 11), so the shop's buy branch does not run; the spec takes its "no row the wallet can pay" branch and checks the close. To exercise the buy, fund an account offline (bridge/admin-chars.mjs `meseta`) and set `PSO_USER`/`PSO_PASSWORD`, knowing the buys spend it again.
 
 **Side effects:** each run leaves one new account in `vendor/newserv/system/players/` (the shop and each phone test), as newserv registers unknown users on login.
+
+## 2026-10-23: e2e: the shop's buy branch runs again (funded offline); drop spot checked in Chrome (drop.spec.ts)
+
+**Shop buy branch.** `pioneer2-shop.spec.ts` logs in to a fresh account, so its character had no meseta and the buy never ran. `e2e/fresh-field.ts` (new, shared) now makes the character and enters a party; for the shop it then funds slot 0 with 200 meseta while the account is offline: the page leaves the server first (newserv saves a character when its client goes away), `bridge/admin-chars.mjs` (`applyCharacterPatch` + `writeCharacter`, backup kept) writes the meseta, the file is read back after 2 s, and the account logs in again. The spec then buys the first row the wallet pays (one piece, the 50-meseta row), asserts the wallet starts at 200 and drops (200 -> 150), and asserts the bag grew (the Monomate stack 4 -> 5; the check is per kind, so a new kind also passes). The window still closes. No newserv or bridge change; no other account is touched.
+
+**Drop in Chrome.** `e2e/drop.spec.ts` (new): an unequipped bag item is dropped with `GameItems.drop` (the menu's Drop call; the menu keys are not driven). The game's send methods are wrapped on the page, and the sequence must be exactly 6x2C (900 frames, at the player's x/z), 6x2A, 6x2D. The item is then on the floor with `source: 'player'`, at a distance of 6 * r from the player for a whole ring r in 1..6, on the ground (y = ground + 6), with `collision.segmentHit` from the eye to the spot clear. The item has left the bag, and a held W (300 ms) moves the player. The first run passed; no port change.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. Playwright on the local newserv, Vite on 5175, `--workers=1`: `drop.spec.ts` + `pioneer2-shop.spec.ts` passed twice in a row (drop 56 s; shop 1.0 min alone).
+
+**Side effects:** each shop/drop run leaves one `wsh...` / `wdr...` account in `vendor/newserv/system/players/`, and the shop run leaves a backup of the funded `.psochar` under `_admin-backups`.
