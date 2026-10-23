@@ -58,7 +58,7 @@ import {
 import { maxStackSize } from '../formats/itemnames.ts';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { EMPTY_BOX_TYPES, ITEM_BOX_TYPES, type FloorItem, type GameItems } from '../net/items.ts';
-import { DropSearch } from '../net/dropspot.ts';
+import { DropSearch, type DropBody } from '../net/dropspot.ts';
 import { EnemyArchive } from './enemymodel.ts';
 import { FieldParticles } from './hitfx.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -86,6 +86,8 @@ export interface FloorItemLayerOptions {
   ground: (x: number, z: number, fromY: number) => number | null;
   // The map ray of a drop's line of sight (mask -1); absent: no walls.
   wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
+  // The object boxes a drop spot must stay clear of (FUN_007b5318); absent: none.
+  dropBodies?: () => readonly DropBody[];
   blocked: () => boolean; // a menu has the keyboard
   describe?: (item: FloorItem) => string;
   log?: (msg: string) => void;
@@ -141,7 +143,8 @@ export class FloorItemLayer {
     items.onFloorItemAdded = (it) => void this.show(it, it.source !== 'sync' && !items.game.loading && this.localPlayerOnFloor());
     items.onFloorItemRemoved = (it) => this.hide(it.id);
     items.onPickedUp = (it, picker) => this.pickedUp(it, picker);
-    items.dropSearch = (me) => new DropSearch(me, { ground: opts.ground, wallBlocks: (a, b) => (opts.wallBlocks ? opts.wallBlocks(a, b) : false) });
+    items.dropSearch = (me) =>
+      new DropSearch(me, { ground: opts.ground, wallBlocks: (a, b) => (opts.wallBlocks ? opts.wallBlocks(a, b) : false), bodies: opts.dropBodies });
     viewer.renderer.domElement.addEventListener('keydown', this.onKey);
   }
 

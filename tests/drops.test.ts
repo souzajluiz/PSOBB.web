@@ -56,6 +56,23 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   eq(walled.status, 'failed', 'a wall on every line: failed');
   const wall16 = run(me, () => 0, (_a, b) => b.z === 16);
   eq([wall16.status, wall16.steps, r3(wall16.at)], ['found', 2, [16, 6, 10]], 'a blocked spot goes to the next one');
+  // The body test (FUN_007b5318 over the object entities): the first spot is
+  // (10, 16) and the second (16, 10). A box over the first spot sends the search
+  // to the second; a box out of the 100 unit range is not tested; a box clear of
+  // the spot's radius of 3 leaves it; a rotated box (yaw pi/2) covers it.
+  const body = (b: { x: number; z: number; yaw: number; halfX: number; halfZ: number }) => {
+    const s = new DropSearch(me, { ground: () => 0, wallBlocks: () => false, bodies: () => [b] });
+    for (let steps = 1; steps <= 20; steps++) {
+      const r = s.search();
+      if (r.status === 'found') return { steps, at: r3(r.at) };
+    }
+    return null;
+  };
+  eq(body({ x: 10, z: 16, yaw: 0, halfX: 1, halfZ: 1 }), { steps: 2, at: [16, 6, 10] }, 'a box over the first spot: the second spot is taken');
+  eq(body({ x: 1000, z: 1000, yaw: 0, halfX: 1000, halfZ: 1000 }), { steps: 1, at: [10, 6, 16] }, 'a box beyond 100 units is not tested');
+  eq(body({ x: 40, z: 16, yaw: 0, halfX: 1, halfZ: 1 }), { steps: 1, at: [10, 6, 16] }, 'a box 30 units away on x does not cover the spot');
+  eq(body({ x: 14, z: 16, yaw: 0, halfX: 0.5, halfZ: 1.5 }), { steps: 1, at: [10, 6, 16] }, 'yaw 0: the box ends 3.5 from the spot, clear of its radius');
+  eq(body({ x: 14, z: 16, yaw: Math.PI / 2, halfX: 0.5, halfZ: 1.5 }), { steps: 2, at: [16, 6, 10] }, 'yaw pi/2: the same box turned covers the spot');
   // The eye: ground under the player probed from y + 10, plus 6.
   let eye: { x: number; y: number; z: number } | null = null;
   const probes: number[] = [];
