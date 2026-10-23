@@ -12041,3 +12041,42 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Checks:** `node tests/objectcollision.test.ts` (new section 3c) and the related tests pass (`collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`, `enemies`, and `itemmodels` with `vendor/` linked into the worktree). `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
 
 **Left (ROADMAP line stays open):** the 44 undecoded sites (indexed per-kind tables and parameters); enemies' use of their tables (no port hit test for enemies); the NPC question; the break flag of the containers.
+
+## 2026-10-23: Options > Keyboard Config (classic/keyconfig.ts, input/keyconfig.ts): the window, rebinding with swap, save with 04ED
+
+**Premise, checked against the exe and newserv.** The key config is not in the 00E2 packet as a save path. It is the account's system file `key_config` (0x16C bytes, newserv `PSOBBBaseSystemFile`, offset 0x114). Three places carry it:
+- 00E7 (SC_SyncSaveFiles, the full character) carries the system file at 0x2EA4, so the key config is at **0x2FB8** in the record the port already receives (`net/charfile.ts` layout). The port reads it there (`applyKeyConfig` in `net/bbsession.ts`, on E7).
+- 00E2 (S_SyncSystemFile_BB, newserv `send_system_file_bb`) carries the same system file at offset 0. Not read by the port: E7 is enough.
+- Save: the client sends **0x04ED** (C_UpdateKeyConfig_BB_04ED, newserv `on_ED_BB` case 4: `sys->key_config = cmd`, then `save_system_file`). The exe builds it in `send_packet0xed_subcommand4` (dump name; size 0x174 = 8-byte header + 364 bytes, the 0xED subcommand 4). It is sent from `KeyboardConfigObject_Destructor_0078f7fc` (0x0078f7fc) on every close, changed or not.
+
+**Exe evidence (PsoBB.exe 1.25.13, named dump `Psobb.exe-05112026.c`, data read with `tools/exedata.py`-style PE reads):**
+- Window: `KeyboardConfigObject_Constructor_00791be8` (0x00791be8). Lists at (100, 40) 5 rows (the top list, unitxt strings `g_KeyboardConfigStrings`), (100, 170) the category header 260 wide, (110, 200) the rows, (10, 440) the message bar. States: `HandleKeyboardConfigInput_007903ba` (0x007903ba) dispatches to `HandleKeyboardConfigState_00790a50`, `HandleKeyBindingListInput_00790924`, `HandleKeyBindingInput_007907cc` (left / right change the category, wrapping; Decide -> `HandleKeyBindingState3_007908d4`, the "wait for a key" state), `HandleKeyBindingConfirm_00790970`.
+- Rebinding: `HandleInputKeyBinding_00790458` (0x00790458). Keys ESC, L/R Shift, Ctrl (0x56), Alt -> "This button is impossible to set." (unitxt 0x4d). A key another row holds goes to that row (the old key of the row goes with it, "Setup interchanged." unitxt 0x4e). The select arrows (bindings 10..13) are never swapped with. `SetKeyBinding_00790774` writes one entry.
+- Validation: `ValidateAndApplyKeyboardConfig_007917c0` (0x007917c0): an entry type above 1, or a marker (entry 45) not 1, resets the config to the default.
+- Tables: labels `0x0097b500` (pairs `{binding, unitxt group 0}` per category, stride 0x48: cat 0 = 6 rows, cat 1 = 5, cat 2 = 9); key names `0x0097b5e0` (95 pairs `{code, wide name}`, names with a ": " prefix); row counts `0x0097bbc8` (u16 6, 5, 9); category names `0x0097bbb4` (u32 14, 15, 16); the 10 control names of type 1 bindings `0x0097b4a0` (not ported).
+- Default config: newserv `DEFAULT_KEY_CONFIG` (SaveFileFormats.cc). Its entries 35..44 are the codes 0x2A..0x33 (hotbar 1..0); the old `input/keyconfig.ts` header said 34..43, which was wrong by one.
+
+**Ported:**
+- `input/keyconfig.ts`: the 364-byte config (`readBinding`, `writeBinding`, `normalizeKeyConfig`, `defaultKeyConfig`, `keyConfigFromCharacter` / `writeKeyConfigToCharacter` at 0x2FB8), the key-name table, DOM <-> code (`domKeyOfCode`, `codeOfDomKey`, `domEventOf`), and `applyKeyConfig`, which rewrites `KEYS` and `PALETTE_KEYS` in place from the bindings. `KEYS` was a module constant; now the input layer reads the config at call time. `virtualpad.ts` (the stick sectors, `DOM_KEYS`) and `webcontrols.ts` (`isRepeatingKey`) read it too; their old module-load copies would have gone stale.
+- `classic/keyconfig.ts`: `KeyConfigMenu` (top list, categories, rows with their key captions, wait for a key, swap, refusals, Cancel levels, commit on close).
+- `classic/options.ts`: row 5 (Keyboard Config) opens the window; the option list is not drawn while it is open (ASSUMED: the exe's overlap). `characterOptionsEnv` gets the window's load / commit (write into the character record, `applyKeyConfig`, send 0x04ED with 364 bytes).
+
+**ASSUMED / not decoded:**
+- The top list's five strings are taken as group 0 0x50..0x54 ("Default1..4", "Custom"): the table that holds them (`g_KeyboardConfigStrings`) was not located; the words at `0x0097bb60` (1..6, 8..11) were not matched to it. Default 1..4 are greyed out (their contents are not in the data; the exe keeps them in runtime slots at `0x009ff3c0`). Custom starts selected (ASSUMED).
+- Category headers: the words at `0x0097bbb4` read as unitxt 0x0E, 0x0F, 0x10. The third header then reads "Setting improper item" in newserv's text; the exe's dump gives the same string for that window's header code. Kept as the table says; not verified in Chrome.
+- The label is the second word of each label pair (unitxt 0x12.. = "Move Forward", ...); the dump reads the first word. The first word is the binding index (it matches the bindings of each row). Checked with newserv's unitxt_e (`tests/options.test.ts`).
+- Layout: positions from the constructor; the widths (140 / 260 / 420), the key column (220) and the row text offsets are ASSUMED.
+- Cancel (binding 7) is not changeable and shows "ESC/BACK SPACE" (exe string at 0x0097c62c); Decide on it shows "This item is not changable." (unitxt 0x4c).
+- While waiting, Backspace is an assignable key (the exe scans the whole key table); Escape / Shift / Ctrl / Alt are refused and the wait goes on. The port has no other way out of the wait (ASSUMED: the exe has none either).
+- After a plain set the message bar keeps "Press the button you wish to map." until the cursor moves (the exe's code path; ASSUMED from `ClearKeyBindingSelection_0079079c`).
+- Both Shift keys map to the DOM key "Shift" (the code is L SHIFT on the way in, R SHIFT when `code` is ShiftRight).
+- Keypad keys have no DOM name in the port, so they cannot be bound from the keyboard (the table has them).
+- Changes are committed on every close (the exe's destructor always sends); the port does the same.
+
+**Left (ROADMAP line stays open):**
+- Pad Button Config (row 4) and the Default 1..4 presets.
+- Menus still read Enter / Backspace / the arrows literally (`fieldwindows.ts` `listKey`); the exe's menus use the Decide / Cancel / select bindings. Only the field, combat, palette and move keys follow the config. Literal keys remain in `telepipe.ts` (`USE_KEY`, 'ArrowLeft') and in the menus.
+- The touch buttons (`webcontrols.ts` `holdButton`) take their key when built: a rebinding on a phone is seen after a reload.
+- Not run in Chrome. Not tested against a live server's saved config (the E7 read and the 04ED send are checked only against newserv's code and the byte layout).
+
+**Checks:** `node tests/options.test.ts` (102 checks: the key config layout and marker, the 0x2FB8 record, DOM names, `applyKeyConfig` on KEYS / PALETTE_KEYS / the stick, the window's rebind, swap, refusals, categories, Cancel levels and commit, the row 5 open / close path, the unitxt labels). Also pass: `controls`, `mobileinput`, `mobilecontrols`, `telepipe`, `fieldhud`, `lobbymenu`, `volopt`, `returnprompt`, `minimap`, `stickflick`, and `cd client && tsc --noEmit -p .` (Node 24; the worktree's `client/node_modules` was linked to the main checkout's for the run, then unlinked). A draw smoke test (stub canvas, scratch only) runs the window's draw in each stage. Playwright not run.

@@ -6,44 +6,34 @@
 // Movement is digital in this client (the views test W / A / S / D), so the
 // stick is quantised to 8 directions with a dead zone in the middle.
 
-import { KEYS } from './keyconfig.ts';
+import { domEventOf, KEYS } from './keyconfig.ts';
 
-export type GameKey = (typeof KEYS)[keyof typeof KEYS];
-export type MoveKey = typeof KEYS.moveForward | typeof KEYS.moveBackward | typeof KEYS.moveLeft | typeof KEYS.moveRight;
+export type GameKey = string; // a DOM key name (KEYS holds the bound ones)
+export type MoveKey = string;
 
-// KeyboardEvent.key / .code of each game key (KEYS holds lower-cased keys,
-// the views compare either form).
-export const DOM_KEYS: Readonly<Record<GameKey, { key: string; code: string }>> = {
-  w: { key: 'w', code: 'KeyW' },
-  s: { key: 's', code: 'KeyS' },
-  a: { key: 'a', code: 'KeyA' },
-  d: { key: 'd', code: 'KeyD' },
-  enter: { key: 'Enter', code: 'Enter' },
-  backspace: { key: 'Backspace', code: 'Backspace' },
-  home: { key: 'Home', code: 'Home' },
-  ' ': { key: ' ', code: 'Space' },
-  end: { key: 'End', code: 'End' },
-  arrowup: { key: 'ArrowUp', code: 'ArrowUp' },
-  arrowdown: { key: 'ArrowDown', code: 'ArrowDown' },
-  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft' },
-  arrowright: { key: 'ArrowRight', code: 'ArrowRight' },
-  control: { key: 'Control', code: 'ControlLeft' },
-};
+// KeyboardEvent.key / .code of each game key. Read at call time: the keys
+// follow the key config (input/keyconfig.ts applyKeyConfig).
+export const DOM_KEYS: Readonly<Record<string, { key: string; code: string }>> = new Proxy(
+  {} as Record<string, { key: string; code: string }>,
+  { get: (_t, k) => domEventOf(String(k)) },
+);
 
 // Fraction of the stick radius that counts as centred.
 export const STICK_DEAD_ZONE = 0.25;
 
 // The 8 directions counter-clockwise from screen right (east), y up.
-const SECTORS: ReadonlyArray<readonly MoveKey[]> = [
-  [KEYS.moveRight],
-  [KEYS.moveForward, KEYS.moveRight],
-  [KEYS.moveForward],
-  [KEYS.moveForward, KEYS.moveLeft],
-  [KEYS.moveLeft],
-  [KEYS.moveBackward, KEYS.moveLeft],
-  [KEYS.moveBackward],
-  [KEYS.moveBackward, KEYS.moveRight],
-];
+function sectorKeys(sector: number): readonly MoveKey[] {
+  switch (sector) {
+    case 0: return [KEYS.moveRight];
+    case 1: return [KEYS.moveForward, KEYS.moveRight];
+    case 2: return [KEYS.moveForward];
+    case 3: return [KEYS.moveForward, KEYS.moveLeft];
+    case 4: return [KEYS.moveLeft];
+    case 5: return [KEYS.moveBackward, KEYS.moveLeft];
+    case 6: return [KEYS.moveBackward];
+    default: return [KEYS.moveBackward, KEYS.moveRight];
+  }
+}
 
 export interface StickVector {
   // Knob offset from the stick centre in screen pixels (y grows downward).
@@ -58,7 +48,7 @@ export function stickKeys({ dx, dy, radius }: StickVector, deadZone = STICK_DEAD
   if (!(radius > 0) || Math.hypot(dx, dy) <= radius * deadZone) return new Set();
   const angle = Math.atan2(-dy, dx); // screen y down -> math y up
   const sector = ((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8;
-  return new Set(SECTORS[sector]);
+  return new Set(sectorKeys(sector));
 }
 
 // Clamps a knob offset to the stick radius (the knob stops at the rim).
@@ -74,10 +64,10 @@ export function keyDiff<K>(prev: ReadonlySet<K>, next: ReadonlySet<K>): { releas
 }
 
 // Keyboard-like auto-repeat for held arrow buttons (menu cursors): first
-// repeat after REPEAT_DELAY ms, then every REPEAT_INTERVAL ms.
+// repeat after REPEAT_DELAY ms, then every REPEAT_INTERVAL ms. isRepeatingKey
+// (the select keys) says which keys repeat.
 export const REPEAT_DELAY = 400;
 export const REPEAT_INTERVAL = 80;
-export const REPEATING_KEYS: ReadonlySet<GameKey> = new Set([KEYS.selectUp, KEYS.selectDown, KEYS.selectLeft, KEYS.selectRight]);
 
 // Number of repeat keydowns due after a button has been held `heldMs`.
 export function repeatCount(heldMs: number): number {

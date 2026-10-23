@@ -9,6 +9,7 @@
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
 import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
+import { applyKeyConfig, keyConfigFromCharacter } from '../input/keyconfig.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
 
@@ -146,6 +147,8 @@ export class BBSession {
       this.log(`<- ${hex(c.command, 4)} flag=${c.flag} (${c.data.length} bytes)`);
       if (c.command === 0xe7) {
         this.fullCharacter = c.data;
+        // The account's key config (system file at 0x2FB8 in the 00E7 record) becomes the live keys.
+        applyKeyConfig(keyConfigFromCharacter(c.data));
         try {
           this.character = parseCharacterFile(c.data);
         } catch (err) {
