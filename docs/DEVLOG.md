@@ -9559,3 +9559,27 @@ Slots with flags 2 in the file: 0, 2, 4, 41, 51, 53. The rest are flags 1.
 **Open:** the egg's look in Chrome is still unexplained by slot metadata; the earlier open items in the 2026-10-23 egg entry (spawn offset sign, sprite size vs the exe focal length) remain.
 
 Checks: `tools/exedata.py read` on 0x00a101c0 + n*0x28 for all 54 slots; Ghidra decompile of 0x00501c4c, 0x00501804, 0x00800f4c, 0x00801dd0, 0x00801df8, 0x00801034, 0x0050864c, 0x008013bc, 0x007a902c/905c/9044/9074, 0x0082acfc, 0x0082b440, 0x00837468, 0x00508460. Named source read: render_particle_renderer3 (Psobb.exe-05112026.c:816525).
+
+## 2026-10-23 - Egg sprite size and spawn offset re-checked against the exe (spawn draw order fixed, no size change)
+
+Question (HANDOFF): is the egg (particle 0x9f, renderer 3) too small in Chrome because the port sizes the sprite in world units with a 60 deg camera, while the exe uses a projection with focal D = 437.44? And is the spawn offset sign wrong (exe `(rand/32768 + 0.5)` vs port `rand - 0.5`)?
+
+**Result 1, sprite size: the port already matches the exe formula. No size change.**
+- Field projection, from the camera angle: FUN_0082ebc8 (0x0082ebc8; called by the field camera sites 0x004d2ac2, 0x004d3b7f, 0x004d411b, 0x004d4246, 0x00502525, 0x0078de31). fovy from the angle (the same math as `njPerspectiveFovy`); `g_CameraFOV = DAT_00af0354 * cot(fovy/2) * 0.5` (0x0098a4f4 = 0.5), with DAT_00af0354 = g_ViewportHeight (not in the file: runtime, ASSUMED 480).
+- Renderer 3, render_particle_renderer3 (0x00801df8, named dump .c:816525): `half_x = (g_CameraFOV / g_CameraFOVMultiplier) * (+0x14 width) * size_x / (-z)`, `half_y = g_CameraFOV * (+0x18 height) * size_y / (-z)`, screen centre `g_HalfViewportWidth + x*f/(-z)`, `g_HalfViewportHeight - y*f/(-z)`. For slot 35 (width = height = 32), size 0.08 at spawn, growing x1.04 per tick.
+- Field camera angle: LobbyView sets `CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE)` with CAMERA_FOV_ANGLE = 0x36c1 (render/playercamera.ts, lobbyview.ts:30, 691), which is 59.095 deg, not 60. At H = 480: exe focal = 423.375 px; the port focal = 240 / tan(59.095/2) = 423.375 px. Port sprite half-size = `2 * 32 * 0.08 / 2 * D/z`, the same as the exe. Ratio port/exe = 1.000 (ASSUMED H = 480). The 60 deg value in the HANDOFF is the MapViewer's default before LobbyView overwrites it, so it is not the game's camera.
+- So the egg's small look in Chrome is not a projection or width error. The remaining candidates are the sprite's colour/alpha over the field, not its size (not investigated here).
+
+**Result 2, spawn offset sign: the port is right. The DEVLOG's "+0.5" was a misread.**
+- The spawn is FUN_0050ec4c (`particle_effect_single_particle_constructor`, named dump .c:292180). Its constants are `_DAT_0092040c` = 32768.0 and `_DAT_00920410` = -0.5 (exedata read). The 0x00920440 / 0x00920444 values read in the earlier entry (32768 and +0.5) are other data, read by the update function FUN_0050dbb8 (0x0050dbd5, 0x0050dd6b), not the spawn.
+- Offset: `x = (rand / 32768 + (-0.5)) * x_variation + emitter.x`, so rand - 0.5 as the port has. Unchanged.
+
+**Result 3, spawn draw order (the exe's, proven by the decompile): x, then z, then y.** The port drew x, y, z. Changed in `client/src/classic/particles.ts` `spawn()`: the three offsets are now drawn x, z, y (the `fixedY` case still draws no y rand). This changes the RNG stream for every particle with more than one variation axis; no particle with zero variation (the egg) is affected. Renderers, sizes and blends are unchanged.
+
+**Not changed (flagged):** the exe's velocity rotation uses FUN_007829f4 on (field36, field37), i.e. a 2D rotation of (vx, vy), while the port rotates vx in the x-z plane and keeps vy. This affects every particle with a non-zero vy speed (not the egg, which has no velocity). Needs its own trace of FUN_007829f4 before a change.
+
+**ASSUMED:** H = 480 (g_ViewportHeight not in the file), the field camera's angle is 0x36c1 in every field (only the local player camera's +0x54 was read), and DAT_00af0354 is the viewport height rather than a width.
+
+**Tooling note:** the REA Ghidra provider failed to launch twice (`GhidraLaunchError`), so the decompiles were done with tools/ghidra/decomp.sh.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/particleslope.test.ts`, `deathfx`, `telepipe`, `hitfx`, `gunbullet`, `dragon`, `techlightning`, `playerfx`: all pass. Not run in Chrome.
