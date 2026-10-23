@@ -60,6 +60,13 @@ import type { LoadedQuest } from '../client/src/net/quests.ts';
 import { killExp } from '../client/src/combat/progression.ts';
 import { parsePlyLevelTbl } from '../client/src/formats/plyleveltbl.ts';
 import { applyOverlay, buildChallengeOverlay, challengeTemplate, writeOverlayRaw } from '../client/src/quest/cmodeoverlay.ts';
+import {
+  buildStageListIndex,
+  challengeQuestProgress,
+  challengeSenderStep,
+  challengeWindowState,
+  type ChallengeQuestDialog,
+} from '../client/src/quest/cmode.ts';
 import { graveDropPoints, recordGrave, saveGrave } from '../client/src/quest/cmode.ts';
 import {
   decodeGraveDate,
@@ -683,6 +690,39 @@ if (newserv) {
   // The 6x8A body: the index is the u32 at +4.
   eq(parseStageListIndex(Uint8Array.of(0x8a, 2, 0, 0, 3, 0, 0, 0)), 3, 'the index is read at +4');
   eq(parseStageListIndex(Uint8Array.of(0x8a, 2, 0, 0)), null, 'a short body has no index');
+
+  // --- the Pioneer 2 challenge quest dialog and the leader's 6x8A sender ---
+  // The sent body: 0x8a, 2 dwords, the index at +4 (exec_packet0x60_subcommand0x8a, 0x004db990).
+  eq([...buildStageListIndex(5)], [0x8a, 2, 0, 0, 5, 0, 0, 0], '6x8A body: sub 8a, size 2, index u32 at +4');
+  // get_challenge_quest_window_state (0x006d0584): closed 0, episode choice 1, quest 2 / 3 (selection).
+  const dlg = (built: boolean, state: number, headerRead = false, quest = -1): ChallengeQuestDialog => ({ built, state, headerRead, quest });
+  eq(challengeWindowState(null, 0), 0, 'no dialog: window 0');
+  eq(challengeWindowState(dlg(false, 0), 0), 0, 'not built (+0x38 == 0): window 0');
+  eq(challengeWindowState(dlg(true, 0), 0), 1, 'state 0: the episode choice (window 1)');
+  eq(challengeWindowState(dlg(true, 1), 0), 2, 'state 1, selection 0: window 2');
+  eq(challengeWindowState(dlg(true, 2), 0), 2, 'state 2, selection 0: window 2');
+  eq(challengeWindowState(dlg(true, 2), 1), 3, 'state 2, selection 1: window 3');
+  eq(challengeWindowState(dlg(true, 1), 2), 2, 'a selection other than 0 or 1 still gives window 2');
+  eq(challengeWindowState(dlg(true, 3), 1), 0, 'state above 2: window 0');
+  eq(challengeWindowState(dlg(true, -1), 1), 0, 'negative state: window 0');
+  // GetChallengeEntityProgress_006cb310 -> 0x006d0524: the quest number, -1 with no header.
+  eq(challengeQuestProgress(null), -1, 'no dialog: progress -1');
+  eq(challengeQuestProgress(dlg(true, 2, false, 0x35)), -1, 'header not read (+0x40 == 0): -1');
+  eq(challengeQuestProgress(dlg(false, 2, true, 0x35)), 0x35, 'the header quest counts even when not built');
+  // UpdateChallengeEntityProgress_004d9848: the index and the send rule.
+  const step = (counter: number, leader: boolean, w: number, p: number, sel: number) => challengeSenderStep(counter, leader, w, p, sel);
+  eq(step(7, false, 2, 0x35, 0), { counter: 7, send: null }, 'a non-leader does not run the sender');
+  eq(step(7, true, 2, 0x33, 0), { counter: 7, send: 3 }, 'window 2, progress 0x33: index 3 (Episode 1 stage 1), counter kept');
+  eq(step(7, true, 2, 0x3b, 0), { counter: 7, send: 11 }, 'window 2, progress 0x3b: index 11 (Episode 1 stage 9)');
+  eq(step(7, true, 2, 0x35, 5), { counter: 7, send: null }, 'the same index as the selected window is not sent again');
+  eq(step(7, true, 3, 0x3d, 0), { counter: 7, send: 12 }, 'window 3, progress 0x3d: index 12 (Episode 2 stage 1)');
+  eq(step(7, true, 3, 0x41, 0), { counter: 7, send: 16 }, 'window 3, progress 0x41: index 16 (Episode 2 stage 5)');
+  eq(step(0, true, 2, 0x40, 0), { counter: 30, send: 1 }, 'window 2 with no match: counter 30, index 1');
+  eq(step(0, true, 3, 0x3c, 0), { counter: 30, send: 2 }, 'window 3 with no match: counter 30, index 2');
+  eq(step(0, true, 0, 0, 0), { counter: 0, send: null }, 'closed dialog, nothing selected: no send');
+  eq(step(0, true, 0, 0, 3), { counter: 0, send: 0 }, 'closed dialog with a selection: 0 closes it');
+  eq(step(5, true, 0, 0, 3), { counter: 4, send: null }, 'closed dialog: the counter counts down, no send while it is above 0');
+  eq(step(0, true, 1, 0, 0), { counter: 0, send: null }, 'the episode choice (window 1) is index 0 too');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');
