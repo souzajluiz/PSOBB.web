@@ -75,7 +75,7 @@
 //   player is invisible) is set. Infliction of poison / paralysis / slow /
 //   confusion plays no sound.
 //
-// ASSUMED (not readable): the status particles' height above the feet (BODY_DY);
+// ASSUMED (not readable): the status particles' emitter follows the player (flags 0x50);
 // that particle entries of types 1 and 2 are drawn like type 0 (as
 // render/levelupfx.ts does); that SEs have no distance attenuation here
 // (play_directional_sound_effect's distance model is not read).
@@ -106,9 +106,12 @@ export interface FxSpec {
 // point is the feet at rest (dy 0). PlayerActionDispatch (dump 232924) writes the
 // same slots as scratch during some actions (dump 233861..233876); not modelled.
 export const HIT_POINT_DY = 0;
-// ASSUMED: the status particles' anchor (EntityProcessStatusEffectParticle_007752dc,
-// dump 747965) is not traced; kept at the old guess.
-export const BODY_DY = 20;
+// The status particle is made at the hit point: EntityHitEntity_00773350 (dump 747965)
+// passes `position` (= the flagged box's position2, 747820) to
+// EntityProcessStatusEffectParticle_007752dc (dump 748529, create_particle_effect_3 at
+// the same point as the hit spark), so the anchor is the feet at rest (dy 0).
+// ASSUMED: the per-tick pulse (statusFx) uses the same anchor; its own call is not traced.
+export const BODY_DY = HIT_POINT_DY;
 export const BLOCK_DY = 36;
 export const REVIVE_DY = 20;
 export const SOUL_DY = 10;

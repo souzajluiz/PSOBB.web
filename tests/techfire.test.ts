@@ -5,6 +5,8 @@
 import {
   BartaBolt,
   effectTier,
+  enemyAimHeight,
+  AIM_HEIGHT,
   enemyFire,
   FIRE_SE,
   FireShot,
@@ -411,6 +413,14 @@ near(techReach(TECH.rabarta, 0), 45, 'Rabarta Lv1 reaches 45');
 check(inTechReach(TECH.jellen, 4, 54.99) && !inTechReach(TECH.jellen, 4, 55), 'Jellen at level 4: just inside 55, not 55');
 check(inTechReach(TECH.zalure, 10, 78.99) && !inTechReach(TECH.zalure, 10, 79), 'Zalure at level 10: just inside 79, not 79');
 near(techData(TECH.rafoie, 10).rangeH, 120, 'Rafoie Lv11 range_h 120');
+
+// --- Enemy aim height (check_enemy_is_targetable: the hit box centre) -------------
+// Monest 0x42: its own table's enabled row (0, 20, 0) -> 20. Booma 0x44 reaches only a
+// shared helper at depth 3 -> the ASSUMED fallback. An unknown type falls back too.
+check(enemyAimHeight(0x42) === 20, `Monest aims at its box centre (got ${enemyAimHeight(0x42)})`);
+check(enemyAimHeight(0x44) === AIM_HEIGHT, 'Booma (shared helper only) falls back to AIM_HEIGHT');
+check(enemyAimHeight(null) === AIM_HEIGHT, 'no type falls back to AIM_HEIGHT');
+check(enemyAimHeight(0xfff0) === AIM_HEIGHT, 'a type with no table falls back');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

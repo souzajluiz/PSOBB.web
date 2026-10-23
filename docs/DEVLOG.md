@@ -12359,3 +12359,25 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 - The keyboard-enabled and movement-disabled gates of `handle_player_emote_input` are not checked in the lobby view (the existing emote path has the same gap).
 
 **Checks:** `node tests/emotes.test.ts` (all checks passed, including the Alt order, the first-edge rule, the Alt+U / Alt+I exclusion, the field slots for Alt+F1 (9) and the town slot (6), and the sit end keys), `tests/motions.test.ts`, `tests/players.test.ts`, `tests/chatline.test.ts`, `tests/lobbymain.test.ts` pass with Node 24. Client `tsc --noEmit -p .` is clean (a temporary link to the main checkout's `client/node_modules`, removed afterwards). Not run in Chrome or against newserv.
+
+## 2026-10-23: enemy aim at the hit box centre, status particle at the hit point, player aim height traced
+
+**What changed:** `combat/techfire.ts` `enemyAimHeight(type)` gives the height above an enemy's origin that a technique aims at: the y of the first enabled row of the enemy type's own box table (TYPE_COLLISION_TABLES, depth 0 or 1; a deeper link is a shared helper and falls back). `AIM_HEIGHT` 22 is the fallback. `render/combat.ts` uses it for the lock-on and fire candidates (`pickFireTargets`, the spawn aim, the gun bullet's hit test and the gun target centre) through `aimHeightOf(e)`. `combat/playerfx.ts` `BODY_DY` 20 -> 0 (= `HIT_POINT_DY`).
+
+**Exe evidence (PsoBB.exe; dump `refsrc/.../Psobb.exe-05112026.c`):**
+- Enemy target picking is `check_enemy_is_targetable` (dump 785xxx, after `find_targets_for_weapons_and_techs` 785117): for each enabled box of the target (flag bit 0, and the weapon's masks) it measures `vec3_xz_distance_sq(weapon_position, box.position2)` and keeps the box as `hitbox_index`. The reticle is drawn at that hitbox (`create_target_reticles_for_weapon_or_tech`, dump 785268, `target_hitbox_index`). So the aim point is a box centre (position2), not a flat height. The XZ distance is the test for the pick; the y of the centre is the aim height.
+- Enemy boxes: `COLLISION_TABLES` rows (x, y, z at `offset`) are the position1 values; position2 = origin + RotY * position1 (`UpdateCollisionBoxPosition_007b999c`, dump 802533), so the y of the centre is origin.y + offset.y.
+- Status particle: `EntityHitEntity_00773350` (dump 747464) reads the defender's own flagged box (`defender->collision_data`, flag 0x4000000, dump 747591..747594) and passes its position2 as `position` (dump 747820). `EntityProcessStatusEffectParticle_007752dc` (dump 748529) makes the status particle with `create_particle_effect_3(position, id, 0x40)` at that same point, as the hit spark and the damage number (dump 747595..747673). So the anchor is the hit point: the feet at rest for a player (HIT_POINT_DY 0). The other two callers (dump 584627 and 584848) pass a vtable getter's point (slot 0x1c, the invincibility path) which is not traced.
+- Enemy technique aim on a player: the directed Foie (`create_directed_foie_object`, dump 349686 and 186019) takes the target entity's `+0x300` as its point; +0x300 is the entity's origin x (the same as `&param_1->x` in `gunner_shooting_update`, dump 328951), so the aim is the player's feet, not PLAYER_AIM_HEIGHT 10 above them.
+
+**Port:** the enemy aim point is the box centre per type; the status particle is at the hit point. Not changed: `PLAYER_AIM_HEIGHT` 10 (`combat/enemyshots.ts`, `techlightning.ts`). The directed Foie evidence says the feet, but the same constant is the enemy shots' hit window (`EnemyShot` y in [0, 2 * PLAYER_AIM_HEIGHT]) and the bullets' aim is not traced, so changing it needs its own pass.
+
+**ASSUMED:**
+- `enemyAimHeight`: the first enabled row of the shallowest table (depth 0 or 1) of the type; a multi-box enemy has no per-box choice (the lock-on's box is not modelled). Types whose shallowest link is depth 2 or deeper (e.g. Booma 0x44, only the shared helper at depth 3) keep 22. The generator's type map is ASSUMED (see collisionboxes.gen.ts).
+- The x/z of the box centre is not rotated (only y is used for the aim).
+- `BODY_DY` 0: the per-tick status pulse (`statusFx`) uses the same anchor as the on-hit particle; its own emitter is not traced.
+- `PLAYER_AIM_HEIGHT` 10 is still a guess for enemy bullets and techniques other than directed Foie.
+
+**Tests:** `node tests/techfire.test.ts` (new: Monest aims at 20, Booma and an unknown type fall back to 22); `node tests/playerfx.test.ts` (the poison particle spec is at dy 0); `combatdepth` 842 checks, `techlightning`, `objectcollision`, `enemyfsmcaves`, `enemyfsmmines` pass. `client tsc --noEmit` shows no error in the touched files (the worktree has no `three` types and the checkout has no `vite`/`@capacitor`, their errors are unchanged). Run with the main checkout's `three` linked into `client/node_modules` for the test run only, then removed. Not run in Chrome.
+
+**Left:** `PLAYER_AIM_HEIGHT` 10 (the enemy bullets' aim and the Foie-family feet aim); the lock-on's per-box pick for multi-box enemies; the status pulse's emitter; the vtable getter behind dump 584627.
