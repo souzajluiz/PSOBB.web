@@ -4892,7 +4892,8 @@ export class CombatView {
       this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) casts Megid`);
       return;
     }
-    const spit = new LilySpit(x, z, angle);
+    const baseY = e.instance.root.position.y;
+    const spit = new LilySpit(x, z, angle, baseY);
     let mesh: THREE.Mesh | null = null;
     try {
       mesh = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 6), new THREE.MeshBasicMaterial({ color: 0x9be04a }));
@@ -4900,7 +4901,6 @@ export class CombatView {
     } catch {
       mesh = null;
     }
-    const baseY = e.instance.root.position.y;
     this.spits.push({ spit, owner, baseY, mesh });
     mesh?.position.set(x, baseY + spit.height, z);
     this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) spits`);

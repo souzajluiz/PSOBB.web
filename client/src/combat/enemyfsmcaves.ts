@@ -7,7 +7,7 @@
 import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
 import type { EnemyAttackData, EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
-import { EnemyShot, PLAYER_AIM_HEIGHT, type ShotEffect, type ShotLook } from './enemyshots.ts';
+import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import { exhaustive } from '../exhaustive.ts';
 
 const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [0, 0, 0, 0, 0, 0] };
@@ -445,9 +445,17 @@ export const NANO_POWER = {
   motion: 6,
 } as const;
 
+// The squared 3D distance from a point to a player's feet (the player's +0x300 point, AiTarget y).
+function feetDistSq(t: AiTarget, x: number, y: number, z: number): number {
+  const dx = t.x - x;
+  const dy = (t.y ?? 0) - y;
+  const dz = t.z - z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
 // The breath (update 0x0057fcc0): fparam2 a frame toward the target; it
-// pierces, hitting every player within fparam2 each frame, and dies after 500
-// units (0x00927b8c).
+// pierces, dies after 500 units (0x00927b8c), and hits every player whose feet
+// (+0x300) are within fparam2 of it in 3D (FUN_0078ea2c, dist^2 <= speed^2).
 export class NanoBreath extends EnemyShot {
   readonly effect: ShotEffect;
   readonly look: ShotLook = { color: 0xff7020, size: 3 };
@@ -474,9 +482,13 @@ export class NanoBreath extends EnemyShot {
     this.y += this.vy;
     this.z += this.vz;
     this.travelled += this.speed;
-    if (this.travelled >= NANO.breathRange || this.y <= 0) this.done = true;
-    // ASSUMED: the breath's contact is the XZ box test (no height window).
-    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= this.speed + 5);
+    // The range gates the hit (0x0057fcc0 tests dc < 500 before the map ray and the hits);
+    // the floor stands for the map ray (ASSUMED).
+    if (this.travelled >= NANO.breathRange || this.y <= 0) {
+      this.done = true;
+      return [];
+    }
+    return targets.filter((t) => !t.dead && feetDistSq(t, this.x, this.y, this.z) <= this.speed * this.speed);
   }
 }
 
@@ -506,6 +518,8 @@ export class NanoShot extends EnemyShot {
     this.effect = { kind: 'tech', power: opts.power };
   }
 
+  // 0x00580270 (dump): the steer and the hit use the locked target's +0x300 (its feet). Only
+  // that target can be hit: 3D dist^2 to its feet <= speed^2 (FUN_0078ea2c vs DAT_00a7417c).
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     if (++this.frames > NANO.shotLife) {
@@ -515,7 +529,7 @@ export class NanoShot extends EnemyShot {
     const t = targets.find((p) => p.clientId === this.targetId && !p.dead);
     if (t) {
       const dx = t.x - this.x;
-      const dy = PLAYER_AIM_HEIGHT - this.y;
+      const dy = (t.y ?? 0) - this.y;
       const dz = t.z - this.z;
       const d = Math.hypot(dx, dy, dz) || 1;
       this.vx += (dx / d) * this.steer;
@@ -530,11 +544,9 @@ export class NanoShot extends EnemyShot {
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    // ASSUMED: the XZ box test (no height window), as in the breath above.
-    const hit = targets.find((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= this.speed + 5);
-    if (hit) {
+    if (t && feetDistSq(t, this.x, this.y, this.z) <= this.speed * this.speed) {
       this.done = true;
-      return [hit];
+      return [t];
     }
     return [];
   }
@@ -769,7 +781,9 @@ export class NanoDragonAi extends BrainBase {
         if (!this.fired && this.frames >= NANO.fireFrame && t) {
           this.fired = true;
           const y = NANO.base + this.height + NANO.mouth;
-          out.shots = [new NanoBreath(this.x, y, this.z, t.x, PLAYER_AIM_HEIGHT, t.z, this.mv.fparam2, this.mv.iparam[0] ?? 0)];
+          // ASSUMED: the breath is aimed at the target's feet (the exe's aim not traced). With the
+          // 3D feet hit above, an aim 10 up would never bring it within fparam2 of a standing player.
+          out.shots = [new NanoBreath(this.x, y, this.z, t.x, t.y ?? 0, t.z, this.mv.fparam2, this.mv.iparam[0] ?? 0)];
         }
         if (!t || this.timer >= NANO.attackTimer) this.after(out, targets);
         break;

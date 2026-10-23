@@ -135,14 +135,21 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   eq(maxH, NANO.cruise, 'it rises to 50');
   eq([t.state, t.height], ['idle', 0], 'and lands back in idle');
   // The breath pierces and dies after 500 units.
-  const br = new NanoBreath(0, 10, 0, 0, 10, 100, 3, 40);
+  // The hit is 3D to the feet (+0x300) within fparam2 = 3: a breath flying at height 2 passes over
+  // both players 2 above their feet, each is hit once (the feet are 2 away in y, 0 in XZ at its step).
+  const br = new NanoBreath(0, 2, 0, 0, 2, 100, 3, 40);
   let hits = 0;
   let frames = 0;
   while (!br.done && frames < 1000) {
-    hits += br.tick([player(0, 60)]).length;
+    hits += br.tick([player(0, 30), player(0, 60)]).length;
     frames++;
   }
-  check(hits > 1, `the breath keeps hitting a player it passes through (${hits})`);
+  eq(hits, 2, 'the breath pierces: each player it passes over is hit (3D to the feet)');
+  // The same breath at height 10 never gets within 3 of the feet (3D), so no hit.
+  const high = new NanoBreath(0, 10, 0, 0, 10, 100, 3, 40);
+  let highHits = 0;
+  while (!high.done) highHits += high.tick([player(0, 60)]).length;
+  eq(highHits, 0, 'a breath 10 above the feet misses (3D distance, not the XZ box)');
   eq(Math.ceil(500 / 3), frames, 'it travels 500 units');
   const sh = new NanoShot({ x: 0, y: 10, z: 0, yaw: Math.PI / 2, speed: 2, steer: 0.1, grow: 0.01, power: 25, targetId: 0, near: true });
   let got: AiTarget[] = [];

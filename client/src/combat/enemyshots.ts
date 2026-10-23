@@ -367,13 +367,21 @@ export class GunnerLaser extends EnemyShot {
     this.z += this.vz;
     // The hit test is the XZ box test (EXE: CheckTwoHitboxCollision_007b5e40,
     // dump 800093, both y forced to 0); the old 0..2 * aim height window is gone.
-    const hit = this.y >= 0 ? this.within(targets, this.radius)[0] : undefined;
+    const hit = this.y >= 0 ? this.touched(targets)[0] : undefined;
     if (hit) {
       this.done = true;
       return [hit];
     }
     if (--this.life <= 0) this.done = true;
     return [];
+  }
+
+  // The laser's update (FUN_0054649c, dump 0x0054649c) tests its round box (type 0, flags
+  // 0x8003, radius speed * 0.75 from the template at 0x009bd124) against the players' round
+  // boxes (radius 5) in XZ: CheckSphereOverlap is dist < r1 + r2, strict.
+  private touched(targets: readonly AiTarget[]): AiTarget[] {
+    const r = this.radius + PLAYER_RADIUS;
+    return targets.filter((t) => !t.dead && (t.x - this.x) ** 2 + (t.z - this.z) ** 2 < r * r);
   }
 }
 

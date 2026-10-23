@@ -448,6 +448,20 @@ function GUNNER_WAIT(): number {
   );
 }
 
+// Dark Gunner laser (FUN_0054649c): round box radius speed * 0.75 against the player's round box 5,
+// XZ, strict (CheckSphereOverlap dist < r1 + r2). Speed 4 -> radius 3, so the reach is 8.
+{
+  // Aimed along +x at height 0: the step is (4 * 100 / |(100, 10)|, 0.4, 0), so the laser's x after
+  // one step is vx and after the probe's step 2 * vx, where the player stands dx further out.
+  const probe = (dx: number): number => {
+    const laser = new GunnerLaser({ x: 0, y: 0, z: 0, tx: 100, tz: 0, speed: 4, power: 1, death: false });
+    laser.tick([]);
+    return laser.tick([player(2 * laser.x + dx, 0)]).length;
+  };
+  eq(probe(7.99), 1, 'laser: a player 7.99 out in XZ is inside 3 + 5');
+  eq(probe(8.01), 0, 'laser: 8.01 out is outside (the reach is 3 + 5)');
+}
+
 if (failures) {
   console.log(`enemyfsmruins: ${failures} failures`);
   process.exit(1);
