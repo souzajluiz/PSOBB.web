@@ -11568,3 +11568,75 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 **Left:** the Pioneer 2 stage-selection counter (its opener and the 17-row list), the records window's text (the separator and prefix strings, the stage-name format address), the S-rank name window (keyboard), the grave's model and killer line, the drop ground test, the sounds, a Chrome check.
 
 **Checks:** `node tests/cmode.test.ts` (the Episode 1 and other rows against the exe table, the types valid for `buildSRankWeapon`, the name filter, 8-char limit); `tests/quests.test.ts`, `tests/questflow.test.ts`, `tests/townfield.test.ts` pass; client `tsc --noEmit` clean (Node 24). Not run in Chrome.
+## 2026-10-23: lobby Home menu: Symbol Chat and Guild Card traced, not ported
+
+No code change. Both leaves need data the port does not have, so neither was ported
+in one pass (the rule: a leaf is ported whole or not at all).
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump lines):
+- Menu ids (enum `player_menu_entry`, 79629): `guild_card_menu` = 14 (0xe),
+  `chat_shortcut_menu` = 17 (0x11), `symbol_chat_menu` = 18 (0x12). Matches
+  `classic/mainmenu.ts` CHAT.
+- `handle_player_menu_select` (700118): each leaf allocates its object in the main arena
+  and stores it at the menu's +0x20. Symbol Chat: alloc 0x70, `local_8 = 0xc`,
+  `ChatShortcutMenuWindow_Constructor_0075882c` (728581). Guild Card: alloc 0x90,
+  `local_8 = 0xd`, `GameListMenuContainer_Constructor_00744a60` (714610, a plain field
+  init: +0x2c = -1, +0x84..0x8c = 0, vtable `PTR_LAB_00b41948`).
+- The dump's names for these two are not trusted (the lessons in HANDOFF): the
+  constructor for 0x12 sets a capture singleton (`render_capture_symbol_chat_down_arrow`),
+  the constructor for 0xe only sets fields; the real behaviour is in their state handlers.
+
+**Symbol Chat (0x12), what the exe does:**
+- `ChatShortcutMenuWindow_Process_00758900` (728631..729511, about 880 lines): state 0 / 1
+  builds a list of 12 chat-message slots (`GetChatMessagePtr_0077d8d0`,
+  `GetChatMessageStringId_0077d910`, `ChatMessage_IsValid_0077d948`; a valid slot is drawn
+  with 0x66, an empty one with cursor flags), at `get_gui_position(0x7e)` (list item) and
+  `get_gui_position(0x7a)` (the list window, title `unitxt(11, 0x44)`), width 220.0
+  (0x435c0000); state 2 reads the selection; flag 2 (chosen) goes to state 3 and
+  `ProcessChatMessageType_0077d880`; flag 4 (cancel) goes to state 0x2a.
+- Other sub-windows in the same file: `CreateOptionList_00759e10`, `CreateChatItemWindow_00759ee8`,
+  the capture list (`ToggleCaptureWindow_00759fcc`, `IsCaptureItemSelected_0075a114`,
+  `InitializeCaptureList_0075a17c`), the shortcut list (`UpdateShortcutList_0075a208`,
+  `CreateShortcutListItems_0075a28c`), the keyboard input (`CreateKeyboardInput_0075a720`)
+  and the yes / no (`YesNoWindow_Constructor_0075a690`).
+- Blockers: the capture list needs the symbol art (captured screen images stored in
+  the character file and on the quest side: `create_symbol_chat_capture_buffer`, opcode
+  0xF943, and `get_recent_symbol_chat` 0xF942, both only named in `formats/questopcodes.ts`);
+  the port keeps neither. Keyboard entry and the 12 phrase slots are a separate data path
+  (ASSUMED: the Chat > Shortcut leaf 0x11 uses the same phrase list; its constructor
+  `ChatShortcutMenu_Constructor_00754c8c` is not traced).
+
+**Guild Card (0xe), what the exe does:**
+- `GuildCardMenuStateHandler_00746bdc` (714652..716264, about 1600 lines): the window
+  state machine (states 0 / 1 close the sub-windows and build the menu window, 2 shows the
+  list, 3 shows the sub-list, then the confirm dialog and the search / card windows).
+- `CreateGuildCardMenuWindow_0074736c` (716268): window at `get_gui_position(0x82)`, title
+  `unitxt(11, 0x30)`, rows `unitxt(11, 0x65)` (state 3), `0x66` (state 0xb), `0x67` (state
+  0x1d), and `unitxt(11, 0x117)` (state 0x39): enabled only in `logged_in`, otherwise
+  greyed (`ListWindowObject_AddListItem_00735ee0` flag 6). Scroll position 0x43330000
+  (178.75).
+- `CreateGuildCardConfirmDialog_00747430` (716303): Yes / No at `get_gui_position(0x83)`,
+  text table `0x0097340c`.
+- `CreateGuildCardListWindow_0074744c` (716316): the list's item text comes from the table
+  at `0x00973414` (`unitxt` ids indexed by the list's selection, 0x80 flags).
+- The list's data is the ship's guild card book: the exe sends ship packets `0xEA`
+  subcommand 5 (`send_packet0xea_subcommand5`, 777863) and handles the ship's `0x41` guild
+  reply (`handle_ship_packet0x41`, 809943). The port has no 0xEA / 0x41 handling and no
+  guild card list (the only guild card data is the own card in the character file,
+  `net/charfile.ts` GuildCardBB at 0x19C0). Whether newserv implements 0xEA / 0x41 is not
+  checked here.
+
+**Not done, and why:** the window rectangles are not resolved (the GUI table 0x00971f40,
+8-byte stride, was not read: only the get_gui_position indices 0x7a, 0x7e, 0x82, 0x83, 0x84
+are in the dump), the rows' state codes beyond the constructors, the input key table and
+the back key (the state handler's close path) are not traced in full.
+
+**ASSUMED:**
+- The dump's names (`ChatShortcutMenuWindow`, `GameListMenuContainer`) describe the
+  windows they build; the state handlers were used for the behaviour, not the names.
+- The two leaves are independent of each other; each needs its own session.
+
+**Next step (in order):** (1) Guild Card: port the server's card book first (0xEA / 0x41
+in `net/`, check newserv's support), then the state handler's list and confirm rows; (2)
+Symbol Chat: the symbol art store (0xF942 / 0xF943 and the character file's capture area)
+before the list; (3) Chat > Shortcut (0x11) with the same phrase list as Symbol Chat.
