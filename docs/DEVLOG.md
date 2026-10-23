@@ -11792,3 +11792,56 @@ worktree.
 **Not ported (left):** the Monest's flinch (4) and hit reaction (7) and their kill path (above); the Mothmant's flinch trigger; the Mothmant's ground kill (7), fall (8) and dead flag (9) are the deathfx path (the fall's landing VERIFIED earlier), not changed here.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/enemyfsm.test.ts` ("all checks passed"), `enemies`, `combatdepth`, `waves`, `enemysplits` pass. The intro's numbers with the animation ended from the start: drop to animation 9 at tick 159, intro 229 ticks; wake animation at wake tick 60 (transition as tick 1), children at 69 and 79, dormant at 90. No browser check (no Playwright, no Chrome).
+## 2026-10-23: confusion steering on the attack heading (dispatch_action_attack_step1..3)
+
+**What the exe does (dump `refsrc/.../Psobb.exe-05112026.c`):**
+- `dispatch_action_attack_step1` (line 586811): the `is_player_in_unsafe_map` gate, then the
+  heading is the angle to the primary target (`int_angle_between`, or `param_1->heading` with no
+  target), then `modify_direction` (line 586837), then the 6x43 subcommand with that heading in
+  `local_c`. The step writes nothing else to the player.
+- `dispatch_action_attack_step2` (586506, `modify_direction` at 586529) and
+  `dispatch_action_attack_step3` (586297, at 586320) have the same shape for the combo steps.
+  So a confused strike on an unsafe map is sent at a random heading, with or without a target.
+- The palette press (`unknown_handle_palette_inputs`, the attack branch at 555922 / 555980 /
+  556038, and `unknown_handle_main_palette_slot_down_activation` at 557161): when the movement
+  input is over the threshold, `param_1->heading = modify_direction(camera_amount)` before
+  `handle_input_movement_related(attack_step1, dispatch)`.
+- The camera-driven calls at 587236 / 587263 are `unknown_handle_gamepad_input_move`, the
+  movement path already ported (`MoverInput.steer`). The calls at 581529..581777 are the
+  move-start and move-stop paths, also the movement steer.
+- Premise check: the technique cast does not steer. The tech branches of the palette press
+  (557168, 555932, 555992, 556048) go to `handle_input_movement_related(cast_tech, dispatch)`
+  with no `modify_direction`; `handle_input_state_cast_tech` case 9 (585815..585853) turns the
+  caster to the first target's angle (`int_angle_between`, 585835) or keeps `heading` (585832),
+  no rand. The `cast_tech` packet (585936) carries no heading. Techniques are not confused-steered.
+
+**Ported:**
+- `render/playermove.ts` `attackHeading(rad, confused, rand)`: the heading goes through
+  `modifyDirection` (`toBams` in, `fromBams` out) and is returned unchanged when not confused
+  (no rand call).
+- `render/combat.ts` `startAttack`: the 6x43 is sent with `attackHeading(me.angle, confused, rand)`,
+  `confused = status.has(confusion) && inUnsafeMap(area)`, one draw per strike (C `rand()`
+  0..32767, as the movement steer). `me.angle` itself is not written with the random: the exe
+  writes only the packet's `local_c`, so the weapon cone (`weaponTargets`) keeps the real heading.
+- Remote clients turn to the packet's angle (`remoteAttack` -> `setPlayerAngle`), so they see the
+  random strike heading, as they would in the exe.
+
+**Not ported:**
+- The palette press's `param_1->heading = modify_direction(camera)` write (555922 / 555980 /
+  556038 / 557161). The port's press does not write the facing; the mover's per-tick steer
+  already randomises the heading while the player walks. Porting the write would mean a one-tick
+  random turn on the press; not traced further.
+- Steps 2 and 3 use the port's current `weaponTargets(...)[0]`, while the exe uses the primary
+  target locked at step 1 (`update_player_targeting_info`, 588704). Not changed here.
+
+**ASSUMED:**
+- The step bodies store nothing but the packet's `local_c`, so the local facing is not changed
+  by the scramble (read from the step bodies, not from a runtime trace).
+- `rand()` is the uniform 0..32767 of the port's `Math.random` draw, as in the movement entry.
+
+**Tests:** `tests/status.test.ts` (`attackHeading` off: heading kept, no rand call; on: the BAMS
+value of the draw, one rand call, rand 0 -> heading 0). `node tests/status.test.ts` and
+`tests/playermove.test.ts` / `tests/playerfx.test.ts` pass. `npx tsc --noEmit -p .` in `client/`
+is clean. `tests/combat.test.ts` not run (needs `vendor/newserv/build/newserv`). The fresh
+worktree had no `client/node_modules` (`three` not found); the run used a temporary symlink to
+the main checkout's `client/node_modules`, removed before the commit.

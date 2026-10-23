@@ -108,6 +108,17 @@ export function modifyDirection(heading: number, confused: boolean, rand: () => 
   return Math.round(((r / DIRECTION_NORMALIZATION) * DEGREES_360 * DIRECTION_SCALE) / DEGREES_360) & 0xffff;
 }
 
+// The heading an attack is sent with (dispatch_action_attack_step1 at dump line 586837,
+// _step2 at 586529, _step3 at 586320): the target's angle (or the player's heading) goes
+// through modify_direction before the 6x43 packet's local_c, so a confused player's
+// strike carries a random heading. Radians in and out; the exe writes only the packet,
+// the player's own heading (param_1->heading) is not changed by the step (ASSUMED from the
+// step bodies, which store nothing but local_c).
+export function attackHeading(rad: number, confused: boolean, rand: () => number): number {
+  if (!confused) return rad;
+  return fromBams(modifyDirection(toBams(rad), true, rand));
+}
+
 // The keyboard ramp (0x0070a60c): a held key moves its axis by 32 a poll up
 // to 128 (the stand-state "amount" is |axis| / 128 against 0.1, and the sum of
 // squares / 16384 against 0.1 / 0.75 while moving); a released key drops to 0.

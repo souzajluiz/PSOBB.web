@@ -132,7 +132,7 @@ import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTarg
 import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
-import { inUnsafeMap, slowApplies } from './playermove.ts';
+import { attackHeading, inUnsafeMap, RAND_MAX_C, slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
 import {
   canUseSpecialAttack,
@@ -5675,7 +5675,10 @@ export class CombatView {
       const p = primary.instance.root.position;
       me.angle = facingOf(p.x - from.x, p.z - from.z);
     }
-    this.game.sendAttack(step, me.angle, type);
+    // modify_direction in each dispatch_action_attack_step (see attackHeading): a confused
+    // player on an unsafe map strikes at a random heading (should_do_confused_movement).
+    const confused = this.status.has(STATUS.confusion) && inUnsafeMap(this.area);
+    this.game.sendAttack(step, attackHeading(me.angle, confused, () => Math.floor(Math.random() * (RAND_MAX_C + 1))), type);
     // The weapon's attacks_per_step sets the Mechgun's bursts (combat/attack.ts burstCount).
     const weapon = this.equippedWeapon();
     this.attack.begin(step, type, weapon ? burstCount(weapon.data1[1], weapon.data1[2]) : 1);
