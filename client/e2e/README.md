@@ -42,3 +42,18 @@ installed Google Chrome (`channel: 'chrome'`), so no browser download is needed.
   (player_webbattle_0.psochar / .psobank, system_webbattle.psosys) with palette slot 2 set to a
   trap, group 1 = 4 and group 2 = 0x0d, at file offset 0x3f8 (the palette's E7 offset 0x3f0 plus
   the file's 8-byte header).
+- `pioneer2-shop.spec.ts`: a fresh account per run (`wsh...`, or `PSO_USER`), made and entered
+  through `fresh-field.ts`. Its character is funded offline with 200 meseta before the shop step:
+  the page leaves the server, `bridge/admin-chars.mjs` (`applyCharacterPatch`, `writeCharacter`,
+  backup under `system/players/_admin-backups`) sets the meseta in `player_<user>_0.psochar`, and
+  the account logs in again. The clerk's list is then bought from (the first row the wallet pays,
+  one piece; rows dearer than the wallet answer "not enough meseta"), the meseta drops and the bag
+  grows (a new kind, or a stack), and the window closes. Each run leaves one account behind.
+- `fresh-field.ts`: the shared steps of the fresh-account tests (log in, make slot 0 if empty,
+  optional offline funding, reach the lobby, create a PARTY, enter it).
+- `drop.spec.ts`: an unequipped item from the bag is dropped on Pioneer 2 with `GameItems.drop`
+  (the call behind the item menu's Drop). The game's sends are wrapped on the page: 6x2C (900
+  frames, at the player), then 6x2A, then 6x2D, in that order and nothing else. The item is on the
+  floor on a search ring (6 * r, r 1..6) from the player, on the ground (+6), with no wall between
+  the eye and the spot (`collision.segmentHit`, mask -1); it left the bag; a held W (300 ms) moves
+  the player again.
