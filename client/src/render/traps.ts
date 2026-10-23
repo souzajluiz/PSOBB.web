@@ -303,14 +303,20 @@ export class SealDoor {
 // --- Seabed capture traps (TOTrapSeabed01, 0x0228) and trap vision -----------
 //
 // Object 0x0228 is the Seabed capture trap: the o.dat type table row (VA 0x00a084e4
-// and its copies) pairs 0x0228 with the creator CreateDerolleTrapEntity_0063ee10
-// (the pillar types 0x0154 / 0x0167 pair with their own creators the same way), and
-// that creator builds the object on DerolleEnemyVTable3 (0x00b2df80) through
+// and its copies) pairs 0x0228 with the creator CreateDerolleTrapEntity_0063ee10,
+// which builds the object on DerolleEnemyVTable3 (0x00b2df80) through
 // InitializeDerolleTrapEntity_0063ec24. VERIFIED (exe bytes, dump names).
 //
-// Cloak: ApplyDerolleTrapInitData_0063ea98 reads param5 (+0x88) as an int and clamps it
-// to 0..1; +0x354 = 1 when it is above 0 ("offset 0x354 is != 0 when it's cloaked" in
-// render_capturetrap). VERIFIED.
+// Init (ApplyDerolleTrapInitData_0063ea98, VERIFIED): +0x68 (param1) = 0.1 (0x00934514) when
+// below 0.1, else min(param1, 10) (0x00934508); the animation speed +0xc8 is that same value.
+// +0x33c (the idle's radius) and +0x340 = 15.0 (0x41700000). +0x84 (param4) clamped 1..60, +0x350 =
+// it x 30 (not read by the handlers traced here). +0x88 (param5) clamped 0..1, +0x354 = 1 when
+// it is above 0 (the cloak). +0x6c clamped to >= 0, +0x35c = that x the difficulty's factor
+// (1, 2, 3, 6, DAT_00a9cd68; not read here). +0x8c (param6) clamped 0..5, +0x358 = it.
+// +0xc0 (the spring's motion frame) = 0; +0x348 (the hit counter) = 1 (InitializeBaseMapObject).
+//
+// Cloak: +0x354 != 0 selects the cloak pass in render_capturetrap (recursively_render_capture_
+// trap_njm, unknown_set_advanced_effect_cloaked). VERIFIED.
 //
 // Trap vision: the player's unknown_flags_2 (player +0x33c) bit 0x10000 (dump enum
 // has_trap_vision = 65536). The bit follows the player's +0x964 bit 0x10: FUN_00695b48 sets
@@ -321,46 +327,71 @@ export class SealDoor {
 // temporary after a Trap Vision tool (ReceiveSubcommands.cc, the flag table); no duration
 // is in newserv.
 //
-// Reveal: EnemyAIUpdateState_0063a034 in state 0 calls vtable +0x154, which is
-// IsPlayerVisibleToPartTrap_0063a208: any of the four player slots in the trap's room with
-// the has-trap-vision bit (no distance). When it is true the state becomes 1. State 1's
-// handler (vtable +0x148 = DerollePartObjectEnableReticle_0063a3bc) enables the reticle (the
-// marker: enable_reticle makes the trap targetable for each player's lock-on) and runs the
-// idle (vtable +0x144, DerollePartObjectUpdateTarget_0063a3d8). No handler sets the state
-// back to 0: the reveal is sticky. VERIFIED.
+// The state machine (EnemyAIUpdateState_0063a034, 30 AI ticks a second, VERIFIED): the vtable
+// slots of DerolleEnemyVTable3 are +0x144 idle (DerollePartObjectUpdateTarget_0063a3d8), +0x148
+// state 1 (DerollePartObjectEnableReticle_0063a3bc: enable_reticle, then the idle), +0x14c state 2
+// (SawMapObjectUpdateAnimation_0063e7a4), +0x150 state 3 (SawMapObjectHandleHit_0063e72c), +0x154
+// IsPlayerVisibleToPartTrap_0063a208 (any of the four slots in the trap's room with the bit).
+// Every tick: state 0 asks the vision (-> 1), then the idle runs for states 0 and 1; states 2
+// and 3 run their handler instead. The dispatch is one handler per tick.
+//   Trigger (idle): EnemyGetNearestTargetInRange_007714cc(radius +0x33c = 15) finds the nearest
+//   player (entity on the floor, not dead or hidden; the exe also rays the map, not ported); its
+//   XZ distance squared below 15^2 -> state 2. So a trap fires on a player in range whether or
+//   not anyone has trap vision; the reveal only sets the reticle.
+//   2 spring (SawMapObjectUpdateAnimation): anim (+0xc0) += speed (+0xc8) each tick. When it is
+//   above (njm frame count - 1) (+0.0 from 0x009344d0; with no motion the float 2^32 keeps it
+//   going), anim is clamped to that, state = 3, and EnemyAcquireTargetAndAttack_0063e444 runs:
+//   the nearest player in 15 (cleared when none); r = +0x340 - the player's hitbox radius (+0x340
+//   is rewritten by the call); XZ distance squared < r^2 -> SawMapObjectPlaySound (the seabed or
+//   jungle SE, positional at the trap) and SnowBerillSendAttackPacket_006937c8 with the player as
+//   its `this`: 6x2C {client id, frames 0xffff, particle 0, the trap's x / z, r^2}. 0xffff is the
+//   frames value: the hold has no timer (the release is 6x2D, see below).
+//   3 hold (SawMapObjectHandleHit): the counter (+0x348) drops by 1 a tick. While it is 0 or more
+//   the SE plays (SawMapObjectPlaySound); below 0 the exe hits the target with vtable try_hit_entity
+//   (1.0) and unknown_melee_attack_2 every tick (damage UNCLEAR, not ported). Nothing in these
+//   handlers sets the state back: the trap stays in 3.
+//   Release: the trap's on-interact (vtable +0x5c = SawMapObjectOnInteract_0063ed78) runs
+//   SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0: the captured player (the nearest of
+//   the trap's target, by client slot) with the movement_disabled flag gets DisablePlayerMovement_
+//   00685514, i.e. 6x2D (the release). UNCLEAR: which input the on-interact is driven by; the web
+//   has no object interaction key (switches are stood on), so the release is not wired.
 //
-// Radius: ApplyDerolleTrapInitData stores 0x41700000 (15.0) at +0x33c. The idle reads that
-// slot as a float radius for EnemyGetNearestTargetInRange (the dump types it as an int, which
-// is a naming artifact). ASSUMED to be the float 15.0.
+// Reticle (state 1): enable_reticle (dump 575550) makes the trap a lock-on target for each
+// player's weapon targeting list (check_enemy_is_targetable); the drawing is not ported.
 //
-// Draw: render_capturetrap (dump 503294) and render_inactive_capture_trap (503119): a
-// view-distance test (vtable +0x24 = GiGuesGetViewDistance_007ba468 with 400 and
-// 100), then the state: below 2 (idle, revealed or not) the inactive draw, from 2 the active
-// draw (render_active_capturetrap, which has no cloak check). The inactive draw of a cloaked
-// trap returns early when the advanced-effects setting is off (get_settings_advanced_effect);
-// with it on, each mesh is drawn through the cloak pass (unknown_set_advanced_effect_cloaked,
-// texture matrices only). So the reveal does NOT change what is drawn: a cloaked trap is
-// drawn as a cloak in states 0 and 1 whether or not anyone has trap vision, and the trap
-// vision only sets the reticle. There is no fade-in ramp (no alpha is animated in the trap or
-// the cloak setup). VERIFIED from the dump; the advanced-effects setting is ASSUMED on (the
-// same assumption as combat/enemyfsmep2c.ts).
-//
-// Wired: render/gamefield.ts feeds every capture trap the players' rooms and vision bits
-// (captureTicks, visionSlots: androids only, from the class flag) and draws it by captureTrapDraw
-// (objectview.ts setCaptureDraw). The cloak is an ASSUMED translucent shader (objectview.ts
-// cloakMaterial): the exe's projected effect texture is not in the web's data.
-// Not ported: the spring and hold of 0x0228 (sub-states 2 and 3: EnemyAcquireTargetAndAttack
-// 0x0063e444 and the handlers at 0x0063e7a4 / 0x0063e72c; the spring's motion is the BML's njm),
-// the reticle's drawing, and the Trap Vision tool's temporary bit (UNCLEAR, see above).
+// Draw: render_capturetrap (dump 503294) and render_inactive_capture_trap (503119): a view
+// test (vtable +0x24 = GiGuesGetViewDistance_007ba468 with 400), then the state: below 2 the
+// inactive draw (the cloak rule), from 2 the active draw (render_active_capturetrap, the
+// spring's njm frame +0xc0, no cloak check). The advanced-effects setting is ASSUMED on.
 
 export const TRAP_CAPTURE = 0x0228; // TOTrapSeabed01 (the Seabed capture trap)
 export const TRAP_VISION_FLAG = 0x10000; // player unknown_flags_2 (has_trap_vision)
-export const CAPTURE_RADIUS = 15; // ASSUMED float 0x41700000 at +0x33c
+export const CAPTURE_RADIUS = 15; // +0x33c (idle radius) and +0x340 (0x41700000, ApplyDerolleTrapInitData)
 export const VIEW_DISTANCE = 400; // vtable +0x24 arg 0x43c80000 (400.0); its mesh radius 0x42c80000 (100.0) is not used here
+export const CAPTURE_SPEED_MIN = Math.fround(0.1); // 0x00934514 (and 0x0093450c)
+export const CAPTURE_SPEED_MAX = 10; // 0x00934508
+export const HOLD_UNTIL_RELEASED = 0xffff; // 6x2C frames argument of the capture hold (EnemyAcquireTargetAndAttack)
+// ASSUMED: a player's hitboxes->radius (the pillar traps' PLAYER_RADIUS, combat/enemyfsm.ts).
+export const CAPTURE_PLAYER_RADIUS = 5;
 
 // The cloak flag: param5 (+0x88), an int clamped to 0..1 (ApplyDerolleTrapInitData).
 export function captureTrapCloaked(params: readonly number[]): boolean {
   return Math.trunc(params[4] ?? 0) > 0;
+}
+
+// The animation speed (+0xc8) and the clamped param1 (+0x68): ApplyDerolleTrapInitData_0063ea98.
+export function captureSpeed(p1: number): number {
+  if (!(p1 >= CAPTURE_SPEED_MIN)) return CAPTURE_SPEED_MIN;
+  return Math.fround(Math.min(p1, CAPTURE_SPEED_MAX));
+}
+
+// SawMapObjectPlaySound_0063e288 (PlayDirectionalSFX, positional): the jungle group (cca, jungle
+// east / north, mountain, seaside) 0x4da and the seabed group (upper / lower) 0x4fe. ASSUMED: the
+// areas 23..27 are the jungle group and 28 / 29 the seabed one (the DEVLOG's floor list).
+export function captureSound(area: number): number | null {
+  if (area >= 23 && area <= 27) return 0x4da;
+  if (area === 28 || area === 29) return 0x4fe;
+  return null;
 }
 
 // The has-trap-vision bit of a player's unknown_flags_2 (player +0x33c).
@@ -399,24 +430,124 @@ export function captureTrapDraw(cloaked: boolean, advancedEffects: boolean, inVi
   return advancedEffects ? 'cloak' : 'hidden';
 }
 
+// A player as the trap's nearest search sees it (EnemyGetNearestTargetInRange: the floor's players).
+export interface CapturePlayer {
+  clientId: number;
+  x: number;
+  z: number;
+  radius: number; // hitboxes->radius
+}
+
+export interface CaptureInput {
+  slots: readonly (VisionPlayer | null)[]; // the four client slots (trap vision)
+  room: number; // the trap's room
+  players: readonly CapturePlayer[]; // the players on the trap's floor
+  selfId: number; // the local client id (the hold goes to it only)
+  springFrames: number; // the spring motion's frame count; 0 = not known (the spring does not end)
+}
+
+// Nearest player whose XZ distance squared is under max^2 (EnemyGetNearestTargetInRange_007714cc,
+// the strict test updates the best). ASSUMED: the exe's map ray test is left out.
+function nearestInRange(players: readonly CapturePlayer[], x: number, z: number, max: number): CapturePlayer | null {
+  let best: CapturePlayer | null = null;
+  let bestD = max * max;
+  for (const p of players) {
+    const dx = p.x - x;
+    const dz = p.z - z;
+    const d = dz * dz + dx * dx;
+    if (d < bestD) {
+      best = p;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
 export class CaptureTrap {
   readonly cloaked: boolean;
-  readonly radius = CAPTURE_RADIUS;
-  // State 0 (idle) or 1 (revealed by trap vision). Sticky: nothing in the state 1 handlers
-  // returns it to 0.
+  readonly radius = CAPTURE_RADIUS; // +0x33c
+  readonly speed: number; // +0xc8
+  readonly sound: number | null;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  // Trap vision seen (sticky: nothing clears it).
   revealed = false;
+  // +0x32e: 0 idle, 1 revealed (trap vision), 2 spring, 3 hold. Only 0 -> 1 comes from the vision,
+  // 1 -> 2 from the idle (a player in range); nothing returns to 0 or 1.
+  state: 0 | 1 | 2 | 3 = 0;
+  // +0xc0: the spring motion frame (render_active_capturetrap reads it).
+  anim = 0;
+  // +0x340: EnemyAcquireTargetAndAttack rewrites it (r -= the player's radius) on each call.
+  private reach = CAPTURE_RADIUS;
+  // +0x348: the hit counter of SawMapObjectHandleHit (1 at construction, never reset here).
+  private counter = 1;
 
-  constructor(params: readonly number[]) {
+  constructor(params: readonly number[], area = 0, at: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 }) {
     this.cloaked = captureTrapCloaked(params);
+    this.speed = captureSpeed(params[0] ?? 0);
+    this.sound = captureSound(area);
+    this.x = at.x;
+    this.y = at.y;
+    this.z = at.z;
   }
 
-  // One AI tick: EnemyAIUpdateState_0063a034 in state 0 asks IsPlayerVisibleToPartTrap.
-  frame(players: readonly (VisionPlayer | null)[], room: number): void {
-    if (!this.revealed && trapVisionSeen(room, players)) this.revealed = true;
+  // One AI tick (EnemyAIUpdateState_0063a034). The returned events are the exe's calls out: the
+  // 6x2C hold (only for the local player), positional SEs.
+  frame(input: CaptureInput): TrapEvent[] {
+    const out: TrapEvent[] = [];
+    if (this.state === 0 && trapVisionSeen(input.room, input.slots)) {
+      this.revealed = true;
+      this.state = 1;
+    }
+    if (this.state <= 1) {
+      this.idle(input);
+    } else if (this.state === 2) {
+      this.spring(input, out);
+    } else {
+      this.hold(out);
+    }
+    return out;
   }
 
-  // The state the draw reads: 0 / 1 (inactive); the spring (2+) is not ported.
-  get state(): 0 | 1 {
-    return this.revealed ? 1 : 0;
+  // DerollePartObjectUpdateTarget_0063a3d8: a player within the radius -> spring.
+  private idle(input: CaptureInput): void {
+    if (nearestInRange(input.players, this.x, this.z, this.radius)) this.state = 2;
+  }
+
+  // SawMapObjectUpdateAnimation_0063e7a4 (+ EnemyAcquireTargetAndAttack_0063e444 at the end).
+  private spring(input: CaptureInput, out: TrapEvent[]): void {
+    this.anim = Math.fround(this.anim + this.speed);
+    // njm frame count - 1 (+0.0 from 0x009344d0). With no motion the exe's value is 2^32 - 1 (never ends).
+    const end = input.springFrames > 0 ? input.springFrames - 1 : Infinity;
+    if (this.anim <= end) return;
+    this.anim = end;
+    this.state = 3;
+    const target = nearestInRange(input.players, this.x, this.z, this.radius);
+    if (!target) return;
+    this.reach = Math.fround(this.reach - target.radius);
+    const dx = target.x - this.x;
+    const dz = target.z - this.z;
+    if (dz * dz + dx * dx < this.reach * this.reach) {
+      const r2 = Math.fround(this.reach * this.reach);
+      // SnowBerillSendAttackPacket_006937c8 is sent for the target; the packet goes out for the local player.
+      if (target.clientId === input.selfId) {
+        out.push({ kind: 'hold', clientId: target.clientId, frames: HOLD_UNTIL_RELEASED, x: this.x, z: this.z, radius2: r2 });
+      }
+      if (this.sound !== null) out.push({ kind: 'sound', id: this.sound });
+    }
+  }
+
+  // SawMapObjectHandleHit_0063e72c: the counter drops; while it is 0 or more the SE plays. Below 0
+  // the exe hits the target every tick (damage not ported, UNCLEAR).
+  private hold(out: TrapEvent[]): void {
+    this.counter -= 1;
+    if (this.counter >= 0 && this.sound !== null) out.push({ kind: 'sound', id: this.sound });
+  }
+
+  // The local player's release (6x2D; SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0). The
+  // input that calls it is UNCLEAR (not wired); the state is not changed by it in the exe.
+  release(clientId: number): TrapEvent {
+    return { kind: 'release', clientId };
   }
 }

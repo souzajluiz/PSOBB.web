@@ -145,6 +145,7 @@ export class GameView {
       talkCamera: () => this.npcs.talkCameraView(),
       bossCamera: () => this.combat.bossCameraView(),
       trap: (ev, trap) => this.combat.trapEvent(ev, trap),
+      captureTrap: (ev) => this.combat.captureTrapEvent(ev),
     });
     this.items = new GameItems(game, { ...character, log });
     // Join sync (net/joinsync.ts): when we lead and a player joins, the

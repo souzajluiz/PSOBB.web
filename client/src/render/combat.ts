@@ -4016,6 +4016,19 @@ export class CombatView {
     }
   }
 
+  // The Seabed capture trap (TOTrapSeabed01; render/traps.ts CaptureTrap): its hold is the 6x2C on
+  // the local player with frames 0xffff (no timer, EnemyAcquireTargetAndAttack_0063e444), and the
+  // release is the 6x2D (SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0). The release's input
+  // is not wired (UNCLEAR, see traps.ts), so the hold lasts until a 6x2D is sent.
+  captureTrapEvent(ev: TrapEvent): void {
+    if (ev.kind === 'hold') this.imposeHold({ frames: ev.frames, particle: 0, x: ev.x, z: ev.z, radius2: ev.radius2 }, 'capture trap');
+    else if (ev.kind === 'release') {
+      if (this.holdTicks > 0) this.game.sendReleaseHold();
+      this.holdTicks = 0;
+      this.opts.log('capture trap: hold released');
+    }
+  }
+
   // The local hold of an item drop (0x0068d878's 6x2C; the packet is sent by
   // GameItems, net/items.ts). 6x2D releases it (releaseLocalHold).
   holdLocal(frames: number): void {

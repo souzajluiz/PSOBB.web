@@ -7,12 +7,19 @@
 //  4. TOTrapSeabed01 (0x0228, the Seabed capture trap): the cloak flag from
 //     param5, the trap vision bit (0x10000) and the same-room check of
 //     IsPlayerVisibleToPartTrap, the sticky reveal, the view distance and the
-//     draw modes of render_capturetrap.
+//     draw modes of render_capturetrap;
+//  5. the trap vision source (class flag 0x10) and the reveal as gamefield feeds it;
+//  6. the capture trap's trigger (idle, 15 in XZ), the spring (njm frames, the attack at
+//     its end, 6x2C with frames 0xffff for the local client), the hold's SE and the release event.
 // Run: node tests/traps.test.ts
 import {
   CAPTURE_RADIUS,
+  type CapturePlayer,
   CaptureTrap,
+  captureSound,
+  captureSpeed,
   captureTrapCloaked,
+  HOLD_UNTIL_RELEASED,
   captureTrapDraw,
   hasTrapVision,
   PillarTrap,
@@ -136,11 +143,12 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
 
   const ct = new CaptureTrap([0, 0, 0, 0, 1, 0]);
   check(ct.cloaked && ct.radius === 15 && ct.state === 0, 'a new cloaked capture trap is idle');
-  ct.frame([{ room, flags: 0 }], room);
+  const inp = (slots: (VisionPlayer | null)[], r: number, players: CapturePlayer[] = []) => ({ slots, room: r, players, selfId: 0, springFrames: 4 });
+  ct.frame(inp([{ room, flags: 0 }], room));
   check(ct.state === 0 && !ct.revealed, 'no trap vision: stays idle');
-  ct.frame(seeing, room);
+  ct.frame(inp(seeing, room));
   check(ct.revealed && ct.state === 1, 'trap vision in the room: state 1');
-  ct.frame([], room);
+  ct.frame(inp([], room));
   check(ct.revealed, 'the reveal is sticky (nothing sets state 0 again)');
 
   check(withinViewDistance(0) && withinViewDistance(-400) && !withinViewDistance(-400.5) && !withinViewDistance(1), 'view distance 400 in front of the camera');
@@ -162,12 +170,88 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   const androidFlags = isAndroid(4) ? 0x10000 : 0;
   const ct = new CaptureTrap([0, 0, 0, 0, 1, 0]);
   const room = 3;
-  ct.frame([null, null, { room, flags: androidFlags }, null], room);
+  ct.frame({ slots: [null, null, { room, flags: androidFlags }, null], room, players: [], selfId: 0, springFrames: 4 });
   check(ct.revealed, 'an android in the trap room reveals a cloaked capture trap');
   check(captureTrapDraw(ct.cloaked, true, true, false) === 'cloak', 'the revealed trap still draws as the cloak (the draw does not read the reveal)');
   const human = new CaptureTrap([0, 0, 0, 0, 1, 0]);
-  human.frame([{ room, flags: isAndroid(0) ? 0x10000 : 0 }], room);
+  human.frame({ slots: [{ room, flags: isAndroid(0) ? 0x10000 : 0 }], room, players: [], selfId: 0, springFrames: 4 });
   check(!human.revealed, 'a human in the room does not reveal it');
+}
+
+// 6. Seabed capture trap, the trigger, the spring and the hold (EnemyAIUpdateState_0063a034 and the
+// handlers 0x0063a3d8 / 0x0063e7a4 / 0x0063e444 / 0x0063e72c).
+{
+  const none: (VisionPlayer | null)[] = [null, null, null, null];
+  const at = (x: number, z: number, clientId = 0, radius = 5): CapturePlayer => ({ clientId, x, z, radius });
+  const run = (ct: CaptureTrap, players: CapturePlayer[], springFrames: number, selfId = 0) => ct.frame({ slots: none, room: 0, players, selfId, springFrames });
+  check(captureSpeed(0) === Math.fround(0.1) && captureSpeed(NaN) === Math.fround(0.1) && captureSpeed(1) === 1 && captureSpeed(50) === 10, 'speed: param1 clamped to 0.1..10');
+  check(captureSound(23) === 0x4da && captureSound(27) === 0x4da && captureSound(28) === 0x4fe && captureSound(29) === 0x4fe && captureSound(22) === null, 'SE by area');
+
+  // Trigger: the idle's nearest player in XZ under 15 -> spring, the same tick (state 0 and 1 both run the idle).
+  const near = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  run(near, [at(0, 14.9, 1)], 4);
+  check(near.state === 2, 'a player 14.9 away in XZ springs the trap in the same tick');
+  const edge = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  run(edge, [at(15, 0, 1)], 4);
+  check(edge.state === 0, 'exactly 15 is not in range (strict)');
+  const high = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  run(high, [{ clientId: 1, x: 3, z: 4, radius: 5 }], 4);
+  check(high.state === 2, 'the XZ distance (5) is in range whatever the height');
+  const seen = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  seen.frame({ slots: [null, null, { room: 0, flags: 0x10000 }, null], room: 0, players: [], selfId: 0, springFrames: 4 });
+  check(seen.state === 1 && run(seen, [], 4).length === 0 && seen.state === 1, 'trap vision alone (no player in range) keeps state 1');
+
+  // Spring: anim += speed per tick; past frames-1 (3 for a 4-frame motion) it clamps, state 3, the attack.
+  const hit = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 10, y: 0, z: 20 });
+  run(hit, [at(10, 20 + 14, 1)], 4); // 14 away: springs
+  check(hit.state === 2 && hit.anim === 0, 'springs at frame 0');
+  for (let i = 0; i < 3; i++) run(hit, [at(10, 20 + 14, 1)], 4);
+  check(hit.state === 2 && hit.anim === 3, 'speed 1: frame 3 after 3 more ticks, still springing');
+  // The attack: reach = 15 - 5 = 10; a player at 14 is out of the reach (no hold), the player at 8 is in.
+  const ev = run(hit, [at(10, 20 + 14, 0)], 4);
+  check(hit.state === 3 && hit.anim === 3 && ev.length === 0, 'the spring ends at frame 3, state 3: a 14-away player is out of the 10 reach (no hold, no SE)');
+  const fired = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 10, y: 0, z: 20 });
+  run(fired, [at(10, 20 + 14, 1)], 4);
+  for (let i = 0; i < 3; i++) run(fired, [at(10, 20 + 8, 0)], 4);
+  const shot = run(fired, [at(10, 20 + 8, 0)], 4);
+  const hold = shot.find((e) => e.kind === 'hold');
+  check(fired.state === 3 && hold !== undefined, 'a player 8 away (under the reach of 10) is held when the spring ends');
+  if (hold?.kind === 'hold') check(hold.clientId === 0 && hold.frames === HOLD_UNTIL_RELEASED && hold.frames === 0xffff && hold.x === 10 && hold.z === 20 && hold.radius2 === 100, '6x2C: the local client, frames 0xffff, the trap x / z, radius^2 = 10^2');
+  const other = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 10, y: 0, z: 20 });
+  run(other, [at(10, 34, 1)], 4, 0);
+  for (let i = 0; i < 3; i++) run(other, [at(10, 28, 1)], 4, 0);
+  const oshot = run(other, [at(10, 28, 1)], 4, 0);
+  check(!oshot.some((e) => e.kind === 'hold') && oshot.some((e) => e.kind === 'sound'), 'another client held: no 6x2C here, the SE still plays');
+
+  // The spring with no motion (0 frames) never ends.
+  const still = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  run(still, [at(0, 1, 1)], 0);
+  for (let i = 0; i < 100; i++) run(still, [at(0, 1, 1)], 0);
+  check(still.state === 2, 'no known motion: the spring does not end');
+
+  // Speed 2: the same 4-frame motion ends after 2 ticks (anim 2, 4 > 3 -> clamp to 3).
+  const fast = new CaptureTrap([2, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  run(fast, [at(0, 1, 1)], 4);
+  run(fast, [at(0, 1, 1)], 4);
+  run(fast, [at(0, 1, 1)], 4);
+  check(fast.state === 3 && fast.anim === 3, 'speed 2 reaches the last frame in 2 ticks (clamped)');
+
+  // Hold: the counter 1 -> 0 plays the SE, then nothing (the hit path is not ported).
+  const hold3 = new CaptureTrap([1, 0, 0, 0, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  hold3.frame({ slots: none, room: 0, players: [at(0, 1, 1)], selfId: 0, springFrames: 1 });
+  hold3.frame({ slots: none, room: 0, players: [at(0, 1, 1)], selfId: 0, springFrames: 1 });
+  check(hold3.state === 3, 'springs and ends at once with one frame');
+  const h1 = run(hold3, [], 1);
+  const h2 = run(hold3, [], 1);
+  const h3 = run(hold3, [], 1);
+  check(h1.length === 1 && h1[0].kind === 'sound' && h2.length === 0 && h3.length === 0 && hold3.state === 3, 'hold: the SE once, then no event; the state never clears');
+
+  // No sound for areas outside the groups; the release is 6x2D on the given client.
+  const quiet = new CaptureTrap([1, 0, 0, 0, 0, 0], 3, { x: 0, y: 0, z: 0 });
+  quiet.frame({ slots: none, room: 0, players: [at(0, 1, 1)], selfId: 0, springFrames: 1 });
+  quiet.frame({ slots: none, room: 0, players: [at(0, 1, 1)], selfId: 0, springFrames: 1 });
+  check(quiet.sound === null && quiet.state === 3, 'an area without the SE: the hold still runs silently');
+  check(near.release(0).kind === 'release' && near.release(3).kind === 'release' && (near.release(3) as { clientId: number }).clientId === 3, 'release: a release event for the client');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');
