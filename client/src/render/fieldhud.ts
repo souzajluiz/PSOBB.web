@@ -97,6 +97,8 @@ export interface FieldHudOptions {
   telepipeAllowed?: () => boolean;
   // The local player's status flags (combat/status.ts), for Antidote / Antiparalysis.
   statusFlags?: () => number;
+  // The Moon Atomizer's target (render/combat.ts atomizerTarget), null when none.
+  atomizerTarget?: () => number | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // Sends a command to the game server (the Options window's 0x01ED).
@@ -299,6 +301,7 @@ export class FieldHud {
       maxGrind: (w: { data1: Uint8Array }) => names?.pmt.getWeapon(w.data1[1], w.data1[2])?.maxGrind ?? 0,
       telepipe: () => this.opts.telepipeAllowed?.() ?? false,
       statusFlags: () => this.opts.statusFlags?.() ?? 0,
+      atomizerTarget: () => this.opts.atomizerTarget?.() ?? null,
     };
   }
 

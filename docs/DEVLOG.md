@@ -10041,3 +10041,31 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 **Not changed:** the number on a player (the port shows none for the local player, as the exe); the attribute particle and the status fx.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/hitfx.test.ts`, `playerfx.test.ts` (new asserts: CRITICAL_HIT_FX ids 7, 0xb, 0xc, 0xe and the -20 offset), `combatdepth.test.ts` (new asserts: a critical hit sets the fx flag, a normal one does not), `sound.test.ts` and `combat.test.ts` (with `PSOBB_DATA=~/Downloads/psobb-client/data`, `NEWSERV=vendor/newserv`) pass. Not run: Playwright / Chrome (per the brief).
+## 2026-10-23: The Moon Atomizer's send side (a tool on a dead teammate)
+
+**Report:** using the Moon Atomizer on a dead teammate sent nothing. The port's item use (`net/items.ts` `use`) sent 6x27 for self only. Ported: the target pick (the nearest dead teammate in range), 6x27 then 6x33 `{sender, target}`, and no send without a target (the item is refused, not used up).
+
+**Exe evidence (PsoBB.exe, Ephinea dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, Ghidra decompiles via `tools/ghidra/decomp.sh`, byte checks with `exedata.py`):**
+- Item: `030400` = Moon Atomizer (`bb_items.txt` line 838); `030500` = Star Atomizer.
+- Use entry: the item's vtable `unknown_use_item` runs `FUN_005deb74` (fastcall, this = the item; the owner is the player at `this+0xf8`). It checks `FUN_007ba9d8` (owner `+0x1c` == `DAT_00a9c4f4`, the local player only) and owner `+0x45c` != 0 (the targeting table exists), then `FUN_007a401c(4,9)`. If the record's `+0xa0` target is not -1, it calls `FUN_0069a18c(self id = owner+0x1c, target)`. The entry is `0x005deb74`; the send call is at `0x005debbe`.
+- `SinowberillWeaponObject_FindTargetingParam_007a401c` (`FUN_007a401c`, `0x007a401c`): finds the record with key (val1, val2) in the 14-entry table at `this+0x84` (stride 0x124, `+2` bit 0 = disabled); the record's `+0xa0` is an s16 target id (-1 = none). The record (4,9) is the Moon Atomizer's; (4,10) is `FUN_005de664`'s 6x66 (the Star Atomizer's broadcast). The record's filler (the nearest-dead search that writes it) is not traced: ASSUMED the Reverser's pick.
+- Send: `FUN_0069a18c(self, target)` (`0x0069a18c`): if the sender's `+0x32c` == 2 it returns (no send); else `checked_call(0x33, size 2)` with `[0x33, 2, sender (+2, the header), target (+4), 0 (+6)]`. The receive side (`0x0069a1e0`, `HandlePacket0x60Subcommand0x1d_0069a1e0`) matches the DEVLOG's earlier entry.
+- Trigger and order: `ChallengePlayer_HandleItemUsage_0068dbbc` (`0x0068dbbc`) first runs `SinowberillChallengePlayer_Process_0068be94` (`0x0068be94`). Its case 4 (subclass 4): if owner `+0x45c` != 0 and (no record (4,9) or its target == -1) the use is refused (returns 0; the caller plays SE 0x17 and sends nothing). Otherwise it sends the 6x27 (`use_item` = 0x27, size 2) and goes to state 0x16. The 6x27 echo runs `action_use_item` (`0x00569493`, sender only: `is_packet0x60_subcommand_sent_by_self2`), which calls the item's vtable `unknown_use_item` = `FUN_005deb74`, so the 6x33 follows the 6x27.
+- The item's removal is not in `FUN_005deb74` (nothing removes it there); the consumption path was not traced.
+- The local effect: the 6x33 receive (`0x0069a1e0`) spawns `CreateTechniqueEntity_006ef8a4(sender, pos, [1 target: client_id2, 0xffff pad], 0x1d)`. Note the 4th argument: the Reverser passes its effective level there (`CalculateEffectiveTechniqueLevel`), so 0x1d is an effect-table index of the same family; the object's visual is not decoded.
+
+**Ported:**
+- `client/src/net/items.ts`: `buildRevivePlayer(clientId, target)` (6x33, 8 bytes); `canUse` for subclass 4 needs `rules.atomizerTarget()` (no target = not usable); `use` sends 6x33 after the 6x27 (target from the same rule), then the existing removal.
+- `client/src/render/combat.ts`: `atomizerTarget()` (the Reverser's `reverserTarget` at `ATOMIZER_RANGE` = 10, the 6x33 object's range 0x41200000). `reverserTarget` now takes `rangeH` (the Reverser's call passes `data.rangeH`, unchanged).
+- The rule is passed through `render/gameview.ts` (the field HUD), `render/fieldhud.ts` (`atomizerTarget` option) and `ui/onlineTab.ts` (the inventory panel).
+- `tests/returnprompt.test.ts`: new section (6x33 bytes; no target = not usable, nothing sent, not used up; a target = 6x27 then 6x33 with the target in the body; the item used up).
+
+**ASSUMED / NOT PORTED:**
+- The (4,9) record's filler: the nearest dead teammate within 10 (the Reverser's pick). The exe's targeting search was not traced.
+- The consumption (the port removes one, as for the other tools).
+- The state-2 send guard (`+0x32c` == 2) and the target's invincibility-2 check (receive side): not ported; the web client has no equivalent state here.
+- The local object 0x1d's visual (the receive side revives the target; the object is not drawn).
+- The SE 0x17 on refusal: not played (the port's inventory has no failure sound on a refused use).
+- Star Atomizer (`030500`, the (4,10) 6x66 broadcast): not ported.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/returnprompt.test.ts` 46/46 (the new section included), `node tests/items.test.ts` (with the worktree's `vendor` linked), `node tests/techniques.test.ts`, `node tests/fieldhud.test.ts` pass. Not run: Playwright / Chrome (per the brief).
