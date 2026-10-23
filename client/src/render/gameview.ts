@@ -179,7 +179,7 @@ export class GameView {
       floorFilesFor: (f) => this.floorFilesFor(f),
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
       // cast_ray_at_map_collision_geometry(from, to, 0x8100) for a gun's bullet (combat/gunbullet.ts).
-      wallBlocks: (a, b) => (this.collision ? this.collision.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], 0x8100) !== null : false),
+      wallBlocks: (a, b, mask = 0x8100) => (this.collision ? this.collision.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], mask) !== null : false),
       ...character,
       source,
       paletteSlot: (i) => this.hud?.paletteSlot(i) ?? null,
