@@ -11845,3 +11845,39 @@ value of the draw, one rand call, rand 0 -> heading 0). `node tests/status.test.
 is clean. `tests/combat.test.ts` not run (needs `vendor/newserv/build/newserv`). The fresh
 worktree had no `client/node_modules` (`three` not found); the run used a temporary symlink to
 the main checkout's `client/node_modules`, removed before the commit.
+
+## 2026-10-23: guild card book: protocol and store ported (Guild Card window still open)
+
+Step 1 of the lobby Guild Card leaf (the card book). Client side in `client/src/net/guildcard.ts`, tests in `tests/guildcard.test.ts` (`node tests/guildcard.test.ts`: ALL PASS). The menu window (`classic/lobby.ts` leaf, `mainmenu.ts` id 0xe) is not done.
+
+**Premise check (the brief named 0xEA sub 5 as the card-list source; the exe says otherwise):**
+- `send_packet0xea_subcommand5` (dump 814456) is the team remove-member packet (05EA). Its caller at 777863 is `HandleLobbyTeamLeaveMenu_007996f8` (777824), next to `team_leave_success_display`. It is not guild card traffic; `net/team.ts` already has it.
+- The guild card book uses the E8 family: `send_packet0xe8_subcommand0x1` (202452) checksum 01E8, `0x3` (202497) re-download 03E8, subcommand 4 / 5 / 6 / 7 / 8 / 9 / 0xa (814260..814392) add / delete / update / block / unblock / comment / swap. The state handler `GuildCardMenuStateHandler_00746bdc` calls 6 (714916), 0x7, 0x8, 0x9, 0xa through its helpers `HandleGuildCardMenuData_00781c3c` (758418: sub 5 then shift down), `SwapGuildCardData_00781d44` (758465), `HandleGuildCardMenuData_007824d4` (758922, sub 7), `RemoveGuildCardSlot_007825ec` (759026, sub 8), `SendGuildCardPacket_007479b0` (716620).
+- The 0x41 reply (`handle_ship_packet0x41`, 809943) is the search result of 0040 (`send_packet0x40`, 811844; the sender wrapper `ShipConnectionManager_SendPacket_00827f28`, 841367). It is not the list. It feeds `ChallengePlayerInfoWindowListWindow_UpdateContent`.
+- The list's data is the file in `g_ChallengeModeMainDataBuffer` (0xD590 bytes), not a packet per card.
+
+**Exe evidence (dump lines):**
+- File 0xD590 bytes, entries at `0x1F74 + i * 0x1BC`, 0x69 entries (`HandleGuildCardMenuData_00781c3c` 758418, `GetGuildCardEntry_00827f14` 841359 is the UI list stride 0x49 and is a different table).
+- CRC: `unknown_crc32_2` (619131) is a reflected CRC-32, poly 0xEDB88320, init 0xFFFFFFFF; the final inversion was not read. The 01E8 checksum and the 02DC check both use it over the whole 0xD590-byte file.
+- 01DC (`handle_packet0xdc_subcommand0x1`, 202603): payload `unknown_a1` @0, file size @4, checksum @8 (the header's 8-byte BB part not counted). Then it sends 03DC {unknown_a1, chunk 0, cont 1}.
+- 02DC (`handle_packet0xdc_subcommand0x2`, 202519): checks `unknown_a1` differs from the 01DC's, copies chunk `index * 0x6800`, asks the next with cont 1; on the last chunk checks the CRC: match -> 03DC cont 0; mismatch -> 03E8 (restart). Matches newserv `send_guild_card_chunk_bb` / `on_DC_BB`.
+- 0041 (`bb_guild_reply_pkt`, dump 121195): 8-byte header + payload: tag @0, searcher @4, card @8, ip @0x14, port @0x18, location UTF-16[0x44] @0x1C, menu id @0xA4, item id @0xA8, name UTF-16[0x20] @0xE8; payload 0x128 bytes, the same size newserv's `S_GuildCardSearchResult_BB_41` (0x128).
+
+**newserv (vendor/newserv/src) already implements all of it:** 01E8 / 02E8 (`on_E8_BB`, ReceiveCommands.cc 3777), 03E8 (`send_guild_card_header_bb` 677), 03DC chunks (`send_guild_card_chunk_bb` 683, 0x6800 each), 04E8 add, 05E8 delete, 06E8 update, 07E8 block, 08E8 unblock, 09E8 comment, 0AE8 swap, 0040 search (`on_40`, ReceiveCommands 4205) -> 0041 (`send_card_search_result`). Nothing server-side is missing for the card book; the work was the client.
+
+**Ported (`client/src/net/guildcard.ts`):**
+- `crc32`, the constants (`GC_FILE`, `GC_CMD`), `GuildCard` record codec (0x108, name with the \tE marker), `parseGuildCardFile` (entries + blocked list).
+- Packet builders: 01E8, 03E8, 03DC, 04E8, 05E8, 06E8, 07E8, 08E8, 09E8 (0xB4 bytes), 0AE8, 0040. Parsers: 01DC header, 02DC chunk, 02E8 result, 0041 search result.
+- `GuildCardBook`: the raw 0xD590 bytes as the server keeps them (so the checksum is the server's), with add / update / remove / swap / setComment / blockAdd / blockDelete following newserv's `on_E8_BB` slot rules (add keeps the slot's comment and clears the 4 unknown bytes; delete shifts up and clears the last slot).
+- `GuildCardClient` over a structural `CommandLink` (BBConnection satisfies it): `sync` (01E8, download, CRC check, up to 3 tries), `search` (0040 -> 0041 or null after the timeout), and the list commands that send the packet and update the local book.
+
+**ASSUMED:**
+- The exe's CRC final inversion (not read; the table CRC is the standard one, the test checks the standard check value 0xCBF43926 and newserv uses `phosg::crc32`).
+- The name marker: writing `\tE` on the names of added records (newserv's type is UTF16_ALWAYS_MARKED; the exe's add path was not traced).
+- The 0041 `ip` field is read as a raw u32 at 0x14 (the exe stores it there; its byte order was not checked against a live reply).
+- Search timeout (default 5 s) counts as "offline / blocked"; newserv sends nothing in that case (ReceiveCommands 4205).
+- `GuildCardClient.sync` with a cached copy: a current cache (02E8 = 0) is taken as is.
+
+**Tests:** `node tests/guildcard.test.ts` (ALL PASS): CRC check value, file constants, every packet layout (command numbers, payload sizes, 0xB4 comment), record round trip, book slot rules, a scripted-server download (3 chunks + closing cont 0), a CRC mismatch restart, a cached-copy skip, a search reply parse, an offline search resolving null, list commands updating the local copy. `client` tsc: no new errors in the new module (the existing `vite.config.ts` / `ImportMeta.env` errors are unchanged in this worktree, which has no `node_modules` of its own).
+
+**Left (step 3, not started):** the Guild Card menu window: `CreateGuildCardMenuWindow_0074736c` (716268) at `get_gui_position(0x82)`, title `unitxt(11, 0x30)`, rows 0x65 / 0x66 / 0x67 / 0x117 (logged in only), the list window (`CreateGuildCardListWindow_0074744c`, 716316), the confirm dialog (716303, `get_gui_position(0x83)`), and the state handler's rows. Not wired: no call site fetches the card book at login (`sync` needs a connection in the lobby), and the search result is not shown. Symbol Chat is unchanged (needs the symbol-art store).
