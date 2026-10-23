@@ -11743,3 +11743,28 @@ worktree.
 - The exe's `CheckPlayerCollisionWithEntities` may also check the trap's `+0x30` bits set by the ctor (`0x60000000`); none of them is in 0x80000800, so the step test is not affected (traced from the ctor, not the step filter in full).
 
 **Checks:** `node tests/objectcollision.test.ts` (new section 3b: the pillar sphere, 6 units blocks, 8 does not, step toward / away); `cd client && tsc --noEmit -p .` clean. Also pass: `collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`. Not run in Chrome (the brief).
+
+## 2026-10-23 - generated table of the InitEnemyCollisionBoxes sites (tools/gen-collision-boxes.py)
+
+**What changed:** `tools/gen-collision-boxes.py` reads PsoBB.exe (`PSOBB_EXE`, default `~/Downloads/psobb-client/PsoBB.exe`) and writes `client/src/formats/collisionboxes.gen.ts`: the box tables by exe address, the 199 decoded call sites, and the factory type id -> tables map with a call depth. Numbers only; the exe is not in the repo. `objectmodels.ts` gets `generatedBox(address)` (a single-row table as an `ObjectCollision`). Three field objects that had a port model and no box now block: the ancient nest container 0x0152 (box 0x009c7868, sphere r10, 8 up, flags 0x38003), the info capsule 0x0229 (0x009c4a14, sphere r3, 10 up, 0x30003), the Wilds poison plant 0x0380 (0x009c9f18, sphere r14, 0x10003). `render/fieldobjects.ts` `SOLID_TYPES` lists them. `tests/objectcollision.test.ts` section 3c checks the table, the depth link and the three solids.
+
+**Exe evidence (PsoBB.exe; `objdump -d` for the call sites, `tools/exedata.py` for the rows):**
+- Calls: `InitEnemyCollisionBoxes_007b9a88` is thiscall (this in ECX): the count is pushed first and the table last (0x00440468 `pushl $1`, 0x00440483 `pushl $0x9a4eb0`, 0x00440488 `calll 0x7b9a88`). The E8 scan finds 243 call sites.
+- Decoded: 199 sites with an immediate table and count (the two pushes before the call, or a count in a register set by `movl $imm`; a conditional jump inside the argument setup is allowed). The pillar site is 0x0063c779 (pushes at 0x0063c706 and 0x0063c723, a `jg` between them).
+- Not decoded: 44 sites. Their table is an index computed at run time (`leal base(%reg,%reg)`, the per-kind arrays of enemies) or a parameter (`pushl 0x14(%esp)`, `pushl %ebx`), and one passes a `volopt_core_collision_box` pointer. The generated file gives only their count.
+- Row layout (0x2c bytes, checked on 0x009c684c, 0x009c63cc, 0x009c77ac, 0x009c9778): x, y, z at +0x00 / +0x04 / +0x08; radius at +0x0c (for a box, the half depth, halfZ); half width at +0x10 (halfX; 0 for a sphere); shape at +0x14 (0 sphere, 1 box); flags at +0x18. +0x1c..+0x2b are zero in the rows read.
+- Factory: the type rows are {u32 type, u32 creator, u32 0x48742400, u32 0} (16 bytes); 311 type ids from the scan of the data sections. Creators: 0x0152 -> 0x00650324 (site 0x0065046e is in it, depth 0); 0x0229 -> 0x006156e0 (site 0x006157e3, depth 0); 0x0380 -> 0x0067927c (site 0x0067935c, depth 0); 0x0154 -> 0x0063bfd4 and 0x0167 -> 0x0063b4e8 reach 0x009c684c at depths 1 and 2.
+- A site's function is the code between two padding runs (two 0xCC / 0x90 bytes in a row, the guess of `exedata.py xref`); checked on the sites above, not on all 243.
+
+**Reading of the table:** a shared helper reaches many types. `CreateDerollePartMapObject_0064de38` (the dump's name; it sets the container sphere 0x009c77ac) is reached at depth 1 or 2 by enemy and object creators alike, so depth-2 links for ids below 0x0100 are not object evidence. The generated map keeps the shallowest depth; the port uses depth 0 or 1 only for solids.
+
+**ASSUMED / not traced:**
+- A static box that passes the gate is a physical block for the three new solids (as for the containers). The falling stalactite (0x038b, box 0x009c9fb8, r15) and the beehive (0x038f) are not solids: their boxes may be hit boxes or change state, and the state was not read.
+- Depth-0 links are taken as "the constructor sets this box"; the dump's ctor names were not all checked.
+- The 44 undecoded sites are not mapped to types, so enemy hitboxes are not in the port.
+- The 0x0205 box (0x009c7e0c) and the 0x0191 / 0x0193 boxes (0x009c9430, 0x009c945c) pass the gate at depth 0, but the port has no model for those ids; not added.
+- The door ids that the table gives as depth 0 (0x0192, 0x0202, 0x0204, 0x01a0) already have their boxes in `objectmodels.ts` as doors; not changed.
+
+**Checks:** `node tests/objectcollision.test.ts` (new section 3c) and the related tests pass (`collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`, `enemies`, and `itemmodels` with `vendor/` linked into the worktree). `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
+
+**Left (ROADMAP line stays open):** the 44 undecoded sites (indexed per-kind tables and parameters); enemies' use of their tables (no port hit test for enemies); the NPC question; the break flag of the containers.

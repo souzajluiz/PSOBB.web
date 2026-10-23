@@ -15,6 +15,7 @@ import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
 import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
+import { COLLISION_SITES, COLLISION_TABLES, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -98,6 +99,32 @@ if (pillar) {
   check(!world.blockedBy(58, 0, 50, PLAYER_RADIUS), 'a pillar does not block a player 8 units from its centre');
   check(!!world.blockedBy(56, 0, 50, PLAYER_RADIUS, [-1, 0]), 'a step toward a pillar is blocked');
   check(!world.blockedBy(56, 0, 50, PLAYER_RADIUS, [1, 0]), 'a step away from an overlapped pillar is not blocked');
+  world.obstacles = [];
+}
+
+// 3c. The generated table (tools/gen-collision-boxes.py, client/src/formats/collisionboxes.gen.ts).
+// The pillar box is read from the exe (0x009c684c, one sphere, radius 2, 8.5 up); the pillar
+// type reaches it at depth 1 (its constructor calls InitializeDerolleEnemyBase_0063c638).
+check(COLLISION_SITES.length >= 190, `the generator decodes the call sites (got ${COLLISION_SITES.length})`);
+const pillarTable = COLLISION_TABLES[0x009c684c];
+check(!!pillarTable && pillarTable.length === 1 && pillarTable[0].shape === 0 && pillarTable[0].radius === 2 && pillarTable[0].flags === 0x38003, 'the generated pillar table is one sphere r2, flags 0x38003');
+check(!!TYPE_COLLISION_TABLES[0x0154]?.some((l) => l.table === 0x009c684c && l.depth === 1), 'type 0x0154 reaches the pillar table at depth 1');
+// The three field objects the table adds to the solids: the ancient nest container, the
+// info capsule and the Wilds poison plant. Each box passes the player's flag gate.
+const added = collectFieldSolids([place(0x0152, 7, [0, 0, 0]), place(0x0229, 8, [0, 0, 0]), place(0x0380, 9, [0, 0, 0])], { area: 0x18, episode: 4 });
+const addedAddr: Record<number, number> = { 7: 0x009c7868, 8: 0x009c4a14, 9: 0x009c9f18 };
+check(added.length === 3, `the nest container, the capsule and the poison plant are solids (got ${added.length})`);
+for (const s of added) {
+  check(s.collision.address === addedAddr[s.index], `solid ${s.index} uses its generated box ${addedAddr[s.index].toString(16)}`);
+  check(boxPairActive(PLAYER_BOX_FLAGS, s.collision.flags), `solid ${s.index} box passes the player's flag gate`);
+}
+const nest = added.find((s) => s.index === 7);
+if (nest) {
+  const o = solidObstacle(nest);
+  check(o.sphere === true && o.halfX === 10 && o.flags === 0x38003 && o.y === 8, 'the nest container is a sphere of radius 10, 8 up');
+  world.obstacles = [o];
+  check(!!world.blockedBy(14, 0, 0, PLAYER_RADIUS), 'the nest container blocks a player 14 units out (10 + 5 = 15)');
+  check(!world.blockedBy(16, 0, 0, PLAYER_RADIUS), 'the nest container does not block a player 16 units out');
   world.obstacles = [];
 }
 
