@@ -266,6 +266,11 @@ export class FieldMenu {
     this.menu.key(e);
   }
 
+  // Key releases reach the leaf that holds a repeating direction (the amount spinner).
+  keyUp(e: KeyboardEvent): void {
+    if (this.leaf instanceof ItemPackMenu) this.leaf.keyUp(e);
+  }
+
   // `extra`: virtual width beyond 640 (windows on the right half follow the
   // right edge, classic/ingame.ts anchorX). `bottom`: the y shift of the bottom
   // band of a tall fill frame (stage.ts bandsOf); the main menu stays at the top,

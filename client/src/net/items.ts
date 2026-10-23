@@ -726,7 +726,7 @@ export class GameItems {
   // the spot is found (6x2D).
   onDropHold: (frames: number) => void = () => {};
   onDropRelease: () => void = () => {};
-  private pendingDrops: Array<{ itemId: number; size: number; floor: number; search: DropSearch }> = [];
+  private pendingDrops: Array<{ itemId: number; size: number; split: number; floor: number; search: DropSearch }> = [];
   onInventoryChanged: () => void = () => {};
   onBoxOpened: (objectIndex: number) => void = () => {};
   // Shop lists by 6xB5 type (6xB6), kept for the rest of the game like the
@@ -1047,36 +1047,35 @@ export class GameItems {
     this.game.sendSubcommand(0x5a, buildPickUpRequest(this.game.selfId, item.id, item.floor).subarray(4));
   }
 
-  // Drop a whole item (6x2A) or part of a stack / meseta (6xC3).
+  // Drop a whole item (6x2A) or part of a stack / meseta (6xC3). Both run the
+  // same exe path (ChallengePlayer_UseItem_0068d878): the 6x2C hold, then the
+  // drop object's spot search (FUN_006a44fc gates the split branch too), then
+  // 6xC3 at the spot for a split (FUN_005c4c4c -> FUN_005c4c99), 6x2A for a whole item.
   drop(itemId: number, amount = 0): void {
     const me = this.game.self;
     const inv = this.inventory;
     if (!me || !inv) return;
-    const { x, y, z } = me.position;
     if (itemId === MESETA_ITEM_ID) {
       if (amount <= 0 || amount > (this.character?.meseta ?? 0)) return;
-      this.pendingSplits.push({ itemId, amount, floor: me.floor, x, z });
-      this.game.sendSubcommand(0xc3, buildSplitStack(this.game.selfId, itemId, amount, me.floor, x, z).subarray(4));
+      this.startDrop(itemId, 0, amount, me);
       return;
     }
     const it = inv.find(itemId);
     if (!it) return;
     const size = stackSize(it.data);
-    if (amount && amount < size) {
-      this.pendingSplits.push({ itemId, amount, floor: me.floor, x, z });
-      this.game.sendSubcommand(0xc3, buildSplitStack(this.game.selfId, itemId, amount, me.floor, x, z).subarray(4));
-      return;
-    }
-    // 0x0068d878: 6x2C holds the player and the drop object searches a spot
-    // (net/dropspot.ts); the 6x2A amount is the stack count (0x005d29b0;
-    // newserv ignores it).
+    this.startDrop(itemId, size, amount && amount < size ? amount : 0, me);
+  }
+
+  // `split` > 0: part of a stack (6xC3 with that amount); 0: the whole item (6x2A, `size`).
+  private startDrop(itemId: number, size: number, split: number, me: { position: { x: number; y: number; z: number }; floor: number; angle: number }): void {
+    const { x, y, z } = me.position;
     if (!this.dropSearch) {
-      this.placeDrop(itemId, size, me.floor, { x, y, z });
+      this.placeDrop(itemId, size, split, me.floor, { x, y, z });
       return;
     }
     this.game.sendImposeHold(DROP_HOLD_FRAMES, 0, x, z, 0);
     this.onDropHold(DROP_HOLD_FRAMES);
-    this.pendingDrops.push({ itemId, size, floor: me.floor, search: this.dropSearch({ x, y, z, angle: me.angle }) });
+    this.pendingDrops.push({ itemId, size, split, floor: me.floor, search: this.dropSearch({ x, y, z, angle: me.angle }) });
   }
 
   // One spot search step per game frame for each drop in progress
@@ -1091,16 +1090,25 @@ export class GameItems {
         this.log(`drop ${d.itemId.toString(16)}: no spot`);
         continue;
       }
-      this.placeDrop(d.itemId, d.size, d.floor, r.at);
+      this.placeDrop(d.itemId, d.size, d.split, d.floor, r.at);
       this.game.sendReleaseHold();
       this.onDropRelease();
     }
   }
 
-  // 6x2A at the spot (Player_DropItem_0068f090), then the item is ours on the floor.
-  private placeDrop(itemId: number, size: number, floor: number, at: { x: number; y: number; z: number }): void {
+  // A split goes out as 6xC3 at the spot; the item leaves the inventory when the
+  // server's 6x5D echoes it (the 6x29 follows then, see the 0x5d case). A whole
+  // item is 6x2A at the spot (Player_DropItem_0068f090) and is ours on the floor.
+  private placeDrop(itemId: number, size: number, split: number, floor: number, at: { x: number; y: number; z: number }): void {
     const inv = this.inventory;
-    if (!inv || !inv.find(itemId)) return;
+    if (!inv) return;
+    if (split) {
+      if (itemId !== MESETA_ITEM_ID && !inv.find(itemId)) return;
+      this.pendingSplits.push({ itemId, amount: split, floor, x: at.x, z: at.z });
+      this.game.sendSubcommand(0xc3, buildSplitStack(this.game.selfId, itemId, split, floor, at.x, at.z).subarray(4));
+      return;
+    }
+    if (!inv.find(itemId)) return;
     this.game.sendSubcommand(0x2a, buildDropItem(this.game.selfId, itemId, floor, at.x, at.y, at.z, size).subarray(4));
     const data = inv.remove(itemId);
     this.addFloorItem({ id: itemId, floor, x: at.x, y: at.y, z: at.z, data, source: 'player', entityIndex: 0xffff });

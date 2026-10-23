@@ -145,6 +145,28 @@ eq([ITEM_GROUND_OFFSET, ITEM_GROUND_PROBE, SE_PICKUP, DROP_RING_STEP], [6, 300, 
   items.drop(0x11);
   for (let i = 0; i < 70; i++) items.tickDrops();
   eq([sent.length, releases, holds.length, ch.inventory.some((i) => i.data.id === 0x11)], [0, 1, 2, true], 'no spot: no 6x2A, no 6x2D, the item stays');
+
+  // A split (part of a stack) goes through the same hold and spot search (exe
+  // ChallengePlayer_UseItem_0068d878 + the drop object's FUN_006a4820): 6x2C at the
+  // player, then 6xC3 {floor, x, z, item id, amount} at the spot; the stack leaves
+  // the inventory only when the server's 6x5D echoes it.
+  ch.inventory.length = 0;
+  ch.inventory.push(inv('030000000005000000000000', 0x12));
+  items.dropSearch = (me) => new DropSearch(me, { ground: () => 2, wallBlocks: () => false });
+  sent.length = 0;
+  const holdsBefore = holds.length;
+  const releasesBefore = releases;
+  const addedBefore = added.length;
+  items.drop(0x12, 2);
+  const beforeTick = [sent.length, holds.length - holdsBefore];
+  items.tickDrops();
+  const sb = new DataView(sent[0][1].buffer, sent[0][1].byteOffset);
+  eq(
+    [beforeTick, sent.length, sent[0][0], sb.getUint16(0, true), sb.getFloat32(4, true), sb.getFloat32(8, true), sb.getUint32(12, true), sb.getUint32(16, true)],
+    [[0, 1], 1, 0xc3, 1, 0, 6, 0x12, 2],
+    'split: the hold first, then 6xC3 at the spot with the amount',
+  );
+  eq([releases - releasesBefore, added.length - addedBefore, ch.inventory.some((i) => i.data.id === 0x12)], [1, 0, true], 'split: 6x2D, no floor item yet, the stack stays until 6x5D');
 }
 
 // --- can_pickup_item ---
