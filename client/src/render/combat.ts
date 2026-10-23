@@ -923,7 +923,7 @@ export class CombatView {
         const at = { x: instance.placed.world[0], z: instance.placed.world[2], angle: instance.placed.yaw };
         const movement = params && mi !== null ? params.movement(difficulty, mi) : null;
         const setParams = head.slot.set.params;
-        if (className === 'TObjEneRe2Flower') ai = new LilyAi({ ...at, attack, radius, rng: () => this.rng() });
+        if (className === 'TObjEneRe2Flower') ai = new LilyAi({ ...at, attack, radius, ultimate, rng: () => this.rng() });
         else if (className === 'TObjGrass') {
           // AttackData [0] slash, [1] web, [2] dash (g_EnemyAttackStats).
           const attacks = params && def ? def.attack.map((i) => params.attack(difficulty, i)) : [];
@@ -1590,7 +1590,8 @@ export class CombatView {
       if (ai instanceof BarbaRayAi) this.tickBarbaParts(e, ai);
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
-      if (ai instanceof LilyAi || ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
+      if (ai instanceof LilyAi) ai.setHp(e.stats.hp, e.stats.maxHp);
+      if (ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
         ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof GeeAi || ai instanceof GiGueAi || ai instanceof GibblesAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       // Confusion (entity+0x30 & 0x10): the families' target searches widen
@@ -1659,6 +1660,12 @@ export class CombatView {
         this.inflictStatus(r.status.type as StatusType, `E-${e.index.toString(16)} (${e.slot.type})`);
       }
       if (r.projectile && ai instanceof LilyAi) this.launchSpit(e, ai, r.projectile.x, r.projectile.z, r.projectile.angle);
+      // The low-HP spin's bob / blast sounds (combat/enemyfsm.ts LilyAi); the
+      // blast leaves the Lily dead (its state 10: the kill as usual).
+      if (ai instanceof LilyAi) {
+        for (const id of ai.takeSe()) this.playSeAt(id, root.position);
+        if (ai.exploded && !e.dead) this.killEnemy(e, FLAG_DEAD);
+      }
     }
     this.tickSpits(targets);
     this.tickShots(targets);
