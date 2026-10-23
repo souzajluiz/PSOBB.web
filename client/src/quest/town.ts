@@ -120,6 +120,7 @@ export class QuestTown {
       facePlayer: (angle) => this.view.setSelfAngle(angle),
       cameraView: () => this.view.cameraView(),
       defaultTalkCamera: () => this.view.talkCameraTurn(),
+      defaultTalkEnd: () => this.view.talkCameraEnd(),
       talk: (npc) => this.talk(npc),
     };
     const onFloor = () => void this.enterFloor();

@@ -7,7 +7,7 @@
 // plymotiondata.rlc (formats/plymotion.ts). Until a model is loaded (or when
 // the files are missing) a capsule stands in.
 
-import { CAMERA_FOV_ANGLE, PlayerCamera } from './playercamera.ts';
+import { PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import { takeCameraTurn, touchStick } from '../input/analog.ts';
@@ -26,8 +26,6 @@ import { PlayerMover, fromBams, legSpeed, rampAxis, remoteStep, toBams, type Fol
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 
-// The player camera's field of view (+0x54 = 0x36c1, render/playercamera.ts).
-const CAMERA_FOV = njPerspectiveFovy(CAMERA_FOV_ANGLE);
 const CLASS_COLORS = [
   0xd64545, 0xe0607a, 0xa83232, // HUmar, HUnewearl, HUcast
   0x3f86d6, 0x2f5fa8, 0x4fa3c9, // RAmar, RAcast, RAcaseal
@@ -242,9 +240,10 @@ export class LobbyView {
     viewer: MapViewer,
     lobby: Lobby,
     mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
-    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource } = {},
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource; town?: boolean } = {},
   ) {
     this.labels = options.labels ?? true;
+    this.camera.town = options.town ?? false;
     this.viewer = viewer;
     this.lobby = lobby;
     this.showPlayer = options.showPlayer ?? (() => true);
@@ -688,8 +687,9 @@ export class LobbyView {
       // Drawn between its last two ticks (render/smoothrender.ts; not with ?fps=30).
       const { source, target } = this.camera.view(pos, mine.angle, this.viewer.smoother.enabled ? this.cameraTicks : 1);
       const cam = this.viewer.camera;
-      if (cam.fov !== CAMERA_FOV) {
-        cam.fov = CAMERA_FOV;
+      const fov = njPerspectiveFovy(this.camera.fovAngle);
+      if (cam.fov !== fov) {
+        cam.fov = fov;
         cam.updateProjectionMatrix();
       }
       cam.position.set(source.x, source.y, source.z);
@@ -778,6 +778,11 @@ export class LobbyView {
     return c.source && c.target ? { source: { ...c.source }, target: { ...c.target } } : null;
   }
 
+  // FUN_004d7e4c: the talk ends for a talk that is not a camera mover's.
+  talkCameraEnd(): void {
+    this.camera.talk = false;
+  }
+
   // UpdateDefaultNPCCameraOrientation_004d83f4: an NPC talk turns the camera
   // to the player's heading + or - 0x6000 (BAMS; +0x30 is heading + 0x8000
   // for straight behind), the one nearer the current angle first, the other
@@ -787,6 +792,8 @@ export class LobbyView {
   // camera's desired source at that angle (the exe offsets the player by the
   // camera's +0xdc..+0xe4 vector).
   talkCameraTurn(): void {
+    // The talk flag (+0x100) first: the field of view goes to 0x22d8.
+    this.camera.talk = true;
     const me = this.lobby.self;
     const m = me ? this.markers.get(me.clientId) : undefined;
     if (!m) return;
