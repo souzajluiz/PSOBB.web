@@ -467,6 +467,10 @@ const TECH_HEIGHT_WINDOW = 40;
 
 export interface CombatOptions {
   log: (msg: string) => void;
+  // The death fade is over and 6x4E went out (the dead prompt opens), and the
+  // player is alive again (6x4F, the prompt closes). combat/playerdamage.ts.
+  onRevivable?: () => void;
+  onRevived?: () => void;
   // palette_slots[index] of the current action palette (render/fieldhud.ts).
   paletteSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
   // Map files of a floor (GameView.floorFilesFor).
@@ -646,10 +650,12 @@ export class CombatView {
       sendRevivable: () => {
         this.game.sendPlayerRevivable();
         this.showSoul(this.game.selfId, true);
+        this.opts.onRevivable?.();
       },
       sendRevived: () => {
         this.game.sendPlayerRevived();
         this.showSoul(this.game.selfId, false);
+        this.opts.onRevived?.();
       },
       log: (msg) => this.opts.log(msg),
       sound: (id) => this.playSe(id),
@@ -1325,6 +1331,15 @@ export class CombatView {
     this.damage.maxHp = p.maxHp;
     this.damage.reset(p.maxHp, p.maxHp);
     this.tp = p.maxTp;
+  }
+
+  // After the return to Pioneer 2 (GameView.returnToPioneer2): the warp's
+  // floor load already refilled the HP of a dead player (enterFloor). The TP
+  // is refilled too (ASSUMED: PlayerRestoreHealthAndTP_0068fda4, full HP and TP).
+  returnedToCity(): void {
+    if (!this.damage.dead) return;
+    this.damage.reset(this.damage.maxHp);
+    if (this.progression) this.tp = this.progression.maxTp;
   }
 
   // What a party member's window shows (QuestListEntryUpdate_0073eb28,

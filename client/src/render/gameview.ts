@@ -175,6 +175,8 @@ export class GameView {
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       bossPhase: (phase) => this.field.noteBossPhase(phase),
       constructObjects: (floor, room, group) => this.constructObjects(floor, room, group),
+      onRevivable: () => this.openReturnPrompt(),
+      onRevived: () => this.hud.closeReturnPrompt(),
       ...(options.streamFiles ? { streamFiles: options.streamFiles } : {}),
     });
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
@@ -432,6 +434,29 @@ export class GameView {
     const me = this.game.self!;
     this.game.finishLoading(me.position.x, me.position.y, me.position.z, me.angle);
     this.items.ensureIds();
+  }
+
+  // The dead prompt (render/fieldhud.ts): Yes returns to Pioneer 2.
+  private openReturnPrompt(): void {
+    this.hud.openReturnPrompt((yes) => {
+      if (yes) void this.returnToPioneer2();
+    });
+  }
+
+  // Yes on the dead prompt: return_to_p2_maybe sends 6x21 floor 0 and loads
+  // Pioneer 2 (warpTo). ASSUMED: the arrival spot is the floor's group 0 spawn,
+  // the Hunter's Guild return's (quest/town.ts), not the Medical Center's
+  // respawn position (DAT_0097df90). combat.returnedToCity refills HP and TP.
+  private async returnToPioneer2(): Promise<void> {
+    try {
+      await this.warpTo(0, 0);
+      if (this.game.self?.floor === 0) {
+        this.combat.returnedToCity();
+        this.log('returned to Pioneer 2');
+      }
+    } catch (err) {
+      this.log(`return to Pioneer 2 failed: ${(err as Error).message}`);
+    }
   }
 
   // 6x21 + 6x22, load, then 6x3F / 6x1F / 6x3B / 6x23.

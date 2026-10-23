@@ -32,6 +32,7 @@ import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
 import { createCounter, type Counter, type CounterKind } from '../classic/shop.ts';
+import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
@@ -128,6 +129,11 @@ export class FieldHud {
   private shopGroups: string[][] | null = null;
   // The open shop / bank counter (classic/shop.ts), opened by quest/town.ts.
   private counter: Counter | null = null;
+  // The dead prompt (classic/returnprompt.ts): open while the player is dead and
+  // the death fade is over. `returnToken` drops a prompt that closed while its
+  // unitxt text was still loading.
+  private returnPrompt: ReturnPrompt | null = null;
+  private returnToken = 0;
   private names: () => ItemNames | null = () => null;
   private palette: PaletteData | null = null;
   private paletteHud = new PaletteHud();
@@ -442,6 +448,32 @@ export class FieldHud {
     return !!this.counter;
   }
 
+  get returnPromptOpen(): boolean {
+    return !!this.returnPrompt;
+  }
+
+  // The dead prompt (0x006920ac -> DialogListItem_Constructor_0073f0ec): onAnswer
+  // gets true for Yes. The movement keys are off while it is up.
+  openReturnPrompt(onAnswer: (yes: boolean) => void): void {
+    const token = ++this.returnToken;
+    this.load()
+      .then(() => {
+        if (this.disposed || token !== this.returnToken) return;
+        this.returnPrompt = new ReturnPrompt(this.text(11, RETURN_TEXT), this.text(11, RETURN_YES), this.text(11, RETURN_NO), (yes) => {
+          this.returnPrompt = null;
+          onAnswer(yes);
+        });
+        this.opts.log?.('dead prompt: return to Pioneer 2?');
+      })
+      .catch((err) => this.opts.log?.(`dead prompt: no text (${(err as Error).message})`));
+  }
+
+  // The player is alive again (a Reverser / Moon Atomizer) or the prompt is no longer wanted.
+  closeReturnPrompt(): void {
+    this.returnToken++;
+    this.returnPrompt = null;
+  }
+
   // Opens a Pioneer 2 counter (bb_p2_menu 0 / 2 / 3 / 5); resolves when it
   // closes. The movement keys are off meanwhile (unknown_keyboard_enable_in_menu(0)).
   async openCounter(kind: CounterKind): Promise<void> {
@@ -499,7 +531,7 @@ export class FieldHud {
   attach(): void {
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
-      inner?.(dt, this.menu.isOpen || this.counter ? NO_KEYS : keys);
+      inner?.(dt, this.menu.isOpen || this.counter || this.returnPrompt ? NO_KEYS : keys);
       const cam = this.viewer.camera;
       cam.updateProjectionMatrix();
       const f = this.menu.shift;
@@ -519,6 +551,13 @@ export class FieldHud {
       e.preventDefault();
       e.stopImmediatePropagation();
       this.counter.key(e);
+      return;
+    }
+    if (this.returnPrompt) {
+      if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.returnPrompt.key(e);
       return;
     }
     if (this.opts.blocked()) return;
@@ -633,6 +672,7 @@ export class FieldHud {
     ctx.translate(0, bands.mid);
     this.counter?.draw(ctx, this.tex.skin, this.tex.menu, extra);
     ctx.restore();
+    this.returnPrompt?.draw(ctx, this.tex.skin);
   }
 
   // Console aid: window.gameView.hud.debug()
@@ -661,6 +701,7 @@ export class FieldHud {
     // Closing the menu destroys an open Options window, which saves (01ED).
     this.menu.close();
     this.counter?.close();
+    this.returnPrompt = null;
     this.host.removeEventListener('keydown', this.onKey, true);
     this.host.removeEventListener('keyup', this.onKeyUp, true);
     this.host.removeEventListener('blur', this.onBlur);

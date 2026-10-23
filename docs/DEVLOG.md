@@ -9810,3 +9810,31 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - The 0x8144b0 path (looping / owner-keyed positional voices, the telepipe loop exemption 0xa0) is not ported here; no caller uses it yet for a pickup.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/drops.test.ts`, `node tests/items.test.ts` (with `vendor` linked for the newserv build, removed afterwards), `node tests/sound.test.ts` (new cases: the 0x571 flag bits and attenuation, `positionalMode` for the 2 / 300 / exempt-area / near-band / kind rules, `seDistance`, `seGain3d`, `sePan`), `node tests/hitfx.test.ts` all pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: The dead prompt and the return to Pioneer 2 (Yes warps to floor 0)
+
+**Report:** a dead player got no way back to Pioneer 2: the death fade ended in the revivable state (6x4E) and the only exit was the web client's own R key. This entry ports the exe's dead prompt and its Yes path: after the fade a "Do you wish to / return to / Pioneer 2?" window with Yes / No opens; Yes sends the floor change to Pioneer 2 and loads it; No leaves the player dead until a revive.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13 dump, names from the Ghidra dump):**
+- Dead state handler `HandlePlayerInputAndState_0069e458` (the `0xf` case, `handle_input_state_dead`), then the death fade's countdown helper: the callback is `0x006920ac`, which runs at alpha 128 (`player_death_class_countdown_helper__update_return_to_p2_med_helper`, the fade step and threshold are the globals already in combat/playerdamage.ts).
+- `0x006920ac` (decompiled with `tools/ghidra/decomp.sh`): on a field, not battle, not quest, not offline, it calls `CreateChallengeEntity_00692510` (the dialog object at player+0x378, only for player+0x32c == 1, which the dump misnames) and `HandlePacket0x60SubcommandWithStateCheck_0069acd4` (the 0x60 subcommand that is 6x4E; ASSUMED from newserv's revivable marker).
+- The dialog is `DialogListItem_Constructor_0073f0ec`: `YesNoListMenu_Construct` with unitxt(11, 0x56) as the question, at `get_gui_position(0x25)` = (17, 306) (table 0x00971f40 + 8 * 0x25: 0x00972068 = 17.0, 0x0097206c = 306.0), width 206 (literal), cursor on index 1 (No). Rows unitxt(11, 0x6e) / (11, 0x6f): "YES" / "NO" (English), "Yes" / "No" (JP). Text read from `usbb-resources/unitxt_e.prs`: "Do you wish to \nreturn to \nPioneer 2?".
+- `DialogListItem_Update_0073f1d4`: the dialog closes when the player is no longer dead or on No; Yes allocates the loading screen with callback `LoadingScreen_Callback_0073f410`, which runs `return_to_p2_maybe` (6x21 floor 0 for the player, `SetFloorAndMapVariant(.., 0, ..)`, the respawn state, the floor load).
+- HP after the return: `PlayerRestoreHealthAndTP_0068fddc` (full HP and TP outside the unsafe maps, half HP in an unsafe map, the P2 is a safe map). The exe's exact call site is not traced (the callers of `Player_ResumeMovement_0069046c` and `PlayerResetDeadState_0068fdc8` are not named in the dump).
+
+**Ported:**
+- `client/src/classic/returnprompt.ts` (new): `ReturnPrompt`, the teammenu `Question` (YesNoListMenu) at the exe position, unitxt rows 11/0x56, 0x6e, 0x6f; Enter decides, Backspace is No, one answer per prompt.
+- `client/src/render/fieldhud.ts`: `openReturnPrompt` / `closeReturnPrompt` (the text loads with the HUD's unitxt; a close during the load drops the prompt), the prompt takes the keys (capture phase, like the counter and the menu) and draws over the field. The movement keys are off while it is up. Touch controls dispatch the same KeyboardEvents on the game canvas (classic/main.ts `keyTarget`), so the pad works too.
+- `client/src/render/combat.ts`: `CombatOptions.onRevivable` (after `sendRevivable`) and `onRevived` (after `sendRevived`); `returnedToCity()` refills HP and TP of a dead player.
+- `client/src/render/gameview.ts`: the prompt opens on `onRevivable`; Yes runs `warpTo(0, 0)` (6x21 floor 0, load, 6x3F / 6x1F / 6x3B / 6x23), then `combat.returnedToCity()`.
+
+**Packets:** on Yes, 6x21 with floor 0 (+ 6x22 from `Game.warp`), then 6x1F / 6x3B / 6x23 from `finishWarp`. On death: 6x89 + 6x4D (as before), 6x4E at the end of the fade (as before). No 6x4F: the return is not a revive in the exe.
+
+**ASSUMED / UNCLEAR:**
+- The arrival spot is the Pioneer 2 group 0 spawn (the Hunter's Guild return's, `quest/town.ts`), not the Medical Center respawn position (`get_p2_return_location_2` DAT_0097df90 per episode, `get_p2_med_center_return_location`). The mapping of those positions to the port's spawn groups is not done.
+- HP and TP full after the return (ASSUMED from `PlayerRestoreHealthAndTP_0068fda4`).
+- The 6x4E is the 0x60 subcommand that `0x0069acd4` sends from 0x006920ac (the stack argument is not decoded; newserv's "revivable" is the match).
+- The web client's own R key still revives a dead player (a convenience of the port, not in the exe). A Reverser / Moon Atomizer from another player is not wired to the local player here (no 6x4F receive path for self), so the "wait for a Reverser" case only ends by the R key.
+- The dead-state camera is not ported (ROADMAP keeps it open).
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/returnprompt.test.ts` (new: the unitxt rows and the exe position, the cursor on No, Up/Enter Yes, Backspace No, one answer per prompt, the death path to the revivable state with one 6x4E and a full-HP reset), `node tests/playerfx.test.ts`, `node tests/teammenu.test.ts`, `node tests/combatdepth.test.ts` pass. E2e `client/e2e/death-return.spec.ts` (fresh account, warp to Forest 1, lethal hit through `damage.hit`, prompt, Up + Enter held 150 ms, floor 0 alive at full HP, no page error): passed twice in a row against Vite on 5175.
