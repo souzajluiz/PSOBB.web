@@ -13357,3 +13357,26 @@ Follow-up to "player trade window" above. Research pass on the three open items;
 - the zone bits: the trade collision map object (initdata param 4) and the bit semantics (the inverted-looking condition);
 - the 900-frame quick menu countdown and the quick menu 0x14..0x20 flow (needs the quick menu);
 - the numeric offer rows (`CreateNumericDisplayListWindow_00728ac4`, the 0xf8..0x1e8 list).
+## 2026-10-23: Symbol Chat data, 0x02ED save and the 6x07 wire
+
+**What changed:** the symbol chat store and its packets, not the window. The lobby Home menu's Symbol Chat leaf (0x12) is still a logged no-op: its window (the 12-entry list, the item window, the capture / shortcut / keyboard / yes-no sub-windows) and the chat bubble need more than one session, and the leaf is ported whole or not at all. `net/symbolchat.ts` (new): the 0x68-byte entry (present, name, SymbolChatT), the spec word (`decodeSpec` / `encodeSpec`), corner objects, face parts, `parseSymbolChats` / `writeSymbolChats` (the character file block), `symbolChatsPayload` (the 0x02ED body), `symbolChatSubcommandPayload` / `parseSymbolChatSubcommand` (6x07). `net/charfile.ts`: `CharacterFile.symbolChats`. `net/game.ts`: 6x07 receive emits `symbolChat` (typed in `net/lobby.ts` LobbyEvents); `Game.sendSymbolChat(chat)` sends 6x07. Tests: `tests/symbolchat.test.ts` (all pass).
+
+**Premise correction:** the brief says BB keeps the symbol chats in the account system file. newserv puts them in the character file: `PSOBBCharacterFile.symbol_chats` at 0x1ACC (12 x 0x68, `SaveFileFormats.hh`), saved by 0x02ED into that file (`ReceiveCommands.cc`, `c->character_file(true, false)->symbol_chats`). The account file (`LegacySavedAccountDataBB`, .nsa) keeps a copy at 0xEB80 for the legacy save import only. The exe agrees: the chat messages are read from the session block at `get_00a95df8() + 0xd8` with a 0x68 stride (`GetChatMessagePtr_0077d8d0`, dump 754434), and the 12 loop is `< 0xc` (dump 728706 area). The exe's own struct `sylverant_bb_full_char_t.symbol_chats[1248]` (dump 121083) is the same 0x4E0 block.
+
+**Exe evidence** (dump lines of `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):
+- `ChatMessage_IsValid_0077d948` (754489): valid when bit 0 or bit 1 of the entry's u32 at +0 is set (newserv `present`; bit 1 is the chosen flag the window sets, 728748 area).
+- `ProcessChatMessageType_0077d880` (754383): plays `PlayDirectionalSoundEffect_0077d8a0(param[0xb] >> 5 & 0xf)` when bit 0 is set. `param[0xb]` is +0x2C, the SymbolChatT (spec) start, the newserv offset. The sound table is `DAT_00979670`, and `PlayDirectionalSound_0077d89c` returns for an index above 8, so index 8 plays table entry 8.
+- The window: `ChatShortcutMenuWindow_Process_00758900` builds 12 rows (`ListWindowObject_AddListItem_00735c90`, flag 0x66 for a valid entry, `unitxt(11, 0xea)` for an invalid one), title `unitxt(11, 0x44)`, and `ListWindowObject_Initialize_007361d0((int)this_00, 0x435c0000, 188.0)` (728740 area: width 220.0, then 188.0, the second float is ASSUMED to be the height). Not ported.
+
+**newserv evidence:** `on_symbol_chat` (ReceiveSubcommands.cc 1518) forwards 6x07 only when `can_chat` and `cmd.client_id == lobby_client_id`; `G_SymbolChat_6x07` is 0x44 bytes (header 4, `client_id` u32 at +4, SymbolChatT at +8). The port's `sendSubcommand` writes the header (sub, size 0x11, the sender's id as u16 at +2), so the payload is the u32 client id + 0x3C bytes.
+
+**ASSUMED:**
+- The 6x07 sender in the exe is not traced (the in-game symbol chat key path). The payload is newserv's layout, with the client id as the sender's lobby id; the exe is assumed to copy entry +0x2C..+0x68 unchanged.
+- The spec's mute bit (8) is newserv's "mute"; the exe does not read it, so bit 8 alone plays table entry 8 (`soundBits` keeps the exe's `>> 5 & 0xf`).
+- The 0x02ED path is newserv's; the exe's send of 0x02ED was not traced.
+- Names are written as given (no `\tE` marker); newserv's defaults carry one.
+- The character file offset 0x1ACC is newserv's; the exe's stride and count match it, the offset itself was not checked against the exe's struct.
+
+**Tests:** `node tests/symbolchat.test.ts` passes (sizes, the spec and corner bits, the file block at 0x1ACC, the name marker, the 02ED body, parseCharacterFile, the 6x07 body and its rejections). Also passing in this worktree: options, guildcard, emotes, trade, setposition, shop. Not run here: the tests that import `classic/chat.ts` or `quest/questui.ts` fail in this worktree with "Cannot find package 'three'" (no `client/node_modules`; the fresh worktree lacks it), and `tsc` shows only the same missing-package errors (`three`, `@capacitor/*`, `ImportMeta.env`); nothing from the new files.
+
+**Left (in order):** (1) the symbol art: the port keeps no capture entries (the capture bit 9 is read and written, the picture is not); (2) the item window and the 12-entry list of the Home menu leaf (`ChatShortcutMenuWindow_Process_00758900`, its sub-windows and the phrase keyboard); (3) the chat bubble for 6x07 (the exe's bubble render, the corner objects and face parts from the symbol textures, not traced); (4) the in-game symbol chat key (End) sending through `sendSymbolChat`; (5) Chat > Shortcut (0x11), which shares the phrase list (ASSUMED).
