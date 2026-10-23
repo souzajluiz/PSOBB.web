@@ -42,6 +42,9 @@ import {
   parseSetChallengeTime,
   RECORDS_SIZE,
   resultLines,
+  sRankChoices,
+  srankNameFromInput,
+  S_RANK_NAME_MAX,
   timerText,
   validTime,
   type ChallengeEnv,
@@ -191,6 +194,22 @@ function lcg(seed = 1): () => number {
   eq(new DataView(w.buffer).getUint32(12, true), 0x00010005, 'item id');
   eq(buildSRankWeapon(0x6f, 'X'), null, '0x6F is not an S-rank type');
   check(buildSRankWeapon(0xa5, 'X') !== null && buildSRankWeapon(0x88, 'X') !== null, 'edges of the type ranges');
+}
+
+// --- the S-rank prize choices (exe tables 0x009ce920 / 0x009ce9a0) and the name window -------------------
+{
+  const ep1 = sRankChoices(0);
+  eq(ep1.length, 14, 'Episode 1 rows (table 0x009ce920 up to its -1)');
+  eq([ep1[0], ep1[13]], [{ name: 386, type: 0x70 }, { name: 399, type: 0x7d }], 'Episode 1 first and last row');
+  const other = sRankChoices(1);
+  eq(other.length, 16, 'other episodes rows (table 0x009ce9a0 up to its -1)');
+  eq(other[10], { name: 410, type: 0x88 }, 'the 0x88 row ends the 0x7E.. run');
+  eq([other[11], other[15]], [{ name: 484, type: 0xa5 }, { name: 488, type: 0xa9 }], 'the 0xA5..0xA9 rows');
+  check(ep1.every((c) => buildSRankWeapon(c.type, 'X') !== null) && other.every((c) => buildSRankWeapon(c.type, 'X') !== null), 'every row is a valid S-rank type');
+  check(!ep1.some((c) => c.type >= 0x7e), 'Episode 1 has no 0x7E.. type');
+  eq(srankNameFromInput(' ab-c1 de fghi '), 'ABCDEFGH', 'letters only, upper case, 8 characters');
+  eq(srankNameFromInput(''), '', 'an empty name stays empty');
+  eq(S_RANK_NAME_MAX, 8, 'name length');
 }
 
 // --- the mode itself (an Episode 1 game) --------------------------------------------------------------------
