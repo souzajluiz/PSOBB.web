@@ -111,7 +111,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Real lobby spawn points (`TObjPlayerSet` in `map_lobby_NNo.dat`) and collision (`*c.rel`)
 - [x] Player hitbox radius from the exe: 5.0 for every class (only its height is per class)
 - [x] Collision of lobby objects: TObjLobbyMain (0x0182) round hitbox of radius 32, the only lobby object with one
-- [ ] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`); round hitboxes of field objects other than doors
+- [x] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`): the model per event and set param4, the one-frame-a-tick motion, drawn by the lobby from the 64 join's event (DEVLOG 2026-10-23, `tests/lobbymain.test.ts`)
+- [ ] Round hitboxes of field objects other than doors: the exe has 97 sphere boxes; the port reads only the doors' boxes, so containers and rocks do not block yet (DEVLOG 2026-10-23 survey)
 - [ ] Real lobby spawn points and collision (`*c.rel`)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
 - [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
