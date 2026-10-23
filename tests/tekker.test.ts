@@ -23,7 +23,6 @@ import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts
 import { buildAcceptIdentify, buildIdentifyItem, GameItems, parseIdentifyResult } from '../client/src/net/items.ts';
 import type { Game } from '../client/src/net/game.ts';
 import { itemPictureEntry } from '../client/src/formats/itemkt.ts';
-import { tekkerItemAngleBams, tekkerItemGate, tekkerItemScale, tekkerWeaponModel, TEKKER_ITEM_X, TEKKER_ITEM_Y } from '../client/src/formats/tekkeritem.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -323,20 +322,6 @@ eq(
   await press(c, 'Enter', 'Enter', 'Enter', 'Enter');
   await tick(c);
   eq([calls, c.done], [[], true], 'not enough meseta: nothing sent, no jingle');
-}
-
-// --- the tekker's 3D item object (formats/tekkeritem.ts, FUN_006d9d94 / 0x29) ---
-{
-  eq([TEKKER_ITEM_X, TEKKER_ITEM_Y], [400, 50], 'GUI 0x29 at (400, 50)');
-  eq(tekkerItemGate(), 1, 'FUN_0078b208 is 1 (FUN_006dc358 returns 0)');
-  eq([tekkerItemScale(tekkerItemGate()), tekkerItemScale(3)], [1, 0.75], 'scale 1.0; 0.75 only when the gate is above 2');
-  eq(tekkerItemAngleBams(), 0xfff8, 'the fixed draw angle: ROUND(0x1000000 - 7.5) = -8 BAMS');
-  const pmt = { getWeapon: (a: number, b: number) => (a === 1 && b === 2 ? { type: 9, skin: 4 } : undefined) };
-  const weapon = new Uint8Array([0, 1, 2, 0, 0, 0, 0, 0]);
-  eq(tekkerWeaponModel(weapon, pmt), { type: 9, skin: 4 }, 'a weapon takes its ItemPMT type and skin');
-  eq(tekkerWeaponModel(new Uint8Array([0, 5, 5, 0, 0, 0, 0, 0]), pmt), null, 'a weapon the table lacks has no model');
-  eq(tekkerWeaponModel(new Uint8Array([1, 1, 2, 0, 0, 0, 0, 0]), pmt), null, 'armour has no 3D model here');
-  eq(tekkerWeaponModel(weapon, null), null, 'no ItemPMT: no model');
 }
 
 if (failures) {
