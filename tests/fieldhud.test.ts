@@ -205,6 +205,46 @@ press('ArrowDown', 'Enter', 'Enter', 'ArrowLeft', 'ArrowLeft', 'ArrowUp', 'Enter
 eq(calls, ['unequip 256', 'use 65537', 'drop 65537 3', 'meseta 101'], 'menu actions');
 eq(menu.key({ key: 'Backspace' } as KeyboardEvent), false, 'Backspace closes the list');
 
+// --- the later windows run their own animation (windowanim.ts) ---
+{
+  const mk = () =>
+    new ItemPackMenu({
+      character: () => character,
+      rowContext: () => ctx,
+      purposeContext: () => pctx,
+      text: (g, i) => `${g}:${i}`,
+      actions: { use: () => 0, equip: () => 0, unequip: () => 0, drop: () => 0, dropMeseta: () => 0, sortAuto: () => 0, sortSwap: () => 0, commitSort: () => 0 },
+    });
+  const m = mk();
+  const k = (key: string) => m.key({ key } as KeyboardEvent);
+  const run = (n: number) => {
+    for (let i = 0; i < n; i++) m.tick();
+  };
+  eq([m.detailAnim.isOpen, m.purposeAnim.visible], [true, false], 'description open, no Purpose window in the list');
+  k('Enter'); // Saber: the Purpose window opens from counter 0; the description closes
+  eq([m.detailAnim.animating, m.detailAnim.isOpen, m.purposeAnim.visible, m.purposeAnim.counter], [true, false, true, 0], 'Purpose opens at 0, description closes');
+  run(3); // speed 1 adds 2 a frame: counter 6 < 7.5
+  eq(m.purposeAnim.animating, true, 'Purpose still opening after 3 frames');
+  run(1); // counter 8 >= 7.5
+  eq([m.purposeAnim.isOpen, m.purposeAnim.animating], [true, false], 'Purpose open at counter 8');
+  k('Backspace'); // back to the list: Purpose closes (4-frame close), the description reopens
+  eq([m.purposeAnim.visible, m.purposeAnim.animating], [true, true], 'Purpose closes');
+  run(5);
+  eq(m.purposeAnim.visible, false, 'Purpose gone after its close');
+  eq(m.detailAnim.isOpen, true, 'description open again once the list is back');
+
+  // Meseta: Drop asks the amount in its own window; Backspace closes the spinner, the Purpose window stays.
+  const m2 = mk();
+  const k2 = (key: string) => m2.key({ key } as KeyboardEvent);
+  k2('ArrowDown');
+  k2('ArrowDown');
+  k2('Enter');
+  k2('Enter');
+  eq([m2.debugState().state, m2.amountAnim.visible, m2.amountAnim.counter], ['amount', true, 0], 'meseta Drop opens the Amount window');
+  k2('Backspace');
+  eq([m2.amountAnim.animating, m2.purposeAnim.isOpen], [true, true], 'Amount closes, Purpose stays open');
+}
+
 // --- Sort (SortAndReassignChallengeItems_006a60f4, InventorySwapLinkedItems_006a6a08, 6xC4) ---
 {
   const mk = (hex: string, id: number, equipped = false): InventoryItem => {

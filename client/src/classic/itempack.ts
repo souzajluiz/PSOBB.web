@@ -77,9 +77,10 @@ import { MESETA_ITEM_ID, isEquippable, stackSize } from '../net/items.ts';
 import { isSRankWeapon, maxStackSize, type ItemData, type ItemNames } from '../formats/itemnames.ts';
 import { SPECIAL_STARS_BEGIN_INDEX } from '../formats/itempmt.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
+import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
+import { WindowAnim, withWindowAnim } from './windowanim.ts';
 
 export const ITEM_LIST = { x: 13, y: 256, w: 308, h: 184 } as const; // entry 3, 0x00973ca0
 export const ITEM_DETAIL = { x: 324, y: 256, w: 240, h: 184 } as const; // entry 2, 0x009f2b58
@@ -535,6 +536,15 @@ export class ItemPackMenu {
   private picked: number | null = null;
   private amount: AmountSpinner | null = null;
   private frame = 0;
+  // The later windows run their own list window animation (classic/windowanim.ts),
+  // each with its own counter: the description (open while the list is browsed),
+  // Purpose, Sort and Amount. ASSUMED silent: the menu's cursor / decide / cancel
+  // sounds play as before. `speed`: the field menu's window speed (0..3).
+  readonly detailAnim = new WindowAnim(true, true);
+  readonly purposeAnim = new WindowAnim(true, false);
+  readonly sortAnim = new WindowAnim(true, false);
+  readonly amountAnim = new WindowAnim(true, false);
+  speed = 1;
   rows: ItemRow[] = [];
   // The panel drawn by the last draw() (null: none), for the HUD's debug hook.
   private panelDrawn: { x: number; y: number; w: number; h: number; kind: 'equip' | 'mag' } | null = null;
@@ -568,7 +578,31 @@ export class ItemPackMenu {
 
   tick(): void {
     this.frame++;
+    this.detailAnim.tick(this.speed);
+    this.purposeAnim.tick(this.speed);
+    this.sortAnim.tick(this.speed);
+    this.amountAnim.tick(this.speed);
     if (this.state === 'amount' && this.amount?.frame()) se(SE.cursor);
+  }
+
+  // The description closes while an action window is up and opens again when
+  // the list comes back (states 2 / 3 of ChallengePlayer_StateMachine_00750954).
+  private openPurpose(): void {
+    this.detailAnim.close();
+    this.purposeAnim.open(this.speed);
+  }
+
+  private backToList(): void {
+    this.purposeAnim.close();
+    this.sortAnim.close();
+    this.amountAnim.close();
+    this.detailAnim.open(this.speed);
+  }
+
+  private openAmount(n: number): void {
+    this.amount = new AmountSpinner(n);
+    this.state = 'amount';
+    this.amountAnim.open(this.speed);
   }
 
   // Key releases end a held direction of the amount spinner.
@@ -595,6 +629,7 @@ export class ItemPackMenu {
         se(SE.ok);
         this.purpose = { cursor: 0, items: purposeItems(it, this.env.purposeContext(), (i) => this.env.text(11, i)) };
         this.state = 'purpose';
+        this.openPurpose();
       } else if (e.key === 'Backspace' || e.key === 'Escape') {
         se(SE.cancel);
         this.dispose();
@@ -604,15 +639,19 @@ export class ItemPackMenu {
     }
     if (this.state === 'purpose') {
       const r = listKey(e, this.purpose.items, this.purpose);
-      if (r === 'cancel') this.state = 'list';
-      else if (r === 'decide') this.decide(this.purpose.items[this.purpose.cursor].value);
+      if (r === 'cancel') {
+        this.state = 'list';
+        this.backToList();
+      } else if (r === 'decide') this.decide(this.purpose.items[this.purpose.cursor].value);
       return true;
     }
     if (this.state === 'sort') {
       const items = this.sortItems();
       const r = listKey(e, items, this.sortMenu);
-      if (r === 'cancel') this.state = 'purpose';
-      else if (r === 'decide') this.decideSort(items[this.sortMenu.cursor].value);
+      if (r === 'cancel') {
+        this.state = 'purpose';
+        this.sortAnim.close();
+      } else if (r === 'decide') this.decideSort(items[this.sortMenu.cursor].value);
       return true;
     }
     if (this.state === 'manual') return this.manualKey(e);
@@ -625,12 +664,11 @@ export class ItemPackMenu {
         const it = this.item();
         if (it === 'meseta') this.env.actions.dropMeseta(a.value);
         else if (it) this.env.actions.drop(it.data.id, a.value);
-        this.amount = null;
         this.afterAction();
       } else if (e.key === 'Backspace' || e.key === 'Escape') {
         se(SE.cancel);
-        this.amount = null;
         this.state = 'purpose';
+        this.amountAnim.close();
       }
       return true;
     }
@@ -654,6 +692,9 @@ export class ItemPackMenu {
     } else {
       this.picked = null;
       this.state = 'manual';
+      this.purposeAnim.close();
+      this.sortAnim.close();
+      this.detailAnim.open(this.speed);
     }
   }
 
@@ -703,10 +744,8 @@ export class ItemPackMenu {
     const a = this.env.actions;
     if (it === 'meseta') {
       const meseta = this.env.character()?.meseta ?? 0;
-      if (meseta > 1) {
-        this.amount = new AmountSpinner(meseta);
-        this.state = 'amount';
-      } else if (meseta === 1) {
+      if (meseta > 1) this.openAmount(meseta);
+      else if (meseta === 1) {
         a.dropMeseta(1);
         this.afterAction();
       }
@@ -719,14 +758,14 @@ export class ItemPackMenu {
     else if (value === PURPOSE.drop) {
       const n = maxStackSize(it.data) > 1 ? stackSize(it.data) : 1;
       if (n >= 2) {
-        this.amount = new AmountSpinner(n);
-        this.state = 'amount';
+        this.openAmount(n);
         return;
       }
       a.drop(id, 1);
     } else if (value === PURPOSE.sort) {
       this.sortMenu = { cursor: 0 };
       this.state = 'sort';
+      this.sortAnim.open(this.speed);
       return;
     }
     this.afterAction();
@@ -735,6 +774,7 @@ export class ItemPackMenu {
   // State 0x16 -> 1: back to the list, rebuilt.
   private afterAction(): void {
     this.state = 'list';
+    this.backToList();
     this.refresh();
   }
 
@@ -768,18 +808,24 @@ export class ItemPackMenu {
     // The other windows are on the right half: they follow the right edge.
     ctx.save();
     ctx.translate(extra, 0);
-    if (this.state === 'list' || this.state === 'manual') {
-      const it = this.item();
-      if (this.rows.length) {
-        const text = it && it !== 'meseta' ? itemDescription(it.data, this.env.rowContext().names) : it === 'meseta' ? this.env.text(11, 0x135) : '';
-        drawTextWindow(ctx, skin, ITEM_DETAIL, text);
-      }
-    } else {
-      const P = PURPOSE_POS;
-      drawListWindow(ctx, skin, P.x, P.y, P.w, this.env.text(11, 0x39), this.purpose.items, this.purpose.cursor, this.state === 'purpose');
-      if (this.state === 'sort') drawListWindow(ctx, skin, SORT_POS.x, SORT_POS.y, SORT_POS.w, this.env.text(11, 0x3a), this.sortItems(), this.sortMenu.cursor);
-      if (this.state === 'amount' && this.amount) this.drawAmount(ctx, skin, tex, this.amount);
+    // Each later window is under its own animation (windowanim.ts); a closing
+    // window keeps drawing its last contents until it is gone.
+    const it = this.item();
+    if (this.rows.length) {
+      const text = it && it !== 'meseta' ? itemDescription(it.data, this.env.rowContext().names) : it === 'meseta' ? this.env.text(11, 0x135) : '';
+      const D = ITEM_DETAIL;
+      withWindowAnim(ctx, this.detailAnim, D.x, D.y, D.w, D.h, () => drawTextWindow(ctx, skin, D, text));
     }
+    const P = PURPOSE_POS;
+    const purposeTitle = this.env.text(11, 0x39);
+    withWindowAnim(ctx, this.purposeAnim, P.x, P.y, P.w, listWindowHeight(this.purpose.items.length, true), () =>
+      drawListWindow(ctx, skin, P.x, P.y, P.w, purposeTitle, this.purpose.items, this.purpose.cursor, this.state === 'purpose'),
+    );
+    const S = SORT_POS;
+    const sortTitle = this.env.text(11, 0x3a);
+    withWindowAnim(ctx, this.sortAnim, S.x, S.y, S.w, listWindowHeight(2, true), () => drawListWindow(ctx, skin, S.x, S.y, S.w, sortTitle, this.sortItems(), this.sortMenu.cursor));
+    const amount = this.amount;
+    if (amount) withWindowAnim(ctx, this.amountAnim, AMOUNT_RECT.x, AMOUNT_RECT.y, AMOUNT_RECT.w, AMOUNT_RECT.h, () => this.drawAmount(ctx, skin, tex, amount));
     ctx.restore();
     // The panel is on the left (no translation). Off: the exe's Item Pack
     // (inventory_menu 0xB -> GuildCardSearchWindow_Constructor_0075086c) never
