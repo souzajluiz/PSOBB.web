@@ -31,7 +31,6 @@ import {
   movementIndex,
   type AiTarget,
   type EnemyAiMotion,
-  type EnemyAiProfile,
   type EnemyBrain,
 } from '../combat/enemyai.ts';
 import {
@@ -40,7 +39,7 @@ import {
   MONEST,
   MonestSpawner,
   MOTHMANT_FLY_HEIGHT,
-  MOTHMANT_PROFILE,
+  MothmantAi,
   RappyFakeDeath,
   WolfAi,
 } from '../combat/enemyfsm.ts';
@@ -1157,6 +1156,12 @@ export class CombatView {
           });
         }
         else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
+        else if (className === 'TObjEneBm3Fly') {
+          // Mothmant's own FSM (combat/enemyfsm.ts MothmantAi). A Mothmant
+          // set on its own (no Monest) counts the other parentless ones.
+          const speed = enemySpeeds(movement, 0.5).engagedMove;
+          ai = new MothmantAi({ ...at, turnRate: cfg.turnRate, speed, attack, radius, siblingsOn: (id, self) => this.countMothmantTargets(null, id, self), rng: () => this.rng() });
+        }
         else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
           z: instance.placed.world[2],
@@ -4617,6 +4622,17 @@ export class CombatView {
     this.spits = this.spits.filter((x) => !x.spit.done);
   }
 
+  // HildebearCheckEntityCount_0051a924: the live Mothmants of the same group
+  // (the same Monest, or none) that already target the player `clientId`.
+  private countMothmantTargets(parent: EnemyRuntime | null, clientId: number, self: MothmantAi): number {
+    let n = 0;
+    for (const c of this.enemies.values()) {
+      if (c.dead || c.parent !== parent || !(c.ai instanceof MothmantAi) || c.ai === self) continue;
+      if (c.ai.targetId === clientId && c.ai.state !== 'dead') n++;
+    }
+    return n;
+  }
+
   // spawn_mothmant_from_monest: the Monest's next MOTHMANT slot.
   private tickMonest(e: EnemyRuntime, targets: AiTarget[], ended: boolean): void {
     const m = e.monest!;
@@ -4665,16 +4681,17 @@ export class CombatView {
       exp = st.exp;
     }
     const mi = params ? movementIndex('MOTHMANT') : null;
-    const ai = new EnemyAi({
+    const ai = new MothmantAi({
       x: mp.x,
       z: mp.z,
       angle: monest.instance.root.rotation.y,
-      profile: MOTHMANT_PROFILE as unknown as EnemyAiProfile,
-      detect: 225,
       turnRate: 1536,
+      speed: enemySpeeds(params && mi !== null ? params.movement(difficulty, mi) : null, 0.5).engagedMove,
       attack,
-      speeds: enemySpeeds(params && mi !== null ? params.movement(difficulty, mi) : null, 0.5),
       radius: collisionRadius('TObjEneBm3Fly'),
+      spawnLift: MONEST.height,
+      siblingsOn: (id, self) => this.countMothmantTargets(monest, id, self),
+      rng: () => this.rng(),
     });
     const runtime: EnemyRuntime = {
       instance,
