@@ -91,6 +91,8 @@ export interface DeathStep {
   sink?: { perFrame: number; frames: number };
   /** Remove the enemy now (a death state that ends itself). */
   remove?: boolean;
+  /** The owner's own fade (a Pofuilly Slime's alpha, 0x00597594): it steps the fade each frame and removes the enemy when it is spent. */
+  fade?: boolean;
 }
 
 export interface DeathPlan {
@@ -300,8 +302,8 @@ export function deathPlanFor(className: string, type: string, ctx: DeathContext)
           { when: { wait: 30 }, particles: [{ p: abDead(0x1e), at: ORIGIN }], pools: [pool('green7_5', 15)] },
         ],
       };
-    case 'TObjEneSlime': // Pofuilly Slime 0x00598648 (VERIFIED): SE 0x108 at the origin and the particle 0xfe at +0x300 when the death starts
-      return { steps: [{ when: 'kill', se: 0x108, particles: [{ p: { id: 0xfe }, at: BODY }] }] };
+    case 'TObjEneSlime': // Pofuilly Slime 0x00598648 (VERIFIED): SE 0x108 at the origin and the particle 0xfe at +0x300 when the death starts; its alpha fade (0x00597594, 5 frames, -0.2 a frame) is the slime's own (SlimeAi.stepDeathFade) and removes it
+      return { steps: [{ when: 'kill', se: 0x108, particles: [{ p: { id: 0xfe }, at: BODY }], fade: true }] };
     case 'TObjEneMoja': // Hildebear / Hildeblue 0x00513614 (VERIFIED: the death motion, which the dump names 'Attack'; SE 0xc2 at frame 0, at 27 SE 0xbc, 0xf0 and gensei 50 at the blood point, red 15 (0x005781d8) 20 late). The kill's sink (0.1 a frame, 200) is ASSUMED: its state (not located) was not read
       return {
         steps: [
@@ -598,6 +600,8 @@ export interface DeathActions {
   sink: number;
   /** The enemy ends now. */
   remove: boolean;
+  /** The owner's fade starts this frame (it steps the fade from the next frame). */
+  fade: boolean;
 }
 
 /** The steps of one dying enemy, advanced once per game frame. */
@@ -619,7 +623,7 @@ export class DeathRun {
 
   /** One game frame; `motionFrame` is the death motion's elapsed frames, `ended` whether it ended, `dissolved` whether the dissolve is done. */
   tick(motionFrame: number, ended: boolean, dissolved = false): DeathActions {
-    const out: DeathActions = { se: [], spawn: [], pools: [], fragments: [], dissolve: false, sink: 0, remove: false };
+    const out: DeathActions = { se: [], spawn: [], pools: [], fragments: [], dissolve: false, sink: 0, remove: false, fade: false };
     // Several steps may fall due in the same frame (kill + a motion that is already past a frame).
     while (this.i < this.plan.steps.length) {
       const s = this.plan.steps[this.i];
@@ -639,6 +643,7 @@ export class DeathRun {
         this.sinkStep = s.sink.perFrame;
       }
       if (s.remove) out.remove = true;
+      if (s.fade) out.fade = true;
     }
     if (this.sinkLeft > 0) {
       out.sink = this.sinkStep;

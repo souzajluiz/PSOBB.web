@@ -861,6 +861,7 @@ export const SLIME = {
   armRand: 5,
   morphFrames: 20, // ASSUMED: the emerge / burrow morph lengths
   throwHeight: 10,
+  deathFrames: 5, // the death entry's counter (0x00598648 sets +0x398 = 5)
 } as const;
 
 // Spit glob 0x0059738c: from 20 up and 15 ahead, 0.6 a frame forward,
@@ -901,17 +902,30 @@ export class SlimeSpit extends EnemyShot {
   }
 }
 
-// The arm 0x00598368 / 0x00598f1c: hits every player within 7.5 once while
-// its motion is between frames 17 and 30.
-export const ARM = { from: 17, to: 30, radius: 7.5, life: 45 } as const;
+// The arm sub-entity (0x00598420 constructor, vtable 0x00b097a0, motion 6): its
+// update 0x00598db0 (vtable +4) runs the hit 0x00598f1c while the arm's stats
+// are set. The hit (0x00598f1c) only runs while the animation frame (+0xc0) is
+// 17..30 (0x00929350 / 0x0092934c). It takes the nearest player within 25
+// (0x00a745a4, EnemyGetNearestTargetInRange) and hits it when that player is not
+// the lock (+0x384, 0xffff at the spawn) and the arm's height is within 5 of the
+// player's (0x00a745a8; the player's height +0xe3c is ASSUMED 0 here) and the
+// XZ distance is within 7.5 (0x00a745ac). The hit then sets the lock to that
+// player, so a player is hit once per change of the lock id.
+// ASSUMED / not ported: the update's second branch (AcquireClosestTargetInRange
+// 0x0077170c, any entity but the owner within 7.5, the vtable +0x60 / +0x68
+// hit every frame of the window): the port's cooldown for it is unknown.
+// The arm's tech hit (entity_hit_by_tech with the slime's atp, 0x00598f1c) is
+// the plain melee shot here (ASSUMED).
+export const ARM = { from: 17, to: 30, range: 25, radius: 7.5, height: 5, life: 45 } as const;
 
 export class SlimeArm extends EnemyShot {
   readonly effect: ShotEffect = { kind: 'melee', mult: 1, knockback: 0 }; // ASSUMED: a plain hit with the slime's AttackData
   readonly look: ShotLook = { color: 0x80e060, size: 2.5 };
-  private touched = new Set<number>();
+  // The lock (+0x384): the client id of the player the arm last hit.
+  private lock: number | null = null;
 
-  constructor(x: number, z: number) {
-    super(x, 0, z);
+  constructor(x: number, z: number, y = 0) {
+    super(x, y, z);
   }
 
   tick(targets: readonly AiTarget[]): AiTarget[] {
@@ -919,9 +933,13 @@ export class SlimeArm extends EnemyShot {
     this.frames++;
     if (this.frames >= ARM.life) this.done = true;
     if (this.frames < ARM.from || this.frames > ARM.to) return [];
-    const hits = this.within(targets, ARM.radius - 5).filter((t) => !this.touched.has(t.clientId));
-    for (const t of hits) this.touched.add(t.clientId);
-    return hits;
+    const near = nearest(targets, this.x, this.z, ARM.range);
+    if (!near || near.clientId === this.lock) return [];
+    const dy = this.y - (near.y ?? 0);
+    if (dy < -ARM.height || dy > ARM.height) return [];
+    if ((near.x - this.x) ** 2 + (near.z - this.z) ** 2 > ARM.radius * ARM.radius) return [];
+    this.lock = near.clientId;
+    return [near];
   }
 }
 
@@ -954,6 +972,7 @@ export const SLIME_XF = {
   alphaCut: 0.5,
   riseWobble: 0.1,
   sinkWobble: 0.15,
+  deathFade: 0.2, // 0x00597594: +0x3a8 -= 0.2 a frame (0x00929300), floored at 0 (0x0092950c)
 } as const;
 
 export interface SlimeXf {
@@ -1025,6 +1044,7 @@ export class SlimeAi extends BrainBase {
   private xf: SlimeXf = { alpha: 0, height: SLIME_XF.low, sx: 0, sy: 0, sz: 0 };
   private morph = SLIME_MORPH.puddle;
   private count = 0;
+  private deathLeft = 0;
 
   private readonly puddleMotion: number;
 
@@ -1299,7 +1319,8 @@ export class SlimeAi extends BrainBase {
             else {
               const a = this.rng() * Math.PI * 2;
               const r = this.rng() * SLIME.armRand + SLIME.armBase;
-              out.shots = [new SlimeArm(t.x + Math.sin(a) * r, t.z + Math.cos(a) * r)];
+              // 0x00598070: the arm point keeps the target's height (+0x3dc).
+              out.shots = [new SlimeArm(t.x + Math.sin(a) * r, t.z + Math.cos(a) * r, t.y ?? 0)];
             }
           }
         }
@@ -1346,6 +1367,26 @@ export class SlimeAi extends BrainBase {
       this.xf.sx = this.xf.sy = this.xf.sz = 1;
       this.morph = SLIME_MORPH.flinch;
     }
+  }
+
+  // The death entry (0x00598648): scale 1, morph 5 (the hurt pose), the counter
+  // 5. The alpha is left as it is; stepDeathFade runs the fade.
+  kill(): void {
+    if (this.state === 'dead') return;
+    super.kill();
+    this.xf.sx = this.xf.sy = this.xf.sz = 1;
+    this.morph = SLIME_MORPH.dead;
+    this.deathLeft = SLIME.deathFrames;
+  }
+
+  // One death frame of the fade (0x00597594, the death state's frame): the
+  // alpha drops 0.2 (floored at 0) and the counter goes down; true when the
+  // counter is spent, the slime is removed then (flag +8 |= 1). The owner calls
+  // it from the death plan (render/combat.ts deathSteps, the plan's `fade` step),
+  // and slimeView draws the alpha, so the fade has one owner.
+  stepDeathFade(): boolean {
+    this.xf.alpha = Math.max(0, this.xf.alpha - SLIME_XF.deathFade);
+    return --this.deathLeft <= 0;
   }
 
   // The flinch ended: 12 -> 5.

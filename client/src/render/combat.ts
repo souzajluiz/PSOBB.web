@@ -353,7 +353,7 @@ interface EnemyRuntime {
   esp: number; // BattleParamEntry esp (the specials' status resistance)
   slimeSlot?: number; // a Pofuilly Slime's k in its control's slots (parent = the control)
   splitHp?: number; // a Hidoom / Migium's HP at the split (its call threshold)
-  death?: { run: DeathRun; acc: number; dissolve: Dissolve | null }; // combat/deathfx.ts: the death state's steps
+  death?: { run: DeathRun; acc: number; dissolve: Dissolve | null; fade: boolean }; // combat/deathfx.ts: the death state's steps (fade: the slime's own fade runs)
   blood?: number; // the stats row's f32 @0x10 (the blood pool's distance, formats/battleparams.ts bloodOffset)
 }
 
@@ -1372,7 +1372,7 @@ export class CombatView {
           continue;
         }
         // A death plan that has steps or a dissolve left owns the removal.
-        const planBusy = !!e.death && (!e.death.run.finished || !!e.death.dissolve);
+        const planBusy = !!e.death && (!e.death.run.finished || !!e.death.dissolve || e.death.fade);
         if (ended && e.removeIn <= 0 && !e.fake && !planBusy && e.instance.spec.name === 'TObjEneLappy') {
           // update_rappy: a dead Rappy fakes it (combat/enemyfsm.ts).
           const ctx = this.difficultyParams;
@@ -1588,7 +1588,7 @@ export class CombatView {
       if (!p) continue;
       if (id === this.game.selfId && this.damage.dead) continue;
       const attacking = id === this.game.selfId ? !!this.attack?.active : this.attacking.has(id);
-      out.push({ clientId: id, x: pos.x, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle, attacking });
+      out.push({ clientId: id, x: pos.x, y: pos.y, z: pos.z, charClass: p.charClass, dead: false, angle: id === this.game.selfId ? (this.game.self?.angle ?? p.angle) : p.angle, attacking });
     }
     return out;
   }
@@ -6536,7 +6536,10 @@ export class CombatView {
     d.acc -= Math.floor(d.acc);
     const anim = e.instance.animators[0];
     while (frames-- > 0) {
+      // The slime's fade starts on the frame after its kill (0x00597594 runs in the death state).
+      const fading = d.fade;
       if (this.applyDeath(e, d.run.tick(anim?.frame ?? 0, ended))) return true;
+      if (fading && e.ai instanceof SlimeAi && e.ai.stepDeathFade()) return true;
       if (d.dissolve) {
         const f = d.dissolve.tick();
         setModelOpacity(e.instance.root, f.opacity);
@@ -6563,6 +6566,7 @@ export class CombatView {
       if (this.fx && part?.model !== undefined) this.fx.fragments.spawn(e.instance.archive, part.model, table, this.deathPoint(e, { base: 'body' }), e.instance.root.rotation.y, () => this.rng());
     }
     if (act.dissolve) d.dissolve = new Dissolve();
+    if (act.fade) d.fade = true;
     if (act.sink) p.y -= act.sink;
     return act.remove;
   }
@@ -8181,7 +8185,7 @@ export class CombatView {
     e.removeIn = 0.5;
     const plan = deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
     if (plan) {
-      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null };
+      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null, fade: false };
       if (plan.instant) e.instance.root.visible = false;
     }
     // A Barbarous Wolf's death arms its packmates' howl countdown (armPackHowl).
