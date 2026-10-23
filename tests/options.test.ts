@@ -69,7 +69,7 @@ import {
   sameAnalogAxis,
   writePadConfigToCharacter,
 } from '../client/src/input/padconfig.ts';
-import { controlsHeld, PadKeyFeed, padSampleOf, type PadSample } from '../client/src/input/padinput.ts';
+import { controlsHeld, padMoveStick, PadKeyFeed, padSampleOf, type PadSample } from '../client/src/input/padinput.ts';
 
 let failures = 0;
 let checks = 0;
@@ -479,13 +479,20 @@ if (typeof globalThis.KeyboardEvent === 'undefined') {
   eq(MUST_BIND.has(7), false, 'only control 7 may be left empty');
   // The sample: buttons as bits, the d-pad as POV bits, axes as codes.
   const pressed = (on: number[]) => Array.from({ length: 16 }, (_, i) => ({ pressed: on.includes(i) }));
-  eq(padSampleOf({ buttons: pressed([0, 2]), axes: [] }), { buttons: 0x5, analog: [] }, 'buttons 0 and 2 are PAD BUTTON1 and 3');
+  eq(padSampleOf({ buttons: pressed([0, 2]), axes: [] }), { buttons: 0x5, analog: [], axes: [0, 0, 0, 0, 0, 0] }, 'buttons 0 and 2 are PAD BUTTON1 and 3');
   eq(padSampleOf({ buttons: pressed([12]), axes: [] })?.buttons, 0x10000, 'd-pad up is POV(Y)+');
   eq(padSampleOf({ buttons: pressed([14]), axes: [] })?.buttons, 0x40000, 'd-pad left is POV(X)+');
   eq(padSampleOf({ buttons: pressed([]), axes: [0.9, -0.9, 0, 0.1] })?.analog, [0, 8], 'X + and Y -: codes 0 and 8');
   eq(padSampleOf(null), null, 'no gamepad: no sample');
-  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x10000, analog: [] })], [0], 'POV(Y)+ holds control 0 by default');
-  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x1, analog: [] })], [4], 'PAD BUTTON1 holds control 4 (Decide) by default');
+// The analog rows (defaults: row 0 = X+, row 1 = Y+): the stick right and up (browser Y -0.9) on the 128 scale, dead zone inside 31.
+{
+  const cfg = defaultPadConfig();
+  const st = padMoveStick(cfg, padSampleOf({ buttons: 0, axes: [0.9, -0.9, 0, 0, 0, 0] }) as PadSample);
+  eq([st?.lr, st?.fb], [115, 115], 'stick right and up: lr and fb (ASSUMED: Y + is up)');
+  eq(padMoveStick(cfg, padSampleOf({ buttons: 0, axes: [0.05, 0.05, 0, 0, 0, 0] }) as PadSample), null, 'inside the dead zone: no stick');
+}
+  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x10000, axes: [], analog: [] })], [0], 'POV(Y)+ holds control 0 by default');
+  eq([...controlsHeld(defaultPadConfig(), { buttons: 0x1, axes: [], analog: [] })], [4], 'PAD BUTTON1 holds control 4 (Decide) by default');
 }
 {
   // The window: Decide waits; the first rising pad input is set on the row; a holder swaps.
@@ -499,18 +506,18 @@ if (typeof globalThis.KeyboardEvent === 'undefined') {
     swap56: () => false,
   });
   eq(menu.key(key('Enter')), true, 'Decide on row 0 (analog) waits');
-  sample.s = { buttons: 0, analog: [2] };
+  sample.s = { buttons: 0, axes: [], analog: [2] };
   menu.tick();
-  sample.s = { buttons: 0, analog: [] };
+  sample.s = { buttons: 0, axes: [], analog: [] };
   menu.tick();
-  sample.s = { buttons: 0, analog: [2] };
+  sample.s = { buttons: 0, axes: [], analog: [2] };
   menu.tick();
   eq(menu.current()[0], 2, 'the analog Z+ is set on row 0');
   for (let i = 0; i < 4; i++) menu.key(key('ArrowDown'));
   menu.key(key('Enter'));
-  sample.s = { buttons: 0, analog: [] };
+  sample.s = { buttons: 0, axes: [], analog: [] };
   menu.tick();
-  sample.s = { buttons: 0x4, analog: [] };
+  sample.s = { buttons: 0x4, axes: [], analog: [] };
   menu.tick();
   // Row 4 is Select Up (control 0, POV(Y)+); BUTTON3 (0x4) was control 5's, which takes the old value.
   eq(buttonOf(menu.current(), 0), 0x4, 'Select Up is BUTTON3');
@@ -537,15 +544,15 @@ if (typeof globalThis.KeyboardEvent === 'undefined') {
   const events: string[] = [];
   const target = { dispatchEvent: (e: { type: string; key: string }) => (events.push(`${e.type}:${e.key}`), true) } as unknown as HTMLElement;
   applyKeyConfig(null);
-  let s: PadSample | null = { buttons: 0x10000, analog: [] };
+  let s: PadSample | null = { buttons: 0x10000, axes: [], analog: [] };
   const feed = new PadKeyFeed(target, () => s, () => defaultPadConfig());
   feed.tick(0);
   feed.tick(10);
-  s = { buttons: 0, analog: [] };
+  s = { buttons: 0, axes: [], analog: [] };
   feed.tick(20);
   eq(events, ['keydown:ArrowUp', 'keyup:ArrowUp'], 'Select Up (POV(Y)+) is ArrowUp with the default keys');
   events.length = 0;
-  s = { buttons: 0x4, analog: [] };
+  s = { buttons: 0x4, axes: [], analog: [] };
   feed.tick(30);
   eq(events[0], 'keydown:Backspace', 'control 5 (BUTTON3) feeds Backspace (Cancel) first');
   feed.releaseAll();

@@ -134,6 +134,29 @@ export function touchStick(): StickAxes | null {
   return stick;
 }
 
+// The gamepad's left stick (the pad config's Move Left/Right and Move
+// Forward/Backward rows, input/padinput.ts). Same axes and rules as the touch
+// stick: the exe's shared input reads the one stick (unknown_handle_shared_inputs).
+let padStick: StickAxes | null = null;
+
+export function setPadStick(axes: StickAxes | null): void {
+  padStick = axes ? { lr: axes.lr, fb: axes.fb } : null;
+}
+
+// The stick the player walks with: the touch pad's while it is held, else the
+// gamepad's, else null (keyboard movement).
+export function analogStick(): StickAxes | null {
+  return stick ?? padStick;
+}
+
+// Stick axes from unit deflections (-1..1; lr right +, fb forward +) of a
+// gamepad, on the exe's -128..127 scale (ASSUMED: full deflection is 128, the
+// touch rim's value) with the same dead zone. Null when both are inside it.
+export function padStickFromUnit(lr: number, fb: number): StickAxes | null {
+  const axes = { lr: deadZone(axis(lr)), fb: deadZone(axis(fb)) };
+  return axes.lr === 0 && axes.fb === 0 ? null : axes;
+}
+
 // Second-finger drag: a full canvas width turns the camera half a turn.
 // ASSUMED (feel): the exe has no free camera turn on keyboard / mouse.
 export const CAMERA_DRAG_TURN = Math.PI;

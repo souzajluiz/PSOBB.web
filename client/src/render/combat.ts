@@ -198,7 +198,7 @@ import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitP
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
 import { haptic } from '../input/haptics.ts';
-import { StickFlick, touchStick } from '../input/analog.ts';
+import { analogStick, StickFlick } from '../input/analog.ts';
 import { WindowAnim } from '../classic/windowanim.ts';
 import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
@@ -1332,7 +1332,7 @@ export class CombatView {
     const moveDown = MOVE_KEYS.filter((k) => keys.has(k));
     const moved = moveDown.some((k) => !this.heldMove.has(k));
     this.heldMove = new Set(moveDown);
-    const flicked = this.stickFlick.step(touchStick());
+    const flicked = this.stickFlick.step(analogStick());
     if ((moved || flicked) && this.area !== 0 && !this.damage.dead) this.status.mash(true);
     if (me && view) {
       const blocked = this.damage.busy || this.status.immobile;

@@ -255,10 +255,15 @@ export class PlayerMover {
       this.launch = want;
       return;
     }
+    // The run gate's measure: the keyboard path compares the sum of squares
+    // (unknown_handle_gamepad_input_move's speed, the ramp values); the stick's
+    // path (the same function, its amount > 0.1 branch, dump line 587209)
+    // compares movement_input_amount, hypot / 128 clamped to 1.
+    const pace = input.keyboard ? sumSquares : amount;
     if (this.state === 'walk') {
-      if (sumSquares > RUN_THRESHOLD) this.runCount++;
+      if (pace > RUN_THRESHOLD) this.runCount++;
       if (this.runCount >= RUN_TICKS) this.state = 'run';
-    } else if (this.arrived && sumSquares < RUN_THRESHOLD) {
+    } else if (this.arrived && pace < RUN_THRESHOLD) {
       this.state = 'walk';
       this.runCount = 0;
     }

@@ -23,11 +23,14 @@ import { intersects, padLayout, type PxRect } from '../client/src/input/padlayou
 import { loadMuted, MUTE_STORAGE_KEY, parseMuted, resolveMuted, saveMuted, serializeMuted } from '../client/src/audio/mute.ts';
 import {
   addCameraTurn,
+  analogStick,
   AnalogGait,
   AXIS_DEAD,
   dragTurn,
   RUN_FRAMES,
+  setPadStick,
   setTouchStick,
+  padStickFromUnit,
   stickAmount,
   stickAxes,
   takeCameraTurn,
@@ -332,6 +335,18 @@ check(resolveMuted({ stored: null, dev: true, soundParam: 'x' }) === true, 'unkn
   check(loadHaptics(broken) === null && loadHaptics(null) === null, 'throwing / missing storage reads as no choice');
   saveHaptics(true, broken); // must not throw
 }
+
+// The gamepad's left stick feeds the same shared stick (analogStick), the touch's first.
+check(padStickFromUnit(0.05, -0.05) === null, 'pad: inside the dead zone is no stick');
+check(padStickFromUnit(1, 0)?.lr === 127 || padStickFromUnit(1, 0)?.lr === 128, 'pad: full right deflection');
+check(padStickFromUnit(0, 1)?.fb === 127 || padStickFromUnit(0, 1)?.fb === 128, 'pad: full forward');
+setPadStick({ lr: 0, fb: 64 });
+check(analogStick()?.fb === 64, 'pad stick feeds analogStick');
+setTouchStick({ lr: -20, fb: 0 });
+check(analogStick()?.lr === -20, 'the touch stick wins over the pad');
+setTouchStick(null);
+setPadStick(null);
+check(analogStick() === null, 'no stick: keyboard movement');
 
 if (failures) {
   console.log(`${failures} check(s) failed`);

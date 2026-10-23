@@ -10,7 +10,7 @@
 import { PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
-import { stickAmount, takeCameraTurn, touchStick } from '../input/analog.ts';
+import { analogStick, stickAmount, takeCameraTurn } from '../input/analog.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
@@ -747,7 +747,7 @@ export class LobbyView {
     this.moveTicks += dt * 30;
     let ticks = Math.min(Math.floor(this.moveTicks), 30);
     this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
-    const stick = touchStick();
+    const stick = analogStick(); // the touch pad's or the gamepad's left stick
     const leg = moveOn ? this.legState() : undefined;
     for (; ticks > 0 && mine; ticks--) {
       this.prevLogic.copy(pos);
