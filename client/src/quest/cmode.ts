@@ -1214,3 +1214,79 @@ export function timerText(seconds: number): string {
 export function areaCounterText(current: number, total: number, label = 'Area'): string {
   return `${label} ${pad2(current)}/${pad2(total)}`;
 }
+
+// --- the stage list window (Pioneer 2 Challenge object) ----------------------------------------
+// 6x8A (show_challenge_times_window, row 0x8a / perm 2 in the 0x60 table at 0x00a0fba0, handler
+// HandleChallengeStageSelection_004dbb20 at 0x004dbb20 -> SetChallengeStageSelectionWindow_004d9d1c
+// -> UpdateChallengeStageListWindow_004dc350). The sender is the leader's challenge entity
+// (UpdateChallengeEntityProgress_004d9848, 0x004d9848), which the port does not run.
+// The index is the u32 at body +4. 0 closes the window; 1 and 2 are the Records overviews of
+// Episode 1 and 2; 3..11 are Episode 1 stages 1..9; 12..16 are Episode 2 stages 1..5.
+export const CM_STAGE_LIST_MAX = 16;
+
+// The strings the window uses: unitxt group 12 (0x4f "Records", 0x50 "Current Stage ", 0x51
+// "No Record", 0x52 "All stages cleared", 0x53 "Stage "). The separators are the exe's own
+// strings: 0x00909980 "< %s >\n", 0x00909990 "\n    ", 0x009099c4 "\n  ", 0x009099cc "      ",
+// 0x00909a28 "  ", 0x00909a30 "%1d'%02d\"%02d\n" (the time).
+export interface StageListStrings {
+  records: string;
+  current: string;
+  noRecord: string;
+  allCleared: string;
+  stage: string;
+}
+export const STAGE_LIST_STRINGS_EN: StageListStrings = {
+  records: 'Records',
+  current: 'Current Stage ',
+  noRecord: 'No Record',
+  allCleared: 'All stages cleared',
+  stage: 'Stage ',
+};
+
+// The leading valid stage times of an episode (the count GetValidChallengeStageCount_004da298 returns).
+export function validStageCount(records: ChallengeRecords, e: number): number {
+  let n = 0;
+  while (n < CM_STAGE_COUNT[e]! && records.time(e, n) !== 0) n++;
+  return n;
+}
+
+// The window's lines (UpdateChallengeStageListWindow_004dc350 / ..Content_004dc6ac), or null for
+// index 0 or an index out of range. The per-player first column of a completed stage (the stage
+// name and its total, the exe's "%02d'%02d\"%02d %s" at 0x00909a04, and the 12-space
+// "failed" text) is not ported: its stack slots in the disassembly were not traced, so that
+// column is left out (see the DEVLOG).
+export function stageListLines(
+  index: number,
+  players: readonly { name: string; records: ChallengeRecords }[],
+  s: StageListStrings = STAGE_LIST_STRINGS_EN,
+): string[] | null {
+  if (!Number.isInteger(index) || index <= 0 || index > CM_STAGE_LIST_MAX) return null;
+  let text = '';
+  if (index <= 2) {
+    const e = index - 1;
+    text = `< ${s.records} >\n`;
+    for (const p of players) {
+      const n = validStageCount(p.records, e);
+      const count = n < CM_STAGE_COUNT[e]! ? (n === 0 ? s.noRecord : `${s.current}${pad2(n)}`) : s.allCleared;
+      text += `${p.name}\n    ${count}\n`;
+    }
+  } else {
+    const e = index <= 11 ? 0 : 1;
+    const k = e === 0 ? index - 3 : index - 12;
+    text = `< ${s.stage}${k + 1} >\n`;
+    for (const p of players) {
+      text += `${p.name}\n  `;
+      const t = p.records.time(e, k);
+      text += t === 0 ? `      ${s.noRecord}\n` : `  ${hmsText(t)}\n`;
+    }
+  }
+  const lines = text.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+// The index of a 6x8A body (its u32 at +4, the exe's *(int *)(param_1 + 4)).
+export function parseStageListIndex(b: Uint8Array): number | null {
+  if (b.length < 8) return null;
+  return new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(4, true);
+}

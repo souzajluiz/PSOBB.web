@@ -32,13 +32,16 @@ import {
   parseDeadFlag,
   parseFailureOption,
   parseSetChallengeTime,
+  parseStageListIndex,
   recordGrave,
   resultLines,
   RECORDS_SIZE,
   saveGrave,
   sRankChoices,
   srankNameFromInput,
+  stageListLines,
   timerText,
+  CM_STAGE_LIST_MAX,
   type ChallengeEnv,
   type ChallengeMode,
 } from './cmode.ts';
@@ -85,6 +88,8 @@ export class ChallengeRuntime {
   private readonly graveHudIds = new Set<string>();
   private lastGraveAt = 0;
   private lastArea = '';
+  // maybe_currently_selected_challenge_stage_window (0 when none).
+  private stageListIndex = 0;
 
   private readonly o: ChallengeRuntimeOptions;
 
@@ -121,7 +126,7 @@ export class ChallengeRuntime {
     for (const d of this.disposers) d();
     this.clearGraveLabels();
     const ui = this.o.town.ui;
-    for (const id of ['cmode-timer', 'cmode-area', 'cmode-result', 'cmode-hint', 'cmode-dead', 'cmode-wait']) ui.setHud(id, null);
+    for (const id of ['cmode-timer', 'cmode-area', 'cmode-result', 'cmode-hint', 'cmode-dead', 'cmode-wait', 'cmode-stages']) ui.setHud(id, null);
     this.o.view.combat.challengeExpMultiplier = null;
     this.restoreCharacter();
   }
@@ -293,7 +298,12 @@ export class ChallengeRuntime {
   // --- incoming 6x ---------------------------------------------------------------------------------
 
   private onSubcommand(sub: number, clientId: number, body: Uint8Array): void {
-    if (!this.alive || clientId === this.o.game.selfId) return;
+    if (!this.alive) return;
+    if (sub === 0x8a) {
+      this.showStageList(parseStageListIndex(body));
+      return;
+    }
+    if (clientId === this.o.game.selfId) return;
     const cm = this.cm;
     if (sub === 0x95 && cm) {
       const t = parseSetChallengeTime(body);
@@ -311,6 +321,23 @@ export class ChallengeRuntime {
         this.floorChanged();
       }
     }
+  }
+
+  // SetChallengeStageSelectionWindow_004d9d1c: the window changes only when the index does, and
+  // 0 closes it. The Pioneer 2 Challenge object (g_ChallengeObject) only exists in a Challenge game.
+  private showStageList(index: number | null): void {
+    if (index === null || index < 0 || index > CM_STAGE_LIST_MAX || index === this.stageListIndex) return;
+    this.stageListIndex = index;
+    const { game, town } = this.o;
+    if (!game.info?.challenge) return;
+    const players = this.present()
+      .sort((a, b) => a - b)
+      .map((id) => ({
+        name: game.players.get(id)?.name || `Player ${id + 1}`,
+        records: (id === game.selfId ? this.records() : this.others.get(id)) ?? new ChallengeRecords(),
+      }));
+    const lines = stageListLines(index, players);
+    town.ui.setHud('cmode-stages', lines ? { x: 388, y: 177, lines } : null);
   }
 
   // --- HUD and per-tick duties -------------------------------------------------------------------------

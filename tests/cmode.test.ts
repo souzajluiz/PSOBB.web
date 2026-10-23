@@ -35,17 +35,23 @@ import {
   decryptRankText,
   dfCommand,
   encodeChallengeTime,
+  encodeStageTime,
   encryptRankText,
+  hmsText,
+  CM_STAGE_LIST_MAX,
   parseChallengeRecords,
   parseDeadFlag,
   parseFailureOption,
   parseSetChallengeTime,
+  parseStageListIndex,
   RECORDS_SIZE,
   resultLines,
   sRankChoices,
   srankNameFromInput,
+  stageListLines,
   S_RANK_NAME_MAX,
   timerText,
+  validStageCount,
   validTime,
   type ChallengeEnv,
   type ChallengeResult,
@@ -622,6 +628,52 @@ if (newserv) {
   // The drop fan starts from the grave's own heading (ProcessGraveChallengePlayerLogic_004ddcbc).
   const fan = graveDropPoints(0, 0, graveHeading(1), 1);
   check(Math.abs(fan[0]!.x - 7.5 * Math.cos(Math.PI / 4)) < 1e-6 && Math.abs(fan[0]!.z - 7.5 * Math.sin(Math.PI / 4)) < 1e-6, 'the fan starts at the grave heading (slot 1 = 0x2000 = 45 degrees)');
+}
+
+// --- the stage list window (6x8A; UpdateChallengeStageListWindow_004dc350 / ..Content_004dc6ac) --------
+{
+  const rnd = lcg(3);
+  const mine = new ChallengeRecords();
+  mine.setTimeRaw(0, 0, encodeStageTime(125, rnd));
+  mine.setTimeRaw(0, 1, encodeStageTime(3725, rnd));
+  const other = new ChallengeRecords();
+  eq(hmsText(3725), "1'02\"05", 'h of 3725 is 1, mm and ss are two digits');
+  eq(validStageCount(mine, 0), 2, 'two leading valid stages');
+  eq(validStageCount(other, 0), 0, 'no stage');
+  // A gap stops the count (the loop in GetValidChallengeStageCount_004da298 stops at the first zero).
+  mine.setTimeRaw(0, 3, encodeStageTime(200, rnd));
+  eq(validStageCount(mine, 0), 2, 'a later valid stage after a gap is not counted');
+  mine.setTimeRaw(0, 3, 0);
+  eq(stageListLines(0, [{ name: 'Me', records: mine }]), null, 'index 0 closes the window');
+  eq(stageListLines(CM_STAGE_LIST_MAX + 1, [{ name: 'Me', records: mine }]), null, 'index 17 is not a window');
+  eq(stageListLines(-1, [{ name: 'Me', records: mine }]), null, 'a negative index is not a window');
+  // Overview (1 = Episode 1): the title, then name / count per visible player.
+  eq(
+    stageListLines(1, [{ name: 'Me', records: mine }, { name: 'Other', records: other }]),
+    ['< Records >', 'Me', '    Current Stage 02', 'Other', '    No Record'],
+    'Episode 1 overview: Current Stage NN and No Record',
+  );
+  const full = new ChallengeRecords();
+  for (let s = 0; s < 9; s++) full.setTimeRaw(0, s, encodeStageTime(100 + s, rnd));
+  eq(stageListLines(1, [{ name: 'Full', records: full }])!.at(-1), '    All stages cleared', 'all 9 stages of Episode 1 cleared');
+  const ep2 = new ChallengeRecords();
+  for (let s = 0; s < 5; s++) ep2.setTimeRaw(1, s, encodeStageTime(100 + s, rnd));
+  eq(stageListLines(2, [{ name: 'Me', records: ep2 }])!.at(-1), '    All stages cleared', 'all 5 stages of Episode 2 cleared');
+  eq(stageListLines(2, [{ name: 'Me', records: mine }])!.at(-1), '    No Record', 'Episode 2 with no record');
+  // Stage windows: 3..11 are Episode 1 stages 1..9, 12..16 are Episode 2 stages 1..5.
+  eq(
+    stageListLines(3, [{ name: 'Me', records: mine }, { name: 'Other', records: other }]),
+    ['< Stage 1 >', 'Me', '    0\'02"05', 'Other', '        No Record'],
+    'stage 1 of Episode 1: a time and a missing one',
+  );
+  eq(stageListLines(11, [{ name: 'Me', records: mine }])![0], '< Stage 9 >', 'index 11 is Episode 1 stage 9');
+  const ep2Stage3 = new ChallengeRecords();
+  ep2Stage3.setTimeRaw(1, 2, encodeStageTime(65, rnd));
+  eq(stageListLines(14, [{ name: 'Me', records: ep2Stage3 }]), ['< Stage 3 >', 'Me', '    0\'01"05'], 'index 14 is Episode 2 stage 3');
+  eq(stageListLines(16, [{ name: 'Me', records: ep2 }])![0], '< Stage 5 >', 'index 16 is Episode 2 stage 5');
+  // The 6x8A body: the index is the u32 at +4.
+  eq(parseStageListIndex(Uint8Array.of(0x8a, 2, 0, 0, 3, 0, 0, 0)), 3, 'the index is read at +4');
+  eq(parseStageListIndex(Uint8Array.of(0x8a, 2, 0, 0)), null, 'a short body has no index');
 }
 
 console.log(failures ? `FAILED (${failures} problems)` : 'OK');
