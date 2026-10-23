@@ -131,6 +131,12 @@ export class FieldMenu {
     return this.menu.open;
   }
 
+  // Console aid: the open leaf's state (the item pack's debugState), null with no leaf.
+  leafDebug(): unknown {
+    if (!this.leaf) return null;
+    return this.leaf instanceof ItemPackMenu ? { leaf: 'itempack', ...this.leaf.debugState() } : { leaf: 'other' };
+  }
+
   // The menu shifts the 3D view (frames 0..3, mainmenu.ts menuViewShift).
   get shift(): number {
     return this.menu.shift;

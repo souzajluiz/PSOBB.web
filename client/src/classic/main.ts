@@ -293,6 +293,9 @@ async function main(): Promise<void> {
         ...(streamFile ? { streamFiles: () => streamFile! } : {}),
       });
       gameView = view;
+      // The field Item Pack names its rows and draws the equipment panel from the item names
+      // (render/fieldhud.ts names()); the lobby's Item List has them through the same loader.
+      view.hud.setNames(() => itemNames);
       view.onLobbyWarp = () => void leaveGame(game, shipName);
       townField = new FieldTown({ game, view, files, canvas: worldCanvas, character: () => session?.character ?? null, log: game.log });
       Object.assign(window, { classicTown: townField.town });

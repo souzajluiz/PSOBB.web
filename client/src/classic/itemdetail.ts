@@ -77,7 +77,14 @@ export const VALUE_COLOR = {
   none: '#909090', // 0xff909090
 } as const;
 
-// The panel's window (GUI entry 0xC, (16, 172)); the size is ASSUMED.
+// The panel's window: GUI entry 0xC (16, 172) (get_gui_position(0xc), state 0/1 of
+// ChallengePlayerListWindow_HandleInput_007526c8). The height 132 is the exe's base: the
+// stats-only case of EquipmentStatDisplayObject_Update_00727220 / _00727078 sets it with
+// UIElement_SetPositionAndSize_0072e7e4(panel, 0, 132); the requirement rows grow it to
+// 172 / 192 / 212 / 232 (not ported: the rows went with the pages). The width 240 is ASSUMED
+// (the exe's calls leave the width to the element table, 0x00973e24, not decoded). The
+// panel's bottom (304) overlaps the item list (ITEM_LIST, entry 3 / the weapon list of entry
+// 7 at (13, 256)) by 48 px: the exe's coordinates overlap the same way.
 export const EQUIP_PANEL = { x: 16, y: 172, w: 240, h: 132 } as const;
 
 // What an item adds to the six stats (ApplyEquipmentBonuses_005d330c, see the
