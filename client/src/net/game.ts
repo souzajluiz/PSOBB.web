@@ -1506,6 +1506,14 @@ export function parsePlayerDeath(body: Uint8Array): { clientId: number; deathFla
   return { clientId: dv.getUint16(2, true), deathFlags: dv.getUint32(4, true) };
 }
 
+// 6x33 (G_RevivePlayer_6x33, 8): the Moon Atomizer's revive. The header's client id
+// is the sender; client_id2 (at +4) is the revived player.
+export function parseRevivePlayer(body: Uint8Array): { clientId: number; target: number } | null {
+  if (body.length < 6 || body[0] !== 0x33) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  return { clientId: dv.getUint16(2, true), target: dv.getUint16(4, true) };
+}
+
 // 6x46: the entity ids a strike hit.
 export function parseAttackTargets(body: Uint8Array): { clientId: number; targets: number[] } | null {
   if (body.length < 8 || body[0] !== 0x46) return null;

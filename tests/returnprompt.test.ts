@@ -6,6 +6,9 @@
 import { ReturnPrompt, RETURN_POS, RETURN_TEXT, RETURN_YES, RETURN_NO } from '../client/src/classic/returnprompt.ts';
 import { PlayerDamage, DEATH_FADE_TICKS } from '../client/src/combat/playerdamage.ts';
 import { wrapGameText } from '../client/src/classic/chat.ts';
+import { pioneer2ReturnArrival } from '../client/src/net/telepipe.ts';
+import { reviveRestore, reverserHp } from '../client/src/combat/buffs.ts';
+import { parseRevivePlayer } from '../client/src/net/game.ts';
 
 // A stub canvas for the text measure (gametext.ts): every glyph is 7 px wide.
 (globalThis as unknown as { OffscreenCanvas: unknown }).OffscreenCanvas = class {
@@ -102,6 +105,68 @@ check(wrapGameText(QUESTION, RETURN_POS.w - 20).length === 3, 'the question is t
   // Returning to Pioneer 2 refills HP (combat/playerdamage reset, as enterFloor does).
   d.reset(100);
   check(!d.dead && d.hp === 100 && d.fade === 0, 'a reset after the return is alive at full HP');
+}
+
+{
+  // The Yes spot: the Medical Center position of the player's client id and episode
+  // (SetPlayerRespawnState_006986ec), not DAT_0097df90 (214, 0, -236), which is for
+  // the state-3 players. Episode 4 uses the Episode 1 values; angle is the P2 facing.
+  const a = pioneer2ReturnArrival(0, 1);
+  check(a.x === 213 && a.y === 3 && a.z === -280, 'Episode 1, client 0: the Medical Center spot (213, 3, -280)');
+  const b = pioneer2ReturnArrival(3, 1);
+  check(b.x === 225 && b.z === -280, 'Episode 1, client 3: (225, 3, -280)');
+  const c = pioneer2ReturnArrival(1, 2);
+  check(c.x === 5 && c.y === 0 && c.z === -185, 'Episode 2, client 1: (5, 0, -185)');
+  const d4 = pioneer2ReturnArrival(2, 3);
+  check(d4.x === 219 && d4.y === 3 && d4.z === -280, 'Episode 4 (wire 3) uses the Episode 1 table');
+  check(a.angle === 0x4000, 'the arrival facing is the P2 arrival angle (ASSUMED)');
+  check(!(a.x === 214 && a.z === -236), 'the arrival is not DAT_0097df90');
+}
+
+{
+  // The revive rule (PlayerRestoreHealthAndTP_0068fddc): a field (unsafe, no quest)
+  // is max HP / 2 with TP kept; a quest or a safe map is full HP and TP.
+  const field = reviveRestore(100, 80, { quest: false, unsafe: true });
+  check(field.hp === 50 && field.tp === null, 'a Reverser on a field: half HP, TP kept');
+  check(reverserHp(1) === 1, 'half HP is at least 1');
+  const quest = reviveRestore(100, 80, { quest: true, unsafe: true });
+  check(quest.hp === 100 && quest.tp === 80, 'a Reverser in a quest: full HP and TP');
+  const safe = reviveRestore(100, 80, { quest: false, unsafe: false });
+  check(safe.hp === 100 && safe.tp === 80, 'a Reverser on a safe map: full HP and TP');
+}
+
+{
+  // The Moon Atomizer's 6x33: the sender's client id at +2, the revived player at +4.
+  const body = new Uint8Array([0x33, 0x02, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00]);
+  const r = parseRevivePlayer(body);
+  check(r !== null && r.clientId === 2 && r.target === 1, '6x33: sender 2 revives client 1');
+  check(parseRevivePlayer(new Uint8Array([0x33, 0x02, 0x02, 0x00])) === null, '6x33 shorter than 6 bytes is rejected');
+  check(parseRevivePlayer(new Uint8Array([0x4f, 0x01, 0x02, 0x00, 0x01, 0x00])) === null, 'a 6x4F body is not a 6x33');
+  // The revive state: one 6x4F, the HP set, no second revive while alive.
+  const sent: string[] = [];
+  const dmg = new PlayerDamage({
+    motion: () => {},
+    push: () => {},
+    face: () => {},
+    sendHit: () => {},
+    sendShieldAttack: () => {},
+    sendDeath: () => {},
+    sendRevivable: () => {},
+    sendRevived: () => sent.push('revived'),
+    log: () => {},
+  });
+  dmg.reset(100, 100);
+  dmg.hit(500, 0, 0);
+  let n = 0;
+  while (dmg.state !== 'revivable' && n < 1000) {
+    dmg.tick();
+    n++;
+  }
+  dmg.revive(50);
+  check(dmg.state === 'reviving' && dmg.hp === 50 && !dmg.dead, 'the revive from the revivable state: alive at the given HP');
+  check(sent.length === 1, 'the revive sends one 6x4F');
+  dmg.revive(50);
+  check(sent.length === 1, 'a second revive while alive sends nothing');
 }
 
 console.log(`${checks - failures}/${checks} checks passed${failures ? `, ${failures} FAILED` : ' ALL PASS'}`);

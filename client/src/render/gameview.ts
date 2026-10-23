@@ -43,6 +43,9 @@ import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { serverUrl } from '../net/server.ts';
+import { pioneer2ReturnArrival } from '../net/telepipe.ts';
+
+const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
 // The map viewer's set-data markers stand in for entities without a model.
 // In a game those are logic-only objects (TShopGenerator, TObjLuker,
@@ -178,6 +181,7 @@ export class GameView {
       constructObjects: (floor, room, group) => this.constructObjects(floor, room, group),
       onRevivable: () => this.openReturnPrompt(),
       onRevived: () => this.hud.closeReturnPrompt(),
+      questRunning: () => this.quest !== null,
       ...(options.streamFiles ? { streamFiles: options.streamFiles } : {}),
     });
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
@@ -445,12 +449,15 @@ export class GameView {
   }
 
   // Yes on the dead prompt: return_to_p2_maybe sends 6x21 floor 0 and loads
-  // Pioneer 2 (warpTo). ASSUMED: the arrival spot is the floor's group 0 spawn,
-  // the Hunter's Guild return's (quest/town.ts), not the Medical Center's
-  // respawn position (DAT_0097df90). combat.returnedToCity refills HP and TP.
+  // Pioneer 2 (warpTo). The arrival is the player's Medical Center spot
+  // (SetPlayerRespawnState_006986ec, net/telepipe.ts pioneer2ReturnArrival); the
+  // floor's group 0 spawn still places the objects and NPCs. DAT_0097df90 is
+  // sent for the state-3 players only (FUN_007b4234), not for this player.
+  // combat.returnedToCity refills HP and TP.
   private async returnToPioneer2(): Promise<void> {
     try {
-      await this.warpTo(0, 0);
+      const a = pioneer2ReturnArrival(this.game.selfId, this.episode());
+      await this.warpTo(0, 0, { x: a.x, y: a.y, z: a.z, angle: a.angle * BAMS_TO_RAD });
       if (this.game.self?.floor === 0) {
         this.combat.returnedToCity();
         this.log('returned to Pioneer 2');

@@ -9955,3 +9955,34 @@ So the solo case: spring -> captured -> hold for counter ticks -> the trap's on-
 - Hit type 4 (vtable 0x10 = 0x63ed14, which releases and kills the trap) is not decoded: the attack that makes it is not traced. Not ported.
 
 **Checks (follow-up 2):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all pass (sections 1-8). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+
+## 2026-10-23: Revives from a teammate (Reverser, Moon Atomizer) and the return spot (Medical Center, not DAT_0097df90)
+
+**Report:** the dead prompt's Yes put the player at the Pioneer 2 group 0 spawn. The exe places a returning player at its Medical Center spot (per episode and client id), and DAT_0097df90 is for the state-3 players only. Also the revive by a teammate: the exe revives with the Reverser's rule (HP / TP by quest and map) and the Moon Atomizer is a Reverser-type object (6x33). The earlier note "no 6x4F receive path for self" was wrong: a remote Reverser already revived the local player (`remoteSupport`), now through the same rule.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13 dump, names from the Ghidra dump; handlers read from the 0x60 subcommand table `g_Packet0x60SubcommandTable` at 0x00a0fba0, 8-byte entries of type u16, permission u16, handler u32, found by type with `exedata.py read 0x00a0fba0 u 368`):**
+- 6x4F (table entry 0x4f, handler 0x0069aea8): `FUN_006a97c0` ignores the sender when it is this client (DAT_00aaecf0 == 0 and the id == DAT_00a9c4f4). Otherwise, for a valid player with +0x33c & 4 clear and +0x14 == DAT_00aca374, `FUN_0069d8f4(0)` = `ForceExitSpecialState_0069db5c` (0x0069db5c): the state 0x12 (revive) with invulnerability 300, max_tp 0x30, the revive particle. So 6x4F is the other clients' update of a revived player; the revived client sends it itself (`dispatch_action_0x4f`, line 583545, from the 0x12 state's dispatch).
+- 6x33 (table entry 0x33, handler 0x0069a1e0, FUN_0069a1e0): packet = sender client id (+2), client_id2 = the revived player (+4). When the target is a valid player with +0x33c & 4 clear and +0x14 == DAT_00aca374, it builds an object (`FUN_006ef8a4(sender, sender + 0x38, [1 target: client_id2, 0xffff pad], 0x1d)`) with range 0x41200000 = 10.0, the Reverser's range (`techlightning.ts` reverser 10). ASSUMED: the object's hit is the Reverser's hit (the revive below).
+- Reverser on a dead target: `entity_hit_by_tech` case `reverser` (dump line 748212) runs vtable +0x108 = `PlayerResetDeadState_0068fdc8` (line 571414: clears the dead flag, then `PlayerRestoreHealthAndTP_0068fddc`). That function (line 571426): if g_QuestStarted != 1, on an unsafe map outside battle mode with invincibility != 3, HP = max_hp1 / 2 and TP is not touched; otherwise HP = max_hp1 and TP = max_tp2. The dead flag does not block a Reverser (line 747826).
+- Return (`return_to_p2_maybe`, line 573760): 6x21 floor 0 (`local_14 = 0x21, 2`), then `SetPlayerRespawnState_006986ec(player_idx, episode multiplier, get_p2_med_center_return_location(player))` (line 573780, body at 0x006986ec: DAT_00a94140 + idx * 20 = [1, mult, x, y, z]). `get_p2_med_center_return_location` = the table of WeaponStat[0xb].flDamage (0x009cc4ec + 4 * episode, three pointers) + player_idx * 12. Read with `exedata.py`: Episode 1 (0x00968e14) client 0..3 = (213, 3, -280), (207, 3, -280), (219, 3, -280), (225, 3, -280); Episode 2 (0x00968e44) = (7, 0, -200), (5, 0, -185), (20, 0, -211), (23, 0, -197); Episode 4 (0x00968e74) = Episode 1's values.
+- `SinowberillChallenge_SendPlayerPositionAndFloorChange` (line 573787) is `FUN_007b4234` (Ghidra): for each of the 4 player slots in state +0x32c == 3 with +0x750 != -1 it sends the position and the floor. DAT_0097df90 (`get_p2_return_location_2`, `&DAT_0097df90 + episode * 12`) = (214, 0, -236) for all three episodes; it is the position of those state-3 players, not of the returning field player (+0x32c == 1, ASSUMED).
+
+**Ported:**
+- `combat/buffs.ts` `reviveRestore(maxHp, maxTp, { quest, unsafe })`: the Reverser's rule above (HP max / 2 and TP kept on a field; full HP and TP in a quest or a safe map). `reverserHp` stays for the party windows.
+- `render/combat.ts` `reviveSelf(from)`: the revive of the local dead player through `reviveRestore`, then `PlayerDamage.revive(hp)` (the revive state; sends 6x4F; `onRevived` closes the dead prompt). The remote Reverser (`remoteSupport`) now uses it (it used max / 2 and never set TP); a 6x33 whose target is this client does the same (`parseRevivePlayer` in `net/game.ts`). `CombatOptions.questRunning` (set by `render/gameview.ts`) tells whether a quest runs.
+- `net/telepipe.ts` `P2_MEDICAL_EP1` / `P2_MEDICAL_EP2` and `pioneer2ReturnArrival(clientId, episode)` (wire episode 1 / 2 / 3 = Episode 4). `render/gameview.ts` `returnToPioneer2` warps to floor 0 with that spot as the arrival (`placePlayer`, as the telepipe does); the floor's group 0 spawn still places the objects and NPCs.
+- Tests: `tests/returnprompt.test.ts` new sections: the arrival spots (Episode 1 / 2 / 4, not DAT_0097df90), the revive rule, `parseRevivePlayer` (6x33 length and sub), and the revive state (one 6x4F, no second revive while alive).
+
+**Not changed (the 6x4F question):** the local dead player does not need a 6x4F receive: the exe ignores its own 6x4F, and the revive comes from the Reverser or the 6x33 effect. Its own 6x4F is sent by `PlayerDamage.revive`, as before.
+
+**Not ported:** the Moon Atomizer's sending side. The port's item use (`net/items.ts` `use`) sends 6x27 for the local player only: there is no target pick for a tool on a dead teammate, so nothing sends 6x33 yet. The Reverser's sending side exists (`castTechnique` -> `reverserTarget`, the nearest dead teammate within the range, 6x47 with the client id).
+
+**ASSUMED / UNCLEAR:**
+- The 6x33 object's hit is the Reverser's revive (the object 0x1d is not decoded; the range 10 and the one-target list fit the Reverser).
+- The player index (`player_idx` of the exe) is the port's client id (`selfId & 3`).
+- The arrival facing is the P2 arrival angle (0x4000); the exe's respawn state has no angle.
+- The exe's invincibility-3 and battle-mode tests are covered by the quest flag (a battle run is a quest session).
+- The state-3 check of `FUN_007b4234` (+0x32c == 3 = not a field player) and the field player's +0x32c == 1 are from the DEVLOG 2026-10-23 entries, not re-checked here.
+- The web R key still revives a dead player at 12.5% HP (a web convenience, not in the exe; kept).
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/returnprompt.test.ts` 38/38, and `playerfx`, `techniques`, `items`, `buffs`, `combatdepth`, `telepipe`, `party`, `traps` pass. Not run: Playwright / Chrome (per the brief).
