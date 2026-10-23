@@ -359,7 +359,11 @@ export class LobbyScreen implements Screen {
       this.menu.leafOpen = true;
     } else if (id === 0x25 && this.hud.team) {
       // handle_player_menu_select team_member_list_menu (classic/teammenu.ts): the list of the team's members.
-      this.teamList = new TeamMemberListWindow(this.hud.team, { t11: (i) => this.hud.text(0x0b, i), t15: (i) => this.hud.text(0x0f, i) });
+      this.teamList = new TeamMemberListWindow(this.hud.team, {
+        t11: (i) => this.hud.text(0x0b, i),
+        t12: (i) => this.hud.text(0x0c, i),
+        t15: (i) => this.hud.text(0x0f, i),
+      });
       this.teamList.show();
       this.menu.leafOpen = true;
     } else if (id === 6) {

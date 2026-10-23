@@ -380,6 +380,8 @@ async function main(): Promise<void> {
       setPrivilege: (card, privilege) => c.setPrivilege(card, privilege),
       disband: () => c.disband(),
       crossRanking: () => c.crossRanking(),
+      // Enter on a member row: the Guild Card search (0040 / 0041) of that card, true on an answer.
+      searchMember: async (card) => (await (session?.guildCardClient ?? null)?.search(gc, card)) != null,
     };
   };
 

@@ -134,11 +134,15 @@ export interface TeamHost {
   setPrivilege(guildCard: number, privilege: number): Promise<number>;
   disband(): Promise<number>;
   crossRanking(): Promise<TeamRank[]>;
+  // The Guild Card search (0040 / 0041, net/guildcard.ts) of one member: true when the
+  // member answers (the exe's Enter on a member row, dump 720824 states 3, 0xf, 0x10).
+  searchMember?(guildCard: number): Promise<boolean>;
 }
 
 export interface TeamText {
   t11: Text;
   t15: Text;
+  t12?: Text;
 }
 
 export function format(template: string, ...args: string[]): string {
@@ -716,19 +720,49 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
 // (dump 722010) colours them by privilege: 0x10 / 0x20 0xff8affa3, 0x30 0xff5eb1ff,
 // 0x40 0xffff6d46, others the default colour.
 //
-// Not ported: Enter on a row. The exe opens an action sub-list (titled unitxt
-// (11, 0x30), rows (11, 0x15c..0x15e), the dump's state 4 at 720880..) and then its
-// confirm lists (unitxt (11, 0x3a), (11, 0x15f / 0x160)). What the rows do is not
-// traced yet, so Enter is a no-op here and only Cancel closes. The member list is
-// read-only: 08EA is the request, 09EA the answer.
+// Enter on a row (ChallengePlayerInfoWindow_ProcessState_0074d9ac, dump 720824):
+//   state 3: the row's guild card is kept (+0x24) and the window goes to 0xf;
+//   state 0xf: the Guild Card search 0040 for that card (SendJoinPacket_0074f008 ->
+//     send_packet0x40), the "Press X" line (unitxt (12, 0x4b)) in a message box at
+//     (418, 344) (dump state 0xf, 206 x 92 as the dump's locals show);
+//   state 0x10: 150 frames (0x96) for the answer. The answer (the 0041 card, which
+//     sets the list's title flag, dump 0074d47c) goes to state 4, the action list
+//     titled unitxt (11, 0x30) at get_gui_position(0x8a) = (419, 256) (CreateMenuList
+//     _0074ea28, dump 721815); no answer adds "Not Found." (unitxt (11, 0x15b)) and
+//     state 0x11 waits for a key.
+//   Action rows: Send Mail (11, 0x15c, always) -> state 0xb; Sent Item (11, 0x15d,
+//     enabled only with the trade-state flag and another member) -> state 0x15; Meet
+//     the User (11, 0x15e, enabled in the lobby) -> state 0x12. Their windows are not
+//     ported: a chosen enabled row is recorded (lastLeaf) and the action list stays.
+//   The confirm list Sort (11, 0x3a) with By Number / By Rank (11, 0x15f / 0x160) is
+//     state 7, which only SetState_0074e9f4(3) enters; this list has no row 3, so the
+//     member list does not reach it. Not ported.
+// The member list itself is read-only: 08EA is the request, 09EA the answer.
 //
 // ASSUMED: the window sits at get_gui_position(0x15) = (13, 256), read from the
 // static table at 0x00971f40 (tools/exedata.py). The table is not checked against a
 // runtime write: entry 0x1b reads (200, 256) statically while the port's main menu
 // uses (28, 85) at run time, so some entries are written while the game runs.
 // The 8 visible rows and the width (widest row + 2 * INSET) are the PickList's.
+// The 150-frame wait is the GuildCardClient's 5 s timeout (ASSUMED 30 fps).
 export const TEAM_LIST_POS = { x: 13, y: 256 } as const; // 0x15, ASSUMED (see above)
-export const T11_TEAM_LIST = { title: 0x156 } as const;
+export const TEAM_ACTION_POS = { x: 419, y: 256 } as const; // get_gui_position(0x8a)
+export const TEAM_SEARCH_MSG_POS = { x: 418, y: 344, w: 206 } as const; // the state 0xf box
+export const T11_TEAM_LIST = { title: 0x156, action: 0x30, notFound: 0x15b, sendMail: 0x15c, sentItem: 0x15d, meetUser: 0x15e } as const;
+export const T12_TEAM_LIST = { pressX: 0x4b } as const;
+
+export type MemberPhase = 'list' | 'searching' | 'notFound' | 'actions';
+
+// The action list's rows (CreateMenuList_0074ea28): Send Mail always; Sent Item only
+// with the trade-state flag and not on the own card ((iVar5 != 1) || bVar1 greys it);
+// Meet the User only in the lobby (unknown_current_map_is_lobby).
+export function memberActionRows(text: Text, o: { tradeState: boolean; self: boolean; lobby: boolean }): ListItem[] {
+  return [
+    { label: text(T11_TEAM_LIST.sendMail), value: 0, enabled: true },
+    { label: text(T11_TEAM_LIST.sentItem), value: 1, enabled: o.tradeState && !o.self },
+    { label: text(T11_TEAM_LIST.meetUser), value: 2, enabled: o.lobby },
+  ];
+}
 
 // The row colour of a privilege level (the exe's ARGB words, alpha dropped).
 export function memberColor(privilege: number): string | undefined {
@@ -742,13 +776,29 @@ export class TeamMemberListWindow {
   private list: PickList = new PickList([]);
   private colors = new WeakMap<ListItem, string | undefined>();
   private epoch = 0;
+  private searchEpoch = 0;
   private visible = false;
+  private phase: MemberPhase = 'list';
+  private actions: PickList | null = null;
+  private leaf: number | null = null;
   private readonly title: string;
+  private readonly actionTitle: string;
+  private readonly pressX: string;
+  private readonly notFound: string;
+  private readonly actionText: Text;
   private readonly host: TeamHost;
+  // trade-state: IsTradeStateFlagSet_00825abc (not wired in the port: ASSUMED never set);
+  // lobby: the Team menus live in the lobby, so Meet the User is enabled.
+  private readonly rules: { tradeState: boolean; lobby: boolean };
 
-  constructor(host: TeamHost, text: TeamText) {
+  constructor(host: TeamHost, text: TeamText & { t12: Text }, rules: { tradeState?: boolean; lobby?: boolean } = {}) {
     this.host = host;
     this.title = text.t11(T11_TEAM_LIST.title);
+    this.actionTitle = text.t11(T11_TEAM_LIST.action);
+    this.notFound = text.t11(T11_TEAM_LIST.notFound);
+    this.pressX = text.t12(T12_TEAM_LIST.pressX);
+    this.actionText = text.t11;
+    this.rules = { tradeState: rules.tradeState ?? false, lobby: rules.lobby ?? true };
   }
 
   get open(): boolean {
@@ -761,6 +811,8 @@ export class TeamMemberListWindow {
     const epoch = ++this.epoch;
     this.visible = true;
     this.list = new PickList([]);
+    this.phase = 'list';
+    this.actions = null;
     this.host
       .members()
       .then((members) => {
@@ -775,21 +827,82 @@ export class TeamMemberListWindow {
       .catch(() => {});
   }
 
-  // Cancel closes; Enter on a row does nothing (see above). Returns whether the window is still open.
+  // List: Cancel closes, Enter searches the row's member. Searching: Cancel goes back to
+  // the list (the answer is then dropped). Not found: a key goes back. Actions: Cancel
+  // goes back, Enter records the row (the leaf windows are not ported).
+  // Returns whether the window is still open.
   key(e: MenuKey): boolean {
     if (!this.visible) return false;
-    if (menuKeyOf(e) === 'cancel') {
-      this.close();
-      return false;
+    const k = menuKeyOf(e);
+    switch (this.phase) {
+      case 'list': {
+        if (k === 'cancel') {
+          this.close();
+          return false;
+        }
+        this.list.key(e);
+        const r = this.list.result;
+        this.list.result = null;
+        if (r === 'decide') this.enter();
+        return true;
+      }
+      case 'searching':
+        if (k === 'cancel') {
+          this.searchEpoch++;
+          this.phase = 'list';
+        }
+        return true;
+      case 'notFound':
+        if (k === 'cancel' || k === 'decide') this.phase = 'list';
+        return true;
+      case 'actions': {
+        if (!this.actions) return true;
+        this.actions.key(e);
+        const r = this.actions.result;
+        this.actions.result = null;
+        if (r === 'cancel') {
+          this.actions = null;
+          this.phase = 'list';
+        } else if (r === 'decide') {
+          const row = this.actions.selected;
+          if (row?.enabled) this.leaf = row.value as number;
+        }
+        return true;
+      }
     }
-    this.list.key(e);
-    this.list.result = null;
-    return true;
+  }
+
+  // Enter on the member row: the Guild Card search (state 3 -> 0xf -> 0x10).
+  private enter(): void {
+    const row = this.list.selected;
+    const search = this.host.searchMember;
+    if (!row || !row.enabled || !search) return;
+    this.phase = 'searching';
+    const ep = ++this.searchEpoch;
+    const target = row.value as number;
+    search.call(this.host, target).then(
+      (found) => this.answer(ep, target, found),
+      () => this.answer(ep, target, false),
+    );
+  }
+
+  private answer(ep: number, target: number, found: boolean): void {
+    if (ep !== this.searchEpoch || this.phase !== 'searching' || !this.visible) return;
+    if (found) {
+      const self = target === this.host.selfGuildCard();
+      this.actions = new PickList(memberActionRows(this.actionText, { tradeState: this.rules.tradeState, self, lobby: this.rules.lobby }));
+      this.phase = 'actions';
+    } else {
+      this.phase = 'notFound';
+    }
   }
 
   close(): void {
     this.epoch++;
+    this.searchEpoch++;
     this.visible = false;
+    this.phase = 'list';
+    this.actions = null;
   }
 
   // The rows as the answer gave them (test and draw helpers).
@@ -801,12 +914,35 @@ export class TeamMemberListWindow {
     return this.colors.get(item);
   }
 
+  // The current phase and the action list's rows / the last chosen leaf (test helpers).
+  get state(): MemberPhase {
+    return this.phase;
+  }
+
+  get actionRows(): readonly ListItem[] | null {
+    return this.actions?.items ?? null;
+  }
+
+  get lastLeaf(): number | null {
+    return this.leaf;
+  }
+
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
     if (!this.visible) return;
     const w = Math.max(0, gameTextWidth(this.title), ...this.list.items.map((i) => gameTextWidth(i.label))) + 2 * INSET;
     ctx.save();
     ctx.translate(extra / 2, 0); // menus follow the counter's centring
     drawListWindow(ctx, skin, TEAM_LIST_POS.x, TEAM_LIST_POS.y, w, this.title, this.list.visible, this.list.cursor - this.list.top, true, (it) => this.colors.get(it));
+    if (this.phase === 'searching' || this.phase === 'notFound') {
+      const lines = this.phase === 'notFound' ? [this.pressX, this.notFound] : [this.pressX];
+      const rows = lines.map((label) => ({ label, value: 0, enabled: true }));
+      drawListWindow(ctx, skin, TEAM_SEARCH_MSG_POS.x, TEAM_SEARCH_MSG_POS.y, TEAM_SEARCH_MSG_POS.w, null, rows, -1, false);
+    }
+    if (this.phase === 'actions' && this.actions) {
+      const labels = this.actions.items.map((i) => gameTextWidth(i.label));
+      const aw = Math.max(gameTextWidth(this.actionTitle), ...labels) + 2 * INSET;
+      drawListWindow(ctx, skin, TEAM_ACTION_POS.x, TEAM_ACTION_POS.y, aw, this.actionTitle, this.actions.visible, this.actions.cursor - this.actions.top, true);
+    }
     ctx.restore();
   }
 }

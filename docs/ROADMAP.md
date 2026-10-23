@@ -51,8 +51,13 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    (2026-10-21, `classic/field.ts`; no NPC talk, quests or chat there yet). The counter's Change SHIP / BLOCK and
    the Team menus (create, leave, ranking, promote / demote / dismiss, dissolve)
    are done 2026-10-20 (`classic/teammenu.ts`, `net/team.ts`; not seen in Chrome);
-   left: Master Transfer (6x handshake), Buying Privileges / Flag Records windows,
-   inviting players, banned team names, team chat line. No captures exist for any of it.
+   Home menu > Team > Team Member List (0x25) is done 2026-10-23 (rows, colours; Enter on a
+   row searches the member (0040 / 0041), then the action list; its three leaves are logged
+   no-ops). Left: the action leaves (Send Mail, Sent Item, Meet the User), Team Info (0x2b:
+   Point Information 18EA / Earned Privileges 19EA), Team Log (0x27), Point Regist (0x2d),
+   Master Transfer (6x handshake), Buying Privileges / Flag Records windows, Invite (0x29:
+   sends a 6x62 C1 17 peer message, not 03EA; DEVLOG 2026-10-23), banned team names, team
+   chat line. No captures exist for any of it.
 4. DONE 2026-10-20 (see HANDOFF item 2 for what is left): the rest of the Episode 2 FSMs (Merillia / Meriltas and Dolmolm / Dolmdarl
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
