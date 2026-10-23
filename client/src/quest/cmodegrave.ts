@@ -18,27 +18,87 @@ import { ENEMY_TYPE_NAMES } from '../formats/entitynames.ts';
 //                                                  distance b0 <= 500, 0x00909cc0)
 //   UpdateChallengePlayerGraveDistance_004de164    the fade (object +0xb4)
 
-// The killer (SaveChallengeEntityProgressOnDeath_004d9a60 stores the last attacker
-// enemy's enemy_name_unitxt_index, +0x378, as the monster id; "Defeated by %s." is
-// unitxt_get_monster_name(id) when id > 0). The port has no unitxt monster-name
-// table, so the id is the enemy type's position in formats/entitynames.ts
-// ENEMY_TYPE_NAMES plus one (ASSUMED: not the exe's index; only port clients read it).
-// 0xffffffff is "no killer", as the exe writes it.
-const ENEMY_TYPE_KEYS = Object.keys(ENEMY_TYPE_NAMES);
+// The killer. SaveChallengeEntityProgressOnDeath_004d9a60 stores the last attacker
+// enemy's enemy_name_unitxt_index (enemy +0x378) as the record's monster id, and
+// "Defeated by %s." is unitxt_get_monster_name(id) when id > 0 (0xffffffff: none).
+// The exe writes +0x378 only through the setter at 0x00787550 (`mov [ecx+0x378],
+// eax; ret 4`, 72 call sites, read from the disassembly with their immediates) and
+// through forwarders that pass the id on (0x00520390 and the like). The ids below
+// are the immediates of those calls, reached from each type's creator in the
+// per-area spawn table at 0x009fa000 (type code -> create function) by call depth 2.
+// Dump: the same calls appear as set_enemy_name_unitxt_index(this, N) (.c:762775).
+// A kind with no entry here shows no killer line (the exe's own 0xffffffff), because
+// its index is not decoded yet (see the DEVLOG "Left" list).
 export const GRAVE_NO_KILLER = 0xffffffff;
 
+export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
+  // InitializeHildebearResources_005157e0 (0x005157e0, calls at 0x005157ff / 0x00515841 with 2,
+  // 0x00515874 with 1): 2 when the set's param6 >= 1 or is_monster_rare, else 1.
+  HILDEBEAR: 1,
+  HILDEBLUE: 2,
+  // monest ctor (0x005191c0 forwards 4 through 0x00520390).
+  MONEST: 4,
+  // savage_wolf_constructor (0x0051b2e8): 8 when the wolf subtype (+0x3e0) is not 0, else 7.
+  SAVAGE_WOLF: 7,
+  BARBAROUS_WOLF: 8,
+  // set_booma_name_unitxt_index (dump .c:319613): subtype 0 / 1 / 2 -> 9 / 10 / 11.
+  BOOMA: 9,
+  GOBOOMA: 10,
+  GIGOBOOMA: 11,
+  // grass assassin ctor (0x005249c8 with 12).
+  GRASS_ASSASSIN: 12,
+  // PoisonLilyConstructor_005293ac (0x005293ac): the tower (0x800 flag) 0x53; else
+  // LilyIsRareOrDel ? 0xe : 0xd. DEL_LILY is the tower's lily.
+  POISON_LILY: 13,
+  NAR_LILY: 14,
+  DEL_LILY: 83,
+  // nanodragon ctor (0x0057f6b0 with 15).
+  NANO_DRAGON: 15,
+  // SetBoomaSubtype_00512f94 (the shark's, dump name notwithstanding): subtype 0 / 1 / 2 -> 16 / 17 / 18.
+  EVIL_SHARK: 16,
+  PAL_SHARK: 17,
+  GUIL_SHARK: 18,
+  // panarms ctor (0x00582e38 with 21).
+  PAN_ARMS: 21,
+  // gilchic_constructor (0x00556600): param6 == 0 -> 24, else 50.
+  DUBCHIC: 24,
+  GILLCHIC: 50,
+  // set_sinowbeat_subtype (0x0058d660 forwards 26 / 27): 27 when initdata_param2 >= g_SinowbeatSubtypeThreshold.
+  SINOW_BEAT: 26,
+  SINOW_GOLD: 27,
+  // canadine ctor (0x005424d8 forwards 28).
+  CANADINE: 28,
+  // delsaber ctor (0x0055018c with 30).
+  DELSABER: 30,
+  // dark gunner (0x00545e54 with 34).
+  DARK_GUNNER: 34,
+  // chaos bringer (0x0053cd38 forwards 36), dark belra (0x005394ec forwards 37).
+  CHAOS_BRINGER: 36,
+  DARK_BELRA: 37,
+  // SetDimenianDifficulty_005520f8: difficulty 0 / 1 / 2 -> 41 / 42 / 43.
+  DIMENIAN: 41,
+  LA_DIMENIAN: 42,
+  SO_DIMENIAN: 43,
+};
+
+// The monster id of a killer kind (GRAVE_NO_KILLER when the kind has none).
 export function graveKillerId(enemyType: string | null): number {
   if (enemyType === null) return GRAVE_NO_KILLER;
-  const i = ENEMY_TYPE_KEYS.indexOf(enemyType);
-  return i < 0 ? GRAVE_NO_KILLER : i + 1;
+  return GRAVE_KILLER_INDEX[enemyType] ?? GRAVE_NO_KILLER;
+}
+
+// The port's name of a monster id: the first kind with that id in ENEMY_TYPE_NAMES
+// (the same in-game names the quest editor shows). Null when no kind has it.
+const KILLER_NAME_BY_ID = new Map<number, string>();
+for (const [key, id] of Object.entries(GRAVE_KILLER_INDEX)) {
+  if (!KILLER_NAME_BY_ID.has(id)) KILLER_NAME_BY_ID.set(id, ENEMY_TYPE_NAMES[key]![0]);
 }
 
 // The killer's name, null when there is none (the exe shows the line only for id > 0).
 export function graveKillerName(id: number): string | null {
   const sid = id | 0;
   if (sid <= 0) return null;
-  const key = ENEMY_TYPE_KEYS[sid - 1];
-  return key === undefined ? null : ENEMY_TYPE_NAMES[key]![0];
+  return KILLER_NAME_BY_ID.get(sid) ?? null;
 }
 
 // The grave's model: the tomb / rebirth-mark archive the object loader reads

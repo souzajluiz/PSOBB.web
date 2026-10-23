@@ -13652,3 +13652,39 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+
+## 2026-10-23: Challenge mode: the grave's killer id, from the exe's +0x378 writes
+
+**Report:** the previous entry's killer id was the port's own (the enemy type's position in `ENEMY_TYPE_NAMES` plus one), so a grave written by an exe client named the wrong monster. The exe's ids are now decoded for 29 kinds. The premise holds: the grave stores the killer as enemy +0x378 (`get_enemy_name_unitxt_index`, dump .c:762786, reads it; `unitxt_get_monster_name` names it).
+
+**Exe (PsoBB.exe at ~/Downloads/psobb-client; `objdump -d -M intel` of the text, Ghidra headless via `tools/ghidra/decomp.sh` for the bodies):**
+- The writer is the setter at 0x00787550: `mov eax,[esp+4]; mov [ecx+0x378],eax; ret 4` (dump .c:762775, `set_enemy_name_unitxt_index`). 72 call sites in the text; the immediate pushed before each call is the id. Forwarders that take the id as an argument (0x00520390 and a few more) add the rest.
+- The per-type table at 0x009fa000 is the spawn lists (16-byte rows: type code, create function, a float, a count; 0xffff ends a list). Each type's create function is mapped to its setter call sites by call depth 2 over a call graph of the text (function starts from int3 padding and call targets).
+- Other writers of +0x378 (a generic init at 0x00452c14 that stores its argument, the shark/booma/lily paths) are the same field and are handled by the same setter sites.
+
+**Decoded ids (port kind -> exe id, the condition, the site):**
+- HILDEBEAR 1 / HILDEBLUE 2: InitializeHildebearResources (0x005157e0): 2 when param6 >= 1 or is_monster_rare, else 1.
+- MONEST 4 (monest ctor via 0x00520390); SAVAGE_WOLF 7 / BARBAROUS_WOLF 8 (wolf ctor 0x0051b2e8: 8 when +0x3e0 != 0).
+- BOOMA 9 / GOBOOMA 10 / GIGOBOOMA 11 (`set_booma_name_unitxt_index`, dump .c:319613: subtype 0 / 1 / 2).
+- GRASS_ASSASSIN 12 (0x005249c8); POISON_LILY 13 / NAR_LILY 14 / DEL_LILY 83 (0x005293ac: the tower's lily (0x800 flag) 0x53, else LilyIsRareOrDel ? 0xe : 0xd).
+- NANO_DRAGON 15 (0x0057f6b0); EVIL_SHARK 16 / PAL_SHARK 17 / GUIL_SHARK 18 (`SetBoomaSubtype_00512f94`, dump name notwithstanding: the shark's; subtype 0 / 1 / 2).
+- PAN_ARMS 21 (0x00582e38); DUBCHIC 24 / GILLCHIC 50 (gilchic_constructor 0x00556600: param6 == 0 -> 24).
+- SINOW_BEAT 26 / SINOW_GOLD 27 (`set_sinowbeat_subtype`, dump .c:374960: initdata_param2 >= g_SinowbeatSubtypeThreshold -> 27).
+- CANADINE 28 (0x005424d8); DELSABER 30 (0x0055018c); DARK_GUNNER 34 (0x00545e54); CHAOS_BRINGER 36 (0x0053cd38); DARK_BELRA 37 (0x005394ec).
+- DIMENIAN 41 / LA_DIMENIAN 42 / SO_DIMENIAN 43 (`SetDimenianDifficulty_005520f8`, dump .c:337357: difficulty 0 / 1 / 2).
+
+**Port:** `quest/cmodegrave.ts`: `GRAVE_KILLER_INDEX` (the table, with the exe cite per row), `graveKillerId(kind)` (the table, GRAVE_NO_KILLER otherwise), `graveKillerName(id)` (the port's name for the id, from `ENEMY_TYPE_NAMES`; the first kind with that id). A kind with no entry now shows no killer line instead of a wrong name. The name lookup is the same table as the quest editor's `enemyDisplayName`. The port draws no enemy name in the lock-on or the target window (checked: `render/combat.ts` has none), so nothing else to change.
+
+**ASSUMED:**
+- The conditions read the set's param: booma and shark subtype = param6 (the exe's `booma_subtype` field's source not traced), Dimenian difficulty = param6 (+0x33c source not traced), wolf subtype = param2 (+0x3e0 source not traced), the tower = area 0x23 (the port's DEL_LILY rule), LilyIsRareOrDel = the port's rare kinds (NAR_LILY).
+- `g_SinowbeatSubtypeThreshold` is not read (its value is in .data at dump .c:132578); the port's param2 >= 1 is kept for the 26 / 27 split.
+- The per-floor name table: `unitxt_get_monster_name` uses another table above floor 2 (`unitxt + 0x10`, `g_CurrentFloor > 2`). The port shows one English name per id, so an exe client's name on a floor above 2 may read from the other table.
+- `set_enemy_name_unitxt_index` in the dump is the same setter as 0x00787550 (one of the 72 call sites is the wrapper's own argument, so a few dump names may sit one level up).
+
+**Left (ids not decoded, the kind shows no killer line):**
+- The Rappy family: `ragrappy_constructor` takes `rappy_loaded_unitxt_ids[rare]`, filled at runtime from `rappy_unitxt_ids[param_2 * 2 + episode * 8 + rare]` (.c:309416), which is a runtime table (not in the file's initialised data; its writer is not traced).
+- GARANZ (0x81, dump .c:357087 sets 0x19; the creator's call chain is not confirmed), CANANE (0x1d), CHAOS_SORCERER (0x1f), POFUILLY_SLIME (0x13 / 0x14), CLAW (0x26, InitializeEnemyBase, the creator is in doubt), BULCLAW (0x27 / 0x28 in the claw action), DUBWITCH (no setter), DARK_GUNNER_CONTROL (no killer).
+- Sites found but conditions not read: Volopt family 46 / 47 (0xc2..0xc7), Merillia / Merikle / Mericarol / Gibbon / Gee / Delbiter / Morfos / Recobox (0x34..0x3a, 0x3d, 0x42, 0x43, 0x48, 0x52..0x54, 0x56..0x60, 0x66..0x67), Sinow Zoa / Zele / Spigell (0x20, 0x21, 0x45, 0x46, 0x54), Astark 88, Satellite Lizard / Yowie 89 / 90, Merissa 92, Zu / Pazuzu 94 / 95, Dorphon 99 / 100, Goran 101..103, Olga / Dark Falz / Epsilon (0x2f, 0x4d, 0x4e, 0x54, 0x57).
+- The rest of the table (the Ep2/Ep4 objects and the Nurse/Derolle creators) was not matched to sites.
+
+**Checks:** `node tests/cmode.test.ts` (the killer cases rewritten, plus a table test over every `GRAVE_KILLER_INDEX` row: the port name, the round trip, the ids unique and in range, and the spot checks: Hildeblue 2, the shark 16, the tower lily 83, Gillchic 50, Dimenian 41). Client `tsc --noEmit -p .`: no error in the touched files. Not run in Chrome.
