@@ -203,7 +203,11 @@ const BOX_TYPES = new Set([0x0088, 0x0091, 0x0092, 0x0093, 0x0161, 0x0162, 0x020
 // flags 0x38003) is set once by InitializeDerolleEnemyBase_0063c638 and never
 // moves or toggles with the rise (the rise only lifts the model's nodes): so a
 // pillar blocks in both its lowered and its raised state, as the exe does.
-const SOLID_TYPES = new Set([...BOX_TYPES, 0x0206, 0x0207, 0x0208, 0x0154, 0x0167]);
+// The ancient nest container (0x0152, box 0x009c7868), the info capsule (0x0229,
+// box 0x009c4a14) and the Wilds poison plant (0x0380, box 0x009c9f18): each is a
+// model in the port whose constructor sets a box that passes the flag gate (depth 0
+// of TYPE_COLLISION_TABLES in collisionboxes.gen.ts; ASSUMED that a static box is a block).
+const SOLID_TYPES = new Set([...BOX_TYPES, 0x0206, 0x0207, 0x0208, 0x0154, 0x0167, 0x0152, 0x0229, 0x0380]);
 
 // A non-door field object with a collision box: its set entry's world place and
 // the box table it was built with (objectmodels.ts ObjectCollision).

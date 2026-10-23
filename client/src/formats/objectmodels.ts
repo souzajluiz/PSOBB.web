@@ -23,6 +23,7 @@
 // marked "generic".
 
 import type { ObjectSet } from './setdata.ts';
+import { COLLISION_TABLES } from './collisionboxes.gen.ts';
 
 export interface ObjectModelContext {
   area: number;
@@ -124,6 +125,15 @@ const BOX = (address: number, halfX: number, halfZ: number, y = 20, z = 0): Obje
 const DOOR_BOX_20 = (address: number) => BOX(address, 20, 10);
 // 0x009c77ac: sphere r9 at (0, 6, 0), flags 0x38003.
 const CONTAINER_SPHERE: ObjectCollision = { address: 0x009c77ac, offset: [0, 6, 0], type: 0, halfX: 9, halfZ: 9, flags: 0x38003 };
+// A box table read from the exe by tools/gen-collision-boxes.py (collisionboxes.gen.ts),
+// for a constructor whose table has one row: a sphere's halfX is its radius, a box's halfZ.
+function generatedBox(address: number): ObjectCollision {
+  const rows = COLLISION_TABLES[address];
+  if (!rows || rows.length !== 1) throw new Error(`box table ${address.toString(16)} is not a single row`);
+  const r = rows[0];
+  const type = r.shape === 1 ? 1 : 0;
+  return { address, offset: [r.offset[0], r.offset[1], r.offset[2]], type, halfX: type === 1 ? r.halfX : r.radius, halfZ: r.radius, flags: r.flags };
+}
 
 const spec = (name: string, bml: string, parts: ObjectPartSpec[], extra: Partial<ObjectModelSpec> = {}): ObjectModelSpec => ({ name, bml, parts, ...extra });
 
@@ -747,7 +757,9 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x0151:
       return spec('TOFenceAncient04', 'bm_fd_obj_n_saku_6x4.bml', [{ model: 0 }]);
     case 0x0152:
-      return spec('TContainerAncient01', 'bm_obj_geenest.bml', [{ model: 0 }]);
+      // Box 0x009c7868 (sphere r10, 8 up, flags 0x38003): depth 0 of the type table
+      // (collisionboxes.gen.ts), so the constructor itself sets it.
+      return spec('TContainerAncient01', 'bm_obj_geenest.bml', [{ model: 0 }], { collision: generatedBox(0x009c7868) });
     case 0x0153:
       return spec('TOTrapAncient01', 'bm_o_trap_ancient01.bml', [{ model: 3 }]);
     // TOTrapAncient02 (0x0154, create 0x0063bfd4, ctor
@@ -790,7 +802,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x015f:
       return spec('TOWreckAncient07', 'bm_o_wreck_ancient.bml', [{ model: 5 }]);
     case 0x0229:
-      return spec('TOCapsuleLabo', 'bm_obj_labo_infocapsule.bml', [{ model: 0 }]);
+      // Box 0x009c4a14 (sphere r3, 10 up, flags 0x30003), depth 0 of the type table.
+      return spec('TOCapsuleLabo', 'bm_obj_labo_infocapsule.bml', [{ model: 0 }], { collision: generatedBox(0x009c4a14) });
     // TOTrapSeabed01 (the Seabed capture trap): CreateDerolleTrapEntity 0x0063ee10 /
     // InitializeDerolleTrapEntity 0x0063ec24 build it; LoadSeabedTuriganeBMLData 0x0063eeec
     // loads bm_obj_seabed_turigane.bml (exe string) and the texture archive, which the exe names
@@ -848,7 +861,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x038d:
       return spec('__DESERT_CRYSTALS_BOX__', 'bm_obj_ep4_crystal.bml', [{ model: 3 }]);
     case 0x0380:
-      return spec('__POISON_PLANT__', 'bm_obj_ep4_flower.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }]);
+      // Box 0x009c9f18 (sphere r14, flags 0x10003), depth 0 of the type table.
+      return spec('__POISON_PLANT__', 'bm_obj_ep4_flower.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }], { collision: generatedBox(0x009c9f18) });
     default:
       return null;
   }
