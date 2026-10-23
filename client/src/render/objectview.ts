@@ -274,7 +274,16 @@ export class ObjectLayer {
         m.parts.map((p) => p.group),
         local,
       );
-      for (const mesh of local.build()) m.root.add(mesh);
+      for (const mesh of local.build()) {
+        // build() switches the merged mesh's matrix updates off, so its world matrix
+        // would stay at identity and the box would draw at the world origin. The
+        // geometry is in the object's frame (space = the inverse of m.root's world
+        // matrix), so the mesh is an identity child of m.root: freezeStatic below
+        // computes and freezes its world matrix with the root's.
+        mesh.matrixAutoUpdate = true;
+        mesh.matrixWorldAutoUpdate = true;
+        m.root.add(mesh);
+      }
       add(local.stats);
       this.ownBatched.add(i);
     }
