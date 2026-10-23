@@ -14072,3 +14072,40 @@ Found with a temporary Playwright spec (warp to Forest 1, read `view.objectLayer
 **Tests.** `node tests/batching.test.ts` (new section: an own-batched object keeps its world matrix; the test fails without the fix), `node tests/objectcollision.test.ts`, `node tests/waves.test.ts`, `node tests/townfield.test.ts`, `node tests/drops.test.ts` all pass; `tsc --noEmit -p client` clean. Chrome: the Playwright check used the shared Vite and newserv; no spec is committed.
 
 **Left.** The other hideable objects (the delayed ones, `construct`) take the same path and are fixed by it, but not seen in Chrome. The own path merges one mesh per object: a floor with many boxes makes many small draws (not measured).
+
+## 2026-10-23: bottom hotbar traced in PsoBB.exe (not ported yet)
+
+Scope: the 10-hexagon bar along the bottom of the field (keys 1..0). This entry is the trace only; no client code changed.
+
+**Who draws it.** `update_player_menu_` (dump 681984) calls `unknown_update_player_menu_hide_palette` (the 3-slot window, object +0x38) and `unknown_update_player_menu_hide_hotbar` (dump 682072, object +0x3c). The +0x3c window is built in the player-menu constructor (dump 681820) by `SinowberillChallengeObjectListWindow_Constructor_007104bc` (dump 672339), which takes GUI position entry 0x21. The table 0x00971f40 (8-byte stride) gives entry 0x21 = (0, 442) (`tools/exedata.py read 00972048 f 2`); the 3-slot palette is entry 0x20 = (484, 368).
+
+**Hide rule.** The hotbar y is 443.0 (0x43dd0000) normally, and 342.0 (0x43ab0000) while the main interactive panel is open (`UIPanel_IsMainInteractivePanelActive`, flag 0x100). When input is locked (`IsUIElementInputLocked`) it plays the close sfx instead of updating. The 3-slot palette uses 368 / 268.
+
+**Slots.** `PaletteMenu_HandleInput_0071050c` (dump 672361) loops iVar8 4..13 and reads `palette_slots[iVar8-1]` of the current palette (flat index 3..12 = `hotbar_slots[0..9]`). Element pointer index from the byte table 0x0096f50c[4..13] = 0x14, 0x16, ..., 0x26. Enabled test: byte table 0x0096f500[4..13] = 4..13 with `Player_IsPaletteSlotEnabled_0068ce58`; disabled tint 0xff404040, enabled white. Icons use `PaletteMenu_UpdateSlotIcon_0070fde5` and `PaletteMenu_UpdateTextures_0070ff56`, the same routines as the 3-slot palette (`classic/palette.ts`). The dump's `hotbar_slots` field is also written as floats in the Sinowberill boss code (dump 159079, 161527, 215290); that is a different struct, so do not read those as the bar.
+
+**Render.** `SinowberillChallengeObjectListWindow_Render_00731a40` (dump 699098): `unknown_render_background_for_menus`, then `render_text_in_chat_bubble_and_more` (child elements). The hexagon textures and per-slot element UVs are NOT traced. The table at 0x009f15d4 (passed to the constructor) is not the hexagon layout.
+
+**Keys.** `unknown_handle_palette_inputs` (dump 555862): the hotbar loop runs iVar6 0x23..0x2c (`palette_bar_slot_1`..`_0`, enum at dump 86193) with iVar9 4..13. It is skipped while Shift, Alt or Ctrl is held. Two gates before it (`PlayerHasPaletteSlotEquipped_006a7c24` with g_KeyboardSharedState[0xc] / [0xd] / [0xe] via `GetCharacterKeyIndex*`) are not traced; ASSUMED false for a normal hunter. A slot is skipped while its bit is in `bitfield_palette_slots_disabled` (1 << n).
+
+Dispatch on group_1 of the pressed slot:
+- 2 attack: `CheckPlayerAttackPermission_006994d4`, then attack step 1 (heading from the camera when the stick passes the threshold).
+- 3 technique: `CheckPlayerTechCastEligibility_0069a088`, then `cast_tech` (the port's `castTechnique`).
+- 4 item: `SinowberillChallengePlayer_CanPerformAction_0068aa8c` (menu closed, player active, and `is_current_map_safe()` = 1, i.e. the map is NOT in the safe list, dump 820975), then `SinowberillChallengePlayer_HandlePaletteInput_0068aadc(player, group_2)`.
+- 5 photon blast: `CanPlayerCastTechInCurrentState_0069a8c0`, then `use_photon_blast`.
+- 6: `SinowberillChallengePlayer_IsPlayerFrozen_0068c10d`, then `activate_palette_button_quest_function` (quest hook; not ported).
+
+Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks the tool as `compact_item_data {3, a, b}`; case 0 breaks to the tail:
+- 0: (3,0,0), 1: (3,0,1), 2: (3,0,2), 3: (3,1,0), 4: (3,1,1), 5: (3,1,2), 8: (3,3,0), 9: (3,4,0), 0xa: (3,5,0), 0xb: (3,7,0), 0xc: (3,8,0). Matches `PALETTE_ITEMS` in `classic/palette.ts`. Cases 6 and 7 were not read in full (the table says (6,0) and (6,1)).
+- 0xd..0x10: battle traps via `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` (index 0..3), as palette.ts has them.
+- Tail: `FindItemInInventory_006a4e50` with the tool data; `is_current_map_lobby()` must be 0; `find_item_in_inventory` for the instance id; `SinowberillChallengePlayer_Process_0068be94` (0 gives sfx 0x17 and nothing); else **subcommand 0x27 of 6x60** with size 2 and the instance id (`checked_call_packet0x60_subcommand`: bytes [0x14]=0x27, [0x15]=2, +0x18 = instance id). This is the use-item packet; the port's `use` in `net/items.ts` should send the same. After the send the item is looked up again and the return is 1 while `CheckEntityStepConstructed_008173b4` says it is still there (ASSUMED meaning).
+
+**Assumed.** The hotbar draw positions and per-slot UVs (from the reference screenshot: a row of about 10 hexagons, about 40 px apart at 640 width; not measured in exe). The count-label font and placement follow the palette's digits.
+
+**Port status.** Nothing ported in code. Left, in order:
+1. Read `SinowberillChallengePlayer_Process_0068be94`, cases 6 and 7 of `HandlePaletteInput_0068aadc`, and the hexagon element UVs (child constructors of elements 20..38).
+2. Port the hotbar input in `render/combat.ts` `frame()`: palette indices 4..13 from `hotbar[0..9]`, keys 1..0 (`KEYS` 35..44), the modifier rule, groups 2 / 3 / 5 as the palette does, group 4 through `net/items.ts` `use` (6x27 path) with the table above.
+3. Draw the bar at (0, 442) on the field HUD, hidden in menus / locked input, moved to 342 while the main panel is open. Grey when the item count is 0 (ASSUMED: the exe greys disabled slots; the empty-bag grey is not traced).
+4. Assignment UI and its save packet: not traced.
+5. Tests: `tests/hotbar.test.ts`; e2e after that.
+
+**Checks.** Docs only; no tsc or tests run for this entry.
