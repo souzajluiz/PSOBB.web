@@ -11189,3 +11189,25 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 **ASSUMED:** the BB A6 / A7 bytes are plain PRS (no decrypt), as the exe's receive path reads them; no server sends them to BB, so this is untested against a live server. The download-quest menu is not built; the `.qst` for the non-BB download format is not decoded.
 
 **Not done:** the optimal PRS parser (not quick; left open in the ROADMAP).
+
+## 2026-10-23: lobby spawn points and lobby collision: checked against the exe, roadmap entry closed
+
+**Goal:** the open ROADMAP item "Real lobby spawn points and collision (`*c.rel`)" was a duplicate of a done item (2026-10-16). Check the port against the exe and close it, or finish what is missing.
+
+**Port state (no code change needed for the spawns):**
+- `loadLobbyMapData()` (`render/lobbyview.ts`) reads `scene/map_lobby_NNc.rel` (collision) and `map_lobby_NNo.dat` (spawns) for `lobby_01`..`lobby_10`; `spawnFor(clientId)` takes the `TObjPlayerSet` whose `param1` equals the client id.
+- `data.gsl` check (scratch dump): each of the 10 lobby files has 12 `TObjPlayerSet` entries, client ids 0-11, all with source `iparams[0] = 0`.
+- `tests/collision.test.ts` (ALL PASS), `tests/townfield.test.ts` and `tests/players.test.ts` pass; `client` `tsc --noEmit` clean (Node 24).
+
+**Exe evidence (`Psobb.exe-5-10-2026.c` in the reference dump):**
+- `player_set_object_constructor` (line 527235 of the dump): `type_id = TPlayerSet`, `initdata_param1` (client id) clamped up to `g_MaxPlayerSetCount`, `initdata_param4` (source) clamped to >= 0. Port: `source: Math.max(0, iparams[0])`.
+- `SinowberillChallengePlayer_UpdatePosition_006884ac` (line 554283; the name is a mis-assignment, the function places a player on map entry): when no teleport target (`GetTeleportTargetDataForPlayer_006e9630`) and not the respawn case, it takes the arrival kind `iVar10`. If the player's `unknown_menu_inputs_allowed == -1`, `iVar10 = get_warp_type(&g_prev_floor_id)` mapped as: 0 -> 1, 1 or 2 -> 0, other -> 1. It then scans the object list for a `TPlayerSet` with `ROUND(param1) == player_idx` AND `+0x84 (source) == iVar10`, and copies x/y/z from `+0x38..+0x40` and heading from `+0x60`. Not found: x = y = z = 0.
+- `get_warp_type` (line 833687): floor > 0x11 -> 4; flag bit 8 & 1 -> 2; episode 0 with the Volopt boss floor has its own 0 / 1 test; otherwise the result is 0 when `param[1] - param[0] < 0` and 1 when not (`param[0]` is the previous floor index, `param[1]` the second word of the same struct; its meaning is not confirmed).
+- Port vs exe: the port always uses source 0. This equals the exe for arrival kind 0 (warp type 1 / 2). For arrival kind 1 the exe finds no lobby set and puts the player at the origin, which the port does not do. Every lobby set is source 0, so the origin case only happens when the previous floor makes `get_warp_type` return 0 or 3 / 4.
+
+**Lobby collision:** the exe loads `map_lobby_NNc.rel` like any map (the port's per-lobby load matches); `TObjLobbyMain` round hitbox is already in `loadLobbyMapData`, owned by the other agent's work and not touched here.
+
+**ASSUMED / not done:**
+- The origin fallback for source-1 arrivals in lobbies is not ported: which lobby arrivals give `get_warp_type` 0 (or 3 / 4) needs the prev-floor values of the real join flow, and there is no Chrome check. Left open in the ROADMAP.
+- `GetTeleportTargetDataForPlayer` (per-episode teleport table, `0x006e9630`) is not mapped to the port's warp path.
+- The `UpdatePosition` branches for the offline and challenge modes are outside the lobby path and were not read in full.

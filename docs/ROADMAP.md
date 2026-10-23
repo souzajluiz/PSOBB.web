@@ -112,7 +112,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Player hitbox radius from the exe: 5.0 for every class (only its height is per class)
 - [x] Collision of lobby objects: TObjLobbyMain (0x0182) round hitbox of radius 32, the only lobby object with one
 - [ ] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`); round hitboxes of field objects other than doors
-- [ ] Real lobby spawn points and collision (`*c.rel`)
+- [x] Real lobby spawn points and collision (`*c.rel`) (done 2026-10-16; stale entry closed 2026-10-23, DEVLOG 2026-10-23)
+- [ ] Lobby spawn lookup: the exe also matches a `TObjPlayerSet`'s source (`+0x84`) to the arrival kind from `get_warp_type`; all lobby sets are source 0, so the port's source 0 only holds for that arrival kind (ASSUMED, not verified in Chrome)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
 - [x] Exact hair/cap texture lists for hat-wearing classes; non-default android heads (exe model name lists and texture lists in `playertables.ts`; DEVLOG 2026-10-23)
 - [x] Player motions (`plymotiondata.rlc`: RelChunk + PRC + NJS_MOTION with short angle keys), town idle/walk/run tables from `PsoBB.exe`
