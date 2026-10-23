@@ -356,6 +356,8 @@ eq(enemyIconRule('HILDEBLUE'), { scale: 1, color: 0xffffa24c, forced: false }, '
 eq(enemyIconRule('OLGA_FLOW_2'), { scale: 4, color: 0xffffa24c, forced: true }, 'boss icon: Olga Flow phase 2 is forced at scale 4.0 (unknown_olga_related)');
 eq(enemyIconRule('DE_ROL_LE'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: De Rol Le is forced at scale 2.0 (UpdateDerolle)');
 eq(enemyIconRule('GAL_GRYPHON'), { scale: 2, color: 0xffffa24c, forced: true }, 'boss icon: Gal Gryphon is forced at scale 2.0 (update_gal_gryphon)');
+eq(enemyIconRule('SINOW_BERILL'), { scale: 2, color: 0xffffa24c, forced: true }, 'enemy icon: Sinow Berill is forced at scale 2.0 (UpdateSinowberillEntity_004addc0)');
+eq(enemyIconRule('SINOW_GOLD'), { scale: 1, color: 0xffffa24c, forced: false }, 'enemy icon: Sinow Gold keeps the plain icon');
 {
   const m = new MinimapState();
   m.enterFloor(0, 0, [], new MinimapFloors());
