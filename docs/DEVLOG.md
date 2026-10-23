@@ -12521,3 +12521,35 @@ So `QuickMenuRenderTextBackground_00742a6c` is not part of the field menus and h
 **Checks:** `node tests/npcai.test.ts` ok (new cases above); `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24. `tsc --noEmit -p client` clean, with the worktree's `client/node_modules` symlinked to the main checkout's (git-ignored, not committed). `tests/combat.test.ts` needs `vendor/newserv/build/newserv`, not run. Not run in Chrome.
 
 **Left open (ROADMAP line):** the item use (needs NPC inventory), the enemy 0x8000 flag (needs the name-to-factory-id map), the head's +0x7c state dispatch (move / cast state 2) and the NPC's own level / MST / eligibility.
+
+## 2026-10-23: enemy box table from the enemy's own constructor (aim height, NPC target pick)
+
+The port's enemies carry the .dat set type (`EnemySlot.set.type`; the newserv name in `EnemySlot.type` derives from it, `formats/setdata.ts` enemyKind). The old map (`TYPE_COLLISION_TABLES`, keyed by the type table's creator rows) was the wrong key for enemies: 16 of 125 enemy set types have no type-table creator row, and `enemyAimHeight` took the shallowest table, which for several enemies was a shared helper's at depth 2 or 3.
+
+**Exe evidence.** The per-area enemy table at `0x009fba60` (47 pointers to rows `{u32 set type, u32 factory, f32 dist^2, u32 child count}`, ended by 0xFFFF; `formats/enemymodels.ts`) gives each set type its factory, which allocates the enemy and runs its constructor. The box table is set by an `InitEnemyCollisionBoxes_007b9a88` call in that constructor or in a helper it calls:
+- Monest 0x42: factory 0x00519144 -> ctor 0x005191c0 pushes table 0x009bb780 and calls the enemy base helper 0x0051ff3c at 0x0051926c. The helper takes (table, count) as stack arguments and passes them to the init at 0x0051ff4c, so its own init site is dynamic. The generator resolves each constant-argument call to such a helper as an effective site of the caller (`via`).
+- Chaos Sorcerer 0xa1: factory 0x0059b1a4 -> ctor 0x0059b220 -> 0x0059d8b8 (call at 0x0059b2e7) -> helper 0x0051ff3c with table 0x009bff60.
+- Dark Gunner 0xa2: factory 0x00545e54 sets table 0x009bd0dc itself.
+- Booma 0x44: factory 0x00535e50 allocates, runs base ctor 0x00787a4c and calls a vtable slot (`call *0x14c`); no direct init call is reached, so its box is not resolved.
+- Shared helper example: the NPC / object factories (0x0060xxxx) reach 0x00606bc8 -> 0x009c3ecc.
+- `check_enemy_is_targetable` (dump 785551, `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`) tests `unknown_flags` (+0x18) with 0x22000 (nearest pick) and 0xa000 (battle-mode line of sight), and reads each box's position2.
+
+**Ported.**
+- `tools/gen-collision-boxes.py`: the factory per area is read from `0x009fba60`; factory entries are added to the function map (a factory is reached through a pointer, not a call); a helper that passes its table on is resolved at each constant-argument caller (32 sites). Per (set type, factory) the link is the shallowest site within depth 4 of the factory, in a function that only this set type reaches (`shared` otherwise); the last call wins when ambiguous. Output: `ENEMY_COLLISION_LINKS` in `client/src/formats/collisionboxes.gen.ts`. `TYPE_COLLISION_TABLES` is kept for the object pillars (`tests/objectcollision.test.ts`), now built with the helper-resolved sites.
+- `client/src/formats/enemyboxes.ts`: `enemyBoxTable(setType, area)` (the link of the area; null for a shared-only or unresolved link), `slotSetType(slot)` (child slots have no own set type: null), `boxTargetable(row)` (flag 0x8000), `isTargetable(setType, area)` (true when no table is known, ASSUMED).
+- `enemyAimHeight(type, area)` (`combat/techfire.ts`) uses it; `render/combat.ts` `aimHeightOf` passes the slot's set type and the floor's area.
+- `render/combat.ts` `npcEnemies()` returns each enemy's boxes (xz of origin + RotY * position1, `enemyBoxHits`), targetable by flag 0x8000; `quest/town.ts` feeds them to `pickAttackTarget` (replacing one targetable point per enemy).
+
+**Coverage.** 123 enemy set types. 42 resolve to an own table; 54 reach a table only through a shared constructor (not used); the rest reach none within depth 4. Resolved: Monest 0x42 -> 0x009bb780 (box at the origin, aim 0; was 20); Hildebear 0x40 -> 0x009bb58c (aim 20); Dark Gunner 0xa2 -> 0x009bd0dc (aim 3.5); Bulclaw 0xa7 -> 0x009bc77c (aim 18); Sorcerer 0xa1 -> 0x009bff60 (aim 0). Unresolved (aim falls back to 22): Booma 0x44, Pofuilly slime 0x64, Chaos Bringer 0xa4, Claw 0xa8, the bosses 0xc2 / 0xc8 / 0xca / 0xcb.
+
+**ASSUMED:**
+- Flag 0x8000 as "targetable": the exe masks it with 0xa000 in the battle-mode line-of-sight test and with 0x2000 in the nearest pick. `isTargetable` and the NPC pick use it as the brief says.
+- A box centre for the NPC pick is origin + RotY * position1 (xz), with the root's `rotation.y` as RotY.
+- Child slots (Mothmants, Pofuilly, pan-arm halves) use the fallback: the exe creates them from the parent's constructor, which this map does not resolve.
+- An enemy with no resolved table is targetable and aims at 22 (the old rule).
+- The shared-helper rule (fan-in over set types) also drops 0x005424d8, reached by both Canadine 0x83 and Canane 0x84, so Canadine gets the fallback. Its own table is probably 0x009bcecc (ASSUMED: Canane creates Canadines with that constructor).
+- The last init call in a constructor is the one in effect (only the ambiguous cases).
+
+**Tests.** `node tests/techfire.test.ts` ok (Monest 0, Hildebear 20, Dark Gunner 3.5, Booma fallback); `node tests/npcai.test.ts` ok (flag 0x8000 pick); `node tests/objectcollision.test.ts` ok (the links, `isTargetable`, `boxTargetable`, child slots). `tsc --noEmit -p client` shows no errors in the touched files (this worktree had no `node_modules`; the main checkout's is linked as `client/node_modules`, git-ignored). Other tests that import `render/combat.ts` (barbaray, derolle, dragon, ...) were not run: they fail with "Cannot use import statement" under the default `node` on this machine (run with the Node 24 binary). Not run in Chrome, no Playwright.
+
+**Left open:** the enemies whose box is set through a vtable or a shared constructor (Booma first), the bosses' own tables, child enemies, and the exact meaning of 0x8000.

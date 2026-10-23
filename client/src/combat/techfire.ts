@@ -32,7 +32,7 @@
 //   (level / 5, 1..5, else 0), +0x12c hit radius 4.0 (the directed Gibarta
 //   12.0), +0x128 the hit box (InitEnemyCollisionBoxes_007b9a88).
 
-import { COLLISION_TABLES, TYPE_COLLISION_TABLES } from '../formats/collisionboxes.gen.ts';
+import { enemyBoxTable } from '../formats/enemyboxes.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
 import { STATUS } from './status.ts';
@@ -60,17 +60,15 @@ export const AIM_HEIGHT = 22;
 // The height above an enemy's origin of the point a technique aims at: the y of the
 // hit box's centre (check_enemy_is_targetable, dump 785xxx, measures to each enabled
 // box's position2; position2 = origin + RotY * position1, so the y is origin.y +
-// position1.y). The box table is the enemy type's own (TYPE_COLLISION_TABLES, depth
-// 0 or 1); a deeper link is a shared helper, not the type's box, so it falls back.
-// ASSUMED: the first enabled row of the table (a multi-box enemy has no per-box pick
-// here, the lock-on cursor's box is not modelled).
-export function enemyAimHeight(type: number | null): number {
-  if (type === null) return AIM_HEIGHT;
-  const links = TYPE_COLLISION_TABLES[type];
-  if (!links || links.length === 0) return AIM_HEIGHT;
-  const own = links.reduce((a, b) => (b.depth < a.depth ? b : a));
-  if (own.depth > 1) return AIM_HEIGHT;
-  const row = COLLISION_TABLES[own.table]?.find((r) => (r.flags & 1) !== 0);
+// position1.y). The box table is the one the enemy's own constructor sets
+// (formats/enemyboxes.ts enemyBoxTable, from the .dat set type and the area); an enemy
+// whose table is not resolved (a box set through a vtable, or only by a shared helper)
+// falls back. ASSUMED: the first enabled row of the table (a multi-box enemy has no per-box
+// pick here, the lock-on cursor's box is not modelled).
+export function enemyAimHeight(type: number | null, area: number | null = null): number {
+  const b = enemyBoxTable(type, area);
+  if (!b) return AIM_HEIGHT;
+  const row = b.rows.find((r) => (r.flags & 1) !== 0);
   return row ? row.offset[1] : AIM_HEIGHT;
 }
 

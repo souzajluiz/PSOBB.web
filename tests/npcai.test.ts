@@ -23,6 +23,7 @@ import {
   pickAttackTarget,
 } from '../client/src/quest/npcai.ts';
 import { questOpcodeByName } from '../client/src/formats/questopcodes.ts';
+import { boxTargetable } from '../client/src/formats/enemyboxes.ts';
 import { QuestVM } from '../client/src/quest/vm.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -113,6 +114,10 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(pick === 9, 'the nearest targetable box inside the range wins; non-targetable and out-of-range boxes are skipped');
   check(pickAttackTarget(npc, 100, [{ slot: 1, hitboxes: [box(100, 0)] }]) === null, 'a box at exactly the range is out (strict <)');
   check(pickAttackTarget(npc, 100, []) === null, 'no enemies, no target');
+  // A box's targetable bit is its flag 0x8000 (formats/enemyboxes.ts boxTargetable): the table
+  // 0x0093902c has flags 0x30003 (no 0x8000), so its enemy is not picked; 0x8003 is.
+  check(pickAttackTarget(npc, 100, [{ slot: 4, hitboxes: [{ x: 5, z: 0, targetable: boxTargetable({ flags: 0x30003 }) }] }]) === null, 'a box without flag 0x8000 is not an NPC target');
+  check(pickAttackTarget(npc, 100, [{ slot: 4, hitboxes: [{ x: 5, z: 0, targetable: boxTargetable({ flags: 0x8003 }) }] }]) === 4, 'a box with flag 0x8000 is an NPC target');
 
   const row = npcAttackRow(0)!;
   const g1 = new NpcAttackGate();

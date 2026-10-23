@@ -128,6 +128,7 @@ import {
   type TechResist,
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
+import { boxTargetable, enemyBoxTable, slotSetType } from '../formats/enemyboxes.ts';
 import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
@@ -145,7 +146,7 @@ import {
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
 import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect } from '../quest/battletraps.ts';
-import type { PlayerRatioStatus } from '../quest/npcai.ts';
+import type { EnemyHitbox as EnemyBoxHit, PlayerRatioStatus } from '../quest/npcai.ts';
 import { BattleTrapView } from './battletrapview.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
@@ -6705,16 +6706,32 @@ export class CombatView {
   }
 
   // The live enemies as the NPC attack AI reads them (quest/npcai.ts pickAttackTarget):
-  // entity id (0x1000 | index) and the xz of the hit point. ASSUMED: every live enemy
-  // counts as targetable (the exe's 0x8000 box flag of the enemy boxes is not ported).
-  npcEnemies(): Array<{ id: number; x: number; z: number }> {
-    const out: Array<{ id: number; x: number; z: number }> = [];
+  // entity id (0x1000 | index), the xz of the hit point, and one entry per collision box
+  // (xz of the box centre, targetable = flag 0x8000, formats/enemyboxes.ts boxTargetable).
+  npcEnemies(): Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> {
+    const out: Array<{ id: number; x: number; z: number; boxes: EnemyBoxHit[] }> = [];
     for (const e of this.enemies.values()) {
       if (e.dead || !e.instance.root.visible || concealed(e)) continue;
       const p = this.hitPoint(e);
-      out.push({ id: 0x1000 | e.index, x: p.x, z: p.z });
+      out.push({ id: 0x1000 | e.index, x: p.x, z: p.z, boxes: this.enemyBoxHits(e) });
     }
     return out;
+  }
+
+  // The boxes of an enemy in the xz plane: origin + RotY * position1 (the exe's position2,
+  // check_enemy_is_targetable). An enemy with no known box table is one targetable box at its
+  // origin (ASSUMED, the port's former rule).
+  private enemyBoxHits(e: EnemyRuntime): EnemyBoxHit[] {
+    const root = e.instance.root;
+    const { x, z } = root.position;
+    const b = enemyBoxTable(slotSetType(e.slot), this.area);
+    if (!b) return [{ x, z, targetable: true }];
+    const c = Math.cos(root.rotation.y);
+    const s = Math.sin(root.rotation.y);
+    return b.rows.map((r) => {
+      const [ox, , oz] = r.offset;
+      return { x: x + ox * c + oz * s, z: z - ox * s + oz * c, targetable: boxTargetable(r) };
+    });
   }
 
   // The local player's HP and TP for the NPC head's status flags (quest/npcai.ts headStatusFlags;
@@ -6838,7 +6855,7 @@ export class CombatView {
   // The height an enemy is aimed at: the centre of its hit box (combat/techfire.ts
   // enemyAimHeight, from the type's box table; AIM_HEIGHT where it is not known).
   private aimHeightOf(e: EnemyRuntime): number {
-    return enemyAimHeight((e.slot.set as EnemySet | undefined)?.type ?? null);
+    return enemyAimHeight(slotSetType(e.slot), this.area);
   }
 
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
