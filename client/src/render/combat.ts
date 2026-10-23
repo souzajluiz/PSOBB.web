@@ -46,6 +46,7 @@ import {
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
+import { DUBWITCH, DubwitchAi } from '../combat/dubwitch.ts';
 import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SORCERER, SorcererAi, SorcererBitAi, type BulclawEvent, type HealAlly } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
@@ -398,6 +399,8 @@ interface PendingTechHit {
 const OWN_FSM = new Set([
   'TObjEneNanoDrago',
   'TObjEneDubchik',
+  // Dubwitch (combat/dubwitch.ts): hp 300 from its ctor.
+  'TOCtrlDubchik',
   'TObjEneGyaranzo',
   'TObjEneMe3ShinowaReal',
   'TObjEneMe1Canadin',
@@ -467,6 +470,7 @@ const concealed = (e: { ai: EnemyBrain | null }): boolean =>
   ((e.ai instanceof PanArmsAi || e.ai instanceof PanHalfAi || e.ai instanceof SlimeAi || e.ai instanceof SlimeControl) && e.ai.untargetable) ||
   ((e.ai instanceof VoloptAi || e.ai instanceof VoloptPartAi || e.ai instanceof VoloptForm2Ai || e.ai instanceof DragonAi) && e.ai.untargetable) ||
   (e.ai instanceof GoldDragonAi && e.ai.untargetable) ||
+  (e.ai instanceof DubwitchAi && e.ai.untargetable) ||
   ((e.ai instanceof DarkFalzAi || e.ai instanceof DarkFalzPartAi) && e.ai.untargetable) ||
   (e.ai instanceof DrlSegmentAi && e.ai.untargetable) ||
   (e.ai instanceof BarbaPartAi && e.ai.untargetable) ||
@@ -914,6 +918,8 @@ export class CombatView {
         attacker = enemyAttacker(s, attack);
         withStats++;
       }
+      // The Dubwitch has no BattleParam row (stats []): its ctor sets 300 HP.
+      if (head.slot.type === 'DUBWITCH') stats = { hp: DUBWITCH.hp, maxHp: DUBWITCH.hp, evp: 0, dfp: 0 };
       // Behaviour: the AI profile of the client class plus the enemy's own
       // AI record (search radius / turn rate) and MovementData speeds.
       const className = instance.spec.name;
@@ -945,6 +951,7 @@ export class CombatView {
         } else if (className === 'TObjEneNanoDrago') ai = new NanoDragonAi({ ...at, param2: setParams[1], movement, rng: () => this.rng() });
         else if (className === 'TObjEneDubchik')
           ai = new DubchicAi({ ...at, param1: setParams[0], gillchic: head.slot.type === 'GILLCHIC', ultimate, movement, attack, rng: () => this.rng() });
+        else if (className === 'TOCtrlDubchik') ai = new DubwitchAi({ ...at, rng: () => this.rng() });
         else if (className === 'TObjEneGyaranzo') ai = new GaranzAi({ ...at, movement, rng: () => this.rng() });
         else if (className === 'TObjEneMe3ShinowaReal') {
           // The Sinow's MovementData rows are 6 (Beat) and 0x10 (Gold)
@@ -1610,6 +1617,7 @@ export class CombatView {
       if (ai instanceof BarbaPartAi) continue;
       if (ai instanceof BarbaRayAi) this.tickBarbaParts(e, ai);
       if (ai instanceof DelbiterAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
+      if (ai instanceof DubwitchAi) ai.linkedDead = this.dubwitchWake(e);
       if (ai instanceof SinowZoaAi) ai.disrupted = e.status.has(STATUS.freeze) || e.status.has(STATUS.shock);
       if (ai instanceof LilyAi) ai.setHp(e.stats.hp, e.stats.maxHp);
       if (ai instanceof GrassAi || ai instanceof NanoDragonAi || ai instanceof GaranzAi || ai instanceof BulclawAi || ai instanceof SorcererAi || ai instanceof MerilliaAi)
@@ -4952,6 +4960,15 @@ export class CombatView {
   }
 
   private sinowEvent(e: EnemyRuntime, _ai: SinowAi, ev: SinowEvent): void {
+    // The Gold's technique (0x0058dde4): the cast's effect on the Gold, then
+    // the buff (Shifta / Deband: ASSUMED on the Gold alone, as Gibbon's enrage).
+    if (ev.kind === 'tech') {
+      const at = e.instance.root.position;
+      this.overlay?.techEffect(ev.tech === 'resta' ? 'resta' : 'support', at.x, at.y, at.z, 20);
+      if (ev.tech !== 'resta') this.buffEnemy(e, ev.tech === 'shifta' ? GROUP.shifta : GROUP.deband, supportPower(ev.level), `Gold E-${e.index.toString(16)}`, false);
+      this.opts.log(`Gold E-${e.index.toString(16)} casts ${ev.tech} (level ${ev.level})`);
+      return;
+    }
     const list = this.sinowClones.get(e.index) ?? [];
     this.sinowClones.set(e.index, list);
     if (ev.kind === 'dismiss') {
@@ -7117,6 +7134,40 @@ export class CombatView {
     return { ...a, atp: this.selfBuffs.atp(a.atp), atpSpread: this.selfBuffs.atpSpread(a.atpSpread) };
   }
 
+  // The Dubchics the Dubwitch e links (kill_dubwitch's scan: class, param6 == 0
+  // i.e. slot type DUBCHIC, and the same spawn section), still alive.
+  private dubwitchDubchics(e: EnemyRuntime): EnemyRuntime[] {
+    const section = (e.slot.set as EnemySet).section;
+    return [...this.enemies.values()].filter(
+      (d) => d !== e && !d.dead && d.ai instanceof DubchicAi && d.slot.type === 'DUBCHIC' && (d.slot.set as EnemySet).section === section,
+    );
+  }
+
+  // update_dubwitch's wake (state 0): a linked Dubchic is dead or lying down.
+  private dubwitchWake(e: EnemyRuntime): boolean {
+    const section = (e.slot.set as EnemySet).section;
+    return [...this.enemies.values()].some(
+      (d) =>
+        d !== e &&
+        d.ai instanceof DubchicAi &&
+        d.slot.type === 'DUBCHIC' &&
+        (d.slot.set as EnemySet).section === section &&
+        (d.dead || d.ai.lying),
+    );
+  }
+
+  // A Dubwitch killed by another client (the 6x0A's dead flag): its kill runs
+  // here too, so the section's Dubchics die for good without the EXP or drop
+  // requests (those are the killer's).
+  private dubwitchRemoteKill(e: EnemyRuntime): void {
+    for (const d of this.dubwitchDubchics(e)) {
+      if (!(d.ai instanceof DubchicAi)) continue;
+      d.ai.markLinkedDead();
+      d.dead = true;
+      this.playDeath(d);
+    }
+  }
+
   // 6x0A (dead) was sent: 6x76, the drop request and the EXP request, then the
   // death motion (the enemy is removed when it ends).
   private killEnemy(e: EnemyRuntime, _flags: number): void {
@@ -7154,6 +7205,20 @@ export class CombatView {
       e.parent.ai.childGone();
     }
     this.splitterDied(e, true);
+    // kill_dubwitch (0x00619050): the Dubwitch's kill effects, then its
+    // section's Dubchics die for good. Their own on-kill (EXP and the drop
+    // request, 0x005558bc) runs here, the killer's side.
+    if (e.ai instanceof DubwitchAi) {
+      const at = e.instance.root.position;
+      this.particle({ id: 0x45 }, new THREE.Vector3(at.x, at.y, at.z));
+      this.particle({ id: 0x46 }, new THREE.Vector3(at.x, at.y, at.z));
+      for (const d of this.dubwitchDubchics(e)) {
+        if (!(d.ai instanceof DubchicAi)) continue;
+        d.ai.markLinkedDead();
+        this.killEnemy(d, ENEMY_BASE_FLAGS | FLAG_DEAD);
+        this.opts.log(`E-${d.index.toString(16)} (Dubchic) dies with its Dubwitch E-${e.index.toString(16)}`);
+      }
+    }
     // A Hidoom / Migium (0x00587720) and a slime (0x00598648) only run
     // on_enemy_killed (0x00787534: EXP and the drop request); their set entry
     // is cleared by the Pan Arms / the slime control, not by their own 6x76.
@@ -7552,6 +7617,7 @@ export class CombatView {
           e.dead = true;
           this.splitterDied(e, false);
           this.playDeath(e);
+          if (e.ai instanceof DubwitchAi) this.dubwitchRemoteKill(e);
         }
       } else if (s.flags & 0x200) {
         // The hit flag runs the hit handler (vtable +0x100) here too: the

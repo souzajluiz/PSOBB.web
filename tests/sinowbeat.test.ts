@@ -271,6 +271,42 @@ function fighting(ai: SinowAi, t: AiTarget): void {
   eq(ai.events.filter((e) => e.kind === 'dismiss').length, 1, 'once');
 }
 
+// 9. The Gold's technique (0x0058dde4): at the motion's end Resta on itself at
+//    the clamped iparam1 (13, or 28 in Ultimate); Ultimate adds Shifta at 5 and
+//    Deband at 10 frames; then iparam2 frames before the chase.
+{
+  const m = { fparam1: 1.25, fparam2: 0, fparam3: 0.6, fparam4: 0, fparam5: 0, fparam6: 0, iparam: [20, 3, 5, 0, 0, 0] };
+  const cast = (ultimate: boolean): { heal: number | null; fx: Array<[number, string]>; leftAt: number } => {
+    const g = new SinowAi({ x: 0, z: 0, angle: 0, gold: true, ultimate, movement: m, attack: atk, radius: 10, rng: () => 0.5 });
+    const t = at(0, 20);
+    fighting(g, t);
+    run(g, [t], 6000, () => g.state === 'tech');
+    g.events.splice(0);
+    const first = g.tick([t], true);
+    const fx: Array<[number, string]> = [];
+    const note = (tick: number) => {
+      for (const ev of g.events.splice(0)) if (ev.kind === 'tech') fx.push([tick, ev.tech]);
+    };
+    note(1);
+    let tick = 1;
+    while (g.state === 'tech' && tick < 100) {
+      tick++;
+      g.tick([t], false);
+      note(tick);
+    }
+    return { heal: first.heal?.level ?? null, fx, leftAt: tick };
+  };
+  const plain = cast(false);
+  eq(plain.heal, 13, 'the Resta level is clamped to 13 outside Ultimate');
+  check(JSON.stringify(plain.fx) === JSON.stringify([[1, 'resta']]), `outside Ultimate only the Resta effect: ${JSON.stringify(plain.fx)}`);
+  eq(plain.leftAt, 4, 'then iparam2 frames (sub 1) and the chase');
+  const ult = cast(true);
+  eq(ult.heal, 20, 'the Resta level in Ultimate is iparam1 (up to 28)');
+  const want = [[1, 'resta'], [5, 'shifta'], [10, 'deband']];
+  check(JSON.stringify(ult.fx) === JSON.stringify(want), `Ultimate: Shifta at 5, Deband at 10: ${JSON.stringify(ult.fx)}`);
+  eq(ult.leftAt, 14, 'the hold after the Deband');
+}
+
 void SINOW;
 if (failures) {
   console.log(`${failures} failures`);
