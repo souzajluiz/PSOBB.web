@@ -14055,3 +14055,20 @@ Follow-up to the 2026-10-23 "enemy boxes: vtable calls, the shared-pair rule, Bo
 - A mail in a game (the field menu has no Simple Mail; the arrival and the SE are wired through the lobby object only).
 
 **Checks:** `node tests/simplemail.test.ts` (all pass); `node tests/infoboard.test.ts`, `guildcardmenu.test.ts`, `guildcard.test.ts`, `lobbymain.test.ts`, `controls.test.ts` pass. All `tests/*.test.ts` run: 115 pass; 8 exit non-zero, all of them spawn the absent `vendor/newserv/build/newserv` or read data that is not in this worktree (combat, items, itemmodels, magfeed, oracle, rangedaim, specials, weaponorigin; the DEVLOG's older list had seven). `client`: `tsc --noEmit -p .` reports no errors in the touched files (the worktree's `client/node_modules` is a symlink to the main checkout's, the rest of the output is the missing `three` / `vite` types of that link).
+## 2026-10-23: field boxes drew at the world origin (hideable objects batched)
+
+The user saw no dungeon boxes (containers) on the floors. Not the models, not a hide rule: the models build, are in the scene and are visible, but their meshes drew at the world origin.
+
+**Cause.** `ObjectLayer.batchStatic` (`render/objectview.ts`) merges the objects that only change through `setVisible` (boxes, delayed objects: `hideableIndices`) per object, under the object root, with `StaticBatcher.build()`. `build()` switches the merged mesh's matrix updates off (`matrixAutoUpdate` and `matrixWorldAutoUpdate` false), so the mesh never gets its world matrix: it stays at identity. The geometry is in the object's frame (`space` = the inverse of the root's world matrix), so the merged mesh has to follow its root, as the parts did. `freezeStatic` then froze the identity matrix. Introduced by 3213a80 (2026-10-19, static batching); not by today's merges.
+
+Found with a temporary Playwright spec (warp to Forest 1, read `view.objectLayer.models` and `view.field.objects.boxes`): the box root sat at the object (479.9, 33.1, 12.5) and its merged mesh at (0, 0, 0). After the fix the mesh has the root's world matrix and the crates show next to the path (screenshot taken in the worktree, not committed).
+
+**Fix.** The own-batch loop sets `matrixAutoUpdate` and `matrixWorldAutoUpdate` back on for the merged meshes before they are added under the root; `freezeStatic` at the end of `batchStatic` computes and freezes their world matrices. The shared batches (world-space geometry, no own transform) were already right.
+
+**Exe.** The box object is TObjContainerItem / TObjContainerBase (ctor FUN_0064deb4 / FUN_0064ee44, model 1 or 2), as before: `formats/objectmodels.ts` `containerSpec`. Forest 1 `map_forest01_00o.dat` has 50 box objects (0x0088 / 0x0092), all group 0 (not delayed), all with a model; the BML and XVM names are in `data.gsl`.
+
+**ASSUMED.** None new: the crate placement is the object's position and yaw as before. The screenshot check put the player inside a crate (the spawn helper skips the collision test), so the outside view was checked only by the two facing shots.
+
+**Tests.** `node tests/batching.test.ts` (new section: an own-batched object keeps its world matrix; the test fails without the fix), `node tests/objectcollision.test.ts`, `node tests/waves.test.ts`, `node tests/townfield.test.ts`, `node tests/drops.test.ts` all pass; `tsc --noEmit -p client` clean. Chrome: the Playwright check used the shared Vite and newserv; no spec is committed.
+
+**Left.** The other hideable objects (the delayed ones, `construct`) take the same path and are fixed by it, but not seen in Chrome. The own path merges one mesh per object: a floor with many boxes makes many small draws (not measured).

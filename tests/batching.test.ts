@@ -20,6 +20,8 @@ import {
 import { poolable, stateKey, TexturePool } from '../client/src/render/texturepool.ts';
 import { MaterialCache } from '../client/src/render/njmesh.ts';
 import { GroundIndex } from '../client/src/render/groundindex.ts';
+import { ObjectLayer } from '../client/src/render/objectview.ts';
+import { ClientFiles } from '../client/src/data/clientfiles.ts';
 
 let failures = 0;
 const check = (ok: boolean, what: string) => {
@@ -389,6 +391,39 @@ const trianglesOf = (m: THREE.Mesh) => (m.geometry.index?.count ?? 0) / 3;
   const skipped = new GroundIndex();
   skipped.addObjects([root], (o) => o === upper);
   check(skipped.triangleCount === 12 * 12 * 2, 'a skipped subtree (a moving entry) stays out of the index');
+}
+
+// --- a hideable object's merged meshes keep the object's world matrix -------------------
+{
+  // ObjectLayer.batchStatic's own path (boxes, delayed objects): build() switches the merged
+  // mesh's matrix updates off, so its world matrix stayed at identity and the box drew at the
+  // world origin. The merged mesh must sit at the object's world matrix and keep its box.
+  const stub = { label: 'stub', list: async () => [], read: async () => new Uint8Array() };
+  const layer = new ObjectLayer({ scene: new THREE.Scene(), frameHooks: new Set() } as any, new ClientFiles(stub));
+  const root = new THREE.Group();
+  const objRoot = new THREE.Group();
+  objRoot.position.set(100, 20, -50);
+  objRoot.rotation.y = 0.7;
+  const part = new THREE.Group();
+  const crate = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({ color: 0x884422 }));
+  crate.position.set(0, 5, 0);
+  part.add(crate);
+  objRoot.add(part);
+  root.add(objRoot);
+  root.updateMatrixWorld(true);
+  (layer as any).root = root;
+  layer.models.set(7, { entity: null, spec: { name: 'TObjContainerItem', bml: '', parts: [] }, root: objRoot, parts: [{ show: 'always', group: part, animator: null, drive: 'loop', nodes: [] }] } as any);
+  layer.batchStatic(new Set(), new Set([7]));
+  const merged = objRoot.children.find((c) => c.type === 'Mesh') as THREE.Mesh | undefined;
+  check(!!merged, 'the object keeps one merged mesh under its root');
+  if (merged) {
+    const w = merged.matrixWorld.elements;
+    check(near(w[12], 100) && near(w[13], 20) && near(w[14], -50), `the merged mesh sits at the object (${w[12]}, ${w[13]}, ${w[14]})`);
+    check(merged.matrixWorld.equals(objRoot.matrixWorld), 'the merged mesh has the root world matrix');
+    merged.geometry.computeBoundingBox();
+    const box = merged.geometry.boundingBox!;
+    check(near(box.max.y - box.min.y, 10) && near(box.min.y, 0), 'the crate keeps its own size and height in the object frame');
+  }
 }
 
 if (failures) {
