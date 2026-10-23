@@ -108,8 +108,35 @@ export function emotePayload(slot: number, opposite: boolean): Uint8Array {
   const out = new Uint8Array(4);
   const dv = new DataView(out.buffer);
   dv.setUint16(0, slot & 0xffff, true);
-  dv.setUint16(2, opposite ? 1 : 0, true);
+  dv.setUint16(2, opposite ? EMOTE_FLAG_OPPOSITE : 0, true);
   return out;
+}
+
+// Sit (6xAB, action_type sit_photon_chair = 171): the subcommand table entry
+// 0x000700AB is HandlePlayerInputState_0069b378 (FUN_0069b378), the same body
+// shape as 6x58: u16 client id @2, u16 0 @4, u16 flags @6. dispatch_action_
+// sit_photon_chair sets flag 2 when the key's slot is 49 (Alt+I) and flag 1
+// from the option 0x80000 (Alt+Shift). The receiver reads flag 2 as
+// +0x33c |= 0x10000000 (the chair pose: slot 49 instead of 48) and flag 1 as
+// +0x33c |= 0x8000000 (FUN_00691b30 re-picks +0xdc from the receiver's own
+// body type; no sender gender enters it).
+export const SIT_OPCODE = 0xab;
+export const SIT_SLOT_PLAIN = 48; // Alt+U: the town getter 0x108
+export const SIT_SLOT_CHAIR = 49; // Alt+I: the town getter 0x10c
+export const EMOTE_FLAG_OPPOSITE = 1; // dword bit 0x10000
+export const SIT_FLAG_CHAIR = 2; // dword bit 0x20000
+
+export function sitPayload(chair: boolean, opposite: boolean): Uint8Array {
+  const out = new Uint8Array(4);
+  new DataView(out.buffer).setUint16(2, (chair ? SIT_FLAG_CHAIR : 0) | (opposite ? EMOTE_FLAG_OPPOSITE : 0), true);
+  return out;
+}
+
+export function parseSitSubcommand(body: Uint8Array): { clientId: number; chair: boolean; opposite: boolean } | null {
+  if (body.length < 8 || body[0] !== SIT_OPCODE) return null;
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const flags = dv.getUint16(6, true);
+  return { clientId: dv.getUint16(2, true), chair: (flags & SIT_FLAG_CHAIR) !== 0, opposite: (flags & EMOTE_FLAG_OPPOSITE) !== 0 };
 }
 
 // A received 6x58: body = the whole subcommand (header included).

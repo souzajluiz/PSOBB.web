@@ -14,6 +14,10 @@ import {
   emoteSlot,
   parseEmoteKeys,
   parseEmoteSubcommand,
+  parseSitSubcommand,
+  sitPayload,
+  SIT_SLOT_CHAIR,
+  SIT_SLOT_PLAIN,
 } from '../client/src/formats/emotes.ts';
 import { FIELD_EMOTE_ROWS, FIELD_EMOTE_SLOTS } from '../client/src/formats/plyemotedata.ts';
 import { townMotion } from '../client/src/formats/plymotion.ts';
@@ -99,6 +103,21 @@ try {
   threw = true;
 }
 eq(threw, true, 'a slot that is not a field emote slot throws');
+
+// Sit (6xAB): the body is u8 0xAB, u8 2, u16 client id, u16 0, u16 flags; flag 2
+// (dword 0x20000) is the chair pose (slot 49), flag 1 (0x10000) the option.
+{
+  const body = new Uint8Array(8);
+  body.set(sitPayload(true, true), 4);
+  body[0] = 0xab;
+  body[1] = 2;
+  new DataView(body.buffer).setUint16(2, 0x1234, true);
+  eq(parseSitSubcommand(body), { clientId: 0x1234, chair: true, opposite: true }, 'sit body round trip');
+  eq(Array.from(sitPayload(false, false)), [0, 0, 0, 0], 'plain sit has no flags');
+  eq([SIT_SLOT_PLAIN, SIT_SLOT_CHAIR], [48, 49], 'sit slots are the town getters 0x108 / 0x10c');
+  body[0] = 0x58;
+  eq(parseSitSubcommand(body), null, 'a 6x58 is not a sit');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);
