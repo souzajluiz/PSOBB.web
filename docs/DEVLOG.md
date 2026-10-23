@@ -10587,3 +10587,40 @@ passes. Not run in Chrome (no browser run for this change).
 **Tests:** `tests/enemyfsmruins.test.ts`: hurt test (int HP, Ultimate); the heal reaches the heal state, picks the farthest hurt enemy within 200 (not the out-of-reach one, not the healthy one), level iparam3, its SE; a hurt Sorcerer heals itself; no hurt enemy in reach, no cast; a down attack bit cuts the cast; the bit sits on its anchor, floats 18, is invulnerable and hidden while down, and comes back at 900 frames (revive taken once).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. All 101 `tests/*.test.ts` pass. Not checked in Chrome (no browser run for this change).
+
+## 2026-10-23: Pan Arms split / merge and Pofuilly morphs re-checked in the exe
+
+**What changed:** no code change. The open Caves items were traced again in
+`PsoBB.exe` (Ghidra). Two DEVLOG claims were corrected, and the Pofuilly
+puddle look has a new lead that is not ported yet.
+
+**Details:**
+- Pan Arms split HP (`0x00587a04`, the half's split function): the half's HP is
+  `trunc((Pan Arms HP + 1) / 2)`, the same for both halves, and it is also kept
+  as the half's split HP (`+0x3c4`). Confirmed; `render/combat.ts` does this.
+- Pan Arms merge HP: the plain sum of the two live halves, every frame, with no
+  clamp (`0x005822e4`: `+0x334 = half1 + half2`). Confirmed.
+- Correction: `0x00582ab8` is not the sum. It is a timer path on Pan Arms
+  (`+0x390`, run down by 1 a frame) that sets the state to 10 or 12 and clears
+  the child slots. The earlier note that cited it for the sum was wrong.
+- Slime emerge (`0x00597dbc`): morph 9 and the countdown `+0x39c` = 8. At 0 it
+  spawns effect `0xcd` (`0x0050b510`) on the body. The state leaves only when
+  the morph's animation ends (`0x00599e2c`, checked in `0x00596c7c`): confused
+  (flag `0x10` in `+0x30`) -> 7, else 6. The port's 20-frame wait stands in for
+  the morph's length: ASSUMED, the length is in the BML.
+- Slime burrow (`0x00597e1c`): morph 10 and countdown 20, the same morph-end
+  exit (`0x00596ce8`) -> 3. The 20 matches the port's `morphFrames` (ASSUMED).
+- Effect `0xcd` at the emerge countdown is not in the port (no effect hook for
+  slimes yet). Left as is.
+- Puddle (state 0, `0x00597b0c`): it plays morph 7. Morphs 7 and 8 take their
+  motion id from `DAT_009bfda0[rare]` (`0x009bfda0`: 4 normal, 5 rare, read with
+  `tools/exedata.py`), not from the 9+ table. So the puddle has a body pose in
+  the exe. The port hides the puddle body (`HIDDEN_STATES`): still ASSUMED, and
+  now partly contradicted. Open: which BML motion 4 / 5 is, and how the flags
+  `0xa000528` (bits `0x08000000`, `0x02000000`) gate the draw.
+- `+0x3fc` is `is_monster_rare` (`0x005999fb`); it picks the BML chunk counts
+  and the rare motion row.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `tests/enemysplits`,
+`enemyfsmcaves`, `enemies` and `combatdepth` pass (`842 checks, 0 failures` for
+combatdepth). Not checked in Chrome.
