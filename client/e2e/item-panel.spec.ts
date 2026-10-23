@@ -1,12 +1,11 @@
-// The Item Pack's equipment stat panel (GUI entry 0xC, classic/itempack.ts drawPanel) on a fresh
-// account in a party field. The field menu is opened with Home (held), Item Pack -> Items, then
-// the cursor is moved onto the equipped weapon. The HUD's debug hook (hud.debug().itemPack, the
-// ItemPackMenu.debugState rects of the last draw) gives the panel and the item list rectangles.
-//
-// The exe's coordinates overlap the two (the panel's 132-high frame at (16, 172) reaches y 304;
-// the item list starts at (13, 256), and its open height is 188: ChallengePlayerListWindow_
-// HandleInput_007526c8 state 0/1 and ListWindowObject_FinishRenderPositionUpdate(0x433c0000)),
-// so the test asserts the overlap the exe's rects give, not an empty intersection.
+// The Item Pack > Items window on a fresh account in a party field, as the exe lays it out
+// (menu 11 -> GuildCardSearchWindow_Constructor_0075086c; the list is GUI entry 3 (13, 256),
+// 308 x 184, from the size table 0x00973ca0; the description is entry 2 (324, 256), 240 x 184).
+// The Item Pack never creates GUI entry 0xC, so no equipment stat panel is drawn here (the exe's
+// panel belongs to the mag menus' window, ChallengePlayerListWindow_Constructor_007525bc).
+// The field menu is opened with Home (held), Item Pack -> Items, then the cursor is moved onto
+// the equipped weapon. The HUD's debug hook (hud.debug().itemPack, ItemPackMenu.debugState of the
+// last draw) gives the rectangles and the cursor row, which must be on screen and inside the list.
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -24,7 +23,6 @@ async function hold(page: Page, k: string, ms = 150): Promise<void> {
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
-type PanelRect = Rect & { kind: 'equip' | 'mag' };
 interface ItemPackDebug {
   leaf: string;
   state: string;
@@ -33,7 +31,8 @@ interface ItemPackDebug {
   item: { id: number; cls: number; equipped: boolean } | null;
   list: Rect;
   detail: Rect;
-  panel: PanelRect | null;
+  panel: (Rect & { kind: 'equip' | 'mag' }) | null;
+  cursorRow: Rect;
 }
 
 const itemPack = (page: Page) => peek(page, (w): ItemPackDebug | null => w.classicGame?.view?.hud?.debug().itemPack ?? null);
@@ -44,7 +43,10 @@ const overlap = (a: Rect, b: Rect) => ({
   y: Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)),
 });
 
-test('the equipment stat panel is drawn for the equipped weapon, at the exe\'s rect', async ({ page }) => {
+// The virtual screen is 640 x 480 (the windows' game space).
+const inScreen = (r: Rect) => r.x >= 0 && r.y >= 0 && r.x + r.w <= 640 && r.y + r.h <= 480;
+
+test('the Item Pack list is laid out at the exe\'s rect, and the cursor row on the weapon is visible', async ({ page }) => {
   test.setTimeout(300_000);
   const logs = consoleLog(page);
   mkdirSync(OUT, { recursive: true });
@@ -75,12 +77,11 @@ test('the equipment stat panel is drawn for the equipped weapon, at the exe\'s r
     return id!;
   });
 
-  await test.step('the cursor moves onto the weapon: the panel draws for it', async () => {
+  await test.step('the cursor moves onto the weapon: its row is visible in the list', async () => {
     const rows = (await itemPack(page))!.rows;
     const want = rows.indexOf(weapon);
     for (let i = 0; i < rows.length && (await itemPack(page))!.cursor !== want; i++) await hold(page, 'ArrowDown');
     await expect.poll(async () => (await itemPack(page))?.cursor ?? -1, { timeout: 30_000 }).toBe(want);
-    await expect.poll(async () => (await itemPack(page))?.panel ?? null, { timeout: 10_000 }).not.toBeNull();
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${OUT}item-panel-weapon.png` });
 
@@ -88,20 +89,20 @@ test('the equipment stat panel is drawn for the equipped weapon, at the exe\'s r
     expect(pack.item?.id).toBe(weapon);
     expect(pack.item?.cls).toBe(0);
     expect(pack.item?.equipped).toBe(true);
-    // The exe's panel: GUI entry 0xC (16, 172); the base frame is 132 high (no requirement rows).
-    expect(pack.panel).toEqual({ x: 16, y: 172, w: 240, h: 132, kind: 'equip' });
-    // The item list (ITEM_LIST, 13, 256) and the panel meet in y by 48 px, the exe's rects overlap so.
+    // The exe's list: GUI entry 3 (13, 256), 308 x 184 (size table 0x00973ca0). It opens down
+    // from its y, not up: nothing in this menu sets its height to 188.
     expect(pack.list).toEqual({ x: 13, y: 256, w: 308, h: 184 });
-    expect(overlap(pack.panel!, pack.list)).toEqual({ x: 240, y: 48 });
-    // The item detail (entry 2, (324, 256)) is clear of the panel.
-    expect(overlap(pack.panel!, pack.detail).x).toBe(0);
-  });
-
-  await test.step('the panel is drawn on the list rows, not over the detail window', async () => {
-    const pack = (await itemPack(page))!;
-    expect(pack.state).toBe('list');
-    expect(pack.rows.length).toBeGreaterThan(0);
-    await page.screenshot({ path: `${OUT}item-panel-weapon-full.png`, fullPage: false });
+    expect(inScreen(pack.list)).toBe(true);
+    // No equipment panel in the Item Pack (GUI entry 0xC is not created by the inventory menu).
+    expect(pack.panel).toBeNull();
+    // The cursor's row is inside the list, below its title, and on screen.
+    const row = pack.cursorRow;
+    expect(row.x).toBeGreaterThanOrEqual(pack.list.x);
+    expect(row.y).toBeGreaterThan(pack.list.y);
+    expect(row.y + row.h).toBeLessThanOrEqual(pack.list.y + pack.list.h);
+    expect(inScreen(row)).toBe(true);
+    // The description (entry 2, (324, 256)) is clear of the list (the list ends at x 321).
+    expect(overlap(pack.list, pack.detail).x).toBe(0);
   });
 
   const errors = logs.filter((l) => l.startsWith('pageerror'));

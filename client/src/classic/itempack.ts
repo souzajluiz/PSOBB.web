@@ -86,6 +86,10 @@ export const ITEM_DETAIL = { x: 324, y: 256, w: 240, h: 184 } as const; // entry
 export const PURPOSE_POS = { x: 324, y: 256, w: 224 } as const; // entry 4
 export const AMOUNT_RECT = { x: 324, y: 318, w: 224, h: 80 } as const; // entry 5
 export const SORT_POS = { x: 324, y: 318, w: 224 } as const; // entry 6
+// The equipment stat panel at GUI entry 0xC (drawPanel). Off in the Item Pack: the exe's
+// inventory menu does not create entry 0xC (see the note in draw()). The panel is kept for
+// the mag menus' window (ChallengePlayerListWindow_Constructor_007525bc), not ported yet.
+const SHOW_EQUIP_PANEL = false;
 export const MAX_ITEMS = 30; // 0x1e
 export const VISIBLE_ROWS = 8;
 const ICON = 18; // 0x00970d98
@@ -711,9 +715,12 @@ export class ItemPackMenu {
       if (this.state === 'amount' && this.amount) this.drawAmount(ctx, skin, tex, this.amount);
     }
     ctx.restore();
-    // The panel is on the left (no translation).
+    // The panel is on the left (no translation). Off: the exe's Item Pack
+    // (inventory_menu 0xB -> GuildCardSearchWindow_Constructor_0075086c) never
+    // creates GUI entry 0xC; that entry is the mag menus' window
+    // (mag_menu1/2 -> ChallengePlayerListWindow_Constructor_007525bc). See SHOW_EQUIP_PANEL.
     this.panelDrawn = null;
-    if (this.state === 'list' || this.state === 'manual') {
+    if (SHOW_EQUIP_PANEL && (this.state === 'list' || this.state === 'manual')) {
       const it = this.item();
       if (it && it !== 'meseta' && this.rows.length) this.drawPanel(ctx, skin, it);
     }
@@ -772,17 +779,20 @@ export class ItemPackMenu {
   }
 
   // Console aid (window.gameView.hud.debug().itemPack): the cursor, the rows, the selected
-  // item and the rects drawn by the last draw() (the list, the detail and the panel).
+  // item and the rects drawn by the last draw() (the list, the detail and the panel), plus
+  // the cursor's row (the select bar draw() puts at cy + (cursor - top) * ROW, 16 high).
   debugState() {
     const it = this.item();
+    const L = ITEM_LIST;
     return {
       state: this.state,
       cursor: this.cursor,
       rows: this.rows.map((r) => r.id),
       item: it && it !== 'meseta' ? { id: it.data.id, cls: it.data.data1[0], equipped: !!it.equipped } : null,
-      list: { ...ITEM_LIST },
+      list: { ...L },
       detail: { ...ITEM_DETAIL },
       panel: this.panelDrawn,
+      cursorRow: { x: L.x + INSET, y: L.y + INSET + TITLE_GAP + (this.cursor - this.top) * ROW, w: L.w - 2 * INSET, h: 16 },
     };
   }
 
