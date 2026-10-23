@@ -22,6 +22,7 @@ import { parseQuestBin } from '../client/src/formats/questbin.ts';
 import { parseQuestDat } from '../client/src/formats/questdat.ts';
 import { QUEST_OPCODES, questOpcode, questOpcodeByName } from '../client/src/formats/questopcodes.ts';
 import { assembleQuest, disassembleQuest, QuestAssemblyError } from '../client/src/formats/questasm.ts';
+import { decodeTypedData, encodeTypedData, typedLayout, type FieldValue, type TypedRecord } from '../client/src/formats/questdata.ts';
 import { buildQuestDat, serializeQuestBin, serializeQuestDat, setQuestDatChunk } from '../client/src/formats/questwrite.ts';
 import { packQst, parseQst } from '../client/src/formats/qst.ts';
 
@@ -115,6 +116,7 @@ let qstExact = 0;
 let ratioSum = 0;
 let ratioN = 0;
 let dataSections = 0;
+let typedSections = 0;
 let totalLines = 0;
 const newservSample = quests.filter((_, i) => i % 12 === 0);
 
@@ -141,6 +143,7 @@ try {
       text = disassembleQuest(bin);
       totalLines += text.split('\n').length;
       dataSections += (text.match(/^ {2}\.data /gm) ?? []).length;
+      typedSections += (text.match(/^ {2}\.(struct|cstr) /gm) ?? []).length;
       const again = assembleQuest(text);
       const out = serializeQuestBin(again);
       if (same(out, bytes)) asmExact++;
@@ -215,7 +218,7 @@ try {
 
 const withDat = quests.filter((q) => q.dat).length;
 console.log(`.bin exact ${binExact}/${quests.length}, asm exact ${asmExact}/${quests.length}, .dat exact ${datExact}/${withDat}, qst ${qstExact}/${withDat}`);
-console.log(`PRS: our output is ${(ratioSum / ratioN * 100).toFixed(1)}% of the shipped size on average; ${dataSections} .data lines in ${totalLines} lines of disassembly`);
+console.log(`PRS: our output is ${(ratioSum / ratioN * 100).toFixed(1)}% of the shipped size on average; ${dataSections} .data lines and ${typedSections} typed labels (.struct / .cstr) in ${totalLines} lines of disassembly`);
 check(binExact === quests.length, 'not every .bin round-trips');
 check(asmExact === quests.length, 'not every .bin round-trips through the assembler');
 check(datExact === withDat, 'not every .dat round-trips');
@@ -318,6 +321,102 @@ loop_a:
     }
     check(threw, 'a .qst that mixes 44 and A6 is rejected');
   }
+}
+
+// --- typed data labels ------------------------------------------------------
+// A label that a code reference types (questopcodes.ts data types) is printed
+// as `.struct` / `.cstr`, and re-assembles to the same bytes; a label that
+// does not fit its type stays `.data` hex.
+{
+  let seed = 4242;
+  const rnd = (n: number): Uint8Array =>
+    Uint8Array.from({ length: n }, () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed >>> 24;
+    });
+  const dotData = (b: Uint8Array): string => `  .data ${[...b].map((x) => x.toString(16).padStart(2, '0')).join(' ')}`;
+  for (const kind of ['PLAYER_STATS', 'RESIST_DATA', 'ATTACK_DATA', 'MOVEMENT_DATA'] as const) {
+    const size = typedLayout(kind).size;
+    for (let k = 0; k < 50; k++) {
+      const b = rnd(size);
+      const rec = decodeTypedData(kind, b);
+      check(rec !== null && same(encodeTypedData(kind, rec), b), `${kind}: random record does not re-encode`);
+    }
+    check(decodeTypedData(kind, rnd(size - 1)) === null, `${kind}: a short label is not decoded`);
+  }
+  // The visual config: a record with a guild card number and a name.
+  const visual = decodeTypedData('PLAYER_VISUAL_CONFIG', new Uint8Array(0x70));
+  check(visual !== null, 'a zero PLAYER_VISUAL_CONFIG decodes');
+  const setField = (rec: TypedRecord, name: string, v: FieldValue): void => {
+    const e = rec.find(([n]) => n === name);
+    if (!e) throw new Error(`no field ${name}`);
+    e[1] = v;
+  };
+  const vrec = visual![0];
+  setField(vrec, 'guild_card_number', { text: '22000010' });
+  setField(vrec, 'name', { text: 'Ann' });
+  setField(vrec, 'name_color', { int: 0xffffffff });
+  setField(vrec, 'proportion_x', { float: 0x3f800000 });
+  const visualBytes = encodeTypedData('PLAYER_VISUAL_CONFIG', [vrec]);
+
+  const script = [
+    'start:',
+    '  set_enemy_physical_data stats',
+    '  set_enemy_attack_data attack',
+    '  set_enemy_resist_data resist',
+    '  set_enemy_movement_data move',
+    '  prepare_npc_visual visual',
+    '  set_enemy_physical_data short',
+    '  npc_text_id r60, r61, greeting',
+    '  npc_text_id r60, r61, junk',
+    '  ret',
+    'stats:',
+    dotData(rnd(0x24)),
+    'attack:',
+    dotData(rnd(0x30)),
+    'resist:',
+    dotData(rnd(0x20)),
+    'move:',
+    dotData(rnd(0x30)),
+    'visual:',
+    dotData(visualBytes),
+    'short:',
+    dotData(rnd(0x20)),
+    'greeting:',
+    '  .cstr "Hi \\u3042!"',
+    'junk:',
+    '  .data 48 00 69 00 00 00 99',
+    '',
+  ].join('\n');
+  const bin1 = assembleQuest(script);
+  const text1 = disassembleQuest(bin1);
+  for (const want of ['.struct PLAYER_STATS', '.struct ATTACK_DATA', '.struct RESIST_DATA', '.struct MOVEMENT_DATA', '.struct PLAYER_VISUAL_CONFIG', '  .field name "Ann"', '  .cstr "Hi ']) {
+    check(text1.includes(want), `typed disassembly has ${want}`);
+  }
+  // Labels print under their numbers: the short PlayerStats (0x20 bytes) is the one with no .struct.
+  check(text1.split('.struct PLAYER_STATS').length === 2, 'a PLAYER_STATS label of the wrong size stays .data');
+  check(text1.includes('  .data 48 00 69 00 00 00 99'), 'a CSTRING label with trailing bytes stays .data');
+  const out1 = serializeQuestBin(bin1);
+  const bin2 = assembleQuest(text1);
+  check(same(serializeQuestBin(bin2), out1), `typed labels re-assemble to the same bytes`);
+  check(disassembleQuest(bin2) === text1, 'typed disassembly is a fixed point');
+
+  // Assembler errors on the typed forms.
+  const rejects = (src: string, what: string): void => {
+    let threw = false;
+    try {
+      assembleQuest(src);
+    } catch (err) {
+      threw = err instanceof QuestAssemblyError;
+    }
+    check(threw, `${what} is rejected`);
+  };
+  rejects('start:\n  ret\nx:\n  .struct PLAYER_STATS\n  .field atp 1\n', 'a PLAYER_STATS with missing fields');
+  rejects('start:\n  ret\nx:\n  .struct PLAYER_STATS\n  .field nope 1\n', 'a PLAYER_STATS with an unknown field');
+  rejects('start:\n  ret\nx:\n  .struct PLAYER_STATS\n  .field atp 70000\n', 'a field value out of range');
+  rejects('start:\n  ret\nx:\n  .struct NOPE\n', 'an unknown .struct kind');
+  rejects('start:\n  ret\n  .field atp 1\n', 'a .field outside .struct');
+  rejects('start:\n  ret\nx:\n  .struct VECTOR4F_LIST\n  .vector 1 2 3\n', 'a .vector with three values');
 }
 
 if (failures) {
