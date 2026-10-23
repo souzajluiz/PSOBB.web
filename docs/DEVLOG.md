@@ -10219,3 +10219,32 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The shield's barrier specials (the barrier entities, `ConstructArmorBarrierInstance_005d145c`) are a separate effect; not part of the 6x4A routine and not touched here.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/combatdepth.test.ts` 831 checks 0 failures (6 new), `node tests/playerfx.test.ts` all passed, `node tests/specials.test.ts` all passed, `node tests/combat.test.ts` (with `vendor/newserv` linked) 5946 checks 0 failures, `node tests/returnprompt.test.ts` 46/46.
+## 2026-10-23: The equipment panel's exe rect (16, 172, 132 high); the field Item Pack had no item names
+
+**Report:** the open questions of the stat panel entry are settled in part. The panel's 132 height is the exe's base frame, not an assumption. The overlap with the item list is what the exe's coordinates give. The field Item Pack never got the item names, so its rows showed hex codes and the equipment panel never drew: fixed (`classic/main.ts`). The description's GUI entry stays open.
+
+**Exe evidence (PsoBB.exe, Ephinea dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, `tools/exedata.py`, `tools/ghidra/decomp.sh`):**
+- Positions: `gui_positions` is at 0x00971f40 (8 bytes per entry, `vec2f[436]`). Entry 0xC = (16, 172) (`0x00971fa0`); entry 7 = (13, 256) (the weapon list, `ChallengePlayerListWindow_InitializeUI_00752664`, table `0x00973dc0`); entry 3 = (13, 256) (the port's ITEM_LIST); entry 9 = (395, 256); entry 2 = (324, 256); entry 8 = (221, 256); entry 0xD = (13, 317).
+- The panel's element table is `g_ChallengeListWindowItemPositions` = 0x00973e24 (the push in the state machine's case 0/1, `0x00752e20`, asm of `ChallengePlayerListWindow_HandleInput_007526c8`). Its per-row offsets are not decoded (the element struct is in `FUN_00731504` / `FUN_00710d30`); the six rows keep the port's ASSUMED offsets.
+- The panel's height: `EquipmentStatDisplayObject_Update_00727220` and `_00727078` (dump lines ~691040-691140) call `UIElement_SetPositionAndSize_0072e7e4(panel, 0.0, h)`. The stats-only case (equippable: not valid and flag bit 0 set) sets **h = 132**. The requirement rows set 172 (ATP req), 212 (ATA req), 192 (MST req), and the `_00727078` variant 232 (MST req). With no call the height is the table's default. So 132 is the exe's base height: confirmed.
+- The width is not set by these calls (`UIElement_SetPositionAndSize` writes the offset / height / right / bottom only), so the 240 width stays ASSUMED (the element table is not decoded).
+- The description's 152 / 192 heights (`LAB_00725c8c`, dump lines ~690600-690646) belong to the item description text object (its own element group), not the panel.
+- Overlap: the list at (13, 256) opens to 188 (`ListWindowObject_FinishRenderPositionUpdate(…, 0x433c0000)` sets the open target, dump line 704199). The panel's frame spans y 172..304, so the two overlap by 48 px in y and 240 px in x. The exe's coordinates overlap. The panel is created after the list (state 0/1), so creation order would draw it on top.
+- Case 0/1 (`ChallengePlayerListWindow_HandleInput_007526c8`, dump lines 725014..725054): `CreateEquipListWindowObject_00725d18` at GUI entry 9 (395, 256) builds the list `+0x40`. Its data (`ChallengePlayerListWindow_UpdateItemData_00726510`, dump line 690498) is the two equipped slots (`+0xa0` / `+0xa4` compact items), and its selected item (`+0x68`) is the one the panel (`+0x44`, entry 0xC) and state 2 read. So entry 9 is the equipped-items list, not the description. The port's description entry (ITEM_DETAIL, entry 2) is not contradicted, and the exe's description position is still UNCLEAR (the object with `LAB_00725c8c` is not created in this state machine).
+
+**Ported:**
+- `client/src/classic/main.ts`: `view.hud.setNames(() => itemNames)` after the field's GameView is made. The classic field HUD (`render/fieldhud.ts` `names()`) had no item names (only the Online tab set them), so the Item Pack rows showed hex codes, `drawPanel` returned early (`!names`), and the equipment panel never drew in the classic client.
+- `client/src/classic/itemdetail.ts`: the EQUIP_PANEL comment carries the exe evidence (entry 0xC, 132 base, the requirement heights not ported, the 240 width ASSUMED, the 48 px overlap). Values unchanged.
+- `client/src/classic/itempack.ts`: `panelDrawn` (the rect of the last draw) and `debugState()` (cursor, rows, the selected item, the list / detail / panel rects).
+- `client/src/classic/fieldmenu.ts`: `leafDebug()`; `client/src/render/fieldhud.ts` `debug().itemPack` exposes it (the HUD dev hook).
+- `client/e2e/item-panel.spec.ts` (new): fresh account, Home held, Item Pack -> Items, the cursor onto the equipped weapon. Asserts the panel rect `{16, 172, 240, 132}` with kind `equip`, the list `{13, 256, 308, 184}`, the 240 x 48 overlap (the exe's), and the detail is clear. Two screenshots under `client/test-results/`.
+
+**Screenshot (client/test-results/item-panel-weapon.png, 1280x720):** the field with the item list at the bottom left and the description window at the bottom right ("A sword with a Photon blade. Attacks 1 enemy."). The equipment panel sits on the left at y ~262 px (game y 172): ATP 35 -> 35, DFP 17 -> 17, MST 29 -> 29, ATA 30 -> 30, EVP 45 -> 45, LCK 10 -> 10, all white (equal). The panel covers the list's title bar and its first row (the cursor row, "Saber"): only the rows below it are visible ("Mag", "Monomate", "Monofluid"). This is the exe's coordinates drawn as ported; whether the exe draws the list over the panel is UNCLEAR.
+
+**ASSUMED / UNCLEAR:**
+- The panel's width (240) and the six row offsets (the element table 0x00973e24 not decoded).
+- The draw order of the panel and the list (ported: the panel after the list, on top). The cursor row is hidden under the panel in the port. A follow-up: the item list's position in the exe's Item Pack, and whether it is clipped.
+- The description's GUI entry (ITEM_DETAIL entry 2 kept): UNCLEAR, not in this state machine.
+- The requirement rows (172 / 192 / 212 / 232) are not ported (the rows went with the pages).
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` passes. Playwright: `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test item-panel.spec.ts --workers=1 --reporter=line`, 2 runs, both passed (~51 s each). Vite on 5175 was started for the runs and stopped after.

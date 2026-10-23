@@ -691,6 +691,7 @@ export class FieldHud {
     return {
       palette: this.palette,
       menuOpen: this.menu.isOpen,
+      itemPack: this.menu.leafDebug(),
       counter: this.counter?.state() ?? null,
       minimap: {
         type: m.type,

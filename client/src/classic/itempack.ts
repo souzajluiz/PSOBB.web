@@ -469,6 +469,8 @@ export class ItemPackMenu {
   private amount: AmountSpinner | null = null;
   private frame = 0;
   rows: ItemRow[] = [];
+  // The panel drawn by the last draw() (null: none), for the HUD's debug hook.
+  private panelDrawn: { x: number; y: number; w: number; h: number; kind: 'equip' | 'mag' } | null = null;
   private env: ItemPackEnv;
 
   constructor(env: ItemPackEnv) {
@@ -710,6 +712,7 @@ export class ItemPackMenu {
     }
     ctx.restore();
     // The panel is on the left (no translation).
+    this.panelDrawn = null;
     if (this.state === 'list' || this.state === 'manual') {
       const it = this.item();
       if (it && it !== 'meseta' && this.rows.length) this.drawPanel(ctx, skin, it);
@@ -724,6 +727,7 @@ export class ItemPackMenu {
     if (!names || (!hasEquipPanel(it.data) && it.data.data1[0] !== 2)) return;
     const R = EQUIP_PANEL;
     drawWindowFrame(ctx, skin.frame, R.x, R.y, R.w, R.h);
+    this.panelDrawn = { x: R.x, y: R.y, w: R.w, h: R.h, kind: it.data.data1[0] === 2 ? 'mag' : 'equip' };
     const x0 = R.x + INSET;
     const xr = R.x + R.w - INSET;
     const white = '#ffffff';
@@ -765,6 +769,21 @@ export class ItemPackMenu {
       drawGameText(ctx, cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), y, white);
       y += ROW;
     }
+  }
+
+  // Console aid (window.gameView.hud.debug().itemPack): the cursor, the rows, the selected
+  // item and the rects drawn by the last draw() (the list, the detail and the panel).
+  debugState() {
+    const it = this.item();
+    return {
+      state: this.state,
+      cursor: this.cursor,
+      rows: this.rows.map((r) => r.id),
+      item: it && it !== 'meseta' ? { id: it.data.id, cls: it.data.data1[0], equipped: !!it.equipped } : null,
+      list: { ...ITEM_LIST },
+      detail: { ...ITEM_DETAIL },
+      panel: this.panelDrawn,
+    };
   }
 
   private drawRow(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, r: ItemRow, x: number, y: number, w: number): void {
