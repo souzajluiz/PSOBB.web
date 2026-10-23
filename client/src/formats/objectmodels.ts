@@ -51,6 +51,10 @@ interface ObjectPartBase {
   // the ids they replace occur only on the nodes they touch.
   texIds?: Readonly<Record<number, number>>;
   tint?: readonly [number, number, number]; // constant color (render flag 0x10 + FUN_0082d710), 0..1
+  // Translation of the part's model in the object's own frame (turned with the
+  // object's yaw), applied before the draw: the exe's render calls FUN_00830b74
+  // on the current matrix (a local translate, not the object's position).
+  offset?: readonly [number, number, number];
 }
 
 // A part either plays a motion and says how it is driven, or holds its bind
@@ -411,8 +415,12 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // swing while the box is already off (the player walks through a shut-looking
     // door). ASSUMED: the exe's key size per motion (the same header as the
     // short-form enemy motions); the other object motions are unchanged.
+    // The render 0x00646804 calls FUN_00830b74(0, 0, 0xc2a00000) (translate
+    // by (0, 0, -80.0) in the object's frame) before the draw of model 20. The
+    // leaves sit at local z 75..82 in the model, so without this they stand 78
+    // units out in front of the Medical Center wall (the set point is the wall).
     case 0x0049:
-      return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door', keys16: true }], {
+      return spec('TObjCityDoor_Med', 'bm_obj_city_common.bml', [{ model: 20, textures: 'bm_obj_city_common.xvm', motion: 11, drive: 'door', keys16: true, offset: [0, 0, -80] }], {
         collision: BOX(0x00935a54, 25, 4, 0),
         door: true,
       });
