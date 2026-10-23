@@ -10,16 +10,41 @@
 // Phones are emulated (isMobile, hasTouch). The character is made through the
 // phone UI end to end and reaches the lobby. Screenshots go to PSO_SHOTS_DIR
 // when it is set.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { consoleLog, logIn, peek } from './classic';
-import { goToLobbyByTap, enterSlot, firstEmptySlot, firstFilledSlot, loginPhone, makeCharacter, nameRoot, PASSWORD, shot, sleep, slotFilled, SLOT_Y, stageBox, tapVirtual, USER, IPHONE_13, PIXEL_7, IPHONE_13_LANDSCAPE, DESKTOP } from './phone-helpers';
+import { goToLobbyByTap, enterSlot, firstEmptySlot, firstFilledSlot, loginPhone, makeCharacter, nameRoot, shot, sleep, slotFilled, SLOT_Y, stageBox, tapVirtual, IPHONE_13, PIXEL_7, IPHONE_13_LANDSCAPE, DESKTOP } from './phone-helpers';
+
+// Each test logs in to an account of its own, made by the login (newserv registers an unknown user
+// on its first login). A shared account's slots fill up, since every run makes a character, so
+// the tests do not depend on what earlier runs left. PSO_TALL_USER names one account to use instead
+// (then the account's slots must match the test: an empty one, or one with a character).
+let accounts = 0;
+const freshUser = (): string => process.env.PSO_TALL_USER ?? `wt${Date.now().toString(36).slice(-6)}${accounts++}`;
+
+// Logs in to a new account (its password is its name) through the phone's form.
+async function loginFresh(page: Page): Promise<void> {
+  const user = freshUser();
+  await loginPhone(page, user, user);
+}
+
+// Makes the account's first character when its list has none (a tap on the first empty slot, then
+// the creation), so the test has a slot to enter.
+async function ensureCharacter(page: Page): Promise<void> {
+  await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+  if (await peek(page, (w) => w.classicSelect.slots.some((p: unknown) => p !== null))) return;
+  const slot = await firstEmptySlot(page);
+  await tapVirtual(page, 221, SLOT_Y[slot] + 19);
+  await expect.poll(() => peek(page, (w) => !!w.classicCreate), { timeout: 10_000 }).toBe(true);
+  await makeCharacter(page);
+  await expect.poll(() => slotFilled(page, slot), { timeout: 30_000 }).toBe(true);
+}
 
 test.describe('iPhone 13 portrait', () => {
   test.use(IPHONE_13);
 
   test('the list is a tall stage; a tap opens creation; the name is typed in the form; the character reaches the lobby', async ({ page }) => {
     const logs = consoleLog(page);
-    await loginPhone(page);
+    await loginFresh(page);
 
     // The 3:4 box over the 390 wide screen, the screen flagged tall.
     const box = await stageBox(page);
@@ -63,7 +88,7 @@ test.describe('Pixel 7 portrait', () => {
   test.use(PIXEL_7);
 
   test('the list is a 3:4 box and a tap on an empty slot opens the creation with the form', async ({ page }) => {
-    await loginPhone(page);
+    await loginFresh(page);
     const box = await stageBox(page);
     expect(box.w).toBeGreaterThanOrEqual(411);
     expect(Math.abs(box.h - (box.w * 4) / 3)).toBeLessThanOrEqual(2);
@@ -84,9 +109,10 @@ test.describe('Pixel 7 portrait', () => {
   });
 
   test('ship select is the tall stage with the menu pad; a tap on Go to lobby reaches the lobby', async ({ page }) => {
-    await loginPhone(page);
+    await loginFresh(page);
     const box = await stageBox(page);
     expect(Math.abs(box.h - (box.w * 4) / 3)).toBeLessThanOrEqual(2);
+    await ensureCharacter(page);
     await enterSlot(page, await firstFilledSlot(page));
     expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(true);
     await expect(page.locator('.wc-stick-zone')).toBeHidden();
@@ -103,7 +129,7 @@ test.describe('iPhone 13 landscape', () => {
   test.use(IPHONE_13_LANDSCAPE);
 
   test('landscape keeps the whole-screen list and creation', async ({ page }) => {
-    await loginPhone(page);
+    await loginFresh(page);
     const box = await stageBox(page);
     expect(box.w).toBe(664);
     expect(box.h).toBe(390);
@@ -117,7 +143,8 @@ test.describe('iPhone 13 landscape', () => {
   });
 
   test('landscape ship select keeps the whole-screen window; a tap on Go to lobby reaches the lobby', async ({ page }) => {
-    await loginPhone(page);
+    await loginFresh(page);
+    await ensureCharacter(page);
     await enterSlot(page, await firstFilledSlot(page));
     expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(true);
     const box = await stageBox(page);
@@ -135,7 +162,8 @@ test.describe('desktop', () => {
 
   test('desktop keeps the 4:3 list without the tall stage', async ({ page }) => {
     const logs = consoleLog(page);
-    await logIn(page, USER, PASSWORD);
+    const user = freshUser();
+    await logIn(page, user, user);
     await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
     const box = await stageBox(page);
     expect(box).toEqual({ x: 0, y: 0, w: 1280, h: 720 });
@@ -147,8 +175,10 @@ test.describe('desktop', () => {
 
   test('desktop ship select keeps the 4:3 window; a click on Go to lobby reaches the lobby', async ({ page }) => {
     const logs = consoleLog(page);
-    await logIn(page, USER, PASSWORD);
+    const user = freshUser();
+    await logIn(page, user, user);
     await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+    await ensureCharacter(page);
     await enterSlot(page, await firstFilledSlot(page));
     expect(await peek(page, (w) => w.classicShip.phoneLayout)).toBe(false);
     await sleep(1500);

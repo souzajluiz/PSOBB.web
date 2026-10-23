@@ -10,10 +10,14 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { makeCharacter, slotFilled } from './phone-helpers.ts';
 
-// The local test account of tests/login.live.ts.
-const USER = process.env.PSO_USER ?? 'webtest';
-const PASSWORD = process.env.PSO_PASSWORD ?? 'webtest';
+// A fresh account per run (newserv registers an unknown user on its first login): the wallet is
+// not left over from earlier runs, which spend the meseta of a shared account (the wallet had 1
+// meseta, so no row could be bought and the window's close was never reached through a buy).
+// PSO_USER / PSO_PASSWORD override it.
+const USER = process.env.PSO_USER ?? `wsh${Date.now().toString(36).slice(-7)}`;
+const PASSWORD = process.env.PSO_PASSWORD ?? USER;
 
 // The counter's window state (classic/shop.ts state(), render/fieldhud.ts debug().counter).
 type CounterState = { message: string; choice: string[] | null; list: string[] | null; cursor: number; amount: number | null } | null;
@@ -34,7 +38,15 @@ test('the item store counter sells a cheap item on the classic field', async ({ 
   const logs = consoleLog(page);
   const name = `ps${Date.now() % 100000}`;
 
-  await test.step('log in', () => logIn(page, USER, PASSWORD));
+  await test.step('log in, make the character (a new account has none)', async () => {
+    await logIn(page, USER, PASSWORD);
+    await expect.poll(() => peek(page, (w) => !!w.classicSelect), { timeout: 90_000 }).toBe(true);
+    if (!(await slotFilled(page, 0))) {
+      await key(page, 'Enter'); // the empty slot 0: the creation
+      await makeCharacter(page);
+      await expect.poll(() => slotFilled(page, 0), { timeout: 30_000 }).toBe(true);
+    }
+  });
   await test.step('reach the lobby', () => reachLobby(page));
 
   await test.step('create a party and enter it', async () => {
@@ -134,7 +146,19 @@ test('the item store counter sells a cheap item on the classic field', async ({ 
       console.log(`row ${row}: ${outcome || 'no outcome'} (${(await counterState(page))?.message})`);
       if (outcome === 'line') {
         refused++;
-        await key(page, 'Enter'); // dismiss the line, the list is back
+        // Dismiss the line: an Enter while it is still typing only finishes the typing, so the
+        // Enter is repeated until the list is back (the line's wait ends on the next one).
+        await expect
+          .poll(
+            async () => {
+              const s = await counterState(page);
+              if (s?.list && s.message === WHAT) return true;
+              await key(page, 'Enter');
+              return false;
+            },
+            { timeout: 30_000, intervals: [300] },
+          )
+          .toBe(true);
       } else if (outcome === 'amount' || outcome === 'confirm') {
         bought = true;
       }

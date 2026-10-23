@@ -9674,3 +9674,25 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - Not ported: the 0xffff reset of RequestItemPickup (no caller in the dump).
 
 **Checks:** `node tests/drops.test.ts`: all checks passed (new: the search order, ring 2, the failure after 62 calls, the wall, the eye, the heading, the 6x2C / 6x2D pairing). `node tests/items.test.ts`: all passed. `node tests/itemmodels.test.ts`: ALL PASS (4623). `node tests/fieldhud.test.ts`, `tests/telepipe.test.ts`, `tests/shop.test.ts`: all passed. `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome; no live test.
+
+## 2026-10-23: e2e fixes: held presses, fresh accounts, the shop's line, the guns' wave
+
+**Symptom:** the full Playwright run on main had 6 failures: `barbaray-smoke` "the attack path hits at least two different parts" (1 part), `guns` "living enemies in Forest 1" (and the flaky 6x46 counts), `pioneer2-shop` "close the window" (stays open), and the three `phone-charselect` tests (the account's 4 slots were full).
+
+**Diagnosis (spec side, no port change):**
+- barbaray: the swings used `key()` (`keyboard.press`, zero length). The port reads the palette keys once a frame, so most swings were lost (the same cause as goldragon, DEVLOG 2026-10-23 above). Also the radial stand (35 units out from the body's centre) left another part nearer than the target: parts 0/1 and 3/4 share a place, and part 6 sat between the stand and part 0 (`weaponTargets` sorts by distance). Debug probes showed both.
+- guns: the Forest 1 wave is built once, and a dead enemy is not built again (`render/waves.ts`), so the weapons after Handgun, Rifle, Shot and Mechgun found no living enemy (the Samba step).
+- pioneer2-shop: the account `webtest` had 1 meseta (earlier runs spent it), so no row could be bought; and the line "Not enough Meseta..." was dismissed by one Enter while it was still typing (an Enter then only finishes the typing), so the clerk kept waiting and the close loop's Escape was ignored.
+- phone-charselect: every run makes a character on the shared accounts (`webtall`), so the slots fill up.
+
+**Fix:**
+- `barbaray-smoke.spec.ts`: each swing is a held press (120 ms, as `guns.spec.ts` TAP_MS). The stand is searched (distances 30..45, 16 directions) where the part is `weaponTargets(0, ...)[0]`, re-searched every 3 swings (the parts move with the body); parts with no such spot (a tie with a part on the same place) are skipped. All 10 parts are struck; the assertion (>= 2 distinct parts) is unchanged. Timeout 900 s (a run takes about 4 to 6 minutes).
+- `guns.spec.ts`: the 20 ms HP top-up also raises the wave's living enemies to their max HP (only raised, so no drop is hidden; the damage is still read at each arrival), so no enemy dies before the last weapon.
+- `pioneer2-shop.spec.ts`: a fresh account per run (`wsh<time>`, password = name), made through the creation keys (`makeCharacter`, new `makeCharacter` branch for the desktop canvas name editor: the keys type the name, Enter confirms). The line dismissal repeats Enter until the list is back.
+- `phone-charselect.spec.ts`: every test logs in to a fresh account (`freshUser`); the tests that enter a character first make one (`ensureCharacter`). `PSO_TALL_USER` still names one account. `phone-field.spec.ts` keeps the shared `webtall` (its tests need a character).
+
+**Checks:** `npx tsc --noEmit -p .` (client) clean. Playwright on a local newserv, Vite on 5175: `guns.spec.ts` 3 of 3 passed; `barbaray-smoke.spec.ts` 2 of 2 passed (distinct parts hit: 2 to 3 per run before the held-press fix, 8 in both runs after it); `pioneer2-shop.spec.ts` 2 of 2 passed; `phone-charselect.spec.ts` 7 of 7 twice.
+
+**Not covered:** a fresh character could not pay any row of the Tools Shop in the runs ("Not enough Meseta" on all 11), so the shop's buy branch does not run; the spec takes its "no row the wallet can pay" branch and checks the close. To exercise the buy, fund an account offline (bridge/admin-chars.mjs `meseta`) and set `PSO_USER`/`PSO_PASSWORD`, knowing the buys spend it again.
+
+**Side effects:** each run leaves one new account in `vendor/newserv/system/players/` (the shop and each phone test), as newserv registers unknown users on login.

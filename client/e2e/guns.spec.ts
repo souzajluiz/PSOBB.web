@@ -75,6 +75,10 @@ async function installHooks(page: Page): Promise<void> {
         c.damage.hp = c.damage.maxHp;
         c.damage.state = 'alive';
       }
+      // The room's wave is built once and a dead enemy is not built again (waves.ts), so the
+      // weapons that come later would find no living enemy in Forest 1. The enemies' HP is topped
+      // up the same way (only raised, so no HP drop is hidden: the damage is read at each arrival).
+      for (const e of c.enemies.values() as Iterable<any>) if (!e.dead && e.stats.hp < e.stats.maxHp) e.stats.hp = e.stats.maxHp;
     }, 20);
     const origSend = game.sendAttack.bind(game);
     game.sendAttack = (step: number, angle: number, type: number) => {
