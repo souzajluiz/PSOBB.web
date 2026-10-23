@@ -19,6 +19,8 @@ import {
   GOL_A8_SIZE,
   GOL_FLAME,
   GOL_FLAME_RINGS,
+  GOL_EXTRA,
+  golExtraRing,
   GolBreath,
   decodeGolA8,
   encodeGolA8,
@@ -457,6 +459,53 @@ eq(GOL_BODY_BOXES.reach, 15, 'the biggest box is 15');
   ai.tick([]);
   check(ai.sid !== S.roar, 'the derived extras never roar at the clamp');
   eq(golNext(0, true).state, GOL_SEQ_C[0], 'golNext(0, derived) reads table C');
+}
+
+// --- the copies (exe 0x004cb19c case 5 -> 0x004cea04 -> 0x004cede4, the 0x2b gate FUN_004ce970) ----------
+{
+  // The ring: radius 320 around the centre, the body and 5 copies on the 0x10000 / 6 step, all facing the centre.
+  const ring = golExtraRing(0x1234);
+  eq(ring.extras.length, GOL_EXTRA.count, 'the leave places the 5 copies');
+  const r = (p: { x: number; z: number }) => Math.hypot(p.x, p.z);
+  check(Math.abs(r(ring.body) - 320) < 1e-6, 'the body is on the ring (radius 320)');
+  for (const p of ring.extras) check(Math.abs(r(p) - 320) < 1e-6, 'every copy is on the ring');
+  eq(ring.body.yaw, (0x1234 + 0x8000) & 0xffff, 'the body faces the centre (yaw + 0x8000)');
+  eq(ring.extras[0].yaw, ((0x1234 + 10922) + 0x8000) & 0xffff, 'copy 1 is at the first step (0x10000 / 6, truncated)');
+  eq(ring.extras[4].yaw, ((0x1234 + 5 * 10922) + 0x8000) & 0xffff, 'copy 5 is at 5 steps');
+  check(JSON.stringify(golExtraRing(0x1234)) === JSON.stringify(ring), 'the ring is deterministic for a seed');
+}
+{
+  // The 0x2b phase 9 waits while a copy's slot is taken (FUN_004ce970 == 0), then picks and the leave spawns.
+  let free = false;
+  const ai = brain({ extrasFree: () => free });
+  ai.setState(S.attack2b);
+  const held = run(ai, [], 60);
+  eq(held.states.length, 1, 'state 0x2b holds while the copies\' slots are taken');
+  eq(held.events.filter((e) => e.kind === 'extras').length, 0, 'no copies before the 0x2b leave');
+  free = true;
+  const got = run(ai, [], 5);
+  const ex = got.events.filter((e) => e.kind === 'extras');
+  eq(ex.length, 1, 'the 0x2b leave emits the copies once');
+  eq(ex[0]?.extras?.length, GOL_EXTRA.count, 'the leave carries 5 copies');
+  check(Math.abs(Math.hypot(ai.x, ai.z) - 320) < 1e-6, 'the body is moved onto the ring by the leave');
+  // The body faces the centre: its yaw is the bearing of its place plus 0x8000 (BAMS).
+  const bearing = (Math.round((Math.atan2(ai.x, ai.z) * 65536) / (Math.PI * 2)) + 0x8000) & 0xffff;
+  check(Math.abs(((ai.yaw - bearing + 0x8000) & 0xffff) - 0x8000) <= 1, 'the body faces the centre after the leave');
+  // Each copy sits on the ring at its own yaw (facing the centre too).
+  for (const p of ex[0]?.extras ?? []) {
+    const b = (Math.round((Math.atan2(p.x, p.z) * 65536) / (Math.PI * 2)) + 0x8000) & 0xffff;
+    check(Math.abs(((p.yaw - b + 0x8000) & 0xffff) - 0x8000) <= 1, 'a copy faces the centre');
+  }
+  check(got.states.length >= 2 && got.states[1] !== S.attack2b, 'the body leaves 0x2b after the pick');
+}
+{
+  // A copy has no clamp: it dies at hp < 1 once (the kill event), and stays dead.
+  const ai = brain({ derived: true, hp: 1000, singleton: false });
+  ai.setState(S.wait);
+  ai.hp = 0;
+  const ev = run(ai, [], 2).events;
+  eq(ev.filter((e) => e.kind === 'killed').length, 1, 'a copy dies once at hp < 1');
+  check(ai.dead, 'a dead copy stops its brain');
 }
 
 if (failures) {
