@@ -13322,3 +13322,38 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: player trade follow-up: the exe's prompts, the zone bits, the timeouts (not ported yet)
+
+Follow-up to "player trade window" above. Research pass on the three open items; the port's code is unchanged in this entry (the protocol and window tests still pass: `node tests/trade.test.ts`, `node tests/trademenu.test.ts`; the menu test needs `client/node_modules`, linked into this worktree).
+
+**Premise corrections (per the exe):**
+- The Home menu's Yes/No trade confirm (state 3 -> 4) is `QuickMenuWindow_CreateTradeConfirmationWindow_0075ed34` (dump 732562): text = partner name + unitxt(11, 0xf5), `ChatShortcutMenuWindow_CreateSubMenuWithYesNo` at get_gui_position(0x5e) = (239, 256), width 384.0, title unitxt(11, 0x33), cursor on No (`SetSelectedIndex(1)`). The entry above said 0xf6, one row: that was the waiting window, not the ask.
+- After Yes (state 5) the exe sends the request (`QuickMenuWindow_SendTradeRequest_008261e4`: what 0, result 0, status 1) and shows `QuickMenuWindow_CreateConfirmationWindow_0075eccc` (dump 732534): name + unitxt(11, 0xf6), one row (flag 0x82, no Yes/No), at 0x5e. State 6 cancels only while the key is HELD (`SharedInputState_CheckKeyHeld_007c1168`, `g_KeyboardSharedState[0xd]`), sending what 5 result 4 (`ProcessTradeState_00825b4c`) and returning to state 1. The port cancels on one Backspace / Escape press (ASSUMED difference).
+- `trade_invite_menu1/2/3` (player_menu_entry 26 / 27 / 28, dump 700334) all build the same `QuickMenuWindow_Constructor_0075e958`; no separate state for 2 / 3 is in the constructor path. The menu type is not compared in the process function traced here.
+- The dump has no `TObjTradeCollision` or `inTradeZone` name. The per-player zone bits 0..3 of `g_TradeStateFlags` are written by `DerolleMapObjectVisibilityCheck_00667bb5` (dump 531340; the dump's "Derolle" prefix is misleading, this is the generic map-object zone check). Per slot: no player, another scene, a quest running, another floor, or squared XZ distance < radius^2 clears the bit; otherwise, when the object's initdata param 4 is non-zero, the bit is set. The bit is read by `IsTradeStateFlagSet_00825ac0` (ValidateTradePartner / ValidateLocalPlayerTradeState): a clear bit runs `ProcessTradeAcceptance_00825ae4` (what 7, result 0 to the partner; status 2 -> close the window, otherwise the 0x10e text and reset). ASSUMED reading: the set condition is the outside of the radius, which looks inverted for a "zone"; the exe is taken as written.
+
+**The incoming proposal (status 2):**
+- `HandleTradeGuildCardPacket_00824c80` (dump 838389): status 0, what 0, result 0 -> status 2, partner = field 2, `g_GuildCardFlags |= 8`. No UI call in this handler; the window that answers it was not traced (ASSUMED: the port's accept prompt).
+- Accept: `QuickMenuWindow_SendTradeMesetaRequest_00826284` (only at status 2): what 0, result 2, meseta at +8, status 3. Reject: `QuickMenuWindow_SendTradeReject_00826194` (only at status 2): what 0, result 3, `QuickMenu_DisableUI`, clear.
+- The port's accept prompt uses name + 0xf6 with Yes / No. The exe's only Yes/No trade text is 0xf5, so 0xf5 is the likely text (ASSUMED, not changed).
+
+**The timeouts (`IsTradeStateTimedOut_00826508`, dump 839814):** not a timeout. It returns 1 only when both 0x20 (my first confirm sent, `TransitionTradeState_00825bf0`) and 0x40 (partner's first confirm, `HandleTradeRequestSent_008258d4`) are set. The quick menu uses it for the list highlight (state 0x15), the accept check (0x1b) and the cancel hold (0x1c). The real timers: the confirms (30 frames, the port's `TRADE_CONFIRM_FRAMES`); the quick menu's cancel question (state 0x1f, 900 frames) then `CheckTradeTimeoutOrError_00827064` (dump 840342): when 0x400 (list sent) is set, the D4 abort and status 9. `ProcessTradeListState_00825dfc` case 7 / 8 calls it when 0x100 or 0x200 is missing. The port's `listState` mirrors the 0x400 gate; the quick menu's 900-frame countdown is not ported.
+
+**The offer lists (dump 838554..838740, 692115, 733662):**
+- Two lists of (item id, count) pairs in the trade window object: this+0x00..0xf0 (31 pairs, the partner side: `AddTradeItemToWindow_008252a4`, the packet 6xA6 what 2 via `HandleTradeWindowItemUpdate_00825268`) and this+0xf8..0x1e8 (31 pairs, the local side: `UpdateTradeWindowItems_00824e7c`). The id -0xff (0xffffff01, meseta) stops the compaction loops. The local list is built in `ProcessTradeListState_00825dfc` case 6 (31 pairs, `ConstructItemInstance` for meseta with the amount).
+- Rendering: `QuickMenuWindow_CreateTradeWindow_00760468` builds the window at get_gui_position(0x60) = (341, 318) with title unitxt(11, 0x3b) through `CreateNumericDisplayListWindow_00728ac4` (dump 692115): a list window whose rows are numeric counts (6 digit objects, the width from the digit count, `g_NumericDisplayCharWidth`). `QuickMenuWindow_UpdateTradeItemDisplay_00760728` repopulates it (`ListWindowObject_PopulateItemsFromData`) and sets state 3.
+- The port still draws text lines (ASSUMED); the numeric row objects need the digit sprites, not done.
+
+**The quick menu path (`QuickMenuWindow_ProcessState_0075f09c`, dump 732743):** state 0x13 -> 0x14 when `IsQuickMenuTradeStateFlagSet_008264b4` (the quick menu's trade flag). State 0x14 creates the player list at 0x61 (`QuickMenuWindow_CreatePlayerList_007605dc`, positions get_gui_position(0x61) = (341, 318)), sets the trade flag, goes to 0x15 (highlight from `IsTradeStateTimedOut`, pick -> 0x16 close). 0x17 / 0x18 target confirm (`QuickMenuWindow_HandleTradeSelect_007606fc`), 0x1a / 0x1b confirm (`QuickMenuWindow_HandleTradeConfirm_007606d0`, flag2 set, 0x1c wait with a held key), 0x1e / 0x1f cancel question (`QuickMenuWindow_HandleTradeCancel_007606e4`, unitxt 0x116, 900 frames), 0x20 `ClearTradeWindowData` and `HandleTradeSelect`. Not ported: the port has no quick menu, so the 0x61 path is not reachable in the browser.
+
+**Not changed (why):** the ask / accept texts and the held-key cancel would change the menu test sequences (the ask becomes a Yes / No with the cursor on No, so every Enter-Enter sequence in `tests/trademenu.test.ts` changes); the offer rows need the numeric digit sprites; the zone bits need the map-object layer (the port has no trade collision object), so `inTradeZone` stays true (ASSUMED).
+
+**ASSUMED (unchanged in the code):** the ask / accept text 0xf6 and the one-press cancel while waiting (above); `inTradeZone` always true; the offer rows as text lines.
+
+**Left:**
+- port the ask as the exe's Yes / No (0xf5, cursor on No) and the waiting window (0xf6, held-key cancel);
+- trace the window that shows the incoming status 2 (`trade_invite_menu2/3` process path, the accept text);
+- the zone bits: the trade collision map object (initdata param 4) and the bit semantics (the inverted-looking condition);
+- the 900-frame quick menu countdown and the quick menu 0x14..0x20 flow (needs the quick menu);
+- the numeric offer rows (`CreateNumericDisplayListWindow_00728ac4`, the 0xf8..0x1e8 list).
