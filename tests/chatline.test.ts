@@ -67,6 +67,55 @@ eq(crowd.bubbles.list.length <= 8, true, 'balloons are capped');
 crowd.receive({ clientId: 1, name: 'P1' }, 1, 'again', () => 0);
 eq(crowd.bubbles.list.filter((b) => b.clientId === 1).length, 1, 'a speaker keeps one balloon');
 
+// Overlap and docking (chat.ts ChatBubbles: FUN_0071f0c0 retries,
+// UIElementMover_UpdatePosition's docked branch). The frame is 640 x 480.
+const { ChatBubbles, ChatBubble } = await import('../client/src/classic/chat.ts');
+const DOCK = [
+  [320, 140],
+  [140, 300],
+  [500, 300],
+  [320, 240],
+];
+const head = (x: number, y: number, front = true, dist = 50) => ({ x, y, dist, visible: true, front });
+// Two balloons over one head: the second is moved off the first (the rand()
+// of the retries is fixed, so the retry C angle is opposite the head's).
+const pair = new ChatBubbles();
+pair.rand = () => 16000;
+pair.say(1, 'A', 'hello there friend', () => 0);
+pair.say(2, 'B', 'hi', () => 0);
+for (let i = 0; i < 12; i++) pair.tick(() => head(320, 240));
+const [pa, pb] = pair.list;
+const apart =
+  pa.pos.x + pa.target.w <= pb.pos.x || pb.pos.x + pb.target.w <= pa.pos.x || pa.pos.y + pa.target.h <= pb.pos.y || pb.pos.y + pb.target.h <= pa.pos.y;
+eq(apart, true, 'two balloons over one head do not overlap');
+
+// A head off the frame docks the balloon on a slot: its centre is the slot's
+// dock point (the GUI point 0x45 + slot).
+const dockSet = new ChatBubbles();
+dockSet.say(3, 'C', 'over here', () => 0);
+for (let i = 0; i < 6; i++) dockSet.tick(() => head(-200, 100));
+const d = dockSet.list[0];
+eq(d.docked, true, 'off the frame: docked');
+eq(d.slot >= 0 && d.slot <= 3, true, 'docked: a slot');
+const pt = DOCK[d.slot];
+eq([Math.round(d.pos.x + d.target.w / 2), Math.round(d.pos.y + d.target.h / 2)], pt, 'docked: centred on the slot point');
+eq(dockSet.dock.taken !== 0, true, 'docked: slot bit taken');
+
+// Behind the camera also docks; back in view (inside the 50 px margin) it
+// undocks and frees the slot.
+dockSet.tick(() => head(300, 200, false));
+eq(d.docked, true, 'behind the camera: still docked');
+for (let i = 0; i < 3; i++) dockSet.tick(() => head(300, 200));
+eq(d.docked, false, 'back in view: undocked');
+eq(dockSet.dock.taken, 0, 'undocked: slot freed');
+eq(d.tailOn, true, 'in view: the tail is on');
+
+// A far speaker (more than 120 units) docks too.
+const far = new ChatBubbles();
+far.say(4, 'D', 'far', () => 0);
+for (let i = 0; i < 4; i++) far.tick(() => head(320, 240, true, 150));
+eq(far.list[0].docked, true, 'beyond 120 units: docked');
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

@@ -10637,3 +10637,35 @@ puddle look has a new lead that is not ported yet.
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `tests/enemysplits`,
 `enemyfsmcaves`, `enemies` and `combatdepth` pass (`842 checks, 0 failures` for
 combatdepth). Not checked in Chrome.
+
+## 2026-10-23: word balloons: overlap retries, docking off the frame, tail only on screen
+
+**What changed:** `classic/chat.ts` (`ChatBubble`, `ChatBubbles`) now places the word balloons the way PsoBB.exe does. Two balloons over one head are pushed apart, and a balloon whose speaker is off the frame docks on a slot at a fixed point of the screen. Done in `ChatBubbles.tick`, which shares the other balloons and the slot bits. The tail is drawn only while the speaker is on screen. `tests/chatline.test.ts` has new cases for overlap, docking, undocking and the 120-unit limit. `tsc` clean, `chatline`, `fieldhud`, `windowanim` pass.
+
+**Overlap (`FUN_0071f0c0`, `FUN_0071eeac`, `FUN_00712498`):**
+- `UIElementMover_UpdatePosition` (`FUN_0071e4f4`, flags 0x400 clear) runs in states 2, 4, 6. On screen it first tries `FUN_0071eeac`: the old head offset kept, clamped to 20 / 40 from the edges (`0x0097045c..50`), taken if it overlaps nothing. Then `FUN_0071f0c0` runs; its spot wins when it succeeds, else the first one stays.
+- `FUN_0071f0c0`: the angle from the reference offset, the ellipse (`FUN_0071f830`, radii from the target size) and the tail 1000 / distance (`0x009704cc`). A spot less than 10 from the reference length is refused (`0x009704bc`). Then bounds (no move if outside).
+- Overlap retries, only when the spot overlaps a balloon:
+  - A: lerp toward the reference offset by rand / 32768 (no bounds test).
+  - B: angle = head angle − 0x4000 + rand (bounds test, refuse if outside).
+  - C: angle = rand × 2 (full turn; overlap again = no move).
+- `FUN_00712498` (`UIElement_CheckBounds`): overlap test against the list. Only balloons with flag 0x100 (states 1..6) count. Two docked balloons (0x200) never overlap each other. The x test reads the other balloon's placed x and drawn x (0x30, 0x40), the y test its placed y (0x34) and target height (0x3c), as the decompile has them.
+
+**Docking (`FUN_0071e70c`, `FUN_00717aec`, `FUN_00717ca8`, `FUN_00717c78`):**
+- Off = head outside the frame (0x00970520 margin 0; 50 px in once docked, `0x0097051c`), or behind the camera, or dist² > 14400 + 40 × margin (`0x00970518`, `0x00970514`).
+- Slot: `FindNearest` takes the nearest free of the first three slots (bits 0x40 / 0x80 / 0x100), else slot 3 (bit 0x200). `LockSlot` frees it when the balloon is back on screen or dies.
+- Position: the balloon centre on the slot's point, top-left = point − target / 2 (`0x00970538` = −0.5), then clamped as on screen. No overlap test.
+- Dock points: `get_gui_position` 0x45 + slot = (320,140), (140,300), (500,300), (320,240) in the 640 × 480 window (table 0x00971f40, entries 0x00972168..0x00972180). The exe's group 0x45 is the normal player; 0x4a (input locked) and 0x4f (challenge) are not ported.
+- Hide (state 8, `ChatBubbleObject_UpdatePositionAndVisibility`): docked when off screen, else centred on the head (`0x00970484` = −0.5).
+- **Arrow:** the exe draws no arrow for a docked balloon. The tail (flag 0x20) is set only while on screen (front, near, inside the frame). Docked = no tail. The GUI points above are the only docking marks.
+
+**ASSUMED / not ported:**
+- The frame rect for the bounds is (0, 0, 640, 480): the UI element rects of `FUN_007199a0..d0` were not read. The dock points scale with the frame for a wide or tall window.
+- `rand()` is `Math.random() × 32768` (MSVC `rand` is not reproduced). Tests set the `rand` property of a `ChatBubbles`.
+- The balloon list order is the insertion order; the exe's list order is not traced.
+- Flags 0x2c bits 1 and 4 and 0x85 bit 2 are treated as clear (their writers were not all found). Flag 0x400 (the `FUN_0071e8f8` relayout and `GetRandomPosition`) is not ported: the default path only.
+- The 120-unit limit uses the port's camera position as the exe's `g_pDefaultNPCCameraState` camera. It may dock far speakers in the field too. Not checked in Chrome.
+- Quest balloons (`quest/questui.ts`) use the same class and a shared dock state by default; their frame width is not checked.
+- The 0x40 snap flag (no smoothing of the centre) is not ported; the centre smoothing is unchanged from before.
+- Not checked in Chrome or Playwright (no browser run for this change).
+- Sub-menu transitions (`classic/mainmenu.ts`, `FUN_00739418`) are not done.
