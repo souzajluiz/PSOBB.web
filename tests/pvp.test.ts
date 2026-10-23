@@ -17,6 +17,7 @@ import {
   remoteAttacker,
   type CombatStats,
 } from '../client/src/combat/pvp.ts';
+import { bulletSpeed, pelletTargetIndex, planGunShot } from '../client/src/combat/gunbullet.ts';
 import { pickRespawn, respawnCandidates } from '../client/src/quest/battletraps.ts';
 import { parseAttackTargets } from '../client/src/net/game.ts';
 import { ATTACK_DAMAGE_MULT, type DefenderStats } from '../client/src/combat/formulas.ts';
@@ -158,6 +159,29 @@ const never = () => 0.999999; // above any hit chance below 1
   eq(respawnCandidates(points, []).length, 5, 'at most 5 candidates');
   eq(pickRespawn(cands, 0), cands[0], 'pickRespawn index 0 takes the first candidate');
   eq(pickRespawn([], 100), null, 'no candidates: the player stays');
+}
+
+// Gun shots on a remote player (Battle mode): the strike's list mixes enemies and players
+// nearest first (the gun's pellets take it by index), and a pellet aimed at a player's point
+// makes a bullet with its flight time, a wall stops it.
+{
+  const origin = { x: 0, y: 0, z: 0 };
+  const noWall = () => false;
+  const list = nearestTargets(
+    [
+      { d: 16, value: 'enemy-a' },
+      { d: 4, value: 'player-2' },
+      { d: 25, value: 'enemy-b' },
+    ],
+    5,
+  );
+  eq(list, ['player-2', 'enemy-a', 'enemy-b'], 'gun targets: the player between two enemies, nearest first');
+  // Pellet i takes list[pelletTargetIndex(kind, i)]: the Shot's sixth pellet takes target 0 again.
+  check(pelletTargetIndex(9, 0) === 0 && pelletTargetIndex(9, 1) === 1, 'Shot pellet 0 and 1 take targets 0 and 1');
+  const aimAt = { centre: { x: 0, y: 0, z: 60 }, radius: 0 };
+  const shot = planGunShot(origin, { heading: 0, angleBams: 0, horizontalDistance: 170 }, aimAt, noWall, bulletSpeed(6, 8));
+  check(shot.bullet === true && shot.frames === Math.round(60 / bulletSpeed(6, 8)), 'a pellet at a player point makes a bullet (60 units at speed 11)');
+  check(planGunShot(origin, { heading: 0, angleBams: 0, horizontalDistance: 170 }, aimAt, () => true, bulletSpeed(6, 8)).bullet === false, 'a wall on the way to a player: no bullet');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
