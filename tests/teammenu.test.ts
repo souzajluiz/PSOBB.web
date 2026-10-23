@@ -57,7 +57,8 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 const t15 = (i: number) => (i === T15_TEAM.otherBusiness ? 'Other business?' : `T15[${i.toString(16)}] %s`);
 const t11 = (i: number) => `T11[${i.toString(16)}]`;
-const text = { t11, t15 };
+const t12 = (i: number) => `T12[${i.toString(16)}]`;
+const text = { t11, t15, t12 };
 
 const team = (privilege: number, name = 'Alpha'): TeamMembership => ({ masterGuildCard: 900, teamId: 4, unknownA5: 0, unknownA6: 0, privilege, memberCount: 3, name });
 
@@ -66,10 +67,14 @@ interface Calls {
   removed: number[];
   privileges: Array<[number, number]>;
   disbanded: number;
+  searched: number[];
 }
 
-function host(membership: TeamMembership, answers: Partial<{ create: number; remove: number; privilege: number; disband: number }> = {}): { host: TeamHost; calls: Calls } {
-  const calls: Calls = { created: [], removed: [], privileges: [], disbanded: 0 };
+function host(
+  membership: TeamMembership,
+  answers: Partial<{ create: number; remove: number; privilege: number; disband: number; found: boolean }> = {},
+): { host: TeamHost; calls: Calls } {
+  const calls: Calls = { created: [], removed: [], privileges: [], disbanded: 0, searched: [] };
   const members: TeamMember[] = [
     { rank: 1, privilege: PRIVILEGE.master, guildCard: 900, name: 'Boss' },
     { rank: 2, privilege: PRIVILEGE.leader, guildCard: 901, name: 'Lead' },
@@ -83,6 +88,7 @@ function host(membership: TeamMembership, answers: Partial<{ create: number; rem
       createTeam: async (n) => (calls.created.push(n), answers.create ?? 0),
       removeMember: async (g) => (calls.removed.push(g), answers.remove ?? 0),
       members: async () => members,
+      searchMember: async (g) => (calls.searched.push(g), answers.found ?? false),
       setPrivilege: async (g, p) => (calls.privileges.push([g, p]), answers.privilege ?? 0),
       disband: async () => (calls.disbanded++, answers.disband ?? 0),
       crossRanking: async () => [
@@ -548,11 +554,69 @@ async function openMaster(h: TeamHost) {
     'rows are "<rank> name" in the answer order',
   );
   eq(w.rows.map((r) => w.colorOf(r)), ['#ff6d46', '#5eb1ff', undefined], 'rows coloured by privilege');
+  // Enter on the row (Boss, 900) starts the Guild Card search at once; no answer is "Not Found.".
   w.draw(ctx, skin, 0);
-  check(w.key(k('Enter')) && w.open, 'Enter on a row keeps the window (action list not ported)');
-  eq(w.rows.length, 3, 'Enter changes no row');
+  check(w.key(k('Enter')) && w.open, 'Enter on a row keeps the window');
+  eq(w.state, 'searching', 'Enter starts the search (state 0xf)');
+  w.draw(ctx, skin, 0);
+  await tick();
+  eq([w.state, w.rows.length], ['notFound', 3], 'no answer: Not Found. (state 0x10), rows kept');
+  w.draw(ctx, skin, 0);
+  check(w.key(k('Enter')) && w.state === 'list', 'a key after Not Found. goes back to the list');
   check(!w.key(k('Escape')) && !w.open, 'Cancel closes');
   w.draw(ctx, skin, 0);
+
+  // Found: the action list (Send Mail always; Sent Item greyed without the trade state; Meet the User in the lobby).
+  const found = host(team(PRIVILEGE.master), { found: true });
+  const fw = new TeamMemberListWindow(found.host, text);
+  fw.show();
+  await tick();
+  fw.key(k('ArrowDown'));
+  fw.key(k('Enter'));
+  eq(found.calls.searched, [901], 'the row\'s guild card is searched');
+  await tick();
+  eq(fw.state, 'actions', 'answer: the action list');
+  eq(fw.actionRows?.map((r) => r.label), ['T11[15c]', 'T11[15d]', 'T11[15e]'], 'action rows Send Mail / Sent Item / Meet the User');
+  eq(fw.actionRows?.map((r) => r.enabled), [true, false, true], 'Sent Item greyed (trade state not set), Meet the User in the lobby');
+  fw.draw(ctx, skin, 0);
+  fw.key(k('Enter'));
+  eq(fw.lastLeaf, 0, 'Send Mail chosen (its window is not ported)');
+  fw.key(k('ArrowDown'));
+  fw.key(k('Enter'));
+  eq(fw.lastLeaf, 0, 'a greyed row records nothing');
+  fw.key(k('ArrowDown'));
+  fw.key(k('Enter'));
+  eq(fw.lastLeaf, 2, 'Meet the User chosen');
+  check(fw.key(k('Escape')) && fw.state === 'list' && fw.open, 'Cancel in the action list goes back to the member list');
+
+  // Trade state set and not on the own card: Sent Item enabled; on the own card it stays greyed.
+  const tr = new TeamMemberListWindow(host(team(PRIVILEGE.master), { found: true }).host, text, { tradeState: true, lobby: false });
+  tr.show();
+  await tick();
+  tr.key(k('ArrowDown'));
+  tr.key(k('Enter'));
+  await tick();
+  eq(tr.actionRows?.map((r) => r.enabled), [true, true, false], 'trade state: Sent Item enabled, Meet the User off outside the lobby');
+  const own = new TeamMemberListWindow({ ...host(team(PRIVILEGE.master), { found: true }).host, selfGuildCard: () => 901 }, text, { tradeState: true });
+  own.show();
+  await tick();
+  own.key(k('ArrowDown'));
+  own.key(k('Enter'));
+  await tick();
+  eq(own.actionRows?.map((r) => r.enabled), [true, false, true], 'own card: Sent Item stays greyed');
+
+  // Cancel during the search: the answer that comes later is dropped.
+  let answer: (v: boolean) => void = () => {};
+  const slow = new TeamMemberListWindow({ ...h, searchMember: () => new Promise<boolean>((r) => (answer = r)) }, text);
+  slow.show();
+  await tick();
+  slow.key(k('Enter'));
+  eq(slow.state, 'searching', 'searching before the answer');
+  slow.key(k('Escape'));
+  eq(slow.state, 'list', 'Cancel while searching goes back to the list');
+  answer(true);
+  await tick();
+  eq(slow.state, 'list', 'the late answer is dropped');
 
   // A late answer after closing is dropped.
   const late = new TeamMemberListWindow(h, text);

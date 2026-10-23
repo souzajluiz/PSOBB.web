@@ -13652,3 +13652,50 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+
+## 2026-10-23: Team Member List: Enter on a row (search, action list); Invite, Team Info, Team Log, Point Regist traced
+
+**Premise checked against the exe.** The earlier entry (Team Member List 0x25) said Invite should send 03EA / 04EA. The exe does not do that here:
+- `send_packet0xea_subcommand3` (03EA, dump 814436) has no caller in the dump (only its definition matches). The 0xEA senders that have callers are 0x10, 0x11, 0x1b, 0x5 (the lobby's team master menus, `HandleLobbyTeamMasterMenu_00799108` and friends, dump 777132..777734), 0x8, 0x13, 0xd, 0x18 and 0x19.
+- The dispatch of the team leaves is `handle_player_menu_select` at dump 700380..700426: 0x27 `GameListMenu_Constructor_0074d5e8` (700390), 0x29 `ChallengeMenuWindow_Constructor_0074c860` (700402), 0x2b `ChallengePlayerInfoWindow_Constructor_0074c23c` (700414), 0x2d `ChallengePlayerInfoWindowListWindow_Constructor_0074f1e8` (700426).
+- Invite (0x29): vtable 0x00b41e68, state machine `FUN_0074c964` (vtable slot 1). Title unitxt (11, 0x15a) "Who do you want to invite?". The list is `CreateChallengeMenuListWindow_0074d248` at get_gui_position(0x15).
+- Picking a player (state 3) finds that player's slot in the 12 player records and sends a game-level message to it: `FUN_00800464(slot)` (the 0x62 relay, `FUN_007d3fcc`), subcommand 0xC1 with the size word 0x17 (92 bytes), carrying the team name (`DAT_00a9ab78`, set by `ChallengeMenuListWindow_SetTitleString_0074d47c`), the own name (`FUN_006936b4`) and the own slot. newserv relays 6xC1 unchanged (`ReceiveSubcommands.cc:5796`, `forward_subcommand`). So the invite is a peer message, not a server team command.
+- The wait text reads `FUN_0079317c(0x14c)`. `FUN_0079317c` is `*(DAT_00a9cd50 + 0x2c + 4 * index)`, a per-file string table, not unitxt: the text is not identified. The answer flags are the globals the dump names `TeamFlagObject_*` (`DAT_00a9c8c0`, `DAT_00a9c8c4`, `DAT_00a9c924`, `DAT_00a9c928`; the names are suspect and their writers were not found).
+- The rows are the records of `ChallengeMenuListWindow_UpdateItems_0074d37c` (count at +4, stride 0x217 dwords, name as a wchar string at +0x44 with stride 0x42e, dump 720600). The packet that fills them was not identified (ASSUMED: the lobby's nearby list, 13EA / 15EA).
+- Conclusion: Invite is not the 03EA add. Not ported: it needs the 6x62 sender, the answer flags and the invitee side, none traced.
+
+**Enter on a Member List row (exe, dump 720824 `ChallengePlayerInfoWindow_ProcessState_0074d9ac`; the member list is its +0x30 list):**
+- state 2 -> 3 on Enter: the row's guild card goes to +0x24. State 0xf: `CloseSubPanel_0074e934` -> `SendJoinPacket_0074f008` sends **0040** (`send_packet0x40`), a Guild Card search. newserv answers 0041 only when the target is online and does not block the searcher (`on_40`, `ReceiveCommands.cc:4204`). The "Press X" line (unitxt (12, 0x4b)) goes in a message box at (418, 344), 206 x 92 (the state's locals).
+- state 0x10: counts frames up to 0x96 (150). An answer that sets the list's title flag (`ChallengeMenuListWindow_SetTitleString_0074d47c` writes `DAT_00a9ab78` and bit 2 of +0x94; the 0041 handler that calls it is not traced, ASSUMED) goes to state 4. After 150 frames the box gets "Not Found." (unitxt (11, 0x15b)) and state 0x11 waits for a key.
+- state 4 (`ChallengePlayerInfoWindow_CreateMenuList_0074ea28`, dump 721815): action list titled unitxt (11, 0x30) "Select" at get_gui_position(0x8a) = (419, 256). Rows: (11, 0x15c) "Send Mail", always enabled -> state 0xb; (11, 0x15d) "Sent Item", enabled only when `IsTradeStateFlagSet_00825abc` is 1 and the target is not the own card -> state 0x15; (11, 0x15e) "Meet the User", enabled only in the lobby (`unknown_current_map_is_lobby`) -> state 0x12.
+- The confirm list "Sort" (11, 0x3a) with "By Number" / "By Rank" (11, 0x15f / 0x160) is state 7, which only `SetState_0074e9f4(3)` enters. The action list has no row 3, so the member list does not reach it. Not ported. States 9 / 10 (the confirm's answers, `SetState_0074e944`) have no case in the switch and were not traced.
+
+**Team Info (0x2b), traced:** the constructor (dump 720228) builds a list with `CreateListWindow_0074c2d4` at get_gui_position(3) and two rows: (11, 0x170) "Point Information" and (11, 0x171) "Earned Privileges List" (both unitxt group 11). Its process (vtable 0x00b41e08 slot 1, `FUN_0074c364`) sends **18EA** (`send_packet0xea_subcommand0x18`, `FUN_007f67e0`) for row 0 and **19EA** (`send_packet0xea_subcommand0x19`, `FUN_007f6810`) for row 1, then shows the answer. The dump's name is right for the constructor, but the window is not a guild card list: the guild card search records (stride 0x188, `ShowSubmenu_0074c608`) are a generic submenu helper it calls. Not ported.
+
+**Team Log (0x27), traced in part:** `GameListMenu_Constructor_0074d5e8` (dump 720699), vtable 0x00b41f30, process `FUN_0074d618` (vtable slot 1): a two-row list at get_gui_position(0x16) with rows `FUN_0079317c(0x157)`, `(0x158)`, `(0x159)`, the per-file table again (labels not identified; not unitxt groups 11, 12, 13 or 15 at those indexes). Its answer (`FUN_0074d618` state 2 -> the window's callback) was not traced. Not ported.
+
+**Point Regist (0x2d), traced in part:** `ChallengePlayerInfoWindowListWindow_Constructor_0074f1e8` (dump 722203), vtable 0x00b42120, process `FUN_0074f2dc` (vtable slot 1). Its list is at get_gui_position(3) with the position constant (308, 184) from 0x00973b84. The chosen player's object (`FUN_005c5528`) gives a count from its +0x88 method, tested against 2; the "other" branch opens a 0x3c list (`FUN_0074f84c`) and sends the choice through `FUN_0068edac`. The labels and the meaning of the count were not traced. Not ported.
+
+**Port changes:**
+- `client/src/classic/teammenu.ts`: `TeamMemberListWindow` has the phases `list` / `searching` / `notFound` / `actions`. Enter on an enabled row calls the optional `TeamHost.searchMember(card)`, and the answer picks the phase. Cancel while searching drops the answer. `memberActionRows` builds the action list: Sent Item is enabled only with the trade state and not on the own card; Meet the User only in the lobby. `TEAM_ACTION_POS`, `TEAM_SEARCH_MSG_POS`, `T11_TEAM_LIST` (title 0x156, action 0x30, not found 0x15b, rows 0x15c..0x15e) and `T12_TEAM_LIST` ("Press X", group 12 0x4b) are the constants. A chosen enabled row is kept as `lastLeaf`; its window is not ported.
+- `client/src/classic/main.ts`: `teamHost` gives `searchMember` (the session's `guildCardClient.search(own card, card)`; false without a client).
+- `client/src/classic/lobby.ts`: passes `t12`.
+- `tests/teammenu.test.ts`: the member list block covers: the search started on Enter (`searching`), no answer -> `notFound` (both lines) -> a key back to the list; found -> the action list rows and the greyed Sent Item; the leaves recorded and a greyed row recording nothing; Cancel back to the list; trade state on (Sent Item on, Meet the User off outside the lobby); the own card (Sent Item greyed with the trade state); Cancel during the search and the late answer dropped. The old late-answer and failed-list checks are kept.
+- `docs/ROADMAP.md`: the Team line says what is left.
+
+**ASSUMED:**
+- The 150-frame wait is the `GuildCardClient` 5 s timeout (30 fps).
+- The search's answer is the 0041 for the same card (`GuildCardClient.search` checks the card); the exe's writer of the title flag (bit 2 of +0x94) was not traced.
+- `IsTradeStateFlagSet_00825abc` is never set in the port (there is no trade-state flag here), so Sent Item stays greyed.
+- The message box position (418, 344) and size (206, 92) come from the dump's locals (state 0xf and the top of `ProcessState`), not checked in a render. The action list position (419, 256) is `get_gui_position(0x8a)` from the static table (`tools/exedata.py read 0x00972390`).
+- A chosen leaf keeps the action list open (the exe runs the leaf's window; not traced).
+
+**Not checked:** a Chrome view of the search box and the action list (the brief says no Playwright); a real search against newserv.
+
+**Left:**
+- The leaves: Send Mail (state 0xb: the keyboard panel 0x44 and the list 0x3c from `ChatShortcutMenu_CreateWindow_00756a58`), Sent Item (state 0x15, `ChallengePlayerInfoWindow_SetupGuildCardSearch_0074e394`; the name is misleading, it builds the windows 0x30 / 0x48 / 0x50 and was not traced further), Meet the User (state 0x12: `ProcessPhaseLabel_0074f028`, 450 frames, then the owner callback at vtable +0x1c).
+- Invite (0x29): the 6x62 C1 17 sender, the answer flags, the invitee's window and the packet that fills the list.
+- Team Info: the 18EA / 19EA answer lists (the port has `intraRanking` in `net/team.ts`, not in `TeamHost`).
+- Team Log (0x27) and Point Regist (0x2d): the table behind `FUN_0079317c`, the Team Log answer, and the meaning of the Point Regist count.
+
+**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 122 checks), `node tests/lobbymenu.test.ts`, `node tests/lobbymain.test.ts`, `node tests/team.test.ts` and `node tests/guildcardmenu.test.ts` pass. `client` `tsc --noEmit -p .` clean (Node 24). The worktree's `client/node_modules` is a symlink to the main checkout's (not committed).
