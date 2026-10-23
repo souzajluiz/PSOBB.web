@@ -80,6 +80,7 @@ import { enemyCombatMotions, type EnemyCombatMotions } from '../combat/enemymoti
 import {
   hitMotion,
   HEAVY_LAND_FRAME,
+  KnockbackSlide,
   PlayerDamage,
   SE_BLOCK,
   SE_HIT_HEAVY,
@@ -7302,8 +7303,12 @@ export class CombatView {
       if (clientId === this.game.selfId) return;
       const kind: HitMotionKind = sub === 0x4a ? 'block' : sub === 0x4c ? 'heavy' : 'light';
       const h = sub === 0x4a ? null : parseHitByEnemy(body);
-      if (h && sub === 0x4c) this.view?.setPlayerAngle(clientId, h.angle);
-      this.playRemoteMotion(clientId, kind);
+      // action_get_hit_flinch / action_get_hit_fall (0x0069aa2c / 0x0069aaf4):
+      // a dead player takes no hit; otherwise the packet's heading and velocity
+      // become the player's and its hit state runs (the knockback slides it).
+      if (h && this.deadPlayers.has(clientId)) return;
+      if (h) this.view?.setPlayerAngle(clientId, h.angle);
+      this.playRemoteMotion(clientId, kind, h ? { vx: h.vx, vz: h.vz } : undefined);
       return;
     }
     if (sub === 0x4d) {
@@ -7381,7 +7386,10 @@ export class CombatView {
   // keeps its gait suppressed until the motion has ended (the heavy hit's
   // stand-up included); a death holds until the player is revived.
   private remoteHooks = new Map<number, (dt: number) => void>();
-  private playRemoteMotion(clientId: number, kind: HitMotionKind): void {
+  // `knock` is the 6x4B / 6x4C velocity: the light and heavy states slide the
+  // player by it each tick (combat/playerdamage.ts KnockbackSlide), until the
+  // stand-up starts (the exe's physics run in the fall, not in the stand-up).
+  private playRemoteMotion(clientId: number, kind: HitMotionKind, knock?: { vx: number; vz: number }): void {
     const view = this.view;
     const p = this.game.players.get(clientId);
     if (!view || !p) return;
@@ -7408,7 +7416,12 @@ export class CombatView {
     let stage: HitMotionKind = kind;
     let landed = false;
     let age = 0;
+    // The knockback: one damped step per game tick (the exe's tick, 30 a second).
+    const slide = knock && (kind === 'light' || kind === 'heavy') ? new KnockbackSlide() : null;
+    if (slide && knock) slide.start(knock.vx, knock.vz);
+    let slideTicks = 0;
     const done = () => {
+      slide?.stop();
       this.viewer.frameHooks.delete(hook);
       this.remoteHooks.delete(clientId);
       this.hurt.delete(clientId);
@@ -7417,6 +7430,13 @@ export class CombatView {
     const hook = (dt: number) => {
       if (this.disposed) return done();
       age += dt * GAME_TICKS_PER_SECOND;
+      if (slide) {
+        slideTicks += dt * GAME_TICKS_PER_SECOND;
+        for (; slideTicks >= 1; slideTicks--) {
+          const step = slide.tick();
+          if (step) view.pushPlayer(clientId, step.dx, step.dz);
+        }
+      }
       if (stage === 'heavy' && !landed && animator.frame > HEAVY_LAND_FRAME) {
         landed = true;
         this.playSe(heavyLandSe(p.charClass));
@@ -7426,6 +7446,7 @@ export class CombatView {
       if (stage === 'heavy') {
         stage = 'getup';
         age = 0;
+        slide?.stop();
         animator.play(hitMotion(motionType, 0, 'getup'), 1);
         return;
       }

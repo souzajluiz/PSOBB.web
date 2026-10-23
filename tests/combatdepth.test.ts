@@ -40,7 +40,9 @@ import {
   INVULN_TICKS_HEAVY,
   INVULN_TICKS_LIGHT,
   INVULN_TICKS_REVIVE,
+  dampKnockback,
   KNOCKBACK_DAMPING,
+  KnockbackSlide,
   PlayerDamage,
   type HitMotionKind,
 } from '../client/src/combat/playerdamage.ts';
@@ -317,6 +319,52 @@ function damageHarness(maxHp: number) {
   const pd = parsePlayerDeath(d);
   check(!!pd && pd.clientId === 1 && pd.deathFlags === 2, `6x4D fields ${JSON.stringify(pd)}`);
   check(parsePlayerDeath(new Uint8Array([0x4e, 1, 0, 0])) === null, '6x4E is not a 6x4D');
+}
+
+// --- knockback slide (ClampAndDampPlayerVelocity_00694230, HandlePostHitPhysics) --
+{
+  // Per axis: |v| < 1e-5 becomes 0, otherwise v * 0.5 (0x0093c6b8).
+  check(near(dampKnockback(1), 0.5) && near(dampKnockback(-1), -0.5), 'the knockback halves per tick');
+  check(dampKnockback(9e-6) === 0 && dampKnockback(-9e-6) === 0, 'a velocity under 1e-5 is zeroed');
+  check(near(dampKnockback(1e-5), 5e-6), 'a velocity of exactly 1e-5 is halved, not zeroed');
+
+  // A packet's velocity slides the player: each tick it moves by the damped velocity.
+  const s = new KnockbackSlide();
+  s.start(1, -2);
+  const first = s.tick();
+  check(!!first && near(first.dx, 0.5) && near(first.dz, -1), `first slide tick ${JSON.stringify(first)}`);
+  const second = s.tick();
+  check(!!second && near(second.dx, 0.25) && near(second.dz, -0.5), `second slide tick ${JSON.stringify(second)}`);
+  let total = { dx: first!.dx + second!.dx, dz: first!.dz + second!.dz };
+  for (let i = 0; i < 60; i++) {
+    const step = s.tick();
+    if (step) {
+      total.dx += step.dx;
+      total.dz += step.dz;
+    }
+  }
+  check(near(total.dx, 1, 1e-3) && near(total.dz, -2, 1e-3), `the slide covers 2 x its velocity: ${JSON.stringify(total)}`);
+  check(s.tick() === null && s.vx === 0 && s.vz === 0, 'the slide stops once both axes are zero');
+
+  // One axis at rest: only the other moves.
+  const x = new KnockbackSlide();
+  x.start(0.8, 0);
+  const xs = x.tick();
+  check(!!xs && near(xs.dx, 0.4) && xs.dz === 0, `a zero Z stays zero ${JSON.stringify(xs)}`);
+
+  // stop() ends a slide at once (the stand-up, a new hit).
+  const st = new KnockbackSlide();
+  st.start(3, 3);
+  st.stop();
+  check(st.tick() === null, 'stop() ends the slide');
+
+  // A velocity that decays below the epsilon on one tick: the last step is the
+  // damped value of that tick, then nothing.
+  const e = new KnockbackSlide();
+  e.start(1.5e-5, 0);
+  const e1 = e.tick();
+  check(!!e1 && near(e1.dx, 7.5e-6, 1e-9), `1.5e-5 halves to 7.5e-6 ${JSON.stringify(e1)}`);
+  check(e.tick() === null, 'then 7.5e-6 is under the epsilon and the slide stops');
 }
 
 // --- enemy AI tables -------------------------------------------------------

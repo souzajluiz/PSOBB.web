@@ -10099,3 +10099,33 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The mag's DEF / POW / DEX / MIND labels stay plain text (no group 11 label; ASSUMED, as before).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` (all passed), `node tests/items.test.ts` (98/98), `node tests/itemmodels.test.ts` (all pass), `node tests/shop.test.ts`, `node tests/tekker.test.ts`, `node tests/magfeed.test.ts`, `node tests/medical.test.ts`, `node tests/level.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: Remote players' knockback: the 6x4B / 6x4C velocity slides the remote player (the exe's per-tick damping)
+
+**Report:** another player's light or heavy hit now shows the player sliding back, as the exe does for its own player copy. The packet's velocity (`vx`, `vz`) becomes the remote's velocity, the damping runs once per game tick, and the displacement goes through the map collision. A dead remote takes no hit. The local knockback is unchanged; its per-tick step is now shared (`KnockbackSlide`).
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `src/Psobb.exe-5-10-2026.c`):**
+- The 0x60 subcommand handler table (0x00a0fba0, stride 8, u16 type, u16 perm, u32 handler; the rows are looked up by type, not by index): type 0x4B -> `0x0069aa2c` (action_get_hit_flinch), type 0x4C -> `0x0069aaf4` (action_get_hit_fall). Perm 6 for both.
+- `action_get_hit_flinch` / `action_get_hit_fall` (receive side): bail when the player's `unknown_movement_state & dead`; `ClampEntityHP_00770b58(hp)`; only for a root object in an unsafe map: `heading = packet angle`, `velocity.flX / flZ = packet vx / vz`, then `handle_input_state_got_hit_light(this, unknown0)` (6x4B) or `handle_input_state_got_hit_heavy(this, 0)` (6x4C). No heading recompute on the receive side (the recompute is the sender's, `dispatch_action_got_hit_heavy`, already ported).
+- The per-tick physics of the hit states: `handle_input_state_got_hit_light` case `unknown1` -> `HandlePostHitPhysics_0069ece0` (ClampAndDamp `0x00694230`, reset_velocity if `IsPlayerAboutToCollide_00694198`, `player_update_pos` if `player_about_to_collide` is clear). The heavy fall's `ProcessPlayerDeathState_0069e92c` runs the same three steps (both fall and the pre-stand-up stage). The stand-up (`handle_input_state_got_hit_heavy` stage 2 -> `ProcessPlayerHitRecovery_0069e8b0`) has no physics.
+- `ClampAndDampPlayerVelocity_00694230`: per axis, |v| < 1e-5 (0x0093c6c0 / 0x0093c6c4) becomes 0, else v * 0.5 (0x0093c6b8). Already the local constants (`KNOCKBACK_DAMPING`, `KNOCKBACK_EPSILON`).
+- newserv (`vendor/newserv/src/ReceiveSubcommands.cc`, `on_change_hp`, the 6x4B / 6x4C rows of the table at line 5678): the packet is forwarded to the game unchanged (only the sender's own client id is accepted). No server-side displacement.
+- `tools/refsrc.sh grep 6x4C` (`headers/network.h` ~583-640): the recv flow matches the decompile (the velocity at player +0x30c / +0x314, the heading at +0x60).
+
+**Ported:**
+- `client/src/combat/playerdamage.ts`: `dampKnockback` (the per-axis rule, the local `PlayerDamage.tick` uses it too), `KnockbackSlide` (`start`, `stop`, `tick` returns the tick's displacement or null).
+- `client/src/render/combat.ts`: 6x4B / 6x4C from another client: a dead remote (`deadPlayers`) returns; the heading is set from the packet for both 6x4B and 6x4C (the decompile sets it for both; before this only 6x4C set it); `playRemoteMotion(clientId, kind, knock)` runs a `KnockbackSlide` on light and heavy, one step per game tick (30 a second, accumulated from the frame dt), until the motion ends or the stand-up starts.
+- `client/src/render/lobbyview.ts` `pushPlayer`: also moves the marker's follower point (`m.follow`), so the run-follow (`remoteStep`) does not pull a pushed remote back to its old point.
+- `tests/combatdepth.test.ts`: the damping rule (the 1e-5 cut, halving), a slide's total (2 x velocity), the single-axis case, `stop()`, and a decay that ends under the epsilon.
+- `docs/ROADMAP.md`: "Player damage left" drops the remote knockback; a done line for it.
+
+**ASSUMED / UNCLEAR:**
+- `IsPlayerRootObject` and `is_player_in_unsafe_map` (the receive gate) are taken as true for every remote on a field (the combat code only runs on fields).
+- The dead gate: `deadPlayers` (6x4D seen, cleared by 6x4F) stands for the exe's `unknown_movement_state & dead`. ASSUMED that the two agree for a remote.
+- The newer network.h note about a player +0x328 bit 0x8000 ("ignore incoming hits") is not in the 5-10-2026 decompile's receive handler; not ported (the decompile is the authority here).
+- The exe's `reset_velocity` on `IsPlayerAboutToCollide` is not ported; the web's `collision.move` slides instead (same as the local knockback).
+- The heavy fall's stage 1 (the exe's wait before the stand-up, `max_hp` timer) is not in the web's heavy state, which goes to the stand-up when the fall ends; the remote knockback stops at the stand-up start, as the local one does.
+- A remote's own movement packets during the slide are not reconciled with the slide (the sender's copy also slides, the packets set the target; the push sets the target too). ASSUMED no double displacement in practice (remote players are stopped while hit: the sender sends stops).
+- The heading of a remote after the slide is the packet heading; the arrival rule (`m.angle = p.angle` at the last stop) can still reset it when the remote moves again.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/combatdepth.test.ts` (837 checks, 0 failures, the new knockback block included), `node tests/players.test.ts` (ALL PASS), `node tests/playerfx.test.ts` and `node tests/smoothrender.test.ts` pass. Not run: Playwright / Chrome (per the brief).
