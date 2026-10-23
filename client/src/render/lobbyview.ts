@@ -20,7 +20,7 @@ import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
 import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion, type MotionRecord } from '../formats/plymotion.ts';
-import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, emotePayload, emoteRecord, emoteSlot, sitPayload } from '../formats/emotes.ts';
+import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, altEmoteKey, emotePayload, emoteRecord, emoteSlot, sitEndKey, sitPayload } from '../formats/emotes.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -254,7 +254,8 @@ export class LobbyView {
   attacking: (clientId: number) => boolean = () => false;
   // The emotes playing (formats/emotes.ts): a player's emote holds its motion to the
   // last frame (mode 3) and stops the local player; the gait resumes after it.
-  private emotes = new Map<number, { record: MotionRecord }>();
+  // `sit` is set for a sit (6xAB) of the local player: it holds (state 0xab) until its own key.
+  private emotes = new Map<number, { record: MotionRecord; sit?: { chair: boolean } }>();
   // The option 0x80000 (opposite gender flag) and last frame's keys (edge detection).
   private emoteOpposite = false;
   private prevKeys: ReadonlySet<string> = new Set();
@@ -603,7 +604,7 @@ export class LobbyView {
 
   // Plays an emote slot on a player (the lobby's map or the field's, by the view).
   // The field record takes the held weapon's column (the same as the gait).
-  playEmote(clientId: number, slot: number): void {
+  playEmote(clientId: number, slot: number, sit?: { chair: boolean }): void {
     const m = this.markers.get(clientId);
     if (!m || !m.animator || this.attacking(clientId)) return;
     const weaponClass = this.fieldMotions ? this.held?.motionClass?.(clientId) ?? 0 : 0;
@@ -614,27 +615,41 @@ export class LobbyView {
       console.warn(`emote ${slot}: ${(err as Error).message}`);
       return;
     }
-    this.emotes.set(clientId, { record });
+    this.emotes.set(clientId, sit ? { record, sit } : { record });
     m.animator.play(record, 1);
   }
 
-  // Each frame: an emote that reached its last frame ends (the gait returns); the
-  // local player's input is polled once per frame, in the exe's order of
-  // handle_player_emote_input: the chat queue first, then Alt+U / Alt+I (sit),
-  // and only then the option 0x80000 is refreshed from Alt+Shift.
+  // Each frame: an emote that reached its last frame ends (the gait returns), a
+  // local sit does not (it holds until its key); the local player's input is
+  // polled once per frame, in the exe's order of handle_player_emote_input: the
+  // chat queue first, then Alt+U / Alt+I (sit), then the option 0x80000 from
+  // Alt+Shift, then the Alt+<key> emotes (the Alt block).
   private emoteTick(me: LobbyPlayer | null, keys: ReadonlySet<string>): void {
-    for (const [id] of this.emotes) {
+    for (const [id, e] of this.emotes) {
       const m = this.markers.get(id);
-      if (!m || !m.animator || m.animator.ended) {
+      if (!m || !m.animator || (m.animator.ended && !e.sit)) {
         this.emotes.delete(id);
         if (m) this.setGait(m, m.gait, true);
       }
     }
     // Edge-triggered keys (was_key_pressed): down this frame and not the last.
-    const uDown = keys.has('u') && !this.prevKeys.has('u');
-    const iDown = keys.has('i') && !this.prevKeys.has('i');
+    const prev = this.prevKeys;
     this.prevKeys = new Set(keys);
-    if (!me || this.emoting(me.clientId) || this.attacking(me.clientId) || this.dead()) return;
+    const edge = (k: string) => keys.has(k) && !prev.has(k);
+    if (!me) return;
+    const alt = keys.has('alt');
+    const sitting = this.emotes.get(me.clientId)?.sit;
+    if (sitting) {
+      // handle_input_state_0xab: only the sit's own key ends it (move_stop); the
+      // movement input does not (the exe sends a packet and keeps the state).
+      const m = this.markers.get(me.clientId);
+      if (alt && edge(sitEndKey(sitting.chair))) {
+        this.emotes.delete(me.clientId);
+        if (m) this.setGait(m, m.gait, true);
+      }
+      return;
+    }
+    if (this.emoting(me.clientId) || this.attacking(me.clientId) || this.dead()) return;
     const key = this.lobby.emoteQueue.head();
     if (key !== undefined) {
       this.lobby.emoteQueue.shift();
@@ -645,18 +660,26 @@ export class LobbyView {
       this.lobby.sendSubcommand(EMOTE_OPCODE, emotePayload(slot, this.emoteOpposite));
       return;
     }
-    const alt = keys.has('alt');
     // Alt+U (slot 48) wins over Alt+I (49) when both are down, as in the exe. The
-    // field's Alt slots are -1 (no sit there), so the keys do nothing in a game.
-    if (alt && (uDown || iDown) && !this.fieldMotions) {
-      const chair = !uDown;
-      const slot = chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN;
-      this.playEmote(me.clientId, slot);
-      this.lobby.sendSubcommand(SIT_OPCODE, sitPayload(chair, this.emoteOpposite));
+    // field's getters are -1 (no sit there): the exe still returns then, so the
+    // Alt+<key> emotes of this poll are skipped too.
+    if (alt && (edge('u') || edge('i'))) {
+      if (!this.fieldMotions) {
+        const chair = !edge('u');
+        const slot = chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN;
+        this.playEmote(me.clientId, slot, { chair });
+        this.lobby.sendSubcommand(SIT_OPCODE, sitPayload(chair, this.emoteOpposite));
+      }
       return;
     }
     // Option 0x80000 (dispatch_action_emote reads it): set while Alt and Shift are down.
     this.emoteOpposite = alt && keys.has('shift');
+    const k = alt ? altEmoteKey(edge) : undefined;
+    if (k === undefined) return;
+    const slot = emoteSlot(k, this.fieldMotions);
+    if (slot === undefined) return;
+    this.playEmote(me.clientId, slot);
+    this.lobby.sendSubcommand(EMOTE_OPCODE, emotePayload(slot, this.emoteOpposite));
   }
 
   private frame(dt: number, keys: ReadonlySet<string>): void {

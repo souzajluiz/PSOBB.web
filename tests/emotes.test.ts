@@ -5,6 +5,9 @@
 // the field tables 0x009cbeec / 0x009cbf04).
 // Run: node tests/emotes.test.ts
 import {
+  ALT_EMOTE_ORDER,
+  altEmoteKey,
+  sitEndKey,
   EMOTE_KEYS,
   EMOTE_OPCODE,
   EMOTE_SLOTS,
@@ -117,6 +120,23 @@ eq(threw, true, 'a slot that is not a field emote slot throws');
   eq([SIT_SLOT_PLAIN, SIT_SLOT_CHAIR], [48, 49], 'sit slots are the town getters 0x108 / 0x10c');
   body[0] = 0x58;
   eq(parseSitSubcommand(body), null, 'a 6x58 is not a sit');
+}
+
+// Alt block (handle_player_emote_input, named dump 587822..588157): Alt+key plays
+// the key's emote in the exe's order, the same keys as the chat keys (checked
+// against the getters of the field 0xb39ec0 and the town 0xb3a040 vtables).
+{
+  eq(ALT_EMOTE_ORDER.length, 46, 'alt block has 46 keys');
+  eq([...ALT_EMOTE_ORDER].sort(), [...EMOTE_KEYS].sort(), 'alt block keys are the chat keys');
+  eq([ALT_EMOTE_ORDER[0], ALT_EMOTE_ORDER[11], ALT_EMOTE_ORDER[12], ALT_EMOTE_ORDER[45]], ['f1', 'f12', 'm', '4'], 'alt block order');
+  eq(altEmoteKey((k) => k === 'a' || k === 'f5'), 'f5', 'the F-keys come before the letters');
+  eq(altEmoteKey((k) => k === '1' || k === 'm'), 'm', 'm comes before the digits');
+  eq(altEmoteKey(() => false), undefined, 'no edge, no emote');
+  eq(altEmoteKey((k) => k === 'u' || k === 'i'), undefined, 'Alt+U / Alt+I are not in the Alt block');
+  // Alt+F1 on the field is the field's slot 9, in the town it is 6 (EMOTE_SLOTS).
+  eq([emoteSlot(altEmoteKey((k) => k === 'f1') ?? '', true), emoteSlot('f1', false)], [9, 6], 'Alt+F1 slots');
+  eq(sitEndKey(false), 'u', 'Alt+U ends the plain sit');
+  eq(sitEndKey(true), 'i', 'Alt+I ends the chair sit');
 }
 
 if (failures) {

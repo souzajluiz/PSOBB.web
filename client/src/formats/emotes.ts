@@ -139,6 +139,32 @@ export function parseSitSubcommand(body: Uint8Array): { clientId: number; chair:
   return { clientId: dv.getUint16(2, true), chair: (flags & SIT_FLAG_CHAIR) !== 0, opposite: (flags & EMOTE_FLAG_OPPOSITE) !== 0 };
 }
 
+// The keys of the Alt block of handle_player_emote_input (PsoBB.exe named dump
+// 587822..588157, the Alt+F1 .. Alt+4 tests in the order the exe makes them). With
+// Alt down, the first key of this list whose was_key_pressed edge is set plays
+// its emote: the getter at the vtable offset of the chat key (the same offsets as
+// ProcessPlayerEmote_0077cec0), so the slot is EMOTE_SLOTS of the map. The list
+// is EMOTE_KEYS in that order (checked by tests/emotes.test.ts).
+export const ALT_EMOTE_ORDER: readonly string[] = [
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+  'm', '5', '6', '7', '8', '9', '0',
+  'h', 'b', 'o', 'n', 'q', 'j', 'r', 'k', 'w', 's', 't', 'c', 'd', 'f', 'g', 'y', 'p', 'a', 'e', 'z', 'x', 'v', 'l',
+  '1', '2', '3', '4',
+];
+
+// The first Alt emote key of this poll (`edge` = was_key_pressed), in the exe's order.
+export function altEmoteKey(edge: (key: string) => boolean): string | undefined {
+  for (const k of ALT_EMOTE_ORDER) if (edge(k)) return k;
+  return undefined;
+}
+
+// The key that ends a sit (HandleInputState0xAB_0069c0c8): Alt+U ends the plain
+// sit (chair flag clear), Alt+I the chair sit (flag set). Nothing else in this
+// poll ends it; the sit holds (ASSUMED on the other paths: a new action or a hit).
+export function sitEndKey(chair: boolean): string {
+  return chair ? 'i' : 'u';
+}
+
 // A received 6x58: body = the whole subcommand (header included).
 export function parseEmoteSubcommand(body: Uint8Array): { clientId: number; slot: number; opposite: boolean } | null {
   if (body.length < 8 || body[0] !== EMOTE_OPCODE) return null;

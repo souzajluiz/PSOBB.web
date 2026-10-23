@@ -12142,3 +12142,37 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Not ported:** the field's Alt+F emotes (the exe's Alt block, F1..F9 checked there, the rest not read), the emote end `dispatch_action_0x3f` (`HandleEmoteAction0x3fCheck_0069c7bc`, `+0xb0 & 0x10`) and the `+0x33c & 0x20000000` skip, the chat gate of `process_chat_message`.
 
 **Checks:** `node tests/emotes.test.ts`, `tests/motions.test.ts`, `tests/players.test.ts`, `tests/chatline.test.ts`, `tests/lobbymain.test.ts` pass (the worktree has no `node_modules`; the checks ran with a temporary link to the main checkout's, removed afterwards). Client `tsc --noEmit -p .` clean with Node 24. Not run in Chrome or against newserv.
+
+## 2026-10-23: Alt+key emotes, the sit's end and the emote's end
+
+**What changed:** with Alt held, every emote key (F1..F12, a..z without i and u, 0..9) plays its emote in the lobby and in the field, and Alt+Shift still sets the opposite flag on the 6x58. A local sit (Alt+U / Alt+I) now holds until the same sit key again (Alt+U ends a plain sit, Alt+I a chair sit); movement does not end it. Remote sits still end at their motion's last frame, as before. Code: `formats/emotes.ts` (`ALT_EMOTE_ORDER`, `altEmoteKey`, `sitEndKey`), `render/lobbyview.ts` (`emoteTick`, `playEmote` with the sit flag). Tests: `tests/emotes.test.ts`.
+
+**Exe evidence (PsoBB.exe, named dump line numbers; the dump names are partly wrong, noted below):**
+- Alt block of `handle_player_emote_input` (587822..588157): the order is `is_alt && was_key_pressed(u)` (0x108, slot 48) and `(i)` (0x10c, slot 49) first, each returning the getter's value; then `SessionData_SetCharacterOptionBitfield(idx, 0, 0xfff7ffff)` and, with Alt and Shift down, `(idx, 0x80000, 0xfff7ffff)`; then `is_alt && was_key_pressed(k)` for F1..F12, m, 5..9, 0, h, b, o, n, q, j, r, k, w, s, t, c, d, f, g, y, p, a, e, z, x, v, l, 1..4 (the first key pressed wins). Each one calls vtable getter `+off`.
+- The offsets are the same as the chat keys (`ProcessPlayerEmote_0077cec0`). Checked with `tools/exedata.py`-style reads: the field vtable 0xb39ec0 and the town vtable 0xb3a040 return the constants in `EMOTE_SLOTS` for all 46 keys (field: F1 9, F2 11, F3 13, F4 6, F5 26 ... 4 69; town: F1 6 ... 4 53; the field's 0x108 / 0x10c return -1, the town's 48 / 49).
+- So the Alt keys are not field-only: the block is in the shared handler, and the lobby's town getters answer it too.
+- An Alt+U / Alt+I edge returns before the Alt block (in the field the value is -1), so the Alt+<key> keys are skipped that poll.
+- Sit state 0xab (`HandleInputState0xAB_0069c0c8`, 581992, named as the per-tick `update_movement_speed` case): the sit ends (`move_stop`, dispatch) on `is_alt && was_key_pressed(u)` when the chair flag 0x10000000 is clear, on `(i)` when it is set; the chat queue head equal to the sit's getter (0x108 / 0x10c) also ends it (no key of the town map has slot 48 or 49, and the field's getters are -1, so that path never fires in practice). A palette slot ends it only after the interrupt flag `+0x330` is set (`SetPlayerActionState_0069c0ac`, 581978). Movement input does not end the sit: it sends action 0xAF (the enum's name `press_switch` is wrong here: `~80` truncated) with an 8-tick countdown (`+0x35e`), and the palette slot sends action 0xB0 with its own countdown (`+0x360`).
+- Sit end (state 0xab `end`, `ResetPlayerState_006a285c`, 588201): resets the velocity, clears unknown_flags_2 bits 0x1c000000 (0x4000000, 0x8000000, 0x10000000), and sets `+0xdc` to the getter 0x130 (the idle record). Nothing is sent.
+- Emote state 0x17: the entry (state 5) sends 6x58 (`dispatch_action_emote`). Per tick for the local player: state 7 (`HandleEmoteDefendOrNpcInteraction_0069c73c`) processes the queue after a guard or NPC interaction; state 2 (update_movement_speed) only reads the movement speed and returns, it does not leave the state; state 3 (`HandleEmoteAction0x3fCheck_0069c7bc`, 582388) returns when unknown_flags_2 & 0x20000000 and otherwise calls `dispatch_action_0x3f` when `+0xb0 & 0x10`. The end (state 6, `ResetPlayerEmoteState_006a2898`, 588220) clears unknown_flags_2 bits 0x8000000 and 0x20000000, sets `+0xdc` to the idle getter 0x130, and clears the option 0x80000.
+- `dispatch_action_0x3f_` (583247) sends action 0x3f (63), 6 dwords: the local player's index, the guard-stance flag (`in_guard_stance`), the floor, the room (`get_player_room_id`) and the position. This is the same action as the port's `sendSetPosition` (6x3F), whose body does not write the guard flag or the room (port receiver reads the angle at body +6; not traced here).
+
+**Ported:**
+- The Alt+<key> emotes for the lobby and the field: the 46 keys in the exe's order (`altEmoteKey`), the slot from `emoteSlot` (the same table as the chat keys), the 6x58 with the option flag (the option is set from Alt+Shift before the Alt block, as the exe does).
+- The field's Alt+U / Alt+I: the edge returns without an emote (the exe's -1), so the Alt keys of that poll are skipped.
+- The local sit holds: it is kept past the motion's last frame (`emotes` entry with `sit`), its own key ends it (`sitEndKey`), and it blocks the local movement and the chat queue (the queue head stays, as the exe's state 0xab does not consume it).
+
+**ASSUMED:**
+- The emote's end. The traced per-tick code of state 0x17 never leaves it (state 2 only reads the movement speed, and no key ends it in the local path), so the trigger is not found; the port keeps the motion-end rule. A new action (the exe's end path, state 6 called from another action's transition) is ASSUMED to be the real end.
+- The `+0xb0 & 0x10` gate of `dispatch_action_0x3f`: the dump names `+0xb0` as `character_flags` (where 0x10 is "confused"), which is not plausible here; the 0x3f send at emote time is not ported.
+- A remote player's sit end. The exe's 0xAF packet (the sit's movement) is likely the stand-up notice for the other players, but the receiver is not traced; remote sits stay at the motion's end.
+- The chat-queue gate `field_0xeb8` (the exe reads it before the queue and the Alt block; the meaning is not traced).
+- On macOS, Option+letter gives a Unicode key, so the Alt+<key> path works on the other platforms only (as the sit already does).
+
+**Not ported:**
+- The palette-slot route to the sit (`CheckInputStateMask(0xe)` with `PlayerHasPaletteSlotEquipped(keyboard[0xc] / [0xd])`): the exe starts the sit from a palette slot too; the port has Alt+U / Alt+I only.
+- `ProcessCharacterOptionSelection_00719174` (the end of the Alt block, called when Alt is down and no key matched): not traced.
+- The 6x3F body's guard flag and room (see above); `sendSetPosition` is unchanged.
+- The keyboard-enabled and movement-disabled gates of `handle_player_emote_input` are not checked in the lobby view (the existing emote path has the same gap).
+
+**Checks:** `node tests/emotes.test.ts` (all checks passed, including the Alt order, the first-edge rule, the Alt+U / Alt+I exclusion, the field slots for Alt+F1 (9) and the town slot (6), and the sit end keys), `tests/motions.test.ts`, `tests/players.test.ts`, `tests/chatline.test.ts`, `tests/lobbymain.test.ts` pass with Node 24. Client `tsc --noEmit -p .` is clean (a temporary link to the main checkout's `client/node_modules`, removed afterwards). Not run in Chrome or against newserv.
