@@ -11233,3 +11233,24 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - The shine of `QuickMenuRenderTextBackground_00742a6c`: its owner (the table at 0x00741688) is not found; the port has no element for it.
 
 **Tests:** `tests/windowanim.test.ts` (54/54: new cases for the palette's band over 150 columns at the peak near x 500, nothing before the element); `tests/fieldhud.test.ts` (new block: Purpose opens at counter 0 and the description closes, the counter 8 open, Backspace closes Purpose with its 4-frame close and reopens the description, the meseta Amount window opens and closes while Purpose stays). Also `tsc --noEmit` clean (Node 24); `party`, `level`, `minimap`, `questboard`, `options`, `controls`, `battletraps`, `titlescreen` pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: Battle mode: our gun shots name and hit remote players (gun 6x46, bullets to a player's point)
+
+**Exe evidence (named dump Psobb.exe-05112026.c, via `tools/refsrc.sh body`):**
+- `gun_bullet_collision_check` (line 415801) runs when a bullet's countdown ends. It looks the target up with `unknown_get_entity_and_check_hitbox(target id, hitbox)` and, when the target has not moved 8 or more units in XZ, calls the weapon's `weapon_projectile_attack_hit_entity` with the shooter's player and the target.
+- `unknown_get_entity_and_check_hitbox` (line 802747) accepts a player target: an entity id below 0xc is a client id (`GetPlayer_0068d5a8`), 0xffff is none, and the rest is a search of `g_EntityArray`. So a remote player is a valid gun target in the exe, as for melee.
+- The melee side of the same packet is already in `combat/pvp.ts` (the 6x46 names the player, the victim rolls the hit on its own copy). Nothing read in the dump shows the gun's bullet arrival rolling a remote player's hit on the shooter's side.
+
+**What changed:** a gun shot now takes the same target list as a melee strike (`render/combat.ts` pickStrikeTargets: the enemies in the weapon's reach and the remote players of pvpTargetsInReach, nearest first, cut to the weapon's target count). The 6x46 of the shot names the listed players by client id (strikeEntityId), so the victim rolls the hit on its own copy (onRemoteStrikeTargets) as for melee. Each pellet takes its target from that list (pelletTargetIndex). A pellet at a player aims at the player's point (feet + AIM_HEIGHT, radius 0) and makes a bullet with its flight time; a wall stops it as before. When the bullet lands on a player it has no local effect (the victim has the hit): GunBulletRun's entity is null and the player id is kept. The old `enemies.slice(0, cap)` ("a gun's shot does not reach a remote player yet") is gone.
+
+**Ported:** `render/combat.ts` (StrikeTarget, strikeEntityId, pickStrikeTargets, resolveHit gun branch, gunShot, landGunBullet); `tests/pvp.test.ts` (new block: the mixed gun target order, the pellet index, a bullet at a player point, a wall stops it).
+
+**Checks:** `node tests/pvp.test.ts` ALL PASS; `tests/gunbullet.test.ts` all passed; `tests/battle.test.ts` ALL PASS; `tests/combatdepth.test.ts` 842 checks, 0 failures; `tests/weaponorigin.test.ts` all passed; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome or Playwright (per the brief).
+
+**ASSUMED (not traced):**
+- The victim's roll for a gun's player target happens when the 6x46 arrives, at the shot, not at the bullet's arrival. The exe's bullet arrival on the shooter side is not decoded for a player target (the victim may take it at the arrival instead).
+- A player's bullet box is a point at feet + AIM_HEIGHT (radius 0), as the melee reach is a point (the player's hit box is not decoded).
+- The shooter's own gun shot does not roll the damage on a remote player (the victim does, as for melee).
+- A Shot's pellets and the Mechgun's second begin still map to targets by index in the nearest-first list; the exe's per-pellet targets are not checked against player targets.
+
+**Left:** sonar use (the `ba_enable_sonar` / `ba_sonar_count` values are parsed in `quest/battle.ts`, no use path is ported); win particles (the exe's battle end effect not traced yet); the Chrome check.

@@ -383,10 +383,22 @@ interface CastInProgress {
   sent: number[]; // the 6x47 target entity ids
 }
 
+// A strike's target: an enemy, or a remote player (Battle mode) by its client id.
+export interface StrikeTarget {
+  enemy: EnemyRuntime | null;
+  player: number;
+}
+
+// The 6x46 entity id of a strike target (an enemy is 0x1000 | index, a player its client id).
+const strikeEntityId = (t: StrikeTarget): { entityId: number } => ({ entityId: t.enemy ? 0x1000 | t.enemy.index : t.player });
+
 // A gun bullet in flight: its target, the target's centre when the shot was
 // made (gun_bullet_collision_check's orig_target_position) and the ticks left.
+// A remote player's bullet has no entity (player = its client id): its hit is the
+// victim's roll on its own copy (onRemoteStrikeTargets), so it lands with no effect here.
 interface GunBulletRun {
-  entity: EnemyRuntime;
+  entity: EnemyRuntime | null;
+  player: number;
   start: { x: number; y: number; z: number };
   origCentre: { x: number; y: number; z: number };
   ticks: number;
@@ -5763,6 +5775,19 @@ export class CombatView {
     return out.sort((a, b) => a.d - b.d);
   }
 
+  // The strike's targets: the enemies in reach and the remote players of pvpTargetsInReach,
+  // nearest first, cut to `cap` (the weapon's target count).
+  private pickStrikeTargets(enemies: EnemyRuntime[], from: { x: number; y: number; z: number }, attackType: AttackType, cap: number): StrikeTarget[] {
+    const players = this.pvpTargetsInReach(attackType, from);
+    return nearestTargets<StrikeTarget>(
+      [
+        ...enemies.map((e) => ({ d: e.instance.root.position.distanceToSquared(from), value: { enemy: e, player: -1 } })),
+        ...players.map((p) => ({ d: p.d, value: { enemy: null, player: p.id } })),
+      ],
+      cap,
+    );
+  }
+
   // One strike: targets in reach, hit roll, damage, and the 6x commands.
   private resolveHit(attackType: AttackType, step: number): void {
     const me = this.game.self;
@@ -5778,26 +5803,18 @@ export class CombatView {
     const weapon = attackType !== 2 ? this.equippedWeapon() : undefined;
     const kind = weapon?.data1[1] ?? -1;
     const variant = weapon?.data1[2] ?? -1;
+    // Battle Mode: the remote players in reach are targets too (pickStrikeTargets). The nearest
+    // `cap` of both kinds go in the 6x46 (player entity ids are client ids); the victim
+    // rolls a player's hit on its own copy (onRemoteStrikeTargets), so only the enemies are hit here.
+    const picked = this.pickStrikeTargets(enemies, from, attackType, cap);
     if (firesGunBullet(kind, variant)) {
-      const hit = enemies.slice(0, cap); // ASSUMED: a gun's shot does not reach a remote player yet
-      if (hit.length) this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
-      this.gunShot(attackType, step, from, hit, range, kind, variant);
+      if (picked.length) this.game.sendAttackTargets(picked.map(strikeEntityId));
+      this.gunShot(attackType, step, from, picked, range, kind, variant);
       return;
     }
-    // Battle Mode: the remote players in reach are targets of the strike too. The nearest
-    // `cap` of both kinds go in the 6x46 (player entity ids are client ids); the victim
-    // rolls the hit on its own copy (onRemoteStrikeTargets), so only the enemies are hit here.
-    const players = this.pvpTargetsInReach(attackType, from);
-    const picked = nearestTargets<{ enemy: EnemyRuntime | null; player: number }>(
-      [
-        ...enemies.map((e) => ({ d: e.instance.root.position.distanceToSquared(from), value: { enemy: e, player: -1 } })),
-        ...players.map((p) => ({ d: p.d, value: { enemy: null, player: p.id } })),
-      ],
-      cap,
-    );
     const hit = picked.flatMap((t) => (t.enemy ? [t.enemy] : []));
     if (!hit.length && !picked.length) return;
-    this.game.sendAttackTargets(picked.map((t) => (t.enemy ? { entityId: 0x1000 | t.enemy.index } : { entityId: t.player })));
+    this.game.sendAttackTargets(picked.map(strikeEntityId));
     if (!hit.length) return;
     const attacker = this.attackerStats();
     this.strike = { attackType, step };
@@ -5832,7 +5849,7 @@ export class CombatView {
   // the egg effect object (ShotEffect) with particle 0x9f on it, and no muzzle or model.
   // Either way, a pellet with a listed target that no wall stops makes a bullet that lands
   // after its frame count (the damage is unchanged). A pellet without a target goes ahead at its angle.
-  private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: EnemyRuntime[], range: WeaponRange, kind: number, variant: number): void {
+  private gunShot(attackType: AttackType, step: number, from: { x: number; y: number; z: number }, hit: StrikeTarget[], range: WeaponRange, kind: number, variant: number): void {
     const me = this.game.self;
     if (!me) return;
     const visual = shotVisualOf(kind, variant);
@@ -5849,9 +5866,13 @@ export class CombatView {
     for (let i = 0; i < pelletCount(kind); i++) {
       const t = hit[pelletTargetIndex(kind, i)];
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
-      if (t) {
-        const p = t.instance.root.position;
-        target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t) };
+      if (t?.enemy) {
+        const p = t.enemy.instance.root.position;
+        target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t.enemy) };
+      } else if (t) {
+        // A remote player: the point at its feet + AIM_HEIGHT (ASSUMED: the player's box is not decoded, the reach is a point too, combat/pvp.ts).
+        const p = this.view?.playerPositions().get(t.player);
+        if (p) target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: 0 };
       }
       const shot: GunShot = planGunShot(
         start,
@@ -5869,7 +5890,7 @@ export class CombatView {
       } else {
         this.eggShot(start, shot);
       }
-      if (shot.bullet && t && target) this.gunBullets.push({ entity: t, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
+      if (shot.bullet && t && target) this.gunBullets.push({ entity: t.enemy, player: t.enemy ? -1 : t.player, start, origCentre: target.centre, ticks: shot.frames, attackType, step });
     }
   }
 
@@ -5911,6 +5932,11 @@ export class CombatView {
   // only when it moved towards the shooter); otherwise the weapon's hit roll and damage.
   private landGunBullet(b: GunBulletRun): void {
     const e = b.entity;
+    if (!e) {
+      // A remote player (Battle mode): the victim rolls the hit on its own copy from the 6x46 sent at the shot.
+      this.opts.log(`gun bullet reaches player ${b.player + 1}: its victim rolls the hit`);
+      return;
+    }
     if (this.disposed || e.dead || !e.instance.root.visible || concealed(e)) return;
     const p = e.instance.root.position;
     const now = { x: p.x, y: p.y + AIM_HEIGHT, z: p.z };
