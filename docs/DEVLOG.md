@@ -13652,3 +13652,35 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+## 2026-10-23: pad left stick walks and runs (follow-up to Pad Button Config)
+
+**Premise, checked against the exe.** The analog rows did not drive walking: only the touch pad's stick moved the player. The exe reads the gamepad's stick in the same shared input as the touch stick (`unknown_handle_shared_inputs`, dump line 806759: the rows' axes become `movement_input_left_right` / `movement_input_forwards_backwards`, and the dead zone and amount are the ones `input/analog.ts` already has). So the premise was right, and the port now feeds the pad's stick the same way.
+
+**Exe evidence (PsoBB.exe 1.25.13 named dump, `Psobb.exe-05112026.c`):**
+- Stick branch: `unknown_handle_gamepad_input_move` (dump line 587209, run state `unknown_handle_gamepad_input_move_*`). With `movement_input_amount > 0.1` (`g_MovementInputThreshold`) it sets the heading to `modify_direction(unknown_camera_input_amount_1)`. That field is `ROUND(fpatan(lr, fb) * 65536 / 2pi)` plus the camera yaw (`g_pDefaultNPCCameraState->field_0x94`, dump line 806910-806940 with the camera state present), so the heading is camera yaw + atan2 of the stick, as the touch path already had.
+- Run gate on the stick: `movement_input_amount` against `g_MovementSpeedCollisionThreshold` (0.75): at or above it counts up (run), below it clears and walks. The keyboard path compares `speed` = (fb² + lr²) / `g_MovementSpeedNormalizationFactor` against the same 0.75 (the ramp values from `get_input_movement_speed`, dump line 667077, see `update_movement_speed`, dump line 587085). So the two paths use different measures: amount for the stick, sum of squares for the keys.
+- Constants already in the port: dead zone 31 (`0x0097e624` / `0x0097e628`), amount `min(1, hypot / 128)` (`0x0097e61c` = 128, `0x0097e618` = 1), walk threshold 0.1, run 0.75 and 6 ticks.
+- Keyboard ramp: `rampAxis` (32 a poll up to 128, `0x0070a60c`) is unchanged.
+
+**Port (what changed):**
+- `input/analog.ts`: `setPadStick`, `analogStick()` (touch stick first, else pad stick, else null) and `padStickFromUnit(lr, fb)` (unit deflection to the 128 scale with the dead zone; null inside it). The existing `touchStick` and `AnalogGait` stay as they were.
+- `input/padinput.ts`: `PadSample` carries the browser's six axes (`axes`); `analogUnit(code, axes)` reads a row's code (the + side is the axis, codes 7..13 the - side, 0xFF and the slider none); `padMoveStick(cfg, sample)` reads row 0 (Move Left/Right) and row 1 (Move Forward/Backward); `PadKeyFeed.tick` sets the pad stick each frame (null while the window is open or the pad is gone), and `releaseAll` clears it.
+- `render/playermove.ts` `PlayerMover.poll`: the run gate now uses the amount for a stick (`keyboard: false`) and the sum of squares for the keys (`keyboard: true`), as the exe's two paths do. This also changes the touch stick: it runs at a lower deflection than before (amount 0.75 is 0.5625 of the sum of squares, so a stick at 0.78 amount now runs). The touch path's walk and run rules were already written in `AnalogGait` (amount, 0.1 / 0.75 / 6), but no game code called `AnalogGait`; the mover used the sum of squares for the touch stick too. `AnalogGait` is now only used by its test.
+- `render/lobbyview.ts` and `render/combat.ts`: the view's mover input and the freeze mash's stick flick read `analogStick()` (the pad's stick now moves the player and counts for the mash flick like the touch stick, dump 0x0069b728 / CheckMovementInput_007c11d0 stick branch).
+
+**Right analog (not ported, the exe's reader not found).** The right stick is stored as `unknown_camera_input_amount_2` (angle, dump line 807030) and `field8_0x18` (raw, +0x20 / +0x22). The only readers located are the menus (`g_MenuInputState` copies, lines 806711, 807838-807890), the editor's analog (`unknown_editor_maybe_analog_inputs`, line 273911: it uses the left stick's angle and amount), and the photon trail (`PhotonTrailEffect_Update_0050783c`, line 286826, not camera). The camera's stick turn that is in the dump is `UpdateDefaultNPCCameraRotation_004d7c04` (dump line 255656): it turns the view by `movement_input_amount` (the left stick) and sign of `movement_input_left_right`. The port's dead camera orbit (`render/playercamera.ts` `orbit`) already follows that, and it now gets the pad's left stick. So the right stick does not drive the camera in this port, and the exe's field reader was not found.
+
+**ASSUMED:**
+- Full deflection is 128 on the exe's stick scale (the touch rim's value); the browser's -1..1 maps linearly to -128..127 (`padStickFromUnit`). The exe's DirectInput-to-short conversion (the writer of the gamepad state's `+0x1c` / `+0x1e`) was not traced.
+- Sign: the + side of Y (codes 1 and 4) is the stick up, so the browser's Y is negated for those rows (the default block's Move Forward is code 1). The X + side is the stick right. Not confirmed on a real pad.
+- The pad's stick is read every render frame (the exe's shared input runs per game tick).
+- Keyboard and pad at the same time: the stick wins while it is outside the dead zone (as the touch stick does), the keys ramp only when it is not held.
+- The pad stick also moves the player while a menu is open (the touch stick does the same); the exe's menu handling of the stick was not checked.
+
+**Left.**
+- Right analog camera: the field camera's reader (see above) is not located.
+- The keyboard config's type 1 (pad control) bindings are not ported (unchanged).
+- `AnalogGait` is test-only now; the mover's own run and walk rule replaces it in the game. Either delete it or make `PlayerMover` use it.
+- Not run in Chrome. No pad in the test rig.
+
+**Checks.** `node tests/playermove.test.ts` (+ the stick run gate: a stick at amount 0.78 runs, the same on the keys walks), `node tests/mobilecontrols.test.ts` (+ `padStickFromUnit`, `analogStick` precedence), `node tests/options.test.ts` (+ `padMoveStick`: right and up on the scale, the dead zone; the pad samples carry `axes`), `controls`, `mobileinput`, `stickflick` pass. `tsc --noEmit -p client` in the worktree shows only the missing `three` module (no node_modules here); no error in the touched lines.

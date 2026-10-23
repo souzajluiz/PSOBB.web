@@ -203,4 +203,14 @@ console.log('playermove: ok');
   right.tick({ lr: 128, fb: 0, cameraYaw: 0, keyboard: false }, free(right));
   assert.ok(right.x > 0.99 && Math.abs(right.z) < 1e-9, 'right with the camera at yaw 0 runs to +x');
 }
+// The run gate: a stick runs by its amount (unknown_handle_gamepad_input_move, the
+// amount > 0.1 branch, dump line 587209: amount 0.78 is above 0.75), the keys by the
+// sum of squares (0.61 here, so they only walk).
+const padFwd = { lr: 0, fb: 100, cameraYaw: Math.PI, keyboard: false };
+const padRun = new PlayerMover(0, 0);
+for (let i = 0; i < 40; i++) padRun.tick(padFwd, free(padRun));
+assert.equal(padRun.state, 'run', 'a stick at amount 0.78 runs');
+const keyWalk = new PlayerMover(0, 0);
+for (let i = 0; i < 40; i++) keyWalk.tick({ ...padFwd, keyboard: true }, free(keyWalk));
+assert.equal(keyWalk.state, 'walk', 'the same deflection on the keys walks (sum of squares 0.61)');
 console.log('playermove exe keyboard mapping: ok');
