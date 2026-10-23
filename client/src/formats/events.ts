@@ -138,3 +138,69 @@ export function parseEventFile(data: Uint8Array): EventFile {
   }
   return { format, events };
 }
+
+// --- evt2: random-wave events ----------------------------------------------
+// The events section of a challenge quest (quest .dat type 3 with the 'evt2'
+// format) holds templates, not waves: each entry says how many waves to run
+// and how many enemies each one has, and the random enemy sections (.dat types
+// 4 / 5, formats/randomenemies.ts) say which enemies and where. The entry layout
+// is newserv Map.hh Event2Entry (0x18 bytes):
+//   00 u32 event_id          04 u16 flags          06 u16 event_type
+//   08 u16 room              0A u16 wave_number    0C u16 min_delay
+//   0E u16 max_delay         10 u8  min_enemies    11 u8  max_enemies
+//   12 u16 max_waves         14 u32 action_offset (into the action stream)
+// The header is the same 0x10 bytes as evt1; the action stream runs from its
+// action_stream_offset to the end of the section.
+
+export interface Event2Entry {
+  eventId: number;
+  flags: number;
+  eventType: number;
+  room: number;
+  waveNumber: number;
+  minDelay: number;
+  maxDelay: number;
+  minEnemies: number;
+  maxEnemies: number;
+  maxWaves: number;
+  actionOffset: number;
+}
+
+export interface Event2File {
+  entries: Event2Entry[];
+  actionStream: Uint8Array;
+}
+
+export const EVT2_ENTRY_SIZE = 0x18;
+
+export function isEvt2(data: Uint8Array): boolean {
+  if (data.length < 0x10) return false;
+  return new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(12, false) === EVT2;
+}
+
+export function parseEvt2File(data: Uint8Array): Event2File {
+  if (!isEvt2(data)) throw new Error('not an evt2 events section');
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const actionStream = dv.getUint32(0, true);
+  const entries = dv.getUint32(4, true);
+  const count = dv.getUint32(8, true);
+  if (entries + count * EVT2_ENTRY_SIZE > data.length || actionStream > data.length) throw new Error('evt2 offsets out of range');
+  const out: Event2Entry[] = [];
+  for (let i = 0; i < count; i++) {
+    const o = entries + i * EVT2_ENTRY_SIZE;
+    out.push({
+      eventId: dv.getUint32(o, true),
+      flags: dv.getUint16(o + 4, true),
+      eventType: dv.getUint16(o + 6, true),
+      room: dv.getUint16(o + 8, true),
+      waveNumber: dv.getUint16(o + 0x0a, true),
+      minDelay: dv.getUint16(o + 0x0c, true),
+      maxDelay: dv.getUint16(o + 0x0e, true),
+      minEnemies: dv.getUint8(o + 0x10),
+      maxEnemies: dv.getUint8(o + 0x11),
+      maxWaves: dv.getUint16(o + 0x12, true),
+      actionOffset: dv.getUint32(o + 0x14, true),
+    });
+  }
+  return { entries: out, actionStream: data.subarray(actionStream) };
+}

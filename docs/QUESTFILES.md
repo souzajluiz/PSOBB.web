@@ -72,6 +72,22 @@ fields, change `bin.header`.
 all-zero 0x10-byte chunk. Edit by replacing chunk payloads (`setQuestDatChunk`); `QuestDat.floors` is derived and not
 read by the writer.
 
+### Random enemies (types 4 / 5, `evt2`)
+
+Only the Episode 1 challenge quests (`challenge-ep1/c88101..c88109`, 84 floors) have them. A floor with an `evt2`
+events chunk (type 3, format `'evt2'` read big-endian at +0x0C) holds wave templates (Event2Entry, 0x18 bytes); the
+type 4 chunk (`RandomEnemyLocations`: room table, then 0x1C-byte spawn points) and the type 5 chunk
+(`RandomEnemyDefinitions`: 0x20-byte definitions and 4-byte weights) say which enemies and where. The waves are made
+from the lobby's random seed (join packet u32 at 0x198) by `formats/randomenemies.ts`, which follows newserv's
+`materialize_random_sections` (`src/Map.cc:3823`): the enemies, numbered in generation order, and an evt1 events section
+that chains multi-wave events through `trigger_event` (`0x0C`) with ids `event_id + wave + 10000`.
+
+Checked against `materialize-map --bb --seed=12345678` on c88101, c88102 and c88109 (every floor): enemy type, room,
+wave and child count, and event id, room, wave, delay and action offset, all equal (`tests/randomenemies.test.ts`).
+Positions differ from newserv for a room whose table offset is not 0 (the exe's section start is used). The exe's
+HandleQuestDat does not take types 4/5; they go to the challenge tables (`handle_dat_tables_challenge`, Ghidra dump
+line 612602).
+
 ## `.qst`
 
 44 open-file commands for `<name>.bin` and `<name>.dat`, then the 13 write-file commands (0x400-byte chunks of the

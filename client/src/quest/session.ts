@@ -20,12 +20,17 @@
 
 import { parseQuestBin, questEpisode, questOpcodeHistogram, type QuestBin } from '../formats/questbin.ts';
 import { parseQuestDat, type QuestDat, type QuestDatFloor } from '../formats/questdat.ts';
+import { materializeQuestDat } from '../formats/randomenemies.ts';
 import type { LoadedQuest } from '../net/quests.ts';
 import { QuestVM, type QuestFloorDesignation, type QuestVMHost } from './vm.ts';
 
 export interface QuestSessionOptions {
   host?: QuestVMHost;
   log?: (msg: string) => void;
+  // The game's random seed (the join packet's u32 at 0x198). The random-wave
+  // floors of the challenge quests (formats/randomenemies.ts) need it; without
+  // it those floors stay empty.
+  randomSeed?: number | undefined;
 }
 
 export class QuestSession {
@@ -42,7 +47,15 @@ export class QuestSession {
   constructor(quest: LoadedQuest, opts: QuestSessionOptions = {}) {
     this.log = opts.log ?? (() => {});
     this.bin = parseQuestBin(quest.bin);
-    this.dat = parseQuestDat(quest.dat);
+    const parsed = parseQuestDat(quest.dat);
+    if (opts.randomSeed === undefined) {
+      this.dat = parsed;
+      if ([...parsed.floors.values()].some((f) => f.randomEnemies)) {
+        this.log('quest .dat: random enemy floors without a game seed; they stay empty');
+      }
+    } else {
+      this.dat = materializeQuestDat(parsed, opts.randomSeed);
+    }
     this.name = this.bin.header.name || quest.name;
     this.episode = questEpisode(this.bin.header);
     this.vm = new QuestVM({ bin: this.bin, episode: this.episode, host: opts.host });
