@@ -18,6 +18,7 @@ import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerwea
 import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
 import type { SetPositionState } from './game.ts';
 import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
+import type { SymbolChat } from './symbolchat.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 
 export interface LobbyPlayer {
@@ -66,6 +67,8 @@ export interface LobbyEvents {
   // 6x3E: another player stopped (move_stop); a sitting player stands up on it (ASSUMED: the receiver's move-stop transition, dump 0x698b74 path not fully traced).
   stopped: (p: LobbyPlayer) => void;
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
+  // 6x07: a symbol chat said in the room (symbolchat.ts; the bubble is not drawn yet).
+  symbolChat: (clientId: number, chat: SymbolChat) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
   visibilityChanged: (p: LobbyPlayer) => void; // games: 6x22 (hidden while it changes floors) / 6x23

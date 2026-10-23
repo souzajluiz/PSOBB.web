@@ -29,6 +29,7 @@ import { splitLevel } from '../combat/techniques.ts';
 import { parseCombatStats } from '../combat/pvp.ts';
 import { encodeBarbaA9, encodeBarbaAA } from '../combat/barbaray.ts';
 import { encodeGolA8 } from '../combat/goldragon.ts';
+import { parseSymbolChatSubcommand, symbolChatSubcommandPayload, SYMBOL_CHAT_SUBCOMMAND, type SymbolChat } from './symbolchat.ts';
 import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
@@ -619,6 +620,12 @@ export class Game extends Lobby {
     void rest();
   }
 
+  // Sends one symbol chat to the room (6x07, symbolchat.ts). Only the wire part is
+  // ported: the in-game symbol chat window that picks the chat is not.
+  sendSymbolChat(chat: SymbolChat): void {
+    this.sendSubcommand(SYMBOL_CHAT_SUBCOMMAND, symbolChatSubcommandPayload(this.selfId, chat));
+  }
+
   // Our own 6x0A, 6x0B and 6x5F go through here too, so the saved tables
   // follow them as the exe's senders do.
   // Called with every state subcommand this client sends through recordSent
@@ -666,6 +673,13 @@ export class Game extends Lobby {
       case 0x72:
         this.resumed = true;
         break;
+      case 0x07: {
+        // 6x07 symbol chat (G_SymbolChat_6x07): the server forwards it from the
+        // sender in this room. The bubble is not drawn yet (symbolchat.ts).
+        const sc = parseSymbolChatSubcommand(body);
+        if (sc) this.emit('symbolChat', sc.clientId, sc.chat);
+        break;
+      }
       case 0x68: {
         // Another player's telepipe (render/telepipe.ts shows it). The header's
         // client id field is unused (G_UnusedHeader).

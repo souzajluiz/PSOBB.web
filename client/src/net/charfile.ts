@@ -15,12 +15,14 @@
 //          06F8 PlayerBank200 (0x12C8): u32 num_items, u32 meseta,
 //               200 x {ItemData, u16 amount, u16 present}
 //          19C0 GuildCardBB (0x108)
+//          1ACC 12 x SymbolChat entries (0x68, symbolchat.ts)
 //          2B44 info board (UTF-16, 0xAC chars); 29EC auto reply
 //   2EA4 PSOBBBaseSystemFile (0x2B8)
 //   315C PSOBBFullTeamMembership (0x838)
 
 import { readUtf16 } from './bbconnection.ts';
 import { readItemData, type ItemData } from '../formats/itemnames.ts';
+import { parseSymbolChats, SYMBOL_CHAT_COUNT, SYMBOL_CHAT_ENTRY_SIZE, SYMBOL_CHAT_FILE_OFFSET, type SymbolChatEntry } from './symbolchat.ts';
 
 export const E7_SIZE = 0x3994;
 
@@ -75,6 +77,8 @@ export interface CharacterFile {
   guildCard: { number: number; name: string; teamName: string; description: string; language: number };
   infoBoard: string;
   autoReply: string;
+  // The 12 symbol chats (PSOBBCharacterFile.symbol_chats at 0x1ACC, symbolchat.ts).
+  symbolChats: SymbolChatEntry[];
   teamName: string;
 }
 
@@ -154,6 +158,7 @@ export function parseCharacterFile(data: Uint8Array): CharacterFile {
       description: readUtf16(data, gc + 0x54, 0x58),
       language: data[gc + 0x105],
     },
+    symbolChats: data.length >= SYMBOL_CHAT_FILE_OFFSET + SYMBOL_CHAT_COUNT * SYMBOL_CHAT_ENTRY_SIZE ? parseSymbolChats(data) : [],
     autoReply: readUtf16(data, 0x29ec, 0xac),
     infoBoard: readUtf16(data, 0x2b44, 0xac),
     // PSOBBBaseTeamMembership: +0x00 team master gc, +0x04 team id, ... +0x14 team name (UTF-16, 0x10)
