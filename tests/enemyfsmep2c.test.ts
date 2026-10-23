@@ -2,6 +2,7 @@
 // Sinow Zoa / Zele, Deldepth and Delbiter, driven with the real frame counts of their
 // motions (the brains keep the exe's animation clock themselves).
 // Run: node tests/enemyfsmep2c.test.ts
+import { readFileSync } from 'node:fs';
 import {
   DELBITER,
   DELDEPTH,
@@ -894,6 +895,101 @@ const until = (ai: DeldepthAi, targets: AiTarget[], s: DeldepthState, max = 3000
   while (d.deathLeft > 0 && n++ < 100) d.tick([]);
   check(d.deathLeft === 0 && n < 60, `the death sequence ends (${n} frames)`);
   eq(d.deathMotion, { index: 10, speed: 0.7, loop: false }, 'dead_swim_body');
+}
+
+// The disc transform (DeldepthUpdateState1_00547b70 emerge, 00547cfc retreat,
+// the entries; 0x0054793c / 0x0054781c draw at (x, y + 0x3a4, z) with scale
+// +0x3a8..0x3b0 and alpha +0x3a0). Per frame, t is the progress before its step:
+// y = -2.5 (1 - t), sy = t, alpha = t < 0.5 ? 2t : 1, sx + sz = 2 (2.5 - 1.5 t)
+// (the wobble scales them opposite ways).
+{
+  const curve = (t: number) => ({ y: -2.5 * (1 - t), sy: t, alpha: t < 0.5 ? 2 * t : 1, sum: 2 * (2.5 - 1.5 * t) });
+  const d = mk();
+  eq([d.transform.y, d.transform.sx, d.transform.sy, d.transform.sz, d.transform.alpha], [-2.5, 0, 0, 0, 0], 'dormant entry: height -2.5, scale 0, alpha 0');
+  check(d.discShown && !d.bodyShown, 'dormant: the disc form (animation 6) is the one drawn');
+  until(d, [player(0, 150)], 'emerge');
+  let k = 0;
+  let worst = 0;
+  while (d.state === 'emerge' && k < 60) {
+    const c = curve(k / 30);
+    d.tick([player(0, 150)]);
+    const x = d.transform;
+    worst = Math.max(worst, Math.abs(x.y - c.y), Math.abs(x.sy - c.sy), Math.abs(x.alpha - c.alpha), Math.abs(x.sx + x.sz - c.sum));
+    k++;
+  }
+  check(k >= 30 && k <= 33, `emerge frames (${k})`);
+  check(worst < 1e-3, `emerge curves match the exe per frame (worst ${worst})`);
+  eq([d.state, d.transform.alpha], ['slide', 1], 'slide entry: alpha 1.0');
+  check(d.transform.sx !== d.transform.sz, 'the slide keeps the wobbled scale');
+}
+
+// Retreat: emerge to the top with nobody near, then sinks back (0x00547cfc, step -1/90)
+// and the dormant entry writes the resting values again.
+{
+  const d = mk();
+  until(d, [player(0, 150)], 'emerge');
+  const n = until(d, [], 'retreat', 200);
+  check(n >= 0, 'emerge ends in a retreat with nobody near');
+  eq(d.transform.y, 0, 'retreat entry: height 0');
+  let k = 0;
+  let worst = 0;
+  while (d.state === 'retreat' && k < 200) {
+    const t0 = 1 - k / 90;
+    const c = { y: -2.5 * (1 - t0), sy: t0, alpha: t0 < 0.5 ? 2 * t0 : 1, sum: 2 * (2.5 - 1.5 * t0) };
+    d.tick([]);
+    // The frame that ends the retreat runs the dormant entry, which rests the disc: not a retreat frame.
+    if (d.state !== 'retreat') break;
+    const x = d.transform;
+    worst = Math.max(worst, Math.abs(x.y - c.y), Math.abs(x.sy - c.sy), Math.abs(x.alpha - c.alpha), Math.abs(x.sx + x.sz - c.sum));
+    k++;
+  }
+  check(k >= 88 && k <= 92, `retreat frames (${k})`);
+  check(worst < 1e-3, `retreat curves match the exe per frame (worst ${worst})`);
+  eq([d.state, d.transform.y, d.transform.alpha], ['dormant', -2.5, 0], 'retreat ends in dormant: the dormant entry rests the disc');
+}
+
+// Rise and tuck write none of the curves (0x005493f8, 0x00549460): the transform
+// holds through the transformation.
+{
+  const d = mk();
+  const p = player(0, 120);
+  until(d, [p], 'slide');
+  until(d, [p], 'rise', 300);
+  eq(d.state, 'rise', 'reached the rise');
+  check(d.discShown && d.bodyShown, 'rise (animation 10): both models are drawn');
+  const before = { ...d.transform };
+  for (let i = 0; i < 5 && d.state === 'rise'; i++) d.tick([p]);
+  eq({ ...d.transform }, before, 'rise writes none of the disc curves');
+  until(d, [p], 'aim', 300);
+  check(d.bodyShown && !d.discShown, 'aim (animation 0): the body is drawn, not the disc');
+}
+
+// Death fade (0x00548d60): alpha stays 1 through the countdown, then 5 steps of -0.2.
+{
+  const d = mk();
+  until(d, [player(0, 40)], 'slide');
+  d.kill();
+  eq([d.transform.sx, d.transform.sy, d.transform.sz], [1, 1, 1], 'death entry: scale 1.0');
+  const alphas: number[] = [];
+  let n = 0;
+  while (d.deathLeft > 0 && n++ < 100) {
+    d.tick([]);
+    alphas.push(d.transform.alpha);
+  }
+  check(alphas.length >= 38, `death countdown and fade (${alphas.length} frames)`);
+  check(alphas[alphas.length - 6] === 1 && Math.abs(alphas[alphas.length - 5] - 0.8) < 1e-6, 'fade starts 5 frames before the end');
+  check(Math.abs(alphas[alphas.length - 1]) < 1e-6, `the fade ends at alpha 0 (${alphas[alphas.length - 1]})`);
+}
+
+// The render wiring: both parts are named (enemymodels.ts 0xdb), the disc starts
+// hidden and render/combat.ts places them each tick (deldepthView).
+{
+  const em = readFileSync(new URL('../client/src/formats/enemymodels.ts', import.meta.url), 'utf8');
+  const rc = readFileSync(new URL('../client/src/render/combat.ts', import.meta.url), 'utf8');
+  check(em.includes("{ model: 1, name: 'Deldepth disc', hidden: true }"), 'the disc part (model 1) is a hidden child');
+  check(em.includes("{ model: 0, motion: loop(11, 0.5), name: 'Deldepth body' }"), 'the body part (model 0) keeps the wait motion');
+  check(rc.includes('if (ai instanceof DeldepthAi) this.deldepthView(e, ai);'), 'the enemy tick places the Deldepth parts');
+  check(rc.includes('child.position.set(0, xf.y, 0);') && rc.includes('child.scale.set(xf.sx, xf.sy, xf.sz);'), 'deldepthView applies the height and the scale');
 }
 
 // Shots.

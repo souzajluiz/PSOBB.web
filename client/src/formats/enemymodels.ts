@@ -774,10 +774,15 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // Gi Gue: ctor 0x0056beb4, table 0x009be5c0 slot 0 = wait (chains to itself), 0.7.
     case 0xda:
       return spec('TObjEneMe1GiGue', pick('bm_ene_gi_gue.bml', ctx), [{ model: 0, motion: loop(4, 0.7) }]);
-    // Deldepth: ctor 0x005499b0, body model 0 (disc and mines are separate
-    // objects), table 0x009bd1e0 slot 0 = wait_swim_body, 0.5.
+    // Deldepth: ctor 0x005499b0, table 0x009bd1e0 slot 0 = wait_swim_body, 0.5.
+    // Model 0 is the body, model 1 the disc (the sub-object at +0x384, drawn
+    // by 0x0054a38c in the form of its animation id; the mines are separate
+    // objects). Both parts are placed by render/combat.ts deldepthView.
     case 0xdb:
-      return spec('TObjEneDelDepth', pick('bm_ene_del_depth.bml', ctx), [{ model: 0, motion: loop(11, 0.5) }]);
+      return spec('TObjEneDelDepth', pick('bm_ene_del_depth.bml', ctx), [
+        { model: 0, motion: loop(11, 0.5), name: 'Deldepth body' },
+        { model: 1, name: 'Deldepth disc', hidden: true },
+      ]);
     // Delbiter: ctor 0x0054a71c, table 0x009bd460 slot 0 = wait, 0.5.
     case 0xdc:
       return spec('TObjEneDellBiter', pick('bm_ene_biter_body.bml', ctx), [{ model: 0, motion: loop(8, 0.5) }]);
