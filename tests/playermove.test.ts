@@ -14,6 +14,9 @@ assert.equal(rampAxis(128, false, false), 0);
 assert.ok(32 * 32 / 16384 < 0.1 && 64 * 64 / 16384 > 0.1 && 96 * 96 / 16384 < 0.75 + 0.0001 && 128 * 128 / 16384 > 0.75);
 assert.equal(headingStep(0, 0x1000), 0x400); // a quarter
 assert.equal(headingStep(0, 0x6000), 0x3000); // half when far
+// the same step turning the other way and across the 16-bit wrap (0x0 -> 0xf000 is -0x1000)
+assert.equal(headingStep(0, 0xf000), 0xfc00); // -0x800 + 0x400: a quarter, toward the target
+assert.equal(headingStep(0xfff0, 0x0010), 0xfff8); // diff 0x20 across the wrap: step 0x10 - 0x8 = 0x8
 assert.equal(velocityAngle(0, 0x1000), 0x800);
 assert.equal(clampAngleStep(0, 0x2000, 0x800), 0x800);
 assert.equal(clampAngleStep(0, 0x400, 0x800), 0x400);
