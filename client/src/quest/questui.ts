@@ -42,7 +42,7 @@
 
 import * as THREE from 'three';
 import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
-import { activeColorEscape, stripTextCodes } from '../classic/textcodes.ts';
+import { activeColorEscape, expandColorTags, stripTextCodes } from '../classic/textcodes.ts';
 import { drawGameText, gameTextWidth, GAME_TEXT } from '../classic/gametext.ts';
 import { QUEST_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
@@ -61,9 +61,10 @@ const BORDER = 20;
 
 // Language markers (\tE, \tJ) have no glyph; the \tC<c> colour escapes stay in
 // the string: classic/gametext.ts draws them in the game's palette
-// (classic/textcodes.ts).
+// (classic/textcodes.ts). A <color N> tag of the message becomes \tC<N> there too
+// (the exe's interpolation, quest_color_to_string).
 export function questText(s: string): string {
-  return s.replace(/\t[EJ]/g, '').replace(/<color \d+>/gi, '');
+  return expandColorTags(s.replace(/\t[EJ]/g, ''));
 }
 
 // The same text for the places that only compare or print it.
