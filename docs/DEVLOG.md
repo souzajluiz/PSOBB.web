@@ -14131,3 +14131,37 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+
+## 2026-10-23: symbol chat cooldown on the End picker; End key traced to the quick menu
+
+**What changed:** the picker's sends now wait for the chat cooldown (`is_chat_message_cooldown_over`, dump 679808). A decided row that comes too soon is kept and sent when the cooldown ends; Cancel drops it. The Home leaf's decided row now plays its sound only. `classic/symbolchat.ts`: `CHAT_COOLDOWN_FRAMES` (0x2d), `chatCooldownOver`, `chatCooldownTick`, and `SymbolRow.sound`. `classic/symbolchatlist.ts`: the decide callback returns whether the row was taken (the 'chat' window closes only then), and `close()`. `classic/field.ts`: the timer, the pending row, the send. `classic/lobby.ts`: `previewSymbol` plays `row.sound`. `tests/symbolchat.test.ts`: the cooldown, the row sound and the waiting list.
+
+**Premise corrections (per the exe):**
+- **The Home leaf does not send.** `ChatShortcutMenuWindow_Process_00758900` state 2 (dump 728744) calls `ProcessChatMessageType_0077d880` (dump 754383), which plays `PlayDirectionalSound(spec >> 5 & 0xf)` only when the present bit 0 is set. No `send_chat_message*` call is reached from the Home leaf, so the cooldown does not apply there. The earlier entry's balloon on a Home preview is not in the exe; the port now plays the sound only.
+- **The End key is not a symbol picker in the exe.** Key role 14 (the enum name is `quickmenu`, dump 86172; the key config row is "Symbol Chat Open", `classic/keyconfig.ts` label 0x35) is tested in `unknown_handle_quickmenu` (dump 682493): `was_input_pressed(this, quickmenu)` calls `quick_menu_constructor` (dump 711543). So the End key opens the quick menu. The port has no quick menu (see the 2026-10-23 entries), so the 12-row End picker stays as a stand-in.
+- **Dump 701678 comment is not the End path.** The comment at dump 701679 ("used for the following menus: symbol chat, guild card, simple mail, info board, options, quit game, symbol chat quickmenu, inventory purpose menu") introduces `ListWindowObject_ProcessInputAndRender_00734f3b` (701681), a generic list window. Its "symbol chat quickmenu" is a list window kind, not the End key's handler.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump lines):
+- Cooldown: `is_chat_message_cooldown_over` (679808) returns 1 when the short at `g_pUITextColorTable + 0x22` is below 1. `set_chat_message_cooldown_timer` (679819) writes 0x2d. `g_pUITextColorTable` is the quick menu object (`QuickmenuObject`, set at 677402). The timer is ticked down in `QuickmenuobjectHandleSelection_00716a60` (677732), only while the object's `+0x38` panel is set (the only decrement in the dump). Its callers: `send_chat_message_with_cooldown` (754191) and `send_chat_message_with_cooldown_optcall` (754207). A send that is refused (returns 0) leaves the row's 0x10 flag set, so the exe retries each frame until the cooldown is over (677766 path: the flag is cleared and the panel updated only after a send).
+- Who reaches the cooldown: the quick menu object's chat panel (677766, `send_chat_message_with_cooldown(param_1 + 0xa0)`); the challenge player list's chat row (724794 in `ChallengePlayerListWindow_HandleInput_00752238`, 724757); the quick menu's trade path (732793 in `QuickMenuWindow_ProcessState_0075f09c`); and the Shift+F shortcut keys (`handle_chat_shortcuts` 674857 calls `use_chat_shortcut` 754183, which uses `send_chat_message_with_cooldown_optcall`). Text, word and symbol chats all pass through it.
+- Who builds chat type 3 (`symbol_chat`, dump 86208): `ChallengePlayerInfoWindow_UpdateState_007138e0` (674657). Its state 1 (the "symbol chat case", dump 674690..674706) writes `**(param_1 + 0x30) = 3` and builds a `ChatShortcutMenu` (`ChatShortcutMenu_Constructor_007148c0`, 675688). The type-3 message is the list item the player picks (`get_value_from_selected_list_item`, the state's 0x2 branch near 674813); a valid row plays its sound (`ProcessChatMessageType_0077d880`, 674822). The send itself is the chat row's 0x10 flag (above).
+- The 6x07 writer: `send_chat_message_symbol_chat` (754781) builds the subcommand from the entry's 0x2C..0x68 with `g_CurrentPlayerSlotIndex` and calls `checked_call_packet0x60_subcommand`, which runs it on the sender too.
+- The shortcut slots (`get_chat_shortcut_optcall`, 0xa4 stride, 754134) hold the same chat_message records; the Chat > Shortcut leaf (0x11) that edits them is not ported, and its writer was not traced.
+
+**Ported:**
+- The End-key picker: a decided row is sent only when `chatCooldownOver(chatCooldown)`. The cooldown is set to 0x2d on each send and ticked down each 30 Hz field frame. While it runs, the row waits and the window stays open; the send happens when the timer ends, and Cancel drops the row. The sender's own balloon is shown at the send (as before).
+- The Home leaf 0x12: a decided row plays `row.sound` (the spec's sound, only when the present bit is set). No send, no balloon, the window stays open.
+
+**ASSUMED** (also marked in the code):
+- The port ticks the cooldown every field frame. The exe ticks it only while the quick menu's chat panel `+0x38` is up (677732); the port has no such panel, so the timer runs in the field.
+- The picker is a stand-in for the quick menu's chat row (End opens the quick menu in the exe). The picker's cooldown and its row flow follow the chat row path (677766 and the `ChallengePlayerInfoWindow` mode 1), but the link from role 14 to that window (through `quick_menu_constructor` and its tabs) is not traced.
+- The chat window's 0x10 flag is treated as "send now" for symbol rows; the exe's retry on each frame is ported as the pending row.
+- The text chat in the port has no cooldown. The exe's shared timer also gates text sends (`send_chat_message_text` via the same wrapper), so text chat should get the same gate when it is ported. Not done here.
+
+**Tests:** `node tests/symbolchat.test.ts` (Node 24): ALL PASS (the earlier checks, plus the cooldown: the 0x2d timer, 45 ticks to over, the waiting list keeps its window; the row sound: present rows only). `tsc --noEmit -p client` (client/node_modules linked from the main checkout for the run, removed before the commit): no errors. Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The quick menu: `quick_menu_constructor` (711543), its tabs and the chat row, so that the End key opens it as the exe does. The picker then goes away (or becomes the chat row's list).
+2. Text chat's cooldown (the same timer, `send_chat_message_text` path) and the Shift+F shortcut sends (`use_chat_shortcut`), which the port does not have yet.
+3. The per-frame tick's real guard: the `+0x38` panel of the quick menu object.
+4. The Home leaf's option list and item window (states 5..9) and the capture window, as before.

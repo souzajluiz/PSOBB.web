@@ -15,7 +15,9 @@
 //
 // The symbol chat key (the key config's Symbol Chat, End by default) opens the
 // 12-row picker (classic/symbolchatlist.ts, mode 'chat'); a decided row is sent
-// (Game.sendSymbolChat) and shown over the player too. A 6x07 from another player
+// (Game.sendSymbolChat) and shown over the player too. A send waits for the chat
+// cooldown (symbolchat.ts chatCooldownOver, dump 679808): a decided row that comes
+// too soon is kept and sent when the cooldown ends. A 6x07 from another player
 // shows its picture over that player (ChatLine.receiveSymbol).
 
 import type { Game } from '../net/game.ts';
@@ -25,7 +27,7 @@ import { KEYS } from '../input/keyconfig.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
+import { CHAT_COOLDOWN_FRAMES, chatCooldownOver, chatCooldownTick, symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
@@ -52,6 +54,9 @@ export class FieldScreen implements Screen {
   private frame = 0;
   private symbolEnv: FieldSymbolEnv;
   symbolList: SymbolChatList | null = null;
+  // The chat cooldown timer (is_chat_message_cooldown_over) and the row waiting for it.
+  private chatCooldown = 0;
+  private pendingSymbol: SymbolRow | null = null;
   private extra = 0;
   // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
   private vh = 480;
@@ -95,6 +100,14 @@ export class FieldScreen implements Screen {
 
   private tick(): void {
     if (++this.frame % PING_FRAMES === 0) this.game.conn.send(0x1d, 0);
+    this.chatCooldown = chatCooldownTick(this.chatCooldown);
+    if (this.pendingSymbol && chatCooldownOver(this.chatCooldown)) {
+      const row = this.pendingSymbol;
+      this.pendingSymbol = null;
+      this.sendSymbol(row);
+      this.symbolList?.close();
+      this.symbolList = null;
+    }
     const cam = this.view.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
@@ -147,11 +160,23 @@ export class FieldScreen implements Screen {
   // The End-key picker: a decided row goes to the room, and the sender's own balloon shows it too.
   private openSymbolList(): void {
     const rows = symbolChatRows(this.symbolEnv.symbolChats(), this.symbolEnv.text);
-    this.symbolList = new SymbolChatList('chat', this.symbolEnv.text(11, SYMBOL_TEXT.title), rows, (row) => this.sendSymbol(row));
+    this.symbolList = new SymbolChatList('chat', this.symbolEnv.text(11, SYMBOL_TEXT.title), rows, (row) => this.decideSymbol(row));
+  }
+
+  // Returns true when the row was sent now (the picker closes); false when it waits.
+  private decideSymbol(row: SymbolRow): boolean {
+    if (!row.chat) return false;
+    if (!chatCooldownOver(this.chatCooldown)) {
+      this.pendingSymbol = row;
+      return false;
+    }
+    this.sendSymbol(row);
+    return true;
   }
 
   private sendSymbol(row: SymbolRow): void {
     if (!row.chat) return;
+    this.chatCooldown = CHAT_COOLDOWN_FRAMES;
     this.game.sendSymbolChat(row.chat);
     this.chat.receiveSymbol(this.game.selfId, this.game.playerName(this.game.selfId), row.chat, (id) => this.distanceTo(id));
   }
@@ -164,7 +189,10 @@ export class FieldScreen implements Screen {
     if (this.symbolList) {
       e.preventDefault();
       this.symbolList.key(e);
-      if (!this.symbolList.open) this.symbolList = null;
+      if (!this.symbolList.open) {
+        this.symbolList = null;
+        this.pendingSymbol = null; // Cancel drops a row that waited for the cooldown
+      }
       return;
     }
     if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {
