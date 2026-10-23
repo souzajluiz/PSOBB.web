@@ -4,6 +4,7 @@
 // 6x0C / 6x0D watcher, the HUD icons and the Ultimate melee status rolls.
 // Run: node tests/status.test.ts
 import {
+  attackHeading,
   modifyDirection,
   PlayerMover,
 } from '../client/src/render/playermove.ts';
@@ -244,6 +245,19 @@ eq(meleeHitStatus('MOTHMANT', true, Math.fround(0.05)), null, 'Mothvert roll at 
   eq(modifyDirection(0x4000, true, rand), 2000, 'confused: ROUND(1000 / 32768 * 65536) BAMS');
   eq(modifyDirection(0x4000, true, () => 32767), 0xfffe, 'confused: rand max -> 0xfffe BAMS');
   eq(modifyDirection(0x4000, true, () => 0), 0, 'confused: rand 0 -> heading 0');
+}
+// dispatch_action_attack_step1..3 (dump 586837 / 586529 / 586320): the strike's heading is
+// modify_direction'd, so a confused strike is sent at a random heading; not confused, it is kept.
+{
+  let calls = 0;
+  const rand = () => (calls++, 1000);
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  check(near(attackHeading(Math.PI / 2, false, rand), Math.PI / 2), 'attack not confused: heading kept');
+  eq(calls, 0, 'attack not confused: no rand call');
+  // 2000 BAMS = 2000 / 65536 * 2pi
+  check(near(attackHeading(Math.PI / 2, true, rand), (2000 / 0x10000) * Math.PI * 2), 'attack confused: random heading (2000 BAMS)');
+  eq(calls, 1, 'attack confused: one rand call per strike');
+  check(near(attackHeading(Math.PI / 2, true, () => 0), 0), 'attack confused: rand 0 -> heading 0');
 }
 // PlayerMover: a confused walk heads where the steer says, not the stick.
 {
