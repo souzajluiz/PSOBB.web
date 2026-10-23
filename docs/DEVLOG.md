@@ -10437,3 +10437,28 @@ Jellen on frame 40, the sound once past 10 frames, the motion end to the roam st
 **ASSUMED:** the Olga phase-1 icon's position is the enemy's root (the dump passes `param_1[1].field_0x144`); the battle state is the port's battle run (`BattleController.slots`, a present slot's team), not the exe's `unknown_is_in_battle_mode` (the spawn-item flag path is not modelled); the team of a slot that is not present is none (normal colours).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/minimap.test.ts` (new sections: the team colours with battle off / team 1 / team 0 / team 2; the Olga icon rule; a forced icon beyond the range is added, a plain one is not; the Komo rule's shape, colours and parity), `tests/fieldhud.test.ts`, `tests/battle.test.ts`, `tests/returnprompt.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: The Item Pack has no equipment panel in the exe; the list is not overlapped
+
+**Report:** the port drew the equipment stat panel (GUI entry 0xC, (16, 172)) in the field Item Pack, over the item list. The exe's Item Pack never creates entry 0xC: the panel is the mag menus' window. The panel is now off in the Item Pack (`SHOW_EQUIP_PANEL = false`, `classic/itempack.ts`), so the list shows its title and cursor row. The list's rect is the exe's (13, 256), 308 x 184, and it opens down, not up.
+
+**Exe evidence (PsoBB.exe, Ephinea dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, `tools/exedata.py`, `tools/ghidra/decomp.sh`):**
+- Menu ids: `inventory_menu` = 11 (0xB) -> `GuildCardSearchWindow_Constructor_0075086c` (dump line ~700204, dispatch in `handle_player_menu_select`). `equip_menu1/2` = 9/10 -> `EquipmentMenu_Constructor_0074aa48`. `mag_menu1/2` = 23/24 -> `ChallengePlayerListWindow_Constructor_007525bc` (dump line ~700316), whose `ChallengePlayerListWindow_InitializeUI_00752664` / `_HandleInput_007526c8` state 0/1 is the only code that calls `get_gui_position(0xc)` (dump line 725038). A grep of the dump shows no other `get_gui_position(0xc)`.
+- The Item Pack's constructor takes the list from `get_gui_position(3)` = (13, 256) (dump line 723140), size from the table at `0x00973ca0` = (308.0, 184.0) (`exedata.py read 0x00973ca0 f 2`). Its state machine `ChallengePlayer_StateMachine_00750954` (dump line 723211) creates the list (`ChallengePlayer_CreateItemList_00751ae0`), the description (`get_gui_position(2)`, state 0/1), the purpose window (entry 4), and the amount window (entry 5). It calls no `FinishRenderPositionUpdate` and no `get_gui_position(0xc)`.
+- The 188 (`0x433c0000`): `ListWindowObject_FinishRenderPositionUpdate_00737ab8` (dump line 704199) writes its argument to `list+0x3c`. In `list_window_object` (dump line ~116760), `+0x30` is `source_position` (x, y, width, height at +0x30/+0x34/+0x38/+0x3c), and `set_list_window_render_position` copies it to `render_position`. So 188 is the list's HEIGHT, not y. It is set in the weapon state machine (`_HandleInput_007526c8` state 0/1, line 725054; `EquipmentMenu_UpdateListDisplay_0074abf9`, line 719059), not in the Item Pack. The Item Pack list keeps the 184 from its size table.
+- The 640x480 -> screen mapping: `overlayFrame` (`classic/stage.ts`) scales uniformly by height (s = h / 480), the right-half windows follow the right edge (`anchorX`). The field windows use it already; the port's mapping is not the bug.
+- Element table `g_ChallengeListWindowItemPositions` (0x00973e24) decoded: 144, 68, 308, 124, 214, 184, 1.0, 1.5, 8, 40, 20, -0.5 (`exedata.py read 0x00973e24 f 12`). Its element reader is `AllocateAndInitUIElement_Positioned_00731604` -> `FUN_00731504` / `FUN_00710d30` -> `FUN_00712c44` (Ghidra). The per-row offsets are still not mapped to the six stat rows: ASSUMED.
+
+**Ported:**
+- `client/src/classic/itempack.ts`: `SHOW_EQUIP_PANEL = false` gates the panel draw (drawPanel kept for the mag window). `debugState()` adds `cursorRow` (the select bar rect of the cursor row).
+- `client/src/classic/itemdetail.ts`: the header and the EQUIP_PANEL comment say the panel belongs to the mag menus; the 188 height is the list's height in that menu.
+- `client/e2e/item-panel.spec.ts`: asserts the list `{13, 256, 308, 184}` in screen, `panel` null, the cursor row inside the list and on screen, and the detail clear of the list.
+
+**Screenshot (client/test-results/item-panel-weapon.png, 1280x720):** the field with the item list at the bottom left: orange "Item List" title, "5/30" pill, rows Saber (highlighted, the cursor), Frame, Mag, Monomate x4, Monofluid x4. The description window is bottom right ("A sword with a Photon blade. Attacks 1 enemy."). No equipment panel is drawn.
+
+**ASSUMED / UNCLEAR:**
+- That no other path creates entry 0xC for the Item Pack (the grep found one `get_gui_position(0xc)`; an indirect table index was not checked).
+- The mag menu's panel / list draw order (the list is 206 x 184 and opens to 188 there; the panel overlaps it by 48 px): UNCLEAR. The port has no mag menu window yet.
+- The six row offsets of the panel (0x00973e24) and the panel width 240: ASSUMED.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` ("all checks passed"). Playwright `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test item-panel.spec.ts --workers=1 --reporter=line`, 2 runs, both passed (49.8 s, 53.2 s). Vite on 5175 stopped after the runs.

@@ -1,9 +1,10 @@
-// Item Pack > Items: the equipment stat panel and the mag rows of the selected
-// item. The panel is the element group at GUI table entry 0xC (16, 172), the
-// one ChallengePlayerListWindow_HandleInput_007526c8 fills for the item (state
-// 2 / 8: ChallengePlayerListWindow_UpdateItemDetail_0073175c, and the mag's
-// RefreshItemStatDisplay_00726294 in state 8). The description stays in
-// ITEM_DETAIL (entry 2, the text of itemdetail's info page in itempack.ts).
+// The equipment stat panel and the mag rows of a selected item. The panel is the element
+// group at GUI table entry 0xC (16, 172), the one ChallengePlayerListWindow_HandleInput_
+// 007526c8 fills (state 2 / 8: ChallengePlayerListWindow_UpdateItemDetail_0073175c, and the
+// mag's RefreshItemStatDisplay_00726294 in state 8). That window is the mag menus' (menu ids
+// 23 / 24 -> ChallengePlayerListWindow_Constructor_007525bc), NOT the Item Pack's (menu 11 ->
+// GuildCardSearchWindow_Constructor_0075086c, which never creates entry 0xC). The Item Pack
+// draws its description in ITEM_DETAIL (entry 2) only; itempack.ts keeps the panel off.
 //
 // Evidence (PsoBB.exe, Ephinea 1.25.13; the named dump's names are the
 // community ones, the addresses are the exe's):
@@ -82,9 +83,10 @@ export const VALUE_COLOR = {
 // stats-only case of EquipmentStatDisplayObject_Update_00727220 / _00727078 sets it with
 // UIElement_SetPositionAndSize_0072e7e4(panel, 0, 132); the requirement rows grow it to
 // 172 / 192 / 212 / 232 (not ported: the rows went with the pages). The width 240 is ASSUMED
-// (the exe's calls leave the width to the element table, 0x00973e24, not decoded). The
-// panel's bottom (304) overlaps the item list (ITEM_LIST, entry 3 / the weapon list of entry
-// 7 at (13, 256)) by 48 px: the exe's coordinates overlap the same way.
+// (the exe's calls leave the width to the element table, 0x00973e24, not decoded). In the
+// mag menu the panel's bottom (304) overlaps that window's weapon list (entry 7 at (13, 256),
+// 206 x 184, open height 188 by ListWindowObject_FinishRenderPositionUpdate 0x433c0000: the
+// height, not y). The draw order of the two there is UNCLEAR.
 export const EQUIP_PANEL = { x: 16, y: 172, w: 240, h: 132 } as const;
 
 // What an item adds to the six stats (ApplyEquipmentBonuses_005d330c, see the
