@@ -291,6 +291,35 @@ loop_a:
   check(questOpcode(0x01)?.name === 'ret', 'opcode table sanity');
 }
 
+// --- download quests (A6 / A7 .qst) -------------------------------------------
+{
+  const dq = quests.find((x) => x.dat);
+  if (dq) {
+    const bin = parseQuestBin(load(dq.bin));
+    const dat = parseQuestDat(load(dq.dat!));
+    const online = packQst(bin, dat, { filename: dq.stem.slice(0, 12) });
+    const download = packQst(bin, dat, { filename: dq.stem.slice(0, 12), download: true });
+    check(download.length === online.length, 'A6/A7 .qst has the same length as the 44/13 one');
+    const dv = new DataView(download.buffer, download.byteOffset, download.byteLength);
+    check(dv.getUint16(2, true) === 0xa6, 'download .qst opens with A6');
+    check(new DataView(online.buffer, online.byteOffset, online.byteLength).getUint16(2, true) === 0x44, 'online .qst opens with 44');
+    const back = parseQst(download);
+    check(back.download, 'A6/A7 .qst parses with download set');
+    check(!parseQst(online).download, '44/13 .qst parses without download');
+    check(same(serializeQuestBin(back.bin), load(dq.bin)) && same(serializeQuestDat(back.dat), load(dq.dat!)), 'A6/A7 .qst round trips the quest');
+    // A 44 open followed by A7 writes (or the reverse) is not a download .qst.
+    const mixed = online.slice();
+    new DataView(mixed.buffer).setUint16(2, 0xa6, true);
+    let threw = false;
+    try {
+      parseQst(mixed);
+    } catch {
+      threw = true;
+    }
+    check(threw, 'a .qst that mixes 44 and A6 is rejected');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

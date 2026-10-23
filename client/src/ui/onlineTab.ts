@@ -11,6 +11,7 @@ import { DIFFICULTY_NAMES, EPISODE_NAMES, Game, floorToArea, type GameListEntry 
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { connectBridge } from '../net/wstransport.ts';
 import { QuestClient, type LoadedQuest, type QuestMenuEntry } from '../net/quests.ts';
+import { downloadQuestStore, recordForQuest } from '../net/downloadquests.ts';
 import { runQuest, type QuestRunner } from '../quest/run.ts';
 import { QuestTown } from '../quest/town.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -40,6 +41,8 @@ export function initOnlineTab(log: (msg: string) => void): void {
   let busy = false;
   let bgm: BgmPlayer | null = null; // floor music in games (render/gamefield.ts)
   let quests: QuestClient | null = null; // quest menu + file download (net/quests.ts)
+  // Download quests (A6 / A7) received in the lobby, kept under Download Quests.
+  const downloadQuests = downloadQuestStore();
   let questRunner: QuestRunner | null = null;
   // NPC talk, the area script, the counters and the quest windows of the
   // current game (quest/town.ts).
@@ -137,8 +140,9 @@ export function initOnlineTab(log: (msg: string) => void): void {
     quests = new QuestClient(l.conn, {
       log,
       // The server sends the files whenever any player picks a quest, so the
-      // same path runs for our own choice and for someone else's.
-      onQuest: (q) => void startQuest(q),
+      // same path runs for our own choice and for someone else's. A download
+      // quest (A6 / A7, picked in the lobby) is saved instead of started.
+      onQuest: (q) => void (q.download ? saveDownloadQuest(q) : startQuest(q)),
       onStart: () => {
         addChat('*', 'quest started');
         questPanel.update();
@@ -146,11 +150,21 @@ export function initOnlineTab(log: (msg: string) => void): void {
     });
   }
 
+  async function saveDownloadQuest(q: LoadedQuest): Promise<void> {
+    try {
+      await downloadQuests.put(recordForQuest(q));
+      const n = (await downloadQuests.list()).length;
+      log(`download quest "${q.name}" saved (${n} under Download Quests)`);
+    } catch (err) {
+      log(`download quest "${q.name}" not saved: ${errorText(err)}`);
+    }
+  }
+
   async function startQuest(q: LoadedQuest): Promise<void> {
     const view = gameView;
     const g = game;
     if (!view || !g) {
-      log(`quest "${q.name}" arrived outside a game (download quest); not started`);
+      log(`quest "${q.name}" arrived outside a game; not started`);
       return;
     }
     try {

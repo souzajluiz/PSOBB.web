@@ -78,8 +78,11 @@ read by the writer.
 PRS-compressed files), each with the 8-byte BB command header; the 13 commands are 0x41C bytes + 4 zero bytes so the
 next command is 8-aligned (newserv `encode_qst_file`). The name is `PSO/<quest name>` (the header name when it is ASCII,
 else the file name), 23 characters at most. `parseQst` accepts chunks in any order, all-zero chunk indexes (assumed in
-order) and write commands whose size includes the 4 padding bytes; it rejects download quests (A6/A7, encrypted) and
-non-BB files.
+order) and write commands whose size includes the 4 padding bytes. Download quests use the same bodies with A6 (open) and
+A7 (write) instead of 44 / 13: `parseQst` reads them (`download: true`) and `packQst(..., { download: true })` writes them.
+ASSUMED: the BB A6/A7 files are plain PRS, like the 44 / 13 ones (the exe's receive path decompresses them without a
+decrypt). The PSO V2 encrypted download format (newserv `encode_download_quest_data`: an 8-byte header, then the PRS
+stream encrypted with PSO V2) is the DC / PC / GC / XB one; it is not decoded, and `parseQst` still rejects non-BB files.
 
 ## Script text
 
