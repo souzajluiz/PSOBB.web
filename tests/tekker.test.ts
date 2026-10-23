@@ -22,6 +22,7 @@ import { itemFromHex, ItemNames, type ItemData } from '../client/src/formats/ite
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 import { buildAcceptIdentify, buildIdentifyItem, GameItems, parseIdentifyResult } from '../client/src/net/items.ts';
 import type { Game } from '../client/src/net/game.ts';
+import { itemPictureEntry } from '../client/src/formats/itemkt.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -80,7 +81,7 @@ const press = async (c: { key(e: KeyboardEvent): void; tick(): void }, ...keys: 
 };
 
 // The server identifies by clearing the 0x80 flag and setting data1[4] = 5.
-function makeEnv(character: CharacterFile, calls: string[], answerAfter = 0) {
+function makeEnv(character: CharacterFile, calls: string[], answerAfter = 0, extra: Partial<CounterEnv> = {}) {
   let result: ItemData | null = null;
   let pendingFrames = -1;
   let sent: ItemData | null = null;
@@ -125,6 +126,7 @@ function makeEnv(character: CharacterFile, calls: string[], answerAfter = 0) {
     rowContext: () => ctx,
     pmt: () => pmt,
     items,
+    ...extra,
   };
   return {
     env,
@@ -272,6 +274,54 @@ const character = (meseta: number, inventory: InventoryItem[]) =>
   be.set(mine.subarray(4), 4);
   sub(0xbe, 1, be);
   eq(ch.inventory.length, 1, "newserv's 6xBE echo does not duplicate it");
+}
+
+// --- the item picture (ItemKTep4.afs entry, FUN_005e5870) ---
+const d1 = (kind: number, sub: number) => Uint8Array.from([kind, sub, 0, 0, 0, 0, 0, 0]);
+eq(
+  [itemPictureEntry(d1(0, 1), 0xb1), itemPictureEntry(d1(0, 1), 0x256), itemPictureEntry(d1(0, 1), 0x257), itemPictureEntry(d1(0, 1), undefined), itemPictureEntry(d1(2, 0x10)), itemPictureEntry(d1(2, 0x52)), itemPictureEntry(d1(1, 0x10))],
+  [0x52, 0x1f7, 0x1f8, 0x1f8, 0x10, 0, null],
+  'weapon: name id - 0x5f inside 0xb1..0x256, else 0x1f8; tool: its id below 0x52, else 0; armor: none',
+);
+
+// --- the jingles and the picture (BGM j_kantei.adx / miniclear.adx; window 0x32) ---
+{
+  // Deal without the equip question (the class cannot equip the Saber).
+  const calls: string[] = [];
+  const ch = character(500, [inv('000200008000000000000000 02000100 00000000'), unknownSaber()]);
+  ch.inventory[1].data.id = 0x10003;
+  const pictures: number[] = [];
+  const music = { jingle: (name: string) => calls.push(`jingle ${name}`), restore: () => calls.push('restore') };
+  const { env } = makeEnv(ch, calls, 0, {
+    music,
+    picture: async (item) => {
+      pictures.push(item.data1[4]);
+      return {} as ImageBitmap;
+    },
+  });
+  const c = new TekkerCounter(env);
+  c.start();
+  await press(c, 'Enter', 'Enter', 'Enter');
+  eq(calls, ['6xB8 10002', 'jingle j_kantei.adx'], '6xB8, then the appraisal jingle');
+  await tick(c, TEKKER_WAIT + 2);
+  eq([c.state().message, c.state().picture, pictures], ['6#8', true, [5]], 'Result: the picture of the identified item');
+  await press(c, 'Enter');
+  eq(calls.slice(2), ['pay 100', 'accept 10002 5', 'jingle miniclear.adx'], 'the deal: pay, accept, then miniclear');
+  eq(c.state().picture, false, 'the picture is not kept past the deal');
+  await press(c, 'Backspace', 'Enter');
+  await tick(c);
+  eq([c.done, calls.slice(-1)], [true, ['restore']], 'closed: the floor track comes back');
+}
+{
+  // Not enough meseta: nothing sent, no jingle, no restore.
+  const calls: string[] = [];
+  const music = { jingle: (name: string) => calls.push(`jingle ${name}`), restore: () => calls.push('restore') };
+  const { env } = makeEnv(character(50, [unknownSaber()]), calls, 0, { music });
+  const c = new TekkerCounter(env);
+  c.start();
+  await press(c, 'Enter', 'Enter', 'Enter', 'Enter');
+  await tick(c);
+  eq([calls, c.done], [[], true], 'not enough meseta: nothing sent, no jingle');
 }
 
 if (failures) {

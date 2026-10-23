@@ -24,6 +24,7 @@
 import type { BgmPlayer } from '../audio/bgm.ts';
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { FieldMusic } from '../audio/fieldbgm.ts';
+import type { CounterMusic } from '../classic/shop.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseEventFile, type WaveEvent } from '../formats/events.ts';
 import { enemySlots } from '../formats/enemyids.ts';
@@ -193,6 +194,14 @@ export class GameField {
   // not echo them.
   noteBossPhase(phase: number): void {
     if (this.music?.setBossPhase(phase)) this.opts.log(`boss phase ${phase}: ${this.music.bossMusic?.name}`);
+  }
+
+  // The counters' jingles (classic/shop.ts) over this floor's music.
+  counterMusic(): CounterMusic {
+    return {
+      jingle: (name) => this.music?.jingle(name),
+      restore: () => this.music?.resume(),
+    };
   }
 
   // construct_objects (room/group keys) per floor, kept across visits.

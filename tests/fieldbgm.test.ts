@@ -109,5 +109,30 @@ if (existsSync(OGG)) {
   eq(played, ['stop', 'sl:4'], 'Dark Falz music');
 }
 
+// --- Counter jingles (classic/shop.ts TekkerCounter: j_kantei / miniclear) ---
+{
+  const played: string[] = [];
+  const fake = { play: async (n: string) => void played.push(n), playInteractive: (i: number) => played.push(`sl:${i}`), stop: () => played.push('stop') } as unknown as BgmPlayer;
+  const m = new FieldMusic(fake);
+  m.enter(0x00, 1); // Pioneer 2: city zones
+  m.tick(1 / 30, { x: 0, y: 0, z: 0 });
+  played.length = 0;
+  m.jingle('j_kantei.adx');
+  eq(played, ['j_kantei.adx'], 'a jingle replaces the track');
+  m.tick(1 / 30, { x: 0, y: 0, z: 0 });
+  eq(played, ['j_kantei.adx'], 'no restore while the jingle is the one playing');
+  m.resume();
+  m.tick(1 / 30, { x: 0, y: 0, z: 0 });
+  eq(played, ['j_kantei.adx', 'city.adx'], 'resume: the city track starts again');
+  played.length = 0;
+  m.enter(0x0e, 1); // Dark Falz: sl:4 after 0x5b frames
+  for (let i = 0; i < 0x5c; i++) m.tick(1 / 30, { x: 0, y: 0, z: 0 });
+  played.length = 0;
+  m.jingle('miniclear.adx');
+  m.resume();
+  m.tick(1 / 30, { x: 0, y: 0, z: 0 });
+  eq(played, ['miniclear.adx', 'sl:4'], 'resume on an interactive track plays it again');
+}
+
 console.log(failures ? `${failures} failures` : 'field music: all checks passed');
 process.exit(failures ? 1 : 0);

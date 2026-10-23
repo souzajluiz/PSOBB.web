@@ -188,6 +188,7 @@ export class GameView {
     this.hud = new FieldHud(viewer, this.files, {
       ...character,
       items: this.items,
+      music: this.field.counterMusic(),
       area: () => this.current?.area ?? 0,
       questStarted: () => this.quest !== null,
       quest: () => this.quest,
