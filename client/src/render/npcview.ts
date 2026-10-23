@@ -30,9 +30,7 @@ import {
   NPC_CAMERA_MOVER_VIEWS,
   NPC_MOTION_TABLES,
   NPC_TALK_CAMERA_MOVERS,
-  NPC_TALK_COS,
   NPC_TALK_NO_TURN,
-  NPC_TALK_RANGE,
   NPC_TOWN_MOTION_FILE,
   NPC_TURN_STEP,
   npcModelFor,
@@ -56,6 +54,7 @@ import { PlayerAnimator } from './playeranim.ts';
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { NjcmModelBuilder } from './njcmmesh.ts';
+import { inWeaponReach, type WeaponReach } from '../combat/weaponaim.ts';
 import type { CollisionWorld } from './collision.ts';
 import { lerpPoint, type Vec3 } from './playercamera.ts';
 import { TickClock } from './smoothrender.ts';
@@ -452,25 +451,26 @@ export class NpcLayer {
     this.publishBodies();
   }
 
-  // The NPC a player at (x, z) facing `yaw` (radians, three.js convention)
-  // can talk to: shown, with a talk label, within NPC_TALK_RANGE and in front.
-  talkTarget(x: number, z: number, yaw: number): NpcInstance | null {
+  // The nearest NPC the Middle key can talk to: shown, with a talk label, and inside the
+  // weapon's reach (combat/weaponaim.ts inWeaponReach). `d2` is its squared distance from the
+  // reach's origin; `act` starts the talk for a player at that origin.
+  nearestInReach(reach: WeaponReach, act: (npc: NpcInstance) => void = () => {}): { d2: number; act: () => void } | null {
     let best: NpcInstance | null = null;
-    let bestD = NPC_TALK_RANGE * NPC_TALK_RANGE;
-    const fx = Math.sin(yaw);
-    const fz = Math.cos(yaw);
+    let bestD = Infinity;
     for (const n of this.instances) {
       if (!n.shown || !n.params.script) continue;
-      const dx = n.root.position.x - x;
-      const dz = n.root.position.z - z;
+      if (!inWeaponReach(reach, n.root.position.x, n.root.position.y, n.root.position.z)) continue;
+      const dx = n.root.position.x - reach.x;
+      const dz = n.root.position.z - reach.z;
       const d = dx * dx + dz * dz;
-      if (d > bestD) continue;
-      const len = Math.sqrt(d) || 1;
-      if ((dx * fx + dz * fz) / len < NPC_TALK_COS) continue;
-      best = n;
-      bestD = d;
+      if (d < bestD) {
+        best = n;
+        bestD = d;
+      }
     }
-    return best;
+    if (!best) return null;
+    const npc = best;
+    return { d2: bestD, act: () => act(npc) };
   }
 
   get talking(): boolean {

@@ -305,13 +305,9 @@ export function npcShown(p: NpcParams, reg: (r: number) => number): boolean {
 // *(0x009c3eb0 + 8) = 0x400 BAMS per tick (ClampAngleDifference_007a8c74);
 // once within that step it faces the player and the talk thread starts.
 export const NPC_TURN_STEP = 0x400;
-// The player has to stand within 20 units of the NPC and face it within 60
-// degrees: the rule of the Pioneer 2 counters (IsEntityInFrontAndInRange
-// _006d739c: distance 20.0, dot(forward, to NPC) against -0.5 at 0x0096c2a0),
-// used here for every NPC. The client picks the NPC through the player's
-// action target instead (the "talk" palette slot), which is not modelled.
-export const NPC_TALK_RANGE = 20;
-export const NPC_TALK_COS = 0.5;
+// The talk is the Action Palette Middle key's interact, picked from the weapon's
+// target reach (render/npcview.ts nearestInReach, PsoBB.exe 0x0068c31d); the
+// Pioneer 2 counters keep their own 20-unit rule (IsEntityInFrontAndInRange).
 
 // EnemyObjectUpdate_0060648c state 0: for these talk actions the NPC does not
 // turn; the player is turned to face it at once (6x3E with the angle from the

@@ -24,3 +24,25 @@ export function inWeaponCone(dx: number, dz: number, heading: number, halfAngle:
 export function facingOf(dx: number, dz: number): number {
   return Math.atan2(dx, dz);
 }
+
+// The weapon's target reach from the player: the origin, the heading and the
+// weapon's range and cone (WeaponRange of the ItemPMT entry, render/combat.ts weaponRange).
+export interface WeaponReach {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  maxDist: number; // horizontal + vertical range
+  halfAngle: number; // radians
+}
+
+// Whether a point is in the weapon's target reach. find_targets_for_weapons_and_techs
+// (PsoBB.exe .c:785117) keeps a target inside the range and the cone; the 40-unit height
+// window is the port's enemy rule (render/combat.ts weaponTargets), ASSUMED for the others.
+export function inWeaponReach(r: WeaponReach, x: number, y: number, z: number): boolean {
+  const dx = x - r.x;
+  const dz = z - r.z;
+  if (Math.hypot(dx, dz) > r.maxDist) return false;
+  if (Math.abs(y - r.y) > 40) return false;
+  return inWeaponCone(dx, dz, r.heading, r.halfAngle);
+}

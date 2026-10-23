@@ -47,6 +47,7 @@ import type { Game } from '../net/game.ts';
 import type { LobbyPlayer } from '../net/lobby.ts';
 import type { QuestClient, QuestMenuEntry } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
+import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
@@ -125,6 +126,7 @@ export class QuestTown {
     // classic/questboard.ts), its lists and board text still take them.
     this.view.questKey = (e) => this.ui.menuKey(e);
     this.ui.onAction = () => this.action();
+    this.view.middleInteract = (reach) => this.interactMiddle(reach);
     this.ui.onTick = () => this.tick();
     this.view.inputBlocked = () => this.ui.blocking || this.view.npcs.talking || this.counterOpen;
     const npcs = this.view.npcs;
@@ -253,15 +255,27 @@ export class QuestTown {
 
   // --- talking -----------------------------------------------------------------
 
+  // The Action Palette Middle key's interact (PsoBB.exe 0x0068c31d, the middle-slot override of
+  // update_main_palette_slot_down_override): the nearest NPC or floor item in the weapon's reach
+  // talks or is picked up; false when none is, so the key attacks. The exe's override is the
+  // first non-hitbox entry of the weapon target list (find_targets_for_weapons_and_techs); NPCs
+  // and floor items are not modelled as hitboxes, ASSUMED.
+  private interactMiddle(reach: WeaponReach | null): boolean {
+    if (!reach || this.counterOpen || this.view.npcs.talking) return false;
+    const me = this.view.selfPose();
+    if (!me) return false;
+    const npc = this.view.npcs.nearestInReach(reach, (n) => this.view.npcs.startTalk(n, me.x, me.z));
+    const item = this.view.floorItems.nearestInReach(reach);
+    if (!npc && !item) return false;
+    if (npc && (!item || npc.d2 <= item.d2)) npc.act();
+    else item?.act();
+    return true;
+  }
+
   private action(): boolean {
     if (this.counterOpen || this.view.npcs.talking) return false;
     const me = this.view.selfPose();
     if (!me) return false;
-    const npc = this.view.npcs.talkTarget(me.x, me.z, me.angle);
-    if (npc) {
-      this.view.npcs.startTalk(npc, me.x, me.z);
-      return true;
-    }
     // at_coords_talk: the action button becomes "talk" inside the radius.
     const zone = this.zoneAt(me, 'talk');
     if (zone && this.quest) {

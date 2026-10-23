@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { facingOf, coneOffset, inWeaponCone } from '../client/src/combat/weaponaim.ts';
+import { facingOf, coneOffset, inWeaponCone, inWeaponReach } from '../client/src/combat/weaponaim.ts';
 import { parseItemPMT } from '../client/src/formats/itempmt.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -76,6 +76,17 @@ check(near(facingOf(1, 0), Math.PI / 2), 'facingOf(+x) is pi/2');
   check(handgun?.horizontalHalfAngle === 1820 && handgun?.maxTargets === 1, `Handgun cone 1820, one target (${JSON.stringify(handgun)})`);
   const shot = pmt.weaponRange(9, 0, 0);
   check(shot?.maxTargets === 5 && shot?.horizontal === 130, `Shot: five targets, reach 130 (${JSON.stringify(shot)})`);
+}
+
+// The Middle key's reach (inWeaponReach): range, height window and cone from the player.
+{
+  const reach = { x: 0, y: 0, z: 0, heading: 0, maxDist: 50, halfAngle: HANDGUN_HALF };
+  check(inWeaponReach(reach, 0, 0, 40), 'a point 40 units ahead is in reach');
+  check(!inWeaponReach(reach, 0, 0, 60), 'a point 60 units ahead is past the reach');
+  check(!inWeaponReach(reach, 0, 0, -10), 'a point behind the heading is out of the cone');
+  check(!inWeaponReach(reach, 0, 45, 10), 'a point 45 units above is out of the height window');
+  check(inWeaponReach(reach, 0, 30, 10), 'a point 30 units above is inside the height window');
+  check(!inWeaponReach({ ...reach, heading: Math.PI / 2 }, 0, 0, 40), 'the cone turns with the heading');
 }
 
 if (failures) {

@@ -21,7 +21,7 @@
 import { KEYS, PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
-import { facingOf, inWeaponCone } from '../combat/weaponaim.ts';
+import { facingOf, inWeaponCone, type WeaponReach } from '../combat/weaponaim.ts';
 import {
   AI_PROFILES,
   aiConfig,
@@ -518,6 +518,10 @@ export interface CombatOptions {
   questRunning?: () => boolean;
   // palette_slots[index] of the current action palette (render/fieldhud.ts).
   paletteSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
+  // The Action Palette Middle key, before its attack: true when an NPC or floor item in the
+  // weapon's reach took it (the exe's middle-slot override, update_main_palette_slot_down_override
+  // and unknown_handle_main_palette_slot_down_activation). The reach is null without a player.
+  interactMiddle?: (reach: WeaponReach | null) => boolean;
   // Map files of a floor (GameView.floorFilesFor).
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
   // Ground height under (x, z), so a walking enemy follows the floor.
@@ -1329,7 +1333,10 @@ export class CombatView {
         const down = keys.has(key);
         if (down && !this.held.has(key) && !blocked) {
           const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
-          if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
+          // The Middle key: an NPC or floor item in the weapon's reach replaces the attack.
+          if (index === 1 && this.opts.interactMiddle?.(this.middleReach(slot)) === true) {
+            // taken by the interaction (talk or pick up)
+          } else if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
           else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);
           else if (slot && !slot.disabled && slot.group1 === 5) this.firePhotonBlast(slot.group2);
           else if (slot && !slot.disabled && slot.group1 === 4 && trapPaletteType(slot.group2) !== null) this.placeTrap?.(trapPaletteType(slot.group2)!);
@@ -5809,6 +5816,18 @@ export class CombatView {
     const fallback: WeaponRange = { horizontal: 14, vertical: 18, horizontalHalfAngle: 0x127d, verticalHalfAngle: 0x127d, maxTargets: 1 };
     if (!w || !this.pmtSync) return fallback;
     return this.pmtSync.weaponRange(w.data1[1], w.data1[2], attackType) ?? fallback;
+  }
+
+  // The weapon's reach from the player for the Middle key (combat/weaponaim.ts inWeaponReach):
+  // the range and cone of the Middle slot's attack when it is an attack, else the basic one
+  // (ASSUMED: the exe's per-target-info table is not ported).
+  private middleReach(slot: { group1: number; group2: number; disabled: boolean } | null | undefined): WeaponReach | null {
+    const me = this.game.self;
+    if (!me) return null;
+    const attackType = (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2 ? slot.group2 : 0) as AttackType;
+    const range = this.weaponRange(attackType);
+    const p = me.position;
+    return { x: p.x, y: p.y, z: p.z, heading: me.angle, maxDist: range.horizontal + range.vertical, halfAngle: range.horizontalHalfAngle * BAMS_TO_RAD };
   }
 
   // The enemies the weapon reaches from `from` inside its cone around the
