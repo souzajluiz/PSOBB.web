@@ -70,7 +70,7 @@ eq(statusPulse(STATUS.shock, true), { particle: 0x21, se: 0x11 }, 'shock onset: 
 eq(statusPulse(STATUS.freeze, true), { particle: null, se: 0x10 }, 'freeze onset: SE 0x10, the ice object instead of a particle');
 eq(statusPulse(STATUS.freeze, false), { particle: null, se: 0x10 }, 'freeze tick: SE 0x10');
 eq(statusFx(STATUS.freeze), [], 'freeze has no particle');
-eq(statusFx(STATUS.poison), [{ id: 0x25, dy: 20 }], 'poison particle spec');
+eq(statusFx(STATUS.poison), [{ id: 0x25, dy: 0 }], 'poison particle spec (at the hit point, dump 748529)');
 eq(Object.keys(STATUS_FX).length, 6, 'six status effects');
 
 // The pulses PlayerStatus sends, with their SE: poison 45 frames after the hit,

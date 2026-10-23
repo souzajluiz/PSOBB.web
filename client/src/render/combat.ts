@@ -128,7 +128,7 @@ import {
   type TechResist,
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
-import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -5926,7 +5926,7 @@ export class CombatView {
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
       if (t?.enemy) {
         const p = t.enemy.instance.root.position;
-        target = { centre: { x: p.x, y: p.y + AIM_HEIGHT, z: p.z }, radius: this.hitRadiusOf(t.enemy) };
+        target = { centre: { x: p.x, y: p.y + this.aimHeightOf(t.enemy), z: p.z }, radius: this.hitRadiusOf(t.enemy) };
       } else if (t) {
         // A remote player: its hit box centre, which is the feet at rest (the player's
         // embedded box has position1 = 0, combat/playerfx.ts HIT_POINT_DY). Radius 0 as before (combat/pvp.ts).
@@ -5998,7 +5998,7 @@ export class CombatView {
     }
     if (this.disposed || e.dead || !e.instance.root.visible || concealed(e)) return;
     const p = e.instance.root.position;
-    const now = { x: p.x, y: p.y + AIM_HEIGHT, z: p.z };
+    const now = { x: p.x, y: p.y + this.aimHeightOf(e), z: p.z };
     if (bulletMissed(b.origCentre, now)) {
       if (movedTowards(b.origCentre, now, b.start)) {
         const at = this.hitPoint(e);
@@ -6752,19 +6752,25 @@ export class CombatView {
   // (combat/techfire.ts pickTechTargets: check_enemy_is_targetable). ASSUMED: the
   // lock-on cursor is not a manually chosen primary target, the weapon position
   // is WEAPON_HEIGHT above the feet and an enemy's hit box is a round box of its
-  // collision radius centred AIM_HEIGHT up.
+  // collision radius centred on its hit box (aimHeightOf).
   private pickFireTargets(data: TechniqueData, from: THREE.Vector3, heading: number): EnemyRuntime[] {
     const cands: Candidate[] = [];
     const byId = new Map<number, EnemyRuntime>();
     for (const e of this.enemies.values()) {
       if (e.dead || !e.instance.root.visible || concealed(e)) continue;
       const p = e.instance.root.position;
-      cands.push({ id: e.index, x: p.x, y: p.y + AIM_HEIGHT, z: p.z, radius: this.hitRadiusOf(e) });
+      cands.push({ id: e.index, x: p.x, y: p.y + this.aimHeightOf(e), z: p.z, radius: this.hitRadiusOf(e) });
       byId.set(e.index, e);
     }
     const out: Candidate[] = [];
     pickTechTargets(from.x, from.y + WEAPON_HEIGHT, from.z, heading, data, cands, null, out);
     return out.map((c) => byId.get(c.id)!);
+  }
+
+  // The height an enemy is aimed at: the centre of its hit box (combat/techfire.ts
+  // enemyAimHeight, from the type's box table; AIM_HEIGHT where it is not known).
+  private aimHeightOf(e: EnemyRuntime): number {
+    return enemyAimHeight((e.slot.set as EnemySet | undefined)?.type ?? null);
   }
 
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
@@ -6815,7 +6821,7 @@ export class CombatView {
       return false;
     }
     const tp = aimed && first ? first.instance.root.position : null;
-    const aim = tp ? { x: tp.x, y: tp.y + AIM_HEIGHT, z: tp.z } : null;
+    const aim = tp && first ? { x: tp.x, y: tp.y + this.aimHeightOf(first), z: tp.z } : null;
     const rafoie = tech === TECH.rafoie;
     const obj = makeFireObject({
       tech,
