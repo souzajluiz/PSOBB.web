@@ -67,12 +67,15 @@ export type ObjectPartSpec = ObjectPartBase & PartMotion & PartTextures;
 // Object collision box (InitEnemyCollisionBoxes_007b9a88 entry, 0x2c bytes):
 // type 1 = box of half extents (halfX, halfZ) in the object's frame
 // (FUN_008443d8: x in +-unk1, z in +-radius, y +-50); type 0 = sphere.
+// flags: the table's flag word (+0x18, read from PsoBB.exe at `address`); see
+// render/collision.ts boxPairActive for what the bits do to a player.
 export interface ObjectCollision {
   address: number;
   offset: [number, number, number];
   type: 0 | 1;
   halfX: number; // type 1: unk1 (+0x10); type 0: radius
   halfZ: number; // type 1: radius (+0x0c); type 0: radius
+  flags: number;
 }
 
 export interface ObjectModelSpec {
@@ -116,9 +119,11 @@ export const DIGIT_COLORS: ReadonlyArray<[number, number, number]> = [
 ];
 
 // Collision boxes read from the constructors' FUN_007b9a88 arguments.
-const BOX = (address: number, halfX: number, halfZ: number, y = 20, z = 0): ObjectCollision => ({ address, offset: [0, y, z], type: 1, halfX, halfZ });
+// Box tables read from the exe: flags 0x10003 (bit 0 enabled, bits 1 and 0x10000).
+const BOX = (address: number, halfX: number, halfZ: number, y = 20, z = 0): ObjectCollision => ({ address, offset: [0, y, z], type: 1, halfX, halfZ, flags: 0x10003 });
 const DOOR_BOX_20 = (address: number) => BOX(address, 20, 10);
-const CONTAINER_SPHERE: ObjectCollision = { address: 0x009c77ac, offset: [0, 6, 0], type: 0, halfX: 9, halfZ: 9 };
+// 0x009c77ac: sphere r9 at (0, 6, 0), flags 0x38003.
+const CONTAINER_SPHERE: ObjectCollision = { address: 0x009c77ac, offset: [0, 6, 0], type: 0, halfX: 9, halfZ: 9, flags: 0x38003 };
 
 const spec = (name: string, bml: string, parts: ObjectPartSpec[], extra: Partial<ObjectModelSpec> = {}): ObjectModelSpec => ({ name, bml, parts, ...extra });
 
@@ -202,7 +207,7 @@ const LOBBY_MAIN_EVENT_CHUNK: Readonly<Record<number, number>> = { 1: 12, 3: 16,
 const LOBBY_MAIN_MOTION: Readonly<Record<number, number>> = { 7: 0, 8: 1, 9: 2, 15: 3, 16: 4, 17: 4 };
 // The round box 0x009c9778 (InitEnemyCollisionBoxes entry: radius 32 at the
 // object, flags 0x10003); the lobby's players are stopped by it in lobbyview.ts.
-const LOBBY_MAIN_COLLISION: ObjectCollision = { address: 0x009c9778, offset: [0, 0, 0], type: 0, halfX: 32, halfZ: 32 };
+const LOBBY_MAIN_COLLISION: ObjectCollision = { address: 0x009c9778, offset: [0, 0, 0], type: 0, halfX: 32, halfZ: 32, flags: 0x10003 };
 
 export function lobbyMainChunk(event: number, param4: number): number {
   const mapped = event === 0x0c ? 0 : event === 0x0d ? 8 : event;
@@ -760,7 +765,7 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x0154:
     case 0x0167: {
       const name = o.type === 0x0154 ? 'TOTrapAncient02' : 'TOTrapAncient02R';
-      const collision: ObjectCollision = { address: 0x009c684c, offset: [0, 8.5, 0], type: 0, halfX: 2, halfZ: 2 };
+      const collision: ObjectCollision = { address: 0x009c684c, offset: [0, 8.5, 0], type: 0, halfX: 2, halfZ: 2, flags: 0x38003 };
       const bml =
         area === 0x13 || area === 0x14
           ? 'bm_obj_ruins_pillar.bml'
@@ -806,7 +811,7 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x0207:
     case 0x0208: {
       const tex = area === 0x1a ? 'o_rock_jungle_04.xvm' : area === 0x1b ? 'o_rock_jungle_05.xvm' : 'o_rock_jungle_123.xvm';
-      if (o.type === 0x0206) return spec('TORockJungleS01', 'bm_o_rock_jungle.bml', [{ model: 0, textures: tex }], { collision: { address: 0x009c63a0, offset: [0, 0, 0], type: 0, halfX: 5, halfZ: 5 } });
+      if (o.type === 0x0206) return spec('TORockJungleS01', 'bm_o_rock_jungle.bml', [{ model: 0, textures: tex }], { collision: { address: 0x009c63a0, offset: [0, 0, 0], type: 0, halfX: 5, halfZ: 5, flags: 0x10003 } });
       if (o.type === 0x0207) return spec('TORockJungleM01', 'bm_o_rock_jungle.bml', [{ model: 2, textures: tex }], { collision: BOX(0x009c63cc, 12, 8, 0) });
       return spec('TORockJungleL01', 'bm_o_rock_jungle.bml', [{ model: 4, textures: tex }], { collision: BOX(0x009c63f8, 20, 10, 0) });
     }

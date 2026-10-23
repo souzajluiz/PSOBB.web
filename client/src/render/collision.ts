@@ -5,12 +5,14 @@
 //  - move() is a simplified unknown_player_touching_wall_maybe: one ray along
 //    the motion (stop when running nearly head-on into a wall, otherwise slide),
 //    then 8 radial rays around the new position to push out of walls.
-// `obstacles` holds the collision boxes of objects that block the player
-// (closed doors). The client keeps them in the object's box array
-// (InitEnemyCollisionBoxes_007b9a88, flag 1 set while the door is closed by
-// FUN_007b52c4 and cleared when it opens by FUN_007b52ec) and tests them with
-// the box-vs-box check at 0x00844540; here the player is a point with its
-// radius, which is enough to stop it walking through a door.
+// `obstacles` holds the collision boxes of the field objects that block the
+// player: closed doors, containers and jungle rocks (collectFieldSolids). The
+// client keeps them in the object's box array (InitEnemyCollisionBoxes_007b9a88,
+// bit 0 of the flag word at +0x18 enables a box: the door's is set while it is
+// closed by FUN_007b52c4 and cleared when it opens by FUN_007b52ec). The pair
+// test is CheckTwoHitboxCollision_007b5e40 (boxPairActive); the player's box is
+// a sphere of PLAYER_RADIUS (sphere-vs-box and sphere-vs-sphere, XZ). A box
+// blocks only when the step moves toward its centre (IsPlayerAboutToCollide_00694198).
 // `bodies` holds the round hitboxes of other characters (NPCs) that the
 // mover cannot walk into, with the client's rule (see bodyBlocks).
 // Constants were read from PsoBB.exe (.rdata) at the addresses the decomp uses.
@@ -57,8 +59,40 @@ export interface SegmentHit {
   flags: number;
 }
 
+// The flag word (+0x18) of a field object's box as its table holds it (the
+// door and rock boxes 0x10003, the containers 0x38003; see objectmodels.ts).
+// The player's box is PLAYER_BOX_FLAGS.
+export const OBJECT_BOX_FLAGS = 0x10003;
+// SinowberillChallengePlayer_InitializeSpawnData_00695f28 (0x00695f28) writes the
+// player's flag word at +0x770: 0x200b for class 1 (+0x8fc == 0), 0x2003 (+0x8fc
+// set), 0x604b / 0x6043 for class 3, 0x16043 for class 6 (ASSUMED: class 1 is the
+// normal player). Both class-1 words pass every field object's table.
+export const PLAYER_BOX_FLAGS = 0x200b;
+
+// CheckTwoHitboxCollision_007b5e40 (0x007b5e40), the flag gate before any shape
+// test: both boxes enabled (bit 0 = 1), they share bit 1 or bit 2, and no pair of
+// "exclusive" bits crosses between them: (8, 0x2000), (0x10, 0x4000), (0x20, 0x8000),
+// (0x40, 0x10000), (0x80, 0x40000). Bit 0x100 is not part of the pair gate: the
+// step test refuses a box that has it (IsPlayerAboutToCollide_00694198).
+export function boxPairActive(a: number, b: number): boolean {
+  if (!(a & b & 1)) return false;
+  if (!(a & b & 6)) return false;
+  for (const [x, y] of [
+    [0x8, 0x2000],
+    [0x10, 0x4000],
+    [0x20, 0x8000],
+    [0x40, 0x10000],
+    [0x80, 0x40000],
+  ] as const) {
+    if (a & x && b & y) return false;
+    if (b & x && a & y) return false;
+  }
+  return true;
+}
+
 // A blocking object box in world space: a box of half extents (halfX, halfZ)
-// rotated by `yaw` around its center, between yMin and yMax.
+// rotated by `yaw` around its center, between yMin and yMax. A sphere (sphere)
+// has radius halfX and no orientation; the test is in XZ.
 export interface Obstacle {
   key: number;
   x: number;
@@ -68,7 +102,15 @@ export interface Obstacle {
   halfX: number;
   halfZ: number;
   height: number; // the client's boxes are +-50 around the box center
+  sphere?: boolean; // type 0 (CONTAINER_SPHERE, the jungle rock): halfX is the radius
+  flags?: number; // the box's flag word (+0x18); OBJECT_BOX_FLAGS when absent
+  ex?: number; // the entity's origin (CheckPlayerCollisionWithEntities' 100-unit filter)
+  ez?: number;
 }
+
+// CheckPlayerCollisionWithEntities_007b62a0 takes an entity only when its origin is
+// within this squared XZ distance of the player (0x0097e3bc = 10000).
+export const PLAYER_COLLISION_RANGE_SQ = 10000;
 
 // A round hitbox in XZ (collision_box with unk2 = 0: CheckTwoHitboxCollision
 // _007b5e40 hands both boxes to CheckSphereOverlap_0083dbd4 with y = 0, so
@@ -232,8 +274,8 @@ export class CollisionWorld {
       if (pass === 1 && this.radialPush(nxp, ry, nzp, radius)) return stay;
     }
 
-    // 2b. Object boxes (closed doors) block the new position.
-    if (this.blockedBy(nxp, y, nzp, radius)) return stay;
+    // 2b. Object boxes (doors, containers, rocks) block the new position.
+    if (this.blockedBy(nxp, y, nzp, radius, [dx, dz])) return stay;
     // 2c. Character hitboxes (NPCs) ahead refuse the move.
     if (bodies && this.bodies.length) {
       const heading = Math.trunc((Math.atan2(dx, dz) * 0x10000) / (Math.PI * 2)) & 0xffff;
@@ -246,15 +288,35 @@ export class CollisionWorld {
     return { x: nxp, y: ny, z: nzp, blocked };
   }
 
-  // True when (x, y, z) with `radius` overlaps a blocking object box.
-  blockedBy(x: number, y: number, z: number, radius = PLAYER_RADIUS): Obstacle | null {
+  // The blocking object box that (x, y, z) with `radius` overlaps, or null.
+  // Without `step` the overlap alone counts; with it (the player's step, dx/dz)
+  // only a box whose centre lies ahead of the new position counts
+  // (IsPlayerAboutToCollide_00694198: dot(new position - centre, velocity) < 0).
+  blockedBy(x: number, y: number, z: number, radius = PLAYER_RADIUS, step?: readonly [number, number]): Obstacle | null {
     for (const o of this.obstacles) {
+      const flags = o.flags ?? OBJECT_BOX_FLAGS;
+      if (!boxPairActive(flags, PLAYER_BOX_FLAGS)) continue;
+      if (flags & 0x100) continue; // the step test passes a box with this bit (IsPlayerAboutToCollide)
+      if (o.ex !== undefined && o.ez !== undefined) {
+        const fx = o.ex - x, fz = o.ez - z;
+        if (fx * fx + fz * fz >= PLAYER_COLLISION_RANGE_SQ) continue;
+      }
       if (y + WALL_RAY_HEIGHT < o.y - o.height || y > o.y + o.height) continue;
       const dx = x - o.x, dz = z - o.z;
-      const c = Math.cos(-o.yaw), s = Math.sin(-o.yaw);
-      const lx = dx * c - dz * s;
-      const lz = dx * s + dz * c;
-      if (Math.abs(lx) <= o.halfX + radius && Math.abs(lz) <= o.halfZ + radius) return o;
+      if (o.sphere) {
+        const r = o.halfX + radius;
+        if (dx * dx + dz * dz >= r * r) continue;
+      } else {
+        const c = Math.cos(-o.yaw), s = Math.sin(-o.yaw);
+        const lx = dx * c - dz * s;
+        const lz = dx * s + dz * c;
+        // sphere against the rotated rectangle: the nearest point lies within the radius
+        const ex = lx - Math.max(-o.halfX, Math.min(o.halfX, lx));
+        const ez = lz - Math.max(-o.halfZ, Math.min(o.halfZ, lz));
+        if (ex * ex + ez * ez >= radius * radius) continue;
+      }
+      if (step && dx * step[0] + dz * step[1] >= 0) continue;
+      return o;
     }
     return null;
   }

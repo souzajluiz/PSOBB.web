@@ -58,7 +58,8 @@
 
 import * as THREE from 'three';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
-import type { CollisionWorld, Obstacle } from './collision.ts';
+import { OBJECT_BOX_FLAGS, type CollisionWorld, type Obstacle } from './collision.ts';
+import { objectModelFor, type ObjectCollision, type ObjectModelContext } from '../formats/objectmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { SEAL_DOOR, SealDoor, type CaptureDraw } from './traps.ts';
@@ -195,6 +196,58 @@ export function doorLamps(d: FieldDoor, unlocked: boolean, flags: ReadonlySet<nu
 // Boxes (newserv Map.cc names): item boxes, enemy boxes, the rare ones and
 // their jungle / Ruins / VR counterparts.
 const BOX_TYPES = new Set([0x0088, 0x0091, 0x0092, 0x0093, 0x0161, 0x0162, 0x0200, 0x0203, 0x02b0]);
+
+// Field objects that block the player without being doors: the containers
+// (BOX_TYPES, a breakable one stops blocking once broken) and the jungle rocks.
+// The Ancient pillar traps (0x0154 / 0x0167, sphere 0x009c684c) are not here:
+// their box follows the trap's rise, which is not traced.
+const SOLID_TYPES = new Set([...BOX_TYPES, 0x0206, 0x0207, 0x0208]);
+
+// A non-door field object with a collision box: its set entry's world place and
+// the box table it was built with (objectmodels.ts ObjectCollision).
+export interface FieldSolid {
+  index: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  collision: ObjectCollision;
+}
+
+// The solids of a floor (the placed objects whose model has a box and which are
+// not doors). Doors have their own list (collectFieldObjects).
+export function collectFieldSolids(placed: PlacedEntity[], ctx: ObjectModelContext): FieldSolid[] {
+  const out: FieldSolid[] = [];
+  for (const p of placed) {
+    if (p.entity.kind !== 'object' || !SOLID_TYPES.has(p.entity.type)) continue;
+    const spec = objectModelFor(p.entity, ctx);
+    if (!spec?.collision || spec.door) continue;
+    const [x, y, z] = p.world;
+    out.push({ index: p.entity.index, x, y, z, yaw: p.yaw, collision: spec.collision });
+  }
+  return out;
+}
+
+// The collision box of a solid in world space (the same frame as the doors':
+// the table's offset turned by the entity's yaw).
+export function solidObstacle(s: FieldSolid): Obstacle {
+  const c = s.collision;
+  const cos = Math.cos(s.yaw), sin = Math.sin(s.yaw);
+  return {
+    key: s.index,
+    x: s.x + c.offset[0] * cos + c.offset[2] * sin,
+    y: s.y + c.offset[1],
+    z: s.z - c.offset[0] * sin + c.offset[2] * cos,
+    yaw: s.yaw,
+    halfX: c.halfX,
+    halfZ: c.halfZ,
+    height: 50,
+    sphere: c.type === 0,
+    flags: c.flags,
+    ex: s.x,
+    ez: s.z,
+  };
+}
 
 const SWITCH_RADIUS: Record<number, number> = {
   0x0081: 20, // FUN_0062998c: +0xcc = 20.0
@@ -461,6 +514,7 @@ export class FieldObjects {
   triggers: FieldEventTrigger[] = [];
   boxes: FieldBox[] = [];
   private all: ReturnType<typeof collectFieldObjects>;
+  private solids: FieldSolid[];
   private sets = new Map<number, ObjectSet>(); // object index -> set entry
   private delayed = new Set<number>(); // object indices not constructed yet
   private constructed: Set<string>;
@@ -496,6 +550,7 @@ export class FieldObjects {
     this.collision = collision;
     this.constructed = constructed;
     this.all = collectFieldObjects(placed, ctx);
+    this.solids = collectFieldSolids(placed, { area: ctx.area, episode: ctx.episode });
     for (const p of placed) {
       if (p.entity.kind !== 'object') continue;
       this.sets.set(p.entity.index, p.entity);
@@ -582,8 +637,9 @@ export class FieldObjects {
     return !d.locked && d.flags.every((f) => this.flags.has(f));
   }
 
-  // Collision boxes of the doors that are closed right now (the client turns
-  // the door's box on in states 0 and 2 and off in states 4 and 5).
+  // Collision boxes of the blocking objects right now: the doors that are closed
+  // (the client turns the door's box on in states 0 and 2 and off in states 4 and
+  // 5), and the containers and rocks that are constructed and not broken.
   obstacles(): Obstacle[] {
     const out: Obstacle[] = [];
     for (const d of this.doors) {
@@ -603,7 +659,15 @@ export class FieldObjects {
         halfX,
         halfZ,
         height: 50,
+        flags: box?.flags ?? OBJECT_BOX_FLAGS,
+        ex: d.x,
+        ez: d.z,
       });
+    }
+    const broken = new Set(this.all.boxes.filter((b) => b.broken).map((b) => b.index));
+    for (const s of this.solids) {
+      if (this.delayed.has(s.index) || broken.has(s.index)) continue;
+      out.push(solidObstacle(s));
     }
     return out;
   }
