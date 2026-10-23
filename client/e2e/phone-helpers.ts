@@ -142,7 +142,14 @@ export async function makeCharacter(page: Page, stopAtName = false): Promise<voi
     }
     if (s.sub === 1) {
       if (s.text && stopAtName) return;
-      if (s.text) {
+      if (s.text && !(await page.locator('.lf-root input[name=name]').count())) {
+        // The desktop's canvas name editor (no HTML form): the keys type the name, Enter confirms it.
+        await page.keyboard.type(NAME, { delay: 30 });
+        await key(page, 'Enter');
+        await expect.poll(async () => (await createState(page))?.sub).toBe(0);
+        await key(page, 'ArrowDown');
+        await sleep(150);
+      } else if (s.text) {
         const input = page.locator('.lf-root input[name=name]');
         await expect(input).toBeVisible({ timeout: 10_000 });
         await shot(page, 'create-name-form');
