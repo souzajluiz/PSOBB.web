@@ -9784,3 +9784,29 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **ASSUMED:** the cloak shader (translucent, cool tint, screen-space shimmer; opacity 0.45); the advanced-effects setting is on (no option in the web); the view test ignores the 100 mesh radius and the frustum (left to three.js); the vision is checked per AI tick with the room from `roomAt` (the map section a point falls in).
 
 **Checks:** `node tests/traps.test.ts` all checks pass (sections 1-5); `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome (no Playwright, per the brief).
+## 2026-10-23: Floor item 0x9B particle and SE 0x571 as a positional sound
+
+**Report:** the item particle and the pickup SE were already wired (0x9B on appear and pickup, SE 0x571 at the picker), with a 2D `se()` and a plain "under 300" check. This entry ports the exe's positional SE path (FUN_00814298 with a position) into `audio/se.ts`, gives SE 0x571 its 3D buffer and cull, and adds the appear condition on the local player's floor. The 0x9B ring simulation (type 1) was already in `classic/particles.ts` since 2026-10-21, so the particle needed no change beyond that condition.
+
+**From PsoBB.exe** (virtual addresses; the dump's `play_directional_sound_effect` / `PlayDirectionalSFX` names are not all right, so the disassembly decides):
+- 6x59 -> `HandlePlayerPickupSuccess_005c4c1c` (called from 0x005c4b40 / 0x005c4b54 with `this` = the floor item found by id): if the floor is `g_CurrentFloor`, `create_particle_effect(item + 0x38, 0x9b)`, then `play_sound_effect_at_player(player, 0x571)`.
+- `play_sound_effect_at_player` (0x006904cc): if `player_is_on_same_floor_as_me` (0x006877b0), `FUN_00814298(0x571, player + 0x38, 0, 0)`. The position is the picker's, not the item's.
+- `create_item_box_on_ground` (0x005c4874): the 0x9B particle at item + 0x38 after `set_item_y_floating`, only when `g_CurrentFloor` == the item's floor, `FUN_005c9a18` is not 1 (the local player exists and is on another floor, 0x3f0), and `DAT_00a8d8c8 != 0` (the floor is set up, not a join sync).
+- `FUN_00814298(id, pos, volume, flags)` (0x00814298), the positional entry: slot = `FUN_0081443c(id)` for ids below 0x700, flags = `DAT_00a13b20[slot]`, d = `FUN_00836208(pos, listener)` (squared distance, under 0.025 is 0). Cull when `d >= 300` (0x00980af4) unless the area is 0xe / 0x1f / 0x2c (`FUN_00814498`, the current area `DAT_00aafc9c`). A position within 2 (0x00980afc) is 2D; so is one within 16 (0x00980af8) for slots 0x87..0xa7 except 0x88, 0x8a, 0x8f, 0x93, 0x94, 0xa1. Otherwise `FUN_00828e4c` makes a 3D buffer when `FUN_00829130(flags)` is 10: kind bits 0 or 10 and flag bit 0x8000. The 3D buffer has CTRL3D (0x10), `SetPosition(x, y, -z)`, `SetMinDistance(80)` (0x42a00000) and `SetMaxDistance(500)` (0x43fa0000).
+- Volume is the same as the 2D path (`FUN_00814298`: flags 0x7f00 attenuation, master, f^3 * 6400). Distance changes only the buffer's rolloff.
+- Listener (`DAT_00acb39c`): `FUN_00814168` each frame sets it to the local player's position (`FUN_0068d5a8(DAT_00a9c4f4)` +0x38) or, with no player, the camera's (`DAT_00a48a54` +0x178); the front is the camera's (target - position), (0, 0, 1) when there is no camera.
+- SE 0x571's slot flags are 0x2005a802: 3D bit set, kind 0, static attenuation 0x28 (40). The 0x00980b00..0x00980ae4 constants were read with `tools/exedata.py read` (0.0, 2.0, 16.0, 300.0, 1.0, 127.0, -1.0, 6400.0; 0.025 for the squared-distance floor).
+
+**Ported:**
+- `audio/se.ts`: `SePlayOptions.at` (a position) routes `play()` through `positionalMode` (cull / 2D / 3D), with `seGain3d` (min / clamp(d, min, max)) on the voice gain and a `StereoPannerNode` for the pan (`sePan`, the listener's right side). `setSeListener(pos, front)` holds the listener. `seDistance` is the exe's squared-distance rule. A voice that is 2D is unchanged.
+- `render/flooritems.ts`: the pickup calls `se(SE_PICKUP, { at: picker position })` after setting the listener from the local player (else the camera) and the camera's direction. The old "under 300" check and `SE_RANGE` are gone; the cull is in the SE engine. The appear particle needs `me.floor === this.floor` (or no local player), FUN_005c9a18.
+- `render/hitfx.ts`: header corrected. Type 1 entries run the ring simulation (not the type 0 one).
+
+**ASSUMED / UNCLEAR:**
+- The pan: DirectSound's software 3D pan is not read. The port uses the listener's right side (front x up) with a StereoPanner. The DS3D rolloff is taken as the inverse law, min / clamp(d, min, max); the exe's rolloff factor is not read (it is the DS default).
+- `FUN_00807ac0` (`DAT_00aafc9c`) is taken to be the area number `SePlayer.area` holds (set by `setArea`). The 0xe / 0x1f / 0x2c exemption is read from `FUN_00814498`, which reads EAX left by the call (the decompile's `in_EAX`); the disassembly was not traced.
+- The listener is set at the pickup, not each frame. That matches the exe's value at the event (no SE is played between frames).
+- The 3D `SetPosition` z sign (-z) is the exe's; the port's camera uses the same screen convention for the pan.
+- The 0x8144b0 path (looping / owner-keyed positional voices, the telepipe loop exemption 0xa0) is not ported here; no caller uses it yet for a pickup.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/drops.test.ts`, `node tests/items.test.ts` (with `vendor` linked for the newserv build, removed afterwards), `node tests/sound.test.ts` (new cases: the 0x571 flag bits and attenuation, `positionalMode` for the 2 / 300 / exempt-area / near-band / kind rules, `seDistance`, `seGain3d`, `sePan`), `node tests/hitfx.test.ts` all pass. Not run: Playwright / Chrome (per the brief).
