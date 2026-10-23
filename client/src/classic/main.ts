@@ -38,6 +38,7 @@ import { NameForm } from './nameform.ts';
 import { TitleScreen, type TitleAssets } from './title.ts';
 import { DEFAULT_TEXT, type Credentials, type MenuText } from './titleflow.ts';
 import { installWebControls, type WebControls } from '../ui/webcontrols.ts';
+import { startPadInput } from '../input/padinput.ts';
 import { installNoZoom } from '../ui/nozoom.ts';
 import { serverUrl } from '../net/server.ts';
 import { Capacitor } from '@capacitor/core';
@@ -743,6 +744,8 @@ async function main(): Promise<void> {
   referenceOverlay();
   // Fullscreen / mute buttons and the touch pad (browser conveniences).
   controls = installWebControls({ root: document.body, fullscreenElement: document.documentElement, keyTarget: canvas, chat: { kind: 'canvas', keyboard }, below: () => fit.below, tall: () => stageTall, fill: () => stageFill });
+  // The gamepad's controls become key events on the canvas (input/padinput.ts, the pad config's map).
+  startPadInput(canvas);
   controls.setPadSuppressed(current.touchPad === false);
   controls.setPadMenu(current.touchMenu === true);
   // Landscape lock after the fullscreen button (Android Chrome; iOS has none).

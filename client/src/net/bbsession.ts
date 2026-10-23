@@ -11,6 +11,7 @@ import { parseCharacterFile, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient } from './guildcard.ts';
 import { applyKeyConfig, keyConfigFromCharacter } from '../input/keyconfig.ts';
+import { applyPadConfig, padConfigFromCharacter } from '../input/padconfig.ts';
 
 export type TransportFactory = (port: number) => Promise<Transport>;
 
@@ -156,6 +157,8 @@ export class BBSession {
         this.fullCharacter = c.data;
         // The account's key config (system file at 0x2FB8 in the 00E7 record) becomes the live keys.
         applyKeyConfig(keyConfigFromCharacter(c.data));
+        // The account's pad config (system file joystick_config at 0x280, 00E7 at 0x3124).
+        applyPadConfig(padConfigFromCharacter(c.data));
         try {
           this.character = parseCharacterFile(c.data);
         } catch (err) {
