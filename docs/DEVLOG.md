@@ -11339,3 +11339,17 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - The local `npc_crp` sends `param1 = state` as before; the owner test uses the local creation instead (the exe's owner rule is param1 == own slot; the sender's param1 is not traced).
 
 **Not done:** the attack AI (command 3's action packet, target choice, attack timing; the AI object's update `SinowberillChallengeBoss_*` is not traced), the takeover (007b46f8: the TS has no owner-leave path), the challenge-mode opcodes. Stays open on the ROADMAP.
+
+## 2026-10-23: Recobox and Recon orientation (children's tilt)
+
+**What changed:** a Recobox and its Recons are drawn tilted about X by their kind: kind 1 (ceiling) by 0x8000 (flipped), kind 2 (wall) by 0x4000 (on its side), kind 0 upright. The tilt is applied after the yaw (the heading, +0x60). Code: `combat/enemyfsmep2d.ts` (`derolleTiltX`, `RecoboxAi.tiltX`, `ReconAi.tiltX`), `render/combat.ts` (the enemy tick sets `rotation.x` with `rotation.order = 'YXZ'`).
+
+**Exe:** the Recobox render (0x0058958c) runs translate (0x0082d838 on +0x38), yaw (0x0082d8bc with edx = +0x60, ecx = 0), then at 0x00589700..0x00589717 `if (+0x3e4 == 1) rotX(ecx = 0, edx = 0x8000)` / `if (== 2) rotX(0, 0x4000)` through 0x0082e9e4 (the current matrix). The Recon's draw (the dump's `recon_debug_display`, body after its debug labels) does the same: translate, yaw +0x60, the kind's X rotation, then the Recon node. Kind is `param6` clamped to 0..2 (`recon_apply_initdata_from_recobox`, 0x00589374), the same mapping the port has.
+
+**ASSUMED:**
+- Post-multiplied order (translate, then yaw, then tilt, the tilt applied to the vertices first): the NJ convention; the helpers were not traced to the matrix layout. `YXZ` in three.js gives Ry * Rx.
+- The Recon's draw is the `recon_debug_display` body: its address is not pinned (the Ghidra project's function boundaries do not cover it), so the vtable slot is not confirmed. The body draws the Recon's node with the kind, so it is taken as the Recon's own draw.
+
+**Not done (still open in the ROADMAP line):** Deldepth's disc. Traced, not ported: the disc (sub-object +0x384, model 1) is drawn by `DeldepthRenderDisc_0054793c` at (x, y + 0x3a4, z), yaw +0x60, scale (+0x3a8, +0x3ac, +0x3b0), with the state-1 / state-4 / state-5 float curves (`DeldepthUpdateState1_00547b70`, 0x00547e44..0x548404) writing those and +0x3a0 (1.0 when not fading); the body and disc motions 6..11 are in `DeldepthSetAnimation_0054a160`. Morfos's arm / wall and the Pofuilly tails are not traced here.
+
+**Checks:** `node tests/enemyfsmep2d.test.ts` (new: `derolleTiltX` 0 / pi / pi/2, a box and its Recon of each kind carry the tilt), `enemyfsmep2`, `enemyfsmep2a`, `enemyfsmep2b`, `enemyfsmep2c`, `enemies`, `combatdepth` pass; `cd client && npx tsc --noEmit -p .` clean (Node 24). Not run in Chrome.

@@ -17,6 +17,7 @@ import {
   ReconBomb,
   RecoboxAi,
   bamsOf,
+  derolleTiltX,
   epsilonTint,
   sweepPasses,
 } from '../client/src/combat/enemyfsmep2d.ts';
@@ -583,6 +584,22 @@ const box = (o: { params?: number[]; clones?: number; difficulty?: number; rng?:
   check(lifts[0][1] > lifts[0][0], 'floor: it rises');
   check(lifts[1][1] < lifts[1][0], 'ceiling: it comes down');
   check(moved[2] > 40 && moved[2] < 60 && moved[0] < 1, `wall: it slides out along the heading (${moved[2].toFixed(1)}), floor: it does not`);
+}
+{
+  // Orientation (0x0058958c / recon_debug_display): yaw, then X by 0x8000 for
+  // kind 1 and 0x4000 for kind 2; kind 0 is upright. The Recon keeps its kind.
+  near(derolleTiltX(0), 0, 'floor tilt is 0');
+  near(derolleTiltX(1), Math.PI, 'ceiling tilt is 0x8000 (pi)', 1e-9);
+  near(derolleTiltX(2), Math.PI / 2, 'wall tilt is 0x4000 (pi / 2)', 1e-9);
+  for (const kind of [0, 1, 2]) {
+    const b = new RecoboxAi({ x: 0, z: 0, angle: 0.3, params: [0, 0, 0, 1, 0, kind], cloneCount: 4, movement: rmv, attack: atk(25, 768, 15), rng: () => 0.5 });
+    near(b.tiltX, derolleTiltX(kind), `box kind ${kind} tilt`, 1e-9);
+    const rb = rig(b);
+    run(rb, [player(0, 300)], 250);
+    const rc = b.alive[0];
+    if (rc) near(rc.tiltX, derolleTiltX(kind), `recon kind ${kind} tilt`, 1e-9);
+    else check(false, `a Recon of type ${kind} for the tilt`);
+  }
 }
 {
   // Hover: 45 +- 2 plus the box's param1.
