@@ -8,7 +8,10 @@ import {
   format,
   memberFilter,
   Question,
+  memberColor,
+  TEAM_LIST_POS,
   TEAM_POS,
+  TeamMemberListWindow,
   TeamMenus,
   teamRowsDisabled,
   T15_TEAM,
@@ -520,6 +523,49 @@ async function openMaster(h: TeamHost) {
   await tick();
   none.draw(ctx, skin, 0);
   check(phases.length > 5, 'drew several phases without throwing');
+}
+
+// --- Home menu > Team Member List (0x25): the 09EA rows, colours, Cancel -----------------------
+{
+  const skin = { frame: {} as CanvasImageSource, bars: {} as CanvasImageSource };
+  eq(memberColor(0x10), '#8affa3', 'privilege 0x10 colour');
+  eq(memberColor(0x20), '#8affa3', 'privilege 0x20 colour');
+  eq(memberColor(0x30), '#5eb1ff', 'privilege 0x30 colour');
+  eq(memberColor(0x40), '#ff6d46', 'privilege 0x40 colour');
+  eq(memberColor(0), undefined, 'a member keeps the default colour');
+  eq(TEAM_LIST_POS, { x: 13, y: 256 }, 'list position (ASSUMED, get_gui_position(0x15))');
+
+  const { host: h } = host(team(PRIVILEGE.master));
+  const w = new TeamMemberListWindow(h, text);
+  eq(w.open, false, 'closed before the menu opens it');
+  w.show();
+  eq(w.open, true, 'open at once (08EA sent)');
+  eq(w.rows.length, 0, 'no rows until the 09EA answer');
+  await tick();
+  eq(
+    w.rows.map((r) => r.label),
+    ['<0001> Boss', '<0002> Lead', '<0003> Rook'],
+    'rows are "<rank> name" in the answer order',
+  );
+  eq(w.rows.map((r) => w.colorOf(r)), ['#ff6d46', '#5eb1ff', undefined], 'rows coloured by privilege');
+  w.draw(ctx, skin, 0);
+  check(w.key(k('Enter')) && w.open, 'Enter on a row keeps the window (action list not ported)');
+  eq(w.rows.length, 3, 'Enter changes no row');
+  check(!w.key(k('Escape')) && !w.open, 'Cancel closes');
+  w.draw(ctx, skin, 0);
+
+  // A late answer after closing is dropped.
+  const late = new TeamMemberListWindow(h, text);
+  late.show();
+  late.close();
+  await tick();
+  eq(late.rows.length, 0, 'answer after close is dropped');
+
+  // A failed request leaves the title and no rows; the window stays open.
+  const failing = new TeamMemberListWindow({ ...h, members: async () => Promise.reject(new Error('no 09EA')) }, text);
+  failing.show();
+  await tick();
+  check(failing.open && failing.rows.length === 0, 'failed request: window open, no rows');
 }
 
 console.log(failures ? `${failures} of ${checks} FAILED` : `ALL PASS (${checks} checks)`);

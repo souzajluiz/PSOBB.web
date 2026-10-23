@@ -40,7 +40,7 @@ import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
-import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
+import { Question, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
@@ -130,6 +130,8 @@ export class LobbyScreen implements Screen {
   private counter: InfoCounter;
   private party: PartyMenus | null = null;
   private team: TeamMenus | null = null;
+  // Home menu > Team > Team Member List (0x25, teammenu.ts TeamMemberListWindow).
+  private teamList: TeamMemberListWindow | null = null;
   // The info window [15:6] shown from Change SHIP / Change BLOCK until the
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
@@ -228,7 +230,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.guildCard || !!this.trade;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.trade;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -317,6 +319,11 @@ export class LobbyScreen implements Screen {
       // online map, the lobby is one); newserv refuses 6xA6 / D0..D4 outside a game, so
       // the proposal gets no answer there (see the DEVLOG entry of 2026-10-23).
       this.trade = new TradeMenu(this.tradeEnv());
+      this.menu.leafOpen = true;
+    } else if (id === 0x25 && this.hud.team) {
+      // handle_player_menu_select team_member_list_menu (classic/teammenu.ts): the list of the team's members.
+      this.teamList = new TeamMemberListWindow(this.hud.team, { t11: (i) => this.hud.text(0x0b, i), t15: (i) => this.hud.text(0x0f, i) });
+      this.teamList.show();
       this.menu.leafOpen = true;
     } else if (id === 6) {
       const full = () => this.hud.fullCharacter?.() ?? null;
@@ -464,6 +471,14 @@ export class LobbyScreen implements Screen {
       this.team.key(e);
       return;
     }
+    if (this.teamList) {
+      e.preventDefault();
+      if (!this.teamList.key(e)) {
+        this.teamList = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
       e.preventDefault();
       if (!this.counter.open) {
@@ -514,6 +529,7 @@ export class LobbyScreen implements Screen {
     this.trade = null;
     this.party?.close();
     this.team?.close();
+    this.teamList = null;
     this.closeOptions();
     this.menu.close();
   }
@@ -540,6 +556,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.counter.draw(ctx, this.hud.skin, extra));
       this.party?.draw(ctx, this.hud.skin, extra, bands.bottom);
       inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
+      inBand(ctx, bands.mid, () => this.teamList?.draw(ctx, this.hud.skin, extra));
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));

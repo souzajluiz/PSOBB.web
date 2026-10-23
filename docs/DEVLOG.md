@@ -13380,3 +13380,30 @@ Follow-up to "player trade window" above. Research pass on the three open items;
 **Tests:** `node tests/symbolchat.test.ts` passes (sizes, the spec and corner bits, the file block at 0x1ACC, the name marker, the 02ED body, parseCharacterFile, the 6x07 body and its rejections). Also passing in this worktree: options, guildcard, emotes, trade, setposition, shop. Not run here: the tests that import `classic/chat.ts` or `quest/questui.ts` fail in this worktree with "Cannot find package 'three'" (no `client/node_modules`; the fresh worktree lacks it), and `tsc` shows only the same missing-package errors (`three`, `@capacitor/*`, `ImportMeta.env`); nothing from the new files.
 
 **Left (in order):** (1) the symbol art: the port keeps no capture entries (the capture bit 9 is read and written, the picture is not); (2) the item window and the 12-entry list of the Home menu leaf (`ChatShortcutMenuWindow_Process_00758900`, its sub-windows and the phrase keyboard); (3) the chat bubble for 6x07 (the exe's bubble render, the corner objects and face parts from the symbol textures, not traced); (4) the in-game symbol chat key (End) sending through `sendSymbolChat`; (5) Chat > Shortcut (0x11), which shares the phrase list (ASSUMED).
+## 2026-10-23: Home menu > Team > Team Member List (0x25) ported; the other team leaves traced
+
+**Exe (PsoBB.exe, dump Psobb.exe-05112026.c):**
+- `handle_player_menu_select` (line 700118): the team leaves are `team_member_list_menu` 37 (0x25), `team_log_option_menu` 39 (0x27), `team_invite_menu` 41 (0x29), `team_info_menu` 43 (0x2b), `team_point_menu` 45 (0x2d). The enum (line 79629) matches the port's menu ids.
+- 0x25: `TeamMemberListMenu_Constructor_0074d8f4` (line 720781) builds the list `CreateChallengePlayerInfoWindowListWindow_0074ec58` (line 721925) at `get_gui_position(0x15)`, title unitxt (11, 0x156) (`ChatShortcutMenuWindow_CreateTitleObject` in its constructor, line 721950).
+- The rows come from the 09EA answer: `ChallengePlayerInfoWindowListWindow_UpdateItems_0074eddc` (line 722010) reads the count at +8, the privilege at +0x10, the rank at +0xc, the name at +0x18, stride 0x2c, the same record as `parseMemberList`. The row text is `s_ChallengePlayerItemFormat` ("<%04d> name", see `memberRowLabel`). Colours: privilege 0x10 / 0x20 0xff8affa3, 0x30 0xff5eb1ff, 0x40 0xffff6d46, else white.
+- The state machine (`ChallengePlayerInfoWindow_ProcessState_0074d9ac`, line 720824) picks a row and opens an action list (the title unitxt (11, 0x30), rows (11, 0x15c..0x15e), created by `CreateMenuList_0074ea28`, line 721815); that list's choice goes to states 0xb (keyboard control), 0x15 and 0x12 via `SetState_0074e9f4` (line 721788), and state 7 opens a confirm list (unitxt (11, 0x3a), (11, 0x15f / 0x160)). Not traced, so Enter on a row does nothing in the port.
+
+**Port changes:**
+- `client/src/classic/teammenu.ts`: `TeamMemberListWindow` (show: `host.members()` = 08EA, the answer fills the rows; close on Cancel or a new open; a late answer after a close is dropped; a failed request leaves the title and no rows), `memberColor`, `TEAM_LIST_POS` = (13, 256).
+- `client/src/classic/lobby.ts`: the 0x25 leaf (only with a team host) opens the window and sets `menu.leafOpen`; its key, draw and close are wired next to the counter's Team menus; it counts as busy.
+- `tests/teammenu.test.ts`: the colours, the position, the 09EA rows, Enter kept, Cancel, the dropped late answer, the failed request, a draw smoke test.
+
+**Traced, not ported:**
+- 0x2b (Team Info): the dump names the constructor `ChallengePlayerInfoWindow_Constructor_0074c23c` (line 720228), but it sets `g_GuildCardMenu_IsOpen` and its search list (`ShowSubmenu_0074c608`, line 720352) reads Guild Card search records (stride 0x188, the name at +0xc). The dump's name is suspect: the window's content is not established. Not ported.
+- 0x27 (Team Log) and 0x29 (Invite) and 0x2d (Point Regist): their constructors are not traced yet (dispatch lines 700380..700420: `GameListMenu_Constructor_0074d5e8` (0x27), `ChallengeMenuWindow_Constructor_0074c860` (0x29), `TeamPointMenu` at 0x2d uses `ChallengePlayerInfoWindowListWindow_Constructor_0074f1e8`). Invite should use the 03EA / 04EA packets in `net/team.ts` (`addMemberPacket`, `TeamClient.addMember`), but the exe's window was not read.
+
+**ASSUMED:**
+- The window's position is `get_gui_position(0x15)` = (13, 256), read statically from the table at 0x00971f40 (`tools/exedata.py read 0x00971fe8 f 2`). The table is not checked against a runtime write: entry 0x1b reads (200, 256) statically while the port's main menu uses (28, 85) at run time, so some entries change while the game runs.
+- 08EA is sent when the window opens (the exe's sender site was not found by name in the dump).
+- The width is the widest row or the title plus 2 * INSET; the 8 visible rows are the PickList's.
+
+**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 107 checks), `node tests/lobbymenu.test.ts` (passes), `client` `tsc --noEmit -p .` clean (the worktree had no `client/node_modules`; a symlink to the main checkout's was used for the run and is not part of the commit).
+
+**Not checked:** a Chrome view of the window (the brief says not to run Playwright); the position above is the main thing to confirm in a render.
+
+**Left:** Enter on a row (the exe's action list and its states 0xb / 0x12 / 0x15); Team Info 0x2b (confirm the dump's name against a Ghidra decompile of 0074c23c, or its caller); Team Log 0x27, Invite 0x29, Point Regist 0x2d (trace their windows; Invite then sends 03EA / 04EA).
