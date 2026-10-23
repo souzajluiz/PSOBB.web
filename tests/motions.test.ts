@@ -9,6 +9,7 @@ import { sampleKeys } from '../client/src/formats/njmotion.ts';
 import {
   locomotionSlot,
   LOCOMOTION_FACTOR,
+  fieldLocomotion,
   MOTION_TYPE,
   PLAYER_MOTION_FILE,
   PLAYER_MOTION_NODES,
@@ -125,6 +126,52 @@ for (let cls = 0; cls < 12; cls++) {
     }
     if (g !== 'idle' && maxTurn < 0.3) fail(`${CLASS_NAMES[cls]} ${g}: bones barely move (${maxTurn.toFixed(2)} rad)`);
   }
+}
+
+// 4b. Field locomotion (FIELD_LOCOMOTION_TABLE): every weapon column is a loop
+//     inside the archive; column 0 is the town set's walk / idle / run (the
+//     field table reads the same records); a weapon column differs from it;
+//     a field pose plays on every class.
+{
+  const town = (cls: number, g: 'idle' | 'walk' | 'run') => townMotion(cls, locomotionSlot(cls, g));
+  for (let cls = 0; cls < 12; cls++) {
+    for (let w = 0; w < 19; w++) {
+      for (const g of ['idle', 'walk', 'run'] as const) {
+        const r = fieldLocomotion(cls, w, g);
+        if (r.index < 0 || r.index >= motions.count) fail(`field ${CLASS_NAMES[cls]} weapon ${w} ${g}: entry ${r.index} out of range`);
+        if (r.mode !== 1 || r.next !== -1) fail(`field ${CLASS_NAMES[cls]} weapon ${w} ${g}: mode ${r.mode} next ${r.next}, expected a plain loop`);
+        if (!(r.speed > 0)) fail(`field ${CLASS_NAMES[cls]} weapon ${w} ${g}: speed ${r.speed}`);
+      }
+    }
+    for (const g of ['idle', 'walk', 'run'] as const) {
+      const f = fieldLocomotion(cls, 0, g);
+      const t = town(cls, g);
+      if (f.index !== t.index || f.speed !== t.speed || f.mode !== t.mode) fail(`field ${CLASS_NAMES[cls]} ${g} weapon 0: ${f.index}/${f.speed} is not the town ${t.index}/${t.speed}`);
+    }
+  }
+  // Weapon columns differ: HUmar with a weapon class 1 (walk 104, idle 159, run 111 in the exe's table).
+  const expect = (cls: number, w: number, g: 'idle' | 'walk' | 'run', index: number, speed: number) => {
+    const r = fieldLocomotion(cls, w, g);
+    if (r.index !== index || Math.abs(r.speed - speed) > 1e-6) fail(`field ${CLASS_NAMES[cls]} weapon ${w} ${g}: ${r.index}/${r.speed}, expected ${index}/${speed}`);
+  };
+  expect(0, 1, 'walk', 104, 1.2);
+  expect(0, 1, 'idle', 159, 1);
+  expect(0, 1, 'run', 111, 0.8);
+  expect(0, 3, 'idle', 159, 0.8);
+  expect(0, 3, 'run', 207, 0.8);
+  expect(0, 11, 'walk', 69, 1.4);
+  // A field pose: a weapon column plays on a model.
+  const L = classLetter(11);
+  const assets = parsePlayerAssets(11, new Uint8Array(readFileSync(join(DATA, `pl${L}nj.bml`))), new Uint8Array(readFileSync(join(DATA, `pl${L}tex.afs`))));
+  const model = buildPlayerModel(assets, DEFAULT_APPEARANCE);
+  const anim = new PlayerAnimator(model.partBones[0], assets.parts.get(`pl${L}bdy00.nj`)!, motions);
+  for (const w of [0, 5, 18]) {
+    anim.play(fieldLocomotion(11, w, 'walk'), LOCOMOTION_FACTOR.walk);
+    for (let t = 0; t < 30; t++) anim.update(1 / 30);
+    model.root.updateMatrixWorld(true);
+    if (model.partBones[0].some((b) => b.matrixWorld.elements.some((v) => !Number.isFinite(v)))) fail(`field RAmarl weapon ${w}: bone not finite`);
+  }
+  console.log('field locomotion: 12 classes x 19 weapon columns, column 0 = town set, weapon columns differ');
 }
 
 // Character screens: charamakingmot.bml (NMDM chunks), the 9 motion records

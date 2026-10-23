@@ -117,7 +117,8 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
 - [x] Player motions (`plymotiondata.rlc`: RelChunk + PRC + NJS_MOTION with short angle keys), town idle/walk/run tables from `PsoBB.exe`
 - [x] Player models in the lobby instead of capsules, idle/run animation, facing the movement
-- [ ] `proportion_x/y` scaling; field (per-weapon) motion tables; other town motions (emotes, sit)
+- [x] `proportion_x/y` (body and head morph, the scale channel of the 64 body nodes; DEVLOG 2026-10-16) and the field's per-weapon walk / idle / run motions (DEVLOG 2026-10-23)
+- [ ] Emotes (`6x58`, player input state 0x17, DEVLOG 2026-10-23) and sit: the emote slot table and the remote receive path are not ported yet
 
 ## Phase 5: game
 - [x] Collision (`*c.rel`): parser, ground probe, wall rays/slide (`render/collision.ts`)

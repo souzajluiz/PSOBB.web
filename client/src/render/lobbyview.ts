@@ -17,7 +17,7 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
-import { locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
+import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -137,6 +137,9 @@ function nameSprite(text: string): THREE.Sprite {
 export interface HeldWeaponSource {
   equipped(clientId: number): { type: number; skin: number } | null;
   visible(): boolean;
+  // The motion class of the player's weapon (0..18, 0 = none), which picks the field
+  // motions (formats/plymotion.ts fieldLocomotion). Absent: 0.
+  motionClass?(clientId: number): number;
 }
 
 interface Marker {
@@ -227,6 +230,8 @@ export class LobbyView {
   private assets = new Map<number, Promise<PlayerAssets>>();
   private motions: Promise<PlayerMotions> | null = null;
   private held: HeldWeaponSource | null;
+  // The players' gait uses the field motion set (weapon-dependent) instead of the town set.
+  private fieldMotions: boolean;
   private heldFiles: HeldWeaponFiles | null = null;
   private disposed = false;
 
@@ -247,10 +252,11 @@ export class LobbyView {
     viewer: MapViewer,
     lobby: Lobby,
     mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
-    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource; town?: boolean } = {},
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource; town?: boolean; field?: boolean } = {},
   ) {
     this.labels = options.labels ?? true;
     this.camera.town = options.town ?? false;
+    this.fieldMotions = options.field ?? false;
     this.viewer = viewer;
     this.lobby = lobby;
     this.showPlayer = options.showPlayer ?? (() => true);
@@ -493,6 +499,12 @@ export class LobbyView {
     if (!m.animator) return;
     if (this.attacking(m.clientId)) return;
     const cls = m.charClass;
+    if (this.fieldMotions) {
+      // Field: the weapon's column of the field tables (loop records, no chain).
+      const weaponClass = this.held?.motionClass?.(m.clientId) ?? 0;
+      m.animator.play(fieldLocomotion(cls, weaponClass, gait), LOCOMOTION_FACTOR[gait]);
+      return;
+    }
     m.animator.play(townMotion(cls, locomotionSlot(cls, gait)), LOCOMOTION_FACTOR[gait], (slot) => townMotion(cls, slot));
   }
 

@@ -291,6 +291,18 @@ export class GameView {
         const w = pmt && data1 ? pmt.getWeapon(data1[1], data1[2]) : undefined;
         return w ? { type: w.type, skin: w.skin } : null;
       },
+      // The weapon's motion class: ItemPMT's kind table (combat/attack.ts Motion class, ASSUMED).
+      motionClass: (clientId) => {
+        const pmt = this.combat.loadedItemPmt;
+        let data1: Uint8Array | null | undefined;
+        if (clientId === this.game.self?.clientId) {
+          const w = this.characterFile()?.inventory.find((i) => (i.flags & 8) !== 0 && i.data.data1[0] === 0);
+          data1 = w?.data.data1 ?? this.game.self?.weapon;
+        } else {
+          data1 = this.game.players.get(clientId)?.weapon;
+        }
+        return pmt && data1 ? (pmt.weaponKinds[data1[1]] ?? 0) : 0;
+      },
       visible: () => inUnsafeMap(this.current?.area ?? 0),
     };
   }
@@ -604,6 +616,9 @@ export class GameView {
       held: this.heldSource(),
       // Pioneer 2: the talk's target height (render/playercamera.ts). ASSUMED area test.
       town: AREA_NAMES[area] === 'Pioneer 2',
+      // The game's maps, Pioneer 2 included, use the field motion set (DAT_00a943cc = 1 in a
+      // game, 0 in the lobby: FUN_006a745c / FUN_006a7748). ASSUMED for Pioneer 2 (a game area).
+      field: true,
     });
     const objectBase = await this.objectBase(floor);
     // The quest's floor handler runs on a new thread when the player arrives

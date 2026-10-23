@@ -11098,3 +11098,22 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: field per-weapon locomotion; proportions re-checked against the exe
+
+**What changed:** in the field, a player's walk / idle / run now plays the field motion of its weapon column (`formats/plymotion.ts` `fieldLocomotion`, `FIELD_LOCOMOTION_TABLE`), not the town set. `render/lobbyview.ts` takes a `field` option (gameview passes it for every game map) and `HeldWeaponSource.motionClass` (gameview: ItemPMT's weapon kind of the equipped weapon, the same value as the attack's motion class). Proportions were already morphed (2026-10-16, `render/playermodel.ts`); this entry re-reads the blend against the exe and marks the roadmap line done.
+
+**Exe evidence (PsoBB.exe, Ghidra VAs):**
+- Field motion set vtable `0x00b39ec0`. Getters: `+0x50` `0x006a758c` returns 7 (walk), `+0x54` `0x006a7594` returns 8 (idle), `+0x70` `0x006a75cc` returns 15 (run). None checks the type, so every class uses the same slots.
+- Tables: `FUN_006a733c` returns the record pointer of `[type][weapon]` (`0x009cbeec`), `FUN_006a737c` the rlc index pointer (`0x009cbf04`), `FUN_006a73bc(type, weapon, slot)` the index. Both pointer tables hold 6 type pointers, each to 19 weapon pointers, each to 72 slots. A record is 16 bytes: `u16 mode, u16 next (0xffff none), u32 slot, f32 speed, u32 flags`. The decoded attack, cast and heavy rows (`combat/attack.ts`, `techniques.ts`, `playerdamage.ts`) match this layout.
+- Decoded walk / idle / run for `[type][weapon]`: all mode 1 (loop), no next. Column 0 equals the town set for all six types (e.g. type 0: 200 / 201 / 207, type 2: 506 / 487 / 508), and the other 18 columns differ (e.g. type 0 weapon 1: walk 104 at 1.2, idle 159, run 111 at 0.8).
+- Weapon class: `FUN_006a7b80` returns the motion set's class at `+4` when it is below 19 (0 otherwise). Where that value is written is not traced; ItemPMT's weapon kind (`combat/attack.ts`) is the ASSUMED source, as for the attacks.
+- Town vs field: `DAT_00a943cc` is 0 in the lobby (`FUN_006a7748`, the reset) and 1 in a game (`FUN_006a745c`); `FUN_00696454` builds the set from it (town class `0xc`, field class `0x24c`). Pioneer 2 is a game map, so it takes the field set. ASSUMED: the `FUN_006a745c` callers were not found, so "game" is inferred from PROTOCOL.md's note.
+
+**Proportions (re-checked, no code change):** `FUN_004ee534` (`0x004ee534`) loads the three shapes of the player, sets the weights (`FUN_004e94cc`) and blends (`FUN_004e7e50`, `FUN_004e7e54`). The blend loops 64 body nodes with position, scale and vertex chunks, and 5 head nodes with position and vertices only (no scale). `morphObject` does the same. The per-node flag mapping (bits 1 and 4 of the node flags, `nodeFlags`) is read from the decompile and is ASSUMED to match the stored flag word.
+
+**Ported:** `FIELD_LOCOMOTION_TABLE` (6 x 19 x [walk, idle, run], generated from the exe with the reading above; the generator is not committed), `fieldLocomotion`, the lobby's gait choice, the held-weapon motion class, `docs/PROTOCOL.md` field section.
+
+**Not ported (open):** emotes and sit. `6x58` is sent by `FUN_0069c74c` (`0x0069c74c`), which sends the emote id at player+0x3cc; its only caller is `FUN_0069c6c0` (`0x0069c6c0`), the handler of player input state 0x17 (`FUN_0069c7dc` sets player+0x348 = 0x17). The key or menu that sets +0x3cc, the receive path of a remote `6x58` and the emote motion slots are not traced. Sit is not located.
+
+**Checks:** `tests/motions.test.ts` section 4b (every field record is a loop inside the archive for all 12 classes and 19 weapon columns, column 0 equals the town walk / idle / run, the known weapon-1 and weapon-3 rows, a field walk plays on RAmarl for weapons 0, 5, 18). `tests/players.test.ts` and `tests/weaponorigin.test.ts` pass; `client` `tsc --noEmit` passes. Not run in Chrome or against newserv (no Chrome in this session).
