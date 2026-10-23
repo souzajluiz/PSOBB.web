@@ -173,3 +173,34 @@ console.log('playermove: ok');
   assert.equal(s.heading, 0x2000, 'second tick: heading half way to the leg (0x4000)');
   assert.ok(Math.abs(s.x - (1.0 + Math.sin((0x3000 / 0x10000) * Math.PI * 2))) < 1e-9, 'second tick moves along the half-way angle');
 }
+
+// The keyboard direction against the exe (unknown_handle_gamepad_input_move, dump line
+// 587209): the target heading is the camera yaw plus fpatan(lr, fb) (atan2(lr, fb)), with
+// the camera yaw g_pDefaultNPCCameraState->field_0x94 = y_rotation (apply_camera_angle_rotations,
+// dump line 254525: atan2 of the direction from the camera's target to its source). The exe's
+// fb is negative for forward (get_input_movement_speed, dump line 667077: move_forwards sets
+// -move_speed, move_left the negative lr, move_right the positive), so the port's forward-positive
+// fb is the exe's fb with the sign flipped. Checked by the leg direction of the launch tick.
+{
+  const yaws = [0, 0.7, Math.PI / 2, 2.5, -2.0];
+  const keys: Array<[number, number]> = [[0, 128], [0, -128], [128, 0], [-128, 0], [96, 64], [-64, 128]];
+  for (const yaw of yaws) {
+    for (const [lr, fb] of keys) {
+      const m = new PlayerMover(0, 0);
+      m.tick({ lr, fb, cameraYaw: yaw, keyboard: false }, free(m));
+      const exeHeading = yaw + Math.atan2(lr, -fb);
+      const dir = Math.atan2(m.x, m.z);
+      const diff = Math.atan2(Math.sin(dir - exeHeading), Math.cos(dir - exeHeading));
+      assert.ok(Math.abs(diff) < 2e-4, `yaw ${yaw} lr ${lr} fb ${fb}: leg ${dir} vs exe ${exeHeading}`);
+    }
+  }
+  // Forward is away from the camera (the camera sits at yaw, looking back at the player),
+  // right is screen right (camera looking along -(sin yaw, cos yaw): right = (cos yaw, -sin yaw)).
+  const fwd = new PlayerMover(0, 0);
+  fwd.tick({ lr: 0, fb: 128, cameraYaw: 0, keyboard: false }, free(fwd));
+  assert.ok(fwd.z < -0.99 && Math.abs(fwd.x) < 1e-9, 'forward with the camera at yaw 0 runs to -z (away from the camera at +z)');
+  const right = new PlayerMover(0, 0);
+  right.tick({ lr: 128, fb: 0, cameraYaw: 0, keyboard: false }, free(right));
+  assert.ok(right.x > 0.99 && Math.abs(right.z) < 1e-9, 'right with the camera at yaw 0 runs to +x');
+}
+console.log('playermove exe keyboard mapping: ok');

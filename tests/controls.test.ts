@@ -201,5 +201,24 @@ check(PALETTE_KEYS.map(([k, s]) => `${k}:${s}`).join(' ') === 'arrowleft:1 arrow
   check(c.chase === 1, 'alive again: a moving player starts the chase');
 }
 
+// The camera is ticked once per game tick on the player's LOGIC position (LobbyView.frame,
+// the exe's order: the move, then ProcessCameraChaseState_004d7a1c on that tick's position).
+// A player walking 1.0 a tick along +x with heading 0x4000 gets a camera that turns behind
+// it and stays there: the move per tick is the full step, so the chase runs at once.
+{
+  const c = new PlayerCamera();
+  c.angle = 0; // the camera starts to the north (+z) of the player
+  const heading = Math.PI / 2; // running toward +x
+  const pos = { x: 0, y: 0, z: 0 };
+  for (let t = 0; t < 120; t++) {
+    pos.x += 1.0;
+    c.tick(pos, heading);
+  }
+  const goal = heading + Math.PI;
+  check(Math.abs(Math.atan2(Math.sin(c.angle - goal), Math.cos(c.angle - goal))) < 1e-6, 'logic-tick chase: the camera ends behind the player');
+  check(c.chase === 1, 'logic-tick chase: the chase state stays on while the player moves');
+  check(c.source!.x < pos.x - 20, 'logic-tick chase: the camera source sits behind the player (-x)');
+}
+
 console.log(failures ? `${failures} failures` : 'camera and controls: all checks passed');
 process.exit(failures ? 1 : 0);
