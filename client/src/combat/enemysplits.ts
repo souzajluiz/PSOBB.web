@@ -826,8 +826,10 @@ export class PanHalfAi extends BrainBase {
 // Splits (both throw a copy into the first free slot, 10 above it, a random
 // direction, state 14): a physical hit by an attack of type 2 (0x00597914),
 // a technique of group 2, Gibarta / Rabarta (0x005987c8).
-// Flags 0xa000528 (states 0, 1, 2, 12, 13, 14) and the puddle morphs 7 / 8
-// (0, 2, 3, 14): ASSUMED untargetable and not drawn as the body.
+// Flags 0xa000528 (states 0, 1, 2, 12, 13, 14): ASSUMED untargetable.
+// The puddle (state 0, 0x00597b0c) is morph 7: its motion is DAT_009bfda0[rare]
+// (4 normal, 5 rare, the exe table), so the puddle is drawn as that pose; the
+// sink / crawl / thrown states keep the body hidden (ASSUMED).
 export const SLIME = {
   outer: 500,
   near: 200,
@@ -931,7 +933,11 @@ const SLIME_ANIM = {
   hurt: once(3, 0.8), // animation 5
 };
 
-const HIDDEN_STATES: ReadonlySet<SlimeState> = new Set(['puddle', 'sink', 'crawl', 'thrown']);
+const HIDDEN_STATES: ReadonlySet<SlimeState> = new Set(['sink', 'crawl', 'thrown']);
+// DAT_009bfda0[rare]: the puddle morph's BML motion (exe 0x00597b0c -> 0x00599c7c(7)).
+export const PUDDLE_MOTION = { normal: 4, rare: 5 } as const;
+// ASSUMED: the puddle pose plays at the wait rate (the spawn motion's 0.5).
+const PUDDLE_SPEED = 0.5;
 const UNTARGETABLE: ReadonlySet<SlimeState> = new Set(['puddle', 'rise', 'sink', 'crawl', 'flinch', 'thrown', 'dead']);
 
 export class SlimeAi extends BrainBase {
@@ -958,14 +964,20 @@ export class SlimeAi extends BrainBase {
   private vz = 0;
   private vy = 0;
 
-  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; rng?: () => number }) {
+  private readonly puddleMotion: number;
+
+  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; rare?: boolean; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.spawnX = opts.x;
     this.spawnZ = opts.z;
     this.power = Math.max(0, opts.movement?.fparam1 ?? 0);
+    this.puddleMotion = opts.rare ? PUDDLE_MOTION.rare : PUDDLE_MOTION.normal;
     this.current = SLIME_ANIM.wait;
     if (opts.thrown) this.throwFrom(opts.x, opts.z);
-    else this.timer = this.puddleWait();
+    else {
+      this.current = { index: this.puddleMotion, speed: PUDDLE_SPEED, loop: true };
+      this.timer = this.puddleWait();
+    }
   }
 
   get hidden(): boolean {
@@ -973,7 +985,7 @@ export class SlimeAi extends BrainBase {
   }
 
   get untargetable(): boolean {
-    return this.hidden;
+    return this.hidden || this.state === 'puddle';
   }
 
   get invulnerable(): boolean {
@@ -1016,7 +1028,7 @@ export class SlimeAi extends BrainBase {
     switch (s) {
       case 'puddle':
         this.timer = this.puddleWait();
-        this.play(out, SLIME_ANIM.wait);
+        this.play(out, { index: this.puddleMotion, speed: PUDDLE_SPEED, loop: true });
         break;
       case 'rise':
         this.level = 0;

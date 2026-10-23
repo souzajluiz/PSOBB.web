@@ -246,6 +246,23 @@ const mv = (f: number[], i: number[]) => ({ fparam1: f[0] ?? 0, fparam2: f[1] ??
   for (const i of [2, 3]) lead.children[i].state = 'dead';
   eq(lead.childGone(), true, '2 left: the ring leaves');
   eq(lead.state, 'gone', 'the Canane leaves without EXP');
+  // Later cycles (0x0053e25c): a freed ring out-fighter lasers again and then
+  // orbits; a freed in-fighter zaps; a standalone one lasers twice, then zaps.
+  const freed = new CanadineAi({ x: 0, z: 0, angle: 0, kind: 'ring', inFighter: false, movement: m, attack: atk(10), radius: 10, rng: () => 0.5 });
+  freed.free = true;
+  (freed as unknown as { choose(o: unknown): void }).choose({});
+  eq(freed.state, 'laser', 'a freed ring out-fighter picks the laser every cycle');
+  const freedIn = new CanadineAi({ x: 0, z: 0, angle: 0, kind: 'ring', inFighter: true, movement: m, attack: atk(10), radius: 10, rng: () => 0.5 });
+  freedIn.free = true;
+  (freedIn as unknown as { choose(o: unknown): void }).choose({});
+  eq(freedIn.state, 'zap', 'a ring in-fighter always zaps');
+  const lone = new CanadineAi({ x: 0, z: 0, angle: 0, kind: 'standalone', inFighter: false, movement: m, attack: atk(10), radius: 10, rng: () => 0.5 });
+  const picks: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    (lone as unknown as { choose(o: unknown): void }).choose({});
+    picks.push(lone.state);
+  }
+  eq(picks, ['laser', 'laser', 'zap'], 'a standalone Canadine: laser, laser, zap');
   // newserv: CANANE + 8 CANADINE_GROUP slots, Sinow + 4.
   const set = (type: number, params: number[] = [0, 0, 0, 0, 0, 0, 0]) => ({ type, index: 0, params, numChildren: 0, section: 0, wave: 0 }) as unknown as EnemySet;
   const s1 = expandEnemySets([set(0x84)], 1);

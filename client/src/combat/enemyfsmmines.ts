@@ -1298,10 +1298,12 @@ export class CanadineAi extends BrainBase {
     if (state === 'laser' || state === 'zap' || state === 'orbit' || state === 'boom') this.current = this.current ?? loop(4, 0.2);
   }
 
-  // 0x1ac: the attack choice.
+  // 0x0053e25c (the vtable slot 0x1ac): flag 0x100 (param1 0, an in-fighter)
+  // zaps (state 7); a ring member (0x3cc = 1) always lasers, freed or not
+  // (state 6); a standalone one lasers twice and then zaps (counter 0x474).
   protected choose(out: AiFrame): void {
     if (this.kind !== 'canane' && this.inFighter) this.enter(out, 'zap');
-    else if (this.kind === 'ring' && !this.free) this.enter(out, 'laser');
+    else if (this.kind === 'ring') this.enter(out, 'laser');
     else this.enter(out, this.cycle++ % 3 === 2 ? 'zap' : 'laser');
   }
 

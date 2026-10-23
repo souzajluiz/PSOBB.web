@@ -5172,8 +5172,10 @@ export class CombatView {
   private async spawnSlime(control: EnemyRuntime, c: SlimeControl, x: number, z: number, angle: number, thrown: boolean): Promise<EnemyRuntime | null> {
     const k = c.take();
     if (k < 0) return null;
-    const ai = new SlimeAi({ x, z, angle, movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null, thrown, rng: () => this.rng() });
-    const r = await this.spawnSplitChild(control, control.index + 1 + k, 'POFUILLY_SLIME', 0, { index: 10, speed: 0.5, loop: true }, ai, { x, z });
+    // Rare = param6 & 1 (ASSUMED, as the Rappy's): the puddle's morph motion.
+    const rare = (Math.trunc((control.instance.placed.entity as EnemySet).params[5] ?? 0) & 1) !== 0;
+    const ai = new SlimeAi({ x, z, angle, movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null, thrown, rare, rng: () => this.rng() });
+    const r = await this.spawnSplitChild(control, control.index + 1 + k, 'POFUILLY_SLIME', 0, ai.motion ?? { index: 10, speed: 0.5, loop: true }, ai, { x, z });
     if (!r) {
       c.died(k);
       return null;
