@@ -88,6 +88,24 @@ export function guardStance(on: boolean, distSq: number | null, charClass: numbe
 export interface LegState {
   slowed: boolean;
   target: { x: number; y: number; z: number } | null;
+  // Confused on an unsafe map: the heading is steered at random (modifyDirection).
+  confused: boolean;
+}
+
+// modify_direction (dump Psobb.exe-05112026.c line 556981, its VA not read): a movement input's
+// target heading (the stick or key direction plus the camera) is replaced, every
+// tick it is read, by a random heading while the player is confused in an
+// unsafe map. The random is the C rand() (0..32767, the constant 0x0093c750), and
+// the result is ROUND(rand / 32768 * 360 * 65536 / 360) BAMS (0x0093c748 = 65536,
+// 0x0093c74c = 360). Not confused: the heading is returned as it is, no rand call.
+export const RAND_MAX_C = 32767;
+const DIRECTION_NORMALIZATION = 32768; // 0x0093c750
+const DIRECTION_SCALE = 65536; // 0x0093c748
+const DEGREES_360 = 360; // 0x0093c74c
+export function modifyDirection(heading: number, confused: boolean, rand: () => number): number {
+  if (!confused) return heading;
+  const r = rand();
+  return Math.round(((r / DIRECTION_NORMALIZATION) * DEGREES_360 * DIRECTION_SCALE) / DEGREES_360) & 0xffff;
 }
 
 // The keyboard ramp (0x0070a60c): a held key moves its axis by 32 a poll up
@@ -142,6 +160,8 @@ export interface MoverInput {
   fb: number; // forward +, -128..128
   cameraYaw: number; // radians, the camera's chase angle (forward = -sin, -cos)
   keyboard: boolean; // sideways-only keys turn in place instead of walking off
+  // modify_direction on the input's target heading (BAMS); absent = no steering.
+  steer?: ((heading: number) => number) | undefined;
 }
 
 export type MoveFn = (dx: number, dz: number) => { x: number; z: number };
@@ -209,7 +229,8 @@ export class PlayerMover {
     const fz = -Math.cos(input.cameraYaw);
     const dx = fx * input.fb - fz * input.lr;
     const dz = fz * input.fb + fx * input.lr;
-    const want = toBams(Math.atan2(dx, dz));
+    const aim = toBams(Math.atan2(dx, dz));
+    const want = input.steer ? input.steer(aim) : aim;
     if (this.state === 'stand') {
       if (input.keyboard && Math.abs(input.fb) / AXIS < MOVE_THRESHOLD) {
         this.heading = clampAngleStep(this.heading, want, TURN_IN_PLACE);

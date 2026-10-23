@@ -25,7 +25,7 @@ import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
 import type { WeaponNodeRef } from '../combat/weaponorigin.ts';
-import { PlayerMover, fromBams, legSpeed, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
+import { PlayerMover, RAND_MAX_C, fromBams, legSpeed, modifyDirection, rampAxis, remoteStep, toBams, type Follower, type LegState } from './playermove.ts'; // exe: 1.5 / 1.0 units per tick
 import { buildPlayerModel, classLetter, loadPlayerAssets, type PlayerAssets } from './playermodel.ts';
 import { HeldWeaponFiles, type HeldWeapon } from './heldweapon.ts';
 
@@ -255,7 +255,7 @@ export class LobbyView {
   dead: () => boolean = () => false;
   // The local player's slow and guard inputs (render/combat.ts in the field;
   // the lobby has no status effects and no target, so 0.5 / 0.75 never apply).
-  legState: () => LegState = () => ({ slowed: false, target: null });
+  legState: () => LegState = () => ({ slowed: false, target: null, confused: false });
 
   constructor(
     viewer: MapViewer,
@@ -628,7 +628,9 @@ export class LobbyView {
           lr = this.keyLr;
           fb = this.keyFb;
         }
-        this.mover.tick({ lr, fb, cameraYaw: this.cameraYaw, keyboard: !stick }, (dx, dz) => this.stepPlayer(pos, dx, dz));
+        // Confusion steering (modify_direction): a random heading per tick in the field.
+        const steer = leg.confused ? (heading: number) => modifyDirection(heading, true, () => Math.floor(Math.random() * (RAND_MAX_C + 1))) : undefined;
+        this.mover.tick({ lr, fb, cameraYaw: this.cameraYaw, keyboard: !stick, steer }, (dx, dz) => this.stepPlayer(pos, dx, dz));
       }
       const gait = this.mover.state;
       const moving = gait !== 'stand';
