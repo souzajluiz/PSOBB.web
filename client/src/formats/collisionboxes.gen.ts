@@ -8,7 +8,7 @@
 // down the call graph (depth 4; virtual calls resolved through the stored vtable) in a function
 // that only this type reaches, or that exactly two types reach with a constant helper argument
 // (ASSUMED; shared: only helpers reached by three or more types), the last call when ambiguous.
-// 28 init sites are not decoded: their table or count is computed at run time.
+// 27 init sites are not decoded: their table or count is computed at run time.
 // Indexed sites (table = base + stride * [field], e.g. Booma 0x44) have one row set per variant.
 
 export interface CollisionBoxRow {
@@ -26,6 +26,7 @@ export interface CollisionIndex {
   disp: number; // the field's offset in that argument
   width: number; // 1, 2 or 4 bytes
   signed: boolean;
+  mask: number | null; // the index is ANDed with this (2^k - 1) first; null when not masked
   recordOffset: number | null; // the offset in the set record (factory argument = record + 4; arg 2 only)
 }
 
@@ -64,6 +65,9 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009a4eb0: [{ offset: [0, 0, 0], radius: 0.0010000000474974513, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009a4f70: [{ offset: [0, -5, 0], radius: 6, halfX: 0, shape: 0, flags: 0x8005 }],
   0x009a5100: [{ offset: [0, 0, 0], radius: 20, halfX: 0, shape: 0, flags: 0x8005 }],
+  0x009a512c: [{ offset: [0, 0, 0], radius: 10, halfX: 0, shape: 0, flags: 0x8003 }],
+  0x009a5158: [{ offset: [0, 0, 0], radius: 15, halfX: 0, shape: 0, flags: 0x8003 }],
+  0x009a5184: [{ offset: [0, 0, 0], radius: 10, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009a52c0: [{ offset: [0, 0, 0], radius: 0, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009a53e0: [{ offset: [0, 23, 29], radius: 10, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [36, 26, 0], radius: 15, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [-36, 26, 0], radius: 15, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 25, -35], radius: 18, halfX: 0, shape: 0, flags: 0x8003 }, { offset: [0, 26, 0], radius: 24, halfX: 0, shape: 0, flags: 0x8003 }],
   0x009a55c0: [{ offset: [0, 18, 0], radius: 20, halfX: 0, shape: 0, flags: 0x8003 }],
@@ -301,10 +305,11 @@ export const COLLISION_TABLES: Readonly<Record<number, readonly CollisionBoxRow[
   0x009f7740: [{ offset: [0, 12.5, 0], radius: 7.5, halfX: 0, shape: 0, flags: 0x8003 }],
 };
 
-// Every decoded call site (246; the unresolved ones are not listed).
+// Every decoded call site (247; the unresolved ones are not listed).
 export const COLLISION_SITES: readonly CollisionBoxSite[] = [
   { site: 0x00440488, func: 0x00440458, table: 0x009a4eb0, via: null },
   { site: 0x004413f5, func: 0x004413a4, table: 0x009a4f70, via: null },
+  { site: 0x004417e5, func: 0x0044161c, table: null, via: null },
   { site: 0x00441f97, func: 0x00441f1c, table: 0x009a5100, via: null },
   { site: 0x00443f17, func: 0x00443ef0, table: 0x009a52c0, via: null },
   { site: 0x004491fc, func: 0x004491cc, table: 0x009a53e0, via: null },
@@ -594,13 +599,13 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x0041: [{ factory: 0x00526cc4, areas: [1, 2, 19, 20, 36, 37, 38, 39, 40, 41, 42, 43, 46], table: 0x009bc17c, func: 0x00526d90, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0042: [{ factory: 0x00519144, areas: [1, 2, 19, 20], table: 0x009bb780, func: 0x005191c0, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
   0x0043: [{ factory: 0x0051b26c, areas: [1, 2, 21, 22], table: 0x009bb7ec, func: 0x0051b2e8, depth: 1, via: null, shared: false, ambiguous: true, index: null, variants: null }],
-  0x0044: [{ factory: 0x00535e50, areas: [1, 2], table: null, func: 0x00535f1c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009bc8e0, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bc8e0, 1: 0x009bc90c, 2: 0x009bc938 } }],
+  0x0044: [{ factory: 0x00535e50, areas: [1, 2], table: null, func: 0x00535f1c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bc8e0, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bc8e0, 1: 0x009bc90c, 2: 0x009bc938 } }],
   0x0045: [{ factory: 0x0060c518, areas: [1, 2, 23, 24, 25, 26, 27, 34, 36, 37, 38, 39, 40, 41, 42, 43], table: null, func: null, depth: null, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0046: [{ factory: 0x0060de48, areas: [2], table: 0x009c444c, func: 0x0060df14, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0060: [{ factory: 0x005248fc, areas: [3, 4, 16, 17, 19, 20], table: null, func: null, depth: null, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0061: [{ factory: 0x00529330, areas: [3, 4, 5, 19, 20, 35], table: 0x009bc1c0, func: 0x005293ac, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: true, index: null, variants: null }],
   0x0062: [{ factory: 0x0057f5e4, areas: [3, 4, 5], table: 0x009bef60, func: 0x0057f6b0, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
-  0x0063: [{ factory: 0x00512b04, areas: [3, 4, 5, 16, 17], table: null, func: 0x00512bd0, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009bb260, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bb260, 1: 0x009bb28c, 2: 0x009bb2b8 } }],
+  0x0063: [{ factory: 0x00512b04, areas: [3, 4, 5, 16, 17], table: null, func: 0x00512bd0, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bb260, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bb260, 1: 0x009bb28c, 2: 0x009bb2b8 } }],
   0x0064: [{ factory: 0x0059594c, areas: [4, 5], table: 0x009bfd68, func: 0x005997c8, depth: 4, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0065: [{ factory: 0x00582e44, areas: [3, 5, 21, 22], table: 0x009bf60c, func: 0x00586bf8, depth: 2, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0080: [{ factory: 0x00556600, areas: [6, 7, 21, 22], table: 0x009bdd5c, func: 0x00556600, depth: 0, via: null, shared: false, ambiguous: false, index: null, variants: null }],
@@ -615,7 +620,7 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x00a3: [{ factory: 0x00543ab8, areas: [9, 10], table: null, func: null, depth: null, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x00a4: [{ factory: 0x0053a3d8, areas: [9, 10, 16, 17], table: 0x009bcc20, func: 0x0053cd38, depth: 2, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
   0x00a5: [{ factory: 0x00536b80, areas: [8, 10, 19, 20], table: 0x009bcb84, func: 0x005394ec, depth: 2, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
-  0x00a6: [{ factory: 0x00551c70, areas: [8, 9, 10, 19, 20], table: null, func: 0x00551d3c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009bd7a0, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bd7a0, 1: 0x009bd7cc, 2: 0x009bd7f8 } }],
+  0x00a6: [{ factory: 0x00551c70, areas: [8, 9, 10, 19, 20], table: null, func: 0x00551d3c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bd7a0, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bd7a0, 1: 0x009bd7cc, 2: 0x009bd7f8 } }],
   0x00a7: [{ factory: 0x00533f90, areas: [8, 9, 10], table: 0x009bc77c, func: 0x00533f90, depth: 0, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x00a8: [{ factory: 0x00535408, areas: [8, 9, 10], table: 0x009bc850, func: 0x00535818, depth: 2, via: null, shared: true, ambiguous: false, index: null, variants: null }],
   0x00a9: [{ factory: 0x006074c8, areas: [9, 10], table: 0x009c3f00, func: 0x00607594, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
@@ -636,7 +641,7 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x00d2: [{ factory: 0x0060b180, areas: [18], table: 0x009c3ecc, func: 0x00606bc8, depth: 2, via: null, shared: true, ambiguous: false, index: null, variants: null }],
   0x00d3: [{ factory: 0x0060c250, areas: [18, 36, 37, 38, 39], table: 0x009c3ecc, func: 0x00606bc8, depth: 2, via: null, shared: true, ambiguous: false, index: null, variants: null }],
   0x00d4: [{ factory: 0x0059e01c, areas: [23, 24, 25, 26, 27], table: 0x009c0124, func: 0x005a1be8, depth: 3, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
-  0x00d5: [{ factory: 0x00575da4, areas: [23, 24, 25, 26, 27, 34], table: null, func: 0x00575e70, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009beb60, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009beb60, 1: 0x009beb8c, 2: 0x009bebb8 } }],
+  0x00d5: [{ factory: 0x00575da4, areas: [23, 24, 25, 26, 27, 34], table: null, func: 0x00575e70, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009beb60, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009beb60, 1: 0x009beb8c, 2: 0x009bebb8 } }],
   0x00d6: [{ factory: 0x00572b84, areas: [23, 24, 25, 26, 27, 35], table: 0x009be96c, func: 0x00572c00, depth: 1, via: null, shared: false, ambiguous: true, index: null, variants: null }],
   0x00d7: [{ factory: 0x005649e8, areas: [23, 24, 25, 26, 27, 34], table: 0x009be30c, func: 0x00564a64, depth: 1, via: 0x0051ff3c, shared: true, ambiguous: true, index: null, variants: null }],
   0x00d8: [{ factory: 0x00563134, areas: [23, 24, 25, 26, 27, 35], table: 0x009be138, func: 0x00563200, depth: 1, via: null, shared: false, ambiguous: true, index: null, variants: null }],
@@ -644,7 +649,7 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x00da: [{ factory: 0x0056bde8, areas: [23, 24, 25, 26, 27, 35], table: 0x009be560, func: 0x0056beb4, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x00db: [{ factory: 0x00549900, areas: [28, 29], table: 0x009bd2f0, func: 0x00549f70, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x00dc: [{ factory: 0x0054a6a0, areas: [28, 29, 35], table: 0x009bd424, func: 0x0054d8c8, depth: 2, via: null, shared: false, ambiguous: true, index: null, variants: null }],
-  0x00dd: [{ factory: 0x00553bb0, areas: [28, 29, 34], table: null, func: 0x00553c7c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009bd960, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bd960, 1: 0x009bd98c, 2: 0x009bd9b8 } }],
+  0x00dd: [{ factory: 0x00553bb0, areas: [28, 29, 34], table: null, func: 0x00553c7c, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009bd960, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009bd960, 1: 0x009bd98c, 2: 0x009bd9b8 } }],
   0x00de: [{ factory: 0x0057a0b8, areas: [28, 29], table: 0x009bef08, func: 0x0057c96c, depth: 2, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
   0x00df: [{ factory: 0x00588520, areas: [28, 29, 34, 35], table: 0x009bf790, func: 0x0058859c, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
   0x00e0: [{ factory: 0x00558530, areas: [35], table: 0x009bde40, func: 0x005585ac, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }, { factory: 0x005914d0, areas: [28, 29], table: 0x009bfb84, func: 0x00594bc0, depth: 3, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
@@ -671,11 +676,24 @@ export const ENEMY_COLLISION_LINKS: Readonly<Record<number, readonly EnemyCollis
   0x0112: [{ factory: 0x005b6b24, areas: [41, 42, 43, 46], table: 0x009c1d88, func: 0x005b6bf0, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
   0x0113: [{ factory: 0x005ab9ac, areas: [41, 42, 43, 46], table: 0x009c0ca0, func: 0x005aba28, depth: 1, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
   0x0114: [{ factory: 0x005b47b8, areas: [36, 37, 38, 39, 40, 41, 42, 43, 46], table: 0x009c1640, func: 0x005b4884, depth: 1, via: null, shared: false, ambiguous: false, index: null, variants: null }],
-  0x0115: [{ factory: 0x005a5c08, areas: [36, 37, 38, 39, 40, 46], table: null, func: 0x005a5cd4, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009c0500, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009c0500, 1: 0x009c052c, 2: 0x009c0558 } }],
+  0x0115: [{ factory: 0x005a5c08, areas: [36, 37, 38, 39, 40, 46], table: null, func: 0x005a5cd4, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009c0500, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009c0500, 1: 0x009c052c, 2: 0x009c0558 } }],
   0x0116: [{ factory: 0x005a673c, areas: [36, 37, 38, 39, 40, 46], table: 0x009c07c0, func: 0x005a9c58, depth: 2, via: 0x0051ff3c, shared: false, ambiguous: false, index: null, variants: null }],
-  0x0117: [{ factory: 0x005adac4, areas: [41, 42, 43, 46], table: null, func: 0x005adb90, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, base: 0x009c1020, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009c1020, 1: 0x009c104c, 2: 0x009c1078 } }],
+  0x0117: [{ factory: 0x005adac4, areas: [41, 42, 43, 46], table: null, func: 0x005adb90, depth: 1, via: null, shared: false, ambiguous: false, index: { arg: 2, disp: 0x3c, width: 2, signed: true, mask: null, base: 0x009c1020, stride: 44, recordOffset: 0x40 }, variants: { 0: 0x009c1020, 1: 0x009c104c, 2: 0x009c1078 } }],
   0x0118: [{ factory: 0x00602a14, areas: [36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46], table: 0x009c3ecc, func: 0x00606bc8, depth: 2, via: null, shared: true, ambiguous: false, index: null, variants: null }],
   0x0119: [{ factory: 0x0076a86c, areas: [44], table: null, func: null, depth: null, via: null, shared: false, ambiguous: false, index: null, variants: null }],
+};
+
+// Set type -> children built in a caller's loop (CHILD_CALLERS, hand-read and checked): child k
+// (0-based, creation order) takes the box table of variant k & mask.
+export interface CollisionChildLink {
+  callee: number; // the child's constructor
+  count: number; // children built by the loop
+  mask: number; // the constructor's `and` on the loop counter
+  variants: Readonly<Record<number, number>>; // variant -> table VA
+}
+
+export const CHILD_COLLISION_LINKS: Readonly<Record<number, CollisionChildLink>> = {
+  0x00c2: { callee: 0x0044161c, count: 24, mask: 3, variants: { 0: 0x009a5100, 1: 0x009a512c, 2: 0x009a5158, 3: 0x009a5184 } },
 };
 
 // Factory type id -> the box tables its constructor reaches (only types that reach a site).

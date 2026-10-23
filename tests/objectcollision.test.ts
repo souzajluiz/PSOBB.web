@@ -15,8 +15,8 @@ import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
 import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
-import { COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
-import { boxTargetable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
+import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
+import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -152,6 +152,16 @@ check(slotVariant({ set: { params: [0, 0, 0, 0, 0, 2, 0] } as never, child: 0 })
 // constructors do not overwrite it). The Pofuilly slime 0x64 table is 0x009bfd68 (the init is 4 deep).
 check(enemyBoxTable(0x83, null)?.table === 0x009bcecc && enemyBoxTable(0x84, null)?.table === 0x009bcecc, 'Canadine and Canane link to the shared constructor table 0x009bcecc');
 check(enemyBoxTable(0x64, null)?.table === 0x009bfd68, 'Pofuilly slime links to its table 0x009bfd68 (depth 4)');
+// Vol Opt 0xc2 (TBoss3Volopt, not the Dragon: that is 0xc0): its 24 monitors are built by the AI's
+// build state (0x0043c680, the loop at 0x0043c8a2..0x0043c94d), each through the monitor constructor
+// 0x0044161c with the loop counter as argument 4; the constructor masks it with 3 (0x004416b8), so
+// monitor k has the box row of shape k & 3. The root itself has no box table of its own.
+check(childBoxTable(0xc2, 0)?.table === 0x009a5100 && childBoxTable(0xc2, 5)?.table === 0x009a512c, 'Vol Opt monitors 0 and 5 take rows 0x009a5100 and 0x009a512c (shapes 0 and 1)');
+check(childBoxTable(0xc2, 10)?.table === 0x009a5158 && childBoxTable(0xc2, 23)?.table === 0x009a5184, 'Vol Opt monitors 10 and 23 take rows 0x009a5158 and 0x009a5184 (shapes 2 and 3)');
+check(childBoxTable(0xc2, 0)?.rows[0].radius === 20 && childBoxTable(0xc2, 2)?.rows[0].radius === 15, 'the big monitor (shape 0) is a radius 20 sphere, shape 2 is radius 15');
+check(childBoxTable(0xc2, 0)?.rows.every(boxTargetable) === true, 'the monitors\' boxes are targetable (flag 0x8000)');
+check(childBoxTable(0xc2, 24) === null && childBoxTable(0xc2, -1) === null && childBoxTable(0xc1, 0) === null && childBoxTable(null, 0) === null, 'a child past the count, a negative one, a type with no children and no type have no table');
+check(enemyBoxTable(0xc2, null) === null && CHILD_COLLISION_LINKS[0xc2]?.callee === 0x0044161c && CHILD_COLLISION_LINKS[0xc2]?.count === 24, 'the Vol Opt root has no box table; its children are the 24 monitors of 0x0044161c');
 check(isTargetable(0x44) === true, 'an enemy with no known table is targetable (ASSUMED)');
 check(isTargetable(0x42) === true, 'Monest has a box with flag 0x8000');
 check(boxTargetable({ flags: 0x8003 }) && !boxTargetable({ flags: 0x30003 }), 'flag 0x8000 makes a box targetable');
