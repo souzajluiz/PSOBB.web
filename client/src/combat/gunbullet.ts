@@ -17,10 +17,12 @@
 //    construct_generic_weapon 0x005e959c (movl $0x41980000, 0x208(%ecx) at
 //    0x005e975e, before the kind's own write). The countdown runs one game
 //    tick per frame (CountdownHelperConstructor 0x005e5b88).
-//  - the effect: create_gun_bullet_particle_effect (0x005e4678) spawns particle
-//    9 at the hand (create_particle_effect 0x0050b510) and a trail object from
-//    the hand to the aim point over the same frames (object 0x005e4704, body
-//    not decoded: ASSUMED shape).
+//  - the effect: the item's shot callback (+0x238, shotVisualOf). Default
+//    create_gun_bullet_particle_effect (0x005e4678) spawns particle 9 at the hand
+//    (create_particle_effect 0x0050b510) and the gun_bullet.xj object 0x005e4704 that
+//    flies from the hand to the aim point (render/guntracer.ts). The egg callback
+//    0x005e4264 (Handgun group, Samba, 0x1c, 0x8b) makes no muzzle and no model: the
+//    0x64-byte ShotEffect (0x005e407c) flies the same way, with particle 0x9f on it.
 // At arrival gun_bullet_collision_check (0x005c7120): the target is missed when
 // its hitbox centre moved at least sqrt(g_WeaponBulletCollisionRadiusSq) =
 // sqrt(64) = 8 in XZ since the shot (0x0092bcb4); the miss text shows only when
@@ -100,6 +102,12 @@ export interface GunShot {
   frames: number; // flight time, in game ticks
   wall: boolean; // a map wall stopped the shot
   bullet: boolean; // a bullet is created (a target, no wall): it can hurt
+  // The vector and the float frame count the shot callback gets (begin_gun_bullet_attack's
+  // fStack_14 = distance / speed, not rounded): `from - start`, where `from` is the target's
+  // centre, or `end` for an open shot and a wall. ASSUMED for the wall: the exe's point is the
+  // ground object's position, not the aim point.
+  dir: Vec3;
+  flight: number;
 }
 
 // One pellet: the aim point, the wall ray and the bullet's flight time.
@@ -112,12 +120,79 @@ export function planGunShot(
   speed = GUN_BULLET_SPEED_DEFAULT,
 ): GunShot {
   const end = target ? targetAimPoint(start, target.centre, target.radius) : openAimPoint(start, aim.heading, aim.angleBams, aim.horizontalDistance);
-  if (wallBlocks(start, end)) {
-    // The wall branch: the effect only (the ground object's distance; ASSUMED the hit point).
-    return { end, frames: bulletFrames(dist(start, end), speed), wall: true, bullet: false };
+  // The wall branch: the effect only (the ground object's distance; ASSUMED the hit point).
+  const wall = wallBlocks(start, end);
+  const from = target && !wall ? target.centre : end;
+  const d = dist(start, from);
+  return {
+    end,
+    frames: bulletFrames(d, speed),
+    wall,
+    bullet: !!target && !wall,
+    dir: { x: from.x - start.x, y: from.y - start.y, z: from.z - start.z },
+    flight: d / speed,
+  };
+}
+
+// The shot's visual (the item's shot callback at +0x238, written by the inner ctor):
+//  - 'default': 0x005e4678 (create_gun_bullet_particle_effect): the muzzle particle 9 at the
+//    hand and the gun_bullet.xj object of the trail (render/guntracer.ts);
+//  - 'egg': 0x005e4264, the Handgun group's and the others' callback: no muzzle particle and no
+//    bullet model; the effect object ShotEffect below, with particle 0x9f on it.
+export type ShotVisual = 'default' | 'egg';
+// The kinds whose inner ctor writes 0x005e4264 (kindmap of the item ctors): the Handgun ctor
+// group 6 (ctor 0x005f3380, also 0x44, 0xaf, 0xe8), 0x1c (ctor 0x005f1188), the Samba Maracas
+// 0x48 (ctor 0x005fc2fc) and 0x8b (ctor 0x005eb05c). Only the guns in GUN_KINDS fire at all.
+const EGG_SHOT_KINDS: ReadonlySet<number> = new Set([6, 0x1c, 0x44, 0x48, 0x8b, 0xaf, 0xe8]);
+export const shotVisualOf = (kind: number): ShotVisual => (EGG_SHOT_KINDS.has(kind) ? 'egg' : 'default');
+
+// The egg effect (0x005e4264 -> 0x005e407c -> ctor 0x005e4158, a 0x64-byte object, vtable
+// 0x00b0ff6c). Its particle is particleentry.dat entry 0x9f ("egg_bullet": type 0, rate 0.5 per
+// frame, life 30 frames, colour cyan), made at the object's position with the instance flags
+// 0x44 (+0x60 = 4, | 0x40): the particle does not follow the object (no flag 0x10), the emitter
+// moves with it (the object's update copies its position into the particle, vtable slot 4,
+// 0x005e45e8) and stops when the object dies (its destructor 0x005e3eac sets the kill flag on
+// the handle). The object is not a bullet: it has no model and no hit (the arrival is the
+// bullet countdown of begin_gun_bullet_attack, unchanged).
+export const EGG_PARTICLE = 0x9f;
+export const EGG_INSTANCE_FLAGS = 0x44;
+const TIMER_END = -0.0078125; // _DAT_0092d52c
+
+// The egg object's state. The velocity is the unit direction times distance / frames (the
+// ctor's normalise and scale, 0x005e4158): dir / flight, i.e. the bullet speed per game tick.
+// The timer starts at `flight` (+0x34, a float) and each tick (update 0x005e400c) moves the
+// object by its velocity, then the timer drops by 1; the object dies when the timer is at or
+// below -1/128 (so after floor(flight) + 1 ticks: the last move goes a tick past the end). It
+// also dies when its shooter is gone; that tick still moves it (the owner check 0x005c57ac).
+export class ShotEffect {
+  pos: Vec3;
+  readonly vel: Vec3;
+  private timer: number;
+  private dead = false;
+
+  constructor(start: Vec3, dir: Vec3, flight: number) {
+    this.pos = { ...start };
+    this.vel = { x: dir.x / flight, y: dir.y / flight, z: dir.z / flight };
+    this.timer = flight;
   }
-  if (!target) return { end, frames: bulletFrames(dist(start, end), speed), wall: false, bullet: false };
-  return { end, frames: bulletFrames(dist(start, target.centre), speed), wall: false, bullet: true };
+
+  // The exe makes the object only when the float is not 0 (0x005e407c; flights are >= 0 here).
+  static make(start: Vec3, dir: Vec3, flight: number): ShotEffect | null {
+    return flight > 0 && Number.isFinite(flight) ? new ShotEffect(start, dir, flight) : null;
+  }
+
+  get alive(): boolean {
+    return !this.dead;
+  }
+
+  // One game tick of the object (0x005e400c).
+  tick(ownerAlive: boolean): void {
+    if (this.dead) return;
+    if (!ownerAlive) this.dead = true;
+    this.pos = { x: this.pos.x + this.vel.x, y: this.pos.y + this.vel.y, z: this.pos.z + this.vel.z };
+    this.timer -= 1;
+    if (this.timer <= TIMER_END) this.dead = true;
+  }
 }
 
 // gun_bullet_collision_check: the target moved too far from the shot's position.

@@ -87,18 +87,56 @@ async function installHooks(page: Page): Promise<void> {
     const origShot = c.gunShot;
     c.gunShot = function (this: any, ...args: any[]) {
       const before = this.tracers?.live?.length ?? 0;
+      const effectsBefore = this.shotEffects?.length ?? 0;
       const r = origShot.apply(this, args as any);
       const after = this.tracers?.live?.length ?? 0;
-      log.push({ t: 'shot', pellets: after - before, hp: sumHp() });
-      // Test hook for the flight screenshot: the bullets of this shot are held at the middle of
-      // their flight (their tick and frame are stopped) until the screenshot is taken.
+      // A pellet is a trail (default visual) or an egg object (the Handgun group's visual).
+      const newEggs = (this.shotEffects?.length ?? 0) - effectsBefore;
+      log.push({ t: 'shot', pellets: after - before + newEggs, hp: sumHp() });
+      // Test hook for the flight screenshot: the bullets of this shot are held in flight (their
+      // tick and frame are stopped) until the screenshot is taken. The trails are held at the
+      // middle of their flight; the egg objects (the Handgun group's shot, render/combat.ts
+      // eggShot) one tick short of their arrival, with their particles' steps stopped so the trail stays on screen.
       const tr = this.tracers;
-      if ((window as any).__gunFreezeNext && tr) {
+      if ((window as any).__gunFreezeNext) {
         (window as any).__gunFreezeNext = false;
-        for (const t of tr.live.slice(before)) t.ticks = Math.ceil(t.total / 2);
-        tr.frame(0);
-        tr.tick = () => {};
-        tr.frame = () => {};
+        if (tr) {
+          for (const t of tr.live.slice(before)) t.ticks = Math.ceil(t.total / 2);
+          tr.frame(0);
+          tr.tick = () => {};
+          tr.frame = () => {};
+        }
+        const eggs = (this.shotEffects ?? []).slice(effectsBefore);
+        for (const e of eggs) {
+          const v = Math.hypot(e.vel.x, e.vel.y, e.vel.z) || 1;
+          const to = (args[3] as any[])[0];
+          const span = to ? Math.hypot(to.instance.root.position.x - args[2].x, to.instance.root.position.z - args[2].z) : 60;
+          const n = Math.max(0, Math.round(span / v) - 1);
+          for (let k = 0; k < n; k++) e.tick(true);
+          e.tick = () => {};
+        }
+        (window as any).__gunEggs = eggs;
+        const frozen: any[] = [];
+        for (const b of (this.fx?.bursts ?? []) as any[]) {
+          if (b.particles.emitters.some((em: any) => em.entry.id === 0x9f)) {
+            b.particles.step = () => {};
+            frozen.push(b.particles);
+          }
+        }
+        (window as any).__gunEggParticles = frozen;
+        // The side-on view for the screenshot: the camera stands across the flight, 120 units to
+        // one side of its midpoint, looking at it (the follow camera is wrapped in sideOn()).
+        const me = args[2];
+        const target = (args[3] as any[])[0];
+        if (target) {
+          const tp = target.instance.root.position;
+          const dx = tp.x - me.x;
+          const dz = tp.z - me.z;
+          const len = Math.hypot(dx, dz) || 1;
+          const mx = (me.x + tp.x) / 2;
+          const mz = (me.z + tp.z) / 2;
+          (window as any).__gunSide = { cam: [mx - (dz / len) * 120, me.y + 60, mz + (dx / len) * 120], look: [mx, me.y + 25, mz] };
+        }
         (window as any).__gunFrozen = true;
       }
       return r;
@@ -251,6 +289,44 @@ function flightShot(info: TestInfo, weapon: string): string {
   return join(dir, file);
 }
 
+// The flight screenshot's side-on view: the game's frame camera is wrapped (onFrame runs the
+// follow camera, then this) and set to __gunSide, a camera across the flight. Nothing else changes.
+async function sideOn(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as any;
+    const v = w.classicGame.view.combat.viewer;
+    const side = w.__gunSide;
+    if (!v || !side) return;
+    const orig = v.onFrame ?? null;
+    w.__gunSideOrig = orig;
+    v.onFrame = (dt: number, keys: any) => {
+      orig?.(dt, keys);
+      v.camera.position.set(side.cam[0], side.cam[1], side.cam[2]);
+      v.camera.lookAt(side.look[0], side.look[1], side.look[2]);
+      v.controls.target.set(side.look[0], side.look[1], side.look[2]);
+    };
+  });
+}
+
+// Releases the frozen flight and the side-on view (sideOn): trails, egg objects, egg particles, camera.
+async function releaseFlight(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as any;
+    const combat = w.classicGame.view.combat;
+    if (combat.tracers) {
+      delete combat.tracers.tick;
+      delete combat.tracers.frame;
+    }
+    for (const e of w.__gunEggs ?? []) delete e.tick;
+    for (const p of w.__gunEggParticles ?? []) delete p.step;
+    w.__gunEggs = null;
+    w.__gunEggParticles = null;
+    if (w.__gunSide && combat.viewer) combat.viewer.onFrame = w.__gunSideOrig ?? null;
+    w.__gunSide = null;
+    w.__gunFrozen = false;
+  });
+}
+
 const swingCount = (page: Page) => page.evaluate(() => (window as any).__gun.log.filter((e: Entry) => e.t === 'swing').length as number);
 
 const idle = (page: Page) => page.evaluate(() => !((window as any).classicGame.view.combat.attack?.active ?? false));
@@ -349,15 +425,9 @@ test('guns: the swings, bursts, pellets and bullet arrivals of the five weapons 
         ? page
             .waitForFunction(() => (window as any).__gunFrozen === true, undefined, { timeout: 8000, polling: 5 })
             .catch(() => undefined)
+            .then(() => sideOn(page))
             .then(() => page.screenshot({ path: flightShot(info, w.name) }))
-            .then(() =>
-              page.evaluate(() => {
-                const tr = (window as any).classicGame.view.combat.tracers;
-                delete tr.tick;
-                delete tr.frame;
-                (window as any).__gunFrozen = false;
-              }),
-            )
+            .then(() => releaseFlight(page))
         : null;
 
       // Swing 2: the armed press of swing 1 queued it (its hit opened the window). The enemies

@@ -14,6 +14,8 @@ import {
   pelletCount,
   planGunShot,
   SHOT_ANGLES_BAMS,
+  ShotEffect,
+  shotVisualOf,
   targetAimPoint,
 } from '../client/src/combat/gunbullet.ts';
 import * as THREE from '../client/node_modules/three/build/three.module.js';
@@ -170,6 +172,43 @@ check(bulletTextureIndex(0xe9, 7) === 1, 'classes 0xe8..0xeb: variant 1');
   const m = scene.children[0];
   check(near(m.rotation.y, Math.PI / 2) && near(m.rotation.x, 0) && m.rotation.z === 0 && m.rotation.order === 'YXZ', 'toward +x: yaw 90 degrees, Y X Z order');
   tr.dispose();
+}
+
+// The shot callback per kind (the item's +0x238): 0x005e4264 (egg) for the Handgun group,
+// 0x1c, the Samba Maracas and 0x8b; 0x005e4678 (default) for the rest.
+for (const k of [6, 0x1c, 0x44, 0x48, 0x8b, 0xaf, 0xe8]) check(shotVisualOf(k) === 'egg', `kind ${k.toString(16)} fires the egg callback`);
+for (const k of [7, 8, 9, 0x83]) check(shotVisualOf(k) === 'default', `kind ${k.toString(16)} keeps the default callback`);
+
+// The egg effect of a target shot: the vector and the float frame count are the hand to the
+// hitbox centre (not the aim point), the velocity is the speed per tick (11 for the Handgun).
+{
+  const centre = { x: 0, y: 0, z: 60 };
+  const shot = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 0 }, { centre, radius: 0 }, () => false, 11);
+  check(shot.bullet && shot.frames === 5 && near(shot.flight, 60 / 11), `egg target shot: 5 frames, flight 60/11 (${shot.frames}, ${shot.flight})`);
+  check(shot.dir.x === 0 && shot.dir.y === 0 && shot.dir.z === 60, 'egg target shot: the vector runs to the centre');
+  const e = ShotEffect.make(O, shot.dir, shot.flight);
+  check(e !== null && near(e.vel.z, 11) && near(e.vel.x, 0) && near(e.vel.y, 0), 'egg velocity: 11 units a tick along the shot');
+  for (let i = 1; i <= 5; i++) e!.tick(true);
+  check(e!.alive && near(e!.pos.z, 55), `egg alive after 5 ticks at 55 (${e?.pos.z})`);
+  e!.tick(true);
+  check(!e!.alive && near(e!.pos.z, 66), `egg dies on tick 6 after one more move to 66 (${e?.pos.z}, alive ${e?.alive})`);
+  e!.tick(true);
+  check(near(e!.pos.z, 66), 'a dead egg does not move again');
+}
+// The owner's death kills the egg, and that tick still moves it.
+{
+  const e = ShotEffect.make(O, { x: 0, y: 0, z: 60 }, 60 / 11)!;
+  e.tick(false);
+  check(!e.alive && near(e.pos.z, 11), 'egg: a dead owner kills it, the tick still moves it one step');
+}
+// No flight, no object (0x005e407c tests the float against 0).
+check(ShotEffect.make(O, { x: 0, y: 0, z: 0 }, 0) === null, 'egg: a zero flight makes no object');
+// An open shot's vector runs to the open aim point; a wall shot's to the wall-stopped end; neither makes a bullet.
+{
+  const open = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 33 }, null, () => false, 11);
+  check(!open.bullet && near(open.flight, 3) && near(open.dir.z, 33), `open egg vector: 33 units at speed 11 (${open.flight})`);
+  const wall = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 33 }, { centre: { x: 0, y: 0, z: 60 }, radius: 0 }, () => true, 11);
+  check(wall.wall && !wall.bullet && near(wall.dir.z, 60), 'wall: the vector runs to the aim point (the radius-0 centre here), no bullet');
 }
 
 if (failures) {
