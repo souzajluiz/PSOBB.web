@@ -90,9 +90,9 @@ const source: DataSource = {
 const files = new ClientFiles(source);
 
 // Classes the set data uses that this client does not draw yet (see
-// docs/ROADMAP.md): TObjNpcEnemy (0x33, a stage NPC with no model of its own),
-// the NPC Hildebear (0x46) and the Episode 4 quest NPC (0x118).
-const NOT_YET = new Set([0x33, 0x46, 0x118]);
+// docs/ROADMAP.md): TObjNpcEnemy (0x33, the model is a stage NPC slot) and the
+// Episode 4 quest NPC (0x118, an NPC player of npcplayerchar.dat).
+const NOT_YET = new Set([0x33, 0x118]);
 // Every NPC type of the per-area factory table 0x009fba60 (dumped from the
 // exe: the humanoid classes plus the ones above).
 const NPC_FACTORY_TYPES = new Set([...NPC_CLASSES.map((c) => c.type), ...NOT_YET, ...NPC_ENEMY_TYPES]);
@@ -491,8 +491,9 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
 // 10. The enemy factories' quest NPCs: Rappy (0x45) takes the Rappy loader's
 //     BML (g_RappyBmlData: season by event, episode 4 sandlappy, ultimate _ap),
 //     model entry 0; the Chaos Bringer NPC (0xa9) takes the Chaos Bringer's
-//     BML (ultimate ModelA) with its wait row (njm 9, 0.8); the NPC types
-//     without a model (0x33, 0x46, 0x118) give none.
+//     BML (ultimate ModelA) with its wait row (njm 9, 0.8); the Hildebear NPC
+//     (0x46) takes the moja BML with row 0 (njm 0, 0.5); the NPC types
+//     without a model (0x33, 0x118) give none.
 {
   const npc = (type: number, p6 = 0): EnemySet => ({
     kind: 'enemy', index: 0, type, floor: 0, section: 0, position: [0, 0, 0], rotation: [0, 0, 0],
@@ -510,9 +511,16 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   check(enemyModelFor(npc(0xa9), ctx(1, 3, 0))?.bml === 'bm_ene_df2_bringer_a.bml', 'Chaos Bringer NPC ultimate takes ModelA');
   const motion = bringer?.parts[0]?.motion;
   check(motion?.index === 9 && Math.abs(motion.speed - 0.8) < 1e-6 && motion.loop === true, `Chaos Bringer NPC wait row: njm 9 at 0.8 (${motion?.index}, ${motion?.speed})`);
-  check(NPC_ENEMY_TYPES.has(0x45) && NPC_ENEMY_TYPES.has(0xa9) && !NPC_ENEMY_TYPES.has(0x46), 'NPC_ENEMY_TYPES: Rappy and Chaos Bringer only');
-  for (const t of [0x33, 0x46, 0x118]) check(enemyModelFor(npc(t), ctx(1, 0, 0)) === null, `NPC 0x${t.toString(16)} has no enemy model (not ported)`);
-  console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed})`);
+  check(NPC_ENEMY_TYPES.has(0x45) && NPC_ENEMY_TYPES.has(0xa9) && NPC_ENEMY_TYPES.has(0x46), 'NPC_ENEMY_TYPES: Rappy, Hildebear and Chaos Bringer');
+  // Hildebear NPC (0x46): the enemy's moja BML (ultimate _a), model entry 0, row 0 = motion 0 at 0.5.
+  const hilde = enemyModelFor(npc(0x46), ctx(1, 0, 0));
+  check(hilde?.bml === 'bm_ene_bm2_moja.bml' && hilde.name === 'TObjNpcMoja', `Hildebear NPC takes bm_ene_bm2_moja (${hilde?.bml})`);
+  check(hilde?.parts.length === 1 && hilde.parts[0]!.model === 0 && hilde.parts[0]!.textureArchive === undefined, 'Hildebear NPC: model entry 0, no rare texture archive');
+  const hm = hilde?.parts[0]?.motion;
+  check(hm?.index === 0 && Math.abs(hm.speed - 0.5) < 1e-6 && hm.loop === true, `Hildebear NPC motion row 0: motion 0 at 0.5 (${hm?.index}, ${hm?.speed})`);
+  check(enemyModelFor(npc(0x46), ctx(1, 3, 0))?.bml === 'bm_ene_bm2_moja_a.bml', 'Hildebear NPC ultimate takes the _a BML');
+  for (const t of [0x33, 0x118]) check(enemyModelFor(npc(t), ctx(1, 0, 0)) === null, `NPC 0x${t.toString(16)} has no enemy model (not ported)`);
+  console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Hildebear ${hilde?.bml} (motion ${hm?.index} at ${hm?.speed}), Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed})`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

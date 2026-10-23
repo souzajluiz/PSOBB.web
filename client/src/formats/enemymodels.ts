@@ -466,9 +466,9 @@ const RAPPY_BML = [
 export const NO_MODEL_TYPES = new Set([0xa3]);
 
 // Set types of the category 'npc' that the enemy loaders model (the quest NPCs
-// built by the enemy factories: Rappy 0x45, Chaos Bringer 0xa9). They are drawn
-// by the enemy layer (render/enemyview.ts), not by the NPC layer.
-export const NPC_ENEMY_TYPES: ReadonlySet<number> = new Set([0x45, 0xa9]);
+// built by the enemy factories: Rappy 0x45, Hildebear 0x46, Chaos Bringer 0xa9).
+// They are drawn by the enemy layer (render/enemyview.ts), not by the NPC layer.
+export const NPC_ENEMY_TYPES: ReadonlySet<number> = new Set([0x45, 0x46, 0xa9]);
 
 // The model of an enemy set entry, or null for types that draw nothing (the
 // Dark Gunner control enemy) or whose model is not decoded yet.
@@ -840,6 +840,18 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     case 0x45: {
       const rappy = enemyModelFor({ ...e, type: 0x41 }, ctx);
       return rappy ? spec('TObjNpcRappy', rappy.bml, [{ model: 0, motion: loop(6, 0.9) }]) : null;
+    }
+    // Hildebear NPC / Small Hildebear NPC (0x46, TObjNpcMoja in newserv): factory
+    // 0x0060de48, init 0x0060df14 (InitializeHildebearEnemyObject_0060df14 in the
+    // dump). It takes hildebear_bml_stuff, which init_hildebear_global_config (0x00516124)
+    // loads from the same descriptor as the enemy's moja BML: 0x009bb4f0, or
+    // 0x009bb540 (_a) on the ultimate floor. Model entry 0 with entry 0's texture
+    // list (unknown_get_njcm_chunks / njtl with index 0), motion row 0 of
+    // DAT_009c4478 = motion 0 at 0.5 (mode 1, next 0). The NPC's own registration
+    // of the stage NPC array (ids 0x32..0x34) is the enemy's, not drawn here.
+    case 0x46: {
+      const bml = pick('bm_ene_bm2_moja.bml', ctx);
+      return spec('TObjNpcMoja', bml, [{ model: 0, motion: loop(0, 0.5) }]);
     }
     // Chaos Bringer NPC (0xa9): factory 0x006074c8, init 0x00607594 with
     // g_ChaosBringerGlobalConfig (the same loader as the enemy, 0x009bcda8; ultimate
