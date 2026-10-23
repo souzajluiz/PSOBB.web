@@ -638,6 +638,30 @@ export interface BattleOptions {
 }
 
 // SinowberillChallengeEntity (state field +0x1c, next state +0x24, sub state +0x20).
+// The win particle (SinowberillChallengePlayer_HandleDetectionLogic_00689a74,
+// dump line 555440, asm 0x00689a74; the name is the community's). Each update of a
+// battle player, the exe checks: the battle phase (see below); the player's own slot
+// entry (word 0 = its id) has its second short (the place, word 2) at 0; the
+// target getter GetSinowberillChallengeTargetPlayer_006afc7c (asm 0x006afc7c) is
+// nonzero, which is the flag (opcode_ba_close_msg 1, opcode_unknownF889 0, the
+// battle start 1) and some slot with a player has a place other than 0; then
+// not invisible (+0x30 & 0x2000000), no stealth suit, and movement 0x408000 clear.
+// It then calls create_sdjz_particle(player +0x390, 0x114) (asm 0x00689b26).
+// The battle phase is unknown_is_in_battle_mode (asm 0x00687c48: the dword
+// 0xa942c0 == 1 and ValidateChallengePhaseIndex_006a8eb0 == 1).
+// The port keeps no invisibility, stealth or movement state of the players, so
+// those three checks always pass here (ASSUMED: nothing is hidden or cloaked).
+export const WIN_PARTICLE = 0x114;
+
+// The ids that get the win particle this update: the places (rankPlayers, place 0 =
+// first) when the flag is on and somebody is not first. Empty slots (id -1) never count.
+export function winParticleHolders(places: readonly PlaceEntry[], winFlag: boolean): number[] {
+  if (!winFlag) return [];
+  const present = places.filter((p) => p.id >= 0);
+  if (!present.some((p) => p.place !== 0)) return [];
+  return present.filter((p) => p.place === 0).map((p) => p.id);
+}
+
 export class BattleController {
   readonly setup: BattleSetup;
   private host: BattleHost;
@@ -947,6 +971,13 @@ export class BattleController {
   private rank(): PlaceEntry[] {
     const list = this.slots.flatMap((s, id) => (s.present ? [{ id, points: s.points, team: s.team }] : []));
     return rankPlayers(list, this.effective.teams === 1);
+  }
+
+  // The players that get the win particle this update (winParticleHolders). Nobody once
+  // the battle is finished.
+  winHolders(): number[] {
+    if (this.finished) return [];
+    return winParticleHolders(this.places, this.setup.winEffects);
   }
 
   // PrintResults: the ranking lines of a mid-battle announcement.

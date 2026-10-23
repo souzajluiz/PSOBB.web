@@ -155,6 +155,12 @@ export const REVIVE_FX_UPDATES = 200;
 export const SOUL_PARTICLE = 0xaf;
 export const SOUL_FX: readonly FxSpec[] = [{ id: SOUL_PARTICLE, frames: Infinity, dy: SOUL_DY }];
 
+// The battle win particle (quest/battle.ts winParticleHolders, the exe's
+// create_sdjz_particle(player +0x390, 0x114), flags 0x50): one emission following the
+// player, at its position (ASSUMED no height: the emitter takes the entity's position
+// block, +0x74, not a point above it), re-created on every update the player holds it.
+export const WIN_FX: readonly FxSpec[] = [{ id: 0x114 }];
+
 // The attribute table of EntityProcessStatusEffectParticle_007752dc and
 // EntityHitEntity_00773350: attribute -> particle.
 export const ATTRIBUTE_PARTICLE: Readonly<Record<number, number>> = { 1: 0xf1, 2: 0xf2, 4: 0xe3, 8: 0x10d };

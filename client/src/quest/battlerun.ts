@@ -205,6 +205,8 @@ export class BattleRun {
     this.lastHp = dmg.hp;
     this.wasDead = dmg.dead;
     c.tick();
+    // The win particle on each leader, every update while the flag holds (quest/battle.ts winHolders).
+    for (const id of c.winHolders()) this.opts.view.combat.winEffect(id);
     if (c.state === 'battle') this.tickTraps();
     if (this.hud) {
       this.hud.state.points = c.state === 'battle' ? this.points() : this.hud.state.points;

@@ -15,7 +15,7 @@ import { Game } from '../client/src/net/game.ts';
 import {
   BattleController, BattleRecords, BattleSetup, PlayerScore, assignTeams, baInitialFloor, build6x8F, build6xCF, build6xD0, build7D,
   decodeBattleRules, effectiveRules, encodeBattleRules, formatBattleTimer, localRestrictions, newBattleRules, parse7D, rankPlayers,
-  roundEven, shuffleStarts, trapNumber, weightFromRegs, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
+  roundEven, shuffleStarts, trapNumber, weightFromRegs, winParticleHolders, WIN_PARTICLE, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
   type Battle7D, type BattleHost,
 } from '../client/src/quest/battle.ts';
 import { QuestSession } from '../client/src/quest/session.ts';
@@ -243,6 +243,27 @@ eq(trapNumber(2, 3, 5), 2 * 0x50 + 3 * 0x14 + 5, 'trap number');
   const c = new BattleController({ setup, host });
   for (let i = 0; i < RULES_FRAMES * 3 + ACK_FRAMES + LOADING_FRAMES + 50; i++) c.tick();
   check(exited === true && sent.some((m) => m.what === 0 && m.phase === 5), 'alone: abort');
+}
+
+// --- the win particle (SinowberillChallengePlayer_HandleDetectionLogic_00689a74) -----------
+{
+  const places = rankPlayers([{ id: 0, points: 30 }, { id: 1, points: 10 }, { id: 2, points: 30 }], false);
+  eq(winParticleHolders(places, true), [0, 2], 'the first-place players get the win particle while someone is behind');
+  eq(winParticleHolders(places, false), [], 'the flag off: nobody');
+  eq(winParticleHolders(rankPlayers([{ id: 0, points: 5 }, { id: 1, points: 5 }], false), true), [], 'a tie for first with nobody behind: nobody');
+  eq(winParticleHolders([{ id: -1, place: 0, points: 0 }, { id: 3, place: 1, points: 0 }], true), [], 'an empty slot never counts');
+  eq(winParticleHolders([], true), [], 'no table yet: nobody');
+  // The controller reads the flag live: disable_win_pfx turns the particle off, enable_win_pfx on.
+  const setup = new BattleSetup();
+  const c = new BattleController({ setup, host: {} as BattleHost });
+  c.places = places;
+  eq(c.winHolders(), [0, 2], 'the controller: the win particle on the leaders');
+  setup.winEffects = false;
+  eq(c.winHolders(), [], 'the controller: disable_win_pfx clears it');
+  setup.winEffects = true;
+  c.finished = true;
+  eq(c.winHolders(), [], 'a finished battle: nobody');
+  eq(WIN_PARTICLE, 0x114, 'the particle id is 0x114');
 }
 
 // --- Game.create with the battle flag ------------------------------------------------------
