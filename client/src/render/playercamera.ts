@@ -106,8 +106,10 @@ export const LERP_SOURCE = Math.fround(0.67); // 0x3f2b851f
 const LERP_SOURCE_NEAR_WALL = Math.fround(0.05); // 0x3d4ccccd
 export const LERP_TARGET = Math.fround(0.289); // 0x3e93f7cf
 const LERP_SPEED = Math.fround(0.16); // 0x00909524 g_LerpSpeedFactor
-const LERP_JUMP_FROM = 5.0; // 0x00909510
-const LERP_JUMP = 12.0; // 0x00909520 g_MaxLerpDistance
+// 0x00909510 is a double (fcoml m64fp, opcode dc 15 at 0x004d63f7): 8 bytes
+// 00 00 00 00 00 00 14 40 = 5.0. A float read gives 0.0 (low dword) and is wrong.
+const LERP_JUMP_FROM = 5.0;
+const LERP_JUMP = 12.0; // 0x00909520 g_MaxLerpDistance (float)
 export const CAMERA_WALL_MASK = 0x901; // camera source rays
 export const CAMERA_SIGHT_MASK = 0x100; // CalculateCameraTargetWithCollision
 export const CAMERA_FOV_ANGLE = 0x36c1; // +0x54
