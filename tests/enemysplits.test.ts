@@ -265,6 +265,94 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   eq(t.state, 'rise', 'it lands and rises (1)');
 }
 
+// --- Pofuilly Slime: the body transform (SLIME_XF, 0x00596264 / 0x0059670c / 0x00596884) ---
+{
+  const near = [player(0, 40)];
+  const near5 = (v: number, want: number, what: string) => check(Math.abs(v - want) < 1e-6, `${what}: ${v} != ${want}`);
+  const fresh = () => new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5 });
+
+  // The puddle (0x00597b0c) is not drawn: alpha 0 (the body draw returns at alpha <= 0).
+  const p = fresh();
+  near5(p.view.alpha, 0, 'puddle: alpha 0');
+  near5(p.view.height, -2.5, 'puddle: height -2.5');
+  near5(p.view.sx + p.view.sy + p.view.sz, 0, 'puddle: scale 0');
+  eq(p.view.morph, 7, 'puddle: morph 7');
+  check(!p.view.tail, 'puddle: no tail');
+
+  // The thrown entry (0x00598740) is the same: alpha 0, scale 0.
+  const th = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  eq(th.state, 'thrown', 'thrown: state 14');
+  near5(th.view.alpha, 0, 'thrown: alpha 0');
+  near5(th.view.sx + th.view.sy + th.view.sz, 0, 'thrown: scale 0');
+
+  // Rise: the first frame (count 0, t 0): alpha 0, height -2.5, scale 2.5 / 0 / 2.5.
+  const r = fresh();
+  let n = 0;
+  while (r.state === 'puddle' && n++ < 100) r.tick(near);
+  eq(r.state, 'rise', 'rise: the puddle rose');
+  r.tick(near);
+  near5(r.view.alpha, 0, 'rise frame 0: alpha 0');
+  near5(r.view.height, -2.5, 'rise frame 0: height -2.5');
+  near5(r.view.sx, 2.5, 'rise frame 0: sx 2.5');
+  near5(r.view.sz, 2.5, 'rise frame 0: sz 2.5');
+  near5(r.view.sy, 0, 'rise frame 0: sy 0');
+  // Frame 5 (count 4, sin(0x4000) = 1, t = 4/30, f = 1): w = 0.1, sx = 2.3 * 1.1, sz = 2.3 * 0.9.
+  for (let i = 0; i < 4; i++) r.tick(near);
+  const t5 = 4 / 30;
+  near5(r.view.sy, t5, 'rise frame 4: sy = t');
+  near5(r.view.alpha, 2 * t5, 'rise frame 4: alpha 2t');
+  near5(r.view.height, -2.5 * (1 - t5), 'rise frame 4: height -2.5 (1 - t)');
+  near5(r.view.sx, (2.5 - 1.5 * t5) * 1.1, 'rise frame 4: sx = (2.5 - 1.5t)(1 + 0.1 sin)');
+  near5(r.view.sz, (2.5 - 1.5 * t5) * 0.9, 'rise frame 4: sz = (2.5 - 1.5t)(1 - 0.1 sin)');
+
+  // Sink (0x00596884): after the rise with nobody near, the sink starts at t = 1
+  // (height 0, alpha 1) and its frame 70 (count 99, t = 1 - 69/90) has the sink wobble.
+  const s = fresh();
+  n = 0;
+  while (s.state === 'puddle' && n++ < 100) s.tick(near);
+  n = 0;
+  while (s.state === 'rise' && n++ < 100) s.tick([]);
+  eq(s.state, 'sink', 'sink: a risen slime with nobody near sinks');
+  s.tick([]);
+  near5(s.view.sx, 1, 'sink frame 0: t = 1, sx 1');
+  near5(s.view.alpha, 1, 'sink frame 0: alpha 1');
+  near5(s.view.height, 0, 'sink frame 0: height 0');
+  for (let i = 1; i < 70; i++) s.tick([]);
+  eq(s.state, 'sink', 'sink: still sinking at frame 70');
+  const tk = 1 - 69 / 90;
+  near5(s.view.alpha, 2 * tk, 'sink frame 69: alpha 2t');
+  near5(s.view.height, -2.5 * (1 - tk), 'sink frame 69: height');
+  near5(s.view.sy, tk, 'sink frame 69: sy = t');
+  // count 99 << 12 = 0x3000 (3/16 of a turn): w = 0.15 * sin(67.5 deg).
+  const w = 0.15 * Math.sin((3 * Math.PI) / 8);
+  near5(s.view.sx, (2.5 - 1.5 * tk) * (1 + w), 'sink frame 69: sx = z (1 + w)');
+  near5(s.view.sz, (2.5 - 1.5 * tk) * (1 - w), 'sink frame 69: sz = z (1 - w)');
+
+  // The crawl (0x00597c3c): drawn at alpha 1, morph 8, no tail; the emerge (morph 9) has the tail.
+  const c = fresh();
+  n = 0;
+  while (c.state === 'puddle' && n++ < 100) c.tick(near);
+  n = 0;
+  while (c.state === 'rise' && n++ < 100) c.tick(near);
+  eq(c.state, 'crawl', 'crawl: a risen slime with a player near crawls');
+  near5(c.view.alpha, 1, 'crawl: alpha 1');
+  eq(c.view.morph, 8, 'crawl: morph 8');
+  check(!c.view.tail, 'crawl: one model, no tail');
+  n = 0;
+  while (c.state === 'crawl' && n++ < 500) c.tick(near);
+  eq(c.state, 'emerge', 'emerge: within 50');
+  eq(c.view.morph, 9, 'emerge: morph 9');
+  check(c.view.tail, 'emerge: the body and the tail are drawn (forms 9..11)');
+
+  // A flinch (0x005985c4) sets the scale to 1 and the morph to 5; the alpha stays.
+  const f = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  f.onDamage(0);
+  eq(f.state, 'flinch', 'flinch: state 12');
+  near5(f.view.sx + f.view.sy + f.view.sz, 3, 'flinch: scale 1');
+  eq(f.view.morph, 5, 'flinch: morph 5');
+  near5(f.view.alpha, 0, 'flinch: the alpha is kept');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

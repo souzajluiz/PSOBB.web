@@ -1732,6 +1732,7 @@ export class CombatView {
         root.rotation.x = ai.tiltX;
       }
       if (ai instanceof DeldepthAi) this.deldepthView(e, ai);
+      if (ai instanceof SlimeAi) this.slimeView(e, ai);
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
@@ -1774,7 +1775,8 @@ export class CombatView {
         this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       }
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
-      if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
+      // A Pofuilly Slime's parts are placed by slimeView (the body is drawn at alpha > 0, not by `hidden`).
+      if (r.hidden !== undefined && !(ai instanceof SlimeAi)) for (const c of root.children) c.visible = !r.hidden;
       if (ai instanceof EpsilonAi) for (const ev of ai.events.splice(0)) this.playSeAt(ev.id, root.position);
       // The Grass Assassin's emerge (the abeast spawn sound and particles) and
       // the Nano Dragon's power-up charge (sound 0x111, particle 0xfa).
@@ -4458,6 +4460,22 @@ export class CombatView {
     }
   }
 
+  // Pofuilly Slime (combat/enemysplits.ts SlimeAi.view): the body is placed at
+  // its height and scale and drawn only at alpha > 0 (0x00596264); the tail
+  // part is drawn in the forms 9..11 (0x00599ef0, two parts), with the same
+  // transform. The yaw is the root's.
+  private slimeView(e: EnemyRuntime, ai: SlimeAi): void {
+    const v = ai.view;
+    for (const child of e.instance.root.children) {
+      const body = child.name === 'Slime body';
+      if (!body && child.name !== 'Slime tail') continue;
+      child.position.set(0, v.height, 0);
+      child.scale.set(v.sx, v.sy, v.sz);
+      child.visible = v.alpha > 0 && (body || v.tail);
+      if (child.visible) setModelOpacity(child, v.alpha);
+    }
+  }
+
   private epsilonView(e: EnemyRuntime, ai: EpsilonAi, r: { hidden?: boolean; motion?: EnemyAiMotion | null }): void {
     const parts = e.instance.root.children;
     if (parts.length < 2) return;
@@ -5267,7 +5285,7 @@ export class CombatView {
       return null;
     }
     r.slimeSlot = k;
-    for (const part of r.instance.root.children) part.visible = !ai.hidden;
+    this.slimeView(r, ai);
     return r;
   }
 
