@@ -9532,3 +9532,30 @@ Checks: `node tests/goldragon.test.ts` ok (new: the ring radius, yaw and step; t
 **ASSUMED (also in the code):** Mechgun (8) and Rifle (7) fire through the regular or a similar hook (not traced); the other class 6..9 kinds with no gun callback (0x42, 0x45, 0x65, 0x6d) are not checked and stay off the list; 0x20000 is never set (the EBP reading above); the Handgun group_idx 8 is the variant the exe names (the port's bytes: group_idx = data1[2]).
 
 **Checks:** `node tests/gunbullet.test.ts`: all checks passed. `node tests/mechgun.test.ts`: 21 checks, 0 failures. `tests/rangedaim.test.ts` needs `vendor/newserv/build/newserv`, which this worktree does not have (not run here). `npx tsc --noEmit -p .` in client (Node 24): clean. Not run in Chrome (guns.spec.ts not run).
+
+## 2026-10-23 - effect_nt slot metadata (frames, UV rects, blend) checked for slot 35 (no code change)
+
+Question: the egg particle (slot 35) looks small in Chrome. Does the exe draw one UV sub-rect per particle (frame count > 1) or a different blend than the port's always-additive path? Checked the effect_nt metadata table and its renderer.
+
+**Table (exe .data, file-initialised, 0x28 bytes per slot at 0x00a101c0; 0x36 slots):** named struct `effect_nt_metadata` in the named dump (refsrc original-psobb-client-source, src/Psobb.exe-05112026.c:69552): +0x00 flags, +0x04 xvm, +0x08 texture_index, +0x0c unk_count (frame count), +0x10 unk_float_ptr (UV rects, 4 floats each: u0 v0 u1 v1), +0x14 width, +0x18 height, +0x1c color, +0x20 xvm_idx, +0x24 renderer_type.
+- The table values are already in the file; the loaders checked (find_effect_nt_index 0x00501804, load_effect_nt_data 0x00501c4c, which fills the GBIX ids at 0x00a72880) do not write them. The ctor 0x00800f4c only reads +0x0c for its pool size. Nothing in the exe rewrites +0x0c / +0x10 for slot 35 (no writer found in the named dump).
+
+**Slot 35, read from PsoBB.exe (tools/exedata.py) and decomp:** flags +0x00 = 1; unk_count +0x0c = 1; rect 0 at 0x00a112cc = (0, 0, 1, 1), the whole texture; width / height = 32.0 / 32.0; renderer_type = 3 (create_particle_renderer3 0x00801dd0, render_particle_renderer3 0x00801df8).
+
+**Blend, from flags +0x00 (render_particle_renderer3 and the named 0x0082acfc / 0x00837468 setters):**
+- bit 2 clear, bit 4 clear (flags 1): SRCALPHA / ONE (additive). This is slot 35 and the port's behaviour.
+- bit 2 set, bit 4 clear (flags 2): SRCALPHA / INVSRCALPHA (alpha blend).
+- bit 2 clear, bit 4 set (flags 4): INVDESTCOLOR / INVSRCCOLOR.
+- both set (flags 6): INVDESTCOLOR / INVSRCALPHA.
+Decoded from the D3DBLEND values the setter maps to (SRCALPHA 5, INVSRCALPHA 6, ONE 2, INVSRCCOLOR 4, INVDESTCOLOR 10).
+Slots with flags 2 in the file: 0, 2, 4, 41, 51, 53. The rest are flags 1.
+
+**Frames:** unk_count > 1 only for slots 34 and 40..50 (16 frames). Their rect lists at +0x10 point into memory that is not in the file (built at run time), so their rects cannot be read statically. Per particle, render_particle_renderer3 draws the quad with rect[unk_index] of the particle's bucket (u,v from the float array at +0x10 + i*16).
+
+**Verdict for slot 35:** one frame, whole texture (0,0,1,1); additive SRCALPHA/ONE; half size 32 at renderer 3. The port's NT_LAYOUT (classic/particles.ts, [32, 3]) and its additive blend already match. So neither frames nor blend explain the small egg. No code changed.
+
+**Port gap, not changed (general):** the port ignores effect_nt flags +0x00 (always additive, see title.ts / particles.ts comments) and the frame list (+0x0c / +0x10). Only slots 0, 2, 4, 41, 51, 53 (blend) and 34, 40..50 (frames, runtime lists) differ. Not fixed here: those slots are not the egg, and the runtime rect lists for 34 and 40..50 need their builder traced first.
+
+**Open:** the egg's look in Chrome is still unexplained by slot metadata; the earlier open items in the 2026-10-23 egg entry (spawn offset sign, sprite size vs the exe focal length) remain.
+
+Checks: `tools/exedata.py read` on 0x00a101c0 + n*0x28 for all 54 slots; Ghidra decompile of 0x00501c4c, 0x00501804, 0x00800f4c, 0x00801dd0, 0x00801df8, 0x00801034, 0x0050864c, 0x008013bc, 0x007a902c/905c/9044/9074, 0x0082acfc, 0x0082b440, 0x00837468, 0x00508460. Named source read: render_particle_renderer3 (Psobb.exe-05112026.c:816525).
