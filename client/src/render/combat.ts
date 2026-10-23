@@ -1640,6 +1640,12 @@ export class CombatView {
         this.tickGol(e, e.ai, targets);
         continue;
       }
+      // A killed Monest keeps its states until its kill (set_monest_dead runs
+      // on every tick while it is dead).
+      if (e.monest?.isDying && e.instance.root.visible) {
+        this.tickMonest(e, e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended));
+        continue;
+      }
       if (e.dead || !e.instance.root.visible) continue;
       // The status block of update_enemy_control_object (combat/enemystatus.ts).
       if (e.status.flags) {
@@ -4890,12 +4896,17 @@ export class CombatView {
   }
 
   // spawn_mothmant_from_monest: the Monest's next MOTHMANT slot.
+  // The Monest's states decide its own death: a killing hit sends it to the
+  // flinch (not yet active) or the kill (active); its body is removed when the
+  // kill state (8) is entered. The wire's kill (6x0A, 6x76, drop, EXP) went out
+  // at the killing hit (killEnemy).
   private tickMonest(e: EnemyRuntime, ended: boolean): void {
     const m = e.monest!;
     const alive = [...this.enemies.values()].filter((c) => c.parent === e && !c.dead).length;
-    const r = m.tick(alive, ended);
+    const r = m.tick(alive, ended, e.stats.hp <= Math.trunc(e.stats.maxHp / 2));
     if (r.motion) this.playEnemyMotion(e, r.motion);
     if (r.spawn) void this.spawnMothmant(e, m.spawned - 1);
+    if (r.killed) this.playDeath(e);
   }
 
   private async spawnMothmant(monest: EnemyRuntime, n: number): Promise<void> {
@@ -6381,7 +6392,13 @@ export class CombatView {
     }
     // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
-    else if (damage >= 1 && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
+    else if (e.monest) {
+      // A Monest's own hit reaction (MothmanProcessState_0051a8dc via vtable 0x100).
+      if (damage >= 1 && !e.status.locked) {
+        const motion = e.monest.hit((this.game.info?.difficulty ?? 0) === 3);
+        if (motion) this.playEnemyMotion(e, motion);
+      }
+    } else if (damage >= 1 && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,
     );
@@ -7428,7 +7445,9 @@ export class CombatView {
     const anchor = e.instance.root.position.clone();
     anchor.y += 22;
     this.hud?.expPopup(amount, () => anchor);
-    this.playDeath(e);
+    // A Monest's body is removed by its kill state (tickMonest).
+    if (e.monest) e.monest.die();
+    else this.playDeath(e);
   }
 
   // --- level and EXP ---------------------------------------------------------
@@ -7833,7 +7852,9 @@ export class CombatView {
         if (!e.dead) {
           e.dead = true;
           this.splitterDied(e, false);
-          this.playDeath(e);
+          // A Monest's death runs through its own states (set_monest_dead).
+          if (e.monest) e.monest.die();
+          else this.playDeath(e);
           if (e.ai instanceof DubwitchAi) this.dubwitchRemoteKill(e);
         }
       } else if (s.flags & 0x200) {
