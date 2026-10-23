@@ -10916,3 +10916,21 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 **Tests:** `tests/tekker.test.ts`: the picture entry rule (weapon range and fallback, tool, armor), the jingle order (6xB8, j_kantei, pay, accept, miniclear, restore on close), the picture flag, no jingle when the meseta is short. `tests/fieldbgm.test.ts`: a jingle replaces the track, `resume()` restarts the city track and an interactive track.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/tekker.test.ts`, `tests/fieldbgm.test.ts`, `tests/fieldhud.test.ts`, `tests/itemmodels.test.ts`, `tests/shop.test.ts` pass. Not run in Chrome or Playwright (per the brief).
+
+## 2026-10-23: Bank item lists (take / deposit)
+
+**What changed:** the Check Room's item lists (`classic/shop.ts` `BankCounter`) get the "n/200" line on the take list and leave out equipped items on the deposit list. The rows, titles, meseta windows and the stack spinner were already the exe's and are unchanged.
+
+**Details** (Ephinea `PsoBB.exe`; the named dump's `BankItemTakeMenuDialog_EnterState0_006d7b50` does not decompile, so the take list and the deposit list were read with Ghidra, `tools/ghidra/decomp.sh`):
+- **Take list** (FUN_006d7b50 = EnterState0, state 1 of the bank item take dialog): title `FUN_006dbdb8(0x30)` ("Check Room"), list `FUN_0073ff34(title, 200, slot)`, then `set_max_number_of_items_in_bank_list(200)` (FUN_007400c0, dump line 711194 sets list+0x94). One row per occupied bank slot (`FUN_006c8f1c`, slots 0..199), a stack's amount passed for amounts of 2 and up. Rows are the shop-style row (FUN_0072bc4c: icon 0x36, validation state), which is `shopRow`.
+- **The n/max line:** `ListWindowObject_Render_0074000c` draws `ListWindowObject_RenderItemText_007367d0(list, count = x86, max = x94)` when x94 > 0: "count/max" through the title's pill routine (RenderTextCharacter_00760b74). `InformationCounterListWindow_Initialize_007400d0` sets x94 = 0, so every other list has no line. The take list shows `rows/200`.
+- **Deposit list** (FUN_006daac4, state 0 of the 0x006da468 window; vtable 0x00b3cb00): candidates from `FUN_006a520c`, the inventory items whose flag 0x80 (item+0xdc) is clear. None: [0x49] and state 7. The list is titled [0x30] and created with max 0x40 and no x94, so no line. Rows: FUN_00737620 -> FUN_0072bdd4, the inventory row, which is `itemRow`.
+- **Deposit stacks:** FUN_006da7ac opens the spinner at 0x2d (CreateNumericDisplayListWindow via FUN_00728ac4, min 1, max = the carried count), then Yes / No. No 0x2c window in the bank lists.
+- **Deposit full:** FUN_006c9850 refuses above 200 (`200 < count`, [0x3c]), FUN_006c8acc refuses at 200 (`199 < count`). The port refuses at 200 with the same line.
+
+**ASSUMED:**
+- the flag 0x80 of the runtime item (FUN_006a520c) is "equipped" (the same check the sell list uses, DEVLOG 2026-10-17);
+- the count pill's place: the list's bottom-right corner, on its lower edge (the exe's offsets through the -60 argument and the plate's 27 px height are not traced to a screen position);
+- the take spinner: the exe's max is not decoded (the spinner value is passed to CreateNumericDisplayListWindow with the meseta count, which reads like a mislabel), and the exe withdraws the chosen amount and checks the room only afterwards (0x4b). The port still clamps to the room, as before.
+
+**Checks:** `tests/shop.test.ts`: the take list shows 200 with two bank items, the deposit list has no line and leaves out the equipped saber. `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/shop.test.ts`, `tests/items.test.ts`, `tests/fieldhud.test.ts`, `tests/tekker.test.ts` pass. Not run in Chrome or Playwright (per the brief). The partial-stack drop selector of the field menu is not used here: the bank keeps its own `AmountSpinner`.

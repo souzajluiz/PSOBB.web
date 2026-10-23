@@ -72,7 +72,7 @@ import {
   type RowContext,
 } from './itempack.ts';
 import { isSRankWeapon } from '../formats/itemnames.ts';
-import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
+import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSkin } from './stage.ts';
 
 // --- layout ------------------------------------------------------------------
 
@@ -419,6 +419,9 @@ interface ItemList {
   quantity: ((index: number) => number) | null; // "Item Quantity" window
   detail: boolean; // the description window at 0x29
   bar: boolean; // the cursor bar
+  // The "n/max" line (ListWindowObject_RenderItemText_007367d0, drawn when the
+  // list's max is above 0): the bank's take list only. null: no line.
+  capacity: number | null;
 }
 
 class Closed extends Error {}
@@ -548,10 +551,21 @@ abstract class CounterBase {
     rows: ItemRow[],
     items: ItemData[],
     quantity: ItemList['quantity'] = null,
-    opts: { detail?: boolean; bar?: boolean } = {},
+    opts: { detail?: boolean; bar?: boolean; capacity?: number } = {},
   ): void {
     const cursor = this.list ? Math.min(this.list.cursor, Math.max(0, rows.length - 1)) : 0;
-    this.list = { title, rows, items, cursor, top: 0, resolve: null, quantity, detail: opts.detail ?? true, bar: opts.bar ?? true };
+    this.list = {
+      title,
+      rows,
+      items,
+      cursor,
+      top: 0,
+      resolve: null,
+      quantity,
+      detail: opts.detail ?? true,
+      bar: opts.bar ?? true,
+      capacity: opts.capacity ?? null,
+    };
     this.clampTop();
   }
 
@@ -713,6 +727,18 @@ abstract class CounterBase {
       if (r.count) drawGameText(ctx, r.count, cx + cw - gameTextWidth(r.count), y, r.nameColor);
     });
     drawWindowTitle(ctx, skin, L.x, L.y, l.title);
+    if (l.capacity !== null) this.drawCapacity(ctx, skin, L, `${l.rows.length}/${l.capacity}`);
+  }
+
+  // The "n/max" line: a pill of the title's kind with the number in it (the
+  // exe draws it with RenderTextCharacter_00760b74, the title's pill routine).
+  // ASSUMED placement: the bottom-right corner, on the frame's lower edge.
+  private drawCapacity(ctx: CanvasRenderingContext2D, skin: WindowSkin, L: WindowRect, text: string): void {
+    const tw = gameTextWidth(text);
+    const x = L.x + L.w - INSET - pillWidth(tw);
+    const y = L.y + L.h - 13;
+    drawTitlePill(ctx, skin.frame, x, y, tw, 0);
+    drawGameText(ctx, text, x + (pillWidth(tw) - tw) / 2, y + 4 + 1, '#120400');
   }
 
   // A one-line counter window: its label at the left, the number at the
@@ -727,7 +753,15 @@ abstract class CounterBase {
   }
 
   // Console / test aid.
-  state(): { message: string; choice: string[] | null; list: string[] | null; cursor: number; amount: number | null; picture: boolean } {
+  state(): {
+    message: string;
+    choice: string[] | null;
+    list: string[] | null;
+    cursor: number;
+    amount: number | null;
+    picture: boolean;
+    capacity: number | null;
+  } {
     return {
       message: this.clerk.text,
       choice: this.choice?.items.map((i) => i.label) ?? null,
@@ -735,6 +769,7 @@ abstract class CounterBase {
       cursor: this.list?.cursor ?? -1,
       amount: this.amount?.spinner.value ?? null,
       picture: this.picture !== null,
+      capacity: this.list?.capacity ?? null,
     };
   }
 }
@@ -1059,13 +1094,16 @@ export class BankCounter extends CounterBase {
     for (;;) {
       const c = this.env.character();
       if (!c) return false;
-      if (!c.inventory.length) {
+      // FUN_006daac4 / FUN_006a520c: the candidates are the inventory items
+      // without flag 0x80 (ASSUMED: the equipped ones), in slot order; the
+      // list has no "n/max" line (its max stays 0).
+      const inv = c.inventory.filter((it) => !it.equipped);
+      if (!inv.length) {
         this.closeList();
         await this.tell(MSG.noItems);
         break;
       }
       const ctx = this.env.rowContext();
-      const inv = c.inventory.slice();
       this.showList(this.env.shopText(MSG.bankTitle), inv.map((it) => itemRow(it, ctx)), inv.map((it) => it.data), (i) => stackSize(inv[i].data));
       const i = await this.pick();
       if (i === null) break;
@@ -1102,11 +1140,14 @@ export class BankCounter extends CounterBase {
       }
       const ctx = this.env.rowContext();
       const list = bank.items.slice();
+      // FUN_006d7b50: the list's max is set to 200 (FUN_007400c0), so the
+      // "n/200" line shows the bank's item count.
       this.showList(
         this.env.shopText(MSG.bankTitle),
         list.map((b) => shopRow(b.data, maxStackSize(b.data) > 1 ? `×${b.amount}` : '', ctx)),
         list.map((b) => b.data),
         (i) => list[i].amount,
+        { capacity: BANK_ITEMS_MAX },
       );
       const i = await this.pick();
       if (i === null) break;
