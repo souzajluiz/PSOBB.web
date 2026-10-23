@@ -170,6 +170,8 @@ const menuEnv = {
 const fm = new FieldMenu(menuEnv);
 const press = (k: string) => fm.key({ key: k } as KeyboardEvent);
 fm.toggle();
+// the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+fm.tick(); fm.tick();
 press('Enter'); // Item Pack
 for (let i = 0; i < 5; i++) press('ArrowDown'); // Equip, Items, MAG, Trade, Area Map, Quest Board
 press('Enter');
@@ -185,6 +187,8 @@ for (let i = 0; i < 12; i++) fm.tick();
 eq([fm.questBoard, hud & 0x10], [null, 0], 'closing the menu destroys it');
 press('Enter'); // the menu is closed: nothing
 fm.toggle();
+// the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+fm.tick(); fm.tick();
 press('Enter');
 for (let i = 0; i < 5; i++) press('ArrowDown');
 press('Enter');
@@ -193,6 +197,8 @@ eq([fm.questBoard, hud & 0x10, fm.menu.leafOpen], [null, 0, false], 'closeQuestB
 started = false;
 fm.close();
 fm.toggle();
+// the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+fm.tick(); fm.tick();
 press('Enter');
 for (let i = 0; i < 5; i++) press('ArrowDown');
 press('Enter');

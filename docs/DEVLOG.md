@@ -11435,3 +11435,34 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 **Checks:** no code changed; no test run in this pass.
 
 **Left:** sonar use (find the item's use path, the radar reveal), win particles (confirm the 0x114 meaning and port the gate in the battle controller's tick), the local overlay mirror (decide after the exe's client reset is compared), Chrome check. REA's Ghidra provider needs `rea doctor` before the xrefs work again.
+## 2026-10-23: lobby Home menu: sub-menu slide, input delay, Quit Game > Disconnect
+
+**What changed:** the Home menu (`classic/mainmenu.ts` MainMenu, shared by the lobby and the field) now has the exe's 2-frame input delay after it opens and the sub-menu slide (the chosen row moves to the top of the panel over 8 frames, its sub-menu's rows are drawn below it). The lobby's Quit Game row (id 7, Disconnect 8 online) opens the Yes / No confirm and Yes returns to Ship Select (`classic/lobby.ts`, `QUIT_POS`, `disconnect()`). The other leaves stay logged no-ops (see Not done).
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump lines):
+- `handle_player_menu_select` (700118): one switch, each leaf builds a window and stores it at the menu's +0x20. Quit is `quit_game1/2` -> `QuitMenu_Constructor_0074bf30` (720090).
+- `CreateYesNoMenuListWindow_00738e40` (705220): the window's +0x60 flags = 4 (input blocked) and +0x64 = 2 (the input delay counter).
+- `YesNoMenuHandleInput_0073916c` (705333): returns while the window is blocked by flag 4 or while `+0x64 > 0` (then `--`); flags 1 / 2 (chosen / cancelled) stop it too. The gate on `SinowberillChallengeObjectListWindow_IsRenderHeightReached_00712798` (673667) comes first.
+- `ProcessYesNoMenuSelectionTransition_00739e28` (705918): copies the selected row into a free slot as the moving item (state 2), `+0x62` (the row counter) += 1, flag 4 set. `ChatShortcutMenuYesNoWindow_Show_00733320` (700453) then calls `FindOrCreateItem_00739ad4` (705707), which clears flag 4 again, so no input is blocked during the slide.
+- `InitializeYesNoMenuItemState_00739ce0` (705780): a row's y = (counter + slot) * `0x00a9a8e0` (16); the moving item's target is (0, counter * 16) (`UpdateYesNoMenuItemState_00739cfc`, 705790), with `+0x14 = 8` (8 frames). New rows: age -2 * slot (`CreateYesNoMenuItemState_00739d14`).
+- Colours (render `ChatShortcutMenuYesNoWindow_Render_0073950c`, 705495): state 0 normal 0xffffff / disabled 0x686868 with alpha age / 4; state 1 (cursor) 0xffff6121; state 2 (moving) 0xff51eaff, full alpha.
+- Quit: `ChallengeMenuProcessSelection_0074c018` (720139): Yes (selected 0) -> `unknown_send_disconnect` (782693) and a loading screen (`LAB_0074c134`); No -> the parent's slot 0x1c. The loading screen's return is `ResetLobbyStateAndReturnToShipSelect_0079ac9c` (779102): the 0xa0 ship request and the ship list (`send_packet0xa0`). The Quit window: `get_gui_position(0x18)` = (214, 256) (table 0x00971fc0), width 469.0, text unitxt (11, 0x4e) logged in.
+
+**Ported:**
+- `MainMenu.toggle` sets `inputDelay = INPUT_DELAY` (2); `tick` takes one off; `key` returns while it is above 0. Re-opening starts it again.
+- Sub-menu open: `header` = the chosen row's id, from `TOP + (row + header?1:0) * 16` to `TOP` over 8 frames (linear); the sub-menu's rows are drawn one row lower; the panel height counts the header; the header is drawn in 0xff51eaff. Back-step: the header becomes the parent of the level shown again (no slide back).
+- Lobby Quit row (7 / 8): `Question` (teammenu.ts YesNoListMenu) at (214, 256), width 469, text unitxt (11, 0x4e), rows unitxt (11, 0x6e) / (11, 0x6f). Yes -> `transport(0)` (the Change SHIP path, 0xa0 through `session.changeShip`) and the info window; No -> back to the menu.
+- Leaves not in the port: `console.info("[classic] Home menu entry 0x..: no window in the port yet (not ported)")`, the menu stays open.
+
+**Not done (logged no-ops in the lobby Home menu):** Trade Window 0x1a; Chat > Shortcut 0x11, Symbol Chat 0x12, Guild Card 0xe, Simple Mail 0x13, Info Board 0x16; Team > Team Member List 0x25, Team Log 0x27, Invite 0x29, Team Info 0x2b, Point Regist 0x2d. Customize (0), Technique (3), Area Map (0xc) and Quest Board (0xf) are validated off in the lobby, so they are not reachable there. Log Window (0x15), Items (0xb), Options (6) and Quit are ported.
+- Not traced: the sub-menu render's icon (`SetChatBubbleIconState` 0x4d / 0x4c for states 1 / 2), the per-frame lerp of the item's drawn position (`+0x8 / +0xc` towards `+0 / +4`), the clipped scroll of older headers, the back-step slide, and the `+0x5c` render-height gate.
+
+**ASSUMED:**
+- The delay is 2 frames per open (the constructor's 2 at 0x00738e40 is the only value seen); the port counts it from the open, not from the render-height gate.
+- Linear 8-frame slide; the header sits at the top row with the children below it (the exe's y = (counter + slot) * 16 with the counter = depth).
+- Quit's text is 0x4e: the lobby's scene is `logged_in`.
+- Disconnect = the Change SHIP request (0xa0). The exe's pre-steps (`unknown_send_disconnect`: the 0x60 CE 17 leave and packet 5) are not sent (not traced).
+- Yes / No rows are unitxt (11, 0x6e) / (11, 0x6f), as in `classic/returnprompt.ts`.
+- The field's Home menu gets the same delay and slide (one window in the exe); the field's Quit is not changed.
+
+**Checks:** `client` `npx tsc --noEmit -p .` clean (Node 24). `tests/lobbymenu.test.ts` (new cases: the 2-frame delay and its re-open, the header's 8-frame slide to row 0 and its back-step, Quit reaching the action as 8 in the lobby), `tests/fieldhud.test.ts`, `tests/teammenu.test.ts`, `tests/chatline.test.ts` pass. Three field / option tests (`tests/minimap.test.ts`, `tests/questboard.test.ts`, `tests/options.test.ts`) pressed keys on the frame the menu opened; they now tick 2 frames first (the delay). `medical`, `telepipe` pass. Not run in Chrome or against newserv.
