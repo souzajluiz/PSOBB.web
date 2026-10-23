@@ -123,7 +123,7 @@ import {
   type TechniqueData,
   type TechResist,
 } from '../combat/techniques.ts';
-import { bulletMissed, bulletSpeed, EGG_PARTICLE, isGunKind, MUZZLE_PARTICLE, movedTowards, pelletCount, planGunShot, SHOT_ANGLES_BAMS, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
+import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -5383,13 +5383,14 @@ export class CombatView {
     if (!from) return;
     const range = this.weaponRange(attackType);
     const hit = this.weaponTargets(attackType, from).slice(0, Math.max(1, range.maxTargets));
-    // A gun (GUN_KINDS: 6..9, 0x1c, 0x44, 0x48, 0xaf, 0xe8) fires bullets (combat/gunbullet.ts): the shot now, the
+    // A gun (GUN_KINDS, firesGunBullet) fires bullets (combat/gunbullet.ts): the shot now, the
     // damage at the bullet's arrival (tickGunBullets). The 6x46 goes with the listed targets.
     const weapon = attackType !== 2 ? this.equippedWeapon() : undefined;
     const kind = weapon?.data1[1] ?? -1;
-    if (isGunKind(kind)) {
+    const variant = weapon?.data1[2] ?? -1;
+    if (firesGunBullet(kind, variant)) {
       if (hit.length) this.game.sendAttackTargets(hit.map((e) => ({ entityId: 0x1000 | e.index })));
-      this.gunShot(attackType, step, from, hit, range, kind, weapon?.data1[2] ?? -1);
+      this.gunShot(attackType, step, from, hit, range, kind, variant);
       return;
     }
     if (!hit.length) return;
@@ -5436,7 +5437,7 @@ export class CombatView {
     // port's player state yet, so the bullets use variant 0 (both bytes read as 0).
     const texture = bulletTextureIndex(0, 0);
     for (let i = 0; i < pelletCount(kind); i++) {
-      const t = hit[i];
+      const t = hit[pelletTargetIndex(kind, i)];
       // ASSUMED: the bullet starts WEAPON_HEIGHT above the feet (the exe's weapon_position, not decoded).
       const start = { x: from.x, y: from.y + WEAPON_HEIGHT, z: from.z };
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
@@ -5446,12 +5447,15 @@ export class CombatView {
       }
       const shot: GunShot = planGunShot(
         start,
-        { heading: me.angle, angleBams: SHOT_ANGLES_BAMS[i] ?? 0, horizontalDistance: range.horizontal },
+        { heading: me.angle, angleBams: pelletAngleBams(kind, i), horizontalDistance: range.horizontal },
         target,
         (a, b) => (this.opts.wallBlocks ? this.opts.wallBlocks(a, b) : false),
         bulletSpeed(kind, variant),
       );
-      if (trails) {
+      if (visual === 'none') {
+        // No callback (0x238 = 0): no trail. The muzzle particle comes from the item's hook, once per trigger (ASSUMED for the Rifle and 0x65 hooks).
+        if (i === 0) this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
+      } else if (trails) {
         this.particle({ id: MUZZLE_PARTICLE }, new THREE.Vector3(start.x, start.y, start.z));
         trails.spawn(start, shot.end, shot.frames, texture);
       } else {

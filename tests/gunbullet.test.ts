@@ -1,17 +1,21 @@
 // Gun bullets (client/src/combat/gunbullet.ts, PsoBB.exe begin_gun_bullet_attack 0x005e6578,
 // gun_bullet_collision_check 0x005c7120): the flight time from the distance and speed 19,
 // the aim point pulled back by the hitbox radius, the wall ray (mask 0x8100), the
-// movement miss (g_WeaponBulletCollisionRadiusSq = 64), the Shot's five pellets, and the
-// trail's lifetime. Run: node tests/gunbullet.test.ts
+// movement miss (g_WeaponBulletCollisionRadiusSq = 64), the Shot's six begin calls (five pellets
+// and the regular shot), the gun gate per kind and variant, and the trail's lifetime.
+// Run: node tests/gunbullet.test.ts
 import {
   bulletFrames,
   bulletMissed,
   GUN_BULLET_SPEED_DEFAULT,
   bulletSpeed,
+  firesGunBullet,
   isGunKind,
   movedTowards,
   openAimPoint,
+  pelletAngleBams,
   pelletCount,
+  pelletTargetIndex,
   planGunShot,
   SHOT_ANGLES_BAMS,
   ShotEffect,
@@ -40,6 +44,7 @@ check(GUN_BULLET_SPEED_DEFAULT === 19, 'default gun bullet speed is 19');
 check(bulletSpeed(6, 8) === 11 && bulletSpeed(9) === 15 && bulletSpeed(0x48) === 11 && bulletSpeed(0x1c) === 11, `per-kind speeds: Handgun 8 at 11, Shot 15, Samba 11, 0x1c 11 (${bulletSpeed(6, 8)}, ${bulletSpeed(9)}, ${bulletSpeed(0x48)}, ${bulletSpeed(0x1c)})`);
 check(bulletSpeed(6, 0) === 19 && bulletSpeed(6) === 19, `other Handguns keep the default 19 (${bulletSpeed(6, 0)})`);
 check(bulletSpeed(7) === 19 && bulletSpeed(8) === 19, `Rifle and Mechgun keep the default 19 (${bulletSpeed(7)}, ${bulletSpeed(8)})`);
+check(bulletSpeed(0x42) === 19 && bulletSpeed(0x45) === 19 && bulletSpeed(0x65) === 20, `0x42 and 0x45 keep 19, 0x65 is 20 (inner 0x00601d52) (${bulletSpeed(0x42)}, ${bulletSpeed(0x45)}, ${bulletSpeed(0x65)})`);
 check(bulletFrames(60, bulletSpeed(6, 8)) === 5 && bulletFrames(60, bulletSpeed(9)) === 4, `frames per kind: 60 units -> Handgun 8 5 (60/11), Shot 4 (60/15) (${bulletFrames(60, bulletSpeed(6, 8))}, ${bulletFrames(60, bulletSpeed(9))})`);
 {
   const shot = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, bulletSpeed(6, 8));
@@ -87,13 +92,24 @@ check(bulletFrames(60, 10) === 6, 'speed is a parameter (60 / 10 = 6)');
 
 // Shot: five pellets at the exe's angles (shotgun_bullet_angles 0x0092dffc); only kind 9 has five.
 check(SHOT_ANGLES_BAMS.length === 5 && SHOT_ANGLES_BAMS[0] === 0 && SHOT_ANGLES_BAMS[1] === 2184 && SHOT_ANGLES_BAMS[3] === 4551, 'five shot angles 0, 2184, -2184, 4551, -4551');
-check(pelletCount(9) === 5 && pelletCount(6) === 1 && pelletCount(7) === 1, 'the Shot fires five pellets, the other guns one');
+// The Shot: five hook pellets (0x005fe004) and the regular shot (0x005e8cc9) at angle 0, target 0.
+check(pelletCount(9) === 6 && pelletCount(6) === 1 && pelletCount(7) === 1 && pelletCount(0x65) === 1, 'the Shot makes six begin calls, the other guns one');
+check(pelletAngleBams(9, 0) === 0 && pelletAngleBams(9, 1) === 2184 && pelletAngleBams(9, 4) === -4551 && pelletAngleBams(9, 5) === 0, 'Shot pellet angles: the five, then 0 for the regular shot');
+check(pelletTargetIndex(9, 3) === 3 && pelletTargetIndex(9, 5) === 0 && pelletTargetIndex(6, 0) === 0, 'Shot pellet targets: 0..4, then target 0');
 check(isGunKind(6) && isGunKind(7) && isGunKind(8) && isGunKind(9) && isGunKind(0x48), 'Handgun, Rifle, Mechgun, Shot, Samba Maracas are guns');
+// 0x42 and 0x45 (0x005ea204, 0x005f205c) and 0x65 (inner 0x00601d20, regular shot) fire.
+check([0x42, 0x45, 0x65].every(isGunKind), 'kinds 0x42, 0x45, 0x65 are guns');
 // The Handgun factory's other kinds (flags 0, the Handgun vtable) and the 0x1c ctor (flags 0) fire too.
 check([0x1c, 0x44, 0xaf, 0xe8].every(isGunKind), 'kinds 0x1c, 0x44, 0xaf, 0xe8 fire (regular shot, flags 0)');
 // 0x8b shoots through its own hook (0x005eae08), not begin_gun_bullet_attack: no bullet.
 check(!isGunKind(0x8b), 'kind 0x8b (own shot hook 0x005eae08) is not on the bullet path');
+// 0x6d (vtable 0xb167e0, flags 0x2): its hook 0x005d20b8 makes no direct begin call.
+check(!isGunKind(0x6d), 'kind 0x6d (hook 0x005d20b8, no begin call) is not on the bullet path');
 check(!isGunKind(1) && !isGunKind(10) && !isGunKind(11), 'melee kinds and the launcher are not on the bullet path');
+// The variants that go to the projectile (no begin call): Rifle group_idx 13 (flags 0x8000), 0x45 group_idx 1.
+check(firesGunBullet(7, 12) && firesGunBullet(7, 8) && !firesGunBullet(7, 13), 'Rifle: group_idx 8..12 fire, 13 is the launcher');
+check(firesGunBullet(0x45, 0) && firesGunBullet(0x45, 2) && !firesGunBullet(0x45, 1), '0x45: group_idx 1 is the projectile, the others fire');
+check(firesGunBullet(0x42, 1) && firesGunBullet(0x42, 0) && firesGunBullet(6, 8) && !firesGunBullet(0x6d, 0), '0x42 fires in every variant; 0x6d never');
 
 // Movement miss: at 8 or more in XZ since the shot (64 = g_WeaponBulletCollisionRadiusSq).
 {
@@ -181,11 +197,15 @@ check(bulletTextureIndex(0xe9, 7) === 1, 'classes 0xe8..0xeb: variant 1');
 }
 
 // The shot callback per kind (the item's +0x238, read from the inner ctors): 0x005e4264 (egg) for
-// Handgun 6 with group_idx 8 (0x005f3380), 0x1c and the Samba Maracas; 0x005e4678 (default) for the rest.
+// Handgun 6 with group_idx 8 (0x005f3380), 0x1c and the Samba Maracas; 0 (none) for Shot 9, 0x65 and
+// Rifle group_idx 8..11 and 13; 0x005e4678 (default) for the rest.
 check(shotVisualOf(6, 8) === 'egg', 'Handgun with group_idx 8 fires the egg callback');
 check(shotVisualOf(6, 0) === 'default' && shotVisualOf(6) === 'default', 'other Handguns keep the default callback');
 for (const k of [0x1c, 0x48]) check(shotVisualOf(k, 0) === 'egg', `kind ${k.toString(16)} fires the egg callback`);
-for (const k of [0x44, 0xaf, 0xe8, 7, 8, 9, 0x83]) check(shotVisualOf(k, 0) === 'default', `kind ${k.toString(16)} keeps the default callback`);
+for (const k of [0x44, 0xaf, 0xe8, 8, 0x42, 0x45, 0x83]) check(shotVisualOf(k, 0) === 'default', `kind ${k.toString(16)} keeps the default callback`);
+check(shotVisualOf(9, 0) === 'none' && shotVisualOf(0x65, 0) === 'none', 'the Shot and kind 0x65 write a zero callback (no visual)');
+check(shotVisualOf(7, 0) === 'default' && shotVisualOf(7, 12) === 'default' && shotVisualOf(7) === 'default', 'Rifle group_idx 12 and the other variants keep the default callback');
+for (const v of [8, 9, 10, 11, 13]) check(shotVisualOf(7, v) === 'none', `Rifle group_idx ${v} writes a zero callback`);
 
 // The egg effect of a target shot: the vector and the float frame count are the hand to the
 // hitbox centre (not the aim point), the velocity is the speed per tick (11 for the Handgun).
