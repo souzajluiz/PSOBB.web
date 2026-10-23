@@ -1334,8 +1334,9 @@ export class CombatView {
         const down = keys.has(key);
         if (down && !this.held.has(key) && !blocked) {
           const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
-          // The Middle key: an NPC or floor item in the weapon's reach replaces the attack.
-          if (index === 1 && this.opts.interactMiddle?.(this.middleReach(slot)) === true) {
+          // The Middle key (palette_slots[0], 1-based slot 1, input/keyconfig.ts): an NPC or
+          // floor item in the weapon's reach replaces the attack.
+          if (index === 0 && this.opts.interactMiddle?.(this.middleReach(slot)) === true) {
             // taken by the interaction (talk or pick up)
           } else if (slot && !slot.disabled && slot.group1 === 2 && slot.group2 <= 2) this.press(slot.group2 as AttackType);
           else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);

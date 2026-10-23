@@ -51,12 +51,24 @@ test('a quest starts from the Hunter\'s Guild counter and runs in the classic fi
       const p = v.npcs.byAction(1011).root.position;
       v.placePlayer(w.classicGame.game.selfId, p.x, p.y, p.z + 8, Math.PI);
     });
-    await key(page, 'Enter');
+    // Talk is the action palette's Middle key (ArrowDown by default), as in the
+    // exe (palette slot down, 0x0068c31d); held so a 30 fps poll sees it.
+    const talk = async () => {
+      await page.keyboard.down('ArrowDown');
+      await page.waitForTimeout(150);
+      await page.keyboard.up('ArrowDown');
+      await page.waitForTimeout(60);
+    };
+    await talk();
     await expect
       .poll(
         async () => {
           const n = await peek(page, (w) => w.classicTown.ui.lists.length);
-          if (n === 0) await key(page, 'Enter');
+          if (n === 0) {
+            // The clerk's lines and the counter advance with Enter (Decide); a new talk starts with the Middle key.
+            if (await peek(page, (w) => w.classicGame.view.npcs.talking || w.classicTown.counterOpen)) await key(page, 'Enter');
+            else await talk();
+          }
           return n;
         },
         { timeout: 60_000, intervals: [700] },
