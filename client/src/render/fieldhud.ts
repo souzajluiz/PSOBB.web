@@ -308,7 +308,14 @@ export class FieldHud {
       names: this.names(),
       charClass: c?.charClass ?? 0,
       level: c?.level ?? 1,
-      stats: { atp: c?.stats.atp ?? 0, mst: c?.stats.mst ?? 0, ata: c?.stats.ata ?? 0 },
+      stats: {
+        atp: c?.stats.atp ?? 0,
+        mst: c?.stats.mst ?? 0,
+        ata: c?.stats.ata ?? 0,
+        dfp: c?.stats.dfp ?? 0,
+        evp: c?.stats.evp ?? 0,
+        lck: c?.stats.lck ?? 0,
+      },
       lobby: this.opts.area() === 0x0f,
     };
   }

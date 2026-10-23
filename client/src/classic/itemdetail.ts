@@ -1,61 +1,73 @@
-// Item Pack > Items: the item detail pages of equipment and mags (the item
-// description window at ITEM_DETAIL, entry 2 = (324, 256) 240 x 184).
+// Item Pack > Items: the equipment stat panel and the mag rows of the selected
+// item. The panel is the element group at GUI table entry 0xC (16, 172), the
+// one ChallengePlayerListWindow_HandleInput_007526c8 fills for the item (state
+// 2 / 8: ChallengePlayerListWindow_UpdateItemDetail_0073175c, and the mag's
+// RefreshItemStatDisplay_00726294 in state 8). The description stays in
+// ITEM_DETAIL (entry 2, the text of itemdetail's info page in itempack.ts).
 //
 // Evidence (PsoBB.exe, Ephinea 1.25.13; the named dump's names are the
 // community ones, the addresses are the exe's):
-//   - the stat labels are unitxt group 11: ATP 0x9c, DFP 0x9d, MST 0x9e,
+//   - the six stat labels are unitxt group 11: ATP 0x9c, DFP 0x9d, MST 0x9e,
 //     ATA 0x9f, EVP 0xa0, LCK 0xa1 (EquipmentStatDisplayObject_SetStatLabels_
-//     00726f38); EFR..ELT 0xa2..0xa6; Native 0xb5, A.Beast 0xb6, Machine 0xb7,
-//     Dark 0xb8, Hit 0xb9 (ItemAttributesPanel_Update_00726ee2); Slot 0xbf,
-//     Level 0xc0, Synchro 0xc1, IQ 0xc2, "Attribute:" 0xc3.
-//   - ItemAttributesPanel_Update_00726ee2 sets the label of each attribute
-//     row, then the character's own values (GetItemTechBoostAddress 0x00770d6c,
-//     the 5 types) and, unless the item is the equipped one, the candidate
-//     item's pairs from data1[6..11] (type, value) x 3; every row gets 0 first,
-//     so all five show an item value. Type 1..5 = Native..Hit (the row order).
-//   - UIElement_DisplayItemAttribute_0072d330 draws "label:" at the left, the
-//     current value right-aligned with "%" (flag 0x20, set on all five), then
-//     when the item value is shown "→" and the item value. Its colour: equal
-//     white 0xffffffff, lower 0xff77e8ff, higher 0xffdd8c41, and 0xff909090
-//     unless flag 0x10 is set (no attribute row sets it, so they stay grey).
-//     The numbers are plain decimal (append_number_to_wstrcat_buffer).
-//   - Requirements: the weapon's ATP / MST / ATA (ItemPMT 0x12 / 0x14 / 0x16)
-//     with the same labels, armour and shield Level = requiredLevel + 1
-//     (the port's equipProblems rule; the exe's EquipmentStatDisplayObject_
-//     Update_00727078 reads the mst_req byte path for the same row).
-//   - Mags: RefreshItemStatDisplay_00726294 feeds the Synchro and IQ values
-//     and DEF / POW / DEX / MIND as level (hundredths / 100) with the part
-//     (hundredths % 100) as the bar; a level above the shown one is a full bar
-//     (0x42c80000 = 100.0). ItemStatDisplayObject_SetAnimatedValue_0072d420
-//     colours a changed value like the attributes.
+//     00726f38, in the order of the panel's six values).
+//   - UpdateEquipmentStatDisplay_007258dc (0x007258dc): the current values are
+//     ATP = base + variance + range min (battleparams), ATA = total_ata, DFP =
+//     field_0x2d2, EVP = evp, MST and LCK = battleparams (set_current_equip_
+//     value). The item values come from PlayerRecalculateStats_0068e030 (the
+//     candidate, not equipped) or PlayerCalculateItemStats_0068e4e8 (the
+//     equipped one), six shorts [ATP, DFP, MST, ATA, EVP, LCK].
+//   - the rows are visible (flag 0x10, the colour) only when ValidateItemForEquip
+//     is non-zero; otherwise the item values are drawn grey (0xff909090).
+//   - the colour (UIElement_DisplayItemAttribute_0072d330): equal 0xffffffff,
+//     lower 0xff77e8ff, higher 0xffdd8c41.
+//   - what an item adds (ApplyEquipmentBonuses_005d330c): a weapon adds its
+//     ATP range min += atp_min + 2 * grind (data1[3]), ATA += ata * 10 (plus
+//     the ATA special, type 5 in data1[6..11]: value * 10) and MST += mst. The
+//     armour and shield go through ApplyWeaponStats_005d4840 (their pmt struct
+//     overlays the weapon's; the DFP / EVP use here are the item's dfp / evp,
+//     ASSUMED from the names of the ItemPMT fields).
+//   - the mag rows: RefreshItemStatDisplay_00726294 feeds Synchro and IQ and
+//     DEF / POW / DEX / MIND as level (hundredths / 100) with the part as the
+//     bar; the port's text is the level then the part as a decimal.
 //
 // ASSUMED (not decoded, kept simple):
-//   - the page order (info, requirements, attributes; mags: info, mag) and the
-//     page keys (Left / Right, wrapping; the cursor move resets to the info
-//     page); the exe's page switching is in ChallengePlayerListWindow_
-//     HandleInput_007526c8 and was not traced;
-//   - the row positions (INSET, ROW) and the spacing between the label and the
-//     value (the exe's g_ItemAttributeColonSpacingConstant etc. are not read);
-//   - the mag's DEF / POW / DEX / MIND labels (no unitxt label was found in
-//     group 11; they are plain text here) and the PB names (the short names of
-//     itemnames.ts);
-//   - requirement rows that are not met are drawn in the cannot-equip grey.
+//   - the current values come from the character file's displayed stats (the
+//     exe's live battleparams / variance are not in the file); the candidate is
+//     current + what the new item adds - what the equipped item of its slot
+//     adds (the exe's PlayerRecalculateStats starts from the base and clamps
+//     to the class maximum; the buff multipliers and the set / morning glory
+//     bonuses are taken as 0 / 1);
+//   - the armour's DFP / EVP variance (dfpRange / evpRange) and the unit slots
+//     (units and tools add no row here);
+//   - the panel's frame (height 132 = six rows of ROW + the inset, the width
+//     240 like the description) and the row spacing;
+//   - the mag's DEF / POW / DEX / MIND labels (plain text; no group 11 label
+//     was found).
 //
-// Not ported here: the equipment stat panel (ATP / DFP / MST / ATA / EVP / LCK
-// with the item's deltas, UpdateEquipmentStatDisplay_007258dc) and the mag
-// bar animation.
+// Not evidenced: the page keys. ChallengePlayerListWindow_HandleInput_007526c8
+// has no Left / Right handling (its only key is the cancel, g_KeyboardSharedState
+// [0xd]); the earlier Left / Right pages of this port were removed.
 
 import type { ItemData } from '../formats/itemnames.ts';
 import { magStats } from '../formats/itemnames.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
 
-export const ATTRIBUTE_LABELS = [0xb5, 0xb6, 0xb7, 0xb8, 0xb9] as const; // Native A.Beast Machine Dark Hit
-export const ATTRIBUTE_HEADING = 0xc3; // "Attribute:"
-export const REQUIREMENT_LABELS = { atp: 0x9c, mst: 0x9e, ata: 0x9f } as const; // ATP / MST / ATA
-export const LEVEL_LABEL = 0xc0;
+export const MAG_LEVEL_LABEL = 0xc0;
 export const SYNCHRO_LABEL = 0xc1;
 export const IQ_LABEL = 0xc2;
 export const MAG_STAT_NAMES = ['DEF', 'POW', 'DEX', 'MIND'] as const; // ASSUMED plain text
+
+// The panel's six rows, in the exe's order (labels 0x9c..0xa1).
+export const EQUIP_STAT_ROWS = [
+  { key: 'atp', label: 0x9c },
+  { key: 'dfp', label: 0x9d },
+  { key: 'mst', label: 0x9e },
+  { key: 'ata', label: 0x9f },
+  { key: 'evp', label: 0xa0 },
+  { key: 'lck', label: 0xa1 },
+] as const;
+export type EquipStatKey = (typeof EQUIP_STAT_ROWS)[number]['key'];
+export type StatBlock = Record<EquipStatKey, number>;
 
 // ItemStatDisplayObject / UIElement_DisplayItemAttribute colours.
 export const VALUE_COLOR = {
@@ -65,87 +77,77 @@ export const VALUE_COLOR = {
   none: '#909090', // 0xff909090
 } as const;
 
-export type DetailPage = 'info' | 'requirements' | 'attributes' | 'mag';
+// The panel's window (GUI entry 0xC, (16, 172)); the size is ASSUMED.
+export const EQUIP_PANEL = { x: 16, y: 172, w: 240, h: 132 } as const;
 
-// Pages of an item (ASSUMED order). data1[0]: 0 weapon, 1 armour / shield /
-// unit, 2 mag, 3 tool.
-export function detailPages(item: ItemData): DetailPage[] {
-  const d = item.data1;
-  if (d[0] === 2) return ['info', 'mag'];
-  if (d[0] === 0 || (d[0] === 1 && (d[1] === 1 || d[1] === 2))) return ['info', 'requirements', 'attributes'];
-  return ['info'];
-}
-
-// --- requirements ---------------------------------------------------------
-
-export interface RequirementRow {
-  label: number; // unitxt group 11 index
-  value: number;
-  unmet: boolean;
-}
-
-export interface Stats {
-  atp: number;
-  ata: number;
-  mst: number;
-  level: number; // displayed level (1-based)
-}
-
-// The requirement rows of a weapon (ATP, MST, ATA) or of an armour / shield
-// (Level). Other items have none.
-export function requirementRows(item: ItemData, pmt: ItemPMT, stats: Stats): RequirementRow[] {
+// What an item adds to the six stats (ApplyEquipmentBonuses_005d330c, see the
+// header). Units, tools and mags add nothing here.
+export function equipContribution(item: ItemData, pmt: ItemPMT): Partial<StatBlock> {
   const d = item.data1;
   if (d[0] === 0) {
     const w = pmt.getWeapon(d[1], d[2]);
-    if (!w) return [];
-    return [
-      { label: REQUIREMENT_LABELS.atp, value: w.atpRequired, unmet: stats.atp < w.atpRequired },
-      { label: REQUIREMENT_LABELS.mst, value: w.mstRequired, unmet: stats.mst < w.mstRequired },
-      { label: REQUIREMENT_LABELS.ata, value: w.ataRequired, unmet: stats.ata < w.ataRequired },
-    ];
+    if (!w) return {};
+    let ata = w.ata * 10;
+    for (let i = 0; i < 3; i++) if (d[6 + 2 * i] === 5) ata += d[7 + 2 * i] * 10; // ATA special
+    return { atp: w.atpMin + 2 * d[3], mst: w.mst, ata };
   }
   if (d[0] === 1 && (d[1] === 1 || d[1] === 2)) {
     const a = (d[1] === 1 ? pmt.armors : pmt.shields)[d[2]];
-    if (!a) return [];
-    const need = a.requiredLevel + 1;
-    return [{ label: LEVEL_LABEL, value: need, unmet: stats.level < need }];
+    if (!a) return {};
+    return { dfp: a.dfp, evp: a.evp };
   }
-  return [];
+  return {};
 }
 
-// --- attributes -----------------------------------------------------------
-
-export interface AttributeRow {
-  label: number;
-  current: number; // the character's value
-  item: number | null; // the candidate item's value (null: not shown)
-  color: string; // colour of the item value
-}
-
-// `current` holds the character's values for types 1..5 (Native..Hit).
-export function attributeRows(item: ItemData, current: readonly number[], equipped: boolean): AttributeRow[] {
+// Whether an item gets the panel (weapon, armour, shield).
+export function hasEquipPanel(item: ItemData): boolean {
   const d = item.data1;
-  const bonus: Array<number | null> = [null, null, null, null, null];
-  if (!equipped) {
-    // The candidate's values: every row starts at 0, the pairs at data1[6..11].
-    bonus.fill(0);
-    for (let i = 0; i < 3; i++) {
-      const type = d[6 + 2 * i];
-      if (type >= 1 && type <= 5) bonus[type - 1] = d[7 + 2 * i];
-    }
-  }
-  return ATTRIBUTE_LABELS.map((label, i) => {
-    const cur = current[i] ?? 0;
-    const it = bonus[i];
-    let color: string = VALUE_COLOR.none;
-    if (it !== null) color = it === cur ? VALUE_COLOR.same : it < cur ? VALUE_COLOR.lower : VALUE_COLOR.higher;
-    return { label, current: cur, item: it, color };
-  });
+  return d[0] === 0 || (d[0] === 1 && (d[1] === 1 || d[1] === 2));
 }
 
-// "12%" (the row's value text; the item value follows an arrow).
-export function attributeText(n: number): string {
-  return `${n}%`;
+// The candidate's stats: the current ones, plus what the candidate adds and
+// minus what the equipped item of its slot adds (ASSUMED model, see header).
+export function candidateStats(current: StatBlock, add: Partial<StatBlock>, remove: Partial<StatBlock>): StatBlock {
+  const out = { ...current };
+  for (const { key } of EQUIP_STAT_ROWS) out[key] = current[key] + (add[key] ?? 0) - (remove[key] ?? 0);
+  return out;
+}
+
+// The colour of a candidate value against the current one.
+export function compareColor(item: number, current: number): string {
+  if (item === current) return VALUE_COLOR.same;
+  return item < current ? VALUE_COLOR.lower : VALUE_COLOR.higher;
+}
+
+export interface EquipStatRow {
+  key: EquipStatKey;
+  label: number;
+  current: number;
+  item: number; // the candidate's value (the equipped item shows its own)
+  color: string;
+}
+
+// The panel rows for the cursor item. `equipped` is the item already in its
+// slot (no delta); `old` is the item in that slot when the candidate is not
+// equipped; `equippable` is ValidateItemForEquip's answer (not equippable =
+// grey candidate values).
+export function equipStatRows(
+  current: StatBlock,
+  item: ItemData,
+  old: ItemData | null,
+  pmt: ItemPMT,
+  equipped: boolean,
+  equippable: boolean,
+): EquipStatRow[] {
+  const cand = equipped
+    ? current
+    : candidateStats(current, equipContribution(item, pmt), old ? equipContribution(old, pmt) : {});
+  return EQUIP_STAT_ROWS.map(({ key, label }) => {
+    const cur = current[key];
+    const it = cand[key];
+    const color = equippable ? compareColor(it, cur) : VALUE_COLOR.none;
+    return { key, label, current: cur, item: it, color };
+  });
 }
 
 // --- mags -----------------------------------------------------------------
@@ -165,7 +167,6 @@ export interface MagRows {
   synchro: string; // "28%"
   iq: string;
   stats: Array<{ name: string; text: string; bar: number }>; // bar = part of the level, 0..99
-  photonBlasts: Array<number | null>;
 }
 
 export function magRows(item: ItemData): MagRows {
@@ -176,17 +177,5 @@ export function magRows(item: ItemData): MagRows {
     synchro: `${m.synchro}%`,
     iq: `${m.iq}`,
     stats: MAG_STAT_NAMES.map((name, i) => ({ name, text: magStatText(raw[i]), bar: raw[i] % 100 })),
-    photonBlasts: m.photonBlasts,
   };
-}
-
-// --- page switching -------------------------------------------------------
-
-// Left / Right move through the item's pages (wrapping); the caller resets
-// the page when the cursor moves (ASSUMED).
-export function nextPage(page: number, count: number, key: string): number {
-  if (count <= 1) return 0;
-  if (key === 'ArrowRight') return (page + 1) % count;
-  if (key === 'ArrowLeft') return (page + count - 1) % count;
-  return page;
 }
