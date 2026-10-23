@@ -199,11 +199,11 @@ export class GeeSpike extends EnemyShot {
       this.done = true;
       return [];
     }
-    // ASSUMED: the player is an upright cylinder of radius 5 and height
-    // 2 * PLAYER_AIM_HEIGHT (the spike aims at its feet).
+    // The player's box is tested on the XZ plane (EXE: CheckTwoHitboxCollision_007b5e40,
+    // dump 800093); ASSUMED the spike uses that test too, radius 5 as before.
     for (const t of targets) {
       if (t.dead) continue;
-      if (Math.hypot(t.x - this.x, t.z - this.z) <= GEE.shotBody + 5 && this.y <= 2 * PLAYER_AIM_HEIGHT) {
+      if (Math.hypot(t.x - this.x, t.z - this.z) <= GEE.shotBody + 5) {
         this.done = true;
         return [t];
       }
@@ -1200,7 +1200,8 @@ export class GiGueSpit extends EnemyShot {
       this.done = true;
       return [];
     }
-    if (t && Math.hypot(t.x - this.x, PLAYER_AIM_HEIGHT - this.y, t.z - this.z) <= this.speed) {
+    // ASSUMED: the XZ box test (see the spike above); the y of the hit is not a window.
+    if (t && Math.hypot(t.x - this.x, t.z - this.z) <= this.speed) {
       this.done = true;
       return [t];
     }
@@ -1240,7 +1241,8 @@ export class GiGueBomb extends EnemyShot {
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    const direct = targets.some((t) => !t.dead && Math.hypot(t.x - this.x, this.y - PLAYER_AIM_HEIGHT, t.z - this.z) <= 10);
+    // ASSUMED: the bomb's direct contact is the XZ test within 10 (no height window).
+    const direct = targets.some((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= 10);
     if (this.travelled > GIGUE.bombRange || this.y <= 0 || direct) {
       this.done = true;
       return targets.filter((t) => !t.dead && (t.x - this.x) ** 2 + (t.z - this.z) ** 2 <= GIGUE.bombRadiusSq);

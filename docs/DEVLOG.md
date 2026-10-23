@@ -12521,3 +12521,22 @@ So `QuickMenuRenderTextBackground_00742a6c` is not part of the field menus and h
 **Checks:** `node tests/npcai.test.ts` ok (new cases above); `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24. `tsc --noEmit -p client` clean, with the worktree's `client/node_modules` symlinked to the main checkout's (git-ignored, not committed). `tests/combat.test.ts` needs `vendor/newserv/build/newserv`, not run. Not run in Chrome.
 
 **Left open (ROADMAP line):** the item use (needs NPC inventory), the enemy 0x8000 flag (needs the name-to-factory-id map), the head's +0x7c state dispatch (move / cast state 2) and the NPC's own level / MST / eligibility.
+## 2026-10-23: enemy shot hit test is the XZ box test, aim height split from the hit window
+
+**What changed:** `PLAYER_AIM_HEIGHT` 10 (`combat/enemyshots.ts`) is now only the aim point of the enemy shots whose aim is not traced. It is no longer a hit window. The XZ hit tests drop their height term in `combat/enemyshots.ts` (`GunnerLaser`: the `0..2 * aim` window is gone, the hit is `within`, XZ), `combat/enemyfsmep2a.ts` (the spike, the gigue bomb's direct contact and the 3D distance of its flight hit) and `combat/enemyfsmcaves.ts` (the breath and the 3D hit of the caves' shot). `techlightning.ts` `PLAYER_POINT` is unchanged (ASSUMED).
+
+**Exe evidence (PsoBB.exe; dump `refsrc/.../Psobb.exe-05112026.c`):**
+- Directed Foie: `create_directed_foie_object` is called with `target + 0x300` (dump 349686 and 186019, the same at 295460, 390505, 394153, 501426, 641887). The branch needs the target pointer `field_0x398` set and the angle to it below `max_y_angle / 2`; else the Foie goes along the heading (`create_foie_object1`). `+0x300` is the origin, so the aim is the feet (EXE). The port's Foie has no directed branch: `enemyfsmep2b.ts` casts it on the heading only (not changed here).
+- AoE / technique hit: `ProcessAoEHits_006ebfdc` (dump 649429) -> `CheckAoECollision_006eada8` (648656) -> `GetCollisionDataForEntity_007b65b4` (800203, XZ prefilter 10000) -> `CheckTwoHitboxCollision_007b5e40` (799546). Both boxes' `position2` is the world centre (origin + rotated `position1`). The overlap branches call `CheckSphereOverlap_0083dbd4` (dump 800093) or `CheckBoxOverlap_0083d2fc` (dump ~800040) with `y = 0` on both centres, so the test is on the XZ plane: the height of the aim is not part of the hit. The player's box is the sphere of radius 5 at the feet (`+0x758`, position1 zero).
+- The gunner laser, the spike, the gigue bomb and the caves' shots: their own update code is not traced. They are ASSUMED to use the same XZ test as the technique path.
+
+**Port:** the hit tests that measured the 3D distance to the player at `PLAYER_AIM_HEIGHT` use XZ. The aim points (the missile's homing, the gunner laser's direction, the caves' bolt aim, the NanoBreath spawn) keep `PLAYER_AIM_HEIGHT` (ASSUMED).
+
+**ASSUMED:**
+- `PLAYER_AIM_HEIGHT` 10 as the aim of every enemy shot not traced (bullets, Rafoie, Gifoie, the laser's aim).
+- The XZ test for the non-technique projectiles (laser, spike, gigue bomb, caves' breath and bolt): the exe code for each was not read.
+- `PLAYER_RADIUS` 5 for the player's box (the `+0x758` sphere, DEVLOG player hit box entry).
+
+**Tests:** `node tests/enemyfsmcaves.test.ts`, `enemyfsmep2a`, `enemyfsmep2b`, `enemyfsmep2c`, `enemyfsmep2d`, `enemyfsmruins`, `enemyfsmmines`, `enemyfsmep2`, `techlightning`, `combatdepth` (842 checks, 0 failures) all pass. `client tsc --noEmit` has 138 errors (the worktree lacks `three` and the other packages' types); none in the touched files. Not run in Chrome, no Playwright.
+
+**Left:** the directed Foie branch (target pointer and the angle test) in the enemy that casts it; the gunner laser's, the spike's and the caves' own exe updates (to confirm the XZ test per projectile); `PLAYER_AIM_HEIGHT` for the Rafoie and Gifoie aims (their objects are XZ AoEs, so the aim height only sets the direction).
