@@ -2336,11 +2336,15 @@ export class BringerAi extends BrainBase {
 //     the angle +0x3f8, which turns 60 degrees (0x2aaa) at every placement;
 //     none for 90 frames -> lurk.
 //   heal (6 0x0059c1a0 / 7 0x0059bd94): HP below max / 4 (Ultimate: below
-//     max, 0x0059c7f0) heals itself (the other hurt enemies within 200 of
-//     the room are left out), else it appears 160 (0x00929958) around itself
-//     and idles 60 frames; the heal: 90 frames, row 4 (motion 3, 0.5), at
-//     frame 11 the enemy Resta (CreateSpecialAttackEntity_006eeeb4) at level
-//     iparam3.
+//     max, 0x0059c7f0, sorcererHurt) heals itself; else it appears 160
+//     (0x00929958) around itself and looks for the farthest hurt enemy
+//     within 200 (0x00a746b4 squared; findHealAlly; the room test is ASSUMED
+//     out). No target: idles 60 frames, no cast. The heal: 90 frames, row 4
+//     (motion 3, 0.5), at frame 11 the enemy Resta (CreateSpecialAttackEntity_006eeeb4,
+//     the caster's MST) at level iparam3 on the target.
+//   bits (BEE_R = entity index + 1, the attack bit; BEE_L = + 2, the heal
+//     bit; sorcerer_constructor_ 0x0059d8b8): SorcererBitAi. A bit that goes
+//     down cuts the cast it serves (attack or heal, sub 1 above).
 //   flinch (8): practically never (super armor whenever it can be hit).
 //   death (9): row 6 (motion 5, 0.5).
 export const SORCERER = {
@@ -2362,6 +2366,9 @@ export const SORCERER = {
   noTarget: 60,
   bitSide: 15,
   bitHeight: 18,
+  // The heal reaches the hurt enemies within 200 (0x00a746b4 = 40000, the
+  // squared XZ distance from the Sorcerer).
+  healRange: 200,
   // ASSUMED: how the enemy technique objects fly (enemyshots.ts TechBolt).
   boltSpeed: 4,
   boltRadius: 4,
@@ -2369,14 +2376,44 @@ export const SORCERER = {
 
 const SORCERER_MOTION = { idle: loop(7, 0.6), appear: once(6, 0.6), charge: loop(0, 0.6), start: once(2, 0.6), cast: once(1, 0.7), heal: once(3, 0.5) };
 
+// The heal's cast sound (unknown_check_sound_effect_id_(0x1df) in the heal
+// state, 0x0059bd94). ASSUMED: played once when the cast starts.
+export const SORCERER_HEAL_SE = 0x1df;
+
 export type SorcererState = 'lurk' | 'appear' | 'attack' | 'vanish' | 'reposition' | 'heal' | 'dead';
 
 // Rangers (the 0x964 & 0x40 job flag): RAmar, RAcast, RAcaseal, RAmarl.
 const RANGERS = new Set([3, 4, 5, 11]);
 
+// SorcererCheckActionReady_0059c7f0: an entity is hurt (a heal target) at HP
+// below max / 4, or below max in Ultimate. The exe's test is on the int HP.
+export function sorcererHurt(hp: number, maxHp: number, ultimate: boolean): boolean {
+  return ultimate ? hp < maxHp : hp < Math.floor(maxHp / 4);
+}
+
+// A hurt enemy the heal can reach (the owner passes the live enemies).
+export interface HealAlly {
+  id: number; // the entity id (0x1000 | index)
+  x: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+}
+
 export class SorcererAi extends BrainBase {
   state: SorcererState = 'lurk';
   hpFraction = 1; // the owner keeps it current
+  // The owner keeps these current too: the exact HP test of the heal (hurt
+  // when hp < floor(maxHp / 4)); until then the fraction stands in.
+  hp = 0;
+  maxHp = 0;
+  // The enemies the heal can pick (the owner passes the live ones, not bits).
+  allies: readonly HealAlly[] = [];
+  // Whether the BEE_R (attack bit, bit 1) and BEE_L (heal bit, bit 2) are
+  // down: a down bit cuts the technique it casts (SorcererProcessState3).
+  bitDown: readonly [boolean, boolean] = [false, false];
+  // Sound effects to play, drained by the owner.
+  sounds: number[] = [];
   confused = false;
   private ultimate: boolean;
   private episode2: boolean;
@@ -2389,6 +2426,8 @@ export class SorcererAi extends BrainBase {
   private placeAngle = 0;
   private warp = 0;
   private healSelf = false;
+  // The heal's target: an ally's entity id, or null for itself.
+  private healTargetId: number | null = null;
 
   constructor(opts: { x: number; z: number; angle: number; ultimate: boolean; episode2?: boolean; movement: EnemyMovementData | null; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
@@ -2452,6 +2491,30 @@ export class SorcererAi extends BrainBase {
   // constrain_tech_level: 0-based, 0..13 (Ultimate 0..28).
   private level(i: number): number {
     return Math.max(0, Math.min(this.ultimate ? 28 : 13, Math.trunc(this.mv.iparam[i])));
+  }
+
+  // The Sorcerer itself is hurt (its heal on itself).
+  private selfHurt(): boolean {
+    if (this.maxHp > 0) return sorcererHurt(this.hp, this.maxHp, this.ultimate);
+    return this.ultimate ? this.hpFraction < 1 : this.hpFraction < 0.25;
+  }
+
+  // State 4 (0x0059c1a0) sub 1: the farthest hurt enemy within 200 (strictly
+  // farther than the one before it, so the first of equal distances wins).
+  // ASSUMED: the room test is left out (the owner passes the enemies of this
+  // area only).
+  private findHealAlly(): HealAlly | null {
+    let best: HealAlly | null = null;
+    let bestSq = 0;
+    const range = SORCERER.healRange * SORCERER.healRange;
+    for (const a of this.allies) {
+      if (a.maxHp <= 0 || !sorcererHurt(a.hp, a.maxHp, this.ultimate)) continue;
+      const d = (a.x - this.x) ** 2 + (a.z - this.z) ** 2;
+      if (d > range || d <= bestSq) continue;
+      best = a;
+      bestSq = d;
+    }
+    return best;
   }
 
   private release(out: AiFrame, t: AiTarget): void {
@@ -2527,11 +2590,16 @@ export class SorcererAi extends BrainBase {
             this.timer = 0;
           }
         } else if (this.sub === 1) {
-          if (animationEnded && this.current === SORCERER_MOTION.start) this.play(out, SORCERER_MOTION.charge);
-          if (this.timer > SORCERER.charge - 1) {
-            this.sub = 3;
-            this.frames = 0;
-            this.play(out, SORCERER_MOTION.cast);
+          // The attack bit went down: the charge is cut (state 3 sub 1 checks
+          // IsTargetInActiveState on bit 1 each frame).
+          if (this.bitDown[0]) this.sub = 5;
+          else {
+            if (animationEnded && this.current === SORCERER_MOTION.start) this.play(out, SORCERER_MOTION.charge);
+            if (this.timer > SORCERER.charge - 1) {
+              this.sub = 3;
+              this.frames = 0;
+              this.play(out, SORCERER_MOTION.cast);
+            }
           }
         } else if (this.sub === 3) {
           if (this.frames >= SORCERER.releaseFrame) {
@@ -2552,24 +2620,44 @@ export class SorcererAi extends BrainBase {
       }
       case 'heal': {
         if (this.sub === 0) {
-          if (this.healSelf) {
-            this.sub = 1;
-            this.timer = 0;
-            this.play(out, SORCERER_MOTION.start);
-          } else {
+          // The target: the Sorcerer itself when it is hurt (state 4 sub 0),
+          // else the farthest hurt enemy in reach; none, no cast. A down heal
+          // bit (bit 2) cuts the cast the same way as the attack bit.
+          if (this.bitDown[1]) {
             this.sub = 4;
             this.timer = 0;
+          } else if (this.healSelf) {
+            this.healTargetId = null;
+            this.sub = 1;
+            this.timer = 0;
+            this.sounds.push(SORCERER_HEAL_SE);
+            this.play(out, SORCERER_MOTION.start);
+          } else {
+            const ally = this.findHealAlly();
+            if (ally) {
+              this.healTargetId = ally.id;
+              this.sub = 1;
+              this.timer = 0;
+              this.sounds.push(SORCERER_HEAL_SE);
+              this.play(out, SORCERER_MOTION.start);
+            } else {
+              this.sub = 4;
+              this.timer = 0;
+            }
           }
         } else if (this.sub === 1) {
-          if (animationEnded && this.current === SORCERER_MOTION.start) this.play(out, SORCERER_MOTION.charge);
-          if (this.timer > SORCERER.charge - 1) {
-            this.sub = 3;
-            this.frames = 0;
-            this.play(out, SORCERER_MOTION.heal);
+          if (this.bitDown[1]) this.sub = 5;
+          else {
+            if (animationEnded && this.current === SORCERER_MOTION.start) this.play(out, SORCERER_MOTION.charge);
+            if (this.timer > SORCERER.charge - 1) {
+              this.sub = 3;
+              this.frames = 0;
+              this.play(out, SORCERER_MOTION.heal);
+            }
           }
         } else if (this.sub === 3) {
           if (this.frames >= SORCERER.releaseFrame) {
-            out.heal = { level: this.level(2) };
+            out.heal = { level: this.level(2), target: this.healTargetId };
             this.sub = 2;
           }
         } else if (this.sub === 2) {
@@ -2589,7 +2677,7 @@ export class SorcererAi extends BrainBase {
         out.hidden = true;
         if (this.cycle === 2) {
           // State 6: itself when hurt, else 160 around its own position.
-          this.healSelf = this.ultimate ? this.hpFraction < 1 : this.hpFraction < 0.25;
+          this.healSelf = this.selfHurt();
           const r = this.healSelf ? 20 : SORCERER.placeHeal;
           const cx = this.x;
           const cz = this.z;
@@ -2621,6 +2709,92 @@ export class SorcererAi extends BrainBase {
 
   resume(): string {
     if (this.state !== 'dead') this.current = SORCERER_MOTION.idle;
+    return this.state;
+  }
+}
+
+// --- Chaos Sorcerer's bits (BEE_R / BEE_L) -------------------------------------------
+//
+// Entities of their own: sorcerer_constructor_ (0x0059d8b8) creates BEE_R at
+// entity index + 1 (SinowzoaCreate_0059a2b0, anchor 0x3d4 = bit 1) and BEE_L at
+// + 2 (SinowzoaCreateVariant_0059a340, anchor 0x3e0 = bit 2). Each takes its
+// own stats row (init 0x0059ae6c: BattleParams stats rows 11 / 12 through
+// init_sorcererbee_global_config), dark attribute, name 0x20 / 0x21 and the
+// body's texture list, and follows its anchor (SorcererAi.bit, 0x0059c770).
+// Its hit boxes are the collision data g_pSinowzoaCollisionData, not decoded:
+// ASSUMED the default radius.
+//
+// Down (ASSUMED from SinowzoaProcessState_0059a3d0's action 4 and action 0):
+// a hit that takes its HP to 0 puts it in action 4 (0x410 counts frames, SE
+// 0x1e0 at the bit); at 900 frames (0x410 > 899) it is back in action 0 with
+// its HP refilled to max (the state 5 handler sets 0x334 = max). While down
+// it is hidden and invulnerable, and the Sorcerer's cast on it is cut.
+// ASSUMED: no death plan, no drop and no EXP for a bit.
+export const BEE_DOWN_FRAMES = 900;
+
+export class SorcererBitAi extends BrainBase {
+  state: 'follow' | 'down' = 'follow';
+  private readonly body: SorcererAi;
+  readonly side: 1 | 2; // 1 = BEE_R (attack), 2 = BEE_L (heal)
+  private timer = 0;
+  private revived = false;
+
+  constructor(body: SorcererAi, side: 1 | 2, rng: () => number) {
+    super(body.x, body.z, body.angle, rng);
+    this.body = body;
+    this.side = side;
+  }
+
+  // The owner's test: a down bit cannot be hit.
+  get invulnerable(): boolean {
+    return this.state === 'down';
+  }
+
+  // ASSUMED: the bits never flinch.
+  get superArmor(): boolean {
+    return true;
+  }
+
+  // Hidden while down and with its Sorcerer (the body's lurk, warp out, ...).
+  get hidden(): boolean {
+    return this.state === 'down' || this.body.hidden;
+  }
+
+  // The owner calls this when a hit takes the bit's HP to 0.
+  down(): void {
+    if (this.state === 'down') return;
+    this.state = 'down';
+    this.timer = 0;
+  }
+
+  // True once after the bit comes back at full HP (the owner refills it).
+  takeRevive(): boolean {
+    const r = this.revived;
+    this.revived = false;
+    return r;
+  }
+
+  tick(): AiFrame {
+    const out = this.frame();
+    if (this.state === 'down') {
+      this.timer++;
+      if (this.timer > BEE_DOWN_FRAMES - 1) {
+        this.state = 'follow';
+        this.revived = true;
+      }
+    }
+    const a = this.body.bit(this.side);
+    this.x = a.x;
+    this.z = a.z;
+    this.angle = this.body.angle;
+    out.hidden = this.hidden;
+    out.lift = a.y;
+    return this.finish(out);
+  }
+
+  onDamage(_clientId: number): void {}
+
+  resume(): string {
     return this.state;
   }
 }

@@ -297,9 +297,10 @@ export interface AiFrame {
   // A contact hit through entity_hit_by_tech (group 0 with this power: the
   // Chaos Bringer's charge), optionally with a status roll.
   techHit?: { clientId: number; power: number; status?: { type: number; chance: number } } | null;
-  // The Chaos Sorcerer's Resta: heal this enemy (null = itself) with the
-  // technique at this 0-based level.
-  heal?: { level: number } | null;
+  // The Chaos Sorcerer's Resta: heal the enemy with entity id `target` (0x1000 |
+  // index; null / absent = the Sorcerer itself) with the technique at this
+  // 0-based level.
+  heal?: { level: number; target?: number | null } | null;
 }
 
 // What render/combat.ts drives: the generic FSM below or a per-family one.

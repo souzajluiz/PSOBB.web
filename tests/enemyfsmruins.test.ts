@@ -17,8 +17,12 @@ import {
   DelsaberAi,
   GunnerAi,
   GunnerControl,
+  BEE_DOWN_FRAMES,
   SORCERER,
+  SORCERER_HEAL_SE,
   SorcererAi,
+  SorcererBitAi,
+  sorcererHurt,
   updateTarget,
 } from '../client/src/combat/enemyfsmruins.ts';
 import { BELRA_ARM, BelraArm, GunnerLaser, TechBolt } from '../client/src/combat/enemyshots.ts';
@@ -317,6 +321,80 @@ function GUNNER_WAIT(): number {
   const r = new SorcererAi({ x: 0, z: 0, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
   for (let f = 0; f < 30; f++) r.tick([player(0, 380, { charClass: 3 })]);
   eq(r.state, 'appear', 'a Ranger is seen from 400');
+}
+
+// --- Chaos Sorcerer: the heal of other enemies and the bits ---------------------------
+{
+  check(sorcererHurt(24, 100, false) && !sorcererHurt(25, 100, false), 'hurt below max / 4 (int)');
+  check(sorcererHurt(99, 100, true) && !sorcererHurt(100, 100, true), 'Ultimate: hurt below max');
+  // Heal: reach the heal cycle, then pick the farthest hurt enemy within 200.
+  const h = new SorcererAi({ x: 0, z: 0, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
+  h.hp = 100;
+  h.maxHp = 100;
+  h.state = 'reposition';
+  (h as unknown as { cycle: number }).cycle = 2;
+  for (let f = 0; f < 200 && h.state !== 'heal'; f++) h.tick([player(0, 300)], true);
+  eq(h.state, 'heal', 'the heal cycle reaches the heal state');
+  const at = { x: h.x, z: h.z };
+  h.allies = [
+    { id: 0x1005, x: at.x, z: at.z + 150, hp: 10, maxHp: 100 },
+    { id: 0x1006, x: at.x, z: at.z + 50, hp: 5, maxHp: 100 },
+    { id: 0x1007, x: at.x, z: at.z + 300, hp: 1, maxHp: 100 },
+    { id: 0x1008, x: at.x, z: at.z + 120, hp: 100, maxHp: 100 },
+  ];
+  let heal: { level: number; target?: number | null } | null = null;
+  for (let f = 0; f < 400 && !heal; f++) heal = h.tick([player(0, 300)], true).heal ?? null;
+  eq(heal?.target, 0x1005, 'the farthest hurt enemy within 200 (not the one out of reach, not the healthy one)');
+  eq(heal?.level, 3, 'the heal at iparam3');
+  check(h.sounds.includes(SORCERER_HEAL_SE), 'the heal cast plays its SE');
+  // A hurt Sorcerer heals itself first.
+  const s2 = new SorcererAi({ x: 0, z: 0, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
+  s2.hp = 10;
+  s2.maxHp = 100;
+  s2.allies = [{ id: 0x1005, x: 0, z: 50, hp: 1, maxHp: 100 }];
+  s2.state = 'reposition';
+  (s2 as unknown as { cycle: number }).cycle = 2;
+  let self: { target?: number | null } | null = null;
+  for (let f = 0; f < 400 && !self; f++) self = s2.tick([player(0, 300)], true).heal ?? null;
+  eq(self?.target ?? null, null, 'hurt: heals itself');
+  // No hurt enemy in reach: no cast.
+  const n = new SorcererAi({ x: 0, z: 0, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
+  n.hp = 100;
+  n.maxHp = 100;
+  n.state = 'reposition';
+  (n as unknown as { cycle: number }).cycle = 2;
+  for (let f = 0; f < 200 && n.state !== 'heal'; f++) n.tick([player(0, 300)], true);
+  n.allies = [{ id: 0x1005, x: n.x, z: n.z + 250, hp: 1, maxHp: 100 }];
+  let none = 0;
+  for (let f = 0; f < 600; f++) if (n.tick([player(0, 300)], true).heal) none++;
+  eq(none, 0, 'no hurt enemy within 200: no heal');
+  // A down attack bit cuts the charge before the release.
+  const b = new SorcererAi({ x: 0, z: 0, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
+  for (let f = 0; f < 30; f++) b.tick([player(0, 200)]);
+  for (let f = 0; f < 60; f++) b.tick([player(0, 200)], true);
+  eq(b.state, 'attack', 'the attack state');
+  b.bitDown = [true, false];
+  let cut = 0;
+  for (let f = 0; f < 200 && b.state === 'attack'; f++) cut += b.tick([player(0, 200)], true).shots?.length ?? 0;
+  eq([b.state, cut], ['vanish', 0], 'a down attack bit cuts the cast');
+}
+
+// --- Chaos Sorcerer's bit ------------------------------------------------------------
+{
+  const body = new SorcererAi({ x: 100, z: 100, angle: 0, ultimate: false, movement: mv([], [5, 5, 3]) });
+  body.state = 'attack';
+  const bit = new SorcererBitAi(body, 1, () => 0.5);
+  const f0 = bit.tick();
+  near(bit.x, body.bit(1).x, 'the attack bit sits on its anchor');
+  eq(f0.lift, SORCERER.bitHeight, 'the bit floats 18 above the body');
+  check(!bit.invulnerable && bit.superArmor, 'an up bit takes hits and never flinches');
+  bit.down();
+  check(bit.invulnerable && bit.hidden && bit.state === 'down', 'down: hidden, invulnerable');
+  for (let f = 0; f < BEE_DOWN_FRAMES - 1; f++) bit.tick();
+  check(bit.state === 'down' && !bit.takeRevive(), 'still down at 899 frames');
+  bit.tick();
+  check(bit.state === 'follow' && bit.takeRevive() && !bit.takeRevive(), 'back at 900 frames, the revive is taken once');
+  check(!bit.hidden, 'and shown again');
 }
 
 // --- Delsaber -----------------------------------------------------------------------

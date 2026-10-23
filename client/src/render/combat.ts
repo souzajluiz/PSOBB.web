@@ -46,7 +46,7 @@ import {
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
-import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SorcererAi, type BulclawEvent } from '../combat/enemyfsmruins.ts';
+import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SORCERER, SorcererAi, SorcererBitAi, type BulclawEvent, type HealAlly } from '../combat/enemyfsmruins.ts';
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
@@ -1220,6 +1220,7 @@ export class CombatView {
       });
     }
     this.difficultyParams = { params, difficulty, slots, base };
+    for (const rt of [...this.enemies.values()]) if (rt.ai instanceof SorcererAi) void this.spawnSorcererBits(rt, rt.ai);
     this.buildGunnerGroups(slots, base);
     await this.spawnSplitters();
     if (this.disposed || token !== this.enterToken) return;
@@ -1624,6 +1625,7 @@ export class CombatView {
       if (ai instanceof PanArmsAi && (ai.state === 'split' || ai.state === 'merge')) e.stats.hp = this.panHalfHp(ai);
       if (ai instanceof PanArmsAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof PanHalfAi) ai.hpFraction = e.stats.hp / Math.max(1, e.splitHp ?? e.stats.maxHp);
+      if (ai instanceof SorcererAi) this.sorcererFeed(e, ai);
       const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
       if (ai instanceof BarbaRayAi) this.barbaDrain(e, ai);
       if (ai instanceof PigRayAi) this.pigDrain(e, ai);
@@ -1647,7 +1649,9 @@ export class CombatView {
         if (r.techHit.status && this.rng() <= r.techHit.status.chance) this.inflictStatus(r.techHit.status.type as StatusType, what);
       }
       if (r.tpDrain) this.drainTp(e, ai, r.tpDrain);
-      if (r.heal) this.enemyResta(e, r.heal.level);
+      if (r.heal) this.sorcererHeal(e, r.heal);
+      if (ai instanceof SorcererAi) for (const id of ai.sounds.splice(0)) this.playSeAt(id, e.instance.root.position);
+      if (ai instanceof SorcererBitAi && ai.takeRevive()) e.stats.hp = e.stats.maxHp; // back at full HP after 900 frames down
       if (ai instanceof BulclawAi) for (const ev of ai.events.splice(0)) this.bulclawEvent(e, ai, ev);
       if (ai instanceof RecoboxAi) for (const sp of ai.spawns.splice(0)) void this.spawnRecon(e, ai, sp);
       if ((ai instanceof ReconAi && ai.removed) || (ai instanceof EpsigardAi && ai.state === 'gone')) this.dropQuietly(e);
@@ -4208,16 +4212,114 @@ export class CombatView {
     this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) drains ${lost} TP`);
   }
 
-  // The Chaos Sorcerer's Resta (CreateSpecialAttackEntity_006eeeb4) on
-  // itself. ASSUMED: the player Resta's heal, MST * 0.5 + power.
-  private enemyResta(e: EnemyRuntime, level: number): void {
+  // The Chaos Sorcerer's bits: BEE_R (entity index + 1, the attack bit) and
+  // BEE_L (+ 2, the heal bit), created by sorcerer_constructor_ 0x0059d8b8. They
+  // are entities of their own with the BEE slot's stats row, the body's
+  // model 0 texture list and the bit model (entry 1); the AI places them on
+  // their anchors (SorcererAi.bit). ASSUMED: the bits are not sent to the
+  // other clients on their own, the body's enemy packets cover them.
+  private async spawnSorcererBits(body: EnemyRuntime, bodyAi: SorcererAi): Promise<void> {
     const ctx = this.difficultyParams;
-    const def = ENEMY_TYPE_PARAMS[e.slot.type];
+    if (!ctx) return;
+    for (const side of [1, 2] as const) {
+      const index = body.index + side;
+      const type = side === 1 ? 'BEE_R' : 'BEE_L';
+      const slot = ctx.slots[index - ctx.base];
+      if (!slot || slot.type !== type || this.enemies.has(index)) {
+        this.opts.log(`Chaos Sorcerer E-${body.index.toString(16)}: no ${type} slot`);
+        continue;
+      }
+      const at = bodyAi.bit(side);
+      const bp = body.instance.root.position;
+      const placed = {
+        ...body.instance.placed,
+        entity: { ...(body.instance.placed.entity as EnemySet), index: -1 - index },
+        world: [at.x, bp.y, at.z] as [number, number, number],
+        yaw: bodyAi.angle,
+        name: side === 1 ? 'Bee R' : 'Bee L',
+      };
+      const spec = { ...body.instance.spec, name: 'TObjEneRe4SorcererBee', parts: [{ model: 1, texlistOf: 0 }] };
+      const instance = await this.layer.spawn(placed as typeof body.instance.placed, spec as typeof body.instance.spec);
+      if (!instance || this.disposed) return;
+      const fight = this.childFightStats(type);
+      const ai = new SorcererBitAi(bodyAi, side, () => this.rng());
+      this.enemies.set(index, {
+        instance,
+        index,
+        slot,
+        ...fight,
+        motions: enemyCombatMotions('TObjEneRe4SorcererBee', instance.archive),
+        rtIndex: ENEMY_TYPE_PARAMS[type]?.rt ?? 0xff,
+        dead: false,
+        state: 'idle',
+        removeIn: 0,
+        ai,
+        lift: SORCERER.bitHeight,
+        monest: null,
+        parent: body,
+        fake: null,
+        buffs: new EntityBuffs(),
+        status: new EnemyStatus(enemyAttribute(type)),
+      });
+    }
+  }
+
+  // The Chaos Sorcerer's inputs for this tick: its HP (the exact heal test),
+  // the enemies its heal can reach and whether each bit is down.
+  private sorcererFeed(e: EnemyRuntime, ai: SorcererAi): void {
+    ai.hp = e.stats.hp;
+    ai.maxHp = e.stats.maxHp;
+    const allies: HealAlly[] = [];
+    for (const o of this.enemies.values()) {
+      if (o === e || o.dead || o.ai instanceof SorcererBitAi) continue;
+      const p = o.instance.root.position;
+      allies.push({ id: 0x1000 | o.index, x: p.x, z: p.z, hp: o.stats.hp, maxHp: o.stats.maxHp });
+    }
+    ai.allies = allies;
+    ai.bitDown = [this.beeDown(e.index + 1), this.beeDown(e.index + 2)];
+  }
+
+  private beeDown(index: number): boolean {
+    const bit = this.enemies.get(index);
+    return !!bit && bit.ai instanceof SorcererBitAi && bit.ai.state === 'down';
+  }
+
+  // The Chaos Sorcerer's Resta on the enemy the heal picked (entity id in
+  // `target`, null = the caster itself).
+  private sorcererHeal(caster: EnemyRuntime, h: { level: number; target?: number | null }): void {
+    const target = h.target == null ? caster : this.enemies.get(h.target & 0xfff);
+    if (!target || target.dead) return;
+    this.enemyResta(caster, target, h.level);
+  }
+
+  // CreateSpecialAttackEntity_006eeeb4 with the caster's MST: the heal lands
+  // on `target` (the caster itself or an ally). ASSUMED: the player Resta's
+  // heal, MST * 0.5 + power, MST of the caster's row.
+  private enemyResta(caster: EnemyRuntime, target: EnemyRuntime, level: number): void {
+    const ctx = this.difficultyParams;
+    const def = ENEMY_TYPE_PARAMS[caster.slot.type];
     const mst = ctx?.params && def?.stats.length ? Math.max(0, ctx.params.stats(ctx.difficulty, def.stats[0]).mst) : 0;
     const heal = Math.round(mst * 0.5 + techPower(TECH.resta, level));
-    e.stats.hp = Math.min(e.stats.maxHp, e.stats.hp + heal);
-    this.sendEnemy(e, ENEMY_BASE_FLAGS);
-    this.opts.log(`E-${e.index.toString(16)} (${e.slot.type}) casts Resta: +${heal} HP (${e.stats.hp}/${e.stats.maxHp})`);
+    target.stats.hp = Math.min(target.stats.maxHp, target.stats.hp + heal);
+    this.sendEnemy(target, ENEMY_BASE_FLAGS);
+    const what = target === caster ? 'itself' : `E-${target.index.toString(16)} (${target.slot.type})`;
+    this.opts.log(`E-${caster.index.toString(16)} (${caster.slot.type}) casts Resta on ${what}: +${heal} HP (${target.stats.hp}/${target.stats.maxHp})`);
+  }
+
+  // A hit on a Chaos Sorcerer's bit: its own HP row; at 0 it goes down
+  // (combat/enemyfsmruins.ts SorcererBitAi) with the SE 0x1e0 at the bit.
+  // ASSUMED: no death plan, no drop, no EXP.
+  private sorcererBitHit(e: EnemyRuntime, ai: SorcererBitAi, damage: number, critical: boolean, baseFlags: number, what: string): void {
+    const flags = baseFlags | applyDamage(e.stats, damage);
+    const down = (flags & FLAG_DEAD) !== 0;
+    this.sendEnemy(e, flags & ~FLAG_DEAD);
+    const p = e.instance.root.position;
+    this.num(damage, critical, p.x, p.y + 26, p.z);
+    if (down) {
+      ai.down();
+      this.playSeAt(0x1e0, p);
+    }
+    this.opts.log(`${what}hit ${e.slot.type} for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp}${down ? ' (down)' : ''}`);
   }
 
   // --- Epsilon (combat/enemyfsmep2d.ts) ---------------------------------------
@@ -6034,6 +6136,10 @@ export class CombatView {
       this.opts.log(`${what}hit De Rol Le's ${pool} for ${Math.round(damage)}: shell ${ai.shellHp}/${ai.shellMax}, body ${ai.bodyHp}/${ai.bodyMax}`);
       return;
     }
+    if (e.ai instanceof SorcererBitAi) {
+      this.sorcererBitHit(e, e.ai, damage, critical, baseFlags, what);
+      return;
+    }
     let flags = baseFlags | applyDamage(e.stats, damage);
     if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
       // State 5's revive branch: the Dubchic falls, lies there and gets up
@@ -7009,6 +7115,11 @@ export class CombatView {
   // death motion (the enemy is removed when it ends).
   private killEnemy(e: EnemyRuntime, _flags: number): void {
     e.dead = true;
+    // The Chaos Sorcerer's bits go with it (SorcererDestructor_005a4f28 marks both).
+    if (e.ai instanceof SorcererAi) for (const n of [1, 2]) {
+      const bit = this.enemies.get(e.index + n);
+      if (bit) this.dropQuietly(bit);
+    }
     // The death handler (+0x104) sends the mirage clones away first.
     if (e.ai instanceof SinowAi && !e.ai.ally) {
       e.ai.kill();
