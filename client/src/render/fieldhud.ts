@@ -31,13 +31,16 @@ import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, undroppable, type RowContext } from '../classic/itempack.ts';
-import { createCounter, type Counter, type CounterKind } from '../classic/shop.ts';
+import { createCounter, type Counter, type CounterKind, type CounterMusic } from '../classic/shop.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
-import { bandsOf, overlayFrame, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
-import type { ItemNames } from '../formats/itemnames.ts';
+import { bandsOf, overlayFrame, textureBitmap, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
+import type { ItemData, ItemNames } from '../formats/itemnames.ts';
+import { AFSArchive } from '../formats/archives.ts';
+import { ITEM_KT_FILE, itemPictureEntry } from '../formats/itemkt.ts';
+import { parseXvm } from '../formats/xvm.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -80,6 +83,8 @@ export interface FieldHudOptions {
   character: () => CharacterFile | null;
   fullCharacter: () => Uint8Array | null;
   items: GameItems;
+  // The floor music for the counters' jingles (classic/shop.ts CounterMusic).
+  music?: CounterMusic;
   area: () => number;
   // g_QuestStarted: a quest is loaded and running (the main menu's Quest
   // Board entry, classic/fieldmenu.ts).
@@ -133,6 +138,7 @@ export class FieldHud {
   private host: HTMLCanvasElement;
   private tex: Textures | null = null;
   private groups: string[][] | null = null;
+  private itemKt: Promise<AFSArchive> | null = null; // ItemKTep4.afs, read on the first picture
   private shopGroups: string[][] | null = null;
   // The open shop / bank counter (classic/shop.ts), opened by quest/town.ts.
   private counter: Counter | null = null;
@@ -512,6 +518,8 @@ export class FieldHud {
         rowContext: () => this.rowContext(),
         pmt: () => this.names()?.pmt ?? null,
         items: this.opts.items,
+        picture: (item) => this.itemPicture(item),
+        ...(this.opts.music ? { music: this.opts.music } : {}),
         log: this.opts.log,
       },
       kind,
@@ -526,6 +534,22 @@ export class FieldHud {
       };
       counter.start();
     });
+  }
+
+  // The item's picture (ItemKTep4.afs, formats/itemkt.ts) as a bitmap, or
+  // null when the exe draws none. The archive is read once.
+  private async itemPicture(item: ItemData): Promise<ImageBitmap | null> {
+    if (!this.itemKt) {
+      this.itemKt = this.files.read(ITEM_KT_FILE).then((data) => new AFSArchive(data));
+    }
+    const pmt = this.names()?.pmt ?? null;
+    const weaponId = item.data1[0] === 0 ? pmt?.getWeapon(item.data1[1], item.data1[2])?.id : undefined;
+    const entry = itemPictureEntry(item.data1, weaponId);
+    if (entry === null) return null;
+    const archive = await this.itemKt;
+    if (entry >= archive.entries.length) return null;
+    const [tex] = parseXvm(archive.get(entry));
+    return tex ? textureBitmap(tex) : null;
   }
 
   async load(): Promise<void> {

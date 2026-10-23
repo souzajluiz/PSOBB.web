@@ -86,6 +86,9 @@ export const BANK_WINDOW = { x: 12, y: 389, w: 160, h: 27 } as const; // entry 0
 // The spinner at 0x2d: the Item Pack's numeric window (0x009f2c48) without
 // a title. ASSUMED: same template, so 224 x 74.
 export const SHOP_AMOUNT = { x: 266, y: 270, w: 224, h: 74 } as const;
+// The tekker's item picture window: entry 0x32 (0x009720d0 = (124, 98)), 160 x
+// 120 from the template 0x00971018 (FUN_00731460, unknown_get_itemkt_image).
+export const ITEM_PICTURE = { x: 124, y: 98, w: 160, h: 120 } as const;
 export const LIST_ROWS = 8; // (184 - 20 - 6 + 6) / 20
 
 // --- shops -------------------------------------------------------------------
@@ -388,7 +391,16 @@ export interface CounterEnv {
   rowContext: () => RowContext;
   pmt: () => ItemPMT | null;
   items: CounterItems;
+  // The item picture of an identified item (formats/itemkt.ts), or null.
+  picture?: ((item: ItemData) => Promise<ImageBitmap | null>) | undefined;
+  // Floor music for the counter's jingles (audio/fieldbgm.ts FieldMusic).
+  music?: CounterMusic | undefined;
   log?: ((msg: string) => void) | undefined;
+}
+
+export interface CounterMusic {
+  jingle(name: string): void; // replaces the floor track (FUN_00814f0c)
+  restore(): void; // the floor track again
 }
 
 interface Choice {
@@ -421,6 +433,8 @@ abstract class CounterBase {
   private waitCancel = false;
   protected choice: Choice | null = null;
   protected list: ItemList | null = null;
+  // The item picture window (0x32) while it is up.
+  protected picture: ImageBitmap | null = null;
   private amount: { spinner: AmountSpinner; resolve: (v: number | null) => void } | null = null;
   private polls: Array<{ test: () => boolean; resolve: () => void }> = [];
   protected showBankMeseta = false;
@@ -447,11 +461,16 @@ abstract class CounterBase {
       })
       .finally(() => {
         this.done = true;
+        this.picture = null;
+        this.leave();
         this.onClose();
       });
   }
 
   protected abstract run(): Promise<void>;
+
+  // Runs when the counter closes (after its last line or a force-close).
+  protected leave(): void {}
 
   // Force-close (leaving the floor): every pending prompt rejects.
   close(): void {
@@ -649,6 +668,7 @@ abstract class CounterBase {
       if (item && l.detail) drawTextWindow(ctx, skin, { x: anchorX(R.x, R.w, extra), y: R.y, w: R.w, h: R.h }, itemDescription(item, this.env.rowContext().names));
       if (l.quantity && item) this.drawCount(ctx, skin, QUANTITY_WINDOW, this.env.text(12, 1), l.quantity(l.cursor));
     }
+    if (this.picture) this.drawPicture(ctx, skin, extra, this.picture);
     if (this.showBankMeseta && this.env.items.bank && !l) this.drawCount(ctx, skin, BANK_WINDOW, this.env.text(12, 2), this.env.items.bank.meseta);
     this.drawCount(ctx, skin, MONEY_WINDOW, this.env.text(11, 0x9b), c?.meseta ?? 0);
     if (this.clerk.text) this.clerk.draw(ctx, skin, extra);
@@ -661,6 +681,22 @@ abstract class CounterBase {
       drawAmountWindow(ctx, skin, tex, this.amount.spinner, { ...R, x: anchorX(R.x, R.w, extra) }, null);
     }
   }
+
+  // The picture window: the frame, then the picture inside it (ASSUMED: the
+  // picture fills the inset, the exe's texture scale is not decoded).
+  private drawPicture(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number, img: ImageBitmap): void {
+    const P = ITEM_PICTURE;
+    const x = anchorX(P.x, P.w, extra);
+    drawWindowFrame(ctx, skin.frame, x, P.y, P.w, P.h);
+    ctx.drawImage(img, x + INSET, P.y + INSET, P.w - 2 * INSET, P.h - 2 * INSET);
+  }
+
+  protected jingle(name: string): void {
+    this.jingled = true;
+    this.env.music?.jingle(name);
+  }
+
+  protected jingled = false;
 
   private drawList(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, l: ItemList): void {
     const L = SHOP_LIST;
@@ -691,13 +727,14 @@ abstract class CounterBase {
   }
 
   // Console / test aid.
-  state(): { message: string; choice: string[] | null; list: string[] | null; cursor: number; amount: number | null } {
+  state(): { message: string; choice: string[] | null; list: string[] | null; cursor: number; amount: number | null; picture: boolean } {
     return {
       message: this.clerk.text,
       choice: this.choice?.items.map((i) => i.label) ?? null,
       list: this.list?.rows.map((r) => r.name) ?? null,
       cursor: this.list?.cursor ?? -1,
       amount: this.amount?.spinner.value ?? null,
+      picture: this.picture !== null,
     };
   }
 }
@@ -1128,8 +1165,12 @@ export class BankCounter extends CounterBase {
 // The lines are unitxt_shop group 0x0096c6ec[section id] = 4 + section id
 // (unknown_get_shop_unitxt_3, 0x006dbe14 for the title), the section id
 // being the one that also picks the tekker's model (0x00a9c4d8).
-// Left out: the item picture window at 0x32 (124, 98), 160 x 120 (template
-// 0x00971018; unknown_get_itemkt_image) and the two BGM changes.
+// The picture window at 0x32 (124, 98), 160 x 120 (template 0x00971018), shows
+// the item's ItemKTep4.afs picture (formats/itemkt.ts) while the Result list is
+// up. The two BGM changes are j_kantei.adx (after 6xB8) and miniclear.adx
+// (after the deal). Left out: the object created at 0x29's position (400, 50)
+// with scale 0.75 when FUN_0078b208() > 2 (FUN_006d9d94, object 0xb4 via
+// FUN_00725d18): its model is not traced.
 export const TEKKER = {
   title: 0,
   welcome: 1,
@@ -1148,6 +1189,10 @@ export const TEKKER = {
 export const TEKKER_FEE = 100; // 0x006da050: 99 < meseta; newserv on_identify_item_bb
 export const TEKKER_WAIT = 0x5f; // state 3's timer, frames
 export const TEKKER_RESULT_TITLE = 'Result'; // 0x0096c444 (0x0096c438 on a Japanese client)
+// The two jingles (FUN_00814f0c, the ADX names at 0x0096c428 / 0x009699ac):
+// the appraisal starts with j_kantei.adx, the end of a deal plays miniclear.adx.
+export const TEKKER_APPRAISE_BGM = 'j_kantei.adx';
+export const TEKKER_DONE_BGM = 'miniclear.adx';
 
 // unitxt_shop group of the tekker's lines (0x0096c6ec: 4..13 by section id).
 export function tekkerGroup(sectionId: number): number {
@@ -1207,18 +1252,21 @@ export class TekkerCounter extends CounterBase {
       const originalId = picked.data.id;
       items.identify(originalId);
       this.closeList();
+      this.jingle(TEKKER_APPRAISE_BGM);
       this.say(TEKKER.examining);
       // State 3.
       await this.delay(TEKKER_WAIT);
       await this.until(() => items.identifyResult !== null);
       const answer = items.identifyResult!;
       const result: ItemData = { data1: answer.data1.slice(), id: items.takeItemId(), data2: answer.data2.slice() };
+      this.picture = (await this.env.picture?.(result)) ?? null;
       this.showList(TEKKER_RESULT_TITLE, [shopRow(result, '', this.env.rowContext())], [result], null, { bar: false });
       this.say(TEKKER.accept);
       // States 4 / 6.
       for (;;) {
         if ((await this.choose([MSG.yes, MSG.no])) === 0) {
           this.closeList();
+          this.picture = null;
           items.pay(TEKKER_FEE);
           let equip = false;
           if (equipProblems(result, this.env.rowContext()) === 0) {
@@ -1227,12 +1275,14 @@ export class TekkerCounter extends CounterBase {
             equip = (await this.choose([MSG.yes, MSG.no])) === 0;
           }
           this.accept(originalId, result, equip);
+          this.jingle(TEKKER_DONE_BGM);
           this.say(TEKKER.anythingElse);
           break;
         }
         this.say(TEKKER.stillPay);
         if ((await this.choose([MSG.yes, MSG.no])) === 0) {
           this.closeList();
+          this.picture = null;
           items.pay(TEKKER_FEE);
           this.say(TEKKER.yourChoice);
           // State 5.
@@ -1244,6 +1294,12 @@ export class TekkerCounter extends CounterBase {
         this.say(TEKKER.accept);
       }
     }
+  }
+
+  // The floor track comes back when the counter closes (ASSUMED: the exe
+  // resumes the area track once nothing plays; the end is not traced).
+  protected override leave(): void {
+    if (this.jingled) this.env.music?.restore();
   }
 
   private accept(originalId: number, result: ItemData, equip: boolean): void {

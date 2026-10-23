@@ -234,6 +234,21 @@ export class FieldMusic {
     else void this.bgm.play(s.name);
   }
 
+  // A jingle (a named ADX, e.g. the tekker's j_kantei.adx) replaces the floor
+  // track (FUN_00814f0c).
+  jingle(name: string): void {
+    void this.bgm.play(name);
+  }
+
+  // After a jingle, the floor track starts again on the next tick: a city
+  // zone the player stands in plays its track, else the city track
+  // (FUN_00642824's rule, the zone table being re-entered).
+  resume(): void {
+    this.started = false;
+    this.zoneTrack = -1;
+    this.inside = this.inside.map(() => false);
+  }
+
   // Boss of the current floor, or null on a floor without one.
   get bossMusic(): BossBgm | null {
     return this.boss;
