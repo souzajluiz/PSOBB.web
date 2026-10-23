@@ -551,6 +551,23 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   // The quest NPC (0x118): an NPC player, not an enemy model; its record is param6 bits 8..13.
   check(enemyModelFor(npc(QUEST_NPC_TYPE, 0x0500), ctx(3, 0, 0)) === null, 'quest NPC 0x118 is not an enemy model');
   check(questNpcTemplate(0x0500) === 5 && questNpcTemplate(0x4201) === 2 && questNpcTemplate(-1) === 63, 'quest NPC template = param6 bits 8..13 (flag bit 0 ignored)');
+  // 11. The enemy-built NPCs talk (the vtables of 0x33 / 0x45 / 0x46 / 0xa9 / 0x118 all
+  // carry the NPC talk: +0x2c 0x006072e0, +0x160 EnemyObjectUpdate_0060648c, +0x164
+  // 0x00606a34; ASSUMED from the exe's vtable slots). Their set params are the talk
+  // parameters: action 105 with label 300 talks in the quest (npcParams), as for an NPC.
+  const talkEnemy = (type: number, params: number[]): EnemySet => ({ ...npc(type), params: params as EnemySet['params'] });
+  for (const type of [0x33, 0x45, 0x46, 0xa9]) {
+    const t = npcParams(talkEnemy(type, [0, 0, 0, 105, 300, 0, 0]).params);
+    check(t.script === 'quest' && t.label === 300 && t.action === 105, `enemy-built NPC 0x${type.toString(16)} talks: ${JSON.stringify(t)}`);
+    check(npcParams(talkEnemy(type, [0, 0, 0, 50, 300, 0, 0]).params).script === null, `enemy-built NPC 0x${type.toString(16)} with action 50 cannot talk`);
+    check(npcParams(talkEnemy(type, [0, 0, 0, 0, 0, 0, 0]).params).script === null, `enemy-built NPC 0x${type.toString(16)} with no label cannot talk`);
+  }
+  const areaTalk = npcParams(talkEnemy(0x33, [0, 1005, 0, 1049, 870, 0, 0]).params);
+  check(areaTalk.script === 'area' && areaTalk.label === 870 && areaTalk.displayAreaScript, 'enemy-built NPC with action 1049 talks in the area script');
+  // The quest NPC (0x118) talks through the same NPC path (the NpcInstance of buildQuestNpc).
+  const questTalk = npcParams(talkEnemy(QUEST_NPC_TYPE, [0, 0, 0, 105, 300, 0x0500, 0]).params);
+  check(questTalk.script === 'quest' && questTalk.label === 300, 'quest NPC 0x118 talks through the NPC path');
+
   console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Hildebear ${hilde?.bml} (motion ${hm?.index} at ${hm?.speed}), Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed}); stage NPC 0x33 slot 12 ${hilde33?.bml}; quest NPC records ${NPC_PLAYER_COUNT}`);
 }
 
