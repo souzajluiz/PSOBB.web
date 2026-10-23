@@ -174,8 +174,15 @@ eq([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 1, 1], [2, 1, 0], [0, 1, 1],
   const one = gizondeStrike(0, cast, [a], half);
   eq([one.hits, one.bolts.length, one.bolts[0].thickness, one.particles.map((p) => p.id), one.sounds[0].id, one.sounds[0].pitch], [true, 1, 0.5, [0x19f], 0x90, 0x100], 'Gizonde Lv1 on one target');
   eq(one.particles[0].at, a, 'the hit particle is at the first hit box');
+  // The exe's return 0 on a bad pair (asm 6e6148 / 6e605f): the bolts before it stay, nothing is hit.
   const chain = gizondeStrike(0, cast, [a, b, c], half);
-  eq(chain.bolts.length, 2, 'a chain bolt per consecutive pair at non zero distance (b -> c is zero)');
+  eq([chain.bolts.length, chain.hits], [2, false], 'b -> c is at zero distance: the chain stops, no hit (the first bolt and a -> b stay)');
+  eq(gizondeStrike(0, cast, [a, null, b], half).bolts.length, 1, 'a missing entity in the middle: the chain stops after the first bolt');
+  const stop = gizondeStrike(0, cast, [a, null, b], half);
+  eq(stop.hits, false, 'a missing entity in the middle: no hit');
+  const ok = gizondeStrike(0, cast, [a, b, { x: 90, y: 26, z: 10 }], half);
+  eq([ok.bolts.length, ok.hits], [3, true], 'a clean chain of three: first bolt + two pairs, every target hit');
+  eq(gizondeStrike(0, cast, [null, a], half).bolts.length, 0, 'a missing first target: nothing is drawn');
   const t5 = gizondeStrike(25, cast, [a, b], half);
   eq(t5.bolts.map((x) => x.thickness), [5, 0.5, 0.5, 5, 0.5, 0.5], 'tier 5: three bolts per segment');
   eq(t5.particles.map((p) => p.id), [0x19f, 0x188], 'tier 5 particles');
@@ -195,12 +202,15 @@ eq([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 1, 1], [2, 1, 0], [0, 1, 1],
   near(sp[0].z, Math.sin(a1) * 5.4 + 5, 'point 0 z = sin * step + z');
   eq(sp.every((p) => p.y === 20), true, 'the spiral stays at the cast height');
   near(Math.hypot(sp[7].x - 10, sp[7].z - 5), 5.4 * 8, 'point 7 is at 8 steps');
-  const lv0 = razondeStrike(0, { x: 0, y: 0, z: 0 }, half, { x: 1, y: 2, z: 3 });
+  const H = { x: 1, y: 2, z: 3 };
+  const W = { x: 7, y: 8, z: 9 };
+  const lv0 = razondeStrike(0, { x: 0, y: 0, z: 0 }, half, { hand: H, weapon: W });
   eq([lv0.bolts.length, lv0.bolts[0].thickness, lv0.bolts[0].hold, lv0.particles.map((p) => p.id), lv0.sounds[0].id], [7, 5, 6, [0x93], 0x91], 'Razonde Lv1');
-  eq(lv0.casterParticles, [{ id: 0x93, at: { x: 1, y: 2, z: 3 } }], 'the caster gets the first table particle');
-  const lv16 = razondeStrike(15, { x: 0, y: 0, z: 0 }, half, { x: 1, y: 2, z: 3 });
+  eq(lv0.casterParticles, [{ id: 0x93, at: H }], 'the caster gets the first table particle at the hand');
+  const lv16 = razondeStrike(15, { x: 0, y: 0, z: 0 }, half, { hand: H, weapon: W });
   eq(lv16.particles.map((p) => [p.id, p.at.x === lv16.spiral[lv16.particles.indexOf(p)].x]), [[0xaa, true], [0xad, true]], 'tier 3 particles at the first two spiral points');
   eq(lv16.casterParticles.map((p) => [p.id, p.duration ?? null]), [[0xaa, null], [0xad, 60]], 'table[1] is a 60 frame emitter on the caster');
+  eq(lv16.casterParticles[1].at, W, 'the 60 frame emitter is at the weapon position (caster + 0x300), not the hand');
   eq(razondeStrike(15, O, half, null).casterParticles, [], 'an enemy caster makes none');
   eq(razondeStrike(25, O, half, null).bolts.length, 14, 'tier 5 adds a thin bolt per segment');
   eq(razondeStrike(25, O, half, null).particles.map((p) => p.id), [0xab, 0xae], 'tier 5 particle table');
