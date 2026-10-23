@@ -21,10 +21,15 @@
 //
 // Every label is a numbered label (labelXXXX, hex) or a name (`my_loop:`),
 // which the assembler numbers itself. Labels whose bytes are not code are
-// emitted as `.data` hex. Text after `//` is a comment.
+// emitted as `.data` hex, unless a code reference types them (the opcode's
+// argument data type, questopcodes.ts): a string (`.cstr "..."`) or a structure
+// (`.struct KIND` with one `.field name value` line per field, or `.vector x y z t`
+// lines for VECTOR4F_LIST; questdata.ts). A typed form is used only when it
+// re-encodes to the same bytes. Text after `//` is a comment.
 
 import { decodeInstruction, questCodeEnd, type QuestBin, type QuestFloorAssignment, type QuestInstruction, type QuestInstructionArg } from './questbin.ts';
-import { F_ARGS, F_CLEAR_ARGS, F_PUSH_ARG, questOpcodeByName, type QuestArg, type QuestOpcodeDef } from './questopcodes.ts';
+import { decodeCString, decodeTypedData, encodeTypedData, typedLayout, TYPED_DATA_KINDS, type FieldValue, type TypedDataKind, type TypedRecord } from './questdata.ts';
+import { F_ARGS, F_CLEAR_ARGS, F_PUSH_ARG, questOpcodeByName, type QuestArg, type QuestArgDataType, type QuestOpcodeDef } from './questopcodes.ts';
 import { buildQuestBin } from './questwrite.ts';
 
 // ---------------------------------------------------------------------------
@@ -212,11 +217,11 @@ function decodeSection(data: Uint8Array, start: number, stop: number): Pick<Sect
   return { insns, tail: at, clean, terminated };
 }
 
-// Label references of one section: [label, isScript].
-function sectionRefs(s: Section): { label: number; script: boolean }[] {
-  const out: { label: number; script: boolean }[] = [];
+// Label references of one section: the label, whether it is code, and the data type of the argument.
+function sectionRefs(s: Section): { label: number; script: boolean; data: QuestArgDataType | undefined }[] {
+  const out: { label: number; script: boolean; data: QuestArgDataType | undefined }[] = [];
   const add = (a: QuestArg, value: number): void => {
-    out.push({ label: value, script: a.data === 'SCRIPT' });
+    out.push({ label: value, script: a.data === 'SCRIPT', data: a.data });
   };
   for (const insn of s.insns) {
     for (const a of insn.args) {
@@ -241,6 +246,88 @@ function dataLines(bytes: Uint8Array): string[] {
     lines.push(`  .data ${[...bytes.subarray(i, i + 32)].map((b) => hex(b, 2)).join(' ')}`);
   }
   return lines;
+}
+
+const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+
+// The typed form of a data label, or null when the type does not describe its bytes.
+function typedLines(bytes: Uint8Array, type: QuestArgDataType): string[] | null {
+  if (type === 'CSTRING') {
+    const s = decodeCString(bytes);
+    return s === null ? null : [`  .cstr ${quote(s)}`];
+  }
+  if (!(TYPED_DATA_KINDS as readonly string[]).includes(type)) return null;
+  const kind = type as TypedDataKind;
+  const records = decodeTypedData(kind, bytes);
+  if (!records) return null;
+  try {
+    if (!bytesEqual(encodeTypedData(kind, records), bytes)) return null;
+  } catch {
+    return null;
+  }
+  const lines = [`  .struct ${kind}`];
+  for (const rec of records) {
+    if (kind === 'VECTOR4F_LIST') {
+      lines.push(`  .vector ${rec.map(([, v]) => fmtFieldValue(v)).join(' ')}`);
+    } else {
+      for (const [name, v] of rec) lines.push(`  .field ${name} ${fmtFieldValue(v)}`);
+    }
+  }
+  return lines;
+}
+
+function fmtFieldValue(v: FieldValue): string {
+  if ('int' in v) return String(v.int);
+  if ('float' in v) return fmtFloat(v.float);
+  if ('bytes' in v) return [...v.bytes].map((b) => hex(b, 2)).join('');
+  return quote(v.text);
+}
+
+// The `.struct` block's records from its `.field` / `.vector` lines (assembler side).
+function parseStructItems(kind: TypedDataKind, items: readonly ParsedLine[]): TypedRecord[] {
+  const lineErr = (no: number, msg: string): never => {
+    throw new QuestAssemblyError(no, msg);
+  };
+  if (kind === 'VECTOR4F_LIST') {
+    return items.map((it) => {
+      if (it.head !== '.vector') lineErr(it.no, `${kind} takes .vector lines, got ${it.head}`);
+      const toks = it.rest.trim().split(/\s+/).filter((t) => t.length);
+      if (toks.length !== 4) lineErr(it.no, '.vector takes four floats: x y z t');
+      return ['x', 'y', 'z', 't'].map((n, i) => [n, { float: parseFloatBits(toks[i], it.no) }] as [string, FieldValue]);
+    });
+  }
+  const layout = typedLayout(kind);
+  const rec: TypedRecord = items.map((it) => {
+    if (it.head !== '.field') lineErr(it.no, `${kind} takes .field lines, got ${it.head}`);
+    const m = /^(\S+)\s*(.*)$/.exec(it.rest.trim());
+    if (!m) lineErr(it.no, '.field takes a name and a value');
+    const [, name, value] = m!;
+    const def = layout.fields.find((d) => d.name === name);
+    if (!def) lineErr(it.no, `${name} is not a field of ${kind}`);
+    const d = def!;
+    switch (d.t) {
+      case 'u8':
+        return [name, { int: parseInteger(value, it.no, 0, 0xff, name) }];
+      case 'i8':
+        return [name, { int: parseInteger(value, it.no, -0x80, 0x7f, name) }];
+      case 'u16':
+        return [name, { int: parseInteger(value, it.no, 0, 0xffff, name) }];
+      case 'i16':
+        return [name, { int: parseInteger(value, it.no, -0x8000, 0x7fff, name) }];
+      case 'u32':
+        return [name, { int: parseInteger(value, it.no, 0, 0xffffffff, name) }];
+      case 'i32':
+        return [name, { int: parseInteger(value, it.no, -0x80000000, 0x7fffffff, name) }];
+      case 'f32':
+        return [name, { float: parseFloatBits(value, it.no) }];
+      case 'bytes':
+        if (!/^([0-9a-fA-F]{2})*$/.test(value)) lineErr(it.no, `${name} takes hex bytes`);
+        return [name, { bytes: Uint8Array.from(value.match(/../g) ?? [], (b) => parseInt(b, 16)) }];
+      default:
+        return [name, { text: unquote(value, it.no) }];
+    }
+  });
+  return [rec];
 }
 
 export interface DisassembleOptions {
@@ -304,6 +391,32 @@ export function disassembleQuest(bin: QuestBin, opts: DisassembleOptions = {}): 
     const trailingZero = data.subarray(s.tail, s.stop).every((b) => b === 0);
     if (reachable.has(i) || (s.clean && s.terminated && s.insns.length > 0 && trailingZero && !dataRefs.has(i))) s.kind = 'code';
   });
+
+  // --- typed data labels: a data section that a code section references with
+  // a data type (the first type, in reference order, that re-encodes exactly)
+  const candidates = new Map<number, QuestArgDataType[]>();
+  sections.forEach((s, i) => {
+    if (s.kind !== 'code') return;
+    for (const r of refsOf[i]) {
+      if (!r.data || r.data === 'SCRIPT' || r.data === 'DATA') continue;
+      const si = sectionAt.get(bin.labels[r.label]);
+      if (si === undefined || sections[si].kind !== 'data') continue;
+      const list = candidates.get(si) ?? [];
+      if (!list.includes(r.data)) list.push(r.data);
+      candidates.set(si, list);
+    }
+  });
+  const typedOf = new Map<number, string[]>();
+  for (const [si, types] of candidates) {
+    const s = sections[si];
+    for (const t of types) {
+      const lines = typedLines(data.subarray(s.start, s.stop), t);
+      if (lines) {
+        typedOf.set(si, lines);
+        break;
+      }
+    }
+  }
 
   // --- header
   const lines: string[] = [];
@@ -373,11 +486,11 @@ export function disassembleQuest(bin: QuestBin, opts: DisassembleOptions = {}): 
   lines.push(...extra);
 
   // --- code
-  for (const s of sections) {
+  for (const [si, s] of sections.entries()) {
     lines.push('');
     for (const l of s.labels) lines.push(l === 0 ? 'start:' : `${labelName(l)}:`);
     if (s.kind === 'data') {
-      lines.push(...dataLines(data.subarray(s.start, s.stop)));
+      lines.push(...(typedOf.get(si) ?? dataLines(data.subarray(s.start, s.stop))));
       continue;
     }
     const notes = new Map<QuestInstruction, string>();
@@ -601,6 +714,7 @@ interface ParsedLine {
   kind: 'label' | 'directive' | 'insn';
   head: string; // label name / directive / opcode name
   rest: string;
+  items?: ParsedLine[]; // a `.struct` line's `.field` / `.vector` lines
 }
 
 export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions = {}): QuestBin {
@@ -618,6 +732,16 @@ export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions
     const m = /^(\S+)\s*(.*)$/.exec(line)!;
     parsed.push({ no, kind: m[1][0] === '.' ? 'directive' : 'insn', head: m[1], rest: m[2] });
   });
+  // A `.struct` line takes the `.field` / `.vector` lines after it.
+  for (let i = 0; i < parsed.length; i++) {
+    if (parsed[i].kind !== 'directive' || parsed[i].head !== '.struct') continue;
+    const items: ParsedLine[] = [];
+    while (i + 1 < parsed.length && parsed[i + 1].kind === 'directive' && (parsed[i + 1].head === '.field' || parsed[i + 1].head === '.vector')) {
+      items.push(parsed[i + 1]);
+      parsed.splice(i + 1, 1);
+    }
+    parsed[i].items = items;
+  }
 
   // --- label numbering: labelXXXX is numbered by its name, `start` is 0, any
   // other name gets the lowest unused number.
@@ -916,6 +1040,17 @@ export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions
           const s = unquote(rest.trim(), no);
           for (let i = 0; i < s.length; i++) code.u16(s.charCodeAt(i));
           code.u16(0);
+          break;
+        }
+        case '.struct': {
+          const kind = rest.trim();
+          if (!(TYPED_DATA_KINDS as readonly string[]).includes(kind)) throw new QuestAssemblyError(no, `unknown .struct kind ${kind}`);
+          try {
+            code.bytes(encodeTypedData(kind as TypedDataKind, parseStructItems(kind as TypedDataKind, l.items ?? [])));
+          } catch (err) {
+            if (err instanceof QuestAssemblyError) throw err;
+            throw new QuestAssemblyError(no, (err as Error).message);
+          }
           break;
         }
         default:

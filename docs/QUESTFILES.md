@@ -9,6 +9,7 @@ and `formats/prs.ts`. The write side, the foundation of a quest editor, is:
 | `formats/questwrite.ts` | `serializeQuestBin`, `serializeQuestDat`, `buildQuestDat`, `setQuestDatChunk`, `buildQuestBin` |
 | `formats/qst.ts` | `parseQst`, `packQst` |
 | `formats/questasm.ts` | `disassembleQuest`, `assembleQuest`, `QuestAssemblyError` |
+| `formats/questdata.ts` | `decodeTypedData`, `encodeTypedData`, `decodeCString` (the typed data labels of the disassembly) |
 
 Formats follow newserv (`src/QuestScript.cc`, `src/Quest.cc`, `src/CommandFormats.hh`, MIT). Nothing was copied from
 phantasmal-world. Blue Burst only.
@@ -128,7 +129,24 @@ label0096:
   fixed register run `arg_pushb` of its first register).
 - Code that is not reachable from label 0 (through `jmp`/`call`/`thread`/... and the arg stack) and does not decode as a
   clean function ending in `ret`/`exit`/`jmp`, and every byte after a terminator, is emitted as `.data` hex. `.zero N`
-  and `.cstr "..."` also exist. Labels the text cannot express: `.unset_label N` (referenced but 0xFFFFFFFF in the
+  and `.cstr "..."` also exist.
+- Typed data labels (`formats/questdata.ts`): a data label that a code reference types through the opcode's argument
+  data type (`questopcodes.ts`, newserv's `DataType`) is printed as a structure or a string instead of hex, when its size
+  fits the type and it re-encodes to the same bytes:
+  - `.cstr "..."`: a BB string (UTF-16 units and the zero unit; `npc_text_id`, `window_msg`'s label forms and the rest of
+    the CSTRING arguments).
+  - `.struct KIND` followed by `  .field name value` lines in layout order, for `PLAYER_STATS` (0x24: the battle
+    parameter's stats, `set_enemy_physical_data`), `ATTACK_DATA` (0x30), `RESIST_DATA` (0x20), `MOVEMENT_DATA` (0x30) and
+    `PLAYER_VISUAL_CONFIG` (0x70, `prepare_npc_visual` / `get_npc_data`: the guild card number and the name are
+    strings). Integers are decimal, floats are the shortest text that gives their bits (`fmtFloat`, else `0x` bits),
+    `bytes` fields are hex without spaces. Layouts follow newserv's `BattleParamsIndex.hh`, `LevelTable.hh` and
+    `PlayerSubordinates.hh`.
+  - `.struct VECTOR4F_LIST` with `  .vector x y z t` lines (16 bytes each; `get_vector_from_path`, `load_unk_data`: the
+    path's points).
+  - `IMAGE_DATA` (PRS-compressed images) and untyped labels stay `.data` hex. The assembler reads the typed forms back
+    with the same encoder, so a typed label round-trips byte for byte; a `.struct` block with a field name out of place,
+    missing or out of range is an error.
+  Labels the text cannot express: `.unset_label N` (referenced but 0xFFFFFFFF in the
   table), `.raw_label N 0xV` (a table value outside the code), `.label_count N` (table longer than the last label),
   `.undefined_label N` (referenced beyond the table; shipped q453 does this).
 - The header's floor assignments are the arguments of the `bb_map_designate` instructions in text order (as newserv does).
@@ -142,7 +160,9 @@ label0096:
 newserv prints `... args` after F_ARGS opcodes, names sections `labelXXXX@0xNNNN:` and uses `.data` for non-code too; ours
 prints `// args`, names `labelXXXX:` and does not parse newserv's text (the directive set overlaps, the argument and
 label syntax differ in details such as `.allow_create_item`'s format). `.language`, `.include` and `--qedit` mnemonics
-are not supported (`.language` is ignored). Data labels (text, NPC stat blocks, splines) are hex, not decoded.
+are not supported (`.language` is ignored). Typed data labels use our `.struct` / `.cstr` / `.vector` forms (above), not
+newserv's `// As PlayerStats` comment listings. Compressed images (`IMAGE_DATA`) stay hex (newserv prints them
+decompressed; ours would need a PRS compressor that reproduces the shipped bytes).
 
 ## Round-trip results
 
@@ -151,7 +171,10 @@ are not supported (`.language` is ignored). Data labels (text, NPC stat blocks, 
 - parse -> `serializeQuestBin`: 335 / 335 byte-identical.
 - parse -> `serializeQuestDat`: 333 / 333 identical (every file ends with the 0x10-byte zero chunk; no padding chunks).
 - `disassembleQuest` -> `assembleQuest` -> `serializeQuestBin`: 335 / 335 identical, and the disassembly of the result is
-  the same text.
+  the same text. Across the 335 quests 146 labels print as typed (`.struct` / `.cstr`; the rest of the data labels are
+  `.data`). A synthetic script covers every typed kind, the labels that stay `.data` (wrong size, trailing bytes), and
+  the assembler's errors on malformed `.struct` blocks; random PlayerStats / ResistData / AttackData / MovementData records
+  re-encode to themselves.
 - `packQst` -> `parseQst`: 333 / 333 identical `.bin` and `.dat`.
 - With `vendor/newserv/build/newserv`: for a sample of 27 quests `decode-qst` of our `.qst` gives our files,
   `decompress-prs` gives our `.bin`, and `disassemble-quest-script --bb` prints the same text for the original, the
