@@ -151,7 +151,23 @@ export const LILY = {
   screamEnd: 30,
   turnRate: 512,
   retarget: 20,
+  // The low-HP spin (state 8, SinowberillAI_ProcessState_005282d0): below
+  // max HP >> 2 (the damage handler's test, hp < max / 4 in shorts) the flinch
+  // ends in the spin; the count (+0x418) passing 450 (0x1c2) is the blast.
+  spinLimit: 450,
+  spinUltimateStep: 20, // Ultimate Mode adds 20 a frame (is_ultimate_mode)
+  spinBobTop: 0x100, // the bob (+0x3e0) turns at 256 and runs back from 0x1fe
+  spinBobFull: 0xff, // the bob is 255 from count 435 on
 } as const;
+
+// The spin's heading turn (BAMS a frame) and bob step by count (+0x418): under
+// 300 0x400 / 0x11, under 360 0x800 / 0x22, under 435 0x1000 / 0x44; from 435
+// on the Lily stops turning and its bob holds at 255.
+const LILY_SPIN_PHASES = [
+  { until: 300, turn: 0x400, bob: 0x11 },
+  { until: 360, turn: 0x800, bob: 0x22 },
+  { until: 435, turn: 0x1000, bob: 0x44 },
+] as const;
 
 const LILY_MOTION = {
   spit: once(0, 0.6),
@@ -176,18 +192,87 @@ export class LilyAi extends BrainBase {
   private screamTarget: number | null = null;
   private attackAngle: number;
   private reach: number;
-  hpFraction = 1; // the owner keeps it current (the spin state below 1/4)
+  // The owner keeps these current (setHp). The spin tests hp < maxHp >> 2.
+  hp = 0;
+  maxHp = 0;
+  // Ultimate Mode (is_ultimate_mode: the count runs 20 a frame) and the Nar
+  // (dark) variant (entity flag 0x800: other sounds). The owner sets them.
+  ultimate = false;
+  dark = false;
+  // Spin (state 8): the count (+0x418), the bob (+0x3e0, 0..255 with the
+  // direction +0x41c), the flag that the spin started (+0x3cc bit 4, kept
+  // across re-entries), the resume state (+0x380 == 8) and the blast.
+  spinFrames = 0;
+  spinBob = 0;
+  private spinDown = false;
+  private spinStarted = false;
+  private spinResume = false;
+  exploded = false;
+  private sePending: number[] = [];
 
-  constructor(opts: { x: number; z: number; angle: number; attack: EnemyAttackData | null; radius: number; rng?: () => number }) {
+  constructor(opts: {
+    x: number;
+    z: number;
+    angle: number;
+    attack: EnemyAttackData | null;
+    radius: number;
+    ultimate?: boolean;
+    rng?: () => number;
+  }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.attackAngle = ((opts.attack?.angle ?? 0x2000) & 0xffff) * BAMS_TO_RAD;
     this.reach = (opts.attack?.distanceX ?? 0) + opts.radius;
+    this.ultimate = opts.ultimate ?? false;
     this.current = LILY_MOTION.closed;
+  }
+
+  // The owner keeps the HP current (the enemy's stats).
+  setHp(hp: number, maxHp: number): void {
+    this.hp = hp;
+    this.maxHp = maxHp;
+  }
+
+  // The sounds of the spin's bob and blast, taken by the owner (play them).
+  takeSe(): number[] {
+    return this.sePending.splice(0);
+  }
+
+  // The damage handler's low-HP test: hp < (maxHp >> 2).
+  private lowHp(): boolean {
+    return this.maxHp > 0 && this.hp < this.maxHp >> 2;
   }
 
   // The spit hit a player (LilyAI_SetActiveFlag_00529c78).
   spitLanded(): void {
     this.satisfiedPending = true;
+  }
+
+  // SinowberillAI_ProcessState_005282d0 at arg 0: the count, the turn and the bob.
+  private spinFrame(): void {
+    this.spinFrames += this.ultimate ? LILY.spinUltimateStep : 1;
+    const c = this.spinFrames;
+    const phase = LILY_SPIN_PHASES.find((p) => c < p.until);
+    if (!phase) {
+      this.spinBob = LILY.spinBobFull;
+      return;
+    }
+    this.angle = wrap(this.angle + phase.turn * BAMS_TO_RAD);
+    if (!this.spinDown) {
+      const v = this.spinBob + phase.bob;
+      if (v < LILY.spinBobTop) this.spinBob = v;
+      else {
+        // The bob turns at the top (0x41c = 1): the blow-up sound.
+        this.spinDown = true;
+        this.spinBob = 0x1fe - v;
+        this.sePending.push(this.dark ? 0x2c6 : 0xfd);
+      }
+    } else {
+      const v = this.spinBob - phase.bob;
+      if (v < 0) {
+        this.spinDown = false;
+        this.spinBob = -v;
+      } else this.spinBob = v;
+    }
   }
 
   private enter(out: AiFrame, state: LilyState): void {
@@ -197,6 +282,18 @@ export class LilyAi extends BrainBase {
     this.frames = 0;
     this.dealt = false;
     this.held = -1;
+    if (state === 'spin') {
+      // Entered again after a flinch it keeps its count (bit 4 set).
+      this.spinResume = true;
+      if (!this.spinStarted) {
+        this.spinStarted = true;
+        this.spinFrames = 0;
+        this.spinDown = true;
+        this.spinBob = 0;
+      }
+      this.play(out, LILY_MOTION.closed);
+      return;
+    }
     if (state === 'idle') {
       this.targetId = null;
       this.play(out, LILY_MOTION.closed);
@@ -213,10 +310,10 @@ export class LilyAi extends BrainBase {
 
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     const out = this.frame();
-    if (this.state === 'dead' || this.state === 'spin') return out;
+    if (this.state === 'dead') return out;
     this.timer++;
     this.frames += this.current?.speed ?? 0;
-    if (this.satisfiedPending && this.state !== 'scream') {
+    if (this.satisfiedPending && this.state !== 'scream' && this.state !== 'spin') {
       this.satisfiedPending = false;
       this.enter(out, 'satisfied');
       return this.finish(out);
@@ -290,6 +387,22 @@ export class LilyAi extends BrainBase {
         // waits for g_LilyAnimElapsedThreshold + the motion's length).
         if (this.timer >= 60) this.enter(out, 'track');
         break;
+      case 'spin': {
+        // Arg 0 then the transition check (arg 3): past 450 the Lily goes to
+        // its death state (10). The blast's damage is ASSUMED to be the
+        // nearest player within its reach (the battle-params record at
+        // 0x009bc358 is not traced); its SE is 0xfe (0x2c7 dark).
+        this.spinFrame();
+        if (this.spinFrames > LILY.spinLimit) {
+          this.sePending.push(this.dark ? 0x2c7 : 0xfe);
+          const t = nearest(targets, this.x, this.z, this.reach);
+          if (t) out.hit = { clientId: t.clientId, knockback: 3, mult: 1 };
+          this.exploded = true;
+          this.state = 'dead';
+          this.current = null;
+        }
+        break;
+      }
       default:
         exhaustive(this.state);
     }
@@ -306,11 +419,11 @@ export class LilyAi extends BrainBase {
   resume(): string {
     if (this.state === 'dead') return this.state;
     const out = this.frame();
-    if (this.hpFraction < 0.25) {
-      // The spin of state 8 (SinowberillAI_ProcessState_005282d0) is not
-      // reproduced: the Lily keeps tracking (left out).
-      this.enter(out, 'track');
-    } else if (Math.fround(this.rng()) < LILY.screamChance) this.enter(out, 'scream');
+    // unknown_lily_handle_damage_taken (arg 3): a spinning Lily spins again;
+    // below max HP >> 2 it starts the spin; else the scream roll; else the
+    // resume state (track).
+    if (this.spinResume || this.lowHp()) this.enter(out, 'spin');
+    else if (Math.fround(this.rng()) < LILY.screamChance) this.enter(out, 'scream');
     else this.enter(out, 'track');
     return this.state;
   }

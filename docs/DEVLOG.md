@@ -10462,3 +10462,67 @@ Jellen on frame 40, the sound once past 10 frames, the motion end to the roam st
 - The six row offsets of the panel (0x00973e24) and the panel width 240: ASSUMED.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` ("all checks passed"). Playwright `PW_BASE_URL=http://127.0.0.1:5175 npx playwright test item-panel.spec.ts --workers=1 --reporter=line`, 2 runs, both passed (49.8 s, 53.2 s). Vite on 5175 stopped after the runs.
+
+## 2026-10-23: Poison / Nar Lily low-HP spin; Rag Rappy chase (traced, partly ported)
+
+**What changed:** the Poison Lily's low-HP spin (state 8) runs its own spin, turn,
+bob and blast instead of tracking (`combat/enemyfsm.ts` LilyAi, `render/combat.ts`
+passes the HP and the Ultimate flag and plays the bob / blast sounds; the blast
+kills the Lily). The Rag Rappy's own alive chase is traced but NOT ported (see the
+last section).
+
+**Details** (Ephinea `PsoBB.exe`, named dump):
+- Trigger: the flinch end (unknown_lily_handle_damage_taken, state 9, arg 3) goes to
+  the spin when the Lily is already spinning (enemy +0x380 == 8) or when hp <
+  maxHp >> 2 (the short compare in that handler), before the scream roll (0.3).
+  Hits while spinning flinch and re-enter the spin with the count kept (+0x3cc bit 4).
+- Spin (SinowberillAI_ProcessState_005282d0, state 8 of LilyAI_Update_00527e74,
+  arg 4 enter): animation 1 (the closed loop, table 0x009bc280). Count +0x418 +1 a
+  frame, +20 in Ultimate Mode (`is_ultimate_mode`). Heading (+0x60) turns 0x400 BAMS a
+  frame under 300, 0x800 under 360, 0x1000 under 435, and not after; the bob (+0x3e0,
+  0..255, direction +0x41c) climbs 0x11 / 0x22 / 0x44 a frame in the same phases and
+  holds at 0xff from 435. The bob turns at 256 (value 0x1fe - v) with SE 0xfd (0x2c6
+  dark, flag 0x800).
+- Blast (arg 3): count > 0x1c2 (450): SE 0xfe (0x2c7 dark), the attack effect of
+  DispatchSinowberillAttackEffect_0051fc9c with record 0x009bc358 (the dark variant
+  uses the Ultimate globals), SetEnemyAiState 10 = EnemyAI_ProcessState_00527f20
+  (the death: EnemyOnKilledHandler, the kill SE). The port kills the Lily through
+  killEnemy after the blast.
+- Frame counts: 451 frames to the blast in Normal, 23 in Ultimate Mode (count 460).
+
+**Rag Rappy (update_rappy, 0x00525xxx; ragrappy_constructor 0x00526d90 per enemymodels.ts):**
+- +0x32e dispatch: 0 RappyProcessMovementAndAnimation (wander / idle / home, sub-states
+  +0x380 0 wander, 1 idle with a timer +0x386, 2 walk back to the spawn x1,z1 at the
+  record speed; wander sub-states +0x330 0 pick the walk animation 1, 1 count, 2 walk
+  30 units on animation 3, 3 wander with speed 358[1] and turn 358[2]); 1
+  RappyProcessState_00526008 (mode +evasion/+defense: 0 chase, 1 engaged chase, 3 the
+  get-up spin, 4 the run-away); 2 RappyProcessState_00525d94 (the lunge: turn 11 frames,
+  forward 14 frames with try_hit 1.0 and knockback 3.0 and the roar, wait 30, coast);
+  3 RappyProcessState_00525d2c (recovery 15 frames); 4 PlayerUpdateState_Combat_00525b8c
+  (vulnerable, the dead Rappy: PlayerProcessVulnerableState_00525c90 sets 0x32e 1 and
+  evasion 3); 5 PlayerUpdateState_Standard_00525b08.
+- Mode 0 / 1 chase: EnemyAI_UpdateTargeting toward the player's weapon position at
+  358[1]; the target is dropped when its squared distance is above 358[0]^2 (150^2,
+  g_RappyMaxAttackRange 0x009bc144) or below 358[1]^2.
+- Run-away (mode 4, animation 4 = motion 3): every frame it runs at 358[1] * 3.5
+  (0x00921be8); after 15 frames a player within 300 that is within 0xaaa BAMS of the
+  heading turns it 90 degrees either way (random). This is RappyFakeDeath's flee:
+  already ported (the fake death: spin on the get-up, run, removed at no ground).
+- Not traced: the writers of 0x32e = 1 / 2 for an alive Rappy (the only writer in the
+  0x00525xxx range is the get-up), and the notice test vtable +0x44 (30). So the
+  alive chase and the lunge keep the generic walking FSM (`combat/enemyai.ts`, the
+  TObjEneLappy profile) and their entry is not ported.
+
+**ASSUMED:** the explosion's damage (the nearest player within the Lily's reach, no
+angle; the battle-params record 0x009bc358 is not decoded); the bob is not drawn (the
+value is kept on the brain, `spinBob`); the Nar variant is not set by the owner (the
+`dark` flag defaults off, so the Nar Lily's spin uses the normal sounds); the spin's
+particles (0xd3 at the blast, 0x46 / 0x32 at the get-up) are left out.
+
+**Tests:** `tests/enemyfsm.test.ts` (new Lily spin block): the threshold (249 of 1000
+spins, 250 does not), the first step's turn and bob, the blast at count 451 with its
+hit and dead state, Ultimate's 23 frames, a flinch during the spin keeps the count,
+the bob's sound.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean; `node tests/enemyfsm.test.ts`
+passes. Not run in Chrome (no browser run for this change).

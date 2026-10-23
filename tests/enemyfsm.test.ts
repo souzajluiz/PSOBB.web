@@ -110,6 +110,68 @@ const attack = { distanceX: 12, angle: 0x1c71 } as never;
   check(far.z > 18 * SPIT.speed, 'it flies straight for 18 frames first');
 }
 
+// --- Poison Lily low-HP spin (state 8) --------------------------------------
+{
+  const spin = (hp: number, maxHp: number, ultimate = false) => {
+    const l = new LilyAi({ x: 0, z: 0, angle: 0, attack, radius: 10, ultimate, rng: () => 0.9 });
+    l.setHp(hp, maxHp);
+    return l;
+  };
+  // The flinch end: hp < maxHp >> 2 (249 of 1000, not 250) starts the spin.
+  let l = spin(249, 1000);
+  l.onDamage(0);
+  eq(l.resume(), 'spin', 'hp 249 of 1000 (below 250) spins');
+  l = spin(250, 1000);
+  l.onDamage(0);
+  eq(l.resume(), 'track', 'hp 250 of 1000 does not spin (roll 0.9 no scream)');
+  // Spin turn and bob: the first frame turns 0x400 BAMS, the bob climbs 17.
+  l = spin(10, 1000);
+  l.onDamage(0);
+  l.resume();
+  let r = l.tick([]);
+  eq([l.state, l.spinFrames], ['spin', 1], 'spin counts one frame');
+  near(r.angle, 0x400 * Math.PI * 2 / 0x10000, 'spin turns 0x400 BAMS in the first frame');
+  eq(l.spinBob, 17, 'the bob starts at 0 (0x41c = 1): the first step runs it down past 0 and back up 17');
+  l.tick([]);
+  eq(l.spinBob, 34, 'the bob climbs 17 more a frame in the first phase');
+  // The blast after 450 frames: the nearest player within reach, dead, one SE.
+  l = spin(10, 1000);
+  l.onDamage(0);
+  l.resume();
+  let blast: ReturnType<LilyAi['tick']> | null = null;
+  for (let i = 0; i < 451 && !blast; i++) {
+    const f = l.tick([player(0, 5)]);
+    if (f.hit) blast = f;
+  }
+  eq([l.spinFrames, l.state, l.exploded, blast?.hit?.clientId ?? null], [451, 'dead', true, 0], 'the spin blasts at count 451 (> 450): hit, dead');
+  const se = l.takeSe();
+  eq(se[se.length - 1], 0xfe, 'the blast SE 0xfe is the last sound (the dark variant 0x2c7)');
+  // Ultimate Mode counts 20 a frame: 450 / 20 passes at the 23rd frame.
+  l = spin(10, 1000, true);
+  l.onDamage(0);
+  l.resume();
+  let frames = 0;
+  while (l.state === 'spin' && frames < 100) {
+    l.tick([]);
+    frames++;
+  }
+  eq([frames, l.exploded], [23, true], 'Ultimate Mode blasts after 23 frames (count 460)');
+  // A flinch during the spin re-enters it and keeps the count (bit 4 stays).
+  l = spin(10, 1000);
+  l.onDamage(0);
+  l.resume();
+  for (let i = 0; i < 10; i++) l.tick([]);
+  l.onDamage(0);
+  eq(l.resume(), 'spin', 'a flinch while spinning spins again');
+  eq(l.spinFrames, 10, 'the count survives the re-entry');
+  // The bob turns at 256 (0x1fe - v) and plays the 0xfd sound once per turn.
+  l = spin(10, 1000);
+  l.onDamage(0);
+  l.resume();
+  for (let i = 0; i < 40; i++) l.tick([]);
+  eq(l.takeSe().filter((id) => id === 0xfd).length >= 1, true, 'the bob turn plays SE 0xfd');
+}
+
 // --- Savage Wolf -------------------------------------------------------------
 near(wolfLeapHeight(0), 0, 'leap height at 0');
 near(wolfLeapHeight(15), 20, 'leap apex 20 at frame 15');
