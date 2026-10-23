@@ -394,17 +394,9 @@ export interface CounterEnv {
   items: CounterItems;
   // The item picture of an identified item (formats/itemkt.ts), or null.
   picture?: ((item: ItemData) => Promise<ImageBitmap | null>) | undefined;
-  // The item's 3D object at the description window (render/tekkeritem.ts), or null.
-  model3d?: ((item: ItemData) => Promise<CounterModel | null>) | undefined;
   // Floor music for the counter's jingles (audio/fieldbgm.ts FieldMusic).
   music?: CounterMusic | undefined;
   log?: ((msg: string) => void) | undefined;
-}
-
-// A 3D object the counter draws each frame and disposes when it closes.
-export interface CounterModel {
-  draw(ctx: CanvasRenderingContext2D, extra: number): void;
-  dispose(): void;
 }
 
 export interface CounterMusic {
@@ -447,8 +439,6 @@ abstract class CounterBase {
   protected list: ItemList | null = null;
   // The item picture window (0x32) while it is up.
   protected picture: ImageBitmap | null = null;
-  // The item's 3D object at the description window (0x29) while it is up.
-  protected model: CounterModel | null = null;
   private amount: { spinner: AmountSpinner; resolve: (v: number | null) => void } | null = null;
   private polls: Array<{ test: () => boolean; resolve: () => void }> = [];
   protected showBankMeseta = false;
@@ -476,7 +466,6 @@ abstract class CounterBase {
       .finally(() => {
         this.done = true;
         this.picture = null;
-        this.dropModel();
         this.leave();
         this.onClose();
       });
@@ -695,7 +684,6 @@ abstract class CounterBase {
       if (l.quantity && item) this.drawCount(ctx, skin, QUANTITY_WINDOW, this.env.text(12, 1), l.quantity(l.cursor));
     }
     if (this.picture) this.drawPicture(ctx, skin, extra, this.picture);
-    this.model?.draw(ctx, extra);
     if (this.showBankMeseta && this.env.items.bank && !l) this.drawCount(ctx, skin, BANK_WINDOW, this.env.text(12, 2), this.env.items.bank.meseta);
     this.drawCount(ctx, skin, MONEY_WINDOW, this.env.text(11, 0x9b), c?.meseta ?? 0);
     if (this.clerk.text) this.clerk.draw(ctx, skin, extra);
@@ -716,12 +704,6 @@ abstract class CounterBase {
     const x = anchorX(P.x, P.w, extra);
     drawWindowFrame(ctx, skin.frame, x, P.y, P.w, P.h);
     ctx.drawImage(img, x + INSET, P.y + INSET, P.w - 2 * INSET, P.h - 2 * INSET);
-  }
-
-  // Frees the 3D object (render/tekkeritem.ts), if any.
-  protected dropModel(): void {
-    this.model?.dispose();
-    this.model = null;
   }
 
   protected jingle(name: string): void {
@@ -1320,11 +1302,6 @@ export class TekkerCounter extends CounterBase {
       const answer = items.identifyResult!;
       const result: ItemData = { data1: answer.data1.slice(), id: items.takeItemId(), data2: answer.data2.slice() };
       this.picture = (await this.env.picture?.(result)) ?? null;
-      this.dropModel();
-      const model = (await this.env.model3d?.(result)) ?? null;
-      // The counter may have closed while the model loaded.
-      if (this.done) model?.dispose();
-      else this.model = model;
       this.showList(TEKKER_RESULT_TITLE, [shopRow(result, '', this.env.rowContext())], [result], null, { bar: false });
       this.say(TEKKER.accept);
       // States 4 / 6.
@@ -1332,7 +1309,6 @@ export class TekkerCounter extends CounterBase {
         if ((await this.choose([MSG.yes, MSG.no])) === 0) {
           this.closeList();
           this.picture = null;
-          this.dropModel();
           items.pay(TEKKER_FEE);
           let equip = false;
           if (equipProblems(result, this.env.rowContext()) === 0) {
@@ -1349,7 +1325,6 @@ export class TekkerCounter extends CounterBase {
         if ((await this.choose([MSG.yes, MSG.no])) === 0) {
           this.closeList();
           this.picture = null;
-          this.dropModel();
           items.pay(TEKKER_FEE);
           this.say(TEKKER.yourChoice);
           // State 5.
