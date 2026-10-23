@@ -560,6 +560,8 @@ export class GameView {
       labels: this.labels,
       showPlayer: (p) => p.floor === this.game.self?.floor && p.visible !== false,
       held: this.heldSource(),
+      // Pioneer 2: the talk's target height (render/playercamera.ts). ASSUMED area test.
+      town: AREA_NAMES[area] === 'Pioneer 2',
     });
     const objectBase = await this.objectBase(floor);
     // The quest's floor handler runs on a new thread when the player arrives
@@ -697,6 +699,10 @@ export class GameView {
 
   talkCameraTurn(): void {
     this.view?.talkCameraTurn();
+  }
+
+  talkCameraEnd(): void {
+    this.view?.talkCameraEnd();
   }
 
   setSelfAngle(angle: number): void {

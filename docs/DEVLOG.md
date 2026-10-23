@@ -9744,3 +9744,23 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. Playwright on the local newserv, Vite on 5175, `--workers=1`: `drop.spec.ts` + `pioneer2-shop.spec.ts` passed twice in a row (drop 56 s; shop 1.0 min alone).
 
 **Side effects:** each shop/drop run leaves one `wsh...` / `wdr...` account in `vendor/newserv/system/players/`, and the shop run leaves a backup of the funded `.psochar` under `_admin-backups`.
+
+## 2026-10-23: NPC talk mode of the player camera
+
+**What changed:** talking to an NPC now switches the player camera to the talk mode the client has: the field of view eases to 0x22d8 and back, and on Pioneer 2 the target's height goes to -3.0 in the talk. Code: `render/playercamera.ts` (`talk`, `fovAngle`, `targetHeight`, `town`, `easeBams`, `easeHeight`), `render/lobbyview.ts` (`talkCameraTurn` sets the flag, `talkCameraEnd` clears it, the projection follows `fovAngle`), `render/npcview.ts` (`defaultTalkEnd` host hook at the talk's end), `render/gameview.ts` and `quest/town.ts` (wiring; `town` = area Pioneer 2).
+
+**Details** (Ephinea `PsoBB.exe`, decompiled with `tools/ghidra/decomp.sh`):
+- **Flag +0x100:** set to 1 by UpdateDefaultNPCCameraOrientation_004d83f4 (the default talk camera, the path of EnemyObjectUpdate_0060648c state 1 that is not a camera mover and not in the no-turn list). Cleared to 0 by FUN_004d7e4c (state 2 -> 3, for every talk that is not a camera mover's; the movers' end calls FUN_004d5f70 instead).
+- **Field of view** (UpdateUnknownPlayerCamera_004d7698): +0x54 goes to 0x22d8 when +0x100 is set, else 0x36c1, by a step of 0xb6 BAMS a frame (007a8c74: the step, or the goal once within one step). 0x22d8 BAMS = 49.0 degrees, 0x36c1 = 77.0 degrees before `njPerspectiveFovy`; the talk takes about 29 frames (a second) each way.
+- **Target height** (UpdateCameraTarget_004d7d40): +0x108 is added to the desired target's height (+0x4c). It goes to -3.0 (0xc0400000) in the talk and to 0 otherwise, only when FUN_00807e10 is true; the ease is FUN_004d64d8 with factor 1.4 (0x3fb33333): the distance shrinks by 0.16 * 1.4 of itself a frame (0x0090951c = 0.16).
+- Sets the talk flag for the default talk only: the camera movers (1001, 1002, 1050, 1051, 1055) and the no-turn actions keep the camera as it is, as before.
+
+**ASSUMED:**
+- the Pioneer 2 test (FUN_00807e10 checks a table entry against 0xd) is taken as the floor `AREA_NAMES` calls 'Pioneer 2' (`render/gameview.ts`);
+- the ease step of FUN_004d6540 is 0.16 * factor * distance (the product FUN_004d64d8 tests against the distance);
+- the flag is set before the turn, whatever the talk's NPC pointer is (both are in UpdateDefaultNPCCameraOrientation_004d83f4 before its `*piVar1 != 0` test);
+- the gate FUN_006dc358 (state 1 of the talk, not ported) is taken as always 0.
+
+**Found, not changed:** `lerpPoint` (`render/playercamera.ts`, the vec3 lerp 0x004d63b0) takes its 5.0 cutoff from 0x00909510, but `tools/exedata.py read 0x00909510 f 1` reads 0.0, and the decompile of 0x004d63b0 tests `0x00909510 <= t` before it sets the step to 12.0 (0x00909520, which reads 12.0). If the read is right, the exe always moves a fixed 12 units when the lerp is short of the goal, and the port's 5.0 rule is wrong; the NPC camera movers and the player camera both use it. Not changed here (shared with the verified mover ease).
+
+**Tests:** `tests/npcs.test.ts` section 9: the BAMS ease wraps and snaps; the talk field of view reaches 0x22d8 within 30 frames and returns to 0x36c1; outside Pioneer 2 the height does not move; on Pioneer 2 it reaches -3.0 and returns to 0, and the desired target carries it. `npx tsc --noEmit -p .` (client, Node 24) clean. Not run in Chrome (no Playwright for this change).

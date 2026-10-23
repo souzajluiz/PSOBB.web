@@ -179,6 +179,9 @@ export interface NpcLayerHost {
   cameraView?: () => { source: Vec3; target: Vec3 } | null;
   // UpdateDefaultNPCCameraOrientation_004d83f4 (the camera turns aside).
   defaultTalkCamera?: () => void;
+  // EnemyObjectUpdate state 2 -> 3 (FUN_004d7e4c clears the talk flag): the
+  // talk ended and no camera mover of it is running.
+  defaultTalkEnd?: () => void;
   log?: (msg: string) => void;
 }
 
@@ -431,7 +434,9 @@ export class NpcLayer {
         .finally(() => {
           n.state = 'idle';
           npcTalkEnd(n.brain);
-          // State 3: the camera mover is flagged for deletion.
+          // State 3: the camera mover is flagged for deletion, and a talk
+          // without a mover ends the camera's talk.
+          if (!NPC_TALK_CAMERA_MOVERS.has(n.params.action)) this.host.defaultTalkEnd?.();
           this.mover = null;
           if (this.talker?.npc === n) this.talker = null;
         });

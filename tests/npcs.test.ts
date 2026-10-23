@@ -50,7 +50,7 @@ import { bodyBlocks, CollisionWorld, PLAYER_RADIUS } from '../client/src/render/
 import { parseMapCRel } from '../client/src/formats/crel.ts';
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { parseSetFile, placeEntities } from '../client/src/formats/setdata.ts';
-import { lerpPoint } from '../client/src/render/playercamera.ts';
+import { CAMERA_TALK_FOV_ANGLE, CAMERA_FOV_ANGLE, CAMERA_ZOOM, easeBams, lerpPoint, PlayerCamera } from '../client/src/render/playercamera.ts';
 import {
   NPC_RADIUS,
   NPC_SPEED,
@@ -438,6 +438,44 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
     }
     console.log(`talk camera movers: ${[...where].map(([a, n]) => `${a} -> NPC 0x${n.type.toString(16)}`).join(', ')}`);
   } else console.log('scene files not found, skipping the camera mover checks');
+}
+
+// 9. The NPC talk of the player camera (UpdateUnknownPlayerCamera_004d7698,
+//    UpdateCameraTarget_004d7d40): the field of view goes to 0x22d8 and back
+//    by 0xb6 BAMS a frame (007a8c74); on Pioneer 2 the target height goes to
+//    -3.0 in the talk and back to 0 (004d64d8, factor 1.4).
+{
+  check(easeBams(0x0100, 0xff00, 0xb6) === 0x004a, 'BAMS ease wraps the short way');
+  check(easeBams(0x1000, 0x1000 + 0xb6, 0xb6) === 0x1000 + 0xb6, 'BAMS ease snaps within one step');
+  const pos = { x: 0, y: 0, z: 0 };
+  const cam = new PlayerCamera();
+  cam.tick(pos, 0);
+  check(cam.fovAngle === CAMERA_FOV_ANGLE, 'player camera starts at 0x36c1');
+  cam.talk = true;
+  let n = 0;
+  while (n < 60 && cam.fovAngle !== CAMERA_TALK_FOV_ANGLE) { cam.tick(pos, 0); n++; }
+  check(cam.fovAngle === CAMERA_TALK_FOV_ANGLE && n <= 30, `talk field of view reaches 0x22d8 in ${n} frames (about 29 expected)`);
+  cam.talk = false;
+  n = 0;
+  while (n < 60 && cam.fovAngle !== CAMERA_FOV_ANGLE) { cam.tick(pos, 0); n++; }
+  check(cam.fovAngle === CAMERA_FOV_ANGLE, `field of view returns to 0x36c1 in ${n} frames`);
+
+  // Target height: only on Pioneer 2 (town); the talk moves it to -3.0.
+  const outside = new PlayerCamera();
+  outside.talk = true;
+  for (let i = 0; i < 60; i++) outside.tick(pos, 0);
+  check(outside.targetHeight === 0, 'target height is not eased outside Pioneer 2');
+  const town = new PlayerCamera();
+  town.town = true;
+  town.talk = true;
+  for (let i = 0; i < 60; i++) town.tick(pos, 0);
+  check(Math.abs(town.targetHeight + 3) < 1e-3, `Pioneer 2 talk target height ${town.targetHeight.toFixed(4)} reaches -3.0`);
+  const d = town.desired(pos, 0).target;
+  check(Math.abs(d.y - (pos.y + CAMERA_ZOOM[town.zoom].targetY + town.targetHeight)) < 1e-9, 'the target height is added to the desired target');
+  town.talk = false;
+  for (let i = 0; i < 60; i++) town.tick(pos, 0);
+  check(Math.abs(town.targetHeight) < 1e-3, 'target height returns to 0 after the talk');
+  console.log(`player camera talk: fov 0x${CAMERA_TALK_FOV_ANGLE.toString(16)} and back, Pioneer 2 target height ${town.targetHeight.toFixed(4)} after the talk`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

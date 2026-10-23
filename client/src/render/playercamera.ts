@@ -59,14 +59,21 @@
 //      a ray (mask 0x901) from the target to the source puts the source on
 //      the first wall it crosses (and the safe source 1 normal off it).
 //
-// Field of view: +0x54 starts at 0x36c1 and is eased toward 0x36c1 by 0xb6
-// per frame (UpdateUnknownPlayerCamera), so it stays 0x36c1; the controller
-// passes it to the projection (0x0082ebc8, same math as njPerspectiveFovy).
+// Field of view: +0x54 is eased toward 0x36c1 by 0xb6 per frame
+// (UpdateUnknownPlayerCamera_004d7698, 0x007a8c74: a step of 0xb6 BAMS, or
+// the goal once closer); in the NPC talk (+0x100 = 1, set by
+// UpdateDefaultNPCCameraOrientation_004d83f4) the goal is 0x22d8. The
+// controller passes it to the projection (0x0082ebc8, same math as
+// njPerspectiveFovy).
+//
+// Talk target height (+0x108, UpdateCameraTarget_004d7d40): on Pioneer 2 the
+// target's height is eased toward 0 and, in the NPC talk (+0x100), toward -3.0
+// (0xc0400000) with the scalar ease of 004d64d8 (factor 1.4 = 0x3fb33333,
+// step 0.16 * factor of the distance). Other floors do not ease it.
 //
 // Left out: the lock-on check of state 1 (no turn while the player's target
 // is within 70 units, player +0x45c), guard / freeze / death states, the
-// Pioneer 2 target height offset (eased to 0 there), the camera shake, the
-// NPC / boss cameras, and the 0x22d8 field of view of mode +0x100.
+// camera shake, and the NPC / boss cameras.
 
 export interface CameraZoomLevel {
   sourceY: number;
@@ -104,6 +111,10 @@ const LERP_JUMP = 12.0; // 0x00909520 g_MaxLerpDistance
 export const CAMERA_WALL_MASK = 0x901; // camera source rays
 export const CAMERA_SIGHT_MASK = 0x100; // CalculateCameraTargetWithCollision
 export const CAMERA_FOV_ANGLE = 0x36c1; // +0x54
+export const CAMERA_TALK_FOV_ANGLE = 0x22d8; // +0x54 in the NPC talk (+0x100)
+const CAMERA_FOV_STEP = 0xb6; // 007a8c74 step per frame
+export const CAMERA_TALK_HEIGHT = -3; // 0xc0400000 target height offset in the talk
+const CAMERA_HEIGHT_FACTOR = Math.fround(1.4); // 0x3fb33333 (004d64d8)
 
 export type Vec3 = { x: number; y: number; z: number };
 type V3 = [number, number, number];
@@ -118,6 +129,22 @@ function lerpInto(out: Vec3, a: Vec3, b: Vec3, t: number): void {
   out.x = a.x + (b.x - a.x) * t;
   out.y = a.y + (b.y - a.y) * t;
   out.z = a.z + (b.z - a.z) * t;
+}
+
+// 007a8c74: a BAMS step toward `goal` (16-bit), or the goal once within `step`.
+export function easeBams(cur: number, goal: number, step: number): number {
+  const diff = ((goal - cur + 0x8000) & 0xffff) - 0x8000;
+  if (Math.abs(diff) <= step) return goal & 0xffff;
+  return (cur + (diff < 0 ? -step : step)) & 0xffff;
+}
+
+// 004d64d8 (scalar): the distance to the goal shrinks by 0.16 * factor of
+// itself per frame; the goal once the step would reach it.
+export function easeHeight(cur: number, goal: number, factor: number): number {
+  const d = Math.abs(cur - goal);
+  const step = LERP_SPEED * d * factor;
+  if (!(step < d)) return goal;
+  return cur + (goal > cur ? step : -step);
 }
 
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -163,6 +190,14 @@ export class PlayerCamera {
   private prevSource: Vec3 | null = null;
   private prevTarget: Vec3 | null = null;
   private readonly drawn = { source: { x: 0, y: 0, z: 0 }, target: { x: 0, y: 0, z: 0 } };
+  // The NPC talk (+0x100): the field of view and the target height goal.
+  talk = false;
+  // Field of view (BAMS, +0x54): 0x36c1, or 0x22d8 in the talk.
+  fovAngle = CAMERA_FOV_ANGLE;
+  // Target height offset (+0x108): eased in the talk on Pioneer 2 (`town`,
+  // the floor where 004d7d40 applies it; ASSUMED from 00807e10 / 00807e24).
+  targetHeight = 0;
+  town = false;
 
   // Straight behind the player (camera start, Camera key, warps).
   reset(heading: number): void {
@@ -195,7 +230,7 @@ export class PlayerCamera {
       source: { x: pos.x + Math.sin(a) * z.distance, y: pos.y + z.sourceY, z: pos.z + Math.cos(a) * z.distance },
       target: {
         x: pos.x + move.x * TARGET_LEAD + Math.sin(h) * z.targetZ,
-        y: pos.y + z.targetY,
+        y: pos.y + z.targetY + this.targetHeight,
         z: pos.z + move.z * TARGET_LEAD + Math.cos(h) * z.targetZ,
       },
     };
@@ -203,6 +238,10 @@ export class PlayerCamera {
 
   // One game frame (30 per second).
   tick(pos: Vec3, heading: number, world: CameraWorld | null = null): void {
+    // UpdateUnknownPlayerCamera_004d7698: the field of view, and the target
+    // height on Pioneer 2 (004d7d40).
+    this.fovAngle = easeBams(this.fovAngle, this.talk ? CAMERA_TALK_FOV_ANGLE : CAMERA_FOV_ANGLE, CAMERA_FOV_STEP);
+    if (this.town) this.targetHeight = easeHeight(this.targetHeight, this.talk ? CAMERA_TALK_HEIGHT : 0, CAMERA_HEIGHT_FACTOR);
     // The points are never changed in place, only replaced: keep the old ones.
     this.prevSource = this.source;
     this.prevTarget = this.target;
