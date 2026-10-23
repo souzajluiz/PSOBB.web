@@ -27,6 +27,21 @@ import {
   type SymbolChatEntry,
 } from '../client/src/net/symbolchat.ts';
 import { parseCharacterFile, E7_SIZE } from '../client/src/net/charfile.ts';
+import {
+  CORNER_SIZE,
+  cornerCell,
+  drawSymbolParts,
+  faceCell,
+  faceColour,
+  FACE_SIZE,
+  SYMBOL_CHAT_FRAMES,
+  SYMBOL_COLOURS,
+  SYMBOL_PLATE,
+  symbolChatRows,
+  symbolSoundId,
+} from '../client/src/classic/symbolchat.ts';
+import { SymbolChatList } from '../client/src/classic/symbolchatlist.ts';
+import { applyKeyConfig, defaultKeyConfig, KEYS } from '../client/src/input/keyconfig.ts';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -170,6 +185,77 @@ check('6x07 subcommand is 0x44 bytes', 4 + 4 + SYMBOL_CHAT_SIZE === 0x44);
   chat.cornerObjects[2] = 0x0476;
   writeSymbolChat(buf, 8, chat);
   check('SymbolChatT parses at an offset', JSON.stringify(parseSymbolChat(buf, 8)) === JSON.stringify(chat));
+}
+
+// --- the picture (classic/symbolchat.ts) and the list (classic/symbolchatlist.ts) ---
+{
+  check('the symbol balloon lives 0x5a frames', SYMBOL_CHAT_FRAMES === 0x5a);
+  check('a corner word with Z 0xFF (0xFFFF too) is no object', cornerCell(0xffff) === null && cornerCell(0x00ff) === null);
+  const c = cornerCell(0x0476);
+  check('corner Z 0x76: sheet 1 (9 + 1 = texture 10)', c?.sheet === 1, String(c?.sheet));
+  check('corner Z 0x76: cell (6, 6) of 32 texels', c?.sx === 192 && c?.sy === 192, `${c?.sx},${c?.sy}`);
+  check('corner colour index 4 (bits 8-10)', c?.colour === SYMBOL_COLOURS[4]);
+  check('corner flips are bits 11 and 12', !c?.flipH && !c?.flipV && cornerCell(0x0800 | 0x0d)?.flipH === true && cornerCell(0x1000)?.flipV === true);
+  check('corner Z 0x0D: cell (5, 1)', cornerCell(0x000d)?.sx === 160 && cornerCell(0x000d)?.sy === 32);
+  check('face type 0 is the first 16-texel cell', JSON.stringify(faceCell(0)) === JSON.stringify({ sx: 0, sy: 0, flipH: false }));
+  check('face type 0x0F is (112, 16)', faceCell(0x0f)?.sx === 112 && faceCell(0x0f)?.sy === 16);
+  check('face type 0x2F is (112, 80)', faceCell(0x2f)?.sx === 112 && faceCell(0x2f)?.sy === 80);
+  check('face types 0x30 and 0xFF draw nothing', faceCell(0x30) === null && faceCell(0xff) === null);
+  check('face flags bit 0 is the horizontal flip, bit 1 is not drawn', faceCell(0x05, 0x01)?.flipH === true && faceCell(0x05, 0x02)?.flipH === false);
+  check('sound: spec bits 5-8 give the table entry', symbolSoundId(0x28) === 1399 && symbolSoundId(0x100) === 1416);
+  check('sound: index 9 plays nothing', symbolSoundId(9 << 5) === null);
+  check('face colour: spec bits 2-4', faceColour(0x28) === SYMBOL_COLOURS[2]);
+
+  const text = (g: number, i: number) => `${g}:${i.toString(16)}`;
+  const entries: SymbolChatEntry[] = Array.from({ length: 12 }, (_, i) => ({ present: 0, name: '', chat: emptyChat() }));
+  entries[0] = HELLO;
+  entries[3] = { present: 2, name: '', chat: emptyChat() };
+  const rows = symbolChatRows(entries, text);
+  check('12 rows', rows.length === 12);
+  check('a valid row shows its name', rows[0].valid && rows[0].label === 'Hello');
+  check('a chosen-only (bit 1) row is valid', rows[3].valid && rows[3].label === '11:eb', rows[3].label);
+  check('an empty slot shows unitxt(11, 0xEA)', !rows[1].valid && rows[1].label === '11:ea' && rows[1].chat === null);
+
+  // drawSymbolParts: the corner sheet of index 1, the face sheet (texture 12) for the faces.
+  const sheets = [{ id: 9 }, { id: 10 }, { id: 11 }, { id: 12 }] as unknown as CanvasImageSource[];
+  const calls: { img: unknown; sx: number; sy: number; size: number }[] = [];
+  const moves: [number, number][] = [];
+  const fake = {
+    save() {},
+    restore() {},
+    translate(x: number, y: number) {
+      moves.push([x, y]);
+    },
+    scale() {},
+    drawImage(img: unknown, sx: number, sy: number, sw: number, _sh: number, _dx: number, _dy: number, dw: number) {
+      calls.push({ img, sx, sy, size: dw });
+    },
+  } as unknown as CanvasRenderingContext2D;
+  drawSymbolParts(fake, HELLO.chat, sheets, 100, 100);
+  const corner = calls.filter((k) => k.img === sheets[0]);
+  const faces = calls.filter((k) => k.img === sheets[3]);
+  check('corners draw the sheet of their Z (one object)', corner.length === 1 && corner[0].size === CORNER_SIZE && corner[0].sx === 160 && corner[0].sy === 32);
+  check('faces draw the face sheet for the two real parts', faces.length === 2 && faces.every((f) => f.size === FACE_SIZE), String(faces.length));
+  check('face 0 is type 5 (80, 0)', faces[0].sx === 80 && faces[0].sy === 0);
+  check('the corner sits in the top-right quarter of the plate', moves.some(([x, y]) => x === 100 - SYMBOL_PLATE / 2 + CORNER_SIZE && y === 100 - SYMBOL_PLATE / 2));
+
+  // The list: Enter on an invalid row buzzes; in 'home' a valid row previews and the window stays open.
+  applyKeyConfig(defaultKeyConfig());
+  const decided: number[] = [];
+  const home = new SymbolChatList('home', 'Symbol Chat', rows, (r) => decided.push(r.index));
+  home.key({ key: KEYS.decide }); // row 0 is valid
+  check('home: Enter on a valid row previews it', decided.length === 1 && decided[0] === 0);
+  check('home: the window stays open after a preview', home.open);
+  home.key({ key: KEYS.selectDown });
+  home.key({ key: KEYS.decide }); // row 1 is empty
+  check('home: Enter on an empty row does nothing', decided.length === 1);
+  home.key({ key: 'Escape' });
+  check('home: Cancel closes', !home.open);
+
+  const sent: number[] = [];
+  const chatList = new SymbolChatList('chat', 'Symbol Chat', rows, (r) => sent.push(r.index));
+  chatList.key({ key: KEYS.decide });
+  check('chat: Enter sends the row and closes', sent.length === 1 && !chatList.open);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

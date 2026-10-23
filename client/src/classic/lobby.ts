@@ -49,6 +49,8 @@ import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import { SymbolChatList } from './symbolchatlist.ts';
+import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
@@ -141,6 +143,8 @@ export class LobbyScreen implements Screen {
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
   private itemList: ItemListWindow | null = null;
+  // Home menu > Chat > Symbol Chat (0x12): the 12 saved chats, a decided row previews it (symbolchatlist.ts).
+  private symbolList: SymbolChatList | null = null;
   // Home menu > Guild Card (0xe): the Guild Card menu and its card list (guildcardmenu.ts).
   private guildCard: GuildCardMenu | null = null;
   // Home menu > Simple Mail / Info Board: the Info Board window (infoboard.ts). infoOwn is the
@@ -244,7 +248,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.trade;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.trade || !!this.symbolList;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -327,6 +331,15 @@ export class LobbyScreen implements Screen {
       };
       this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
+    } else if (id === 0x12) {
+      // handle_player_menu_select symbol_chat_menu (0x12): the list of the 12 saved chats
+      // (symbolchatlist.ts, mode 'home'). A decided row previews it; the leaf's option list
+      // and icon editor are not ported.
+      const raw = this.hud.fullCharacter?.() ?? null;
+      const entries = raw ? parseCharacterFile(raw).symbolChats : [];
+      const rows = symbolChatRows(entries, (g, i) => this.hud.text(g, i));
+      this.symbolList = new SymbolChatList('home', this.hud.text(11, SYMBOL_TEXT.title), rows, (row) => this.previewSymbol(row));
+      this.menu.leafOpen = true;
     } else if (id === 0x16) {
       // handle_player_menu_select info_board_menu (0x16): the Info Board window (classic/infoboard.ts,
       // the exe's state machine FUN_007501e0). Needs the lobby's connection for its packets.
@@ -379,6 +392,14 @@ export class LobbyScreen implements Screen {
       // A leaf window the port does not have yet: no window opens, the menu stays.
       console.info(`[classic] Home menu entry 0x${id.toString(16)}: no window in the port yet (not ported)`);
     }
+  }
+
+  // The preview of a saved chat: its picture over our own head, with the chat's sound (the exe's
+  // ProcessChatMessageType_0077d880 plays the sound; the balloon is ASSUMED).
+  private previewSymbol(row: SymbolRow): void {
+    if (!row.chat) return;
+    const id = this.lobby.selfId;
+    this.chat.receiveSymbol(id, this.lobby.players.get(id)?.name ?? '', row.chat, (x) => this.distanceTo(x));
   }
 
   private applyViewShift(): void {
@@ -460,6 +481,15 @@ export class LobbyScreen implements Screen {
     if (this.itemList) {
       if (!this.itemList.key(e)) {
         this.itemList = null;
+        this.menu.leafOpen = false;
+      }
+      return;
+    }
+    if (this.symbolList) {
+      e.preventDefault();
+      this.symbolList.key(e);
+      if (!this.symbolList.open) {
+        this.symbolList = null;
         this.menu.leafOpen = false;
       }
       return;
@@ -581,6 +611,7 @@ export class LobbyScreen implements Screen {
     this.party?.close();
     this.team?.close();
     this.teamList = null;
+    this.symbolList = null;
     this.closeOptions();
     this.menu.close();
   }
@@ -611,6 +642,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
+      inBand(ctx, bands.mid, () => this.symbolList?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin));

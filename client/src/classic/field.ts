@@ -12,13 +12,30 @@
 //
 // The Pioneer 2 NPC talk, counters and quests are the town's
 // (classic/townfield.ts, keys on the 3D canvas).
+//
+// The symbol chat key (the key config's Symbol Chat, End by default) opens the
+// 12-row picker (classic/symbolchatlist.ts, mode 'chat'); a decided row is sent
+// (Game.sendSymbolChat) and shown over the player too. A 6x07 from another player
+// shows its picture over that player (ChatLine.receiveSymbol).
 
 import type { Game } from '../net/game.ts';
 import type { GameView } from '../render/gameview.ts';
+import type { SymbolChatEntry } from '../net/symbolchat.ts';
+import { KEYS } from '../input/keyconfig.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import { bandsOf, type Screen, type Stage, type TextInputState } from './stage.ts';
+import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
+import { SymbolChatList } from './symbolchatlist.ts';
+import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
+
+// What the picker needs from the screen: the window skin, the saved chats of the
+// character and the unitxt texts (group 11).
+export interface FieldSymbolEnv {
+  skin: WindowSkin;
+  symbolChats: () => readonly SymbolChatEntry[];
+  text: (group: number, index: number) => string;
+}
 
 const FRAME = 1 / 30;
 
@@ -33,6 +50,8 @@ export class FieldScreen implements Screen {
   private bubble: BubbleTextures;
   private acc = 0;
   private frame = 0;
+  private symbolEnv: FieldSymbolEnv;
+  symbolList: SymbolChatList | null = null;
   private extra = 0;
   // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
   private vh = 480;
@@ -41,7 +60,7 @@ export class FieldScreen implements Screen {
   readonly phoneLayout: boolean;
   readonly phoneFill: boolean;
 
-  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures, phone = false) {
+  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures, phone: boolean, symbol: FieldSymbolEnv) {
     this.phoneLayout = phone;
     this.phoneFill = phone;
     this.view = view;
@@ -49,9 +68,11 @@ export class FieldScreen implements Screen {
     this.target = target;
     this.stage = stage;
     this.bubble = bubble;
+    this.symbolEnv = symbol;
     this.chat = new ChatLine((text) => this.game.sendChat(text));
-    view.inputBlocked = () => this.chat.open;
+    view.inputBlocked = () => this.chat.open || this.symbolList !== null;
     this.game.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
+    this.game.on('symbolChat', (clientId, chat) => this.chat.receiveSymbol(clientId, this.game.playerName(clientId), chat, (id) => this.distanceTo(id)));
     // A press on the 3D canvas keeps the focus here: the canvas focuses itself
     // on pointerdown (LobbyView) and the browser would take the focus on the
     // mousedown default, so that default is cancelled and the stage takes it.
@@ -100,6 +121,7 @@ export class FieldScreen implements Screen {
       ctx.translate(0, bands.bottom);
       this.chat.input.draw(ctx, this.frame);
       ctx.restore();
+      this.symbolList?.draw(ctx, this.symbolEnv.skin);
     });
   }
 
@@ -122,9 +144,32 @@ export class FieldScreen implements Screen {
     if (!this.target.dispatchEvent(copy)) e.preventDefault();
   }
 
+  // The End-key picker: a decided row goes to the room, and the sender's own balloon shows it too.
+  private openSymbolList(): void {
+    const rows = symbolChatRows(this.symbolEnv.symbolChats(), this.symbolEnv.text);
+    this.symbolList = new SymbolChatList('chat', this.symbolEnv.text(11, SYMBOL_TEXT.title), rows, (row) => this.sendSymbol(row));
+  }
+
+  private sendSymbol(row: SymbolRow): void {
+    if (!row.chat) return;
+    this.game.sendSymbolChat(row.chat);
+    this.chat.receiveSymbol(this.game.selfId, this.game.playerName(this.game.selfId), row.chat, (id) => this.distanceTo(id));
+  }
+
   key(e: KeyboardEvent): void {
     if (this.chat.open) {
       this.chat.key(e);
+      return;
+    }
+    if (this.symbolList) {
+      e.preventDefault();
+      this.symbolList.key(e);
+      if (!this.symbolList.open) this.symbolList = null;
+      return;
+    }
+    if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {
+      e.preventDefault();
+      this.openSymbolList();
       return;
     }
     if (e.key === ' ') {

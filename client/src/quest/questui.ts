@@ -356,7 +356,7 @@ export class QuestUi {
         if (p) b.bubble.tick(p);
         else b.bubble.state = 9;
       }
-      if (this.body) b.bubble.draw(ctx, { body: this.body, tab: this.body });
+      if (this.body) b.bubble.draw(ctx, { body: this.body, tab: this.body, symbol: [] });
     }
 
     if (this.board) {
