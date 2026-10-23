@@ -230,11 +230,13 @@ export class ParticleSystem {
     // Texture flag 2 (a model particle's): the height is the fixed variation, not a random spread
     // (the constructor 0x0050ec4c: y = y_variation + y).
     const fixedY = this.models && (d.flags & 2) !== 0;
-    const p: [number, number, number] = [
-      e.pos[0] + (r() - 0.5) * d.variation[0],
-      fixedY ? e.pos[1] + d.variation[1] : e.pos[1] + (r() - 0.5) * d.variation[1],
-      e.pos[2] + (r() - 0.5) * d.variation[2],
-    ];
+    // The exe draws x, then z, then y (FUN_0050ec4c, the first three _rand calls), so the
+    // draws are sequenced in that order. The offset is rand / 32768 + g_ParticleRandomOffset
+    // (0x00920410 = -0.5), i.e. rand - 0.5.
+    const x = e.pos[0] + (r() - 0.5) * d.variation[0];
+    const z = e.pos[2] + (r() - 0.5) * d.variation[2];
+    const y = fixedY ? e.pos[1] + d.variation[1] : e.pos[1] + (r() - 0.5) * d.variation[1];
+    const p: [number, number, number] = [x, y, z];
     const size = r() * d.size[1] + d.size[0];
     const dt = 1 / Math.max(1, Math.round(r() * d.life[1] + d.life[0]));
     if (d.kind === 1) {
