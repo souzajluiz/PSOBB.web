@@ -465,6 +465,11 @@ const RAPPY_BML = [
 // model spec.
 export const NO_MODEL_TYPES = new Set([0xa3]);
 
+// Set types of the category 'npc' that the enemy loaders model (the quest NPCs
+// built by the enemy factories: Rappy 0x45, Chaos Bringer 0xa9). They are drawn
+// by the enemy layer (render/enemyview.ts), not by the NPC layer.
+export const NPC_ENEMY_TYPES: ReadonlySet<number> = new Set([0x45, 0xa9]);
+
 // The model of an enemy set entry, or null for types that draw nothing (the
 // Dark Gunner control enemy) or whose model is not decoded yet.
 // params[0..4] = param1..5 (floats), params[5] = param6, params[6] = param7
@@ -838,6 +843,25 @@ export function enemyModelFor(e: EnemySet, ctx: EnemyModelContext): EnemyModelSp
     // table 0x009c10c0 slot 0 = stund, 0.6.
     case 0x117:
       return spec('GoranFamily', 'bm_ene_golan.bml', [{ model: clamp(p6, 0, 2), motion: loop(9, 0.6) }]);
+    // Rappy NPC (0x45): factory 0x0060c518, init 0x0060c5e4 (named
+    // InitializeDerolleEnemy_0060c5e4 in the dump, but it reads g_RappyBmlData).
+    // g_RappyBmlData is the BML the Rappy loader set (g_pRappyEnemyModelAssetTable
+    // row, the enemy's own choice: season, episode, ultimate), and the init takes
+    // its model entry 0 with entry 0's texture list (`*(bml+0x42c)+8`, `+0xc`): no
+    // rare variant. ASSUMED: its motion table (g_pDerolleAnimationData) is not
+    // located, so the Rappy's wait row (motion 6, 0.9) stands in for it.
+    case 0x45: {
+      const rappy = enemyModelFor({ ...e, type: 0x41 }, ctx);
+      return rappy ? spec('TObjNpcRappy', rappy.bml, [{ model: 0, motion: loop(6, 0.9) }]) : null;
+    }
+    // Chaos Bringer NPC (0xa9): factory 0x006074c8, init 0x00607594 with
+    // g_ChaosBringerGlobalConfig (the same loader as the enemy, 0x009bcda8; ultimate
+    // ModelA). Model entry 0, texture list 0, motion DAT_009c3f5c row 0 = njm 9 at
+    // 0.8 (0x3f4ccccd), which is the enemy's wait row (0xa4).
+    case 0xa9: {
+      const bringer = enemyModelFor({ ...e, type: 0xa4 }, ctx);
+      return bringer ? { ...bringer, name: 'TObjNpcChaosBringer' } : null;
+    }
     // Saint-Milion / Shambertin: ctor 0x0076acf0 (factory 0x0076a86c),
     // SaintEmilionPart_LoadBmlAndStats_0076af74 picks model
     // 0x009f75c8[variant]; the ctor starts the "advent" motion (slot 0), idle =

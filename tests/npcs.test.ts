@@ -41,6 +41,7 @@ import { prsDecompress } from '../client/src/formats/prs.ts';
 import { parseQuestBin } from '../client/src/formats/questbin.ts';
 import { parseQuestDat } from '../client/src/formats/questdat.ts';
 import { enemyKind, parseEnemySets, type EnemySet } from '../client/src/formats/setdata.ts';
+import { enemyModelFor, NPC_ENEMY_TYPES } from '../client/src/formats/enemymodels.ts';
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { floorToArea } from '../client/src/net/game.ts';
 import { QuestVM, type QuestMessage } from '../client/src/quest/vm.ts';
@@ -90,12 +91,11 @@ const files = new ClientFiles(source);
 
 // Classes the set data uses that this client does not draw yet (see
 // docs/ROADMAP.md): TObjNpcEnemy (0x33, a stage NPC with no model of its own),
-// the NPC Rappy / Hildebear / Dark Bringer of a few quests (0x45, 0x46, 0xa9)
-// and the Episode 4 quest NPC (0x118).
-const NOT_YET = new Set([0x33, 0x45, 0x46, 0xa9, 0x118]);
+// the NPC Hildebear (0x46) and the Episode 4 quest NPC (0x118).
+const NOT_YET = new Set([0x33, 0x46, 0x118]);
 // Every NPC type of the per-area factory table 0x009fba60 (dumped from the
 // exe: the humanoid classes plus the ones above).
-const NPC_FACTORY_TYPES = new Set([...NPC_CLASSES.map((c) => c.type), ...NOT_YET]);
+const NPC_FACTORY_TYPES = new Set([...NPC_CLASSES.map((c) => c.type), ...NOT_YET, ...NPC_ENEMY_TYPES]);
 
 // 1. The town motions: four NJS_ACTIONs of 64 nodes; the three motion tables
 //    point into them.
@@ -140,6 +140,16 @@ let npcEntries = 0;
 let floors = 0;
 const visit = (e: EnemySet, area: number, where: string) => {
   npcEntries++;
+  // The enemy factories' quest NPCs (NPC_ENEMY_TYPES) are modelled by the enemy
+  // layer: every episode / difficulty gives a spec (no class in npcmodels.ts).
+  if (NPC_ENEMY_TYPES.has(e.type)) {
+    for (const episode of [1, 2, 3]) for (const difficulty of [0, 3]) {
+      const spec = enemyModelFor(e, { area, episode, difficulty, event: 0 });
+      check(!!spec, `${where}: NPC 0x${e.type.toString(16)} has no enemy model (episode ${episode}, difficulty ${difficulty})`);
+    }
+    seen.set(`enemy model 0x${e.type.toString(16)}`, (seen.get(`enemy model 0x${e.type.toString(16)}`) ?? 0) + 1);
+    return;
+  }
   const cls = npcClass(e.type);
   if (!cls) {
     // Types no area factory table (0x009fba60) constructs are skipped by the
@@ -476,6 +486,33 @@ console.log(`area script: labels without code ${noLabel.join(', ') || 'none'}; $
   for (let i = 0; i < 60; i++) town.tick(pos, 0);
   check(Math.abs(town.targetHeight) < 1e-3, 'target height returns to 0 after the talk');
   console.log(`player camera talk: fov 0x${CAMERA_TALK_FOV_ANGLE.toString(16)} and back, Pioneer 2 target height ${town.targetHeight.toFixed(4)} after the talk`);
+}
+
+// 10. The enemy factories' quest NPCs: Rappy (0x45) takes the Rappy loader's
+//     BML (g_RappyBmlData: season by event, episode 4 sandlappy, ultimate _ap),
+//     model entry 0; the Chaos Bringer NPC (0xa9) takes the Chaos Bringer's
+//     BML (ultimate ModelA) with its wait row (njm 9, 0.8); the NPC types
+//     without a model (0x33, 0x46, 0x118) give none.
+{
+  const npc = (type: number, p6 = 0): EnemySet => ({
+    kind: 'enemy', index: 0, type, floor: 0, section: 0, position: [0, 0, 0], rotation: [0, 0, 0],
+    numChildren: 0, wave: 0, wave2: 0, unknownA1: 0, params: [0, 0, 0, 0, 0, p6, 0],
+  });
+  const ctx = (episode: number, difficulty: number, event: number) => ({ area: 0, episode, difficulty, event, online: true });
+  const rappy = enemyModelFor(npc(0x45), ctx(1, 0, 0));
+  check(rappy?.bml === 'bm_ene_lappy.bml' && rappy.parts.length === 1 && rappy.parts[0]!.model === 0, `Rappy NPC: ${rappy?.bml} model 0`);
+  check(enemyModelFor(npc(0x45), ctx(1, 3, 0))?.bml === 'bm_ene_lappy_ap.bml', 'Rappy NPC ultimate takes the _ap loader');
+  check(enemyModelFor(npc(0x45), ctx(1, 0, 1))?.bml === 'bm_ene_lappy_xs.bml', 'Rappy NPC in the event 1 season takes the xs BML');
+  check(enemyModelFor(npc(0x45), ctx(3, 0, 0))?.bml === 'bm_ene_sandlappy.bml', 'Rappy NPC on Episode 4 takes sandlappy');
+  check(rappy?.parts[0]!.textureArchive === undefined, 'Rappy NPC has no rare texture archive (model entry 0 only)');
+  const bringer = enemyModelFor(npc(0xa9), ctx(1, 0, 0));
+  check(bringer?.bml === 'bm_ene_df2_bringer.bml' && bringer.name === 'TObjNpcChaosBringer', 'Chaos Bringer NPC takes bm_ene_df2_bringer');
+  check(enemyModelFor(npc(0xa9), ctx(1, 3, 0))?.bml === 'bm_ene_df2_bringer_a.bml', 'Chaos Bringer NPC ultimate takes ModelA');
+  const motion = bringer?.parts[0]?.motion;
+  check(motion?.index === 9 && Math.abs(motion.speed - 0.8) < 1e-6 && motion.loop === true, `Chaos Bringer NPC wait row: njm 9 at 0.8 (${motion?.index}, ${motion?.speed})`);
+  check(NPC_ENEMY_TYPES.has(0x45) && NPC_ENEMY_TYPES.has(0xa9) && !NPC_ENEMY_TYPES.has(0x46), 'NPC_ENEMY_TYPES: Rappy and Chaos Bringer only');
+  for (const t of [0x33, 0x46, 0x118]) check(enemyModelFor(npc(t), ctx(1, 0, 0)) === null, `NPC 0x${t.toString(16)} has no enemy model (not ported)`);
+  console.log(`enemy-modelled NPCs: Rappy ${rappy?.bml}, Chaos Bringer ${bringer?.bml} (motion ${motion?.index} at ${motion?.speed})`);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

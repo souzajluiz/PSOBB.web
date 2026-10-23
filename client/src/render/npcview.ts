@@ -44,6 +44,7 @@ import {
   type NpcModelSource,
   type NpcParams,
 } from '../formats/npcmodels.ts';
+import { NPC_ENEMY_TYPES } from '../formats/enemymodels.ts';
 import { RelFile } from '../formats/rel.ts';
 import type { PlacedEntity } from '../formats/setdata.ts';
 import { EnemyArchive, NodeAnimator, texturesFromXvm } from './enemymodel.ts';
@@ -246,6 +247,8 @@ export class NpcLayer {
     for (const p of items) {
       const e = p.entity;
       if (e.kind !== 'enemy' || p.category !== 'npc') continue;
+      // The enemy factories' quest NPCs are modelled by the enemy layer.
+      if (NPC_ENEMY_TYPES.has(e.type)) continue;
       const resolved = npcModelFor(e.type, ctx);
       if (!resolved) {
         // Known class whose model this map does not load, or no model at all.
