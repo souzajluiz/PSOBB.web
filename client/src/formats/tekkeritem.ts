@@ -16,20 +16,21 @@
 // the flags' bit 2 is clear (the object's +0x2c is 0 from the constructor), and
 // the draw (FUN_00712658) rotates by ROUND(+0x5c - 7.5) (0x0096f68c = -7.5),
 // so the pose is fixed at -8 BAMS (about -0.0008 rad, ASSUMED to be the Y
-// rotation): the object does not spin.
+// rotation): the object does not spin. (Superseded: 0x00712658 is the 2D
+// element's text geometry, so this is not the model's angle; see Model below.)
 //
-// Model: the item's own model is chosen by its PMT kind and sub-kind (the byte
-// pair at +0x68, set from +0x70 by FUN_007275c0 when +0xa4 is not -1):
-// FUN_00727450's dispatch on data1[0] (kind) and data1[1] (sub), through the
-// tables 0x009f2520 (kind 0 weapon: FUN_00727220), 0x009f2538 / 0x009f252c
-// (kind 1 armour and shield: FUN_00727078), 0x009f2544 (kind 2: FUN_00726ff0),
-// FUN_00726780 (kind 1 sub 3, the unit), FUN_00726608 / FUN_007265f0 (kind 3,
-// the tool). The weapon's path (FUN_00727220) takes the ItemPMT record by the
-// item id and loads its parts with FUN_005c9e40 (not traced here). The port
-// draws the weapon from the same two archives as the held weapon
-// (ItemModel.afs / ItemTexture.afs, the ItemPMT weapon's type and skin:
-// render/heldweapon.ts): ASSUMED. The armour, unit, mag and tool models are
-// not drawn (the exe's paths for them are not ported).
+// Model (corrected 2026-10-23, see the DEVLOG): 0x00725d18 is a 2D list
+// window (vtable 0x00b3fff0: update 0x00725e4c = ChatShortcutMenu_Update, draw
+// 0x00725ef8 = UIElement_UpdateRenderData 0x00712658 (text geometry), the
+// element list 0x0072a648 and the sub-list text 0x0073e6b4). It draws no NJ
+// model. The item's 3D object is a separate instance: FUN_006d9d94 stores
+// FUN_005c9a40(item) in +0x14, the floor-item factory (kind table 0x009c2130:
+// 0 weapon 0x005e762c, 1 armour 0x005c9718 -> sub table 0x009c2120, 2 mag
+// 0x005d8d14, 3 tool 0x005de228, 4 0x005dd8e8). Those objects share the floor
+// item base's update / draw (0x005c3ed8 / 0x005c4068 -> FUN_005c407c, the
+// item.bml kind box). ASSUMED: the port keeps drawing the weapon's archives
+// (render/heldweapon.ts) here; the exe's object is not that model. Armour,
+// unit, mag and tool models are not drawn.
 
 // GUI 0x29 (the description window), 0x00972088.
 export const TEKKER_ITEM_X = 400;
