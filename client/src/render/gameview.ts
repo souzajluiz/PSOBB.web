@@ -616,6 +616,8 @@ export class GameView {
     this.floorItems.attach();
     const attacking = this.combat.isAttacking;
     this.view.attacking = (id) => attacking(id) || (id === this.game.selfId && (this.inputBlocked() || this.telepipes.using));
+    // The dead camera (render/playercamera.ts): the dead flag of the local player.
+    this.view.dead = () => this.combat.damage.dead;
     await this.combat.enterFloor(floor, area, enemySets, await this.combat.enemyBase(floor));
     if (this.disposed) return;
     this.combat.attach(this.view);
