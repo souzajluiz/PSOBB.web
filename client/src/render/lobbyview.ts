@@ -20,7 +20,7 @@ import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
 import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion, type MotionRecord } from '../formats/plymotion.ts';
-import { EMOTE_OPCODE, emotePayload, emoteRecord, emoteSlot } from '../formats/emotes.ts';
+import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, emotePayload, emoteRecord, emoteSlot, sitPayload } from '../formats/emotes.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -255,6 +255,9 @@ export class LobbyView {
   // The emotes playing (formats/emotes.ts): a player's emote holds its motion to the
   // last frame (mode 3) and stops the local player; the gait resumes after it.
   private emotes = new Map<number, { record: MotionRecord }>();
+  // The option 0x80000 (opposite gender flag) and last frame's keys (edge detection).
+  private emoteOpposite = false;
+  private prevKeys: ReadonlySet<string> = new Set();
   // The local player is dead or revivable (the dead camera orbits; set by GameView).
   dead: () => boolean = () => false;
   // The local player's slow and guard inputs (render/combat.ts in the field;
@@ -313,6 +316,10 @@ export class LobbyView {
     // 6x58: another player's emote (the local player's own is played in frame()).
     lobby.on('emote', (p, slot) => {
       if (p.clientId !== this.lobby.selfId) this.playEmote(p.clientId, slot);
+    });
+    // 6xAB: another player's sit (the field has no sit slots: its getters are -1).
+    lobby.on('sit', (p, chair) => {
+      if (p.clientId !== this.lobby.selfId && !this.fieldMotions) this.playEmote(p.clientId, chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN);
     });
 
     this.placeSelfOnGround();
@@ -612,8 +619,10 @@ export class LobbyView {
   }
 
   // Each frame: an emote that reached its last frame ends (the gait returns); the
-  // local player sends the queued chat emote when no emote or attack is running.
-  private emoteTick(me: LobbyPlayer | null): void {
+  // local player's input is polled once per frame, in the exe's order of
+  // handle_player_emote_input: the chat queue first, then Alt+U / Alt+I (sit),
+  // and only then the option 0x80000 is refreshed from Alt+Shift.
+  private emoteTick(me: LobbyPlayer | null, keys: ReadonlySet<string>): void {
     for (const [id] of this.emotes) {
       const m = this.markers.get(id);
       if (!m || !m.animator || m.animator.ended) {
@@ -621,22 +630,40 @@ export class LobbyView {
         if (m) this.setGait(m, m.gait, true);
       }
     }
+    // Edge-triggered keys (was_key_pressed): down this frame and not the last.
+    const uDown = keys.has('u') && !this.prevKeys.has('u');
+    const iDown = keys.has('i') && !this.prevKeys.has('i');
+    this.prevKeys = new Set(keys);
     if (!me || this.emoting(me.clientId) || this.attacking(me.clientId) || this.dead()) return;
     const key = this.lobby.emoteQueue.head();
-    if (key === undefined) return;
-    this.lobby.emoteQueue.shift();
-    const slot = emoteSlot(key, this.fieldMotions);
-    if (slot === undefined) return;
-    // The exe sends the emote whether or not the model is up (dispatch_action_emote).
-    this.playEmote(me.clientId, slot);
-    this.lobby.sendSubcommand(EMOTE_OPCODE, emotePayload(slot, false));
+    if (key !== undefined) {
+      this.lobby.emoteQueue.shift();
+      const slot = emoteSlot(key, this.fieldMotions);
+      if (slot === undefined) return;
+      // The exe sends the emote whether or not the model is up (dispatch_action_emote).
+      this.playEmote(me.clientId, slot);
+      this.lobby.sendSubcommand(EMOTE_OPCODE, emotePayload(slot, this.emoteOpposite));
+      return;
+    }
+    const alt = keys.has('alt');
+    // Alt+U (slot 48) wins over Alt+I (49) when both are down, as in the exe. The
+    // field's Alt slots are -1 (no sit there), so the keys do nothing in a game.
+    if (alt && (uDown || iDown) && !this.fieldMotions) {
+      const chair = !uDown;
+      const slot = chair ? SIT_SLOT_CHAIR : SIT_SLOT_PLAIN;
+      this.playEmote(me.clientId, slot);
+      this.lobby.sendSubcommand(SIT_OPCODE, sitPayload(chair, this.emoteOpposite));
+      return;
+    }
+    // Option 0x80000 (dispatch_action_emote reads it): set while Alt and Shift are down.
+    this.emoteOpposite = alt && keys.has('shift');
   }
 
   private frame(dt: number, keys: ReadonlySet<string>): void {
     const me = this.lobby.self;
     const mine = me ? this.markers.get(me.clientId) : undefined;
     this.syncHeld();
-    this.emoteTick(me ?? null);
+    this.emoteTick(me ?? null, keys);
     this.viewer.fogProbe = mine ? mine.group.position : null; // fog regions follow our player
 
     // Second-finger camera drag of the touch pad (input/analog.ts): turns the

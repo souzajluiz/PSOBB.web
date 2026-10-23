@@ -15,7 +15,7 @@ import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
 import type { PlayerAppearance } from '../render/playermodel.ts';
 import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
-import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand } from '../formats/emotes.ts';
+import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -58,6 +58,8 @@ export interface LobbyEvents {
   teleported: (p: LobbyPlayer) => void; // 6x55: placed at once, no walk
   // 6x58: another player's emote (slot in the map of the session's kind; opposite = flag 1).
   emote: (p: LobbyPlayer, slot: number, opposite: boolean) => void;
+  // 6xAB: another player's sit (chair = flag 2, slot 49 instead of 48; opposite = flag 1).
+  sit: (p: LobbyPlayer, chair: boolean, opposite: boolean) => void;
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
@@ -340,6 +342,11 @@ export class Lobby {
           case 0x58: { // emote {u16 emote slot, u16 flags} (formats/emotes.ts; the player plays it)
             const e = parseEmoteSubcommand(body);
             if (e) this.emit('emote', p, e.slot, e.opposite);
+            break;
+          }
+          case 0xab: { // sit {u16 0, u16 flags} (formats/emotes.ts; FUN_0069b378)
+            const sit = parseSitSubcommand(body);
+            if (sit) this.emit('sit', p, sit.chair, sit.opposite);
             break;
           }
           case 0x25: // equip {item id, slot}: the weapon is tracked (playerweapon.ts)
