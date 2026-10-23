@@ -1653,7 +1653,7 @@ export class CombatView {
       if (e.state !== 'idle') continue;
       const ended = e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended);
       if (e.monest) {
-        this.tickMonest(e, targets, ended);
+        this.tickMonest(e, ended);
         continue;
       }
       const ai = e.ai;
@@ -4890,12 +4890,10 @@ export class CombatView {
   }
 
   // spawn_mothmant_from_monest: the Monest's next MOTHMANT slot.
-  private tickMonest(e: EnemyRuntime, targets: AiTarget[], ended: boolean): void {
+  private tickMonest(e: EnemyRuntime, ended: boolean): void {
     const m = e.monest!;
     const alive = [...this.enemies.values()].filter((c) => c.parent === e && !c.dead).length;
-    const p = e.instance.root.position;
-    const near = targets.some((t) => !t.dead && (t.x - p.x) ** 2 + (t.z - p.z) ** 2 < 225 * 225);
-    const r = m.tick(alive, near, ended);
+    const r = m.tick(alive, ended);
     if (r.motion) this.playEnemyMotion(e, r.motion);
     if (r.spawn) void this.spawnMothmant(e, m.spawned - 1);
   }
