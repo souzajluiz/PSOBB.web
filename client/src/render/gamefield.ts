@@ -38,6 +38,9 @@ import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, killedSetEntry, type WaveEnemy } from './waves.ts';
 import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
+import { CaptureTrap, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type VisionPlayer } from './traps.ts';
+import { isAndroid } from '../combat/progression.ts';
+import * as THREE from 'three';
 import { PLAYER_RADIUS } from '../combat/enemyfsm.ts';
 import { se } from '../audio/se.ts';
 import { BossWarp, CONFIRM_WIDTH, POS_CONFIRM, POS_MESSAGE, POS_PLAYER_LIST } from './bosswarp.ts';
@@ -117,6 +120,8 @@ export class GameField {
   private enemyBase = 0;
   private readonly othersBuf: Array<{ x: number; y: number; z: number }> = []; // the other players' positions, refilled every frame
   private traps: Array<{ index: number; trap: PillarTrap }> = []; // TOTrapAncient02 / 02R of the floor
+  // TOTrapSeabed01 (0x0228) of the floor: the sticky trap-vision reveal and the draw (render/traps.ts CaptureTrap).
+  private captures: Array<{ index: number; x: number; y: number; z: number; trap: CaptureTrap }> = [];
   private battleFrames = 0; // 0x5a countdown after the room is cleared
   private battle = false;
   private frameAcc = 0;
@@ -291,7 +296,14 @@ export class GameField {
       if (o.kind !== 'object' || (o.type !== TRAP_HOLD && o.type !== TRAP_TECH)) continue;
       this.traps.push({ index: o.index, trap: new PillarTrap({ type: o.type, x: p.world[0], z: p.world[2], params: o.params, difficulty }) });
     }
-    this.objects.batchStatic(this.traps.map((t) => t.index)); // after the traps: they move their model's nodes
+    this.captures = [];
+    for (const p of e.placed) {
+      const o = p.entity;
+      if (o.kind !== 'object' || o.type !== TRAP_CAPTURE) continue;
+      this.captures.push({ index: o.index, x: p.world[0], y: p.world[1], z: p.world[2], trap: new CaptureTrap(o.params) });
+    }
+    // after the traps: they move their model's nodes; the capture traps change their draw every frame
+    this.objects.batchStatic([...this.traps.map((t) => t.index), ...this.captures.map((c) => c.index)]);
     this.objects.onEventTrigger = (t) => {
       this.opts.log(`event trigger ${t.index}: event ${t.eventId}`);
       this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
@@ -459,6 +471,7 @@ export class GameField {
     for (let i = 0; i < ticks; i++) w?.frame();
     this.tickClock.advance(ticks, this.frameAcc);
     if (ticks && this.traps.length) this.trapFrames(ticks, pos);
+    if (ticks && this.captures.length) this.captureTicks(ticks, pos);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
@@ -486,6 +499,52 @@ export class GameField {
       cam.lookAt(boss.target.x, boss.target.y, boss.target.z);
     } else if (cam.up.x !== 0 || cam.up.y !== 1 || cam.up.z !== 0) {
       cam.up.set(0, 1, 0);
+    }
+    this.captureDraw();
+  }
+
+  // The trap vision of the players in the field, by client slot (IsPlayerVisibleToPartTrap_0063a208
+  // reads the four slots): the room and the has-trap-vision bit (unknown_flags_2 0x10000), which the
+  // exe sets from the class flag 0x10 of the player (UpdatePlayerEntityStateAndFlags_00695b48). Only
+  // androids have it here: the Trap Vision tool's temporary bit has no exe writer that is ported (ASSUMED none).
+  private visionSlots(pos: { x: number; y: number; z: number } | null): Array<VisionPlayer | null> {
+    const slots: Array<VisionPlayer | null> = [null, null, null, null];
+    const me = this.game.self;
+    if (me && pos && me.clientId >= 0 && me.clientId < 4) {
+      slots[me.clientId] = { room: this.roomAt(pos), flags: isAndroid(me.charClass) ? TRAP_VISION_FLAG : 0 };
+    }
+    for (const p of this.game.players.values()) {
+      if (p.clientId === me?.clientId || p.floor !== this.floor || p.visible === false) continue;
+      if (p.clientId < 0 || p.clientId >= 4) continue;
+      slots[p.clientId] = { room: this.roomAt(p.position), flags: isAndroid(p.charClass) ? TRAP_VISION_FLAG : 0 };
+    }
+    return slots;
+  }
+
+  // The capture traps' AI ticks (30/s): the reveal of state 0 to 1 by trap vision in the trap's room.
+  private captureTicks(ticks: number, pos: { x: number; y: number; z: number } | null): void {
+    const slots = this.visionSlots(pos);
+    for (const c of this.captures) {
+      const room = this.roomAt({ x: c.x, y: c.y, z: c.z });
+      for (let i = 0; i < ticks; i++) c.trap.frame(slots, room);
+    }
+  }
+
+  // The capture traps' draw (render_capturetrap): the view test against the camera (the exe's
+  // GiGuesGetViewDistance with 400), then the cloak rule. Runs after the camera is placed.
+  // ASSUMED: the advanced-effects setting is on (the web has no such option; as in combat/enemyfsmep2c.ts).
+  // A trap the floor has not constructed yet (delayed) keeps the hidden state its ObjectLayer gave it.
+  private captureDraw(): void {
+    if (!this.captures.length || !this.objects) return;
+    const cam = this.viewer.camera;
+    cam.updateMatrixWorld();
+    const v = new THREE.Vector3();
+    for (const c of this.captures) {
+      if (this.objects.isDelayed(c.index)) continue;
+      v.set(c.x, c.y, c.z).applyMatrix4(cam.matrixWorldInverse);
+      const inView = withinViewDistance(v.z);
+      // sprung (states 2-3, the spring and hold) is not ported: always false here.
+      this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, false));
     }
   }
 

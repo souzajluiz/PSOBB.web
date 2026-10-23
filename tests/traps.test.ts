@@ -29,6 +29,7 @@ import {
   type TrapPlayer,
   type VisionPlayer,
 } from '../client/src/render/traps.ts';
+import { isAndroid } from '../client/src/combat/progression.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -151,6 +152,22 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
   check(captureTrapDraw(false, false, true, false) === 'plain', 'not cloaked: the plain model');
   check(captureTrapDraw(true, false, true, true) === 'plain', 'sprung (state 2+): the active draw has no cloak check');
   check(captureTrapDraw(true, true, false, false) === 'hidden', 'out of the view distance: hidden');
+}
+
+// 5. Trap vision source (the class flag 0x10 -> unknown_flags_2 0x10000) and the reveal of a
+// cloaked capture trap, as gamefield.ts feeds them.
+{
+  // Androids (HUcast 2, RAcast 4, RAcaseal 5, HUcaseal 9) carry class flag 0x10; the others do not.
+  check([2, 4, 5, 9].every((c) => isAndroid(c)) && [0, 1, 3, 6, 7, 8, 10, 11].every((c) => !isAndroid(c)), 'android classes carry the class flag 0x10');
+  const androidFlags = isAndroid(4) ? 0x10000 : 0;
+  const ct = new CaptureTrap([0, 0, 0, 0, 1, 0]);
+  const room = 3;
+  ct.frame([null, null, { room, flags: androidFlags }, null], room);
+  check(ct.revealed, 'an android in the trap room reveals a cloaked capture trap');
+  check(captureTrapDraw(ct.cloaked, true, true, false) === 'cloak', 'the revealed trap still draws as the cloak (the draw does not read the reveal)');
+  const human = new CaptureTrap([0, 0, 0, 0, 1, 0]);
+  human.frame([{ room, flags: isAndroid(0) ? 0x10000 : 0 }], room);
+  check(!human.revealed, 'a human in the room does not reveal it');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');
