@@ -9471,3 +9471,22 @@ Kill gate and rewards: the Gol's kill is the same bossKilled path as the other b
 Notes: the xref tool in tools/exedata.py matches small immediates loosely (0x6e4 and 0x4cede4 gave false hits); use the `calls` action or a byte scan for exact references. The walk velocity is a float store (fstp), not the int the Ghidra text suggests.
 
 Checks: `node tests/goldragon.test.ts` ok (new: lattice rings and steps, the breath's cells and reach, the breath on the 50th tick, the burrow's aim 0xc000 and its pick, the 0x17 exit at tick 200..202 with no kill, the gone spawn, the derived sequence and clamp). `tests/dragon.test.ts` ok, `tests/combat.test.ts` 5946 checks 0 failures, `tests/combatdepth.test.ts` 824 checks 0 failures, `npx tsc --noEmit -p .` clean. E2e `client/e2e/goldragon-smoke.spec.ts` extended with a breath step (the player 15 units from the body; waits for states 0x08..0x0c and a "technique hit" from the Gol): passed, breath hit logged; the 0x17 exit is not in the e2e (it needs the Gol killed; the e2e roll does 0 damage).
+
+## 2026-10-23 - Egg shot particle 0x9f: colour and size checked against the exe (no code change)
+
+Question: the egg dot (particle 0x9f, egg_bullet) looks small and purple in Chrome; the exe is cyan and larger. Checked the port path (classic/particles.ts ParticleSystem, render/hitfx.ts FieldParticles) against the exe. Nothing in the port contradicts the exe for this particle, so no code was changed.
+
+**Particle 0x9f, read from data.gsl particleentry.dat (entry 159, 0x98 bytes):** gbix 0x000ab05f = effect_nt slot 35 (64 x 64 DXT1, NT_LAYOUT [32, 3]); size [0.08, 0, 1.04] (scale_x, scale_y, scale_z); rate 0.5; life 30 fixed; fade [0, 1] (spxof, spyof); colour slope (1, -1, 1) at +0x6c..0x74; colour base (0.15, 0.8, 1) at +0x7c..0x84; texture_flags 0x40.
+
+**Exe, colour (update_particle_effect_single_particle, 0x0050dbb8 region, named dump):** with instance flag 0x100 clear the colour is `age * opt + color` per channel, clamped to 0..1, packed ARGB as A<<24 | R<<16 | G<<8 | B. The port (`particleShade`) does the same. The egg instance flags are 0x44 (no 0x100), so no tint and no SetId copy applies: the multiply the HANDOFF item is about is not used by this particle. So the colour ramps from cyan at birth to violet at mid-life and magenta at the end, in the exe too.
+
+**Exe, size (particle ctor 0x00508460 / spawn; renderer 3 `render_particle_renderer3`):** scale_x = rand * scale_y + scale_x = 0.08 at spawn; scale_x *= scale_z (1.04) each update, so it grows to about 3.2 times by the end of life; the quad half size is effect_nt half (+0x14, 32 for slot 35) x scale x projection. The port (`particleQuad`, `q.size *= d.size[2]`) does the same.
+
+**Exe, alpha:** BaseScale 1.0 and DefaultScale 0.0 (ASSUMED name-to-address map: read from .data around 0x920054 / 0x920058, which the ctor 0x00508460 reads) make field46 = BaseScale / spyof = 1, so alpha = 1 - age, as the port (`fade[1]` = 1).
+
+**Texture:** slot 35 is mostly dark blue with bright blue spots (decoded: average RGBA about 15 / 21 / 36; brightest samples about 115 / 141 / 197). Multiplying it by the colour gives blue at birth and violet later, so the purple is most likely the texture times the age ramp, not a port bug. ASSUMED: this is what the exe shows too; the original look was not seen.
+
+**Open, not changed:**
+- effect_nt metadata for slot 35 (blend flags +0x0, frame count +0xc, UV list +0x10, per-axis half size +0x14 / +0x18) is built at run time, not read from the file. If its frame count is above 1, the exe draws one UV frame per particle, cycling by age (texture_flags 0x10 clear), and the port draws the whole 64 x 64 texture. Not checked.
+- The spawn offset: the exe spawn is `(rand / g_ParticleRandomNorm + g_ParticleRandomOffset) * variation + pos`, and the .data values read at 0x920440 / 0x920444 are 32768 and +0.5. The port uses `(rand - 0.5) * variation`. The egg has variation 0, so it does not affect this effect. ASSUMED: the addresses are right; the sign was not confirmed in another read.
+- Sprite path (render/hitfx.ts, `FieldParticles.draw`): the sprite is sized in world units (2 x half x size), and the on-screen size depends on the viewer camera (60 degrees vertical in render/mapviewer.ts), not on the exe focal D = 437.44. Not compared in Chrome.
