@@ -5,10 +5,10 @@
 // create_particle_effect_ex / 9 emit every frame for `duration` frames after
 // `delay` frames (update_particle_effect 0x00509090: the delay counts down at
 // +0x38, the duration at +0x3c). Flag 0x10 (create_particle_effect_3 with 0x50)
-// makes the particles follow their entity. Every particle type is run with the
-// type 0 simulation of classic/particles.ts, as the level-up effect (id 0x23,
-// type 1 in the file) already is (ASSUMED for the types 1 and 2 entries: the
-// exe builds those through ParticleEffectInstanceFactory_00510534 and
+// makes the particles follow their entity. Type 1 entries (rings, e.g. the level-up
+// 0x23 and the item pickup 0x9B) run the ring simulation of classic/particles.ts;
+// type 0 runs the single-particle one (ASSUMED for the type 2 entries: the exe
+// builds those through ParticleEffectInstanceFactory_00510534 and
 // CreateParticleEffectInstance_0051163c).
 // ASSUMED: the field +0x44 / +0x48 particle scale of a few special effects
 // scales the drawn quad.

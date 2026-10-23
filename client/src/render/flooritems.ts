@@ -22,27 +22,29 @@
 //     the item appears where it lands. The model is drawn with fog off
 //     (render_item_box 0x005c37c4);
 //   - picking up (6x59 -> HandlePlayerPickupSuccess_005c4c1c, any picker on
-//     our floor): SE 0x571 at the picker (play_sound_effect_at_player; a 3D
-//     sound is dropped 300 or more from the listener, docs/PROTOCOL.md);
-//     nothing plays when an item drops, and no message line is shown;
+//     our floor): SE 0x571 at the picker (play_sound_effect_at_player =
+//     FUN_00814298 with the picker's position, audio/se.ts). Slot 0x571 has
+//     flag bit 0x8000 (a 3D buffer, min 80 / max 500), a -40 static attenuation
+//     and is culled 300 or more from the listener (the local player, else the
+//     camera, FUN_00814168). Nothing plays when an item drops, and no message
+//     line is shown;
 //   - the local player's drop (0x0068d878 -> HandleItemAcquisition_006a43b8):
 //     the 6x2C hold, then one spot a frame around the player with ground and
 //     a clear line of sight (net/dropspot.ts, DropSearch); 6x2A and 6x2D go
 //     out at the first spot found.
 //   - the particle 0x9B (w_itemget; create_particle_effect at the item's
-//     origin) when an item appears after the floor was set up (create_item_
-//     box_on_ground 0x005c4874, g_ItemInitializationState != 0: not for the
-//     items of a join sync) and in HandlePlayerPickupSuccess_005c4c1c; its
-//     type-1 entry runs with the type-0 simulation of render/hitfx.ts
-//     (ASSUMED, like the other type 1 / 2 effects).
-// Left out: the 3D attenuation of SE 0x571; the spot search's body test
-// (FUN_007b5318, see net/dropspot.ts).
+//     origin, after set_item_y_floating) when an item appears on the current
+//     floor (create_item_box_on_ground 0x005c4874: g_ItemInitializationState
+//     != 0, so not for the items of a join sync; and the local player is not
+//     on another floor, FUN_005c9a18) and in HandlePlayerPickupSuccess_005c4c1c
+//     (the floor is ours). Its type-1 entry is a ring (classic/particles.ts).
+// Left out: the spot search's body test (FUN_007b5318, see net/dropspot.ts).
 // ASSUMED: a failed search sends nothing (the hold runs down). Fitted: the Enter radius for
 // pickup (PICKUP_RADIUS; newserv accepts up to 30) and for boxes
 // (BOX_RADIUS).
 
 import * as THREE from 'three';
-import { se } from '../audio/se.ts';
+import { se, setSeListener } from '../audio/se.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import {
   floorItemLook,
@@ -72,7 +74,6 @@ export const ITEM_GROUND_OFFSET = 6; // item_box_ground_y_offset 0x0092bb6c
 export const ITEM_GROUND_PROBE = 300; // g_ItemFloatingYOffset 0x0092bb70
 export const SE_PICKUP = 0x571; // HandlePlayerPickupSuccess_005c4c1c
 export const PARTICLE_ITEMGET = 0x9b; // w_itemget
-export const SE_RANGE = 300; // FUN_00814298: 3D sounds this far are dropped
 
 // set_item_y_floating: the height of a floor item's origin.
 export function floorItemHeight(item: { x: number; z: number; y?: number }, ground: (x: number, z: number, fromY: number) => number | null): number {
@@ -136,7 +137,8 @@ export class FloorItemLayer {
         opts.log?.(`floor items: ${(err as Error).message}`);
         return null;
       });
-    items.onFloorItemAdded = (it) => void this.show(it, it.source !== 'sync' && !items.game.loading);
+    // The 0x9B particle on appear: not for a join sync, and not while the local player is on another floor (FUN_005c9a18).
+    items.onFloorItemAdded = (it) => void this.show(it, it.source !== 'sync' && !items.game.loading && this.localPlayerOnFloor());
     items.onFloorItemRemoved = (it) => this.hide(it.id);
     items.onPickedUp = (it, picker) => this.pickedUp(it, picker);
     items.dropSearch = (me) => new DropSearch(me, { ground: opts.ground, wallBlocks: (a, b) => (opts.wallBlocks ? opts.wallBlocks(a, b) : false) });
@@ -215,16 +217,26 @@ export class FloorItemLayer {
     if (appeared) void this.fx.spawn({ id: PARTICLE_ITEMGET }, node.position.clone());
   }
 
-  // HandlePlayerPickupSuccess_005c4c1c: SE 0x571 at the picker when the
-  // item was on our floor.
+  // FUN_005c9a18 is 1 (no appear particle) when the local player is on another floor.
+  private localPlayerOnFloor(): boolean {
+    const me = this.items.game.self;
+    return !me || me.floor === this.floor;
+  }
+
+  // HandlePlayerPickupSuccess_005c4c1c: the particle at the item and SE 0x571
+  // at the picker (play_sound_effect_at_player) when the item was on our floor.
   private pickedUp(item: FloorItem, picker: number): void {
     if (item.floor !== this.floor) return;
     void this.fx.spawn({ id: PARTICLE_ITEMGET }, new THREE.Vector3(item.x, floorItemHeight(item, this.opts.ground), item.z));
-    const me = this.items.game.self;
     const p = this.items.game.players.get(picker);
-    if (!me || !p) return;
-    const d = Math.hypot(p.position.x - me.position.x, p.position.y - me.position.y, p.position.z - me.position.z);
-    if (d < SE_RANGE) se(SE_PICKUP);
+    if (!p) return;
+    // FUN_00814168's listener: the local player's position (else the camera's), facing the camera's direction.
+    const cam = this.viewer.camera;
+    const dir = new THREE.Vector3();
+    cam.getWorldDirection(dir);
+    const me = this.items.game.self?.position ?? cam.position;
+    setSeListener([me.x, me.y, me.z], [dir.x, dir.y, dir.z]);
+    se(SE_PICKUP, { at: [p.position.x, p.position.y, p.position.z] });
   }
 
   private hide(id: number): void {

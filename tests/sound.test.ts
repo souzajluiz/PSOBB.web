@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseSePac, waveToFloat } from '../client/src/formats/sepac.ts';
 import { SE_AREA_BANK, SE_BANKS, SE_SLOT_FLAGS } from '../client/src/audio/se_tables.ts';
-import { SE, seSlot, seVolume } from '../client/src/audio/se.ts';
+import { positionalMode, SE, seDistance, seGain3d, seSlot, sePan, seVolume } from '../client/src/audio/se.ts';
 
 const SOUND = join(process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data'), 'sound');
 let failures = 0;
@@ -52,6 +52,24 @@ check(seVolume(0) === 0 && seVolume(0x7f00) === -6400, 'volume formula end point
 const area = SE_AREA_BANK[0x2c];
 check(SE_BANKS[area]?.file === 'boss09.pac', `area 0x2c bank is boss09.pac (got ${SE_BANKS[area]?.file})`);
 check(SE_BANKS[area]?.slots.includes(0x6f8) === true, 'SE 0x6f8 (laser loop) in the area 0x2c bank');
+
+// Positional SE (FUN_00814298 with a position): SE 0x571 (the pickup, play_sound_effect_at_player)
+// has flag 0x8000 and kind 0 (a 3D buffer), static attenuation 0x28, and is culled at 300.
+const f571 = SE_SLOT_FLAGS[seSlot(0x571)];
+check(((f571 >>> 15) & 1) === 1 && ((f571 & 0x0f000000) >>> 24) === 0 && ((f571 & 0x7f00) >> 8) === 0x28, `SE 0x571 flags 0x${f571.toString(16)}: 3D bit, kind 0, attenuation 0x28`);
+check(positionalMode(0x571, f571, 0, 1) === '2d' && positionalMode(0x571, f571, 2, 1) === '2d', 'SE 0x571 within 2 is 2D');
+check(positionalMode(0x571, f571, 2.5, 1) === '3d' && positionalMode(0x571, f571, 299.9, 1) === '3d', 'SE 0x571 from 2 to 300 is 3D');
+check(positionalMode(0x571, f571, 300, 1) === 'cull' && positionalMode(0x571, f571, 900, 1) === 'cull', 'SE 0x571 at 300 or more is culled');
+check(positionalMode(0x571, f571, 900, 0x0e) === '3d' && positionalMode(0x571, f571, 900, 0x2c) === '3d', 'areas 0xe / 0x2c do not cull');
+check(positionalMode(0x571, 0, 50, 1) === '2d', 'a slot without flag 0x8000 is 2D');
+check(positionalMode(0x90, 0x8000, 10, 1) === '2d' && positionalMode(0x90, 0x8000, 17, 1) === '3d', 'slot 0x90 is 2D within 16 only');
+check(positionalMode(0x88, 0x8000, 10, 1) === '3d', 'slot 0x88 stays 3D within 16');
+check(positionalMode(0x90, 0x8000 | (10 << 24), 50, 1) === '3d' && positionalMode(0x90, 0x8000 | (3 << 24), 50, 1) === '2d', 'kinds 0 and 10 are 3D, other kinds 2D');
+check(seDistance([3, 4, 0], [0, 0, 0]) === 5 && seDistance([0.1, 0, 0], [0, 0, 0]) === 0, 'distance: 3-4-5, and under 0.025 squared is 0');
+check(seGain3d(50) === 1 && seGain3d(80) === 1 && seGain3d(160) === 0.5 && seGain3d(900) === 80 / 500, 'DS3D gain: 1 to min 80, min / d, clamped at max 500');
+const lis = { pos: [0, 0, 0] as const, front: [0, 0, -1] as const };
+check(sePan([10, 0, 0], lis) === 1 && sePan([-10, 0, 0], lis) === -1 && sePan([0, 5, -10], lis) === 0, 'pan: right is +x for a front of -z (the camera\'s screen)');
+check(Math.abs(sePan([10, 0, -10], lis) - Math.SQRT1_2) < 1e-9, 'pan 45 degrees right is sqrt(1/2)');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

@@ -17,6 +17,18 @@
 //   a = clamp(-attenuation [+ offset when flag 2], -127, 0)
 //   f = (1 + a/127) * (1 + master/127) - 1
 //   SetVolume(round(f^3 * 6400))
+// Positional sounds (FUN_00814298 with a position, play_directional_sound_effect):
+// the distance d to the listener (FUN_00836208; the listener is DAT_00acb39c,
+// set by FUN_00814168 from the local player, see setSeListener):
+//   d >= 300 is dropped (0x00980af4), unless the area is 0xe / 0x1f / 0x2c (FUN_00814498);
+//   d <= 2 (0x00980afc), or d <= 16 (0x00980af8) for slots 0x87..0xa7 other than
+//   0x88 0x8a 0x8f 0x93 0x94 0xa1, plays 2D (no position);
+//   otherwise a 3D buffer when the slot's flags have bit 0x8000 and kind 0 / 10
+//   (FUN_00829130): CTRL3D, min distance 80 and max 500 (0x42a00000 / 0x43fa0000,
+//   FUN_00828e4c), position (x, y, -z). The distance does not change the volume
+//   of FUN_00814298 itself; the buffer's rolloff does. ASSUMED: the rolloff is
+//   DirectSound's inverse law, min / clamp(d, min, max), and the pan follows the
+//   listener's right side (the port has no DS3D pan).
 // One-shots play once. Looping waves (record flag bit 0, played through
 // FUN_008144b0 / FUN_008292dc) get a position-notify event; when it fires
 // FUN_00828978 stops the buffer, seeks to the loop start sample and plays
@@ -54,6 +66,80 @@ export interface SePlayOptions {
    * playback rate is 2 ** (v / 3072).
    */
   pitch?: number;
+  /**
+   * A position (FUN_00814298's param_2): the sound is culled, 2D or 3D by the
+   * rules in the header, against the listener (setSeListener).
+   */
+  at?: readonly [number, number, number];
+}
+
+/** A positional sound's cull distance (0x00980af4, FUN_00814298). */
+export const SE_CULL_DISTANCE = 300;
+/** Within this distance a positional sound plays 2D (0x00980afc). */
+export const SE_NEAR = 2;
+/** The DirectSound 3D min / max distance of a 3D buffer (FUN_00828e4c: 80, 500). */
+export const SE_3D_MIN = 80;
+export const SE_3D_MAX = 500;
+/** The areas where the cull does not apply (FUN_00814498: 0xe, 0x1f, 0x2c). */
+const CULL_EXEMPT_AREAS = new Set([0x0e, 0x1f, 0x2c]);
+/** Slots that stay 3D within 16 of the listener (FUN_00814298's exceptions to the 2D band 0x87..0xa7). */
+const NEAR_BAND_EXEMPT = new Set([0x88, 0x8a, 0x8f, 0x93, 0x94, 0xa1]);
+
+/** The 3D listener (DAT_00acb39c position, DAT_00ab59cc front), see setSeListener. */
+export interface SeListener {
+  pos: readonly [number, number, number];
+  front: readonly [number, number, number];
+}
+let listener: SeListener = { pos: [0, 0, 0], front: [0, 0, 1] };
+
+/**
+ * FUN_00814168 sets the listener each frame: the local player's position when
+ * there is one (else the camera's), and the camera's direction. ASSUMED: the
+ * port sets it when a positional sound is asked for (render/flooritems.ts).
+ */
+export function setSeListener(pos: readonly [number, number, number], front: readonly [number, number, number]): void {
+  listener = { pos, front };
+}
+
+/** Distance of FUN_00836208: a squared distance under 0.025 is 0. */
+export function seDistance(at: readonly number[], pos: readonly number[]): number {
+  const d2 = (at[0] - pos[0]) ** 2 + (at[1] - pos[1]) ** 2 + (at[2] - pos[2]) ** 2;
+  return d2 < 0.025 ? 0 : Math.sqrt(d2);
+}
+
+/**
+ * The gain of a 3D buffer at distance d (ASSUMED: DirectSound's inverse rolloff):
+ * 1 within the min distance, then min / d, clamped at the max distance.
+ */
+export function seGain3d(d: number): number {
+  return d <= SE_3D_MIN ? 1 : SE_3D_MIN / Math.min(d, SE_3D_MAX);
+}
+
+/**
+ * The stereo pan (-1 left .. 1 right) of a point for a listener: its offset
+ * along the listener's right side (front x up, the screen's right in the port's
+ * camera). ASSUMED: the exe's DirectSound pan is not read.
+ */
+export function sePan(at: readonly number[], l: SeListener): number {
+  // right = front x up (0, 1, 0) = (-front.z, 0, front.x)
+  const [fx, , fz] = l.front;
+  const rl = Math.hypot(fx, fz);
+  const d = seDistance(at, l.pos);
+  if (rl === 0 || d === 0) return 0;
+  const dot = ((at[0] - l.pos[0]) * -fz + (at[2] - l.pos[2]) * fx) / rl;
+  return Math.max(-1, Math.min(1, dot / d));
+}
+
+/**
+ * What FUN_00814298 does with a positional sound of slot `slot` (flags = its
+ * slot flags) at distance d in `area`: dropped ('cull'), a 2D voice, or a 3D
+ * buffer ('3d'). See the header of this file.
+ */
+export function positionalMode(slot: number, flags: number, d: number, area: number): 'cull' | '2d' | '3d' {
+  if (!CULL_EXEMPT_AREAS.has(area) && d >= SE_CULL_DISTANCE) return 'cull';
+  const kind = (flags & 0x0f000000) >>> 24;
+  const near = d <= SE_NEAR || (d <= 16 && slot > 0x86 && slot < 0xa8 && !NEAR_BAND_EXEMPT.has(slot));
+  return !near && (kind === 0 || kind === 10) && (flags & 0x8000) !== 0 ? '3d' : '2d';
 }
 
 interface Wave {
@@ -67,6 +153,7 @@ interface Voice {
   slot: number;
   node: AudioBufferSourceNode;
   gain: GainNode;
+  pan: StereoPannerNode | null;
 }
 
 export function seSlot(id: number): number {
@@ -165,7 +252,10 @@ export class SePlayer {
     return w.buffer;
   }
 
-  /** FUN_00814298(id, 0, volume, flags): returns the wave slot, or -1 when nothing plays. */
+  /**
+   * FUN_00814298(id, position, volume, flags): returns the wave slot, or -1 when
+   * nothing plays. Without `at` the sound is 2D (the UI's id, position 0).
+   */
   play(id: number, opts: SePlayOptions = {}): number {
     if (!id) return -1;
     const slot = id < 0x700 ? seSlot(id) : 0;
@@ -173,6 +263,14 @@ export class SePlayer {
     const ctx = this.context();
     if (!w || ctx.state !== 'running') return -1;
     const flags = SE_SLOT_FLAGS[slot] ?? 0;
+    // The positional rules of FUN_00814298 (see the header): the cull, then 2D or a 3D buffer.
+    let spatial: { gain: number; pan: number } | null = null;
+    if (opts.at) {
+      const d = seDistance(opts.at, listener.pos);
+      const mode = positionalMode(slot, flags, d, this.area);
+      if (mode === 'cull') return -1;
+      if (mode === '3d') spatial = { gain: seGain3d(d), pan: sePan(opts.at, listener) };
+    }
     if (!(flags & FLAG_OVERLAP)) for (const v of this.voices.filter((v) => v.slot === slot)) this.stopVoice(v);
     if (this.voices.length >= VOICES) return -1;
     const node = ctx.createBufferSource();
@@ -185,11 +283,19 @@ export class SePlayer {
     }
     const gain = ctx.createGain();
     const ds = seVolume(flags, this.master, opts.volume ?? 0, opts.volume !== undefined);
-    gain.gain.value = Math.pow(10, ds / 2000);
-    node.connect(gain).connect(this.out!);
-    const voice: Voice = { slot, node, gain };
+    gain.gain.value = Math.pow(10, ds / 2000) * (spatial?.gain ?? 1);
+    let pan: StereoPannerNode | null = null;
+    if (spatial) {
+      pan = ctx.createStereoPanner();
+      pan.pan.value = spatial.pan;
+      node.connect(gain).connect(pan).connect(this.out!);
+    } else {
+      node.connect(gain).connect(this.out!);
+    }
+    const voice: Voice = { slot, node, gain, pan };
     node.onended = () => {
       gain.disconnect();
+      pan?.disconnect();
       this.voices = this.voices.filter((v) => v !== voice);
     };
     node.start();
@@ -220,6 +326,7 @@ export class SePlayer {
       // already stopped
     }
     v.gain.disconnect();
+    v.pan?.disconnect();
     this.voices = this.voices.filter((x) => x !== v);
   }
 }
