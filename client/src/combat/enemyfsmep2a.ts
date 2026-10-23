@@ -1175,9 +1175,15 @@ export class GiGueSpit extends EnemyShot {
       return [];
     }
     const t = targets.find((p) => p.clientId === this.targetId && !p.dead);
+    // The steer and the hit are on the player's weapon_position (exe dump 354566:
+    // `local_24 = this->weapon_position - pos`, and the hit tests the 3D distance
+    // to weapon_position). The player's weapon_position (+0x300) is the feet plus
+    // 0.5 * the bloodstain offset, which is zero (ROADMAP "Player damage left",
+    // UpdatePlayerWeaponPosition_0077a1f4), so the feet.
+    const wy = t ? t.y ?? 0 : 0;
     if (t) {
       let dx = t.x - this.x;
-      let dy = PLAYER_AIM_HEIGHT - this.y;
+      let dy = wy - this.y;
       let dz = t.z - this.z;
       const len = Math.hypot(dx, dy, dz) || 1;
       dx = (dx / len) * this.strength;
@@ -1200,8 +1206,10 @@ export class GiGueSpit extends EnemyShot {
       this.done = true;
       return [];
     }
-    // ASSUMED: the XZ box test (see the spike above); the y of the hit is not a window.
-    if (t && Math.hypot(t.x - this.x, t.z - this.z) <= this.speed) {
+    // GiGuesProjectileUpdate_0056c96c (dump 354566): `vec3_distance_ab_sq(pos,
+    // weapon_position) <= ZOffset^2` (3D, vec3_distance_ab_sq at dump 768587);
+    // ZOffset is the spit's fparam3, the port's `speed` (ASSUMED the same value).
+    if (t && (t.x - this.x) ** 2 + (wy - this.y) ** 2 + (t.z - this.z) ** 2 <= this.speed ** 2) {
       this.done = true;
       return [t];
     }

@@ -255,6 +255,8 @@ export type AiState = 'idle' | 'notice' | 'chase' | 'attack' | 'recover' | 'dead
 export interface AiTarget {
   clientId: number;
   x: number;
+  /** The feet (the entity origin, exe +0x300 / +0x20); absent in the tests (0). */
+  y?: number;
   z: number;
   y?: number; // height (the Pofuilly Slime's arm window, 0x00598f1c); 0 when not given
   charClass: number;

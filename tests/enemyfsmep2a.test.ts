@@ -5,7 +5,7 @@
 // are plausible stand-ins (a run with several lengths guards against a state
 // that waits on a length: nothing may hang).
 // Run: node tests/enemyfsmep2a.test.ts
-import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GroundBlast, type GeeState } from '../client/src/combat/enemyfsmep2a.ts';
+import { GEE, GIBBLES, GIGUE, GeeAi, GibblesAi, GiGueAi, GiGueSpit, GroundBlast, type GeeState } from '../client/src/combat/enemyfsmep2a.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import { STATUS } from '../client/src/combat/status.ts';
 
@@ -665,6 +665,19 @@ eq([GIGUE.search, GIGUE.turn, GIGUE.bombRadiusSq], [150, 768, 1600], 'Gi Gue: re
 eq([GIBBLES.search, GIBBLES.turn, GIBBLES.dormant], [250, 1024, 200], 'Gibbles: record 250 / 1024, waits for 200');
 eq([GIBBLES.sinkLimit], [25], 'Gibbles: the sink ends past velocity 25');
 near(GIBBLES.sinkStep, 0.1, 1e-7, 'Gibbles: the sink steps 0.1');
+
+// --- The Gigue spit's hit (GiGuesProjectileUpdate_0056c96c, dump 354566) ----------
+// The hit is the 3D distance to the player's weapon_position (the feet, see
+// the port's steer), not the XZ distance: a spit 20 above the feet does not hit.
+{
+  const effect = { kind: 'tech' as const, power: 1 };
+  const spit = (y: number) => new GiGueSpit({ x: 0, y, z: 0, yaw: 0, delay: 1, speed: 4, strength: 0, bump: 0, effect, targetId: 1 });
+  const feet: AiTarget = { clientId: 1, x: 0, z: 0, charClass: 0, dead: false, y: 0 };
+  eq(spit(20).tick([feet]), [], 'a spit 20 above the feet (XZ on the target): no 3D hit');
+  // yaw 0 flies 4 along +z in the first step: the target 4 out on z puts the spit 0.5 above its weapon point.
+  const onWeapon: AiTarget = { clientId: 1, x: 0, z: 4, charClass: 0, dead: false, y: 0 };
+  eq(spit(0.5).tick([onWeapon]).length, 1, 'a spit 0.5 above the weapon point (within the speed): hit');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);

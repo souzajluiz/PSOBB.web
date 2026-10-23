@@ -979,6 +979,9 @@ export class GibbonAi extends BrainBase {
   private readonly castChance: number;
   private readonly level: number;
   private readonly ultimate: boolean;
+  // The row's max_y_angle (battleparams_attacks, ENEMY_TYPE_PARAMS attack[0]); null
+  // when the table has no row (then the directed Foie is never taken).
+  private readonly maxYRow: EnemyAttackData | null;
   private readonly entityIndex: number;
   private readonly motionFrames: (motion: number) => number;
   private readonly spawnX: number;
@@ -1030,6 +1033,7 @@ export class GibbonAi extends BrainBase {
     params: readonly number[];
     ultimate?: boolean;
     level?: number;
+    attack?: EnemyAttackData | null;
     entityIndex?: number;
     groups?: GibbonGroups;
     motionFrames?: (motion: number) => number;
@@ -1045,6 +1049,7 @@ export class GibbonAi extends BrainBase {
     this.castChance = Math.fround(p(4) + GIBBON.spellChanceBase);
     this.search = this.isLeader ? GIBBON.searchZol : GIBBON.searchUl;
     this.ultimate = opts.ultimate ?? false;
+    this.maxYRow = opts.attack ?? null;
     this.level = Math.max(0, Math.min(this.ultimate ? 29 : 14, Math.trunc(opts.level ?? 0)));
     this.entityIndex = opts.entityIndex ?? 0;
     this.motionFrames = opts.motionFrames ?? (() => 30);
@@ -1714,21 +1719,47 @@ export class GibbonAi extends BrainBase {
     if (this.sub === 2) this.enter(out, 'wander');
   }
 
+  // The Foie's branch test: |heading - bearing to t| (BAMS) < max_y_angle / 2
+  // (C int division, so truncated). No row: 0, never taken.
+  private aimedAtTarget(t: AiTarget): boolean {
+    const turn = Math.abs(wrap(this.angleTo(t) - this.angle)) / BAMS_TO_RAD;
+    const half = Math.trunc((this.maxYRow?.angle ?? 0) / 2);
+    return turn < half;
+  }
+
   private fireSpell(out: AiFrame, t: AiTarget | null): void {
     const x = this.x + Math.sin(this.angle) * GIBBON.castAhead;
     const z = this.z + Math.cos(this.angle) * GIBBON.castAhead;
     let tech: number;
     if (this.isLeader) tech = this.ultimate ? TECH.megid : TECH.rafoie;
     else tech = this.ultimate ? TECH.gizonde : TECH.foie;
-    // Foie and Rafoie are the real objects (combat/techfire.ts): Foie along the
-    // heading, Rafoie on the target (ASSUMED the list form that follows it).
+    // Foie and Rafoie are the real objects (combat/techfire.ts). unknown_gibbon_
+    // behavior2 (dump 349686, the non-ultimate else): with a target (+0x398) and
+    // the turn to it below max_y_angle / 2, create_directed_foie_object takes the
+    // target's +0x300 (its feet); else create_foie_object1 flies along the heading.
+    // The angle is the post-turn difference of EnemyAI_UpdateRotation_00771858
+    // (dump 746368: integer_angle_abs_difference); here the difference before the
+    // fire-frame turn (ASSUMED: the exe's extra turn by the record's rate is not
+    // ported). Rafoie is on the target (ASSUMED the list form that follows it).
     if (tech === TECH.foie || tech === TECH.rafoie) {
-      const shot =
-        tech === TECH.foie
-          ? enemyFire({ tech, level: this.level, x, y: GIBBON.castHeight, z, heading: this.angle, enemy: true })
-          : t
-            ? enemyFire({ tech, level: this.level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: this.angle, targetId: t.clientId, enemy: true })
-            : null;
+      let shot: EnemyShot | null = null;
+      if (tech === TECH.rafoie) {
+        shot = t
+          ? enemyFire({ tech, level: this.level, x: t.x, y: PLAYER_AIM_HEIGHT, z: t.z, heading: this.angle, targetId: t.clientId, enemy: true })
+          : null;
+      } else {
+        const aimed = t !== null && this.aimedAtTarget(t);
+        shot = enemyFire({
+          tech,
+          level: this.level,
+          x,
+          y: GIBBON.castHeight,
+          z,
+          heading: this.angle,
+          aim: aimed && t ? { x: t.x, y: t.y ?? 0, z: t.z } : null,
+          enemy: true,
+        });
+      }
       if (shot) (out.shots ??= []).push(shot);
       return;
     }

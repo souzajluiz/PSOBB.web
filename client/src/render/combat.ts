@@ -1034,7 +1034,7 @@ export class CombatView {
           };
           // unknown_get_tech_level_from_battleparams_stats: the stats row's level field.
           const level = params && def ? params.stats(difficulty, def.stats[0]).level : 0;
-          ai = new GibbonAi({ ...at, subtype, params: setParams, ultimate, level, entityIndex: head.index, groups: this.gibbonGroups, motionFrames, rng: () => this.rng() });
+          ai = new GibbonAi({ ...at, subtype, params: setParams, ultimate, level, attack, entityIndex: head.index, groups: this.gibbonGroups, motionFrames, rng: () => this.rng() });
         }
         else if (className === 'TObjEneMe1Gee') ai = new GeeAi({ ...at, params: setParams, movement, rng: () => this.rng() });
         else if (className === 'TObjEneMe1GiGue') ai = new GiGueAi({ ...at, params: setParams, attack, movement, rng: () => this.rng() });
