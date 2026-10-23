@@ -742,6 +742,12 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TOWreckAncient07', 'bm_o_wreck_ancient.bml', [{ model: 5 }]);
     case 0x0229:
       return spec('TOCapsuleLabo', 'bm_obj_labo_infocapsule.bml', [{ model: 0 }]);
+    // TOTrapSeabed01 (the Seabed capture trap): CreateDerolleTrapEntity 0x0063ee10 /
+    // InitializeDerolleTrapEntity 0x0063ec24 build it; LoadSeabedTuriganeBMLData 0x0063eeec
+    // loads bm_obj_seabed_turigane.bml (exe string) and the texture archive, which the exe names
+    // obj_seabed_turigane.gvm; the web's data archive is .xvm (ASSUMED the same archive under
+    // the BB name). The draw rule (hidden / plain / cloak) and the reveal are render/traps.ts
+    // CaptureTrap, driven by render/gamefield.ts.
     case 0x0228:
       return spec('TOTrapSeabed01', 'bm_obj_seabed_turigane.bml', [{ model: 0, textures: 'obj_seabed_turigane.xvm' }]);
     // Jungle rocks: TORockJungleS01 (0x0206, create 0x00635040, ctor

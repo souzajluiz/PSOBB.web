@@ -345,9 +345,13 @@ export class SealDoor {
 // the cloak setup). VERIFIED from the dump; the advanced-effects setting is ASSUMED on (the
 // same assumption as combat/enemyfsmep2c.ts).
 //
+// Wired: render/gamefield.ts feeds every capture trap the players' rooms and vision bits
+// (captureTicks, visionSlots: androids only, from the class flag) and draws it by captureTrapDraw
+// (objectview.ts setCaptureDraw). The cloak is an ASSUMED translucent shader (objectview.ts
+// cloakMaterial): the exe's projected effect texture is not in the web's data.
 // Not ported: the spring and hold of 0x0228 (sub-states 2 and 3: EnemyAcquireTargetAndAttack
-// and the handlers at 0x0063e7a4 / 0x0063e72c), the cloak shader itself (no advanced-effect
-// pass in the web), and the reticle's drawing.
+// 0x0063e444 and the handlers at 0x0063e7a4 / 0x0063e72c; the spring's motion is the BML's njm),
+// the reticle's drawing, and the Trap Vision tool's temporary bit (UNCLEAR, see above).
 
 export const TRAP_CAPTURE = 0x0228; // TOTrapSeabed01 (the Seabed capture trap)
 export const TRAP_VISION_FLAG = 0x10000; // player unknown_flags_2 (has_trap_vision)

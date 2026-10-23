@@ -61,7 +61,7 @@ import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import type { CollisionWorld, Obstacle } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
-import { SEAL_DOOR, SealDoor } from './traps.ts';
+import { SEAL_DOOR, SealDoor, type CaptureDraw } from './traps.ts';
 
 export type WarpKind = 'area' | 'boss' | 'main' | 'cca' | 'map' | 'lobby';
 
@@ -619,6 +619,11 @@ export class FieldObjects {
   // A pillar trap's rise and spin (render/traps.ts).
   setTrapPose(index: number, rise1: number, rise2: number, spin: number): void {
     this.models?.setTrapPose(index, rise1, rise2, spin);
+  }
+
+  // A Seabed capture trap's draw (render/traps.ts captureTrapDraw).
+  setCaptureDraw(index: number, draw: CaptureDraw): void {
+    this.models?.setCaptureDraw(index, draw);
   }
 
   // The nodes the pillar traps move on the ticks.

@@ -18,6 +18,36 @@ import { extractStatic, freezeStatic, poolMeshInPlace, StaticBatcher, type Batch
 import type { MapViewer } from './mapviewer.ts';
 import { disposeTree } from './dispose.ts';
 import { TexturePool } from './texturepool.ts';
+import type { CaptureDraw } from './traps.ts';
+
+// The cloak of a Seabed capture trap (render/traps.ts captureTrapDraw, 'cloak').
+// ASSUMED shader: the exe's cloak (unknown_set_advanced_effect_cloaked, dump)
+// projects a screen-space effect texture through the texture matrices of stage
+// 1 and draws each mesh once more; that texture is not in the web's data, so
+// the cloak here is a translucent, cool-tinted copy of the mesh's own material
+// with a screen-space shimmer standing in for the projection.
+function cloakMaterial(src: THREE.Material): THREE.Material {
+  const basic = src as THREE.MeshBasicMaterial;
+  const m = new THREE.MeshBasicMaterial({
+    map: basic.map ?? null,
+    color: basic.color ? basic.color.clone() : new THREE.Color(0xffffff),
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+    side: src.side,
+  });
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      `#include <dithering_fragment>
+       float shimmer = 0.75 + 0.25 * sin(gl_FragCoord.x * 0.35) * sin(gl_FragCoord.y * 0.35);
+       gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.6, 0.78, 1.0), 0.35);
+       gl_FragColor.a *= shimmer;`,
+    );
+  };
+  m.customProgramCacheKey = () => 'capture-trap-cloak';
+  return m;
+}
 
 // Texture ids are per model; remapping every id to one texture is how
 // FUN_0081a588 sets the texture of all meshes of a model.
@@ -94,6 +124,10 @@ export class ObjectLayer {
   // The pillar trap nodes setTrapPose moves on the game ticks (drawn
   // between ticks by render/smoothrender.ts).
   readonly trapNodes = new Set<THREE.Object3D>();
+  // Seabed capture traps (setCaptureDraw): the cloak copy of each source material and
+  // the draw each object was last given (the setter only swaps when it changes).
+  private cloaks = new Map<THREE.Material, THREE.Material>();
+  private captureDraws = new Map<number, CaptureDraw>();
   stats: ObjectLayerStats = { placed: 0, unresolved: [], invisible: 0, errors: [] };
 
   constructor(viewer: MapViewer, files: ClientFiles) {
@@ -353,6 +387,30 @@ export class ObjectLayer {
     for (const m of part.sealMaterials) m.color?.setRGB(v, v, v);
   }
 
+  // Seabed capture trap (TOTrapSeabed01, render/traps.ts captureTrapDraw): 'hidden'
+  // hides the model, 'plain' draws it, 'cloak' swaps each mesh's material for its
+  // cloak copy. The original materials stay on the mesh as userData.plainMaterial.
+  setCaptureDraw(index: number, draw: CaptureDraw): void {
+    const m = this.live(index, 'setCaptureDraw');
+    if (!m || this.captureDraws.get(index) === draw) return;
+    this.captureDraws.set(index, draw);
+    m.root.visible = draw !== 'hidden';
+    const cloak = draw === 'cloak';
+    const swap = (src: THREE.Material): THREE.Material => {
+      if (!cloak) return src;
+      let c = this.cloaks.get(src);
+      if (!c) this.cloaks.set(src, (c = cloakMaterial(src)));
+      return c;
+    };
+    for (const part of m.parts) {
+      part.group.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const plain = (o.userData.plainMaterial ??= o.material) as THREE.Material | THREE.Material[];
+        o.material = Array.isArray(plain) ? plain.map(swap) : swap(plain);
+      });
+    }
+  }
+
   setVisible(index: number, visible: boolean): void {
     const m = this.ownBatched.has(index) ? this.models.get(index) : this.live(index, 'setVisible');
     if (m) m.root.visible = visible;
@@ -388,6 +446,16 @@ export class ObjectLayer {
     this.warned.clear();
     this.pool?.dispose();
     this.pool = null;
+    // The cloak copies are this layer's own: back to the plain materials (which
+    // disposeTree releases with the meshes), then the copies go.
+    if (this.root) {
+      this.root.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.userData.plainMaterial) o.material = o.userData.plainMaterial;
+      });
+    }
+    for (const c of this.cloaks.values()) c.dispose();
+    this.cloaks.clear();
+    this.captureDraws.clear();
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
     disposeTree(this.root);
