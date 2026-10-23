@@ -13652,3 +13652,36 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+
+## 2026-10-23: Morfos's arm placement (the body's node 10 is captured into the parent's +0x4ac)
+
+**Report:** the Morfos's punch arm was drawn at the Morfos origin (ASSUMED in the 13:5x entry). The premise is wrong: the arm's position is a world point the body's draw writes each frame.
+
+**Exe evidence (PsoBB.exe 1.25.13; `objdump -d` of the whole exe, the named dump `Psobb.exe-05112026.c`, `tools/exedata.py`):**
+- The writers of parent+0x4ac in 0x00579000..0x0057d000 (`objdump` for `0x4ac(`, the whole exe for the callback): the only store is the init's zeroing at 0x0057cadc (`movl $0, 0x4ac(%ebp)`, with +0x4a0..+0x4dc). The live value comes from the node-capture callback. The arm reads it through `MorfosGetSubEntityOffset_0057c7b8` (returns this+0x4ac).
+- The stream init (0x0057c830) zeroes the counter and pointer globals; the body's part draw (0x0057a6b4) sets the pointer `0xa74130 = enemy+0x4a0` and the counter `0xa74134 = 0`, and registers the callback 0x00579f3c (`ProcessAnimationStep_00579f3c` in the named dump) as the NJ user callback (`0x0082fac4` stores it in `0xae6dc0`). The NJ walker 0x008472dc calls the callback once per object, depth first, root first, after the object's matrix is pushed and before its children (its mesh is drawn after the callback).
+- The callback's count (0xa74134) is per part draw: 0x0057a6b4 is called once per part with `esi = enemy+0x42c+12*part`. At count 6 it copies the node's world origin (`0x00520c5c` transforms the zero vector) to the pointer and advances by 12; at count 10 it does the same, so node 6 goes to enemy+0x4a0 and node 10 to enemy+0x4ac. The named dump says the same (`g_MorfosModel1VertexData == 6 || == 10`).
+- The body (kabe_body.nj) has 45 objects; the wall (kabe_wall.nj) 1; the arm (kabe_arm.nj) 20. Node 6 is the object under the root with rotation y 90 deg (flags 0x0c, no mesh); node 10 hangs under 8, 8 under 7, 7 under 6 (`tree.ts`, node-by-node DFS from `parseNinjaChunkFile`).
+- The draw matrix of the body is translate(enemy +0x38) then rotate(yaw +0x60) (0x0057a6fc / 0x0057a704), so the captured points are world points in the enemy's space.
+- The arm: ctor 0x0057cc3c copies parent+0x4ac into its +0x38..+0x40 and the parent's yaw (0x0057c7b4) into +0x60, and +0xfc = parent, +0x100 = the parent's word +0x1c. Update 0x0057cd3c copies the same each frame (no hit code in it, nor in the draw 0x0057cd9c, which translates to +0x38, turns by +0x60 and draws the sub's model with the generic draw 0x007aa668). The sub's motion table 0x009bef44 slot 0: motion 0 (attack_kabe_arm), speed 0.7, flags 0x4, started in the ctor (`Enemy__InitAnimation(sub, 0)`) and in the punch (0x0057bb5c).
+- The arm's end: its update, when the generic status word +0xb0 has bit 0x10 set, sets bit 0 of the 16-bit word +0x8 (the dead mark, as the DEVLOG's sub note says). The generic update 0x007aa094 keeps 0x10 (`and 0xfffff7d5`), so the bit is set elsewhere; the setter is not traced.
+
+**Port:**
+- `render/combat.ts` `morfosView` → `morfosArmPlace`: while the arm is out (the swing) its position is node 10's world origin (`e.instance.nodes[0][MORFOS.armNode]`), taken in the root's local space (`root.worldToLocal`); the arm's yaw stays the root's. The placement runs before this frame's motion is applied, so the arm takes the previous frame's pose, as the exe's copy does (the capture is in the draw, the copy in the update).
+- `combat/enemyfsmep2d.ts`: `MORFOS.armNode = 10`, `MORFOS.muzzleNode = 6` (documented, the muzzle not ported); the header comment states the arm has no hit (the punch's hit is the body's `out.hit`).
+- Unchanged: the arm's motion (0.7, once), the arm's visibility rule (`armOut`), the wall and body UVs.
+
+**ASSUMED:**
+- The NJ walker's callback count is the DFS index of every object, including the root (the walker's order was read from the disassembly; the parser's `children` order was taken as the NJ child order).
+- The body part is the one with count 6 and 10 (the wall, 1 object, never reaches 6; the arm is not in this walk).
+- The arm's place uses the previous frame's pose (the port's update order); the exe's order between the arm's update and the body's draw was not traced beyond the capture.
+- The arm's motion flags 0x4 are not mapped to the port's loop flag (the port plays it once, as before).
+- The generic update 0x007aa094 deals no damage.
+
+**Tests:** `PSOBB_DATA` default (`~/Downloads/psobb-client/data`): `node tests/enemies.test.ts` (new checks: the body's node list has 45 entries, nodes 6 and 10 exist, node 10 hangs under 8, 7 and 6) passes; `node tests/enemyfsmep2d.test.ts` passes. `client`: `tsc --noEmit -p .` clean with Node 24 (the worktree's `client/node_modules` is a symlink to the main checkout's; not committed).
+
+**Left:**
+- The arm's end: the setter of +0xb0 bit 0x10 (the motion end or the death) is not traced; the port hides the arm when the punch's sub-state leaves 1.
+- The laser's origin: the exe's muzzle is body node 6 (+0x4a0); the port's bolt still starts at the Morfos origin.
+- The arm's flags 0x4 and the sub's motion-speed path (the port's `play(..., 0.7, false)`).
+- Not run in Chrome (brief: no Playwright).

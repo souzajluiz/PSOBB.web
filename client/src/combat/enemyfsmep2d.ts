@@ -371,11 +371,22 @@ abstract class Ep2dBrain<S extends string> extends BrainBase {
 // stream (EnemyUpdateRoutine_0057a2a0) reads it: the body's child mesh with the
 // bulge itself, the second mesh with trunc(bulge / 2.0) (0x00927694 = 2.0, the
 // fistp under RC 11 at 0x0057a314..0x0057a322). See `wallBulge` / `armBulge`.
-// ASSUMED: the arm entity (CreateMorfosSubEntity_0057cbc4) is visual only; the
-// laser's muzzle node (enemy+0x4a0) is the Morfos' own
-// position; the walk has no wall rays (0x00520940 stops the crawl at walls);
-// nothing can hurt it while hidden (state 2); same-room checks hold.
+// The arm entity (CreateMorfosSubEntity_0057cbc4) has no hit of its own: its
+// ctor (0x0057cc3c), update (0x0057cd3c) and draw (0x0057cd9c) call no hit
+// check; the punch's hit is the body's (out.hit at the swing's frame 8).
+// ASSUMED: the generic update it calls (0x007aa094) deals no damage either.
+// The arm's place is not here (a render matter, render/combat.ts
+// morfosArmPlace): the body's node 10 (`armNode`) in the draw's capture
+// (0x00579f3c, count 6 = enemy+0x4a0, count 10 = enemy+0x4ac).
+// ASSUMED: the laser's muzzle (enemy+0x4a0) is the Morfos' own position in
+// the port's bolt; the exe's point is body node 6 (`muzzleNode`), not ported.
+// The walk has no wall rays (0x00520940 stops the crawl at walls); nothing can
+// hurt it while hidden (state 2); same-room checks hold.
 export const MORFOS = {
+  // Body node indices (depth first, every object counts) whose world origin the
+  // draw captures: 0x00579f3c stores node 6 at enemy+0x4a0 and node 10 at +0x4ac.
+  muzzleNode: 6,
+  armNode: 10,
   search: 400,
   retarget: 60,
   rise: f32(0.5),
