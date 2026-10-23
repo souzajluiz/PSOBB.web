@@ -18,9 +18,12 @@ import {
   answerOnPacket,
   mailTextAccepted,
   parseMailBody,
+  processEntityNameWithShopItems,
   readUnits,
+  setShopDialogItems,
   simpleMailPacket,
 } from '../client/src/net/simplemail.ts';
+import { AUTO_REPLY_OFFSET, writeAutoReply } from '../client/src/net/charfile.ts';
 // The Question and the text helpers measure on an OffscreenCanvas (gametext.ts); a fixed
 // advance is enough for the window's logic. The window module loads after the stub.
 const measure = { measureText: () => ({ width: 7 }), getImageData: () => ({ data: new Uint8ClampedArray(64) }) };
@@ -327,6 +330,47 @@ const sentOf = (link: { sent: Array<{ command: number; flag: number; payload: Ui
   win.key(key('Escape'));
   win.key(key('Escape'));
   check('answer menu: close sends C8 (off changed)', sentOf(link, 0xc8).length === 1 && !win.open);
+}
+
+// 7. The smut filter (ProcessEntityNameWithShopItems, exe 00813a78 / 00813b18). The pattern is
+// "#!@%" x 8: the j-th unit of a word becomes pattern[j]; spaces of the word stay spaces.
+{
+  const REPL = '#!@%#!@%#!@%#!@%#!@%#!@%#!@%#!@%';
+  check('filter: no groups copies the text', processEntityNameWithShopItems('a BAD b', []) === 'a BAD b');
+  check('filter: a word is replaced by pattern[j]', processEntityNameWithShopItems('a BAD b', [['bad']]) === 'a #!@ b');
+  check('filter: capitals match lower case words', processEntityNameWithShopItems('BAD', [['bad']]) === '#!@');
+  check('filter: every occurrence is replaced', processEntityNameWithShopItems('bad bad', [['bad']]) === '#!@ #!@');
+  check('filter: symbols in the text are spaces (b.a.d matches "b a d")', processEntityNameWithShopItems('b.a.d', [['b a d']]) === '#.@.#');
+  check('filter: fullwidth capitals become lower case ASCII (FF21 - 0xfec0 = a)', processEntityNameWithShopItems('ＢＡＤ', [['bad']]) === '#!@');
+  check('filter: the list is matched lower case (a capital word in the list does not match)', processEntityNameWithShopItems('bad', [['BAD']]) === 'bad');
+  check('filter: a tab makes the next unit a space (no match after it)', processEntityNameWithShopItems('x\tbad', [['bad']]) === 'x\tbad');
+  check('filter: groups run one after another', processEntityNameWithShopItems('xyz bad', [['bad'], ['xyz']]) === '#!@ #!@');
+  check('filter: a word past the pattern (33 units) ends the text at unit 32', processEntityNameWithShopItems('a'.repeat(33), [['a'.repeat(33)]]) === REPL);
+  // The 0081 path: the body's message is filtered before the text check and the store.
+  setShopDialogItems([['bad']]);
+  const fb = new SimpleMailBox(fakeLink());
+  check('filter: a filtered 0081 is stored with the words replaced', fb.receive(mailBody(9, 'Ann', 'd', 'so BAD')) === 'stored' && fb.store.all()[0].text === 'so #!@');
+  setShopDialogItems([]);
+  const plain = new SimpleMailBox(fakeLink());
+  plain.receive(mailBody(9, 'Ann', 'd', 'so BAD'));
+  check('filter: with no list the mail is stored as sent', plain.store.all()[0].text === 'so BAD');
+}
+
+// 8. The mail in a game: the same 0081 path (the box takes it whatever the screen); the answer
+// text is the save's (E7 0x29EC), kept in the save copy when it changes.
+{
+  const raw = new Uint8Array(0x3994);
+  writeAutoReply(raw, 'Away now');
+  check('save: the auto reply is written at 0x29EC', AUTO_REPLY_OFFSET === 0x29ec && readStr(raw, 0x29ec, 0xac) === 'Away now');
+  check('save: the rest of the 0xAC units is zero', readU16(raw, 0x29ec + 2 * 8) === 0 && readU16(raw, 0x29ec + 2 * 0xab) === 0);
+  const kept: string[] = [];
+  const link = fakeLink();
+  const box = new SimpleMailBox(link, { answerText: readStr(raw, 0x29ec, 0xac), saveAnswer: (t) => kept.push(t) });
+  check('answer: the box starts with the save\'s text, service off', box.answerText === 'Away now' && box.answerOn === false);
+  box.setAnswerText('Back soon');
+  check('answer: a new text goes to the save copy', kept.length === 1 && kept[0] === 'Back soon');
+  box.closeWindow();
+  check('answer: closing sends C7 with the text', sentOf(link, 0xc7).length === 1 && box.answerOn === true);
 }
 
 // Layout: the top window is at exe 0xa0 and the keyboard at 0xcf (table 0x00971f40).

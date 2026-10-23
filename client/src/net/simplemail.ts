@@ -2,9 +2,12 @@
 // classic/simplemail.ts). Packets, the received mail store and the answer service.
 //
 // Decoded from PsoBB.exe (Psobb.exe-05112026.c, Ghidra via tools/ghidra/decomp.sh):
-//   - 0081 (S->C) is handled by handle_ship_packet0x81 (810083), which calls the handler
-//     in unknown_packet_handlers[0x17] = LAB_0081384c (the dump's name is missing). That
-//     thunk runs FUN_00813a3c (the text check) and then the store FUN_00813870 / 0081386c.
+//   - 0081 (S->C) is the function at 0x007c8dc4 (the dump's name handle_ship_packet0x81 at
+//     0x00810083 is wrong: that address is mid-function). It is the 0x81 entry of the pair table
+//     at 0x00a0f800 (8-byte stride; the pair at 0x00a0f9b8, next to the in-game 0x60 / 0x62).
+//     It runs ProcessEntityNameWithShopItems on the message in place (msg = packet + 0x5c), then
+//     unknown_packet_handlers[0x17] = LAB_0081384c (ship connection +0x1e0d0). That thunk runs
+//     FUN_00813a3c (the text check) and then the store FUN_00813870 / 0081386c (SE 0x586).
 //   - 0081 (C->S) is FUN_008136f0 (the builder) and the wrapper FUN_007d4384, which sets the
 //     header to size 0x45C, command 0x81, flags 0 (0x7d75c8: `mov word [esi], 0x45c`,
 //     `mov byte [eax+2], 0x81`). The body is 0x454 bytes (newserv SC_SimpleMail_BB_81,
@@ -68,6 +71,148 @@ export function readUnits(body: Uint8Array, offset: number, units: number): stri
     const u = dv.getUint16(p, true);
     if (u === 0) break;
     out += String.fromCharCode(u);
+  }
+  return out;
+}
+
+// The smut filter (ProcessEntityNameWithShopItems, exe 00813a78; NormalizeAndFilterEntityName,
+// exe 00813b18). The list is smutdata.prs (g_ShopDialogFilePath at 0x0096ee00, "smutdata.prs"),
+// read by InitializeShopDialog_0070ac88 with the unitxt parser: each group is a list of strings
+// ended by an empty string. The exe runs it on every 0081 message in place (007c8dc4), so a mail
+// is stored with the words replaced. With no groups (count < 1) the message is copied as it is.
+//
+// The tables (PsoBB.exe .data, read with tools/exedata.py):
+//   0x00980980: 16 entries of 4 units, stride 8 bytes: the symbols that become spaces in the
+//               normalized text (ASCII and fullwidth punctuation, see FILTER_SYMBOLS).
+//   0x00980a00: halfwidth katakana FF66..FF9D -> full width (KATAKANA_FULL).
+//   0x00980a80: g_ShopNameReplacementPattern, "#!@%" x 8 (the character j of a word is replaced
+//               by pattern[j]; past the 32 units the pattern reads 0, which ends the text).
+const FILTER_SYMBOLS: readonly number[] = [
+  0x21, 0x40, 0x23, 0x24, 0x25, 0x5e, 0x26, 0x2a, 0x28, 0x29, 0x2d, 0x5f, 0x3d, 0x2b, 0x7c, 0x5c,
+  0x5b, 0x5d, 0x7b, 0x7d, 0x3b, 0x3a, 0x27, 0x22, 0x3f, 0x2f, 0x3c, 0x2c, 0x3e, 0x2e, 0xff01, 0xff20,
+  0xff03, 0xff04, 0xff05, 0xff3e, 0xff06, 0xff0a, 0xff08, 0xff09, 0x30fc, 0xff3f, 0xff1d, 0xff0b,
+  0xffe5, 0xff5c, 0x300c, 0x300d, 0xff5b, 0xff5d, 0xff1b, 0xff1a, 0x2019, 0x201d, 0xff1f, 0x30fb,
+  0x3002, 0xff1e, 0xff1c, 0x3001, 0xff5e, 0x2018, 0x7e, 0x60,
+];
+const KATAKANA_FULL: readonly number[] = [
+  0x30f2, 0x30a1, 0x30a3, 0x30a5, 0x30a7, 0x30a9, 0x30e3, 0x30e5, 0x30e7, 0x30c3, 0x30fc, 0x30a2, 0x30a4, 0x30a6,
+  0x30a8, 0x30aa, 0x30ab, 0x30ad, 0x30af, 0x30b1, 0x30b3, 0x30b5, 0x30b7, 0x30b9, 0x30bb, 0x30bd, 0x30bf, 0x30c1,
+  0x30c4, 0x30c6, 0x30c8, 0x30ca, 0x30cb, 0x30cc, 0x30cd, 0x30ce, 0x30cf, 0x30d2, 0x30d5, 0x30d8, 0x30db, 0x30de,
+  0x30df, 0x30e0, 0x30e1, 0x30e2, 0x30e4, 0x30e6, 0x30e8, 0x30e9, 0x30ea, 0x30eb, 0x30ec, 0x30ed, 0x30ef, 0x30f3,
+];
+const REPLACEMENT_PATTERN = '#!@%#!@%#!@%#!@%#!@%#!@%#!@%#!@%';
+const FILTER_SYMBOL_SET = new Set(FILTER_SYMBOLS);
+// ASSUMED: the exe loops until a word no longer matches; a replacement that rebuilds the same
+// word would loop forever there, so the port stops after this many passes over one word.
+const FILTER_PASSES = 256;
+
+// The groups of smutdata.prs (set once the file is read; the exe's InitializeShopDialog).
+let shopDialogItems: readonly (readonly string[])[] = [];
+
+export function setShopDialogItems(groups: readonly (readonly string[])[]): void {
+  shopDialogItems = groups;
+}
+
+// One unit of NormalizeAndFilterEntityName's pass over the text: u5 is the unit to process
+// (a space after a tab), u6 the original unit (the katakana table is used only when they match).
+function normalizeFilterUnit(u5: number, u6: number): number {
+  let c = u5 === 0x3000 ? 0x20 : u5;
+  if (c >= 0x41 && c <= 0x5a) c += 0x20; // ASCII capitals to lower case
+  else if (c >= 0xff21 && c <= 0xff3a) c -= 0xfec0; // fullwidth capitals to ASCII capitals
+  else if (c > 0xff40 && c < 0xff5b) c -= 0xfee0; // fullwidth small letters to ASCII
+  if (c === u6 && u6 > 0xff65 && u6 < 0xff9e) c = KATAKANA_FULL[u6 - 0xff66];
+  if (FILTER_SYMBOL_SET.has(c)) c = 0x20;
+  return c;
+}
+
+// NormalizeAndFilterEntityName (exe 00813b18) for one group. N is the normalized text with a
+// leading and a trailing space (N[i + 1] is the unit of O[i]); O is the text as sent, with the
+// replaced words. Returns O with its zero unit.
+function normalizeAndFilter(input: readonly number[], group: readonly string[]): number[] {
+  const at = (k: number): number => (k < input.length ? input[k] : 0);
+  const N: number[] = [0x20];
+  const O: number[] = [];
+  let i = 0;
+  let u6 = at(0);
+  let u5 = u6;
+  let bVar2 = false;
+  if (u6 === 9) {
+    // A tab starts the exe's second pass: its unit and the one after it become spaces.
+    u5 = 0x20;
+    bVar2 = true;
+  }
+  if (u6 !== 0) {
+    for (;;) {
+      N.push(normalizeFilterUnit(u5, u6));
+      O.push(u6);
+      i++;
+      u6 = at(i);
+      if (u6 === 0 || i > 0xfc) break;
+      if (u6 === 9) {
+        u5 = 0x20;
+        bVar2 = true;
+        continue;
+      }
+      u5 = bVar2 ? 0x20 : u6;
+      bVar2 = false;
+    }
+  }
+  N.push(0x20, 0);
+  O.push(0);
+
+  const pattern = (j: number): number => (j < REPLACEMENT_PATTERN.length ? REPLACEMENT_PATTERN.charCodeAt(j) : 0);
+  for (const word of group) {
+    if (word.length === 0) break; // the group's end
+    const S = Array.from(word, (ch) => ch.charCodeAt(0));
+    for (let pass = 0; pass < FILTER_PASSES; pass++) {
+      // The last place the word occurs in N (the exe keeps the last match it scanned).
+      let last = -1;
+      for (let pos = 0; pos < N.length && N[pos] !== 0; pos++) {
+        let hit = true;
+        for (let j = 0; j < S.length && hit; j++) hit = (N[pos + j] ?? 0) === S[j];
+        if (hit) last = pos;
+      }
+      if (last < 0) break;
+      for (let j = 0; j < S.length; j++) {
+        if (S[j] === 0x20) continue;
+        const c = pattern(j);
+        N[last + j] = c;
+        // The exe writes O only when the unit before it is set; before the text (O[-1]) it
+        // reads memory outside the message, which is taken as set (ASSUMED).
+        const prev = last + j - 2;
+        if (prev < 0 || O[prev] !== 0) O[last + j - 1] = c;
+      }
+    }
+  }
+  return O;
+}
+
+// ProcessEntityNameWithShopItems (exe 00813a78): each group filters the result of the one
+// before it. Returns the text up to its first zero unit.
+export function processEntityNameWithShopItems(text: string, items: readonly (readonly string[])[]): string {
+  if (items.length < 1) return text;
+  let dest = Array.from(text, (ch) => ch.charCodeAt(0));
+  let out: number[] = [];
+  for (const group of items) {
+    out = normalizeAndFilter(dest, group);
+    const end = out.indexOf(0);
+    dest = out.slice(0, end < 0 ? out.length : end);
+  }
+  const end = out.indexOf(0);
+  return String.fromCharCode(...out.slice(0, end < 0 ? out.length : end));
+}
+
+// The 0081 body with its message filtered (the exe filters the packet's message in place).
+export function filterMailBody(body: Uint8Array): Uint8Array {
+  if (shopDialogItems.length < 1) return body;
+  const text = readUnits(body, MAIL_BODY.text, 0xfd);
+  const filtered = processEntityNameWithShopItems(text, shopDialogItems);
+  const out = body.slice();
+  const dv = new DataView(out.buffer);
+  for (let i = 0; i <= filtered.length; i++) {
+    const p = MAIL_BODY.text + i * 2;
+    if (p + 1 >= out.byteLength) break;
+    dv.setUint16(p, i < filtered.length ? filtered.charCodeAt(i) : 0, true);
   }
   return out;
 }
@@ -185,20 +330,27 @@ export class MailStore {
 export class SimpleMailBox {
   readonly store = new MailStore();
   private readonly link: CommandLink;
+  private readonly saveAnswer: ((text: string) => void) | null;
   answerOn = false;
   answerSent = false;
   answerDirty = false;
   answerText = '';
 
-  constructor(link: CommandLink) {
+  // answerText: the auto reply the save holds (E7 0x29EC; the exe's in-memory +0x2510). The
+  // service starts off whatever the text (the exe's flag bit 0 is not in the save; ASSUMED).
+  // saveAnswer: told each new text, so the session's save copy keeps it (writeAutoReply).
+  constructor(link: CommandLink, opts: { answerText?: string; saveAnswer?: (text: string) => void } = {}) {
     this.link = link;
+    this.answerText = (opts.answerText ?? '').slice(0, MAIL_TEXT_UNITS);
+    this.saveAnswer = opts.saveAnswer ?? null;
   }
 
-  // The 0081 handler (LAB_0081384c -> store). Returns 'stored' when the mail was kept (the
-  // caller plays SE 0x586 then, FUN_0081386c), 'dropped' otherwise.
+  // The 0081 handler (the filter in 007c8dc4, then LAB_0081384c -> store). Returns 'stored' when
+  // the mail was kept (the caller plays SE 0x586 then, FUN_0081386c), 'dropped' otherwise.
   receive(body: Uint8Array): 'stored' | 'dropped' {
-    if (!mailTextAccepted(body)) return 'dropped';
-    const m = parseMailBody(body);
+    const filtered = filterMailBody(body);
+    if (!mailTextAccepted(filtered)) return 'dropped';
+    const m = parseMailBody(filtered);
     this.store.insert(m);
     return 'stored';
   }
@@ -214,6 +366,7 @@ export class SimpleMailBox {
     this.answerText = text.slice(0, MAIL_TEXT_UNITS);
     this.answerDirty = true;
     this.answerOn = this.answerText.length > 0;
+    this.saveAnswer?.(this.answerText);
   }
 
   // SimpleMail_SetAnswerServiceEnabled (0077a4c0): true when the flag changed.

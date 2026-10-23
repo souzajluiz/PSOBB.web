@@ -14131,3 +14131,39 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+
+## 2026-10-23: Simple Mail follow-ups (smut filter, arrival in a game, auto reply in the save)
+
+Three open items of the Simple Mail entry above, traced in PsoBB.exe (Psobb.exe-05112026.c dump; Ghidra via `tools/ghidra/decomp.sh`; bytes via `objdump -d -M intel` and `tools/exedata.py`).
+
+**Exe.**
+- The 0x81 handler is not `handle_ship_packet0x81` at 0x00810083. That address is mid-function (Ghidra's FUN_00810030 starts before it), so the dump name is wrong. The real entry is **0x007c8dc4** (`push edi; push ebx; mov edi, ecx`; the caller's body is at 0x007c8dd6..0x007c8de7). It is the 0x81 entry of the (command, handler) pair table at **0x00a0f800** (8-byte stride; the pair at 0x00a0f9b8 = 0x81 / 0x007c8dc4, next to the 0x60 / 0x62 game entries, which suggests the same connection dispatch serves the game; the dispatcher that reads `[8*eax + 0xa0f804]` at 0x007c1a01 was not traced to its state gate, ASSUMED).
+- Its body: `ProcessEntityNameWithShopItems(msg, msg)` with msg = packet + 0x5c (0x007c8dd6: `lea eax, [ebx+0x5c]`; `push eax; push eax; call 0x813a78`), then `call [edi+0x1e0d0]` = `unknown_packet_handlers[0x17]` (0x007c8de1), which is LAB_0081384c (set once in `init_ship_connection_manager`, 0x00797ce2: `mov [eax+0x1e0d0], 0x81384c`). The 0x17 handler runs FUN_00813a3c (the text check) and the store (FUN_0081386c, SE 0x586; the SE and the store are carried from the entry above, not re-decompiled here). The handler lives on the ship connection for the whole session: nothing clears slot 0x17.
+- The filter (0x00813a78, ProcessEntityNameWithShopItems): `g_ShopDialogItemCount` (0x70ac58) < 1 → copy. Else for each item i (0x70ac60): `NormalizeAndFilterEntityName(item, out)` with EAX = `_Dest` (the working copy) and EDX = out (0x813ab0..0x813ad0), then `_Dest = out`. The item list is `g_ShopDialogItemList`, loaded by `InitializeShopDialog_0070ac88` (0x0070ac88, reached from the init table at 0x009ff7a8; the call is not in the code, ASSUMED: a start-up / session init step).
+- The list file is `g_ShopDialogFilePath` = **"smutdata.prs"** (string at 0x0096ee00). It is read with the unitxt parser (`ParseUnitxtFileList_0070b084`): groups of strings, each group ended by an empty string. The port's `parseUnitxt` reads the same layout.
+- Tables (read from the exe; the values are `FILTER_SYMBOLS` and `KATAKANA_FULL` in simplemail.ts): symbols 0x00980980 (16 entries of 4 units, stride 8: ASCII and fullwidth punctuation, 64 units in all) → spaces in the normalized text; halfwidth katakana FF66..FF9D → 0x00980a00 (56 units); the replacement pattern `g_ShopNameReplacementPattern` 0x00980a80 = "#!@%" x 8.
+- Normalization (0x813b18): U+3000 → space; ASCII capitals → lower case; fullwidth FF21..FF3A → ASCII lower case (`- 0xfec0` gives 0x61..), FF41..FF5A → ASCII (`- 0xfee0`); katakana when unchanged; the symbol tables → space. The word match is on the normalized text N (leading and trailing space); the replacement writes `pattern[j]` for each non-space unit j of the word, into N and into the text O (O[i] is N[i+1]). The last match is replaced and the word is searched again. A tab starts a second pass: the tab's unit and the one after it become spaces (the exe's `bVar2`).
+- The user's `~/Downloads/psobb-client/data/smutdata.prs` is 8 bytes (PRS-decodes to 16 zero bytes: group count 0). On that copy the filter is a no-op (count -1: copy).
+
+**Port.**
+- `client/src/net/simplemail.ts`: the tables; `normalizeFilterUnit`, `normalizeAndFilter` (0x813b18), `processEntityNameWithShopItems` (0x813a78), `filterMailBody` (the body's message, in place as the exe), `setShopDialogItems` (the exe's global list). `SimpleMailBox.receive` filters before the text check, as 007c8dc4 does. The header comment now gives 0x007c8dc4 and the correct pair-table path.
+- `client/src/classic/main.ts`: `smutdata.prs` is read after the title file (not awaited; a missing file keeps the list empty); `enterGame` listens for `simpleMail` on the `Game` (the lobby is detached while in a game, so before this a mail in a game was dropped): the mail is stored in the session's box and plays SE 0x586 (`SE.newMail`).
+- The auto reply. Exe: the answer text is `Session_GetAnswerServiceDataPointer_0077a5b0` = `FUN_006c1bd4(0xffff) + 0x2510`, where `FUN_006c1bd4` returns `DAT_00a95df8` (the current character data). So the text is in the character's save, at file offset **0x29EC** (0xAC units; newserv's PSOBBCharacterFile, the same as `charfile.ts`). The offset delta (+0x4DC) is the one the Info Board uses (0x2B44 / +0x2668, DEVLOG "Info Board"). Where it leaves the exe: C7 (`send_packet0xc7`, dump 812242) carries the text on close; the save goes to the server as E7 (`send_packet0xe7`, dump 811346: `calloc(0x399c)`, a full character file) from `send_packet5` (dump 811320: E7, then command 05). The port never sends E7 upstream.
+- `client/src/net/charfile.ts`: `writeAutoReply(raw, text)` writes the 0xAC units at 0x29EC. `client/src/net/bbsession.ts`: the box starts with the save's `autoReply` (E7 is read before the lobby), and each new text (`setAnswerText`) is kept in `character.autoReply` and in the raw E7 copy (`keepAutoReply`).
+- `tests/simplemail.test.ts`: section 7 (the filter: no list, a word, capitals, every occurrence, symbols in the text, fullwidth, the tab, two groups in turn, a word past the pattern, the 0081 path with and without the list) and section 8 (the save offset, the box's start text and its save hook, C7 on close).
+
+**ASSUMED.**
+- `FILTER_PASSES` (256): the exe loops until the word is gone; the port stops after 256 passes over one word (a replacement that rebuilds the word would hang the exe).
+- O[-1] (the unit before the message, read by the exe when a match starts at the first unit) is taken as set, so the first unit is replaced.
+- The tab rule (the unit after a tab is a space) is the decompile's `bVar2` reading; not checked against a Chrome run.
+- Dispatch of 0x81 in a game (the pair table, not state-gated) and the SE / store of 007c8dc4's callee chain (carried from the entry above).
+- smutdata.prs is loaded at start-up (InitializeShopDialog's caller not traced).
+- The answer service starts off after a load whatever the saved text (the exe's flag bit 0 is not in the save).
+- The save offset 0x29EC is the port's reading of the exe's +0x2510 with the Info Board's +0x4DC delta (two anchors, not a field decode).
+
+**Left.**
+- The E7 upload (`send_packet0xe7` / `send_packet5`): the answer text (and everything else) reaches the server only if the port sends E7. Not ported; the change lasts for the page's session.
+- The smutdata list is not in the user's data copy (zero groups), so the filter is unobserved in Chrome. No Playwright run (per the brief).
+- The Info Board line in ROADMAP still reads as a no-op (it was ported in the 13529 entry); not corrected here.
+
+**Checks:** `node tests/simplemail.test.ts` (all pass, incl. sections 7 and 8); `node tests/symbolchat.test.ts`, `trade.test.ts`, `shop.test.ts`, `medical.test.ts` pass; `tests/items.test.ts` exits non-zero on the absent `vendor/newserv/build/newserv` (known); `client`: `npx tsc --noEmit -p .` clean (exit 0). The worktree's `client/node_modules` is a temporary symlink to the main checkout's, removed before the commit.

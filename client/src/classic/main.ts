@@ -1,7 +1,8 @@
 // Entry point of the classic (original-looking) client.
 
 import { BgmPlayer } from '../audio/bgm.ts';
-import { SePlayer, setSePlayer } from '../audio/se.ts';
+import { se, SE, SePlayer, setSePlayer } from '../audio/se.ts';
+import { setShopDialogItems } from '../net/simplemail.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
@@ -110,6 +111,16 @@ async function main(): Promise<void> {
   loader.step('archive');
   await files.has('title.prs');
   loader.step('title');
+  // The mail filter's word list (smutdata.prs, the exe's InitializeShopDialog_0070ac88; unitxt
+  // groups). Not awaited: the first mail comes after the login. Without the file the list is
+  // empty and the mail is shown as sent (the exe copies the text then).
+  void (async () => {
+    try {
+      if (await files.has('smutdata.prs')) setShopDialogItems(parseUnitxt(await files.read('smutdata.prs')));
+    } catch (err) {
+      console.warn(`[mail] smutdata.prs not read: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  })();
   const bgm = new BgmPlayer(source);
   setSePlayer(new SePlayer(source)); // common.pac + city.pac (area 0), as at start-up
   const stage = new Stage(canvas);
@@ -281,6 +292,12 @@ async function main(): Promise<void> {
   let townField: FieldTown | null = null;
   const enterGame = async (game: Game, shipName: string) => {
     game.log = (m) => console.log(`[game] ${m}`);
+    // A Simple Mail in a game (0x81): the lobby is detached here, so the game takes it. The exe's
+    // 0081 handler is the connection's, not the lobby's (007c8dc4): the mail is kept and SE 0x586 plays.
+    game.on('simpleMail', (body) => {
+      const box = session?.mailbox ?? null;
+      if (box && box.receive(body) === 'stored') se(SE.newMail);
+    });
     const assets = await loadConnectingAssets();
     const bubble = await bubbleTextures();
     // The loading screen covers the window; the 3D canvas (and the field HUD

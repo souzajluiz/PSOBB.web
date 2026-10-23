@@ -7,7 +7,7 @@
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
-import { parseCharacterFile, type CharacterFile } from './charfile.ts';
+import { parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient } from './guildcard.ts';
 import { InfoBoardClient } from './infoboard.ts';
@@ -296,6 +296,12 @@ export class BBSession {
     return lobby;
   }
 
+  // The Simple Mail answer text: the parsed save and the raw E7 copy (the exe's character +0x2510).
+  private keepAutoReply(text: string): void {
+    if (this.character) this.character.autoReply = text;
+    if (this.fullCharacter) writeAutoReply(this.fullCharacter, text);
+  }
+
   // Guild card book after login (the exe's 01E8 checksum, then the 01DC / 03DC /
   // 02DC download when the server's copy differs; net/guildcard.ts). Once per
   // session and not awaited: the lobby does not wait for it, and a failure is
@@ -305,7 +311,11 @@ export class BBSession {
     const client = new GuildCardClient(conn);
     this.guildCardClient = client;
     this.infoBoardClient = new InfoBoardClient(conn);
-    this.mailbox = new SimpleMailBox(conn);
+    // The auto reply comes from the save (E7 0x29EC); a new text is kept in the save copy.
+    this.mailbox = new SimpleMailBox(conn, {
+      answerText: this.character?.autoReply ?? '',
+      saveAnswer: (text) => this.keepAutoReply(text),
+    });
     this.guildCardSync = client
       .sync(null)
       .then((book) => {
