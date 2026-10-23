@@ -768,11 +768,7 @@ export class ItemPackMenu {
   }
 
   private drawRow(ctx: CanvasRenderingContext2D, tex: ItemPackTextures, r: ItemRow, x: number, y: number, w: number): void {
-    // BaseEntity_Render_0072ae74: icon 1, icon 2 (18 px each), name, count.
-    drawIcon(ctx, tex.icons, r.icon1, x, y, r.iconColor, this.frame);
-    drawIcon(ctx, tex.icons, r.icon2, x + ICON, y, r.iconColor, this.frame);
-    if (r.name) drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor);
-    if (r.count) drawGameText(ctx, r.count, x + w - gameTextWidth(r.count), y, r.nameColor);
+    drawItemRow(ctx, tex.icons, r, this.frame, x, y, w);
   }
 
   private drawAmount(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, a: AmountSpinner): void {
@@ -810,6 +806,17 @@ export function drawAmountWindow(
       ctx.drawImage(tex.arrows, 224, 28, 14, 12, ax, y + 25, 14, 12);
     }
   }
+}
+
+// One Item List row at (x, y) in a list `w` wide: BaseEntity_Render_0072ae74
+// draws icon 1 and icon 2 (18 px each), then the name, and the stack count
+// right-aligned to the window's right edge in the name's colour. Nothing clips
+// the name (no truncation in the render path).
+export function drawItemRow(ctx: CanvasRenderingContext2D, icons: CanvasImageSource, r: ItemRow, frame: number, x: number, y: number, w: number): void {
+  drawIcon(ctx, icons, r.icon1, x, y, r.iconColor, frame);
+  drawIcon(ctx, icons, r.icon2, x + ICON, y, r.iconColor, frame);
+  if (r.name) drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor);
+  if (r.count) drawGameText(ctx, r.count, x + w - gameTextWidth(r.count), y, r.nameColor);
 }
 
 export function drawIcon(ctx: CanvasRenderingContext2D, img: CanvasImageSource, icon: number, x: number, y: number, color: string, frame: number): void {

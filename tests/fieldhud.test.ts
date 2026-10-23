@@ -14,6 +14,7 @@ import {
   hasBonuses,
   ItemPackMenu,
   itemRow,
+  itemRows,
   itemRowName,
   purposeItems,
   PURPOSE,
@@ -333,6 +334,17 @@ eq(
   [5, '28%', '3', ['DEF 3', 'POW 1', 'DEX 4', 'MIND 0.42']],
   'mag rows: level, synchro, IQ, DEF / POW / DEX / MIND',
 );
+
+// --- lobby Item List rows: the Item Pack's rows (itemRows), no "E " text ---
+const lobbyChar = { charClass: 0, level: 2, meseta: 300, stats: { atp: 50, mst: 0, ata: 50 }, inventory: [saber, mate] } as unknown as CharacterFile;
+const lobbyRows = itemRows(lobbyChar, { ...ctx, lobby: true }, 'Meseta');
+eq(lobbyRows.length, 3, 'lobby Item List: two items and the meseta row');
+eq(lobbyRows[0].icon1, 0x0c, 'lobby: equipped mark is icon 0x0C');
+eq(lobbyRows[0].name, 'Saber', 'lobby: no "E " text on the equipped row');
+eq(lobbyRows[1].count, '×4', 'lobby: stack count "×n"');
+eq(lobbyRows[2].count, '300Meseta', 'lobby: meseta row count with the word');
+eq(lobbyRows[2].icon2, 9, 'lobby: meseta icon');
+eq(itemRows({ ...lobbyChar, meseta: 0 } as CharacterFile, ctx, 'Meseta').length, 2, 'no meseta row at 0 meseta');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

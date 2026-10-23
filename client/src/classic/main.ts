@@ -44,6 +44,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { SoftKeyboard } from '../ui/softkeyboard.ts';
 import { Loader } from './loader.ts';
+import { itemRows } from './itempack.ts';
 import { installStageFit, lockLandscape } from './viewport.ts';
 
 const VERSION = 'PSOBB.web';
@@ -210,13 +211,11 @@ async function main(): Promise<void> {
       bubble: { body: hyouji[1], tab: tex.texlist[0] },
       menu: { panel: tex.panel, labels: tex.texlist[2] },
       text: (g, i) => (table[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
+      itemIcons: hyouji[1],
       inventory: () => {
         const c = session?.character;
         if (!c) return null;
-        return c.inventory.map((it) => {
-          const name = itemNames ? itemNames.describe(it.data) : [...it.data.data1].map((b) => b.toString(16).padStart(2, '0')).join('');
-          return it.equipped ? `E ${name}` : name;
-        });
+        return itemRows(c, { names: itemNames, charClass: c.charClass, level: c.level, stats: c.stats, lobby: true }, (table[12]?.[0] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''));
       },
       infoCols,
       fullCharacter: () => session?.fullCharacter ?? null,
