@@ -372,7 +372,48 @@ const morfos = (o: { params?: number[]; rng?: () => number; difficulty?: number;
   check(m.state === 'laser' || m.state === 'walk' || m.state === 'search', `Ultimate engages from the cone (${m.state})`);
 }
 
-// --- Recobox and Recon ----------------------------------------------------------
+{
+  // The wall bulge (enemy+0x3dc): zeroed at the rise's entry, floor(0.5 k) a
+  // frame, 12 at the cap (k = 24) and kept at 12 after the rise (the exit);
+  // the arm's stream value is trunc(bulge / 2.0).
+  const m = morfos();
+  const r = rig(m);
+  const p = player(0, 300);
+  step(r, [p]);
+  step(r, []);
+  let t = 0;
+  while (m.state !== 'rise' && t < 200) {
+    step(r, [p]);
+    t++;
+  }
+  eq(m.state, 'rise', 'the rise is reached');
+  eq(m.wallBulge, 0, 'the rise entry zeroes the bulge');
+  const seen: number[] = [];
+  let frames = 0;
+  while (m.state === 'rise' && frames < 100) {
+    step(r, [p]);
+    frames++;
+    if (m.state === 'rise' || m.state === 'walk') seen.push(m.wallBulge);
+  }
+  // The target search waits for the retarget interval (60 frames) before the
+  // rise's steps begin. From the first step that reads 1 (acc 1.0) on, acc
+  // gains 0.5 a frame, so the bulge is 1 + floor(k / 2) after k more steps and
+  // 12 from k = 22 (acc 12.0).
+  const a = seen.findIndex((v) => v > 0);
+  check(a > 0, `the rise waits for a target before it bulges (${a} frames)`);
+  eq(seen[a - 1], 0, 'the frame before the first bulge is 0');
+  const expect = Array.from({ length: 23 }, (_, k) => Math.min(12, 1 + Math.floor(k / 2)));
+  eq(seen.slice(a, a + 23), expect, 'the bulge is 1 + floor(k / 2) per frame while it rises');
+  eq(seen[seen.length - 1], 12, 'the rise ends at 12');
+  eq(m.wallBulge, 12, 'the exit keeps the bulge at 12 (the walk)');
+  eq(m.armBulge, 6, 'the arm stream is trunc(12 / 2.0)');
+  // Hidden or searching keeps the bulge; only the next rise restarts it.
+  run(r, [], 70);
+  run(r, [p], 60);
+  eq(m.wallBulge, 12, 'walk and search keep the bulge');
+  eq(new MorfosAi({ x: 0, z: 0, angle: 0, params: [0, 0, 0, 0, 0, 0], movement: mv(), attack: atk(32, 6784), rng: () => 0.9 }).wallBulge, 0, 'a new Morfos starts at 0');
+}
+// --- Recobox and Recon----------------------------------------------------------
 const rmv = { fparam1: 1.15, fparam2: 18, fparam3: 450, fparam4: 3, fparam5: 0, fparam6: 0, iparam: [8, 12, 0, 0, 0, 0] };
 const box = (o: { params?: number[]; clones?: number; difficulty?: number; rng?: () => number } = {}) =>
   new RecoboxAi({ x: 0, z: 0, angle: 0, params: o.params ?? [0, 0, 0, 3, 0, 0], cloneCount: o.clones ?? 8, movement: rmv, attack: atk(25, 768, 15), difficulty: o.difficulty ?? 0, rng: o.rng ?? (() => 0.5) });

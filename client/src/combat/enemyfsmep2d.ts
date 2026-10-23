@@ -363,8 +363,16 @@ abstract class Ep2dBrain<S extends string> extends BrainBase {
 // one from behind drops the shield and sets flag 0x20, which makes the flinch
 // end (0x0057ab8c) skip the shield roll. The flinch end resumes into the state
 // saved at its entry (+0x380).
-// ASSUMED: the arm entity (CreateMorfosSubEntity_0057cbc4) and the wall bulge
-// are visual only; the laser's muzzle node (enemy+0x4a0) is the Morfos' own
+// The wall bulge (enemy+0x3dc, a whole number 0..12): zeroed by the rise's entry
+// (0x0057c3d0 event 4), the rise frame writes floor(acc) with acc += 0.5 a frame
+// (0x0057c431..0x0057c482: fistl under RC 01 = round down; 0x00927628 = 0.5),
+// and 12 once floor(acc) reaches 12 (sub 2). The rise's exit (event 5,
+// 0x0057c4b5) writes 12. Nothing else writes it; the death keeps it. The wall
+// stream (EnemyUpdateRoutine_0057a2a0) reads it: the body's child mesh with the
+// bulge itself, the second mesh with trunc(bulge / 2.0) (0x00927694 = 2.0, the
+// fistp under RC 11 at 0x0057a314..0x0057a322). See `wallBulge` / `armBulge`.
+// ASSUMED: the arm entity (CreateMorfosSubEntity_0057cbc4) is visual only; the
+// laser's muzzle node (enemy+0x4a0) is the Morfos' own
 // position; the walk has no wall rays (0x00520940 stops the crawl at walls);
 // nothing can hurt it while hidden (state 2); same-room checks hold.
 export const MORFOS = {
@@ -372,6 +380,7 @@ export const MORFOS = {
   retarget: 60,
   rise: f32(0.5),
   riseMax: 12,
+  armBulgeScale: 2, // 0x00927694 (2.0): the arm stream's divisor
   nearRange: 30,
   laserChance: f32(0.3),
   punchHitFrame: 8,
@@ -497,6 +506,7 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
   private resumeInto: MorfosState = 'walk';
   private readonly fadeA = new FadeEffect(); // +0x3f4
   private readonly fadeB = new FadeEffect(); // +0x410
+  private bulgeValue = 0; // +0x3dc: the wall bulge, 0..12 (see the header)
 
   constructor(opts: {
     x: number;
@@ -555,8 +565,20 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
     return this.hp01 <= 0.5;
   }
 
-  // SetEnemyAiState_0051f62c: leave the old state, enter the new one (event 4).
+  // The wall bulge of the body's wall stream (enemy+0x3dc), 0..12.
+  get wallBulge(): number {
+    return this.bulgeValue;
+  }
+
+  // The second mesh's stream value: trunc(bulge / 2.0) (0x0057a314).
+  get armBulge(): number {
+    return Math.trunc(this.bulgeValue / MORFOS.armBulgeScale);
+  }
+
+  // SetEnemyAiState_0051f62c: leave the old state (event 5), enter the new one (event 4).
   private enter(out: AiFrame | null, s: MorfosState): void {
+    // Event 5 of the rise (0x0057c4b5): the bulge is left at 12.
+    if (this.state === 'rise') this.bulgeValue = MORFOS.riseMax;
     this.state = s;
     this.sub = 0;
     this.count = 0;
@@ -586,6 +608,10 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
         this.fadeB.full();
         break;
       case 'rise':
+        // Event 4 of the rise (0x0057c4fe): the bulge and its accumulator restart.
+        this.bulgeValue = 0;
+        this.setAnim(out, MORFOS_ANIM.wait);
+        break;
       case 'walk':
       case 'punch':
       case 'search':
@@ -723,7 +749,12 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
       }
     } else if (this.sub === 1) {
       this.accum = f32(MORFOS.rise + this.accum);
-      if (Math.floor(this.accum) >= MORFOS.riseMax) this.sub = 2;
+      // 0x0057c431..0x0057c482: the bulge is floor(acc), 12 at the cap (sub 2).
+      const r = Math.floor(this.accum);
+      if (r >= MORFOS.riseMax) {
+        this.bulgeValue = MORFOS.riseMax;
+        this.sub = 2;
+      } else this.bulgeValue = r;
     }
   }
 
