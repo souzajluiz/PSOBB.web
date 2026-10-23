@@ -377,40 +377,66 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
 }
 
 // --- Monest ------------------------------------------------------------------
-// The wake-up (state 1): 61 idle ticks, then one Mothmant every 10 ticks from
-// tick 70 until the threshold (param2) is reached; then dormant (state 2).
+// The intro (state 0, MothmanProcessState_00519e20): the nest drops from 100
+// and lands; it wakes only after its last cycle when the animation has ended.
 {
   const m = new MonestSpawner(2, 30);
   eq([m.total, m.threshold], [30, 2], 'param3 total, param2 threshold');
-  eq(m.tick(0, false, false).motion, null, 'waits for a player');
-  eq(m.tick(0, true, false).motion?.index, 14, 'wakes up on the wait motion (animation 0)');
+  eq(m.state, 'intro', 'the Monest starts in the intro (state 0)');
+  let drop = -1;
+  for (let f = 1; f <= 400; f++) {
+    const r = m.tick(0, false);
+    if (r.motion?.index === 3 && drop < 0) drop = f;
+  }
+  check(drop > 100 && drop < 260, `the drop reaches the animation 9 threshold near tick ${drop}`);
+  eq(m.state, 'intro', 'no wake while the animation has not ended');
+  m.tick(0, true);
+  eq(m.state, 'wake', 'the wake-up follows the last cycle once the animation ends');
+  // Intro length with the animation ended from the start: the drop (100 -> 18,
+  // then -5) plus 24 cycle ticks.
+  const q = new MonestSpawner(2, 30);
+  let t = 0;
+  while (q.state === 'intro' && t < 2000) {
+    q.tick(0, true);
+    t++;
+  }
+  check(t > 120 && t < 260, `the intro lasts ${t} ticks (drop and six cycles)`);
+}
+// The wake-up: counted from its first tick (the transition tick), 60 idle
+// ticks, the animation 1 from the 61st, then a child at the 70th and every 10
+// ticks; the threshold reached, the next check goes dormant.
+{
+  const m = new MonestSpawner(2, 30);
+  while (m.state === 'intro') m.tick(0, true);
   const spawnTicks: number[] = [];
+  let wakeMotion = -1;
   let dormantTick = -1;
   for (let f = 1; f <= 120; f++) {
-    const r = m.tick(0, true, false);
+    const r = m.tick(0, false);
     if (r.spawn) spawnTicks.push(f);
-    if (r.motion?.index === 14 && dormantTick < 0 && f > 1) dormantTick = f;
+    if (r.motion?.index === 11 && wakeMotion < 0) wakeMotion = f;
+    if (m.state === 'dormant' && dormantTick < 0) dormantTick = f;
   }
-  eq(spawnTicks, [70, 80], 'the wake-up spawns at wake ticks 70 and 80');
+  eq(wakeMotion, 60, 'the animation 1 starts at the 61st wake-up tick (tick 1 is the transition)');
+  eq(spawnTicks, [69, 79], 'children at wake-up ticks 70 and 80');
+  eq(dormantTick, 90, 'the threshold reached at tick 90: dormant on the next check');
   eq(m.state, 'dormant', 'then dormant (state 2)');
-  eq(MONEST_WAKE.idleTicks, 61, 'the wake-up idles 61 ticks');
-  eq(new MonestSpawner(0, 9).tick(0, true, false).motion?.index, 14, 'threshold 0 still wakes');
+  eq(MONEST_WAKE.idleTicks, 60, 'the wake-up idles 60 ticks (0x3c)');
   const none = new MonestSpawner(0, 9);
-  none.tick(0, true, false);
+  while (none.state === 'intro') none.tick(0, true);
   let anySpawn = false;
-  for (let f = 0; f < 200; f++) anySpawn ||= none.tick(0, true, false).spawn;
+  for (let f = 0; f < 200; f++) anySpawn ||= none.tick(0, false).spawn;
   check(!anySpawn, 'threshold 0 wakes and spawns nothing in the wake-up');
   eq(new MonestSpawner(9, 99).total, 30, 'param3 is clamped to 30');
   eq(new MonestSpawner(9, 99).threshold, 6, 'param2 above 5 is 6');
   // Dormant: armed while the live children are at most threshold / 2; one
   // child per pending batch (batch 1, interval 150).
   const d = new MonestSpawner(2, 30);
-  d.tick(0, true, false);
-  for (let f = 0; f < 80; f++) d.tick(0, true, false);
+  while (d.state !== 'dormant') d.tick(0, true);
   const dormantSpawns: number[] = [];
   let alive = 0;
   for (let f = 0; f < 600; f++) {
-    const r = d.tick(alive, true, false);
+    const r = d.tick(alive, false);
     if (r.spawn) {
       dormantSpawns.push(f);
       alive++;
@@ -470,6 +496,68 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   eq(b.state, 'swoop', 'two siblings on the player send it to the swoop');
   eq(MOTHMANT.leash, 450, 'the leash 450 (0x920cc4)');
   eq(MOTHMANT.detect, 200, 'the search radius 200 (0x920c08)');
+}
+
+// --- Mothmant: the ring, the flinch and the swoop's sub-steps -----------------
+{
+  eq(MOTHMANT.ringRadius, 30, 'the ring is 30 (the float at 0x00920c44, read by the hover, wander and launch; no writer)');
+  let sib = 0;
+  const make2 = (over: Partial<ConstructorParameters<typeof MothmantAi>[0]> = {}) =>
+    new MothmantAi({ x: 0, z: 0, angle: 0, turnRate: 1536, speed: 2, attack: null, radius: 10, siblingsOn: () => sib, rng: () => 0.5, spawnLift: 25, ...over });
+  const near = { clientId: 1, x: 40, z: 0, charClass: 0, dead: false };
+  const landed = (x: MothmantAi) => {
+    for (let f = 0; f < 500 && x.state === 'launch'; f++) x.tick([]);
+  };
+  // Flinch (HildebearProcessState_00516fbc): the animation's end returns to the
+  // state it came from.
+  const f1 = make2();
+  landed(f1);
+  eq(f1.state, 'wander', 'a Mothmant that landed wanders');
+  f1.flinch();
+  f1.tick([], false);
+  eq(f1.state, 'flinch', 'the flinch takes the flinch state');
+  f1.tick([], false);
+  eq(f1.state, 'flinch', 'the flinch holds until its animation ends');
+  f1.tick([], true);
+  eq(f1.state, 'wander', 'then back to the state it came from');
+  // Flinch out of the attack: the attack goes on when fewer than 2 siblings are on the player.
+  sib = 0;
+  const f2 = make2();
+  landed(f2);
+  f2.tick([near]);
+  f2.tick([near]);
+  eq(f2.state, 'attack', 'a player inside 100 with no sibling on it is attacked');
+  f2.flinch();
+  f2.tick([near], true);
+  eq(f2.state, 'attack', 'a flinched attacker keeps its player when it may take it');
+  // ... and swoops when two siblings are on the player and no other player is free.
+  sib = 2;
+  const f3 = make2();
+  landed(f3);
+  f3.tick([near]);
+  f3.tick([near]);
+  eq(f3.state, 'swoop', 'two siblings on the player send the chase to the swoop');
+  f3.flinch();
+  f3.tick([near], true);
+  eq(f3.state, 'swoop', 'a flinched attacker with no free player swoops');
+  // The swoop's sweep: it holds while the arc is under a half turn, and ends in
+  // the attack once the siblings allow it.
+  sib = 2;
+  const s = make2();
+  landed(s);
+  s.tick([near]);
+  s.tick([near]);
+  eq(s.state, 'swoop', 'the swoop starts');
+  for (let f = 0; f < 60; f++) s.tick([near]);
+  eq(s.state, 'swoop', 'the swoop holds through its approach and its first sweep');
+  sib = 0;
+  let end = -1;
+  for (let f = 0; f < 800 && end < 0; f++) {
+    s.tick([near]);
+    if (s.state !== 'swoop') end = f;
+  }
+  check(end > 0 && end < 800, `after a half turn the swoop ends in the attack (after ${end} ticks)`);
+  eq(s.state, 'attack', 'the exit is the attack once the player may be taken');
 }
 
 // --- Rag Rappy: its own alive FSM (RappyAi) ----------------------------------

@@ -1469,56 +1469,66 @@ export class RappyAi extends BrainBase {
   }
 }
 
-// --- Monest: the wake-up and the Mothmant spawns ----------------------------
+// --- Monest: the intro, the wake-up and the Mothmant spawns -----------------
 //
-// handle_monest_behavior (dump 0x00519xxx, the Monest's dispatcher on +0x32e):
-// 0 intro (MothmanProcessState_00519e20: six orbit pieces, the nest drops
-// and rises), 1 wake-up (MonestProcessState_0051ae9c), 2 dormant
-// (MothmanProcessState_00519d98), 3 spawn one (MothmanProcessState_00519d08),
-// 4 flinch (00519b6c), 5 hover (00519a30), 6 spawn one (005198b4), 7 hit
-// reaction (005197a0), 8 (00519550), 9 the fall (sub-entities).
+// handle_monest_behavior (dump 0x00519xxx, the Monest's dispatcher on the AI
+// state): 0 intro (MothmanProcessState_00519e20), 1 wake-up
+// (MonestProcessState_0051ae9c), 2 dormant (MothmanProcessState_00519d98),
+// 3 spawn one (MothmanProcessState_00519d08), 4 flinch (00519b6c), 5 hover
+// (00519a30), 6 spawn one (005198b4), 7 hit reaction (005197a0), 8 the kill
+// (00519550), 9 the dead flag (0051950c). The second argument is the event:
+// 4 enter, 3 check (the transitions), 0 update, 5 exit.
 //
 // monest_constructor (0x005191c0) sets: the wake threshold initdata_param2
 // clamped to 0..6 (MothmanSetTarget_0051a1fc: +0x398, 6 when above 5), the
 // total initdata_param3 clamped to 0..30 (+0x39c), its first child's entity
-// index (+0x3cc = own + 1) and the spawned count (+0x3bc).
+// index (+0x3cc = own + 1) and the spawned count (+0x3bc). Its last act is
+// MothmanProcessState_00519e20(this, 4): the Monest starts in the intro.
 //
-// Wake-up (state 1, 0x0051ae9c): entered from the intro. Animation 0 (motion
-// 14) for 61 ticks, then animation 1 (motion 11, ASSUMED 12 - animation) and
-// every 10 ticks counted from the start of the state (ticks 70, 80, ...)
-// spawn_mothmant_from_monest puts one Mothmant at Monest + 25 up (0x00920e68)
-// until the wake count reaches the threshold; then the next state is +0x394,
-// which the constructor leaves at 2 (dormant). spawn_mothmant_from_monest
-// does nothing while more than 6 children are alive.
-//
-// Dormant (state 2, 0x00519d98): animation 0; MothmanManageSpawnLogic_00519ad0
-// with batch 1 and interval 150 (0x96). Spawn one (state 3, 0x00519d08):
-// animation 1, the spawn at animation frame 15, back to dormant when the
-// animation ends. Hover (state 5, 0x00519a30): batch 2 and interval 120
-// (0x78), set only the first time (+0x3b0 == 0); state 6 spawns one at
-// animation 5 (motion 7) frame 15.
-//
-// MothmanManageSpawnLogic_00519ad0: while not armed it arms itself when the
-// live children are at most threshold / 2 (C integer division) or when the
-// hover state has been entered (+0x3b0); armed, a counter runs past the
-// interval and then the pending count becomes min(batch, 6 - alive,
-// total - spawned).
-//
-// ASSUMED: the Monest wakes up (wait -> wake) when a player is within the
-// search radius 225 (the record 0x009bb764). The intro's six-piece motion is
-// not modelled (deathfx / the renderer only see the nest's motion).
+// ProcessActionState (EnemyTransitionAiState_0051f5bc) runs the check of the
+// current state, then its update with the state the check left (the update
+// reads unknown_ai_state again), so a transition is updated in the same tick.
+
+// The intro (state 0): the nest starts at height 100 (0x42c80000, 0x00920df0)
+// and drops by (sin(angle) + 1) * 0.3 + 0.2 a tick while its angle turns by
+// 0x700 BAMS (0x00920e0c = 1.0, 0x00920df8 = 0.3, 0x00920dfc = 0.2). Below
+// 18 (0x00920df4) it plays animation 9 once. Below -5 (0x00920e3c, which is
+// 0xc0a00000) it lands: a particle (0xf0) and a sound (0xe3), then 6 cycles of
+// 4 ticks (0x8c > 5). The check waits for the animation to end after the last
+// cycle and then wakes the nest (state 1).
+// The first tick of the drop creates six orbit pieces (MothmanSubEntity, 0x68
+// bytes each); they are not drawn (ASSUMED: no model for them in the port).
+export const MONEST_INTRO = {
+  start: 100,
+  turn: 0x700,
+  drop: Math.fround(0.3),
+  floor: Math.fround(0.2),
+  animate9: 18,
+  land: -5,
+  cycleTicks: 4,
+  cycles: 6,
+} as const;
+
 export const MONEST = { batch: 2, interval: 120, maxAlive: 6, spawnFrame: 15, height: 25, maxTotal: 30 } as const;
 // The dormant interval and batch (state 2).
 export const MONEST_DORMANT = { batch: 1, interval: 150 } as const;
-// The wake-up: 61 idle ticks, then one spawn every 10 ticks.
-export const MONEST_WAKE = { idleTicks: 61, every: 10 } as const;
+// The wake-up: 60 idle ticks. The counter is 61 at the tick the animation
+// switches to 1 (MonestProcessState_0051ae9c: `0x3c < counter`). From the
+// next tick on, a child is put out whenever the counter is a multiple of 10
+// (ticks 70, 80, ...) until the threshold is reached.
+export const MONEST_WAKE = { idleTicks: 60, every: 10 } as const;
 
 const MONEST_MOTION = {
+  intro: loop(4, 0.3), // animation 8 (ASSUMED motion 4 = 12 - animation, as the hover / spawn rows)
+  drop: once(3, 0.3), // animation 9 (ASSUMED motion 3)
   wait: loop(14, 0.3), // animation 0
-  wake: loop(11, 0.3), // animation 1 (ASSUMED motion 11 = 12 - animation, as the hover / spawn rows)
+  wake: loop(11, 0.3), // animation 1 (ASSUMED motion 11 = 12 - animation)
   hover: loop(8, 0.3), // animation 4
   spawn: once(7, 0.7), // animation 5
 };
+
+type MonestStateName = 'intro' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover';
+type MonestOut = { motion: EnemyAiMotion | null; spawn: boolean };
 
 export class MonestSpawner {
   total: number;
@@ -1526,16 +1536,27 @@ export class MonestSpawner {
   spawned = 0;
   // Whether the hover state (5) was ever entered: +0x3b0, the arming test.
   active = false;
-  state: 'wait' | 'wake' | 'dormant' | 'spawn' | 'hover' | 'spawnHover' = 'wait';
+  state: MonestStateName = 'intro';
   private armed = false;
   private counter = 0;
   private pending = 0;
   private frames = 0;
   private fired = false;
-  // Ticks since the wake-up started (+0x4d0).
+  // The intro: height (+0x70), angle (+0x94), phase (+0x90), the tick counter
+  // (+0x88), the cycles (+0x8c) and whether the animation 9 was started.
+  private height: number = MONEST_INTRO.start;
+  private angle = 0;
+  private introPhase: 0 | 1 | 2 = 0;
+  private introCounter = 0;
+  private introCycles = 0;
+  private landingMotion = false;
+  // The wake-up: ticks since it started (+0x4d0), children put out (+0x4d4),
+  // its sub-state (+0x4d8: 0 idle, 2 putting out, 3 done) and whether the
+  // animation 1's end was handled.
   private wakeTicks = 0;
-  // Mothmants the wake-up put out (+0x4d4).
   private wakeSpawned = 0;
+  private wakeSub: 0 | 2 | 3 = 0;
+  private wakeMotionEnded = false;
   private batch: number = 1;
   private interval: number = MONEST_DORMANT.interval;
 
@@ -1547,11 +1568,11 @@ export class MonestSpawner {
 
   get motion(): EnemyAiMotion {
     switch (this.state) {
-      case 'wait':
+      case 'intro':
+        return MONEST_MOTION.intro;
+      case 'wake':
       case 'dormant':
         return MONEST_MOTION.wait;
-      case 'wake':
-        return MONEST_MOTION.wake;
       case 'hover':
         return MONEST_MOTION.hover;
       case 'spawn':
@@ -1560,10 +1581,24 @@ export class MonestSpawner {
     }
   }
 
-  private enter(state: MonestSpawner['state']): EnemyAiMotion {
+  private enter(state: MonestStateName): EnemyAiMotion {
     this.state = state;
     this.frames = 0;
     this.fired = false;
+    if (state === 'intro') {
+      this.height = MONEST_INTRO.start;
+      this.angle = 0;
+      this.introPhase = 0;
+      this.introCounter = 0;
+      this.introCycles = 0;
+      this.landingMotion = false;
+    }
+    if (state === 'wake') {
+      this.wakeTicks = 0;
+      this.wakeSpawned = 0;
+      this.wakeSub = 0;
+      this.wakeMotionEnded = false;
+    }
     if (state === 'dormant') {
       this.batch = MONEST_DORMANT.batch;
       this.interval = MONEST_DORMANT.interval;
@@ -1576,68 +1611,127 @@ export class MonestSpawner {
     return this.motion;
   }
 
-  // One frame. `alive` is the number of its live Mothmants. Returns the motion
+  // One frame. `alive` is the number of its live Mothmants; `animationEnded`
+  // is the current animation's end (animation_flags & 0x10). Returns the motion
   // to start (when it changed) and whether a Mothmant is spawned this frame.
-  tick(alive: number, playerNear: boolean, animationEnded: boolean): { motion: EnemyAiMotion | null; spawn: boolean } {
-    if (this.state === 'wait') {
-      if (!playerNear) return { motion: null, spawn: false };
-      this.wakeTicks = 0;
-      this.wakeSpawned = 0;
-      this.enter('wake');
-      return { motion: MONEST_MOTION.wait, spawn: false };
+  tick(alive: number, animationEnded: boolean): MonestOut {
+    let motion: EnemyAiMotion | null = null;
+    // Check (event 3).
+    if (this.state === 'intro' && this.introPhase === 2 && animationEnded) {
+      motion = this.enter('wake');
+    } else if (this.state === 'wake' && this.wakeSub === 3) {
+      // The next state is +0x394 (ASSUMED dormant, state 2). The exe reads it
+      // and tests 2 (dormant), 5 (hover) and 9; no writer of it was found in
+      // the Monest / Mothmant code.
+      motion = this.enter('dormant');
+    } else if ((this.state === 'dormant' || this.state === 'hover') && this.pending > 0) {
+      motion = this.enter(this.state === 'hover' ? 'spawnHover' : 'spawn');
+    } else if ((this.state === 'spawn' || this.state === 'spawnHover') && animationEnded && this.fired) {
+      motion = this.enter(this.state === 'spawnHover' ? 'hover' : 'dormant');
     }
-    if (this.state === 'wake') {
-      this.wakeTicks++;
-      if (this.wakeTicks <= MONEST_WAKE.idleTicks) return { motion: null, spawn: false };
-      if (this.wakeTicks === MONEST_WAKE.idleTicks + 1) return { motion: MONEST_MOTION.wake, spawn: false };
-      if (this.wakeTicks % MONEST_WAKE.every !== 0) return { motion: null, spawn: false };
-      if (this.wakeSpawned >= this.threshold) {
-        // The next state is +0x394, the dormant state (2).
-        return { motion: this.enter('dormant'), spawn: false };
-      }
-      this.wakeSpawned++;
-      const spawn = alive <= MONEST.maxAlive;
-      if (spawn) this.spawned++;
-      return { motion: null, spawn };
-    }
-    if (this.state === 'dormant' || this.state === 'hover') {
-      if (!this.armed) {
-        if (alive <= Math.trunc(this.threshold / 2) || this.active) {
-          this.armed = true;
+    // Update (event 0) of the state the check left.
+    const out = this.update(alive, animationEnded);
+    return { motion: out.motion ?? motion, spawn: out.spawn };
+  }
+
+  private update(alive: number, animationEnded: boolean): MonestOut {
+    switch (this.state) {
+      case 'intro':
+        return this.introUpdate();
+      case 'wake':
+        return this.wakeUpdate(alive, animationEnded);
+      case 'dormant':
+      case 'hover':
+        if (!this.armed) {
+          if (alive <= Math.trunc(this.threshold / 2) || this.active) {
+            this.armed = true;
+            this.counter = 0;
+          }
+        } else if (++this.counter > this.interval) {
           this.counter = 0;
+          this.pending = Math.min(this.batch, MONEST.maxAlive - alive, this.total - this.spawned);
         }
-      } else if (++this.counter > this.interval) {
-        this.counter = 0;
-        this.pending = Math.min(this.batch, MONEST.maxAlive - alive, this.total - this.spawned);
+        return { motion: null, spawn: false };
+      case 'spawn':
+      case 'spawnHover': {
+        // One child at animation frame 15, then back when the animation ends.
+        this.frames += MONEST_MOTION.spawn.speed;
+        let spawn = false;
+        if (!this.fired && this.frames >= MONEST.spawnFrame) {
+          this.fired = true;
+          this.pending--;
+          if (alive <= MONEST.maxAlive && this.spawned < this.total) {
+            this.spawned++;
+            spawn = true;
+          }
+        }
+        return { motion: null, spawn };
       }
-      if (this.pending > 0) {
-        return { motion: this.enter(this.state === 'hover' ? 'spawnHover' : 'spawn'), spawn: false };
+    }
+  }
+
+  private introUpdate(): MonestOut {
+    if (this.introPhase === 0) {
+      const sin = Math.sin((this.angle * 2 * Math.PI) / 65536);
+      this.height -= (sin + 1) * MONEST_INTRO.drop + MONEST_INTRO.floor;
+      this.angle = (this.angle + MONEST_INTRO.turn) % 65536;
+      let motion: EnemyAiMotion | null = null;
+      if (this.height < MONEST_INTRO.animate9 && !this.landingMotion) {
+        this.landingMotion = true;
+        motion = MONEST_MOTION.drop;
+      }
+      if (this.height < MONEST_INTRO.land) {
+        this.height = MONEST_INTRO.land;
+        this.introPhase = 1;
+        this.introCounter = 0;
+      }
+      return { motion, spawn: false };
+    }
+    if (this.introPhase === 1) {
+      if (this.introCounter + 1 < MONEST_INTRO.cycleTicks) {
+        this.introCounter++;
+      } else {
+        this.introCounter = 0;
+        this.introCycles++;
+        if (this.introCycles >= MONEST_INTRO.cycles) this.introPhase = 2;
+      }
+    }
+    return { motion: null, spawn: false };
+  }
+
+  private wakeUpdate(alive: number, animationEnded: boolean): MonestOut {
+    this.wakeTicks++;
+    if (this.wakeSub === 0) {
+      if (this.wakeTicks > MONEST_WAKE.idleTicks) {
+        this.wakeSub = 2;
+        return { motion: MONEST_MOTION.wake, spawn: false };
       }
       return { motion: null, spawn: false };
     }
-    // spawn / spawnHover: one child at animation frame 15, then back.
-    this.frames += MONEST_MOTION.spawn.speed;
-    let spawn = false;
-    if (!this.fired && this.frames >= MONEST.spawnFrame) {
-      this.fired = true;
-      this.pending--;
-      if (alive <= MONEST.maxAlive && this.spawned < this.total) {
-        this.spawned++;
-        spawn = true;
-      }
+    if (this.wakeSub !== 2) return { motion: null, spawn: false };
+    // The animation's end returns to animation 0 (animation_flags & 0x10).
+    let motion: EnemyAiMotion | null = null;
+    if (animationEnded && !this.wakeMotionEnded) {
+      this.wakeMotionEnded = true;
+      motion = MONEST_MOTION.wait;
     }
-    if (animationEnded && this.fired) {
-      const next = this.state === 'spawnHover' ? 'hover' : 'dormant';
-      return { motion: this.enter(next), spawn };
+    if (this.wakeTicks % MONEST_WAKE.every !== 0) return { motion, spawn: false };
+    if (this.wakeSpawned >= this.threshold) {
+      this.wakeSub = 3;
+      return { motion, spawn: false };
     }
-    return { motion: null, spawn };
+    this.wakeSpawned++;
+    // spawn_mothmant_from_monest does nothing while more than 6 are alive.
+    const spawn = alive <= MONEST.maxAlive;
+    if (spawn) this.spawned++;
+    return { motion, spawn };
   }
 }
 
 // --- Mothmant: its own state machine ----------------------------------------
 //
 // unknown_handle_mothmant_behavior (dump 0x00516xxx..0x00518xxx, the
-// Mothmant's dispatcher on +0x32e): 0 launch (HildebearProcessState_0051845c),
+// Mothmant's dispatcher on the AI state): 0 launch (HildebearProcessState_0051845c),
 // 1 wander (HildebearProcessState_00518144), 2 chase
 // (HildebearProcessState_00517b28), 3 attack (HildebearProcessState_0051784c),
 // 4 swoop (HildebearProcessState_0051738c), 5 hover (HildebearProcessState_00517200),
@@ -1665,22 +1759,40 @@ export const MOTHMANT = {
   heightJitter: 2, // 0x00920ba4 / 0x00920b9c
   strikeFrame: 9, // 9.0 (0x0051784c): the strike lands at animation frame 9
   strikes: 4, // 0x448 < 4: four strikes per attack
-  // ASSUMED: the wind-up before a strike is g_MothmantAnimSpeedParams+0x1c
-  // (a battleparams row not decoded); 20 ticks is the placeholder.
+  // ASSUMED: the wind-up before a strike is the battleparams animation row's
+  // +0x1c (g_MothmanAnimSpeedParams, init_mothmant_global_config). The row is
+  // data read with get_battleparams_animation_speeds; its field is typed as a
+  // float there but compared as an int (`*(int *)(... + 0x1c) <= counter`),
+  // which was not resolved, so 20 ticks is the placeholder.
   windup: 20,
-  // ASSUMED: the ring around the spawn point (g_HildebearSwordMoveAmplitude,
-  // a global set from the battleparams that was not decoded).
-  ringRadius: 20,
-  swoopArc: 0x8000, // the swoop ends after half a turn (+0x3d4 > 0x8000, BAMS)
+  // The ring around the spawn point: g_HildebearSwordMoveAmplitude is the
+  // float at 0x00920c44 = 30.0. Nothing writes that address (objdump finds
+  // only reads, at 0x00517200 hover, 0x00518144 wander and 0x00518715 /
+  // 0x00518740), so the exe's value is the image's constant.
+  ringRadius: 30,
+  swoopArc: 0x8000, // the swoop ends after half a turn (|0x3d4| > 0x8000, BAMS)
+} as const;
+
+// The swoop's dive (HildebearProcessState_0051738c): the orbit point is 70
+// (0x00920c1c) out from the target, the dive starts when the Mothmant is within
+// 14 (0x00920c30) of the target, and the sweep rate is +-65536 * speed / 439.82
+// (0x00920c28 / 0x00920c20 over 0x00920c24) BAMS a tick, the sign by a coin
+// (0x00920c2c). The sweep's sub-steps: 0 approach, 1 half step (the sweep's half
+// rate until the Mothmant is within its speed of the orbit point), 2 full step.
+export const MOTHMANT_SWOOP = {
+  orbit: 70,
+  start: 14,
+  turnBase: 65536,
+  turnDiv: 439.8228759765625,
 } as const;
 
 const MOTHMANT_MOTION = {
   fly: loop(10, 0.6), // animation 1 / 0 fly
   strike: once(0, 1), // the attack motion (the profile's attack row)
-  flinch: once(3, 1),
+  flinch: once(3, 1), // animation 3 (HildebearProcessState_00516fbc, enter)
 };
 
-export type MothmantState = 'launch' | 'wander' | 'chase' | 'attack' | 'swoop' | 'hover' | 'dead';
+export type MothmantState = 'launch' | 'wander' | 'chase' | 'attack' | 'swoop' | 'hover' | 'flinch' | 'dead';
 
 // The Mothmant's own states. The brain sees its siblings through `siblingsOn`:
 // HildebearCheckEntityCount_0051a924 counts the live children of the same
@@ -1703,8 +1815,14 @@ export class MothmantAi extends BrainBase {
   private height: number;
   private strike = 0;
   private sub: 'idle' | 'windup' | 'strike' = 'idle';
-  private sweep = 0;
-  private sweepStep = 0;
+  // The swoop: its sub-step (+0x3c8), the orbit heading (+0x3d8, radians), the
+  // accumulated sweep (+0x3d4) and the sweep rate a tick (+0x3dc).
+  private swoopSub: 0 | 1 | 2 = 0;
+  private orbit = 0;
+  private arc = 0;
+  private dv = 0;
+  // The state the flinch returns to (+0x380).
+  private prev: MothmantState | null = null;
   private siblingsOn: (clientId: number, self: MothmantAi) => number;
   private hitDone = false;
   lift = 0;
@@ -1743,6 +1861,7 @@ export class MothmantAi extends BrainBase {
   }
 
   private enter(out: AiFrame, state: MothmantState, t: AiTarget | null): void {
+    const from = this.state;
     this.state = state;
     this.timer = 0;
     this.sub = 'idle';
@@ -1759,19 +1878,80 @@ export class MothmantAi extends BrainBase {
     } else if (state === 'attack') {
       this.strike = 0;
     } else if (state === 'swoop') {
-      this.sweep = 0;
-      // sub 0 of the swoop picks the sweep rate: +- 65536 * speed / 439.82 BAMS
-      // (0x00920c28 / 0x00920c24, the half of the coin in 0x00920c2c).
-      const dv = Math.round((65536 * this.speed) / 439.8228759765625) * (this.rng() <= 0.5 ? 1 : -1);
-      this.sweepStep = dv * BAMS_TO_RAD;
+      // HildebearProcessState_0051738c, enter: from the swoop itself (sVar1 == 4)
+      // the sweep carries on at sub 2 with a fresh arc; from anywhere else the
+      // orbit starts half a turn from the facing and the dive begins at sub 0.
+      this.arc = 0;
+      if (from === 'swoop') {
+        this.swoopSub = 2;
+      } else {
+        this.swoopSub = 0;
+        this.orbit = wrap(this.angle + Math.PI);
+        this.dv = 0;
+      }
+    } else if (state === 'flinch') {
+      // HildebearProcessState_00516fbc, enter: animation 3, and the state it
+      // came from is kept at +0x380 (SetEnemyField0x380).
+      this.prev = from;
     }
-    this.play(out, MOTHMANT_MOTION.fly);
+    this.play(out, state === 'flinch' ? MOTHMANT_MOTION.flinch : MOTHMANT_MOTION.fly);
+  }
+
+  // The flinch (state 6). Its trigger is not located: the exe's writer of
+  // AI state 6 is not in the Mothmant code (ASSUMED: the caller decides).
+  flinch(): void {
+    if (this.state === 'dead' || this.state === 'flinch') return;
+    this.pendingFlinch = true;
+  }
+  private pendingFlinch = false;
+
+  private distTo(p: { x: number; z: number }): number {
+    return Math.hypot(p.x - this.x, p.z - this.z);
+  }
+
+  private approachTo(p: { x: number; z: number }, step: number): void {
+    const dx = p.x - this.x;
+    const dz = p.z - this.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= 0) return;
+    const s = Math.min(step, d);
+    this.x += (dx / d) * s;
+    this.z += (dz / d) * s;
+  }
+
+  private orbitPoint(t: AiTarget): { x: number; z: number } {
+    return { x: t.x + Math.sin(this.orbit) * MOTHMANT_SWOOP.orbit, z: t.z + Math.cos(this.orbit) * MOTHMANT_SWOOP.orbit };
+  }
+
+  // The swoop's exit (its check, event 3): the current target when the attack
+  // may take it (fewer than 2 siblings on it), else the nearest other player
+  // the attack may take, else the swoop again (HildebearProcessState_0051738c).
+  private swoopExit(out: AiFrame, targets: readonly AiTarget[], t: AiTarget): void {
+    if (this.siblingsOn(t.clientId, this) < 2) {
+      this.enter(out, 'attack', t);
+      return;
+    }
+    const others = targets
+      .filter((x) => !x.dead && x.clientId !== t.clientId)
+      .sort((a, b) => this.dist(a) - this.dist(b));
+    for (const o of others) {
+      if (this.siblingsOn(o.clientId, this) < 2) {
+        this.targetId = o.clientId;
+        this.enter(out, 'attack', o);
+        return;
+      }
+    }
+    this.enter(out, 'swoop', t);
   }
 
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     const out = this.frame();
     if (this.state === 'dead') return out;
     this.timer++;
+    if (this.pendingFlinch) {
+      this.pendingFlinch = false;
+      this.enter(out, 'flinch', null);
+    }
     switch (this.state) {
       case 'launch': {
         // 0x0051845c sub 0: the throw decays for 41 ticks (vx, vz * 0.9, vy - 0.1).
@@ -1840,7 +2020,7 @@ export class MothmantAi extends BrainBase {
         const d = this.dist(t);
         if (d < MOTHMANT.attackRange) {
           // The attack needs fewer than 2 siblings on this player; otherwise
-          // the swoop takes it around (ASSUMED: the retarget loop is not run).
+          // the swoop takes it around.
           this.enter(out, this.siblingsOn(t.clientId, this) < 2 ? 'attack' : 'swoop', t);
           break;
         }
@@ -1886,20 +2066,72 @@ export class MothmantAi extends BrainBase {
         break;
       }
       case 'swoop': {
-        // A half turn around the target at the approach speed (ASSUMED: the
-        // dive's three sub-steps are not decoded beyond the arc).
+        // The check (event 3) first: no target sends it to hover; a half turn
+        // (|0x3d4| > 0x8000) makes the exit.
         const t = this.target(targets);
         if (!t) {
           this.enter(out, 'hover', null);
           break;
         }
-        this.sweep += Math.abs(this.sweepStep);
-        const side = this.sweepStep < 0 ? -1 : 1;
-        this.angle = turnToward(this.angle, this.angleTo(t) + side * Math.PI / 2, this.turn);
-        this.x += Math.sin(this.angle) * this.speed;
-        this.z += Math.cos(this.angle) * this.speed;
+        if (Math.abs(this.arc) > MOTHMANT.swoopArc * BAMS_TO_RAD) {
+          this.swoopExit(out, targets, t);
+          break;
+        }
+        // The update: the sub-step moves the orbit and the Mothmant goes to the
+        // orbit point (its movement target: 0x3b4 is the distance to it), then
+        // the Mothmant faces its target.
+        if (this.swoopSub === 0) {
+          this.approachTo(this.orbitPoint(t), this.speed);
+          if (this.distTo(this.orbitPoint(t)) < MOTHMANT_SWOOP.start) {
+            // The sweep rate is +-65536 * speed / 439.82 BAMS; the coin (0x920c2c) sets the sign.
+            const step = Math.round((MOTHMANT_SWOOP.turnBase * this.speed) / MOTHMANT_SWOOP.turnDiv);
+            this.dv = (this.rng() <= 0.5 ? step : -step) * BAMS_TO_RAD;
+            this.swoopSub = 1;
+          }
+        } else if (this.swoopSub === 1) {
+          this.orbit += this.dv / 2;
+          this.arc += this.dv / 2;
+          this.approachTo(this.orbitPoint(t), this.speed);
+          if (this.distTo(this.orbitPoint(t)) < this.speed) this.swoopSub = 2;
+        } else {
+          this.orbit += this.dv;
+          this.arc += this.dv;
+          this.approachTo(this.orbitPoint(t), this.speed);
+        }
+        this.angle = this.angleTo(t);
         this.lift = this.hover;
-        if (this.sweep >= MOTHMANT.swoopArc * BAMS_TO_RAD) this.enter(out, 'chase', t);
+        break;
+      }
+      case 'flinch': {
+        // HildebearProcessState_00516fbc, check: once the flinch animation ends
+        // (animation_flags & 0x10). An attacker (+0x380 == 3) keeps its target
+        // when the attack may take it (fewer than 2 siblings), else takes the
+        // nearest other player it may take, else swoops; any other state is
+        // restored.
+        if (!animationEnded) break;
+        if (this.prev !== 'attack') {
+          this.enter(out, this.prev ?? 'wander', this.target(targets));
+          break;
+        }
+        const t = this.target(targets);
+        if (!t) {
+          this.enter(out, 'swoop', null);
+          break;
+        }
+        if (this.siblingsOn(t.clientId, this) < 2) {
+          this.enter(out, 'attack', t);
+          break;
+        }
+        const others = targets
+          .filter((x) => !x.dead && x.clientId !== t.clientId)
+          .sort((a, b) => this.dist(a) - this.dist(b));
+        const o = others.find((x) => this.siblingsOn(x.clientId, this) < 2);
+        if (o) {
+          this.targetId = o.clientId;
+          this.enter(out, 'attack', o);
+        } else {
+          this.enter(out, 'swoop', t);
+        }
         break;
       }
       default:
@@ -1924,7 +2156,7 @@ export class MothmantAi extends BrainBase {
   }
 }
 
-// Mothmant (MothmanConstructor_005168a4 -> 0x00518bfc, table 0x009bb5c0,
+// Mothman (MothmanConstructor_005168a4 -> 0x00518bfc, table 0x009bb5c0,
 // record 0x009bb614: search 225, turn 1536). The generic FSM uses these rows
 // for the Mothmants the Monest spawned before MothmantAi.
 export const MOTHMANT_PROFILE = {
