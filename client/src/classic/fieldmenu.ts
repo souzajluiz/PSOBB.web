@@ -30,6 +30,7 @@ import { MagMenu, type MagMenuEnv } from './magmenu.ts';
 import { cursorSaved, OptionsMenu, type OptionsEnv } from './options.ts';
 import { AREA_MAP_MENU_ID, AreaMapWindow, type AreaMapEnv, type AreaMapTextures } from './areamap.ts';
 import { QUEST_BOARD_MENU_ID, QuestBoardWindow, type QuestBoardEnv, type QuestBoardTextures } from './questboard.ts';
+import { TradeMenu, type TradeEnv } from './trade.ts';
 import { se, SE } from '../audio/se.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
@@ -91,6 +92,8 @@ export interface FieldMenuEnv {
   options: OptionsEnv;
   areaMap: AreaMapEnv;
   questBoard: QuestBoardEnv;
+  // The Trade Window's environment (classic/trade.ts); null when the field has no session.
+  trade?: () => TradeEnv | null;
 }
 
 export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, QuestBoardTextures {
@@ -113,6 +116,8 @@ export class FieldMenu {
   readonly leafAnim = new WindowAnim(true, false);
   private closingLeaf: Leaf | null = null;
   private leafBounds = { x: 0, y: 0, w: 0, h: 0 };
+  // The Trade Window (Home menu 0x1a, or a partner's proposal; classic/trade.ts).
+  trade: TradeMenu | null = null;
   // The Area Map window (open, or closing after the menu went away).
   areaMap: AreaMapWindow | null = null;
   // The Quest Board window (open, or closing).
@@ -130,7 +135,7 @@ export class FieldMenu {
   }
 
   get isOpen(): boolean {
-    return this.menu.open;
+    return this.menu.open || !!this.trade;
   }
 
   // Console aid: the open leaf's state (the item pack's debugState), null with no leaf.
@@ -185,10 +190,23 @@ export class FieldMenu {
     return this.env.android() ? MAIN_MENU_ANDROID : MAIN_MENU;
   }
 
+  // The Trade Window opens (Home menu 0x1a) or, from the field, a partner's proposal
+  // opens its accept prompt with no menu open (the caller checks the session status).
+  openTrade(auto = false): void {
+    const env = this.env.trade?.() ?? null;
+    if (!env) return;
+    this.trade = new TradeMenu(env);
+    if (!auto) this.menu.leafOpen = true;
+  }
+
   // handle_player_menu_select. Player Status (0x19,
   // ChatShortcutMenuWindow_Constructor_00756ff4) is in no menu table and no
   // caller passes it in this build, so it is not opened here.
   private open(id: number): void {
+    if (id === 0x1a) {
+      this.openTrade();
+      return;
+    }
     if (id === AREA_MAP_MENU_ID) {
       this.areaMap?.dispose();
       this.areaMap = new AreaMapWindow(this.env.areaMap, this.speed, (id) => se(id));
@@ -227,6 +245,13 @@ export class FieldMenu {
 
   tick(): void {
     this.menu.tick();
+    if (this.trade) {
+      this.trade.tick();
+      if (!this.trade.open) {
+        this.trade = null;
+        if (this.menu.open) this.menu.leafOpen = false;
+      }
+    }
     if (this.leaf instanceof ItemPackMenu || this.leaf instanceof EquipMenu || this.leaf instanceof MagMenu) this.leaf.speed = this.speed;
     this.leaf?.tick();
     this.leafAnim.tick(this.speed);
@@ -255,6 +280,13 @@ export class FieldMenu {
   }
 
   key(e: KeyboardEvent): void {
+    if (this.trade) {
+      if (!this.trade.key(e)) {
+        this.trade = null;
+        if (this.menu.open) this.menu.leafOpen = false;
+      }
+      return;
+    }
     if (this.questBoard?.anim.isOpen && !this.questBoard.finished) {
       this.questBoard.key(e);
       return;
@@ -280,6 +312,7 @@ export class FieldMenu {
   // Key releases reach the leaf that holds a repeating direction (the amount spinner).
   keyUp(e: KeyboardEvent): void {
     if (this.leaf instanceof ItemPackMenu) this.leaf.keyUp(e);
+    this.trade?.keyUp(e);
   }
 
   // `extra`: virtual width beyond 640 (windows on the right half follow the
@@ -297,6 +330,7 @@ export class FieldMenu {
   private drawBottom(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number): void {
     this.areaMap?.draw(ctx, skin, tex);
     this.questBoard?.draw(ctx, skin, tex);
+    this.trade?.draw(ctx, skin);
     const leaf = this.leaf ?? this.closingLeaf;
     if (!leaf || !this.leafAnim.visible) return;
     const rects: { x: number; y: number; w: number; h: number }[] = [];

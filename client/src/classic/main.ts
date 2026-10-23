@@ -219,6 +219,7 @@ async function main(): Promise<void> {
       },
       infoCols,
       fullCharacter: () => session?.fullCharacter ?? null,
+      character: () => session?.character ?? null,
     };
   };
   // Item names for the Item List window (ItemPMT from the stream file, as the

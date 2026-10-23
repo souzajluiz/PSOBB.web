@@ -17,6 +17,8 @@ import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
 import type { SetPositionState } from './game.ts';
+import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
+import { tradeIO, type TradeHost } from './tradeio.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -157,6 +159,24 @@ export class Lobby {
   // the view plays and sends them (render/lobbyview.ts).
   readonly emoteQueue = new EmoteQueue();
   selfId = -1;
+  // Player trade (net/trade.ts, the Home menu's Trade Window). The host gives the
+  // session the character and the notices; the session is made for the current self id
+  // on first use (6xA6 / D1 / D4 may arrive before any window is open).
+  tradeHost: TradeHost | null = null;
+  private tradeSession: TradeSession | null = null;
+  get trade(): TradeSession {
+    if (!this.tradeSession || this.tradeSession.self !== this.selfId) {
+      this.tradeSession = new TradeSession(
+        this.selfId,
+        tradeIO({
+          send: (p) => this.conn.send(p.command, p.flag, p.payload),
+          host: () => this.tradeHost,
+          isPresent: (id) => id === this.selfId || this.players.has(id),
+        }),
+      );
+    }
+    return this.tradeSession;
+  }
   leaderId = -1;
   lobbyNumber = 0;
   blockNumber = 0;
@@ -262,6 +282,18 @@ export class Lobby {
       case 0x6d:
         this.onSubcommands(c.data);
         break;
+      // Trade (net/trade.ts): D1 the server executes the list, D3 the items moved (no
+      // handler in the exe, ASSUMED), D4 the result (flag 1 = done, 0 = failed; exe
+      // ShowTradeErrorDialogAndReset_00827024: 0x10a / 0x10b).
+      case 0xd1:
+        this.trade.onAdvance();
+        break;
+      case 0xd3:
+        this.trade.onExecute();
+        break;
+      case 0xd4:
+        this.trade.onComplete(c.flag === 1);
+        break;
     }
   }
 
@@ -325,6 +357,8 @@ export class Lobby {
       const body = data.subarray(o, o + size);
       const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
       const clientId = dv.getUint16(2, true);
+      // 6xA6 is the trade proposal / answer / offer subcommand (net/trade.ts receive).
+      if (sub === TRADE_SUB && body.length >= TRADE_SUB_SIZE) this.trade.receive(body);
       const p = this.players.get(clientId);
       if (p) {
         switch (sub) {

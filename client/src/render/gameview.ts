@@ -196,6 +196,9 @@ export class GameView {
       questRunning: () => this.quest !== null,
       ...(options.streamFiles ? { streamFiles: options.streamFiles } : {}),
     });
+    // The player trade's host (net/tradeio.ts): the offers come from the character, the
+    // session's notices go to the open Trade Window (render/fieldhud.ts notifyTrade).
+    game.tradeHost = { character: () => this.characterFile(), notify: (textId) => this.hud.notifyTrade(textId) };
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
     this.hud = new FieldHud(viewer, this.files, {
       ...character,
@@ -213,6 +216,10 @@ export class GameView {
       starTargets: () => this.combat.starTargets(),
       atomizerEcho: (packet) => this.combat.atomizerEcho(packet),
       send: (command, payload) => game.conn.send(command, 0, payload),
+      trade: () => ({
+        session: game.trade,
+        partners: () => [...game.players.values()].filter((p) => p.clientId !== game.selfId).map((p) => ({ id: p.clientId, name: p.name })),
+      }),
       minimap: {
         self: () => this.minimapPlayer(this.game.selfId),
         others: () => {
