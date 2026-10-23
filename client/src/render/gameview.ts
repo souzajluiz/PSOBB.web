@@ -19,6 +19,7 @@ import { parseObjectSets, playerSpawns, roomToWorld, type ObjectSetEntry } from 
 import { parseSetFile, placeEntities, type EnemySet, type PlacedEntity } from '../formats/setdata.ts';
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
+import { playerRoomId } from '../formats/playerroom.ts';
 import { GameItems } from '../net/items.ts';
 import { parseMagEvolution, SE_FEED } from '../net/magfeed.ts';
 import { se } from '../audio/se.ts';
@@ -503,12 +504,16 @@ export class GameView {
     this.busy = true;
     try {
       const from = me.floor;
+      // The guard stance is the mover's before the warp; the exe's flag (character_flags
+      // 0x100000) is not cleared by a floor load, so the 6x3F after it carries that value
+      // (ASSUMED: the load does not clear it).
+      const guard = this.view?.guarding ?? false;
       this.game.warp(floor);
       // TObjPlayerSet param4: 0 = arriving from a lower floor, 1 = returning from a higher one.
       await this.loadFloor(floor, source ?? (floor > from ? 0 : 1));
       if (arrival) this.view?.placePlayer(this.game.selfId, arrival.x, arrival.y, arrival.z, arrival.angle);
-      // The guard stance is off on a fresh floor (ASSUMED); the room is the field's zone at the position.
-      this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle, { guard: false, room: this.roomAt(me.position) });
+      // The room is get_player_room_id on the new floor at the position.
+      this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle, { guard, room: this.playerRoom(me.position) });
     } finally {
       this.busy = false;
     }
@@ -625,6 +630,8 @@ export class GameView {
       // The game's maps, Pioneer 2 included, use the field motion set (DAT_00a943cc = 1 in a
       // game, 0 in the lobby: FUN_006a745c / FUN_006a7748). ASSUMED for Pioneer 2 (a game area).
       field: true,
+      // 6x3E / 6x3F room: get_player_room_id on this floor's map (the field's section).
+      room: (pos) => this.playerRoom(pos),
     });
     const objectBase = await this.objectBase(floor);
     // The quest's floor handler runs on a new thread when the player arrives
@@ -815,6 +822,13 @@ export class GameView {
 
   roomAt(pos: { x: number; y: number; z: number }): number {
     return this.field.roomAt(pos);
+  }
+
+  // The room a player sends in 6x3F / 6x3E at `pos` (get_player_room_id, formats/playerroom.ts):
+  // Pioneer 2 gives 0, the field's section otherwise, both exe fields holding that section.
+  playerRoom(pos: { x: number; y: number; z: number }): number {
+    const r = this.field.roomAt(pos);
+    return playerRoomId(this.current?.area ?? -1, r, r);
   }
 
   zoneCleared(floor: number, room: number): boolean {

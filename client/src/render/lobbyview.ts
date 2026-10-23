@@ -15,13 +15,15 @@ import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
 import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
-import { parseMapNRel } from '../formats/nrel.ts';
+import { parseMapNRel, type MapSection } from '../formats/nrel.ts';
+import { playerRoomAt } from '../formats/playerroom.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
 import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion, type MotionRecord } from '../formats/plymotion.ts';
 import { EMOTE_OPCODE, SIT_OPCODE, SIT_SLOT_CHAIR, SIT_SLOT_PLAIN, altEmoteKey, emotePayload, emoteRecord, emoteSlot, sitEndKey, sitPayload } from '../formats/emotes.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
+import type { SetPositionState } from '../net/game.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { PlayerAnimator, skeletonNodePosition } from './playeranim.ts';
@@ -63,7 +65,12 @@ export interface LobbyMapData {
   // TObjLobbyMain entries placed like the field's objects (the seasonal model,
   // objectmodels.ts lobbyMainSpec, is drawn by LobbyView).
   mainObjects?: PlacedEntity[];
+  // The lobby's map sections (map_NNn.rel rooms): the room a stop sends (playerRoomAt).
+  sections?: MapSection[];
 }
+
+// The lobby map's area (the exe's map_id lobby = 15; class 14, so the room is _1).
+const LOBBY_AREA = 15;
 
 // The lobby objects of map_lobby_NNo.dat that collide (object factory
 // 0x00a06be0, the constructors checked for InitEnemyCollisionBoxes_007b9a88 /
@@ -94,6 +101,7 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
   }
   try {
     const rooms = parseMapNRel(await source.read(`scene/map_${area}n.rel`)).sections;
+    data.sections = rooms;
     const raw = await files.read(`map_${area}o.dat`);
     const sets = parseObjectSets(raw);
     const mains = parseSetObjects(raw).filter((o) => o.type === 0x0182);
@@ -264,14 +272,27 @@ export class LobbyView {
   // The local player's slow and guard inputs (render/combat.ts in the field;
   // the lobby has no status effects and no target, so 0.5 / 0.75 never apply).
   legState: () => LegState = () => ({ slowed: false, target: null, confused: false });
+  // The room a 6x3E / 6x3F sends at a point (get_player_room_id; the field passes its own).
+  private roomOf: (pos: { x: number; y: number; z: number }) => number;
+
+  // The local player's guard stance (the mover's, 0x0052ac5c): in_guard_stance in 6x3E / 6x3F.
+  get guarding(): boolean {
+    return this.mover.guard;
+  }
+
+  // The 6x3E state at `pos`: the guard stance and the room (net/lobby.ts stopBody).
+  stopState(pos: { x: number; y: number; z: number }): SetPositionState {
+    return { guard: this.mover.guard, room: this.roomOf(pos) };
+  }
 
   constructor(
     viewer: MapViewer,
     lobby: Lobby,
     mapData: LobbyMapData = { collision: null, spawns: new Map(), files: null },
-    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource; town?: boolean; field?: boolean } = {},
+    options: { labels?: boolean; showPlayer?: (p: LobbyPlayer) => boolean; held?: HeldWeaponSource; town?: boolean; field?: boolean; room?: (pos: { x: number; y: number; z: number }) => number } = {},
   ) {
     this.labels = options.labels ?? true;
+    this.roomOf = options.room ?? ((pos) => playerRoomAt(LOBBY_AREA, mapData.sections ?? [], pos));
     this.camera.town = options.town ?? false;
     this.fieldMotions = options.field ?? false;
     this.viewer = viewer;
@@ -378,7 +399,7 @@ export class LobbyView {
       m.angle = angle;
     }
     this.cameraYaw = angle + Math.PI; // camera behind the player
-    this.lobby.sendStop(x, y, z, angle);
+    this.lobby.sendStop(x, y, z, angle, this.stopState({ x, y, z }));
   }
 
   // The client has no mouse look: a click only gives the view the keyboard,
@@ -762,7 +783,7 @@ export class LobbyView {
           this.sentLeg = this.mover.legSerial;
         }
       } else if (this.wasMoving) {
-        this.lobby.sendStop(pos.x, pos.y, pos.z, mine.angle);
+        this.lobby.sendStop(pos.x, pos.y, pos.z, mine.angle, this.stopState(pos));
         this.sentGait = null;
         this.sentLeg = -1;
         this.setGait(mine, 'idle');
@@ -1015,7 +1036,7 @@ export class LobbyView {
     }
     if (clientId === this.lobby.selfId) {
       this.cameraYaw = angle + Math.PI;
-      this.lobby.sendStop(x, gy, z, angle);
+      this.lobby.sendStop(x, gy, z, angle, this.stopState({ x, y: gy, z }));
     }
   }
 
