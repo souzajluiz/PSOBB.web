@@ -38,6 +38,7 @@ import { buildSyncLayout, type SyncFloor, type SyncLayout } from '../net/joinsyn
 import { LobbyView, type HeldWeaponSource, type LobbyMapData, type LobbySpawn } from './lobbyview.ts';
 import { inUnsafeMap } from './playermove.ts';
 import { NpcLayer } from './npcview.ts';
+import { NPC_ENEMY_TYPES } from '../formats/enemymodels.ts';
 import { TelepipeLayer, type Arrival } from './telepipe.ts';
 import * as THREE from 'three';
 import type { QuestSession } from '../quest/session.ts';
@@ -718,6 +719,15 @@ export class GameView {
   // NPC models of the floor (render/npcview.ts); returns the entries drawn.
   private async showNpcs(placed: ReturnType<typeof placeEntities>, area: number): Promise<Set<(typeof placed)[number]>> {
     const done = await this.npcs.show(placed, { area, sectionId: this.game.self?.sectionId ?? 0 });
+    // The enemy-built NPCs (0x33, 0x45, 0x46, 0xa9) are drawn by the enemy layer; they
+    // talk through the NPC layer (NpcLayer.adoptEnemyNpcs).
+    const adopted: { placed: (typeof placed)[number]; root: THREE.Object3D }[] = [];
+    for (const p of placed) {
+      if (p.category !== 'npc' || p.entity.kind !== 'enemy' || !NPC_ENEMY_TYPES.has(p.entity.type)) continue;
+      const root = this.enemyLayer.model(p.entity.index);
+      if (root) adopted.push({ placed: p, root });
+    }
+    this.npcs.adoptEnemyNpcs(adopted);
     const n = this.npcs.stats;
     if (n.placed || n.unresolved.length || n.errors.length) {
       this.log(

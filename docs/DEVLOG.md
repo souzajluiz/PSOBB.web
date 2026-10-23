@@ -12630,3 +12630,33 @@ So `QuickMenuRenderTextBackground_00742a6c` is not part of the field menus and h
 
 **Tests:** `node tests/enemyfsm.test.ts` (the Monest kill block now runs the kill to the dead state: 200 sink ticks, the removal once no child is alive; the Mothmant flinch from the launch state) passes. `node tests/enemystatus.test.ts` (the freeze counts down during paralysis, and the old chain-stop assumption is replaced) passes. `node tests/combatdepth.test.ts` (842 checks), `hitfx.test.ts`, `waves.test.ts`, `status.test.ts` pass. `client`: `tsc --noEmit -p .` clean (Node 24; the worktree has no `node_modules`, so the check used the main checkout's, linked for the run only and removed afterwards). Not run in Chrome or in Playwright (per the brief).
 
+## 2026-10-23: talk of the enemy-built NPCs (0x33, Rappy 0x45, Hildebear 0x46, Chaos Bringer 0xa9) and the 0x118 check
+
+**Question:** how does talk reach the enemy-built NPCs, which have no `NpcInstance` (so the talk press never found them), and does 0x118 go through the NPC talk path?
+
+**Exe (PsoBB.exe, objdump and the dump).** The NPC talk is one machine: the object's vtable slots +0x2c (talk start), +0x160 (update) and +0x164 (set_params). Checked for each factory's vtable (the vtable store in its constructor, then the slots):
+
+| set type | factory / init | vtable | +0x2c | +0x160 | +0x164 |
+|---|---|---|---|---|---|
+| 0x33 TObjNpcEnemy | 0x00607dd8 / ConstructDerolleBossObject_00607ea4 | 0x00b1e680 | 0x006072e0 | 0x0060648c | 0x00606a34 |
+| 0x45 Rappy NPC | 0x0060c518 / init 0x0060c5e4 | 0x00b215c0 | 0x006072e0 | 0x0060648c | 0x00606a34 |
+| 0x46 Hildebear NPC | 0x0060de48 / init 0x0060df14 | 0x00b22960 | 0x006072e0 | 0x0060648c | 0x00606a34 |
+| 0xa9 Chaos Bringer NPC | 0x006074c8 / init 0x00607594 | 0x00b1e000 | 0x006072e0 | 0x0060648c | 0x00606a34 |
+| 0x118 Ep4 quest NPC | 0x00602a14 / 0x00602ae0 | 0x00b1d800 | 0x006072e0 | 0x0060648c | 0x00606a34 |
+
+So 0x33, 0x45, 0x46, 0xa9 and 0x118 are the same NPC objects as the humanoid NPCs (`EnemyObjectUpdate_0060648c` is the talk state machine for all of them). The set's param4 (action, +0x3b4) and param5 (label, +0x3b0) come from the shared set_params override 0x00606a34, so the enemy-built NPCs talk exactly as an NPC does (quest label for action 100..999, area script for >= 1000). 0x118 is therefore on the NPC talk path (its `NpcInstance`, `buildQuestNpc`), as the port already had it.
+
+**Talk start, 0x006072e0 (vtable +0x2c).** Given the talking player's id (u16 arg): when the label (+0x3b0) is > 0 and the NPC is not already in mode 3 (+0x32e), it sets mode 3, clears +0x330, and writes the player id to the NPC's target (+0x94) and action target (+0x340). If the id is the local slot (g_CurrentPlayerSlotIndex), it also clears the local player's action state, disables its palette slots 0..3 and resets the UI lock, then calls the NPC's +0x168 (set motion, walk row 1). The NPC then turns to the player in EnemyObjectUpdate_0060648c state 0.
+
+**Who calls +0x2c with the id (the trigger): NOT FOUND.** The 22 indirect `call *0x2c` sites in .text were listed; none is clearly the action-press path (4d89b0, 644713, 6cd286 and others are generic virtual calls). The NPC's target is `this->target_idx` (+0x94), set by `set_enemy_target` (only through `get_targetable_npc`, which needs the target's `is_targetable_by_enemies`), so the talk picks the player the NPC targets. The port keeps its own approximation for every NPC (Enter, within 20 units, 60 degrees in front: `talkTarget`, the counter rule). ASSUMED for the enemy-built NPCs too.
+
+**Ported:**
+- `render/npcview.ts`: `NpcInstance` gets `name` (log name), `fixed` (no wander) and `animator: ... | null` (null = the enemy layer's animator). `NpcLayer.adoptEnemyNpcs(entries)` adds each enemy-built NPC's enemy-layer root as an instance (params from its set entry, height from its bounds, display registers through `updateVisibility`). `setMotion` returns early without an animator; `frame` and `tick` skip it when it has none / is fixed.
+- `render/gameview.ts` `showNpcs`: after the NPC layer is built, the NPC_ENEMY_TYPES entries that the enemy layer drew are adopted (`enemyLayer.model(index)`). `quest/town.ts` logs `npc.name`.
+- Talk, `quest/town.ts` `action()` / `talk()`: unchanged; the enemy-built NPCs now reach `talkTarget` (shown, with a label, in range and in front).
+
+**ASSUMED / not traced:** the talk trigger (above); that the enemy-built NPCs do not wander (their vtable's wander mode +0xf4 is not traced); the 0x33 slot motion (the enemy's idle row) and the Rappy / Hildebear / Chaos Bringer NPC motion rows (the enemy layer's rows). An NPC with no model (0x33 slot with an id the port does not draw) has no talk: the exe's invisible NPC is not modelled.
+
+**Tests:** `tests/npcs.test.ts` section 11: for 0x33, 0x45, 0x46, 0xa9 the talk params (action 105, label 300 talks in the quest; action 50 or no label cannot talk; action 1049 talks in the area script); 0x118 talks through the NPC path. `tests/questflow.test.ts` passes. `node tests/npcs.test.ts`: ALL PASS. Client `tsc --noEmit -p .` clean (Node 24; `client/node_modules` linked from the main checkout for the check). Not run in Chrome (no Playwright for this change).
+
+**Left:** the talk trigger (who calls +0x2c with the local player id); the enemy-built NPCs' wander (whether they stay put); the 0x33 slot motion and the enemy NPC motion rows; models for 0x33 ids the port does not draw.

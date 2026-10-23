@@ -182,14 +182,21 @@ export type NpcTalkState = 'idle' | 'turning' | 'talking';
 
 export interface NpcInstance {
   placed: PlacedEntity;
-  // The NPC class; null for the quest NPC (0x118), which is an NPC player.
+  // Name for the log (the NPC class, or the enemy model's name for an enemy-built NPC).
+  name: string;
+  // The NPC class; null for the quest NPC (0x118), which is an NPC player, and for
+  // the enemy-built NPCs (adoptEnemyNpcs).
   cls: NpcClass | null;
   // The npcplayerchar.dat class of a quest NPC (its motions are the player's).
   charClass: number | null;
   params: NpcParams;
-  root: THREE.Group;
-  // NodeAnimator: the 64-node NPC skeleton; PlayerAnimator: a quest NPC's player model.
-  animator: NodeAnimator | PlayerAnimator;
+  root: THREE.Object3D;
+  // NodeAnimator: the 64-node NPC skeleton; PlayerAnimator: a quest NPC's player model;
+  // null for an enemy-built NPC, whose enemy layer animator plays its motion.
+  animator: NodeAnimator | PlayerAnimator | null;
+  // An enemy-built NPC (TObjNpcEnemy / Rappy / Hildebear / Chaos Bringer NPC): it talks
+  // but does not wander (ASSUMED: the wander modes of its vtable are not traced).
+  fixed: boolean;
   angle: number; // BAMS, obj+0x60
   height: number;
   state: NpcTalkState;
@@ -322,11 +329,13 @@ export class NpcLayer {
         const params = npcParams(e.params);
         const npc: NpcInstance = {
           placed: p,
+          name: resolved.cls.name,
           cls: resolved.cls,
           charClass: null,
           params,
           root: group,
           animator,
+          fixed: false,
           angle: toBams(p.yaw),
           height: model.height,
           state: 'idle',
@@ -379,11 +388,13 @@ export class NpcLayer {
     const angle = toBams(p.yaw);
     const npc: NpcInstance = {
       placed: p,
+      name: '__QUEST_NPC__',
       cls: null,
       charClass: t.charClass,
       params: npcParams(e.params),
       root: group,
       animator,
+      fixed: false,
       angle,
       height: Number.isFinite(box.max.y) ? box.max.y : 16,
       state: 'idle',
@@ -394,6 +405,41 @@ export class NpcLayer {
     animator.play(townMotion(t.charClass, locomotionSlot(t.charClass, 'idle')), LOCOMOTION_FACTOR.idle, (slot) => townMotion(t.charClass, slot));
     group.rotation.y = fromBams(angle);
     return { npc, missingTextures: built.stats.missingTextures };
+  }
+
+  // The enemy-built NPCs of the floor (0x33 TObjNpcEnemy, 0x45 Rappy, 0x46 Hildebear,
+  // 0xa9 Chaos Bringer NPC, 0x118 is built above) are drawn by the enemy layer. Their
+  // factories run the same NPC code as the humanoid NPCs: vtable +0x160 is
+  // EnemyObjectUpdate_0060648c (the talk), +0x164 the set_params override 0x00606a34
+  // (action / label / display registers), +0x2c the talk start 0x006072e0. Verified
+  // in PsoBB.exe: vtables 0x00b1e680 (0x33), 0x00b215c0 (0x45), 0x00b22960 (0x46),
+  // 0x00b1e000 (0xa9). So each one gets a talk entry here, with the enemy layer's root
+  // (the model stays theirs; ASSUMED: no wander, the motion is the enemy's idle row).
+  adoptEnemyNpcs(entries: { placed: PlacedEntity; root: THREE.Object3D }[]): void {
+    for (const { placed: p, root } of entries) {
+      const e = p.entity;
+      if (e.kind !== 'enemy') continue;
+      const angle = toBams(p.yaw);
+      root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root);
+      this.instances.push({
+        placed: p,
+        name: root.name.split(' #')[0] || 'enemy NPC',
+        cls: null,
+        charClass: null,
+        params: npcParams(e.params),
+        root,
+        animator: null,
+        fixed: true,
+        angle,
+        height: Number.isFinite(box.max.y) ? box.max.y : 16,
+        state: 'idle',
+        shown: true,
+        brain: npcBrain(p.world[0], p.world[1], p.world[2], angle, e.params),
+        motion: 0,
+      });
+    }
+    this.updateVisibility();
   }
 
   // UpdateMovementRestriction_00606f10: each NPC's display registers.
@@ -452,6 +498,7 @@ export class NpcLayer {
   private setMotion(n: NpcInstance, m: 0 | 1): void {
     if (n.motion === m) return;
     n.motion = m;
+    if (!n.animator) return; // an enemy-built NPC: its enemy layer animator plays
     if (n.animator instanceof PlayerAnimator) {
       // A quest NPC: the player's town idle / walk of its class (ASSUMED, see buildQuestNpc).
       const c = n.charClass ?? 0;
@@ -477,7 +524,7 @@ export class NpcLayer {
   }
 
   private frame(dt: number): void {
-    for (const n of this.instances) if (n.shown) n.animator.update(dt);
+    for (const n of this.instances) if (n.shown) n.animator?.update(dt);
     this.tickRemainder += dt * 30;
     const ticks = Math.min(Math.floor(this.tickRemainder), 30);
     this.tickRemainder -= Math.floor(this.tickRemainder);
@@ -491,7 +538,7 @@ export class NpcLayer {
     const players = this.players();
     for (const n of this.instances) {
       // ASSUMED: a hidden NPC (display registers) neither moves nor collides.
-      if (!n.shown || n.brain.mode === 3) continue;
+      if (!n.shown || n.fixed || n.brain.mode === 3) continue;
       const b = n.brain;
       const px = b.x, py = b.y, pz = b.z;
       npcTick(b, this.world);
