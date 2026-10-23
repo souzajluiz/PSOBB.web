@@ -1065,6 +1065,14 @@ export class GameItems {
   // can take the item (can_pickup_item) and none is pending for it; the item
   // then ignores new requests until the server answers (6x59) or 900 frames
   // pass (UpdateGroundItem_005c4010).
+  // Whether pickUp would send a request now (can_pickup_item and no request pending). The exe's
+  // middle-slot override takes an item only when the player can pick it up (CanPlayerPickupItem).
+  canPickUpNow(item: FloorItem): boolean {
+    const c = this.character;
+    if (c && !canPickUp(c, item.data)) return false;
+    return !this.pickupLock.has(item.id);
+  }
+
   pickUp(item: FloorItem): void {
     const c = this.character;
     if (c && !canPickUp(c, item.data)) return;

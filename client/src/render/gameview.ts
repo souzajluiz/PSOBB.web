@@ -29,6 +29,7 @@ import { FieldHud } from './fieldhud.ts';
 import { doorIcon, raderIconObject, radToBams, type Icon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
+import type { WeaponReach } from '../combat/weaponaim.ts';
 import { EnemyLayer } from './enemyview.ts';
 import { GameField } from './gamefield.ts';
 import { ObjectLayer } from './objectview.ts';
@@ -118,6 +119,9 @@ export class GameView {
   // While this returns true the local player cannot move, attack or pick up
   // (an NPC talk, a quest message or list waits; UIState_SetLockedState).
   inputBlocked: () => boolean = () => false;
+  // The Action Palette Middle key's interact (quest/town.ts): true when an NPC or floor item
+  // in the weapon's reach took the key, so the key does not attack (render/combat.ts).
+  middleInteract: (reach: WeaponReach | null) => boolean = () => false;
   // false: no name labels over the players (the classic page, classic/field.ts).
   private labels: boolean;
 
@@ -183,6 +187,7 @@ export class GameView {
       ...character,
       source,
       paletteSlot: (i) => this.hud?.paletteSlot(i) ?? null,
+      interactMiddle: (reach) => this.middleInteract(reach),
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       bossPhase: (phase) => this.field.noteBossPhase(phase),
       constructObjects: (floor, room, group) => this.constructObjects(floor, room, group),

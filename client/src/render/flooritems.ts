@@ -60,6 +60,7 @@ import { maxStackSize } from '../formats/itemnames.ts';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { EMPTY_BOX_TYPES, ITEM_BOX_TYPES, type FloorItem, type GameItems } from '../net/items.ts';
 import { DropSearch, type DropBody } from '../net/dropspot.ts';
+import { inWeaponReach, type WeaponReach } from '../combat/weaponaim.ts';
 import { EnemyArchive } from './enemymodel.ts';
 import { FieldParticles } from './hitfx.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -266,6 +267,33 @@ export class FloorItemLayer {
       s.node.rotation.y += spin;
       for (const t of s.scroll) t.offset.set(offset, offset);
     }
+  }
+
+  // The Middle key: the nearest floor item inside the weapon's reach that the player can take
+  // (the exe's middle-slot override of a flag-4 item, update_main_palette_slot_down_override);
+  // `act` requests the pick-up. Null when none is in reach.
+  nearestInReach(reach: WeaponReach): { d2: number; act: () => void } | null {
+    if (this.items.game.loading) return null;
+    let best: Shown | null = null;
+    let bestD = Infinity;
+    for (const s of this.shown.values()) {
+      if (!inWeaponReach(reach, s.item.x, s.node.position.y, s.item.z)) continue;
+      if (!this.items.canPickUpNow(s.item)) continue;
+      const d = (s.item.x - reach.x) ** 2 + (s.item.z - reach.z) ** 2;
+      if (d < bestD) {
+        best = s;
+        bestD = d;
+      }
+    }
+    if (!best) return null;
+    const hit = best;
+    return {
+      d2: bestD,
+      act: () => {
+        this.opts.log?.(`pick up ${this.opts.describe?.(hit.item) ?? hit.item.id.toString(16)}`);
+        this.items.pickUp(hit.item);
+      },
+    };
   }
 
   // Enter: the nearest item within PICKUP_RADIUS, else the nearest closed box.
