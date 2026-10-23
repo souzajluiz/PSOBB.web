@@ -12041,3 +12041,30 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Checks:** `node tests/objectcollision.test.ts` (new section 3c) and the related tests pass (`collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`, `enemies`, and `itemmodels` with `vendor/` linked into the worktree). `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
 
 **Left (ROADMAP line stays open):** the 44 undecoded sites (indexed per-kind tables and parameters); enemies' use of their tables (no port hit test for enemies); the NPC question; the break flag of the containers.
+
+## 2026-10-23: NPC players' attack AI: the AI object's update traced, target pick and attack gate ported
+
+**Question:** the ROADMAP's "NPC players' attack AI" line: command 3's action state, the target choice and the attack timing, with the AI object's update not traced.
+
+**Exe evidence (dump `src/Psobb.exe-05112026.c`; the names are community guesses, the bodies are used):**
+- The owner's branch of 6x69 command 0 builds the AI object with `SinowberillChallengeBoss_Constructor_007aea10` (`.c:798404`); command 3's owner branch uses `_007ae360` (`.c:798452` is the non-owner branch, `.c:798753` the takeover). Both store the vtable `g_SinowberillChallengeBossVtable` at `0x00b46578`. Its slot [1] is `SinowberillChallengePlayer_Update_007aefd4` (`.c:794690`; read with `tools/exedata.py read 00b46578 u 24`). ASSUMED: the slot is the per-frame update (the call site was not checked).
+- Records: `+0x74` = A, the owner's own player (slot = the ctor's param1); `+0x78` = B, the NPC (slot = 6x69 param2). Stat row = the 6x69 template (`+0x2c`).
+- Update gate (`.c:794696..794709`): A and B both live and not step-constructed, B's `+0xdf0` = 0, and B's leader (`+0x750`) != 0xffff. So the NPC attacks only while it follows a leader.
+- Target pick (`EnemyAI_AcquireClosestTargetInRange_007af2a0`, `.c:794836`): entities from `g_PlayerEntityCount` to `+g_NumEntities` with state flags and `+0x30 & 0x20000000`; per collision box with flag `0x8000` (`+0x18`), xz distance squared from the NPC's position below range^2; at most 9, sorted ascending. The head uses `AcquireTarget_007afc2c` with range = stat `+0x38` (`SinowberillHead_UpdateState_007af7ec`, `.c:795069`).
+- Attack decision (`SinowberillHead_TryAttack_007b0754`, `.c:795725`): far branch only (`stat +0x44`^2 <= |A - B|^2). The counter `+0x66` is bumped and the retarget runs on the call that finds it at 3; then `0x8080` is set when the target is within stat `+0x48` of the NPC. Counter does not advance without targets.
+- Execution (`SinowberillHead_ExecuteAttack_007b2ae8`, `.c:797151`): action 0 casts tech 0xf (or uses an item when B's flag `0x20` is set), 2 / 3 cast 0x10 / 0x11. The sub-state 8 (`+0x7c`) runs it from `SinowberillHead_AIUpdateState_007b2764` (`.c:796961`).
+- Stat row `0x00a02ea0 + template * 0x28` (10 floats), rows 0..5 read: acquire (k=2) 100 / 100 / 100 / 120 / 100 / 100; far (k=5) 30 / 35 / 40 / 40 / 40 / 30; attack (k=6) 30 / 25 / 30 / 30 / 30 / 30. The first two floats of each row are tiny denormals (integer fields, ASSUMED unused).
+
+**Ported** (`client/src/quest/npcai.ts`):
+- `NPC_ATTACK_ROWS`, `npcAttackRow(template)`: the stat rows above.
+- `pickAttackTarget(npc, range, enemies)`: the nearest targetable box inside range, at most 9 candidates, strict `<`.
+- `NpcAttackGate`: the far-branch retarget cadence (every 3rd far tick with a target; attack when the target is inside the attack radius).
+
+**Not ported (the ROADMAP line stays open):**
+- `ExecuteAttack` (the tech 0xf / 0x10 / 0x11 cast, or the item use with flag 0x20) and the damage it does to enemies: the port's tech and hit path is for the local caster, and no remote-caster hit path was traced.
+- The enemy hitbox source: `town.ts` has no access to the enemies' flagged boxes, so `pickAttackTarget` is not called from the game loop.
+- The head's movement and state machine (`SinowberillHead_AIUpdateMovement_007b1298`, `AIUpdateState_007b267c`, the move sends `007b298c` / `007b29f0`, `CheckPathAndTarget_007b086c`, `UpdateState_007b00bc`), the position sync to other clients, and the command 3 action state (`Player_ProcessActionPacket_00690534` on the new player, not traced).
+
+**ASSUMED:** the vtable slot [1] is the per-frame update; the retarget runs once per AI tick; the stat row index is the template; the first two floats of each row are unused.
+
+**Checks:** `node tests/npcai.test.ts` (new cases: stat rows, nearest-box pick and strict range, the retarget cadence and the no-target case); `questflow`, `quests`, `npcs`, `questmisc` pass with Node 24. `cd client && tsc --noEmit -p .` clean. Not run in Chrome.

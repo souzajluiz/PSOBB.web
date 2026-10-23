@@ -3,7 +3,17 @@
 // quest's npc_play reaching the host through the VM.
 //
 // Run: node tests/npcai.test.ts
-import { FOLLOW_DISTANCE, NO_LEADER, NpcAi, NPC_FLAG_CREATED, NPC_FLAG_FOLLOWER, followPoint } from '../client/src/quest/npcai.ts';
+import {
+  FOLLOW_DISTANCE,
+  NO_LEADER,
+  NpcAi,
+  NpcAttackGate,
+  NPC_FLAG_CREATED,
+  NPC_FLAG_FOLLOWER,
+  followPoint,
+  npcAttackRow,
+  pickAttackTarget,
+} from '../client/src/quest/npcai.ts';
 import { questOpcodeByName } from '../client/src/formats/questopcodes.ts';
 import { QuestVM } from '../client/src/quest/vm.ts';
 import { readFileSync } from 'node:fs';
@@ -76,6 +86,37 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(/case 'npc_play': \{\s*this\.host\.npcPlay\?\.\(this\.int\(a, 0\)\);/.test(vmSrc), 'the VM sends npc_play to host.npcPlay');
   check(!/'npc_stop', 'npc_play'/.test(vmSrc), 'npc_play is no longer a no-op');
   check(typeof QuestVM === 'function', 'QuestVM loads');
+}
+
+// --- the attack AI (exe: SinowberillChallengePlayer_Update_007aefd4, EnemyAI_AcquireClosestTargetInRange_007af2a0, SinowberillHead_TryAttack_007b0754)
+{
+  const r0 = npcAttackRow(0);
+  check(!!r0 && r0.acquireRange === 100 && r0.farRadius === 30 && r0.attackRadius === 30, 'stat row 0: acquire 100, far 30, attack 30 (exe 0x00a02ea0)');
+  check(npcAttackRow(3)?.acquireRange === 120, 'stat row 3 has acquire range 120');
+  check(npcAttackRow(6) === null, 'rows the exe read are the only ones given (6 and up are null)');
+
+  const npc = { x: 0, z: 0 };
+  const box = (x: number, z: number, targetable = true) => ({ x, z, targetable });
+  const pick = pickAttackTarget(npc, 100, [
+    { slot: 7, hitboxes: [box(40, 0)] },
+    { slot: 8, hitboxes: [box(10, 0, false)] },
+    { slot: 9, hitboxes: [box(0, 20), box(150, 0)] },
+  ]);
+  check(pick === 9, 'the nearest targetable box inside the range wins; non-targetable and out-of-range boxes are skipped');
+  check(pickAttackTarget(npc, 100, [{ slot: 1, hitboxes: [box(100, 0)] }]) === null, 'a box at exactly the range is out (strict <)');
+  check(pickAttackTarget(npc, 100, []) === null, 'no enemies, no target');
+
+  const row = npcAttackRow(0)!;
+  const g1 = new NpcAttackGate();
+  const seq1 = [g1.tick(row, true, 10), g1.tick(row, true, 10), g1.tick(row, true, 10), g1.tick(row, true, 10)];
+  check(seq1.join() === 'false,false,true,false', `retarget every 3rd far tick, attack when the target is inside attackRadius (got ${seq1.join()})`);
+  const g2 = new NpcAttackGate();
+  check([1, 2, 3].every(() => g2.tick(row, true, 31 * 31)) === false, 'a target outside attackRadius never sets the attack flag');
+  const g3 = new NpcAttackGate();
+  check(g3.tick(row, false, 1) === false && g3.tick(row, false, 1) === false && g3.tick(row, false, 1) === false, 'near the leader (not far) the NPC does not attack');
+  const g4 = new NpcAttackGate();
+  const seq4 = [g4.tick(row, true, null), g4.tick(row, true, null), g4.tick(row, true, 1), g4.tick(row, true, 1), g4.tick(row, true, 1)];
+  check(seq4.join() === 'false,false,false,false,true', `no target: the counter does not advance (got ${seq4.join()})`);
 }
 
 if (failures) {

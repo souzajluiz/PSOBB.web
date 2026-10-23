@@ -129,3 +129,130 @@ export function followPoint(
   if (dist <= FOLLOW_DISTANCE || dist < 1e-6) return { x: follower.x, z: follower.z };
   return { x: leader.x + (dx / dist) * FOLLOW_DISTANCE, z: leader.z + (dz / dist) * FOLLOW_DISTANCE };
 }
+
+// --- the attack AI (the AI object's update, traced 2026-10-23) ---------------------
+//
+// The AI object built by SinowberillChallengeBoss_Constructor_007aea10 (.c:794483,
+// the owner's branch of command 0 and of command 3's owner path, .c:798404 /
+// .c:798753) has the vtable g_SinowberillChallengeBossVtable at 0x00b46578
+// (constructor writes it at .c:794503). Vtable slot [1] is
+// SinowberillChallengePlayer_Update_007aefd4 (.c:794690, read from the table). The
+// dump's Sinowberill / Head / Challenge names are community guesses; the bodies are
+// what is used here. Two records hang off the object: +0x74 = A, the owner's own
+// player (slot = the ctor's param_1 = g_CurrentPlayerSlotIndex), +0x78 = B, the NPC
+// (slot = param2 of 6x69). The stat row is the 6x69 template (+0x2c, param3).
+//
+// Update gate (.c:794690-794749): A and B both resolve to live, not step-constructed
+// players (ResolvePlayerReference, .c:794766), B's +0xdf0 is 0, and B's leader
+// (+0x750) is not 0xffff, i.e. the NPC only attacks while it follows. Then the
+// movement / state / AI chain runs (AIUpdate_007b1134 -> AIUpdateState_007b267c ->
+// ExecuteAttack via state 8, .c:796961..797050).
+//
+// Target pick (EnemyAI_AcquireClosestTargetInRange_007af2a0, .c:794836): every
+// entity from g_PlayerEntityCount to g_PlayerEntityCount + g_NumEntities whose state
+// flags are non-zero and whose +0x30 has 0x20000000 (enemies); per collision box with
+// flag 0x8000 (+0x18), the xz distance squared from the origin (the NPC's position,
+// +0x38 of B's player) must be below range^2; at most 9 candidates, sorted ascending
+// by distance. The head uses the nearest one (.c:795069, AcquireTarget_007afc2c with
+// range = stat +0x38).
+//
+// Attack decision (SinowberillHead_TryAttack_007b0754, .c:795725): the attack flag
+// (0x80) is set only on the far branch (|A - B|^2 >= stat +0x44 ^2, i.e. the NPC is
+// at least that far from its leader): every 4th call (counter +0x66 0..3) it takes
+// the current target and sets 0x8080 when the target is within stat +0x48 of the NPC.
+// Attack execution is ExecuteAttack_007b2ae8 (.c:797151): action 0 casts tech 0xf
+// (or uses an item when B's flag 0x20 is set), 2 / 3 cast 0x10 / 0x11, and B's
+// stats are the stat row's.
+//
+// Stat row 0x00a02ea0 + template * 0x28 (10 floats; exe read with tools/exedata.py,
+// rows 0..5). Float index k is at +4k: k=2 acquire range (+0x38), k=5 far radius
+// (+0x44), k=6 attack radius (+0x48). Rows 6+ are not read.
+//   row: acquire / far / attack
+//   0: 100 / 30 / 30    1: 100 / 35 / 25    2: 100 / 40 / 30
+//   3: 120 / 40 / 30    4: 100 / 40 / 30    5: 100 / 30 / 30
+// ASSUMED: the first two floats of each row are integer fields (they read as tiny
+// denormals) and are not used here.
+
+export interface NpcAttackRow {
+  acquireRange: number;
+  farRadius: number;
+  attackRadius: number;
+}
+
+// The stat rows read from the exe (see the comment above).
+export const NPC_ATTACK_ROWS: readonly NpcAttackRow[] = [
+  { acquireRange: 100, farRadius: 30, attackRadius: 30 },
+  { acquireRange: 100, farRadius: 35, attackRadius: 25 },
+  { acquireRange: 100, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 120, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 100, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 100, farRadius: 30, attackRadius: 30 },
+];
+
+// The 6x69 template index is the stat row (+0x2c = param3). Null for rows not read.
+export function npcAttackRow(template: number): NpcAttackRow | null {
+  return NPC_ATTACK_ROWS[template] ?? null;
+}
+
+// A collision box of an enemy, reduced to what the target pick reads: its xz centre
+// and whether its flag word has 0x8000 (+0x18 of the 0x2c-byte box).
+export interface EnemyHitbox {
+  x: number;
+  z: number;
+  targetable: boolean;
+}
+
+export interface EnemyCandidate {
+  slot: number;
+  hitboxes: readonly EnemyHitbox[];
+}
+
+export const MAX_ATTACK_CANDIDATES = 9; // EnemyAI_AcquireClosestTargetInRange: the list stops at 9 (.c:794900)
+
+// The nearest enemy with a targetable box inside `range` of the NPC, or null
+// (EnemyAI_AcquireClosestTargetInRange: candidates sorted by distance, [0] is used).
+export function pickAttackTarget(
+  npc: { x: number; z: number },
+  range: number,
+  enemies: readonly EnemyCandidate[],
+): number | null {
+  let best: { slot: number; d: number } | null = null;
+  let count = 0;
+  for (const e of enemies) {
+    for (const b of e.hitboxes) {
+      if (!b.targetable) continue;
+      const dx = b.x - npc.x;
+      const dz = b.z - npc.z;
+      const d = dx * dx + dz * dz;
+      if (d >= range * range) continue;
+      if (count >= MAX_ATTACK_CANDIDATES) break;
+      count++;
+      if (!best || d < best.d) best = { slot: e.slot, d };
+    }
+  }
+  return best ? best.slot : null;
+}
+
+// TryAttack's retarget cadence: the counter (+0x66) is bumped while it stays below 3
+// and the check runs on the call that finds it at 3 (sVar3 = counter + 1 < 3 stores,
+// else reset and check; .c:795737..795760). ASSUMED to run once per AI tick.
+export const ATTACK_RETARGET_THRESHOLD = 3;
+
+// One TryAttack tick. `farFromLeader` = |A - B|^2 >= farRadius^2 (the far branch);
+// `targetDistSq` = the locked target's distance from the NPC squared, or null when
+// the NPC has no target. Returns whether the attack flag is set this tick. The
+// counter is the state; pass the same object every tick.
+export class NpcAttackGate {
+  private counter = 0;
+
+  tick(row: NpcAttackRow, farFromLeader: boolean, targetDistSq: number | null): boolean {
+    if (!farFromLeader) return false;
+    if (targetDistSq === null) return false; // B has no targets: the counter is not advanced (.c:795737)
+    if (this.counter + 1 < ATTACK_RETARGET_THRESHOLD) {
+      this.counter++;
+      return false;
+    }
+    this.counter = 0;
+    return targetDistSq < row.attackRadius * row.attackRadius;
+  }
+}
