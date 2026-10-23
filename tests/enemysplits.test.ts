@@ -4,7 +4,7 @@
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
 import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
-import type { AiTarget } from '../client/src/combat/enemyai.ts';
+import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
 let failures = 0;
@@ -398,6 +398,90 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   near5(f.view.sx + f.view.sy + f.view.sz, 3, 'flinch: scale 1');
   eq(f.view.morph, 5, 'flinch: morph 5');
   near5(f.view.alpha, 0, 'flinch: the alpha is kept');
+}
+
+// --- Pofuilly Slime's crawl frame (0x005969cc) ----------------------------------------
+{
+  // A risen slime with a player 100 ahead: the entry (0x00597c3c) aims at the player
+  // (the random 15 push at angle ~0 leaves the direction along +z).
+  const toCrawl = (opts: { ground?: (x: number, z: number, fromY: number) => number | null; wall?: () => boolean }) => {
+    const s = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5, ...opts });
+    const near = [player(0, 100)];
+    let n = 0;
+    while (s.state === 'puddle' && n++ < 100) s.tick(near);
+    for (let i = 0; i < SLIME.riseFrames; i++) s.tick(near);
+    eq(s.state, 'crawl', 'crawl: entered after the rise');
+    return s;
+  };
+  const near = [player(0, 100)];
+
+  // Flat open ground: the first trial commits, so the body moves along the direction.
+  const flat = toCrawl({});
+  flat.tick(near);
+  check(flat.z > 0 && Math.abs(flat.x) < 1e-2, `crawl: flat ground moves it along +z (${flat.x}, ${flat.z})`);
+  eq(flat.lift, 0, 'crawl: flat ground keeps the lift at 0');
+
+  // No wall and no floor: no trial commits, so the body stays put (the frame does not move it).
+  const noFloor = toCrawl({ ground: () => null });
+  noFloor.tick(near);
+  eq([noFloor.x, noFloor.z], [0, 0], 'crawl: no floor under any trial: no move');
+  eq(noFloor.state, 'crawl', 'crawl: no floor does not end the crawl');
+
+  // A wall on every segment: nothing commits, the body stays and the crawl goes on.
+  const walled = toCrawl({ wall: () => true });
+  walled.tick(near);
+  eq([walled.x, walled.z], [0, 0], 'crawl: a wall on every trial: no move');
+  eq(walled.state, 'crawl', 'crawl: a blocked frame does not end the crawl (0x596bda)');
+
+  // The floor 4 below: the height moves half way (y = -2) and the lift is the gap to the floor, 2.
+  const low = toCrawl({ ground: () => -4 });
+  low.tick(near);
+  check(low.z > 0, 'crawl: a lower floor still moves it');
+  check(Math.abs(low.lift - 2) < 1e-9, `crawl: the height moves half way to the floor (lift ${low.lift})`);
+}
+
+// --- Pofuilly Slime's arm walk (0x00598070) and the arm's branch B (0x00598f1c) ----------
+{
+  type Walker = { armWalk(out: AiFrame, t: AiTarget): void; frame(): AiFrame };
+  const walker = (opts: { ground?: (x: number, z: number, fromY: number) => number | null; wall?: () => boolean }) =>
+    new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rng: () => 0.5, ...opts }) as unknown as Walker & SlimeAi;
+  const target = player(0, 30, 2);
+
+  // Flat open ground: the walk completes and the arm is made at the point (target + 2.5..7.5 away).
+  const ok = walker({});
+  const okOut = ok.frame();
+  ok.armWalk(okOut, target);
+  eq(ok.state, 'arm', 'arm walk: a clear walk makes the arm');
+  const shot = okOut.shots?.[0];
+  check(shot instanceof SlimeArm, 'arm walk: the arm is a SlimeArm');
+  if (shot instanceof SlimeArm) {
+    const d = Math.hypot(shot.x - target.x, shot.z - target.z);
+    check(d >= 2.5 - 1e-9 && d <= 7.5 + 1e-9, `arm walk: the arm point is 2.5..7.5 from the target (${d})`);
+  }
+
+  // A wall on the way: the first probe fails and the slime spits instead (state 9).
+  const walled = walker({ wall: () => true });
+  const walledOut = walled.frame();
+  walled.armWalk(walledOut, target);
+  eq(walled.state, 'spit', 'arm walk: a wall on the way: the slime spits (state 9)');
+  check(!walledOut.shots?.some((s) => s instanceof SlimeArm), 'arm walk: no arm when blocked');
+
+  // No floor under the walk: the same fallback.
+  const holed = walker({ ground: () => null });
+  holed.armWalk(holed.frame(), target);
+  eq(holed.state, 'spit', 'arm walk: no floor: spit');
+
+  // Branch B: the closest other enemy within 7.5 of the arm is hit every frame of the window.
+  const arm = new SlimeArm(0, 0, 0);
+  const mon = { clientId: 0x1000 | 3, x: 5, z: 0, charClass: -1, dead: false };
+  for (let i = 1; i <= 16; i++) arm.tick([], [mon]);
+  const hitsB = arm.tick([], [mon]); // frame 17
+  eq(hitsB.map((t) => t.clientId), [0x1003], 'arm: an enemy 5 away is hit (branch B) from frame 17');
+  eq(new SlimeArm(0, 0, 0).tick([], [{ ...mon, x: 9 }]).length, 0, 'arm: an enemy 9 away (over 7.5) is not hit');
+  const armFar = new SlimeArm(0, 0, 0);
+  for (let i = 1; i <= 16; i++) armFar.tick([], []);
+  eq(armFar.tick([], [{ ...mon, x: 5 }]).length, 1, 'arm: a frame-17 hit on an enemy');
+  eq(new SlimeArm(0, 0, 0).tick([], [mon]).length, 0, 'arm: nothing before frame 17');
 }
 
 if (failures) {

@@ -840,10 +840,22 @@ export const SLIME = {
   misses: 5,
   riseFrames: 30,
   sinkFrames: 90,
-  crawlBase: 50,
+  crawlBase: 50, // 0x00597c3c: the budget 50 + rand * 20
   crawlRand: 20,
-  crawlMax: 2.5,
-  crawlAccel: 0.25,
+  crawlMax: 2.5, // 0x009292e4 (0x40200000)
+  crawlAccel: 0.25, // 0x009292e8: the ramp is 0.5 * (sin + 0.5) * this, the stop is this
+  crawlTurn: 0x100, // 0x005969cc: the heading (+0x60) turns 0x100 a frame, no target
+  crawlPhase: 0xc00, // the ramp's phase (+0x3a4) steps only while the budget lasts
+  crawlSteps: 14, // the trial steps of a frame (esi = 1..14)
+  crawlSweep: 0x1000, // trial i turns the direction by +-(i << 12) (odd i: minus)
+  crawlSeek: 200, // 0x00597c3c: the target search of the entry (0x00a745dc)
+  crawlPush: 15, // 0x00a745e4: the entry's random push of the direction
+  crawlTurnRange: 1048575, // 0x009294d4: the entry's random angle, truncated, read mod 0x10000
+  crawlMinDir: 0.01, // 0x009294d0: the direction's length must be above this
+  crawlProbe: 15, // the probe starts 5 above the step's y (0x00929534) and FUN_007b4c58 adds 10 (0x0097e3e4)
+  crawlPull: 0.5, // 0x009292e0: the step's y moves this far to the ground
+  crawlLeave: 50, // 0x00a745e0 (0x42480000): the end-of-frame target search
+  crawlLeaveMin: 15, // 0x00a745e4 (0x41700000): the emerge needs a distance above this
   searchTurn: 0x400,
   searchSpin: 0x600,
   searchRadius: (200 - 50) * 0.75 + 50,
@@ -857,8 +869,12 @@ export const SLIME = {
   spitFrames: 0x5a,
   spitAt: 0x13, // the glob 19 frames into the state (+0x39c)
   armFrames: 0x5a,
-  armBase: 2.5,
+  armBase: 2.5, // 0x00598070: the arm point's distance 2.5 + rand * 5 (0x00a74574 / 0x00a74578)
   armRand: 5,
+  armAngle: 65536, // 0x009294a4: the arm point's angle, a full turn
+  armStep: 10, // 0x00a7457c: the walk's step
+  armMinDir: 0.01, // 0x0092949c: shorter walks use +x
+  armProbeY: 5, // 0x009294a8: the wall test's end is 5 above the body
   morphFrames: 20, // ASSUMED: the emerge / burrow morph lengths
   throwHeight: 10,
   deathFrames: 5, // the death entry's counter (0x00598648 sets +0x398 = 5)
@@ -911,11 +927,13 @@ export class SlimeSpit extends EnemyShot {
 // player's (0x00a745a8; the player's height +0xe3c is ASSUMED 0 here) and the
 // XZ distance is within 7.5 (0x00a745ac). The hit then sets the lock to that
 // player, so a player is hit once per change of the lock id.
-// ASSUMED / not ported: the update's second branch (AcquireClosestTargetInRange
-// 0x0077170c, any entity but the owner within 7.5, the vtable +0x60 / +0x68
-// hit every frame of the window): the port's cooldown for it is unknown.
-// The arm's tech hit (entity_hit_by_tech with the slime's atp, 0x00598f1c) is
-// the plain melee shot here (ASSUMED).
+// Branch B (the closest other entity, 0x0077170c, found within 25 and hit within
+// 7.5 of the arm, the vtable +0x60 / +0x68 every frame of the window) is ported:
+// the search keeps the monsters (ids 0x1000..0x3fff) and the arm itself is left out
+// (flag 0x2000000 while it searches); the hit goes to the enemy path (render/combat.ts
+// enemyHitsEnemy). ASSUMED: the search's type-1 test is every live enemy, the 7.5
+// is measured on the XZ plane, and no cooldown is kept (the exe hits each frame).
+// The arm's hit uses the slime's melee AttackData (ASSUMED), not entity_hit_by_tech.
 export const ARM = { from: 17, to: 30, range: 25, radius: 7.5, height: 5, life: 45 } as const;
 
 export class SlimeArm extends EnemyShot {
@@ -928,18 +946,27 @@ export class SlimeArm extends EnemyShot {
     super(x, y, z);
   }
 
-  tick(targets: readonly AiTarget[]): AiTarget[] {
+  // Branch A (0x00598f1c, the nearest player within 25, the lock) and branch B
+  // (after it, every frame of the window): the closest other enemy within 25 (the
+  // search 0x0077170c; the arm itself is excluded, the owner is not in `monsters`),
+  // hit when it is within 7.5 on the XZ plane. Both hits go out together.
+  tick(targets: readonly AiTarget[], monsters: readonly AiTarget[] = []): AiTarget[] {
     if (this.done) return [];
     this.frames++;
     if (this.frames >= ARM.life) this.done = true;
     if (this.frames < ARM.from || this.frames > ARM.to) return [];
+    const hits: AiTarget[] = [];
     const near = nearest(targets, this.x, this.z, ARM.range);
-    if (!near || near.clientId === this.lock) return [];
-    const dy = this.y - (near.y ?? 0);
-    if (dy < -ARM.height || dy > ARM.height) return [];
-    if ((near.x - this.x) ** 2 + (near.z - this.z) ** 2 > ARM.radius * ARM.radius) return [];
-    this.lock = near.clientId;
-    return [near];
+    if (near && near.clientId !== this.lock) {
+      const dy = this.y - (near.y ?? 0);
+      if (dy >= -ARM.height && dy <= ARM.height && (near.x - this.x) ** 2 + (near.z - this.z) ** 2 <= ARM.radius * ARM.radius) {
+        this.lock = near.clientId;
+        hits.push(near);
+      }
+    }
+    const mon = nearest(monsters, this.x, this.z, ARM.range);
+    if (mon && (mon.x - this.x) ** 2 + (mon.z - this.z) ** 2 <= ARM.radius * ARM.radius) hits.push(mon);
+    return hits;
   }
 }
 
@@ -1016,6 +1043,14 @@ export const PUDDLE_MOTION = { normal: 4, rare: 5 } as const;
 const PUDDLE_SPEED = 0.5;
 const UNTARGETABLE: ReadonlySet<SlimeState> = new Set(['puddle', 'rise', 'sink', 'crawl', 'flinch', 'thrown', 'dead']);
 
+// The map queries the crawl needs (render/combat.ts wires them to the map).
+// Heights are relative to the floor under the body at the frame's start (0 there),
+// so the body's `lift` is its height over the floor it stands on. ground returns
+// the floor under (x, z) probed from fromY, or null for none; wall is true when
+// the segment from -> to hits a wall (FUN_00780d3c).
+export type SlimeGround = (x: number, z: number, fromY: number) => number | null;
+export type SlimeWall = (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
+
 export class SlimeAi extends BrainBase {
   state: SlimeState = 'puddle';
   confused = false;
@@ -1032,8 +1067,10 @@ export class SlimeAi extends BrainBase {
   private budget = 0;
   private speed = 0;
   private phase = 0;
-  private goalX = 0;
-  private goalZ = 0;
+  // The crawl's direction (0x3c0 / 0x3c4 / 0x3c8, unit length, kept between frames).
+  private dirX = 0;
+  private dirY = 0;
+  private dirZ = 0;
   private locked = false;
   private fired = false;
   private vx = 0;
@@ -1047,12 +1084,17 @@ export class SlimeAi extends BrainBase {
   private deathLeft = 0;
 
   private readonly puddleMotion: number;
+  private readonly ground: SlimeGround;
+  private readonly wall: SlimeWall;
 
-  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; rare?: boolean; rng?: () => number }) {
+  // ground / wall default to flat open ground (ASSUMED for a test without a map).
+  constructor(opts: { x: number; z: number; angle: number; movement: EnemyMovementData | null; thrown?: boolean; rare?: boolean; rng?: () => number; ground?: SlimeGround; wall?: SlimeWall }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
     this.spawnX = opts.x;
     this.spawnZ = opts.z;
     this.power = Math.max(0, opts.movement?.fparam1 ?? 0);
+    this.ground = opts.ground ?? (() => 0);
+    this.wall = opts.wall ?? (() => false);
     this.puddleMotion = opts.rare ? PUDDLE_MOTION.rare : PUDDLE_MOTION.normal;
     this.current = SLIME_ANIM.wait;
     if (opts.thrown) this.throwFrom(opts.x, opts.z);
@@ -1141,25 +1183,30 @@ export class SlimeAi extends BrainBase {
         this.timer = SLIME.sinkFrames;
         break;
       case 'crawl': {
-        const t = nearest(targets, this.x, this.z, SLIME.near);
+        // 0x00597c3c: the nearest target within 200 (none -> sink). The direction
+        // is the offset to it plus 15 in a random XZ direction (the angle is
+        // int(rand * 0x9294d4) read mod 0x10000), normalised; a length of 0.01 or
+        // less -> sink. ASSUMED: the offset's height is 0 (the port has no
+        // absolute body height). The budget is 50 + rand * 20.
+        const t = nearest(targets, this.x, this.z, SLIME.crawlSeek);
         if (!t) {
           this.enter(out, 'sink');
           return;
         }
-        // ASSUMED: the goal is the player's position off by up to 15.
-        const a = this.rng() * Math.PI * 2;
-        const r = this.rng() * SLIME.min;
-        this.goalX = t.x + Math.sin(a) * r;
-        this.goalZ = t.z + Math.cos(a) * r;
-        if (Math.hypot(this.goalX - this.x, this.goalZ - this.z) <= SLIME.min) {
+        const th = (Math.trunc(this.rng() * SLIME.crawlTurnRange) % 0x10000) * BAMS;
+        const dx = t.x - this.x + SLIME.crawlPush * Math.sin(th);
+        const dz = t.z - this.z + SLIME.crawlPush * Math.cos(th);
+        const len = Math.hypot(dx, dz);
+        if (len <= SLIME.crawlMinDir) {
           this.enter(out, 'sink');
           return;
         }
+        this.dirX = dx / len;
+        this.dirY = 0;
+        this.dirZ = dz / len;
         this.budget = this.rng() * SLIME.crawlRand + SLIME.crawlBase;
         this.speed = 0;
-        this.angle = Math.atan2(this.goalX - this.x, this.goalZ - this.z);
-        // 0x00597c3c (after its no-target and near exits): alpha 1, morph 8.
-        // The crawl is drawn (the body is not hidden while it crawls).
+        // 0x00597c3c: alpha 1, morph 8. The crawl is drawn (the body is not hidden).
         this.xf.alpha = 1;
         this.morph = SLIME_MORPH.crawl;
         break;
@@ -1225,6 +1272,94 @@ export class SlimeAi extends BrainBase {
     this.count++;
   }
 
+  // 0x00598070 (state 10's entry; the whole walk runs in one frame). The arm point
+  // is the target's XZ plus (sin, cos) of a random angle (65536 a turn) at 2.5 + rand
+  // * 5 (the distance is drawn first). The body walks to it in steps of 10: n =
+  // round(length / 10) probes, from the body's spot. A probe needs a floor under it
+  // (probed from 15 above, the crawl's probe) and no wall from the body to it (the
+  // probe 5 above the body). A failed probe -> spit (9). Otherwise the arm is made at
+  // the point (0x00598368). A zero walk -> burrow (5). ASSUMED: the walk is in XZ (the
+  // heights of the arm point and the body are not compared), and each probe is one
+  // step further along the direction (FUN_0082ebac).
+  private armWalk(out: AiFrame, t: AiTarget): void {
+    const r = this.rng() * SLIME.armRand + SLIME.armBase;
+    const th = Math.round(SLIME.armAngle * this.rng()) * BAMS;
+    const px = t.x + Math.sin(th) * r;
+    const pz = t.z + Math.cos(th) * r;
+    const vx = px - this.x;
+    const vz = pz - this.z;
+    const len = Math.hypot(vx, vz);
+    if (len === 0) {
+      this.enter(out, 'burrow');
+      return;
+    }
+    const n = Math.round(len / SLIME.armStep);
+    // A direction shorter than 0.01 walks along +x (the exe's default vector).
+    const ux = len > SLIME.armMinDir ? vx / len : 1;
+    const uz = len > SLIME.armMinDir ? vz / len : 0;
+    let cx = this.x;
+    let cz = this.z;
+    for (let i = 0; i < n; i++) {
+      const g = this.ground(cx, cz, this.lift + SLIME.crawlProbe);
+      if (g === null || this.wall({ x: this.x, y: this.lift, z: this.z }, { x: cx, y: this.lift + SLIME.armProbeY, z: cz })) {
+        this.enter(out, 'spit');
+        return;
+      }
+      cx += ux * SLIME.armStep;
+      cz += uz * SLIME.armStep;
+    }
+    this.enter(out, 'arm');
+    out.shots = [new SlimeArm(px, pz, t.y ?? 0)];
+  }
+
+  // 0x005969cc, one crawl frame. The heading turns 0x100 a frame. The speed ramps
+  // while the budget lasts (the phase +0x3a4 steps only then) and stops otherwise;
+  // the budget runs down by it. Then up to 14 trial steps from the frame's start:
+  // trial i moves by dir * speed (the height by dirY * speed), its floor is probed
+  // from 15 above it (the probe) and the height moves half way down to it (0x009292e0).
+  // A trial with a floor and no wall on the way from the start commits the frame
+  // (lift = height - floor) and ends the search. Otherwise the direction turns by
+  // +-(i << 12) (odd i: minus) and trial i + 1 runs. A frame with no committed trial
+  // leaves the body where it was; the direction keeps its last turn either way.
+  private crawlFrame(): void {
+    this.angle = wrap(this.angle + SLIME.crawlTurn * BAMS);
+    if (this.budget > 0) {
+      this.phase += SLIME.crawlPhase * BAMS;
+      this.speed = Math.min(SLIME.crawlMax, this.speed + 0.5 * (Math.sin(this.phase) + 0.5) * SLIME.crawlAccel);
+    } else this.speed = Math.max(0, this.speed - SLIME.crawlAccel);
+    this.budget -= this.speed;
+    const x0 = this.x;
+    const z0 = this.z;
+    const y0 = this.lift;
+    let dx = this.dirX;
+    let dz = this.dirZ;
+    for (let i = 1; i <= SLIME.crawlSteps; i++) {
+      const x = x0 + dx * this.speed;
+      const z = z0 + dz * this.speed;
+      const yt = y0 + this.dirY * this.speed;
+      const g = this.ground(x, z, yt + SLIME.crawlProbe);
+      if (g !== null) {
+        const y = yt + SLIME.crawlPull * (g - yt);
+        if (!this.wall({ x: x0, y: y0, z: z0 }, { x, y, z })) {
+          this.x = x;
+          this.z = z;
+          this.lift = y - g;
+          this.dirX = dx;
+          this.dirZ = dz;
+          return;
+        }
+      }
+      const a = (i & 1 ? -1 : 1) * (i << 12) * BAMS;
+      const s = Math.sin(a);
+      const c = Math.cos(a);
+      const nx = dx * c - s * dz;
+      dz = dz * c + s * nx;
+      dx = nx;
+    }
+    this.dirX = dx;
+    this.dirZ = dz;
+  }
+
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
     const out = this.frame();
     if (this.state === 'dead') return this.finish(out);
@@ -1255,16 +1390,11 @@ export class SlimeAi extends BrainBase {
         if (--this.timer < 0) this.enter(out, 'puddle');
         break;
       case 'crawl':
-        this.phase += 0xc00 * BAMS;
-        if (this.budget > 0) this.speed = Math.min(SLIME.crawlMax, this.speed + 0.5 * (Math.sin(this.phase) + 0.5) * SLIME.crawlAccel);
-        else this.speed = Math.max(0, this.speed - SLIME.crawlAccel);
-        this.budget -= this.speed;
-        this.angle = turnToward(this.angle, Math.atan2(this.goalX - this.x, this.goalZ - this.z), 0x100 * BAMS);
-        this.x += Math.sin(this.angle) * this.speed;
-        this.z += Math.cos(this.angle) * this.speed;
+        this.crawlFrame();
         if (this.budget <= 0 && this.speed === 0) {
-          const n = nearest(targets, this.x, this.z, SLIME.close);
-          if (n && Math.hypot(n.x - this.x, n.z - this.z) > SLIME.min) this.enter(out, 'emerge');
+          // 0x005969cc's end: a target within 50 and farther than 15 -> emerge (4), else crawl again (3).
+          const n = nearest(targets, this.x, this.z, SLIME.crawlLeave);
+          if (n && Math.hypot(n.x - this.x, n.z - this.z) > SLIME.crawlLeaveMin) this.enter(out, 'emerge');
           else this.enter(out, 'crawl', targets);
         }
         break;
@@ -1311,18 +1441,8 @@ export class SlimeAi extends BrainBase {
           this.z += Math.cos(this.angle) * SLIME.approachSpeed;
         }
         if (--this.timer <= 0) {
-          const close = t && this.dist(t) <= SLIME.close;
-          const next: SlimeState = close && this.rng() >= SLIME.armChance ? 'arm' : 'spit';
-          this.enter(out, next, targets);
-          if (next === 'arm') {
-            if (!t) this.enter(out, 'burrow');
-            else {
-              const a = this.rng() * Math.PI * 2;
-              const r = this.rng() * SLIME.armRand + SLIME.armBase;
-              // 0x00598070: the arm point keeps the target's height (+0x3dc).
-              out.shots = [new SlimeArm(t.x + Math.sin(a) * r, t.z + Math.cos(a) * r, t.y ?? 0)];
-            }
-          }
+          if (t && this.dist(t) <= SLIME.close && this.rng() >= SLIME.armChance) this.armWalk(out, t);
+          else this.enter(out, 'spit', targets);
         }
         break;
       case 'spit':

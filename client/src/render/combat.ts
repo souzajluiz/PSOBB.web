@@ -46,7 +46,7 @@ import {
   armPackHowl,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
-import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
+import { PanArmsAi, PanHalfAi, SlimeAi, SlimeArm, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { DUBWITCH, DubwitchAi } from '../combat/dubwitch.ts';
 import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SORCERER, SorcererAi, SorcererBitAi, type BulclawEvent, type HealAlly } from '../combat/enemyfsmruins.ts';
@@ -522,9 +522,9 @@ export interface CombatOptions {
   floorFilesFor: (floor: number) => Promise<{ area: number; files: { enemies: string } | null }>;
   // Ground height under (x, z), so a walking enemy follows the floor.
   ground?: (x: number, z: number, fromY: number) => number | null;
-  // The map's wall ray (cast_ray_at_map_collision_geometry, mask 0x8100): true when a
-  // wall stands between the two points (combat/gunbullet.ts).
-  wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
+  // The map's wall ray (cast_ray_at_map_collision_geometry, mask 0x8100 by default): true when a
+  // wall stands between the two points (combat/gunbullet.ts; the slime's crawl passes 0x8000).
+  wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask?: number) => boolean;
   // The owner's body node's world point for a gun's bullet start (combat/weaponorigin.ts);
   // default: the local player's skeleton in the lobby view. False / absent: WEAPON_HEIGHT above the feet.
   weaponOrigin?: WeaponOriginProvider;
@@ -4065,7 +4065,8 @@ export class CombatView {
 
   private tickShots(targets: AiTarget[]): void {
     for (const s of this.shots) {
-      const hits = s.shot.tick(targets);
+      // The Pofuilly Slime's arm also hits the other enemies (its branch B): they come in as 0x1000 | index.
+      const hits = s.shot.tick(targets, s.shot instanceof SlimeArm ? this.enemyTargets(s.owner) : undefined);
       // The Dragon's fireball particles (its table, the fireball update 0x00426790): the flight, the impact.
       if (s.shot instanceof DragonFireball) {
         for (const id of s.shot.drainParticles()) void this.fx?.spawn({ id }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
@@ -4075,6 +4076,11 @@ export class CombatView {
       s.mesh?.position.set(s.shot.x, s.baseY + s.shot.y, s.shot.z);
       if (s.model && !s.shot.done) this.poseShotModel(s.model, s.shot, s.baseY);
       for (const hit of hits) {
+        if (hit.clientId >= 0x1000) {
+          // The arm's hit on an enemy: the confused-enemy path (ASSUMED: every client resolves it).
+          this.enemyHitsEnemy(s.owner, hit.clientId & 0xfff, 0, s.shot.effect.kind === 'melee' ? s.shot.effect.mult : 1);
+          continue;
+        }
         if (hit.clientId !== this.game.selfId) continue; // each client resolves its own player
         const fx = s.shot.effect;
         const what = `E-${s.owner.index.toString(16)} (${s.owner.slot.type})`;
@@ -5290,8 +5296,41 @@ export class CombatView {
     if (k < 0) return null;
     // Rare = param6 & 1 (ASSUMED, as the Rappy's): the puddle's morph motion.
     const rare = (Math.trunc((control.instance.placed.entity as EnemySet).params[5] ?? 0) & 1) !== 0;
-    const ai = new SlimeAi({ x, z, angle, movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null, thrown, rare, rng: () => this.rng() });
+    // The crawl's map queries (SlimeAi.ground / wall) take heights relative to the floor
+    // under the body: the floor is the root's height less its lift (as the draw places it).
+    let self: EnemyRuntime | null = null;
+    const floorY = () => (self ? self.instance.root.position.y - self.lift : 0);
+    const ground = this.opts.ground;
+    const wall = this.opts.wallBlocks;
+    const ai = new SlimeAi({
+      x,
+      z,
+      angle,
+      movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null,
+      thrown,
+      rare,
+      rng: () => this.rng(),
+      // Without a map the crawl keeps the brain's flat-ground default.
+      ...(ground
+        ? {
+            ground: (x: number, z: number, fromY: number) => {
+              const floor = floorY();
+              const g = ground(x, z, floor + fromY);
+              return g === null ? null : g - floor;
+            },
+          }
+        : {}),
+      ...(wall
+        ? {
+            wall: (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => {
+              const floor = floorY();
+              return wall({ x: a.x, y: a.y + floor, z: a.z }, { x: b.x, y: b.y + floor, z: b.z }, 0x8000);
+            },
+          }
+        : {}),
+    });
     const r = await this.spawnSplitChild(control, control.index + 1 + k, 'POFUILLY_SLIME', 0, ai.motion ?? { index: 10, speed: 0.5, loop: true }, ai, { x, z });
+    self = r;
     if (!r) {
       c.died(k);
       return null;

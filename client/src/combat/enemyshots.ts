@@ -84,8 +84,10 @@ export abstract class EnemyShot {
   // tick that filled it.
   spawned?: EnemyShot[];
 
-  // One game tick; returns the players the shot hit this tick.
-  abstract tick(targets: readonly AiTarget[]): AiTarget[];
+  // One game tick; returns the players the shot hit this tick. `monsters` are the
+  // other live enemies (clientId 0x1000 | index), for the shots that hit them (the
+  // Pofuilly Slime's arm, combat/enemysplits.ts).
+  abstract tick(targets: readonly AiTarget[], monsters?: readonly AiTarget[]): AiTarget[];
 
   protected within(targets: readonly AiTarget[], radius: number): AiTarget[] {
     return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= radius + PLAYER_RADIUS);
