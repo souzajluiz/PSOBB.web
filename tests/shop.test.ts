@@ -313,6 +313,37 @@ function makeEnv(character: CharacterFile, calls: string[], shopItems: ItemData[
 
 eq(buyCheck(saber, 10, { meseta: 5, inventory: [] } as unknown as CharacterFile, { names, charClass: 0, level: 1, stats: { atp: 0, mst: 0, ata: 0 }, lobby: false }), 'meseta', 'buy check: meseta first');
 
+{
+  // Bank item lists (BankItemTakeMenuDialog 0x006d7b50, deposit 0x006daac4):
+  // the take list shows "n/200" (the list's max is set to 200, FUN_007400c0);
+  // the deposit list has no line (max 0) and leaves out the equipped items
+  // (FUN_006a520c's flag 0x80, ASSUMED to be "equipped").
+  const calls: string[] = [];
+  const equippedSaber = inv('000100000000000000000000 ffffffff 20030000', true);
+  const mate = inv('030000000003000000000000 01000100 00000000');
+  const ch = { charClass: 0, level: 5, meseta: 300, inventory: [equippedSaber, mate], stats: { atp: 100, mst: 0, ata: 100 } } as unknown as CharacterFile;
+  const base = makeEnv(ch, calls, []);
+  const bankItems = [
+    { data: mate.data, amount: 3 },
+    { data: itemFromHex('000100000000000000000000'), amount: 1 },
+  ];
+  const env = { ...base, items: { ...base.items, get bank() { return { meseta: 50, items: bankItems }; } } };
+  const take = new BankCounter(env);
+  take.start();
+  await press(take, 'ArrowDown', 'Enter', 'ArrowDown', 'Enter');
+  eq([take.state().capacity, take.state().list?.length], [200, 2], 'take list: n/200 over the two bank items');
+  take.close();
+  await tick(take);
+
+  const dep = new BankCounter(base);
+  dep.start();
+  await tick(dep);
+  await press(dep, 'Enter', 'ArrowDown', 'Enter');
+  eq([dep.state().capacity, dep.state().list?.length], [null, 1], 'deposit list: no line, the equipped saber left out');
+  dep.close();
+  await tick(dep);
+}
+
 if (failures) {
   console.log(`shop: ${failures} failure(s)`);
   process.exit(1);
