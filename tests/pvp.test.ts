@@ -1,0 +1,106 @@
+// Player versus player in Battle mode (combat/pvp.ts): the 6x70 stats a remote player's hit
+// check reads, the strike roll of a remote attacker against the local player, the knockback
+// rule, the 6x8F payload (quest/battle.ts build6x8F and the parse), and the 6x46 targets that
+// name the local player.
+//
+// Run: node tests/pvp.test.ts
+import { build6x8F } from '../client/src/quest/battle.ts';
+import { isPlayerEntity, parse6x8F, parseCombatStats, pvpKnockback, pvpStrike, remoteAttacker, type CombatStats } from '../client/src/combat/pvp.ts';
+import { parseAttackTargets } from '../client/src/net/game.ts';
+import { ATTACK_DAMAGE_MULT, type DefenderStats } from '../client/src/combat/formulas.ts';
+
+let failures = 0;
+const check = (ok: boolean, msg: string) => {
+  if (!ok) {
+    failures++;
+    console.log(`FAIL ${msg}`);
+  }
+};
+const eq = (a: unknown, b: unknown, msg: string) => check(JSON.stringify(a) === JSON.stringify(b), `${msg}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
+
+// --- the 6x70 PlayerStats (0x140, little endian) ---------------------------------
+{
+  const body = new Uint8Array(0x4c0);
+  body[0] = 0x70;
+  const dv = new DataView(body.buffer);
+  dv.setUint16(0x140, 120, true); // atp
+  dv.setUint16(0x142, 33, true); // mst
+  dv.setUint16(0x144, 44, true); // evp
+  dv.setUint16(0x146, 250, true); // hp
+  dv.setUint16(0x148, 55, true); // dfp
+  dv.setUint16(0x14a, 66, true); // ata
+  dv.setUint16(0x14c, 7, true); // lck
+  eq(parseCombatStats(body), { atp: 120, evp: 44, dfp: 55, ata: 66, lck: 7 }, 'PlayerStats of a 6x70');
+  eq(parseCombatStats(new Uint8Array(0x100)), null, 'a short 6x70 has no stats');
+  const other = body.slice();
+  other[0] = 0x71;
+  eq(parseCombatStats(other), null, 'a non-6x70 has no stats');
+}
+
+// --- the remote attacker's stats -----------------------------------------------
+{
+  const stats: CombatStats = { atp: 100, evp: 0, dfp: 0, ata: 120, lck: 10 };
+  eq(remoteAttacker(-1, stats), null, 'an unknown class has no attacker');
+  eq(remoteAttacker(0, null), null, 'no 6x70 yet: no attacker');
+  const a = remoteAttacker(0, stats);
+  check(a !== null && a.atp === 100 && a.lck === 10 && a.isPlayer, 'attacker takes the synced ATP / LCK');
+}
+
+// --- the strike roll ----------------------------------------------------------------
+const defender: DefenderStats = { hp: 300, maxHp: 300, evp: 0, dfp: 0 };
+const strong = remoteAttacker(0, { atp: 100, evp: 0, dfp: 0, ata: 1000, lck: 0 })!;
+const never = () => 0.999999; // above any hit chance below 1
+{
+  const hit = pvpStrike(strong, defender, 0, 0, () => 0);
+  check(hit.landed && hit.damage >= 1, `a sure strike lands for damage (${hit.damage})`);
+  check(Number.isInteger(hit.damage), 'the damage is whole HP');
+  // The class's base ATA is part of the attacker's ATA, so a miss needs EVP that drives the chance below 0.
+  const miss = pvpStrike(strong, { ...defender, evp: 100000 }, 0, 0, () => 0);
+  eq([miss.landed, miss.damage], [false, 0], 'a huge EVP makes the hit chance 0 (no hit)');
+  const dodge = pvpStrike(strong, { ...defender, evp: 9999 }, 0, 0, never);
+  eq([dodge.landed, dodge.damage], [false, 0], 'a high EVP dodges a roll near 1');
+  // A heavy strike does less damage than a normal one (ATTACK_DAMAGE_MULT 1.7 vs 0.9 is the
+  // multiplier; the normal strike is the reference).
+  const normal = pvpStrike(strong, defender, 0, 0, () => 0);
+  const heavy = pvpStrike(strong, defender, 1, 0, () => 0);
+  check(heavy.damage > normal.damage, `a heavy strike hurts more (${heavy.damage} > ${normal.damage})`);
+  check(ATTACK_DAMAGE_MULT[1] > ATTACK_DAMAGE_MULT[0], 'the heavy multiplier is the larger one');
+}
+
+// --- knockback ----------------------------------------------------------------------
+{
+  eq(pvpKnockback(0, 40), 0, 'a normal strike does not push');
+  eq(pvpKnockback(1, 40), 40, 'a heavy strike pushes by its damage');
+}
+
+// --- 6x8F payload and parse -----------------------------------------------------------
+{
+  // The sender's body: header {0x8f, 2, attacker}, then build6x8F(victim, amount).
+  const body = new Uint8Array(8);
+  body[0] = 0x8f;
+  body[1] = 2;
+  new DataView(body.buffer).setUint16(2, 3, true);
+  body.set(build6x8F(1, 412), 4);
+  eq(parse6x8F(body), { attacker: 3, target: 1, amount: 412 }, '6x8F parses attacker, victim and amount');
+  check(isPlayerEntity(1) && isPlayerEntity(3) && !isPlayerEntity(4) && !isPlayerEntity(0x1000), 'player entities are the client ids 0..3');
+  eq(parse6x8F(new Uint8Array(4)), null, 'a short 6x8F is refused');
+}
+
+// --- 6x46 names the local player ----------------------------------------------------------
+{
+  // [0x46, size, client id 2, unused, u32 count, {u16 entity, u16 hitbox}...]
+  const body = new Uint8Array(8 + 4 * 2);
+  body[0] = 0x46;
+  body[1] = 4;
+  const dv = new DataView(body.buffer);
+  dv.setUint16(2, 2, true);
+  dv.setUint32(4, 2, true);
+  dv.setUint16(8, 0, true);
+  dv.setUint16(10, 0, true);
+  dv.setUint16(12, 0x1005, true);
+  dv.setUint16(14, 0, true);
+  eq(parseAttackTargets(body), { clientId: 2, targets: [0, 0x1005] }, '6x46 targets of client 2');
+}
+
+console.log(failures ? `${failures} FAILED` : 'ALL PASS');
+process.exit(failures ? 1 : 0);

@@ -152,9 +152,11 @@ import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
+import { pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import {
   parseAttack,
+  parseAttackTargets,
   parseCastTechnique,
   parseCastTechniqueComplete,
   parseChangeLevel,
@@ -559,6 +561,15 @@ export class CombatView {
   // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
   // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
   placeTrap: ((type: number) => void) | null = null;
+  // Battle Mode player versus player (combat/pvp.ts): set by quest/battlerun.ts while the
+  // battle controller is in its battle phase. A remote player's strike that names the local
+  // player in its 6x46 targets hits it (onRemoteStrikeTargets).
+  battlePvp = false;
+  // The local player was hit by a remote player (clientId = the attacker, amount = the damage
+  // dealt): quest/battlerun.ts sends the 6x8F that credits the attacker.
+  onPvpHit: ((attackerId: number, damage: number) => void) | null = null;
+  // The last strike (6x43..6x45: combo step, attack type) of each remote player.
+  private remoteStrike = new Map<number, { step: number; attackType: number }>();
   // The Battle Mode traps in the field (render/battletrapview.ts), made on the first sync.
   private battleTraps: BattleTrapView | null = null;
   private disposed = false;
@@ -7289,9 +7300,11 @@ export class CombatView {
     if (sub >= 0x43 && sub <= 0x45) {
       const a = parseAttack(body);
       if (!a || a.clientId === this.game.selfId) return;
+      this.remoteStrike.set(a.clientId, { step: a.step, attackType: a.attackType });
       this.remoteAttack(a.clientId, a.step, a.angle);
       return;
     }
+    if (sub === 0x46) this.onRemoteStrikeTargets(clientId, body);
     if (sub === 0x0a) {
       const s = parseEnemyState(body);
       if (!s) return;
@@ -7595,6 +7608,34 @@ export class CombatView {
     };
     this.remoteHooks.set(clientId, hook);
     this.viewer.frameHooks.add(hook);
+  }
+
+  // Battle Mode: a remote player's strike at its hit frame (6x46) that names the local player
+  // is the hit on the local player (combat/pvp.ts; the victim's copy of the attacker's hit
+  // check, ASSUMED to run at the 6x46). The damage goes through PlayerDamage.hit with the
+  // attacker as the killer; the 6x4B / 6x4C of the flinch carries the new HP, and onPvpHit
+  // sends the 6x8F.
+  private onRemoteStrikeTargets(clientId: number, body: Uint8Array): void {
+    if (!this.battlePvp || this.damage.dead || clientId === this.game.selfId || !this.view) return;
+    const t = parseAttackTargets(body);
+    if (!t || !t.targets.includes(this.game.selfId)) return;
+    const me = this.game.self;
+    const from = this.view.playerPositions().get(clientId);
+    const remote = this.game.players.get(clientId);
+    const attacker = remoteAttacker(remote?.charClass ?? -1, remote?.combatStats ?? null);
+    if (!me || !from || !attacker) return;
+    const stats = this.selfStats();
+    // Deband / Zalure move the DFP (+0x2d2); a freeze lowers EVP (as enemyHitsPlayer).
+    const defender: DefenderStats = { hp: this.damage.hp, maxHp: this.damage.maxHp, evp: this.status.evp(stats.evp), dfp: this.selfBuffs.dfp(stats.dfp) };
+    const strike = this.remoteStrike.get(clientId) ?? { step: 0, attackType: 0 };
+    const type = (strike.attackType === 1 ? 1 : 0) as AttackType;
+    const r = pvpStrike(attacker, defender, type, strike.step, this.rng);
+    if (!r.landed) return;
+    // The direction from the attacker to the local player (the enemyHitsPlayer convention).
+    const angle = Math.atan2(me.position.x - from.x, me.position.z - from.z);
+    this.damage.hit(r.damage, angle, pvpKnockback(type, r.damage), clientId, r.critical);
+    this.onPvpHit?.(clientId, r.damage);
+    this.opts.log(`hit by ${remote?.name ?? `player ${clientId + 1}`} for ${r.damage}: ${this.damage.hp}/${this.damage.maxHp}`);
   }
 
   private remoteAttack(clientId: number, step: number, angle: number): void {
