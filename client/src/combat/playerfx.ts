@@ -79,6 +79,7 @@
 // render/levelupfx.ts does); that SEs have no distance attenuation here
 // (play_directional_sound_effect's distance model is not read).
 
+import { CRITICAL_SPARK } from './hitfx.ts';
 import { STATUS, STATUS_SE, type StatusType } from './status.ts';
 
 export interface FxSpec {
@@ -109,6 +110,11 @@ export const HIT_SPARK: readonly FxSpec[] = [
   { id: 6, dy: HIT_POINT_DY - 15 },
   { id: 13, dy: HIT_POINT_DY },
 ];
+
+// The critical hit's particles on a player (EntityHitEntity_00773350's
+// unknown_display_critical_hit_effect, 0x005014e8, replaces HIT_SPARK): 7,
+// 0xb, 0xc (20 below the hit point) and 0xe, the same offsets as on an enemy.
+export const CRITICAL_HIT_FX: readonly FxSpec[] = CRITICAL_SPARK.map((p) => ({ id: p.id, dy: HIT_POINT_DY + (p.dy ?? 0) }));
 
 // The attribute particle of a hit (EntityHitEntity_00773350 on the local
 // player, EntityProcessStatusEffectParticle_007752dc on a remote copy).

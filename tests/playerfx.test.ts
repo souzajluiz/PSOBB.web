@@ -12,6 +12,7 @@ import {
   attributeFx,
   attributeParticle,
   BLOCK_FX,
+  CRITICAL_HIT_FX,
   footstepType,
   FxEmitter,
   heavyLandSe,
@@ -111,6 +112,8 @@ eq(Object.keys(STATUS_FX).length, 6, 'six status effects');
 
 // --- the emitter tables ---
 eq(HIT_SPARK.map((s) => s.id), [4, 5, 6, 13], 'hit spark entity: particles 4, 5, 6, 0xd');
+eq(CRITICAL_HIT_FX.map((s) => s.id), [7, 0xb, 0xc, 0xe], 'critical spark: particles 7, 0xb, 0xc, 0xe');
+check(CRITICAL_HIT_FX[2].dy === HIT_SPARK[0].dy! - 20, 'particle 0xc sits 20 below the hit point, as on an enemy');
 check(HIT_SPARK[2].dy === HIT_SPARK[0].dy! - 15, 'particle 6 sits 15 below the hit point');
 eq(BLOCK_FX.map((s) => s.id), [0, 1, 2, 3], 'block entity: particles 0..3');
 eq(SOUL_FX.map((s) => s.id), [0xaf], 'dead marker: particle 0xaf');

@@ -197,7 +197,7 @@ export type PlayerHitState = 'alive' | 'light' | 'heavy' | 'getup' | 'block' | '
 
 // What the state machine shows (combat/playerfx.ts has the ids).
 export type PlayerDamageFx =
-  | { kind: 'hit'; heavy: boolean } // a hit that did damage (EntityHitEntity_00773350's spark and attribute particle)
+  | { kind: 'hit'; heavy: boolean; critical: boolean } // a hit that did damage (EntityHitEntity_00773350's spark or critical spark and attribute particle)
   | { kind: 'block' } // 6x4A (PlayerProcessHurtDamage_0068c8e8)
   | { kind: 'revive' }; // 6x4F (ForceExitSpecialState_0069db5c)
 
@@ -307,7 +307,7 @@ export class PlayerDamage {
   // One attack against the player. `damage` is the rounded total (0 = the hit
   // did nothing: the client sends 6x4A instead), `angle` the direction the hit
   // came from in radians, `strength` the knockback magnitude.
-  hit(damage: number, angle: number, strength: number, killerEntityId = 0xffff): void {
+  hit(damage: number, angle: number, strength: number, killerEntityId = 0xffff, critical = false): void {
     if (this.dead || this.state === 'reviving' || this.lethal) return;
     if (this.invuln > 0) return;
     if (damage < 1) {
@@ -341,7 +341,7 @@ export class PlayerDamage {
     this.landed = false;
     this.startMotion(heavy ? 'heavy' : 'light');
     this.events.sound?.(heavy ? SE_HIT_HEAVY : SE_HIT_LIGHT);
-    this.events.fx?.({ kind: 'hit', heavy });
+    this.events.fx?.({ kind: 'hit', heavy, critical });
     this.events.log(`hit for ${Math.round(damage)}: ${this.hp}/${this.maxHp} HP`);
   }
 

@@ -87,7 +87,7 @@ import {
   type HitMotionKind,
   type PlayerDamageFx,
 } from '../combat/playerdamage.ts';
-import { attributeFx, BLOCK_FX, heavyLandSe, HIT_SPARK, REVIVE_FX, SOUL_FX, statusFx, statusPulse, type FxSpec } from '../combat/playerfx.ts';
+import { attributeFx, BLOCK_FX, CRITICAL_HIT_FX, heavyLandSe, HIT_POINT_DY, HIT_SPARK, REVIVE_FX, SOUL_FX, statusFx, statusPulse, type FxSpec } from '../combat/playerfx.ts';
 import { PlayerEffects } from './playerfx.ts';
 import {
   applyDamage,
@@ -5168,13 +5168,16 @@ export class CombatView {
     const chance = (attacker.ata - defender.evp * 0.2) * 0.01;
     let total = 0;
     let landed = false;
+    let critical = false;
     if (chance > 0 && this.rng() <= chance) {
       landed = true;
-      total = rollDamage(attacker, defender, 0, this.rng, mult).damage;
+      const r = rollDamage(attacker, defender, 0, this.rng, mult);
+      total = r.damage;
+      critical = r.critical;
     }
     const angle = from ? Math.atan2(from.x - p.x, from.z - p.z) : 0;
     // cause_knockback(kbScale * the damage try_hit_entity returned).
-    this.damage.hit(total, angle, kbScale !== undefined ? kbScale * total : knockback, 0x1000 | e.index);
+    this.damage.hit(total, angle, kbScale !== undefined ? kbScale * total : knockback, 0x1000 | e.index, critical && total >= 1);
     if (landed && total >= 1) this.gainPb(total, true);
     if (landed) e.ai?.landed?.(total);
     // The Ultimate wolves' and Mothmants' status rolls (combat/status.ts).
@@ -5225,7 +5228,15 @@ export class CombatView {
   // The look of the local player's states (combat/playerfx.ts).
   private selfFx(e: PlayerDamageFx): void {
     const id = this.game.selfId;
-    if (e.kind === 'hit') this.fxOn(id, [...HIT_SPARK, ...attributeFx(this.game.self?.charClass ?? 0)]);
+    if (e.kind === 'hit') {
+      this.fxOn(id, [...(e.critical ? CRITICAL_HIT_FX : HIT_SPARK), ...attributeFx(this.game.self?.charClass ?? 0)]);
+      // The critical's SE 0x42 and flash at the hit point (the player's feet + HIT_POINT_DY).
+      if (e.critical) {
+        this.playSe(CRITICAL_SE);
+        const p = this.view?.playerPositions().get(id);
+        if (p) void this.fx?.models.flash(new THREE.Vector3(p.x, p.y + HIT_POINT_DY, p.z));
+      }
+    }
     else if (e.kind === 'block') this.fxOn(id, BLOCK_FX);
     else this.fxOn(id, REVIVE_FX);
   }
