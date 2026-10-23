@@ -299,3 +299,120 @@ export class SealDoor {
     return SEAL_LAMP_BITS.map((b) => (this.bits & b) !== 0);
   }
 }
+
+// --- Seabed capture traps (TOTrapSeabed01, 0x0228) and trap vision -----------
+//
+// Object 0x0228 is the Seabed capture trap: the o.dat type table row (VA 0x00a084e4
+// and its copies) pairs 0x0228 with the creator CreateDerolleTrapEntity_0063ee10
+// (the pillar types 0x0154 / 0x0167 pair with their own creators the same way), and
+// that creator builds the object on DerolleEnemyVTable3 (0x00b2df80) through
+// InitializeDerolleTrapEntity_0063ec24. VERIFIED (exe bytes, dump names).
+//
+// Cloak: ApplyDerolleTrapInitData_0063ea98 reads param5 (+0x88) as an int and clamps it
+// to 0..1; +0x354 = 1 when it is above 0 ("offset 0x354 is != 0 when it's cloaked" in
+// render_capturetrap). VERIFIED.
+//
+// Trap vision: the player's unknown_flags_2 (player +0x33c) bit 0x10000 (dump enum
+// has_trap_vision = 65536). The bit follows the player's +0x964 bit 0x10: FUN_00695b48 sets
+// it when the bit is set, FUN_005e60c0 clears it when it is not. VERIFIED (Ghidra decompile of
+// 0x00695b48 / 0x005e60c0). The source of +0x964 bit 0x10 (androids, the Trap Vision tool,
+// its duration) was NOT located: no code in the exe writes +0x964 by a displacement store
+// (only loads and a test), so the source is UNCLEAR. newserv says permanent for androids and
+// temporary after a Trap Vision tool (ReceiveSubcommands.cc, the flag table); no duration
+// is in newserv.
+//
+// Reveal: EnemyAIUpdateState_0063a034 in state 0 calls vtable +0x154, which is
+// IsPlayerVisibleToPartTrap_0063a208: any of the four player slots in the trap's room with
+// the has-trap-vision bit (no distance). When it is true the state becomes 1. State 1's
+// handler (vtable +0x148 = DerollePartObjectEnableReticle_0063a3bc) enables the reticle (the
+// marker: enable_reticle makes the trap targetable for each player's lock-on) and runs the
+// idle (vtable +0x144, DerollePartObjectUpdateTarget_0063a3d8). No handler sets the state
+// back to 0: the reveal is sticky. VERIFIED.
+//
+// Radius: ApplyDerolleTrapInitData stores 0x41700000 (15.0) at +0x33c. The idle reads that
+// slot as a float radius for EnemyGetNearestTargetInRange (the dump types it as an int, which
+// is a naming artifact). ASSUMED to be the float 15.0.
+//
+// Draw: render_capturetrap (dump 503294) and render_inactive_capture_trap (503119): a
+// view-distance test (vtable +0x24 = GiGuesGetViewDistance_007ba468 with 400 and
+// 100), then the state: below 2 (idle, revealed or not) the inactive draw, from 2 the active
+// draw (render_active_capturetrap, which has no cloak check). The inactive draw of a cloaked
+// trap returns early when the advanced-effects setting is off (get_settings_advanced_effect);
+// with it on, each mesh is drawn through the cloak pass (unknown_set_advanced_effect_cloaked,
+// texture matrices only). So the reveal does NOT change what is drawn: a cloaked trap is
+// drawn as a cloak in states 0 and 1 whether or not anyone has trap vision, and the trap
+// vision only sets the reticle. There is no fade-in ramp (no alpha is animated in the trap or
+// the cloak setup). VERIFIED from the dump; the advanced-effects setting is ASSUMED on (the
+// same assumption as combat/enemyfsmep2c.ts).
+//
+// Not ported: the spring and hold of 0x0228 (sub-states 2 and 3: EnemyAcquireTargetAndAttack
+// and the handlers at 0x0063e7a4 / 0x0063e72c), the cloak shader itself (no advanced-effect
+// pass in the web), and the reticle's drawing.
+
+export const TRAP_CAPTURE = 0x0228; // TOTrapSeabed01 (the Seabed capture trap)
+export const TRAP_VISION_FLAG = 0x10000; // player unknown_flags_2 (has_trap_vision)
+export const CAPTURE_RADIUS = 15; // ASSUMED float 0x41700000 at +0x33c
+export const VIEW_DISTANCE = 400; // vtable +0x24 arg 0x43c80000 (400.0); its mesh radius 0x42c80000 (100.0) is not used here
+
+// The cloak flag: param5 (+0x88), an int clamped to 0..1 (ApplyDerolleTrapInitData).
+export function captureTrapCloaked(params: readonly number[]): boolean {
+  return Math.trunc(params[4] ?? 0) > 0;
+}
+
+// The has-trap-vision bit of a player's unknown_flags_2 (player +0x33c).
+export function hasTrapVision(flags2: number): boolean {
+  return (flags2 & TRAP_VISION_FLAG) !== 0;
+}
+
+export interface VisionPlayer {
+  room: number;
+  flags: number; // unknown_flags_2
+}
+
+// IsPlayerVisibleToPartTrap_0063a208: the four player slots (0..3), same room, has the bit.
+export function trapVisionSeen(trapRoom: number, players: readonly (VisionPlayer | null)[]): boolean {
+  for (let i = 0; i < 4; i++) {
+    const p = players[i];
+    if (p && p.room === trapRoom && hasTrapVision(p.flags)) return true;
+  }
+  return false;
+}
+
+// GiGuesGetViewDistance_007ba468 with view distance `distance`: the trap is in front of the
+// camera (the exe's camera-space z is negative in front) and within the distance. ASSUMED:
+// the frustum's screen-space bounds are left to three.js culling.
+export function withinViewDistance(depth: number, distance = VIEW_DISTANCE): boolean {
+  return depth <= 0 && depth >= -distance;
+}
+
+// What render_capturetrap draws: 'hidden', 'plain' (the normal model) or 'cloak' (the cloak
+// pass). The reveal is not an input: the exe's draw does not read it.
+export type CaptureDraw = 'hidden' | 'plain' | 'cloak';
+export function captureTrapDraw(cloaked: boolean, advancedEffects: boolean, inView: boolean, sprung: boolean): CaptureDraw {
+  if (!inView) return 'hidden';
+  if (sprung) return 'plain'; // render_active_capturetrap: no cloak check
+  if (!cloaked) return 'plain';
+  return advancedEffects ? 'cloak' : 'hidden';
+}
+
+export class CaptureTrap {
+  readonly cloaked: boolean;
+  readonly radius = CAPTURE_RADIUS;
+  // State 0 (idle) or 1 (revealed by trap vision). Sticky: nothing in the state 1 handlers
+  // returns it to 0.
+  revealed = false;
+
+  constructor(params: readonly number[]) {
+    this.cloaked = captureTrapCloaked(params);
+  }
+
+  // One AI tick: EnemyAIUpdateState_0063a034 in state 0 asks IsPlayerVisibleToPartTrap.
+  frame(players: readonly (VisionPlayer | null)[], room: number): void {
+    if (!this.revealed && trapVisionSeen(room, players)) this.revealed = true;
+  }
+
+  // The state the draw reads: 0 / 1 (inactive); the spring (2+) is not ported.
+  get state(): 0 | 1 {
+    return this.revealed ? 1 : 0;
+  }
+}
