@@ -28,6 +28,7 @@ export interface ObjectModelContext {
   area: number;
   episode: number; // 1, 2, 3 (= Episode 4)
   ultimate?: boolean; // Ultimate Episode 1 online loads the *_a archives
+  event?: number; // the session's seasonal event (the 64 join's event byte; 0 = none)
 }
 
 // When a part is drawn.
@@ -185,12 +186,52 @@ export function isInvisibleObject(name: string): boolean {
   return INVISIBLE_OBJECTS.has(name);
 }
 
+// TObjLobbyMain (0x0182; create 0x00672254, ctor 0x006722d0, vtable 0x00b35ea8,
+// BML bm_obj_lobby_main.bml, loader 0x006724b4). Its dump names say Lobby2Plant /
+// Derolle: copied from other classes, the code is this object's.
+// The BML's models are entries 0..17 (.xj) and its motions 18..22 (.njm, motion
+// index 0..4). The render draws model `chunk` and its motion from the table
+// below (5 = no motion: 0x0093a4c0, read by hand with exedata).
+// The chunk is the seasonal event's (DerolleSetNjmChunkIdBasedOnSeason_00671e1c
+// after DerolleGetMappedSeasonalEventID_00671d78, which maps 0x0c to 0 and 0x0d
+// to 8, so 0x0d shows the Sakura model). An event with no case (none, 0x0c)
+// takes the set entry's initdata_param4 when it is 1..9, else 0
+// (DerolleSetStateID_00672410 reads +0x84 = initdata_param4 of
+// ApplyObjectInitData_007ba33c).
+const LOBBY_MAIN_EVENT_CHUNK: Readonly<Record<number, number>> = { 1: 12, 3: 16, 4: 14, 5: 15, 7: 10, 8: 11, 9: 17, 10: 1, 11: 13 };
+const LOBBY_MAIN_MOTION: Readonly<Record<number, number>> = { 7: 0, 8: 1, 9: 2, 15: 3, 16: 4, 17: 4 };
+// The round box 0x009c9778 (InitEnemyCollisionBoxes entry: radius 32 at the
+// object, flags 0x10003); the lobby's players are stopped by it in lobbyview.ts.
+const LOBBY_MAIN_COLLISION: ObjectCollision = { address: 0x009c9778, offset: [0, 0, 0], type: 0, halfX: 32, halfZ: 32 };
+
+export function lobbyMainChunk(event: number, param4: number): number {
+  const mapped = event === 0x0c ? 0 : event === 0x0d ? 8 : event;
+  const seasonal = LOBBY_MAIN_EVENT_CHUNK[mapped];
+  if (seasonal !== undefined) return seasonal;
+  return param4 >= 1 && param4 <= 9 ? param4 : 0;
+}
+
+function lobbyMainSpec(o: ObjectSet, event: number): ObjectModelSpec {
+  const chunk = lobbyMainChunk(event, Math.trunc(o.params[3]));
+  const motion = LOBBY_MAIN_MOTION[chunk];
+  // The animation advances one frame a tick and wraps at the last frame
+  // (FUN_00672008: frame + 1, minus the last frame when it passes it).
+  const part: ObjectPartSpec =
+    motion === undefined
+      ? { model: chunk, textures: 'obj_lobby_main.xvm' }
+      : { model: chunk, textures: 'obj_lobby_main.xvm', motion, drive: 'loop-last', speed: 1 };
+  return spec('TObjLobbyMain', 'bm_obj_lobby_main.bml', [part], { collision: LOBBY_MAIN_COLLISION });
+}
+
 export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectModelSpec | null {
   const { area, episode } = ctx;
   const ult = !!ctx.ultimate && episode === 1;
   const a = (name: string) => (ult ? name.replace(/\.bml$/, '_a.bml') : name);
   const ax = (name: string) => (ult ? name.replace(/\.xvm$/, '_a.xvm') : name);
   switch (o.type) {
+    // ---- lobby ----
+    case 0x0182:
+      return lobbyMainSpec(o, ctx.event ?? 0);
     // ---- warps ----
     // TObjAreaWarpForest (and the quest copy 0x001B): create 0x007bac58, ctor
     // FUN_006696a4: model 0 (+0xd0, warp base, all nodes FUN_00835120), model 1

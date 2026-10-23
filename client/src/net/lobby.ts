@@ -131,6 +131,9 @@ export class Lobby {
   leaderId = -1;
   lobbyNumber = 0;
   blockNumber = 0;
+  // The lobby's seasonal event (newserv l->event, the event byte of the 64 join
+  // at 0x195; 0 = none). The lobby decorations follow it (objectmodels.ts).
+  event = 0;
   // Raw 0x520-byte 67 entry of the local player (inventory + disp data), kept
   // to build the 98 / 6x70 commands when this connection later joins a game.
   selfEntry: Uint8Array | null = null;
@@ -213,6 +216,10 @@ export class Lobby {
         this.emit('playerLeft', id);
         break;
       }
+      case 0x64:
+        // The lobby's join (newserv send_join_lobby_t): the event byte is all we keep.
+        if (c.data.length > 0x195) this.event = c.data[0x195];
+        break;
       case 0x06:
         this.onChat(c);
         break;

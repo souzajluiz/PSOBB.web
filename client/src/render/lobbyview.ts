@@ -17,6 +17,8 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel } from '../formats/nrel.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
+import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
+import { ObjectLayer } from './objectview.ts';
 import { fieldLocomotion, locomotionSlot, LOCOMOTION_FACTOR, PLAYER_MOTION_FILE, PlayerMotions, townMotion, type Locomotion } from '../formats/plymotion.ts';
 import type { Lobby, LobbyPlayer } from '../net/lobby.ts';
 import { CollisionWorld, STEP_UP, type Body } from './collision.ts';
@@ -57,6 +59,9 @@ export interface LobbyMapData {
   // TObjInfoCol (object type 0x0180): information counter trigger circles,
   // world x/z and radius (param1).
   infoCols?: Array<{ x: number; z: number; radius: number }>;
+  // TObjLobbyMain entries placed like the field's objects (the seasonal model,
+  // objectmodels.ts lobbyMainSpec, is drawn by LobbyView).
+  mainObjects?: PlacedEntity[];
 }
 
 // The lobby objects of map_lobby_NNo.dat that collide (object factory
@@ -88,7 +93,10 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
   }
   try {
     const rooms = parseMapNRel(await source.read(`scene/map_${area}n.rel`)).sections;
-    const sets = parseObjectSets(await files.read(`map_${area}o.dat`));
+    const raw = await files.read(`map_${area}o.dat`);
+    const sets = parseObjectSets(raw);
+    const mains = parseSetObjects(raw).filter((o) => o.type === 0x0182);
+    if (mains.length) data.mainObjects = placeEntities(mains, rooms, 1);
     for (const s of playerSpawns(sets)) {
       if (s.source !== 0 || data.spawns.has(s.clientId)) continue;
       const room = rooms.find((r) => r.id === s.room);
@@ -226,6 +234,7 @@ export class LobbyView {
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
   private spawns: Map<number, LobbySpawn>;
+  private mainObjects: ObjectLayer | null = null; // TObjLobbyMain models (disposed with the view)
   private files: ClientFiles | null;
   private assets = new Map<number, Promise<PlayerAssets>>();
   private motions: Promise<PlayerMotions> | null = null;
@@ -266,6 +275,13 @@ export class LobbyView {
     (globalThis as { lobbyView?: LobbyView }).lobbyView = this; // console/automation access
     this.spawns = mapData.spawns;
     this.files = mapData.files;
+    if (mapData.files && mapData.mainObjects?.length) {
+      // The seasonal decoration of TObjLobbyMain for this session's event (the
+      // lobby's 64 join); a load error only leaves the decoration out.
+      const layer = new ObjectLayer(viewer, mapData.files);
+      this.mainObjects = layer;
+      layer.show(mapData.mainObjects, { area: 0, episode: 1, event: lobby.event }).catch((err) => console.warn('lobby objects:', err));
+    }
     // The map is unlit (vertex colors); the player materials are Lambert, lit by
     // the area light the viewer takes from lightentry.bin (MapViewer.setArea).
     viewer.setOrbitEnabled(false);
@@ -907,6 +923,8 @@ export class LobbyView {
 
   dispose(): void {
     this.disposed = true;
+    this.mainObjects?.dispose();
+    this.mainObjects = null;
     for (const id of [...this.markers.keys()]) this.removeMarker(id);
     this.viewer.fogProbe = null;
     for (const d of this.disposers) d();

@@ -520,6 +520,7 @@ export class Game extends Lobby {
   private onJoinGame(c: Command): void {
     const info = parseJoinGame(c.data);
     this.info = info;
+    this.event = info.event;
     this.selfId = info.clientId;
     this.leaderId = info.leaderId;
     this.players.clear();
