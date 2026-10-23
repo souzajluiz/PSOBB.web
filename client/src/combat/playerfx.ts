@@ -42,10 +42,12 @@
 //   Heavy fall, frame 10 of the motion: SE 0x15, or 0x21 for a RAcast
 //     (get_player_class_footstep_sound_effect_type == 2).
 //   Block (6x4A, PlayerProcessHurtDamage_0068c8e8 on the evade state's entry):
-//     with a shield equipped the shield's own routine runs (ASSUMED the same
-//     look; not read); without one CreateEnemyEffectEntity_005030bc: entity
-//     0x00503144 (update 0x00503184) emits particles 0, 1, 2, 3 (guard_a..d,
-//     once each) at the player's height-0x24 point and plays SE 0x23.
+//     with a shield equipped the shield's own routine runs: the shield item's
+//     do_attack (vtable +0x70 = 0x0061cdb0, a bare `ret`), so nothing shows and
+//     no SE plays (read: the shield vtable 0x00b0fb60, CreateArmorInstance_005e3200).
+//     Without one CreateEnemyEffectEntity_005030bc: entity 0x00503144 (update
+//     0x00503184) emits particles 0, 1, 2, 3 (guard_a..d, once each) at the
+//     player's height-0x24 point, and SE 0x23 plays either way.
 //   Death (handle_input_state_dead, 0x0069e458): no sound, no particle;
 //     the death motion, then on the local player the red fade (combat/
 //     playerdamage.ts DEATH_FADE_*); 6x4E (HandlePlayerRootObjectDespawn_

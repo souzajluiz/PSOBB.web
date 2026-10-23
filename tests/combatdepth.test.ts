@@ -102,7 +102,7 @@ interface Sent {
   args: number[];
 }
 
-function damageHarness(maxHp: number) {
+function damageHarness(maxHp: number, shielded = false) {
   const sent: Sent[] = [];
   const motions: HitMotionKind[] = [];
   const pushes: Array<[number, number]> = [];
@@ -124,6 +124,7 @@ function damageHarness(maxHp: number) {
       fx.push(e.kind === 'hit' ? (e.heavy ? 'hit-heavy' : 'hit-light') : e.kind);
       if (e.kind === 'hit') crits.push(e.critical);
     },
+    shielded: () => shielded,
   });
   d.reset(maxHp);
   return { d, sent, motions, pushes, sounds, fx, crits };
@@ -244,6 +245,23 @@ function damageHarness(maxHp: number) {
   check(h.d.hp === 100 && h.sent[0].kind === '6x4A' && h.motions[0] === 'block', `blocked hit ${JSON.stringify(h.sent)} ${h.motions[0]}`);
   check(h.sounds.join() === '35' && h.fx.join() === 'block', `block SE 0x23 and fx: ${h.sounds} ${h.fx}`);
   check(h.d.invuln === 0, 'a block grants no invulnerability');
+}
+
+{
+  // A shielded block (PlayerProcessHurtDamage_0068c8e8 -> the shield's do_attack,
+  // vtable +0x70 = 0x0061cdb0, a bare ret): the block motion, 6x4A and the HP
+  // unchanged, but no SE 0x23 and no guard particles.
+  const h = damageHarness(100, true);
+  h.d.hit(0, 0, 0);
+  check(h.d.hp === 100 && h.sent[0].kind === '6x4A' && h.motions[0] === 'block', `shielded block ${JSON.stringify(h.sent)} ${h.motions[0]}`);
+  check(h.sounds.length === 0 && h.fx.length === 0, `shielded block: no SE / fx (${h.sounds} ${h.fx})`);
+  check(h.d.state === 'block', 'the shielded block still enters the block state');
+  for (let i = 0; i < 40; i++) h.d.tick();
+  check(h.d.state === 'alive', 'and ends like the unshielded one');
+  // A hit that does damage is not changed by the shield (the light hit's SE / fx play).
+  const g = damageHarness(100, true);
+  g.d.hit(10, 0, 0);
+  check(g.sounds.join() === '19' && g.fx.join() === 'hit-light', `shielded light hit: ${g.sounds} ${g.fx}`);
 }
 
 {

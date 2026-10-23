@@ -33,9 +33,13 @@
 //     created at once), velocity reset. See PlayerDamage.die.
 //   handle_input_state_evade_attack (6x4A, action_block @ 0x0069a9c8; entry
 //     0x0069f498): motion slot = vtable +0x4c -> 6, then PlayerProcessHurtDamage
-//     _0068c8e8: the shield's own routine, or without a shield the effect
-//     entity 0x00503144 (particles 0..3 at the player, height 0x24, plus SE
-//     0x23). See combat/playerfx.ts.
+//     _0068c8e8 (dump 557599): with a shield in the shield slot it calls the
+//     shield item's do_attack (vtable +0x70 = 0x0061cdb0, a bare `ret`: the
+//     shield shows nothing and plays no SE; shield vtable 0x00b0fb60 from
+//     CreateArmorInstance_005e3200, group_idx 0x4f). Without one it calls
+//     CreateEnemyEffectEntity_005030bc: the effect entity 0x00503144 (particles
+//     0..3 at the player, height 0x24, when its pool allows) and SE 0x23 at
+//     once. See combat/playerfx.ts.
 //   Slot 13 (vtable +0x68) is the motion of the revive state 0x12.
 // The slot numbers come from the vtable getters (each a `mov eax, N; ret`):
 // 0x006a7584 (+0x4c) -> 6, 0x006a759c (+0x58) -> 9, 0x006a75a4 (+0x5c) -> 10,
@@ -224,6 +228,10 @@ export interface PlayerDamageEvents {
   fx?(e: PlayerDamageFx): void;
   // The SE of the heavy fall's 10th frame (0x15, 0x21 for a RAcast).
   landSound?(): number;
+  // Whether a shield is in the shield slot (get_equipment_slot(shield) != 0).
+  // A shielded block runs the shield's do_attack, which is empty: no SE, no
+  // particles. Without it (the default) the no-shield effect plays.
+  shielded?(): boolean;
   // The model's current motion has played to its end / its current frame.
   // Without them the state lengths fall back to fixed tick counts.
   motionEnded?(): boolean;
@@ -347,8 +355,12 @@ export class PlayerDamage {
       // 6x4A: the attack was fully blocked (block state, motion slot 6).
       this.state = 'block';
       this.startMotion('block');
-      this.events.sound?.(SE_BLOCK);
-      this.events.fx?.({ kind: 'block' });
+      // PlayerProcessHurtDamage_0068c8e8: the shield's own routine (empty) or,
+      // without a shield, CreateEnemyEffectEntity_005030bc (particles + SE 0x23).
+      if (!(this.events.shielded?.() ?? false)) {
+        this.events.sound?.(SE_BLOCK);
+        this.events.fx?.({ kind: 'block' });
+      }
       this.events.sendShieldAttack();
       return;
     }
