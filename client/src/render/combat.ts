@@ -1648,6 +1648,12 @@ export class CombatView {
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
       if (r.hidden !== undefined) for (const c of root.children) c.visible = !r.hidden;
       if (ai instanceof EpsilonAi) for (const ev of ai.events.splice(0)) this.playSeAt(ev.id, root.position);
+      // The Grass Assassin's emerge (the abeast spawn sound and particles) and
+      // the Nano Dragon's power-up charge (sound 0x111, particle 0xfa).
+      if (ai instanceof GrassAi || ai instanceof NanoDragonAi) {
+        for (const id of ai.sounds.splice(0)) this.playSeAt(id, root.position);
+        for (const fx of ai.effects.splice(0)) this.particle({ id: fx.id }, new THREE.Vector3(root.position.x, root.position.y + fx.dy, root.position.z));
+      }
       if (ai instanceof EpsilonAi) this.epsilonView(e, ai, r);
       if (ai instanceof CananeAi && !e.ringSpawned) {
         e.ringSpawned = true;

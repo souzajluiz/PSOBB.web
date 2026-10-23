@@ -3,7 +3,7 @@
 // and take-off, the Shark's AI record; the Dubchic laser / Garanz shots of
 // combat/enemyshots.ts that the Caves code shares.
 // Run: node tests/enemyfsmcaves.test.ts
-import { GRASS, GrassAi, NANO, NanoBreath, NanoDragonAi, NanoShot } from '../client/src/combat/enemyfsmcaves.ts';
+import { GRASS, GrassAi, NANO, NANO_POWER, NanoBreath, NanoDragonAi, NanoShot } from '../client/src/combat/enemyfsmcaves.ts';
 import { aiConfig, type AiTarget } from '../client/src/combat/enemyai.ts';
 import { enemyCombatMotions } from '../client/src/combat/enemymotions.ts';
 
@@ -29,8 +29,9 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   const attacks = [atk(15), atk(120), atk(200)];
   const mk = (fparam2 = 0, rng = () => 0.9) => new GrassAi({ x: 0, z: 0, angle: 0, attacks, radius: 10, fparam1: 0.5, fparam2, rng });
   const g = mk();
+  eq([g.state, g.invulnerable], ['emerge', true], 'the Grass starts in the ground, invulnerable');
   g.tick([player(0, 500)]);
-  eq(g.state, 'idle', 'a player beyond 400 is not noticed');
+  eq(g.state, 'emerge', 'a player beyond 400 is not noticed (the emerge goes on)');
   g.tick([player(0, 300)]);
   eq(g.state, 'chase', 'a player within 400 is chased (mode 1)');
   const z0 = g.z;
@@ -73,6 +74,28 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   const a = mk(50);
   a.tick([player(0, 300)]);
   eq(a.state, 'ambush', 'fparam2 > 0: the ambush run');
+
+  // Emerge (wanderer sub 0 / 1, 0x0052407c): the spawn SE and particles on the
+  // first frame, 40 frames of the state timer, then out (idle).
+  const em = mk();
+  em.tick([]);
+  eq([em.sounds, em.effects.map((f) => f.id)], [[0x124], [0xea, 0xe9]], 'the emerge plays SE 0x124 and particles 0xea / 0xe9');
+  em.sounds.length = 0;
+  em.effects.length = 0;
+  for (let f = 0; f < 39; f++) em.tick([]);
+  eq([em.state, em.invulnerable], ['emerge', true], 'still in the ground after 40 frames (39 timer updates on top of the spawn frame)');
+  em.tick([]);
+  eq([em.state, em.invulnerable], ['idle', false], 'out after the 40th timer update');
+  eq(em.sounds.length + em.effects.length, 0, 'the spawn effects play once');
+  // A player found in the ground: the run / chase at once, invulnerable no more.
+  const ec = mk();
+  ec.tick([]);
+  ec.tick([player(0, 300)]);
+  eq([ec.state, ec.invulnerable], ['chase', false], 'a player within 400 ends the emerge (0x525104)');
+  const ea = mk(50);
+  ea.tick([]);
+  ea.tick([player(0, 300)]);
+  eq(ea.state, 'ambush', 'the emerge of an ambusher ends in the run');
 }
 
 // --- Nano Dragon -----------------------------------------------------------------
@@ -125,6 +148,33 @@ eq(enemyCombatMotions('TObjEneShark', null as never).damage, { index: 3, speed: 
   let got: AiTarget[] = [];
   for (let f = 0; f < NANO.shotLife && !sh.done; f++) got = sh.tick([player(0, 60)]);
   eq(got.length, 1, 'the homing shot turns onto its target');
+}
+
+// --- Nano Dragon power-up (state 0xc, EnemyAI_ProcessChargeState_0057d790) ---
+{
+  const mv = { fparam1: 2, fparam2: 3, fparam3: 2, fparam4: 0.1, fparam5: 0.01, fparam6: 0, iparam: [40, 25, 0, 0, 0, 0] };
+  const d = new NanoDragonAi({ x: 0, z: 0, angle: 0, param2: 50, movement: mv, rng: () => 0.5 });
+  const run = () => {
+    for (let f = 0; f < 10 && d.state === 'charge'; f++) d.tick([], f === 2);
+  };
+  eq([d.powers, d.atpBonus, d.scale], [0, 0, NANO_POWER.scale], 'the power-up starts at 0 charges, ATP +0, scale 0.6');
+  check(d.powerUp() === true, 'the first charge starts');
+  d.tick([]);
+  eq([d.state, d.sounds, d.effects.map((f) => f.id), d.atpBonus], ['charge', [0x111], [0xfa], 8], 'a charge: state 0xc, SE 0x111, particle 0xfa, ATP +8');
+  eq(d.motion?.index, NANO_POWER.motion, 'the charge plays motion 6 (animation 5)');
+  near(d.scaleTarget, 0.7, 'the scale grows toward 0.6 + 0.1');
+  run();
+  eq([d.state, d.powers], ['idle', 1], 'the charge ends and the Nano is idle again');
+  near(d.scale, 0.7, 'the scale lands on its target');
+  for (let i = 0; i < 3; i++) {
+    d.powerUp();
+    run();
+  }
+  eq([d.powers, d.atpBonus], [4, 32], 'four charges: ATP +32 in all');
+  eq(d.powerUp(), false, 'a fifth charge is refused (the cap of 4)');
+  d.tick([]);
+  run();
+  eq([d.state, d.atpBonus], ['idle', 32], 'the refused charge changes nothing');
 }
 
 if (failures) {

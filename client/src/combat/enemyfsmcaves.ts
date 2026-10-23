@@ -50,6 +50,15 @@ const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam
 //     for 15 frames.
 //   flinch (7, 0x005228d0): when it ends, HP < max * fparam1 enrages it
 //     (flag 0x2000) and drops the target.
+//   emerge (0, the wanderer 0x0052407c, sub 0 / 1): the Grass starts in the
+//     ground: 0x3b4 = 1 (not yet out), flags 0x4040000 (invulnerable). Sub 0
+//     runs the abeast spawn: SE 0x124 (0x0052d25c's remap, ASSUMED identity)
+//     and the particles 0xea (10, 30) at the spot and 0xe9 at the spot plus
+//     g_AbeastParticleYOffset (ASSUMED 0); it starts the state timer
+//     (0x00576c48: rate 2 / 10, t = rate * -30, done at t >= 2 (0x00576b18):
+//     40 frames). Sub 1 then clears 0x3b4 and goes to sub 2 (the wander).
+//     A target found in the meantime (0x524d18 clears the flags 0x40000 /
+//     0x4000000 when it sets one) enters the run / chase at once (0x525104).
 export const GRASS = {
   search: 400,
   retarget: 30,
@@ -68,13 +77,24 @@ export const GRASS = {
   dashKb: 2,
   webFrames: 180,
   webRecover: 15,
+  // The emerge: 40 frames of the state timer (0x00576c48 / 0x00576b18).
+  emergeFrames: 40,
+  emergeSe: 0x124,
+  // The abeast spawn particles (create_abeast_spawn_particle_effects 0x005789e4 family).
+  emergeFx: [0xea, 0xe9],
+  // ASSUMED: g_AbeastParticleYOffset is 0 (the value is not read yet).
+  emergeFxDy: 0,
 } as const;
 
-export type GrassState = 'idle' | 'ambush' | 'chase' | 'slash' | 'dash' | 'web' | 'dead';
+export type GrassState = 'emerge' | 'idle' | 'ambush' | 'chase' | 'slash' | 'dash' | 'web' | 'dead';
 
 export class GrassAi extends BrainBase {
-  state: GrassState = 'idle';
+  state: GrassState = 'emerge';
   enraged = false;
+  // Sound ids and particle ids (with a height offset) the owner plays at the
+  // emerge's first frame; drained by the owner (render/combat.ts).
+  sounds: number[] = [];
+  effects: Array<{ id: number; dy: number }> = [];
   hpFraction = 1; // the owner keeps it current
   private attacks: Array<EnemyAttackData | null>;
   private radius: number;
@@ -91,6 +111,7 @@ export class GrassAi extends BrainBase {
   private dashZ = 0;
   private touched = new Set<number>();
   private held = new Map<number, number>(); // clientId -> frames of web left
+  private emergeT = 0; // the emerge's frames (the state timer's updates)
 
   constructor(opts: { x: number; z: number; angle: number; attacks: Array<EnemyAttackData | null>; radius: number; fparam1: number; fparam2: number; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
@@ -103,9 +124,10 @@ export class GrassAi extends BrainBase {
     this.current = loop(6, 0.7);
   }
 
-  // The crouch before the dash (flags 0x28).
+  // The crouch before the dash (flags 0x28); the whole emerge (the wanderer's
+  // sub 0 / 1 set flags 0x4040000).
   get invulnerable(): boolean {
-    return this.state === 'dash' && this.sub === 3;
+    return this.state === 'emerge' || (this.state === 'dash' && this.sub === 3);
   }
 
   private mult(): number {
@@ -158,8 +180,9 @@ export class GrassAi extends BrainBase {
       else this.held.set(id, n - 1);
     }
     let t = this.target(targets);
-    if (this.timer % GRASS.retarget === 0 || (!t && this.state === 'idle')) {
-      if (this.state === 'idle' || this.state === 'chase') {
+    const emerging = this.state === 'emerge';
+    if (this.timer % GRASS.retarget === 0 || (!t && (this.state === 'idle' || emerging))) {
+      if (this.state === 'idle' || this.state === 'chase' || emerging) {
         const n = nearest(targets, this.x, this.z, GRASS.search);
         if (n) {
           t = n;
@@ -170,6 +193,22 @@ export class GrassAi extends BrainBase {
     const v = GRASS.speed * this.mult();
     const turn = GRASS.turn * this.mult() * BAMS_TO_RAD;
     switch (this.state) {
+      case 'emerge':
+        // A target ends the emerge at once (0x525104 with the state 0 entry).
+        if (t) {
+          this.enter(out, this.mode === 2 ? 'ambush' : 'chase');
+          break;
+        }
+        if (this.sub === 0) {
+          this.sub = 1;
+          this.emergeT = 0;
+          this.sounds.push(GRASS.emergeSe);
+          // 0xea at the spot (create_particle_effect_ex), 0xe9 raised by the Y offset.
+          this.effects.push({ id: GRASS.emergeFx[0], dy: 0 }, { id: GRASS.emergeFx[1], dy: GRASS.emergeFxDy });
+        } else if (++this.emergeT >= GRASS.emergeFrames) {
+          this.enter(out, 'idle');
+        }
+        break;
       case 'idle':
         if (t) this.enter(out, this.mode === 2 ? 'ambush' : 'chase');
         break;
@@ -383,7 +422,25 @@ export const NANO = {
   mouth: 10,
 } as const;
 
-export type NanoState = 'idle' | 'combat' | 'volley' | 'breath' | 'takeoff' | 'dead';
+export type NanoState = 'idle' | 'combat' | 'volley' | 'breath' | 'takeoff' | 'charge' | 'dead';
+
+// The power-up (EnemyAI_ProcessChargeState_0057d790, state 0xc). Each charge
+// (at most 4: field_0x394 < 4) adds 8 to the ATP (base_atp and
+// base_atp_with_shifta), grows the body's scale (+0.1 a charge, the target
+// at +0x6c, 0x009279ac) and plays the sound 0x111 and the particle 0xfa at the
+// body; the animation is 5 (motion 6, once, 0.8).
+export const NANO_POWER = {
+  max: 4,
+  atp: 8,
+  scale: Math.fround(0.6), // 0x3f19999a in the constructor (+0x68)
+  step: Math.fround(0.1), // 0x009279ac
+  // ASSUMED: the scale's growth a frame (g_DAT_00a74158 is written at run
+  // time, not in the image).
+  grow: 0.01,
+  sound: 0x111,
+  particle: 0xfa,
+  motion: 6,
+} as const;
 
 // The breath (update 0x0057fcc0): fparam2 a frame toward the target; it
 // pierces, hitting every player within fparam2 each frame, and dies after 500
@@ -481,6 +538,8 @@ export class NanoShot extends EnemyShot {
 export class NanoDragonAi extends BrainBase {
   state: NanoState = 'idle';
   height = 0; // +0x40c
+  // The ATP the charges added (8 each, at most 4).
+  atpBonus = 0;
   hpFraction = 1; // the owner keeps it current
   private mv: EnemyMovementData;
   private spawnX: number;
@@ -498,6 +557,13 @@ export class NanoDragonAi extends BrainBase {
   private destZ = 0;
   private flinchHp = 1;
   private volleyIds: number[] = [];
+  // The power-up (combat/enemyfsmcaves.ts NANO_POWER).
+  powers = 0; // +0x394
+  scale = NANO_POWER.scale; // +0x68
+  scaleTarget = NANO_POWER.scale; // +0x6c
+  chargeMode = 0; // 0 start, 1 growing, -1 finished
+  sounds: number[] = [];
+  effects: Array<{ id: number; dy: number }> = [];
 
   constructor(opts: { x: number; z: number; angle: number; param2: number; movement: EnemyMovementData | null; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
@@ -657,6 +723,29 @@ export class NanoDragonAi extends BrainBase {
         }
         if (!t || this.timer >= NANO.attackTimer) this.after(out, targets);
         break;
+      case 'charge':
+        if (this.chargeMode === 0) {
+          // The first frame: a charge while under the cap, else the cancel (-1).
+          if (this.powers < NANO_POWER.max) {
+            this.powers++;
+            this.scaleTarget = Math.fround(this.scale + NANO_POWER.step);
+            this.chargeMode = 1;
+            this.atpBonus += NANO_POWER.atp;
+            this.sounds.push(NANO_POWER.sound);
+            this.effects.push({ id: NANO_POWER.particle, dy: 0 });
+            this.play(out, once(NANO_POWER.motion, 0.8));
+          } else {
+            this.scaleTarget = this.scale;
+            this.chargeMode = -1;
+          }
+        } else if (this.chargeMode === 1) {
+          this.scale = Math.min(this.scale + NANO_POWER.grow, this.scaleTarget);
+          if (animationEnded) this.chargeMode = -1;
+        } else {
+          this.scale = this.scaleTarget;
+          this.enter(out, this.targetId !== null ? 'combat' : 'idle');
+        }
+        break;
       case 'takeoff': {
         if (this.sub === 0) {
           if (this.frames >= NANO.riseFrame) this.height += NANO.rise;
@@ -692,6 +781,16 @@ export class NanoDragonAi extends BrainBase {
     }
     out.lift = NANO.base + this.height;
     return this.finish(out);
+  }
+
+  // The power-up (state 0xc): enters the charge; its first tick adds the
+  // charge, or cancels it at the cap of 4 (as in the exe). Returns whether a
+  // charge will be added.
+  powerUp(out: AiFrame = this.frame()): boolean {
+    if (this.state === 'dead' || this.state === 'charge') return false;
+    this.enter(out, 'charge');
+    this.chargeMode = 0;
+    return this.powers < NANO_POWER.max;
   }
 
   private after(out: AiFrame, targets: readonly AiTarget[]): void {
