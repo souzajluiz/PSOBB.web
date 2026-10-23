@@ -13,13 +13,17 @@
 // A helper reached by exactly two set types with a constant table (Canadine 0x83 and Canane 0x84,
 // 0x005424d8) is used for both (ASSUMED).
 //
+// Children built in a caller's loop (CHILD_COLLISION_LINKS, Vol Opt 0xc2's 24 monitors) have no
+// set type or record of their own: child k (0-based, creation order) takes variant k & mask
+// (`childBoxTable`). Their box rows are not used by the port's own monitor hit test yet.
+//
 // An indexed link (variants, e.g. Booma 0x44) picks its row set by the variant: the constructor
 // computes table = base + stride * [this+0x370], and that field is the vtable slot's copy of the
 // factory argument's s16 at +0x3c, which is the set record at +0x40 (the factory argument is
 // record + 4, the spawner 0x00810fcb; the walk is in the generator, see the DEVLOG). The record's
 // +0x40 is EnemySet.params[5] (`slotVariant`).
 
-import { COLLISION_TABLES, ENEMY_COLLISION_LINKS, type CollisionBoxRow, type EnemyCollisionLink } from './collisionboxes.gen.ts';
+import { CHILD_COLLISION_LINKS, COLLISION_TABLES, ENEMY_COLLISION_LINKS, type CollisionBoxRow, type EnemyCollisionLink } from './collisionboxes.gen.ts';
 import type { EnemySlot } from './enemyslots.ts';
 
 // Box flag 0x8000 (+0x18 of the 0x2c-byte box, unknown_flags of collision_box): the box
@@ -50,6 +54,24 @@ export function enemyBoxTable(setType: number | null, area: number | null = null
   if (table === null) return null;
   const rows = COLLISION_TABLES[table];
   return rows ? { table, link, rows } : null;
+}
+
+// The box table of child `child` (0-based, creation order) of a loop-built set type, or null
+// past the child count or for a set type with no such children. The table is the variant
+// child & mask (EnemyCollisionLink-style rows, CHILD_COLLISION_LINKS).
+export interface ChildBoxTable {
+  table: number;
+  rows: readonly CollisionBoxRow[];
+}
+
+export function childBoxTable(setType: number | null, child: number): ChildBoxTable | null {
+  if (setType === null) return null;
+  const link = CHILD_COLLISION_LINKS[setType];
+  if (!link || !Number.isInteger(child) || child < 0 || child >= link.count) return null;
+  const table = link.variants[child & link.mask];
+  if (table === undefined) return null;
+  const rows = COLLISION_TABLES[table];
+  return rows ? { table, rows } : null;
 }
 
 // The set type of a slot's enemy, or null for a child (see the header).

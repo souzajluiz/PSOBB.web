@@ -14318,3 +14318,45 @@ Scope: the 10-hexagon bar along the bottom of the field, from the exe trace in t
 - Not run in Chrome (the brief says no Playwright); a real Send Mail to a live newserv not run.
 
 **Checks:** `node tests/teammenu.test.ts` (ALL PASS, 129 checks), `node tests/simplemail.test.ts` (all pass), `node tests/lobbymenu.test.ts`, `node tests/lobbymain.test.ts`, `node tests/team.test.ts`, `node tests/guildcardmenu.test.ts` pass. `client` `tsc --noEmit -p .` clean (Node 24; the worktree's `client/node_modules` is a symlink to the main checkout's, removed before the commit).
+## 2026-10-23: Vol Opt's monitor boxes (0xc2 is Vol Opt, not the Dragon); masked index and loop children
+
+The brief called 0xc2 the Dragon. The exe and the port's `enemyids.ts` say otherwise: set type 0xc2 is TBoss3Volopt (Vol Opt, 1 + 6 + 24 + ... slots), and the Dragon is 0xc0 (TBoss1Dragon, ctor 0x00419214, table 0x009a39a0). The 0xc2 init found by the previous probe (site 0x004417e5, table `0x009a5100 + 0x2c * ([arg4] & 3)`) is the constructor of Vol Opt's monitors, which the port already models as `VoloptMonitor` (`combat/volopt.ts`, `shape = index & 3`, ctor 0x0044161C).
+
+**The value the caller passes: the loop counter 0..23 (exe).**
+- Vol Opt's vtable 0xaf5540 slot 4 is 0x0043c5d4, which calls the AI state function 0x0043c680 (the switch on `[ecx+0x32e]`). Mode 0 (0x0043c7fe..0x0043c94d) builds the arena: a 7-loop of 0x420-byte objects (0x004422d4), then a 24-loop from 0x0043c8a2: `call 0x005caba4` (alloc 0x39c), `call 0x0044161c` at 0x0043c92e. The loop counter is `[ebp-0x18]` (0x0043c944..0x0043c94d: `add $1`, `cmp $0x18`, `jl`), pushed as argument 4 (`push %ebx` at 0x0043c92a). The callee's `this` is the new object; argument 1 is Vol Opt itself (`esi = [ebp-0x14]`).
+- The constructor 0x0044161c reads its argument 4 from `[ebp+0x14]` (0x00441657), masks it with `and $3` (0x004416b8), stores it at `+0x370` (0x004416bb), and uses it for the model (`0x009a5210[4*v]`, 0x00441727) and the box table (`lea 0x9a5100 + 44*v`, 0x004417d7..0x004417e2). Then `push $1` (count, 0x004417c4), `push table`, `call 0x007b9a88` (0x004417e5).
+- So child k (k = 0..23, creation order) gets variant `k & 3`: each shape is used by 6 monitors (k = v, v+4, ...). The walk found no record field: the value is the caller's loop counter, not the set record.
+
+**The rows (read with `tools/exedata.py read`, all centre (0,0,0), sphere, shape 0):** 0x009a5100 radius 20 flags 0x8005 (shape 0, the big monitor, `MONITOR_LOCK_Y` 43); 0x009a512c radius 10 flags 0x8003; 0x009a5158 radius 15 flags 0x8003; 0x009a5184 radius 10 flags 0x8003. All four have the 0x8000 targetable bit. They are the monitors' boxes, not body parts. The type 0xc6 (TBoss3VoloptMonitor) already links to row 0 (`0x441ea0 -> 0x441f1c`, a direct site with table 0x009a5100), which is the monitor's own function (ASSUMED: its default row).
+
+**Generator (`tools/gen-collision-boxes.py`):**
+- `step`: `andl $imm, %reg` on one leaf makes a leaf `('and', ('arg', k), mask)` (power-of-two masks only; any other `and` stays unknown). `indexed_site` accepts that leaf. The Vol Opt site 0x004417e5 now decodes as indexed (`mask 3`): 16 indexed sites (was 15), 27 undecoded (was 28), 246 tables (was 243).
+- `index_mask`, `index_text`: `CollisionIndex.mask` (null for the record indexes, which are unchanged apart from the new field). The variant loop stops at mask + 1 (variants 0..3, not up to 16).
+- `CHILD_CALLERS` (hand-read, checked by `main`): the monitor constructor 0x0044161C, its call site 0x0043C92E (must be an E8 call to it), the argument 4, the loop bound `cmp $0x18` at 0x0043C94A (checked by disassembly), count 24. The 0xc2 factory tree never reaches the site (the monitors are built by the AI's build state, not by the ctor's vtable slots), so `ENEMY_COLLISION_LINKS[0xc2]` stays null (that is correct: the root has no box table of its own in the exe).
+- `CHILD_COLLISION_LINKS`: `0x00c2: { callee: 0x0044161c, count: 24, mask: 3, variants: { 0: 0x009a5100, 1: 0x009a512c, 2: 0x009a5158, 3: 0x009a5184 } }`.
+- Regenerated `client/src/formats/collisionboxes.gen.ts` (diff: the new rows, the new site, the `mask` fields, the `CHILD_COLLISION_LINKS` block).
+
+**Port:**
+- `client/src/formats/enemyboxes.ts`: `childBoxTable(setType, child)` returns `{ table, rows }` for child k (`variants[k & mask]`), or null past the count, for a negative child, or for a set type with no children. The header explains it.
+- No runtime consumer yet: the port's `VoloptMonitor` keeps its own hit test and HP. The rows are available for it, and for the monitors' box flags, when that is wired.
+
+**The bosses 0xc8 / 0xca / 0xcb (exe).**
+- 0xc8 (TBoss4DarkFalz): the candidate path is wrong. Vtable 0xaf6a20 is 0x1b8 bytes long; the address 0xaf6bd8 that the walk read as slot 0x1b8 is the vtable of a different class (its ctor 0x0044e57a stores 0xaf6bd8, and 0x0044e544 is that class's dtor, which frees its own +0x94 and +0xa8 members). The walker read past the end of 0xaf6a20, so 0x0044e544 is not the Dark Falz dtor and is not a box path. The real init 0x0045fca0 (table 0x009a67c8: radius 0, flags 0x807a) sits in the constructor 0x0045fb24 (vtable 0xaf7d60), which is called only from 0x0044c605 in the grid loop of 0x0044c430 (a placement routine: 0x0044c558..0x0044c614, rows of 10 up to 0x2d). That looks like the Darvants (0x1fd children), not the boss. Its caller chain above 0x0044c430 is not traced.
+- 0xca (TBoss6PlotFalz, factory 0x0048d764): the ctor 0x0048d814 (vtable 0xaf9240) calls helpers 0x0048d038, 0x0048dafc, 0x0048db1c. The generator's tree from the factory (23 functions, depth 8) has no init call. The ctor's own sub-tree was not expanded (the function start for 0x0048d814 did not match the walker's table), so this is not final.
+- 0xcb (TBoss7DeRolLeC, factory 0x004af5b8, ctor 0x004af634): the depth-8 tree is 1108 functions and reaches only the shared helpers 0x0051ff3c / 0x00521bbc / 0x00521c5c, which several set types reach. Not an own box; left.
+
+**ASSUMED:**
+- The monitor index is the loop counter (the monitor constructed k-th is `VoloptMonitor(k)`, `wall = k >> 2`, `shape = k & 3`). The exe agrees on the shape, the model table (0x9a5210) and the position table (0x9a51e0) use the same `& 3`, but the monitor's own index field is not read.
+- `CHILD_CALLERS` is a hand-read exe fact: the generator checks the call and the loop bound, not the loop's start (0) and step (1), which are read from the same block by hand.
+- The `and` leaf is a power-of-two mask on a single argument; any other `and` stays unknown.
+- The walker still follows no branches. The Vol Opt path is straight-line within 0x44161c up to the init call (the model and table lines are not branched).
+- Row 0 (0x009a5100) is the monitor's default: type 0xc6's own function 0x00441f1c sets it.
+- 0x0044c430 is the entry of the Darvant grid loop's function (no padding seen between it and 0x0044c558); the Darvant reading of its children is a guess.
+
+**Tests.** `node tests/objectcollision.test.ts` all checks passed (the Vol Opt monitor rows for k = 0, 5, 10, 23; radius 20 / 15; targetable; out-of-range and the no-children types; the root has no table; `CHILD_COLLISION_LINKS` fields). `node tests/techfire.test.ts` ok. `npx tsc --noEmit -p .` in `client/` clean. `client/node_modules` is a symlink to the main checkout's while testing and is removed before the commit. Not run in Chrome, no Playwright.
+
+**Left:**
+- The Dark Falz (0xc8) root box and the Darvants' box (0x9a67c8, radius 0, flags 0x807a) are not linked: their caller chain above 0x0044c430 is open.
+- 0xca and 0xcb: the own init is not found (the ctor sub-trees need the walker's function starts fixed; the 0xcb tree is too generic at depth 8).
+- Wire `childBoxTable(0xc2, i)` into the monitors' hit test, if the monitors' boxes should be used by the player's shots (the port's own hit test covers the monitors now).
+- The 28 -> 27 undecoded sites: none is a boss factory's tree (the list in `--dynamic`).

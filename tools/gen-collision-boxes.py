@@ -475,6 +475,18 @@ def step(w, mnem, ops, info, text_fn):
             if src[0] == "reg":
                 w.write("reg", dst[1], 4, L_scale(w.regs[src[1]], s[1]))
                 return
+    if mnem == "andl" and len(args) == 2:
+        # `and $2^k-1, %reg` on one leaf (the Vol Opt monitor's shape: `and $3, %eax` at 0x004416b8, the
+        # stack argument 4 masked): a leaf of its own, ('and', leaf, mask). Any other `and` is unknown.
+        s, d = w.operand(args[0]), w.operand(args[1])
+        if s[0] == "imm" and d[0] == "reg":
+            v = w.regs[d[1]]
+            mask = s[1]
+            if v is not None and v[0] == 0 and len(v[1]) == 1 and v[1][0][1] == 1 and mask >= 0 and (mask & (mask + 1)) == 0:
+                w.write("reg", d[1], 4, (0, ((("and", v[1][0][0], mask), 1),)))
+            else:
+                w.write("reg", d[1], 4, None)
+        return
     if mnem == "pushl":
         s = w.operand(args[0])
         w.push(w.read(s[0], s[1], 4) if s[0] in ("imm", "reg", "mem") else None)
@@ -577,7 +589,9 @@ def indexed_site(site, func, info, text_fn):
     if len(table[1]) != 1:
         return None
     leaf, stride = table[1][0]
-    if not (isinstance(leaf, tuple) and leaf[0] == "M"):
+    if not (isinstance(leaf, tuple) and leaf[0] in ("M", "and")):
+        return None
+    if leaf[0] == "and" and not (isinstance(leaf[1], tuple) and leaf[1][0] == "arg"):
         return None
     return {"base": table[0], "stride": stride, "index": leaf, "count": count[0],
             "branches": w.branches}
@@ -666,6 +680,18 @@ def call_tree(root, graph, depth_limit):
 
 MAX_VARIANTS = 16  # an indexed table is read up to this many rows (ASSUMED bound)
 
+# Constructors that are built in a loop by a function outside every factory tree (the AI's build
+# state, not the constructor's own vtable), so ENEMY_COLLISION_LINKS cannot reach them. Each entry is
+# a hand-read exe fact, checked by main(): the constructor (key), the E8 call site in the loop (site),
+# the stack argument that carries the loop counter (arg), and the loop's count. Child k (0-based, in
+# creation order) gets the table of variant k & mask. Vol Opt (set type 0xc2): its state 0 build
+# (EnemyProcessAiState, 0x0043c680) runs the 0x18 loop at 0x0043c8a2..0x0043c94d; the counter
+# [ebp-0x18] is pushed as argument 4 at 0x0043c92e, and the monitor's constructor 0x0044161c masks it
+# with 3 (0x004416b8) for its shape. ASSUMED: the counter is the monitor's index (VoloptMonitor(i)).
+CHILD_CALLERS = {
+    0x0044161C: {"set": 0x00C2, "site": 0x0043C92E, "arg": 4, "count": 0x18, "bound": 0x0043C94A},
+}
+
 
 def row_is_set(r):
     """A plausible box row: finite, bounded numbers, shape 0 or 1, and a flag or a radius set."""
@@ -688,15 +714,25 @@ def variants_text(v):
     return "{ " + ", ".join(f"{k}: 0x{t:08x}" for k, t in sorted(v.items())) + " }"
 
 
+def index_mask(idx):
+    """The mask the index is ANDed with (2^k - 1), or None."""
+    return idx["index"][2] if idx["index"][0] == "and" else None
+
+
 def index_text(idx):
     if idx is None:
         return "null"
-    leaf = idx["index"]  # ("M", ((("arg", k), 1),), disp, width, signed)
-    arg = leaf[1][0][0][1]
-    disp = leaf[2]
-    rec = f"{disp + 4:#x}" if arg == 2 else "null"
-    return ("{ arg: %d, disp: 0x%x, width: %d, signed: %s, base: 0x%08x, stride: %d, recordOffset: %s }" % (
-        arg, disp, leaf[3], "true" if leaf[4] else "false", idx["base"], idx["stride"], rec))
+    leaf = idx["index"]
+    if leaf[0] == "and":  # ("and", ("arg", k), mask): a masked stack argument (Vol Opt monitors, 0x0044161c)
+        arg, disp, width, signed, rec = leaf[1][1], 0, 4, False, "null"
+        mask = str(leaf[2])
+    else:  # ("M", ((("arg", k), 1),), disp, width, signed)
+        arg = leaf[1][0][0][1]
+        disp, width, signed = leaf[2], leaf[3], leaf[4]
+        rec = f"{disp + 4:#x}" if arg == 2 else "null"
+        mask = "null"
+    return ("{ arg: %d, disp: 0x%x, width: %d, signed: %s, mask: %s, base: 0x%08x, stride: %d, recordOffset: %s }" % (
+        arg, disp, width, "true" if signed else "false", mask, idx["base"], idx["stride"], rec))
 
 
 def wrapper_sites(init_sites, func_of, calls, dynamic_funcs):
@@ -784,7 +820,9 @@ def main(argv):
             # no box (ASSUMED: an index past the array's boxes reads no box).
             idx = s["indexed"]
             idx["variants"] = {}
-            for v in range(MAX_VARIANTS):
+            # A masked index (`and $m`) has m + 1 variants at most (the mask is read from the exe).
+            limit = min(MAX_VARIANTS, index_mask(idx) + 1) if index_mask(idx) is not None else MAX_VARIANTS
+            for v in range(limit):
                 t = idx["base"] + idx["stride"] * v
                 if offset(t) is None or offset(t + ROW * s["count"] - 4) is None:
                     break
@@ -800,6 +838,22 @@ def main(argv):
     site_by_func = collections.defaultdict(list)
     for s in sites:
         site_by_func[s["func"]].append(s)
+
+    # Loop-built children (CHILD_CALLERS): checked against the exe, then child k -> variant k & mask.
+    child_links = {}
+    for callee, spec in CHILD_CALLERS.items():
+        if (spec["site"], callee) not in calls:
+            raise SystemExit(f"CHILD_CALLERS: {spec['site']:#x} does not call {callee:#x}")
+        bound = " ".join(t[2] for t in text_fn(spec["bound"], spec["bound"] + 3))
+        if f"$0x{spec['count']:x}" not in bound:
+            raise SystemExit(f"CHILD_CALLERS: {spec['bound']:#x} is not `cmp ${spec['count']:#x}`: {bound}")
+        cs = [s for s in site_by_func.get(callee, [])
+              if s["table"] is None and s["indexed"]["index"][0] == "and" and s["indexed"]["index"][1][1] == spec["arg"]]
+        if len(cs) != 1:
+            raise SystemExit(f"CHILD_CALLERS: {callee:#x} has no single masked index on argument {spec['arg']}")
+        idx = cs[0]["indexed"]
+        child_links[spec["set"]] = {"callee": callee, "count": spec["count"], "mask": index_mask(idx),
+                                    "variants": idx["variants"]}
 
     # Enemy set type -> factory (per area) -> the box table its constructor sets.
     trees = {}
@@ -892,6 +946,7 @@ def main(argv):
     lines.append("  disp: number; // the field's offset in that argument")
     lines.append("  width: number; // 1, 2 or 4 bytes")
     lines.append("  signed: boolean;")
+    lines.append("  mask: number | null; // the index is ANDed with this (2^k - 1) first; null when not masked")
     lines.append("  recordOffset: number | null; // the offset in the set record (factory argument = record + 4; arg 2 only)")
     lines.append("}")
     lines.append("")
@@ -955,6 +1010,22 @@ def main(argv):
                 f"via: {via}, shared: {'true' if l['shared'] else 'false'}, ambiguous: {'true' if l['ambiguous'] else 'false'}, "
                 f"index: {index_text(l['indexed'])}, variants: {variants_text(l['variants'])} }}")
         lines.append(f"  0x{t:04x}: [{', '.join(parts)}],")
+    lines.append("};")
+    lines.append("")
+    lines.append("// Set type -> children built in a caller's loop (CHILD_CALLERS, hand-read and checked): child k")
+    lines.append("// (0-based, creation order) takes the box table of variant k & mask.")
+    lines.append("export interface CollisionChildLink {")
+    lines.append("  callee: number; // the child's constructor")
+    lines.append("  count: number; // children built by the loop")
+    lines.append("  mask: number; // the constructor's `and` on the loop counter")
+    lines.append("  variants: Readonly<Record<number, number>>; // variant -> table VA")
+    lines.append("}")
+    lines.append("")
+    lines.append("export const CHILD_COLLISION_LINKS: Readonly<Record<number, CollisionChildLink>> = {")
+    for t in sorted(child_links):
+        c = child_links[t]
+        lines.append(f"  0x{t:04x}: {{ callee: 0x{c['callee']:08x}, count: {c['count']}, mask: {c['mask']}, "
+                     f"variants: {variants_text(c['variants'])} }},")
     lines.append("};")
     lines.append("")
     # Factory type id (the type table's {type, creator} rows, objects included) -> the box tables
