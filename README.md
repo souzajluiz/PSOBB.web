@@ -32,6 +32,7 @@ A **Phantasy Star Online: Blue Burst** client that runs in the browser and conne
 | NPCs (Pioneer 2, Lab, quests) with the client's models and motions, talk, the area script, the Hunter's Guild counter, a quest from the counter to the reward (6x24, 6x69, 6xC9) | ✅ 66 NPC archives build; Mop-up Operation #1 taken and paid live in Chrome |
 | Pioneer 2 shops (buy / sell, client prices) and bank (meseta and items) | ✅ bought, sold, deposited and withdrew live against newserv, server meseta matches |
 | Boss rooms: enemy child objects (Vol Opt's monitors and pillars, Sorcerer bits, Belra arms, De Rol Le / Barba Ray and Saint-Milion parts), boss warp gathering (6x6A) and boss music phases | ✅ live in Chrome |
+| Admin panel (`/admin`, [docs/ADMIN.md](docs/ADMIN.md)): accounts, online players, quests, config; character editor (offline, backup + confirmation): level sets the EXP threshold and recomputes the class's stats from newserv's level table (materials kept), techniques limited to what the class can learn, an item picker (weapon grind / special / attributes, armor slots / DFP / EVP, unit +/-, mag, tool stack, tech disk, meseta; raw hex kept as "advanced"), a mag editor (stats, synchro, IQ, colour, photon blasts) | ✅ unit tests + Chrome e2e with its own newserv |
 
 Details and next steps: [docs/ROADMAP.md](docs/ROADMAP.md); where to resume: [docs/HANDOFF.md](docs/HANDOFF.md). Development log: [docs/DEVLOG.md](docs/DEVLOG.md).
 
@@ -73,6 +74,8 @@ node tests/fog.test.ts           # fogentry.dat / lightentry.bin values and the 
 node tests/items.test.ts         # ItemPMT parser and item names vs newserv's reference tables
 node tests/batching.test.ts      # static batching, texture pools, ground index (same pixels / ground heights as the plain scene)
 node tests/resolution.test.ts    # pixel ratio plan and the adaptive step logic
+node tests/admin-items.test.ts   # admin character editor: level -> EXP / stats, class technique limits, item and mag encoding
+# cd client && npx playwright test -c playwright.admin.config.ts   # admin character editor in Chrome (own newserv + bridge)
 # node tools/perfprobe.mjs --base http://127.0.0.1:5173   # draw calls / CPU ms per map in headless Chrome (needs vite running)
 node tests/login.live.ts         # live login through the bridge
 node tests/lobby.live.ts         # two clients: create char, lobby, chat, movement

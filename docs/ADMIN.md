@@ -158,7 +158,7 @@ and the audit log entries (a record, written by the server in English).
 | --- | --- | --- |
 | Dashboard | server name, uptime, players, games, lobbies, account counts, connected players | `GET /y/summary`, `GET /y/accounts` |
 | Accounts | list; create (BB username + password + flags); edit flags; change password; ban (30m ... permanent) / unban; delete; kick | `GET /y/accounts`, `GET /y/clients`; `add-account flags=HEX`, `add-license ID BB USER PASS`, `update-account ID flags=HEX`, `update-account ID ban-duration=Nd` / `unban`, `delete-license` + `add-license` (no change-password command exists), `delete-account ID`, `kick 0xID` |
-| Characters | per account and slot: name, class, section id, level, EXP, meseta, 7 stats, 19 technique levels, inventory (add / remove / see equipped), bank and shared bank (meseta, add / remove items) | files: `system/players/player_<user>_<n>.psochar`, `.psobank`, `shared_bank_<user>.psobank` (online accounts refused: `GET /y/clients`) |
+| Characters | per account and slot: name, class, section id, level (EXP threshold and stats recomputed from the level table), EXP, meseta, 7 stats, the technique levels the class can learn (with its caps), inventory (item names; give items with a picker or raw bytes; remove; see equipped), mag editor, bank and shared bank (meseta, add / remove items, same picker) | files: `system/players/player_<user>_<n>.psochar`, `.psobank`, `shared_bank_<user>.psobank` (online accounts refused: `GET /y/clients`) |
 | Online | players with account, class, lobby, address; kick; announcement to everyone; games | `GET /y/summary`, `GET /y/clients`, `GET /y/client/:id`, `kick`, `announce` |
 | Quests | quests by category, category listed / hidden, enabled expression, versions; **Open in editor** per quest, **New quest**; reload | `GET /y/data/quests`, `reload quests`; files: `GET /quests/files`, `GET /quests/file/<folder>/<name>`, `POST /quests/publish` (see Quest editor) |
 | Teams | list (read-only); reload | `GET /y/teams`, `reload teams` |
@@ -188,9 +188,41 @@ inventory at `+0x0`, the player stats at `+0x34C`, the bank at `+0x6F8`). Rules:
   (the newest 30 per file are kept); writes are atomic (temp file + rename);
 - values are range-checked (level 1-200, meseta 0-999999, stats 0-9999,
   technique levels 1-30, section 0-9, class 0-11, 30 inventory / 200 bank
-  slots); item data is 12 + 4 hex bytes and is not checked against the item
-  tables, so wrong data can make a client reject the character;
-- stats are **not** recomputed from the level: edit them together;
+  slots);
+- **game data** comes from newserv's own tables, read at run time from
+  `<system>/tables` (`ADMIN_TABLES_DIR` overrides; nothing is copied into this
+  repository): `level-table-v4.json` (BB PlyLevelTbl), `item-parameter-table-bb-v4.json`
+  (BB ItemPMT) and `names-v4.json` (item names). Code: `bridge/admin-items.mjs`.
+  Without them the editor falls back to the raw behaviour (level alone, techniques
+  1-30, raw items only) and says so;
+- **level**: setting the level (or the class) writes the EXP threshold of that
+  level and recomputes the class's base stats exactly as newserv's `$edit level`
+  does (`PSOBBCharacterFile::recompute_stats`: base stats + every level's
+  deltas, LCK deltas ignored, then +2 per used POWER / MIND / EVADE / DEF / LUCK
+  material; HP materials are not in these stats, the client adds them). The
+  page previews the values (`GET .../characters/<n>/level-preview?level=`) and
+  any stat / EXP typed after that still wins;
+- **techniques**: only those the class can learn are shown, with the cap
+  (ItemPMT `MaxTechLevels`, the table newserv checks when a disk is used:
+  androids none, hunters / rangers lower caps, Grants / Megid forces only,
+  Reverser / Ryuker level 1); the server refuses anything else (400);
+- **give items**: a picker (search by name, kind-specific fields) encodes the
+  item the way newserv's `ItemData` does: weapon grind (up to the ItemPMT max),
+  special, three attributes (-100..100 %; none on S-rank weapons), armor slots
+  0-4 / DFP / EVP bonus (up to the ItemPMT ranges), shield DFP / EVP, unit
+  modifier (-2..+2 times the ItemPMT step), mag (newserv's new-mag defaults),
+  tool stack (newserv's stack limits), technique disk (technique + level),
+  meseta (added to the character's or the bank's meseta). A stackable tool
+  joins an existing stack. Raw 12 + 4 hex bytes stay under "Advanced"; raw
+  bytes are not checked against the item tables;
+- **mag editor** (any mag in the inventory): type, DEF / POW / DEX / MIND
+  level and progress, synchro (0-120), IQ (0-200), colour (19 names), and the
+  three photon blast slots (center, right, left: filled in that order, each
+  blast once; the left slot is encoded as an index among the unused blasts, as
+  `ItemData::add_mag_photon_blast`). The level sum must be 200 or less; the
+  progress is stored in steps of 2 (newserv masks bit 0). The wrapped flag and
+  the item id are kept. Evolution rules (which type at which level) are not
+  enforced;
 - the bank is written to the `.psobank` file, which newserv prefers over the
   bank inside the `.psochar` (`Client::bank_file`);
 - the technique levels above 15 use the extension byte of the matching
@@ -259,7 +291,7 @@ reload. The quest number newserv shows is the one in the file name
 ## What newserv cannot manage (so the panel does not)
 
 - **Characters** online (no command), character creation / deletion, names,
-  appearance, materials, quest progress; item names for offline characters.
+  appearance, material counts (shown, not edited), quest progress.
 - **Per-player messages** (only `announce` to everyone; `chat` / `warp` /
   `create-item` work on proxy sessions only).
 - **Teams** (no team commands: read-only).
@@ -291,3 +323,15 @@ English fallback, language detection) and prints a report of English literals in
 `admin.js` / `admin.mjs` that have no entry. `node tests/admin.live.ts` runs everything
 against a real `vendor/newserv/build/newserv` started on random loopback ports
 in a temporary copy of its system folder (it never touches `system/players`).
+
+`node tests/admin-items.test.ts` (newserv's tables via `NEWSERV=`, or the
+checkout's `vendor/newserv`) checks the character editor's rules: level -> EXP
+and stats against newserv's level table (materials, LCK, every class), the
+class technique caps, every picker kind's bytes and round trip, mag encoding
+and validation (level sum, ranges, photon blast slots), and the inventory /
+bank additions (stack merge, meseta). `cd client && npx playwright test -c
+playwright.admin.config.ts` runs `e2e/admin-characters.spec.ts` in Chrome: its
+own newserv (temporary system copy) and `bridge/server.mjs`, a fresh account
+through the panel, a copy of a local character file, then level, techniques,
+picker, mag editor, confirmation, backup and the file read back, plus the
+server-side refusals.

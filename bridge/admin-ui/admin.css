@@ -155,3 +155,14 @@ select.lang { width: auto; font-size: 13px; padding: .2rem .5rem; }
 .logo { width: 28px; height: 28px; vertical-align: middle; margin-right: .5rem; filter: drop-shadow(0 0 6px rgba(53,208,238,.6)); }
 .login h1 .logo { width: 22px; height: 22px; margin-right: .4rem; }
 .bar .brand { display: inline-flex; align-items: center; }
+
+/* character editor: item picker, mag editor, pending additions */
+.picker { margin-bottom: .6rem; }
+.picker-search { display: flex; flex-direction: column; gap: .35rem; grid-column: 1 / -1; }
+.picker-search .item-list { width: 100%; min-height: 9rem; }
+.card.inner { margin: .6rem 0; background: rgba(0, 0, 0, .18); }
+ul.pending { margin: 0 0 .8rem; padding-left: 1.2rem; }
+ul.pending li { margin-bottom: .25rem; }
+details.advanced { margin: .4rem 0 .8rem; }
+details.advanced summary { cursor: pointer; color: var(--muted); margin-bottom: .4rem; }
+b.bad { color: var(--bad); }
