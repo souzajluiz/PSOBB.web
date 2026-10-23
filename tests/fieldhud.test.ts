@@ -21,7 +21,7 @@ import {
 } from '../client/src/classic/itempack.ts';
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
-import { attributeRows, attributeText, detailPages, magRows, magStatText, nextPage, requirementRows, VALUE_COLOR } from '../client/src/classic/itemdetail.ts';
+import { candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magRows, magStatText, VALUE_COLOR, type EquipStatRow } from '../client/src/classic/itemdetail.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -286,53 +286,53 @@ eq(hex(buildUseItem(1, 0x10001)), '2702010001000100', '6x27 use');
 eq(hex(buildDropItem(0, 0x10002, 1, 0, 0, 0, 1)), '2a0600000100010002000100000000000000000000000000', '6x2A drop');
 eq(hex(buildSplitStack(0, 0x10001, 3, 1, 0, 0)), 'c30600000100000000000000000000000100010003000000', '6xC3 split');
 
-// --- item detail pages (classic/itemdetail.ts) ---
-pmt.weapons[3] = [{ id: 40, usabilityFlags: 0xff, atpRequired: 50, mstRequired: 5, ataRequired: 20 } as never];
-const detailStats = { atp: 40, ata: 50, mst: 0, level: 1 };
-eq(detailPages(itemFromHex('000300000000000000000000')), ['info', 'requirements', 'attributes'], 'weapon pages');
-eq(detailPages(itemFromHex('010100000000000000000000')), ['info', 'requirements', 'attributes'], 'armour pages');
-// A mag: level 5, DEF 300 / POW 100 / DEX 400 / MIND 42 (hundredths), synchro 28, IQ 3.
+// --- equipment stat panel and mag rows (classic/itemdetail.ts) ---
+// A weapon: ATP min 10, ATP max 20, MST 2, ATA 3 (x10 in the panel); grind 2 adds 4 to the ATP.
+pmt.weapons[3] = [{ id: 40, usabilityFlags: 0xff, atpRequired: 50, mstRequired: 5, ataRequired: 20, atpMin: 10, atpMax: 20, mst: 2, ata: 3 } as never];
+pmt.armors[0] = { id: 20, usabilityFlags: 0xff, requiredLevel: 0, dfp: 12, evp: 7 } as never;
 const MAG_HEX = '020105002c01640090012a00' + '00000000' + '1c030000'; // data1, id, data2 (synchro 28, IQ 3)
-eq(detailPages(itemFromHex(MAG_HEX)), ['info', 'mag'], 'mag pages');
-eq(detailPages(itemFromHex('030000000004000000000000')), ['info'], 'tool: info only');
+const WEAPON_G0 = '000300000000000000000000';
+const WEAPON_G2 = '000300020000000000000000';
+const WEAPON_G2_SPECIAL = '000300020000050100000000'; // ATA special (type 5, value 1) = +10
+const ARMOR_HEX = '010100000000000000000000';
+const cur = { atp: 40, dfp: 20, mst: 5, ata: 50, evp: 10, lck: 3 };
+eq(equipContribution(itemFromHex(WEAPON_G2), pmt), { atp: 14, mst: 2, ata: 30 }, 'weapon: ATP min + 2 x grind, MST, ATA x10');
+eq(equipContribution(itemFromHex(WEAPON_G2_SPECIAL), pmt).ata, 40, 'weapon: the ATA special adds value x10');
+eq(equipContribution(itemFromHex(ARMOR_HEX), pmt), { dfp: 12, evp: 7 }, 'armour: DFP and EVP');
+eq(equipContribution(itemFromHex('030000000004000000000000'), pmt), {}, 'tool: no stat contribution');
+eq([hasEquipPanel(itemFromHex(WEAPON_G0)), hasEquipPanel(itemFromHex(ARMOR_HEX)), hasEquipPanel(itemFromHex('010200000000000000000000')), hasEquipPanel(itemFromHex('030000000004000000000000')), hasEquipPanel(itemFromHex(MAG_HEX))], [true, true, true, false, false], 'panel: weapon, armour, shield');
+eq(candidateStats(cur, { atp: 14, mst: 2, ata: 30 }, {}), { atp: 54, dfp: 20, mst: 7, ata: 80, evp: 10, lck: 3 }, 'candidate: current + what the item adds');
+eq(candidateStats(cur, { atp: 14 }, { atp: 10 }), { ...cur, atp: 44 }, 'candidate: minus the equipped item of the slot');
+const rowsOf = (r: EquipStatRow[]) => r.map((x) => [x.key, x.item, x.color]);
 eq(
-  requirementRows(itemFromHex('000300000000000000000000'), pmt, detailStats),
+  rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), null, pmt, false, true)),
   [
-    { label: 0x9c, value: 50, unmet: true },
-    { label: 0x9e, value: 5, unmet: true },
-    { label: 0x9f, value: 20, unmet: false },
+    ['atp', 54, VALUE_COLOR.higher],
+    ['dfp', 20, VALUE_COLOR.same],
+    ['mst', 7, VALUE_COLOR.higher],
+    ['ata', 80, VALUE_COLOR.higher],
+    ['evp', 10, VALUE_COLOR.same],
+    ['lck', 3, VALUE_COLOR.same],
   ],
-  'weapon requirements ATP / MST / ATA with the unmet flags',
+  'weapon with no equipped weapon: higher / equal colours per row',
 );
-eq(requirementRows(itemFromHex('010100000000000000000000'), pmt, { ...detailStats, level: 0 }), [{ label: 0xc0, value: 1, unmet: true }], 'armour level = requiredLevel + 1');
-eq(requirementRows(itemFromHex('030000000004000000000000'), pmt, detailStats), [], 'tool has no requirement');
-// Native +5 and Machine +2 as candidate values (data1[6..11] = type, value pairs).
-const bonusWeapon = itemFromHex('0003000000000105030200000001000000000000');
 eq(
-  attributeRows(bonusWeapon, [3, 0, 4, 0, 0], false).map((r) => [r.label, r.current, r.item, r.color]),
-  [
-    [0xb5, 3, 5, VALUE_COLOR.higher],
-    [0xb6, 0, 0, VALUE_COLOR.same],
-    [0xb7, 4, 2, VALUE_COLOR.lower],
-    [0xb8, 0, 0, VALUE_COLOR.same],
-    [0xb9, 0, 0, VALUE_COLOR.same],
-  ],
-  'candidate attributes: Native up, Machine down, equal rows white',
+  rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), itemFromHex(WEAPON_G0), pmt, false, true)).slice(0, 1),
+  [['atp', 44, VALUE_COLOR.higher]],
+  'old grind-0 weapon removed: ATP 40 + 14 - 10',
 );
-eq(attributeRows(bonusWeapon, [3, 0, 4, 0, 0], true).map((r) => r.item), [null, null, null, null, null], 'equipped item shows no candidate values');
-eq(attributeRows(itemFromHex('000300000000000000000000'), [0, 0, 0, 0, 0], false)[0].item, 0, 'candidate with no pairs: every row shows 0');
-eq(attributeText(12), '12%', 'attribute value with %');
+eq(rowsOf(equipStatRows(cur, itemFromHex(ARMOR_HEX), null, pmt, false, true))[1], ['dfp', 32, VALUE_COLOR.higher], 'armour DFP 20 + 12');
+eq(rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), null, pmt, false, false)).map((r) => r[2]), Array(6).fill(VALUE_COLOR.none), 'not equippable: grey candidate values');
+eq(rowsOf(equipStatRows(cur, itemFromHex(WEAPON_G2), null, pmt, true, true)).map((r) => r[1]), [40, 20, 5, 50, 10, 3], 'equipped item: its values are the current ones');
+eq([compareColor(3, 5), compareColor(5, 5), compareColor(7, 5)], [VALUE_COLOR.lower, VALUE_COLOR.same, VALUE_COLOR.higher], 'colour rule: lower, equal, higher');
+// A mag: level 5, DEF 300 / POW 100 / DEX 400 / MIND 42 (hundredths), synchro 28, IQ 3.
 eq([magStatText(300), magStatText(150), magStatText(105), magStatText(42)], ['3', '1.5', '1.05', '0.42'], 'mag stat text: level, then the part');
 const mag = magRows(itemFromHex(MAG_HEX));
 eq(
   [mag.level, mag.synchro, mag.iq, mag.stats.map((s) => `${s.name} ${s.text}`)],
   [5, '28%', '3', ['DEF 3', 'POW 1', 'DEX 4', 'MIND 0.42']],
-  'mag page: level, synchro, IQ, DEF / POW / DEX / MIND',
+  'mag rows: level, synchro, IQ, DEF / POW / DEX / MIND',
 );
-eq(nextPage(0, 3, 'ArrowRight'), 1, 'Right: next page');
-eq(nextPage(0, 3, 'ArrowLeft'), 2, 'Left wraps to the last page');
-eq(nextPage(2, 3, 'ArrowRight'), 0, 'Right wraps to the first page');
-eq(nextPage(0, 1, 'ArrowRight'), 0, 'one page: no move');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
