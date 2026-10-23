@@ -362,6 +362,9 @@ interface EnemyRuntime {
 interface HitVisual {
   kind?: HitFxKind;
   miss?: boolean;
+  // The hit roll passed (0x200, took_damage), 0 damage included. Default: not
+  // a miss. A caller with its own roll (a confusion or a Megid kill) sets it.
+  landed?: boolean;
 }
 
 // Epsilon's body: its cloned materials, their base colours and the last tint
@@ -634,6 +637,9 @@ export class CombatView {
   private techObjects: TechObjects | null = null;
   // The strike being shown is a failed accuracy roll: its number is "MISS".
   private hitMissed = false;
+  // The strike being shown landed (its send carries 0x200, 0 damage included):
+  // set by applyEnemyHit for the send helpers it dispatches to.
+  private hitLanded = false;
   // The particles on players: hits, blocks, status effects, revives and the
   // dead marker (render/playerfx.ts, combat/playerfx.ts).
   private playerFx: PlayerEffects | null = null;
@@ -1649,7 +1655,7 @@ export class CombatView {
       }
       if (e.dead || !e.instance.root.visible) continue;
       // The status block of update_enemy_control_object (combat/enemystatus.ts).
-      if (e.status.flags) {
+      if (e.status.active) {
         const st = e.status.tick();
         for (const t of st.ended) this.opts.log(`${STATUS_NAME[t]} on E-${e.index.toString(16)} wore off`);
         for (const t of st.pulses) this.statusFx(e, t, true);
@@ -2209,7 +2215,7 @@ export class CombatView {
     const owner = ai.owner;
     const went = owner.hitSegment(ai.index, damage);
     if (e.parent) e.parent.stats.hp = owner.bodyHp;
-    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 26, p.z);
     const s = ai.segment;
@@ -2379,7 +2385,7 @@ export class CombatView {
     const went = ai.hit(damage);
     e.stats.hp = BARBA_HP;
     if (parent && damage >= 1) this.barbaLastHit.set(parent.index, byPlayer);
-    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
     if (parent) this.barbaDrain(parent, owner);
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 26, p.z);
@@ -3002,7 +3008,7 @@ export class CombatView {
       total = c.entity.maxHp - c.entity.hp;
       dead = c.entity.hp <= 0;
     }
-    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, total));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, total));
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 20, p.z);
     this.opts.log(`${what}hit Saint-Milion's ${c.part ? 'part ' + c.index : 'tentacle ' + (c.index - SM_PART_COUNT)} for ${Math.round(damage)}`);
@@ -3372,7 +3378,7 @@ export class CombatView {
     ai.owner.damagePart(part.entity, damage, local);
     e.stats.hp = part.hp;
     const dead = part.hp <= 0;
-    this.sendEnemy(e, flags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 10, p.z);
     this.opts.log(`${what}hit Vol Opt ${part.kind}${part.kind === 'pillar' || part.kind === 'monitor' ? ` ${part.index}` : ''} for ${Math.round(damage)}: ${part.hp}/${part.maxHp}`);
@@ -3941,7 +3947,7 @@ export class CombatView {
     if (applied >= 1 && ai.entity >= DF_ID.darvant && ai.entity <= DF_ID.lastDarvant) this.falzLastHit.set(e.index, local);
     e.stats.hp = part.hp;
     const dead = part.hp <= 0;
-    this.sendEnemy(e, flags | (applied >= 1 ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
+    this.sendEnemy(e, flags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (dead ? FLAG_DEAD : 0), Math.max(0, part.maxHp - part.hp));
     const p = e.instance.root.position;
     this.num(applied, critical, p.x, p.y + 10, p.z);
     this.opts.log(`${what}hit Dark Falz ${this.falzName(ai.entity)} for ${Math.round(applied)}: ${part.hp}/${part.maxHp}`);
@@ -4305,9 +4311,10 @@ export class CombatView {
     if (!d || d.dead || !attacker) return;
     const defender = this.enemyDefenderOf(d);
     const chance = (attacker.ata - defender.evp * 0.2) * 0.01;
-    const damage = chance > 0 && this.rng() <= chance ? rollDamage(attacker, defender, 0, this.rng, mult).damage : 0;
+    const hit = chance > 0 && this.rng() <= chance;
+    const damage = hit ? rollDamage(attacker, defender, 0, this.rng, mult).damage : 0;
     this.opts.log(`confused E-${e.index.toString(16)} (${e.slot.type}) hits E-${index.toString(16)} (${d.slot.type})`);
-    this.applyEnemyHit(d, ENEMY_BASE_FLAGS, damage, false, `E-${e.index.toString(16)}: `, false);
+    this.applyEnemyHit(d, ENEMY_BASE_FLAGS, damage, false, `E-${e.index.toString(16)}: `, false, { landed: hit });
   }
 
   // The Delsaber's guard drain for a player's attack: (ATP + spread + the
@@ -4428,7 +4435,7 @@ export class CombatView {
   // (combat/enemyfsmruins.ts SorcererBitAi) with the SE 0x1e0 at the bit.
   // ASSUMED: no death plan, no drop, no EXP.
   private sorcererBitHit(e: EnemyRuntime, ai: SorcererBitAi, damage: number, critical: boolean, baseFlags: number, what: string): void {
-    const flags = baseFlags | applyDamage(e.stats, damage);
+    const flags = baseFlags | applyDamage(e.stats, damage, this.hitLanded);
     const down = (flags & FLAG_DEAD) !== 0;
     this.sendEnemy(e, flags & ~FLAG_DEAD);
     const p = e.instance.root.position;
@@ -6160,7 +6167,6 @@ export class CombatView {
       damage += r.damage >= 1 ? r.damage : 0;
       critical = r.critical;
     }
-    if (damage >= 1) flags |= FLAG_HIT;
     this.applyEnemyHit(e, flags, damage, critical, what, true, { kind: out.strikeMult !== null ? 'weapon' : specialHitFx(type) });
   }
 
@@ -6276,6 +6282,8 @@ export class CombatView {
     const me = this.game.self;
     if (byPlayer && damage >= 1 && !e.ai?.invulnerable) haptic('hit'); // browser vibration (input/haptics.ts)
     this.hitMissed = fx.miss === true;
+    const landed = fx.landed ?? fx.miss !== true;
+    this.hitLanded = landed;
     if (e.ai?.invulnerable) {
       // EntityHitEntity / entity_hit_by_tech: the number 0 and nothing else.
       const ip = e.instance.root.position;
@@ -6312,7 +6320,7 @@ export class CombatView {
       ai.hit(damage, me?.x ?? ai.x, me?.z ?? ai.z, byPlayer);
       if (damage >= 1) this.voloptLastHit.set(e.index, byPlayer);
       e.stats.hp = ai.hp;
-      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit Vol Opt's body for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}, parts ${ai.partHp.join('/')}`);
@@ -6326,7 +6334,7 @@ export class CombatView {
         this.golLastHit.set(e.index, byPlayer);
       }
       e.stats.hp = ai.hp;
-      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Gol Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
@@ -6342,7 +6350,7 @@ export class CombatView {
         this.dragonLastHit.set(e.index, byPlayer);
       }
       e.stats.hp = ai.hp;
-      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED) | (ai.hp <= 0 ? FLAG_DEAD : 0), Math.max(0, ai.maxHp - ai.hp));
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 40, p.z);
       this.opts.log(`${what}hit the Dragon for ${Math.round(damage)}: ${ai.hp}/${ai.maxHp}`);
@@ -6367,7 +6375,7 @@ export class CombatView {
       ai.hitRoot(damage);
       e.stats.hp = e.stats.maxHp;
       if (damage >= 1) this.barbaLastHit.set(e.index, byPlayer);
-      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
       this.barbaDrain(e, ai);
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
@@ -6384,7 +6392,7 @@ export class CombatView {
       const pool = ai.hit(damage);
       e.stats.hp = ai.bodyHp;
       if (damage >= 1) this.drlLastHitLocal.set(e.index, byPlayer);
-      this.sendEnemy(e, baseFlags | (damage >= 1 ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
+      this.sendEnemy(e, baseFlags | (this.hitLanded ? FLAG_HIT : FLAG_MISSED), Math.max(0, Math.round(damage)));
       const p = e.instance.root.position;
       this.num(damage, critical, p.x, p.y + 26, p.z);
       this.opts.log(`${what}hit De Rol Le's ${pool} for ${Math.round(damage)}: shell ${ai.shellHp}/${ai.shellMax}, body ${ai.bodyHp}/${ai.bodyMax}`);
@@ -6394,7 +6402,7 @@ export class CombatView {
       this.sorcererBitHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
-    let flags = baseFlags | applyDamage(e.stats, damage);
+    let flags = baseFlags | applyDamage(e.stats, damage, landed);
     if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
       // State 5's revive branch: the Dubchic falls, lies there and gets up
       // with full HP; mark_enemy_as_dead (6x76, the drop and EXP requests)
@@ -6425,7 +6433,7 @@ export class CombatView {
       }
     }
     // A landed melee hit sets the Mothmant's +0x2e0 bit 2 before the kill picks its death state (0x005187a0).
-    if (e.ai instanceof MothmantAi && fx.kind === 'weapon' && baseFlags & FLAG_HIT) e.ai.noteMeleeHit();
+    if (e.ai instanceof MothmantAi && fx.kind === 'weapon' && landed) e.ai.noteMeleeHit();
     // A locked enemy skips its damage reaction (vtable +0x88 / +0x100).
     if (flags & FLAG_DEAD) this.killEnemy(e, flags);
     else if (e.monest) {
@@ -7308,7 +7316,7 @@ export class CombatView {
       // ASSUMED the floor is not a boss map).
       const chance = megidChance(level, e.resist.edk);
       const kill = this.rng() < chance;
-      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `, true, { kind: techHitFx(tech) });
+      this.applyEnemyHit(e, ENEMY_BASE_FLAGS, kill ? e.stats.hp : 0, false, `${name} (${Math.round(chance * 100)}%) `, true, { kind: techHitFx(tech), landed: kill });
       return;
     }
     const damage = techDamage(tech, level, mst, charClass, e.resist);

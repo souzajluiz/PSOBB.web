@@ -87,6 +87,9 @@ check(rollHit(atk, def, 0, 0, () => 0), 'a roll of 0 hits');
   const d = { hp: 100, maxHp: 100, evp: 0, dfp: 0 };
   check(applyDamage(d, 0.9) === FLAG_MISSED && d.hp === 100, 'damage below 1 is a miss');
   check(applyDamage(d, 10) === FLAG_HIT && d.hp === 90, 'a normal hit');
+  // EntityHitEntity: a landed roll sets 0x200 (took_damage) at 0 damage; a miss is 0x100 only.
+  check(applyDamage(d, 0, true) === FLAG_HIT && d.hp === 90, 'a landed 0-damage hit sends 0x200');
+  check(applyDamage(d, 0, false) === FLAG_MISSED && d.hp === 90, 'a missed roll sends 0x100');
   check(applyDamage(d, 30) === (FLAG_HIT | FLAG_BIG_HIT) && d.hp === 60, 'more than 25% of max HP sets the big-hit flag');
   check((applyDamage(d, 60) & FLAG_DEAD) !== 0 && d.hp === 0, 'HP below 1 sets the dead flag');
 }

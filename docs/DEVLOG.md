@@ -12870,3 +12870,32 @@ So 0x33, 0x45, 0x46, 0xa9 and 0x118 are the same NPC objects as the humanoid NPC
 - The `0x200` send on a landed roll that does 0 damage (the gap above).
 
 **Tests:** `node tests/enemyfsm.test.ts` (all checks pass, the new Mothmant death block included), `node tests/deathfx.test.ts` (all checks pass), `node tests/combatdepth.test.ts` (842 checks, 0 failures), `node tests/enemystatus.test.ts` and `node tests/hitfx.test.ts` (pass). `client`: `tsc --noEmit -p .` clean (Node 24; the worktree has no `node_modules`, so the check linked the main checkout's for the run and removed the link). Not run in Chrome or Playwright (per the brief).
+
+## 2026-10-23: the landed hit's 0x200 at 0 damage, and the 0x4000 hold (ported)
+
+**Found in the exe (dump lines in `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):**
+- `took_damage` is `512` = `0x200` (line 70185). `EntityHitEntity_00773350` (line 747464) sets it on the landed branch (`g_Float0 <= local_14`, line 747690) with no damage test. `0x100` is set only on a miss: the resisted roll (747521, 747720) and the tech misses (749007, 749068, 749103).
+- A landed 0-damage hit shows the number `0` (`display_floating_text_effect_numeric(..., 0)`, line 747690 area, the `else` at 747670), not "MISS". The MISS text is `display_attack_miss_text` (749722), only on the `0x100` path.
+- `entity_hit_by_tech` (747782): the landed branches of every group set `took_damage` regardless of the damage (e.g. 747960, 748352, 748388, 749222, 749367).
+- Tech group 20 is `always_zero_damage` (line 70370). Its case (748365) does not set `0x200` or `0x100`; it only calls `vtable +0xe8(power)` and gives 0. It skips the invulnerability test (747835), so it reaches invulnerable enemies too. The group-20 hold is `Player_ApplyStatusEffect_00779828` (751127): `+0x294 = round(power)`, `+0x28c = 20`, flag `0x4000`.
+- Which callers pass group 20: none of the player techniques. `techGroup` (`client/src/combat/techniques.ts`) returns 0..0x13 for them. The plain-20 callers in the dump are `EpsigardProcessTechHit_0055aa5c` (line 342575, the Epsigard's pass-through), `Epsigard2TechAttackLogic_0055be44` (line 343573, only when the attacker's group is 0x14), and a room-wide hit on the players inside `CheckPlayerInSameRoom` (line 547719; the name is the dump's and may be wrong; power = field `+0x28 * 0x96 + 100`). Group 21 (`always_zero_damage | foie_gifoie_rafoie`, line 536421, the Sinowberill variant 2) is another case and does not write the hold.
+- The tick is `unknown_handle_paralysis_effect` (750229): with flag `0x4000` and id > 0xfff it counts `+0x294` down, clears the hold at the end (`< 1`) and returns 1 (locked) on every such frame, before the paralysis count. Shock and freeze run on their own (0x00521920 calls all three).
+
+**Ported:**
+- `render/combat.ts` `applyEnemyHit`: a per-call `landed` (`fx.landed ?? !fx.miss`, stored in `hitLanded` for the send helpers). Every send site that used `damage >= 1 ? FLAG_HIT : FLAG_MISSED` now uses it (the Dragon, Gol Dragon, Volopt body, Barba, De Rol Le, the Sorcerer bits, Dark Falz parts, the Volopt parts, the Sm children, the De Rol Le segments). `formulas.ts` `applyDamage(defender, total, landed = total >= 1)` takes the same flag. The MISS display (`hitMissed`) is unchanged: it still needs `fx.miss`.
+- The callers with their own roll set the flag: the confused enemy's hit (`enemyHitsEnemy`, `{ landed: hit }`; a failed roll stays `0x100`) and Megid (`{ landed: kill }`, the old rule). The weapon strike's `if (damage >= 1) flags |= FLAG_HIT` is gone (the landed flag sets it). The Mothmant's melee check (`noteMeleeHit`) reads `landed` now, not `baseFlags & FLAG_HIT`, so a landed 0-damage melee hit sets its `+0x2e0 & 2` as the exe's `took_damage` does.
+- `combat/enemystatus.ts`: `EnemyStatus.hold` (+0x294, null when clear), `applyHold(power)` (the vtable 0xe8 writer, `roundHalfEven(power)`), the lock (`locked` includes the hold) and the tick (the hold counts down and locks first; the paralysis is not counted while it runs; shock and freeze are unchanged). `active` (flags or hold) replaces `flags` as the tick's gate in `render/combat.ts`, so a held enemy with no other effect still ticks.
+- `tests/combat.test.ts` (the 0 damage landed case, the miss case), `tests/enemystatus.test.ts` (the hold's round(power) ticks, the paralysis pause, the round-half-even count).
+- `docs/ROADMAP.md`: the 0x4000 line now says the tick and lock are in, with no producer.
+
+**ASSUMED:**
+- ROUND in the hold is round-half-even (the EVP's rounding); the exe's `ROUND` macro was not decoded.
+- The hold is local only: the 6x0A carries the low six status bits, and the 0x4000 bit's send was not traced.
+- The Epsigard's shield and the room hit are not wired to the hold: there is no port path that gives an enemy a group 20 hit, so `applyHold` has no caller (the Epsilon's `immuneToTech` already lets group 20 through when it is invulnerable).
+- `landed` for the other `applyEnemyHit` callers with no roll (the photon blast, the plain weapon strike, the non-Megid techniques) is true at 0 damage: the exe's landed branches set `0x200` without a damage test. Their own rolls (the PB, the special's plain strike) were not traced one by one.
+
+**Not done:**
+- The hold's producer (no group 20 source on an enemy in the port).
+- The 0x200 send on the PB path was not traced to its exe function (`applyEnemyHit` with no roll).
+
+**Tests:** `node tests/enemystatus.test.ts` (all checks pass, the hold block included), `node tests/combatdepth.test.ts` (842 checks, 0 failures), `node tests/hitfx.test.ts` (pass), `node tests/enemyfsm.test.ts` and `node tests/deathfx.test.ts` (pass). `node tests/combat.test.ts` stops at line 215: it needs `vendor/newserv/build/newserv`, which this worktree does not have (the new checks at line 88 run before it; the rest was not run). `client`: `tsc --noEmit -p .` clean (Node 24; the worktree's `node_modules` was linked from the main checkout for the run and removed). Not run in Chrome or Playwright (per the brief).

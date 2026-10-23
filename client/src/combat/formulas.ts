@@ -122,8 +122,12 @@ export const FLAG_HIT = 0x200;
 export const FLAG_BIG_HIT = 0x400;
 export const FLAG_DEAD = 0x800;
 
-export function applyDamage(defender: DefenderStats, total: number): number {
-  if (total < 1) return FLAG_MISSED;
+// `landed`: the hit roll passed. The exe sets 0x200 (took_damage, 512) on every
+// landed hit, a 0-damage one included, and 0x100 only on a miss (EntityHitEntity
+// 0x00773350 at dump 747690 and the tail at 747720; entity_hit_by_tech 747960..
+// 749367). The default is the damage test for the callers with no roll.
+export function applyDamage(defender: DefenderStats, total: number, landed = total >= 1): number {
+  if (!landed) return FLAG_MISSED;
   let flags = FLAG_HIT;
   if (total > defender.maxHp * 0.25) flags |= FLAG_BIG_HIT;
   defender.hp = Math.max(0, defender.hp - Math.round(total));
