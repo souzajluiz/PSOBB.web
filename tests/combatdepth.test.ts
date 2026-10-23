@@ -106,6 +106,7 @@ function damageHarness(maxHp: number) {
   const pushes: Array<[number, number]> = [];
   const sounds: number[] = [];
   const fx: string[] = [];
+  const crits: boolean[] = [];
   const d = new PlayerDamage({
     motion: (k) => motions.push(k),
     push: (vx, vz) => pushes.push([vx, vz]),
@@ -117,10 +118,23 @@ function damageHarness(maxHp: number) {
     sendRevived: () => sent.push({ kind: '6x4F', args: [] }),
     log: () => {},
     sound: (id) => sounds.push(id),
-    fx: (e) => fx.push(e.kind === 'hit' ? (e.heavy ? 'hit-heavy' : 'hit-light') : e.kind),
+    fx: (e) => {
+      fx.push(e.kind === 'hit' ? (e.heavy ? 'hit-heavy' : 'hit-light') : e.kind);
+      if (e.kind === 'hit') crits.push(e.critical);
+    },
   });
   d.reset(maxHp);
-  return { d, sent, motions, pushes, sounds, fx };
+  return { d, sent, motions, pushes, sounds, fx, crits };
+}
+
+{
+  // A critical hit flags its hit fx (the owner shows the critical spark, SE 0x42 and the flash); a normal one does not.
+  const crit = damageHarness(200);
+  crit.d.hit(20, 0, ATTACK_KNOCKBACK, 0xffff, true);
+  check(crit.d.hp === 180 && crit.crits.at(-1) === true, 'a critical hit sets the hit fx flag');
+  const plain = damageHarness(200);
+  plain.d.hit(20, 0, ATTACK_KNOCKBACK);
+  check(plain.crits.at(-1) === false, 'a normal hit leaves the hit fx flag clear');
 }
 
 {
