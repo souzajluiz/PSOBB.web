@@ -39,9 +39,17 @@
 // reaction (+0x88 / +0x100 are skipped). So a paralyzed, shocked or frozen
 // enemy stands still; a confused one keeps acting. (ASSUMED: a hit that lands
 // during the lock is not consumed here; the port drops it, see render/combat.ts.)
-// The paralysis test also has a branch for flag 0x4000 (a hold of +0x294
-// frames, enemies with id > 0xfff) that returns 1 without counting the
-// paralysis; its writer was not found, so the port does not model it.
+// The 0x4000 hold (Player_ApplyStatusEffect_00779828, dump line 751127, the
+// enemy's vtable slot 0xe8): +0x294 = round(power), +0x28c = 20, flag 0x4000.
+// Its one writer is entity_hit_by_tech's always_zero_damage case (tech group
+// 20, dump line 748365), which runs on a live enemy whatever its invulnerable
+// bits (the invulnerability test skips group 20). The paralysis test (+0x98,
+// unknown_handle_paralysis_effect, dump line 750229) runs the hold first, for
+// enemies (id > 0xfff): while the flag is set it counts +0x294 down and returns
+// 1 (locked) without touching the paralysis; at the count's end it clears the
+// flag and the counters, and that frame still returns 1. Shock and freeze run
+// on their own (0x00521920 calls all three). The hold is not in the 6x0A's
+// status bits (the low six), so it is not sent (ASSUMED).
 //   paralysis: counter - 1; while > 0 the flag stays and every 45 frames the
 //     particle 0x26 / SE 0xd play; at 0 the slot clears and the EVP comes back.
 //   freeze / shock / confusion: frames - 1; at 0 the slot clears.
@@ -129,6 +137,8 @@ export class EnemyStatus {
   slot1: Slot = empty();
   // +0x338: the status bits the last Ultimate 6x9C carried.
   private sent = 0;
+  // The 0x4000 hold's frames left (+0x294); null when flag 0x4000 is clear.
+  hold: number | null = null;
   readonly attribute: number;
 
   constructor(attribute: number) {
@@ -146,9 +156,21 @@ export class EnemyStatus {
     return (this.flags & STATUS_FLAG[type]) !== 0;
   }
 
-  // Paralyzed, shocked or frozen: the enemy control skips the AI.
+  // Paralyzed, shocked, frozen or held: the enemy control skips the AI.
   get locked(): boolean {
-    return this.has(STATUS.paralysis) || this.has(STATUS.shock) || this.has(STATUS.freeze);
+    return this.has(STATUS.paralysis) || this.has(STATUS.shock) || this.has(STATUS.freeze) || this.hold !== null;
+  }
+
+  // Whether the status block of the enemy's frame has anything to count.
+  get active(): boolean {
+    return this.flags !== 0 || this.hold !== null;
+  }
+
+  // Player_ApplyStatusEffect_00779828 (vtable 0xe8, from entity_hit_by_tech's
+  // always_zero_damage case): the hold lasts round(power) ticks.
+  // ASSUMED: ROUND is round-half-even (as the EVP's).
+  applyHold(power: number): void {
+    this.hold = roundHalfEven(power);
   }
 
   // EVP after the multipliers: evp + round(mult * evp) per slot.
@@ -199,7 +221,13 @@ export class EnemyStatus {
     // +0x98 paralysis, +0xa8 shock, +0xa4 freeze: 0x00521920 calls all three
     // and ORs them (no early return), so each counts down every frame.
     let locked = false;
-    if (this.slot0.type === STATUS.paralysis && this.countDown(0, ended)) {
+    if (this.hold !== null) {
+      // unknown_handle_paralysis_effect's flag 0x4000 branch (dump line 750229):
+      // count +0x294 down; at the end clear the hold, and this frame still locks.
+      // The paralysis is not counted while the hold runs (its branch returns first).
+      if (--this.hold < 1) this.hold = null;
+      locked = true;
+    } else if (this.slot0.type === STATUS.paralysis && this.countDown(0, ended)) {
       if (this.slot0.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(STATUS.paralysis);
       locked = true;
     }

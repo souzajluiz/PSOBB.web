@@ -142,6 +142,38 @@ near(techFreezeChance(100, true), 0.125, 'Ultimate below 0.2 unchanged');
 near(techShockChance(false), 1 / 15, 'Zonde shock 1/15');
 near(techShockChance(true), 0.025, 'Zonde shock 0.025 in Ultimate');
 
+// 5. The 0x4000 hold (vtable 0xe8, Player_ApplyStatusEffect_00779828): round(power)
+// ticks, locked while it runs; the paralysis is not counted during it.
+{
+  const s = new EnemyStatus(ENEMY_ATTR.native);
+  s.applyHold(3);
+  eq(s.locked, true, 'the hold locks at once');
+  eq([s.tick().locked, s.tick().locked, s.tick().locked], [true, true, true], 'the hold locks for its round(power) ticks');
+  eq(s.hold, null, 'the hold clears on its last tick');
+  eq(s.tick().locked, false, 'free after the hold');
+  eq(s.active, false, 'no status block once clear');
+}
+{
+  const s = new EnemyStatus(ENEMY_ATTR.native);
+  s.inflict(STATUS.paralysis);
+  s.applyHold(2.4);
+  s.tick();
+  eq(s.slot0.frames, ENEMY_PARALYSIS_FRAMES, 'the paralysis is not counted during the hold');
+  s.tick();
+  eq(s.slot0.frames, ENEMY_PARALYSIS_FRAMES, 'still not counted on the hold\'s last tick');
+  s.tick();
+  eq(s.slot0.frames, ENEMY_PARALYSIS_FRAMES - 1, 'the paralysis counts after the hold');
+}
+{
+  // round(2.5) is 2 (round half even, ASSUMED); an invulnerable enemy takes the hold too.
+  const s = new EnemyStatus(ENEMY_ATTR.native);
+  s.applyHold(2.5);
+  eq(s.hold, 2, 'round(power) for the hold count');
+  const z = new EnemyStatus(ENEMY_ATTR.machine);
+  z.applyHold(1);
+  eq(z.tick().locked, true, 'a machine is held too (the hold is not an attribute check)');
+}
+
 if (failures) {
   console.log(`enemystatus: ${failures} failure(s)`);
   process.exit(1);
