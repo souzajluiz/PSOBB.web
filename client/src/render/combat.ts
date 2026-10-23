@@ -18,7 +18,8 @@
 // cast state machine; this file sends 6x8D / 6x47 / 6x48 and applies the
 // hits like a weapon strike (6x0A, kill flow).
 
-import { KEYS, PALETTE_KEYS } from '../input/keyconfig.ts';
+import { HOTBAR_KEYS, KEYS, PALETTE_KEYS } from '../input/keyconfig.ts';
+import { hotbarAction, type HotbarAction } from '../classic/hotbar.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
 import { facingOf, inWeaponCone, type WeaponReach } from '../combat/weaponaim.ts';
@@ -522,6 +523,12 @@ export interface CombatOptions {
   questRunning?: () => boolean;
   // palette_slots[index] of the current action palette (render/fieldhud.ts).
   paletteSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
+  // hotbar_slots[index] (0..9) of the current action palette: the bottom hotbar's keys 1..0
+  // (classic/hotbar.ts; render/fieldhud.ts).
+  hotbarSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
+  // Uses the bag item of palette item index group2 (the hotbar's group 1 = 4); true when a use was sent.
+  // The safe-map gate is applied here, before the call (render/fieldhud.ts useHotbarItem does the lobby test).
+  useItem?: (group2: number) => boolean;
   // The Action Palette Middle key, before its attack: true when an NPC or floor item in the
   // weapon's reach took it (the exe's middle-slot override, update_main_palette_slot_down_override
   // and unknown_handle_main_palette_slot_down_activation). The reach is null without a player.
@@ -1323,6 +1330,44 @@ export class CombatView {
 
   // --- local player ----------------------------------------------------------
 
+  // A hotbar key (slot i = key i + 1, key 0 = slot 10): the action of hotbar_slots[i].
+  private pressHotbar(i: number): void {
+    const slot = this.opts.hotbarSlot?.(i) ?? null;
+    const act: HotbarAction = hotbarAction(slot);
+    switch (act.kind) {
+      case 'attack':
+        this.press(act.type as AttackType);
+        return;
+      case 'technique':
+        this.castTechnique(act.tech);
+        return;
+      case 'item':
+        this.useSlotItem(act.group2);
+        return;
+      case 'trap':
+        this.placeTrap?.(act.trap);
+        return;
+      case 'photon':
+        this.firePhotonBlast(act.slot);
+        return;
+      case 'quest':
+        this.opts.log(`hotbar ${i + 1}: the quest function is not ported`);
+        return;
+      case 'none':
+        return;
+    }
+  }
+
+  // Group 1 = 4 (not a trap): the item of palette item index group2 is used from the bag
+  // (6x27, net/items.ts). CanPerformAction_0068aa8c: the player is not dead and the map is not
+  // a safe one (is_current_map_safe = 0; the cities refuse it). The lobby test is in fieldhud.
+  private useSlotItem(group2: number): void {
+    if (!this.game.self || !this.view) return;
+    if (this.damage.busy || this.damage.dead || this.cast || this.attack?.active) return;
+    if (!inUnsafeMap(this.area)) return;
+    this.opts.useItem?.(group2);
+  }
+
   private frame(dt: number, keys: ReadonlySet<string>): void {
     if (this.disposed) return;
     const me = this.game.self;
@@ -1348,8 +1393,20 @@ export class CombatView {
           else if (slot && !slot.disabled && slot.group1 === 3) this.castTechnique(slot.group2);
           else if (slot && !slot.disabled && slot.group1 === 5) this.firePhotonBlast(slot.group2);
           else if (slot && !slot.disabled && slot.group1 === 4 && trapPaletteType(slot.group2) !== null) this.placeTrap?.(trapPaletteType(slot.group2)!);
-          else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): only attacks and techniques are wired yet`);
+          else if (slot && !slot.disabled && slot.group1 === 4) this.useSlotItem(slot.group2);
+          else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): not wired yet`);
         }
+        if (down) this.held.add(key);
+        else this.held.delete(key);
+      }
+      // The bottom hotbar: keys 1..0 (hotbar_slots[0..9]), skipped while Shift, Alt or Ctrl is held
+      // (unknown_handle_palette_inputs, dump 555862).
+      const modifier = keys.has('shift') || keys.has('alt') || keys.has('control');
+      for (let i = 0; i < HOTBAR_KEYS.length; i++) {
+        const key = HOTBAR_KEYS[i];
+        if (!key) continue;
+        const down = keys.has(key);
+        if (down && !this.held.has(key) && !blocked && !modifier) this.pressHotbar(i);
         if (down) this.held.add(key);
         else this.held.delete(key);
       }

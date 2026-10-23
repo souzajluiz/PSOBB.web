@@ -38,6 +38,7 @@ import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/ret
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
+import { drawHotbar, HOTBAR_POS, hotbarY } from '../classic/hotbar.ts';
 import { bandsOf, overlayFrame, textureBitmap, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
 import type { ItemData, ItemNames } from '../formats/itemnames.ts';
 import { AFSArchive } from '../formats/archives.ts';
@@ -307,6 +308,24 @@ export class FieldHud {
   paletteSlot(index: number): PaletteSlot | null {
     this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
     return this.palette ? (currentPalette(this.palette).slots[index] ?? null) : null;
+  }
+
+  // hotbar_slots[index] (0..9) of the current action palette (the bottom hotbar, classic/hotbar.ts).
+  hotbarSlot(index: number): PaletteSlot | null {
+    this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
+    return this.palette ? (currentPalette(this.palette).hotbar[index] ?? null) : null;
+  }
+
+  // The hotbar's item use (group 1 = 4, not a trap): the bag item of palette item index
+  // group2 goes through GameItems.use (6x27). Refused in the lobby (is_current_map_lobby)
+  // and on a safe map; false when the bag has no such item (nothing is sent).
+  useHotbarItem(group2: number): boolean {
+    const area = this.opts.area();
+    if (area === 0x0f || isSafeMap(area)) return false; // the lobby, or a city (CanPerformAction_0068aa8c)
+    const id = this.paletteItemId(group2);
+    if (id === null) return false;
+    this.opts.items.use(id, this.rules());
+    return true;
   }
 
   // ItemPMT of the item names (MAG feeding, render/gameview.ts).
@@ -710,9 +729,16 @@ export class FieldHud {
 
   // Stack count of palette item index i (0x0096f51c).
   private itemCount(i: number): number {
+    const id = this.paletteItemId(i);
+    const it = id === null ? undefined : this.opts.character()?.inventory.find((x) => x.data.id === id);
+    return it ? stackSize(it.data) : 0;
+  }
+
+  // The inventory item id of palette item index i (PALETTE_ITEMS: the tool's data1[1], data1[2]), null when the bag has none.
+  private paletteItemId(i: number): number | null {
     const t = PALETTE_ITEMS[i];
     const it = t && this.opts.character()?.inventory.find((x) => x.data.data1[0] === 3 && x.data.data1[1] === t[0] && x.data.data1[2] === t[1]);
-    return it ? stackSize(it.data) : 0;
+    return it ? it.data.id : null;
   }
 
   private draw(): void {
@@ -739,6 +765,11 @@ export class FieldHud {
     ctx.imageSmoothingEnabled = true;
     if (this.palette && !this.menu.isOpen && !this.counter) {
       this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y + bands.bottom);
+    }
+    // The bottom hotbar (GUI 0x21 = (0, 442)): hidden with the menus (unknown_update_player_menu_hide_hotbar).
+    if (this.palette && !this.menu.isOpen && !this.counter) {
+      const slots = currentPalette(this.palette).hotbar;
+      drawHotbar(ctx, this.tex.palette, slots, { itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, HOTBAR_POS.x, hotbarY(false) + bands.bottom);
     }
     const prompt = !this.menu.isOpen && !this.counter ? this.prompt?.() : null;
     if (prompt) {

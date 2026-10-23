@@ -187,6 +187,8 @@ export class GameView {
       ...character,
       source,
       paletteSlot: (i) => this.hud?.paletteSlot(i) ?? null,
+      hotbarSlot: (i) => this.hud?.hotbarSlot(i) ?? null,
+      useItem: (g) => this.hud?.useHotbarItem(g) ?? false,
       interactMiddle: (reach) => this.middleInteract(reach),
       warpSelf: (pos, angle) => this.view?.warpSelf(pos, angle),
       bossPhase: (phase) => this.field.noteBossPhase(phase),
