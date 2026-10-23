@@ -17,6 +17,9 @@ import {
   GOL_SLOTS,
   GOL_STATE,
   GOL_A8_SIZE,
+  GOL_FLAME,
+  GOL_FLAME_RINGS,
+  GolBreath,
   decodeGolA8,
   encodeGolA8,
   golNext,
@@ -341,6 +344,119 @@ eq(GOL_BODY_BOXES.reach, 15, 'the biggest box is 15');
     if (ai.cursor >= GOL_CURSOR_B) break;
   }
   check(minHp >= ai.clamp || ai.cursor >= GOL_CURSOR_B, 'the clamp holds hp at the clamp before the roar');
+}
+
+// --- the breath (exe 0x004cab30 -> 0x004cfc08 -> the flame object 0x004d0300) -----------
+
+// The lattice: 4 rings (1 + 6 + 12 + 18 cells), the steps from the exe's immediates.
+{
+  eq(GOL_FLAME_RINGS.map((r) => r.length).join(','), '1,6,12,18', 'the flame lattice has 4 rings of 1, 6, 12 and 18 cells');
+  eq(GOL_FLAME.stepX, 37.5, 'the lattice x step (0x42160000)');
+  eq(Math.fround(GOL_FLAME.stepZ), Math.fround(43.3), 'the lattice z step (0x422d3333)');
+  eq(GOL_FLAME.reach, 373, 'a cell is made within 398 - 25 of the centre');
+  eq(GOL_FLAME.frames, 51, 'the flame lasts 51 frames');
+}
+// A breath at the origin: ring 0 (the centre) is on the first tick and hits a player at 10; a player at (40, -20) is hit
+// by ring 1 (the odd cell at (37.5, -21.65)) on the second tick; a player at -200 is out of reach of every ring.
+{
+  const b = new GolBreath(0, 0, 130);
+  const targets = [player(1, 10, 0), player(2, 40, -20), player(3, -200, 0)];
+  const hit1 = b.tick(targets).map((t) => t.clientId);
+  eq(hit1.join(','), '1', 'the centre cell hits the player at 10 on the first tick');
+  const hit2 = b.tick(targets).map((t) => t.clientId);
+  eq(hit2.join(','), '2', 'ring 1 hits the player at (40, -20) on the second tick, once');
+  let all: number[] = [];
+  for (let i = 0; i < 60; i++) all = all.concat(b.tick(targets).map((t) => t.clientId));
+  check(!all.includes(1) && !all.includes(2), 'a player hit once is not hit again by the same breath');
+  check(!all.includes(3), 'a player at -200 is out of reach of the lattice');
+  check(b.done, 'the breath ends after its 51 frames');
+}
+// The breath spawns from the body's sub 0 at the 50th tick (0x004cab30's 50.0).
+{
+  const ai = brain();
+  ai.setState(S.breathA);
+  let at = -1;
+  for (let i = 0; i < 60 && at < 0; i++) {
+    const f = ai.tick([]);
+    if (f.shots?.some((s) => s instanceof GolBreath)) at = i + 1;
+  }
+  eq(at, 50, 'the breath is made on the 50th tick of state 0x08');
+}
+
+// --- the burrow (exe 0x004c42a8, sids 0x10 / 0x11) --------------------------------
+
+// Sub 0 counts 60 ticks, then aims at the centre (heading atan2 + 0x8000) and walks in; the leader's pick waits
+// for the body within 50 of the centre.
+{
+  const ai = brain();
+  ai.setState(S.burrowFirst);
+  const targets = [player(1, 400, 0)];
+  ai.x = 400;
+  ai.z = 0;
+  for (let i = 0; i < 59; i++) ai.tick(targets);
+  eq(ai.x, 400, 'the burrow stands still during its 60-tick sub 0');
+  ai.tick(targets);
+  eq(ai.yaw, 0xc000, 'the aim is atan2(400, 0) + 0x8000 = 0xc000 (towards the centre, along -x)');
+  let effects = 0;
+  let first = -1;
+  let t = 0;
+  for (; t < 5000 && ai.sid === S.burrowFirst; t++) {
+    ai.tick(targets);
+    for (const e of ai.drainEvents()) if (e.kind === 'effect' && e.id === 0xe0) effects++;
+    if (ai.sid !== S.burrowFirst) first = ai.sid;
+  }
+  check(ai.x < 400, `the burrow walks towards the centre (x ${ai.x.toFixed(1)})`);
+  check(Math.hypot(ai.x, ai.z) < 50 + 4 * 2, `the pick waits for the body within 50 (dist ${Math.hypot(ai.x, ai.z).toFixed(1)})`);
+  check(effects > 0, 'the walk emits the effect 0xe0 every 11 ticks');
+  check(first >= 0 && t < 5000, `the burrow ends with a pick (${t} ticks)`);
+}
+{
+  const ai = brain();
+  ai.setState(S.burrowNext);
+  eq(ai.air, 2, 'the burrow sets the airborne variant (+0xfb = 2)');
+}
+
+// --- the children (exe 0x004c5dd4, 0x005794d8) and the exit of state 0x17 ----------------
+
+// The child's timer counts 0.005 a tick from 0; the first child to reach -1 removes the body. Entering 0x17
+// gives the rate, so the exit comes on the 201st tick (timer -1.0 after 200 steps).
+{
+  const ai = brain({ singleton: false });
+  ai.setState(S.children);
+  let gone = -1;
+  let killed = 0;
+  for (let i = 0; i < 400 && gone < 0; i++) {
+    ai.tick([]);
+    for (const e of ai.drainEvents()) {
+      if (e.kind === 'gone') gone = i + 1;
+      if (e.kind === 'killed') killed++;
+    }
+  }
+  check(gone >= 200 && gone <= 202, `state 0x17 removes the body after its children expire (tick ${gone})`);
+  check(ai.dead, 'the brain stops after the removal');
+  eq(killed, 0, 'the removal sends no kill');
+}
+
+// --- kill-gate spawn (the area table's 0x12008 bits, ASSUMED option) and the derived extras -----------
+
+{
+  const ai = brain({ gone: true });
+  const ev = run(ai, [], 3).events;
+  eq(ev.filter((e) => e.kind === 'gone').length, 1, 'a gone spawn is removed at its first tick');
+  check(ai.dead, 'a gone spawn stops');
+}
+{
+  // The derived extras (ctor 0x004cede4): flag 0x40, the table C sequence, no hit clamp (+0x682 = 0xffff).
+  const ai = brain({ derived: true, hp: 1000, singleton: false });
+  eq(ai.flags & 0x40, 0x40, 'the derived extras carry flag 0x40');
+  eq(ai.clamp, -1, 'the derived extras have no hit clamp (0xffff)');
+  ai.setState(S.wait);
+  const states = run(ai, [], 3).states;
+  eq(states[1], GOL_SEQ_C[0], 'the derived extras pick from sequence C (its first entry)');
+  ai.hp = 100;
+  ai.tick([]);
+  check(ai.sid !== S.roar, 'the derived extras never roar at the clamp');
+  eq(golNext(0, true).state, GOL_SEQ_C[0], 'golNext(0, derived) reads table C');
 }
 
 if (failures) {

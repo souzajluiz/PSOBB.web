@@ -87,6 +87,33 @@ test('Gol Dragon: the brain runs in Chrome, its states change, a key attack hits
   console.log(`goldragon states ${JSON.stringify({ states: [...states].map((s) => s.toString(16)), changes, last })}`);
   expect(changes, 'the states change over ~60 s').toBeGreaterThan(1);
 
+  // The breath (state 0x08, exe 0x004cab30 -> the flame cells): the player stands 15 units from the body and the
+  // spec waits for the breath to fire on this client; a cell that reaches the player logs a technique hit from the Gol.
+  await test.step('the breath hits a player standing at the body', async () => {
+    const breathHits = () => logs.filter((l) => new RegExp(`E-${last.index.toString(16)} \\([^)]*\\): technique hit`).test(l));
+    const mark = breathHits().length;
+    let breathSeen = false;
+    for (let i = 0; i < 300 && !(breathSeen && breathHits().length > mark); i++) {
+      const s = await golState(page);
+      if (!s) break;
+      last = s;
+      if (s.sid >= 0x08 && s.sid <= 0x0c) breathSeen = true;
+      if (i % 2 === 0) {
+        await page.evaluate(
+          ([x, y, z]) => {
+            const g = (window as any).classicGame.view;
+            g.placePlayer(g.game.selfId, x, y, z + 15, Math.PI);
+          },
+          [s.x, s.y, s.z],
+        );
+      }
+      await page.waitForTimeout(500);
+    }
+    console.log(`goldragon breath ${JSON.stringify({ breathSeen, lines: breathHits().slice(mark) })}`);
+    expect(breathSeen, 'the body breathes (state 0x08..0x0c) within ~150 s').toBe(true);
+    expect(breathHits().length, 'a breath cell hits the player (technique hit from the Gol)').toBeGreaterThan(mark);
+  });
+
   // Stand 35 units in front of the body and attack with the real keys until the hit is logged.
   const hpBefore = last.hp;
   const hitLines = () => logs.filter((l) => /hit the Gol Dragon/.test(l));
