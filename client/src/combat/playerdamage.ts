@@ -241,8 +241,41 @@ const FALLBACK_TICKS = {
   revive: 40,
 } as const;
 
-function damp(v: number): number {
+// One axis of ClampAndDampPlayerVelocity_00694230.
+export function dampKnockback(v: number): number {
   return v >= KNOCKBACK_EPSILON || v <= -KNOCKBACK_EPSILON ? v * KNOCKBACK_DAMPING : 0;
+}
+
+// The knockback of a player whose hit state runs the exe's physics tick
+// (HandlePostHitPhysics_0069ece0 in the light hit, ProcessPlayerDeathState_0069e92c
+// in the heavy fall): each game tick the velocity is damped and the player moves
+// by it. A remote player's copy (6x4B / 6x4C of another client, action_get_hit_flinch
+// / action_get_hit_fall @ 0x0069aa2c / 0x0069aaf4) sets the same velocity from the
+// packet, so it slides with this too. The owner moves the model by the returned
+// displacement; the exe's reset_velocity on IsPlayerAboutToCollide is not ported
+// (the collision move slides instead, as for the local player).
+export class KnockbackSlide {
+  vx = 0;
+  vz = 0;
+
+  start(vx: number, vz: number): void {
+    this.vx = vx;
+    this.vz = vz;
+  }
+
+  stop(): void {
+    this.vx = 0;
+    this.vz = 0;
+  }
+
+  // One game tick: the displacement of this tick, or null when the player stands still.
+  tick(): { dx: number; dz: number } | null {
+    if (!this.vx && !this.vz) return null;
+    this.vx = dampKnockback(this.vx);
+    this.vz = dampKnockback(this.vz);
+    if (!this.vx && !this.vz) return null;
+    return { dx: this.vx, dz: this.vz };
+  }
 }
 
 // The local player's HP, hit motions and death / revive flow. Pure logic: the
@@ -391,8 +424,8 @@ export class PlayerDamage {
     if (this.invuln > 0) this.invuln--;
     this.ticksIn++;
     if (this.vx || this.vz) {
-      this.vx = damp(this.vx);
-      this.vz = damp(this.vz);
+      this.vx = dampKnockback(this.vx);
+      this.vz = dampKnockback(this.vz);
       if (this.vx || this.vz) this.events.push(this.vx, this.vz);
     }
     switch (this.state) {

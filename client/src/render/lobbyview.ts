@@ -782,6 +782,10 @@ export class LobbyView {
       if (y !== null && Math.abs(y - pos.y) < 25) pos.set(pos.x + dx, y, pos.z + dz);
     }
     m.target.copy(pos);
+    // A remote player's run-follow (remoteStep) walks from its logic point; the
+    // knockback moves that point too, or the follow would pull the player back.
+    m.follow.x = pos.x;
+    m.follow.z = pos.z;
     const me = this.lobby.self;
     if (me && me.clientId === clientId) me.position = { x: pos.x, y: pos.y, z: pos.z };
   }
