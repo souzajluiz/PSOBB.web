@@ -21,8 +21,26 @@
 //    create_gun_bullet_particle_effect (0x005e4678) spawns particle 9 at the hand
 //    (create_particle_effect 0x0050b510) and the gun_bullet.xj object 0x005e4704 that
 //    flies from the hand to the aim point (render/guntracer.ts). The egg callback
-//    0x005e4264 (Handgun group, Samba, 0x1c, 0x8b) makes no muzzle and no model: the
-//    0x64-byte ShotEffect (0x005e407c) flies the same way, with particle 0x9f on it.
+//    0x005e4264 (Handgun 6 with group_idx 8, Samba 0x48, 0x1c) makes no muzzle and no
+//    model: the 0x64-byte ShotEffect (0x005e407c) flies the same way, with particle 0x9f on it.
+//
+// WHICH weapons shoot (the gate, found 2026-10-23):
+//  - the item's do_attack (vtable +0x70) is PerformItemAttack (0x005e8908) for the base
+//    item vtable 0x00b10200 and for the Handgun vtable 0x00b15640 and the 0x1c vtable
+//    0x00b14580 (all three read from the exe). Its extraspecial hook (+0xcc) runs first;
+//    the default hook is 0x0061cdb0 (no shot). Then, on the item flags at +0x1dc:
+//    bit 0x2 set -> no regular shot; bit 0x8000 -> the launcher projectile; neither ->
+//    begin_gun_bullet_attack, once per pellet. Bit 0x20000 (the 'ranged' melee branch) is
+//    never set: UpdateItemFlagBasedOnStatus (0x005e9578) reads bit 0 of 0x005e93c8's
+//    result, which is the caller's EBP (ASSUMED: an even stack address, so 0x10000 is set).
+//  - the kinds that reach it with flags 0 (no ctor writes 0x2 / 0x8000 for them): the
+//    Handgun factory (0x005f32ec, kinds 6, 0x44, 0xaf, 0xe8; ctor 0x005f3380), the 0x1c
+//    factory (ctor 0x005f1188). Samba (0x48, flags 0x203) shoots from its own extraspecial
+//    hook: 0x005fc348 calls begin_gun_bullet_attack (vtable +0xc8) itself. Mechgun (8, 0x203)
+//    is ASSUMED to do the same (not traced); Rifle (7) and Shot (9) are not traced here. Kind 0x8b (ctor 0x005eb05c, flags 0x2) shoots through its own hook 0x005eae08,
+//    which calls 0x005e6df8 / 0x005e7014, not begin_gun_bullet_attack: no bullet.
+//  - the factory table 0x009c2244 is indexed by kind - 1 (Handgun at index 5, Samba at 71,
+//    the 0x8b at 138; checked with tools/exedata.py-style scans of the image).
 // At arrival gun_bullet_collision_check (0x005c7120): the target is missed when
 // its hitbox centre moved at least sqrt(g_WeaponBulletCollisionRadiusSq) =
 // sqrt(64) = 8 in XZ since the shot (0x0092bcb4); the miss text shows only when
@@ -45,26 +63,35 @@ export interface Vec3 {
 //   Shot 9     inner 0x005fe170: movl $0x41700000 (15.0) at 0x005fe1d4
 //   Samba 0x48 inner 0x005fc2fc: movl $0x41300000 (11.0) at 0x005fc339
 // Rifle 7 (inner 0x005fb494) and Mechgun 8 (inner 0x005f473c) keep the generic 19.0 (both call 0x005e959c).
+// The Handgun's 11.0 is written only in its egg branch (0x005f3380: group_2 == 6 and group_idx == 8,
+// the bytes at item +0xf3 / +0xf4); the other Handguns keep 19.0. The 0x1c ctor (0x005f1188) writes 11.0.
 export const GUN_BULLET_SPEED_DEFAULT = 19;
+export const HANDGUN_KIND = 6;
+export const HANDGUN_EGG_VARIANT = 8; // group_idx (data1[2]) of the Handgun branch 0x005f3380 tests
 export const GUN_BULLET_SPEED_BY_KIND: ReadonlyMap<number, number> = new Map([
-  [6, 11],
+  [0x1c, 11],
   [9, 15],
   [0x48, 11],
 ]);
-export const bulletSpeed = (kind: number): number => GUN_BULLET_SPEED_BY_KIND.get(kind) ?? GUN_BULLET_SPEED_DEFAULT;
+// variant = the item's group_idx (data1[2]); only the Handgun's speed depends on it.
+export const bulletSpeed = (kind: number, variant = -1): number => {
+  if (kind === HANDGUN_KIND) return variant === HANDGUN_EGG_VARIANT ? 11 : GUN_BULLET_SPEED_DEFAULT;
+  return GUN_BULLET_SPEED_BY_KIND.get(kind) ?? GUN_BULLET_SPEED_DEFAULT;
+};
 export const BULLET_COLLISION_RADIUS_SQ = 64; // g_WeaponBulletCollisionRadiusSq (0x0092bcb4)
 export const BULLET_WALL_MASK = 0x8100; // cast_ray_at_map_collision_geometry flags of begin_gun_bullet_attack
 export const MUZZLE_PARTICLE = 9; // create_particle_effect(hand, 9) (0x005e4678, unk_shoot_shotgun)
 export const SHOT_ANGLES_BAMS: readonly number[] = [0, 2184, -2184, 4551, -4551]; // shotgun_bullet_angles (0x0092dffc)
 
-// ItemPMT weapon kinds (data1[1]) of the guns that fire begin_gun_bullet_attack:
-// Handgun 6 and Shot 9 are the rows the ItemPMT test reads (tests/rangedaim.test.ts);
-// Rifle 7 and Mechgun 8 are ASSUMED to be the kinds in between. Samba Maracas 0x48 is ASSUMED
-// a gun too: its own inner ctor (0x005fc2fc) writes the Handgun's bullet speed and the Handgun's
-// particle callback (0x005e4264), and its motion class is the Mechgun's (8, newserv WeaponKind).
+// ItemPMT weapon kinds (data1[1]) of the guns that fire begin_gun_bullet_attack (see the gate in
+// the header). Handgun 6 and Shot 9 are the rows the ItemPMT test reads (tests/rangedaim.test.ts);
+// Rifle 7 and Mechgun 8 are ASSUMED to be the kinds in between. Samba Maracas 0x48 fires from its
+// own hook (0x005fc348). The Handgun factory's other kinds 0x44, 0xaf, 0xe8 share the Handgun
+// vtable and flags 0, so they take the regular shot (found 2026-10-23). The 0x1c ctor (0x005f1188)
+// has flags 0 and the regular shot too. Kind 0x8b does not reach begin_gun_bullet_attack (see header).
 // The motion class alone is NOT the gate: the class-6..9 kinds include ~40 weapons whose ctors
-// set no gun callback or speed (e.g. 0x42, 0x45, 0x65, 0x6d).
-export const GUN_KINDS: ReadonlySet<number> = new Set([6, 7, 8, 9, 0x48]);
+// set no gun callback or speed (e.g. 0x42, 0x45, 0x65, 0x6d); whether those shoot is not traced.
+export const GUN_KINDS: ReadonlySet<number> = new Set([6, 7, 8, 9, 0x1c, 0x44, 0x48, 0xaf, 0xe8]);
 export const isGunKind = (kind: number): boolean => GUN_KINDS.has(kind);
 // The Shot (kind 9) fires five pellets (unk_shoot_shotgun 0x005fe004); the others one.
 export const SHOT_KIND = 9;
@@ -137,14 +164,18 @@ export function planGunShot(
 // The shot's visual (the item's shot callback at +0x238, written by the inner ctor):
 //  - 'default': 0x005e4678 (create_gun_bullet_particle_effect): the muzzle particle 9 at the
 //    hand and the gun_bullet.xj object of the trail (render/guntracer.ts);
-//  - 'egg': 0x005e4264, the Handgun group's and the others' callback: no muzzle particle and no
-//    bullet model; the effect object ShotEffect below, with particle 0x9f on it.
+//  - 'egg': 0x005e4264, no muzzle particle and no bullet model; the effect object ShotEffect
+//    below, with particle 0x9f on it.
 export type ShotVisual = 'default' | 'egg';
-// The kinds whose inner ctor writes 0x005e4264 (kindmap of the item ctors): the Handgun ctor
-// group 6 (ctor 0x005f3380, also 0x44, 0xaf, 0xe8), 0x1c (ctor 0x005f1188), the Samba Maracas
-// 0x48 (ctor 0x005fc2fc) and 0x8b (ctor 0x005eb05c). Only the guns in GUN_KINDS fire at all.
-const EGG_SHOT_KINDS: ReadonlySet<number> = new Set([6, 0x1c, 0x44, 0x48, 0x8b, 0xaf, 0xe8]);
-export const shotVisualOf = (kind: number): ShotVisual => (EGG_SHOT_KINDS.has(kind) ? 'egg' : 'default');
+// The inner ctors that write 0x005e4264 (read from the exe, 2026-10-23):
+//  - Handgun 6 (ctor 0x005f3380): only when group_idx (data1[2], item +0xf4) is 8; other Handguns,
+//    including 0x44 / 0xaf / 0xe8 (their group_2 is not 6), keep the default visual;
+//  - 0x1c (ctor 0x005f1188) and Samba 0x48 (ctor 0x005fc2fc): always;
+//  - 0x8b (ctor 0x005eb05c, group_idx 3): written, but 0x8b's shots do not reach the callback.
+export const shotVisualOf = (kind: number, variant = -1): ShotVisual => {
+  if (kind === HANDGUN_KIND) return variant === HANDGUN_EGG_VARIANT ? 'egg' : 'default';
+  return kind === 0x1c || kind === 0x48 ? 'egg' : 'default';
+};
 
 // The egg effect (0x005e4264 -> 0x005e407c -> ctor 0x005e4158, a 0x64-byte object, vtable
 // 0x00b0ff6c). Its particle is particleentry.dat entry 0x9f ("egg_bullet": type 0, rate 0.5 per

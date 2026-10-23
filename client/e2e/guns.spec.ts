@@ -50,7 +50,7 @@ const WEAPONS = [
   { name: 'Mechgun', kind: 8, bursts: 1, pellets: 1 },
   { name: 'Samba Maracas', kind: 0x48, bursts: 3, pellets: 1 },
 ] as const;
-const GUN_KINDS = new Set([6, 7, 8, 9, 0x48]); // combat/gunbullet.ts GUN_KINDS
+const GUN_KINDS = new Set([6, 7, 8, 9, 0x1c, 0x44, 0x48, 0xaf, 0xe8]); // combat/gunbullet.ts GUN_KINDS
 
 type Entry = { t: 'swing' | 'hit' | 'targets' | 'shot' | 'land'; step?: number; pellets?: number; dhp?: number; hp: number };
 type Swing = { step: number; hits: number; shots: number; pellets: number; targets: number; lands: number; dhp: number };

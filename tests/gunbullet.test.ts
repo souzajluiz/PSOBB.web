@@ -34,13 +34,15 @@ const noWall = () => false;
 const wall = () => true;
 
 // Speed: the item speed_maybe of a gun is 19 by default (construct_generic_weapon 0x005e959c),
-// and each gun's inner ctor writes its own (objdump): Handgun 11, Shot 15, Samba 11.
+// and each gun's inner ctor writes its own (objdump): Shot 15, Samba 11, 0x1c 11; the Handgun 11
+// only for group_idx 8 (the branch 0x005f3380 writes it in), 19 for the other Handguns.
 check(GUN_BULLET_SPEED_DEFAULT === 19, 'default gun bullet speed is 19');
-check(bulletSpeed(6) === 11 && bulletSpeed(9) === 15 && bulletSpeed(0x48) === 11, `per-kind speeds: Handgun 11, Shot 15, Samba 11 (${bulletSpeed(6)}, ${bulletSpeed(9)}, ${bulletSpeed(0x48)})`);
+check(bulletSpeed(6, 8) === 11 && bulletSpeed(9) === 15 && bulletSpeed(0x48) === 11 && bulletSpeed(0x1c) === 11, `per-kind speeds: Handgun 8 at 11, Shot 15, Samba 11, 0x1c 11 (${bulletSpeed(6, 8)}, ${bulletSpeed(9)}, ${bulletSpeed(0x48)}, ${bulletSpeed(0x1c)})`);
+check(bulletSpeed(6, 0) === 19 && bulletSpeed(6) === 19, `other Handguns keep the default 19 (${bulletSpeed(6, 0)})`);
 check(bulletSpeed(7) === 19 && bulletSpeed(8) === 19, `Rifle and Mechgun keep the default 19 (${bulletSpeed(7)}, ${bulletSpeed(8)})`);
-check(bulletFrames(60, bulletSpeed(6)) === 5 && bulletFrames(60, bulletSpeed(9)) === 4, `frames per kind: 60 units -> Handgun 5 (60/11), Shot 4 (60/15) (${bulletFrames(60, bulletSpeed(6))}, ${bulletFrames(60, bulletSpeed(9))})`);
+check(bulletFrames(60, bulletSpeed(6, 8)) === 5 && bulletFrames(60, bulletSpeed(9)) === 4, `frames per kind: 60 units -> Handgun 8 5 (60/11), Shot 4 (60/15) (${bulletFrames(60, bulletSpeed(6, 8))}, ${bulletFrames(60, bulletSpeed(9))})`);
 {
-  const shot = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, bulletSpeed(6));
+  const shot = planGunShot(O, { heading: 0, angleBams: 0, horizontalDistance: 170 }, { centre: { x: 0, y: 0, z: 60 }, radius: 10 }, noWall, bulletSpeed(6, 8));
   check(shot.bullet && shot.frames === 5, `Handgun shot at a target 60 away: 5 frames (${shot.frames})`);
 }
 check(bulletFrames(19) === 1 && bulletFrames(60) === 3 && bulletFrames(170) === 9, `frames = ROUND(distance / 19): 19 -> 1, 60 -> 3, 170 -> 9 (${bulletFrames(19)}, ${bulletFrames(60)}, ${bulletFrames(170)})`);
@@ -87,6 +89,10 @@ check(bulletFrames(60, 10) === 6, 'speed is a parameter (60 / 10 = 6)');
 check(SHOT_ANGLES_BAMS.length === 5 && SHOT_ANGLES_BAMS[0] === 0 && SHOT_ANGLES_BAMS[1] === 2184 && SHOT_ANGLES_BAMS[3] === 4551, 'five shot angles 0, 2184, -2184, 4551, -4551');
 check(pelletCount(9) === 5 && pelletCount(6) === 1 && pelletCount(7) === 1, 'the Shot fires five pellets, the other guns one');
 check(isGunKind(6) && isGunKind(7) && isGunKind(8) && isGunKind(9) && isGunKind(0x48), 'Handgun, Rifle, Mechgun, Shot, Samba Maracas are guns');
+// The Handgun factory's other kinds (flags 0, the Handgun vtable) and the 0x1c ctor (flags 0) fire too.
+check([0x1c, 0x44, 0xaf, 0xe8].every(isGunKind), 'kinds 0x1c, 0x44, 0xaf, 0xe8 fire (regular shot, flags 0)');
+// 0x8b shoots through its own hook (0x005eae08), not begin_gun_bullet_attack: no bullet.
+check(!isGunKind(0x8b), 'kind 0x8b (own shot hook 0x005eae08) is not on the bullet path');
 check(!isGunKind(1) && !isGunKind(10) && !isGunKind(11), 'melee kinds and the launcher are not on the bullet path');
 
 // Movement miss: at 8 or more in XZ since the shot (64 = g_WeaponBulletCollisionRadiusSq).
@@ -174,10 +180,12 @@ check(bulletTextureIndex(0xe9, 7) === 1, 'classes 0xe8..0xeb: variant 1');
   tr.dispose();
 }
 
-// The shot callback per kind (the item's +0x238): 0x005e4264 (egg) for the Handgun group,
-// 0x1c, the Samba Maracas and 0x8b; 0x005e4678 (default) for the rest.
-for (const k of [6, 0x1c, 0x44, 0x48, 0x8b, 0xaf, 0xe8]) check(shotVisualOf(k) === 'egg', `kind ${k.toString(16)} fires the egg callback`);
-for (const k of [7, 8, 9, 0x83]) check(shotVisualOf(k) === 'default', `kind ${k.toString(16)} keeps the default callback`);
+// The shot callback per kind (the item's +0x238, read from the inner ctors): 0x005e4264 (egg) for
+// Handgun 6 with group_idx 8 (0x005f3380), 0x1c and the Samba Maracas; 0x005e4678 (default) for the rest.
+check(shotVisualOf(6, 8) === 'egg', 'Handgun with group_idx 8 fires the egg callback');
+check(shotVisualOf(6, 0) === 'default' && shotVisualOf(6) === 'default', 'other Handguns keep the default callback');
+for (const k of [0x1c, 0x48]) check(shotVisualOf(k, 0) === 'egg', `kind ${k.toString(16)} fires the egg callback`);
+for (const k of [0x44, 0xaf, 0xe8, 7, 8, 9, 0x83]) check(shotVisualOf(k, 0) === 'default', `kind ${k.toString(16)} keeps the default callback`);
 
 // The egg effect of a target shot: the vector and the float frame count are the hand to the
 // hitbox centre (not the aim point), the velocity is the speed per tick (11 for the Handgun).

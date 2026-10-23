@@ -6,10 +6,11 @@
   (not wired: forms lack the exe pose); Saint-Milion laser e2e + area SE banks now load;
   Battle Mode traps (ba_initial_floor warps); Episode 2 floors smoke (all 17 load).
 - Guns: attacks face the primary target; bullets fly (gun_bullet.xj) and hit at arrival
-  (movement miss, wall block); per-weapon speed (19 / Handgun 11 / Shot 15 / Samba 11);
-  Mechgun bursts = attacks_per_step (1, or 3 for Samba / Psychogun / Guld Milla / Mille
-  Marteaux); guns e2e. Open: the exe's rule for which weapons fire bullets (the port lists
-  6..9 + 0x48), the Handgun / Samba effect 0x005e4264 (particle 159), side-on bullet check.
+  (movement miss, wall block); per-weapon speed (19 / Handgun 11 for group_idx 8 / Shot 15 /
+  Samba 11 / 0x1c 11); Mechgun bursts = attacks_per_step (1, or 3 for Samba / Psychogun /
+  Guld Milla / Mille Marteaux); guns e2e. Which kinds shoot: the exe's gate (PerformItemAttack
+  flags, see DEVLOG 2026-10-23); 0x8b is not a bullet. Open: Mechgun (8), Rifle (7) and the
+  class 6..9 kinds with no gun callback are not traced; side-on bullet check.
 - Remote players: one 6x40 / 6x42 per leg + dead reckoning (stutter on phones). Not
   measured on a real phone.
 - Phones (portrait): tall stage for title, login (HTML form), character select / create
