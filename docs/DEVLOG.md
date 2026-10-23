@@ -12041,3 +12041,30 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 **Checks:** `node tests/objectcollision.test.ts` (new section 3c) and the related tests pass (`collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`, `enemies`, and `itemmodels` with `vendor/` linked into the worktree). `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
 
 **Left (ROADMAP line stays open):** the 44 undecoded sites (indexed per-kind tables and parameters); enemies' use of their tables (no port hit test for enemies); the NPC question; the break flag of the containers.
+
+## 2026-10-23 - player damage: hit point and weapon position heights (exe trace, no constant changed)
+
+**What changed:** nothing in the code. The ROADMAP "Player damage left" line now records what the exe does for the weapon position and the hit point. Two of the port's assumptions are wrong for the weapon position and are not yet fixed (see below). The three height constants stay ASSUMED because no exe value could be read for them.
+
+**Exe evidence (PsoBB.exe at `~/Downloads/psobb-client/PsoBB.exe`; `objdump -d` for the code, `tools/exedata.py read` for the constant; dump lines are in `refsrc/.../Psobb.exe-05112026.c`):**
+- The player's weapon position `weapon_position` (player +0x300) has one writer, `UpdatePlayerWeaponPosition_0077a1f4` (dump 751644; objdump 0x0077a1f4..0x0077a23c). With `battleparams_stats` at +0x2b4 non-null: x = +0x38, z = +0x40, and y = `float(battleparams_stats+0x10) * 0.5 + player.y` (`flds 0x10(%eax)`, `fmuls 0x9780a8`, `fadds 0x3c(%ecx)`; the constant reads 0.5 as f32 at 0x009780a8). Without the pointer: y = player.y. So the weapon position is the feet plus the bloodstain offset, not a height of 20 or 22.
+- The pointer +0x2b4 is set to the player's own embedded stats at +0xe2c in `LoadPlayerEntityBattleParams_006960e4` (dump 577090; objdump store `movl %eax, 0x2b4(%esi)` at 0x696182, `leal 0xe2c(%esi)` at 0x69617c). Inside that function the bloodstain offset (+0xe3c, the float at +0x10 of that row) is read first (`movl 0xe3c(%esi), %edx` at 0x6960e8), written from the character record (`movl %ecx, 0xe3c(%esi)` at 0x69614c), and then restored to the value read first (`movl %edx, 0xe3c(%esi)` at 0x696176). So the file never sets it. Its value is whatever the object held before the load. No other player writer was found: the other `0xe3c` stores in the exe (e.g. 0x4e6629) are on a different object (base +0x930).
+- Readers of weapon_position (dump lines 165533, 183286, 186758, 187400, 188300, 190780, 209062, 285215, 285491, ...): enemy lock-on and velocity copies, the ground probe (`GetGroundCollisionData_00505b48` at 285215), and an Olga-era lock-on cursor (209062). The port has no weapon-position consumer yet, except the gun fallback (below).
+- The hit point of a hit on a player: `EntityHitEntity_00773350` (dump 747464) loops over `defender->hitboxes` (player +0xa4, `hitbox_count` +0xa8, stride 0x2c, the `collision_box` layout in dump line 2749) for the box flagged 0x4000000 and uses its `position2` (+0x1c..+0x24) as the hit point (`local_54`). That is the box centre, the same point the spark, the damage numbers and the critical use. It is not a fixed height. The player's box list is set by a writer not located (the +0xa4 stores are in other objects; `GetPlayerHitboxPosition_007b5264` / `unknown_set_entity_flags` at dump 799487 / 799520 read it).
+- The gun origin: `get_weapon_position` (dump 442935) takes the attach index (item +0x1f2): -1 -> body node 0x30 (the hand, node 48), -2 -> node 0x23, n -> the weapon walk's n-th matrix. This is already the port's `combat/weaponorigin.ts` (skeleton provider). No constant is involved when the skeleton exists.
+
+**Port vs exe:**
+- `WEAPON_HEIGHT` 20 (`combat/techfire.ts`, ASSUMED): used only as the gun / technique origin when the owner has no skeleton (headless, tests). The exe has no such fallback value (the function always reads a node), so this stays ASSUMED and is not used on the lobby view.
+- `AIM_HEIGHT` 22 (ASSUMED): the port's aim point on a player (feet + 22) and the lock-on cursor (`render/combat.ts` `p.y += 22`). The exe's lock-on for a player-as-target copies weapon_position (dump 209062), which is the feet, so 22 is not the exe's value. Not changed here: the enemy-target aim uses the enemy's box, not a player height, and the player's box is not located.
+- `HIT_POINT_DY` 20 and `BODY_DY` 20 (`combat/playerfx.ts`, ASSUMED): the hit spark / status particles. The exe puts them at the hit box centre (player box not located), so 20 is a guess.
+- `PLAYER_AIM_HEIGHT` 10 (`combat/enemyshots.ts`, ASSUMED): the height an enemy shot aims at a player, used by the enemy shots and by `techlightning.ts` `PLAYER_POINT`. Not traced.
+
+**ASSUMED / not traced:**
+- The bloodstain offset at player +0xe3c is taken as 0 (no writer besides the preserve/restore pair; the object's initial contents not read from the allocator).
+- The player's hit box list (+0xa4) writer and its box table (position1 / radius / flags) are not located, so `HIT_POINT_DY`, `BODY_DY`, `AIM_HEIGHT` are still ASSUMED.
+- `PLAYER_AIM_HEIGHT` 10 and `AIM_HEIGHT` 22 use in enemy shots and the lock-on cursor are not traced.
+- The dump's comment on `weapon_position` ("the weapon's vertical position is slightly higher") is a guess; the code above is what the exe does.
+
+**Left (ROADMAP line stays open):** find the player's hit box writer (the +0xa4 list and its position2 per frame; start from the object created by `CreatePlayerEntity_0063b4e8` / `InitializePlayerEntity_0063b5b4`, dump 501072 / 501122); decide whether the player's weapon position feeds any port path (the port has none beyond the gun fallback); then replace HIT_POINT_DY / BODY_DY with the box centre.
+
+**Tests:** existing `tests/weaponorigin.test.ts` and `tests/playerfx.test.ts` cover the current constants (no change). Not run in Chrome.
