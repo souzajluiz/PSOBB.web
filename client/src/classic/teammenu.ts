@@ -705,3 +705,109 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
   drawWindowTitle(ctx, skin, W.x, W.y, title);
 }
 
+// --- Home menu > Team > Team Member List (menu id 0x25) ------------------------------
+//
+// handle_player_menu_select team_member_list_menu (dump 700371, enum value 37) ->
+// TeamMemberListMenu_Constructor_0074d8f4 (dump 720781). Its list is
+// CreateChallengePlayerInfoWindowListWindow_0074ec58 (dump 721925) at
+// get_gui_position(0x15) with the title unitxt (11, 0x156). The rows are the 09EA
+// member list (rank, privilege, guild card, name), each "<%04d> name"
+// (s_ChallengePlayerItemFormat); ChallengePlayerInfoWindowListWindow_UpdateItems_0074eddc
+// (dump 722010) colours them by privilege: 0x10 / 0x20 0xff8affa3, 0x30 0xff5eb1ff,
+// 0x40 0xffff6d46, others the default colour.
+//
+// Not ported: Enter on a row. The exe opens an action sub-list (titled unitxt
+// (11, 0x30), rows (11, 0x15c..0x15e), the dump's state 4 at 720880..) and then its
+// confirm lists (unitxt (11, 0x3a), (11, 0x15f / 0x160)). What the rows do is not
+// traced yet, so Enter is a no-op here and only Cancel closes. The member list is
+// read-only: 08EA is the request, 09EA the answer.
+//
+// ASSUMED: the window sits at get_gui_position(0x15) = (13, 256), read from the
+// static table at 0x00971f40 (tools/exedata.py). The table is not checked against a
+// runtime write: entry 0x1b reads (200, 256) statically while the port's main menu
+// uses (28, 85) at run time, so some entries are written while the game runs.
+// The 8 visible rows and the width (widest row + 2 * INSET) are the PickList's.
+export const TEAM_LIST_POS = { x: 13, y: 256 } as const; // 0x15, ASSUMED (see above)
+export const T11_TEAM_LIST = { title: 0x156 } as const;
+
+// The row colour of a privilege level (the exe's ARGB words, alpha dropped).
+export function memberColor(privilege: number): string | undefined {
+  if (privilege === 0x10 || privilege === 0x20) return '#8affa3';
+  if (privilege === 0x30) return '#5eb1ff';
+  if (privilege === 0x40) return '#ff6d46';
+  return undefined;
+}
+
+export class TeamMemberListWindow {
+  private list: PickList = new PickList([]);
+  private colors = new WeakMap<ListItem, string | undefined>();
+  private epoch = 0;
+  private visible = false;
+  private readonly title: string;
+  private readonly host: TeamHost;
+
+  constructor(host: TeamHost, text: TeamText) {
+    this.host = host;
+    this.title = text.t11(T11_TEAM_LIST.title);
+  }
+
+  get open(): boolean {
+    return this.visible;
+  }
+
+  // Opens the window and asks for the list (08EA). The rows appear with the answer;
+  // a failed request leaves the title and no rows.
+  show(): void {
+    const epoch = ++this.epoch;
+    this.visible = true;
+    this.list = new PickList([]);
+    this.host
+      .members()
+      .then((members) => {
+        if (epoch !== this.epoch || !this.visible) return;
+        const items = members.map((m) => {
+          const item: ListItem = { label: memberRowLabel(m), value: m.guildCard, enabled: true };
+          this.colors.set(item, memberColor(m.privilege));
+          return item;
+        });
+        this.list = new PickList(items);
+      })
+      .catch(() => {});
+  }
+
+  // Cancel closes; Enter on a row does nothing (see above). Returns whether the window is still open.
+  key(e: MenuKey): boolean {
+    if (!this.visible) return false;
+    if (menuKeyOf(e) === 'cancel') {
+      this.close();
+      return false;
+    }
+    this.list.key(e);
+    this.list.result = null;
+    return true;
+  }
+
+  close(): void {
+    this.epoch++;
+    this.visible = false;
+  }
+
+  // The rows as the answer gave them (test and draw helpers).
+  get rows(): readonly ListItem[] {
+    return this.list.items;
+  }
+
+  colorOf(item: ListItem): string | undefined {
+    return this.colors.get(item);
+  }
+
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra: number): void {
+    if (!this.visible) return;
+    const w = Math.max(0, gameTextWidth(this.title), ...this.list.items.map((i) => gameTextWidth(i.label))) + 2 * INSET;
+    ctx.save();
+    ctx.translate(extra / 2, 0); // menus follow the counter's centring
+    drawListWindow(ctx, skin, TEAM_LIST_POS.x, TEAM_LIST_POS.y, w, this.title, this.list.visible, this.list.cursor - this.list.top, true, (it) => this.colors.get(it));
+    ctx.restore();
+  }
+}
+
