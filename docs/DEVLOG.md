@@ -10099,3 +10099,63 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The mag's DEF / POW / DEX / MIND labels stay plain text (no group 11 label; ASSUMED, as before).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/fieldhud.test.ts` (all passed), `node tests/items.test.ts` (98/98), `node tests/itemmodels.test.ts` (all pass), `node tests/shop.test.ts`, `node tests/tekker.test.ts`, `node tests/magfeed.test.ts`, `node tests/medical.test.ts`, `node tests/level.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+## 2026-10-23: Savage Wolf side dash and Barbarous Wolf howl (bodies ported, triggers not found)
+
+**What changed:** the wolf's two remaining states, the side dash (state 0xc) and the
+howl (state 0xe), now run in `combat/enemyfsm.ts` (`WolfAi`). The howl casts Zalure and
+Jellen on the wolf's target, plays its sound and ends in the roam state. The howl does not
+call or buff the other wolves: its entry's search through the pack list stores nothing.
+Neither state's entry is reached by the wolf's own code yet (see below), so `WolfAi.startDash`
+and `WolfAi.armHowl` are the hooks until a trigger is found.
+
+**Details** (Ephinea `PsoBB.exe`, refsrc dump `Psobb.exe-05112026.c`; the Derolle-named handlers are the wolf's):
+- **Dispatcher** (DerolleProcessState_0051b778): state 0xc = DerolleProcessStateAttack_0051c5ac
+  (side dash), 0xe = SavageWolfProcessState_0051c0ac (howl), 7 = HandleDerolleState_0051d9b8
+  (the roam state: a random point near the origin, not ported: the port's idle stands still).
+- **Side dash, entry** (0x0051c5ac, state 4): animation 1 (the stalk motion, 13), speed 0x408
+  = 1.6 (0x3fcccccd), origin = the wolf's position, heading 0x438 = the wolf's heading, dash
+  angle 0x434 = heading +- 0x5000 (112.5 degrees). With a target: + when
+  CheckVectorCrossProduct_007829cc(facing, target - wolf) is nonzero, else -. Without one: a
+  random float >= 0.5 (0x00921330) gives -, else +.
+- **Side dash, frame** (state 0): the dash angle turns toward the heading by 0x100 a frame
+  (ClampAngleDifference_007a8c74(0x434, 0x438, 0x100)); the goal is the origin plus
+  90 (0x0092132c = 90.0) along the dash angle; the frame counter 0x424 counts the frames.
+- **Side dash, exit** (state 3): no target, or the counter past 0x96 (150), goes to state 7.
+  A speed test (0x3b4 < 0x43c) goes to the stalk (state 10) too; not ported.
+- **Howl** (0x0051c0ac): entry sets animation 0xb (motion 4, mode 3, speed 0.4 from the table row
+  0x009bb8b0), counter 0, resume 7. Each frame: sound 0xd3 once the animation has run past 10
+  (check_entity_animation_elapsed_threshold); at counter 30 (0x1e) Zalure (tech 0xc) and at 40
+  (0x28) Jellen (tech 0xb) on the entity at 0x3e8 (the target, 0xffff at spawn) through the
+  entity's vtable +0x60 with power 1.0 (0x3f800000). The motion's end (flag 0x10 of 0xb0) goes to 7.
+  The entry's pack search (g_DerolleEntityListHead, entity field 0x3e4) stores nothing.
+- **Howl trigger**: DerolleHandleStatusEffect_0051e45c (wolf vtable slot 1, 0x00b00264 in the
+  vtable at 0x00b00260 = savage_wolf_vtable) counts 0x41c down each frame and enters 0xe when it
+  reaches 0 (not when dead, state 0x10 / 0x11). Nothing in the dumped wolf code writes 0x41c.
+- **Side dash trigger**: nothing in the dumped wolf code sets state 0xc (the literal sets are in
+  other families). The flinch resume (DerolleHandleState_0051bec0) can re-enter 0xc from 0x380,
+  but 0x380 is only 0xc inside the dash itself.
+- Ghidra (`tools/ghidra/decomp.sh`, project read-only) confirmed InitializeEnemyStateInterval_005217fc
+  sets 0x3c4 (the interval) and 0x3c0 (its phase); it is not the 0x41c countdown.
+
+**Ported as:** `WOLF_DASH`, `WOLF_HOWL`, `WOLF_MOTION.howl`, `WolfCast`, `WolfAi.casts` and
+`WolfAi.sounds` (render/combat.ts plays the sound at the wolf and applies a cast when it lands on
+this player through `applySelfBuff`, like Gi Gue's and Pan Half's casts). The Jellen / Zalure
+power is 1.0, passed as is.
+
+**Assumed:** the dash step toward the goal is its speed 1.6 (LerpFloat_0051d3c4 0.2 not traced),
+and the facing turns toward the target at the stalk's rate; the sign of CheckVectorCrossProduct
+is the one the Savage Wolf death note gives (f.z * v.x < f.x * v.z); the sound's threshold is
+measured in the motion frames the port has run; the howl and the dash both leave for the port's
+idle, which clears the target (the exe keeps it).
+
+**Left out:** the dash's hit check (ProcessGalgryphonHitCheck_00521528(0x500, 0x40c)) and its
+per-frame sound (TriggerDerolleAttackSound_0051ddf4); the dash's visibility check; the speed test
+that goes back to the stalk; the roam state 7; the resist roll of Jellen / Zalure on a player
+(get_player_tech_resist_chance, combat/buffs.ts) which the Gi Gue / Pan Half path also skips.
+
+**Tests:** `tests/enemyfsm.test.ts`: the howl's countdown entry, motion 4 once, Zalure on frame 30,
+Jellen on frame 40, the sound once past 10 frames, the motion end to the roam state; the dash via
+`startDash` (the cross-side start to +x, 150 frames, the roam state after) and the no-target case.
+`npx tsc --noEmit -p .` (client) clean; all `tests/enemyfsm*.test.ts`, `tests/enemies.test.ts`,
+`tests/combatdepth.test.ts` and `tests/combat.test.ts` pass. Not run: Playwright / Chrome (per the brief).
