@@ -4916,16 +4916,30 @@ export class CombatView {
 
   // spawn_mothmant_from_monest: the Monest's next MOTHMANT slot.
   // The Monest's states decide its own death: a killing hit sends it to the
-  // flinch (not yet active) or the kill (active); its body is removed when the
-  // kill state (8) is entered. The wire's kill (6x0A, 6x76, drop, EXP) went out
-  // at the killing hit (killEnemy).
+  // flinch (not yet active) or the kill (active). The kill plays its animation,
+  // the body sinks, and the dead state (9) removes it once no child is alive.
+  // The wire's kill (6x0A, 6x76, drop, EXP) went out at the killing hit (killEnemy).
   private tickMonest(e: EnemyRuntime, ended: boolean): void {
     const m = e.monest!;
     const alive = [...this.enemies.values()].filter((c) => c.parent === e && !c.dead).length;
     const r = m.tick(alive, ended, e.stats.hp <= Math.trunc(e.stats.maxHp / 2));
     if (r.motion) this.playEnemyMotion(e, r.motion);
     if (r.spawn) void this.spawnMothmant(e, m.spawned - 1);
-    if (r.killed) this.playDeath(e);
+    if (r.sink) e.instance.root.position.y -= r.sink;
+    if (r.removed && e.state !== 'death') this.monestRemove(e);
+  }
+
+  // The Monest's body leaves at its dead state (9): the death plan of its kind
+  // runs (deathPlanFor), with no death motion of its own (the kill's animation
+  // is the last one shown).
+  private monestRemove(e: EnemyRuntime): void {
+    e.state = 'death';
+    e.removeIn = 0;
+    const plan = deathPlanFor(e.instance.spec.name, e.slot.type, { area: this.area, episode: this.game.info?.episode ?? 1 });
+    if (plan) {
+      e.death = { run: new DeathRun(plan), acc: 0, dissolve: null };
+      if (plan.instant) e.instance.root.visible = false;
+    }
   }
 
   private async spawnMothmant(monest: EnemyRuntime, n: number): Promise<void> {
@@ -6418,6 +6432,10 @@ export class CombatView {
         const motion = e.monest.hit((this.game.info?.difficulty ?? 0) === 3);
         if (motion) this.playEnemyMotion(e, motion);
       }
+    } else if (e.ai instanceof MothmantAi) {
+      // A Mothmant's landed hit (its vtable 0x100 = 0x00589ab0): the flinch (6),
+      // from any state, unless the status lock skips the hit (EnemyUpdateLoop 0x158).
+      if (damage >= 1 && !e.status.locked) e.ai.flinch();
     } else if (damage >= 1 && !groupStun && !e.status.locked && !e.ai?.superArmor && (e.ai?.flinches?.(damage, e.stats.maxHp) ?? true)) this.playDamage(e);
     this.opts.log(
       `${what}hit E-${e.index.toString(16)} (${e.slot.type}) for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp} HP${flags & FLAG_DEAD ? ' (dead)' : ''}`,

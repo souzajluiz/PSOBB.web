@@ -28,13 +28,20 @@
 //
 // Ticks and the behaviour lock (update_enemy_control_object 0x00787a80,
 // enemy_ailment_statuses_tick): every frame the enemy runs vtable
-// +0xa0 (confusion_effect_tick), then +0x98 (unknown_paralysis_effect_tick ->
-// unknown_handle_paralysis_effect 0x00777cfc area), +0xa8 (shock_effect_tick)
-// and +0xa4 (unknown_frozen_effect_tick -> frozen_effect_tick), stopping at the
-// first that returns 1. While one does the enemy only refreshes its reticle
-// and minimap icon (vtable +0x78) and returns: no AI state, no damage
+// +0xa0 (confusion_effect_tick), then the lock gate, vtable +0x158 =
+// 0x00521920, which ORs the results of +0x98 (paralysis: 0x00777d10, the
+// unknown_handle_paralysis_effect), +0xa8 (shock: 0x0077818c) and +0xa4
+// (freeze: 0x007780a8). The gate calls all three every frame, with no short
+// circuit (0x00521920 reads the three into locals, then ORs them), so a frozen
+// enemy's freeze still counts down while it is also paralysed. A nonzero OR
+// makes EnemyUpdateLoop (0x0052167c) return 4: the enemy only refreshes its
+// reticle and minimap icon (vtable +0x78) and returns: no AI state, no damage
 // reaction (+0x88 / +0x100 are skipped). So a paralyzed, shocked or frozen
-// enemy stands still; a confused one keeps acting.
+// enemy stands still; a confused one keeps acting. (ASSUMED: a hit that lands
+// during the lock is not consumed here; the port drops it, see render/combat.ts.)
+// The paralysis test also has a branch for flag 0x4000 (a hold of +0x294
+// frames, enemies with id > 0xfff) that returns 1 without counting the
+// paralysis; its writer was not found, so the port does not model it.
 //   paralysis: counter - 1; while > 0 the flag stays and every 45 frames the
 //     particle 0x26 / SE 0xd play; at 0 the slot clears and the EVP comes back.
 //   freeze / shock / confusion: frames - 1; at 0 the slot clears.
@@ -189,22 +196,19 @@ export class EnemyStatus {
     if (this.slot1.type === STATUS.confusion && this.countDown(1, ended) && this.slot1.frames % ENEMY_STATUS_PERIOD === 0) {
       pulses.push(STATUS.confusion);
     }
-    // +0x98 paralysis, then +0xa8 shock, then +0xa4 freeze; the first that
-    // returns 1 stops the chain.
-    if (this.slot0.type === STATUS.paralysis) {
-      if (this.countDown(0, ended)) {
-        if (this.slot0.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(STATUS.paralysis);
-        return done(true);
-      }
+    // +0x98 paralysis, +0xa8 shock, +0xa4 freeze: 0x00521920 calls all three
+    // and ORs them (no early return), so each counts down every frame.
+    let locked = false;
+    if (this.slot0.type === STATUS.paralysis && this.countDown(0, ended)) {
+      if (this.slot0.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(STATUS.paralysis);
+      locked = true;
     }
-    if (this.slot1.type === STATUS.shock || this.slot1.type === STATUS.freeze) {
-      const t = this.slot1.type;
-      if (this.countDown(1, ended)) {
-        if (this.slot1.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(t);
-        return done(true);
-      }
+    const t1 = this.slot1.type;
+    if ((t1 === STATUS.shock || t1 === STATUS.freeze) && this.countDown(1, ended)) {
+      if (this.slot1.frames % ENEMY_STATUS_PERIOD === 0) pulses.push(t1);
+      locked = true;
     }
-    return done(false);
+    return done(locked);
   }
 
   // frames - 1; true while the effect lasts, else the slot is cleared.
