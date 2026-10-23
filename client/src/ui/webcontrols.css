@@ -63,6 +63,30 @@
 .wc-bar-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .wc-overlay.is-touch .wc-bar-button { width: calc(var(--wc-btn) * 0.75); max-height: none; opacity: 0.75; }
 
+/* Function-key bar (F1..F12, input/fkeys.ts): top-left, above the status
+   window, so it clears the HUD; a Mac convenience, hidden on the touch pad. */
+.wc-fkeys {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: calc(100% - 8px);
+}
+.wc-overlay .wc-fkey {
+  width: 26px;
+  height: 22px;
+  font-size: 10px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.wc-overlay .wc-fkey:hover,
+.wc-overlay .wc-fkey.is-down { opacity: 0.95; }
+.wc-overlay .wc-fkey.is-down { background: var(--wc-fill-down); }
+.wc-overlay.is-touch .wc-fkeys { display: none; }
+.wc-bar-button.wc-fn { font-size: 10px; }
+
 /* Touch pad. */
 .wc-touch { position: absolute; inset: 0; }
 .wc-stick-zone,

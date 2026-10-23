@@ -38,6 +38,7 @@ import {
   type ProxyKey,
 } from '../input/virtualpad.ts';
 import { padLayout, padLayoutFill, type Insets, type PadLayout, type PxRect } from '../input/padlayout.ts';
+import { FKEY_COUNT, fKeyEventInit, fkeysShown, FKEYS_STORAGE_KEY, holdRemaining, isMacPlatform } from '../input/fkeys.ts';
 import { FullscreenController } from './fullscreen.ts';
 import type { SoftKeyboard } from './softkeyboard.ts';
 import './webcontrols.css';
@@ -97,9 +98,27 @@ class KeyFeed {
     this.target = target;
   }
 
-  private send(type: 'keydown' | 'keyup', k: ProxyKey, repeat = false): void {
+  private send(type: 'keydown' | 'keyup', k: ProxyKey, repeat = false, altKey = false): void {
     const ctrlKey = type === 'keydown' && k.key === 'Control';
-    this.target.dispatchEvent(new KeyboardEvent(type, { key: k.key, code: k.code, repeat, ctrlKey, bubbles: true, cancelable: true }));
+    this.target.dispatchEvent(new KeyboardEvent(type, { key: k.key, code: k.code, repeat, ctrlKey, altKey, bubbles: true, cancelable: true }));
+  }
+
+  // A function-key press of the F-key bar: F<n> goes down now and up when the
+  // returned function is called. With Alt / Option held the game reads Alt too
+  // (the emote keys, formats/emotes.ts), so Alt goes down first and up last,
+  // unless the keyboard already holds Alt (`physicalAlt`): that Alt is left alone.
+  pressFKey(n: number, altKey: boolean, physicalAlt: boolean): () => void {
+    const init = fKeyEventInit(n, altKey);
+    if (!init) return () => {};
+    const k = { key: init.key, code: init.code };
+    const alt = { key: 'Alt', code: 'AltLeft' };
+    const ownAlt = altKey && !physicalAlt;
+    if (ownAlt) this.send('keydown', alt, false, true);
+    this.send('keydown', k, false, altKey);
+    return () => {
+      this.send('keyup', k, false, altKey);
+      if (ownAlt) this.send('keyup', alt, false, false);
+    };
   }
 
   down(key: GameKey): void {
@@ -166,6 +185,23 @@ function touchPreferred(): boolean {
   return matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 }
 
+// The function-key bar's stored choice (input/fkeys.ts). Storage may be
+// missing or throw (private windows, blocked site data): then the default.
+function storedFkeys(): string | null {
+  try {
+    return localStorage.getItem(FKEYS_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+function storeFkeys(on: boolean): void {
+  try {
+    localStorage.setItem(FKEYS_STORAGE_KEY, on ? '1' : '0');
+  } catch {
+    // not kept: the default applies on the next load
+  }
+}
+
 function urlTouchSetting(): TouchSetting | null {
   const q = new URLSearchParams(location.search).get('touch');
   return q === '1' ? 'on' : q === '0' ? 'off' : null;
@@ -225,7 +261,73 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     toggleMuted();
     refocus();
   });
-  strip.append(row, fsButton, muteButton);
+  // Function-key bar toggle ("Fn"): shows / hides the F1..F12 bar below.
+  const fnButton = button('wc-bar-button wc-fn', 'Fn', 'Function keys');
+  const fkeyBar = document.createElement('div');
+  fkeyBar.className = 'wc-fkeys';
+  const syncFkeys = (on: boolean) => {
+    fkeyBar.hidden = !on;
+    fnButton.setAttribute('aria-pressed', String(on));
+    const t = on ? 'Hide function keys' : 'Show function keys (F1..F12)';
+    fnButton.title = t;
+    fnButton.setAttribute('aria-label', t);
+  };
+  fnButton.addEventListener('click', () => {
+    const on = fkeyBar.hidden;
+    syncFkeys(on);
+    storeFkeys(on);
+    refocus();
+  });
+  strip.append(row, fsButton, muteButton, fnButton);
+
+  // Function-key bar: F1..F12 buttons along the top edge, left-aligned, above
+  // the status window (classic/hud.ts STATUS_WINDOW starts at y 37 of 480). A
+  // press holds the key from pointer down until pointer up, and at least
+  // FKEY_HOLD_MS (input/fkeys.ts). Option / Alt held while pressing sends Alt+F<n>.
+  // The keyboard's own Alt is tracked so a synthetic Alt is only sent without one.
+  let physicalAlt = false;
+  listen('keydown', (e) => {
+    if (e.isTrusted && e.key === 'Alt') physicalAlt = true;
+  }, true);
+  listen('keyup', (e) => {
+    if (e.isTrusted && e.key === 'Alt') physicalAlt = false;
+  }, true);
+  listen('blur', () => {
+    physicalAlt = false;
+  });
+  for (let n = 1; n <= FKEY_COUNT; n++) {
+    const b = button('wc-fkey', `F${n}`, `F${n} (Option / Alt: Alt+F${n})`);
+    let active: { pointerId: number; at: number; release: () => void } | null = null;
+    const end = (pointerId: number) => {
+      if (!active || active.pointerId !== pointerId) return;
+      const a = active;
+      active = null;
+      b.classList.remove('is-down');
+      const wait = holdRemaining(a.at, performance.now());
+      if (wait > 0) window.setTimeout(a.release, wait);
+      else a.release();
+    };
+    b.addEventListener('pointerdown', (e) => {
+      if (active || e.button !== 0) return;
+      e.preventDefault(); // no focus change: the canvas keeps the keyboard
+      capture(b, e.pointerId);
+      active = { pointerId: e.pointerId, at: performance.now(), release: feed.pressFKey(n, e.altKey, physicalAlt) };
+      b.classList.add('is-down');
+      haptic('tap');
+      refocus();
+    });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+      b.addEventListener(type, (e) => end(e.pointerId));
+    }
+    fkeyBar.append(b);
+  }
+  syncFkeys(fkeysShown(storedFkeys(), isMacPlatform({
+    platform: navigator.platform,
+    userAgent: navigator.userAgent,
+    maxTouchPoints: navigator.maxTouchPoints,
+    uaPlatform: (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform,
+  })));
 
   // Shortcuts. The keydown is stopped in the window capture phase so the game
   // never sees Enter / M; the matching keyup is stopped too, even when Alt is
@@ -495,7 +597,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   }
 
   pad.append(zone, dpad, actions, ...paletteButtons.values());
-  overlay.append(pad, strip);
+  overlay.append(pad, fkeyBar, strip);
   root.append(overlay);
 
   // --- layout ------------------------------------------------------------------
@@ -543,7 +645,7 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
     else if (opts.tall?.()) {
       // The HUD geometry of padLayout does not hold on a tall stage (no HUD
       // there): the two buttons sit in the top-right corner.
-      const sw = 2 * l.button * 0.75 + l.gap;
+      const sw = (fnButton.hidden ? 2 : 3) * l.button * 0.75 + l.gap; // fullscreen, mute (+ Fn)
       place(strip, { x: Math.max(0, w - insets().right - l.gap - sw), y: l.topStrip.y, w: sw, h: l.topStrip.h });
     } else place(strip, l.topStrip);
     place(zone, l.stickZone);
@@ -584,6 +686,8 @@ export function installWebControls(opts: WebControlsOptions): WebControls {
   let suppressed = false;
   const syncParts = () => {
     const shown = !pad.hidden;
+    // On the touch pad the function-key bar and its Fn toggle are not used.
+    fnButton.hidden = shown;
     zone.hidden = menuOnly;
     base.hidden = !shown || menuOnly;
     row.hidden = !shown || menuOnly;

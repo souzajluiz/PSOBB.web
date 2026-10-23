@@ -14072,3 +14072,26 @@ Found with a temporary Playwright spec (warp to Forest 1, read `view.objectLayer
 **Tests.** `node tests/batching.test.ts` (new section: an own-batched object keeps its world matrix; the test fails without the fix), `node tests/objectcollision.test.ts`, `node tests/waves.test.ts`, `node tests/townfield.test.ts`, `node tests/drops.test.ts` all pass; `tsc --noEmit -p client` clean. Chrome: the Playwright check used the shared Vite and newserv; no spec is committed.
 
 **Left.** The other hideable objects (the delayed ones, `construct`) take the same path and are fixed by it, but not seen in Chrome. The own path merges one mesh per object: a floor with many boxes makes many small draws (not measured).
+
+## 2026-10-23: Mac function-key bar (F1..F12 buttons, web convenience)
+
+On a Mac the top row of keys is brightness and volume, so F1..F12 reach the browser only with fn held. The game's F-key hotbar and the Alt+F emote keys could not be used from the keyboard. This is a browser convenience for the web port, not exe behaviour: the exe takes the F keys from the keyboard as usual.
+
+**Game side (read, not changed).** The game reads keys as DOM key names, lower-cased, in the held-key sets of the views (`input/keyconfig.ts` KEYS; the hotbar is entries 20..31 = F1..F12, `input/keyconfig.ts` header; `formats/emotes.ts` ALT_EMOTE_ORDER starts with f1..f12). The Alt emotes test `keys.has('alt')` in the poll (`render/lobbyview.ts`), so Alt is a held key like the others. The on-screen pad (`input/virtualpad.ts`, `ui/webcontrols.ts` KeyFeed) already dispatches KeyboardEvents on the canvas, and that path is reused.
+
+**Ported (web only).**
+- `input/fkeys.ts` (new, pure): `isMacPlatform` (navigator platform, userAgentData; iPad in desktop mode and iPhone excluded), `fkeysShown` (stored "1" / "0", else the Mac default), `fKeyEventInit` (key and code F<n>, altKey), `holdRemaining` (the 120 ms floor, `FKEY_HOLD_MS`).
+- `ui/webcontrols.ts`: `KeyFeed.send` takes altKey; `KeyFeed.pressFKey` sends F<n> down at pointer down and up at pointer up, never before 120 ms. With Option held and no physical Alt seen by the page it sends Alt down first and up last. A bar of 12 buttons top-left above the status window (`.wc-fkeys`, `ui/webcontrols.css`); `pointerdown` and `mousedown` are `preventDefault`ed and the canvas is refocused. An "Fn" toggle on the top strip shows and hides the bar; the choice is stored in localStorage `psobb.fkeys` (try/catch). The bar and the toggle are hidden where the touch pad shows.
+- `tests/fkeys.test.ts` (platform detection, stored choice, event fields for F1..F12, hold timing); `client/e2e/fkeys-bar.spec.ts` (one spec: on a stubbed Mac the bar shows 12 buttons, a click on F1 gives keydown then keyup on the game canvas, 120 ms or more apart, and the canvas keeps the focus).
+
+**ASSUMED.**
+- The top band of the field canvas (above the status window, y < 37 virtual px, `classic/hud.ts` STATUS_WINDOW) is free of the game's own HUD. Checked against the HUD rectangles only, not on a screenshot.
+- The field's viewer reads Alt from its held set the same way as the lobby (`render/lobbyview.ts`); only the lobby poll was read.
+- The key is held while the pointer is down, and at least 120 ms: a click is a tap of 120 ms or more, a long press holds the key longer. The brief's fixed 120 ms tap was read as a minimum.
+
+**Left.**
+- The bar also shows on the title and login screens on a Mac (no per-screen suppression). Not checked there.
+- Overlapping clicks on the same F key each send their own keydown and keyup; the game's held set can drop the key a little early when two presses overlap.
+- The Alt emote path in the field was not run in Chrome. The e2e checks the F1 keydown and keyup only.
+
+**Checks:** `node tests/fkeys.test.ts` passes; `node tests/controls.test.ts` passes (its newserv file check skipped: no vendor/newserv). `npx playwright test e2e/fkeys-bar.spec.ts` passes (1 test, Chrome, Vite on 5173 started by the config). `tsc --noEmit -p client` run with the main checkout's typescript: no errors in the touched files; the worktree has no node_modules, so the other tsc errors (three, vite, ImportMeta) are environment only.
