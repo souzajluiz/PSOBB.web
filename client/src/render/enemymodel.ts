@@ -27,7 +27,7 @@ import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { BmlArchive } from '../formats/bml.ts';
 import { parseNinjaChunkFile, parseNjtl, type NjcmObject } from '../formats/njcm.ts';
-import { parseNjmFile, sampleKeys, type NjMotion, type NjQuatKey } from '../formats/njmotion.ts';
+import { hasRootZOff, parseNjmFile, sampleKeys, type NjMotion, type NjQuatKey } from '../formats/njmotion.ts';
 import { parseNjsFile, shapeVertexCount, type NjShapeMotion, type NjShapeNodeInput } from '../formats/njshape.ts';
 import { RelFile } from '../formats/rel.ts';
 import { EVAL_ZXY_ANG, parseNjObject, type NjObject } from '../formats/xj.ts';
@@ -299,12 +299,17 @@ export class NodeAnimator {
   private apply(frame: number): void {
     const m = this.motion;
     const v = this.v;
+    // The exe's user-function position channel (FUN_00842d7c) drops Z for a
+    // motion marked by a 0x20000000 record (formats/njmotion.ts markRootZOff).
+    const zOff = hasRootZOff(m);
     for (let i = 0; i < this.nodes.length; i++) {
       const node = this.nodes[i];
       const k = m.nodes[i];
       if (!k) continue;
-      if (k.position) node.position.fromArray(sampleKeys(k.position, frame, m.frameCount, v));
-      else node.position.copy(this.bindPos[i]);
+      if (k.position) {
+        node.position.fromArray(sampleKeys(k.position, frame, m.frameCount, v));
+        if (zOff) node.position.z = 0;
+      } else node.position.copy(this.bindPos[i]);
       if (k.quaternion) {
         node.quaternion.copy(this.quat(k.quaternion, frame, this.qa));
       } else if (k.rotation) {

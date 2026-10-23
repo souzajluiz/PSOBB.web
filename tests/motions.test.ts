@@ -5,7 +5,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GSLArchive } from '../client/src/formats/archives.ts';
-import { sampleKeys } from '../client/src/formats/njmotion.ts';
+import * as THREE from '../client/node_modules/three/build/three.module.js';
+import { hasRootZOff, markRootZOff, sampleKeys, type NjMotion } from '../client/src/formats/njmotion.ts';
+import { NPC_MOTION_TABLES, parseNpcTownMotions } from '../client/src/formats/npcmodels.ts';
+import { NodeAnimator } from '../client/src/render/enemymodel.ts';
 import {
   locomotionSlot,
   LOCOMOTION_FACTOR,
@@ -283,6 +286,56 @@ for (let cls = 0; cls < 12; cls++) {
   for (let i = 0; i < 400 && !anim.ended; i++) anim.update(1 / 30);
   if (!anim.ended) fail('field emote F1 never reached its last frame (mode 3 holds)');
   console.log('emotes: 46 keys, town and field records in range, field F1 holds on the last frame');
+}
+
+// 4d. Root Z on the enemy / NPC node animator (render/enemymodel.ts NodeAnimator,
+// formats/njmotion.ts markRootZOff): the same FUN_00842d7c rule as the player.
+// Only a motion marked by a flagged record drops Z (the NPC walk rows, 0x20000002
+// in table 0x0092f470 slot 1 and its two siblings); the enemies' records carry no
+// 0x20000000 (their walk / run motions keep the root Z keys, see enemies.test.ts).
+{
+  const motion: NjMotion = {
+    frameCount: 30,
+    type: 3,
+    spline: false,
+    shortAngles: false,
+    nodes: [{ position: [{ frame: 0, value: [1, 2, 0] }, { frame: 15, value: [3, 4, 20] }], rotation: null, scale: null, quaternion: null, other: [] }],
+  };
+  const root = new THREE.Object3D();
+  const anim = new NodeAnimator([root], [0], motion, 1, true);
+  anim.setFrame(10);
+  const kept = root.position.z;
+  if (Math.abs(kept - 20 * (10 / 15)) > 1e-6) fail(`unmarked motion: root Z ${kept}, expected the key lerp 13.33`);
+  markRootZOff(motion);
+  anim.setFrame(10);
+  if (root.position.z !== 0) fail(`marked motion: root Z ${root.position.z}, expected 0 (FUN_00842d7c)`);
+  if (Math.abs(root.position.x - (1 + 2 * (10 / 15))) > 1e-6 || Math.abs(root.position.y - (2 + 2 * (10 / 15))) > 1e-6) {
+    fail(`marked motion: X/Y ${root.position.x}, ${root.position.y} not kept`);
+  }
+  for (const [fam, t] of Object.entries(NPC_MOTION_TABLES)) {
+    if (!t.walk.rootZ || t.idle.rootZ) fail(`${fam}: walk row must carry rootZ, idle must not`);
+  }
+  const cpt = gsl.has('plymotionnpctown.cpt') ? gsl.get('plymotionnpctown.cpt') : null;
+  if (!cpt) fail('plymotionnpctown.cpt missing');
+  else {
+    const npcMotions = parseNpcTownMotions(cpt);
+    for (const [fam, t] of Object.entries(NPC_MOTION_TABLES)) {
+      const walk = npcMotions[t.walk.motion];
+      const idle = npcMotions[t.idle.motion];
+      if (hasRootZOff(walk) || hasRootZOff(idle)) fail(`${fam}: motion marked before it plays`);
+      const bones = Array.from({ length: walk.nodes.length }, () => new THREE.Object3D());
+      const a = new NodeAnimator(bones, bones.map(() => 0), walk, t.walk.speed, true);
+      markRootZOff(walk);
+      for (let f = 0; f < walk.frameCount; f++) {
+        a.setFrame(f);
+        if (bones[0].position.z !== 0) {
+          fail(`${fam} walk frame ${f}: root Z ${bones[0].position.z} after the mark`);
+          break;
+        }
+      }
+    }
+    console.log('npc walk rows: rootZ on the three families, marked motions keep Z = 0 on every frame');
+  }
 }
 
 if (failures) {

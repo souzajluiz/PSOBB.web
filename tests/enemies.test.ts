@@ -16,7 +16,9 @@ import { enemyKind, parseEnemySets, type EnemySet } from '../client/src/formats/
 import { floorFiles, freePlayVariations, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { enemySlotCount } from '../client/src/formats/enemyids.ts';
 import { expandEnemySets } from '../client/src/formats/enemyslots.ts';
-import { buildEnemy, EnemyArchive, texturesFromXvm } from '../client/src/render/enemymodel.ts';
+import * as THREE from '../client/node_modules/three/build/three.module.js';
+import { buildEnemy, EnemyArchive, NodeAnimator, texturesFromXvm } from '../client/src/render/enemymodel.ts';
+import { hasRootZOff } from '../client/src/formats/njmotion.ts';
 import { BELRA } from '../client/src/combat/enemyfsmruins.ts';
 import { SPINNER_ANIMATIONS, SPINNER_COUNT, SPINNER_MOTION_NODES } from '../client/src/combat/saintmilion.ts';
 
@@ -263,6 +265,51 @@ for (const [bml, nodes] of [['bm_ene_re7_berura.bml', BELRA.handNode], ['bm_ene_
       }
     });
     check(driven > 0, 'Morfos: a body material uses the driven texture');
+  }
+}
+
+// Root Z of the enemies' walk / run motions (render/enemymodel.ts NodeAnimator).
+// The exe drops the position Z (FUN_00842d7c) only for a motion whose record
+// has 0x20000000 (Enemy__SetNjmFactorFlag). Every enemy table read from
+// PsoBB.exe (tools/exedata.py motions) has no such record, so the enemies keep
+// their root Z keys. Measured here: how many walk / run motions key node 0's Z,
+// and that the animator keeps the keyed Z of the Savage Wolf's run b (Z -3.3..12.2).
+{
+  let walkRun = 0;
+  let withZ = 0;
+  let unread = 0;
+  for (const [bml, archive] of archives) {
+    const nodes = archive.nodeCount(0);
+    archive.bml.entries.slice(archive.modelCount).forEach((e, j) => {
+      if (!/walk|run/i.test(e.name)) return;
+      walkRun++;
+      let m;
+      try {
+        m = archive.motion(j, nodes, false);
+      } catch {
+        // A motion that keys fewer nodes than the model (the Pan Arms' parts): not measured here.
+        unread++;
+        return;
+      }
+      if (hasRootZOff(m)) check(false, `${bml} ${e.name}: an enemy motion is marked by the record flag`);
+      if (m.nodes[0]?.position?.length) withZ++;
+    });
+  }
+  check(walkRun > 100 && withZ > 0, `walk / run motions: ${walkRun}, with node 0 Z keys ${withZ}`);
+  const wolf = archives.get('bm_ene_bm5_wolf.bml');
+  if (!wolf) check(false, 'bm_ene_bm5_wolf.bml not loaded');
+  else {
+    const j = wolf.bml.entries.slice(wolf.modelCount).findIndex((e) => e.name === 'runb_bm5_s_kem_body.njm');
+    const m = wolf.motion(j, wolf.nodeCount(0), false);
+    const bones = Array.from({ length: m.nodes.length }, () => new THREE.Object3D());
+    const a = new NodeAnimator(bones, bones.map(() => 0), m, 1, true);
+    let hi = -Infinity;
+    for (let f = 0; f < m.frameCount; f++) {
+      a.setFrame(f);
+      hi = Math.max(hi, bones[0].position.z);
+    }
+    check(hi > 12, `Savage Wolf run b: root Z peak ${hi.toFixed(2)}, expected the keyed 12.25 (unmarked)`);
+    console.log(`enemy walk / run: ${walkRun} motions (${unread} not read), ${withZ} key node 0 Z; Savage Wolf run b root Z peak ${hi.toFixed(2)}`);
   }
 }
 
