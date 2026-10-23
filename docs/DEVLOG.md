@@ -11098,3 +11098,20 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - A 6x2F that sets our HP to 0 does not kill us; the death comes by its own 6x4D.
 
 **Left:** gun shots on remote players (the bullet's arrival and the pellet-to-target mapping); friendly-fire rules beyond battle (not modelled); the 6x2F validation for remote players (partyhp does not check the inner id against `FindEntityById`); the Chrome check.
+
+## 2026-10-23: player hair, cap and head model names from PsoBB.exe
+
+**What changed:** `render/playermodel.ts` takes the hair, cap and head model files from the exe's name lists instead of building `pl<L>hai<NN>.nj`, `pl<L>cap<NN>.nj` and `pl<L>hed<NN>.nj` from the index. `tools/gen-player-tables.py` emits them as `models` in `render/playertables.ts`.
+
+**Findings:**
+- The appearance record at `0x009b5b60 + 0x2c * class` also holds the model name lists: +0x10 hair (`plXhaiNN.nj`, one per hair style), +0x14 cap (`plXcapNN.nj`, or NULL for a style with no cap), +0x18 head (`plXhedNN.nj`, 5 for androids). Read with the same pointer lists as the texture tables.
+- Caps exist only where the list is non-NULL: HUmar (plA) hair 6; RAmar (plD), FOmarl (plG), FOnewm (plH), FOnewearl (plI), FOmar (plK) and RAmarl (plL) on every hair style. HUnewearl (plB) and the four androids have none.
+- Androids (plC, plE, plF, plJ) have no hair list; their head list is 5 entries, all `plXhed00..04.nj`, present in the data.
+- The exe draws the head at `0x9a8` (texture list +0xc7c), the hair at `0x9a4` (texture list +0xb10, depth pass 3) and the cap at `0x9a0` (same texture list as the hair, the alpha path `RenderChallengeModelWithAlpha_004e70c4`); `Olga2UpdatePlayerContext_0049a37c` copies them from the context at +0x5a8..+0x5b0 (the code that fills those is not traced), and they are drawn in `render_player_head_maybe` (the dump's name).
+- Human heads: the record's head list is empty (limit 0), so `pl<L>hed00.nj` is the only head, as before.
+
+**Verified:** `node tests/players.test.ts` ALL PASS. New checks: each class's hair, cap and head names follow the pattern and exist in `pl<L>nj.bml`; each hair style builds with a cap exactly where the exe lists one; each android head builds; HUmar hair 6 draws `plAhai06.nj` and `plAcap06.nj`. `node tests/motions.test.ts` and `node tests/itemmodels.test.ts` pass; client `tsc --noEmit` clean (Node 24). Not run in Chrome.
+
+**ASSUMED / open:**
+- The cap is ported as a plain part with the hair texture list. The exe draws it through the alpha path (`RenderChallengeModelWithAlpha_004e70c4`, flag from the SetRenderColor bit); its blend state is not traced.
+- The dump's names for these functions are unreliable (`FUN_004e6920` is labelled `PopulateChallengeUIEntries_004e6920`), so the slot assignment above is read from the code, not from a name.

@@ -6,7 +6,8 @@
 # Usage: python3 tools/gen-player-tables.py /path/to/PsoBB.exe > client/src/render/playertables.ts
 #
 # Tables read (addresses are virtual addresses in PsoBB.exe):
-#   0x009b5b60  12 x 0x2c appearance records, one per class:
+#   0x009b5b60  12 x 0x2c appearance records, one per class (the model name
+#               lists are read with max(limit, 1) entries; a null cap = no cap):
 #               +0x00 i16 limits[5]: costume, skin, face, head, hair (count,
 #                     0 = field must be 0); checked by FUN_004e665c
 #               +0x10 char** hair model names [hair]   (plXhaiNN.nj)
@@ -67,12 +68,28 @@ for c in range(12):
     names = [cstr(u32(u32(arc + 12) + 4 * i)) for i in range(u32(arc + 4))]
     index = {n: i for i, n in enumerate(names)}
     lists = lambda ls: [[index[n] for n in l] for l in ls]
+    # Part model names: plXhaiNN.nj (hair), plXcapNN.nj (cap, None when the
+    # exe's pointer is NULL) and plXhedNN.nj (head), by index.
+    def modellist(p, count, nullable=False):
+        if not p:
+            return None
+        out_ = []
+        for i in range(max(count, 1)):
+            q = u32(p + 4 * i)
+            out_.append(cstr(q) if q else None)
+        return out_ if nullable else [x for x in out_ if x is not None]
+    models = {
+        'hair': modellist(u32(rec + 0x10), limits[4]),
+        'cap': modellist(u32(rec + 0x14), limits[4], True),
+        'head': modellist(u32(rec + 0x18), limits[3]) or [],
+    }
     out.append({
         'limits': limits,
         'body': [index[n] for n in texlist(body_t)],
         'head': lists(texlist(u32(head_t + 4 * i)) for i in range(max(limits[3], 1))),
         'hair': lists(texlist(u32(hair_t + 4 * i)) for i in range(max(limits[4], 1))) if hair_t else None,
         'names': names,
+        'models': models,
         'addr': (rec, body_t, head_t, hair_t, u32(arc + 12)),
     })
 
@@ -92,6 +109,8 @@ p('  limits: readonly [number, number, number, number, number];')
 p('  body: readonly number[];')
 p('  head: readonly (readonly number[])[]; // per head')
 p('  hair: readonly (readonly number[])[] | null; // per hair style (hai + cap)')
+p('  // Part model names by index: hair (plXhaiNN.nj), cap (plXcapNN.nj, null = no cap\n  // for that style), head (plXhedNN.nj).')
+p('  models: { hair: readonly string[] | null; cap: readonly (string | null)[] | null; head: readonly string[] };')
 p('  names: readonly string[];')
 p('}')
 p()
@@ -110,6 +129,9 @@ for c, o in enumerate(out):
         p('    hair: null,')
     else:
         p(f'    hair: [{", ".join("[" + ", ".join(map(str, l)) + "]" for l in o["hair"])}],')
+    m = o['models']
+    j = lambda v: 'null' if v is None else '[' + ', '.join('null' if x is None else repr(x).replace("'", '"') for x in v) + ']'
+    p(f'    models: {{ hair: {j(m["hair"])}, cap: {j(m["cap"])}, head: {j(m["head"])} }},')
     p(f'    names: n(\'{" ".join(s[3:] for s in o["names"])}\'),')
     p('  },')
 p('];')

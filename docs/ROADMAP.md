@@ -114,7 +114,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [ ] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`); round hitboxes of field objects other than doors
 - [ ] Real lobby spawn points and collision (`*c.rel`)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)
-- [ ] Exact hair/cap texture lists for hat-wearing classes; non-default android heads
+- [x] Exact hair/cap texture lists for hat-wearing classes; non-default android heads (exe model name lists and texture lists in `playertables.ts`; DEVLOG 2026-10-23)
 - [x] Player motions (`plymotiondata.rlc`: RelChunk + PRC + NJS_MOTION with short angle keys), town idle/walk/run tables from `PsoBB.exe`
 - [x] Player models in the lobby instead of capsules, idle/run animation, facing the movement
 - [ ] `proportion_x/y` scaling; field (per-weapon) motion tables; other town motions (emotes, sit)

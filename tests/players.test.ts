@@ -156,6 +156,48 @@ eq('HUmar head', playerTextureNames(0, { ...DEFAULT_APPEARANCE, face: 3, skin: 1
 eq('RAcaseal head', playerTextureNames(5, { ...DEFAULT_APPEARANCE, head: 3, skin: 24 }).head, ['pxtFb_04y_w_kami1', 'pxtFb_04y_w_kao1']);
 // Out-of-range values reset to 0 (FUN_004e665c), not wrapped.
 eq('clamp', clampAppearance(0, { ...DEFAULT_APPEARANCE, costume: 18, skin: -1, hair: 3, proportionX: 1, proportionY: 0.5 }), { ...DEFAULT_APPEARANCE, hair: 3 });
+// Part model names from the exe's record lists (+0x10 hair, +0x14 cap, +0x18 head)
+// and the parts each hair / head index assembles (FUN_0068a088: a cap is drawn
+// only where its list entry is not NULL).
+for (let cls = 0; cls < 12; cls++) {
+  const L = classLetter(cls);
+  const name = `${CLASS_NAMES[cls]} (pl${L}) models`;
+  const m = PLAYER_CLASS_TABLES[cls].models;
+  const assets = parsePlayerAssets(cls, new Uint8Array(readFileSync(join(DATA, `pl${L}nj.bml`))), new Uint8Array(readFileSync(join(DATA, `pl${L}tex.afs`))));
+  const lim = appearanceLimits(cls);
+  (m.hair ?? []).forEach((h, i) => {
+    if (h !== `pl${L}hai${pad2(i)}.nj`) fail(`${name}: hair ${i} is ${h}`);
+    if (!assets.parts.has(h)) fail(`${name}: ${h} not in pl${L}nj.bml`);
+  });
+  (m.cap ?? []).forEach((c, i) => {
+    if (c !== null && c !== `pl${L}cap${pad2(i)}.nj`) fail(`${name}: cap ${i} is ${c}`);
+    if (c !== null && !assets.parts.has(c)) fail(`${name}: ${c} not in pl${L}nj.bml`);
+  });
+  m.head.forEach((h, i) => {
+    if (h !== `pl${L}hed${pad2(i)}.nj`) fail(`${name}: head ${i} is ${h}`);
+    if (!assets.parts.has(h)) fail(`${name}: ${h} not in pl${L}nj.bml`);
+  });
+  if (m.hair && m.hair.length !== lim.hair) fail(`${name}: ${m.hair.length} hair names, limit ${lim.hair}`);
+  if (isAndroid(cls)) {
+    if (m.head.length !== lim.head) fail(`${name}: ${m.head.length} heads, limit ${lim.head}`);
+    for (let head = 0; head < lim.head; head++) {
+      const parts = buildPlayerModel(assets, { ...DEFAULT_APPEARANCE, head }).parts;
+      if (!parts.includes(`pl${L}hed${pad2(head)}.nj`) || parts.some((p) => /hai|cap/.test(p))) fail(`${name}: head ${head} parts ${parts}`);
+    }
+  } else if (m.hair) {
+    for (let hair = 0; hair < lim.hair; hair++) {
+      const parts = buildPlayerModel(assets, { ...DEFAULT_APPEARANCE, hair }).parts;
+      const hasCap = parts.includes(`pl${L}cap${pad2(hair)}.nj`);
+      if (!parts.includes(`pl${L}hai${pad2(hair)}.nj`)) fail(`${name}: hair ${hair} not drawn`);
+      if (hasCap !== (m.cap?.[hair] != null)) fail(`${name}: hair ${hair} cap drawn ${hasCap}, exe ${m.cap?.[hair]}`);
+    }
+  }
+}
+// HUmar (class 0): only hair style 6 has a cap (plAcap06, hair list 6).
+{
+  const ra = parsePlayerAssets(0, new Uint8Array(readFileSync(join(DATA, 'plAnj.bml'))), new Uint8Array(readFileSync(join(DATA, 'plAtex.afs'))));
+  eq('HUmar cap 6 parts', buildPlayerModel(ra, { ...DEFAULT_APPEARANCE, hair: 6 }).parts.filter((p) => /hai|cap/.test(p)), ['plAhai06.nj', 'plAcap06.nj']);
+}
 // Proportion triangles and weights.
 eq('proportions (0,0)', proportionMorph(0, 0), { shapes: [1, 3, 0], weights: [0, 0, 1] });
 eq('proportions (1/3,1/2)', proportionMorph(Math.fround(1 / 3), 0.5).weights.map((w) => Math.round(w * 1e6) / 1e6), [0, 1, 0]);

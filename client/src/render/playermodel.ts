@@ -405,7 +405,10 @@ export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppeara
     if (!p) throw new Error(`${name} missing from pl${L}nj.bml`);
     return p;
   };
-  const head = isAndroid(assets.charClass) ? `pl${L}hed${pad2(a.head)}.nj` : `pl${L}hed00.nj`;
+  // Part names from the exe's model name lists (playertables.ts `models`):
+  // androids pick their head by index; humans have one head, pl<L>hed00.nj.
+  const models = PLAYER_CLASS_TABLES[assets.charClass].models;
+  const head = isAndroid(assets.charClass) ? (models.head[a.head] ?? `pl${L}hed${pad2(a.head)}.nj`) : `pl${L}hed00.nj`;
   let bodyRoot = part(`pl${L}bdy00.nj`);
   let headRoot = part(head);
   if (assets.morphs) {
@@ -421,11 +424,12 @@ export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppeara
   const inputs: NjcmPartInput[] = [{ name: `pl${L}bdy00.nj`, root: bodyRoot, textures: lookup(lists.body) }];
   inputs.push({ name: head, root: headRoot, textures: lookup(lists.head), attachTo: HEAD_MODEL_NODE });
   if (!isAndroid(assets.charClass)) {
-    const hair = `pl${L}hai${pad2(a.hair)}.nj`;
+    // A null cap name is a style without a cap (exe record +0x14).
+    const hair = models.hair?.[a.hair];
     const hairColor = new THREE.Color().setRGB(a.hairR / 255, a.hairG / 255, a.hairB / 255, THREE.SRGBColorSpace);
-    if (assets.parts.has(hair)) inputs.push({ name: hair, root: part(hair), textures: lookup(lists.hair), attachTo: HEAD_NODE, diffuse: hairColor });
-    const cap = `pl${L}cap${pad2(a.hair)}.nj`;
-    if (assets.parts.has(cap)) inputs.push({ name: cap, root: part(cap), textures: lookup(lists.hair), attachTo: HEAD_NODE });
+    if (hair && assets.parts.has(hair)) inputs.push({ name: hair, root: part(hair), textures: lookup(lists.hair), attachTo: HEAD_NODE, diffuse: hairColor });
+    const cap = models.cap?.[a.hair];
+    if (cap && assets.parts.has(cap)) inputs.push({ name: cap, root: part(cap), textures: lookup(lists.hair), attachTo: HEAD_NODE });
   }
   let weaponAt = -1;
   if (opts.weapon) {
