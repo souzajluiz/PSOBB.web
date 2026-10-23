@@ -29,6 +29,7 @@ import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseEventFile, type WaveEvent } from '../formats/events.ts';
 import { enemySlots } from '../formats/enemyids.ts';
 import type { MapSection } from '../formats/nrel.ts';
+import { roomOfPoint } from '../formats/playerroom.ts';
 import type { EnemySet, PlacedEntity } from '../formats/setdata.ts';
 import { floorToArea, parseSwitchFlag, type Game } from '../net/game.ts';
 import type { CollisionWorld } from './collision.ts';
@@ -435,16 +436,7 @@ export class GameField {
   // Room of a position: the map section whose circle contains it, nearest first
   // (the client keeps the room id on the player, +0x28).
   roomAt(pos: { x: number; y: number; z: number }): number {
-    let best = -1;
-    let bestD = Infinity;
-    for (const s of this.sections) {
-      const d = Math.hypot(s.position[0] - pos.x, s.position[2] - pos.z);
-      if (d <= s.radius && d < bestD) {
-        bestD = d;
-        best = s.id;
-      }
-    }
-    return best;
+    return roomOfPoint(this.sections, pos);
   }
 
   // Call after the LobbyView of the floor has been created: it takes over

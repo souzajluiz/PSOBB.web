@@ -12691,3 +12691,31 @@ So 0x33, 0x45, 0x46, 0xa9 and 0x118 are the same NPC objects as the humanoid NPC
 - The sit end on a 6x3F or a hit: the exe's 6x3F receiver (dump 583247's counterpart at 0x00698cd0) was not traced for a state change, so the port ends a remote sit only on 6x3E.
 
 **Checks:** `node tests/emotes.test.ts` (now with the 6x3F body checks: guard, floor, room, xyz, the 20-byte length), `tests/motions.test.ts`, `tests/players.test.ts`, `tests/chatline.test.ts`, `tests/lobbymain.test.ts`, `tests/setdatatable.test.ts` pass with Node 24. Client `tsc --noEmit -p .` is clean (a temporary link to the main checkout's `client/node_modules`, removed afterwards). Not run in Chrome or against newserv; no 6x3F test existed before, and the body is checked by the emotes test only.
+
+## 2026-10-23: 6x3F / 6x3E room follows get_player_room_id per map; guard stance sent; 6x3E dispatcher traced
+
+**What changed:** the room and guard fields of 6x3F and 6x3E now follow the exe on every map. `formats/playerroom.ts` (new) holds the map class table and `playerRoomId(area, room1, room2)`; `net/game.ts` `setPositionBody` is unchanged; `net/lobby.ts` `sendStop` takes a `SetPositionState` and builds the body with the new `stopBody`; `render/lobbyview.ts` sends the mover's guard (`LobbyView.guarding`, `stopState(pos)`) on each 6x3E, and its room comes from the field (`options.room`) or, in the lobby, from the lobby map's sections; `render/gameview.ts` `playerRoom(pos)` gives the 6x3F room on a warp, and `warpTo` sends the guard stance the mover had before the warp. `render/gamefield.ts` `roomAt` now calls `roomOfPoint` (same rule, one copy).
+
+**Exe evidence:**
+- `get_player_room_id` (dump line 803432): Pioneer 2 (`map_is_pioneer2_`) returns 0; a player (idx < 0x1000) on Forest 1 / Forest 2, on a map where `is_cca_tower_seanight_map_` is true, or on De Rol Le / Barba Ray reads `unknown_room_id_2`; any other player, and any enemy, reads `unknown_room_id_1`.
+- `set_player_room_id` (dump line 803404) writes `_1` on every map and `_2` too only on the same special maps. So on those maps the read value is the last value written through it.
+- The predicates read `unknown_map_data` (dword[47], VA 0x0097f040; read with `tools/exedata.py read 0097f040 u 47`, the hub list 0x0097f1c8 = 0, 15, 18, 45 confirms the table). Class by map id: 13 = Pioneer 2 (0, 18, 45), 14 = lobby (15), 6 = 0x17 CCA, 0x18, 0x19, 0x1a, 0x1b (Jungle North / South, Mountain, Seaside), 0x22 Seaside Night, 0x23 Tower; 11 = bosses (0x0b..0x0e, 0x1e..0x21, 0x2c); 7 = Seabed (0x1c, 0x1d). Forest 1 / 2 are 1 and 2 by id; De Rol Le is 12 and Barba Ray 32, named in the code.
+- The table's class 6 is wider than the predicate's name: Jungle, Mountain and Seaside (0x18..0x1b) are class 6 too, so the exe reads `_2` there. The port follows the table.
+- `dispatch_action_move_stop` (dump line 587490): action 0x3e, size 6; guard `character_flags & in_guard_stance` at +4, heading at +6, floor at +8, room (`get_player_room_id`) at +0xa, xyz at +0xc.
+- 6x3E receiver (`0x00698b74`, objdump): copies the body, `GetPlayer` by idx, sets xyz, floor and heading on the remote player, sets or clears `character_flags` 0x100000 from the packet's guard word (+4 test with 1), calls `set_player_room_id` (room at +0xa, when >= 0), IsPlayerRootObject, then the state dispatcher `0x006a1ac0` with **argument 0**.
+- Dispatcher `0x006a1ac0` (objdump; jump table 0x0093d808): case 0 -> `0x006a1c8c`, which switches on the player's state word `+0x32e` (table 0x0093d840, states 0..0x18, else nothing) and calls that state's handler with the event 6. Case 5 is the local move-stop sender (`0x006a1b48`, the 6x3E sender); case 1 -> `0x006a1c04`; case 2 writes the 0xa9432c / 0xa94330 pair and calls `0x0069b728`; case 7 -> `0x0069b720`.
+
+**Ported:**
+- Room: `playerRoomId` on every send. Pioneer 2 Ep1 / Ep2 / Ep4 send 0; forest, CCA class (incl. Seaside Night and Tower), De Rol Le and Barba Ray use the room value on those maps; everything else the same value. The port has one room value per point (the section circle, `roomOfPoint`), so it passes it as both exe fields.
+- Guard: 6x3E always, and 6x3F on a warp, carry the mover's guard stance (`PlayerMover.guard`, the port's 0x0052ac5c model), not 0.
+- 6x3F on the first load (Pioneer 2) keeps room 0 and guard off.
+
+**ASSUMED:**
+- The guard flag survives a floor load: the warp sends the pre-warp guard. The exe's `character_flags` is not cleared by the load in any traced code, but the load path was not traced.
+- The lobby's room comes from the lobby map's sections (`map_NNn.rel`) with the lobby's map id 15 (class 14, so `_1`). The exe's lobby room source (packet or map-object writes) was not traced.
+- The `_1`-only writes (initdata param6 0x10000, the Sinowberill challenge's section, `set_player_room_id`'s non-special maps) are not modelled, so on the special maps the port cannot report the exe's stale `_2`.
+- The sit stand-up on 6x3E is still ASSUMED (see below).
+
+**Not confirmed: the 6x3E receiver ends a remote sit.** The traced path is receiver -> `0x006a1ac0(0)` -> `0x006a1c8c` -> the handler for the player's `+0x32e` state with event 6. The sit's own flags are not touched on that path: the 6xAB receiver (`HandlePlayerInputState_0069b378`, dump 581207) sets `unknown_flags_2` 0x10000000 (and 0x8000000 for the opposite flag), and neither the 6x3E receiver nor `0x006a1ac0` / `0x006a1c8c` writes them. Whether the sit ends depends on what the `+0x32e` state handler does with event 6 for a sitting player, which was not traced (the sit's `+0x32e` value is not identified). The port keeps "a remote 6x3E ends a remote sit" as ASSUMED.
+
+**Tests:** `tests/setposition.test.ts` (new): the class table, the Pioneer 2 / room-2 / room-1 maps, `playerRoomId`, `roomOfPoint` and `playerRoomAt` on synthetic sections, the 6x3F room and guard, the 6x3E body (`stopBody`: guard, heading, floor, room, xyz). `tests/emotes.test.ts` (6x3F body) still passes. `tests/motions.test.ts`, `tests/players.test.ts`, `tests/playermove.test.ts`, `tests/lobbymain.test.ts`, `tests/chatline.test.ts` pass (the first three need `three` in `client/node_modules`, linked temporarily from the main checkout). Client `tsc --noEmit -p .` is clean. Not run in Chrome or against newserv.

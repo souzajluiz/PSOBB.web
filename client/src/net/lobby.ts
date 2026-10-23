@@ -16,6 +16,7 @@ import type { PlayerAppearance } from '../render/playermodel.ts';
 import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
 import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
+import type { SetPositionState } from './game.ts';
 
 export interface LobbyPlayer {
   clientId: number;
@@ -129,6 +130,24 @@ function parseEntry(data: Uint8Array, o: number): LobbyPlayer {
     gait: 'run',
     floor: 0,
   };
+}
+
+// The 6x3E body (20 bytes after the 4-byte header). Exe: dispatch_action_move_stop
+// (PsoBB.exe dump 587490) writes action move_stop 0x3e, size 6, then guard
+// (`character_flags & in_guard_stance`, +4), heading (+6), floor (+8), room
+// (get_player_room_id, +0xa), xyz (+0xc). The port sends the facing at +6, as it
+// does for 6x3F (net/game.ts setPositionBody).
+export function stopBody(pos: { x: number; y: number; z: number }, angle: number, floor: number, state: SetPositionState): Uint8Array {
+  const p = new Uint8Array(0x14);
+  const dv = new DataView(p.buffer);
+  dv.setUint16(0, state.guard ? 1 : 0, true);
+  dv.setUint16(2, Math.round((angle / (Math.PI * 2)) * 0x10000) & 0xffff, true);
+  dv.setInt16(4, floor, true);
+  dv.setInt16(6, state.room, true);
+  dv.setFloat32(8, pos.x, true);
+  dv.setFloat32(12, pos.y, true);
+  dv.setFloat32(16, pos.z, true);
+  return p;
 }
 
 export class Lobby {
@@ -424,18 +443,10 @@ export class Lobby {
     if (this.self) this.self.gait = 'run';
   }
 
-  // 6x3E: stop at (x, y, z) facing `angle` radians.
-  sendStop(x: number, y: number, z: number, angle: number): void {
-    const p = new Uint8Array(0x14);
-    const dv = new DataView(p.buffer);
-    dv.setUint16(0, 0, true); // is_near_enemy
-    dv.setUint16(2, Math.round((angle / (Math.PI * 2)) * 0x10000) & 0xffff, true);
-    dv.setInt16(4, this.self?.floor ?? 0, true);
-    dv.setInt16(6, 0, true); // room
-    dv.setFloat32(8, x, true);
-    dv.setFloat32(12, y, true);
-    dv.setFloat32(16, z, true);
-    this.sendSubcommand(0x3e, p);
+  // 6x3E: stop at (x, y, z) facing `angle` radians. `state` is the mover's guard
+  // stance and room (stopBody).
+  sendStop(x: number, y: number, z: number, angle: number, state: SetPositionState = { guard: false, room: 0 }): void {
+    this.sendSubcommand(0x3e, stopBody({ x, y, z }, angle, this.self?.floor ?? 0, state));
     this.updateSelf(x, y, z, angle, false);
   }
 
