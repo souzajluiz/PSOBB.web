@@ -1371,7 +1371,7 @@ export class SlimeAi extends BrainBase {
 
   // The death entry (0x00598648): scale 1, morph 5 (the hurt pose), the counter
   // 5. The alpha is left as it is; stepDeathFade runs the fade.
-  kill(): void {
+  override kill(): void {
     if (this.state === 'dead') return;
     super.kill();
     this.xf.sx = this.xf.sy = this.xf.sz = 1;
