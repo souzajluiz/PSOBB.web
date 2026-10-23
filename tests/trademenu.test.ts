@@ -1,8 +1,10 @@
 // The Home menu's Trade Window (classic/trade.ts TradeMenu) over a real TradeSession and
-// the tradeio.ts IO: the partner pick and the proposal (6xA6 what 0 to the partner, 0x62),
-// the accept prompt for a partner's proposal, the item list and the meseta amount (what 2
-// with the offer), the confirm and cancel dialogs (the held confirm flag), a partner's
-// decline as a notice, the layout values of the exe's GUI table, and a drawing smoke test.
+// the tradeio.ts IO: the partner pick, the ask (name + 0xf5, Yes / No, the cursor on No), the
+// waiting window (name + 0xf6, one row, the held Cancel), the accept prompt for a partner's
+// proposal (name + 0xf8, Yes / No at (23, 277), the cursor on Yes), the item list and the
+// meseta amount (what 2 with the offer), the confirm and cancel dialogs (the held confirm
+// flag), a partner's decline as a notice, the layout values of the exe's GUI table, and a
+// drawing smoke test.
 // Run: node tests/trademenu.test.ts
 import { T11_TRADE, TradeMenu, TRADE_POS, type TradeEnv, type TradePhase } from '../client/src/classic/trade.ts';
 import { MESETA_ITEM_ID } from '../client/src/net/items.ts';
@@ -107,27 +109,48 @@ function rig(open: 'list' | 'requested' = 'list'): Rig {
 const phase = (m: TradeMenu): TradePhase => m.phase;
 const sentWhat = (out: Packet[], what: number) => out.some((p) => p.command === 0x62 && p.payload[4] === what);
 
+// Enter on the partner opens the ask; its cursor starts on No, so Yes is ArrowUp then Enter.
+function askYes(r: Rig): void {
+  r.menu.key(key('Enter'));
+  r.menu.key(key('ArrowUp'));
+  r.menu.key(key('Enter'));
+}
+
 // ---- Layout: the exe's GUI table (0x00971f40 + 8 * index) -------------------
 
 check('partner list at get_gui_position(0x5d) = (13, 256)', TRADE_POS.partner.x === 13 && TRADE_POS.partner.y === 256);
-check('confirm list at get_gui_position(0x5e) = (239, 256)', TRADE_POS.ask.x === 239 && TRADE_POS.ask.y === 256);
+check('ask at get_gui_position(0x5e) = (239, 256)', TRADE_POS.ask.x === 239 && TRADE_POS.ask.y === 256);
 check('trade window at get_gui_position(0x60) = (341, 318)', TRADE_POS.window.x === 341 && TRADE_POS.window.y === 318);
 check('dialog at get_gui_position(0x62) = (341, 256)', TRADE_POS.dialog.x === 341 && TRADE_POS.dialog.y === 256);
+check('accept at get_gui_position(0xc4) = (23, 277)', TRADE_POS.accept.x === 23 && TRADE_POS.accept.y === 277);
 check(
-  'group 11 texts: 0x32 partner title, 0x3b window title, 0x33 dialog title, 0x105 confirm, 0x116 cancel, 0xf6 propose',
-  T11_TRADE.partnerTitle === 0x32 && T11_TRADE.windowTitle === 0x3b && T11_TRADE.dialogTitle === 0x33 && T11_TRADE.confirm === 0x105 && T11_TRADE.cancel === 0x116 && T11_TRADE.propose === 0xf6,
+  'group 11 texts: 0x32 partner title, 0x3b window title, 0x33 dialog title, 0xf5 ask, 0xf6 waiting, 0xf8 accept, 0x105 confirm, 0x116 cancel',
+  T11_TRADE.partnerTitle === 0x32 &&
+    T11_TRADE.windowTitle === 0x3b &&
+    T11_TRADE.dialogTitle === 0x33 &&
+    T11_TRADE.ask === 0xf5 &&
+    T11_TRADE.propose === 0xf6 &&
+    T11_TRADE.accept === 0xf8 &&
+    T11_TRADE.confirm === 0x105 &&
+    T11_TRADE.cancel === 0x116,
 );
 
-// ---- Partner pick and proposal ---------------------------------------------
+// ---- Partner pick and the ask (Yes / No) ------------------------------------
 
 {
   const r = rig();
   check('the leaf opens on the partner list', phase(r.menu) === 'partner');
   r.menu.key(key('Enter'));
-  check('Enter on a partner asks for the trade', phase(r.menu) === 'ask');
+  check('Enter on a partner opens the ask (name + 0xf5, Yes / No)', phase(r.menu) === 'ask');
   check('asking sends nothing', r.out.length === 0);
   r.menu.key(key('Enter'));
-  check('Enter on the ask sends the proposal (6xA6 what 0 to the partner, 0x62)', phase(r.menu) === 'waiting' && r.out.length === 1 && r.out[0]!.command === 0x62 && r.out[0]!.flag === PARTNER && r.out[0]!.payload[4] === TRADE_WHAT.propose);
+  check('the ask starts on No: Enter declines and returns to the partner list', phase(r.menu) === 'partner' && r.out.length === 0);
+}
+
+{
+  const r = rig();
+  askYes(r);
+  check('Yes on the ask sends the proposal (6xA6 what 0 to the partner, 0x62)', phase(r.menu) === 'waiting' && r.out.length === 1 && r.out[0]!.command === 0x62 && r.out[0]!.flag === PARTNER && r.out[0]!.payload[4] === TRADE_WHAT.propose);
   check('the session is proposed', r.session.status === TRADE_STATUS.proposed);
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.reject));
   check('a decline is a notice and returns to the partner list', r.session.status === TRADE_STATUS.none);
@@ -136,11 +159,22 @@ check(
 }
 
 {
+  // A tap: the key is up again before the frame's tick, so the held check finds nothing.
   const r = rig();
-  r.menu.key(key('Enter'));
-  r.menu.key(key('Enter'));
+  askYes(r);
   r.menu.key(key('Backspace'));
-  check('Backspace while waiting cancels the proposal (what 5 to the partner)', phase(r.menu) === 'partner' && sentWhat(r.out, TRADE_WHAT.cancelProposal) && r.session.status === TRADE_STATUS.none);
+  r.menu.keyUp(key('Backspace') as KeyboardEvent);
+  r.menu.tick();
+  check('a tap of Cancel on the waiting window does not cancel (the key must be held)', phase(r.menu) === 'waiting' && r.session.status === TRADE_STATUS.proposed && !sentWhat(r.out, TRADE_WHAT.cancelProposal));
+}
+
+{
+  // The hold: Cancel is still down at the frame's tick, so the proposal is cancelled (what 5).
+  const r = rig();
+  askYes(r);
+  r.menu.key(key('Backspace'));
+  r.menu.tick();
+  check('Cancel held through a frame cancels the proposal (what 5 to the partner)', phase(r.menu) === 'partner' && sentWhat(r.out, TRADE_WHAT.cancelProposal) && r.session.status === TRADE_STATUS.none);
 }
 
 {
@@ -153,8 +187,7 @@ check(
 
 {
   const r = rig();
-  r.menu.key(key('Enter'));
-  r.menu.key(key('Enter'));
+  askYes(r);
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   check('the partner accepts: the trade window opens', phase(r.menu) === 'window' && r.session.status === TRADE_STATUS.open);
@@ -179,8 +212,7 @@ check(
 {
   // The spinner keeps the count inside the stack: 3 swords, two presses up.
   const r = rig();
-  r.menu.key(key('Enter'));
-  r.menu.key(key('Enter'));
+  askYes(r);
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   r.menu.key(key('Enter'));
@@ -195,8 +227,7 @@ check(
 
 {
   const r = rig();
-  r.menu.key(key('Enter'));
-  r.menu.key(key('Enter'));
+  askYes(r);
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   r.menu.key(key(' '));
@@ -218,8 +249,7 @@ check(
 
 {
   const r = rig();
-  r.menu.key(key('Enter'));
-  r.menu.key(key('Enter'));
+  askYes(r);
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   r.menu.key(key('Backspace'));
@@ -229,18 +259,18 @@ check(
   check('Yes on the cancel question ends the trade (what 5, result 4) and closes the leaf', open === false && r.menu.open === false && sentWhat(r.out, TRADE_WHAT.cancelProposal) && r.session.status === TRADE_STATUS.none);
 }
 
-// ---- The partner's proposal: the accept prompt -----------------------------
+// ---- The partner's proposal: the accept prompt (name + 0xf8, cursor on Yes) -
 
 {
   const r = rig('requested');
   check('a proposal opens the accept prompt', phase(r.menu) === 'accept');
-  r.menu.key(key('ArrowUp'));
   r.menu.key(key('Enter'));
-  check('Yes accepts (what 0, result 2) and opens the window', phase(r.menu) === 'window' && r.out.some((p) => p.payload[4] === TRADE_WHAT.propose && p.payload[5] === TRADE_RESULT.accept) && r.session.status === TRADE_STATUS.open);
+  check('Yes (the cursor starts on it) accepts (what 0, result 2) and opens the window', phase(r.menu) === 'window' && r.out.some((p) => p.payload[4] === TRADE_WHAT.propose && p.payload[5] === TRADE_RESULT.accept) && r.session.status === TRADE_STATUS.open);
 }
 
 {
   const r = rig('requested');
+  r.menu.key(key('ArrowDown'));
   const open = r.menu.key(key('Enter'));
   check('No declines (what 0, result 3) and closes the prompt', open === false && r.out.some((p) => p.payload[4] === TRADE_WHAT.propose && p.payload[5] === TRADE_RESULT.reject) && r.session.status === TRADE_STATUS.none);
 }
@@ -263,8 +293,11 @@ check(
   draw();
   r.menu.key(key('Enter'));
   r.menu.draw(ctx, skin);
+  draw();
+  r.menu.key(key('ArrowUp'));
   r.menu.key(key('Enter'));
   r.menu.draw(ctx, skin);
+  draw();
   r.session.receive(tradeSubcommand(PARTNER, TRADE_WHAT.propose, TRADE_RESULT.accept, { amount: 0 }));
   r.menu.tick();
   for (const k of ['Enter', 'Enter', 'Enter', 'Backspace', ' ', 'Escape']) {

@@ -6,6 +6,7 @@
 import {
   TRADE_CMD,
   TRADE_CONFIRM_FRAMES,
+  TRADE_FLAG,
   TRADE_ITEM_SIZE,
   TRADE_LIST_BODY,
   TRADE_MESETA_ID,
@@ -415,6 +416,33 @@ function tickAll(relay: Relay, ids: number[], frames: number): void {
   // D1 with no trade in the list state does nothing (exe ExecuteTradeAction_00826394: status 7 only).
   conn.onCommand!({ command: 0xd1, flag: 0, data: new Uint8Array(0) });
   check('D1 without a list state sends nothing', !sent.some((p) => p.command === 0xd2));
+}
+
+// ---- The abort (exe CheckTradeTimeoutOrError_00827064, dump 840342) -------------
+// With the list out (flag 0x400) and a second confirm missing, the exe sends the D4 abort
+// (flag 0, what SendTradeAbortPacket_007f6984) and sets status 9; without 0x400 it sends nothing.
+{
+  const sent: Packet[] = [];
+  const io: TradeIO = {
+    send: (p) => sent.push(p),
+    message: () => {},
+    compactItem: () => null,
+    removeOffer: () => {},
+    inTradeZone: () => true,
+    playerPresent: () => true,
+  };
+  const s = new TradeSession(1, io);
+  s.partner = 2;
+  s.status = TRADE_STATUS.list;
+  s.flags = TRADE_FLAG.listSent | TRADE_FLAG.confirm2Sent;
+  s.tick();
+  check('a list out with the partner second confirm missing sends the D4 abort (flag 0)', sent.some((p) => p.command === 0xd4 && p.flag === 0) && s.status === TRADE_STATUS.aborted);
+  check('the abort clears the list flag (0x400) as the exe does', (s.flags & TRADE_FLAG.listSent) === 0);
+  sent.length = 0;
+  s.status = TRADE_STATUS.list;
+  s.flags = 0;
+  s.tick();
+  check('no list flag: no abort is sent', !sent.some((p) => p.command === 0xd4) && s.status === TRADE_STATUS.list);
 }
 
 console.log(failures ? `${failures} FAILED` : 'all trade checks passed');
