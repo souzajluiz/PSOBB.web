@@ -1697,6 +1697,11 @@ export class CombatView {
         e.lift = lift;
       }
       root.rotation.y = r.angle;
+      // A Recobox and its Recons: yaw, then the kind's tilt about X (derolleTiltX).
+      if (ai instanceof RecoboxAi || ai instanceof ReconAi) {
+        root.rotation.order = 'YXZ';
+        root.rotation.x = ai.tiltX;
+      }
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);

@@ -1032,6 +1032,19 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
 // clone_count: total = min(30, clone_count - 1) (0 when param4 is 0 or
 // clone_count < 2), alive at once = min(param4, total). The Recons are the
 // following slots (box + 1 + child index), each spawned at most once.
+//
+// Orientation (the box's render 0x0058958c and the Recon's render
+// recon_debug_display, same order): translate to the position, yaw by the
+// heading (+0x60), then for kind 1 rotate about X by 0x8000 (the ceiling one
+// is flipped) and for kind 2 by 0x4000 (the wall one lies on its side). The
+// rotation is post-multiplied, so the model is tilted before it is yawed. The
+// X-rotation call sites are 0x00589704 (edx 0x8000) and 0x00589717 (edx 0x4000),
+// with ecx = 0 (the current matrix); kind 0 has no tilt.
+
+// The model tilt about X (radians) that the box and its Recons are drawn with.
+export function derolleTiltX(kind: number): number {
+  return (kind === 1 ? 0x8000 : kind === 2 ? 0x4000 : 0) * BAMS_TO_RAD;
+}
 //   0 (0x00589df0): the first frame -> 1.
 //   1 (0x00589268): the 40-frame fade-in (the effect object at +0x3c8) -> 2.
 //   2 (0x00589148): closed: a player within 500 (nearest) and no Recon in its
@@ -1131,6 +1144,11 @@ export class RecoboxAi extends Ep2dBrain<RecoboxState> {
 
   flinches(): boolean {
     return false;
+  }
+
+  // The box's tilt about X (derolleTiltX), drawn after its yaw.
+  get tiltX(): number {
+    return derolleTiltX(this.kind);
   }
 
   // ASSUMED: the exe plays no death motion (it bursts); the box closes.
@@ -1545,6 +1563,12 @@ export class ReconAi extends Ep2dBrain<ReconState> {
 
   get flinchMotion(): EnemyAiMotion {
     return RECON_ANIM.damage;
+  }
+
+  // The Recon's tilt about X (derolleTiltX), drawn after its yaw
+  // (recon_debug_display, the kind it was initialised with).
+  get tiltX(): number {
+    return derolleTiltX(this.kindCeiling ? 1 : this.kindWall ? 2 : 0);
   }
 
   get deathMotion(): EnemyAiMotion {
