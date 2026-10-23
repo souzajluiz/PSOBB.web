@@ -18,7 +18,7 @@
 // cast state machine; this file sends 6x8D / 6x47 / 6x48 and applies the
 // hits like a weapon strike (6x0A, kill flow).
 
-import { PALETTE_KEYS } from '../input/keyconfig.ts';
+import { KEYS, PALETTE_KEYS } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
 import { facingOf, inWeaponCone } from '../combat/weaponaim.ts';
@@ -182,7 +182,7 @@ import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techl
 import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
-import { Dissolve, iceRadius } from '../combat/hitmodels.ts';
+import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
 import { CRITICAL_SE, restaFloat, FLAME_FRAMES, FLAME_PARTICLE, flamePoint, hitParticles, specialHandlerParticles, specialHitFx, statusApplyFx, statusTickFx, techHitFx, type EnemyStatusKind, type HitFxKind, type ParticleSpawn } from '../combat/hitfx.ts';
 import { PlayerHud } from './playerhud.ts';
 import { LevelUpEffects } from './levelupfx.ts';
@@ -216,6 +216,10 @@ const SE_CUTOFF = 300;
 const ATOMIZER_RANGE = 10;
 
 const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
+
+// The four movement bindings (Move Forward / Backward / Left / Right: the
+// freeze mash counts presses of these, FUN_0078fd68 over bindings 0..3).
+const MOVE_KEYS = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight] as const;
 
 // Action palette keys (input/keyconfig.ts: Left / Down / Right in the BB
 // default key config) and what they do: the palette slot's group 1 = 2 is an
@@ -541,6 +545,8 @@ export class CombatView {
   private floor = 0;
   private area = 0;
   private held = new Set<string>();
+  // The movement keys down last frame (the freeze mash counts their new presses).
+  private heldMove = new Set<string>();
   // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
   // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
   placeTrap: ((type: number) => void) | null = null;
@@ -1229,6 +1235,11 @@ export class CombatView {
     if (this.disposed) return;
     const me = this.game.self;
     const view = this.view;
+    // The freeze mash (combat/status.ts mash): a movement key newly down this frame.
+    const moveDown = MOVE_KEYS.filter((k) => keys.has(k));
+    const moved = moveDown.some((k) => !this.heldMove.has(k));
+    this.heldMove = new Set(moveDown);
+    if (moved && this.area !== 0 && !this.damage.dead) this.status.mash(true);
     if (me && view) {
       const blocked = this.damage.busy || this.status.immobile;
       for (const [key, index] of PALETTE_KEYS) {
@@ -5268,6 +5279,26 @@ export class CombatView {
     const p = statusPulse(type, onset);
     if (p.se !== null) this.playSe(p.se);
     this.fxOn(clientId, statusFx(type), true);
+    if (type === STATUS.freeze && onset) this.playerIce(clientId);
+  }
+
+  // The ice block of a player's freeze: the same object as an enemy's (the
+  // exe's CreateItemEffectHandler_00500fe8 on the player entity, combat/hitmodels.ts
+  // IceBlock). ASSUMED: the player has no hit box pointer (+0x2b4 / +0xa4), so the
+  // target radius is the default 1.5, and the block sits at the hit point height.
+  // It shatters when the freeze ends or the player dies.
+  private playerIce(clientId: number): void {
+    const self = clientId === this.game.selfId;
+    const center = (): THREE.Vector3 | null => {
+      const p = this.view?.playerPositions().get(clientId);
+      return p ? new THREE.Vector3(p.x, p.y + HIT_POINT_DY, p.z) : null;
+    };
+    const frozen = (): boolean => {
+      if (self ? this.damage.dead : this.deadPlayers.has(clientId)) return false;
+      const s = self ? this.status : this.remoteStatus.get(clientId);
+      return !!s && s.has(STATUS.freeze);
+    };
+    this.fx?.ice({ center, frozen, radius: ICE_DEFAULT_RADIUS });
   }
 
   // The ticks of the remote players' status effects (their copies run them

@@ -119,6 +119,45 @@ eq([SLOW_FRAMES, CONFUSION_FRAMES, FREEZE_FRAMES, SHOCK_FRAMES], [210, 300, 150,
   check(!s.immobile, 'shock does not lock');
 }
 
+// --- freeze mash: ROUND(frames * -0.1) = -15 a press, 8-tick window, control ---
+{
+  const { s } = harness();
+  s.inflict(STATUS.freeze);
+  check(!s.mash(true), 'first press only starts the window');
+  eq(s.slot1.counter, FREEZE_FRAMES, 'no frames off on the first press');
+  for (let i = 0; i < 3; i++) s.tick(100, false, 0);
+  const before = s.slot1.counter;
+  check(s.mash(true), 'a press 3 ticks later counts');
+  eq(s.slot1.counter, before - 15, 'a counted press takes 15 frames (150 * -0.1)');
+  check(!s.mash(false), 'no mash outside the control state (+0x32c != 1)');
+  for (let i = 0; i < 8; i++) s.tick(100, false, 0);
+  const at = s.slot1.counter;
+  check(!s.mash(true), 'a press 8 ticks after the last one does not count');
+  eq(s.slot1.counter, at, 'nothing taken');
+  s.tick(100, false, 0);
+  check(s.mash(true), 'the window restarts from every press');
+  for (let i = 0; i < 300 && s.has(STATUS.freeze); i++) {
+    s.tick(100, false, 0);
+    s.mash(true);
+  }
+  check(!s.has(STATUS.freeze), 'mashing every tick ends the freeze');
+  check(!s.mash(true), 'no mash without a freeze');
+}
+{
+  // Mashing every 2 ticks ends a 150-frame freeze after 10 counted presses (150 / 15),
+  // plus the ticks in between: the freeze ends before its natural 150 frames.
+  const { s, pulses } = harness();
+  s.inflict(STATUS.freeze);
+  let ticks = 0;
+  let counted = 0;
+  for (; s.has(STATUS.freeze) && ticks < 400; ticks++) {
+    s.tick(100, false, 0);
+    if (ticks % 2 === 1 && s.mash(true)) counted++;
+  }
+  check(counted > 0 && ticks < FREEZE_FRAMES, `2-tick mashing ends the freeze early (${ticks} ticks, ${counted} presses)`);
+  check(pulses.includes(STATUS.freeze), 'the freeze pulse was sent at its start');
+}
+
 // --- slow halves the motion step ---
 {
   const { s } = harness();
