@@ -3,7 +3,7 @@
 // and Resta, merge); the Pofuilly Slime's puddle / rise / crawl cycle, its
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
-import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SPIT } from '../client/src/combat/enemysplits.ts';
+import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -197,7 +197,10 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
 // --- Pofuilly Slime ------------------------------------------------------------------
 {
   const s = new SlimeAi({ x: 0, z: 0, angle: 0, movement: mv({ fparam1: 12 }), rng: () => 0.5 });
-  check(s.hidden && s.invulnerable, 'a puddle is not drawn and cannot be hit');
+  check(!s.hidden && s.untargetable && s.invulnerable, 'a puddle is drawn (morph 7) and cannot be hit');
+  eq(s.motion, { index: PUDDLE_MOTION.normal, speed: 0.5, loop: true }, 'the puddle pose is DAT_009bfda0[0] = motion 4');
+  const rareSlime = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, rare: true, rng: () => 0.5 });
+  eq(rareSlime.motion?.index, PUDDLE_MOTION.rare, 'a rare puddle uses DAT_009bfda0[1] = motion 5');
   const near = [player(0, 40)];
   let n = 0;
   while (s.state === 'puddle' && n++ < 100) s.tick(near);
