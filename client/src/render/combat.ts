@@ -90,7 +90,7 @@ import {
   type HitMotionKind,
   type PlayerDamageFx,
 } from '../combat/playerdamage.ts';
-import { attributeFx, BLOCK_FX, CRITICAL_HIT_FX, heavyLandSe, HIT_POINT_DY, HIT_SPARK, REVIVE_FX, SOUL_FX, statusFx, statusPulse, type FxSpec } from '../combat/playerfx.ts';
+import { attributeFx, BLOCK_FX, CRITICAL_HIT_FX, heavyLandSe, HIT_POINT_DY, HIT_SPARK, REVIVE_FX, SOUL_FX, WIN_FX, statusFx, statusPulse, type FxSpec } from '../combat/playerfx.ts';
 import { PlayerEffects } from './playerfx.ts';
 import {
   applyDamage,
@@ -5487,6 +5487,12 @@ export class CombatView {
   // them with the player (flag 0x10).
   private fxOn(clientId: number, specs: readonly FxSpec[], follow = false): void {
     if (specs.length) void this.playerFx?.play(clientId, specs, { follow });
+  }
+
+  // The battle win particle on a leading battle player, one emission per call
+  // (quest/battlerun.ts calls it on every 30 Hz update, as the exe does).
+  winEffect(clientId: number): void {
+    this.fxOn(clientId, WIN_FX, true);
   }
 
   // The look of the local player's states (combat/playerfx.ts).

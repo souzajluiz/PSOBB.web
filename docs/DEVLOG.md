@@ -11466,3 +11466,27 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - The field's Home menu gets the same delay and slide (one window in the exe); the field's Quit is not changed.
 
 **Checks:** `client` `npx tsc --noEmit -p .` clean (Node 24). `tests/lobbymenu.test.ts` (new cases: the 2-frame delay and its re-open, the header's 8-frame slide to row 0 and its back-step, Quit reaching the action as 8 in the lobby), `tests/fieldhud.test.ts`, `tests/teammenu.test.ts`, `tests/chatline.test.ts` pass. Three field / option tests (`tests/minimap.test.ts`, `tests/questboard.test.ts`, `tests/options.test.ts`) pressed keys on the frame the menu opened; they now tick 2 frames first (the delay). `medical`, `telepipe` pass. Not run in Chrome or against newserv.
+
+## 2026-10-23: Battle win particles (the 0x114 gate, ported)
+
+**What changed:** the battle leaders get particle 0x114 every update while the win flag holds. `quest/battle.ts`: `WIN_PARTICLE`, `winParticleHolders(places, winFlag)` (the gate's ids), `BattleController.winHolders()`. `combat/playerfx.ts`: `WIN_FX` (one emission, follows the player). `render/combat.ts`: `winEffect(clientId)` (`fxOn`, follow). `quest/battlerun.ts`: after `c.tick()` on each 30 Hz frame, `winEffect` for each holder. The flag itself (`enable_win_pfx` / `disable_win_pfx`, `BattleSetup.winEffects`, default 1) was already routed by `BATTLE_OPCODES`; it is now read. Tests: `tests/battle.test.ts` (the gate's cases, the live flag, a finished battle).
+
+**Correction to the entry above (win particles):** the getter is not "0 once a place is set". Read from the asm, `GetSinowberillChallengeTargetPlayer_006afc7c` (0x006afc7c) returns the flag only when some slot with a player has its place word nonzero, and 0 otherwise. The decompile's `unk_ba_scores` view is a mis-typed alias: the slot array (0xa94af4, 8-byte entries) carries the place at +2, and the ranking's swaps (0x006ae15b..0x006ae1aa) move it with the id.
+
+**Exe evidence** (PsoBB.exe 1.25.13; `objdump -d -M intel`; dump line 555440 for the names):
+- Caller: `unknown_update_player` (dump 554842) ends with `SinowberillChallengePlayer_HandleDetectionLogic_00689a74(this)` (0x00689a74 is its body). The caller's dispatch is not traced (ASSUMED: the per-update player step, 30 Hz like the battle clock).
+- The gate, in order (0x00689a74..0x00689b3e): `unknown_is_in_battle_mode` (0x00687c48: dword 0xa942c0 == 1 and `ValidateChallengePhaseIndex_006a8eb0(0xa94290) == 1`); the own slot: `word [slot+0] == player +0x1c` for entries 0..3 (base `GetSinowberillChallengePlayerSlotsPtr_006afcc8` = 0x006afcc8 = 0xa94af4, stride 8), then `movsx [slot+2] == 0`; the target getter (0x006afc7c); `[player+0x328] & 0x408000 == 0`; invisibility `[player+0x30] & 0x2000000 == 0` (0x00689b44); stealth (0x00688e9c, `has_stealth_suit_effect`) == 0; then `push 0x114; push word [player+0x390]; lea ecx,[player+0x394]; call 0x006a350c`.
+- `+0x390` is a ushort entity id, not a point: 0x006a350c = `create_sdjz_particle`: `FindEntityById_007b4d18(id)`, then `create_particle_effect_3(&entity+0x74, 0x114, 0x50)` (flags 0x50 = follow 0x10 + not culled 0x40), then `ParticleEffectSingleParticle_SetMotionIndex_00508f14(id)`. So the anchor is the entity's position block (no height is added: ASSUMED dy 0), and the particle follows the entity by its id.
+- The flag writers: battle start 1 (dump 602043), `opcode_ba_close_msg` (= enable_win_pfx 0xF888) sets 1, `opcode_unknownF889` (disable_win_pfx) sets 0 (dump 608420..608440).
+- Cadence: one `create_particle_effect_3` per call, i.e. one new one-emission emitter per update (+0x34 = 1, the playerfx header's reading of the same creator). While the holder keeps the gate, that is one emission each update.
+
+**Port:** `winParticleHolders` is the gate's data part: the flag on, somebody with place != 0 (present, id >= 0), the holders are the present players with place 0. The places are the controller's table (`rankPlayers`, 0 = first), which the port already recomputes each battle tick (`tickBattle`), so the gate follows the score as the exe's ranking does. `winEffect` spawns through `PlayerEffects` (`play`, follow): a new burst each call, the same path the status pulses use.
+
+**Not ported / ASSUMED:**
+- The three player checks (invisible 0x2000000, stealth suit, movement 0x408000): the port keeps no such per-player state, so they always pass. A cloaked or invisible leader would still show the particle here.
+- The particle's meaning (0x114 as a "win" effect): the name in particleentry.dat was not read (data.gsl not extracted in this pass); the community's name for the gate is a guess.
+- The emitter's height (dy 0) and the update rate (30 Hz, the battle clock's rate).
+- The battle phase: "in battle" is mapped to the controller existing and not finished (includes results); the exe's phase byte was read only as the dword test.
+- Cost: a leader gets ~30 bursts per second while the flag holds (one per update, each a short-lived `THREE.Group`). Not measured in a browser.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/battle.test.ts` ALL PASS (the new win-particle cases included), `battletraps`, `hitfx`, `particleslope`, `playerfx` pass. No Playwright, no Chrome.
