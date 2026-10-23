@@ -304,6 +304,11 @@ export class NpcAttackAi {
     this.cooldown = Math.max(this.cooldown, ticks);
   }
 
+  // True when no cast is still running (the head's chooser runs only then).
+  ready(): boolean {
+    return this.cooldown === 0;
+  }
+
   // One AI tick. Returns true when the attack flag is set this tick.
   tick(a: {
     row: NpcAttackRow;
@@ -330,5 +335,156 @@ export class NpcAttackAi {
     const pos = this.target === null ? null : a.targetPos(this.target);
     const distSq = pos === null ? null : (pos.x - a.npc.x) ** 2 + (pos.z - a.npc.z) ** 2;
     return this.gate.tick(a.row, true, distSq);
+  }
+}
+
+// --- the head's status flags (SinowberillCheckHeadRotation_007af694, .c:795008) ---------
+//
+// Each record's +0x90 (status) and +0x8c (need) words are set from the player's HP and TP
+// ratios: HP (cur +0x334 / max +0x2bc) <= 0.75 sets 0x8 and need 4, <= 0.1 also 0x800 (ratio
+// thresholds 0xddd8 / 0xddd0); the player's state 0x30 & 0x13 sets 0x2 and need 4; TP (cur
+// +0x336 / max +0x2be) <= 0.2 (0xddcc) with a max above 0 sets 0x10 and need 4.
+// ASSUMED: the exe ORs these bits into the words and clears them elsewhere; here each tick
+// starts from zero and the flags are recomputed from the current ratios. ASSUMED: the state
+// word 0x30 is 0 for an NPC's owner (not read).
+
+export const HEAD_FLAG_STATUS = 0x2;
+export const HEAD_FLAG_NEED_HEAL = 0x8;
+export const HEAD_FLAG_NEED_TP = 0x10;
+export const HEAD_FLAG_ITEM = 0x20;
+export const HEAD_FLAG_CRITICAL = 0x800;
+export const HEAD_NEED_BIT = 0x4; // written into +0x8c with the flags above
+export const HEAD_NEED_BLOCK = 0x2; // +0x8c & 2 of the NPC: the chooser returns (.c:795905)
+
+export interface PlayerRatioStatus {
+  hp: number;
+  hpMax: number;
+  tp: number;
+  tpMax: number;
+  stateFlags30: number; // the player's +0x30 word (ASSUMED 0 when not known)
+}
+
+export function headStatusFlags(s: PlayerRatioStatus): { f90: number; f8c: number } {
+  let f90 = 0;
+  let f8c = 0;
+  if (s.hpMax > 0) {
+    const r = s.hp / s.hpMax;
+    if (r <= 0.75) {
+      f90 |= HEAD_FLAG_NEED_HEAL;
+      f8c |= HEAD_NEED_BIT;
+      if (r <= 0.1) {
+        f90 |= HEAD_FLAG_CRITICAL;
+        f8c |= HEAD_NEED_BIT;
+      }
+    }
+  }
+  if ((s.stateFlags30 & 0x13) !== 0) {
+    f90 |= HEAD_FLAG_STATUS;
+    f8c |= HEAD_NEED_BIT;
+  }
+  if (s.tpMax !== 0 && s.tp / s.tpMax <= 0.2) {
+    f90 |= HEAD_FLAG_NEED_TP;
+    f8c |= HEAD_NEED_BIT;
+  }
+  return { f90, f8c };
+}
+
+// --- the head's action chooser (SinowberillHead_AIProcessState_007b0a7c, .c:795871) ----
+//
+// The action is the head's +0x92 word that ExecuteAttack_007b2ae8 reads (.c:797040, the state
+// 8 dispatch of AIUpdateState_007b2764). This function is the only writer of +0x92 in the dump:
+// it writes 0, 1 or 2 (3 is never written, so action 3 / Reverser is not chosen in the exe).
+// Its inputs: the owner's record A (+0x74: +0x90 status, +0x8c need) and the NPC's record B
+// (+0x78: +0x90, +0x8c, its player's inventory and tech eligibility), the head's +0x34 (ASSUMED
+// meaning: 0x40 set = the action is held back) and +0x84 (a second target; 0 for an NPC).
+// mode = the call's param_2: 0 for the NPC's own needs, 1 for the owner's.
+//
+//   v = (B +0x8c & 4 ? 1 : 0) | (mode != 0 && A +0x8c & 4 && head +0x84 == 0 ? 2 : 0)
+//   1. mode 1, v & 2, B has a candidate: a counter (+0x66, threshold 0x1e) and every 30th
+//      call the locked target within the attack radius returns 1 with no write to +0x92.
+//   2. v 1 / 3 (B's needs): if B +0x90 has no 0x2: if 0x8, item 0 or tech 0xf (eligibility)
+//      gives action 0 (item use when an item is taken, flag 0x20); else if 0x10, item 1 gives
+//      action 1; else v 3 falls to 2. If B +0x90 has 0x2, tech 0x10 gives action 2.
+//   3. v 2 (the owner's needs, B +0x8c & 2 returns): A +0x90 without 0x2 and with 0x800 and
+//      tech 0xf gives action 0; with 0x2 and tech 0x10 gives action 2. Each needs the head's
+//      +0x34 & 0x40 clear.
+
+export interface HeadChooseInput {
+  owner90: number; // A +0x90
+  owner8c: number; // A +0x8c
+  npc90: number; // B +0x90 (the status bits from headStatusFlags)
+  npc8c: number; // B +0x8c
+  head34: number; // the head's +0x34 (ASSUMED: 0 for the NPC's head)
+  head84: number; // the head's +0x84 (ASSUMED: 0)
+  hasTarget: boolean; // B's candidate count is not 0 (the locked target is entry 0)
+  hasItem(sub: number): boolean; // GetItemInstanceIdFromPlayerInventory(B player, 3, sub) != -1
+  canCast(tech: number): boolean; // CheckPlayerTechCastEligibility(B player, tech) (ASSUMED true when not modelled)
+  lockedInRadius(): boolean; // the locked target within the head's attack radius (+0x48) of the NPC
+}
+
+export interface HeadChoice {
+  attack: boolean; // the chooser's return value
+  action: number; // the head's +0x92 after the call (ExecuteAttack's action)
+  item: boolean; // B +0x90 0x20: the action is an item use
+}
+
+export const HEAD_COUNTER_THRESHOLD = 0x1e; // +0x66 in AIProcessState (.c:795905); TryAttack's own counter uses 3
+
+export class NpcHeadChooser {
+  // The head's +0x92 (ASSUMED 0 at the start: the first use of an unwritten word is action 0).
+  action = 0;
+  private counter = 0;
+
+  choose(mode: 0 | 1, i: HeadChooseInput): HeadChoice {
+    let item = false;
+    const none = (): HeadChoice => ({ attack: false, action: this.action, item: false });
+    const act = (a: number): HeadChoice => {
+      this.action = a;
+      return { attack: true, action: a, item };
+    };
+    const free = (i.head34 & 0x40) === 0;
+    let v = i.npc8c & HEAD_NEED_BIT ? 1 : 0;
+    if (mode !== 0 && i.owner8c & HEAD_NEED_BIT && i.head84 === 0) v |= 2;
+
+    if (mode !== 0 && i.hasTarget && (v & 2) !== 0) {
+      if (this.counter + 1 < HEAD_COUNTER_THRESHOLD) {
+        this.counter++;
+      } else {
+        this.counter = 0;
+        if (i.lockedInRadius()) return { attack: true, action: this.action, item: false };
+      }
+    }
+
+    if (v === 1 || v === 3) {
+      if ((i.npc90 & HEAD_FLAG_STATUS) === 0) {
+        if ((i.npc90 & HEAD_FLAG_NEED_HEAL) !== 0) {
+          const hasItem0 = i.hasItem(0);
+          if (hasItem0) item = true;
+          else if (!i.canCast(0xf)) return none();
+          return item || free ? act(0) : none();
+        }
+        if ((i.npc90 & HEAD_FLAG_NEED_TP) !== 0) {
+          if (i.hasItem(1)) {
+            item = true;
+            return act(1);
+          }
+          return none();
+        }
+        if (v !== 3) return none();
+        v = 2;
+      } else {
+        return i.canCast(0x10) && free ? act(2) : none();
+      }
+    }
+
+    if (v === 2) {
+      if (i.npc8c & HEAD_NEED_BLOCK) return none();
+      if ((i.owner90 & HEAD_FLAG_STATUS) === 0) {
+        if ((i.owner90 & HEAD_FLAG_CRITICAL) !== 0 && i.canCast(0xf) && free) return act(0);
+      } else if (i.canCast(0x10) && free) {
+        return act(2);
+      }
+    }
+    return none();
   }
 }

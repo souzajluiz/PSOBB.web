@@ -49,7 +49,7 @@ import type { QuestClient, QuestMenuEntry } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, NO_LEADER, NpcAi, NpcAttackAi, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -91,6 +91,8 @@ export class QuestTown {
   private readonly npcAi = new NpcAi();
   // The attack AI of the NPCs this client owns, by slot (quest/npcai.ts NpcAttackAi).
   private readonly npcAttacks = new Map<number, NpcAttackAi>();
+  // The head's action chooser of those NPCs (quest/npcai.ts NpcHeadChooser), by slot.
+  private readonly npcHeads = new Map<number, NpcHeadChooser>();
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
   private insideZones = new Set<number>();
@@ -618,8 +620,9 @@ export class QuestTown {
 
   // The attack AI of the NPCs this client owns (SinowberillChallengePlayer_Update_007aefd4,
   // .c:794690): it runs only for an NPC that follows a leader, and its action is cast on
-  // the owner's client (quest/npcai.ts NpcAttackAi). ASSUMED: the action is always 0 (the
-  // head's state machine that picks it is not traced).
+  // the owner's client (quest/npcai.ts NpcAttackAi). The action and the cast decision come
+  // from the head's chooser (NpcHeadChooser, SinowberillHead_AIProcessState_007b0a7c) on the
+  // owner's HP / TP flags; the NpcAttackAi keeps the target and the cadence.
   private stepNpcAttacks(): void {
     const me = this.view.selfPose();
     const combat = this.view.combat;
@@ -627,6 +630,7 @@ export class QuestTown {
     const enemies = combat.npcEnemies();
     const at = new Map(enemies.map((e) => [e.id, e] as const));
     const candidates: EnemyCandidate[] = enemies.map((e) => ({ slot: e.id, hitboxes: [{ x: e.x, z: e.z, targetable: true }] }));
+    const owner = headStatusFlags(combat.npcOwnerStatus());
     for (const slot of this.npcAi.slots()) {
       const st = this.npcAi.get(slot);
       const p = this.game.players.get(slot);
@@ -638,16 +642,41 @@ export class QuestTown {
         ai = new NpcAttackAi();
         this.npcAttacks.set(slot, ai);
       }
-      const attacks = ai.tick({
+      let head = this.npcHeads.get(slot);
+      if (!head) {
+        head = new NpcHeadChooser();
+        this.npcHeads.set(slot, head);
+      }
+      ai.tick({
         row,
         npc: { x: p.position.x, z: p.position.z },
         leader: { x: me.x, z: me.z },
         enemies: candidates,
         targetPos: (id) => at.get(id) ?? null,
       });
-      if (!attacks) continue;
-      const cast = npcAttackCast(0, false);
-      if (!cast || cast.kind !== 'tech') continue;
+      if (!ai.ready()) continue;
+      // The NPC's own HP / TP are not modelled (ASSUMED full: no flags); its inventory is not
+      // (ASSUMED empty: no item use); its tech eligibility is not checked (ASSUMED true).
+      const npc = headStatusFlags({ hp: 1, hpMax: 1, tp: 1, tpMax: 1, stateFlags30: 0 });
+      const lockedPos = ai.target !== null ? at.get(ai.target) : undefined;
+      const input = {
+        owner90: owner.f90,
+        owner8c: owner.f8c,
+        npc90: npc.f90,
+        npc8c: npc.f8c,
+        head34: 0,
+        head84: 0,
+        hasTarget: ai.target !== null,
+        hasItem: () => false,
+        canCast: () => true,
+        lockedInRadius: () =>
+          !!lockedPos && (lockedPos.x - p.position.x) ** 2 + (lockedPos.z - p.position.z) ** 2 < row.attackRadius * row.attackRadius,
+      };
+      let choice = head.choose(1, input);
+      if (!choice.attack) choice = head.choose(0, input);
+      if (!choice.attack) continue;
+      const cast = npcAttackCast(choice.action, choice.item);
+      if (!cast || cast.kind !== 'tech') continue; // an item use: the NPC has no inventory here (hasItem is false)
       // The owner's own player is the target of Resta / Anti; Reverser takes the locked enemy.
       const targets = cast.target === 'owner' ? [this.game.selfId] : ai.target !== null ? [ai.target] : [];
       if (cast.target === 'target' && !targets.length) continue;

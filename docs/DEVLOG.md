@@ -12479,3 +12479,45 @@ So `QuickMenuRenderTextBackground_00742a6c` is not part of the field menus and h
 **Not ported (logged no-ops; the menu stays open or the leaf goes back to the list):** search (0x0f, 0040 / 0041); row 0x65 (state 3: the 0x68 / 0x69 sub-list, then the lobby player picker or the name keyboard, `GuildCardMenu_GetOrCreateInstance_007153e0`); row 0x67 (state 0x1d: the `g_GuildCardList` text list with its option list 0x6a / 0x6b, states 0x1e..0x20); row 0x117 (state 0x39: the Block list at 0x93 = (194, 256), with row 0x119 (unblock, state 0x3b: the blocked list at 0x94 with 0x1c entries, confirm at 0x99, 08E8 `RemoveGuildCardSlot_007825ec`) and row 0x11a (add, state 0x3f: from the card book (0x41: card list, confirm 0x9a, `HandleGuildCardMenuData_007824d4`), from a lobby player (0x45: list 0x97, title 0x40, `HandleGuildCardMenuStackData_0078253c` -> 07E8 with the player's data), or from an entity (0x4a: list 0x98, title 0x41, `HandleGuildCardMenuGuestDataStack_00782594` -> 07E8))); the send packet (0xc0); and the 0x9b window (width 50090). The player and guest copies need the player's guild card data, which the port does not have yet.
 
 **Left:** row 0x117 (the Block list: unblock and the three adds, which need the session's player and entity data); rows 0x65 and 0x67; search (0040 / 0041) and its result window; the 7-row page indicator and the exe's page keys (once the key map is traced); a Chrome check of the card windows' placement (not run; no Playwright).
+
+## 2026-10-23: NPC attack AI: the head's action chooser (action 0 / 1 / 2 from the owner's and the NPC's HP / TP flags)
+
+**Question:** the previous entry left open which action the head picks (the town always cast action 0), the item cast (flag 0x20) and the enemy 0x8000 box flag. Port the head state machine so the action is chosen like the exe.
+
+**Premise check (exe):** the brief named action 0 / 1 / 2 / 3. The action is the head's +0x92 word, read by `SinowberillHead_ExecuteAttack_007b2ae8` (`.c:797040`, from the state 8 dispatch in `SinowberillHead_AIUpdateState_007b2764`, `.c:796961`). In the dump only one function writes +0x92: `SinowberillHead_AIProcessState_007b0a7c` (`.c:795871`), and it writes 0, 1 and 2 only. Action 3 (Reverser, `0x11`) is never chosen, so the exe's attack set is Resta / Anti / the item uses. The head's +0x7c state (0 / 1 / 2 / 8) is a different word: 8 is the attack state, 2 the technique (`SinowberillHead_CastTechnique_007b2e20`), not traced here.
+
+**Exe evidence:**
+- `SinowberillChallengePlayer_Update_007aefd4` (`.c:794690`): the update gate and the call order (UpdateState_007af7ec, UpdateState_007b00bc, AIUpdate_007b1134).
+- `SinowberillHead_AIProcessState_007b0a7c` (`.c:795871`): the chooser. Its inputs are the owner's record A (+0x74: +0x90 status, +0x8c need), the NPC's record B (+0x78: +0x90, +0x8c, the player at +0x94 for the inventory and tech eligibility), the head's +0x34 (0x40) and +0x84, and the head's +0x66 counter (threshold 0x1e, the retarget every 30th call).
+- `SinowberillCheckHeadRotation_007af694` (`.c:795008`): the status bits from the HP ratio (cur +0x334 / max +0x2bc; 0.75 / 0.1 = `0xddd8` / `0xddd0`), the state word 0x30 & 0x13 (0x2), and the TP ratio (cur +0x336 / max +0x2be; 0.2 = `0xddcc`, 0x10).
+- `SinowberillHead_ExecuteAttack_007b2ae8` (`.c:797151`): action 0 = tech 0xf or item (flag 0x20 on B +0x90), 1 = item, 2 = tech 0x10 or item, 3 = tech 0x11 or item.
+- `CheckPlayerTechCastEligibility_0069a088` (`.c:580401`) and `GetItemInstanceIdFromPlayerInventory_0068faa8` (`.c:571180`): what the chooser asks of the NPC's player.
+
+**Ported (`quest/npcai.ts`):**
+- `headStatusFlags(status)`: the status bits of CheckHeadRotation from the HP / TP ratios (each tick from zero; ASSUMED below).
+- `NpcHeadChooser.choose(mode, input)`: AIProcessState's mode 0 / 1 branches (v = B need | owner need), the 30-call retarget (returns attack without a write to the action), the NPC's heal / TP / status branches, and the owner's critical / status branches. `action` is the +0x92 word that persists between calls.
+- `NpcAttackAi.ready()`: no cast is running.
+- `quest/town.ts` `stepNpcAttacks()`: the NpcAttackAi keeps the lock and the cadence; the cast is decided by the chooser (mode 1, then mode 0), with the action and item flag it returns. The attack gate of TryAttack no longer decides the cast (it does not check support actions: Resta on the owner needs no enemy).
+- `render/combat.ts` `npcOwnerStatus()`: the local player's HP / TP for the owner's record.
+- `tests/npcai.test.ts`: the status bits, the chooser's branches (owner 50% / 10%, status, the head's 0x40, the second target), the NPC's heal / TP / status branches, the 30th-call retarget, and a sweep proving action 3 is never returned.
+
+**Behaviour change:** the NPC now casts Resta on its owner only when the owner is at 10% HP or less (exe `0x800`), Anti when the owner has the status bit, and does nothing at full HP. Before, it cast Resta whenever an enemy was near.
+
+**Item cast (flag 0x20):** the branch is in the chooser (`item: true` with action 0 / 1), and `npcAttackCast` maps it. The town does not cast an item: the NPC has no inventory here (`hasItem` is false), so the branch is unreachable until NPC inventories are modelled. `ChallengePlayer_HandleItemUsage_007b2d7c` (`.c:797309`) and its `0068dbbc` use are not ported.
+
+**Enemy 0x8000 box flag (not ported):** `collisionboxes.gen.ts` keys its tables by the factory type id (`TYPE_COLLISION_TABLES`, e.g. 0x0001..). The port's enemies carry a newserv name (`EnemySlot.type`, `formats/entitynames.ts`), and no name-to-factory-id map exists, so the per-enemy table cannot be looked up. `npcEnemies()` still treats every live enemy as targetable. Open until that map exists.
+
+**ASSUMED:**
+- The head's +0x34 and +0x84 are 0 for an NPC (the 0x40 gate open, no second target). The +0x34 meaning is not traced.
+- The NPC's own HP / TP are full (no flags), its inventory is empty, and its tech eligibility is true (`CanPlayerCastTechnique_0069a0c4` not modelled).
+- The owner's state word 0x30 is 0.
+- The exe ORs the status bits into the words and clears them elsewhere; here each tick starts from zero.
+- The head's +0x66 counter is shared with TryAttack in the exe; here the chooser has its own counter and TryAttack's gate is kept only for the target lock (`NpcAttackAi.tick`).
+- Mode 1 runs first each tick, mode 0 when mode 1 does not attack.
+- The initial +0x92 is 0, so a retarget attack with no earlier choice casts Resta (the exe's word starts unwritten).
+- The 0x8080 retarget path returns attack without the UpdateState dispatch (the move / state 1 choice is not ported).
+- The enemy box centre is the enemy's position plus the row offset, unrotated (for the 0x8000 filter, once the map exists).
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases above); `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24. `tsc --noEmit -p client` clean, with the worktree's `client/node_modules` symlinked to the main checkout's (git-ignored, not committed). `tests/combat.test.ts` needs `vendor/newserv/build/newserv`, not run. Not run in Chrome.
+
+**Left open (ROADMAP line):** the item use (needs NPC inventory), the enemy 0x8000 flag (needs the name-to-factory-id map), the head's +0x7c state dispatch (move / cast state 2) and the NPC's own level / MST / eligibility.

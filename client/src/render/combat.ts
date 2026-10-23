@@ -145,6 +145,7 @@ import {
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
 import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect } from '../quest/battletraps.ts';
+import type { PlayerRatioStatus } from '../quest/npcai.ts';
 import { BattleTrapView } from './battletrapview.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
@@ -6714,6 +6715,12 @@ export class CombatView {
       out.push({ id: 0x1000 | e.index, x: p.x, z: p.z });
     }
     return out;
+  }
+
+  // The local player's HP and TP for the NPC head's status flags (quest/npcai.ts headStatusFlags;
+  // the owner's record A). ASSUMED: the state word 0x30 is not read (0).
+  npcOwnerStatus(): PlayerRatioStatus {
+    return { hp: this.damage.hp, hpMax: this.damage.maxHp, tp: this.tp, tpMax: this.progression?.maxTp ?? 0, stateFlags30: 0 };
   }
 
   // An NPC player's technique (quest/npcai.ts npcAttackCast): the owner's client sends the
