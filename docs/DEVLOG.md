@@ -14131,3 +14131,21 @@ Item use (`HandlePaletteInput_0068aadc`, dump 556202). Switch on group_2 picks t
 5. Tests: `tests/hotbar.test.ts`; e2e after that.
 
 **Checks.** Docs only; no tsc or tests run for this entry.
+
+## 2026-10-23: Minimap: Sinow Berill's forced 2.0 icon; the Dark Falz form 1 and the 2.5 hazard checked
+
+**What changed:** the radar and the Area Map now draw Sinow Berill's icon as a forced 2.0 icon in 0xffffa24c at its root, like the other forced enemy icons (`FORCED_ICON_RULES` in `classic/minimap.ts`, renamed from `BOSS_ICON_RULES` because it holds an enemy). No other icon was added: the Dark Falz form 1 icons were already ported (`form1Icons`), and the 2.5 hazard and the Gal Gryphon minion have no port entity that can carry them yet.
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`, `unknown_add_minimap_icon3(pos, colour, scale, shape, flags)`, flags 1 = forced):
+- **Sinow Berill** = `UpdateSinowberillEntity_004addc0` (dump 231611; the call `unknown_add_minimap_icon3(&x2, 0xffffa24c, 0x40000000, 1, 1)` at dump 231675, after `UpdateCollisionBoxPosition` and `enable_reticle` (skipped on flag 0x2000000), so unconditional). ASSUMED: this update is the Berill's. The dump's enemy id 212 (0xd4, the enum `SinowBerill=212`) is the setdata row that gives `SINOW_BERILL` (`formats/setdata.ts`, p6 == 0); the states (lock-on attack, death) fit it. Not traced through the vtable.
+- **Dark Falz form 1 (dump 195947)**: the four 5.0 calls at dump 195947-195992 are inside `UpdateVoloptForm7Behavior` (dump 195879), which is the port's `DfForm1.minimapIcons` / `form1Icons` (the 2026-10-23 "Dark Falz form 1 icons" entry). Nothing to add here; the roadmap's "not traced" note was out of date.
+- **Dark Falz 2.5 hazard (dump 197706)**: inside `UpdateVoloptForm7Hazard` (dump 197587), in the branch `+0x3d0 == 6 || 7` (the beam balls, the port's form 2 `BEAM_L` / `BEAM_R`, `combat/darkfalz2.ts`): `unknown_add_minimap_icon3(&local_64, 0xffffa24c, 0x40200000, 1, 1)` (2.5, forced) per frame at the ball's position. Not ported: the exe moves the ball every frame (`+0x40c` / `+0x414` velocity, steering toward `g_VoloptForm7HazardMaxScale`, the `+0x41c` height) and the ball has a life that `DeleteVoloptForm7Hazard` (dump 197096) ends. The port's `ballAt` stores fixed points (ASSUMED zigzag), never removes them (`ballCount` only grows) and does not draw them, so an icon now would sit at the wrong place for the whole fight.
+- **Gal Gryphon minion (dump 229625)**: `UpdateGalgryphonMinion_004ab283` (dump 229526) calls `unknown_add_minimap_icon3(pPos, 0xffffa24c, 0x3fc00000, 1, 1)` (1.5, forced) in state 2 only (state 0 goes to 1; state 1 returns). The port has no Gal Gryphon minion object (`TBoss5Gryphon` is the boss body only), so there is nothing to draw it from. Not ported.
+
+**Ported:** `classic/minimap.ts` (`FORCED_ICON_RULES`, `SINOW_BERILL` at scale 2, forced; `enemyIconRule` unchanged in shape), `tests/minimap.test.ts` (Sinow Berill forced at 2.0; Sinow Gold keeps the plain icon). `docs/ROADMAP.md` (the "Minimap left to do" line).
+
+**ASSUMED:** the Berill's identity of `UpdateSinowberillEntity_004addc0` (see above); the icon's position is the enemy's `x2` root as for the other forced enemy icons.
+
+**Checks:** `client` `npx tsc --noEmit -p .` clean (Node 24). `node tests/minimap.test.ts`: all checks passed (Node 24). Not run: Playwright / Chrome (per the brief).
+
+**Left:** the 2.5 hazard icon needs the beam ball's exe movement and life (the balls are the port's `balls` in `combat/darkfalz2.ts`, which have no life or motion yet); the Gal Gryphon minion needs a minion object (none in the port); the rest of the open minimap list in ROADMAP (Seabed dolphin / boss / beam doors, Komo variant 6 object, Challenge "Area n" title).

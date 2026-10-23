@@ -136,14 +136,23 @@ export const ENEMY_ICON_RULE: EnemyIconRule = { scale: 1, color: ENEMY_ICON_COLO
 // (the body and mine types are other updates).
 // GAL_GRYPHON (update_gal_gryphon, dump 226140): icon3 at &x2 with scale 2.0,
 // flags 1 (dump 226217), unconditional after enable_reticle.
-export const BOSS_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
+// SINOW_BERILL (UpdateSinowberillEntity_004addc0, dump 231611): icon3 at &x2
+// with scale 0x40000000 (2.0), flags 1 (dump 231675), unconditional after
+// enable_reticle (exe 0x004addc0 onwards). ASSUMED: this update is the Sinow
+// Berill's: the dump's enemy id 212 (0xd4) is the setdata row that gives
+// SINOW_BERILL (formats/setdata.ts, p6 == 0), and the state set (lock-on attack,
+// death) matches it. Sinow Berill is an enemy, not a boss.
+// Not ported: the Gal Gryphon minion (UpdateGalgryphonMinion_004ab283, dump
+// 229625, icon3 1.5 forced in its state 2): the port has no minion object.
+export const FORCED_ICON_RULES: Readonly<Record<string, EnemyIconRule>> = {
   OLGA_FLOW_1: { scale: 5, color: ENEMY_ICON_COLOR, forced: true },
   OLGA_FLOW_2: { scale: 4, color: ENEMY_ICON_COLOR, forced: true },
   DE_ROL_LE: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
   GAL_GRYPHON: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
+  SINOW_BERILL: { scale: 2, color: ENEMY_ICON_COLOR, forced: true },
 };
 export function enemyIconRule(type: string): EnemyIconRule {
-  return BOSS_ICON_RULES[type] ?? ENEMY_ICON_RULE;
+  return FORCED_ICON_RULES[type] ?? ENEMY_ICON_RULE;
 }
 
 // Komo variant 6 (MapObjectKomoVariant6Update_0065d89c, Episode 2 only): one
