@@ -70,6 +70,8 @@ export interface LobbyEvents {
   // 6x07: a symbol chat said in the room (symbolchat.ts; the bubble is not drawn yet).
   symbolChat: (clientId: number, chat: SymbolChat) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
+  // 6x06: a guild card another player sent (the 0x108 card at +4; exe handle_packet0x60_subcommand0x6).
+  guildCardSent: (body: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
   visibilityChanged: (p: LobbyPlayer) => void; // games: 6x22 (hidden while it changes floors) / 6x23
   // S->C 0x23: the Momoka item exchange's answer (flag 0 ok, 1 no item, 2 full inventory; other = failed), newserv on_momoka_item_exchange_bb.
@@ -360,6 +362,8 @@ export class Lobby {
       const body = data.subarray(o, o + size);
       const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
       const clientId = dv.getUint16(2, true);
+      // 6x06 (sub 6): the guild card a player sent (net/guildcard.ts receiveSent).
+      if (sub === 0x06 && body.length >= 0x10c) this.emit('guildCardSent', body);
       // 6xA6 is the trade proposal / answer / offer subcommand (net/trade.ts receive).
       if (sub === TRADE_SUB && body.length >= TRADE_SUB_SIZE) this.trade.receive(body);
       const p = this.players.get(clientId);

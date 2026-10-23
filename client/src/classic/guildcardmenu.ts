@@ -199,6 +199,7 @@ export const GUILD_CARD_POS = {
   entityList: { x: 194, y: 256 }, // 0x98 (the entities)
   unblockAsk: { x: 419, y: 256 }, // 0x99 (the unblock yes / no)
   addAsk: { x: 419, y: 256 }, // 0x9a (the add yes / no)
+  searchOptions: { x: 439, y: 256 }, // 0x8e (the recent row's option list: search keyboard / 0x25)
 } as const;
 
 // Width of the description and comment boxes (ASSUMED: DAT_0097340c = 188.0).
@@ -243,6 +244,8 @@ export const T11_GUILD = {
   subShowCard: 0x68,
   subRename: 0x69,
   noRecent: 0xf2,
+  searchOption21: 0x6a,
+  searchOption25: 0x6b,
 } as const;
 
 // unitxt groups of the card info window's class and section names (unitxt + 0x20 and + 0x120).
@@ -265,7 +268,9 @@ export const GUILD_ADD_STATE = { card: 0x41, player: 0x45, entity: 0x4a } as con
 // state a recent row or a player reports (ported as logged no-ops).
 export const GUILD_SUB_STATE = { players: 5, rename: 9 } as const;
 export const GUILD_TEXT_OPEN_STATE = 0x1f;
-export const GUILD_PLAYER_SEND_STATE = 6;
+// The send to a player (state 6) and the rename (state 9) are ported; the search option list
+// (0x8e) values: 0x6a -> state 0x21 (the keyboard), 0x6b -> state 0x25 (both reported, not ported).
+export const GUILD_SEARCH_OPTION = { keyboard: 0x21, option25: 0x25 } as const;
 
 // A lobby player as the add-from-player path reads it (the lobby record's fields).
 export interface LobbyPlayerCard {
@@ -402,6 +407,14 @@ export function subRows(text: Text): ListItem[] {
   ];
 }
 
+// The search option list (CreateGuildCardOptionListWindow_007478e0, 0x8e): both rows enabled in the lobby.
+export function searchOptionRows(text: Text): ListItem[] {
+  return [
+    { label: text(T11_GUILD.searchOption21), value: GUILD_SEARCH_OPTION.keyboard, enabled: true },
+    { label: text(T11_GUILD.searchOption25), value: GUILD_SEARCH_OPTION.option25, enabled: true },
+  ];
+}
+
 // The card info window's lines (GuildCardUI_UpdateListItemText_00715518): name, number
 // (not 0), class, section, team, description. The language is not drawn (see the header).
 export function cardInfoLines(card: GuildCard, unitxt: (group: number, index: number) => string): string[] {
@@ -474,6 +487,8 @@ export type GuildCardPhase =
   | 'text'
   | 'sub'
   | 'subPlayers'
+  | 'searchOpts'
+  | 'rename'
   | 'closed';
 
 const PAGE_KEYS: Readonly<Record<string, -1 | 1>> = { ArrowLeft: -1, ArrowRight: 1 };
@@ -501,6 +516,9 @@ export class GuildCardMenu {
   private askBack: GuildCardPhase = 'addCard';
   private question: Question | null = null;
   private editor: TextEditor | null = null;
+  // The search option list of a recent row (0x8e) and its cursor.
+  private searchOpts: ListItem[] = [];
+  private readonly searchState = { cursor: 0 };
   // The slot marked for a swap (0x8c selected_line), -1 for none.
   private mark = -1;
 
@@ -684,6 +702,11 @@ export class GuildCardMenu {
         return this.subKey(e);
       case 'subPlayers':
         return this.subPlayersKey(e);
+      case 'searchOpts':
+        return this.searchOptsKey(e);
+      case 'rename':
+        this.renameKey(e);
+        return null;
       default:
         return null;
     }
@@ -713,7 +736,8 @@ export class GuildCardMenu {
     return { state: row.value, card: -1 };
   }
 
-  // Row 0x67: a recent row opens the search result window (state 0x1f), not ported; the list stays.
+  // Row 0x67: a recent row opens the search option list (state 0x1f: the result window 0x8d is
+  // not drawn; the option list 0x8e is).
   private textKey(e: MenuKey): UnportedAction | null {
     const r = listKey(e, this.list, this.listState);
     if (r === 'cancel') {
@@ -721,10 +745,25 @@ export class GuildCardMenu {
       return null;
     }
     if (r !== 'decide') return null;
-    return { state: GUILD_TEXT_OPEN_STATE, card: this.list[this.listState.cursor]!.value };
+    this.searchOpts = searchOptionRows(this.text);
+    this.searchState.cursor = 0;
+    this.phase = 'searchOpts';
+    return null;
   }
 
-  // Row 0x65: the sub-list. The players (state 5) open the player list; the rename (state 9) is not ported.
+  // The option list (state 0x20): cancel -> the recent list (state 0x1d); a row reports its state
+  // (0x21 keyboard, 0x25) for the recent row, not ported; the list stays.
+  private searchOptsKey(e: MenuKey): UnportedAction | null {
+    const r = listKey(e, this.searchOpts, this.searchState);
+    if (r === 'cancel') {
+      this.phase = 'text';
+      return null;
+    }
+    if (r !== 'decide') return null;
+    return { state: this.searchOpts[this.searchState.cursor]!.value, card: this.list[this.listState.cursor]?.value ?? -1 };
+  }
+
+  // Row 0x65: the sub-list. The players (state 5) open the player list; the rename (state 9) opens the keyboard.
   private subKey(e: MenuKey): UnportedAction | null {
     const r = listKey(e, this.sub, this.subState);
     if (r === 'cancel') {
@@ -736,10 +775,13 @@ export class GuildCardMenu {
       this.openSubPlayers();
       return null;
     }
-    return { state: GUILD_SUB_STATE.rename, card: -1 };
+    this.editor = new TextEditor('', MAX_COMMENT, false);
+    this.phase = 'rename';
+    return null;
   }
 
-  // The lobby players (state 5): a player sends 0x62 (state 6), not ported; the list stays.
+  // The lobby players (state 5): a player gets the card (state 6: the 0x62 send, GuildCard_Sprintf_0078193c);
+  // then the player list closes and the sub-list is back (state 7 -> 8 -> 3; the title window 0x87 is not drawn).
   private subPlayersKey(e: MenuKey): UnportedAction | null {
     const r = listKey(e, this.list, this.listState);
     if (r === 'cancel') {
@@ -747,8 +789,38 @@ export class GuildCardMenu {
       return null;
     }
     if (r !== 'decide') return null;
-    return { state: GUILD_PLAYER_SEND_STATE, card: this.list[this.listState.cursor]!.value };
+    this.host.client()?.sendCardTo(this.list[this.listState.cursor]!.value);
+    this.phase = 'sub';
+    return null;
   }
+
+  // The rename keyboard (state 9 -> 10, the text is the own card's description: GuildCard_SetName_007814bc
+  // writes +0x54, at most 0x57 units, then 06E8). Enter sends the own card (when it is in the book);
+  // Escape cancels. Both return to the menu (state 1).
+  private renameKey(e: MenuKey): void {
+    const ed = this.editor;
+    if (!ed) {
+      this.phase = 'menu';
+      return;
+    }
+    if (e.key === 'Escape') {
+      se(SE.cancel);
+      this.editor = null;
+      this.phase = 'menu';
+    } else if (e.key === 'Enter') {
+      se(SE.ok);
+      const self = this.host.selfGuildCard();
+      const own = self === null ? undefined : this.host.book()?.find(self);
+      if (own) this.host.client()?.update({ ...own.card, description: ed.text });
+      this.editor = null;
+      this.phase = 'menu';
+    } else if (e.key === 'Backspace') {
+      ed.backspace();
+    } else if (e.key.length === 1) {
+      ed.type(e.key);
+    }
+  }
+
 
   private listPhaseKey(e: MenuKey): UnportedAction | null {
     const dir = PAGE_KEYS[e.key];
@@ -1065,6 +1137,11 @@ export class GuildCardMenu {
       const subTitle = this.text(T11_GUILD.subTitle);
       drawListWindow(ctx, skin, s.x, s.y, windowWidth(this.sub, subTitle), subTitle, this.sub, this.subState.cursor, this.phase === 'sub');
     }
+    if (this.phase === 'searchOpts') {
+      const o = GUILD_CARD_POS.searchOptions;
+      const optTitle = this.text(T11_GUILD.title);
+      drawListWindow(ctx, skin, o.x, o.y, windowWidth(this.searchOpts, optTitle), optTitle, this.searchOpts, this.searchState.cursor, true);
+    }
     if (this.phase === 'subPlayers') {
       const p = GUILD_CARD_POS.playerPick;
       const pickTitle = this.text(T11_GUILD.pickTitle);
@@ -1097,7 +1174,7 @@ export class GuildCardMenu {
     if ((this.phase === 'delete' || this.phase === 'unblockAsk' || this.phase === 'addAsk') && this.question) {
       this.question.draw(ctx, skin, this.text(T11_GUILD.yes), this.text(T11_GUILD.no));
     }
-    if (this.phase === 'comment' && this.editor) {
+    if ((this.phase === 'comment' || this.phase === 'rename') && this.editor) {
       const k = GUILD_CARD_POS.keyboard;
       drawWindowFrame(ctx, skin.frame, k.x, k.y, CARD_TEXT_WIDTH, 34);
       const shown = this.editor.shown;
