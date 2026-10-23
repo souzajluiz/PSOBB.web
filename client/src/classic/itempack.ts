@@ -427,6 +427,69 @@ export class AmountSpinner {
   digitRight(k: number, width: number = AMOUNT_RECT.w): number {
     return 10 * 0.5 + this.digits * 12 * 0.5 + (width - 20) * 0.5 - 6 - k * 12;
   }
+
+  // Hold-repeat (SinowberillUIElementListWindow_HandleAction_00728d44): a
+  // direction steps once when it goes down (the "just pressed" bit, +0x4c),
+  // then again on the frame its held count reaches SPIN_DELAY + 1 and every
+  // SPIN_INTERVAL frames after that (CheckSharedInputStateKeyHeld_007c0c6c with
+  // 6 and 5). The browser's own key repeat is not used (`press` is only called
+  // for a first keydown); `frame` drives the repeats. ASSUMED: the held count
+  // is 1 on the press frame, so the first repeat comes six frames after it.
+  private held = new Map<SpinDir, number>();
+
+  press(dir: SpinDir): void {
+    this.step(dir);
+    this.held.set(dir, 1);
+  }
+
+  release(dir: SpinDir): void {
+    this.held.delete(dir);
+  }
+
+  // One game frame: returns true when a held direction stepped the value.
+  frame(): boolean {
+    let stepped = false;
+    for (const [dir, c] of this.held) {
+      const n = c + 1;
+      this.held.set(dir, n);
+      const k = n - SPIN_DELAY - 1;
+      if (k >= 0 && k % SPIN_INTERVAL === 0) {
+        this.step(dir);
+        stepped = true;
+      }
+    }
+    return stepped;
+  }
+
+  private step(dir: SpinDir): void {
+    if (dir === 'up') this.up();
+    else if (dir === 'down') this.down();
+    else if (dir === 'left') this.left();
+    else this.right();
+  }
+}
+
+export type SpinDir = 'up' | 'down' | 'left' | 'right';
+export const SPIN_DELAY = 6; // frames held before the first repeat (see AmountSpinner)
+export const SPIN_INTERVAL = 5; // frames between repeats
+const SPIN_KEYS: Readonly<Record<string, SpinDir>> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+
+// Key routing for a spinner window (Item Pack and the shop / bank counters).
+// Returns true when the key is a direction the spinner takes (a first press
+// steps it and plays 0x56F; OS repeats are ignored, see AmountSpinner.frame).
+export function spinnerKeyDown(a: AmountSpinner, e: KeyboardEvent): boolean {
+  const dir = SPIN_KEYS[e.key];
+  if (!dir) return false;
+  if (!e.repeat) {
+    a.press(dir);
+    se(SE.cursor);
+  }
+  return true;
+}
+
+export function spinnerKeyUp(a: AmountSpinner, e: KeyboardEvent): void {
+  const dir = SPIN_KEYS[e.key];
+  if (dir) a.release(dir);
 }
 
 // --- the window set --------------------------------------------------------
@@ -505,6 +568,12 @@ export class ItemPackMenu {
 
   tick(): void {
     this.frame++;
+    if (this.state === 'amount' && this.amount?.frame()) se(SE.cursor);
+  }
+
+  // Key releases end a held direction of the amount spinner.
+  keyUp(e: KeyboardEvent): void {
+    if (this.amount) spinnerKeyUp(this.amount, e);
   }
 
   // Returns false when the menu closes (Backspace on the list).
@@ -549,11 +618,8 @@ export class ItemPackMenu {
     if (this.state === 'manual') return this.manualKey(e);
     if (this.state === 'amount' && this.amount) {
       const a = this.amount;
-      if (e.key === 'ArrowUp') (a.up(), se(SE.cursor));
-      else if (e.key === 'ArrowDown') (a.down(), se(SE.cursor));
-      else if (e.key === 'ArrowLeft') (a.left(), se(SE.cursor));
-      else if (e.key === 'ArrowRight') (a.right(), se(SE.cursor));
-      else if (e.key === 'Enter') {
+      if (spinnerKeyDown(a, e)) return true;
+      if (e.key === 'Enter') {
         if (a.value < a.min || a.value > a.max) return se(SE.buzzer), true;
         se(SE.ok);
         const it = this.item();

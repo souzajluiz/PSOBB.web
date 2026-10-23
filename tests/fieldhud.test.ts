@@ -18,6 +18,8 @@ import {
   itemRowName,
   purposeItems,
   PURPOSE,
+  spinnerKeyDown,
+  spinnerKeyUp,
   type RowContext,
 } from '../client/src/classic/itempack.ts';
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
@@ -150,6 +152,30 @@ eq(a.value, 1, 'over max wraps to min');
 a.down();
 eq(a.value, 25, 'under min wraps to max');
 eq([a.digitRight(0), a.digitRight(1)], [113, 101], 'digit right edges for 2 digits (224 wide)');
+
+// --- hold-repeat: a press steps at once; while held, the sixth frame, then every fifth
+// (CheckSharedInputStateKeyHeld_007c0c6c with 6 and 5, SinowberillUIElementListWindow_HandleAction_00728d44)
+{
+  const h = new AmountSpinner(100);
+  h.press('up');
+  eq(h.value, 2, 'a press steps at once');
+  const steps: number[] = [];
+  for (let f = 1; f <= 12; f++) if (h.frame()) steps.push(f);
+  eq([steps, h.value], [[6, 11], 4], 'held: the sixth frame, then every fifth');
+  h.release('up');
+  eq([h.frame(), h.value], [false, 4], 'released: no repeat');
+  const w = new AmountSpinner(3);
+  w.press('down');
+  eq(w.value, 3, 'hold-repeat wraps like the single step');
+  const k = (key: string, repeat = false) => ({ key, repeat }) as unknown as KeyboardEvent;
+  const s = new AmountSpinner(100);
+  spinnerKeyDown(s, k('ArrowUp'));
+  spinnerKeyDown(s, k('ArrowUp', true));
+  eq(s.value, 2, 'an OS repeat is not a second step');
+  spinnerKeyUp(s, k('ArrowUp'));
+  eq(s.frame(), false, 'a key up ends the hold');
+  eq(spinnerKeyDown(s, k('Enter')), false, 'Enter is not a spinner direction');
+}
 
 // --- the Item Pack flow ends in the item actions ---
 const calls: string[] = [];

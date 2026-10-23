@@ -180,7 +180,10 @@ export class FieldHud {
   // Held keys and the mouse, for the Area Map (menu inputs read each frame).
   private held = new Set<string>();
   private mouse = { down: false, x: 0, y: 0 };
-  private onKeyUp = (e: KeyboardEvent) => this.held.delete(e.key.toLowerCase());
+  private onKeyUp = (e: KeyboardEvent) => {
+    this.held.delete(e.key.toLowerCase());
+    this.menu.keyUp(e);
+  };
   private onBlur = () => {
     this.held.clear();
     this.mouse.down = false;
