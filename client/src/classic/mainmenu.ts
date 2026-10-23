@@ -115,7 +115,11 @@ export class MainMenu {
   // Cursor Position option (classic/options.ts cursorSaved): true = "Saved".
   cursorSaved: () => boolean = () => true;
   private kept: KeptCursor[] = [];
-  private stack: Array<{ entries: ShownEntry[]; cursor: number; table: MenuEntry[] }> = [];
+  private stack: Array<{ entries: ShownEntry[]; cursor: number; table: MenuEntry[]; parent: number | null }> = [];
+  // The parent row kept at the top while a sub-menu is open (see `slide`).
+  private header: SlideHeader | null = null;
+  // Frames of input delay after the menu opens (see `toggle`).
+  private inputDelay = 0;
   private ages: number[] = [];
   private height = 0;
   private heightLeft = 0;
@@ -137,13 +141,25 @@ export class MainMenu {
     return this.stack[this.stack.length - 1];
   }
 
+  // The sub-menu's parent row, drawn at the top of the panel in the
+  // "moving" colour (the exe's state-2 item).
+  get slide(): { id: number; y: number } | null {
+    return this.header ? { id: this.header.id, y: this.header.y } : null;
+  }
+
+  // The input delay is the list window's +0x64 counter, set to 2 by the
+  // window's constructor (CreateYesNoMenuListWindow_00738e40); the handler
+  // YesNoMenuHandleInput_0073916c returns while it is above 0 and takes one
+  // off each call.
   toggle(entries: MenuEntry[]): void {
     if (this.open) return this.close();
     this.open = true;
     this.leafOpen = false;
     this.stack = [];
+    this.header = null;
+    this.inputDelay = INPUT_DELAY;
     this.height = TOP + BOTTOM; // FUN_00738e40: built empty, then filled
-    this.show(entries, this.keptCursor(0, entries));
+    this.show(entries, this.keptCursor(0, entries), null);
     se(SE.ok);
   }
 
@@ -151,6 +167,7 @@ export class MainMenu {
     this.open = false;
     this.leafOpen = false;
     this.stack = [];
+    this.header = null;
   }
 
   private keptCursor(level: number, table: MenuEntry[]): number {
@@ -158,12 +175,12 @@ export class MainMenu {
     return this.cursorSaved() && k && k.table === table && k.cursor < table.length ? k.cursor : 0;
   }
 
-  private show(raw: MenuEntry[], cursor: number): void {
+  private show(raw: MenuEntry[], cursor: number, parent: number | null): void {
     const entries: ShownEntry[] = raw.map((e) => {
       const v = this.validate?.(e.id) ?? { id: e.id, enabled: true };
       return { id: v.id, sub: e.sub, enabled: v.enabled };
     });
-    this.stack.push({ entries, cursor, table: raw });
+    this.stack.push({ entries, cursor, table: raw, parent });
     this.ages = entries.map((_, i) => -2 * i);
     this.heightLeft = 8;
     this.help.set(this.helpText(entries[cursor].id));
@@ -173,8 +190,16 @@ export class MainMenu {
   tick(): void {
     this.shift = Math.max(0, Math.min(3, this.shift + (this.open ? 1 : -1)));
     if (!this.open) return;
+    if (this.inputDelay > 0) this.inputDelay--;
     this.ages = this.ages.map((a) => Math.min(4, a + 1));
-    const target = this.level.entries.length * ROW + TOP + BOTTOM;
+    const h = this.header;
+    if (h && h.left > 0) {
+      // Linear approach to the top row over the 8 frames (ASSUMED ease).
+      h.y += (TOP - h.y) / h.left;
+      h.left--;
+    }
+    const rows = this.level.entries.length + (h ? 1 : 0);
+    const target = rows * ROW + TOP + BOTTOM;
     if (this.heightLeft > 0) {
       this.height += (target - this.height) / this.heightLeft;
       this.heightLeft--;
@@ -183,7 +208,7 @@ export class MainMenu {
   }
 
   key(e: KeyboardEvent): void {
-    if (!this.open || this.leafOpen) return;
+    if (!this.open || this.leafOpen || this.inputDelay > 0) return;
     const lv = this.level;
     const n = lv.entries.length;
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -198,13 +223,21 @@ export class MainMenu {
       }
       se(SE.ok);
       this.kept[this.stack.length - 1] = { cursor: lv.cursor, table: lv.table };
-      if (it.sub) this.show(it.sub, this.keptCursor(this.stack.length, it.sub));
-      else this.action(it.id);
+      if (it.sub) {
+        // The chosen row slides up to the top row: from its drawn y (one row
+        // lower while a header is already up) to TOP.
+        const off = this.header ? 1 : 0;
+        this.header = { id: it.id, y: TOP + (off + lv.cursor) * ROW, left: SLIDE_FRAMES };
+        this.show(it.sub, this.keptCursor(this.stack.length, it.sub), it.id);
+      } else this.action(it.id);
     } else if (e.key === 'Backspace' || e.key === 'Escape') {
       se(SE.cancel);
       if (this.stack.length > 1) {
         this.kept[this.stack.length - 1] = { cursor: lv.cursor, table: lv.table };
         this.stack.pop();
+        // The parent of the level shown again is its header (ASSUMED: no slide back).
+        const parent = this.level.parent;
+        this.header = parent === null ? null : { id: parent, y: TOP, left: 0 };
         this.ages = this.level.entries.map(() => 4);
         this.heightLeft = 8;
         this.help.set(this.helpText(this.level.entries[this.level.cursor].id));
@@ -232,12 +265,20 @@ export class MainMenu {
     }
     ctx.drawImage(img, 0, 135, 116, 39, x, y + off, MENU_W, BOTTOM);
     const lv = this.level;
+    const hdr = this.header ? 1 : 0;
+    if (this.header) {
+      const [u, v] = LABEL_UV[this.header.id] ?? [0, 0];
+      const hy = y + this.header.y;
+      if (hy + ROW <= y + h) {
+        ctx.drawImage(tintLabel(tex.labels, SLIDE_COLOUR), u, v, 98, 16, x + 10, hy, 98, 16);
+      }
+    }
     lv.entries.forEach((it, i) => {
       const age = this.ages[i] ?? 4;
       if (age <= 0) return;
       const [u, v] = LABEL_UV[it.id] ?? [0, 0];
       const rx = x + 10;
-      const ry = y + TOP + i * ROW;
+      const ry = y + TOP + (i + hdr) * ROW;
       if (ry + ROW > y + h) return;
       const color = !it.enabled ? 0x686868 : i === lv.cursor ? 0xff6121 : 0xffffff;
       ctx.save();
@@ -251,6 +292,18 @@ export class MainMenu {
     ctx.restore();
   }
 }
+
+// The parent row that slides to the top of a sub-menu (the exe's transition
+// item, state 2: colour 0xff51eaff; ChatShortcutMenuYesNoWindow_UpdateRenderState).
+interface SlideHeader {
+  id: number;
+  y: number;
+  left: number;
+}
+const SLIDE_FRAMES = 8; // UpdateYesNoMenuItemState_00739cfc: age 8 (+0x14)
+const SLIDE_COLOUR = 0x51eaff;
+// The list window's +0x64 counter at open (see MainMenu.toggle).
+export const INPUT_DELAY = 2;
 
 const labelCache = new WeakMap<object, Map<number, OffscreenCanvas>>();
 function tintLabel(img: CanvasImageSource, color: number): CanvasImageSource {

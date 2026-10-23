@@ -35,7 +35,7 @@ import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
-import { TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
+import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
@@ -122,6 +122,8 @@ export class LobbyScreen implements Screen {
   private transporting: InfoWindow | null = null;
   private itemList: ItemListWindow | null = null;
   private options: OptionsMenu | null = null;
+  // Quit Game's Yes / No (QuitMenu_Constructor_0074bf30).
+  private quit: Question | null = null;
   private logWindow = false;
   private heights = new Map<number, number>();
   private acc = 0;
@@ -200,7 +202,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -231,6 +233,14 @@ export class LobbyScreen implements Screen {
     return p && me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0;
   }
 
+  // Quit Game > Yes: the loading screen returns to Ship Select (the exe's
+  // ResetLobbyStateAndReturnToShipSelect_0079ac9c, 0xa0). The exe first sends the
+  // 0x60 leave (CE 17) and packet 5 (unknown_send_disconnect, 0x0074c018 caller);
+  // not ported (ASSUMED: the server's 0xa0 answer is the leave here).
+  private disconnect(): void {
+    this.transport(0);
+  }
+
   private menuAction(id: number): void {
     if (id === 0xb) {
       const rows = this.hud.inventory();
@@ -243,6 +253,14 @@ export class LobbyScreen implements Screen {
       const full = () => this.hud.fullCharacter?.() ?? null;
       this.options = new OptionsMenu(characterOptionsEnv(this.hud.text, full, (c, p) => this.lobby.conn.send(c, 0, p)));
       this.menu.leafOpen = true;
+    } else if (id === 7 || id === 8) {
+      // Quit Game (8 = Disconnect online): QuitMenu_Constructor_0074bf30 at
+      // get_gui_position(0x18), width 469, text unitxt (11, 0x4e) when logged in.
+      this.quit = new Question(this.hud.text(0x0b, 0x4e), QUIT_POS);
+      this.menu.leafOpen = true;
+    } else {
+      // A leaf window the port does not have yet: no window opens, the menu stays.
+      console.info(`[classic] Home menu entry 0x${id.toString(16)}: no window in the port yet (not ported)`);
     }
   }
 
@@ -327,6 +345,17 @@ export class LobbyScreen implements Screen {
       return;
     }
     if (this.transporting) return; // waiting for the server's menu
+    if (this.quit) {
+      e.preventDefault();
+      this.quit.key(e);
+      const r = this.quit.result;
+      if (r) {
+        this.quit = null;
+        this.menu.leafOpen = false; // No: back to the menu
+        if (r === 'yes') this.disconnect();
+      }
+      return;
+    }
     if (this.party?.open) {
       // Tab is the game list's info key, Backspace its cancel.
       e.preventDefault();
@@ -382,6 +411,7 @@ export class LobbyScreen implements Screen {
 
   leave(): void {
     this.keys.clear();
+    this.quit = null;
     this.party?.close();
     this.team?.close();
     this.closeOptions();
@@ -413,6 +443,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
+      inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);
     });
@@ -437,6 +468,9 @@ export class LobbyScreen implements Screen {
     }
   }
 }
+
+// get_gui_position(0x18) (table 0x00971fc0 = (214, 256)) and the Quit window's width (469.0).
+const QUIT_POS = { x: 214, y: 256, w: 469 };
 
 // Runs fn shifted by dy (a band of a tall fill frame, stage.ts bandsOf; 0 on
 // the desktop).

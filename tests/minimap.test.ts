@@ -257,6 +257,8 @@ const menuEnv = {
 const fm = new FieldMenu(menuEnv);
 const press = (key: string) => fm.key({ key } as KeyboardEvent);
 fm.toggle();
+// the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+fm.tick(); fm.tick();
 press('Enter'); // Item Pack
 for (let i = 0; i < 4; i++) press('ArrowDown'); // Equip, Items, MAG, Trade, Area Map
 press('Enter');

@@ -150,16 +150,22 @@ const env: OptionsEnv = {
   let flags = 0;
   menu.cursorSaved = () => cursorSaved(flags);
   menu.toggle(MAIN_MENU);
+  // the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+  menu.tick(); menu.tick();
   for (let i = 0; i < 5; i++) menu.key(key('ArrowDown'));
   menu.key(key('Enter'));
   eq(opened, [6], 'Options chosen');
   menu.close();
   menu.toggle(MAIN_MENU);
+  // the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+  menu.tick(); menu.tick();
   menu.key(key('Enter'));
   eq(opened, [6, 6], 'Saved: the menu reopens on Options');
   menu.close();
   flags = 4;
   menu.toggle(MAIN_MENU);
+  // the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+  menu.tick(); menu.tick();
   menu.key(key('ArrowDown'));
   menu.key(key('Enter')); // Customize has no sub-menu
   eq(opened, [6, 6, 0], 'Non-Saved: the menu reopens on the first entry');
@@ -167,6 +173,8 @@ const env: OptionsEnv = {
   // Sub-menus keep their own cursor.
   flags = 0;
   menu.toggle(MAIN_MENU);
+  // the exe ignores keys for 2 frames after the menu opens (MainMenu.toggle)
+  menu.tick(); menu.tick();
   menu.key(key('ArrowUp')); // the kept Customize -> Item Pack
   menu.key(key('Enter')); // Item Pack
   menu.key(key('ArrowDown'));
