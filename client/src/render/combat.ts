@@ -42,6 +42,7 @@ import {
   MothmantAi,
   RappyFakeDeath,
   WolfAi,
+  armPackHowl,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
 import { PanArmsAi, PanHalfAi, SlimeAi, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
@@ -1175,7 +1176,7 @@ export class CombatView {
             rng: () => this.rng(),
           });
         }
-        else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, rng: () => this.rng() });
+        else if (className === 'TObjEneBm5Wolf') ai = new WolfAi({ ...at, detect: cfg.detect, turnRate: cfg.turnRate, attack, radius, entityId, barbarous: head.slot.type === 'BARBAROUS_WOLF', rng: () => this.rng() });
         else if (className === 'TObjEneBm3Fly') {
           // Mothmant's own FSM (combat/enemyfsm.ts MothmantAi). A Mothmant
           // set on its own (no Monest) counts the other parentless ones.
@@ -7835,6 +7836,11 @@ export class CombatView {
     if (plan) {
       e.death = { run: new DeathRun(plan), acc: 0, dissolve: null };
       if (plan.instant) e.instance.root.visible = false;
+    }
+    // A Barbarous Wolf's death arms its packmates' howl countdown (armPackHowl).
+    if (e.ai instanceof WolfAi) {
+      const wolves = [...this.enemies.values()].flatMap((x) => (x.ai instanceof WolfAi ? [x.ai] : []));
+      armPackHowl(e.ai, wolves, () => this.rng());
     }
     const m = e.ai?.deathMotion ?? e.motions.death;
     e.ai?.kill();

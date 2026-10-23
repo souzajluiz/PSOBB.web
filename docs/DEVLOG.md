@@ -10677,3 +10677,90 @@ combatdepth). Not checked in Chrome.
 **ASSUMED (marked in the code):** the Rappy's motion row (the enemy's wait, 6 at 0.9) stands in for `g_pDerolleAnimationData`; the Rappy BML is the loader's for the floor whenever the NPC is placed (the loader's area list was not read); the ultimate Chaos Bringer NPC name `bm_ene_df2_bringer_a.bml` is the port's ultimate name (the ModelA string was not read).
 
 **Tests:** `tests/npcs.test.ts`: the 0x45 / 0xa9 entries of every floor have a spec (episode 1..3, difficulty 0 / 3); section 10 checks the Rappy BML by difficulty and event, the sandlappy on Episode 4, the Chaos Bringer BML and the wait row (njm 9, 0.8), and that 0x33 / 0x46 / 0x118 have no spec. `tests/enemies.test.ts`, `tests/enemyfsm.test.ts`, `tests/questflow.test.ts` pass; `npx tsc --noEmit -p .` (client, Node 24) clean. Not run in Chrome (no Playwright for this change).
+
+## 2026-10-23: Savage Wolf writers, roam state, dash hit step and speed test
+
+**What changed:** the howl's countdown has its writer: a Barbarous Wolf's death arms the
+howl of its live packmates (`armPackHowl`, `combat/enemyfsm.ts`, called from `killEnemy` in
+`render/combat.ts`). The roam (state 7) is ported as the wolf's idle; the side dash's hit
+step (`ProcessGalgryphonHitCheck_00521528(0x500, 0x40c)`) and its speed test (0x3b4 < 0x43c)
+are ported. The side dash's own entry (state 0xc) still has no writer in the dumped code:
+`WolfAi.startDash` stays the hook.
+
+**Writers searched** (named Ephinea dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`,
+Ghidra for the unnamed ones, byte scans of `PsoBB.exe`):
+- +0x41c (disp32 `1c 04 00 00` with a mod=10 ModRM, 220 hits in `.text`; SIB forms, 9 hits, none on
+  the wolf). On the wolf path only four writes:
+  - savage_wolf_constructor (0x0051b26c): `mov [..+0x41c], 0` (instruction at 0x0051b544).
+  - DerolleProcessState_0051ba20, the death state 0x10, phase 4: for each wolf with the same pack
+    id (+0x3e4), when the dying wolf has the Barbarous flag (+0x3e0), `+0x41c = round(50 * r) + 20`
+    and `+0x420 = the killer's entity index` (instruction at 0x0051bd47; the dump's
+    `pbVar7[0x14].field_0xc`, i.e. +0x410 + 0xc = +0x41c; Ghidra shows the same store).
+  - DerolleHandleStatusEffect_0051e45c (vtable slot 1, 0x00b00264): the countdown
+    (`0x41c - 1`, store at 0x0051e4a9); at 0 and not state 0x10 / 0x11 it enters 0xe.
+  - No other write of a nonzero 0x41c on a wolf was found. The rest of the hits belong to other
+    families' objects (Olga, Galgryphon, Mothman, Sinowbeat ...); not every raw hit was traced.
+- State 0xc on the wolf (0x32e, `SetEnemyAiState_0051f62c`): no caller for a wolf. The literal
+  writes are DorphonSetStateC (0x005ac5a4) and other families' handlers. `ApplyEnemyTargetAndState`
+  (0x00423a78) and its conditional twin (0x00423ac8) have no xref and no data pointer in the exe.
+- 0x380 = 0xc (`SetEnemyField0x380`, the sub-state that the flinch exit 0xf resumes from):
+  only in the dash's own entry (DerolleProcessStateAttack_0051c5ac, dump line 300829). The
+  flinch (0xf) has no wolf writer either.
+- Attack picks: the stalk (0xa, SavageWolfProcessTargetLogic_0051cdfc) goes to the lunge (0xb) when
+  close or in front (`cos` of 0x6aaa), else to 8 / 9 (SavageWolfProcessFarTargetLogic_0051d430).
+  The lunge exits to 0xd. Neither picks 0xc.
+- Vtable (0x00b00260, savage_wolf_vtable): slot 0 0x0051b078 (the deleting destructor: it runs SavageWolfConstructor_0051b09c, then frees), slot 1 0x0051e45c
+  (status effect, above), slot 2 0x0051e534 (draw), slot 65 0x0051e9b4 (sets 0x10 unless already
+  0x10 / 0x11).
+
+**Roam (state 7, HandleDerolleState_0051d9b8)**, ported as the idle (`WolfAi.roamFrame`):
+entry: goal = origin + 120 * r * (sin, cos)(65536 * r BAMS) (0x00921230, 0x00921238), speed
+0x408 = 0.3 + 0.7 r (0x0092122c, 0x00921234), 0x40c = 0, 0x43c = 2 + 0.5 * speed / sin(0x100 BAMS)
+(0x00979ac4). Phase 0 (walk): aim at the goal, speed lerps 0.05, counter 0x428 past 100 or
+0x3b4 < 0x43c goes to phase 1; hit step (round(0x40c * 512), 0x40c). Phase 1: speed lerps 0.02
+toward 0, at <= 0.1 phase 2 with 240..360 frames of rest. Phase 2: at 0, a new goal
+(DerolleCalculateMovementTarget_0051de40: away from the origin, a random half turn, 120 * (0.3..1.0)),
+speed 0.3..1.0, back to phase 0. Motion 13 walking, 12 resting.
+
+**Side dash hit step (state 0xc frame):** the goal is origin + 90 along the dash angle (as before);
+the aim (InitializeEnemyAnimationVelocity) is toward the goal; the speed lerps 0.2 toward 1.6
+(0x408 at entry); then the heading turns toward the aim by 0x500 BAMS and the wolf steps 0x40c.
+**Speed test:** the dash exits to the stalk (state 10) when the goal distance 0x3b4 < 0x43c (the
+threshold the roam left; a fresh wolf has 0x40555555 from the chase entry).
+
+**Pack trigger** (`armPackHowl`): packmates get `20 + round(50 r)` ticks on the howl countdown;
+the howl then runs as before (Zalure frame 30, Jellen frame 40 on the target).
+
+**ASSUMED:**
+- Pack id = `round(spawn x)` (exe +0x3e4 = ROUND(+0x35c), taken as the spawn x; the exe's leader
+  search in state 0 is not ported, so the origin is the spawn point, not the leader's position).
+- The 0xb8 motion index mapping (1 = stalk 13 walking, 0 = wait 12 resting) is inferred from the
+  states' use, not decoded.
+- The roam's far logic (phase 3 with 0x470: states 8 / 9) is not ported: a target in range goes to
+  the stalk. The stuck retarget (CheckEnemyActionProgress 0x14 on the wall-ray counter 0x388) is not
+  ported: the port has no wall ray (open ground).
+- RotateVector2D's sense in DerolleCalculateMovementTarget (the rotation is symmetric in the random
+  spread, only the mirror differs).
+- The dash's facing toward the target keeps the stalk's turn rate (DerolleUpdateRotationFromTarget
+  not traced); the speed test is checked on the same tick (the exe checks it on the next).
+- Countdowns run in ticks (frames); the port runs the countdown in every non-dead tick (the exe's
+  slot-3 gate on DerolleHandleStatusEffect was not traced).
+- The howl's casts go to the port's target; the exe casts on entity 0x3e8 (set in state 0 to the
+  pack leader's index, 0xffff at spawn).
+- The packmate's 0x420 (killer's index) is not used.
+
+**Left out:** the dash's visibility gate (CheckEnemyTargetVisibility_00521238), its sound
+(TriggerDerolleAttackSound_0051ddf4), the wall ray and surface check of the hit check
+(GetGalGryphonAttackTargetRaycast, try_hit_entity), the roam's sound, the far logic (states 8 / 9),
+the state 0 leader search, and the flinch (0xf). The side dash trigger is still open: the next
+step is to find the writer of 0x380 = 0xc or 0x32e = 0xc through a generic path (a network
+state sync, if the online client takes one for wolves) rather than the wolf's own code.
+
+**Tests:** `tests/enemyfsm.test.ts`: the dash hit step (speed 0.2 then 0.4, the turn at most 0x500
+BAMS, the step to the cross side), the speed test (the stalk when the goal is inside 0x43c), the
+roam (goal at 60 for rng 0.5, motion 13, the speed ramp 0.05, the arrival, the rest 240..360 with
+motion 12, the new goal), the pack howl (the packmate at 45 frames for rng 0.5, other packs not
+armed, a non-Barbarous death arms nobody). The earlier cases (the howl, the 150-frame dash, the
+stalk and leap) still pass. `npx tsc --noEmit -p .` (client) clean; `tests/enemyfsm*.test.ts`,
+`tests/enemies.test.ts`, `tests/combatdepth.test.ts` and `tests/combat.test.ts` pass. Not run:
+Playwright / Chrome (per the brief).

@@ -546,16 +546,21 @@ export const WOLF = {
 // 0x434 is heading +- 0x5000 (112.5 degrees): with a target the sign is +
 // when CheckVectorCrossProduct_007829cc(facing, target - wolf) is nonzero,
 // else -; without one a random float >= 0.5 (0x00921330) gives -, else +.
-// Frame (state 0): the dash angle turns toward the heading by 0x100 a frame
-// (ClampAngleDifference_007a8c74(0x434, 0x438, 0x100)); the goal is the origin
-// plus 90 (0x0092132c) along the dash angle. Exit (state 3): no target, or the
-// frame counter 0x424 past 0x96 (150), goes to the roam state 7.
-// ASSUMED: the step toward the goal is the speed 1.6 (LerpFloat_0051d3c4 0.2
-// was not traced); the facing turns toward the target at the stalk's rate; the
-// dash's hit check (ProcessGalgryphonHitCheck_00521528(0x500, 0x40c)) and its
-// sound are not ported; the state 3 speed test (0x3b4 < 0x43c, back to the
-// stalk) is not ported. Entry sources: not found in the dumped code (nothing
-// writes state 0xc for the wolf), so startDash is the entry for now.
+// Frame (state 0, only the part the port runs): the dash angle turns toward the
+// heading by 0x100 a frame (ClampAngleDifference_007a8c74(0x434, 0x438, 0x100));
+// the goal is the origin plus 90 (0x0092132c) along the dash angle; the unit
+// vector and distance to the goal are InitializeEnemyAnimationVelocity's
+// (+0x3a8/+0x3b0, +0x3b4); the speed 0x40c moves toward 0x408 by LerpFloat 0.2
+// (LerpFloat_0051d3c4); then ProcessGalgryphonHitCheck_00521528
+// (0x500, 0x40c): the heading turns toward the aim by 0x500 BAMS and the wolf
+// steps 0x40c along it. Exit (state 3, checked before the frame in the exe):
+// no target, or the frame counter 0x424 past 0x96 (150), goes to the roam state
+// 7; else the speed test 0x3b4 < 0x43c (the roam threshold, shared) goes to the
+// stalk (state 10). The sound (TriggerDerolleAttackSound_0051ddf4), the
+// visibility gate (CheckEnemyTargetVisibility_00521238) and the wall ray of the
+// hit check are not ported (ASSUMED open ground). Entry sources: none found in
+// the dumped code (no state write of 0xc reaches a wolf; the only write of
+// 0x380 = 0xc is the dash's own entry), so startDash is the hook.
 export const WOLF_DASH = {
   speed: Math.fround(1.6),
   radius: 90,
@@ -563,6 +568,47 @@ export const WOLF_DASH = {
   turnFrame: 0x100,
   frames: 0x96,
   sideChance: 0.5,
+  // ProcessGalgryphonHitCheck_00521528(0x500, 0x40c): the turn of the heading.
+  turn: 0x500,
+  // LerpFloat_0051d3c4(this, 0.2) of the speed toward 0x408.
+  lerp: 0.2,
+} as const;
+
+// The roam state (7, HandleDerolleState_0051d9b8), the wolf's idle. Entry (state
+// 4): motion 1 (the stalk motion) while it walks, the goal is a random point up to
+// 120 (0x00921230) from the origin (the spawn point: 0x3fc..0x404) along a random
+// heading (65536 * r BAMS, 0x00921238), the walk speed 0x408 = 0.3 + 0.7 r
+// (0x0092122c, 0x00921234), the speed 0x40c = 0, the arrival threshold 0x43c =
+// 2 + CalculateSineScaledValue_00782a34(0x200, speed) (= 2 + 0.5 * speed /
+// sin(0x100 BAMS), 0x00979ac4 = 0.5, 0x00921258 = 2).
+// Phase 0 (walk): the aim at the goal (InitializeEnemyAnimationVelocity), the speed
+// lerps 0.05 toward 0x408, the counter 0x428 counts; the arrival (0x3b4 < 0x43c)
+// or a counter past 100 goes to phase 1. The hit check is (round(0x40c * 512),
+// 0x40c): the turn toward the aim in BAMS per unit speed (0x00921244 = 512).
+// Phase 1 (slow): the speed lerps 0.02 toward 0; at 0.1 (0x00921250) phase 2 with
+// a wait of 240..360 frames (0x428). Phase 2 (wait) counts down; at 0 a new goal
+// (DerolleCalculateMovementTarget_0051de40): the heading away from the origin
+// turned by 90 deg + a random half turn, 120 * (0.3..1.0) out; the speed
+// 0x408 = 0.3..1.0 and back to phase 0.
+// The roam's far logic (phase 3 with 0x470: SavageWolfProcessFarTargetLogic, states
+// 8 / 9) is not ported: a target in range goes to the stalk (ASSUMED). The stuck
+// retarget (CheckEnemyActionProgress 0x14 on the wall-ray counter 0x388) is not
+// ported: the port has no wall ray (ASSUMED open ground).
+export const WOLF_ROAM = {
+  radius: 120,
+  speedMin: 0.3,
+  speedRange: 0.7,
+  turnPerSpeed: 512,
+  up: 0.05,
+  down: 0.02,
+  stop: 0.1,
+  waitMin: 240,
+  waitRange: 120,
+  walkMax: 100,
+  arriveBase: 2,
+  // CalculateSineScaledValue_00782a34(0x200, s) = 0.5 * s / sin(0x100 BAMS).
+  sineScale: 0.5,
+  // The motion: 1 (stalk, 13) while walking, 0 (wait, 12) when resting.
 } as const;
 
 // The howl (state 0xe, SavageWolfProcessState_0051c0ac): the animation is 0xb
@@ -574,8 +620,9 @@ export const WOLF_DASH = {
 // does not touch the other wolves: its entry's search through the pack list
 // (g_DerolleEntityListHead) stores nothing. Entry: the countdown 0x41c that
 // DerolleHandleStatusEffect_0051e45c (vtable slot 1) runs each tick; when it
-// reaches 0 the wolf enters state 0xe unless dead. What arms 0x41c is not
-// found in the dumped code (armHowl). ASSUMED: the sound's threshold is the
+// reaches 0 the wolf enters state 0xe unless dead. The only nonzero writer of
+// 0x41c on a wolf is the death of a Barbarous Wolf in its pack (armPackHowl);
+// the wolf's constructor clears it. ASSUMED: the sound's threshold is the
 // motion frames the port has run (the elapsed unit is not traced).
 export const WOLF_HOWL = {
   sound: 0xd3,
@@ -634,19 +681,148 @@ export class WolfAi extends BrainBase {
   private howlSounded = false;
   // The howl's countdown (0x41c); 0 = not armed.
   private howlIn = 0;
+  // The roam (state 7) and the dash share the walk speed 0x40c, the walk's
+  // target speed 0x408 and the arrival threshold 0x43c; the origin is 0x3fc..0x404.
+  private speed = 0;
+  private wantSpeed = 0;
+  // 0x43c before any roam: the spawn path's chase (state 1) sets 0x40555555.
+  private arriveAt = Math.fround(3.3333333);
+  private goalX = 0;
+  private goalZ = 0;
+  private origin: { x: number; z: number };
+  private roamPhase = 0;
+  private roamCount = 0;
+  private roamReady = false;
+  private aimX = 0;
+  private aimZ = 0;
   lift = 0;
   // Output of the howl for render/combat.ts: the Jellen / Zalure casts on
   // the players and the sound effects to play at the wolf.
   casts: WolfCast[] = [];
   sounds: number[] = [];
 
-  constructor(opts: { x: number; z: number; angle: number; detect: number; turnRate: number; attack: EnemyAttackData | null; radius: number; entityId: number; rng?: () => number }) {
+  // The pack (+0x3e4: the rounded spawn x, InitializeEnemySpawnData_0051b660) and
+  // the Barbarous flag (+0x3e0). ASSUMED: the port's pack is the spawn x.
+  readonly pack: number;
+  readonly barbarous: boolean;
+
+  constructor(opts: { x: number; z: number; angle: number; detect: number; turnRate: number; attack: EnemyAttackData | null; radius: number; entityId: number; pack?: number; barbarous?: boolean; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
+    this.pack = opts.pack ?? Math.round(opts.x);
+    this.barbarous = opts.barbarous ?? false;
     this.detect = opts.detect;
     this.turn = opts.turnRate * BAMS_TO_RAD;
     this.reach = (opts.attack?.distanceX ?? 0) + opts.radius;
     this.parity = opts.entityId & 1;
     this.current = WOLF_MOTION.wait;
+    // The origin is the spawn point (ASSUMED: the pack leader's position, the
+    // exe's 0x3fc source when a leader is in the list, is not ported).
+    this.origin = { x: opts.x, z: opts.z };
+  }
+
+  // The arrival threshold of the walk speed s: 2 + CalculateSineScaledValue(0x200, s).
+  private arriveFor(s: number): number {
+    return WOLF_ROAM.arriveBase + (WOLF_ROAM.sineScale * s) / Math.sin(0x100 * BAMS_TO_RAD);
+  }
+
+  // The roam's entry (state 7, phase 0): a random goal up to 120 out from the
+  // origin on a random heading, the walk speed and the arrival threshold.
+  private roamStart(): void {
+    const ang = Math.round(this.rng() * 65536) * BAMS_TO_RAD;
+    const d = this.rng() * WOLF_ROAM.radius;
+    this.goalX = this.origin.x + Math.sin(ang) * d;
+    this.goalZ = this.origin.z + Math.cos(ang) * d;
+    this.wantSpeed = WOLF_ROAM.speedMin + this.rng() * WOLF_ROAM.speedRange;
+    this.speed = 0;
+    this.arriveAt = Math.fround(this.arriveFor(this.wantSpeed));
+    this.roamPhase = 0;
+    this.roamCount = 0;
+    this.roamReady = true;
+  }
+
+  // DerolleCalculateMovementTarget_0051de40: the next goal is away from the
+  // origin, a random half turn on from the wolf's offset, 120 * (0.3..1.0) out.
+  // ASSUMED: RotateVector2D's sense; the ground ray that pulls the goal in is not
+  // ported.
+  private roamNewGoal(): void {
+    let dx = this.x - this.origin.x;
+    let dz = this.z - this.origin.z;
+    const len = Math.hypot(dx, dz);
+    if (len > 0) {
+      dx /= len;
+      dz /= len;
+    }
+    const r = (Math.round(this.rng() * 32768) + 0x4000) * BAMS_TO_RAD;
+    const c = Math.cos(r);
+    const s = Math.sin(r);
+    const nx = dx * c + dz * s;
+    const nz = dz * c - dx * s;
+    const dist = WOLF_ROAM.radius * (WOLF_ROAM.speedMin + this.rng() * WOLF_ROAM.speedRange);
+    this.goalX = this.origin.x + nx * dist;
+    this.goalZ = this.origin.z + nz * dist;
+  }
+
+  // InitializeEnemyAnimationVelocity: the unit vector toward (gx, gz) and the
+  // distance (+0x3a8 / +0x3b0 / +0x3b4). Returns the distance.
+  private aimAt(gx: number, gz: number): number {
+    const dx = gx - this.x;
+    const dz = gz - this.z;
+    const d = Math.hypot(dx, dz);
+    this.aimX = d > 0 ? dx / d : 0;
+    this.aimZ = d > 0 ? dz / d : 0;
+    return d;
+  }
+
+  // ProcessGalgryphonHitCheck_00521528(bams, speed): the heading turns toward the
+  // aim by bams and the wolf steps speed along the heading. The wall ray and the
+  // surface check of the exe are not ported (ASSUMED open ground).
+  private hitStep(bams: number, speed: number): void {
+    this.angle = turnToward(this.angle, Math.atan2(this.aimX, this.aimZ), bams * BAMS_TO_RAD);
+    this.x += Math.sin(this.angle) * speed;
+    this.z += Math.cos(this.angle) * speed;
+  }
+
+  // Motion 13 (stalk) while the roam walks, 12 (wait) while it rests.
+  private roamPlay(out: AiFrame, walking: boolean): void {
+    this.play(out, walking ? WOLF_MOTION.stalk : WOLF_MOTION.wait);
+  }
+
+  // One roam frame (HandleDerolleState_0051d9b8, phase 0 / 1 / 2).
+  private roamFrame(out: AiFrame): void {
+    if (this.roamPhase === 0) {
+      const d = this.aimAt(this.goalX, this.goalZ);
+      // LerpFloat_0051d3c4(0.05) toward the walk speed.
+      this.speed += Math.max(-WOLF_ROAM.up, Math.min(WOLF_ROAM.up, this.wantSpeed - this.speed));
+      this.roamCount++;
+      if (d < this.arriveAt || this.roamCount > WOLF_ROAM.walkMax) {
+        this.roamPhase = 1;
+        this.wantSpeed = 0;
+      }
+      this.hitStep(Math.round(this.speed * WOLF_ROAM.turnPerSpeed), this.speed);
+      return;
+    }
+    if (this.roamPhase === 1) {
+      this.aimAt(this.goalX, this.goalZ);
+      this.speed += Math.max(-WOLF_ROAM.down, Math.min(WOLF_ROAM.down, this.wantSpeed - this.speed));
+      if (this.speed <= WOLF_ROAM.stop) {
+        this.roamPhase = 2;
+        this.roamCount = Math.round(WOLF_ROAM.waitMin + this.rng() * WOLF_ROAM.waitRange);
+        this.roamPlay(out, false);
+      }
+      this.hitStep(Math.round(this.speed * WOLF_ROAM.turnPerSpeed), this.speed);
+      return;
+    }
+    // Phase 2: rest, then a new goal and back to walking.
+    this.roamCount--;
+    if (this.roamCount < 1) {
+      this.roamNewGoal();
+      this.wantSpeed = WOLF_ROAM.speedMin + this.rng() * WOLF_ROAM.speedRange;
+      this.speed = 0;
+      this.arriveAt = Math.fround(this.arriveFor(this.wantSpeed));
+      this.roamPhase = 0;
+      this.roamCount = 0;
+      this.roamPlay(out, true);
+    }
   }
 
   private enter(out: AiFrame, state: WolfState, t: AiTarget | null): void {
@@ -655,8 +831,10 @@ export class WolfAi extends BrainBase {
     this.frames = 0;
     this.lift = 0;
     if (state === 'idle') {
+      // The roam (state 7) entry: a new goal, walking (motion 13).
       this.targetId = null;
-      this.play(out, WOLF_MOTION.wait);
+      this.roamStart();
+      this.roamPlay(out, true);
     } else if (state === 'stalk') {
       this.orbitWant = WOLF.stalkMin + this.rng() * (WOLF.stalkMax - WOLF.stalkMin);
       this.side = this.rng() < 0.5 ? 1 : -1;
@@ -681,6 +859,8 @@ export class WolfAi extends BrainBase {
       this.dashOrigin = { x: this.x, z: this.z };
       this.dashHeading = this.angle;
       this.dashAngle = wrap(this.angle + this.dashSide(t) * WOLF_DASH.side * BAMS_TO_RAD);
+      // 0x408 = 1.6; the speed 0x40c and the threshold 0x43c are not reset.
+      this.wantSpeed = WOLF_DASH.speed;
       this.play(out, WOLF_MOTION.stalk);
     } else if (state === 'howl') {
       this.howlSounded = false;
@@ -709,7 +889,7 @@ export class WolfAi extends BrainBase {
   }
 
   // Arms the howl's countdown (0x41c): it enters state 0xe when it reaches 0.
-  // The exe's arming is not found yet.
+  // The exe's arming is the pack's death, see armPackHowl.
   armHowl(ticks: number): void {
     this.howlIn = ticks;
   }
@@ -721,11 +901,20 @@ export class WolfAi extends BrainBase {
     this.frames += this.current?.speed ?? 0;
     switch (this.state) {
       case 'idle': {
+        // The roam (state 7): a target in the detect range first (ASSUMED: the
+        // exe's far logic, states 8 / 9, is not ported, the stalk stands in for
+        // it), else the walk / rest of HandleDerolleState_0051d9b8.
         const t = nearest(targets, this.x, this.z, this.detect);
         if (t) {
           this.targetId = t.clientId;
           this.enter(out, 'stalk', t);
+          break;
         }
+        if (!this.roamReady) {
+          this.roamStart();
+          this.roamPlay(out, true);
+        }
+        this.roamFrame(out);
         break;
       }
       case 'stalk': {
@@ -810,16 +999,16 @@ export class WolfAi extends BrainBase {
         this.dashAngle = turnToward(this.dashAngle, this.dashHeading, WOLF_DASH.turnFrame * BAMS_TO_RAD);
         const gx = this.dashOrigin.x + Math.sin(this.dashAngle) * WOLF_DASH.radius;
         const gz = this.dashOrigin.z + Math.cos(this.dashAngle) * WOLF_DASH.radius;
-        const dx = gx - this.x;
-        const dz = gz - this.z;
-        const d = Math.hypot(dx, dz);
-        if (d > 0) {
-          const s = Math.min(d, WOLF_DASH.speed);
-          this.x += (dx / d) * s;
-          this.z += (dz / d) * s;
-        }
+        const d = this.aimAt(gx, gz);
+        // LerpFloat_0051d3c4(0.2) of the speed toward 0x408 (1.6), then the hit check.
+        this.speed += Math.max(-WOLF_DASH.lerp, Math.min(WOLF_DASH.lerp, this.wantSpeed - this.speed));
+        this.hitStep(WOLF_DASH.turn, this.speed);
+        // DerolleUpdateRotationFromTarget: the facing toward the target (rate ASSUMED).
         this.angle = turnToward(this.angle, this.angleTo(t), this.turn);
+        // The exit checks (state 3): the counter past 0x96 goes to the roam; the
+        // speed test (0x3b4 < 0x43c) goes to the stalk (state 10).
         if (this.timer > WOLF_DASH.frames) this.enter(out, 'idle', null);
+        else if (d < this.arriveAt) this.enter(out, 'stalk', t);
         break;
       }
       case 'howl': {
@@ -858,6 +1047,25 @@ export class WolfAi extends BrainBase {
     this.enter(out, this.targetId !== null ? 'stalk' : 'idle', null);
     return this.state;
   }
+}
+
+// The Barbarous Wolf's death (DerolleProcessState_0051ba20, state 0x10 entry,
+// phase 4): when the dying wolf has the Barbarous flag, every wolf of its pack
+// (the same +0x3e4) gets the howl countdown +0x41c = round(50 * r) + 20 frames
+// (0x00921388 = 50, the +0x14), one random draw per packmate in list order. The
+// exe also stores the killer's entity index in +0x420 (the port has no use for
+// it). Dead wolves are skipped: the countdown is not run in the dead states.
+export const WOLF_PACK_HOWL = { base: 20, range: 50 } as const;
+
+export function armPackHowl(dead: WolfAi, wolves: readonly WolfAi[], rng: () => number): number {
+  if (!dead.barbarous) return 0;
+  let n = 0;
+  for (const m of wolves) {
+    if (m === dead || m.pack !== dead.pack || m.state === 'dead') continue;
+    m.armHowl(WOLF_PACK_HOWL.base + Math.round(WOLF_PACK_HOWL.range * rng()));
+    n++;
+  }
+  return n;
 }
 
 // --- Rag Rappy / Al Rappy: the fake death -----------------------------------
