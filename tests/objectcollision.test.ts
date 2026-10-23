@@ -81,6 +81,26 @@ check(sphereOb.y === 6 && sphereOb.x === 100 && sphereOb.z === 50, 'the containe
 const turned = solidObstacle({ index: 9, x: 0, y: 0, z: 0, yaw: Math.PI / 2, collision: { address: 0, offset: [3, 0, 0], type: 1, halfX: 1, halfZ: 1, flags: 0x10003 } });
 check(Math.abs(turned.x) < 1e-9 && Math.abs(turned.z + 3) < 1e-9, 'a table offset turns with the entity yaw (+3 on x at yaw pi/2 is -3 on z)');
 
+// 3b. The Ancient pillars (TOTrapAncient02 0x0154, 02R 0x0167): their box is the
+// static sphere 0x009c684c (r2, 8.5 up, flags 0x38003) from InitializeDerolleEnemyBase_0063c638.
+// The box does not follow the rise (no writer in the trap's states), so the solid
+// is built from the placement alone and blocks whether the pillar is up or down.
+const pillars = collectFieldSolids([place(0x0154, 5, [50, 0, 50]), place(0x0167, 6, [-40, 0, 0])], { area: 0x13, episode: 1 });
+check(JSON.stringify(pillars.map((s) => s.index).sort()) === '[5,6]', 'both pillar types are solids');
+const pillar = pillars.find((s) => s.index === 5);
+check(!!pillar && pillar.collision.address === 0x009c684c && pillar.collision.type === 0 && pillar.collision.halfX === 2, 'a pillar is the sphere r2 of 0x009c684c');
+if (pillar) {
+  const o = solidObstacle(pillar);
+  check(o.sphere === true && o.flags === 0x38003 && o.halfX === 2, 'a pillar box is a sphere of radius 2 with flags 0x38003');
+  check(Math.abs(o.y - 8.5) < 1e-9 && o.x === 50 && o.z === 50, 'a pillar box sits at its origin, 8.5 up');
+  world.obstacles = [o];
+  check(!!world.blockedBy(56, 0, 50, PLAYER_RADIUS), 'a pillar blocks a player 6 units from its centre (r2 + r5 = 7), lowered or raised');
+  check(!world.blockedBy(58, 0, 50, PLAYER_RADIUS), 'a pillar does not block a player 8 units from its centre');
+  check(!!world.blockedBy(56, 0, 50, PLAYER_RADIUS, [-1, 0]), 'a step toward a pillar is blocked');
+  check(!world.blockedBy(56, 0, 50, PLAYER_RADIUS, [1, 0]), 'a step away from an overlapped pillar is not blocked');
+  world.obstacles = [];
+}
+
 // 4. Drop spot body test on a sphere (FUN_0083dbd4 with the spot radius 3).
 const sphereBody = { x: 10, z: 0, yaw: 0, halfX: 9, halfZ: 9, sphere: true };
 check(spotHitsBody({ x: 0, y: 0, z: 0 }, sphereBody), 'a spot 10 from a sphere of radius 9 is hit (3 + 9 = 12)');

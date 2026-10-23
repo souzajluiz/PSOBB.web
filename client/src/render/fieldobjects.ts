@@ -198,10 +198,12 @@ export function doorLamps(d: FieldDoor, unlocked: boolean, flags: ReadonlySet<nu
 const BOX_TYPES = new Set([0x0088, 0x0091, 0x0092, 0x0093, 0x0161, 0x0162, 0x0200, 0x0203, 0x02b0]);
 
 // Field objects that block the player without being doors: the containers
-// (BOX_TYPES, a breakable one stops blocking once broken) and the jungle rocks.
-// The Ancient pillar traps (0x0154 / 0x0167, sphere 0x009c684c) are not here:
-// their box follows the trap's rise, which is not traced.
-const SOLID_TYPES = new Set([...BOX_TYPES, 0x0206, 0x0207, 0x0208]);
+// (BOX_TYPES, a breakable one stops blocking once broken), the jungle rocks and
+// the Ancient pillar traps. The pillars' box (0x009c684c, sphere r2 at 8.5 up,
+// flags 0x38003) is set once by InitializeDerolleEnemyBase_0063c638 and never
+// moves or toggles with the rise (the rise only lifts the model's nodes): so a
+// pillar blocks in both its lowered and its raised state, as the exe does.
+const SOLID_TYPES = new Set([...BOX_TYPES, 0x0206, 0x0207, 0x0208, 0x0154, 0x0167]);
 
 // A non-door field object with a collision box: its set entry's world place and
 // the box table it was built with (objectmodels.ts ObjectCollision).

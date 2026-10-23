@@ -112,7 +112,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
 - [x] Player hitbox radius from the exe: 5.0 for every class (only its height is per class)
 - [x] Collision of lobby objects: TObjLobbyMain (0x0182) round hitbox of radius 32, the only lobby object with one
 - [x] TObjLobbyMain's seasonal decoration model (`bm_obj_lobby_main.bml`) (2026-10-23, DEVLOG)
-- [ ] Round hitboxes of field objects: doors, containers and jungle rocks block the player (2026-10-23: flag gate of CheckTwoHitboxCollision, step test of IsPlayerAboutToCollide); not yet: the Ancient pillar traps (0x0154/0x0167, box follows the rise), the other 243 `InitEnemyCollisionBoxes` sites, and whether NPCs stop at containers
+- [ ] Round hitboxes of field objects: doors, containers, jungle rocks and the Ancient pillar traps block the player (2026-10-23: flag gate of CheckTwoHitboxCollision, step test of IsPlayerAboutToCollide; the pillars' box is static in the exe, it does not follow the rise, DEVLOG 2026-10-23 pillars); not yet: the other 243 `InitEnemyCollisionBoxes` sites, and whether NPCs stop at containers
 - [x] Real lobby spawn points and collision (`*c.rel`) (done 2026-10-16; stale entry closed 2026-10-23, DEVLOG 2026-10-23)
 - [ ] Lobby spawn lookup: the exe also matches a `TObjPlayerSet`'s source (`+0x84`) to the arrival kind from `get_warp_type`; all lobby sets are source 0, so the port's source 0 only holds for that arrival kind (ASSUMED, not verified in Chrome)
 - [x] Character models: `pl?nj.bml` (NJCM) + `pl?tex.afs`, 12 classes, appearance (dev page `models.html`)

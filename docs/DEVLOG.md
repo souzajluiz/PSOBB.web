@@ -11720,3 +11720,26 @@ off / on, the rand bounds; a `PlayerMover` walk turned by `steer`, and without i
 `tests/combatdepth.test.ts` pass. `npx tsc --noEmit -p .` in `client/` is clean.
 `tests/combat.test.ts` was not run: it needs `vendor/newserv/build/newserv`, absent in this
 worktree.
+
+## 2026-10-23 - pillars: the Ancient pillar traps (0x0154 / 0x0167) block the player, with a static box
+
+**What changed:** the two pillar traps block the player and the drop spots. The brief's premise (the box follows the rise, so a raised pillar blocks and a lowered one does not) is wrong for the exe: the box is set once and never moves, toggles or changes height with the rise. The port follows the exe, so a pillar blocks in both states. `render/fieldobjects.ts` `SOLID_TYPES` gets 0x0154 and 0x0167; `formats/objectmodels.ts` already had their box (0x009c684c) and only its comment changed. `tests/objectcollision.test.ts` gets section 3b.
+
+**Exe evidence (PsoBB.exe; dump `src/Psobb.exe-05112026.c`, `tools/exedata.py`, `objdump`):**
+- Object factory: the o.dat type table rows are 16 bytes (type, creator, a word `0x48742400`, 0). Row for 0x0154 at VA `0x00a0bb20` (creator `0x0063bfd4`, copy at `0x00a0bf90`); row for 0x0167 at `0x00a08420` (creator `0x0063b4e8`, copy at `0x00a08800`, `0x00a08cc0`). The third word is not traced (ASSUMED: not a box or flag).
+- Creators: `DerolleEnemy_Constructor_0063bfd4` (dump 501494) and `CreatePlayerEntity_0063b4e8` (dump 501072, through `InitializePlayerEntity_0063b5b4`, 501122). Both call `InitializeDerolleEnemyBase_0063c638` (dump 501784).
+- The box: `InitializeDerolleEnemyBase_0063c638` calls `InitEnemyCollisionBoxes_007b9a88(this, &DAT_009c684c, 1)` (dump 501831) and then `UpdateCollisionBoxPosition_007b999c`. Table 0x009c684c (read with `exedata.py`): position (0, 8.5, 0), radius 2.0, unk1 0, unk2 0 (sphere), unknown_flags 0x38003 (229379), damage_reduction 0.
+- `UpdateCollisionBoxPosition_007b999c` (dump 802533) computes the world box as the table offset rotated by `y_rot` plus the entity origin `x2/y2/z2`. It does not read `+0x34c` / `+0x350` (the rise). So the rise cannot move the box.
+- No writer of the box: the pillar's states never touch `collision_data` or the flag word at `+0x18`. The 02R handler `ProcessEnemyAttackState_0063b930` (dump 501287) and the stun `ProcessPlayerStunState_0063b828` (501232) write only `+0x32e / +0x330 / +0x34c / +0x350 / +0x35c`. The 02 spring (`0x0063c990`, vtable `0x00b2d7c0 + 0x14c`, name not in the dump) calls only the target search, the distance and the 6x2C send, no box call (objdump of `0x63c990..0x63cbe4`). The hold `0x0063c7f4` and the tree update `UpdateTreeObject_0063cbe4` (dump 501851) also write no box. `DerolleClearHitboxAndCollision` (dump 802665) runs only on destruction.
+- The rise is drawn only: `RenderSeabedPillarMapObject_0063c2bc` (dump 501614) adds `+0x34c` / `+0x350` to node offsets.
+- Test: the step test (`IsPlayerAboutToCollide`) and the pair gate take the box as it is: 0x38003 pairs with the class 1 player's 0x200b (share bit 0x2; no exclusive pair crosses), so the pillar blocks a step toward its centre within XZ 7 (2 + 5). The exe's overlap tests pass y = 0, so the height is not a gate there; the port's own ±50 height range stays (as for the containers).
+
+**Port:** `render/fieldobjects.ts` `SOLID_TYPES` (0x0154, 0x0167): `collectFieldSolids` now returns the placed pillars, `solidObstacle` builds the sphere (r2, y + 8.5, flags 0x38003, entity origin for the 100-unit filter). `obstacles()` passes them with the containers and rocks: a pillar is never delayed or broken. `render/collision.ts` header comment updated. `formats/objectmodels.ts` comment: the box is on in every state.
+
+**ASSUMED / not traced:**
+- The Derolle table's third word (`0x48742400`) in the object rows is not read.
+- The 02 spring's name (`0x0063c990`) is not in the dump; it is read from the vtable and the objdump, not the decompile.
+- A pillar that is not yet constructed (a delayed group) is not a solid; that follows the container rule (ASSUMED, not checked against the exe for pillars).
+- The exe's `CheckPlayerCollisionWithEntities` may also check the trap's `+0x30` bits set by the ctor (`0x60000000`); none of them is in 0x80000800, so the step test is not affected (traced from the ctor, not the step filter in full).
+
+**Checks:** `node tests/objectcollision.test.ts` (new section 3b: the pillar sphere, 6 units blocks, 8 does not, step toward / away); `cd client && tsc --noEmit -p .` clean. Also pass: `collision`, `townfield`, `drops`, `traps`, `fieldhud`, `npcs`, `npcai`, `waves`, `formats`, `lobbymain`. Not run in Chrome (the brief).

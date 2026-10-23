@@ -6,7 +6,8 @@
 //    the motion (stop when running nearly head-on into a wall, otherwise slide),
 //    then 8 radial rays around the new position to push out of walls.
 // `obstacles` holds the collision boxes of the field objects that block the
-// player: closed doors, containers and jungle rocks (collectFieldSolids). The
+// player: closed doors, containers, jungle rocks and the Ancient pillars, whose
+// box is static (collectFieldSolids). The
 // client keeps them in the object's box array (InitEnemyCollisionBoxes_007b9a88,
 // bit 0 of the flag word at +0x18 enables a box: the door's is set while it is
 // closed by FUN_007b52c4 and cleared when it opens by FUN_007b52ec). The pair
