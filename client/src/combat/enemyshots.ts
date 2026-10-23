@@ -12,7 +12,9 @@ import type { AiTarget } from './enemyai.ts';
 // ASSUMED: the player's hit box radius for projectiles (the player collision
 // radius 5 of render/lobbyview.ts; same value as enemyfsm.ts PLAYER_RADIUS).
 export const PLAYER_RADIUS = 5;
-// ASSUMED: the height of the point a shot aims at / hits on a player.
+// ASSUMED: the height of the point an enemy shot aims at on a player (not
+// traced per projectile). It is no longer a hit window: the exe's box test is
+// on the XZ plane (see `within`).
 export const PLAYER_AIM_HEIGHT = 10;
 
 // What a shot does to a player it hits:
@@ -361,8 +363,9 @@ export class GunnerLaser extends EnemyShot {
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    // ASSUMED: the player's body spans the ground to twice its aim height.
-    const hit = this.y >= 0 && this.y <= PLAYER_AIM_HEIGHT * 2 ? this.within(targets, this.radius)[0] : undefined;
+    // The hit test is the XZ box test (EXE: CheckTwoHitboxCollision_007b5e40,
+    // dump 800093, both y forced to 0); the old 0..2 * aim height window is gone.
+    const hit = this.y >= 0 ? this.within(targets, this.radius)[0] : undefined;
     if (hit) {
       this.done = true;
       return [hit];

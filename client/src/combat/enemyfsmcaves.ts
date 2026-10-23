@@ -475,7 +475,8 @@ export class NanoBreath extends EnemyShot {
     this.z += this.vz;
     this.travelled += this.speed;
     if (this.travelled >= NANO.breathRange || this.y <= 0) this.done = true;
-    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, PLAYER_AIM_HEIGHT - this.y, t.z - this.z) <= this.speed + 5);
+    // ASSUMED: the breath's contact is the XZ box test (no height window).
+    return targets.filter((t) => !t.dead && Math.hypot(t.x - this.x, t.z - this.z) <= this.speed + 5);
   }
 }
 
@@ -529,7 +530,8 @@ export class NanoShot extends EnemyShot {
     this.x += this.vx;
     this.y += this.vy;
     this.z += this.vz;
-    const hit = targets.find((p) => !p.dead && Math.hypot(p.x - this.x, PLAYER_AIM_HEIGHT - this.y, p.z - this.z) <= this.speed + 5);
+    // ASSUMED: the XZ box test (no height window), as in the breath above.
+    const hit = targets.find((p) => !p.dead && Math.hypot(p.x - this.x, p.z - this.z) <= this.speed + 5);
     if (hit) {
       this.done = true;
       return [hit];
