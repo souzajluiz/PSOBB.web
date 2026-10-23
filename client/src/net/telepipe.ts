@@ -129,6 +129,32 @@ export function pioneer2Arrival(clientId: number, episode: number): { x: number;
   return { x: t[0], y: t[1], z: t[2], angle: P2_ARRIVAL_ANGLE };
 }
 
+// The Medical Center spots a returning player is placed at (return_to_p2_maybe ->
+// SetPlayerRespawnState_006986ec, which takes WeaponStat[0xb].flDamage's per-episode
+// table + client id * 12; read with tools/exedata.py: pointers 0x009cc4ec + 4 * episode,
+// 3 floats per client at 0x00968e14 (Episode 1), 0x00968e44 (Episode 2), 0x00968e74
+// (Episode 4)). Episode 4 has the Episode 1 values. The angle is not in the exe's
+// respawn state (ASSUMED: the P2 arrival facing).
+export const P2_MEDICAL_EP1: ReadonlyArray<readonly [number, number, number]> = [
+  [213, 3, -280],
+  [207, 3, -280],
+  [219, 3, -280],
+  [225, 3, -280],
+];
+export const P2_MEDICAL_EP2: ReadonlyArray<readonly [number, number, number]> = [
+  [7, 0, -200],
+  [5, 0, -185],
+  [20, 0, -211],
+  [23, 0, -197],
+];
+
+// The Pioneer 2 spot of the dead prompt's Yes (GameView.returnToPioneer2). The wire
+// episode: 1 Episode 1, 2 Episode 2, 3 Episode 4.
+export function pioneer2ReturnArrival(clientId: number, episode: number): { x: number; y: number; z: number; angle: number } {
+  const t = (episode === 2 ? P2_MEDICAL_EP2 : P2_MEDICAL_EP1)[clientId & 3];
+  return { x: t[0], y: t[1], z: t[2], angle: P2_ARRIVAL_ANGLE };
+}
+
 export function readTelepipe(dv: DataView, o: number): TelepipeState {
   return {
     owner: dv.getUint16(o, true),

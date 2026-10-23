@@ -125,7 +125,7 @@ import {
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
-import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reverserHp, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { antiCures, EntityBuffs, GROUP, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { inUnsafeMap, slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
@@ -164,6 +164,7 @@ import {
   parseGiveExp,
   parseHitByEnemy,
   parsePlayerDeath,
+  parseRevivePlayer,
   parseStatusEffect,
   parseTechLevelOverride,
   type ChangeLevel,
@@ -471,6 +472,9 @@ export interface CombatOptions {
   // player is alive again (6x4F, the prompt closes). combat/playerdamage.ts.
   onRevivable?: () => void;
   onRevived?: () => void;
+  // Whether a quest (or a Battle Mode run) is on: its revive restores full HP and TP
+  // (reviveRestore). Set by the game view.
+  questRunning?: () => boolean;
   // palette_slots[index] of the current action palette (render/fieldhud.ts).
   paletteSlot?: (index: number) => { group1: number; group2: number; disabled: boolean } | null;
   // Map files of a floor (GameView.floorFilesFor).
@@ -6738,10 +6742,21 @@ export class CombatView {
     } else if (tech === TECH.anti && onMe && level >= 1) {
       this.applyAnti(level, name);
     } else if (tech === TECH.reverser && onMe && this.damage.dead) {
-      // PlayerResetDeadState_0068fdc8: max HP / 2 on a field.
-      this.damage.revive(reverserHp(this.damage.maxHp));
-      this.opts.log(`${name}: revived`);
+      this.reviveSelf(name);
     }
+  }
+
+  // A Reverser or a Moon Atomizer on the local dead player: the HP / TP rule of
+  // reviveRestore (PlayerResetDeadState_0068fdc8), then the revive state, which
+  // sends 6x4F and closes the dead prompt (onRevived).
+  private reviveSelf(from: string): void {
+    const r = reviveRestore(this.damage.maxHp, this.progression?.maxTp ?? this.tp, {
+      quest: this.opts.questRunning?.() ?? false,
+      unsafe: inUnsafeMap(this.area),
+    });
+    this.damage.revive(r.hp);
+    if (r.tp !== null && this.progression) this.tp = r.tp;
+    this.opts.log(`${from}: revived`);
   }
 
   // Another player's 6x48 for the Foie / Barta families: their object runs here too
@@ -7283,6 +7298,14 @@ export class CombatView {
     if (sub === 0x4e) {
       // HandlePlayerRootObjectDespawn_0069ad04: the dead marker (soul).
       if (clientId !== this.game.selfId) this.showSoul(clientId, true);
+      return;
+    }
+    // 6x33 (Moon Atomizer): FUN_0069a1e0 spawns a Reverser-type object at the
+    // sender with the revived player as its one target (range 10); its hit on the
+    // target is the Reverser's revive. ASSUMED: the object's hit is that revive.
+    if (sub === 0x33) {
+      const r = parseRevivePlayer(body);
+      if (r && r.target === this.game.selfId && this.damage.dead) this.reviveSelf(`player ${r.clientId}'s Moon Atomizer`);
       return;
     }
     if (sub === 0x4f) {

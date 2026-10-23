@@ -51,7 +51,7 @@
 //
 // Reverser: a player's vtable +0x108 = PlayerResetDeadState_0068fdc8 clears
 // the dead flag and PlayerRestoreHealthAndTP_0068fddc sets HP to max HP / 2 on
-// a field (outside battle mode), full HP / TP otherwise.
+// a field (outside battle mode and quests), full HP / TP otherwise (reviveRestore).
 
 const f32 = Math.fround;
 
@@ -178,6 +178,16 @@ export function antiCures(level: number): string[] {
 // PlayerRestoreHealthAndTP_0068fddc on a field: max HP / 2 (short division).
 export function reverserHp(maxHp: number): number {
   return Math.max(1, Math.trunc(maxHp / 2));
+}
+
+// The revive of a Reverser or a Moon Atomizer: PlayerResetDeadState_0068fdc8
+// clears the dead flag and PlayerRestoreHealthAndTP_0068fddc runs. Outside a
+// quest, on an unsafe map (a field), HP is max / 2 and the TP is left alone
+// (tp null); otherwise HP and TP are full. ASSUMED: the exe's battle-mode and
+// invincibility-3 tests are covered by the quest test (a battle run is a quest).
+export function reviveRestore(maxHp: number, maxTp: number, opts: { quest: boolean; unsafe: boolean }): { hp: number; tp: number | null } {
+  if (!opts.quest && opts.unsafe) return { hp: reverserHp(maxHp), tp: null };
+  return { hp: Math.max(1, maxHp), tp: maxTp };
 }
 
 // The level a remote technique object runs at (action_launch_tech): the 6x48
