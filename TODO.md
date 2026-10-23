@@ -24,7 +24,6 @@ only part of them has matching C (psobb-client-source).
 - [ ] Field HUD: Status window, Keyboard / Pad config, MAG panel and Photon Blast window, equipment detail pages, sort (6xC4), palette save (07ED), item list scroll bar, TP use, window shine
 - [ ] Minimap: switch icons, door / box / boss icons, battle team colours, Challenge "Area n" title
 - [ ] Team: Master Transfer, Buying Privileges, Flag Records, invitations, banned names, team chat line
-- [ ] Other Pioneer 2 counters (medical center, giveaway)
 
 ## C. World and objects
 - [ ] Lobby: seasonal decoration model, real spawn points and collision (`*c.rel`)

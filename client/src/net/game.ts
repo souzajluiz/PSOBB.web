@@ -491,6 +491,9 @@ export class Game extends Lobby {
         this.emit('playerLeft', id);
         return;
       }
+      case 0x23: // Momoka item exchange answer (the counter waits on it, quest/town.ts)
+        this.emit('momokaResult', c.flag);
+        return;
       case 0x1d: // ping: newserv releases the queued join commands on our reply
         if (this.info) this.conn.send(0x1d, 0);
         return;

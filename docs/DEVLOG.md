@@ -10542,3 +10542,87 @@ passes. Not run in Chrome (no browser run for this change).
 **Assumed:** the Monest still wakes when a player is within 225 (the intro's six orbit pieces and the drop are not modelled, the trigger was not traced; the wake-up's own sub-states are). The Mothmant's ring radius 20 (`g_HildebearSwordMoveAmplitude` is a battleparams global that was not decoded); the wind-up 20 ticks (`g_MothmantAnimSpeedParams + 0x1c`, not decoded); the launch velocity (create_mothmant's args, not decoded; a random sideways throw of 1 with a 0.5 lift); the wake's animation 1 as motion 11 (12 - animation, as the hover / spawn rows) at speed 0.3; the swoop as a half turn around the target at the approach speed (its three dive sub-steps are not decoded); the chase's search radius 200 and the attack reach (attack distanceX + radius). Not ported: the Mothmant's flinch (state 6, animation 3) and the Monest's flinch (4) and hit reaction (7), the 0x394 == 5 / 9 wake exits (the hover path is only reached from the dormant state's arming), the retarget loop of the attack (it takes the swoop directly).
 
 **Tests:** `tests/enemyfsm.test.ts`: the wake-up's 70 / 80 spawns and the dormant state, threshold 0, the clamps, the dormant arming and interval; the Mothmant's launch (41 ticks, then wander), wander -> chase at 200, the 450 give-up to hover, the attack inside 100 with no sibling on the player and its strike in reach, two siblings -> swoop. `tests/enemies.test.ts`, `tests/enemysplits.test.ts`, `tests/combatdepth.test.ts` still pass; `npx tsc --noEmit -p .` clean.
+
+## 2026-10-23: Pioneer 2 Present Counter (giveaway, bb_p2_menu 8)
+
+**What changed:** talking to the Pioneer 2 present clerk (`bb_p2_menu` 8) opens
+the Present Counter: "Hehehe... Welcome", then the list of the quest's offered
+items with "I can exchange your X for you... What do you want?", Is that OK?,
+and the exchange: the server takes the hand-in item and creates the offered one
+(6xD9, answer 0x23). The quest's own script can run the same exchange with F95B
+(`bb_replace_item`). The medical counter (the other item of the ROADMAP line)
+was already in the 2026-10-19 entry; this closes the line.
+Code: `quest/giveaway.ts` (new: the table, the packed item arguments, the tokens,
+the texts), `quest/town.ts` (`present`, `momokaExchange`, `sendMomoka`,
+`momokaResult`), `quest/vm.ts` (`bb_replace_item` case, `momokaExchange` host
+hook), `net/items.ts` (`buildMomokaExchange`), `net/game.ts` (S->C 0x23 emits
+`momokaResult`), `net/lobby.ts` (event type), `formats/npcmodels.ts`
+(`P2_MENU_PRESENT`), `render/fieldhud.ts` (`itemNames`, for the names in the
+lists), `classic/townfield.ts` and `ui/onlineTab.ts` (pass the names).
+
+**The exchange table:** the quest header's create-item mask table at `0x42c`
+(`CreateItemMaskEntry`, stride 0x38, 0x122C header, `formats/questbin.ts`
+header). Entry 0 is the item handed in (data1[0..2], count = data1[5]); entries
+1.. are the offers, read while their data1[0..2] is non-zero (up to 0x3F). Each
+offer carries the count of entry 0 (1 when that is 0). A 0x398 quest file has no
+table (the counter offers nothing).
+
+**Exe** (Ephinea `PsoBB.exe`, `Psobb.exe-05112026.c`, via the named dump and
+`tools/ghidra/decomp.sh 0x006cad20`):
+- Constructor `MedicalCenterDialog_Constructor_006ca84c` (named for the Medical
+  Center by the dump, wrongly: it is the present counter): reads
+  `g_CurrentQuestPointer+0x19c+0x42c`; item at `+0x40` (count `+0x50` = entry 0
+  data1[5]), offers at `+0x3c` (0x14 bytes each, count at `+0x10`), offer count
+  `+0x54`. Vtable 0xb3b928.
+- State machine `BankDialog_StateMachineHandler_006ca4b8` (the dump's Bank names
+  are the same class): 0 open `0x006cad20` (window at GUI 0x2e, 332 x 80,
+  welcome 0x4f); 1 list `0x006cab9c` (title 0x4e, offer message 0x51 with the
+  hand-in item name); 2 list keys `0x006ca7a8` (select -> 3, cancel -> 4);
+  3 yes / no `0x006ca660` (0x52, GUI 0x2d; Yes -> 5, No -> 0x54 and back to 1);
+  4 cancel `0x006ca600` (0x58 with the item name, then 8); 5
+  `send_packet0x60_subcommand0xd9` (`.c:624905`); 6 answer
+  `0x006caa90` (30 s, `0x1e < now - start`, timeout 0x57; 0x23 flag 0 -> 0x53,
+  1 -> 0x50 "don't have an %s", 2 -> 0x55 full, other -> 0x56); 7 `0x006ca508`
+  (after the answer's message: 0x58 with the item name); 8 close
+  `0x006caa3c`.
+- 0x23 answer: `handle_ship_packet0x23` (`.c:814163`) stores the flag and
+  `g_BankDialogPendingFlag = 1`; nothing else.
+- 6xD9 bytes (`send_packet0x60_subcommand0xd9`, `.c:624905`): item1 = the
+  hand-in item (data1[0..2], id 0, data2 = its count), item2 = the chosen offer
+  (data1[0..2], data2 = count), token1 = count ^ slot, token2 = slot ^ 1, labels
+  0. `opcode_unknownF95B` (`.c:611678`) builds the same from args: item = data1
+  [0..2] = the packed argument's bytes (high byte first), tokens = args ^ slot,
+  labels = args 4 / 5.
+- Texts: unitxt_shop_e group 0, 0x4e "Present Counter" .. 0x58 (decoded from
+  `vendor/newserv/notes/psobb/usbb-resources/unitxt_shop_e.prs`).
+- Server (newserv): `on_momoka_item_exchange_bb` (`src/ReceiveSubcommands.cc`
+  5463): removes one of the hand-in item (`find_item_by_primary_identifier`),
+  creates the offer through the quest's mask table, answers 0x23 with 0 ok,
+  1 no item, 2 full inventory. `CommandFormats.hh` 6xD9 struct, 0x23 flags.
+
+**Choices:**
+- Labels of F95B are sent as given; the VM does not jump to them, since the
+  exe's 0x23 handler stores only the flag (nothing reads the labels back).
+- The counter's 6xD9 sends labels 0 (as the exe does).
+- The 6xD9 size byte is the fixed 0x0E dwords (the exe leaves it
+  uninitialised; newserv's MomokaItemExchangeFix patch expects the fixed size).
+- Timeout: 30 s, from the send.
+
+**Verified:** `tests/giveaway.test.ts` (new: the table and its limits, the
+packed F95B items, the tokens, the 6xD9 bytes, F95B through the VM with the
+tokens xored and the labels); `tests/medical.test.ts`, `tests/townfield.test.ts`,
+`tests/npcs.test.ts`, `tests/shop.test.ts`, `tests/questmisc.test.ts`,
+`tests/quests.test.ts`, `tests/questflow.test.ts`, `tests/items.test.ts`;
+client `tsc --noEmit` clean (Node 24). Not run in Chrome: the counter's window
+flow (list, Is that OK?, the answer's messages) is ported from the exe's states
+but has no test; the server answer was not seen on a live ship.
+
+**ASSUMED (not traced in the exe):**
+- With no quest running (or no table) the counter shows the welcome and closes;
+  the exe opens an empty list there.
+- The order of the offer message and the list: the exe shows 0x51 in the state
+  that opens the list; here the message is shown, then the list.
+- The 0x23 answer that arrives with no counter waiting is dropped (the exe keeps
+  the pending flag until the next state 6).
+- Count of the offered item in 6xD9 data2 (from the 0x14-byte offer, `+0x10`):
+  read from the exe's copy, not checked against newserv's ItemData use.

@@ -55,6 +55,8 @@ export interface LobbyEvents {
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   floorChanged: (p: LobbyPlayer) => void; // games: 6x1F / 6x21 / 6x70 from another player
   visibilityChanged: (p: LobbyPlayer) => void; // games: 6x22 (hidden while it changes floors) / 6x23
+  // S->C 0x23: the Momoka item exchange's answer (flag 0 ok, 1 no item, 2 full inventory; other = failed), newserv on_momoka_item_exchange_bb.
+  momokaResult: (code: number) => void;
   // B0 (RcvEmergencyCall): server text for the player's message window
   // (handle_b0_packet -> DisplayChallengeResultToPlayer_00718350).
   serverText: (text: string) => void;
