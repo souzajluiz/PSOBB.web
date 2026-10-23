@@ -723,6 +723,42 @@ class Rig {
   }
 }
 
+// --- Gibbon's Foie branch (unknown_gibbon_behavior2, dump 349686) -----------------
+// Non-ultimate, non-leader: with a target and |turn to it| < max_y_angle / 2 the
+// Foie is create_directed_foie_object at the target's feet (+0x300); else
+// create_foie_object1 along the heading. The heading object has direction y 0.
+{
+  const row = (angle: number) => ({ minAtp: 0, maxAtp: 0, minAta: 0, maxAta: 0, distanceX: 0, angle, distanceY: 0 });
+  const mkFoie = (attackAngle: number | null) =>
+    new GibbonAi({ x: 0, z: 0, angle: 0, subtype: 0, params: [1, 0, 0, 0, 0, 0], level: 4, attack: attackAngle === null ? null : row(attackAngle), rng: () => 0.9 });
+  const foieOf = (ai: GibbonAi, t: AiTarget | null) => {
+    const out = {} as AiFrame;
+    (ai as unknown as { fireSpell(o: AiFrame, t: AiTarget | null): void }).fireSpell(out, t);
+    return (out.shots?.[0] ?? null) as unknown as { tick(ts: readonly AiTarget[]): AiTarget[]; fire: { x: number; y: number; z: number } } | null;
+  };
+  // The Foie after one step: a directed one drops toward the feet, the heading one stays at castHeight.
+  const stepY = (ai: GibbonAi, t: AiTarget | null) => {
+    const shot = foieOf(ai, t);
+    if (!shot) return null;
+    shot.tick([]);
+    return shot.fire.y;
+  };
+  // A target straight ahead (bearing 0 = turn 0) and one 90 degrees off (turn 0x4000 BAMS).
+  const ahead: AiTarget = { ...player(0, 50, 1), y: 0 };
+  const side: AiTarget = { ...player(50, 0, 1), y: 0 };
+  const castY = GIBBON.castHeight;
+  check(stepY(mkFoie(0x2000), ahead)! < castY, 'directed Foie: turn 0 < 0x1000 (max_y_angle 0x2000 / 2) flies down to the feet');
+  eq(stepY(mkFoie(0x4000), side), castY, 'heading Foie: turn 0x4000 >= 0x2000 (max 0x4000 / 2) flies along the heading (y kept)');
+  eq(stepY(mkFoie(0x2000), null), castY, 'no target: the heading Foie');
+  eq(stepY(mkFoie(null), ahead), castY, 'no battleparams row: never directed (ASSUMED fallback)');
+  eq(stepY(mkFoie(0), ahead), castY, 'max_y_angle 0: half 0, the test is never true');
+  // The directed Foie's velocity is aimed at the feet: x / z follow the target (ahead: z grows, x stays 0).
+  {
+    const shot = foieOf(mkFoie(0x2000), { ...player(20, 50, 1), y: 0 });
+    check(shot.fire.x === 0 && shot.fire.z === 12, 'directed Foie starts at the cast point');
+  }
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);
