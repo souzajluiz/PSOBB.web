@@ -38,7 +38,7 @@ import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { SLOT_ARMOR, SLOT_MAG, SLOT_SHIELD, SLOT_UNIT_1, SLOT_WEAPON } from '../net/items.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawTextWindow, drawWindowTitle, INSET, ROW, TITLE_GAP } from './fieldwindows.ts';
-import { wipeElement, WindowAnim, withElementWipe } from './windowanim.ts';
+import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { equipProblems, ICON_UV, isWrapped, itemDescription, itemRow, type ItemPackEnv, type ItemPackTextures, type ItemRow } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 
@@ -128,11 +128,24 @@ export class EquipMenu {
   private frame = 0;
   slots: EquipSlot[] = [];
   items: InventoryItem[] = [];
+  // The later windows are objects of their own (each with its own counter,
+  // classic/windowanim.ts). The description (entry 2) is made with the menu and
+  // opens with it (start); the item list (entry 1) is made fresh on each open
+  // (SetupEquipListWindow_0074ad50 -> CreateEquipListWindow_0074ae04), so its
+  // opening restarts at counter 0. `speed`: the field menu's window speed.
+  speed = 1;
+  detailAnim = new WindowAnim(true, false);
+  itemsAnim = new WindowAnim(true, false);
   private env: EquipMenuEnv;
 
   constructor(env: EquipMenuEnv) {
     this.env = env;
     this.refresh();
+  }
+
+  // The description opens with the menu (its object is made in EquipmentMenu_Constructor_0074aa48).
+  start(): void {
+    this.detailAnim.open(this.speed);
   }
 
   // State 1: rebuild the slot list (and the item list when it is open).
@@ -160,6 +173,8 @@ export class EquipMenu {
 
   tick(): void {
     this.frame++;
+    this.detailAnim.tick(this.speed);
+    this.itemsAnim.tick(this.speed);
   }
 
   // Returns false when the window closes (Backspace on the slot list).
@@ -176,6 +191,8 @@ export class EquipMenu {
         this.state = 'items';
         this.itemCursor = 0;
         this.itemTop = 0;
+        this.itemsAnim = new WindowAnim(true, false);
+        this.itemsAnim.open(this.speed);
         this.refresh();
       } else if (back) {
         se(SE.cancel);
@@ -201,6 +218,7 @@ export class EquipMenu {
       this.state = 'slots';
       this.refresh();
     } else if (back) {
+      // ASSUMED: the item list goes at once (the exe's state 1 path has no close call for its object).
       se(SE.cancel);
       this.state = 'slots';
       this.refresh();
@@ -208,7 +226,8 @@ export class EquipMenu {
     return true;
   }
 
-  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim): the elements of each window are revealed by its wipe.
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim) for the slot list;
+  // the item list and the description draw under their own animations (detailAnim, itemsAnim).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
     const rc = this.env.rowContext();
     const L = SLOT_LIST;
@@ -232,11 +251,12 @@ export class EquipMenu {
     let shown: InventoryItem | null = this.slots[this.slotCursor]?.item ?? null;
     if (!browsing) {
       const I = EQUIP_ITEMS;
-      drawWindowFrame(ctx, skin.frame, I.x, I.y, I.w, I.h);
+      const ia = this.itemsAnim;
+      withWindowAnim(ctx, ia, I.x, I.y, I.w, I.h, () => drawWindowFrame(ctx, skin.frame, I.x, I.y, I.w, I.h));
       const ix = I.x + INSET;
       const iy = I.y + INSET + TITLE_GAP;
       const iw = I.w - 2 * INSET;
-      withElementWipe(wipe, ix, iy, iw, () => {
+      withWindowAnim(ctx, ia, I.x, I.y, I.w, I.h, () => withElementWipe(ia, ix, iy, iw, () => {
         if (!this.items.length) {
           const none = this.env.text(11, 0xee);
           wipeElement(ctx, ix, iy + 1, ROW, () => drawGameText(ctx, none, ix, iy + 1, DISABLED));
@@ -246,14 +266,17 @@ export class EquipMenu {
           this.items.slice(this.itemTop, this.itemTop + ITEM_ROWS).forEach((it, i) => this.drawRow(ctx, tex, itemRow(it, rc), ix, iy + i * ROW, iw));
         }
         drawWindowTitle(ctx, skin, I.x, I.y, this.env.text(11, 0x37));
-      });
+      }));
       shown = this.items[this.itemCursor] ?? null;
     }
 
     ctx.save();
     ctx.translate(extra, 0);
-    withElementWipe(wipe, EQUIP_DETAIL.x + INSET, EQUIP_DETAIL.y + INSET, EQUIP_DETAIL.w - 2 * INSET, () =>
-      drawTextWindow(ctx, skin, EQUIP_DETAIL, shown ? itemDescription(shown.data, rc.names) : ''),
+    const D = EQUIP_DETAIL;
+    withWindowAnim(ctx, this.detailAnim, D.x, D.y, D.w, D.h, () =>
+      withElementWipe(this.detailAnim, D.x + INSET, D.y + INSET, D.w - 2 * INSET, () =>
+        drawTextWindow(ctx, skin, D, shown ? itemDescription(shown.data, rc.names) : ''),
+      ),
     );
     ctx.restore();
   }
