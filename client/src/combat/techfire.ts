@@ -41,19 +41,15 @@ const TAU = Math.PI * 2;
 const bamsRad = (b: number): number => ((b & 0xffff) * TAU) / 0x10000;
 const f32 = Math.fround;
 
-// ASSUMED: the weapon node's height above the feet (the same value
-// render/combat.ts takes for the weapon position +0x300). The exe's origin is
-// not a height: PerformItemAttack_005e8908 (0x005e8a45) calls
-// unknown_get_position_of_weapon_maybe (0x005e7534), which runs
-// get_weapon_position (0x005e83c8) with the weapon's attach index (item +0x1f2,
-// from the weapon's PMT byte +0x1f, ConstructWeaponArbiter) on the owner's node
-// matrices, then the camera inverse: the hand node's world point (the held
-// model hangs from node 48, render/heldweapon.ts HAND_NODE). The sim has no
-// skeleton, so the height stays ASSUMED. The exe's weapon_position is
-// player+0x300 (x, y, z); its writer is not located yet.
+// ASSUMED fallback: the height above the feet of a gun's bullet start and of the technique cast
+// point, used only when the owner has no skeleton (headless, tests). A gun's start is the attach
+// node's world point when a skeleton exists (combat/weaponorigin.ts, the weapon's walk entry
+// named by ItemPMT +0x1f; PerformItemAttack_005e8908 0x005e8a45 -> get_weapon_position
+// 0x005e83c8). The techniques' cast point (unknown_get_tech_cast_location 0x0068c2f4) is not
+// moved to the node yet, so this height still stands for them.
 // begin_gun_bullet_attack (FUN_005e6578, 0x005e6578) tests the line from
 // (player+0x300 x, origin.y, player+0x308 z) to the target, so the y of the start
-// is the caller's origin (the hand node's y).
+// is the caller's origin.
 export const WEAPON_HEIGHT = 20;
 // ASSUMED: the height of the point a technique aims at on an enemy (the
 // lock-on cursor's height, render/combat.ts).

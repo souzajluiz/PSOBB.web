@@ -127,6 +127,7 @@ import {
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { AIM_HEIGHT, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { inUnsafeMap, slowApplies } from './playermove.ts';
@@ -151,6 +152,7 @@ import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
 import { parseItemPMT, type ItemPMT, type WeaponRange } from '../formats/itempmt.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
+import { HAND_NODE } from './heldweapon.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
@@ -508,6 +510,9 @@ export interface CombatOptions {
   // The map's wall ray (cast_ray_at_map_collision_geometry, mask 0x8100): true when a
   // wall stands between the two points (combat/gunbullet.ts).
   wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
+  // The owner's body node's world point for a gun's bullet start (combat/weaponorigin.ts);
+  // default: the local player's skeleton in the lobby view. False / absent: WEAPON_HEIGHT above the feet.
+  weaponOrigin?: WeaponOriginProvider;
   // The session's character (E7) kept in step with level / EXP / stats, like
   // net/items.ts keeps the inventory.
   character?: () => CharacterFile | null;
@@ -5645,6 +5650,19 @@ export class CombatView {
     return this.pmtSync.weaponKinds[w.data1[1]] ?? 0;
   }
 
+  // The local player's skeleton as the gun's origin provider (the lobby view's model).
+  private weaponOriginOfSelf(clientId: number): WeaponOriginProvider {
+    return (ref, out) => this.view?.weaponOriginOf(clientId, ref, out) ?? false;
+  }
+
+  // The equipped weapon's attach index: its ItemPMT byte +0x1f (item +0x1f2). Without an
+  // ItemPMT entry the hand node is used (ASSUMED).
+  private weaponAttach(): number {
+    const w = this.equippedWeapon();
+    if (!w || !this.pmtSync) return HAND_NODE;
+    return this.pmtSync.getWeapon(w.data1[1], w.data1[2])?.projectile ?? HAND_NODE;
+  }
+
   private weaponRange(attackType: AttackType): WeaponRange {
     const w = this.equippedWeapon();
     const fallback: WeaponRange = { horizontal: 14, vertical: 18, horizontalHalfAngle: 0x127d, verticalHalfAngle: 0x127d, maxTargets: 1 };
@@ -5750,10 +5768,14 @@ export class CombatView {
     // ASSUMED: the shooter bytes +0xf3 / +0xf4 (bulletTextureIndex) are not mapped to the
     // port's player state yet, so the bullets use variant 0 (both bytes read as 0).
     const texture = bulletTextureIndex(0, 0);
+    // The bullet starts at the attach node's world point (PerformItemAttack 0x005e8a45 ->
+    // get_weapon_position: a node of the weapon's walk, or a body node for -1 / -2), the feet +
+    // WEAPON_HEIGHT without a skeleton (ASSUMED). The exe's line test uses the player's
+    // weapon_position x / z (+0x300 / +0x308), not the start's; the start's x / z are taken from
+    // the node here (ASSUMED).
+    const start = gunBulletStart(this.weaponAttach(), from, this.opts.weaponOrigin ?? this.weaponOriginOfSelf(me.clientId), { x: 0, y: 0, z: 0 });
     for (let i = 0; i < pelletCount(kind); i++) {
       const t = hit[pelletTargetIndex(kind, i)];
-      // ASSUMED: the bullet starts WEAPON_HEIGHT above the feet (the exe's weapon_position, not decoded).
-      const start = { x: from.x, y: from.y + WEAPON_HEIGHT, z: from.z };
       let target: { centre: { x: number; y: number; z: number }; radius: number } | null = null;
       if (t) {
         const p = t.instance.root.position;

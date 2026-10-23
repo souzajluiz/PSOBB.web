@@ -36,6 +36,8 @@ export interface Weapon extends ItemBase {
   special: number;
   ata: number;
   statBoostEntryIndex: number;
+  // Byte +0x1f: the weapon's attach index (ConstructWeaponArbiter 0x005d1b50 copies it to
+  // item +0x1f2; get_weapon_position 0x005e83c8 reads the owner's body node, combat/weaponorigin.ts).
   projectile: number;
   trail1X: number;
   trail1Y: number;

@@ -23,6 +23,7 @@ import { AFSArchive } from '../formats/archives.ts';
 import { BmlArchive } from '../formats/bml.ts';
 import { parseNinjaChunkFile, type NjcmModel as NjcmChunkModel, type NjcmObject } from '../formats/njcm.ts';
 import { EVAL_UNIT_POS, EVAL_UNIT_SCL } from '../formats/xj.ts';
+import { exeWalkIndices } from './playeranim.ts';
 import { parseXvr } from '../formats/xvm.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { NjcmModelBuilder, type NjcmModel, type NjcmPartInput } from './njcmmesh.ts';
@@ -358,6 +359,9 @@ export interface PlayerModel extends NjcmModel {
   parts: string[];
   // The held weapon's mesh (null without one). The caller hides it in the hubs.
   weapon: THREE.SkinnedMesh | null;
+  // The weapon's bones in the exe's walk order (exeWalkIndices): entry k is the bone the
+  // attach index k names (combat/weaponorigin.ts). Null without a weapon.
+  weaponBones: THREE.Bone[] | null;
 }
 
 export interface PlayerBuildOptions {
@@ -430,5 +434,6 @@ export function buildPlayerModel(assets: PlayerAssets, appearance: PlayerAppeara
     inputs.push({ name: `weapon:${HAND_NODE}`, root: w.object, textures: (id) => w.textures[id] ?? null, attachTo: HAND_NODE });
   }
   const model = new NjcmModelBuilder().build(inputs);
-  return { ...model, parts: inputs.map((p) => p.name), weapon: weaponAt >= 0 ? (model.partMeshes[weaponAt] ?? null) : null };
+  const weaponBones = opts.weapon && weaponAt >= 0 ? exeWalkIndices(opts.weapon.object).map((i) => model.partBones[weaponAt]?.[i]).filter((b): b is THREE.Bone => !!b) : null;
+  return { ...model, parts: inputs.map((p) => p.name), weapon: weaponAt >= 0 ? (model.partMeshes[weaponAt] ?? null) : null, weaponBones };
 }

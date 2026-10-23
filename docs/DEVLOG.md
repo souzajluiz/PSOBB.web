@@ -10971,3 +10971,37 @@ PsoBB.exe (Ephinea 1.25.13, dump `src/Psobb.exe-05112026.c`; Ghidra where noted)
 - The 0x40 snap flag (no smoothing of the centre) is not ported; the centre smoothing is unchanged from before.
 - Not checked in Chrome or Playwright (no browser run for this change).
 - Sub-menu transitions (`classic/mainmenu.ts`, `FUN_00739418`) are not done.
+## 2026-10-23: The gun's start is a node of the weapon's own walk, not the hand (corrects the entry above)
+
+**Report:** the entry above read the attach index as a body node (node 48 for the usual weapon). That is wrong for indexes 0 and up. The attach index (ItemPMT +0x1f) names the n-th matrix of the weapon model's node walk, which the exe writes into the owner's `unk_matrix_array` from the hand matrix. Body nodes are used only for -1 (0x30) and -2 (0x23). The gun's bullet start is now the world point of that weapon node when the player has a skeleton; WEAPON_HEIGHT stays as the no-skeleton fallback.
+
+**Exe evidence** (named dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`, dump line numbers):
+- `ConstructWeaponArbiter` (444167): `item+0x1f2 = (ushort)*(byte *)(pmt + 0x1f)`. The same byte is `pmt_weapon_bb_t.projectile` (444022), so the port's `projectile` field is the attach index.
+- `get_weapon_position` (442935): index -1 gives `field67_0x10c(0x30)`, -2 gives `0x23`, a null `unk_model_data` gives `0x30`; otherwise it copies `owner->unk_matrix_array + index` (64-byte stride) to the stack, multiplies by the camera inverse and translates the origin.
+- `unk_matrix_array` (576881) is `g_SinowberillChallengeModelData + player_idx * 0x800`: a 32-matrix block per player. It is not the body block `[player+0xe0]`.
+- Its writers: `UpdateItemPosition` pushes `owner->field149_0xe0 + GetItemField189` (the hand, node 48 for a weapon, the port's `HAND_NODE`) and calls `UpdateWeaponModelTransformations_005c3568` (412244) or `unk_apply_weapon_model_transforms_from_nj` (411822). Both walk the weapon's njcm tree pre-order and copy the stack head of each visited node into `unk_matrix_array[k]` (k = walk order). A node with `EVAL_BREAK` (0x10) takes no children into the walk.
+- So attach k = the k-th node of the weapon model (a muzzle or another weapon node), placed by the hand and the animation.
+- Real ItemPMT bytes (vendored newserv tables, `tests/weaponorigin.test.ts`): Handgun 6/0 = 2, Rifle 7/0 = 1, Mechgun 8/0 = 1, Shot 9/0 = 0. The bytes seen are 0..4; none reaches 64.
+- `AdjustBarrierPosition` (437840) also packs `field396_0x1f2` for item groups 0x22, 0x23, 0x88, 0x2a. It is not part of the gun attach path. ASSUMED: the gun's byte is never overwritten.
+- A PMT byte is 0..255 (the ushort and short casts keep it positive), so the -1 / -2 branches are not reached from a gun's byte. They are kept for the exe's signed encoding (ASSUMED).
+
+**Ported:**
+- `client/src/combat/weaponorigin.ts` (new): `weaponAttachRef(attach)` (-1 body 0x30, -2 body 0x23, n weapon walk entry n), `gunBulletStart(attach, feet, origin, out)` (the provider's point, else feet + WEAPON_HEIGHT), the `WeaponOriginProvider` type.
+- `client/src/render/playeranim.ts`: `exeWalkIndices(root)` (the exe's walk order over the depth-first nodes, EVAL_BREAK skips children) and `skeletonNodePosition(bones, node, out)` (refreshes the bone chain, `Object3D.getWorldPosition`, one shared Vector3, no allocation).
+- `client/src/render/playermodel.ts`: `PlayerModel.weaponBones` = the weapon part's bones in the walk order.
+- `client/src/render/lobbyview.ts`: each marker keeps `body` (partBones[0]) and `weaponBones`; `weaponOriginOf(clientId, ref, out)` serves any player (remote players included) once their model is loaded.
+- `client/src/render/combat.ts`: `CombatOptions.weaponOrigin` (injectable provider; default the lobby view's skeleton of the local player), `weaponAttach()` (the equipped weapon's ItemPMT `projectile`, the hand node without an entry), and `gunShot` computes one start per trigger with `gunBulletStart` (before: a feet + WEAPON_HEIGHT point per pellet).
+- `client/src/formats/itempmt.ts`: comment on `projectile` (+0x1f). `client/src/combat/techfire.ts`: the WEAPON_HEIGHT comment (the fallback; the techniques' cast point is unchanged).
+- `docs/ROADMAP.md`: "Player damage left" updated.
+- `tests/weaponorigin.test.ts` (new): the index mapping, the provider's ref, the fallback, the walk order (`[0, 1, 2, 3, 5]` for a tree with a break node), the skeleton world point (a group, a 90 degree bone and a child: (105, 10, 50), with no prior matrix update), and the gun attach bytes.
+
+**ASSUMED:**
+- The weapon's njcm is one root tree. The exe also walks the root's `next` siblings; the port keeps only the root object.
+- The start's x and z come from the node. The exe's line test uses the player's weapon_position x / z (+0x300 / +0x308), not the start's. Not decoded.
+- No ItemPMT entry: the hand node (48) is used. The item's model matrix (item +0x230) is 0 for the guns (only the special weapon constructors allocate it).
+- The techniques' cast point (unknown_get_tech_cast_location 0x0068c2f4) still uses WEAPON_HEIGHT; ASSUMED to read the same weapon matrix (GetWeaponModelData +0x10 in the exe, not traced here); moving it is the next step.
+- The port's `NjcmObject.children` order matches the NJ child order the exe walks.
+
+**Left open:** the hit point height (ASSUMED 20; aim 22), the player's hit box list (+0xa4 writer), the `weapon_position` (+0x300) writer, the cast point (above), and the top-level sibling walk of weapon models.
+
+**Checks:** `node node_modules/typescript/bin/tsc --noEmit -p .` (client, Node 24) clean. `tests/weaponorigin` (new), `gunbullet`, `rangedaim`, `mechgun`, `heldweapontex`, `itemmodels`, `techfire` pass. No Playwright / Chrome (per the brief).
