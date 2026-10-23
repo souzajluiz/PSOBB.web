@@ -72,6 +72,16 @@ export interface CommandLink {
   poll(...commands: number[]): Command | null;
 }
 
+// The exe's received-card group (ASSUMED size: four slots, see GuildCardClient.receiveSent).
+const RECEIVED_SLOTS = 4;
+
+// CheckValidity_00781f44 on a card at +0: the description's last unit (+0x102) is 0, the flag
+// byte (+0x104) is 1, and the language, section and class are not negative as signed bytes.
+export function sentCardValid(card: Uint8Array): boolean {
+  return card[CARD_TAIL] === 0 && card[CARD_TAIL + 1] === 0 && card[CARD_FLAGS] === 1
+    && card[0x105]! < 0x80 && card[0x106]! < 0x80 && card[0x107]! < 0x80;
+}
+
 // Standard CRC-32 (zlib / phosg::crc32): init 0xFFFFFFFF, reflected, final xor.
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -238,6 +248,23 @@ export function addCardPacket(card: GuildCard): Packet {
 export function updateCardPacket(card: GuildCard): Packet {
   return packet(GC_CMD.update, 0, buildGuildCard(card));
 }
+
+// 0x62 targeted guild card send (exe GuildCard_Sprintf_0078193c, 0x00781940..0x00781953:
+// the bytes [0x06, 0x01, x, x] (subcommand 6, one dword) and TeamQuest_SendPacket_008005b0 ->
+// send_packet0x62 with the player's slot as the target). The two last bytes are the exe's
+// stale stack (ASSUMED zero here); the card itself is not in the send (the server fills the
+// sender's card into the 6x06 it relays, newserv, ASSUMED).
+export function sendCardPacket(target: number): Packet {
+  return { command: 0x62, flag: target, payload: new Uint8Array([0x06, 0x01, 0x00, 0x00]) };
+}
+
+// The 6x06 the server relays (exe packet0x60_subcmd_bb_gcsend_t): a 4-byte header, then the
+// 0x108 card at +4 (guild card number, name, team, description, present, language, section, class).
+export const GC_SENT_CARD_OFFSET = 4;
+export const GC_SENT_SIZE = GC_SENT_CARD_OFFSET + GC_FILE.cardSize;
+// Offsets inside the 0x108 card (exe: +0x102 the description's last unit, +0x104 the flag byte).
+const CARD_TAIL = 0x102;
+const CARD_FLAGS = 0x104;
 
 // 05E8 / 08E8: delete a card (list or blocked list).
 export function deleteCardPacket(guildCardNumber: number): Packet {
@@ -443,6 +470,8 @@ export class GuildCardClient {
   private readonly timeoutMs: number;
   // The recent search results (the exe's g_GuildCardList, 7 entries, the menu's text list 0x67).
   recent: GuildCardSearchResult[] = [];
+  // Cards received from other players that are not in the book (see receiveSent).
+  received: GuildCard[] = [];
 
   constructor(link: CommandLink, timeoutMs = 5000) {
     this.link = link;
@@ -521,6 +550,42 @@ export class GuildCardClient {
     if (i >= 0) this.recent.splice(i, 1);
     if (this.recent.length >= 7) this.recent.shift();
     this.recent.push(result);
+  }
+
+  // 0x62 send of this card to a lobby player (the menu's row 0x65 / players, state 6).
+  sendCardTo(target: number): void {
+    this.send(sendCardPacket(target));
+  }
+
+  // Receives a 6x06 (exe handle_packet0x60_subcommand0x6, 0x00781958; CheckValidity_00781f44).
+  // A card already in the book is overwritten (its record only, the comment stays) when the
+  // card's flag byte bit 1 is clear, or when the book entry's bit 1 is set and the card's class
+  // is below 12 (the exe's two copies). Then the card goes back to the server as 04E8
+  // (send_packet0xe8_subcommand4) -> 'updated'.
+  // Any other valid card waits in `received` (the exe's card group; its PlayerInfo window is
+  // not ported). ASSUMED: four slots, a card keeps its slot, a full group drops it.
+  receiveSent(body: Uint8Array): 'invalid' | 'updated' | 'received' | 'dropped' {
+    if (body.length < GC_SENT_SIZE) return 'invalid';
+    const raw = body.subarray(GC_SENT_CARD_OFFSET, GC_SENT_SIZE);
+    if (!sentCardValid(raw)) return 'invalid';
+    const incoming = parseGuildCard(raw, 0);
+    const book = this.book;
+    if (book) {
+      for (let i = 0; i < GC_FILE.entryCount; i++) {
+        const o = GC_FILE.entriesOffset + i * GC_FILE.entrySize;
+        if (!(book.raw[o + CARD_FLAGS]! & 1)) break;
+        if (parseGuildCard(book.raw, o).guildCardNumber !== incoming.guildCardNumber) continue;
+        const entryBit1 = (book.raw[o + CARD_FLAGS]! & 2) !== 0;
+        if ((raw[CARD_FLAGS]! & 2) === 0 || (entryBit1 && incoming.charClass < 0xc)) book.update(incoming);
+        this.send(addCardPacket(incoming));
+        return 'updated';
+      }
+    }
+    const at = this.received.findIndex((c) => c.guildCardNumber === incoming.guildCardNumber);
+    if (at >= 0) this.received[at] = incoming;
+    else if (this.received.length < RECEIVED_SLOTS) this.received.push(incoming);
+    else return 'dropped';
+    return 'received';
   }
 
   // The list commands: sent to the server and applied to the local copy the same way.

@@ -219,6 +219,11 @@ export class LobbyScreen implements Screen {
     this.chat = new ChatLine((text) => lobby.sendChat(text));
     lobby.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
     lobby.on('playerLeft', (id) => this.heights.delete(id));
+    // A guild card sent by a player (6x06): the book takes a known card; others wait (ASSUMED: no window).
+    lobby.on('guildCardSent', (body) => {
+      const r = this.hud.guildCardClient?.()?.receiveSent(body);
+      if (r === 'received' || r === 'dropped') console.info(`[classic] Guild Card received: ${r} (its window is not ported)`);
+    });
   }
 
   // The chat line, or the party menus' name / password editors.

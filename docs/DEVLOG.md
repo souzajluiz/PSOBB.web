@@ -13322,3 +13322,42 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: Guild Card: the 0x62 card send (6x06), the 6x06 receive, the own description rename, the search option list
+
+**Premise check (the brief against the exe):**
+- The 0x62 of state 6 is the 6x06 guild card send (the brief's guess is right). `GuildCard_Sprintf_0078193c` (758193) builds the bytes `[0x06, 0x01, x, x]` (`movb $6,(%esp)`, `movb $1,1(%esp)`, objdump 0x78193c..0x781954) and calls `TeamQuest_SendPacket_008005b0` (815213) -> `send_packet0x62` with the player's slot as the target. The card is not in the send.
+- Receiving is not "adds to the book". The 6x06 receiver is the 0x60 table row type 0x06 (perm 7, row at 0x00a0fba0, handler 0x00781958 = `handle_packet0x60_subcommand0x6`, dump 758202). It runs `GuildCard_CheckValidity_00781f44` (758637), then `HandleGuildCardUpdate_00781acc` (758294): a card already in the book is overwritten (the 0x108 record, the comment stays) and sent back with `send_packet0xe8_subcommand4` (04E8). A new card does not go to the book: it goes to the received group (`g_GuildCardDataArray_00a9bcc0` and the `g_GuildCardDefaultData` / `g_GuildCardSlot*` buffers, four usable) and sets `g_GuildCardFlags |= 2`, which the quick menu checker (dump 677940, the flag test at 677952) uses to open the player info window. No prompt is created in the handler itself.
+- State 9 is not a name rename. `GuildCard_SetName_007814bc` (757881) writes the session card at +0x54 (the description, `_wcsncpy(this+0x54, src, 0x57)`) and clears +0x102 (the description's last unit). The name (+0x04) is not touched. State 10 then sends 06E8 (`send_packet0xe8_subcommand6`, 814226, 0x110 bytes: the 0x108 card) with the session card.
+- The option list 0x8e (`CreateGuildCardOptionListWindow_007478e0`, 716573): title unitxt(11,0x30), rows unitxt 0x6a (value 0x21, enabled) and 0x6b (value 0x25; greyed unless `unknown_current_map_is_lobby`, so enabled here).
+
+**Exe evidence (dump lines in `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):**
+- Packet struct `packet0x60_subcmd_bb_gcsend_t` (93885): type, size, unused, guildcard, name[24], team_name[16], text[88], one, language, section, char_class = 0x10c bytes. The port's card is the 0x108 record at +4 (`parseGuildCard`: description = +0x54, present = +0x104, language +0x105, section +0x106, class +0x107).
+- The send's two last bytes are stale (`movl` of esi), so the port sends zeros (ASSUMED: newserv fills in the sender's card when it relays the 6x06).
+- `CheckValidity_00781f44`: +0x102 (short) == 0, +0x104 == 1, and the signed bytes +0x105 / +0x106 / +0x107 >= 0.
+- Book loop (`HandleGuildCardUpdate_00781acc`, 758294): entries from `g_ChallengeModeMainDataBuffer + 0x1f74` (the book, stride 0x1bc), each tested for flag bit 0 (+0x104 & 1, stops at the first clear one); a number match: overwrite when the packet's +0x104 bit 1 is clear, or when the entry's bit 1 is set and the class < 12; then 04E8 is sent (unconditionally after the match).
+- Rename keyboard: `CreateGuildCardKeyboardInput_00747548` (716375), `TKeyboardControl_constructor(..., 0xb6, 2, 4, slot)`; the text starts empty (no initial text is passed; ASSUMED). Both accept and cancel go to state 1 (the menu).
+- Search: row 0x67 -> state 0x1f (715260): closes 0x70, builds the result window 0x8d (`GuildCardListWindow_Constructor_00762dcc`, 736195) over `g_GuildCardEntryBuffer`, and the option list 0x8e; state 0x20 waits: cancel -> 0x1d (the recent list), a row -> its value (0x21 / 0x25). State 0x21 (715298) closes the lists and opens the keyboard 0x88 (`CreateKeyboardControl_00756ab0`, position 0xcf -> 0xd0); 0x22..0x24 wait for a chat-shortcut style list 0x78; 0x25 (715371) clears the emote of the player in slot `+0x28` and goes to 0x26.
+- The result window 0x8d draws `": " + field`, name, field 2, the item line (`+0x6e`, hidden when its first unit is 0) and the next item line (`+8`, against `+0xe4`, with unitxt 0x58). The label text is not in the dump (the first appended string is `wchar_colon`), and the offsets do not map cleanly onto `parseSearchResult` (name at port +0xe8), so the window is not drawn.
+
+**Port:**
+- `client/src/net/guildcard.ts`: `sendCardPacket(target)` (0x62, flag = target, payload `06 01 00 00`); `sentCardValid` (CheckValidity); `GuildCardClient.sendCardTo(slot)`; `GuildCardClient.receiveSent(body)` -> `'invalid' | 'updated' | 'received' | 'dropped'` (the book overwrite + 04E8, the received group); `GuildCardClient.received` (four slots, ASSUMED).
+- `client/src/net/lobby.ts`: sub 6 with a 0x10c body emits `guildCardSent`. `client/src/classic/lobby.ts` routes it to `hud.guildCardClient().receiveSent`.
+- `client/src/classic/guildcardmenu.ts`: row 0x65 players -> `sendCardTo(slot)` and back to the sub-list (state 6 / 7; the title window 0x87 is not drawn). Row 0x65 rename -> the keyboard (phase `rename`, the comment's `TextEditor`, max 0x57): Enter sends 06E8 with the book's copy of the own card and the typed description (`client.update`), Escape cancels; both -> the menu. Row 0x67 -> the search option list (phase `searchOpts`, position 0x8e = (439, 256)): cancel -> the recent list; a row reports 0x21 / 0x25 (logged no-ops).
+- `tests/guildcardmenu.test.ts`: the menu tests 19 and 21 now check the send (flag 2, `06 01 00 00`), the rename keyboard, the option list; new blocks 21b (the rename sends 06E8 with the book's description; nothing sent without the own card) and 21c (the 6x06 receive: invalid flags / class / length, known card updated and 04E8, unknown card waits, fifth card dropped, the 0x62 packet).
+
+**ASSUMED:**
+- The 0x62's last two bytes are zero (exe: stale stack); the server fills the card in the relayed 6x06 (newserv).
+- The rename text is the own card's description (+0x54), typed on an empty keyboard, max 0x57 units (the exe's copy limit; the keyboard's own limit not read). The own card is the book's copy of the own number: the exe uses the session card, which the port does not have. With no book copy nothing is sent (the exe would send the session card).
+- The received group: four slots, a card keeps its slot, a full group drops it (the exe's slot chain is 4 buffers, the decompile aliases two of them).
+- The `[classic]` log line is the only report of a received card; the player info window (`g_GuildCardFlags & 2`, the quick menu checker) is not ported.
+- Option 0x6b is enabled (the lobby is the only place the port's menu runs).
+
+**Not done / left:**
+- The 0x8d search result window (lines: `": " + field`, name, field 2, item, next item; the label text and the reply offsets are not resolved) and the 0x21 keyboard / 0x25 handler (0x25: emote clear and the 0x26 state, not traced). Both are reported as logged no-ops.
+- The player info window for a received card (`g_GuildCardFlags` 2 and the quick menu's PlayerInfo entity).
+- The title window 0x87 (unitxt 0x4b) after a send, and its state 8 key wait.
+- 6x06 receive in the game (only the lobby's `onSubcommands` is wired); the send from a game (the menu is lobby-only in the port).
+- A Chrome check of the send and the rename (not run; the brief says not to run Playwright).
+
+**Tests:** `node tests/guildcardmenu.test.ts` (ALL PASS, new checks in 19, 21, 21b, 21c), `node tests/guildcard.test.ts` (ALL PASS), `lobbymain`, `lobbymenu`, `teammenu`, `warpmenu` (pass). `client` `tsc --noEmit -p .` clean (Node 24). The worktree's `client/node_modules` is a symlink to the main checkout's (not committed).

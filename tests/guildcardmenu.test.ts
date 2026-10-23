@@ -18,11 +18,12 @@ import {
   blockRows,
   cardInfoLines,
   recentRows,
+  searchOptionRows,
   subRows,
   T11_GUILD,
   type LobbyPlayerCard,
 } from '../client/src/classic/guildcardmenu.ts';
-import { GuildCardBook, GuildCardClient, GC_CMD, GC_FILE, type GuildCard } from '../client/src/net/guildcard.ts';
+import { buildGuildCard, GuildCardBook, GuildCardClient, GC_CMD, GC_FILE, sendCardPacket, sentCardValid, type GuildCard } from '../client/src/net/guildcard.ts';
 
 // A stub canvas and skin: every call does nothing (the same trick as teammenu.test.ts).
 const noop = () => {};
@@ -71,13 +72,14 @@ function bookWith(cards: GuildCard[]): GuildCardBook {
 // A client on a recording link; the book is shared with the menu (as the session does after the sync).
 interface Sent {
   command: number;
+  flag: number;
   payload: Uint8Array;
 }
 function menuFor(book: GuildCardBook | null, loggedIn = true, players: LobbyPlayerCard[] = [], self: number | null = 1000): { menu: GuildCardMenu; sent: Sent[]; client: GuildCardClient } {
   const sent: Sent[] = [];
   const link = {
-    send: (command: number, _flag: number, payload: Uint8Array = new Uint8Array()) => {
-      sent.push({ command, payload });
+    send: (command: number, flag: number, payload: Uint8Array = new Uint8Array()) => {
+      sent.push({ command, flag, payload });
     },
     waitFor: async () => {
       throw new Error('no reply in this test');
@@ -504,14 +506,20 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   check('the sub-list rows are 5 (players) and 9 (rename)', subRows(text).map((r) => r.value).join(',') === '5,9');
   menu.key(key('Enter'));
   check('the players row opens the player list (phase subPlayers)', menu.phase === 'subPlayers');
-  const picked = menu.key(key('Enter'));
-  check('a player reports state 6 with the player slot', picked?.state === 6 && picked.card === 2, JSON.stringify(picked));
-  check('the player list stays open after the report', menu.phase === 'subPlayers');
+  const { menu: m2, sent } = menuFor(book, true, players);
+  m2.key(key('Enter'));
+  m2.key(key('Enter'));
+  const picked = m2.key(key('Enter'));
+  const sendHit = sent.find((x) => x.command === 0x62);
+  check('a player gets the card: 0x62 to the player slot with 06 01 00 00 (state 6, no report)', picked === null && sendHit?.flag === 2 && Array.from(sendHit.payload).join(',') === '6,1,0,0', JSON.stringify(sendHit));
+  check('the sub-list is back after the send (the player list closes)', m2.phase === 'sub');
   menu.key(key('Backspace'));
-  check('Backspace in the player list returns to the sub-list', menu.phase === 'sub');
   menu.key(key('ArrowDown'));
   const rename = menu.key(key('Enter'));
-  check('the rename row reports state 9 and stays in the sub-list', rename?.state === 9 && rename.card === -1 && menu.phase === 'sub', JSON.stringify(rename));
+  check('the rename row is not a report', rename === null, JSON.stringify(rename));
+  check('the rename row opens the keyboard (phase rename)', menu.phase === 'rename');
+  menu.key(key('Escape'));
+  check('Escape in the rename keyboard returns to the menu', menu.phase === 'menu');
 }
 
 // 20. Row 0x65 with no other player: the greyed row buzzes (no report, no phase change).
@@ -552,7 +560,60 @@ function chooseAction(menu: GuildCardMenu, value: number): ReturnType<GuildCardM
   filled.menu.key(key('ArrowDown'));
   filled.menu.key(key('Enter'));
   const opened = filled.menu.key(key('Enter'));
-  check('a recent row reports state 0x1f (the result window is not ported), the list stays', opened?.state === 0x1f && opened.card === 0 && filled.menu.phase === 'text', JSON.stringify(opened));
+  check('a recent row opens the search option list (no report)', opened === null && filled.menu.phase === 'searchOpts', JSON.stringify(opened));
+  check('the option list rows are 0x21 (0x6a) and 0x25 (0x6b)', searchOptionRows(text).map((r) => r.value).join(',') === '33,37');
+  const pick = filled.menu.key(key('Enter'));
+  check('the 0x6a row reports state 0x21 for the recent row 0, the list stays', pick?.state === 0x21 && pick.card === 0 && filled.menu.phase === 'searchOpts', JSON.stringify(pick));
+  filled.menu.key(key('Escape'));
+  check('Escape in the option list returns to the recent list (state 0x1d)', filled.menu.phase === 'text');
+}
+
+// 21b. The rename (state 9): Enter writes the own card's description (06E8, the book's copy); no own card in the book: nothing sent.
+{
+  const book = bookWith([card(1000, 'Me')]);
+  const { menu, sent } = menuFor(book, true, [], 1000);
+  menu.key(key('Enter'));
+  menu.key(key('ArrowDown'));
+  menu.key(key('Enter')); // the rename row (the second row of the sub-list)
+  check('the rename keyboard is open', menu.phase === 'rename');
+  for (const k of 'Hi') menu.key({ key: k });
+  menu.key(key('Enter'));
+  const upd = sent.find((x) => x.command === GC_CMD.update);
+  check('Enter sends 06E8 with the own card and the typed description', upd !== undefined && upd.payload.length === GC_FILE.cardSize, JSON.stringify(upd?.payload.length));
+  check('the book copy carries the new description', book.find(1000)?.card.description === 'Hi');
+  const none = menuFor(bookWith([card(7, 'Ann')]), true, [], 1000);
+  none.menu.key(key('Enter'));
+  none.menu.key(key('ArrowDown'));
+  none.menu.key(key('Enter'));
+  for (const k of 'x') none.menu.key({ key: k });
+  none.menu.key(key('Enter'));
+  check('no own card in the book: nothing is sent', none.sent.length === 0);
+}
+
+// 21c. The 6x06 receive: a book card is overwritten and sent back as 04E8; a new valid card waits; a bad card is refused.
+{
+  const sentBody = (c: GuildCard, flag = 1, cls = 0): Uint8Array => {
+    const body = new Uint8Array(4 + GC_FILE.cardSize);
+    body[0] = 0x06;
+    body[1] = 0x43;
+    body.set(buildGuildCard({ ...c, present: true, charClass: cls }), 4);
+    body[4 + 0x104] = flag;
+    return body;
+  };
+  const book = bookWith([card(7, 'Ann')]);
+  const { client, sent } = menuFor(book, true, [], 1000);
+  check('a card with the flag clear is valid (CheckValidity)', sentCardValid(sentBody(card(9, 'Bo')).subarray(4)));
+  check('a card with flag 0 is refused', client.receiveSent(sentBody(card(9, 'Bo'), 0)) === 'invalid');
+  check('a card with class -1 (signed) is refused', client.receiveSent(sentBody(card(9, 'Bo'), 1, 0xff)) === 'invalid');
+  check('a short body is refused', client.receiveSent(new Uint8Array(8)) === 'invalid');
+  const got = client.receiveSent(sentBody({ ...card(7, 'Ann2'), description: 'new' }));
+  check('a known card (bit 1 of the flag clear) is updated and sent back as 04E8', got === 'updated' && book.find(7)?.card.name === 'Ann2' && sent.some((x) => x.command === GC_CMD.add), JSON.stringify(got));
+  const got2 = client.receiveSent(sentBody(card(9, 'Bo')));
+  check('an unknown valid card waits in the received group', got2 === 'received' && client.received.length === 1 && book.find(9) === null);
+  for (let n = 20; n < 23; n++) client.receiveSent(sentBody(card(n, 'X')));
+  check('a fifth card is dropped (four slots, ASSUMED)', client.receiveSent(sentBody(card(30, 'Y'))) === 'dropped' && client.received.length === 4);
+  const sp = sendCardPacket(3);
+  check('the 0x62 send: flag = target, payload 06 01 00 00', sp.command === 0x62 && sp.flag === 3 && sp.payload.join(',') === '6,1,0,0');
 }
 
 // 22. The card info lines: name, number (not 0), class and section names from the host, team and description (empty ones left out).
