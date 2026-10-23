@@ -146,6 +146,68 @@ near(wolfLeapHeight(7.5), 15, 'quarter way: 15');
   check(r.motion?.index === 13, 'stalk motion 13');
 }
 
+// --- Savage / Barbarous Wolf: side dash and howl -----------------------------
+{
+  // The howl: the countdown enters it, the casts land on frames 30 and 40 on
+  // the target, the sound once the motion has run past 10, and the motion's
+  // end goes to the roam state (idle here).
+  const w = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1005, rng: () => 0.5 });
+  const p = player(0, 20, Math.PI);
+  w.tick([p]);
+  eq(w.state, 'stalk', 'the howl test wolf stalks first');
+  w.armHowl(3);
+  w.tick([p]);
+  w.tick([p]);
+  eq(w.state, 'stalk', 'the countdown is still running');
+  const entry = w.tick([p]);
+  eq(w.state, 'howl', 'the countdown reaches 0 and the wolf howls');
+  eq(entry.motion?.index, 4, 'the howl plays motion 4');
+  eq(entry.motion?.loop, false, 'the howl is a once motion');
+  let zalureAt = -1;
+  let jellenAt = -1;
+  let soundAt = -1;
+  let t = 0;
+  for (let i = 1; i <= 200 && w.state === 'howl'; i++) {
+    w.casts.length = 0;
+    w.sounds.length = 0;
+    const end = i >= 90;
+    w.tick([p], end);
+    t = i;
+    for (const c of w.casts) if (c.tech === 'zalure') zalureAt = i;
+    for (const c of w.casts) if (c.tech === 'jellen') jellenAt = i;
+    if (w.sounds.includes(0xd3)) soundAt = i;
+  }
+  eq(zalureAt, 30, 'Zalure on the 30th frame of the howl (the entry tick is frame 0)');
+  eq(jellenAt, 40, 'Jellen on the 40th frame');
+  check(soundAt >= 20 && soundAt <= 27, `the sound 0xd3 plays once the motion has run 10 frames (tick ${soundAt})`);
+  eq(w.state, 'idle', 'the motion end leaves the howl for the roam state');
+  check(t >= 90, 'the howl runs to its motion end');
+}
+{
+  // Side dash: a target on the + side of the heading starts the dash to +x.
+  const w = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1005, rng: () => 0.9 });
+  const far = player(-50, 0);
+  const out = w.startDash(far);
+  eq(w.state, 'dash', 'startDash enters the side dash');
+  eq(out.motion?.index, 13, 'the dash plays the stalk motion (animation 1)');
+  w.tick([far]);
+  check(w.x > 0, `a target on the cross side starts the dash to +x (x ${w.x.toFixed(2)})`);
+  // The dash ends in the roam state after 150 frames.
+  let n = 0;
+  while (w.state === 'dash' && n < 400) {
+    w.tick([far]);
+    n++;
+  }
+  eq(n, 150, 'the dash runs 150 frames (the counter passes 0x96)');
+  eq(w.state, 'idle', 'then the roam state');
+  // Without a target the dash is random in side and ends at once (no goal to walk to).
+  const v = new WolfAi({ x: 0, z: 0, angle: 0, detect: 225, turnRate: 1536, attack: null, radius: 10, entityId: 0x1005, rng: () => 0.9 });
+  v.startDash(null);
+  eq(v.state, 'dash', 'startDash works with no target');
+  v.tick([]);
+  eq(v.state, 'idle', 'the dash ends at once with no target');
+}
+
 // --- Rag Rappy fake death ----------------------------------------------------
 {
   const f = new RappyFakeDeath({ x: 0, z: 0, angle: 0, moveSpeed: 1, rng: () => 0.25 });

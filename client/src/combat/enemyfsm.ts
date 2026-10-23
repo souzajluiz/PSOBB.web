@@ -424,6 +424,58 @@ export const WOLF = {
   stalkSpeed: 0.7,
 } as const;
 
+// The side dash (state 0xc, DerolleProcessStateAttack_0051c5ac, the
+// Derolle-named handler in the dump). Entry (state 4): the animation is 1 (the
+// stalk motion), the dash speed 0x408 = 1.6 (0x3fcccccd), the origin is the
+// wolf's position, the heading 0x438 is the wolf's heading and the dash angle
+// 0x434 is heading +- 0x5000 (112.5 degrees): with a target the sign is +
+// when CheckVectorCrossProduct_007829cc(facing, target - wolf) is nonzero,
+// else -; without one a random float >= 0.5 (0x00921330) gives -, else +.
+// Frame (state 0): the dash angle turns toward the heading by 0x100 a frame
+// (ClampAngleDifference_007a8c74(0x434, 0x438, 0x100)); the goal is the origin
+// plus 90 (0x0092132c) along the dash angle. Exit (state 3): no target, or the
+// frame counter 0x424 past 0x96 (150), goes to the roam state 7.
+// ASSUMED: the step toward the goal is the speed 1.6 (LerpFloat_0051d3c4 0.2
+// was not traced); the facing turns toward the target at the stalk's rate; the
+// dash's hit check (ProcessGalgryphonHitCheck_00521528(0x500, 0x40c)) and its
+// sound are not ported; the state 3 speed test (0x3b4 < 0x43c, back to the
+// stalk) is not ported. Entry sources: not found in the dumped code (nothing
+// writes state 0xc for the wolf), so startDash is the entry for now.
+export const WOLF_DASH = {
+  speed: Math.fround(1.6),
+  radius: 90,
+  side: 0x5000,
+  turnFrame: 0x100,
+  frames: 0x96,
+  sideChance: 0.5,
+} as const;
+
+// The howl (state 0xe, SavageWolfProcessState_0051c0ac): the animation is 0xb
+// (motion 4, mode 3, speed 0.4), it plays the sound 0xd3 once the animation has
+// run past 10 (check_entity_animation_elapsed_threshold), casts Zalure (tech
+// 0xc) on the target at frame 30 (0x1e) and Jellen (tech 0xb) at frame 40
+// (0x28) through the target's entity_hit_by_tech with power 1.0 (0x3f800000),
+// and ends in the roam state 7 when the motion ends (flag 0x10 of 0xb0). It
+// does not touch the other wolves: its entry's search through the pack list
+// (g_DerolleEntityListHead) stores nothing. Entry: the countdown 0x41c that
+// DerolleHandleStatusEffect_0051e45c (vtable slot 1) runs each tick; when it
+// reaches 0 the wolf enters state 0xe unless dead. What arms 0x41c is not
+// found in the dumped code (armHowl). ASSUMED: the sound's threshold is the
+// motion frames the port has run (the elapsed unit is not traced).
+export const WOLF_HOWL = {
+  sound: 0xd3,
+  soundFrames: 10,
+  zalure: 30,
+  jellen: 40,
+} as const;
+
+// One Jellen / Zalure cast from the howl: entity_hit_by_tech on this player.
+export interface WolfCast {
+  clientId: number;
+  tech: 'jellen' | 'zalure';
+  power: number;
+}
+
 // The leap's height above the ground at motion frame t.
 export function wolfLeapHeight(t: number): number {
   if (t > WOLF.airFrames) return 0;
@@ -439,9 +491,11 @@ const WOLF_MOTION = {
   // covers exactly d; the hop back 1.0.
   leap: once(5, 30 / WOLF.leapFrames),
   hop: once(9, 1),
+  // The howl: mode 3 (once), speed 0.4 (table row 0xb, 0x009bb8b0 area).
+  howl: once(4, 0.4),
 };
 
-export type WolfState = 'idle' | 'stalk' | 'leap' | 'hop' | 'dead';
+export type WolfState = 'idle' | 'stalk' | 'leap' | 'hop' | 'dash' | 'howl' | 'dead';
 
 export class WolfAi extends BrainBase {
   state: WolfState = 'idle';
@@ -459,7 +513,17 @@ export class WolfAi extends BrainBase {
   private ended = -1;
   private hopAngle = 0;
   private parity: number;
+  private dashOrigin = { x: 0, z: 0 };
+  private dashHeading = 0;
+  private dashAngle = 0;
+  private howlSounded = false;
+  // The howl's countdown (0x41c); 0 = not armed.
+  private howlIn = 0;
   lift = 0;
+  // Output of the howl for render/combat.ts: the Jellen / Zalure casts on
+  // the players and the sound effects to play at the wolf.
+  casts: WolfCast[] = [];
+  sounds: number[] = [];
 
   constructor(opts: { x: number; z: number; angle: number; detect: number; turnRate: number; attack: EnemyAttackData | null; radius: number; entityId: number; rng?: () => number }) {
     super(opts.x, opts.z, opts.angle, opts.rng ?? Math.random);
@@ -497,7 +561,42 @@ export class WolfAi extends BrainBase {
       const sign = this.parity === 0 ? -1 : 1;
       this.hopAngle = wrap(this.angle + sign * WOLF.hopTurn * BAMS_TO_RAD);
       this.play(out, WOLF_MOTION.hop);
+    } else if (state === 'dash') {
+      // The side the dash starts on (see WOLF_DASH).
+      this.dashOrigin = { x: this.x, z: this.z };
+      this.dashHeading = this.angle;
+      this.dashAngle = wrap(this.angle + this.dashSide(t) * WOLF_DASH.side * BAMS_TO_RAD);
+      this.play(out, WOLF_MOTION.stalk);
+    } else if (state === 'howl') {
+      this.howlSounded = false;
+      this.play(out, WOLF_MOTION.howl);
     }
+  }
+
+  // +1 or -1: the side of the heading the dash starts on.
+  private dashSide(t: AiTarget | null): number {
+    if (!t) return this.rng() >= WOLF_DASH.sideChance ? -1 : 1;
+    const fx = Math.sin(this.angle);
+    const fz = Math.cos(this.angle);
+    const vx = t.x - this.x;
+    const vz = t.z - this.z;
+    // ASSUMED: CheckVectorCrossProduct_007829cc is nonzero when fz * vx < fx * vz.
+    return fz * vx < fx * vz ? 1 : -1;
+  }
+
+  // Starts the side dash (state 0xc). The exe entry is not found yet, so this
+  // is the hook for it; the returned frame carries the motion.
+  startDash(t: AiTarget | null): AiFrame {
+    this.targetId = t?.clientId ?? null;
+    const out = this.frame();
+    this.enter(out, 'dash', t);
+    return this.finish(out);
+  }
+
+  // Arms the howl's countdown (0x41c): it enters state 0xe when it reaches 0.
+  // The exe's arming is not found yet.
+  armHowl(ticks: number): void {
+    this.howlIn = ticks;
   }
 
   tick(targets: readonly AiTarget[], animationEnded = false): AiFrame {
@@ -586,9 +685,47 @@ export class WolfAi extends BrainBase {
           this.enter(out, t ? 'stalk' : 'idle', t);
         }
         break;
+      case 'dash': {
+        const t = this.target(targets);
+        if (!t) {
+          this.enter(out, 'idle', null);
+          break;
+        }
+        // The dash angle turns toward the heading, the goal sits 90 out along it.
+        this.dashAngle = turnToward(this.dashAngle, this.dashHeading, WOLF_DASH.turnFrame * BAMS_TO_RAD);
+        const gx = this.dashOrigin.x + Math.sin(this.dashAngle) * WOLF_DASH.radius;
+        const gz = this.dashOrigin.z + Math.cos(this.dashAngle) * WOLF_DASH.radius;
+        const dx = gx - this.x;
+        const dz = gz - this.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 0) {
+          const s = Math.min(d, WOLF_DASH.speed);
+          this.x += (dx / d) * s;
+          this.z += (dz / d) * s;
+        }
+        this.angle = turnToward(this.angle, this.angleTo(t), this.turn);
+        if (this.timer > WOLF_DASH.frames) this.enter(out, 'idle', null);
+        break;
+      }
+      case 'howl': {
+        // SavageWolfProcessState_0051c0ac: the sound once past its threshold,
+        // then the casts at frames 30 and 40 on the target (0x3e8).
+        if (!this.howlSounded && this.frames > WOLF_HOWL.soundFrames) {
+          this.howlSounded = true;
+          this.sounds.push(WOLF_HOWL.sound);
+        }
+        const t = this.target(targets);
+        if (t && this.timer === WOLF_HOWL.zalure) this.casts.push({ clientId: t.clientId, tech: 'zalure', power: 1 });
+        if (t && this.timer === WOLF_HOWL.jellen) this.casts.push({ clientId: t.clientId, tech: 'jellen', power: 1 });
+        if (animationEnded) this.enter(out, 'idle', null);
+        break;
+      }
       default:
         exhaustive(this.state);
     }
+    // The howl's countdown (DerolleHandleStatusEffect_0051e45c): the wolf enters
+    // the howl when it reaches 0 (a dead wolf returned above).
+    if (this.howlIn > 0 && --this.howlIn === 0) this.enter(out, 'howl', this.target(targets));
     out.lift = this.lift;
     return this.finish(out);
   }

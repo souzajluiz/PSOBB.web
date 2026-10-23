@@ -1641,6 +1641,12 @@ export class CombatView {
       if (ai instanceof GiGueAi && ai.events.length)
         for (const ev of ai.events.splice(0))
           if (ev.clientId === this.game.selfId) this.applySelfBuff(ev.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(ev.level), `E-${e.index.toString(16)} (${e.slot.type})`);
+      // The Barbarous Wolf's howl: its sound at the wolf, and Jellen / Zalure on this player.
+      if (ai instanceof WolfAi) {
+        for (const id of ai.sounds.splice(0)) this.playSeAt(id, root.position);
+        for (const c of ai.casts.splice(0))
+          if (c.clientId === this.game.selfId) this.applySelfBuff(c.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, c.power, `E-${e.index.toString(16)} (${e.slot.type})`);
+      }
       if (ai instanceof PanHalfAi && ai.buff && ai.buff.clientId === this.game.selfId) {
         const b = ai.buff;
         this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
