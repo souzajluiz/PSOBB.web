@@ -44,6 +44,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { SoftKeyboard } from '../ui/softkeyboard.ts';
 import { Loader } from './loader.ts';
+import { applyGamePointer } from './cursor.ts';
 import { itemRows } from './itempack.ts';
 import { installStageFit, lockLandscape } from './viewport.ts';
 
@@ -111,7 +112,9 @@ async function main(): Promise<void> {
   const bgm = new BgmPlayer(source);
   setSePlayer(new SePlayer(source)); // common.pac + city.pac (area 0), as at start-up
   const stage = new Stage(canvas);
-  const tex = async (names: string[]) => textureBitmaps(await files.textures(names));
+  // The game's own pointer (classic/cursor.ts), read from the user's PsoBB.exe; not awaited.
+  void applyGamePointer(source, [canvas, document.getElementById('world') as HTMLCanvasElement]);
+  const tex =async (names: string[]) => textureBitmaps(await files.textures(names));
   const hyouji = await textureBitmaps(await files.textures('f256_hyouji.prs'));
   // SinowberillInit_006fb914: an account whose AccountCtrl registry key reads
   // "Episode4" (get_game_version() == 1) gets TitleEP4.prs and the Login menu
