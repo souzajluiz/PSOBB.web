@@ -48,6 +48,8 @@ import type { LobbyPlayer } from '../net/lobby.ts';
 import type { QuestClient, QuestMenuEntry } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
 import type { NpcInstance } from '../render/npcview.ts';
+import { followTick, fromBams, toBams } from '../render/playermove.ts';
+import { followPoint, NO_LEADER, NpcAi } from './npcai.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -86,6 +88,7 @@ export class QuestTown {
   }
   private shop: string[][] | null = null;
   private templates: NpcPlayerTemplate[] | null = null;
+  private readonly npcAi = new NpcAi();
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
   private insideZones = new Set<number>();
@@ -207,6 +210,7 @@ export class QuestTown {
       returnToGuild: () => void this.returnToGuild(),
       npcCreated: (npc) => void this.npcCreated(npc),
       npcKilled: (id) => this.npcKilled(id),
+      npcPlay: (id) => this.npcPlay(id),
       getQuestFlag: (flag) => this.game.getQuestFlag(flag),
       setQuestFlag: (flag, set) => this.game.setQuestFlag(flag, set),
     };
@@ -294,6 +298,7 @@ export class QuestTown {
     // without the text window (close_msg_qb does not end the wait).
     this.ui.boardWait = !!(this.area?.vm.boardWaiting || this.quest?.vm.boardWaiting);
     this.view.npcs.updateVisibility();
+    this.stepNpcFollowers();
     // at_coords_call: the thread starts by itself when the player walks in.
     const me = this.view.selfPose();
     const vm = this.quest?.vm;
@@ -567,16 +572,50 @@ export class QuestTown {
 
   private npcKilled(slot: number): void {
     if (this.game.players.get(slot)?.npcTemplate === undefined) return;
+    this.npcAi.remove(slot);
     this.game.removeLocalPlayer(slot);
   }
 
-  private async npcControl(c: { param1: number; param2: number; command: number; param3: number }, local: boolean, pos?: { x: number; y: number; z: number; angle: number }): Promise<void> {
-    if (c.command === 1) {
-      this.log(`6x69: NPC ${c.param1} stops acting`);
-      return;
+  // npc_play (vm.ts): 6x69 command 2 to everyone, then applied here too (the exe's
+  // SendPacket0x60_007b4874 goes through checked_call, which runs the handler on the sender).
+  private npcPlay(leader: number): void {
+    const c = { param1: leader, param2: 0, command: 2, param3: 0 };
+    this.game.conn.send(0x60, 0, buildNpcControl(c));
+    void this.npcControl(c, true);
+  }
+
+  // The NPC players follow their leader (quest/npcai.ts; the walk is the render-side followTick).
+  // Every client runs it from the leaders' synced positions (ASSUMED sync, see npcai.ts).
+  private stepNpcFollowers(): void {
+    for (const slot of this.npcAi.slots()) {
+      const st = this.npcAi.get(slot);
+      const p = this.game.players.get(slot);
+      if (!st || !p || p.npcTemplate === undefined || st.leader === NO_LEADER) continue;
+      const leader = this.game.players.get(st.leader);
+      if (!leader) continue;
+      const goal = followPoint(p.position, leader.position);
+      if (goal.x === p.position.x && goal.z === p.position.z) {
+        if (p.moving) {
+          p.moving = false;
+          this.game.notifyMoved(p);
+        }
+        continue;
+      }
+      const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
+      followTick(f, goal.x, goal.z, false);
+      p.position = { x: f.x, y: leader.position.y, z: f.z };
+      p.angle = fromBams(f.heading);
+      p.moving = true;
+      p.gait = 'walk';
+      p.floor = leader.floor;
+      this.game.notifyMoved(p);
     }
-    if (c.command === 2) {
-      this.log(`6x69: NPC starts acting (following client ${c.param1})`);
+  }
+
+  private async npcControl(c: { param1: number; param2: number; command: number; param3: number }, local: boolean, pos?: { x: number; y: number; z: number; angle: number }): Promise<void> {
+    if (c.command === 1 || c.command === 2) {
+      const msg = this.npcAi.apply(c, this.game.selfId);
+      if (msg) this.log(`6x69: ${msg}`);
       return;
     }
     if (c.command !== 0 && c.command !== 3) return;
@@ -585,6 +624,8 @@ export class QuestTown {
     if (existing && existing.npcTemplate === undefined) return; // a real player (newserv refuses this too)
     const t = (await this.npcTemplates())[c.param3];
     if (!t) return;
+    // The owner is the client the 6x69 names (param1 = its slot) or the one that made it.
+    this.npcAi.create(slot, local || c.param1 === this.game.selfId);
     const me = this.game.self;
     const p: LobbyPlayer = {
       clientId: slot,
@@ -613,6 +654,7 @@ export class QuestTown {
     this.quest = session;
     this.insideZones.clear();
     if (!session) {
+      this.npcAi.clear();
       for (const [id, p] of [...this.game.players]) if (p.npcTemplate !== undefined) this.game.removeLocalPlayer(id);
     }
   }

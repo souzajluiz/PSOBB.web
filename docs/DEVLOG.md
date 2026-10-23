@@ -11312,3 +11312,30 @@ The new **Overview** panel (left column) lists the designated floors and the flo
 - Leaves: Customize, Technique, Trade, Shortcut, Symbol Chat, Guild Card, Simple Mail, Info Board, the Team rows and Quit (Disconnect) still do nothing in the lobby. Their exe handlers were not traced in this pass (`handle_player_menu_select` at 700118 is the next read).
 - Ship select camera: not decoded. Leads: the field-style default NPC camera (`UpdateDefaultNPCCameraState_004d2fb4` 251939, `UpdateCameraStateFromNPC` 252033, `SetDefaultNpcCamera`, called with indices 5 and 9 by several scenes). `create_lobby_burst_screen` (157525) and `UpdateMenuCameraPosition` (157313) are the game-list menu's mouse-scroll camera, not the Ship Select orbit. The circling path in `classic/shipselect.ts` remains fitted.
 - Not checked in Chrome (no browser run in this change).
+
+## 2026-10-23: NPC players follow their leader (6x69 commands 0-3 applied)
+
+**Exe evidence.** The 0x60 subcommand table `g_Packet0x60SubcommandTable` (0x00a0fba0) has rows of 8 bytes, but the rows are not indexed by subcommand: the row is found by its type field (u16 low, perm u16 high). Scanning it: row type 0x69, perm 7, handler 0x007b3f04 (`SinowberillChallenge_DispatchPacket_007b3f04`, `.c:798360`; the dump's Sinowberill names are community guesses, the body is the 6x69 receiver). Body: `{69, 03, u16 unused, u16 param1 (+4), u16 param2 = NPC slot (+6), u16 command (+8), u16 param3 = template (+10)}`.
+
+- **Command 0 / 3 (create):** the NPC is a player made by `SinowberillChallengePlayer_Constructor_00686258`, which sets `unknown_flags_invincibility` (+0x32c) = 7 and the leader (`player +0x750`) = 0xffff (`.c:552273`, `.c:552337`). The client named by param1 == its own slot is the owner and also builds the AI object (`SinowberillChallengeBoss_Constructor_007aea10`, `.c:798404`); the others build the player only (`.c:798452`). Command 3 also runs `Player_ProcessActionPacket_00690534` on the new player.
+- **Command 1 (stop):** the player in slot param1, if its flag is 3, gets +0x750 = 0xffff (`.c:798425`).
+- **Command 2 (start):** every slot 0..3 whose flag is 3 gets +0x750 = param1 (`.c:798433`). `SendPacket0x60_007b4874` (`.c:798832`) is the sender of command 2 (`npc_play`); the sender runs the handler too (`checked_call_packet0x60_subcommand`).
+- **Flag 3 and takeover:** `SinowberillChallenge_CheckAndReassignPlayer_007b46f8` (`.c:798768`): when the NPC's owner slot is empty, the first other connected slot takes the NPC: if that is this client, it sets flag 3, the leader (+0x750) = its own slot, sends the default command 2 and builds the AI object.
+- **Floor:** `MapObject_ChangeFloor_00669bf8` (`.c:533010`) moves each flag-3 NPC with a leader to the new floor.
+
+**Ported** (`client/src/quest/npcai.ts`, `client/src/quest/town.ts`, `client/src/quest/vm.ts`):
+- `NpcAi`: per-slot state (flag, leader, owner). Command 0 / 3 creates it (flag 7, no leader, owner when param1 names this client), command 1 stops a flag-3 follower, command 2 sets the leader of the followers.
+- The follow walk: each tick, a follower whose leader is in the lobby walks (render-side `followTick`) to the point `FOLLOW_DISTANCE` from the leader and takes the leader's floor. It moves through `notifyMoved`, so the remote-player view walks it.
+- `npc_play` (opcode 0x62, I32 = the client to follow) is no longer a no-op: the VM calls `host.npcPlay`, which sends 6x69 command 2 and applies it locally.
+- The 6x69 log lines now say what was applied.
+
+**Checks:** `tests/npcai.test.ts` (new): creation and owner rule, the own-slot and 0xffff guards, command 1 / 2 gates, stop, follow point, the `npc_play` wiring (source check). `quests`, `questflow`, `questmisc`, `npcs` and `combatdepth` pass with Node 24; `cd client && tsc --noEmit -p .` clean. Not run in Chrome.
+
+**ASSUMED:**
+- Command 2 also reaches the NPCs made by commands 0 / 3 (`FOLLOW_CREATED_NPCS`). The exe gates command 2 on flag 3; command 0 leaves flag 7 in the constructor, and what sets flag 3 for those NPCs (the vtable init) is not traced. Without this the quest's `npc_play` would do nothing.
+- `FOLLOW_DISTANCE` = 3.0 units; the walk is a straight line (no path).
+- Each client runs the followers from the leaders' synced positions; the exe's position sync of an NPC to the other clients is not traced.
+- `npc_play`'s I32 is the client to follow (the exe's `SendPacket0x60_007b4874` param1).
+- The local `npc_crp` sends `param1 = state` as before; the owner test uses the local creation instead (the exe's owner rule is param1 == own slot; the sender's param1 is not traced).
+
+**Not done:** the attack AI (command 3's action packet, target choice, attack timing; the AI object's update `SinowberillChallengeBoss_*` is not traced), the takeover (007b46f8: the TS has no owner-leave path), the challenge-mode opcodes. Stays open on the ROADMAP.
