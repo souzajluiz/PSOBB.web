@@ -414,6 +414,7 @@ async function main(): Promise<void> {
     hud.guildCards = () => session?.guildCards ?? null;
     hud.guildCardClient = () => session?.guildCardClient ?? null;
     hud.infoBoardClient = () => session?.infoBoardClient ?? null;
+    hud.mailbox = () => session?.mailbox ?? null;
     hud.episode4 = episode4;
     return new LobbyScreen(v, lobbyView, lobby, hud, shipName, fit.enabled);
   };
