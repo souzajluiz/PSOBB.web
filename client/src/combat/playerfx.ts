@@ -67,8 +67,8 @@
 //   poison 0x25 / SE 0xc, paralysis 0x26 / 0xd, slow 0x27 / 0xe,
 //   confusion 0x24 / 0xf, shock 0x21 / 0x11 (the infliction plays the SE too),
 //   freeze: no particle; the infliction creates the ice block entity
-//   (CreateItemEffectHandler_00500fe8, the model of g_IceBmlData_00a72838,
-//   ASSUMED left out here) and plays SE 0x10, the tick repeats SE 0x10 every 45
+//   (CreateItemEffectHandler_00500fe8, the model of g_IceBmlData_00a72838;
+//   render/combat.ts playerIce, the enemy's IceBlock) and plays SE 0x10, the tick repeats SE 0x10 every 45
 //   frames. All of them are skipped while the character flag 0x2000000 (the
 //   player is invisible) is set. Infliction of poison / paralysis / slow /
 //   confusion plays no sound.

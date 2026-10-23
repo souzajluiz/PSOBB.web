@@ -57,7 +57,8 @@
 //     enter_special_npc_dialog put the player into input state 0x13, which
 //     takes no movement or attack input until the flag clears (pressing a
 //     movement key adds +0x3e0 to the frames left, InputState0x13Invincibility
-//     Check_0069d6f4: left out here).
+//     Check_0069d6f4; +0x3e0 = ROUND(frames * -0.1) at the state's start, so
+//     150 frames take -15 a press: PlayerStatus.mash).
 //   slowed: apply_slow_status_effect_to_attack_speed (0x00690300 area)
 //     multiplies the player's motion frame step by 0.5 (0x0093c710).
 //   paralyzed: is_player_allowed_to_attack (0x00699510) refuses attacks
@@ -139,6 +140,14 @@ export const SLOW_FRAMES = 0xd2;
 export const CONFUSION_FRAMES = 300;
 export const FREEZE_FRAMES = 0x96;
 export const SHOCK_FRAMES = 300;
+// The freeze mash (InputState0x13Invincibility_0069d6f4 with the direction
+// check FUN_007c11d0). When the freeze state is entered (FUN_0069d730 writes
+// +0x3e0 = ROUND(frames * -0.1), the double at 0x0093d948 = -0.1: 150 -> -15),
+// each movement press (the four bindings W / S / A / D, keyconfig.ts) adds that
+// step to the frames left (+0x270) when the previous counted press was fewer than
+// 8 game ticks before. Only in state 0x13 and with the control state +0x32c == 1.
+export const FREEZE_MASH_FRACTION = -0.1;
+export const FREEZE_MASH_WINDOW = 8;
 // freeze_entity's EVP multiplier (0xbe99999a, the same as 0x0097810c).
 export const FREEZE_EVP = f32(-0.3);
 // apply_slow_status_effect_to_attack_speed: 0x0093c710.
@@ -200,6 +209,11 @@ export class PlayerStatus {
   slot1: Slot = empty();
   // +0x3d8: the flags the 6x0C / 6x0D watcher last saw.
   private synced = 0;
+  // The freeze mash: the step taken at the freeze's start, the game tick
+  // counter (DAT_00a9c4ec) and the tick of the last counted-window press.
+  private mashStep = 0;
+  private clock = 0;
+  private lastMash = -Infinity;
   private events: StatusEvents;
   android = false;
 
@@ -249,6 +263,7 @@ export class PlayerStatus {
     const slot = statusSlot(type) === 0 ? this.slot0 : this.slot1;
     slot.type = type;
     slot.mult = type === STATUS.freeze ? FREEZE_EVP : 0;
+    if (type === STATUS.freeze) this.mashStep = roundHalfEven(FREEZE_FRAMES * FREEZE_MASH_FRACTION);
     slot.counter =
       type === STATUS.poison
         ? POISON_START
@@ -308,9 +323,23 @@ export class PlayerStatus {
     this.sync();
   }
 
+  // One movement press while frozen (FUN_007c11d0 counts it when the previous
+  // press was under FREEZE_MASH_WINDOW game ticks ago; every press restarts the
+  // window). `controlled` is the control state +0x32c == 1. Returns true when the
+  // press took frames off the freeze. ASSUMED: the press is a key down this frame.
+  mash(controlled: boolean): boolean {
+    if (!controlled || this.slot1.type !== STATUS.freeze) return false;
+    const counted = this.clock - this.lastMash < FREEZE_MASH_WINDOW;
+    this.lastMash = this.clock;
+    if (!counted) return false;
+    this.slot1.counter += this.mashStep;
+    return true;
+  }
+
   // One frame on a field. `hp` is the current HP, `dead` whether the player
   // has the dead flag, `difficulty` g_CurrentDifficulty.
   tick(hp: number, dead: boolean, difficulty: number): void {
+    this.clock++;
     const s0 = this.slot0;
     if (s0.type === STATUS.poison) {
       const c = s0.counter + 1;

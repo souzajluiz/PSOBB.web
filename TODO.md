@@ -37,11 +37,11 @@ only part of them has matching C (psobb-client-source).
 ## D. Player and character
 - [ ] Hair / cap texture lists for hat classes; non-default android heads
 - [ ] `proportion_x/y` scaling; per-weapon field motions; emotes, sit
-- [ ] Damage: freeze ice block on players, dead prompt and return to Pioneer 2, dead camera, critical-hit effect, remote knockback, shield block routine, hit point heights
+- [ ] Damage: dead prompt and return to Pioneer 2, dead camera, critical-hit effect, remote knockback, shield block routine, hit point heights
 - [ ] Items: pickup particle, SE attenuation, drop line-of-sight, pickup lock, tekker window, bank windows, partial stacks
 
 ## E. Combat
-- [ ] Telepipe ring particle, light, loop sound; remote Resta heal; confusion steering; freeze button mash
+- [ ] Telepipe ring particle, light, loop sound; remote Resta heal; confusion steering
 - [ ] Technique leftovers: cast light, Resta / Anti particles, wall impacts, special effects
 - [ ] Photon blasts (joined / donated), blast objects, weapons with their own specials, per-part hit boxes
 - [ ] Enemy specials: Pan Arms split / merge, Pofuilly split, Grass Assassin emerge, Nano Dragon fly-in, Dubwitch link

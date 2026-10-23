@@ -10153,3 +10153,23 @@ The exe's critical visual is one path for any defender: `EntityHitEntity_0077335
 - The text objects' `maybe_ignore_color_prefix` flag (the 5th argument of `unknown_render_text`) is not modelled; no quest path was found that uses it.
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/textcodes.test.ts`, `tests/chatline.test.ts`, `tests/quests.test.ts`, `tests/questmisc.test.ts`, `tests/questflow.test.ts`, `tests/questboard.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+## 2026-10-23: The freeze's ice block on a player and the freeze button mash
+
+**What changed:** a frozen player (local or remote) gets the same ice block an enemy gets when frozen (`IceBlock`, bm_eff_ice.bml model 1, grows, turns, shatters when the freeze ends or the player dies). Movement presses while the local player is frozen now take frames off the freeze, so mashing gets you out sooner. Remote players' freezes already came over `6x0C` / `6x0D`; the owner's mash-end sends `6x0D` through the existing sync.
+
+**Details** (Ephinea `PsoBB.exe`):
+- **Ice object:** `freeze_entity` (0x00778cc0) calls `CreateItemEffectHandler_00500fe8` (0x00500fe8, the BattleMapEffect object 0x374 bytes) with the 0x96 duration, unless flag 0x2000000 is set, then SE 0x10 (`FUN_00814298(0x10, ...)`). `InitializeEnemyEntity_00501068` takes the hit box pointer's centre, and with no hit box the entity's own +0x300..0x308 point and radius 1.5 (`0x3fc00000`). The port's enemy block already implements the rest (`combat/hitmodels.ts` IceBlock, notes of 2026-10-18 / 10-21).
+- **Mash:** entering the freeze state (`FUN_0069d730`, state 0x13) writes `+0x3e0 = ROUND(+0x270 * d)` with the double at 0x0093d948 = -0.1 (`tools/exedata.py read 0x93d948 d 1`), so 150 frames give -15. The state handler `FUN_0069d6f4` (0x0069d6f4, state 0x13 case 1) adds `+0x3e0` to the frames left (`add [esi+0x270], eax`) when `+0x33c & 0x200` is clear, `+0x32c == 1`, and `FUN_007c11d0` (0x007c11d0) returns 1. That check: a press (the keys bound to Move Forward / Backward / Left / Right, `FUN_0078fd68` over bindings 0..3, or a stick flick of at least 0x5000 BAMS with magnitude > 0.5) counts when the previous press was fewer than 8 frames before (`iVar4 - iVar1 < 8`; every press sets the new time). This matches the wiki's "-15 per input, 8 frames" (`notes/_wiki_combat_formulas.md` section 5), which the 2026-05 sweep had marked as absent: the step is `+0x3e0`, not a literal 15.
+- **Ice on a player:** nothing else in the player's path reads a hit box, so the block uses the default radius and the hit point height (`HIT_POINT_DY`, the same as the player's hit sparks).
+
+**Assumed:**
+- The player has no hit box pointer (+0x2b4 / +0xa4), so the radius is the default 1.5 and the centre is the feet + `HIT_POINT_DY` (20, itself ASSUMED).
+- The caller passes a non-null hit box to `freeze_entity` for players, or the block would not be made at all in the exe. Not checked: the caller's argument for a player's freeze.
+- The mash step is taken at the freeze's start (`inflict`), which equals the state entry's `+0x270` (150).
+- "Press" means a movement key newly down this frame (the exe's buffered key list is not read); stick and pad presses are not ported.
+- `+0x32c == 1` is read as "the player is under control (not in a menu)"; the port passes true whenever it is on a field and alive. `+0x33c & 0x200` is taken as clear.
+- The mash counts game ticks (the tick counter, `DAT_00a9c4ec`, 30 a second).
+
+**Files:** `client/src/combat/status.ts` (`FREEZE_MASH_FRACTION`, `FREEZE_MASH_WINDOW`, `PlayerStatus.mash`, the step at infliction, the clock in `tick`), `client/src/render/combat.ts` (`MOVE_KEYS`, the press detection in `frame`, `playerIce` from `statusPulse` on a freeze onset), `client/src/combat/playerfx.ts` (comment), `tests/status.test.ts` (new cases: -15 step, window, control, mashing ends the freeze), `docs/ROADMAP.md`, `TODO.md`.
+
+**Checks:** `tsc --noEmit -p .` (client, Node 24) clean. `node tests/status.test.ts`, `enemystatus`, `playerfx`, `combatdepth` pass (826 checks). Not run: Playwright / Chrome (per the brief).
