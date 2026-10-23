@@ -43,6 +43,7 @@
 // scales by 0.75 (0x009712c8, 0x009712cc, FUN_004d434c), in 3 frames
 // (0x00971300); it moves back the same way when the menu closes.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, INSET, ROW as LIST_ROW, TITLE_GAP } from './fieldwindows.ts';
@@ -211,11 +212,11 @@ export class MainMenu {
     if (!this.open || this.leafOpen || this.inputDelay > 0) return;
     const lv = this.level;
     const n = lv.entries.length;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      lv.cursor = (lv.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+      lv.cursor = (lv.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       this.help.set(this.helpText(lv.entries[lv.cursor].id));
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       const it = lv.entries[lv.cursor];
       if (!it.enabled) {
         se(SE.buzzer);
@@ -230,7 +231,7 @@ export class MainMenu {
         this.header = { id: it.id, y: TOP + (off + lv.cursor) * ROW, left: SLIDE_FRAMES };
         this.show(it.sub, this.keptCursor(this.stack.length, it.sub), it.id);
       } else this.action(it.id);
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       if (this.stack.length > 1) {
         this.kept[this.stack.length - 1] = { cursor: lv.cursor, table: lv.table };
@@ -362,13 +363,13 @@ export class ItemListWindow {
 
   key(e: KeyboardEvent): boolean {
     const n = this.rows.length;
-    if (e.key === 'Backspace' || e.key === 'Escape') {
+    if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       return false;
     }
     if (!n) return true;
-    if (e.key === 'ArrowUp') this.cursor = (this.cursor + n - 1) % n;
-    else if (e.key === 'ArrowDown') this.cursor = (this.cursor + 1) % n;
+    if (menuKeyOf(e) === 'up') this.cursor = (this.cursor + n - 1) % n;
+    else if (menuKeyOf(e) === 'down') this.cursor = (this.cursor + 1) % n;
     else return true;
     se(SE.cursor);
     if (this.cursor < this.top) this.top = this.cursor;

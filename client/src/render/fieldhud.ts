@@ -42,6 +42,7 @@ import type { ItemData, ItemNames } from '../formats/itemnames.ts';
 import { AFSArchive } from '../formats/archives.ts';
 import { ITEM_KT_FILE, itemPictureEntry } from '../formats/itemkt.ts';
 import { parseXvm } from '../formats/xvm.ts';
+import { KEYS } from '../input/keyconfig.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -361,10 +362,10 @@ export class FieldHud {
   private areaMapInput(): AreaMapInput {
     const h = this.held;
     return {
-      up: h.has('arrowup'),
-      down: h.has('arrowdown'),
-      left: h.has('arrowleft'),
-      right: h.has('arrowright'),
+      up: h.has(KEYS.selectUp),
+      down: h.has(KEYS.selectDown),
+      left: h.has(KEYS.selectLeft),
+      right: h.has(KEYS.selectRight),
       zoomIn: h.has('shift'),
       zoomOut: h.has('control'),
       mouse: { ...this.mouse },
@@ -630,7 +631,7 @@ export class FieldHud {
       return;
     }
     if (this.opts.blocked()) return;
-    if (e.key === 'Home' || e.key === 'F12') {
+    if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
       e.preventDefault();
       e.stopImmediatePropagation();
       if (this.tex) this.menu.toggle();

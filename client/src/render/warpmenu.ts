@@ -22,6 +22,7 @@
 //     entry 0x34 = (176, 130) sized by FUN_0073608c: width = widest item +
 //     20, height = items * (14 + 6) - 6 + 20; items centred.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawGameText, gameTextWidth } from '../classic/gametext.ts';
@@ -230,10 +231,10 @@ export class WarpMenuOverlay {
   private key(e: KeyboardEvent): void {
     if (!this.open) return;
     const n = this.items.length;
-    if (e.key === 'ArrowUp' && n) this.cursor = (this.cursor + n - 1) % n;
-    else if (e.key === 'ArrowDown' && n) this.cursor = (this.cursor + 1) % n;
-    else if (e.key === 'Enter' && n) this.close(this.items[this.cursor]?.floor ?? null);
-    else if (e.key === 'Backspace' || e.key === 'Escape') this.close(null);
+    if (menuKeyOf(e) === 'up' && n) this.cursor = (this.cursor + n - 1) % n;
+    else if (menuKeyOf(e) === 'down' && n) this.cursor = (this.cursor + 1) % n;
+    else if (menuKeyOf(e) === 'decide' && n) this.close(this.items[this.cursor]?.floor ?? null);
+    else if (menuKeyOf(e) === 'cancel') this.close(null);
     else return;
     e.preventDefault();
     e.stopPropagation();

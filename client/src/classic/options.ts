@@ -67,6 +67,7 @@
 // send_packet0xed_subcommand1: command 0x01ED, flag 0, u32 option_flags;
 // newserv on_ED_BB stores it in the character file).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import { drawGameText } from './gametext.ts';
 import { drawListWindow, drawWindowTitle, INSET, listKey, ROW, SELECTED, TITLE_GAP, type ListItem } from './fieldwindows.ts';
@@ -319,16 +320,16 @@ export class OptionsMenu {
     const s = this.settings;
     if (s) {
       const n = s.items.length;
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        s.cursor = (s.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+      if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+        s.cursor = (s.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
         se(SE.cursor);
-      } else if (e.key === 'Enter') {
+      } else if (menuKeyOf(e) === 'decide') {
         // ChatShortcutMenuYesNoWindow_ConfirmSelection_00714d04.
         s.chosen = s.cursor;
         se(SE.ok);
         this.apply(s);
         this.closeSettings();
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.cancel);
         this.closeSettings();
       }

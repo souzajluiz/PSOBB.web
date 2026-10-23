@@ -29,6 +29,7 @@
 // window; when the cast is refused (TP, already casting) it plays SE 0x585
 // like the client.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import { techTpCost } from '../combat/techniques.ts';
 import { drawListWindow, drawTextWindow, INSET, listKey, type ListItem, TITLE_GAP } from './fieldwindows.ts';
@@ -113,7 +114,7 @@ export class TechniqueMenu {
       return r !== 'cancel';
     }
     const items = techItems(this.type.cursor, this.env);
-    if (e.key === 'Enter') {
+    if (menuKeyOf(e) === 'decide') {
       const it = items[this.tech.cursor];
       if (it?.enabled && this.env.canCast() && this.env.cast?.(it.value)) {
         se(SE.ok);

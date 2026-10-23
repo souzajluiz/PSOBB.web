@@ -33,6 +33,7 @@
 //   the item already in that slot is removed; otherwise the item leaves its
 //   current slot, the slot's item is removed, and the item is equipped there.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { SLOT_ARMOR, SLOT_MAG, SLOT_SHIELD, SLOT_UNIT_1, SLOT_WEAPON } from '../net/items.ts';
@@ -179,14 +180,14 @@ export class EquipMenu {
 
   // Returns false when the window closes (Backspace on the slot list).
   key(e: KeyboardEvent): boolean {
-    const up = e.key === 'ArrowUp';
-    const back = e.key === 'Backspace' || e.key === 'Escape';
+    const up = menuKeyOf(e) === 'up';
+    const back = menuKeyOf(e) === 'cancel';
     if (this.state === 'slots') {
       const n = this.slots.length;
-      if ((up || e.key === 'ArrowDown') && n) {
+      if ((up || menuKeyOf(e) === 'down') && n) {
         this.slotCursor = (this.slotCursor + (up ? n - 1 : 1)) % n;
         se(SE.cursor);
-      } else if (e.key === 'Enter' && n) {
+      } else if (menuKeyOf(e) === 'decide' && n) {
         se(SE.ok);
         this.state = 'items';
         this.itemCursor = 0;
@@ -201,11 +202,11 @@ export class EquipMenu {
       return true;
     }
     const n = this.items.length;
-    if ((up || e.key === 'ArrowDown') && n) {
+    if ((up || menuKeyOf(e) === 'down') && n) {
       this.itemCursor = (this.itemCursor + (up ? n - 1 : 1)) % n;
       this.clampTop();
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       const it = this.items[this.itemCursor];
       const c = this.env.character();
       const s = this.slots[this.slotCursor];

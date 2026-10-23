@@ -28,6 +28,7 @@
 // Name tags over the heads: no code for them was found in PsoBB.exe; they
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import type { GuildCardBook } from '../net/guildcard.ts';
 import type { Lobby } from '../net/lobby.ts';
@@ -42,6 +43,7 @@ import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import { KEYS } from '../input/keyconfig.ts';
 import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
@@ -358,7 +360,7 @@ export class LobbyScreen implements Screen {
       return;
     }
     if (this.logWindow) {
-      if (e.key === 'Backspace' || e.key === 'Escape' || e.key === 'Enter') {
+      if (menuKeyOf(e) === 'cancel' || menuKeyOf(e) === 'decide') {
         this.logWindow = false;
         this.menu.leafOpen = false;
       }
@@ -387,7 +389,7 @@ export class LobbyScreen implements Screen {
       this.team.key(e);
       return;
     }
-    if (e.key === 'Home' || e.key === 'F12') {
+    if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
       e.preventDefault();
       if (!this.counter.open) {
         this.keys.clear();
@@ -414,7 +416,7 @@ export class LobbyScreen implements Screen {
       this.chat.begin();
       return;
     }
-    if (e.key === 'Enter' && this.nearCounter()) {
+    if (menuKeyOf(e) === 'decide' && this.nearCounter()) {
       this.keys.clear();
       this.counter.begin();
     }

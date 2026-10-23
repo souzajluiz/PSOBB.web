@@ -40,6 +40,7 @@
 // window does not (quest_run_thread_1 / _2 move window_msg__message__chat_box
 // on only while is_menu_open is 0; closing the menu lets it go on).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
 import { activeColorEscape, expandColorTags, stripTextCodes } from '../classic/textcodes.ts';
@@ -282,18 +283,18 @@ export class QuestUi {
     const list = this.lists[this.lists.length - 1];
     if (list) {
       const n = list.items.length;
-      if (e.key === 'ArrowUp' && n) list.cursor = (list.cursor + n - 1) % n;
-      else if (e.key === 'ArrowDown' && n) list.cursor = (list.cursor + 1) % n;
-      else if (e.key === 'Enter' && !e.repeat) {
+      if (menuKeyOf(e) === 'up' && n) list.cursor = (list.cursor + n - 1) % n;
+      else if (menuKeyOf(e) === 'down' && n) list.cursor = (list.cursor + 1) % n;
+      else if (menuKeyOf(e) === 'decide' && !e.repeat) {
         this.lists.pop();
         list.resolve(n ? list.cursor : null);
-      } else if ((e.key === 'Escape' || e.key === 'Backspace') && list.cancellable) {
+      } else if ((menuKeyOf(e) === 'cancel') && list.cancellable) {
         this.lists.pop();
         list.resolve(null);
       } else return false;
       return true;
     }
-    if (e.key !== 'Enter' || e.repeat) return false;
+    if (menuKeyOf(e) !== 'decide' || e.repeat) return false;
     if (this.pendingTell && !menuOpen) {
       const r = this.pendingTell;
       this.pendingTell = null;

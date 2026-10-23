@@ -16,10 +16,13 @@
 // keyboard_controls) and it is sent to the server with 0x04ED on every close,
 // changed or not (the destructor always calls send_packet0xed_subcommand4).
 //
-// Not ported: the four Default presets (exe 0x009ff3c0 slots; their contents
-// are not in the data, so they are greyed out here), the "May I overwrite
-// custom setting?" prompt before a preset is copied, and the control names of
-// type 1 bindings (pad buttons; shown blank).
+// The Default 1..4 entries copy their preset into the working config (the
+// exe's FUN_00792f98 from the table at 0x0097aca0; the contents are in
+// input/keyconfig.ts). ASSUMED: no "overwrite" prompt is shown first (the exe
+// opens a message box with unitxt 0x4A in FUN_00790970; its answer flow is not
+// decoded), and the list stays on the top level after a copy.
+// Not ported: the control names of type 1 bindings (pad buttons; shown blank).
+// The menu keys are read live (menuKeyOf): Select, Decide, Cancel.
 //
 // Layout: the exe's list positions (KeyboardConfigObject_Constructor): top list
 // at (100, 40), header at (100, 170) 260 wide, the rows at (110, 200), the
@@ -32,7 +35,10 @@ import {
   codeOfDomKey,
   KEY_NAMES,
   keyCaption,
+  menuKeyOf,
   normalizeKeyConfig,
+  PRESET_COUNT,
+  presetKeyConfig,
   readBinding,
   writeBinding,
 } from '../input/keyconfig.ts';
@@ -53,7 +59,8 @@ const MSG_NOT_CHANGEABLE = 0x4c; // "This item is not changable."
 const MSG_IMPOSSIBLE = 0x4d; // "This button is impossible to set."
 const MSG_INTERCHANGED = 0x4e; // "Setup interchanged."
 
-// The top list: Default1..4 (exe 0x50..0x53, not ported) and Custom (0x54).
+// The top list: Default1..4 (exe 0x50..0x53) and Custom (0x54). Default n is
+// preset n-1 (presetKeyConfig, the exe's 0x0097aca0 table).
 const PRESET_LABELS = [0x50, 0x51, 0x52, 0x53] as const;
 const CUSTOM_LABEL = 0x54;
 
@@ -136,9 +143,9 @@ export class KeyConfigMenu {
   constructor(env: KeyConfigEnv) {
     this.env = env;
     this.cfg = normalizeKeyConfig(env.load());
-    this.top = { cursor: 4 }; // ASSUMED: starts on Custom (the presets are not ported)
+    this.top = { cursor: 4 }; // ASSUMED: starts on Custom
     this.topItems = [
-      ...PRESET_LABELS.map((g) => ({ label: env.text(0, g), value: g, enabled: false })),
+      ...PRESET_LABELS.map((g) => ({ label: env.text(0, g), value: g, enabled: true })),
       { label: env.text(0, CUSTOM_LABEL), value: CUSTOM_LABEL, enabled: true },
     ];
   }
@@ -171,6 +178,11 @@ export class KeyConfigMenu {
         return false;
       }
       if (r === 'decide') {
+        if (this.top.cursor < PRESET_COUNT) {
+          // Default n: its preset becomes the working config (FUN_00792f98).
+          this.cfg.set(presetKeyConfig(this.top.cursor));
+          return true;
+        }
         this.stage = 'items';
         this.cat = 0;
         this.row = 0;
@@ -179,16 +191,17 @@ export class KeyConfigMenu {
       return true;
     }
     if (this.stage === 'items') {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const mk = menuKeyOf(e);
+      if (mk === 'left' || mk === 'right') {
         // HandleKeyBindingInput_007907cc: the header wraps (flags 0x2000 / 0x4000).
         const n = CATEGORIES.length;
-        this.cat = e.key === 'ArrowLeft' ? (this.cat + n - 1) % n : (this.cat + 1) % n;
+        this.cat = mk === 'left' ? (this.cat + n - 1) % n : (this.cat + 1) % n;
         this.row = 0;
         this.msg = MSG_SELECT;
         se(SE.cursor);
         return true;
       }
-      if (e.key === 'Backspace' || e.key === 'Escape') {
+      if (mk === 'cancel') {
         se(SE.cancel);
         this.stage = 'top';
         this.msg = null;

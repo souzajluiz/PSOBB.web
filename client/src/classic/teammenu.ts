@@ -73,6 +73,7 @@
 // Name." header row, the right aligned points in the ranking, the buzzer on a
 // greyed row.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import { memberRowLabel, PRIVILEGE, inTeam, type TeamMember, type TeamMembership, type TeamRank } from '../net/team.ts';
 import { wrapGameText } from './chat.ts';
@@ -182,13 +183,13 @@ export class Question {
 
   key(e: MenuKey): void {
     if (this.result) return;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
       this.cursor = 1 - this.cursor;
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       se(SE.ok);
       this.result = this.cursor === 0 ? 'yes' : 'no';
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       this.result = 'no';
     }
@@ -218,7 +219,7 @@ export class TeamNameWindow {
     if (this.result) return;
     const ed = this.editor;
     if (ed) {
-      if (e.key === 'Enter') {
+      if (menuKeyOf(e) === 'decide') {
         this.name = cleanTeamName(ed.text);
         this.editor = null;
         this.row = this.canRegister ? 2 : 1;
@@ -230,16 +231,16 @@ export class TeamNameWindow {
       else ed.type(e.key);
       return;
     }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
       if (this.canRegister) {
         this.row = this.row === 1 ? 2 : 1;
         se(SE.cursor);
       }
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       se(SE.ok);
       if (this.row === 1) this.editor = new TextEditor(this.name, MAX_TEAM_NAME, false);
       else this.result = 'register';
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       this.result = 'cancel';
     }
@@ -478,7 +479,7 @@ export class TeamMenus {
         else if (p.q.result === 'no') this.other();
         break;
       case 'notice':
-        if (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Escape') {
+        if (menuKeyOf(e) === 'decide' || menuKeyOf(e) === 'cancel') {
           se(SE.ok);
           if (p.next === 'name') this.openName();
           else this.closeAll();
@@ -529,7 +530,7 @@ export class TeamMenus {
       case 'working':
         // Waiting for the server; Cancel leaves (the exe's handlers for these
         // states only look at the answer, so this is a browser convenience).
-        if (e.key === 'Backspace' || e.key === 'Escape') {
+        if (menuKeyOf(e) === 'cancel') {
           se(SE.cancel);
           this.closeAll();
         }
@@ -541,12 +542,12 @@ export class TeamMenus {
 
   private rankingKey(rows: RankRows, e: MenuKey): void {
     const n = rows.rows.length;
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
-      rows.cursor = (rows.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
+      rows.cursor = (rows.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       if (rows.cursor < rows.top) rows.top = rows.cursor;
       if (rows.cursor >= rows.top + VISIBLE_ROWS - 1) rows.top = rows.cursor - VISIBLE_ROWS + 2;
       se(SE.cursor);
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       this.closeAll();
     }

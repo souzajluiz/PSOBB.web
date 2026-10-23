@@ -23,6 +23,7 @@
 // Coordinates are in the 640x480 virtual screen; game logic runs at 30 fps.
 
 import { se } from '../audio/se.ts';
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { drawInputWindow } from './login.ts';
 import { drawMenuWindow, drawText, inWindowSpace, ITEM_STEP, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 import type { LoginForm } from './loginform.ts';
@@ -339,26 +340,20 @@ export class TitleScreen implements Screen {
   }
 }
 
-// Keyboard -> the client's key slots (Enter, Escape = cancel slot 0xd,
-// arrows, Alt+Backspace = exit the game), or a typed character.
+// Keyboard -> the client's key slots (the live Decide / Cancel / Select keys,
+// Escape = cancel slot 0xd, Alt+Backspace = exit the game), or a typed
+// character. Backspace stays the text delete of the name and password fields
+// (and exits the game with Alt).
 export function toKey(e: Pick<KeyboardEvent, 'key' | 'altKey'>): Key | null {
-  switch (e.key) {
-    case 'ArrowUp':
-      return 'up';
-    case 'ArrowDown':
-    case 'Tab':
-      return 'down';
-    case 'ArrowLeft':
-      return 'left';
-    case 'ArrowRight':
-      return 'right';
-    case 'Enter':
-      return 'enter';
-    case 'Escape':
-      return 'cancel';
-    case 'Backspace':
-      return e.altKey ? 'exitGame' : 'backspace';
-  }
+  const mk = menuKeyOf(e);
+  if (mk === 'up') return 'up';
+  if (mk === 'down' || e.key === 'Tab') return 'down';
+  if (mk === 'left') return 'left';
+  if (mk === 'right') return 'right';
+  if (mk === 'decide') return 'enter';
+  if (e.key === 'Escape') return 'cancel';
+  if (e.key === 'Backspace') return e.altKey ? 'exitGame' : 'backspace';
+  if (mk === 'cancel') return 'cancel';
   return e.key.length === 1 ? { char: e.key } : null;
 }
 

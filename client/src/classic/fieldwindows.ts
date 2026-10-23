@@ -12,9 +12,12 @@
 // cursor but are drawn 0xff909090. The title pill sits 13 px above the frame
 // (template 0x00974d00), state 1 (orange) of table 0x00974bf8.
 // The cursor moves with the arrows and wraps (0x00736768 / 0x007381e0, SE
-// 0x56F); Enter confirms (SE 0x570), Backspace cancels (SE 0x585).
+// 0x56F); Enter confirms (SE 0x570), Backspace cancels (SE 0x585). The keys
+// are the live bindings (menuKeyOf: Select, Decide, Cancel), not the literal
+// keys, as the exe's menus read the config's six menu keys.
 
 import { se, SE } from '../audio/se.ts';
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type WindowSkin } from './stage.ts';
 import { titleTextShown, wipeElement } from './windowanim.ts';
@@ -109,13 +112,14 @@ export type ListKey = 'move' | 'decide' | 'cancel' | 'buzzer' | 'none';
 
 export function listKey(e: { key: string }, items: readonly ListItem[], state: { cursor: number }): ListKey {
   const n = items.length;
-  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+  const k = menuKeyOf(e);
+  if (k === 'up' || k === 'down') {
     if (!n) return 'none';
-    state.cursor = (state.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    state.cursor = (state.cursor + (k === 'up' ? n - 1 : 1)) % n;
     se(SE.cursor);
     return 'move';
   }
-  if (e.key === 'Enter') {
+  if (k === 'decide') {
     const it = items[state.cursor];
     if (!it || !it.enabled) {
       se(SE.buzzer);
@@ -124,7 +128,7 @@ export function listKey(e: { key: string }, items: readonly ListItem[], state: {
     se(SE.ok);
     return 'decide';
   }
-  if (e.key === 'Backspace' || e.key === 'Escape') {
+  if (k === 'cancel') {
     se(SE.cancel);
     return 'cancel';
   }

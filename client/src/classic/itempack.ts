@@ -71,6 +71,7 @@
 // amount when the stack holds more than one (state 0xC), meseta likewise
 // (state 0x13).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, isEquippable, stackSize } from '../net/items.ts';
@@ -614,13 +615,13 @@ export class ItemPackMenu {
   key(e: KeyboardEvent): boolean {
     if (this.state === 'list') {
       const n = this.rows.length;
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
         if (n) {
-          this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+          this.cursor = (this.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
           this.clampTop();
           se(SE.cursor);
         }
-      } else if (e.key === 'Enter') {
+      } else if (menuKeyOf(e) === 'decide') {
         const it = this.item();
         if (!it) {
           se(SE.buzzer);
@@ -630,7 +631,7 @@ export class ItemPackMenu {
         this.purpose = { cursor: 0, items: purposeItems(it, this.env.purposeContext(), (i) => this.env.text(11, i)) };
         this.state = 'purpose';
         this.openPurpose();
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.cancel);
         this.dispose();
         return false;
@@ -658,14 +659,14 @@ export class ItemPackMenu {
     if (this.state === 'amount' && this.amount) {
       const a = this.amount;
       if (spinnerKeyDown(a, e)) return true;
-      if (e.key === 'Enter') {
+      if (menuKeyOf(e) === 'decide') {
         if (a.value < a.min || a.value > a.max) return se(SE.buzzer), true;
         se(SE.ok);
         const it = this.item();
         if (it === 'meseta') this.env.actions.dropMeseta(a.value);
         else if (it) this.env.actions.drop(it.data.id, a.value);
         this.afterAction();
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.cancel);
         this.state = 'purpose';
         this.amountAnim.close();
@@ -704,11 +705,11 @@ export class ItemPackMenu {
   // ASSUMED: the meseta row cannot be picked (it is not an item object).
   private manualKey(e: KeyboardEvent): boolean {
     const n = this.rows.length;
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
-      this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
+      this.cursor = (this.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       this.clampTop();
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       const it = this.item();
       if (!it || it === 'meseta') {
         se(SE.buzzer);
@@ -721,7 +722,7 @@ export class ItemPackMenu {
         this.picked = null;
         this.refresh();
       }
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       if (this.picked !== null) this.picked = null;
       else {

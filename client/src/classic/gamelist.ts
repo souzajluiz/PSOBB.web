@@ -72,6 +72,7 @@
 // password editor shows its text as typed (flag 0 is not 0x2000); a game list
 // with no rows ignores Decide; the info window of a game is 342 wide.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CreateGameOptions, GameListEntry } from '../net/game.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -203,31 +204,30 @@ export class GameListView {
 
   key(e: MenuKey): ListEvent {
     const n = this.rows.length;
-    switch (e.key) {
-      case 'ArrowUp':
-      case 'ArrowDown':
-        if (!n) return { type: 'none' };
-        this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
-        this.follow();
-        se(SE.cursor);
-        return { type: 'move' };
-      case 'Enter': {
-        const entry = this.selected;
-        if (!entry) {
-          se(SE.buzzer);
-          return { type: 'none' };
-        }
-        se(SE.ok);
-        return { type: 'decide', entry };
+    const k = menuKeyOf(e);
+    if (k === 'up' || k === 'down') {
+      if (!n) return { type: 'none' };
+      this.cursor = (this.cursor + (k === 'up' ? n - 1 : 1)) % n;
+      this.follow();
+      se(SE.cursor);
+      return { type: 'move' };
+    }
+    if (k === 'decide') {
+      const entry = this.selected;
+      if (!entry) {
+        se(SE.buzzer);
+        return { type: 'none' };
       }
-      case 'Tab': {
-        const entry = this.selected;
-        return entry ? { type: 'info', entry } : { type: 'none' };
-      }
-      case 'Backspace':
-      case 'Escape':
-        se(SE.cancel);
-        return { type: 'cancel' };
+      se(SE.ok);
+      return { type: 'decide', entry };
+    }
+    if (e.key === 'Tab') {
+      const entry = this.selected;
+      return entry ? { type: 'info', entry } : { type: 'none' };
+    }
+    if (k === 'cancel') {
+      se(SE.cancel);
+      return { type: 'cancel' };
     }
     return { type: 'none' };
   }
@@ -287,17 +287,17 @@ export class CreatePartyWindow {
       this.popupKey(e);
       return;
     }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      const d = e.key === 'ArrowDown' ? 1 : CREATE_ROWS - 1;
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+      const d = menuKeyOf(e) === 'down' ? 1 : CREATE_ROWS - 1;
       let r = this.row;
       do r = (r + d) % CREATE_ROWS;
       while (!this.selectable(r));
       this.row = r;
       se(SE.cursor);
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       this.result = 'cancel';
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       if (!this.selectable(this.row)) {
         se(SE.buzzer);
         return;
@@ -322,7 +322,7 @@ export class CreatePartyWindow {
 
   private editorKey(e: MenuKey): void {
     const ed = this.editor!;
-    if (e.key === 'Enter') {
+    if (menuKeyOf(e) === 'decide') {
       if (this.step === 'name') this.name = ed.text;
       else this.password = ed.text;
       se(SE.ok);
@@ -338,15 +338,15 @@ export class CreatePartyWindow {
   private popupKey(e: MenuKey): void {
     const p = this.popup!;
     const n = this.step === 'mode' ? MODES.length : DIFFICULTIES.length;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      p.cursor = (p.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+      p.cursor = (p.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       se(SE.ok);
       if (this.step === 'mode') this.mode = MODES[p.cursor];
       else this.difficulty = DIFFICULTIES[p.cursor];
       this.idle();
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       se(SE.cancel);
       this.idle();
     }
@@ -374,7 +374,7 @@ export class PasswordPrompt {
 
   key(e: MenuKey): void {
     if (this.result) return;
-    if (e.key === 'Enter') {
+    if (menuKeyOf(e) === 'decide') {
       se(SE.ok);
       this.result = 'ok';
     } else if (e.key === 'Escape') {
@@ -516,13 +516,13 @@ export class PartyMenus {
         this.createKey(e);
         break;
       case 'loading':
-        if (e.key === 'Backspace' || e.key === 'Escape') {
+        if (menuKeyOf(e) === 'cancel') {
           se(SE.cancel);
           this.close();
         }
         break;
       case 'message':
-        if (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Escape') this.close();
+        if (menuKeyOf(e) === 'decide' || menuKeyOf(e) === 'cancel') this.close();
         break;
     }
   }

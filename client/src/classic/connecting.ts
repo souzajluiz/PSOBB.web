@@ -30,6 +30,7 @@
 // "Connecting.." object (that one is FUN_00407b74 of the connect loop). The
 // floor loads behind it and unk_end_loading_screen ends it at once.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { RESULT_WAIT_FRAMES, STATUS_POS } from './connectstatus.ts';
 import { drawGameText } from './gametext.ts';
 import { makeTinter, ParticleSystem, parseParticleEntry } from './particles.ts';
@@ -124,7 +125,8 @@ export class ConnectingScreen implements Screen {
   }
 
   key(e: KeyboardEvent): void {
-    if (!this.showingError || this.finished || (e.key !== 'Enter' && e.key !== 'Escape')) return;
+    const mk = menuKeyOf(e);
+    if (!this.showingError || this.finished || (mk !== 'decide' && mk !== 'cancel')) return;
     this.finished = true;
     this.onError(this.error ?? '');
   }

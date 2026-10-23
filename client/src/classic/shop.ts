@@ -47,6 +47,7 @@
 // The tekker (bb_p2_menu 6, JUDGMENT): see TekkerCounter; the Medical
 // Center (bb_p2_menu 1): see MedicalCounter.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
 import { maxStackSize, type ItemData } from '../formats/itemnames.ts';
@@ -623,25 +624,25 @@ abstract class CounterBase {
 
   key(e: KeyboardEvent): void {
     if (this.waitEnter) {
-      if (e.key === 'Enter' && !e.repeat) {
+      if (menuKeyOf(e) === 'decide' && !e.repeat) {
         if (this.typing) this.clerk.finish();
         else this.waitEnter();
-      } else if (this.waitCancel && (e.key === 'Backspace' || e.key === 'Escape') && !e.repeat && !this.typing) {
+      } else if (this.waitCancel && (menuKeyOf(e) === 'cancel') && !e.repeat && !this.typing) {
         this.waitEnter();
       }
       return;
     }
     if (this.amount) {
       const { spinner: a, resolve } = this.amount;
-      if (e.key === 'ArrowUp') (a.up(), se(SE.cursor));
-      else if (e.key === 'ArrowDown') (a.down(), se(SE.cursor));
-      else if (e.key === 'ArrowLeft') (a.left(), se(SE.cursor));
-      else if (e.key === 'ArrowRight') (a.right(), se(SE.cursor));
-      else if (e.key === 'Enter') {
+      if (menuKeyOf(e) === 'up') (a.up(), se(SE.cursor));
+      else if (menuKeyOf(e) === 'down') (a.down(), se(SE.cursor));
+      else if (menuKeyOf(e) === 'left') (a.left(), se(SE.cursor));
+      else if (menuKeyOf(e) === 'right') (a.right(), se(SE.cursor));
+      else if (menuKeyOf(e) === 'decide') {
         if (a.value < a.min || a.value > a.max) return void se(SE.buzzer);
         se(SE.ok);
         resolve(a.value);
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.cancel);
         resolve(null);
       }
@@ -650,13 +651,13 @@ abstract class CounterBase {
     if (this.choice) {
       const c = this.choice;
       const n = c.items.length;
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        c.cursor = (c.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+      if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+        c.cursor = (c.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
         se(SE.cursor);
-      } else if (e.key === 'Enter' && !e.repeat) {
+      } else if (menuKeyOf(e) === 'decide' && !e.repeat) {
         se(SE.ok);
         c.resolve(c.cursor);
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.cancel);
         c.resolve(null);
       }
@@ -665,16 +666,16 @@ abstract class CounterBase {
     const l = this.list;
     if (l?.resolve) {
       const n = l.rows.length;
-      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
-        l.cursor = (l.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+      if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
+        l.cursor = (l.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
         this.clampTop();
         se(SE.cursor);
-      } else if (e.key === 'Enter' && !e.repeat) {
+      } else if (menuKeyOf(e) === 'decide' && !e.repeat) {
         // ShopDialog_ProcessItemSelection_006d5200: SE 0x570 on Enter and on
         // Backspace alike.
         se(SE.ok);
         if (n) l.resolve(l.cursor);
-      } else if (e.key === 'Backspace' || e.key === 'Escape') {
+      } else if (menuKeyOf(e) === 'cancel') {
         se(SE.ok);
         l.resolve(null);
       }
