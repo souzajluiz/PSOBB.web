@@ -51,7 +51,7 @@ import {
   type ChallengeMode,
 } from './cmode.ts';
 import { applyOverlay, buildChallengeOverlay, writeOverlayRaw } from './cmodeoverlay.ts';
-import { graveFadeStep, graveHeading, graveLines, GRAVE_DRAW_RANGE, GRAVE_NEAREST_START, GRAVE_TICK_MS, GRAVE_TEXT_HEIGHT } from './cmodegrave.ts';
+import { graveFadeStep, graveHeading, graveKillerId, graveKillerName, graveLines, GRAVE_DRAW_RANGE, GRAVE_NEAREST_START, GRAVE_TICK_MS, GRAVE_TEXT_HEIGHT } from './cmodegrave.ts';
 import type { QuestTown } from './town.ts';
 import type { QuestVM } from './vm.ts';
 
@@ -100,6 +100,8 @@ export class ChallengeRuntime {
   private senderCounter = 0;
   private challengeDialog: ChallengeQuestDialog | null = null;
   private senderPoll: ReturnType<typeof setInterval> | null = null;
+  // The local player's last chat line (the grave's message).
+  private lastChat = '';
 
   private readonly o: ChallengeRuntimeOptions;
 
@@ -109,6 +111,9 @@ export class ChallengeRuntime {
     const { game } = o;
     const onSub = (sub: number, clientId: number, body: Uint8Array) => this.onSubcommand(sub, clientId, body);
     game.on('subcommand', onSub);
+    game.on('chat', (from, _gc, text) => {
+      if (this.alive && from && from.clientId === game.selfId) this.lastChat = text;
+    });
     const onFloor = () => this.floorChanged();
     o.view.floorHooks.add(onFloor);
     this.disposers.push(() => o.view.floorHooks.delete(onFloor));
@@ -463,8 +468,8 @@ export class ChallengeRuntime {
           owner: game.players.get(gr.owner)?.name ?? null,
           deaths: gr.g.deaths,
           team: gr.g.team,
-          message: '',
-          defeatedBy: null,
+          message: gr.g.message,
+          defeatedBy: graveKillerName(gr.g.defeatedBy),
           date: gr.owner === game.selfId ? gr.g.date : null,
         });
         this.o.town.ui.setWorldHud(id, { x: gr.x, y: gr.y + GRAVE_TEXT_HEIGHT, z: gr.z, lines, alpha: gr.fade });
@@ -498,7 +503,8 @@ export class ChallengeRuntime {
       y: pos?.y ?? 0,
       z: pos?.z ?? 0,
       team: game.name,
-      defeatedByRt: 0xffffffff,
+      defeatedBy: graveKillerId(view.combat.enemyTypeOf(view.combat.damage.lastAttacker)),
+      message: this.lastChat,
       date: new Date(),
     });
     this.persist();
@@ -526,10 +532,12 @@ export class ChallengeRuntime {
       if (!drop) return;
       const room = view.roomAt({ x: g.x, y: g.y, z: g.z });
       const floor = view.current?.floor ?? 0;
-      for (const pt of graveDropPoints(g.x, g.z, graveHeading(this.graves[i]!.owner), drop.count)) {
+      // Only the fan points that stand on the ground get an item (the exe's ground test).
+      const spots = graveDropPoints(g, graveHeading(this.graves[i]!.owner), drop.count, (x, z, fromY) => view.groundProbe(x, z, fromY));
+      for (const pt of spots) {
         game.sendServerSubcommand(buildGraveRecoveryRequest(game.selfId, floor, room, pt.x, pt.z, drop.type));
       }
-      this.o.log(`Challenge Mode: grave drop, ${drop.count} x item type ${drop.type}`);
+      this.o.log(`Challenge Mode: grave drop, ${spots.length} of ${drop.count} x item type ${drop.type}`);
     });
   }
 

@@ -305,6 +305,11 @@ export class PlayerDamage {
   private landed = false; // SE 0x15 of the heavy fall played
   private lethal = false; // the hit in progress takes the player to the dead state
   private killer = 0xffff;
+  // The entity id of the last attacker that hit this player (the exe's
+  // last_attacker_entity_idx; an enemy is 0x1000 | its index, 0xffff none).
+  get lastAttacker(): number {
+    return this.killer;
+  }
 
   constructor(events: PlayerDamageEvents) {
     this.events = events;

@@ -13322,3 +13322,33 @@ So the sampling change is exe-faithful but does not change any measured number i
 **ASSUMED:** the move loop reads the camera yaw left by the previous tick (the exe's order between the input and the camera update is not traced; the port keeps the previous tick's yaw).
 
 **Left:** the drift in the recording (turn-and-run sequences, the near-wall snap, a recording with the keys tapped); the exe's ProcessCameraChaseState state 2 (not reached, per playercamera.ts).
+
+## 2026-10-23: Challenge mode: the grave's killer line, its last chat line and the drop ground test
+
+**Report:** the grave text had no "Defeated by" and no message line, and the drops landed without a ground test (the entry above left all three open).
+
+**Exe (PsoBB.exe; dump `refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; asm via `objdump -d -M intel`, data via `tools/exedata.py`):**
+- Killer, in `SaveChallengeEntityProgressOnDeath_004d9a60` (.c:257354, at the death): `get_enemy_last_attacker_idx(player)` (.c:749997, the player's `last_attacker_entity_idx`). If `(id & 0xf000) == 0x1000` and `FindEntityById_007b4d18` finds it, the record's killer (+0x34 of the object, record 0x6c) is that enemy's `enemy_name_unitxt_index` (enemy +0x378; `get_enemy_name_unitxt_index`, .c:762786); otherwise 0xffffffff. The line is `SetChallengeTargetDisplayName_004df194` (.c:262007): `unitxt_get_monster_name(id)` when id > 0, unitxt group 12 0x4e "Defeated by %s.".
+- Last chat line, same function (.c:257414): `_wcsncpy(local_110, g_LastChatMessage_009b1048, 0x5f)`. Empty: nothing. Under 0x20 units: the first 0x1f. From 0x20 on: `"... "` (0x00909850 holds `...` and a space, 4 units) followed by `NormalizeTextForUI_0073c270(.., 0x1b)` in the next stack buffer, so 31 units in all. The text goes to grave +0x44 (record 0xa4). `g_LastChatMessage_009b1048` is set by `append_to_chat_log` (.c:707363) only for the local slot, which is the server's echo of our own line.
+- Drop ground test, `ProcessGraveChallengePlayerLogic_004ddcbc` (.c:261085; asm 0x004ddfd8..0x004de060): for the angles `heading - (count - 1) * 0x1000` in steps of 0x2000, 8 at most: point = grave xz + 7.5 (0x00909c84) * (cos, sin), y = grave y + 10 (0x00909c80). `Enemygetgroundinfo007b4c58(player, &pt, 0)` probes from `pt.y + g_GroundCheckHeightOffset` (0x0097e3e4 = 10.0) with mask 0x55 (`unknown_identify_entity` = `entity_index & 0x5000`, 0 for a player) and on a hit overwrites pt with the hit object's x / y / z. On a hit: `pt.y += 10`, then `request_grave_drop` (.c:413882), which sends only x and z (0x62 subcommand 0xd1 with floor and room). The first `count` points that pass are the drops. The trigger distance 10 (0x00909c88) is unchanged.
+
+**Port:**
+- `quest/cmode.ts`: `graveDropPoints(grave, heading, count, ground)` does the 8-angle ground test and keeps the first `count` that pass (`GRAVE_DROP_LIFT`, `GRAVE_GROUND_CHECK_HEIGHT`). `graveMessage(sent)` is the copy rule. `recordGrave` returns `message`. `saveGrave` takes `defeatedBy` (was `defeatedByRt`) and `message` and writes 0xa4.
+- `quest/cmodegrave.ts`: `graveKillerId(type)` / `graveKillerName(id)`.
+- `combat/playerdamage.ts`: `lastAttacker` (the port's `killer`, the 0x1000 | index id of the last enemy hit). `render/combat.ts`: `enemyTypeOf(entityId)`. `render/gameview.ts`: `groundProbe(x, z, fromY, mask = 0x55)`.
+- `quest/cmoderun.ts`: the local player's last chat line from the `chat` event (`from.clientId === selfId`); the death stores the killer and the message; every grave's label shows its message and killer; the drops use the ground probe and log the count that landed.
+
+**ASSUMED:**
+- The killer id. The exe's `enemy_name_unitxt_index` is set per spawn in many functions and was not decoded for each type, so the port uses the enemy type's position in `ENEMY_TYPE_NAMES` plus one. The name is the port's English one. A grave from an exe client shows the wrong name, and the port's graves show the port's names only.
+- The player's last attacker is the port's `killer` (set on each hit with an entity id; the hits without one set 0). The exe's setter callers were not all traced.
+- The ground hit's x and z equal the probe's (the exe copies the hit object's x / z).
+- The echo of our chat line has the same body, and the lobby's player list has the local player (`from.clientId === selfId`). The exe's `\tJ` / `\tE` tag (added when the line is not sent with Enter) and `NormalizeTextForUI_0073c270` are not modelled (identity).
+- Mask 0x55 has the same meaning as in `render/npcwander.ts` (NPC_GROUND_MASK).
+
+**Checks:** `node tests/cmode.test.ts` (new cases: the ground test's order and probe height, the points that fail the ground are skipped, the message rule, the 0xa4 round trip, the killer id and name, the killer line), `node tests/quests.test.ts`, `node tests/questflow.test.ts` pass. Client `tsc --noEmit`: no new errors in the touched files (this worktree has no `client/node_modules`, so the check ran with the main checkout's typescript; the missing `three` / `@capacitor` modules are reported as before). Not run in Chrome.
+
+**Left:**
+- The grave's model (`re_b_mark_base.bml`, not in the local data).
+- The exe's per-type `enemy_name_unitxt_index` table, for exe-compatible killer ids and the unitxt monster names.
+- The `\tJ` / `\tE` tag and `NormalizeTextForUI_0073c270` (decode and port).
+- A Chrome check of the grave text and the drops.

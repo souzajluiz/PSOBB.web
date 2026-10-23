@@ -1430,6 +1430,13 @@ export class CombatView {
     this.hud?.frame(dt, this.hudValues(), this.game.selfId, (slot) => this.partyValues(slot));
   }
 
+  // The enemy type (newserv name) of an enemy entity id (0x1000 | index), null for
+  // anything else or an enemy that is gone (FindEntityById_007b4d18 in the exe).
+  enemyTypeOf(entityId: number): string | null {
+    if ((entityId & 0xf000) !== 0x1000) return null;
+    return this.enemies.get(entityId & 0x0fff)?.slot.type ?? null;
+  }
+
   // Whether a player of this game is dead (Challenge Mode's
   // cmode_check_*_player_dead read is_player_dead for every slot).
   isPlayerDead(clientId: number): boolean {
