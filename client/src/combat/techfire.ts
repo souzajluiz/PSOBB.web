@@ -42,7 +42,10 @@ const bamsRad = (b: number): number => ((b & 0xffff) * TAU) / 0x10000;
 const f32 = Math.fround;
 
 // ASSUMED: the weapon node's height above the feet (the same value
-// render/combat.ts takes for the weapon position +0x300).
+// render/combat.ts takes for the weapon position +0x300). The exe's
+// weapon_position is player+0x300 (x, y, z); its writer is not located yet.
+// begin_gun_bullet_attack (FUN_005e6578) tests the line from (weapon.x, origin.y,
+// weapon.z) to the target, so the y of the start is the caller's origin.
 export const WEAPON_HEIGHT = 20;
 // ASSUMED: the height of the point a technique aims at on an enemy (the
 // lock-on cursor's height, render/combat.ts).
