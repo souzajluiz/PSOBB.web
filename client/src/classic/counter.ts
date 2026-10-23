@@ -43,6 +43,7 @@
 // (ShowTeamMainMenu); greyed rows (SetItemHighlight_0073662c, 0xff909090) keep
 // the cursor and refuse Decide (ASSUMED: the buzzer).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import { DISABLED } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
@@ -156,11 +157,11 @@ export class InfoCounter {
     if (!this.open || this.held) return;
     const top = this.stack[this.stack.length - 1];
     const n = top.menu.items.length;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      top.cursor = (top.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
+      top.cursor = (top.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       se(SE.cursor);
       this.showInfo(top);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       if (top.menu.disabled?.()[top.cursor]) {
         se(SE.buzzer);
         return;
@@ -179,7 +180,7 @@ export class InfoCounter {
           top.collapse = 0;
         } else this.close();
       }
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    } else if (menuKeyOf(e) === 'cancel') {
       // close_lobby_menus: every counter menu goes at once.
       se(SE.cancel);
       this.close();

@@ -34,6 +34,7 @@
 // (state 0xE, ListWindowObject_Initialize_0075330c at entry 0xA) is left
 // out: it does nothing here.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { isMagFood, photonBlasts, SE_MAG_LEVEL, type FeedTimer } from '../net/magfeed.ts';
@@ -203,14 +204,14 @@ export class MagMenu {
   // Returns false when the window closes (Backspace on the MAG list).
   key(e: KeyboardEvent): boolean {
     if (this.busy) return true;
-    const back = e.key === 'Backspace' || e.key === 'Escape';
+    const back = menuKeyOf(e) === 'cancel';
     if (this.state === 'mags') {
       const n = this.mags.length;
-      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
-        this.cursor = (this.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+      if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
+        this.cursor = (this.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
         this.clampTop();
         se(SE.cursor);
-      } else if (e.key === 'Enter') {
+      } else if (menuKeyOf(e) === 'decide') {
         if (!n) {
           se(SE.buzzer);
           return true;
@@ -238,11 +239,11 @@ export class MagMenu {
     }
     // state 'items'
     const n = this.foods.length;
-    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && n) {
-      this.item.cursor = (this.item.cursor + (e.key === 'ArrowUp' ? n - 1 : 1)) % n;
+    if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
+      this.item.cursor = (this.item.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
       this.clampTop();
       se(SE.cursor);
-    } else if (e.key === 'Enter') {
+    } else if (menuKeyOf(e) === 'decide') {
       const mag = this.mags[this.cursor];
       const food = this.foods[this.item.cursor];
       if (!mag || !food) {

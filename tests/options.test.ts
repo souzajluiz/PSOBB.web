@@ -43,8 +43,11 @@ import {
   KEYS,
   keyCaption,
   keyConfigFromCharacter,
+  menuKeyOf,
   normalizeKeyConfig,
   PALETTE_KEYS,
+  presetKeyConfig,
+  PRESET_COUNT,
   readBinding,
   writeBinding,
   writeKeyConfigToCharacter,
@@ -338,6 +341,59 @@ function keyWindowEnv(start: Uint8Array | null) {
   w.key(dkey('Backspace'));
   eq(w.key(dkey('Backspace')), false, 'closed');
   eq(commits.length, 1, 'one commit');
+}
+{
+  // The four Default presets (exe 0x0097aca0): Default 1 is the default config; Default 4 is numpad moves.
+  eq(PRESET_COUNT, 4, 'four presets');
+  eq(presetKeyConfig(0), defaultKeyConfig(), 'Default 1 is the default config');
+  const p = [0, 1, 2, 3].map((n) => presetKeyConfig(n));
+  eq(p.map((c) => new DataView(c.buffer).getUint32(360, true)), [1, 1, 1, 1], 'each preset has the marker');
+  eq(p.map((c) => readBinding(c, 0).code), [0x26, 0x26, 0x5e, 0x75], 'move forward: W, W, Up, numpad 8');
+  eq(p.map((c) => readBinding(c, 16).code), [0x5c, 0x19, 0x10, 0x5c], 'action palette left: Left, J, A, Left');
+  eq(
+    p.map((c) => [6, 7, 10, 11, 12, 13].map((i) => readBinding(c, i).code)),
+    [[0x61, 0x50, 0x5e, 0x5d, 0x5c, 0x5f], [0x61, 0x50, 0x5e, 0x5d, 0x5c, 0x5f], [0x61, 0x50, 0x5e, 0x5d, 0x5c, 0x5f], [0x61, 0x50, 0x5e, 0x5d, 0x5c, 0x5f]],
+    'the menu keys are the same in all four',
+  );
+}
+{
+  // Default 4 (index 3) copied on Decide from the top list: Custom (4) is one Up away.
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  w.key(dkey('ArrowUp'));
+  eq(w.key(dkey('Enter')), true, 'Default 4 is decided (copies its preset, stays on the top list)');
+  eq(w.key(dkey('Backspace')), false, 'Cancel on the top list closes the window');
+  eq(readBinding(commits[0], 0), { type: 0, code: 0x75 }, 'the working config is preset 4 (numpad 8)');
+  eq(readBinding(commits[0], 20), { type: 0, code: 0x40 }, 'the copy keeps the function keys');
+}
+{
+  // Default 2 (index 1): Up three times from Custom.
+  const { env, commits } = keyWindowEnv(null);
+  const w = new KeyConfigMenu(env);
+  w.key(dkey('ArrowUp'));
+  w.key(dkey('ArrowUp'));
+  w.key(dkey('ArrowUp'));
+  w.key(dkey('Enter'));
+  w.key(dkey('Backspace'));
+  w.key(dkey('Backspace'));
+  eq(readBinding(commits[0], 16).code, 0x19, 'Default 2 is preset 2 (action palette left = J)');
+}
+{
+  // The menu keys follow the bindings (menuKeyOf): Decide is Z once rebound, Enter no longer decides.
+  eq(menuKeyOf({ key: 'Enter' }), 'decide', 'default: Enter decides');
+  eq(menuKeyOf({ key: 'Backspace' }), 'cancel', 'default: Backspace cancels');
+  eq(menuKeyOf({ key: 'Escape' }), 'cancel', 'Escape always cancels');
+  eq(menuKeyOf({ key: 'ArrowUp' }), 'up', 'Up arrow is Select Up');
+  eq(menuKeyOf({ key: 'ArrowRight' }), 'right', 'Right arrow is Select Right');
+  eq(menuKeyOf({ key: 'a' }), null, 'a letter is not a menu key');
+  const rebound = defaultKeyConfig();
+  writeBinding(rebound, BINDING.decide, { type: 0, code: 0x29 });
+  applyKeyConfig(rebound);
+  eq(menuKeyOf({ key: 'z' }), 'decide', 'rebound Decide (Z) decides');
+  eq(menuKeyOf({ key: 'Enter' }), null, 'Enter no longer decides after the rebind');
+  eq(menuKeyOf({ key: 'Escape' }), 'cancel', 'Escape still cancels');
+  applyKeyConfig(null);
+  eq(menuKeyOf({ key: 'Enter' }), 'decide', 'the default config restores Enter');
 }
 // Options > Keyboard Config (row 5) opens the window; its Cancel returns to the option list.
 {

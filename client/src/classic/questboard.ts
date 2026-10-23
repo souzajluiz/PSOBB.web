@@ -60,6 +60,7 @@
 // frames (alpha = c * 255 / 6, truncated: 0x00973f6c / 0x00974354); then the
 // elements.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { se as playSe, SE } from '../audio/se.ts';
 import { plainText } from '../quest/questui.ts';
 import type { QuestBoardItem } from '../quest/vm.ts';
@@ -221,8 +222,8 @@ export class QuestBoardWindow {
       if (this.state === 4) this.env.questKey(e);
       return true;
     }
-    const left = e.key === 'ArrowLeft';
-    const right = e.key === 'ArrowRight';
+    const left = menuKeyOf(e) === 'left';
+    const right = menuKeyOf(e) === 'right';
     if (left || right) {
       if (!(this.flags & 4)) {
         this.sound(SE.cursor);
@@ -230,7 +231,7 @@ export class QuestBoardWindow {
       }
       return true;
     }
-    if (e.key === 'Enter') {
+    if (menuKeyOf(e) === 'decide') {
       // QuestListWindow_ConfirmSelection_00754998.
       if (!(this.flags & 4)) {
         this.sound(SE.ok);
@@ -238,7 +239,7 @@ export class QuestBoardWindow {
       }
       return true;
     }
-    if (e.key === 'Backspace' || e.key === 'Escape') {
+    if (menuKeyOf(e) === 'cancel') {
       // GuildCardListWindow_Cancel_0074943c.
       this.sound(SE.cancel);
       this.flags |= 2;

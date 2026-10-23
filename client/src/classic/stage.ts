@@ -8,6 +8,7 @@
 // drawRound*, which compensates for the stretch.
 
 import type { XvrTexture } from '../formats/xvm.ts';
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { clipReveal, drawWindowShine, type WindowAnim } from './windowanim.ts';
 
 export const VW = 640;
@@ -139,7 +140,9 @@ export class Stage {
     this.resize();
     canvas.tabIndex = 0;
     canvas.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(e.key)) e.preventDefault();
+      // The menu keys are the live bindings (a rebound key is held back too).
+      const menuKey = e.key !== 'Backspace' && menuKeyOf(e) !== null;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Escape', ' ', 'Tab'].includes(e.key) || menuKey) e.preventDefault();
       this.screen?.key?.(e, this);
     });
     canvas.addEventListener('keyup', (e) => this.screen?.keyUp?.(e, this));

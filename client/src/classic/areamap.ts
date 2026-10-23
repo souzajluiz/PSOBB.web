@@ -41,6 +41,7 @@
 // _RenderPhaseText_007444f0) at (487, 41) and (487, 97) from the window;
 // both fade in over 6 frames (alpha = n * 255 / 6, 0x00973264).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import type { MinimapState } from './minimap.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
 import { drawWindowTitle } from './fieldwindows.ts';
@@ -188,7 +189,7 @@ export class AreaMapWindow {
 
   // Backspace (or Escape) closes the window; every other key is the map's.
   key(e: KeyboardEvent): boolean {
-    return !(e.key === 'Backspace' || e.key === 'Escape');
+    return !(menuKeyOf(e) === 'cancel');
   }
 
   // The window is destroyed (ChallengeMenuListWindow_Destructor_00743f60:

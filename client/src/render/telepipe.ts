@@ -56,6 +56,7 @@
 import * as THREE from 'three';
 import { se, sePlaying, seStop } from '../audio/se.ts';
 import { isSafeMap } from '../classic/fieldmenu.ts';
+import { KEYS } from '../input/keyconfig.ts';
 import { parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -85,7 +86,6 @@ import type { MapViewer } from './mapviewer.ts';
 
 const FRAME = 1 / 30;
 const LUKER_TYPE = 0x41;
-const USE_KEY = 'ArrowLeft'; // binding 0xC (input/keyconfig.ts KEYS.selectLeft)
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
 export interface Arrival {
@@ -320,7 +320,8 @@ export class TelepipeLayer {
   }
 
   private key(e: KeyboardEvent): void {
-    if (this.disposed || e.key !== USE_KEY || e.repeat || this.use || this.host.blocked()) return;
+    // The use key is binding 0xC (Select Left), read live (input/keyconfig.ts).
+    if (this.disposed || e.key.toLowerCase() !== KEYS.selectLeft || e.repeat || this.use || this.host.blocked()) return;
     const n = this.nearest();
     if (!n) return;
     e.preventDefault();

@@ -19,6 +19,7 @@
 // (measured on the reference capture: "Go to lobby" at x 23, centre y 73.5),
 // with the orange selection bar (drawSelectBar) across the content width.
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { anchorX, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { drawSelectBar, drawTitlePill, drawWindowFrame, pillWidth, type Screen, type Stage, type WindowSkin } from './stage.ts';
@@ -74,10 +75,10 @@ export class ShipSelectScreen implements Screen {
     if (this.busy) return;
     // Default keyboard config: Select Up/Down = arrows, Decide = Enter,
     // Cancel = Backspace (see lobby.ts in classic/).
-    if (e.key === 'ArrowUp') this.cursor = (this.cursor + this.items.length - 1) % this.items.length;
-    else if (e.key === 'ArrowDown') this.cursor = (this.cursor + 1) % this.items.length;
-    else if (e.key === 'Enter') this.choose(this.cursor);
-    else if (e.key === 'Backspace' || e.key === 'Escape') this.cancel();
+    if (menuKeyOf(e) === 'up') this.cursor = (this.cursor + this.items.length - 1) % this.items.length;
+    else if (menuKeyOf(e) === 'down') this.cursor = (this.cursor + 1) % this.items.length;
+    else if (menuKeyOf(e) === 'decide') this.choose(this.cursor);
+    else if (menuKeyOf(e) === 'cancel') this.cancel();
   }
 
   // A tap on a row moves the cursor there; a click on it chooses it.

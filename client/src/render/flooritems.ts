@@ -43,6 +43,7 @@
 // pickup (PICKUP_RADIUS; newserv accepts up to 30) and for boxes
 // (BOX_RADIUS).
 
+import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
 import { se, setSeListener } from '../audio/se.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -122,7 +123,7 @@ export class FloorItemLayer {
   private disposed = false;
   private fx: FieldParticles;
   private onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.repeat && !this.opts.blocked()) this.interact();
+    if (menuKeyOf(e) === 'decide' && !e.repeat && !this.opts.blocked()) this.interact();
   };
 
   constructor(viewer: MapViewer, files: ClientFiles, items: GameItems, opts: FloorItemLayerOptions) {

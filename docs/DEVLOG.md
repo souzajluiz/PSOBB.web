@@ -12870,3 +12870,40 @@ So 0x33, 0x45, 0x46, 0xa9 and 0x118 are the same NPC objects as the humanoid NPC
 - The `0x200` send on a landed roll that does 0 damage (the gap above).
 
 **Tests:** `node tests/enemyfsm.test.ts` (all checks pass, the new Mothmant death block included), `node tests/deathfx.test.ts` (all checks pass), `node tests/combatdepth.test.ts` (842 checks, 0 failures), `node tests/enemystatus.test.ts` and `node tests/hitfx.test.ts` (pass). `client`: `tsc --noEmit -p .` clean (Node 24; the worktree has no `node_modules`, so the check linked the main checkout's for the run and removed the link). Not run in Chrome or Playwright (per the brief).
+## 2026-10-23: Keyboard Config follow-up: menus read the live keys, Default 1..4 presets (exe data)
+
+**Premise, checked against the exe.** The old entry said the menus read Enter / Backspace / the arrows "literally" and that the Default presets' contents are "not in the data". Both are only half right:
+- The menus do follow the key config, through six menu keys. `unknown_handle_keyboard_menu_inputs` (dump line 807334) reads the masks `g_KeyboardSharedState[8, 9, 10, 0xB, 0xC, 0xD]` (`set_menu_input_keycode_masks`; `FUN_007C1294` copies them from 0x00A0F664, which is `g_KeyboardSharedState`). Those slots are loaded from the active config by `ApplyKeyboardConfiguration_00792818` (0x00792818: a loop over the 16 slots that reads the 12 u32 entries of `g_pKeyboardControlConfig`). The order of the six, Up / Down / Left / Right / Decide / Cancel, is ASSUMED from the window's rows (selects 10..13, Decide 6, Cancel 7). The list menu handler (`unknown_list_menu_key_handling2_`, dump line 807929) reads the same kind of per-button masks, `g_KeyboardKeyBitmaskPointers[0..13]`.
+- The presets are in the exe's data, not in the 0x009FF3C0 slots. 0x009FF3C0 is a table of four **pointers to runtime slots** (0x00A9CCDC, 0x00A9CCE0, 0x00A9CCE4, 0x00A9CCE8). `InitializeKeyboardConfigSubsystem_0079277c` (0x0079277C) fills the slots with 0x0097ACA0 + n * 0x16C, so the four presets are static data at **0x0097ACA0**, 0x16C bytes each (45 bindings of type 0, marker 1 at +0x168).
+- The loader is `FUN_00792f98` (0x00792F98; Ghidra name, unnamed in the dump): `FUN_0086b6b8(cfg, DAT_0097aca0 + n*0x16C, 0x168)`, then the marker is set. Ten call sites (E8 scan of .text): 0x0078FC3A, 0x007901DF, 0x00790967 (the list decide `FUN_00790924`, which loads the list cursor when it is below 4), 0x00791800 / 0x0079180E / 0x00791B00 (the validator `FUN_007917C0`: an invalid config loads preset 0), 0x0079284D, 0x00792ABA, 0x00792B2E, 0x00792F6C.
+
+**Exe evidence: the presets** (read from the exe's .data: 45 u32 pairs per preset, all type 0, marker 1):
+- Default 1 (the default, = newserv DEFAULT_KEY_CONFIG): moves W / A / S / D; Action Palette Middle Down, Left Left, Right Right; Camera Up; Symbol Chat End.
+- Default 2: moves W / A / S / D; Action Palette Middle K, Left J, Right L; Camera I.
+- Default 3: moves with the arrows (Up 0x5E, Down 0x5D, Left 0x5C, Right 0x5F); Action Palette Middle S, Left A, Right D; Camera W.
+- Default 4: moves numpad 8 / 2 / 4 / 6 (0x75, 0x69, 0x71, 0x73); Action Palette arrows; Camera Up.
+- In all four: Decide Enter (0x61), Cancel Backspace (0x50), Select arrows (0x5E / 0x5D / 0x5C / 0x5F), Menu Home (0x06), Input Start Space (0x59), Ctrl for Action Palette Change, F1..F12 (0x40..0x4B), hotbar 1..0 (0x2A..0x33).
+- The `PRESET_CODES` table in `input/keyconfig.ts` is generated from these bytes by a script, not typed by hand.
+
+**Exe evidence: the window.** The list decide (`FUN_00790924`) calls the loader with the cursor index, so Default n is preset n-1; Custom (index 4) keeps the working config (ASSUMED that the test `FUN_0073d134` is the "custom" check; not decoded). The exe then calls `FUN_00790970` (0x00790970), which opens a message box with unitxt group 0 0x4A (the "overwrite" prompt named in the old note). Its answer flow is not decoded.
+
+**Exe evidence: Pad Button Config (not ported).** The window constructor is `pad_button_config_related` (dump line 772001; `AllocatePadConfigObject_00792280`, `create_pad_config_singleton`, `DestroyPadConfigSingleton_00792734`). It builds its rows from `g_PadButtonMenuConfigs` (float[7] rows, dump line 564253) and uses `g_pKeyboardControlConfig` (the 4 + 12 u32 keyboard control block, filled from the active config). The joystick config is 0x38 bytes (14 u32) and is sent by `send_packet0xed_subcommand5` (dump line 813845; 0xED subcommand 5, size 0x40 with the 8-byte header). newserv's handling of 0x05ED was not checked (no newserv source in this checkout).
+
+**Ported.**
+- `input/keyconfig.ts`: `PRESET_CODES` (the four presets), `PRESET_COUNT`, `presetKeyConfig(n)`. `defaultKeyConfig()` is preset 0; the old `DEFAULT_CODES` is gone (its values are the same as preset 0). `menuKeyOf(e)`: the menu key of a KeyboardEvent by the live bindings (Up / Down / Left / Right / Decide / Cancel; Escape is always Cancel, ASSUMED).
+- `classic/keyconfig.ts`: the Default 1..4 entries are enabled; Decide on one copies its preset into the working config (committed on close, as before); Left / Right / Cancel use `menuKeyOf`. Starts on Custom (ASSUMED, as before).
+- Menus read `menuKeyOf` instead of the literal keys: `classic/fieldwindows.ts` `listKey` (the shared list cursor, used by the Key Config top list and the list windows), `classic/counter.ts`, `shop.ts`, `gamelist.ts` (its `key()` switch becomes if-chains), `lobby.ts`, `mainmenu.ts`, `shipselect.ts`, `itempack.ts`, `equipmenu.ts`, `magmenu.ts`, `teammenu.ts`, `charselect.ts` (Escape -> cancel), `questboard.ts`, `options.ts`, `techmenu.ts`, `connecting.ts` (the error dismiss), `areamap.ts`, `render/warpmenu.ts`, `render/flooritems.ts` (Enter interacts), `quest/questui.ts`, `title.ts` (`toKey`), `classic/stage.ts` (the preventDefault list keeps the literal keys and adds the bound menu keys), `render/telepipe.ts` (the use key is Select Left, read live; was a literal 'ArrowLeft'), `render/fieldhud.ts` (the menu toggle is Menu (Home) live, F12 kept; the Area Map's Up / Down / Left / Right read the Select bindings), `classic/lobby.ts` (the menu toggle, as in fieldhud).
+- Left literal on purpose (ASSUMED: text editing, not a menu key): Backspace as the character delete in the name / password / chat / editor fields (`ed.backspace()`), Enter in `chat.ts`, `loginform.ts`, `softkeyboard.ts`, `charcreate.ts`; the Shift / Ctrl zoom keys of the Area Map (exe 0x10 / 0x11); `virtualpad.ts` (fullscreen).
+
+**ASSUMED / not decoded.**
+- The six menu keys' order for `g_KeyboardSharedState[8..0xD]`, and which config entry feeds which slot: the copy in `ApplyKeyboardConfiguration_00792818` is an unnamed function (its call sites are in that function), not decoded. The port's mapping is the binding table, not a traced one. Next step: decompile that copy with `tools/ghidra/decomp.sh`.
+- Escape as a second Cancel in every menu.
+- The preset copy has no overwrite prompt, and the top list stays open after a copy.
+- `FUN_00790924` / `FUN_0073d134` / `FUN_00790970` answer flow (the "custom" test and the prompt) not decoded.
+- Backspace is still not held back by the stage's preventDefault (behaviour kept).
+
+**Left.**
+- Pad Button Config (Options row 4): not ported. Only the window's constructor and the joystick config's size and command are traced (above). What each row edits, the button names and the save path are not decoded.
+- Not run in Chrome; no Playwright.
+
+**Checks.** `node tests/options.test.ts`: 115 checks (was 94; +21: the four presets and their marker, Default 2 and Default 4 copied on Decide, the menu keys before and after a rebind, Escape). Pass: `controls`, `telepipe`, `mobileinput`, `mobilecontrols`, `fieldhud`. All `tests/*.test.ts`: 108 pass; 8 fail on the missing `vendor/newserv/build/newserv` binary (`combat`, `itemmodels`, `items`, `magfeed`, `oracle`, `rangedaim`, `specials`, `weaponorigin`; unrelated to keys, the binary is not in this checkout). `cd client && tsc --noEmit -p .` is clean (the worktree's `client/node_modules` was linked to the main checkout's for the run and unlinked after).
