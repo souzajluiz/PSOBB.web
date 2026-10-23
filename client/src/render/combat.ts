@@ -6685,6 +6685,49 @@ export class CombatView {
     return true;
   }
 
+  // The live enemies as the NPC attack AI reads them (quest/npcai.ts pickAttackTarget):
+  // entity id (0x1000 | index) and the xz of the hit point. ASSUMED: every live enemy
+  // counts as targetable (the exe's 0x8000 box flag of the enemy boxes is not ported).
+  npcEnemies(): Array<{ id: number; x: number; z: number }> {
+    const out: Array<{ id: number; x: number; z: number }> = [];
+    for (const e of this.enemies.values()) {
+      if (e.dead || !e.instance.root.visible || concealed(e)) continue;
+      const p = this.hitPoint(e);
+      out.push({ id: 0x1000 | e.index, x: p.x, z: p.z });
+    }
+    return out;
+  }
+
+  // An NPC player's technique (quest/npcai.ts npcAttackCast): the owner's client sends the
+  // 6x47 / 6x48 under the NPC's client id and runs the caster's release on this client.
+  // The effect is the target's own client's (combat/techniques.ts remote rules): Resta heals
+  // and Anti cures the owner here (the owner is the target of 0xf / 0x10), Reverser's effect
+  // on a non-player target is not ported. Returns the cast's ticks, or null when it did not go out.
+  // ASSUMED: the NPC's level is 0, its MST is the owner's, its eligibility and TP are not checked,
+  // and the release is at once (the exe waits for the motion's release frame).
+  npcCastTechnique(npc: { clientId: number; charClass: number }, tech: number, targetIds: readonly number[]): number | null {
+    const view = this.view;
+    const me = this.game.self;
+    if (!view || !me || tech < 0 || tech > 18 || !view.playerAnimator(npc.clientId)) return null;
+    const name = `NPC ${npc.clientId}'s ${TECH_NAMES[tech] ?? `technique ${tech}`}`;
+    const level = 0;
+    const data = techData(tech, level, npc.charClass);
+    this.game.sendNpcCastTechnique(npc.clientId, tech, level, targetIds.map((id) => ({ entityId: id })));
+    this.remoteCast(npc.clientId, tech);
+    this.game.sendNpcCastTechniqueComplete(npc.clientId, tech, level);
+    const selfTarget = targetIds.includes(me.clientId);
+    if (tech === TECH.resta && selfTarget && !this.damage.dead) {
+      const heal = restaHeal(level, this.selfStats().mst, npc.charClass);
+      this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + heal);
+      this.opts.log(`${name}: +${heal} HP to you (${this.damage.hp})`);
+    } else if (tech === TECH.anti && selfTarget) {
+      this.applyAnti(level, name);
+    } else if (tech === TECH.reverser) {
+      this.opts.log(`${name}: no effect on this client (not ported)`);
+    }
+    return data.charge + data.cast;
+  }
+
   private chargeSe: { id: number; ticks: number } | null = null;
 
   // One game tick of the local cast (ProcessHeavySpecialAttackState).

@@ -12210,3 +12210,33 @@ rotation gizmo for the locations (the rest of the editor's left-to-do list is in
 - `PLAYER_AIM_HEIGHT` 10 (`combat/enemyshots.ts`, `techlightning.ts`): the enemy shot aim point is not traced.
 
 **Tests:** `node tests/playerfx.test.ts`, `combatdepth`, `enemyfsmmines`, `enemyfsmruins`, `enemyfsmcaves`, `enemyfsmep2c`, `enemyfsmep2d`, `pvp`, `techfire` pass. `tests/weaponorigin.test.ts` cannot run in the worktree (it needs `vendor/newserv/build/newserv`, not built here). There is no `playerdamage` test file. `cd client && tsc --noEmit -p .` (Node 24) clean. Not run in Chrome.
+## 2026-10-23: NPC players' attack AI wired: the gate and target pick per tick, ExecuteAttack's cast as the NPC
+
+**Question:** the previous entry left ExecuteAttack's cast and its damage to enemies, the enemy hitbox source, and the call from the game loop open. Wire them.
+
+**Premise check (exe):** the brief said action 0 casts tech 0xf and 2 / 3 cast 0x10 / 0x11 with damage to the target enemy. The exe does cast those ids (`SinowberillHead_ExecuteAttack_007b2ae8`, `.c:797151`, into `HandlePlayerTechCastState_007b2bc0`, `.c:797207`), but in the port's TECH table they are Resta (0xf), Anti (0x10) and Reverser (0x11) (`combat/techniques.ts`). None of them hits an enemy. The target choice differs per id (`.c:797207..797232`): 0xf and 0x10 take the owner's own player (A) as the 6x47 target, and 0x11 takes B's own target (B +0x7c / +0x84). So the port casts what the exe casts: the support on the owner, and the Reverser at the locked enemy, with no damage.
+
+**Exe evidence:** `.c:797151` (ExecuteAttack: action 0 tech 0xf or item when B +0x90 flag 0x20; 2 / 3 tech 0x10 / 0x11; action 1 item only); `.c:797258..797270` (the cast header's caster id is B +0x8a, the NPC's own client id, sent through `checked_call_packet0x60_subcommand`); `.c:797207..797232` (the targets per id). The stat rows and the gate are as in the previous entry.
+
+**Ported:**
+- `quest/npcai.ts`: `npcAttackCast(action, itemFlag)` (the action to tech / item map), `NpcAttackAi` (per NPC: the gate, the locked target re-picked on the gate's retarget call or when the target is gone, and the cast's busy ticks), `NpcAttackGate.retargetDue()`.
+- `quest/town.ts` `stepNpcAttacks()` (each game tick, after the followers): only for an NPC this client owns (`owner`) that follows a leader; the far test is |self - NPC|^2 against the stat's far radius; the target list is `CombatView.npcEnemies()`; action 0 is cast (the state machine that picks the action is not traced).
+- `net/game.ts` `sendNpcCastTechnique` / `sendNpcCastTechniqueComplete`: 6x47 / 6x48 with the NPC's client id (no 6x8D).
+- `render/combat.ts` `npcCastTechnique(npc, tech, targetIds)`: sends the cast, plays the cast motion on the NPC (`remoteCast`), releases at once, and applies the effect the target's own client would: Resta heals the owner, Anti cures the owner, Reverser has no effect here (logged). Returns the cast's ticks (charge + cast) for the busy time.
+- `tests/npcai.test.ts`: the action map (0 / 2 / 3, flag 0x20, action 1, unknown), the retarget due flag, and the planner (cadence, lock, busy, near leader, target gone).
+
+**Not ported (ROADMAP line stays open):**
+- The item use (flag 0x20, `ChallengePlayer_HandleItemUsage_007b2d7c`): the action returns `item`, the town skips it.
+- The damage to enemies: no tech in this path damages one (see the premise check), so there is none to port.
+- Which action the head picks (the move / state machine, `SinowberillHead_AIUpdateState_007b267c`): the town always casts action 0.
+- Command 3's action state and the enemy 0x8000 box flag (`npcEnemies()` treats every live enemy as targetable).
+
+**ASSUMED:**
+- The vtable slot [1] is the per-frame update (from the previous entry); the AI runs once per game tick.
+- The action is always 0; the cast releases at once (the exe waits for the motion's release frame); the busy time is charge + cast ticks.
+- The NPC's technique level is 0, its MST is the owner's (the NPC's own stats not located), and its eligibility and TP are not checked.
+- The target is re-picked when the gate is due or the locked target is gone (not kept between retargets).
+- `npcEnemies()` treats every live enemy as targetable, with the hit point's xz as the box centre.
+- The server accepts a 6x47 / 6x48 whose caster id is an NPC slot the client sent (newserv not checked).
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `techfire`, `techlightning`, `questflow`, `quests`, `npcs`, `questmisc`, `questboard` pass with Node 24. `tests/combat.test.ts` needs `vendor/newserv/build/newserv`, which this worktree does not have (not run). `tsc --noEmit -p client` clean, using the main checkout's `node_modules` through a symlink. Not run in Chrome.

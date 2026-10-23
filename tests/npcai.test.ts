@@ -7,8 +7,13 @@ import {
   FOLLOW_DISTANCE,
   NO_LEADER,
   NpcAi,
+  NpcAttackAi,
   NpcAttackGate,
   NPC_FLAG_CREATED,
+  NPC_TECH_ANTI,
+  NPC_TECH_RESTA,
+  NPC_TECH_REVERSER,
+  npcAttackCast,
   NPC_FLAG_FOLLOWER,
   followPoint,
   npcAttackRow,
@@ -117,6 +122,48 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   const g4 = new NpcAttackGate();
   const seq4 = [g4.tick(row, true, null), g4.tick(row, true, null), g4.tick(row, true, 1), g4.tick(row, true, 1), g4.tick(row, true, 1)];
   check(seq4.join() === 'false,false,false,false,true', `no target: the counter does not advance (got ${seq4.join()})`);
+}
+
+// --- the attack's cast and the per-tick AI (exe: SinowberillHead_ExecuteAttack_007b2ae8 .c:797151, HandlePlayerTechCastState_007b2bc0 .c:797207)
+{
+  const a0 = npcAttackCast(0, false);
+  check(a0?.kind === 'tech' && a0.tech === 0xf && a0.target === 'owner', 'action 0 casts tech 0xf (Resta) on the owner');
+  check(NPC_TECH_RESTA === 0xf && NPC_TECH_ANTI === 0x10 && NPC_TECH_REVERSER === 0x11, 'action techs 0xf / 0x10 / 0x11');
+  const a2 = npcAttackCast(2, false);
+  const a3 = npcAttackCast(3, false);
+  check(a2?.kind === 'tech' && a2.tech === 0x10 && a2.target === 'owner', 'action 2 casts 0x10 on the owner');
+  check(a3?.kind === 'tech' && a3.tech === 0x11 && a3.target === 'target', 'action 3 casts 0x11 on the locked target');
+  check(npcAttackCast(0, true)?.kind === 'item' && npcAttackCast(2, true)?.kind === 'item', 'flag 0x20 turns the action into an item use');
+  check(npcAttackCast(1, false) === null && npcAttackCast(1, true)?.kind === 'item', 'action 1 is the item only');
+  check(npcAttackCast(4, false) === null, 'unknown action: nothing');
+
+  const row = npcAttackRow(0)!;
+  const gd = new NpcAttackGate();
+  gd.tick(row, true, 10);
+  check(!gd.retargetDue(), 'retarget is not due after one far tick');
+  gd.tick(row, true, 10);
+  check(gd.retargetDue(), 'retarget is due on the third far tick (counter 2)');
+
+  // The leader at the origin; the NPC 40 away (far for row 0: radius 30); an enemy 10 from the NPC.
+  const enemy = { slot: 0x1005, hitboxes: [{ x: 50, z: 0, targetable: true }] };
+  const posOf = (id: number) => (id === 0x1005 ? { x: 50, z: 0 } : null);
+  const ai = new NpcAttackAi();
+  const tickAt = (npcX: number) => ai.tick({ row, npc: { x: npcX, z: 0 }, leader: { x: 0, z: 0 }, enemies: [enemy], targetPos: posOf });
+  const seqA = [tickAt(40), tickAt(40), tickAt(40), tickAt(40)];
+  check(seqA.join() === 'false,false,true,false', `planner: attacks on the gate's cadence (got ${seqA.join()})`);
+  check(ai.target === 0x1005, 'planner locks the nearest enemy');
+  ai.busy(3);
+  check([tickAt(40), tickAt(40), tickAt(40)].every((x) => x === false), 'planner: no attack while the cast is busy');
+
+  const aiNear = new NpcAttackAi();
+  const nearRes = [1, 2, 3, 4].map(() => aiNear.tick({ row, npc: { x: 5, z: 0 }, leader: { x: 0, z: 0 }, enemies: [enemy], targetPos: posOf }));
+  check(nearRes.every((x) => !x) && aiNear.target === null, 'planner: an NPC near its leader does not attack or lock a target');
+
+  const aiGone = new NpcAttackAi();
+  for (let i = 0; i < 3; i++) aiGone.tick({ row, npc: { x: 40, z: 0 }, leader: { x: 0, z: 0 }, enemies: [enemy], targetPos: posOf });
+  check(aiGone.target === 0x1005, 'planner: the target is locked');
+  const gone = aiGone.tick({ row, npc: { x: 40, z: 0 }, leader: { x: 0, z: 0 }, enemies: [], targetPos: () => null });
+  check(gone === false && aiGone.target === null, 'planner: a dead or gone target is dropped (no enemies left, no target)');
 }
 
 if (failures) {

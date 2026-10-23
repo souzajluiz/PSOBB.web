@@ -27,9 +27,9 @@
 // too (their flag is 7 in the constructor; what sets flag 3 for them is in the
 // vtable init, not traced), so the quest's npc_play follows them here; the
 // follow distance; the walk path (a straight line with the render-side
-// followTick); the attack and target choice (not ported: the AI object's
-// update is not traced); who syncs the NPC's position to the other clients
-// (every client simulates the followers from the leaders' synced positions).
+// followTick); who syncs the NPC's position to the other clients (every client
+// simulates the followers from the leaders' synced positions). The attack AI
+// (below) runs on the owner's client only, as the exe's AI object does.
 
 export const NPC_FLAG_CREATED = 7; // SinowberillChallengePlayer_Constructor_00686258 (.c:552337)
 export const NPC_FLAG_FOLLOWER = 3; // 007b46f8 (.c:798808); the 6x69 command 1 / 2 gate (.c:798425, .c:798433)
@@ -161,8 +161,8 @@ export function followPoint(
 // at least that far from its leader): every 4th call (counter +0x66 0..3) it takes
 // the current target and sets 0x8080 when the target is within stat +0x48 of the NPC.
 // Attack execution is ExecuteAttack_007b2ae8 (.c:797151): action 0 casts tech 0xf
-// (or uses an item when B's flag 0x20 is set), 2 / 3 cast 0x10 / 0x11, and B's
-// stats are the stat row's.
+// (or uses an item when B's flag 0x20 is set), 2 / 3 cast 0x10 / 0x11 (see
+// npcAttackCast below: Resta, Anti, Reverser, none of them a hit on an enemy).
 //
 // Stat row 0x00a02ea0 + template * 0x28 (10 floats; exe read with tools/exedata.py,
 // rows 0..5). Float index k is at +4k: k=2 acquire range (+0x38), k=5 far radius
@@ -245,6 +245,11 @@ export const ATTACK_RETARGET_THRESHOLD = 3;
 export class NpcAttackGate {
   private counter = 0;
 
+  // True when the next far tick with a target re-picks the target (the call that finds the counter at 3).
+  retargetDue(): boolean {
+    return this.counter + 1 >= ATTACK_RETARGET_THRESHOLD;
+  }
+
   tick(row: NpcAttackRow, farFromLeader: boolean, targetDistSq: number | null): boolean {
     if (!farFromLeader) return false;
     if (targetDistSq === null) return false; // B has no targets: the counter is not advanced (.c:795737)
@@ -254,5 +259,76 @@ export class NpcAttackGate {
     }
     this.counter = 0;
     return targetDistSq < row.attackRadius * row.attackRadius;
+  }
+}
+
+// --- the attack's technique (SinowberillHead_ExecuteAttack_007b2ae8, dump .c:797151) ---
+//
+// action 0 -> HandlePlayerTechCastState_007b2bc0(this, 0xf), 2 -> 0x10, 3 -> 0x11
+// (ChallengePlayer_HandleItemUsage_007b2d7c instead when B's flag 0x20 is set, subtype =
+// the action); action 1 is the item only. The port's TECH ids (combat/techniques.ts):
+// 0xf = Resta, 0x10 = Anti, 0x11 = Reverser. None of them damages an enemy, so the
+// attack's effect is the support / revive on the owner or on the target, not a hit.
+// The target of 0xf and 0x10 is the owner's own player (.c:797207..797232: the 6x47
+// list takes A's id); 0x11 takes B's own target (B +0x7c / +0x84, not traced further).
+export const NPC_TECH_RESTA = 0xf;
+export const NPC_TECH_ANTI = 0x10;
+export const NPC_TECH_REVERSER = 0x11;
+
+export type NpcAttackCast = { kind: 'tech'; tech: number; target: 'owner' | 'target' } | { kind: 'item'; subtype: number };
+
+// What ExecuteAttack does for `action` (the state machine that picks it is not traced).
+export function npcAttackCast(action: number, itemFlag: boolean): NpcAttackCast | null {
+  if (action === 0 || action === 2 || action === 3) {
+    if (itemFlag) return { kind: 'item', subtype: action };
+    if (action === 0) return { kind: 'tech', tech: NPC_TECH_RESTA, target: 'owner' };
+    if (action === 2) return { kind: 'tech', tech: NPC_TECH_ANTI, target: 'owner' };
+    return { kind: 'tech', tech: NPC_TECH_REVERSER, target: 'target' };
+  }
+  if (action === 1 && itemFlag) return { kind: 'item', subtype: 1 };
+  return null;
+}
+
+// The NPC's attack AI for one NPC: the gate (cadence and radii) plus the locked target
+// (EnemyAI_AcquireClosestTargetInRange at the acquire range, re-picked on the retarget
+// call or when the locked target is gone). ASSUMED: the target is re-picked when the gate
+// is due, not kept between retargets; `busy` models the cast the exe's state machine waits on.
+export class NpcAttackAi {
+  private readonly gate = new NpcAttackGate();
+  // The locked enemy's entity id (0x1000 | index), or null.
+  target: number | null = null;
+  private cooldown = 0;
+
+  // The cast takes `ticks` ticks before the next attack (ASSUMED: the technique's charge + cast).
+  busy(ticks: number): void {
+    this.cooldown = Math.max(this.cooldown, ticks);
+  }
+
+  // One AI tick. Returns true when the attack flag is set this tick.
+  tick(a: {
+    row: NpcAttackRow;
+    npc: { x: number; z: number };
+    leader: { x: number; z: number };
+    enemies: readonly EnemyCandidate[];
+    targetPos: (id: number) => { x: number; z: number } | null;
+  }): boolean {
+    if (this.cooldown > 0) {
+      this.cooldown--;
+      return false;
+    }
+    const dx = a.leader.x - a.npc.x;
+    const dz = a.leader.z - a.npc.z;
+    const far = dx * dx + dz * dz >= a.row.farRadius * a.row.farRadius;
+    if (!far) {
+      this.gate.tick(a.row, false, null);
+      return false;
+    }
+    const locked = this.target === null ? null : a.targetPos(this.target);
+    if (locked === null || this.gate.retargetDue()) {
+      this.target = pickAttackTarget(a.npc, a.row.acquireRange, a.enemies);
+    }
+    const pos = this.target === null ? null : a.targetPos(this.target);
+    const distSq = pos === null ? null : (pos.x - a.npc.x) ** 2 + (pos.z - a.npc.z) ** 2;
+    return this.gate.tick(a.row, true, distSq);
   }
 }

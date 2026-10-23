@@ -49,7 +49,7 @@ import type { QuestClient, QuestMenuEntry } from '../net/quests.ts';
 import type { GameView } from '../render/gameview.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, NO_LEADER, NpcAi } from './npcai.ts';
+import { followPoint, NO_LEADER, NpcAi, NpcAttackAi, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -89,6 +89,8 @@ export class QuestTown {
   private shop: string[][] | null = null;
   private templates: NpcPlayerTemplate[] | null = null;
   private readonly npcAi = new NpcAi();
+  // The attack AI of the NPCs this client owns, by slot (quest/npcai.ts NpcAttackAi).
+  private readonly npcAttacks = new Map<number, NpcAttackAi>();
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
   private insideZones = new Set<number>();
@@ -299,6 +301,7 @@ export class QuestTown {
     this.ui.boardWait = !!(this.area?.vm.boardWaiting || this.quest?.vm.boardWaiting);
     this.view.npcs.updateVisibility();
     this.stepNpcFollowers();
+    this.stepNpcAttacks();
     // at_coords_call: the thread starts by itself when the player walks in.
     const me = this.view.selfPose();
     const vm = this.quest?.vm;
@@ -573,6 +576,7 @@ export class QuestTown {
   private npcKilled(slot: number): void {
     if (this.game.players.get(slot)?.npcTemplate === undefined) return;
     this.npcAi.remove(slot);
+    this.npcAttacks.delete(slot);
     this.game.removeLocalPlayer(slot);
   }
 
@@ -609,6 +613,46 @@ export class QuestTown {
       p.gait = 'walk';
       p.floor = leader.floor;
       this.game.notifyMoved(p);
+    }
+  }
+
+  // The attack AI of the NPCs this client owns (SinowberillChallengePlayer_Update_007aefd4,
+  // .c:794690): it runs only for an NPC that follows a leader, and its action is cast on
+  // the owner's client (quest/npcai.ts NpcAttackAi). ASSUMED: the action is always 0 (the
+  // head's state machine that picks it is not traced).
+  private stepNpcAttacks(): void {
+    const me = this.view.selfPose();
+    const combat = this.view.combat;
+    if (!me || !combat) return;
+    const enemies = combat.npcEnemies();
+    const at = new Map(enemies.map((e) => [e.id, e] as const));
+    const candidates: EnemyCandidate[] = enemies.map((e) => ({ slot: e.id, hitboxes: [{ x: e.x, z: e.z, targetable: true }] }));
+    for (const slot of this.npcAi.slots()) {
+      const st = this.npcAi.get(slot);
+      const p = this.game.players.get(slot);
+      if (!st?.owner || !p || p.npcTemplate === undefined || st.leader === NO_LEADER) continue;
+      const row = npcAttackRow(p.npcTemplate);
+      if (!row) continue;
+      let ai = this.npcAttacks.get(slot);
+      if (!ai) {
+        ai = new NpcAttackAi();
+        this.npcAttacks.set(slot, ai);
+      }
+      const attacks = ai.tick({
+        row,
+        npc: { x: p.position.x, z: p.position.z },
+        leader: { x: me.x, z: me.z },
+        enemies: candidates,
+        targetPos: (id) => at.get(id) ?? null,
+      });
+      if (!attacks) continue;
+      const cast = npcAttackCast(0, false);
+      if (!cast || cast.kind !== 'tech') continue;
+      // The owner's own player is the target of Resta / Anti; Reverser takes the locked enemy.
+      const targets = cast.target === 'owner' ? [this.game.selfId] : ai.target !== null ? [ai.target] : [];
+      if (cast.target === 'target' && !targets.length) continue;
+      const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, cast.tech, targets);
+      if (ticks !== null) ai.busy(ticks);
     }
   }
 
@@ -655,6 +699,7 @@ export class QuestTown {
     this.insideZones.clear();
     if (!session) {
       this.npcAi.clear();
+      this.npcAttacks.clear();
       for (const [id, p] of [...this.game.players]) if (p.npcTemplate !== undefined) this.game.removeLocalPlayer(id);
     }
   }
