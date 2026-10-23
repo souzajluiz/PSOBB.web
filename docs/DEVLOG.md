@@ -13652,3 +13652,32 @@ Follow-up to the 2026-10-23 "enemy box table from the enemy's own constructor" e
 **Left:**
 - The enemy and NPC `NodeAnimator` path does not apply the bit (their flags come from their own animation data, `Enemy__SetNjmFactorFlag`, and were not checked against their models).
 - `DAT_00ae6dc8` bit 0 (set around the player body draw, `FUN_0082fa9c`) swaps the rotation interpolator to `0x00842f3c` (BAMS as int); the port's short-angle path is not checked against it.
+
+## 2026-10-23: trade windows: the ask, the held cancel, the accept prompt, the abort check
+
+Follow-up to "trade follow-up" above: the traced windows are ported. Code: `client/src/classic/trade.ts`, `tests/trademenu.test.ts`, `tests/trade.test.ts`. `tsc --noEmit -p client` clean; `node tests/trademenu.test.ts` and `node tests/trade.test.ts` pass. Not run: Playwright, Chrome, the field in a real game.
+
+**Premise corrections (per the exe):**
+- The offer lists are not numeric display rows with digit sprites. `ListWindowObject_PopulateItemsFromData_0074b7ac` (dump 719699) adds item rows through `UIElement_SetItemDisplayProperties_0072c36c` (icons, name, count), and the meseta pseudo id 0xffffff01 through `ListWindowObject_AddItemValue_0073771c` -> `UIElementSetIntText_0072c61c` (dump 694971: the number, then the unitxt meseta string). The digit sprites belong to the amount spinner only (`CreateNumericDisplayListWindow_00728ac4`, dump 692115, which the port already draws with the texturejapanese digits). The port keeps its text lines for the offers (see ASSUMED).
+- The accept window is not a trade-only window: `QuickmenuobjectOpenChallengePlayerInfoWindow_00716d68` (dump 677993) runs when `g_GuildCardFlags & 8` (set by `HandleTradeGuildCardPacket_00824c80`) and builds `ChallengePlayerInfoWindow_Constructor_00761478` (dump 734712): name + unitxt(11, 0xf8), a Yes / No list (`YesNoListMenu_Construct_0073ce70`) at `get_gui_position(0xc4)` = (23, 277) (read from the exe's position table), width 260.0, no `SetSelectedIndex`, so the cursor starts on the first row.
+
+**Ported:**
+- The ask (state 4, `QuickMenuWindow_CreateTradeConfirmationWindow_0075ed34`, dump 732562): name + unitxt(11, 0xf5), Yes / No at (239, 256), width 384, the cursor on No. No returns to the partner list; Yes sends the proposal (what 0, result 0) and goes to the waiting window.
+- The waiting window (state 5, `QuickMenuWindow_CreateConfirmationWindow_0075eccc`, dump 732534): name + unitxt(11, 0xf6), one row (flag 0x82), no Yes / No. Its cancel is a HELD key: state 6 calls `SharedInputState_CheckKeyHeld_007c1168` on `g_KeyboardSharedState[0xd]` every frame and sends what 5 result 4 (`ProcessTradeState_00825b4c`), then state 1. The port sets a flag on the Cancel key down (`menuKeyOf`), clears it on the key up (`keyUp`), and cancels in `tick()` while it is set. A tap released before the frame does nothing. Index 0xd is the Cancel binding (ASSUMED from the port's `menuKeyOf` comment, which maps g_KeyboardSharedState[8..0xD] to Up, Down, Left, Right, Decide, Cancel).
+- The accept prompt (status 2): name + unitxt(11, 0xf8), Yes / No at (23, 277), width 260, cursor on Yes. Yes accepts (`QuickMenuWindow_SendTradeMesetaRequest_00826284` is what the exe's `QuickMenuWindow_SendTradeRequest_008261e4` calls at status 2 for the same partner: what 0, result 2, status 3); No rejects (what 0, result 3, `QuickMenuWindow_SendTradeReject_00826194`).
+- The abort (`CheckTradeTimeoutOrError_00827064`, dump 840342): with 0x400 (list sent) set, D4 flag 0 (`SendTradeAbortPacket_007f6984`), status 9, 0x400 cleared. `net/trade.ts` `listState()` already does this from `ProcessTradeListState_00825dfc` cases 7 / 8; `tests/trade.test.ts` now checks it.
+
+**ASSUMED:**
+- The held-key model: the exe checks the key each frame; the port's `tick()` is the frame, and a key released before the tick does not count.
+- The accept's Yes is row 0 (the YesNoListMenu order: 0x6e = Yes is value 0, 0x6f = No is value 1, from `yes_no_list_constructor`, dump 702412). The accept's end-to-end state machine (`ChallengePlayerInfoWindow_ProcessState_0074d9ac`, states 0x16..0x1a and the `SetState` helpers) is not traced, so the routing of the value to accept / reject is ASSUMED from the quick menu's trade path.
+- The waiting window's text: `CreateConfirmationWindow_0075eccc` takes the text as its 3rd argument (state 5 passes unitxt 0xf6), but the decompile appends its 4th parameter (a stack slot the decompiler could not name). ASSUMED: the text is 0xf6, as the call site shows.
+- The offers stay plain text lines (`name  xN`); the exe's item rows with icons and the meseta line (number + unitxt meseta string) are not drawn. The port's own meseta label is kept.
+- `inTradeZone` stays always true (the zone bits are not ported; see the trace entry above).
+
+**Tests:** `tests/trademenu.test.ts` sequences: the ask is Enter then ArrowUp then Enter (Yes); the accept is Enter (Yes, cursor on it) or ArrowDown then Enter (No); the cancel check is a tap (no cancel) and a hold through a tick (cancel, what 5). `tests/trade.test.ts`: the D4 abort with 0x400 set, and no abort without it. `client/node_modules` was linked into this worktree (a symlink to the main checkout's) for the menu test to import `three`; the link is not committed.
+
+**Left:**
+- the ChallengePlayerInfoWindow state machine (the Yes / No value routing and its 0x16..0x1a states), so the accept is traced end to end;
+- the offer item rows with icons and the meseta line (`UIElementSetIntText`);
+- the quick menu trade path (states 0x13..0x20) and its 900-frame countdown (needs the quick menu);
+- the zone bits (the trade collision object, initdata param 4).

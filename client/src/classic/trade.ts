@@ -13,10 +13,16 @@
 //         invincibility 6 / 3 excluded), unitxt(11, 0xf1) greyed when none (0x5d list,
 //         NOT the 0x61 list: 0x61 belongs to the quick menu's trade state 0x14 in
 //         ProcessState_0075f09c, reached from the quick menu, not from the Home menu);
-//       state 3: the chosen partner -> state 4: the confirm list at get_gui_position(0x5e)
-//         = (239, 256), its text is the partner's name + unitxt(11, 0xf6), one row;
-//       state 5: QuickMenuWindow_SendTradeRequest_008261e4 (the proposal, what 0), the
-//         same window kept, state 6: cancel (ProcessTradeState_00825b4c) -> state 1.
+//       state 3: the chosen partner -> state 4: the ask, QuickMenuWindow_CreateTradeConfirmationWindow_0075ed34
+//         (dump 732562): text = the partner's name + unitxt(11, 0xf5), a Yes / No sub-menu
+//         at get_gui_position(0x5e) = (239, 256), width 384, the cursor on No
+//         (ListWindowObject_SetSelectedIndex 1). No -> state 1; Yes -> state 5;
+//       state 5: QuickMenuWindow_CreateConfirmationWindow_0075eccc (dump 732534): the
+//         waiting window, name + unitxt(11, 0xf6), ONE row (flag 0x82, no Yes / No), at
+//         0x5e; then QuickMenuWindow_SendTradeRequest_008261e4 (the proposal, what 0);
+//       state 6: the window is cancelled only while the Cancel key is HELD
+//         (SharedInputState_CheckKeyHeld_007c1168 on g_KeyboardSharedState[0xd], the
+//         Cancel binding) -> ProcessTradeState_00825b4c (what 5, result 4) -> state 1.
 //   - QuickMenuWindow_CreateTradeWindow_00760468 (733662): the trade window at
 //     get_gui_position(0x60) = (341, 318), title unitxt(11, 0x3b), built with
 //     CreateNumericDisplayListWindow_00728ac4 (692115).
@@ -28,19 +34,31 @@
 //     (YesNoListMenu_CreateListItem_0075ef80).
 //   - unitxt(11, 0xfc) / 0xfb / 0x102 / 0xfd / 0xfe are the quick menu's player list
 //     (QuickMenuWindow_CreatePlayerList_007605dc, 0x61): not used by the Home menu leaf.
+//   - The partner's proposal (status 2, HandleTradeGuildCardPacket_00824c80 sets
+//     g_GuildCardFlags |= 8) opens QuickmenuobjectOpenChallengePlayerInfoWindow_00716d68
+//     (dump 677993), which builds ChallengePlayerInfoWindow_Constructor_00761478 (dump
+//     734712): name + unitxt(11, 0xf8), a Yes / No list (YesNoListMenu_Construct) at
+//     get_gui_position(0xc4) = (23, 277), width 260.0, no SetSelectedIndex (cursor on
+//     the first row, Yes). Yes -> accept, No -> reject. This is the accept prompt.
+//
+// The offers: the trade window's rows (ListWindowObject_PopulateItemsFromData_0074b7ac,
+// dump 719699) are item rows (UIElement_SetItemDisplayProperties: icons, name, count)
+// and, for the meseta pseudo id 0xffffff01, UIElementSetIntText (dump 694971: the number
+// then the unitxt meseta string). The digit sprites are not used for the offers; they
+// belong to the amount spinner only (CreateNumericDisplayListWindow_00728ac4, dump 692115).
 //
 // ASSUMED (see the DEVLOG entry 2026-10-23 "trade window"):
 //   - the keys: Enter opens the item list from the window (the exe's slot list), Space
 //     the confirm dialog, Backspace / Escape the cancel question (the exe's key indices
-//     are not traced here);
+//     are not traced here); the waiting window's cancel is the held Cancel key (above);
 //   - the first Yes of the confirm dialog holds the first confirm (flag 0x10) until the
 //     session has sent it (exe TransitionTradeState_00825bf0 cancels a release before
 //     30 frames; the port keeps the button down itself), the second Yes the second;
-//   - the accept prompt (a partner's proposal) is the partner's name + unitxt(11, 0xf6)
-//     with Yes / No (the exe's trade_invite_menu2/3 window is not traced);
-//   - the offer lines of the trade window are plain text lines (the exe's numeric
-//     display list rows are not traced); the amount is a spinner (AmountSpinner) in a
-//     box at (341, 256);
+//   - the accept prompt's Yes is the first row (cursor 0), its Yes / No value order is
+//     the YesNoListMenu's (ASSUMED: the window's SetState is not traced);
+//   - the offer lines of the trade window are plain text lines (ASSUMED: the item rows
+//     with icons are not drawn; the meseta line keeps the port's label);
+//   - the amount is a spinner (AmountSpinner) in a box at (341, 256);
 //   - the notice (the session's TRADE_TEXT) is drawn in that same box when no other
 //     dialog is up.
 
@@ -51,6 +69,7 @@ import { drawGameText, gameTextWidth } from './gametext.ts';
 import type { MenuKey } from './gamelist.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
 import { Question } from './teammenu.ts';
+import { menuKeyOf } from '../input/keyconfig.ts';
 import { MESETA_ITEM_ID } from '../net/items.ts';
 import { TRADE_FLAG, TRADE_MESETA_ID, TRADE_NO_PARTNER, TRADE_STATUS, type TradeSession } from '../net/trade.ts';
 
@@ -60,13 +79,16 @@ export const TRADE_POS = {
   ask: { x: 239, y: 256 }, // 0x5e
   window: { x: 341, y: 318 }, // 0x60
   dialog: { x: 341, y: 256 }, // 0x62
+  accept: { x: 23, y: 277 }, // 0xc4 (ChallengePlayerInfoWindow_Constructor_00761478)
 } as const;
 
 // unitxt group 11 indices of the Trade Window.
 export const T11_TRADE = {
   partnerTitle: 0x32,
   nobody: 0xf1,
-  propose: 0xf6,
+  ask: 0xf5, // the ask's Yes / No text (CreateTradeConfirmationWindow_0075ed34)
+  propose: 0xf6, // the waiting window (CreateConfirmationWindow_0075eccc)
+  accept: 0xf8, // the partner's proposal (ChallengePlayerInfoWindow_Constructor_00761478)
   windowTitle: 0x3b,
   dialogTitle: 0x33,
   confirm: 0x105,
@@ -75,7 +97,10 @@ export const T11_TRADE = {
   no: 0x6f,
 } as const;
 
-// The width of the confirm and amount boxes (ASSUMED: the guild card's 282 for the dialog).
+// The widths of the ask (384, 0x5e), the accept (260.0) and the confirm / amount boxes
+// (ASSUMED: the guild card's 282 for the dialog).
+const ASK_WIDTH = 384;
+const ACCEPT_WIDTH = 260;
 const DIALOG_WIDTH = 282;
 
 export type TradePhase = 'partner' | 'ask' | 'waiting' | 'accept' | 'window' | 'items' | 'amount' | 'confirm' | 'cancel' | 'closed';
@@ -116,6 +141,8 @@ export class TradeMenu {
   private question: Question | null = null;
   // The confirm is held by the window (see ASSUMED above): the flag it set.
   private holding = 0;
+  // The waiting window's cancel is a held key (exe g_KeyboardSharedState[0xd]), not a press.
+  private cancelHeld = false;
 
   constructor(env: TradeEnv) {
     this.env = env;
@@ -144,13 +171,27 @@ export class TradeMenu {
     return this.env.partners().find((p) => p.id === id)?.name ?? '';
   }
 
-  private openAccept(): void {
-    this.target = this.env.session.partner;
-    this.question = new Question(this.partnerName(this.target) + this.text(T11_TRADE.propose), {
+  // The ask (exe state 4): name + 0xf5, Yes / No, the cursor on No (Question's default).
+  private openAsk(): void {
+    this.question = new Question(this.partnerName(this.target) + this.text(T11_TRADE.ask), {
       x: TRADE_POS.ask.x,
       y: TRADE_POS.ask.y,
-      w: DIALOG_WIDTH,
+      w: ASK_WIDTH,
     });
+    this.phase = 'ask';
+  }
+
+  // The partner's proposal (ChallengePlayerInfoWindow): name + 0xf8, Yes / No at (23, 277),
+  // width 260; the Yes / No list has no SetSelectedIndex, so the cursor starts on Yes (ASSUMED
+  // from the constructor, row 0).
+  private openAccept(): void {
+    this.target = this.env.session.partner;
+    this.question = new Question(this.partnerName(this.target) + this.text(T11_TRADE.accept), {
+      x: TRADE_POS.accept.x,
+      y: TRADE_POS.accept.y,
+      w: ACCEPT_WIDTH,
+    });
+    this.question.cursor = 0;
     this.phase = 'accept';
   }
 
@@ -192,9 +233,19 @@ export class TradeMenu {
         else if (s.status === TRADE_STATUS.requested) this.openAccept();
         break;
       case 'ask':
-      case 'waiting':
         if (s.status === TRADE_STATUS.open) this.openWindow();
-        else if (this.phase === 'waiting' && s.status === TRADE_STATUS.none) this.phase = 'partner';
+        break;
+      case 'waiting':
+        // The held Cancel (state 6): one frame with the key down is enough in the exe.
+        if (this.cancelHeld) {
+          this.cancelHeld = false;
+          s.cancel();
+          this.phase = 'partner';
+          se(SE.cancel);
+          break;
+        }
+        if (s.status === TRADE_STATUS.open) this.openWindow();
+        else if (s.status === TRADE_STATUS.none) this.phase = 'partner';
         break;
       case 'accept':
         if (s.status === TRADE_STATUS.none) this.closeWith(null);
@@ -225,11 +276,8 @@ export class TradeMenu {
       case 'ask':
         return this.askKey(e);
       case 'waiting':
-        if (e.key === 'Backspace' || e.key === 'Escape') {
-          this.env.session.cancel();
-          this.phase = 'partner';
-          se(SE.cancel);
-        }
+        // Only the hold counts: tick() cancels while the Cancel key stays down.
+        if (menuKeyOf(e) === 'cancel') this.cancelHeld = true;
         return true;
       case 'accept':
         return this.acceptKey(e);
@@ -260,6 +308,7 @@ export class TradeMenu {
 
   keyUp(e: KeyboardEvent): void {
     if (this.spinner) spinnerKeyUp(this.spinner, e);
+    if (menuKeyOf(e) === 'cancel') this.cancelHeld = false;
   }
 
   private partnerKey(e: MenuKey): boolean {
@@ -271,21 +320,22 @@ export class TradeMenu {
     if (r !== 'decide') return true;
     const row = this.partnerRows[this.partnerState.cursor]!;
     this.target = row.value;
-    this.phase = 'ask';
+    this.openAsk();
     return true;
   }
 
+  // The ask (state 4): Yes proposes (state 5, the waiting window), No returns to the list.
   private askKey(e: MenuKey): boolean {
-    if (e.key === 'Enter') {
-      const s = this.env.session;
-      if (s.propose(this.target, 0)) {
-        this.phase = 'waiting';
-        se(SE.ok);
-      }
-    } else if (e.key === 'Backspace' || e.key === 'Escape') {
+    const q = this.question;
+    if (!q) {
       this.phase = 'partner';
-      se(SE.cancel);
+      return true;
     }
+    q.key(e);
+    if (!q.result) return true;
+    this.question = null;
+    if (q.result === 'yes' && this.env.session.propose(this.target, 0)) this.phase = 'waiting';
+    else this.phase = 'partner';
     return true;
   }
 
@@ -412,10 +462,14 @@ export class TradeMenu {
       const title = this.text(T11_TRADE.partnerTitle);
       drawListWindow(ctx, skin, pos.partner.x, pos.partner.y, windowWidth(this.partnerRows, title), title, this.partnerRows, this.partnerState.cursor, true);
     }
-    if (this.phase === 'ask' || this.phase === 'waiting') {
+    if (this.phase === 'ask' && this.question) {
+      this.question.draw(ctx, skin, this.text(T11_TRADE.yes), this.text(T11_TRADE.no));
+    }
+    if (this.phase === 'waiting') {
+      // The waiting window: one row, no Yes / No (flag 0x82), not highlighted.
       const label = this.partnerName(this.target) + this.text(T11_TRADE.propose);
       const items: ListItem[] = [{ label, value: 0, enabled: true }];
-      drawListWindow(ctx, skin, pos.ask.x, pos.ask.y, windowWidth(items, null), null, items, 0, this.phase === 'ask');
+      drawListWindow(ctx, skin, pos.ask.x, pos.ask.y, windowWidth(items, null), null, items, 0, false);
     }
     if (this.phase === 'accept' && this.question) {
       this.question.draw(ctx, skin, this.text(T11_TRADE.yes), this.text(T11_TRADE.no));
