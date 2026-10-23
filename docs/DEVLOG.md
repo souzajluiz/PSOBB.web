@@ -9872,3 +9872,86 @@ Checks: `tsc --noEmit -p client` clean, `node tests/goldragon.test.ts` ok, `node
 - The dead-state camera is not ported (ROADMAP keeps it open).
 
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/returnprompt.test.ts` (new: the unitxt rows and the exe position, the cursor on No, Up/Enter Yes, Backspace No, one answer per prompt, the death path to the revivable state with one 6x4E and a full-HP reset), `node tests/playerfx.test.ts`, `node tests/teammenu.test.ts`, `node tests/combatdepth.test.ts` pass. E2e `client/e2e/death-return.spec.ts` (fresh account, warp to Forest 1, lethal hit through `damage.hit`, prompt, Up + Enter held 150 ms, floor 0 alive at full HP, no page error): passed twice in a row against Vite on 5175.
+## 2026-10-23: Seabed capture trap: trigger, spring, hold and release
+
+**Report:** the capture trap (TOTrapSeabed01, 0x0228) now runs its state machine past the reveal. A player within 15 (XZ) of the trap springs it (state 1 -> 2; the trigger does not need trap vision). The spring plays the model's njm motion (drive `spring`; the frame is the exe's +0xc0). At the end of the spring the trap checks the nearest player again and, inside the reach, imposes the hold on the local player (6x2C, frames 0xffff). The state then stays at 3. The release (6x2D) is ported as an event, but its input is not wired (see UNCLEAR). The reticle is not ported.
+
+**From PsoBB.exe** (virtual addresses; the named dump `Psobb.exe-05112026.c` and Ghidra for the unnamed helpers):
+- Vtable DerolleEnemyVTable3 (0x00b2df80), read with `tools/exedata.py read`: +0x144 idle 0x0063a3d8; +0x148 state 1 0x0063a3bc (enable_reticle, then the idle); +0x14c state 2 0x0063e7a4 (SawMapObjectUpdateAnimation); +0x150 state 3 0x0063e72c (SawMapObjectHandleHit); +0x154 vision 0x0063a208; +0x158 / +0x160 / +0x168 stubs (0x0061cdb0); +0x15c 0x0063e594 (the kill callback's 6 particle effects); +0x164 0x0063da1c (damage: param x {1, 2, 3, 6} by difficulty); +0x5c on-interact 0x0063ed78 (SawMapObjectOnInteract). EnemyAIUpdateState_0063a034 runs the vision (state 0 only), then the idle (states 0 and 1) or the handler of state 2 or 3.
+- Init (ApplyDerolleTrapInitData_0063ea98; Ghidra decompile, constants read with `exedata.py`): +0x68 = 0.1 (0x00934514) below 0.1, else min(param1, 10) (0x00934508); the speed +0xc8 is the same value; +0x33c and +0x340 = 15.0 (0x41700000); +0x84 (param4) clamped 1..60, +0x350 = it x 30; +0x88 (param5) clamped 0..1 (cloak, +0x354); +0x8c (param6) clamped 0..5, +0x358 = it. The spring: +0xc0 starts at 0; the motion is njm 0 (get_njm_chunk(bml, 0) in InitializeDerolleTrapEntity).
+- Trigger (idle, 0x0063a3d8): EnemyGetNearestTargetInRange_007714cc(radius +0x33c) finds the nearest player on the floor; its XZ distance squared under 15^2 -> state 2 (0x32e = 2).
+- Spring (SawMapObjectUpdateAnimation_0063e7a4): anim (+0xc0) += speed each tick. It ends when anim > (njm frame count - 1); the float at 0x009344d0 is 0.0, and with no frame count the other constant (2^32, 0x009344d4) keeps it going. Then anim is clamped to the end, state = 3, and EnemyAcquireTargetAndAttack_0063e444 runs: the nearest player within 15 (none: return); reach = +0x340 - the player's hitbox radius (the call rewrites +0x340); XZ distance squared < reach^2 -> SawMapObjectPlaySound_0063e288 (the positional SE) and SnowBerillSendAttackPacket_006937c8 with the player as `this`: 6x2C {u8 0x2c, u8 5, client id (the player's +0x1c), u16 0xffff, u16 0 (particle), f32 x, f32 z (the trap's +0x38), f32 reach^2}.
+- Hold (SawMapObjectHandleHit_0063e72c): the counter at +0x348 (1 at construction) drops each tick; at 0 or more the SE plays. Below 0 the exe calls the enemy's try_hit_entity(target, 1.0) and unknown_melee_attack_2 each tick (not ported). Nothing sets the state back to 0 or 1.
+- Release (SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0, the on-interact at vtable 0x5c): for the captured player with the movement_disabled flag, DisablePlayerMovement_00685514 (6x2D, `checked_call_packet0x60_subcommand`). The input that calls the on-interact was not traced.
+- SE (SawMapObjectPlaySound_0063e288): cca, jungle east, jungle north, mountain, seaside -> 0x4da; seabed upper and lower -> 0x4fe; seaside night -> 0x547; tower -> 0x523.
+- newserv (`vendor/newserv/src/ReceiveSubcommands.cc`, the 6x2C / 6x2D rows of the subcommand table): both are forwarded to the other clients unchanged (on_forward_check_client).
+
+**Ported:**
+- `render/traps.ts` CaptureTrap: `frame(input)` runs one AI tick (the vision, the idle trigger, the spring with its end and attack, the hold's SE counter) and returns TrapEvents (`hold` for the local client only, `sound`). Also `captureSpeed`, `captureSound` (by area: 23..27 0x4da, 28 / 29 0x4fe), `CAPTURE_SPEED_MIN` / `_MAX`, `HOLD_UNTIL_RELEASED` (0xffff), and `release(clientId)`.
+- `formats/objectmodels.ts`: 0x0228 gets motion 0 with drive `spring`; `PartDrive` has `spring`.
+- `render/objectview.ts` / `render/fieldobjects.ts`: `setSpringFrame` / `springFrames` (the animator's frame, like the door's) and `setCaptureFrame` on the facade.
+- `render/gamefield.ts`: `captureTicks` builds the player list (the local player and the floor's others, with PLAYER_RADIUS) and the trap's `springFrames`; SE events are positional (`se(id, { at })`); hold and release go to `opts.captureTrap`. `captureDraw` sets the spring frame from state 2 on.
+- `render/gameview.ts` -> `render/combat.ts` `captureTrapEvent`: the hold is `imposeHold` (6x2C, frames 0xffff, holdTicks, and the movement lock that combat already applies); the release sends 6x2D when a hold is on.
+
+**ASSUMED / UNCLEAR:**
+- UNCLEAR, blocking: the release's input. The exe sends 6x2D from the trap's on-interact (vtable 0x5c). The web has no object interaction key (switches are stood on), so nothing sends 6x2D: a captured local player stays held until the hold counter runs out (65535 ticks, about 36 minutes). Wire the on-interact before shipping the capture trap.
+- UNCLEAR: state 3's hit path (try_hit_entity and unknown_melee_attack_2 each tick once the counter is below 0). Not ported: no damage, no status.
+- UNCLEAR: +0x350 (param4 x 30) is not read by the handlers traced here, so the hold has no timer in the port (the 6x2C carries 0xffff). +0x35c (+0x6c x the difficulty factor) is set, but its reader was not traced.
+- ASSUMED: the search and the attack use the trap's position (the exe's search reads +0x300, the packet reads +0x38; the port uses one position for both).
+- ASSUMED: the player's hitbox radius is PLAYER_RADIUS (5), the same as the pillar traps.
+- ASSUMED: the map ray test of EnemyGetNearestTargetInRange (walls between the trap and the player) is left out.
+- ASSUMED: the 6x2C goes to the local client only. The exe also sends it when this client is the authority, for other clients' targets; the port leaves those to the other clients.
+- ASSUMED: the SE groups by area (23..27 the jungle group, 28 / 29 the seabed one). The exe's map ids are not matched to area numbers beyond the DEVLOG's floor list.
+- ASSUMED: the reach is rewritten per call as the exe does (`+0x340 -= radius`); the spring ends once per trap, so it reads as 15 - radius.
+- ASSUMED: the njm frame count is the motion's frameCount. A trap whose model is not built keeps its spring at frame 0 with no end.
+- Not ported: the reticle (state 1 handler enable_reticle 0x0063a3bc: each player's lock-on targeting list, check_enemy_is_targetable); the Trap Vision tool's temporary bit (UNCLEAR, as before); the cloak is still the ASSUMED translucent shader.
+
+**Checks:** `cd client && npx tsc --noEmit -p .` (Node 24) clean. `node tests/traps.test.ts` all checks pass: sections 4 and 5 moved to the `frame(input)` API, and new section 6 (trigger edge, spring end and reach, 6x2C fields, other client, no motion, speed clamp, SE by area, hold counter, release event). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts` and `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome (per the brief).
+
+**Follow-up (same day): the release is wired.** Written after the coordinator's review; it supersedes the "UNCLEAR, blocking" release item above.
+
+- The trap's on-interact is vtable slot 0x5c. The exe calls slot 0x5c from collision loops: an entity whose collision step touches a map object (object +0x96 == 1) calls `(*obj+0x50)(entity, 1.0)` and, when that is true, `(*obj+0x5c)(entity, 1.0)` (dump line 390595 and the asm `call *0x5c(%edx)` sites). The +0x50 gate for the capture trap is 0x0063a00c: `GetTargetableNPC(trap) != entity`. So the held (target) player cannot release itself; any other entity that touches the trap does (VERIFIED from the decompiles of 0x63a00c, 0x63ed78, 0x63e3b0).
+- The on-interact (SawMapObjectOnInteract 0x63ed78) runs SawMapObjectDisablePlayerMovementOnVisibility (0x63e3b0): the trap's target gets DisablePlayerMovement (6x2D) when its movement_disabled flag is set. The sender's own client sends it for its own player (the port: the held client).
+- The box: DerolleTrapCollisionBoxData (0x009c6b04) is a sphere of radius 14 at y + 20 (+0x0c = 14.0, +0x04 = 20.0, read with exedata.py; same layout as the pillar's 0x009c684c). The touch distance is 14 + the player radius 5 = 19, XZ (ASSUMED).
+
+**Ported (follow-up):**
+- `render/traps.ts` CaptureTrap: `captured` (the spring's target client id, set on every client). In state 3, `touch()` releases when another entity is within CAPTURE_TOUCH_RADIUS (19); one release, then `captured = null`. The held client itself is excluded (the 0x63a00c gate).
+- `parseHoldPacket(sub, body)`: the 6x2C / 6x2D body (u16 client id at 2, u16 frames at 4 for 6x2C).
+- `render/combat.ts`: `captureTrapEvent` sends 6x2D only when the released client is the local one (`holdTicks` cleared). `onSubcommand` handles incoming 6x2C / 6x2D: a 6x2D for the local client clears the local hold (released by another client); a 6x2C for it sets `holdTicks` to its frames; other clients' holds go to `remoteHolds` (6x2C adds, 6x2D removes; their movement still comes from their own packets).
+- `tests/traps.test.ts` section 7: a teammate 18 away releases the held local client; the held player alone does not; 20 away does not; a second release does not fire; a touch by client 3 releases client 2 (remote); `release()`; `parseHoldPacket` for 6x2C / 6x2D and rejects.
+
+**Open (not ported, decision for the coordinator):**
+- The state-3 hit path (SawMapObjectHandleHit 0x63e72c, counter <0). The asm: `call *0x114(%eax)` (unknown_melee_attack_2) then `call *0x5c(%edx)` on the trap's own slot with the target: that is the on-interact again, so it is the release (no touch gate), and it has no damage. The counter is +0x348, initialised to 1 in InitializeBaseMapObject, and the handler runs every state-3 tick: the release would come about two ticks after the spring, if the target's movement_disabled flag is set by the 6x2C (not traced). This contradicts the intended hold, so it is not ported. Decide after checking the 6x2C receive path in the exe.
+- The try_hit's damage: none; the slot is the on-interact, not a damage routine.
+- Not traced: the 6x2C receiver that sets movement_disabled; the authority branch of 0x63e3b0 (CreateItemObject == 1) that sends 6x2D for any target (the port sends only for the held client).
+- Hit type 4 (vtable slot 0x10 = 0x0063ed14) also runs the release and then kills the trap; the attack that makes a hit of type 4 is not decoded.
+
+**Checks (follow-up):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all checks pass (sections 1-7). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.
+
+**Follow-up 2 (same day): the hold is timed; the solo player is released by the trap.** This supersedes the open question of follow-up 1 and corrects two earlier claims: the state-3 counter is at +0x350, not +0x348, and the hit path does release the target (a timed hold, not a 2-tick grab).
+
+**The 6x2C receiver (VERIFIED).** The 0x60 action table `g_Packet0x60SubcommandTable` is at 0x00a0fba0 (stride 8: u16 type, u16 permission, u32 handler; read with `exedata.py`). Entry 0x2c = 0x0068d734, entry 0x2d = 0x0068d830 (Ghidra decompiles):
+- 0x68d734 (6x2C; the payload start is param_1): frames = u16 at +4 -> the player's +0x808 (a short countdown); particle = u16 at +6 -> +0x80a; x / z / radius^2 (+8, +0xc, +0x10) -> +0x814 / +0x818 / +0x810; `+0x33c |= 1` (the flag `movement_disabled` = 1 in the `unknown_player_flags` enum, dump line 2760); then the hold effect (FUN_0077d578, FUN_00578eb0).
+- 0x68d830 (6x2D): `+0x33c &= ~1`, i.e. clears movement_disabled. Nothing else.
+- Where the countdown is read: `unknown_update_player` (dump line 554850, every player update) calls `SinowberillChallengePlayer_UpdateState_00689440`, which, while movement_disabled is set and the short countdown is >= 0, decrements it and calls DisablePlayerMovement (6x2D) when it goes below 0. The short -1 (0xffff) is skipped: **0xffff in the 6x2C means "no self timer"**. That is what the capture trap's 6x2C sends.
+- The one other writer of +0x808 is the reset to 0 (552277, 555080 region). The per-tick countdown is the only decrement.
+
+**The counter of the state-3 hold (corrected).** The state-3 handler (SawMapObjectHandleHit 0x63e72c) decrements `bitfield_palette_slots_disabled`, which is at +0x350 (the player layout: palette_buttons_enabled_bitfield +0x348, field421..424 +0x34c, then it). ApplyDerolleTrapInitData writes `param_1[0xd4] = clamp(param4, 1, 60) * 30` to +0x350 (`0x1e` = 30, decompile line 503195 region). So the counter is the hold time in ticks, and +0x348 was wrong (its init 1 belongs to InitializeBaseMapObject's other field).
+
+**The release by the counter (decided).** In state 3 each tick the counter drops by 1; while it is 0 or more the SE plays; below 0 the handler runs `unknown_melee_attack_2` and `try_hit_entity(target, 1.0)`, which the asm shows as `call *0x5c(%edx)` on the trap's own vtable: the on-interact. That runs SawMapObjectDisablePlayerMovementOnVisibility (0x63e3b0) for the target, which sends 6x2D when the target's movement_disabled is set (the sender's own client for its own player, in the port). So the hold is a timed grab of param4 (1..60) seconds, released by the trap itself, and a solo player is never stuck. The hit path does no damage (the on-interact only releases).
+
+So the solo case: spring -> captured -> hold for counter ticks -> the trap's on-interact releases it. The 0xffff frames means the player's own countdown does not end the hold; the trap's counter does.
+
+**Ported (follow-up 2):**
+- `render/traps.ts` CaptureTrap: `counter = clamp(params[3], 1, 60) * 30` at construction; `hold()` decrements; SE once at the hold's start (ASSUMED: the exe calls it every tick, its handle at +0x360 reads as looping); below 0, release for the captured client (once; `captured = null`).
+- `holdCountdown(frames)`: 0xffff -> Infinity (no self timer); other frames unchanged. `combat.ts` uses it for the 6x2C paths (imposeHold, incoming 6x2C for self), so the local hold does not count down on its own.
+- The teammate touch release (follow-up 1) stays; it is the faster release when another player is near.
+- Tests: section 8 (solo release on tick 31 for param4 1 and 0; 1801 for 60 and above 60; the held client named; no second release; SE once; a remote held client released by this run; no target -> no hold, no release; holdCountdown). Sections 1-7 still pass.
+
+**ASSUMED / UNCLEAR:**
+- The SE is started once (the exe may replay it each tick).
+- `unknown_flags_invincibility == 1` is taken to be the normal state for the countdown (the countdown's gate). Not traced further.
+- The 6x2D's sender: the port's held client sends its own. The exe's authority branch (CreateItemObject == 1) can send for any target; not traced.
+- Hit type 4 (vtable 0x10 = 0x63ed14, which releases and kills the trap) is not decoded: the attack that makes it is not traced. Not ported.
+
+**Checks (follow-up 2):** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/traps.test.ts` all pass (sections 1-8). `node tests/batching.test.ts`, `node tests/fieldhud.test.ts`, `node tests/townfield.test.ts` pass. Not run: Playwright / Chrome.

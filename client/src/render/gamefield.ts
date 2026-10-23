@@ -38,7 +38,7 @@ import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, killedSetEntry, type WaveEnemy } from './waves.ts';
 import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
-import { CaptureTrap, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type VisionPlayer } from './traps.ts';
+import { CaptureTrap, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type CapturePlayer, type VisionPlayer } from './traps.ts';
 import { isAndroid } from '../combat/progression.ts';
 import * as THREE from 'three';
 import { PLAYER_RADIUS } from '../combat/enemyfsm.ts';
@@ -64,6 +64,8 @@ export interface GameFieldOptions {
   // A pillar trap's hold or technique on a player (render/traps.ts); combat
   // applies those on the local player.
   trap?: (e: TrapEvent, trap: PillarTrap) => void;
+  // A Seabed capture trap's hold (6x2C) or release (6x2D) on the local player (render/traps.ts CaptureTrap).
+  captureTrap?: (e: TrapEvent) => void;
   log: (msg: string) => void;
 }
 
@@ -300,7 +302,7 @@ export class GameField {
     for (const p of e.placed) {
       const o = p.entity;
       if (o.kind !== 'object' || o.type !== TRAP_CAPTURE) continue;
-      this.captures.push({ index: o.index, x: p.world[0], y: p.world[1], z: p.world[2], trap: new CaptureTrap(o.params) });
+      this.captures.push({ index: o.index, x: p.world[0], y: p.world[1], z: p.world[2], trap: new CaptureTrap(o.params, area, { x: p.world[0], y: p.world[1], z: p.world[2] }) });
     }
     // after the traps: they move their model's nodes; the capture traps change their draw every frame
     this.objects.batchStatic([...this.traps.map((t) => t.index), ...this.captures.map((c) => c.index)]);
@@ -521,18 +523,39 @@ export class GameField {
     return slots;
   }
 
-  // The capture traps' AI ticks (30/s): the reveal of state 0 to 1 by trap vision in the trap's room.
+  // The capture traps' AI ticks (30/s): the reveal by trap vision, the idle's player search, the spring
+  // and the hold (render/traps.ts CaptureTrap). The hold goes to combat (6x2C / 6x2D), the SEs are positional.
   private captureTicks(ticks: number, pos: { x: number; y: number; z: number } | null): void {
     const slots = this.visionSlots(pos);
+    const players = this.capturePlayers(pos);
     for (const c of this.captures) {
       const room = this.roomAt({ x: c.x, y: c.y, z: c.z });
-      for (let i = 0; i < ticks; i++) c.trap.frame(slots, room);
+      const springFrames = this.objects?.springFrames(c.index) ?? 0;
+      for (let i = 0; i < ticks; i++) {
+        for (const ev of c.trap.frame({ slots, room, players, selfId: this.game.selfId, springFrames })) {
+          if (ev.kind === 'sound') se(ev.id, { at: [c.x, c.y, c.z] });
+          else this.opts.captureTrap?.(ev);
+        }
+      }
     }
   }
 
+  // The players the capture traps search (EnemyGetNearestTargetInRange): the local player and the
+  // others on this floor, with the player collision radius (ASSUMED the hitbox radius of PLAYER_RADIUS).
+  private capturePlayers(pos: { x: number; y: number; z: number } | null): CapturePlayer[] {
+    const out: CapturePlayer[] = [];
+    const me = this.game.self;
+    if (me && pos) out.push({ clientId: me.clientId, x: pos.x, z: pos.z, radius: PLAYER_RADIUS });
+    for (const p of this.game.players.values()) {
+      if (p.clientId === me?.clientId || p.floor !== this.floor || p.visible === false) continue;
+      out.push({ clientId: p.clientId, x: p.position.x, z: p.position.z, radius: PLAYER_RADIUS });
+    }
+    return out;
+  }
+
   // The capture traps' draw (render_capturetrap): the view test against the camera (the exe's
-  // GiGuesGetViewDistance with 400), then the cloak rule. Runs after the camera is placed.
-  // ASSUMED: the advanced-effects setting is on (the web has no such option; as in combat/enemyfsmep2c.ts).
+  // GiGuesGetViewDistance with 400), then the cloak rule; from state 2 the spring's motion frame.
+  // Runs after the camera is placed. ASSUMED: the advanced-effects setting is on (the web has no such option; as in combat/enemyfsmep2c.ts).
   // A trap the floor has not constructed yet (delayed) keeps the hidden state its ObjectLayer gave it.
   private captureDraw(): void {
     if (!this.captures.length || !this.objects) return;
@@ -543,8 +566,9 @@ export class GameField {
       if (this.objects.isDelayed(c.index)) continue;
       v.set(c.x, c.y, c.z).applyMatrix4(cam.matrixWorldInverse);
       const inView = withinViewDistance(v.z);
-      // sprung (states 2-3, the spring and hold) is not ported: always false here.
-      this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, false));
+      const sprung = c.trap.state >= 2;
+      this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, sprung));
+      if (sprung) this.objects.setCaptureFrame(c.index, c.trap.anim);
     }
   }
 

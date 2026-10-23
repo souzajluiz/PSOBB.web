@@ -38,7 +38,7 @@ export type PartShow = 'always' | 'locked' | 'unlocked' | 'on' | 'off' | 'idle' 
 // wrapping the overshoot (restart-last: once it reaches the last frame),
 // loop-last wraps at the last frame instead of the frame count, door follows
 // the door state machine, laser the fence's own one.
-export type PartDrive = 'loop' | 'loop-last' | 'restart' | 'restart-last' | 'door' | 'laser';
+export type PartDrive = 'loop' | 'loop-last' | 'restart' | 'restart-last' | 'door' | 'laser' | 'spring';
 
 interface ObjectPartBase {
   model: number; // model entry (BML position)
@@ -749,7 +749,8 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     // the BB name). The draw rule (hidden / plain / cloak) and the reveal are render/traps.ts
     // CaptureTrap, driven by render/gamefield.ts.
     case 0x0228:
-      return spec('TOTrapSeabed01', 'bm_obj_seabed_turigane.bml', [{ model: 0, textures: 'obj_seabed_turigane.xvm' }]);
+      // The spring is motion 0 (get_njm_chunk(bml, 0) in InitializeDerolleTrapEntity), driven by render/traps.ts CaptureTrap.
+      return spec('TOTrapSeabed01', 'bm_obj_seabed_turigane.bml', [{ model: 0, textures: 'obj_seabed_turigane.xvm', motion: 0, drive: 'spring' }]);
     // Jungle rocks: TORockJungleS01 (0x0206, create 0x00635040, ctor
     // 0x006350b8), M01 (0x0207, 0x0063540c / 0x00635484) and L01 (0x0208,
     // 0x006358b8 / 0x00635930) take models 0, 2 and 4 of

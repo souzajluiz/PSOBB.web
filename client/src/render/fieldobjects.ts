@@ -626,6 +626,15 @@ export class FieldObjects {
     this.models?.setCaptureDraw(index, draw);
   }
 
+  // The spring's njm frame (0..frames-1) of a capture trap; its frame count (0 when unknown).
+  setCaptureFrame(index: number, frame: number): void {
+    this.models?.setSpringFrame(index, frame);
+  }
+
+  springFrames(index: number): number {
+    return this.models?.springFrames(index) ?? 0;
+  }
+
   // The nodes the pillar traps move on the ticks.
   trapNodes(): ReadonlySet<THREE.Object3D> | null {
     return this.models?.trapNodes ?? null;

@@ -6,7 +6,8 @@
 //
 // Motions: parts with drive 'loop' or 'restart' advance like an enemy idle
 // motion; parts with drive 'door' or 'laser' are driven by the door state
-// machine (fieldobjects.ts) through ObjectModel.setDoorFrame / setLaserFrame.
+// machine (fieldobjects.ts) through ObjectModel.setDoorFrame / setLaserFrame;
+// drive 'spring' (the Seabed capture trap) by its state machine through setSpringFrame.
 // Four-light doors light their lamps one by one through setLamps.
 
 import * as THREE from 'three';
@@ -421,6 +422,21 @@ export class ObjectLayer {
     const m = this.live(index, 'setDoorFrame');
     if (!m) return;
     for (const part of m.parts) if (part.drive === 'door' && part.animator) part.animator.setFrame(frame);
+  }
+
+  // Frame of the spring motion of a Seabed capture trap (drive 'spring', render/traps.ts CaptureTrap.anim).
+  setSpringFrame(index: number, frame: number): void {
+    const m = this.live(index, 'setSpringFrame');
+    if (!m) return;
+    for (const part of m.parts) if (part.drive === 'spring' && part.animator) part.animator.setFrame(frame);
+  }
+
+  // Frame count of that motion (0 when the object has none, or is not built yet).
+  springFrames(index: number): number {
+    const m = this.models.get(index);
+    if (!m) return 0;
+    for (const part of m.parts) if (part.drive === 'spring' && part.animator) return part.animator.frameCount;
+    return 0;
   }
 
   setLaserFrame(index: number, frame: number): void {

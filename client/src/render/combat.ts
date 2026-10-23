@@ -191,7 +191,7 @@ import { PartyHp, syncHp } from '../combat/partyhp.ts';
 import type { PartyValues } from '../classic/hud.ts';
 import type { EnemyInstance, EnemyLayer } from './enemyview.ts';
 import type { NodeAnimator } from './enemymodel.ts';
-import type { PillarTrap, TrapEvent } from './traps.ts';
+import { holdCountdown, parseHoldPacket, type PillarTrap, type TrapEvent } from './traps.ts';
 import type { LobbyView } from './lobbyview.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { TickClock } from './smoothrender.ts';
@@ -4031,6 +4031,43 @@ export class CombatView {
     }
   }
 
+  // The Seabed capture trap (TOTrapSeabed01; render/traps.ts CaptureTrap): its hold is the 6x2C on
+  // the local player with frames 0xffff (no timer, EnemyAcquireTargetAndAttack_0063e444), and the
+  // release is the 6x2D (SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0), sent when another
+  // entity touches the trap (CaptureTrap.touch). The state-3 hit path is not ported (traps.ts).
+  captureTrapEvent(ev: TrapEvent): void {
+    if (ev.kind === 'hold') this.imposeHold({ frames: ev.frames, particle: 0, x: ev.x, z: ev.z, radius2: ev.radius2 }, 'capture trap');
+    else if (ev.kind === 'release') {
+      // The held player's own client sends the 6x2D (DisablePlayerMovement on its own player); the other
+      // clients run the same trap and only drop their record of it.
+      if (ev.clientId !== this.game.selfId) return;
+      if (this.holdTicks > 0) this.game.sendReleaseHold();
+      this.holdTicks = 0;
+      this.opts.log('capture trap: hold released');
+    }
+  }
+
+  // Incoming 6x2C / 6x2D (render/traps.ts parseHoldPacket). A 6x2D for the local player releases its
+  // hold (a teammate's touch of a capture trap, or another trap's release); a 6x2C for it imposes one.
+  // Other players' holds are kept in remoteHolds (their movement comes from their own packets).
+  private remoteHolds = new Set<number>();
+  private onHoldPacket(sub: number, body: Uint8Array): void {
+    const h = parseHoldPacket(sub, body);
+    if (!h) return;
+    if (h.clientId === this.game.selfId) {
+      if (h.sub === 0x2d) {
+        if (this.holdTicks > 0) this.opts.log('hold released by another client');
+        this.holdTicks = 0;
+      } else if (!this.damage.dead) {
+        this.holdTicks = holdCountdown(h.frames);
+        this.view?.resetGait(this.game.selfId);
+      }
+      return;
+    }
+    if (h.sub === 0x2c) this.remoteHolds.add(h.clientId);
+    else this.remoteHolds.delete(h.clientId);
+  }
+
   // The local hold of an item drop (0x0068d878's 6x2C; the packet is sent by
   // GameItems, net/items.ts). 6x2D releases it (releaseLocalHold).
   holdLocal(frames: number): void {
@@ -4047,7 +4084,7 @@ export class CombatView {
   private holdTicks = 0;
   private imposeHold(h: { frames: number; particle: number; x: number; z: number; radius2: number }, what: string): void {
     if (this.damage.dead) return;
-    this.holdTicks = h.frames;
+    this.holdTicks = holdCountdown(h.frames);
     this.game.sendImposeHold(h.frames, h.particle, h.x, h.z, h.radius2);
     this.view?.resetGait(this.game.selfId);
     this.opts.log(`${what}: web hold for ${h.frames} frames`);
@@ -6993,6 +7030,10 @@ export class CombatView {
     }
     // Remote HP for the party members' windows; the handlers below still run.
     this.party.receive(sub, body);
+    if (sub === 0x2c || sub === 0x2d) {
+      this.onHoldPacket(sub, body);
+      return;
+    }
     if (sub === 0x12) {
       this.onDragonAction(body);
       return;
