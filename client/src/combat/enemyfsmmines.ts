@@ -50,7 +50,8 @@ const EMPTY_MV: EnemyMovementData = { fparam1: 0, fparam2: 0, fparam3: 0, fparam
 //   death (5, 0x00555234): a Dubchic (param6 == 0) that has died fewer than 5
 //     times gets up again: it lies mv.i1 frames, then animation 14 (motion
 //     5, 0.7) stands it up with full HP and the revived flag (+0x39a). A
-//     Gillchic (and the 6th death) dies for good.
+//     Gillchic (and the 6th death) dies for good, and so does a Dubchic the
+//     Dubwitch of its section killed (markLinkedDead, combat/dubwitch.ts).
 export const DUBCHIC = {
   search: 30,
   aggroEven: 170,
@@ -275,7 +276,7 @@ export class DubchicAi extends BrainBase {
   // The kill: true when the Dubchic gets up again (state 5's revive branch;
   // the owner keeps it alive and plays the fall).
   revive(): boolean {
-    if (this.gillchic || this.deaths >= DUBCHIC.maxRevives - 1) {
+    if (this.linked || this.gillchic || this.deaths >= DUBCHIC.maxRevives - 1) {
       this.deaths++;
       return false;
     }
@@ -286,6 +287,22 @@ export class DubchicAi extends BrainBase {
     this.standing = false;
     this.current = null;
     return true;
+  }
+
+  // The Dubwitch link (kill_dubwitch 0x00619050 -> mark_enemy_as_dead
+  // 0x00555974: flag 0x2000000 at +0x390 and the dead flag): the next death is
+  // final, the revive branch of state 5 is skipped and its on-kill handler
+  // (0x005558bc) runs. Gillchics are never linked (the Dubwitch's test is
+  // param6 == 0). Only the Dubwitch's own section is linked (render/combat.ts).
+  private linked = false;
+  markLinkedDead(): void {
+    this.linked = true;
+  }
+
+  // Dead for the Dubwitch's wake (update_dubwitch's scan reads the entity's
+  // dead flag, which a lying Dubchic keeps until it stands up at 0x00555234).
+  get lying(): boolean {
+    return this.state === 'down' || this.state === 'dead';
   }
 
   // Lying down and getting up: hits do nothing (invulnerable until the stand
@@ -564,8 +581,10 @@ export class GaranzAi extends BrainBase {
 //   warp away (7, 0x0058e598): animation 2 (motion 1), away from the target
 //     (+0x8000), turning 0x31c7; vanishes at 15, moves 80 / 11.25 a frame,
 //     reappears at 24; then the Gold casts (10), else chase.
-//   technique (10, 0x0058dde4): animation 7 (motion 6, 0.7), the cast at
-//     level iparam1, iparam2 frames, then chase.
+//   technique (10, 0x0058dde4): animation 7 (motion 6, 0.7); at its end Resta
+//     on itself at level iparam1 (0x0058df58 / 0x006eeeb4); Ultimate adds
+//     Shifta at 5 and Deband at 10 frames (0x006f0984 / 0x006e2634); iparam2
+//     frames, then chase.
 //   lost (11, 0x0058dd3c): animation 8 (motion 8, 0.5); a target within 200
 //     -> chase; after 90 frames it gives up (9: back to its spawn point).
 //   flinch: never in Ultimate (0x005900c8).
@@ -655,7 +674,10 @@ export type SinowState = 'wait' | 'drop' | 'chase' | 'warp' | 'combo' | 'away' |
 // clones appear round the real body; a dismiss sends them away.
 export type SinowEvent =
   | { kind: 'mirage'; main: number; x: number; z: number; angle: number; targetId: number | null; tx: number; tz: number }
-  | { kind: 'dismiss' };
+  | { kind: 'dismiss' }
+  // The Gold's technique (0x0058dde4): its cast effect on itself, the level
+  // is the clamped iparam1.
+  | { kind: 'tech'; tech: 'resta' | 'shifta' | 'deband'; level: number };
 
 export class SinowAi extends BrainBase {
   state: SinowState = 'wait';
@@ -671,6 +693,10 @@ export class SinowAi extends BrainBase {
   private step = 0;
   private hitIndex = 0;
   private hold = -1;
+  // The Gold's cast (0x0058dde4): sub 2 (Ultimate only) counts to 10 with
+  // Shifta at 5 and Deband at 10; sub 1 holds iparam2 frames.
+  private castSub = 0;
+  private castCount = 0;
   private combos = 0;
   private dir = 0;
   // The mirage (SINOW_MIRAGE). param1 is the set entry's: a Beat with param1 >=
@@ -777,6 +803,11 @@ export class SinowAi extends BrainBase {
   // ASSUMED: a vanished Sinow cannot be hit.
   get invulnerable(): boolean {
     return this.hidden || this.state === 'hide';
+  }
+
+  // constrain_tech_level (0x00520e3c): 0..13, or 0..28 in Ultimate.
+  private techLevel(): number {
+    return Math.max(0, Math.min(this.ultimate ? 28 : 13, this.mv.iparam[0] ?? 0));
   }
 
   private enter(out: AiFrame, state: SinowState): void {
@@ -959,10 +990,30 @@ export class SinowAi extends BrainBase {
         if (this.timer >= SINOW_MIRAGE.hideFrames) this.hidden = true;
         break;
       case 'tech':
-        // The cast (0x006eeeb4 at level iparam1, probably Resta; Shifta /
-        // Deband in Ultimate) is played, its effect is not reproduced.
-        if (this.hold < 0 && animationEnded) this.hold = Math.max(0, this.mv.iparam[1] ?? 0);
-        if (this.hold >= 0 && this.hold-- === 0) this.enter(out, t ? 'chase' : 'lost');
+        // 0x0058dde4: at the end of the motion, SinowberillExecuteTech_0058df58
+        // casts Resta on itself at the clamped iparam1 (0x006eeeb4; the heal is
+        // the owner's enemyResta). Ultimate (0x00520e6c) then runs sub 2: Shifta
+        // (0x006f0984) at 5 frames and Deband (0x006e2634) at 10, then sub 1
+        // holds iparam2 frames. The Ultimate's buffs are ASSUMED to be on the
+        // Gold alone (the Gibbon's own enrage in render/combat.ts).
+        if (this.hold < 0 && animationEnded) {
+          this.hold = Math.max(0, this.mv.iparam[1] ?? 0);
+          this.castSub = this.ultimate ? 2 : 1;
+          this.castCount = 0;
+          out.heal = { level: this.techLevel() };
+          this.events.push({ kind: 'tech', tech: 'resta', level: this.techLevel() });
+        }
+        if (this.hold >= 0) {
+          if (this.castSub === 2) {
+            const n = ++this.castCount;
+            if (n === 5) this.events.push({ kind: 'tech', tech: 'shifta', level: this.techLevel() });
+            if (n === 10) {
+              this.events.push({ kind: 'tech', tech: 'deband', level: this.techLevel() });
+              this.castSub = 1;
+              this.castCount = 0;
+            }
+          } else if (this.hold-- === 0) this.enter(out, t ? 'chase' : 'lost');
+        }
         break;
       default:
         exhaustive(this.state);
