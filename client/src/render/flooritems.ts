@@ -26,19 +26,18 @@
 //     sound is dropped 300 or more from the listener, docs/PROTOCOL.md);
 //     nothing plays when an item drops, and no message line is shown;
 //   - the local player's drop (0x0068d878 -> HandleItemAcquisition_006a43b8):
-//     rings 1..5 around the player, ring r of radius 6r with 4r spots, from
-//     the player's facing, spot = centre + (sin a, cos a) * radius; the
-//     first spot with ground is used (findDropSpot).
+//     the 6x2C hold, then one spot a frame around the player with ground and
+//     a clear line of sight (net/dropspot.ts, DropSearch); 6x2A and 6x2D go
+//     out at the first spot found.
 //   - the particle 0x9B (w_itemget; create_particle_effect at the item's
 //     origin) when an item appears after the floor was set up (create_item_
 //     box_on_ground 0x005c4874, g_ItemInitializationState != 0: not for the
 //     items of a join sync) and in HandlePlayerPickupSuccess_005c4c1c; its
 //     type-1 entry runs with the type-0 simulation of render/hitfx.ts
 //     (ASSUMED, like the other type 1 / 2 effects).
-// Left out: the 3D attenuation of SE 0x571; the spot search's line-of-sight
-// test (0x0077fffc) and its 6x2C hold.
-// ASSUMED: the spot's ground is probed from the player's height + 6; a
-// failed search keeps the player's position. Fitted: the Enter radius for
+// Left out: the 3D attenuation of SE 0x571; the spot search's body test
+// (FUN_007b5318, see net/dropspot.ts).
+// ASSUMED: a failed search sends nothing (the hold runs down). Fitted: the Enter radius for
 // pickup (PICKUP_RADIUS; newserv accepts up to 30) and for boxes
 // (BOX_RADIUS).
 
@@ -57,6 +56,7 @@ import {
 import { maxStackSize } from '../formats/itemnames.ts';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { EMPTY_BOX_TYPES, ITEM_BOX_TYPES, type FloorItem, type GameItems } from '../net/items.ts';
+import { DropSearch } from '../net/dropspot.ts';
 import { EnemyArchive } from './enemymodel.ts';
 import { FieldParticles } from './hitfx.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -73,7 +73,6 @@ export const ITEM_GROUND_PROBE = 300; // g_ItemFloatingYOffset 0x0092bb70
 export const SE_PICKUP = 0x571; // HandlePlayerPickupSuccess_005c4c1c
 export const PARTICLE_ITEMGET = 0x9b; // w_itemget
 export const SE_RANGE = 300; // FUN_00814298: 3D sounds this far are dropped
-export const DROP_RING_STEP = 6; // 0x0093db68
 
 // set_item_y_floating: the height of a floor item's origin.
 export function floorItemHeight(item: { x: number; z: number; y?: number }, ground: (x: number, z: number, fromY: number) => number | null): number {
@@ -82,26 +81,10 @@ export function floorItemHeight(item: { x: number; z: number; y?: number }, grou
   return g === null ? y : g + ITEM_GROUND_OFFSET;
 }
 
-// The spot search of the local player's drop (HandleItemAcquisition_006a43b8).
-export function findDropSpot(
-  me: { x: number; y: number; z: number; angle: number },
-  ground: (x: number, z: number, fromY: number) => number | null,
-): { x: number; y: number; z: number } | null {
-  for (let r = 1; r <= 5; r++) {
-    const n = 4 * r;
-    for (let k = 0; k < n; k++) {
-      const a = me.angle + (k * Math.PI * 2) / n;
-      const x = me.x + Math.sin(a) * DROP_RING_STEP * r;
-      const z = me.z + Math.cos(a) * DROP_RING_STEP * r;
-      const g = ground(x, z, me.y + ITEM_GROUND_OFFSET);
-      if (g !== null) return { x, y: g, z };
-    }
-  }
-  return null;
-}
-
 export interface FloorItemLayerOptions {
   ground: (x: number, z: number, fromY: number) => number | null;
+  // The map ray of a drop's line of sight (mask -1); absent: no walls.
+  wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) => boolean;
   blocked: () => boolean; // a menu has the keyboard
   describe?: (item: FloorItem) => string;
   log?: (msg: string) => void;
@@ -156,7 +139,7 @@ export class FloorItemLayer {
     items.onFloorItemAdded = (it) => void this.show(it, it.source !== 'sync' && !items.game.loading);
     items.onFloorItemRemoved = (it) => this.hide(it.id);
     items.onPickedUp = (it, picker) => this.pickedUp(it, picker);
-    items.dropSpot = (me) => findDropSpot(me, opts.ground);
+    items.dropSearch = (me) => new DropSearch(me, { ground: opts.ground, wallBlocks: (a, b) => (opts.wallBlocks ? opts.wallBlocks(a, b) : false) });
     viewer.renderer.domElement.addEventListener('keydown', this.onKey);
   }
 

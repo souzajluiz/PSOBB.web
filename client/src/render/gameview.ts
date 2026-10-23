@@ -157,6 +157,8 @@ export class GameView {
     };
     this.floorItems = new FloorItemLayer(viewer, this.files, this.items, {
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
+      // The drop's line of sight: cast_ray_at_map_collision_geometry(eye, spot, -1) (net/dropspot.ts).
+      wallBlocks: (a, b) => (this.collision ? this.collision.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], 0xffffffff) !== null : false),
       blocked: () => this.field.menu.open || this.busy || this.inputBlocked(),
       log,
     });
@@ -225,6 +227,8 @@ export class GameView {
     this.hud.prompt = () => this.telepipes.prompt();
     this.combat.telepipe = { allowed: () => this.telepipes.allowed(), open: () => this.telepipes.open() };
     this.items.onTelepipe = () => this.telepipes.open();
+    this.items.onDropHold = (frames) => this.combat.holdLocal(frames);
+    this.items.onDropRelease = () => this.combat.releaseLocalHold();
     this.items.onCure = (subtype) => this.combat.useCureItem(subtype);
     // The Medical Center (classic/shop.ts MedicalCounter).
     this.items.medicalNeedsOf = () => this.combat.medicalNeeds();
