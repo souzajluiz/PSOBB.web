@@ -883,7 +883,10 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     case 0x038f:
       return spec('__BEEHIVE__', 'bm_obj_ep4_bee_nest.bml', [{ model: clamp(p4(o), 0, 1), motion: clamp(p4(o), 0, 1), drive: 'loop', speed: 1 }]);
     case 0x038d:
-      return spec('__DESERT_CRYSTALS_BOX__', 'bm_obj_ep4_crystal.bml', [{ model: 3 }]);
+      // Box 0x009c9ce8 (sphere r9 at 6 up, flags 0x38003, the container's sphere), set by the
+      // constructor 0x00677610 (its helper 0x0067768c pushes the table and the count 1 at
+      // 0x006776e6..0x006776f0). The exe row was read with tools/exedata.py.
+      return spec('__DESERT_CRYSTALS_BOX__', 'bm_obj_ep4_crystal.bml', [{ model: 3 }], { collision: generatedBox(0x009c9ce8) });
     case 0x0380:
       // Box 0x009c9f18 (sphere r14, flags 0x10003), depth 0 of the type table.
       return spec('__POISON_PLANT__', 'bm_obj_ep4_flower.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }], { collision: generatedBox(0x009c9f18) });

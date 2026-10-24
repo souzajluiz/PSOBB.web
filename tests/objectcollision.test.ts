@@ -120,6 +120,22 @@ for (const s of added) {
   check(s.collision.address === addedAddr[s.index], `solid ${s.index} uses its generated box ${addedAddr[s.index].toString(16)}`);
   check(boxPairActive(PLAYER_BOX_FLAGS, s.collision.flags), `solid ${s.index} box passes the player's flag gate`);
 }
+// 3c-2. The desert crystal box (0x038d, table 0x009c9ce8, set by ctor 0x00677610): a sphere
+// of radius 9 at 6 up, the container's flags, so it blocks like a container. The Seabed
+// capture trap (0x0228, table 0x009c6b04, flags 0x8011f04) has bit 0x1 clear, so the gate
+// refuses it: a trap the player walks over, not a block.
+const crystal = collectFieldSolids([place(0x038d, 10, [0, 0, 0])], { area: 0x18, episode: 4 });
+check(crystal.length === 1 && crystal[0].collision.address === 0x009c9ce8, 'the desert crystal box is a solid with table 0x009c9ce8');
+check(TYPE_COLLISION_TABLES[0x038d]?.some((l) => l.table === 0x009c9ce8 && l.depth === 1) === true, 'type 0x038d reaches table 0x009c9ce8 at depth 1');
+if (crystal.length === 1) {
+  const o = solidObstacle(crystal[0]);
+  check(o.sphere === true && o.halfX === 9 && o.y === 6 && o.flags === 0x38003, 'the crystal box is a sphere of radius 9, 6 up');
+}
+check(!boxPairActive(0x8011f04, PLAYER_BOX_FLAGS), 'the Seabed trap box (flags 0x8011f04, bit 0x1 clear) does not pass the gate');
+// The NPC box (0x009c3ecc, flags 0x30203, read from the exe) passes the gate against the
+// container and the rock words, so an NPC is stopped by them as the player is (ASSUMED: the NPC's
+// own walk uses the same gate; its runtime flag word is not traced).
+check(boxPairActive(0x30203, 0x38003) && boxPairActive(0x30203, OBJECT_BOX_FLAGS), 'the NPC box passes the container and rock gates');
 const nest = added.find((s) => s.index === 7);
 if (nest) {
   const o = solidObstacle(nest);

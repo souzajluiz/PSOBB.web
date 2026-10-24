@@ -16388,3 +16388,25 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 
 **Left:**
 - Wiring: the hooks in `GalgryphonFxB` (`galgryphonstatesb.ts`, the S0..S17 unification) and `render/combat.ts`; the minion ring's particle objects; the S27 beam spawn `SpawnOlgaMinionEffect_004a5218` (dump 225179: random angle and radius, ground search, `CheckOlgaMinionTargetValidity_004a5428`); the lightning jitter; the Derolle vtable bodies behind the area hit.
+
+## 2026-10-23 - desert crystal box (0x038d) blocks; Wilds rocks and beehive left open (ROADMAP round hitboxes)
+
+**What changed:** the desert crystal box (0x038d, `__DESERT_CRYSTALS_BOX__`, model 3 of `bm_obj_ep4_crystal.bml`) now blocks the player and the drop spots, as the containers do. `formats/objectmodels.ts` gives it `generatedBox(0x009c9ce8)`; `render/fieldobjects.ts` `SOLID_TYPES` gets 0x038d. `tests/objectcollision.test.ts` section 3c-2 checks the solid, its generated link, the Seabed trap's gate and the NPC box's gate.
+
+**Survey of the open items on the line (what the exe gives, 2026-10-23):**
+- Desert crystal box, 0x038d: factory row at VA 0x00a07340 (and 0x00a0f250), creator 0x00677610. The constructor calls the helper 0x0067768c at 0x0067766a; the helper's init call is 0x006776f0 with `pushl $0x9c9ce8` and `pushl $1` at 0x006776e6..0x006776eb. Row 0x009c9ce8 (read with `tools/exedata.py read`): position (0, 6, 0), radius 9.0 (0x41100000), shape 0 (sphere), unknown_flags 0x38003 (229379), damage_reduction 0. The same sphere and flags as the container's 0x009c77ac.
+- Seabed capture trap, 0x0228 (the port's `TOTrapSeabed01`): its box 0x009c6b04 has flags 0x8011f04. Bit 0x1 is clear, so `boxPairActive` refuses it against the player (the gate needs both enabled). Not a solid: the trap is walked over and sprung by its own rule (`render/traps.ts`).
+- NPC box 0x009c3ecc: flags 0x30203 (bit 0x1 set, share bit 0x2, the 0x10000 / 0x20000 bits, no exclusive pair with 0x38003 or 0x10003). It passes both gates, so an NPC is stopped by the containers and rocks as the player is. This answers the ROADMAP question's table side; the NPC walk's own use of the gate is ASSUMED.
+- Not done, with the reason:
+  - Wilds crater cacti 0x0301 (creator 0x0067612c), brown rock 0x0302 (creator 0x00675748), destructible rock 0x0303 (0x00675bf8), black rocks 0x0386 (0x00677de4): each has 3 or 1 table row (`TYPE_COLLISION_TABLES`), and their init sites are run-time tables (`COLLISION_SITES` 0x00675840, 0x00676224, 0x0067674c, 0x00676c0f, 0x00677edc: `table: null`). The model index comes from `param4`, and the exe's choice of row per model is not decoded. Left open.
+  - Beehive 0x038f: two rows (0x009c9b60 at y 5, 0x009c9b8c at y 9, both sphere r7, 0x38003); which one is set per `param4` is not traced. Left open.
+  - Falling stalactite 0x038b: row 0x009c9fb8 (sphere r15, 0x10003). It falls (its state, and whether the box is live while it falls, are not read). Left open.
+  - 0x0191 / 0x0193 (boxes 0x009c9430 / 0x009c945c, box r6 half 16) and 0x0205 (0x009c7e0c, sphere r5 at 10 up, 0x30003): their factories (0x00667ec8, 0x00668194, 0x00658eac) have no port model. Not added.
+
+**ASSUMED / not traced:**
+- A static box with the container flags blocks the desert crystal box, and the box is not breakable (0x038d is not in `BOX_TYPES`, so there is no broken state; the exe's break rule for it is not traced).
+- The NPC's runtime flag word is the table's 0x30203 (the ctor is not checked for a write to +0x18).
+
+**Checks:** `node tests/objectcollision.test.ts` ALL PASS (section 3c-2 added); `tests/collision`, `townfield`, `drops`, `fieldhud`, `npcs` pass. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
+
+**Left:** the Wilds rocks / cacti (run-time rows: decode the 5 init sites' row choice from `param4`), the beehive row choice, the stalactite's state, the three untyped ids (0x0191 / 0x0193 / 0x0205), and the box break flags (from the entry above).
