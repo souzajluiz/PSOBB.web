@@ -760,6 +760,27 @@ class Rig {
   }
 }
 
+// --- Gibbon spawn: the first frame leaves `spawn` (0x005690f8) ------------------
+// render/combat.ts builds a Gibbon from its set entry the same way whether the
+// entry is placed in a section or by a wave event; the brain must leave spawn on
+// its first tick, whatever the group or the appear kind (param2 < 1: spot, else
+// jump). A brain that is never ticked (hidden until its wave spawns, see
+// render/enemyview.ts hideAll) stays in spawn: that is the owner's gate, not this.
+{
+  for (const subtype of [0, 1]) {
+    for (const p2 of [0, 1]) {
+      const groups = new GibbonGroups();
+      const ai = new GibbonAi({ x: 100, z: -50, angle: 0.3, subtype, params: [1, p2, 0, 0, 0, 0], level: 4, groups, motionFrames: () => 30, rng: () => 0.5 });
+      const tag = `Gibbon subtype ${subtype} param2 ${p2}`;
+      eq(ai.state, 'spawn', `${tag}: built in spawn`);
+      ai.tick([], false);
+      eq(ai.state, p2 < 1 ? 'spot' : 'jump', `${tag}: the first frame leaves spawn`);
+      for (let i = 0; i < 60; i++) ai.tick([player(0, 5000)], false);
+      check(ai.state !== 'spawn', `${tag}: not back in spawn after 60 more frames`);
+    }
+  }
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

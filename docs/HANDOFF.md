@@ -146,10 +146,13 @@ worktrees are left.
    - Tower / Epsilon not seen in Chrome (no enemies there);
    - floors 1, 5, 7, 10: 2026-10-24 long watch per wave group (`client/e2e/ep2-floors-watch.spec.ts`,
      DEVLOG "Episode 2 floors 1, 5, 7, 10: long watch"): floor 1 (25 groups) and floor 5 (11) run;
-     floor 7 partial (4 of 27), floor 10 not run (the run was stopped). OPEN: section-placed Gibbon /
-     Merilltas / Sinow groups stay in `spawn` (exe: 0x005690f8 leaves spawn on its first frame; not
-     traced); floor 5 group 5/3 and floor 1 group 20/1 idle after their trigger (range or stall, not
-     checked). Floors 7 and 10 still to finish;
+     floor 7 partial (4 of 27), floor 10 not run (the run was stopped). The section-placed Gibbon /
+     Merilltas / Sinow groups in `spawn` are chained waves (DEVLOG "Episode 2 watch: the section-placed
+     Gibbons / Sinows in `spawn` are chained waves"): never built, because their event runs only after
+     the previous wave is dead. The brain leaves spawn on its first tick (test "Gibbon spawn"). OPEN:
+     the watch spec must resolve the chain root and kill the predecessor's enemies; floor 5 group 5/3
+     and floor 1 group 20/1 idle after their trigger (built; detection range not checked). Floors 7
+     and 10 still to finish;
    - the enemy motion archives ARE in `data.gsl` (the earlier "not on this Mac" note is stale), so
      the animation lengths of groups a / d are still stand-ins in the tests, not from the files
      (checked: every `bm_ene_*` / `bm_boss*` name the port uses is in the GSL); no wall / ground rays;
