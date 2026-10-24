@@ -400,6 +400,32 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   near5(f.view.alpha, 0, 'flinch: the alpha is kept');
 }
 
+// --- Pofuilly Slime's state 11 (stun) -------------------------------------------------
+// The writer (PsoBB.exe 0x00597ae4, the slime's vtable slot +0xfc, reached from the
+// generic enemy path 0x00543efb): unless the slime is in state 11 it sets +0x38c = 11,
+// clears +0x30 & 0x100 and enters 11 (0x0059856c: scale 1, counter 0, morph 4). Its
+// update (0x00597514) counts a frame; when the motion has ended it goes to confused
+// (+0x30 & 0x10, state 7) or search (state 6).
+{
+  const st = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  const pf = (st as unknown as { frame(): AiFrame }).frame();
+  st.pendingHit(pf);
+  eq(st.state, 'stun', 'pendingHit enters state 11');
+  eq(st.view.morph, SLIME_MORPH.stun, 'stun: morph 4');
+  check(Math.abs(st.view.sx + st.view.sy + st.view.sz - 3) < 1e-5, 'stun: scale 1');
+  st.pendingHit(pf);
+  eq(st.state, 'stun', 'pendingHit in state 11 changes nothing');
+  for (let i = 0; i < 5; i++) st.tick([], false);
+  eq(st.state, 'stun', 'stun holds while its motion runs');
+  st.tick([], true);
+  eq(st.state, 'search', 'stun ends at the motion end: search (6) when not confused');
+  const sc = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  sc.pendingHit(pf);
+  sc.confused = true;
+  sc.tick([], true);
+  eq(sc.state, 'confused', 'stun ends at the motion end: confused (7) when +0x30 has 0x10');
+}
+
 // --- Pofuilly Slime's crawl frame (0x005969cc) ----------------------------------------
 {
   // A risen slime with a player 100 ahead: the entry (0x00597c3c) aims at the player

@@ -54,7 +54,7 @@ import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi,
 import { DolmolmAi, MerilliaAi } from '../combat/enemyfsmep2.ts';
 import { GibbonAi, GibbonGroups, MericarolAi } from '../combat/enemyfsmep2b.ts';
 import { GeeAi, GibblesAi, GiGueAi } from '../combat/enemyfsmep2a.ts';
-import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
+import { EPSILON_ANIM, epsilonTint, EpsilonAi, EpsigardAi, MORFOS, MorfosAi, MorfosBolt, ReconAi, RecoboxAi, type ReconSpawn } from '../combat/enemyfsmep2d.ts';
 import { EpsilonFx } from './epsilonfx.ts';
 import { DelbiterAi, DeldepthAi, ExeBrain, SinowBerillAi, SinowZoaAi } from '../combat/enemyfsmep2c.ts';
 import { DeRolLeAi, DrlSegmentAi, DRL_BEAM, DRL_SEGMENT, DRL_SLOTS, type DrlEvent, type Vec3 } from '../combat/derolle.ts';
@@ -1107,7 +1107,7 @@ export class CombatView {
           ai = mor;
         } else if (className === 'TObjEneRecobox')
           // The Recons' rows: MovementData / AttackData 66 (ENEMY_TYPE_PARAMS.RECON).
-          ai = new RecoboxAi({ ...at, params: setParams, cloneCount: (head.slot.set as EnemySet).numChildren, movement: params ? params.movement(difficulty, 66) : null, attack: params ? params.attack(difficulty, 66) : null, difficulty, rng: () => this.rng() });
+          ai = new RecoboxAi({ ...at, boxY: instance.placed.world[1], params: setParams, cloneCount: (head.slot.set as EnemySet).numChildren, movement: params ? params.movement(difficulty, 66) : null, attack: params ? params.attack(difficulty, 66) : null, difficulty, rng: () => this.rng() });
         else if (className === 'TObjEneEpsilonBody')
           ai = new EpsilonAi({ ...at, params: setParams, movement, epsigard: params ? params.movement(difficulty, 36) : null, phase: head.index, rng: () => this.rng() });
         // Sinow Berill / Spigell: MovementData rows 6 / 0x10 (0x00929c00), not the ResistData index.
@@ -1935,7 +1935,11 @@ export class CombatView {
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
       if (r.hit && r.hit.clientId >= 0x1000) this.enemyHitsEnemy(e, r.hit.clientId & 0xfff, r.hit.knockback, r.hit.mult);
       else if (r.hit) this.enemyHitsPlayer(e, r.hit.clientId, r.hit.knockback, r.hit.mult, r.hit.kbScale, r.hit.attack);
-      if (r.shots) for (const s of r.shots) this.launchShot(e, s);
+      if (r.shots)
+        for (const s of r.shots) {
+          if (s instanceof MorfosBolt) this.morfosMuzzle(e, s);
+          this.launchShot(e, s);
+        }
       if (r.techHit && r.techHit.clientId === this.game.selfId) {
         const what = `E-${e.index.toString(16)} (${e.slot.type})`;
         const p = e.instance.root.position;
@@ -1973,8 +1977,9 @@ export class CombatView {
         this.applySelfBuff(b.tech === 'jellen' ? GROUP.jellen : GROUP.zalure, supportPower(b.level), `E-${e.index.toString(16)} (${e.slot.type})`);
       }
       if (ai instanceof BulclawAi && !ai.bulk && this.bulclawPending.delete(e)) void this.swapBulclawModel(e, ai);
-      // A Pofuilly Slime's parts are placed by slimeView (the body is drawn at alpha > 0, not by `hidden`).
-      if (r.hidden !== undefined && !(ai instanceof SlimeAi)) for (const c of root.children) c.visible = !r.hidden;
+      // A Pofuilly Slime's parts are placed by slimeView (the body is drawn at alpha > 0, not by `hidden`);
+      // a Morfos's by morfosView (its arm has its own life).
+      if (r.hidden !== undefined && !(ai instanceof SlimeAi) && !(ai instanceof MorfosAi)) for (const c of root.children) c.visible = !r.hidden;
       if (ai instanceof EpsilonAi) for (const ev of ai.events.splice(0)) this.playSeAt(ev.id, root.position);
       // The Grass Assassin's emerge (the abeast spawn sound and particles) and
       // the Nano Dragon's power-up charge (sound 0x111, particle 0xfa).
@@ -4729,18 +4734,24 @@ export class CombatView {
   // in the UVN units (/255) of those strips. The arm (the punch's sub-entity) is
   // drawn while the swing runs, from its own attack_kabe_arm motion, once.
   private morfosArmStarted = new Set<EnemyRuntime>();
+  // The exe's render_morfos draws nothing while the hidden flag (+0x3c8 & 1) is
+  // set, the wall included: the body and the wall follow `hidden`. The arm is a
+  // sub-entity of its own (0x0057cd9c): it is drawn while ai.armOut, which ends
+  // when its motion reaches the last frame (ai.armSpent, 0x0057cd3c).
   private morfosView(e: EnemyRuntime, ai: MorfosAi, hidden: boolean): void {
     for (const child of e.instance.root.children) {
-      if (child.name === 'Morfos body') child.userData.uvOffsets?.get(2)?.set(ai.wallBulge / 255, 0);
-      else if (child.name === 'Morfos wall') child.userData.uvOffsets?.get(0)?.set(0, ai.armBulge / 255);
-      else if (child.name === 'Morfos arm') {
-        const armOut = ai.armOut && !hidden;
-        child.visible = armOut;
-        if (armOut) this.morfosArmPlace(e, child);
+      if (child.name === 'Morfos body') {
+        child.visible = !hidden;
+        child.userData.uvOffsets?.get(2)?.set(ai.wallBulge / 255, 0);
+      } else if (child.name === 'Morfos wall') {
+        child.visible = !hidden;
+        child.userData.uvOffsets?.get(0)?.set(0, ai.armBulge / 255);
+      } else if (child.name === 'Morfos arm') {
+        const i = e.instance.parts.findIndex((p) => p.name === 'Morfos arm');
+        const a = e.instance.animators[i];
+        let armOut = ai.armOut && !hidden;
         if (armOut && !this.morfosArmStarted.has(e)) {
           this.morfosArmStarted.add(e);
-          const i = e.instance.parts.findIndex((p) => p.name === 'Morfos arm');
-          const a = e.instance.animators[i];
           if (a) {
             try {
               a.play(e.instance.archive.motion(0, a.nodeCount), 0.7, false);
@@ -4748,9 +4759,30 @@ export class CombatView {
               this.opts.log(`morfos arm motion: ${(err as Error).message}`);
             }
           }
-        } else if (!armOut) this.morfosArmStarted.delete(e);
+        }
+        // No animator (ASSUMED: nothing to time the arm by): it is not shown.
+        if (armOut && (!a || a.ended)) {
+          ai.armSpent();
+          armOut = false;
+        }
+        if (!armOut) this.morfosArmStarted.delete(e);
+        child.visible = armOut;
+        if (armOut) this.morfosArmPlace(e, child);
       }
     }
+  }
+
+  // The laser's origin (0x0057d0f4 gets enemy+0x4a0, body node 6 captured by the
+  // draw): the bolt starts at that node's world point, given above the launch
+  // ground like every shot (the base y is the root's y less the lift).
+  private morfosMuzzle(e: EnemyRuntime, bolt: MorfosBolt): void {
+    const node = e.instance.nodes?.[0]?.[MORFOS.muzzleNode];
+    if (!node) return;
+    const root = e.instance.root;
+    root.updateMatrixWorld(true);
+    const v = this.morfosVec;
+    node.getWorldPosition(v);
+    bolt.placeAt(v.x, v.y - (root.position.y - e.lift), v.z);
   }
 
   private readonly morfosVec = new THREE.Vector3();
@@ -5774,6 +5806,9 @@ export class CombatView {
 
   // A Recon comes out of its Recobox: slot box + 1 + child, model 0 of the box's BML.
   private async spawnRecon(box: EnemyRuntime, ai: RecoboxAi, sp: ReconSpawn): Promise<void> {
+    // The Recon starts at the box's y (its lift is above the ground under the spot).
+    const g = this.opts.ground?.(sp.x, sp.z, sp.boxY + 30) ?? null;
+    if (g !== null) sp.recon.startFromBox(sp.boxY, g);
     const r = await this.spawnSplitChild(box, box.index + 1 + sp.child, 'RECON', 0, { index: 8, speed: 0.7, loop: true }, sp.recon, { x: sp.x, z: sp.z });
     if (!r) ai.spawnFailed(sp.recon);
     else this.opts.log(`Recobox E-${box.index.toString(16)} sent Recon E-${r.index.toString(16)}`);
