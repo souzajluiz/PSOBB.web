@@ -50,6 +50,25 @@ the reported symptoms (1 of 1, Undo disabled, no page error). `tests/questeditor
 **Tests:** `node tests/olgaflowai.test.ts` (wire, table, entrance -> hub, the leader's sends and applyRemote, the sword chains, no state past the cap over 20000 ticks, the HP and the death hold once, remote damage). `node tests/combat.test.ts`, goldragon, galgryphonai, barbaray, dragon, enemyfsm, enemies, combatdepth, derolle, galgryphonstatesa pass. `tsc --noEmit -p client` clean.
 
 **Not checked:** in Chrome (no room with Olga Flow was run).
+## 2026-10-24: Barba Ray: corner transitions, the arc moved to phases 4 / 0xa
+
+**What changed:** the body now walks the arena's corners. `combat/barbaray.ts` ports the transition body 0x004b1e98 (`ProcessPlayerInteractionState`, refsrc `Psobb.exe-05112026.c:234174`) for the phases the table emits: 3, 5, 6, 8, 9, 0xb, 0xc, 0xe (`BARBA_MOVES`) and the raised-ring transitions 0x28 / 0x29 (from the current anchor, 5 below or above) and 0x2a..0x39 (fixed pairs among anchors 5..9). The enter teleports to `from` (`teleport`, a warp), signs each axis by the direction of the move, and runs three velocity easings (`BarbaEase`, the exe's `Player__ApplyVelocityEasing` 0x0042c9a0 with `NormalizeMovementTarget_00434a3c`). Sub-states 0..4 are the approach (x and y, z on its own velocity), the x-first and z-first curves and the settle, ported from `ProcessPlayerApproachPhase`, `ProcessSinowberillMovementState_004b2b14 / 2a24 / 2954`. The leader's table step runs when the walk is done (event 9, 0x730 == 1), not on the 30-tick pace; with the gate closed it waits `BARBA_DWELL`.
+
+**Dispatch correction (the port was wrong):** Ghidra's dispatcher `FUN_004b02b4` (`tools/ghidra/decomp.sh 0x004b02b4`) says phases 4 and 0xa call the arc `FUN_004b0ee0(p, 0, 2)` / `(p, 2, 0)`, and 5 / 6 are the corner transitions `FUN_004b1e98(p, 0, 3)` / `(p, 1, 2)`. The port had the arc on 5 / 6. The arc is now on 4 / 0xa (`BARBA_PHASE.arc0 / arc2`); 5 / 6 use the transition body.
+
+**Arc fixes found while tracing (same file):**
+- The sub 3 easing had its arguments in the wrong order. `00434ac4(max 7.0, dist |25 - z|, accel 0.2, decel 0.05)` (refsrc line 233873, the exe's +0xc / +0x14 / +4 / +8 writes), not `DrlEasing(7, |25-z|, 0.2, 0.05)` in DrlEasing's (accel, decel, max, dist) order.
+- Sub 4 -> 5 is at timer 46: `0x906fb8` is 46.0 (exedata), the old note said 70 (the 70 is not in the exe).
+
+**Renderer:** every teleport bumps `warps` (the transition's enter, the arc's enter, the swim exit). The side entry (`sideEntry`, FUN_004b416c) now bumps it too; it is a jump. The easing records are preallocated (`ex`, `ey`, `ez`, `arcEase`) and reinitialised in place, so a transition allocates nothing.
+
+**Ported, with the constants read from the exe** (`tools/exedata.py read`): 0x906f18..0x906f3c (the curve max / accel), 0x906ef4 380, 0x906ef8 160, 0x906efc 200, 0x906f04 100, 0x906ee8 30, 0x906eec 4.0, 0x906ef0 0.1, 0x906f08 0.9, 0x906f0c 0.1, 0x906f00 .. 0x906f48 (0.0 / 1.0 / -1.0 are the signs). The normaliser's constants are 1, -1, -2, 0.5 (0x008fcc40 / 44 / 3c / 38).
+
+**ASSUMED:** the wait counter (+0xc8) is the transition's own (the exe shares it with the animation speed, so the anim part is not ported); the leader's step after a transition is not gated by 0x1b (the exe's gate decode says "the rest send 0x1b"); the volopt flag holders (+0x6e4) are not drawn, only flag 0x400 and its sound (0x3e9 on a rise / a drop: the port uses 0x3e9 for sign y > 0, 1000 otherwise, per the asm branch); the arrival ack (event 2, 0xa9) is not sent (every client runs the walk, the table step is the leader's); the start anchor is 0 at the ctor (+0x6c8 is not decoded at spawn); the arc's enter teleports to `side` as decoded from the asm, but the dispatch passes (0, 2) and (2, 0), so for 0xa the from anchor is 2 and the port's side is 0 or 1 (CONFLICT, not resolved).
+
+**Still open (phases with no port):** 0x0d (`HandleSinowberillMovementState_004b7040`), 0x0f / 0x10 (`0x004b2cd0`), 0x11 / 0x12 (`0x004b30fc`), 0x17 (`0x004b6d08`), 0x18 (`0x004b6300`), 0x19 / 0x1a (`0x004b4684`), dispatch 0 / 1 / 2 (`0x004b9e54`, `0x004b8034`, the pull-back `0x004b7860`); the followers' drawing; the animation speed of the walk.
+
+**Checks:** `node tests/barbaray.test.ts` ALL PASS (new "corner transitions": the 0x03 walk lands on anchor 1 in 100..260 ticks with no warp during the walk and the easing records reused; 0x28 drop to anchor 5 with sub 4 and flag 0x400; 5 / 6 are transitions; the dwell with the gate closed; the gate-open step at the walk's end; the side entry warp; the arc tests moved to 4 / 0xa and the 46 threshold). `node tests/combat.test.ts` 5852 checks, 0 failures (NEWSERV = the main checkout's `vendor/newserv`). `combatdepth` 836 checks, `dragon`, `goldragon`, `enemyfsm`, `enemyfsmep2`, `enemystatus`, `derolle` ALL PASS under Node 24. `client/node_modules/.bin/tsc --noEmit -p client` exit 0. Not run in Chrome (no e2e).
 
 ## 2026-10-24: Quest editor rotation gizmo
 
