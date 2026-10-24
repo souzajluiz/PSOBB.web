@@ -198,6 +198,25 @@ for (let cls = 0; cls < 12; cls++) {
   const ra = parsePlayerAssets(0, new Uint8Array(readFileSync(join(DATA, 'plAnj.bml'))), new Uint8Array(readFileSync(join(DATA, 'plAtex.afs'))));
   eq('HUmar cap 6 parts', buildPlayerModel(ra, { ...DEFAULT_APPEARANCE, hair: 6 }).parts.filter((p) => /hai|cap/.test(p)), ['plAhai06.nj', 'plAcap06.nj']);
 }
+// The section-ID aura (ASSUMED name for the lobby "cape" glow, DEVLOG 2026-10-23): body
+// texture 0 is the section emblem 'pxtZc_01<x>_t_core' (32x32, translucent body strip).
+// Section 2 Skyly is cyan and 8 Yellowboze is yellow (the lobby's cyan and yellow glows).
+{
+  const ra = parsePlayerAssets(0, new Uint8Array(readFileSync(join(DATA, 'plAnj.bml'))), new Uint8Array(readFileSync(join(DATA, 'plAtex.afs'))));
+  const mean = (sectionId: number) => {
+    const idx = playerTextureLists(ra, { ...DEFAULT_APPEARANCE, sectionId }).body[0];
+    const t = parseXvr(ra.textureData.get(idx), idx);
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < t.rgba.length; i += 4) if (t.rgba[i + 3] >= 8) { r += t.rgba[i]; g += t.rgba[i + 1]; b += t.rgba[i + 2]; n++; }
+    return [r / n, g / n, b / n];
+  };
+  eq('section 2 aura name', playerTextureNames(0, { ...DEFAULT_APPEARANCE, sectionId: 2 }).body[0], 'pxtZc_01c_t_core');
+  eq('section 8 aura name', playerTextureNames(0, { ...DEFAULT_APPEARANCE, sectionId: 8 }).body[0], 'pxtZc_01i_t_core');
+  const [sr, sg, sb] = mean(2);
+  if (!(sg > sr + 60 && sb > sr + 60)) fail(`Skyly aura not cyan: ${sr.toFixed(0)},${sg.toFixed(0)},${sb.toFixed(0)}`);
+  const [yr, yg, yb] = mean(8);
+  if (!(yr > yb + 100 && yg > yb + 100)) fail(`Yellowboze aura not yellow: ${yr.toFixed(0)},${yg.toFixed(0)},${yb.toFixed(0)}`);
+}
 // Proportion triangles and weights.
 eq('proportions (0,0)', proportionMorph(0, 0), { shapes: [1, 3, 0], weights: [0, 0, 1] });
 eq('proportions (1/3,1/2)', proportionMorph(Math.fround(1 / 3), 0.5).weights.map((w) => Math.round(w * 1e6) / 1e6), [0, 1, 0]);
