@@ -20,6 +20,7 @@ import {
   localRestrictions,
   parse7D,
   rankPlayers,
+  SonarStock,
   type Battle7D,
   type BattleSetup,
   type EffectiveRules,
@@ -45,6 +46,9 @@ import {
 import { isPlayerEntity, parse6x8F } from '../combat/pvp.ts';
 import { buildTeleport } from '../formats/npcplayerchar.ts';
 import type { QuestUi } from './questui.ts';
+import { buildBattleOverlay } from './battleoverlay.ts';
+import { applyOverlay, writeOverlayRaw } from './cmodeoverlay.ts';
+import type { CharacterFile } from '../net/charfile.ts';
 
 export interface BattleRunOptions {
   game: Game;
@@ -75,6 +79,10 @@ export class BattleRun {
   // Battle Mode traps (quest/battletraps.ts): the field of placed traps and the local stock.
   readonly traps = new TrapField();
   counters = new TrapCounters();
+  // The local sonar stock (quest/battle.ts SonarStock): set by applyRestrictions.
+  readonly sonar = new SonarStock();
+  // The real character while the battle overlay is on (quest/battleoverlay.ts); restored on exit.
+  private backup: { character: CharacterFile; raw: Uint8Array | null } | null = null;
   private names: (i: number) => string;
   rulesText = '';
 
@@ -114,6 +122,7 @@ export class BattleRun {
     this.wasDead = false;
     this.traps.clear();
     this.counters = new TrapCounters(); // the stock is set by applyRestrictions (trap mode ALL_PLAYERS)
+    this.sonar.setFromRules(null); // the stock is set by applyRestrictions (sonar enable)
     this.controller = new BattleController({
       setup,
       host: {
@@ -155,6 +164,7 @@ export class BattleRun {
           this.log(`battle: exit${aborted ? ' (aborted)' : ''}`);
           ui.closeWindow();
           this.hud?.clear();
+          this.restoreCharacter();
         },
         records: this.records,
       },
@@ -186,8 +196,79 @@ export class BattleRun {
     // locally is the lives counter and the HUD.
     if (this.hud) this.hud.state.lives = e.respawn === 2 ? e.lives : null;
     // UNCLEAR: the stock without trap mode ALL_PLAYERS is not traced; it stays at 0 here.
-    const counts = localRestrictions(e).traps;
-    if (counts) this.counters.setFromRules(counts);
+    const lr = localRestrictions(e);
+    if (lr.traps) this.counters.setFromRules(lr.traps);
+    this.sonar.setFromRules(lr.sonarCount);
+    void this.applyOverlay(e);
+  }
+
+  // The local overlay (cmoderun.applyTemplate's pattern): the backup is the real character,
+  // taken once; a rematch rebuilds from the same backup. Applied when the level table is in.
+  private async applyOverlay(e: EffectiveRules): Promise<void> {
+    const { view } = this.opts;
+    try {
+      const c = this.character();
+      const full = this.full();
+      if (!c) return;
+      if (!this.backup) this.backup = { character: structuredClone(c), raw: full ? full.slice(0, 0x4dc) : null };
+      const table = await view.combat.challengeLevelTable();
+      if (!table) {
+        this.log('battle: no level table, the battle overlay is not applied');
+        return;
+      }
+      if (!this.backup || this.disposed) return; // the battle exited while the table loaded
+      const overlay = buildBattleOverlay(this.backup.character, e, table);
+      applyOverlay(c, overlay);
+      if (full) {
+        writeOverlayRaw(c, full);
+        this.opts.game.selfSnapshot.inventory.set(full.subarray(0, 0x34c));
+        this.opts.game.selfSnapshot.disp.set(full.subarray(0x34c, 0x4dc));
+      }
+      await view.combat.reloadProgression();
+      view.items.onInventoryChanged();
+    } catch (err) {
+      this.log(`battle: overlay failed: ${(err as Error).message}`);
+    }
+  }
+
+  // The real character comes back when the battle exits (cmoderun.restoreCharacter).
+  private restoreCharacter(): void {
+    const b = this.backup;
+    const c = this.character();
+    if (!b || !c) return;
+    c.inventory.splice(0, c.inventory.length, ...b.character.inventory);
+    Object.assign(c.stats, b.character.stats);
+    c.level = b.character.level;
+    c.exp = b.character.exp;
+    c.meseta = b.character.meseta;
+    c.hpFromMaterials = b.character.hpFromMaterials;
+    c.tpFromMaterials = b.character.tpFromMaterials;
+    c.techLevels.splice(0, c.techLevels.length, ...b.character.techLevels);
+    const full = this.full();
+    if (full && b.raw) {
+      full.set(b.raw, 0);
+      this.opts.game.selfSnapshot.inventory.set(b.raw.subarray(0, 0x34c));
+      this.opts.game.selfSnapshot.disp.set(b.raw.subarray(0x34c, 0x4dc));
+    }
+    this.backup = null;
+    void this.opts.view.combat.reloadProgression();
+    this.opts.view.items.onInventoryChanged();
+  }
+
+  private character(): CharacterFile | null {
+    return this.opts.view.items.inventory?.c ?? null;
+  }
+
+  private full(): Uint8Array | null {
+    const f = this.opts.game.selfSnapshot.full;
+    return f && f.length >= 0x4dc ? f : null;
+  }
+
+  // The sonar's use (the Challenge item list row 5, quest/battle.ts SonarStock). ASSUMED:
+  // the battle's map is a battle map (the port has no map id for the battle arena here),
+  // and no list window is wired to it yet.
+  useSonar(): boolean {
+    return this.sonar.use(true);
   }
 
   // One 30 Hz frame: the local player's HP and death feed the score, then the controller.
@@ -205,6 +286,7 @@ export class BattleRun {
     this.lastHp = dmg.hp;
     this.wasDead = dmg.dead;
     c.tick();
+    this.sonar.tick();
     // The win particle on each leader, every update while the flag holds (quest/battle.ts winHolders).
     for (const id of c.winHolders()) this.opts.view.combat.winEffect(id);
     if (c.state === 'battle') this.tickTraps();
@@ -397,6 +479,7 @@ export class BattleRun {
     this.opts.view.hud.trapCount = null;
     this.opts.view.hud.battleTeam = null;
     this.traps.clear();
+    this.restoreCharacter();
     this.opts.view.combat.syncBattleTraps([]);
     this.opts.view.combat.battlePvp = false;
     this.opts.view.combat.onPvpHit = null;

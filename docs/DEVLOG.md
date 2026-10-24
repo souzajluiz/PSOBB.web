@@ -15869,3 +15869,53 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 - Flag 2 (`EffectFx.flag2`) has no port caller: the exe's flag-2 `create_particle_effect2` calls with flags 2 (dump 190645, 190742, 340283, 354745, 365975, 367994, 368123, 530958) are other objects. The Foie / Megid / Barta / Gibarta paths never pass the effect flag 2 (the table flag 2 selects the function, it is not the effect flag).
 - Barta's and Gibarta's model entries (flag 0x20: 0x193, 0x1d7, 0x1d8, 0x182..0x18e) are still not drawn (the BML models are not ported).
 - The 0x2000 ring-type question (ASSUMED above) needs a type 1 emitter with 0x2000 to check.
+
+## 2026-10-23: Battle mode: sonar stock and use, the local battle overlay
+
+**What changed:** `quest/battle.ts` (`localRestrictions` without the rare-only split, `SonarStock`), new `quest/battleoverlay.ts` (`buildBattleOverlay`, the mirror of newserv's `Client::create_battle_overlay` and the exe's ResetAll), `quest/battlerun.ts` (the backup, the overlay on the rules, the restore on exit and dispose, the sonar stock, `useSonar`), `tests/battle.test.ts` (the phase mapping, the sonar stock, the overlay on a fake level table). The ROADMAP battle line is updated.
+
+**Sonar: the reader is found.** The enable and the count are read in `SinowberillChallengePlayer_ResetAll_00690674` (dump 572006): the enable is `ValidateChallengePhaseIndexD_006a8f5c` on the effective struct at 0xa94290+0xd (the rule's +0x11 byte, `SetChallengeState8`), the count is `ValidateChallengePhaseIndexN_006a9050`'s char at +0x13 (the rule's +0x12). When the enable is 1, `SetSinowberillChallengeValue_00697944(&player->+0x8a0, count)` writes the count (clamped to 0..99, dump 572192). The dump names this field `last_attack_type` ("SNS glitch"); it is an int here, and the name is wrong.
+- The use: `ChallengePlayer_ProcessListSelection_0075158c` (dump 723874) maps list value 5 to state 0x11; `ChallengePlayer_StateMachine_00750954` state 0x11 / 0x12 (dump 723500..723520) calls `CreateSinowberillChallengeEntityManager_006b08b8` (602277) and, when it returns 1, `DecrementCounterAndClamp_00697968(+0x8a0, 1)` (578151). The create returns 1 only on the `battle_spaceship` and `battle_ruins` maps, and only while `g_SinowberillChallengeEntityManager_00a94b4c` is 0; the object's constructor (602318) sets its id 0x3de and a life of 0x1e.
+- Not the sonar: the trap palette (group 1 = 4, group 2 0x0d..0x10) goes through `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` (576703), which sends 6x83 with the trap stock at +0x89c (`DecrementTrapCounter_00698954`, 579095). That path is the port's `TrapCounters`, already ported.
+- The rule bytes map as: `ba_enable_sonar` = rule +0x11 (the enable), `ba_sonar_count` = rule +0x12. `localRestrictions` already gave the count only with the enable on.
+
+**Overlay: the phase-to-rule mapping, traced.** The effective struct bytes the ResetAll validators read (the setters `SetChallenge*` at 594106..594285, offsets from their writes):
+- weapons and armor: `ValidateChallengePhaseIndex_006a8ecc` on +2 = `weaponAndArmor`, 1..3. All three call `RemoveTechsAndEquipment_006a5998` for the weapon and armor groups; the removal (dump 590938) does not read a mode. So phase 3 (forbid rares) removes all weapons and armor, as newserv does for any mode but ALLOW. The old port `removeRareWeapons` (rares only) was wrong and is removed.
+- mags: `ValidateChallengeSubPhaseIndex_006a8edc` on +3 = `mag`, 1 (FORBID_ALL).
+- tools: `ValidateChallengeWaveIndex_006a8eec` on +4 = `tool`, 1..2.
+- replace char: `GetSinowberillChallengeState_006a8f0c` on +8 = `replaceChar`, 1; the level is `GetSinowberillChallengePlayerLevel_006a9020` (+0x14 = `charLevel`); then `apply_base_stats`, the materials zeroed.
+- meseta: `ValidateChallengePhaseIndexC_006a8f4c` on +0xc = `meseta` != 0; clears `battleparams_stats->meseta_unused_for_monsters`, the field the Challenge item list shows as Meseta (`ChallengePlayer_CreateItemList_00751ae0`, 724344).
+- scape dolls: `ValidateChallengePhaseIndexE_006a8f6c` on +0xe = `forbidScapeDolls`, 1; `ResetEquipment(inv, this, 3, 9)`.
+- techniques: `ValidateChallengeStateIndex_006a8ebc` on +1 = `techDisk`: 1 sets every technique's cooldown to 0xff, 2 sets 0x1d and runs `UpdateTechniqueCastingState` with `maxTechLevel` (+0x11). The exe blocks techniques with cooldowns, not with levels.
+- hp / tp materials: the replace-char branch zeroes them (ResetAll 572155).
+- `keap_weapon_on_drop` = +9 = `dropWeapon` 1, `telepipes_disabled` always set, `ClampChallengePlayerField5To1_006a92c4` (+5 = `trapMode`) gives the four trap stock values; all as the port already has them.
+
+**Ported:**
+- `buildBattleOverlay(base, effective, table)`: the inventory filter (types 0 and 1 for weapons and armor, 2 for mags, 3 for tools, 3/9 for scape dolls), renumbered; the meseta clear; with replace-char the stats from the level table (same walk as `cmodeoverlay.buildChallengeOverlay`), level = charLevel + 1, EXP at that level, ESP 40, no material bonuses; the technique rule (forbid all: no technique; limit: each level capped at maxTechLevel + 1, the 1-based store).
+- `BattleRun.applyRestrictions` takes a backup once (the real character and its raw save), applies the overlay in place (`applyOverlay`, `writeOverlayRaw`), and restores on the battle's exit and on dispose; a rematch rebuilds from the same backup.
+- `SonarStock`: `setFromRules` (the count with the enable, else 0), `use(battleMap)` (refused on a non-battle map, while the manager lives, or at 0; takes one and starts a 0x1e-frame life), `tick` once per frame. `BattleRun.useSonar()` is the entry point.
+
+### ASSUMED
+
+- Battle map: the port has no map id for the battle arena here; `useSonar` passes `battleMap = true`.
+- The sonar list row is greyed at 0 (the exe's `ChallengePlayer_SetMenuItemsEnabled` checks the row value, its writer not traced), and the manager ends after 0x1e frames (its end is not traced).
+- The sonar's effect (what the manager reveals) is not ported.
+- Tools: all tools are removed (newserv). The exe's removal for tools compares the stack count with a limit from the item type's vtable 0x88 (`RemoveTechsAndEquipment_006a5998` at 590980..591009), and that limit is not traced.
+- Replace-char stats: ESP 40 (newserv and cmode) and no meseta 300 (newserv sets it; the exe's ResetAll does not show it, `apply_base_stats` not traced).
+- Techniques: newserv's levels (FORBID_ALL unlearns, LIMIT_LEVEL caps), not the exe's cooldowns 0xff / 0x1d. The exe's technique block is the port's cooldown path, which is not ported here.
+- Equipped items are removed with the rest (the exe unequips the weapon and the units by slot; the inventory entry is the same item).
+
+### Checks
+
+- `node tests/battle.test.ts`: all checks passed (the new overlay and sonar cases included).
+- `node tests/cmode.test.ts`: passed (the template overlay skipped, no PlyLevelTbl.prs here); `node tests/customize.test.ts`: passed.
+- `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run; removed before the commit).
+- No Playwright, no Chrome.
+
+### Left
+
+- The sonar's list row, its key and the Challenge item list window (the port has no list window for the battle items); the trigger goes through `BattleRun.useSonar`.
+- The sonar's effect (the manager object: what it reveals and for how long).
+- The battle map check (the port has no map id for the battle arena).
+- The technique block as the exe does it (cooldowns 0xff / 0x1d), the tools' count-limit compare, and `apply_base_stats`'s exact stat writes.
+- The Chrome check of the overlay and the sonar row.

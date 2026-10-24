@@ -330,8 +330,7 @@ export function assignTeams(present: boolean[], teamsOn: boolean): number[] {
 // --- what the rules do to the local character -----------------------------------
 
 export interface LocalRestrictions {
-  removeWeapons: boolean; // weapons and armor / shield / units out of the inventory
-  removeRareWeapons: boolean; // ASSUMED for FORBID_RARES: only the rares go
+  removeWeapons: boolean; // weapons and armor / shield / units out of the inventory (phases 1..3, all three modes)
   removeMags: boolean;
   removeTools: boolean;
   clearTechs: boolean; // tech disk mode FORBID_ALL: every technique reset
@@ -345,12 +344,22 @@ export interface LocalRestrictions {
   sonarCount: number | null;
 }
 
-// SinowberillChallengePlayer_ResetAll_00690674 (.c:572006), per player. newserv
-// does the same to the server-side character (Client::create_battle_overlay).
+// SinowberillChallengePlayer_ResetAll_00690674 (dump 572006), per player. The phase
+// values are the effective struct's bytes (ValidateChallenge*Index validators):
+//   weapons and armor: ValidateChallengePhaseIndex_006a8ecc = weaponAndArmor, 1..3
+//     (all three modes call RemoveTechsAndEquipment for weapons and for armors; the
+//     removal itself does not look at the mode, dump 590938);
+//   mags: ValidateChallengeSubPhaseIndex_006a8edc = mag, 1 (FORBID_ALL);
+//   tools: ValidateChallengeWaveIndex_006a8eec = tool, 1..2;
+//   replace char: GetSinowberillChallengeState_006a8f0c = replaceChar, 1 (apply_base_stats);
+//   meseta: ValidateChallengePhaseIndexC_006a8f4c = meseta, != 0 (the battleparams
+//     meseta field, which the Challenge item list shows as Meseta).
+// newserv does the same to the server-side character (Client::create_battle_overlay:
+// remove types 0 and 1 for any mode but ALLOW, type 2 for FORBID_ALL, type 3 for a
+// tool mode but ALLOW, type 3 subtype 9 for scape dolls).
 export function localRestrictions(e: EffectiveRules): LocalRestrictions {
   return {
-    removeWeapons: e.weaponAndArmor === WEAPON_ARMOR.clearAndAllow || e.weaponAndArmor === WEAPON_ARMOR.forbidAll,
-    removeRareWeapons: e.weaponAndArmor === WEAPON_ARMOR.forbidRares,
+    removeWeapons: e.weaponAndArmor >= WEAPON_ARMOR.clearAndAllow && e.weaponAndArmor <= WEAPON_ARMOR.forbidRares,
     removeMags: e.mag === MAG_MODE.forbidAll,
     removeTools: e.tool === TOOL_MODE.clearAndAllow || e.tool === TOOL_MODE.forbidAll,
     clearTechs: e.techDisk === TECH_DISK.forbidAll,
@@ -363,6 +372,50 @@ export function localRestrictions(e: EffectiveRules): LocalRestrictions {
     traps: e.trapMode === TRAP_MODE.allPlayers ? [...e.trapCounts] as [number, number, number, number] : null,
     sonarCount: e.sonar === 1 ? e.sonarCount : null,
   };
+}
+
+// --- sonar -----------------------------------------------------------------------
+//
+// The rule count reaches the player as a 4-byte value at player +0x8a0 (the dump's
+// `last_attack_type`, a misnamed field): ResetAll writes it through
+// SetSinowberillChallengeValue_00697944 (clamped to 0..99) when the effective enable
+// byte is 1 (dump 572192; the enable is ValidateChallengePhaseIndexD_006a8f5c). The
+// use is the Challenge item list's row 5 (ChallengePlayer_ProcessListSelection_0075158c
+// -> state 0x11), state 0x12 of ChallengePlayer_StateMachine_00750954 (dump 723500):
+// CreateSinowberillChallengeEntityManager_006b08b8 must return 1 (only on the battle
+// spaceship and ruins maps, and only while g_SinowberillChallengeEntityManager_00a94b4c
+// is 0), then DecrementCounterAndClamp(+0x8a0, 1). The object's effect is not traced.
+export const SONAR_MANAGER_FRAMES = 0x1e; // ASSUMED: the manager's life (its constructor writes 0x1e at +0x20)
+
+export class SonarStock {
+  count = 0;
+  private life = 0; // frames the manager object lives (g_SinowberillChallengeEntityManager_00a94b4c != 0)
+
+  // ResetAll: the rule count when the enable is on, else 0.
+  setFromRules(sonarCount: number | null): void {
+    this.count = sonarCount === null ? 0 : Math.max(0, Math.min(99, sonarCount));
+    this.life = 0;
+  }
+
+  get active(): boolean {
+    return this.life > 0;
+  }
+
+  // One frame of the manager's life (ASSUMED: the object ends after its frames; the
+  // exe's end is not traced).
+  tick(): void {
+    if (this.life > 0) this.life--;
+  }
+
+  // The use: false (nothing changes) when the map is not a battle map, a manager is
+  // alive, or the stock is empty (ASSUMED: the list row is greyed at 0; the exe's
+  // SetMenuItemsEnabled checks the row value, its writer is not traced).
+  use(battleMap: boolean): boolean {
+    if (!battleMap || this.active || this.count < 1) return false;
+    this.life = SONAR_MANAGER_FRAMES;
+    this.count--;
+    return true;
+  }
 }
 
 // --- scoring --------------------------------------------------------------------
