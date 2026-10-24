@@ -110,7 +110,7 @@ export class QuestUi {
   private lists: ListState[] = [];
   // Fixed windows of a mode's HUD (the Challenge Mode timer, Area counter and
   // result panel, quest/cmoderun.ts), keyed by name.
-  private huds = new Map<string, { x: number; y: number; lines: string[] }>();
+  private huds = new Map<string, { x: number; y: number; lines: string[]; centre?: number | undefined }>();
   // Labels pinned to a world point (a grave's text, quest/cmodegrave.ts): drawn
   // with no frame, centred on the projected point, lines going down, at `alpha`;
   // dropped while the point is behind the camera.
@@ -229,8 +229,10 @@ export class QuestUi {
 
   // A window at a fixed spot (GUI position in the 640x480 space), shown until
   // it is cleared with null. Not interactive.
-  setHud(id: string, win: { x: number; y: number; lines: string[] } | null): void {
-    if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(questText) });
+  // centre (optional): the box is centred on x + centre instead of starting at x (the exe's
+  // list window text sits at origin + centre - width / 2, UpdateWindowPositionForText_00761040).
+  setHud(id: string, win: { x: number; y: number; lines: string[]; centre?: number | undefined } | null): void {
+    if (win) this.huds.set(id, { x: win.x, y: win.y, lines: win.lines.map(questText), centre: win.centre });
     else this.huds.delete(id);
   }
 
@@ -378,7 +380,7 @@ export class QuestUi {
       this.boardCtx.setTransform(s, 0, 0, s, 0, 0);
       this.drawText(this.boardCtx, QUEST_BOARD_POS[0], QUEST_BOARD_POS[1], this.board, extra);
     }
-    for (const h of this.huds.values()) this.drawText(ctx, h.x, h.y, h.lines, extra);
+    for (const h of this.huds.values()) this.drawText(ctx, h.x, h.y, h.lines, extra, h.centre);
     if (cam) {
       for (const w of this.worldHuds.values()) {
         const p = projectHead(cam, w.pos, 0, VW + extra);
@@ -402,10 +404,10 @@ export class QuestUi {
     for (const list of this.lists) this.drawList(ctx, list, extra);
   }
 
-  private drawText(ctx: CanvasRenderingContext2D, x0: number, y: number, lines: string[], extra: number): void {
+  private drawText(ctx: CanvasRenderingContext2D, x0: number, y: number, lines: string[], extra: number, centre?: number): void {
     const w = Math.max(...lines.map(gameTextWidth)) + BORDER;
     const h = lines.length * GAME_TEXT.lineHeight - GAP + BORDER;
-    const x = anchorX(x0, w, extra);
+    const x = anchorX(centre === undefined ? x0 : x0 + centre - w / 2, w, extra);
     drawWindowFrame(ctx, this.skin!.frame, x, y, w, h);
     lines.forEach((l, i) => drawGameText(ctx, l, x + 10, y + 10 + i * GAME_TEXT.lineHeight, '#ffffff'));
   }
