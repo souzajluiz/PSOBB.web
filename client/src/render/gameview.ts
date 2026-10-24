@@ -448,6 +448,8 @@ export class GameView {
   quest: QuestSession | null = null;
   // The quest overlay's keys while the main menu holds them (quest/town.ts).
   questKey: ((e: KeyboardEvent) => boolean) | null = null;
+  // The soft keyboard's request while a quest window takes text (the S-rank name window).
+  questTextInput: (() => { password: boolean } | null) | null = null;
 
   setQuest(quest: QuestSession | null): void {
     this.quest = quest;

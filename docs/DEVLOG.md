@@ -1,5 +1,23 @@
 # Devlog
 
+## 2026-10-24: Challenge: the S-rank prize name window (the exe's TKeyboardControl, no prompt)
+
+**What changed:** the S-rank name is no longer typed in `prompt()`. `quest/srankname.ts` is the pure model (the typed text, a letters-only rule, the cap of 8, Backspace, Decide with an empty name kept waiting), `QuestUi.askName` (`quest/questui.ts`) draws the window and takes its keys, `cmoderun.ts` `askAwardName` awaits it, and the field's soft keyboard (phones) opens for it through `GameView.questTextInput` (`classic/field.ts` textInput, wired in `quest/town.ts`). The send path is the same: the name goes to `buildSRankWeapon` through `nameAward()`.
+
+**Which window the exe uses (checked):** the S-rank name window is `TKeyboardControl`, not the char-create soft grid. `QuestThread4Constructor_006bcf6c` (`Psobb.exe-05112026.c` ~615553) calls `TKeyboardControl_constructor(.., 8, 0, 1, ..)`: the 8 is the length cap, the 1 is the advanced text input (`InitializeChallengePlayerInputAdvanced_0073122c`, `EnableIME_Advanced`), so the exe types through the IME into a text line, with no character grid. The same constructor (`TKeyboardControl_constructor` ~768708) is the game list's password editor (16, `0x10`), which the port already models as `TextEditor` + `drawEditor` (`classic/gamelist.ts`), so the window reuses `TextEditor`'s rule (printable ASCII, a cap) with the letters-only filter. The char-create name editor is the other thing (FUN_0078eba4, the grid), not reused. The Input UserID window (`titleflow.ts` `InputUserIdWindow`) is a different exe window (the login's ChallengePlayerInputWindow), not this one.
+
+**Exe evidence:**
+- Keyboard at GUI 0xd3 = (261, 173) (`tools/exedata.py read 009725d8 f 2`), label list at GUI 0x58 = (99, 120) (`read 00972200 f 2`). The formula `0x00971f40 + 8 * entry` checks out against the port's 0xd7 (99, 128) and 0xd8 (109, 164) (`classic/gamelist.ts`).
+- Label: `ListWindowObject_AddListItem(.., unitxt 12 / 0x47, 0x81)`, the list is initialised with 443.0 and 84.0 (`ListWindowObject_Initialize_007361d0`, the frame size is ASSUMED from those two arguments).
+- `ProcessQuestListSelection_006bc68c` (~614986): an empty text returns 0 with the callback (the window waits); a non-empty text goes through `NormalizeEntityName_00813f0c` (~831829), which is a shop-dialog word filter (`NormalizeAndFilterEntityName_00813b18`, ~831631: full-width folding, case folding, then a banned-entry pass), not a character whitelist. The port keeps letters only because the weapon's 5-bit name (`buildSRankWeapon`, `QuestThread4`'s `g_QuestListErrorBuffer` write on a failed filter) holds A..Z only; any other character would be packed as 0.
+- The award state (`award_item_name`, ~614862 in `ProcessQuestThread`) waits on that function and only then marks the item done.
+
+**ASSUMED:** the window starts empty; the typed text's place inside the label frame (the editor's origin is GUI 0xd3 as read, the frame is drawn at GUI 0x58 with the height 84); the caret; Escape does nothing (the exe's cancel path, `handle_text_input_end` on escape, is not traced here; the award list has no cancel either); a letter typed while Decide is bound to a letter key is taken as Decide (same as the gamelist editors); the word filter's banned list is not reproduced (the server's own name rules apply, as before); the window is not run in Chrome.
+
+**Checks:** `node tests/srankname.test.ts` (letters only, the 8 cap, Backspace, Decide on empty / non-empty and upper case, the name packs to the weapon's 5-bit S, the GUI positions 0x58 / 0xd3); `node tests/cmode.test.ts` passes (the template overlay part skips without `PlyLevelTbl.prs`, as before); `tests/questflow.test.ts`, `tests/townfield.test.ts`, `tests/quests.test.ts` pass; `client/node_modules/.bin/tsc --noEmit -p client` is clean (Node 24).
+
+**Left:** a Chrome check of the window (the label frame, the editor place, the phone keyboard), the award's remaining states, and the Pioneer 2 records window (see 2026-10-23).
+
 ## 2026-10-24: Quest editor rotation gizmo
 
 **What changed:** a rotation gizmo in the quest editor's 3D view
