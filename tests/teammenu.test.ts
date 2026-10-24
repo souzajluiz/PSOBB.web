@@ -75,13 +75,14 @@ interface Calls {
   privileges: Array<[number, number]>;
   disbanded: number;
   searched: number[];
+  meets: number[];
 }
 
 function host(
   membership: TeamMembership,
   answers: Partial<{ create: number; remove: number; privilege: number; disband: number; found: boolean }> = {},
 ): { host: TeamHost; calls: Calls } {
-  const calls: Calls = { created: [], removed: [], privileges: [], disbanded: 0, searched: [] };
+  const calls: Calls = { created: [], removed: [], privileges: [], disbanded: 0, searched: [], meets: [] };
   const members: TeamMember[] = [
     { rank: 1, privilege: PRIVILEGE.master, guildCard: 900, name: 'Boss' },
     { rank: 2, privilege: PRIVILEGE.leader, guildCard: 901, name: 'Lead' },
@@ -96,6 +97,7 @@ function host(
       removeMember: async (g) => (calls.removed.push(g), answers.remove ?? 0),
       members: async () => members,
       searchMember: async (g) => (calls.searched.push(g), answers.found ?? false),
+      meetMember: (g) => calls.meets.push(g),
       setPrivilege: async (g, p) => (calls.privileges.push([g, p]), answers.privilege ?? 0),
       disband: async () => (calls.disbanded++, answers.disband ?? 0),
       crossRanking: async () => [
@@ -613,6 +615,9 @@ async function openMaster(h: TeamHost) {
   fw.key(k('ArrowDown'));
   fw.key(k('Enter'));
   eq([fw.lastLeaf, fw.state], [2, 'meet'], 'Meet the User chosen: the phase label starts');
+  eq(found.calls.meets, [901], 'Meet the User asks the host to reconnect to the searched member once');
+  fw.key(k('Enter'));
+  eq(found.calls.meets, [901], 'a key during the phase label does not ask again');
   check(fw.key(k('Escape')) && fw.state === 'meet', 'keys are ignored during the phase label');
   for (let i = 0; i < 450; i++) fw.tick();
   check(fw.open && fw.meetFrames === 450, 'the phase label lasts 450 frames');

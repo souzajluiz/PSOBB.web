@@ -9,6 +9,7 @@ import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } fro
 import { Game, type GameListEntry } from '../net/game.ts';
 import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
+import type { GuildCardSearchResult } from '../net/guildcard.ts';
 import { membershipFromSave, NO_TEAM, TeamClient } from '../net/team.ts';
 import { GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
@@ -385,7 +386,10 @@ async function main(): Promise<void> {
   // (net/team.ts): one per connection, its membership refreshed from the latest
   // E7 save data at each lobby entry (the 12EA updates keep it current).
   let teamClient: { conn: BBConnection; client: TeamClient } | null = null;
-  const teamHost = (lobby: Lobby): TeamHost | undefined => {
+  // The last Guild Card search reply of the member list (the exe keeps the 0041 copy in the
+  // list window, +0x9c): Meet the User reconnects with it (BBSession.meetUser).
+  let memberReply: GuildCardSearchResult | null = null;
+  const teamHost = (lobby: Lobby, shipName: string): TeamHost | undefined => {
     const s = session;
     if (!s?.init) return undefined;
     const gc = s.init.guildCardNumber;
@@ -405,7 +409,21 @@ async function main(): Promise<void> {
       intraRanking: () => c.intraRanking(),
       rewards: (owned) => c.rewards(owned),
       // Enter on a member row: the Guild Card search (0040 / 0041) of that card, true on an answer.
-      searchMember: async (card) => (await (session?.guildCardClient ?? null)?.search(gc, card)) != null,
+      searchMember: async (card) => {
+        memberReply = (await session?.guildCardClient?.search(gc, card)) ?? null;
+        return memberReply != null;
+      },
+      // Meet the User: reconnect to the searched member's server with the reply (state 0x12).
+      meetMember: (card) => {
+        const reply = memberReply;
+        const s = session;
+        if (!s || !reply || reply.guildCardNumber !== card) return;
+        memberReply = null;
+        s.meetUser(reply).then(
+          (next) => enterLobby(next, shipName),
+          (err: unknown) => console.error(err),
+        );
+      },
     };
   };
 
@@ -434,7 +452,7 @@ async function main(): Promise<void> {
     console.info(`[lobby#${lobby.seq}] lobby view built: lobby ${lobby.lobbyNumber}, ${lobby.players.size} players, markers [${lobbyView.markerIds()}]`);
     const hud = await loadHud(mapData.infoCols ?? []);
     hud.party = partyHost(lobby, shipName);
-    const team = teamHost(lobby);
+    const team = teamHost(lobby, shipName);
     if (team) hud.team = team;
     hud.transport = transportHost(shipName);
     hud.guildCards = () => session?.guildCards ?? null;

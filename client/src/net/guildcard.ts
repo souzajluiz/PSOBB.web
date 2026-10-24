@@ -305,20 +305,38 @@ export interface GuildCardSearchResult {
   guildCardNumber: number;
   address: number; // raw IPv4 field (reconnect target), little-endian u32
   port: number;
-  location: string; // "BLOCK##-##" style string, the lobby the player is in
+  location: string; // "GAME,BLOCK##,SERVER" style string, the lobby the player is in
+  // The embedded 19 (reconnect) of the reply: its header flag and the 8 body bytes
+  // (address big-endian, port, unused). Meet the User sends them back and reconnects.
+  reconnect: { flag: number; body: Uint8Array };
+  // The last ','-token of the location (the exe's g_SinowberillChallengePhaseLabel, see phaseLabelOf).
+  phaseLabel: string;
   menuId: number;
   itemId: number;
   name: string;
 }
 
+// ProcessPhaseLabel_0074f028 (dump 722132): the location is cut at 0x44 units and every
+// ','-token is copied (the label is 0x11 units at most); the last token is what stays.
+export function phaseLabelOf(location: string): string {
+  let label = '';
+  for (const token of location.slice(0, 0x44).split(',')) {
+    if (token.length > 0) label = token.slice(0, 0x10);
+  }
+  return label;
+}
+
 export function parseSearchResult(data: Uint8Array): GuildCardSearchResult {
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const location = stripMarker(readUtf16(data, 0x1c, 0x44));
   return {
     searcher: u32(dv, 0x04),
     guildCardNumber: u32(dv, 0x08),
     address: u32(dv, 0x14),
     port: dv.getUint16(0x18, true),
-    location: stripMarker(readUtf16(data, 0x1c, 0x44)),
+    location,
+    reconnect: { flag: u32(dv, 0x10), body: data.slice(0x14, 0x1c) },
+    phaseLabel: phaseLabelOf(location),
     menuId: u32(dv, 0xa4),
     itemId: u32(dv, 0xa8),
     name: stripMarker(readUtf16(data, 0xe8, 0x20)),

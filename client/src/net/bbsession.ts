@@ -9,7 +9,8 @@
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
 import { parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
 import { Lobby } from './lobby.ts';
-import { GuildCardBook, GuildCardClient } from './guildcard.ts';
+import { GuildCardBook, GuildCardClient, type GuildCardSearchResult } from './guildcard.ts';
+import { MENU_ID_LOBBY } from './game.ts';
 import { InfoBoardClient } from './infoboard.ts';
 import { SimpleMailBox } from './simplemail.ts';
 import { applyKeyConfig, keyConfigFromCharacter } from '../input/keyconfig.ts';
@@ -446,6 +447,47 @@ export class BBSession {
     });
     this.lobby = new Lobby(conn);
     return this.menuReply(conn);
+  }
+
+  // Meet the User (the team member list's leaf 2, exe state 0x12 -> ProcessPhaseLabel_0074f028
+  // dump 722132 -> ShipConnectionManager_HandlePacket0x19_007d7640 dump 812031). The 0041
+  // reply's embedded 19 is sent on the current connection, then the session reconnects to the
+  // reply's port and logs in with the Meet User fields (connection phase 6, menu_id LOBBY and the
+  // reply's lobby as preferred_lobby_id; newserv on_93_BB and SC_MeetUserExtensionT). The
+  // server answers 67 (lobby joined). The address is not used: the bridge routes every port to
+  // its server, as followRedirect does (ASSUMED for a multi-server setup). The lobby is returned;
+  // the caller shows it.
+  async meetUser(reply: GuildCardSearchResult): Promise<Lobby> {
+    const init = this.init;
+    const login = this.gameLogin;
+    if (!init || !login) throw new Error('log in first');
+    this.log(`meet: ${reply.phaseLabel}, redirected to port ${reply.port}`);
+    this.requireConn().send(0x19, reply.reconnect.flag, reply.reconnect.body);
+    const conn = await this.open(reply.port);
+    conn.sendLogin({
+      username: login.username,
+      password: login.password,
+      guildCardNumber: init.guildCardNumber,
+      securityToken: init.securityToken,
+      clientConfig: init.clientConfig,
+      connectionPhase: 6,
+      characterSlot: login.slot,
+      menuId: MENU_ID_LOBBY,
+      preferredLobbyId: reply.itemId,
+    });
+    const lobby = new Lobby(conn);
+    this.lobby = lobby;
+    const first = await conn.waitFor(0x07, 0x67, 0x1a, 0xd5);
+    if (first.command === 0x1a || first.command === 0xd5) {
+      throw new Error(readUtf16(first.data, 0, first.data.length >> 1));
+    }
+    if (first.command === 0x07) throw new Error('meet: the server sent a menu, not the lobby');
+    // The guild card book, mailbox and info board are bound to a connection: rebind them
+    // to the new one (ASSUMED: the exe's per-lobby sync was not traced).
+    this.guildCardSync = null;
+    this.startGuildCardSync(conn);
+    this.log(`meet: joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}`);
+    return lobby;
   }
 
   close(): void {

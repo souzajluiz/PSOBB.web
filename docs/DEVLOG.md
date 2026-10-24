@@ -14832,3 +14832,39 @@ the shell's default Node 16 fails to load them), `cd client && npx tsc --noEmit 
 2. The lobby motion menu (case 0xc / 0xe) drawing and its sub-lists (unitxt group 0x42).
 3. The trade path (states 0x13..0x20 of `QuickMenuWindow_ProcessState_0075f09c`, the 900-frame cancel) and the 0x61 player list.
 4. The chat cooldown owner: the quick menu object's `+0x22` timer, ticked only while its panel is up.
+## 2026-10-23: Meet the User reconnects (the 0041 reply's embedded 19)
+
+**Premise checked against the exe.** The entry above said the port stays on its block and the embedded 0x19 is not sent. The exe does both, so this entry ports the reconnect. The Send Mail and Meet the User leaves are otherwise as the previous entry says.
+
+**Exe evidence (PsoBB.exe, Psobb.exe-05112026.c dump):**
+- State 0x12 (dump 721093) calls `ChallengePlayerInfoWindow_ProcessPhaseLabel_0074f028` (dump 722132). It returns unless the list's reply flag (+0x94 bit 1) is set. It copies the location (+0xc0, packet +0x24) cut at 0x44 units, keeps the last `,` token as `g_SinowberillChallengePhaseLabel`, and then calls `ShipConnectionManager_HandlePacket0x19_007d7640(g_pShipConnectionManager, list+0xb0, list+0x148)`.
+- The list copy (`ChallengePlayerInfoWindowListWindow_UpdateContent_0074ef0c`, dump 722063) is the 0x130-byte 0041 packet from its header, at list+0x9c. So list+0xb0 is packet +0x14 (the embedded 19, header then body) and list+0x148 is packet +0xac (0x84 bytes, the Meet User extension).
+- `ShipConnectionManager_HandlePacket0x19_007d7640` (dump 812031): sends the embedded 19 with `send_packet` on the current connection (`*param_1` bytes); reads the address from `param_1[2]` (packet +0x1c) and the port from `param_1[3]` low 16 bits (packet +0x20); copies the 0x84 extension to `g_Packet0x19Data_00aaec20`; calls the connection's vtable +0x14 (close), sets +0x12138 = 1 (the reconnect flag), +0x1211c / +0x12130 / +0x1641c / +0x16420 = 0, sets the target (`DarvantForm7Target_SetPhaseId` / `SetTargetId`), calls vtable +0x10 (connect; a negative result sets +0x10074), then vtable +0x18 (on connected).
+- The reconnect login: `handle_ship_packet0x3` (dump 813403) sends the 0xB4-byte 93 login and, when +0x12138 is set, goes to socket state 6 (`g_SocketState = '\x06'`, dump line 813510) with the extension stored in `_DAT_00a46bfc`. The names of that global are wrong (only written here); the 93 body is not traced byte by byte.
+- The packet layout matches newserv `S_GuildCardSearchResultT` (vendor/newserv/src/CommandFormats.hh; the BB form is 0x128 after the 8-byte header): player tag +8, searcher +0xc, result +0x10, embedded header +0x14 (8 bytes), embedded reconnect body +0x1c (address big-endian, port, unused), location +0x24 (0x44 units), extension +0xac (`SC_MeetUserExtensionT`: lobby_refs[0] menu_id +0xac, item_id +0xb0, name +0xf0 (0x20 units)). `handle_ship_packet0x41` (dump 809943) copies the same 0x130 bytes.
+- newserv's 93 (`C_LoginBase_BB_93`, 0x7C): connection_phase 6 is "lobby server (with Meet User fields specified)"; menu_id at 0x74 and preferred_lobby_id at 0x78 are the lobby ref; `on_93_BB` (ReceiveCommands.cc) takes the lobby when menu_id is `MenuID::LOBBY` (0x33000033).
+
+**Port:**
+- `client/src/net/guildcard.ts`: `parseSearchResult` also returns `reconnect` (embedded flag and the 8 body bytes at payload 0x14) and `phaseLabel`; `phaseLabelOf(location)` is the ProcessPhaseLabel token rule (last non-empty `,` token, cut at 0x10 units).
+- `client/src/net/bbconnection.ts`: `LoginParams.menuId` / `preferredLobbyId` are written at body 0x74 / 0x78 (they were zero).
+- `client/src/net/bbsession.ts`: `BBSession.meetUser(reply)` sends the embedded 19 on the current connection, opens the reply's port (`open`, as `followRedirect`), logs in with connection_phase 6, menu_id `MENU_ID_LOBBY` and the reply's lobby (`itemId`), waits for 67, rebinds the guild card sync, mailbox and info board to the new connection (`guildCardSync = null`, then `startGuildCardSync`), and returns the new `Lobby`.
+- `client/src/classic/teammenu.ts`: `TeamHost.meetMember?(card)`; Enter on Meet the User calls it once (the phase label starts as before).
+- `client/src/classic/main.ts`: `teamHost(lobby, shipName)` keeps the last 0041 reply (`memberReply`, set by `searchMember`); `meetMember` calls `session.meetUser(reply)` and then `enterLobby(next, shipName)`, which shows the new lobby screen.
+- `tests/guildcard.test.ts`: the embedded 19 body bytes, its flag, the phase label, the LOBBY ref, and `phaseLabelOf` (empty, no comma, empty tokens, the 0x10 cut). `tests/teammenu.test.ts`: `meetMember` gets the searched card once; a key during the phase label does not ask again.
+
+**ASSUMED:**
+- The embedded 19 is sent back to the server with the reply's 8-byte header flag and the 8 body bytes (length 0x10, as newserv's reconnect header). The exe sends `*param_1` bytes; the length and flag were not checked against a live reply. newserv has no client-side 19 handler (grep found none), so the echo is assumed harmless there.
+- The reconnect login uses connection_phase 6 with menu_id LOBBY and the reply's lobby as preferred_lobby_id. The exe's 93 body was not decoded; the phase and lobby fields follow newserv's documentation of the Meet User login.
+- The reply's address is not used. `connectBridge(port)` routes every port to the bridge's server, as `followRedirect` already does. A real multi-server setup would need the address.
+- The ship connection's vtable slots (+0x14 close, +0x10 connect, +0x18 connected) are named by their order in `HandlePacket0x19` and in the matching `handle_ship_packet0x19` (dump 201495); their bodies were not traced.
+- `startGuildCardSync` is once per session in the port; for Meet it is reset so the guild card client, mailbox and info board use the new connection. The exe's per-lobby sync was not traced.
+- The member list's 450-frame wait still runs on the old lobby screen; the new screen replaces it when the reconnect finishes. If the reconnect takes longer than 450 frames, the list closes first and the old screen stays until the new lobby is shown. The old screen's pings during the reconnect are not stopped.
+- `parseSearchResult`'s `address` is still read as little-endian u32; newserv writes it big-endian. It is not used for the connection.
+
+**Not ported / left:**
+- **Guild Card search result (player info) Meet row:** the port's Guild Card window has no Meet row, and the exe's Guild Card result window was not traced. The reconnect helper (`BBSession.meetUser`) is reusable for it; the row and its state are the missing part.
+- **The phase label is not drawn:** its only reader in the dump is the Sinowberill challenge timer (`BuildPhaseTimerString_0077ba70`, dump 752612), which the port does not have. It is kept on the parsed reply (`phaseLabel`).
+- **Sent Item (state 0x15)** is still greyed (trade item window, not traced).
+- Not run live: no second player or multi-ship server in this session. The 93 phase 6 login and the 19 echo are checked only against newserv's source and the exe's control flow.
+
+**Checks:** `node tests/teammenu.test.ts` (ALL PASS, 155 checks), `node tests/guildcard.test.ts` (ALL PASS), `node tests/guildcardmenu.test.ts`, `node tests/simplemail.test.ts`, `node tests/lobbymenu.test.ts`, `node tests/lobbymain.test.ts`, `node tests/team.test.ts` (all pass). `client` `tsc --noEmit -p .` clean (Node 24; the worktree's `client/node_modules` symlink is removed before the commit).
