@@ -16,7 +16,7 @@
 // destroys (dump line 288330) and the single particle update never submits (dump 291923).
 // Run: node tests/particleorient.test.ts
 
-import { NT_FLAGS, ParticleSystem, NO_ORIENT, modelOpaquePassSkipped, modelParticleBlend, modelParticleColour, orientOfDirection, parseParticleEntry, particleIsNt, turnStep, type Orient } from '../client/src/classic/particles.ts';
+import { NT_FLAGS, ParticleSystem, NO_ORIENT, diffuseAlphaPass, diffuseByte, modelOpaquePassSkipped, modelParticleBlend, modelParticleDiffuse, orientOfDirection, packDiffuse, parseParticleEntry, particleIsNt, setColour, turnStep, type Orient } from '../client/src/classic/particles.ts';
 import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, RafoieBlast, RafoieSphere, emitterFx, objectEmitterOrient, rafoieBlastEmitters, sphereTurnRad, startEmitters, type FireKind, type FireObject, type FxEmitter, type TechTarget } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
 import { advancedEffectsOn, setAdvancedEffects } from '../client/src/render/advancedeffects.ts';
@@ -336,10 +336,37 @@ check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie
   check('model alpha: a non-NT particle at half fade skips the opaque pass', modelOpaquePassSkipped(false, 0.5) === true);
   check('model alpha: an NT particle never skips it (its alpha is 0, not below 0)', modelOpaquePassSkipped(true, 0.2) === false);
   check('model alpha: a fade of 0 skips it too', modelOpaquePassSkipped(false, 0) === true);
-  // The colour (SetColor dump 287693, the non-NT branch is (0, 0, 0)): a non-NT model is black whatever its
-  // shade; an NT one keeps its shade (the blend is SRCALPHA / INVSRCALPHA for non-NT, checked above).
-  check('model colour: a non-NT particle is black', JSON.stringify(modelParticleColour(false, [0.5, 0.2, 1])) === '[0,0,0]');
-  check('model colour: an NT particle keeps its shade', JSON.stringify(modelParticleColour(true, [0.5, 0.25, 1])) === '[0.5,0.25,1]');
+  // The colour and its packing (SetColor dump 287693, set_rs_DiffuseAmbientMaterial dump 850240, 0x20 branch).
+  // A non-NT particle's packed alpha is (A + 1) & 0xff for every byte A (the float path is exact: checked here
+  // for all 256 bytes), so A = 255 is invisible and A = 254 is opaque.
+  let wrapOk = true;
+  for (let A = 0; A < 256; A++) {
+    const argb = packDiffuse(setColour(false, (A << 24) >>> 0));
+    if (argb >>> 24 !== ((A + 1) & 0xff) || (argb & 0xffffff) !== 0) wrapOk = false;
+  }
+  check('packing: a non-NT alpha byte A packs to (A + 1) & 0xff for all 256 bytes, RGB 0', wrapOk);
+  check('packing: A = 255 packs to alpha 0', packDiffuse(setColour(false, 0xff000000)) >>> 24 === 0);
+  check('packing: A = 254 packs to alpha 255', packDiffuse(setColour(false, 0xfe000000)) >>> 24 === 255);
+  check('packing: A = 0 packs to alpha 1', packDiffuse(setColour(false, 0)) >>> 24 === 1);
+  check('packing: A = 128 packs to alpha 129', packDiffuse(setColour(false, 0x80000000)) >>> 24 === 129);
+  // ROUND is chop: trunc(c * 255), not the nearest integer (0.999999 * 255 = 254.99975 gives 254, and
+  // -0.5 * 255 = -127.5 gives -127, low byte 129).
+  check('packing: a channel is chopped, not rounded (254.99975 -> 254)', diffuseByte(0.999999) === 254);
+  check('packing: a negative channel is chopped toward zero (-127.5 -> low byte 129)', diffuseByte(-0.5) === 129);
+  check('packing: the alpha pass flag is a < 0 (A < 255)', diffuseAlphaPass(setColour(false, 0xfe000000)) && !diffuseAlphaPass(setColour(false, 0xff000000)));
+  check('packing: an NT particle has a = 0 and no alpha pass', !diffuseAlphaPass(setColour(true, 0x00102030)) && packDiffuse(setColour(true, 0x00102030)) >>> 24 === 0);
+  // NT: the bytes at +0x96 (R), +0x95 (G), +0x94 (B) each become (byte + 1) & 0xff.
+  const nt = packDiffuse(setColour(true, 0x00102030));
+  check('packing: an NT particle packs R, G, B as byte + 1', nt === 0x00112131);
+  check('packing: an NT particle with a 255 red byte packs red to 0 (green and blue 0 pack to 1)', packDiffuse(setColour(true, 0x00ff0000)) === 0x00000101);
+  // The model's draw state (modelParticleDiffuse): non-NT is black with the packed alpha as its opacity;
+  // NT keeps the packed channels and the fade as its opacity.
+  const plateau = modelParticleDiffuse(false, 1, [0.5, 0.2, 1]);
+  check('model draw: a non-NT particle at full fade is black and invisible (A = 255 packs to 0)', JSON.stringify(plateau.rgb) === '[0,0,0]' && plateau.alpha === 0 && !plateau.alphaPass);
+  const half = modelParticleDiffuse(false, 0.5, [0.5, 0.2, 1]);
+  check('model draw: a non-NT particle at half fade is black, opacity (127 + 1) / 255, alpha pass', JSON.stringify(half.rgb) === '[0,0,0]' && Math.abs(half.alpha - 128 / 255) < 1e-9 && half.alphaPass);
+  const ntDraw = modelParticleDiffuse(true, 0.25, [0.5, 0.25, 1]);
+  check('model draw: an NT particle keeps its packed channels (B 255 -> 0) and the fade as opacity', ntDraw.rgb[2] === 0 && ntDraw.alpha === 0.25 && !ntDraw.alphaPass);
 }
 
 if (failures) {

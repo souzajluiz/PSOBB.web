@@ -18099,3 +18099,36 @@ The previous entry's `modelParticleColour` (black for a non-NT model particle) i
 - The Item Pack and the shops: no 0xC (the Item Pack) and no page writer (the shops), so no pages there. Their stat rows (page 0) are the shops' open item.
 - The page slide, and the item picture of 0xC (the asset of the item picture).
 - The page-1 row layout (the exe's element offsets), the photon empty-row text, and the Photon Blast window's text (state 0xE, entry 0xA).
+## 2026-10-23: Rabarta colour packing (the held-back entry resolved)
+
+The held-back question was whether the packed diffuse alpha of a non-NT model particle (byte / 255 - 1, so at most 0) clamps to 0 or wraps. **It wraps.** The exe packs every channel as the low byte of a chopped float, so the alpha is (A + 1) & 0xff, and the port now draws that opacity.
+
+**Exe evidence (`scratchpad/exe.s`, objdump -d AT&T; dump lines in brackets).**
+- SetColor, 0x508958..0x508a2d [dump 287693]. Non-NT (+0x97 byte A): `fildl A; fdivs 255.0 (0x92003c); fadds -1.0 (0x920040); fstps` gives `a = f32(A / 255 - 1)`; `r = g = b = 0.0` (the `movl $0x0` stores at 0x508a0d..0x508a18). NT (dword +0x94): `r = byte(+0x96) / 255 - 1`, `g = byte(+0x95) / 255 - 1`, `b = byte(+0x94) / 255 - 1`, `a = 0.0`. The branch is `je 0x5089d7` at 0x508964 (param_2 == 0 is non-NT, taken there); NT is the fall-through from 0x508966.
+- The colour dword: `unk_particle_struct` is at particle +0x70 (`field47_0x6c` at +0x6c, `unk_particle_effect_struct` after it), so `color` is +0x94 and A is +0x97 [dump 87426, 116296].
+- Packing, set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color, 0x831e2c [dump 850233]. The 0x20 branch is at 0x831f61..0x832057 (the flag 0x8021 of the model branch selects it; the 0x10 branch is at 0x831e6f). Each channel: `flds c; fmul 255` (exact in extended precision), then `fnstcw; or $0xc00; fldcw` (RC = chop), `fistpll`, `movzbl` (low byte). The alpha is `shll $0x18` on the int64's low dword with no mask, so it keeps the low byte too. So `packed = low8(trunc(c * 255))` per channel, `A << 24 | R << 16 | G << 8 | B`. Transform flag 1 is set when `a < 0` (`fcomps 0x98a594` = 0.0, `jae` at 0x832033..0x832042).
+- The dump's names for this function are partly wrong: the 0x10 branch compares with 0x98a590 (1.0 in the exe), where the dump says `g_Float0_5`. The port uses only the 0x20 branch.
+
+**Float check.** The exe's single precision was emulated (Math.fround of `B / 255 - 1`, then `* 255` and the chop) for all 256 bytes: the packed alpha is (B + 1) & 0xff for every B, so the float rounding does not change the result. Table: B = 0 gives alpha 1, B = 127 gives 128, B = 254 gives 255 (opaque), B = 255 gives 0 (invisible).
+
+**So a non-NT model particle looks like this.** The RGB is 0 (black, MODULATE with the texel). The opacity is (B + 1) / 255 for B in 0..254: the alpha pass only (flag 1, the opaque strips are skipped), with B = 254 fully opaque. At B = 255 the flag is clear and the opaque strips run with alpha 0, so the particle is invisible. Under the port's fade (0..1, trunc(fade * 255) = B), that is invisible at full fade (the plateau) and at the fade edges it is opaque-ish. Clamping to 0 would make it invisible everywhere; the wrap does not, but the plateau is invisible too.
+
+**NT.** The packed channels are `(byte + 1) & 0xff` (so a 255 channel is black), alpha 0. The port keeps the fade as NT opacity (ASSUMED: alpha 0 would hide an NT model; the stage's alpha source for NT is not traced).
+
+**Ported.**
+- `client/src/classic/particles.ts`: `diffuseByte` (chop), `colourFloatOfByte`, `setColour` (SetColor), `packDiffuse` (the 0x20 branch), `diffuseAlphaPass`, `particleColourDword` (the per-frame +0x94 dword from the fade and the shade), `modelParticleDiffuse` (the draw state: rgb, opacity, alpha pass). `modelOpaquePassSkipped` now uses the same path. `modelParticleColour` is removed.
+- `client/src/render/hitfx.ts` `placeModel`: for the technique models (exeAlpha) the colour and opacity come from `modelParticleDiffuse`. The coordinator hold comment is replaced by the exe reference. Other models keep the shade and the fade.
+- `tests/particleorient.test.ts`: the old colour checks are replaced by 17 packing checks (all 256 alpha bytes, the plateau, the chop on 0.999999 and -0.5, the NT channels, the draw states).
+
+**ASSUMED:**
+- The fade-to-byte map: B = trunc(fade * 255). The per-frame writer (dump 291671) multiplies by `g_ParticleMinAlpha`, and I did not read its value: no code that writes it was found in the exe.s range I searched, and the dump's own expression (`ROUND(fVar * g_ParticleMinAlpha)`) cannot give 0..255 bytes for a 0..1 or 0..255 value without a second scale. The 255 scale is taken from SetColor's `/ 255`. If the real map differs, the plateau visibility changes; that is the first thing to check.
+- The stage's alpha source is the diffuse alpha (SELECTARG2, or MODULATE with mesh flag 0x800; the texture's alpha is ignored under SELECTARG2, the port multiplies it in).
+- NT opacity is the fade (the exe's NT alpha is 0).
+- The exeAlpha gate: only technique models get the exact colour and opacity; the other model bursts keep the shade (not traced to SetColor).
+
+**Checks:** `node tests/particleorient.test.ts` ALL PASS; `node tests/{deathfx,dragon,hitfx,objectcollision,particleframes,particlespawn,particleslope,playerfx,techfire,telepipe,techlightning}.test.ts` all pass; `client` tsc clean (`node client/node_modules/typescript/bin/tsc --noEmit -p client`, Node 24, the worktree's `client/node_modules` is a symlink to the main checkout for the run and is removed before the commit). Not run: Playwright (per the brief). A Chrome check of the Rabarta planes is the next step, because the plateau is now invisible under the ASSUMED map.
+
+**Left:**
+- The value of `g_ParticleMinAlpha` (read it at runtime or find its initialiser), which closes the fade-to-byte map.
+- The NT alpha (the stage source for NT particles, and whether an NT model is drawn with alpha 0).
+- The other model bursts (`drawModels`): whether they go through SetColor at all.

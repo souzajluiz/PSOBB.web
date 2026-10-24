@@ -568,22 +568,94 @@ export function modelParticleBlend(nt: boolean): { src: number; dst: number } {
 // (`(flags & 1) == 0`, dump 849892) does not run; only the alpha strips are drawn.
 // ASSUMED: the byte is the particle's fade in 0..255 (the port's fade; the exe's alpha byte is not traced).
 export function modelOpaquePassSkipped(nt: boolean, fade: number): boolean {
-  if (nt) return false;
-  const byte = Math.max(0, Math.min(255, Math.round(fade * 255)));
-  return byte / 255 - 1 < 0;
+  return modelParticleDiffuse(nt, fade, [0, 0, 0]).alphaPass;
 }
 
-// The colour of a model particle (SetColor_00508958, dump 287693, the non-NT branch): (0, 0, 0) with
-// the alpha above. The draw's vertex diffuse is that colour (set_rs_DiffuseAmbientMaterial_Source_and_
-// xj_vertex_color, dump 850240, the 0x20 branch packs g_CurrentTargetColor into xj_mesh_constant_vertex_
-// color), and the stage-0 colour op is MODULATE (SetupChallengeEntityTextureStates_00839de0, dump
-// 855566: COLOROP = MODULATE, COLORARG1 = texture, COLORARG2 = current = the diffuse), so the texel's
-// colour is multiplied by black: the model is drawn black. With the blend of modelParticleBlend
-// (SRCALPHA / INVSRCALPHA, not ONE) the result is dst * (1 - alpha), a darkening, not an additive
-// black (which would be invisible). NT keeps the packed colour of its +0x94 (SetColor's second branch,
-// not traced into the port's shade: the port keeps rgb for NT).
-export function modelParticleColour(nt: boolean, rgb: readonly [number, number, number]): [number, number, number] {
-  return nt ? [rgb[0], rgb[1], rgb[2]] : [0, 0, 0];
+// The colour of a model particle, from the exe's float colour and its packing. The particle's colour
+// dword at +0x94 (ARGB, A at +0x97) is written per frame by update_particle_effect_single_particle
+// (dump 291671); the port builds it in particleColourDword below.
+//
+// SetColor_00508958 (dump 287693, exe 0x508958..0x508a2d) turns the dword into a float colour:
+//   non-NT: a = (float)A / 255.0f + (-1.0f), r = g = b = 0.0 (the fildl / fdivs / fadds / fstps at
+//           0x508979..0x5089d5, single precision in memory);
+//   NT:     r, g, b = byte(+0x96) / 255 - 1, byte(+0x95) / 255 - 1, byte(+0x94) / 255 - 1; a = 0.0.
+// set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240, exe 0x831e2c, its 0x20 branch
+// at 0x831f6f) packs the colour into xj_mesh_constant_vertex_color as A << 24 | R << 16 | G << 8 | B,
+// each channel the low byte of trunc(c * 255): ROUND is chop here (fnstcw, `or 0xc00`, fistpll at
+// 0x831f8f..0x831ffc), and the alpha is shifted left 24 without a mask, which also keeps only the low
+// byte. Transform flag 1 (the alpha pass, read by the opaque pass at dump 849892) is set when a < 0
+// (`fcomps 0.0`, `jae` at 0x832033..0x832042).
+// So a non-NT channel byte x gives the packed byte (x - 255) & 0xff = (x + 1) & 0xff for the alpha, and the
+// colour's r, g, b are 0 (black); an NT channel byte x gives (x + 1) & 0xff, and an NT alpha is 0.
+// The float rounding does not change this: fstps of byte / 255 - 1 times 255 is exact to the integer
+// (checked for all 256 bytes, tests/particleorient.test.ts).
+
+// The packed byte of one float channel: the low byte of trunc(c * 255) (chop, not round). The float is
+// the single-precision store of the exe (Math.fround).
+export function diffuseByte(c: number): number {
+  return Math.trunc(Math.fround(c) * 255) & 0xff;
+}
+
+// One SetColor channel: the float the exe stores for byte b (non-NT alpha, NT r / g / b).
+export function colourFloatOfByte(b: number): number {
+  return Math.fround(b / 255 + -1);
+}
+
+export interface ParticleColour {
+  a: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+// SetColor_00508958 (dump 287693): the float colour from the particle's colour dword.
+export function setColour(nt: boolean, dword: number): ParticleColour {
+  if (nt) {
+    return {
+      a: 0,
+      r: colourFloatOfByte((dword >>> 16) & 0xff),
+      g: colourFloatOfByte((dword >>> 8) & 0xff),
+      b: colourFloatOfByte(dword & 0xff),
+    };
+  }
+  return { a: colourFloatOfByte((dword >>> 24) & 0xff), r: 0, g: 0, b: 0 };
+}
+
+// The 0x20 branch of set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240): the packed
+// vertex diffuse (ARGB, unsigned).
+export function packDiffuse(c: ParticleColour): number {
+  return ((diffuseByte(c.a) << 24) | (diffuseByte(c.r) << 16) | (diffuseByte(c.g) << 8) | diffuseByte(c.b)) >>> 0;
+}
+
+// Transform flag 1, the alpha pass (dump 850240, 0x20 branch): set when the colour's a is below 0.
+export function diffuseAlphaPass(c: ParticleColour): boolean {
+  return c.a < 0;
+}
+
+// The colour dword the per-frame writer leaves at +0x94 (ARGB): alpha byte A, then the colour bytes.
+// ASSUMED: the byte is trunc(fade * 255) (the port's fade in 0..1; the exe's per-frame scale constant,
+// the dump's g_ParticleMinAlpha, was not read, so the 0..1 scale of the writer is not closed).
+export function particleColourDword(fade: number, rgb: readonly [number, number, number]): number {
+  const byte = (v: number) => Math.max(0, Math.min(255, Math.trunc(v * 255)));
+  return ((byte(fade) << 24) | (byte(rgb[0]) << 16) | (byte(rgb[1]) << 8) | byte(rgb[2])) >>> 0;
+}
+
+// A model particle's draw state from its colour dword: the packed diffuse's RGB (the colour), the
+// diffuse alpha (opacity, 0..1) and the alpha pass flag. NT alpha is 0 in the exe; the port keeps its
+// fade there (ASSUMED: the stage's alpha source for NT is not traced).
+export function modelParticleDiffuse(
+  nt: boolean,
+  fade: number,
+  rgb: readonly [number, number, number],
+): { rgb: [number, number, number]; alpha: number; alphaPass: boolean } {
+  const c = setColour(nt, particleColourDword(fade, rgb));
+  const argb = packDiffuse(c);
+  const chan = (shift: number) => ((argb >>> shift) & 0xff) / 255;
+  return {
+    rgb: [chan(16), chan(8), chan(0)],
+    alpha: nt ? fade : chan(24),
+    alphaPass: diffuseAlphaPass(c),
+  };
 }
 
 // Additive tint of a texture (vertex color x texel), cached per color step.

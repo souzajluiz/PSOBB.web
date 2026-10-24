@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelOpaquePassSkipped, modelParticleBlend, modelParticleColour, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelOpaquePassSkipped, modelParticleBlend, modelParticleDiffuse, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -451,12 +451,11 @@ export class FieldParticles {
 
   // The model's transform and shade for one particle: T(p) S(size) Rz(z) Rx(x) Ry(angle) (the exe's
   // matrix, dump 291966: the step's Vector3f_GetAnglesZ, then the spin), colour and fade as the particle's.
-  // The colour: black for a non-NT particle (modelParticleColour, SetColor dump 287693); an NT particle
-  // keeps the port's shade (ASSUMED). The exe's inputs for NT are not closed: SetColor (dump 287693)
-  // stores the particle's +0x94 / +0x97 bytes (its matrix element, never written by the constructor)
-  // in g_CurrentTargetColor, which set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240,
-  // run by render_animated_xj and RenderXJModel) packs into the vertex diffuse; a < 0 selects the
-  // alpha pass (the same blending as here).
+  // The colour and alpha of a technique model (exeAlpha): SetColor (dump 287693) and the packed vertex
+  // diffuse (dump 850240), in modelParticleDiffuse (classic/particles.ts). A non-NT particle is black with
+  // the opacity of its packed alpha byte, (A + 1) & 0xff / 255 (so A = 255 is invisible and A = 254 is
+  // opaque); an NT particle's colour is its packed channels (its opacity stays the fade, ASSUMED). Other
+  // models keep the shade and the fade (not traced to SetColor).
   private placeModel(q: Particle, obj: THREE.Object3D, materials: readonly THREE.Material[], exeAlpha = false): void {
     const axis = this.pieceAxis;
     const { fade, rgb } = particleShade(q);
@@ -478,17 +477,14 @@ export class FieldParticles {
     // The exe's alpha test (modelOpaquePassSkipped, dump 849892): a technique model's copy with alpha
     // below 0 draws its alpha strips only, so its opaque strips are hidden. Other models share their
     // materials between particles, so they keep the old shade.
+    const diffuse = exeAlpha ? modelParticleDiffuse(nt, fade, rgb) : null;
     const skipOpaque = exeAlpha && modelOpaquePassSkipped(nt, fade);
     for (const mat of materials) {
       const mm = mat as THREE.MeshBasicMaterial;
-      mm.opacity = fade;
+      mm.opacity = diffuse ? diffuse.alpha : fade;
       mm.transparent = true;
       mm.blending = blending;
-      // Coordinator hold (2026-10-23): modelParticleColour (black for non-NT) is not applied yet. The exe alpha
-      // is byte/255 - 1 <= 0, which the port does not use (opacity = fade), so black at the fade opacity
-      // would draw dark planes the exe may never show (alpha packed to 0). Needs the packed-alpha path
-      // (dump 291671) and a capture first.
-      const c = nt ? modelParticleColour(nt, rgb) : rgb;
+      const c = diffuse ? diffuse.rgb : rgb;
       mm.color?.setRGB(c[0], c[1], c[2]);
       if (exeAlpha) mm.visible = !(skipOpaque && opaqueStripMaterials.has(mm));
     }
