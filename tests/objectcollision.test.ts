@@ -17,6 +17,7 @@ import { collectFieldSolids, solidObstacle, type FieldSolid } from '../client/sr
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
+import { rowsAimHeight, rowsRadius } from '../client/src/combat/techfire.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -162,6 +163,17 @@ check(childBoxTable(0xc2, 0)?.rows[0].radius === 20 && childBoxTable(0xc2, 2)?.r
 check(childBoxTable(0xc2, 0)?.rows.every(boxTargetable) === true, 'the monitors\' boxes are targetable (flag 0x8000)');
 check(childBoxTable(0xc2, 24) === null && childBoxTable(0xc2, -1) === null && childBoxTable(0xc1, 0) === null && childBoxTable(null, 0) === null, 'a child past the count, a negative one, a type with no children and no type have no table');
 check(enemyBoxTable(0xc2, null) === null && CHILD_COLLISION_LINKS[0xc2]?.callee === 0x0044161c && CHILD_COLLISION_LINKS[0xc2]?.count === 24, 'the Vol Opt root has no box table; its children are the 24 monitors of 0x0044161c');
+// The render's use of the monitor rows (render/combat.ts voloptMonitorRows): the radius of the first
+// enabled row is 20 / 10 / 15 / 10 for shape k & 3 (flags 0x8005 / 0x8003 have bit 0), the aim height
+// is the row's centre (offset 0, the monitor's own origin).
+const MONITOR_RADIUS = [20, 10, 15, 10];
+let monitorRadiusOk = true;
+for (let k = 0; k < 24; k++) {
+  const rows = childBoxTable(0xc2, k)?.rows;
+  if (!rows || rowsRadius(rows) !== MONITOR_RADIUS[k & 3] || rowsAimHeight(rows) !== 0) monitorRadiusOk = false;
+}
+check(monitorRadiusOk, 'Vol Opt monitor k has the radius 20/10/15/10 of shape k & 3 and aims at its origin');
+check(rowsRadius([]) === null && rowsAimHeight([]) === 22, 'no rows: no radius, the fallback aim height');
 check(isTargetable(0x44) === true, 'an enemy with no known table is targetable (ASSUMED)');
 check(isTargetable(0x42) === true, 'Monest has a box with flag 0x8000');
 check(boxTargetable({ flags: 0x8003 }) && !boxTargetable({ flags: 0x30003 }), 'flag 0x8000 makes a box targetable');
