@@ -21,6 +21,7 @@ import {
   captureTrapCloaked,
   HOLD_UNTIL_RELEASED,
   holdCountdown,
+  captureReticleShown,
   captureTrapDraw,
   hasTrapVision,
   PillarTrap,
@@ -31,6 +32,7 @@ import {
   TRAP_HOLD,
   parseHoldPacket,
   TRAP_TECH,
+  TRAP_VISION_FLAG,
   trapSe,
   trapVisionSeen,
   withinViewDistance,
@@ -345,6 +347,17 @@ const run = (t: PillarTrap, n: number, players: TrapPlayer[], self = 0, area = 6
 
   // 6x2C 0xffff is no self countdown; any other frames count down as they are.
   check(holdCountdown(0xffff) === Infinity && holdCountdown(90) === 90, 'holdCountdown: 0xffff has no timer, other frames count');
+
+  // The state-1 cursor (DerollePartObjectEnableReticle_0063a3bc): shown only in state 1 and in view (ASSUMED gate).
+  check(captureReticleShown(1, true), 'reticle: state 1 in view shows the cursor');
+  check(!captureReticleShown(0, true) && !captureReticleShown(2, true) && !captureReticleShown(3, true), 'reticle: idle (0) and sprung (2, 3) do not show it');
+  check(!captureReticleShown(1, false), 'reticle: state 1 out of view is hidden');
+  // A revealed trap (state 1) with a player in range springs and stops showing the cursor.
+  const reticleTrap = new CaptureTrap([1, 0, 0, 1, 0, 0], 28, { x: 0, y: 0, z: 0 });
+  reticleTrap.frame({ slots: [{ room: 0, flags: TRAP_VISION_FLAG }, null, null, null], room: 0, players: [at(0, 40, 0)], selfId: 0, springFrames: 1 });
+  check(reticleTrap.state === 1 && captureReticleShown(reticleTrap.state, true), 'reticle: a revealed trap with nobody in range shows the cursor');
+  reticleTrap.frame({ slots: none, room: 0, players: [at(0, 10, 0)], selfId: 0, springFrames: 1 });
+  check(reticleTrap.state === 2 && !captureReticleShown(reticleTrap.state, true), 'reticle: a player in range springs the trap and hides the cursor');
 }
 
 console.log(failures ? `${failures} failures` : 'traps: all checks passed');

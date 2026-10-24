@@ -434,6 +434,15 @@ export function withinViewDistance(depth: number, distance = VIEW_DISTANCE): boo
   return depth <= 0 && depth >= -distance;
 }
 
+// The state-1 cursor (DerollePartObjectEnableReticle_0063a3bc calls enable_reticle, dump 575550, before the
+// idle; GetReticlePosition_007a35c8 / RenderReticleModel_007a3764 draw the lock-on cursor, combat/reticle.ts).
+// ASSUMED gate: the exe enables the cursor only for a player's targeting record that passes
+// check_enemy_is_targetable (range, facing, weapon); that check is not ported, so the cursor shows for the
+// revealed trap (state 1) while it is in front of the camera, for the local player.
+export function captureReticleShown(state: number, inView: boolean): boolean {
+  return state === 1 && inView;
+}
+
 // What render_capturetrap draws: 'hidden', 'plain' (the normal model) or 'cloak' (the cloak
 // pass). The reveal is not an input: the exe's draw does not read it.
 export type CaptureDraw = 'hidden' | 'plain' | 'cloak';

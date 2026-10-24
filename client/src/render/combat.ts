@@ -4420,6 +4420,13 @@ export class CombatView {
   // the local player with frames 0xffff (no timer, EnemyAcquireTargetAndAttack_0063e444), and the
   // release is the 6x2D (SawMapObjectDisablePlayerMovementOnVisibility_0063e3b0), sent when another
   // entity touches the trap (CaptureTrap.touch). The state-3 hit path is not ported (traps.ts).
+  // The Seabed capture trap's state-1 reticle (DerollePartObjectEnableReticle_0063a3bc, dump 575550
+  // enable_reticle; drawn with the lock-on cursor, combat/reticle.ts). `pos` is the trap's point or null to
+  // hide it. ASSUMED: the cursor sits on the trap origin (no height offset).
+  setCaptureReticle(pos: { x: number; y: number; z: number } | null): void {
+    this.overlay?.setTarget(pos, { row: reticleRow('enemy'), camera: this.viewer.camera, trap: true });
+  }
+
   captureTrapEvent(ev: TrapEvent): void {
     if (ev.kind === 'hold') this.imposeHold({ frames: ev.frames, particle: 0, x: ev.x, z: ev.z, radius2: ev.radius2 }, 'capture trap');
     else if (ev.kind === 'release') {

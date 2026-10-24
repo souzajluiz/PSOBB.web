@@ -41,7 +41,7 @@ import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, killedSetEntry, type WaveEnemy } from './waves.ts';
 import type { JoinSyncState, SyncFloor, SyncLayout } from '../net/joinsync.ts';
 import { PillarTrap, TRAP_HOLD, TRAP_TECH, type TrapEvent, type TrapPlayer } from './traps.ts';
-import { CaptureTrap, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type CapturePlayer, type VisionPlayer } from './traps.ts';
+import { CaptureTrap, captureReticleShown, captureTrapDraw, TRAP_CAPTURE, TRAP_VISION_FLAG, withinViewDistance, type CapturePlayer, type VisionPlayer } from './traps.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { TRADE_COLLISION_TYPE, tradeZoneObject, type TradeZoneObject, type TradeZoneWorld } from '../net/tradezone.ts';
 import * as THREE from 'three';
@@ -70,6 +70,8 @@ export interface GameFieldOptions {
   trap?: (e: TrapEvent, trap: PillarTrap) => void;
   // A Seabed capture trap's hold (6x2C) or release (6x2D) on the local player (render/traps.ts CaptureTrap).
   captureTrap?: (e: TrapEvent) => void;
+  // The Seabed capture trap's state-1 cursor (render/traps.ts captureReticleShown); null hides it.
+  captureReticle?: (pos: { x: number; y: number; z: number } | null) => void;
   // Whether a quest is running (g_QuestStarted): the trade zone bits clear while it runs.
   questStarted?: () => boolean;
   log: (msg: string) => void;
@@ -593,6 +595,7 @@ export class GameField {
     const cam = this.viewer.camera;
     cam.updateMatrixWorld();
     const v = new THREE.Vector3();
+    let reticle: { x: number; y: number; z: number } | null = null;
     for (const c of this.captures) {
       if (this.objects.isDelayed(c.index)) continue;
       v.set(c.x, c.y, c.z).applyMatrix4(cam.matrixWorldInverse);
@@ -600,7 +603,9 @@ export class GameField {
       const sprung = c.trap.state >= 2;
       this.objects.setCaptureDraw(c.index, captureTrapDraw(c.trap.cloaked, true, inView, sprung));
       if (sprung) this.objects.setCaptureFrame(c.index, c.trap.anim);
+      if (!reticle && captureReticleShown(c.trap.state, inView)) reticle = { x: c.x, y: c.y, z: c.z };
     }
+    this.opts.captureReticle?.(reticle);
   }
 
   // The trade zone bits (net/tradezone.ts): each collision object checks the four slots on

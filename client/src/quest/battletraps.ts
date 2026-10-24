@@ -66,6 +66,9 @@ export const TRAP_FUSE_FRAMES = 0x1e; // ASSUMED
 export const TRAP_CHAIN_FUSE = 0x0f; // VERIFIED (0x0062f274)
 export const TRAP_TRIGGER_RADIUS = 50; // ASSUMED
 export const TRAP_BLAST_RADIUS = 50; // ASSUMED (80 in Ultimate outside battle, not modelled)
+// The reveal range (TrapProcessHitbox_0062ea74, dump 492200): g_TrapHitboxRangeSq at 0x00932bc0
+// is 40000.0 (VERIFIED: exedata read), i.e. 200 units; the squared XZ distance is compared to it.
+export const TRAP_REVEAL_RANGE_SQ = 40000;
 // Upper bound of a trap count: 0x14 = 20. VERIFIED: the counter read (0x00698984) clamps
 // 0..0x14 (the exe bytes), and safe_create_trap_object refuses a count of 0x15 or more (dump).
 // The 6x83 validator 0x006a9ea4 itself only refuses a negative count (VERIFIED).
@@ -194,6 +197,9 @@ export class BattleTrap {
   fuse = TRAP_FUSE_FRAMES; // ASSUMED
   readonly number: number;
   announced = false; // +0x388: the "<name> TRAP" line was shown
+  // +0xa4 (the trap's hitboxes field, TrapProcessHitbox_0062ea74): 0 hidden, 2 revealed to the owner
+  // (the owner's trap vision and invincibility check). The state 2 position copy is not ported (UNCLEAR).
+  hitbox: 0 | 2 = 0;
   readonly owner: number;
   readonly type: number;
   readonly x: number;
@@ -220,6 +226,14 @@ export interface TrapTarget {
   floor: number;
   dead: boolean;
   local: boolean; // the effect is applied by this client only to its own player
+  // The owner's checks of TrapProcessHitbox_0062ea74 (read from the player when the trap is revealed):
+  // trapVision = the vision bit 0x10000 of unknown_flags_2 (+0x33c), set for androids (player class
+  // flag 0x10, UpdatePlayerEntityStateAndFlags_00695b48); challengeOne = the player's +0x32c word is 1.
+  // ASSUMED: the +0x32c word is the challenge type set by SinowberillChallengePlayer_SetChallengeType_00686984
+  // (1 for types 0..3); the dump names it unknown_flags_invincibility, but its writers are the challenge
+  // type, so the battle players are taken as type 1 by the caller.
+  trapVision?: boolean;
+  challengeOne?: boolean;
 }
 
 export type TrapEvent =
@@ -230,9 +244,22 @@ export type TrapEvent =
 
 export interface TrapRules {
   trapsHitOwner: boolean; // g_BATrapsCanTargetOwnerPlayer
+  // get_player_room_id(trap) == get_player_room_id(owner) (the reveal's room test). ASSUMED false when
+  // the caller has no room data (the battle field has none in this port), so only the range counts.
+  sameRoom?: (t: BattleTrap, owner: TrapTarget) => boolean;
 }
 
 const dist2 = (ax: number, az: number, bx: number, bz: number): number => (ax - bx) * (ax - bx) + (az - bz) * (az - bz);
+
+// TrapProcessHitbox_0062ea74 (hitboxes == 0 branch, VERIFIED from the disassembly 0x0062ea74..0x0062eb32):
+// the owner (GetPlayer(+0xa8)) must exist, have the challenge word 1 (+0x32c) and the vision bit
+// (+0x33c & 0x10000). Then the trap is revealed when the squared XZ distance to the owner is at most
+// g_TrapHitboxRangeSq (40000) or the two are in the same room (the exe returns only when the distance
+// is over the range and the rooms differ).
+export function trapRevealed(t: BattleTrap, owner: TrapTarget | undefined, sameRoom: boolean): boolean {
+  if (!owner || !owner.challengeOne || !owner.trapVision) return false;
+  return dist2(t.x, t.z, owner.x, owner.z) <= TRAP_REVEAL_RANGE_SQ || sameRoom;
+}
 
 export class TrapField {
   readonly traps: BattleTrap[] = [];
@@ -286,6 +313,12 @@ export class TrapField {
   // One 30 Hz frame of every trap (update_trap). `targets` are the players in the game.
   tick(targets: readonly TrapTarget[], rules: TrapRules): TrapEvent[] {
     const events: TrapEvent[] = [];
+    // TrapProcessHitbox_0062ea74: a hidden trap is revealed to its owner (hitbox 0 -> 2), once.
+    for (const t of this.traps) {
+      if (t.hitbox !== 0 || t.state === 5) continue;
+      const owner = targets.find((g) => g.id === t.owner);
+      if (owner && trapRevealed(t, owner, rules.sameRoom?.(t, owner) ?? false)) t.hitbox = 2;
+    }
     for (const t of [...this.traps]) {
       if (t.state === 0) {
         if (t.delay > 0) {
