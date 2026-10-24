@@ -35,6 +35,7 @@ import { floorToArea, parseSwitchFlag, type Game } from '../net/game.ts';
 import type { CollisionWorld } from './collision.ts';
 import type { EnemyLayer } from './enemyview.ts';
 import { constructKey, FieldObjects, MAP_WARP_TEXT, type FieldSwitch, type FieldWarp } from './fieldobjects.ts';
+import { FieldParticles } from './hitfx.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { BATTLE_LINGER_FRAMES, ENEMY_BUILT, ENEMY_DEAD, FloorWaves, killedSetEntry, type WaveEnemy } from './waves.ts';
@@ -98,6 +99,8 @@ export class GameField {
   private game: Game;
   private opts: GameFieldOptions;
   private music: FieldMusic | null;
+  private readonly files: ClientFiles;
+  private particles: FieldParticles | null = null; // the beam door's particles (created on first use)
   readonly menu: WarpMenuOverlay;
   private objects: FieldObjects | null = null;
   private floor = 0;
@@ -144,6 +147,7 @@ export class GameField {
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, opts: GameFieldOptions) {
     this.viewer = viewer;
     this.game = game;
+    this.files = files;
     this.opts = opts;
     this.music = opts.bgm ? new FieldMusic(opts.bgm) : null;
     this.menu = new WarpMenuOverlay(viewer.renderer.domElement);
@@ -333,6 +337,12 @@ export class GameField {
       this.game.sendTriggerEvent(0x4000 + this.objectBase + t.index, floor, t.eventId);
       this.triggerEvent(floor, t.eventId);
     };
+    this.objects.onSe = (id, at) => se(id, { at: [at.x, at.y, at.z] });
+    this.objects.onParticles = (id, at) => this.particlesAt(id, at);
+    this.objects.onBeamUnlock = (d) => {
+      this.opts.log(`beam door ${d.index} unlocked`);
+      this.game.sendObjectState(0x4000 + this.objectBase + d.index, 1, d.index);
+    };
     // Saint-Milion's track depends on the boss variant (param6 & 1).
     const boss = e.enemySets.find((s) => s.type === 0x119);
     this.music?.enter(area, episode, boss ? Math.trunc(boss.params[5]) : 0);
@@ -463,6 +473,12 @@ export class GameField {
     };
   }
 
+  // One particle effect at a point of the floor (the beam door's 0x229); the emitter set is made on first use.
+  private particlesAt(id: number, at: { x: number; y: number; z: number }): void {
+    this.particles ??= new FieldParticles(this.viewer, this.files, (m) => this.opts.log(m));
+    void this.particles.spawn({ id }, new THREE.Vector3(at.x, at.y, at.z));
+  }
+
   private pressSwitch(s: FieldSwitch): void {
     this.opts.log(`switch ${s.index} on floor ${this.floor}: flag ${s.flag}`);
     this.game.sendSwitchFlag(0x4000 + this.objectBase + s.index, this.floor, s.flag, true);
@@ -488,6 +504,7 @@ export class GameField {
     if (ticks && this.traps.length) this.trapFrames(ticks, pos);
     if (ticks && this.tradeObjects.length) this.tradeZoneFrame();
     if (ticks && this.captures.length) this.captureTicks(ticks, pos);
+    if (ticks && this.objects) this.objects.tickBeamDoors(ticks, pos, others);
     if (w && pos && ticks) this.updateBattleMusic(w, pos, ticks);
     if (pos && !this.busy) this.watchWarps(pos);
     for (let i = 0; i < ticks && !this.busy; i++) this.bossWarpFrame(pos);
@@ -901,6 +918,8 @@ export class GameField {
     this.menu.dispose();
     this.objects?.dispose();
     this.objects = null;
+    this.particles?.dispose();
+    this.particles = null;
     this.opts.bgm?.stop();
   }
 }
