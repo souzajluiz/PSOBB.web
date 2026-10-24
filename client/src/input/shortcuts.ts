@@ -6,8 +6,9 @@
 // entry a function key opens, or 0x30 for none:
 //   - Ctrl or Alt held: none (Alt+F1..F12 are the lobby's emotes, emotes.ts);
 //   - Shift: with the character option 0x2000000 clear, Shift must NOT be held; with it
-//     set, Shift must be held (the chat shortcut form). The port has no such option
-//     flag yet, so the option is taken as clear (ASSUMED);
+//     set, Shift must be held (the menu shortcuts then need Shift). The port reads the
+//     option from the character file (chatFormOption); the Function Key row of the
+//     Options window writes it (classic/options.ts);
 //   - F1 function_key_info_menu toggles the F-key help list (flag 0x200 at the player
 //     menu object, unknown_render_help_menu; the 0x400 branch when CanEnter is non-zero
 //     is not read by the render): the field draws it (render/fieldhud.ts, ASSUMED geometry);
@@ -22,6 +23,9 @@
 //     0x1000000): not ported (no team chat window in the port's chat line, no mouse
 //     control mode);
 //   - F12 main_menu_2 opens and closes the main menu, as Home does (no shift test).
+// handle_chat_shortcuts (named dump line 674857) is the other reader of the same
+// option: it is the chat form, so the raw F1..F12 keys send the chat shortcut slots
+// (chatShortcutIndex) when the option is set (plain F) and when it is clear (Shift+F).
 // The entry then goes through ChallengeMenuObject_HandleItemSelection_00733714 ->
 // ValidateMenuItemCondition_00732620 -> handle_player_menu_select, so a disabled entry
 // does nothing (classic/fieldmenu.ts validateMenuEntry).
@@ -88,4 +92,34 @@ export function functionKeyAction(e: KeyLike, names: readonly string[], shiftOpt
   if (n === 1) return { kind: 'help' };
   const id = FKEY_MENU_ID[n];
   return id === undefined ? null : { kind: 'menu', id };
+}
+
+// The character option 0x2000000 (Function Key: 1 = Chat Shortcuts, 0 = Menu Shortcuts;
+// PSOBBCharacterFile option_flags at 0x4EC, the newserv comment in SaveFileFormats.hh).
+export const OPTION_FUNCTION_KEY_CHAT = 0x2000000;
+export const OPTION_FLAGS_OFFSET = 0x4ec;
+
+// The chat form is on (the option is set) for a full character; false without one.
+export function chatFormOption(full: Uint8Array | null): boolean {
+  if (!full || full.length < OPTION_FLAGS_OFFSET + 4) return false;
+  const flags = new DataView(full.buffer, full.byteOffset, full.byteLength).getUint32(OPTION_FLAGS_OFFSET, true);
+  return (flags & OPTION_FUNCTION_KEY_CHAT) !== 0;
+}
+
+// The chat shortcut slots: F1..F12 are slots 0..11 (handle_chat_shortcuts: the
+// was_key_pressed(f1) .. f12 chain, slot 0xb for F12).
+export const CHAT_SHORTCUT_KEYS = 12;
+
+// The slot a key sends in handle_chat_shortcuts (dump 674857), or -1. It reads the raw
+// F keys (was_key_pressed(f1..f12), not the key config's bindings). Ctrl or Alt held:
+// none. Shift must be held when the option is clear and must be up when it is set
+// (the mirror of unknown_handle_fkey_inputs). Ignored while another window has the
+// keys (the callers check that).
+export function chatShortcutIndex(e: KeyLike, chatForm: boolean): number {
+  if (e.ctrlKey || e.altKey) return -1;
+  if (chatForm ? e.shiftKey : !e.shiftKey) return -1;
+  const m = /^F(\d{1,2})$/.exec(e.key);
+  if (!m) return -1;
+  const n = Number(m[1]);
+  return n >= 1 && n <= CHAT_SHORTCUT_KEYS ? n - 1 : -1;
 }

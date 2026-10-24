@@ -33,8 +33,9 @@ import { drawGameText, gameTextWidth, GAME_TEXT } from './gametext.ts';
 import { se } from '../audio/se.ts';
 import { activeColorEscape } from './textcodes.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
-import { drawSymbolParts, symbolSoundId, SYMBOL_CHAT_FRAMES, SYMBOL_PLATE, type TintFn } from './symbolchat.ts';
+import { CHAT_COOLDOWN_FRAMES, chatCooldownOver, chatCooldownTick, drawSymbolParts, symbolSoundId, SYMBOL_CHAT_FRAMES, SYMBOL_PLATE, type TintFn } from './symbolchat.ts';
 import type { SymbolChat } from '../net/symbolchat.ts';
+import type { ChatShortcut } from '../net/chatshortcut.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
 export const CHAT_MAX_LENGTH = 0x4f; // FUN_00713540 -> FUN_007312f0
@@ -126,24 +127,54 @@ export class ChatInput {
 
 export class ChatLog {
   lines: string[] = [];
+  // Rows scrolled back from the newest line (0 = the bottom). PageUp / PageDown in the
+  // Log Window move it by a page (page); a new line returns it to 0 (add).
+  back = 0;
 
   add(name: string, text: string): void {
     // unknown_write_chat_message_to_logs turns '\n' into spaces first.
     this.lines.push(name ? `${name} > ${text.replace(/\n/g, ' ')}` : text);
     if (this.lines.length > CHAT_LOG_LINES) this.lines.shift();
+    // ChatShortcutMenuYesNoListWindow_AddItem_0073c228 -> SyncRenderState_0073b5e0 sets the
+    // list's scroll progress (+0xa4) to 0, so the view shows the newest line again (ASSUMED
+    // that the view follows the progress to 0 at once).
+    this.back = 0;
+  }
+
+  // The lines as the window draws them (wrapped at the text width).
+  wrapped(): string[] {
+    return this.lines.flatMap((l) => wrapGameText(l, LOG_WINDOW.w - 20));
+  }
+
+  // PageUp (up = true: older lines) or PageDown moves the view by one page, clamped to
+  // the rows that exist (ChatLog.back stays 0..rows - fit).
+  page(up: boolean): void {
+    const max = Math.max(0, this.wrapped().length - LOG_FIT);
+    this.back = Math.min(max, Math.max(0, this.back + (up ? LOG_PAGE_ROWS : -LOG_PAGE_ROWS)));
   }
 }
 
 export const LOG_WINDOW = { x: 17, y: 36, w: 303, h: 400 }; // 0x00973d78
+// The list's page step (ListWindow_UpdateRenderProgress_0073c554 with +-380.0 on PageUp /
+// PageDown, dump 724833). 380 px is one page of the window's text rows: 19 rows of 20 px
+// (ASSUMED: the exe animates the step over frames, the port moves at once).
+export const LOG_PAGE_PX = 380;
+export const LOG_PAGE_ROWS = LOG_PAGE_PX / GAME_TEXT.lineHeight;
+export const LOG_FIT = Math.floor((LOG_WINDOW.h - 20 + 6) / GAME_TEXT.lineHeight);
 
-// The Log Window: the newest lines at the bottom (the list window scrolls to
-// its last item when one is added, FUN_0073c228 -> FUN_0073b558).
+// The rows the Log Window shows: `fit` rows that end `back` rows above the newest.
+export function logWindowRows(rows: readonly string[], fit: number, back: number): string[] {
+  const end = Math.max(0, rows.length - back);
+  return rows.slice(Math.max(0, end - fit), end);
+}
+
+// The Log Window: the newest lines at the bottom, moved back by PageUp / PageDown
+// (ChatLog.back). The list window scrolls to its last item when one is added
+// (FUN_0073c228 -> FUN_0073b558).
 export function drawLogWindow(ctx: CanvasRenderingContext2D, skin: WindowSkin, log: ChatLog): void {
   const { x, y, w, h } = LOG_WINDOW;
   drawWindowFrame(ctx, skin.frame, x, y, w, h);
-  const rows = log.lines.flatMap((l) => wrapGameText(l, w - 20));
-  const fit = Math.floor((h - 20 + 6) / GAME_TEXT.lineHeight);
-  rows.slice(-fit).forEach((l, i) => drawGameText(ctx, l, x + 10, y + 10 + i * GAME_TEXT.lineHeight, '#ffffff'));
+  logWindowRows(log.wrapped(), LOG_FIT, log.back).forEach((l, i) => drawGameText(ctx, l, x + 10, y + 10 + i * GAME_TEXT.lineHeight, '#ffffff'));
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +856,15 @@ export class ChatLine {
   readonly input = new ChatInput();
   readonly bubbles = new ChatBubbles();
   private readonly send: (text: string) => void;
+  // The chat send cooldown (is_chat_message_cooldown_over, symbolchat.ts): every send
+  // (typed line, symbol row, chat shortcut) sets it to 0x2d frames. The screen ticks it.
+  private cooldown = 0;
+  // A typed line the cooldown holds. The line stays open with its text until the
+  // cooldown ends and the line goes (ASSUMED: the exe keeps the chat window's send flag
+  // 0x10 and retries it each frame, ChallengePlayerListWindow_HandleInput_00752238).
+  private held: string | null = null;
+  // Sends a symbol chat (a symbol shortcut); the screen sends it and draws the sender's balloon.
+  sendSymbol: ((chat: SymbolChat) => void) | null = null;
 
   // send: the text Enter sends (the chat packet 06 of the lobby or the game).
   constructor(send: (text: string) => void) {
@@ -835,15 +875,68 @@ export class ChatLine {
     return this.input.open;
   }
 
-  // Space (begin_chat_input) opens the line.
+  // The cooldown is over (a send may go now).
+  cooldownOver(): boolean {
+    return chatCooldownOver(this.cooldown);
+  }
+
+  // A send was made: the cooldown restarts (set_chat_message_cooldown_timer, dump 679819).
+  startCooldown(): void {
+    this.cooldown = CHAT_COOLDOWN_FRAMES;
+  }
+
+  // One 30 Hz frame: the cooldown runs down, and a held typed line goes when it ends.
+  tickCooldown(): void {
+    this.cooldown = chatCooldownTick(this.cooldown);
+    if (this.held !== null && this.cooldownOver()) {
+      const t = this.held;
+      this.held = null;
+      this.input.text = null;
+      this.dispatch(t);
+    }
+  }
+
+  private dispatch(text: string): void {
+    this.startCooldown();
+    this.send(text);
+  }
+
+  // Space (begin_chat_input) opens the line; a held line keeps it open until it goes.
   begin(): void {
-    this.input.begin();
+    if (this.held === null) this.input.begin();
   }
 
   key(e: KeyboardEvent): void {
     e.preventDefault();
+    if (this.held !== null) {
+      // Escape drops the held line (Cancel on the waiting chat window); other keys wait.
+      if (e.key === 'Escape') {
+        this.held = null;
+        this.input.text = null;
+      }
+      return;
+    }
+    // Enter with a line but no cooldown holds it (the send happens when the cooldown ends).
+    if (e.key === 'Enter' && this.input.text?.trim() && !this.cooldownOver()) {
+      this.held = this.input.text;
+      return;
+    }
     const text = this.input.key(e);
-    if (text) this.send(text);
+    if (text) this.dispatch(text);
+  }
+
+  // use_chat_shortcut (dump 754183) -> send_chat_message_with_cooldown_optcall (754207):
+  // a shortcut that comes while the cooldown runs is dropped, not held. An empty record
+  // still sets the cooldown: the timer is set before send_chat_message, which then sends
+  // nothing for an empty text. Word-select records are not sent (ASSUMED: the port has
+  // no word-select sender). Returns whether the shortcut was used.
+  useShortcut(s: ChatShortcut | null): boolean {
+    if (!this.cooldownOver()) return false;
+    this.startCooldown();
+    if (!s) return true;
+    if (s.type === 1 && s.text) this.send(s.text);
+    else if (s.type === 3 && s.symbol) this.sendSymbol?.(s.symbol);
+    return true;
   }
 
   // A line from the server; `from` is null when the speaker is not a known player.

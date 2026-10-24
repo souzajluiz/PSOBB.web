@@ -24,7 +24,7 @@ the port). File references are to `client/src/`.
 | F10 | team_chat_toggle (29) | missing | not ported | Exe: dump 678385: while that window is open, toggles the lock bit (0x80) that sends the chat line as team chat (`SendChatMessageDispatcher_0077d710`, dump 754350). Same reason as F9. |
 | F11 | keyboard_controls_toggle (30) | missing | not ported | Exe: `ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159), character option 0x1000000. The port has no mouse-control mode. |
 | F12 | main_menu_2 (31) | wired | `render/fieldhud.ts` key(), `classic/lobby.ts` key() | Read through `bindingKey(BINDING.mainMenu2)`, so a rebound F12 follows the config. |
-| Shift+F1..F12 | the same roles, option 0x2000000 | missing | `input/shortcuts.ts` functionKeyAction | The option flag is not in the port; it is taken as clear (plain F keys only). The chat shortcut form is not ported. |
+| Shift+F1..F12 | handle_chat_shortcuts (dump 674857): the raw F keys, slots 0..11 | partial | `input/shortcuts.ts` chatShortcutIndex; `render/fieldhud.ts` key(); `classic/lobby.ts` key(); `classic/chat.ts` ChatLine.useShortcut; `net/chatshortcut.ts` | Option 0x2000000 clear (the default): Shift+F sends the slot, plain F is the menu key. Option set: plain F sends the slot and Shift+F is the menu (the Options window's Function Key row). A slot is the save's record at 0x1FAC (text or symbol chat), sent with the chat cooldown (dropped while it runs). Not ported: the Chat > Shortcut leaf (0x11) editor, and the word-select record (type 2). |
 | Alt+F1..F12 | lobby emotes (`EMOTE_KEYS` f1..f12) | wired | `render/lobbyview.ts` (altEmoteKey, line ~707); `formats/emotes.ts` line 33 | Alt keeps the F keys off the shortcuts (the exe's `is_alt_pressed_` check). |
 | Alt+1..0 | lobby emotes (digits) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | |
 | Alt+A..Z | lobby emotes (letters) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | Letters in `EMOTE_KEYS`; the set is the port's (ASSUMED to match the exe's emote table). |
@@ -40,7 +40,7 @@ the port). File references are to `client/src/`.
 | Backspace | menu_back (7) | wired | `input/keyconfig.ts` menuKeyOf; `classic/fieldwindows.ts` listKey | |
 | Enter | menu_accept (6) | wired | `input/keyconfig.ts` menuKeyOf | |
 | Home | main_menu_1 (8) | wired | `render/fieldhud.ts` line 670; `classic/lobby.ts` line 652 | |
-| PageUp / PageDown | not an input enum role | missing | `classic/chat.ts` ChatLog (line ~127) | The Log Window draws the newest lines with no scroll state. The exe handler was not located. |
+| PageUp / PageDown | pso_keycode page_up (8) / page_down (9), raw keys (not a role) | partial | `classic/lobby.ts` key() (Log Window); `classic/chat.ts` ChatLog.page | Lobby only: the Log Window (Home > Chat > Log Window, leaf 0x15) moves a page (380 px = 19 rows) per press; PageUp shows older lines. Exe: ChallengePlayerListWindow_HandleInput_00752238 (dump 724833, `ListWindow_UpdateRenderProgress` +-380). The field has no Log Window leaf in the port, so the keys do nothing there. A new line returns the view to the newest. |
 | End | symbol_chat_open (14) | wired (field) | `classic/field.ts` line 198 | The lobby's symbol list is the Home menu's (F7). |
 | Ctrl+End | quickmenu (14) with Ctrl | missing | not ported | Exe: `unknown_handle_quickmenu` (dump 682493), `quick_menu_constructor`. The quick menu window is not in the port. |
 | Up | camera (19) | wired | `render/lobbyview.ts` ~745 | Recentres the camera. |
@@ -52,16 +52,31 @@ the port). File references are to `client/src/`.
 
 - **Wired:** movement, the menu keys, Home, F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End (field), the action palette, the hotbar 1..0, the camera,
   Alt emotes, Q / E auto run and walk (the manual's keys, see the ASSUMED list).
-- **Partial:** F1 (help list, field only), numpad (NumLock on only).
-- **Missing:** F9..F11 (team chat, DEVLOG 2026-10-23; keyboard control mode),
-  Shift+F (option flag), Ctrl+End (quick menu), PageUp / PageDown (log scroll), Tab,
-  Print Screen.
+- **Partial:** F1 (help list, field only), numpad (NumLock on only), Shift+F chat shortcuts
+  (no slot editor, no word select), PageUp / PageDown (lobby Log Window only).
+- **Missing:** F9..F11 (team chat window and keyboard control mode), Ctrl+End (quick menu),
+  Tab, Print Screen.
 
 ## ASSUMED
 
 - F2..F4 open the leaf with the main panel behind it (the leaf as the menu shows it when
   picked from the list). The exe may draw the leaf alone.
-- Shift+F uses option 0x2000000 cleared (the port has no such flag).
+- Shift+F and the chat form: the option 0x2000000 meaning is the newserv comment's (0 =
+  menu shortcuts, 1 = chat shortcuts). The two dump readers agree with it: the menu
+  reader (unknown_handle_fkey_inputs) needs Shift when the option is set, the chat reader
+  (handle_chat_shortcuts) needs Shift when it is clear. The raw F keys are read for the
+  chat slots (was_key_pressed(f1..f12)), not the key config's bindings.
+- A chat shortcut that comes during the cooldown is dropped; an empty slot still starts
+  the cooldown (the exe sets the timer before send_chat_message, which then sends nothing).
+  The word-select record sends nothing here, and the lobby sends no symbol chat (the port's
+  lobby has no symbol sender; the field has one).
+- Log Window: the page step is 380 px (one page of 19 rows at 20 px), applied at once (the
+  exe's list animates the progress over frames). A new line returns the view to the bottom
+  (ChatShortcutMenuYesNoListWindow_AddItem_0073c228 resets the progress). The same handler
+  also moves the progress by +-6 on two shared-state keys (g_KeyboardSharedState 8 and 9,
+  dump 724833); the port does not map them (which keys they are is not traced).
+- A typed line that comes during the chat cooldown is held with the input open until the
+  cooldown ends (the chat window's send flag, retried each frame); Escape drops it.
 - Q and E are the manual's keys when bindings 4 and 5 are unbound (the exe's presets
   leave them unbound).
 - Auto run and walk: a direction key (W / S / A / D) turns the setting off; the exe turns

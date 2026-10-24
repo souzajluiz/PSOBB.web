@@ -11,7 +11,7 @@ const measure = { measureText: () => ({ width: 7 }), getImageData: () => ({ data
     return measure;
   }
 };
-const { ChatLine } = await import('../client/src/classic/chat.ts');
+const { ChatLine, ChatLog, logWindowRows, LOG_FIT } = await import('../client/src/classic/chat.ts');
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -115,6 +115,112 @@ const far = new ChatBubbles();
 far.say(4, 'D', 'far', () => 0);
 for (let i = 0; i < 4; i++) far.tick(() => head(320, 240, true, 150));
 eq(far.list[0].docked, true, 'beyond 120 units: docked');
+
+// The chat send cooldown (is_chat_message_cooldown_over, dump 679808; 0x2d frames): a
+// typed line sent sets it, and a line that comes while it runs is held until it ends.
+const cool = [];
+const cl = new ChatLine((t) => cool.push(t));
+cl.begin();
+for (const k of ['o', 'k']) cl.key(press(k));
+cl.key(press('Enter'));
+eq(cool, ['ok'], 'cooldown: the first line goes');
+eq(cl.cooldownOver(), false, 'cooldown: a send starts it');
+cl.begin();
+for (const k of ['n', 'o']) cl.key(press(k));
+cl.key(press('Enter'));
+eq(cool, ['ok'], 'cooldown: a line during it is held');
+eq(cl.open, true, 'cooldown: the held line keeps the input open');
+cl.begin();
+cl.key(press('x'));
+eq(cl.input.text, 'no', 'cooldown: Space does not clear a held line');
+for (let i = 0; i < 0x2c; i++) cl.tickCooldown();
+eq(cool, ['ok'], 'cooldown: 44 frames, still held');
+cl.tickCooldown();
+eq(cool, ['ok', 'no'], 'cooldown: the held line goes at 45 frames');
+eq(cl.open, false, 'cooldown: the line closes when it goes');
+cl.begin();
+cl.key(press('z'));
+cl.key(press('Escape'));
+cl.begin();
+cl.key(press('a'));
+cl.key(press('Enter'));
+for (let i = 0; i < 0x2d; i++) cl.tickCooldown();
+cl.begin();
+cl.key(press('q'));
+cl.key(press('Enter'));
+cl.begin();
+cl.key(press('w'));
+cl.key(press('Enter'));
+eq(cool.length, 3, 'cooldown: sends after the ticks only');
+cl.tickCooldown();
+eq(cl.cooldownOver(), false, 'cooldown: starts again after a send');
+
+// Escape drops a held line: it never goes.
+const esc = [];
+const el = new ChatLine((t) => esc.push(t));
+el.begin();
+el.key(press('a'));
+el.key(press('Enter'));
+el.begin();
+el.key(press('b'));
+el.key(press('Enter'));
+el.key(press('Escape'));
+eq(el.open, false, 'held: Escape closes the held line');
+for (let i = 0; i < 0x2d; i++) el.tickCooldown();
+eq(esc, ['a'], 'held: a dropped line is not sent');
+
+// A blank Enter during the cooldown closes the line and sends nothing (no hold).
+const blank = [];
+const bl = new ChatLine((t) => blank.push(t));
+bl.begin();
+bl.key(press('y'));
+bl.key(press('Enter'));
+bl.begin();
+bl.key(press(' '));
+bl.key(press('Enter'));
+eq(blank, ['y'], 'blank during cooldown: nothing held');
+eq(bl.open, false, 'blank during cooldown: the line closes');
+
+// Chat shortcuts (use_chat_shortcut, dump 754183): a text record goes, and the cooldown
+// starts; a record during the cooldown is dropped; an empty record starts it too.
+const sc = [];
+const sl = new ChatLine((t) => sc.push(t));
+const symbolSent = [];
+sl.sendSymbol = (chat) => symbolSent.push(chat);
+eq(sl.useShortcut({ type: 1, text: 'hello', symbol: null }), true, 'shortcut: used when free');
+eq(sc, ['hello'], 'shortcut: the text goes');
+eq(sl.useShortcut({ type: 1, text: 'again', symbol: null }), false, 'shortcut: refused during the cooldown');
+eq(sc, ['hello'], 'shortcut: a refused record is dropped (not held)');
+for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
+eq(sl.useShortcut(null), true, 'shortcut: an empty slot is used');
+eq(sl.cooldownOver(), false, 'shortcut: an empty slot still starts the cooldown');
+eq(sc, ['hello'], 'shortcut: an empty slot sends nothing');
+for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
+sl.useShortcut({ type: 3, text: '', symbol: { spec: 0, cornerObjects: [], faceParts: [] } });
+eq(symbolSent.length, 1, 'shortcut: a symbol record goes to the symbol sender');
+for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
+sl.useShortcut({ type: 2, text: '', symbol: null });
+eq(sc, ['hello'], 'shortcut: a word-select record sends no text (not ported)');
+
+// Log Window paging (ChatLog.page; PageUp = older lines, PageDown = newer). A new line
+// returns the view to the bottom.
+const lg = new ChatLog();
+for (let i = 0; i < 0x1e; i++) lg.add('P', `line ${i}`);
+const rowsNow = () => logWindowRows(lg.wrapped(), LOG_FIT, lg.back);
+eq(rowsNow().at(-1), lg.wrapped().at(-1), 'log: the newest line is at the bottom');
+lg.page(true);
+eq(lg.back > 0, true, 'log: PageUp moves the view back');
+const older = rowsNow();
+eq(older.at(-1) !== lg.wrapped().at(-1), true, 'log: PageUp shows older lines');
+for (let i = 0; i < 20; i++) lg.page(true);
+eq(lg.back, Math.max(0, lg.wrapped().length - LOG_FIT), 'log: PageUp stops at the first line');
+eq(rowsNow()[0], lg.wrapped()[0], 'log: the first line is the top of the window');
+for (let i = 0; i < 40; i++) lg.page(false);
+eq(lg.back, 0, 'log: PageDown stops at the newest line');
+lg.page(true);
+lg.add('P', 'new');
+eq(lg.back, 0, 'log: a new line returns the view to the bottom');
+eq(logWindowRows(lg.wrapped(), LOG_FIT, 0).at(-1), 'P > new', 'log: the new line is shown');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
