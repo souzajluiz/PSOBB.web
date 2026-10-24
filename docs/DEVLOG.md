@@ -18141,3 +18141,45 @@ The brief's premise holds: the exe's icon does not read the gauge. `QuickMenuUpd
 - The real remote blast end (the exe's phase / counter in ticks) and how the remote's 6x37 relates to it.
 - The second `GetPhotonBlastData` caller in the status window (dump 712934, the positions at y 173 by the participant's weapon field) is not traced.
 - The +0x524 bit 2 readers beyond the fire gate.
+
+## 2026-10-23: photon blast joins, gate and end timing
+
+Exe addresses. The constructor is at 0x0067e9e0 (the vtable store of 0x00b38328 is at 0x0067ea4b); the dump's name `PhotonBlast_Constructor_0067ec51` is off, the body in dump 547640 is that function. `CheckPlayerInSameRoom` is at 0x0067e97c (called from `CreatePhotonBlast` at 0x0067e72b). `CreatePhotonBlast` itself runs from 0x0067e63a.
+
+**Joins** (`CreatePhotonBlast`, dump 547409): the list is the same-room players (the caster's room) whose weapon data field is not -1, in slot order. The dump then groups them by that field (`local_50` counts); the port does not model the grouping. The port does not track a remote's weapon field, so the joined list is the caster alone (ASSUMED).
+
+**Gate** (the `bVar1` loop, 0x0067e6c0 .. 0x0067e968): when any other same-room player's slot byte (0x00a90420 + slot * 36) is not 0, no blast object is made. The caster's own state does not count.
+
+**End timing.** Two branches, chosen by `CheckPlayerInSameRoom` (true when the local player is the caster or is on the caster's floor and room):
+- Local branch (+0x4c != 0, `SpawnBossEntity_0067f5b4`, dump 548066): phase 0 spawns one boss entity per participant (index +0x20 against count +0x28), waiting on `CheckEntityStepConstructed` for the previous one; phase 1 clears the entity's flags 4 and 0x10 and returns to 0; at index == count phase 0 goes to phase 2; phase 2 plays SE 0xae, runs `HandlePhotonBlastDamage_0067fa2c` and sets due-for-destruction. With one update per tick and no construction wait (ASSUMED), the effect is on update 2n + 2.
+- Counter branch (+0x4c == 0, the caster's room is not the local room): `UpdatePhotonBlastState_0067eed0` (0x0067eed0) adds 1 to +0x44 each update and runs the effect when the delay +0x48 is below it, so the effect is on update delay + 1.
+- The delay (0x67e779..0x67e78a): 150 n + 100, with n the index of the first empty participant entry (the loop's break, 0x67e914 sets n = index). When all four entries are filled the index stays 0, so the delay is 100. The port keeps that quirk (`pbDelayFor`).
+
+So the brief's premise is half wrong: the counter is not the remote player's blast, it is a blast from another room. A same-room remote's 6x49 takes the local branch. The port uses the local branch for every blast it sees (the server relays only this game's players).
+
+**Creation time (ASSUMED):** the blast object is made in the weapon attack state machine (`ResetWeaponStateForUnsafeMap`, dump 585705, from `CreatePhotonBlast` when the weapon data list is set), which is timed by the animation (`Player__UpdateWeaponAttackAnimation`, dump 585590, state 3). That time is not traced. The port keeps 30 ticks from the fire to the creation (`PB_CREATE_TICKS_ASSUMED`) and adds the effect's updates after it.
+
+**6x37 (the release):** `SendPhotonBlastCompletionPacket_0069f93c` (0x0069f93c) sends {client id, u16 round(+0x520)} once, when the motion passes its release (`HandlePhotonBlastAnimationUpdate_0069f8a0`, state 2 to 3, flag 0x40). +0x520 is the gauge (`unknown_player_data` at +0x4e4, `pb_charge` at +0x3c), so 6x37 carries the charge at the release, which the port already sends. The exe's sender returns early when the entity's +0x32c is 2 (not the local player). The receiver of an incoming 6x37 was not located in the dump (no name, the subcommand dispatch is not in the dump's named functions); the port ignores incoming 6x37, and whether a remote's 6x37 creates or ends a remote blast is ASSUMED to be unknown.
+
+**The second caller (the status window):** `QuickMenuUpdateListItemPosition_0074253c` (dump 712934) calls `GetPhotonBlastData_0067e334` with the slot. The 8-word result is the weapon fields (words 0..3) and the participant slots (words 4..7). When the slot is found, its weapon field picks the x of the row, at y 173: field 5 (Mylla & Youlla) x 0, 4 (Leilla) x 34, 3 (Pilla) x 68, 1 (Estlla) x 102, 2 (Golla) x 136, 0 (Farlla) x 170. Otherwise (not found, or the map is not a challenge phase) the row is placed by the player's index at y 202. The port's status icon row (`classic/quickmenu.ts`, the party icons) does not place the blast icon by type yet; not changed (ASSUMED the row is the status icon row).
+
+**Ported:**
+- `client/src/combat/photonblast.ts`: `pbParticipants` (the join list, slot order, the no-field players left out), `pbBlockedBy` (the gate, `PhotonBlastSlots` state of the others), `pbDelayFor` (100 + 150 n, the 4-filled quirk), `pbCounterEndUpdates` (delay + 1), `pbLocalEndUpdates` (2 n + 2), `pbEndUpdates` (branch), `pbTechHitTicks` (creation ASSUMED 30 + the effect's updates - 1, for `tickTechHits`).
+- `client/src/render/combat.ts`: the fire checks the gate (blocked: no slot state and no effect, the release and the gauge still go out, ASSUMED) and uses `pbTechHitTicks` instead of 30; the remote 6x49 has the same gate and timing.
+- `tests/photonblast.test.ts`: section 8 (delay values, both end counts, the tick count, joins, the gate).
+
+**ASSUMED:**
+- One object update per game tick (30 a second), the first update in the tick after the object exists.
+- No construction wait in the local phase machine (`CheckEntityStepConstructed` is true at once).
+- The creation delay of 30 ticks from the fire (the animation state; not traced).
+- The joined list is the caster alone (a remote's weapon field is not tracked).
+- A blocked blast still releases (6x37 and the gauge spend), with no effect.
+- A remote 6x49 is made into a blast on this client with the same timing as the local one.
+
+**Checks:** `node tests/photonblast.test.ts` (all checks passed). Client `tsc --noEmit` using the main checkout's TypeScript: no new errors (the worktree has no node_modules, so the existing `three`, `vite` and `@capacitor` errors are the missing modules, the same as before).
+
+**Left:**
+- The creation time: the weapon attack state 3 with the special flag (the animation timing in `Player__UpdateWeaponAttackAnimation`), so the 30-tick creation delay is still a guess.
+- The receiver of 6x37 (a remote's release) and whether it creates or ends a blast.
+- The joined blasts' weapon field for remote players (the grouping in `CreatePhotonBlast` by field).
+- The status row's blast icon position by weapon field (dump 712934).
