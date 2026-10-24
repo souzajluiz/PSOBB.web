@@ -198,6 +198,20 @@ function run(ops: Op[], host: QuestVMHost = {}, blobs: Uint8Array[] = []): Quest
   check(!bp.override('attack', 0, 0x60, new Uint8Array(0x30)) && !bp.override('resist', 0, 0, new Uint8Array(4)), 'bad index / short row refused');
 }
 
+// The quest timer window (show_timer / winset_time / hide_timer; the exe's
+// CreateQuestWindowTimeObject_00717de4, opcode_winset_time -> SetTimerText_00717e28,
+// close_timer_window): winset_time only while the window is open, the window opens once.
+{
+  const events: Array<[boolean, number]> = [];
+  const timerHost = { timerChanged: (shown: boolean, seconds: number) => events.push([shown, seconds]) };
+  const vm = run([['leti', 3, 85], ['winset_time', 3], ['show_timer'], ['winset_time', 3], ['show_timer'], ['hide_timer'], ['winset_time', 3]], timerHost);
+  check(vm.timerShown === false, 'timer: closed at the end');
+  check(vm.timerSeconds === 85, 'timer: seconds kept from the open window');
+  check(JSON.stringify(events) === JSON.stringify([[true, 0], [true, 85], [false, 85]]), `timer: open once, set while open, close (${JSON.stringify(events)})`);
+  const vm2 = run([['leti', 3, 3725], ['show_timer'], ['winset_time', 3]], timerHost);
+  check(vm2.timerShown && vm2.timerSeconds === 3725, 'timer: shown with its seconds');
+}
+
 if (failures) {
   console.log(`${failures} failures`);
   process.exit(1);

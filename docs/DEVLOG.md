@@ -17515,3 +17515,44 @@ Next step to settle it: ask the user which section IDs the two characters in the
 - The cape / aura shapes (above): not identified, not ported.
 - The beam's colour and texture (ASSUMED sheet; compare with the reference in a lobby with the pink orb).
 - The yellow floor ring at the pedestal: not checked against the lobby map mesh.
+
+## 2026-10-23: field HUD status icons, party window icons, quest timer window (Chrome check: screenshot)
+
+**What changed:** the status icons next to the status window and the party windows now follow the exe's icon table, the photon blast icon and the remote players' Shifta / Deband slots; the quest timer window (show_timer / winset_time / hide_timer, the generic quest timer) is drawn at GUI 0x24 instead of being a no-op.
+
+**Premise check:** the brief said the timer format is m'ss"cc. The exe's set_timer_text writes h'mm"ss (no centiseconds): `0'25"24` in the reference is 0 h 25 min 24 s, which the port already formats (`timerText`, `formatBattleTimer`). The reference timer sits at x ~363 (not centred): GUI 0xb9, see below. The exe's icons do not blink.
+
+**Exe evidence** (named dump `reverse/refsrc/.../Psobb.exe-05112026.c`, values read with `tools/exedata.py`, code with `objdump -d`):
+- `QuickMenuUpdateShiftaStatusIcons_007426d8` (dump line 712999): the status window (GUI 0x1e) and the party windows (`QuestListEntryDestructor_0073ead8`, GUI 0xbd) keep one window per occupied slot: the photon blast icon `10 + index` first when `GetPhotonBlastData_0067e334` is 1 or 2, then the four slots `+0x25c, +0x268, +0x274 (attack), +0x280 (defense)`, each mapped by `get_monster_status` (dump line 676709: 2->2, 3->1, 9->6, 0xa->8, 0xb->7, 0xc->9, 0xf->3, 0x10->4, 0x11->5, 0x12->0, default 14).
+- `ui_target_window_status` (dump line 676627): icon 14 sets flag 0x2 (hidden), icons < 10 use texture 1, the others texture 2, texel = `0x0096fd20 + icon * 8` (read: 0,180 / 32,180 / 64,180 / 96,180 / 128,180 / 0,208 / 32,208 / 64,208 / 96,208 / 128,208 / 72,167 / 104,167 / 136,167 / 168,167).
+- Slot position: `unknown_update_shifta_hud_icon_helper` (dump line 676677): slot index * `g_ShiftaHudIconSlotSpacing` (16, the port's STATUS_ICON_STEP); the occupied counter moves only for non-zero slots, so an icon 14 keeps its place.
+- GUI table 0x00971f40, 8 bytes per index: 0x1e = (226, 37), 0xbd = (117, 7), 0x24 = (254, 37), 0xb9 = (366, 37), 0xba = (270, 75) (read and matched).
+- Shifta / Deband tick: `shifta_jellen_effect_tick` (dump line 750441, 0x750440) and `deband_zalure_effect_tick` (dump line 750517, 0x750500): the buff counts down in frames; every 45 frames (`% 0x2d`) it plays sound 0xb1 / 0xb2 (Shifta / Jellen) or 0xb3 / 0xb4 (Deband / Zalure) and makes a particle object; at zero the stats are removed. No icon blink in these functions or in the icon code above (blink ASSUMED none).
+- Timer: `opcode_window_time` -> `CreateQuestWindowTimeObject_00717de4` (dump 679021): opens the window once (text kept); `opcode_winend_time` -> `close_timer_window` (679036); `opcode_winset_time` (606173) -> `SetTimerText_00717e28` (679049): only while the window exists; text = `set_timer_text` (dump 734588): `h'mm"ss`, or `9'59"59` from 10 hours.
+- Timer position: `ListWindowObject_Constructor_00760f78` (dump 734395) -> `unknown_soccer_scoreboard_positioning` (734415): GUI 0x24 when `g_GuildCardFlags & 7 == 0` (bits 1, 2, 4: the guild card menu state, set by the 0x60/6 receipt and the card menu, cleared in QuickMenuObject_CloseGuildCardMenu), else GUI 0xb9; GUI 0xba when the window's flag 0x1 is set. The reference is 0xb9.
+- Timer width: `UpdateWindowPositionForText_00761040` (exe 0x761040): element +8 = (textWidth + off[sign]) * -0.5 + 42 (floats at 0x974cac = -0.5, 0x974cb0 = 42, 0x974c88 = 0, 2^32 for negatives). The meaning of element +8 is not traced (ASSUMED: an x offset of the text, not the frame width); the port keeps its BORDER box (`drawText`, 20 px).
+
+**Ported:**
+- `classic/hud.ts`: `STATUS_ICON_TEXELS` has the 14 texels of the exe table; `drawStatusIcons` takes the window's textures (texture 1 for icons 0..9, `statusBlast` = texture 2 for 10..13) and counts an icon 14 as a slot. `HudTextures.statusBlast`.
+- `render/playerhud.ts`: loads f256_hyouji.prs texture 2 as `statusBlast`.
+- `render/combat.ts`: the local status icons start with the photon blast icon (10) while the gauge is ready (`pb.ready`). The party windows take the remote copy's status slots (`remoteStatus`, 6x0C / 6x0D) and a new `remoteBuffs` map (Shifta / Deband the local client applies to the other players of a remote 6x47 list, level >= 2, with the stronger-holds rule via `EntityBuffs.apply`); the remote buffs tick with the local ones and clear on a new floor.
+- `quest/vm.ts`: `show_timer` (0xC7 window_time) opens the window, `hide_timer` (0xC8) closes it, `winset_time` (0xC9) sets the seconds while open; host hook `timerChanged`. `quest/town.ts`: the hook draws `quest-timer` at (254, 37) with `timerText`; the window is cleared when the quest ends.
+- `client/e2e/fieldhud-status.spec.ts`: Forest 1 of a fresh field; Shifta and Deband on the local player (icons 6, 8); a fake party member "Vicky" (slot 1..3 by the local id, Lv 125) with Shifta and Deband from a remote cast; the timer box text `0'25"24` set by `setHud` (the VM path is unit-tested); screenshot to test-results.
+- Tests: `tests/party.test.ts` (texels 9 / 10 / 13 / 14, the slots of [10, 6, 14, 8] on the two textures, no texture = nothing drawn), `tests/questmisc.test.ts` (timer: winset_time while closed is ignored, show once, hide, the seconds kept).
+
+**Checks:**
+- `node tests/party.test.ts`: 31/31. `node tests/buffs.test.ts`, `tests/fieldhud.test.ts`, `tests/questmisc.test.ts`, `tests/cmode.test.ts`: pass.
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24): clean.
+- Playwright: `client/e2e/fieldhud-status.spec.ts` passes in Chrome against the worktree Vite (port 5190, `PW_BASE_URL`). One earlier attempt failed at the login because `PSO_USER` was set to an empty string in my shell (not a code failure); the second run passed. The screenshot is 1280 x 720: status window at (28, 37) x 1.5, the icons at virtual (254, 74) and (270, 74), the Vicky window at (30, 116) with the icons at (147, 123), the timer box at (254, 37). The reference (640 x 360, a 0.75 scale in y) matches these positions except the timer, which is at x ~363 (GUI 0xb9).
+
+**ASSUMED:**
+- The photon blast icon is index 0 (10) for the local player and shows while `pb.ready` (charge >= 100); the exe's list index and the `something_about_photon_blasts` state (1 / 2) are not traced further.
+- Remote players' Shifta / Deband are applied from the caster's 6x47 target list at level >= 2 (the same rule as the local player); the caster itself is in that list only if the list names it.
+- The timer's text is 0'00"00 until the first winset_time (the exe keeps the buffer's old text; not traced).
+- The quest timer id is shared by the area and quest VMs (`quest-timer`); the challenge timer keeps its own `cmode-timer`.
+
+**Left:**
+- Timer position: the reference shows the box at GUI 0xb9 (366, 37). The port uses 0x24. The exe picks 0xb9 while `g_GuildCardFlags & 7` is set (guild card menu state); the port has no such flag word, so the variant is not ported. The box width (element +8 formula above) is not matched to the reference (the reference box is wider, ~80 px at virtual scale; not measured exactly).
+- Remote players' photon blast icons (6x39 / 6x3A are not tracked for remote players) and the remote players' own Shifta from their own cast if the caster is not in its own 6x47 list.
+- Party window HP bar and "Vicky" colour against the reference: the reference is 640 px wide, the bar is not readable at that size.
+- Chrome check of a real Shifta cast (the screenshot uses `applySelfBuff` / `applyRemoteBuff` directly, not the palette cast) and of a live quest timer (the spec sets the HUD text directly).

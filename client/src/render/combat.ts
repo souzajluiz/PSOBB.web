@@ -137,6 +137,7 @@ import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
+import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
 import { attackHeading, inUnsafeMap, RAND_MAX_C, slowApplies } from './playermove.ts';
 import { EnemyStatus, enemyAttribute, techFreezeChance, techShockChance } from '../combat/enemystatus.ts';
@@ -719,6 +720,10 @@ export class CombatView {
   // ASSUMED: they survive a floor change (the client keeps the player object
   // across field warps; its tick only runs on a field).
   readonly selfBuffs = new EntityBuffs();
+  // The same slots of the remote players the local client hits with a Shifta /
+  // Deband (remoteSupport: the caster's 6x47 targets), for the party windows'
+  // status icons (QuickMenuUpdateShiftaStatusIcons_007426d8 on each player).
+  private remoteBuffs = new Map<number, EntityBuffs>();
   // Per remote client: the last 6x8D level_upgrade and the last 6x47, which its
   // 6x48 technique object runs with (action_launch_tech).
   private techOverride = new Map<number, number>();
@@ -1382,6 +1387,7 @@ export class CombatView {
     // A new floor: no dead markers or remote status effects carry over.
     for (const id of [...this.souls.keys()]) this.showSoul(id, false);
     this.remoteStatus.clear();
+    this.remoteBuffs.clear();
     if (progression && this.tp === 0) this.tp = progression.maxTp;
     this.opts.log(
       `combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ` +
@@ -1615,7 +1621,11 @@ export class CombatView {
       this.partyOwners.set(slot, p.guildCardNumber);
     }
     const m = this.party.get(slot) ?? this.party.stats(slot, this.partyStats(p));
-    return { name: p.name, level: p.level, hp: m.hp, maxHp: m.maxHp, dead: m.dead || this.deadPlayers.has(slot), nameColor: p.nameColor };
+    // The remote copy's status slots (6x0C / 6x0D) and its Shifta / Deband slots, in
+    // the order of the local window (slot 0, slot 1, attack, defense).
+    const rs = this.remoteStatus.get(slot);
+    const statusIcons = [...(rs ? rs.types().map(statusIcon) : []), ...(this.remoteBuffs.get(slot)?.icons() ?? [])];
+    return { name: p.name, level: p.level, hp: m.hp, maxHp: m.maxHp, dead: m.dead || this.deadPlayers.has(slot), nameColor: p.nameColor, statusIcons };
   }
 
   private partyStats(p: { charClass: number; level: number; hpStat?: number; hpMaterials?: number }) {
@@ -1639,7 +1649,9 @@ export class CombatView {
       pb: this.pb.charge,
       dead: this.damage.dead,
       nameColor: me?.nameColor,
-      statusIcons: [...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
+      // The photon blast icon comes first while the blast is ready (10 + the
+      // player's index in the blast list, ASSUMED 0 for the local player).
+      statusIcons: [...(this.pb.ready ? [STATUS_ICON_BLAST_FIRST] : []), ...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
     };
   }
 
@@ -1658,6 +1670,10 @@ export class CombatView {
   // the local player and on every live enemy.
   private tickBuffs(): void {
     for (const s of this.selfBuffs.tick()) this.opts.log(`${buffName(s.type)} wore off`);
+    for (const [id, b] of this.remoteBuffs) {
+      for (const s of b.tick()) this.opts.log(`player ${id}: ${buffName(s.type)} wore off`);
+      if (!b.attack.type && !b.defense.type) this.remoteBuffs.delete(id);
+    }
     for (const e of this.enemies.values()) {
       if (e.dead) continue;
       for (const s of e.buffs.tick()) this.opts.log(`${buffName(s.type)} on E-${e.index.toString(16)} wore off`);
@@ -7767,6 +7783,16 @@ export class CombatView {
     this.opts.log(`${what}: ${buffName(group)} ${pct(slot.mult)} for ${(slot.frames / GAME_TICKS_PER_SECOND).toFixed(0)} s (${stat})`);
   }
 
+  // entity_hit_by_tech(shifta / deband) on another player (the remote copy's slot).
+  private applyRemoteBuff(id: number, group: BuffGroup, power: number, what: string): void {
+    let b = this.remoteBuffs.get(id);
+    if (!b) {
+      b = new EntityBuffs();
+      this.remoteBuffs.set(id, b);
+    }
+    if (b.apply(group, power)) this.opts.log(`${what}: player ${id} ${buffName(group)}`);
+  }
+
   // entity_hit_by_tech(jellen / zalure) on an enemy; the caster's client
   // reports it with 6x0A (vtable +0x130, 0x00787578: unchanged total damage).
   private buffEnemy(e: EnemyRuntime, group: BuffGroup, power: number, what: string, own: boolean): void {
@@ -7881,6 +7907,14 @@ export class CombatView {
     const self = this.game.selfId;
     const onMe = cast.targets.includes(self);
     const group = BUFF_GROUP[tech];
+    // The other players in the 6x47 list take Shifta / Deband the same way (the
+    // level 2 gate is the local rule); their slots feed the party windows' icons.
+    if ((group === GROUP.shifta || group === GROUP.deband) && level >= 2) {
+      for (const id of cast.targets) {
+        if (id === self || id >= 0x1000 || !this.game.players.has(id)) continue;
+        this.applyRemoteBuff(id, group, supportPower(level), name);
+      }
+    }
     if ((group === GROUP.shifta || group === GROUP.deband) && onMe && level >= 2) {
       this.applySelfBuff(group, supportPower(level), name);
     } else if (group === GROUP.jellen || group === GROUP.zalure) {
