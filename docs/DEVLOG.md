@@ -17862,3 +17862,37 @@ So 500 ticks at 30 ticks a second (`GAME_TICKS_PER_SECOND` in the port, ASSUMED 
 - The Derolle vtable bodies behind the area hit (unchanged from the previous entry).
 
 **Tests.** `node tests/galgryphonfx.test.ts`, `galgryphonai`, `galgryphonminion`, `galgryphon`, `galgryphonstatesa`, `galgryphonstatesb`, `galgryphonscript`: pass. `node tests/combat.test.ts`: 5852 checks, 0 failures. `cd client && npx tsc --noEmit -p .`: exit 0. Playwright: `e2e/galgryphon-floor12.spec.ts` (`--workers=1`, the one check allowed): passes (the boss leaves S4 after about 14.5 s from the first sight, 0 page errors, screenshot taken after the exit). To run it in this worktree, `vendor` and `client/node_modules` had to be linked to the main checkout (`client/vite.config.ts` reads the key files from `../vendor`); both links, and `client/test-results`, are removed after the run.
+
+## 2026-10-23: DerollePartObject debris emitter (rock 0x0303 break, stalactite 0x038b shatter)
+
+**Premise check:** the brief's premises hold with two corrections. (1) The `DerollePartObject` of the dump is a particle emitter only in name: each of its particles is one chunk of the object's own model (the object archive's model `config_5`, texture list `config_6`, drawn at the particle with its three BAMS angles), so the emitter is the physics of model chunks, not a particle effect. (2) The rock's table 0x009c9a00 is six triples of floats (12.0, 7.0, 12.0 ...), not ints; the values are the same as the DEVLOG rock entry. The stalactite's 0x17c template is five 0x4c blocks (one per part), each the same block the ctor copies. The dump's `DerollePartObject` struct is wrong about the types of +0x48..+0x50 and +0x58 (they are ints in the code).
+
+**Exe evidence (`exe.s` objdump; `tools/exedata.py read` for the blocks and constants; the vtable 0x00b2f2c8 read as u32):**
+- Vtable 0x00b2f2c8: +0x00 0x006440fc, +0x10 0x00644b3c (InitSystem variant), +0x14 0x00644cd0 (InitSystem), +0x18 0x006443bc (inactive: obj+0x230 == 0), +0x1c 0x006443d0 (update), +0x20 0x006445c4, +0x24 0x006446f4 (draw dispatch), +0x28 0x00644718, +0x2c 0x0064487c (the two draws). The tick 0x00644390 calls +0x1c, then +0x18; on inactive it sets the object's dead bit (+0x08 |= 1).
+- Ctor 0x006441f4: sets vtable 0xb2f2c8, copies the 0x4c-byte block to +0x24..+0x6c, +0x1c = 200.0, +0x20 = 40.0, +0x230 = 1, then InitSystem; a 0 result clears +0x230. Size 0x234.
+- InitSystem 0x00644cd0: count (+0x54) over 8 fails. Per particle (0x38 bytes at +0x70): origin = obj +0x30..0x38; six rand calls in the order x, y, z, s0, s1, s2 (0x008587a5, the divisor 32768 = 0x009354f4): vx = m6 (r/K - 0.5), vy = m7 r/K, vz = m8 (r/K - 0.5) (m = +0x3c, +0x40, +0x44); the spins trunc(obj +0x48 / 0x4c / 0x50 * r/K); life 1.0 at +0x30; delay = obj +0x58 at +0x34.
+- Update 0x006443d0 per particle: delay 0 and flag 4 clear: skipped; delay 0 and flag 4 set: life -= 1.0, alive while > 0; delay > 0: delay -= 1, alive. A moving particle then: vx' = vx + (-vx * 0.07), vz' likewise (+0x28 = 0.07), vy' = (vy - g) + (-0.1 vy) (+0x2c = g, 0x935518 = 0.1), pos += v' (in the order x, y, z), spins add to the angles. Flag 2 bounces: if the new y is under the floor (+0x5c, the float bits) and vy' < 0, vy = -restitution (+0x24) * vy', vx and vz = 0.9 v', y = floor, the spins halve (truncated). No alive particle: +0x230 = 0.
+- Rock break 0x006759d4: the block 0x0093aa40 = {0.95, 0.07, 0.4, origin 0, scale (5, 7.5, 5), spin (1024, 256, 1024), count 1, delay 30, floor, tint 0.4, model/texture (5b8610(1), 5b8624(1)), flags 14}; six emitters at the rock's place plus the point, floor = the rock's y.
+- Stalactite shatter 0x00679b70: the template 0x0093b540 (five blocks: count 1, 2, 5, 2, 5; delay 40; restitution 0.7 in all five, gravity 0.5 / 0.6 / 0.4 / 0.6 / 0.4, drag 0.07, scale 1.0, flags 14); origin = (x, y + 25, z) for parts 0..2 and (x, y + 10, z) for parts 3, 4 (constants 0x0093b6ec = 25.0, 0x0093b6e8 = 10.0); models 0, 2, 1, 2, 1 (5b8610 pushes); floor = the stalactite's y; the debris call comes before the particles 100 / 0xf0 and the SE 0xaf.
+
+**Ported:**
+- `client/src/classic/particles.ts`: `DerolleBlock` and `parseDerolleBlock` (the 19 dwords), `DerolleEmitter` (InitSystem with the injected `rand`, `update`, `tick` with the dead flag, `drawList`), `bamsToRad`, the two data tables (`ROCK_DEBRIS_BLOCK` / `ROCK_DEBRIS_POINTS`, `STALACTITE_DEBRIS_TEMPLATE` with its chunk and rise tables).
+- `client/src/render/fieldobjects.ts`: `spawnRockDebris` (on the break tick, after the particles 0x45 / 0x46), `spawnStalactiteDebris` (on the shatter, before the particles and the SE), `tickDebris` (per game tick; dead emitters dropped), `debrisRand` (a test seam), and `frame()` hands the chunks to the object layer.
+- `client/src/render/objectview.ts`: `ObjectLayer.drawChunks` clones the object archive's model (`buildEnemy`, `texlistOf` = the texture index) once per (bml, model, texture) and places the clones at the particles; the templates are disposed in `clear()`.
+- `client/src/render/gamefield.ts`: `tickDebris` on the game ticks after `tickRocks`.
+- `tests/objectcollision.test.ts` section 6c: the block decode, InitSystem (rand 0.5), one update (vy 3.75 -> 2.975), the drag, the life and the inactive tick (tick 31), the bounce, the count-9 failure, the rock's six emitters and their origins, the drop on the inactive tick, the stalactite's five parts (counts, chunks, y), the radians of the draw list.
+
+**Checks:** `node tests/objectcollision.test.ts` (all pass, section 6c added); `traps`, `collision`, `townfield`, `drops`, `fieldhud` pass (Node 24). The client `tsc` run in this worktree has errors only from the missing `three` types (no node_modules here; checked against the main checkout's install), none in the changed lines. Not run: Playwright and Chrome (per the brief).
+
+**ASSUMED:**
+- `rand` returns 0..32767 (the divisor 32768 is exact; the range of 0x008587a5 is not traced).
+- The chunk transform: the exe draws each chunk with the matrix stack (0x0082d7b0 push, 0x0082d838 translate, 0x0083a314 the three BAMS angles, 0x0082e1e8 the model, 0x0082da80 pop), with blend state 0x810 / 0x8011 when flag 4 is set. The port uses Euler XYZ, scale 1, no tint, no blend. The exe's colour argument (0.4 / 1.0 = `block[15]`) is not applied.
+- The rock's six points are not rotated. The exe transforms each point with a matrix from obj+0x60 (0x0082d8bc, 0x0082eab8, 0x0082ebac), the angle's meaning is not traced.
+- The chunk model index is the archive model (`FUN_005b8610(i)`) and the texture list is the model's own (`texlistOf`); the texture-list call 0x00829cc8 is not traced.
+- The debris ticks once per game tick (the caller of 0x00644390 is not traced).
+- The debris is drawn from the object layer's root: it is removed on a field change (`clear`).
+
+**Left:**
+- The exact chunk draw (matrix order, blend, tint 0.4 / 1.0, scale) and the rock's point rotation (0x0082d8bc).
+- Visual check in Chrome (not run per the brief): the chunks' look and the flat-to-tint choice.
+- The stalactite's +0x80 record path (box status and 0x007b5038) is still not ported.

@@ -19,6 +19,7 @@ import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 import { rowsAimHeight, rowsRadius } from '../client/src/combat/techfire.ts';
+import { DerolleEmitter, parseDerolleBlock, ROCK_DEBRIS_BLOCK, STALACTITE_DEBRIS_TEMPLATE } from '../client/src/classic/particles.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -291,6 +292,73 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   check(parts.length === 2 && parts[0][0] === 0x45 && parts[1][0] === 0x46, 'the flag tick makes particles 0x45 then 0x46');
   fo.tickRocks(3);
   check(se.length === 1 && parts.length === 2, 'the break effects run once');
+}
+
+// 6c. The DerollePartObject debris (ctor 0x006441f4, InitSystem 0x00644cd0, update 0x006443d0, tick 0x00644390).
+{
+  const half = () => 16384; // rand() / 32768 = 0.5 for every draw
+  const rock = parseDerolleBlock(ROCK_DEBRIS_BLOCK);
+  check(Math.abs(rock.restitution - 0.95) < 1e-6 && Math.abs(rock.gravity - 0.4) < 1e-6 && rock.count === 1 && rock.life === 30 && rock.flags === 14, 'the rock block 0x0093aa40 decodes: restitution 0.95, gravity 0.4, one particle, delay 30, flags 14');
+  check(rock.velScale.join() === '5,7.5,5' && rock.spin.join() === '1024,256,1024' && Math.abs(rock.scale - 0.4) < 1e-6, 'the rock block: velocity scale 5 / 7.5 / 5, spin 1024 / 256 / 1024, tint 0.4');
+  // InitSystem with rand = 0.5 everywhere: vx = vz = 0 (m * (0.5 - 0.5)), vy = 7.5 * 0.5, spins halved.
+  const e = new DerolleEmitter({ ...rock, origin: [1, 2, 3], floor: 0 }, half);
+  const p = e.particles[0];
+  check(e.particles.length === 1 && p.vel[0] === 0 && p.vel[1] === 3.75 && p.vel[2] === 0, 'InitSystem: vx = m (rand/32768 - 0.5), vy = m rand/32768 (rand 0.5 gives 0, 3.75, 0)');
+  check(p.step[0] === 512 && p.step[1] === 128 && p.step[2] === 512 && p.pos[0] === 1 && p.pos[1] === 2 && p.pos[2] === 3 && p.delay === 30 && p.life === 1, 'InitSystem: spins trunc(spin * rand/32768), origin = the block origin, delay 30, life 1.0');
+  check(e.active && e.radius === 200 && e.height === 40, 'the ctor sets radius 200, height 40, active');
+  // One tick: vy = 3.75 - 0.4 - 0.1 * 3.75 = 2.975; y = 2 + 2.975; the angle grows by the step.
+  e.update();
+  check(Math.abs(p.vel[1] - 2.975) < 1e-5 && Math.abs(p.pos[1] - 4.975) < 1e-5 && p.delay === 29, 'update: vy loses gravity and 0.1 vy, y moves by the new vy, delay counts down');
+  check(p.ang[0] === 512 && p.ang[1] === 128 && p.ang[2] === 512, 'update: the angles add the steps');
+  // Horizontal drag keeps 0.93 of the speed (x and z are zero here, so use a moving block).
+  const moving = new DerolleEmitter({ ...rock, velScale: [10, 0, 10], origin: [0, 0, 0], floor: -100, spin: [0, 0, 0], count: 1 }, () => 32767);
+  const mp = moving.particles[0];
+  const vx0 = mp.vel[0];
+  moving.update();
+  check(Math.abs(mp.vel[0] - vx0 * 0.93) < 1e-3 && Math.abs(mp.pos[0] - vx0 * 0.93) < 1e-3, 'update: x speed keeps 0.93 per tick (drag 0.07) and x moves by it');
+  // Delay 30, then the life (1.0) counts down in one tick; the object goes inactive on that tick (tick returns true).
+  const life = new DerolleEmitter({ ...rock, origin: [0, 0, 0], floor: -1000 }, half);
+  let died = -1;
+  for (let t = 1; t <= 40; t++) if (life.tick() && died < 0) died = t;
+  check(died === 31 && life.dead && life.drawList().length === 0, 'a 30-tick delay then one life tick: the emitter is inactive at tick 31 and draws nothing');
+  // Bounce: a chunk with no velocity starts 0.1 above the floor, falls 0.4 and comes back up with 0.95 of it.
+  const bounce = new DerolleEmitter({ ...rock, velScale: [0, 0, 0], origin: [0, 0.1, 0], floor: 0, spin: [0, 0, 0], life: 0, count: 1 }, half);
+  bounce.update();
+  const bp = bounce.particles[0];
+  check(bp.pos[1] === 0 && Math.abs(bp.vel[1] - 0.38) < 1e-5, 'bounce: below the floor and falling, the chunk sits on the floor and its vy becomes -0.95 vy');
+  check(bp.step[0] === 0 && Math.abs(bp.vel[0]) < 1e-9, 'bounce: spins halve (truncated) and the horizontal speed keeps 0.9');
+  // Count above 8 fails InitSystem (no particles, inactive).
+  const bad = new DerolleEmitter({ ...rock, count: 9 }, half);
+  check(bad.particles.length === 0 && !bad.active, 'InitSystem with more than 8 particles fails: no particles, inactive');
+  // The rock's six debris emitters at its place (from the break tick) and the drawn chunks.
+  const rockObj = { kind: 'object', type: 0x0303, index: 9, params: [0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0], group: 0, section: 0 };
+  const rockPlaced = [{ entity: rockObj, name: 'rock', category: 'object', world: [10, 2, -4], yaw: 0, sectionFound: true }];
+  const rflags = new Set<number>([5]);
+  const rfo = new FieldObjects({ scene: { add() {}, remove() {} } } as any, rockPlaced as any, { episode: 1, floor: 0, area: 1 }, rflags);
+  rfo.debrisRand = half;
+  rfo.tickRocks(1);
+  const debris = (rfo as any).debris as Array<{ emitter: DerolleEmitter; bml: string }>;
+  check(debris.length === 6 && debris.every((d) => d.emitter.block.model === 1 && d.emitter.block.texture === 1 && d.emitter.block.floor === 2), 'the rock break makes six emitters on chunk model 1 / texture 1 with the floor at the rock');
+  check(debris[0].emitter.particles[0].pos.join() === '22,9,8' && debris[1].emitter.particles[0].pos.join() === '-4,18,9', 'the emitters start at the rock plus each point (12,7,12) and (-14,16,13)');
+  rfo.tickDebris(30);
+  check((rfo as any).debris.length === 6, 'the rock debris lives through the 30-tick delay');
+  rfo.tickDebris(1);
+  check((rfo as any).debris.length === 0, 'the rock debris is dropped on the tick it goes inactive');
+  // The stalactite's five emitters: particle counts 1, 2, 5, 2, 5 (the template's blocks), chunks 0, 2, 1, 2, 1.
+  const sfo = new FieldObjects({ scene: { add() {}, remove() {} } } as any, [], { episode: 1, floor: 0, area: 1 }, new Set<number>());
+  sfo.debrisRand = half;
+  (sfo as any).shatterStalactite(7, { state: 1, x: 3, y: 4, z: 5 });
+  const parts = (sfo as any).debris as Array<{ emitter: DerolleEmitter }>;
+  const counts = parts.map((d) => d.emitter.particles.length).join(',');
+  const chunks = parts.map((d) => d.emitter.block.model).join(',');
+  const ys = parts.map((d) => d.emitter.particles[0].pos[1]).join(',');
+  check(parts.length === 5 && counts === '1,2,5,2,5' && chunks === '0,2,1,2,1', 'the stalactite shatter makes five emitters: particles 1, 2, 5, 2, 5 on chunks 0, 2, 1, 2, 1');
+  check(ys === '29,29,29,14,14' && parts.every((d) => d.emitter.block.floor === 4) && STALACTITE_DEBRIS_TEMPLATE.length === 95, 'the stalactite parts sit at y + 25 (parts 0..2) or y + 10 (parts 3, 4); their floor is the stalactite y');
+  // A chunk's draw list: the position and the radian angles (BAMS 16384 = a quarter turn).
+  const cl = new DerolleEmitter({ ...rock, origin: [1, 2, 3], floor: 0, spin: [32768, 0, 0], count: 1, life: 0 }, half);
+  cl.update();
+  const drawn = cl.drawList();
+  check(drawn.length === 1 && Math.abs(drawn[0].ang[0] - Math.PI / 2) < 1e-9 && drawn[0].pos.length === 3, 'drawList: the angle is in radians (16384 = a quarter turn)');
 }
 
 if (failures) {

@@ -65,6 +65,18 @@ import * as THREE from 'three';
 import type { PlacedEntity, ObjectSet } from '../formats/setdata.ts';
 import { OBJECT_BOX_FLAGS, type CollisionWorld, type Obstacle } from './collision.ts';
 import { objectModelFor, type ObjectCollision, type ObjectModelContext } from '../formats/objectmodels.ts';
+import {
+  DerolleEmitter,
+  parseDerolleBlock,
+  ROCK_DEBRIS_BLOCK,
+  ROCK_DEBRIS_CHUNK,
+  ROCK_DEBRIS_POINTS,
+  STALACTITE_DEBRIS_CHUNK,
+  STALACTITE_DEBRIS_RISE,
+  STALACTITE_DEBRIS_TEMPLATE,
+  type DerolleBlock,
+  type DerolleChunk,
+} from '../classic/particles.ts';
 import type { MapViewer } from './mapviewer.ts';
 import type { ObjectLayer } from './objectview.ts';
 import { SEAL_DOOR, SealDoor, type CaptureDraw } from './traps.ts';
@@ -343,6 +355,9 @@ const STALACTITE_SE_SHATTER = 0xaf; // play_directional_sound_effect(0xaf) at th
 const STALACTITE_PARTICLES = [100, 0xf0]; // create_particle_effect(xyz, 100) and (xyz, 0xf0) (0x00679b70)
 const ROCK_BREAK_SE = 0x44c; // 0x0063371c: the positional SE call 0x00814298 with id 0x44c at obj+0x38 (ASSUMED: an SE id)
 const ROCK_BREAK_PARTICLES = [0x45, 0x46]; // 0x006336f8: create_particle_effect(obj+0x38, 0x45) then 0x46 (0x0050b510)
+// The chunks' models: the BML of each object (objectmodels.ts, the same names as its case).
+const ROCK_DEBRIS_BML = 'bm_obj_ep4_iwa_crater_brk.bml';
+const STALACTITE_DEBRIS_BML = 'bm_obj_ep4_syounyuuseki.bml';
 
 // The destructible rock's switch flag from param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
 export function rockSwitchFlag(param4: number): number {
@@ -786,6 +801,10 @@ export class FieldObjects {
   private flags: Set<number>; // switch flags of this floor
   private pressed = new Set<number>(); // switches the local player stands on
   private models: ObjectLayer | null;
+  // The live debris emitters (DerollePartObject, classic/particles.ts) with the BML of their chunks.
+  private debris: Array<{ emitter: DerolleEmitter; bml: string }> = [];
+  // rand() of the emitters' InitSystem, 0..32767 (the exe's 0x008587a5; ASSUMED range). A test may replace it.
+  debrisRand: () => number = () => Math.floor(Math.random() * 32768);
   // Quest flags of the current difficulty (Vol Opt's seal door reads 0x2c..0x2f).
   questFlag: (flag: number) => boolean = () => false;
   private seals = new Map<number, SealDoor>();
@@ -1011,6 +1030,11 @@ export class FieldObjects {
 
   // One game frame: switches under the local player, event triggers, door states.
   frame(self: { x: number; y: number; z: number } | null, others: Array<{ x: number; y: number; z: number }>): void {
+    if (this.models && this.debris.length) {
+      const chunks: Array<{ bml: string; chunk: DerolleChunk }> = [];
+      for (const d of this.debris) for (const chunk of d.emitter.drawList()) chunks.push({ bml: d.bml, chunk });
+      this.models.drawChunks(chunks);
+    }
     if (self) {
       for (const s of this.switches) {
         const on = dist3(s, self) < s.radius;
@@ -1140,20 +1164,61 @@ export class FieldObjects {
   // The break tick (DerollePart update 0x00633734, state 0 -> 1 branch, 0x00633795..0x006337aa): the vtable +0x3c
   // slot 0x006336f8 runs first (its +0x40 slot 0x0063371c plays SE 0x44c at the object, ASSUMED: the positional SE
   // call 0x00814298 takes the id as its first argument), then the particles 0x45 and 0x46 at the object's position
-  // (create_particle_effect 0x0050b510 at obj+0x38), then the vtable +0x38 slot 0x006759d4, the six-part debris,
-  // which is NOT ported (DerollePartObject bodies, 0x006441f4). The model hides on the next tick (state 1 path).
+  // (create_particle_effect 0x0050b510 at obj+0x38), then the vtable +0x38 slot 0x006759d4: the six debris emitters.
+  // The model hides on the next tick (state 1 path).
   private breakRockEffects(at: { x: number; y: number; z: number }): void {
     this.onSe(ROCK_BREAK_SE, at);
     for (const id of ROCK_BREAK_PARTICLES) this.onParticles(id, at);
+    this.spawnRockDebris(at);
   }
 
-  // The shatter (DerolleEnemyHead_Destructor 0x00679ac4, the path without a box record): state 2, the
-  // box off, the model hidden, the debris (the particles and the SE here; its five parts are not ported).
+  // The rock's debris (0x006759d4): the block 0x0093aa40 once per point of 0x009c9a00, the emitter's origin at the
+  // rock's place plus the point (ASSUMED: no yaw), the floor at the rock's y, the chunk = model 1 / texture 1.
+  private spawnRockDebris(at: { x: number; y: number; z: number }): void {
+    const base = parseDerolleBlock(ROCK_DEBRIS_BLOCK);
+    for (const [px, py, pz] of ROCK_DEBRIS_POINTS) {
+      const block: DerolleBlock = {
+        ...base,
+        origin: [at.x + px, at.y + py, at.z + pz],
+        floor: at.y,
+        model: ROCK_DEBRIS_CHUNK,
+        texture: ROCK_DEBRIS_CHUNK,
+      };
+      this.debris.push({ emitter: new DerolleEmitter(block, this.debrisRand), bml: ROCK_DEBRIS_BML });
+    }
+  }
+
+  // The stalactite's debris (0x00679b70): five emitters from the 0x17c template, one 0x4c block each, the origin
+  // at the stalactite's x / z and y + 25 (parts 0..2) or + 10 (parts 3, 4), the floor at its y.
+  private spawnStalactiteDebris(at: { x: number; y: number; z: number }): void {
+    for (let i = 0; i < 5; i++) {
+      const base = parseDerolleBlock(STALACTITE_DEBRIS_TEMPLATE.slice(i * 19, i * 19 + 19));
+      const block: DerolleBlock = {
+        ...base,
+        origin: [at.x, at.y + STALACTITE_DEBRIS_RISE[i], at.z],
+        floor: at.y,
+        model: STALACTITE_DEBRIS_CHUNK[i],
+        texture: STALACTITE_DEBRIS_CHUNK[i],
+      };
+      this.debris.push({ emitter: new DerolleEmitter(block, this.debrisRand), bml: STALACTITE_DEBRIS_BML });
+    }
+  }
+
+  // The debris emitters, once per game tick (the tick 0x00644390 of each object); a dead one is dropped.
+  tickDebris(ticks: number): void {
+    if (!this.debris.length) return;
+    for (let i = 0; i < ticks; i++) for (const d of this.debris) d.emitter.tick();
+    this.debris = this.debris.filter((d) => !d.emitter.dead);
+  }
+
+  // The shatter (DerolleEnemyHead_Destructor 0x00679ac4, the path without a box record): state 2, the box off, the
+  // model hidden, then the debris 0x00679b70 (five emitters), the particles 100 and 0xf0 and the SE 0xaf.
   private shatterStalactite(index: number, s: FallingStalactite): void {
     s.state = 2;
     this.shattered.add(index);
     this.models?.setVisible(index, false);
     const at = { x: s.x, y: s.y, z: s.z };
+    this.spawnStalactiteDebris(at);
     for (const id of STALACTITE_PARTICLES) this.onParticles(id, at);
     this.onSe(STALACTITE_SE_SHATTER, at);
   }
