@@ -7,6 +7,7 @@
 // per frame (the ribbons are laid out into fixed buffers).
 
 import * as THREE from 'three';
+import { NO_ORIENT, orientOfDirection, type Orient } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
 import {
@@ -191,7 +192,7 @@ export class TechEffects {
         for (const id of e.ids) this.particle({ id, at: e.at, delay: 0, duration: e.frames });
         break;
       case 'follow':
-        if (follow) this.follow(e.emitters, e.frames, follow);
+        if (follow) this.follow(e.emitters, e.frames, follow, e.base);
         break;
     }
   }
@@ -226,10 +227,11 @@ export class TechEffects {
   }
 
   /** Continuous emitters that ride a moving point until it is gone (the Megid orb's). */
-  follow(emitters: readonly EmitterSpec[], frames: number, at: () => Vec3 | null): void {
+  follow(emitters: readonly EmitterSpec[], frames: number, at: () => Vec3 | null, base: Orient): void {
     for (const em of emitters) {
       const spawn: ParticleSpawn = { id: em.id, delay: 0, duration: frames };
       if (em.scale !== undefined) spawn.scale = [em.scale, em.scale];
+      if (em.angles) spawn.orient = base;
       const start = at();
       if (!start) continue;
       void this.particles.spawn(spawn, this.pointGetter(at), false, true);
@@ -597,7 +599,8 @@ export class TechObjects {
         const run: OrbRun = { flight, level, caster, pos: { x: flight.x, y: flight.y, z: flight.z } };
         this.orbs.push(run);
         this.fx.playSe(techSound(SE.megid, hand, tier));
-        this.fx.follow(MEGID_EMITTERS[tier], Math.ceil(rangeH / speed) + 2, () => (flight.done ? null : run.pos));
+        const base = aim ? NO_ORIENT : orientOfDirection(Math.sin(caster.angle), 0, Math.cos(caster.angle));
+        this.fx.follow(MEGID_EMITTERS[tier], Math.ceil(rangeH / speed) + 2, () => (flight.done ? null : run.pos), base);
         return;
       }
       default:

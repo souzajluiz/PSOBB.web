@@ -276,7 +276,7 @@ export class TelepipeLayer {
     ids.forEach((id, i) => {
       const e = this.entries.get(id);
       if (!e) return;
-      particles.add(e, [x, gy + (i === 2 ? 1.8 : 0), z], 0, tint);
+      particles.add(e, [x, gy + (i === 2 ? 1.8 : 0), z], null, tint);
     });
     const group = new THREE.Group();
     this.viewer.scene.add(group);

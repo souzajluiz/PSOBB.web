@@ -124,10 +124,17 @@ export function parseParticleEntry(dat: Uint8Array, id: number): ParticleEntry {
   };
 }
 
+// The object angles of create_particle_effect2 (the particle effect's +0x78 / +0x7c /
+// +0x80 = X, Y, Z: update_particle_effect hands them to the single particle, whose
+// field49 is X, rot_y is Y and field51 is Z, see turnStep). Radians here; the exe
+// keeps BAMS ints (0x10000 = a turn, orientOfDirection).
+export type Orient = readonly [number, number, number];
+export const NO_ORIENT: Orient = [0, 0, 0];
+
 export interface Emitter {
   entry: ParticleEntry;
   pos: [number, number, number];
-  rotX: number; // radians (BAMS 0x4000 = 90 degrees)
+  orient: Orient | null; // the emitter's object angles (null = none: the velocity is not turned)
   acc: number;
   // ParticleEffectSingleParticle_SetId_00508ee4: a colour override (RGB,
   // flag 0x100 of the effect). ASSUMED to scale the entry's colour.
@@ -178,6 +185,44 @@ export function particleQuad(q: Particle, slot: number | undefined): { hw: numbe
   return { hw: half * q.size, hh: half * q.size, rotated: false };
 }
 
+const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
+
+/**
+ * Vector3f_GetAnglesZ_007a8d98 of a direction (x, y, z): X = round(atan2(z, hypot(x, y)))
+ * and Z = -round(atan2(x, y)), in BAMS with the exe's 65536 / 6.2831840515 factor
+ * (0x0097d8d8 / 0x0097d8d0). Y is not set by it, so it is 0 here. Radians out.
+ * ASSUMED: ROUND is round-half-up.
+ */
+export function orientOfDirection(x: number, y: number, z: number): Orient {
+  const k = 0x10000 / 6.283184051513672;
+  const ax = Math.round(Math.atan2(z, Math.hypot(x, y)) * k);
+  const az = -Math.round(Math.atan2(x, y) * k);
+  return [ax * BAMS_TO_RAD, 0, az * BAMS_TO_RAD];
+}
+
+/**
+ * The step a local velocity becomes under the object angles (update_particle_effect_single_particle,
+ * the branch without texture flag 0x20 and with particle flag 2 clear, 0x0050dbb8 area):
+ * push identity, rotate_matrix_by_int_angle (Z), maybe_rotate_matrix_around_x (X),
+ * matrix_rotation_y (Y), then rotate_vec3f_using_matrix_transformation_stack. Each
+ * helper left-multiplies the stack, and that vector step reads it transposed, so
+ * v' = Rz(Z) Rx(X) Ry(Y) v with the standard right-handed matrices: Y first, Z last.
+ * (The particle-flag-2 branch, which no emitter here passes, applies Rx Ry Rz instead.)
+ */
+export function turnStep(o: Orient | null, v: readonly [number, number, number]): [number, number, number] {
+  if (!o || (o[0] === 0 && o[1] === 0 && o[2] === 0)) return [v[0], v[1], v[2]];
+  const [ax, ay, az] = o;
+  const cy = Math.cos(ay), sy = Math.sin(ay);
+  let x = cy * v[0] + sy * v[2];
+  let y = v[1];
+  let z = -sy * v[0] + cy * v[2];
+  const cx = Math.cos(ax), sx = Math.sin(ax);
+  [y, z] = [cx * y - sx * z, sx * y + cx * z];
+  const cz = Math.cos(az), sz = Math.sin(az);
+  [x, y] = [cz * x - sz * y, sz * x + cz * y];
+  return [x, y, z];
+}
+
 // Projection with the fixed camera at the origin looking down -Z
 // (FUN_004d31f4(9) + FUN_004d33c0(0, (0,0,-1)) in the connection loop) and
 // the default perspective (D = 437.44, title.ts) around the screen centre.
@@ -197,8 +242,8 @@ export class ParticleSystem {
     return ((this.seed >>> 16) & 0x7fff) / 32768;
   }
 
-  add(entry: ParticleEntry, pos: [number, number, number], rotX: number, tint?: number): void {
-    this.emitters.push({ entry, pos, rotX, acc: 0, tint });
+  add(entry: ParticleEntry, pos: [number, number, number], orient: Orient | null, tint?: number): void {
+    this.emitters.push({ entry, pos, orient, acc: 0, tint });
   }
 
   // The live particles (render/telepipe.ts draws them in the world).
@@ -283,9 +328,8 @@ export class ParticleSystem {
     }
     q.v = [q.v[0] * d.damping, q.v[1] + d.gravity, q.v[2] * d.damping];
     q.size *= d.size[2];
-    // Emitter rotation about X: y' = y cos - z sin, z' = y sin + z cos.
-    const c = Math.cos(q.e.rotX), s = Math.sin(q.e.rotX);
-    q.step = [q.v[0], q.v[1] * c - q.v[2] * s, q.v[1] * s + q.v[2] * c];
+    // The emitter's object angles turn the local velocity (turnStep).
+    q.step = turnStep(q.e.orient, q.v);
     q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
     q.age += q.dt;
     if (this.models) this.modelStep(q);

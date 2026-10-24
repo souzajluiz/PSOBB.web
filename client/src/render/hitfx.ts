@@ -186,7 +186,7 @@ export class FieldParticles {
     const base = pos.clone();
     const origin = pos.clone();
     origin.y += p.dy ?? 0;
-    particles.add(e, [origin.x, origin.y, origin.z], 0, p.tint);
+    particles.add(e, [origin.x, origin.y, origin.z], p.orient ?? null, p.tint);
     const burst: Burst = {
       particles,
       anchor: follow ? at : null,
@@ -232,7 +232,7 @@ export class FieldParticles {
     particles.slots = this.slots;
     const dy = p.dy ?? 0;
     const first = new THREE.Vector3(points[0].x, points[0].y, points[0].z);
-    for (const q of points) particles.add(e, [q.x, q.y + dy, q.z], 0, p.tint);
+    for (const q of points) particles.add(e, [q.x, q.y + dy, q.z], null, p.tint);
     for (const em of particles.emitters) em.acc = Math.max(0, 1 - e.rate);
     particles.step(true);
     particles.emitters.length = 0;
@@ -272,7 +272,7 @@ export class FieldParticles {
     const particles = new ParticleSystem();
     particles.models = true;
     particles.slots = this.slots;
-    particles.add(e, [at.x, at.y, at.z], 0);
+    particles.add(e, [at.x, at.y, at.z], null);
     particles.emitters[0].acc = Math.max(0, 1 - e.rate);
     particles.step(true);
     particles.emitters.length = 0;

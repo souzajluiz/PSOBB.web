@@ -41,6 +41,7 @@
 // (0x0096e0c0), u 0..1 across, v + 1 per point, the texture entry 0 of
 // technic_pt.xvm (ASSUMED, matched by content: the only lightning strand).
 
+import { NO_ORIENT, orientOfDirection, type Orient } from '../classic/particles.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
 
@@ -617,6 +618,8 @@ export type WallHit = (from: Vec3, to: Vec3) => Vec3 | null;
 export interface EmitterSpec {
   id: number;
   scale?: number; // flag 0x40: field +0x44 / +0x48
+  /** create_particle_effect2 with the object's angles (the table's flag 2); else create_particle_effect4. */
+  angles?: boolean;
 }
 
 /** g_pMegidParticleEffectConfigPointers (0x0096da78 + 8 * tier): continuous emitters following the object. */
@@ -624,9 +627,10 @@ export const MEGID_EMITTERS: readonly (readonly EmitterSpec[])[] = [
   [{ id: 0x1c5 }, { id: 0x1c8 }],
   [{ id: 0x1c5, scale: 1.4 }, { id: 0x1c8, scale: 1.4 }],
   [{ id: 0x1c5, scale: 1.8 }, { id: 0x1c8, scale: 1.8 }],
-  [{ id: 0x1c4 }, { id: 0x1c5, scale: 2.2 }, { id: 0x1c8, scale: 2.2 }],
-  [{ id: 0x1c4 }, { id: 0x1c5, scale: 2.6 }, { id: 0x1c8, scale: 2.6 }],
-  [{ id: 0x1c4 }, { id: 0x1c5, scale: 3 }, { id: 0x1c8, scale: 3 }, { id: 0x1c7 }, { id: 0x1cf }],
+  [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 2.2 }, { id: 0x1c8, scale: 2.2 }],
+  [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 2.6 }, { id: 0x1c8, scale: 2.6 }],
+  // 0x1cf is flags 0x1002: its flag 2 gives the angles, its 0x1000 the particle flag 0x2000 (as create_megid's flags).
+  [{ id: 0x1c4, angles: true }, { id: 0x1c5, scale: 3 }, { id: 0x1c8, scale: 3 }, { id: 0x1c7 }, { id: 0x1cf, angles: true }],
 ];
 
 export function megidSpeed(level: number): number {
@@ -772,7 +776,7 @@ export type TechFxEvent =
   | { t: 'se'; s: FxSound }
   | { t: 'ring'; at: Vec3 }
   | { t: 'emitters'; ids: readonly number[]; at: Vec3; frames: number }
-  | { t: 'follow'; emitters: readonly EmitterSpec[]; frames: number };
+  | { t: 'follow'; emitters: readonly EmitterSpec[]; frames: number; base: Orient };
 
 /** The Grants object's timeline for one target, ticked once per game tick. */
 export class GrantsTimeline {
@@ -993,7 +997,9 @@ export class MegidOrb extends TechShot {
     this.radius = playerRadius;
     this.wall = wall;
     this.events.push({ t: 'se', s: techSound(SE.megid, from, this.tier) });
-    this.events.push({ t: 'follow', emitters: MEGID_EMITTERS[this.tier], frames: Math.ceil(range / this.speed) + 2 });
+    // The angles of the object (TechniqueEntity +0x54 / +0x5c): the heading's, or none for an aimed one (EffectEntityBase).
+    const base = aim ? NO_ORIENT : orientOfDirection(Math.sin(heading), 0, Math.cos(heading));
+    this.events.push({ t: 'follow', emitters: MEGID_EMITTERS[this.tier], frames: Math.ceil(range / this.speed) + 2, base });
   }
 
   tick(targets: readonly AiTarget[]): AiTarget[] {
