@@ -18,12 +18,16 @@ import { ObjectLayer } from '../render/objectview.ts';
 import { areaName } from './areas.ts';
 import { bamsToDegrees, degreesToBams, nearestSection, wrapBams, worldToSection } from './geom.ts';
 import type { Change, QuestDocument } from './model.ts';
+import { pivotAngle, turnedBams } from './turn.ts';
 
 const MARKER_COLORS = { enemy: 0xff6b5b, npc: 0x6bff9a, object: 0x5fd4ff } as const;
 const MARKER_LIFT = 6;
 const UP = new THREE.Vector3(0, 1, 0);
 const ONE = new THREE.Vector3(1, 1, 1);
 const MODEL_DELAY_MS = 150;
+const TURN_RADIUS = 18; // the rotation gizmo's ring, in world units around the pivot
+const TURN_GRAB = 6; // how far from the ring a press still grabs it
+const TURN_COLOR = 0x7dffd1;
 
 interface Item {
   entity: SetEntity;
@@ -61,6 +65,7 @@ export class EditorScene {
   private markerMeshes: THREE.InstancedMesh[] = [];
   private markerOf = new Map<THREE.InstancedMesh, Item[]>();
   private selectionRoot = new THREE.Group();
+  private turnRoot = new THREE.Group();
   private loadToken = 0;
   private modelToken = 0;
   private modelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -78,7 +83,7 @@ export class EditorScene {
     this.doc = doc;
     this.host = host;
     this.viewer = new MapViewer(canvas);
-    this.viewer.scene.add(this.markerRoot, this.selectionRoot);
+    this.viewer.scene.add(this.markerRoot, this.selectionRoot, this.turnRoot);
     this.tooltip = document.createElement('div');
     this.tooltip.className = 'qe-tooltip';
     this.tooltip.hidden = true;
@@ -257,13 +262,7 @@ export class EditorScene {
 
   // The selected entities get a yellow ring and a stem to the ground point.
   private rebuildSelection(): void {
-    for (const c of [...this.selectionRoot.children]) {
-      this.selectionRoot.remove(c);
-      if (c instanceof THREE.Mesh) {
-        c.geometry.dispose();
-        (c.material as THREE.Material).dispose();
-      }
-    }
+    disposeChildren(this.selectionRoot);
     for (const e of this.doc.selection) {
       const item = this.byEntity.get(e);
       if (!item) continue;
@@ -273,6 +272,7 @@ export class EditorScene {
       ring.userData.item = item;
       this.selectionRoot.add(ring);
     }
+    this.rebuildTurnGizmo();
     this.positionSelection();
   }
 
@@ -281,6 +281,53 @@ export class EditorScene {
       const item = c.userData.item as Item;
       c.position.set(item.placed.world[0], item.placed.world[1] + MARKER_LIFT, item.placed.world[2]);
     }
+    this.placeTurnGizmo();
+  }
+
+  // The pivot of the rotation gizmo: the last selected entity on this floor.
+  private turnPivot(): Item | null {
+    let pivot: Item | null = null;
+    for (const s of this.doc.selection) pivot = this.byEntity.get(s) ?? pivot;
+    return pivot;
+  }
+
+  // The rotation gizmo: a ring lying flat around the pivot with a dot at its
+  // heading. Pressing the ring and dragging turns every selected entity in place.
+  // Rebuilt with the selection; the geometry and materials of the old one are freed.
+  private rebuildTurnGizmo(): void {
+    disposeChildren(this.turnRoot);
+    if (!this.turnPivot()) return;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(TURN_RADIUS, 1.2, 6, 48), new THREE.MeshBasicMaterial({ color: TURN_COLOR, fog: false, depthTest: false, transparent: true, opacity: 0.9 }));
+    ring.rotation.x = Math.PI / 2;
+    ring.renderOrder = 21;
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(3.2, 10, 8), new THREE.MeshBasicMaterial({ color: TURN_COLOR, fog: false, depthTest: false }));
+    dot.name = 'turn-heading';
+    dot.renderOrder = 21;
+    this.turnRoot.add(ring, dot);
+    this.placeTurnGizmo();
+  }
+
+  // Moves the gizmo with its pivot and turns the heading dot to the pivot's yaw.
+  private placeTurnGizmo(): void {
+    const pivot = this.turnPivot();
+    if (!pivot) return;
+    const [x, y, z] = pivot.placed.world;
+    this.turnRoot.position.set(x, y + MARKER_LIFT, z);
+    this.turnRoot.getObjectByName('turn-heading')?.position.set(Math.sin(pivot.placed.yaw) * TURN_RADIUS, 0, Math.cos(pivot.placed.yaw) * TURN_RADIUS);
+  }
+
+  // The gizmo's grab test: where the pointer's ray meets the ring's plane is within
+  // TURN_GRAB of the ring. Returns the plane and the pivot and start angle of a drag.
+  private turnAt(e: { clientX: number; clientY: number }): { plane: THREE.Plane; cx: number; cz: number; angle: number } | null {
+    const pivot = this.turnPivot();
+    if (!pivot) return null;
+    const [x, y, z] = pivot.placed.world;
+    const plane = new THREE.Plane(UP, -(y + MARKER_LIFT));
+    this.raycaster.setFromCamera(this.ndc(e), this.viewer.camera);
+    const p = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(plane, p)) return null;
+    if (Math.abs(Math.hypot(p.x - x, p.z - z) - TURN_RADIUS) > TURN_GRAB) return null;
+    return { plane, cx: x, cz: z, angle: pivotAngle(x, z, p.x, p.z) };
   }
 
   private scheduleModels(): void {
@@ -412,6 +459,26 @@ export class EditorScene {
   private onDown(e: PointerEvent): void {
     if (e.target !== this.canvas || e.button !== 0) return;
     this.canvas.focus({ preventScroll: true });
+    const turn = this.turnAt(e);
+    if (turn) {
+      // The gizmo wins over the markers; the selection is what it turns.
+      e.stopPropagation();
+      const items = this.doc.selection.map((s) => this.byEntity.get(s)).filter((i): i is Item => !!i);
+      this.drag = {
+        kind: 'turn',
+        plane: turn.plane,
+        cx: turn.cx,
+        cz: turn.cz,
+        startAngle: turn.angle,
+        startX: e.clientX,
+        startY: e.clientY,
+        items: items.map((item) => ({ item, rotation: [...item.entity.rotation] as Vec3 })),
+        moved: false,
+      };
+      this.viewer.setOrbitEnabled(false);
+      this.canvas.setPointerCapture(e.pointerId);
+      return;
+    }
     const item = this.pick(e);
     if (!item) {
       this.drag = { kind: 'click', startX: e.clientX, startY: e.clientY, shift: e.shiftKey || e.ctrlKey || e.metaKey };
@@ -450,6 +517,20 @@ export class EditorScene {
     this.tooltip.hidden = true;
     if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 3) return;
     d.moved = true;
+    if (d.kind === 'turn') {
+      // Holding Shift snaps the stored angle to 15 degrees (the drag's own snap is live).
+      this.raycaster.setFromCamera(this.ndc(e), this.viewer.camera);
+      const point = new THREE.Vector3();
+      if (!this.raycaster.ray.intersectPlane(d.plane, point)) return;
+      const angle = pivotAngle(d.cx, d.cz, point.x, point.z);
+      const snap = e.shiftKey;
+      this.doc.patchEntities(
+        d.items.map(({ item, rotation }) => [item.entity, { rotation: [rotation[0], turnedBams(rotation[1], d.startAngle, angle, snap), rotation[2]] as Vec3 }] as const),
+        'Turn',
+        'turn',
+      );
+      return;
+    }
     if (d.kind === 'rotate') {
       const deltaDeg = -(e.clientX - d.startX) * 0.5;
       this.doc.patchEntities(
@@ -489,6 +570,11 @@ export class EditorScene {
 
   private hover(e: PointerEvent): void {
     if (e.buttons) return;
+    if (this.turnAt(e)) {
+      this.canvas.style.cursor = 'grab';
+      this.tooltip.hidden = true;
+      return;
+    }
     const item = this.pick(e);
     this.canvas.style.cursor = item ? 'pointer' : '';
     if (!item) {
@@ -588,8 +674,30 @@ export class EditorScene {
   }
 }
 
+// Removes the children of a group and frees their geometry and materials.
+function disposeChildren(group: THREE.Group): void {
+  for (const c of [...group.children]) {
+    group.remove(c);
+    if (c instanceof THREE.Mesh) {
+      c.geometry.dispose();
+      (c.material as THREE.Material).dispose();
+    }
+  }
+}
+
 type DragState =
   | { kind: 'click'; startX: number; startY: number; shift: boolean }
+  | {
+      kind: 'turn';
+      plane: THREE.Plane;
+      cx: number;
+      cz: number;
+      startAngle: number;
+      startX: number;
+      startY: number;
+      items: Array<{ item: Item; rotation: Vec3 }>;
+      moved: boolean;
+    }
   | {
       kind: 'move' | 'rotate';
       plane: THREE.Plane;

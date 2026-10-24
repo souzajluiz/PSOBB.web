@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-24: Quest editor rotation gizmo
+
+**What changed:** a rotation gizmo in the quest editor's 3D view
+(`client/src/questeditor/scene.ts`): a green ring lying flat around the selection
+(pivot: the last selected entity on the floor), with a dot at its heading. Pressing
+the ring and dragging turns every selected entity in place; the drag is one undo step
+(`Turn`, merged until seal). Shift during the drag snaps the stored angle to 15 degrees.
+The angle math is pure logic in `client/src/questeditor/turn.ts`: the pointer's heading
+around the pivot (`atan2(dx, dz)`, the same convention as the yaw), the shortest turn
+across the atan2 seam, the BAMS value wrapped to 0..0xffff, and the 15-degree snap. The
+ring's geometry and materials are freed when the selection changes. Alt-drag and the
+`[` / `]` keys are unchanged.
+
+**Why:** the ROADMAP's quest editor list had a rotation gizmo; Alt-drag rotated but
+had no visible handle and no snapping.
+
+**Tests:** `tests/questeditorturn.test.ts` (406 checks: heading convention, drag to
+BAMS, seam, wrap, snap, range). `tests/questeditor.test.ts` still passes (1424 checks).
+`tsc --noEmit -p client` is clean. The gizmo itself was not checked in a browser.
+
 ## 2026-10-24: Optimal PRS parser for quest files
 
 **What changed:** `prsCompressOptimal` in `client/src/formats/prscompress.ts`,

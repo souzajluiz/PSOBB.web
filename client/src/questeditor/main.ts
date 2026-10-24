@@ -268,7 +268,7 @@ const viewBar = h(
   h('label', { class: 'qe-check' }, modelsBox, ' Models'),
   h('label', { class: 'qe-check', title: 'Dragging keeps entities on the ground' }, snapBox, ' Snap to ground'),
 );
-const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, Delete removes. Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
+const view3d = h('div', { class: 'qe-view' }, viewBar, canvasWrap, viewStatus, h('p', { class: 'qe-hint', text: 'Click selects (Shift or Ctrl adds), drag moves, Alt-drag rotates, drag the green ring around the selection to turn it (Shift snaps to 15 degrees), Delete removes. Drag orbits, wheel zooms, right-drag pans, WASD / Q / E fly. Drag a type from the palette into the view to create it.' }));
 const viewScript = h('div', { class: 'qe-view', hidden: true });
 const viewEvents = h('div', { class: 'qe-view scroll', hidden: true }, events.el);
 const viewRandom = h('div', { class: 'qe-view scroll', hidden: true }, random.el);

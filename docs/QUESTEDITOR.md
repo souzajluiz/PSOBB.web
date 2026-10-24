@@ -31,6 +31,8 @@ The header copy is what the server reads and what the game falls back to; the ga
 Pick a floor in the floor list. The map, the enemy / NPC / object models and one marker per entity (red enemy, green NPC, blue object) are drawn.
 
 - **Click** selects, **Shift/Ctrl-click** adds or removes, a click on empty space clears. **Drag** a selected entity (or any, it selects first) moves all selected ones in the horizontal plane of the grabbed entity. **Alt-drag** rotates about the vertical axis. **Snap to ground** keeps dragged entities on the map surface.
+- **Rotation gizmo**: a green ring lies flat around the selection (its pivot is the last selected entity on the floor), with a dot at that entity's heading. Press the ring and drag to turn every selected entity in place; the drag is one undo step ("Turn"). Without Shift the angle follows the pointer freely; **hold Shift** while dragging to snap the stored angle to multiples of 15 degrees (of the entity's own angle, as the inspector shows it, so the room's offset does not shift the grid).
+- The angle is stored in the .dat as the entity's Y angle in PSO units: 0x10000 = 360 degrees, wrapped to 0..0xffff. Alt-drag, the `[` / `]` keys and the inspector write the same field.
 - Empty-space drag orbits, wheel zooms, right-drag pans, click the view then WASD / Q / E to fly (the map viewer's controls).
 - **Delete** removes the selection, **Ctrl+D** duplicates, **Ctrl+A** selects the floor, **Esc** clears, **F** frames the selection, **[** / **]** rotate by 15 degrees.
 - **Create**: drag a type from the **Palette** (it lists the types the floor's area holds) into the view, or press `+` next to it to add it at the centre of the view. The new entity gets the nearest room and sits on the map.
