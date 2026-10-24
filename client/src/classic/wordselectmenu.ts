@@ -9,12 +9,22 @@
 //     the header / footer phrase tokens of those lists);
 //   - GetItemMetaPointer_00705544 (dump 661927): the index -> list mapping, including the
 //     pseudo indices (-0x28 list A, -0x2D list B, -0x3C / -0x46 / -0x50 / -0x5A the name lists).
+//   - the selection buffer (the 0x1C WordSelectMessageT at menu +0xC4: AddSelection_00708108,
+//     RemoveLastSelection_007080d0, PopSelection_007080ec, InitializeSelectionBounds_00708134),
+//     UpdateSelectionEffect_00706fb0 (the toggle), IsValidSelection_0070706d, GetStringIdGroup_0070682c;
+//   - WordSelectMenu_ProcessID_00707f40 (0x707f40, locale 0): the category of a chosen token
+//     (the four groups in the exe's data at 0x9D06A0..0x9D06CC) and the table at 0x96EA38 that
+//     gives the target type (+0xC6) and the next state (+0xB4) of the root (state 0) accept;
+//   - ResetAndCloseMenus_00706c94 (0x706c94) copies the 0x1C buffer out, ResetAllMenus_00706da4
+//     (0x706da4) does not (WordSelectPickerModel below).
 // The tables are the JP ws_data_jp.bin lists (net/wordselect.ts list1 / list2). Not ported: the
-// state machine (WordSelectMenu_ProcessState_007023c8, about 30 handlers), the ListWindowEntity /
-// WordSelectEntity drawing and cursor, the galgryphon effects, and the Shortcut / Symbol Chat
-// wiring. See DEVLOG 2026-10-23 (word select picker, list model).
+// rest of the state machine (WordSelectMenu_ProcessState_007023c8: the child-list stack, the
+// states 1..0x14 accept paths, the numeric count window), the ListWindowEntity / WordSelectEntity
+// drawing and cursor, the galgryphon effects and sounds, the ES/FR/DE/US locales, and the Shortcut /
+// Symbol Chat wiring. See DEVLOG 2026-10-23 (word select picker, model).
 
 import type { WordSelectTable } from '../net/wordselect.ts';
+import type { WordSelectMessage } from '../net/chatshortcut.ts';
 
 // get_word_select_type_by_room_map_scene (dump 664258) return values (the WS_* enum).
 export type WordSelectScene = 'pioneer2' | 'lobby' | 'battle' | 'challenge' | 'quest' | 'free';
@@ -166,4 +176,225 @@ export function wordSelectNameListAt(lists: WordSelectNameLists, index: number):
     default:
       return null;
   }
+}
+
+// ---- Selection buffer (the 0x1C WordSelectMessageT at menu +0xC4) ----
+// The exe's layout (the same bytes the 6x74 sender copies): u16 count at +0, u16 target type at +2,
+// u16 tokens[8] at +4 (short index 2..9; a free slot is 0xFFFF), u32 numeric parameter at +0x14
+// (GetWordSelectEntryId_0070811c / WordSelectMenu_SetCurrentItemID_00708120), u32 at +0x18.
+// Values here are the signed shorts the exe compares; -1 is the free slot.
+export const WORD_SELECT_TOKEN_FREE = -1;
+export const WORD_SELECT_MAX_TOKENS = 8;
+
+export interface WordSelectSelection {
+  count: number;
+  targetType: number;
+  tokens: number[]; // 8 entries, -1 free
+  numericParameter: number;
+  unknownA4: number;
+}
+
+// WordselectmenuInitializeSelectionBounds_00708134 (dump 0x708134): count 0, type 0, tokens -1,
+// numeric 0, +0x18 0.
+export function newWordSelectSelection(): WordSelectSelection {
+  return {
+    count: 0,
+    targetType: 0,
+    tokens: new Array(WORD_SELECT_MAX_TOKENS).fill(WORD_SELECT_TOKEN_FREE),
+    numericParameter: 0,
+    unknownA4: 0,
+  };
+}
+
+// WordSelectMenu_AddSelection_00708108: with a count above 0, the top token is overwritten.
+export function addSelection(sel: WordSelectSelection, value: number): void {
+  if (sel.count > 0) sel.tokens[sel.count - 1] = value;
+}
+
+// WordSelectMenu_RemoveLastSelection_007080d0 (the push): below the 8-token cap, the value goes on
+// top and the count rises. The exe's name; the effect is a push.
+export function pushSelection(sel: WordSelectSelection, value: number): void {
+  if (sel.count < WORD_SELECT_MAX_TOKENS) {
+    sel.tokens[sel.count] = value;
+    sel.count++;
+  }
+}
+
+// WordSelectMenu_PopSelection_007080ec: with a count above 0, the top token is cleared (-1) and
+// the count falls.
+export function popSelection(sel: WordSelectSelection): void {
+  if (sel.count > 0) {
+    sel.count--;
+    sel.tokens[sel.count] = WORD_SELECT_TOKEN_FREE;
+  }
+}
+
+// WordSelectMenu_IsItemInCategory_00707095 (0x707095): 0x36 < id < 0x46.
+export function isItemInCategory(id: number): boolean {
+  return id > 0x36 && id < 0x46;
+}
+
+// WordSelectMenu_IsValidSelection_0070706d (0x70706d): the id is not 0x2C8 and not in the category.
+export function isValidSelection(id: number): boolean {
+  return id !== 0x2c8 && !isItemInCategory(id);
+}
+
+// WordSelectMenu_UpdateSelectionEffect_00706fb0 (0x706fb0): run when the cursor's value changes.
+// Toggle 0 (+0x98 clear): a valid value is pushed and the toggle sets; an invalid one is added over
+// the top. Toggle 1: a valid value is added over the top; an invalid one pops and clears the toggle.
+// `last` is the value seen last (+0x9C, -1 at the start).
+export interface SelectionEffectState {
+  toggle: number; // +0x98
+  last: number; // +0x9C
+}
+
+export function newSelectionEffectState(): SelectionEffectState {
+  return { toggle: 0, last: -1 };
+}
+
+export function updateSelectionEffect(sel: WordSelectSelection, fx: SelectionEffectState, value: number): void {
+  if (value === fx.last) return;
+  if (fx.toggle === 0) {
+    if (!isValidSelection(value)) {
+      addSelection(sel, value);
+    } else {
+      pushSelection(sel, value);
+      fx.toggle = 1;
+    }
+  } else if (fx.toggle === 1) {
+    if (!isValidSelection(value)) {
+      popSelection(sel);
+      fx.toggle = 0;
+    } else {
+      addSelection(sel, value);
+    }
+  }
+  fx.last = value;
+}
+
+// WordSelectMenu_GetStringIdGroup_0070682c (0x70682c): 0x2E4 -> 0; 0x2FF < id < 0x396 -> 1;
+// 0x45C < id < 0x470 except 0x46D, 0x46E -> 2; 0x4F3 -> 3; 0x635 -> 4; 0x650 -> 5; else 7.
+export function stringIdGroup(id: number): number {
+  if (id === 0x2e4) return 0;
+  if (id > 0x2ff && id < 0x396) return 1;
+  if (id > 0x45c && id < 0x470 && id !== 0x46d && id !== 0x46e) return 2;
+  if (id === 0x4f3) return 3;
+  if (id === 0x635) return 4;
+  if (id === 0x650) return 5;
+  return 7;
+}
+
+// WordSelectMenu_CanCancel_007028a8 (0x7028a8) and the confirm check: a chosen id whose group is
+// not 7 opens the numeric count window (the sub-state at +0xB8); the port keeps only the test.
+export function canConfirmSelection(id: number): boolean {
+  return stringIdGroup(id) !== 7;
+}
+
+// IsItemInSpecialCategory_00706470 (0x706470): 0x5AB < id < 0x5FA (the state 0x14 branch).
+export function isItemInSpecialCategory(id: number): boolean {
+  return id > 0x5ab && id < 0x5fa;
+}
+
+// ---- Root category (WordSelectMenu_ProcessID_00707f40, dump 0x707f40, locale 0) ----
+// The four groups: each has a list of tokens (the exe's data at 0x96EA68..0x96EA80, counts at
+// 0x96EA84..0x96EA90), and a config id (0x9D06A8, B4, C0, CC). A token in a group gives that
+// group's id; the id 2 is 1 in the JP locale; no match gives 5.
+export const WORD_SELECT_CATEGORY_GROUPS: { tokens: number[]; configId: number }[] = [
+  { tokens: [0x0b], configId: 0 }, // 0x96EA68
+  { tokens: [0x0c], configId: 2 }, // 0x96EA6C
+  { tokens: [0x0d], configId: 3 }, // 0x96EA70
+  { tokens: [0x02, 0x0f, 0x18, 0x2f], configId: 4 }, // 0x96EA74
+];
+export const WORD_SELECT_CATEGORY_NONE = 5;
+
+// The table at 0x96EA38: [category] = [target type (ProcessIDIndex0, +0xC6), next state
+// (ProcessIDIndex1, +0xB4)]. Read from the exe: 2,5 / 3,7 / 4,12 / 6,2 / 1,3 / 1,1.
+export const WORD_SELECT_ROOT_TABLE: readonly (readonly [number, number])[] = [
+  [2, 5],
+  [3, 7],
+  [4, 12],
+  [6, 2],
+  [1, 3],
+  [1, 1],
+];
+
+// The category index of a token (ProcessID's loop); `jpLocale` is word_select_locale == 0.
+export function wordSelectCategory(token: number, jpLocale: boolean): number {
+  for (const group of WORD_SELECT_CATEGORY_GROUPS) {
+    if (group.tokens.includes(token)) {
+      if (group.configId === 2 && jpLocale) return 1;
+      return group.configId;
+    }
+  }
+  return WORD_SELECT_CATEGORY_NONE;
+}
+
+// WordSelectMenu_ProcessIDIndex0_00707280 and ProcessIDIndex1_00707294 for a token.
+export function wordSelectRootTransition(token: number, jpLocale: boolean): { targetType: number; next: number; category: number } {
+  const category = wordSelectCategory(token, jpLocale);
+  const row = WORD_SELECT_ROOT_TABLE[category];
+  return { targetType: row[0], next: row[1], category };
+}
+
+// ---- The picker model (the parts above, joined by the close and cancel exits) ----
+// The window, the child-list stack and the cursor belong to the not-yet-ported picker window; the
+// caller reports the cursor's value (ListWindowEntity_GetSelectedEntryValue) and the accept.
+export const WORD_SELECT_STATUS_OPEN = 0;
+export const WORD_SELECT_STATUS_ACCEPTED = 2; // ResetAndCloseMenus_00706c94 (+0xA8 = 2)
+export const WORD_SELECT_STATUS_CANCELLED = 3; // ResetAllMenus_00706da4 (+0xA8 = 3)
+
+export class WordSelectPickerModel {
+  readonly sel: WordSelectSelection = newWordSelectSelection();
+  readonly fx: SelectionEffectState = newSelectionEffectState();
+  state = 0; // +0xB0 (the root, ASSUMED: the create path does not write it)
+  next = 0; // +0xB4
+  status = WORD_SELECT_STATUS_OPEN; // +0xA8
+  readonly itemType: number; // +0x88: get_word_select_type (the item table index base)
+
+  constructor(p: { type: number; numericParameter?: number }) {
+    this.itemType = p.type;
+    this.sel.numericParameter = p.numericParameter ?? 0;
+    this.sel.targetType = 0;
+  }
+
+  // The cursor moved to `value` (UpdateSelectionEffect is called on each change).
+  cursor(value: number): void {
+    updateSelectionEffect(this.sel, this.fx, value);
+  }
+
+  // The root accept (State0_Update_007031b4): the chosen token's category sets the target type and
+  // the next state. Returns false when the picker is not on the root.
+  acceptRoot(token: number, jpLocale: boolean): boolean {
+    if (this.state !== 0 || this.status !== WORD_SELECT_STATUS_OPEN) return false;
+    const t = wordSelectRootTransition(token, jpLocale);
+    this.sel.targetType = t.targetType;
+    this.next = t.next;
+    return true;
+  }
+
+  // ResetAndCloseMenus_00706c94: the 0x1C buffer is copied to the caller and the picker is accepted.
+  close(): WordSelectMessage {
+    this.status = WORD_SELECT_STATUS_ACCEPTED;
+    return this.result();
+  }
+
+  // ResetAllMenus_00706da4: the picker is cancelled; nothing is copied out.
+  cancel(): void {
+    this.status = WORD_SELECT_STATUS_CANCELLED;
+  }
+
+  // The buffer as the 6x74 sender takes it (free slots keep 0xFFFF, as in the exe).
+  result(): WordSelectMessage {
+    return {
+      numTokens: this.sel.count,
+      targetType: this.sel.targetType,
+      tokens: this.sel.tokens.map((t) => t & 0xffff),
+      numericParameter: this.sel.numericParameter >>> 0,
+      unknownA4: this.sel.unknownA4 >>> 0,
+    };
+  }
+}
+
+export function openWordSelectPicker(p: { type: number; numericParameter?: number }): WordSelectPickerModel {
+  return new WordSelectPickerModel(p);
 }
