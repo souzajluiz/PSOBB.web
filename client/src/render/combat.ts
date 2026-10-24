@@ -72,6 +72,7 @@ import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
+import { galgryphonAttackBurst } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
@@ -1013,7 +1014,8 @@ export class CombatView {
         // monest_constructor: initdata_param2 / initdata_param3.
         monest = new MonestSpawner(head.slot.set.params[1], head.slot.set.params[2]);
       }
-      if (profile || OWN_FSM.has(className)) {
+      // The Gal Gryphon has its own brain (the branch below) and no AI_PROFILES row, so it is let in here.
+      if (profile || OWN_FSM.has(className) || className === 'TBoss5Gryphon') {
         // initdata_param6 (set entry params[5]) is the subtype, as
         // formats/enemymodels.ts reads it.
         const subtype = Math.max(0, Math.trunc(head.slot.set.params[5]));
@@ -1299,6 +1301,8 @@ export class CombatView {
             players: () => Math.max(1, this.aiTargets().length),
             rand: () => this.rng(),
             send: (packet) => this.game.sendGalgryphonPacket(packet),
+            // The probe's sound (GalgryphonFxB probe, 0x39b) at the boss.
+            sfx: (id) => this.playSe(id),
             throwMinion: (origin, offset, target, slot) => {
               this.galMinions.throw(origin, offset, target, slot);
             },
@@ -1525,7 +1529,9 @@ export class CombatView {
       this.tickEnemies();
       // The Gal Gryphon's minions (combat/galgryphon.ts): the launchers make the
       // homing Effects, which home on the party and draw their radar icons.
-      if (this.galMinions.active && this.opts.ground) this.galMinions.update(this.aiTargets(), this.opts.ground);
+      if (this.galMinions.active && this.opts.ground) {
+        this.galMinions.update(this.aiTargets(), this.opts.ground, (at) => this.galgryphonAttack(at));
+      }
       this.damage.tick();
       this.tickStatus();
       this.tickRemoteStatus();
@@ -2746,6 +2752,9 @@ export class CombatView {
   // its own height (no ground follow); the motion plays on each change of row.
   private tickGalgryphon(e: EnemyRuntime, ai: GalgryphonAi, targets: AiTarget[]): void {
     const r = ai.tick(targets);
+    // The area hits of the brain's minion ring (combat/galgryphonai.ts tickRing), through the enemy
+    // shot path, so each client resolves its own player (tickShots).
+    if (r.shots) for (const s of r.shots) this.launchShot(e, s);
     const root = e.instance.root;
     root.position.set(r.x, r.y ?? root.position.y, r.z);
     e.lift = 0;
@@ -2758,6 +2767,20 @@ export class CombatView {
         this.opts.log(`Gal Gryphon motion ${r.motion.index}: ${(err as Error).message}`);
       }
     }
+  }
+
+  // The homing minion's area hit (DispatchGalGryphonAttackEffect_004a8690, galgryphonfx.ts
+  // galgryphonAttackBurst): the attack's owner is the Gal Gryphon (its entity is the attacker in the
+  // exe: 0x004a6edc returns the boss). Nothing is hit when the boss is not on the field.
+  private galgryphonAttack(at: { x: number; y: number; z: number }): void {
+    let owner: EnemyRuntime | null = null;
+    for (const e of this.enemies.values()) {
+      if (e.ai instanceof GalgryphonAi && !e.dead) {
+        owner = e;
+        break;
+      }
+    }
+    if (owner) this.launchShot(owner, galgryphonAttackBurst(at, 0, 0));
   }
 
   // A 0xA0 (the pattern step) or a 0x9F (the target) from the leader. The leader ignores its own echo.

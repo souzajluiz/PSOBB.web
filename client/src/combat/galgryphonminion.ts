@@ -99,7 +99,7 @@ export class GalgryphonMinionEffect {
 
   /** One game tick (UpdateGalgryphonMinion_004ab283). `players` are the living
    * party; a slot the party does not hold is no target. */
-  update(players: readonly GalgryphonPlayer[]): void {
+  update(players: readonly GalgryphonPlayer[], attack?: (at: { x: number; y: number; z: number }) => void): void {
     this.icons.length = 0;
     if (this.dead) return;
     if (this.state === GALMINION_STATE.init) {
@@ -126,7 +126,10 @@ export class GalgryphonMinionEffect {
       this.state = GALMINION_STATE.wind;
       this.timer = 0;
     }
-    // Falls through to the move in the exe, on the same tick.
+    // Falls through to the move in the exe, on the same tick. The area hit comes first
+    // (UpdateGalgryphonMinion_004ab283 calls DispatchGalGryphonAttackEffect_004a8690 at 0x004ab39e,
+    // after the life test and before the direction): once per move tick, at the minion's point.
+    attack?.({ x: this.x, y: this.y, z: this.z });
     const d = this.direction(players);
     this.vx = (d.x * GALMINION.accel + this.vx) * GALMINION.damp;
     this.vz = (d.z * GALMINION.accel + this.vz) * GALMINION.damp;
