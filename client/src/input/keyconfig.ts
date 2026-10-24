@@ -157,6 +157,9 @@ export const BINDING = {
   paletteRight: 17,
   paletteChange: 18,
   camera: 19,
+  // Function keys (20..31 = F1..F12, exe enum unknown_input_type 20..31).
+  functionKeyInfo: 20, // F1 function_key_info_menu
+  mainMenu2: 31, // F12 main_menu_2
 } as const;
 
 // The four Default presets, exe data at 0x0097aca0 (0x16C bytes each, read
@@ -263,7 +266,9 @@ export type KeyRole =
   | 'paletteLeft'
   | 'paletteRight'
   | 'paletteChange'
-  | 'camera';
+  | 'camera'
+  | 'autorun'
+  | 'autowalk';
 
 // The binding index each key role reads.
 const ROLE_BINDING: Record<KeyRole, number> = {
@@ -285,6 +290,8 @@ const ROLE_BINDING: Record<KeyRole, number> = {
   paletteRight: BINDING.paletteRight,
   paletteChange: BINDING.paletteChange,
   camera: BINDING.camera,
+  autorun: BINDING.lockMoveForward,
+  autowalk: BINDING.lockWalkForward,
 };
 
 // Current DOM key names per role (rewritten by applyKeyConfig).
@@ -307,6 +314,8 @@ export const KEYS: Record<KeyRole, string> = {
   paletteRight: '',
   paletteChange: '',
   camera: '',
+  autorun: '',
+  autowalk: '',
 };
 
 // Action palette keys and the palette_slots[] index (0-based) each one uses.
@@ -332,6 +341,13 @@ export function currentKeyConfig(): Uint8Array {
 
 // Makes cfg the config in use (an invalid or missing one becomes the default)
 // and points KEYS / PALETTE_KEYS at its keys. Returns the config in use.
+// The DOM key bound to binding i of the config in use ('' when it is not a keyboard key
+// or has no key). Reads the live config, so a rebound function key follows it.
+export function bindingKey(i: number): string {
+  const b = readBinding(active, i);
+  return b.type === 0 ? domKeyOfCode(b.code) : '';
+}
+
 export function applyKeyConfig(cfg: Uint8Array | null | undefined): Uint8Array {
   active = normalizeKeyConfig(cfg);
   const keyOf = (i: number): string => {

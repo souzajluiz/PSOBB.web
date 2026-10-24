@@ -10,6 +10,7 @@
 import { PlayerCamera } from './playercamera.ts';
 import { njPerspectiveFovy } from '../classic/playerview.ts';
 import { KEYS } from '../input/keyconfig.ts';
+import { autoKey, AUTO_RUN_FALLBACK, AUTO_WALK_FALLBACK, autoMoveAxes, autoMoveStart, stepAutoMove, type AutoMoveState } from '../input/automove.ts';
 import { analogStick, stickAmount, takeCameraTurn } from '../input/analog.ts';
 import * as THREE from 'three';
 import { ClientFiles } from '../data/clientfiles.ts';
@@ -237,6 +238,7 @@ export class LobbyView {
   private moveTicks = 0;
   private keyFb = 0;
   private keyLr = 0;
+  private auto: AutoMoveState = autoMoveStart(); // auto run / walk (input/automove.ts)
   private wasMoving = false;
   private sentGait: 'walk' | 'run' | null = null;
   private disposers: Array<() => void> = [];
@@ -749,6 +751,15 @@ export class LobbyView {
     this.moveTicks = Math.min(this.moveTicks - Math.floor(this.moveTicks), 1);
     const stick = analogStick(); // the touch pad's or the gamepad's left stick
     const leg = moveOn ? this.legState() : undefined;
+    // Auto run / auto walk (input/automove.ts, unknown_handle_movement dump 667141): a
+    // press toggles the mode, a direction key turns it off; Alt disables the toggles.
+    if (mine && !stick) {
+      this.auto = stepAutoMove(this.auto, {
+        run: !keys.has('alt') && keys.has(autoKey(KEYS.autorun, AUTO_RUN_FALLBACK)),
+        walk: !keys.has('alt') && keys.has(autoKey(KEYS.autowalk, AUTO_WALK_FALLBACK)),
+        direction: keys.has(KEYS.moveForward) || keys.has(KEYS.moveBackward) || keys.has(KEYS.moveLeft) || keys.has(KEYS.moveRight),
+      });
+    }
     for (; ticks > 0 && mine; ticks--) {
       this.prevLogic.copy(pos);
       // A held key ramps its axis once per game tick (0x0070a60c): in the move
@@ -756,6 +767,11 @@ export class LobbyView {
       if (!stick && (moveOn || dead)) {
         this.keyFb = rampAxis(this.keyFb, keys.has(KEYS.moveBackward), keys.has(KEYS.moveForward));
         this.keyLr = rampAxis(this.keyLr, keys.has(KEYS.moveLeft), keys.has(KEYS.moveRight));
+        const axes = moveOn ? autoMoveAxes(this.auto.mode) : null;
+        if (axes) {
+          this.keyFb = axes.fb;
+          this.keyLr = axes.lr;
+        }
       }
       const lr = stick ? stick.lr : this.keyLr;
       const fb = stick ? stick.fb : this.keyFb;

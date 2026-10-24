@@ -28,7 +28,8 @@
 // Name tags over the heads: no code for them was found in PsoBB.exe; they
 // are kept as on the psobb.io capture (fitted, see DEVLOG).
 
-import { menuKeyOf } from '../input/keyconfig.ts';
+import { BINDING, bindingKey, menuKeyOf } from '../input/keyconfig.ts';
+import { functionKeyAction, functionKeyNames, LOBBY_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
 import type { InfoBoardClient } from '../net/infoboard.ts';
@@ -636,7 +637,19 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
-    if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
+    // The function-key shortcuts (input/shortcuts.ts): F5..F8 open the lobby's leaves.
+    if (!this.menu.open && !this.counter.open) {
+      const a = functionKeyAction(e, functionKeyNames());
+      if (a?.kind === 'menu' && LOBBY_SHORTCUT_LEAVES.has(a.id) && validateMenuEntry(a.id, lobbyMenuRules(!!this.hud.team && teamMember(this.hud))).enabled) {
+        e.preventDefault();
+        this.keys.clear();
+        this.menu.toggle(MAIN_MENU);
+        this.menuAction(a.id);
+        return;
+      }
+    }
+    const fk = e.key.toLowerCase();
+    if (fk === KEYS.menu || fk === bindingKey(BINDING.mainMenu2)) {
       e.preventDefault();
       if (!this.counter.open) {
         this.keys.clear();

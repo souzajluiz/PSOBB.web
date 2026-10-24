@@ -44,7 +44,8 @@ import type { ItemData, ItemNames } from '../formats/itemnames.ts';
 import { AFSArchive } from '../formats/archives.ts';
 import { ITEM_KT_FILE, itemPictureEntry } from '../formats/itemkt.ts';
 import { parseXvm } from '../formats/xvm.ts';
-import { KEYS } from '../input/keyconfig.ts';
+import { BINDING, bindingKey, KEYS } from '../input/keyconfig.ts';
+import { functionKeyAction, functionKeyNames } from '../input/shortcuts.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -665,11 +666,21 @@ export class FieldHud {
       return;
     }
     if (this.opts.blocked()) return;
-    if (e.key.toLowerCase() === KEYS.menu || e.key === 'F12') {
+    const k = e.key.toLowerCase();
+    if (k === KEYS.menu || k === bindingKey(BINDING.mainMenu2)) {
       e.preventDefault();
       e.stopImmediatePropagation();
       if (this.tex) this.menu.toggle();
       return;
+    }
+    // The function-key shortcuts (input/shortcuts.ts): F2..F4 open the field's leaves.
+    if (!this.menu.isOpen && this.tex) {
+      const a = functionKeyAction(e, functionKeyNames());
+      if (a?.kind === 'menu' && this.menu.openShortcut(a.id)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
     }
     if (this.menu.isOpen) {
       if (e.key === 'Control' || e.key === 'Shift' || e.key === 'Alt' || e.key === 'Meta') return;
