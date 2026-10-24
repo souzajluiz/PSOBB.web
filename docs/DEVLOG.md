@@ -17590,3 +17590,35 @@ Trap Vision (tool, item 8):
 - The six rock debris parts (0x006759d4) and the five stalactite debris parts (0x00679b70): the `DerollePartObject` emitter (0x006441f4, `InitSystem` 0x00644cd0, its update and draw).
 - The stalactite's +0x80 record setter (not in the stalactite's own range) and the record path (0x007b5038 notify).
 - The callers of the item's consume / add (0x005de46c, 0x005de4a0): none of the 48 indirect sites is confirmed.
+
+## 2026-10-23: lobby "cape" glows = section-ID aura on the body (not MAGs; hubs hide MAGs)
+
+**Question:** the lobby screenshot shows translucent cape-like glows behind players (cyan behind one, yellow behind another). The 0x0181 entry above left them open. Candidates were the section-ID aura, the slot colour (`PLAYER_COLORS`), and MAG models.
+
+**Identified: the section-ID aura.** The port's body model already draws it.
+- `playerTextureLists` (`render/playermodel.ts`): body texture id 0 is the section emblem `pxtZc_01<x>_t_core` (type 'c', `x` = 'a' + section ID). The texture is 32x32.
+- In the body model, the one translucent strip (use-alpha: `transparent`, three.js CustomBlending in the port's NJ mesh) uses texture 0. Every other strip is opaque. Measured with a Node probe (`tests/players.test.ts` now checks it): the translucent strip spans the body (y 0 to 16.8 for HUmar).
+- Mean colours of the 32x32 emblem per section (decoded from `plAtex.afs`, alpha >= 8): Skyly (2, 'c') = (64, 159, 165), cyan. Yellowboze (8, 'i') = (164, 164, 15), yellow. Viridia (0) is (0, 112, 68), Whitill (9) is grey. The two glows in the user's frame are cyan (Skyly) and yellow (Yellowboze). That match is strong evidence, not proof: the two characters' section IDs are ASSUMED to be Skyly and Yellowboze (ask the user, or read `section` from the lobby join data).
+- Exe evidence: the body is drawn every frame by `UpdateSinowberillChallengePlayerAnimation_0069ad54` (dump line ~581015) through `SinowberillChallengePlayer_RenderPart_0068a1a8` (dump 555724) with no map or lobby check, so the strip is drawn in every scene, the lobby included. The section emblem rule is FUN_004e6920 (documented in `playermodel.ts`).
+
+**Not the cause: slot colour.** `PLAYER_COLORS` (red, green, yellow, blue) is the minimap marker colour only. No cyan slot exists.
+
+**Not the cause: MAGs.** The exe does not draw a MAG in the hubs:
+- A MAG is an `item_instance` with `item_kind == 2` owned by a player (`UpdateItemInstance_005c3ed8`, dump 412764). Its draw sits in `UpdateItemPhysics_005c4124` (dump 412908), which calls the MAG vtable's draw (`field25_0x64`) only when `is_current_map_safe()` is nonzero.
+- `is_current_map_safe` (dump 820975) returns 0 when `current_map` is in `unknown_safe_maps`. Read from the exe: `0x0097f1c8` = 0, 15, 18, 45, -1. Map 15 is the lobby (see the 0x0181 entry), so the MAG draw is skipped there.
+- The same gate hides the weapon in the hubs (`UpdateItemVisibility_005c3f7c`, dump 412806).
+- The port draws no MAG model at all, in the lobby or in the field (no MAG draw in `render/`; `net/magfeed.ts` is only the feed rules). So the port cannot be drawing MAGs in the lobby.
+- Caveat: the equipment-list render (`unknown_render_player_equipment`, dump 420047) runs each `render_on_character` of the list without the gate. Its MAG callee was not traced, so "no MAG in the hub" rests on the item draw gate above (ASSUMED that no other MAG path draws it).
+
+**Ported:** nothing new in the render path. The aura was already drawn; the port matches the exe's texture rule. Added `tests/players.test.ts` (section "section-ID aura"): the aura texture name for section 2 is `pxtZc_01c_t_core` and for section 8 `pxtZc_01i_t_core`, and the decoded means are cyan (Skyly) and yellow (Yellowboze).
+
+**ASSUMED:**
+- The two characters in the reference frame are Skyly (2) and Yellowboze (8).
+- The aura strip's blend and depth are the exe's (the port uses the NJ blend factors; not compared to a runtime capture).
+- No MAG path draws in the hubs besides the item draw gate.
+
+**Checks:** `node tests/players.test.ts` ALL PASS (Node 24, `data.gsl` / `plAtex.afs` from `~/Downloads/psobb-client/data`). Not run: Playwright (per the brief).
+
+**Left:**
+- MAG models are not ported, in the field or the lobby. In the exe a MAG is drawn in the field (`UpdateItemPhysics_005c4124`, the MAG's model from `InitializeMagModel_005d8351` and `mag_model_constructor`, dump 433604), behind the shoulder. This is a separate feature; it is not needed for the lobby glows.
+- Confirm the section IDs of the reference frame's two characters (lobby join data or the user).
