@@ -52,7 +52,8 @@ import { se, SE } from '../audio/se.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
-import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
+import { ItemListWindow, MAIN_MENU, MainMenu, type MainMenuTextures } from './mainmenu.ts';
+import { applyMenuViewShift } from '../render/viewshift.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { KEYS } from '../input/keyconfig.ts';
@@ -450,13 +451,7 @@ export class LobbyScreen implements Screen {
   }
 
   private applyViewShift(): void {
-    const cam = this.viewer.camera;
-    cam.updateProjectionMatrix();
-    if (!this.menu.shift) return;
-    const { ox, oy, s } = menuViewShift(this.menu.shift);
-    const m = new THREE.Matrix4().set(s, 0, 0, ox, 0, s, 0, oy, 0, 0, 1, 0, 0, 0, 0, 1);
-    cam.projectionMatrix.premultiply(m);
-    cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+    applyMenuViewShift(this.viewer.camera, this.menu.shift);
   }
 
   update(dt: number, stage: Stage): void {

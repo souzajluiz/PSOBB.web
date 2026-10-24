@@ -14671,3 +14671,25 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: Home menu view shift (correction: it reaches the field's draw)
+
+The entry above says the 3D view is not shifted in Chrome. That was a misreading of the screenshot. The shift is applied and drawn; the scene fills the canvas because the shifted frustum shows more of the room, not because the shift is missing. The root cause was not a missing wire.
+
+**Chrome probe (`client/e2e/field-menu-home.spec.ts` and a temporary probe, not committed).** Closed: `camera.projectionMatrix` elements [0] 0.992, [5] 1.764, [8] 0, [9] 0; the render loop runs (`renderer.info.render.frame` 308 -> 470 in one second). Open (shift 3): [0] 0.744 and [5] 1.323 (both x 0.75), [8] -0.25, [9] -0.48. The projection the field's `renderer.render` uses is the shifted one. Pixel check: with the menu closed the player's feet are at about (640, 640); open they are at about (800, 400). The NDC map (0.75 x + 0.25, 0.75 y + 0.48) predicts (792, 398). So the room is drawn right and up at scale 0.75.
+
+**Exe (PsoBB.exe, dump `render_player_menu_background`, 700858).** On open the globals are 80.0 and 115.2 (0x00a9a894 / 0x00a9a890 at the open branch), and the frame counter (param+0x60 / +0x61) runs 0..3. The centre written to the camera's UI struct is `x = (ViewportWidth >> 1) + (80 * scale / 3) * f` and `y = (ViewportHeight >> 1) - (115.2 * scale / 3) * f`, with the height's half 240 (the minus is in the formula, `-(fVar5 / fVar6) * fVar4 + (H >> 1)`). So the exe moves the centre **right and up** (y is screen-down). The brief's "right/down" is not the exe's. The scale is `a4 = (W - x) / (W / 2)` (0.75 at f = 3) and `a8 = y / (H / 2)` (0.52); the code keeps the larger (`if a8 <= a4`), so one uniform scale of 0.75. The port's NDC offsets (+0.25, +0.48) and scale 0.75 are the same numbers.
+
+**Port.** `client/src/render/viewshift.ts` `applyMenuViewShift(cam, f)` is the one projection step (rebuild, premultiply the offset and scale, keep the inverse). The field's `FieldHud.attach` (`render/fieldhud.ts`) and the lobby's `applyViewShift` (`classic/lobby.ts`) call it; they had two copies of the same four lines. No behaviour change in the lobby.
+
+**Screenshot.** `client/test-results/field-menu-home.png` (Home held 200 ms, menu open): the room and the player sit right and up of the closed frame, the menu panel and the help window are on the left. The closed frame is `client/test-results/zz-closed.png` from the probe run (the same character).
+
+**Test.** `tests/viewshift.test.ts`: frame 0 projects the axis to the centre; frame 3 projects it to NDC (0.25, 0.48) (exe centre 400, 125 of 640 x 480); the frustum's edges go to -0.5 and +1.0 (scale 0.75 with the offset); applying a frame twice does not compound; frame 0 returns to the plain projection; projection times inverse is the identity. `node tests/viewshift.test.ts` and `node tests/mainmenulayout.test.ts` pass. `cd client && npx tsc --noEmit -p .` is clean. Playwright `e2e/field-menu-home.spec.ts` passes in Chrome.
+
+**Worktree set-up (for the next run in a worktree).** The Vite config reads the newserv keys from `../vendor/newserv` next to `client/`, and the client needs `client/node_modules`; a worktree has neither, so both were symlinked from the main checkout for the runs and removed before the commit. Playwright needs Node 24 on PATH (the `npx` shebang picks Node 16 otherwise). Without the keys the login stops with "key file default.nsk not found".
+
+**ASSUMED.**
+- The exe draws the 3D view over the whole canvas at scale 0.75 (no viewport clip). The dump sets the centre and the scale only; the draw code was not traced, so a window-shaped view (as in the GC reference) is not ruled out.
+- The room covers the canvas in the open frame because the scene is bigger than the shifted frustum (an inference from the projection; not checked against the exe's picture).
+
+**Left.** Nothing for the shift. The GC reference's shrunk window is not reproduced (not in the exe's code path read here).
