@@ -17188,3 +17188,32 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 - The Gal Gryphon minion's 1.5 icon (needs the Gal Gryphon brain: the launcher and its state 2, see the 2026-10-23 Gal Gryphon minion entry).
 - The Challenge "Area n" title: `cmode_area_title_buffer` (set by opcode_set_area_title_number, dump 607512) is read by `maybe_update_mainwarp` (dump 510944), which looks like a warp-menu entry label, not a radar icon. Not traced to its drawing code; the warp menu is the place to check.
 - Form 2's levels (ASSUMED, above).
+
+## 2026-10-23: technique visuals: the multi-frame particle textures (Gifoie's dotted squares, Gibarta's speckled blocks)
+
+**What changed.** effect_nt.xvm holds some 4 x 4 sheets (slots 34 and 40..50 in the exe's `effect_nt_metadata` table). The port drew each whole sheet on every particle, so a Gifoie spark (0x22, slot 42) showed 16 dots in a square, and the Gibarta / Barta / Rabarta dots (0x181, 0x190, 0x191, 0x1db, 0x1e0, 0x1e1: slot 43) showed a speckled block. Now a particle shows one frame of its texture: `classic/particles.ts` keeps a `frame` per particle (`NT_FRAME_COUNT`, `frameUv`), and `render/hitfx.ts` gives the sprite a view of the texture with that frame's UV rectangle (`frameTexture`); the canvas path (`ParticleSystem.draw`) takes the same source rectangle.
+
+**Exe evidence.**
+- The table: `effect_nt_metadata` is 0x28 bytes per slot at 0x00a101c0 (+0x0c `unk_count`, +0x10 `unk_float_ptr`, +0x24 renderer; `struct effect_nt_metadata`, dump 69549). Read with `tools/exedata.py read 0xa101c0 u 540`: slots 34, 40..50 have `unk_count` 16 and one shared list pointer (0x00aaed20); every other slot has 1 and the list 0,0,1,1 (0x00a112cc). The 16-entry list is on the heap (not in an initialised section), so its floats are not read from the file: ASSUMED a row-major 4 x 4 grid.
+- The renderer: `ParticleEffectSingleParticle_Update_0050e698` (dump 291799 ff.) takes `u = unk_float_ptr[unk_index * 4]`, `v = [+1]`, width `[+2] - [+0]`, height `[+3] - [+1]` (dump 287625 ff., the spawn-side draw).
+- The frame: `unk_index` steps once an update, `unk_index + 1` while below `unk_count`, else 0 (dump 291716..291731); with texture flag 0x10 it is `(unk_count - 1) * field43_0x5c` (set once; ASSUMED a random fraction at spawn). Ring particles (type 1) are not stepped here.
+- The renderers 3 / 4 read the UV list of the texture the same way (`render_particle_renderer3`, dump 816525: the four floats per entry at `+0x10`, count at `+0xc`).
+
+**Verdicts** (Forest 1 spec, by eye; the scenes vary between runs):
+- Gifoie at 600 ms: before, flat yellow sheets with dotted squares; after, yellow-orange glowing sparks with the same spiral layout, no dotted squares. The big yellow planes near the caster remain (the emitter sizes follow the exe's formula; not traced further).
+- Gibarta at 600 ms: before, white speckled hard-edged blocks; after, a soft white cloud at the target (no grid).
+- Barta: not re-checked in this pass (no cube seen in the new frames; the earlier cube is not reproduced).
+- Rabarta: before, large white / grey planes with cyan edges covering the view at 600 ms; after, the capture had no visible cast (the character was at 12 HP and the wave had moved), so inconclusive. The planes are the model particles (flag 0x20, BML chunks 2..4) and were not changed.
+
+**ASSUMED.** The 16-frame list is a uniform 4 x 4 row-major grid (its floats are built at run time). The flag 0x10 fraction is a random draw at spawn (`field43_0x5c` is not traced). The draw order of the frame and the sprite's rotation are as the renderer's (the streak entries 0xac are not changed).
+
+**Checks.**
+- `node tests/particleframes.test.ts`: all passed (new: the table's counts, the grid's rectangles, one step per update with the wrap, a one-frame texture, flag 0x10, the canvas source rectangle).
+- `node tests/particleslope.test.ts`: ALL PASS.
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .`: exit 0 (Node 24).
+- `PW_BASE_URL=http://127.0.0.1:5181 npx playwright test e2e/techvisuals.spec.ts`: 1 passed (8 casts), frames read; the harness's `test-results` is removed after the run.
+
+**Left.**
+- Barta's translucent blue cube, far above the enemy: the cast height (feet + WEAPON_HEIGHT, then the floor + 5 once the ground is known) and the tier 5 model entries 0x193 / 0x1d8 / 0x1d7 (BML model 0, motion 0) are not traced against `create_particle_effect5` (dump 640449 ff.) yet.
+- Rabarta's model planes (BML chunks 2..4 at the cast point): the model's alpha and colour chain (`ParticleEffectSingleParticle_SetColor_00508958`, `g_CurrentTargetColor`, dump 850240: an alpha below 0 skips the opaque pass, which the coordinator noted) are not ported; the planes stay as the port's shade.
+- The emitter sizes of the big Gifoie sheets (renderer 3 half 16 x size) are the exe's formula but were not checked against a capture at a known distance.
