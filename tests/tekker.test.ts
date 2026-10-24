@@ -5,7 +5,9 @@
 // Run: node tests/tekker.test.ts
 import {
   COUNTER_MENUS,
+  ITEM_PICTURE,
   MSG,
+  SHOP_DETAIL,
   TEKKER,
   TEKKER_FEE,
   TEKKER_RESULT_TITLE,
@@ -284,6 +286,16 @@ eq(
   [0x52, 0x1f7, 0x1f8, 0x1f8, 0x10, 0, null],
   'weapon: name id - 0x5f inside 0xb1..0x256, else 0x1f8; tool: its id below 0x52, else 0; armor: none',
 );
+// The windows the Result draws: GUI table 0x00971f40 + id * 8. The picture window 0x32 is
+// (124, 98) at 0x009720d0 and 160 x 120 from the template at 0x00971018. The description
+// window 0x29 is (400, 50) at 0x00972088, 240 x 184 (ShopDialog's detail). Read with
+// tools/exedata.py read 009720d0 f 2 and 00972088 f 2.
+eq(
+  [ITEM_PICTURE.x, ITEM_PICTURE.y, ITEM_PICTURE.w, ITEM_PICTURE.h],
+  [124, 98, 160, 120],
+  'picture window 0x32 (exe GUI table, template 0x00971018)',
+);
+eq([SHOP_DETAIL.x, SHOP_DETAIL.y, SHOP_DETAIL.w, SHOP_DETAIL.h], [400, 50, 240, 184], 'description window 0x29 (exe GUI table)');
 
 // --- the jingles and the picture (BGM j_kantei.adx / miniclear.adx; window 0x32) ---
 {

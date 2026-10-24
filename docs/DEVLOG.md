@@ -17754,3 +17754,29 @@ Trap Vision (tool, item 8):
 - Draw the 0xC panel in the MAG window with the page byte (states 5 / 0xC) and the candidate rows; the Chrome check then goes with it.
 - Decode the initial page value, the info page (0x726780), the tool's panels, and the counter format.
 - Resist candidates from `PlayerRecalculateStats_0068e030` out[6..10].
+## 2026-10-23: Tekker Result reference (11.png): the black box is the picture window; page 2/3 is not in the exe
+
+**What changed:** no code change in `classic/`. The premise in the reference is checked: the black box under the item row is the picture window 0x32 (the ItemKTep4 picture the port already draws, `classic/shop.ts` `drawPicture`), not a 3D object, and it does not rotate. The right panel with Native / A.Beast / Machine / Dark / Hit (page 2/3) has no code path in PsoBB.exe, so it is not ported. `tests/tekker.test.ts` pins the two window rects against the exe's GUI table. `client/e2e/tekker-result.spec.ts` (new) and `client/e2e/fresh-field.ts` (`weapon` option: an unidentified weapon in the last inventory slot, `UNIDENTIFIED_WEAPON`) are the Playwright check; the spec does not reach the Result yet (see "Playwright").
+
+**Window geometry (the reference's crop):** the picture window 0x32 is (124, 98), 160 x 120 (`0x009720d0` = (124, 98), template `0x00971018` = 160.0 / 120.0; `tools/exedata.py read 009720d0 f 2`). The reference's black box is 160 x 120 and its top is 30 px above 98 in the image, which fits a crop of the 640 x 480 screen. The description window 0x29 is (400, 50), 240 x 184 (`0x00972088`). In the reference its top edge is about 2 px above 50 in the same crop.
+
+**Exe evidence:**
+- Native / A.Beast / Machine / Dark / Hit are unitxt group 11 0xb5..0xb9 (`ItemAttributesPanel_Update_00726ee2`, 0x00726ee2, named dump lines ~690888..690930). Its five elements take the candidate item's attribute pairs (`ItemAttributesPanel_UpdateDisplayWithCallback_00726cf0`, pairs of type 1..5 and value, the item's data1 bytes 6..11) and the current values (`set_current_equip_value`).
+- The row format is `UIElement_DisplayItemAttribute_0072d330` (0x0072d330): label, colon, the current value, then the arrow "→" and the new value when flag 0x8 is set; the new value is coloured by the same rule as the equipment panel (`VALUE_COLOR.higher` = 0xffdd8c41, the orange of the reference). `classic/itemdetail.ts` already has these colours and the arrow rule for its six rows.
+- **Neither routine is referenced in PsoBB.exe:** no `call` / `jmp` to 0x726ee2 or 0x72d330 in the disassembly (`/private/tmp/.../scratchpad/exe.s`), no absolute immediate or data-table entry of either VA, no RVA (the search covered the whole file). Other panel routines do appear in data (for example 0x007258dc at file offset 0x326406, 0x00726ff0 at 0x5f1144), so the search works. Within this build the Native..Hit page is dead code, and the Result's description window (0x29) has no content routine that reaches it.
+- The description window 0x29 is created in state 3 (FUN_006d9d94, `CreateEquipListWindowObject_00725d18`, a list window of 0xb4 bytes). The port draws no description in the Result (`detail: false` in `TekkerCounter`), so the Result shows the picture only. The earlier entries' "2D list window" finding stands.
+
+**Ported:** nothing new. The 3D object stays removed (the entry above, 2026-10-23 "Tekker Result shows no 3D item object").
+
+**ASSUMED:**
+- The reference is from a build or a client whose Result has the page 2/3 panel (the arrows "◀◀ 2/3 ▶▶" are not traced in the exe). The exe here is the Ephinea 1.25.13 `PsoBB.exe` the other entries use.
+- The picture window's frame: the reference's black box has no visible frame, while the port draws `drawWindowFrame` around it. Not decided from the exe (the template's frame draw is not traced).
+
+**Tests:** `node tests/tekker.test.ts` (Node 24) passes with the new window-rect checks (picture 0x32 and description 0x29 against the GUI table). `cd client && node_modules/typescript/bin/tsc --noEmit -p .` (Node 24): run before the commit, see the commit message.
+
+**Playwright (one screenshot spec, per the brief):** the spec logs in, makes the character offline with 300 meseta and the unidentified weapon, enters the party field (Pioneer 2), and walks to the tekker (talk action 1009). In this environment the talk does not open any counter: `client/e2e/pioneer2-shop.spec.ts` (the item store, action 1008) fails at the same step with the same placement, so the cause is the environment (the bridge or newserv), not the tekker. No Result screenshot was taken, so the comparison with the reference is not done. Linked `vendor` and `client/node_modules` for the run were removed; `client/test-results` was deleted.
+
+**Left:**
+- The Result's page 2/3 panel and the arrows: only if another build's code is found (not in PsoBB.exe).
+- The picture frame against the reference (ASSUMED above): compare once the talk step works.
+- The talk step of the e2e in this environment (the same failure as `pioneer2-shop.spec.ts`).
