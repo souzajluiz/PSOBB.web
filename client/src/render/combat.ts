@@ -47,7 +47,7 @@ import {
   armPackHowl,
 } from '../combat/enemyfsm.ts';
 import { GrassAi, NanoDragonAi } from '../combat/enemyfsmcaves.ts';
-import { PanArmsAi, PanHalfAi, SlimeAi, SlimeArm, SlimeControl, type PanEvent } from '../combat/enemysplits.ts';
+import { PanArmsAi, PanHalfAi, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, type PanEvent } from '../combat/enemysplits.ts';
 import { CanadineAi, CananeAi, DubchicAi, GaranzAi, SinowAi, SINOW_MIRAGE, type SinowEvent } from '../combat/enemyfsmmines.ts';
 import { DUBWITCH, DubwitchAi } from '../combat/dubwitch.ts';
 import { BELRA, BelraAi, BringerAi, BulclawAi, ClawAi, delLilyMegid, DelsaberAi, GunnerAi, GunnerControl, SORCERER, SorcererAi, SorcererBitAi, type BulclawEvent, type HealAlly } from '../combat/enemyfsmruins.ts';
@@ -5847,7 +5847,7 @@ export class CombatView {
     }
   }
 
-  private async spawnSlime(control: EnemyRuntime, c: SlimeControl, x: number, z: number, angle: number, thrown: boolean): Promise<EnemyRuntime | null> {
+  private async spawnSlime(control: EnemyRuntime, c: SlimeControl, x: number, z: number, angle: number, thrown: boolean, throwAngle?: number | undefined): Promise<EnemyRuntime | null> {
     const k = c.take();
     if (k < 0) return null;
     // Rare = param6 & 1 (ASSUMED, as the Rappy's): the puddle's morph motion.
@@ -5864,6 +5864,7 @@ export class CombatView {
       angle,
       movement: this.difficultyParams?.params ? this.difficultyParams.params.movement(this.difficultyParams.difficulty, 0x30) : null,
       thrown,
+      throwAngle,
       rare,
       rng: () => this.rng(),
       // Without a map the crawl keeps the brain's flat-ground default.
@@ -5902,7 +5903,10 @@ export class CombatView {
     const control = e.parent;
     if (!control || !(control.ai instanceof SlimeControl) || !control.ai.slots.includes('free')) return;
     const p = e.instance.root.position;
-    const r = await this.spawnSlime(control, control.ai, p.x, p.z, e.instance.root.rotation.y, true);
+    // The copy's heading: 0x00597914 takes ROUND(65535 * rand) as a short BAMS angle,
+    // the direction is (sin, 0, cos) of it (ASSUMED: the exe's rand is this.rng).
+    const throwAngle = ((Math.round(65535 * this.rng()) & 0xffff) / 0x10000) * Math.PI * 2;
+    const r = await this.spawnSlime(control, control.ai, p.x, p.z, e.instance.root.rotation.y, true, throwAngle);
     if (r) this.opts.log(`${what}: E-${e.index.toString(16)} (${e.slot.type}) splits into E-${r.index.toString(16)}`);
   }
 
@@ -6616,10 +6620,8 @@ export class CombatView {
     this.strike = { attackType, step };
     for (const e of hit) {
       if (attackType === 2) {
-        const hits = e.ai instanceof SlimeAi ? e.ai.hits : 0;
+        // The special's hits take the split in applyEnemyHit (0x00597914, the combo step).
         this.specialHit(e, attacker, step);
-        // 0x00597914: a landed hit of attack type 2 splits a Pofuilly Slime.
-        if (e.ai instanceof SlimeAi && e.ai.hits > hits && !e.dead) void this.splitSlime(e, 'special attack');
         continue;
       }
       let damage = 0;
@@ -7162,7 +7164,12 @@ export class CombatView {
     const p = e.instance.root.position;
     this.num(damage, critical, p.x, p.y + 26, p.z);
     // The enemy turns on its attacker (unknown_enemy_behavior_4).
+    // 0x00597914 (the took-damage handler): the combo step 2 of the attacker (this.strike) splits a
+    // Pofuilly Slime that is not flinching; the split is made after its flinch (the order is free: the copy
+    // takes the body's spot, not the hit).
+    const slimeSplit = e.ai instanceof SlimeAi && slimeSplitsOnHit(e.ai.state, this.strike?.step, damage, byPlayer, (flags & FLAG_DEAD) !== 0);
     if (damage >= 1 && me && byPlayer) e.ai?.onDamage(me.clientId);
+    if (slimeSplit) void this.splitSlime(e, 'the combo step 2 hit');
     // The Pofuilly's no-damage hit: EntityHitEntity sets +0x30 0x100 and the generic
     // path (0x00543efb) calls its slot +0xfc, state 11 (SlimeAi.hitNoDamage).
     if (e.ai instanceof SlimeAi && byPlayer && !landed) {

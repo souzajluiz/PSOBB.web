@@ -3,7 +3,7 @@
 // and Resta, merge); the Pofuilly Slime's puddle / rise / crawl cycle, its
 // spit and arm, its flinch, and the control's four-slot budget.
 // Run: node tests/enemysplits.test.ts
-import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
+import { HALF, PAN, PAN_BOLT, PAN_WAVE, PanArmsAi, PanArmsShot, PanHalfAi, PUDDLE_MOTION, SLIME, SlimeAi, SlimeArm, SlimeControl, slimeSplitsOnHit, SlimeSpit, SLIME_MORPH, SPIT } from '../client/src/combat/enemysplits.ts';
 import type { AiFrame, AiTarget } from '../client/src/combat/enemyai.ts';
 import type { EnemyMovementData } from '../client/src/formats/battleparams.ts';
 
@@ -528,6 +528,25 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   for (let i = 1; i <= 16; i++) armFar.tick([], []);
   eq(armFar.tick([], [{ ...mon, x: 5 }]).length, 1, 'arm: a frame-17 hit on an enemy');
   eq(new SlimeArm(0, 0, 0).tick([], [mon]).length, 0, 'arm: nothing before frame 17');
+}
+
+// --- Pofuilly Slime's split gate (0x00597914) and the copy's heading --------------------
+{
+  // A landed hit by a player on combo step 2 splits a slime that is not flinching.
+  check(slimeSplitsOnHit('emerge', 2, 5, true, false), 'split: a landed step-2 hit on an emerged slime');
+  check(slimeSplitsOnHit('puddle', 2, 5, true, false), 'split: the gate tests only flinch and death, not the puddle');
+  check(!slimeSplitsOnHit('flinch', 2, 5, true, false), 'split: no split while flinching (state 12)');
+  check(!slimeSplitsOnHit('emerge', 1, 5, true, false), 'split: combo step 1 does not split');
+  check(!slimeSplitsOnHit('emerge', 0, 5, true, false), 'split: combo step 0 does not split');
+  check(!slimeSplitsOnHit('emerge', undefined, 5, true, false), 'split: no attacker strike, no split');
+  check(!slimeSplitsOnHit('emerge', 2, 0, true, false), 'split: a hit that does no damage does not split');
+  check(!slimeSplitsOnHit('emerge', 2, 5, false, false), 'split: a hit that is not the local player does not split');
+  check(!slimeSplitsOnHit('emerge', 2, 5, true, true), 'split: a killing hit does not split (the is_dead branch)');
+  // The copy is thrown with the exe's heading: vx = sin, vz = cos of it.
+  const t = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, throwAngle: Math.PI / 2, rng: () => 0.5 });
+  eq(t.state, 'thrown', 'a split copy starts thrown (state 14)');
+  t.tick([]);
+  check(Math.abs(t.x - 1) < 1e-9 && Math.abs(t.z) < 1e-9, `the copy moves along (sin, cos) of its heading: ${t.x}, ${t.z}`);
 }
 
 if (failures) {
