@@ -51,7 +51,7 @@ import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -93,6 +93,8 @@ export class QuestTown {
   private readonly npcAi = new NpcAi();
   // The attack AI of the NPCs this client owns, by slot (quest/npcai.ts NpcAttackAi).
   private readonly npcAttacks = new Map<number, NpcAttackAi>();
+  // The move sends of those NPCs (quest/npcai.ts NpcMoveSender), by slot.
+  private readonly npcMoves = new Map<number, NpcMoveSender>();
   // The head's action chooser of those NPCs (quest/npcai.ts NpcHeadChooser), by slot.
   private readonly npcHeads = new Map<number, NpcHeadChooser>();
   private counterOpen = false;
@@ -699,6 +701,7 @@ export class QuestTown {
     if (this.game.players.get(slot)?.npcTemplate === undefined) return;
     this.npcAi.remove(slot);
     this.npcAttacks.delete(slot);
+    this.npcMoves.delete(slot);
     this.game.removeLocalPlayer(slot);
   }
 
@@ -720,13 +723,20 @@ export class QuestTown {
       const leader = this.game.players.get(st.leader);
       if (!leader) continue;
       const goal = followPoint(p.position, leader.position);
+      let sender = this.npcMoves.get(slot);
+      if (!sender) {
+        sender = new NpcMoveSender();
+        this.npcMoves.set(slot, sender);
+      }
       if (goal.x === p.position.x && goal.z === p.position.z) {
+        sender.reset();
         if (p.moving) {
           p.moving = false;
           this.game.notifyMoved(p);
         }
         continue;
       }
+      const dist = Math.hypot(goal.x - p.position.x, goal.z - p.position.z);
       const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
       followTick(f, goal.x, goal.z, false);
       p.position = { x: f.x, y: leader.position.y, z: f.z };
@@ -735,6 +745,13 @@ export class QuestTown {
       p.gait = 'walk';
       p.floor = leader.floor;
       this.game.notifyMoved(p);
+      // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id). The exe
+      // sends the head's move target; the port sends the NPC's position after its step (ASSUMED).
+      const row = npcAttackRow(p.npcTemplate);
+      if (st.owner && row) {
+        const send = sender.tick(dist, row.leash);
+        if (send) this.game.sendNpcMove(slot, send === 'run', p.position.x, p.position.z);
+      }
     }
   }
 
@@ -849,6 +866,7 @@ export class QuestTown {
     if (!session) {
       this.npcAi.clear();
       this.npcAttacks.clear();
+      this.npcMoves.clear();
       for (const [id, p] of [...this.game.players]) if (p.npcTemplate !== undefined) this.game.removeLocalPlayer(id);
     }
   }

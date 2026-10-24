@@ -15156,3 +15156,38 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 1. The Chat > Shortcut editor window (menu 0x11): the slot list (16 rows, `ChatShortcutMenu_SubList_Refresh_00755640`), the action rows, the text window at +0x44 (the keyboard control, the 0x50-character limit), the type choice (text / symbol / word select: not traced), the confirm and clear sub-windows, and the leaf's destructor send (`sendChatShortcuts`, to be called on the leaf's close when changed). The leaf stays a logged no-op.
 2. The receive of 6x74 (`handle_packet0x60_subcommand0x74`, the word-select window): needs the word table (newserv's `ws_data.bin` per version, not in the port's data).
 3. The lobby symbol sender (the record's type 3 in the lobby still sends nothing).
+## 2026-10-23: NPC players' move sends (6x40 walk / 6x42 run) on the head's state-1 rules
+
+**Question:** the ROADMAP's "NPC players' attack AI" line: the movement toward the target (speed, path), the 6x packets the leader sends, and the follow when there is no target.
+
+**Premise check (exe):** the brief said the attack damages through the normal hit path or a special one. The exe does not damage with it: ExecuteAttack casts Resta (0xf), Anti (0x10) and Reverser (0x11) (DEVLOG 2026-10-23 wired entry). No hit path is involved.
+
+**Exe evidence (dump `src/Psobb.exe-05112026.c`; names are community guesses, bodies used):**
+- Update gate (`SinowberillChallengePlayer_Update_007aefd4`, `.c:794690`): the AI runs only when both records resolve and the NPC's leader (+0x750) is not 0xffff. The owner's state word 0x30 with 0x800 takes a second branch (the head's timer path, `.c:794720..794746`); not ported.
+- The state-1 send (`SinowberillHead_AIUpdateState_007b2764`, `.c:796990..797035`): with the head's move target (+0xac / +0xb4) at xz distance `d` from the NPC: `d <= 1.0` (DAT_0097dd2c) sends nothing; else when `+0x40 < d` the run `SinowberillHead_SendMove_007b29f0` (6x42) is sent and flag 0x8 is set; else when flag 0x8 is clear the walk start `SinowberillHead_SendMoveStart_007b298c` (6x40), otherwise the run. The flag is cleared on a tick when the head is not in state 1. The 6x40 is sent with the flags word 8 when the NPC's +0x30 has 0x100000 (not ported).
+- Packet layout (`checked_call_packet0x60_subcommand`): 6x40 = action 0x40 (`move_start = 64`, dump enum `input_state_1`), size 4 dwords, caster id = B +0x8a (the NPC's client id, u16 at +2), x f32 at +4, z f32 at +8, flags u32 at +12. 6x42 = action 0x42 (`move = 66`), size 3, the same without flags.
+- Leash (+0x40 of the head): constructor `.c:794405` copies stat row float k=4 (`DAT_00a02eb0 + template * 0x28`). Row values read with `tools/exedata.py`: rows 0..5 = 13 / 15 / 15 / 18 / 15 / 15. Row k=3 is 10 for every row (not used).
+- The attack's casts: `HandlePlayerTechCastState_007b2bc0` (`.c:797207`): Resta / Anti put the owner's id in the target list, Reverser takes B's own target list (+0x7c / +0x84), and each cast is gated by `CheckPlayerTechCastEligibility_0069a088`. The cast state is 0x16 for 0xf / 0x10, 0x17 for 0 / 3 / 6 and 2 otherwise.
+- Idle head: `SinowberillHead_UpdateState_007b00bc` (`.c:795537..795539`): with no second target, the head's anchor (+0xdc) is set to the NPC's own player position (B's +0x38). So the exe's idle head does not walk the NPC to its leader; the walk toward the leader is in the far / attack path (`UpdateAttackTarget_007b0fdc`, `CheckPathAndTarget_007b086c`), not traced.
+- Movement helper: `SinowberillHead_AIUpdateMovement_007b1298` (`.c:796204`) aims at the midpoint of the NPC and its anchor (k = 0.5, DAT_0097dd84), checks walls with `cast_ray_at_map_collision_geometry` (flags 0x2100) and steers round them with `CalculateAvoidanceTarget_007b23a4`, `AdjustTargetForCollision_007b25c0`, `CalculateTarget_007b193c`; not ported.
+
+**Ported:**
+- `quest/npcai.ts`: `NPC_ATTACK_ROWS` gains `leash`; `NpcMoveSender` (the send choice: no send at <= 1.0, run beyond the leash or once a run was sent, walk otherwise; `reset()` when not moving); `NPC_MOVE_WALK` 0x40, `NPC_MOVE_RUN` 0x42.
+- `net/game.ts`: `buildNpcMove(npcId, run, x, z)` (the exe layout above) and `sendNpcMove`.
+- `quest/town.ts` `stepNpcFollowers()`: for a follower this client owns (`st.owner`) with a stat row, the send is decided from the distance to the follow point before the step; the packet carries the NPC's position after the step. `npcMoves` per slot, cleared with `npcAttacks`.
+- `tests/npcai.test.ts`: the leash values, the sender's sequence (no send, walk, run, run continues, reset), the 6x40 / 6x42 bytes, and source checks of the town wiring and `sendNpcMove`.
+
+**Not ported (the ROADMAP line stays open):**
+- The head's movement target (AIUpdateMovement_007b1298: the midpoint, the wall branches, the avoidance and the path, `CheckPathAndTarget_007b086c`, `UpdateAttackTarget_007b0fdc`). The port's walk is still `followTick` toward `followPoint` (3 units from the leader).
+- The head's state dispatch beyond state 1 (`AIUpdateState_007b267c` move-needed gate: the squared distance above DAT_0097dd34 = 100, the 0x4000 path flag; state 2 cast, state 8 attack).
+- The cast timing: the cast states 0x16 / 0x17 and the release (the busy ticks are still ASSUMED charge + cast).
+- The 0x100000 flag (the 6x40 flags word) and the 0x800 downed branch.
+
+**ASSUMED:**
+- The packet's x / z: the exe sends the head's move target, the port sends the NPC's position after its own step (the other clients set the NPC's position from it, so they follow the owner's steps).
+- The walk / run choice uses the port's follow distance (3 units from the leader) against the leash, so the port sends walks and never a run while the leader stays put. The exe's target is different.
+- The owner's client is the only sender (the exe's AI object lives on the owner); the other clients still simulate their followers locally, and the packets correct them.
+- The head's run flag is set by the run send and cleared when the NPC does not move this tick.
+- The 6x40 flags word is 0 (the 0x100000 bit of the NPC's +0x30 is not read).
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`client/node_modules` symlinked to the main checkout's for the run, removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.

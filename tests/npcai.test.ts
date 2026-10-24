@@ -20,8 +20,10 @@ import {
   NPC_FLAG_FOLLOWER,
   followPoint,
   npcAttackRow,
+  NpcMoveSender,
   pickAttackTarget,
 } from '../client/src/quest/npcai.ts';
+import { buildNpcMove } from '../client/src/net/game.ts';
 import { questOpcodeByName } from '../client/src/formats/questopcodes.ts';
 import { boxTargetable } from '../client/src/formats/enemyboxes.ts';
 import { QuestVM } from '../client/src/quest/vm.ts';
@@ -241,6 +243,27 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
     if (c.action === 3) seen3 = true;
   }
   check(!seen3, 'the chooser never writes action 3');
+}
+
+// --- the NPC's move sends (exe: SinowberillHead_AIUpdateState_007b2764 state 1 .c:796990..797035,
+// SendMoveStart_007b298c .c:797061, SendMove_007b29f0 .c:797089; leash = stat row k=4)
+{
+  check(npcAttackRow(0)?.leash === 13 && npcAttackRow(3)?.leash === 18, 'stat rows: the leash (k=4) is 13 for row 0 and 18 for row 3 (exe 0x00a02eb0)');
+  const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  const s = new NpcMoveSender();
+  check(s.tick(1.0, 15) === null && s.tick(0.5, 15) === null, 'a target within 1.0 of the NPC sends nothing (DAT_0097dd2c)');
+  check(s.tick(2, 15) === 'walk' && s.tick(2, 15) === 'walk', 'near the leash the walk start (6x40) is sent each tick, the run flag is not set');
+  check(s.tick(20, 15) === 'run', 'beyond the leash a run (6x42) is sent and sets the run flag');
+  check(s.tick(2, 15) === 'run', 'with the run flag set, the moves that stay near the leash are runs too');
+  s.reset();
+  check(s.tick(2, 15) === 'walk', 'a tick without a move clears the run flag (the next move walks again)');
+  check(hexOf(buildNpcMove(0x1234, false, 1.5, -2)) === '40043412' + '0000c03f' + '000000c0' + '00000000', '6x40 for an NPC: header 40 04, caster id, f32 x, f32 z, u32 flags 0 (16 bytes)');
+  check(hexOf(buildNpcMove(0x1234, true, 1.5, -2)) === '42033412' + '0000c03f' + '000000c0', '6x42 for an NPC: header 42 03, caster id, f32 x, f32 z (12 bytes)');
+  const townSrc = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(/sendNpcMove\(slot, send === 'run', p\.position\.x, p\.position\.z\)/.test(townSrc), 'the owner sends the NPC move from stepNpcFollowers (town.ts)');
+  check(/if \(st\.owner && row\)/.test(townSrc), 'only the owner sends the NPC move');
+  const gameSrc = readFileSync(join(HERE, '../client/src/net/game.ts'), 'utf8');
+  check(gameSrc.includes('this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z))'), 'game.ts sendNpcMove builds the 6x40 / 6x42 packet');
 }
 
 if (failures) {

@@ -165,28 +165,30 @@ export function followPoint(
 // npcAttackCast below: Resta, Anti, Reverser, none of them a hit on an enemy).
 //
 // Stat row 0x00a02ea0 + template * 0x28 (10 floats; exe read with tools/exedata.py,
-// rows 0..5). Float index k is at +4k: k=2 acquire range (+0x38), k=5 far radius
-// (+0x44), k=6 attack radius (+0x48). Rows 6+ are not read.
-//   row: acquire / far / attack
-//   0: 100 / 30 / 30    1: 100 / 35 / 25    2: 100 / 40 / 30
-//   3: 120 / 40 / 30    4: 100 / 40 / 30    5: 100 / 30 / 30
+// rows 0..5). Float index k is at +4k: k=2 acquire range (+0x38), k=4 move leash (+0x40,
+// copied into the head record by the constructor, .c:794405), k=5 far radius (+0x44),
+// k=6 attack radius (+0x48). Rows 6+ are not read.
+//   row: acquire / leash / far / attack
+//   0: 100 / 13 / 30 / 30    1: 100 / 15 / 35 / 25    2: 100 / 15 / 40 / 30
+//   3: 120 / 18 / 40 / 30    4: 100 / 15 / 40 / 30    5: 100 / 15 / 30 / 30
 // ASSUMED: the first two floats of each row are integer fields (they read as tiny
 // denormals) and are not used here.
 
 export interface NpcAttackRow {
   acquireRange: number;
+  leash: number; // head +0x40: the run threshold of the move sends (NpcMoveSender)
   farRadius: number;
   attackRadius: number;
 }
 
 // The stat rows read from the exe (see the comment above).
 export const NPC_ATTACK_ROWS: readonly NpcAttackRow[] = [
-  { acquireRange: 100, farRadius: 30, attackRadius: 30 },
-  { acquireRange: 100, farRadius: 35, attackRadius: 25 },
-  { acquireRange: 100, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 120, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 100, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 100, farRadius: 30, attackRadius: 30 },
+  { acquireRange: 100, leash: 13, farRadius: 30, attackRadius: 30 },
+  { acquireRange: 100, leash: 15, farRadius: 35, attackRadius: 25 },
+  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 120, leash: 18, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30 },
+  { acquireRange: 100, leash: 15, farRadius: 30, attackRadius: 30 },
 ];
 
 // The 6x69 template index is the stat row (+0x2c = param3). Null for rows not read.
@@ -259,6 +261,44 @@ export class NpcAttackGate {
     }
     this.counter = 0;
     return targetDistSq < row.attackRadius * row.attackRadius;
+  }
+}
+
+// --- the NPC's move sends (SinowberillHead_AIUpdateState_007b2764 state 1, .c:796990..797035) ---
+//
+// While the head is in state 1 (move) the owner's client sends the NPC's walk toward the head's
+// move target (+0xac / +0xb4) each tick: no send when the target is within 1.0 of the NPC
+// (DAT_0097dd2c, .c:797009); a run (6x42, SendMove_007b29f0) when the target is further than
+// the leash (+0x40, row k=4) and then the head's run flag 0x8 is set; otherwise a walk start
+// (6x40, SendMoveStart_007b298c), repeated each tick while the flag is clear (the walk start
+// does not set it). The flag is cleared on a tick when the head is not in state 1 (.c:797032).
+// The 6x40 carries a flags word (8 when the NPC's +0x30 has 0x100000, ASSUMED near-enemy; the
+// port sends 0). The send rules and the packet layout are exe-read. In the exe the packet's x / z
+// are the head's move target; the port sends the NPC's own position after its step (ASSUMED,
+// see quest/town.ts stepNpcFollowers).
+export const NPC_MOVE_WALK = 0x40; // action_type move_start = 64 (dump enum input_state_1)
+export const NPC_MOVE_RUN = 0x42; // action_type move = 66
+export const NPC_MOVE_STOP_DISTANCE = 1.0; // DAT_0097dd2c (.c:797009)
+
+export type NpcMoveSend = 'walk' | 'run';
+
+export class NpcMoveSender {
+  // Head +0x80 bit 0x8: a run was sent in this move.
+  private running = false;
+
+  // The send for this tick, or null when the target is already reached.
+  tick(dist: number, leash: number): NpcMoveSend | null {
+    if (dist <= NPC_MOVE_STOP_DISTANCE) return null;
+    if (leash < dist) {
+      this.running = true;
+      return 'run';
+    }
+    return this.running ? 'run' : 'walk';
+  }
+
+  // The head is not moving this tick (the flag 0x8 is cleared when the state is not 1).
+  reset(): void {
+    this.running = false;
   }
 }
 
