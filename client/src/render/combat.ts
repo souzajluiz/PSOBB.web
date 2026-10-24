@@ -153,7 +153,14 @@ import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain,
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type BattleParamKind, type EnemyAttackData } from '../formats/battleparams.ts';
-import { ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
+import { ENEMY_TYPE_NAMES, ENEMY_TYPE_PARAMS } from '../formats/entitynames.ts';
+import { BmlArchive } from '../formats/bml.ts';
+import { modelTriangles } from '../formats/minimap.ts';
+import { parseNinjaChunkFile } from '../formats/njcm.ts';
+import { parseUnitxt } from '../classic/charcreate_text.ts';
+import { graveKillerId } from '../quest/cmodegrave.ts';
+import { reticleRow } from '../combat/reticle.ts';
+import { targetCardText, type TargetCardText } from '../combat/targetcard.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
 import { parseItemPMT, type ItemPMT, type WeaponRange } from '../formats/itempmt.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
@@ -790,7 +797,11 @@ export class CombatView {
       // should_do_confused_movement: confused (flag 0x10) in an unsafe map.
       confused: this.status.has(STATUS.confusion) && inUnsafeMap(this.area),
     });
-    this.overlay ??= new CombatOverlay(this.viewer.scene);
+    if (!this.overlay) {
+      this.overlay = new CombatOverlay(this.viewer.scene);
+      void this.loadReticleModels();
+    }
+    this.loadUnitxtText();
     this.hpReadout ??= this.makeHpReadout();
     if (!this.hud) {
       this.hud = new PlayerHud(this.viewer, this.files);
@@ -850,7 +861,7 @@ export class CombatView {
     if (lock && this.overlay) {
       const p = s.drawnPosition(lock.instance.root, this.reticleAt);
       p.y += 22;
-      this.overlay.setTarget(p);
+      this.overlay.setTarget(p, { row: reticleRow('enemy'), camera: this.viewer.camera });
     }
   }
 
@@ -5722,7 +5733,8 @@ export class CombatView {
     if (!view || !me || !this.overlay) return;
     const from = view.playerPositions().get(me.clientId);
     if (!from || this.damage.dead) {
-      this.overlay.setTarget(null);
+      this.overlay.setTarget(null, { row: 0, camera: this.viewer.camera });
+      if (this.hud) this.hud.targetCard = null;
       this.lockOn = null;
       return;
     }
@@ -5740,7 +5752,57 @@ export class CombatView {
       bestSq = d;
     }
     this.lockOn = best;
-    this.overlay.setTarget(best ? { x: best.instance.root.position.x, y: best.instance.root.position.y + 22, z: best.instance.root.position.z } : null);
+    this.overlay.setTarget(best ? { x: best.instance.root.position.x, y: best.instance.root.position.y + 22, z: best.instance.root.position.z } : null, {
+      row: reticleRow('enemy'),
+      camera: this.viewer.camera,
+    });
+    if (this.hud) this.hud.targetCard = best ? this.targetCardOf(best) : null;
+  }
+
+  // The lock-on cursor's model: bm_ply_lock_on_cursor.bml (LoadReticleModel_007a41d0),
+  // njcm chunk 0 (obj_f_maincarsol.nj, the triangle) and chunk 2 (obj_f_blackcarsol.nj, the outline).
+  private async loadReticleModels(): Promise<void> {
+    try {
+      const bml = new BmlArchive((await this.files.readFirst(['bm_ply_lock_on_cursor.bml'])).data);
+      const geometry = (name: string): THREE.BufferGeometry => {
+        const model = bml.has(name) ? (parseNinjaChunkFile(bml.get(name)).object?.model ?? null) : null;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(model ? modelTriangles(model) : new Float32Array(0), 3));
+        return g;
+      };
+      this.overlay?.setReticleModels(geometry('obj_f_maincarsol.nj'), geometry('obj_f_blackcarsol.nj'));
+    } catch (err) {
+      this.opts.log(`lock-on cursor unavailable (${(err as Error).message})`);
+    }
+  }
+
+  // The unitxt text tables for the target card (loaded once; the card falls back to
+  // the port's names until they are in).
+  private unitxtLoading = false;
+  private unitxt: string[][] | null = null;
+  private loadUnitxtText(): void {
+    if (this.unitxtLoading) return;
+    this.unitxtLoading = true;
+    void (async () => {
+      try {
+        this.unitxt = parseUnitxt((await this.files.readFirst(['unitxt_e.prs', 'unitxt_j.prs'])).data);
+      } catch (err) {
+        this.opts.log(`target card text unavailable (${(err as Error).message})`);
+      }
+    })();
+  }
+
+  // The target card's text for an enemy (ui_target_window_attribute, combat/targetcard.ts).
+  private targetCardOf(e: EnemyRuntime): TargetCardText {
+    const kind = e.slot.type;
+    const base = (ENEMY_TYPE_NAMES[kind]?.[0] ?? kind).replace(/ \([^)]*\)$/, '');
+    return targetCardText({
+      name: base,
+      attribute: enemyAttribute(kind),
+      floor: this.floor,
+      texts: this.unitxt,
+      monsterId: graveKillerId(kind),
+    });
   }
 
   private selfAnimator() {

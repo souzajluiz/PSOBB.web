@@ -14530,3 +14530,93 @@ The official PSOBB keyboard map was checked row by row. `docs/CONTROLS.md` has t
 - F5..F8 in the field: the windows are lobby-only (the field menu's Guild Card, Simple Mail, Symbol Chat and Team entries are still no-ops there).
 
 **Checks.** `node tests/shortcuts.test.ts`; `fieldhud`, `lobbymenu`, `controls`, `hotbar`, `mobilecontrols`, `fkeys`, `emotes`, `symbolchat`, `options`, `mobileinput` pass; `cd client && tsc --noEmit -p .` clean. Not run in Chrome (no Playwright, per the brief).
+## 2026-10-23: lock-on cursor and target card (the exe's, not the sprite)
+
+**What changed:** The lock-on was a canvas sprite (a yellow ring with four ticks,
+ASSUMED) and had no name anywhere. Now the cursor is the exe's model and the
+card is the exe's target window, for enemy targets:
+- `client/src/combat/reticle.ts`: the exe's constants and colour rows
+  (`RETICLE_BAMS`, `RETICLE_NOTCH`, `RETICLE_COLORS`, the outline threshold, the
+  fallback row), `reticleRow` (kind -> row), `reticleOutlineVisible`.
+- `client/src/render/combatoverlay.ts`: `setReticleModels` builds the cursor
+  from `bm_ply_lock_on_cursor.bml` (the triangle, njcm chunk 0, and its black
+  outline, chunk 2): three copies at 60, 180 and 300 degrees on a circle of 8.75,
+  the outline first, the coloured triangle 0.25 nearer the camera. `setTarget`
+  moves the group to the target, turns it to the camera and sets the row's colour.
+- `client/src/combat/targetcard.ts`: the card's text and colour (attribute index
+  by the exe's flag tests, the attribute colours, the unitxt monster name by
+  collection 8 or 0x10, the labels of group 11).
+- `client/src/render/playerhud.ts`: `targetCard` is drawn on the HUD canvas
+  (640x480 space, the HUD's glyph font) at the bottom left.
+- `client/src/render/combat.ts`: the lock-on sets the cursor and the card each
+  frame; the cursor model and the unitxt text are loaded once per combat view.
+
+**Why:** The user's reference screenshots (vanilla client): a big green
+triangle over the target and three triangles round it (left, right, below), and
+a dark bottom-left card with the name and "Attribute: Native". The port's sprite
+was neither.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump lines are `Psobb.exe-05112026.c`):**
+- `enable_reticle` 575550 (per player, per targeting record: `check_enemy_is_targetable`);
+  `find_targets_for_weapons_and_techs` 785117 -> `create_target_reticles_for_weapon_or_tech`
+  268 (one reticle object per target; the primary target is `some_entity_idx`).
+- `init_reticle` (no dump name; code at 0x007a42a0): notch 8.75 (`0x41 0x0c`
+  dwords at +0x38), colour row from `GetReticleColorIndex_006aba4c`, the
+  fallback row for an unpickable target from 0x009ff620.
+- `PositionAndRenderReticlePrimitives_007a360c` 786060: three rotations 0x2aaa,
+  0x7fff, 0xd554 (60 / 180 / 300 degrees), outline when the opacity is above
+  0x0097cfd4 (0.99999), the model 0.25 further in z, the z offset 0x009ff520 (0.01).
+- `LoadReticleModel_007a41d0` 786594: `LoadBML(5, "bm_ply_lock_on_cursor.bml")`
+  (PTR at 0x009ff650), chunks 0 and 2 as the model and the outline.
+- The colour table `g_ReticleColorTable` at 0x009ff540 (14 rows of opacity,
+  r, g, b; read with `tools/exedata.py read 009ff540 f 56`; the row address is
+  from the init_reticle disassembly: `movl 0x9ff540(,%ebx,8)`, ebx = index * 2).
+- The card: `ui_target_window_attribute` 699426 (the disassembly at 0x731dc0:
+  `push 0xc3`, flag tests 0x40 / 1 / 2 / 4 / 8, `(&monster_attribute_color)[i]`
+  at 0x009f2ed0); `get_gui_position(0x1f)` = (8.0, 437.0) at 0x00972038;
+  height 93.0; `unitxt_get_monster_name` 772723 (collection 8 for floors 0..2, 0x10
+  after); `IsEnemyEligibleForChallengeDisplay_00731afc` 699198 (the 0x20000000 flag).
+- The monster id: `graveKillerId` (quest/cmodegrave.ts, the exe's
+  `set_enemy_name_unitxt_index` immediates).
+
+**ASSUMED.**
+- Reticle colour: row 0 (green) for the lock-on enemy, row 4 for other targets.
+  The exe picks the row from the player's targeting record (`GetReticleColorIndex`
+  over the weapon's 14-entry table), not traced per weapon.
+- The cursor is drawn with its radius 0 (`CalculatePositionTowardsCamera` moves the
+  point by the hitbox radius; the port passes none) and it faces the camera fully
+  (the exe turns it by the view's yaw only).
+- The njcm chunk indices: chunk 0 = `obj_f_maincarsol.nj`, chunk 2 =
+  `obj_f_blackcarsol.nj` (the BML's entry order); the outline's texture is not used
+  (flat black). `obj_f_zakocarsol.nj` (the 8-vertex bar) is not drawn: no exe use found.
+- The card's box: placed from the reference screenshot (top 369, 97 high, the
+  anchor's x), padding 10 and the value gap 4; the exe's window size (unk1 and the
+  text margins) is not traced.
+- The card's name is the unitxt monster name when the kind has an id (`graveKillerId`),
+  else the port's kind name without its variant.
+
+**Left.**
+- The player (ally) target card: `ChallengeMenuObject_UpdatePlayerTarget_0073220c`
+  (699599) uses `QuickMenuUpdatePlayerInfo` (the section ID icon and name, window
+  height 49.0, placed above the gui slot); not ported. The port's lock-on picks
+  enemies only, so a Resta ally's light-blue cursor (screenshot 6) has no target.
+- The card's HP bar: `monster_hp_bar` is set as the window's callback
+  (699447), but the reference card shows no bar; not ported (addon look).
+- The exe's secondary reticles (`render_secondary_reticle_maybe` 786247: black chunk
+  2 then the table colour chunk 1 for a reticle on the other targets): not ported.
+- The "EXP+5" floating text over the killed enemy in screenshot 5 (magenta): the
+  drawer was not traced this session (`display_floating_text_effect_numeric` is
+  the hit numbers' drawer, the EXP text is in `expPopup`).
+- `client/e2e/lockon.spec.ts` FAILS in this run: login, Forest 1 and the warp
+  work, but Forest 1's enemies are never drawn (their `instance.root.visible` stays
+  false and the minimap shows them as red dots), so `updateLockOn` has no target.
+  Not resolved: whether the enemies are culled by the room or the dev data, and
+  whether the same happens in Chrome (not checked). The spec places the player with
+  `GameView.placePlayer` and sets `game.self.angle`, as `guns.spec.ts` does.
+
+**Checks.** `node tests/reticle.test.ts` (all pass; the cursor-model section reads
+`~/Downloads/psobb-client/data/data.gsl` when present); `node tests/enemystatus.test.ts`
+and `node tests/fieldhud.test.ts` pass; `client`: `npx tsc --noEmit -p .` exit 0.
+Playwright: `npx playwright test e2e/lockon.spec.ts` (one spec, run as the user asked)
+fails at the lock-on step as described above; `test-results/lockon-*` has the failure
+screenshot (no enemies drawn).
