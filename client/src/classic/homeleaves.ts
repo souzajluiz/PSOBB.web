@@ -1,6 +1,7 @@
 // The Home menu leaves that the lobby and the field share (PsoBB.exe
 // handle_player_menu_select, dump Psobb.exe-05112026.c line 700118):
 //   0x0E Guild Card      (GuildCardMenu, guildcardmenu.ts)
+//   0x11 Chat > Shortcut (ChatShortcutMenu, chatshortcutmenu.ts; 03ED on close when an action was picked)
 //   0x12 Symbol Chat     (SymbolChatList, mode 'home', symbolchatlist.ts)
 //   0x13 Simple Mail     (SimpleMailMenu, simplemail.ts; Team Member List > Send Mail: MailCompose)
 //   0x25 Team Member List (TeamMemberListWindow, teammenu.ts; needs a team)
@@ -16,13 +17,14 @@ import type { SimpleMailBox } from '../net/simplemail.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { se } from '../audio/se.ts';
 import { GUILD_SEARCH_OPTION, GuildCardMenu, type GuildCardHost, type UnportedAction } from './guildcardmenu.ts';
+import { ChatShortcutMenu } from './chatshortcutmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { MEET_FRAMES, TeamInfoWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
 import type { WindowSkin } from './stage.ts';
 
-export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x12, 0x13, 0x25, 0x2b]);
+export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x11, 0x12, 0x13, 0x25, 0x2b]);
 
 // What the leaves read from the session: the local player and the other players come from
 // the lobby object (a Game is one: its connection, players and self).
@@ -37,6 +39,8 @@ export interface HomeLeafServices {
   // Guild Card > Search > Meet the User (state 0x25): reconnects with the search result
   // (BBSession.meetUser). Optional: a host without a session leaves the row a no-op.
   meetUser?: (reply: GuildCardSearchResult) => void;
+  // Sends the chat shortcut records (03ED) when the Chat > Shortcut leaf closes after an edit.
+  sendShortcuts?: () => void;
 }
 
 export interface HomeLeafHost extends HomeLeafServices {
@@ -45,6 +49,7 @@ export interface HomeLeafHost extends HomeLeafServices {
 
 export class HomeLeaves {
   private guildCard: GuildCardMenu | null = null;
+  private shortcuts: ChatShortcutMenu | null = null;
   private mail: SimpleMailMenu | null = null;
   private symbolList: SymbolChatList | null = null;
   private teamList: TeamMemberListWindow | null = null;
@@ -65,7 +70,7 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
-    return !!(this.guildCard || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamMail || this.searchMail);
+    return !!(this.guildCard || this.shortcuts || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamMail || this.searchMail);
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -89,6 +94,22 @@ export class HomeLeaves {
           unitxt: text,
         };
         this.guildCard = new GuildCardMenu((i) => text(11, i), host);
+        return true;
+      }
+      case 0x11: {
+        // handle_player_menu_select chat_shortcut_menu (17): the save copy's 16 records.
+        if (!h.fullCharacter()) {
+          console.info('[classic] Chat > Shortcut: no save copy yet');
+          return false;
+        }
+        this.shortcuts = new ChatShortcutMenu({
+          text: (g, i) => text(g, i),
+          full: h.fullCharacter,
+          onClose: (picked) => {
+            // The destructor (CloseAllListMenusAndCleanup_00754ba4): 03ED when an action was picked.
+            if (picked) h.sendShortcuts?.();
+          },
+        });
         return true;
       }
       case 0x12: {
@@ -182,6 +203,9 @@ export class HomeLeaves {
       const m = this.searchMail;
       m.key(e); // its callbacks may clear the field, so the check uses the local
       if (!m.open) this.searchMail = null;
+    } else if (this.shortcuts) {
+      this.shortcuts.key(e);
+      if (!this.shortcuts.open) this.shortcuts = null;
     } else if (this.symbolList) {
       this.symbolList.key(e);
       if (!this.symbolList.open) this.symbolList = null;
@@ -311,6 +335,7 @@ export class HomeLeaves {
   }
 
   drawOther(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+    this.shortcuts?.draw(ctx, skin);
     this.symbolList?.draw(ctx, skin);
     this.guildCard?.draw(ctx, skin);
     this.searchMail?.draw(ctx, skin);
@@ -325,6 +350,12 @@ export class HomeLeaves {
     } catch {
       // ignored: nothing to send on a closed connection
     }
+    try {
+      this.shortcuts?.dispose(); // the destructor's 03ED (a closed connection sends nothing)
+    } catch {
+      // ignored: nothing to send on a closed connection
+    }
+    this.shortcuts = null;
     this.guildCard = null;
     this.mail = null;
     this.teamList = null;

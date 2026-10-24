@@ -88,6 +88,8 @@ export interface LobbyHud {
   infoCols: InfoCol[];
   // The session's full character data (00E7): the option word (options.ts).
   fullCharacter?: () => Uint8Array | null;
+  // The Chat > Shortcut leaf's save (03ED, BBSession.sendChatShortcuts).
+  sendShortcuts?: () => void;
   // The character file (the Trade Window reads the offers and the meseta from it).
   character?: () => CharacterFile | null;
   // Quit Game > Disconnect: the save upload (E7, then 05; BBSession.sendSaveFile).
@@ -216,6 +218,7 @@ export class LobbyScreen implements Screen {
       fullCharacter: () => hud.fullCharacter?.() ?? null,
       team: () => hud.team ?? null,
       meetUser: (reply) => hud.meetUser?.(reply),
+      sendShortcuts: () => hud.sendShortcuts?.(),
     }));
     this.home.onAllClosed = () => {
       this.menu.leafOpen = false;
