@@ -328,8 +328,9 @@ export function toolTabStep(
 // The traps tab (ListWindowObject_ResetAndRefresh_0074b9b4, dump 719825 -> the challenge
 // status items, dump 704479). Five rows, index 0..4. Rows 0..3 are the player's challenge
 // status bytes (+0x89c, SinowberillChallengePlayer_GetStatusOrAction_00698984: signed,
-// 0..20, anything else reads as 0). Row 4 is the Battle Mode trap stock (the player's
-// `last_attack_type` field in the dump, ClampValue_00697958: 0..99, anything else 0).
+// 0..20, anything else reads as 0). Row 4 is the SONAR stock, not a trap stock (2026-10-23
+// premise fix: the player's `last_attack_type` field at +0x8a0 is the sonar count, ClampValue_00697958:
+// 0..99, anything else 0; its use is state 0x11 of ChallengePlayer_StateMachine, see quest/battleitems.ts).
 // A row is shown only when its count is above 0. Its label is unitxt group 0x11, 0x13 + row
 // (ASSUMED: the label text is not read). A row is greyed (flag 0x80) unless the map is safe
 // and not a boss map.

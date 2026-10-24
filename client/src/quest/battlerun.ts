@@ -27,6 +27,7 @@ import {
   type PlaceEntry,
 } from './battle.ts';
 import { BattleHud, RULES_WINDOW } from './battleui.ts';
+import { battleRowAction, type BattleRowAction } from './battleitems.ts';
 import {
   pickRespawn,
   respawnCandidates,
@@ -264,11 +265,30 @@ export class BattleRun {
     return f && f.length >= 0x4dc ? f : null;
   }
 
-  // The sonar's use (the Challenge item list row 5, quest/battle.ts SonarStock). ASSUMED:
-  // the battle's map is a battle map (the port has no map id for the battle arena here),
-  // and no list window is wired to it yet.
+  // The sonar's use (the Challenge item list's menu value 5, quest/battle.ts SonarStock).
+  // ASSUMED: the battle's map is a battle map (the port has no map id for the battle arena
+  // here; the exe needs battle_spaceship or battle_ruins), and the list window is not ported,
+  // so only activateStatusRow calls this.
   useSonar(): boolean {
     return this.sonar.use(true);
+  }
+
+  // A press of a status row's one-row menu (quest/battleitems.ts): menu value 4 is the trap
+  // palette of the row's type, value 5 the sonar. Returns what ran (null: nothing).
+  activateStatusRow(statusIndex: number, menuValue: number): BattleRowAction {
+    const a = battleRowAction(statusIndex, menuValue);
+    if (!a) return null;
+    if (a.kind === 'trap') return this.placeTrap(a.type) ? a : null;
+    return this.useSonar() ? a : null;
+  }
+
+  // One frame of the sonar manager (quest/battle.ts SonarManager): the owner's position against
+  // the other players in the game; its ping plays at the pitch the distance gives.
+  private tickSonar(): void {
+    const g = this.opts.game;
+    const others = [...g.players.values()].filter((p) => p.clientId !== g.selfId).map((p) => p.position);
+    const ping = this.sonar.tick(g.self ? g.self.position : null, others);
+    if (ping) this.opts.view.combat.playSonarPing(ping.pitch);
   }
 
   // One 30 Hz frame: the local player's HP and death feed the score, then the controller.
@@ -286,7 +306,7 @@ export class BattleRun {
     this.lastHp = dmg.hp;
     this.wasDead = dmg.dead;
     c.tick();
-    this.sonar.tick();
+    if (this.sonar.active) this.tickSonar();
     // The win particle on each leader, every update while the flag holds (quest/battle.ts winHolders).
     for (const id of c.winHolders()) this.opts.view.combat.winEffect(id);
     if (c.state === 'battle') this.tickTraps();
@@ -479,6 +499,7 @@ export class BattleRun {
     this.opts.view.hud.trapCount = null;
     this.opts.view.hud.battleTeam = null;
     this.traps.clear();
+    this.sonar.clear();
     this.restoreCharacter();
     this.opts.view.combat.syncBattleTraps([]);
     this.opts.view.combat.battlePvp = false;

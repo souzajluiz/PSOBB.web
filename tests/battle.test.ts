@@ -16,8 +16,12 @@ import {
   BattleController, BattleRecords, BattleSetup, PlayerScore, assignTeams, baInitialFloor, build6x8F, build6xCF, build6xD0, build7D,
   decodeBattleRules, effectiveRules, encodeBattleRules, formatBattleTimer, localRestrictions, newBattleRules, parse7D, rankPlayers,
   roundEven, shuffleStarts, trapNumber, weightFromRegs, winParticleHolders, WIN_PARTICLE, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
-  SonarStock, type BattleRules, type Battle7D, type BattleHost,
+  SonarManager, SonarStock, type BattleRules, type Battle7D, type BattleHost,
 } from '../client/src/quest/battle.ts';
+import {
+  battleRowAction, clampSonar, listSelectionAction, menuRowSelectable, menuValueForStatusRow, statusRowIndex, statusRowValue,
+  statusRowsView, trapStatusByte,
+} from '../client/src/quest/battleitems.ts';
 import { QuestSession } from '../client/src/quest/session.ts';
 import { buildBattleOverlay } from '../client/src/quest/battleoverlay.ts';
 import type { LevelTable } from '../client/src/formats/plyleveltbl.ts';
@@ -125,11 +129,40 @@ eq([baInitialFloor(0), baInitialFloor(1), baInitialFloor(2), baInitialFloor(3), 
   sonar.setFromRules(5);
   eq([sonar.use(false), sonar.count, sonar.use(true), sonar.count, sonar.active], [false, 5, true, 4, true], 'sonar: a use needs a battle map, then takes one');
   eq(sonar.use(true), false, 'sonar: no second use while the manager lives');
-  for (let i = 0; i < 0x1e; i++) sonar.tick();
-  eq([sonar.active, sonar.use(true), sonar.count], [false, true, 3], 'sonar: the manager ends after its frames, the next use takes another');
+  // The manager (exe 006b0744): life 0x3de = 990 frames, the ping timer 30; no other player means
+  // f = 0 (no pitch) and a 60-frame interval. Pings at frames 30, 90, ... while the life is above 90
+  // (frames 30..870: 15 pings), then the object is removed at frame 990 and the next use is allowed.
+  const pings: number[] = [];
+  for (let i = 1; i <= 990; i++) if (sonar.tick({ x: 0, z: 0 }, []) || false) pings.push(i);
+  eq([sonar.active, pings.length, pings[0], pings[14], sonar.count], [false, 15, 30, 870, 4], 'sonar: 990 frames, 15 pings with nobody near, ends after 990');
+  eq([sonar.use(true), sonar.count], [true, 3], 'sonar: the next use takes another once the manager is gone');
   sonar.setFromRules(0);
-  sonar.tick();
+  sonar.tick(null, []);
   eq([sonar.use(true), sonar.count], [false, 0], 'sonar: an empty stock is refused');
+
+  // The ping's pitch and interval from the nearest other player (f = 1 - (max(d, 200) - 200) / 1300).
+  const first = (others: { x: number; z: number }[]) => {
+    const m = new SonarManager();
+    for (let i = 1; i < 30; i++) m.tick({ x: 0, z: 0 }, others);
+    return m.tick({ x: 0, z: 0 }, others);
+  };
+  const near = first([{ x: 3, z: 4 }]); // d = 5: f = 1
+  const mid = first([{ x: 800, z: 0 }]); // d = 800: f = 1 - 600 / 1300 = 0.538
+  const far = first([{ x: 2000, z: 0 }]); // beyond 1500: f = 0
+  eq([near?.pitch, near?.interval, mid?.pitch, mid?.interval, far?.pitch, far?.interval], [256, 7, 138, 31, 0, 60], 'sonar ping: pitch round(256 f), interval round(-53 f) + 60');
+  const m = new SonarManager();
+  for (let i = 1; i < 30; i++) m.tick(null, []);
+  eq(m.tick(null, [])?.pitch, 0, 'sonar ping: no owner position counts every player as far');
+
+  // The Challenge item list rows (quest/battleitems.ts; dump 723874 / 724163 / 704479).
+  eq([statusRowValue(0), statusRowValue(4), statusRowIndex(0xfffffff4), statusRowIndex(0xffffff01), statusRowIndex(5)], [0xfffffff0, 0xfffffff4, 4, null, null], 'list: status row values 0xfffffff0 + i; the meseta row (-255) is not a status row');
+  eq([0, 1, 2, 3].map((i) => menuValueForStatusRow(i)).concat(menuValueForStatusRow(4)), [4, 4, 4, 4, 5], 'list: the one-row menu under status 4 is the sonar (5), the others the palette (4)');
+  eq([0, 1, 2, 3, 4, 5, 6, 7, 8].map((v) => listSelectionAction(v)), ['use', 'use', 'use', 'itemMenu', 'trap', 'sonar', 'meseta', 'listInit', null], 'list: ProcessListSelection 0..7 -> states 5, 0xc, 0xf, 0x11, 0x13, 6');
+  eq([battleRowAction(2, 4), battleRowAction(4, 5), battleRowAction(0, 0)], [{ kind: 'trap', type: 2 }, { kind: 'sonar' }, null], 'list: a trap row is the palette of its type, the sonar row the sonar');
+  const rows = statusRowsView([3, 0, 20, -1], 7);
+  eq(rows.map((r) => [r.index, r.labelId, r.count]), [[0, 0x13, 3], [2, 0x15, 20], [4, 0x17, 7]], 'list: a status row shows only with a count above 0; labels group 0x11 0x13 + i');
+  eq([trapStatusByte(21), trapStatusByte(-1), trapStatusByte(20), clampSonar(100), clampSonar(99), clampSonar(-3)], [0, 0, 20, 0, 99, 0], 'list: the trap byte is 0..20, the sonar count 0..99, else 0');
+  eq([menuRowSelectable(true, false), menuRowSelectable(false, false), menuRowSelectable(true, true)], [true, false, false], 'list: a menu row is selectable on a map that is not in the safe table and not a boss map');
 
   // A fake level table (the real one is PlyLevelTbl.prs): base 10 per stat, +1 per stat per level, EXP 100 * level.
   const cls = 0;

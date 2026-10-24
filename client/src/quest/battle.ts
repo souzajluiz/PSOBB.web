@@ -384,37 +384,103 @@ export function localRestrictions(e: EffectiveRules): LocalRestrictions {
 // -> state 0x11), state 0x12 of ChallengePlayer_StateMachine_00750954 (dump 723500):
 // CreateSinowberillChallengeEntityManager_006b08b8 must return 1 (only on the battle
 // spaceship and ruins maps, and only while g_SinowberillChallengeEntityManager_00a94b4c
-// is 0), then DecrementCounterAndClamp(+0x8a0, 1). The object's effect is not traced.
-export const SONAR_MANAGER_FRAMES = 0x1e; // ASSUMED: the manager's life (its constructor writes 0x1e at +0x20)
+// is 0), then DecrementCounterAndClamp(+0x8a0, 1).
+//
+// The manager (vtable 0x00b3a888, constructor 006b0970, update 006b0744; dump 602277..602400
+// and the update decompiled with tools/ghidra/decomp.sh, 2026-10-23) is a proximity ping, not
+// a reveal: it writes no minimap or enemy state. Its constructor sets +0x1c = 0x3de (990, the
+// life) and +0x20 = 0x1e (30, the ping timer). Each frame: the life drops by one and the
+// object is removed at 0 (the destructor clears the global, so a new use is allowed again);
+// while the life is above 0x5a (90) the ping timer drops by one and, at 0 or less, the ping
+// runs: the nearest other player's squared XZ distance (of the four slots, from 2250000 =
+// 1500^2 down) gives d = sqrt, near = max(d, 200), f = 1 - (near - 200) / 1300; the sound 0xb7
+// (183) plays with pitch round(256 * f) (FUN_00814664 sets the pitch), and the timer becomes
+// round(-53 * f) + 60 (7 frames when a player is at 200 or less, 60 when none is within 1500).
+// So the ping runs for the first 900 frames (30 s at 30 Hz) of the 990. The exe does not
+// test the other players' floor, and its `+0x30 & 0x800` skip is not named (ASSUMED: no
+// remote player is skipped here). The first ping comes at frame 30.
+export const SONAR_LIFE_FRAMES = 0x3de; // 990: +0x1c at construction (dump 602318)
+export const SONAR_PING_FRAMES = 0x1e; // 30: +0x20 at construction
+export const SONAR_SILENT_LIFE = 0x5a; // 90: no ping while the life is at or below this
+export const SONAR_NEAR_DIST = 200; // 0x009695cc and 0x009695e0
+export const SONAR_FAR_DIST = 1500; // sqrt(0x009695e4 = 2250000)
+export const SONAR_PING_SOUND = 0xb7; // 183, play_directional_sound_effect(0xb7, 0, 0, 0)
+
+export interface SonarPing {
+  sound: number;
+  pitch: number; // round(256 * f); 0 = no pitch change
+  interval: number; // the next ping's frames
+}
+
+// The manager object. tick() is one frame of its update; it returns the ping when one runs.
+export class SonarManager {
+  life = SONAR_LIFE_FRAMES;
+  private ping = SONAR_PING_FRAMES;
+
+  get alive(): boolean {
+    return this.life > 0;
+  }
+
+  // me: the owner's position (null when the owner has none, then every other player is far).
+  tick(me: { x: number; z: number } | null, others: ReadonlyArray<{ x: number; z: number }>): SonarPing | null {
+    if (this.life <= 0) return null;
+    this.life -= 1;
+    if (this.life < 1) return null; // removed (the exe sets the destroy flag)
+    if (this.life <= SONAR_SILENT_LIFE) return null;
+    this.ping -= 1;
+    if (this.ping >= 1) return null;
+    let min2 = SONAR_FAR_DIST * SONAR_FAR_DIST;
+    if (me) {
+      for (const o of others) {
+        const d2 = (me.x - o.x) ** 2 + (me.z - o.z) ** 2;
+        if (d2 <= min2) min2 = d2;
+      }
+    }
+    const near = Math.max(Math.sqrt(min2), SONAR_NEAR_DIST);
+    const f = (near - SONAR_NEAR_DIST) * -0.0007692307699471712 + 1;
+    const pitch = roundEven(256 * f);
+    this.ping = roundEven(-53 * f) + 60;
+    return { sound: SONAR_PING_SOUND, pitch, interval: this.ping };
+  }
+}
 
 export class SonarStock {
   count = 0;
-  private life = 0; // frames the manager object lives (g_SinowberillChallengeEntityManager_00a94b4c != 0)
+  // The live manager (g_SinowberillChallengeEntityManager_00a94b4c); null when none.
+  manager: SonarManager | null = null;
 
   // ResetAll: the rule count when the enable is on, else 0.
   setFromRules(sonarCount: number | null): void {
     this.count = sonarCount === null ? 0 : Math.max(0, Math.min(99, sonarCount));
-    this.life = 0;
+    this.manager = null;
   }
 
   get active(): boolean {
-    return this.life > 0;
+    return this.manager !== null;
   }
 
-  // One frame of the manager's life (ASSUMED: the object ends after its frames; the
-  // exe's end is not traced).
-  tick(): void {
-    if (this.life > 0) this.life--;
+  // One frame: the manager's update; its ping (if any) is returned for the caller to play.
+  // A manager that ends is dropped here (the exe's destructor clears the global).
+  tick(me: { x: number; z: number } | null, others: ReadonlyArray<{ x: number; z: number }>): SonarPing | null {
+    const m = this.manager;
+    if (!m) return null;
+    const ping = m.tick(me, others);
+    if (!m.alive) this.manager = null;
+    return ping;
   }
 
-  // The use: false (nothing changes) when the map is not a battle map, a manager is
-  // alive, or the stock is empty (ASSUMED: the list row is greyed at 0; the exe's
-  // SetMenuItemsEnabled checks the row value, its writer is not traced).
+  // The use: false (nothing changes) when the map is not a battle map, a manager is alive, or
+  // the stock is empty. ASSUMED: the exe's list row 5 is greyed at 0 (its writer is not traced).
   use(battleMap: boolean): boolean {
     if (!battleMap || this.active || this.count < 1) return false;
-    this.life = SONAR_MANAGER_FRAMES;
+    this.manager = new SonarManager();
     this.count--;
     return true;
+  }
+
+  // The battle's exit (the manager's global is cleared with the battle).
+  clear(): void {
+    this.manager = null;
   }
 }
 
