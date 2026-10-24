@@ -26,7 +26,8 @@ import { KEYS } from '../input/keyconfig.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import { parseChatShortcut } from '../net/chatshortcut.ts';
+import { parseChatShortcut, type WordSelectMessage } from '../net/chatshortcut.ts';
+import { currentWordSelectTable, renderWordSelect } from '../net/wordselect.ts';
 import type { SymbolChat } from '../net/symbolchat.ts';
 import { QuickMenu, type QuickMenuEnv } from './quickmenuwindow.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
@@ -77,7 +78,11 @@ export class FieldScreen implements Screen {
     this.quickEnv = quick;
     this.chat = new ChatLine((text) => this.game.sendChat(text));
     this.chat.sendSymbol = (chat) => this.sendSymbolChat(chat);
-    this.chat.sendWord = (message) => this.game.sendWordSelect(message);
+    this.chat.sendWord = (message) => {
+      this.game.sendWordSelect(message);
+      this.showWord(this.game.selfId, message);
+    };
+    this.game.on('wordSelect', (clientId, message) => this.showWord(clientId, message));
     // The team chat window (F9 / F10) and its sender name (classic/teamchat.ts).
     this.chat.team = view.teamChat;
     this.chat.teamSender = () => this.game.playerName(this.game.selfId);
@@ -169,6 +174,14 @@ export class FieldScreen implements Screen {
   }
 
   // The 6x07 to the room and the sender's own balloon (the shortcut and the picker share it).
+  // A word select balloon: a received 6x74, or the sender's own (send_chat_message_word_select
+  // calls checked_call_packet0x60_subcommand, which runs the handler locally too, dump 664328).
+  private showWord(clientId: number, message: WordSelectMessage): void {
+    const names = (slot: number) => this.game.playerName(slot);
+    const text = renderWordSelect(message, currentWordSelectTable(), names);
+    this.chat.receiveWord(clientId, this.game.playerName(clientId), text, (id) => this.distanceTo(id));
+  }
+
   private sendSymbolChat(chat: SymbolChat): void {
     this.game.sendSymbolChat(chat);
     this.chat.receiveSymbol(this.game.selfId, this.game.playerName(this.game.selfId), chat, (id) => this.distanceTo(id));

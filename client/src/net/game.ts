@@ -30,7 +30,6 @@ import { parseCombatStats } from '../combat/pvp.ts';
 import { encodeBarbaA9, encodeBarbaAA } from '../combat/barbaray.ts';
 import { encodeGolA8 } from '../combat/goldragon.ts';
 import { parseSymbolChatSubcommand, symbolChatSubcommandPayload, SYMBOL_CHAT_SUBCOMMAND, type SymbolChat } from './symbolchat.ts';
-import { parseWordSelectSubcommand } from './wordselect.ts';
 import { JoinSyncState, QUEST_FLAG_TABLE_BYTES, syncStateCommand, type SyncCounts } from './joinsync.ts';
 
 export const MENU_ID_LOBBY = 0x33000033;
@@ -684,12 +683,6 @@ export class Game extends Lobby {
         // sender in this room; the screen draws the picture over the sender (classic/chat.ts).
         const sc = parseSymbolChatSubcommand(body);
         if (sc) this.emit('symbolChat', sc.clientId, sc.chat);
-        break;
-      }
-      case 0x74: {
-        // 6x74 word select (net/wordselect.ts; handle_packet0x60_subcommand0x74, dump 664363).
-        const ws = parseWordSelectSubcommand(body);
-        if (ws) this.emit('wordSelect', ws.clientId, ws.message);
         break;
       }
       case 0x68: {

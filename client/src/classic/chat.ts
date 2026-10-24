@@ -768,8 +768,9 @@ export class ChatBubbles {
     return b;
   }
 
-  say(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
-    this.balloonFor(clientId, name, distanceTo).say(text);
+  // `wrap`: the balloon's width limit (Infinity keeps the text's own line breaks, flag 4).
+  say(clientId: number, name: string, text: string, distanceTo: (id: number) => number, wrap?: number): void {
+    this.balloonFor(clientId, name, distanceTo).say(text, wrap);
   }
 
   // A symbol chat (6x07, or the sender's own): the balloon shows the picture and
@@ -965,5 +966,15 @@ export class ChatLine {
   // A symbol chat from a player (6x07). No log line: action_symbol_chat (dump 754836) writes none.
   receiveSymbol(clientId: number, name: string, chat: SymbolChat, distanceTo: (id: number) => number): void {
     this.bubbles.saySymbol(clientId, name, chat, distanceTo);
+  }
+
+  // A word select message (6x74, sent or received; handle_packet0x60_subcommand0x74, dump 664363).
+  // DisplayItemBubble_007078f1 calls DisplayChatBubble_007184f8(client, text, 0x4F): flag 0x40 writes
+  // the text to the Log Window (append_to_chat_log, no speaker name), and the balloon keeps the
+  // text's own line breaks (flag 4: width 1e6) and plays the chat sound (ChatBubbleEntity_UpdateTextAndSize_00720954).
+  receiveWord(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
+    this.log.add('', text);
+    se(SE_CHAT);
+    this.bubbles.say(clientId, name, text, distanceTo, Infinity);
   }
 }
