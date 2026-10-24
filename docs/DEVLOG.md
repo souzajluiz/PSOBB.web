@@ -18099,3 +18099,63 @@ The previous entry's `modelParticleColour` (black for a non-NT model particle) i
 - The Item Pack and the shops: no 0xC (the Item Pack) and no page writer (the shops), so no pages there. Their stat rows (page 0) are the shops' open item.
 - The page slide, and the item picture of 0xC (the asset of the item picture).
 - The page-1 row layout (the exe's element offsets), the photon empty-row text, and the Photon Blast window's text (state 0xE, entry 0xA).
+
+## 2026-10-23: Pofuilly stun trigger, the Recon's absolute height, the Morfos arm's end (the three open items of the 2026-10-23 "ROADMAP line 152 leftovers" entry)
+
+**Report:** the three open items were checked against the raw exe (objdump of `PsoBB.exe`, `tools/exedata.py` for the vtable and the constants; the named dump for names only). The brief's premises held for the Recon (the lift +0x450 and the hover +0x468 are world y) and for the Pofuilly (the stun comes from the generic path). The Morfos premise was half wrong: the +0xb0 bit 0x10 setter is the generic animation step's mode 3 branch, not a hidden writer elsewhere. Ported: the Pofuilly no-damage hit into state 11, its effect every 4th count, the Recon's absolute height. Not ported: the defence roll that resists an attack, the exe's motion 4, the animator's last-frame step.
+
+**Exe evidence (PsoBB.exe 1.25.13):**
+
+Pofuilly trigger:
+- The vtable of the slime is 0x00b094e0. Slot +0x88 is 0x00777ba4: `movl 0x30(%ecx), %eax; andl $0x200, %eax; retl`. So the test is +0x30 & 0x200 (took_damage, the enum in the dump: `took_damage=512`).
+- Slot +0xfc is 0x00597ae4 (state 11 writer) and slot +0x100 is the hit handler (flinch, 0x00597914, from the 2026-10-23 notes).
+- The generic path 0x00543ef1..0x00543f19: `if vtable[+0x88]() -> vtable[+0x100]()` (the flinch), `else if (+0x30 & 0x100) -> vtable[+0xfc]()` (state 11). The dump names this function `GalgryphonSubObject_Update_00543e8c`, which is wrong for the slime: it is the generic enemy update.
+- The writer of +0x30 bit 0x100 is `EntityHitEntity_00773350` (dump name; the attack-hit function): the defence roll branch `if (GetEnemyDefense > 0 && get_random_float < GetEnemyDefense)` (0x773397: `orl $0x100`, return 0, the attack is "resisted") and the tail for a negative damage (0x7738af: `orl $0x100`, return 0). The landed branch (`damage >= 0`) sets +0x30 bit 0x200 (took_damage) and deals the damage.
+- Other sites that OR 0x100 into +0x30 (0x76e8b3, 0x773221, 0x775fd4, 0x776171, 0x776370, 0x777614) are other hit functions (0x7775ec is the one that calls vtable +0x74 first). Not traced.
+- `GetEnemyDefense_00773a44`: `g_BaseEnemyDefense` (0.0, 0x978288) unless the defender's +0x324 pointer has a short [5] > 0; then `short[5] * 0.01` (0x978284) clamped to 1.0 (0x978280). ASSUMED: for an enemy +0x324 is its stats row, so [5] is the row's `ata` (+0xa). The enemy's writer of +0x324 was not found (the 0x770854 function writes +0x318..+0x324 from one register, not confirmed as the enemy init).
+- State 11 entry 0x0059856c: scale 1, counter (+0x39c) 0, `EnemyLoadAnimationOrModel_00599c7c(4)` (morph 4; its animation branch plays animation 4 when the sub-object's flag 0x1000 is set), the sub-object's word +0x18 cleared of the mask 0x0a000d68 (`andl $0xf5fff297`), +0x3f4 = 1.
+- State 11 update 0x00597514: `count = ++(+0x39c); if ((count & 3) == 0) 0x0050b510(&(+0x300), 0xe0)` (the effect with id 0xe0 at the slime's +0x300); then the motion end test (+0xb0 & 0x10) -> confused (+0x30 & 0x10, morph 7 state) or search (6).
+- +0x3f4 is written 0 or 1 by the slime's states (0x597b86..0x597fb1); its readers were not found in the slime's draw (0x596264..0x596a00 has no `0x3f4(` read).
+
+Recon height:
+- The exe's lift +0x450 and hover +0x468 are world y (the 2026-10-23 "orbit and launch" and the "ROADMAP line 152" entries). The launch 0x0058bed4 compares `+0x450 + vy` with +0x468; the orbit 0x0058b21c eases +0x450 toward `+0x468 + bob`. The clamp 0x00589fdc keeps the Recon at least 5 above the ground under it (ASSUMED the ground is the floor the Recon is over).
+- The aim (`DerolleObjectIsGrounded_0058a164`) compare was not traced: the port keeps the aim height above the ground (ASSUMED).
+
+Morfos arm end (+0xb0 bit 0x10):
+- The generic animation step 0x007aa094 (objdump 7aa094..7aa45e). The frame is `+0xc0 += +0xc8` (the speed). Mode is `+0xf4` (u16): 1 loop, 3 once, 5 hold.
+- Mode 3 (7aa2f9): when `frame >= count - 1` (the last frame, `+0xc4 - 1.0` at 0x97d97c = 1.0): frame -= speed (back one step), mode = 5, speed = 0.0 (0x97d978), `+0xb0 |= 0x30` (7aa358). So the setter of bit 0x10 is at 0x007aa358, in this step.
+- Mode 5 (7aa440) holds: frame -= speed (speed 0 now).
+- The Morfos arm's motion is 0x009bef44's record: mode 3, speed 0.7, flags 0x4 (`tools/exedata.py motions`).
+
+**Port:**
+- `combat/enemysplits.ts`:
+  - `SlimeAi.pendingHit(out)` (unchanged: the vtable +0xfc), new `SlimeAi.hitNoDamage()`: the port's side of the no-damage hit; it builds a frame, calls `pendingHit` and returns the motion to play (null when the slime is already in state 11 or dead).
+  - `SlimeAi.effects` (`{id, dy}[]`): the stun's tick pushes the effect 0xe0 (`STUN_EFFECT`) when the counter (`timer`, reset at the entry) is a multiple of 4.
+  - the stun tick's comment cites 0x00597514.
+- `render/combat.ts`:
+  - `applyEnemyHit`: a `SlimeAi` hit with `byPlayer && !landed` calls `hitNoDamage()` and plays the motion. A landed hit keeps `onDamage` (the flinch). The invulnerable branch returns before this, as EntityHitEntity's maybe_invuln return does.
+  - the enemy tick: the slime's `effects` are spawned at the body (`root.position + dy`).
+  - `ReconAi`: `setGround(g)` is called before each tick for a Recon (the ground at its spot, the same query the placement uses).
+- `combat/enemyfsmep2d.ts` (`ReconAi`):
+  - `ry` is the world y; `hover` is the absolute hover (no `Math.max` with 5 any more; the 5 is applied above the ground); `ground` (set by `setGround` and `startFromBox`).
+  - `lift` = `max(ry - ground, 5)`: the render keeps placing the root at `ground + lift`, so it is consistent with the old ground-relative render.
+  - the launch and the aim clamp at `ground + 5`; the aim height is `ground + aimY` (ASSUMED, see above); `grounded()` compares with it.
+- `tests/enemysplits.test.ts`: the effect every 4th count (4, 8, 12), the effects taken by the owner, `hitNoDamage` (state 11, the motion, no second motion, not a landed hit).
+- `tests/enemyfsmep2d.test.ts`: over a floor at 20 the hover is 45 +- 2 above world 0 (lift 23..27); a ceiling box at 150 over a floor at 100 settles at lift 5 and never goes under 5.
+- `docs/ROADMAP.md`: the Pofuilly, Recon and Morfos items on the line.
+
+**Tests:** `node tests/enemysplits.test.ts`, `enemyfsmep2d`, `enemyfsmep2`, `enemyfsmep2a`, `enemyfsmep2b`, `enemyfsmep2c`, `enemyfsm`, `enemyfsmmines`, `deathfx`, `bossrooms`, `derolle`: all pass. `enemies` (with `client/node_modules` linked from the main checkout for the run) passes; `combat` (NEWSERV set) passes; `combatdepth` 836 checks, 0 failures. `client` tsc (Node 24): clean. Playwright and Chrome: not run (the brief).
+
+**ASSUMED:**
+- The port's `!landed` hit is the exe's no-damage path (0x100). The exe's defence roll (`GetEnemyDefense_00773a44`) is not ported: it is in EntityHitEntity for every enemy, so it needs its own change and the +0x324 stats row confirmed first.
+- The stun's effect position is the body's root (the exe's +0x300 is not traced for the slime).
+- The stun's animation is still the port's hurt animation; the exe's animation 4 is not mapped to a BML motion.
+- The Recon's ground is the query at its spot; the clamp is the ground under the Recon, not the floor it will land on.
+- The aim height is above the ground (the exe's aim compare was not traced).
+- The arm's end: the port's animator clamps to the last frame; the exe holds one step before it (see the ROADMAP). Not changed: the animator is shared by every enemy.
+
+**Left:**
+- The defence roll (`GetEnemyDefense_00773a44`) for every enemy, and which struct +0x324 is for an enemy.
+- The Pofuilly's exe motion 4 (animation 4) and the stun's effect position (+0x300).
+- +0x3f4's readers (the slime's draw does not read it; the generic draw was not checked).
+- The Morfos arm's frame timing against the layer's animator hook (`EnemyLayer.hook`): the arm's removal reads `a.ended` in the combat tick, so the order is ASSUMED.
