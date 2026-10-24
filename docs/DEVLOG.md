@@ -14671,3 +14671,70 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: Customize (action palette editor) and the save upload (E7) traced and ported
+
+Scope: the main menu's Customize row (menu id 0, "Customizes the Action Menu.") and the E7 save upload that the exe makes on leaving the session. Client code and tests; the server side is newserv (vendor/newserv, read only).
+
+**Premise check.** The brief said the exe sends E7 on leave. Confirmed, with more triggers than leave (see the E7 part). The palette is NOT saved by E7 on this server: the palette save is 07ED (below), and newserv's E7 handler keeps neither the palette nor the auto reply.
+
+### Customize window (exe)
+
+- Menu entry: `customize_menu1` / `customize_menu2` (menu id 0) at dump 700143: `customize_menu_constructor` (dump 717277), with the window's flag +0x24 and the two lists.
+- Lists: the slot list at GUI position table entry 0x0F = (0, 256) (`CreateGuildCardListWindow_00748d8c`, dump 717602, `get_gui_position(0xf)`); the action list at entry 0x10 = (214, 256) (`customize_menu_action_list_constructor`, dump 718599, `get_gui_position(0x10)`); table 0x00971f40, 8-byte stride (`tools/exedata.py read 00971fb8 f 4`). Titles: unitxt group 11 0x36 (slot list) and 0x35 (action list). The dump's `GuildCardListWindow*` names are the customize window's (the names are wrong, the code is the customize window).
+- Input (`unknown_handle_customize_menu_inputs`, dump 717334): state machine in +0x1c (2 = slot list, 3 / 4 = action list). Keys: Decide (g_KeyboardSharedState[0xc] | [0x15]) and Cancel ([0xd]). In the action list the number keys 1..0 (`was_input_pressed` with 0x23..0x2c, the palette_bar_slot enum) write hotbar slot iVar8 = 4..13 (flat palette_slots index 3..12) from the highlighted row (dump 717401..717443).
+- Palette data: `get_palette_data_for_customize` (dump 555029) returns the regular palette (`currently_casting_tech_info + 0xd8`, the 0xE8 config); the pb palette branch is unused (the dump's own comment says so).
+- Hotbar write (`unknown_set_palette_slot`, dump 558003, writes group_1 and group_2 only): the toggle (the row equals palette 0's slot) clears the slot in BOTH palettes (717407..717410); otherwise every other hotbar slot with the row's action is cleared in both palettes (717427..717436) and the slot takes the action in both palettes (717438..717439).
+- 3-slot write (`GuildCardListWindowApplyPaletteSelection_00749d98`, dump 718358): only the window's palette (flip state, +0x62), slot from `GuildCardListWindowGetPaletteSlotIndex` (718410: element 0 -> slot 2, 1 -> slot 1, else 3). Toggle clears; otherwise `GuildCardListWindowResetDefaultPalette_00749eac` (718426) clears the same action from palette 0 and 1's three palette slots (order 0, 2, 1), then the slot is written.
+- Flag +0x24: set by every assignment (717442, 717451, 717456). The window's destructor (dump 717267) sends 07ED when it is set: `send_packet0xed_subcommand7(player)` (dump 813897).
+- Action rows: `customize_menu_action_list_fleshie_config` / `_android_config` (dump 562653 / 562657), 12-byte rows (the code steps `paVar5 + 3` of a 4-byte struct), ended by category 8. The row contents are NOT decoded (0x009f4060 is not the table). The port uses attacks 0..2, techniques 0..18 and palette items 0..12, in that order (ASSUMED).
+- Labels: `probably_get_item_description` (dump 717482): attacks = unitxt action description (group 11, index 0x13 + group_2, ASSUMED group), techniques = `unitxt_get_technique_name` (group 5, as the Technique menu), items: not traced (placeholder).
+- Lobby: not allowed (the exe's message; fieldmenu.ts opens id 0 in the field only).
+
+### 07ED (exe and newserv)
+
+- Frame (dump 813897): size 0xF0, command 0xED, flag 7, u32 0, then the 0xE8 config from player+0xd8. newserv `on_ED_BB` case 0x07ED (`vendor/newserv/src/ReceiveCommands.cc:4031`): `character_file()->disp.config = cmd.customize` in memory; newserv's own save path writes the file. So the palette persists on this server.
+- Port: `classic/customize.ts` `customizeBody`, `BBSession.sendCustomize` (`net/bbsession.ts`), sent by the window's close when a change was made (`CustomizeMenu` close).
+
+### E7 save upload (exe)
+
+- `send_packet0xe7` (dump 811346): size 0x399C, command 0xE7, flag 0, then the full save: [0, 0x4DC) from `GetItemData_006c1bcc(0xffff)` (the character file's first part), [0x4E4, 0x2EAC) from `get_00a95df8()` (the session data, 0x29C8 bytes; its +0x2510 is the auto reply, file 0x29EC), [0x2EAC, 0x399C) the system file and team config (`g_pKeyTeamConfig`, 0xAF0 bytes). The body is newserv's `SC_SyncSaveFiles_BB_E7` layout (0x3994: char 0x2EA4, system 0x2B8, team 0x838).
+- `send_packet5` (dump 811320): E7 first, then the 8-byte 05 packet (size 8, command 5, flag 0).
+- Callers of `send_packet5` / `unknown_send_disconnect` (dump 782693): `uninit_login_scene` (dump 805110, the logout), `ExitGame_007a6358` (788401), `close_game` (805704), `ChallengeMenuProcessSelection_0074c018` (720173: the Quit Game > Disconnect answer; the lobby's `disconnect()` follows it, ported here), `update_game_in_quest` (805549), `cleanup_for_logged_in_game_exit` (805483), and the exit at 805457. Also `check_for_alt_bs` (419366, when `g_ShouldDisconnect` and not the lobby), the login error branches of `handle_login_packet0xe4` / `0xe6` (201221, 201876, 201883) and `SendPacket0x0F` (202290, from `handle_packet0xeb`).
+- Periodic: `GameLoop_Update_007bcc4c` (dump 805216, not logged in) and `update_game_in_quest` (dump 805534): `g_Packet5SendTimer` counts frames while `is_0_or_1(g_GameListData)` is 0 and sends E7 + 05 after 12 frames. The decompile reads `g_GameListData` as a 0/1 flag; ASSUMED: the periodic upload runs under that condition, not ported.
+- newserv `on_E7_BB` (`ReceiveCommands.cc:4047`): copies only challenge records, battle records, death count and the system file. It does NOT keep the palette config (07ED does) or the auto reply (0x29EC). The 05 packet is `on_ignored` on BB (`ReceiveCommands.cc:5644`); the exe's disconnect is the TCP close.
+
+### Port
+
+- `client/src/classic/customize.ts` (new): the layout (`slotOffset`, `readRow`, `writeRow`), `assignHotbar`, `assignPaletteSlot`, `customizeBody` (07ED body), `actionRows`, the `CustomizeMenu` leaf (slot list and action list, Decide / Cancel / number keys, the close that saves on a change).
+- `client/src/classic/fieldmenu.ts`: id 0 opens `CustomizeMenu` (the env is optional; the field only).
+- `client/src/render/fieldhud.ts`: the Customize env (learned, hasItem, config and its write-back to the save copy at 0x3E0, flip state, save hook); `FieldHudOptions.saveCustomize`.
+- `client/src/render/gameview.ts`, `client/src/classic/main.ts`: `saveCustomize` = `session.sendCustomize`.
+- `client/src/net/bbsession.ts`: `sendCustomize` (07ED), `sendSaveFile` (E7 + 05, with the 0x3994 size check).
+- `client/src/classic/lobby.ts`: `disconnect()` (Quit Game > Disconnect) calls `hud.saveFile` first (E7 + 05, the exe's order).
+- `docs/ROADMAP.md` (hotbar line): the assignment ported.
+- `tests/customize.test.ts` (new): the layout against `parsePalette`, the hotbar and palette writes (add, move, toggle, flags kept), the reset rule, the 07ED body, the action rows, the window's keys and close rule, the E7 + 05 and 07ED frames through a fake connection.
+
+### ASSUMED
+
+- The action list's order and content (attacks 0..2, techniques 0..18, palette items 0..12); the exe's table is not decoded.
+- Labels: attack names (group 11, 0x13 + group_2), item names (`Item N` placeholder; the tool's unitxt name is not traced), slot names (Bottom / Left / Right and the hotbar digits), list titles (group 11 0x36 / 0x35), width 179.
+- Unlearned technique = disabled (the Technique menu's rule); items are always enabled (the bag check is not traced).
+- The slot list's cursor order (bottom, left, right).
+- Closing: Cancel on the slot list closes the window (the exe's destructor path; its close animation is not modelled).
+- The hotbar write covers both palettes, and the 3-slot write only the window's palette (as the exe's code reads); the bar draws palette `flipped ? 1 : 0`, so a 3-slot change shows only in the same flip state.
+- E7 upload: only on Quit Game > Disconnect. The logout, quit and periodic triggers above are not ported.
+
+### Left
+
+- The Customize window in Chrome (not run: the brief says no Playwright).
+- The exe's action row table (`customize_menu_action_list_fleshie_config`, 12-byte rows): find its address (not in the dump's header; `tools/exedata.py xref` on the code at 0x0074a198..0x0074a8e8, or the Ghidra project) and the item rows' unitxt names.
+- The exe's per-row availability (ValidatePlayerAction_006ab474, dump 597294) for techniques and items.
+- Auto reply persistence: newserv's `on_E7_BB` does not keep 0x29EC, so the Simple Mail answer text does not survive a server restart on this server. Needs a server-side change (the vendored newserv is read only here; production runs the ghcr image), or a separate command. The port keeps the text in the save copy for the session.
+- E7 on logout, quit and the periodic trigger (see the E7 part).
+
+### Checks
+
+- `node tests/customize.test.ts`: all checks pass.
+- `node tests/hotbar.test.ts`, `fieldhud.test.ts`, `simplemail.test.ts`, `lobbymenu.test.ts`, `options.test.ts` (159 checks), `questboard.test.ts`: pass.
+- `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run; removed before the commit).

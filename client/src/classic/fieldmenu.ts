@@ -26,6 +26,7 @@ import { MAIN_MENU, MAIN_MENU_ANDROID, MainMenu, type MainMenuTextures, type Men
 import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
+import { CustomizeMenu, type CustomizeEnv } from './customize.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
 import { cursorSaved, OptionsMenu, type OptionsEnv } from './options.ts';
 import { AREA_MAP_MENU_ID, AreaMapWindow, type AreaMapEnv, type AreaMapTextures } from './areamap.ts';
@@ -36,7 +37,7 @@ import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
 import { FIELD_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
 
-type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu;
+type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu | CustomizeMenu;
 
 export const SAFE_MAPS = [0x00, 0x0f, 0x12, 0x2d];
 
@@ -89,6 +90,8 @@ export interface FieldMenuEnv {
   itemPack: ItemPackEnv;
   equip: EquipActions;
   tech: TechMenuEnv;
+  // Main menu > Customize (classic/customize.ts): the action palette editor.
+  customize?: CustomizeEnv;
   mag: MagMenuEnv;
   options: OptionsEnv;
   areaMap: AreaMapEnv;
@@ -238,6 +241,7 @@ export class FieldMenu {
       this.leaf.speed = this.speed;
     }
     else if (id === 3) this.leaf = new TechniqueMenu(this.env.tech);
+    else if (id === 0 && this.env.customize) this.leaf = new CustomizeMenu(this.env.customize);
     else if (id === 0x17) this.leaf = new MagMenu(this.env.mag);
     else if (id === 6) this.leaf = new OptionsMenu(this.env.options);
     else return;
@@ -352,7 +356,7 @@ export class FieldMenu {
     try {
       withWindowAnim(ctx, this.leafAnim, b.x, b.y, b.w, b.h, () => {
         // The leaf's rows, bars and texts take the element wipe of the same animation.
-        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu) leaf.draw(ctx, skin, extra, this.leafAnim);
+        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu || leaf instanceof CustomizeMenu) leaf.draw(ctx, skin, extra, this.leafAnim);
         else leaf.draw(ctx, skin, tex, extra, this.leafAnim);
       });
     } finally {

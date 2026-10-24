@@ -131,7 +131,7 @@ export class GameView {
     source: DataSource,
     log: (msg: string) => void = () => {},
     bgm: BgmPlayer | null = null,
-    character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null } = { character: () => null, fullCharacter: () => null },
+    character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null; saveCustomize?: (config: Uint8Array) => void } = { character: () => null, fullCharacter: () => null },
     options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>> } = {},
   ) {
     this.labels = options.labels ?? true;

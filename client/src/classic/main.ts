@@ -235,6 +235,7 @@ async function main(): Promise<void> {
       infoCols,
       fullCharacter: () => session?.fullCharacter ?? null,
       character: () => session?.character ?? null,
+      saveFile: () => session?.sendSaveFile(),
     };
   };
   // Item names for the Item List window (ItemPMT from the stream file, as the
@@ -309,7 +310,7 @@ async function main(): Promise<void> {
       lobbyView = null;
       gameView?.dispose();
       townField?.dispose();
-      const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null }, {
+      const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null, saveCustomize: (cfg) => session?.sendCustomize(cfg) }, {
         labels: false,
         ...(streamFile ? { streamFiles: () => streamFile! } : {}),
       });
