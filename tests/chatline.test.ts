@@ -199,8 +199,18 @@ for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
 sl.useShortcut({ type: 3, text: '', symbol: { spec: 0, cornerObjects: [], faceParts: [] } });
 eq(symbolSent.length, 1, 'shortcut: a symbol record goes to the symbol sender');
 for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
-sl.useShortcut({ type: 2, text: '', symbol: null });
-eq(sc, ['hello'], 'shortcut: a word-select record sends no text (not ported)');
+// A word-select record goes to the word sender (6x74, send_chat_message_word_select, dump 664328),
+// not to the text path; with no sender it is dropped without a text line.
+const wordSent = [];
+sl.sendWord = (m) => wordSent.push(m);
+const wordMsg = { numTokens: 1, targetType: 0, tokens: [7, 0, 0, 0, 0, 0, 0, 0], numericParameter: 0, unknownA4: 0 };
+sl.useShortcut({ type: 2, text: '', symbol: null, word: wordMsg });
+eq(wordSent, [wordMsg], 'shortcut: a word-select record goes to the word sender');
+eq(sc, ['hello'], 'shortcut: a word-select record sends no text line');
+for (let i = 0; i < 0x2d; i++) sl.tickCooldown();
+sl.sendWord = null;
+eq(sl.useShortcut({ type: 2, text: '', symbol: null, word: wordMsg }), true, 'shortcut: a word-select record with no sender still uses the slot');
+eq(wordSent.length, 1, 'shortcut: no sender, nothing sent');
 
 // Log Window paging (ChatLog.page; PageUp = older lines, PageDown = newer). A new line
 // returns the view to the bottom.

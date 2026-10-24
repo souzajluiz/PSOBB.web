@@ -19,6 +19,7 @@ import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } 
 import type { SetPositionState } from './game.ts';
 import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
 import type { SymbolChat } from './symbolchat.ts';
+import { WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload, type WordSelectMessage } from './chatshortcut.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 import { TradeZone } from './tradezone.ts';
 
@@ -451,6 +452,14 @@ export class Lobby {
     new DataView(body.buffer).setUint16(2, this.selfId, true);
     body.set(payload, 4);
     this.conn.send(command, 0, body);
+  }
+
+  // A word select chat (6x74, the shortcut's type 2): send_chat_message_word_select
+  // (dump 664328) sends the 0x1C-byte message after the header, size 8 dwords. Sent from
+  // the lobby too: send_chat_message does not check the scene for type 2 (ASSUMED that
+  // the lobby's send is the same path; the exe's CreateItemObject gate is not traced).
+  sendWordSelect(message: WordSelectMessage): void {
+    this.sendSubcommand(WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload(message));
   }
 
   sendChat(text: string): void {

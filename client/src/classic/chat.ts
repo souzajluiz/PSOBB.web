@@ -35,7 +35,7 @@ import { activeColorEscape } from './textcodes.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
 import { CHAT_COOLDOWN_FRAMES, chatCooldownOver, chatCooldownTick, drawSymbolParts, symbolSoundId, SYMBOL_CHAT_FRAMES, SYMBOL_PLATE, type TintFn } from './symbolchat.ts';
 import type { SymbolChat } from '../net/symbolchat.ts';
-import type { ChatShortcut } from '../net/chatshortcut.ts';
+import type { ChatShortcut, WordSelectMessage } from '../net/chatshortcut.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
 export const CHAT_MAX_LENGTH = 0x4f; // FUN_00713540 -> FUN_007312f0
@@ -865,6 +865,8 @@ export class ChatLine {
   private held: string | null = null;
   // Sends a symbol chat (a symbol shortcut); the screen sends it and draws the sender's balloon.
   sendSymbol: ((chat: SymbolChat) => void) | null = null;
+  // Sends a word select chat (a word-select shortcut): the 6x74 message (Lobby.sendWordSelect).
+  sendWord: ((message: WordSelectMessage) => void) | null = null;
 
   // send: the text Enter sends (the chat packet 06 of the lobby or the game).
   constructor(send: (text: string) => void) {
@@ -928,13 +930,14 @@ export class ChatLine {
   // use_chat_shortcut (dump 754183) -> send_chat_message_with_cooldown_optcall (754207):
   // a shortcut that comes while the cooldown runs is dropped, not held. An empty record
   // still sets the cooldown: the timer is set before send_chat_message, which then sends
-  // nothing for an empty text. Word-select records are not sent (ASSUMED: the port has
-  // no word-select sender). Returns whether the shortcut was used.
+  // nothing for an empty text. A word-select record goes to sendWord (6x74, dump 664328).
+  // Returns whether the shortcut was used.
   useShortcut(s: ChatShortcut | null): boolean {
     if (!this.cooldownOver()) return false;
     this.startCooldown();
     if (!s) return true;
     if (s.type === 1 && s.text) this.send(s.text);
+    else if (s.type === 2 && s.word) this.sendWord?.(s.word);
     else if (s.type === 3 && s.symbol) this.sendSymbol?.(s.symbol);
     return true;
   }
