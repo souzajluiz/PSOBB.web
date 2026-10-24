@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-10-24: Saint-Milion wake: 0 -> 0x19 -> 2 checked against the exe
+
+**Question:** the Chrome run (DEVLOG "Boss leftovers in Chrome") saw the brain go sid 0 -> 0x19 (25, the form reads 2) -> 2. Is that the exe's order, and does the wake lead to 0x19 at all?
+
+**Verdict: exe-correct, no code change.** The order 0 -> 0x19 -> 2 is what the exe does. The unit test `tests/saintmilionboss.test.ts` block 2 already pins it (the leader sends `{0, 0x19}`, the follower follows, the intro hands over to 2).
+
+**Exe facts (`PsoBB.exe`, VAs):**
+- **The wake (the write of 0x19).** The state-0 handler `0x00768098` (the port's `waitForPlayer`) runs over the four player slots (`0x007680f2 .. 0x00768159`). For a slot whose player position is within a squared distance of `6251.0` (`0x009768a0`, compared at `0x0076810f .. 0x00768118`) of `(-50, 24)` (the immediates at `0x007680b3` / `0x007680bc`, the distance helper `0x007a9180`, the squared sum of the two axes), it builds the packet at `0x0076811a .. 0x00768139`: opcode `0xDC`, size 2, `u16 0xFFFF`, action `u16 0` (`0x0076812b`, `0x00768135`), param `u16 0x19` (`mov ecx, 0x19` at `0x00768130`, stored at `0x00768139`). It sends it at `0x0076814c` (`call 0x008003e0`) when the sender guard `0x0052cf54` passes (`0x0076813f .. 0x00768146`; the port's `leader()`).
+- **The row (table 0x009f6c60, 40 bytes a row).** Row 25 (`0x009f7048`, the port's `SM_STATES[0x19]`): kind 4, handler `0x00769a64`, next 2, animation 24, flags `0x8a0`, parts 2. Row 0 (`0x009f6c60`): next -1, flags `0x808`, parts 0.
+- **Next (the exit to 2).** Row 25's handler `0x00769a64` calls `0x0076b688` (`UpdatePhaseAndBGM`, the port's `cutsceneEnter`) on phase 4 and `0x0076b620` (`ProcessDyingState`, `cutsceneLeave`) on phase 5. The wait is `HandleStateOrPacket 0x0076a658`: with flag `0x20` set (row 25 has it), it runs `EnterDefaultState 0x0076a708` (flag 2 set, flag 0x20 cleared) once `GetGlobalGameState()` is 0 or its bit 0 is set. Flag 2 makes `UpdateState` (`0x00769f88`) run `ChangeState` to the row's next, 2.
+
+**Table check (done by script, not by eye):** all 31 rows of `SM_STATES` agree with the exe's rows on kind, next, animation, flags and parts. The four animation fields that read `65535` in the exe are the port's `-1` (rows 0, 16, 29, 30; the port's `enter()` only takes `anim >= 0`). The animation table `0x009f6a20` (16-byte rows: a `u16` mode, motion, speed float, a loop word) matches `SM_ANIMS` on motion and speed for all 28 rows; the port's `loop` is the exe's mode `1` (rows 1, 11, 13, 15), and row 24 (the intro's 0x19 animation) is motion 0x1c, speed 1, not looping.
+
+**What the exe does NOT settle (the timing, not the order).** The exit of 0x19 is gated by `GetGlobalGameState` (the dump's `int GetGlobalGameState(void)`, `Psobb.exe-05112026.c:254720`; its VA is not read): with no current map object it returns 0 and the wait ends at once; with one, it returns the map's `+0x9c` block and the gate is that block's bit 0 at `+0x9e`, which the function itself sets when the default NPC camera index is not 5. The port instead ends 0x19 when the intro motion (0x1c) has ended (`cutsceneWait`, `clock.ended`). That is the ASSUMED already marked in the file header: in the exe the intro lasts as long as the cutscene object, not the boss's animation. So in Chrome the 0x19 time is the port's animation length, not the exe's.
+
+**Smaller differences (not changed):**
+- The exe's `0x00768098` does not return after the first send: it runs the four slots and sends one `{0, 0x19}` per in-range slot in the same frame. The second and later sends are no-ops (flags `0x8a0 & 0x25` is set, and `ProcessStateTransition` queues nothing for the state it is already in), but they are real packets. The port's `waitForPlayer` returns after one send, so it sends one.
+- `form` (`kind === 3 || sid >= 11`) reads 2 in 0x19, the cutscene rows. No attack runs there, so nothing is affected; the exe's form for these rows was not traced.
+
+**Checks:** `node tests/saintmilionboss.test.ts` (ALL PASS), `node tests/saintmilion.test.ts` (all checks passed). No code changed, so no typecheck was run. Not run in Chrome (the Chrome run was 2026-10-24 "Boss leftovers in Chrome").
+
 ## 2026-10-24: NPC attack AI: the cast eligibility of the head's chooser (CanPlayerCastTechnique)
 
 **Question:** the ROADMAP's "NPC players' attack AI" line lists the NPC's own level / MST / eligibility as open. The chooser (`NpcHeadChooser`, AIProcessState) asked `canCast` and the town answered `true`. What does the exe's eligibility test check for B's player?
