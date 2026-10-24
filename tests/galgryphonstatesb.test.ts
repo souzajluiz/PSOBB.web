@@ -90,7 +90,7 @@ function makeCtx(over: { players?: number; recordDuration?: number } = {}, fxOve
     releaseEffects: () => calls.push('releaseEffects'),
     footsteps: () => calls.push('footsteps'),
     lerpBattle: () => calls.push('lerpBattle'),
-    attackDispatch: () => calls.push('attackDispatch'),
+    thresholdDispatch: () => calls.push('thresholdDispatch'),
     phaseStats: () => calls.push('phaseStats'),
     spawnRing: () => calls.push('spawnRing'),
     disableMinions: () => calls.push('disableMinions'),
@@ -264,7 +264,7 @@ eq(wrapShortB(100), 100, 'wrapShort: a small value is unchanged');
   eq(ctx.b.flags & 0x30, 0x30, 'S21 enter: flags 0x30');
   motion.time = 11; // the tick reaches 12: the near band (10..17)
   runGalgryphonStateB(ctx, 21, 0);
-  check(calls.includes('footsteps') && calls.includes('attackDispatch'), 'S21: footsteps and attack dispatch');
+  check(calls.includes('footsteps') && calls.includes('thresholdDispatch'), 'S21: footsteps and the threshold dispatch');
   near(ctx.b.velZ, 1, 'S21 near band: speed 1 along heading 0');
   runGalgryphonStateB(ctx, 21, 5);
   eq(ctx.b.flags & 0x30, 0, 'S21 leave: clears 0x30');
@@ -352,7 +352,8 @@ eq(wrapShortB(100), 100, 'wrapShort: a small value is unchanged');
 {
   const { ctx, calls } = makeCtx({ players: 4 });
   runGalgryphonStateB(ctx, 27, 0); // m = 0 -> the beam
-  check(calls.some((c) => c === 'spawnBeam:true:16384'), 'S27: P > 3 at m % 20 == 0 spawns the beam (flag true at m/20 = 0)');
+  // The raw random 16384 scales to trunc(16384 / 65536 * 4) = 1 (galgryphonfx.ts s27BeamValue).
+  check(calls.some((c) => c === 'spawnBeam:true:1'), 'S27: P > 3 at m % 20 == 0 spawns the beam (flag true at m/20 = 0, value scaled by s27Beam)');
 }
 {
   const { ctx, calls } = makeCtx({ players: 1 });

@@ -18,11 +18,13 @@
 // attack spawns are hooks in GalgryphonFxB, named with the exe address they stand for;
 // the brain (the wiring into render/combat.ts) is not done here.
 //
-// The per-state context is GalgryphonStateCtxB below. It is a local minimal shape: the
-// S0..S17 module (galgryphonstatesa.ts, not merged yet) defines GalgryphonStateCtx and
-// GalgryphonHandler; at wiring time this file's ctx and that one get unified.
+// The handlers take GalgryphonStateCtxB, a view of part A's GalgryphonStateCtx (viewStateCtxB at the
+// bottom of this file): one context, one body, one set of hooks for S0..S34 (galgryphonai.ts).
 //
 // Run: node tests/galgryphonstatesb.test.ts
+
+import type { GalgryphonBody, GalgryphonMotion, GalgryphonStateCtx } from './galgryphonstatesa.ts';
+import { s27Beam } from './galgryphonfx.ts';
 
 // ---- constants (exe bytes; see the comments per use) ----
 
@@ -203,8 +205,12 @@ export interface GalgryphonFxB {
   footsteps(): void;
   /** 0x004a46bc: lerp the battle params (the lerp part is ported by the hook). */
   lerpBattle(): void;
-  /** 0x004a47a8: the four-way attack dispatch on the frame events. */
-  attackDispatch(): void;
+  /**
+   * 0x004a47a8 (UpdateOlgaMinionState_004a47a8, dump 224813): the threshold dispatch on the four
+   * float thresholds 0x00a475c4..d0 (galgryphonfx.ts minionThresholdDispatch), called from the S21
+   * frame. Not an attack: the attack is 0x004a8690, called from the minion update (galgryphon.ts).
+   */
+  thresholdDispatch(): void;
   /** 0x004a4ae8: the phase battle-stats gate (ResetOlgaMinionStats_004a4ae8 in the dump). */
   phaseStats(): void;
   /** 0x004a9174: spawn the ring / area attack at a point with a heading. */
@@ -419,7 +425,7 @@ export const galStateB21: GalgryphonHandlerB = (ctx, phase) => {
   ctx.motion.tick();
   ctx.fx.footsteps();
   ctx.fx.lerpBattle();
-  ctx.fx.attackDispatch();
+  ctx.fx.thresholdDispatch();
   const d = ctx.motion.elapsed();
   let damp: number;
   let speed: number;
@@ -585,10 +591,9 @@ export const galStateB27: GalgryphonHandlerB = (ctx, phase) => {
     ctx.fx.lightningUnderBody();
     ctx.fx.lightningTransform(60.0);
   }
-  if (ctx.players > 3 && b.m % 20 === 0) {
-    // the raw get_random_int >> 16 value; the exe scales it by constants not decoded (ASSUMED in the hook)
-    ctx.fx.spawnBeam(((b.m / 20) & 1) === 0, ctx.rng.next16());
-  }
+  // The beam on m % 20 == 0 (flag (m / 20) & 1 == 0) with the value of the exe's scaling (galgryphonfx.ts s27Beam).
+  const beam = ctx.players > 3 ? s27Beam(b.m, () => ctx.rng.next16()) : null;
+  if (beam) ctx.fx.spawnBeam(beam.flag, beam.value);
   ctx.fx.sfx(GALGRYPHON_SFX_B.sfx3ab);
   b.m += 1;
 };
@@ -884,6 +889,78 @@ export const GALGRYPHON_STATE_HANDLERS_B: Readonly<Record<number, GalgryphonHand
   33: galStateB33,
   34: galStateB34,
 };
+
+// ---- the unified context: part A's GalgryphonStateCtx seen with part B's names ----
+
+/**
+ * Part B's field names over part A's GalgryphonBody. The exe bytes are the same (the -b doc's
+ * int-index names were x4): one storage, two names. Aliases: y = h (+0x3c), velX / velZ = vx / vz,
+ * headingVel = turn (+0x488), dirX / dirZ = toTargetX / toTargetZ (+0x3a8 / +0x3b0), n = aux (+0x6e8),
+ * pitchB = tilt (+0x64), k = aura (+0x6f0; S4 and S30 never run together).
+ */
+export function bodyViewB(a: GalgryphonBody): GalgryphonBodyB {
+  return {
+    get x() { return a.x; }, set x(v: number) { a.x = v; },
+    get y() { return a.h; }, set y(v: number) { a.h = v; },
+    get z() { return a.z; }, set z(v: number) { a.z = v; },
+    get heading() { return a.heading; }, set heading(v: number) { a.heading = v; },
+    get pitch() { return a.pitch; }, set pitch(v: number) { a.pitch = v; },
+    get pitchB() { return a.tilt; }, set pitchB(v: number) { a.tilt = v; },
+    get stage() { return a.stage; }, set stage(v: number) { a.stage = v; },
+    get flags() { return a.flags; }, set flags(v: number) { a.flags = v; },
+    get sub() { return a.sub; }, set sub(v: number) { a.sub = v; },
+    get n() { return a.aux; }, set n(v: number) { a.aux = v; },
+    get m() { return a.m; }, set m(v: number) { a.m = v; },
+    get k() { return a.aura; }, set k(v: number) { a.aura = v; },
+    get slope() { return a.slope; }, set slope(v: number) { a.slope = v; },
+    get velX() { return a.vx; }, set velX(v: number) { a.vx = v; },
+    get velY() { return a.vy; }, set velY(v: number) { a.vy = v; },
+    get velZ() { return a.vz; }, set velZ(v: number) { a.vz = v; },
+    get headingVel() { return a.turn; }, set headingVel(v: number) { a.turn = v; },
+    get dirX() { return a.toTargetX; }, set dirX(v: number) { a.toTargetX = v; },
+    get dirZ() { return a.toTargetZ; }, set dirZ(v: number) { a.toTargetZ = v; },
+    get pA() { return a.pA; }, set pA(v) { a.pA = v; },
+    get pB() { return a.pB; }, set pB(v) { a.pB = v; },
+  };
+}
+
+/** Part B's motion calls over part A's motion: tick 0x007aa094, elapsed 0x007aabd8, frameEvent 0x007aaa30; the rest are part A's readers. */
+export function motionViewB(m: GalgryphonMotion): GalgryphonMotionB {
+  return {
+    tick: () => m.tick(),
+    frameEvent: (t: number) => m.crossed(t),
+    elapsed: () => m.frame(),
+    step: () => m.speed(),
+    // +0xb4: part A reads it as the playing row's slot, part B as the record flags (ASSUMED the same byte).
+    recordFlags: () => m.playing(),
+    setFlagsB0: (c: number, s: number) => m.setFlagsB0(c, s),
+  };
+}
+
+const viewCache = new WeakMap<GalgryphonStateCtx, GalgryphonStateCtxB>();
+
+/**
+ * The part B context over the unified one (cached per context). setAnim writes the motion slot
+ * (+0xb8) through part A's play(): part B's GALGRYPHON_ANIM_B names are used as slot numbers here
+ * (ASSUMED: the doc's anim indices and the table's slots are not reconciled; see the DEVLOG).
+ */
+export function viewStateCtxB(c: GalgryphonStateCtx): GalgryphonStateCtxB {
+  const cached = viewCache.get(c);
+  if (cached) return cached;
+  const view: GalgryphonStateCtxB = {
+    b: bodyViewB(c.body),
+    motion: motionViewB(c.motion),
+    rng: c.rng,
+    rt: c.rt,
+    get players() { return c.players; },
+    get recordDuration() { return c.rec?.roll ?? 0; },
+    setAnim: (anim: number) => c.motion.play(anim),
+    advance: () => c.advance(),
+    fx: c.fx,
+  };
+  viewCache.set(c, view);
+  return view;
+}
 
 /**
  * Runs one phase of a state in 18..34 (the table lookup; other states return false).

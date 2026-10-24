@@ -71,6 +71,7 @@ import { VoloptAi, VoloptPartAi, VO_AI, type VoloptEvent } from '../combat/volop
 import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
+import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
@@ -1282,6 +1283,30 @@ export class CombatView {
             entityId,
             rng: () => this.rng(),
           });
+        } else if (className === 'TBoss5Gryphon') {
+          // The Gal Gryphon (combat/galgryphonai.ts): the brain owns the body, the pattern and the
+          // motion. The leader sends each 0xA0 (sendGalgryphonPacket); the followers apply them
+          // (onGalgryphonSync). ASSUMED: P is the live player count; the heading is the spawn yaw in BAMS.
+          ai = new GalgryphonAi({
+            entityId,
+            x: at.x,
+            h: instance.placed.world[1],
+            z: at.z,
+            heading: Math.round((at.angle * 65536) / (Math.PI * 2)) & 0xffff,
+            hp: stats.hp,
+            maxHp: stats.maxHp,
+            leader: () => this.game.selfId === this.game.leaderId,
+            players: () => Math.max(1, this.aiTargets().length),
+            rand: () => this.rng(),
+            send: (packet) => this.game.sendGalgryphonPacket(packet),
+            throwMinion: (origin, offset, target, slot) => {
+              this.galMinions.throw(origin, offset, target, slot);
+            },
+            ground: (x, z, y) => {
+              const gy = this.opts.ground?.(x, z, y) ?? null;
+              return gy === null ? null : { y: gy };
+            },
+          });
         } else if (profile) ai = new EnemyAi({
           x: instance.placed.world[0],
           z: instance.placed.world[2],
@@ -1797,6 +1822,11 @@ export class CombatView {
       }
       const ai = e.ai;
       if (!ai) continue;
+      if (ai instanceof GalgryphonAi) {
+        ai.setHp(e.stats.hp, e.stats.maxHp);
+        this.tickGalgryphon(e, ai, targets);
+        continue;
+      }
       if (ai instanceof DeRolLeAi) {
         this.tickDeRolLe(e, ai, targets);
         continue;
@@ -2706,6 +2736,38 @@ export class CombatView {
     if (!(e?.ai instanceof DragonAi) || e.dead) return;
     const target = dv.getUint32(8, true) & 0xffff;
     e.ai.applyRemote(dv.getUint16(4, true), dv.getUint16(6, true), target === 0xffff ? null : target, dv.getFloat32(12, true), dv.getFloat32(16, true));
+  }
+
+  // --- the Gal Gryphon (combat/galgryphonai.ts) ----------------------------------
+  //
+  // The brain owns the body (x, height, z, heading) and its motion row. The leader's brain sends
+  // each 0xA0 (its pattern step, through GalgryphonAi.emit) and each 0x9F (its target); the
+  // followers apply them (onGalgryphonSub) and run phase 0 only. ASSUMED: the body is placed at
+  // its own height (no ground follow); the motion plays on each change of row.
+  private tickGalgryphon(e: EnemyRuntime, ai: GalgryphonAi, targets: AiTarget[]): void {
+    const r = ai.tick(targets);
+    const root = e.instance.root;
+    root.position.set(r.x, r.y ?? root.position.y, r.z);
+    e.lift = 0;
+    root.rotation.y = r.angle;
+    if (!r.motion) return;
+    for (const a of e.instance.animators) {
+      try {
+        a.play(e.instance.archive.motion(r.motion.index, a.nodeCount), r.motion.speed, r.motion.loop);
+      } catch (err) {
+        this.opts.log(`Gal Gryphon motion ${r.motion.index}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  // A 0xA0 (the pattern step) or a 0x9F (the target) from the leader. The leader ignores its own echo.
+  private onGalgryphonSub(sub: number, body: Uint8Array): void {
+    if (body.length < 8 || this.game.selfId === this.game.leaderId) return;
+    const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    const e = this.enemies.get(dv.getUint16(2, true) - 0x1000);
+    if (!(e?.ai instanceof GalgryphonAi) || e.dead) return;
+    if (sub === 0xa0) e.ai.receive(dv);
+    else e.ai.receiveTarget(dv);
   }
 
   // --- the Gol Dragon (combat/goldragon.ts) -------------------------------------
@@ -3677,8 +3739,8 @@ export class CombatView {
   // mark_falz_as_dead_and_request_drop at the end of OL ENDING, on every client.
 
   private falzHead: EnemyRuntime | null = null;
-  // The Gal Gryphon's thrown minions (combat/galgryphon.ts). Nothing throws them
-  // yet: the Gryphon brain (the S7 handler, animation 20.5) is not ported.
+  // The Gal Gryphon's thrown minions (combat/galgryphon.ts). The brain's S7 handler
+  // (animation 20.5) throws them through GalgryphonAi's throwMinion (spawn wiring above).
   private readonly galMinions = new GalgryphonMinionManager();
   // Dark Falz's cutscene camera file (bo04opcam.rel), read on the first call of bossCameraView.
   private bossCameraSource: BossCameraSource | null = null;
@@ -8167,6 +8229,10 @@ export class CombatView {
     }
     if (sub === 0x12) {
       this.onDragonAction(body);
+      return;
+    }
+    if (sub === 0xa0 || sub === 0x9f) {
+      this.onGalgryphonSub(sub, body);
       return;
     }
     if (sub === 0xa8) {

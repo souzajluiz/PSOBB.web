@@ -21,6 +21,7 @@
 
 import type { GalgryphonPacket } from './galgryphonscript.ts';
 import type { Vec3 } from './galgryphon.ts';
+import type { GalgryphonFxB, GalgryphonRngB, GalgryphonRuntimeB } from './galgryphonstatesb.ts';
 
 /** The phases a handler is called with (the exe's ProcessState phase numbers). */
 export const GALGRYPHON_PHASE = {
@@ -130,6 +131,8 @@ export interface GalgryphonMotion {
   playing(): number;
   /** FUN_007aaa30(f): frame f was crossed on this tick. */
   crossed(frame: number): boolean;
+  /** +0xb0 flags: clear `clear`, then set `set` (S30 sub 0 -> 1 sets 0x1 and clears 0x4). Part B's setFlagsB0. */
+  setFlagsB0(clear: number, set: number): void;
 }
 
 /** The boss's own fields (exe byte offsets in the comments). Mutated by the handlers. */
@@ -175,13 +178,25 @@ export interface GalgryphonBody {
   target: { id: number; x: number; z: number };
   /** +0x6f0: the entrance aura flag (S4 sets it on enter, clears it on leave). */
   aura: number;
+  /** +0x6ec: the S27 spin counter (part B's `m`). */
+  m: number;
+  /** +0x6fc: the S30 dive's per-tick height step (part B's `slope`). */
+  slope: number;
+  /** +0x480: the vertical velocity (part B's `velY`; the integrate adds it). */
+  vy: number;
+  /** The S31 stored points (+0x3d4 / +0x3e0; part B's pA / pB). */
+  pA: Vec3;
+  pB: Vec3;
 }
 
 /** An FX object the host made (the exe's effect object). Opaque to the states. */
 export type GalgryphonFxHandle = object;
 
-/** The FX, sound and muzzle hooks. The host maps the exe's ids to its own assets. */
-export interface GalgryphonFx {
+/**
+ * The FX, sound and muzzle hooks. The host maps the exe's ids to its own assets. Part B's hooks
+ * (GalgryphonFxB, galgryphonstatesb.ts) are part of the same object: one context for both parts.
+ */
+export interface GalgryphonFx extends GalgryphonFxB {
   /** A literal effect index (FUN_0050b7a4's index: 0x201, 0x20d, ...), at a point. */
   spawn(effect: number, at: Vec3): GalgryphonFxHandle | null;
   /** A template slot of the boss's FX table (+0x5f8: slot k is the k-th int, 0 .. 0x18). */
@@ -280,6 +295,12 @@ export interface GalgryphonStateCtx {
   readonly world: GalgryphonWorld;
   readonly death: GalgryphonDeath;
   readonly net: GalgryphonNet;
+  /** The random source the states draw from (get_random_int >> 16 in the exe; the reseed is the host's). */
+  readonly rng: GalgryphonRngB;
+  /** The runtime .bss values (ASSUMED defaults, set by the host). */
+  readonly rt: GalgryphonRuntimeB;
+  /** The party size P the branches and the S27 / S30 gates read. */
+  readonly players: number;
   /** The minion throw of S7 (the host's GalgryphonMinionManager.throw). */
   throwMinion(origin: Vec3, offset: Vec3, target: { x: number; z: number }, slot: number): void;
   /** The event queue (FUN_006ff5f8: tag and argument). Its consumer is not decoded. */
