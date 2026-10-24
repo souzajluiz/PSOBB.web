@@ -55,7 +55,15 @@ import {
   type GalgryphonScriptContext,
   type GalgryphonSync,
 } from './galgryphonscript.ts';
-import type { GroundHit, Vec3 } from './galgryphonfx.ts';
+import {
+  GALFX_RING,
+  groundProbe as groundProbeOutcome,
+  minionRingTick,
+  sinowberillBurst,
+  type GroundHit,
+  type Vec3,
+} from './galgryphonfx.ts';
+import type { EnemyShot } from './enemyshots.ts';
 import type { AiFrame, AiTarget, EnemyAiMotion } from './enemyai.ts';
 
 /** The bits of +0x4c8 the brain itself reads (names are the port's; the exe's values are exact). */
@@ -92,10 +100,18 @@ export interface GalgryphonMotionRow {
   flags: number;
 }
 
-/** The rows the states 0..17 use (PROVEN from the doc's table). Other slots fall back to MOTION_DEFAULT. */
+/**
+ * The motion table 0x009a7c80 (PROVEN, dump of the exe bytes via `tools/exedata.py motions 009a7c80 27`):
+ * 27 records of 0x10 bytes: u16 mode @0, u16 chain slot @2, u32 MOTION FILE INDEX @4 (the doc's
+ * "float @4 = 0" was wrong), f32 step @8, u32 flags @12. A state writes a SLOT number into +0xb8
+ * (S27 writes the literal 0x11 at dump 224954), and the player reads record[slot]; the motion played
+ * is record[slot].motion. So the slot is the state's number and the motion is the record's @4.
+ * Before this table had all 27 rows, slots 2, 10..18, 21..23 fell back to the stand motion.
+ */
 export const GALGRYPHON_MOTION_ROWS: Readonly<Record<number, GalgryphonMotionRow>> = {
   0: { mode: 1, next: 0, motion: 9, frames: 30, speed: 0.8, flags: 0 },
   1: { mode: 1, next: 0, motion: 11, frames: 30, speed: 0.5, flags: 0 },
+  2: { mode: 3, next: 0, motion: 1, frames: 30, speed: 0.43, flags: 0 },
   3: { mode: 3, next: 0, motion: 10, frames: 40, speed: 0.5, flags: 0 },
   4: { mode: 1, next: 0, motion: 0, frames: 30, speed: 0.77, flags: 0 },
   5: { mode: 3, next: 0, motion: 6, frames: 40, speed: 0.48, flags: 0 },
@@ -103,8 +119,20 @@ export const GALGRYPHON_MOTION_ROWS: Readonly<Record<number, GalgryphonMotionRow
   7: { mode: 1, next: 0, motion: 5, frames: 20, speed: 0.9, flags: 7 },
   8: { mode: 3, next: 0, motion: 4, frames: 30, speed: 0.57, flags: 0 },
   9: { mode: 3, next: 0, motion: 3, frames: 40, speed: 0.7, flags: 0 },
+  10: { mode: 2, next: 11, motion: 22, frames: 10, speed: 1.0, flags: 0xa },
+  11: { mode: 1, next: 0, motion: 21, frames: 20, speed: 1.0, flags: 0xb },
+  12: { mode: 3, next: 0, motion: 23, frames: 35, speed: 1.0, flags: 0 },
+  13: { mode: 2, next: 14, motion: 15, frames: 14, speed: 0.4, flags: 0xd },
+  14: { mode: 1, next: 0, motion: 14, frames: 14, speed: 0.35, flags: 0xe },
+  15: { mode: 3, next: 0, motion: 12, frames: 14, speed: 0.4, flags: 0 },
+  16: { mode: 2, next: 17, motion: 25, frames: 30, speed: 0.75, flags: 0x10 },
+  17: { mode: 1, next: 0, motion: 24, frames: 10, speed: 0.35, flags: 0x11 },
+  18: { mode: 3, next: 0, motion: 26, frames: 30, speed: 0.6, flags: 0 },
   19: { mode: 2, next: 20, motion: 19, frames: 20, speed: 0.5, flags: 0x13 },
   20: { mode: 1, next: 0, motion: 17, frames: 20, speed: 1.0, flags: 0x14 },
+  21: { mode: 3, next: 0, motion: 20, frames: 20, speed: 0.5, flags: 0x15 },
+  22: { mode: 3, next: 0, motion: 18, frames: 30, speed: 0.0, flags: 0x16 },
+  23: { mode: 3, next: 0, motion: 13, frames: 30, speed: 0.35, flags: 0 },
   24: { mode: 3, next: 0, motion: 8, frames: 30, speed: 0.65, flags: 0 },
   25: { mode: 3, next: 0, motion: 7, frames: 500, speed: 1.0, flags: 0x80000000 },
   26: { mode: 3, next: 0, motion: 16, frames: 150, speed: 0.5, flags: 0 },
@@ -350,6 +378,8 @@ export interface GalgryphonAiOptions {
   playerPos?: (slot: number) => { x: number; y: number; z: number } | null;
   /** The event queue (FUN_006ff5f8: tag and argument). */
   queue?: (tag: number, arg: number) => void;
+  /** A sound at the boss (the probe's 0x39b); the host plays it. */
+  sfx?: (id: number) => void;
   /** Host overrides of the hook groups (the defaults are no-ops). */
   fx?: Partial<GalgryphonFx>;
   cine?: Partial<GalgryphonCine>;
@@ -389,6 +419,11 @@ export class GalgryphonAi {
   private hpNow: number;
   private hpMax: number;
   private readonly ctx: GalgryphonStateCtx;
+  // The minion ring (CreateGalgryphonMinion_004aabd8): its counter and state, and the attacks it made
+  // this tick. The attack is DispatchGalGryphonAttackEffectVariant_004a86e0 (dump 229600), at the centre.
+  private ring: { state: 0 | 1; counter: number; x: number; z: number } | null = null;
+  // The area hits and projectiles of this tick, handed to the host (frameOut's `shots`).
+  private shotsOut: EnemyShot[] = [];
 
   constructor(opts: GalgryphonAiOptions) {
     this.opts = opts;
@@ -467,6 +502,7 @@ export class GalgryphonAi {
       }
       this.integrate();
       this.cooldown();
+      this.tickRing();
     }
     return this.frameOut();
   }
@@ -496,7 +532,28 @@ export class GalgryphonAi {
     return true;
   }
 
+  /**
+   * The minion ring's tick (UpdateGalgryphonMinionParticles_004aade4, dump 229207): the spawn state
+   * (31 ticks) makes the variant attack with radius counter * 7 at the ring's centre; the fade state
+   * makes none. ASSUMED: the variant's speed0 is 1.0 (the caller's value is not decoded; it reads only
+   * the Derolle vtable's animation, which the port does not play).
+   */
+  private tickRing(): void {
+    const r = this.ring;
+    if (!r) return;
+    const t = minionRingTick(r.state, r.counter, { x: r.x, z: r.z }, { speed0: 1, variant: 0, variantParam2: 1 });
+    r.state = t.state;
+    r.counter = t.counter;
+    if (t.attack) {
+      // The variant context is [variant, speed, radius, 10, param2]: its radius is the ring's, not 15.
+      this.shotsOut.push(sinowberillBurst({ x: r.x, y: GALFX_RING.y, z: r.z }, t.attack));
+    }
+    if (t.dead) this.ring = null;
+  }
+
   private frameOut(): AiFrame {
+    const shots = this.shotsOut;
+    this.shotsOut = [];
     const slot = this.motionPlayer.playing();
     let motion: EnemyAiMotion | null = null;
     if (slot !== this.lastSlot) {
@@ -510,6 +567,7 @@ export class GalgryphonAi {
       angle: (this.body.heading * 2 * Math.PI) / 65536,
       hit: null,
       y: this.body.h,
+      shots: shots.length ? shots : undefined,
     };
   }
 
@@ -675,7 +733,12 @@ export class GalgryphonAi {
       kiriFx: noop,
       lightning: noop,
       lightningAux: noop,
-      groundProbe: noop,
+      groundProbe: () => {
+        // OlgaMinionSpawnEffect_004a15fc (dump 223918): the probe at the body; a hit at or below 6.0 plays 0x39b.
+        const hit = o.ground?.(b.x, b.z, b.h) ?? null;
+        const r = groundProbeOutcome({ x: b.x, y: b.h, z: b.z }, hit);
+        if (r) o.sfx?.(r.sfx);
+      },
       resetParticles: noop,
       releaseEffects: noop,
       footsteps: noop,
@@ -698,7 +761,10 @@ export class GalgryphonAi {
       spawnBeam: noop,
       lightningSetup: noop,
       lightningRelease: noop,
-      spawnMinionRing: noop,
+      spawnMinionRing: (x, _y, z) => {
+        // CreateGalgryphonMinion_004aabd8 (dump 229084): the ring starts at counter 0 in its spawn state.
+        this.ring = { state: 0, counter: 0, x, z };
+      },
       diveBeam: noop,
       updateTargeting: noop,
       initVelocity: noop,

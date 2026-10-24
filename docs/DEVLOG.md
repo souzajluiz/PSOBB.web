@@ -17438,3 +17438,41 @@ Trap Vision (item 8: `init_item_tool_8` 0x005df848, constructor 0x005df8dc, vtab
 - The stalactite's five debris parts (0x00679b70: the DerollePart bodies with the BML chunks and their physics); the record path of the shatter (+0x80: box status and 0x007b5038).
 - The destructible rock's break effects (0x006759d4, and the 0x006336f8 calls to 0x0050b510 with the SE / particle ids 0x45 and 0x46).
 - Trap Vision: no duration exists in the exe client (the value is a stack count). Open: the callers of 0x005de46c and 0x005de4a0 (the consume / add of the item's stack), and whether the use path's technique 14 cast (0x006e0780, case 14) has any Trap Vision effect (not traced; the dump names this function `use_telepipe`, so the vtable may belong to the Telepipe).
+
+## 2026-10-23: Gal Gryphon effects and hits (minion attack, ring variant, motion table, brain gate)
+
+**Premise check.** The brief's list of effects was right about the hooks, but the brain from the previous entry never ran in the game: the `TBoss5Gryphon` branch of the spawn (`render/combat.ts`) sat inside `if (profile || OWN_FSM.has(className))`, and the Gal Gryphon has neither, so no `GalgryphonAi` was built (the boss stayed a model with no brain). Fixed: the branch is let in by name. The Playwright check below found it.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump = `Psobb.exe-05112026.c`, disassembly via objdump).**
+- Motion table 0x009a7c80: 27 records of 0x10 bytes (`tools/exedata.py motions 009a7c80 27`). Layout: u16 mode @0, u16 chain slot @2, **u32 motion file index @4**, f32 step @8, u32 flags @12. The doc's "float @4 (0 in all records)" is wrong; the field is the motion index.
+- A state writes a slot number into +0xb8, and the player reads record[slot]. S27's enter writes the literal `0x11` (`HandleGalgryphonState_004a4d6c`, dump 224954, `*(short*)(this+0xb8) = 0x11`). So the GALGRYPHON_ANIM_B values are slots (kiri = slot 17, which plays motion 24), and the doc's names/frames were keyed by motion index. The port's row map had 14 of the 27 rows: slots 2, 10..18, 21..23 fell back to the stand motion. Now complete.
+- Homing minion area hit: `UpdateGalgryphonMinion_004ab283` calls `DispatchGalGryphonAttackEffect_004a8690` at 0x004ab39e (dump 229617), after the life test (`+0x20 > 0x168`) and before the direction (0x004ab4e8), so once per tick in MOVE. Its `this` is the result of 0x004a6edc, which returns the global `*0x00a47660` (the Gal Gryphon head), and its `param_2` is the minion's position (+0x28).
+- The attack's context (dump 227054): `[g_GalgryphonBaseEffectIntensity, g_GalgryphonAnimationSpeeds[2]->field2_0x8, 15.0 (0x41700000), 10.0 (0x41200000), uint 0x00903990]`. The intensity global 0x00903980 is 0 in the file, and its only absolute reference in .text is the read at 0x004a8694 (`tools/exedata.py xref`), so the exe's power is 0.
+- The ring variant `DispatchGalGryphonAttackEffectVariant_004a86e0` (dump 227070): `[*0x00903994 (= 0), speed * factor, radius, 10.0, *0x009039a4 (= 1)]`.
+- `DispatchSinowberillAttackEffect_0051fc9c` (dump 303366): the +8 float > 100.0 picks vtable +0x30, else +0x34 (the port's `sinowberillBranch`). `DerolleInitializeItemDisplay_0051fcf4` writes the context's +8 into the Derolle object at +0xc and 0x9d03 at +0x18.
+
+**What changed.**
+- `combat/galgryphonai.ts`: `GALGRYPHON_MOTION_ROWS` has all 27 rows (the frames are keyed by motion index, from the doc's frame column; they match the rows already there). The brain's `tickRing` runs the minion ring (`minionRingTick`) each tick and queues its variant hit (`sinowberillBurst` with the ring context, radius counter * 7); `frameOut` returns the queue as `shots`. The default `groundProbe` hook runs the pure `groundProbe` and calls the new option `sfx` (0x39b). The default `spawnMinionRing` hook starts the ring.
+- `combat/galgryphonminion.ts` and `combat/galgryphon.ts`: `update(players, attack?)` calls the attack once per MOVE tick at the minion's point (after the life test, before the direction).
+- `render/combat.ts`: the spawn gate (above); `tickGalgryphon` launches `r.shots` through `launchShot`; the minion's attack goes to `galgryphonAttack` (`galgryphonAttackBurst(at, 0, 0)` on the live Gal Gryphon, so the hit is resolved by `tickShots` through `enemyTechHitsPlayer`, the player's damage path); the probe's sound uses `playSe`.
+- `client/e2e/galgryphon-floor12.spec.ts` (new): an Episode 2 party warps to floor 12 and checks the brain and the page errors, with one screenshot.
+
+**ASSUMED.**
+- The hit's damage is `trunc(0.2 * (0.5 * mst + power))` with power 0 (the exe's intensity); the mapping of the context words to the group / power of `entity_hit_by_tech` is not decoded.
+- The Derolle vtable bodies (+0x30 / +0x34) are not decoded: the burst radius is the context's +8 float, the branch above 100 is not modelled, and the hit is a sphere of size 3 (`launchShot`).
+- The homing hit's point is the minion's (x, ground y, z). The ring's centre is its point, and its `speed0` is 1.0 (the caller's value is not decoded; it only feeds the Derolle animation).
+- The frame counts of the table rows are the motion index's (the doc's column); the playback's real timing is not checked against the NJM files.
+
+**Tests.**
+- `node tests/galgryphonai.test.ts`: the table has 27 rows and the motion of slots 2, 10, 17, 22, 25; the ring makes 31 hits with radius 0..210 in steps of 7, then none.
+- `node tests/galgryphonminion.test.ts`: one attack per move tick, none at init or in WIND.
+- `node tests/galgryphon.test.ts`, `galgryphonfx`, `galgryphonstatesa`, `galgryphonstatesb`, `galgryphonscript`: pass.
+- `node tests/combat.test.ts` (vendor linked from the main checkout, then removed): 5852 checks, 0 failures.
+- `cd client && node_modules/typescript/bin/tsc --noEmit -p .` (Node 24; node_modules linked, then removed): exit 0.
+- Playwright (one check, as the brief allowed): `npx playwright test e2e/galgryphon-floor12.spec.ts` passes. The boss is built as `GalgryphonAi` (S4 entrance, HP 9000), 0 page errors. Screenshot verdict: the Gal Gryphon model is drawn in its flying pose high in the frame, the player stands on the floor, and the boss icon is on the minimap. It is the entrance, not a mid-fight frame: the boss stays in S4 over about 15 s, so the entrance's end is not confirmed in the browser.
+
+**Left.**
+- The effect objects: the ring's particles, the S27 beam, the lightning, the dive beam (`galgryphonfx.ts` bodies are pure; no objects are drawn).
+- The S27 beam spawn `SpawnOlgaMinionEffect_004a5218` (dump 225179: the random radius and angle, the ground probe, `CheckOlgaMinionTargetValidity_004a5428`, then `CreateGalgryphonLightningBeamEffectObject_004aa4ec`), and the lightning jitter `create_jitter_values_for_points` (dump 654426; the consts 0x009043ac, 0x009043b8, 0x009043bc are not read yet).
+- The Derolle vtable bodies behind the area hit, and the `thresholdDispatch` input floats (0x00a475c4..d0, no writer in the image).
+- The S4 entrance's end in the browser (the boss stayed in S4 over about 15 s).

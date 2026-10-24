@@ -159,14 +159,14 @@ export class GalgryphonMinionManager {
   }
 
   /** One game tick: the launchers (which make the Effects), then the Effects (which home on the party). */
-  update(players: readonly GalgryphonPlayer[], ground: GroundFn): void {
+  update(players: readonly GalgryphonPlayer[], ground: GroundFn, attack?: (at: Vec3) => void): void {
     const made: GalgryphonMinionEffect[] = [];
     for (const l of this.launchers) {
       const e = l.update(ground);
       if (e) made.push(e);
     }
     this.launchers = this.launchers.filter((l) => !l.dead);
-    for (const e of this.effects) e.update(players);
+    for (const e of this.effects) e.update(players, attack);
     this.effects = this.effects.filter((e) => !e.dead);
     this.effects.push(...made);
   }

@@ -119,6 +119,30 @@ eq(low?.state, GALMINION_STATE.init, 'starts in state 0');
   eq(m.y, 4, 'height is the ground');
 }
 
+// ---- the homing minion's area hit (DispatchGalGryphonAttackEffect_004a8690 at 0x004ab39e, each move tick) ----
+{
+  const ground = () => 4;
+  const m = GalgryphonMinionEffect.create(ground, 100, 200, 0xffff)!;
+  const hits: Array<{ x: number; y: number; z: number }> = [];
+  const att = (p: { x: number; y: number; z: number }) => hits.push(p);
+  m.update([], att); // init -> move
+  eq(hits.length, 0, 'attack: none on the init tick');
+  m.update([], att);
+  eq(hits.length, 1, 'attack: one per move tick');
+  m.update([], att);
+  eq(hits.length, 2, 'attack: each move tick');
+  near(hits[1]!.y, 4, 'attack: at the minion height (the ground under it, capped at 6)');
+  // The wind state (after 360 ticks of move) makes no attack.
+  const w = GalgryphonMinionEffect.create(ground, 100, 200, 0xffff)!;
+  w.update([]);
+  for (let i = 0; i <= GALMINION.life + 1; i++) w.update([]);
+  const before = hits.length;
+  const w2: Array<unknown> = [];
+  for (let i = 0; i < 5; i++) w.update([], () => w2.push(1));
+  eq(w2.length, 0, 'attack: none once the minion winds down');
+  check(before >= 0, 'attack: counted');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

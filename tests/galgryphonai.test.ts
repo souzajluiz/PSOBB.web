@@ -17,6 +17,7 @@ import {
 import { decodeGalgryphonSync } from '../client/src/combat/galgryphonscript.ts';
 import { bodyViewB, viewStateCtxB } from '../client/src/combat/galgryphonstatesb.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
+import { DrlBurst } from '../client/src/combat/derolle.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -234,6 +235,39 @@ const rollOf = (bytes: Uint8Array) => decodeGalgryphonSync(new DataView(bytes.bu
   } as never);
   eq(cv.players, 3, 'view: the player count is the context\'s');
   eq(cv.recordDuration, 0, 'view: no record gives duration 0');
+}
+
+// ---- the motion table (0x009a7c80, 27 records; the motion is the record's u32 @4) ----
+{
+  for (let k = 0; k <= 26; k++) check(GALGRYPHON_MOTION_ROWS[k] !== undefined, `motion table: slot ${k} has a row`);
+  eq(GALGRYPHON_MOTION_ROWS[17]!.motion, 24, 'motion: slot 17 (S27 kiri, literal 0x11) plays motion 24');
+  eq(GALGRYPHON_MOTION_ROWS[22]!.motion, 18, 'motion: slot 22 (S18 runin) plays motion 18');
+  eq(GALGRYPHON_MOTION_ROWS[2]!.motion, 1, 'motion: slot 2 (S31 kakuin) plays motion 1');
+  eq(GALGRYPHON_MOTION_ROWS[10]!.next, 11, 'motion: slot 10 chains to slot 11');
+  eq(GALGRYPHON_MOTION_ROWS[25]!.frames, 500, 'motion: slot 25 is the 500-frame motion 7');
+}
+
+// ---- the minion ring's area hits (UpdateGalgryphonMinionParticles_004aade4 -> 0x004a86e0) ----
+{
+  const r = rig({ leader: true, players: 1 });
+  // The S31 22.0 event makes the ring (CreateGalgryphonMinion_004aabd8). Its hook is the default one.
+  (r.ai as unknown as { ctx: { fx: { spawnMinionRing(x: number, y: number, z: number): void } } }).ctx.fx.spawnMinionRing(10, 2, 20);
+  const radii: number[] = [];
+  let spawnTicks = 0;
+  for (let i = 0; i < 80; i++) {
+    const f = r.ai.tick([]);
+    for (const s of f.shots ?? []) {
+      if (s instanceof DrlBurst) radii.push(s.radius);
+      spawnTicks++;
+    }
+  }
+  eq(spawnTicks, 31, 'ring: 31 area hits (the spawn state runs 31 ticks)');
+  eq(radii[0], 0, 'ring: the first hit has radius counter * 7 = 0');
+  eq(radii[30], 210, 'ring: the last spawn hit has radius 30 * 7 = 210');
+  check(radii.every((v, i) => v === i * 7), 'ring: radius steps by 7');
+  // The ring's hits are the variant context: power 0 (the exe's global 0x00903994), a tech hit.
+  const first = (r.ai as unknown as { shotsOut: unknown[] }).shotsOut;
+  eq(first.length, 0, 'ring: the queue is drained by frameOut');
 }
 
 if (failures > 0) {
