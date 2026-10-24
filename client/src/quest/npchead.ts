@@ -1,56 +1,68 @@
 // The NPC's head (SinowberillHead_*): where the owner's client sends the NPC to walk, whether
-// a move is needed, and the field's attack state machine. The exe keeps one head record per
-// NPC; this is the part of it the follow walk and the attack read (DEVLOG 2026-10-23 NPC follow
-// head, and the DEVLOG entry of the map-mode port). The dump's Sinowberill / Head names are
-// community guesses; the bodies are what is used. Head fields: +0x34 tier word, +0x40 leash
-// (stat row k=4), +0x44 / +0x58 near test, +0x48 attack radius, +0x4c far radius, +0x52 / +0x53
-// need bytes, +0x54 stand-off, +0x66 / +0x68 counters, +0x6c / +0x5c timers, +0x7c state,
-// +0x80 flags, +0x8c / +0x8d wall counters, +0x8e cooldown, +0x90 move timer, +0xac send
-// target, +0xd0 move target, +0xdc anchor, +0xe0 / +0xe4 anchor height and z, +0x94..+0x9c the
-// last move vector. The NPC's own record B has +0x38 (position), +0x300 (weapon position, XZ the
-// same as +0x38), +0x7c / +0x84 (target ids), +0x8c (need bits), +0x90 (status bits).
+// a move is needed, the target pick of the field, and the attack state machine. The exe keeps
+// one head record per NPC (P) with the owner entity Q = P+0x74 and the NPC entity B = P+0x78
+// (B+0x94 is the NPC's player record: its position +0x38, weapon +0x300, height +0x304, TP +0x336).
+// The dump's Sinowberill / Head names are community guesses; the bodies are what is used.
+//
+// Head fields (P): +0x30 / +0x34 raw row words (+0x34 = the tier word, 0x40 = no state-2 cast),
+// +0x38 acquire range, +0x40 leash, +0x44 far radius (TryAttack's near test is the far test:
+// (P+0x44)^2 <= P+0x58), +0x48 attack radius, +0x4c path radius, +0x50 level byte, +0x52 / +0x53
+// need bytes, +0x54 stand-off, +0x58 owner-NPC distance^2, +0x66 TryAttack counter, +0x68 path
+// counter, +0x7c state, +0x80 flags, +0x88 spawn distance^2, +0x8c / +0x8d wall counters,
+// +0x8e cooldown, +0xac send target, +0xd0 move target, +0xdc anchor.
+// B fields: +0x0 candidate count and triples (id, box, distance^2), +0x7c / +0x84 the locked
+// id and box (+0x80 the previous id), +0x8c need bits (0x1 moved, 0x2 acquired a target, 0x20 /
+// 0x80 avoidance, ASSUMED not written here), +0x90 status bits, +0x9c the last move origin.
 //
 // Traced (dump /Users/junior/Downloads/psobb-master/reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c):
-//  - the update chain of a leader-following NPC (SinowberillChallengePlayer_Update_007aefd4,
-//    .c:794690): SinowberillHead_UpdateState_007b00bc (.c:795481), then
-//    SinowberillHead_AIUpdate_007b1134 (.c:796128), then the state dispatch
-//    SinowberillHead_AIUpdateState_007b2764 (.c:796961), and only when the owner's 0x800 is clear
-//    (.c:794710); the sends are gated by the record's +0x328 & 2 (.c:796974).
-//  - Pioneer 2 (map_is_pioneer2_, .c:795492): UpdateState_007b00bc sets the anchor to the
-//    owner's weapon position (UpdateAttackTarget_007b0fdc with head +0x84 == 0, .c:796082),
-//    state 1 (move) and flag 0x20, and returns.
-//  - the spawn check (SinowberillChallengeBoss_CheckSpawnValidity_007b1220, .c:796178): range
-//    min(40, leash + 12) (DAT_0097dd8c = 40, DAT_0097dd90 = 12); inside it the head stops.
-//  - the move target (SinowberillHead_AIUpdateMovement_007b1298, .c:796204): the midpoint of
-//    the NPC and the anchor (k = 0.5, DAT_0097dd84). The wall ray (SinowberillHead_CheckWall_007b18e0,
-//    cast_ray_at_map_collision_geometry mask 0x2100) is from the NPC's weapon position to the
-//    anchor (.c:796254). With no wall and B's need bits 0x20 / 0x80 clear, the target is the
-//    midpoint, or SinowberillHead_CalculateTarget_007b193c when the wall counter (+0x8c) is
-//    15..29 (.c:796257..796290).
-//  - the move gate (SinowberillHead_AIUpdateState_007b267c, .c:796915): xz distance squared
-//    above DAT_0097dd34 = 100 needs a move; with the counter (+0x8c) at 0x1f or more the move is
-//    refused and the counter is set to 0x1e with flag 0x4000 (.c:796915..796936).
-//  - the state-1 sends (2764 state 1, .c:796990..797035): quest/npcai.ts NpcMoveSender.
-//  - the map-mode branch (UpdateState_007b00bc, head mode +0x1c = 1, .c:795510..795700):
-//    TryAttack (.c:795725), CheckPathAndTarget (.c:795775), the attack chooser
-//    AIProcessState(1) / (0) (quest/npcai.ts NpcHeadChooser), UpdateAttackTarget's second
-//    target branch (.c:796082). The state-2 cast is set here (.c:795602: CheckPathAndTarget
-//    ok and no cooldown, flag 0x1000 set).
-//  - the state-2 cast (SinowberillHead_CastTechnique_007b2e20, .c:797346): the tier from +0x34,
-//    the table 0x0097dcf8, the strong flags 0x2000 (head) and 0x1000 (B +0x90), the roll with the
-//    byte +0x53 (quest/npchead.ts headTwoTech); each tick while the state is 2 (2764 dispatch).
+//  - the update chain (SinowberillChallengePlayer_Update_007aefd4, .c:794690): UpdateState_007af1a8
+//    (the owner's bit 2 on Q), SinowberillHead_UpdateState_007af7ec (.c:795069: the distance, the
+//    B acquire, the wall counter), SinowberillHead_UpdateState_007b00bc (.c:795481: the Pioneer 2
+//    branch, or the field's mode 0 / mode 1), SinowberillHead_AIUpdate_007b1134 (.c:796128), and the
+//    state dispatch SinowberillHead_AIUpdateState_007b2764 (.c:796961) with its +0x328 & 2 gate.
+//  - the stat row (SinowberillChallenge_InitializePlayerStats_007adbe0, .c:794403..794413; see
+//    npcai.ts NPC_ATTACK_ROWS): every field above that comes from the table.
+//  - the mode-1 entry: AcquireTarget (SinowberillHead_AcquireTarget_007afc2c, .c:795255) sets B +0x8c
+//    bit 2 when EnemyAI_AcquireClosestTargetInRange (.c:794836) finds a candidate within the range
+//    P+0x38 of the NPC; the owner's bit (Q +0x8c bit 2, UpdateState_007af1a8, .c:794797) is set the
+//    same way with range 30 around the owner. Neither bit is cleared in the traced code (only reset).
+//  - the candidate list: AcquireClosestTargetInRange fills B's triples (count at B+0x0, at most 9,
+//    sorted ascending by the box's xz distance^2 from the NPC): enemies with state flags and entity
+//    flag 0x20000000, per box with flag 0x8000 within the range.
+//  - the wall counter (+0x8c, UpdateState_007af7ec .c:795227): CheckHeadDistance (SinowberillCheckHeadDistance_007af628,
+//    .c:794983: the NPC moved more than 0.4 since the last copy) resets it; otherwise in state 1 it counts up
+//    (+0x8d capped at 0x1e) unless B +0x8c & 0x80. The moved case copies the move origin (B+0x9c).
+//  - the move gate (AIUpdateState_007b267c, .c:796915) and the spawn check (CheckSpawnValidity_007b1220,
+//    .c:796178: flag 0x10 bypasses the range, the squared distance goes to +0x88).
+//  - the mode-0 tail (.c:795669..795730): B +0x8c & 2 enters mode 1 (flags & 0xffffefcf, state 0,
+//    anchor = the NPC); otherwise AIProcessState(1) (the attack chooser) decides attack or move.
+//  - mode 1 (.c:795510..795700): the cooldown roll, TryAttack, CheckPathAndTarget, the chooser
+//    transitions, and the attack anchor = the NPC (B.player weapon), not the owner.
+//  - TryAttack (.c:795725), CheckPathAndTarget (.c:795775: the ray from the NPC's weapon to each
+//    candidate, mask 0x2100; flag 0x1000 when (path+10)^2 > the anchor's distance^2; 0x40 when none).
+//  - the state-2 cast (SinowberillHead_CastTechnique_007b2e20, .c:797346): the table word 0x40 of +0x34
+//    blocks it; the tier from +0x34; the strong pick needs P+0x80 & 0x2000 and B+0x90 & 0x1000, else the
+//    roll |rand / 32768 * 10| against +0x53 * 0.1; the TP gate (B.player +0x336 against the cost / +0x2be)
+//    only sets the input state 3 and the chat bubble; HandlePlayerTechCastState_007b2bc0 (.c:797215) sets
+//    the input state (0x16 / 0x17 / 2) and sends the cast with the targets B +0x7c / +0x84.
+//  - the 0x16 / 0x17 input states are the player's own action dispatch (PlayerActionDispatch, .c:232924:
+//    case 0x16 -> ProcessSinowberillSpecialAttack_004b41ac(param 2), case 0x17 -> ProcessSinowberillActionState_004B6D08(param 2)).
+//    No head writer produces them except HandlePlayerTechCastState; whether the head's +0x24 reaches that
+//    table is not traced.
 //
 // ASSUMED (not traced here):
-//  - the map-mode entry: UpdateState_007b00bc enters mode 1 when B +0x8c & 2 (.c:795539..); who
-//    sets B +0x8c bit 2 is not traced, so the port keeps mode 0 and runs the Pioneer 2 state on
-//    every map (the field branch is ported but not entered).
-//  - the wall branch of AIUpdateMovement with the wall hit (CalculateAvoidanceTarget_007b23a4,
-//    AdjustTargetForCollision_007b25c0, CalculatePointToSegmentDistance_007b20ac) and
-//    UpdateTargetPosition_007b1ad0: the midpoint is kept when the ray hits.
-//  - the counter +0x8c increments (not found in the dump: only its reset and 0x1e are written).
-//  - the head's input states (+0x24: 0x13, 0x18, 7, 8, 0xb) are not modelled.
-//  - the near test of TryAttack ((head +0x44)^2 <= head +0x58) is the caller's input (not traced).
-//  - the cast's release timing (quest/npcai.ts, combat.ts npcCastTechnique).
+//  - B +0x90 & 0x1000 (the strong bit) and B +0x90 & 8 / 0x10 are not written in the traced code (the
+//    status comes from the server); the port keeps them 0, so the state-2 cast is always the roll.
+//  - B.player +0x44 (the NPC's last position for CheckHeadDistance) is modelled as the position at the
+//    last tick: the moved test is the NPC's own movement since the last tick.
+//  - the owner's and the NPC's bits 0x20 / 0x80 of B +0x8c are set by the collision loop of
+//    UpdateState_007af7ec (not ported): 0 here.
+//  - the second-target branches (P +0x84 != 0) are dormant: P+0x84 is not written in the traced code.
+//  - the wall branch of AIUpdateMovement (CalculateAvoidanceTarget, AdjustTargetForCollision,
+//    UpdateTargetPosition) is the midpoint.
+//  - the input states of the head (+0x24) and the timers +0x5c / +0x6a / +0x6c / +0x70 / +0x100 are not modelled.
+//  - the cast's release timing (quest/npcai.ts, combat.ts npcCastTechnique): the charge ticks.
+//  - the Pioneer 2 test (map_is_pioneer2_) is the floor 0 of the lobby (ASSUMED).
 
 // DAT_0097dd84 (.c:796204): the midpoint factor.
 export const HEAD_MIDPOINT = 0.5;
@@ -65,17 +77,24 @@ export const HEAD_WALL_MASK = 0x2100;
 export const HEAD_RAY_HEIGHT = 5;
 // DAT_0097dd6c = 20: CalculateTarget's offset (.c:796453).
 export const HEAD_STUCK_OFFSET = 20;
-// DAT_0097dd9c = 900: the squared distance under which the attack starts (AIUpdateMovement's
-// map branch, .c:795571; 900 = 30^2) and DAT_0097dd98 = 10 (CheckPathAndTarget's margin).
+// DAT_0097dd9c = 900: the squared distance under which the attack starts (30^2) and DAT_0097dd98 = 10
+// (CheckPathAndTarget's margin).
 export const HEAD_ATTACK_START_SQ = 900;
 export const HEAD_PATH_MARGIN = 10;
+// DAT_0097dddc = 0.4: the distance the NPC must move for CheckHeadDistance to count it as moved.
+export const HEAD_MOVED_DIST = 0.4;
+// DAT_0097dd14 = 0.2 is the TP gate of CastTechnique (the input state 3 only); the owner's acquire
+// range is 30 (EnemyAI_AcquireClosestTargetInRange(Q, 30.0, ...), .c:794816).
+export const HEAD_OWNER_ACQUIRE = 30;
+// The max candidates of the target list (EnemyAI_AcquireClosestTargetInRange: the list stops at 9).
+export const HEAD_MAX_TARGETS = 9;
 
 // Head flags (+0x80) this module writes.
 export const HEAD_FLAG_RUN = 0x8; // +0x80 & 8: a run was sent this move (2764)
 export const HEAD_FLAG_MOVE = 0x20; // +0x80 & 0x20: a move was requested (UpdateState_007b00bc)
 export const HEAD_FLAG_TARGET_LOCKED = 0x40; // +0x80 & 0x40: no path target (CheckPathAndTarget)
 export const HEAD_FLAG_ACTION = 0x10; // +0x80 & 0x10: the cast request (state 2)
-export const HEAD_FLAG_STRONG = 0x1000; // +0x80 & 0x1000: the target is far (CheckPathAndTarget)
+export const HEAD_FLAG_STRONG = 0x1000; // +0x80 & 0x1000: the target is near the anchor (CheckPathAndTarget)
 export const HEAD_FLAG_TOO_CLOSE = 0x2000; // +0x80 & 0x2000: three or more targets (CheckPathAndTarget)
 export const HEAD_FLAG_WALL_CLAMP = 0x4000; // +0x80 & 0x4000: the wall counter reached 0x1f
 export const HEAD_FLAG_AVOID = 0x1; // +0x80 & 1: the avoidance target is in use (AIUpdateMovement)
@@ -83,13 +102,19 @@ export const HEAD_FLAG_NEXT = 0x200; // +0x80 & 0x200: an attack is chosen (the 
 export const HEAD_FLAG_ATTACK_SET = 0x100; // +0x80 & 0x100: TryAttack's attack flag
 export const HEAD_FLAG_TARGET_HIT = 0x8000; // +0x80 & 0x8000: the target was re-picked and is in range (TryAttack)
 export const HEAD_FLAG_SECOND = 0x80; // +0x80 & 0x80: the second target is in range (TryAttack, 0x8080)
-export const HEAD_FLAG_BIG = 0x8000; // +0x80 & 0x8000: the multiplier 2 of the cooldown roll (TryAttack's 0x8080 pair)
+export const HEAD_FLAG_BIG = 0x8000; // +0x80 & 0x8000: the cooldown roll's multiplier 2 (DAT_0097ddac)
 
 // Head states (+0x7c). 0 = idle, 1 = move, 2 = cast, 8 = attack (AIUpdateState_007b2764).
 export const HEAD_STATE_IDLE = 0;
 export const HEAD_STATE_MOVE = 1;
 export const HEAD_STATE_CAST = 2;
 export const HEAD_STATE_ATTACK = 8;
+
+// B +0x8c need bits this module reads or writes.
+export const HEAD_NEED_MOVED = 0x1;
+export const HEAD_NEED_ACQUIRED = 0x2;
+export const HEAD_NEED_0X20 = 0x20;
+export const HEAD_NEED_0X80 = 0x80;
 
 export interface HeadPoint {
   x: number;
@@ -151,50 +176,145 @@ export type WallRay = (from: HeadPoint, to: HeadPoint, mask: number) => boolean;
 
 const raised = (p: HeadPoint): HeadPoint => ({ x: p.x, y: p.y + HEAD_RAY_HEIGHT, z: p.z });
 
-export interface HeadUpdateInput {
-  npc: HeadPoint; // the NPC's position (B +0x38, XZ; y for the ray)
-  owner: HeadPoint; // the owner's position (A +0x300, the anchor on Pioneer 2)
-  leash: number; // stat row k=4 (head +0x40)
-  wall: WallRay;
-  needMove?: number; // B +0x8c (the need bits 0x20 / 0x80 of the wall branch; default 0)
+// A candidate enemy as the head reads it (combat.npcEnemies): the entity id, the xz of its hit
+// point (+0x38 / +0x40 of the target, the anchor), and one box per collision box (xz centre and
+// the flag 0x8000 of the box, formats/enemyboxes.ts).
+export interface HeadCandidate {
+  id: number;
+  x: number;
+  z: number;
+  boxes: readonly { x: number; z: number; targetable: boolean }[];
 }
 
-// A target of CheckPathAndTarget: the B record's entry (id, second id) and the target's position.
+// The stat row of one NPC (npcai.ts NpcAttackRow) as the head reads it.
+export interface HeadRow {
+  acquireRange: number;
+  leash: number;
+  farRadius: number;
+  attackRadius: number;
+  pathRadius: number;
+  flags34: number;
+  need52: number;
+  need53: number;
+  standOff: number;
+}
+
+// One entry of B's candidate triples: the entity id, its box index, and the entity's position.
 export interface PathTarget {
   id: number;
   id2: number;
   pos: HeadPoint | null;
 }
 
+// EnemyAI_AcquireClosestTargetInRange_007af2a0 (.c:794836): the candidates of one box within
+// `range` (xz distance^2 from the origin to the box centre), nearest first, at most 9. The
+// target's position is its hit point (ASSUMED: the exe reads +0x300 / +0x38 of the entity).
+export function acquireClosestTargets(origin: HeadPoint, range: number, cands: readonly HeadCandidate[]): PathTarget[] {
+  const found: { entry: PathTarget; d: number }[] = [];
+  for (const c of cands) {
+    for (let box = 0; box < c.boxes.length; box++) {
+      const b = c.boxes[box];
+      if (!b.targetable) continue;
+      const d = xzDistSq(origin, b);
+      if (d < range * range) found.push({ entry: { id: c.id, id2: box, pos: { x: c.x, y: origin.y, z: c.z } }, d });
+    }
+  }
+  found.sort((a, b) => a.d - b.d);
+  return found.slice(0, HEAD_MAX_TARGETS).map((f) => f.entry);
+}
+
+export interface HeadUpdateInput {
+  npc: HeadPoint; // the NPC's position (B +0x94 +0x38; y for the ray)
+  owner: HeadPoint; // the owner's position (Q.player +0x38; the anchor on Pioneer 2)
+  wall: WallRay;
+}
+
 // One NPC's head. The exe's record is one object per NPC; the port keeps one per slot
-// (quest/town.ts). Start state: idle, the send target and the targets at the origin
-// (never written before the first update), like the exe's zeroed record.
+// (quest/town.ts). A fresh head is the zeroed record of the exe with its row copied in
+// (configure).
 export class NpcHead {
   state = HEAD_STATE_IDLE; // +0x7c
   flags = 0; // +0x80
   anchor: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xdc
   moveTarget: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xd0
   sendTarget: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xac
-  // The map-mode branch's mode (head +0x1c): 0 = Pioneer-style follow, 1 = field attack (ASSUMED
-  // not entered, see the header).
+  // The map-mode branch's mode (head +0x1c): 0 = the follow / chooser tail, 1 = field attack.
   mode = 0;
   counter66 = 0; // +0x66: TryAttack's retarget counter (3)
   counter68 = 0; // +0x68: CheckPathAndTarget's counter (100)
   cooldown8e = 0; // +0x8e: the attack cooldown from the roll (AIUpdateState cooldown)
   wall8c = 0; // +0x8c (byte): the wall counter (CalculateTarget at 15..29, stuck at 0x1f)
   wall8d = 0; // +0x8d (byte): the counter's reset guard
-  head34 = 0; // +0x34: the tier word (ASSUMED 0 for an NPC's head, see headTwoTier)
-  prevNpc: HeadPoint | null = null; // the NPC's position of the last update (the move vector, +0x9c..)
-  wallHit = false; // the wall ray's answer for the last movement (the branch it picks is ASSUMED)
+  dist58 = 0; // +0x58: the owner-NPC distance^2 (UpdateState_007af7ec)
+  dist88 = 0; // +0x88: the spawn check's distance^2 (CheckSpawnValidity)
+  // The row (npcai.ts NpcAttackRow, copied by configure).
+  head34 = 0; // +0x34: the tier word (0x40 blocks the state-2 cast)
+  need52 = 0; // +0x52: the cooldown need (* 0.1)
+  need53 = 0; // +0x53: the cast need (* 0.1)
+  nearRadius = 0; // +0x44: TryAttack's far branch
+  attackRadius = 0; // +0x48
+  pathRadius = 0; // +0x4c: CheckPathAndTarget's margin
+  standOff = 0; // +0x54
+  leash = 0; // +0x40
+  acquireRange = 0; // +0x38
+  // B's fields the head reads and writes.
+  npcNeed8c = 0; // B +0x8c (the bits 0x1, 0x2, 0x20, 0x80)
+  ownerNeed8c = 0; // Q +0x8c (bit 2: the owner has a candidate within 30)
+  targets: PathTarget[] = []; // B's candidate triples (B +0x0 count)
+  lockedPrimary = 0; // B +0x7c: the locked target id (0 = none)
+  lockedSecond = 0; // B +0x84: the locked target's box
+  lockedPrevious = 0; // B +0x80: the previous locked id (CastTechnique's 0xffff test is not ported)
+  moveRef: HeadPoint = { x: 0, y: 0, z: 0 }; // B +0x9c: the move origin
+  prevNpc: HeadPoint | null = null; // the NPC's position at the last tick (B.player +0x44, ASSUMED)
   castTicks = 0; // the state-2 cast's busy ticks (ASSUMED: the technique's charge + cast)
+  wallHit = false; // the wall ray's answer for the last movement (the branch it picks is ASSUMED)
+
+  // Copies the stat row (the head's constructor, .c:794403..794413).
+  configure(r: HeadRow): void {
+    this.acquireRange = r.acquireRange;
+    this.leash = r.leash;
+    this.nearRadius = r.farRadius;
+    this.attackRadius = r.attackRadius;
+    this.pathRadius = r.pathRadius;
+    this.head34 = r.flags34;
+    this.need52 = r.need52;
+    this.need53 = r.need53;
+    this.standOff = r.standOff;
+  }
 
   // UpdateState_007b00bc on Pioneer 2 (.c:795492): the anchor is the owner's position
-  // (UpdateAttackTarget with no second target), the state is 1 (move), and the flags get 0x20
+  // (UpdateAttackTarget with no second target), the state is 1 (move) and the flags get 0x20
   // with 0x1010 cleared.
   pioneerUpdateState(owner: HeadPoint): void {
     this.anchor = { x: owner.x, y: owner.y, z: owner.z };
     this.state = HEAD_STATE_MOVE;
     this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
+  }
+
+  // SinowberillHead_UpdateState_007af7ec (.c:795069), the parts the field reads, in the exe's order:
+  // the owner-NPC distance (+0x58), the moved test and the wall counter, the B acquire (AcquireTarget,
+  // range +0x38, sets B +0x8c bit 2 when it finds a candidate), and the owner's bit (UpdateState_007af1a8,
+  // range 30 around the owner). The candidate list is B's triples for CheckPathAndTarget.
+  headStateUpdate(i: { npc: HeadPoint; owner: HeadPoint; cands: readonly HeadCandidate[] }): void {
+    this.dist58 = xzDistSq(i.owner, i.npc);
+    const moved = this.prevNpc === null || Math.hypot(i.npc.x - this.prevNpc.x, i.npc.y - this.prevNpc.y, i.npc.z - this.prevNpc.z) > HEAD_MOVED_DIST;
+    if (moved) {
+      this.npcNeed8c |= HEAD_NEED_MOVED;
+      this.moveRef = this.prevNpc ? { ...this.prevNpc } : { x: 0, y: 0, z: 0 };
+      this.wall8c = 0;
+      this.wall8d = 0;
+    } else if (this.state === HEAD_STATE_MOVE) {
+      if ((this.npcNeed8c & HEAD_NEED_0X80) === 0) {
+        this.wall8c = (this.wall8c + 1) & 0xff;
+        this.wall8d = Math.min(this.wall8d + 1, 0x1e);
+      } else {
+        this.wall8c = 0;
+        this.wall8d = 0;
+      }
+    }
+    this.targets = acquireClosestTargets(i.npc, this.acquireRange, i.cands);
+    if (this.targets.length > 0) this.npcNeed8c |= HEAD_NEED_ACQUIRED;
+    if (acquireClosestTargets(i.owner, HEAD_OWNER_ACQUIRE, i.cands).length > 0) this.ownerNeed8c |= HEAD_NEED_ACQUIRED;
   }
 
   // The move gate (SinowberillHead_AIUpdateState_007b267c, .c:796915). True when a move is
@@ -215,35 +335,37 @@ export class NpcHead {
   // SinowberillHead_AIUpdate_007b1134 (.c:796128) with its movement and state gate. Inside
   // the spawn range the send target keeps its last value (the exe returns before writing it).
   update(i: HeadUpdateInput): void {
-    // CheckSpawnValidity: the NPC inside the range of its anchor stops (.c:796178).
-    const range = headSpawnRange(i.leash);
-    if (xzDistSq(this.anchor, i.npc) < range * range) {
+    // CheckSpawnValidity (.c:796178): flag 0x10 bypasses the range; the squared distance is +0x88.
+    const range = headSpawnRange(this.leash);
+    this.dist88 = xzDistSq(this.anchor, i.npc);
+    if ((this.flags & HEAD_FLAG_ACTION) === 0 && this.dist88 < range * range) {
+      this.flags &= ~HEAD_FLAG_ATTACK_SET; // 0x80 & 0xfffffeff (.c:796187)
       if ((this.flags & HEAD_FLAG_MOVE) !== 0 && this.state !== HEAD_STATE_ATTACK) {
+        // 0xffffefcf: the state idle, the move and cast flags cleared, the anchor is the NPC's weapon.
         this.state = HEAD_STATE_IDLE;
-        this.flags &= ~HEAD_FLAG_MOVE;
-        this.anchor = { x: i.owner.x, y: i.owner.y, z: i.owner.z };
+        this.flags &= ~(0x1000 | HEAD_FLAG_MOVE | HEAD_FLAG_ACTION);
+        this.anchor = { x: i.npc.x, y: i.npc.y, z: i.npc.z };
       }
       this.prevNpc = { ...i.npc };
       return; // the send target is not written on this path (.c:796131)
     }
-    const move = this.prevNpc ? { x: i.npc.x - this.prevNpc.x, z: i.npc.z - this.prevNpc.z } : { x: 0, z: 0 };
-    this.prevNpc = { ...i.npc };
     // AIUpdateMovement (.c:796204): the midpoint, or the stuck target at the wall counter's band.
+    const move = { x: i.npc.x - this.moveRef.x, z: i.npc.z - this.moveRef.z };
     const mid = headMidpoint(i.npc, this.anchor);
-    this.wallHit = i.wall(raised(i.npc), raised(this.anchor), HEAD_WALL_MASK);
-    const needMove = i.needMove ?? 0;
-    if (!this.wallHit && (needMove & 0x20) === 0 && (needMove & 0x80) === 0) {
+    const wallHit = i.wall(raised(i.npc), raised(this.anchor), HEAD_WALL_MASK);
+    this.wallHit = wallHit;
+    if (!wallHit &&  (this.npcNeed8c & HEAD_NEED_0X20) === 0 && (this.npcNeed8c & HEAD_NEED_0X80) === 0) {
       if (this.wall8c < 0xf || this.wall8c > 0x1d) {
         if (this.wall8d > 0xf) this.wall8c = 0;
         this.moveTarget = mid;
       } else {
         this.moveTarget = headCalculateTarget(i.npc, this.anchor, move, this.wall8c);
       }
-      this.flags &= ~HEAD_FLAG_AVOID; // 0x80 & 0xfffffffe (.c:796257..796290)
     } else {
       // The wall branch (avoidance, UpdateTargetPosition) is ASSUMED to be the midpoint.
       this.moveTarget = mid;
     }
+    this.flags &= ~HEAD_FLAG_AVOID; // 0x80 & 0xfffffffe (.c:796296)
     // AIUpdateState_007b267c (.c:796915): a move is needed when the send target is more than 10 away.
     if (this.moveGate()) {
       this.sendTarget = { ...this.moveTarget };
@@ -251,17 +373,18 @@ export class NpcHead {
         this.state = HEAD_STATE_MOVE;
         this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
       }
-      return;
+    } else {
+      // No move: the send target is the NPC's own position (AIUpdate_007b1134 .c:796149).
+      this.sendTarget = { x: i.npc.x, y: i.npc.y, z: i.npc.z };
     }
-    // No move: the send target is the NPC's own position (AIUpdate_007b1134 .c:796149).
-    this.sendTarget = { x: i.npc.x, y: i.npc.y, z: i.npc.z };
+    this.prevNpc = { ...i.npc };
   }
 
-  // SinowberillHead_TryAttack_007b0754 (.c:795725). `near` is (head +0x44)^2 <= head +0x58
-  // (ASSUMED: the caller's test). `primaryPos` is the NPC's first target (B +0x7c's record), or
-  // null; `hasTargets` is B's candidate count != 0. Returns the attack flag.
-  tryAttack(t: { ownerBusy: boolean; npcStatus8: boolean; near: boolean; hasTargets: boolean; primaryPos: HeadPoint | null; npc: HeadPoint; attackRadius: number }): boolean {
-    if (t.ownerBusy) {
+  // SinowberillHead_TryAttack_007b0754 (.c:795725). The owner's bit (Q +0x8c & 2) stops the attack;
+  // the NPC's status 8 (B +0x90 & 8, `npcStatus8`) starts it. The near test is the far test of the
+  // head's distance: (P+0x44)^2 <= P+0x58. Returns the attack flag (0x100).
+  tryAttack(t: { npcStatus8: boolean }): boolean {
+    if ((this.ownerNeed8c & HEAD_NEED_ACQUIRED) !== 0) {
       this.flags &= ~HEAD_FLAG_ATTACK_SET;
       return false;
     }
@@ -269,15 +392,17 @@ export class NpcHead {
       this.flags |= HEAD_FLAG_ATTACK_SET;
       return true;
     }
-    if (t.near) {
+    if (this.nearRadius * this.nearRadius <= this.dist58) {
       this.flags |= HEAD_FLAG_ATTACK_SET;
-      if (t.hasTargets) {
+      if (this.targets.length > 0) {
         if (this.counter66 + 1 < 3) {
           this.counter66++;
         } else {
           this.counter66 = 0;
           this.flags &= ~HEAD_FLAG_TARGET_HIT;
-          if (t.primaryPos && xzDistSq(t.primaryPos, t.npc) < t.attackRadius * t.attackRadius) this.flags |= HEAD_FLAG_TARGET_HIT | HEAD_FLAG_SECOND;
+          const first = this.targets[0].pos;
+          const npc = this.npcPos;
+          if (first && npc && xzDistSq(first, npc) < this.attackRadius * this.attackRadius) this.flags |= HEAD_FLAG_TARGET_HIT | HEAD_FLAG_SECOND;
         }
       }
       return true;
@@ -287,14 +412,16 @@ export class NpcHead {
     return false;
   }
 
-  // SinowberillHead_CheckPathAndTarget_007b086c (.c:795775). `targets` is B's candidate list
-  // (the exe's B +0x0 count and triples of ids). The first target with a clear ray from the NPC's
-  // weapon position (mask 0x2100) becomes the locked one: B +0x7c / +0x84 take its ids, the anchor
-  // is the first candidate's position at the NPC's height, and flag 0x1000 is set when the
-  // anchor is beyond (far + 10). Returns true when a target was picked. The state writes of the
-  // counter (+0x24: 0 / 1 / 8) are ASSUMED (not modelled).
-  checkPathAndTarget(t: { targets: readonly PathTarget[]; npc: HeadPoint; npcWeapon: HeadPoint; farRadius: number; ray: WallRay; lockedId: { primary: number; second: number } }): boolean {
-    const count = t.targets.length;
+  // The NPC's position for TryAttack and CheckPathAndTarget (set by fieldUpdate and headStateUpdate callers).
+  npcPos: HeadPoint | null = null;
+
+  // SinowberillHead_CheckPathAndTarget_007b086c (.c:795775). The count of B's candidates decides
+  // the flag 0x2000 and the counter +0x68. The first candidate with a clear ray from the NPC's weapon
+  // (mask 0x2100, to the candidate at the NPC's height) becomes the locked one: B +0x7c / +0x84 take its
+  // id and box (+0x80 the previous id), the anchor is the first candidate's position at the NPC's height,
+  // and flag 0x1000 is set when (path + 10)^2 > the anchor's distance^2. With none clear, flag 0x40.
+  checkPathAndTarget(t: { npc: HeadPoint; npcWeapon: HeadPoint; ray: WallRay }): boolean {
+    const count = this.targets.length;
     if (count < 3) {
       this.flags &= ~HEAD_FLAG_TOO_CLOSE;
     } else {
@@ -305,17 +432,18 @@ export class NpcHead {
         this.counter68 = 0;
       }
     }
-    if (count === 0) return false;
-    for (const e of t.targets) {
+    if (count === 0) return false; // the exe's whole block (loop, 0x40) sits under B's count != 0 (.c:795806)
+    for (const e of this.targets) {
       if (!e.pos) continue;
       const to = { x: e.pos.x, y: t.npcWeapon.y, z: e.pos.z };
       if (t.ray(t.npcWeapon, to, HEAD_WALL_MASK)) continue;
-      t.lockedId.primary = e.id;
-      t.lockedId.second = e.id2;
-      const first = t.targets[0].pos ?? e.pos;
+      this.lockedPrevious = this.lockedPrimary;
+      this.lockedPrimary = e.id;
+      this.lockedSecond = e.id2;
+      const first = this.targets[0].pos ?? e.pos;
       this.anchor = { x: first.x, y: t.npc.y, z: first.z };
-      const far = HEAD_PATH_MARGIN + t.farRadius;
-      if (far * far > xzDistSq(this.anchor, t.npc)) this.flags |= HEAD_FLAG_STRONG;
+      const margin = HEAD_PATH_MARGIN + this.pathRadius;
+      if (!(margin * margin <= xzDistSq(this.anchor, t.npc))) this.flags |= HEAD_FLAG_STRONG;
       this.flags &= ~HEAD_FLAG_TARGET_LOCKED;
       return true;
     }
@@ -327,13 +455,13 @@ export class NpcHead {
   // it is the owner's weapon position. With one and the stand-off bit 0x80 of +0x34 set, it is
   // pushed `standOff` away from the NPC when the NPC is inside that range (head +0x88 is the
   // squared distance of the spawn check); otherwise the owner's weapon position.
-  updateAttackTarget(t: { ownerWeapon: HeadPoint; npc: HeadPoint; secondTarget: boolean; standOff: number; distSq: number }): void {
+  updateAttackTarget(t: { ownerWeapon: HeadPoint; npc: HeadPoint; secondTarget: boolean }): void {
     const ow = t.ownerWeapon;
     if (!t.secondTarget || (this.head34 & 0x80) === 0) {
       this.anchor = { x: ow.x, y: ow.y, z: ow.z };
       return;
     }
-    if (t.distSq <= t.standOff * t.standOff) {
+    if (this.dist88 <= this.standOff * this.standOff) {
       let dx = this.anchor.x - t.npc.x;
       let dz = this.anchor.z - t.npc.z;
       const l = Math.hypot(dx, dz);
@@ -341,130 +469,168 @@ export class NpcHead {
         dx /= l;
         dz /= l;
       }
-      this.anchor = { x: this.anchor.x - dx * t.standOff, y: ow.y, z: this.anchor.z - dz * t.standOff };
+      this.anchor = { x: this.anchor.x - dx * this.standOff, y: ow.y, z: this.anchor.z - dz * this.standOff };
       return;
     }
     this.anchor = { x: ow.x, y: ow.y, z: ow.z };
   }
 
-  // The map-mode branch of SinowberillHead_UpdateState_007b00bc (head mode 1, .c:795510..795700).
-  // ctx: the attack inputs of the call. chooser(mode) is AIProcessState(mode) (quest/npcai.ts
-  // NpcHeadChooser.choose returns its attack flag). It returns nothing; it updates state, flags,
-  // anchor and the cooldown. The mode exit at the end (B +0x8c & 2 clear -> mode 0) is applied.
+  // The field's state update: SinowberillHead_UpdateState_007b00bc's map-mode branch (.c:795510..795700).
+  // ctx.owner is the owner's position (the anchor's owner weapon); ctx.npc the NPC's position and
+  // ctx.npcWeapon its ray origin; `allowed` is is_player_allowed_to_attack(B's player) (ASSUMED true);
+  // `roll` is rand() in 0..32767; `npcStatus8` is B +0x90 & 8; `chooser(mode)` is AIProcessState(mode)
+  // (quest/npcai.ts NpcHeadChooser), true when an attack is chosen.
   fieldUpdate(ctx: {
-    ownerWeapon: HeadPoint;
     owner: HeadPoint;
     npc: HeadPoint;
     npcWeapon: HeadPoint;
-    npcNeed8c: number;
-    npcStatus90: number;
-    npcSecond: boolean;
-    npcTargets: readonly PathTarget[];
-    lockedId: { primary: number; second: number };
-    ownerNeed8c: number;
     allowed: boolean;
-    roll: number; // _rand(), 0..32767
-    need52: number;
-    near: boolean;
+    roll: number;
     npcStatus8: boolean;
-    hasTargets: boolean;
-    primaryPos: HeadPoint | null;
-    attackRadius: number;
-    farRadius: number;
-    standOff: number;
     ray: WallRay;
     chooser: (mode: 0 | 1) => boolean;
   }): void {
-    // The cooldown (+0x8e): rolled from the need byte when the player may attack and it is 0.
-    const localC = (this.flags & HEAD_FLAG_BIG) !== 0 ? 2 : 1; // DAT_0097ddac = 2 when 0x8000, else DAT_0097ddb0 = 1
+    this.npcPos = ctx.npc;
+    if (this.mode === 0) {
+      this.modeZeroTail(ctx);
+      return;
+    }
+    // Mode 1: the cooldown roll (+0x8e) from the cooldown need (+0x52) when the NPC may attack.
+    const localC = (this.flags & HEAD_FLAG_BIG) !== 0 ? 2 : 1; // DAT_0097ddac = 2 with 0x8000, else DAT_0097ddb0 = 1
     let s = this.cooldown8e;
     if (ctx.allowed && s === 0) {
       const r = Math.abs((ctx.roll / 32768) * 10);
-      const f = ctx.need52 * 0.1;
+      const f = this.need52 * 0.1;
       s = localC * f <= r ? Math.round(-localC * f + r) * 10 : 0;
     }
     s -= 1;
     this.cooldown8e = s < 1 ? 0 : s;
 
-    const tryOk = this.tryAttack({
-      ownerBusy: (ctx.ownerNeed8c & 2) !== 0,
-      npcStatus8: ctx.npcStatus8,
-      near: ctx.near,
-      hasTargets: ctx.hasTargets,
-      primaryPos: ctx.primaryPos,
-      npc: ctx.npc,
-      attackRadius: ctx.attackRadius,
-    });
-    if (!tryOk || ctx.npcSecond) {
+    const tryOk = this.tryAttack({ npcStatus8: ctx.npcStatus8 });
+    if (!tryOk) {
       if (!ctx.chooser(1)) {
-        const path = this.checkPathAndTarget({ targets: ctx.npcTargets, npc: ctx.npc, npcWeapon: ctx.npcWeapon, farRadius: ctx.farRadius, ray: ctx.ray, lockedId: ctx.lockedId });
+        const path = this.checkPathAndTarget({ npc: ctx.npc, npcWeapon: ctx.npcWeapon, ray: ctx.ray });
         if (!path || this.cooldown8e !== 0) {
-          if (!ctx.npcSecond) this.anchor = { ...ctx.npc };
-          else this.updateAttackTarget({ ownerWeapon: ctx.ownerWeapon, npc: ctx.npc, secondTarget: true, standOff: ctx.standOff, distSq: xzDistSq(this.anchor, ctx.npc) });
-          this.state = HEAD_STATE_MOVE;
-          this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
+          this.anchor = { ...ctx.npc };
+          this.setMove();
         } else if ((this.flags & HEAD_FLAG_STRONG) === 0) {
-          this.state = HEAD_STATE_MOVE;
-          this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
+          this.setMove();
         } else {
           this.state = HEAD_STATE_CAST;
-          this.flags = (this.flags & 0xffffefdf) | HEAD_FLAG_ACTION; // clears 0x1000 and 0x20 (.c:795556)
+          this.flags = (this.flags & 0xffffefdf) | HEAD_FLAG_ACTION; // clears 0x1000 and 0x20, sets 0x10 (.c:795556)
         }
       } else {
-        this.enterAttackOrCast(ctx);
+        this.attackOrCastBranch(ctx);
       }
     } else if (!ctx.chooser(0)) {
       if ((this.flags & HEAD_FLAG_SECOND) === 0) {
-        this.updateAttackTarget({ ownerWeapon: ctx.ownerWeapon, npc: ctx.npc, secondTarget: false, standOff: ctx.standOff, distSq: 0 });
-        this.state = HEAD_STATE_MOVE;
-        this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
+        this.updateAttackTarget({ ownerWeapon: ctx.owner, npc: ctx.npc, secondTarget: false });
+        this.setMove();
       } else if (this.cooldown8e === 0) {
         this.state = HEAD_STATE_CAST;
-        this.flags = (this.flags & 0xffffef5f) | HEAD_FLAG_ACTION;
+        this.flags = (this.flags & 0xffffef5f) | HEAD_FLAG_ACTION; // clears 0x1000, 0x80, 0x20; sets 0x10
       } else {
-        this.flags &= ~HEAD_FLAG_AVOID;
+        this.flags &= ~HEAD_FLAG_SECOND; // 0xffffff7f (.c:795700)
       }
     } else {
-      this.anchor = { ...ctx.ownerWeapon };
-      this.state = HEAD_STATE_ATTACK;
-      this.flags &= ~0x1000;
-      this.flags &= ~0x80;
+      this.toAttack(ctx.npc);
+      this.flags &= ~(0x1000 | HEAD_FLAG_SECOND); // 0xffffef7f
     }
-    if ((ctx.npcNeed8c & 2) === 0) this.mode = 0; // .c:795663: the mode exit when B +0x8c & 2 is clear
+    if ((this.npcNeed8c & HEAD_NEED_ACQUIRED) === 0) this.mode = 0; // .c:795663: the mode exit when B +0x8c & 2 is clear
   }
 
-  // The AIProcessState(1) attack branch of the field update (.c:795602..795685).
-  private enterAttackOrCast(ctx: { ownerWeapon: HeadPoint; npc: HeadPoint; npcSecond: boolean; standOff: number }): void {
+  // The mode-0 tail of UpdateState_007b00bc (.c:795669..795730): the mode entry on B +0x8c bit 2,
+  // else the attack chooser decides attack or the move to the owner.
+  private modeZeroTail(ctx: { owner: HeadPoint; npc: HeadPoint; chooser: (mode: 0 | 1) => boolean }): void {
+    if ((this.npcNeed8c & HEAD_NEED_ACQUIRED) !== 0) {
+      this.mode = 1;
+      this.flags &= 0xffffefcf; // clears 0x1000, 0x20 and 0x10
+      this.state = HEAD_STATE_IDLE;
+      this.anchor = { ...ctx.npc };
+      return;
+    }
+    this.flags &= ~0x100; // 0xfffffeff (.c:795680)
+    if (ctx.chooser(1)) {
+      if ((this.flags & HEAD_FLAG_NEXT) !== 0) {
+        this.toAttack(ctx.npc);
+        this.flags &= ~0x1000;
+        return;
+      }
+      this.flags &= ~HEAD_FLAG_NEXT;
+      if (xzDistSq(this.anchor, ctx.npc) < HEAD_ATTACK_START_SQ) {
+        this.state = HEAD_STATE_ATTACK;
+        this.flags &= ~0x1000;
+        this.anchor = { ...ctx.npc };
+        return;
+      }
+      this.updateAttackTarget({ ownerWeapon: ctx.owner, npc: ctx.npc, secondTarget: false });
+      this.setMove();
+      return;
+    }
+    this.updateAttackTarget({ ownerWeapon: ctx.owner, npc: ctx.npc, secondTarget: false });
+    this.setMove();
+    this.cooldown8e = 0; // P+0x8e = 0 on this path (.c:795690)
+  }
+
+  // The chooser(1) attack branch of mode 1 (.c:795602..795685), with the second-target branches dormant.
+  private attackOrCastBranch(ctx: { owner: HeadPoint; npc: HeadPoint }): void {
     const f = this.flags;
     if ((f & HEAD_FLAG_NEXT) === 0) {
       if ((f & HEAD_FLAG_SECOND) === 0) {
         this.flags &= ~HEAD_FLAG_NEXT;
         if (xzDistSq(this.anchor, ctx.npc) < HEAD_ATTACK_START_SQ) {
           this.state = HEAD_STATE_ATTACK;
-          this.flags &= ~HEAD_FLAG_STRONG;
-          this.anchor = { ...ctx.ownerWeapon };
-        } else if (!ctx.npcSecond) {
-          this.updateAttackTarget({ ownerWeapon: ctx.ownerWeapon, npc: ctx.npc, secondTarget: false, standOff: ctx.standOff, distSq: 0 });
-          this.state = HEAD_STATE_MOVE;
-          this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
-        } else if (this.cooldown8e === 0) {
-          this.state = HEAD_STATE_CAST;
-          this.flags = (this.flags & ~HEAD_FLAG_MOVE) | HEAD_FLAG_ACTION;
+          this.flags &= ~0x1000;
+          this.anchor = { ...ctx.npc };
+        } else {
+          this.updateAttackTarget({ ownerWeapon: ctx.owner, npc: ctx.npc, secondTarget: false });
+          this.setMove();
         }
       } else if (this.cooldown8e === 0) {
         this.state = HEAD_STATE_CAST;
-        this.flags = (f & 0xffffed5f) | HEAD_FLAG_ACTION;
+        this.flags = (f & 0xffffed5f) | HEAD_FLAG_ACTION; // clears 0x1000, 0x200, 0x80, 0x20; sets 0x10
       } else {
-        this.flags = f & 0xfffffd7f;
+        this.flags = f & 0xfffffd7f; // clears 0x200 and 0x80
       }
     } else {
-      this.state = HEAD_STATE_ATTACK;
-      this.flags &= ~HEAD_FLAG_STRONG;
-      this.anchor = { ...ctx.ownerWeapon };
+      this.toAttack(ctx.npc);
+      this.flags &= ~0x1000;
     }
   }
-}
 
+  // The state-8 switch of the field (.c:795580 / .c:795700): input state 0x13 is the head's action
+  // input (ASSUMED not modelled), the anchor is the NPC's own weapon position.
+  private toAttack(npc: HeadPoint): void {
+    this.state = HEAD_STATE_ATTACK;
+    this.anchor = { ...npc };
+  }
+
+  // State 1 with the move flags (0xffffefef | 0x20).
+  private setMove(): void {
+    this.state = HEAD_STATE_MOVE;
+    this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
+  }
+
+  // The 2764 dispatch's post-state resets (.c:797023..797050): TryAttack's counter and the 0x8000 flag
+  // clear unless the state is 2; the run flag 8 clears unless the state is 1; state 0 writes the send
+  // and move targets from the anchor.
+  afterDispatch(): void {
+    if (this.state !== HEAD_STATE_CAST) {
+      this.counter66 = 0;
+      this.flags &= ~HEAD_FLAG_TARGET_HIT;
+    }
+    if (this.state !== HEAD_STATE_MOVE) this.flags &= ~HEAD_FLAG_RUN;
+    if (this.state === HEAD_STATE_IDLE) {
+      this.sendTarget = { ...this.anchor };
+      this.moveTarget = { ...this.anchor };
+    }
+  }
+
+  // The owner's and the NPC's need bits that the chooser reads (the NPC's bit 2 is the target flag).
+  get acquired(): boolean {
+    return (this.npcNeed8c & HEAD_NEED_ACQUIRED) !== 0;
+  }
+}
 
 // The state-1 sends read the head's send target: the distance from it to the NPC, and the
 // state. Returns that distance (XZ), or null when the send is not in state 1 (the run flag is

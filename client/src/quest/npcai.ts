@@ -170,7 +170,7 @@ export function followPoint(
 // Stat row 0x00a02ea0 + template * 0x28 (10 floats; exe read with tools/exedata.py,
 // rows 0..5). Float index k is at +4k: k=2 acquire range (+0x38), k=4 move leash (+0x40,
 // copied into the head record by the constructor, .c:794405), k=5 far radius (+0x44),
-// k=6 attack radius (+0x48). Rows 6+ are not read.
+// k=6 attack radius (+0x48), k=7 path radius (+0x4c), k=9 stand-off (+0x54). Rows 6+ are not read.
 //   row: acquire / leash / far / attack
 //   0: 100 / 13 / 30 / 30    1: 100 / 15 / 35 / 25    2: 100 / 15 / 40 / 30
 //   3: 120 / 18 / 40 / 30    4: 100 / 15 / 40 / 30    5: 100 / 15 / 30 / 30
@@ -178,20 +178,28 @@ export function followPoint(
 // denormals) and are not used here.
 
 export interface NpcAttackRow {
-  acquireRange: number;
-  leash: number; // head +0x40: the run threshold of the move sends (NpcMoveSender)
-  farRadius: number;
-  attackRadius: number;
+  acquireRange: number; // head +0x38 (k=2): EnemyAI_AcquireClosestTargetInRange's range
+  leash: number; // head +0x40 (k=4): the run threshold of the move sends (NpcMoveSender)
+  farRadius: number; // head +0x44 (k=5): TryAttack's far branch (|owner - NPC|^2 >= this^2)
+  attackRadius: number; // head +0x48 (k=6): TryAttack's 0x8080 test and the attack radius
+  pathRadius: number; // head +0x4c (k=7): CheckPathAndTarget's margin (10 + this)^2 (0x1000)
+  flags34: number; // head +0x34 (raw word of k=1): the tier (4 / 8 / 0x10) and 0x40 (no state-2 cast)
+  need52: number; // head +0x52 (byte 2 of the raw word at k=8): the cooldown need, * 0.1
+  need53: number; // head +0x53 (byte 3 of the raw word at k=8): the cast need, * 0.1
+  standOff: number; // head +0x54 (k=9): UpdateAttackTarget's stand-off
 }
 
-// The stat rows read from the exe (see the comment above).
+// The stat rows read from the exe (see the comment above and the head constructor's table
+// copy at .c:794403..794413, DAT_00a02ea0 + row * 0x28; rows 0..5 read with tools/exedata.py).
+// The raw words (k=1, k=8) are integers: k=1 is the head's +0x34 word, and k=8 holds the level
+// byte (+0x50, always 0 here) and the two need bytes (+0x52 cooldown, +0x53 cast).
 export const NPC_ATTACK_ROWS: readonly NpcAttackRow[] = [
-  { acquireRange: 100, leash: 13, farRadius: 30, attackRadius: 30 },
-  { acquireRange: 100, leash: 15, farRadius: 35, attackRadius: 25 },
-  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 120, leash: 18, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30 },
-  { acquireRange: 100, leash: 15, farRadius: 30, attackRadius: 30 },
+  { acquireRange: 100, leash: 13, farRadius: 30, attackRadius: 30, pathRadius: 100, flags34: 0x40, need52: 15, need53: 0, standOff: 50 },
+  { acquireRange: 100, leash: 15, farRadius: 35, attackRadius: 25, pathRadius: 100, flags34: 0x8, need52: 25, need53: 90, standOff: 50 },
+  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30, pathRadius: 100, flags34: 0x8, need52: 30, need53: 80, standOff: 50 },
+  { acquireRange: 120, leash: 18, farRadius: 40, attackRadius: 30, pathRadius: 100, flags34: 0x4, need52: 60, need53: 40, standOff: 50 },
+  { acquireRange: 100, leash: 15, farRadius: 40, attackRadius: 30, pathRadius: 120, flags34: 0x40, need52: 20, need53: 0, standOff: 50 },
+  { acquireRange: 100, leash: 15, farRadius: 30, attackRadius: 30, pathRadius: 100, flags34: 0x40, need52: 60, need53: 0, standOff: 50 },
 ];
 
 // The 6x69 template index is the stat row (+0x2c = param3). Null for rows not read.
