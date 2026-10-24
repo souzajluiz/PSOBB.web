@@ -28,7 +28,9 @@ import {
 } from '../client/src/classic/itempack.ts';
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
-import { candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magRows, magStatText, VALUE_COLOR, type EquipStatRow } from '../client/src/classic/itemdetail.ts';
+import {
+  attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magRows, magStatText, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
+} from '../client/src/classic/itemdetail.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -590,6 +592,43 @@ if (failures) {
   mm.key({ key: 'Backspace' } as KeyboardEvent); // Select -> list: Select closes
   eq(mm.selectAnim.animating, true, 'MAG: Select closes on the way back to the list');
   eq(mm.statusAnim.isOpen, true, 'MAG: the status window is open through all of it');
+}
+
+// --- the panel's pages (GUI 0xC; dispatcher GameList_RenderSelectionDisplay_00727450, tables 0x9f2520..0x9f2544) ---
+{
+  const d = (...b: number[]) => Uint8Array.from([...b, ...new Array(12 - b.length).fill(0)]);
+  // weapon: stats, attributes, info (table 0x9f2520)
+  eq(panelKind(d(0, 1), 0), 'weaponStats', 'page: weapon page 0 is the stats (0x727220)');
+  eq(panelKind(d(0, 1), 1), 'weaponAttributes', 'page: weapon page 1 is the attributes (0x726dc8)');
+  eq(panelKind(d(0, 1), 2), 'info', 'page: weapon page 2 is the info (0x726780, ASSUMED name)');
+  // shield (sub 2, table 0x9f252c) and armour (sub 1, table 0x9f2538)
+  eq(panelKind(d(1, 2), 1), 'shieldResist', 'page: shield page 1 is the resist (0x726c7c)');
+  eq(panelKind(d(1, 1), 1), 'armourResist', 'page: armour page 1 is the resist and slot (0x726cb0)');
+  eq(panelKind(d(1, 1), 0), 'stats', 'page: armour page 0 is the stats (0x727078)');
+  eq(panelKind(d(1, 3), 0), 'info', 'page: a unit is the info on every page (0x726780)');
+  eq(panelKind(d(1, 3), 2), 'info', 'page: a unit is the info on page 2');
+  // mag (table 0x9f2544): stats, status (Level / Synchro / IQ), photon blast
+  eq(panelKind(d(2), 0), 'magStats', 'page: mag page 0 is the stats (0x726ff0)');
+  eq(panelKind(d(2), 1), 'magStatus', 'page: mag page 1 is the status (0x726864)');
+  eq(panelKind(d(2), 2), 'magPhoton', 'page: mag page 2 is the photon blast (0x7267dc)');
+  eq(panelKind(d(3), 0), 'none', 'page: a tool has no panel here (0x726608 / 0x7265f0 not decoded)');
+  eq(panelKind(d(0), 3), null, 'page: no page 3 in the table');
+
+  // attributes: pairs at data1[6..11] (type 1..5, value); equipped gives candidate 0
+  const w = d(0, 1, 0, 0, 0, 0, 2, 7, 5, 3, 0, 0);
+  const rows = attributeRows(w, false);
+  eq(rows.map((r) => r.label), [0xb5, 0xb6, 0xb7, 0xb8, 0xb9], 'attributes: labels Native..Hit are 0xb5..0xb9');
+  eq(rows.map((r) => r.candidate), [0, 7, 0, 0, 3], 'attributes: candidate from the pairs (type 2 = A.Beast 7, type 5 = Hit 3)');
+  eq(rows[2].candidate, 0, 'attributes: type 3 (Machine) is not in this item');
+  eq(rows[0].color, VALUE_COLOR.none, 'attributes: the candidate is grey (flag 0x10 is not set)');
+  // the pairs: type 3 value 5 at the second pair
+  eq(attributeRows(d(0, 1, 0, 0, 0, 0, 3, 5), false)[2].candidate, 5, 'attributes: a pair with type 3 sets Machine');
+  eq(attributeRows(w, true).map((r) => r.candidate), [0, 0, 0, 0, 0], 'attributes: an equipped item has candidate 0');
+
+  // resist and slot
+  eq(RESIST_LABELS, [0xa2, 0xa3, 0xa4, 0xa5, 0xa6], 'resist: labels EFR..ELT are 0xa2..0xa6');
+  eq(SLOT_LABEL, 0xbf, 'slot: label 0xbf');
+  eq(slotValue(d(1, 1, 0, 0, 0, 4)), 4, 'slot: value is data1[5] (the armour slot count)');
 }
 
 console.log('fieldhud: all checks passed');

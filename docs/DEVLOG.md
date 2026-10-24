@@ -17646,3 +17646,44 @@ Trap Vision (tool, item 8):
 **Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/shop.test.ts` (new: the saber white with no X; the class-blocked weapon red X with grey name and grey icon; the unmet ATP requirement grey with no X; untekked cyan; rare yellow; `hasEquipPanel` true for a weapon, false for a mate), `tests/items.test.ts`, `tests/fieldhud.test.ts`, `tests/tekker.test.ts` pass.
 
 **Not done:** the Playwright screenshot of the take list. `client/e2e/bank-check-room.spec.ts` (drafted, not committed) gets into a fresh Pioneer 2 field and talks to the bank clerk (talk action 1010, shown, 3 to 8 units in front, `hud.debug().counter` stays null); the talk did not start in four runs, so no Check Room screenshot exists yet. The cause is not found: the guild clerk and the item store (1011, 1008) open with the same placement in their specs. Left: that talk (the bank counter's first step), then the screenshot compare.
+
+## 2026-10-23: the item detail pages are reachable (correction); page model ported, not drawn
+
+**Correction.** The earlier entries (the Left / Right pages, then "no place for the attribute rows in the exe's panel") were wrong about reachability. Neither the Left / Right keys nor the Item Pack's entry 2 reach these pages. The pages are the panel at GUI entry 0xC, and the page is chosen by the mag window's state machine. The Check Room agent's note that `0x726ee2` has no caller is also wrong: `0x726ee2` is not a function start; the dump's `ItemAttributesPanel_Update_00726ee2` is the same body as Ghidra's `FUN_00726dc8`, split by the dump.
+
+**Exe evidence** (PsoBB.exe, Ephinea 1.25.13; `tools/ghidra/decomp.sh`; dump `Psobb.exe-05112026.c`):
+- Dispatcher: `GameList_RenderSelectionDisplay_00727450` (dump 690228 area, Ghidra `FUN_00727450`). It reads the item at `+0x68` (data1[0] = kind, data1[1] = sub-type) and the page byte `**(byte **)(this+0x64)`, then calls `*(table + page * 4)()`. Kinds (the table rows): weapon `DAT_009f2520`, shield (sub 2) `DAT_009f252c`, armour (sub 1) `DAT_009f2538`, mag `DAT_009f2544`; unit (sub 3) calls `0x726780` directly; tool `0x726608` / `0x7265f0` (not decoded).
+- Pages (Ghidra decompile of each target, as read):
+  - weapon: 0 `0x727220` (`EquipmentStatDisplayObject_Update`, the stats with the candidate and its colour), 1 `0x726dc8` (Native..Hit: labels 0xb5..0xb9 through `GetItemTechBoostAddress_00770d6c` and `ItemAttributesPanel_UpdateDisplayWithCallback_00726cf0`), 2 `0x726780` (ASSUMED: the info page; the exe's name is `ChallengePlayerListWindow_InitializeItemDisplay`, not traced further).
+  - shield: 0 `0x727078`, 1 `0x726c7c` (EFR..ELT, labels 0xa2..0xa6 through `0x726aa8`), 2 `0x726780`.
+  - armour: 0 `0x727078`, 1 `0x726cb0` (EFR..ELT and the Slot line 0xbf with `data1[5]`), 2 `0x726780`.
+  - mag: 0 `0x726ff0` (labels 0x9c..0xa1 with the current values only), 1 `0x726864` (Level 0xc0, Synchro 0xc1, IQ 0xc2 and the four stats), 2 `0x7267dc` (the three photon blast names through `FUN_0070ff48`).
+- Page writers: `HandleGameListNavigation_007260e8` is the only caller of `UpdateListNavigationDirection_0073e954` (which stores the page byte and starts a slide of +10 / -10 in its +8 field). Its callers in `ChallengePlayerListWindow_HandleInput_007526c8` are state 5 (direction 1, dump 725130 and the item list open at 725131..725141) and state 0xC (direction 2, dump 725239, before the photon blast window). No key handler calls it. The initial value is not traced (ASSUMED 0).
+- The window is the mag menus' (`mag_menu1/2` -> `ChallengePlayerListWindow_Constructor_007525bc`, dump 700308), so the pages belong to the MAG window's panel. The Item Pack's own entry 2 has no pages.
+- Labels: group 11 0xb5..0xb9 (Native, A.Beast, Machine, Dark, Hit), 0xa2..0xa6 (EFR, EIC, ETH, EDK, ELT), 0xbf (Slot), 0xc0..0xc2 (Level, Synchro, IQ).
+- Candidate order for the resist page (dump 690776..690780): EFR <- out[6], EIC <- out[7], ETH <- out[8], EDK <- out[10], ELT <- out[9]. This is the exe's order; `PlayerRecalculateStats_0068e030`'s out array is not decoded.
+- Attribute pairs: `data1[6..11]` as three (type 1..5, value) pairs (dump 690826..690878, the loop of three). An equipped item gets no candidate (`IsEquippedItemValid_00725b14` non-zero passes NULL, dump 690940). The exe's first clear pass covers the first four rows only (`this_00..this_03`), so the fifth row (Hit) keeps its old value there; ASSUMED 0.
+
+**Ported (model only):**
+- `client/src/classic/itemdetail.ts`: `panelKind(data1, page)` (the table above, null past page 2), `attributeRows(data1, equipped)` (labels, candidate from the pairs, grey), `RESIST_LABELS`, `SLOT_LABEL`, `slotValue`. The header note that the pages had no evidence is replaced.
+- `tests/fieldhud.test.ts`: the page table for weapon, shield, armour, unit, mag and tool; the attribute rows (labels, the pairs, the equipped case, grey); the resist and slot labels.
+
+**Not ported (drawing):**
+- The panel is not drawn: `SHOW_EQUIP_PANEL` stays off in `classic/itempack.ts` (the Item Pack never creates 0xC). The MAG window (`classic/magmenu.ts`) has no candidate panel yet, so the attribute page has no place on screen. The page byte is not modelled in `magmenu.ts` (states 5 and 0xC map to page 1 and 2).
+- The counter ("n/3") format string: not found in this pass. The coordinator's "n/3" reading is not verified.
+- The info page (`0x726780`) and the tool's panels (`0x726608` / `0x7265f0`).
+- The candidate values for the resist page (out[6..10]).
+- The character's own attribute values (`GetItemTechBoostAddress_00770d6c`) and resist values (efr..elt): the web client does not hold them, so both are 0.
+
+**ASSUMED:**
+- The page byte starts at 0 and never resets in the traced code (the constructor was not traced).
+- Entry 0x726780 is the info page (its body is not decoded).
+- Attribute value text with a "%" suffix (earlier DEVLOG; not re-checked here).
+- The Hit row keeps its value on the first pass (0 here).
+
+**Checks:** `node tests/fieldhud.test.ts` (all pass, page section added); `client` tsc (Node 24) exit 0. The worktree's `client/node_modules` and `vendor` are links to the main checkout and are removed before commit. Not run: Playwright (per the brief; the drawing is not wired, so a screenshot would show nothing new).
+
+**Left:**
+- Draw the 0xC panel in the MAG window with the page byte (states 5 / 0xC) and the candidate rows; the Chrome check then goes with it.
+- Decode the initial page value, the info page (0x726780), the tool's panels, and the counter format.
+- Resist candidates from `PlayerRecalculateStats_0068e030` out[6..10].
