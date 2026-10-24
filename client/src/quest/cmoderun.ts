@@ -43,7 +43,6 @@ import {
   RECORDS_SIZE,
   saveGrave,
   sRankChoices,
-  srankNameFromInput,
   stageListLines,
   timerText,
   CM_STAGE_LIST_MAX,
@@ -574,13 +573,12 @@ export class ChallengeRuntime {
     return choices[i ?? 0]?.type ?? 0x70;
   }
 
-  // award_item_name: the name window's label is unitxt group 12 0x47
-  // "You can put your name on this reward."; the exe's keyboard is not ported, a
-  // prompt stands in for it (ASSUMED: the typed name starts empty).
+  // award_item_name: the name window (quest/srankname.ts, QuestThread4Constructor_006bcf6c):
+  // its label is unitxt group 12 0x47 "You can put your name on this reward.". An empty name is
+  // not sent (the window waits). ASSUMED: the window starts empty.
   private async askAwardName(): Promise<string> {
     const label = this.o.view.hud.itemNames?.text?.[12]?.[0x47] || 'You can put your name on this reward.';
-    const typed = typeof prompt === 'function' ? prompt(label, '') : null;
-    return srankNameFromInput(typed ?? '');
+    return (await this.o.town.ui.askName(label)) ?? '';
   }
 
   private async confirmAward(): Promise<number> {

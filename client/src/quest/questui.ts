@@ -47,9 +47,11 @@ import { activeColorEscape, expandColorTags, stripTextCodes } from '../classic/t
 import { drawGameText, gameTextWidth, GAME_TEXT } from '../classic/gametext.ts';
 import { QUEST_LAYER } from '../classic/hud.ts';
 import { anchorX } from '../classic/ingame.ts';
+import { CARET, caretColor } from '../classic/titleflow.ts';
 import { drawSelectBar, drawWindowFrame, textureBitmaps, VH, VW, type WindowSkin } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { GRAVE_LINE_STEP } from './cmodegrave.ts';
+import { NAME_EDITOR_POS, NAME_LABEL_POS, NAME_WINDOW_SIZE, SRankNameEntry } from './srankname.ts';
 
 export const QUEST_WINDOW = { x: 88, y: 120, w: 384, h: 80 }; // GUI 0xbe, 0x00971d18
 export const QUEST_LIST_POS = [106, 120] as const; // GUI 0x39
@@ -108,6 +110,9 @@ export class QuestUi {
   // it in step with the VMs; close_msg_qb does not end the wait).
   boardWait = false;
   private lists: ListState[] = [];
+  // The S-rank prize name window (quest/srankname.ts): one at a time.
+  private nameEntry: { entry: SRankNameEntry; label: string; resolve: (name: string | null) => void } | null = null;
+  private frameNo = 0; // 30 Hz ticks, for the caret
   // Fixed windows of a mode's HUD (the Challenge Mode timer, Area counter and
   // result panel, quest/cmoderun.ts), keyed by name.
   private huds = new Map<string, { x: number; y: number; lines: string[]; centre?: number | undefined }>();
@@ -161,7 +166,24 @@ export class QuestUi {
   // A balloon, window or list waits for the player (the player cannot move:
   // the talk locks the controls, UIState_SetLockedState_00717d68).
   get blocking(): boolean {
-    return this.balloons.some((b) => b.waiting) || !!this.window?.waiting || this.lists.length > 0;
+    return this.balloons.some((b) => b.waiting) || !!this.window?.waiting || this.lists.length > 0 || this.nameEntry !== null;
+  }
+
+  // The soft keyboard (phones) while the name window takes text (classic/main.ts).
+  textInput(): { password: boolean } | null {
+    return this.nameEntry ? { password: false } : null;
+  }
+
+  // --- S-rank name window ----------------------------------------------------------
+
+  // Asks for a name (award_item_name). Resolves with the name (letters, upper case, at most 8),
+  // never with an empty one: Decide on an empty text keeps the window open. A window already
+  // open is answered null first.
+  askName(label: string): Promise<string | null> {
+    this.nameEntry?.resolve(null);
+    return new Promise((resolve) => {
+      this.nameEntry = { entry: new SRankNameEntry(), label: questText(label), resolve };
+    });
   }
 
   // --- speech balloons -------------------------------------------------------
@@ -290,6 +312,7 @@ export class QuestUi {
   }
 
   private handleKey(e: KeyboardEvent, menuOpen: boolean): boolean {
+    if (this.nameEntry && !menuOpen) return this.nameKey(e);
     const list = this.lists[this.lists.length - 1];
     if (list) {
       const n = list.items.length;
@@ -325,7 +348,34 @@ export class QuestUi {
     return menuOpen ? false : this.onAction();
   }
 
+  // The name window's keys (ProcessQuestListSelection_006bc68c): letters are typed,
+  // Backspace deletes, Decide sends a non-empty name. Escape is consumed and does nothing
+  // (ASSUMED, see quest/srankname.ts).
+  private nameKey(e: KeyboardEvent): boolean {
+    const ne = this.nameEntry!;
+    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (menuKeyOf(e) === 'decide') {
+      if (e.repeat) return true;
+      const name = ne.entry.decide();
+      if (name === null) return true;
+      this.nameEntry = null;
+      ne.resolve(name);
+      return true;
+    }
+    if (e.key === 'Escape') return true;
+    if (e.key === 'Backspace') {
+      ne.entry.backspace();
+      return true;
+    }
+    if (e.key.length === 1) {
+      ne.entry.type(e.key);
+      return true;
+    }
+    return false;
+  }
+
   // --- drawing -------------------------------------------------------------------
+
 
   private frame(t: number): void {
     const dt = this.last ? Math.min(0.25, (t - this.last) / 1000) : 0;
@@ -333,6 +383,7 @@ export class QuestUi {
     this.acc += dt * 30;
     const ticks = Math.min(Math.floor(this.acc), 30);
     this.acc -= Math.floor(this.acc);
+    this.frameNo += ticks;
     for (let i = 0; i < ticks; i++) this.onTick();
     const host = this.host;
     const w = host.clientWidth;
@@ -402,6 +453,22 @@ export class QuestUi {
       lines.forEach((l, i) => drawGameText(ctx, l, x + 10, W.y + 10 + i * GAME_TEXT.lineHeight, '#ffffff'));
     }
     for (const list of this.lists) this.drawList(ctx, list, extra);
+    if (this.nameEntry) this.drawNameEntry(ctx, this.nameEntry, extra);
+  }
+
+  // The label window (GUI 0x58) with its line, and the typed name at the editor's spot (GUI 0xd3)
+  // with the caret; the editor moves with the label when the window is on the right half.
+  private drawNameEntry(ctx: CanvasRenderingContext2D, ne: { entry: SRankNameEntry; label: string }, extra: number): void {
+    const { w, h } = NAME_WINDOW_SIZE;
+    const x = anchorX(NAME_LABEL_POS.x, w, extra);
+    drawWindowFrame(ctx, this.skin!.frame, x, NAME_LABEL_POS.y, w, h);
+    drawGameText(ctx, ne.label, x + 10, NAME_LABEL_POS.y + 10, '#ffffff');
+    const ex = NAME_EDITOR_POS.x + (x - NAME_LABEL_POS.x);
+    const ey = NAME_EDITOR_POS.y;
+    const text = ne.entry.text;
+    drawGameText(ctx, text, ex, ey + 1);
+    ctx.fillStyle = caretColor(this.frameNo);
+    ctx.fillRect(ex + gameTextWidth(text), ey, CARET.w, CARET.h);
   }
 
   private drawText(ctx: CanvasRenderingContext2D, x0: number, y: number, lines: string[], extra: number, centre?: number): void {
@@ -439,6 +506,9 @@ export class QuestUi {
     this.worldHuds.clear();
     for (const l of this.lists) l.resolve(null);
     this.lists = [];
+    const ne = this.nameEntry;
+    this.nameEntry = null;
+    ne?.resolve(null);
     const r = this.pendingTell;
     this.pendingTell = null;
     r?.();

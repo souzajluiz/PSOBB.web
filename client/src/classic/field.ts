@@ -149,7 +149,8 @@ export class FieldScreen implements Screen {
   }
 
   textInput(): TextInputState | null {
-    return this.chat.open ? { password: false, chat: true } : null;
+    if (this.chat.open) return { password: false, chat: true };
+    return this.view.questTextInput?.() ?? null;
   }
 
   private forward(e: KeyboardEvent): void {

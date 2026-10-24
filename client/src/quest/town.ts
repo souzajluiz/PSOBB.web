@@ -141,6 +141,7 @@ export class QuestTown {
     // While the main menu holds the keys (a Quest Board item's thread runs,
     // classic/questboard.ts), its lists and board text still take them.
     this.view.questKey = (e) => this.ui.menuKey(e);
+    this.view.questTextInput = () => this.ui.textInput();
     this.ui.onAction = () => this.action();
     this.view.middleInteract = (reach) => this.interactMiddle(reach);
     this.ui.onTick = () => this.tick();
@@ -1023,6 +1024,7 @@ export class QuestTown {
     for (const d of this.disposers) d();
     this.view.inputBlocked = () => false;
     this.view.questKey = null;
+    this.view.questTextInput = null;
     this.view.npcs.host = {};
     this.ui.dispose();
   }
