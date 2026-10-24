@@ -55,6 +55,9 @@ export interface LobbyPlayer {
   // PlayerStats of the last 6x70 (atp, evp, dfp, ata, lck): the Battle mode hit check
   // of a strike on the local player (combat/pvp.ts).
   combatStats?: CombatStats;
+  // The MST of the player's battleparams_stats (6x70 at 0x142, then each 6x30): the caster's
+  // MST in a remote Resta's heal (combat/techniques.ts remoteRestaHeal). Unknown = undefined.
+  mst?: number;
 }
 
 export interface LobbyEvents {

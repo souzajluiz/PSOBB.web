@@ -18141,3 +18141,42 @@ The brief's premise holds: the exe's icon does not read the gauge. `QuickMenuUpd
 - The real remote blast end (the exe's phase / counter in ticks) and how the remote's 6x37 relates to it.
 - The second `GetPhotonBlastData` caller in the status window (dump 712934, the positions at y 173 by the participant's weapon field) is not traced.
 - The +0x524 bit 2 readers beyond the fire gate.
+## 2026-10-23: Pioneer 2: lock-on and minimap; remote Resta heals the local player
+
+Two ROADMAP items: the Pioneer 2 open question, and the "remote players' Resta heal" left item.
+
+**Pioneer 2 (floor 0): lock-on and minimap, read from the exe.**
+- `is_current_map_safe` (dump 820975) and `is_map_unsafe` (dump 820994) read `unknown_safe_maps` (`map_id[5]` at 0x0097f1c8 = 0, 15, 18, 45, then INVALID). Both return 0 on a listed map. So the dump's name `is_current_map_safe` is inverted: non-zero means "not a safe map". The callers that test `!= 0` as "may attack / cast" agree.
+- Enemy lock-on cursor: `enable_reticle` (dump 575550) is called only by the enemy AI states (`enable_reticle_`, dump 504292) and by the player's idle box (`enable_reticle_on_idle_box`, dump 513784). It has no map gate. Pioneer 2 has no hostile entities: the 23 enemy-set entries of `map_city00_00e.dat` are all `NON_ENEMY_NPC` (types 29, 4, 10, 26, ... 256, 48). The port's enemy layer takes only the `NPC_ENEMY_TYPES` set types (0x33, 0x45, 0x46, 0xa9), so the city NPCs never reach `this.enemies`. The port's `updateLockOn` finds no target: no enemy cursor and no target card on Pioneer 2, as in the exe.
+- Player reticle, `update_reticle_` (dump 785873): the attack reticle (type 2) and the tech reticles (types 3 and 5) are hidden on a safe map. The support reticle (type 4: Resta / Anti / Reverser) has no map gate in that function, and the port's `updateAllyLock` has none either. ASSUMED: the exe's targeting path that feeds the type-4 record also runs on Pioneer 2 (its caller `find_targets_for_weapons_and_techs`, dump 785117, is not traced).
+- Minimap: `load_minimap_data` (dump 819156) loads `<prefix>r.rel`. `map_city00_00r.rel` is not in the data (only `map_city00_00n.rel`, `c.rel`, `.tam`, `.xvm`), so `minimap_current_map_data` stays null and `unknown_render_minimap` (dump 817600) returns at its first test. The port already matches: `MinimapState.loaded` is `rooms !== null`, and the HUD draws only a ready minimap. Nothing is drawn on Pioneer 2: no radar, no icons, no compass. The Area Map (item 0xC) is not offered on a safe map (`classic/fieldmenu.ts`).
+- Port: no code change for lock-on or minimap. `tests/minimap.test.ts` gets a Pioneer 2 block (radar file name, `loaded` and `ready` false).
+
+**Remote Resta heals the local player.**
+- The 6x47 target list makes a Resta entity: `unknown_cast_tech` case resta (dump 642090) calls `CreateTechniqueEntity_006ef15c`. `TechniqueEntity_Update_006ef3b8` (dump 651772) hits the targets: with the entity's level below 2 (`+0xa4 < 2`) only the primary target (the caster itself); otherwise every list target. Each hit calls the target's vtable +0x60 with the caster as the attacker: `entity_hit_by_tech` (0x00773afc, dump 747782).
+- Its resta case (dump ~748180): `fVar9 = local_1c * g_DamageMultiplier_NonPlayer + power`, where `local_1c` is the attacker's `battleparams_stats->mst` (clamped at 0). Then `add_player_hp(target, round(fVar9))`. The multiplier is ASSUMED to be the 0.5 at 0x00978278 (the port's `RESTA_MST_SCALE`). The power is the entity's `flPower` (`UpdateSpecialAttackEntityStats_006ef020`).
+- MST source: a player's `battleparams_stats` points into its own stats block (`LoadPlayerEntityBattleParams_006960e4`, dump 577090). The 6x30 handler `UpdatePlayerStatsAndLevelMessage_006928e4` (dump 574022) writes `battleparams_stats->mst` for any player id from the packet on each level change. So the caster's MST is the value its last 6x70 or 6x30 gave.
+- Gates in `entity_hit_by_tech` (dump 747782): no hit on a dead target unless the technique is a reverser. Resta has no resist roll (group 6 is outside the roll's range). The attacker's class boost is not applied to the heal in the resta case.
+- Port: `combat/techniques.ts` `remoteRestaHeal(targets, selfId, selfDead, level, casterMst, casterClass)` returns the heal for this client's player when its id is in the 6x47 list, it is alive, and the level is 3 or higher (0-based 2+). `render/combat.ts` `remoteResta` (the 6x48 path) applies it to `damage.hp` (capped at max) and logs it. The other targets keep the green "HP+n", now with the caster's MST instead of 0. `net/lobby.ts` `LobbyPlayer.mst` is read from the 6x70 at 0x142 (`net/game.ts` `parsePlayerSync`) and updated by the 6x30 (`onChangeLevel`).
+
+**ASSUMED:**
+- 0x00978278 is the exe's `g_DamageMultiplier_NonPlayer` (the value 0.5 is read; the global's address is not traced).
+- The heal lands at the 6x48 (the local cast also heals at its release). The exe's entity hits on its first update after the 6x47 / 6x48, a frame or so later.
+- A remote caster with no 6x70 or 6x30 yet has MST 0 (the port's fallback).
+- The 6x70 stats block at 0x140 holds the same MST as the exe's `battleparams_stats` after a join. The save's block is at 0x34c, and `player_constructor` copies from the save layout; the remote join copy is not traced.
+- Not traced: the `some_bool` branch of the resta case for a remote attacker, which decides `add_player_hp` and the text. The port uses the common path (heal on a player target).
+- The exe hides the HP text when `field383_0x32c == 1`; the port keeps the existing float over the other targets.
+
+**Tests:**
+- `node tests/techniques.test.ts`: the remote heal (listed, not listed, dead, Lv1 / Lv2, the MST term = MST * 0.5) and the 6x70 MST at 0x142 through `parsePlayerSync`. Passes.
+- `node tests/minimap.test.ts`: the Pioneer 2 block. Passes.
+- `node tests/level.test.ts`: 60 / 60. `node tests/buffs.test.ts`: passes.
+- `node tests/pvp.test.ts`: one failure ("attacker takes the synced ATP / LCK", `a.isPlayer`). Not from this change: `combat/pvp.ts` and `combat/formulas.ts` are untouched. Not investigated.
+- `client` typecheck (`tsc --noEmit -p .` with Node 24; `client/node_modules` linked to the main checkout for this run): clean.
+- No Playwright run (per the brief).
+
+**Left:**
+- The Pioneer 2 Chrome check (the ROADMAP item stays open for it).
+- The exe's caller of `find_targets_for_weapons_and_techs`, to confirm the support cursor on Pioneer 2.
+- The Resta entity's visuals on the target (the port heals at the 6x48 and shows the float; no entity flies to the target).
+- The `some_bool` branch for a remote attacker, and the MST of a remote join (the save-layout copy).

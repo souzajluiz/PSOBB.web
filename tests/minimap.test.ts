@@ -515,6 +515,20 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
   const capsuleDoors = collectFieldObjects([{ entity: { kind: 'object', index: 3, type: 0x0103, floor: 0, section: 0, position: [0, 0, 0], rotation: [0, 0, 0], group: 0, unknownA3: 0, params: [0, 0, 0, 0, 0, 0] }, name: 'x', category: 'object', world: [0, 0, 0], yaw: 0, sectionFound: true } as unknown as PlacedEntity], { episode: 0, floor: 0, area: 0x06 }).doors;
   eq(capsuleDoors.length, 0, '0x0103 is not in the door list (no lock, no state, no minimap icon)');
 }
+
+// --- Pioneer 2 (floor 0): no radar, no lock-on enemies (DEVLOG 2026-10-24) ---
+// load_minimap_data (PsoBB.exe, dump 819156) loads the floor's `<prefix>r.rel`; the
+// city maps have none (only `map_city00_00n.rel`), so minimap_current_map_data stays null and
+// unknown_render_minimap returns at once: no radar, no icons, no compass. The port's
+// classic/minimap.ts `loaded` is `rooms !== null`, so a floor without rooms draws nothing.
+{
+  eq(minimapFileFor('map_city00_00n.rel'), 'map_city00_00r.rel', 'the Pioneer 2 radar file name (absent in the data)');
+  const floors = new MinimapFloors();
+  const radar = new MinimapState();
+  radar.enterFloor(0, 0, null, floors);
+  eq([radar.loaded, radar.ready], [false, false], 'Pioneer 2 has no minimap rooms: nothing is loaded or drawn');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

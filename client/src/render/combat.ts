@@ -116,6 +116,7 @@ import {
   castMotion,
   megidChance,
   releaseFrame,
+  remoteRestaHeal,
   restaHeal,
   targetListKind,
   TECH,
@@ -8016,15 +8017,27 @@ export class CombatView {
   // Another player's Resta: the green "HP+n" over every healed player but this
   // one. ASSUMED: the caster's MST is unknown here, so n is the level's power
   // plus MST 0 (the exe uses the caster's real value).
+  // The caster's Resta on this client: the entity's hit on every 6x47 target (combat/techniques.ts
+  // remoteRestaHeal). The local player takes round(caster MST * 0.5 + power) when it is listed and
+  // alive; the other targets show the green "HP+n" (their own clients heal them).
   private remoteResta(clientId: number, sentLevel: number): void {
     const cast = this.remoteCasts.get(clientId);
     if (!cast || cast.tech !== TECH.resta) return;
     const level = remoteTechLevel(sentLevel, this.techOverride.get(clientId) ?? 0);
-    const charClass = this.game.players.get(clientId)?.charClass ?? 0;
-    const heal = restaHeal(level, 0, Math.max(0, charClass));
+    const caster = this.game.players.get(clientId);
+    const charClass = Math.max(0, caster?.charClass ?? 0);
+    // ASSUMED: an unknown caster MST (no 6x70 / 6x30 yet) is 0.
+    const casterMst = caster?.mst ?? 0;
+    const heal = restaHeal(level, casterMst, charClass);
     for (const id of cast.targets) {
       const q = id !== this.game.selfId && id < 0x1000 ? this.view?.playerPositions().get(id) : null;
       if (q) this.overlay?.float(restaFloat(heal), q.x, q.y + 26, q.z);
+    }
+    const mine = remoteRestaHeal(cast.targets, this.game.selfId, this.damage.dead, level, casterMst, charClass);
+    if (mine > 0) {
+      const before = this.damage.hp;
+      this.damage.hp = Math.min(this.damage.maxHp, this.damage.hp + mine);
+      this.opts.log(`${caster?.name ?? `client ${clientId}`} casts Resta on you: +${mine} HP (${before} -> ${this.damage.hp})`);
     }
   }
 
@@ -8299,6 +8312,8 @@ export class CombatView {
       if (other) {
         other.level = c.level + 1;
         other.hpStat = c.hp;
+        // The 6x30 handler writes the battleparams MST (0x006928e4): the caster MST of its Resta.
+        other.mst = c.mst;
         // The new stats, then hp = max_hp1 on a field.
         this.party.stats(c.clientId, this.partyStats(other));
         if (this.area !== 0) this.party.refill(c.clientId);

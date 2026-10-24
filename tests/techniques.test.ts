@@ -8,6 +8,7 @@ import {
   castMotion,
   megidChance,
   releaseFrame,
+  remoteRestaHeal,
   restaHeal,
   splitLevel,
   targetListKind,
@@ -25,6 +26,7 @@ import {
   buildTechLevelOverride,
   parseCastTechnique,
   parseCastTechniqueComplete,
+  parsePlayerSync,
 } from '../client/src/net/game.ts';
 
 let failures = 0;
@@ -90,10 +92,31 @@ near(megidChance(0, 10), 0.17, 'Megid Lv1 vs EDK 10');
 eq(restaHeal(0, 100), 100, 'Resta Lv1, MST 100: 100 * 0.5 + 50');
 eq(restaHeal(9, 150), 75 + 50 + 5 * 9, 'Resta Lv10, MST 150');
 
+// A remote Resta heals the local player by the caster's MST (PsoBB.exe entity_hit_by_tech case
+// resta: round(MST * 0.5 + power)), only when the local id is in the 6x47 list, alive, Lv3+.
+const SELF = 1;
+eq(remoteRestaHeal([0, SELF, 2], SELF, false, 2, 200, 0), restaHeal(2, 200, 0), 'remote Resta Lv3 lists self: the caster MST');
+eq(remoteRestaHeal([0, SELF, 2], SELF, false, 2, 200, 0) - remoteRestaHeal([0, SELF, 2], SELF, false, 2, 0, 0), 100, 'the MST part is MST * 0.5');
+eq(remoteRestaHeal([0, 2], SELF, false, 2, 200, 0), 0, 'self not in the 6x47 list: no heal');
+eq(remoteRestaHeal([SELF], SELF, true, 2, 200, 0), 0, 'a dead local player takes no heal');
+eq(remoteRestaHeal([SELF], SELF, false, 1, 200, 0), 0, 'Lv2 (0-based 1): the entity hits the caster only');
+eq(remoteRestaHeal([SELF], SELF, false, 0, 200, 0), 0, 'Lv1: no list hit');
+eq(remoteRestaHeal([SELF], SELF, false, 9, 150, 2), restaHeal(9, 150, 2), 'a remote Lv10 heal uses the given class');
+
 // --- 6x47 targets and the level split ---
 eq([targetListKind(TECH.foie), targetListKind(TECH.gifoie), targetListKind(TECH.gizonde), targetListKind(TECH.resta)], ['one', 'none', 'list', 'list'], '6x47 target kinds');
 eq(splitLevel(9), { sent: 9, extra: 0 }, 'level 10: no override');
 eq(splitLevel(20), { sent: 14, extra: 6 }, 'level 21: 14 + 6');
+
+// --- the caster's MST from a 6x70 (PlayerStats at 0x140: atp, mst at +2) ---
+{
+  const body = new Uint8Array(0x500); // parsePlayerSync reads the floor at 0x4b0
+  body[0] = 0x70;
+  new DataView(body.buffer).setUint16(0x142, 77, true);
+  const into = {} as Parameters<typeof parsePlayerSync>[1];
+  parsePlayerSync(body, into);
+  eq(into.mst, 77, '6x70 MST at 0x142');
+}
 
 // --- commands ---
 eq(hex(buildTechLevelOverride(1, 6)), '8d02010006000000', '6x8D');
