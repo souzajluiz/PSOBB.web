@@ -140,6 +140,15 @@ function generatedBox(address: number): ObjectCollision {
   return { address, offset: [r.offset[0], r.offset[1], r.offset[2]], type, halfX: type === 1 ? r.halfX : r.radius, halfZ: r.radius, flags: r.flags };
 }
 
+// A box picked by an index from a table of rows 0x2c bytes apart: the constructors' `base + 0x2c * [this+0x84]`
+// (param4; the Wilds crater rocks, the beehive, 0x676224 / 0x675840 / 0x677edc / 0x676c0f in
+// collisionboxes.gen.ts, whose COLLISION_SITES entries carry the variants). ASSUMED: the index is
+// clamped to the rows the model index is clamped to (the exe's raw index past the last row is not read).
+const ROW_BYTES = 0x2c;
+function generatedRowBox(base: number, index: number): ObjectCollision {
+  return generatedBox(base + ROW_BYTES * index);
+}
+
 const spec = (name: string, bml: string, parts: ObjectPartSpec[], extra: Partial<ObjectModelSpec> = {}): ObjectModelSpec => ({ name, bml, parts, ...extra });
 
 // A door whose single model opens with motion 0 (Cave, Mine, Ruins, VR, Seabed,
@@ -870,18 +879,42 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
       return spec('TOTrapChainSawKey', 'bm_obj_jungle_nokogiri.bml', [{ model: 0, motion: 0, drive: 'loop', speed: 1 }]);
     // Episode 4 scenery: the constructors read the model index from the
     // object's param4 (dword [EBX + 0x84]).
-    case 0x0301:
-      return spec('__WILDS_CRATER_CACTUS__', 'bm_obj_ep4_sabotena.bml', [{ model: clamp(p4(o), 0, 2) }]);
-    case 0x0302:
-      return spec('__WILDS_CRATER_BROWN_ROCK__', 'bm_obj_ep4_iwa_crater.bml', [{ model: clamp(p4(o), 0, 2) }]);
+    // The Wilds crater scenery: the box row is base + 0x2c * param4 (the same index as the model; the
+    // ctor stores [record+0x30] into this+0x84 and the init call's table is `0x2c * [this+0x84] + base`,
+    // COLLISION_SITES entries 0x00676224, 0x00675840, 0x00677edc). Cactus 0x0301 (creator 0x0067612c,
+    // ctor 0x006761a8, rows 0x009c9aa0: sphere r2, sphere r4, box 9). Brown rock 0x0302 (creator
+    // 0x00675748, ctor 0x006757c4, rows 0x009c9940: box 17, box 22, box 22). Black rocks 0x0386 (creator
+    // 0x00677de4, ctor 0x00677e60, rows 0x009c9d80: sphere 30, 25, 10).
+    case 0x0301: {
+      const v = clamp(p4(o), 0, 2);
+      return spec('__WILDS_CRATER_CACTUS__', 'bm_obj_ep4_sabotena.bml', [{ model: v }], { collision: generatedRowBox(0x009c9aa0, v) });
+    }
+    case 0x0302: {
+      const v = clamp(p4(o), 0, 2);
+      return spec('__WILDS_CRATER_BROWN_ROCK__', 'bm_obj_ep4_iwa_crater.bml', [{ model: v }], { collision: generatedRowBox(0x009c9940, v) });
+    }
+    // Destructible rock 0x0303 (creator 0x00675bf8, ctor 0x00675c74): one box 0x009c9a68 (box 22, flags 0x10003), not
+    // indexed by param4. Its break is not ported (no broken state, like the other rocks; ASSUMED).
     case 0x0303:
-      return spec('__WILDS_CRATER_BROWN_ROCK_DESTRUCTIBLE__', 'bm_obj_ep4_iwa_crater_brk.bml', [{ model: clamp(p4(o), 0, 1) }]);
-    case 0x0386:
-      return spec('__WILDS_CRATER_BLACK_ROCKS__', 'bm_obj_ep4_iwa_desert.bml', [{ model: clamp(p4(o), 0, 2) }]);
+      return spec('__WILDS_CRATER_BROWN_ROCK_DESTRUCTIBLE__', 'bm_obj_ep4_iwa_crater_brk.bml', [{ model: clamp(p4(o), 0, 1) }], { collision: generatedBox(0x009c9a68) });
+    case 0x0386: {
+      const v = clamp(p4(o), 0, 2);
+      return spec('__WILDS_CRATER_BLACK_ROCKS__', 'bm_obj_ep4_iwa_desert.bml', [{ model: v }], { collision: generatedRowBox(0x009c9d80, v) });
+    }
+    // Falling stalactite 0x038b (creator 0x00679f58, ctor 0x00679fd4, row 0x009c9fb8: sphere r15 at the origin, flags 0x10003).
+    // The ctor ORs 0x1f00 into box 0 (0x007b52c4) and keeps bit 0, so the box is on while it hangs
+    // (state 0) and while it falls (state 1; the box does not move with the fall, which is drawn
+    // from +0x340). Its state 2 (shattered) turns bit 0 off (0x007b52ec, mask 1) and is only reached
+    // with no set record; a placed one reports the break instead (0x007b5038). The fall and the
+    // shatter are not ported: the stalactite stays at its place, its box on (ASSUMED).
     case 0x038b:
-      return spec('__FALLING_STALACTITE__', 'bm_obj_ep4_syounyuuseki.bml', [{ model: 3 }]);
-    case 0x038f:
-      return spec('__BEEHIVE__', 'bm_obj_ep4_bee_nest.bml', [{ model: clamp(p4(o), 0, 1), motion: clamp(p4(o), 0, 1), drive: 'loop', speed: 1 }]);
+      return spec('__FALLING_STALACTITE__', 'bm_obj_ep4_syounyuuseki.bml', [{ model: 3 }], { collision: generatedBox(0x009c9fb8) });
+    // Beehive 0x038f (creator 0x00676adc, ctor 0x00676b58): the box row is 0x009c9b60 + 0x2c * param4,
+    // so param4 0 is the row at y 5 and 1 the row at y 9 (sphere r7, flags 0x38003 both).
+    case 0x038f: {
+      const v = clamp(p4(o), 0, 1);
+      return spec('__BEEHIVE__', 'bm_obj_ep4_bee_nest.bml', [{ model: v, motion: v, drive: 'loop', speed: 1 }], { collision: generatedRowBox(0x009c9b60, v) });
+    }
     case 0x038d:
       // Box 0x009c9ce8 (sphere r9 at 6 up, flags 0x38003, the container's sphere), set by the
       // constructor 0x00677610 (its helper 0x0067768c pushes the table and the count 1 at

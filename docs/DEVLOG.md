@@ -16497,3 +16497,31 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 **Checks:** `node tests/objectcollision.test.ts` ALL PASS (section 3c-2 added); `tests/collision`, `townfield`, `drops`, `fieldhud`, `npcs` pass. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. Not run in Chrome or Playwright.
 
 **Left:** the Wilds rocks / cacti (run-time rows: decode the 5 init sites' row choice from `param4`), the beehive row choice, the stalactite's state, the three untyped ids (0x0191 / 0x0193 / 0x0205), and the box break flags (from the entry above).
+
+## 2026-10-23 - Wilds solids: cactus, brown rock, black rocks, beehive, destructible rock, stalactite (ROADMAP round hitboxes)
+
+**What changed:** six Episode 4 field objects now block the player as the containers do. `formats/objectmodels.ts`: the cactus 0x0301, brown rock 0x0302 and black rocks 0x0386 take the box row `base + 0x2c * clamp(param4, 0, 2)` (`generatedRowBox`); the beehive 0x038f takes `0x009c9b60 + 0x2c * clamp(param4, 0, 1)`; the destructible rock 0x0303 takes its one box 0x009c9a68; the stalactite 0x038b takes its row 0x009c9fb8. `render/fieldobjects.ts` `SOLID_TYPES` gets the six ids. `tools/gen-collision-boxes.py` writes the `variants` of each indexed site into `COLLISION_SITES` (regenerated; only the site lines changed). `tests/objectcollision.test.ts` section 3c-3 checks the variants against the port's bases and each object's box.
+
+**Exe evidence (PsoBB.exe, read 2026-10-23):**
+- The row choice is the same in the indexed constructors. Brown rock ctor 0x006757c4: `movl 0x84(%ecx), %eax` (this+0x84 = param4), then `leal (%eax,%eax), %edx; addl %edx,%edx; subl %eax,%edx; addl %edx,%edx; addl %edx,%edx; subl %eax,%edx; addl %edx,%edx` (edx = 44 * param4), then `leal 0x9c9940(%edx,%edx), %ebx; pushl %ebx; pushl $1; calll 0x007b9a88` at 0x00675838..0x00675840. So the row is `0x9c9940 + 0x2c * param4`, count 1. The generator's walk (`indexed_site`) gives the same stride for the cactus site 0x00676224 (base 0x9c9aa0), the black rock site 0x00677edc (base 0x9c9d80) and the beehive site 0x00676c0f (base 0x9c9b60); the index is the record's +0x30, stored into this+0x84 by the base constructor's vtable call.
+- Destructible rock 0x0303, ctor 0x00675c74: `pushl $1; pushl $0x9c9a68; calll 0x007b9a88` at 0x00675cce..0x00675cd5, no branch: one box for every model.
+- Beehive creator 0x00676adc, ctor 0x00676b58 (site 0x00676c0f). Rows 0x9c9b60 (sphere r7 at y 5) and 0x9c9b8c (sphere r7 at y 9), both flags 0x38003.
+- Stalactite 0x038b, creator 0x00679f58, ctor 0x00679fd4: `pushl $0x1f00; pushl $0; calll 0x007b52c4` ORs 0x1f00 into box 0's flags (0x007b52c4 reads the object's table at 0xa4(this), row stride 0x2c, flags at +0x18). Then the init with row 0x9c9fb8 (sphere r15, flags 0x10003). Bit 0 stays set, so the box is on from construction. Vtable 0xb37c00; update is slot 1, 0x00679948.
+- Stalactite state (state word `movswl 0x32e(this)`):
+  - state 0 (hanging): the update scans the four players (`0x68d5a8(i)`, class check 0xaafca0); a player with distance squared under 2500 (float 0x0093b6fc = 2500.0) sets state 1.
+  - state 1 (falling, 0x006799c8): the fall value goes to +0x340 (`y - dt` from 0x00772b44). When it is under 10.0 (0x0093b6f0), the players within 100 (0x0093b6f4) take a hit (vtable call `*0x60`), and their flag 0x400 is set; the mask at 0x33c keeps one hit per player.
+  - the shatter: when the entity flag 0x800000 (+0x30) is set, 0x00679ac4 runs. With a set record (`this+0x80` non-null) it reports the break through 0x007b5038 (an event with the object's index and the flags at +0x1c) and changes no state. With no record it sets state 2, clears box 0's bit 0 (0x007b52ec with mask 1), and spawns the debris (0x00679b70, a 0x17c-byte template at 0x0093b540).
+- Destructible rock break: not traced. Its vtable (0xb36980): slot 0 0x00675948 (the deleting destructor), slot 1 0x00633734, slot 2 0x00675b8c, slot 3 0x0061cdb0, slot 4 0x00618a44, slot 5 0x007ba33c.
+
+**ASSUMED / not traced:**
+- The port clamps the index to the rows the model clamps to. The exe does not clamp the box index (the walk has no `cmp`), so a param4 past the last row reads the next table in the exe; the clamp is ASSUMED to match the model's range.
+- A static box on a solid is a block (as the containers are). The stalactite's box is on while it hangs, at the origin (the exe's fall writes +0x340 and not the box position, from the ctor and the walk).
+- The stalactite is not ported as falling: it stays up with its box on. The placed object reports its break in the exe and changes no local state; the port has no break, so the box never turns off.
+- The destructible rock has no broken state here (0x0303 is not in `BOX_TYPES`), like the crystal box.
+- A sphere blocks at any height (the XZ overlap of `collision.ts`).
+
+**Generator note:** the row 0x009c9c18 decodes as denormal floats with flags 0x93ada0 (the generator's `row_is_set` keeps it). No port model uses it; it is probably not a box.
+
+**Checks:** `node tests/objectcollision.test.ts` ALL PASS (section 3c-3 added); `tests/collision`, `townfield`, `drops`, `fieldhud`, `npcs` pass. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) clean. client/node_modules was linked from the main checkout for the run and is removed before the commit. Not run in Chrome or Playwright.
+
+**Left:** the destructible rock's break (vtable 0xb36980 slot 1 or 2, not traced); the stalactite's fall, shatter and debris (0x00679b70); the generator's `row_is_set` on 0x009c9c18; the three untyped ids (0x0191 / 0x0193 / 0x0205) and the box break flags (from the crystal box entry).

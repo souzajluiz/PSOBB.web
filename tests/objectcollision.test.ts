@@ -146,6 +146,37 @@ if (nest) {
   world.obstacles = [];
 }
 
+// 3c-3. The Episode 4 solids. The crater cactus 0x0301, brown rock 0x0302, black rocks 0x0386 and the
+// beehive 0x038f take their box row from base + 0x2c * param4 (the ctors' init table; COLLISION_SITES
+// has the variants, checked here against the port's bases). The destructible rock 0x0303 has one box
+// (0x009c9a68). The falling stalactite 0x038b is row 0x009c9fb8, sphere r15 at the origin.
+const epSite = (site: number) => COLLISION_SITES.find((s) => s.site === site);
+const variantsOf = (site: number) => epSite(site)?.variants;
+check(JSON.stringify(variantsOf(0x00676224)) === JSON.stringify({ 0: 0x009c9aa0, 1: 0x009c9acc, 2: 0x009c9af8 }), 'the cactus site 0x00676224 has rows 0x9c9aa0 + 0x2c * param4');
+check(JSON.stringify(variantsOf(0x00675840)) === JSON.stringify({ 0: 0x009c9940, 1: 0x009c996c, 2: 0x009c9998 }), 'the brown rock site 0x00675840 has rows 0x9c9940 + 0x2c * param4');
+check(JSON.stringify(variantsOf(0x00677edc)) === JSON.stringify({ 0: 0x009c9d80, 1: 0x009c9dac, 2: 0x009c9dd8 }), 'the black rock site 0x00677edc has rows 0x9c9d80 + 0x2c * param4');
+check(JSON.stringify(variantsOf(0x00676c0f)) === JSON.stringify({ 0: 0x009c9b60, 1: 0x009c9b8c }), 'the beehive site 0x00676c0f has rows 0x9c9b60 + 0x2c * param4');
+check(epSite(0x00675cd5)?.table === 0x009c9a68, 'the destructible rock site 0x00675cd5 has the single table 0x9c9a68');
+check(epSite(0x0067a038)?.table === 0x009c9fb8, 'the stalactite site 0x0067a038 has table 0x9c9fb8');
+const ep = (type: number, p4: number) => {
+  const o = object(type, 20);
+  o.params[3] = p4;
+  return collectFieldSolids([{ ...place(type, 20, [0, 0, 0]), entity: o } as PlacedEntity], { area: 0x2c, episode: 4 })[0];
+};
+const cactusRows = [0x009c9aa0, 0x009c9acc, 0x009c9af8];
+[0, 1, 2].forEach((p, k) => {
+  const s = ep(0x0301, p);
+  check(!!s && s.collision.address === cactusRows[k], `cactus with param4 ${p} takes row ${cactusRows[k].toString(16)}`);
+});
+check(ep(0x0301, 2)?.collision.halfZ === 9 && ep(0x0301, 2)?.collision.type === 1, 'the cactus at param4 2 is the 9 x 9 box');
+check(ep(0x0302, 0)?.collision.address === 0x009c9940 && ep(0x0302, 2)?.collision.address === 0x009c9998, 'the brown rock takes rows 0x9c9940 / 0x9c9998 for param4 0 / 2');
+check(ep(0x0386, 0)?.collision.halfZ === 30 && ep(0x0386, 2)?.collision.halfZ === 10, 'the black rocks: sphere 30 at param4 0, sphere 10 at 2');
+check(ep(0x0303, 0)?.collision.address === 0x009c9a68 && ep(0x0303, 1)?.collision.address === 0x009c9a68, 'the destructible rock has its single box whatever the param4');
+const stal = ep(0x038b, 0);
+check(!!stal && stal.collision.address === 0x009c9fb8 && stal.collision.type === 0 && stal.collision.halfZ === 15 && stal.collision.flags === 0x10003, 'the stalactite is a sphere of radius 15, flags 0x10003 (bit 0 on while it hangs)');
+check(ep(0x038f, 0)?.collision.offset[1] === 5 && ep(0x038f, 1)?.collision.offset[1] === 9, 'the beehive is the row at y 5 for param4 0 and at y 9 for 1');
+check(ep(0x038f, 0)?.collision.flags === 0x38003, 'the beehive box has the container flags');
+
 // 4. Drop spot body test on a sphere (FUN_0083dbd4 with the spot radius 3).
 const sphereBody = { x: 10, z: 0, yaw: 0, halfX: 9, halfZ: 9, sphere: true };
 check(spotHitsBody({ x: 0, y: 0, z: 0 }, sphereBody), 'a spot 10 from a sphere of radius 9 is hit (3 + 9 = 12)');
