@@ -843,16 +843,24 @@ const BARTA_FX: readonly (readonly FxEmitter[])[] = [
   ],
 ];
 
-// Rabarta (g_ParticleEffectDataPointers, 0x0096dc6c): create_particle_effect3 at the
-// cast point, not moved; flag 0x40 sets the scale, flag 0x20 is a model (not
-// drawn). Tier 5 adds the one-shot 0x1d6 (a model particle) 5 above the point.
+// Rabarta (LOOP in CreateRabartaEntity_006ec2d0 / RabartaEntity_Constructor_006ec344, dump
+// 649593..649752, the table at g_ParticleEffectDataPointers 0x0096dc6c: {pointer, count} per
+// tier, 8 bytes; entries {id, flags, scale} of 12 bytes, decoded from PsoBB.exe): create_particle_effect3
+// at the cast point, not moved and not turned (no angles); flag 0x40 sets the scale (+0x44 / +0x48);
+// flag 0x20 is a model: +0x50 = unknown_get_njcm_chunks(bml, flags >> 16), +0x58 = 0 (no motion, the
+// model is static), +0x54 = the xvm, +0x60 = 1.0, +0x2c |= 0x200 (dump 649746..649760).
+// The model entries: 0x1df (tier 0), 0x194 (1), 0x195 (2) chunk 2; 0x199 (3), 0x19a (4) chunk 3;
+// 0x19b (5) chunk 4. Their table scales (1.4 / 1.6 / 1.8 / 1.0) have no flag 0x40, so they are not used.
+// Tier 5 adds the one-shot 0x1d6 at (x, y + g_RabartaParticleEffectYOffset (5.0, 0x0096db8c), z)
+// with model chunk 1 and motion 1 (get_njm_chunk(bml, 1), dump 649738..649748), z2 = 1.0.
+const RABARTA_MODEL = (chunk: number): Partial<FxEmitter> => ({ model: { chunk, motion: null } });
 const RABARTA_FX: readonly (readonly FxEmitter[])[] = [
-  [E(0x1d9, 1, 'fixed'), E(0x1db, 1, 'fixed')],
-  [E(0x1d9, 1, 'fixed'), E(0x1db, 1.2, 'fixed')],
-  [E(0x1d9, 1, 'fixed'), E(0x1db, 1.2, 'fixed')],
-  [E(0x1d9, 1, 'fixed'), E(0x196, 1, 'fixed')],
-  [E(0x1d9, 1, 'fixed'), E(0x196, 1.2, 'fixed')],
-  [E(0x1d9, 1, 'fixed'), E(0x197, 1, 'fixed'), E(0x1d6, 1, 'burst', { dy: 5 })],
+  [E(0x1d9, 1, 'fixed'), E(0x1db, 1, 'fixed'), E(0x1df, 1, 'fixed', RABARTA_MODEL(2))],
+  [E(0x1d9, 1, 'fixed'), E(0x1db, 1.2, 'fixed'), E(0x194, 1, 'fixed', RABARTA_MODEL(2))],
+  [E(0x1d9, 1, 'fixed'), E(0x1db, 1.2, 'fixed'), E(0x195, 1, 'fixed', RABARTA_MODEL(2))],
+  [E(0x1d9, 1, 'fixed'), E(0x196, 1, 'fixed'), E(0x199, 1, 'fixed', RABARTA_MODEL(3))],
+  [E(0x1d9, 1, 'fixed'), E(0x196, 1.2, 'fixed'), E(0x19a, 1, 'fixed', RABARTA_MODEL(3))],
+  [E(0x1d9, 1, 'fixed'), E(0x197, 1, 'fixed'), E(0x19b, 1, 'fixed', RABARTA_MODEL(4)), E(0x1d6, 1, 'burst', { dy: 5, model: { chunk: 1, motion: 1 } })],
 ];
 
 // Gifoie (gifoie_particle_data, 0x0096d3f4): every spiral emitter carries these.
@@ -874,13 +882,16 @@ const RAFOIE_BLAST: readonly (readonly FxEmitter[])[] = [
   [E(0x1ee, 1, 'burst')],
   [E(0x1eb, 1, 'burst'), E(0x1ee, 1, 'burst')],
   [E(0x189, 1, 'burst'), E(0x1ee, 1, 'burst')],
-  [E(0x18c, 1, 'burst'), E(0x1ee, 1, 'burst'), E(0x1e2, 1, 'burst'), E(0x1e6, 1, 'burst')],
+  [E(0x18c, 1, 'burst'), E(0x1ee, 1, 'burst'), E(0x1e2, 1, 'burst', { hidden: true }), E(0x1e6, 1, 'burst')],
 ];
-// The marks round the target when the cast starts: the list form makes 0x39 at the
-// followed target's position, the fixed form 0x3a and 0x3b (the model particle
-// 0x1a, a ring of the technique BML, is not drawn).
-export const RAFOIE_MARK_LIST: readonly FxEmitter[] = [E(0x39, 1, 'burst')];
-export const RAFOIE_MARK_FIXED: readonly FxEmitter[] = [E(0x3a, 1, 'burst'), E(0x3b, 1, 'burst')];
+// The marks round the target when the cast starts (RafoieEffectEntity_Constructor_006ed8f4 and
+// rafoie_constructor 0x006ed8f4, dump 650318 / 650527): the fixed form makes the ring 0x1a at the
+// point, then 0x3a and 0x3b; the list form makes 0x39 at the target's weapon position, then the ring
+// 0x1a there. The ring is the technique BML's njcm chunk 9 with no motion (z = 0.0), z2 = 1.0, flags
+// 0x600 = model | 0x400 (the cloak branch, not modelled: the port always draws it, ASSUMED).
+const RAFOIE_RING = { model: { chunk: 9, motion: null } } as const;
+export const RAFOIE_MARK_LIST: readonly FxEmitter[] = [E(0x39, 1, 'burst'), E(0x1a, 1, 'burst', RAFOIE_RING)];
+export const RAFOIE_MARK_FIXED: readonly FxEmitter[] = [E(0x1a, 1, 'burst', RAFOIE_RING), E(0x3a, 1, 'burst'), E(0x3b, 1, 'burst')];
 
 /** The emitters an object makes when it is created, by kind and tier. */
 export function startEmitters(kind: FireKind, tier: number, fixedRafoie = false): readonly FxEmitter[] {

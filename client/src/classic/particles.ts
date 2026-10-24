@@ -477,6 +477,17 @@ export function particleShade(q: Particle): { fade: number; rgb: [number, number
   return { fade, rgb };
 }
 
+// The blend of a model particle (ParticleEffectSingleParticle_SetColor_00508958, dump 287693, run
+// before the model's draw in the model branch of update_particle_effect_single_particle, dump 291966):
+// d3d8Dev_SetRenderState_SrcDestBlend_Save(1, 4, dst) with dst 5 for a non-NT particle and 1 for an
+// NT one (IsNTParticle: effect_nt flag 1 of the particle's renderer). The save helper (dump 852687)
+// sets SRCBLEND = table[src], DESTBLEND = table[dst], and the table 0x00a219f8 holds 1..8, that is
+// table[i] = D3DBLEND value i + 1. So non-NT is SRCALPHA / INVSRCALPHA and NT is SRCALPHA / ONE.
+export const D3DBLEND = { ZERO: 1, ONE: 2, SRCALPHA: 5, INVSRCALPHA: 6 } as const;
+export function modelParticleBlend(nt: boolean): { src: number; dst: number } {
+  return { src: D3DBLEND.SRCALPHA, dst: nt ? D3DBLEND.ONE : D3DBLEND.INVSRCALPHA };
+}
+
 // Additive tint of a texture (vertex color x texel), cached per color step.
 export function makeTinter(): (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource {
   const cache = new Map<string, OffscreenCanvas>();

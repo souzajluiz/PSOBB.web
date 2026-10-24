@@ -302,12 +302,12 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
   eq(ids(startEmitters('gibarta', 2)), [0x180, 0x181, 0x184], 'Gibarta tier 2 with its spike model 0x184 (flag 0x20)');
   check(startEmitters('gibarta', 2).every((e) => e.mode === 'fixed'), 'Gibarta\'s emitters stay');
   check(startEmitters('barta', 0).every((e) => e.mode === 'follow'), 'Barta\'s follow');
-  eq(ids(startEmitters('rabarta', 0)), [0x1d9, 0x1db], 'Rabarta tier 0');
+  eq(ids(startEmitters('rabarta', 0)), [0x1d9, 0x1db, 0x1df], 'Rabarta tier 0 with its model 0x1df (flag 0x20)');
   eq(ids(startEmitters('gifoie', 5)), [0x22, 0xac, 0x19e], 'Gifoie tier 5');
   eq(ids(rafoieBlastEmitters(3)), [0x1eb, 0x1ee], 'Rafoie blast tier 3');
-  eq(ids(rafoieBlastEmitters(5)), [0x18c, 0x1ee, 0x1e2, 0x1e6], 'tier 5');
-  eq(ids(startEmitters('rafoie', 0, false)), [0x39], 'Rafoie list form mark');
-  eq(ids(startEmitters('rafoie', 0, true)), [0x3a, 0x3b], 'fixed form marks');
+  eq(ids(rafoieBlastEmitters(5)), [0x18c, 0x1ee, 0x1e2, 0x1e6], 'tier 5 (0x1e2 hidden, 0x1e6 follows)');
+  eq(ids(startEmitters('rafoie', 0, false)), [0x39, 0x1a], 'Rafoie list form mark and its ring 0x1a');
+  eq(ids(startEmitters('rafoie', 0, true)), [0x1a, 0x3a, 0x3b], 'fixed form: the ring 0x1a, then the marks');
   eq([FIRE_SE.start.foie, FIRE_SE.start.rabarta, FIRE_SE.foieHit, FIRE_SE.rafoieBlast], [0x87, 0x8d, 0xaf, 0x8a], 'sound ids');
   eq([0, 1, 2, 3, 4, 5].map((t) => startPitch('foie', t)), [0x100, 0, 0, -0x180, -0x250, -0x100], 'Foie pitch by tier');
   eq([0, 1, 2, 3, 4, 5].map((t) => startPitch('barta', t)), [0x100, 0, -0x180, -0x180, -0x250, -0x100], 'Barta pitch by tier');
@@ -394,10 +394,10 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
   tf = make();
   const raf = new RafoieBlast({ level: 0, x: 40, y: 22, z: 0, heading: 0 }, 9);
   tf.start(raf, null);
-  eq(spawns.map((s) => s.id), [0x39], 'the list form\'s mark');
+  eq(spawns.map((s) => s.id), [0x39, 0x1a], 'the list form\'s mark and ring');
   eq(sounds.length, 0, 'and no creation sound in the list form');
   for (let i = 0; i < 10; i++) tf.tick([T(9, 40, 0)], 1);
-  eq(spawns.slice(1).map((s) => s.id), [0x1ee], 'the tier 0 blast');
+  eq(spawns.slice(2).map((s) => s.id), [0x1ee], 'the tier 0 blast');
   eq(sounds.map((s) => s[0]), [0x8a], 'and its sound');
   near(sounds[0][1], 40, 'at the target');
 

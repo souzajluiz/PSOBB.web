@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, modelParticleBlend, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -430,10 +430,17 @@ export class FieldParticles {
     this.pieceRotation.multiply(this.pieceTurn);
     this.pieceTurn.setFromAxisAngle(axis.y, q.angle * BAMS_RAD);
     obj.quaternion.copy(this.pieceRotation.multiply(this.pieceTurn));
+    // The blend is the exe's (modelParticleBlend): SRCALPHA / INVSRCALPHA for a non-NT particle, which
+    // is three's NormalBlending; SRCALPHA / ONE (AdditiveBlending) for NT. The port does not carry the
+    // NT flag (effect_nt flag 1 of the renderer), so every model particle is non-NT here (ASSUMED).
+    const nt = false;
+    const blend = modelParticleBlend(nt);
+    const blending = blend.dst === D3DBLEND.ONE ? THREE.AdditiveBlending : THREE.NormalBlending;
     for (const mat of materials) {
       const mm = mat as THREE.MeshBasicMaterial;
       mm.opacity = fade;
       mm.transparent = true;
+      mm.blending = blending;
       mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
     }
   }

@@ -16388,3 +16388,77 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 
 **Left:**
 - Wiring: the hooks in `GalgryphonFxB` (`galgryphonstatesb.ts`, the S0..S17 unification) and `render/combat.ts`; the minion ring's particle objects; the S27 beam spawn `SpawnOlgaMinionEffect_004a5218` (dump 225179: random angle and radius, ground search, `CheckOlgaMinionTargetValidity_004a5428`); the lightning jitter; the Derolle vtable bodies behind the area hit.
+
+## 2026-10-23: Rabarta and Rafoie model particles (the table's flag 0x20 entries, Rafoie's ring; the blend of a model particle)
+
+
+
+**What changed.** The flag 0x20 entries of Rabarta are models now, and so is the Rafoie ring. Model particles are blended as the exe does (SRCALPHA / INVSRCALPHA for a non-NT particle, the port's NormalBlending).
+
+- Rabarta (`combat/techfire.ts` `RABARTA_FX`): 0x1df (tier 0), 0x194 (1), 0x195 (2) use njcm chunk 2; 0x199 (3), 0x19a (4) chunk 3; 0x19b (5) chunk 4; all fixed, no motion, no angles. Tier 5 adds the one-shot 0x1d6 at 5 above the point with chunk 1 and motion 1, z2 1.0. The non-model entries (0x1d9, 0x1db, 0x196, 0x197) are unchanged, and the table scales now follow the exe (only flag 0x40 uses one).
+
+- Rafoie (`RAFOIE_MARK_LIST` / `RAFOIE_MARK_FIXED`): the ring 0x1a is the model with njcm chunk 9, no motion, z2 1.0. The list form makes 0x39 then 0x1a at the target; the fixed form makes 0x1a, then 0x3a and 0x3b at the point. Tier 5 of the blast: 0x1e2 has flag 0x1000, so it is hidden (`hidden: true`, noDraw).
+
+- `render/techfire.ts` `burst()` now passes `emitterFx(e)`, so the hidden and model flags reach the one-shot emitters (the blast and the marks had dropped them).
+
+- `classic/particles.ts` `modelParticleBlend(nt)` (D3DBLEND values), used by `render/hitfx.ts` `placeModel`: blending is NormalBlending for non-NT, AdditiveBlending for NT.
+
+
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`; tables decoded from PsoBB.exe with `tools/exedata.py` read and a scratch helper):
+
+- Rabarta table: `g_ParticleEffectDataPointers` 0x0096dc6c, {pointer, count} per tier (8 bytes), entries {id, flags, scale} of 12 bytes. Tier 0 `{473,0,0} {475,0,0} {479,0x20020,1.0}`, tier 1 `{473} {475,0x40,1.2} {404,0x20020}`, tier 2 `{473} {475,0x40,1.2} {405,0x20020}`, tier 3 `{473} {406} {409,0x30020}`, tier 4 `{473} {406,0x40,1.2} {410,0x30020}`, tier 5 `{473} {407} {411,0x40020}`. The loop (`RabartaEntity_Constructor_006ec344`, dump 649593..649752): create_particle_effect3 at the cast point (not turned), flag 0x40 sets +0x44 / +0x48, flag 0x20: +0x50 = `unknown_get_njcm_chunks(bml, flags >> 16)`, +0x58 = 0, +0x54 = the xvm, +0x60 = 1.0, +0x2c |= 0x200.
+
+- Rabarta tier 5 one-shot: `create_particle_effect(&p, 0x1d6)` at y + `g_RabartaParticleEffectYOffset` (5.0 at 0x0096db8c, read with `fld` at 0x006ec636); x = `unknown_get_njcm_chunks(bml, 1)`, y = xvm, z = `get_njm_chunk(bml, 1)`, z2 = 1.0, |= 0x200 (dump 649738..649748).
+
+- Rafoie ring: `rafoie_constructor` (dump 650318) and `RafoieEffectEntity_Constructor_006ed8f4` (dump 650527): `create_particle_effect(p, 0x1a)`, x = `unknown_get_njcm_chunks(bml, 9)`, z = 0.0, z2 = 1.0, flags |= 0x600. The fixed branch makes 0x1a, 0x3a, 0x3b; the target branch makes 0x39 and 0x1a at the target's `weapon_position`.
+
+- Rafoie blast table `rafoie_and_bazooka_particles` at 0x0096dd6c (struct {ptr, count}; entries {particle_id, unk1, scale} of 12 bytes): tier 5 `{0x18c} {0x1ee} {0x1e2,0x1000} {0x1e6,0x10}`; the others as the port has them. The blast object: `rafoie_aoe_tick` (dump 650685): the 10th tick makes it; 0x1000 becomes particle flag 0x2000 (noDraw), 0x10 follows the entity; the blast Y offset is `g_RafoieParticleYOffset` (5.0, 0x0096dda4) + 8.0 (0x0096dda0) = 13 (unchanged).
+
+- Model blend: `ParticleEffectSingleParticle_SetColor_00508958` (dump 287693): non-NT `SrcDestBlend_Save(1, 4, 5)`, NT `(1, 4, 1)`. The save helper (dump 852687) sets SRCBLEND = table[src], DESTBLEND = table[dst]; the table at 0x00a219f8 is 1..8 (value i + 1, `D3DBLEND`). So non-NT = SRCALPHA (5) / INVSRCALPHA (6), NT = SRCALPHA (5) / ONE (2). The model branch (dump 291966) calls SetColor before `RenderXJModel_008317b6` / `render_animated_xj`, with `g_RenderTargetFlags |= 0x8021`.
+
+- The cloak branch: flag 0x400 (the ring has it) draws only when `get_settings_advanced_effect_()` is set, through `unknown_set_advanced_effect_cloaked`; otherwise the particle is not drawn (dump 291946).
+
+
+
+**Premise corrected.** The brief said SetColor writes the TFACTOR. In the dump it does not: it stores its colour in `g_CurrentTargetColor` (`copy_color_to_af0370`, dump 846531), and the only `D3DRS_TEXTUREFACTOR` writes are the shadow paths (dump 847205, 850284). The colour inputs are also odd: non-NT gives rgb 0 and alpha = byte(+0x97) / 255 - 1 (`_g_ParticleBaseAlpha` = -1.0 at 0x00920040, 255.0 at 0x0092003c), and NT gives rgb from the dword +0x94 / 255 - 1 with alpha 0. The +0x94 is a matrix element in `ParticleEffectSingleParticle_SetTransform_00508dec` (dump 287983), and I found no other writer. So the colour cannot be closed from the dump.
+
+
+
+**ASSUMED:**
+
+- The colour of a model particle is still the port's shade (`particleShade`: the entry colour ramp times the fade). The exe's inputs above are unresolved (a -1 base would make TFACTOR alpha <= 0, so something downstream of `g_CurrentTargetColor` must add it back; not traced).
+
+- NT: the port does not carry effect_nt flag 1 of the particle's renderer, so every model particle is non-NT (`const nt = false` in `placeModel`). Barta, Gibarta, Rabarta and the ring are all drawn NormalBlending.
+
+- The ring's 0x400 cloak is not modelled: the ring is always drawn as a plain model (the exe draws it only with the advanced effects setting, through the cloak).
+
+- `technic.xvm` is the models' texture list and the chunk / motion indices are the port's as in the Barta / Gibarta entry above.
+
+
+
+**Checks:**
+
+- `node tests/particleorient.test.ts` ALL PASS (new: Rabarta model entries by tier, the 0x1d6 model and its dy, Rafoie fixed and list marks with the ring, the blast's hidden 0x1e2, the model blend mapping).
+
+- `node tests/techfire.test.ts` ALL PASS (the Rabarta tier 0, the Rafoie marks and the tier 0 blast now expect the models and the ring; the old expectations were the "not drawn" state).
+
+- `hitfx`, `particlespawn`, `particleslope`, `telepipe`, `techlightning`, `deathfx`, `dragon`, `techniques`, `enemyfsmep2c` pass (Node 24).
+
+- `cd client && node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) exit 0 (Node 24; `client/node_modules` linked from the main checkout for the run, removed before the commit).
+
+- Not run in Chrome, no Playwright (per the brief): the model draw, the blend and the ring are not seen on screen.
+
+
+
+**Left:**
+
+- Rafoie's fire sphere: the blast object makes a child (`IndTexObject_Constructor_00504b58(child, 0x11, entity)`, dump 650794 and 650999; the dump names are wrong, the vtable is a generic base object), its update and draw are not traced, so it is not drawn.
+
+- The colour / alpha path of the model (see ASSUMED), checked on screen against a Rabarta cast and a Rafoie.
+
+- The ring's 0x400 cloak branch (`unknown_set_advanced_effect_cloaked`) and the advanced effects setting.
+
+- NT flag per particle (effect_nt flag 1 of the renderer), so NT model particles get SRCALPHA / ONE.
+
+- The list form's mark (0x39) and ring (0x1a) are made once at the start, at the target's position then, and do not follow it (the existing mark's behaviour, not checked against the exe's follow of the entity).
