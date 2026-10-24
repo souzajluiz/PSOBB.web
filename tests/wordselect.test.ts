@@ -10,6 +10,8 @@ import {
   loadWordSelectTable,
   parseWordSelectSubcommand,
   parseWordSelectTable,
+  renderWordSelect,
+  renderWordSelectJP,
   wordSelectItemId,
   wordSelectPhrase,
   WORD_SELECT_TOKEN_COUNT,
@@ -91,6 +93,61 @@ if (existsSync(dataPath) && existsSync(textPath)) {
 } else {
   console.log(`SKIP real JP table (no ${dataPath})`);
 }
+
+// The JP renderer (WordSelectMenu_ProcessSelectionType_00703690). Phrases are a test map; the
+// expected strings are worked out from the exe's rules (see the comments in net/wordselect.ts).
+const P: Record<number, string> = {
+  0x10: 'Hello',
+  0x11: 'there',
+  0x12: 'friend',
+  0x13: 'Ask',
+  0x14: 'abcdefghijklmnopqr', // 18 characters: a line that wraps
+  0x301: 'Hi', // class 1 (group A)
+  0x460: 'Ya', // class 2 (group B)
+  0x4f3: 'Ya', // class 3
+  0x635: 'Ya', // class 4
+  0x650: 'Ya', // class 5
+  0x2e4: 'Ya', // class 0
+};
+const ph = (t: number) => (t === 0x698 ? null : (P[t] ?? ''));
+const names = (slot: number) => ['Ann', 'Bo'][slot] ?? '';
+const mk = (count: number, sel: number, tokens: number[], numeric = 0): WordSelectMessage => ({
+  numTokens: count,
+  targetType: sel,
+  tokens: [...tokens, 0, 0, 0, 0, 0, 0, 0, 0].slice(0, 8),
+  numericParameter: numeric,
+  unknownA4: 0,
+});
+const render = (m: WordSelectMessage) => renderWordSelectJP(m, ph);
+
+eq(render(mk(0, 1, [0x10])), '', 'count 0: empty');
+eq(render(mk(1, 1, [0x10])), 'Hello', 'type 1: one phrase');
+eq(render(mk(2, 1, [0x10, 0x11])), 'Hello\n> there', 'type 1: a second phrase after "\\n> "');
+eq(render(mk(2, 2, [0x10, 0x11])), 'Hellothere?', 'type 2: two phrases then "?" (no separator)');
+eq(render(mk(3, 2, [0x10, 0x11, 0x12])), 'Hellothere?\n> friend', 'type 2: a third phrase after "\\n> "');
+eq(render(mk(2, 6, [0x10, 0x11])), 'Hello there', 'type 6: a short line breaks with a space');
+eq(render(mk(4, 6, [0x10, 0x11, 0x12, 0x13])), 'Hello there friend\n> Ask', 'type 6: three phrases, then "\\n> " and the fourth');
+eq(render(mk(3, 5, [0x10, 0x11, 0x12])), 'Hellotherefriend', 'type 5: three tokens, the third has no wrap');
+eq(render(mk(2, 5, [0x14, 0x10])), 'abcdefghijklmnopqr\nHello', 'type 5: a line of 16 or more characters wraps before the next token');
+eq(render(mk(3, 3, [0x14, 0x10, 0x11, 0x12])), 'abcdefghijklmnopqr\nHellothere', 'type 3: three tokens, a wrap before the first and the second, the fourth after "\\n> "');
+eq(render(mk(2, 4, [0x10, 0x11])), 'there\n> Hello', 'type 4 with two tokens: the second, then "\\n> " and the first');
+eq(render(mk(3, 4, [0x14, 0x10, 0x11])), 'thereHello\n> abcdefghijklmnopqr', 'type 4 with three tokens: the third, the second, then "\\n> " and the first');
+eq(render(mk(1, 1, [0x301], 5)), 'Hi+5', 'class 1: phrase, "+", the number');
+eq(render(mk(1, 1, [0x460], 7)), 'Ya Lv.7', 'class 2: phrase, " Lv.", the number');
+eq(render(mk(1, 1, [0x4f3], 20)), 'Ya15', 'class 3: the number is capped at 15');
+eq(render(mk(1, 1, [0x635], 200)), 'Ya200', 'class 4: phrase then the number (cap 200)');
+eq(render(mk(1, 1, [0x650], 1234)), '999Ya', 'class 5: the number first, capped at 999');
+eq(render(mk(1, 1, [0x2e4], 3)), '3Ya', 'class 0: the number first');
+eq(render(mk(1, 1, [0x10], 3)), 'Hello', 'a plain phrase ignores the number');
+eq(render(mk(1, 1, [0x301], 0)), 'Hi', 'a number of 0 is not shown');
+eq(renderWordSelect(mk(1, 1, [0x68c]), null, names), 'Ann', 'token 0x68C: the slot 0 name');
+eq(render(mk(1, 1, [0x698])), '', 'token 0x698: no text');
+eq(renderWordSelect(mk(1, 1, [0]), table, () => ''), 'Please select a subject.', 'the table phrase of token 0');
+eq(renderWordSelect(mk(1, 1, [0x68d]), table, names), 'Bo', 'a player token reads the names by slot');
+// The 0x80 buffer: a phrase that does not fit (len + n + 1 >= 0x80) is skipped; "?" still fits.
+const long = 'x'.repeat(70);
+P[0x15] = long;
+eq(render(mk(2, 2, [0x15, 0x15])), `${long}?`, 'type 2: the second 70-character phrase does not fit the 0x80 buffer');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

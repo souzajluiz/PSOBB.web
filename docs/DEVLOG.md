@@ -16094,3 +16094,30 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts`); the per-frame order and the ProcessState call are not wired.
 - The hooks: `groundProbe` (0x004a15fc), `attackDispatch` (0x004a47a8), `spawnRing` (0x004a9174), the S27 lightning objects (0x004a9de0 / 0x004a9869 / 0x0073d160), the S30 beam (0x004aa4b0), the minion ring's particle update (0x004aade4) and the S27 beam value's constants (`g_GalgryphonMinionEffectRandomBias` etc.) have no port here.
 - The -b doc: its S30 section and its per-state offsets still carry the old text (a correction note is added at its top).
+## 2026-10-23: word select text (JP renderer) and its balloon; the picker is not ported
+
+**What changed.** `net/wordselect.ts`: the JP renderer (`renderWordSelectJP`, `renderWordSelect`, `wordSelectPhraseOf`, `wordSelectStringType`), the table holder (`setWordSelectTable` / `currentWordSelectTable`) and `loadWordSelectFromFiles` (ws_data_jp.bin and unitxt_ws_j.prs from the client's data folder, read by `classic/main.ts`, not awaited). `net/lobby.ts`: 6x74 is emitted in `Lobby.onSubcommands`, so the lobby gets it too (the game's own case is removed; the exe's handler is the same in both). `classic/chat.ts`: `ChatBubbles.say` takes a width; `ChatLine.receiveWord` writes the log line, plays the chat sound and shows the balloon. `classic/field.ts` and `classic/lobby.ts`: `showWord` for a received 6x74 and for the sender's own echo. `tests/wordselect.test.ts`: the renderer cases.
+
+**Premise check (per the exe).** The brief said there is no log line. The exe's balloon call is `DisplayChatBubble_007184f8(client, buf, 0x4F)` (`DisplayItemBubble_007078f1`, dump 664497), and 0x4F has bit 0x40, which runs `append_to_chat_log` (dump 707363): the text goes to the Log Window with no speaker name. Flag 4 (also in 0x4F) makes the balloon's width 1e6 and keeps the text's own newlines (`ChatBubbleEntity_UpdateTextAndSize_00720954`, dump 686274), and that function always calls `play_directional_sound_effect(0x574)`, so the chat sound plays. The sender's own message is shown too: `send_chat_message_word_select` (dump 664328) calls `checked_call_packet0x60_subcommand`, which runs the handler locally.
+
+**Exe evidence (renderer).** Read with `objdump -d --start-address=... PsoBB.exe` (the file has the code at the VA; the dump's line numbers are the dump lines):
+- `WordSelectMenu_ProcessSelectionType_00703690` (0x703690): count = message u16 +0 (0 gives an empty text), type = +2 (1..6), tokens = +4 + 2k. The jump table: 1 -> `ProcessWordSelectStringData_00706490` (0x706490), 2 -> 0x70385e, 3 -> 0x7037d9, 4 -> 0x70373c, 5 -> 0x7036db, 6 -> `ProcessStringVariant_007069fc` (0x7069fc).
+- Type 1 (0x706490): typed(tokens[0]); if count > 1: "\n> " then the plain phrase of tokens[1] (`RefreshWordSelectDisplay_00706b6d`, 0x706b6d).
+- Typed (`AppendStringToBuffer_00706569`, 0x706569, reached through 0x7064d8 / 0x7064e5): class = `GetWordSelectStringType_00706831`: 0x2E4 -> 0; 0x300..0x395 -> 1; 0x45D..0x46F except 0x46D, 0x46E -> 2; 0x4F3 -> 3; 0x635 -> 4; 0x650 -> 5; else 7. The number is the message's numeric parameter (+0x14, `GetWordSelectEntryId_0070811c`), capped by `DAT_0096e714` = {999999, 99, 30, 15, 200, 999} per class. Layouts: 1 = phrase, '+', number; 2 = phrase, " Lv." (`u_Lv__0096ea2c`), number; 3 and 4 = phrase, number; 0 and 5 (JP) = number, phrase; a number <= 0 gives the plain phrase.
+- Line rules: `WrapTextAtNewline_00706284` puts a newline when the line since the last newline has 16 or more characters; the inline one in 0x7069fc (`HandleLineBreaks_00706904`) puts a space instead when it is shorter. "\n> " is `AppendWordSelectEntry_007069b8`; "?" is `AppendWideChar_0070625c`.
+- The buffer is 0x80 wide characters; an append that does not fit (len + n + 1 >= 0x80) is skipped (`AppendStringToBuffer_007067f0`).
+- Phrases (`GetStringResource_0070651d`, 0x70651d): tokens 0x68C..0x697 are the twelve player name slots (the 6x74 handler fills them), 0x698 is NULL, others are the table's phrases.
+
+**ASSUMED.**
+- The number is written in decimal (`IntToString_008162d8` not read).
+- A negative count gives an empty text (the exe reads it as signed; not traced).
+- Tokens past index 7 read as 0 (the exe reads past the 0x1C struct).
+- A player name is cut to 24 characters, with no terminator (`_wcsncpy` 0x18).
+- The log keeps the text's newlines. The port's `ChatLog.add` changes them only for a named line.
+- Flag 1 (text mode 0x420) is drawn like the others. The balloon's sound is the port's chat sound, not a directional one.
+
+**Checks.** `node tests/wordselect.test.ts` passes under Node 24 (the renderer: counts, the six selection types with their wraps, the class layouts and caps, the names, the 0x80 buffer; the real JP table case ran because the client data is present). `node tests/chatline.test.ts`, `chatshortcut`, `chatshortcutmenu` and `symbolchat` pass. `cd client && npx tsc --noEmit -p .` exit 0 (`client/node_modules` linked from the main checkout, removed before the commit). Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The word select picker, `CreateWordSelectMenuEntity_00701d00` (dump 658278): a ListWindowEntity with two WordSelectEntity lists (`CreateWordSelectEntity_00700db8`), the player-name list (`InitializePlayerNameList_007060ec`), the state machine (`WordSelectMenu_ProcessState_007023c8` and about 30 state handlers), the galgryphon effects, and the category tables from `LoadLocaleData_00705eb8`. newserv does not parse table1 / table2 / table4 / table6 (its readers are commented out), so their layout has to come from the exe. Not started in code. The Chat > Shortcut editor's word mode stays as it was.
+2. The Shortcut editor's word type, which needs (1).

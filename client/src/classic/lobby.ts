@@ -30,7 +30,8 @@
 
 import { BINDING, bindingKey, menuKeyOf } from '../input/keyconfig.ts';
 import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames, LOBBY_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
-import { parseChatShortcut } from '../net/chatshortcut.ts';
+import { parseChatShortcut, type WordSelectMessage } from '../net/chatshortcut.ts';
+import { currentWordSelectTable, renderWordSelect } from '../net/wordselect.ts';
 import * as THREE from 'three';
 import type { GuildCardBook, GuildCardClient, GuildCardSearchResult } from '../net/guildcard.ts';
 import type { InfoBoardClient } from '../net/infoboard.ts';
@@ -266,7 +267,12 @@ export class LobbyScreen implements Screen {
       this.applyViewShift();
     };
     this.chat = new ChatLine((text) => lobby.sendChat(text));
-    this.chat.sendWord = (message) => lobby.sendWordSelect(message);
+    this.chat.sendWord = (message) => {
+      lobby.sendWordSelect(message);
+      this.showWord(lobby.selfId, message);
+    };
+    // 6x74 in the lobby: the same handler as in a game (handle_packet0x60_subcommand0x74).
+    lobby.on('wordSelect', (clientId, message) => this.showWord(clientId, message));
     this.chat.team = hud.teamChat ?? null;
     this.chat.teamSender = () => lobby.players.get(lobby.selfId)?.name ?? '';
     lobby.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
@@ -346,6 +352,13 @@ export class LobbyScreen implements Screen {
     const p = this.lobby.players.get(id)?.position;
     const me = this.lobby.self?.position;
     return p && me ? Math.hypot(p.x - me.x, p.y - me.y, p.z - me.z) : 0;
+  }
+
+  // A word select balloon (the renderer's player names are the room's players by slot).
+  private showWord(clientId: number, message: WordSelectMessage): void {
+    const names = (slot: number) => this.lobby.players.get(slot)?.name ?? '';
+    const text = renderWordSelect(message, currentWordSelectTable(), names);
+    this.chat.receiveWord(clientId, names(clientId), text, (id) => this.distanceTo(id));
   }
 
   // Quit Game > Yes: the loading screen returns to Ship Select (the exe's

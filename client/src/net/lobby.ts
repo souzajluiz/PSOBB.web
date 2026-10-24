@@ -20,6 +20,7 @@ import type { SetPositionState } from './game.ts';
 import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
 import type { SymbolChat } from './symbolchat.ts';
 import { WORD_SELECT_SUBCOMMAND, wordSelectSubcommandPayload, type WordSelectMessage } from './chatshortcut.ts';
+import { parseWordSelectSubcommand } from './wordselect.ts';
 import { tradeIO, type TradeHost } from './tradeio.ts';
 import { TradeZone } from './tradezone.ts';
 
@@ -71,7 +72,7 @@ export interface LobbyEvents {
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   // 6x07: a symbol chat said in the room (symbolchat.ts; the bubble is not drawn yet).
   symbolChat: (clientId: number, chat: SymbolChat) => void;
-  // 6x74: a word select message from a player in the room (net/wordselect.ts; no balloon yet).
+  // 6x74: a word select message from a player in the room (net/wordselect.ts; drawn by classic/chat.ts receiveWord).
   wordSelect: (clientId: number, message: WordSelectMessage) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   // 6x06: a guild card another player sent (the 0x108 card at +4; exe handle_packet0x60_subcommand0x6).
@@ -378,6 +379,12 @@ export class Lobby {
       if (sub === 0x06 && body.length >= 0x10c) this.emit('guildCardSent', body);
       // 6xA6 is the trade proposal / answer / offer subcommand (net/trade.ts receive).
       if (sub === TRADE_SUB && body.length >= TRADE_SUB_SIZE) this.trade.receive(body);
+      // 6x74 word select, in the lobby and in a game (handle_packet0x60_subcommand0x74, dump 664363:
+      // the same handler in both): the balloon is drawn by the screen (classic/chat.ts receiveWord).
+      if (sub === WORD_SELECT_SUBCOMMAND) {
+        const ws = parseWordSelectSubcommand(body);
+        if (ws) this.emit('wordSelect', ws.clientId, ws.message);
+      }
       const p = this.players.get(clientId);
       if (p) {
         switch (sub) {

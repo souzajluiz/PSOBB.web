@@ -4,6 +4,7 @@ import { BgmPlayer } from '../audio/bgm.ts';
 import { se, SE, SePlayer, setSePlayer } from '../audio/se.ts';
 import { setShopDialogItems } from '../net/simplemail.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
+import { loadWordSelectFromFiles } from '../net/wordselect.ts';
 import { HttpSource, pickDataFolder, type DataSource } from '../data/source.ts';
 import { BBSession, type CharacterPreview, type MenuItem as ServerMenuItem } from '../net/bbsession.ts';
 import { Game, type GameListEntry } from '../net/game.ts';
@@ -113,6 +114,10 @@ async function main(): Promise<void> {
   loader.step('archive');
   await files.has('title.prs');
   loader.step('title');
+  // The word select table and phrases (ws_data_jp.bin, unitxt_ws_j.prs; LoadLocaleData_00705eb8's
+  // JP case). Not awaited: a word select balloon needs it only in a game. Without the files the
+  // balloon shows no phrase text (net/wordselect.ts).
+  void loadWordSelectFromFiles(files).catch(() => false);
   // The mail filter's word list (smutdata.prs, the exe's InitializeShopDialog_0070ac88; unitxt
   // groups). Not awaited: the first mail comes after the login. Without the file the list is
   // empty and the mail is shown as sent (the exe copies the text then).
