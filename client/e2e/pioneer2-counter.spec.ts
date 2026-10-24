@@ -6,7 +6,7 @@
 //
 // Against a local newserv, like the other classic e2e tests (e2e/classic.ts).
 import { expect, test } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { consoleLog, cursorTo, expectInGame, key, logIn, openPartyMenu, peek, reachLobby, talkKey } from './classic.ts';
 
 // The local test account of tests/login.live.ts.
 const USER = process.env.PSO_USER ?? 'webtest';
@@ -51,7 +51,7 @@ test('the Hunter\'s Guild counter opens the quest menu in the classic field', as
       const p = v.npcs.byAction(1011).root.position;
       v.placePlayer(w.classicGame.game.selfId, p.x, p.y, p.z + 8, Math.PI);
     });
-    await key(page, 'Enter');
+    await talkKey(page);
     // The clerk's welcome lines wait for Enter; the categories list follows.
     await expect
       .poll(

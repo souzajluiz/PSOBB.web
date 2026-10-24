@@ -16,6 +16,15 @@ export async function key(page: Page, k: string, times = 1): Promise<void> {
   }
 }
 
+// Talk is the action palette's Middle key (ArrowDown by default), as in the exe (palette slot
+// down, 0x0068c31d); Enter is Decide and no longer talks. Held so a 30 fps frame sees it.
+export async function talkKey(page: Page): Promise<void> {
+  await page.keyboard.down('ArrowDown');
+  await page.waitForTimeout(150);
+  await page.keyboard.up('ArrowDown');
+  await page.waitForTimeout(60);
+}
+
 // Moves a cursor with ArrowDown until `at` reports `want` (never presses Enter).
 export async function cursorTo(page: Page, at: (w: Win) => number, want: number, max = 8): Promise<void> {
   for (let i = 0; i < max && (await peek(page, at)) !== want; i++) await key(page, 'ArrowDown');
