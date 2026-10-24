@@ -14,9 +14,9 @@
 // The attack dispatch DispatchGalGryphonAttackEffect_004a8690 (dump 227054) only builds
 // the parameters of DispatchSinowberillAttackEffect_0051fc9c; it is not an update.
 //
-// Not ported here: the S7 handler that calls throw() (its sub-phase flow, the beam
-// handle and the state records are the Gryphon brain, which is not in the port), the
-// launcher's particles and sounds (0x3ad, the frustum particle sets), and the attack
+// The S7 handler that calls throw() is galgryphonstatesa.ts (s7), reached from the
+// brain (galgryphonai.ts) wired in render/combat.ts. Not ported here: the launcher's
+// particles and sounds (0x3ad, the frustum particle sets), and the attack
 // effect's area hit (0x0051fc9c). ASSUMED items are marked below.
 
 import type { Icon } from '../classic/minimap.ts';
@@ -140,7 +140,7 @@ export class GalgryphonMinionLauncher {
 
 /**
  * The minions in flight and the minion Effects of one Gal Gryphon fight. The brain's S7 handler
- * (not ported) would call throw(); until it does, nothing is made here.
+ * (galgryphonstatesa.ts) calls throw() once per S7 run; render/combat.ts owns the manager.
  */
 export class GalgryphonMinionManager {
   private launchers: GalgryphonMinionLauncher[] = [];
