@@ -161,6 +161,38 @@ are in `tests/dragon.test.ts` ("the state sounds").
 | 0x325 | `0x0041f16e` | burrow out (`0x0041ed68`), phase 0 | every frame |
 | 0x325 | `0x0041f5b3` | burrow (`0x0041f238`), phase 0, both sub-states | every frame |
 | 0x326 | `0x00420550` | collapse, sub-state 1 | every frame |
+| 0x318 | `0x0041ebde` (helper `0x0041ebc0`, its check `0x007aaa30(5.0)`) | roarAir (`0x0042008c` case 0), dive (`0x0041f6cc` sub 0), flyAcross (`0x00421ecc` case 0, every tick), flyShoot (`0x00421972`, the turn, sub 1; ASSUMED), emerge (`0x0041e3f8` sub 5; sub 4 only on animation 16) | frame 5 (`animSound`) |
+| 0x318 | `0x00421235` | land (`0x00420ee8`), sub 0 (the counter at +0x21b; the port's sub 0 is ASSUMED to be it) | frame 2 |
+| 0x320 | `0x004268db` (the fireball update `0x00426790`, arrived, counter 1, the impact branch `0x0042688f`) | `DragonFireball` impact, once per fireball (`drainSounds`, played by the renderer's `tickShots`) | the impact tick |
+
+**2026-10-24, the last sites (the same day).** `0x0041ebde` is in `0x0041ebc0`,
+a helper that plays 0x318 at the body (+0x644) when the animation passes frame
+5, and is called by the states above (the teleport 0x19 and fly_move 0x1a call it
+too, the port has no such states). `0x00421235` is the land's sub 0 (frame 2).
+The 0x320 is the fireball's impact: `0x004268df` was a bad Ghidra start, the
+impact block is `0x004268db` (`xor eax, eax`, reached by the `je` at
+`0x004268c5` and by fall-through from `0x004268d4`), so every impact plays it.
+`0x0042365d` is in `HandleSinowbeatState1` (`0x00423614`, the dispatcher's case
+1, the sid 1). No Dragon-range code writes sid 1: the disassembly has no
+`push 6; push 1; call *0x164` (the state change `(1, 6)`) and no `movl $1` to
++0x388 or `movw $1` to +0x32e between `0x00419b14` and `0x0042xxxx` (the `(1, 6)`
+at `0x00431f51` is in `0x004318ac`, another entity), and no sequence table holds
+1, so the port has no state 1 and the 0x314 is NOT wired (reachable only if a
+received packet carries state 1; not checked).
+
+The frame rule `passed(f)` is `check_entity_animation_elapsed_threshold`
+(`0x007aaa30`): `f < +0xc0 <= f + +0xc8` (the frame, the speed), gated by
+`(+0xb0 & 4) == 0 || (+0xb0 & 1)` and `FUN_007a9970 == 0` (`+0xb8 != +0xba`, the
+animation changing). The port has no gate on +0xb0 and relies on `changing` being
+cleared by the tick's animate (ASSUMED for the Dragon's flags).
+
+Found on the way, not changed: `0x00421ecc` (flyAcross, state 6) also calls
+`0x0041c768` (the take-off helper, particle +0x04 at frame 14, as roarAir does);
+the port's `tickFlyAcross` has no take-off particle. The older table row for
+`0x004221b0` (flyShoot) is off: Ghidra puts the call at `0x004221a9` in
+`0x00421ecc` (flyAcross), while the flyShoot take-off at `0x0042197a` is the
+port's flyShoot sub 1.
+
 
 The 5-argument helper of 0x325 / 0x326 is `0x008144b0` (FUN_008144b0 in
 Ghidra, the same SE engine as `0x00814298`, which takes four). The dump's name
@@ -170,12 +202,9 @@ the name is wrong; the calls are to 0x008144b0. The frames are the exe's
 `check_entity_animation_elapsed_threshold` window (`passed`).
 
 **Not wired:** 0x319 has no call in the exe (every `0x319` in the dump is a
-field name). 0x320 has a literal call, `0x004268e5` (the push at `0x004268e0`),
-but it is in a fragment that Ghidra starts at `0x004268df` with no owner
-(reached by fall-through, no jump refers to it), next to the fireball's
-impact code; so it stays unwired, as the 2026-10-21 entry decided. Two more 0x318
-sites (`0x0041ebde`, `0x00421235`) and one 0x314 (`0x0042365d`) are not checked
-against the port's emerge, land and walk paths.
+field name). 0x314 at `0x0042365d` (state 1, see above). The 0x320 at
+`0x004268e5` is now wired at the fireball's impact (the table row above; the
+2026-10-21 "no owner" call was the Ghidra fragment, not a missing owner).
 
 **ASSUMED:** the walk's dust also comes from the input walk
 (`handle_input_state_dragon_walk`, gated by field 0xb8 == 1); the port has one

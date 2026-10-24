@@ -1252,6 +1252,76 @@ for (const n of [1, 2, 5]) {
     enter.setState(S.collapse);
     eq(ids(enter.events.flatMap((e) => (e.kind === 'se' ? [e.id] : []))), ids([0x31a]), 'collapse entry sounds 31a');
   }
+  // 0x318 at frame 5: the animate helper 0x0041ebc0 (0x0041ebde), called by roarAir (0x42008c
+  // case 0), dive (sub 0), flyAcross (every tick), flyShoot (the turn), emerge (sub 5; sub 4 on slot 16).
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 0;
+    (ai as unknown as { sid: number }).sid = DRAGON_STATE.roarAir;
+    eq(ids(tickSounds(ai, 'frameState', 5.25)), ids([0x318]), 'roarAir: frame 5 sounds 318');
+    eq(ids(tickSounds(ai, 'frameState', 6.25)), '', 'roarAir: frame 6 is silent');
+  }
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 0;
+    eq(ids(tickSounds(ai, 'tickDive', 5.25)), ids([0x318]), 'dive: sub 0 frame 5 sounds 318');
+    (ai as unknown as { c86c: number }).c86c = 2;
+    check(!tickSounds(ai, 'tickDive', 5.25).includes(0x318), 'dive: later sub-states do not sound 318 at frame 5');
+  }
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 0;
+    eq(ids(tickSounds(ai, 'tickFlyAcross', 5.25)), ids([0x318]), 'flyAcross: sub 0 frame 5 sounds 318');
+    (ai as unknown as { c86c: number }).c86c = 2;
+    eq(ids(tickSounds(ai, 'tickFlyAcross', 5.25)), ids([0x318]), 'flyAcross: every sub-state sounds at frame 5');
+  }
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 1;
+    eq(ids(tickSounds(ai, 'tickFlyShoot', 5.25)), ids([0x318]), 'flyShoot: the turn sounds 318 at frame 5');
+  }
+  {
+    const ai = brain();
+    const p = ai as unknown as { c86c: number; c870: number; setSlot(i: number): void; speed: number; mframe: number };
+    p.c86c = 5;
+    p.c870 = 0;
+    eq(ids(tickSounds(ai, 'tickEmerge', 5.25)), ids([0x318]), 'emerge: sub 5 frame 5 sounds 318');
+    p.c86c = 5;
+    eq(ids(tickSounds(ai, 'tickEmerge', 6.25)), '', 'emerge: sub 5 frame 6 is silent');
+    // sub 4 sounds only on animation 16 (+0x2e, the slot index): tickSounds sets slot 25, so it is silent.
+    p.c86c = 4;
+    p.f888 = 0;
+    eq(ids(tickSounds(ai, 'tickEmerge', 5.25)), '', 'emerge: sub 4 off animation 16 is silent');
+    p.setSlot(16);
+    p.speed = 0.5;
+    p.c86c = 4;
+    p.f888 = 0;
+    p.mframe = 4.75;
+    ai.events.splice(0);
+    call(ai, 'tickEmerge');
+    eq(ids(ai.events.flatMap((e) => (e.kind === 'se' ? [e.id] : []))), ids([0x318]), 'emerge: sub 4 on animation 16 sounds 318');
+  }
+  // 0x318 at frame 2 in land (0x00420ee8 sub 0, 0x00421235); land, landRoar, landDie and landCollapse share it.
+  {
+    const ai = brain();
+    (ai as unknown as { c86c: number }).c86c = 0;
+    eq(ids(tickSounds(ai, 'tickLand', 2.25)), ids([0x318]), 'land: sub 0 frame 2 sounds 318');
+    (ai as unknown as { c86c: number }).c86c = 1;
+    eq(ids(tickSounds(ai, 'tickLand', 2.25)), '', 'land: sub 1 is silent at frame 2');
+  }
+  // 0x320: the fireball's impact (0x004268db, the update 0x00426790 at arrived counter 1), once.
+  {
+    const f = new DragonFireball([0, 0, 0], [0, 0, 40], 1);
+    let guard = 0;
+    while (f.flying && guard++ < 1000) f.tick([]);
+    eq(ids(f.drainSounds()), '', 'fireball: no SE in the flight');
+    f.tick([]);
+    eq(ids(f.drainSounds()), ids([0x320]), 'fireball: the impact sounds 320');
+    f.tick([]);
+    eq(ids(f.drainSounds()), '', 'fireball: the counter 2 frame is silent');
+  }
+  // 0x314 (0x0042365d, the state 1 entry): state 1 has no port state (no writer in the Dragon's code).
+  check(!Object.values(DRAGON_STATE).includes(0x01), 'the port names no state 1 (its 0x314 is not wired)');
 }
 
 // 31. Sids 0x19 (teleport) and 0x1a (fly move) are not reachable in the normal fight

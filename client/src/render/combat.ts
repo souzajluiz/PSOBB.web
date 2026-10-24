@@ -4394,6 +4394,11 @@ export class CombatView {
       // The Dragon's fireball particles (its table, the fireball update 0x00426790): the flight, the impact.
       if (s.shot instanceof DragonFireball) {
         for (const id of s.shot.drainParticles()) void this.fx?.spawn({ id }, new THREE.Vector3(s.shot.x, s.baseY + s.shot.y, s.shot.z));
+        // The impact's SE 0x320 (0x004268db), at the fireball.
+        for (const id of s.shot.drainSounds()) {
+          this.sePlayer ??= this.opts.source ? new SePlayer(this.opts.source) : null;
+          this.sePlayer?.play(id);
+        }
       }
       if (s.shot.spawned?.length) for (const n of s.shot.spawned.splice(0)) this.launchShot(s.owner, n);
       if (s.shot instanceof TechShot) this.techfx?.drainShot(s.shot);

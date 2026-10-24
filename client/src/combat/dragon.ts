@@ -231,11 +231,12 @@ export function footNodes(side: number): readonly number[] {
 // 0x314..0x326 are sound effects in the same way. Wired at their sites (each
 // `emit({ kind: 'se' })` below cites its exe call): 0x315 (walk), 0x317 / 0x318
 // (flyUp, flyShoot), 0x31a (collapse entry), 0x31b (death), 0x31d (tail), 0x31e
-// (flyShoot), 0x325 (circle, burrow, burrowOut), 0x326 (collapse). Not wired: 0x319
-// (no call in the exe), 0x320 (its call at 0x004268e5 is in a fragment with no
-// owner, see the DEVLOG), the 0x318 sites at 0x0041ebde and 0x00421235 (not checked
-// against the port's emerge and land), and 0x314 at 0x0042365d (not checked).
-export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f } as const;
+// (flyShoot), 0x325 (circle, burrow, burrowOut), 0x326 (collapse). The 2026-10-24
+// pass (DEVLOG): 0x318 at frame 5 in the animate helper 0x0041ebc0 (animSound), 0x318
+// at frame 2 in land (0x00421235), 0x320 at the fireball's impact (0x004268db, in the
+// fireball update 0x00426790, arrived counter 1). Not wired: 0x319 (no call in the
+// exe), 0x314 at 0x0042365d (state 1: no writer in the Dragon's code, no port state).
+export const DRAGON_SE = { breath: 0x321, breathAfterFrames: 30, fireball: 0x31f, impact: 0x320 } as const;
 
 // The Dragon's particle ids (create_particle_effect 0x0050b7a4 / 0x0050981c: the
 // second argument is the id, the third the flag; the 0x840 of 0x0041ec4c is the
@@ -508,6 +509,8 @@ export class DragonFireball extends DragonShot {
   readonly look: ShotLook = { color: 0xff9030, size: 4 };
   readonly ids: DragonFireIds;
   private queued: number[] = [];
+  // The SE ids made since the last drain (0x320 at the impact, 0x00426790 counter 1).
+  private sounds: number[] = [];
   private impactFrames = 0; // the exe's counter [+0x34] after the arrival
   private ox: number;
   private oy: number;
@@ -547,6 +550,10 @@ export class DragonFireball extends DragonShot {
   drainParticles(): number[] {
     return this.queued.splice(0);
   }
+  // The SE ids made since the last drain, in order (the renderer plays them).
+  drainSounds(): number[] {
+    return this.sounds.splice(0);
+  }
   tick(targets: readonly AiTarget[]): AiTarget[] {
     if (this.done) return [];
     this.frames++;
@@ -564,6 +571,8 @@ export class DragonFireball extends DragonShot {
     this.impactFrames++;
     if (this.impactFrames === 1) {
       this.queued.push(this.ids.f04, this.ids.f08);
+      // 0x004268db (the impact branch 0x0042688f, every impact): SE 0x320 at the fireball.
+      this.sounds.push(DRAGON_SE.impact);
       return this.within(targets, DRAGON.fireballRadius);
     }
     if (this.impactFrames === 2) this.queued.push(this.ids.f08);
@@ -1700,6 +1709,8 @@ export class DragonAi extends BrainBase {
       case S.roarAir:
         this.animate();
         this.c86c++;
+        // 0x0042008c case 0: 0x0041ebc0 (SE 0x318 at frame 5) before the take-off.
+        this.animSound();
         // 0x004201ba: the take-off helper (0x0041c768) at frame 14.
         if (this.crossed(14)) this.emitBody(this.ultimate ? DRAGON_PARTICLE_IDS.ultimate.f04 : DRAGON_PARTICLE_IDS.normal.f04);
         return;
@@ -1898,6 +1909,8 @@ export class DragonAi extends BrainBase {
   // 0x00421ecc phase 0: turn along the easing, then glide across.
   private tickFlyAcross(): void {
     this.animate();
+    // 0x00421ecc case 0: 0x0041ebc0 (SE 0x318 at frame 5) every tick.
+    this.animSound();
     if (this.c86c === 0) {
       this.f884 += 1;
       this.yaw = Math.trunc(this.i87c + this.sign664 * this.headProfile.value(this.f884));
@@ -1952,6 +1965,9 @@ export class DragonAi extends BrainBase {
       this.sign664 = turnTo(this.yaw, this.i87c) >= 0 ? 1 : -1;
       this.turnSetup(this.i87c);
     }
+    // 0x00421972 (the turn, sub-state 1): 0x0041ebc0, SE 0x318 at frame 5. ASSUMED: the
+    // call sits in the turn's block, as the take-off below does (0x0042197a).
+    if (sub === 1) this.animSound();
     // 0x0042197a: the take-off helper (0x0041c768, gated on frame 14) while it turns.
     if (sub === 1 && this.crossed(14)) this.emitBody(this.pids().f04);
     if (this.turnStep()) {
@@ -2062,6 +2078,9 @@ export class DragonAi extends BrainBase {
   // goes off (radius MovementData fparam4).
   private tickLand(): void {
     this.animate();
+    // 0x00420ee8 sub-state 0 (0x00421235): SE 0x318 at frame 2 (0x41300000 is frame 11, below).
+    // ASSUMED: the port's sub 0 (before frame 18) is the exe's sub 0 (the counter at +0x21b).
+    if (this.c86c === 0 && this.passed(2)) this.emit({ kind: 'se', id: 0x318 });
     this.f888 = DRAGON_GUESS.animYOffset;
     if (this.c86c === 0 && this.mframe >= 18) this.c86c = 1;
     const sub = this.c86c;
@@ -2128,6 +2147,15 @@ export class DragonAi extends BrainBase {
   // at the exact threshold (one tick), see the DEVLOG entry.
   private passed(f: number): boolean {
     return this.mframe > f && this.mframe <= f + this.speed;
+  }
+
+  // 0x0041ebc0 (called after the animate step by the take-off-style states: roarAir
+  // 0x0042008c case 0, dive 0x0041f6cc sub 0, emerge 0x0041e3f8 sub 5 (and sub 4 on
+  // slot 16), flyAcross 0x00421ecc case 0, flyShoot's turn 0x00421972): SE 0x318 at
+  // frame 5 (0x0041ebde, the check 0x007aaa30(5.0) = 0x40a00000). The
+  // teleport (0x19) and fly_move (0x1a) states call it too; the port has neither.
+  private animSound(): void {
+    if (this.passed(5)) this.emit({ kind: 'se', id: 0x318 });
   }
 
   // 0x0041b220 variant 1 (normal), by +0x874. Frames are motion frames.
@@ -2366,6 +2394,8 @@ export class DragonAi extends BrainBase {
     this.animate();
     const sub = this.c86c;
     if (sub === 0) {
+      // 0x0041f6cc sub 0: 0x0041ebc0 (SE 0x318 at frame 5) before the take-off.
+      this.animSound();
       // 0x0041ff7a (before the turn, 0x0041ffc0): the take-off helper (+0x04) at frame 14.
       if (this.crossed(14)) this.emitBody(this.pids().f04);
       if (this.turnStep()) {
@@ -2552,6 +2582,8 @@ export class DragonAi extends BrainBase {
       this.x += this.velX;
       this.z += this.velZ;
     } else if (sub === 4) {
+      // 0x0041e73b: 0x0041ebc0 (SE 0x318 at frame 5) only while the animation is 16 (+0x2e).
+      if (this.slotIndex === 16) this.animSound();
       this.f888 += this.f88c;
       this.alt += this.f888;
       this.velX *= 0.98;
@@ -2559,6 +2591,8 @@ export class DragonAi extends BrainBase {
       this.x += this.velX;
       this.z += this.velZ;
     } else if (sub === 5) {
+      // 0x0041e8d8: 0x0041ebc0 (SE 0x318 at frame 5) every tick of the settle.
+      this.animSound();
       if (++this.c870 > 0x31) this.c86c = 6;
     }
   }

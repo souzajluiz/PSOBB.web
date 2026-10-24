@@ -153,10 +153,11 @@ worktrees are left.
    Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
    and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles. The state sounds
    are in too (2026-10-24, each at its exe call: 0x315 walk, 0x317 / 0x318 flyUp, 0x318 / 0x31e flyShoot, 0x31a
-   collapse entry, 0x31b death, 0x31d tail, 0x325 spiral / burrow / burrow out, 0x326 collapse). Not wired: 0x319
-   (no call in the exe), 0x320 (its call at 0x004268e5 is in a fragment with no owner, see the DEVLOG), and the 0x318
-   calls at 0x0041ebde and 0x00421235 (not checked against the emerge and the land), and 0x314 at 0x0042365d (not
-   checked). The Dragon's particles: the stomp
+   collapse entry, 0x31b death, 0x31d tail, 0x325 spiral / burrow / burrow out, 0x326 collapse; the 2026-10-24 pass
+   adds 0x318 at frame 5 in the animate helper 0x0041ebc0 (roarAir, dive, flyAcross, flyShoot's turn, emerge; ASSUMED
+   for flyShoot and emerge sub 4), 0x318 at frame 2 in land, and 0x320 at the fireball's impact). Not wired: 0x319
+   (no call in the exe), 0x314 at 0x0042365d (state 1: no port state, no writer in the Dragon's code). The Dragon's
+   particles: the stomp
    dust, the fireball's flight / impact / puff (its table; the trail was misread and is corrected), the land's
    take-off and stomp, the lift, the hover roar and the launch flash are in (2026-10-21, "Dragon particles from
    its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now; the
