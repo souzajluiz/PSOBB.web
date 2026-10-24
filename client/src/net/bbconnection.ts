@@ -27,7 +27,9 @@ export const HEADER_SIZE = 8;
 export interface LoginParams {
   username: string;
   password: string;
-  connectionPhase?: number; // 0 = initial, 4 = login server, 5 = lobby
+  connectionPhase?: number; // 0 = initial, 4 = login server, 5 = lobby, 6 = lobby with Meet User fields
+  menuId?: number; // 0x74: MENU_ID_LOBBY with preferredLobbyId (phase 6, newserv on_93_BB)
+  preferredLobbyId?: number; // 0x78
   characterSlot?: number;
   guildCardNumber?: number;
   securityToken?: number;
@@ -95,6 +97,8 @@ export class BBConnection {
     dv.setUint32(0x10, p.securityToken ?? 0, true);
     writeAscii(body, 0x14, 0x30, p.username);
     writeAscii(body, 0x44, 0x30, p.password);
+    dv.setUint32(0x74, p.menuId ?? 0, true); // C_LoginBase_BB_93 menu_id / preferred_lobby_id
+    dv.setUint32(0x78, p.preferredLobbyId ?? 0, true);
     if (p.clientConfig) body.set(p.clientConfig.subarray(0, 0x28), 0x7c);
     else writeAscii(body, 0x7c, 0x28, p.versionString ?? 'Ver. 1.25.13');
     this.send(0x93, 0, body);

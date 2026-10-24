@@ -137,6 +137,9 @@ export interface TeamHost {
   // The Guild Card search (0040 / 0041, net/guildcard.ts) of one member: true when the
   // member answers (the exe's Enter on a member row, dump 720824 states 3, 0xf, 0x10).
   searchMember?(guildCard: number): Promise<boolean>;
+  // Meet the User on the searched member (state 0x12): the host reconnects to the member's
+  // server with the last search reply (ProcessPhaseLabel_0074f028). Called once on Enter.
+  meetMember?(guildCard: number): void;
   // Team Info (0x2b, see TeamInfoWindow below): 18EA and 19EA / 1AEA answers.
   intraRanking?(): Promise<IntraRanking>;
   rewards?(owned: boolean): Promise<TeamReward[]>;
@@ -742,10 +745,11 @@ export function drawRanking(ctx: CanvasRenderingContext2D, skin: WindowSkin, row
 //     0x81 to the searched card (+0x24) through FUN_008136f0 and returns to the action
 //     list; No goes back to the keyboard; Escape (state 4) returns too. The lobby runs
 //     the keyboard (classic/simplemail.ts MailCompose) while phase is 'mail'.
-//   Meet the User (state 0x12): ProcessPhaseLabel_0074f028 (the 0x41 reply's embedded
-//     0x19 goes to the connection, then the reconnect to the reply's address and port;
-//     not ported, see the DEVLOG), 450 frames (MEET_FRAMES), then the owner callback
-//     (vtable +0x1c) closes the list.
+//   Meet the User (state 0x12): ProcessPhaseLabel_0074f028 (dump 722132) -> the 0x41
+//     reply's embedded 0x19 goes to the connection and the session reconnects to the
+//     reply's port (ShipConnectionManager_HandlePacket0x19_007d7640, dump 812031; the
+//     port side is host.meetMember -> BBSession.meetUser). 450 frames (MEET_FRAMES),
+//     then the owner callback (vtable +0x1c) closes the list.
 //   The confirm list Sort (11, 0x3a) with By Number / By Rank (11, 0x15f / 0x160) is
 //     state 7, which only SetState_0074e9f4(3) enters; this list has no row 3, so the
 //     member list does not reach it. Not ported.
@@ -894,6 +898,7 @@ export class TeamMemberListWindow {
           else if (row.value === MEMBER_LEAF.meetUser) {
             this.phase = 'meet';
             this.frames = 0;
+            if (this.target !== null) this.host.meetMember?.(this.target);
           }
         }
         return true;

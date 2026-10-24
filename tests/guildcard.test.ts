@@ -20,6 +20,7 @@ import {
   parseFileHeader,
   parseGuildCard,
   parseSearchResult,
+  phaseLabelOf,
   searchPacket,
   swapPacket,
   type CommandLink,
@@ -264,6 +265,31 @@ async function main() {
     const r = await client.search(7, 9);
     check('search parses the 0041 reply', r !== null && r.guildCardNumber === 9 && r.searcher === 7 && r.port === 5000 && r.location === 'BLOCK02-05' && r.menuId === 3 && r.itemId === 4 && r.name === 'Bob', JSON.stringify(r));
     check('an empty 0041 body reads as blank', parseSearchResult(new Uint8Array(0x128)).name === '');
+  }
+
+  // 0041 Meet the User fields (newserv send_card_search_result_t, exe handle_ship_packet0x41 copy):
+  // the embedded 19 header at payload 0x0c (8 bytes), its flag at 0x10, its body at 0x14 (8 bytes:
+  // address, port, unused); the location at 0x1c; the lobby ref at 0xa4 / 0xa8 (BB 8-byte header not counted).
+  {
+    const res = new Uint8Array(0x128);
+    const dv = new DataView(res.buffer);
+    dv.setUint16(0x0c, 0x10, true); // embedded size
+    dv.setUint16(0x0e, 0x19, true); // embedded command
+    dv.setUint32(0x10, 0, true); // embedded flag
+    res.set([0x7f, 0x00, 0x00, 0x01], 0x14); // address (big-endian)
+    dv.setUint16(0x18, 5278, true); // port
+    const location = 'BLOCK01-03,,BLOCK01,Ship Alpha';
+    for (let i = 0; i < location.length; i++) dv.setUint16(0x1c + i * 2, location.charCodeAt(i), true);
+    dv.setUint32(0xa4, 0x33000033, true);
+    dv.setUint32(0xa8, 3, true);
+    const r = parseSearchResult(res);
+    check('the embedded 19 body is the 8 bytes at 0x14', hex(r.reconnect.body) === '7f000001' + '9e14' + '0000', hex(r.reconnect.body));
+    check('the embedded 19 flag is 0', r.reconnect.flag === 0);
+    check('the phase label is the last , token (ProcessPhaseLabel)', r.phaseLabel === 'Ship Alpha', r.phaseLabel);
+    check('the lobby ref is LOBBY and the lobby number', r.menuId === 0x33000033 && r.itemId === 3, `${r.menuId} ${r.itemId}`);
+    check('phaseLabelOf: no comma is the whole string, empty tokens skipped', phaseLabelOf('BLOCK02-05') === 'BLOCK02-05' && phaseLabelOf('a,,,b,') === 'b');
+    check('phaseLabelOf: a token is cut at 0x10 units', phaseLabelOf(`x,${'y'.repeat(20)}`) === 'y'.repeat(16));
+    check('phaseLabelOf: an empty location is empty', phaseLabelOf('') === '');
   }
 
   // a search with no answer (offline target) resolves null
