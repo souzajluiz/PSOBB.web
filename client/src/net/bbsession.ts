@@ -9,6 +9,7 @@
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
 import { E7_SIZE, parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
 import { customizeBody } from '../classic/customize.ts';
+import { CHAT_SHORTCUTS_COMMAND, CHAT_SHORTCUTS_FLAG, chatShortcutsPayload } from './chatshortcut.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient, type GuildCardSearchResult } from './guildcard.ts';
 import { MENU_ID_LOBBY } from './game.ts';
@@ -499,6 +500,16 @@ export class BBSession {
 
   // The save upload the exe makes when it leaves the session (send_packet5, dump 811320:
   // E7 with the full save (dump 811346), then 05). Only with a full 0x3994-byte save.
+  // The chat shortcut records (03ED, send_packet0xed_subcommand3, dump 813730): the 16
+  // records of the save copy, 0xA40 bytes. The exe sends it from the Chat > Shortcut
+  // leaf's destructor when the leaf changed the records. newserv's E7 handler does not
+  // take them, so this is the only save path for an edited record.
+  sendChatShortcuts(): void {
+    const body = chatShortcutsPayload(this.fullCharacter);
+    if (!this.conn || !body) return;
+    this.conn.send(CHAT_SHORTCUTS_COMMAND, CHAT_SHORTCUTS_FLAG, body);
+  }
+
   sendSaveFile(): void {
     const save = this.fullCharacter;
     if (!this.conn || !save || save.length !== E7_SIZE) return;

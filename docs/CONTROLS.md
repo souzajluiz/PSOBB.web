@@ -24,7 +24,7 @@ the port). File references are to `client/src/`.
 | F10 | team_chat_toggle (29) | missing | not ported | Exe: dump 678385: while that window is open, toggles the lock bit (0x80) that sends the chat line as team chat (`SendChatMessageDispatcher_0077d710`, dump 754350). Same reason as F9. |
 | F11 | keyboard_controls_toggle (30) | missing | not ported | Exe: `ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159), character option 0x1000000. The port has no mouse-control mode. |
 | F12 | main_menu_2 (31) | wired | `render/fieldhud.ts` key(), `classic/lobby.ts` key() | Read through `bindingKey(BINDING.mainMenu2)`, so a rebound F12 follows the config. |
-| Shift+F1..F12 | handle_chat_shortcuts (dump 674857): the raw F keys, slots 0..11 | partial | `input/shortcuts.ts` chatShortcutIndex; `render/fieldhud.ts` key(); `classic/lobby.ts` key(); `classic/chat.ts` ChatLine.useShortcut; `net/chatshortcut.ts` | Option 0x2000000 clear (the default): Shift+F sends the slot, plain F is the menu key. Option set: plain F sends the slot and Shift+F is the menu (the Options window's Function Key row). A slot is the save's record at 0x1FAC (text or symbol chat), sent with the chat cooldown (dropped while it runs). Not ported: the Chat > Shortcut leaf (0x11) editor, and the word-select record (type 2). |
+| Shift+F1..F12 | handle_chat_shortcuts (dump 674857): the raw F keys, slots 0..11 | partial | `input/shortcuts.ts` chatShortcutIndex; `render/fieldhud.ts` key(); `classic/lobby.ts` key(); `classic/chat.ts` ChatLine.useShortcut; `net/chatshortcut.ts` | Option 0x2000000 clear (the default): Shift+F sends the slot, plain F is the menu key. Option set: plain F sends the slot and Shift+F is the menu (the Options window's Function Key row). A slot is the save's record at 0x1FAC (text or symbol chat), sent with the chat cooldown (dropped while it runs). Not ported: the Chat > Shortcut leaf (0x11) editor. A word-select record (type 2) sends 6x74 (`Lobby.sendWordSelect`, 2026-10-23). |
 | Alt+F1..F12 | lobby emotes (`EMOTE_KEYS` f1..f12) | wired | `render/lobbyview.ts` (altEmoteKey, line ~707); `formats/emotes.ts` line 33 | Alt keeps the F keys off the shortcuts (the exe's `is_alt_pressed_` check). |
 | Alt+1..0 | lobby emotes (digits) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | |
 | Alt+A..Z | lobby emotes (letters) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | Letters in `EMOTE_KEYS`; the set is the port's (ASSUMED to match the exe's emote table). |
@@ -53,7 +53,7 @@ the port). File references are to `client/src/`.
 - **Wired:** movement, the menu keys, Home, F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End (field), the action palette, the hotbar 1..0, the camera,
   Alt emotes, Q / E auto run and walk (the manual's keys, see the ASSUMED list).
 - **Partial:** F1 (help list, field only), numpad (NumLock on only), Shift+F chat shortcuts
-  (no slot editor, no word select), PageUp / PageDown (lobby Log Window only).
+  (no slot editor; word select sends 6x74, receive is not ported), PageUp / PageDown (lobby Log Window only).
 - **Missing:** F9..F11 (team chat window and keyboard control mode), Ctrl+End (quick menu),
   Tab, Print Screen.
 
@@ -68,7 +68,7 @@ the port). File references are to `client/src/`.
   chat slots (was_key_pressed(f1..f12)), not the key config's bindings.
 - A chat shortcut that comes during the cooldown is dropped; an empty slot still starts
   the cooldown (the exe sets the timer before send_chat_message, which then sends nothing).
-  The word-select record sends nothing here, and the lobby sends no symbol chat (the port's
+  The word-select record sends 6x74 (lobby and field), and the lobby sends no symbol chat (the port's
   lobby has no symbol sender; the field has one).
 - Log Window: the page step is 380 px (one page of 19 rows at 20 px), applied at once (the
   exe's list animates the progress over frames). A new line returns the view to the bottom
