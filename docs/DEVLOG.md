@@ -20,6 +20,16 @@ had no visible handle and no snapping.
 BAMS, seam, wrap, snap, range). `tests/questeditor.test.ts` still passes (1424 checks).
 `tsc --noEmit -p client` is clean. The gizmo itself was not checked in a browser.
 
+## 2026-10-24: Gal Gryphon: its brain owns the death
+
+**What changed:** a Gal Gryphon kill now goes through its brain. `render/combat.ts`: the hit path no longer takes the generic kill (`killEnemy`) at hp 0. It applies the damage, clamps at 0, sends the 6x0A without the dead flag and records the last hit (`galgryphonLastHit`). The brain's death gate (hp <= 0, the leader's death script, `combat/galgryphonai.ts` `stageGate`) runs the script; its S5 leave calls the new `galgryphonKilled` (the same `bossKilled` as the other bosses: 6x76 flag 8, the drop request from the leader, the EXP request), then `setQuestFlag(0x52)` through `game.setQuestFlag`, as Vol Opt sets 0x2a. A remote 6x0A sets hp = max - damage_taken and the last hit to false; its dead flag is ignored. The brain keeps ticking after its kill until S34 marks it gone, and the body is then hidden (`GalgryphonAi.gone`). `tests/galgryphonai.test.ts`: hp 0 runs the leave once, flag 0x52 once, no second kill, body gone.
+
+**Exe evidence:** the Gryphon's per-tick update (`Psobb.exe-05112026.c` ~226140-226215) has no on-killed call; the dead flag there only comes from the spawn initdata (`0x40`). Its death is `HandleGalgryphonState9_004a7360` (~226240): the script runs when flags & 0xc == 0 and hp <= 0. The on-killed is `EnemyOnKilledHandler_0051f894` (~303086), called from the death leave `FUN_004a2008` (S5), which sets quest flag 0x52.
+
+**ASSUMED:** that the exe's generic hit reaction does not kill the Gryphon (its vtable hit handler is not decoded; the dump has no on-kill call in the Gryphon update); that followers' remote kill matches the leader's (followers run the leave only through the synced states); that the drop is at the origin (the on-killed runs with the body at the origin, as the exe does).
+
+**Not checked:** in Chrome. The leader's death script in a live room.
+
 ## 2026-10-24: Optimal PRS parser for quest files
 
 **What changed:** `prsCompressOptimal` in `client/src/formats/prscompress.ts`,

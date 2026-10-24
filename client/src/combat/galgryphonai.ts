@@ -539,6 +539,11 @@ export class GalgryphonAi {
     return this.state;
   }
 
+  /** True once the body is removed (S34's markRemoved, or kill()): the host hides it and stops ticking it. */
+  get gone(): boolean {
+    return this.removed;
+  }
+
   kill(): void {
     this.removed = true;
   }

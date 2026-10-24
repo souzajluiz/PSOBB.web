@@ -346,6 +346,37 @@ const rollOf = (bytes: Uint8Array) => decodeGalgryphonSync(new DataView(bytes.bu
   check(slots.some((r) => r.k === 31) && slots.some((r) => r.k === 0), 'ring: the slots run 0..31');
 }
 
+// ---- the death hooks: hp <= 0 runs the death script once; its S5 leave calls the kill and quest flag 0x52 ----
+{
+  const killed: number[] = [];
+  const flagsSet: number[] = [];
+  const sent: Uint8Array[] = [];
+  const ai = new GalgryphonAi({
+    entityId: 0x1234,
+    x: 0,
+    h: 180,
+    z: 991,
+    heading: 0,
+    leader: () => true,
+    hp: 1000,
+    maxHp: 1000,
+    players: () => 2,
+    rand: lcg(3),
+    send: (p) => sent.push(p),
+    death: { killed: () => killed.push(1), setQuestFlag: (id) => flagsSet.push(id) },
+  });
+  for (let i = 0; i < 700 && sent.length === 0; i++) ai.tick([]);
+  ai.setHp(0, 1000);
+  for (let i = 0; i < 6000 && killed.length === 0; i++) ai.tick([]);
+  eq(killed.length, 1, 'death hooks: the leave calls the kill once');
+  eq(flagsSet.length, 1, 'death hooks: the leave sets one quest flag');
+  eq(flagsSet[0], 0x52, 'death hooks: the quest flag is 0x52');
+  for (let i = 0; i < 3000; i++) ai.tick([]);
+  eq(killed.length, 1, 'death hooks: the script does not run the kill twice');
+  eq(flagsSet.length, 1, 'death hooks: the quest flag is set once');
+  check(ai.gone, 'death hooks: the script reaches the remove state (34), the body is gone');
+}
+
 if (failures > 0) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

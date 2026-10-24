@@ -962,6 +962,7 @@ export class CombatView {
     this.drlViews.clear();
     this.drlLastHitLocal.clear();
     this.dragonLastHit.clear();
+    this.galgryphonLastHit.clear();
     this.dragonLogged.clear();
     this.galMinions.clear();
     this.dragonBodies.clear();
@@ -1313,6 +1314,12 @@ export class CombatView {
             players: () => Math.max(1, this.aiTargets().length),
             rand: () => this.rng(),
             send: (packet) => this.game.sendGalgryphonPacket(packet),
+            // The brain's death (S5's leave, galgryphonstatesa.ts): on_enemy_killed, then the quest flag 0x52
+            // (set_quest_flag, as Vol Opt's 0x2a). The on-killed runs with the body at the origin.
+            death: {
+              killed: () => this.galgryphonKilled(entityId - 0x1000),
+              setQuestFlag: (id) => this.game.setQuestFlag(id, true),
+            },
             // The probe's sound (GalgryphonFxB probe, 0x39b) at the boss.
             sfx: (id) => this.playSe(id),
             // The S27 beam and the S30 dive beam: lightning ribbons through the technique effects (the
@@ -1867,6 +1874,12 @@ export class CombatView {
       // on every tick while it is dead).
       if (e.monest?.isDying && e.instance.root.visible) {
         this.tickMonest(e, e.instance.animators.length > 0 && e.instance.animators.every((a) => a.ended));
+        continue;
+      }
+      // The Gal Gryphon's brain keeps running after its kill: the death script (S5's leave, then the
+      // remove state 34) is the brain's, so it ticks until the body is gone.
+      if (e.ai instanceof GalgryphonAi && e.dead && !e.ai.gone && e.instance.root.visible) {
+        this.tickGalgryphon(e, e.ai, targets);
         continue;
       }
       if (e.dead || !e.instance.root.visible) continue;
@@ -2826,6 +2839,8 @@ export class CombatView {
   // its own height (no ground follow); the motion plays on each change of row.
   private tickGalgryphon(e: EnemyRuntime, ai: GalgryphonAi, targets: AiTarget[]): void {
     const r = ai.tick(targets);
+    // S34 (remove) marked the body gone: it leaves the room (Gol Dragon's gone case).
+    if (ai.gone) e.instance.root.visible = false;
     // The area hits of the brain's minion ring (combat/galgryphonai.ts tickRing), through the enemy
     // shot path, so each client resolves its own player (tickShots).
     if (r.shots) for (const s of r.shots) this.launchShot(e, s);
@@ -2865,6 +2880,20 @@ export class CombatView {
     if (!(e?.ai instanceof GalgryphonAi) || e.dead) return;
     if (sub === 0xa0) e.ai.receive(dv);
     else e.ai.receiveTarget(dv);
+  }
+
+  // Whether the last hit on a Gal Gryphon was the local player's (bossKilled's drop and EXP).
+  private galgryphonLastHit = new Map<number, boolean>();
+
+  // State 5's leave: EnemyOnKilledHandler_0051f894 (every client that runs the leave). The brain's
+  // death, not the generic kill: the body is at the origin during the on-killed (galgryphonstatesa.ts).
+  private galgryphonKilled(index: number): void {
+    const e = this.enemies.get(index);
+    if (!e || e.dead) return;
+    e.dead = true;
+    e.stats.hp = 0;
+    if (this.lockOn === e) this.lockOn = null;
+    this.bossKilled(e, 0, 0, this.galgryphonLastHit, 'Gal Gryphon');
   }
 
   // --- the Gol Dragon (combat/goldragon.ts) -------------------------------------
@@ -6974,6 +7003,19 @@ export class CombatView {
       this.sorcererBitHit(e, e.ai, damage, critical, baseFlags, what);
       return;
     }
+    if (e.ai instanceof GalgryphonAi) {
+      // The Gal Gryphon's brain owns its death: the hit takes the HP (clamped at 0) and the 6x0A goes out
+      // without the dead flag, so no kill (6x76, drop, EXP) here. The brain's death gate (hp <= 0, the
+      // leader's death script) runs the kill at its leave. ASSUMED: the exe's hit reaction does not take the
+      // generic kill (its update, dump 226140, has no on-killed call; the kill is the death script's).
+      const flags = (baseFlags | applyDamage(e.stats, damage, landed)) & ~FLAG_DEAD;
+      if (damage >= 1) this.galgryphonLastHit.set(e.index, byPlayer);
+      this.sendEnemy(e, flags);
+      const p = e.instance.root.position;
+      this.num(damage, critical, p.x, p.y + 26, p.z);
+      this.opts.log(`${what}hit the Gal Gryphon for ${Math.round(damage)}: ${e.stats.hp}/${e.stats.maxHp}`);
+      return;
+    }
     let flags = baseFlags | applyDamage(e.stats, damage, landed);
     if (flags & FLAG_DEAD && e.ai instanceof DubchicAi && e.ai.revive()) {
       // State 5's revive branch: the Dubchic falls, lies there and gets up
@@ -8613,6 +8655,16 @@ export class CombatView {
           this.barbaLastHit.set(e.index, false);
           this.barbaDrain(e, e.ai);
           this.opts.log(`Barba Ray's body hit for ${s.totalDamage} (6x0A from another client): shell ${e.ai.shellHp}, body ${e.ai.bodyHp}`);
+        }
+        return;
+      }
+      if (e.ai instanceof GalgryphonAi) {
+        // restore_enemy_status: hp = max - damage_taken, and the hit flag. The dead flag is ignored: the
+        // brain owns the death (its gate runs on the leader), as the De Rol Le's.
+        if (s.flags & FLAG_HIT && s.totalDamage > 0 && !e.dead) {
+          e.stats.hp = Math.max(0, e.stats.maxHp - s.totalDamage);
+          this.galgryphonLastHit.set(e.index, false);
+          this.opts.log(`the Gal Gryphon was hit (6x0A from another client): ${e.stats.hp}/${e.stats.maxHp}`);
         }
         return;
       }

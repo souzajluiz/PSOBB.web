@@ -31,9 +31,10 @@
   `psoLobbyDebug()` for the production "players don't see each other" report (not
   reproduced locally; waiting for a production console log).
 - Episode 2 bosses: Barba Ray ported (brain, 10 parts as hit targets, Pig Ray minions;
-  body movement open; map in docs/bosses/barbaray-map.md). Gal Gryphon mapped only
-  (docs/bosses/galgryphon-*.md; blocked on the state-record source and the HP gate).
-  Olga Flow and Gol Dragon not started.
+  body movement open; map in docs/bosses/barbaray-map.md). Gol Dragon has its brain
+  (combat/goldragon.ts). Gal Gryphon has its brain (combat/galgryphonai.ts and the states
+  files; its death goes through the brain since 2026-10-24). Olga Flow has no brain yet
+  (map in docs/bosses/olgaflow-map.md).
 - tools/ghidra/decomp.sh now works from git worktrees.
 
 Rewritten 2026-10-21 at the end of the day (the user: "pare tudo e documente pra
@@ -129,8 +130,9 @@ worktrees are left.
    placed enemy gets a model, FSM states change on 12 floors, no page error, no hang; the two
    quest-only floors (Seaside Night 0x22, Tower 0x23) miss their object sets (`map_jungle0{6,7}_00o.dat`,
    in no data source here), so they load with no enemies. Open:
-   - the Episode 2 bosses (Gal Gryphon, Olga Flow, Barba Ray, Gol Dragon) have models but no brain
-     (state `none`, they stand still);
+   - the Episode 2 bosses: Barba Ray, Gol Dragon and Gal Gryphon have brains (wired in
+     render/combat.ts; the Gryphon's death through its brain was added 2026-10-24, DEVLOG).
+     Olga Flow (`TBoss6PlotFalz`, 0x1f) still has no brain: state `none`, it stands still;
    - Tower / Epsilon not seen in Chrome (no enemies there);
    - floors 1, 5, 7, 10 saw no state change in 10 s (their waves did not fire); a longer watch
      per room is needed to see their FSMs;
