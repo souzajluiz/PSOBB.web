@@ -21,6 +21,7 @@ import {
   SHOPS,
   soldOutWhenBought,
   stackCapacity,
+  shopRow,
   unitStars,
   type CounterEnv,
   type CounterItems,
@@ -41,6 +42,7 @@ import {
   parseBankContents,
   parseShopContents,
 } from '../client/src/net/items.ts';
+import { hasEquipPanel } from '../client/src/classic/itemdetail.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -342,6 +344,27 @@ eq(buyCheck(saber, 10, { meseta: 5, inventory: [] } as unknown as CharacterFile,
   eq([dep.state().capacity, dep.state().list?.length], [null, 1], 'deposit list: no line, the equipped saber left out');
   dep.close();
   await tick(dep);
+}
+
+{
+  // Bank take list rows (FUN_006d7b50 -> the shop-style row, shopRow): a red X (icon 0x13) for
+  // a class that cannot use the weapon, grey for an unmet requirement (no X), cyan for an
+  // untekked weapon, yellow for a rare, white for the rest. The detail of a weapon / armour /
+  // shield is the stat panel (hasEquipPanel), not the description.
+  pmt.weapons[1][2] = { ...base(0x17a), atpMax: 40, usabilityFlags: 0x00, atpRequired: 0, ataRequired: 0, mstRequired: 0 } as never; // no class
+  pmt.weapons[1][3] = { ...base(0x17b), atpMax: 40, usabilityFlags: 0xff, atpRequired: 999, ataRequired: 0, mstRequired: 0 } as never; // ATP
+  const ctx = { names, charClass: 0, level: 5, stats: { atp: 100, mst: 0, ata: 100 }, lobby: false } as RowContext;
+  const saber = shopRow(itemFromHex('000100000000000000000000'), '', ctx);
+  const noClass = shopRow(itemFromHex('000102000000000000000000'), '', ctx);
+  const atp = shopRow(itemFromHex('000103000000000000000000'), '', ctx);
+  const untekked = shopRow(itemFromHex('000100008000000000000000'), '', ctx);
+  const rare = shopRow(itemFromHex('000101000000000000000000'), '', ctx);
+  eq([saber.icon1, saber.nameColor], [0x36, '#ffffff'], 'saber: no X, white');
+  eq([noClass.icon1, noClass.nameColor, noClass.iconColor], [0x13, '#909090', '#aaaaaa'], 'class cannot use it: red X, grey name');
+  eq([atp.icon1, atp.nameColor], [0x36, '#909090'], 'requirement not met: no X, grey name');
+  eq([untekked.nameColor], ['#00fffc'], 'untekked: cyan name');
+  eq([rare.nameColor], ['#ffea00'], 'rare: yellow name');
+  eq([hasEquipPanel(itemFromHex('000100000000000000000000')), hasEquipPanel(itemFromHex('030000000003000000000000'))], [true, false], 'detail panel for a weapon, not for a mate');
 }
 
 if (failures) {

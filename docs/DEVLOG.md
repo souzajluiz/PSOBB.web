@@ -17624,3 +17624,25 @@ Trap Vision (tool, item 8):
 - The packed colour's alpha (dump 291671) and the fade it comes from: the port's fade stands in for the byte.
 - Gifoie: the tier-2 scale branch (level field `+0x78` vs `+0xc4`), and the big planes' size (no capture at a known distance).
 - Barta's cube: `create_particle_effect5` position updates for the `follow` model particles (the port's convention: the object's y each tick; the exe's effect position update not traced).
+## 2026-10-23: Check Room detail: the stat panel instead of the description (weapons, armour, shields)
+
+**Premise checked against the exe.** The reference (the Check Room with its pages: Native / A.Beast / Machine / Dark as "current% -> item%", "2/3" with arrows) is not what PsoBB.exe draws for the take list, and the pages have no evidence in the exe. Rows were already the exe's: `shopRow` (icon 0x13 = the red X when the class cannot use it, 0x19 untekked rare, name colours untekked 0xff00fffc, cannot 0xff909090, rare 0xffffea00, bonus 0xff61e853) is what `takeItems` shows; `tests/shop.test.ts` now checks each case.
+
+**What changed:** the take list's detail (`BankCounter`, `shop.ts`) draws the equipment stat rows (ATP, DFP, MST, ATA, EVP, LCK: the current value, then "→" the candidate's, arrow and colour) for a weapon, armour or shield, in place of the description. Tools and units keep the description. The rows are the Item Pack's (`drawEquipStatRows`, moved out of `ItemPackMenu.drawPanelRows` unchanged; `drawEquipPanel` is the frame plus the rows).
+
+**Exe evidence** (Ephinea `PsoBB.exe`; dump line numbers from `Psobb.exe-05112026.c`, addresses are the exe's):
+- `FUN_006d7b50` (take list, Ghidra `tools/ghidra/decomp.sh 0x006d7b50`): creates the detail window with `FUN_0073ec50(0x29)` -> `CreateEquipListWindowObject_00725d18` (in `param_1[0xd]`), and on the selection calls `GameListMenu_SetCompactItemDisplay_00725fa8` (dump line 690142) on it.
+- That leads to `GameList_RenderSelectionDisplay_00727450` (dump line 691166). It picks a handler by the item's class (`compact[0]`) and the list's kind byte (`**(byte **)(this + 0x64)`, 0 for this window): weapon -> `DAT_009f2520[kind]` = 0x00727220 (`EquipmentStatDisplayObject_Update_00727220`); armour / shield -> `DAT_009f2538[kind]` = 0x00727078 (`_00727078`); unit -> `ChallengePlayerListWindow_InitializeItemDisplay_00726780` (description + picture); tool -> the description (0x007265f0 / 0x00726608); mag -> `DAT_009f2544[kind]` = 0x00726ff0 (not decoded here).
+- The weapon / armour handlers (dump lines 691020, 691076) set the rows' labels (group 11 0x9c..0xa1, `EquipmentStatDisplayObject_SetStatLabels_00726f38`) and the panel's height (132, or 232 with an MST requirement).
+- **No attribute page:** `ItemAttributesPanel_Update_00726ee2` (labels Native..Hit, group 11 0xb5..0xb9) has no caller in `PsoBB.exe`: no direct `call` to 0x00726ee2 in `scratchpad/exe.s` (the only `call`s to 0x00726cf0 are inside that block), and the file has no absolute pointer 0x00726ee2 (byte search of `/Users/junior/Downloads/psobb-client/PsoBB.exe`). So the reference's page 2 is not something this exe shows.
+- **No page keys:** the Left / Right keys (`g_KeyboardSharedState[10]` / `[0xb]`, `menu_left` / `menu_right`) are read only by `SinowberillUIElementListWindow_HandleAction_00728d44` (the numeric spinner) and the wrapping menus; the list windows of the shop and the bank have none (see the Item Pack entry 2026-10-23 for the same finding).
+
+**ASSUMED:**
+- the panel's place inside the detail window: the rows start at the window's inset, the frame is the detail's own 240 x 184 (the exe's element offsets for the 0x29 window are not decoded);
+- the 232 height with an MST requirement is not drawn (the rows are the same, the window is not grown);
+- the take list's cursor item drives the detail, as the description did before;
+- the shops' buy / sell lists also use the 0x29 window in the exe (`ShopDialog_UpdateItemDisplay_006d600c`), so they should get the same panel; not changed here.
+
+**Checks:** `npx tsc --noEmit -p .` (client, Node 24) clean. `node tests/shop.test.ts` (new: the saber white with no X; the class-blocked weapon red X with grey name and grey icon; the unmet ATP requirement grey with no X; untekked cyan; rare yellow; `hasEquipPanel` true for a weapon, false for a mate), `tests/items.test.ts`, `tests/fieldhud.test.ts`, `tests/tekker.test.ts` pass.
+
+**Not done:** the Playwright screenshot of the take list. `client/e2e/bank-check-room.spec.ts` (drafted, not committed) gets into a fresh Pioneer 2 field and talks to the bank clerk (talk action 1010, shown, 3 to 8 units in front, `hud.debug().counter` stays null); the talk did not start in four runs, so no Check Room screenshot exists yet. The cause is not found: the guild clerk and the item store (1011, 1008) open with the same placement in their specs. Left: that talk (the bank counter's first step), then the screenshot compare.
