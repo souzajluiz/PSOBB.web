@@ -10,6 +10,8 @@ import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
   parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
   TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts, trapRevealed, TRAP_REVEAL_RANGE_SQ,
+  MAP_ACTION_PERMISSION, TRAP_ACTION_PERMISSION, TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS,
+  trapPlacePermitted,
   type PlaceContext, type TrapTarget,
 } from '../client/src/quest/battletraps.ts';
 
@@ -299,6 +301,20 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   const roomTrap = roomField.place({ clientId: 2, type: 1, count: 1 }, ctx({ ownerPos: { x: 0, y: 0, z: 0 }, ownerAngle: 0 }), new TrapCounters());
   roomField.tick([owner({ x: 900, z: 0 })], { trapsHitOwner: false, sameRoom: () => true });
   eq(roomTrap?.hitbox, 2, 'the same room reveals the trap beyond the range');
+}
+
+// --- the placing permission and the constructor's constants (2026-10-24) ----------
+{
+  // map_action_permission_levels[48] (.data 0x00a10160): the 0x83 row's perm 0x6 is refused only by 15 and 47.
+  eq(MAP_ACTION_PERMISSION.length, 48, 'the permission table has one byte per map (48)');
+  eq(TRAP_ACTION_PERMISSION, 0x06, 'the 0x83 row permission is 0x06 (table row 95)');
+  const refused = MAP_ACTION_PERMISSION.map((_, i) => i).filter((i) => !trapPlacePermitted(i));
+  eq(refused, [15, 47], 'only maps 15 and 47 refuse the trap placement');
+  check(trapPlacePermitted(16) && trapPlacePermitted(17), 'the battle arena maps 16 and 17 permit it');
+  check(trapPlacePermitted(0x2c), 'Saint-Milion (0x2c) permits it');
+  check(!trapPlacePermitted(-1) && !trapPlacePermitted(48) && !trapPlacePermitted(1.5), 'out-of-range or non-integer maps refuse');
+  // trap_constructor's stores (dump 492906..493000): arm 0x96, fuse 0x1e, trigger and blast 50.0.
+  eq([TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS, TRAP_BLAST_RADIUS], [0x96, 0x1e, 50, 50], 'the constructor stores 0x96, 0x1e, 50, 50');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

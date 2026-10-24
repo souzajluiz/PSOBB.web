@@ -18652,3 +18652,32 @@ Morfos arm end (+0xb0 bit 0x10):
 **Tests:** `node tests/techniques.test.ts` (the remote heal cases already cover the level gate, the list, the dead check and the MST term).
 
 **Left:** the caster-entity gate above (ASSUMED present); `g_DamageMultiplier_NonPlayer`'s address; the first-update frame (ASSUMED no visible difference).
+
+## 2026-10-24: Battle Mode trap placement, the send order and the map permission
+
+**Path traced (exe, dump `Psobb.exe-05112026.c`):** palette press -> `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` (576703; the guards, count from `GetStatusOrAction` 0x00698984 > 0) -> `checked_call_packet0x60_subcommand` (815078) -> `handle_packet0x60_subcommand0x83` (576670) -> `safe_create_trap_object` (492758) -> `trap_constructor` (492906..493000) -> `update_trap` (492596) and `TrapProcessHitbox_0062ea74` (492200).
+
+**VERIFIED here:**
+- `checked_call_packet0x60_subcommand` sends the packet FIRST (`send_packet0x60`, unconditional when the ship manager exists), then sets `g_IsActionExecuting = 1`, finds the row in `g_Packet0x60SubcommandTable` (0x00a0fba0, 8-byte rows) and calls the handler only when `map_action_permission_levels[get_current_map()] & perm` is non-zero. The 0x83 row is `perm 0x0006`, handler 0x00695930 (row 95, read with `tools/exedata.py read 00a0fba0 b 1472`).
+- `map_action_permission_levels[48]` at 0x00a10160: 0x06 passes for every map except 15 (0x01) and 47 (0x00). The 48 bytes are in `client/src/quest/battletraps.ts` `MAP_ACTION_PERMISSION`.
+- The placement is at the OWNER's position: `trap_constructor` copies the owner's x / y / z to the trap's +0x38 / +0x3c / +0x40 (and +0x50.., +0x33c.., +0x2a4.., +0x298.., +0x44..), the heading `owner->heading` to +0x378, and the owner's room ids to +0x2e / +0x28. The owner's floor must equal `g_CurrentFloor` (safe_create, the constructor's flag +0x8 otherwise).
+- The constructor's stores (the earlier ASSUMED values are in the code): arm +0x84 = 0x96, fuse +0x88 = 0x1e, trigger +0x354 = 0x42480000 (50.0), blast +0x358 = 0x42480000 (50.0). The Ultimate branch (`g_CurrentFloor == ultimate && is_value_less_than_2(g_Pioneer2MapInitData) == 0`) stores arm 0x3c and blast 0x42a00000 (80.0) and sets `g_BATrapsCanTargetOwnerPlayer = 0`, `g_BATrapOwnerTargetingDisabled = 1`.
+- Trigger (state 0, `trap_is_primed_and_has_target` 493014): the arm delay counts down first; then each live entity with `player_idx != 0xffff` within the trigger radius on the same floor (players, idx < 0x1000) primes the trap; idx 0x1000..0x3fff uses the distance only.
+- Blast (state 4, `update_trap`): skips the trap itself, `character_flags & (maybe_invuln | dead)`, and the owner unless `g_BATrapsCanTargetOwnerPlayer == 1`; a room test (trap +0x2e == player room_id_2, or player room_id_1 == the trap's spawn section, or player room_id_1 == trap +0x2e); a player (idx < 0x1000) needs `g_IsBattleMode == 1 || field1246 != 0` and the floor; the hit is refused when `unknown_flags_invincibility == 2`. The announcement (`Trap_CheckPlayerInBattleAndGetName_0062f1a0`) runs only in battle mode and is retried until it returns 1 (+0x388 = 1).
+- The 6x80 receive (`handle_packet0x60_subcommand0x80`, 492531): what 0 calls a vtable slot (state 0..1), what 1 stuns states 0..2, what 2 sets state 4 from states 0..3.
+- The sent-by-self predicate (`is_packet0x60_subcommand_sent_by_self`, 595030) refuses only the client's own id when `g_IsActionExecuting == 0`; it accepts remote senders and self during an action.
+
+**Ported (2026-10-24):**
+- `quest/battletraps.ts`: `MAP_ACTION_PERMISSION` (48 bytes), `TRAP_ACTION_PERMISSION` (0x06), `trapPlacePermitted(map)`; the constants' comments now cite the constructor stores (VERIFIED).
+- `quest/battlerun.ts` `placeTrap`: the 6x83 goes out first (the exe's checked send), then the local placement runs only on a permitted map and when `TrapField.place` accepts. A refused map sends, places nothing, decrements nothing and still returns true (the exe's palette handler returns 1 after the call). Before, the web sent only on a successful local placement.
+
+**ASSUMED / UNCLEAR (left open):**
+- The port's `area` is `get_current_map()` (the map table index; Saint-Milion 0x2c is the same assumption from the 2026-10-22 entry).
+- The remote receive path for a 6x83 (which dispatcher calls `handle_packet0x60_subcommand0x83` for another client, and whether it applies the map permission) was not traced; the web places a remote trap without the map gate.
+- The blast's room test and the invincibility / `maybe_invuln` checks: the port has no room data in the battle field and the flag names are not mapped to the web's player state; the web hits by distance only.
+- The NPC branch (idx 0x1000..0x3fff) of the trigger and the blast, and the owner predicate's second clause (`is_value_less_than_2(g_Pioneer2MapInitData)`), are not ported.
+- The Ultimate branch (arm 0x3c, blast 80.0, owner targeting off) is not ported: `is_value_less_than_2` and the `ultimate` floor id are not traced to the port's floors.
+- The announcement is shown once when the blast starts, not retried until the battle test passes.
+- The trap's heading is `owner->heading` (exe) and the port's `angle` (ASSUMED the same unit).
+
+**Checks:** `node tests/battletraps.test.ts` ALL PASS (new: the 48-entry table matches the exe bytes, only 15 and 47 refuse, 16 / 17 / 0x2c permit, the constructor's 0x96 / 0x1e / 50 / 50); `node tests/battle.test.ts` ALL PASS; `client/node_modules/.bin/tsc --noEmit -p client` clean (Node 24). Not run in Chrome.
