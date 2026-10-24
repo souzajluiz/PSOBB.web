@@ -194,8 +194,9 @@ function fakeEnv(opts: {
       safeNotBoss: () => opts.safeNotBoss ?? true,
       map: () => opts.map ?? 0,
       managerExists: () => opts.managerExists ?? false,
-      placeStock: () => {
-        calls.push('place');
+      // Row 4 is the sonar (quest/battlerun.ts useSonar), not a trap placement.
+      useSonar: () => {
+        calls.push('sonar');
         return opts.placeOk ?? true;
       },
       sendStatus: (row, count) => calls.push(`status ${row} ${count}`),
@@ -350,10 +351,11 @@ check('decide: the element gate off sends nothing', trapDecide(td({ uiGate: fals
 check('decide: palette blocked (0x32c == 2) sends nothing', trapDecide(td({ paletteBlocked: true })).kind === 'none');
 check('decide: cannot perform sends nothing', trapDecide(td({ canPerform: false })).kind === 'none');
 const trap = trapDecide(td({ row: 4, stock: 4, map: 16 }));
-check('decide: row 4 on battle_spaceship makes a trap and takes one from the stock', trap.kind === 'trap' && trap.close && trap.stockAfter === 3);
+check('decide: row 4 (the sonar stock, not a trap) on battle_spaceship uses the sonar and takes one from the stock', trap.kind === 'sonar' && trap.close && trap.stockAfter === 3 && trap.packet === null);
 check('decide: row 4 with an empty stock clamps to 0', trapDecide(td({ row: 4, stock: 0, map: 17 })).stockAfter === 0);
 check('decide: row 4 off the battle maps does nothing', trapDecide(td({ row: 4, map: 1 })).kind === 'none');
 check('decide: row 4 with a manager already up does nothing', trapDecide(td({ row: 4, managerExists: true })).kind === 'none');
+check('decide: row 4 is never a palette packet (it is the sonar, not the trap palette)', trapDecide(td({ row: 4, map: 16 })).kind !== 'palette');
 
 // Weapon compare list (key 0xe held in state 1).
 check('compare: opening sets the list open and clears bit 8', compareToggle(false).open && !compareToggle(false).uiBit8Set);
@@ -456,7 +458,7 @@ check('tools bits: a mag cell with a mag at stage 4 is out', !tools([3, 12, 0], 
   const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
   m.key(key(KEYS.selectDown));
   m.key(key(KEYS.decide));
-  check('traps: row 4 places a trap from the stock and the menu closes', calls.join(';') === 'place' && !m.open, calls.join(';'));
+  check('traps: row 4 uses the sonar from the stock and the menu closes', calls.join(';') === 'sonar' && !m.open, calls.join(';'));
 }
 {
   const { env, calls } = fakeEnv({ stock: 3, map: 0 });
@@ -469,7 +471,7 @@ check('tools bits: a mag cell with a mag at stage 4 is out', !tools([3, 12, 0], 
   const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
   m.key(key(KEYS.selectDown));
   m.key(key(KEYS.decide));
-  check('traps: a refused placement keeps the menu open', calls.join(';') === 'place' && m.open, calls.join(';'));
+  check('traps: a refused sonar use keeps the menu open', calls.join(';') === 'sonar' && m.open, calls.join(';'));
 }
 {
   const { env, calls } = fakeEnv({ stock: 3, statuses: [0, 2, 0, 0], map: 16, safeNotBoss: false });

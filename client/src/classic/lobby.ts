@@ -317,7 +317,7 @@ export class LobbyScreen implements Screen {
         safeNotBoss: () => false,
         map: () => 0,
         managerExists: () => false,
-        placeStock: () => false,
+        useSonar: () => false,
         sendStatus: () => {},
       },
       techOrder: { get: () => DEFAULT_TECH_ORDER, set: () => {} },

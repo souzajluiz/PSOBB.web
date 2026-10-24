@@ -421,6 +421,58 @@ eq(lobbyRows[2].count, '300Meseta', 'lobby: meseta row count with the word');
 eq(lobbyRows[2].icon2, 9, 'lobby: meseta icon');
 eq(itemRows({ ...lobbyChar, meseta: 0 } as CharacterFile, ctx, 'Meseta').length, 2, 'no meseta row at 0 meseta');
 
+// --- Battle Mode rows of the Item Pack (ChallengePlayer_CreateItemList_00751ae0, dump 724311): the
+// five status rows with a count above 0 after the items, the meseta row greyed, a status row's
+// one-row menu (AddMenuItemList_007518b0, value 4 trap / 5 sonar) and its action.
+{
+  const picks: string[] = [];
+  let sonarLeft = 2;
+  let selectable = true;
+  const hook = {
+    traps: () => [3, 0, 0, 0],
+    sonar: () => sonarLeft,
+    selectable: () => selectable,
+    activate: (i: number, v: number) => {
+      picks.push(`${i}:${v}`);
+      if (v === 5) sonarLeft--;
+      return true;
+    },
+  };
+  const bc = { meseta: 0, inventory: [saber] } as unknown as CharacterFile;
+  const noop = () => 0;
+  const bm = new ItemPackMenu({
+    character: () => bc,
+    rowContext: () => ctx,
+    purposeContext: () => pctx,
+    text: (g, i) => `${g}:${i}`,
+    actions: { use: noop, equip: noop, unequip: noop, drop: noop, dropMeseta: noop, sortAuto: noop, sortSwap: noop, commitSort: noop },
+    challenge: () => hook,
+  });
+  const bpress = (...keys: string[]) => keys.forEach((key) => bm.key({ key } as KeyboardEvent));
+  const state = () => bm.debugState().state;
+  eq(bm.rows.map((r) => r.status ?? null), [null, 0, 4], 'battle rows: the item, then the status rows with a count above 0 (trap 0 and sonar 4)');
+  eq(bm.rows[1].name, `${0x11}:${0x13}`, 'status row 0 is labelled group 0x11 string 0x13');
+  eq([bm.rows[1].nameColor, bm.rows[1].countColor, bm.rows[1].count], ['#aaaaaa', '#909090', '×3'], 'status rows are greyed (name aaaaaa, count 909090)');
+  bc.meseta = 50;
+  bm.refresh();
+  const mRow = bm.rows[bm.rows.length - 1];
+  eq([mRow.status === undefined, mRow.countColor, mRow.nameColor], [true, '#909090', '#aaaaaa'], 'the meseta row is an item-list row, greyed');
+  bc.meseta = 0;
+  bm.refresh();
+  bpress('ArrowDown', 'Enter'); // status 0 (a trap row): its one-row menu opens
+  eq(state(), 'challenge', 'a status row opens its one-row menu (state 3)');
+  eq(bm.debugState().rows.length, 3, 'the item list keeps its rows behind the menu');
+  bpress('Enter'); // the trap palette (menu value 4) of type 0
+  eq([picks, state()], [['0:4'], 'list'], 'the trap row runs the palette of its status index, then the list returns');
+  bpress('ArrowDown', 'Enter', 'Enter'); // status 4: the sonar (value 5)
+  eq([picks, sonarLeft], [['0:4', '4:5'], 1], 'the sonar row runs the sonar use');
+  selectable = false;
+  bpress('ArrowUp', 'Enter', 'Enter'); // status 0's menu, greyed (the map is a hub or a boss map)
+  eq([state(), picks.length], ['challenge', 2], 'a greyed one-row menu does not run');
+  bpress('Backspace');
+  eq(state(), 'list', 'Backspace in the one-row menu goes back to the list');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

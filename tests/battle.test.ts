@@ -20,7 +20,7 @@ import {
 } from '../client/src/quest/battle.ts';
 import {
   battleRowAction, clampSonar, listSelectionAction, menuRowSelectable, menuValueForStatusRow, statusRowIndex, statusRowValue,
-  statusRowsView, trapStatusByte,
+  isBattleArena, statusRowsView, trapStatusByte,
 } from '../client/src/quest/battleitems.ts';
 import { QuestSession } from '../client/src/quest/session.ts';
 import { buildBattleOverlay } from '../client/src/quest/battleoverlay.ts';
@@ -163,6 +163,11 @@ eq([baInitialFloor(0), baInitialFloor(1), baInitialFloor(2), baInitialFloor(3), 
   eq(rows.map((r) => [r.index, r.labelId, r.count]), [[0, 0x13, 3], [2, 0x15, 20], [4, 0x17, 7]], 'list: a status row shows only with a count above 0; labels group 0x11 0x13 + i');
   eq([trapStatusByte(21), trapStatusByte(-1), trapStatusByte(20), clampSonar(100), clampSonar(99), clampSonar(-3)], [0, 0, 20, 0, 99, 0], 'list: the trap byte is 0..20, the sonar count 0..99, else 0');
   eq([menuRowSelectable(true, false), menuRowSelectable(false, false), menuRowSelectable(true, true)], [true, false, false], 'list: a menu row is selectable on a map that is not in the safe table and not a boss map');
+  // The sonar's battle arena gate (CreateSinowberillChallengeEntityManager_006b08b8: map 16 or 17 only).
+  eq([0x0f, 0x10, 0x11, 0x12].map((a) => isBattleArena(a)), [false, true, true, false], 'sonar: battle_spaceship 16 and battle_ruins 17 are the arenas; the lobby and Lab are not');
+  const gate = new SonarStock();
+  gate.setFromRules(2);
+  eq([gate.use(isBattleArena(0x0f)), gate.count, gate.use(isBattleArena(0x10)), gate.count], [false, 2, true, 1], 'sonar: refused off the arena with the stock kept, used on 16');
 
   // A fake level table (the real one is PlyLevelTbl.prs): base 10 per stat, +1 per stat per level, EXP 100 * level.
   const cls = 0;

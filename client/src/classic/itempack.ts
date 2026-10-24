@@ -82,6 +82,7 @@ import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, IN
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { EQUIP_PANEL, equipStatRows, hasEquipPanel, IQ_LABEL, MAG_LEVEL_LABEL, magRows, SYNCHRO_LABEL, type StatBlock } from './itemdetail.ts';
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
+import { menuValueForStatusRow, MENU_LABEL, statusRowsView, STATUS_LABEL_GROUP } from '../quest/battleitems.ts';
 
 export const ITEM_LIST = { x: 13, y: 256, w: 308, h: 184 } as const; // entry 3, 0x00973ca0
 export const ITEM_DETAIL = { x: 324, y: 256, w: 240, h: 184 } as const; // entry 2, 0x009f2b58
@@ -232,13 +233,17 @@ export function undroppable(item: ItemData, names: ItemNames | null): boolean {
 }
 
 export interface ItemRow {
-  id: number; // item id, MESETA_ITEM_ID for the meseta row
+  id: number; // item id, MESETA_ITEM_ID for the meseta row, the list value for a status row
   icon1: number;
   icon2: number;
   name: string;
   count: string; // right-aligned text ("×5", "300Meseta")
   nameColor: string;
   iconColor: string;
+  // The count's colour (the grey rows); the name's colour when absent.
+  countColor?: string;
+  // Battle Mode status row (quest/battleitems.ts): its index 0..4, undefined for an item or meseta.
+  status?: number;
 }
 
 const COLOR = {
@@ -246,6 +251,7 @@ const COLOR = {
   untekked: '#00fffc', // 0xff00fffc
   cannot: '#909090', // 0xff909090
   cannotIcon: '#aaaaaa', // 0xffaaaaaa
+  greyCount: '#909090', // 0xff909090 (the count and the icon of a greyed row)
   srank: '#fe3c28', // 0xfffe3c28
   rare: '#ffea00', // 0xffffea00
   bonus: '#61e853', // 0xff61e853
@@ -331,16 +337,64 @@ export function itemRow(it: InventoryItem, ctx: RowContext): ItemRow {
   return row;
 }
 
+// The meseta row is greyed in every mode: ChallengePlayer_SetMenuItemsEnabled_00751bd4 (dump
+// 724376) sets its name colour 0xffaaaaaa and its count colour 0xff909090 (ASSUMED: which of
+// the exe's item fields are the name and the count; the row's icon is the meseta icon 9).
 export function mesetaRow(meseta: number, mesetaWord: string): ItemRow {
-  return { id: MESETA_ITEM_ID, icon1: NO_ICON, icon2: 9, name: '', count: `${meseta}${mesetaWord}`, nameColor: COLOR.white, iconColor: COLOR.white };
+  return { id: MESETA_ITEM_ID, icon1: NO_ICON, icon2: 9, name: '', count: `${meseta}${mesetaWord}`, nameColor: COLOR.cannotIcon, iconColor: COLOR.white, countColor: COLOR.greyCount };
 }
 
-// ChallengePlayer_CreateItemList_00751ae0: the inventory in slot order, then
-// meseta when there is any.
-export function itemRows(c: CharacterFile, ctx: RowContext, mesetaWord: string): ItemRow[] {
+// A Battle Mode status row (ChallengePlayerListWindowUpdateStatusItem_00737ec4, dump 704479):
+// the label is unitxt group 0x11 string 0x13 + index; the count text is ASSUMED "×n" (the exe's
+// UIElement_SetItemDisplay is not traced). Greyed by ChallengePlayer_SetMenuItemsDisabled_00751c80
+// (dump 724449): name 0xffaaaaaa, icon and count 0xff909090.
+export function statusItemRow(index: number, count: number, label: string): ItemRow {
+  return {
+    id: 0xfffffff0 + index,
+    icon1: NO_ICON,
+    icon2: NO_ICON,
+    name: label,
+    count: `×${count}`,
+    nameColor: COLOR.cannotIcon,
+    iconColor: COLOR.greyCount,
+    countColor: COLOR.greyCount,
+    status: index,
+  };
+}
+
+// ChallengePlayer_CreateItemList_00751ae0: the inventory in slot order, then the five status
+// rows (those with a count above 0), then meseta when there is any.
+export function itemRows(c: CharacterFile, ctx: RowContext, mesetaWord: string, statuses: readonly ItemRow[] = []): ItemRow[] {
   const rows = c.inventory.map((it) => itemRow(it, ctx));
+  rows.push(...statuses);
   if (c.meseta > 0) rows.push(mesetaRow(c.meseta, mesetaWord));
   return rows;
+}
+
+// The Battle Mode status rows of the list (quest/battleitems.ts statusRowsView), labelled from
+// unitxt group 0x11. `label(index)` gives the text.
+export function challengeStatusRows(traps: readonly number[], sonar: number, label: (group: number, index: number) => string): ItemRow[] {
+  return statusRowsView(traps, sonar).map((v) => statusItemRow(v.index, v.count, label(STATUS_LABEL_GROUP, v.labelId)));
+}
+
+// The Battle Mode hooks of the list (quest/battleitems.ts; the battle run fills them in
+// render/fieldhud.ts). Absent outside a battle: the list then has no status rows.
+export interface ChallengeListEnv {
+  // The trap stock by type (the status rows 0..3, SinowberillChallengePlayer +0x89c).
+  traps: () => readonly number[];
+  // The sonar stock (status row 4, +0x8a0).
+  sonar: () => number;
+  // AddMenuItemList's row flag: selectable when the map is not a hub map and not a boss map.
+  selectable: () => boolean;
+  // A one-row menu's choice (menu value 4 = trap palette, 5 = sonar): BattleRun.activateStatusRow.
+  // False when the action did not run.
+  activate: (statusIndex: number, menuValue: number) => boolean;
+}
+
+// The one-row menu under a status row (ChallengePlayer_AddMenuItemList_007518b0, dump 724163):
+// label unitxt group 0x11, string 0x0f; value 5 for the sonar row, else 4.
+export function challengeMenuItems(statusIndex: number, selectable: boolean, label: string): ListItem[] {
+  return [{ label, value: menuValueForStatusRow(statusIndex), enabled: selectable }];
 }
 
 // --- Purpose -------------------------------------------------------------
@@ -522,9 +576,13 @@ export interface ItemPackEnv {
   purposeContext: () => PurposeContext;
   text: (group: number, index: number) => string;
   actions: ItemPackActions;
+  // Battle Mode (null outside a battle): the status rows and the one-row menu under them.
+  challenge?: () => ChallengeListEnv | null;
 }
 
-type State = 'list' | 'purpose' | 'amount' | 'sort' | 'manual';
+// 'challenge': the one-row menu under a status row (ChallengePlayer state 3 / 4, the same GUI
+// entry 4 and title as the Purpose window).
+type State = 'list' | 'purpose' | 'amount' | 'sort' | 'manual' | 'challenge';
 
 export class ItemPackMenu {
   private state: State = 'list';
@@ -536,6 +594,8 @@ export class ItemPackMenu {
   // it trades places with.
   private picked: number | null = null;
   private amount: AmountSpinner | null = null;
+  // The status row whose one-row menu is up ('challenge').
+  private challengeIndex = 0;
   private frame = 0;
   // The later windows run their own list window animation (classic/windowanim.ts),
   // each with its own counter: the description (open while the list is browsed),
@@ -558,7 +618,7 @@ export class ItemPackMenu {
 
   private item(): InventoryItem | 'meseta' | null {
     const row = this.rows[this.cursor];
-    if (!row) return null;
+    if (!row || row.status !== undefined) return null;
     if (row.id === MESETA_ITEM_ID) return 'meseta';
     return this.env.character()?.inventory.find((i) => i.data.id === row.id) ?? null;
   }
@@ -566,7 +626,9 @@ export class ItemPackMenu {
   // Rebuilds the rows after the inventory changed (states 8 / 0x16 -> 1).
   refresh(): void {
     const c = this.env.character();
-    this.rows = c ? itemRows(c, this.env.rowContext(), this.env.text(12, 0)) : [];
+    const ch = this.env.challenge?.() ?? null;
+    const statuses = ch ? challengeStatusRows(ch.traps(), ch.sonar(), this.env.text) : [];
+    this.rows = c ? itemRows(c, this.env.rowContext(), this.env.text(12, 0), statuses) : [];
     if (this.cursor >= this.rows.length) this.cursor = Math.max(0, this.rows.length - 1);
     this.clampTop();
   }
@@ -611,8 +673,37 @@ export class ItemPackMenu {
     if (this.amount) spinnerKeyUp(this.amount, e);
   }
 
+  // The one-row menu under a Battle Mode status row (ChallengePlayer_CreateSelectionListWindow_00751284
+  // with the row's value; GUI entry 4, the Purpose window's place).
+  private openChallenge(statusIndex: number): void {
+    const ch = this.env.challenge?.() ?? null;
+    if (!ch) return;
+    this.challengeIndex = statusIndex;
+    this.purpose = { cursor: 0, items: challengeMenuItems(statusIndex, ch.selectable(), this.env.text(STATUS_LABEL_GROUP, MENU_LABEL)) };
+    this.state = 'challenge';
+    this.openPurpose();
+  }
+
+  // ChallengePlayer_ProcessListSelection_0075158c for the one-row menu: the palette or the sonar
+  // runs, then the list comes back rebuilt (states 0x10 / 0x12 -> 1).
+  private decideChallenge(value: number): void {
+    const ok = this.env.challenge?.()?.activate(this.challengeIndex, value) ?? false;
+    this.state = 'list';
+    this.backToList();
+    this.refresh();
+    if (!ok) se(SE.buzzer);
+  }
+
   // Returns false when the menu closes (Backspace on the list).
   key(e: KeyboardEvent): boolean {
+    if (this.state === 'challenge') {
+      const r = listKey(e, this.purpose.items, this.purpose);
+      if (r === 'cancel') {
+        this.state = 'list';
+        this.backToList();
+      } else if (r === 'decide') this.decideChallenge(this.purpose.items[this.purpose.cursor].value);
+      return true;
+    }
     if (this.state === 'list') {
       const n = this.rows.length;
       if (menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') {
@@ -622,6 +713,12 @@ export class ItemPackMenu {
           se(SE.cursor);
         }
       } else if (menuKeyOf(e) === 'decide') {
+        const row = this.rows[this.cursor];
+        if (row?.status !== undefined) {
+          se(SE.ok);
+          this.openChallenge(row.status);
+          return true;
+        }
         const it = this.item();
         if (!it) {
           se(SE.buzzer);
@@ -783,7 +880,8 @@ export class ItemPackMenu {
   // and texts are revealed by the element wipe (windowanim.ts withElementWipe).
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: ItemPackTextures, extra = 0, wipe?: WindowAnim): void {
     const c = this.env.character();
-    const collapsed = this.state !== 'list' && this.state !== 'manual';
+    // The status rows' menu does not shrink the list (ChallengePlayer state 3 has no AdjustSelectedLinePosition).
+    const collapsed = this.state !== 'list' && this.state !== 'manual' && this.state !== 'challenge';
     const L = ITEM_LIST;
     const h = collapsed ? ROW + 14 + TITLE_GAP : L.h;
     drawWindowFrame(ctx, skin.frame, L.x, L.y, L.w, h);
@@ -833,7 +931,7 @@ export class ItemPackMenu {
     const purposeTitle = this.env.text(11, 0x39);
     withWindowAnim(ctx, this.purposeAnim, P.x, P.y, P.w, listWindowHeight(this.purpose.items.length, true), () =>
       withElementWipe(this.purposeAnim, P.x + INSET, P.y + INSET + TITLE_GAP, P.w - 2 * INSET, () =>
-        drawListWindow(ctx, skin, P.x, P.y, P.w, purposeTitle, this.purpose.items, this.purpose.cursor, this.state === 'purpose'),
+        drawListWindow(ctx, skin, P.x, P.y, P.w, purposeTitle, this.purpose.items, this.purpose.cursor, this.state === 'purpose' || this.state === 'challenge'),
       ),
     );
     const S = SORT_POS;
@@ -992,7 +1090,7 @@ export function drawItemRow(ctx: CanvasRenderingContext2D, icons: CanvasImageSou
   if (r.name) wipeElement(ctx, x + 2 * ICON, y, ROW, () => drawGameText(ctx, r.name, x + 2 * ICON, y, r.nameColor));
   if (r.count) {
     const nx = x + w - gameTextWidth(r.count);
-    wipeElement(ctx, nx, y, ROW, () => drawGameText(ctx, r.count, nx, y, r.nameColor));
+    wipeElement(ctx, nx, y, ROW, () => drawGameText(ctx, r.count, nx, y, r.countColor ?? r.nameColor));
   }
 }
 

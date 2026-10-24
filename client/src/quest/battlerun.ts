@@ -27,7 +27,8 @@ import {
   type PlaceEntry,
 } from './battle.ts';
 import { BattleHud, RULES_WINDOW } from './battleui.ts';
-import { battleRowAction, type BattleRowAction } from './battleitems.ts';
+import { battleRowAction, isBattleArena, type BattleRowAction } from './battleitems.ts';
+import type { BattleItemsHook } from '../render/fieldhud.ts';
 import {
   pickRespawn,
   respawnCandidates,
@@ -101,6 +102,8 @@ export class BattleRun {
     opts.view.combat.onPvpHit = (attackerId, damage) => this.reportPlayerHit(attackerId, damage);
     // The palette's trap slots show the local stock (render/fieldhud.ts, classic/palette.ts slotCount).
     opts.view.hud.trapCount = (type) => this.counters.get(type);
+    // The item list's status rows and the quick menu's sonar row (classic/itempack.ts, render/fieldhud.ts).
+    opts.view.hud.battleItems = this.battleItemsHook();
     // The minimap's team colours and the teammates' markers (classic/minimap.ts teamColour).
     opts.view.hud.battleTeam = (clientId) => (this.controller?.slots[clientId]?.present ? this.controller.slots[clientId]!.team : null);
     if (opts.canvas) {
@@ -265,12 +268,23 @@ export class BattleRun {
     return f && f.length >= 0x4dc ? f : null;
   }
 
-  // The sonar's use (the Challenge item list's menu value 5, quest/battle.ts SonarStock).
-  // ASSUMED: the battle's map is a battle map (the port has no map id for the battle arena
-  // here; the exe needs battle_spaceship or battle_ruins), and the list window is not ported,
-  // so only activateStatusRow calls this.
+  // The sonar's use (the Challenge item list's menu value 5, quest/battle.ts SonarStock). The
+  // exe makes the manager only on battle_spaceship (16) or battle_ruins (17)
+  // (CreateSinowberillChallengeEntityManager_006b08b8); the port's area of the floor is that map id
+  // (quest/battleitems.ts isBattleArena). Called by activateStatusRow and the quick menu's row 4.
   useSonar(): boolean {
-    return this.sonar.use(true);
+    return this.sonar.use(isBattleArena(this.opts.view.current?.area ?? -1));
+  }
+
+  // What the field's windows read while the battle runs (render/fieldhud.ts BattleItemsHook).
+  private battleItemsHook(): BattleItemsHook {
+    return {
+      traps: () => [0, 1, 2, 3].map((t) => this.counters.get(t)),
+      sonar: () => this.sonar.count,
+      sonarActive: () => this.sonar.active,
+      useSonar: () => this.useSonar(),
+      activate: (statusIndex, menuValue) => this.activateStatusRow(statusIndex, menuValue) !== null,
+    };
   }
 
   // A press of a status row's one-row menu (quest/battleitems.ts): menu value 4 is the trap
@@ -497,6 +511,7 @@ export class BattleRun {
     this.opts.game.onSent = null;
     this.opts.view.combat.placeTrap = null;
     this.opts.view.hud.trapCount = null;
+    this.opts.view.hud.battleItems = null;
     this.opts.view.hud.battleTeam = null;
     this.traps.clear();
     this.sonar.clear();

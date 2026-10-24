@@ -229,7 +229,6 @@ export class GameView {
       blocked: () => this.field.menu.open,
       chatShortcut: (index) => this.chatShortcut?.(index, character.fullCharacter()),
       cast: (t) => this.combat.castTechnique(t),
-      placeTrap: (type) => this.combat.placeTrap?.(type) ?? false,
       challengeTrap: (row, count) => game.sendSubcommand(0x83, build6x83(game.selfId, row, count).subarray(4)),
       telepipeAllowed: () => this.telepipes.allowed(),
       statusFlags: () => this.combat.status.flags,

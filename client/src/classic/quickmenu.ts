@@ -394,7 +394,8 @@ export interface TrapDecideInput {
   managerExists: boolean;
 }
 export interface TrapDecision {
-  kind: 'none' | 'cancel' | 'palette' | 'trap';
+  // 'sonar': row 4 uses the sonar (SONAR_STATUS_ROW, the manager's creation), not a trap.
+  kind: 'none' | 'cancel' | 'palette' | 'sonar';
   close: boolean;
   sound: number | null;
   // The 6x60 subcommand 0x83 body for the palette path (ASSUMED layout: command, size 2,
@@ -421,7 +422,7 @@ export function trapDecide(d: TrapDecideInput): TrapDecision {
   }
   if (!canCreateChallengeTrapManager(d.map, d.managerExists)) return NO_DECISION;
   const after = d.stock - 1 >= 0 ? d.stock - 1 : 0;
-  return { kind: 'trap', close: true, sound: null, packet: null, stockAfter: after };
+  return { kind: 'sonar', close: true, sound: null, packet: null, stockAfter: after };
 }
 
 // The weapon compare list (key 0xe held in state 1 of the weapon tab, dump 711680..711740).
