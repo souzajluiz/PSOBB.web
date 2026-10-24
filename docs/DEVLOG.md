@@ -18099,3 +18099,48 @@ The previous entry's `modelParticleColour` (black for a non-NT model particle) i
 - The Item Pack and the shops: no 0xC (the Item Pack) and no page writer (the shops), so no pages there. Their stat rows (page 0) are the shops' open item.
 - The page slide, and the item picture of 0xC (the asset of the item picture).
 - The page-1 row layout (the exe's element offsets), the photon empty-row text, and the Photon Blast window's text (state 0xE, entry 0xA).
+
+## 2026-10-23: mag window: element offsets, the photon list, the page keys, the MAG picture
+
+**Question:** the leftovers of "the mag window's pages": the Photon Blast window (state 0xE, entry 0xA), the page slide at the nav object's +8, the page-1 element offsets, the photon empty-row text (the 0x70ff48 arguments), and the item picture of entry 0xC.
+
+**Corrections to the earlier entries (the exe):**
+- **The page keys exist.** The earlier entries said no key moves the page. That holds for the state machine (states 5 and 0xC are the only writers of the byte in the mag window's HandleInput), but the GameList's own update does more: the GameList vtable (0x00b3fff0, shared by every list `CreateEquipListWindowObject_00725d18` builds) has slot 1 = `ChatShortcutMenu_Update_00725e4c` (0x725e4c). When the list shows an item (flag 0x4 clear) it calls `ChatShortcutMenu_HandleInput_0073e60c` (dump 709643) on the navigation object: `g_KeyboardSharedState[0x11]` goes up one page (slide +10.0, 0x41200000), `[0x10]` goes down one (-10.0, 0xc1200000), both wrapping over the count 3 (the `SetData(obj, 0, 3, slot)` argument), SE 0x56f, and a change re-renders the page. The earlier "no page keys" reading (the Item Pack entry 2026-10-23) read only [8]..[0xb]. The key of each slot is ASSUMED (ArrowRight / ArrowLeft, the port's Select Right / Left).
+- **The slide** decays by 0.85 a tick: `ChatShortcutMenu_UpdatePosition_0073e5f8` does `s += -0.15 * s` (constant 0x00971eec = -0.15). The exe runs it in the update's else branch (flag 0x4 set, no item). With an item shown the same update runs the input branch instead, so the decay for a shown item is not traced: ASSUMED it runs each tick (otherwise the slide would stay at 10 while a mag is shown).
+- **The photon row is not text.** `0x70ff48` is `SinowberillChallengeObject_UpdateItemUI_0070ff48(element, type, index)` (dump 671950): type 0 = kind 7 (blank, the default UVs from 0x96f59c / 0x96f5a0), type 2 = kind 6 (palette UVs), type 3 / 5 = kind 5 with the UV pair of table 0x009f12d0 / 0x009f1600 at the index, type 4 = table 0x009f1380, type 7 = table 0x009f1420. Its tail stores the element's four floats (+0x1c..+0x28). So the page-2 empty row is `(element, 0, 0)` (a blank) and a blast is `(element, 5, blast)` (its picture).
+
+**Exe evidence:**
+- Photon Blast (state 0xE, `ChallengePlayerListWindow_HandleInput_007526c8`, dump 724975; exe.s 0x7526c8): Select's value 0 -> `ChallengePlayerListWindowSetActionState_00752fe0` (dump 725382) -> state 0xE. State 0xE closes Select (+0x3c), plays the close SFX and sets flags 0x8 | 0x4 on the status window (+0x40). It then builds `ListWindowObject_Initialize_0075330c` (dump 725550) at `get_gui_position(10)` = (221, 256) (table 0x00971f40, entry 0xA at 0x971f90), and `ChallengePlayerListWindowCreateInfoWindow_007531a4` (dump 725474) at entry 0xB = (409, 256). The list's constructor fills three rows with `UpdateItemUI(row, 0, 0)` or `(row, 5, blast)` (`GetPhotonBlastValue_005dbc08` per slot). Its directional input is `ChallengePlayerListWindow_HandleDirectionalInput_007534ac` (dump 725605): the cursor (+0x61) moves +1 / -1 with wrap over 3, SE 0x56f. The highlight of cursor row k is drawn at the element `DAT_00973e88[k]` = bytes 3, 1, 2 (`ChallengePlayerListWindow_GetChildPositionOffset_007535c0`). State 0xF polls the list's flags: 0x2 or 0x1 -> state 3 (Select). Decide and Cancel both end there. No state assigns a blast: `UpdateDescriptionText_007531f4` only reads it.
+- The info (0xB) text: `ChallengePlayerListWindowUpdateDescriptionText_007531f4` (dump 725498): `unitxt_get_action_description(blast + 0x27)`, or the empty string for -1. unitxt_get_action_description is group 7 (the port's `env.text(7, i)`, as customize.ts uses it).
+- Page 1 (`0x726864`, exe.s 888194): `[0]` Level (text group 11 0xc0; value from the 0x5dbdb8 return), `[1]` Synchro (0xc1; value struct+2), `[2]` IQ (0xc2; struct+0). Each stat k (DEF, POW, DEX, MIND; the mag's shorts at +4 / +6 / +8 / +0xa of the item's struct) uses three elements: `[3k+3]` cleared (0x72e0e4), `[3k+4]` the level (int at +0x20, /100), `[3k+5]` the part (float at +0x24, %100) with its update through the vtable (+0xc). `[15]` (+0x3c) is centred (`y = height * -0.5 + 0x970744`).
+- Page 2 (`0x7267dc`, exe.s 888146): the three photon rows are `[1]`, `[2]`, `[3]` (`pushl 0x4(%ecx,%ebx,4)`).
+- Entry 0xC (16, 172) is the item picture (`ChallengePlayerListWindow_UpdateItemDetail_0073175c`, dump 698949): `unknown_get_itemkt_image` (dump 440786): for a mag (`group_1 == 2`), `group_2 < 0x52` -> `cached_read_itemkt_image(group_2)`, else entry 0 (`OpenAssetFileSlot_0086dab0(0xb8, 0)`). The file is `ItemKTep4.afs` (the string at 52c168, `load_itemkt_afs` at dump 440915, handle 0xb8). The group's state byte: 1 found, 2 none.
+
+**Ported:**
+- `client/src/classic/magmenu.ts`: state `photon` (state 0xE). Select's Photon Blast opens the list (entry 0xA, `photonAnim`) and the info (entry 0xB, `photonInfoAnim`), and shuts the status window (`statusAnim.close()`, reopened on the way back to Select). Up / Down move the cursor (wrap over 3); Decide and Cancel return to Select. The info text is `photonInfo` (group 7, blast + 0x27). The page keys (Left / Right, `stepPage`) wrap over 3 with `slide` +/-10, decayed by 0.85 each tick (`pageSlide` getter); they are off while the status window is shut. The picture of the cursor mag (entry 0xC, `MAG_PICTURE`) is asked once per mag through `env.picture`.
+- `client/src/classic/itemdetail.ts`: `MAG_ELEMENT` (the element offsets above), `photonRowArgs` (the 0x70ff48 arguments), `photonDescriptionIndex`, `nextPage` / `PAGE_COUNT` / `PAGE_SLIDE` / `pageSlideAfter`. The pages section was corrected (the keys, the slide, the not-ported note).
+- `client/src/formats/itemkt.ts`: the mag branch's comment said "tool"; the exe's `group_1 == 2` is the mag. The code is unchanged (it already returns data1[1] below 0x52, else 0).
+- `client/src/render/fieldhud.ts`: the mag environment gets `picture: (item) => this.itemPicture(item)` (the shop's ItemKTep4 reader).
+- `tests/fieldhud.test.ts`: the MAG keys / photon / picture block and a constants block (the element offsets 0..15 once each, the photon rows, the highlight bytes, the page wrap, the slide decay, the info index).
+- `docs/ROADMAP.md`: the Field HUD left-to-do line.
+
+**ASSUMED:**
+- The page keys are ArrowRight / ArrowLeft (the exe's `g_KeyboardSharedState[0x11]` / `[0x10]`; the key map of those slots is not traced).
+- The slide decays each tick (see above), and its drawn axis is horizontal (the rows are translated inside a clip of the status window).
+- The photon list's width is 172 (the Select window's; `GetListWindowDefaultWidth_007336fc` returns `n - owner+0x58` and the owner's value is not traced). The info's width fits its text (min 172). No title (the exe calls none for entry 0xA). Rows are 20 px apart.
+- The photon rows show the blast's name (group 9) where the exe shows the blast's picture (the kind-5 UVs from 0x9f1600 in the item sheet, not ported).
+- Decide and Cancel in the photon list both return to Select (the exe's state 0xF tests flags 2 and 1; the setter of the list's Cancel flag is not traced).
+- The picture is drawn at native size at (16, 172) (the element's size from its table is not decoded).
+- Page 1's reset (0x72e0e4) and bar update are read as a bar's clear and redraw (no text).
+- The page-1 Level / Synchro / IQ values are the port's `data1[2]` / `data2[0]` / `data2[1]`, as before (the struct readers 0x5dc1e0 / 0x5d4108 are not re-traced here).
+
+**Checks:** `node tests/fieldhud.test.ts` (all pass, with the new MAG keys / photon / picture checks and the constants block). `node tests/magfeed.test.ts` passes once `vendor/` is linked from the main checkout (the worktree has no `vendor/newserv` data; the link is removed before the commit). `playerstats`, `quickmenu`, `shop`, `tekker` pass. `client` tsc clean (with `client/node_modules` linked from the main checkout; the link is removed before the commit).
+
+**Screenshot:** not taken. The brief says no Playwright, and the photon list needs a mag with a blast on a fresh account.
+
+**Left:**
+- The photon blast pictures (kind 5, the UVs from 0x009f1600 in the item sheet) and the exe's row sprite size.
+- The slide's real axis and the owner of its decay (the render that reads the nav object's +8 is not traced).
+- The weapon and armour pages (attribute 0x726dc8, resist 0x726c7c / 0x726cb0, slot): they need a GameList with a weapon or armour and the page keys. The shops and the bank are the candidates (not traced one by one).
+- The picture's element size (the element table of entry 0xC).
+- The Decide / Cancel flag setters of the photon list (`unknown_closing_window_`, the list's HandleInput).

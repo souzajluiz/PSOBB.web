@@ -4,7 +4,8 @@
 // Decompiled from PsoBB.exe (Ephinea 1.25.13), unknown_get_itemkt_image
 // 0x005e5870 (the dump's name; the archive is loaded by load_itemkt_afs
 // 0x005e5ad0 as "ItemKTep4.afs", handle 0xb8 in FUN_007081b4):
-//   - data1[0] == 2 (tool): entry data1[1] when data1[1] < 0x52, else entry 0;
+//   - data1[0] == 2 (mag, the exe's `group_1 == 2` branch): entry data1[1] when data1[1] < 0x52,
+//     else entry 0 (OpenAssetFileSlot_0086dab0(0xb8, 0)); the mag window's picture (entry 0xC) uses it;
 //   - data1[0] == 0 (weapon): the weapon's PMT record (FUN_005e5408(data1[1],
 //     data1[2]), whose first dword is the item's name id, ItemBase.id), entry
 //     id - 0x5f when id - 0xb1 < 0x1a6 (ITEM_STARS_FIRST_ID), else the
@@ -22,7 +23,7 @@ const ITEM_KT_WEAPON_SPAN = 0x1a6; // FUN_005e5870's range test
 // `weaponId` is the weapon's PMT name id (ItemPMT.getWeapon(data1[1],
 // data1[2])?.id) for a weapon; undefined when the PMT has no such record.
 export function itemPictureEntry(data1: Uint8Array, weaponId?: number): number | null {
-  if (data1[0] === 2) return data1[1] < 0x52 ? data1[1] : 0;
+  if (data1[0] === 2) return data1[1] < 0x52 ? data1[1] : 0; // a mag
   if (data1[0] !== 0) return null;
   if (weaponId === undefined) return ITEM_KT_FALLBACK;
   const d = weaponId - ITEM_STARS_FIRST;

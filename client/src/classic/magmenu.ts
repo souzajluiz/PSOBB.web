@@ -27,16 +27,25 @@
 // 0x96 (ApplyItemMagData_0072610c, the bars full meanwhile:
 // RefreshItemStatDisplay_00726294); 0xC/0xD the photon blast line when the
 // mag gained one; back to 3.
+// State 0xE (Select's "Photon Blast", value 0): the status window closes (entry 9), the
+// photon list opens at entry 0xA (221, 256) with the mag's three blast rows and the cursor
+// (ListWindowObject_Initialize_0075330c; Up / Down move it, wrapping over 3), and the info
+// window at entry 0xB (409, 256) shows the cursor blast's description (unitxt group 7 at
+// blast + 0x27). Decide and Cancel both return to state 3 (Select), where the status window
+// opens again. Nothing is assigned: the exe's list has no writer for a blast.
 //
 // The status window (entry 9) is the GameList of the mag window; its page is the list's
-// navigation byte (itemdetail.ts, the pages section), written by states 5 and 0xC only:
+// navigation byte (itemdetail.ts, the pages section). It is written by states 5 and 0xC
+// (absolute: UpdateListNavigationDirection) and by the GameList's own key input
+// (ChatShortcutMenu_HandleInput_0073e60c: Right / Left wrap it over 3, with a slide of
+// +/-10 that decays each tick). The page is:
 //   page 0 (open): the six stats with the current values (0x726ff0, labels 0x9c..0xa1);
 //   page 1 (Give Items): Level / Synchro / IQ [0xC0..0xC2] and the four stats with a bar of
-//     their part of a level (0x726864; the row layout is ASSUMED, not recovered);
-//   page 2 (a photon blast gained): the mag's three photon blast rows (0x7267dc).
-// No page counter or arrow is drawn (none found); the exe's page slide is not ported.
-// The Photon Blast choice (state 0xE, ListWindowObject_Initialize_0075330c at entry 0xA)
-// is left out: it does nothing here.
+//     their part of a level (0x726864; the element offsets are in itemdetail.ts MAG_ELEMENT);
+//   page 2 (a photon blast gained, or by the keys): the mag's three photon blast rows
+//     (0x7267dc; an empty row is blank, `UpdateItemUI(elem, 0, 0)`).
+// The item picture of the cursor mag is the window at entry 0xC (16, 172): the exe's
+// ItemKTep4.afs entry (formats/itemkt.ts, through env.picture), or nothing.
 
 import { menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
@@ -48,13 +57,30 @@ import { DISABLED, drawListWindow, drawWindowTitle, INSET, listKey, listWindowHe
 import { wipeElement, WindowAnim, withElementWipe, withWindowAnim } from './windowanim.ts';
 import { ICON_UV, isWrapped, itemRow, type ItemPackTextures, type ItemRow, type RowContext } from './itempack.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
-import { magPhotonRows, magStatRows, MAG_PAGE, type StatBlock } from './itemdetail.ts';
+import {
+  magPhotonRows,
+  magStatRows,
+  MAG_PAGE,
+  nextPage,
+  PAGE_SLIDE,
+  pageSlideAfter,
+  photonDescriptionIndex,
+  PAGE_COUNT,
+  type StatBlock,
+} from './itemdetail.ts';
+import type { ItemData } from '../formats/itemnames.ts';
 
 export const MAG_LIST = { x: 13, y: 256, w: 206, h: 184 } as const; // entry 7, 0x00973dc0
 export const MAG_SELECT = { x: 221, y: 256, w: 172 } as const; // entry 8
 export const MAG_STATUS = { x: 395, y: 256, w: 240, h: 184 } as const; // entry 9, 0x009f2b58
 export const MAG_ITEMS = { x: 13, y: 317, w: 308, h: 124 } as const; // entry 0xD, 0x00973e2c
 export const MAG_PB = { x: 320, y: 340 } as const; // entry 0xE
+// Entry 0xA (221, 256) and 0xB (409, 256) from the GUI table 0x00971f40 (8-byte stride). The
+// photon list's width is ASSUMED to be the Select window's (172); the info window's width fits
+// its text (ASSUMED: GetListWindowDefaultWidth's result is not decoded).
+export const MAG_PHOTON_LIST = { x: 221, y: 256, w: 172 } as const; // entry 0xA
+export const MAG_PHOTON_INFO = { x: 409, y: 256 } as const; // entry 0xB
+export const MAG_PICTURE = { x: 16, y: 172 } as const; // entry 0xC
 export const LEVEL_STEP_FRAMES = 30; // 0x00973e6c
 export const PB_FRAMES = 90; // 0x00973e68
 const LIST_ROWS = 8; // (184 - 26 + 6) / 20
@@ -68,9 +94,11 @@ export interface MagMenuEnv {
   pmt: () => ItemPMT | null;
   feedTimer: (magId: number) => FeedTimer;
   feed: (magId: number, foodId: number) => boolean;
+  // The mag's picture (ItemKTep4.afs, formats/itemkt.ts), or null when the exe draws none.
+  picture?: (item: ItemData) => Promise<ImageBitmap | null>;
 }
 
-type State = 'mags' | 'select' | 'items' | 'rising' | 'pb';
+type State = 'mags' | 'select' | 'items' | 'rising' | 'pb' | 'photon';
 
 // The mags of the inventory (group 2), in order.
 export function magList(c: CharacterFile): InventoryItem[] {
@@ -107,6 +135,13 @@ export class MagMenu {
   // The status window's page (the GameList's navigation byte, itemdetail.ts MAG_PAGE): 0 at
   // open, 1 once Give Items has opened the item list, 2 once a feed gained a photon blast.
   private panelPage: number = MAG_PAGE.stats;
+  // The page slide (ChatShortcutMenu_UpdatePosition_0073e5f8): +/-10 when the page changes, decayed each tick.
+  private slide = 0;
+  // The photon list (entry 0xA): its cursor row, and the info window (entry 0xB) is its description.
+  private photon = { cursor: 0 };
+  // The cursor mag's picture (entry 0xC); `pictureId` is the mag whose picture was asked for.
+  private picture: ImageBitmap | null = null;
+  private pictureId = -1;
   mags: InventoryItem[] = [];
   foods: InventoryItem[] = [];
   // The later windows are objects of their own, each with its own counter
@@ -121,6 +156,8 @@ export class MagMenu {
   selectAnim = new WindowAnim(true, false);
   itemsAnim = new WindowAnim(true, false);
   pbAnim = new WindowAnim(true, false);
+  photonAnim = new WindowAnim(true, false);
+  photonInfoAnim = new WindowAnim(true, false);
   private env: MagMenuEnv;
 
   constructor(env: MagMenuEnv) {
@@ -144,10 +181,21 @@ export class MagMenu {
     if (to === 'select') this.selectAnim = fresh();
     if (to === 'items') this.itemsAnim = fresh();
     if (to === 'pb') this.pbAnim = fresh();
+    if (to === 'photon') {
+      this.photonAnim = fresh();
+      this.photonInfoAnim = fresh();
+      // State 0xE: the status window (entry 9) closes with the close SFX and stays shut until state 3.
+      this.statusAnim.close();
+    }
     if (from === 'select') this.selectAnim.close();
     // Back to the Select window: the item list closes (state 3's CloseGameListMenu on +0x38).
     if (to === 'select' && from !== 'mags') this.itemsAnim.close();
     if (from === 'pb') this.pbAnim.close();
+    if (from === 'photon') {
+      this.photonAnim.close();
+      this.photonInfoAnim.close();
+      this.statusAnim.open(this.speed); // state 3 clears the status window's closing flag
+    }
     this.state = to;
   }
 
@@ -178,12 +226,51 @@ export class MagMenu {
     return this.state === 'rising' || this.state === 'pb';
   }
 
+  // The page slide now (0 when settled).
+  get pageSlide(): number {
+    return this.slide;
+  }
+
+  // The photon list's cursor row (0..2) and the description its info window shows.
+  get photonCursor(): number {
+    return this.photon.cursor;
+  }
+
+  get photonInfo(): string {
+    const blast = magPhotonRows(this.cursorBlasts())[this.photon.cursor];
+    const index = photonDescriptionIndex(blast);
+    return index === null ? '' : this.env.text(7, index);
+  }
+
+  private cursorBlasts(): number[] {
+    const mag = this.mags[this.cursor];
+    return mag ? photonBlasts(mag.data) : [];
+  }
+
+  // The cursor mag's picture: asked for once per mag (UpdateItemDetail_0073175c runs on each cursor move).
+  private syncPicture(): void {
+    const mag = this.mags[this.cursor];
+    const id = mag ? mag.data.id : -1;
+    if (id === this.pictureId) return;
+    this.pictureId = id;
+    this.picture = null;
+    if (!mag || !this.env.picture) return;
+    const ask = this.env.picture(mag.data);
+    ask.then((bmp) => {
+      if (this.pictureId === id) this.picture = bmp;
+    });
+  }
+
   tick(): void {
     this.frame++;
     this.statusAnim.tick(this.speed);
     this.selectAnim.tick(this.speed);
     this.itemsAnim.tick(this.speed);
     this.pbAnim.tick(this.speed);
+    this.photonAnim.tick(this.speed);
+    this.photonInfoAnim.tick(this.speed);
+    this.slide = Math.abs(this.slide) < 0.01 ? 0 : pageSlideAfter(this.slide);
+    this.syncPicture();
     const mag = this.mags[this.cursor];
     if (this.state === 'rising' && mag && this.shown && ++this.wait > LEVEL_STEP_FRAMES) {
       // ApplyItemMagData_0072610c: each stat shown below its level goes up 1.
@@ -216,12 +303,32 @@ export class MagMenu {
 
   // Returns false when the window closes (Backspace on the MAG list).
   key(e: KeyboardEvent): boolean {
+    const k = menuKeyOf(e);
+    // The status window's page keys (the GameList's navigation, ChatShortcutMenu_HandleInput_0073e60c):
+    // read in every state while the window shows an item; not while it is shut (state 0xE).
+    if ((k === 'left' || k === 'right') && this.state !== 'photon' && this.mags.length > 0) {
+      this.stepPage(k === 'right' ? 1 : -1);
+      return true;
+    }
     if (this.busy) return true;
-    const back = menuKeyOf(e) === 'cancel';
+    const back = k === 'cancel';
+    if (this.state === 'photon') {
+      // The photon list (ListWindowObject_HandleDirectionalInput_007534ac): Up / Down move the
+      // cursor over the three rows. Decide and Cancel both return to Select (state 0xF -> 3).
+      if (k === 'up' || k === 'down') {
+        this.photon.cursor = (this.photon.cursor + (k === 'up' ? PAGE_COUNT - 1 : 1)) % PAGE_COUNT;
+        se(SE.cursor);
+      } else if (k === 'decide' || back) {
+        se(back ? SE.cancel : SE.ok);
+        this.setState('select');
+        this.refresh();
+      }
+      return true;
+    }
     if (this.state === 'mags') {
       const n = this.mags.length;
-      if ((menuKeyOf(e) === 'up' || menuKeyOf(e) === 'down') && n) {
-        this.cursor = (this.cursor + (menuKeyOf(e) === 'up' ? n - 1 : 1)) % n;
+      if ((k === 'up' || k === 'down') && n) {
+        this.cursor = (this.cursor + (k === 'up' ? n - 1 : 1)) % n;
         this.clampTop();
         se(SE.cursor);
       } else if (menuKeyOf(e) === 'decide') {
@@ -248,6 +355,10 @@ export class MagMenu {
         this.setState('items');
         this.item = { cursor: 0, top: 0 };
         this.refresh();
+      } else if (r === 'decide') {
+        // Photon Blast (value 0): state 0xE (ChallengePlayerListWindowSetActionState_00752fe0).
+        this.photon.cursor = 0;
+        this.setState('photon');
       }
       return true;
     }
@@ -272,6 +383,14 @@ export class MagMenu {
       this.refresh();
     }
     return true;
+  }
+
+  // The GameList's page key (ChatShortcutMenu_HandleInput_0073e60c): the page wraps over 3, the
+  // slide starts at +10 going right and -10 going left (0x41200000 / 0xc1200000), SE 0x56f.
+  private stepPage(step: 1 | -1): void {
+    this.panelPage = nextPage(this.panelPage, step);
+    this.slide = step * PAGE_SLIDE;
+    se(SE.cursor);
   }
 
   // State 7 -> 8: feed, then show the levels rising.
@@ -353,6 +472,9 @@ export class MagMenu {
     ctx.translate(extra, 0);
     const mag = this.mags[this.cursor];
     if (mag) this.drawStatus(ctx, skin, mag);
+    if (this.picture) ctx.drawImage(this.picture, MAG_PICTURE.x, MAG_PICTURE.y); // entry 0xC (native size: ASSUMED)
+    if (this.state === 'photon' || this.photonAnim.visible) this.drawPhotonList(ctx, skin);
+    if (this.state === 'photon' || this.photonInfoAnim.visible) this.drawPhotonInfo(ctx, skin);
     if (this.state === 'pb' || this.pbAnim.visible) {
       const w = gameTextWidth(this.pbLine) + 2 * INSET;
       const P = MAG_PB;
@@ -367,13 +489,64 @@ export class MagMenu {
     ctx.restore();
   }
 
-  // ASSUMED layout (see the header).
+  // ASSUMED layout (see the header). The page's rows slide with the page change (the slide is
+  // ASSUMED to be a horizontal offset of the rows inside the window).
   private drawStatus(ctx: CanvasRenderingContext2D, skin: WindowSkin, mag: InventoryItem): void {
     const S = MAG_STATUS;
     const a = this.statusAnim;
     withWindowAnim(ctx, a, S.x, S.y, S.w, S.h, () => {
       drawWindowFrame(ctx, skin.frame, S.x, S.y, S.w, S.h);
-      withElementWipe(a, S.x + INSET, S.y + INSET, S.w - 2 * INSET, () => this.drawStatusRows(ctx, mag));
+      withElementWipe(a, S.x + INSET, S.y + INSET, S.w - 2 * INSET, () => {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(S.x + INSET, S.y + INSET, S.w - 2 * INSET, S.h - 2 * INSET);
+        ctx.clip();
+        ctx.translate(this.slide, 0);
+        this.drawStatusRows(ctx, mag);
+        ctx.restore();
+      });
+    });
+  }
+
+  // The photon list (entry 0xA): the mag's blast rows (a blank row is empty), the cursor bar on
+  // its row. The row's text is the blast's name (group 9), an ASSUMED stand-in for the exe's
+  // picture of the blast (itemdetail.ts photonRowArgs).
+  private drawPhotonList(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+    const P = MAG_PHOTON_LIST;
+    const a = this.photonAnim;
+    const h = 3 * ROW + 2 * INSET;
+    withWindowAnim(ctx, a, P.x, P.y, P.w, h, () => {
+      drawWindowFrame(ctx, skin.frame, P.x, P.y, P.w, h);
+      const x = P.x + INSET;
+      const w = P.w - 2 * INSET;
+      withElementWipe(a, x, P.y + INSET, w, () => {
+        const bar = P.y + INSET + this.photon.cursor * ROW;
+        wipeElement(ctx, x, bar, 16, () => drawSelectBar(ctx, skin.bars, x, bar, w, 16));
+        magPhotonRows(this.cursorBlasts()).forEach((blast, i) => {
+          if (blast === null) return;
+          const y = P.y + INSET + i * ROW;
+          wipeElement(ctx, x, y, ROW, () => drawGameText(ctx, this.env.text(9, blast), x, y, '#ffffff'));
+        });
+      });
+    });
+  }
+
+  // The photon info window (entry 0xB): the cursor blast's description (group 7, blast + 0x27); an
+  // empty row shows nothing. ASSUMED: the width is the list's or the text's, whichever is wider.
+  private drawPhotonInfo(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
+    const I = MAG_PHOTON_INFO;
+    const a = this.photonInfoAnim;
+    const lines = this.photonInfo === '' ? [] : this.photonInfo.split('\n');
+    const w = Math.max(MAG_PHOTON_LIST.w, ...lines.map((l) => gameTextWidth(l) + 2 * INSET));
+    const h = Math.max(1, lines.length) * ROW + 2 * INSET;
+    withWindowAnim(ctx, a, I.x, I.y, w, h, () => {
+      drawWindowFrame(ctx, skin.frame, I.x, I.y, w, h);
+      withElementWipe(a, I.x + INSET, I.y + INSET, w - 2 * INSET, () =>
+        lines.forEach((line, i) => {
+          const y = I.y + INSET + i * ROW;
+          wipeElement(ctx, I.x + INSET, y, ROW, () => drawGameText(ctx, line, I.x + INSET, y, '#ffffff'));
+        }),
+      );
     });
   }
 

@@ -324,6 +324,7 @@ export class FieldHud {
         pmt: () => this.names()?.pmt ?? null,
         feedTimer: (id) => this.opts.items.feedTimer(id),
         feed: (mag, food) => this.opts.items.feedMag(mag, food),
+        picture: (item) => this.itemPicture(item),
       },
       options: characterOptionsEnv(
         (g, i) => this.text(g, i),
