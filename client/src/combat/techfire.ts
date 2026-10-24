@@ -449,6 +449,13 @@ const GIFOIE_WOBBLE: readonly number[] = [0, 3.5, 7];
 export const GIFOIE_GROW = f32(0.55); // 0x0096d37c: the spiral radius a frame
 export const GIFOIE_BODY = 5; // 0x0096d390: the hit disc is the ring's distance + 5
 const GIFOIE_OFFSET = 10; // the emitters start 10 from the cast point (0, 0, -10)
+// The emitters' scale (create_gifoie, dump 644560..644675): every emitter is made at scale 1.0 (the
+// particle's +0x44 / +0x48 default). The exe's 1.3 / 1.3 (level 15..24) and 1.3 / 1.8 (25..29) branch
+// sits behind `tier == 2` (the entity's +0x7a, `field_0x44`), and the tier is level / 5 of the same
+// level (AllocateEffectBuffer_006e1cec), so tier 2 is only levels 10..14, which never pass the level
+// test: the branch never runs and the port keeps scale 1 for every tier. The Gifoie entity is an
+// EffectEntity (EffectEntity_Constructor_006de5f0): its level is +0x78 (clamped 0..30, the port's
+// `level`), its tier +0x7a (the port's `tier`); the +0xc4 / +0xc6 of the technique base are another layout.
 
 /** Gifoie: vtable 0x00b3d3f8 (update_gifoie 0x006e4dbc), hit entity_hit_by_gifoie
  * 0x006e4e80, group 1. At the cast point it makes `GIFOIE_GROUPS[tier]` spiral
@@ -920,7 +927,13 @@ const GIBARTA_FX: readonly (readonly FxEmitter[])[] = [
 // tier 5 flag 0x20 entries (0x193 / 0x1d8 / 0x1d7, no angles) are the BML model 0 with its
 // motion 0 (BARTA_PARTICLE_MODEL, dump 640489), drawn animated.
 const BARTA_ANGLED = { angles: 'object' } as const;
-const BARTA_MODEL = { model: { chunk: 0, motion: 0 } } as const;
+// update_barta (dump 640772): every tick each entry's position is the object's (x, y, z) copied in
+// (copy_pos_to_particle), and an entry with the table's flag 0x20 (the model) takes y - 10 instead
+// (`local_1c.flY = _DAT_0096c9a8 + param_1[9]`, _DAT_0096c9a8 = -10.0). ASSUMED: the exe copies
+// before BartaEntity_UpdatePosition runs in that tick; the port places the model from the object's
+// position at draw time (the order within a tick is not traced).
+export const BARTA_MODEL_DY = -10;
+const BARTA_MODEL = { model: { chunk: 0, motion: 0 }, dy: BARTA_MODEL_DY } as const;
 const BARTA_FX: readonly (readonly FxEmitter[])[] = [
   [E(0x190, 1, 'follow', BARTA_ANGLED), E(0x191, 1, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],
   [E(0x190, 1.2, 'follow', BARTA_ANGLED), E(0x191, 1.2, 'follow', BARTA_ANGLED), E(0x192, 1, 'follow')],

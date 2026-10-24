@@ -17896,3 +17896,43 @@ So 500 ticks at 30 ticks a second (`GAME_TICKS_PER_SECOND` in the port, ASSUMED 
 - The exact chunk draw (matrix order, blend, tint 0.4 / 1.0, scale) and the rock's point rotation (0x0082d8bc).
 - Visual check in Chrome (not run per the brief): the chunks' look and the flat-to-tint choice.
 - The stalactite's +0x80 record path (box status and 0x007b5038) is still not ported.
+
+## 2026-10-23: Rabarta's black planes, Barta's cube y, Gifoie's scale (the follow-up to "Barta's start at the feet and the model alpha pass")
+
+**What changed.**
+- Model particles of a non-NT particle are black: `modelParticleColour` (`classic/particles.ts`) returns (0, 0, 0) and `render/hitfx.ts` `placeModel` sets the material colour to it. The alpha stays the port's fade; the blend stays SRCALPHA / INVSRCALPHA. NT keeps the port's shade.
+- Barta's model entries (0x193 / 0x1d8 / 0x1d7, `BARTA_MODEL`, `combat/techfire.ts`) follow at the object's y - 10: `BARTA_MODEL_DY = -10`, applied through the `follow` placement (`render/techfire.ts`). The other Barta entries stay at the object's y.
+- Gifoie's emitters stay at scale 1.0 (no code change); the dead tier-2 branch and the level / tier fields are documented in `combat/techfire.ts`.
+- Tests: `tests/particleorient.test.ts` (black for non-NT, the shade kept for NT), `tests/techfire.test.ts` (Barta's model entries at dy -10, the others at 0).
+
+**Exe evidence** (named dump `Psobb.exe-05112026.c`; addresses are VAs; table reads with `tools/exedata.py`).
+- Blend: `ParticleEffectSingleParticle_SetColor_00508958` (dump 287693), non-NT: `d3d8Dev_SetRenderState_SrcDestBlend_Save(1, 4, 5)`. The save helper (dump 852687) takes the src / dest indices (param 2 / 3) and maps them through `D3DBLEND_00a219f8` (`0x00a219f8` = 1, 2, 3, ..., so index i is D3DBLEND value i + 1). Index 4 is SRCALPHA (5) and index 5 is INVSRCALPHA (6). NT is (1, 4, 1): SRCALPHA / ONE.
+- Colour: the same function gives the non-NT colour `(r, g, b) = (0, 0, 0)` and `a = byte(+0x97) / 255 + g_ParticleBaseAlpha` (`0x00920040` = -1.0). It is stored by `copy_color_to_af0370` (dump 846531) in `g_CurrentTargetColor`.
+- The draw: the model branch (dump 292770..292795, and the one at ~291966) sets `g_RenderTargetFlags |= 0x8021`, so the 0x20 branch of `set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color` (dump 850240) packs `g_CurrentTargetColor` into `xj_mesh_constant_vertex_color` (black, alpha = packed a), selects vertex shader base 0x10 (the constant is the vertex diffuse), and sets transform flag 5 when a < 0.
+- The texture stages: `SetupChallengeEntityTextureStates_00839de0` (dump 855561..855571) sets stage 0 COLOROP = MODULATE, COLORARG1 = TEXTURE, COLORARG2 = CURRENT (the diffuse); ALPHAOP = SELECTARG2 (`SetChallengeEntityAlphaOperationSelectArg2_00836550`, dump 852839), or MODULATE with mesh flag 0x800 (dump 855411 / 853498). The only stage-0 COLOROP writer in the dump is that one (grep of `SetTextureStageState`).
+- So black + alpha is not additive: the output is `src * a + dst * (1 - a)` with src = texel * 0 = black, which is `dst * (1 - a)`, a darkening. It is not invisible black (that would need ONE as the dest).
+- Gifoie's level / tier: `EffectEntity_Constructor_006de5f0` (dump 640931..640975) clamps the level to 0..30 and stores it at +0x78 (short), then `AllocateEffectBuffer_006e1cec` (dump 642696) gives the tier (level / 5 for 1..5, else 0) and stores it at +0x7a. `create_gifoie` (dump 644475..644540) uses this constructor, so +0x78 is the level and +0x7a the tier. The technique base `TechniqueEntity_Constructor_006efe50` (dump 652194..652255) keeps the level at +0xc4 and the tier at +0xc6; that is a different layout, and the port's `level` / `tier` are the same semantic fields.
+- The branch: in `create_gifoie`'s emitter loop (dump 644560..644675), `field_0x44` is the tier (`(undefined1) sVar1`, sVar1 = +0x7a). The scale code runs only when `tier == 2`. Tier 2 is level 10..14 (level / 5 = 2), and the inner tests need the level at 15..24 (1.3 / 1.3) or 25..29 (1.3 / 1.8), so they are never true together. The branch is dead; every Gifoie emitter keeps the particle's default +0x44 / +0x48 = 1.0 (the port's scale 1).
+- Barta's cube follow: `update_barta` (dump 640772..640830) copies the object's position into each entry every tick (`copy_pos_to_particle`, dump 287950: the effect's +0x6c..+0x74), with `local_1c.flY = _DAT_0096c9a8 + param_1[9]` for an entry whose table flag has 0x20 (the model). `_DAT_0096c9a8` = -10.0 (read with `tools/exedata.py`). The object's y is +0x24 = `param_1[9]`, which `BartaEntity_UpdatePhysics_006f0568` (dump 652518) sets to the floor + 5 (`_g_BartaDefaultGroundY_0096dea8` = 5.0). So a model entry sits at floor - 5 after the first step.
+- The creation: `AntiTechEntity_Constructor_006dd85c` (dump 640381) adds `_DAT_0096c9b4` (5.0) to +0x24 before the effects are made (the undirected case). The directed constructor (dump 640640, `AntiTechEntity_Constructor_006dde24`) does not, so the creation point is the cast point there.
+- Other per-tick writes: `update_barta` also makes a 0x18a stream at tier 5 (`create_particle_effect_ex`, the port's `render/techfire.ts` already has it). `AntiTechEntity_UpdateEffects_006ddcbc` (dump 640563) only plays the sounds.
+
+**ASSUMED:**
+- The particle alpha byte (+0x97) is the port's fade. The exe's alpha is `(fade_byte + 1) & 0xff` after the wrap (`ROUND(a * 255)` with a < 0, the same mapping as the note in the previous entry); the port keeps the fade.
+- The stage-0 colour op stays MODULATE through the particle draws (no other writer found in the dump; the draw order of the setup was not traced).
+- NT model particles keep the port's shade (the exe's NT colour is the packed +0x94 bytes; the packed colour's writer, dump 291671, is not ported).
+- The Barta copy runs before `BartaEntity_UpdatePosition` in the same tick; the port places the model from the object's position at draw time (the tick order is not traced).
+- The black colour is the exe's constant, not a result of a texture that is pure black; the models' textures were not inspected.
+
+**Checks.**
+- `node tests/particleorient.test.ts`: ALL PASS (new: the colour checks).
+- `node tests/techfire.test.ts`: ok (new: Barta's model dy -10, the others 0).
+- `node tests/hitfx.test.ts`, `techniques`, `techlightning`, `deathfx`, `particleframes`, `particleslope`, `particlespawn`: pass (Node 24).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24, `client/node_modules` linked from the main checkout for the run, removed before the commit): clean.
+- `client/e2e/techvisuals.spec.ts` (`--workers=1`, the exception in the brief): not captured. Two runs failed at the login: the Vite page logged in, but no `tvi` account reached newserv's log (the other sessions' newserv on 9001 / the bridge on 8080 were in use, so I did not start another). The page's classic select screen never came up within 90 s (`fresh-field.ts:43`). The cause is not found; the capture stays open.
+
+**Left.**
+- The captures of Rabarta, Gifoie, Barta, Gibarta and Gizonde after these fixes (the spec, once the login is fixed; the 5-shot set is `test-results/techvisuals-<name>-<ms>.png`).
+- Gifoie's big planes' size (a capture at a known distance; the planes' size is the renderer's half size times the particle size, no change made).
+- The packed colour (dump 291671) for NT model particles and the alpha wrap.
+- The exe's NT colour path and whether any Rabarta / Barta planes are NT.

@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelOpaquePassSkipped, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelOpaquePassSkipped, modelParticleBlend, modelParticleColour, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -451,7 +451,8 @@ export class FieldParticles {
 
   // The model's transform and shade for one particle: T(p) S(size) Rz(z) Rx(x) Ry(angle) (the exe's
   // matrix, dump 291966: the step's Vector3f_GetAnglesZ, then the spin), colour and fade as the particle's.
-  // The colour is the port's shade (ASSUMED). The exe's inputs are not closed: SetColor (dump 287693)
+  // The colour: black for a non-NT particle (modelParticleColour, SetColor dump 287693); an NT particle
+  // keeps the port's shade (ASSUMED). The exe's inputs for NT are not closed: SetColor (dump 287693)
   // stores the particle's +0x94 / +0x97 bytes (its matrix element, never written by the constructor)
   // in g_CurrentTargetColor, which set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240,
   // run by render_animated_xj and RenderXJModel) packs into the vertex diffuse; a < 0 selects the
@@ -483,7 +484,8 @@ export class FieldParticles {
       mm.opacity = fade;
       mm.transparent = true;
       mm.blending = blending;
-      mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
+      const c = modelParticleColour(nt, rgb);
+      mm.color?.setRGB(c[0], c[1], c[2]);
       if (exeAlpha) mm.visible = !(skipOpaque && opaqueStripMaterials.has(mm));
     }
   }

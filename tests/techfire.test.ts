@@ -301,6 +301,9 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
   eq(ids(startEmitters('foie', 5)), [0x18, 0x19e, 0x14, 0xac, 0x19c], 'Foie tier 5');
   near(startEmitters('foie', 4)[1].scale, 1.8, 'Foie tier 4 scale 1.8');
   eq(ids(startEmitters('barta', 5)), [0x190, 0x191, 0x192, 0x198, 0x193, 0x1d8, 0x1d7], 'Barta tier 5 with its three model entries (flag 0x20)');
+  // update_barta (dump 640772): a flag 0x20 entry is the object's y - 10 each tick; the others are the object's y.
+  check(startEmitters('barta', 5).filter((e) => e.model).every((e) => e.dy === -10), 'Barta tier 5 model entries sit 10 below the object (update_barta)');
+  check(startEmitters('barta', 5).filter((e) => !e.model).every((e) => (e.dy ?? 0) === 0), 'the other Barta entries stay at the object');
   eq(ids(startEmitters('gibarta', 2)), [0x180, 0x181, 0x184], 'Gibarta tier 2 with its spike model 0x184 (flag 0x20)');
   check(startEmitters('gibarta', 2).every((e) => e.mode === 'fixed'), 'Gibarta\'s emitters stay');
   check(startEmitters('barta', 0).every((e) => e.mode === 'follow'), 'Barta\'s follow');
