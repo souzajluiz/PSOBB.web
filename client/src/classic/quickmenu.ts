@@ -9,11 +9,13 @@
 // it is the motion menu (8 categories). None of its tabs is a symbol chat row.
 // The symbol chat row belongs to the challenge / player list windows, not here.
 //
-// The model is here; the window is classic/quickmenuwindow.ts. Not ported (see DEVLOG
-// 2026-10-23 "quick menu"): the two-handed and traps lists (update_quickmenu cases 3..5
-// and 6..8), the compare list (gui 2), the trade path states 0x13..0x20 of
-// QuickMenuWindow, the 0x61 player list, and the chat cooldown owner (the quick menu
-// object at g_pUITextColorTable, not the End window).
+// The model is here; the window is classic/quickmenuwindow.ts. The tools tab (cases 3..5),
+// the traps tab (6..8), the weapon compare toggle (gui 2) and the technique swap (0xa) are
+// wired (2026-10-23, DEVLOG "quick menu windows: tools, traps, compare, swap"). Not ported:
+// the compare list's stat rows, the tools' checker bits (ASSUMED here, see toolItemFacts),
+// the tool slot action (state 4's UpdateQuickMenuToolTechSlotState), the trade path states
+// 0x13..0x20 of QuickMenuWindow, the 0x61 player list, and the chat cooldown owner (the
+// quick menu object at g_pUITextColorTable, not the End window).
 //
 // Refs: dump line numbers are from ../reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c.
 
@@ -453,4 +455,24 @@ export interface TechniqueRow {
 }
 export function techniqueRows(order: readonly number[]): TechniqueRow[] {
   return order.slice(0, TECHNIQUE_ORDER_LENGTH).map((techId, slot) => ({ slot, techId }));
+}
+
+// The facts of one inventory item for the tools tab (ASSUMED, 2026-10-23). The checker bits of
+// CheckItemEquipConditions_005d5f40 (dump 427680) are not decoded yet, and neither is the
+// barrier check CheckItemEquipConditions_Optcall_005c9cb4 (dump 418088), so the bits are a
+// stand-in: a wrapped item has none (CanEquipItem_005c9bf8 returns 0 for it); an unwrapped tool
+// is taken as equippable (bit 2) and not blocked here (bit 1 clear); every other item has no
+// bits. dwItemFlags (+0xdc) is not mapped from the port's item (0). `data1` is the item's
+// ItemData bytes, `rare` is is_item_rare (ItemNames.isRare).
+export function toolItemFacts(data1: Uint8Array, rare: boolean): QuickMenuItemFacts {
+  const wrapped = (data1[4] & 0x40) !== 0;
+  const tool = data1[0] === GROUP_TOOLS_TECHS;
+  return {
+    group1: data1[0] ?? 0,
+    group2: data1[1] ?? 0,
+    groupIdx: data1[2] ?? 0,
+    dwItemFlags: 0,
+    equipCheckBits: tool && !wrapped ? ATTACK_BIT_EQUIPPABLE : 0,
+    rare,
+  };
 }

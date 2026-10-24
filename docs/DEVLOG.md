@@ -15919,3 +15919,43 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 - The battle map check (the port has no map id for the battle arena).
 - The technique block as the exe does it (cooldowns 0xff / 0x1d), the tools' count-limit compare, and `apply_base_stats`'s exact stat writes.
 - The Chrome check of the overlay and the sonar row.
+
+## 2026-10-23: quick menu windows: tools, traps, compare toggle and technique swap wired
+
+**What changed.** `classic/quickmenuwindow.ts` (QuickMenu) now runs the tools tab (cursor 1, tab 3, states 3..5), the traps tab (cursor 2, tab 6, states 6..8), the weapon compare toggle (key 0xe on the weapon tab, state 1) and the technique swap (key 0xe on the technique tab, state 0xa). The env (`QuickMenuEnv`) gains `tools`, `isRare`, `traps` and `techOrder`; `render/fieldhud.ts` `fieldQuickEnv` fills them, `render/gameview.ts` passes `placeTrap` and `challengeTrap`, `render/combat.ts` `placeTrap` returns whether the trap was placed. The lobby env stubs them. `classic/quickmenu.ts` gets `toolItemFacts` (the tools' facts, ASSUMED bits, see below). `tests/quickmenu.test.ts` has 138 checks, all pass. `tsc --noEmit -p .` in `client/` is clean. The ROADMAP Classic HUD line is updated.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`):
+- Tools (`update_quickmenu` 711755..711870): state 3 creates gui 1 and populates; state 4 runs `UpdateQuickMenuToolTechSlotState_00741c08` (712261) each frame and goes to 5 on list flag +0x84 bit 1; state 5 cancels on key 0xd (SE 0x585), else when `IsPlayerActionAllowed` and the instance exists calls `ChallengePlayer_HandleItemUsage_0068dbbc(this, id)` (569453) and closes. That function refuses in the lobby, runs `SinowberillChallengePlayer_Process_0068be94` (SE 0x17 on refusal), then `checked_call_packet0x60_subcommand(use_item, 2, id)`, which is the 6x27. So the use is the 6x27 path the brief named (`items.use`).
+- The tool slot action (`UpdateQuickMenuToolTechSlotState_00741c08` / `ProcessToolTechUse_00741c00`, 712224..712261) sets the player's action 4 with slot `GetToolTechSlotId_005de4d8` when `Player_CanPerformAction(…, 4, slot)` passes. Not ported (the port has no player action 4 field); the tools tab's use does not depend on it.
+- Traps (711817..711870): state 8 with key 0xd cancels; `(id & 0xf) != 4` goes to `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` (the 6x60 sub 0x83) when `ChallengeUI_HandleActionForAllElements_00719200` passes, then `goto QuickMenu_Exit`, which does not set the close flag. So a palette row closes the menu only when it was sent (the `trapDecide` palette path). Row 4 calls `CreateSinowberillChallengeEntityManager_006b08b8` and, when it returns non-zero, `DecrementCounterAndClamp_00697968(&last_attack_type, 1)` and closes.
+- Compare (711680..711740): state 1, key 0xe held: opens `CreateEquipListWindowObject_00725d18` at gui 2 (324, 256), or closes it and sets the UI bit 8; then `InformationCounterListWindow_SetSelectedIndex`. The list's stat rows come from `UpdateEquipmentStatDisplay_007258dc` (689847): six `set_current_equip_value` rows (atp, ata, the 0x2d2 stat, evp, mst, lck) and `PlayerRecalculateStats_0068e030` for the candidate weapon. Not ported: the candidate recalculation needs the player's battle-params stats.
+- Technique swap (711875..711960, case 0xa): key 0xe held: when the list's pending row (+0x8e) is -1 it takes the selected row (+0x8c); otherwise `SwapTechniqueSlots_00741d28` (712325) swaps the two rows of the 19-entry order and sets the quick menu's +0x2c changed flag, then the list is rebuilt. The order is read from `get_00a95df8()` (= `g_pCurrentCharacterData`, dump 122598) at `+0x13 * sizeof + 0x108`, 16-bit ids.
+- Tab change (`InformationCounterListWindow_UpdateItemStates`): closes the four list windows, so the compare list closes on a tab step, and the step is held while the compare list is open (`InformationCounterListWindow_HandleInput_007419d4`, see the previous entry).
+
+**Ported:**
+- Tools: the rows are the `twoHandedTabRows` of the inventory (inventory order, value = instance id, label `itemName`); Enter uses the tool through `toolTabStep(5, …)` and `items.use` (6x27), then closes; not allowed or no item: the cancel SE, the menu stays open.
+- Traps: `trapRows` (rows 0..3 from the statuses, row 4 from the stock; a row shows only with a count; greyed off the hub and on a boss map); Enter runs `trapDecide`: rows 0..3 send the 6x60 sub 0x83 through `challengeTrap` (`build6x83`, the layout of the verified battle trap 6x83: id, type = row, count), row 4 places a battle trap through `combat.placeTrap` (the existing path, which takes one from the stock).
+- Compare: key 0xe toggles the gui 2 list on the weapon tab; Left / Right do not step while it is open; the list is drawn empty at (324, 256).
+- Technique swap: key 0xe on the technique tab marks the row, the next press swaps; the rows follow the order. The order lives in `FieldHud` (in memory, starts 0..18).
+
+**ASSUMED** (also marked in the code):
+- The tools' checker bits: `toolItemFacts` gives an unwrapped tool bit 2 (equippable) and bit 1 clear (not blocked here); a wrapped item and every non-tool have no bits. The real bits come from `CheckItemEquipConditions_005d5f40` and `CheckItemEquipConditions_Optcall_005c9cb4`, neither decoded. dwItemFlags (+0xdc) is 0 (the port's item has no such field). `isRare` is `ItemNames.isRare`.
+- Trap rows 0..3: the port has no Sinowberill challenge player, so the statuses are zeros and these rows never show. The palette gate (`ChallengeUI_HandleActionForAllElements`, the player's 0x32c block, `SinowberillChallengePlayer_CanPerformAction`) is taken as true.
+- Trap row 4: the exe has one stock (`last_attack_type`, 0..99); the port keeps four typed counters, so the row shows the first type with a stock and places that type. `managerExists` is false: the exe's entity manager is one at a time, the port's trap field is not mapped to it.
+- Trap row enable: `is_current_map_safe` is taken as the inverse of the port's hub list (`isSafeMap`, `classic/fieldmenu.ts`), as `paletteWindowsShown` does; boss areas are `BOSS_AREAS` (telepipe.ts, the map type 0x0B).
+- The 6x83 body for row 0..3 uses the battle trap's layout (id, type, count); the exe's challenge palette packet is not traced separately.
+- Key 0xe is the End key (key role 14, `KEYS.symbolChat`). A press is one event (no held-state poll). CONFLICT, not resolved: `update_quickmenu` (dump 711666) closes the menu when `CheckKeyboardInput_0078fdfc(…, 0xe)` is set once the flags word +0x1e is above 2. Read literally, End would close the menu before the compare / swap runs. The port does not close on End (as before this entry). A human should decide which reading is right.
+- The technique order's start (0..18) and its in-memory stride (`sizeof` of the retyped `unknown_session_data`, 0x21C from the field list) are not verified.
+- The compare list is drawn empty (names only, the stat labels are not read).
+- Lobby: the tools, traps and technique env are stubs (the lobby has only the motion menu).
+
+**Not persisted:** the technique order is not in the save. `net/charfile.ts` has no order field (newserv's PlayerDispDataV4 keeps `technique_levels_v1` only), and whether the exe writes the order to the save is not traced. So a swap lasts for the view (the session), not across a reload.
+
+**Tests:** `node tests/quickmenu.test.ts` (Node 24): ALL PASS (138 checks: the window's tools, traps, compare and swap with a fake env, and the earlier rows and builders). `node tests/fieldhud.test.ts`, `tests/lobbymenu.test.ts`, `tests/battletraps.test.ts`, `tests/symbolchat.test.ts`: pass. `cd client && npx tsc --noEmit -p .`: exit 0. Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. Decode `CheckItemEquipConditions_005d5f40` (tool branch, dump 427680..427900) and `CheckItemEquipConditions_Optcall_005c9cb4` (dump 418088): `pmt_get_barrier` and `unknown_check_equip_conditions` are not traced, so the tools' bits 1 and 2 are still ASSUMED.
+2. The tool slot action (state 4, `UpdateQuickMenuToolTechSlotState_00741c08`) and the player's action 4 field.
+3. The compare list's stat rows: `UpdateEquipmentStatDisplay_007258dc` (dump 689847) and `PlayerRecalculateStats_0068e030`.
+4. The End-key close conflict above (dump 711666), and the save of the technique order (E7 / E8 writers).
+5. The Sinowberill challenge statuses (+0x89c) and element gate, so the traps' rows 0..3 can show.

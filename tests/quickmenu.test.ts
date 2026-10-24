@@ -14,7 +14,7 @@ import {
   quickMenuWeaponRows,
   QUICK_MENU_TECH_COUNT,
 } from '../client/src/classic/quickmenu.ts';
-import { QuickMenu, type QuickMenuEnv } from '../client/src/classic/quickmenuwindow.ts';
+import { DEFAULT_TECH_ORDER, QuickMenu, type QuickMenuEnv } from '../client/src/classic/quickmenuwindow.ts';
 import { KEYS } from '../client/src/input/keyconfig.ts';
 import { SLOT_WEAPON } from '../client/src/net/items.ts';
 import {
@@ -25,6 +25,7 @@ import {
   itemAttackDataBits,
   techniqueRows,
   techniqueSwapKey,
+  toolItemFacts,
   toolPendingAction,
   toolTabStep,
   toolTechSlotId,
@@ -141,11 +142,23 @@ check('step back: 0 goes to 3 with traps', quickMenuStepBack(0, true, false) ===
 check('step back: an Android 0 goes to 2 (skips 3)', quickMenuStepBack(0, true, true) === 2);
 
 // The window: a fake env that records the actions.
-function fakeEnv(opts: { character?: boolean; canCast?: boolean; allowed?: boolean } = {}) {
+function fakeEnv(opts: {
+  character?: boolean;
+  canCast?: boolean;
+  allowed?: boolean;
+  inv?: unknown[];
+  stock?: number;
+  statuses?: number[];
+  safeNotBoss?: boolean;
+  placeOk?: boolean;
+  map?: number;
+  managerExists?: boolean;
+} = {}) {
   const calls: string[] = [];
+  let order: number[] = [...DEFAULT_TECH_ORDER];
   const env: QuickMenuEnv = {
     text: TEXT,
-    character: () => (opts.character === false ? null : ({ inventory: INV } as never)),
+    character: () => (opts.character === false ? null : ({ inventory: opts.inv ?? INV } as never)),
     itemName: nameOf,
     tech: {
       text: TEXT,
@@ -162,8 +175,29 @@ function fakeEnv(opts: { character?: boolean; canCast?: boolean; allowed?: boole
     },
     allowed: () => opts.allowed ?? true,
     emote: (slot) => calls.push(`emote ${slot}`),
+    tools: { use: (id) => calls.push(`use ${id.toString(16)}`) },
+    isRare: () => false,
+    traps: {
+      statuses: () => opts.statuses ?? [0, 0, 0, 0],
+      stock: () => opts.stock ?? 0,
+      safeNotBoss: () => opts.safeNotBoss ?? true,
+      map: () => opts.map ?? 0,
+      managerExists: () => opts.managerExists ?? false,
+      placeStock: () => {
+        calls.push('place');
+        return opts.placeOk ?? true;
+      },
+      sendStatus: (row, count) => calls.push(`status ${row} ${count}`),
+    },
+    techOrder: {
+      get: () => order,
+      set: (o) => {
+        order = [...o];
+        calls.push(`order ${o.slice(0, 6).join(',')}`);
+      },
+    },
   };
-  return { env, calls };
+  return { env, calls, order: () => order };
 }
 const key = (k: string) => ({ key: k });
 
@@ -324,6 +358,94 @@ check('swap: the same row twice keeps the order and sets changed', techniqueSwap
 check('swap: the input order is not mutated', order[4] === 4);
 const rows = techniqueRows(second.order);
 check('swap: 19 rows, slot to tech id', rows.length === 19 && rows[4].techId === 9 && rows[18].slot === 18);
+
+// ---- Tools, traps, compare and swap in the window (2026-10-23) ----
+const toolItem = (id: number, wrapped = false) => ({ equipped: false, data: { id, data1: new Uint8Array([3, 0, 0, 0, wrapped ? 0x40 : 0]) } });
+const TOOL_INV = [weapon(0x100, true), toolItem(0x200), toolItem(0x201, true), toolItem(0x202)];
+
+// Tool facts (ASSUMED bits, see toolItemFacts): an unwrapped tool is in the tab.
+check('tools facts: an unwrapped tool is in the tab', isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0]), false)));
+check('tools facts: a wrapped tool is out', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0x40]), false)));
+check('tools facts: a weapon is not a tool row', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([0, 1, 0, 0, 0]), false)));
+check('tools facts: a rare tool is out', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0]), true)));
+
+{
+  const { env, calls } = fakeEnv({ inv: TOOL_INV });
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  m.key(key(KEYS.selectRight));
+  check('tools: the tab lists the unwrapped tools, by instance id', m.tab === 3 && m.rows().map((r) => r.value.toString(16)).join(',') === '200,202', m.rows().map((r) => r.value.toString(16)).join(','));
+  m.key(key(KEYS.decide));
+  check('tools: deciding a tool uses it (items.use, 6x27) and the menu closes', calls.join(';') === 'use 200' && !m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ inv: TOOL_INV, allowed: false });
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  m.key(key(KEYS.selectRight));
+  m.key(key(KEYS.decide));
+  check('tools: not allowed, nothing is used and the menu stays open', calls.length === 0 && m.open);
+}
+
+// Traps: rows 0..3 are the challenge statuses (6x60 sub 0x83), row 4 is the Battle Mode stock.
+{
+  const { env, calls } = fakeEnv({ stock: 3, statuses: [0, 2, 0, 0], map: 16 });
+  const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
+  check('traps: mode 2 with traps starts on the traps tab (6)', m.tab === 6);
+  check('traps: the rows with a count are 1 (status 2) and 4 (stock 3)', m.rows().map((r) => r.value).join(',') === '1,4', m.rows().map((r) => r.value).join(','));
+  m.key(key(KEYS.decide));
+  check('traps: a status row sends sub 0x83 (row 1, count 2) and the menu closes', calls.join(';') === 'status 1 2' && !m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ stock: 3, statuses: [0, 2, 0, 0], map: 16 });
+  const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
+  m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.decide));
+  check('traps: row 4 places a trap from the stock and the menu closes', calls.join(';') === 'place' && !m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ stock: 3, map: 0 });
+  const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
+  m.key(key(KEYS.decide));
+  check('traps: row 4 off the battle maps does nothing (the menu stays open)', calls.length === 0 && m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ stock: 3, map: 16, placeOk: false });
+  const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
+  m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.decide));
+  check('traps: a refused placement keeps the menu open', calls.join(';') === 'place' && m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ stock: 3, statuses: [0, 2, 0, 0], map: 16, safeNotBoss: false });
+  const m = new QuickMenu(env, { lobby: false, mode: 2, traps: true, android: false });
+  m.key(key(KEYS.decide));
+  check('traps: greyed rows (a hub or a boss map) cannot be chosen', calls.length === 0 && m.open);
+}
+
+// Weapon compare: the End key toggles the gui 2 list on the weapon tab; a tab change closes it.
+{
+  const { env } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  m.key(key(KEYS.symbolChat));
+  m.key(key(KEYS.selectRight));
+  check('compare: the list is open, so the tab does not step', m.tab === 0);
+  m.key(key(KEYS.symbolChat));
+  m.key(key(KEYS.selectRight));
+  check('compare: closed again, the tab steps to 3 (no traps: 2 is skipped)', m.tab === 3);
+}
+
+// Technique swap: the End key marks a row, the next press swaps it with the selected row.
+{
+  const { env, calls, order } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: false, mode: 3, traps: false, android: false });
+  for (let i = 0; i < 4; i++) m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.symbolChat));
+  check('swap: the first press marks the row and changes nothing', calls.length === 0 && order().join() === DEFAULT_TECH_ORDER.join());
+  for (let i = 0; i < 5; i++) m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.symbolChat));
+  check('swap: the second press swaps the marked and the selected rows', order()[4] === 9 && order()[9] === 4, order().join());
+  check('swap: the list shows the new order (row 4 is tech 9)', m.rows()[4]?.value === 9);
+  check('swap: the change is written once (order 0,1,2,3,9,5)', calls.join(';') === 'order 0,1,2,3,9,5', calls.join(';'));
+}
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

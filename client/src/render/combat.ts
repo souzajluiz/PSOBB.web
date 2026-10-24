@@ -617,8 +617,9 @@ export class CombatView {
   // mash like a new movement key press.
   private stickFlick = new StickFlick();
   // Battle Mode: a palette press of a trap slot (group 1 = 4, group 2 = 0x0d..0x10) calls
-  // this with the trap type 0..3. Set by quest/battlerun.ts while a battle runs; null otherwise.
-  placeTrap: ((type: number) => void) | null = null;
+  // this with the trap type 0..3 (the quick menu's trap row 4 too). Returns whether it was placed.
+  // Set by quest/battlerun.ts while a battle runs; null otherwise.
+  placeTrap: ((type: number) => boolean) | null = null;
   // Battle Mode player versus player (combat/pvp.ts): set by quest/battlerun.ts while the
   // battle controller is in its battle phase. A remote player's strike that names the local
   // player in its 6x46 targets hits it (onRemoteStrikeTargets).

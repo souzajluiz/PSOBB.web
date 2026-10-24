@@ -47,7 +47,7 @@ import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { HomeLeaves, HOME_LEAF_IDS } from './homeleaves.ts';
-import { QuickMenu, type QuickMenuEnv } from './quickmenuwindow.ts';
+import { DEFAULT_TECH_ORDER, QuickMenu, type QuickMenuEnv } from './quickmenuwindow.ts';
 import { emotePayload } from '../formats/emotes.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
@@ -300,6 +300,19 @@ export class LobbyScreen implements Screen {
       allowed: () => false,
       // A motion's emote: 6x58 with the town emote slot (formats/emotes.ts EMOTE_SLOTS.town).
       emote: (slot) => this.lobby.sendSubcommand(0x58, emotePayload(slot, false)),
+      // The tools and traps tabs are field tabs; the lobby has none of them.
+      tools: { use: () => {} },
+      isRare: () => false,
+      traps: {
+        statuses: () => [],
+        stock: () => 0,
+        safeNotBoss: () => false,
+        map: () => 0,
+        managerExists: () => false,
+        placeStock: () => false,
+        sendStatus: () => {},
+      },
+      techOrder: { get: () => DEFAULT_TECH_ORDER, set: () => {} },
     };
   }
 
