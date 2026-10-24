@@ -1,10 +1,16 @@
-// The equipment stat panel and the mag rows of a selected item. The panel is the element
-// group at GUI table entry 0xC (16, 172), the one ChallengePlayerListWindow_HandleInput_
-// 007526c8 fills (state 2 / 8: ChallengePlayerListWindow_UpdateItemDetail_0073175c, and the
-// mag's RefreshItemStatDisplay_00726294 in state 8). That window is the mag menus' (menu ids
-// 23 / 24 -> ChallengePlayerListWindow_Constructor_007525bc), NOT the Item Pack's (menu 11 ->
-// GuildCardSearchWindow_Constructor_0075086c, which never creates entry 0xC). The Item Pack
-// draws its description in ITEM_DETAIL (entry 2) only; itempack.ts keeps the panel off.
+// The equipment stat panel and the mag rows of a selected item.
+//
+// Correction (2026-10-23, second pass): GUI entry 0xC (16, 172) is NOT the stat panel. Its
+// element group is the item picture: ChallengePlayerListWindow_UpdateItemDetail_0073175c
+// (state 2 / 8 of ChallengePlayerListWindow_HandleInput_007526c8) only calls
+// unknown_get_itemkt_image(group, item) and sets the group's state byte (1 = picture, 2 = none).
+// The stat rows and the pages are the elements of the GameList window itself (the list's
+// CreateEquipListWindowObject_00725d18 with entry 9 in the mag window): the dispatcher
+// GameList_RenderSelectionDisplay_00727450 is called with that window. The mag window is the
+// mag menus' (menu ids 23 / 24 -> ChallengePlayerListWindow_Constructor_007525bc), NOT the
+// Item Pack's (menu 11 -> GuildCardSearchWindow_Constructor_0075086c, a plain list window that
+// creates neither entry 0xC nor a GameList). The Item Pack draws its description in
+// ITEM_DETAIL (entry 2) only; itempack.ts keeps the panel off.
 //
 // Evidence (PsoBB.exe, Ephinea 1.25.13; the named dump's names are the
 // community ones, the addresses are the exe's):
@@ -45,10 +51,11 @@
 //   - the mag's DEF / POW / DEX / MIND labels (plain text; no group 11 label
 //     was found).
 //
-// The pages (the panel's kind per item and page) are at the end of this file. The earlier
-// note that the pages had no evidence was wrong: the page byte is set by the state machine
-// (states 5 and 0xC), not by Left / Right keys, which ChallengePlayerListWindow_HandleInput_
-// 007526c8 does not read.
+// The pages (the panel's kind per item and page) are at the end of this file. Correction
+// (2026-10-23, second pass): the page byte is written ONLY by the mag window (see the pages
+// section); a weapon, armour or shield is never shown in that window, so their attribute,
+// resist and slot pages have no writer in this build (page 0 only). The shops and the bank
+// list build the same GameList (page 0 = the stats) and never call the page writer.
 
 import type { ItemData } from '../formats/itemnames.ts';
 import { magStats } from '../formats/itemnames.ts';
@@ -80,8 +87,9 @@ export const VALUE_COLOR = {
   none: '#909090', // 0xff909090
 } as const;
 
-// The panel's window: GUI entry 0xC (16, 172) (get_gui_position(0xc), state 0/1 of
-// ChallengePlayerListWindow_HandleInput_007526c8). The height 132 is the exe's base: the
+// The stat panel's window (ASSUMED position: the 0xC position below is the item picture of the
+// mag window, see the header correction; the stats of a list are the list's own elements, and
+// the Check Room / shop windows place theirs in their own rect). The height 132 is the exe's base: the
 // stats-only case of EquipmentStatDisplayObject_Update_00727220 / _00727078 sets it with
 // UIElement_SetPositionAndSize_0072e7e4(panel, 0, 132); the requirement rows grow it to
 // 172 / 192 / 212 / 232 (not ported: the rows went with the pages). The width 240 is ASSUMED
@@ -214,9 +222,9 @@ export function magRows(item: ItemData): MagRows {
   };
 }
 
-// --- The panel's pages (GUI 0xC, ChallengePlayerListWindow family) ---
+// --- The list's pages (the GameList window's dispatch; reached in this build only by the mag window) ---
 //
-// Correction (2026-10-23): the attribute page is reachable. Its function is 0x726dc8, and
+// The attribute page's function is 0x726dc8, and
 // 0x726ee2 is not a start: Ghidra and the dump (ItemAttributesPanel_Update_00726ee2) are the
 // same body, the dump split it. The dispatcher is GameList_RenderSelectionDisplay_00727450
 // (dump 690228 area), called from the list's selection changes. It picks a table by the
@@ -227,14 +235,18 @@ export function magRows(item: ItemData): MagRows {
 //   unit (sub 3):                         0x726780 directly (all pages)
 //   table DAT_009f2544 (mag):             [0x726ff0 stats, 0x726864 mag status, 0x7267dc photon]
 //   tool: 0x726608 / 0x7265f0 (not decoded)
-// The page is the byte at the list's navigation object (this+0x64, read as `**(byte **)`),
-// written only by UpdateListNavigationDirection_0073e954 through HandleGameListNavigation_
-// 007260e8, which has two callers in ChallengePlayerListWindow_HandleInput_007526c8: state 5
-// (opens the item list, direction 1 -> page 1) and state 0xC (a photon blast gained,
-// direction 2 -> page 2). No Left / Right key calls it (the key handler's only use of the
-// navigation object is the state change). ASSUMED: the page resets to 0 only when the window
-// is built (the constructor was not traced). The sub-page direction also runs a slide (+10 / -10
-// in the object's +8 field), not ported.
+// The page is the byte at the list's navigation object (this+0x64, read as `**(byte **)`).
+// Its writer is UpdateListNavigationDirection_0073e954, the only caller of which is
+// HandleGameListNavigation_007260e8 (exe.s: one call site), and that has two callers, both in
+// the mag window's HandleInput: state 5 (the Select window's "Give Items", value 1 ->
+// ChallengePlayerListWindowSetActionState_00752fe0; direction 1 -> page 1) and state 0xC (a
+// photon blast gained after the feed, direction 2 -> page 2). The byte is set absolutely (not a
+// step, no clamp): the same direction again changes nothing. No key writes it directly; the
+// Cancel key (g_KeyboardSharedState[0xd]) in state 7 goes to state 5 again (page 1 again). The
+// navigation object is built by CreateEquipListWindowObject_00725d18 with page 0
+// (ChatShortcutMenu_SubList_SetData_0073e5d4(obj, 0, 3, slot)). The direction also sets a slide
+// (+10 / -10 in the object's +8 field), not ported; no page counter or arrow is drawn by the
+// dispatcher or the page functions (none found).
 // Each table is 4-byte entries: the call is `*(DAT_xxx + page * 4)`.
 
 export type PanelKind =
@@ -300,4 +312,25 @@ export const RESIST_LABELS = [0xa2, 0xa3, 0xa4, 0xa5, 0xa6] as const;
 export const SLOT_LABEL = 0xbf;
 export function slotValue(data1: Uint8Array): number {
   return data1[5];
+}
+
+// --- the mag window's pages (ported 2026-10-23) ---
+//
+// The mag window's panel page (its GameList's navigation byte, see the pages section): page 0
+// when the window opens, page 1 when Give Items opens the item list (state 5), page 2 when the
+// feed gains a photon blast (state 0xC). The page never goes back to 0 while the window is open.
+export const MAG_PAGE = { stats: 0, status: 1, photon: 2 } as const;
+
+// Page 0 (0x726ff0 EquipmentStatDisplayObject_Initialize): the six stat labels (group 11
+// 0x9c..0xa1) with the character's current values, in the exe's order. The candidate arrow is not
+// drawn: a mag is not equippable, so the exe hides the candidate values (ItemStatDisplayObject_
+// SetVisible 0, ASSUMED from ValidateItemForEquip's answer for a mag).
+export function magStatRows(current: StatBlock): Array<{ label: number; value: number }> {
+  return EQUIP_STAT_ROWS.map(({ key, label }) => ({ label, value: current[key] }));
+}
+
+// Page 2 (0x7267dc): three photon blast rows, the mag's blasts in slot order; a slot without a
+// blast is an empty row (ASSUMED: the exe writes its empty-slot text, not decoded).
+export function magPhotonRows(blasts: readonly number[]): Array<number | null> {
+  return [0, 1, 2].map((i) => (i < blasts.length ? blasts[i] : null));
 }

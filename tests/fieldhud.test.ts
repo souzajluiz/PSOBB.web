@@ -29,7 +29,7 @@ import {
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
 import {
-  attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magRows, magStatText, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
+  attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magPhotonRows, magRows, magStatRows, magStatText, MAG_PAGE, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
 } from '../client/src/classic/itemdetail.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
@@ -369,6 +369,7 @@ eq(hex(buildSplitStack(0, 0x10001, 3, 1, 0, 0)), 'c30600000100000000000000000000
 pmt.weapons[3] = [{ id: 40, usabilityFlags: 0xff, atpRequired: 50, mstRequired: 5, ataRequired: 20, atpMin: 10, atpMax: 20, mst: 2, ata: 3 } as never];
 pmt.armors[0] = { id: 20, usabilityFlags: 0xff, requiredLevel: 0, dfp: 12, evp: 7 } as never;
 const MAG_HEX = '020105002c01640090012a00' + '00000000' + '1c030000'; // data1, id, data2 (synchro 28, IQ 3)
+const MAG_PB_HEX = '020105032c01640090012a00' + '00000000' + '1c030100'; // the same mag with photon blast 3 in slot 0 (data1[3], data2[2] bit 0)
 const WEAPON_G0 = '000300000000000000000000';
 const WEAPON_G2 = '000300020000000000000000';
 const WEAPON_G2_SPECIAL = '000300020000050100000000'; // ATA special (type 5, value 1) = +10
@@ -574,6 +575,7 @@ if (failures) {
   mm.speed = 1;
   mm.start();
   eq([mm.statusAnim.isOpen, mm.statusAnim.counter], [true, 0], 'MAG: the status window opens with the menu');
+  eq(mm.page, 0, 'MAG: the status page is 0 at open (the list navigation byte starts at 0)');
   eq(mm.selectAnim.visible, false, 'MAG: no Select window in the list');
   mm.key({ key: 'Enter' } as KeyboardEvent); // list -> Select: a fresh window
   eq([mm.selectAnim.visible, mm.selectAnim.counter], [true, 0], 'MAG: Select opens at counter 0');
@@ -582,6 +584,7 @@ if (failures) {
   mm.key({ key: 'Enter' } as KeyboardEvent); // "Give Items" (value 1, feed allowed): Select closes, the item list opens
   eq([mm.selectAnim.animating, mm.selectAnim.isOpen], [true, false], 'MAG: Select closes with its own animation');
   eq([mm.itemsAnim.visible, mm.itemsAnim.counter], [true, 0], 'MAG: the item list opens at counter 0');
+  eq(mm.page, 1, 'MAG: Give Items sets the status page to 1 (ChallengePlayerListWindow state 5)');
   for (let i = 0; i < 4; i++) mm.tick();
   eq(mm.selectAnim.animating, true, 'MAG: Select still closing after 4 frames');
   mm.tick();
@@ -591,7 +594,41 @@ if (failures) {
   eq([mm.itemsAnim.animating, mm.selectAnim.visible, mm.selectAnim.counter], [true, true, 0], 'MAG: back to Select: the item list closes, Select reopens at 0');
   mm.key({ key: 'Backspace' } as KeyboardEvent); // Select -> list: Select closes
   eq(mm.selectAnim.animating, true, 'MAG: Select closes on the way back to the list');
-  eq(mm.statusAnim.isOpen, true, 'MAG: the status window is open through all of it');
+  eq([mm.statusAnim.isOpen, mm.page], [true, 1], 'MAG: the status window is open through all of it, page 1 stays');
+
+  // a feed that gains a photon blast: state 0xC sets page 2 and shows the PB line
+  const pbChar = { charClass: 0, inventory: [inv(MAG_HEX)], meseta: 0 } as unknown as CharacterFile;
+  const pbFood = inv('030000000004000000000000 01000100 00000000');
+  pbChar.inventory.push(pbFood);
+  const pbMag = new MagMenu({
+    character: () => pbChar,
+    rowContext: () => ctx,
+    text: (g, i) => `${g}:${i}`,
+    pmt: () => ({ getTool: () => ({ itemFlags: 4 }) }) as never, // stub: the monomate-like food
+    feedTimer: () => ({ canFeed: true }) as never,
+    feed: () => {
+      pbChar.inventory[0] = inv(MAG_PB_HEX); // the same mag (id 0), now with photon blast 3 in slot 0
+      return true;
+    },
+  });
+  pbMag.start();
+  pbMag.key({ key: 'Enter' } as KeyboardEvent); // list -> Select
+  pbMag.key({ key: 'Enter' } as KeyboardEvent); // Give Items -> item list (page 1)
+  eq(pbMag.page, 1, 'MAG PB: page 1 before the feed');
+  pbMag.key({ key: 'Enter' } as KeyboardEvent); // feed the first food: 7 -> rising
+  for (let i = 0; i < 3; i++) pbMag.tick(); // the rise has no step (levels unchanged): state 0xC
+  eq([pbMag.busy, pbMag.page], [true, 2], 'MAG PB: a gained photon blast sets page 2 and opens the PB line');
+  for (let i = 0; i < 100; i++) pbMag.tick();
+  eq([pbMag.busy, pbMag.page], [false, 2], 'MAG PB: after the PB line the page stays 2');
+}
+
+// MAG page rows: the six current stats in the exe's order; the three photon slots, blanks after the mag's blasts.
+{
+  const cur = { atp: 10, dfp: 2, mst: 3, ata: 4, evp: 5, lck: 6 };
+  eq(magStatRows(cur).map((r) => [r.label, r.value]), [[0x9c, 10], [0x9d, 2], [0x9e, 3], [0x9f, 4], [0xa0, 5], [0xa1, 6]], 'MAG page 0: labels 0x9c..0xa1 with the current values in order');
+  eq(magPhotonRows([3]), [3, null, null], 'MAG page 2: one blast fills the first row, the rest are blank');
+  eq(magPhotonRows([1, 2, 4]), [1, 2, 4], 'MAG page 2: three blasts fill the three rows');
+  eq(MAG_PAGE, { stats: 0, status: 1, photon: 2 }, 'MAG pages: 0 stats, 1 status, 2 photon');
 }
 
 // --- the panel's pages (GUI 0xC; dispatcher GameList_RenderSelectionDisplay_00727450, tables 0x9f2520..0x9f2544) ---
