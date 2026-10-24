@@ -5,7 +5,7 @@
 // psobb-client-source (no matching function there), so every value below is
 // from the Ghidra dump / a headless decompile of the Ephinea exe.
 
-import { BAMS_TO_RAD, type AiFrame, type AiTarget } from './enemyai.ts';
+import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 import { BrainBase, loop, nearest, once, turnToward, wrap } from './enemyfsm.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
@@ -972,6 +972,8 @@ export class SlimeArm extends EnemyShot {
 
 // 'stun' is the exe's state 11 (entry 0x0059856c, update 0x00597514; the writer is the
 // vtable slot +0xfc, 0x00597ae4, see `SlimeAi.pendingHit`).
+// The particle the stun makes every 4th count (0x0050b510 with the effect id 0xe0).
+const STUN_EFFECT = 0xe0;
 export type SlimeState = 'puddle' | 'rise' | 'sink' | 'crawl' | 'emerge' | 'burrow' | 'search' | 'confused' | 'approach' | 'spit' | 'arm' | 'flinch' | 'thrown' | 'dead' | 'stun';
 
 const SLIME_ANIM = {
@@ -1085,6 +1087,9 @@ export class SlimeAi extends BrainBase {
   private morph = SLIME_MORPH.puddle;
   private count = 0;
   private deathLeft = 0;
+  // Effects the owner makes this frame (the stun's 0xe0 every 4th count); the owner
+  // takes them with splice.
+  readonly effects: { id: number; dy: number }[] = [];
 
   private readonly puddleMotion: number;
   private readonly ground: SlimeGround;
@@ -1269,13 +1274,25 @@ export class SlimeAi extends BrainBase {
   }
 
   // The exe's vtable slot +0xfc of the slime (0x00597ae4), called by the generic
-  // enemy path (0x00543efb) when +0x30 has 0x100 and the slot +0x88 test is off:
+  // enemy path (0x00543efb) when +0x30 has 0x100 and the slot +0x88 test is off
+  // (0x00777ba4: +0x30 & 0x200, took_damage, which runs the flinch 0x100 slot):
   // unless the slime is already in state 11, it enters it and clears 0x100.
-  // ASSUMED: the writer of 0x100 and the +0x88 test are not traced; nothing in the
-  // port calls this yet (the state is reachable only through this method).
+  // The writer of 0x100 is EntityHitEntity_00773350 when the attack does no damage
+  // (the defence roll resists it, 0x773397; or the damage is negative, 0x7738af),
+  // and the other hit paths that set it (0x76e8b3, 0x773221, 0x775fd4, 0x776171,
+  // 0x776370, 0x777614) are not traced. hitNoDamage is the port's side of that.
   pendingHit(out: AiFrame): void {
     if (this.state === 'stun' || this.state === 'dead') return;
     this.enter(out, 'stun');
+  }
+
+  // A player's attack that does no damage to the slime (ASSUMED the port's
+  // `!landed`, i.e. the exe's no-damage path; the defence roll that resists an
+  // attack is not ported): enters state 11 and returns the motion to play.
+  hitNoDamage(): EnemyAiMotion | null {
+    const out = this.frame();
+    this.pendingHit(out);
+    return out.motion;
   }
 
   // The rise (k = 0.1) and the sink (k = 0.15) frames (0x0059670c, 0x00596884):
@@ -1481,9 +1498,11 @@ export class SlimeAi extends BrainBase {
         if (animationEnded) this.enter(out, 'burrow');
         break;
       case 'stun':
-        // 0x00597514: the counter counts a frame; when the motion has ended the slime
-        // goes to confused (+0x30 & 0x10) or search.
+        // 0x00597514: the counter (+0x39c, the timer here) counts a frame; every 4th
+        // count the effect 0xe0 is made at +0x300 (0x0050b510, the owner plays it);
+        // when the motion has ended the slime goes to confused (+0x30 & 0x10) or search.
         this.timer++;
+        if (this.timer % 4 === 0) this.effects.push({ id: STUN_EFFECT, dy: 0 });
         if (animationEnded) this.enter(out, this.confused ? 'confused' : 'search');
         break;
       case 'thrown':

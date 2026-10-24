@@ -1947,6 +1947,12 @@ export class CombatView {
       if (ai instanceof PanArmsAi) ai.hpFraction = e.stats.hp / Math.max(1, e.stats.maxHp);
       if (ai instanceof PanHalfAi) ai.hpFraction = e.stats.hp / Math.max(1, e.splitHp ?? e.stats.maxHp);
       if (ai instanceof SorcererAi) this.sorcererFeed(e, ai);
+      // The Recon's height is absolute (combat/enemyfsmep2d.ts): the ground under it
+      // is the floor it is over, found the same way the placement below finds it.
+      if (ai instanceof ReconAi) {
+        const g = this.opts.ground?.(e.instance.root.position.x, e.instance.root.position.z, e.instance.root.position.y - e.lift + 30) ?? null;
+        if (g !== null) ai.setGround(g);
+      }
       const r = ai.tick(confused && CONFUSION_AWARE.has(e.instance.spec.name) ? [...targets, ...this.enemyTargets(e)] : targets, ended);
       if (ai instanceof BarbaRayAi) this.barbaDrain(e, ai);
       if (ai instanceof PigRayAi) this.pigDrain(e, ai);
@@ -1964,7 +1970,11 @@ export class CombatView {
         root.rotation.x = ai.tiltX;
       }
       if (ai instanceof DeldepthAi) this.deldepthView(e, ai);
-      if (ai instanceof SlimeAi) this.slimeView(e, ai);
+      if (ai instanceof SlimeAi) {
+        this.slimeView(e, ai);
+        // The stun's effect 0xe0 every 4th count (0x0050b510 at the body, +0x300).
+        for (const fx of ai.effects.splice(0)) this.particle({ id: fx.id }, new THREE.Vector3(root.position.x, root.position.y + fx.dy, root.position.z));
+      }
       if (ai instanceof MorfosAi) this.morfosView(e, ai, !!r.hidden);
       // Epsilon's motion goes to the part of the look that is shown (epsilonView).
       if (r.motion && !(ai instanceof EpsilonAi)) this.playEnemyMotion(e, r.motion);
@@ -6983,6 +6993,12 @@ export class CombatView {
     this.num(damage, critical, p.x, p.y + 26, p.z);
     // The enemy turns on its attacker (unknown_enemy_behavior_4).
     if (damage >= 1 && me && byPlayer) e.ai?.onDamage(me.clientId);
+    // The Pofuilly's no-damage hit: EntityHitEntity sets +0x30 0x100 and the generic
+    // path (0x00543efb) calls its slot +0xfc, state 11 (SlimeAi.hitNoDamage).
+    if (e.ai instanceof SlimeAi && byPlayer && !landed) {
+      const motion = e.ai.hitNoDamage();
+      if (motion) this.playEnemyMotion(e, motion);
+    }
     // 0x0054615c: a hit on the Death Gunner while it shoots stuns its group.
     const groupStun = damage >= 1 && e.ai instanceof GunnerAi && e.ai.superArmor;
     if (groupStun) {

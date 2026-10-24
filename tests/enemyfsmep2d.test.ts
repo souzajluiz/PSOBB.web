@@ -682,6 +682,47 @@ const box = (o: { params?: number[]; clones?: number; difficulty?: number; rng?:
   }
 }
 {
+  // The height is absolute (+0x450 and +0x468 are world y): the hover is 45 +- 2
+  // above world y 0 wherever the floor is. Over a floor at 20 the lift is the hover
+  // less 20; a ceiling box at 150 over a floor at 100 comes down to the floor + 5
+  // (the minimum, 0x00589fdc), not to 45 + 100.
+  const b = new RecoboxAi({ x: 0, z: 0, angle: 0, boxY: 120, params: [0, 0, 0, 1, 0, 1], cloneCount: 4, movement: rmv, attack: atk(25, 768, 15), rng: () => 0.5 });
+  const rb = rig(b);
+  let sp: (typeof b.spawns)[number] | undefined;
+  for (let i = 0; i < 400 && !sp; i++) {
+    step(rb, [player(0, 300)]);
+    sp = b.spawns.shift();
+  }
+  if (sp) {
+    sp.recon.startFromBox(120, 20);
+    const rr = rig(sp.recon);
+    let l = 0;
+    run(rr, [], 300, 30, (f) => {
+      l = f.lift ?? l;
+    });
+    check(l > 23 && l < 27, `over a floor at 20 the hover is 45 +- 2 above world 0: lift ${l.toFixed(1)}`);
+  }
+  const c = new RecoboxAi({ x: 0, z: 0, angle: 0, boxY: 150, params: [0, 0, 0, 1, 0, 1], cloneCount: 4, movement: rmv, attack: atk(25, 768, 15), rng: () => 0.5 });
+  const rc = rig(c);
+  let sc: (typeof c.spawns)[number] | undefined;
+  for (let i = 0; i < 400 && !sc; i++) {
+    step(rc, [player(0, 300)]);
+    sc = c.spawns.shift();
+  }
+  if (sc) {
+    sc.recon.startFromBox(150, 100);
+    const rr = rig(sc.recon);
+    let l = 0;
+    let lowest = Infinity;
+    run(rr, [], 300, 30, (f) => {
+      l = f.lift ?? l;
+      lowest = Math.min(lowest, l);
+    });
+    near(l, 5, 'over a floor at 100 a Recon from a ceiling box at 150 settles 5 above the floor');
+    check(lowest >= 5 - 1e-6, `the Recon never goes under 5 above the floor (lowest ${lowest.toFixed(2)})`);
+  }
+}
+{
   // Orientation (0x0058958c / recon_debug_display): yaw, then X by 0x8000 for
   // kind 1 and 0x4000 for kind 2; kind 0 is upright. The Recon keeps its kind.
   near(derolleTiltX(0), 0, 'floor tilt is 0');

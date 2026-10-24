@@ -424,6 +424,26 @@ const mv = (o: Partial<EnemyMovementData> = {}): EnemyMovementData => ({ fparam1
   sc.confused = true;
   sc.tick([], true);
   eq(sc.state, 'confused', 'stun ends at the motion end: confused (7) when +0x30 has 0x10');
+  // The effect 0xe0 is made on every 4th count (0x00597514: the count goes up, then
+  // testb $3): counts 4, 8, ... make it, the others do not.
+  const ef = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  ef.pendingHit(pf);
+  const made: number[] = [];
+  for (let i = 1; i <= 12; i++) {
+    ef.tick([], false);
+    if (ef.effects.length) made.push(i);
+    ef.effects.splice(0);
+  }
+  eq(made.join(','), '4,8,12', 'stun: effect 0xe0 on every 4th count');
+  eq(ef.effects.length, 0, 'the effects are taken by the owner');
+  // hitNoDamage: the no-damage hit enters state 11 and returns the motion to play; a
+  // second one in state 11 returns nothing (pendingHit changes nothing there).
+  const hn = new SlimeAi({ x: 0, z: 0, angle: 0, movement: null, thrown: true, rng: () => 0.5 });
+  const m1 = hn.hitNoDamage();
+  eq(hn.state, 'stun', 'hitNoDamage enters state 11');
+  check(m1 !== null, 'hitNoDamage returns the stun motion');
+  eq(hn.hitNoDamage(), null, 'hitNoDamage in state 11 returns no motion');
+  eq(hn.hits, 0, 'a no-damage hit is not counted as a landed hit');
 }
 
 // --- Pofuilly Slime's crawl frame (0x005969cc) ----------------------------------------

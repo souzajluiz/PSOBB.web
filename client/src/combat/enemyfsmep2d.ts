@@ -1547,7 +1547,12 @@ class ReconSlash extends EnemyShot {
 export class ReconAi extends Ep2dBrain<ReconState> {
   state: ReconState | 'dead' = 'launch';
   readonly box: RecoboxAi;
-  private ry = 0; // lift above the ground (enemy+0x450)
+  // The height is absolute, as in the exe: ry is the world y (enemy+0x450), the
+  // hover is absolute too (+0x468), and the Recon never goes below 5 above the
+  // ground under it (0x00589fdc). `ground` is the ground under the Recon, set by
+  // the render (setGround) before each tick; 0 until then.
+  private ry = 0;
+  private ground = 0;
   private vx: number;
   private vy: number;
   private vz: number;
@@ -1605,9 +1610,9 @@ export class ReconAi extends Ep2dBrain<ReconState> {
     this.vy = opts.vy;
     this.vz = opts.vz;
     const r = () => this.rng() * 2 - 1;
-    // ASSUMED: never below the exe's minimum height above the ground (5), or
-    // the launch's exact landing could never happen.
-    this.hover = Math.max(f32(f32(RECOBOX.hoverSpread * r()) + RECOBOX.hoverBase) + opts.hoverBias, RECON.hoverMin);
+    // The hover is an absolute world y (+0x468); the minimum height above the
+    // ground is applied where the lift is read (get lift, the launch and the aim).
+    this.hover = f32(f32(RECOBOX.hoverSpread * r()) + RECOBOX.hoverBase) + opts.hoverBias;
     this.aimY = f32(f32(RECOBOX.aimSpread * r()) + RECOBOX.aimBase);
     this.orbitR = f32(f32(RECOBOX.radiusSpread * r()) + RECOBOX.radiusBase) + opts.radiusBias;
     const mv = opts.movement;
@@ -1623,9 +1628,9 @@ export class ReconAi extends Ep2dBrain<ReconState> {
     this.idle = opts.phase % 10;
     this.kindCeiling = opts.kind === 1;
     this.kindWall = opts.kind === 2;
-    // ASSUMED start heights until the box's y is known (startFromBox): a floor
-    // box starts on the ground, a ceiling box above the hover height, a wall
-    // box at it.
+    // ASSUMED start heights until the box's y is known (startFromBox): with the
+    // ground still 0 these are absolute: a floor box starts at 0 (lifted to the
+    // ground + 5), a ceiling box above the hover height, a wall box at it.
     this.ry = this.kindCeiling ? this.hover + 40 : this.kindWall ? this.hover : 0;
     this.current = RECON_ANIM.start;
     this.enter(null, 'launch');
@@ -1655,18 +1660,26 @@ export class ReconAi extends Ep2dBrain<ReconState> {
     return this.gone;
   }
 
+  // The lift above the ground the render places the Recon at: its absolute y
+  // less the ground, never under 5 (0x00589fdc).
   get lift(): number {
-    return Math.max(this.ry, RECON.hoverMin);
+    return Math.max(this.ry - this.ground, RECON.hoverMin);
+  }
+
+  // The ground under the Recon (the render's query at its spot).
+  setGround(ground: number): void {
+    this.ground = ground;
   }
 
   // The exe's start height: DerolleInitializeFields_0058c250 copies the entity's
   // y (+0x3c, the box's y: the spawn at 0x00588f8e passes the box's +0x38..+0x40,
   // recon_constructor copies them to +0x3c) into the lift +0x450, and the launch
-  // rises or falls from there toward the hover height. The port's lift is above
-  // the ground, so the render passes the ground under the spot: lift = box y -
-  // ground. ASSUMED: the box's y is the set entry's y (`placed.world[1]`).
+  // rises or falls from there toward the hover height. Both are absolute now,
+  // so the start is the box's y itself. ASSUMED: the box's y is the set entry's
+  // y (`placed.world[1]`).
   startFromBox(boxY: number, ground: number): void {
-    this.ry = f32(boxY - ground);
+    this.ground = ground;
+    this.ry = f32(boxY);
   }
 
   // The box died: update_recon puts the Recon in state 7.
@@ -1914,7 +1927,7 @@ export class ReconAi extends Ep2dBrain<ReconState> {
         this.vz = f32(this.vz * 0.95);
       } else this.sub = 2;
     }
-    if (this.ry < RECON.hoverMin) this.ry = RECON.hoverMin;
+    if (this.ry < this.ground + RECON.hoverMin) this.ry = this.ground + RECON.hoverMin;
   }
 
   // 0x0058bde0 event 0.
@@ -2027,9 +2040,11 @@ export class ReconAi extends Ep2dBrain<ReconState> {
         this.h += Math.max(-RECON.chaseTurn, Math.min(RECON.chaseTurn, d));
         this.move(this.sinH(), this.cosH(), this.chase);
       } else this.initVelocity();
-      // Targets are on the ground (the lift of a player is 0): aim at aimY.
-      this.ry = this.easeY(this.ry, this.aimY);
-      if (this.ry < RECON.hoverMin) this.ry = RECON.hoverMin;
+      // Targets are on the ground (the lift of a player is 0): aim at aimY above
+      // it. ASSUMED: the aim height is taken above the ground under the Recon (the
+      // exe's aim compare was not traced, so it is not made absolute with the hover).
+      this.ry = this.easeY(this.ry, this.ground + this.aimY);
+      if (this.ry < this.ground + RECON.hoverMin) this.ry = this.ground + RECON.hoverMin;
       if (t && this.grounded()) {
         this.sub = 1;
       }
@@ -2063,7 +2078,7 @@ export class ReconAi extends Ep2dBrain<ReconState> {
   // height and facing the target within the attack's angle.
   private grounded(): boolean {
     if (!(this.tdist < RECON.reach + this.reach)) return false;
-    if (!(Math.abs(this.ry - this.aimY) < 1)) return false;
+    if (!(Math.abs(this.ry - (this.ground + this.aimY)) < 1)) return false;
     return this.sinH() * this.tdx + this.cosH() * this.tdz >= Math.cos(this.aimArc);
   }
 
