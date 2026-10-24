@@ -25,6 +25,9 @@ import {
   wordSelectCategory,
   wordSelectRootTransition,
   populateWordSelectItemLists,
+  NumericCountModel,
+  numericDigitCount,
+  WORD_SELECT_NUMERIC_MAX,
   wordSelectItemList,
   wordSelectListAt,
   wordSelectNameLists,
@@ -254,7 +257,16 @@ eq([WORD_SELECT_ENTRIES[0], WORD_SELECT_ENTRIES[2], WORD_SELECT_ENTRIES[20]], [{
   eq(p.cursorValue, 72, 'the child cursor wraps');
   p.move(1);
   const msg = p.press();
-  eq([p.status, msg?.numTokens, msg?.tokens[0]], [2, 1, 70], 'a child accept closes the picker with the token in the buffer');
+  eq(msg, null, 'a child accept confirms the leaf and does not close (ProcessConfirmation: the NEXT / SELECT row)');
+  eq([p.status, p.buttonCursor, p.sel.count, p.sel.tokens[0]], [0, 0, 1, 70], 'the leaf token stays in the buffer; NEXT has the focus');
+  p.press();
+  eq([p.buttonCursor, p.sel.count, p.sel.tokens[0]], [null, 1, 70], 'NEXT keeps the token and returns to the list (the toggle is committed)');
+  p.move(1); // the second word (71) is pushed on top
+  p.press(); // its confirm: NEXT has the focus again
+  eq([p.status, p.buttonCursor, p.sel.count], [0, 0, 2], 'a second word builds the sentence to two tokens');
+  p.move(1);
+  p.press();
+  eq([p.status, p.result().numTokens, p.result().tokens.slice(0, 2)], [2, 2, [70, 71]], 'SELECT closes the picker with the two tokens in the buffer');
   const q = openWordSelectPicker({ type: 1, table: t });
   q.press();
   q.back();
@@ -274,7 +286,10 @@ eq([WORD_SELECT_ENTRIES[0], WORD_SELECT_ENTRIES[2], WORD_SELECT_ENTRIES[20]], [{
   const t = mkTable(l1, list2.map((l, i) => (i === 1 ? [-0x1e] : l)));
   eq(wordSelectChildRows(t, -0x1e, 'lobby'), [1000], 'the placeholder under the lobby: table1[0x0F]');
   eq(wordSelectChildRows(t, -0x1e, 'free'), [2000, 2001], 'the placeholder in the free field: table1[0x11]');
-  eq(wordSelectChildRows(t, -0x28, 'free'), [], 'an item pseudo index has no list here (ASSUMED, not opened)');
+  eq(wordSelectChildRows(t, -0x28, 'free'), populateWordSelectItemLists(t, -1).listA, 'list A without an item is the category list (table1[14])');
+  eq(wordSelectChildRows(t, -0x2d, 'free'), [], 'list B without an item is empty');
+  eq(wordSelectChildRows(t, -0x2d, 'free', { selectedItem: 0x7f }), populateWordSelectItemLists(t, 0x7f).listB, 'list B with the selected item');
+  eq(wordSelectChildRows(t, -0x3c, 'free', { nameLists: wordSelectNameLists((s) => s < 3, 0) }), [0x2c7, 0x68d, 0x68e], 'the name head list: 0x2C7, then the other filled players (slot 0 is the current one)');
   eq(wordSelectRowLabel(null, -0x1e, () => 'x'), '', 'the placeholder has no label (ASSUMED)');
   eq(wordSelectRowLabel(null, 0x68c + 3, (s) => `P${s}`), 'P3', 'a player token is the player name');
 }
@@ -291,7 +306,56 @@ if (existsSync(dataFile) && existsSync(textFile)) {
   eq([p.depth, p.rows.length, p.rows[0]], [1, 16, 70], 'the greetings category opens table1[23]: 16 rows, the first is token 70');
   eq(wordSelectRowLabel(real, p.rows[0], () => '').startsWith('Hello'), true, 'the child row label is "Hello."');
   p.press();
-  eq([p.status, p.result().numTokens], [2, 1], 'the child accept closes with one token');
+  eq([p.status, p.buttonCursor, p.sel.count], [0, 0, 1], 'the child accept (Hello., group 7) confirms with one token; NEXT has the focus');
+  p.move(1);
+  p.press();
+  eq([p.status, p.result().numTokens], [2, 1], 'SELECT closes with one token');
+}
+
+// ---- the count window (group != 7) and the NEXT / SELECT row (multi-word) ----
+{
+  // Token 0x4F3 is string group 3 (max 15, two digits). The root row 5 opens a list of that token.
+  const numT = mkTable(list1.map((l, i) => (i === 5 ? [0x4f3, 0x4f3] : l)), list2.map((l, i) => (i === 1 ? [5] : l)));
+  eq([stringIdGroup(0x4f3), WORD_SELECT_NUMERIC_MAX[3], numericDigitCount(15)], [3, 15, 2], 'group 3: max 15, two digits');
+  eq([numericDigitCount(999999), numericDigitCount(99), numericDigitCount(1)], [6, 2, 1], 'digit counts of the group maxima');
+  const c = new NumericCountModel(42, 15);
+  eq(c.value, 15, 'the initial value is clamped to the maximum');
+  const d = new NumericCountModel(7, 99);
+  d.adjust(1);
+  eq(d.value, 8, 'up on the least significant digit adds 1');
+  d.moveCell(1);
+  d.adjust(1);
+  eq(d.value, 18, 'the next cell adds 10');
+  d.adjust(-1);
+  d.adjust(-1);
+  eq(d.value, 0, 'the value is kept at 0');
+
+  const p = openWordSelectPicker({ type: 1, table: numT, scene: 'free', numericParameter: 0 });
+  p.press(); // the root row 5 opens its list
+  p.press(); // the leaf 0x4F3 (group 3) opens the count window
+  eq([p.numeric !== null, p.buttonCursor], [true, null], 'a group 3 leaf opens the count window first');
+  p.move(1);
+  p.press();
+  eq([p.numeric, p.buttonCursor, p.sel.numericParameter], [null, 0, 1], 'Select on the count copies the value to the parameter and opens the NEXT / SELECT row');
+
+  const q = openWordSelectPicker({ type: 1, table: numT, scene: 'free', numericParameter: 0 });
+  q.press();
+  q.press();
+  q.move(1);
+  q.back();
+  eq([q.numeric, q.sel.numericParameter, q.buttonCursor, q.depth], [null, 0, null, 1], 'Cancel on the count clears the parameter and stays on the list');
+  q.back();
+  eq([q.depth, q.status], [0, 0], 'a second Cancel pops the child list; the picker stays open');
+
+  // NEXT is refused at the 8-token cap (a group 7 leaf, so no count window).
+  const g7 = mkTable(list1.map((l, i) => (i === 23 ? [70] : l)), list2.map((l, i) => (i === 1 ? [23] : l)));
+  const r = openWordSelectPicker({ type: 1, table: g7, scene: 'free' });
+  r.press();
+  r.press();
+  eq([r.buttonCursor, r.sel.count], [0, 1], 'a group 7 leaf goes straight to the NEXT / SELECT row');
+  r.sel.count = 8;
+  r.press();
+  eq([r.buttonCursor, r.sel.count], [0, 8], 'NEXT is refused with 8 tokens (ASSUMED cap)');
 }
 
 if (failures) {

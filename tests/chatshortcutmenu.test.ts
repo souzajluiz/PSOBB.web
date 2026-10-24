@@ -306,7 +306,9 @@ check(SHORTCUT_TEXT.edit === 0x97 && SHORTCUT_TEXT.clear === 0x6d, 'the action r
   list1[23] = [70, 71];
   const list2: number[][] = Array.from({ length: 0x12 }, () => []);
   list2[1] = [23];
-  setWordSelectTable({ tokenToPhrase: [], phrases: [], list1, list2 });
+  // Token 70 reads "Hello." (phrase 0); the other tokens have no phrase (0xFFFF).
+  const tokenToPhrase = Array.from({ length: 0x100 }, (_, i) => (i === 70 ? 0 : 0xffff));
+  setWordSelectTable({ tokenToPhrase, phrases: ['Hello.'], list1, list2 });
   const full = save();
   const { menu } = leaf(full);
   menu.key(press('ArrowDown'));
@@ -317,12 +319,17 @@ check(SHORTCUT_TEXT.edit === 0x97 && SHORTCUT_TEXT.clear === 0x6d, 'the action r
   menu.key(press('Tab'));
   check(menu.phase === 'wordPicker', 'the Symbol key opens the word picker over the table');
   menu.key(press('Enter')); // row 23: its list
-  menu.key(press('Enter')); // token 70: the word
+  menu.key(press('Enter')); // token 70: the word (its NEXT / SELECT row, NEXT has the focus)
+  menu.key(press('ArrowDown')); // SELECT
+  menu.key(press('Enter')); // SELECT closes the picker: the confirm
   const word = menu.pendingRecord?.word;
   check(menu.phase === 'confirm' && menu.pendingRecord?.type === 2 && word?.numTokens === 1 && word?.tokens[0] === 70, 'the word accept asks the confirm for a word record');
   menu.key(press('Enter')); // Yes
   const rec = parseChatShortcut(full, 3);
   check(rec?.type === 2 && rec.word?.tokens[0] === 70, 'the word record is written to slot 3');
+  // The slot row of a word record shows the rendered sentence (renderWordSelect, the balloon's text).
+  const rows = (menu as unknown as { slotItems(): { label: string }[] }).slotItems();
+  check(rows[3]?.label === 'Hello.', `the word record's slot label is its sentence (got ${JSON.stringify(rows[3]?.label)})`);
   setWordSelectTable(null);
 }
 
