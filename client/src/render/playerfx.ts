@@ -158,7 +158,7 @@ export class PlayerEffects {
         }
         if (!s.fx.update() || s.live) continue;
         const spec = s.fx.spec;
-        b.particles.add(s.entry, [b.anchor.x, b.anchor.y + (spec.dy ?? 0), b.anchor.z], 0);
+        b.particles.add(s.entry, [b.anchor.x, b.anchor.y + (spec.dy ?? 0), b.anchor.z], null);
         s.live = b.particles.emitters[b.particles.emitters.length - 1];
         // A single emission spawns at least one particle (the spawn loop
         // runs while max(rate, 1) >= 1).

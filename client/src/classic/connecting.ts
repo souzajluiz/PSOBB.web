@@ -92,10 +92,10 @@ export class ConnectingScreen implements Screen {
     const at = (z: number): [number, number, number] => [0, 0, -z];
     const ids = [0x13, 0x15, 0x17, 0x1d, 0x6e];
     const rot = [Math.PI / 2, Math.PI / 2, 0, Math.PI / 2, Math.PI / 2];
-    ids.forEach((id, i) => this.particles.add(parseParticleEntry(this.assets.particleEntries, id), at(100), rot[i]));
+    ids.forEach((id, i) => this.particles.add(parseParticleEntry(this.assets.particleEntries, id), at(100), [rot[i], 0, 0]));
     // FUN_00417f90: rotation from the camera direction (FUN_007a8d98), i.e.
     // the same quarter turn about X.
-    this.particles.add(parseParticleEntry(this.assets.particleEntries, 0x16), at(65), Math.PI / 2);
+    this.particles.add(parseParticleEntry(this.assets.particleEntries, 0x16), at(65), [Math.PI / 2, 0, 0]);
   }
 
   update(dt: number): void {

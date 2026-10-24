@@ -131,7 +131,7 @@ eq(new DataView(buildPlayerSync(self, state, 42).buffer).getUint16(0x80, true), 
   const e = parseParticleEntry(dat, 0);
   eq([e.kind, e.ring.radius, e.ring.omega, e.ring.rise], [1, [10, 1], [1, 2], [Math.fround(0.1), 0]], 'type 1 fields');
   const sys = new ParticleSystem();
-  sys.add(e, [100, 5, -40], 0);
+  sys.add(e, [100, 5, -40], null);
   for (let i = 0; i < 6; i++) sys.step();
   const q = sys.live[0]!;
   const dist = Math.hypot(q.p[0] - 100, q.p[2] + 40);

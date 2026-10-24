@@ -32,6 +32,7 @@
 //   (level / 5, 1..5, else 0), +0x12c hit radius 4.0 (the directed Gibarta
 //   12.0), +0x128 the hit box (InitEnemyCollisionBoxes_007b9a88).
 
+import { NO_ORIENT, orientOfDirection, type Orient } from '../classic/particles.ts';
 import { enemyBoxTable } from '../formats/enemyboxes.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
@@ -738,6 +739,8 @@ export interface FxEmitter {
   dy?: number;
   /** Added along the object's heading (Gibarta's un-flagged entries: 3 ahead). */
   ahead?: number;
+  /** create_particle_effect2 (the exe's flag 2 or 1 entries) with the object's angles: 'object', or 'half' (X turned half a circle, flag 1). See foieEmitterOrient. */
+  angles?: 'object' | 'half';
 }
 
 const E = (id: number, scale: number, mode: FxEmitter['mode'], extra: Partial<FxEmitter> = {}): FxEmitter => ({ id, scale, mode, ...extra });
@@ -748,13 +751,27 @@ const E = (id: number, scale: number, mode: FxEmitter['mode'], extra: Partial<Fx
 // create_particle_effect12(…, 0x18) at the start is the muzzle burst.
 export const FOIE_MUZZLE = 0x18;
 const FOIE_FX: readonly (readonly FxEmitter[])[] = [
-  [E(0x14, 1, 'follow')],
-  [E(0x14, 1.2, 'follow')],
-  [E(0x14, 1.4, 'follow')],
-  [E(0x14, 1.6, 'follow'), E(0xac, 1, 'follow')],
-  [E(0x14, 1.8, 'follow'), E(0xac, 1, 'follow')],
-  [E(0x19e, 1, 'follow'), E(0x14, 2.2, 'follow'), E(0xac, 1, 'follow'), E(0x19c, 1, 'follow')],
+  [E(0x14, 1, 'follow', { angles: 'object' })],
+  [E(0x14, 1.2, 'follow', { angles: 'object' })],
+  [E(0x14, 1.4, 'follow', { angles: 'object' })],
+  [E(0x14, 1.6, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' })],
+  [E(0x14, 1.8, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' })],
+  [E(0x19e, 1, 'follow'), E(0x14, 2.2, 'follow', { angles: 'object' }), E(0xac, 1, 'follow', { angles: 'half' }), E(0x19c, 1, 'follow', { angles: 'object' })],
 ];
+
+/**
+ * The object angles a Foie emitter is made with (create_particle_effect2's param_2:
+ * local_3c, or local_30 for flag 1 = X + 0x8000). An undirected Foie
+ * (create_foie_object1) is a TechniqueEntity, whose +0x54 / +0x5c are
+ * Vector3f_GetAnglesZ of its heading's direction (sin, 0, cos) (0x006efe50); a
+ * directed one (TechniqueObject_Constructor_006e3480) is an EffectEntityBase, which
+ * sets +0x54 and +0x5c to 0 (0x006f0138), so its emitters are not turned.
+ * The exe's Y is always 0 here (local_3c.flY = 0).
+ */
+export function foieEmitterOrient(o: FireObject, angles: NonNullable<FxEmitter['angles']>): Orient {
+  const base: Orient = o.directed ? NO_ORIENT : orientOfDirection(Math.sin(o.heading), 0, Math.cos(o.heading));
+  return angles === 'half' ? [base[0] + Math.PI, base[1], base[2]] : base;
+}
 
 // Gibarta (g_TechniqueVisualDefinitions, 0x0096d2f0), InitializeTechniqueVisuals_006e3ba0:
 // flag 2 = create_particle_effect5 at the object, else create_particle_effect3 3

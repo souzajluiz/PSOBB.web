@@ -171,7 +171,7 @@ export class LevelUpEffects {
     if (this.disposed || !e || !at) return;
     const particles = new ParticleSystem();
     particles.slots = this.slots;
-    particles.add(e, [at.x, at.y, at.z], 0);
+    particles.add(e, [at.x, at.y, at.z], null);
     // At least one particle: the spawn loop runs while max(rate, 1) >= 1.
     particles.emitters[0].acc = Math.max(0, 1 - e.rate);
     // The one emission of create_particle_effect_3 (+0x34 = 1).
