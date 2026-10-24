@@ -197,7 +197,7 @@ export class GameView {
       // The same ray's hit point (cast_ray_at_map_collision_geometry: the Megid orb stops there).
       wallHit: (a, b, mask) => {
         const hit = this.collision?.segmentHit([a.x, a.y, a.z], [b.x, b.y, b.z], mask);
-        return hit ? { x: hit.point[0], y: hit.point[1], z: hit.point[2] } : null;
+        return hit ? { x: hit.point[0], y: hit.point[1], z: hit.point[2], normal: { x: hit.normal[0], y: hit.normal[1], z: hit.normal[2] } } : null;
       },
       ...character,
       source,

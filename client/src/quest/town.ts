@@ -51,8 +51,8 @@ import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
-import { HEAD_STATE_CAST, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow } from './npcai.ts';
+import { HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STOP_DISTANCE, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -92,8 +92,6 @@ export class QuestTown {
   private shop: string[][] | null = null;
   private templates: NpcPlayerTemplate[] | null = null;
   private readonly npcAi = new NpcAi();
-  // The attack AI of the NPCs this client owns, by slot (quest/npcai.ts NpcAttackAi).
-  private readonly npcAttacks = new Map<number, NpcAttackAi>();
   // The move sends of those NPCs (quest/npcai.ts NpcMoveSender), by slot.
   private readonly npcMoves = new Map<number, NpcMoveSender>();
   // The head's action chooser of those NPCs (quest/npcai.ts NpcHeadChooser), by slot.
@@ -327,7 +325,6 @@ export class QuestTown {
     this.ui.boardWait = !!(this.area?.vm.boardWaiting || this.quest?.vm.boardWaiting);
     this.view.npcs.updateVisibility();
     this.stepNpcFollowers();
-    this.stepNpcAttacks();
     // at_coords_call: the thread starts by itself when the player walks in.
     const me = this.view.selfPose();
     const vm = this.quest?.vm;
@@ -703,7 +700,6 @@ export class QuestTown {
   private npcKilled(slot: number): void {
     if (this.game.players.get(slot)?.npcTemplate === undefined) return;
     this.npcAi.remove(slot);
-    this.npcAttacks.delete(slot);
     this.npcMoves.delete(slot);
     this.npcFollowHeads.delete(slot);
     this.game.removeLocalPlayer(slot);
@@ -773,8 +769,10 @@ export class QuestTown {
     const combat = this.view.combat;
     const npc = { x: p.position.x, y: p.position.y, z: p.position.z };
     const owner = { x: leader.position.x, y: leader.position.y, z: leader.position.z };
-    const wall = (a: HeadPoint, b: HeadPoint, mask: number) => (combat ? combat.npcWallBlocks(a, b, mask) : false);
+    const wall = (a: HeadPoint, b: HeadPoint, mask: number) => (combat ? combat.npcWallHit(a, b, mask) : null);
     const cands = combat ? combat.npcEnemies() : [];
+    // ResetEntityHitboxes_007b34e8 (the tick's bits), then UpdateState_007af1a8 / 007af7ec (the acquires and the moved test).
+    head.resetEntityBits(owner);
     head.headStateUpdate({ npc, owner, cands });
     if (this.isPioneer2()) {
       head.pioneerUpdateState(owner);
@@ -791,9 +789,14 @@ export class QuestTown {
       });
     }
     head.update({ npc, owner, wall });
-    if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
-    head.afterDispatch();
+    // The 2764 dispatch (AIUpdateState_007b2764): its gate B +0x328 & 2 is ASSUMED set for a live NPC record
+    // (no writer of that bit is traced), so it is not checked here. State 2 casts, state 8 runs ExecuteAttack.
     const dist = headSendDistance(head, npc);
+    // State 1 within the stop distance returns from the dispatch before its resets (.c:797012).
+    const arrived = dist !== null && dist <= HEAD_STOP_DISTANCE;
+    if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
+    else if (head.state === HEAD_STATE_ATTACK) this.stepNpcExecuteAttack(slot, p, head);
+    if (!arrived) head.afterDispatch();
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
     if (dist === null) sender.reset();
@@ -823,7 +826,8 @@ export class QuestTown {
 
   // The head's chooser (AIProcessState, quest/npcai.ts NpcHeadChooser) for the field's branch: the
   // owner's and the NPC's status flags (the NPC's HP / TP are ASSUMED full), the head's table word and
-  // whether the locked enemy is inside the attack radius.
+  // whether the first candidate (B +0x4, the nearest) is inside the attack radius. The chooser's writes to
+  // the head (the action +0x92, the item flag, flag 0x200, the 0x8080 re-pick, the 0x8000 clear) are applied here.
   private headChooses(slot: number, head: NpcHead, mode: 0 | 1, cands: readonly { id: number; x: number; z: number }[]): boolean {
     const combat = this.view.combat;
     if (!combat) return false;
@@ -834,7 +838,7 @@ export class QuestTown {
     }
     const owner = headStatusFlags(combat.npcOwnerStatus());
     const npc = headStatusFlags({ hp: 1, hpMax: 1, tp: 1, tpMax: 1, stateFlags30: 0 });
-    const locked = head.lockedPrimary !== 0 ? cands.find((e) => e.id === head.lockedPrimary) : undefined;
+    const first = head.targets.length > 0 ? cands.find((e) => e.id === head.targets[0].id) : undefined;
     const pos = head.npcPos;
     const input = {
       owner90: owner.f90,
@@ -846,9 +850,21 @@ export class QuestTown {
       hasTarget: head.targets.length > 0,
       hasItem: () => false,
       canCast: () => true,
-      lockedInRadius: () => !!locked && !!pos && (locked.x - pos.x) ** 2 + (locked.z - pos.z) ** 2 < head.attackRadius * head.attackRadius,
+      lockedInRadius: () => !!first && !!pos && (first.x - pos.x) ** 2 + (first.z - pos.z) ** 2 < head.attackRadius * head.attackRadius,
     };
-    return ch.choose(mode, input).attack;
+    const c = ch.choose(mode, input);
+    if (c.counterExpired) head.flags &= ~HEAD_FLAG_TARGET_HIT; // 0xffff7fff (.c:795897)
+    if (c.flag200) head.flags |= HEAD_FLAG_NEXT; // 0x200 (.c:795912)
+    if (c.lock && first && pos) {
+      // The re-pick: the anchor is the target's position and the flags 0x8080 are set (.c:795905).
+      head.anchor = { x: first.x, y: pos.y, z: first.z };
+      head.flags |= HEAD_FLAG_SECOND | HEAD_FLAG_TARGET_HIT;
+    }
+    if (c.attack) {
+      head.action = c.action;
+      head.itemFlag = c.item;
+    }
+    return c.attack;
   }
 
   // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, quest/npchead.ts headTwoTech): each
@@ -869,71 +885,24 @@ export class QuestTown {
     if (ticks !== null) head.castTicks = ticks;
   }
 
-  // The attack AI of the NPCs this client owns (SinowberillChallengePlayer_Update_007aefd4,
-  // .c:794690): it runs only for an NPC that follows a leader, and its action is cast on
-  // the owner's client (quest/npcai.ts NpcAttackAi). The action and the cast decision come
-  // from the head's chooser (NpcHeadChooser, SinowberillHead_AIProcessState_007b0a7c) on the
-  // owner's HP / TP flags; the NpcAttackAi keeps the target and the cadence.
-  private stepNpcAttacks(): void {
-    const me = this.view.selfPose();
-    const combat = this.view.combat;
-    if (!me || !combat) return;
-    const enemies = combat.npcEnemies();
-    const at = new Map(enemies.map((e) => [e.id, e] as const));
-    const candidates: EnemyCandidate[] = enemies.map((e) => ({ slot: e.id, hitboxes: e.boxes }));
-    const owner = headStatusFlags(combat.npcOwnerStatus());
-    for (const slot of this.npcAi.slots()) {
-      const st = this.npcAi.get(slot);
-      const p = this.game.players.get(slot);
-      if (!st?.owner || !p || p.npcTemplate === undefined || st.leader === NO_LEADER) continue;
-      const row = npcAttackRow(p.npcTemplate);
-      if (!row) continue;
-      let ai = this.npcAttacks.get(slot);
-      if (!ai) {
-        ai = new NpcAttackAi();
-        this.npcAttacks.set(slot, ai);
-      }
-      let head = this.npcHeads.get(slot);
-      if (!head) {
-        head = new NpcHeadChooser();
-        this.npcHeads.set(slot, head);
-      }
-      ai.tick({
-        row,
-        npc: { x: p.position.x, z: p.position.z },
-        leader: { x: me.x, z: me.z },
-        enemies: candidates,
-        targetPos: (id) => at.get(id) ?? null,
-      });
-      if (!ai.ready()) continue;
-      // The NPC's own HP / TP are not modelled (ASSUMED full: no flags); its inventory is not
-      // (ASSUMED empty: no item use); its tech eligibility is not checked (ASSUMED true).
-      const npc = headStatusFlags({ hp: 1, hpMax: 1, tp: 1, tpMax: 1, stateFlags30: 0 });
-      const lockedPos = ai.target !== null ? at.get(ai.target) : undefined;
-      const input = {
-        owner90: owner.f90,
-        owner8c: owner.f8c,
-        npc90: npc.f90,
-        npc8c: npc.f8c,
-        head34: 0,
-        head84: 0,
-        hasTarget: ai.target !== null,
-        hasItem: () => false,
-        canCast: () => true,
-        lockedInRadius: () =>
-          !!lockedPos && (lockedPos.x - p.position.x) ** 2 + (lockedPos.z - p.position.z) ** 2 < row.attackRadius * row.attackRadius,
-      };
-      let choice = head.choose(1, input);
-      if (!choice.attack) choice = head.choose(0, input);
-      if (!choice.attack) continue;
-      const cast = npcAttackCast(choice.action, choice.item);
-      if (!cast || cast.kind !== 'tech') continue; // an item use: the NPC has no inventory here (hasItem is false)
-      // The owner's own player is the target of Resta / Anti; Reverser takes the locked enemy.
-      const targets = cast.target === 'owner' ? [this.game.selfId] : ai.target !== null ? [ai.target] : [];
-      if (cast.target === 'target' && !targets.length) continue;
-      const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, cast.tech, targets);
-      if (ticks !== null) ai.busy(ticks);
+  // SinowberillHead_ExecuteAttack_007b2ae8 (.c:797151), run by the 2764 dispatch in state 8 (quest/npchead.ts): the
+  // action (+0x92, the chooser's) picks Resta / Anti / Reverser (the owner, or the locked target) and an item use
+  // (B +0x90 0x20; the NPC has no inventory here, so it is skipped). The cast's busy ticks hold the next one
+  // (ASSUMED: the charge + cast, the exe waits on the input state, not modelled). The NPC's own HP / TP are ASSUMED full.
+  private stepNpcExecuteAttack(slot: number, p: LobbyPlayer, head: NpcHead): void {
+    if (head.castTicks > 0) {
+      head.castTicks--;
+      return;
     }
+    const combat = this.view.combat;
+    if (!combat) return;
+    const cast = npcAttackCast(head.action, head.itemFlag);
+    if (!cast || cast.kind !== 'tech') return;
+    // The owner is the target of Resta / Anti; Reverser takes the locked target (B +0x7c, the head's list).
+    const targets = cast.target === 'owner' ? [this.game.selfId] : head.lockedPrimary !== 0 ? [head.lockedPrimary] : [];
+    if (cast.target === 'target' && targets.length === 0) return;
+    const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, cast.tech, targets);
+    if (ticks !== null) head.castTicks = ticks;
   }
 
   private async npcControl(c: { param1: number; param2: number; command: number; param3: number }, local: boolean, pos?: { x: number; y: number; z: number; angle: number }): Promise<void> {
@@ -979,7 +948,6 @@ export class QuestTown {
     this.insideZones.clear();
     if (!session) {
       this.npcAi.clear();
-      this.npcAttacks.clear();
       this.npcMoves.clear();
       this.npcFollowHeads.clear();
       for (const [id, p] of [...this.game.players]) if (p.npcTemplate !== undefined) this.game.removeLocalPlayer(id);
