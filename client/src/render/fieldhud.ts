@@ -38,7 +38,7 @@ import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEnv, type RowContext } from '../classic/itempack.ts';
 import { menuRowSelectable } from '../quest/battleitems.ts';
 import { compareStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
-import { equippedCandidate, recalculateCandidate, wornEquipment } from '../combat/playerstats.ts';
+import { displayedStats, equippedCandidate, recalculateCandidate, wornEquipment, type CompareStats } from '../combat/playerstats.ts';
 import type { ToolCheckContext } from '../classic/quickmenu.ts';
 import { magStats } from '../formats/itemnames.ts';
 import { techMenuOrder } from '../net/charfile.ts';
@@ -507,7 +507,9 @@ export class FieldHud {
     const it = c.inventory.find((o) => o.data.id === instanceId);
     if (!it) return null;
     const rc = this.rowContext();
-    const current: StatBlock = {
+    // The session's stats are the save's stat block (see combat/playerstats.ts); the current row
+    // shows the displayed totals, as UpdatePlayerDisplayStats does.
+    const file: CompareStats = {
       atp: rc.stats.atp,
       dfp: rc.stats.dfp ?? 0,
       mst: rc.stats.mst,
@@ -516,11 +518,12 @@ export class FieldHud {
       lck: rc.stats.lck ?? 0,
     };
     const worn = wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data));
+    const current: StatBlock = displayedStats(file, worn, c.charClass, pmt);
     const problems = equipProblems(it.data, rc);
     // PlayerRecalculateStats_0068e030 (not worn) / PlayerCalculateItemStats_0068e4e8 (worn).
     const cand = it.equipped
-      ? equippedCandidate(current, it.data, worn, c.charClass, pmt)
-      : recalculateCandidate(current, it.data, worn, c.charClass, pmt);
+      ? equippedCandidate(file, it.data, worn, c.charClass, pmt)
+      : recalculateCandidate(file, it.data, worn, c.charClass, pmt);
     return compareStatRows(current, cand, problems === 0);
   }
 
