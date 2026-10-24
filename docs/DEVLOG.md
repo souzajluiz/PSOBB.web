@@ -18339,3 +18339,19 @@ The held-back question was whether the packed diffuse alpha of a non-NT model pa
 **Fix:** `e2e/classic.ts` `talkKey` (ArrowDown held 150 ms so a 30 fps frame sees it, as `pioneer2-quest.spec.ts` already did) now starts the talk in `pioneer2-shop`, `tekker-result`, `pioneer2-counter`, `battle-traps`. New spec `e2e/bank-check-room.spec.ts` (bank Check Room take list) uses it too.
 
 **Tests:** `pioneer2-shop.spec.ts` and `bank-check-room.spec.ts` pass. `tekker-result.spec.ts` now opens the counter and takes the weapon, but still stops at the Result step (no picture; the 2026-10-23 tekker entry already says the spec does not reach the Result), not related to the talk key.
+
+## 2026-10-23: floor item name card (not in PsoBB.exe)
+
+**Question:** the reference (18.png) shows a card bottom-left when the player stands near a floor item: a small item icon, the name in yellow ("Heavenly/Arms", a unit) and a row of 11 stars (9 light blue, 2 yellow). Is it in the vanilla exe?
+
+**Answer: no evidence for it in PsoBB.exe. Nothing ported.** Checked in the named dump (`reverse/refsrc/.../Psobb.exe-05112026.c`, names may be wrong) and the exe's immediates / data:
+
+- Floor lists: `g_FloorItemPointers`, `g_FloorItemActiveCount`, `g_FloorItemBuffer` are touched only by `FreeFloorItems_005c7520`, `reset_floor_items`, `reset_floor_items_for_chl_reset`, `unknown_reset_floor_items_using_memory`, `allocate_floor_items`, `AddItemToFloor_005c8174`, `CanSpawnFloorItem_005c81ec`, `find_floor_item_instance_by_id`, `remove_item_from_floor`, `generate_items_on_floor`, `GetFloorItemPacketData_005c84bc`, `handle_packet0x60_0x63`. None of them is a per-frame proximity test or a draw.
+- Pickup: `action_pick_up_dropped_item` (6x5F / 6x59 path) calls `HandlePlayerPickupSuccess_005c4c1c`, which creates particle 0x9B and plays SE 0x571 and nothing else (no text, no window).
+- Names: `GetItemNameFromData_005c9be4` and `get_item_name` are called from the shop dialog (`UpdateShopDialog_006db358`), `UIElement_SetText_0072b548` / `UIElement_UpdateItemState_0072bc4c` (list and shop rows), `ListWindowObject_SetItemText_007374b8`, `QuickMenuWindow_ProcessState_0075f09c`, the quest message text and the 0x19 IP text. No field-side caller.
+- Stars: `GetPmtStarValue_005e4e74` (item flag bits 0x3f and not 0x80, then `GetStarValueFromPMTTable_005e5450`: the ItemPMT byte at +0x2c, index id - 0xb1; the port's `ItemPMT.itemStars` matches) feeds `CalculateItemStarValue`, `get_item_shop_cost`, `get_unit_star_value`, the challenge list (`ChallengePlayerListWindow_InitializeItemDisplay_00726780`) and the list selection display (`GameList_RenderSelectionDisplay_00727450` -> `UIElement_UpdateItemDescription_00726608`, which stores the star count at +0x10 of the text object). That is a list / shop panel, not the floor.
+- Colour: the exe's item name colour for more than 8 stars is 0xffffea00 (`UIElement_UpdateItemDescription`, `ItemEntity_UpdateColoring_0072c045`), S-rank 0xfffe3c28, validation 0xff61e853. The reference's split (9 blue, 2 yellow) is not the exe's name rule, and no star-drawing code was found to compare the star colours.
+
+**Result:** the card is an overlay or addon, not a vanilla feature. The port keeps the pickup as it is (`render/flooritems.ts`, particle and SE only). ROADMAP line added under the floor item entries.
+
+**ASSUMED:** none (no port). **Tests:** none run (docs only).
