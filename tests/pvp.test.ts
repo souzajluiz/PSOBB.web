@@ -7,6 +7,7 @@
 import { build6x8F } from '../client/src/quest/battle.ts';
 import {
   applyHpModification,
+  applyLevelChangeStats,
   isPlayerEntity,
   nearestTargets,
   parse6x8F,
@@ -20,7 +21,7 @@ import {
 import { bulletSpeed, pelletTargetIndex, planGunShot } from '../client/src/combat/gunbullet.ts';
 import { pickRespawn, respawnCandidates } from '../client/src/quest/battletraps.ts';
 import { parseAttackTargets } from '../client/src/net/game.ts';
-import { ATTACK_DAMAGE_MULT, type DefenderStats } from '../client/src/combat/formulas.ts';
+import { ATTACK_DAMAGE_MULT, weaponForCombat, type DefenderStats } from '../client/src/combat/formulas.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -57,6 +58,30 @@ const eq = (a: unknown, b: unknown, msg: string) => check(JSON.stringify(a) === 
   eq(remoteAttacker(0, null), null, 'no 6x70 yet: no attacker');
   const a = remoteAttacker(0, stats);
   check(a !== null && a.atp === 100 && a.lck === 10 && a.isPlayer, 'attacker takes the synced ATP / LCK');
+}
+
+// --- the remote's worn weapon: its range and ATA (playerAttacker, the local composition) ---
+{
+  const stats: CombatStats = { atp: 100, evp: 0, dfp: 0, ata: 120, lck: 10 };
+  const pmt = { getWeapon: () => ({ atpMin: 40, atpMax: 55, ata: 30 }) };
+  // A Saber (40..55, ata 30) with grind 10 and two type-5 specials (30 + 20).
+  const saber = weaponForCombat(new Uint8Array([0, 1, 2, 10, 0, 0, 5, 3, 5, 2, 0, 0]), pmt);
+  const bare = remoteAttacker(0, stats)!;
+  const armed = remoteAttacker(0, stats, saber)!;
+  eq([bare.equipAtp, bare.atpSpread], [5, 5], 'no weapon: the class range 5..10');
+  eq([armed.equipAtp, armed.atpSpread], [65, 20], 'the Saber: rmin 5 + (40 + 2 x 10), spread (10 + 75) - 65');
+  eq([bare.ata, armed.ata], [77, 112], 'ATA: ROUND((650 + 120) x 0.1), then + 30 (weapon) + 50 / 10 (specials)');
+  const hit = pvpStrike(armed, { hp: 300, maxHp: 300, evp: 0, dfp: 0 }, 0, 0, () => 0);
+  const hitBare = pvpStrike(bare, { hp: 300, maxHp: 300, evp: 0, dfp: 0 }, 0, 0, () => 0);
+  check(hit.damage > hitBare.damage, `an armed remote hits harder (${hit.damage} > ${hitBare.damage})`);
+}
+
+// --- the 6x30 of a remote player: the stat block's atp / evp / dfp / ata ---
+{
+  const s: CombatStats = { atp: 100, evp: 50, dfp: 60, ata: 70, lck: 10 };
+  eq(applyLevelChangeStats(s, { atp: 130, evp: 55, dfp: 62, ata: 75 }), { atp: 130, evp: 55, dfp: 62, ata: 75, lck: 10 }, '6x30 writes atp / evp / dfp / ata and keeps LCK');
+  eq(applyLevelChangeStats(undefined, { atp: 1, evp: 1, dfp: 1, ata: 1 }), undefined, 'no 6x70 yet: nothing to update');
+  eq(s.atp, 100, 'the input stats are not changed');
 }
 
 // --- the strike roll ----------------------------------------------------------------

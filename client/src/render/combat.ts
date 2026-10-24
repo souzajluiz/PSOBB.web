@@ -108,6 +108,7 @@ import {
   hitChanceWith,
   rollDamage,
   rollHit,
+  weaponForCombat,
   type AttackerStats,
   type AttackType,
   type DefenderStats,
@@ -174,7 +175,7 @@ import { HAND_NODE } from './heldweapon.ts';
 import { MOTION_TYPE } from '../formats/plymotion.ts';
 import { parseSetFile, type EnemySet } from '../formats/setdata.ts';
 import { fetchStreamFiles } from '../net/bbsession.ts';
-import { applyHpModification, nearestTargets, pvpInReach, pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
+import { applyHpModification, applyLevelChangeStats, nearestTargets, pvpInReach, pvpKnockback, pvpStrike, remoteAttacker } from '../combat/pvp.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import {
   parseAttack,
@@ -8044,12 +8045,7 @@ export class CombatView {
     const dv = new DataView(disp.buffer, disp.byteOffset, disp.byteLength);
     const stats = { atp: dv.getUint16(0, true), ata: dv.getUint16(0x0a, true), lck: dv.getUint16(0x0c, true) };
     const w = this.equippedWeapon();
-    const pmtWeapon = w && this.pmtSync ? this.pmtSync.getWeapon(w.data1[1], w.data1[2]) : undefined;
-    const a = playerAttacker(
-      me.charClass,
-      stats,
-      pmtWeapon ? { atpMin: pmtWeapon.atpMin, atpMax: pmtWeapon.atpMax, grind: w!.data1[3], ata: pmtWeapon.ata } : null,
-    );
+    const a = playerAttacker(me.charClass, stats, weaponForCombat(w?.data1, this.pmtSync));
     // Shifta / Jellen move ATP (+0x2cc) and its spread (+0x2ce); the
     // equipment ATP (+0x31c) is not touched.
     return { ...a, atp: this.selfBuffs.atp(a.atp), atpSpread: this.selfBuffs.atpSpread(a.atpSpread) };
@@ -8280,6 +8276,10 @@ export class CombatView {
       if (other) {
         other.level = c.level + 1;
         other.hpStat = c.hp;
+        // The stat block takes the command's atp / evp / dfp / ata (the non-local branch of
+        // UpdatePlayerStatsAndLevelMessage_006928e4); the strike and the Battle hit check read it.
+        const cs = applyLevelChangeStats(other.combatStats, c);
+        if (cs) other.combatStats = cs;
         // The new stats, then hp = max_hp1 on a field.
         this.party.stats(c.clientId, this.partyStats(other));
         if (this.area !== 0) this.party.refill(c.clientId);
@@ -8758,7 +8758,8 @@ export class CombatView {
     const me = this.game.self;
     const from = this.view.playerPositions().get(clientId);
     const remote = this.game.players.get(clientId);
-    const attacker = remoteAttacker(remote?.charClass ?? -1, remote?.combatStats ?? null);
+    // The remote's worn weapon (6x25 / 6x26 keep remote.weapon in step): its range and ATA.
+    const attacker = remoteAttacker(remote?.charClass ?? -1, remote?.combatStats ?? null, weaponForCombat(remote?.weapon, this.pmtSync));
     if (!me || !from || !attacker) return;
     const stats = this.selfStats();
     // Deband / Zalure move the DFP (+0x2d2); a freeze lowers EVP (as enemyHitsPlayer).

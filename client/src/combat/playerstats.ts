@@ -179,7 +179,8 @@ function s16(lo: number, hi: number): number {
 const wrap16 = (v: number): number => ((v & 0xffff) << 16) >> 16;
 
 // The ATA of a weapon's three special slots (bytes 6..11): a type 5 adds 10 * the next byte.
-function ataSpecials(d: Uint8Array | number[]): number {
+// (ApplyEquipmentBonuses_005d330c, dump 426168: `(byte * 4 + byte) * 2`, the same as 10 * byte.)
+export function ataSpecials(d: Uint8Array | readonly number[]): number {
   let ata = 0;
   for (let i = 0; i < 3; i++) if (d[6 + 2 * i] === 5) ata += d[7 + 2 * i] * 10;
   return ata;

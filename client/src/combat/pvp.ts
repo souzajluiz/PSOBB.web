@@ -32,7 +32,7 @@
 // attack type is the normal one unless the 6x43..6x45 says heavy; no team check (the
 // exe's EntityHitEntity has none); knockback only for a heavy strike, of its damage.
 
-import { playerAttacker, rollDamage, rollHit, type AttackerStats, type AttackType, type DefenderStats, type Rng } from './formulas.ts';
+import { playerAttacker, rollDamage, rollHit, type AttackerStats, type AttackType, type DefenderStats, type Rng, type WeaponForCombat } from './formulas.ts';
 import { inWeaponCone } from './weaponaim.ts';
 
 // PlayerStats of a 6x70 (BB, little endian) at 0x140: atp, mst, evp, hp, dfp, ata, lck.
@@ -59,12 +59,22 @@ export function parseCombatStats(body: Uint8Array): CombatStats | null {
   };
 }
 
-// The remote attacker's stats as the attacker side of the hit check (playerAttacker,
-// the same composition as the local player without a weapon's ATP range: the class's
-// default spread and equipment part, ASSUMED for a remote).
-export function remoteAttacker(charClass: number, stats: CombatStats | null): AttackerStats | null {
+// The remote attacker's stats as the attacker side of the hit check: playerAttacker, the same
+// composition as the local player (class range + the equipped weapon's range and ATA, from
+// formulas.ts weaponForCombat on the remote's worn weapon; null = no weapon known, ASSUMED to
+// be the bare-hand case).
+export function remoteAttacker(charClass: number, stats: CombatStats | null, weapon: WeaponForCombat | null = null): AttackerStats | null {
   if (!stats || charClass < 0) return null;
-  return playerAttacker(charClass, { atp: stats.atp, ata: stats.ata, lck: stats.lck }, null);
+  return playerAttacker(charClass, { atp: stats.atp, ata: stats.ata, lck: stats.lck }, weapon);
+}
+
+// A 6x30 of another player (UpdatePlayerStatsAndLevelMessage_006928e4, the non-local branch,
+// dump 574022): the command's atp / evp / dfp / ata are written straight into the player's stat
+// block (battleparams_stats, player +0x2b4) and its totals follow. The command has no LCK, and
+// its MST and HP go to the party window (partyStats). undefined in, undefined out (no 6x70 yet).
+export function applyLevelChangeStats(stats: CombatStats | undefined, c: { atp: number; evp: number; dfp: number; ata: number }): CombatStats | undefined {
+  if (!stats) return undefined;
+  return { ...stats, atp: c.atp, evp: c.evp, dfp: c.dfp, ata: c.ata };
 }
 
 export interface PvpHit {
