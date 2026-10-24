@@ -1,5 +1,17 @@
 # Devlog
 
+## 2026-10-24: Olga Flow form 1: the sword stab's hit (the stab object, not the volopt state)
+
+**What changed:** `combat/olgaflowhits.ts` ports the stab object (`OlgaStabObject`: 8 updates, the XZ range test) and `stabGroundPoint` (the spawn formula). `combat/olgaflowai.ts` exposes `stabTick` (rows 11..20). `render/combat.ts` `olgaSwordStab` spawns on the tick and hits the local player each tick. `tests/olgaflowai.test.ts` covers the ground point, the gate and the object's life and range.
+
+**Corrected premise:** the stab's damage is `olga1_sword_stab_update` (dump 212391), the stab object's own update. UpdateVoloptForm7State (195333) only moves an anim index and does no damage.
+
+**Not ported:** the tail swipe (the anchor +0x640..+0x654 has no writer in the Olga code; the dragon constructor writes the same offsets on the dragon), the lancer (row 22), the stab's three gate constants and the per-difficulty range (addresses not decoded).
+
+**ASSUMED:** the vtable binding by name, the gate constants (0, 30, 0), the range (20, placeholder), the bone pair. The REA Ghidra provider failed to launch twice, so nothing was bound through it.
+
+**Checks:** `node tests/olgaflowai.test.ts` passes; `NEWSERV=... node tests/combat.test.ts` 5852 checks, 0 failures; `client/node_modules/.bin/tsc --noEmit -p client` exit 0. Not run in Chrome.
+
 ## 2026-10-24: Barba Ray: the phases 0x0d, 0x0f/0x10, 0x17, 0x19/0x1a and dispatch 0
 
 **What changed:** `combat/barbaray.ts` now ports five more body phases and the dispatch 0 idle, each with a test in `tests/barbaray.test.ts`. The leader's table step (event 9) runs for them the way it does for the corner transitions: once the phase's own sequence is done, not on the 30-tick pace. Ported:

@@ -140,8 +140,8 @@ worktrees are left.
      Olga Flow (`TBoss6PlotFalz`, 0x1f) has a partial brain, form 1 only (2026-10-24,
      combat/olgaflowai.ts, map docs/bosses/olgaflow-map.md sections 13 and 14): the hub, the attack
      choice, the sword chains, the HP / death, the sword wave's hit (combat/olgaflowhits.ts, render
-     olgaSwordWave), the arcs and the turn are ported. Left: the stab's and the tail's hits (their
-     anchors / the volopt form 7 state are unbound), the lancer, the mines, the controller's
+     olgaSwordWave), the stab's hit (pass 5, map section 15; its gate constants and range are ASSUMED), the arcs and the turn are ported. Left: the tail's hit (its
+     anchor has no writer in the Olga code), the lancer, the mines, the controller's
      sub-states, form 2 (unreached in this build). The sword tip and the attack anchors are ASSUMED;
    - Tower / Epsilon not seen in Chrome (no enemies there);
    - floors 1, 5, 7, 10: 2026-10-24 long watch per wave group (`client/e2e/ep2-floors-watch.spec.ts`,

@@ -16,7 +16,7 @@ import {
   encodeOlgaA4,
   type OlgaEvent,
 } from '../client/src/combat/olgaflowai.ts';
-import { olgaBattlePower, randomlyAdjust, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
+import { OLGA_SWORD_STAB, OlgaStabObject, olgaBattlePower, randomlyAdjust, stabGroundPoint, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -292,6 +292,23 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   const still = make({ leader: () => false, x: 0, z: 0 });
   still.tick([]);
   eq(still.angle, 0, 'at the origin the body does not turn');
+}
+
+// --- the sword stab (combat/olgaflowhits.ts, pass 5; exe olga1_sword_stab_update 0x00495508 spawn, 212391 hit) ---
+
+{
+  // The ground point: the sword rising from a (y -10) to tip (y 10) crosses y = 0 at its middle (t = 0.5).
+  const g = stabGroundPoint({ x: 0, y: -10, z: 0 }, { x: 4, y: 10, z: 8 });
+  check(g !== null && Math.abs(g.x - 2) < 1e-9 && Math.abs(g.z - 4) < 1e-9, 'the stab lands where the sword crosses the floor');
+  // The exe's gate as written: tip below a and below the plane, or a below tip and tip above the plane.
+  check(stabGroundPoint({ x: 0, y: 10, z: 0 }, { x: 4, y: 5, z: 8 }) === null, 'a sword that does not meet the gate spawns nothing');
+  // The object: 8 updates in all (the counter runs 0..7), and it hits within its range on the XZ plane.
+  const o = new OlgaStabObject({ x: 0, z: 0 }, 10);
+  let ticks = 0;
+  while (o.alive) { o.tick(); ticks++; }
+  eq(ticks, OLGA_SWORD_STAB.lifeTicks, 'a stab object lives for 8 updates');
+  check(o.touches({ x: 6, z: 8 }), 'a player at 10 (inclusive) is hit by the stab');
+  check(!o.touches({ x: 7, z: 8 }), 'a player beyond the stab range is missed');
 }
 
 console.log(failures === 0 ? 'olgaflowai: all checks passed' : `olgaflowai: ${failures} failure(s)`);
