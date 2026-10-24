@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadWordSelectTable, type WordSelectTable } from '../client/src/net/wordselect.ts';
+import { loadWordSelectTable, wordSelectPhrase, type WordSelectTable } from '../client/src/net/wordselect.ts';
 import {
   addSelection,
   canConfirmSelection,
@@ -18,6 +18,10 @@ import {
   pushSelection,
   stringIdGroup,
   updateSelectionEffect,
+  WORD_SELECT_ENTRIES,
+  wordSelectChildRows,
+  wordSelectRootRows,
+  wordSelectRowLabel,
   wordSelectCategory,
   wordSelectRootTransition,
   populateWordSelectItemLists,
@@ -218,6 +222,76 @@ eq(wordSelectRootTransition(0x100, true), { targetType: 1, next: 1, category: 5 
   q.cancel();
   eq([q.status, q.sel.count], [3, 0], 'cancel: cancelled status, nothing copied');
   eq(q.acceptRoot(0x0b, true), false, 'accept after cancel: the picker is no longer open, so no transition');
+}
+
+// ---- the state table (DAT_009d05e0) ----
+eq(WORD_SELECT_ENTRIES.length, 21, 'the state table has 21 states (0..0x14)');
+eq([WORD_SELECT_ENTRIES[0], WORD_SELECT_ENTRIES[2], WORD_SELECT_ENTRIES[20]], [{ flags: 4, token: 1671 }, { flags: 11, token: -1 }, { flags: 11, token: 1672 }], 'state 0, 2, 0x14 as read from 0x9d05e0');
+
+// ---- the list levels: the root rows, the child list, back, the toggle on the child ----
+{
+  const l1 = list1.map((l, i) => (i === 23 ? [70, 71, 72] : i === 0x0f ? [5, 6] : l));
+  const t = mkTable(l1, list2.map((l, i) => (i === 1 ? [23, -0x1e, 0x7fff] : l)));
+  const p = openWordSelectPicker({ type: 1, table: t, scene: 'lobby' });
+  eq([p.depth, p.rows, p.cursorValue], [0, [23, -0x1e, 0x7fff], 23], 'root: the type 1 rows, the cursor on the first');
+  p.move(-1);
+  eq(p.cursorValue, 0x7fff, 'the cursor wraps up to the last row');
+  p.move(1);
+  p.move(1); // the placeholder row
+  eq(p.press(), null, 'a placeholder row opens its scene list (not a close)');
+  eq([p.depth, p.rows], [1, [5, 6]], 'the placeholder under the lobby opens table1[0x0F]');
+}
+{
+  const t = mkTable(list1.map((l, i) => (i === 23 ? [70, 71, 72] : l)), list2.map((l, i) => (i === 1 ? [23, 999] : l)));
+  const p = openWordSelectPicker({ type: 1, table: t });
+  eq(p.press(), null, 'root accept on a row with a list: no close');
+  eq([p.depth, p.state, p.next, p.rows, p.sel.targetType], [1, 1, 1, [70, 71, 72], 1], 'child level: the next state and the target type of the category');
+  eq([p.sel.count, p.sel.tokens[0]], [1, 70], 'entering a child list shows its first token in the buffer (toggle effect)');
+  p.move(1);
+  eq([p.sel.count, p.sel.tokens[0]], [1, 71], 'the child cursor replaces the toggled token');
+  p.move(-1);
+  p.move(-1);
+  eq(p.cursorValue, 72, 'the child cursor wraps');
+  p.move(1);
+  const msg = p.press();
+  eq([p.status, msg?.numTokens, msg?.tokens[0]], [2, 1, 70], 'a child accept closes the picker with the token in the buffer');
+  const q = openWordSelectPicker({ type: 1, table: t });
+  q.press();
+  q.back();
+  eq([q.depth, q.status, q.sel.count, q.state], [0, 0, 0, 0], 'back on a child list pops the level and the toggled token; the picker stays open');
+  eq(q.press(), null, 'the root row opens its list again');
+  q.back();
+  q.back();
+  eq([q.depth, q.status], [0, 3], 'back on the root cancels the picker');
+  const r = openWordSelectPicker({ type: 1, table: t });
+  r.move(1);
+  eq(r.press(), null, 'a root row with no list does nothing');
+  eq([r.depth, r.status], [0, 0], 'a root row without a list keeps the picker on the root, open');
+}
+{
+  // The placeholder row maps to the scene's list (table1[0x0F] for the lobby, 0x11 for the free field).
+  const l1 = list1.map((l, i) => (i === 0x0f ? [1000] : i === 0x11 ? [2000, 2001] : l));
+  const t = mkTable(l1, list2.map((l, i) => (i === 1 ? [-0x1e] : l)));
+  eq(wordSelectChildRows(t, -0x1e, 'lobby'), [1000], 'the placeholder under the lobby: table1[0x0F]');
+  eq(wordSelectChildRows(t, -0x1e, 'free'), [2000, 2001], 'the placeholder in the free field: table1[0x11]');
+  eq(wordSelectChildRows(t, -0x28, 'free'), [], 'an item pseudo index has no list here (ASSUMED, not opened)');
+  eq(wordSelectRowLabel(null, -0x1e, () => 'x'), '', 'the placeholder has no label (ASSUMED)');
+  eq(wordSelectRowLabel(null, 0x68c + 3, (s) => `P${s}`), 'P3', 'a player token is the player name');
+}
+
+// ---- the real JP table: the root rows and a child list ----
+if (existsSync(dataFile) && existsSync(textFile)) {
+  const real = loadWordSelectTable(new Uint8Array(readFileSync(dataFile)), new Uint8Array(readFileSync(textFile)));
+  eq(wordSelectRootRows(real, 1), real.list2[1], 'the lobby root rows are table2[1]');
+  const p = openWordSelectPicker({ type: 1, table: real, scene: 'lobby' });
+  eq([p.rows.length, p.rows[0]], [11, 23], 'the lobby root: 11 rows, the first is 23 (Fixed: Greetings)');
+  eq(wordSelectRowLabel(real, 23, () => ''), wordSelectPhrase(real, 23).split('\n')[0], 'the row label is the phrase of the value (first line)');
+  eq(wordSelectRowLabel(real, 23, () => '').startsWith('Fixed: Greetin'), true, 'row 23 is the greetings category');
+  p.press();
+  eq([p.depth, p.rows.length, p.rows[0]], [1, 16, 70], 'the greetings category opens table1[23]: 16 rows, the first is token 70');
+  eq(wordSelectRowLabel(real, p.rows[0], () => '').startsWith('Hello'), true, 'the child row label is "Hello."');
+  p.press();
+  eq([p.status, p.result().numTokens], [2, 1], 'the child accept closes with one token');
 }
 
 if (failures) {

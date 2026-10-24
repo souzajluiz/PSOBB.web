@@ -17,13 +17,16 @@
 //     gives the target type (+0xC6) and the next state (+0xB4) of the root (state 0) accept;
 //   - ResetAndCloseMenus_00706c94 (0x706c94) copies the 0x1C buffer out, ResetAllMenus_00706da4
 //     (0x706da4) does not (WordSelectPickerModel below).
-// The tables are the JP ws_data_jp.bin lists (net/wordselect.ts list1 / list2). Not ported: the
-// rest of the state machine (WordSelectMenu_ProcessState_007023c8: the child-list stack, the
-// states 1..0x14 accept paths, the numeric count window), the ListWindowEntity / WordSelectEntity
-// drawing and cursor, the galgryphon effects and sounds, the ES/FR/DE/US locales, and the Shortcut /
-// Symbol Chat wiring. See DEVLOG 2026-10-23 (word select picker, model).
+// The tables are the JP ws_data_jp.bin lists (net/wordselect.ts list1 / list2).
+// Also here (2026-10-23, the picker window): the state table at 0x9d05e0 (WORD_SELECT_ENTRIES), the
+// root rows (table2[type]) and the child lists (table1[value], the scene placeholder -0x1E), the
+// list levels that WordSelectPickerModel pushes and pops (ProcessNextEntry / NavigateBack). The
+// picker window is classic/wordselectwindow.ts. Not ported: the numeric count window (state 3 with
+// GetStringIdGroup != 7), the item-based pseudo lists (-0x28 / -0x2D), the name lists in the picker,
+// the multi-word path (Next, states 0x12 / 0x13), the galgryphon effects and sounds, and the
+// ES/FR/DE/US locales. See DEVLOG 2026-10-23 (word select picker, window).
 
-import type { WordSelectTable } from '../net/wordselect.ts';
+import { wordSelectPhrase, type WordSelectTable } from '../net/wordselect.ts';
 import type { WordSelectMessage } from '../net/chatshortcut.ts';
 
 // get_word_select_type_by_room_map_scene (dump 664258) return values (the WS_* enum).
@@ -336,28 +339,128 @@ export function wordSelectRootTransition(token: number, jpLocale: boolean): { ta
   return { targetType: row[0], next: row[1], category };
 }
 
+// ---- The state table (DAT_009d05e0) and the list levels ----
+// Each state is 8 bytes: flags u32, then a token u32 (0xFFFF = none). The flags: 1 selected style,
+// 2 the selection pops when the state is left, 4 a child list is pushed, 8 no child. Read with
+// `tools/exedata.py read 0x9d05e0 u 42` (21 states, 0..0x14). Used through GetWordSelectMenuEntryPtr_00706e40.
+export const WORD_SELECT_FLAG_SELECTED_STYLE = 1;
+export const WORD_SELECT_FLAG_POPS_SELECTION = 2;
+export const WORD_SELECT_FLAG_CHILD = 4;
+export const WORD_SELECT_FLAG_NO_CHILD = 8;
+export const WORD_SELECT_ENTRIES: readonly { flags: number; token: number }[] = [
+  [4, 1671], [3, -1], [11, -1], [3, -1], [3, -1], [2, 1673], [3, -1], [4, 1674], [2, -1], [2, -1], [3, -1],
+  [11, -1], [4, 1674], [2, 1675], [2, -1], [2, -1], [11, -1], [2, 1672], [2, -1], [11, -1], [11, 1672],
+].map(([flags, token]) => ({ flags, token }));
+
+// The scene placeholder row (-0x1E in the root list) opens the scene's own list (GetWordSelectItemId
+// -0x1E mapping in WordSelectEntity_GetSelectedItemId_00705614, case 0).
+export const WORD_SELECT_SCENE_PLACEHOLDER = -0x1e;
+export const WORD_SELECT_SCENE_LIST: Record<WordSelectScene, number> = {
+  pioneer2: 0x10,
+  lobby: 0x0f,
+  quest: 0x12,
+  free: 0x11,
+  battle: 0x13,
+  challenge: 0x14,
+};
+
+// The root rows of a word type: table2[type] (WordSelectMenuPopulateItemList's sibling, the
+// GetWordSelectItemId list). Each value is a table1 index (the child list) and the phrase of the same
+// number is the row's label (checked against the JP table: 23 is "Fixed: Greetings" and table1[23]
+// holds the greetings).
+export function wordSelectRootRows(table: WordSelectTable | null, type: number): number[] {
+  return table?.list2[type] ? [...table.list2[type]] : [];
+}
+
+// The child list a row opens: table1[value] (GetItemMetaPointer_00705544), the scene list for the
+// placeholder. Empty when the row has no list (the exe's NULL). ASSUMED: the item-based pseudo lists
+// (-0x28 list A, -0x2D list B) and the player-name lists are not opened here.
+export function wordSelectChildRows(table: WordSelectTable | null, value: number, scene: WordSelectScene = 'free'): number[] {
+  const index = value === WORD_SELECT_SCENE_PLACEHOLDER ? WORD_SELECT_SCENE_LIST[scene] : value;
+  return wordSelectListAt(table, index) ?? [];
+}
+
+// The row's text: the phrase of the value (a token of a child list, or a root value). A player token
+// (0x68C + slot) is the player's name; the placeholder has no text (ASSUMED: the exe's label is not
+// traced). Phrases with line breaks show their first line.
+export function wordSelectRowLabel(table: WordSelectTable | null, value: number, names: (slot: number) => string): string {
+  if (value === WORD_SELECT_SCENE_PLACEHOLDER || value < 0) return '';
+  if (value >= WORD_SELECT_TOKEN_PLAYER_FIRST) return names(value - WORD_SELECT_TOKEN_PLAYER_FIRST);
+  return wordSelectPhrase(table, value).split('\n')[0] ?? '';
+}
+
 // ---- The picker model (the parts above, joined by the close and cancel exits) ----
-// The window, the child-list stack and the cursor belong to the not-yet-ported picker window; the
-// caller reports the cursor's value (ListWindowEntity_GetSelectedEntryValue) and the accept.
+// The levels are the child-list stack (ProcessNextEntry pushes, NavigateBack pops): the root is
+// level 0, and a row's child list is the next level. The caller reads the rows and the cursor,
+// moves the cursor and presses accept / back; the window draws it (classic/wordselectwindow.ts).
 export const WORD_SELECT_STATUS_OPEN = 0;
 export const WORD_SELECT_STATUS_ACCEPTED = 2; // ResetAndCloseMenus_00706c94 (+0xA8 = 2)
 export const WORD_SELECT_STATUS_CANCELLED = 3; // ResetAllMenus_00706da4 (+0xA8 = 3)
 
+export interface WordSelectLevel {
+  value: number; // the row this level opened from (-1 at the root)
+  rows: number[];
+  index: number; // the cursor on this level
+}
+
+export interface WordSelectPickerOptions {
+  type: number; // get_word_select_type (the root list's table2 index)
+  numericParameter?: number;
+  table?: WordSelectTable | null;
+  scene?: WordSelectScene; // the placeholder row's list (default free field)
+  jpLocale?: boolean; // word_select_locale == 0 (the only locale read)
+}
+
 export class WordSelectPickerModel {
   readonly sel: WordSelectSelection = newWordSelectSelection();
   readonly fx: SelectionEffectState = newSelectionEffectState();
-  state = 0; // +0xB0 (the root, ASSUMED: the create path does not write it)
+  state = 0; // +0xB0 (the root; the state of the top level)
   next = 0; // +0xB4
   status = WORD_SELECT_STATUS_OPEN; // +0xA8
   readonly itemType: number; // +0x88: get_word_select_type (the item table index base)
+  readonly table: WordSelectTable | null;
+  readonly scene: WordSelectScene;
+  readonly jpLocale: boolean;
+  readonly levels: WordSelectLevel[];
 
-  constructor(p: { type: number; numericParameter?: number }) {
+  constructor(p: WordSelectPickerOptions) {
     this.itemType = p.type;
     this.sel.numericParameter = p.numericParameter ?? 0;
     this.sel.targetType = 0;
+    this.table = p.table ?? null;
+    this.scene = p.scene ?? 'free';
+    this.jpLocale = p.jpLocale ?? true;
+    this.levels = [{ value: -1, rows: wordSelectRootRows(this.table, p.type), index: 0 }];
   }
 
-  // The cursor moved to `value` (UpdateSelectionEffect is called on each change).
+  get depth(): number {
+    return this.levels.length - 1;
+  }
+
+  get top(): WordSelectLevel {
+    return this.levels[this.levels.length - 1];
+  }
+
+  get rows(): number[] {
+    return this.top.rows;
+  }
+
+  // The value under the cursor (WordSelectMenu_GetSelectedEntryValue; -1 for an empty list).
+  get cursorValue(): number {
+    return this.top.rows[this.top.index] ?? WORD_SELECT_TOKEN_FREE;
+  }
+
+  // The cursor moves by `delta` and wraps. The toggle effect runs on the child levels only (the
+  // root's state 0 has no UpdateSelectionEffect call).
+  move(delta: number): void {
+    if (this.status !== WORD_SELECT_STATUS_OPEN) return;
+    const n = this.top.rows.length;
+    if (n === 0) return;
+    this.top.index = (this.top.index + delta + n) % n;
+    if (this.depth > 0) this.cursor(this.cursorValue);
+  }
+
+  // The cursor's value is reported (UpdateSelectionEffect is called on each change).
   cursor(value: number): void {
     updateSelectionEffect(this.sel, this.fx, value);
   }
@@ -370,6 +473,45 @@ export class WordSelectPickerModel {
     this.sel.targetType = t.targetType;
     this.next = t.next;
     return true;
+  }
+
+  // Accept (the Select key). On the root, a row with a list opens it (the state becomes +0xB4 and the
+  // child list is pushed); a root row without a list does nothing (ASSUMED). On a child level the
+  // cursor's token stays in the buffer and the picker closes (ASSUMED: FinalizeSelection's close when
+  // the state is not 1). Returns the copied-out message when the picker closed.
+  press(): WordSelectMessage | null {
+    if (this.status !== WORD_SELECT_STATUS_OPEN) return null;
+    const v = this.cursorValue;
+    if (this.depth === 0) {
+      if (v === WORD_SELECT_TOKEN_FREE || !this.acceptRoot(v, this.jpLocale)) return null;
+      const child = wordSelectChildRows(this.table, v, this.scene);
+      if (child.length === 0) return null;
+      this.state = this.next;
+      this.fx.last = -1;
+      this.levels.push({ value: v, rows: child, index: 0 });
+      this.cursor(this.cursorValue);
+      return null;
+    }
+    return this.close();
+  }
+
+  // Back (the Cancel key): a child level pops (NavigateBack_0070226c), and the leaf's token is
+  // taken off again when the toggle put it there (ASSUMED: the pop of the state's flags 2). On the
+  // root the picker is cancelled (ResetAllMenus).
+  back(): void {
+    if (this.status !== WORD_SELECT_STATUS_OPEN) return;
+    if (this.depth === 0) {
+      this.cancel();
+      return;
+    }
+    this.levels.pop();
+    if (this.fx.toggle === 1) {
+      popSelection(this.sel);
+      this.fx.toggle = 0;
+    }
+    this.fx.last = -1;
+    this.state = 0;
+    this.next = 0;
   }
 
   // ResetAndCloseMenus_00706c94: the 0x1C buffer is copied to the caller and the picker is accepted.
@@ -395,6 +537,6 @@ export class WordSelectPickerModel {
   }
 }
 
-export function openWordSelectPicker(p: { type: number; numericParameter?: number }): WordSelectPickerModel {
+export function openWordSelectPicker(p: WordSelectPickerOptions): WordSelectPickerModel {
   return new WordSelectPickerModel(p);
 }

@@ -10,6 +10,7 @@ import {
   parseChatShortcut,
 } from '../client/src/net/chatshortcut.ts';
 import { SYMBOL_CHAT_FILE_OFFSET } from '../client/src/net/symbolchat.ts';
+import { setWordSelectTable } from '../client/src/net/wordselect.ts';
 
 // The Question and the text helpers measure on an OffscreenCanvas (gametext.ts).
 const measure = new Proxy({} as Record<string, unknown>, {
@@ -189,8 +190,12 @@ function leaf(full: Uint8Array) {
   menu.key(press('ArrowDown')); // slot 3, empty
   menu.key(press('Enter'));
   menu.key(press('Enter')); // Edit
-  menu.key(press('Tab')); // the symbol key
-  check(menu.phase === 'picker', 'the Symbol Chat key opens the picker');
+  menu.key(press('Tab')); // the symbol key: the word picker first (the mode starts at word)
+  check(menu.phase === 'wordPicker', 'the Symbol Chat key opens the word picker first');
+  menu.key(press('x')); // Cancel: back to the keyboard
+  check(menu.phase === 'keyboard', 'Cancel in the word picker returns to the keyboard');
+  menu.key(press('Tab')); // the next Symbol Chat key: the symbol picker
+  check(menu.phase === 'picker', 'the next Symbol Chat key opens the symbol picker');
   menu.key(press('ArrowDown')); // row 1: an empty saved chat
   menu.key(press('Enter'));
   check(menu.phase === 'picker', 'an empty saved chat cannot be picked');
@@ -210,13 +215,15 @@ function leaf(full: Uint8Array) {
   menu.key(press('ArrowDown'));
   menu.key(press('Enter'));
   menu.key(press('Enter'));
-  menu.key(press('Tab'));
+  menu.key(press('Tab')); // the word picker
   menu.key(press('x'));
-  check(menu.phase === 'slots', 'Cancel in the picker goes to the slot list');
+  menu.key(press('Tab')); // the symbol picker
+  menu.key(press('x'));
+  check(menu.phase === 'slots', 'Cancel in the symbol picker goes to the slot list');
 }
 
-// The sub-windows' keyboard: the Symbol key in the picker does nothing (the word picker is not
-// ported), and Left / Right page only the slot list.
+// The sub-windows' keyboard: the Symbol key in the word picker does nothing, and Left / Right page
+// only the slot list.
 {
   const full = save();
   const { menu } = leaf(full);
@@ -224,8 +231,10 @@ function leaf(full: Uint8Array) {
   menu.key(press('Enter'));
   menu.key(press('Tab'));
   menu.key(press('Tab'));
-  check(menu.phase === 'picker', 'the Symbol key in the picker is a no-op');
+  check(menu.phase === 'wordPicker', 'the Symbol key in the word picker is a no-op');
   menu.key(press('x'));
+  menu.key(press('Escape'));
+  check(menu.phase === 'slots', 'Escape on the keyboard returns to the slot list');
   menu.key(press('ArrowRight'));
   check(menu.selectedSlot === 4, 'Right pages the slot list, not the actions');
 }
@@ -289,6 +298,33 @@ function leaf(full: Uint8Array) {
 }
 
 check(SHORTCUT_TEXT.edit === 0x97 && SHORTCUT_TEXT.clear === 0x6d, 'the action rows are unitxt 0x97 (edit) and 0x6d (clear)');
+
+// A word record: the Symbol key opens the word picker over the table (the lobby root, table2[1] =
+// [23]); Enter opens row 23's list, Enter on token 70 accepts it, and Yes writes the type 2 record.
+{
+  const list1: number[][] = Array.from({ length: 0x11a }, () => []);
+  list1[23] = [70, 71];
+  const list2: number[][] = Array.from({ length: 0x12 }, () => []);
+  list2[1] = [23];
+  setWordSelectTable({ tokenToPhrase: [], phrases: [], list1, list2 });
+  const full = save();
+  const { menu } = leaf(full);
+  menu.key(press('ArrowDown'));
+  menu.key(press('ArrowDown'));
+  menu.key(press('ArrowDown')); // slot 3, empty
+  menu.key(press('Enter'));
+  menu.key(press('Enter')); // Edit
+  menu.key(press('Tab'));
+  check(menu.phase === 'wordPicker', 'the Symbol key opens the word picker over the table');
+  menu.key(press('Enter')); // row 23: its list
+  menu.key(press('Enter')); // token 70: the word
+  const word = menu.pendingRecord?.word;
+  check(menu.phase === 'confirm' && menu.pendingRecord?.type === 2 && word?.numTokens === 1 && word?.tokens[0] === 70, 'the word accept asks the confirm for a word record');
+  menu.key(press('Enter')); // Yes
+  const rec = parseChatShortcut(full, 3);
+  check(rec?.type === 2 && rec.word?.tokens[0] === 70, 'the word record is written to slot 3');
+  setWordSelectTable(null);
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);

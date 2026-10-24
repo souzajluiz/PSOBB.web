@@ -32,10 +32,14 @@
 //     (03ED) when +0x28 is set.
 //
 // ASSUMED / left (see DEVLOG 2026-10-23):
-//   - The exe's first picker for the symbol key is the word select picker (word type 2, from the
-//     word table the port does not have). The port opens the symbol picker instead; the word
-//     picker is not ported, and the key does nothing inside the symbol picker.
-//   - The word select row's label (the word table) is the empty label.
+//   - The Symbol Chat key alternates the word picker and the symbol picker (openMode, the mode byte
+//     +0x1C; the exe's order is ASSUMED, see openMode). The word picker is classic/wordselectwindow.ts
+//     over classic/wordselectmenu.ts; its window placement and title are ASSUMED. Accept makes a word
+//     record (type 2) and asks the confirm; Cancel returns to the keyboard. The key does nothing
+//     inside a picker.
+//   - The word select row's label (the slot list) is the empty label; the picker shows the sentence.
+//   - The picker is not opened when the keyboard is activated (the exe's flags 0x240 / key 0xf path is
+//     not traced): it opens on the Symbol Chat key only.
 //   - The preview box (InformationCounterListWindow at 0x76, title unitxt(11, 0x48)) between the
 //     keyboard and the confirm is not drawn.
 //   - The keyboard starts empty (the exe copies nothing from the slot into the buffer; the
@@ -47,11 +51,14 @@
 //   - The Yes / No strings are unitxt(11, 0x6e) / (11, 0x6f) (the same ones the teams use).
 import { se, SE } from '../audio/se.ts';
 import { KEYS, menuKeyOf } from '../input/keyconfig.ts';
-import { clearChatShortcut, CHAT_SHORTCUT_SYMBOL, CHAT_SHORTCUT_TEXT, CHAT_SHORTCUT_TEXT_MAX, parseChatShortcut, writeChatShortcut, type ChatShortcut } from '../net/chatshortcut.ts';
+import { clearChatShortcut, CHAT_SHORTCUT_SYMBOL, CHAT_SHORTCUT_TEXT, CHAT_SHORTCUT_TEXT_MAX, CHAT_SHORTCUT_WORD_SELECT, parseChatShortcut, writeChatShortcut, type ChatShortcut } from '../net/chatshortcut.ts';
+import { currentWordSelectTable } from '../net/wordselect.ts';
 import { parseSymbolChats } from '../net/symbolchat.ts';
 import { drawListWindow, INSET, listKey, type ListItem } from './fieldwindows.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import type { MenuKey } from './gamelist.ts';
+import { openWordSelectPicker, wordSelectType, WORD_SELECT_STATUS_ACCEPTED, WORD_SELECT_STATUS_CANCELLED, type WordSelectScene } from './wordselectmenu.ts';
+import { WordSelectWindow } from './wordselectwindow.ts';
 import { symbolChatRows, type SymbolRow } from './symbolchat.ts';
 import { drawWindowFrame, type WindowSkin } from './stage.ts';
 import { CARET, caretColor, TextEditor } from './titleflow.ts';
@@ -84,9 +91,12 @@ export const SHORTCUT_PAGES = 4;
 export const SHORTCUT_COUNT = SHORTCUT_PAGE_ROWS * SHORTCUT_PAGES;
 export const SHORTCUT_PICKER_ROWS = 5; // the picker's visible rows (ASSUMED, see the header)
 
-export type ShortcutPhase = 'slots' | 'actions' | 'keyboard' | 'picker' | 'confirm' | 'clearConfirm' | 'closed';
+export type ShortcutPhase = 'slots' | 'actions' | 'keyboard' | 'picker' | 'wordPicker' | 'confirm' | 'clearConfirm' | 'closed';
 
 export interface ChatShortcutHost {
+  // The scene the word picker's root list is read for (get_word_select_type). ASSUMED 'lobby' when
+  // the host does not say (the Shortcut leaf is reached from the lobby and the field).
+  wordScene?: () => WordSelectScene;
   // unitxt lookup (group, index), the Home menu's text.
   text: (group: number, index: number) => string;
   // The save copy (the session's full character), read and written in place. Null without one.
@@ -130,6 +140,10 @@ export class ChatShortcutMenu {
   private readonly pickerState = { cursor: 0 };
   private pickerTop = 0;
   private question: Question | null = null;
+  // The keyboard's mode (the exe's +0x1C byte, its constructor's 0 = word): the picker the Symbol
+  // Chat key opens next. It alternates word / symbol with each key press (see openMode).
+  private mode: 'word' | 'symbol' = 'word';
+  private wordPicker: WordSelectWindow | null = null;
 
   constructor(host: ChatShortcutHost) {
     this.host = host;
@@ -184,6 +198,7 @@ export class ChatShortcutMenu {
     this.phase = 'closed';
     this.editor = null;
     this.question = null;
+    this.wordPicker = null;
     this.host.onClose(this.picked);
   }
 
@@ -205,6 +220,9 @@ export class ChatShortcutMenu {
         return;
       case 'picker':
         this.pickerKey(e);
+        return;
+      case 'wordPicker':
+        this.wordPickerKey(e);
         return;
       case 'confirm':
         this.confirmKey(e, false);
@@ -286,12 +304,59 @@ export class ChatShortcutMenu {
       ed.backspace();
       return;
     }
-    // The Symbol Chat key (keyboard control 0xe, BINDING.symbolChat) opens the picker.
+    // The Symbol Chat key (keyboard control 0xe, BINDING.symbolChat) opens the next picker.
     if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {
-      this.openPicker();
+      this.openMode();
       return;
     }
     if (e.key.length === 1) ed.type(e.key);
+  }
+
+  // The Symbol Chat key: the word picker, then the symbol picker, alternately (the mode byte). ASSUMED:
+  // the exe's toggle (ChallengePlayerInfoWindow_Update, 0x713830) flips the mode before it opens, so
+  // its first key would give the symbol picker; the port opens the word picker first because the exe's
+  // first picker is the word one (DEVLOG 2026-10-23, the word select picker).
+  private openMode(): void {
+    if (this.mode === 'word') this.openWordPicker();
+    else this.openPicker();
+    this.mode = this.mode === 'word' ? 'symbol' : 'word';
+  }
+
+  // CreateWordSelectMenuEntity_00701d00 (the word picker over the keyboard): the root list is the
+  // word type of the scene (wordSelectType, no item selected), the table is the JP one.
+  private openWordPicker(): void {
+    const scene = this.host.wordScene?.() ?? 'lobby';
+    const model = openWordSelectPicker({
+      type: wordSelectType(scene, false),
+      table: currentWordSelectTable(),
+      scene,
+      jpLocale: true,
+    });
+    this.wordPicker = new WordSelectWindow(model);
+    this.phase = 'wordPicker';
+  }
+
+  // The word picker: Select accepts (the sentence becomes a word record, asked as a confirm); Cancel
+  // closes it and the keyboard stays (the exe's child closes, the text window goes on).
+  private wordPickerKey(e: MenuKey): void {
+    const w = this.wordPicker;
+    if (!w) return;
+    w.key(e as { key: string });
+    const status = w.model.status;
+    if (status === WORD_SELECT_STATUS_ACCEPTED) {
+      this.wordPicker = null;
+      this.pending = { type: CHAT_SHORTCUT_WORD_SELECT, text: '', symbolIndex: 0, symbol: null, word: w.model.result() };
+      this.question = new Question(this.text(SHORTCUT_TEXT.confirmMessage), {
+        x: SHORTCUT_POS.confirm.x,
+        y: SHORTCUT_POS.confirm.y,
+        w: SHORTCUT_POS.confirm.w,
+      });
+      this.question.cursor = 0;
+      this.phase = 'confirm';
+    } else if (status === WORD_SELECT_STATUS_CANCELLED) {
+      this.wordPicker = null;
+      this.phase = 'keyboard';
+    }
   }
 
   private openPicker(): void {
@@ -369,6 +434,10 @@ export class ChatShortcutMenu {
       drawListWindow(ctx, skin, SHORTCUT_POS.actions.x, SHORTCUT_POS.actions.y, windowWidth(items, title), title, items, this.actionCursor);
     }
     if (p === 'keyboard' && this.editor) drawKeyboard(ctx, skin, this.editor);
+    if (p === 'wordPicker') {
+      if (this.editor) drawKeyboard(ctx, skin, this.editor);
+      this.wordPicker?.draw(ctx, skin);
+    }
     if (p === 'picker') {
       const items = this.pickerItems().slice(this.pickerTop, this.pickerTop + SHORTCUT_PICKER_ROWS);
       drawListWindow(ctx, skin, SHORTCUT_POS.picker.x, SHORTCUT_POS.picker.y, windowWidth(items, null), null, items, this.pickerState.cursor - this.pickerTop);

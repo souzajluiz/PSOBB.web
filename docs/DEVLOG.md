@@ -16887,3 +16887,43 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - The 0x800 branch of the per-tick chain (input states 4 / 5 with the +0x62 counter) is not ported (ASSUMED the flag is clear).
 - The item use (flag 0x20): the NPC has no inventory here.
 - The 2764 gate's bit 2 of B.player +0x328: writer not traced.
+
+## 2026-10-23: word select picker window (list levels, root rows, sentence preview) and the Shortcut editor's word type
+
+**What changed.** `classic/wordselectmenu.ts`: the state table (`WORD_SELECT_ENTRIES`, 0x9D05E0), `wordSelectRootRows` (table2[type]), `wordSelectChildRows` (table1[value], the scene placeholder -0x1E), `wordSelectRowLabel`; `WordSelectPickerModel` keeps the list levels (`levels`, `rows`, `cursorValue`, `move`, `press`, `back`), and `openWordSelectPicker` takes the table, the scene and the locale. `classic/wordselectwindow.ts` (new): the picker window (the list through `drawListWindow`, the sentence under it through `drawTextWindow`) and its keys. `classic/chatshortcutmenu.ts`: the Symbol Chat key alternates the word picker and the symbol picker; Select on the word picker makes a type 2 record and asks the confirm (the record is sent with the existing 6x74 path, `useShortcut` -> `sendWord`); Cancel returns to the keyboard. Tests: `tests/wordselectmenu.test.ts` (the state table, the root and child levels, the placeholder, back and cancel, the real JP table: 11 root rows, row 23 is "Fixed: Greetin..." and opens table1[23] = 16 rows, the first is token 70 "Hello."), `tests/chatshortcutmenu.test.ts` (the key order; a word record is written to slot 3; the old symbol-first assumptions are changed).
+
+**Exe evidence.**
+- Keyboard mode: `ChallengePlayerInfoWindow_Constructor_00713540` (0x713540, dump 674440) sets the mode byte +0x1C to 0 when `probably_return_word_select_supported` is 0 (it is: `CreateItemObject_006dc358` is a stub returning 0), else 1. `ChallengePlayerInfoWindow_UpdateState_007138e0`: mode 0 -> `CreateWordSelectMenuEntity_00701d00` (dump 658278, the word picker, type 2 record); mode 1 -> `ChatShortcutMenu_Constructor_007148c0` (the symbol list, type 3).
+- Symbol key: `UIPanel_Update_007136a8` (0x7136a8) reads keyboard control 0xe (`CheckKeyboardInput_0078fdfc`); its LAB_00713830 branch does `mode = mode + 1` if below 2, else `mode - 1`, then UpdateState. Nothing happens while the child picker is visible (`UIPanel_IsVisible_00730f5c`).
+- The picker window: `CreateWordSelectMenuEntity_00701d00` (658278) builds two WordSelectEntity lists (`CreateWordSelectEntity_00700db8`, 658359 and 658368) with `word_select_number_of_selectable_rows` (0x96E51C = 6.0, `tools/exedata.py read 0x96e51c f 1`), the labels from the string pointers at 0x9D05C4 (u_SELECT, "SELECT") and 0x9D05C0 (u_NEXT, "NEXT"), and the GetStringResource(0x687) label. It calls no `get_gui_position`, and `WordSelectMenu_UpdateListWindowPosition_00706c40` (663556) reads none, so the GUI table 0x971F40 is not used by the picker. Its positions come from the data globals (0x96E518..0x96E584, read with exedata: 6.0, -20, 680, 240, 480, 370, 310, 240, 70, 120, 30, 64).
+- State table DAT_009D05E0: 21 entries of {flags, token}, read with `tools/exedata.py read 0x9d05e0 u 42` (flags 4 = child pushed, 2 = selection pops, 1 = selected style, 8 = no child). `GetWordSelectMenuEntryPtr_00706e40` (663704) is `0x9d05e0 + state * 8`.
+- Levels: `GameListMenu_ProcessNextEntry_00702358` (658491) stores the state at +0x44 + depth * 4, sets +0xB0 = +0xB4 (the next state) and the child's row count; `ListWindowEntity_NavigateBack_0070226c` (658443) pops the depth (a flags-4 state also pops its child).
+- Root accept: `WordSelectMenu_State0_Update_007031b4` (659399): `ProcessIDIndex0` -> +0xC6 (target type), `ProcessIDIndex1` -> +0xB4 (next state), `UpdateIDHistory`, then `WordSelectMenu_Update_007028d4`.
+- Rows: `GetWordSelectItemId_00706be8` (663508) reads table2[type][cursor] as a short; a row's child list is `GetItemMetaPointer_00705544` of the value, i.e. table1[value]. On the JP table the row's label is the phrase of the same number (table2[1] = 23, 24, ...; phrase 23 = "Fixed: Greetin..."; table1[23] = 70 "Hello." ...). The placeholder -0x1E maps by scene in `WordSelectEntity_GetSelectedItemId_00705614` (661975, case 0): Pioneer 2 0x10, lobby 0xF, quest 0x12, free field 0x11, battle 0x13, challenge 0x14.
+- Confirm (not ported): `WordSelectMenu_ProcessConfirmation_0070305c` (659316), state 3: value -0x3C -> state 0x14; else (locale 0) `SetSelectedValue_00702f88`, the selection buffer is cleared (+0xC4), +0xC6 = 3.
+
+**Premise corrections.**
+- The brief named `classic/chat.ts` for the Symbol key. That file has no symbol key. The Symbol key is keyboard control 0xe (End by default): in the field and the lobby it opens the quick menu (`field.ts`, `lobby.ts`), and in the Shortcut editor's text keyboard (`ChallengePlayerInfoWindow`, `chatshortcutmenu.ts`) it opens the picker. The wiring is in `chatshortcutmenu.ts`.
+- The exe's first picker is the word one (the constructor's mode 0, as the previous DEVLOG said). But the exe's toggle flips the mode before it opens, so a first key press from mode 0 would show the symbol picker unless the word picker is already open (it is opened by another path, not traced). The port opens word first (below).
+
+**ASSUMED.**
+- The layout: the picker at (30, 60), 300 wide, 6 rows (the exe's count), the sentence preview under the list. The data globals are read but their mapping to the widgets is not confirmed. The title "SELECT" is the literal; its place (title or label) is ASSUMED.
+- Symbol key order: word first, then symbol, alternating (`openMode`). The exe's order is unresolved (see above).
+- A root row without a child list does nothing; the placeholder's label is empty (its text is not traced).
+- A child-level Select closes the picker with the buffer (FinalizeSelection closes when the state is not 1). Multi-word sentences (Next, states 0x12 / 0x13) are not ported, so one word per picker.
+- The toggle effect runs on child levels only; Cancel on a child pops the toggled token (the flags 2 pop) and resets the last value.
+- The root type uses no selected item (`wordSelectType(scene, false)`), and the scene is `lobby` unless the host gives `wordScene` (the Shortcut leaf is reached from the lobby and the field).
+- A word record's Yes writes it; the confirm is the same as for symbol records (the exe's copy state is not traced).
+
+**Not ported.** The numeric count window (state 3 with a group != 7; `CreateNumericDisplayListWindow_00728ac4`), the item pseudo lists (-0x28 list A, -0x2D list B: they need the selected item), the player-name lists in the picker, the sounds and galgryphon effects, `UpdateIDHistory` (16 recent ids), and the ES / FR / DE / US child maps.
+
+**Checks.** `node tests/wordselectmenu.test.ts` and `node tests/chatshortcutmenu.test.ts` pass under Node 24 (the second with `client/node_modules` linked from the main checkout for `three`, removed before the commit). `node tests/wordselect.test.ts`, `chatline`, `chatshortcut` and `symbolchat` pass. `cd client && node_modules/typescript/bin/tsc --noEmit -p .` exit 0.
+
+**Playwright: not run.** The lobby path needs newserv running from this worktree, and it is not built here. Starting the main checkout's build would run a server from the main repo, which the worktree rule forbids. No screenshot was taken.
+
+**Left (in order).**
+1. The screenshot spec (lobby -> Home -> Chat > Shortcut -> slot -> Edit -> Symbol key) once newserv runs from a worktree build.
+2. The numeric count window and the Next / multi-word path (states 0x12, 0x13), then the state 3 confirm.
+3. The item pseudo lists (-0x28, -0x2D) once the picker knows the selected item.
+4. The exe's ListWindowEntity placement and the 0x96E548.. data mapped to the widgets.
+5. The Shortcut slot label for a word record (the sentence); the slot list still shows the empty label.
