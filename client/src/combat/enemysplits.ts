@@ -970,7 +970,9 @@ export class SlimeArm extends EnemyShot {
   }
 }
 
-export type SlimeState = 'puddle' | 'rise' | 'sink' | 'crawl' | 'emerge' | 'burrow' | 'search' | 'confused' | 'approach' | 'spit' | 'arm' | 'flinch' | 'thrown' | 'dead';
+// 'stun' is the exe's state 11 (entry 0x0059856c, update 0x00597514; the writer is the
+// vtable slot +0xfc, 0x00597ae4, see `SlimeAi.pendingHit`).
+export type SlimeState = 'puddle' | 'rise' | 'sink' | 'crawl' | 'emerge' | 'burrow' | 'search' | 'confused' | 'approach' | 'spit' | 'arm' | 'flinch' | 'thrown' | 'dead' | 'stun';
 
 const SLIME_ANIM = {
   wait: loop(10, 0.5), // animation 0
@@ -1034,6 +1036,7 @@ export const SLIME_MORPH: Readonly<Record<SlimeState, number>> = {
   flinch: 5,
   thrown: 7,
   dead: 5,
+  stun: 4, // 0x0059856c: morph 4 (EnemyLoadAnimationOrModel_00599c7c(4))
 };
 
 const HIDDEN_STATES: ReadonlySet<SlimeState> = new Set(['sink', 'crawl', 'thrown']);
@@ -1253,7 +1256,26 @@ export class SlimeAi extends BrainBase {
         this.morph = SLIME_MORPH.flinch;
         this.play(out, SLIME_ANIM.hurt);
         break;
+      case 'stun':
+        // 0x0059856c: scale 1, the counter (+0x39c) to 0, morph 4, the motion table to 4
+        // (ASSUMED: the port plays its hurt animation; the exe's motion 4 is not mapped),
+        // +0x3f4 = 1 (not modelled: nothing in the port reads it).
+        this.xf.sx = this.xf.sy = this.xf.sz = 1;
+        this.timer = 0;
+        this.morph = SLIME_MORPH.stun;
+        this.play(out, SLIME_ANIM.hurt);
+        break;
     }
+  }
+
+  // The exe's vtable slot +0xfc of the slime (0x00597ae4), called by the generic
+  // enemy path (0x00543efb) when +0x30 has 0x100 and the slot +0x88 test is off:
+  // unless the slime is already in state 11, it enters it and clears 0x100.
+  // ASSUMED: the writer of 0x100 and the +0x88 test are not traced; nothing in the
+  // port calls this yet (the state is reachable only through this method).
+  pendingHit(out: AiFrame): void {
+    if (this.state === 'stun' || this.state === 'dead') return;
+    this.enter(out, 'stun');
   }
 
   // The rise (k = 0.1) and the sink (k = 0.15) frames (0x0059670c, 0x00596884):
@@ -1457,6 +1479,12 @@ export class SlimeAi extends BrainBase {
         break;
       case 'flinch':
         if (animationEnded) this.enter(out, 'burrow');
+        break;
+      case 'stun':
+        // 0x00597514: the counter counts a frame; when the motion has ended the slime
+        // goes to confused (+0x30 & 0x10) or search.
+        this.timer++;
+        if (animationEnded) this.enter(out, this.confused ? 'confused' : 'search');
         break;
       case 'thrown':
         this.x += this.vx;

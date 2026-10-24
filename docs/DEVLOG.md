@@ -17438,3 +17438,67 @@ Trap Vision (item 8: `init_item_tool_8` 0x005df848, constructor 0x005df8dc, vtab
 - The stalactite's five debris parts (0x00679b70: the DerollePart bodies with the BML chunks and their physics); the record path of the shatter (+0x80: box status and 0x007b5038).
 - The destructible rock's break effects (0x006759d4, and the 0x006336f8 calls to 0x0050b510 with the SE / particle ids 0x45 and 0x46).
 - Trap Vision: no duration exists in the exe client (the value is a stack count). Open: the callers of 0x005de46c and 0x005de4a0 (the consume / add of the item's stack), and whether the use path's technique 14 cast (0x006e0780, case 14) has any Trap Vision effect (not traced; the dump names this function `use_telepipe`, so the vtable may belong to the Telepipe).
+
+## 2026-10-23: ROADMAP line 152 leftovers: the Recon's start height, the Morfos's arm end, muzzle and hidden wall, the Pofuilly's state 11 writer
+
+**Report:** four of the open items were checked against the raw exe (objdump of `PsoBB.exe`, `tools/exedata.py`, the named dump for names only). Three premises were wrong or incomplete: the Morfos arm's end is not the +0xb0 bit 0x10 setter (that bit is the arm's own motion end; the setter is the generic animation step and was not traced); the Morfos wall is hidden with the body (the draw returns at the hidden flag, nothing to port beyond the child visibility); Pofuilly state 11 HAS a writer in the raw exe, in a vtable method the dump does not name. Ported: the Recon's start height, the arm's lifetime, the laser's origin, the state 11 body (not its trigger).
+
+**Exe evidence (PsoBB.exe 1.25.13; objdump of the raw exe; the named dump only for names):**
+
+Recon start height:
+- Spawn 0x00588f8e: the box's +0x38 / +0x3c / +0x40 are pushed as the position (`movswl`, `movl 0x38(%edi)`, ... `calll 0x58a200`), so the Recon's world position is the box's position.
+- Recon ctor 0x0058a28c copies that position into +0x38..+0x40 and the box's position into +0x440..+0x448 (`58a336..58a35a`), then calls 0x0058c250.
+- DerolleInitializeFields 0x0058c250: `movl 0x3c(%ebx),%edx` / `movl %edx,0x450(%ebx)` (58c319..58c326): the lift +0x450 is the box's world y.
+- The launch 0x0058bed4 sub 0 (58bf44..58bf5e): `+0x450 + vy (+0x434)` is compared with the hover (+0x468). The hover is absolute in the exe (the orbit target's y is +0x468, see the 13:xx entry), the port keeps it as a lift above the ground.
+
+Morfos arm (sub-entity):
+- Constructor 0x0057cc3c: +0xfc = parent, +0x100 = the parent's word +0x1c, +0x38..+0x40 from the parent's +0x4ac, its motion 0 (attack_kabe_arm, speed 0.7, flags 0x4, from the table at 0x009bef44: `tools/exedata.py motions 009bef44 1`).
+- The swing: the punch state 0x0057bb5c sub 0 -> 1 calls `CreateMorfosSubEntity_0057cbc4` (named dump 365109 and objdump of the call site); it lives until its own motion ends.
+- The arm update 0x0057cd3c (objdump, 57cd3d..57cd9b): runs the generic animation step 0x007aa094, copies the parent's +0x4ac and yaw, then `testb $0x10, +0xb0` of the ARM (57cd74) → `orl $0xffff0001` on the arm's word +0x8, i.e. the dead mark. A missing parent (+0xfc == 0) is dead at once. No hit code in it.
+- So "+0xb0 bit 0x10" is the arm's own animation-end flag (the same bit the Slime and the Morfos body test for their motions). The setter of that bit is the generic animation step's end (not traced; 0x007aa094 keeps the bit, it does not set it).
+- The arm's flags 0x4: nothing on the arm's path tests them (0x57cd3c tests 0x10 only; 0x007aa094 tests 0x40 and clears 0xd5 of its mask, which keeps 0x4). ASSUMED inert.
+
+Morfos muzzle:
+- `MorfosTechProjectile_Constructor_0057d0f4` (named dump 365941) takes the position `&param_1_00[1].z1` = enemy +0x4a0 (body node 6, captured by the draw 0x00579f3c per the 13717 entry) and the heading `+0x7c + 0x8000`; velocity sin / cos of the heading times g_MorfosAnimationSpeed (= the port's bolt speed, fparam1, per the existing note). Its y is the same captured point.
+
+Morfos hidden wall:
+- `render_morfos` (named dump 364020): `if ((sinowbeat_subtype & 1) == 0)` (sinowbeat_subtype = +0x3c8, the hidden flag) wraps the whole draw, so the wall (model 2) is not drawn while hidden. ASSUMED from the named dump's control flow (the function's address is not pinned in the listing; the test is read from the dump, not objdump).
+- The draw's 0x2 bit (+0x3c8 & 2) switches the body to the fade objects (+0x3f4 / +0x410); not changed here.
+
+Pofuilly state 11:
+- The dump has no name for it, but the raw exe has the writer: `movl $0xb, 0x38c(%ecx)` at 0x00597af2 inside the function at 0x00597ae4. The function: if +0x38c != 11, the state is 11, the flag 0x100 of +0x30 is cleared (`andl $0xfffffeff`), and the state's entry is called through `*0x9bfc58` (= 0x0059856c, the entry the 2026-10-23 "Pofuilly tails" notes name).
+- It is the slime's vtable slot +0xfc: the vtable at 0x00b094e0 (the draw at +0x08 is 0x00596264, as the notes say) holds 0x00597ae4 at +0xfc (read from the file: the function's address is in the data at file offset 0x6509dc = VA 0x00b095dc).
+- Caller: the generic path at 0x00543efb: `if (vtable[+0x88](this) != 0) vtable[+0x100](this)` (the slime's hit handler 0x00597914, which sets state 12 = flinch), `else if (+0x30 & 0x100) vtable[+0xfc](this)`. So state 11 is the pending-hit fallback. The writer of +0x30 bit 0x100 and the +0x88 test were not traced.
+- State 11's entry 0x0059856c: scale 1, the counter (+0x39c) 0, morph 4, +0x3f4 = 1. Its update 0x00597514 (objdump 597514..597576): the counter +1; every 4th count the effect 0xe0 at +0x300 (0x0050b510); when the motion has ended (+0xb0 & 0x10): +0x30 & 0x10 (confused) -> state 7 (entry 0x9bfc38), else state 6 (search, 0x9bfc30).
+- The stub table layout (verified from the data at 0x009bfc04): the entry of state k is the pointer at 0x009bfc04 + 8(k-1) + 4 and its update is at 0x009bfc04 + 8k (state 11: 0x59856c / 0x597514; state 12 (flinch): 0x5985c4; state 13 (death): 0x598648). The older note "slot 11 has no reference" appears to come from reading these pairs one slot off (the state 11 call uses 0x9bfc58, which is inside the pair of slot 10).
+
+**Port:**
+- `combat/enemyfsmep2d.ts`:
+  - `RecoboxAi` takes `boxY` (the set entry's y) and passes it on the spawn (`ReconSpawn.boxY`); `ReconAi.startFromBox(boxY, ground)` sets the lift to boxY - ground (the ASSUMED kind start stays when there is no ground query).
+  - `MorfosAi`: the arm is `armLive` from the swing start (sub 0 -> 1) until `armSpent()` (the render calls it when the arm's motion has ended); no longer tied to the punch state. `MorfosBolt.placeAt(x, y, z)`.
+- `render/combat.ts`:
+  - `spawnRecon` calls `startFromBox` with the ground under the box's spot (`opts.ground(x, z, boxY + 30)`).
+  - `RecoboxAi` gets `boxY: instance.placed.world[1]` (the same field the Sinow Berill's hang uses).
+  - `morfosView`: body and wall follow `hidden`; the arm is shown while `ai.armOut`, its motion plays once from the start, and it calls `armSpent()` when the animator ended (no animator: not shown, ASSUMED).
+  - `morfosMuzzle`: each laser bolt is placed at body node 6's world point (`MORFOS.muzzleNode`) before it is launched; y is given above the launch ground (root y less the lift), as every shot.
+  - The generic hidden loop (`r.hidden !== undefined`, which set every child visible for the Morfos, arm included) skips MorfosAi; morfosView owns its children now. This was a real bug: the arm was visible in every state.
+- `combat/enemysplits.ts` (Pofuilly): state `stun` (exe state 11), `SLIME_MORPH.stun = 4`, the entry (scale 1, counter 0), the update (counter; when the motion ended: confused if `confused`, else search), and `pendingHit(out)` = the vtable +0xfc method (no-op in state 11 or dead).
+
+**Tests:**
+- `tests/enemyfsmep2d.test.ts`: (a) a Recon of a ceiling box at 120 over ground 0 starts at 120 and comes down to 45 +- 2 (`startFromBox`, the spawn carries `boxY`); (b) the arm: out at the swing start, still out after the punch state ends, gone after `armSpent()`, never before a swing; (c) `MorfosBolt.placeAt` moves the bolt and it flies from there along the heading.
+- `tests/enemysplits.test.ts`: `pendingHit` enters state 11 (morph 4, scale 1, idempotent), holds while the motion runs, ends in search, or in confused when `confused`.
+- Run: `node tests/enemyfsmep2d.test.ts`, `enemyfsmep2`, `enemyfsmep2a/b/c`, `enemyfsm`, `enemyfsmmines`, `enemysplits`, `enemies`, `combat` (with `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv/build/newserv`), `combatdepth`, `deathfx`, `bossrooms`, `derolle`: all pass. `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24): clean. Playwright and Chrome: not run (the brief).
+
+**ASSUMED:**
+- The set entry's y is the box's +0x3c at construct (the Recon's start uses `placed.world[1]`). The box's +0x3c is not checked for later changes (the writers of the Recobox's +0x3c were not checked).
+- The Recon's start lift is the box's y minus the ground under the box's spot; the exe's hover is absolute and the port's is relative to the ground (the 2026-10-23 "orbit and launch" entry's gap, unchanged). A floor box on the ground starts where it did before.
+- The arm's motion end is the animator's `ended`; the arm is not drawn when there is no animator. A second swing while the arm lives is one arm (the exe makes a new sub-entity each swing).
+- The arm's flags 0x4 are inert (no reader on its path).
+- The laser's origin is node 6's world point at the launch (the exe captures at the previous draw; the port reads the current pose).
+- `render_morfos`'s hidden gate is read from the named dump, not from the listing.
+- The state 11 trigger: the generic path 0x00543efb calls vtable +0xfc when +0x30 has 0x100 and vtable +0x88 is 0; the flag's writer and the +0x88 test are not traced. `SlimeAi.pendingHit` is reachable only from tests until that is traced. The stun motion is the port's hurt animation (the exe's motion 4 of the Slime table is not mapped).
+
+**Left (the ROADMAP line stays open for these):**
+- The setter of +0xb0 bit 0x10 (the generic animation step's end) and the arm's frame timing against the port's animator.
+- Pofuilly state 11's trigger: who sets +0x30 bit 0x100, the +0x88 test (its slot 0x88 of the slime), and the effect 0xe0 every 4th frame (0x0050b510 not traced).
+- The Recon's launch in the absolute frame (the hover is absolute in the exe); the port keeps the ground-relative lift.

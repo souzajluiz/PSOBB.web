@@ -171,20 +171,34 @@ const morfos = (o: { params?: number[]; rng?: () => number; difficulty?: number;
   run(r, [p], 200, 20, (f) => (hitF ??= f.hit));
   check(!!hitF, 'the punch lands');
   eq(hitF && [hitF.knockback, hitF.mult], [MORFOS.punchKnockback, 1], 'try_hit_entity(1.0) + cause_knockback(5.0)');
-  // The arm sub-entity (CreateMorfosSubEntity_0057cbc4) is out only during the
-  // swing (punch sub 1), never in another state.
+  // The arm sub-entity (CreateMorfosSubEntity_0057cbc4, 0x0057bb5c sub 0 -> 1) is
+  // made at the swing's start and lives until its own motion ends (the render
+  // calls armSpent; 0x0057cd3c): it outlives the punch state, and it is out only
+  // after a swing has started.
   const pm = morfos({ rng: () => 0.9 });
   const rp = rig(pm);
-  let armFrames = 0;
-  let armOutside = 0;
-  run(rp, [player(0, 20)], 200, 20, () => {
-    if (pm.armOut) {
-      armFrames++;
-      if (pm.state !== 'punch') armOutside++;
-    }
-  });
-  check(armFrames > 0, `the arm is out during the punch swing (${armFrames} frames)`);
-  eq(armOutside, 0, 'the arm is out only in the punch state');
+  let guard = 0;
+  while (!(pm.state === 'punch' && pm.sub === 1) && guard++ < 400) step(rp, [player(0, 20)]);
+  check(pm.state === 'punch' && pm.sub === 1, 'a punch swing starts');
+  check(pm.armOut, 'the arm is out at the swing start');
+  guard = 0;
+  while (pm.state === 'punch' && guard++ < 400) step(rp, [player(0, 20)]);
+  check(pm.state !== 'punch' && pm.armOut, `the arm stays out after the punch state ends (${pm.state})`);
+  pm.armSpent();
+  check(!pm.armOut, 'the arm is gone once its motion has ended (armSpent)');
+  const pq = morfos({ rng: () => 0.9 });
+  eq(pq.armOut, false, 'no arm before a swing');
+  // The laser's bolt takes the muzzle the render gives it (node 6, placeAt) and
+  // flies from there along its heading.
+  {
+    const mb = new MorfosBolt(10, 20, 0, 7, 360);
+    mb.placeAt(30, 45, -5);
+    near(mb.x, 30, 'the bolt is placed at the muzzle (x)', 1e-9);
+    near(mb.y, 45, 'the bolt is placed at the muzzle (y)', 1e-9);
+    near(mb.z, -5, 'the bolt is placed at the muzzle (z)', 1e-9);
+    mb.tick([]);
+    near(mb.z, -5 + 7, 'the bolt flies along its heading from the muzzle (heading 0: +z)', 1e-6);
+  }
   const l = morfos({ rng: () => 0.1 });
   const rl = rig(l);
   let bolt: EnemyShot | undefined;
@@ -639,6 +653,33 @@ const box = (o: { params?: number[]; clones?: number; difficulty?: number; rng?:
   check(lifts[0][1] > lifts[0][0], 'floor: it rises');
   check(lifts[1][1] < lifts[1][0], 'ceiling: it comes down');
   check(moved[2] > 40 && moved[2] < 60 && moved[0] < 1, `wall: it slides out along the heading (${moved[2].toFixed(1)}), floor: it does not`);
+}
+{
+  // The start height is the box's y: DerolleInitializeFields_0058c250 copies the
+  // entity's y (+0x3c, the spawn's box y at 0x00588f8e) into the lift +0x450, and
+  // the launch goes from there toward the hover height. A ceiling box (kind 1,
+  // launch vector -5) at 120 over ground 0 sends its Recon down from 120 to 45 +- 2
+  // (not from the ground). A floor box at 120 would launch up (+5) and overshoot.
+  const b = new RecoboxAi({ x: 0, z: 0, angle: 0, boxY: 120, params: [0, 0, 0, 1, 0, 1], cloneCount: 4, movement: rmv, attack: atk(25, 768, 15), rng: () => 0.5 });
+  const rb = rig(b);
+  let sp: (typeof b.spawns)[number] | undefined;
+  for (let i = 0; i < 400 && !sp; i++) {
+    step(rb, [player(0, 300)]);
+    sp = b.spawns.shift();
+  }
+  check(!!sp && sp.boxY === 120, `the spawn carries the box's y (${sp?.boxY})`);
+  if (sp) {
+    sp.recon.startFromBox(sp.boxY, 0);
+    near(sp.recon.lift, 120, 'the Recon starts at the box y over ground 0');
+    const rr = rig(sp.recon);
+    let l = 0;
+    let first = -1;
+    run(rr, [], 300, 30, (f, i) => {
+      if (i === 0) first = f.lift ?? -1;
+      l = f.lift ?? l;
+    });
+    check(first < 120 && first > 100 && l > 40 && l < 50, `it comes down from 120 to its hover height 45 +- 2 (${first.toFixed(1)} -> ${l.toFixed(1)})`);
+  }
 }
 {
   // Orientation (0x0058958c / recon_debug_display): yaw, then X by 0x8000 for

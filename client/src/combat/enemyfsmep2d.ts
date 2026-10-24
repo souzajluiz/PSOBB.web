@@ -454,6 +454,14 @@ export class MorfosBolt extends EnemyShot {
   private speed: number;
   private struck = new Set<number>();
 
+  // The render puts the bolt at the body's node 6 (the exe's enemy+0x4a0, captured
+  // by the draw) before it is launched; y is above the launch ground, as ctor.
+  placeAt(x: number, y: number, z: number): void {
+    this.x = x;
+    this.y = y;
+    this.z = z;
+  }
+
   constructor(x: number, z: number, h: number, speed: number, power: number) {
     super(x, PLAYER_AIM_HEIGHT, z);
     this.speed = speed;
@@ -518,6 +526,7 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
   private readonly fadeA = new FadeEffect(); // +0x3f4
   private readonly fadeB = new FadeEffect(); // +0x410
   private bulgeValue = 0; // +0x3dc: the wall bulge, 0..12 (see the header)
+  private armLive = false; // the arm sub-entity exists (see armOut)
 
   constructor(opts: {
     x: number;
@@ -587,10 +596,17 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
     return Math.trunc(this.bulgeValue / MORFOS.armBulgeScale);
   }
 
-  // The arm sub-entity is out (CreateMorfosSubEntity_0057cbc4 at the punch's
-  // swing, 0x0057bb5c sub 1). ASSUMED: it is gone when the swing ends.
+  // The arm sub-entity is out: made at the punch's swing (CreateMorfosSubEntity_0057cbc4,
+  // 0x0057bb5c sub 0 -> 1) and until its own motion ends (armSpent). Its update
+  // 0x0057cd3c sets the dead mark when its animation_flags has 0x10; nothing ties
+  // it to the punch state after the swing.
   get armOut(): boolean {
-    return this.state === 'punch' && this.sub === 1;
+    return this.armLive;
+  }
+
+  // The render saw the arm's motion reach its last frame (0x0057cd3c, 0x10 set).
+  armSpent(): void {
+    this.armLive = false;
   }
 
   // SetEnemyAiState_0051f62c: leave the old state (event 5), enter the new one (event 4).
@@ -829,6 +845,7 @@ export class MorfosAi extends Ep2dBrain<MorfosState> {
         this.aimTarget(targets);
         if (this.rotateTo(bamsOf(this.tdx, this.tdz), this.swingTurn)) {
           this.sub = 1;
+          this.armLive = true; // CreateMorfosSubEntity_0057cbc4 (0x0057bb5c sub 0 -> 1)
           this.setAnim(out, MORFOS_ANIM.punch);
         } else if (MORFOS.nearRange <= this.tdist) this.sub = 3;
       }
@@ -1141,6 +1158,7 @@ export interface ReconSpawn {
   recon: ReconAi;
   x: number;
   z: number;
+  boxY: number; // the box's world y (the spawn's +0x3c, 0x00588f8e)
 }
 
 export class RecoboxAi extends Ep2dBrain<RecoboxState> {
@@ -1159,11 +1177,13 @@ export class RecoboxAi extends Ep2dBrain<RecoboxState> {
   private readonly fade = new FadeEffect();
   private readonly movement: EnemyMovementData | null;
   private readonly attack: EnemyAttackData | null;
+  private readonly boxY: number; // the box's world y (enemy+0x3c)
 
   constructor(opts: {
     x: number;
     z: number;
     angle: number;
+    boxY?: number; // the set entry's y (the box's enemy+0x3c at construct)
     params: readonly number[]; // set entry param1..6
     cloneCount: number; // the set entry's num_children
     movement: EnemyMovementData | null; // the Recon's row
@@ -1188,6 +1208,7 @@ export class RecoboxAi extends Ep2dBrain<RecoboxState> {
     this.ultimate = opts.difficulty === 3;
     this.movement = opts.movement;
     this.attack = opts.attack;
+    this.boxY = opts.boxY ?? 0;
     this.current = RECOBOX_ANIM.closed;
   }
 
@@ -1352,7 +1373,7 @@ export class RecoboxAi extends Ep2dBrain<RecoboxState> {
     });
     this.alive.push(recon);
     this.spawned++;
-    this.spawns.push({ child, recon, x: this.x, z: this.z });
+    this.spawns.push({ child, recon, x: this.x, z: this.z, boxY: this.boxY });
   }
 
   override kill(): void {
@@ -1602,9 +1623,9 @@ export class ReconAi extends Ep2dBrain<ReconState> {
     this.idle = opts.phase % 10;
     this.kindCeiling = opts.kind === 1;
     this.kindWall = opts.kind === 2;
-    // ASSUMED start heights (the box's own y is not known here): a floor box
-    // starts on the ground, a ceiling box above the hover height, a wall box
-    // at it.
+    // ASSUMED start heights until the box's y is known (startFromBox): a floor
+    // box starts on the ground, a ceiling box above the hover height, a wall
+    // box at it.
     this.ry = this.kindCeiling ? this.hover + 40 : this.kindWall ? this.hover : 0;
     this.current = RECON_ANIM.start;
     this.enter(null, 'launch');
@@ -1636,6 +1657,16 @@ export class ReconAi extends Ep2dBrain<ReconState> {
 
   get lift(): number {
     return Math.max(this.ry, RECON.hoverMin);
+  }
+
+  // The exe's start height: DerolleInitializeFields_0058c250 copies the entity's
+  // y (+0x3c, the box's y: the spawn at 0x00588f8e passes the box's +0x38..+0x40,
+  // recon_constructor copies them to +0x3c) into the lift +0x450, and the launch
+  // rises or falls from there toward the hover height. The port's lift is above
+  // the ground, so the render passes the ground under the spot: lift = box y -
+  // ground. ASSUMED: the box's y is the set entry's y (`placed.world[1]`).
+  startFromBox(boxY: number, ground: number): void {
+    this.ry = f32(boxY - ground);
   }
 
   // The box died: update_recon puts the Recon in state 7.
