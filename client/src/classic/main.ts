@@ -329,7 +329,7 @@ async function main(): Promise<void> {
       lobbyView = null;
       gameView?.dispose();
       townField?.dispose();
-      const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null, saveCustomize: (cfg) => session?.sendCustomize(cfg) }, {
+      const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null, saveCustomize: (cfg) => session?.sendCustomize(cfg), sendTechOrder: (order) => session?.sendTechOrder(order) }, {
         labels: false,
         ...(streamFile ? { streamFiles: () => streamFile! } : {}),
         // The Home menu's shared leaves in the field (classic/homeleaves.ts): the game is the connection.

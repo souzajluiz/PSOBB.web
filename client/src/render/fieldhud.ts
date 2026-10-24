@@ -36,6 +36,10 @@ import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
 import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRowName, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
+import { equipStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
+import type { ToolCheckContext } from '../classic/quickmenu.ts';
+import { magStats } from '../formats/itemnames.ts';
+import { techMenuOrder } from '../net/charfile.ts';
 import type { FieldQuickEnv } from '../classic/field.ts';
 import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
@@ -101,6 +105,8 @@ export interface FieldHudOptions {
   fullCharacter: () => Uint8Array | null;
   // Main menu > Customize, window closed with a change: the 0xE8 config goes to the server (07ED, classic/customize.ts).
   saveCustomize?: (config: Uint8Array) => void;
+  // The quick menu's technique order, sent when its list closes after a swap (ED 06, bbsession.ts).
+  sendTechOrder?: (order: readonly number[]) => void;
   items: GameItems;
   // The floor music for the counters' jingles (classic/shop.ts CounterMusic).
   music?: CounterMusic;
@@ -184,7 +190,22 @@ export class FieldHud {
   private names: () => ItemNames | null = () => null;
   // The quick menu's technique order (the 19 ids the technique tab lists). In memory only:
   // the save layout has no order field (net/charfile.ts), so a new view starts from 0..18.
-  private techOrder: number[] = Array.from({ length: 19 }, (_, i) => i);
+  // The technique order: loaded from the save's tech_menu on first use (ASSUMED: the exe's load
+  // is not traced; the default 0..18 when the save has no permutation), sent on the close.
+  private techOrder: number[] | null = null;
+  private techOrderDirty = false;
+  private currentTechOrder(): number[] {
+    if (!this.techOrder) {
+      const save = this.opts.fullCharacter();
+      this.techOrder = (save && techMenuOrder(save)) || Array.from({ length: 19 }, (_, i) => i);
+    }
+    return this.techOrder;
+  }
+  private commitTechOrder(): void {
+    if (!this.techOrderDirty || !this.techOrder) return;
+    this.techOrderDirty = false;
+    this.opts.sendTechOrder?.(this.techOrder);
+  }
   private palette: PaletteData | null = null;
   private paletteHud = new PaletteHud();
   // Battle Mode trap stock by type 0..3 (set by quest/battlerun.ts while a battle runs).
@@ -439,6 +460,52 @@ export class FieldHud {
     if (this.menu.trade) this.menu.trade.notify(textId);
   }
 
+  // The tools tab's checker context (quickmenu.ts toolCheckerBits): the map flags, the level and
+  // class and the equipped items. ASSUMED: the mag's evolution stage is 0 (the port's stage is
+  // not read here), so a mag cell is equippable with any mag equipped.
+  private toolChecks(): ToolCheckContext | null {
+    const pmt = this.names()?.pmt;
+    const c = this.opts.character();
+    if (!pmt || !c) return null;
+    const area = this.opts.area();
+    const equipped = c.inventory
+      .filter((it) => it.equipped)
+      .map((it) => ({ data1: it.data.data1, magLevel: it.data.data1[0] === 2 ? magStats(it.data).level : 0 }));
+    const hasMag = c.inventory.some((it) => it.equipped && it.data.data1[0] === 2);
+    return {
+      pmt,
+      safeMap: isSafeMap(area),
+      bossMap: BOSS_AREAS.includes(area),
+      level: c.level,
+      charClass: c.charClass,
+      equipped,
+      magStage: hasMag ? 0 : null,
+    };
+  }
+
+  // The compare list's rows for a weapon row: the equipment stat panel's rows (itempack
+  // drawPanelRows) for the cursor item against the weapon in its slot.
+  private compareRows(instanceId: number): EquipStatRow[] | null {
+    const pmt = this.names()?.pmt;
+    const c = this.opts.character();
+    if (!pmt || !c) return null;
+    const it = c.inventory.find((o) => o.data.id === instanceId);
+    if (!it) return null;
+    const rc = this.rowContext();
+    const current: StatBlock = {
+      atp: rc.stats.atp,
+      dfp: rc.stats.dfp ?? 0,
+      mst: rc.stats.mst,
+      ata: rc.stats.ata,
+      evp: rc.stats.evp ?? 0,
+      lck: rc.stats.lck ?? 0,
+    };
+    const d = it.data.data1;
+    const old = c.inventory.find((o) => o.equipped && o.data.data1[0] === d[0] && (d[0] !== 1 || o.data.data1[1] === d[1])) ?? null;
+    const problems = equipProblems(it.data, rc);
+    return equipStatRows(current, it.data, old && old !== it ? old.data : null, pmt, it.equipped, problems === 0);
+  }
+
   private rowContext(): RowContext {
     const c = this.opts.character();
     return {
@@ -608,6 +675,8 @@ export class FieldHud {
         allowed: () => true,
         tools: { use: (id) => this.opts.items.use(id, this.rules()) },
         isRare: (it) => this.names()?.isRare(it.data) ?? false,
+        toolChecks: () => this.toolChecks(),
+        compareRows: (id) => this.compareRows(id),
         traps: {
           // ASSUMED zeros: the port has no Sinowberill challenge player (+0x89c).
           statuses: () => [0, 0, 0, 0],
@@ -628,10 +697,12 @@ export class FieldHud {
           sendStatus: (row, count) => this.opts.challengeTrap?.(row, count),
         },
         techOrder: {
-          get: () => this.techOrder,
+          get: () => this.currentTechOrder(),
           set: (order) => {
             this.techOrder = [...order];
+            this.techOrderDirty = true;
           },
+          commit: () => this.commitTechOrder(),
         },
       },
       mode: () => ((readOptionFlags(this.opts.fullCharacter()) ?? 0) & 0x30000) >>> 16,

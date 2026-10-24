@@ -26,6 +26,46 @@ import { parseSymbolChats, SYMBOL_CHAT_COUNT, SYMBOL_CHAT_ENTRY_SIZE, SYMBOL_CHA
 
 export const E7_SIZE = 0x3994;
 
+// The technique menu order (the quick menu's technique tab, 19 u16 ids). It is the save's
+// `tech_menu[40]` (sylverant_bb_full_char_t, data offset 0x2DF8: the E7 body is the data
+// without the 8-byte packet header, and the offsets chain to the known 2EA4 base system file).
+// The exe keeps the live order at g_pCurrentCharacterData + 0x13 * sizeof + 0x108 (SwapTechnique
+// Slots_00741d28, dump 712325) and sends it with ED 06 (send_packet0xed_subcommand6, dump 813854:
+// u32 0, then the 40 bytes from +0x108), not in the E7 copy (E7 copies g_pCurrentSessionData).
+export const TECH_MENU_OFFSET = 0x2df8;
+export const TECH_MENU_SIZE = 40;
+export const TECH_MENU_COUNT = 19;
+export const TECH_MENU_COMMAND = 0xed;
+export const TECH_MENU_FLAG = 0x06;
+
+// The 19 ids of the save's tech menu, or null when the bytes are not a permutation of 0..18
+// (a fresh save's zeros, for one). ASSUMED: the exe's load of this field is not traced.
+export function techMenuOrder(save: Uint8Array): number[] | null {
+  if (save.length < TECH_MENU_OFFSET + TECH_MENU_SIZE) return null;
+  const dv = new DataView(save.buffer, save.byteOffset, save.byteLength);
+  const order: number[] = [];
+  for (let i = 0; i < TECH_MENU_COUNT; i++) order.push(dv.getUint16(TECH_MENU_OFFSET + i * 2, true));
+  const seen = new Set(order);
+  if (seen.size !== TECH_MENU_COUNT || order.some((t) => t >= TECH_MENU_COUNT)) return null;
+  return order;
+}
+
+// The ED 06 body: u32 0, then tech_menu[40] (the 19 u16 ids, the rest zero). 44 bytes, the
+// packet's 4-byte header is the connection's.
+export function techMenuPayload(order: readonly number[]): Uint8Array {
+  const body = new Uint8Array(4 + TECH_MENU_SIZE);
+  const dv = new DataView(body.buffer);
+  for (let i = 0; i < TECH_MENU_COUNT; i++) dv.setUint16(4 + i * 2, order[i] ?? 0, true);
+  return body;
+}
+
+// The order written into a save copy (the E7 file the port keeps for the session).
+export function writeTechMenuOrder(save: Uint8Array, order: readonly number[]): void {
+  if (save.length < TECH_MENU_OFFSET + TECH_MENU_SIZE) return;
+  const dv = new DataView(save.buffer, save.byteOffset, save.byteLength);
+  for (let i = 0; i < TECH_MENU_COUNT; i++) dv.setUint16(TECH_MENU_OFFSET + i * 2, order[i] ?? 0, true);
+}
+
 export interface InventoryItem {
   index: number;
   state: number; // 1 = in inventory, 2 = equipped

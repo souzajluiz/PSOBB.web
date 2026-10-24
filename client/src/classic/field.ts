@@ -182,7 +182,10 @@ export class FieldScreen implements Screen {
     if (this.quick) {
       e.preventDefault();
       this.quick.key(e);
-      if (!this.quick.open) this.quick = null;
+      if (!this.quick.open) {
+        this.quick = null;
+        this.quickEnv.menu.techOrder.commit?.(); // the list's close after a swap (ED 06, dump 711530)
+      }
       return;
     }
     if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {

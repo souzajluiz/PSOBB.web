@@ -303,6 +303,8 @@ export class LobbyScreen implements Screen {
       // The tools and traps tabs are field tabs; the lobby has none of them.
       tools: { use: () => {} },
       isRare: () => false,
+      toolChecks: () => null,
+      compareRows: () => null,
       traps: {
         statuses: () => [],
         stock: () => 0,

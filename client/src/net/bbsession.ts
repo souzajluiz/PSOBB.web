@@ -7,7 +7,16 @@
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
-import { E7_SIZE, parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
+import {
+  E7_SIZE,
+  TECH_MENU_COMMAND,
+  TECH_MENU_FLAG,
+  parseCharacterFile,
+  techMenuPayload,
+  writeAutoReply,
+  writeTechMenuOrder,
+  type CharacterFile,
+} from './charfile.ts';
 import { customizeBody } from '../classic/customize.ts';
 import { CHAT_SHORTCUTS_COMMAND, CHAT_SHORTCUTS_FLAG, chatShortcutsPayload } from './chatshortcut.ts';
 import { Lobby } from './lobby.ts';
@@ -510,6 +519,15 @@ export class BBSession {
     const body = chatShortcutsPayload(this.fullCharacter);
     if (!this.conn || !body) return;
     this.conn.send(CHAT_SHORTCUTS_COMMAND, CHAT_SHORTCUTS_FLAG, body);
+  }
+
+  // The technique menu order the quick menu's swap changed (ED 06, send_packet0xed_subcommand6,
+  // dump 813854, sent when the list window is destroyed after a change, dump 711530). The
+  // order is also written into the session's save copy, so a later E7 copy carries it.
+  sendTechOrder(order: readonly number[]): void {
+    if (this.fullCharacter) writeTechMenuOrder(this.fullCharacter, order);
+    if (!this.conn) return;
+    this.conn.send(TECH_MENU_COMMAND, TECH_MENU_FLAG, techMenuPayload(order));
   }
 
   sendSaveFile(): void {
