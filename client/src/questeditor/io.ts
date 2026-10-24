@@ -6,7 +6,7 @@
 // .qst holds both. The functions here accept either form of a loose file.
 
 import { prsDecompress } from '../formats/prs.ts';
-import { prsCompress } from '../formats/prscompress.ts';
+import { prsCompressOptimal } from '../formats/prscompress.ts';
 import { parseQuestBin } from '../formats/questbin.ts';
 import { parseQuestDat } from '../formats/questdat.ts';
 import { assembleQuest, disassembleQuest } from '../formats/questasm.ts';
@@ -81,8 +81,8 @@ export function buildPackage(doc: QuestDocument): QuestPackage {
     name,
     stem,
     qst: packQst(doc.toQuestBin(), doc.toQuestDat(), { name }),
-    bin: prsCompress(binRaw),
-    dat: prsCompress(datRaw),
+    bin: prsCompressOptimal(binRaw),
+    dat: prsCompressOptimal(datRaw),
     binRaw,
     datRaw,
   };

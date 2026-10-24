@@ -10,7 +10,7 @@
 // with packQstFiles (formats/qst.ts, A6 / A7 commands) and parses back with parseQst.
 
 import { packQstFiles } from '../formats/qst.ts';
-import { prsCompress } from '../formats/prscompress.ts';
+import { prsCompressOptimal } from '../formats/prscompress.ts';
 import type { LoadedQuest } from './quests.ts';
 
 export interface DownloadQuestRecord {
@@ -41,8 +41,8 @@ export function recordForQuest(q: LoadedQuest, savedAt = Date.now()): DownloadQu
     name: q.name,
     binFilename: q.binFilename,
     datFilename: q.datFilename,
-    bin: prsCompress(q.bin),
-    dat: prsCompress(q.dat),
+    bin: prsCompressOptimal(q.bin),
+    dat: prsCompressOptimal(q.dat),
     savedAt,
   };
 }

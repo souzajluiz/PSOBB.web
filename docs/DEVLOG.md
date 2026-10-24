@@ -1,5 +1,38 @@
 # Devlog
 
+## 2026-10-24: Optimal PRS parser for quest files
+
+**What changed:** `prsCompressOptimal` in `client/src/formats/prscompress.ts`,
+next to the greedy `prsCompress` (unchanged output; both now share a
+`PrsWriter` for the control bits). It is the shortest path over the PRS
+command costs in bits (literal 9, short copy 12, long copy 18, extended long
+copy 26), with newserv's candidate windows (short: distance <= 256, length
+<= 5; long / extended: distance <= 8191, length <= 256). Its match finders are
+exact hash chains over the window, so the parse size matches newserv's
+`compress-prs --optimal`. It returns the greedy output when that is smaller
+(control bytes are rounded up, so bits and bytes can disagree).
+
+The quest writers use it: `.bin` / `.dat` in `formats/qst.ts` (`packQst`),
+the editor's publish (`questeditor/io.ts`) and the downloaded-quest store
+(`net/downloadquests.ts`).
+
+**Why:** the roadmap's last PRS item; quest files are small, so the extra
+time is not felt.
+
+**Numbers:** on the 40 largest decoded BB quest files, 796424 bytes in,
+greedy 234832, optimal 224855 (-4.3%). A 100 KB input takes about 0.1 to 0.5 s
+(the greedy takes about 20 ms); the time grows with the match density.
+Newserv on the same files gives the same sizes (64 quests checked, every
+8th file in `system/quests`, 723860 bytes both ways).
+
+**Verified:** `tests/prscompress.test.ts` (round trip on empty / one-byte /
+zeros / random / text / far-edge and distance-8191 copies / seeded random;
+never larger than greedy; newserv size check when a build is present);
+`tests/questwrite.test.ts` and `tests/quests.test.ts` still pass.
+`client` typecheck: no errors in the touched files (the worktree has no
+`node_modules`; the remaining errors are the same environment errors as
+before, from `vite.config.ts` and the render modules).
+
 ## 2026-10-20: Quest editor connected to the admin panel
 
 **What changed:** The Quests tab has "Open in editor" (per quest with BB

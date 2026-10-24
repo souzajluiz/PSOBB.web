@@ -23,7 +23,7 @@
 // server sends (net/quests.ts).
 
 import { prsDecompress } from './prs.ts';
-import { prsCompress } from './prscompress.ts';
+import { prsCompressOptimal } from './prscompress.ts';
 import { parseQuestBin, type QuestBin } from './questbin.ts';
 import { parseQuestDat, type QuestDat } from './questdat.ts';
 import { serializeQuestBin, serializeQuestDat } from './questwrite.ts';
@@ -219,8 +219,8 @@ export function packQst(bin: QuestBin, dat: QuestDat, opts: PackQstOptions = {})
   const name = opts.name ?? (/^[\x20-\x7e]+$/.test(questName) ? questName : base);
   return packQstFiles(
     [
-      { filename: `${base}.bin`, data: prsCompress(serializeQuestBin(bin)) },
-      { filename: `${base}.dat`, data: prsCompress(serializeQuestDat(dat)) },
+      { filename: `${base}.bin`, data: prsCompressOptimal(serializeQuestBin(bin)) },
+      { filename: `${base}.dat`, data: prsCompressOptimal(serializeQuestDat(dat)) },
     ],
     name,
     opts.download === true,
