@@ -26,12 +26,13 @@
 
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
-import { MENU_LAYER } from '../classic/hud.ts';
+import { MENU_LAYER, STATUS_LAYER } from '../classic/hud.ts';
 import { WindowAnim } from '../classic/windowanim.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } from '../classic/fieldmenu.ts';
+import { drawMenuPanel } from '../classic/mainmenu.ts';
 import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
 import { isInTeam } from '../classic/teammenu.ts';
@@ -262,6 +263,8 @@ export class FieldHud {
   };
   private onMouse = (e: MouseEvent) => this.mouseEvent(e);
 
+  private readonly panelCanvas: HTMLCanvasElement;
+
   constructor(viewer: MapViewer, files: ClientFiles, opts: FieldHudOptions) {
     this.viewer = viewer;
     this.files = files;
@@ -274,6 +277,12 @@ export class FieldHud {
     Object.assign(this.canvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(MENU_LAYER) });
     this.host.parentElement?.append(this.canvas);
     this.ctx = this.canvas.getContext('2d')!;
+    // The menu's backdrop (classic/mainmenu.ts drawMenuPanel) sits under the status window
+    // (STATUS_LAYER) and over the 3D view.
+    this.panelCanvas = document.createElement('canvas');
+    this.panelCanvas.className = 'field-hud-panel';
+    Object.assign(this.panelCanvas.style, { position: 'absolute', pointerEvents: 'none', zIndex: String(STATUS_LAYER - 1) });
+    this.host.parentElement?.append(this.panelCanvas);
     // Capture phase on the canvas itself: runs before the movement, combat
     // and item listeners (bubble phase on the same element) and stops them
     // while a menu is open.
@@ -1018,6 +1027,23 @@ export class FieldHud {
     return it ? it.data.id : null;
   }
 
+  private drawPanel(w: number, h: number, dpr: number, host: HTMLElement, s: number): void {
+    const c = this.panelCanvas;
+    const shown = this.menu.shift > 0;
+    c.style.display = shown ? 'block' : 'none';
+    if (!shown || !this.tex) return;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+    }
+    Object.assign(c.style, { left: `${host.offsetLeft}px`, top: `${host.offsetTop}px`, width: `${w}px`, height: `${h}px` });
+    const pc = c.getContext('2d')!;
+    pc.setTransform(1, 0, 0, 1, 0, 0);
+    pc.clearRect(0, 0, c.width, c.height);
+    pc.setTransform(s, 0, 0, s, 0, 0);
+    drawMenuPanel(pc, this.tex.skin.frame, this.menu.shift);
+  }
+
   private draw(): void {
     const host = this.host;
     const w = host.clientWidth;
@@ -1040,6 +1066,7 @@ export class FieldHud {
     const bands = bandsOf(f.vh, f.fill);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
+    this.drawPanel(w, h, dpr, host, s);
     // The action palette (GUI 0x20) and the hotbar (GUI 0x21) are shown on an unsafe map only
     // (classic/fieldmenu.ts paletteWindowsShown): Pioneer 2 and the hubs show neither.
     const paletteShown = paletteWindowsShown(this.opts.area());
@@ -1124,5 +1151,6 @@ export class FieldHud {
     this.minimapView.dispose();
     this.viewer.frameHooks.delete(this.hook);
     this.canvas.remove();
+    this.panelCanvas.remove();
   }
 }

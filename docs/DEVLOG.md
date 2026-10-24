@@ -18547,3 +18547,18 @@ Morfos arm end (+0xb0 bit 0x10):
 **Result:** the card is an overlay or addon, not a vanilla feature. The port keeps the pickup as it is (`render/flooritems.ts`, particle and SE only). ROADMAP line added under the floor item entries.
 
 **ASSUMED:** none (no port). **Tests:** none run (docs only).
+
+## 2026-10-23: Home menu backdrop (teal scanline panel) and the view rect
+
+**Question:** the reference (19.png) shows, with the field main menu open, the 3D view top right and a teal scanline panel on the left and below. Does `render_player_menu_background` (dump 700858) size that panel through the element at `+0x54`?
+
+**Answer: no, the premise is wrong.** `+0x54` is the player slot (ctor `ChallengeMenuObjectBase_Constructor_0073367c` stores its param_2 there), not a UI element. `UIElementSetArrayElement_00719978` / `UIElementSetArrayElement6_0071998c` (0x00719978 / 0x0071998c) call `0x00719960`, which returns the constant 0x00a98480 and ignores the index, then write +0xc and +0x18 of that one record. The record's +0xc / +0x10 / +0x14 / +0x18 are the min x / min y / max x / max y of the visible 3D rect (default 0,0,640,480 from `ResetUIElement_0071a200`); every reader (`UIElementGetArrayElement3/4/5/6`, dump 684960..685600, asm 0x0071e5xx..0x00721dxx) is a chat bubble clamp. Open: min x = 160/3 * frame (0x009712e0 = 160), max y = frame * (230.4 / -3) + 480 (0x009712dc = 230.4, 0x009712e8 = -3, 0x009712ec = 480) = 249.6 at frame 3. This equals the shifted view's left edge (320 + 80 - 0.75 * 320 = 160) and matches the reference (3D from x 160, bottom at y ~250).
+- The viewport stays full screen (`unknown_ui_viewport_updating`, `update_viewport`); only the centre moves (`SetDefaultNPCCameraUILayout_004d4374`, flag 0x400 of 0x00a489fc, read only in the camera module and once at 0x0067c778).
+- Not found: the routine that paints the teal panel. No function reads the rect or the flag to draw; the menu object's vtable (0x00b40830) has no render slot; `render_player_hud_bg` (0x00743b60) draws only the status window pieces of texture 13. The scanline tile exists in f256_hyouji.prs texture 1 (centre of the window frame, texels 32..64).
+- The flag-0x10 branch of the function (offset 0 / 100, rect 0 / 100) is not ported (no caller sets 0x10 in the paths traced).
+
+**Port.** `classic/mainmenu.ts` `menuViewRect(f)` (the exe's rect) and `drawMenuPanel(ctx, frameTex, f)`: the L-shaped area outside the rect, the window-frame centre tile over an opaque teal, a 2 px cyan edge along the 3D view. Field: `render/fieldhud.ts` draws it on its own canvas under the status window (z STATUS_LAYER - 1, over the 3D view), so the HP window shows over it as in the reference. Lobby: `classic/lobby.ts` draws it first in the HUD pass (same menu function). The 3-frame grow / shrink follows `menu.shift`.
+**ASSUMED:** the tile (texture 1 centre), the base colour #063a42 and the edge colour / width (the real painter was not found); the geometry is the exe's. Right and top are not covered (the 3D view reaches them).
+**Checks:** `node tests/mainmenulayout.test.ts` (new view rect cases), `node tests/viewshift.test.ts`, `npx tsc --noEmit -p .`; `client/e2e/field-menu-home.spec.ts` against a worktree Vite: 3D view from x 160 and above y 374 of 720 (= 250 of 480) with the panel left and below, the status window and menu over it; close to the reference layout.
+**Left:** find the exe's panel painter (tile / colour exactness); the lobby was not screenshotted.
+

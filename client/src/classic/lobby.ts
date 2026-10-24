@@ -56,7 +56,7 @@ import { se, SE } from '../audio/se.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
-import { ItemListWindow, MAIN_MENU, MainMenu, type MainMenuTextures } from './mainmenu.ts';
+import { drawMenuPanel, ItemListWindow, MAIN_MENU, MainMenu, type MainMenuTextures } from './mainmenu.ts';
 import { applyMenuViewShift } from '../render/viewshift.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import type { ItemRow } from './itempack.ts';
@@ -704,6 +704,7 @@ export class LobbyScreen implements Screen {
     const bands = bandsOf(stage.vh, stage.fill);
     inGameSpace(ctx, stage, (extra) => {
       this.extra = extra;
+      drawMenuPanel(ctx, this.hud.skin.frame, this.menu.shift);
       this.drawNameTags(ctx, extra, stage.vh);
       this.chat.bubbles.draw(ctx, this.hud.bubble);
       drawLobbyNameWindow(ctx, this.hud.skin, this.lobbyName, extra);
