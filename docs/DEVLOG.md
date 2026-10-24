@@ -18889,3 +18889,20 @@ frames during DEMO_WARP0: 217 (rAF ticks in about 4 s); failed requests: 0; page
 **ASSUMED / open.** The leader gate (the solo test player is the leader, as in 10-22). The DEMO_WARP0 picture against the exe (the screen fade near 0x0044E504 is still not read). The other five scenes' cameras (the DEVLOG 10-22 entry) are still not seen in Chrome: they need the live entities.
 
 **Checks.** `client/node_modules/typescript/bin/tsc --noEmit -p client` (Node 24): clean. `darkfalz-casket.spec.ts` passes (above).
+
+## 2026-10-24: Gal Gryphon minions: who creates them (the throw was already wired; the stale "nothing creates it" notes are fixed)
+
+**Finding.** The minion is created by the brain's S7 handler, once per S7 run, at animation time 20.5. The creation is already in the port: `galgryphonstatesa.ts` s7 calls `throwMinion` at `crossed(20.5)`, `render/combat.ts` routes it to `GalgryphonMinionManager.throw` (`combat/galgryphon.ts`), the launcher makes the homing Effect (`combat/galgryphonminion.ts`) at its flight's end, and `render/combat.ts` `minimapIcons()` draws the forced 1.5 icon in the Effect's state 1. The notes in `galgryphonminion.ts`, `galgryphon.ts` and the ROADMAP Minimap line (which said nothing creates it) were stale and are corrected.
+
+**Exe facts (Psobb.exe-05112026.c, dump addresses).**
+- S7 = `HandleOlgaMinionAction_004a1678` (dump 223944). Its state 0 goes to sub-state 1 (6e4 = 1) on the first tick; in sub-state 1 the events run (sounds at 8 / 20, the Olga spawn at 12) and at `check_entity_animation_elapsed_threshold(this, 20.5)` (dump 224021, the crossing test of dump 791545) it calls `CreateGalgryphonMinion_004aa808` (dump 224036, the only call of that function) once and sets 6e4 = 2.
+- Launcher args: `this+0x4cc` (the parent), the boss `this`, origin = `this+0x44c` (the muzzle), offset = (150 sin, -(muzzle y - 0) / 2, 150 cos) of the heading `this+0x60` (dump 224027..224030; constants 0x00903f38 = 150.0, 0x00903fa0 = 0.0, 0x00903f44 = 0.5, read with `tools/exedata.py`), target = (`this+0x39c`, 0, `this+0x3a4`), slot = u16 `this+0x394`.
+- Launcher layout (dump 228848): control points origin, origin + offset, (target x, 5.0 (0x40a00000), target z); flight frames = ROUND(0.07 * distance) (0x00904468 = 0.07), raised to 30 when below 31; state 0 -> 1 -> 2 (the Effect, `CreateGalgryphonMinionEffect_004ab138`, dump 229417) -> 3.
+- Count: one launcher, hence one minion, per S7 run. The number of S7 runs per fight is the pattern's, not decided here (the port's pattern script decides it as the exe's does).
+- Other `CreateGalgryphonMinion_*` callers are NOT minions: `_004aabd8` (dump 225675, animation 22.0 in HandleGalgryhonState_004a5eec) makes the 0x130 particle ring; `_004a8f5c` (dump 225975) the 0x20 hitbox object; `_004a92b4` (dump 224204) the 0x28 object that sets the npc camera.
+
+**Changes.** No behaviour change: the port already did this. Comments in `client/src/combat/galgryphon.ts` and `galgryphonminion.ts` corrected. `tests/galgryphon.test.ts` gains a block that pins the launcher's control points, slot and flight length from the S7 offset (computed as s7 does, with `sin16` / `cos16` from `galgryphonstatesa.ts`), and that the icon comes after the flight.
+
+**ASSUMED / open.** That the S7 throw is the only creator of the Effect in the exe (the dump has one call of `_004aa808`; the Effect's other callers were not searched beyond `CreateGalgryphonMinionEffect_004ab138`, which is called only from the launcher). The S7 animation time is the port's motion frame (`crossed(20.5)`), taken as equal to the exe's `check_entity_animation_elapsed_threshold` (the same crossing test). The minion's ground lookup and the sound 0x3ad are not checked in Chrome. Still open from the older notes: the Effect's sound 0x39f and the attack dispatch's area hit (unchanged).
+
+**Checks.** `node tests/galgryphon.test.ts`, `galgryphonminion.test.ts`, `galgryphonstatesa.test.ts`, `galgryphonai.test.ts`: all pass. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean.

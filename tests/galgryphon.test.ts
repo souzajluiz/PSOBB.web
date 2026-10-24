@@ -16,6 +16,7 @@ import {
   type Vec3,
 } from '../client/src/combat/galgryphon.ts';
 import { GALMINION } from '../client/src/combat/galgryphonminion.ts';
+import { cos16, sin16 } from '../client/src/combat/galgryphonstatesa.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -136,6 +137,39 @@ eq(minionFlightFrames({ x: 0, y: 3, z: 4 }, { x: 0, z: 0 }), 30, 'the origin hei
   eq(p[2], 15, 'the literal 15.0');
   eq(p[3], 10, 'the literal 10.0');
   eq(p[4], 1, 'the uint32 0x00903990');
+}
+
+// The S7 throw's geometry as the brain makes it (galgryphonstatesa.ts s7 at animation 20.5; the exe's
+// constants 0x00903f38 = 150, 0x00903f44 = 0.5, 0x00903fa0 = 0, dump 224027..224030): one launcher per
+// S7 run, its control points the muzzle, muzzle + offset and the target lifted to 5.0, its slot the
+// target's id (+0x394). ASSUMED: the brain's S7 throw is the only creator of the launcher in the exe
+// (the dump's other CreateGalgryphonMinion_* calls are the 0x130 ring, the 0x20 hitbox and the 0x28 camera).
+{
+  const heading = 0x2000;
+  const muzzle: Vec3 = { x: 11, y: 40, z: 12 };
+  const offset: Vec3 = { x: sin16(heading) * 150, y: -(muzzle.y - 0) * 0.5, z: cos16(heading) * 150 };
+  const target = { x: 300, z: -200 };
+  eq(offset.y, -20, 'the offset y is -muzzle.y / 2');
+  const m = new GalgryphonMinionManager();
+  const l = m.throw(muzzle, offset, target, 9);
+  near(l.points[0].x, 11, 'the first control point is the muzzle (x)');
+  near(l.points[0].y, 40, 'the first control point is the muzzle (y)');
+  near(l.points[1].x, 11 + offset.x, 'the second control point is muzzle + offset (x)');
+  near(l.points[1].y, 20, 'the second control point is muzzle + offset (y)');
+  near(l.points[1].z, 12 + offset.z, 'the second control point is muzzle + offset (z)');
+  near(l.points[2].x, 300, 'the target point (x)');
+  eq(l.points[2].y, 5, 'the target point is lifted to 5.0');
+  near(l.points[2].z, -200, 'the target point (z)');
+  eq(l.slot, 9, 'the launcher slot is the target id');
+  eq(l.duration, minionFlightFrames(muzzle, target), 'the flight length is the S7 distance');
+  // The Effect is made at the flight's end and draws its icon from there on (the target is the party's slot 9).
+  const players = [{ clientId: 9, x: 300, z: -200 }];
+  let firstIcon = -1;
+  for (let i = 0; i < 400 && m.active; i++) {
+    m.update(players, flat(6));
+    if (firstIcon < 0 && m.minimapIcons().length > 0) firstIcon = i;
+  }
+  check(firstIcon > l.duration, `the minion icon comes after the flight: got tick ${firstIcon}, flight ${l.duration}`);
 }
 
 if (failures > 0) {

@@ -31,10 +31,11 @@
 // unaff_retaddr and fLerpSpeed arguments (the Calculate call writes them to
 // the stack slots it passes); the sound 0x39f, the particles and the attack
 // dispatch (DispatchGalGryphonAttackEffect_004a8690, the Sinow Berill attack
-// effect) are not ported here, nor is the launcher that makes the Effect (its
-// path is InterpolateMinionEffectPosition_007be6b8) or the Gal Gryphon brain
-// that makes the launcher: the port has no Gal Gryphon brain yet, so nothing
-// in the game creates this object.
+// effect) are not ported here. The launcher that makes this object is
+// galgryphon.ts (its Bezier path is InterpolateMinionEffectPosition_007be6b8),
+// and the brain's S7 throw makes that launcher (galgryphonstatesa.ts, 2026-10-24
+// check: CreateGalgryphonMinion_004aa808 is called once per S7 run at animation 20.5,
+// dump 224036).
 
 import { ENEMY_ICON_COLOR, type Icon } from '../classic/minimap.ts';
 import type { GroundFn } from './techfire.ts';
