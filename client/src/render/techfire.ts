@@ -5,9 +5,10 @@
 // type 0 simulation), the sounds the SE ids of common.pac.
 //
 // ASSUMED / not drawn (see docs/DEVLOG.md "Technique visuals: Foie and Barta
-// families"): the model particles of Barta and Gibarta are drawn (FieldParticles
-// model bursts, DEVLOG 2026-10-23 "Barta and Gibarta model particles"); Rabarta's
-// body, Rafoie's ring and fire sphere are not, the emitters' orientation
+// families"): the model particles of Barta, Gibarta, Rabarta and Rafoie's ring are
+// drawn (FieldParticles model bursts, DEVLOG 2026-10-23 "Barta and Gibarta model
+// particles" and "Rabarta and Rafoie model particles"); Rafoie's fire sphere (the
+// blast's child object) is not, the emitters' orientation
 // (the exe turns them by the object's angles; the particle engine here only
 // has a pitch), the dynamic light of the cast, the pitch of the creation
 // sounds, the wall impact of a Foie and the 0x18a stream of a level 25+ Barta.
@@ -145,7 +146,7 @@ export class TechFire {
   }
 
   private burst(fx: FieldParticles, e: FxEmitter, x: number, y: number, z: number): void {
-    void fx.spawn({ id: e.id, scale: [e.scale, e.scale], ...(e.dy !== undefined ? { dy: e.dy } : {}) }, new THREE.Vector3(x, y, z));
+    void fx.spawn({ id: e.id, scale: [e.scale, e.scale], ...(e.dy !== undefined ? { dy: e.dy } : {}), fx: emitterFx(e) }, new THREE.Vector3(x, y, z));
   }
 
   // The events of one tick: Foie's hit sound, Rafoie's blast.

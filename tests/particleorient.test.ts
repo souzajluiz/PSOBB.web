@@ -16,8 +16,8 @@
 // destroys (dump line 288330) and the single particle update never submits (dump 291923).
 // Run: node tests/particleorient.test.ts
 
-import { ParticleSystem, NO_ORIENT, orientOfDirection, parseParticleEntry, turnStep, type Orient } from '../client/src/classic/particles.ts';
-import { emitterFx, objectEmitterOrient, startEmitters, type FireKind, type FireObject } from '../client/src/combat/techfire.ts';
+import { ParticleSystem, NO_ORIENT, modelParticleBlend, orientOfDirection, parseParticleEntry, turnStep, type Orient } from '../client/src/classic/particles.ts';
+import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, emitterFx, objectEmitterOrient, rafoieBlastEmitters, startEmitters, type FireKind, type FireObject, type FxEmitter } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
 
 let failures = 0;
@@ -132,6 +132,28 @@ const kindsOf = (k: FireKind, tier: number) =>
   check(`Barta tier 5 emitters [${b5}]`, b5 === '190:object 191:object 192:- 198:half 193:-$0m0 1d8:-$0m0 1d7:-$0m0');
   const rabarta = [0, 1, 2, 3, 4, 5].map((t) => kindsOf('rabarta', t)).join(' | ');
   check('Rabarta: no emitter has angles (create_particle_effect3 only)', !/object|half/.test(rabarta));
+  // Rabarta's flag 0x20 entries (decoded from the table at 0x0096dc6c): chunk = flags >> 16, no motion (dump 649746).
+  const rModels = [0, 1, 2, 3, 4, 5].map((t) => kindsOf('rabarta', t).split(' ').filter((x) => x.includes('$')).join(' ')).join(' | ');
+  check(`Rabarta model entries by tier [${rModels}]`, rModels === '1df:-$2 | 194:-$2 | 195:-$2 | 199:-$3 | 19a:-$3 | 19b:-$4 1d6:-$1m1');
+  // Tier 5's one-shot 0x1d6: model chunk 1 with motion 1 (get_njm_chunk(bml, 1)), 5 above the point (g_RabartaParticleEffectYOffset 5.0).
+  const r1d6 = startEmitters('rabarta', 5).find((e) => e.id === 0x1d6)!;
+  check('Rabarta tier 5 0x1d6: burst, dy 5, model chunk 1 motion 1', r1d6.mode === 'burst' && r1d6.dy === 5 && JSON.stringify(emitterFx(r1d6).model) === '{"chunk":1,"motion":1,"speed":1}');
+  check('Rabarta tier 0 model 0x1df: fixed, no motion, speed 1', (() => {
+    const e = startEmitters('rabarta', 0).find((x) => x.id === 0x1df)!;
+    return e.mode === 'fixed' && JSON.stringify(emitterFx(e).model) === '{"chunk":2,"motion":null,"speed":1}';
+  })());
+  // Rafoie's ring 0x1a: the fixed form makes it first (then 0x3a, 0x3b); the list form makes 0x39 then the ring.
+  const ring = (es: readonly FxEmitter[]) => es.map((e) => `${e.id.toString(16)}${e.model ? `$${e.model.chunk}` : ''}`).join(' ');
+  check(`Rafoie fixed marks [${ring(RAFOIE_MARK_FIXED)}]`, ring(RAFOIE_MARK_FIXED) === '1a$9 3a 3b');
+  check(`Rafoie list marks [${ring(RAFOIE_MARK_LIST)}]`, ring(RAFOIE_MARK_LIST) === '39 1a$9');
+  check('Rafoie ring: model chunk 9, no motion, speed 1', JSON.stringify(emitterFx(RAFOIE_MARK_FIXED[0]!).model) === '{"chunk":9,"motion":null,"speed":1}');
+  // Rafoie's blast tier 5: 0x1e2 has flag 0x1000 (hidden; the table rafoie_and_bazooka_particles at 0x0096dd6c, tier 5 at 0x0096dd00).
+  const blast5 = rafoieBlastEmitters(5);
+  check('Rafoie blast tier 5: 0x1e2 is hidden', blast5.find((e) => e.id === 0x1e2)?.hidden === true && blast5.filter((e) => e.hidden).length === 1);
+  check('Rafoie blast tier 5: the 0x1e2 particle is noDraw', emitterFx(blast5.find((e) => e.id === 0x1e2)!).noDraw === true);
+  // The model particle's blend (SetColor_00508958): SRCALPHA / INVSRCALPHA when non-NT, SRCALPHA / ONE when NT.
+  check('model blend, non-NT: SRCALPHA / INVSRCALPHA (5 / 6)', JSON.stringify(modelParticleBlend(false)) === '{"src":5,"dst":6}');
+  check('model blend, NT: SRCALPHA / ONE (5 / 2)', JSON.stringify(modelParticleBlend(true)) === '{"src":5,"dst":2}');
   // Barta / Gibarta object angles: the heading's when undirected, none when aimed (EffectEntityBase).
   vecNear(objectEmitterOrient({ heading: 0, directed: false } as unknown as FireObject, 'object'), [HALF, 0, 0], 'Barta / Gibarta heading 0: X a quarter turn');
   vecNear(objectEmitterOrient({ heading: 0, directed: true } as unknown as FireObject, 'half'), [Math.PI, 0, 0], 'Barta / Gibarta aimed, flag 1: X a half turn only');
