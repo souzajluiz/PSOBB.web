@@ -51,8 +51,8 @@ import type { GameView } from '../render/gameview.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
-import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
-import { HEAD_STATE_CAST, headSendDistance, headTwoTech, NpcHead } from './npchead.ts';
+import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
+import { HEAD_STATE_CAST, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -735,7 +735,7 @@ export class QuestTown {
       }
       const row = npcAttackRow(p.npcTemplate);
       if (st.owner && row) {
-        this.stepNpcHead(slot, p, leader, row.leash, sender);
+        this.stepNpcHead(slot, p, leader, row, sender);
         continue;
       }
       const goal = followPoint(p.position, leader.position);
@@ -758,28 +758,46 @@ export class QuestTown {
     }
   }
 
-  // The owner's head of one NPC follower (SinowberillChallengePlayer_Update_007aefd4's chain
-  // UpdateState_007b00bc -> AIUpdate_007b1134 -> AIUpdateState_007b2764, quest/npchead.ts).
-  // The head's update state is the Pioneer 2 branch on every map (ASSUMED for the field: the
-  // map-mode branch is not traced). The walk goes to the send target; the sends are the
-  // NpcMoveSender's choice from that target (the run flag is the head's 0x8).
-  private stepNpcHead(slot: number, p: LobbyPlayer, leader: LobbyPlayer, leash: number, sender: NpcMoveSender): void {
+  // The owner's head of one NPC follower (SinowberillChallengePlayer_Update_007aefd4's chain, .c:794690):
+  // UpdateState_007af7ec (the distance, the wall counter, the B acquire), UpdateState_007b00bc (the Pioneer 2
+  // branch, or the field's mode 0 / mode 1 on the other maps), AIUpdate_007b1134 (the movement), then the state
+  // dispatch 2764 (quest/npchead.ts). The walk goes to the send target; the sends are the NpcMoveSender's
+  // choice from that target (the run flag is the head's 0x8).
+  private stepNpcHead(slot: number, p: LobbyPlayer, leader: LobbyPlayer, row: NpcAttackRow, sender: NpcMoveSender): void {
     let head = this.npcFollowHeads.get(slot);
     if (!head) {
       head = new NpcHead();
       this.npcFollowHeads.set(slot, head);
     }
+    head.configure(row);
     const combat = this.view.combat;
     const npc = { x: p.position.x, y: p.position.y, z: p.position.z };
     const owner = { x: leader.position.x, y: leader.position.y, z: leader.position.z };
-    head.pioneerUpdateState(owner);
-    head.update({ npc, owner, leash, wall: (a, b, mask) => combat.npcWallBlocks(a, b, mask) });
+    const wall = (a: HeadPoint, b: HeadPoint, mask: number) => (combat ? combat.npcWallBlocks(a, b, mask) : false);
+    const cands = combat ? combat.npcEnemies() : [];
+    head.headStateUpdate({ npc, owner, cands });
+    if (this.isPioneer2()) {
+      head.pioneerUpdateState(owner);
+    } else {
+      head.fieldUpdate({
+        owner,
+        npc,
+        npcWeapon: npc,
+        allowed: true, // is_player_allowed_to_attack of the NPC's record (ASSUMED true)
+        roll: Math.floor(Math.random() * 32768),
+        npcStatus8: false, // B +0x90 & 8: the server's status, not modelled (ASSUMED false)
+        ray: wall,
+        chooser: (mode) => this.headChooses(slot, head, mode, cands),
+      });
+    }
+    head.update({ npc, owner, wall });
     if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
+    head.afterDispatch();
     const dist = headSendDistance(head, npc);
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
     if (dist === null) sender.reset();
-    else send = sender.tick(dist, leash);
+    else send = sender.tick(dist, head.leash);
     const goal = head.sendTarget;
     const wasMoving = p.moving;
     const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
@@ -797,21 +815,57 @@ export class QuestTown {
     if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);
   }
 
-  // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, quest/npchead.ts headTwoTech):
-  // each tick while the head is in state 2, the Foie family pick at the NPC's locked target. ASSUMED:
-  // the strong flag (B +0x90 & 0x1000, not modelled: false) and the need byte +0x53 (not traced: 0), so
-  // the roll decides and the cast is skipped for any roll above 0. The busy ticks are the cast's own.
+  // Pioneer 2 is the lobby's floor 0 (ASSUMED: map_is_pioneer2_ is not traced; the field branch of
+  // UpdateState_007b00bc runs on every other map).
+  private isPioneer2(): boolean {
+    return (this.game.self?.floor ?? 0) === 0;
+  }
+
+  // The head's chooser (AIProcessState, quest/npcai.ts NpcHeadChooser) for the field's branch: the
+  // owner's and the NPC's status flags (the NPC's HP / TP are ASSUMED full), the head's table word and
+  // whether the locked enemy is inside the attack radius.
+  private headChooses(slot: number, head: NpcHead, mode: 0 | 1, cands: readonly { id: number; x: number; z: number }[]): boolean {
+    const combat = this.view.combat;
+    if (!combat) return false;
+    let ch = this.npcHeads.get(slot);
+    if (!ch) {
+      ch = new NpcHeadChooser();
+      this.npcHeads.set(slot, ch);
+    }
+    const owner = headStatusFlags(combat.npcOwnerStatus());
+    const npc = headStatusFlags({ hp: 1, hpMax: 1, tp: 1, tpMax: 1, stateFlags30: 0 });
+    const locked = head.lockedPrimary !== 0 ? cands.find((e) => e.id === head.lockedPrimary) : undefined;
+    const pos = head.npcPos;
+    const input = {
+      owner90: owner.f90,
+      owner8c: owner.f8c,
+      npc90: npc.f90,
+      npc8c: npc.f8c,
+      head34: head.head34,
+      head84: head.lockedSecond,
+      hasTarget: head.targets.length > 0,
+      hasItem: () => false,
+      canCast: () => true,
+      lockedInRadius: () => !!locked && !!pos && (locked.x - pos.x) ** 2 + (locked.z - pos.z) ** 2 < head.attackRadius * head.attackRadius,
+    };
+    return ch.choose(mode, input).attack;
+  }
+
+  // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, quest/npchead.ts headTwoTech): each
+  // tick while the head is in state 2, the Foie family pick at the locked target (B +0x7c). The table word's
+  // 0x40 leaves the cast off (.c:797355). ASSUMED: the strong bit (B +0x90 & 0x1000) is 0, so the roll with
+  // the cast need byte +0x53 decides; the TP gate only sets the input state 3 (not a block), and the
+  // eligibility check (CheckPlayerTechCastEligibility) is ASSUMED true. The busy ticks are the cast's own.
   private stepNpcTwoTech(slot: number, p: LobbyPlayer, head: NpcHead): void {
     if (head.castTicks > 0) {
       head.castTicks--;
       return;
     }
-    const ai = this.npcAttacks.get(slot);
     const combat = this.view.combat;
-    if (!ai || ai.target === null || !combat) return;
-    const tech = headTwoTech(head.head34, false, Math.floor(Math.random() * 32768) / 32768 * 10, 0);
+    if (!combat || head.lockedPrimary === 0 || (head.head34 & 0x40) !== 0) return;
+    const tech = headTwoTech(head.head34, false, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53);
     if (tech === null) return;
-    const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, tech, [ai.target]);
+    const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, tech, [head.lockedPrimary]);
     if (ticks !== null) head.castTicks = ticks;
   }
 
