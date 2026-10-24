@@ -17072,3 +17072,36 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 **Checks:** `node tests/lobbymain.test.ts` (block 6 adds the four entries: all source 0) ALL PASS with Node 24. `cd client && tsc --noEmit -p .` clean (Node 24; a temporary `client/node_modules` link to the main checkout, removed afterwards). Not run in Chrome, no Playwright.
 
 **Left:** the field arrival kind (`warpTo`) is not traced against the exe (the telepipe / teleport target path and the floor-order warp); the Meet the User path is not traced; the placement timing after the reset is ASSUMED.
+
+## 2026-10-23: field arrival kind (get_warp_type per floor change, the set fallback removed)
+
+**Goal:** the open part of the lobby arrival entry: the field's arrival kind (`warpTo`), traced against the exe, and the `spawnsFor` fallback removed if the exe has none. Correction to the entry above: `get_warp_type` tests `param_1[8] & 1` (flag bit 0, the `0xac9d6c` word), not bit 1.
+
+**Exe evidence (`reverse/refsrc/.../Psobb.exe-05112026.c`):**
+- Floor block `0xac9d4c`: prev `+0x0`, cur `+0x4`, staged `+0xc` (`SetFloorAndMapVariant_00815590`, 833238), flag word `+0x20` = `0xac9d6c`.
+- `MapStateTransitionHandler_008155a8` (833251): prev = cur, cur = staged. It does not touch the flags.
+- `get_warp_type` (833294): prev > 0x11 (signed) -> 4; flag bit 0 -> 2; episode 0 and prev's map = `boss_volopt` (13) -> 0 or 1 by cur's map (8..10 -> 1); else `cur - prev < 0` -> 0, else 1. The kind maps 0 -> 1, 1 or 2 -> 0, other -> 1 (554167..554176).
+- Who sets flag bit 0: `handle_packet0x64` (the game join) through `SetSinowberillChallengeFlags_007bd788` (805714, called at 780138). Who clears it: `ClearLobbyFlagIfNotLobby_008156b0` (833329, `& 0xfffffffe` unless the current map is a lobby), called in the online floor load after the transition (805576, and 805328). The offline and lobby resets write 0 (804305, 804587, 789799, 825060, 805772, 833361). The placement (554167) runs after the clear, so the bit reaches the placement only for the first floor loaded while the previous map is the lobby: the game's start floor 0 (Pioneer 2). That arrival is kind 2, source 0; the port's `enter()` gives it source 0 directly.
+- Teleport target path: `GetTeleportTargetDataForPlayer_006e9630` (647640) returns a position when the player's `+0x91c` is not 0xffff (non-null -> the set search at 554182 is skipped). `+0x91c` is written by the warp object's state machine (536178, 536185: the target entity index from the packet at `+0xa8`), and by the warp send at 647173 / 647191 (the target player). For the Pioneer 2 and Ep2 maps the position comes from the fixed tables (`g_TeleportTargetPositions_EP1_EP4`, `_EP2`); otherwise the other player's `+0x90c` / `+0x918`.
+- Respawn path: with `g_RespawnStateData` = 1 and the flag `unknown_flags_invincibility` not 2, the player is placed at the respawn data (554210..554214), not at a set. The dead return to Pioneer 2 (`SetPlayerRespawnState_006986ec`) uses it, so its source is not used by the exe.
+- No fallback: a missing set is the origin (554194).
+
+**Data (`data.gsl`, variation 0, normal, the exe's floors for Ep1, `tests/warpmenu.test.ts` prints it):** player sets by source (ids with a set): floors 0..9 have source 0 and source 1 (4 ids each); floors 10 (Ruins 3), 11 (Dragon), 12 (De Rol Le), 13 (Vol Opt), 14 (Dark Falz) have source 0 only (4 ids, no source 1); floor 15 (lobby) has 12 source-0 ids. Every floor with sets has source 0.
+
+**Port.**
+- `client/src/formats/fieldspawn.ts` (new, no three.js): `fieldWarpType` (get_warp_type), `fieldArrivalSource`, `floorChangeSource(prev, cur, episode)` (no flag), `spawnsOfSource` (the first set of each id of one source, no other source).
+- `client/src/render/gameview.ts`: `warpTo` passes `floorChangeSource(from, floor, episode)` when the caller gives no source. This is the one place for the field warps: the Ragol teleporter, area and map warps, the boss warp (`6x6A`), the field warp objects, quest `go_floor` and `ba_initial_floor` all call `warpTo(floor)` and get the exe's kind. The telepipe passes `arrival` and keeps its own position (the teleport target path skips the sets).
+- `spawnsFor` takes the sets of its source only (the fallback to 0 and 1 is removed). `mapData.hasSpawnSets` is set from the floor's sets, so a client id without a set of its source is the origin (`lobbySpawnAt`), and the spiral search is only for a floor with no sets at all.
+- Explicit sources kept: `enter()` (source 0: the flag path, kind 2), `returnToPioneer2` (source 0: the respawn path, unused by the exe), `returnToGuild` in `quest/town.ts` (`warpTo(0, 0)`: the exe's p_return_guild path is not traced; kind 0 would be source 1; kept, ASSUMED).
+
+**Visible change (ASSUMED, the user should check in the game):** a floor-order warp back to a floor whose sets are source 0 only (Ruins 3, Dragon, De Rol Le, Vol Opt, Dark Falz, Ep1 variation 0) now puts the player at (0, 0, 0) instead of the source 0 spawn, and a return from Vol Opt to Cave / Forest floors arrives at the origin. This is what the exe's loop gives (554182..554194) if the placement is the set path, which the trace shows for field warps without a teleport target or respawn state. The port has no Chrome check; no Playwright was run.
+
+**Tests:** `node tests/warpmenu.test.ts` (new block: the `get_warp_type` cases, Vol Opt (Ep1 only), the mapping to source, `spawnsOfSource` with no fallback, and the Ep1 set counts from `data.gsl`) ALL PASS with Node 24. `node tests/townfield.test.ts` pass, `node tests/lobbymain.test.ts` ALL PASS. `cd client && tsc --noEmit -p .` clean (Node 24; a temporary `client/node_modules` link to the main checkout, removed afterwards).
+
+**ASSUMED:**
+- Ep1 floor index = map id (floor 13 = Vol Opt, floors 8..10 = Ruins). The default `floorToArea` table is the identity for Ep1; a quest designation's map is not checked.
+- A floor change's previous floor is the one the player left (the exe's prev = cur at the transition). The Vol Opt check uses the same prev.
+- The flag reaches the placement only for the lobby-to-game first floor (clear at 805576 before the placement). Not traced for the online quest loads that start from a non-lobby map.
+- `returnToGuild` (p_return_guild) and the Pioneer 2 return keep their explicit source 0 (see above).
+
+**Left:** the telepipe's `+0x91c` target from another player (`GetTeleportTargetDataForPlayer` with a player index: the port's telepipe.ts arrival is not traced against `+0x90c` / `+0x918`); the p_return_guild path; the Chrome check of the origin placement on the 4-set floors; the quest designation's map for the Vol Opt check.

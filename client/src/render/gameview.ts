@@ -21,6 +21,7 @@ import { parseSetFile, placeEntities, type EnemySet, type PlacedEntity } from '.
 import { floorFiles, geometryCandidates, parseSetDataTable, type FloorFiles, type GameMode, type SetDataTable } from '../formats/setdatatable.ts';
 import { floorToArea, type Game } from '../net/game.ts';
 import { playerRoomId } from '../formats/playerroom.ts';
+import { floorChangeSource, spawnsOfSource } from '../formats/fieldspawn.ts';
 import { GameItems } from '../net/items.ts';
 import { parseMagEvolution, SE_FEED } from '../net/magfeed.ts';
 import { se } from '../audio/se.ts';
@@ -498,6 +499,8 @@ export class GameView {
 
   // First load after 64: Pioneer 2, then 6F.
   async enter(): Promise<void> {
+    // The first floor of a game is entered from the lobby: the flag bit 0 is set
+    // (handle_packet0x64), so get_warp_type is 2 and the source 0 (formats/fieldspawn.ts).
     await this.loadFloor(0, 0);
     const me = this.game.self!;
     // 6x3F room: get_player_room_id is 0 on Pioneer 2 (dump 803432), the first floor here.
@@ -514,8 +517,10 @@ export class GameView {
 
   // Yes on the dead prompt: return_to_p2_maybe sends 6x21 floor 0 and loads
   // Pioneer 2 (warpTo). The arrival is the player's Medical Center spot
-  // (SetPlayerRespawnState_006986ec, net/telepipe.ts pioneer2ReturnArrival); the
-  // floor's group 0 spawn still places the objects and NPCs. DAT_0097df90 is
+  // (SetPlayerRespawnState_006986ec, net/telepipe.ts pioneer2ReturnArrival). The exe
+  // places a player with a respawn state of 1 at the respawn data (554164 / 554210), not
+  // at a TObjPlayerSet, so the source 0 is not used there: placePlayer below overrides
+  // the view's own spawn. The floor's group 0 spawn still places the objects and NPCs. DAT_0097df90 is
   // sent for the state-3 players only (FUN_007b4234), not for this player.
   // combat.returnedToCity refills HP and TP.
   private async returnToPioneer2(): Promise<void> {
@@ -532,8 +537,10 @@ export class GameView {
   }
 
   // 6x21 + 6x22, load, then 6x3F / 6x1F / 6x3B / 6x23.
-  // `source` picks the TObjPlayerSet group (p_return_guild uses 0, the
-  // spawn in front of the Hunter's Guild).
+  // `source` picks the TObjPlayerSet group. Unset: the exe's arrival kind of this
+  // floor change (get_warp_type, formats/fieldspawn.ts), which the telepipe, the
+  // Pioneer 2 return and the lobby entries do not use (they pass `arrival` or their
+  // own source). p_return_guild passes 0 (the spawn in front of the Hunter's Guild).
   // `arrival`: where a telepipe puts the player (GetTeleportTargetDataForPlayer
   // _006e9630) instead of the floor's spawn point.
   async warpTo(floor: number, source?: number, arrival?: Arrival): Promise<void> {
@@ -547,8 +554,7 @@ export class GameView {
       // (ASSUMED: the load does not clear it).
       const guard = this.view?.guarding ?? false;
       this.game.warp(floor);
-      // TObjPlayerSet param4: 0 = arriving from a lower floor, 1 = returning from a higher one.
-      await this.loadFloor(floor, source ?? (floor > from ? 0 : 1));
+      await this.loadFloor(floor, source ?? floorChangeSource(from, floor, this.episode()));
       if (arrival) this.view?.placePlayer(this.game.selfId, arrival.x, arrival.y, arrival.z, arrival.angle);
       // The room is get_player_room_id on the new floor at the position.
       this.game.finishWarp(me.position.x, me.position.y, me.position.z, me.angle, { guard, room: this.playerRoom(me.position) });
@@ -656,6 +662,9 @@ export class GameView {
     }
 
     this.floorSpawns = allSpawnPoints(objects, sections);
+    // The floor has player sets (of any source): a client id without one of this source
+    // is the origin (lobbySpawnAt, 554194), not the spiral search of a set-less map.
+    mapData.hasSpawnSets = playerSpawns(objects).length > 0;
     const me = this.game.self!;
     me.floor = floor;
     me.position = { x: 0, y: 0, z: 0 };
@@ -951,16 +960,14 @@ function allSpawnPoints(objects: ObjectSetEntry[], sections: MapSection[]): Spaw
   });
 }
 
+// The sets of one source only (formats/fieldspawn.ts spawnsOfSource): the exe has
+// no fallback to another source, a client id without one is the origin (lobbySpawnAt).
 function spawnsFor(objects: ObjectSetEntry[], sections: MapSection[], source: number): Map<number, LobbySpawn> {
   const out = new Map<number, LobbySpawn>();
-  const sets = playerSpawns(objects);
-  for (const pass of [source, 0, 1]) {
-    for (const s of sets) {
-      if (s.source !== pass || out.has(s.clientId)) continue;
-      const room = sections.find((r) => r.id === s.room);
-      const [x, y, z] = roomToWorld(s.position, room);
-      out.set(s.clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
-    }
+  for (const [clientId, s] of spawnsOfSource(playerSpawns(objects), source)) {
+    const room = sections.find((r) => r.id === s.room);
+    const [x, y, z] = roomToWorld(s.position, room);
+    out.set(clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
   }
   return out;
 }

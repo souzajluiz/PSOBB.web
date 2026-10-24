@@ -7,6 +7,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { GSLArchive } from '../client/src/formats/archives.ts';
 import { parseSetFile, placeEntities, type ObjectSet } from '../client/src/formats/setdata.ts';
+import { fieldArrivalSource, fieldWarpType, floorChangeSource, spawnsOfSource } from '../client/src/formats/fieldspawn.ts';
+import { parseObjectSets, playerSpawns } from '../client/src/formats/objset.ts';
 import { floorFiles, parseSetDataTable } from '../client/src/formats/setdatatable.ts';
 import { parseMapNRel } from '../client/src/formats/nrel.ts';
 import { floorToArea } from '../client/src/net/game.ts';
@@ -142,6 +144,29 @@ eq(doorFlags(obj(0x1ab, 0x101, 3)), { flags: [], locked: true }, 'four-light doo
   check(!isDelayedObject(obj(0x19, 0), new Set()), 'group 0 is built at load');
 }
 
+// --- Field arrival kind (formats/fieldspawn.ts; get_warp_type, dump line 833294) ---
+eq(fieldWarpType(-1, 0, false, 1), 1, 'prev -1 (no floor) is the forward test');
+eq(fieldWarpType(0, 1, false, 1), 1, 'Pioneer 2 -> Forest 1');
+eq(fieldWarpType(3, 2, false, 1), 0, 'Cave 1 -> Forest 2 (back)');
+eq(fieldWarpType(18, 2, false, 1), 4, 'prev above 0x11 is 4');
+eq(fieldWarpType(16, 0, true, 1), 2, 'flag bit 0 (the game entry from the lobby) is 2');
+eq(fieldWarpType(13, 9, false, 1), 1, 'Ep1 Vol Opt -> Ruins 2 is 1');
+eq(fieldWarpType(13, 14, false, 1), 0, 'Ep1 Vol Opt -> Dark Falz is 0 (not 8..10)');
+eq(fieldWarpType(13, 14, false, 2), 1, 'Vol Opt special case is Ep1 only');
+eq([floorChangeSource(0, 1, 1), floorChangeSource(1, 2, 1), floorChangeSource(2, 1, 1), floorChangeSource(3, 2, 1)], [0, 0, 1, 1], 'floor-order sources');
+eq([fieldArrivalSource(0), fieldArrivalSource(1), fieldArrivalSource(2), fieldArrivalSource(3), fieldArrivalSource(4)], [1, 0, 0, 1, 1], 'warp type to source');
+{
+  const sets = [
+    { clientId: 0, source: 0, tag: 'a' },
+    { clientId: 0, source: 1, tag: 'b' },
+    { clientId: 1, source: 0, tag: 'c' },
+  ];
+  eq([...spawnsOfSource(sets, 0).keys()], [0, 1], 'source 0 sets by client id');
+  eq(spawnsOfSource(sets, 0).get(0)?.tag, 'a', 'first set of an id wins');
+  eq(spawnsOfSource(sets, 1).get(0)?.tag, 'b', 'source 1 set');
+  check(!spawnsOfSource(sets, 1).has(1), 'a client id without a set of the source gets no other source (no fallback)');
+}
+
 // --- Client data: names and objects ---
 if (existsSync(join(DATA, 'data.gsl'))) {
   const gsl = new GSLArchive(new Uint8Array(readFileSync(join(DATA, 'data.gsl'))));
@@ -189,6 +214,22 @@ if (existsSync(join(DATA, 'data.gsl'))) {
       if (episode === 2 && (area === 0x13 || area === 0x15 || area === 0x1c)) check(o.doors.some((d) => d.lamps), `Ep2 area 0x${area.toString(16)} has four-light doors`);
     }
   }
+  // The player sets of each Ep1 floor by source (variation 0, normal). The exe has no
+  // fallback: a floor with only source 0 sets gives a source 1 arrival no set.
+  const setCounts: string[] = [];
+  for (let floor = 0; floor < 18; floor++) {
+    const area = floorToArea(1)[floor];
+    if (area === undefined || area < 0) continue;
+    const files = floorFiles(table, area, 0, 0, floor, 'normal');
+    if (!files || !(loose.has(files.objects) || gsl.has(files.objects))) continue;
+    const sets = playerSpawns(parseObjectSets(read(files.objects)));
+    const s0 = spawnsOfSource(sets, 0).size;
+    const s1 = spawnsOfSource(sets, 1).size;
+    setCounts.push(`${floor}:${s0}/${s1}`);
+    if (sets.length > 0) check(s0 > 0, `Ep1 floor ${floor}: player sets without source 0`);
+  }
+  console.log(`Ep1 player sets (floor:source0/source1 ids): ${setCounts.join(' ')}`);
+  check(setCounts.length > 0, 'Ep1 floors have player sets');
   console.log(`map warps: ${mapWarpsNearPad} of ${mapWarps} land within 100 of another warp`);
   check(mapWarps > 0 && mapWarpsNearPad / mapWarps > 0.8, 'map warp destinations are floor coordinates');
 
