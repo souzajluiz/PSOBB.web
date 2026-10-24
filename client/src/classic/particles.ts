@@ -584,3 +584,228 @@ export function makeTinter(): (img: CanvasImageSource, key: string, r: number, g
     return c;
   };
 }
+
+// ---- DerollePartObject: the debris emitter of the destructible rock 0x0303 and the stalactite 0x038b ----
+// (PsoBB.exe: ctor 0x006441f4, InitSystem 0x00644cd0, update = vtable +0x1c 0x006443d0, the tick 0x00644390
+// (update, then the inactive test of vtable +0x18 0x006443bc sets the dead flag), the draw dispatch 0x006446f4
+// (vtable +0x28 0x00644718 or +0x2c 0x0064487c); object size 0x234; dump names are not trusted.) The object is
+// not a particle effect: each of its particles is one chunk of an object model (the archive model config_5 of
+// the object's own BML, texture list config_6, drawn at the particle with its three BAMS angles), so the
+// emitter is the physics of those chunks. The parameter block is 0x4c bytes (19 dwords), copied to the
+// object's +0x24..+0x6c. Object layout: +0x30 origin xyz, +0x3c velocity scale xyz, +0x48 spin xyz (int),
+// +0x54 count, +0x58 delay, +0x5c floor, +0x60 scale, +0x64 model, +0x68 texture, +0x6c flags, +0x70 particles
+// (8 x 0x38): +0 pos xyz, +0xc velocity xyz, +0x18 angles xyz (int), +0x24 steps xyz (int), +0x30 life
+// (float, 1.0), +0x34 delay (int).
+
+export const DEROLLE_BLOCK_WORDS = 19;
+export const DEROLLE_OBJECT_SIZE = 0x234;
+export const DEROLLE_MAX_PARTICLES = 8;
+const DEROLLE_RAND_DIVISOR = 32768; // 0x009354f4: the rand values are 0..32767 (ASSUMED range of 0x008587a5)
+
+// The block as the ctor reads it. [14] (the floor) and [16] / [17] are set by the callers from the object.
+export interface DerolleBlock {
+  restitution: number; // [0] float, obj+0x24: the vertical factor of a bounce (-restitution * vy)
+  drag: number; // [1] float, obj+0x28: the x / z velocity loss per tick (v + -v * drag)
+  gravity: number; // [2] float, obj+0x2c: subtracted from vy each tick (vy - gravity + -0.1 vy)
+  origin: [number, number, number]; // [3..5] float: where the particles start (the object's place)
+  velScale: [number, number, number]; // [6..8] float: vx = m * (rand/32768 - 0.5), vy = m * rand/32768, vz as vx
+  spin: [number, number, number]; // [9..11] int: the spin steps start at trunc(spin * rand / 32768)
+  count: number; // [12] int: particles (more than 8 and InitSystem fails)
+  life: number; // [13] int: delay in ticks before a particle's own life counts
+  floor: number; // [14] float: the bounce height (the object's y, 0x006759d4 / 0x00679b70)
+  scale: number; // [15] float: obj+0x60 (ASSUMED: the chunk's tint, see drawList)
+  model: number; // [16] int: archive model index (FUN_005b8610 of the object's archive)
+  texture: number; // [17] int: texture list index (FUN_005b8624)
+  flags: number; // [18] int: bit 2 runs the life counter, bit 1 bounces, bits 8 / 4 / 0x10 choose the draw
+}
+
+const f32 = Math.fround;
+const floatOfBits = (u: number): number => {
+  const v = new DataView(new ArrayBuffer(4));
+  v.setUint32(0, u >>> 0);
+  return v.getFloat32(0);
+};
+
+// Decodes the 19 dwords of a block (the words the ctor copies).
+export function parseDerolleBlock(w: ArrayLike<number>): DerolleBlock {
+  if (w.length < DEROLLE_BLOCK_WORDS) throw new Error('DerolleBlock: 19 words');
+  const fl = (i: number) => floatOfBits(w[i]);
+  const int = (i: number) => w[i] | 0;
+  return {
+    restitution: fl(0),
+    drag: fl(1),
+    gravity: fl(2),
+    origin: [fl(3), fl(4), fl(5)],
+    velScale: [fl(6), fl(7), fl(8)],
+    spin: [int(9), int(10), int(11)],
+    count: int(12),
+    life: int(13),
+    floor: fl(14),
+    scale: fl(15),
+    model: int(16),
+    texture: int(17),
+    flags: int(18),
+  };
+}
+
+export interface DerolleParticle {
+  pos: [number, number, number];
+  vel: [number, number, number];
+  ang: [number, number, number]; // BAMS, int adds (wraps at 2^32)
+  step: [number, number, number];
+  life: number; // +0x30, starts at 1.0
+  delay: number; // +0x34
+}
+
+export interface DerolleChunk {
+  pos: [number, number, number];
+  ang: [number, number, number]; // radians
+  model: number;
+  texture: number;
+  tint: number;
+}
+
+// One DerollePartObject. `rand` returns 0..32767; InitSystem draws it six times per particle, in the order
+// x, y, z, then the three spins. `tick()` is one game tick (the update, then the dead test).
+export class DerolleEmitter {
+  readonly block: DerolleBlock;
+  readonly particles: DerolleParticle[] = [];
+  active = true; // +0x230: cleared when no particle is alive (the inactive test)
+  readonly radius = 200; // +0x1c (ctor)
+  readonly height = 40; // +0x20 (ctor)
+  dead = false; // the +0x08 bit 0 of the object, set on the tick after it goes inactive
+
+  constructor(block: DerolleBlock, rand: () => number) {
+    this.block = block;
+    if (block.count > DEROLLE_MAX_PARTICLES) {
+      this.active = false; // InitSystem returns 0
+      return;
+    }
+    const m = block.velScale;
+    for (let i = 0; i < block.count; i++) {
+      const vx = f32(f32(-0.5 * m[0]) + f32(f32(rand() / DEROLLE_RAND_DIVISOR) * m[0]));
+      const vy = f32(f32(rand() / DEROLLE_RAND_DIVISOR) * m[1]);
+      const vz = f32(f32(-0.5 * m[2]) + f32(f32(rand() / DEROLLE_RAND_DIVISOR) * m[2]));
+      const s0 = Math.trunc(f32(block.spin[0] * (rand() / DEROLLE_RAND_DIVISOR)));
+      const s1 = Math.trunc(f32(block.spin[1] * (rand() / DEROLLE_RAND_DIVISOR)));
+      const s2 = Math.trunc(f32(block.spin[2] * (rand() / DEROLLE_RAND_DIVISOR)));
+      this.particles.push({
+        pos: [block.origin[0], block.origin[1], block.origin[2]],
+        vel: [vx, vy, vz],
+        ang: [0, 0, 0],
+        step: [s0, s1, s2],
+        life: 1,
+        delay: block.life,
+      });
+    }
+  }
+
+  // The tick (0x00644390): the update, then the dead test. Returns true on the tick the object dies.
+  tick(): boolean {
+    this.update();
+    if (!this.active && !this.dead) {
+      this.dead = true;
+      return true;
+    }
+    return false;
+  }
+
+  // The update (0x006443d0). A particle with no delay left counts its life down, only when flag 4 is set, and
+  // is alive while the life is above 0; a particle with a delay counts the delay down and is alive. A particle
+  // that is not skipped moves (motion). No alive particle clears `active`.
+  update(): void {
+    const b = this.block;
+    let alive = 0;
+    for (const p of this.particles) {
+      if (p.delay === 0) {
+        if (!(b.flags & 4)) continue;
+        p.life = f32(p.life - 1);
+        if (p.life > 0) alive++;
+      } else {
+        p.delay -= 1;
+        alive++;
+      }
+      this.motion(p);
+    }
+    if (alive === 0) this.active = false;
+  }
+
+  private motion(p: DerolleParticle): void {
+    const b = this.block;
+    const d = f32(b.drag);
+    const vx = p.vel[0];
+    const vy = p.vel[1];
+    const vz = p.vel[2];
+    const qx = f32(vx + f32(-vx * d));
+    const qz = f32(vz + f32(-vz * d));
+    const qy = f32(f32(vy - f32(b.gravity)) + f32(-vy * f32(0.1)));
+    p.vel[0] = qx;
+    p.vel[1] = qy;
+    p.vel[2] = qz;
+    p.pos[0] = f32(p.pos[0] + qx);
+    p.pos[1] = f32(p.pos[1] + qy);
+    p.pos[2] = f32(p.pos[2] + qz);
+    for (let k = 0; k < 3; k++) p.ang[k] = (p.ang[k] + p.step[k]) | 0;
+    if (!(b.flags & 2)) return;
+    // A bounce: below the floor and falling. The vertical speed flips by the restitution, the horizontal
+    // speeds keep 0.9, the spins halve (truncated), and the particle sits on the floor.
+    if (p.pos[1] < b.floor && qy < 0) {
+      p.vel[0] = f32(qx * f32(0.9));
+      p.vel[2] = f32(qz * f32(0.9));
+      p.vel[1] = f32(f32(-b.restitution) * qy);
+      p.step[0] = Math.trunc(p.step[0] / 2);
+      p.step[1] = Math.trunc(p.step[1] / 2);
+      p.step[2] = Math.trunc(p.step[2] / 2);
+      p.pos[1] = b.floor;
+    }
+  }
+
+  // The chunks drawn this frame: every particle of a live object (the draw loops over the count, not over
+  // the alive ones). The draw's exact transform is not traced: the chunk is at its position with its three
+  // angles (Euler XYZ, ASSUMED), unscaled, tinted by `scale` (ASSUMED from the 0.4 / 1.0 colour argument).
+  drawList(): DerolleChunk[] {
+    if (this.dead) return [];
+    return this.particles.map((p) => ({
+      pos: [p.pos[0], p.pos[1], p.pos[2]],
+      ang: [bamsToRad(p.ang[0]), bamsToRad(p.ang[1]), bamsToRad(p.ang[2])],
+      model: this.block.model,
+      texture: this.block.texture,
+      tint: this.block.scale,
+    }));
+  }
+}
+
+// BAMS (65536 = one turn) to radians, for any int (the spins wrap).
+export function bamsToRad(a: number): number {
+  return ((((a % 65536) + 65536) % 65536) / 65536) * Math.PI * 2;
+}
+
+// The rock 0x0303 break (0x006759d4): the block 0x0093aa40 (19 dwords, read with tools/exedata.py) and the six
+// points at 0x009c9a00 (floats, stride 12, not ints). The points are offsets from the rock's place (ASSUMED: no
+// yaw; the exe multiplies them by a matrix built from obj+0x60 through 0x0082d8bc, not traced). Chunk 1 is the
+// rock's model 1 and texture list 1 (FUN_005b8610(1), FUN_005b8624(1)).
+export const ROCK_DEBRIS_BLOCK: readonly number[] = [
+  0x3f733333, 0x3d8f5c29, 0x3ecccccd, 0, 0, 0, 0x40a00000, 0x40f00000, 0x40a00000, 1024, 256, 1024, 1, 30, 0, 0x3ecccccd, 0, 0, 14,
+];
+export const ROCK_DEBRIS_POINTS: ReadonlyArray<readonly [number, number, number]> = [
+  [12, 7, 12],
+  [-14, 16, 13],
+  [-3, 51, 11],
+  [7, 49, -11],
+  [-7, 38, -14],
+  [8, 16, -16],
+];
+export const ROCK_DEBRIS_CHUNK = 1;
+
+// The stalactite's template 0x0093b540 (0x17c bytes): five 0x4c blocks. Origin, floor, chunk and tint per part
+// are set by the caller (0x00679b70). Part i's chunk is STALACTITE_DEBRIS_CHUNK[i]; its origin is the
+// stalactite's x and z with y + STALACTITE_DEBRIS_RISE[i] (the float constants 0x0093b6ec = 25, 0x0093b6e8 = 10).
+export const STALACTITE_DEBRIS_TEMPLATE: readonly number[] = [
+  0x3f333333, 0x3d8f5c29, 0x3f000000, 0, 0, 0, 0x40400000, 0x40a00000, 0x40400000, 2048, 256, 2048, 1, 40, 0, 0x3f800000, 0, 0, 14,
+  0x3f333333, 0x3d8f5c29, 0x3f19999a, 0, 0, 0, 0x40600000, 0x40a00000, 0x40600000, 1024, 256, 1024, 2, 40, 0, 0x3f800000, 0, 0, 14,
+  0x3f333333, 0x3d8f5c29, 0x3ecccccd, 0, 0, 0, 0x40800000, 0x40a00000, 0x40800000, 512, 256, 512, 5, 40, 0, 0x3f800000, 0, 0, 14,
+  0x3f333333, 0x3d8f5c29, 0x3f19999a, 0, 0, 0, 0x40600000, 0x40a00000, 0x40600000, 1024, 256, 1024, 2, 40, 0, 0x3f800000, 0, 0, 14,
+  0x3f333333, 0x3d8f5c29, 0x3ecccccd, 0, 0, 0, 0x40800000, 0x40a00000, 0x40800000, 512, 256, 512, 5, 40, 0, 0x3f800000, 0, 0, 14,
+];
+export const STALACTITE_DEBRIS_CHUNK: readonly number[] = [0, 2, 1, 2, 1];
+export const STALACTITE_DEBRIS_RISE: readonly number[] = [25, 25, 25, 10, 10];

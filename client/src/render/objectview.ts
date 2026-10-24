@@ -20,6 +20,7 @@ import type { MapViewer } from './mapviewer.ts';
 import { disposeTree } from './dispose.ts';
 import { TexturePool } from './texturepool.ts';
 import type { CaptureDraw } from './traps.ts';
+import type { DerolleChunk } from '../classic/particles.ts';
 
 // The cloak of a Seabed capture trap (render/traps.ts captureTrapDraw, 'cloak').
 // ASSUMED shader: the exe's cloak (unknown_set_advanced_effect_cloaked, dump)
@@ -463,6 +464,65 @@ export class ObjectLayer {
     return 0;
   }
 
+  // Debris chunks (the DerollePartObject emitters of render/fieldobjects.ts): each chunk is a clone of one model
+  // of its object's archive (model index, texture list) placed at the particle. A template is built once per
+  // (bml, model, texture); a chunk whose template is still loading is not drawn yet.
+  private chunkTemplates = new Map<string, THREE.Group>();
+  private chunkPending = new Set<string>();
+  private chunkPool: THREE.Group[] = [];
+  private chunkGroup: THREE.Group | null = null;
+
+  drawChunks(list: ReadonlyArray<{ bml: string; chunk: DerolleChunk }>): void {
+    if (!this.root) return;
+    if (!this.chunkGroup) {
+      this.chunkGroup = new THREE.Group();
+      this.chunkGroup.name = 'debris';
+      this.root.add(this.chunkGroup);
+    }
+    let used = 0;
+    for (const { bml, chunk } of list) {
+      const key = `${bml}|${chunk.model}|${chunk.texture}`;
+      const tpl = this.chunkTemplates.get(key);
+      if (!tpl) {
+        void this.loadChunk(bml, chunk.model, chunk.texture, key);
+        continue;
+      }
+      let g = this.chunkPool[used];
+      if (!g || g.userData.key !== key) {
+        const fresh = tpl.clone(true);
+        fresh.userData.key = key;
+        if (g) this.chunkGroup.remove(g);
+        this.chunkGroup.add(fresh);
+        this.chunkPool[used] = fresh;
+        g = fresh;
+      }
+      g.visible = true;
+      g.position.set(chunk.pos[0], chunk.pos[1], chunk.pos[2]);
+      g.rotation.set(chunk.ang[0], chunk.ang[1], chunk.ang[2]);
+      used++;
+    }
+    for (let i = used; i < this.chunkPool.length; i++) this.chunkPool[i].visible = false;
+  }
+
+  private async loadChunk(bml: string, model: number, texture: number, key: string): Promise<void> {
+    if (this.chunkPending.has(key)) return;
+    this.chunkPending.add(key);
+    const gen = this.generation;
+    try {
+      const archive = await this.cache.getAuto(bml);
+      if (gen !== this.generation) return; // a clear() came first: this template belongs to nobody
+      const built = buildEnemy(archive, [toEnemyPart({ model, texlistOf: texture } as ObjectPartSpec)], 0, this.cache.loadedTextures);
+      this.chunkTemplates.set(key, built.root);
+    } catch (err) {
+      if (!this.warned.has(key)) {
+        this.warned.add(key);
+        this.stats.errors.push(`debris ${bml} model ${model}: ${(err as Error).message}`);
+      }
+    } finally {
+      this.chunkPending.delete(key);
+    }
+  }
+
   clear(): void {
     this.generation++;
     this.animators = [];
@@ -482,6 +542,11 @@ export class ObjectLayer {
     for (const c of this.cloaks.values()) c.dispose();
     this.cloaks.clear();
     this.captureDraws.clear();
+    for (const g of this.chunkTemplates.values()) disposeTree(g);
+    this.chunkTemplates.clear();
+    this.chunkPending.clear();
+    this.chunkPool = [];
+    this.chunkGroup = null;
     if (!this.root) return;
     this.viewer.scene.remove(this.root);
     disposeTree(this.root);
