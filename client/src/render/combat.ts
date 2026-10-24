@@ -149,6 +149,7 @@ import {
 } from '../combat/specials.ts';
 import { BOSS_AREAS } from '../net/telepipe.ts';
 import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect } from '../quest/battletraps.ts';
+import { SONAR_PING_SOUND } from '../quest/battle.ts';
 import type { EnemyHitbox as EnemyBoxHit, PlayerRatioStatus } from '../quest/npcai.ts';
 import { BattleTrapView } from './battletrapview.ts';
 import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
@@ -4292,6 +4293,13 @@ export class CombatView {
 
   // A trap's blast ends: the death particle 0x47 at the trap (EnemyDraw's death effect; the
   // position is ASSUMED to be the trap's).
+  // The sonar manager's ping (quest/battle.ts SonarManager, dump 006b0744): the sound 183 with
+  // the pitch the distance gives (0 = no pitch). ASSUMED: it plays where the listener is (the
+  // exe passes (0, 0, 0) to play_directional_sound_effect).
+  playSonarPing(pitch: number): void {
+    this.playSe(SONAR_PING_SOUND, pitch);
+  }
+
   battleTrapBurst(x: number, y: number, z: number): void {
     this.particle({ id: TRAP_DEATH_PARTICLE, delay: 0 }, new THREE.Vector3(x, y, z));
   }

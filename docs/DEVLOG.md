@@ -16163,3 +16163,55 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 2. 0x0202's door motion (the state machine is the port's; the exe's motion for the lock and its update 0x00657718 are not re-checked here).
 3. The 0x0204 `+0xdc` notice (the linked object's flag 1) and the +0x80 record's exact index (the set index is assumed).
 4. The Forest TObjDoor note above says "collision on while closed (FUN_007b52c4)"; by `boxPairActive` flag 8 is passable, so that note may have the two reversed. The port's obstacles use the door state, so behaviour is unchanged; check before relying on the note.
+## 2026-10-23: Battle item list rows (sonar and traps), the sonar manager's ping ported
+
+**What changed:** `quest/battle.ts` (`SonarManager` replaces the old fixed-life stock; `SonarStock` keeps `use` / `setFromRules` and adds `clear`), new `quest/battleitems.ts` (the list's row values, the menu-value mapping, the selection states, the greying, the status rows' counts and labels), `quest/battlerun.ts` (`tickSonar` plays the ping, `activateStatusRow` runs a trap row through `placeTrap` and the sonar row through `useSonar`, the manager is cleared on dispose), `render/combat.ts` (`playSonarPing`), `classic/quickmenu.ts` (a comment: row 4 of the traps tab is the sonar stock, not a trap stock), `tests/battle.test.ts` (the manager's life and pings, the pitch and interval, the list rows). The ROADMAP battle line is updated.
+
+**Premise corrections (exe):**
+- The sonar does not reveal enemies or players on the minimap. The manager's update (`006b0744`, decompiled with `tools/ghidra/decomp.sh`) only plays a ping: the nearest other player's distance sets the pitch and the next interval. Nothing else reads the manager global `g_SinowberillChallengeEntityManager_00a94b4c` (only the create, the clear and the reset in dump 602277..602370, and the state machine).
+- The manager's life is 0x3de (990 frames), not 0x1e. The constructor (dump 602318) writes 0x3de at +0x1c (the life) and 0x1e at +0x20 (the ping timer). The previous entry (2026-10-23 battle sonar stock) had the 0x1e as the life; it is the timer.
+- Row 4 of the traps tab (`classic/quickmenu.ts`, `trapRows` / `trapDecide`) is the sonar (the player's +0x8a0 field, `last_attack_type` in the dump), not a trap stock: its decide creates the manager (state 0x11). The old comment said otherwise.
+- A trap row is a status row (index 0..3) under a one-row menu of value 4; the press places trap type = the status index (the exe reads `selected value & 0xf`).
+
+**Exe evidence:**
+- `ChallengePlayer_ProcessListSelection_0075158c` (dump 723874): values 0..2 -> state 5, 3 -> 0xc, 4 -> 0xf, 5 -> 0x11, 6 -> 0x13, 7 -> 6.
+- `ChallengePlayer_StateMachine_00750954` (dump 723211): states 0xf / 0x10 are the palette (`SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` with `uVar5 & 0xf`); states 0x11 / 0x12 call `CreateSinowberillChallengeEntityManager_006b08b8` (must return 1), then `DecrementCounterAndClamp_00697968(+0x8a0, 1)`; both are gated by `IsPlayerActionAllowed_0068fb00`; the confirm key is `g_KeyboardSharedState[0xd]`, the sound 0x585.
+- `ChallengePlayer_CreateItemList_00751ae0` (dump 724311): inventory rows (value = instance id), five status rows with values 0xfffffff0 + i, the meseta row 0xffffff01 when meseta > 0.
+- `ChallengePlayerListWindowUpdateStatusItem_00737ec4` (dump 704479): `GetStatusOrAction(+0x89c, i)` for i < 4, `ClampValue(+0x8a0)` for i = 4; label unitxt group 0x11, 0x13 + i; a count of 0 or less adds no row; with param 1 the row gets flag 0x80 unless the map is safe and not a boss map.
+- `ChallengePlayer_AddMenuItemList_007518b0` (dump 724163): the one-row menu's value is 5 when `(status value & 0xf) == 4`, else 4; label unitxt group 0x11, 0x0f; flags 0x26 (selectable) on an unlisted non-boss map, else 6.
+- `ChallengePlayer_SetMenuItemsDisabled_00751c80` (724449) and `ChallengePlayer_SetMenuItemsEnabled_00751bd4` (724376): both set the grey colours (0xffaaaaaa / 0xff909090) on the -16..-1 rows and on the -255 row.
+- `CreateSinowberillChallengeEntityManager_006b08b8` (602277): map 16 (battle_spaceship) or 17 (battle_ruins) only, and only while the global is 0.
+- The manager (vtable 0x00b3a888): constructor 602318 (id 0x3de at +0x1c, 0x1e at +0x20, owner player at +0x24). Slot 0 (006b06c8, dump 602262) is the destructor that sets the global to 0, so a removed manager frees the stock for the next use. Slot 1 is the update, 006b0744 (Ghidra): the life drops each frame and the object is removed at 0; while the life is above 90 the timer drops, and at 0 the ping runs: the minimum squared XZ distance to the other players (from 2250000), `sqrt`, `near = max(d, 200)`, `f = 1 - (near - 200) / 1300`, `play_directional_sound_effect(0xb7, 0, 0, 0)` (sound 183), pitch `round(256 f)` through `FUN_00814664`, timer `round(-53 f) + 60`.
+- Constants (`tools/exedata.py read`): 0x009695cc = 200, 0x009695d0 = -53, 0x009695d4 = 256, 0x009695d8 = -1/1300, 0x009695dc = 1, 0x009695e0 = 200, 0x009695e4 = 2250000.
+- The window: the player menu's row 11 (`inventory_menu`; `handle_player_menu_select` at dump 700118, its case at 700197) constructs the challenge item window. The dump names that constructor `GuildCardSearchWindow_Constructor_0075086c`, which is misnamed: its vtable is 0x00b422c0, and slot 0 (0x00b422c4) is the state machine 0x750954. List positions (GUI table 0x00971f40, 8-byte entries, `tools/exedata.py read`): entry 2 (the item list) at (324, 256), entry 4 (the selection list) at (324, 256), entry 5 (the one-row item menu) at (324, 318).
+- The traps tab's refresh (`ChallengePlayerListWindow_InitializeItems_0074b9d8`, dump 719825) adds only the five status rows with the same greying (flag 1).
+
+**Ported:**
+- `SonarManager.tick(me, others)`: the life (990), the silent last 90 frames, the ping timer (30 first), the nearest-distance pitch and interval. `SonarStock` holds the manager (`use` takes one and starts it; `tick` returns the ping; a removed manager frees the stock).
+- `BattleRun.tickSonar` (the owner's position against the other players in the game, no floor test, as the exe) and `playSonarPing(pitch)` (sound 183; pitch 0 = no pitch).
+- `quest/battleitems.ts`: `statusRowValue`, `statusRowIndex`, `menuValueForStatusRow`, `listSelectionAction`, `battleRowAction`, `statusRowsView` (a row only at a count above 0), `trapStatusByte`, `clampSonar`, `menuRowSelectable`.
+- `BattleRun.activateStatusRow(statusIndex, menuValue)`: the trap row (value 4) to `placeTrap(type)`, the sonar row (value 5) to `useSonar()`.
+
+### ASSUMED
+
+- The ping plays at the listener: the exe passes (0, 0, 0) to the directional sound; its volume and the 3D fall-off are not traced.
+- The skip flag `+0x30 & 0x800` on the other players is not named in the exe; the port skips no remote player.
+- The life and the timer count the port's 30 Hz frames.
+- The battle map gate: `useSonar` passes `battleMap = true`; the exe needs map 16 or 17, and the port has no battle map id here.
+- The status rows' greying follows the menu row's safe-and-not-boss rule; the safe-map table (`unknown_safe_maps`, a `map_id[5]`) is not read, so the rule's map set is ASSUMED.
+- The sonar row is absent (not greyed) at a count of 0, as the exe does not add a row with a count of 0.
+- The opening gate of the inventory row (`ValidateMenuItemCondition_00732620`) is not traced.
+
+### Checks
+
+- `node tests/battle.test.ts`: ALL PASS (the manager's 990 frames and 15 pings, the pitch and interval cases, the list rows).
+- `node tests/quickmenu.test.ts` and `node tests/cmode.test.ts`: pass.
+- `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run, removed before the commit).
+- No Playwright, no Chrome.
+
+### Left
+
+- The list window: its drawing (the status rows and the inventory rows with icons, the grey colours, the title unitxt group 11 string 0x39), the opening key (the player menu's inventory row 11; its gate `ValidateMenuItemCondition_00732620` is not traced), and the one-row menu window (entry 5).
+- The safe-map table (`unknown_safe_maps`) and the battle arena's map id, so the sonar gate reads the real map.
+- The skip flag `0x800` on the other players, and the directional sound's position.
+- The Chrome check of the sonar ping and the rows.
