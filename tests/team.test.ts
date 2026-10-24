@@ -191,5 +191,15 @@ function membershipBytes(): Uint8Array {
   check('15EA with a short body yields nothing', parseLobbyTeamInfo({ command: 0x15ea, flag: 1, data: d.slice(0, 100) }).length === 0);
 }
 
+// 07EA team chat (send_packet0xea / SendTeamOperationSuccessPacket 0x007f32ac and the
+// handler 0x007c1a4c): the name is 0x10 units at payload 0, the text at payload 0x20.
+{
+  const p = teamChatPacket('Ann', 'hi there');
+  check('07EA command and flag 0', p.command === 0x07ea && p.flag === 0);
+  const back = parseTeamChat(p.payload);
+  check('07EA round trip: sender and text', back.sender === 'Ann' && back.text === 'hi there');
+  check('07EA text is zero terminated (length (len*2+5)&~3 with a 4-byte floor)', p.payload.length === 0x20 + Math.max(4, ((8 * 2 + 5) & ~3)));
+}
+
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

@@ -11,6 +11,7 @@ import type { BBConnection } from '../net/bbconnection.ts';
 import type { Lobby } from '../net/lobby.ts';
 import type { GuildCardSearchResult } from '../net/guildcard.ts';
 import { membershipFromSave, NO_TEAM, TeamClient } from '../net/team.ts';
+import { TeamChat } from './teamchat.ts';
 import { GameView } from '../render/gameview.ts';
 import { LobbyView, loadLobbyMapData, lobbyMapFile } from '../render/lobbyview.ts';
 import { MapViewer } from '../render/mapviewer.ts';
@@ -289,6 +290,22 @@ async function main(): Promise<void> {
   // it is loaded (the game loop 0x007bcc4c). Here the field is the Online
   // tab's GameView on the 3D canvas (classic/field.ts). A load that fails
   // shows its message on the loading screen; Enter goes back to the lobby.
+  let teamClient: { conn: BBConnection; client: TeamClient } | null = null;
+  // The team client of a connection, made once. Its 07EA lines go to the team chat log.
+  const teamClientFor = (conn: BBConnection, gc: number): TeamClient => {
+    if (teamClient?.conn !== conn) {
+      const client = new TeamClient(conn, NO_TEAM, gc);
+      client.onChat = (sender, text) => teamChat.receive(sender, text);
+      teamClient = { conn, client };
+    }
+    return teamClient.client;
+  };
+  // The team chat window (F9 / F10, classic/teamchat.ts), one per session: the lobby and the
+  // field share it. Its team is the session's connection; a line goes out as 07EA.
+  const teamChat: TeamChat = new TeamChat((sender, text) => {
+    const s = session;
+    if (s?.lobby && s.init) teamClientFor(s.lobby.conn, s.init.guildCardNumber).chat(sender, text);
+  });
   let gameView: GameView | null = null;
   // The game's NPCs, counters and quests (classic/townfield.ts).
   let townField: FieldTown | null = null;
@@ -322,6 +339,7 @@ async function main(): Promise<void> {
           fullCharacter: () => session?.fullCharacter ?? null,
           team: () => teamHost(game.conn) ?? null,
         }),
+        teamChat,
       });
       gameView = view;
       // The field Item Pack names its rows and draws the equipment panel from the item names
@@ -390,7 +408,6 @@ async function main(): Promise<void> {
   // The counter's Team menus (teammenu.ts) over the connection's TeamClient
   // (net/team.ts): one per connection, its membership refreshed from the latest
   // E7 save data at each lobby entry (the 12EA updates keep it current).
-  let teamClient: { conn: BBConnection; client: TeamClient } | null = null;
   // The last Guild Card search reply of the member list (the exe keeps the 0041 copy in the
   // list window, +0x9c): Meet the User reconnects with it (BBSession.meetUser).
   let memberReply: GuildCardSearchResult | null = null;
@@ -398,8 +415,7 @@ async function main(): Promise<void> {
     const s = session;
     if (!s?.init) return undefined;
     const gc = s.init.guildCardNumber;
-    if (teamClient?.conn !== conn) teamClient = { conn, client: new TeamClient(conn, NO_TEAM, gc) };
-    const c = teamClient.client;
+    const c = teamClientFor(conn, gc);
     c.membership = membershipFromSave(s.fullCharacter);
     return {
       membership: () => c.membership,
@@ -459,6 +475,7 @@ async function main(): Promise<void> {
     hud.party = partyHost(lobby, shipName);
     const team = teamHost(lobby.conn, shipName);
     if (team) hud.team = team;
+    hud.teamChat = teamChat;
     hud.transport = transportHost(shipName);
     hud.guildCards = () => session?.guildCards ?? null;
     hud.guildCardClient = () => session?.guildCardClient ?? null;

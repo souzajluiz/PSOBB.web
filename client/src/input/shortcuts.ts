@@ -17,11 +17,13 @@
 //     0x0E (Guild Card), F6 simple_mail_menu_shortcut -> 0x13 (Simple Mail),
 //     F7 symbol_chat_menu_shortcut -> 0x12 (Symbol Chat), F8 team_menu_shortcut -> 0x25
 //     (Team Member List);
-//   - F9 team_chat (dump 678299, TeamChatMenu_Update_00717260), F10 team_chat_toggle
-//     (678385, the same window), F11 keyboard_controls_toggle (697159,
+//   - F9 team_chat (dump 678299, TeamChatMenu_Update_00717260) opens and closes the team
+//     chat window, F10 team_chat_toggle (678385, the same window, only while it is open)
+//     toggles the lock that sends the chat line to the team (classic/teamchat.ts). Both
+//     take the same Shift test as the menu keys (the TeamChatMenu_Update test on 0x2000000);
+//   - F11 keyboard_controls_toggle (697159,
 //     ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130, character option
-//     0x1000000): not ported (no team chat window in the port's chat line, no mouse
-//     control mode);
+//     0x1000000): not ported (no mouse control mode);
 //   - F12 main_menu_2 opens and closes the main menu, as Home does (no shift test).
 // handle_chat_shortcuts (named dump line 674857) is the other reader of the same
 // option: it is the chat form, so the raw F1..F12 keys send the chat shortcut slots
@@ -79,7 +81,7 @@ export interface KeyLike {
   shiftKey: boolean;
 }
 
-export type FKeyAction = { kind: 'menu'; id: number } | { kind: 'mainMenu' } | { kind: 'help' };
+export type FKeyAction = { kind: 'menu'; id: number } | { kind: 'mainMenu' } | { kind: 'help' } | { kind: 'teamChat' } | { kind: 'teamChatLock' };
 
 // What a function key does (null for none). shiftOption is the character option
 // 0x2000000 (Shift is then required, not forbidden).
@@ -90,6 +92,8 @@ export function functionKeyAction(e: KeyLike, names: readonly string[], shiftOpt
   if (e.ctrlKey || e.altKey) return null;
   if (shiftOption ? !e.shiftKey : e.shiftKey) return null;
   if (n === 1) return { kind: 'help' };
+  if (n === 9) return { kind: 'teamChat' };
+  if (n === 10) return { kind: 'teamChatLock' };
   const id = FKEY_MENU_ID[n];
   return id === undefined ? null : { kind: 'menu', id };
 }

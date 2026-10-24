@@ -53,6 +53,7 @@ import { ITEM_KT_FILE, itemPictureEntry } from '../formats/itemkt.ts';
 import { parseXvm } from '../formats/xvm.ts';
 import { BINDING, bindingKey, KEYS } from '../input/keyconfig.ts';
 import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames } from '../input/shortcuts.ts';
+import { drawTeamLog, type TeamChat } from '../classic/teamchat.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
 import type { MapViewer } from './mapviewer.ts';
@@ -131,6 +132,8 @@ export interface FieldHudOptions {
   trade?: () => { session: TradeSession; partners: () => { id: number; name: string }[] } | null;
   // The Home menu's shared leaves' services (classic/homeleaves.ts); null with no session.
   home?: () => HomeLeafServices | null;
+  // The team chat window and its log (classic/teamchat.ts); null with no session.
+  teamChat?: TeamChat | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // A chat shortcut slot (0..11) was pressed (handle_chat_shortcuts, input/shortcuts.ts).
@@ -747,6 +750,14 @@ export class FieldHud {
         this.helpOpen = !this.helpOpen;
         return;
       }
+      // F9 / F10: the team chat window and its lock (classic/teamchat.ts).
+      if (this.opts.teamChat && (a?.kind === 'teamChat' || a?.kind === 'teamChatLock')) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (a.kind === 'teamChat') this.opts.teamChat.toggle();
+        else this.opts.teamChat.toggleLock();
+        return;
+      }
       if (a?.kind === 'menu' && this.menu.openShortcut(a.id)) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -887,6 +898,7 @@ export class FieldHud {
     }
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra, bands.bottom);
     if (this.helpOpen && !this.menu.isOpen) this.drawHelp(ctx, extra, bands.bottom);
+    if (this.opts.teamChat?.open) drawTeamLog(ctx, this.tex.skin, this.opts.teamChat.log);
     if (this.minimapShown()) {
       // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
       for (const e of this.opts.minimap?.enemies() ?? []) {

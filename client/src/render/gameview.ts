@@ -49,6 +49,7 @@ import type { SpawnPoint } from '../quest/battletraps.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { serverUrl } from '../net/server.ts';
 import { pioneer2ReturnArrival } from '../net/telepipe.ts';
+import type { TeamChat } from '../classic/teamchat.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
@@ -127,6 +128,8 @@ export class GameView {
   middleInteract: (reach: WeaponReach | null) => boolean = () => false;
   // false: no name labels over the players (the classic page, classic/field.ts).
   private labels: boolean;
+  // The team chat window (classic/teamchat.ts), shared with the lobby; null without one.
+  readonly teamChat: TeamChat | null;
 
   constructor(
     viewer: MapViewer,
@@ -135,9 +138,10 @@ export class GameView {
     log: (msg: string) => void = () => {},
     bgm: BgmPlayer | null = null,
     character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null; saveCustomize?: (config: Uint8Array) => void } = { character: () => null, fullCharacter: () => null },
-    options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>>; home?: () => Omit<HomeLeafServices, 'lobby'> | null } = {},
+    options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>>; home?: () => Omit<HomeLeafServices, 'lobby'> | null; teamChat?: TeamChat | null } = {},
   ) {
     this.labels = options.labels ?? true;
+    this.teamChat = options.teamChat ?? null;
     this.characterFile = character.character;
     this.viewer = viewer;
     this.game = game;
@@ -213,6 +217,7 @@ export class GameView {
     // Classic field HUD: action palette and main menu (render/fieldhud.ts).
     this.hud = new FieldHud(viewer, this.files, {
       ...character,
+      teamChat: this.teamChat,
       items: this.items,
       music: this.field.counterMusic(),
       area: () => this.current?.area ?? 0,

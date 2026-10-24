@@ -49,7 +49,12 @@ check(functionKeyNumber('a', names) === 0 && functionKeyNumber('', names) === 0,
 // 2. The menu entries of F2..F8 (handle_player_menu_select ids; the exe's return values).
 const want: Record<number, number> = { 2: 0x09, 3: 0x03, 4: 0x17, 5: 0x0e, 6: 0x13, 7: 0x12, 8: 0x25 };
 for (const n of Object.keys(want)) check(FKEY_MENU_ID[Number(n)] === want[Number(n)], `F${n} -> 0x${want[Number(n)].toString(16)}`);
-for (const n of [9, 10, 11]) check(functionKeyAction(key(`f${n}`), names) === null, `F${n} is not ported (null)`);
+check(functionKeyAction(key('f9'), names)?.kind === 'teamChat', 'plain F9 toggles the team chat window (TeamChatMenu_Update, dump 678299)');
+check(functionKeyAction(key('f10'), names)?.kind === 'teamChatLock', 'plain F10 toggles the team lock (dump 678385)');
+check(functionKeyAction(key('f11'), names) === null, 'F11 is not ported (null)');
+check(functionKeyAction(key('f9', { shiftKey: true }), names) === null, 'Shift+F9 is refused with the option clear (the menu keys\' test)');
+check(functionKeyAction(key('f10', { ctrlKey: true }), names) === null, 'Ctrl+F10 is refused');
+check(functionKeyAction(key('f9', { shiftKey: true }), names, true)?.kind === 'teamChat', 'Shift+F9 with the option set (TeamChatMenu_Update reads Shift)');
 check(functionKeyAction(key('f1'), names)?.kind === 'help', 'plain F1 toggles the help list');
 check(functionKeyAction(key('f1', { shiftKey: true }), names) === null, 'Shift+F1 is refused with the option clear');
 check(functionKeyAction(key('f1', { ctrlKey: true }), names) === null, 'Ctrl+F1 is refused');
