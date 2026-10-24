@@ -17016,3 +17016,48 @@ the port applied it to the bare text, which would drop every two-character line 
 "- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
 now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
 emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.
+
+## 2026-10-23: NPC head input states, timers, the 0x800 dead branch, the collision probe (enemy part) and the 2764 standing gate
+
+**Question:** the previous entry's open items: the head's input states (+0x24) and timers, the NPC's chat line, the 0x800 branch, the collision probe that sets B +0x8c 0x20 / 0x80, and the writer of B.player +0x328 bit 2 (the 2764 gate).
+
+**Premise corrections (exe, `reverse/refsrc/.../Psobb.exe-05112026.c`):**
+- The timer list had `+0x100`. The head has no timer there: `(this + 100)` in the dump is decimal 100 = **0x64** (the idle counter). `+0x100` on B is the collision record (B +0xd8..0x104, written by the probe at `.c:795124..795145`), not a head field.
+- The 0x800 test is the character flag `dead` (`character_flags` +0x30, `enum character_flags` `dead=2048`), not a generic branch. The chain runs when the owner is alive; with the NPC dead (0x800 on B) the branch replaces the normal updates (`.c:794715..794746`). With the owner dead nothing runs (`.c:794719`).
+- B.player +0x328 is `unknown_movement_state` (`enum movement_state`, `standing=2`, `walking=4`, `running=16`). Its writer is `SetPlayerInputState_00694390` (`.c:575340`): `+0x328 = 1 << (input & 0x1f)`. So bit 2 is set when the NPC's input state is **1** (standing). The input dispatch ends with `SetPlayerInputState(p, 1, weapon)` (`HandleInputStateMoveStart`, `.c:587654`), so the bit is set again after each action. "No writer traced" was wrong; the earlier ASSUMED is replaced by this.
+- The chat lines are not in the exe's data. `npc_text` (quest opcode, `opcode_npc_text` `.c:605439`) calls `SinowberillChallenge_SetMessageString_007b3e5c` (`.c:798296`): the situation number (0..0x18) and the line go into `g_SinowberillChallengePlayerMessageData` (54 wide chars each). The port's VM already keeps them (`vm.npcText`).
+
+**Exe evidence:**
+- The chain (`SinowberillChallengePlayer_Update_007aefd4`, `.c:794690`): ResetEntityHitboxes (`.c:794709`), then `if owner & 0x800 == 0 { if NPC & 0x800 == 0 { UpdateState_007af1a8, UpdateState_007af7ec, UpdateState_007b00bc, AIUpdate_007b1134 } else { 0x800 branch } ; AIUpdateState_007b2764 }`.
+- The 0x800 branch (`.c:794719..794746`): `+0x62 < 0x400` with `+0x62 >= 0` and `+0x84 == 0` sets input 4 (flag 4), else `+0x62 = 0x400` and input 5; the head goes idle (`+0x7c = 0`), `+0x62 += 1`, flags `&= ~0x1030`, and the anchor is the NPC's weapon `+0x300..0x308`.
+- The 2764 dispatch (`AIUpdateState_007b2764`, `.c:796961`): (1) flag 4 and no warp transparency -> `DisplayChatBubble_007b2a30` (`.c:797110`), before the gate; (2) `B.player +0x328 & 2` (standing) gates the rest; (3) state 0 runs the idle counter `+0x64` (to 0x1518 -> input 0xb with flag 4; 0x1519 -> input 0x19, flag 4 cleared, restart); (4) state 1 sends; state 2 casts; state 8 `ExecuteAttack`; (5) resets: `+0x5e = 0`, `+0x66 = 0`, flag 0x8000 cleared unless state 2; flag 8 cleared unless state 1; `+0x64 = 0` unless state 0.
+- DisplayChatBubble: input above 0x18 -> input 0x19 (no line); the line is `npc_text[input]` (the per-player slot table has no traced writer: `SinowberillChallenge_AssignMessageSlot_007b44bc` has no callers in the dump); the flag is cleared; `+0x5c > 399` -> input 0x19 (silent: the table has no 0x19 line).
+- The collision probe (`.c:795114..795145`): the entities after the players, in array order. `GetCollisionDataForEntity_007b65b4` (`.c:800203`) rejects the same entity, a dead probe, a target with `0x80000800`, an xz distance squared above 10000 (the `dist_sq` argument), and no box hit; `CheckTwoHitboxCollision_007b5e40` (`.c:799546`) does the box test. An enemy (`0x20000000`) with `box flags & 0x308 == 0` sets 0x80 and stops; an object (`0x40000000`) copies its record to B +0xd8..0x104 and sets 0x20.
+- Input writers traced on the paths the port runs: the move gate (`AIUpdateState_007b267c`, `.c:796915`: the wall counter at 0 with flag 0x4000 -> input 0x18; the clamp (counter 0x1f) -> input 7 with the `+0x6a` timer, wrap at 300); CheckPathAndTarget (`.c:795775`: the counter `+0x68` at 100 -> input 0 or 1 by B +0x90 & 8; no clear candidate -> input 8, flag 0x40); HandlePlayerTechCastState (`.c:797215`: Resta / Anti 0x16, Foie family 0 / 3 / 6 0x17, others 2, `+0x5c = 0`, set before the eligibility test); ExecuteAttack (`.c:797151`: param 0 casts Resta, then flag 0x200 -> input 0x13 and return); the attack switch of mode 1 and mode 0 (`.c:795606`, `.c:795645`, `.c:795683`: input 0x13 with state 8); the owner's timers (`SinowberillChallengePlayer_UpdateState_007af1a8`, `.c:794785`: owner status 2 -> `+0x70` with input 9; owner status 8 with the acquire -> `+0x6e` / `+0x6c` with input 0xc, `+0x6e` above 699 resets).
+
+**Ported (`client/src/quest/npchead.ts`, `town.ts`, `questui.ts`, `render/combat.ts`):**
+- `NpcHead`: `inputState` (+0x24) with `setInputState` (flag 4 on change), the timers `t5c` / `t5e` / `t62` / `t64` / `t6a` / `t6c` / `t6e` / `t70`, `bubbleStep` (the chat line), `idleStep` (+0x64), `deadStep` (the 0x800 branch), `ownerStep` (UpdateState_007af1a8's owner part), `castInput`, `attackInput`, `tickInput`.
+- `headProbeEnemies` (the enemy part of the probe, through `headStateUpdate`'s `probe`). `town.ts` passes `headProbeEnemies(at, cands)` over `combat.npcEnemies()`.
+- `town.ts` `stepNpcHead`: the owner's dead flag stops the chain (`combat.npcOwnerDead()`); the owner's timers, the acquires and the probe run in the exe's order; the NPC's line goes out at the 2764's first step (`npcSituationText`: the quest's `npc_text` table, else the field's); the state actions (cast, ExecuteAttack, idle) and their resets run only while standing (`!p.moving`). `stepNpcTwoTech` and `stepNpcExecuteAttack` set the input before the cast.
+- `questui.ts`: `headBubbles` (a `ChatBubbles`) ticked at 30 Hz and drawn over the NPC heads with `speakerHead` and `projectHead` (the same path as the quest balloons); `sayHead(clientId, name, text, distanceTo)`.
+- `render/combat.ts`: `npcOwnerDead()` (the local player's `damage.dead`).
+
+**ASSUMED:**
+- The standing bit: the NPC stands when it did not move at the last tick (`!p.moving`). The port has no NPC input state; the exe's input 2 / 4 (walk start / run) are the move subcommands, not modelled.
+- The NPC's dead flag (0x800 on B) is false: the port keeps no NPC HP (the NPC is removed by `npcKilled`). The owner's dead flag is the local player's only; other owners are alive.
+- The probe's box test: a box centre within `PLAYER_RADIUS` (5) of the NPC stands in for CheckTwoHitboxCollision; the box flags `0x308` pass; the probe's B+0xa8 object is assumed present for every NPC.
+- The +0x5c increment: not traced, so one per head tick (`tickInput`). It only decides the silent input 0x19.
+- `headStatusFlags` of the owner gives B / Q +0x90 for the owner's timers (its bits 0x2 and 0x8 are the port's `stateFlags30 & 0x13` and need-heal flags); the NPC's +0x90 (status 8 for the chooser) is false.
+- `+0x84` of the head (the anim-mode flag, `AcquireTargetWithAnim`) is 0; the port's chooser still takes `head84` from B +0x84 (`lockedSecond`), as before.
+- The input 0x13 mapping of the mode 1 / mode 0 attack switch is by branch (`attackInput` at the NEXT-flag paths and at the chooser-true path); the exact exe site per branch is not all traced.
+- The per-player slot messages (`GetMessageForPlayer_007b4570`) are empty: `AssignMessageSlot` has no traced caller.
+- The bubble flags (0x1b to `DisplayChatBubble_007184f8`) are not decoded; the line uses the chat balloon's default width.
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases: the input-state writes and flag 4, the chat step, the idle counter, the cast and attack inputs, the 0x800 branch, the move gate's clamp and release, the owner's timers, CheckPathAndTarget's inputs, the probe's cut-off and radius, and the source wiring of town.ts and questui.ts). `npcs`, `techniques`, `questflow`, `quests`, `questmisc`, `questboard`, `techfire` pass with Node 24. `cd client && tsc --noEmit -p .` (Node 24) clean. Not run: Playwright (per the brief), Chrome, a screenshot of the NPC balloon.
+
+**Left:**
+- The probe's object part (0x40000000 and its 11-word record to B +0xd8..0x104, which UpdateTargetPosition reads): no record in the port's field obstacles has the exe's layout. Until then the 0x20 bit and UpdateTargetPosition stay dormant.
+- CheckTwoHitboxCollision_007b5e40's exact shape test (the boxes' orientation and extents), in place of the radius stand-in.
+- The TP gate of CastTechnique (input 3), AIProcessState's writes of input 0x14 and the `+0x6c` timer, the multi-step attack (input 0xd, `ExecuteMultiStepAttack`), and the anim-timing acquire states (0xe..0x11: CheckAnimationState reads B +0x334 and head +0x88 as a short; the port's `dist88` is a float with the same offset, a conflict not settled here).
+- The NPC's own dead flag and HP (the 0x800 branch is ported but dormant).
+- The per-player slot messages (`AssignMessageSlot`) and the bubble flags 0x1b.

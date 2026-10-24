@@ -52,7 +52,8 @@ import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, type NpcAttackRow, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow } from './npcai.ts';
-import { HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STOP_DISTANCE, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
+import { acquireClosestTargets, HEAD_FLAG_NEXT, HEAD_FLAG_SECOND, HEAD_FLAG_TARGET_HIT, HEAD_OWNER_ACQUIRE, HEAD_STATE_ATTACK, HEAD_STATE_CAST, HEAD_STATE_IDLE, HEAD_STOP_DISTANCE, headProbeEnemies, headSendDistance, headTwoTech, type HeadPoint, NpcHead } from './npchead.ts';
+import { TECH } from '../combat/techniques.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -771,32 +772,54 @@ export class QuestTown {
     const owner = { x: leader.position.x, y: leader.position.y, z: leader.position.z };
     const wall = (a: HeadPoint, b: HeadPoint, mask: number) => (combat ? combat.npcWallHit(a, b, mask) : null);
     const cands = combat ? combat.npcEnemies() : [];
-    // ResetEntityHitboxes_007b34e8 (the tick's bits), then UpdateState_007af1a8 / 007af7ec (the acquires and the moved test).
+    // The standing gate of the 2764 dispatch: B.player +0x328 & 2 is movement_state standing (input state 1).
+    // ASSUMED: the NPC stands when it was not moving at the last tick (the port's walk is the 6x40 / 6x42 moves).
+    const standing = !p.moving;
+    // ResetEntityHitboxes_007b34e8 (the tick's bits) runs first, outside the owner's dead test (.c:794709).
     head.resetEntityBits(owner);
-    head.headStateUpdate({ npc, owner, cands });
-    if (this.isPioneer2()) {
-      head.pioneerUpdateState(owner);
+    // The owner's dead flag (0x800 of Q, .c:794719): the chain and the 2764 do nothing, so the NPC does not walk.
+    // The other players' death is not in the port (ASSUMED alive).
+    if (this.ownerDead(leader)) return;
+    // The rest of the chain of SinowberillChallengePlayer_Update_007aefd4 (.c:794690).
+    // The NPC's dead flag (0x800 of B): no port source (ASSUMED alive). With it, the dead branch replaces the chain.
+    const npcDead = false;
+    if (npcDead) {
+      head.deadStep(npc);
     } else {
-      head.fieldUpdate({
-        owner,
-        npc,
-        npcWeapon: npc,
-        allowed: true, // is_player_allowed_to_attack of the NPC's record (ASSUMED true)
-        roll: Math.floor(Math.random() * 32768),
-        npcStatus8: false, // B +0x90 & 8: the server's status, not modelled (ASSUMED false)
-        ray: wall,
-        chooser: (mode) => this.headChooses(slot, head, mode, cands),
-      });
+      const ownerF90 = combat && leader.clientId === this.game.selfId ? headStatusFlags(combat.npcOwnerStatus()).f90 : 0;
+      // UpdateState_007af1a8 (the owner's timers), UpdateState_007af7ec (the acquires and the probe), then the field.
+      head.ownerStep(ownerF90, acquireClosestTargets(owner, HEAD_OWNER_ACQUIRE, cands).length > 0);
+      head.headStateUpdate({ npc, owner, cands, probe: (at) => headProbeEnemies(at, cands) });
+      if (this.isPioneer2()) {
+        head.pioneerUpdateState(owner);
+      } else {
+        head.fieldUpdate({
+          owner,
+          npc,
+          npcWeapon: npc,
+          allowed: true, // is_player_allowed_to_attack of the NPC's record (ASSUMED true)
+          roll: Math.floor(Math.random() * 32768),
+          npcStatus8: false, // B +0x90 & 8: the server's status, not modelled (ASSUMED false)
+          ray: wall,
+          chooser: (mode) => this.headChooses(slot, head, mode, cands),
+        });
+      }
+      head.update({ npc, owner, wall });
     }
-    head.update({ npc, owner, wall });
-    // The 2764 dispatch (AIUpdateState_007b2764): its gate B +0x328 & 2 is ASSUMED set for a live NPC record
-    // (no writer of that bit is traced), so it is not checked here. State 2 casts, state 8 runs ExecuteAttack.
+    // The 2764 dispatch (AIUpdateState_007b2764). Its first step is the chat line (DisplayChatBubble_007b2a30),
+    // before the standing gate; the rest (the state actions and their resets) runs only while standing.
+    head.tickInput();
+    const line = head.bubbleStep((situation) => this.npcSituationText(situation));
+    if (line !== null) this.ui.sayHead(slot, p.name, line, (id) => this.distanceFromSelf(id));
     const dist = headSendDistance(head, npc);
     // State 1 within the stop distance returns from the dispatch before its resets (.c:797012).
     const arrived = dist !== null && dist <= HEAD_STOP_DISTANCE;
-    if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
-    else if (head.state === HEAD_STATE_ATTACK) this.stepNpcExecuteAttack(slot, p, head);
-    if (!arrived) head.afterDispatch();
+    if (standing) {
+      if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
+      else if (head.state === HEAD_STATE_ATTACK) this.stepNpcExecuteAttack(slot, p, head);
+      else if (head.state === HEAD_STATE_IDLE) head.idleStep();
+      if (!arrived) head.afterDispatch();
+    }
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
     if (dist === null) sender.reset();
@@ -813,9 +836,27 @@ export class QuestTown {
     }
     p.moving = moved;
     if (moved || wasMoving) this.game.notifyMoved(p);
-    // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id) at the head's
-    // send target (SendMoveStart_007b298c / SendMove_007b29f0).
+    // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id) at the head's send target
+    // (SendMoveStart_007b298c / SendMove_007b29f0).
     if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);
+  }
+
+  // The owner is dead (the local player's dead flag; other players are ASSUMED alive).
+  private ownerDead(leader: LobbyPlayer): boolean {
+    return leader.clientId === this.game.selfId && !!this.view.combat?.npcOwnerDead();
+  }
+
+  // The NPC's line of an input state (DisplayChatBubble_007b2a30's table, set by npc_text in the quest script:
+  // the quest's, else the field's). The exe's per-player slot messages have no traced writer (ASSUMED none).
+  private npcSituationText(situation: number): string | null {
+    return this.quest?.vm.npcText.get(situation) ?? this.area?.vm.npcText.get(situation) ?? null;
+  }
+
+  // The distance of a balloon's speaker from the local player (the balloon replacement order).
+  private distanceFromSelf(id: number): number {
+    const q = this.game.players.get(id)?.position;
+    const me = this.game.self?.position;
+    return q && me ? Math.hypot(q.x - me.x, q.y - me.y, q.z - me.z) : 0;
   }
 
   // Pioneer 2 is the lobby's floor 0 (ASSUMED: map_is_pioneer2_ is not traced; the field branch of
@@ -881,6 +922,7 @@ export class QuestTown {
     if (!combat || head.lockedPrimary === 0 || (head.head34 & 0x40) !== 0) return;
     const tech = headTwoTech(head.head34, false, (Math.floor(Math.random() * 32768) / 32768) * 10, head.need53);
     if (tech === null) return;
+    head.castInput(tech); // HandlePlayerTechCastState (.c:797215): the input state is set before the cast
     const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, tech, [head.lockedPrimary]);
     if (ticks !== null) head.castTicks = ticks;
   }
@@ -901,8 +943,11 @@ export class QuestTown {
     // The owner is the target of Resta / Anti; Reverser takes the locked target (B +0x7c, the head's list).
     const targets = cast.target === 'owner' ? [this.game.selfId] : head.lockedPrimary !== 0 ? [head.lockedPrimary] : [];
     if (cast.target === 'target' && targets.length === 0) return;
+    head.castInput(cast.tech); // HandlePlayerTechCastState (.c:797215): 0x16 for Resta / Anti, 0x17 / 2 for the others
     const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, cast.tech, targets);
     if (ticks !== null) head.castTicks = ticks;
+    // ExecuteAttack's param 0 (Resta): with flag 0x200 the input becomes 0x13 after the cast (.c:797161).
+    if (cast.tech === TECH.resta && (head.flags & HEAD_FLAG_NEXT) !== 0) head.attackInput();
   }
 
   private async npcControl(c: { param1: number; param2: number; command: number; param3: number }, local: boolean, pos?: { x: number; y: number; z: number; angle: number }): Promise<void> {

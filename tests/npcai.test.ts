@@ -40,6 +40,10 @@ import {
   HEAD_RAY_HEIGHT,
   HEAD_FLAG_ARRIVE,
   HEAD_FLAG_AVOID,
+  HEAD_FLAG_BUBBLE,
+  HEAD_FLAG_NEXT,
+  HEAD_FLAG_WALL_CLAMP,
+  headProbeEnemies,
   adjustTargetForCollision,
   calculateAvoidanceTarget,
   distancePointToLine,
@@ -47,6 +51,7 @@ import {
   rotYBams,
   updateTargetPosition,
   type WallHit,
+  type PathTarget,
   NpcHead,
 } from '../client/src/quest/npchead.ts';
 import { buildNpcMove } from '../client/src/net/game.ts';
@@ -588,6 +593,134 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   const exit = headWith(13, { mode: 1, npcNeed8c: 0, dist58: 0 });
   exit.fieldUpdate(base);
   check(exit.mode === 0, 'mode 1 exits to mode 0 when B +0x8c bit 2 is clear (.c:795663)');
+
+  // --- the input state (+0x24), its chat line and the timers. Exe: DisplayChatBubble_007b2a30 (.c:797110), the
+  // 2764 state-0 block (.c:796983), the 0x800 branch (.c:794719), the move gate (.c:796915), the owner's timers
+  // (UpdateState_007af1a8, .c:794785), HandlePlayerTechCastState (.c:797215), ExecuteAttack (.c:797151).
+  {
+    const h = headWith(13);
+    h.setInputState(0x13);
+    check(h.inputState === 0x13 && (h.flags & HEAD_FLAG_BUBBLE) !== 0, 'a change of +0x24 sets flag 4 (the chat line is due)');
+    h.flags &= ~HEAD_FLAG_BUBBLE;
+    h.setInputState(0x13);
+    check((h.flags & HEAD_FLAG_BUBBLE) === 0, 'the same input state again does not set flag 4');
+    const said: number[] = [];
+    const line = (s: number) => {
+      said.push(s);
+      return s === 0x13 ? 'Hold on!' : null;
+    };
+    h.flags |= HEAD_FLAG_BUBBLE;
+    check(h.bubbleStep(line) === 'Hold on!' && (h.flags & HEAD_FLAG_BUBBLE) === 0, 'the chat step: the line of +0x24 is returned and flag 4 is cleared');
+    check(h.bubbleStep(line) === null && said.length === 1, 'no flag 4, no chat step (DisplayChatBubble is called only with flag 4)');
+    const silent = headWith(13);
+    silent.setInputState(0x12);
+    check(silent.bubbleStep(() => null) === null && (silent.flags & HEAD_FLAG_BUBBLE) === 0, 'an empty situation line shows nothing and still clears flag 4');
+    const high = headWith(13);
+    high.setInputState(0x1a);
+    check(high.bubbleStep(line) === null && high.inputState === 0x19, 'an input state above 0x18 goes to 0x19 with no line (.c:797117)');
+    const old = headWith(13);
+    old.setInputState(0x14);
+    old.t5c = 400;
+    check(old.bubbleStep(() => 'Still here') === 'Still here' && old.inputState === 0x19 && old.t5c === 0, 'more than 399 ticks in the state: the line, then input 0x19 (.c:797142)');
+    // The idle counter of state 0: 0x1518 ticks to input 0xb (flag 4), then 0x1519 to 0x19; the counter restarts.
+    const idle = headWith(13);
+    idle.t64 = 0x1517;
+    idle.idleStep();
+    check(idle.t64 === 0x1518 && idle.inputState === 0xb && (idle.flags & HEAD_FLAG_BUBBLE) !== 0, 'idle counter: reaching 0x1518 sets input 0xb with flag 4 (.c:797001)');
+    idle.idleStep();
+    check(idle.t64 === 0 && idle.inputState === 0x19 && (idle.flags & HEAD_FLAG_BUBBLE) === 0, 'idle counter: 0x1519 sets input 0x19 without flag 4 and restarts at 0');
+    const leave = headWith(13);
+    leave.t64 = 500;
+    leave.state = HEAD_STATE_MOVE;
+    leave.afterDispatch();
+    check(leave.t64 === 0, 'the idle counter clears when the head is not idle (.c:797053)');
+    // The cast's input (HandlePlayerTechCastState): Resta / Anti 0x16, the Foie family 0x17, others 2; +0x5c clears.
+    const cast = headWith(13);
+    cast.t5c = 9;
+    cast.castInput(15);
+    check(cast.inputState === 0x16 && cast.t5c === 0, 'Resta casts into input 0x16 and clears +0x5c');
+    cast.castInput(0);
+    check(cast.inputState === 0x17, 'Foie (0) casts into input 0x17');
+    cast.castInput(8);
+    check(cast.inputState === 2, 'a tech outside those casts into input 2');
+    const att = headWith(13);
+    att.flags |= HEAD_FLAG_NEXT;
+    att.attackInput();
+    check(att.inputState === 0x13, 'the 0x200 attack sets input 0x13 (.c:797161)');
+    // The 0x800 branch: the NPC dead, +0x62 counts to the 0x400 cap; input 4, then 5 past the cap.
+    const dead = headWith(13);
+    dead.deadStep({ x: 3, y: 0, z: 4 });
+    check(dead.inputState === 4 && dead.t62 === 1 && dead.state === HEAD_STATE_IDLE && dead.anchor.x === 3 && dead.anchor.z === 4, 'dead NPC: input 4, +0x62 counts, idle, anchor at the NPC weapon');
+    dead.t62 = 0x3ff;
+    dead.deadStep({ x: 0, y: 0, z: 0 });
+    check(dead.inputState === 4 && dead.t62 === 0x400, 'dead NPC: 0x3ff keeps input 4, the counter at 0x400');
+    dead.deadStep({ x: 0, y: 0, z: 0 });
+    check(dead.inputState === 5 && dead.t62 === 0x401, 'dead NPC: past the cap, input 5 (.c:794731)');
+    // The move gate: the wall counter at 0x1f clamps (flag 0x4000, input 7, the 0x6a timer); at 0 with the flag, input 0x18.
+    const clamp = headWith(13);
+    clamp.wall8c = 0x1f;
+    clamp.sendTarget = { x: 0, y: 0, z: 0 };
+    clamp.moveTarget = { x: 50, y: 0, z: 0 };
+    check(clamp['moveGate']() === false && clamp.inputState === 7 && (clamp.flags & HEAD_FLAG_WALL_CLAMP) !== 0 && clamp.wall8c === 0x1e && clamp.t6a === 1, 'move gate clamp: input 7, flag 0x4000, counter 0x1e, the 0x6a timer at 1');
+    clamp.t6a = 299;
+    clamp.wall8c = 0x1f;
+    clamp['moveGate']();
+    check(clamp.t6a === 0, 'the 0x6a timer wraps to 0 at 300 (.c:796950)');
+    const back = headWith(13);
+    back.flags |= HEAD_FLAG_WALL_CLAMP;
+    back.wall8c = 0;
+    back.sendTarget = { x: 0, y: 0, z: 0 };
+    back.moveTarget = { x: 50, y: 0, z: 0 };
+    check(back['moveGate']() === true && back.inputState === 0x18 && (back.flags & HEAD_FLAG_WALL_CLAMP) === 0, 'the clamp is released at counter 0: input 0x18, flag 0x4000 cleared (.c:796928)');
+    // The owner's timers (UpdateState_007af1a8): status bit 2 counts +0x70 with input 9; status bit 8 with the acquire counts +0x6c with input 0xc.
+    const own = headWith(13);
+    own.ownerStep(0x2, false);
+    check(own.inputState === 9 && own.t70 === 1, 'owner status 2: input 9 and the +0x70 timer');
+    own.ownerStep(0x0, false);
+    check(own.t70 === 0, 'owner without status 2: the +0x70 timer clears');
+    own.ownerStep(0x8, true);
+    check(own.inputState === 0xc && own.t6c === 1, 'owner status 8 with an acquire: input 0xc and +0x6c counts');
+    own.ownerStep(0x8, false);
+    check(own.t6c === 1, 'owner status 8 without an acquire: +0x6c does not count');
+    own.t6e = 700;
+    own.ownerStep(0x8, true);
+    check(own.t6e === 0, 'owner acquire: +0x6e above 699 resets to 0 (.c:794835)');
+    // CheckPathAndTarget: the counter at 100 writes input 0 (no status 8) or 1 (status 8) (.c:795801); a clear ray
+    // locks the first candidate; a blocked one with no clear candidate writes input 8 (.c:795856).
+    const three = (): PathTarget[] => [
+      { id: 1, id2: 0, pos: { x: 5, y: 0, z: 0 } },
+      { id: 2, id2: 0, pos: { x: 6, y: 0, z: 0 } },
+      { id: 3, id2: 0, pos: { x: 7, y: 0, z: 0 } },
+    ];
+    const clear = () => null;
+    const blocked = () => ({ point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } });
+    const p0 = headWith(13);
+    p0.targets = three();
+    p0.counter68 = 99;
+    p0.inputState = 5;
+    p0.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: clear });
+    check(p0.inputState === 0 && p0.counter68 === 0, 'CheckPathAndTarget counter at 100 without status 8: input 0');
+    const p1 = headWith(13);
+    p1.targets = three();
+    p1.counter68 = 99;
+    p1.inputState = 5;
+    p1.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: clear, npcStatus8: true });
+    check(p1.inputState === 1, 'CheckPathAndTarget counter at 100 with status 8: input 1');
+    const p2 = headWith(13);
+    p2.targets = three();
+    p2.inputState = 5;
+    check(p2.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: blocked }) === false && p2.inputState === 8 && (p2.flags & 0x40) !== 0, 'CheckPathAndTarget with no clear candidate: input 8 and flag 0x40');
+    // The collision probe (B+0xa8): an enemy within the cut-off (xz^2 <= 10000) whose box centre is within the probe radius (5) sets 0x80.
+    check(headProbeEnemies({ x: 0, y: 0, z: 0 }, [{ x: 30, z: 40, boxes: [{ x: 30, z: 40 }] }]) === null, 'probe: an enemy 50 away with its box 50 away is no hit');
+    const hit = headProbeEnemies({ x: 0, y: 0, z: 0 }, [{ x: 30, z: 40, boxes: [{ x: 3, z: 4 }] }]);
+    check(hit !== null && hit.kind === 'enemy', 'probe: an enemy in the cut-off with a box centre 5 from the NPC is an enemy hit');
+    check(headProbeEnemies({ x: 0, y: 0, z: 0 }, [{ x: 200, z: 0, boxes: [{ x: 1, z: 0 }] }]) === null, 'probe: an enemy beyond the cut-off is never tested');
+    const townSrc = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+    check(townSrc.includes('probe: (at) => headProbeEnemies(at, cands)') && townSrc.includes('const standing = !p.moving;') && townSrc.includes('if (standing) {'), 'town: the probe runs in headStateUpdate, and the 2764 state actions wait for the standing bit');
+    check(townSrc.includes('head.bubbleStep((situation) => this.npcSituationText(situation))') && townSrc.includes('this.ui.sayHead(slot, p.name, line'), 'town: the NPC line goes to the quest UI balloons (sayHead)');
+    const qSrc = readFileSync(join(HERE, '../client/src/quest/questui.ts'), 'utf8');
+    check(qSrc.includes('readonly headBubbles = new ChatBubbles();') && qSrc.includes('this.headBubbles.tick(headOf)') && qSrc.includes('this.headBubbles.draw(ctx,'), 'questui: the head lines are ticked and drawn over the NPC heads');
+  }
 
   // The state-2 cast's gates and the field wiring in town.ts.
   const src = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');

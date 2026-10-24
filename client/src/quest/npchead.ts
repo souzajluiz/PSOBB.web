@@ -36,8 +36,16 @@
 //    The 0x16 / 0x17 input states are the player's action dispatch (PlayerActionDispatch, .c:232924).
 //
 // ASSUMED (not traced here):
-//  - the collision probe (B+0xa8, GetCollisionDataForEntity_007b65b4 / CheckTwoHitboxCollision_007b5e40) is
-//    not ported: the caller passes no probe, so bits 0x20 / 0x80 stay 0 and UpdateTargetPosition is dormant.
+//  - the collision probe (B+0xa8): the enemy part is ported (headProbeEnemies, the xz cut-off and a box centre
+//    within PLAYER_RADIUS for CheckTwoHitboxCollision_007b5e40, ASSUMED); the object record (0x40000000) has no
+//    source in the port, so UpdateTargetPosition stays dormant.
+//  - the input states (+0x24) and timers: the writers of the paths the port runs are ported (see setInputState);
+//    the TP gate of CastTechnique (input 3), AIProcessState's 0x14 / 0x6c writes, the multi-step attack (input
+//    0xd), and the anim-timing acquire states (0xe..0x11, CheckAnimationState: B +0x334 is ASSUMED 0) are not.
+//    The +0x5c increment is ASSUMED one per head tick (tickInput). The bit 0x100 of the head flags and +0x100 of
+//    B are the collision record (B +0xd8..0x104), not a timer.
+//  - the 2764 gate (B.player +0x328 & 2) is movement_state standing (= input state 1, SetPlayerInputState_00694390
+//    writes 1 << input); the port reads it as "the NPC is not moving" (ASSUMED, see town.ts stepNpcHead).
 //  - the weapon (B.player +0x300) is the NPC's feet position; the object of CheckWall is the hit point and
 //    its normal is the surface normal (ground_info object x,y,z assumed to be the hit point).
 //  - the threshold of GetDistancePointToLineSegment (g_DistancePointToLineSegmentThresholdSq) is 0.
@@ -46,7 +54,8 @@
 //  - the input states of the head (+0x24) and the timers +0x5c / +0x5e / +0x6a / +0x6c / +0x70 / +0x100 are
 //    not modelled; the busy time of a cast is the charge ticks (quest/npcai.ts, combat.ts npcCastTechnique).
 //  - the Pioneer 2 test (map_is_pioneer2_) is the floor 0 of the lobby.
-//  - the 2764 gate (B.player +0x328 & 2) is treated as set for a live NPC record (no writer traced).
+
+import { PLAYER_RADIUS } from '../render/collision.ts';
 
 // DAT_0097dd84 (.c:796204): the midpoint factor.
 export const HEAD_MIDPOINT = 0.5;
@@ -95,6 +104,7 @@ export const HEAD_MAX_TARGETS = 9;
 export const HEAD_OWNER_ACQUIRE = 30;
 
 // Head flags (+0x80) this module writes or reads.
+export const HEAD_FLAG_BUBBLE = 0x4; // +0x80 & 4: the input state changed, the chat line is due (2764 -> DisplayChatBubble_007b2a30)
 export const HEAD_FLAG_AVOID = 0x1; // +0x80 & 1: the avoidance target is in use (AIUpdateMovement)
 export const HEAD_FLAG_ARRIVE = 0x2; // +0x80 & 2: the blocked / clear arrival test is pending
 export const HEAD_FLAG_RUN = 0x8; // +0x80 & 8: a run was sent this move (2764)
@@ -376,6 +386,26 @@ export function acquireClosestTargets(origin: HeadPoint, range: number, cands: r
 export type HeadProbeHit = { kind: 'enemy' } | { kind: 'object'; rec: HeadRecord };
 export type HeadProbe = (npc: HeadPoint) => HeadProbeHit | null;
 
+// The collision probe of B+0xa8 (SinowberillHead_UpdateState_007af7ec, .c:795114..795145). The loop runs over the
+// entities after the players in array order. GetCollisionDataForEntity_007b65b4 (.c:800203) rejects an entity
+// farther than sqrt(10000) in xz (HEAD_PROBE_CUTOFF_SQ) and then tests the boxes (CheckTwoHitboxCollision_007b5e40,
+// .c:799546, not ported: ASSUMED a box centre within PLAYER_RADIUS of the NPC). An enemy (flag 0x20000000) sets 0x80.
+// The object record (flag 0x40000000, copied to B+0xd8..0x104) has no source in the port (ASSUMED none); the box
+// flag test (puVar5[6] & 0x308) is ASSUMED to pass.
+export const HEAD_PROBE_CUTOFF_SQ = 10000;
+export interface ProbeEnemy {
+  x: number;
+  z: number;
+  boxes: readonly { x: number; z: number }[];
+}
+export function headProbeEnemies(npc: HeadPoint, enemies: readonly ProbeEnemy[], radius = PLAYER_RADIUS): HeadProbeHit | null {
+  for (const e of enemies) {
+    if (xzDistSq(npc, e) > HEAD_PROBE_CUTOFF_SQ) continue;
+    if (e.boxes.some((b) => (npc.x - b.x) ** 2 + (npc.z - b.z) ** 2 <= radius * radius)) return { kind: 'enemy' };
+  }
+  return null;
+}
+
 export interface HeadUpdateInput {
   npc: HeadPoint; // the NPC's position (B +0x94 +0x38; y for the ray)
   owner: HeadPoint; // the owner's position (Q.player +0x38; the owner's weapon, ASSUMED)
@@ -428,6 +458,18 @@ export class NpcHead {
   castTicks = 0; // the cast's busy ticks (ASSUMED: the technique's charge + cast)
   wallHit = false; // the wall ray's answer for the last movement
   npcPos: HeadPoint | null = null; // the NPC's position for TryAttack and CheckPathAndTarget
+  // The head's input state (+0x24) and its timers (exe offsets in the comments). The input state is the line
+  // the NPC says (DisplayChatBubble_007b2a30 reads the situation table by it). Timers are shorts in the exe.
+  inputState = 0; // +0x24: 0..0x19 (see setInputState for the writers)
+  t5c = 0; // +0x5c: ticks in the input state (reset by each change; the increment site is ASSUMED, see tickInput)
+  t5e = 0; // +0x5e: the multi-step counter (reset by the dispatch unless the head casts)
+  t62 = 0; // +0x62: the dead branch's counter (0x800 chain, capped at 0x400)
+  t64 = 0; // +0x64: the idle counter of state 0 (0x1518 -> input 0xb, 0x1519 -> 0x19)
+  t6a = 0; // +0x6a: the wall clamp's timer (input 7 at the clamp, wraps at 300)
+  t6c = 0; // +0x6c: the owner-status counter (input 0xc, UpdateState_007af1a8)
+  t6e = 0; // +0x6e: the owner-acquire timer of input 0xc (reset to 0 above 699)
+  t70 = 0; // +0x70: the owner's status-2 timer (input 9)
+  anim84 = 0; // +0x84: the head's anim-mode flag (ASSUMED 0: the AcquireTarget path; never written in the traced code)
 
   // Copies the stat row (the head's constructor, .c:794403..794413).
   configure(r: HeadRow): void {
@@ -504,11 +546,24 @@ export class NpcHead {
   private moveGate(): boolean {
     if (!(xzDistSq(this.sendTarget, this.moveTarget) > HEAD_MOVE_GATE_SQ)) return false;
     if (this.wall8c < 0x1f) {
-      if (this.wall8c === 0) this.flags &= ~HEAD_FLAG_WALL_CLAMP;
+      // The counter back at 0 after a clamp: input 0x18 and the 0x6a timer reset (AIUpdateState_007b267c, .c:796928).
+      if (this.wall8c === 0 && (this.flags & HEAD_FLAG_WALL_CLAMP) !== 0) {
+        this.t6a = 0;
+        this.t5c = 0;
+        this.setInputState(0x18);
+        this.flags &= ~HEAD_FLAG_WALL_CLAMP;
+      }
       return true;
     }
     this.wall8c = 0x1e;
     this.flags |= HEAD_FLAG_WALL_CLAMP;
+    // The clamp's timer: input 7 when it is 0, then +1 (0 again at 300 and up) (.c:796941..796951).
+    const s = this.t6a;
+    if (s === 0) {
+      this.t5c = 0;
+      this.setInputState(7);
+    }
+    this.t6a = s + 1 < 300 ? s + 1 : 0;
     return false;
   }
 
@@ -668,7 +723,7 @@ export class NpcHead {
   // (mask 0x2100, to the candidate at the NPC's height) becomes the locked one: B +0x7c / +0x84 take its
   // id and box (+0x80 the previous id), the anchor is the first candidate's position at the NPC's height,
   // and flag 0x1000 is set when (path + 10)^2 > the anchor's distance^2. With none clear, flag 0x40.
-  checkPathAndTarget(t: { npc: HeadPoint; npcWeapon: HeadPoint; ray: WallRay }): boolean {
+  checkPathAndTarget(t: { npc: HeadPoint; npcWeapon: HeadPoint; ray: WallRay; npcStatus8?: boolean }): boolean {
     const count = this.targets.length;
     if (count < 3) {
       this.flags &= ~HEAD_FLAG_TOO_CLOSE;
@@ -678,6 +733,9 @@ export class NpcHead {
         this.counter68++;
       } else {
         this.counter68 = 0;
+        // The NPC's status 8 (B +0x90 & 8) chooses input 1, else 0 (.c:795801..795812).
+        this.t5c = 0;
+        this.setInputState(t.npcStatus8 ? 1 : 0);
       }
     }
     if (count === 0) return false; // the exe's whole block (loop, 0x40) sits under B's count != 0 (.c:795806)
@@ -695,6 +753,9 @@ export class NpcHead {
       this.flags &= ~HEAD_FLAG_TARGET_LOCKED;
       return true;
     }
+    // No clear ray: input 8 (the attack wind-up) and flag 0x40 (.c:795856..795861).
+    this.t5c = 0;
+    this.setInputState(8);
     this.flags |= HEAD_FLAG_TARGET_LOCKED;
     return false;
   }
@@ -757,7 +818,7 @@ export class NpcHead {
     const tryOk = this.tryAttack({ npcStatus8: ctx.npcStatus8 });
     if (!tryOk) {
       if (!ctx.chooser(1)) {
-        const path = this.checkPathAndTarget({ npc: ctx.npc, npcWeapon: ctx.npcWeapon, ray: ctx.ray });
+        const path = this.checkPathAndTarget({ npc: ctx.npc, npcWeapon: ctx.npcWeapon, ray: ctx.ray, npcStatus8: ctx.npcStatus8 });
         if (!path || this.cooldown8e !== 0) {
           this.anchor = { ...ctx.npc };
           this.setMove();
@@ -781,6 +842,7 @@ export class NpcHead {
         this.flags &= ~HEAD_FLAG_SECOND; // 0xffffff7f (.c:795700)
       }
     } else {
+      this.attackInput();
       this.toAttack(ctx.npc);
       this.flags &= ~(0x1000 | HEAD_FLAG_SECOND); // 0xffffef7f
     }
@@ -800,6 +862,7 @@ export class NpcHead {
     this.flags &= ~0x100; // 0xfffffeff (.c:795680)
     if (ctx.chooser(1)) {
       if ((this.flags & HEAD_FLAG_NEXT) !== 0) {
+        this.attackInput();
         this.toAttack(ctx.npc);
         this.flags &= ~0x1000;
         return;
@@ -823,6 +886,7 @@ export class NpcHead {
   // The chooser(1) attack branch of mode 1 (.c:795602..795685), with the second-target branches dormant.
   private attackOrCastBranch(ctx: { owner: HeadPoint; npc: HeadPoint }): void {
     const f = this.flags;
+    this.t6c = 0; // the chooser(1) branch clears the owner counter (.c:795564)
     if ((f & HEAD_FLAG_NEXT) === 0) {
       if ((f & HEAD_FLAG_SECOND) === 0) {
         this.flags &= ~HEAD_FLAG_NEXT;
@@ -841,6 +905,7 @@ export class NpcHead {
         this.flags = f & 0xfffffd7f; // clears 0x200 and 0x80
       }
     } else {
+      this.attackInput();
       this.toAttack(ctx.npc);
       this.flags &= ~0x1000;
     }
@@ -864,13 +929,134 @@ export class NpcHead {
   afterDispatch(): void {
     if (this.state !== HEAD_STATE_CAST) {
       this.counter66 = 0;
+      this.t5e = 0;
       this.flags &= ~HEAD_FLAG_TARGET_HIT;
     }
+    if (this.state !== HEAD_STATE_IDLE) this.t64 = 0; // .c:797053
     if (this.state !== HEAD_STATE_MOVE) this.flags &= ~HEAD_FLAG_RUN;
     if (this.state === HEAD_STATE_IDLE) {
       this.sendTarget = { ...this.anchor };
       this.moveTarget = { ...this.anchor };
     }
+  }
+
+  // --- the input state (+0x24) and its timers ---------------------------------------------
+
+  // The writes of +0x24 in the exe are `if (+0x24 != X) { +0x24 = X; flags |= 4 }`, with +0x5c = 0 before them
+  // in most sites (the callers do that). Flag 4 asks the next 2764 for the chat line (DisplayChatBubble_007b2a30).
+  setInputState(s: number): void {
+    if (this.inputState !== s) {
+      this.inputState = s;
+      this.flags |= HEAD_FLAG_BUBBLE;
+    }
+  }
+
+  // ASSUMED: the +0x5c increment is not traced; it counts one per head tick here, so the 399-tick idle test of
+  // DisplayChatBubble has its meaning. It only changes the silent input state 0x19 (no line).
+  tickInput(): void {
+    this.t5c = (this.t5c + 1) & 0xffff;
+  }
+
+  // HandlePlayerTechCastState_007b2bc0 (.c:797215): the cast's input state is set before the eligibility test:
+  // Resta / Anti 0x16, the Foie family (0 / 3 / 6) 0x17, others 2; +0x5c is cleared.
+  castInput(tech: number): void {
+    this.t5c = 0;
+    this.setInputState(headCastInputState(tech));
+  }
+
+  // ExecuteAttack's 0x200 branch (.c:797161): after Resta (param 0) an attack is chosen, the input is 0x13.
+  attackInput(): void {
+    this.t5c = 0;
+    this.setInputState(0x13);
+  }
+
+  // DisplayChatBubble_007b2a30 (.c:797110), the first step of the 2764 dispatch when flag 4 is set (it runs before
+  // the standing gate). Input states above 0x18 go to 0x19 silently. Otherwise the line of the input state is the
+  // NPC's (`line(state)`, the situation table; the per-player slot messages have no traced writer: ASSUMED none).
+  // Flag 4 is cleared, and the 399-tick idle test sends the input to 0x19. Returns the line to show, or null.
+  bubbleStep(line: (state: number) => string | null): string | null {
+    if ((this.flags & HEAD_FLAG_BUBBLE) === 0) return null;
+    if (this.inputState > 0x18) {
+      this.inputState = 0x19;
+      this.flags &= ~HEAD_FLAG_BUBBLE;
+      return null;
+    }
+    const text = line(this.inputState);
+    this.flags &= ~HEAD_FLAG_BUBBLE;
+    if (this.t5c > 399) {
+      this.inputState = 0x19;
+      this.t5c = 0;
+    }
+    return text !== null && text !== '' ? text : null;
+  }
+
+  // The state-0 block of the 2764 (.c:796983..797002): the idle counter +0x64 counts to 0x1518 (input 0xb, with
+  // +0x5c cleared), then 0x1519 (input 0x19, flag 4 cleared, the counter restarts at 0).
+  idleStep(): void {
+    let s = this.t64 + 1;
+    if (s === 0x1519) {
+      this.t64 = 0x1519;
+      this.inputState = 0x19;
+      this.flags &= ~HEAD_FLAG_BUBBLE;
+      s = 0;
+    }
+    if (s < 0x1518) {
+      this.t64 = s;
+    } else {
+      this.t64 = 0x1518;
+      this.t5c = 0;
+      this.setInputState(0xb);
+    }
+  }
+
+  // The 0x800 branch of the chain (SinowberillChallengePlayer_Update_007aefd4, .c:794719..794746): the NPC is dead
+  // (its character flag 0x800). +0x62 counts; input 4 while it is under 0x400 with +0x84 clear, input 5 at the cap.
+  // The head is idle and its anchor is the NPC's weapon (B +0x94 +0x300). The normal movement is skipped.
+  deadStep(npcWeapon: HeadPoint): void {
+    let s = this.t62;
+    if (s < 0x400) {
+      if (s >= 0 && this.anim84 === 0) {
+        this.t5c = 0;
+        this.setInputState(4);
+      }
+    } else {
+      s = 0x400;
+      this.t62 = 0x400;
+      this.t5c = 0;
+      this.setInputState(5);
+    }
+    this.state = HEAD_STATE_IDLE;
+    this.t62 = s + 1;
+    this.flags &= ~0x1030; // 0xffffefcf: clears 0x1000, 0x20 and 0x10
+    this.anchor = { ...npcWeapon };
+  }
+
+  // The owner's part of SinowberillChallengePlayer_UpdateState_007af1a8 (.c:794785): the owner's status bit 2 runs
+  // the +0x70 timer (input 9); with the owner's acquire (`ownerAcquired`, range 30), the owner's status bit 8 runs
+  // the +0x6e timer (input 0xc) and counts +0x6c. `ownerF90` is the owner's status word (headStatusFlags).
+  ownerStep(ownerF90: number, ownerAcquired: boolean): void {
+    if ((ownerF90 & 0x2) === 0) {
+      this.t70 = 0;
+    } else {
+      const s = this.t70;
+      if (s === 0) {
+        this.t5c = 0;
+        this.setInputState(9);
+      }
+      this.t70 = s + 1;
+    }
+    if (!ownerAcquired) return;
+    if ((ownerF90 & 0x8) === 0) {
+      this.t6e = 0;
+      return;
+    }
+    const s = this.t6e;
+    if (s === 0) {
+      this.t5c = 0;
+      this.setInputState(0xc);
+    }
+    this.t6c = (this.t6c + 1) & 0xffff;
+    if (s > 699) this.t6e = 0;
   }
 
   // The owner's and the NPC's need bits that the chooser reads (the NPC's bit 2 is the target flag).

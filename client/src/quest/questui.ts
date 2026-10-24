@@ -42,7 +42,7 @@
 
 import { menuKeyOf } from '../input/keyconfig.ts';
 import * as THREE from 'three';
-import { ChatBubble, projectHead, wrapGameText } from '../classic/chat.ts';
+import { ChatBubble, ChatBubbles, projectHead, wrapGameText } from '../classic/chat.ts';
 import { activeColorEscape, expandColorTags, stripTextCodes } from '../classic/textcodes.ts';
 import { drawGameText, gameTextWidth, GAME_TEXT } from '../classic/gametext.ts';
 import { QUEST_LAYER } from '../classic/hud.ts';
@@ -97,6 +97,9 @@ export class QuestUi {
   private skin: WindowSkin | null = null;
   private body: CanvasImageSource | null = null;
   private balloons: Balloon[] = [];
+  // The NPC head lines (DisplayChatBubble_007184f8 over an NPC player): the chat balloons of the
+  // head's input states, ticked and drawn with the quest balloons (classic/chat.ts ChatBubbles).
+  readonly headBubbles = new ChatBubbles();
   private window: { text: string; waiting: boolean; rect: { x: number; y: number; w: number; h: number } } | null = null;
   private board: string[] | null = null;
   private boardCanvas: HTMLCanvasElement;
@@ -184,6 +187,11 @@ export class QuestUi {
         b.bubble.life = 0;
       }
     }
+  }
+
+  // An NPC head line: the balloon over the NPC's client id (the head's B +0x1c), docked as the chat balloons are.
+  sayHead(clientId: number, name: string, text: string, distanceTo: (id: number) => number): void {
+    this.headBubbles.say(clientId, name, text, distanceTo);
   }
 
   // --- window ------------------------------------------------------------------
@@ -348,6 +356,13 @@ export class QuestUi {
 
     // Balloons: one game frame per 30 Hz tick, over the projected head.
     const cam = this.camera();
+    const headOf = (id: number) => {
+      const h = this.speakerHead(id);
+      return cam && h ? projectHead(cam, h, 0, VW + extra) : null;
+    };
+    this.headBubbles.list = this.headBubbles.list.filter((b) => b.alive);
+    for (let i = 0; i < ticks; i++) this.headBubbles.tick(headOf);
+    if (cam && this.body) this.headBubbles.draw(ctx, { body: this.body, tab: this.body, symbol: [] });
     this.balloons = this.balloons.filter((b) => b.bubble.alive);
     for (const b of this.balloons) {
       const head = this.speakerHead(b.key);

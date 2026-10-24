@@ -7210,6 +7210,12 @@ export class CombatView {
     return { hp: this.damage.hp, hpMax: this.damage.maxHp, tp: this.tp, tpMax: this.progression?.maxTp ?? 0, stateFlags30: 0 };
   }
 
+  // The local player's dead flag (the owner's character flag 0x800 of SinowberillChallengePlayer_Update_007aefd4's
+  // outer test, .c:794719). The head does nothing while its owner is dead.
+  npcOwnerDead(): boolean {
+    return this.damage.dead;
+  }
+
   // An NPC player's technique (quest/npcai.ts npcAttackCast): the owner's client sends the
   // 6x47 / 6x48 under the NPC's client id and runs the caster's release on this client.
   // The effect is the target's own client's (combat/techniques.ts remote rules): Resta heals
