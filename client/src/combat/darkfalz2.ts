@@ -26,9 +26,16 @@
 // 20 (0x00900200). Each ball is a Rabarta (BEAM_L) or a fixed Rafoie (BEAM_R)
 // technique object (combat/techfire.ts, the enemy shot path through
 // DfFight.shoot) and gives the forced 2.5 radar icon (0x40200000, dump 197706).
-// ASSUMED: the heading source (the target cell minus the body: the exe copies
-// the words at +0x3bc / +0x3c0 / +0x3c4, which the dump's struct names do not
-// match), the levels (row 54 rabarta / rafoie; the exe passes the Form 1
+// The heading source is settled (2026-10-23, objdump of PsoBB.exe): the packet
+// receive (0x00459D53 calls the converter 0x00459DF0) writes the target cell's
+// centre to +0x3bc (x), +0x3c0 (y = 0) and +0x3c4 (z); the beam init (0x0045A790)
+// copies those into D (+0x400 / +0x404 / +0x408), then `D = D - (body +0x38, +0x3c,
+// +0x40)` through 0x0082F9C4 (ecx - edx: the call at 0x0045A7C6 has ecx = &D and
+// edx = &body), zeroes y, and normalises (or (1, 0) under 0.01). Form 2's struct
+// keeps the cell centre at +0x3bc / +0x3c4, where Form 1's keeps it at +0x3c0 /
+// +0x3c8 (darkfalz1.ts). The converter's x87 operand order is taken as the form 1
+// Transform's; its signs were not re-derived.
+// ASSUMED: the levels (row 54 rabarta / rafoie; the exe passes the Form 1
 // animation rows' field7 / field6 to the same constructors), and the icon's
 // visibility (in the list only on the tick that threw the ball).
 //
@@ -225,7 +232,7 @@ export class DfForm2 extends DfEntity {
       case F2.beamR: {
         // The beam init (0x0045A790 / 0x0045A770): P = the body scaled to
         // MaxScale; D = the unit vector from the body to the target cell
-        // (ASSUMED, see the header; (1, 0) when it is under 0.01 away); V = D's
+        // (see the header; (1, 0) when it is under 0.01 away); V = D's
         // heading turned by +0x4000 (L) or -0x4000 (R), as (sin, cos).
         this.anim.frame = 0;
         this.timer = F2.beamFrames;

@@ -18,11 +18,15 @@
 // closing), 8 / 9 BEAM_L / BEAM_R (Rabarta / Rafoie at the target cell, 75),
 // 10 TENCHU (the 64 marks, 150).
 //
-// The Rabarta and Rafoie objects are combat/techfire.ts: a round box of radius
-// range_h of the technique at the row's level (rabarta_constructor 0x006ec8ec,
-// rafoie_constructor 0x006ed8f4; Dark Falz' arena makes the cut-off 250,
-// 0x006ea7c4). ASSUMED: they hit at once (the exe's Rafoie waits 10 frames, its
-// Rabarta stays `cast` frames).
+// The beam (0x00456860, dump FUN_00456860 by Ghidra): at timer 38 it calls the
+// Rabarta constructor 0x006ec8ec (BEAM_L, state 8) or CreateRafoieEffectEntity
+// 0x006ed87c (BEAM_R) with the target cell point (+0x3c0 / +0x3c4 = 0 / +0x3c8)
+// and the Form 1 row's level (0x0077a6cc(0x36) field +0x1c / +0x18). The object is
+// a technique object of the fight (combat/techfire.ts through DfFight.shoot, as
+// form 2's balls): it lives its cast frames and hits each player in its box. The
+// beam adds no radar icon (no minimap call on that path, nor in the 0x006e..0x006f
+// objects). Dark Falz' arena makes the cut-off 250 (0x006ea7c4). ASSUMED: the
+// Rafoie's wait before it hits (the exe's 10 frames, not re-checked here).
 //
 // ASSUMED (neither the dump nor the JP C has it): the flight and the
 // aura of the spat Darvants (class 0xAF7EC0, only its update's skeleton was
@@ -44,7 +48,7 @@ import {
   type Vec3,
 } from './darkfalzcommon.ts';
 import { form1Icons, type Icon } from '../classic/minimap.ts';
-import { techReach } from './techfire.ts';
+import { enemyFire } from './techfire.ts';
 import { TECH } from './techniques.ts';
 
 // Animation table 0x009A5E20 (stride 0x20: mode, next, six motions for the
@@ -497,7 +501,7 @@ export class DfForm1 extends DfEntity {
           const rabarta = this.st === F1.beamL;
           const level = rabarta ? this.row.rabarta : this.row.rafoie;
           f.events.push({ kind: 'se', id: 0x370 });
-          this.techAt(this.target[0], this.target[2], level, rabarta);
+          this.fireBeam(rabarta, level);
         }
         if (--this.timer < 0) this.to_(F1.waitNext);
         break;
@@ -514,15 +518,12 @@ export class DfForm1 extends DfEntity {
     }
   }
 
-  // The technique object at (x, z): every player within its reach is hit
-  // (entity_hit_by_tech group 0 at the tech's level).
-  private techAt(x: number, z: number, level: number, rabarta: boolean): void {
-    const reach = techReach(rabarta ? TECH.rabarta : TECH.rafoie, level);
-    for (const p of this.fight.alive()) {
-      if (Math.hypot(p.x - x, p.z - z) < reach) {
-        this.fight.events.push({ kind: 'tech', clientId: p.clientId, tech: rabarta ? 'rabarta' : 'rafoie', level, x, z, what: `Dark Falz ${rabarta ? 'Rabarta' : 'Rafoie'}` });
-      }
-    }
+  // 0x00456860 at timer 38: the beam's technique object at the target cell, an
+  // enemy's object with the Dark Falz cut-off (the same path as form 2's balls,
+  // darkfalz2.ts spawnBall). Rabarta for BEAM_L, a fixed Rafoie for BEAM_R.
+  private fireBeam(rabarta: boolean, level: number): void {
+    const shot = enemyFire({ tech: rabarta ? TECH.rabarta : TECH.rafoie, level, x: this.target[0], y: 0, z: this.target[2], heading: 0, fixed: !rabarta, enemy: false });
+    if (shot) this.fight.shoot(shot);
   }
 
   // InitializeVoloptForm7HazardPositions (0x0045431C): the local player's spot
