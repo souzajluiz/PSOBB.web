@@ -33,10 +33,44 @@ export interface WordSelectTable {
   tokenToPhrase: number[];
   // The phrases (unitxt_ws group 0).
   phrases: string[];
+  // table1 and table2 (root +0 and +4): each entry is a u16 list at {u32 offset, u32 count}.
+  // Read by the exe's JP case of LoadLocaleData_00705eb8 (only gp[0..2] are read for JP;
+  // table4 / article types / table6 are null in ws_data_jp.bin). See classic/wordselectmenu.ts.
+  list1: number[][];
+  list2: number[][];
+}
+
+// JP counts from the exe's LoadLocaleData_00705eb8 (g_ListItemCount 0x11A, g_WordSelectItemCount 0x12).
+export const WORD_SELECT_JP_LIST1_COUNT = 0x11a;
+export const WORD_SELECT_JP_LIST2_COUNT = 0x12;
+
+// The {u32 offset, u32 count}[count] pointer array at `at`, each target a u16[count] list. An entry
+// that runs past the data reads as an empty list (the exe does not check; this port does).
+function readPointerLists(rel: RelFile, at: number, count: number): number[][] {
+  const out: number[][] = [];
+  const len = rel.data.length;
+  for (let i = 0; i < count; i++) {
+    const e = at + i * 8;
+    if (e + 8 > len) {
+      out.push([]);
+      continue;
+    }
+    const off = rel.u32(e);
+    const n = rel.u32(e + 4);
+    const list: number[] = [];
+    if (off + n * 2 <= len) for (let k = 0; k < n; k++) list.push(rel.u16(off + k * 2));
+    out.push(list);
+  }
+  return out;
 }
 
 // The decompressed table (PRC already undone) with its phrase list.
-export function parseWordSelectTable(decompressed: Uint8Array, phrases: string[]): WordSelectTable {
+export function parseWordSelectTable(
+  decompressed: Uint8Array,
+  phrases: string[],
+  list1Count = WORD_SELECT_JP_LIST1_COUNT,
+  list2Count = WORD_SELECT_JP_LIST2_COUNT,
+): WordSelectTable {
   const rel = new RelFile(decompressed);
   const table = rel.u32(rel.root + BB_ROOT_TOKEN_TABLE);
   const tokenToPhrase: number[] = [];
@@ -44,7 +78,9 @@ export function parseWordSelectTable(decompressed: Uint8Array, phrases: string[]
     const at = table + i * 2;
     tokenToPhrase.push(at + 2 <= decompressed.length ? rel.u16(at) : NO_PHRASE);
   }
-  return { tokenToPhrase, phrases };
+  const list1 = readPointerLists(rel, rel.u32(rel.root), list1Count);
+  const list2 = readPointerLists(rel, rel.u32(rel.root + 4), list2Count);
+  return { tokenToPhrase, phrases, list1, list2 };
 }
 
 // The two files as the client has them (the PRC table and the unitxt_ws PRS text).
