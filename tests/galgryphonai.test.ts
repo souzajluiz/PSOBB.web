@@ -18,6 +18,7 @@ import { decodeGalgryphonSync } from '../client/src/combat/galgryphonscript.ts';
 import { bodyViewB, viewStateCtxB } from '../client/src/combat/galgryphonstatesb.ts';
 import type { AiTarget } from '../client/src/combat/enemyai.ts';
 import { DrlBurst } from '../client/src/combat/derolle.ts';
+import type { Vec3 } from '../client/src/combat/galgryphonfx.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -268,6 +269,43 @@ const rollOf = (bytes: Uint8Array) => decodeGalgryphonSync(new DataView(bytes.bu
   // The ring's hits are the variant context: power 0 (the exe's global 0x00903994), a tech hit.
   const first = (r.ai as unknown as { shotsOut: unknown[] }).shotsOut;
   eq(first.length, 0, 'ring: the queue is drained by frameOut');
+}
+
+// ---- the beams: the S27 beam (spawnBeam) and the S30 dive beam (diveBeam) reach the host's bolt hook
+// 20 and 40 ticks after they are made, and the S27 one lives 17 ticks (the beam object's window) ----
+{
+  const drawn: number[] = [];
+  let n = 0;
+  const sent: Uint8Array[] = [];
+  const ai = new GalgryphonAi({
+    entityId: 0x1234,
+    x: 0,
+    h: 180,
+    z: 991,
+    heading: 0,
+    leader: () => true,
+    hp: 1000,
+    maxHp: 1000,
+    players: () => 1,
+    rand: lcg(9),
+    send: (p) => sent.push(p),
+    ground: () => ({ y: 3 }),
+    bolt: () => drawn.push(n),
+  });
+  const hooks = (ai as unknown as { ctx: { fx: { spawnBeam(f: boolean, v: number): void; diveBeam(a: Vec3, b: Vec3): void } } }).ctx.fx;
+  hooks.spawnBeam(true, 0);
+  for (let i = 0; i < 25; i++) {
+    n++;
+    ai.tick([]);
+  }
+  check(drawn.length === 1 && drawn[0] === 20, `beam: the S27 beam is drawn on its frame 20 (got ${drawn})`);
+  hooks.diveBeam({ x: 0, y: 180, z: 0 }, { x: 100, y: 0, z: 100 });
+  const base = n;
+  for (let i = 0; i < 45; i++) {
+    n++;
+    ai.tick([]);
+  }
+  check(drawn.length === 2 && drawn[1] === base + 40, `beam: the dive beam is drawn on its frame 40 (got ${drawn})`);
 }
 
 if (failures > 0) {

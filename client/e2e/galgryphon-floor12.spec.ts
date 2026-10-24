@@ -45,22 +45,35 @@ test('Episode 2 floor 12: the Gal Gryphon brain runs and the boss is drawn mid-f
     );
   }
   // The boss is built by the combat view a moment after the load; its brain is GalgryphonAi.
+  // The wall clock from the first sight of the brain (set by readBoss below).
+  let seenAt = 0;
   type Boss = { state: string | null; dead: boolean; hp: number | null };
-  const readBoss = () =>
-    peek(page, (w): Boss | null => {
+  const readBoss = async (): Promise<Boss | null> => {
+    const b = await peek(page, (w): Boss | null => {
       const enemies = [...w.classicGame.view.combat.enemies.values()] as any[];
       const e = enemies.find((x) => x.ai?.constructor?.name === 'GalgryphonAi');
       if (!e) return null;
       return { state: e.ai.state ?? null, dead: !!e.dead, hp: e.ai.hpNow ?? null };
     });
+    if (b && !seenAt) seenAt = Date.now();
+    return b;
+  };
   const classes = () =>
     peek(page, (w) => [...w.classicGame.view.combat.enemies.values()].map((x: any) => `${x.ai?.constructor?.name ?? 'none'}:${x.slot?.type ?? '?'}:${x.instance?.spec?.name ?? '?'}`));
   await expect.poll(readBoss, { timeout: 60_000 }).not.toBeNull().catch(async (err) => {
     console.log(`enemies on floor 12: ${JSON.stringify(await classes())}; placed: ${firstWorld}`);
     throw err;
   });
-  // Let the entrance run; the states over the next seconds show the brain ticking.
-  await page.waitForTimeout(6000);
+  // The entrance (S4) is the op motion (slot 25 = motion 7, 500 frames at step 1.0 per game tick,
+  // 30 ticks per second: about 16.7 s; GalgryphonUpdateState_004a22b0, dump 224151). It ends when the
+  // motion finishes (+0xb0 & 0x10) and the leader walks the default list. Poll until the boss leaves S4.
+  const t0 = seenAt;
+  const left = await expect
+    .poll(async () => (await readBoss())?.state ?? null, { timeout: 60_000, intervals: [500] })
+    .not.toBe('S4')
+    .then(() => true)
+    .catch(() => false);
+  const leftAfter = ((Date.now() - t0) / 1000).toFixed(1);
   const boss = await readBoss();
   const states: string[] = [];
   for (let i = 0; i < 6; i++) {
@@ -70,7 +83,8 @@ test('Episode 2 floor 12: the Gal Gryphon brain runs and the boss is drawn mid-f
   }
   const shot = info.outputPath('galgryphon-floor12.png');
   await page.screenshot({ path: shot });
-  console.log(`boss at check: ${JSON.stringify(boss)}; states over 6 s: ${[...new Set(states)].join(',')}`);
+  console.log(`S4 left: ${left} after ${leftAfter} s (wall clock); boss at check: ${JSON.stringify(boss)}; states over 6 s: ${[...new Set(states)].join(',')}`);
+  expect(left, 'the boss leaves S4 (the entrance ends)').toBe(true);
   console.log(`page errors: ${errors.length} ${errors.slice(0, 3).join(' | ')}`);
   console.log(`screenshot: ${shot}`);
   expect(boss, 'the Gal Gryphon brain exists').not.toBeNull();

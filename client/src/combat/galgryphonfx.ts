@@ -29,6 +29,7 @@ import { DrlBurst } from './derolle.ts';
 import type { ShotEffect, ShotLook } from './enemyshots.ts';
 import { galgryphonAttackParams } from './galgryphon.ts';
 import { bamsCos, bamsSin, galRoundB } from './galgryphonstatesb.ts';
+import { BOLT_POINTS, BOLT_SCALE_RANGE, dominantAxis, jitterDirection, LightningBolt, type Rng } from './techlightning.ts';
 
 export interface Vec3 {
   x: number;
@@ -335,6 +336,158 @@ export function diveBeamPoints(from: Vec3, to: Vec3, ground: GroundHit | null): 
     start: GALFX_DIVE_BEAM.start,
     end: GALFX_DIVE_BEAM.start + GALFX_DIVE_BEAM.length,
   };
+}
+
+// ---- the S27 beam: the target check (0x004a5428) and the spawn (0x004a5218) ----
+
+/**
+ * The spawn's constants (SpawnOlgaMinionEffect_004a5218, dump 225179; each value read with
+ * tools/exedata.py, the doubles as f64). The randoms are the boss's 16-bit rng (+0x5fc).
+ */
+export const GALFX_OLGA = {
+  /** 0x00903cec = 100.0: the spawn radius. The first random r gives radius = 100 * (1 + r / 65536). */
+  radius: 100.0,
+  /** 0x00903cf8 = 65536.0: the divisor of the 16-bit randoms (offset 0x00903a80 = 0.0 for the top bit clear). */
+  randDivisor: 65536.0,
+  /** 0x00903ce8 = 45056.0: the angle random's scale (0xb000 BAMS). Also the target check's limit for selector 1. */
+  angleScale: 45056.0,
+  /** 0x00903cf4 = 20480.0: the angle offset for selector 1 (0x5000 BAMS, the spawn only). */
+  angleOffset: 20480.0,
+  /** 0x00903cdc = 20480.0: the target check's limit for selector 0 (the difference must reach it). */
+  angleLimitSel0: 20480,
+  /** 0x00903ce0 = 10000.0: the squared distance from the boss a target must reach (100 units). */
+  minDistSq: 10000.0,
+  /** 0x00903cf0 = 0.5: the middle point's factor (the middle of the minion and the target). */
+  midFactor: 0.5,
+  /** 0x00903ce4 = 250.0: the middle point's height above the minion. */
+  midHeight: 250.0,
+  /** The beam object's window (the call's 0x14 and 0x11): it is live from frame 20 to frame 37. */
+  start: 20,
+  length: 17,
+} as const;
+
+/** ASSUMED: the beam ribbon's width (the exe passes a width to the arc; its value is not decoded). */
+export const GALFX_BEAM_THICKNESS = 1.8;
+
+export interface OlgaSpawn {
+  /** The minion's point (the start of the beam). */
+  minion: Vec3;
+  /** The middle point: (0.5 (minion.x + target.x), minion.y + 250, 0.5 (minion.z + target.z)). */
+  mid: Vec3;
+  /** The target: the player's point when the check passes, else the ring point. */
+  target: Vec3;
+  /** Whether the target is the player's point (no ground probe was made). */
+  onPlayer: boolean;
+}
+
+/**
+ * CheckOlgaMinionTargetValidity_004a5428 (dump 225297 area, disassembly 0x004a5428..0x004a5530). The
+ * player must be 100 units or more from the boss (squared distance against 10000). The angle from the
+ * minion to the player is atan2(dx, dz) as a BAMS value (truncated); the signed difference to the boss's
+ * heading (b_minus_a, ASSUMED argument order: heading - angle, as the port's other b_minus_a uses) is
+ * read as an unsigned 16-bit value d: selector 0 needs d >= 20480, selector 1 needs d <= 45056.
+ * Returns the player's point (the copy to the output) when valid, else null.
+ */
+export function olgaMinionTarget(boss: { x: number; z: number; heading: number }, sel: number, player: Vec3 | null, minion: Vec3): Vec3 | null {
+  if (!player) return null;
+  const bx = player.x - boss.x;
+  const bz = player.z - boss.z;
+  if (bx * bx + bz * bz < GALFX_OLGA.minDistSq) return null;
+  const angle = Math.trunc((Math.atan2(player.x - minion.x, player.z - minion.z) * 32768) / Math.PI);
+  const d = (boss.heading - angle) & 0xffff;
+  const ok = sel !== 0 ? d <= GALFX_OLGA.angleScale : d >= GALFX_OLGA.angleLimitSel0;
+  return ok ? { x: player.x, y: player.y, z: player.z } : null;
+}
+
+/**
+ * SpawnOlgaMinionEffect_004a5218 (dump 225179). Two randoms are drawn first, as the exe does (the radius,
+ * then the angle), whether or not the minion exists. A null minion (the exe's zero pointer) ends the spawn.
+ * Otherwise the target is the player's point when the check passes; else the ring point at the random
+ * radius and angle around the boss, probed at the boss's height (no ground, or a ground above 6.0: the
+ * ring point at the fixed radius of 100). Selector 1 adds 20480 to the angle. The middle point is the
+ * minion's midpoint with the target, raised by 250.
+ */
+export function olgaMinionSpawn(
+  boss: { x: number; y: number; z: number; heading: number },
+  sel: number,
+  player: Vec3 | null,
+  minion: Vec3 | null,
+  rnd16: () => number,
+  ground: (p: Vec3) => GroundHit | null,
+): OlgaSpawn | null {
+  const r1 = rnd16();
+  const radius = (r1 / GALFX_OLGA.randDivisor) * GALFX_OLGA.radius + GALFX_OLGA.radius;
+  const r2 = rnd16();
+  const angle = Math.trunc((r2 / GALFX_OLGA.randDivisor) * GALFX_OLGA.angleScale + boss.heading);
+  if (!minion) return null;
+  const onPlayer = olgaMinionTarget(boss, sel, player, minion);
+  let target: Vec3;
+  if (onPlayer) {
+    target = onPlayer;
+  } else {
+    const a = sel !== 0 ? Math.trunc(angle + GALFX_OLGA.angleOffset) : angle;
+    let p: Vec3 = { x: bamsSin(a) * radius + boss.x, y: boss.y, z: bamsCos(a) * radius + boss.z };
+    const g = ground(p);
+    if (!g || g.y > GALFX.groundLimit) {
+      p = { x: bamsSin(a) * GALFX_OLGA.radius + boss.x, y: boss.y, z: bamsCos(a) * GALFX_OLGA.radius + boss.z };
+    }
+    target = p;
+  }
+  return {
+    minion: { x: minion.x, y: minion.y, z: minion.z },
+    mid: {
+      x: GALFX_OLGA.midFactor * (minion.x + target.x),
+      y: minion.y + GALFX_OLGA.midHeight,
+      z: GALFX_OLGA.midFactor * (target.z + minion.z),
+    },
+    target,
+    onPlayer: onPlayer !== null,
+  };
+}
+
+/**
+ * The beam object's three points (CreateGalgryphonLightningBeamEffectObject_004aa4ec, dump 228648):
+ * the minion, the middle point, and the target's x / z at the ground's height clamped to 6.0 (no ground:
+ * 6.0). The exe's probe runs at the target's own point.
+ */
+export function olgaBeamPoints(s: OlgaSpawn, ground: (p: Vec3) => GroundHit | null): [Vec3, Vec3, Vec3] {
+  const g = ground(s.target);
+  const y = g === null ? GALFX.groundLimit : Math.min(g.y, GALFX.groundLimit);
+  return [s.minion, s.mid, { x: s.target.x, y, z: s.target.z }];
+}
+
+/**
+ * The jitter of a lightning object through its points: create_jitter_values_for_points (dump 654426,
+ * disassembly 0x006f316c): one direction jitter per point (the same function as the Zonde bolt's
+ * jitterDirection, combat/techlightning.ts, along dir = the normalised end - start), then one scale per
+ * inner point ((rng - 0.5) * 2 * 8), and zero at the ends. The points are the object's base; the
+ * per-tick update (ProcessParticleEffect_006f4004) is LightningBolt.tick. The points past the count are
+ * copies of the last point with no jitter.
+ */
+export function jitteredBolt(points: readonly Vec3[], rng: Rng, thickness: number, hold: number): LightningBolt {
+  const n = Math.max(2, Math.min(points.length, BOLT_POINTS));
+  const a = points[0];
+  const b = points[n - 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  const dir = len > 0 ? { x: (b.x - a.x) / len, y: (b.y - a.y) / len, z: (b.z - a.z) / len } : { x: 0, y: 1, z: 0 };
+  // A constant 0.5 source gives zero offsets: the constructor's own jitter is overwritten below.
+  const bolt = new LightningBolt(a, dir, len, thickness, () => 0.5, hold);
+  const axis = dominantAxis(dir.x, dir.y, dir.z);
+  for (let i = 0; i < n; i++) jitterDirection(dir, axis, rng, bolt.jitter, i * 3);
+  bolt.scale.fill(0);
+  for (let i = 1; i < n - 1; i++) bolt.scale[i] = (rng() - 0.5) * 2 * BOLT_SCALE_RANGE;
+  for (let i = 0; i < BOLT_POINTS; i++) {
+    const p = points[Math.min(i, n - 1)];
+    bolt.base[i * 3] = p.x;
+    bolt.base[i * 3 + 1] = p.y;
+    bolt.base[i * 3 + 2] = p.z;
+    if (i >= n) {
+      bolt.jitter[i * 3] = 0;
+      bolt.jitter[i * 3 + 1] = 0;
+      bolt.jitter[i * 3 + 2] = 0;
+    }
+  }
+  return bolt;
 }
 
 // ---- the minion ring (0x004aabd8 and the particle update 0x004aade4) ----

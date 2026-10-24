@@ -1311,6 +1311,9 @@ export class CombatView {
             send: (packet) => this.game.sendGalgryphonPacket(packet),
             // The probe's sound (GalgryphonFxB probe, 0x39b) at the boss.
             sfx: (id) => this.playSe(id),
+            // The S27 beam and the S30 dive beam: lightning ribbons through the technique effects (the
+            // bolt's particle and its ribbon, render/techlightning.ts addBolt).
+            bolt: (b) => this.techfx?.addBolt(b),
             throwMinion: (origin, offset, target, slot) => {
               this.galMinions.throw(origin, offset, target, slot);
             },
