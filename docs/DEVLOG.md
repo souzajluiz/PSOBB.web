@@ -16388,3 +16388,23 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 
 **Left:**
 - Wiring: the hooks in `GalgryphonFxB` (`galgryphonstatesb.ts`, the S0..S17 unification) and `render/combat.ts`; the minion ring's particle objects; the S27 beam spawn `SpawnOlgaMinionEffect_004a5218` (dump 225179: random angle and radius, ground search, `CheckOlgaMinionTargetValidity_004a5428`); the lightning jitter; the Derolle vtable bodies behind the area hit.
+
+## 2026-10-23: Tekker Result row icons checked against the exe (ROADMAP "Items left to do")
+
+**What changed:** the last open check on the line is done. `shopRow` (the Result row, `classic/shop.ts`) gives the same icon 2 as the exe for every item group the tekker can show, and the same icon 1 for a fresh (unequipped, not undroppable) item. `tests/tekker.test.ts` pins the table. No code change in `shopRow`. The two unreferenced modules named on the line were already removed in commit 0471104 (`formats/tekkeritem.ts`, `render/tekkeritem.ts`).
+
+**Exe evidence** (PsoBB.exe 1.25.13; dump `src/Psobb.exe-05112026.c`; `tools/exedata.py read 0092c360 u 19`):
+- The row: `InitializeItemObject_0072bdd4` (694456) calls `HandleWeaponAnimationTable_005c5114` (414153), then `UIElement_SetItemAnimationState_0072b9d0(this, EAX, group_1, group_2, flag 0x400)` (694469 / 694475), then `ItemEntity_UpdateColoring_0072c045` (694494) for the colours and icon 1.
+- Icon 2 (`this+0x1d`, setter 694226..694289): flag 0x400 (wrapped) -> 8; weapon anim 1 -> 0, 3 -> 1, 2 -> 2; group 1: sub 3 (unit) -> 4, sub 2 (shield) -> 10, else (armour) -> 11; group 2 (mag) -> 3; group 3: sub 0 -> 5, 1 -> 7, 2 -> 6, else 8; group 4 (meseta) -> 9; else 0x36. `categoryIcon` in `classic/itempack.ts` gives the same for all of these.
+- The weapon anim is `GetWeaponAnimationTableEntry_005d6724` (428106): kind = `get_weapon_animation_pmt(data1[1])` for data1[1] < 0xed (else the raw byte), value = table[kind] for kind < 0x13, else 0. The table is 0x0092c360 (19 DWORDs: 1 1 1 1 1 1 3 3 3 3 2 2 2 1 1 1 1 3 2), read with `tools/exedata.py` and equal to `WEAPON_ANIM` in `itempack.ts`. ASSUMED: the globals named in the decompile (`g_pWeaponAnimationTable`, ...) are contiguous at 0x0092c360, so `local_4c[kind]` reads that table.
+- Icon 1 (`this+0x1c`, `ItemEntity_UpdateColoring_0072c045` 694505..): flag 0x400 -> returns early (icon 1 stays as the row had it; the other row builder, 694184, sets 0x36 first; colour white). Otherwise, with `GetItemAttackData(item, 0x10, player)` (414125) == 0 and the flag 8 (equipped) clear: 0x19 when untekked and rare, else 0x13 when `ValidateItemInstanceForEquip` bit 1 (class) is set, else 0x36. Equipped: 0x0c. With the attack-data bit set: 0x2a (not equipped) / 0x2b (equipped). Colours: untekked 0xff00fffc; the equip check failing gives 0xff909090 name and 0xffaaaaaa icon; S-rank 0xfffe3c28. The port's `shopRow` matches these except the attack-data (undroppable) branch and the equipped branch, which it does not model.
+- Count: `can_item_stack` (414070) is true for meseta (group 4) and for tools (group 3) with sub 0..8 except 2, and sub 0x10. The Result items (weapon, armour, shield, unit, mag) are never stackable, so no "×n" and `shopRow` passes '' correctly.
+- The `GetPlayer_0068d5a8(this+6)` null path returns before any colour / icon 1 is set. ASSUMED: this+6 is the local player's index for the Result row (not traced for the list row object).
+
+**Tests:** `tests/tekker.test.ts` (section "the Result row's icons"): weapon kinds 0, 6, 10, 13, 17, 18, 19 give icon 2 0, 1, 2, 0, 1, 2, 0x36 (identity PMT kinds, the table above); armour 11, shield 10, unit 4, mag 3; mate 5, fluid 7, disk 6, other tool 8. Expected values are written from the exe table, not from the port's code.
+
+**ASSUMED:** the undroppable and equipped icon 1 (0x2a / 0x2b / 0x0c) do not occur on a fresh Result item; the GetPlayer(+6) path; the 0x0092c360 contiguity above.
+
+**Checks:** `node tests/tekker.test.ts` passes (Node 24). `cd client && node_modules/typescript/bin/tsc --noEmit -p .` exit 0 (node_modules linked from the main checkout for the run, then removed). Not run: Playwright (per the brief), Chrome.
+
+**Left:** `shopRow` undroppable / equipped icon 1 branches (above); the item-type draw slot of the weapon classes is not needed for the Result any more.

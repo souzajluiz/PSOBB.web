@@ -17,6 +17,7 @@ import {
   type CounterItems,
 } from '../client/src/classic/shop.ts';
 import type { RowContext } from '../client/src/classic/itempack.ts';
+import { shopRow } from '../client/src/classic/shop.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames, type ItemData } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -322,6 +323,35 @@ eq(
   await press(c, 'Enter', 'Enter', 'Enter', 'Enter');
   await tick(c);
   eq([calls, c.done], [[], true], 'not enough meseta: nothing sent, no jingle');
+}
+
+// --- the Result row's icons (UIElement_SetItemAnimationState_0072b9d0 for icon 2,
+// ItemEntity_UpdateColoring_0072c045 for icon 1; the row is InitializeItemObject_0072bdd4's).
+// The weapon kind goes through GetWeaponAnimationTableEntry_005d6724: the table 0x0092c360
+// (19 DWORDs: 1 sword, 2 cane, 3 gun) indexed by the PMT kind; kinds >= 0x13 give 0.
+{
+  const ctx: RowContext = { names, charClass: 0, level: 5, stats: { atp: 100, mst: 0, ata: 100 }, lobby: false };
+  pmt.weaponKinds = Array.from({ length: 19 }, (_, k) => k); // identity: the test names the table index
+  const anim = [1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1, 3, 2];
+  const want = (k: number) => (anim[k] === 1 ? 0 : anim[k] === 3 ? 1 : anim[k] === 2 ? 2 : 0x36);
+  const weapon = (kind: number) => inv(`00${kind.toString(16).padStart(2, '0')}00000000000000000000 00000000 00000000`);
+  const got = [0, 6, 10, 13, 17, 18, 19].map((k) => shopRow(weapon(k).data, '', ctx).icon2);
+  eq(got, [0, 6, 10, 13, 17, 18, 19].map(want), 'weapon kinds -> icon 2 (0x0092c360 by kind)');
+  eq(shopRow(weapon(6).data, '', ctx).icon2, 1, 'gun kind 6 -> icon 1');
+  // Non-weapon groups: armour 11 (sub 1), shield 10 (sub 2), unit 4 (sub 3), mag 3, mate 5, fluid 7, disk 6, other tool 8, meseta 9.
+  const row2 = (h: string) => shopRow(inv(h).data, '', ctx).icon2;
+  eq(
+    [row2('010100000000000000000000 00000000 00000000'), row2('010200000000000000000000 00000000 00000000'), row2('010300000000000000000000 00000000 00000000'), row2('020100000000000000000000 00000000 00000000')],
+    [11, 10, 4, 3],
+    'armour / shield / unit / mag icon 2',
+  );
+  eq(
+    [row2('030000000003000000000000 05000100 00000000'), row2('030100000003000000000000 05000100 00000000'), row2('030200000003000000000000 05000100 00000000'), row2('030500000003000000000000 05000100 00000000')],
+    [5, 7, 6, 8],
+    'tools: mate / fluid / disk / other icon 2',
+  );
+  // ASSUMED: the exe's undroppable (0x2a / 0x2b) and equipped (0x0c) icon 1 are not on a fresh Result item (not checked here).
+  pmt.weaponKinds = [];
 }
 
 if (failures) {
