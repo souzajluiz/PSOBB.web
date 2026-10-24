@@ -337,29 +337,47 @@ function flush(parts: Part[]): void {
   if (scheduled) return;
   scheduled = true;
   requestAnimationFrame(() => {
+    // Snapshot the requested parts before clearing: `has` must read the snapshot, not the
+    // live set, or every named part reads as "not requested" once it is cleared.
     scheduled = false;
-    const all = pending.has('all');
-    const has = (p: Part) => all || pending.has(p);
+    const todo = new Set(pending);
     pending.clear();
-    if (has('props')) props.refresh();
-    if (has('floors')) {
+    const has = (p: Part) => todo.has('all') || todo.has(p);
+    // Each part refreshes on its own: one panel throwing must not starve the others (and
+    // the error is logged, not swallowed).
+    const part = (p: Part, fn: () => void): void => {
+      if (!has(p)) return;
+      try {
+        fn();
+      } catch (err) {
+        console.error(`Quest editor: refreshing "${p}" failed`, err);
+      }
+    };
+    part('props', () => props.refresh());
+    part('floors', () => {
       floorOptions();
       overview.refresh();
-    }
-    if (has('palette')) palette.refresh();
-    if (has('list')) entityList.refresh();
-    if (has('inspector')) inspector.refresh();
-    if (has('events') && tab === 'events') events.refresh();
-    if (has('random') && tab === 'random') random.refresh();
-    if (has('script') && tab === 'script') scriptPanel?.refresh();
-    if (has('toolbar')) {
+    });
+    part('palette', () => palette.refresh());
+    part('list', () => entityList.refresh());
+    part('inspector', () => inspector.refresh());
+    part('events', () => {
+      if (tab === 'events') events.refresh();
+    });
+    part('random', () => {
+      if (tab === 'random') random.refresh();
+    });
+    part('script', () => {
+      if (tab === 'script') scriptPanel?.refresh();
+    });
+    part('toolbar', () => {
       undoBtn.disabled = !doc.history.canUndo;
       redoBtn.disabled = !doc.history.canRedo;
       undoBtn.title = doc.history.undoLabel ? `Undo: ${doc.history.undoLabel} (Ctrl+Z)` : 'Nothing to undo';
       redoBtn.title = doc.history.redoLabel ? `Redo: ${doc.history.redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo';
       title.textContent = `${doc.header.name || doc.fileName}${doc.dirty ? ' *' : ''}`;
       document.title = `${doc.dirty ? '* ' : ''}${doc.header.name || doc.fileName} - PSOBB.web Quest editor`;
-    }
+    });
   });
 }
 
