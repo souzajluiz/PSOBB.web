@@ -57,6 +57,7 @@ import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames 
 import { drawTeamLog, type TeamChat } from '../classic/teamchat.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, stackSize, type GameItems } from '../net/items.ts';
+import { BOSS_AREAS } from '../net/telepipe.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { parseMinimapRel, minimapFileFor, type MinimapData } from '../formats/minimap.ts';
 import { enemyIconRule, MinimapFloors, MinimapState, raderHideInside, raderIconIcon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
@@ -116,6 +117,11 @@ export interface FieldHudOptions {
   // Starts a technique cast from the Technique menu (render/combat.ts
   // castTechnique); false when it cannot be cast.
   cast?: (tech: number) => boolean;
+  // Places a Battle Mode trap of `type` from the stock (render/combat.ts placeTrap, the quick
+  // menu's trap row 4); false when refused.
+  placeTrap?: (type: number) => boolean;
+  // The challenge palette's 6x60 subcommand 0x83 for a quick menu status row (rows 0..3).
+  challengeTrap?: (row: number, count: number) => void;
   // Whether a telepipe can be opened here (render/telepipe.ts): the Telepipe
   // item is greyed out otherwise.
   telepipeAllowed?: () => boolean;
@@ -176,6 +182,9 @@ export class FieldHud {
   private returnPrompt: ReturnPrompt | null = null;
   private returnToken = 0;
   private names: () => ItemNames | null = () => null;
+  // The quick menu's technique order (the 19 ids the technique tab lists). In memory only:
+  // the save layout has no order field (net/charfile.ts), so a new view starts from 0..18.
+  private techOrder: number[] = Array.from({ length: 19 }, (_, i) => i);
   private palette: PaletteData | null = null;
   private paletteHud = new PaletteHud();
   // Battle Mode trap stock by type 0..3 (set by quest/battlerun.ts while a battle runs).
@@ -597,12 +606,46 @@ export class FieldHud {
           unequip: (id) => this.opts.items.unequip(id),
         },
         allowed: () => true,
+        tools: { use: (id) => this.opts.items.use(id, this.rules()) },
+        isRare: (it) => this.names()?.isRare(it.data) ?? false,
+        traps: {
+          // ASSUMED zeros: the port has no Sinowberill challenge player (+0x89c).
+          statuses: () => [0, 0, 0, 0],
+          stock: () => {
+            const t = this.battleStockType();
+            return t === null ? 0 : (this.trapCount?.(t) ?? 0);
+          },
+          // is_current_map_safe is the inverse of the hub list here (see paletteWindowsShown),
+          // so a trap row is enabled off the hub and off a boss area.
+          safeNotBoss: () => !isSafeMap(this.opts.area()) && !BOSS_AREAS.includes(this.opts.area()),
+          map: () => this.opts.area(),
+          // ASSUMED false: the exe's entity manager is one at a time; the port's trap field is not mapped to it.
+          managerExists: () => false,
+          placeStock: () => {
+            const t = this.battleStockType();
+            return t !== null && (this.opts.placeTrap?.(t) ?? false);
+          },
+          sendStatus: (row, count) => this.opts.challengeTrap?.(row, count),
+        },
+        techOrder: {
+          get: () => this.techOrder,
+          set: (order) => {
+            this.techOrder = [...order];
+          },
+        },
       },
       mode: () => ((readOptionFlags(this.opts.fullCharacter()) ?? 0) & 0x30000) >>> 16,
       // Battle mode: a battle team is set while the battle runs (quest/battlerun.ts).
       battle: () => this.battleTeam !== null,
       android: () => ANDROID_CLASSES.has(this.opts.character()?.charClass ?? 0),
     };
+  }
+
+  // The Battle Mode trap type the quick menu's stock row uses: the first type with a stock
+  // (ASSUMED: the exe's row 4 has one stock, the port keeps four by type).
+  private battleStockType(): number | null {
+    for (let t = 0; t < 4; t++) if ((this.trapCount?.(t) ?? 0) > 0) return t;
+    return null;
   }
 
   private text(group: number, index: number): string {
