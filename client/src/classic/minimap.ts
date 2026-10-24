@@ -695,7 +695,9 @@ export function raderIconIcon(o: RaderIconObject, isSwitchOn: (flag: number) => 
 
 // TObjDoor (0x0080, UpdatePlayerActionState_00656e28): one icon a frame at the
 // door (icon4, shape 0, scale 1, range checked, heading = the door's yaw),
-// red while its state is 0 (locked), green after.
+// red while `locked`, green after. The caller passes the lock the door's own
+// icon uses: its state 0 for TObjDoor (0x0080), bit 0 of +0xd0 for the beam-family
+// doors (0x0202, 0x0204; fieldobjects.ts doorMapLocked).
 export function doorIcon(x: number, z: number, heading: number, locked: boolean): Icon {
   return { x, z, color: locked ? ICON_RED : ICON_GREEN, shape: 0, scale: 1, heading };
 }

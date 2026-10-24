@@ -28,6 +28,7 @@ import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
 import { FieldHud } from './fieldhud.ts';
 import { doorIcon, komoVariant6Icon, raderIconObject, radToBams, type Icon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
+import { doorMapLocked } from './fieldobjects.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
@@ -736,10 +737,12 @@ export class GameView {
     return pose ? { slot: clientId, x: pose.x, y: pose.y, z: pose.z, heading: radToBams(pose.angle) } : null;
   }
 
-  // The doors of the floor as minimap icons (TObjDoor: red while locked).
+  // The doors of the floor as minimap icons (red while locked): TObjDoor (0x0080) by its
+  // state (UpdatePlayerActionState_00656e28); the beam-family doors (0x0202, 0x0204) by bit 0
+  // (UpdateSeabedDolphinPlayerMinimapIcon_00657718, 0x00657e00: green while bit 0 is set).
   private doorMinimapIcons(): Icon[] {
     const doors = this.fieldObjects?.doors ?? [];
-    return doors.filter((d) => !d.city).map((d) => doorIcon(d.x, d.z, radToBams(d.yaw), d.state === 0));
+    return doors.filter((d) => !d.city).map((d) => doorIcon(d.x, d.z, radToBams(d.yaw), doorMapLocked(d)));
   }
 
   // The Komo variant 6 objects as minimap icons (Episode 2 only: the exe's

@@ -94,6 +94,10 @@ export interface FieldDoor {
   locked: boolean; // permanently locked (flag > 0x100)
   lamps: boolean; // four-light door: lamp i waits for flags[i] (objectmodels.ts lamps)
   city: CityDoor | null; // Pioneer 2 door: opened by distance alone (stepCityDoor)
+  // The +0xd0 bit 0 unlock of the beam-family doors (0x0202, 0x0204; stepBitDoor). null for the
+  // other doors, whose unlock is `flags`. `bit0` is the unlock (and the minimap colour) for both.
+  bitRule: 'switches' | 'beam' | null;
+  bit0: boolean;
   state: number; // FUN_00656eb4 states: 0 locked, 1 unlock camera, 2 closed, 4 opening, 5 open, 3 closing
   // TObjDoor (0x0080) with param6 odd (ctor FUN_006573d4: +0xbc = clamp(param6 % 2, 0, 1)):
   // on unlock the camera looks from (param1, param2, param3) at the door
@@ -178,6 +182,11 @@ const DOOR_FRAMES = 30;
 export const DOOR_CAMERA_FRAMES = 0x50; // +0xc0 in the ctor FUN_006573d4
 const DOOR_CAMERA_LOCKED = 0x3c; // render FUN_00656a50 keeps the locked look while +0xc0 >= 0x3c
 const EVENT_TRIGGER_IDLE = 3; // FUN_00659d98: +0xb4 counts down from 3
+// Beam door (0x0204, ctor 0x00658294, lock slot 0x00658410): the three switch flags
+// 0x46..0x48 (table 0x00937b60) and a player within 50 units of the door in XZ
+// (the squared distance against 2500.0 at 0x00937b78).
+const BEAM_DOOR_FLAGS = [0x46, 0x47, 0x48];
+const BEAM_DOOR_RANGE_SQ = 2500;
 
 // Boss warp destination by episode index (0 = Ep1, 1 = Ep2, 2 = Ep4) * 18 + floor (0x0097f380).
 export const BOSS_WARP_FLOOR = [
@@ -306,6 +315,16 @@ export function doorFlags(o: ObjectSet): { flags: number[]; locked: boolean } {
     case 0x0100:
       if (p4 < 0) return { flags: [], locked: false };
       return { flags: range(p4, 4 - Math.min(4, Math.max(0, p5))), locked: false };
+    // TObjDoorJung (ctor 0x00657a80 on the boss-door base; vtable+0x44 = 0x0061c84c
+    // stores +0xc8 = param4). Lock slot 0x00657b20: bit 0 is set while every flag
+    // +0xc8 + i (16-bit, i < +0xd4 = clamp(param5, 0..4)) is set; none = set.
+    case 0x0202: {
+      const n = Math.min(4, Math.max(0, Math.trunc(p5)));
+      return { flags: range(Math.trunc(p4) & 0xffff, n), locked: false };
+    }
+    // TODoorJungleMain's beam (0x0204): its unlock is stepBitDoor's rule, not a flag.
+    case 0x0204:
+      return { flags: [], locked: false };
     case 0x014a:
       return { flags: range(Math.min(0xfc, Math.max(0, p4)), 4), locked: false };
     case 0x014b:
@@ -394,7 +413,8 @@ export function collectFieldObjects(
         if (DOOR_TYPES.has(o.type)) {
           const { flags, locked } = doorFlags(o);
           const camera = o.type === 0x0080 && Math.trunc(o.params[5]) % 2 === 1 ? ([o.params[0], o.params[1], o.params[2]] as [number, number, number]) : null;
-          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, state: 0, frame: 0, laserFrame: 0, mesh: null, camera, cameraCount: DOOR_CAMERA_FRAMES });
+          const bitRule = o.type === 0x0202 ? 'switches' : o.type === 0x0204 ? 'beam' : null;
+          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, bitRule, bit0: false, state: 0, frame: 0, laserFrame: 0, mesh: null, camera, cameraCount: DOOR_CAMERA_FRAMES });
         } else if (BOX_TYPES.has(o.type)) {
           boxes.push({ ...base, type: o.type, yaw: p.yaw, broken: false });
         } else if (SWITCH_RADIUS[o.type] !== undefined && o.params[3] >= 0 && o.params[3] < 0x100) {
@@ -479,6 +499,33 @@ export function stepCityDoor(d: FieldDoor, nearest: number, frames: number): voi
 // the unlock camera (FUN_00656a50: +0xc0 >= 0x3c).
 export function lockedLook(d: FieldDoor): boolean {
   return d.state === 0 || (d.state === 1 && d.cameraCount >= DOOR_CAMERA_LOCKED);
+}
+
+// One frame of a beam-family door's +0xd0 bit 0 (its lock slot runs before its update).
+// 'switches' (0x0202, FUN_00657b20): bit 0 = every flag of the door is set (none: set).
+// 'beam' (0x0204, slot 0x00658410): once set it stays set; it is set when the flags 0x46..0x48
+// are all on and a player (`players`, the floor's) is within 50 units of the door in XZ.
+// ASSUMED: `players` are the local floor's players (the exe loops GetPlayer 0..3 on the floor).
+export function stepBitDoor(d: FieldDoor, flagOn: (f: number) => boolean, players: ReadonlyArray<{ x: number; y: number; z: number }>): void {
+  if (d.bitRule === 'switches') {
+    d.bit0 = d.flags.every((f) => flagOn(f));
+  } else if (d.bitRule === 'beam' && !d.bit0) {
+    if (BEAM_DOOR_FLAGS.filter((f) => flagOn(f)).length !== BEAM_DOOR_FLAGS.length) return;
+    for (const p of players) {
+      const dx = p.x - d.x, dz = p.z - d.z;
+      if (dx * dx + dz * dz < BEAM_DOOR_RANGE_SQ) {
+        d.bit0 = true;
+        return;
+      }
+    }
+  }
+}
+
+// The minimap colour of a door: red while locked. The beam-family doors (0x0202, 0x0204)
+// draw bit 0 (TObjDoorJung's and the beam's icon, dump 519977 / 0x00657e00); the others
+// draw their state (TObjDoor, UpdatePlayerActionState_00656e28).
+export function doorMapLocked(d: FieldDoor): boolean {
+  return d.bitRule ? !d.bit0 : d.state === 0;
 }
 
 // One frame of a door (FUN_00656eb4).
@@ -678,6 +725,7 @@ export class FieldObjects {
   }
 
   unlocked(d: FieldDoor): boolean {
+    if (d.bitRule) return d.bit0;
     return !d.locked && d.flags.every((f) => this.flags.has(f));
   }
 
@@ -803,6 +851,7 @@ export class FieldObjects {
         if (d.mesh) d.mesh.visible = seal.sealed;
         continue;
       }
+      stepBitDoor(d, (f) => this.switchOn(f), players);
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
       if (d.city) {
         let flat = Infinity;
