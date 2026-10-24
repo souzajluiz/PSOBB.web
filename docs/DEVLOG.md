@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-24: Quest editor: the UI did not refresh after an edit
+
+**Cause:** `client/src/questeditor/main.ts` `flush()`. The rAF callback computed
+`has(p)` as `all || pending.has(p)` but ran `pending.clear()` before the checks, so
+`pending.has(p)` was always false by then. Only `flush(['all'])` (the document load or
+New/Open) refreshed anything; every edit (`entities`, `history`, `selection`, ...)
+scheduled a callback that ran no panel. The model was correct (`doc.history`, the
+entities), only the UI stayed stale: entity list, Undo/Redo, title, inspector.
+
+**Fix:** the callback snapshots the pending set (`todo`) before clearing it, and each
+part refreshes in its own `part()` wrapper that logs a failure with `console.error`
+instead of letting one panel throw and starve the rest. `scheduled` is reset first in
+the callback, so a throw cannot leave it stuck.
+
+**Tests:** `client/e2e/questeditor-refresh.spec.ts` (New, Create, `+` on Booma: "2 of 2
+entities", Undo enabled, title `*`). The same steps on the old code reproduced
+the reported symptoms (1 of 1, Undo disabled, no page error). `tests/questeditor.test.ts` and
+`tests/questeditorturn.test.ts` pass. `tsc --noEmit -p client` is clean.
+
 ## 2026-10-24: Quest editor rotation gizmo
 
 **What changed:** a rotation gizmo in the quest editor's 3D view
