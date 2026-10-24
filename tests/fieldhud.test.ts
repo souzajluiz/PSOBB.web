@@ -29,7 +29,7 @@ import {
 import { CONFIG_OFFSET, currentPalette, paletteFromCharacter, paletteIcon, parsePalette, slotCount, EMPTY_ICON } from '../client/src/classic/palette.ts';
 import { techInfo, techItems, techTpCost, TECH_TYPES } from '../client/src/classic/techmenu.ts';
 import {
-  attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magPhotonRows, magRows, magStatRows, magStatText, MAG_PAGE, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
+  attributeRows, candidateStats, compareColor, equipContribution, equipStatRows, hasEquipPanel, magPhotonRows, magRows, magStatRows, magStatText, MAG_PAGE, MAG_ELEMENT, nextPage, PAGE_COUNT, PAGE_SLIDE, pageSlideAfter, photonDescriptionIndex, photonRowArgs, panelKind, RESIST_LABELS, slotValue, SLOT_LABEL, VALUE_COLOR, type EquipStatRow,
 } from '../client/src/classic/itemdetail.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames } from '../client/src/formats/itemnames.ts';
@@ -620,6 +620,67 @@ if (failures) {
   eq([pbMag.busy, pbMag.page], [true, 2], 'MAG PB: a gained photon blast sets page 2 and opens the PB line');
   for (let i = 0; i < 100; i++) pbMag.tick();
   eq([pbMag.busy, pbMag.page], [false, 2], 'MAG PB: after the PB line the page stays 2');
+}
+
+// MAG: the page keys (ChatShortcutMenu_HandleInput_0073e60c), the photon list (state 0xE, entries 0xA / 0xB) and the picture (entry 0xC).
+{
+  const kchar = { charClass: 0, inventory: [inv(MAG_PB_HEX)], meseta: 0 } as unknown as CharacterFile;
+  const picAsked: number[] = [];
+  const km = new MagMenu({
+    character: () => kchar,
+    rowContext: () => ctx,
+    text: (g, i) => `${g}:${i}`,
+    pmt: () => null,
+    feedTimer: () => ({ canFeed: true }) as never,
+    feed: () => false,
+    picture: (item) => {
+      picAsked.push(item.data1[1]);
+      return Promise.resolve(null);
+    },
+  });
+  km.start();
+  eq([km.page, km.pageSlide], [0, 0], 'MAG keys: page 0 and no slide at open');
+  km.key({ key: 'ArrowRight' } as KeyboardEvent);
+  eq([km.page, km.pageSlide], [1, PAGE_SLIDE], 'MAG keys: Right goes to page 1 with a slide of +10');
+  km.tick();
+  eq(Math.abs(km.pageSlide - 8.5) < 1e-9, true, 'MAG keys: the slide decays by 0.85 a tick');
+  km.key({ key: 'ArrowLeft' } as KeyboardEvent);
+  km.key({ key: 'ArrowLeft' } as KeyboardEvent);
+  eq([km.page, km.pageSlide], [2, -PAGE_SLIDE], 'MAG keys: Left twice from page 0 wraps to page 2 with -10');
+  km.key({ key: 'ArrowRight' } as KeyboardEvent);
+  eq(km.page, 0, 'MAG keys: Right from page 2 wraps to page 0');
+  km.tick();
+  eq(picAsked, [1], 'MAG picture: asked once for the cursor mag (ItemKTep4 entry = data1[1])');
+  km.key({ key: 'Enter' } as KeyboardEvent); // list -> Select (cursor on Give Items)
+  km.key({ key: 'ArrowDown' } as KeyboardEvent); // Photon Blast
+  km.key({ key: 'Enter' } as KeyboardEvent); // state 0xE: the photon list
+  eq([km.photonAnim.visible, km.photonCursor], [true, 0], 'MAG photon: the photon list opens at row 0');
+  eq(km.statusAnim.animating, true, 'MAG photon: the status window closes (state 0xE)');
+  eq(km.photonInfo, '7:42', 'MAG photon: the info is group 7 at blast 3 + 0x27');
+  km.key({ key: 'ArrowLeft' } as KeyboardEvent);
+  eq(km.page, 0, 'MAG photon: the page keys are off while the status window is shut');
+  km.key({ key: 'ArrowDown' } as KeyboardEvent);
+  eq([km.photonCursor, km.photonInfo], [1, ''], 'MAG photon: Down to the empty row 1: no description');
+  km.key({ key: 'ArrowDown' } as KeyboardEvent);
+  km.key({ key: 'ArrowDown' } as KeyboardEvent);
+  eq([km.photonCursor, km.photonInfo], [0, '7:42'], 'MAG photon: the cursor wraps over the three rows');
+  km.key({ key: 'Escape' } as KeyboardEvent); // back to Select (state 3)
+  eq(km.selectAnim.visible, true, 'MAG photon: Cancel returns to Select');
+  for (let i = 0; i < 10; i++) km.tick();
+  eq([km.statusAnim.isOpen, km.photonAnim.visible], [true, false], 'MAG photon: the status window opens again; the list is gone');
+}
+
+// MAG constants and helpers: the exe's element offsets, the photon row arguments, the page wrap.
+{
+  eq([...MAG_ELEMENT.photonRows], [1, 2, 3], 'MAG elements: the photon rows are the GameList elements 1..3 (0x7267dc)');
+  eq([...MAG_ELEMENT.photonHighlight], [3, 1, 2], 'MAG elements: the cursor highlight offsets are bytes 3, 1, 2 (0x973e88)');
+  const used = [MAG_ELEMENT.level, MAG_ELEMENT.synchro, MAG_ELEMENT.iq, MAG_ELEMENT.centre];
+  for (const st of MAG_ELEMENT.stats) used.push(st.reset, st.level, st.bar);
+  eq([...used].sort((a, b) => a - b), Array.from({ length: 16 }, (_, i) => i), 'MAG elements: page 1 uses elements 0..15, each once');
+  eq([photonRowArgs(null), photonRowArgs(3)], [[0, 0], [5, 3]], 'MAG photon row: an empty row is UpdateItemUI(elem, 0, 0), a blast is kind 5 with its index');
+  eq([photonDescriptionIndex(3), photonDescriptionIndex(null)], [0x2a, null], 'MAG photon info: group 7 index blast + 0x27');
+  eq([nextPage(0, 1), nextPage(2, 1), nextPage(0, -1), nextPage(1, -1), PAGE_COUNT], [1, 0, 2, 0, 3], 'MAG page keys: the page wraps over 3');
+  eq(Math.abs(pageSlideAfter(10) - 8.5) < 1e-9, true, 'MAG page slide: 10 decays to 8.5 (0.85 a tick)');
 }
 
 // MAG page rows: the six current stats in the exe's order; the three photon slots, blanks after the mag's blasts.

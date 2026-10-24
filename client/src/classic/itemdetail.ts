@@ -241,12 +241,20 @@ export function magRows(item: ItemData): MagRows {
 // the mag window's HandleInput: state 5 (the Select window's "Give Items", value 1 ->
 // ChallengePlayerListWindowSetActionState_00752fe0; direction 1 -> page 1) and state 0xC (a
 // photon blast gained after the feed, direction 2 -> page 2). The byte is set absolutely (not a
-// step, no clamp): the same direction again changes nothing. No key writes it directly; the
-// Cancel key (g_KeyboardSharedState[0xd]) in state 7 goes to state 5 again (page 1 again). The
-// navigation object is built by CreateEquipListWindowObject_00725d18 with page 0
-// (ChatShortcutMenu_SubList_SetData_0073e5d4(obj, 0, 3, slot)). The direction also sets a slide
-// (+10 / -10 in the object's +8 field), not ported; no page counter or arrow is drawn by the
-// dispatcher or the page functions (none found).
+// step, no clamp): the same direction again changes nothing. The Cancel key (g_KeyboardSharedState
+// [0xd]) in state 7 goes to state 5 again (page 1 again). The navigation object is built by
+// CreateEquipListWindowObject_00725d18 with page 0 (ChatShortcutMenu_SubList_SetData_0073e5d4(obj,
+// 0, 3, slot): the count 3 is the page count).
+// The keys (2026-10-23, third pass): the GameList's vtable slot 1 is ChatShortcutMenu_Update_00725e4c
+// (the vtable 0x00b3fff0 is shared by every GameList of CreateEquipListWindowObject_00725d18); when
+// the list shows an item (flag 4 clear) it calls ChatShortcutMenu_HandleInput_0073e60c on the
+// navigation object: g_KeyboardSharedState[0x11] goes up one page (slide +10, 0x41200000), [0x10]
+// down one (slide -10, 0xc1200000), both wrapping over 3, SE 0x56f, and a change re-renders the page
+// (GameList_RenderSelectionDisplay). The slide decays by 0.85 a tick (ChatShortcutMenu_UpdatePosition
+// _0073e5f8, factor 0x00971eec = -0.15). The key of each slot is ASSUMED (ArrowRight / ArrowLeft).
+// The slide's drawn axis is ASSUMED (horizontal, magmenu.ts drawStatus). The other GameLists built by
+// the same constructor (the shops, the bank: ASSUMED, not checked one by one) would take the same keys
+// on their weapon / armour pages; those pages are not ported in those windows.
 // Each table is 4-byte entries: the call is `*(DAT_xxx + page * 4)`.
 
 export type PanelKind =
@@ -333,4 +341,71 @@ export function magStatRows(current: StatBlock): Array<{ label: number; value: n
 // blast is an empty row (ASSUMED: the exe writes its empty-slot text, not decoded).
 export function magPhotonRows(blasts: readonly number[]): Array<number | null> {
   return [0, 1, 2].map((i) => (i < blasts.length ? blasts[i] : null));
+}
+
+// --- the mag window's element offsets and the photon rows (2026-10-23, third pass) ---
+//
+// The GameList's element table (this+0x28, pointers at 4-byte steps) is shared by the pages: each
+// page writes its own elements. Page 1 (0x726864) and page 2 (0x7267dc) use these indices:
+//   page 1: [0] Level (text 0xc0, value), [1] Synchro (text 0xc1, value), [2] IQ (text 0xc2,
+//           value); the four stats DEF, POW, DEX, MIND, each as three elements: [3] / [6] / [9] /
+//           [12] are cleared by 0x72e0e4 (ASSUMED: the bar's reset), [4] / [7] / [10] / [13] take the
+//           level as an int at +0x20, [5] / [8] / [11] / [14] take the part (0..99) as a float at
+//           +0x24 and their update (vtable +0xc). The stat values are the mag's shorts at data1
+//           +4 / +6 / +8 / +0xa (the exe's 0x4(%esp).. of the item's mag struct), /100 and %100.
+//           [15] (+0x3c) is centred: its y is -0.5 * its height (0x970740) plus 0x970744.
+//   page 2: the photon rows are [1], [2], [3] (0x7267dc: `pushl 0x4(%ecx,%ebx,4)`, ebx = the row).
+//   The photon highlight of the cursor row (the list of entry 0xA, see the photon window below) uses
+//   the offsets table 0x00973e88 = bytes [3, 1, 2]: the cursor row 0 is element [3], row 1 is [1],
+//   row 2 is [2] (ASSUMED that the row's text sits at the element's position).
+export const MAG_ELEMENT = {
+  level: 0,
+  synchro: 1,
+  iq: 2,
+  stats: [
+    { reset: 3, level: 4, bar: 5 }, // DEF
+    { reset: 6, level: 7, bar: 8 }, // POW
+    { reset: 9, level: 10, bar: 11 }, // DEX
+    { reset: 12, level: 13, bar: 14 }, // MIND
+  ],
+  centre: 15,
+  photonRows: [1, 2, 3],
+  photonHighlight: [3, 1, 2],
+} as const;
+
+// The mag's photon rows (0x7267dc) call SinowberillChallengeObject_UpdateItemUI_0070ff48(element,
+// type, index): type 0 = a blank row (the element kind 7, default UVs from 0x96f59c / 0x96f5a0), type
+// 5 = the photon blast's picture (kind 5, the UV pair from table 0x009f1600 at the blast index). So an
+// empty row is NOT text: it is `(element, 0, 0)`. The port draws the blast's name in the row until the
+// picture (the item sheet's UVs) is ported (ASSUMED stand-in).
+export function photonRowArgs(blast: number | null): readonly [number, number] {
+  return blast === null ? [0, 0] : [5, blast];
+}
+
+// The photon blast's description: unitxt group 7 at index blast + 0x27 (unitxt_get_action_description,
+// the photon window's info, ChallengePlayerListWindowUpdateDescriptionText_007531f4). An empty row
+// shows the empty string (flag -1).
+export const PHOTON_DESCRIPTION_BASE = 0x27;
+export function photonDescriptionIndex(blast: number | null): number | null {
+  return blast === null ? null : blast + PHOTON_DESCRIPTION_BASE;
+}
+
+// The page keys: the GameList's navigation (ChatShortcutMenu_HandleInput_0073e60c, 0x73e60c) reads
+// g_KeyboardSharedState[0x11] (+1, slide +10) and [0x10] (-1, slide -10) every frame while the list
+// shows an item, wrapping over the page count (3). The key of each slot is ASSUMED (ArrowRight /
+// ArrowLeft, see the DEVLOG 2026-10-23 mag pages). `nextPage` is that wrap.
+export const PAGE_COUNT = 3;
+export function nextPage(page: number, step: 1 | -1): number {
+  const p = page + step;
+  if (p < 0) return p + PAGE_COUNT;
+  return p >= PAGE_COUNT ? p - PAGE_COUNT : p;
+}
+// The slide the page change starts with (UpdateListNavigationDirection_0073e954 / HandleInput:
+// +10.0 0x41200000 going up, -10.0 0xc1200000 going down) and its per-tick decay (the factor 0.85:
+// the constant 0x00971eec = -0.15 in ChatShortcutMenu_UpdatePosition_0073e5f8, ASSUMED to run each
+// tick).
+export const PAGE_SLIDE = 10;
+export const PAGE_SLIDE_DECAY = 0.85;
+export function pageSlideAfter(slide: number): number {
+  return slide * PAGE_SLIDE_DECAY;
 }
