@@ -159,6 +159,18 @@ export function equipStatRows(
   });
 }
 
+// The compare list's rows (quick menu, UpdateEquipmentStatDisplay_007258dc): the current
+// values against the candidate values the exe computes (combat/playerstats.ts). Grey
+// candidates when the item is not equippable (ValidateItemForEquip).
+export function compareStatRows(current: StatBlock, cand: StatBlock, equippable: boolean): EquipStatRow[] {
+  return EQUIP_STAT_ROWS.map(({ key, label }) => {
+    const cur = current[key];
+    const it = cand[key];
+    const color = equippable ? compareColor(it, cur) : VALUE_COLOR.none;
+    return { key, label, current: cur, item: it, color };
+  });
+}
+
 // --- mags -----------------------------------------------------------------
 
 // The stat text of a mag value in hundredths: level, then the part as a

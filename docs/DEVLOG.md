@@ -16577,3 +16577,43 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 3. The sounds (`PlayGameListMenuSelectSound_00707664`, the cursor move sound), the galgryphon effects and the entry flags' drawing.
 4. The ES / FR / DE / US child-list maps (`WordSelectEntity_GetMenuItemId_*`); only the locale 0 map is read.
 5. The wiring: the chat keyboard's Symbol Chat key in word mode and the Shortcut editor's word type, both after (1).
+## 2026-10-23: compare list candidates from PlayerRecalculateStats (`combat/playerstats.ts`); the exe writes ATP and DFP only
+
+**Premise check:** the last entry (quick menu compare) took the candidate as the exe's six shorts (ATP, DFP, MST, ATA, EVP, LCK) and kept a delta model. The exe does not write six values. Both candidate functions store two shorts and nothing else.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; asm from `objdump -d` of `~/Downloads/psobb-client/PsoBB.exe`, `tools/exedata.py` for the vtable):
+- `PlayerRecalculateStats_0068e030` (dump 569766, asm 0x68e030..0x68e43a) writes the caller's buffer at two places only: `mov word ptr [ebp], bx` (0x68e3e2, ATP) and `mov word ptr [ebp + 0x2], si` (0x68e42c, DFP). `ebp` is the buffer (pushed and popped at the function's ends). It returns 1.
+- The DFP is computed from the buffer's own [1]: `movsx ecx, word ptr [ebp + 0x2]` (0x68e328) feeds `ROUND(dm * x + x)` with `dm = [esi + 0x284]` (the defence buff multiplier). The caller zeroes the buffer (`UpdateEquipmentStatDisplay_007258dc`, dump 689847, `local_2c = 0`), so the candidate DFP is 0.
+- `PlayerCalculateItemStats_0068e4e8` (dump 569928, asm 0x68e4e8..0x68e816) has the same two writes (0x68e7ae, 0x68e804) and the same DFP read of the buffer. It returns 2.
+- The ATP is `ROUND(atp * m + (rmin + atp)) + ROUND(span + m * span)`, where `atp` is the clamped stat block's ATP (block `+0x2b4`), `rmin` / `rmax` the battleparams ATP range (`+0x31c`), `span = rmax - rmin`, `m` the attack buff multiplier. At `m = 0` that is `atp + rmax`.
+- The stat block and range are edited through the item vtable slot `+0x5c` (`g_ItemWeapon_vtable` = 0xb0d2c0, read with `exedata.py`; slot 0x5c = 0xb0d31c = 0x5d22cc, dump `UnknownItemFunction19_005d22cc`, dump 425324). That handler SUBTRACTS the item's stored bonuses (`+0x124` / `+0x126` the range min / max, `+0x100` the stat block). `PlayerRecalculateStats` calls it on the slot's old item, then `ApplyEquipmentBonuses_005d330c` (dump 426168) adds the candidate, then clamps the stat block to the class max (`g_ClassMaxStats`, `combat/materials.ts`). `PlayerCalculateItemStats` calls it on the worn item and does not clamp or apply.
+- Callers: `EquipmentStatDisplayObject_UpdateEquipState_0072582a` (dump 689797) for a candidate that is not worn, `_UpdateUnequipState_00725b7e` (dump 689960) for the worn one. The Item Pack's panel path, `ChallengePlayerListWindow_UpdateItemDetail_0073175c` (dump 698949), does NOT call either function (checked: no `Recalc` / `CalculateItemStats` / `UpdateEquipmentStat` in its body), so the Item Pack keeps the item-only rows of `classic/itemdetail.ts`.
+- Combat (`render/combat.ts` `attackerStats`, 7859) reads the absolute disp snapshot and `playerAttacker` (formulas.ts); it has no delta model and does not use these functions.
+
+**Ported** (`client/src/combat/playerstats.ts`, pure):
+- `equipmentRange(item, pmt)`: the weapon's range min / max (`atpMin + 2 * grind`, `atpMax + 2 * grind`); armour, shield, unit, mag and tool add no range.
+- `recalculateCandidate(stats, item, old, pmt)`: the exe's not-worn path. ATP = file ATP + (candidate range max - old range max). DFP 0.
+- `equippedCandidate(stats, item, pmt)`: the exe's worn path. ATP = file ATP - the item's range max. DFP 0.
+- `classic/itemdetail.ts` `compareStatRows(current, cand, equippable)`: the six rows and their colours (same colour rule as before; grey when not equippable).
+- `render/fieldhud.ts` `compareRows` (the quick menu's weapon / armour compare list) uses these two functions. The Item Pack panel still calls `equipStatRows`.
+
+**What this changes on screen:** the compare list's candidate ATP now follows the weapon's max plus 2 x grind, not its min. The candidate DFP and the candidate MST / ATA / EVP / LCK are 0, so an armour's DFP row reads `-> 0` in the lower colour when the current DFP is above 0. A worn item's row reads the stats without that item. These follow the exe's code as read. If a live exe shows real candidate values, the decompile or the asm reading is wrong somewhere; check the buffer's [1] at 0x68e328 first.
+
+**ASSUMED** (also marked in the code):
+- `m = 0` (no Shifta / Deband / Jellen in the file), so the buff multipliers are not applied.
+- The file's ATP is taken as the stat block's ATP and is inside the class max; the clamp is not applied to the delta.
+- The battleparams base range is not in the file; only the equipment part (the weapon range) is tracked. The current ATP row stays the file's value.
+- The set bonus is 1.0 and the morning glory bonus 0 (`get_equipment_set_bonus` and `morning_glory_atp_bonus` not decoded).
+- The worn-item path's `field23` call arguments are not in the dump (the decompile shows none); the same arrays as the not-worn path are assumed.
+- Units are not subtracted for an armour (the loop over the unit slots); the port has no unit contribution.
+- `ROUND` is round-to-nearest (`Math.round`).
+- The Item Pack's panel path is not checked beyond the absence of the calls.
+
+**Tests:** `node tests/playerstats.test.ts`: ALL PASS (the ranges, the not-worn and worn candidates, the DFP / other rows 0, the compare rows' labels and colours, the grey case, and the Item Pack's unchanged item-only rows). `node tests/fieldhud.test.ts`, `tests/quickmenu.test.ts`: pass. `node tests/combat.test.ts` (5852 checks) and `tests/combatdepth.test.ts` (836 checks): 0 failures, with `vendor/` linked from the main checkout for the newserv binary (the link is removed before commit). `cd client && node node_modules/typescript/bin/tsc --noEmit -p .`: exit 0 (`client/node_modules` linked from the main checkout, removed before commit). No Playwright.
+
+**Left:**
+1. The live check: a weapon and an armour compare in the running exe, against the DFP 0 and MST..LCK 0 reading above.
+2. The buff multiplier `m` (attack and defence) and the Shifta / Deband / Jellen terms on the candidate ATP and DFP.
+3. The battleparams base range per class (the current ATP row's `atp_variance_with_shifta` and `battleparams_attacks->atp_range_min`), so the current ATP row can be the exe's `base + variance + rmin`.
+4. The unit contribution (the loop over the unit slots in `PlayerRecalculateStats`) and the set bonus / morning glory functions.
+5. Combat: `playerAttacker` replaces the class min with the weapon min + 2 x grind; the exe adds the weapon range to the battleparams base. This is not changed here; it needs the base range from item 3.
