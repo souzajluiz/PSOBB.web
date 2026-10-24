@@ -16975,3 +16975,36 @@ Their tests are `tests/playerstats.test.ts` and `tests/playerstatsatp.test.ts`. 
 switched the Item Pack panel's weapon ATP (`classic/itemdetail.ts` `equipStatRows`) to `candidateAtp`;
 that is reverted, because the Item Pack detail (ChallengePlayerListWindow_UpdateItemDetail_0073175c,
 dump 698949) does not call PlayerRecalculateStats: the Item Pack keeps the item-only delta.
+## 2026-10-23: lobby spawn lookup (arrival source), chat send gate of the emote keys
+
+**Goal:** the two open ROADMAP lines "Lobby spawn lookup" (the `TObjPlayerSet` source `+0x84` against the arrival kind) and "Emotes and sit" (the open items). Check the premise against the exe, port what the exe does.
+
+**Premise check, spawn lookup.** The premise holds: the exe matches the set by client id and source. The arrival kind is not a fixed 0: it is the stored value, or `get_warp_type` when that value is -1. The port's source 0 is the right kind for a fresh player object (the stored value 0). The arrival kind of each join flow (ship select, a game leave, a teleporter, Meet the User) is not traceable from the static dump: it depends on `g_prev_floor_id` and the floor block's flag word at run time.
+
+**Exe evidence (`reverse/refsrc/.../Psobb.exe-05112026.c`; the Psobb.exe-5-10-2026.c dump has it at line 554283):**
+- `SinowberillChallengePlayer_UpdatePosition_006884ac` (line 554041), the branch at 554159..554208: with no teleport target (`GetTeleportTargetDataForPlayer_006e9630`) and not the respawn case, `iVar10` is the arrival kind. When the player's stored value (`+0x3d4`, named `unknown_menu_inputs_allowed` in the dump) is -1, `iVar10 = get_warp_type(&g_prev_floor_id)` mapped as 0 -> 1, 1 or 2 -> 0, other -> 1 (554167..554176). Otherwise `iVar10` keeps the stored value and the stored value is set to -1.
+- The loop (554182..554190) takes the first `TPlayerSet` (object type 4) with `ROUND(+0x68) == player index` and `+0x84 == iVar10`; it copies x / y / z from `+0x38..+0x40` and the heading from `+0x60`. No set: x = y = z = 0 (554194..554196).
+- `get_warp_type` (line 833294): previous floor > 0x11 -> 4; flag bit 1 of `[8]` (`+0x20`) -> 2; episode 0 with the Vol Opt floor has its own 0 / 1 test; else 0 when `[1] - [0] < 0`, else 1.
+- The function is called once per player object, from its constructor (553917); `SinowberillChallengePlayer_ResetFields_0068839c` does not write `+0x3d4`.
+- ASSUMED conflict: the same `+0x3d4` is written as an input-state pointer in another player constructor (dump line 169758, `g_PlayerInputStates + slot`). So what the stored value holds for a player is not settled; the port takes the fresh value as 0.
+- Data (`data.gsl`, all `map_*o.dat` player sets): all 10 lobbies have 12 sets, source 0, ids 0..11 each once. Field maps have both sources in most floors and some floors only source 0 (for example `map_boss01o.dat`, `map_ancient03_00_00o.dat`); a field floor with only source 0 has no set for a source 1 arrival, which the exe answers with the origin.
+- Field `warpTo` (`render/gameview.ts`): the port sends `floor > from ? 0 : 1`, which is the exe's `get_warp_type` result 1 -> source 0 and 0 -> source 1 for a floor-order warp (ASSUMED: `[1]` is the new floor).
+
+**Port (spawn lookup).**
+- `client/src/formats/lobbyspawn.ts` (new, no three.js): `lobbyArrivalSource(warpType)` (the mapping), `lobbySpawnAt(spawns, clientId, hasSets)` (the set of the id, else the origin, null when the map has no sets).
+- `client/src/render/lobbyview.ts`: `loadLobbyMapData(source, lobbyNumber, log, arrival = 0)` keeps the sets of the arrival source and sets `hasSpawnSets`; `spawnFor` uses `lobbySpawnAt`. Default arrival 0 is the behaviour before this entry, except that an id with no set on a map that has sets is now the origin (the exe) instead of the caller's fallback (every lobby has ids 0..11; the field floors listed have all four ids, not checked for every floor).
+- No join flow passes a warp type yet (the four arrivals are open, see the ROADMAP line).
+
+**Premise check, emotes.** Most of the open list is blocked by untraced code (the emote end, the opposite-gender motion, the remote emote's gate `FUN_0068be84`), so those stay open. One rule was traced and not yet ported: `process_chat_message` returns `(length - emote tokens - 2)` (0x0077cd1b, `(iVar3 - iVar4) + -2`), and `send_chat_message_text` (dump 754354) and `ProcessAndSendChatMessage_0077d7cc` (754336) skip the send when that value is 0 (`if (iVar2 == 0) return`). Each token counts its braces and its key. The queue still fills (it runs inside the same call).
+
+**Port (chat gate).** `client/src/formats/emotes.ts` `chatSendValue(text)` and `chatLineSends(text)` (length > 0 and the value is not 0). `client/src/net/lobby.ts` `sendChat` queues the keys, then returns when the gate fails (the lobby and the field use this path: `Game` extends `Lobby`).
+
+**ASSUMED:**
+- A two-character line is not sent (the value is 0). This follows the exe's arithmetic and the `-2`; it is a visible change, the user should check it in the game. A one-character line is sent.
+- `+0x3d4` holds 0 for a fresh player object at its placement (the port's source 0 for the lobby).
+- The origin of a missing set keeps no heading (the port uses 0; the exe keeps the player's heading, not traced).
+- The field's fallback passes (`spawnsFor`: source, then 0, then 1) are kept: the exe has no fallback, but the data shows source 0 only in some floors, and removing the fallback would move players to the origin on those floors without a Chrome check.
+
+**Not done:** the arrival kind per join flow; the field's fallback removal; the palette-slot route to the sit; the emote end and `dispatch_action_0x3f`; the remote emote's gate.
+
+**Checks:** `node tests/emotes.test.ts` (chat gate block: values for plain, one token, two tokens, unknown names, empty line, queue kept), `node tests/lobbymain.test.ts` (new block 6: the arrival mapping, the set or origin or fallback, the real lobbies' sources and ids), `tests/chatline.test.ts`, `players`, `townfield`, `collision`, `motions` pass with Node 24. `cd client && tsc --noEmit -p .` clean (Node 24, a temporary link to the main checkout's `client/node_modules`, removed afterwards). Not run in Chrome, no Playwright.
