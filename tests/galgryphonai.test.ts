@@ -308,6 +308,44 @@ const rollOf = (bytes: Uint8Array) => decodeGalgryphonSync(new DataView(bytes.bu
   check(drawn.length === 2 && drawn[1] === base + 40, `beam: the dive beam is drawn on its frame 40 (got ${drawn})`);
 }
 
+// ---- the S27 under-body arc (one bolt per call, the arc's control points on the boss's underside) and the
+// minion ring's particles (the start at the centre, then 32 slot points for each of its 31 spawn ticks) ----
+{
+  const bolts: number[] = [];
+  const starts: Vec3[] = [];
+  const slots: { k: number; at: Vec3 }[] = [];
+  const ai = new GalgryphonAi({
+    entityId: 0x1234,
+    x: 0,
+    h: 180,
+    z: 991,
+    heading: 0,
+    leader: () => true,
+    hp: 1000,
+    maxHp: 1000,
+    players: () => 2,
+    rand: lcg(11),
+    send: () => {},
+    bolt: (b) => bolts.push(b.base[0]!),
+    ringParticles: {
+      start: (c) => starts.push(c),
+      slot: (k, at) => slots.push({ k, at }),
+    },
+  });
+  const hooks = (ai as unknown as { ctx: { fx: { lightningUnderBody(): void; spawnMinionRing(x: number, y: number, z: number): void } } }).ctx.fx;
+  hooks.lightningUnderBody();
+  hooks.lightningUnderBody();
+  check(bolts.length === 2, `under-body: each call draws one arc bolt (got ${bolts.length})`);
+  check(bolts.every((x) => Number.isFinite(x)), 'under-body: each bolt has a finite start point');
+  hooks.spawnMinionRing(10, 99, -20);
+  check(starts.length === 1 && starts[0]!.x === 10 && starts[0]!.z === -20, 'ring: the start is at the ring centre');
+  check(starts[0]!.y === 2, `ring: the start height is 2.0 (got ${starts[0]!.y})`);
+  for (let i = 0; i < 40; i++) ai.tick([]);
+  check(slots.length === 31 * 32, `ring: 31 spawn ticks x 32 slots (got ${slots.length})`);
+  check(slots.every((r) => r.at.y === 0), 'ring: every slot point is at height 0');
+  check(slots.some((r) => r.k === 31) && slots.some((r) => r.k === 0), 'ring: the slots run 0..31');
+}
+
 if (failures > 0) {
   console.log(`${failures} failure(s)`);
   process.exit(1);

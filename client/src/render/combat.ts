@@ -72,7 +72,7 @@ import { bossPhaseOf } from '../audio/bossbgm.ts';
 import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
-import { galgryphonAttackBurst } from '../combat/galgryphonfx.ts';
+import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
 import { cameraSourceOf, DARKFALZ_CAMERA_FILE, type BossCameraSource } from '../combat/darkfalzcamera.ts';
@@ -1314,6 +1314,27 @@ export class CombatView {
             // The S27 beam and the S30 dive beam: lightning ribbons through the technique effects (the
             // bolt's particle and its ribbon, render/techlightning.ts addBolt).
             bolt: (b) => this.techfx?.addBolt(b),
+            // The minion ring's particles (CreateGalgryphonMinion_004aabd8): the two one-shots at the centre, then 32
+            // outer emitters (particle 539) that track their slot's point for the 31 spawn ticks. ASSUMED: particle 539 is
+            // drawn as its particleentry.dat sprite, not the exe's model particle (the lightning BML's chunk 1, not loaded);
+            // the primary emitters (521, destroyed at birth) draw nothing and are not made.
+            ringParticles: (() => {
+              const slots = Array.from({ length: GALFX_RING.slots }, () => new THREE.Vector3());
+              return {
+                start: (c) => {
+                  const at = new THREE.Vector3(c.x, c.y, c.z);
+                  this.particle({ id: GALFX_RING_PARTICLES.startFirst }, at);
+                  this.particle({ id: GALFX_RING_PARTICLES.startSecond }, at);
+                  for (const p of slots) {
+                    p.set(c.x, 0, c.z);
+                    void this.fx?.spawn({ id: GALFX_RING_PARTICLES.outer, duration: GALFX_RING.spawnFrames }, () => p, false, true);
+                  }
+                },
+                slot: (k, at) => {
+                  slots[k]?.set(at.x, at.y, at.z);
+                },
+              };
+            })(),
             throwMinion: (origin, offset, target, slot) => {
               this.galMinions.throw(origin, offset, target, slot);
             },
