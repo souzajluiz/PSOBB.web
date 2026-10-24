@@ -9,7 +9,7 @@ import { STATUS } from '../client/src/combat/status.ts';
 import {
   BattleTrap, TRAP_BLAST_RADIUS, TRAP_CHAIN_FUSE, TRAP_EFFECTS, TrapCounters, TrapField, hitReport, killCounts, parse6x80,
   parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
-  TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts,
+  TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts, trapRevealed, TRAP_REVEAL_RANGE_SQ,
   type PlaceContext, type TrapTarget,
 } from '../client/src/quest/battletraps.ts';
 
@@ -270,6 +270,35 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   check(trapDrawn(t), 'a trap in the fuse state (3) is drawn');
   t.state = 4;
   check(!trapDrawn(t), 'a trap in the blast state is not drawn');
+}
+
+// --- the reveal to the owner (TrapProcessHitbox_0062ea74) ---------------------------
+{
+  const owner = (over: Partial<TrapTarget> = {}): TrapTarget => tgt({ id: 2, x: 0, z: 0, trapVision: true, challengeOne: true, ...over });
+  const trap = () => new BattleTrap(2, 0, 1, 0, 0, 0, 3, 0);
+  eq(TRAP_REVEAL_RANGE_SQ, 40000, 'g_TrapHitboxRangeSq is 40000 (exe 0x00932bc0)');
+  eq(trapRevealed(trap(), owner(), false), true, 'owner with vision and challenge 1 on the trap reveals it');
+  eq(trapRevealed(trap(), owner({ trapVision: false }), false), false, 'no vision bit: no reveal');
+  eq(trapRevealed(trap(), owner({ challengeOne: false }), false), false, 'challenge word other than 1: no reveal');
+  eq(trapRevealed(trap(), undefined, false), false, 'owner not in the game: no reveal');
+  eq(trapRevealed(trap(), owner({ x: 200, z: 0 }), false), true, 'distance squared equal to the range is in reach');
+  eq(trapRevealed(trap(), owner({ x: 201, z: 0 }), false), false, 'beyond the range and another room: no reveal');
+  eq(trapRevealed(trap(), owner({ x: 201, z: 0 }), true), true, 'beyond the range but in the same room: reveal');
+
+  // The field's tick sets the hitbox to 2 once, and only for the owner's checks.
+  const field = new TrapField();
+  const placed = field.place({ clientId: 2, type: 0, count: 1 }, ctx({ ownerPos: { x: 0, y: 0, z: 0 }, ownerAngle: 0 }), new TrapCounters());
+  check(placed !== null && placed.hitbox === 0, 'a placed trap starts hidden (hitbox 0)');
+  field.tick([owner({ x: 500, z: 0 })], { trapsHitOwner: false });
+  eq(placed?.hitbox, 0, 'a far owner (no room data) does not reveal the trap');
+  field.tick([owner({ x: 10, z: 0 })], { trapsHitOwner: false });
+  eq(placed?.hitbox, 2, 'the owner within range reveals the trap on the tick');
+  field.tick([owner({ x: 10, z: 0, trapVision: false })], { trapsHitOwner: false });
+  eq(placed?.hitbox, 2, 'the reveal is sticky (nothing hides it again)');
+  const roomField = new TrapField();
+  const roomTrap = roomField.place({ clientId: 2, type: 1, count: 1 }, ctx({ ownerPos: { x: 0, y: 0, z: 0 }, ownerAngle: 0 }), new TrapCounters());
+  roomField.tick([owner({ x: 900, z: 0 })], { trapsHitOwner: false, sameRoom: () => true });
+  eq(roomTrap?.hitbox, 2, 'the same room reveals the trap beyond the range');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

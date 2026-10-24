@@ -46,6 +46,7 @@ import {
   type TrapTarget,
 } from './battletraps.ts';
 import { isPlayerEntity, parse6x8F } from '../combat/pvp.ts';
+import { isAndroid } from '../combat/progression.ts';
 import { buildTeleport } from '../formats/npcplayerchar.ts';
 import type { QuestUi } from './questui.ts';
 import { buildBattleOverlay } from './battleoverlay.ts';
@@ -460,7 +461,13 @@ export class BattleRun {
     for (const p of g.players.values()) {
       const local = p.clientId === g.selfId;
       // UNCLEAR: the remote players' death state is not tracked here (dead: false).
-      targets.push({ id: p.clientId, x: p.position.x, z: p.position.z, floor: p.floor, dead: local ? view.combat.damage.dead : false, local });
+      // The reveal's owner checks (quest/battletraps.ts trapRevealed): the vision bit is the android
+      // class flag (the same source as the field's capture traps); the challenge word is taken as 1
+      // for the battle players (ASSUMED, see TrapTarget).
+      targets.push({
+        id: p.clientId, x: p.position.x, z: p.position.z, floor: p.floor, dead: local ? view.combat.damage.dead : false, local,
+        trapVision: p.charClass >= 0 && isAndroid(p.charClass), challengeOne: true,
+      });
     }
     const events: TrapEvent[] = this.traps.tick(targets, { trapsHitOwner: this.setup?.trapsHitOwner ?? false });
     for (const ev of events) {
