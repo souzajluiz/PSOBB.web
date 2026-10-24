@@ -61,11 +61,35 @@ import { roundEven, trapNumber } from './battle.ts';
 
 export { trapNumber };
 
-export const TRAP_ARM_FRAMES = 0x96; // ASSUMED
-export const TRAP_FUSE_FRAMES = 0x1e; // ASSUMED
+// The constructor's stores (trap_constructor, dump 492906..493000, 2026-10-24 pass): +0x84 arm = 0x96
+// and +0x88 fuse = 0x1e are immediate stores; +0x354 trigger and +0x358 blast = 0x42480000 (50.0).
+// The Ultimate branch (g_CurrentFloor == ultimate and is_value_less_than_2(g_Pioneer2MapInitData) == 0)
+// stores arm 0x3c and blast 0x42a00000 (80.0) and sets g_BATrapsCanTargetOwnerPlayer = 0. Not ported:
+// the port has no floor id for `ultimate` and is_value_less_than_2 is not traced (UNCLEAR).
+export const TRAP_ARM_FRAMES = 0x96; // VERIFIED (trap_constructor store to +0x84)
+export const TRAP_FUSE_FRAMES = 0x1e; // VERIFIED (trap_constructor store to +0x88)
 export const TRAP_CHAIN_FUSE = 0x0f; // VERIFIED (0x0062f274)
-export const TRAP_TRIGGER_RADIUS = 50; // ASSUMED
-export const TRAP_BLAST_RADIUS = 50; // ASSUMED (80 in Ultimate outside battle, not modelled)
+export const TRAP_TRIGGER_RADIUS = 50; // VERIFIED (trap_constructor store to +0x354 = 0x42480000)
+export const TRAP_BLAST_RADIUS = 50; // VERIFIED (trap_constructor store to +0x358 = 0x42480000; Ultimate 80.0 not ported)
+
+// The placing permission. handle_packet0x60_subcommand0x83's row in g_Packet0x60SubcommandTable
+// (0x00a0fba0 + 95 * 8: action 0x83, permission 0x0006, handler 0x00695930, VERIFIED by reading the
+// exe table). checked_call_packet0x60_subcommand (dump 815078) sends the 6x83 FIRST, then runs the
+// local handler only when `map_action_permission_levels[get_current_map()] & perm` is non-zero. So a
+// map that refuses the permission still sends the 6x83, but nothing is placed or decremented here.
+export const TRAP_ACTION_PERMISSION = 0x0006;
+// map_action_permission_levels[48] (.data 0x00a10160, read with tools/exedata.py, VERIFIED). Index =
+// the map id (get_current_map). Only maps 15 (0x01) and 47 (0x00) refuse the 0x83 permission.
+export const MAP_ACTION_PERMISSION: readonly number[] = [
+  0x02, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x01,
+  0x04, 0x04, 0x02, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+  0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x02, 0x04, 0x00,
+];
+// Whether the local handler runs for a 6x83 on this map (ASSUMED: the port's area is get_current_map).
+export function trapPlacePermitted(map: number): boolean {
+  const v = Number.isInteger(map) ? MAP_ACTION_PERMISSION[map] : undefined;
+  return v !== undefined && (v & TRAP_ACTION_PERMISSION) !== 0;
+}
 // The reveal range (TrapProcessHitbox_0062ea74, dump 492200): g_TrapHitboxRangeSq at 0x00932bc0
 // is 40000.0 (VERIFIED: exedata read), i.e. 200 units; the squared XZ distance is compared to it.
 export const TRAP_REVEAL_RANGE_SQ = 40000;

@@ -41,6 +41,7 @@ import {
   parse6x83,
   trapAnnouncement,
   trapDamage,
+  trapPlacePermitted,
   type PlaceContext,
   type TrapEvent,
   type TrapTarget,
@@ -444,10 +445,21 @@ export class BattleRun {
     if (!c || c.state !== 'battle' || !me || this.opts.view.combat.damage.dead) return false;
     const req = placeRequest(this.counters, type, true);
     if (!req) return false;
+    // checked_call_packet0x60_subcommand (dump 815078) sends the 6x83 first, unconditionally; then the
+    // local handler (handle_packet0x60_subcommand0x83) runs only when the map permits the 0x83 row
+    // (trapPlacePermitted) and safe_create accepts. A refusal places and decrements nothing here, but
+    // the palette press still counts as done (the exe's palette handler returns 1 after the call).
+    g.sendSubcommand(0x83, build6x83(g.selfId, type, req.count).subarray(4));
+    if (!trapPlacePermitted(this.opts.view.current?.area ?? -1)) {
+      this.log(`battle trap ${type} sent, not placed (map refuses the 0x83 permission)`);
+      return true;
+    }
     const owner = { floor: me.floor, position: me.position, angle: me.angle };
     const trap = this.traps.place({ ...req, clientId: g.selfId }, this.placeContext(owner), this.counters);
-    if (!trap) return false;
-    g.sendSubcommand(0x83, build6x83(g.selfId, type, req.count).subarray(4));
+    if (!trap) {
+      this.log(`battle trap ${type} sent, not placed (safe_create refused)`);
+      return true;
+    }
     this.log(`battle trap ${type} placed (stock ${req.count})`);
     return true;
   }
