@@ -16,6 +16,7 @@ import {
   encodeOlgaA4,
   type OlgaEvent,
 } from '../client/src/combat/olgaflowai.ts';
+import { olgaBattlePower, randomlyAdjust, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -212,6 +213,85 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   ai.setHp(500 - 500, 500);
   eq(ai.hit(0), true, 'a remote total of the max starts the death');
   eq(ai.hp, 0, 'the remote damage takes the HP to 0');
+}
+
+// --- the sword wave's hit (combat/olgaflowhits.ts; exe CheckForSwordWaveHittingPlayers 0x00494f58) ----
+
+{
+  const a = { x: 0, z: 0 };
+  const tip = { x: 10, z: 0 };
+  check(swordWaveTouches({ x: 5, z: 10 }, a, tip), 'a player 10 off the middle of the blade is hit (radius 15)');
+  check(!swordWaveTouches({ x: 5, z: 20 }, a, tip), 'a player 20 off the blade is missed');
+  check(!swordWaveTouches({ x: 30, z: 0 }, a, tip), 'a player past the tip is missed (the closest point is outside)');
+  check(!swordWaveTouches({ x: -5, z: 0 }, a, tip), 'a player behind the other point is missed');
+  check(swordWaveTouches({ x: 0, z: 10 }, { x: 0, z: 0 }, { x: 0, z: 0 }), 'a zero-length sword hits within the radius');
+  eq(randomlyAdjust(20, 0.1, 0), 20, 'the adjusted power at rnd 0 is the value (sin 0)');
+  let lo = 1e9;
+  let hi = -1e9;
+  for (let i = 0; i < 1000; i++) {
+    const v = randomlyAdjust(100, 0.1, i / 1000);
+    lo = Math.min(lo, v);
+    hi = Math.max(hi, v);
+  }
+  check(lo >= 90 && hi <= 110, `the adjusted power stays within 10% (got ${lo}..${hi})`);
+  eq(randomlyAdjust(1, 0.1, 0.25), 1, 'the adjusted power is at least 1');
+  eq(olgaBattlePower(0), 20, 'a zero animation speed falls back to 20');
+  eq(olgaBattlePower(-3), 20, 'a negative animation speed falls back to 20');
+  eq(olgaBattlePower(43.4), 43, 'the animation speed is rounded');
+}
+
+{
+  // The window: waveTick is on for the ticks 13..22 of the wave row (5), and never on a row without the wave.
+  const ai = make({ leader: () => false });
+  ai.setState(5);
+  let on = 0;
+  let first = -1;
+  for (let i = 0; i < 30; i++) {
+    ai.tick([]);
+    if (ai.waveTick) {
+      on++;
+      if (first < 0) first = i + 1;
+    }
+  }
+  eq(on, 10, 'the sword wave test runs on 10 ticks of the wave row');
+  eq(first, 13, 'the first wave tick is the 13th tick in the state');
+  const other = make({ leader: () => false });
+  other.setState(2);
+  let otherOn = 0;
+  for (let i = 0; i < 30; i++) {
+    other.tick([]);
+    if (other.waveTick) otherOn++;
+  }
+  eq(otherOn, 0, 'the attack-start row runs no sword wave test');
+}
+
+// --- the beast's arc and turn (exe SetOlga1AttackPosition2 0x00496d4c, UpdateOlga1Rotation 0x00493080) --
+
+{
+  // The arc (row 8, the wave move): the body moves toward its home (the spawn) and snaps home at the timer's end.
+  const ai = make({ leader: () => false, x: 100, z: 0 });
+  ai.x = 50;
+  ai.z = 0;
+  ai.setState(8);
+  // The exe's fraction is 2 sin(32768 r / n) / n: zero at the start (r = n), so the body moves in the middle.
+  for (let i = 0; i < 10; i++) ai.tick([]);
+  check(ai.x > 50 && ai.x < 100, `the arc moves the body toward home (x ${ai.x.toFixed(3)} after 10 ticks)`);
+  for (let i = 0; i < 21; i++) ai.tick([]);
+  check(Math.abs(ai.x - 100) < 1e-9 && Math.abs(ai.z) < 1e-9, `the arc snaps the body home at the timer's end (${ai.x}, ${ai.z})`);
+}
+
+{
+  // The turn: with +0x440 clear the body turns toward the origin by at most 0x1b4 BAMS a tick (row 1: no arc).
+  const ai = make({ leader: () => false, x: 100, z: 0 });
+  ai.flag440 = 0;
+  ai.tick([]);
+  check(Math.abs(ai.angle - -0x1b4 * (Math.PI * 2 / 0x10000)) < 1e-9, `the turn is 0x1b4 BAMS a tick toward the origin (${ai.angle})`);
+  const away = make({ leader: () => false, x: 100, z: 0 });
+  away.tick([]);
+  check(Math.abs(away.angle - 0x1b4 * (Math.PI * 2 / 0x10000)) < 1e-9, 'with +0x440 set the body turns away from the origin');
+  const still = make({ leader: () => false, x: 0, z: 0 });
+  still.tick([]);
+  eq(still.angle, 0, 'at the origin the body does not turn');
 }
 
 console.log(failures === 0 ? 'olgaflowai: all checks passed' : `olgaflowai: ${failures} failure(s)`);

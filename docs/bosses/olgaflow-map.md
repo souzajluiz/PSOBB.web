@@ -326,7 +326,8 @@ the enemymodels spec (leg skywait, body waitside), which matches row 0 and row 2
   > 0, default 20). ASSUMED to match the trap damage in the exe.
 - Beam / FX spawns: `0x0050b7a4` (FX spawn, 14 calls), `0x00509590` and `0x00508efc`
   (PROVEN calls). Effect ids: not decoded.
-- Hit radii, damage flags, hit boxes: NOT DECODED. BLOCKER for hit tests.
+- Hit radii, damage flags, hit boxes: the sword wave's radius 15 and the tail's triangle are decoded (section 14);
+  the stab's and the tail's anchors are not (section 14.7).
 
 ## 9. Particles / SE (PARTIAL)
 
@@ -586,7 +587,7 @@ IsOlga1* globals hold the same numbers).
 - Row 39 (0x27) with no frame fn: a 30-frame hold, then the hub (its leader decides first).
 - Motion: the body model plays the row's body motion, the leg model (animator 0) the leg motion; the playback speed 1.
 
-### 13.9 Left (not ported)
+### 13.9 Left (not ported; pass 4, section 14, ported the sword wave's hit, the arcs and the turn)
 
 1. Hit geometry: CheckOlga1SwordStab_00495508, CheckOlga1SwordWaveHit_0049592c, CheckOlga1ProximityHit_00495fe0, the tail
    swipe 0x00495684, the lancer, the sword wave effect 0x004960a4 and the mines (0x00490058 / 0x00490090). No attack lands.
@@ -597,3 +598,111 @@ IsOlga1* globals hold the same numbers).
 5. Effects and sounds (0x0080575c, 0x0048eb24, 0x004970a0 particle, 0x00494120 render).
 6. Named rows: the 13.6 binding; the 0x1c / 0x24 targets and the row 36 / 38 leaders (0x00498e48, 0x00498f4c) are not run.
 7. The 6xA4 send for state 0x17 (the progress attack) has no decoded body: it runs as a timer state.
+
+## 14. Pass 4 (2026-10-24): hit tests of the sword wave, the beast's arcs and turn
+
+Sources: the dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c` (line numbers below), the
+Ghidra decompile of 0x0083a0dc (`tools/ghidra/decomp.sh`), `tools/exedata.py read` for the constants. The port:
+`client/src/combat/olgaflowhits.ts` (the wave's test, the damage power), `client/src/combat/olgaflowai.ts` (the wave
+window `waveTick`, the arcs, the turn), `client/src/render/combat.ts` (`olgaSwordWave`, `tickOlga`).
+
+### 14.1 Where the hits are made (PROVEN, the frame fns and the calls)
+
+| chain (rows) | frame fn (address) | hit call in the frame | what it does |
+|---|---|---|---|
+| sword wave (5..7) | Olga1HandleSwordWaveAttack_00498634 | `CheckForSwordWaveHittingPlayers_00494f58` (dump 214878) | the player test and the damage |
+| wave move (8..10) | Olga1HandleSwordWaveMoveAttack_00498674 | the same check, then `SetOlga1AttackPosition2` (the arc) | the same test |
+| stab (11..20) | Olga1HandleSwordStabAttack_004986c8 | `CheckOlga1SwordStab_00495508` (dump 215080) | creates the stab objects, no direct damage |
+| tail swipe (21) | Olga1HandleTailSwipeAttack_0049872c | `Olga1TailSwipe_00495684` (dump 215137) | the triangle test and the damage |
+| lancer (22) | Olga1HandleFireLancerMoveAttack_0049876c | `CheckOlga1SwordWaveHit_0049592c` (dump 215247) | NOT ported |
+
+- The damage call in the wave and the tail: `(*this->vtable->entity_hit_by_tech)(player, olga, fixed_damage_maybe, power, 0, ~foie, -1)`
+  with `fixed_damage_maybe = 0` (dump line 70352): group 0, the same path as the port's enemy techs
+  (`enemyTechHitsPlayer`: damage = trunc((attacker MST * 0.5 + power) * 0.2)). The attacker's MST is row 43.
+- `unknown_olga_launcher_attacks_hit_player_check` (dump 210066, called at 214996, 208134, 211293) is NOT damage: it
+  adds the lock-on targeting slot (`AddTargetingSlot_006ff4ac`) to the Olga-map players with `unknown_flags_invincibility == 1`.
+- The stab object (`create_olga_sword_stab_objects`, dump 212446, vtable `g_Olga1SwordStabVtable`): `UpdateOlgaHitPositionObjectState_00491980`
+  (dump 212630) runs state 0 `CheckOlgaHitPositionPlayerCollision_00491b40` (a player within 30.0, `0x009022ec`, of the
+  spawn point sets the object's state to 1), state 1 `UpdateVoloptForm7State` (not decoded: the damage is there, ASSUMED), state 2
+  `Olga1SwordStabEffectUpdate_00491a28` (the effect). The stab's damage is NOT PORTED (the volopt form 7 state is unbound).
+
+### 14.2 The sword wave test (PROVEN; the anchors ASSUMED)
+
+- `can_olga_hit_player` (0x0048e100, dump 209826): the player on map 0x1f (`map_id2`) and `character_flags & 0x2000800 == 0`.
+  The port gates on the floor's area 0x1f only (the flag part is not checked: ASSUMED).
+- The window: the test runs only when the current motion's njm chunk is `g_Olga1SwordWaveChunkId` (9a6e9c = 46) and the anim
+  time is in `[g_Olga1SwordWaveAnimStartTime, g_Olga1SwordWaveAnimEndTime]` = [12.5 (0x0090262c), 22.0 (0x00902628)].
+  The port: the ticks since the state entered, for rows 5..10 (ASSUMED anim time = ticks, the chunk met inside the rows).
+- The geometry: a segment-like test on the XZ plane. `GetDistancePointToLineSegment_0083a0dc` (dump name; Ghidra
+  0x0083a0dc) is the distance to the INFINITE line through `unk_0x5e0` (point A) with direction `position_of_sword - A`
+  (the decompile: `param_2` is the origin, `param_2[3..5]` the direction). The hit needs the distance `<= 15.0`
+  (`g_Olga1SwordWaveCollisionRadius`, 0x00902b04) and `dot(A - C, tip - C) <= 0` (`g_Olga1SwordWaveCollisionThreshold`,
+  0x00902b14 = 0.0), with C the closest point: C lies between A and the tip. The dump's 2D copy of the Y component in
+  the dot is not reproduced literally (ASSUMED the XZ dot).
+- Power: `randomly_adjust_value_by_fraction(+0x484, 0.1)` (dump 210422). +0x484 = `InitializeOlga1AnimationSpeeds_00497bc8`
+  (dump 216711): the BattleParam animation-speed row 43 field 0 (`fparam1`, the port's `movement(difficulty, 43).fparam1`)
+  rounded when > 0, else 0x14 (20). The adjust: `_rand() / 32768` picks an angle `* 65535` BAMS, `value + sin * 0.1 * value`,
+  at least 1. The tail uses +0x488 (the field 2 = `fparam3`, the same rule).
+- The sword's points: `position_of_sword` (+0x5ec) and `unk_0x5e0` (+0x5e0) are NOT WRITTEN in any decoded function (only
+  Y = 10, `SetOlga1SwordAttackYPosition_0049536c`). ASSUMED: the tip is the model's node 4 (`g_OlgaSwordWaveBoneIndices` at
+  0x00902678 = 4, 3, 7, 5, the first entry), and A is the previous tick's tip (`OlgaSwordTrail`).
+- Every hit is applied on the tick it is found (the exe has no latch: each frame of the window that passes the test damages).
+
+### 14.3 Tail swipe (PROVEN test, the tail points NOT bound)
+
+- The test: a TRIANGLE `(body +0x38 / +0x40, P1 = +0x4d0, P2 = +0x64c)` on the XZ plane, the player inside when the three
+  cross products (edge_i x (player - P_i), Y component) do not change sign (tolerance `g_Olga1TailSwipeVerticalTolerance` 0.0).
+- `+0x4d0` is the previous tick's `+0x64c`: the tail's end copies (dump 215180..215190 writes +0x70/+0x74/+0x78 of the
+  casting-info block at +0x460, which is +0x4d0 / +0x4d4 / +0x4d8 in the beast). PROVEN by the copy's offsets.
+- The window: the tail chunk `g_Olga1TailSwipeTailChunkIndex` (9a6ea8 = 51) and the anim time in
+  `[g_Olga1TailSwipeMaxHeight 10.5 (0x00902668), g_Olga1TailSwipeMinHeight 15.0 (0x00902664)]`, on the tail's `+0x450`.
+- `+0x640..+0x654` (the tail's own points) have no decoded writer. NOT PORTED: the tail's anchor is unbound.
+
+### 14.4 The beast's arcs and turn (PROVEN bodies; the callers and the constants as noted)
+
+- The arc `SetOlga1AttackPosition2_00496d4c` (dump 216136) moves `+0x38 / +0x3c / +0x40` toward the home `+0x428 / +0x42c / +0x430`
+  (the ctor InitializeOlga1Form1, dump 216589..216592, copies the spawn). Per tick with `r = +0x418` (timer) and `n = +0x414`
+  (total): `k = g_Olga1AttackPositionNormalizationConstant / n` (1.0, 0x009029fc) when `n < 11` or `r / n <= 0.1`
+  (0x009026fc), else `k = 2 sin(32768 * r / n) / n` (0x00902a00 = 32768); radius and height move by `k` toward the home's;
+  the angle moves by the short difference times `k`; `r <= 0` snaps to home. (`k` is zero at `r = n`: the ramp is a sine.)
+- The arc callers (frame fns, the `SetOlga1AttackPosition2` call before the decrement): Olga1HandleRandomMoveAttack
+  (dump 217153; row 2 by address, ASSUMED), Olga1HandleSpreadMoveAttack_004985e0 (row 4, PROVEN by name), the wave move
+  (8..10), the stab (11..20), the tail (21). No arc: Olga1HandleSpreadAttack (row 3), the wave (5..7), the random float (row 1).
+- The turn `UpdateOlga1Rotation_00493080` (dump 213559), called every tick from `Olga1ObjectUpdate_00492a84` (dump 213423):
+  when the distance from the origin is `> 1e-5` (0x00902c68), the heading (+0x60) turns toward `atan2(-x, -z)` (plus 0x8000 BAMS
+  when `+0x440` is set) by at most `0x1555` when `+0x41c` is set, else `0x1b4` (the dump's names say the reverse; the numbers
+  are the exe's). The first block of the same function (the `+0x5c` facing, `DAT_00a472a8 = 0x666`) is not used by any
+  decoded reader: NOT PORTED.
+- `UpdateOlga1Position_004931c0` (dump 213625): copies `+0x38 / +0x40` to `+0x300 / +0x308` and the height `+0x3c + (-75 or -50)`
+  to `+0x304` (the display position; the port keeps the spawn's render height: ASSUMED).
+- The flag `+0x440` (the turn's away/toward bit): the ctor sets 1 (dump 216598). The three attack senders set 1 before the
+  packet: StartOlga1Attack_00494290 (dump 214285 and 214466), SelectAndSendOlga1Attack_00494b20 (dump 214743). The rows
+  `olga1_DOWN_CENTOP_func3` (dump 217571) and others set 0 / 1 in their frames (unbound): the port keeps 1 (ASSUMED).
+
+### 14.5 Constants (PROVEN values, exedata)
+
+0x00902b04 = 15.0 (wave radius), 0x00902b14 = 0.0 (wave dot), 0x0090262c = 12.5, 0x00902628 = 22.0 (wave window),
+0x009a6e9c = 46 (wave chunk), 0x009a6ea8 = 51 (tail chunk), 0x00902664 = 15.0, 0x00902668 = 10.5 (tail window),
+0x00902ad4 = 0.0 (tail tolerance), 0x009029c8 = 0.0 (the animation-speed threshold), 0x00902678 = 4,3,7,5 (sword bones),
+0x009022ec = 30.0 (stab proximity, not ported), 0x00902c68 = 1e-5, 0x00902950 = 65536, 0x00902948 = 2 pi (double),
+0x009029fc = 1.0, 0x00902a00 = 32768, 0x009026fc = 0.1 (arc). Animation speeds: enum `ep2_OlgaFlowForm1 = 43` (dump 69110),
+the same row as the stats.
+
+### 14.6 ASSUMED (this pass)
+
+- The sword tip = model node 4 (the bone table's first entry) and A = the previous tip; the node index equals the exe's bone index.
+- The anim time = ticks since the state entered; the wave chunk met inside rows 5..10; the window [12.5, 22] in ticks.
+- The XZ dot in the wave test; the wave hit for the local player only (each client resolves its own player, as tickShots does).
+- The arc's `n` (+0x414) = the port's `durationOf` timer; the arc's row 2 (by address) and the `b_minus_a` sign (home minus current).
+- `+0x440` stays 1 (the rows that clear it are unbound); the turn's `+0x41c` reading as the dump gives it.
+- No latch: the exe damages every tick of the passing test; the port does the same through `enemyTechHitsPlayer` (the damage
+  manager's own invincibility decides what lands).
+- The render's height is the spawn height (the arc moves the brain's height, which the selection reads).
+
+### 14.7 Left (not ported)
+
+1. The stab's damage (UpdateVoloptForm7State, the stab object's state 1) and the stab's ground point (`CheckOlga1SwordStab_00495508`
+   with `create_olga_sword_stab_objects`): NO stab hit.
+2. The tail swipe's hit (the anchor +0x640..+0x654 is unbound); the lancer (row 22, `CheckOlga1SwordWaveHit_0049592c`, `SetOlga1AttackPosition3`).
+3. The first block of UpdateOlga1Rotation (the `+0x5c` facing) and the display height of UpdateOlga1Position (+0x304).
+4. Sounds and particles of the wave (0x3bd, 0x3be, 0x3c0 / 0x3c1), the ground strike, the `DmBall` objects (CreateOlgaDmBall).
