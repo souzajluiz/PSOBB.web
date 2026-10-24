@@ -15414,3 +15414,49 @@ Follow-up to "Customize (action palette editor) and the save upload (E7) traced 
 - `node tests/customize.test.ts`: all checks passed.
 - `node tests/hotbar.test.ts`, `fieldhud.test.ts`, `lobbymenu.test.ts`, `simplemail.test.ts`, `options.test.ts`, `questboard.test.ts`, `mainmenulayout.test.ts`, `shortcuts.test.ts`, `teammenu.test.ts`, `telepipe.test.ts`, `minimap.test.ts`: pass.
 - `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run; removed before the commit).
+
+## 2026-10-23: Customize: the window drawn from the exe (grid icons, cursor, scroll, description, slot icons)
+
+Follow-up to "Customize: the action grid from the exe" (above): the grid was a text list. Drawn now from the exe's element layout.
+
+### Exe evidence
+
+- Windows (GUI table 0x00971f40, 8-byte {x, y} entries, read with `tools/exedata.py read 00971fb8 f 2` etc.): slot list 0x0F = (0, 256), grid 0x10 = (214, 256), description 0x11 = (450, 256). customize_menu_constructor (dump 717277) creates the slot list (`CreateGuildCardListWindow_00748d8c`, entry 0x0F) and the description (`CreatePlayerMenuListWindow_0073aa40(get_gui_position(0x11))`); customize_menu_action_list_constructor (718599) creates the grid (entry 0x10).
+- Grid geometry (render_customize_menu_action_list, dump 718800; globals from `tools/exedata.py read`, names from `reverse/refsrc/psobb-client-source/dirty/dirty_symbols.jsonl`): cell width `g_CustomizeMenuGridCellWidth` 0x00973784 = 66, cell height 0x00973780 = 51, column step `col * 66`, row step `row * 51`. Per cell the four elements are placed at (col * 66, row * 51) plus: element [0] (9, 8) (0x009737ac, 0x009737b8); element [1] (12, 10) (0x009737b4, 0x009737b0; the colour 0xff404040 / white is written here); element [3] (51, 37) (0x00973780 is the cell height, 0x00973778 = 37); element [4] (60, 39) (0x00973774 = 60, 0x00973770 = 39). The port draws the icon at [0]'s (9, 8); the roles of [3] and [4] are not traced.
+- Icons: `SinowberillChallengeObject_UpdateUI_0070fdd8` (the same element update as the palette's slot) picks the texture by category: `PaletteMenu_UpdateTextures_0070ff56` (dump 672030), the same function the palette uses. So a grid cell's icon is `paletteIcon(category, action)` in classic/palette.ts.
+- Count: `PaletteMenu_UpdateSlotIcon_0070fde5` (671822): category 4 only; stack count (index < 0xd) or trap stock; drawn when > 0 at the palette's count offset.
+- Cursor: `RenderActionListItem_0074a8e8` (dump 718835 area): highlight at (col * `DAT_0097376c` 66 + `DAT_00973760` 1.0, row * `DAT_00973768` 51 + `DAT_0097375c` -5.0), alpha 0.4.
+- Scroll: `handle_customize_menu_action_list_scrolling` (718814): list Y = row * `g_CustomizeMenuListYOffsetConstants` 51 + `g_CustomizeMenuListBaseYOffset` 33 + `g_CustomizeMenuListYOffsets` -81 (= row * 51 - 48), clamped by `ClampRenderPosition_0073f8a4` (the clamp range is not traced). `get_position_of_list_menu` (672530) subtracts that scroll from every element.
+- Description text: `probably_get_item_description` (717482): attack = unitxt collection 7 index 0x13 + action (empty for Extra Attack with no weapon: the `CheckItemStateForUpdate` branch goes to the add with an empty buffer); technique = its name (group 5), then (not traced here: the level and TP cost), then group 7 index = technique; empty unless `IsTechniqueLevelUnlimited` is 0 (learned); item = group 7 0x16 + action, empty unless `GetChallengeItemInstanceId` finds it in the bag. The text goes to the window at +0x34 via `ListWindowObject_AddItem_0073ae38`.
+- Slot list widths: `GetListWindowDefaultWidth_007336fc` (700698) returns `host+0x58 - param` (the `fsubrs` in the disassembly; param 0 for the slot list, 2 for the description). `handle_player_menu_select` (700133) sets host+0x58 = 0x47447c00 = 50300.0 before the switch, so the passed width is not the 179 the port uses; the clamp inside `ListWindowObject_SetWidth_00712624` is not traced.
+
+### Port
+
+- `client/src/classic/customize.ts`: the draw. Slot list: frame, title, cursor bar, each row's palette icon (16 px high, ASSUMED) and name. Grid: frame, title, cells in three columns scrolled to the cursor row, clipped to a 208 px band (ASSUMED), the icon at 0.7 scale (ASSUMED, the hotbar's scale), the count digits at the palette's offset, the 0x40/0xff tint on unavailable cells, the highlight bar. Description: `actionDescription` (the exe's text rules above), in the window at (450, 256). Pure helpers exported and tested: `gridCellOrigin`, `gridHighlight`, `gridScroll`, `gridRows`, `actionDescription`.
+- `client/src/classic/fieldmenu.ts`: `FieldMenuTextures.palette` (optional), passed to `CustomizeMenu.draw`.
+- `client/src/render/fieldhud.ts`: the palette textures go into the menu textures; the Customize env gets `itemCount` and `trapCount`.
+- `tests/customize.test.ts`: the cell origins, the highlight, the row counts, the scroll (clamp at both ends), the description per kind (attack with / without a weapon, technique learned / unlearned, item in / out of the bag, trap with / without stock, empty cell).
+- `client/e2e/customize.spec.ts`: a fresh field (Forest 1, `warpTo(1)`), Home held 200 ms, ArrowDown to Customize, Enter (the slot list), a screenshot `test-results/customize.png`; Enter again (the grid), `test-results/customize-grid.png`.
+
+### ASSUMED
+
+- The grid icon's scale (0.7) and its place in the cell: the exe's element sizes and the roles of its four extra elements are not traced; the icon is at the icon element's (9, 8).
+- The viewport height (208) and the scroll's clamp range (the scrollbar's settings are not traced).
+- The description window's width (179, the same as the others; see the width note above).
+- The slot list's icon height (16) and its left-aligned names (the exe's row element is not traced).
+- The count offset in the grid (the palette's +25, +28 from the icon origin).
+- The technique description omits the level and TP cost lines (the env has no level or cost).
+- The trap description: shown when the stock is above 0 (`GetChallengeItemInstanceId` is not traced for traps).
+- The weapon test, the boss-map trap rule, the lobby message trigger (carried over from the previous entry).
+
+### Left
+
+- The scroll bar (`RenderScrollbarPrimitives`), the slot-list preview element (`GuildCardListWindow_UpdatePaletteUI`, 717656, sets an element from palette_slots[1]: its role is not traced), the window's background (`unknown_render_background_for_menus`: the frame stands in for it).
+- The technique's level and TP cost lines in the description.
+- The periodic E7 and the logout / exit triggers (the previous entry).
+
+### Checks
+
+- `node tests/customize.test.ts`: all checks passed (the new block 13).
+- `cd client && npx tsc --noEmit -p .`: exit 0 (client/node_modules linked from the main checkout for the run; removed before the commit).
+- Playwright (`client/e2e/customize.spec.ts`, PW_BASE_URL on a worktree Vite at 5174): NOT verified. The login stops at the title with "key file default.nsk not found" (no default.nsk under ~/Downloads/psobb-client/data or the vendor tree on this machine); the existing field-menu-home.spec.ts fails at the same step, so the spec could not reach the Customize window. Screenshot not taken.

@@ -27,6 +27,7 @@ import { EquipMenu, type EquipActions } from './equipmenu.ts';
 import { ItemPackMenu, type ItemPackEnv, type ItemPackTextures } from './itempack.ts';
 import { TechniqueMenu, type TechMenuEnv } from './techmenu.ts';
 import { CustomizeMenu, type CustomizeEnv } from './customize.ts';
+import type { PaletteTextures } from './palette.ts';
 import { MagMenu, type MagMenuEnv } from './magmenu.ts';
 import { cursorSaved, OptionsMenu, type OptionsEnv } from './options.ts';
 import { AREA_MAP_MENU_ID, AreaMapWindow, type AreaMapEnv, type AreaMapTextures } from './areamap.ts';
@@ -121,6 +122,8 @@ export interface FieldMenuEnv {
 
 export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, QuestBoardTextures {
   menu: MainMenuTextures;
+  // The action palette's icons and digits (the Customize window's grid, classic/customize.ts).
+  palette?: PaletteTextures;
 }
 
 export class FieldMenu {
@@ -393,7 +396,8 @@ export class FieldMenu {
     try {
       withWindowAnim(ctx, this.leafAnim, b.x, b.y, b.w, b.h, () => {
         // The leaf's rows, bars and texts take the element wipe of the same animation.
-        if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu || leaf instanceof CustomizeMenu) leaf.draw(ctx, skin, extra, this.leafAnim);
+        if (leaf instanceof CustomizeMenu) leaf.draw(ctx, skin, extra, this.leafAnim, tex.palette);
+        else if (leaf instanceof TechniqueMenu || leaf instanceof OptionsMenu) leaf.draw(ctx, skin, extra, this.leafAnim);
         else leaf.draw(ctx, skin, tex, extra, this.leafAnim);
       });
     } finally {
