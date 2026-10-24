@@ -208,9 +208,18 @@ export class QuickMenu {
       else this.open = false;
       return;
     }
-    // Key 0xe (the End key's role, KEYS.symbolChat): the weapon tab toggles the compare list
-    // (case 1), the technique tab swaps two rows (case 0xa). ASSUMED: each press is one event.
-    if (!this.lobby && e.key.toLowerCase() === KEYS.symbolChat) {
+    // The End key (keyboard role 0xe, KEYS.symbolChat) closes the open menu: update_quickmenu
+    // (dump 711664..711667) tests CheckKeyboardInput_0078fdfc(get_keyboard_controls(), 0xe) once the
+    // state is past 2 and jumps to QuickMenu_Terminate.
+    if (e.key.toLowerCase() === KEYS.symbolChat) {
+      this.open = false;
+      return;
+    }
+    // The compare / swap key is g_KeyboardSharedState[0xe] (SharedInputState_CheckKeyHeld_007c1168,
+    // dump 711691), the shared bit Tab (hard-coded key 0x51, ProcessCameraInput_00708bd4 dump 666092)
+    // sets: the weapon tab toggles the compare list (case 1), the technique tab swaps two rows
+    // (case 0xa). ASSUMED: each press is one event.
+    if (!this.lobby && e.key === 'Tab') {
       if (this.tab === 0) {
         this.compare = compareToggle(this.compare).open;
         return;

@@ -15959,3 +15959,15 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 3. The compare list's stat rows: `UpdateEquipmentStatDisplay_007258dc` (dump 689847) and `PlayerRecalculateStats_0068e030`.
 4. The End-key close conflict above (dump 711666), and the save of the technique order (E7 / E8 writers).
 5. The Sinowberill challenge statuses (+0x89c) and element gate, so the traps' rows 0..3 can show.
+
+## 2026-10-23: quick menu End closes it, Tab compares and swaps
+
+Merge review of the quick menu wiring (the agent left the End-key conflict open). `update_quickmenu`
+(dump 711664..711667) tests `CheckKeyboardInput_0078fdfc(get_keyboard_controls(), 0xe)` (keyboard role
+0xe, the End key) once the state is past 2 and jumps to `QuickMenu_Terminate`: End closes the open
+menu. The compare list (case 1, dump 711691) and the technique swap (case 0xa) test a different
+source, `SharedInputState_CheckKeyHeld_007c1168(…, g_KeyboardSharedState[0xe])`, the shared bit the
+hard-coded Tab key (0x51) sets in `ProcessCameraInput_00708bd4` (dump 666092; see the F11 entry). So
+`classic/quickmenuwindow.ts` closes on End and toggles compare / swaps techniques on Tab, which also
+matches the manual's "Tab: able to change the order of technique from short cut menu".
+`tests/quickmenu.test.ts` updated.

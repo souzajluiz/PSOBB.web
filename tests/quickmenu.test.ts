@@ -421,30 +421,38 @@ check('tools facts: a rare tool is out', !isTwoHandedTabItem(toolItemFacts(new U
   check('traps: greyed rows (a hub or a boss map) cannot be chosen', calls.length === 0 && m.open);
 }
 
-// Weapon compare: the End key toggles the gui 2 list on the weapon tab; a tab change closes it.
+// Weapon compare: Tab (g_KeyboardSharedState[0xe]) toggles the gui 2 list on the weapon tab; a tab change closes it.
 {
   const { env } = fakeEnv();
   const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
-  m.key(key(KEYS.symbolChat));
+  m.key({ key: 'Tab' });
   m.key(key(KEYS.selectRight));
   check('compare: the list is open, so the tab does not step', m.tab === 0);
-  m.key(key(KEYS.symbolChat));
+  m.key({ key: 'Tab' });
   m.key(key(KEYS.selectRight));
   check('compare: closed again, the tab steps to 3 (no traps: 2 is skipped)', m.tab === 3);
 }
 
-// Technique swap: the End key marks a row, the next press swaps it with the selected row.
+// Technique swap: Tab marks a row, the next press swaps it with the selected row.
 {
   const { env, calls, order } = fakeEnv();
   const m = new QuickMenu(env, { lobby: false, mode: 3, traps: false, android: false });
   for (let i = 0; i < 4; i++) m.key(key(KEYS.selectDown));
-  m.key(key(KEYS.symbolChat));
+  m.key({ key: 'Tab' });
   check('swap: the first press marks the row and changes nothing', calls.length === 0 && order().join() === DEFAULT_TECH_ORDER.join());
   for (let i = 0; i < 5; i++) m.key(key(KEYS.selectDown));
-  m.key(key(KEYS.symbolChat));
+  m.key({ key: 'Tab' });
   check('swap: the second press swaps the marked and the selected rows', order()[4] === 9 && order()[9] === 4, order().join());
   check('swap: the list shows the new order (row 4 is tech 9)', m.rows()[4]?.value === 9);
   check('swap: the change is written once (order 0,1,2,3,9,5)', calls.join(';') === 'order 0,1,2,3,9,5', calls.join(';'));
+}
+
+// The End key closes the open quick menu (update_quickmenu, dump 711664).
+{
+  const { env } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  m.key(key(KEYS.symbolChat));
+  check('End: closes the menu', !m.open);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
