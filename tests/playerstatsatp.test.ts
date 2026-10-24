@@ -5,7 +5,7 @@
 //
 // Run: node tests/playerstats.test.ts
 import { classAttackRange, candidateAtp, splitAttack, weaponAttackRange } from '../client/src/combat/playerstats.ts';
-import { playerAttacker } from '../client/src/combat/formulas.ts';
+import { playerAttacker, weaponForCombat } from '../client/src/combat/formulas.ts';
 
 let failures = 0;
 let checks = 0;
@@ -45,6 +45,20 @@ for (const [saved, cls, w] of [
 // The combat attacker takes the split: +0x2cc base (the saved ATP), +0x2ce variance, +0x31c equipment ATP.
 const a = playerAttacker(0, { atp: 500, ata: 150, lck: 30 }, { atpMin: 40, atpMax: 55, grind: 10, ata: 30 });
 eq([a.atp, a.atpSpread, a.equipAtp], [500, 20, 65], 'attacker split from the saved ATP');
+
+// The weapon's special slots add ATA: ApplyEquipmentBonuses_005d330c (dump 426168) adds
+// 10 x the byte after each type-5 special to ata_range_min, so the total ATA (x 0.1) gets 1 x the byte.
+{
+  const pmt = { getWeapon: () => ({ atpMin: 40, atpMax: 55, ata: 30 }) };
+  const d = new Uint8Array([0, 1, 2, 0, 0, 0, 5, 3, 5, 2, 0, 0]);
+  const w = weaponForCombat(d, pmt)!;
+  eq(w.ataSpecials, 50, 'two type-5 specials: 10 x (3 + 2)');
+  eq(weaponForCombat(new Uint8Array([0, 1, 2, 0, 0, 0, 4, 3, 0, 0, 0, 0]), pmt)!.ataSpecials, 0, 'a special that is not type 5 adds nothing');
+  eq(weaponForCombat(new Uint8Array([1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0]), pmt), null, 'an armour is not a weapon');
+  eq(weaponForCombat(d, { getWeapon: () => undefined }), null, 'a weapon row that is not in the table');
+  eq(playerAttacker(0, { atp: 500, ata: 150, lck: 30 }, w).ata, 115, 'ATA = ROUND((650 + 150) x 0.1) + 30 + 50 / 10');
+  eq(playerAttacker(0, { atp: 500, ata: 150, lck: 30 }, { ...w, ataSpecials: 0 }).ata, 110, 'without the specials: 110');
+}
 
 // The compare candidate (m = 0): the displayed ATP with the weapon's range max swapped.
 eq(candidateAtp(40, null, null), 40, 'no candidate weapon: the displayed ATP');

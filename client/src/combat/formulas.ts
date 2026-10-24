@@ -39,7 +39,7 @@
 //   0x800 (dead). Otherwise flag 0x100 (miss / no damage).
 // The red/white number shown is round(d) of each hit box (FUN_0078a5e8).
 
-import { PLAYER_CLASS_ATTACK, splitAttack } from './playerstats.ts';
+import { ataSpecials, PLAYER_CLASS_ATTACK, splitAttack } from './playerstats.ts';
 
 export { PLAYER_CLASS_ATTACK };
 export type AttackType = 0 | 1 | 2; // normal, heavy, special (player +0x8a4)
@@ -144,6 +144,22 @@ export interface WeaponForCombat {
   atpMax: number;
   grind: number; // data1[3]
   ata: number; // ItemPMT weapon ata
+  // The special slots' ATA: 10 * the byte after each type-5 special (ApplyEquipmentBonuses_005d330c,
+  // dump 426168). 0 when the caller has no item data.
+  ataSpecials?: number;
+}
+
+// The combat input of an equipped weapon from its ItemData data1 (weapon class 0) and the ItemPMT
+// weapon row; null for a non-weapon or an unknown row. The same numbers for the local player and
+// for a remote player's copy (the remote's data1 is its PlayerInventory's worn weapon).
+export function weaponForCombat(
+  data1: Uint8Array | readonly number[] | null | undefined,
+  pmt: { getWeapon(a: number, b: number): { atpMin: number; atpMax: number; ata: number } | undefined } | null | undefined,
+): WeaponForCombat | null {
+  if (!data1 || data1[0] !== 0 || !pmt) return null;
+  const w = pmt.getWeapon(data1[1], data1[2]);
+  if (!w) return null;
+  return { atpMin: w.atpMin, atpMax: w.atpMax, grind: data1[3], ata: w.ata, ataSpecials: ataSpecials(data1) };
 }
 
 // Player attacker stats (see combat/playerstats.ts for the exe evidence). The saved ATP is the
@@ -151,8 +167,9 @@ export interface WeaponForCombat {
 // class range and the weapon's range are NOT in it. The variance (+0x2ce = rmax - rmin) and the
 // equipment ATP (+0x31c = atp_range_min, the class min + the weapon min) come from the class table
 // and the equipped weapon, so the roll range is [base + rmin, base + rmax]. ATA = ROUND((class
-// min_ata + character ATA) * 0.1) + weapon ATA: the exe's total_ata (dump 746024) multiplies
-// ata_range_min + stats->ata by 0.1, and the weapon's ata_range_min part is ata * 10 (exact).
+// min_ata + character ATA) * 0.1) + weapon ATA + special-slot ATA / 10: the exe's total_ata (dump
+// 746024) multiplies ata_range_min + stats->ata by 0.1, and the weapon's ata_range_min part is
+// ata * 10 + the specials (10 * each type-5 byte, dump 426168), so both are exact in ATA units.
 export function playerAttacker(
   charClass: number,
   stats: { atp: number; ata: number; lck: number },
@@ -164,7 +181,7 @@ export function playerAttacker(
     atp: split.base,
     atpSpread: split.variance,
     equipAtp: split.rmin,
-    ata: Math.round((cls[2] + stats.ata) * 0.1) + (weapon?.ata ?? 0),
+    ata: Math.round((cls[2] + stats.ata) * 0.1) + (weapon?.ata ?? 0) + (weapon?.ataSpecials ?? 0) / 10,
     lck: stats.lck,
     isPlayer: true,
   };

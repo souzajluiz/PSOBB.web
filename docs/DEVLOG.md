@@ -18260,3 +18260,40 @@ Two ROADMAP items: the Pioneer 2 open question, and the "remote players' Resta h
 - The S27 under-body's second arc source: `create_gal_gryphon_lightning_effect_beams` (0x004a9f44 is the beam object's update, called from the S27 setup's two objects 0x004a9de0): not traced to the render.
 - The Derolle +0x60 / +0x48 on the player class and the radius / power of the area hit.
 - Not in Chrome: the ring and the under-body arc have not been seen in the browser.
+## 2026-10-23: the ATP model everywhere: the special-slot ATA, the remote attacker's weapon, the 6x30 stat block
+
+**Premise (the entry "combat: the saved ATP is the base"), checked against the exe.** The four items of the list, one by one:
+
+**1. Weapon special-slot ATA (ported).** `ApplyEquipmentBonuses_005d330c` (dump 426168) builds the weapon's ATA range: `param_2[2] = pmt ata * 10 + param_2[2]`, then for each of the three special slots (bytes 6..11) with a byte `== 5` it adds `(byte * 4 + byte) * 2`, which is `10 * the next byte`. So `ata_range_min` gets `ata * 10 + specials`, and the total ATA is `ROUND((ata_range_min + stats->ata) * g_AttackStatMultiplier)` (the same blend the entry above settled). The combat ATA had the `ata` part only.
+- `combat/playerstats.ts`: `ataSpecials` is exported (it was private; the compare list already used it).
+- `combat/formulas.ts`: `WeaponForCombat.ataSpecials` (optional, 0 when omitted); `playerAttacker` adds `ataSpecials / 10` (a multiple of 10, so exact; the ROUND is shift-invariant). New `weaponForCombat(data1, pmt)`: the one place that turns a worn weapon's data1 and the ItemPMT row into the combat input (weapon class 0, grind = data1[3], the specials from the same bytes).
+- `render/combat.ts` `attackerStats` (the local player) uses it. The local ATA of a Saber with two type-5 specials (30 + 20) rises by 5 at the 0.1 blend.
+
+**2. Remote attacker's weapon (ported).** `combat/pvp.ts` `remoteAttacker(charClass, stats, weapon)`: the weapon goes through `playerAttacker`, so the range is `[base + class min + weapon min, base + class max + weapon max]` with the weapon min / max `atp + 2 x grind`, the same as the local player. The weapon comes from the remote's worn weapon, `LobbyPlayer.weapon` (data1, kept in step with that player's 6x25 / 6x26 by `net/game.ts` `equippedWeaponOf`), through `weaponForCombat(remote.weapon, pmtSync)` in `onRemoteStrikeTargets`. No weapon known = the class range only (ASSUMED: the bare-hand case; the exe has no other source for the remote's weapon).
+
+**3. 6x30 level-change stats (checked; the displays follow).** `UpdatePlayerStatsAndLevelMessage_006928e4` (dump 574022):
+- Other players (the branch where the player's `unknown_flags_invincibility` (+0x32c) is not 1): `battleparams_stats` (player +0x2b4, the stat block, the same block the save and the 6x70 carry) takes the command's `atp, mst, evp, hp, dfp, ata` directly. Then `unknown_set_total_stats` (dump 745936) recomputes the totals (max HP / TP from `hp` / `mst` + the level, `base_atp`, `total_ata`, the spread), and HP / TP are refilled on a field. The command has no LCK; its level is `unknown_hp_mst_modifier`.
+- The local player (flag 1): `HandleInvincibilityAndEquipmentReset_00692c14` (dump 574143) levels up from the EXP and the level table (`ApplyCharacterStatAllocation_00692e84`, dump 574274): the stat block is reset to the class's battleparams row and the level rows are replayed, with the class maxima (`g_ClassMaxStats`) as the cap. The command's stat values are not written for this branch.
+- The port: the local branch is `PlayerProgression.levelUp` (incremental, the level table's rows, the same numbers). The stats are written back to the snapshot's disp (+0), the save and the inventory's materials by `storeProgression`, so the attack (`attackerStats`), the status window and the inventory panel (`displayedStats`) follow. The HP / TP refill is in `onChangeLevel`.
+- The port's remote branch was the gap: `onChangeLevel` set the level and HP stat for the other player but not its combat stats, so a remote attacker kept the 6x70 ATP / EVP / DFP / ATA from before the level-up. Now `applyLevelChangeStats` (`combat/pvp.ts`) writes the four into `other.combatStats` (LCK kept, it is not in the command).
+- Checked: the level table (newserv `level-table-v4.json`) has no LCK delta on any level, and no class's level rows reach its class maximum (`g_ClassMaxStats` / `CLASS_MAX_STATS`, all 12 classes, levels 1..199). So the replay's cap and the port's incremental sum give the same numbers with this table; the cap is not ported (no effect here).
+- ASSUMED: the flag at +0x32c is the local player's (`HandleInvincibilityAndEquipmentReset` tests `param_1 + 0x32c == 1`, and the port's comment already names the local player for it). The exe's local branch returns early unless `is_current_map_safe()` (dump 574143); the port levels on every map (not traced).
+
+**4. `quest/battleoverlay.ts`, `quest/cmodeoverlay.ts` (no change: the premise is wrong).** Both read `b = table.base[cls]`, which is the level table's base row: the class's battleparams row (`GetPlayerCharacterBpStats_006ac950`), the same row `apply_base_stats` (dump 572006, lines 572201..572208) copies into the stat block before it adds the level rows. So `b.atp` is the stat block's base, not a total. The overlays write `out.stats` (the stat block) and the totals come from the displayed-stats path (`displayedStats`, `UpdatePlayerDisplayStats` / `unknown_set_total_stats`), as for the save. The exe's replay also takes ESP 0x28 (40), which the overlays set. The cap of the exe's replay (see 3) has no effect with this table.
+
+**Tests.**
+- `tests/playerstatsatp.test.ts` (25/25, new block: the specials' sum, a non-5 special, an armour is not a weapon, an unknown row, ATA 115 with the specials and 110 without).
+- `tests/pvp.test.ts` (ALL PASS, new blocks: the remote Saber with grind 10: rmin 65, spread 20, ATA 112 (bare 77); an armed remote hits harder than a bare one; the 6x30 writes atp / evp / dfp / ata and keeps LCK; no 6x70 = nothing).
+- Also pass: `combat` (5852), `combatdepth` (836), `playerstats`, `shop`, `items`, `level` (88/88), `party`, `buffs`, `fieldhud`. `cd client && npx tsc --noEmit -p .` clean (Node 24). The worktree's `client/node_modules` and `vendor` are symlinks to the main checkout for the run and are removed before the commit.
+- Not run: `cmode` / `battle` skip the overlay checks (no `PlyLevelTbl.prs` here, the test says SKIP); Playwright (per the brief).
+
+**ASSUMED:**
+- The remote's weapon is the one in its 6x25 / 6x26 mirror (`LobbyPlayer.weapon`); no weapon known = bare-hand.
+- The flag at +0x32c is the local player's marker (see 3).
+- The remote attack uses the same weapon range and ATA as the local player (the exe's hit check has no separate remote path: the victim runs the attacker's stat block, the entry "the saved ATP is the base").
+- The newserv level table's base rows are the exe's battleparams rows (`table.base` = `GetPlayerCharacterBpStats_006ac950`, the same numbers; the table file is the source, not the exe's data block).
+
+**Left:**
+- The local 6x30 branch's `is_current_map_safe()` gate (the port levels on every map) and the exe's replay order (the material gains are re-added after the level rows; the port keeps them by incremental sums).
+- The class-maximum cap of the level rows is not ported (no effect with the shipped table; it would matter for a table with larger rows).
+- The remote's HP / TP after a 6x30 (the refill follows the party window's `hpStat`, not a remote combat HP).
