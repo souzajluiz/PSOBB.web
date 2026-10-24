@@ -27,7 +27,7 @@ import { se } from '../audio/se.ts';
 import type { CharacterFile } from '../net/charfile.ts';
 import { FloorItemLayer } from './flooritems.ts';
 import { FieldHud } from './fieldhud.ts';
-import { doorIcon, raderIconObject, radToBams, type Icon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
+import { doorIcon, komoVariant6Icon, raderIconObject, radToBams, type Icon, type MinimapPlayer, type RaderHide, type RaderIconObject } from '../classic/minimap.ts';
 import { CollisionWorld } from './collision.ts';
 import { CombatView } from './combat.ts';
 import type { WeaponReach } from '../combat/weaponaim.ts';
@@ -249,6 +249,7 @@ export class GameView {
         forcedIcons: () => this.combat.minimapIcons(),
         switchOn: (flag) => this.fieldObjects?.switchOn(flag) ?? false,
         doorIcons: () => this.doorMinimapIcons(),
+        komoIcons: () => this.komoMinimapIcons(),
         cameraYaw: () => {
           const v = this.view?.cameraView();
           return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
@@ -739,6 +740,14 @@ export class GameView {
   private doorMinimapIcons(): Icon[] {
     const doors = this.fieldObjects?.doors ?? [];
     return doors.filter((d) => !d.city).map((d) => doorIcon(d.x, d.z, radToBams(d.yaw), d.state === 0));
+  }
+
+  // The Komo variant 6 objects as minimap icons (Episode 2 only: the exe's
+  // icon call is behind g_CurrentEpisode == 2). The colour is the state the
+  // object had at the start of the frame (render/fieldobjects.ts stepKomo).
+  private komoMinimapIcons(): Icon[] {
+    if (this.episode() !== 2) return [];
+    return (this.fieldObjects?.komos ?? []).map((k) => komoVariant6Icon(k.value, k.shown, radToBams(k.yaw), k));
   }
 
   // Where the players on the local player's floor stand (the NPCs' collision).
