@@ -142,8 +142,12 @@ worktrees are left.
      tail, lancer, mines), the beast's movement, the controller's sub-states, form 2 (unreached
      in this build). The body stays at its spawn;
    - Tower / Epsilon not seen in Chrome (no enemies there);
-   - floors 1, 5, 7, 10 saw no state change in 10 s (their waves did not fire); a longer watch
-     per room is needed to see their FSMs;
+   - floors 1, 5, 7, 10: 2026-10-24 long watch per wave group (`client/e2e/ep2-floors-watch.spec.ts`,
+     DEVLOG "Episode 2 floors 1, 5, 7, 10: long watch"): floor 1 (25 groups) and floor 5 (11) run;
+     floor 7 partial (4 of 27), floor 10 not run (the run was stopped). OPEN: section-placed Gibbon /
+     Merilltas / Sinow groups stay in `spawn` (exe: 0x005690f8 leaves spawn on its first frame; not
+     traced); floor 5 group 5/3 and floor 1 group 20/1 idle after their trigger (range or stall, not
+     checked). Floors 7 and 10 still to finish;
    - the enemy motion archives ARE in `data.gsl` (the earlier "not on this Mac" note is stale), so
      the animation lengths of groups a / d are still stand-ins in the tests, not from the files
      (checked: every `bm_ene_*` / `bm_boss*` name the port uses is in the GSL); no wall / ground rays;

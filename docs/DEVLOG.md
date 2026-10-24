@@ -19038,3 +19038,61 @@ frames during DEMO_WARP0: 217 (rAF ticks in about 4 s); failed requests: 0; page
 **ASSUMED / open.** That thunk 0x006b4660 is the pad_dragon opcode (the 2026-10-21 entry's ASSUMED, not re-checked here). That the take-off gate is the port's `crossed(14)`: the exe's `FUN_007aaa30` also needs `+0xb0 & 4 == 0` (or `& 1`) and `FUN_007a9970 == 0`, which the port does not model for any frame-gated site. The stock quest opcode scan was not redone.
 
 **Checks.** `node tests/dragon.test.ts`: ok. `node tests/bossrooms.test.ts`, `tests/fieldbgm.test.ts`, `tests/enemyfsmcaves.test.ts`: pass. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean. Playwright not run (per the task).
+
+## 2026-10-24: Episode 2 floors 1, 5, 7, 10: long watch per wave group (partial, floors 7 and 10 open)
+
+HANDOFF to-do 2 asked why floors 1, 5, 7, 10 saw no FSM change in 10 s. The smoke spec placed the player on the first enemy, which is not inside the trigger of the room's wave. `client/e2e/ep2-floors-watch.spec.ts` (new) does one group at a time: per (room, wave) of the floor's set entries, a warp to the Lab (floor 0) and back, the player on the group's trigger object (o.dat type 8, radius from the object) when one of the group's type-1 wave events has one, else at the room's map section centre; then 30 s of FSM samples every 0.5 s. Account `webep2`, Vite on :5183 from the worktree (`PW_BASE_URL`).
+
+**Run:** stopped by the coordinator after 40 groups (floor 1: all 25, floor 5: all 11, floor 7: 4 of 27). Floor 10 not reached. No page error, no failed request, no console error in the 40 groups; no hang. Results: the spec's `ep2w {...}` lines (log) and `ep2-watch-summary.json` are written only at the end of a full run, so the table below is from the log lines.
+
+**Setup fix (env, not the port):** the worktree has no `vendor/` (not committed), so the BB key file (`/keys/default.nsk`) 404'd and the login stuck at the title ("key file default.nsk not found"). Run from a worktree, `vendor` must be a link to the main checkout's `web/vendor` (removed before commit).
+
+| floor | group (room / wave) | placed by | player room | event flags | enemies (type: states seen) | state changes |
+|---|---|---|---|---|---|---|
+| 1 | 10/1 | trigger | -1 | 0 -> 6 | RAG_RAPPY (chase, lunge, recover, wander), DIMENIAN (notice ... idle) | 32 |
+| 1 | 11/1 | trigger | 141 | 0 -> 6 | GRASS_ASSASSIN (chase, web, slash, idle) | 4 |
+| 1 | 20/1 | trigger (r 105) | -1 | 0 -> 6 | HILDEBEAR, GRASS_ASSASSIN, DIMENIAN: idle only | **0** |
+| 1 | 30/1 | trigger | 140 | 0 -> 6 | GRASS_ASSASSIN, RAG_RAPPY (wander) | 4 |
+| 1 | 40/1 | trigger | 40 | 6 -> 6 (already on) | RAG_RAPPY, GRASS_ASSASSIN, DIMENIAN | 32 |
+| 1 | 40/2, 40/3 | section (no event) | 40 | 0 | MONEST, POISON_LILY, LA_DIMENIAN, HILDEBEAR: idle | 0 |
+| 1 | 41/1 | trigger | 41 | 0 -> 6 | DIMENIAN (idle ... recover), HILDEBEAR | 19 |
+| 1 | 41/2, 41/3 | section (no event) | 41 | 0 | DIMENIAN, POISON_LILY, GRASS_ASSASSIN (emerge), HILDEBEAR | 0 |
+| 1 | 60/1 | trigger | 60 | 6 -> 6 (already on) | DIMENIAN (chase ... idle), POISON_LILY (track, bite, spit) | 14 |
+| 1 | 60/2 | section (no event) | 60 | 0 | RAG_RAPPY (wander), GRASS_ASSASSIN (emerge), POISON_LILY | 0 |
+| 1 | 61/1 | trigger | 61 | 6 -> 6 (already on) | POISON_LILY (bite, track, spit), MONEST | 11 |
+| 1 | 61/2 | section (no event) | 61 | 0 | HILDEBEAR (idle) | 0 |
+| 1 | 70/1, 70/2, 70/3 | trigger | 70 | 0 or 6 -> 6 | DIMENIAN, GRASS_ASSASSIN, LA_DIMENIAN, HILDEBEAR, POISON_LILY (idle, track, spit) | 9 / 4 / 19 / 22 |
+| 1 | 70/4 | trigger | 70 | 0 -> 6 | MONEST only (state '-') | 0 |
+| 1 | 91/1 | trigger | 5 | 6 -> 6 | MONEST only | 0 |
+| 1 | 92/1, 93/1, 94/1 | trigger | 92 / 93 / 94 | 0 -> 6 | LA_DIMENIAN, DIMENIAN, POISON_LILY | 52 / 20 / 50 |
+| 1 | 102/1 | trigger | 102 | 0 -> 6 | GRASS_ASSASSIN | 4 |
+| 1 | 140/1 | section (no event) | 140 | 0 | HILDEBEAR (idle) | 0 |
+| 1 | 164/1 | section (no event) | 164 | none | HILDEBEAR (idle) | 0 |
+| 5 | 2/1 | trigger | 1 | 0 -> 6 | ZOL_GIBBON (spot, wander) | 2 |
+| 5 | 2/2 | section (no event) | 2 | 0 | ZOL_GIBBON, UL_GIBBON: **spawn only** | 0 |
+| 5 | 4/1 | trigger | 4 | 6 -> 6 | SINOW_BERILL (rise, lost, home, spawn) | 42 |
+| 5 | 4/2 | section | 4 | 0 | SINOW_SPIGELL: **spawn only** | 0 |
+| 5 | 4/3 | trigger | 4 | 0 -> 6 | UL_GIBBON (spawn ... dodge), MERILTAS (spawn, under) | 16 |
+| 5 | 4/4 | section | 4 | 0 | ZOL_GIBBON: **spawn only** | 0 |
+| 5 | 5/1 | trigger | 5 | 6 -> 6 | SINOW_SPIGELL (fade, drop, lost, appear) | 3 |
+| 5 | 5/2 | section | 5 | 0 | SINOW_SPIGELL: **spawn only** | 0 |
+| 5 | 5/3 | trigger | 5 | 0 -> 6 | SINOW_BERILL: idle | **0** |
+| 5 | 5/4 | section | 5 | 0 | SINOW_BERILL: **spawn only** | 0 |
+| 5 | 6/1 | trigger | 5 | 0 -> 6 | GEE (drop, idle) | 4 |
+| 7 | 1/1 | trigger | 1 | 0 -> 6 | GEE (drop, idle, alert, climb, melee, lost) | 13 |
+| 7 | 2/4 | trigger | 2 | 0 -> 6 | UL_GIBBON (spawn ... dodge) | 14 |
+| 7 | 2/5 | section | 2 | 0 | ZOL_GIBBON: **spawn only** | 0 |
+| 7 | 2/3 | section | 2 | 0 | MERILTAS: **spawn only** | 0 |
+
+Floor 1 totals: 14 groups changed; 3 with a trigger but no change (20/1 idle, 70/4 and 91/1 Monest only); 7 section-placed groups with no wave event (no change, as expected: nothing starts them); 164/1 no event. Floor 5: 5 changed, 1 trigger group idle (5/3), 5 section groups stuck in `spawn`. Floor 7: 2 changed, 2 section groups stuck in `spawn`; 23 groups not run. Floor 10: not run.
+
+**Open stalls (not fixed, not yet explained):**
+- Gibbon / Merilltas / Sinow Spigell / Sinow Berill enemies in section-placed groups stay in `spawn` for 30 s. The exe's Gibbon spawn (0x005690f8, `enemyfsmep2b.ts` header) goes to state 1 or 2 on its first frame, so the port's tick is not reaching these brains, or they are not built as wave enemies. Not traced; the next step is to log the brain class and whether `ai.tick` runs for them.
+- 5/3 (Sinow Berill, idle after its trigger) and 20/1 (HILDEBEAR / GRASS_ASSASSIN / DIMENIAN idle, trigger radius 105): may be detection range (the player stopped 5 units above the trigger); not checked.
+- Monest (`state '-'`) is driven by its spawner, not `ai.state`, so the sample cannot show it.
+
+**Caveats found while reading the data:**
+- A fresh warp does not reset wave events: FloorWaves keeps the flags of a floor for the whole session (as the exe does), so some groups already read `6` before the player touched the trigger (40/1, 60/1, 61/1, 70/1-3 on floor 1). Groups are not independent; the order matters.
+- The trigger's `fired` flag and the placement: 14 of 40 trigger placements read `playerRoom` -1 (the trigger point is outside every section circle). The wave still started (the 6x67 path does not check the room), so the room used for placement is the section circle, not the trigger's.
+
+**Checks:** `client/node_modules/.bin/tsc --noEmit -p client` clean (Node 24). The spec is not in the client tsconfig (playwright compiles it). No source fix in this pass.
