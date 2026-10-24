@@ -85,6 +85,8 @@ export class FieldScreen implements Screen {
     this.game.on('wordSelect', (clientId, message) => this.showWord(clientId, message));
     // The team chat window (F9 / F10) and its sender name (classic/teamchat.ts).
     this.chat.team = view.teamChat;
+    // The Home menu's Log Window pages this chat log (render/fieldhud.ts, classic/fieldmenu.ts).
+    view.chatLog = this.chat.log;
     this.chat.teamSender = () => this.game.playerName(this.game.selfId);
     view.inputBlocked = () => this.chat.open || this.quick !== null;
     // The chat shortcuts (Shift+F or the F keys in the chat form, render/fieldhud.ts key()).
@@ -201,7 +203,11 @@ export class FieldScreen implements Screen {
       }
       return;
     }
-    if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {
+    // The End key (role 14 = quickmenu) opens the quick menu only while the action palette is
+    // flipped (Ctrl): unknown_handle_quickmenu tests Player_CheckPaletteFlipState (dump 682545,
+    // 558030), so the manual's Ctrl+End is the chord. ASSUMED: the lobby's End (lobby.ts) is not
+    // gated here, and the flip-only path that holds a palette key (g_KeyboardSharedState[0xf]) is not read.
+    if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat && this.view.paletteFlipped()) {
       e.preventDefault();
       this.openQuickMenu();
       return;

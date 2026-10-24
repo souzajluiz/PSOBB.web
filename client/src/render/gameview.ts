@@ -54,6 +54,7 @@ import { serverUrl } from '../net/server.ts';
 import { pioneer2ReturnArrival } from '../net/telepipe.ts';
 import { build6x83 } from '../quest/battle.ts';
 import type { TeamChat } from '../classic/teamchat.ts';
+import type { ChatLog } from '../classic/chat.ts';
 
 const BAMS_TO_RAD = (Math.PI * 2) / 0x10000;
 
@@ -136,6 +137,8 @@ export class GameView {
   private labels: boolean;
   // The team chat window (classic/teamchat.ts), shared with the lobby; null without one.
   readonly teamChat: TeamChat | null;
+  // The chat log the Home menu's Log Window pages; set by the classic field (classic/field.ts).
+  chatLog: ChatLog | null = null;
 
   constructor(
     viewer: MapViewer,
@@ -230,6 +233,7 @@ export class GameView {
     this.hud = new FieldHud(viewer, this.files, {
       ...character,
       teamChat: this.teamChat,
+      chatLog: () => this.chatLog,
       items: this.items,
       music: this.field.counterMusic(),
       area: () => this.current?.area ?? 0,
@@ -834,6 +838,11 @@ export class GameView {
   // The local player's position and facing (radians), as drawn.
   selfPose(): { x: number; y: number; z: number; angle: number } | null {
     return this.view?.playerPose(this.game.selfId) ?? null;
+  }
+
+  // The action palette is flipped (Ctrl): the End key's quick menu needs it (classic/field.ts).
+  paletteFlipped(): boolean {
+    return this.hud.paletteFlipped();
   }
 
   // Head point of a player (speech balloons of `message` with a client id).

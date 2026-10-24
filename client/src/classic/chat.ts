@@ -163,6 +163,16 @@ export const LOG_PAGE_PX = 380;
 export const LOG_PAGE_ROWS = LOG_PAGE_PX / GAME_TEXT.lineHeight;
 export const LOG_FIT = Math.floor((LOG_WINDOW.h - 20 + 6) / GAME_TEXT.lineHeight);
 
+// The Log Window's page key: 'up' (PageUp), 'down' (PageDown), or null. Plain keys only: the
+// exe reads them with was_key_pressed_no_modifiers (dump 724833, and 143023 / 784044 for the
+// other lists), so a Shift, Ctrl or Alt held makes them no page key.
+export function logPageKey(e: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean }): 'up' | 'down' | null {
+  if (e.shiftKey || e.ctrlKey || e.altKey) return null;
+  if (e.key === 'PageUp') return 'up';
+  if (e.key === 'PageDown') return 'down';
+  return null;
+}
+
 // The rows the Log Window shows: `fit` rows that end `back` rows above the newest.
 export function logWindowRows(rows: readonly string[], fit: number, back: number): string[] {
   const end = Math.max(0, rows.length - back);

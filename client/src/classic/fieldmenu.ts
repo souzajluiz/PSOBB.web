@@ -38,6 +38,11 @@ import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
 import { FIELD_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
 import { HomeLeaves, HOME_LEAF_IDS, type HomeLeafHost } from './homeleaves.ts';
+import { ChatLog, drawLogWindow, logPageKey } from './chat.ts';
+import { menuKeyOf } from '../input/keyconfig.ts';
+
+// Home > Chat > Log Window (leaf 0x15, mainmenu.ts CHAT). The lobby opens it in lobby.ts menuAction.
+export const LOG_WINDOW_MENU_ID = 0x15;
 
 type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu | CustomizeMenu;
 
@@ -118,6 +123,8 @@ export interface FieldMenuEnv {
   // The Home menu's shared leaves (Guild Card, Symbol Chat, Simple Mail, Team Member List, Team Info);
   // null when the field has no session (classic/homeleaves.ts).
   home?: () => HomeLeafHost | null;
+  // The chat log the Log Window shows (ChatLine.log); null with no chat (classic/chat.ts).
+  chatLog?: () => ChatLog | null;
 }
 
 export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, QuestBoardTextures {
@@ -131,6 +138,8 @@ export class FieldMenu {
   // The shared Home leaves (classic/homeleaves.ts): Guild Card, Symbol Chat, Simple Mail, Team lists.
   private home: HomeLeaves;
   private leaf: Leaf | null = null;
+  // The Log Window is up (leaf 0x15): Cancel / Decide close it, PageUp / PageDown page it.
+  private logWindow = false;
   private env: FieldMenuEnv;
   // The leaf's windows open and close with the list windows' animation
   // (classic/windowanim.ts): fade in, then the 4-frame close about the
@@ -205,6 +214,7 @@ export class FieldMenu {
 
   close(): void {
     this.closeLeaf();
+    this.logWindow = false;
     this.home.close();
     this.areaMap?.anim.close();
     this.questBoard?.close();
@@ -248,6 +258,14 @@ export class FieldMenu {
   // ChatShortcutMenuWindow_Constructor_00756ff4) is in no menu table and no
   // caller passes it in this build, so it is not opened here.
   private open(id: number): void {
+    if (id === LOG_WINDOW_MENU_ID) {
+      // handle_player_menu_select: the Log Window; the menu's panel hides while it is up (mainmenu.ts).
+      if (this.env.chatLog?.()) {
+        this.logWindow = true;
+        this.menu.leafOpen = true;
+      }
+      return;
+    }
     if (HOME_LEAF_IDS.has(id)) {
       if (this.home.openLeaf(id)) this.menu.leafOpen = true;
       return;
@@ -331,6 +349,22 @@ export class FieldMenu {
   }
 
   key(e: KeyboardEvent): void {
+    if (this.logWindow) {
+      // The same handler as the lobby's Log Window (lobby.ts key(), ChallengePlayerListWindow_HandleInput_00752238).
+      const k = menuKeyOf(e);
+      if (k === 'cancel' || k === 'decide') {
+        this.logWindow = false;
+        this.menu.leafOpen = false;
+        return;
+      }
+      const page = logPageKey(e);
+      const log = this.env.chatLog?.();
+      if (page && log) {
+        e.preventDefault();
+        log.page(page === 'up');
+      }
+      return;
+    }
     if (this.home.open) {
       this.home.key(e);
       return;
@@ -376,6 +410,9 @@ export class FieldMenu {
   // the Area Map, the Quest Board and the leaf windows move with the bottom.
   draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, tex: FieldMenuTextures, extra: number, bottom = 0): void {
     this.menu.draw(ctx, skin, tex.menu, bottom);
+    // The Log Window is at its own place (classic/chat.ts LOG_WINDOW), not on the bottom band.
+    const log = this.logWindow ? this.env.chatLog?.() : null;
+    if (log) drawLogWindow(ctx, skin, log);
     ctx.save();
     ctx.translate(0, bottom);
     this.drawBottom(ctx, skin, tex, extra);
