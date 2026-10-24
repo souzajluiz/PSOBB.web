@@ -19,7 +19,7 @@ import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
 import { rowsAimHeight, rowsRadius } from '../client/src/combat/techfire.ts';
-import { DerolleEmitter, parseDerolleBlock, ROCK_DEBRIS_BLOCK, STALACTITE_DEBRIS_TEMPLATE } from '../client/src/classic/particles.ts';
+import { DerolleEmitter, msvcRand, parseDerolleBlock, ROCK_DEBRIS_BLOCK, STALACTITE_DEBRIS_TEMPLATE, yawPoint } from '../client/src/classic/particles.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -359,6 +359,27 @@ check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag
   cl.update();
   const drawn = cl.drawList();
   check(drawn.length === 1 && Math.abs(drawn[0].ang[0] - Math.PI / 2) < 1e-9 && drawn[0].pos.length === 3, 'drawList: the angle is in radians (16384 = a quarter turn)');
+  // The chunk's scale is the block's +0x60 (0.4 for the rock); flag 4 (the rock's 14) gives the life as alpha and the blend.
+  const fresh = new DerolleEmitter({ ...rock, origin: [0, 0, 0], floor: -1000, count: 1 }, half).drawList()[0];
+  check(fresh.scale === rock.scale && fresh.blend === true && fresh.alpha === 1 && fresh.model === rock.model, 'drawList: scale = the block scale 0.4, flag 4 blends with alpha = life (1 at the start)');
+  check(drawn[0].alpha === 0, 'drawList: after one update the life is 0 (flag 4 counts it down), so the chunk is drawn at alpha 0');
+  const noFlag4 = new DerolleEmitter({ ...rock, flags: 10, origin: [0, 0, 0], floor: -1000, spin: [0, 0, 0], life: 0, count: 1 }, half);
+  const nf = noFlag4.drawList()[0];
+  check(nf.blend === false && nf.alpha === 1, 'drawList: without flag 4 the chunk is not blended and has alpha 1');
+  const fading = new DerolleEmitter({ ...rock, origin: [0, 0, 0], floor: -1000, spin: [0, 0, 0], life: 0, count: 1 }, half);
+  fading.update();
+  check(fading.drawList()[0].alpha === 0 && fading.particles[0].life === 0 && fading.drawList().length === 1, 'the life counts down to 0 and the chunk is still drawn, at alpha 0, while the emitter lives');
+  // The exe's rand: MSVC rand (state * 0x343fd + 0x269ec3, bits 16..30): seed 1 gives 41, 18467, 6334.
+  const crt = msvcRand(1);
+  check(crt() === 41 && crt() === 18467 && crt() === 6334, 'msvcRand is the CRT sequence (seed 1: 41, 18467, 6334)');
+  // The rock's points turn by its yaw (Ry, no translation): a quarter turn maps (12, 7, 12) to (12, 7, -12).
+  const q = yawPoint([12, 7, 12], Math.PI / 2);
+  check(Math.abs(q[0] - 12) < 1e-9 && q[1] === 7 && Math.abs(q[2] + 12) < 1e-9 && yawPoint([12, 7, 12], 0).join() === '12,7,12', 'yawPoint: the point turns about +Y (x = c x + s z, z = -s x + c z); yaw 0 leaves it');
+  const rfy = new FieldObjects({ scene: { add() {}, remove() {} } } as any, [{ ...rockPlaced[0], yaw: Math.PI / 2 }] as any, { episode: 1, floor: 0, area: 1 }, rflags);
+  rfy.debrisRand = half;
+  rfy.tickRocks(1);
+  const turned = (rfy as any).debris as Array<{ emitter: DerolleEmitter }>;
+  check(turned.length === 6 && turned[0].emitter.particles[0].pos.join() === '22,9,-16' && turned[1].emitter.particles[0].pos.join() === '23,18,10', 'the rock at yaw pi/2: the emitters start at the rock plus the turned points (22,9,-16) and (23,18,10)');
 }
 
 if (failures) {

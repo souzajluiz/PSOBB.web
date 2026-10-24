@@ -67,7 +67,9 @@ import { OBJECT_BOX_FLAGS, type CollisionWorld, type Obstacle } from './collisio
 import { objectModelFor, type ObjectCollision, type ObjectModelContext } from '../formats/objectmodels.ts';
 import {
   DerolleEmitter,
+  msvcRand,
   parseDerolleBlock,
+  yawPoint,
   ROCK_DEBRIS_BLOCK,
   ROCK_DEBRIS_CHUNK,
   ROCK_DEBRIS_POINTS,
@@ -803,8 +805,9 @@ export class FieldObjects {
   private models: ObjectLayer | null;
   // The live debris emitters (DerollePartObject, classic/particles.ts) with the BML of their chunks.
   private debris: Array<{ emitter: DerolleEmitter; bml: string }> = [];
-  // rand() of the emitters' InitSystem, 0..32767 (the exe's 0x008587a5; ASSUMED range). A test may replace it.
-  debrisRand: () => number = () => Math.floor(Math.random() * 32768);
+  // rand() of the emitters' InitSystem: the CRT rand 0x008587a5 (0..32767), seeded here (ASSUMED seed: the exe's
+  // seed is not traced). A test may replace it.
+  debrisRand: () => number = msvcRand(1 + Math.floor(Math.random() * 0x7ffffffe));
   // Quest flags of the current difficulty (Vol Opt's seal door reads 0x2c..0x2f).
   questFlag: (flag: number) => boolean = () => false;
   private seals = new Map<number, SealDoor>();
@@ -827,7 +830,7 @@ export class FieldObjects {
   onStalactiteHit: (damage: number, at: { x: number; z: number }) => void = () => {};
   private stalactites = new Map<number, FallingStalactite>(); // object index -> stalactite
   private shattered = new Set<number>(); // object indices whose box is off and model hidden (the shatter, the break)
-  private rocks = new Map<number, { flag: number; state: number; at: { x: number; y: number; z: number } }>(); // destructible rocks: switch flag, state (+0xb4), world point
+  private rocks = new Map<number, { flag: number; state: number; at: { x: number; y: number; z: number }; yaw: number }>(); // destructible rocks: switch flag, state (+0xb4), world point, yaw (+0x60)
 
   constructor(
     viewer: MapViewer,
@@ -856,7 +859,7 @@ export class FieldObjects {
       if (p.entity.type === ROCK_BREAKABLE_TYPE) {
         // The rock's switch flag is param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
         const [rx, ry, rz] = p.world;
-        this.rocks.set(p.entity.index, { flag: rockSwitchFlag(p.entity.params[3] ?? -1), state: 0, at: { x: rx, y: ry, z: rz } });
+        this.rocks.set(p.entity.index, { flag: rockSwitchFlag(p.entity.params[3] ?? -1), state: 0, at: { x: rx, y: ry, z: rz }, yaw: p.yaw });
       }
     }
     for (const d of this.all.doors) {
@@ -1154,7 +1157,7 @@ export class FieldObjects {
         }
         if (r.flag >= 0 && r.flag < 0x100 && this.flags.has(r.flag)) {
           r.state = 1;
-          this.breakRockEffects(r.at);
+          this.breakRockEffects(r.at, r.yaw);
         }
       }
     }
@@ -1166,17 +1169,19 @@ export class FieldObjects {
   // call 0x00814298 takes the id as its first argument), then the particles 0x45 and 0x46 at the object's position
   // (create_particle_effect 0x0050b510 at obj+0x38), then the vtable +0x38 slot 0x006759d4: the six debris emitters.
   // The model hides on the next tick (state 1 path).
-  private breakRockEffects(at: { x: number; y: number; z: number }): void {
+  private breakRockEffects(at: { x: number; y: number; z: number }, yaw: number): void {
     this.onSe(ROCK_BREAK_SE, at);
     for (const id of ROCK_BREAK_PARTICLES) this.onParticles(id, at);
-    this.spawnRockDebris(at);
+    this.spawnRockDebris(at, yaw);
   }
 
   // The rock's debris (0x006759d4): the block 0x0093aa40 once per point of 0x009c9a00, the emitter's origin at the
-  // rock's place plus the point (ASSUMED: no yaw), the floor at the rock's y, the chunk = model 1 / texture 1.
-  private spawnRockDebris(at: { x: number; y: number; z: number }): void {
+  // rock's place plus the point turned by the rock's yaw (0x0082d8bc / 0x0082eab8 / 0x0082ebac), the floor at the
+  // rock's y, the chunk = model 1 / texture 1. The yaw is the placement's (ASSUMED equal to the exe's obj+0x60).
+  private spawnRockDebris(at: { x: number; y: number; z: number }, yaw: number): void {
     const base = parseDerolleBlock(ROCK_DEBRIS_BLOCK);
-    for (const [px, py, pz] of ROCK_DEBRIS_POINTS) {
+    for (const point of ROCK_DEBRIS_POINTS) {
+      const [px, py, pz] = yawPoint(point, yaw);
       const block: DerolleBlock = {
         ...base,
         origin: [at.x + px, at.y + py, at.z + pz],

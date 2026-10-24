@@ -639,7 +639,7 @@ export interface DerolleBlock {
   count: number; // [12] int: particles (more than 8 and InitSystem fails)
   life: number; // [13] int: delay in ticks before a particle's own life counts
   floor: number; // [14] float: the bounce height (the object's y, 0x006759d4 / 0x00679b70)
-  scale: number; // [15] float: obj+0x60 (ASSUMED: the chunk's tint, see drawList)
+  scale: number; // [15] float: obj+0x60, the chunk's uniform scale (0x0082fa0c; 0.4 for the rock, 1.0 for the stalactite)
   model: number; // [16] int: archive model index (FUN_005b8610 of the object's archive)
   texture: number; // [17] int: texture list index (FUN_005b8624)
   flags: number; // [18] int: bit 2 runs the life counter, bit 1 bounces, bits 8 / 4 / 0x10 choose the draw
@@ -683,12 +683,19 @@ export interface DerolleParticle {
   delay: number; // +0x34
 }
 
+// One chunk to draw. The exe's draw (0x0064487c / 0x00644718 per particle): push the matrix, translate to the
+// particle (0x0082d838), rotate by the three BAMS angles (0x0083a314: x = +0x18, y = +0x1c, z = +0x20, applied
+// as M = M * Ry * Rx * Rz), scale uniformly by the object's +0x60 (0x0082fa0c, `scale`), draw the model, pop.
+// `alpha` is the particle's life when the object's flag 4 is set (the colour {life, 1, 1, 1} at 0x0082d710),
+// else 1; `blend` is the flag-4 blend state (0x810: the alpha blend stays on for the chunk).
 export interface DerolleChunk {
   pos: [number, number, number];
-  ang: [number, number, number]; // radians
+  ang: [number, number, number]; // radians, Euler order 'YXZ' (three.js): R = Ry * Rx * Rz
+  scale: number;
+  alpha: number;
+  blend: boolean;
   model: number;
   texture: number;
-  tint: number;
 }
 
 // One DerollePartObject. `rand` returns 0..32767; InitSystem draws it six times per particle, in the order
@@ -787,18 +794,40 @@ export class DerolleEmitter {
   }
 
   // The chunks drawn this frame: every particle of a live object (the draw loops over the count, not over
-  // the alive ones). The draw's exact transform is not traced: the chunk is at its position with its three
-  // angles (Euler XYZ, ASSUMED), unscaled, tinted by `scale` (ASSUMED from the 0.4 / 1.0 colour argument).
+  // the alive ones). Flag 4 sets the particle's colour alpha to its life and the blend state; the draw
+  // path of flags 0x10 / 8 (which model draw runs) is not traced beyond that, the model is the same.
   drawList(): DerolleChunk[] {
     if (this.dead) return [];
+    const flag4 = (this.block.flags & 4) !== 0;
     return this.particles.map((p) => ({
       pos: [p.pos[0], p.pos[1], p.pos[2]],
       ang: [bamsToRad(p.ang[0]), bamsToRad(p.ang[1]), bamsToRad(p.ang[2])],
+      scale: this.block.scale,
+      alpha: flag4 ? p.life : 1,
+      blend: flag4,
       model: this.block.model,
       texture: this.block.texture,
-      tint: this.block.scale,
     }));
   }
+}
+
+// The point `p` turned about +Y by `yaw` (radians), the exe's rotation of the rock's six points: the matrix
+// Ry (0x0082d8bc, a column pass on the top: x' = c x + s z, z' = -s x + c z) applied to the point with no
+// translation (0x0082eab8). The yaw is the object's +0x60 (BAMS in the exe; ASSUMED the port's placement yaw).
+export function yawPoint(p: readonly [number, number, number], yaw: number): [number, number, number] {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return [c * p[0] + s * p[2], p[1], -s * p[0] + c * p[2]];
+}
+
+// The CRT rand() (0x008587a5, Visual C runtime): state = state * 0x343fd + 0x269ec3 (mod 2^32), the result
+// (state >> 16) & 0x7fff, so 0..32767. The seed is ASSUMED (the exe's seed is not traced).
+export function msvcRand(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 0x343fd) + 0x269ec3) >>> 0;
+    return (state >>> 16) & 0x7fff;
+  };
 }
 
 // BAMS (65536 = one turn) to radians, for any int (the spins wrap).
@@ -807,9 +836,9 @@ export function bamsToRad(a: number): number {
 }
 
 // The rock 0x0303 break (0x006759d4): the block 0x0093aa40 (19 dwords, read with tools/exedata.py) and the six
-// points at 0x009c9a00 (floats, stride 12, not ints). The points are offsets from the rock's place (ASSUMED: no
-// yaw; the exe multiplies them by a matrix built from obj+0x60 through 0x0082d8bc, not traced). Chunk 1 is the
-// rock's model 1 and texture list 1 (FUN_005b8610(1), FUN_005b8624(1)).
+// points at 0x009c9a00 (floats, stride 12, not ints). The exe pushes the identity, turns the point by the rock's
+// yaw (obj+0x60, 0x0082d8bc, then 0x0082eab8 on the point) and adds the rock's place (0x0082ebac): see yawPoint.
+// Chunk 1 is the rock's model 1 and texture list 1 (FUN_005b8610(1), FUN_005b8624(1)).
 export const ROCK_DEBRIS_BLOCK: readonly number[] = [
   0x3f733333, 0x3d8f5c29, 0x3ecccccd, 0, 0, 0, 0x40a00000, 0x40f00000, 0x40a00000, 1024, 256, 1024, 1, 30, 0, 0x3ecccccd, 0, 0, 14,
 ];

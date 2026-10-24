@@ -18180,3 +18180,43 @@ Two ROADMAP items: the Pioneer 2 open question, and the "remote players' Resta h
 - The exe's caller of `find_targets_for_weapons_and_techs`, to confirm the support cursor on Pioneer 2.
 - The Resta entity's visuals on the target (the port heals at the 6x48 and shows the float; no entity flies to the target).
 - The `some_bool` branch for a remote attacker, and the MST of a remote join (the save-layout copy).
+## 2026-10-23: debris draw per the exe (chunk transform, rock point yaw, CRT rand, stalactite record path)
+
+**What changed.**
+- `client/src/classic/particles.ts`: `DerolleChunk` now carries `scale` (the block's +0x60), `alpha` (the particle's life when flag 4 is set, else 1) and `blend` (flag 4); `drawList` fills them. `yawPoint` turns a rock point about +Y (0x0082d8bc / 0x0082eab8). `msvcRand` is the CRT rand (0x008587a5).
+- `client/src/render/fieldobjects.ts`: the rock's six points are turned by its yaw before the place is added (the yaw is the placement's); the default `debrisRand` is `msvcRand` with a random seed (ASSUMED seed).
+- `client/src/render/objectview.ts`: `drawChunks` sets the Euler order `YXZ`, the uniform scale, and the alpha / blend per chunk (`setChunkAlpha`). Each pooled chunk clones its materials, since `clone(true)` shares them.
+- `tests/objectcollision.test.ts` section 6c: the CRT sequence (41, 18467, 6334), `yawPoint`, the rock at yaw pi/2 (emitters at (22,9,-16) and (23,18,10)), the scale 0.4, the flag-4 alpha and blend, and the flag-4-clear chunk.
+
+**Exe evidence** (Ghidra decompile via `tools/ghidra/decomp.sh`; `exe.s` for the asm; `tools/exedata.py` for the constants):
+- Draw dispatch 0x006446f4: `0x829cc8(obj+0x68)` (texture list), then flags & 0x10 set -> vtable +0x28 (0x00644718), clear -> vtable +0x2c (0x0064487c). The rock and the stalactite have flags 14: the path is 0x0064487c, flag 8 set, flag 4 set.
+- That path (0x0064487c, the last branch): `af034c |= 0x810`, `0x0082d6fc(-1, 0x800)` (sets 0xaf0360 / 0xaf0364), then per particle: colour `{+0x30 life, 1, 1, 1}` through `0x0082d710` (0xaf0370..7c), `push` (0x0082d7b0), translate by the particle position (0x0082d838, the particle at +0x70 + i*0x38), rotate (0x0083a314), scale (0x0082fa0c), model draw (0x0082e1e8 with the model pointer obj+0x64), `pop` (0x0082da80), colour reset to `{0.5, 0, 0, 0}` (0x009ff9b0). Afterwards the render word and 0xaf0360 / 0xaf0364 are restored. The 0x0064487c flag-4-clear branch draws the same without the colour and the blend.
+- Matrix order (column-vector, the matrix is `M = M * ...` at each call): `M = M0 * T(pos) * Ry(+0x1c) * Rx(+0x18) * Rz(+0x20) * S(+0x60)`. 0x0083a314 takes the angles as x = edx = +0x18, y = param 3 = +0x1c, z = param 4 = +0x20; it applies the y block first, then x, then z, each as a right-multiply (columns 0 and 2 for y, 1 and 2 for x, 0 and 1 for z). So the vertex sees S, then Rz, then Rx, then Ry: three.js `rotation.order = 'YXZ'` with `(x, y, z)`.
+- Scale: 0x0082fa0c multiplies the three columns of the top by (obj+0x60) on all axes. Obj+0x60 is the block's [15]: 0.4 for the rock (0x0093aa7c), 1.0 for the stalactite template. So the "tint 0.4 / 1.0" of the brief is the scale, not a tint. The colour alpha is the life only.
+- Blend: 0x810 on the flag-4 path (no blend factors are set there). The 0x8011 path (flag 0x10) calls 0x00836248(1, 4, 5), which sets D3DRS_SRCBLEND (19) = table 0x00a219f8[4] = 5 (SRCALPHA) and DESTBLEND (20) = [5] = 6 (INVSRCALPHA). So the blend is the standard alpha blend.
+- rand: 0x008587a5 is the CRT `_rand`: state = state * 0x343fd + 0x269ec3, result (state >> 16) & 0x7fff. So the range is 0..32767; the ASSUMED range of the earlier entry is now traced.
+- Rock point yaw: the rock break 0x006759d4, per point: push the identity (0x0082d990 from 0x00a21740), `0x0082d8bc(0, obj+0x60)` (Ry by the BAMS angle obj+0x60), `0x0082eab8` (the point through the top's 3x3, no translation, in place), pop 1 (0x0082eb80), then `0x0082ebac` adds the point to the origin (obj +0x38, +0x3c, +0x40). The floor is obj+0x3c. So the origin is the place plus Ry(yaw) times the point.
+- Obj+0x60 comes from the set entry: the base init 0x007ba33c copies its argument's +0x1c into obj+0x60, and the argument is the creator's `record + 4` (the spawner passes `local_c + 2`), so the yaw is the entry's field at record+0x20. ASSUMED: that field is the entity's Y angle (BAMS), i.e. the port's placement yaw.
+- Stalactite +0x80: the set-record spawner `FUN_00810ae8` (the loop over the floor's 0x44-byte records) creates the object through the factory (the creator gets `record + 4`) and stores `obj+0x80 = record` (`piVar5[0x20] = local_c`), the record index is the record's short at +4. So every placed object has a record at +0x80.
+- The shatter 0x00679ac4 (vtable of the stalactite, called with the 0x800000 flag): with no record (+0x80 == 0) it runs `0x007b52ec(0, 1)`, `0x008113bc`, state 2, the dead bit, and the debris 0x00679b70. With a record it does NOT run the debris and changes no state: it reads the index (record +4 short, in 0..0xba0), sets the box-status word `DAT_00ab02bc[index*4] = 1` (the port's `joinSync` box-status table, `bsv`), and sends the 6x60 subcommand 0x0b (`0x007b5038`, a notify through `0x008003e0`, the value is the stack short, ASSUMED 1).
+
+**Ported:**
+- The chunk transform, the blend, the scale, the alpha (above).
+- The rock's point yaw and the CRT rand.
+
+**Not ported (decided here):**
+- The stalactite's record branch. A placed stalactite always takes it, so the port's local shatter (debris, hidden model, state 2) is the no-record branch the exe reaches only for objects with no record. Porting the record branch as the exe has it would remove the visible break for the player who shatters it, and the visible break for that case would then come from the 6x0B echo (the port's `recordObjectState` only stores the flags). That echo is not traced. So the port keeps its local shatter and the record branch stays open.
+
+**ASSUMED:**
+- The rock's yaw is the placement's yaw (the port's `p.yaw`, radians of the entity's Y angle plus the section's) = obj+0x60 in BAMS.
+- The rand seed (random per field); the exe's seed is not traced.
+- The model draw in the 0x0064487c path (0x0082e1e8) draws the same mesh as the port's `buildEnemy` clone (the model's own transforms are inside 0x0082e1e8, and the texture list is set by 0x0829cc8 before).
+- The colour is applied as the material's opacity (life); the exe's 0xaf0370 is a global read by the model draw, its consumer is not traced.
+- The value sent by 0x007b5038 is 1 (the stack short is not traced).
+
+**Checks:** `node tests/objectcollision.test.ts` (all pass, section 6c extended); `traps`, `collision`, `townfield`, `drops`, `fieldhud` pass (Node 24); `client` `tsc --noEmit` clean (the worktree got a `client/node_modules` symlink to the main checkout's install for this, removed after). Not run: Playwright (the optional screenshot was not taken), Chrome.
+
+**Left:**
+- The stalactite's record branch (box status 1, 6x60 0x0b notify, no debris) and how the 6x0B echo breaks the object on the receiving client (`handle_packet0x60_0xb_box_break`, not traced; the port's `recordObjectState` only stores the flags).
+- The 0x0064487c flag-8-clear branch (0x006449e5), and the 0x00644718 flag-0x10 path with 0x831758 (the model pass), are not checked against a live object (no debris object in the port has flag 0x10).
+- The visual check of the chunks in Chrome.
