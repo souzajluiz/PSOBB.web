@@ -4,6 +4,9 @@
 // 2D canvas laid over the game's 3D canvas, like render/warpmenu.ts.
 //
 // PsoBB.exe (Ephinea 1.25.13) behaviour kept here:
+//   - the action palette and the hotbar show on an unsafe map only (Pioneer 2 and
+//     the hubs show neither; classic/fieldmenu.ts paletteWindowsShown, the
+//     quick menu's hidden flag of the palette / hotbar windows);
 //   - the menu locks the player's input (DisablePlayerInputForMenu_006936ec,
 //     unknown_keyboard_enable_in_menu(0)): movement and the action palette
 //     get no keys while it is open, and the palette window hides
@@ -29,7 +32,7 @@ import { WindowAnim } from '../classic/windowanim.ts';
 import { anchorX } from '../classic/ingame.ts';
 import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
-import { FieldMenu, isSafeMap, type FieldMenuTextures } from '../classic/fieldmenu.ts';
+import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } from '../classic/fieldmenu.ts';
 import { equipProblems, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
 import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
@@ -774,11 +777,14 @@ export class FieldHud {
     const bands = bandsOf(f.vh, f.fill);
     ctx.setTransform(s, 0, 0, s, 0, 0);
     ctx.imageSmoothingEnabled = true;
-    if (this.palette && !this.menu.isOpen && !this.counter) {
+    // The action palette (GUI 0x20) and the hotbar (GUI 0x21) are shown on an unsafe map only
+    // (classic/fieldmenu.ts paletteWindowsShown): Pioneer 2 and the hubs show neither.
+    const paletteShown = paletteWindowsShown(this.opts.area());
+    if (this.palette && paletteShown && !this.menu.isOpen && !this.counter) {
       this.paletteHud.draw(ctx, this.tex.palette, { data: this.palette, itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, anchorX(PALETTE_POS.x, PALETTE_SIZE.w, extra), PALETTE_POS.y + bands.bottom);
     }
-    // The bottom hotbar (GUI 0x21 = (0, 442)): hidden with the menus (unknown_update_player_menu_hide_hotbar).
-    if (this.palette && !this.menu.isOpen && !this.counter) {
+    // The bottom hotbar (GUI 0x21 = (0, 442)): hidden with the menus (unknown_update_player_menu_hide_hotbar) and on a safe map.
+    if (this.palette && paletteShown && !this.menu.isOpen && !this.counter) {
       const slots = currentPalette(this.palette).hotbar;
       drawHotbar(ctx, this.tex.palette, slots, { itemCount: (i) => this.itemCount(i), trapCount: (t) => this.trapCount?.(t) ?? 0 }, HOTBAR_POS.x, hotbarY(false) + bands.bottom);
     }
