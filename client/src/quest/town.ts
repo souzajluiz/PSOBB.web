@@ -52,7 +52,7 @@ import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
-import { headSendDistance, NpcHead } from './npchead.ts';
+import { HEAD_STATE_CAST, headSendDistance, headTwoTech, NpcHead } from './npchead.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -774,6 +774,7 @@ export class QuestTown {
     const owner = { x: leader.position.x, y: leader.position.y, z: leader.position.z };
     head.pioneerUpdateState(owner);
     head.update({ npc, owner, leash, wall: (a, b, mask) => combat.npcWallBlocks(a, b, mask) });
+    if (head.state === HEAD_STATE_CAST) this.stepNpcTwoTech(slot, p, head);
     const dist = headSendDistance(head, npc);
     // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
     let send: 'walk' | 'run' | null = null;
@@ -794,6 +795,24 @@ export class QuestTown {
     // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id) at the head's
     // send target (SendMoveStart_007b298c / SendMove_007b29f0).
     if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);
+  }
+
+  // The head's state-2 cast (SinowberillHead_CastTechnique_007b2e20, quest/npchead.ts headTwoTech):
+  // each tick while the head is in state 2, the Foie family pick at the NPC's locked target. ASSUMED:
+  // the strong flag (B +0x90 & 0x1000, not modelled: false) and the need byte +0x53 (not traced: 0), so
+  // the roll decides and the cast is skipped for any roll above 0. The busy ticks are the cast's own.
+  private stepNpcTwoTech(slot: number, p: LobbyPlayer, head: NpcHead): void {
+    if (head.castTicks > 0) {
+      head.castTicks--;
+      return;
+    }
+    const ai = this.npcAttacks.get(slot);
+    const combat = this.view.combat;
+    if (!ai || ai.target === null || !combat) return;
+    const tech = headTwoTech(head.head34, false, Math.floor(Math.random() * 32768) / 32768 * 10, 0);
+    if (tech === null) return;
+    const ticks = combat.npcCastTechnique({ clientId: slot, charClass: p.charClass }, tech, [ai.target]);
+    if (ticks !== null) head.castTicks = ticks;
   }
 
   // The attack AI of the NPCs this client owns (SinowberillChallengePlayer_Update_007aefd4,
