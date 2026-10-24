@@ -39,6 +39,8 @@ import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { SLOT_WEAPON } from '../net/items.ts';
 import { equipSwap, type EquipActions } from './equipmenu.ts';
 import { drawListWindow, listKey } from './fieldwindows.ts';
+import { drawGameText, gameTextWidth } from './gametext.ts';
+import { VALUE_COLOR, type EquipStatRow } from './itemdetail.ts';
 import type { TechMenuEnv } from './techmenu.ts';
 import type { WindowSkin } from './stage.ts';
 import {
@@ -63,6 +65,7 @@ import {
   trapRows,
   twoHandedTabRows,
   type QuickRow,
+  type ToolCheckContext,
   type TrapDecision,
 } from './quickmenu.ts';
 
@@ -105,10 +108,16 @@ export interface QuickMenuEnv {
   tools: { use: (itemId: number) => void };
   // is_item_rare for an inventory item (ItemNames.isRare).
   isRare: (it: InventoryItem) => boolean;
+  // The tools' checker context (quickmenu.ts toolCheckerBits); null when there is no tab.
+  toolChecks: () => ToolCheckContext | null;
+  // The compare list's stat rows for a weapon row (its instance id), as the equipment stat panel
+  // draws them (itemdetail.ts equipStatRows); null when the item is not there.
+  compareRows: (instanceId: number) => EquipStatRow[] | null;
   // The traps tab.
   traps: QuickTrapEnv;
   // The technique order (the 19 technique ids the list shows). The swap writes it.
-  techOrder: { get: () => readonly number[]; set: (order: number[]) => void };
+  // commit (optional) runs when the menu closes: the field sends the order once per close.
+  techOrder: { get: () => readonly number[]; set: (order: number[]) => void; commit?: () => void };
 }
 
 // The default technique order (ASSUMED: the exe's starting order is not traced).
@@ -181,10 +190,12 @@ export class QuickMenu {
   private toolRows(): QuickRow[] {
     const c = this.env.character();
     if (!c) return [];
+    const checks = this.env.toolChecks();
+    if (!checks) return [];
     const listed = c.inventory.map((it) => ({
       it,
       instanceId: it.data.id,
-      facts: toolItemFacts(it.data.data1, this.env.isRare(it)),
+      facts: toolItemFacts(it.data.data1, this.env.isRare(it), checks),
     }));
     return twoHandedTabRows(listed).map((r) => ({ label: this.env.itemName(r.it), value: r.instanceId, enabled: true }));
   }
@@ -355,10 +366,31 @@ export class QuickMenu {
     }
     const pos = QUICK_MENU_GUI.list;
     drawListWindow(ctx, skin, pos.x, pos.y, QUICK_MENU_LIST_W, null, this.rows(), this.list.cursor, true, (it) => (it as QuickRow).color);
-    // The compare list (gui 2) is drawn empty: its stat rows are not ported (names only).
+    // The compare list (gui 2): its rows are the cursor weapon's six stats (ATP, DFP, MST, ATA,
+    // EVP, LCK), current then candidate, coloured as the equipment panel does.
     if (this.compare && this.tab === 0) {
       const cmp = QUICK_MENU_GUI.compareList;
       drawListWindow(ctx, skin, cmp.x, cmp.y, QUICK_MENU_LIST_W, null, [], 0, false);
+      const row = this.rows()[this.list.cursor];
+      const stats = row ? this.env.compareRows(row.value) : null;
+      if (stats) this.drawCompareRows(ctx, cmp.x, cmp.y, stats);
+    }
+  }
+
+  // The compare list's stat rows (UpdateEquipmentStatDisplay_007258dc, dump 689847): the label,
+  // the current value (white) and the candidate value (its colour; grey when not equippable).
+  // Row pitch 16 and the inset 6 are ASSUMED (the list's own element layout is not read).
+  private drawCompareRows(ctx: CanvasRenderingContext2D, x: number, y: number, rows: EquipStatRow[]): void {
+    const xl = x + 6;
+    const xr = x + QUICK_MENU_LIST_W - 6;
+    let py = y + 6;
+    for (const r of rows) {
+      drawGameText(ctx, `${this.env.text(11, r.label)}:`, xl, py, VALUE_COLOR.same);
+      const item = `→ ${r.item}`;
+      const cur = String(r.current);
+      drawGameText(ctx, item, xr - gameTextWidth(item), py, r.color);
+      drawGameText(ctx, cur, xr - gameTextWidth(item) - 6 - gameTextWidth(cur), py, VALUE_COLOR.same);
+      py += 16;
     }
   }
 }

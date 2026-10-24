@@ -1,3 +1,5 @@
+import type { ItemCombination, ItemPMT } from '../formats/itempmt.ts';
+
 // The End-key quick menu (classic), the model part: which tab the menu opens on,
 // how the tab cursor moves, and the gui positions of its lists.
 //
@@ -458,22 +460,107 @@ export function techniqueRows(order: readonly number[]): TechniqueRow[] {
   return order.slice(0, TECHNIQUE_ORDER_LENGTH).map((techId, slot) => ({ slot, techId }));
 }
 
-// The facts of one inventory item for the tools tab (ASSUMED, 2026-10-23). The checker bits of
-// CheckItemEquipConditions_005d5f40 (dump 427680) are not decoded yet, and neither is the
-// barrier check CheckItemEquipConditions_Optcall_005c9cb4 (dump 418088), so the bits are a
-// stand-in: a wrapped item has none (CanEquipItem_005c9bf8 returns 0 for it); an unwrapped tool
-// is taken as equippable (bit 2) and not blocked here (bit 1 clear); every other item has no
-// bits. dwItemFlags (+0xdc) is not mapped from the port's item (0). `data1` is the item's
+// The checker context of a tool (CheckItemEquipConditions_005d5f40, tool branch, dump 427680;
+// CanEquipItem_005c9bf8 and CheckItemEquipConditions_Optcall_005c9cb4, dumps 417953 / 418088).
+export interface ToolCheckEquipped {
+  data1: Uint8Array; // the equipped item's ItemData bytes (its equipment slot)
+  magLevel: number; // the mag's level when it is a mag (group 2), else 0
+}
+export interface ToolCheckContext {
+  pmt: ItemPMT;
+  safeMap: boolean; // is_current_map_safe
+  bossMap: boolean; // current_map_is_boss_map
+  level: number; // the character's displayed level (1-based)
+  charClass: number; // the character's class index
+  equipped: readonly ToolCheckEquipped[]; // every equipped item (the equipment slots)
+  magStage: number | null; // the equipped mag's evolution stage (null: no mag equipped)
+}
+
+const WILD = 0xff; // a PMT wildcard byte (pmt_get_barrier's -1 / 0xff)
+const codeBytes = (code: number): number[] => [(code >>> 16) & 0xff, (code >>> 8) & 0xff, code & 0xff];
+const wildMatch = (value: number, pattern: number): boolean => pattern === WILD || value === pattern;
+
+// CheckItemEquipConditions_Optcall_005c9cb4 (dump 418088). For each equipped slot, the first
+// combination row whose used item matches the candidate (bytes 0..2) and whose equipped item
+// matches that slot (bytes 3..5). Exactly one slot must match; then the row's mag level, grind,
+// level and class must hold. ASSUMED: the level compares the port's 1-based level with the row's
+// byte directly (the exe calls a player method, vtable +0x38, whose base is not read), and the
+// result item check (unknown_check_equip_conditions, dump 418487) is taken as passing.
+export function toolCombinationPasses(data1: Uint8Array, ctx: ToolCheckContext): boolean {
+  const hits: Array<{ eq: ToolCheckEquipped; row: ItemCombination }> = [];
+  for (const eq of ctx.equipped) {
+    const row = ctx.pmt.combinations.find((c) => {
+      const u = codeBytes(c.usedItem);
+      const e = codeBytes(c.equippedItem);
+      return (
+        wildMatch(data1[0] ?? 0, u[0]) &&
+        wildMatch(data1[1] ?? 0, u[1]) &&
+        wildMatch(data1[2] ?? 0, u[2]) &&
+        wildMatch(eq.data1[0] ?? 0, e[0]) &&
+        wildMatch(eq.data1[1] ?? 0, e[1]) &&
+        wildMatch(eq.data1[2] ?? 0, e[2])
+      );
+    });
+    if (row) hits.push({ eq, row });
+  }
+  if (hits.length !== 1) return false;
+  const { eq, row } = hits[0];
+  if (row.magLevel !== WILD && (eq.data1[0] !== 2 || eq.magLevel < row.magLevel)) return false;
+  if (row.grind !== WILD && !(eq.data1[0] === 0 && row.grind <= (eq.data1[3] ?? 0))) return false;
+  if (row.level !== WILD && ctx.level < row.level) return false;
+  if (row.charClass !== WILD && row.charClass !== ctx.charClass) return false;
+  return true;
+}
+
+// CanEquipItem_005c9bf8 for a tool (group 3): a wrapped item is 0. Otherwise the tool's PMT flag
+// word bit 0 (the exe reads it as mst_req & 1 of the tool's struct, +0x14) chooses the path:
+// clear -> the combination check; set -> a mag cell (class 0x0c) needs a mag below stage 4, any
+// other tool is equippable.
+export function toolCanEquip(data1: Uint8Array, flags: number, ctx: ToolCheckContext): boolean {
+  if (((data1[4] ?? 0) & 0x40) !== 0) return false;
+  if ((flags & 1) === 0) return toolCombinationPasses(data1, ctx);
+  if (data1[1] === 0x0c) return ctx.magStage !== null && ctx.magStage < 4;
+  return true;
+}
+
+// The checker bits of CheckItemEquipConditions_005d5f40 for a tool (group 3), as the populate
+// (ListWindowObject_PopulateTwoHandedWeapons, dump 719618) reads them through
+// GetItemAttackData_005c50b4: bit 2 = CanEquipItem, bit 1 = blocked here and now, plus the
+// flag-word bits 0x4 / 0x10. Only the parts the port can read are decoded (see the ASSUMED list).
+// Non-tools return 0 (the tab does not list them). Flags are the tool's PMT itemFlags (+0x14).
+//
+// ASSUMED off (not decoded or not in the port): the challenge object (g_ChallengeObject, bit
+// 0x40 of the flags); class_check(0xd7) (flags bit 8); the technique scroll (class 2: the
+// technique's min mst and the level, GetTechniqueData / CalculateEffectiveTechniqueLevel); the
+// Sinowberill telepipe (class 7); class 6 (player field 0x25c); the grinder's grind test (class
+// 0x0a: the exe reads an uninitialised byte there, only the empty-weapon test is taken); the
+// material rules (class 0x0b: class max and the material cap, can_use_material); the armour
+// rule (class 0x0f).
+export function toolCheckerBits(data1: Uint8Array, ctx: ToolCheckContext): number {
+  if (data1[0] !== GROUP_TOOLS_TECHS) return 0;
+  if (((data1[4] ?? 0) & 0x40) !== 0) return 0;
+  const flags = ctx.pmt.getTool(data1[1] ?? 0, data1[2] ?? 0)?.itemFlags ?? 0;
+  let bits = 0;
+  if (toolCanEquip(data1, flags, ctx)) bits |= ATTACK_BIT_EQUIPPABLE;
+  if ((flags & 0x4) !== 0) bits |= 0x4;
+  if ((flags & 0x2) === 0) bits |= 0x10; // flag 0x2 clear
+  if ((flags & 0x10) === 0 && !ctx.safeMap) bits |= ATTACK_BIT_BLOCKED;
+  if ((flags & 0x20) === 0 && ctx.bossMap) bits |= ATTACK_BIT_BLOCKED;
+  if (data1[1] === 0x0a && !ctx.equipped.some((e) => e.data1[0] === 0)) bits |= ATTACK_BIT_BLOCKED;
+  return bits;
+}
+
+// The facts of one inventory item for the tools tab. `ctx` is the checker context of the live
+// character and map (null: no tab, the lobby). dwItemFlags (+0xdc) is not mapped from the
+// port's item (0), so the 0x200 / 0x80 fix-ups are not applied (ASSUMED). `data1` is the item's
 // ItemData bytes, `rare` is is_item_rare (ItemNames.isRare).
-export function toolItemFacts(data1: Uint8Array, rare: boolean): QuickMenuItemFacts {
-  const wrapped = (data1[4] & 0x40) !== 0;
-  const tool = data1[0] === GROUP_TOOLS_TECHS;
+export function toolItemFacts(data1: Uint8Array, rare: boolean, ctx: ToolCheckContext): QuickMenuItemFacts {
   return {
     group1: data1[0] ?? 0,
     group2: data1[1] ?? 0,
     groupIdx: data1[2] ?? 0,
     dwItemFlags: 0,
-    equipCheckBits: tool && !wrapped ? ATTACK_BIT_EQUIPPABLE : 0,
+    equipCheckBits: toolCheckerBits(data1, ctx),
     rare,
   };
 }

@@ -17,6 +17,15 @@ import {
 import { DEFAULT_TECH_ORDER, QuickMenu, type QuickMenuEnv } from '../client/src/classic/quickmenuwindow.ts';
 import { KEYS } from '../client/src/input/keyconfig.ts';
 import { SLOT_WEAPON } from '../client/src/net/items.ts';
+import { ItemPMT, type ItemCombination, type Tool } from '../client/src/formats/itempmt.ts';
+import type { ItemData } from '../client/src/formats/itemnames.ts';
+import { techMenuOrder, techMenuPayload, writeTechMenuOrder } from '../client/src/net/charfile.ts';
+import { compareColor, equipStatRows, VALUE_COLOR, EQUIP_STAT_ROWS } from '../client/src/classic/itemdetail.ts';
+import {
+  toolCheckerBits,
+  toolCombinationPasses,
+  type ToolCheckContext,
+} from '../client/src/classic/quickmenu.ts';
 import {
   QUICK_MENU_GUI,
   canCreateChallengeTrapManager,
@@ -177,6 +186,8 @@ function fakeEnv(opts: {
     emote: (slot) => calls.push(`emote ${slot}`),
     tools: { use: (id) => calls.push(`use ${id.toString(16)}`) },
     isRare: () => false,
+    toolChecks: () => toolFixture(),
+    compareRows: () => null,
     traps: {
       statuses: () => opts.statuses ?? [0, 0, 0, 0],
       stock: () => opts.stock ?? 0,
@@ -363,11 +374,57 @@ check('swap: 19 rows, slot to tech id', rows.length === 19 && rows[4].techId ===
 const toolItem = (id: number, wrapped = false) => ({ equipped: false, data: { id, data1: new Uint8Array([3, 0, 0, 0, wrapped ? 0x40 : 0]) } });
 const TOOL_INV = [weapon(0x100, true), toolItem(0x200), toolItem(0x201, true), toolItem(0x202)];
 
-// Tool facts (ASSUMED bits, see toolItemFacts): an unwrapped tool is in the tab.
-check('tools facts: an unwrapped tool is in the tab', isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0]), false)));
-check('tools facts: a wrapped tool is out', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0x40]), false)));
-check('tools facts: a weapon is not a tool row', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([0, 1, 0, 0, 0]), false)));
-check('tools facts: a rare tool is out', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0]), true)));
+// Tool checker bits (CheckItemEquipConditions_005d5f40 tool branch, dump 427680; CanEquipItem
+// dump 417953; the combination check, dump 418088). The flags are the tool's PMT +0x14 word.
+// A tool at class 0 index 0 with flags 0x7f (Monomate-like: bit 0 set, the 0x10 / 0x20 flags set).
+function toolFixture(over: Partial<ToolCheckContext> = {}): ToolCheckContext {
+  return { pmt: fakePmt({ '0.0': 0x7f, '3.0': 0x7f, '12.0': 0x7f, '13.0': 0xfa, '10.0': 0x7b }), safeMap: true, bossMap: false, level: 10, charClass: 0, equipped: [], magStage: null, ...over };
+}
+function fakePmt(flags: Record<string, number>, combinations: ItemCombination[] = []): ItemPMT {
+  const pmt = new ItemPMT();
+  for (const [key, f] of Object.entries(flags)) {
+    const [c, i] = key.split('.').map(Number);
+    pmt.tools[c] = pmt.tools[c] ?? [];
+    pmt.tools[c][i] = { id: 0, type: 0, skin: 0, teamPoints: 0, amount: 0, tech: 0, cost: 0, itemFlags: f } as Tool;
+  }
+  pmt.combinations = combinations;
+  return pmt;
+}
+const tools = (d1: number[], ctx: ToolCheckContext): boolean => isTwoHandedTabItem(toolItemFacts(new Uint8Array([...d1, 0, 0, 0]), false, ctx));
+check('tools bits: an unwrapped tool with flag bit 0 set is in the tab', tools([3, 0, 0], toolFixture()));
+check('tools bits: a wrapped tool is out (CanEquipItem is 0 for it)', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0x40]), false, toolFixture())));
+check('tools bits: a weapon is not a tool row', !tools([0, 1, 0], toolFixture()));
+check('tools bits: a rare tool is out', !isTwoHandedTabItem(toolItemFacts(new Uint8Array([3, 0, 0, 0, 0]), true, toolFixture())));
+check('tools bits: the flag word 0x7f gives bit 2 and no bit 1 on a safe map', toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture()) === 0x06);
+check('tools bits: flag 0x2 clear adds 0x10', (toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x7d }) })) & 0x10) !== 0);
+check('tools bits: flag 0x10 clear on an unsafe map blocks (bit 1)', (toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x03 }), safeMap: false })) & 1) !== 0);
+check('tools bits: flag 0x10 set on an unsafe map does not block', (toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ safeMap: false })) & 1) === 0);
+check('tools bits: flag 0x20 clear on a boss map blocks', (toolCheckerBits(new Uint8Array([3, 0, 0, 0, 0]), toolFixture({ pmt: fakePmt({ '0.0': 0x1f }), bossMap: true })) & 1) !== 0);
+check('tools bits: a grinder (class 0x0a) with no weapon equipped is blocked', !tools([3, 10, 0], toolFixture()));
+check('tools bits: a grinder with a weapon equipped is not blocked here', tools([3, 10, 0], toolFixture({ equipped: [{ data1: new Uint8Array([0, 1, 0, 0]), magLevel: 0 }] })));
+// Flag bit 0 clear: the combination check (exactly one equipped slot must match a row).
+const TOOL_13 = { '13.0': 0xfa };
+check('tools bits: flag bit 0 clear with no combination row is out', !tools([13, 0, 0], toolFixture({ pmt: fakePmt(TOOL_13) })));
+// The row: used item = class 13 (bytes 13,0,0), equipped = a weapon (bytes 0,1,any); all else wild.
+const ROW_ANY_ITEM: ItemCombination = { usedItem: 13 << 16, equippedItem: 0x0001ff, resultItem: 0, magLevel: 0xff, grind: 0xff, level: 0xff, charClass: 0xff };
+const weaponEq = { data1: new Uint8Array([0, 1, 0, 3]), magLevel: 0 };
+check('tools bits: a matching combination row with the equipped weapon passes', toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [ROW_ANY_ITEM]), equipped: [weaponEq] })));
+check('tools bits: two matching equipped slots fail (exactly one)', !toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [ROW_ANY_ITEM]), equipped: [weaponEq, weaponEq] })));
+check('tools bits: the row grind above the weapon grind fails', !toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [{ ...ROW_ANY_ITEM, grind: 5 }]), equipped: [weaponEq] })));
+check('tools bits: the row class must be the character class', !toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [{ ...ROW_ANY_ITEM, charClass: 3 }]), equipped: [weaponEq] })));
+check('tools bits: the row level above the character level fails', !toolCombinationPasses(new Uint8Array([13, 0, 0]), toolFixture({ pmt: fakePmt(TOOL_13, [{ ...ROW_ANY_ITEM, level: 20 }]), equipped: [weaponEq] })));
+// A mag cell (class 0x0c, flag bit 0 set) needs a mag below stage 4.
+check('tools bits: a mag cell with no mag is out', !tools([3, 12, 0], toolFixture()));
+check('tools bits: a mag cell with a mag below stage 4 is in', tools([3, 12, 0], toolFixture({ magStage: 2 })));
+check('tools bits: a mag cell with a mag at stage 4 is out', !tools([3, 12, 0], toolFixture({ magStage: 4 })));
+// The populate's stat rows (equipStatRows, the same as the equipment panel): six rows in label order.
+{
+  const cur = { atp: 100, dfp: 10, mst: 5, ata: 20, evp: 8, lck: 3 };
+  const item = { id: 1, data1: new Uint8Array([0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) } as unknown as ItemData;
+  const rows = equipStatRows(cur, item, null, new ItemPMT(), true, true);
+  check('compare rows: six stats in the panel order ATP, DFP, MST, ATA, EVP, LCK', rows.map((r) => r.key).join(',') === 'atp,dfp,mst,ata,evp,lck' && EQUIP_STAT_ROWS.length === 6);
+  check('compare rows: colour formula (equal white, lower cyan, higher orange)', compareColor(5, 5) === VALUE_COLOR.same && compareColor(4, 5) === VALUE_COLOR.lower && compareColor(6, 5) === VALUE_COLOR.higher);
+}
 
 {
   const { env, calls } = fakeEnv({ inv: TOOL_INV });
@@ -453,6 +510,19 @@ check('tools facts: a rare tool is out', !isTwoHandedTabItem(toolItemFacts(new U
   const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
   m.key(key(KEYS.symbolChat));
   check('End: closes the menu', !m.open);
+}
+
+// The technique order's save (tech_menu at data offset 0x2DF8) and the ED 06 body (u32 0, then the 40 bytes).
+{
+  const save = new Uint8Array(0x3994);
+  check('tech order: a zero save has no order (the default is used)', techMenuOrder(save) === null);
+  const order = Array.from({ length: 19 }, (_, i) => (i * 7) % 19);
+  writeTechMenuOrder(save, order);
+  check('tech order: the order round-trips through the save', techMenuOrder(save)?.join(',') === order.join(','));
+  check('tech order: the save bytes are the u16 ids at 0x2DF8', new DataView(save.buffer).getUint16(0x2df8 + 2, true) === order[1]);
+  const body = techMenuPayload(order);
+  check('tech order: ED 06 body is 44 bytes (u32 0, tech_menu 40)', body.length === 44 && body.subarray(0, 4).every((b) => b === 0));
+  check('tech order: ED 06 carries the ids as u16 from +4', new DataView(body.buffer).getUint16(4 + 2 * 3, true) === order[3]);
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
