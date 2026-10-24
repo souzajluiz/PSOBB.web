@@ -14,7 +14,7 @@
 import type { PlacedEntity, ObjectSet } from '../client/src/formats/setdata.ts';
 import type { MapCollision } from '../client/src/formats/crel.ts';
 import { boxPairActive, CollisionWorld, OBJECT_BOX_FLAGS, PLAYER_BOX_FLAGS, PLAYER_RADIUS, type Obstacle } from '../client/src/render/collision.ts';
-import { collectFieldSolids, dist2xz, FallingStalactite, rockSwitchFlag, solidObstacle, stalactiteDamage, stalactiteInRange, type FieldSolid } from '../client/src/render/fieldobjects.ts';
+import { collectFieldSolids, dist2xz, FallingStalactite, FieldObjects, rockSwitchFlag, solidObstacle, stalactiteDamage, stalactiteInRange, type FieldSolid } from '../client/src/render/fieldobjects.ts';
 import { spotHitsBody } from '../client/src/net/dropspot.ts';
 import { CHILD_COLLISION_LINKS, COLLISION_SITES, COLLISION_TABLES, ENEMY_COLLISION_LINKS, TYPE_COLLISION_TABLES } from '../client/src/formats/collisionboxes.gen.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, isTargetable, slotSetType, slotVariant } from '../client/src/formats/enemyboxes.ts';
@@ -270,6 +270,28 @@ check(stalactiteInRange({ x: 0, z: 99 }, { x: 0, z: 0 }) && !stalactiteInRange({
 check(dist2xz({ x: 3, z: 4 }, { x: 0, z: 0 }) === 25, 'the XZ distance squared ignores the height (7a9180)');
 
 check(rockSwitchFlag(0) === 0 && rockSwitchFlag(0xff) === 0xff && rockSwitchFlag(0x100) === 0x100 && rockSwitchFlag(-1) === -1 && rockSwitchFlag(0x101) === -1, 'the destructible rock keeps param4 in 0..0x100 as its switch flag, else none (0x00675c74)');
+
+// 6b. The destructible rock's break (0x00633734 -> 0x006336f8): the flag tick plays SE 0x44c and the particles
+// 0x45 and 0x46 at the rock, once; the next tick hides it. The six-part debris (0x006759d4) is not ported.
+{
+  const rock = { kind: 'object', type: 0x0303, index: 7, params: [0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0], group: 0, section: 0 };
+  const placed = [{ entity: rock, name: 'rock', category: 'object', world: [10, 2, -4], yaw: 0, sectionFound: true }];
+  const se: Array<[number, number]> = [];
+  const parts: Array<[number, number]> = [];
+  const fake = { scene: { add() {}, remove() {} } } as any;
+  const flags = new Set<number>();
+  const fo = new FieldObjects(fake, placed as any, { episode: 1, floor: 0, area: 1 }, flags);
+  fo.onSe = (id, at) => se.push([id, at.x]);
+  fo.onParticles = (id, at) => parts.push([id, at.x]);
+  fo.tickRocks(1);
+  check(se.length === 0 && parts.length === 0, 'a rock with no switch flag set does not break');
+  flags.add(5);
+  fo.tickRocks(1);
+  check(se.length === 1 && se[0][0] === 0x44c && se[0][1] === 10, 'the flag tick plays SE 0x44c at the rock');
+  check(parts.length === 2 && parts[0][0] === 0x45 && parts[1][0] === 0x46, 'the flag tick makes particles 0x45 then 0x46');
+  fo.tickRocks(3);
+  check(se.length === 1 && parts.length === 2, 'the break effects run once');
+}
 
 if (failures) {
   console.log(`${failures} failure(s)`);

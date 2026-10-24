@@ -341,6 +341,8 @@ const STALACTITE_DAMAGE_BASE = 100; // 0x0093b708: GetDifficultyMultiplier = 100
 const STALACTITE_DAMAGE_STEPS = [1, 2, 3, 6];
 const STALACTITE_SE_SHATTER = 0xaf; // play_directional_sound_effect(0xaf) at the object (0x00679b70)
 const STALACTITE_PARTICLES = [100, 0xf0]; // create_particle_effect(xyz, 100) and (xyz, 0xf0) (0x00679b70)
+const ROCK_BREAK_SE = 0x44c; // 0x0063371c: the positional SE call 0x00814298 with id 0x44c at obj+0x38 (ASSUMED: an SE id)
+const ROCK_BREAK_PARTICLES = [0x45, 0x46]; // 0x006336f8: create_particle_effect(obj+0x38, 0x45) then 0x46 (0x0050b510)
 
 // The destructible rock's switch flag from param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
 export function rockSwitchFlag(param4: number): number {
@@ -806,7 +808,7 @@ export class FieldObjects {
   onStalactiteHit: (damage: number, at: { x: number; z: number }) => void = () => {};
   private stalactites = new Map<number, FallingStalactite>(); // object index -> stalactite
   private shattered = new Set<number>(); // object indices whose box is off and model hidden (the shatter, the break)
-  private rocks = new Map<number, { flag: number; state: number }>(); // destructible rocks: switch flag, state (+0xb4)
+  private rocks = new Map<number, { flag: number; state: number; at: { x: number; y: number; z: number } }>(); // destructible rocks: switch flag, state (+0xb4), world point
 
   constructor(
     viewer: MapViewer,
@@ -834,7 +836,8 @@ export class FieldObjects {
       }
       if (p.entity.type === ROCK_BREAKABLE_TYPE) {
         // The rock's switch flag is param4 (ctor 0x00675c74: 0..0x100 kept, else -1 = never breaks).
-        this.rocks.set(p.entity.index, { flag: rockSwitchFlag(p.entity.params[3] ?? -1), state: 0 });
+        const [rx, ry, rz] = p.world;
+        this.rocks.set(p.entity.index, { flag: rockSwitchFlag(p.entity.params[3] ?? -1), state: 0, at: { x: rx, y: ry, z: rz } });
       }
     }
     for (const d of this.all.doors) {
@@ -1125,10 +1128,23 @@ export class FieldObjects {
           changed = true;
           continue;
         }
-        if (r.flag >= 0 && r.flag < 0x100 && this.flags.has(r.flag)) r.state = 1;
+        if (r.flag >= 0 && r.flag < 0x100 && this.flags.has(r.flag)) {
+          r.state = 1;
+          this.breakRockEffects(r.at);
+        }
       }
     }
     if (changed && this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The break tick (DerollePart update 0x00633734, state 0 -> 1 branch, 0x00633795..0x006337aa): the vtable +0x3c
+  // slot 0x006336f8 runs first (its +0x40 slot 0x0063371c plays SE 0x44c at the object, ASSUMED: the positional SE
+  // call 0x00814298 takes the id as its first argument), then the particles 0x45 and 0x46 at the object's position
+  // (create_particle_effect 0x0050b510 at obj+0x38), then the vtable +0x38 slot 0x006759d4, the six-part debris,
+  // which is NOT ported (DerollePartObject bodies, 0x006441f4). The model hides on the next tick (state 1 path).
+  private breakRockEffects(at: { x: number; y: number; z: number }): void {
+    this.onSe(ROCK_BREAK_SE, at);
+    for (const id of ROCK_BREAK_PARTICLES) this.onParticles(id, at);
   }
 
   // The shatter (DerolleEnemyHead_Destructor 0x00679ac4, the path without a box record): state 2, the

@@ -17556,3 +17556,37 @@ Next step to settle it: ask the user which section IDs the two characters in the
 - Remote players' photon blast icons (6x39 / 6x3A are not tracked for remote players) and the remote players' own Shifta from their own cast if the caster is not in its own 6x47 list.
 - Party window HP bar and "Vicky" colour against the reference: the reference is 640 px wide, the bar is not readable at that size.
 - Chrome check of a real Shifta cast (the screenshot uses `applySelfBuff` / `applyRemoteBuff` directly, not the palette cast) and of a live quest timer (the spec sets the HUD text directly).
+## 2026-10-23: rock break SE and particles; stalactite debris and Trap Vision callers (follow-up)
+
+**Premise check:** the debris of both objects is not the njcm body the last entry assumed. The `DerollePartObject` of the dump is a particle emitter (ctor 0x006441f4: `Pioneer2BGMMapObject` vtable, 8 `DerolleParticle`s, `DerollePartObject_InitSystem_00644cd0`), and the debris templates are its parameter blocks. Port of that object is not started.
+
+Destructible rock 0x0303, break (update 0x00633734, the state 0 -> 1 branch at 0x00633795..0x006337aa):
+- Order on the flag tick: state (+0xb4) = 1; vtable +0x3c = 0x006336f8, which calls vtable +0x40 = 0x0063371c, then `0x00814298(0x44c, obj+0x38, 0, 0)`; then `0x0050b510(obj+0x38, 0x45)` and `0x0050b510(obj+0x38, 0x46)`; then vtable +0x38 = 0x006759d4 (the debris); then vtable +0x44 (0x006337af).
+- 0x00814298 takes the id first and the position pointer second. Id 0x44c is read as an SE id (ASSUMED: the same positional SE call as the stalactite's 0xaf; 0x700 mask in the callee not traced).
+- 0x006759d4 loops 6 times over the int triples at 0x009c9a00 (stride 12: (12,7,12), (-14,16,13), (-3,51,11), (7,49,-11), (-7,38,-14), (8,16,-16)), copies the 0x4c-byte block 0x0093aa40 to the stack, and makes one 0x234-byte `DerollePartObject` per point (0x006441f4) at the object's matrix point. NOT PORTED.
+- The hide is on the next tick (state 1 path, 0x00633750: 0x008113bc, `+0x08 |= 1`), as the port already does.
+
+Stalactite 0x038b, shatter debris (0x00679b70): a 0x17c-byte template at 0x0093b540 per part, five parts (the 0x005b8610 / 0x005b8624 calls per part), the same `DerollePartObject` family (ASSUMED: the ctor used per part was not traced). NOT PORTED.
+- The shatter 0x00679ac4 reads +0x80 once (0x00679ac9). In 0x00679000..0x0067a000 nothing stores +0x80, so the record's setter is outside this function (not traced). The record path stays unported.
+
+Trap Vision (tool, item 8):
+- vtable 0x00b0eca0 is written by the item constructors only (0x005df805, 0x005df8ee). Slot +0x8c = 0x005de46c (consume), +0x90 = 0x005de4a0 (add); their direct callers are the value writer 0x005de3b0 (0x005de350, 0x005de489, 0x005de4c2 are inside the tool's own functions).
+- Indirect calls through slots +0x8c / +0x90 in the exe: 48 sites (objdump, `call *0x8c(%reg)` / `*0x90`). Checked: 0x005de5f3 is the Star Atomizer 6x66 receive handler 0x005de5a4 (is_dead on the four player slots, the heal; not the item); 0x005e5e2b is a player is_dead check; 0x0058bcf2 / 0x0058caa7 test flag 0x1000 on a player; the 0x006a5a..0x006a6a cluster calls +0x88 / +0x8c on player objects with pushed arguments (player methods, not the item). The 0x0083adfa..0x0083af8a sites read the globals 0x00acd528 / 0x00ad96c0 / 0x00ad96c8 (not identified). No site was confirmed as the item-stack consumer, so the callers stay open.
+- Technique 14: the first switch (table 0x0096cc20) sends 10..17 to the common body 0x006e0809. The second switch (table 0x0096cbc0) sends case 14 to 0x006e0a7f: owner == local player (`0x00a9c4f4`), then `0x006e8478` (a 0x110-byte TechniqueEntity, vtable 0x00b3db10, owner position and targets), then the target list. The helper 0x006e8478..0x006ea000 has no store to 0x10000 / +0x33c and no read of +0x964. So technique 14 has no Trap Vision effect in the exe.
+- Result: no trap-vision effect is ported (the exe shows none for the tool; the stack count stays as the last entry says).
+
+**Ported:**
+- `client/src/render/fieldobjects.ts`: `breakRockEffects` on the flag tick (SE 0x44c, then particles 0x45 and 0x46 at the rock's point); the rock map keeps the point (`at`). Constants `ROCK_BREAK_SE`, `ROCK_BREAK_PARTICLES`.
+- `tests/objectcollision.test.ts`: section 6b (no break without the flag; SE 0x44c and 0x45 / 0x46 on the flag tick at the rock; the effects run once).
+
+**ASSUMED:**
+- 0x44c is an SE id (the positional call 0x00814298).
+- The break effects are at the placed point (obj+0x38 = the placed world point).
+- The debris (0x006759d4 and 0x00679b70) is left out; the emitter's look and physics are not ported.
+
+**Checks:** `node tests/objectcollision.test.ts` (all pass, section 6b added); `traps`, `collision`, `townfield`, `drops`, `fieldhud` pass; `client` tsc (Node 24) clean. Not run: Playwright (per the brief).
+
+**Left:**
+- The six rock debris parts (0x006759d4) and the five stalactite debris parts (0x00679b70): the `DerollePartObject` emitter (0x006441f4, `InitSystem` 0x00644cd0, its update and draw).
+- The stalactite's +0x80 record setter (not in the stalactite's own range) and the record path (0x007b5038 notify).
+- The callers of the item's consume / add (0x005de46c, 0x005de4a0): none of the 48 indirect sites is confirmed.
