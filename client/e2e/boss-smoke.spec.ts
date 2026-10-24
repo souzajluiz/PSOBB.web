@@ -1,6 +1,6 @@
 // Smoke run of the 2026-10-21 boss and particle passes in Chrome: one classic
 // client creates a party, warps to Forest 1 and then to the Dragon's arena
-// (floor 11). The Dragon's entrance (its sub-states 0x86c / 0x874, its six
+// (floor 11). The Dark Falz casket is in darkfalz-casket.spec.ts. The Dragon's entrance (its sub-states 0x86c / 0x874, its six
 // particle sites and its flame) must spawn particles, the page must log no
 // errors and no request may fail. Screenshots go to the test's output folder.
 import { expect, test } from '@playwright/test';
@@ -62,60 +62,6 @@ test('boss smoke: Forest 1 and the Dragon entrance spawn particles without error
     }
     console.log(`dragon arena: particle peak ${peak}`);
     expect(peak).toBeGreaterThan(0);
-  });
-
-  await test.step('Dark Falz arena: the casket trigger starts the cutscene', async () => {
-    await page.evaluate(() => (window as any).classicGame.view.warpTo(14));
-    await expect.poll(floor, { timeout: 90_000 }).toBe(14);
-    // Dark Falz's scene (1 = WAIT_CASKET, 2 = DEMO_WARP0; combat/darkfalzcommon.ts) and
-    // whether combat.bossCameraView() gives a view.
-    const falz = () =>
-      peek(page, (w) => {
-        const c = w.classicGame.view.combat;
-        const v = c.bossCameraView?.();
-        const e = [...c.enemies.values()].find((x: any) => x.ai?.constructor?.name === 'DarkFalzAi');
-        return { scene: e ? (e.ai.scene as number) : -1, view: v ? 'live' : 'null' };
-      });
-    await expect.poll(async () => (await falz()).scene, { timeout: 60_000 }).toBe(1);
-    await page.waitForTimeout(2000);
-    await page.screenshot({ path: info.outputPath('falz-0-wait-casket.png') });
-
-    // Stand the player on the casket point (x -9860, z -240) at the current floor height.
-    const y = await peek(page, (w) => (w.classicGame.view as any).selfPose()?.y ?? null);
-    expect(y).not.toBeNull();
-    await page.evaluate((h) => {
-      const g = (window as any).classicGame.view;
-      g.placePlayer(g.game.selfId, -9860, h, -240, 0);
-    }, y as number);
-    console.log(`placed player at (-9860, ${y}, -240)`);
-
-    // Sample the scene and the camera every 250 ms; log only changes.
-    const log: string[] = [];
-    let shot = false;
-    let scene2 = false;
-    let cameraWithScene2 = false;
-    let last = '';
-    for (let i = 0; i < 60; i++) {
-      const f = await falz();
-      const line = `scene=${f.scene} view=${f.view}`;
-      if (line !== last) {
-        log.push(`t=${i / 4}s ${line}`);
-        last = line;
-      }
-      if (f.scene === 2) {
-        scene2 = true;
-        if (f.view === 'live') cameraWithScene2 = true;
-        if (!shot) {
-          await page.screenshot({ path: info.outputPath('falz-1-demo-warp0.png') });
-          shot = true;
-        }
-      }
-      await page.waitForTimeout(250);
-    }
-    await page.screenshot({ path: info.outputPath('falz-2-after.png') });
-    console.log(`falz transitions:\n${log.join('\n')}`);
-    expect(scene2, 'Dark Falz leaves WAIT_CASKET (scene 2, DEMO_WARP0)').toBe(true);
-    expect(cameraWithScene2, 'combat.bossCameraView() non-null during DEMO_WARP0').toBe(true);
   });
 
   console.log(`failed requests: ${failed.length}\n${failed.join('\n')}`);

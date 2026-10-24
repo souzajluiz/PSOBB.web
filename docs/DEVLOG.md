@@ -18846,3 +18846,28 @@ Morfos arm end (+0xb0 bit 0x10):
 - The trap's heading is `owner->heading` (exe) and the port's `angle` (ASSUMED the same unit).
 
 **Checks:** `node tests/battletraps.test.ts` ALL PASS (new: the 48-entry table matches the exe bytes, only 15 and 47 refuse, 16 / 17 / 0x2c permit, the constructor's 0x96 / 0x1e / 50 / 50); `node tests/battle.test.ts` ALL PASS; `client/node_modules/.bin/tsc --noEmit -p client` clean (Node 24). Not run in Chrome.
+## 2026-10-24: Dark Falz casket in Chrome (WAIT_CASKET -> DEMO_WARP0 seen; the cutscene camera drives the field)
+
+**Seen.** `client/e2e/darkfalz-casket.spec.ts` (new; the Dark Falz step is moved out of `boss-smoke.spec.ts`, which keeps Forest 1 and the Dragon): one classic client, party Normal, warpTo(14), Dark Falz waits in WAIT_CASKET (scene 1, `bossCameraView()` null). The player is placed at `(-9860, 5, -240)` (the casket point; `placePlayer`, the floor height from `selfPose`). Sampled every 250 ms:
+
+```
+t=0.02s scene=1 view=null
+t=0.31s scene=2 view=live        (DEMO_WARP0: the trigger fires about 0.3 s after the placement)
+t=4.26s scene=3 view=null        (DEMO_WARP0 ends; DEMO_WARP1 next)
+warp0 camera samples matching the boss view: 4; largest camera-to-view distance 1.557; mismatches (>5): 0
+frames during DEMO_WARP0: 217 (rAF ticks in about 4 s); failed requests: 0; page errors: 0
+1 passed (48.6s)
+```
+
+- The field camera is the boss view during DEMO_WARP0: `view.camera.position` equals `bossCameraView().source` exactly in the samples where both are read in the same frame. The 1.5-unit gap in the other samples is the one-tick race (the AI (30 Hz) moves the view after the render set the camera), so the spec allows one tick of motion (5 units).
+- No hang: the rAF counter rises through the cutscene; the page answers the sampling calls at every step.
+- Screenshots (test output, `client/test-results/`, not committed): `falz-0-wait-casket.png` (the arena entrance, the player in view), `falz-1-demo-warp0.png` (the boss camera's frame, 0.5 s into DEMO_WARP0: a 3D ruin with stone steps and a block, the HUD on, the player out of frame), `falz-2-after.png`.
+- The 10-22 entry said the DEMO_WARP0 frame is dark. This run's frame is NOT dark (the arena's geometry is drawn at the camera's place). Why it differs is not known: the earlier run may have sampled at another moment, or the camera's far geometry was not loaded then. UNCLEAR, not checked against the exe's picture.
+
+**Setup needed in a worktree (not committed).** `client/node_modules` and `vendor` are symlinked from the main checkout (the keys route `/keys/*.nsk` reads `vendor/newserv/system/blueburst/keys`; without the link the login stops at "key file default.nsk not found"). Vite on 5179 (`PW_BASE_URL=http://127.0.0.1:5179`); both symlinks and the Vite were removed after the run.
+
+**Bugs.** None found in the cutscene path this run. The port's trigger, the scene change and the boss camera's drive match the observations above.
+
+**ASSUMED / open.** The leader gate (the solo test player is the leader, as in 10-22). The DEMO_WARP0 picture against the exe (the screen fade near 0x0044E504 is still not read). The other five scenes' cameras (the DEVLOG 10-22 entry) are still not seen in Chrome: they need the live entities.
+
+**Checks.** `client/node_modules/typescript/bin/tsc --noEmit -p client` (Node 24): clean. `darkfalz-casket.spec.ts` passes (above).
