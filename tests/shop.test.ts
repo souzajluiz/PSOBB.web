@@ -26,7 +26,7 @@ import {
   type CounterEnv,
   type CounterItems,
 } from '../client/src/classic/shop.ts';
-import type { RowContext } from '../client/src/classic/itempack.ts';
+import { equipProblems, type RowContext } from '../client/src/classic/itempack.ts';
 import { ItemPMT } from '../client/src/formats/itempmt.ts';
 import { itemFromHex, ItemNames, type ItemData } from '../client/src/formats/itemnames.ts';
 import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
@@ -365,6 +365,23 @@ eq(buyCheck(saber, 10, { meseta: 5, inventory: [] } as unknown as CharacterFile,
   eq([untekked.nameColor], ['#00fffc'], 'untekked: cyan name');
   eq([rare.nameColor], ['#ffea00'], 'rare: yellow name');
   eq([hasEquipPanel(itemFromHex('000100000000000000000000')), hasEquipPanel(itemFromHex('030000000003000000000000'))], [true, false], 'detail panel for a weapon, not for a mate');
+}
+
+{
+  // ValidateItemForEquip_005c9e40 (dump 418164): the weapon's requirements are checked against the
+  // DISPLAYED totals (CalculateChallengeDamage: ATP = saved + range max; MST = the stat block). With a
+  // weapon worn in the slot, its stat-block part (here MST 5) comes off the displayed value first.
+  pmt.weapons[1][4] = { ...base(0x17c), atpMax: 40, atpMin: 0, mst: 0, ata: 0, statBoostEntryIndex: 0, usabilityFlags: 0xff, atpRequired: 60, ataRequired: 0, mstRequired: 10 } as never;
+  pmt.weapons[1][5] = { ...base(0x17d), atpMax: 40, atpMin: 0, mst: 5, ata: 0, statBoostEntryIndex: 0, usabilityFlags: 0xff, atpRequired: 0, ataRequired: 0, mstRequired: 0 } as never; // worn: MST +5
+  const cand = itemFromHex('000104000000000000000000');
+  const worn = itemFromHex('000105000000000000000000');
+  const rc = (atp: number, mst: number, wornWeapon: ReturnType<typeof itemFromHex> | null): RowContext =>
+    ({ names, charClass: 0, level: 5, stats: { atp, mst, ata: 100 }, wornWeapon, lobby: false }) as RowContext;
+  eq(equipProblems(cand, rc(59, 20, null)) & 2, 2, 'empty slot: displayed ATP 59 is below the requirement 60');
+  eq(equipProblems(cand, rc(60, 20, null)) & 2, 0, 'empty slot: displayed ATP 60 meets it');
+  eq(equipProblems(cand, rc(60, 12, null)) & 8, 0, 'empty slot: MST 12 meets the requirement 10');
+  eq(equipProblems(cand, rc(60, 12, worn)) & 8, 8, 'worn MST +5 comes off first: 12 - 5 = 7 is below 10');
+  eq(equipProblems(cand, rc(60, 15, worn)) & 8, 0, 'worn MST +5: 15 - 5 = 10 meets it');
 }
 
 if (failures) {

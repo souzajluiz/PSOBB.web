@@ -146,12 +146,13 @@ export interface WeaponForCombat {
   ata: number; // ItemPMT weapon ata
 }
 
-// Player attacker stats (see combat/playerstats.ts for the exe evidence). The attacker's
-// +0x2cc is the base ATP, +0x2ce the variance (the spread) and +0x31c -> atp_range_min the
-// equipment ATP, which the equip adds to the class range (ApplyItemStatsToPlayer_005d1f0c).
-// The displayed ATP is base + variance + rmin, so the split is derived from it (ASSUMED
-// where the file has only the sum). ATA = (class min_ata + character ATA) * 0.1 + weapon ATA
-// (FUN_00770da4 for the first part).
+// Player attacker stats (see combat/playerstats.ts for the exe evidence). The saved ATP is the
+// base (+0x2cc, base_atp = stats->atp, dump 746015): the saved file is the stat block, so the
+// class range and the weapon's range are NOT in it. The variance (+0x2ce = rmax - rmin) and the
+// equipment ATP (+0x31c = atp_range_min, the class min + the weapon min) come from the class table
+// and the equipped weapon, so the roll range is [base + rmin, base + rmax]. ATA = ROUND((class
+// min_ata + character ATA) * 0.1) + weapon ATA: the exe's total_ata (dump 746024) multiplies
+// ata_range_min + stats->ata by 0.1, and the weapon's ata_range_min part is ata * 10 (exact).
 export function playerAttacker(
   charClass: number,
   stats: { atp: number; ata: number; lck: number },

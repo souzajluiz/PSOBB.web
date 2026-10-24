@@ -17681,3 +17681,37 @@ Trap Vision (tool, item 8):
 3. `colored_ring_matching_boosts` and `handle_item_set_bonus` (dump 427136).
 4. Mags' stat effect (`ApplyItemStatBonuses_005d3fa4`, dump 426621): its stats pointer must be recovered (the decompile leaves it unset), then its ROUND(pow / 100 * g_ItemStatMultiplier) etc. into the stat block.
 5. The buff multipliers m / md from the live buffs (the compare uses 0).
+## 2026-10-23: combat: the saved ATP is the base; the requirement check reads the displayed totals
+
+**Premise (settled in the entry "the save holds the stat block"), checked again against the exe.** The save's ATP is the stat block's `[0]` (player +0x2b4, clamped by `ClampPlayerStats_006948dc`, dump 575719). The init (dump 746015..746024) takes `base_atp = stats->atp`, `atp_variance = atp_range_max - atp_range_min`, and `total_ata = ROUND((ata_range_min + stats->ata) * g_AttackStatMultiplier)`. `UpdatePlayerDisplayStats` (dump 728017) shows ATP = base + variance + rmin = base + range max. So the attack range is `[base + rmin, base + rmax]`, and the displayed ATP is `saved + rmax`, not the saved value.
+
+**What changed.**
+- `combat/playerstats.ts` `splitAttack(savedAtp, class, weapon)`: `base = savedAtp` (no subtraction), `variance = rmax - rmin`, `rmin = class min + weapon min` (weapon min = atp_min + 2 x grind). The header's "derived split" text is replaced by the settled one.
+- `combat/formulas.ts` `playerAttacker`: uses the split as it is. The ATA path is unchanged and re-checked: `ROUND((class min_ata + saved ATA) * 0.1) + weapon ATA`. The weapon's `ata_range_min` part is `pmt ata * 10` (ApplyEquipmentBonuses_005d330c, dump ~426200: `local_20 = ppVar3->ata * 10 + param_2[2]`), so `* 0.1` gives exactly `weapon ATA`. The special-slot ATA (`ataSpecials`) is still not in the combat ATA (pre-existing gap, see Left).
+- `classic/itempack.ts` `equipProblems`: the requirement check, traced in ValidateItemForEquip_005c9e40 (dump 418164): `UpdatePlayerChallengeStats_00695340` -> `CalculateChallengeDamage_0069807c` (dump 578524) gives `result[0] ATP = stat ATP + atp_range_max` (the displayed ATP), `result[3] ATA = ROUND((ata_range_min + stat ATA) * blend)` (the displayed ATA), `result[2] MST = stat MST`. The check compares those three with `atp_req`, `ata_req`, `mst_req`. With a weapon worn in the slot, it first subtracts the worn item's stat-block part (`asStack_ac[0x28]` ATP, `[0x29]` MST, `[0x2d]` ATA from ApplyEquipmentBonuses on the worn item), floored at 0. The port: `RowContext.stats` now carries the displayed totals, `RowContext.wornWeapon` the equipped weapon, and `statContribution()` (new, `playerstats.ts`) gives the worn part. The worn weapon's range is NOT removed (the exe keeps it in the displayed ATP; the candidate's range is not added either).
+- `render/fieldhud.ts`: `rowContext()` builds the displayed totals (`displayedStats`); `compareRows()` reads the raw file for its candidate (no double count).
+- `ui/inventoryPanel.ts` (the character panel): ATP / DFP / MST / ATA / EVP / LCK show `displayedStats` (before: the save's stat block was printed as the displayed total). HP stays the file's.
+- Comments only: `net/charfile.ts` (`stats` is the stat block), `bridge/admin-chars.mjs` (`STAT_KEYS`: the saved stats are the stat block; the displayed ATP is atp + range max).
+
+**Exe evidence.** Dump `reverse/refsrc/.../Psobb.exe-05112026.c`: init 746015..746024; UpdatePlayerDisplayStats 728017; ValidateItemForEquip 418164 (weapon branch ~418250..418350); UpdatePlayerChallengeStats 576331; CalculateChallengeDamage 578524; ApplyEquipmentBonuses 426168 (param_2 = range, param_3 = +0x18, param_4 = stat block: `param_4[1] += pmt mst`, dump ~426216). The fresh-char numbers come from the level table (`statsForLevel`, level 1).
+
+**Damage before / after: fresh HUmar (class 0), level 1, with a Saber (00 01 00, atp 40..55, ata 30, grind 0).**
+- Saved stat block: ATP 35, ATA 30, LCK 10 (level table base). Displayed ATP in the exe: 35 + 65 = 100 (class 5..10, weapon 40..55).
+- Before (the old code: saved read as the total): base -30, spread 20, rmin 45, attack range [15, 35]; normal hit vs DFP 0: 2.70 .. 6.30.
+- After: base 35, spread 20, rmin 45, attack range [80, 100]; normal hit vs DFP 0: 14.40 .. 18.00 (the x0.9 normal multiplier, no crit; the roll `(atp + spread * r) * 0.2 + rmin * 0.2 - dfp * 0.2`).
+- ATA 98 before and after (no change: 650 + 30 at 0.1, + the Saber's 30).
+- Script: scratchpad `dmg/dmg.ts` (ItemPMT from `vendor/newserv` encode, stat block from `statsForLevel`). Not a Chrome run.
+
+**Tests.** `tests/playerstatsatp.test.ts` (19/19, rewritten to the saved = base model); `tests/combat.test.ts` (5852 checks: the Saber case is `atp 500 / spread 20 / rmin 65`); `tests/combatdepth.test.ts` (836); `tests/shop.test.ts` (new block: the requirement uses the displayed ATP; with a worn weapon the MST +5 comes off first); `tests/items.test.ts`, `playerstats`, `quickmenu`, `materials`, `itemmodels`, `admin-items`, `admin`, `level`, `buffs`, `party`, `drops`, `magfeed`, `fieldhud`, `tekker` all pass (Node 24; `NEWSERV` set; the worktree has no `vendor/newserv/build` so the symlinks were made for the run and removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run: Playwright (per the brief).
+
+**ASSUMED:**
+- `g_AttackStatMultiplier` is 0.1 (the same blend as the compare's `0x0093ca14`; the init's float was not read).
+- The weapon range is `atp_min/max + 2 x grind` on both ends (grind is 0 in the Saber case, so the damage numbers above do not depend on it).
+- The class range is `PLAYER_CLASS_ATTACK` (min/max/min_ata at `0x00968a60`).
+- Shifta / Jellen multiply the saved base and variance as before (`selfBuffs`), unchanged.
+
+**Left.**
+- Remote attackers: `combat/pvp.ts` `remoteAttacker` passes no weapon, so a remote player's attack has no weapon range (the class range only). Its stat base is now right; the weapon range needs the remote's equipped weapon (not in the 6x70 / disp data read here).
+- Combat ATA misses the weapon's special-slot ATA (`ataSpecials` in `playerstats.ts`, the `ata_range_min` part); the compare list has it.
+- The 6x30 level-change stats (`net/game.ts` `ChangeLevel`) are not checked against the stat block.
+- Battle-mode / CMode overlays (`quest/battleoverlay.ts`, `cmodeoverlay.ts`) read `b.atp` as the total; not traced.
