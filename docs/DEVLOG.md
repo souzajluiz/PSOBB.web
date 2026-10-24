@@ -43,7 +43,7 @@ Checked on the real data (`PSOBB_DATA`, floor 5, variant 1, `map_jungle01_01`): 
 
 **Corrected premise:** the stab's damage is `olga1_sword_stab_update` (dump 212391), the stab object's own update. UpdateVoloptForm7State (195333) only moves an anim index and does no damage.
 
-**Not ported:** the tail swipe (the anchor +0x640..+0x654 has no writer in the Olga code; the dragon constructor writes the same offsets on the dragon), the lancer (row 22), the stab's three gate constants and the per-difficulty range (addresses not decoded).
+**Not ported:** the tail swipe (the anchor +0x640..+0x654 has no writer in the Olga code; the dragon constructor writes the same offsets on the dragon), the lancer (row 22), the stab's three gate constants and the per-difficulty range (addresses not decoded; since read from the exe, see the follow-up below).
 
 **ASSUMED:** the vtable binding by name, the gate constants (0, 30, 0), the range (20, placeholder), the bone pair. The REA Ghidra provider failed to launch twice, so nothing was bound through it.
 
@@ -19226,3 +19226,8 @@ The copy's count of splits is the control's free slots (at most `min(num_childre
 **ASSUMED / open.** The hitter is the local player (`+0x2d8` is read as the last hitter; its writer was not traced: `action_die_1` writes a player field, not the enemy's). `this.strike.step` is the attacker's combo step at the hit (the combo state machine's step, `combat/attack.ts`). Gun bullets use the shot's step. Techniques other than Gibarta / Rabarta do not split (the exe's +0x2d8 attacker with a stale combo step is not modelled). The copy's speed and hop are still ASSUMED (1.0 a frame, 2.5 up, 0.2 gravity). Remote split: no newserv subcommand names a slime split (`vendor/newserv/src/ReceiveSubcommands.cc`, `CommandFormats.hh` have none), so a remote player's hit on a slime is not simulated on this client; left open. The flinch entry's particle 0xce and SE 0x107 (`0x005985c4`) are not in the port's flinch (ASSUMED: the generic path's entry is the same state).
 
 **Checks.** `node tests/enemysplits.test.ts`: all checks passed. `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts`: 5852 checks, 0 failures. `node tests/combatdepth.test.ts`: 836 checks, 0 failures. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean. Playwright not run (per the task).
+
+## 2026-10-24: Olga Flow: the sword stab's constants and range are read from the exe
+
+The stab pass left four placeholders (plane 0, axis 30, epsilon 0, range 20) because the dump's globals have no addresses. The loads in CheckOlga1SwordStab (0x00495508..0x00495684, objdump) name them: g_OlgaSwordStabYPlane 0x00902af0 = 0.0, g_OlgaSwordStabYAxisThreshold 0x00902aec = 150.0, g_OlgaSwordStabEpsilon 0x00902ae8 = 1e-5, and the range is `[4*eax + 0x0090264c]` = {15, 20, 25, 50} with eax = g_CurrentDifficulty 0x00a9cd68 (0x00495614: an index outside 0..3 reads row 0). `combat/olgaflowhits.ts` OLGA_SWORD_STAB and `olgaStabRange`, `render/combat.ts` passes the game's difficulty; `tests/olgaflowai.test.ts` checks the values. Still ASSUMED: the bone pair (tip, previous tip).
+

@@ -120,8 +120,10 @@ export class OlgaSwordTrail {
 // The spawn (CheckOlga1SwordStab, 215080): the sword tip (+0x5ec) and the sword's other point (+0x5e0) must
 // cross the Y plane g_OlgaSwordStabYPlane with both |y| <= g_OlgaSwordStabYAxisThreshold; the ground point is
 // a + (tip - a) * t with t = -a.y / (tip.y - a.y) when tip.y - a.y > g_OlgaSwordStabEpsilon, else t = 1, at y = 0.
-// The formula is PROVEN; the three constants are NOT decoded (no address in the dump), so the values below are
-// ASSUMED placeholders. The range is maybe_olga1_sword_stab_ranges[difficulty] (not decoded): ASSUMED.
+// The formula is PROVEN. The constants are read from the exe (the loads in 0x00495508..0x00495684):
+// g_OlgaSwordStabYPlane 0x00902af0 = 0.0, g_OlgaSwordStabYAxisThreshold 0x00902aec = 150.0,
+// g_OlgaSwordStabEpsilon 0x00902ae8 = 1e-5. The range is maybe_olga1_sword_stab_ranges 0x0090264c
+// {15, 20, 25, 50} indexed by g_CurrentDifficulty 0x00a9cd68 (0x00495614: an index outside 0..3 reads row 0).
 
 export interface XYZ {
   x: number;
@@ -132,12 +134,16 @@ export interface XYZ {
 export const OLGA_SWORD_STAB = {
   // The object lives for 8 updates (counter +0x30 0..7; destroyed when > 7). PROVEN.
   lifeTicks: 8,
-  // ASSUMED placeholders for the decoded-address-less constants and the per-difficulty range.
-  floorPlane: 0,
-  axisThreshold: 30,
-  epsilon: 0,
-  range: 20,
+  floorPlane: 0, // 0x00902af0
+  axisThreshold: 150, // 0x00902aec
+  epsilon: 1e-5, // 0x00902ae8
+  ranges: [15, 20, 25, 50], // 0x0090264c, by difficulty
 } as const;
+
+// The stab range for a difficulty (0x00495614: outside 0..3 reads row 0).
+export function olgaStabRange(difficulty: number): number {
+  return OLGA_SWORD_STAB.ranges[difficulty >= 0 && difficulty < 4 ? difficulty : 0];
+}
 
 // The stab's ground point (CheckOlga1SwordStab_00495508 on the XZ plane), or null when the sword does not
 // cross the stab plane or is outside the axis threshold. The gate's constants are ASSUMED (see above).
@@ -156,7 +162,7 @@ export class OlgaStabObject {
   readonly pos: XZ;
   readonly range: number;
 
-  constructor(pos: XZ, range: number = OLGA_SWORD_STAB.range) {
+  constructor(pos: XZ, range: number = olgaStabRange(0)) {
     this.pos = pos;
     this.range = range;
   }

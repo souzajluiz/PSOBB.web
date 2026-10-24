@@ -16,7 +16,7 @@ import {
   encodeOlgaA4,
   type OlgaEvent,
 } from '../client/src/combat/olgaflowai.ts';
-import { OLGA_SWORD_STAB, OlgaStabObject, olgaBattlePower, randomlyAdjust, stabGroundPoint, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
+import { OLGA_SWORD_STAB, OlgaStabObject, olgaStabRange, olgaBattlePower, randomlyAdjust, stabGroundPoint, swordWaveTouches } from '../client/src/combat/olgaflowhits.ts';
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -309,6 +309,13 @@ const sends = (ai: OlgaFlowAi): OlgaEvent[] => ai.drainEvents().filter((ev) => e
   eq(ticks, OLGA_SWORD_STAB.lifeTicks, 'a stab object lives for 8 updates');
   check(o.touches({ x: 6, z: 8 }), 'a player at 10 (inclusive) is hit by the stab');
   check(!o.touches({ x: 7, z: 8 }), 'a player beyond the stab range is missed');
+}
+
+// The stab constants and ranges read from the exe (0x00902ae8..0x00902af0, 0x0090264c by g_CurrentDifficulty).
+{
+  check(OLGA_SWORD_STAB.axisThreshold === 150 && OLGA_SWORD_STAB.floorPlane === 0 && OLGA_SWORD_STAB.epsilon === 1e-5, 'stab constants from the exe');
+  check([0, 1, 2, 3].map(olgaStabRange).join() === '15,20,25,50', 'stab range per difficulty 15/20/25/50');
+  check(olgaStabRange(4) === 15 && olgaStabRange(-1) === 15, 'an out-of-table difficulty reads row 0');
 }
 
 console.log(failures === 0 ? 'olgaflowai: all checks passed' : `olgaflowai: ${failures} failure(s)`);

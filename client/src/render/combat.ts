@@ -73,7 +73,7 @@ import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
-import { OLGA_AREA, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
+import { OLGA_AREA, OLGA_SWORD_WAVE, OlgaSwordTrail, OlgaStabObject, olgaStabRange, randomlyAdjust, olgaBattlePower, stabGroundPoint, swordWaveTouches, type XYZ } from '../combat/olgaflowhits.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
@@ -2899,8 +2899,8 @@ export class CombatView {
 
   // The sword stab (CheckOlga1SwordStab spawns, olga1_sword_stab_update hits; combat/olgaflowhits.ts, pass 5).
   // The spawn runs on the brain's stabTick (rows 11..20) at the sword's ground point; every live object hits
-  // the local player within its range each tick, for 8 ticks. ASSUMED: the bone pair (tip, previous tip), the
-  // stab constants and the range (see olgaflowhits.ts).
+  // the local player within its range each tick, for 8 ticks. ASSUMED: the bone pair (tip, previous tip)
+  // (see olgaflowhits.ts; the constants and the per-difficulty range are read from the exe).
   private olgaStabs = new Map<number, { prev: XYZ | null; objs: OlgaStabObject[] }>();
 
   private olgaSwordStab(e: EnemyRuntime, ai: OlgaFlowAi): void {
@@ -2916,7 +2916,7 @@ export class CombatView {
       const w = bone.getWorldPosition(new THREE.Vector3());
       const tip: XYZ = { x: w.x, y: w.y, z: w.z };
       const g = stabGroundPoint(st.prev ?? tip, tip);
-      if (g) st.objs.push(new OlgaStabObject(g));
+      if (g) st.objs.push(new OlgaStabObject(g, olgaStabRange(this.difficultyParams?.difficulty ?? 0)));
       st.prev = tip;
     } else {
       st.prev = null;

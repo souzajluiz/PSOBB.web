@@ -777,3 +777,6 @@ launch twice in this pass, so no address was bound through it; the names below a
 2. The lancer (15.4).
 3. The stab's constants and ranges (15.2): the three floats and the per-difficulty array need their addresses (the dump's
    globals are declared without them; Ghidra decompile of 0x00495508 would show the DAT_ addresses once the provider launches).
+
+15.x Follow-up (2026-10-24): the stab constants are decoded from the loads in 0x00495508..0x00495684: plane 0x00902af0 = 0.0, axis threshold 0x00902aec = 150.0, epsilon 0x00902ae8 = 1e-5, ranges 0x0090264c = {15, 20, 25, 50} by g_CurrentDifficulty 0x00a9cd68. The placeholders above (0, 30, 0, 20) are replaced.
+
