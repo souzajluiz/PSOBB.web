@@ -44,6 +44,11 @@
 //   Cave / Mine / Ruins doors take a switch flag in param4 (negative =
 //   always unlocked, > 0x100 = always locked) or a base flag plus a count
 //   (newserv Map.cc); they use the Forest door's distances here.
+// Not a door: 0x0103 (creator 0x00615a9c, ctor InitializeMapObjectDoor_00615b14, vtable 0x00b256a0;
+//   newserv's TOCapsuleMachine01) draws the shared CapMoto model (bm_fs_obj_cap_moto.bml, loader
+//   0x00615bec) and has a box (0x009c4a5c: y 32, halfX 13, halfZ 20). Its vtable has no lock slot
+//   and no icon: slot 1 (0x00615a2c) only tells the shared model the frame counter changed, slot 2
+//   (0x006159b0) draws it inside the view distance. No state, no lock, no minimap icon.
 // Switches set their flag when the player steps on them and send 6x05
 // (G_WriteSwitchFlag_6x05: entity 0x4000 + object index, flag, floor,
 // flags 1), as in newserv's captures of real clients:
@@ -98,6 +103,16 @@ export interface FieldDoor {
   // other doors, whose unlock is `flags`. `bit0` is the unlock (and the minimap colour) for both.
   bitRule: 'switches' | 'beam' | null;
   bit0: boolean;
+  // Collision flag 8 of the door's box (FUN_007b52c4 sets it, FUN_007b52ec clears it, on hitbox
+  // [0].unknown_flags). boxPairActive reads 8 as "no collision with a player (0x2000)": the door
+  // is passable while it is set. Beam-family doors only (the other doors use their state).
+  passable: boolean;
+  // 0x0204 (update BeamDoorMapObjectUpdate_00657e00, lock 0x00658410): the motion frame (+0xb4,
+  // advanced by +0xb8 = 1.0 per tick while bit 0 is set), the count of the flags 0x46..0x48 seen by
+  // the lock (+0xd4) and the ticks counted for the particles (+0xd8).
+  beamFrame: number;
+  lockCount: number;
+  beamTicks: number;
   state: number; // FUN_00656eb4 states: 0 locked, 1 unlock camera, 2 closed, 4 opening, 5 open, 3 closing
   // TObjDoor (0x0080) with param6 odd (ctor FUN_006573d4: +0xbc = clamp(param6 % 2, 0, 1)):
   // on unlock the camera looks from (param1, param2, param3) at the door
@@ -187,6 +202,13 @@ const EVENT_TRIGGER_IDLE = 3; // FUN_00659d98: +0xb4 counts down from 3
 // (the squared distance against 2500.0 at 0x00937b78).
 const BEAM_DOOR_FLAGS = [0x46, 0x47, 0x48];
 const BEAM_DOOR_RANGE_SQ = 2500;
+const BEAM_LOCK_SE = 0x4df; // lock 0x00658410: when the count of the flags changes to a value above 0
+const BEAM_MOTION_SE = 0x4dc; // update 0x00657e00: every tick the motion runs (the door's own position)
+const BEAM_PARTICLE = 0x229; // create_particle_effect_3(..., 0x229, 0x800) at (+-40, 0, 0) of the door
+const BEAM_PARTICLE_EVERY = 30; // ticks (the counter +0xd8 % 30)
+const BEAM_PARTICLE_OFFSET = 40; // the literal 40.0 stored in the update's two points (+-40 on x)
+const BEAM_STEP = 1.0; // +0xb8 (base ctor 0x00619e24: 0x3f800000)
+const BEAM_WINDOW = 70; // DAT_00937b98 (70.0): the last 70 frames of the motion make the door passable
 
 // Boss warp destination by episode index (0 = Ep1, 1 = Ep2, 2 = Ep4) * 18 + floor (0x0097f380).
 export const BOSS_WARP_FLOOR = [
@@ -414,7 +436,7 @@ export function collectFieldObjects(
           const { flags, locked } = doorFlags(o);
           const camera = o.type === 0x0080 && Math.trunc(o.params[5]) % 2 === 1 ? ([o.params[0], o.params[1], o.params[2]] as [number, number, number]) : null;
           const bitRule = o.type === 0x0202 ? 'switches' : o.type === 0x0204 ? 'beam' : null;
-          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, bitRule, bit0: false, state: 0, frame: 0, laserFrame: 0, mesh: null, camera, cameraCount: DOOR_CAMERA_FRAMES });
+          doors.push({ ...base, type: o.type, yaw: p.yaw, flags, locked, lamps: LAMP_DOORS.has(o.type), city: CITY_DOORS[o.type] ?? null, bitRule, bit0: false, passable: false, beamFrame: 0, lockCount: 0, beamTicks: 0, state: 0, frame: 0, laserFrame: 0, mesh: null, camera, cameraCount: DOOR_CAMERA_FRAMES });
         } else if (BOX_TYPES.has(o.type)) {
           boxes.push({ ...base, type: o.type, yaw: p.yaw, broken: false });
         } else if (SWITCH_RADIUS[o.type] !== undefined && o.params[3] >= 0 && o.params[3] < 0x100) {
@@ -506,19 +528,69 @@ export function lockedLook(d: FieldDoor): boolean {
 // 'beam' (0x0204, slot 0x00658410): once set it stays set; it is set when the flags 0x46..0x48
 // are all on and a player (`players`, the floor's) is within 50 units of the door in XZ.
 // ASSUMED: `players` are the local floor's players (the exe loops GetPlayer 0..3 on the floor).
-export function stepBitDoor(d: FieldDoor, flagOn: (f: number) => boolean, players: ReadonlyArray<{ x: number; y: number; z: number }>): void {
+// The 0x0202 lock (0x00657b20) also sets / clears collision flag 8 on the unlock (passable = bit 0).
+// The 0x0204 lock (0x00658410) returns at once once bit 0 is set. Otherwise it counts the three
+// quest flags 0x46..0x48 (flagOn; the difficulty's bits) into +0xd4 and plays SFX 0x4df when the count changes to a value above 0; at a count of 3 a
+// player of the floor within 50 (XZ) sets bit 0 and the unlock event runs (`unlocked`; the
+// network part is NotifyDoorStateChange_007b5038, FieldObjects.onBeamUnlock).
+export interface BitDoorEvents {
+  se: number[]; // sound effects to play at the door
+  unlocked: boolean; // the beam door's unlock event ran this step
+}
+
+export function stepBitDoor(d: FieldDoor, flagOn: (f: number) => boolean, players: ReadonlyArray<{ x: number; y: number; z: number }>): BitDoorEvents {
+  const ev: BitDoorEvents = { se: [], unlocked: false };
   if (d.bitRule === 'switches') {
     d.bit0 = d.flags.every((f) => flagOn(f));
+    d.passable = d.bit0;
   } else if (d.bitRule === 'beam' && !d.bit0) {
-    if (BEAM_DOOR_FLAGS.filter((f) => flagOn(f)).length !== BEAM_DOOR_FLAGS.length) return;
+    const n = BEAM_DOOR_FLAGS.filter((f) => flagOn(f)).length;
+    if (n > 0 && n !== d.lockCount) ev.se.push(BEAM_LOCK_SE);
+    d.lockCount = n;
+    if (n !== BEAM_DOOR_FLAGS.length) return ev;
     for (const p of players) {
       const dx = p.x - d.x, dz = p.z - d.z;
       if (dx * dx + dz * dz < BEAM_DOOR_RANGE_SQ) {
         d.bit0 = true;
-        return;
+        ev.unlocked = true;
+        break;
       }
     }
   }
+  return ev;
+}
+
+// A point sx along the door's x axis, in the door's yaw (the update's matrix: the position, then
+// the heading's rotation; ASSUMED the rotation convention of objectmodels.ts).
+function beamPoint(d: FieldDoor, sx: number): { x: number; y: number; z: number } {
+  const c = Math.cos(d.yaw), s = Math.sin(d.yaw);
+  return { x: d.x + sx * c, y: d.y, z: d.z - sx * s };
+}
+
+// One game tick of the 0x0204 update (BeamDoorMapObjectUpdate_00657e00) once bit 0 is set: the
+// motion frame +0xb4 += 1.0; in the last 70 frames (last - 70 < t < last, last = the motion's
+// frame count - 1) the door is passable (flag 8, and the "unknown" +0xdc notice is not modelled);
+// otherwise the counter +0xd8 counts the ticks, SFX 0x4dc plays at the door every tick the motion
+// runs, and every 30th counted tick two particles 0x229 stand at (+-40, 0, 0) of the door. Past
+// the last frame the frame is held at last. Bit 0 clear: the door is not passable and does not move.
+export function stepBeamMotion(d: FieldDoor, frames: number): { se: boolean; burst: boolean } {
+  const last = frames - 1;
+  const t = d.beamFrame + BEAM_STEP;
+  const inWindow = t > last - BEAM_WINDOW && t < last;
+  if (inWindow) d.passable = true;
+  let se = false;
+  let burst = false;
+  if (t <= last) {
+    se = true;
+    if (!inWindow) {
+      d.beamTicks += 1;
+      burst = d.beamTicks % BEAM_PARTICLE_EVERY === 0;
+    }
+    d.beamFrame = t;
+  } else {
+    d.beamFrame = last;
+  }
+  return { se, burst };
 }
 
 // The minimap colour of a door: red while locked. The beam-family doors (0x0202, 0x0204)
@@ -624,6 +696,11 @@ export class FieldObjects {
   private drivenWarp: { index: number; state: number } | null = null;
   onSwitch: (sw: FieldSwitch) => void = () => {};
   onEventTrigger: (t: FieldEventTrigger) => void = () => {};
+  // Sound and particle effects of the beam door (positional; the caller plays / spawns them).
+  onSe: (id: number, at: { x: number; y: number; z: number }) => void = () => {};
+  onParticles: (id: number, at: { x: number; y: number; z: number }) => void = () => {};
+  // The beam door's unlock event (NotifyDoorStateChange_007b5038: the object's box-status packet).
+  onBeamUnlock: (d: FieldDoor) => void = () => {};
 
   constructor(
     viewer: MapViewer,
@@ -735,8 +812,9 @@ export class FieldObjects {
   obstacles(): Obstacle[] {
     const out: Obstacle[] = [];
     for (const d of this.doors) {
-      if (d.state === 4 || d.state === 5) continue;
-      if (d.city && d.state !== 2) continue; // the box is back on only once it is shut
+      // Beam-family doors: passable while flag 8 of the box is set (passable), not by their state.
+      if (d.bitRule ? d.passable : d.state === 4 || d.state === 5) continue;
+      if (!d.bitRule && d.city && d.state !== 2) continue; // the box is back on only once it is shut
       const box = this.models?.models.get(d.index)?.spec.collision;
       const halfX = box && box.type === 1 ? box.halfX : 20;
       const halfZ = box && box.type === 1 ? box.halfZ : 10;
@@ -851,16 +929,21 @@ export class FieldObjects {
         if (d.mesh) d.mesh.visible = seal.sealed;
         continue;
       }
-      stepBitDoor(d, (f) => this.switchOn(f), players);
       const frames = this.models?.doorFrames(d.index) || DOOR_FRAMES;
-      if (d.city) {
-        let flat = Infinity;
-        for (const p of players) flat = Math.min(flat, Math.hypot(d.x - p.x, d.z - p.z));
-        stepCityDoor(d, flat, frames);
+      if (d.bitRule === 'beam') {
+        // The beam's lock and motion run per game tick (tickBeamDoors); here its frame is drawn.
+        d.frame = d.beamFrame;
       } else {
-        let nearest = Infinity;
-        for (const p of players) nearest = Math.min(nearest, dist3(d, p));
-        stepDoor(d, this.unlocked(d), nearest, frames);
+        stepBitDoor(d, (f) => this.switchOn(f), players);
+        if (d.city) {
+          let flat = Infinity;
+          for (const p of players) flat = Math.min(flat, Math.hypot(d.x - p.x, d.z - p.z));
+          stepCityDoor(d, flat, frames);
+        } else {
+          let nearest = Infinity;
+          for (const p of players) nearest = Math.min(nearest, dist3(d, p));
+          stepDoor(d, this.unlocked(d), nearest, frames);
+        }
       }
       if (this.models?.models.has(d.index)) {
         if (d.lamps) this.models.setLamps(d.index, d.state <= 2 ? doorLamps(d, this.unlocked(d), this.flags) : null);
@@ -878,6 +961,32 @@ export class FieldObjects {
     }
     this.showBossWarps();
     if (this.collision) this.collision.obstacles = this.obstacles();
+  }
+
+  // The beam-family object update runs once per game tick (30/s), as the exe's object update does:
+  // the 0x0204 lock and motion (0x00658410 / 0x00657e00). `self` / `others` are the floor's players.
+  tickBeamDoors(ticks: number, self: { x: number; y: number; z: number } | null, others: ReadonlyArray<{ x: number; y: number; z: number }>): void {
+    for (let i = 0; i < ticks; i++) {
+      const players: Array<{ x: number; y: number; z: number }> = [];
+      if (self) players.push(self);
+      for (const o of others) players.push(o);
+      for (const d of this.doors) {
+        if (d.bitRule !== 'beam') continue;
+        // The lock reads the quest flags of the current difficulty (GetQuestFlagBit_006bb450(difficulty, flag)).
+        const ev = stepBitDoor(d, (f) => this.questFlag(f), players);
+        d.state = d.bit0 ? 5 : 0; // the state reads as open once bit 0 is set (lockedLook, the mesh colour)
+        for (const id of ev.se) this.onSe(id, d);
+        if (ev.unlocked) this.onBeamUnlock(d);
+        if (!d.bit0) {
+          d.passable = false; // the update clears flag 8 while bit 0 is clear
+          continue;
+        }
+        const m = stepBeamMotion(d, this.models?.doorFrames(d.index) || DOOR_FRAMES);
+        if (m.se) this.onSe(BEAM_MOTION_SE, d);
+        if (m.burst) for (const sx of [BEAM_PARTICLE_OFFSET, -BEAM_PARTICLE_OFFSET]) this.onParticles(BEAM_PARTICLE, beamPoint(d, sx));
+      }
+    }
+    if (ticks && this.collision) this.collision.obstacles = this.obstacles();
   }
 
   // The items agent breaks boxes: it gets the box list and hides a broken one.

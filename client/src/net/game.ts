@@ -836,6 +836,21 @@ export class Game extends Lobby {
     this.conn.send(0x60, 0, body);
   }
 
+  // 6x60 subcommand 0x0b type 3 (NotifyDoorStateChange_007b5038, the box-status form of
+  // the same packet as the box break, 0x0C bytes): {0b, 03, u16 entity id, u32 value, u32 object
+  // index}. The beam door sends its own entity id with value 1 when its unlock runs (ASSUMED: the
+  // object index is the set entry's index, the record's +4 short).
+  sendObjectState(entityId: number, value: number, objectIndex: number): void {
+    const body = new Uint8Array(0x0c);
+    const dv = new DataView(body.buffer);
+    body[0] = 0x0b;
+    body[1] = 0x03;
+    dv.setUint16(2, entityId, true);
+    dv.setUint32(4, value, true);
+    dv.setUint32(8, objectIndex, true);
+    this.conn.send(0x60, 0, body);
+  }
+
   // Reads a quest flag of the current difficulty.
   getQuestFlag(flag: number): boolean {
     if (flag >= QUEST_FLAG_BYTES * 8) return false;

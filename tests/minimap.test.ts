@@ -6,7 +6,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { minimapFileFor, modelTriangles, parseMinimapRel } from '../client/src/formats/minimap.ts';
-import { collectFieldObjects, doorMapLocked, stepBitDoor, stepKomo, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import { collectFieldObjects, doorMapLocked, stepBeamMotion, stepBitDoor, stepKomo, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import { objectModelFor } from '../client/src/formats/objectmodels.ts';
 import type { PlacedEntity } from '../client/src/formats/setdata.ts';
 import {
   cameraUp,
@@ -476,6 +477,43 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
   eq(beam.bit0, true, 'beam: the three flags and a player 10 units away in XZ (height ignored) open it');
   stepBitDoor(beam, () => false, []);
   eq([beam.bit0, doorMapLocked(beam)], [true, false], 'beam: once open, bit 0 is latched (the lock slot returns early)');
+  // 0x658410: SFX 0x4df when the flag count changes to above 0; at 3 with a player near, the unlock event once.
+  const lock = door(0x0204, 0, 0, 100, 100);
+  const flagsOn = (n: number) => (f: number) => f >= 0x46 && f < 0x46 + n;
+  eq(stepBitDoor(lock, flagsOn(1), []).se, [0x4df], 'beam lock: one flag on plays SFX 0x4df');
+  eq(stepBitDoor(lock, flagsOn(1), []).se, [], 'beam lock: the count is unchanged, no SFX');
+  eq(stepBitDoor(lock, flagsOn(2), []).se, [0x4df], 'beam lock: the count going to 2 plays SFX again');
+  const far = stepBitDoor(lock, flagsOn(3), [{ x: 100 + 60, y: 0, z: 100 }]);
+  eq([far.unlocked, lock.bit0], [false, false], 'beam lock: three flags with the player out of range do not unlock');
+  const near = stepBitDoor(lock, flagsOn(3), [{ x: 100, y: 0, z: 100 + 49 }]);
+  eq([near.unlocked, lock.bit0], [true, true], 'beam lock: three flags and a player 49 away unlock once (the event runs)');
+  eq(stepBitDoor(lock, flagsOn(3), []).unlocked, false, 'beam lock: the latched door raises no second event');
+  // 0x657e00 motion, one call per tick while bit 0 is set: +1.0 a tick, the last 70 frames passable,
+  // SFX 0x4dc each tick, a pair of 0x229 every 30 counted ticks, held at the last frame.
+  const mv = door(0x0204, 0, 0, 0, 0);
+  mv.bit0 = true;
+  const frames = 200; // last = 199, the window (129, 199)
+  let bursts = 0;
+  let sfx = 0;
+  for (let i = 0; i < 29; i++) {
+    const r = stepBeamMotion(mv, frames);
+    if (r.burst) bursts++;
+    if (r.se) sfx++;
+  }
+  eq([mv.beamFrame, mv.beamTicks, bursts, sfx, mv.passable], [29, 29, 0, 29, false], 'beam motion: 29 ticks advance the frame, count and SFX; no burst yet');
+  eq(stepBeamMotion(mv, frames).burst, true, 'beam motion: the 30th counted tick makes the first particle pair');
+  while (mv.beamFrame < 129) stepBeamMotion(mv, frames);
+  eq([mv.beamFrame, mv.passable], [129, false], 'beam motion: not passable before the last 70 frames');
+  const inWin = stepBeamMotion(mv, frames);
+  eq([mv.passable, inWin.se, inWin.burst, mv.beamTicks], [true, true, false, 129], 'beam motion: inside the window the door is passable, the SFX goes on, the count stops');
+  while (mv.beamFrame < 199) stepBeamMotion(mv, frames);
+  const end = stepBeamMotion(mv, frames);
+  eq([mv.beamFrame, end.se, end.burst], [199, false, false], 'beam motion: past the last frame the frame is held at 199 and the motion SFX stops');
+  // 0x615a2c / ctor: the capsule (0x0103) is not a door: no lock, no icon, a box of table 0x009c4a5c.
+  const capsule = objectModelFor({ kind: 'object', index: 3, type: 0x0103, floor: 0, section: 0, position: [0, 0, 0], rotation: [0, 0, 0], group: 0, unknownA3: 0, params: [0, 0, 0, 0, 0, 0] } as never, { area: 0x06, episode: 1 });
+  eq([capsule?.name, !!capsule?.door, capsule?.collision?.address], ['TOCapsuleMachine01', false, 0x009c4a5c], '0x0103: a capsule machine (CapMoto model, box 0x009c4a5c), not a door');
+  const capsuleDoors = collectFieldObjects([{ entity: { kind: 'object', index: 3, type: 0x0103, floor: 0, section: 0, position: [0, 0, 0], rotation: [0, 0, 0], group: 0, unknownA3: 0, params: [0, 0, 0, 0, 0, 0] }, name: 'x', category: 'object', world: [0, 0, 0], yaw: 0, sectionFound: true } as unknown as PlacedEntity], { episode: 0, floor: 0, area: 0x06 }).doors;
+  eq(capsuleDoors.length, 0, '0x0103 is not in the door list (no lock, no state, no minimap icon)');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);

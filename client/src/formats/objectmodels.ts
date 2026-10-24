@@ -544,6 +544,14 @@ export function objectModelFor(o: ObjectSet, ctx: ObjectModelContext): ObjectMod
     }
     case 0x0192:
       return simpleDoor('TObjDoaEx01', 'fs_obj_ex_doa01.bml', BOX(0x009c798c, 20, 10, 20, -5));
+    // 0x0103 (newserv TOCapsuleMachine01; the exe's creator 0x00615a9c names it a door, but its
+    // vtable has no lock or icon). Ctor InitializeMapObjectDoor_00615b14 sets the box from
+    // table 0x009c4a5c (y 32, halfZ 20 at +0x0c, halfX 13 at +0x10, flags 0x10003). The model is the
+    // shared CapMoto archive (loader 0x00615bec, bm_fs_obj_cap_moto.bml): the exe builds one NREL
+    // tree from one node of it (njcm child->next->child->next) and draws that node at each object.
+    // ASSUMED: the whole entry is drawn here (the node is not selected), with no motion.
+    case 0x0103:
+      return spec('TOCapsuleMachine01', 'bm_fs_obj_cap_moto.bml', [{ model: 0 }], { collision: BOX(0x009c4a5c, 13, 20, 32, 0) });
     // TObjDoorJung (laser door, loader FUN_00657bac: bm_obj_beamdoa.bml, model
     // 0 frame and model 1 beam, embedded texture list 0).
     case 0x0202:
