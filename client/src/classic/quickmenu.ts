@@ -74,11 +74,13 @@ export function quickMenuTabFor(cursor: number): number {
 // gui 2 is not a tab: the weapon tab's compare list (CreateEquipListWindowObject_00725d18,
 // key 0xe in state 1) opens there. The earlier "two-handed at gui 2" reading was wrong.
 export const QUICK_MENU_GUI = {
-  // gui 1: the weapon, two-handed, traps and technique lists (0x00971f48 = 13, 317).
+  // gui 1: every tab's list (update_quickmenu calls get_gui_position(1) in cases 0, 3, 6, 9;
+  // 0x00971f48 = 13, 317).
   list: { x: 13, y: 317, gui: 1 },
-  // gui 2: the weapon tab's compare list (0x00971f50 = 324, 256).
+  // gui 2: the weapon tab's compare list, opened by key 0xe in state 1 (0x00971f50 = 324, 256;
+  // CreateEquipListWindowObject_00725d18, dump 689984). Not a tab (2026-10-23 correction).
   compareList: { x: 324, y: 256, gui: 2 },
-  // gui 0xe1: the lobby motion menu's categories (0x00972648 = 13, 276).
+  // gui 0xe1: the lobby motion menu (0x00972648 = 13, 276).
   motionList: { x: 13, y: 276, gui: 0xe1 },
   // gui 0xe2: the motion menu's sub-list (0x00972650 = 13, 317).
   motionSubList: { x: 13, y: 317, gui: 0xe2 },
@@ -186,4 +188,269 @@ export function quickMenuMotionSubRows(category: number, text: (group: number, i
   const out: QuickRow[] = [];
   for (let k = 0; k < row.count; k++) out.push({ label: text(0x42, row.textBase + k), value: row.valueBase + k, enabled: true });
   return out;
+}
+// ---------------------------------------------------------------------------
+// Tab rows and actions for the quick menu windows (2026-10-23, pure; the window
+// fills the facts from the live item / player / map and acts on the result).
+//
+// Item facts. Offsets are the exe's item_instance fields (struct at dump line 78921):
+// group_1 +0xf2 (data[0]), group_2 +0xf3 (data[1], the tool class), group_idx +0xf4
+// (data[2], the tool variant), owner +0xf8, dwItemFlags +0xdc.
+// ---------------------------------------------------------------------------
+
+// The tools_techs group (group_1 == 3). Every tool in the tab lists is in this group.
+export const GROUP_TOOLS_TECHS = 3;
+
+export interface QuickMenuItemFacts {
+  // item group_1 (+0xf2).
+  group1: number;
+  // item group_2 (+0xf3) and group_idx (+0xf4). Only read for tools.
+  group2: number;
+  groupIdx: number;
+  // item dwItemFlags (+0xdc).
+  dwItemFlags: number;
+  // The raw result of CheckItemEquipConditions_005d5f40 for this item, before the
+  // item-flag fix-ups of GetItemAttackData. Filled by the caller (not decoded here).
+  equipCheckBits: number;
+  // is_rare_weapon (is_item_rare, dump 414662).
+  rare: boolean;
+}
+
+// The bits GetItemAttackData_005c50b4 returns (dump 414125, asm 5c50b4..5c510f).
+export const ATTACK_BIT_BLOCKED = 0x01; // checker bit 1: the item is blocked here and now
+export const ATTACK_BIT_EQUIPPABLE = 0x02; // checker bit 2 (CanEquipItem), or dwItemFlags 0x200
+export const ATTACK_BIT_WEAPON = 0x08; // checker bit 8: set for every non-tool item (group_1 != 3)
+export const ATTACK_BIT_FLAG80 = 0x10; // dwItemFlags 0x80 when the checker result is 0
+
+// GetItemAttackData_005c50b4 (asm): raw = checker & mask; if dwItemFlags & 0x200, raw |= 2;
+// if raw == 0 and dwItemFlags & 0x80, raw = 0x10; return raw & mask. The "attack data type"
+// the populate calls pass is this mask, not an item or ItemPMT field.
+export function itemAttackDataBits(f: QuickMenuItemFacts, mask: number): number {
+  let raw = f.equipCheckBits & mask;
+  if ((f.dwItemFlags & 0x200) !== 0) raw |= ATTACK_BIT_EQUIPPABLE;
+  if (raw === 0 && (f.dwItemFlags & 0x80) !== 0) raw = ATTACK_BIT_FLAG80;
+  return raw & mask;
+}
+
+// The two-handed tab (ListWindowObject_PopulateTwoHandedWeapons_0074b620, dump 719618):
+// GetItemAttackData(item, 2) != 0, GetItemAttackData(item, 1) == 0, not rare. Inventory
+// order is kept. The name is the populate's; the list holds tools, not two-handed weapons
+// (the equipped weapon is not added here).
+export function isTwoHandedTabItem(f: QuickMenuItemFacts): boolean {
+  return itemAttackDataBits(f, ATTACK_BIT_EQUIPPABLE) !== 0 && itemAttackDataBits(f, ATTACK_BIT_BLOCKED) === 0 && !f.rare;
+}
+
+export interface QuickMenuListItem {
+  instanceId: number;
+  facts: QuickMenuItemFacts;
+}
+
+// The rows of the two-handed tab, in inventory order.
+export function twoHandedTabRows<T extends QuickMenuListItem>(items: readonly T[]): T[] {
+  return items.filter((it) => isTwoHandedTabItem(it.facts));
+}
+
+// GetToolTechSlotId_005de4d8 (dump 434966): the tool's slot in the tools/techs bar from
+// (group_2, group_idx). -1 when the item has no slot (class 2, the technique scrolls, and
+// any variant not listed).
+export const TOOL_TECH_SLOT_NONE = -1;
+export function toolTechSlotId(group2: number, groupIdx: number): number {
+  switch (group2) {
+    case 0:
+      return groupIdx <= 2 ? groupIdx : TOOL_TECH_SLOT_NONE;
+    case 1:
+      return groupIdx <= 2 ? groupIdx + 3 : TOOL_TECH_SLOT_NONE;
+    case 3:
+      return 8;
+    case 4:
+      return 9;
+    case 5:
+      return 10;
+    case 6:
+      return groupIdx === 0 ? 6 : groupIdx === 1 ? 7 : TOOL_TECH_SLOT_NONE;
+    case 7:
+      return 0x0b;
+    case 8:
+      return 0x0c;
+    default:
+      return TOOL_TECH_SLOT_NONE;
+  }
+}
+
+// The player action ProcessToolTechUse_00741c00 sets (dump 712224): action type 4 with the
+// slot, when Player_CanPerformAction(…, 4, slot) passes (dump 786128: the player's ready bit
+// (unk1 +0x10b6 bit 0) and slot 9 or 10 only, 8 < slot < 11). Setting the action clears the
+// ready bit. `ready` is that bit. Returns null when nothing is set.
+export const QM_ACTION_TOOL = 4;
+export interface QuickMenuToolAction {
+  actionType: number;
+  slot: number;
+}
+export function toolPendingAction(slot: number, ready: boolean): QuickMenuToolAction | null {
+  if (slot === TOOL_TECH_SLOT_NONE || !ready) return null;
+  if (!(slot > 8 && slot < 0x0b)) return null;
+  return { actionType: QM_ACTION_TOOL, slot };
+}
+
+// The tools tab's state machine (update_quickmenu cases 3..5, dump 711755..711870).
+// State 3 is the populate; it goes on to state 4 in the same frame. In state 4 the list's
+// flags (+0x84): bit 2 closes, bit 1 goes to 5 (the decide). In state 5 the key 0xd (held)
+// cancels with SE 0x585; otherwise, when the action is allowed and the selected item still
+// exists, the item is used (ChallengePlayer_HandleItemUsage) and the menu closes.
+export const QM_TOOL_STATE_POPULATE = 3;
+export const QM_TOOL_STATE_PICK = 4;
+export const QM_TOOL_STATE_USE = 5;
+export const QM_SOUND_CANCEL = 0x585;
+export interface ToolTabStep {
+  state: number;
+  close: boolean;
+  sound: number | null;
+  use: boolean;
+}
+export function toolTabStep(
+  state: number,
+  listFlags: number,
+  keyHeld13: boolean,
+  actionAllowed: boolean,
+  hasItem: boolean,
+): ToolTabStep {
+  if (state === QM_TOOL_STATE_POPULATE) state = QM_TOOL_STATE_PICK;
+  if (state === QM_TOOL_STATE_PICK) {
+    if ((listFlags & 4) !== 0) return { state, close: true, sound: null, use: false };
+    if ((listFlags & 2) !== 0) state = QM_TOOL_STATE_USE;
+    return { state, close: false, sound: null, use: false };
+  }
+  if (keyHeld13) return { state, close: true, sound: QM_SOUND_CANCEL, use: false };
+  if (actionAllowed && hasItem) return { state, close: true, sound: null, use: true };
+  return { state, close: false, sound: null, use: false };
+}
+
+// The traps tab (ListWindowObject_ResetAndRefresh_0074b9b4, dump 719825 -> the challenge
+// status items, dump 704479). Five rows, index 0..4. Rows 0..3 are the player's challenge
+// status bytes (+0x89c, SinowberillChallengePlayer_GetStatusOrAction_00698984: signed,
+// 0..20, anything else reads as 0). Row 4 is the Battle Mode trap stock (the player's
+// `last_attack_type` field in the dump, ClampValue_00697958: 0..99, anything else 0).
+// A row is shown only when its count is above 0. Its label is unitxt group 0x11, 0x13 + row
+// (ASSUMED: the label text is not read). A row is greyed (flag 0x80) unless the map is safe
+// and not a boss map.
+export const TRAP_ROW_COUNT = 5;
+export const TRAP_STOCK_ROW = 4;
+export const TRAP_LABEL_BASE = 0x13;
+export const TRAP_LABEL_GROUP = 0x11;
+export interface TrapRow {
+  row: number;
+  labelId: number;
+  count: number;
+  disabled: boolean;
+}
+export function trapStatusCount(raw: number): number {
+  const v = (raw << 24) >> 24; // the status is a signed byte
+  return v < 0 || v > 0x14 ? 0 : v;
+}
+export function trapStockCount(raw: number): number {
+  return raw < 0 || raw > 99 ? 0 : raw;
+}
+export function trapRows(statuses: readonly number[], stock: number, safeNotBoss: boolean): TrapRow[] {
+  const out: TrapRow[] = [];
+  for (let row = 0; row < TRAP_ROW_COUNT; row++) {
+    const count = row === TRAP_STOCK_ROW ? trapStockCount(stock) : trapStatusCount(statuses[row] ?? 0);
+    if (count <= 0) continue;
+    out.push({ row, labelId: TRAP_LABEL_BASE + row, count, disabled: !safeNotBoss });
+  }
+  return out;
+}
+
+// The Battle Mode trap entity is made only on battle_spaceship (16) and battle_ruins (17),
+// and only one at a time (CreateSinowberillChallengeEntityManager_006b08b8, dump 602277;
+// the map enum at dump lines 68689..68690).
+export const MAP_BATTLE_SPACESHIP = 16;
+export const MAP_BATTLE_RUINS = 17;
+export function canCreateChallengeTrapManager(map: number, managerExists: boolean): boolean {
+  return (map === MAP_BATTLE_SPACESHIP || map === MAP_BATTLE_RUINS) && !managerExists;
+}
+
+// The traps tab's decide (update_quickmenu case 8, dump 711817..711870).
+export interface TrapDecideInput {
+  row: number;
+  keyHeld13: boolean;
+  actionAllowed: boolean;
+  // ChallengeUI_HandleActionForAllElements_00719200 for the player (the element gate).
+  uiGate: boolean;
+  // The player's +0x32c is 2 (HandleSpecialPaletteInput returns 0).
+  paletteBlocked: boolean;
+  // SinowberillChallengePlayer_CanPerformAction_006953ac for the palette path.
+  canPerform: boolean;
+  // The stock (row 4) as the decide sees it.
+  stock: number;
+  // The status count of the row (rows 0..3).
+  status: number;
+  playerId: number;
+  map: number;
+  managerExists: boolean;
+}
+export interface TrapDecision {
+  kind: 'none' | 'cancel' | 'palette' | 'trap';
+  close: boolean;
+  sound: number | null;
+  // The 6x60 subcommand 0x83 body for the palette path (ASSUMED layout: command, size 2,
+  // then u16 player id, u16 row, u16 count; exe at HandleSpecialPaletteInput, dump 576703).
+  packet: { sub: number; size: number; playerId: number; row: number; count: number } | null;
+  // The stock after a trap (DecrementCounterAndClamp_00697968, dump 578151).
+  stockAfter: number | null;
+}
+const NO_DECISION: TrapDecision = { kind: 'none', close: false, sound: null, packet: null, stockAfter: null };
+export function trapDecide(d: TrapDecideInput): TrapDecision {
+  if (d.keyHeld13) return { kind: 'cancel', close: true, sound: QM_SOUND_CANCEL, packet: null, stockAfter: null };
+  if (!d.actionAllowed) return NO_DECISION;
+  if (d.row !== TRAP_STOCK_ROW) {
+    // HandleSpecialPaletteInput: not blocked, the element gate, can perform, count > 0.
+    const sent = !d.paletteBlocked && d.uiGate && d.canPerform && d.status > 0;
+    if (!sent) return NO_DECISION;
+    return {
+      kind: 'palette',
+      close: true,
+      sound: null,
+      packet: { sub: 0x83, size: 2, playerId: d.playerId, row: d.row, count: d.status },
+      stockAfter: null,
+    };
+  }
+  if (!canCreateChallengeTrapManager(d.map, d.managerExists)) return NO_DECISION;
+  const after = d.stock - 1 >= 0 ? d.stock - 1 : 0;
+  return { kind: 'trap', close: true, sound: null, packet: null, stockAfter: after };
+}
+
+// The weapon compare list (key 0xe held in state 1 of the weapon tab, dump 711680..711740).
+// Opening creates the gui 2 list and clears bit 8 of the UI flags (g_pUITextColorTable +0x1c,
+// `& 0xfff7`); closing sets it. The list's rows (the stat compare, EquipmentStatDisplayObject
+// UpdateEquipState 0x72582a, dump 689800) are not ported.
+export const QM_KEY_COMPARE = 0x0e;
+export function compareToggle(open: boolean): { open: boolean; uiBit8Set: boolean } {
+  return { open: !open, uiBit8Set: open };
+}
+
+// The technique swap (update_quickmenu case 0xa, dump 711875..711960). Key 0xe held: the first
+// press marks the selected row (pending = selected); the second press swaps the two rows of
+// the player's 19-entry technique order (SwapTechniqueSlots_00741d28, dump 712325) and clears
+// the mark. `changed` is the list's +0x2c flag the swap sets.
+export const TECHNIQUE_ORDER_LENGTH = 19;
+export const SWAP_NONE = -1;
+export interface TechniqueSwapStep {
+  pending: number;
+  order: number[];
+  changed: boolean;
+}
+export function techniqueSwapKey(pending: number, selected: number, order: readonly number[]): TechniqueSwapStep {
+  if (pending === SWAP_NONE) return { pending: selected, order: [...order], changed: false };
+  const next = [...order];
+  const tmp = next[pending];
+  next[pending] = next[selected];
+  next[selected] = tmp;
+  return { pending: SWAP_NONE, order: next, changed: true };
+}
+export interface TechniqueRow {
+  slot: number;
+  techId: number;
+}
+export function techniqueRows(order: readonly number[]): TechniqueRow[] {
+  return order.slice(0, TECHNIQUE_ORDER_LENGTH).map((techId, slot) => ({ slot, techId }));
 }

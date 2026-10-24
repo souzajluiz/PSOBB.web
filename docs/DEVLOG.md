@@ -15446,3 +15446,53 @@ Follow-up to "Customize (action palette editor) and the save upload (E7) traced 
 1. Sonar use: find the reader of `g_BaRulesState` byte 1 / 2 in the effective copy (`InitializeSinowberillChallenge_006afd1c`), or the battle item palette that uses it.
 2. The local overlay: port the ResetAll removal (`RemoveTechsAndEquipment` semantics above) into a `buildBattleOverlay` with a backup, after the phase-to-rule mapping is confirmed.
 3. The trap placement and trap objects, the trap stock HUD, the PvP hits and the result window: the DEVLOG entries of 2026-10-21 and 2026-10-23 say they are done, not re-checked here.
+## 2026-10-23: quick menu tab rows (tools list, traps, compare, technique swap): pure helpers, not windowed
+
+**What changed.** `classic/quickmenu.ts` gets the row, enabled and action builders for the quick menu's tools tab (the populate named `PopulateTwoHandedWeapons`), the tool-slot action, the traps tab, the weapon compare toggle and the technique swap. Nothing is windowed: the window files (`classic/quickmenuwindow.ts`, `field.ts`, `lobby.ts`) are not touched here. `tests/quickmenu.test.ts` has 87 checks, all pass. `tsc --noEmit -p .` in `client/` is clean. The gui 2 constant is renamed `compareList` (it was `twoHandedList`, wrong since the previous entry). The ROADMAP Classic HUD line is updated.
+
+**Premise corrections (per the exe):**
+- The "two-handed" tab (case 3 of `update_quickmenu`, dump 711755) lists **tools** (`group_1 == tools_techs`, 3), not two-handed weapons. The populate's name is the only thing that says two-handed.
+- The "attack data type" is not an item field or an ItemPMT field. `ListWindowObject_PopulateTwoHandedWeapons_0074b620` calls `GetItemAttackData_005c50b4(item, mask, NULL)` with mask 2, then mask 1, then `is_item_rare`. That function (asm 5c50b4..5c510f) computes `CheckItemEquipConditions(item, mask, player) & mask`, ORs 2 when `dwItemFlags & 0x200`, turns a zero result into 0x10 when `dwItemFlags & 0x80`, and returns `& mask`. The "type" is that mask. The checker's bits (asm 5d5f40; its arg 1 is the mask, the decompile's `param_5` is a misread) are the real classifier.
+- The tool-slot path (state 4..5, `ProcessToolTechUse_00741c00`, dump 712224) sets the player's action 4 with a slot from `GetToolTechSlotId_005de4d8` (dump 434966). The inputs are `group_2` (item +0xf3, data[1]) and `group_idx` (item +0xf4, data[2]); `group_1` is +0xf2, `dwItemFlags` +0xdc, owner +0xf8 (struct at dump 78921). Only slots 9 and 10 pass `Player_CanPerformAction` (dump 786128: `8 < slot < 11`, plus the player's ready bit unk1 +0x10b6 bit 0, which setting the action clears).
+- The traps tab (`ListWindowObject_ResetAndRefresh_0074b9b4`, dump 719825) has five rows, index 0..4. Rows 0..3 are the player's challenge status bytes (+0x89c, signed, 0..20), row 4 is the Battle Mode trap stock (dump field `last_attack_type`, clamped 0..99). A row shows only when its count is above 0. Its label is unitxt group 0x11, index 0x13 + row.
+- The trap decide (case 8, dump 711817): row 4 makes the Battle Mode trap manager (`CreateSinowberillChallengeEntityManager_006b08b8`, dump 602277: map battle_spaceship (16) or battle_ruins (17), one at a time) and takes one from the stock. Rows 0..3 send the 6x60 subcommand 0x83 through `SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` (dump 576703).
+- The compare list (gui 2, key 0xe held in state 1 of the weapon tab, dump 711680) is an `EquipListWindowObject` whose stat rows come from `EquipmentStatDisplayObject_UpdateEquipState` (dump 689800) and `PlayerRecalculateStats`. Only its open / close and its UI flag are ported here.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; asm via `objdump -d -M intel` on `PsoBB.exe`):
+- `GetItemAttackData_005c50b4` (asm 5c50b4..5c510f): the checker is called with ECX = the compact item, stack args mask then player (5c50da..5c50df); the tail is `or eax,2` on `dwItemFlags & 0x200`, then `or eax,0x10; and eax,-3` when the result is 0 and `dwItemFlags & 0x80`, then `and eax,ebp` (the mask).
+- `CheckItemEquipConditions_005d5f40` (asm 5d5f40): arg 1 is the mask, arg 2 the player (`5d5fab: and edi,[esp+0x2c]` masks the result; `ret 8`). Bit 2 comes from `CanEquipItem_005c9bf8` (tools only: `group_1 == 3`; with pmt itemFlags bit 0 clear it is `CheckItemEquipConditions_Optcall_005c9cb4`, the barrier check, not decoded; bit 0 set and `group_2 == 0xc` is the mag evolution check; else 1). Bit 8 is set for every non-tool item (the "weapon" bit the weapon tab uses). Tool bits come from the pmt itemFlags (+0x14 u32, `formats/itempmt.ts` `Tool.itemFlags`), the map / boss / challenge state, and the class branches (6, 7, 2 technique, 0xa grinder, 0xc mag cell, 0xf armor, 0xb material).
+- `ProcessToolTechUse_00741c00` (712224) and `UpdateQuickMenuToolTechSlotState_00741c08` (712261): both check `group_1 == tools_techs`, the slot, `Player_CanPerformAction(…, 4, slot)`, then set unk1 +0x10b4 = 4, +0x10b5 = slot, clear +0x10b6 bit 0.
+- `GetToolTechSlotId_005de4d8` (434966, asm 5de4d8: `movzx edx, byte [eax+0xf3]`): class 0 -> variants 0..2 = slots 0..2; class 1 -> 3..5; class 3 -> 8; 4 -> 9; 5 -> 10; class 6 -> variants 0/1 = 6/7; class 7 -> 0xb; class 8 -> 0xc; anything else -> -1 (class 2 has no case).
+- Tools state machine (`update_quickmenu` 711755..711870): state 3 populates (`ListWindowObject_PopulateTwoHandedWeapons_0074b620`), sets state 4 and falls through; state 4 closes on list flag +0x84 bit 2, goes to 5 on bit 1; state 5 cancels on key 0xd held (SE 0x585), else when `IsPlayerActionAllowed` and the selected instance exists it calls `ChallengePlayer_HandleItemUsage` and closes.
+- `ChallengePlayerListWindowUpdateStatusItem_00737ec4` (704479): `param_2 == 4` -> `ClampValue_00697958(last_attack_type)`, else `SinowberillChallengePlayer_GetStatusOrAction_00698984(player+0x89c, row)` (dump 579111: signed byte, `0 < v <= 0x14`, anything else written back 0). Disabled flag 0x80 unless `is_current_map_safe && !current_map_is_boss_map` (the `if (safe) { if (!boss) goto ... }` shape).
+- Trap stock writers: `SetSinowberillChallengeValue_00697944` (dump 578125, clamp 0..99) from `ValidateChallengePhaseIndexO` in the challenge init (dump 572192); `DecrementCounterAndClamp_00697968` (578151) on a created trap (dump 711863 and 723513).
+- Technique swap (`update_quickmenu` 711875..711960, case 0xa): key 0xe held; the list's +0x8e is the pending row (-1 = none): first press sets it to the selected row (+0x8c); second press calls `SwapTechniqueSlots_00741d28` (712325) on the 19-entry technique order (`get_00a95df8` +0x108 table, 16-bit ids) and clears the pending row; the list is rebuilt (19 rows, `UpdateTechniqueListItem_0075e7e0`).
+- `SharedInputState_CheckKeyHeld_007c1168` (asm 7c1168): a bit test on the player's input state (`test [edi+0x4c], mask; setne`).
+- Map enum (dump 68689..68690): battle_spaceship 16, battle_ruins 17.
+
+**Ported (`classic/quickmenu.ts`):**
+- `itemAttackDataBits(facts, mask)`, `isTwoHandedTabItem(facts)`, `twoHandedTabRows(items)` (the tools list; inventory order; the caller supplies `equipCheckBits` = the raw checker result).
+- `toolTechSlotId(group2, groupIdx)`, `toolPendingAction(slot, ready)`, `toolTabStep(state, listFlags, keyHeld13, actionAllowed, hasItem)`.
+- `trapStatusCount(raw)`, `trapStockCount(raw)`, `trapRows(statuses, stock, safeNotBoss)`, `canCreateChallengeTrapManager(map, exists)`, `trapDecide(input)` (kind none / cancel / palette / trap, close, sound, the 0x83 packet, the stock after).
+- `compareToggle(open)` (open flag and the UI bit 8 of +0x1c), `QUICK_MENU_GUI.compareList` (gui 2, (324, 256)).
+- `techniqueSwapKey(pending, selected, order)`, `techniqueRows(order)`.
+
+**ASSUMED** (also marked in the code):
+- The tools' bit 2 for a tool whose pmt itemFlags bit 0 is clear: the barrier check (`CheckItemEquipConditions_Optcall_005c9cb4`) is not decoded. The window must supply the raw checker bits from the live game.
+- The tools' bit 1 (blocked here): only the branch list above is read; the per-class conditions are not ported, so the window supplies them.
+- The trap row labels are unitxt 0x11 0x13..0x17; the strings are not read.
+- The 6x60 subcommand 0x83 body (command, size 2, u16 player id, u16 row, u16 count): read from the stack stores at dump 576703; the size byte's unit is ASSUMED.
+- The stock's start value (`ValidateChallengePhaseIndexO`) is not traced; the port takes it as an input.
+- The dump's name `last_attack_type` for the stock is a label; the field is only used as the trap stock in these paths.
+- The compare list's stat rows are not ported (they need the recalculated player stats, dump 689800).
+- The `IsPlayerActionAllowed` gate is taken as the caller's input (true in the field, per the 2026-10-23 quick menu entry).
+
+**Tests:** `node tests/quickmenu.test.ts` (Node 24): ALL PASS (87 checks: attack bits, the two-handed predicate and rows, the tool slot table, the pending action, the tools state machine, the trap rows and decide, the battle map gate, the compare toggle, the technique swap and rows). `tsc --noEmit -p .` in `client/`: clean (node_modules linked from the main checkout for the run, removed before the commit). Not run in Chrome (no Playwright, per the brief).
+
+**Merge note:** the window branch (`worktree-agent-af936702b48c88fa3`, commit a6f36c7) also edits `classic/quickmenu.ts`, `tests/quickmenu.test.ts`, the DEVLOG and the ROADMAP line. Expect conflicts there; keep both sides' sections. This branch's `QUICK_MENU_GUI.compareList` rename matches that branch's rename.
+
+**Left (in order):**
+1. The window (not done here, the other agent owns `classic/quickmenuwindow.ts`): the tools tab (gui 1, states 3..5), the traps tab (states 6..8), the compare list (gui 2, key 0xe in state 1), the technique swap (state 0xa, key 0xe), each wired to the builders above.
+2. Decode `CheckItemEquipConditions_Optcall_005c9cb4` (dump 418088, the barrier check) and the tool branch of `CheckItemEquipConditions_005d5f40` (dump 427680..427900), so the tools' bits 1 and 2 are computed, not supplied.
+3. The compare rows: `UpdateEquipmentStatDisplay_007258dc` (dump 689830) and `PlayerRecalculateStats_0068e030`.
+4. The trap row labels (unitxt 0x11 0x13..0x17) and the stock's start value (`ValidateChallengePhaseIndexO`).
