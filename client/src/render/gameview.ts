@@ -11,6 +11,7 @@
 // boxes: net/items.ts (GameItems) and render/flooritems.ts (FloorItemLayer).
 
 import type { BgmPlayer } from '../audio/bgm.ts';
+import type { HomeLeafServices } from '../classic/homeleaves.ts';
 import { ClientFiles } from '../data/clientfiles.ts';
 import { readIfPresent, type DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
@@ -132,7 +133,7 @@ export class GameView {
     log: (msg: string) => void = () => {},
     bgm: BgmPlayer | null = null,
     character: { character: () => CharacterFile | null; fullCharacter: () => Uint8Array | null } = { character: () => null, fullCharacter: () => null },
-    options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>> } = {},
+    options: { labels?: boolean; streamFiles?: () => Promise<Map<string, Uint8Array>>; home?: () => Omit<HomeLeafServices, 'lobby'> | null } = {},
   ) {
     this.labels = options.labels ?? true;
     this.characterFile = character.character;
@@ -245,6 +246,10 @@ export class GameView {
           return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
         },
         hidden: () => this.busy || this.inputBlocked(),
+      },
+      home: () => {
+        const s = options.home?.() ?? null;
+        return s ? { lobby: game, ...s } : null;
       },
       log,
     });

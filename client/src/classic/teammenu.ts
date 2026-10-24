@@ -160,6 +160,12 @@ export function teamRowsDisabled(m: TeamMembership, clientCaps = true): [boolean
   return [has || !clientCaps, !has, has ? !master : true, has ? master : true];
 }
 
+// The member rows of the Home menu (ValidateMenuItemCondition's team entries) need a team:
+// teamRowsDisabled's second row is "no team", so the opposite is in a team.
+export function isInTeam(host: TeamHost | null): boolean {
+  return !!host && !teamRowsDisabled(host.membership())[1];
+}
+
 // Spaces (0x20) and ideographic spaces (0x3000) are removed from the name.
 export function cleanTeamName(raw: string): string {
   return [...raw].filter((c) => c !== ' ' && c !== '　').join('');

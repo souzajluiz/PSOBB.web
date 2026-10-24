@@ -14671,3 +14671,35 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: F-key windows in the field (F5..F8 shared leaves), F1 help list; team chat traced
+
+The brief's three F-key items. Exe evidence is the named dump `Psobb.exe-05112026.c`; line numbers below are dump lines.
+
+**Exe.**
+- `unknown_handle_fkey_inputs` (682260) returns the entry for F2..F8 with only the Ctrl / Alt / Shift gates. Field gating is the player menu's own: `unknown_handle_toggle_player_menu` (682187) opens it only with the menu not already open. `ValidateMenuItemCondition_00732620` disables only the team rows out of a team (0x25 Team Member List, 0x2B Team Info; not 0x0E, 0x12, 0x13), so F5..F8 open in the field as in the lobby.
+- `handle_player_menu_select` (700118): 0x0E `guild_card_menu` (14) -> `GameListMenuContainer_Constructor_00744a60`; 0x12 `symbol_chat_menu` (18) -> `ChatShortcutMenuWindow_Constructor_0075882c`; 0x13 `simple_mail_menu1` (19) -> `ChatShortcutMenu_Constructor_007558a0`; 0x25 `team_member_list_menu` (37) -> `TeamMemberListMenu_Constructor_0074d8f4`.
+- F1 (682284..682336): toggles flag 0x200 at the player menu object's +0x1c when `CanEnterSinowberillChallenge_0071a6d0` is 0, else 0x400. `unknown_render_help_menu` (682584) reads 0x200 and builds a 12-row list from group 11 0x161..0x16c. The 0x400 reader was not found; the CanEnter predicate is not confirmed (its real entry is 0x71a6d4; the dump address is not code).
+- F9 / F10 (`TeamChatMenu_Update_00717260` 678207, called from 677720; F10 at 678385): F9 opens and closes a per-slot team window; F10 sets the lock bit (0x80) that makes the chat send go to team chat (`SendChatMessageDispatcher_0077d710`, 754350; `HandleTeamOperationSuccessFromChat_0077d784`, 754294, sends only in scene 0x0b). The send packet is `SendTeamOperationSuccessPacket_007f32ac` (814481): 07EA, sender name, text. The 07EA receive handler was not located in the dump.
+
+**Port.**
+- `client/src/classic/homeleaves.ts` (new): the Guild Card, Symbol Chat, Simple Mail, Team Member List and Team Info leaves, written once. The lobby and the field both use `HomeLeaves` (the window glue moved out of `classic/lobby.ts`; the lobby's key, draw, busy, tick and leave call it). `HOME_LEAF_IDS`.
+- `classic/fieldmenu.ts`: the field menu opens those ids through `HomeLeaves` (the main panel's entries and the F-keys); key, draw, tick, close and `isOpen` include them. `input/shortcuts.ts` `FIELD_SHORTCUT_LEAVES` gains 0x0e, 0x12, 0x13, 0x25.
+- `classic/teammenu.ts`: `isInTeam(host)`. `render/fieldhud.ts`: the field's team rule uses the team host (was a constant `false`), the F1 help list (`drawHelp`, `helpOpen` toggle).
+- `render/gameview.ts` / `classic/main.ts`: the game passes its services (guild card book and client, mailbox, the character file and the team host on the game's connection, which is the lobby's `conn`). `teamHost` takes the connection now.
+- `input/shortcuts.ts`: `functionKeyAction` returns `{kind: 'help'}` for F1 (plain, not Ctrl / Alt / Shift with the option clear).
+- F9 / F10: not ported, see Left.
+
+**ASSUMED.**
+- F1 help list geometry: anchor 320 x 240, width 360, rows of 20 px, the list centred on that point. The exe builds its list at 320 x 240 with width 0.1; the row step and colour were not read.
+- F1 closes only by F1 again. The exe's close key (`g_KeyboardSharedState[0x12]`, probably Escape) is not confirmed.
+- F1 is field only; the lobby's F-key path does not handle the help kind.
+- CanEnter's 0x400 branch is not drawn (no reader of 0x400 found in the dump).
+- The team rows in the field take the lobby's team client on the game connection (one connection in the port).
+
+**Left.**
+- F9 / F10 team chat: the port has the 07EA send and receive (`net/team.ts` `chat()`, `onChat`) but no chat line route and no window; `classic/main.ts` never wires `onChat`. Porting needs a team channel in `classic/chat.ts` (the ChatLine sends one kind of line), the team window's per-slot state machine, and the scene 0x0b gate. Left for a follow-up.
+- F1's CanEnter branch and its 0x400 reader; the lobby's F1.
+- The remaining team rows in the field (0x23, 0x27, 0x29, 0x2d) are enabled in a team but open nothing (as in the lobby's other unported rows).
+
+**Checks.** `tests/homeleaves.test.ts` (new): the shared leaves' gates, the Symbol Chat Cancel and the close callback. `tests/shortcuts.test.ts`: F1 is the help kind, Shift and Ctrl refused, the field leaves and the field team rule. `tests/fieldhud`, `lobbymenu`, `fkeys`, `symbolchat`, `teammenu`, `guildcardmenu`, `controls`, `hotbar`, `emotes`, `options`, `mobileinput` pass. `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome (no Playwright, per the brief).

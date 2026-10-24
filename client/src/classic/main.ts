@@ -312,6 +312,14 @@ async function main(): Promise<void> {
       const view = new GameView(v, game, source, game.log, bgm, { character: () => session?.character ?? null, fullCharacter: () => session?.fullCharacter ?? null }, {
         labels: false,
         ...(streamFile ? { streamFiles: () => streamFile! } : {}),
+        // The Home menu's shared leaves in the field (classic/homeleaves.ts): the game is the connection.
+        home: () => ({
+          guildCards: () => session?.guildCards ?? null,
+          guildCardClient: () => session?.guildCardClient ?? null,
+          mailbox: () => session?.mailbox ?? null,
+          fullCharacter: () => session?.fullCharacter ?? null,
+          team: () => teamHost(game.conn) ?? null,
+        }),
       });
       gameView = view;
       // The field Item Pack names its rows and draws the equipment panel from the item names
@@ -385,11 +393,11 @@ async function main(): Promise<void> {
   // (net/team.ts): one per connection, its membership refreshed from the latest
   // E7 save data at each lobby entry (the 12EA updates keep it current).
   let teamClient: { conn: BBConnection; client: TeamClient } | null = null;
-  const teamHost = (lobby: Lobby): TeamHost | undefined => {
+  const teamHost = (conn: Lobby['conn']): TeamHost | undefined => {
     const s = session;
     if (!s?.init) return undefined;
     const gc = s.init.guildCardNumber;
-    if (teamClient?.conn !== lobby.conn) teamClient = { conn: lobby.conn, client: new TeamClient(lobby.conn, NO_TEAM, gc) };
+    if (teamClient?.conn !== conn) teamClient = { conn, client: new TeamClient(conn, NO_TEAM, gc) };
     const c = teamClient.client;
     c.membership = membershipFromSave(s.fullCharacter);
     return {
@@ -434,7 +442,7 @@ async function main(): Promise<void> {
     console.info(`[lobby#${lobby.seq}] lobby view built: lobby ${lobby.lobbyNumber}, ${lobby.players.size} players, markers [${lobbyView.markerIds()}]`);
     const hud = await loadHud(mapData.infoCols ?? []);
     hud.party = partyHost(lobby, shipName);
-    const team = teamHost(lobby);
+    const team = teamHost(lobby.conn);
     if (team) hud.team = team;
     hud.transport = transportHost(shipName);
     hud.guildCards = () => session?.guildCards ?? null;

@@ -35,6 +35,7 @@ import { se, SE } from '../audio/se.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
 import { FIELD_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
+import { HomeLeaves, HOME_LEAF_IDS, type HomeLeafHost } from './homeleaves.ts';
 
 type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu;
 
@@ -95,6 +96,9 @@ export interface FieldMenuEnv {
   questBoard: QuestBoardEnv;
   // The Trade Window's environment (classic/trade.ts); null when the field has no session.
   trade?: () => TradeEnv | null;
+  // The Home menu's shared leaves (Guild Card, Symbol Chat, Simple Mail, Team Member List, Team Info);
+  // null when the field has no session (classic/homeleaves.ts).
+  home?: () => HomeLeafHost | null;
 }
 
 export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, QuestBoardTextures {
@@ -103,6 +107,8 @@ export interface FieldMenuTextures extends ItemPackTextures, AreaMapTextures, Qu
 
 export class FieldMenu {
   readonly menu: MainMenu;
+  // The shared Home leaves (classic/homeleaves.ts): Guild Card, Symbol Chat, Simple Mail, Team lists.
+  private home: HomeLeaves;
   private leaf: Leaf | null = null;
   private env: FieldMenuEnv;
   // The leaf's windows open and close with the list windows' animation
@@ -133,10 +139,14 @@ export class FieldMenu {
     );
     this.menu.validate = (id) => validateMenuEntry(id, env.rules());
     this.menu.cursorSaved = () => cursorSaved(env.options.flags());
+    this.home = new HomeLeaves(() => env.home?.() ?? null);
+    this.home.onAllClosed = () => {
+      if (this.menu.open) this.menu.leafOpen = false;
+    };
   }
 
   get isOpen(): boolean {
-    return this.menu.open || !!this.trade;
+    return this.menu.open || !!this.trade || this.home.open;
   }
 
   // Console aid: the open leaf's state (the item pack's debugState), null with no leaf.
@@ -174,6 +184,7 @@ export class FieldMenu {
 
   close(): void {
     this.closeLeaf();
+    this.home.close();
     this.areaMap?.anim.close();
     this.questBoard?.close();
     this.menu.close();
@@ -216,6 +227,10 @@ export class FieldMenu {
   // ChatShortcutMenuWindow_Constructor_00756ff4) is in no menu table and no
   // caller passes it in this build, so it is not opened here.
   private open(id: number): void {
+    if (HOME_LEAF_IDS.has(id)) {
+      if (this.home.openLeaf(id)) this.menu.leafOpen = true;
+      return;
+    }
     if (id === 0x1a) {
       this.openTrade();
       return;
@@ -258,6 +273,7 @@ export class FieldMenu {
 
   tick(): void {
     this.menu.tick();
+    this.home.tick();
     if (this.trade) {
       this.trade.tick();
       if (!this.trade.open) {
@@ -293,6 +309,10 @@ export class FieldMenu {
   }
 
   key(e: KeyboardEvent): void {
+    if (this.home.open) {
+      this.home.key(e);
+      return;
+    }
     if (this.trade) {
       if (!this.trade.key(e)) {
         this.trade = null;
@@ -344,6 +364,8 @@ export class FieldMenu {
     this.areaMap?.draw(ctx, skin, tex);
     this.questBoard?.draw(ctx, skin, tex);
     this.trade?.draw(ctx, skin, tex.icons);
+    this.home.drawTeam(ctx, skin, extra);
+    this.home.drawOther(ctx, skin);
     const leaf = this.leaf ?? this.closingLeaf;
     if (!leaf || !this.leafAnim.visible) return;
     const rects: { x: number; y: number; w: number; h: number }[] = [];

@@ -49,7 +49,10 @@ check(functionKeyNumber('a', names) === 0 && functionKeyNumber('', names) === 0,
 // 2. The menu entries of F2..F8 (handle_player_menu_select ids; the exe's return values).
 const want: Record<number, number> = { 2: 0x09, 3: 0x03, 4: 0x17, 5: 0x0e, 6: 0x13, 7: 0x12, 8: 0x25 };
 for (const n of Object.keys(want)) check(FKEY_MENU_ID[Number(n)] === want[Number(n)], `F${n} -> 0x${want[Number(n)].toString(16)}`);
-for (const n of [1, 9, 10, 11]) check(functionKeyAction(key(`f${n}`), names) === null, `F${n} is not ported (null)`);
+for (const n of [9, 10, 11]) check(functionKeyAction(key(`f${n}`), names) === null, `F${n} is not ported (null)`);
+check(functionKeyAction(key('f1'), names)?.kind === 'help', 'plain F1 toggles the help list');
+check(functionKeyAction(key('f1', { shiftKey: true }), names) === null, 'Shift+F1 is refused with the option clear');
+check(functionKeyAction(key('f1', { ctrlKey: true }), names) === null, 'Ctrl+F1 is refused');
 check(functionKeyAction(key('f12'), names)?.kind === 'mainMenu', 'F12 opens the main menu');
 check(functionKeyAction(key('F12', { ctrlKey: true, altKey: true, shiftKey: true }), names)?.kind === 'mainMenu', 'F12 takes no modifier test');
 check(functionKeyAction(key('f2'), names)?.kind === 'menu' && (functionKeyAction(key('f2'), names) as { id: number }).id === 0x09, 'plain F2 -> Equip');
@@ -85,7 +88,9 @@ check(functionKeyNames()[1] === 'f2', 'the default config is restored');
 const field: MenuRules = { lobby: false, safe: false, online: true, questStarted: false, inTeam: false };
 const fieldSafe: MenuRules = { ...field, safe: true };
 check(FIELD_SHORTCUT_LEAVES.has(0x09) && FIELD_SHORTCUT_LEAVES.has(0x03) && FIELD_SHORTCUT_LEAVES.has(0x17), 'field has Equip, Technique, MAG');
-check(!FIELD_SHORTCUT_LEAVES.has(0x0e) && !FIELD_SHORTCUT_LEAVES.has(0x12), 'field lacks Guild Card and Symbol Chat (not ported)');
+check(FIELD_SHORTCUT_LEAVES.has(0x0e) && FIELD_SHORTCUT_LEAVES.has(0x12) && FIELD_SHORTCUT_LEAVES.has(0x13) && FIELD_SHORTCUT_LEAVES.has(0x25), 'field has the shared Home leaves (Guild Card, Symbol Chat, Simple Mail, Team Member List)');
+check(validateMenuEntry(0x25, field).enabled === false && validateMenuEntry(0x25, { ...field, inTeam: true }).enabled, 'Team Member List needs a team in the field');
+check(validateMenuEntry(0x0e, field).enabled && validateMenuEntry(0x13, field).enabled, 'Guild Card and Simple Mail enabled in the field');
 check(validateMenuEntry(0x09, field).enabled && validateMenuEntry(0x17, field).enabled, 'Equip and MAG enabled in the field');
 check(validateMenuEntry(0x03, fieldSafe).enabled === false && validateMenuEntry(0x03, field).enabled, 'Technique off on a safe map only');
 check(validateMenuEntry(0x09, lobbyMenuRules(false)).enabled === false, 'Equip off in the lobby');
