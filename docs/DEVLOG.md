@@ -14632,3 +14632,42 @@ names). The switch to 0x10 tests a global the dump calls `g_CurrentFloor` above 
 only fit the difficulty (3), so the port reads the difficulty (ASSUMED, the global's writer not
 traced). The spec now builds the wave of room 2 (`constructEnemies`, as `guns.spec.ts`) so an enemy is
 drawn; checked in Chrome: three green triangles around a Booma, card "Booma / Attribute: Native".
+## 2026-10-23: Home menu vs PsoBB.exe (GC reference: Status panel, overlay, view)
+
+Brief: the user's GameCube reference of the field main menu (Home): dimmed striped background, the 3D view shrunk to a window top right, the list (Item Pack, Customize, Technique, Chat, Status, Options, Quit Game), a help window bottom left, and a character info panel bottom right (name, Lv, class, section ID, Total EXP, To Next Lv, Money, page 1/3 with L / R arrows). Port: `classic/fieldmenu.ts` and `classic/mainmenu.ts` (rows, help, view shift) and `render/fieldhud.ts` (attach: the projection shift). The reference is GC, not Blue Burst; only what PsoBB.exe does is ported.
+
+**Exe evidence (PsoBB.exe, Ephinea 1.25.13; dump `Psobb.exe-05112026.c`; dump names checked against the data).**
+- Main table 0x009f2f40 (`tools/exedata.py read 0x009f2f40 u 40`): 2 Item Pack (sub 0x009f2f80: 9, 0xb, 0x17, 0x1a, 0xc, 0xf), 0 Customize, 3 Technique, 5 Chat (sub 0x009f2fb8: 0x11, 0x12, 0xe, 0x13, 0x16, 0x15), 0x23 Team (sub 0x009f2ff0: 0x25, 0x27, 0x29, 0x2b, 0x2d), 6 Options, 7 Quit Game, end 0x30. The android table 0x009f3020 is from the dump's FUN_00733d70 comment (not re-read). So the BB row in the GC Status slot is **Team (0x23)**; no table holds 0x19 (Status).
+- Status 0x19 (`player_status_menu`, dump `handle_player_menu_select` at 700118, case at 700321) builds `ChatShortcutMenuWindow_Constructor_00756ff4` (dump 727858): a 3-row sub-list (group 11 0x132..0x134). Its only caller is that switch case. The dispatch sources are the table walk (`handle_player_menu_inputs`, 699686), the fkey path (`unknown_handle_fkey_inputs`: 9, 3, 0x17, 0xe, 0x13, 0x12, 0x25 only), and the palette / UI-element actions (`UIManager_HandleElementAction_007181ec` called with 0x1d / 0x1e only). No path reaches 0x19. Its help text exists (group 0x0b 0x19 "Display player status, battle, and challenge grade."), which fits the GC Status row, not a BB row.
+- Info strings (unitxt_e.prs, group 0x0b): 0x99 "Total EXP", 0x9a "To Next Lv", 0x9b "Money", 0x9c..0xa6 the stat labels (ATP..ELT), 0xa7 / 0xa8 "Battle", 0xa9..0xad the challenge labels. So the pages' texts exist in BB, but the only window that could use them is the unreachable 0x19 window (page 1 Total EXP / To Next / Money; page 2 stats; page 3 battle / challenge). The GC panel has the same texts, but BB has no caller for the panel itself. The equipment panel reads 0x9c.. too (`EquipmentStatDisplayObject_SetStatLabels_00726f38`), so those labels are not evidence for a page.
+- Help text: one group 0x0b string per cursor row (FUN_0073249c; help window at entry 0x1c = (17, 312), 206 x 140). Row 2 is "Equip weapons or use items here." (0x0b:2), the same sentence the GC shows. The port does this (`MainMenu.help`).
+- Panel: entry 0x1b = (28, 85) (read at 0x00972018 / 0x0097201c in the 8-byte GUI table at 0x00971f40). The label texels in table 0x00971980 (48 pairs, read as floats) equal the port's `LABEL_UV`.
+- 3D view: `render_player_menu_background` (dump 700858): while the menu is open the projection centre goes +80 in x and +115.2 in y, over 3 frames (0x00971300 = 3.0; 0x009712c8 = 80.0, 0x009712cc = 115.2). The port's `menuViewShift` uses the same numbers (s = 1 - 80/320 t, the scale of the exe's projection relation).
+- Overlay: no full-screen dim, stripe or fill helper in the dump (a grep for fill, darken, dim, scanline and stripe finds nothing in the menu path). The GC striping is not in the exe's menu.
+- The F-key help list (`unknown_render_help_menu`, dump 682584: group 11 0x161..0x16c, 12 rows, toggled by a function key) is a key list, not the Home menu's info panel.
+
+**GC vs BB (what differs).**
+- Row 4: GC Status, BB Team (0x23) in the same place. The port already has the BB row.
+- Info panel with pages and L / R arrows: not a BB Home-menu feature in this build (no caller for 0x19). Not ported.
+- Striped overlay: not in the exe's menu path. Not ported.
+- Help window, rows, label colours, menu position, view shift (80 / 115.2 over 3 frames): the same in BB and in the port's code.
+
+**Port check (Chrome, 2026-10-23, `client/e2e/field-menu-home.spec.ts`).** The first run (passed, 6.3 min) saved `client/test-results/field-menu-home.png`: the menu panel (Item Pack in orange; Technique and Team greyed by the field rules), the help text "Equip weapons or use items here.", and the palette hidden. **The 3D view is not shifted in that frame**: the room fills the whole 1280 x 720 canvas. The port's projection math matches the exe's, so the shift is not reaching the screen. The cause is not found (suspects: the chain in `fieldhud.attach` against the viewer's frame loop; not checked in a live probe). The spec now logs `menu.shift` and the projection elements (`[field-menu-home] {...}`), but later runs did not reach the field (the login stalls on this machine, see below), so the probe has no values yet.
+
+**Changes.**
+- `client/src/classic/mainmenu.ts`: `LABEL_UV` exported (no behaviour change).
+- `tests/mainmenulayout.test.ts` (new): the layout tables, no Status row, the 48 label texels from the exe, the menu origin, and the view shift at frames 0 and 3 and its linearity. `node tests/mainmenulayout.test.ts` passes.
+- `client/e2e/field-menu-home.spec.ts` (new): fresh character in Pioneer 2, Home held 200 ms, screenshot, ArrowDown, screenshot, shift probe.
+- ROADMAP (Field HUD left to do): the Status line records the 2026-10-23 check.
+
+**ASSUMED.**
+- "No BB route to 0x19" is by name and table in the dump. Dump names are sometimes wrong (the group-name mismatches above), so a route through a path not read here would change it.
+- The overlay is absent in BB because nothing in the menu path draws a full-screen fill (a negative search, not a byte-level check).
+- Scale 0.75 comes from the exe's projection relation ((W - centre) / (W / 2) with the centre at +80), not from a separate constant.
+
+**Checks.** `node tests/mainmenulayout.test.ts` (pass), `node tests/fieldhud.test.ts` (pass), `node tests/lobbymenu.test.ts` (pass), `cd client && npx tsc --noEmit -p .` (clean). Playwright: the spec passed once (screenshot above). Later runs failed at login (`classicSelect` not reached in 90 s) on this machine's shared newserv / Vite set-up (port 5173 belonged to another session's Vite; the webServer's `npx vite` starts under Node 16), not in the port's code. The run used this worktree's Vite on 5190 through `PW_BASE_URL`.
+
+**Left.**
+- Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
+- The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
+- The GC overlay and the GC info panel: not ported (not in the exe).
