@@ -11,7 +11,8 @@ import {
   parse6x83, pickRespawn, trapAnnouncement, trapDamage, trapNumber, trapVisible, placeRequest, trapPaletteType,
   TRAP_GATE_ADDRESS, TRAP_GATE_VALUE, TRAP_DEATH_PARTICLE, trapDrawn, trapModelParts, trapRevealed, TRAP_REVEAL_RANGE_SQ,
   MAP_ACTION_PERMISSION, TRAP_ACTION_PERMISSION, TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS,
-  trapPlacePermitted,
+  trapPlacePermitted, triggerSkipsOwner, blastRoomMatch, challengeFlagValue,
+  TRAP_ULTIMATE_ARM_FRAMES, TRAP_ULTIMATE_BLAST_RADIUS, DIFFICULTY_ULTIMATE,
   type PlaceContext, type TrapTarget,
 } from '../client/src/quest/battletraps.ts';
 
@@ -113,15 +114,26 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   eq(t.state, 3, 'stunned by a player within the trigger radius');
 }
 {
-  // The owner is ignored unless trapsHitOwner.
+  // trap_is_primed_and_has_target (dump 492890..492898, VERIFIED): the owner is skipped only when the rule
+  // is off AND is_value_less_than_2(g_Pioneer2MapInitData) is non-zero (byte 1). The port's byte is 0 in a
+  // battle (ASSUMED), so the owner triggers its own trap whatever g_BATrapsCanTargetOwnerPlayer is.
+  eq(triggerSkipsOwner(false, 0), false, 'byte 0: the owner is not skipped with the rule off');
+  eq(triggerSkipsOwner(false, 1), true, 'byte 1 and the rule off: the owner is skipped');
+  eq(triggerSkipsOwner(true, 1), false, 'byte 1 and the rule on: the owner is not skipped');
   const f = new TrapField();
   const t = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
   t.delay = 0;
   f['traps'].push(t);
   f.tick([tgt({ id: 1, x: 0, z: 0 })], { trapsHitOwner: false });
-  eq(t.state, 0, 'owner does not trigger its own trap');
-  f.tick([tgt({ id: 1, x: 0, z: 0 })], { trapsHitOwner: true });
-  eq(t.state, 3, 'owner triggers when the rule allows it');
+  eq(t.state, 3, 'battle (byte 0): the owner triggers its own trap with the rule off');
+  const g = new TrapField();
+  const t2 = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  t2.delay = 0;
+  g['traps'].push(t2);
+  g.tick([tgt({ id: 1, x: 0, z: 0 })], { trapsHitOwner: false, challengeFlag: 1 });
+  eq(t2.state, 0, 'challenge byte 1 with the rule off: the owner does not trigger');
+  g.tick([tgt({ id: 1, x: 0, z: 0 })], { trapsHitOwner: true, challengeFlag: 1 });
+  eq(t2.state, 3, 'challenge byte 1 with the rule on: the owner triggers');
 }
 {
   // Fuse: counts down from 0x1e; at a negative value it blasts and asks for 6x80 what 2.
@@ -315,6 +327,89 @@ const tgt = (over: Partial<TrapTarget>): TrapTarget => ({ id: 1, x: 0, z: 0, flo
   check(!trapPlacePermitted(-1) && !trapPlacePermitted(48) && !trapPlacePermitted(1.5), 'out-of-range or non-integer maps refuse');
   // trap_constructor's stores (dump 492906..493000): arm 0x96, fuse 0x1e, trigger and blast 50.0.
   eq([TRAP_ARM_FRAMES, TRAP_FUSE_FRAMES, TRAP_TRIGGER_RADIUS, TRAP_BLAST_RADIUS], [0x96, 0x1e, 50, 50], 'the constructor stores 0x96, 0x1e, 50, 50');
+}
+
+// --- the receive gate (2026-10-24): the 0x83 row is checked on the receiving client's map -----
+{
+  // TeamQuest_ProcessSubcommands (dump 815369) runs the remote handler only when the map permits; map 15
+  // and 47 refuse. A refused remote 6x83 places nothing and decrements nothing (the handler never runs).
+  const f = new TrapField();
+  const k = new TrapCounters();
+  k.setFromRules([2, 2, 2, 2]);
+  eq(f.place({ clientId: 2, type: 0, count: 2 }, ctx({ map: 15 }), k), null, 'remote 6x83 on map 15 is not placed');
+  eq(f.place({ clientId: 2, type: 0, count: 2 }, ctx({ map: 47 }), k), null, 'remote 6x83 on map 47 is not placed');
+  eq(k.n[0], 2, 'a refused placement does not decrement the owner counter');
+  check(f.place({ clientId: 2, type: 0, count: 2 }, ctx({ map: 16 }), k) !== null, 'remote 6x83 on map 16 is placed');
+  eq(k.n[0], 1, 'an accepted placement decrements once');
+  check(f.place({ clientId: 2, type: 0, count: 2 }, ctx(), k) !== null, 'no map given: no permission gate (test default)');
+}
+
+// --- the Ultimate branch of trap_constructor (dump 492994..493002, 2026-10-24) -------------
+{
+  eq(DIFFICULTY_ULTIMATE, 3, 'difficulty_level ultimate = 3');
+  eq(challengeFlagValue(1), 1, 'is_value_less_than_2: byte 1 gives 1');
+  eq(challengeFlagValue(0), 0, 'is_value_less_than_2: byte 0 gives 0');
+  eq(challengeFlagValue(2), 0, 'is_value_less_than_2: byte 2 or more gives 0');
+  const f = new TrapField();
+  const k = new TrapCounters();
+  k.setFromRules([1, 1, 1, 1]);
+  const u = f.place({ clientId: 2, type: 0, count: 1 }, ctx({ difficulty: 3 }), k)!;
+  eq([u.delay, u.blast, u.ultimate], [TRAP_ULTIMATE_ARM_FRAMES, TRAP_ULTIMATE_BLAST_RADIUS, true], 'Ultimate: arm 0x3c, blast 80, branch taken');
+  eq([TRAP_ULTIMATE_ARM_FRAMES, TRAP_ULTIMATE_BLAST_RADIUS], [0x3c, 80], 'Ultimate constants 0x3c and 80.0 (0x42a00000)');
+  const n = f.place({ clientId: 2, type: 1, count: 1 }, ctx({ difficulty: 2 }), k)!;
+  eq([n.delay, n.blast, n.ultimate], [0x96, 50, false], 'Hard: the normal arm 0x96 and blast 50');
+  const c1 = f.place({ clientId: 2, type: 2, count: 1 }, ctx({ difficulty: 3, pioneer2Byte: 1 }), k)!;
+  eq([c1.delay, c1.blast, c1.ultimate], [0x96, 50, false], 'Ultimate with the challenge byte 1: no branch');
+  const c2 = f.place({ clientId: 2, type: 3, count: 1 }, ctx({ difficulty: 3, pioneer2Byte: 2 }), k)!;
+  eq(c2.ultimate, true, 'Ultimate with the challenge byte 2: the branch runs (is_value returns 0)');
+  // The Ultimate blast reaches 80 (not 50): a target at 60 is hit by the 80 blast only.
+  const ub = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  ub.state = 4;
+  ub.blast = TRAP_ULTIMATE_BLAST_RADIUS;
+  const fb = new TrapField();
+  fb['traps'].push(ub);
+  const hitEv = fb.tick([tgt({ id: 2, x: 60, z: 0, local: true })], { trapsHitOwner: false });
+  check(hitEv.some((e) => e.kind === 'hit'), 'Ultimate blast (80) reaches a target at 60');
+  const sb = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  sb.state = 4;
+  const fs = new TrapField();
+  fs['traps'].push(sb);
+  check(!fs.tick([tgt({ id: 2, x: 60, z: 0, local: true })], { trapsHitOwner: false }).some((e) => e.kind === 'hit'), 'normal blast (50) does not reach 60');
+  // The ownerRoom copy (+0x28, +0x2e) and the owner-targeting clear are reported on the trap.
+  const r = new TrapField().place({ clientId: 2, type: 0, count: 1 }, ctx({ ownerRoom: { room1: 7, room2: 9 } }), new TrapCounters());
+  eq([r?.room1, r?.room2], [7, 9], 'trap keeps the owner room words');
+}
+
+// --- the blast's checks (update_trap state 4, dump 492596..492700, 2026-10-24) ---------------
+{
+  const blastOne = (target: Partial<TrapTarget>, room?: { room1: number; room2: number }) => {
+    const f = new TrapField();
+    const t = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+    t.state = 4;
+    if (room) {
+      t.room1 = room.room1;
+      t.room2 = room.room2;
+    }
+    f['traps'].push(t);
+    return f.tick([tgt({ id: 2, x: 1, z: 0, local: true, ...target })], { trapsHitOwner: false });
+  };
+  eq(blastOne({ dead: true }).map((e) => e.kind), ['burst'], 'dead player: no hit, no announce (the burst still runs)');
+  eq(blastOne({ invulnerable: true }).map((e) => e.kind), ['burst'], 'maybe_invuln player: skipped');
+  eq(blastOne({ challengeTwo: true }).map((e) => e.kind), ['announce', 'burst'], '+0x32c == 2: the hit is refused, the announce still runs');
+  eq(blastOne({}).map((e) => e.kind), ['hit', 'announce', 'burst'], 'plain local player is hit');
+  eq(blastOne({ room1: 5, room2: 6 }, { room1: 1, room2: 2 }).map((e) => e.kind), ['burst'], 'room test: no shared word, no hit, no announce');
+  eq(blastOne({ room1: 1, room2: 6 }, { room1: 1, room2: 2 }).map((e) => e.kind), ['hit', 'announce', 'burst'], 'room test: target room_id_1 == trap room_id_1 passes');
+  eq(blastOne({ room1: 2, room2: 6 }, { room1: 1, room2: 2 }).map((e) => e.kind), ['hit', 'announce', 'burst'], 'room test: target room_id_1 == trap room_id_2 passes');
+  eq(blastOne({ room1: 9, room2: 2 }, { room1: 1, room2: 2 }).map((e) => e.kind), ['hit', 'announce', 'burst'], 'room test: target room_id_2 == trap room_id_2 passes');
+  eq(blastOne({}, { room1: 1, room2: 2 }).map((e) => e.kind), ['hit', 'announce', 'burst'], 'no room data on the target: the test passes (ASSUMED)');
+  check(blastRoomMatch(new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0), tgt({ room1: 3, room2: 4 })), 'no room data on the trap: the test passes (ASSUMED)');
+  // Owner: skipped while the rule is off, as in the range loop.
+  const fo = new TrapField();
+  const ot = new BattleTrap(1, 0, 1, 0, 0, 0, 3, 0);
+  ot.state = 4;
+  fo['traps'].push(ot);
+  eq(fo.tick([tgt({ id: 1, x: 0, z: 0, local: true })], { trapsHitOwner: false }).map((e) => e.kind), ['burst'], 'blast: the owner is skipped with the rule off');
+  eq(fo.tick([], { trapsHitOwner: false }).length, 0, 'no further events once the trap is removed');
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

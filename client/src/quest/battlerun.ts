@@ -42,6 +42,7 @@ import {
   trapAnnouncement,
   trapDamage,
   trapPlacePermitted,
+  type BattleTrap,
   type PlaceContext,
   type TrapEvent,
   type TrapTarget,
@@ -418,11 +419,24 @@ export class BattleRun {
       ownerFloor: owner.floor,
       ownerPos: owner.position,
       ownerAngle: owner.angle,
+      // The receiving client's map: the 0x83 permission gate of both dispatches (trapPlacePermitted).
+      map: this.opts.view.current?.area ?? -1,
+      // The owner's room words are not in the port's player state (ASSUMED: no room data, ownerRoom undefined).
+      difficulty: this.opts.game.info?.difficulty ?? 0,
+      pioneer2Byte: 0, // g_Pioneer2MapInitData[0]: ASSUMED 0 in a battle (challengeFlagValue)
     };
   }
 
+  // The Ultimate branch of trap_constructor clears g_BATrapsCanTargetOwnerPlayer (dump 492997); the
+  // port keeps that rule in the battle state, so the trap that ran the branch clears it here.
+  private applyUltimateClear(trap: BattleTrap | null): void {
+    if (trap?.ultimate && this.setup) this.setup.trapsHitOwner = false;
+  }
+
   // A remote player's 6x83 (its client's palette press). The local client's own placement
-  // is made in placeTrap, so its echo (if any) is skipped here.
+  // is made in placeTrap, so its echo (if any) is skipped here. The receive path gates the
+  // handler by this client's map (TeamQuest_ProcessSubcommands, quest/battletraps.ts trapPlacePermitted),
+  // which placeContext's `map` applies inside TrapField.place.
   private onTrapPlaced(clientId: number, body: Uint8Array): void {
     const c = this.controller;
     const g = this.opts.game;
@@ -432,6 +446,7 @@ export class BattleRun {
     if (!p || !owner) return;
     // The owner's stock is not tracked for remote players; a throwaway counter takes the decrement.
     const trap = this.traps.place({ clientId, type: p.type, count: p.count }, this.placeContext(owner), new TrapCounters());
+    this.applyUltimateClear(trap);
     if (trap) this.log(`battle trap ${p.type} placed by ${this.names(clientId)}`);
   }
 
@@ -456,6 +471,7 @@ export class BattleRun {
     }
     const owner = { floor: me.floor, position: me.position, angle: me.angle };
     const trap = this.traps.place({ ...req, clientId: g.selfId }, this.placeContext(owner), this.counters);
+    this.applyUltimateClear(trap);
     if (!trap) {
       this.log(`battle trap ${type} sent, not placed (safe_create refused)`);
       return true;
@@ -481,7 +497,10 @@ export class BattleRun {
         trapVision: p.charClass >= 0 && isAndroid(p.charClass), challengeOne: true,
       });
     }
-    const events: TrapEvent[] = this.traps.tick(targets, { trapsHitOwner: this.setup?.trapsHitOwner ?? false });
+    const events: TrapEvent[] = this.traps.tick(targets, {
+      trapsHitOwner: this.setup?.trapsHitOwner ?? false,
+      challengeFlag: 0, // g_Pioneer2MapInitData[0] in a battle (ASSUMED 0, see challengeFlagValue)
+    });
     for (const ev of events) {
       if (ev.kind === 'send80') {
         g.sendSubcommand(0x80, build6x80(g.selfId, ev.trap.number, ev.what).subarray(4));
