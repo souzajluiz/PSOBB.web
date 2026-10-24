@@ -78,22 +78,23 @@ export const CHALLENGE_MATERIAL_MULTIPLIER = 5;
 // The HP / TP bonus a material use is refused at (0xfa).
 export const MATERIAL_BONUS_LIMIT = 0xfa;
 
-// g_ClassMaxStats (0x00968560, 0x24 bytes a row): atp, mst, evp, dfp, lck per
-// class (the other fields are not used by material use). Read with
-// tools/exedata.py read 00968560 h 216.
-export const CLASS_MAX_STATS: readonly { atp: number; mst: number; evp: number; dfp: number; lck: number }[] = [
-  { atp: 1387, mst: 732, evp: 756, dfp: 579, lck: 100 }, // HUmar
-  { atp: 1227, mst: 1177, evp: 811, dfp: 589, lck: 100 }, // HUnewearl
-  { atp: 1629, mst: 0, evp: 660, dfp: 601, lck: 100 }, // HUcast (android)
-  { atp: 1255, mst: 665, evp: 715, dfp: 515, lck: 100 }, // RAmar
-  { atp: 1345, mst: 0, evp: 699, dfp: 606, lck: 100 }, // RAcast (android)
-  { atp: 1170, mst: 0, evp: 787, dfp: 688, lck: 100 }, // RAcaseal (android)
-  { atp: 869, mst: 1284, evp: 588, dfp: 498, lck: 100 }, // FOmarl
-  { atp: 811, mst: 1500, evp: 679, dfp: 463, lck: 100 }, // FOnewm
-  { atp: 580, mst: 1750, evp: 883, dfp: 390, lck: 100 }, // FOnewearl
-  { atp: 1291, mst: 0, evp: 877, dfp: 525, lck: 100 }, // HUcaseal (android)
-  { atp: 999, mst: 1340, evp: 651, dfp: 470, lck: 100 }, // FOmar
-  { atp: 1140, mst: 1031, evp: 900, dfp: 577, lck: 100 }, // RAmarl
+// g_ClassMaxStats (0x00968560, 0x24 bytes a row, class_max_stats in the dump: atp, mst, evp,
+// hp, dfp, ata, lck, esp as shorts): atp, mst, evp, dfp, ata, lck per class (hp and esp are
+// not used here). ata is the exe's clamp for the stat block's ATA (PlayerRecalculateStats_0068e030,
+// dump 569766). Read with tools/exedata.py read 00968560 h 216 (the 18-short rows).
+export const CLASS_MAX_STATS: readonly { atp: number; mst: number; evp: number; dfp: number; ata: number; lck: number }[] = [
+  { atp: 1387, mst: 732, evp: 756, dfp: 579, ata: 1355, lck: 100 }, // HUmar
+  { atp: 1227, mst: 1177, evp: 811, dfp: 589, ata: 1388, lck: 100 }, // HUnewearl
+  { atp: 1629, mst: 0, evp: 660, dfp: 601, ata: 1300, lck: 100 }, // HUcast (android)
+  { atp: 1255, mst: 665, evp: 715, dfp: 515, ata: 1739, lck: 100 }, // RAmar
+  { atp: 1345, mst: 0, evp: 699, dfp: 606, ata: 1530, lck: 100 }, // RAcast (android)
+  { atp: 1170, mst: 0, evp: 787, dfp: 688, ata: 1580, lck: 100 }, // RAcaseal (android)
+  { atp: 869, mst: 1284, evp: 588, dfp: 498, ata: 1088, lck: 100 }, // FOmarl
+  { atp: 811, mst: 1500, evp: 679, dfp: 463, ata: 1200, lck: 100 }, // FOnewm
+  { atp: 580, mst: 1750, evp: 883, dfp: 390, ata: 1260, lck: 100 }, // FOnewearl
+  { atp: 1291, mst: 0, evp: 877, dfp: 525, ata: 1500, lck: 100 }, // HUcaseal (android)
+  { atp: 999, mst: 1340, evp: 651, dfp: 470, ata: 1010, lck: 100 }, // FOmar
+  { atp: 1140, mst: 1031, evp: 900, dfp: 577, ata: 1730, lck: 100 }, // RAmarl
 ];
 
 // The android classes: class_check(player, 0xd7) is 1 for them (the flag 0x10

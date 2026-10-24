@@ -38,7 +38,7 @@ import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEnv, type RowContext } from '../classic/itempack.ts';
 import { menuRowSelectable } from '../quest/battleitems.ts';
 import { compareStatRows, type EquipStatRow, type StatBlock } from '../classic/itemdetail.ts';
-import { equippedCandidate, recalculateCandidate } from '../combat/playerstats.ts';
+import { equippedCandidate, recalculateCandidate, wornEquipment } from '../combat/playerstats.ts';
 import type { ToolCheckContext } from '../classic/quickmenu.ts';
 import { magStats } from '../formats/itemnames.ts';
 import { techMenuOrder } from '../net/charfile.ts';
@@ -515,13 +515,12 @@ export class FieldHud {
       evp: rc.stats.evp ?? 0,
       lck: rc.stats.lck ?? 0,
     };
-    const d = it.data.data1;
-    const old = c.inventory.find((o) => o.equipped && o.data.data1[0] === d[0] && (d[0] !== 1 || o.data.data1[1] === d[1])) ?? null;
+    const worn = wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data));
     const problems = equipProblems(it.data, rc);
     // PlayerRecalculateStats_0068e030 (not worn) / PlayerCalculateItemStats_0068e4e8 (worn).
     const cand = it.equipped
-      ? equippedCandidate(current, it.data, pmt)
-      : recalculateCandidate(current, it.data, old && old !== it ? old.data : null, pmt);
+      ? equippedCandidate(current, it.data, worn, c.charClass, pmt)
+      : recalculateCandidate(current, it.data, worn, c.charClass, pmt);
     return compareStatRows(current, cand, problems === 0);
   }
 
