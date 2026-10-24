@@ -155,7 +155,7 @@ import { TRAP_DEATH_PARTICLE, trapPaletteType, type BattleTrap, type TrapEffect 
 import { SONAR_PING_SOUND } from '../quest/battle.ts';
 import type { EnemyHitbox as EnemyBoxHit, PlayerRatioStatus } from '../quest/npcai.ts';
 import { BattleTrapView } from './battletrapview.ts';
-import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge } from '../combat/photonblast.ts';
+import { PB_INVULN_FRAMES, PB_MAX_TARGETS, PB_NAMES, PB_RANGE, pbDamage, pbGain, pbPower, PhotonBlastGauge, PhotonBlastSlots } from '../combat/photonblast.ts';
 import { photonBlasts } from '../net/magfeed.ts';
 import { isAndroid } from '../combat/progression.ts';
 import { BattleParams, battleParamFile, type BattleParamKind, type EnemyAttackData } from '../formats/battleparams.ts';
@@ -738,6 +738,8 @@ export class CombatView {
   readonly status: PlayerStatus;
   // The MAG's photon blast gauge (combat/photonblast.ts).
   readonly pb = new PhotonBlastGauge();
+  // The per-slot blast state that drives the status icons (something_about_photon_blasts).
+  private readonly pbSlots = new PhotonBlastSlots();
 
   constructor(viewer: MapViewer, game: Game, files: ClientFiles, layer: EnemyLayer, opts: CombatOptions) {
     this.viewer = viewer;
@@ -1388,6 +1390,7 @@ export class CombatView {
     for (const id of [...this.souls.keys()]) this.showSoul(id, false);
     this.remoteStatus.clear();
     this.remoteBuffs.clear();
+    this.pbSlots.reset();
     if (progression && this.tp === 0) this.tp = progression.maxTp;
     this.opts.log(
       `combat: ${this.enemies.size} enemies on floor ${floor} (entities 0x${(0x1000 | base).toString(16)}+), ` +
@@ -1624,7 +1627,12 @@ export class CombatView {
     // The remote copy's status slots (6x0C / 6x0D) and its Shifta / Deband slots, in
     // the order of the local window (slot 0, slot 1, attack, defense).
     const rs = this.remoteStatus.get(slot);
-    const statusIcons = [...(rs ? rs.types().map(statusIcon) : []), ...(this.remoteBuffs.get(slot)?.icons() ?? [])];
+    // The photon blast icon comes first while the slot is in a blast (GetPhotonBlastData_0067e334).
+    const statusIcons = [
+      ...(this.pbSlots.active(slot) ? [STATUS_ICON_BLAST_FIRST] : []),
+      ...(rs ? rs.types().map(statusIcon) : []),
+      ...(this.remoteBuffs.get(slot)?.icons() ?? []),
+    ];
     return { name: p.name, level: p.level, hp: m.hp, maxHp: m.maxHp, dead: m.dead || this.deadPlayers.has(slot), nameColor: p.nameColor, statusIcons };
   }
 
@@ -1649,9 +1657,13 @@ export class CombatView {
       pb: this.pb.charge,
       dead: this.damage.dead,
       nameColor: me?.nameColor,
-      // The photon blast icon comes first while the blast is ready (10 + the
-      // player's index in the blast list, ASSUMED 0 for the local player).
-      statusIcons: [...(this.pb.ready ? [STATUS_ICON_BLAST_FIRST] : []), ...this.status.types().map(statusIcon), ...this.selfBuffs.icons()],
+      // The photon blast icon comes first while the local slot is in a blast (10 + the
+      // player's index in the blast list, ASSUMED 0: the caster is the only participant).
+      statusIcons: [
+        ...(this.pbSlots.active(this.game.selfId) ? [STATUS_ICON_BLAST_FIRST] : []),
+        ...this.status.types().map(statusIcon),
+        ...this.selfBuffs.icons(),
+      ],
     };
   }
 
@@ -6705,9 +6717,16 @@ export class CombatView {
     this.opts.log(`photon blast ${name} (slot ${slot}, 6x49 with ${targets.length} target(s))`);
     // ASSUMED: the blast goes off one second later (the PB object counts its
     // own frames, UpdatePhotonBlastState_0067eed0).
+    // The blast object (PhotonBlast_Constructor_0067ec51) starts the slot state; its
+    // effect ends the object, which clears the state (ASSUMED: the start is the fire).
+    const self = this.game.selfId;
+    this.pbSlots.start([self]);
     this.techHits.push({
       ticks: 30,
-      apply: () => this.photonBlastEffect(type, gauge, targets),
+      apply: () => {
+        this.photonBlastEffect(type, gauge, targets);
+        this.pbSlots.end(self, [self]);
+      },
     });
     return true;
   }
@@ -8628,6 +8647,15 @@ export class CombatView {
       }
       if (st.add) rs.receiveAdd(st.value);
       else rs.receiveRemove(st.value);
+      return;
+    }
+    // 6x49 from another player: its blast object starts the slot state (the remote copy
+    // of the blast; ASSUMED the end is the same delay as the local blast's effect).
+    if (sub === 0x49) {
+      if (clientId === this.game.selfId) return;
+      this.pbSlots.start([clientId]);
+      this.techHits.push({ ticks: 30, apply: () => this.pbSlots.end(clientId, [clientId]) });
+      this.opts.log(`player ${clientId}: photon blast ${body[0] ?? '?'} (6x49)`);
       return;
     }
     if (sub === 0x5f) this.opts.log(`item dropped (6x5F, ${body.length} bytes)`);

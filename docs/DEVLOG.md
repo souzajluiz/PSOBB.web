@@ -17829,3 +17829,45 @@ The tekker Result entry says ItemAttributesPanel_Update_00726ee2 and the page 2/
 - Remote and local photon blast icon source (above): trace the blast object lifetime and the readers of `something_about_photon_blasts` and of +0x524 bit 2; then port the icon.
 - Bit 0x1 (entity records) and the `ResetGuildCardList` caller; the cmode challenge timer's window constructor.
 - The timer frame width (the exe's list window frame) against the reference.
+
+## 2026-10-23: photon blast icon follows the blast state (local and remote)
+
+The brief's premise holds: the exe's icon does not read the gauge. `QuickMenuUpdateShiftaStatusIcons_007426d8` (dump 712999) and the party window code (dump 713040) draw the photon blast icon when `GetPhotonBlastData_0067e334` (dump 547338) returns 1 or 2 for the slot. That function reads `something_about_photon_blasts` at 0x00a90420 + slot * 36 (the state) and copies the blast data.
+
+**Writers of the state** (the stores to 0x00a90420 and the 0x00a904xx block found in `exe.s`, no register-held base found):
+- 0 at 0x0067ded3, 0x0067e060 (`ShutdownGameGlobals_0067e01c`) and 0x006801e4 (the init near dump 548581).
+- 2 at 0x0067ed22, in `PhotonBlast_Constructor_0067ec51` (dump 547640): for each participant slot below 4 (+0x60..+0x6c), after the copy of the blast data (the copy is skipped when the slot is already 2).
+- 1: no store. The `== 1` branch of `GetPhotonBlastData` has no writer, so a live blast is always state 2.
+
+**Clear:** the blast object's destructor (dump 547137, `PlayerBaseDestructor_0067ddc6`) sets 0 for every participant slot when its caster slot (+0x3c) is below 4, whatever else set the slot since.
+
+**Blast object lifetime:**
+- Created by `CreatePhotonBlast` (dump 547409, the list of the same-room players with a weapon field), called from `ResetWeaponStateForUnsafeMap` (dump 585705) on the weapon-attack state 3 with flag 8 (`Player__UpdateWeaponAttackAnimation`, dump 585590). A new blast is not made when another same-room player's state is not 0 (dump 547535; not ported).
+- Object vtable 0x00b38328: [0] = 0x0067dd74 (destructor thunk), [1] = 0x0067ee70 (update, dump 547815..547870 for the body).
+- Remote branch (+0x4c == 0): the frame counter (+0x44) passes the delay (+0x48 = 100 + 150 * n) -> `ApplyPhotonBlastEffects_0067ef10` and `+8 |= 1` (due for destruction).
+- Local branch (+0x4c != 0): `SpawnBossEntity_0067f5b4` (dump 548066), a phase machine; phase 2 plays SE 0xae, `HandlePhotonBlastDamage_0067fa2c` and sets `+8 |= 1`.
+- `RecursiveGameObjectUpdate_0081888c` (dump 836060) destructs an object whose flag word has `due_for_destruction` (1), and skips the update of any object with `update_disallowed` (15).
+- So the state lives from the blast's start to its effect.
+
+**6x39 / 6x3A and +0x524 bit 2** (0x006a7ff4 / 0x006a8074): traced as far as the icon goes. The icon code does not read +0x524. The offset is a shared word (`0x524(%reg)` appears in about 100 instructions with different bases), so a full reader list was not built. The only player reader known is the fire gate (`CanPlayerCastTechInCurrentState`, +0x524 & 2), already ported as `pb.ready`. Nothing visible is driven by bit 2 beyond that; not changed.
+
+**Ported:**
+- `client/src/combat/photonblast.ts`: `PhotonBlastSlots` (`start(participants)` sets 2 below 4, `end(caster, participants)` clears them when the caster is below 4, `reset()`, `get`, `active` = state 1 or 2). The exe citations are in the block comment.
+- `client/src/render/combat.ts`: `pbSlots`. The local status icon is `active(selfId)` instead of `pb.ready` (the gauge no longer draws the icon). The party windows prepend the icon for a slot in a blast. Firing starts the local slot (`start([self])`) and the effect ends it (`end`). A 6x49 from another client starts that slot and ends it after 30 ticks (`techHits`). A new floor resets the table.
+- `tests/photonblast.test.ts`: section 7 (start / end / caster out of range / reset / no state 1).
+- `docs/ROADMAP.md`: the photon blast icon line in the HUD item.
+
+**ASSUMED:**
+- The start is the fire. The exe creates the object in the weapon state machine (state 3, flag 8), which the port's 6x49 send is taken to stand for.
+- The end is the effect, 30 ticks after the fire (the port's existing delay). The exe ends it at its phase 2 / counter delay, not traced in ticks.
+- Participants = the caster only. The exe adds the same-room players with a weapon field (the joined blasts), which the port does not model.
+- A remote 6x49 is the other client's blast, relayed by the server (the port receives subcommands 0x49 from other clients), and it ends after 30 ticks.
+- The icon index is 0 (icon 10) for every blast, since only the caster is a participant.
+
+**Checks:** `node tests/photonblast.test.ts` (all checks passed), `tests/party.test.ts`, `tests/buffs.test.ts`, `tests/fieldhud.test.ts`, `tests/guildcardflags.test.ts`: exit 0 (the field HUD test needs `three`: the worktree's `client/node_modules` was linked to the main checkout for the run and removed after). Client `tsc --noEmit -p .` (main checkout's TypeScript, Node 24): 0 errors. Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- The joined blasts (the same-room participant list from the weapon data) and the new-blast gate (another same-room player in a blast blocks a new one; the port still applies the effect).
+- The real remote blast end (the exe's phase / counter in ticks) and how the remote's 6x37 relates to it.
+- The second `GetPhotonBlastData` caller in the status window (dump 712934, the positions at y 173 by the participant's weapon field) is not traced.
+- The +0x524 bit 2 readers beyond the fire gate.

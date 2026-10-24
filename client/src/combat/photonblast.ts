@@ -147,3 +147,65 @@ export class PhotonBlastGauge {
     return was >= PB_FULL ? 'notReady' : null;
   }
 }
+
+// Per-slot blast state (the exe's something_about_photon_blasts, the global at
+// 0x00a90420, 36 bytes per room slot 0..3). GetPhotonBlastData_0067e334 (dump
+// 547338) returns 1 or 2 for a slot whose state is non-zero, and the status
+// icon code (QuickMenuUpdateShiftaStatusIcons_007426d8, dump 712999; the party
+// windows, dump 713040) draws the photon blast icon from that alone, not from
+// the gauge.
+//   Writers (every store to 0x00a90420 in the disassembly): 0 in the init
+//   (0x0067ded3, 0x006801e4) and the shutdown (0x0067e060); 2 in the blast
+//   object's constructor PhotonBlast_Constructor_0067ec51 (0x0067ed22), for each
+//   participant slot (+0x60..+0x6c, below 4), after the copy of the blast data.
+//   State 1 has no store in the exe (the 1 branch of GetPhotonBlastData is dead
+//   code as far as the direct stores show; ASSUMED none through a register base).
+//   Clear: the blast object's destructor PlayerBaseDestructor_0067ddc6 (dump
+//   547137) clears every participant slot of the object when its caster slot
+//   (+0x3c) is below 4, whatever else set the slot since.
+//   Lifetime: the constructor runs in CreatePhotonBlast (dump 547409), called
+//   from ResetWeaponStateForUnsafeMap (dump 585705) on a weapon special's
+//   state 3 with flag 8 (Player__UpdateWeaponAttackAnimation, dump 585590). The
+//   object's update sets the due-for-destruction bit (+0x8 bit 0,
+//   0x00 67ee70 / 0x0067eedc) when its frame counter passes its delay (remote
+//   branch) or in phase 2 of its state machine (the local SpawnBossEntity_
+//   0067f5b4, dump 548066: the damage, then `+8 |= 1`), and
+//   RecursiveGameObjectUpdate_0081888c (dump 836060) destructs it on the next
+//   walk. So the state lives from the blast's start to its effect.
+//   Participants (ASSUMED in the port): the caster only. The exe also adds the
+//   same-room players that are in a weapon special (the joined blasts), which
+//   the port does not model.
+export const PB_SLOT_NONE = 0;
+export const PB_SLOT_ONE = 1; // no store in the exe (see above)
+export const PB_SLOT_BLAST = 2;
+
+export class PhotonBlastSlots {
+  private readonly state = [PB_SLOT_NONE, PB_SLOT_NONE, PB_SLOT_NONE, PB_SLOT_NONE];
+
+  // PhotonBlast_Constructor_0067ec51: each participant below 4 gets state 2.
+  start(participants: readonly number[]): void {
+    for (const slot of participants) if (slot >= 0 && slot < 4) this.state[slot] = PB_SLOT_BLAST;
+  }
+
+  // PlayerBaseDestructor_0067ddc6: when the caster slot is below 4, every
+  // participant below 4 goes back to 0.
+  end(caster: number, participants: readonly number[]): void {
+    if (!(caster >= 0 && caster < 4)) return;
+    for (const slot of participants) if (slot >= 0 && slot < 4) this.state[slot] = PB_SLOT_NONE;
+  }
+
+  // The init (0x0067ded3) and the shutdown (0x0067e060) clear all four.
+  reset(): void {
+    for (let i = 0; i < 4; i++) this.state[i] = PB_SLOT_NONE;
+  }
+
+  get(slot: number): number {
+    return slot >= 0 && slot < 4 ? this.state[slot] : PB_SLOT_NONE;
+  }
+
+  // GetPhotonBlastData_0067e334 returns 1 or 2: the slot has a blast icon.
+  active(slot: number): boolean {
+    const s = this.get(slot);
+    return s === PB_SLOT_ONE || s === PB_SLOT_BLAST;
+  }
+}
