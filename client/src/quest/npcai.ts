@@ -26,15 +26,18 @@
 // ASSUMED (not traced): that command 2 reaches the NPCs made by command 0 / 3
 // too (their flag is 7 in the constructor; what sets flag 3 for them is in the
 // vtable init, not traced), so the quest's npc_play follows them here; the
-// follow distance; the walk path (a straight line with the render-side
-// followTick); who syncs the NPC's position to the other clients (every client
-// simulates the followers from the leaders' synced positions). The attack AI
-// (below) runs on the owner's client only, as the exe's AI object does.
+// follow distance of the non-owner clients (FOLLOW_DISTANCE, followPoint); the owner's
+// follow is the head's spawn range and move target (quest/npchead.ts, traced 2026-10-23);
+// the walk path of the non-owners (a straight line with the render-side followTick); who
+// syncs the NPC's position to the other clients (every client simulates the followers from
+// the leaders' synced positions). The attack AI (below) runs on the owner's client only, as
+// the exe's AI object does.
 
 export const NPC_FLAG_CREATED = 7; // SinowberillChallengePlayer_Constructor_00686258 (.c:552337)
 export const NPC_FLAG_FOLLOWER = 3; // 007b46f8 (.c:798808); the 6x69 command 1 / 2 gate (.c:798425, .c:798433)
 export const NO_LEADER = 0xffff; // player +0x750 (.c:552273)
-// ASSUMED: the distance a follower keeps from its leader, in units.
+// ASSUMED: the distance a non-owner client keeps its follower from the leader, in units. The
+// owner's client uses the head's spawn range instead (quest/npchead.ts headSpawnRange).
 export const FOLLOW_DISTANCE = 3.0;
 // ASSUMED: command 2 also starts the NPCs made by command 0 / 3 (see above).
 export const FOLLOW_CREATED_NPCS = true;
@@ -273,9 +276,9 @@ export class NpcAttackGate {
 // (6x40, SendMoveStart_007b298c), repeated each tick while the flag is clear (the walk start
 // does not set it). The flag is cleared on a tick when the head is not in state 1 (.c:797032).
 // The 6x40 carries a flags word (8 when the NPC's +0x30 has 0x100000, ASSUMED near-enemy; the
-// port sends 0). The send rules and the packet layout are exe-read. In the exe the packet's x / z
-// are the head's move target; the port sends the NPC's own position after its step (ASSUMED,
-// see quest/town.ts stepNpcFollowers).
+// port sends 0). The send rules and the packet layout are exe-read. The packet's x / z are the
+// head's send target (+0xac / +0xb4, quest/npchead.ts NpcHead.sendTarget), as in the exe
+// (SendMoveStart_007b298c, SendMove_007b29f0). The send's distance is from that target to the NPC.
 export const NPC_MOVE_WALK = 0x40; // action_type move_start = 64 (dump enum input_state_1)
 export const NPC_MOVE_RUN = 0x42; // action_type move = 66
 export const NPC_MOVE_STOP_DISTANCE = 1.0; // DAT_0097dd2c (.c:797009)
@@ -285,6 +288,10 @@ export type NpcMoveSend = 'walk' | 'run';
 export class NpcMoveSender {
   // Head +0x80 bit 0x8: a run was sent in this move.
   private running = false;
+
+  get isRunning(): boolean {
+    return this.running;
+  }
 
   // The send for this tick, or null when the target is already reached.
   tick(dist: number, leash: number): NpcMoveSend | null {

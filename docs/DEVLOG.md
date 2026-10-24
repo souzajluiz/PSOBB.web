@@ -15591,3 +15591,47 @@ Follow-up to "Customize (action palette editor) and the save upload (E7) traced 
 2. The preview box (0x76, title 0x48) between the keyboard and the confirm.
 3. The receive side of 6x74 (the word-select window), as before.
 4. The keyboard's control mapping (page keys 0x10 / 0x11; 0xe as the Symbol Chat key) to check in Chrome.
+## 2026-10-23: NPC follow head: the owner's walk goes to the head's send target (Pioneer 2 state, spawn range, midpoint, move gate)
+
+**Question:** the ROADMAP's NPC players' attack AI line: the head's move target (AIUpdateMovement_007b1298, CheckPathAndTarget_007b086c), the state dispatch (AIUpdateState_007b267c), the cast timing, replacing the port's ASSUMED followTick / followPoint and busy ticks.
+
+**Premise check (exe):**
+- The cast premise is only half right. Two cast paths exist. ExecuteAttack_007b2ae8 (state 8) casts Resta (0xf), Anti (0x10) and Reverser (0x11), as the previous entry says. SinowberillHead_CastTechnique_007b2e20 (state 2, `.c:797346`) casts the Foie family from `g_SinowberillHead_TechniqueTable` at 0x0097dcf8 = [0 Foie, 1 Gifoie, 3 Barta, 4 Gibarta, 6 Zonde, 8 Razonde] (index = tier * 2 + strong; tier from the head's +0x34: 0x4 -> 0, 0x8 -> 1, 0x10 -> 2). Those hit the NPC's own target (B +0x7c / +0x84). So "no enemy takes damage" holds for state 8 only. The state-2 trigger sits in the map-mode branch (not traced), so it is ported as a pure pick and not wired.
+- The follow premise: the idle head does not walk the NPC to its leader on its own. On Pioneer 2 (`map_is_pioneer2_`, `.c:795492`) UpdateState_007b00bc sets the anchor to the owner's position, the state to 1 (move) and flag 0x20 every tick. The stop distance is the spawn range, not 3 units.
+- The release premise: HandlePlayerTechCastState_007b2bc0 (`.c:797215`) has no release. It sets the input state (0x16 for Resta / Anti, 0x17 for Foie / Barta / Zonde, 2 for the others), the cast packet and the eligibility check. The release is the end of those input states (handle_input_state_0x57 / dispatch_action_emote), not traced.
+
+**Exe evidence (dump `src/Psobb.exe-05112026.c`; names are community guesses, bodies used):**
+- Update chain (`SinowberillChallengePlayer_Update_007aefd4`, `.c:794690`): UpdateState_007b00bc (`.c:795481`), AIUpdate_007b1134 (`.c:796128`), then the state dispatch 2764 (`.c:796961`), which runs only when the owner's 0x800 is clear (`.c:794710`).
+- Pioneer 2 branch (`.c:795492..795496`): UpdateAttackTarget_007b0fdc (`.c:796082`) with head +0x84 == 0 sets the anchor to the owner's weapon position (+0x300); state 1; flags = flags & 0xffffefef | 0x20; return.
+- Spawn check (`SinowberillChallengeBoss_CheckSpawnValidity_007b1220`, `.c:796178`): the range is min(DAT_0097dd8c = 40, leash + DAT_0097dd90 = 12), leash = head +0x40 (stat row k=4). Inside the range: when flag 0x20 is set and the state is not 8, state 0, flag 0x20 cleared, anchor = owner (`.c:796131..796143`), and the send target (+0xac) is not written.
+- Move target (`SinowberillHead_AIUpdateMovement_007b1298`, `.c:796204`): the midpoint of the NPC and the anchor, k = 0.5 (DAT_0097dd84). The wall ray `SinowberillHead_CheckWall_007b18e0` (`.c:796427`, cast_ray_at_map_collision_geometry, mask 0x2100). No wall and the NPC's need bits 0x20 / 0x80 clear: target = midpoint (+0xd0). The wall branch (CalculateAvoidanceTarget_007b23a4, AdjustTargetForCollision_007b25c0, CalculateTarget_007b193c, UpdateTargetPosition_007b1ad0) is not ported.
+- Move-needed gate (`SinowberillHead_AIUpdateState_007b267c`, `.c:796915`): xz distance squared between the send target (+0xac) and the new target (+0xd0) above DAT_0097dd34 = 100: the send target becomes the target, state 1 (unless 2), flag 0x20 (`.c:796154..796159` in 1134). Otherwise the send target is the NPC's own position (`.c:796149`), so the 2764 check measures 0 and sends nothing.
+- State-1 sends (2764, `.c:796990..797035`): unchanged (NpcMoveSender). The packet x / z are the head's send target (+0xac / +0xb4: SendMoveStart_007b298c `.c:797061`, SendMove_007b29f0 `.c:797089`), not the NPC's position.
+- Constants read with `tools/exedata.py read 0097dd00 f 48`: 0x97dd2c 1.0, 0x97dd34 100, 0x97dd84 0.5, 0x97dd8c 40, 0x97dd90 12. Technique table `tools/exedata.py read 0097dcf8 u 6`.
+- Struct: player +0x300 is `weapon_position` (the struct's comment: the same XZ, a higher Y), so the head's XZ uses the player position in the port.
+
+**Ported:**
+- `client/src/quest/npchead.ts` (new): the constants; `headSpawnRange` (min(40, leash + 12)); `headMidpoint`; `NpcHead` with `pioneerUpdateState` (UpdateState_007b00bc's Pioneer 2 branch) and `update` (spawn check, midpoint, the wall ray answer in `wallHit`, the move-needed gate, the send target); `headSendDistance` (the 2764 state-1 check); `headCastInputState` (0x16 / 0x17 / 2); `HEAD_TWO_TECH_TABLE`, `headTwoTier`, `headTwoTech` (the state-2 pick with the roll and the +0x53 skip).
+- `client/src/quest/town.ts` `stepNpcFollowers`: the owner's NPCs go through `stepNpcHead` (head update; the walk to the head's send target with followTick, run speed when the sender runs; the 6x40 / 6x42 at the send target; `sender.reset()` when the head is not in state 1). `npcFollowHeads` per slot, cleared with the others. Non-owners keep `followPoint` (ASSUMED).
+- `client/src/render/combat.ts` `npcWallBlocks(from, to, mask)`: the map's wall ray with the given mask (mask 0x2100 for the head).
+- `client/src/quest/npcai.ts`: `NpcMoveSender.isRunning`; the comments for the send target and the non-owner follow distance.
+- `tests/npcai.test.ts`: spawn range, midpoint, Pioneer 2 state, a far owner's send target, the move gate (a 10-unit change sends nothing), the near stop (state 0), the state check of the sends, walk vs run, the wall answer and mask, the cast input states, the state-2 table, tier, and roll skip, and source checks of town.ts and combat.ts.
+
+**Not ported (the ROADMAP line stays open):**
+- The wall branch of AIUpdateMovement (avoidance, path, CalculateTarget, UpdateTargetPosition) and the collision adjustments (AdjustTargetForCollision_007b25c0).
+- The map-mode branch of UpdateState_007b00bc (head mode +0x1c = 1: AIProcessState, TryAttack_007b0754, CheckPathAndTarget_007b086c, the second target +0x84 and UpdateAttackTarget's second-target branch). The port runs the Pioneer 2 state on every map.
+- The state-2 cast: `headTwoTech` is not wired; the attack AI (`stepNpcAttacks`) still casts the state-8 set (Resta, Anti, Reverser) only.
+- The cast's release timing: the states 0x16 / 0x17 and their end (handle_input_state_0x57 / dispatch_action_emote). The busy ticks are still the port's charge + cast (ASSUMED).
+- The 6x40 flags word and the 0x100000 gate (walk start with flag 8), and the 2764 gate `B +0x328 & 2`.
+
+**ASSUMED:**
+- The Pioneer 2 update state on every map (the head's mode +0x1c is not traced).
+- The wall branch: the midpoint is kept when the ray hits (wallHit is recorded).
+- The ray runs from the NPC's and the anchor's position raised by 5 (`HEAD_RAY_HEIGHT`, the player's wall-ray height); the weapon position's XZ is the position's XZ (struct comment).
+- The owner's position is the leader's position (the local player's +0x38; the port's leader is the player record).
+- The walk speed is followTick with the sender's run flag; the exe's NPC walk and run speeds are the motion's, not traced here.
+- The 2764 gate `B +0x328 & 2` is treated as set; the 0x100000 bit of B +0x30 is treated as clear.
+- The release of the cast states is the port's charge + cast ticks.
+- Non-owner clients keep the follow point (FOLLOW_DISTANCE, 3 units) and the local walk until the packets correct them.
+
+**Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`client/node_modules` symlinked to the main checkout's for the run, removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.

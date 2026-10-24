@@ -23,6 +23,19 @@ import {
   NpcMoveSender,
   pickAttackTarget,
 } from '../client/src/quest/npcai.ts';
+import {
+  headCastInputState,
+  headMidpoint,
+  headSendDistance,
+  headSpawnRange,
+  headTwoTech,
+  headTwoTier,
+  HEAD_STATE_IDLE,
+  HEAD_STATE_MOVE,
+  HEAD_TWO_TECH_TABLE,
+  HEAD_WALL_MASK,
+  NpcHead,
+} from '../client/src/quest/npchead.ts';
 import { buildNpcMove } from '../client/src/net/game.ts';
 import { questOpcodeByName } from '../client/src/formats/questopcodes.ts';
 import { boxTargetable } from '../client/src/formats/enemyboxes.ts';
@@ -260,10 +273,88 @@ const cmd = (param1: number, param2: number, command: number, param3 = 0) => ({ 
   check(hexOf(buildNpcMove(0x1234, false, 1.5, -2)) === '40043412' + '0000c03f' + '000000c0' + '00000000', '6x40 for an NPC: header 40 04, caster id, f32 x, f32 z, u32 flags 0 (16 bytes)');
   check(hexOf(buildNpcMove(0x1234, true, 1.5, -2)) === '42033412' + '0000c03f' + '000000c0', '6x42 for an NPC: header 42 03, caster id, f32 x, f32 z (12 bytes)');
   const townSrc = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
-  check(/sendNpcMove\(slot, send === 'run', p\.position\.x, p\.position\.z\)/.test(townSrc), 'the owner sends the NPC move from stepNpcFollowers (town.ts)');
+  check(/sendNpcMove\(slot, send === 'run', goal\.x, goal\.z\)/.test(townSrc), 'the owner sends the NPC move at the head send target from stepNpcHead (town.ts)');
   check(/if \(st\.owner && row\)/.test(townSrc), 'only the owner sends the NPC move');
   const gameSrc = readFileSync(join(HERE, '../client/src/net/game.ts'), 'utf8');
   check(gameSrc.includes('this.conn.send(0x60, 0, buildNpcMove(npcId, run, x, z))'), 'game.ts sendNpcMove builds the 6x40 / 6x42 packet');
+}
+
+// --- the follow head (exe: SinowberillHead_AIUpdate_007b1134 .c:796128, CheckSpawnValidity_007b1220
+// .c:796178, AIUpdateMovement_007b1298 .c:796204, AIUpdateState_007b267c .c:796915, UpdateState_007b00bc's
+// Pioneer 2 branch .c:795492; the 2764 sends are read from the send target)
+{
+  const noWall = () => false;
+  check(headSpawnRange(13) === 25 && headSpawnRange(18) === 30 && headSpawnRange(28) === 40 && headSpawnRange(50) === 40, 'spawn range: min(40, leash + 12) (DAT_0097dd8c / dd90)');
+  const m = headMidpoint({ x: 0, y: 0, z: 0 }, { x: 10, y: 4, z: -6 });
+  check(m.x === 5 && m.y === 2 && m.z === -3, 'midpoint of the NPC and the anchor, k = 0.5 (DAT_0097dd84)');
+
+  // Pioneer 2: the anchor is the owner, the state is 1 (move), flag 0x20 with 0x1010 cleared.
+  const h = new NpcHead();
+  h.flags = 0x1010;
+  h.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  check(h.state === HEAD_STATE_MOVE && h.flags === 0x20 && h.anchor.x === 50, 'Pioneer 2 update state: anchor = owner, state 1, flags 0x20 (0x1010 cleared)');
+
+  // A far owner: the send target becomes the midpoint (25), and a run follows from the sender.
+  let seenMask = -1;
+  let wallAnswer = false;
+  const wall = (_a: unknown, _b: unknown, mask: number) => {
+    seenMask = mask;
+    return wallAnswer;
+  };
+  h.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, leash: 13, wall });
+  check(h.sendTarget.x === 25 && h.sendTarget.z === 0, 'a far owner: the send target is the midpoint (move needed: the last one was 0,0, more than 10 away)');
+  check(seenMask === HEAD_WALL_MASK && HEAD_WALL_MASK === 0x2100, 'the wall ray uses mask 0x2100 (SinowberillHead_CheckWall_007b18e0)');
+  check(h.wallHit === false, 'no wall: the wall flag is clear');
+  const sender = new NpcMoveSender();
+  check(headSendDistance(h, { x: 0, z: 0 }) === 25, 'the state-1 sends measure the distance from the send target to the NPC');
+  check(sender.tick(25, 13) === 'run', 'a send target beyond the leash is a run (6x42)');
+
+  // The NPC got closer to the midpoint: the new midpoint is within 10 of the last send target, so
+  // the send target becomes the NPC's own position (no walk).
+  h.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  h.update({ npc: { x: 20, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, leash: 13, wall: noWall });
+  check(h.sendTarget.x === 20 && headSendDistance(h, { x: 20, z: 0 }) === 0, 'a midpoint within 10 of the last send target: no move (the send target is the NPC)');
+  check(h.state === HEAD_STATE_MOVE, 'the state stays 1 while the Pioneer 2 update runs, so the 2764 check sees 0 and sends nothing');
+
+  // Inside the spawn range: state 0 and flag 0x20 cleared; the send target is not written.
+  const near = new NpcHead();
+  near.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  near.update({ npc: { x: 30, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, leash: 13, wall: noWall });
+  check(near.state === HEAD_STATE_IDLE && (near.flags & 0x20) === 0 && near.sendTarget.x === 0, 'inside the spawn range (20 < 25): state 0, flag 0x20 cleared, send target not written');
+  check(headSendDistance(near, { x: 30, z: 0 }) === null, 'a head not in state 1 sends nothing (2764 state check)');
+
+  // A short walk: the leash 25 keeps a walk (6x40) for a 20-unit send distance.
+  const w = new NpcHead();
+  w.pioneerUpdateState({ x: 40, y: 0, z: 0 });
+  w.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 40, y: 0, z: 0 }, leash: 25, wall: noWall });
+  check(w.sendTarget.x === 20 && new NpcMoveSender().tick(20, 25) === 'walk', 'a send distance within the leash is a walk (6x40)');
+
+  // A wall between the NPC and the anchor: the answer is recorded (the branch is ASSUMED: the midpoint).
+  const blocked = new NpcHead();
+  blocked.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  wallAnswer = true;
+  blocked.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, leash: 13, wall });
+  check(blocked.wallHit === true && blocked.sendTarget.x === 25, 'a wall on the ray is recorded; the avoidance branch is not ported (ASSUMED midpoint)');
+
+  // The cast states (HandlePlayerTechCastState_007b2bc0 .c:797215): Resta / Anti 0x16, Foie / Barta / Zonde 0x17, others 2.
+  check(headCastInputState(0xf) === 0x16 && headCastInputState(0x10) === 0x16, 'Resta and Anti: input state 0x16');
+  check(headCastInputState(0) === 0x17 && headCastInputState(3) === 0x17 && headCastInputState(6) === 0x17, 'Foie, Barta, Zonde: input state 0x17');
+  check(headCastInputState(0x11) === 2 && headCastInputState(1) === 2 && headCastInputState(8) === 2, 'Reverser and the other techniques: input state 2');
+
+  // The state-2 technique table (0x0097dcf8: 0, 1, 3, 4, 6, 8) and its tier (.c:797366..797380).
+  check(HEAD_TWO_TECH_TABLE.join(',') === '0,1,3,4,6,8', 'the state-2 table is 0x0097dcf8 (Foie, Gifoie, Barta, Gibarta, Zonde, Razonde)');
+  check(headTwoTier(0x4) === 0 && headTwoTier(0x8) === 1 && headTwoTier(0x10) === 2 && headTwoTier(0) === 0 && headTwoTier(0x1c) === 0, 'tier: 0x4 first (0), then 0x8 (1), 0x10 (2), else 0');
+  check(headTwoTech(0, false, 0, 0) === 0 && headTwoTech(0, true, 0, 0) === 1, 'tier 0: Foie, or Gifoie when strong');
+  check(headTwoTech(0x8, false, 0, 0) === 3 && headTwoTech(0x8, true, 0, 0) === 4, 'tier 1: Barta, or Gibarta when strong');
+  check(headTwoTech(0x10, false, 0, 0) === 6 && headTwoTech(0x10, true, 0, 0) === 8, 'tier 2: Zonde, or Razonde when strong');
+  check(headTwoTech(0, false, 5, 10) === null && headTwoTech(0, false, 0.5, 10) === 0, 'a weak roll above the head byte +0x53 * 0.1 skips the cast (.c:797388)');
+  check(headTwoTech(0, true, 5, 10) === 1, 'a strong cast is not skipped by the roll');
+  const combatSrc = readFileSync(join(HERE, '../client/src/render/combat.ts'), 'utf8');
+  check(/npcWallBlocks\(from: \{[^}]*\}, to: \{[^}]*\}, mask: number\): boolean/.test(combatSrc), 'combat view exposes the NPC head wall ray with the mask');
+  const townSrc2 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
+  check(townSrc2.includes('this.stepNpcHead(slot, p, leader, row.leash, sender)'), 'the owner follows through the head (town.ts stepNpcHead)');
+  check(townSrc2.includes("if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);"), 'the 6x40 / 6x42 carry the head send target (goal = head.sendTarget)');
+  check(townSrc2.includes('combat.npcWallBlocks(a, b, mask)'), 'the head wall ray comes from the combat view');
 }
 
 if (failures) {
