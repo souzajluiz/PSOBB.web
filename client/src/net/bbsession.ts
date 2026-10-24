@@ -7,7 +7,8 @@
 //   4. ask for each character slot with E3; server answers E5 (preview) or E4 (empty)
 
 import { BBConnection, readAscii, readUtf16, type Command, type Transport } from './bbconnection.ts';
-import { parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
+import { E7_SIZE, parseCharacterFile, writeAutoReply, type CharacterFile } from './charfile.ts';
+import { customizeBody } from '../classic/customize.ts';
 import { Lobby } from './lobby.ts';
 import { GuildCardBook, GuildCardClient, type GuildCardSearchResult } from './guildcard.ts';
 import { MENU_ID_LOBBY } from './game.ts';
@@ -488,6 +489,21 @@ export class BBSession {
     this.startGuildCardSync(conn);
     this.log(`meet: joined lobby ${lobby.lobbyNumber + 1}, block ${lobby.blockNumber}`);
     return lobby;
+  }
+
+  // Main menu > Customize: the 0xE8 config to the server (07ED; classic/customize.ts). The
+  // palette is in the save copy too (the field HUD writes it there before this call).
+  sendCustomize(config: Uint8Array): void {
+    this.conn?.send(0xed, 7, customizeBody(config));
+  }
+
+  // The save upload the exe makes when it leaves the session (send_packet5, dump 811320:
+  // E7 with the full save (dump 811346), then 05). Only with a full 0x3994-byte save.
+  sendSaveFile(): void {
+    const save = this.fullCharacter;
+    if (!this.conn || !save || save.length !== E7_SIZE) return;
+    this.conn.send(0xe7, 0, save);
+    this.conn.send(0x05, 0);
   }
 
   close(): void {

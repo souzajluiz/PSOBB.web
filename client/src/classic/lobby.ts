@@ -85,6 +85,8 @@ export interface LobbyHud {
   fullCharacter?: () => Uint8Array | null;
   // The character file (the Trade Window reads the offers and the meseta from it).
   character?: () => CharacterFile | null;
+  // Quit Game > Disconnect: the save upload (E7, then 05; BBSession.sendSaveFile).
+  saveFile?: () => void;
   // The counter's party menus talk to the server through this (gamelist.ts);
   // without it Organize PARTY only closes.
   party?: PartyHost;
@@ -300,6 +302,7 @@ export class LobbyScreen implements Screen {
   // 0x60 leave (CE 17) and packet 5 (unknown_send_disconnect, 0x0074c018 caller);
   // not ported (ASSUMED: the server's 0xa0 answer is the leave here).
   private disconnect(): void {
+    this.hud.saveFile?.();
     this.transport(0);
   }
 

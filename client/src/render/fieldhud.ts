@@ -43,7 +43,8 @@ import { createCounter, type Counter, type CounterKind, type CounterMusic } from
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { menuViewShift } from '../classic/mainmenu.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
-import { currentPalette, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
+import { currentPalette, CONFIG_OFFSET, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
+import { CONFIG_SIZE } from '../classic/customize.ts';
 import { drawHotbar, HOTBAR_POS, hotbarY } from '../classic/hotbar.ts';
 import { bandsOf, overlayFrame, textureBitmap, textureBitmaps, type WindowSkin } from '../classic/stage.ts';
 import type { ItemData, ItemNames } from '../formats/itemnames.ts';
@@ -94,6 +95,8 @@ const ANDROID_CLASSES = new Set([2, 4, 5, 9]);
 export interface FieldHudOptions {
   character: () => CharacterFile | null;
   fullCharacter: () => Uint8Array | null;
+  // Main menu > Customize, window closed with a change: the 0xE8 config goes to the server (07ED, classic/customize.ts).
+  saveCustomize?: (config: Uint8Array) => void;
   items: GameItems;
   // The floor music for the counters' jingles (classic/shop.ts CounterMusic).
   music?: CounterMusic;
@@ -300,6 +303,16 @@ export class FieldHud {
           this.hudFlags = on ? this.hudFlags | bit : this.hudFlags & ~bit;
         },
       },
+      customize: {
+        text: (g, i) => this.text(g, i),
+        learned: (t) => (this.opts.character()?.techLevels[t] ?? null) !== null,
+        hasItem: (i) => this.paletteItemId(i) !== null,
+        itemName: (i) => `Item ${i + 1}`, // ASSUMED placeholder: the tool's unitxt name is not traced
+        config: () => this.paletteConfig(),
+        flipped: () => this.palette?.flipped ?? false,
+        setConfig: (cfg) => this.setPaletteConfig(cfg),
+        save: (cfg) => this.opts.saveCustomize?.(cfg),
+      },
       tech: {
         text: (g, i) => this.text(g, i),
         level: (t) => this.opts.character()?.techLevels[t] ?? null,
@@ -323,6 +336,18 @@ export class FieldHud {
   paletteSlot(index: number): PaletteSlot | null {
     this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
     return this.palette ? (currentPalette(this.palette).slots[index] ?? null) : null;
+  }
+
+  // The 0xE8 config of the save (a copy; zeros with no save) and its write-back for the Customize window.
+  private paletteConfig(): Uint8Array {
+    const raw = this.opts.fullCharacter();
+    return raw && raw.length >= CONFIG_OFFSET + CONFIG_SIZE ? raw.slice(CONFIG_OFFSET, CONFIG_OFFSET + CONFIG_SIZE) : new Uint8Array(CONFIG_SIZE);
+  }
+
+  private setPaletteConfig(cfg: Uint8Array): void {
+    const raw = this.opts.fullCharacter();
+    if (raw && raw.length >= CONFIG_OFFSET + CONFIG_SIZE) raw.set(cfg, CONFIG_OFFSET);
+    this.palette = paletteFromCharacter(raw);
   }
 
   // hotbar_slots[index] (0..9) of the current action palette (the bottom hotbar, classic/hotbar.ts).
