@@ -137,6 +137,38 @@ export interface FieldBox {
   broken: boolean;
 }
 
+// Komo variant 6 (type 0x0082, MapObjectKomoVariant6Constructor_0065db10, dump
+// 524188): the state at +0xb4 is 0 (active, the switch is locked) or 1 (idle,
+// unlocked); its switch flag is +0xb0 = (short) param4 (+0x84). The update
+// (MapObjectKomoVariant6Update_0065d89c, dump 524037) takes the colour of the
+// state it finds at the start of the frame, then runs the state's handler:
+// StateActive (0065d954) moves to 1 when the flag is set, StateIdle (0065d924)
+// moves back to 0 when it is not. `shown` keeps that start-of-frame state for
+// the minimap icon (the colour is red at 0, green at 1).
+export interface FieldKomo {
+  index: number;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number; // +0x60, the heading of the icon
+  flag: number; // +0xb0, the switch flag (signed short)
+  value: number; // +0x8c (param6), the icon's scale parity
+  state: 0 | 1; // +0xb4
+  shown: 0 | 1; // the state the frame's icon was drawn with
+}
+
+// One frame of a Komo variant 6 object: returns the state its icon takes and
+// moves the state on (the handlers above).
+export function stepKomo(k: FieldKomo, switchOn: boolean): 0 | 1 {
+  k.shown = k.state;
+  if (k.state === 0) {
+    if (switchOn) k.state = 1;
+  } else if (!switchOn) {
+    k.state = 0;
+  }
+  return k.shown;
+}
+
 const DOOR_OPEN_DISTANCE = 70; // 0x00937964
 const DOOR_CLOSE_DISTANCE = 100; // 0x0093796c
 const DOOR_STEP = 1.8; // 0x0093795c / 0x00937960
@@ -308,12 +340,13 @@ export interface FieldContext {
 export function collectFieldObjects(
   placed: PlacedEntity[],
   ctx: FieldContext,
-): { warps: FieldWarp[]; doors: FieldDoor[]; switches: FieldSwitch[]; triggers: FieldEventTrigger[]; boxes: FieldBox[] } {
+): { warps: FieldWarp[]; doors: FieldDoor[]; switches: FieldSwitch[]; triggers: FieldEventTrigger[]; boxes: FieldBox[]; komos: FieldKomo[] } {
   const warps: FieldWarp[] = [];
   const doors: FieldDoor[] = [];
   const switches: FieldSwitch[] = [];
   const triggers: FieldEventTrigger[] = [];
   const boxes: FieldBox[] = [];
+  const komos: FieldKomo[] = [];
   for (const p of placed) {
     if (p.entity.kind !== 'object') continue;
     const o = p.entity;
@@ -354,6 +387,9 @@ export function collectFieldObjects(
       case 0x0044:
         warps.push({ ...base, kind: 'lobby', radius: 23, floor: 0x0f, flag: -1, warpType: 0 });
         break;
+      case 0x0082:
+        komos.push({ ...base, yaw: p.yaw, flag: (Math.trunc(o.params[3]) << 16) >> 16, value: o.params[5], state: 0, shown: 0 });
+        break;
       default:
         if (DOOR_TYPES.has(o.type)) {
           const { flags, locked } = doorFlags(o);
@@ -366,7 +402,7 @@ export function collectFieldObjects(
         }
     }
   }
-  return { warps, doors, switches, triggers, boxes };
+  return { warps, doors, switches, triggers, boxes, komos };
 }
 
 // Map warps (TObjMapWarpForest 0x0003, TObjCityMapWarp 0x0045,
@@ -519,6 +555,7 @@ export class FieldObjects {
   switches: FieldSwitch[] = [];
   triggers: FieldEventTrigger[] = [];
   boxes: FieldBox[] = [];
+  komos: FieldKomo[] = [];
   private all: ReturnType<typeof collectFieldObjects>;
   private solids: FieldSolid[];
   private sets = new Map<number, ObjectSet>(); // object index -> set entry
@@ -610,6 +647,7 @@ export class FieldObjects {
     this.switches = live(this.all.switches);
     this.triggers = live(this.all.triggers);
     this.boxes = live(this.all.boxes);
+    this.komos = live(this.all.komos);
   }
 
   isDelayed(index: number): boolean {
@@ -748,6 +786,7 @@ export class FieldObjects {
       }
     }
     for (const s of this.switches) this.models?.setState(s.index, this.flags.has(s.flag) ? 'on' : 'off');
+    for (const k of this.komos) stepKomo(k, this.flags.has(k.flag));
     const players = this.playersBuf;
     players.length = 0;
     if (self) players.push(self);

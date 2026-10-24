@@ -79,6 +79,7 @@ export interface MinimapSource {
   hidden: () => boolean; // a talk camera or a UI that blocks the player's input
   switchOn: (flag: number) => boolean; // a switch flag of this floor (TObjRaderIcon colour)
   doorIcons: () => readonly Icon[]; // the doors' icons (TObjDoor, this floor)
+  komoIcons?: () => readonly Icon[]; // the Komo variant 6 icons (Episode 2 floors)
   battle: () => number | null; // the local player's battle team while battle mode runs (null: not in battle)
 }
 
@@ -874,6 +875,7 @@ export class FieldHud {
       const src = this.opts.minimap;
       for (const r of this.raderIcons) this.minimap.addIcon(raderIconIcon(r, (f) => src?.switchOn(f) ?? false));
       for (const ic of src?.doorIcons() ?? []) this.minimap.addIcon(ic);
+      for (const ic of src?.komoIcons?.() ?? []) this.minimap.addIcon(ic);
       // The radar follows the right edge; the full map stays in its window.
       ctx.save();
       ctx.translate(0, this.minimap.type === 0 ? 0 : bands.bottom);

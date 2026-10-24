@@ -6,6 +6,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { minimapFileFor, modelTriangles, parseMinimapRel } from '../client/src/formats/minimap.ts';
+import { stepKomo } from '../client/src/render/fieldobjects.ts';
 import {
   cameraUp,
   clampPan,
@@ -420,6 +421,19 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
 {
   eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, -1, null, false, false).length, 1, 'Dark Falz form 3: the trail is off on a frame with bit 0 set');
   eq(falz3Icons({ x: 0, z: 0 }, 0xffffa24c, 0, { x: 60, z: 0 }, true, false)[0].color, 0xffffffff, 'Dark Falz form 3: white with the trail off on the same frame');
+}
+// Komo variant 6 state (MapObjectKomoVariant6Update_0065d89c, dump 524037): the icon takes the
+// state the frame starts with; the handler moves the state after it (1 when the flag is set, 0 when not).
+{
+  const k = { index: 1, x: 0, y: 0, z: 0, yaw: 0, flag: 5, value: 3, state: 0 as 0 | 1, shown: 0 as 0 | 1 };
+  eq(stepKomo(k, false), 0, 'Komo: the first frame draws state 0 (red) with the switch off');
+  eq(k.state, 0, 'Komo: the switch off keeps state 0');
+  eq(stepKomo(k, true), 0, 'Komo: the frame the switch comes on still draws red');
+  eq(k.state, 1, 'Komo: StateActive moves to 1 once the flag is set');
+  eq(stepKomo(k, true), 1, 'Komo: the next frame draws state 1 (green)');
+  eq(stepKomo(k, false), 1, 'Komo: a frame with the flag off still draws green');
+  eq(k.state, 0, 'Komo: StateIdle moves back to 0 when the flag is not set');
+  eq(komoVariant6Icon(k.value, k.shown, 0, k).color, ICON_GREEN, 'Komo: the last frame drew state 1, so its icon is green');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);
