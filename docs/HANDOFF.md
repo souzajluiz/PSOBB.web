@@ -151,8 +151,12 @@ worktrees are left.
    brain; see their DEVLOG entries). Still open: Saint-Milion's laser aim (the laser's hit, life and sound loop are in, 2026-10-21; no writer of its aim (+0x44) or origin (+0x38) is in the exe on the traced paths, so the sweep 0x8000 and reach 620 stay ASSUMED, and the wall cut and impact particle are not reproduced; see the two DEVLOG entries),
    its cutscene states (they end with their animation), camera / sounds / particles;
    Vol Opt's cage, bars and prison (no model in the exe: particles and spheres, 2026-10-21; the lids and the broken monitors are drawn now); the Dragon's remaining effects (the mouth and feet nodes
-   and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles: the burrow / dive /
-   emerge / spiral / rain / walk sounds 0x315, 0x317..0x326 are not wired). The Dragon's particles: the stomp
+   and the fire's sounds 0x321 / 0x31f are in, 2026-10-21; the 0x31x ids are SEs, not particles. The state sounds
+   are in too (2026-10-24, each at its exe call: 0x315 walk, 0x317 / 0x318 flyUp, 0x318 / 0x31e flyShoot, 0x31a
+   collapse entry, 0x31b death, 0x31d tail, 0x325 spiral / burrow / burrow out, 0x326 collapse). Not wired: 0x319
+   (no call in the exe), 0x320 (its call at 0x004268e5 is in a fragment with no owner, see the DEVLOG), and the 0x318
+   calls at 0x0041ebde and 0x00421235 (not checked against the emerge and the land), and 0x314 at 0x0042365d (not
+   checked). The Dragon's particles: the stomp
    dust, the fireball's flight / impact / puff (its table; the trail was misread and is corrected), the land's
    take-off and stomp, the lift, the hover roar and the launch flash are in (2026-10-21, "Dragon particles from
    its data tables" and "Dragon particles: more sites"; the map table particleentrya%d.dat is read now; the
