@@ -35,6 +35,7 @@ import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } fro
 import { drawMenuPanel } from '../classic/mainmenu.ts';
 import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
+import type { ChatLog } from '../classic/chat.ts';
 import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEnv, type RowContext } from '../classic/itempack.ts';
 import { menuRowSelectable } from '../quest/battleitems.ts';
@@ -158,6 +159,8 @@ export interface FieldHudOptions {
   home?: () => HomeLeafServices | null;
   // The team chat window and its log (classic/teamchat.ts); null with no session.
   teamChat?: TeamChat | null;
+  // The chat log the Home menu's Log Window pages (classic/chat.ts); null with no chat.
+  chatLog?: () => ChatLog | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // A chat shortcut slot (0..11) was pressed (handle_chat_shortcuts, input/shortcuts.ts).
@@ -300,6 +303,7 @@ export class FieldHud {
         return { lobby: area === 0x0f, safe: isSafeMap(area), online: true, questStarted: this.opts.questStarted(), inTeam: isInTeam(this.opts.home?.()?.team() ?? null) };
       },
       android: () => ANDROID_CLASSES.has(this.opts.character()?.charClass ?? 0),
+      chatLog: () => this.opts.chatLog?.() ?? null,
       itemPack: {
         character: () => this.opts.character(),
         rowContext: () => this.rowContext(),
@@ -412,6 +416,13 @@ export class FieldHud {
     const raw = this.opts.fullCharacter();
     if (raw && raw.length >= CONFIG_OFFSET + CONFIG_SIZE) raw.set(cfg, CONFIG_OFFSET);
     this.palette = paletteFromCharacter(raw);
+  }
+
+  // Action Palette Change has flipped the palette (Ctrl toggles it). The End key's quick menu
+  // opens only then (unknown_handle_quickmenu, dump 682545; classic/field.ts).
+  paletteFlipped(): boolean {
+    this.palette ??= paletteFromCharacter(this.opts.fullCharacter());
+    return this.palette?.flipped ?? false;
   }
 
   // hotbar_slots[index] (0..9) of the current action palette (the bottom hotbar, classic/hotbar.ts).

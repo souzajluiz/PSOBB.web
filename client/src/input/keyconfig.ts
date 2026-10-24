@@ -326,6 +326,23 @@ export const PALETTE_KEYS: [string, number][] = [
   ['', 2],
 ];
 
+// Tab is a second key of the Left palette channel. ProcessCameraInput_00708bd4 (dump
+// 666092 / 666096, camera mode 0, the gameplay mode) reads unknown_is_key_pressed(0x51) and
+// was_key_pressed(0x51) outside the key config's table, and ORs the palette-left bit
+// g_KeyboardSharedState[0xe] (the bit of role 16, case 0x10 of the same switch). So Tab
+// answers with Keyboard Controls OFF too. ASSUMED: the bit's only consumer is the Left press.
+export const TAB_KEY = 'tab';
+// The PALETTE_KEYS slot index of the Left channel (palette_slots[1], Left = slot 2).
+export const PALETTE_LEFT_SLOT = 1;
+
+// The identity of the palette channel that is down this frame: its bound key, or Tab for the
+// Left channel; '' when neither is held. `held` is the view's held-key set (lower-case names).
+export function paletteChannelDown(held: ReadonlySet<string>, key: string, slot: number): string {
+  if (key && held.has(key)) return key;
+  if (slot === PALETTE_LEFT_SLOT && held.has(TAB_KEY)) return TAB_KEY;
+  return '';
+}
+
 // The bottom hotbar's keys 1..0 (bindings 35..44, palette_bar_slot_1.._0 at dump 86193):
 // HOTBAR_KEYS[i] is the key of hotbar slot i (hotbar_slots[i], key i + 1, key 0 = slot 10).
 // Rewritten in place by applyKeyConfig; '' when the binding has no key.

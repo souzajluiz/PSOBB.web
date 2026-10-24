@@ -30,7 +30,7 @@ the port). File references are to `client/src/`.
 | Alt+A..Z | lobby emotes (letters) | wired | `render/lobbyview.ts`; `formats/emotes.ts` | Letters in `EMOTE_KEYS`; the set is the port's (ASSUMED to match the exe's emote table). |
 | 1..0 | palette_bar_slot_1..0 (35..44) | wired | `render/combat.ts` ~1405 (HOTBAR_KEYS) | Skipped while Shift, Alt or Ctrl is held (dump 555862). |
 | Numpad 0..9 | the same bindings (keycode pairs) | partial | `render/combat.ts` ~1405 | Works only when the browser reports the digit (NumLock on). With NumLock off the numpad keys report their navigation names and do not match. |
-| Tab | not an input enum role (hard-coded key 0x51) | missing | `classic/gamelist.ts` line 224 (the game list only) | Exe: `ProcessCameraInput_00708bd4` (dump 666092 / 666096) reads TAB (`unknown_is_key_pressed(0x51)`, `was_key_pressed(0x51)`) and sets `g_KeyboardSharedState[0xe]`, the same bit the action palette Left role (16) sets (case 0x10 of the switch). So in the exe Tab is a second key of the palette-left channel (ASSUMED reading of that bit's consumers; not ported). The manual's "Tab menu / character info change" (change the order of techniques in the shortcut menu) was not located as its own window in the dump. |
+| Tab | not an input enum role (hard-coded key 0x51, camera mode 0) | wired (field) | `input/keyconfig.ts` `paletteChannelDown`; `render/combat.ts` frame | Exe: `ProcessCameraInput_00708bd4` (dump 665913, lines 666092 / 666096) reads `unknown_is_key_pressed(0x51)` and `was_key_pressed(0x51)` and ORs `g_KeyboardSharedState[0xe]`, the palette-left bit (role 16, case 0x10). So Tab is a second Left key. It is outside the key config's table, so it works with Keyboard Controls OFF too. The port reads it in the field (the lobby's Tab is not traced, ASSUMED none). The game list's own Tab (`classic/gamelist.ts`) is another window. |
 | Q | autorun (4), default row unbound | wired (manual key) | `input/automove.ts`; `render/lobbyview.ts` ~754 | The exe's preset rows 4 and 5 are 0 in every preset (`input/keyconfig.ts` PRESET_CODES), so the manual's Q and E are the fallback when the row has no key (ASSUMED). |
 | E | autowalk (5), default row unbound | wired (manual key) | `input/automove.ts`; `render/lobbyview.ts` ~754 | Same as Q. |
 | W / A / S / D | move_forwards..move_right (0..3) | wired | `render/combat.ts` (`render/combat.ts` ~1408, read at call time); `classic/lobby.ts` moveKeyOf; `render/lobbyview.ts` ~757 | Off with Keyboard Controls OFF (no key for roles 0..3). |
@@ -40,9 +40,9 @@ the port). File references are to `client/src/`.
 | Backspace | menu_back (7) | wired | `input/keyconfig.ts` menuKeyOf; `classic/fieldwindows.ts` listKey | |
 | Enter | menu_accept (6) | wired | `input/keyconfig.ts` menuKeyOf | |
 | Home | main_menu_1 (8) | wired | `render/fieldhud.ts` line 670; `classic/lobby.ts` line 652 | |
-| PageUp / PageDown | pso_keycode page_up (8) / page_down (9), raw keys (not a role) | partial | `classic/lobby.ts` key() (Log Window); `classic/chat.ts` ChatLog.page | Lobby only: the Log Window (Home > Chat > Log Window, leaf 0x15) moves a page (380 px = 19 rows) per press; PageUp shows older lines. Exe: ChallengePlayerListWindow_HandleInput_00752238 (dump 724833, `ListWindow_UpdateRenderProgress` +-380). The field has no Log Window leaf in the port, so the keys do nothing there. A new line returns the view to the newest. |
-| End | symbol_chat_open (14) | wired (field) | `classic/field.ts` line 198 | The lobby's symbol list is the Home menu's (F7). |
-| Ctrl+End | quickmenu (14) with Ctrl | missing | not ported | Exe: `unknown_handle_quickmenu` (dump 682493), `quick_menu_constructor`. The quick menu window is not in the port. |
+| PageUp / PageDown | pso_keycode page_up (8) / page_down (9), raw keys (not a role) | partial | `classic/lobby.ts` key() and `classic/fieldmenu.ts` key() (Log Window, Home > Chat, leaf 0x15); `classic/chat.ts` ChatLog.page, logPageKey | Plain keys only (`was_key_pressed_no_modifiers`, dump 807503). The Log Window moves a page (380 px = 19 rows) per press in the lobby and in the field: PageUp shows older lines. Exe: ChallengePlayerListWindow_HandleInput_00752238 (dump 724833, +-380). A new line returns the view to the newest. The ship lobby list and the party menu page too in the exe (dump 143023, 784044, +-140), not in the port. |
+| End | quickmenu (14, the enum name; the config row is "Symbol Chat Open") | wired (field, with the palette flipped) | `classic/field.ts` key() (`view.paletteFlipped()`); `classic/quickmenuwindow.ts` | Exe: `unknown_handle_quickmenu` (dump 682493) opens `quick_menu_constructor` only when the action palette is flipped (`Player_CheckPaletteFlipState_0068ce14`, dump 558030, dump 682545): the End key alone does nothing on palette 1, so the manual's Ctrl+End is the chord (Ctrl flips the palette). The lobby's End is not gated (ASSUMED, see below). The lobby's symbol list is the Home menu's (F7). |
+| Ctrl+End | quickmenu (14) with the palette flipped (Ctrl) | wired (field) | `classic/field.ts` key(); `render/fieldhud.ts` `paletteFlipped()` | The Ctrl tab flips the palette (`classic/palette.ts`); the next End opens the quick menu. Held-palette branch (`g_KeyboardSharedState[0xf]`) not ported (ASSUMED, see below). |
 | Up | camera (19) | wired | `render/lobbyview.ts` ~745 | Recentres the camera. |
 | Left / Down / Right (action palette) | palette_left / middle / right (16 / 15 / 17) | wired | `render/combat.ts` ~1384 (PALETTE_KEYS) | Left = slot 2, Down = slot 1, Right = slot 3 (`input/keyconfig.ts` header). |
 | Left / Down / Right / Up (menus) | select_left..up (12..10) | wired | `input/keyconfig.ts` menuKeyOf | |
@@ -50,12 +50,11 @@ the port). File references are to `client/src/`.
 
 ## Summary
 
-- **Wired:** movement, the menu keys, Home, F11 (Keyboard Controls), F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End (field), the action palette, the hotbar 1..0, the camera,
+- **Wired:** movement, the menu keys, Home, F11 (Keyboard Controls), F12, F2..F8 (F5..F8 in the field and the lobby), Space, Ctrl, End with Ctrl (field), Tab (field, the Left key), the action palette, the hotbar 1..0, the camera,
   Alt emotes, Q / E auto run and walk (the manual's keys, see the ASSUMED list).
 - **Partial:** F1 (help list, field only), numpad (NumLock on only), Shift+F chat shortcuts
-  (no slot editor; word select sends 6x74, receive is not ported), PageUp / PageDown (lobby Log Window only).
-- **Missing:** Ctrl+End (quick menu), Tab (an alias of the palette-left channel in the exe, not ported),
-  Print Screen, the mouse controls (option 0x700000).
+  (no slot editor; word select sends 6x74, receive is not ported), PageUp / PageDown (the Log Window only: lobby and field; the ship lobby list and the party menu page in the exe, not ported).
+- **Missing:** Print Screen, the mouse controls (option 0x700000).
 
 ## Keyboard Controls OFF
 
@@ -73,7 +72,8 @@ Every other role is 0 (no key): Move Forward / Backward / Left / Right (0..3), t
 moves (4, 5), Input Start Space (9), Symbol Chat End (14), the action palette (15..17),
 Ctrl (18) and Camera Up (19). So with Keyboard Controls OFF the keyboard does not move,
 does not open the chat with Space, and does not open the palette: the menus, the function
-keys and the numpad hotbar still answer. The table lives in `input/keyconfig.ts`
+keys and the numpad hotbar still answer. Tab still presses the palette's Left slot (its test is
+outside the table, dump 666092). The table lives in `input/keyconfig.ts`
 (`KEYBOARD_OFF_KEYS`); `setKeyboardControls` swaps the keys in use.
 
 ## ASSUMED
@@ -98,6 +98,15 @@ keys and the numpad hotbar still answer. The table lives in `input/keyconfig.ts`
   cooldown ends (the chat window's send flag, retried each frame); Escape drops it.
 - Q and E are the manual's keys when bindings 4 and 5 are unbound (the exe's presets
   leave them unbound).
+- Ctrl+End (2026-10-24): the field's End opens the quick menu only with the palette flipped
+  (`unknown_handle_quickmenu`, dump 682545). The palette-held branch (`g_KeyboardSharedState[0xf]`
+  held opens it without End, dump 682545 / 682549) is not ported; which keys set bit 0xf is not traced.
+  The lobby's End (`classic/lobby.ts`) is not gated (the same handler runs there, not verified).
+- Tab (2026-10-24): camera mode 0 (the gameplay mode, `unknown_keyboard_enable_in_menu` sets mode 1
+  for the menus) is the only mode with the Tab test (dump 666092). Bit 0xe has no consumer but the
+  Left press (not traced in full).
+- PageUp / PageDown in the field (2026-10-24): the Log Window (leaf 0x15) opens at the lobby's place
+  (`LOG_WINDOW`), its page step is the lobby's (380 px); the field's other list windows do not page.
 - Auto run and walk: a direction key (W / S / A / D) turns the setting off; the exe turns
   it off on the forward key's ramp and when the player stops. Walk is a half forward push
   (fb 64) and run a full one (fb 128); the exe passes the speed itself.

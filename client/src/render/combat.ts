@@ -18,7 +18,7 @@
 // cast state machine; this file sends 6x8D / 6x47 / 6x48 and applies the
 // hits like a weapon strike (6x0A, kill flow).
 
-import { HOTBAR_KEYS, KEYS, PALETTE_KEYS } from '../input/keyconfig.ts';
+import { HOTBAR_KEYS, KEYS, PALETTE_KEYS, paletteChannelDown } from '../input/keyconfig.ts';
 import { hotbarAction, type HotbarAction } from '../classic/hotbar.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { AttackState, type AttackEvents, burstCount } from '../combat/attack.ts';
@@ -1479,8 +1479,10 @@ export class CombatView {
     if (me && view) {
       const blocked = this.damage.busy || this.status.immobile;
       for (const [key, index] of PALETTE_KEYS) {
-        const down = keys.has(key);
-        if (down && !this.held.has(key) && !blocked) {
+        // The channel's edge is kept per channel, so Tab and the bound Left key are one press.
+        const chan = `palette:${index}`;
+        const down = paletteChannelDown(keys, key, index) !== '';
+        if (down && !this.held.has(chan) && !blocked) {
           const slot = this.opts.paletteSlot?.(index) ?? DEFAULT_SLOTS[index];
           // The Middle key (palette_slots[0], 1-based slot 1, input/keyconfig.ts): an NPC or
           // floor item in the weapon's reach replaces the attack.
@@ -1493,8 +1495,8 @@ export class CombatView {
           else if (slot && !slot.disabled && slot.group1 === 4) this.useSlotItem(slot.group2);
           else if (slot && slot.group1 !== 0) this.opts.log(`palette slot ${index} (${slot.group1}, ${slot.group2}): not wired yet`);
         }
-        if (down) this.held.add(key);
-        else this.held.delete(key);
+        if (down) this.held.add(chan);
+        else this.held.delete(chan);
       }
       // The bottom hotbar: keys 1..0 (hotbar_slots[0..9]), skipped while Shift, Alt or Ctrl is held
       // (unknown_handle_palette_inputs, dump 555862).

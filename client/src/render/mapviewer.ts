@@ -170,7 +170,7 @@ export class MapViewer {
     canvas.tabIndex = 0;
     canvas.addEventListener('keydown', (e) => {
       // The game keys (input/keyconfig.ts) must not scroll the page.
-      if (/^(arrow(up|down|left|right)| |home|end|backspace)$/i.test(e.key)) e.preventDefault();
+      if (/^(arrow(up|down|left|right)| |home|end|backspace|tab)$/i.test(e.key)) e.preventDefault();
       this.keys.add(e.key.toLowerCase());
     });
     canvas.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
