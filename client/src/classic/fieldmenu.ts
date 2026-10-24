@@ -34,6 +34,7 @@ import { TradeMenu, type TradeEnv } from './trade.ts';
 import { se, SE } from '../audio/se.ts';
 import { windowFrames, type WindowSkin } from './stage.ts';
 import { WindowAnim, withWindowAnim } from './windowanim.ts';
+import { FIELD_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
 
 type Leaf = ItemPackMenu | EquipMenu | TechniqueMenu | MagMenu | OptionsMenu;
 
@@ -197,6 +198,18 @@ export class FieldMenu {
     if (!env) return;
     this.trade = new TradeMenu(env);
     if (!auto) this.menu.leafOpen = true;
+  }
+
+  // A function-key shortcut (input/shortcuts.ts, exe unknown_handle_fkey_inputs ->
+  // ChallengeMenuObject_HandleItemSelection_00733714): the leaf opens at once, with the
+  // main panel behind it as when the leaf is picked from the list (ASSUMED: the exe may
+  // draw the leaf alone). Only the field's leaves open; a disabled entry does nothing.
+  openShortcut(id: number): boolean {
+    if (this.menu.open || this.trade || !FIELD_SHORTCUT_LEAVES.has(id)) return false;
+    if (!validateMenuEntry(id, this.env.rules()).enabled) return false;
+    this.menu.toggle(this.entries());
+    this.open(id);
+    return true;
   }
 
   // handle_player_menu_select. Player Status (0x19,

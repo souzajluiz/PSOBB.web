@@ -247,7 +247,7 @@ eq(
   {
     moveForward: 'w', moveBackward: 's', moveLeft: 'a', moveRight: 'd', decide: 'enter', cancel: 'backspace', menu: 'home',
     chat: ' ', symbolChat: 'end', selectUp: 'arrowup', selectDown: 'arrowdown', selectLeft: 'arrowleft', selectRight: 'arrowright',
-    paletteMiddle: 'arrowdown', paletteLeft: 'arrowleft', paletteRight: 'arrowright', paletteChange: 'control', camera: 'arrowup',
+    paletteMiddle: 'arrowdown', paletteLeft: 'arrowleft', paletteRight: 'arrowright', paletteChange: 'control', camera: 'arrowup', autorun: '', autowalk: '',
   },
   'KEYS from the default config',
 );

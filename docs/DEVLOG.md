@@ -14495,3 +14495,38 @@ Three open items of the Simple Mail entry above, traced in PsoBB.exe (Psobb.exe-
 - The Info Board line in ROADMAP still reads as a no-op (it was ported in the 13529 entry); not corrected here.
 
 **Checks:** `node tests/simplemail.test.ts` (all pass, incl. sections 7 and 8); `node tests/symbolchat.test.ts`, `trade.test.ts`, `shop.test.ts`, `medical.test.ts` pass; `tests/items.test.ts` exits non-zero on the absent `vendor/newserv/build/newserv` (known); `client`: `npx tsc --noEmit -p .` clean (exit 0). The worktree's `client/node_modules` is a temporary symlink to the main checkout's, removed before the commit.
+
+
+## 2026-10-23: keyboard controls audit against the manual, function-key shortcuts, auto run / walk
+
+The official PSOBB keyboard map was checked row by row. `docs/CONTROLS.md` has the table: the manual's key, the exe role (input enum `unknown_input_type` in the named dump, line 86172, with the key config binding), the port status, and file:line.
+
+**Exe.**
+- `unknown_handle_fkey_inputs` (dump 682260) returns the menu entry a function key opens: F2 equipment (0x09), F3 technique (0x03), F4 MAG (0x17), F5 guild card (0x0E), F6 simple mail (0x13), F7 symbol chat (0x12), F8 team (0x25). Ctrl and Alt give none. Shift must be clear unless character option 0x2000000 is set, then it must be held. The entry goes through `ChallengeMenuObject_HandleItemSelection_00733714`, then `ValidateMenuItemCondition_00732620`, then `handle_player_menu_select`.
+- F1 toggles the F-key help window (flags 0x200 / 0x400, `unknown_render_help_menu`). F9 / F10 are the team chat window (`TeamChatMenu_Update_00717260`, dump 678299 and 678385). F11 is `keyboard_controls_toggle` (dump 697159, character option 0x1000000).
+- `unknown_handle_movement` (dump 667085..667215): the autorun and autowalk roles toggle `g_MouseControlsSetting_00a97f48` (off / run / walk), and while it is set the forward input is held at `move_speed`. Alt blocks the toggles.
+- The presets (`PRESET_CODES`, `input/keyconfig.ts`) leave bindings 4 and 5 (autorun, autowalk) at 0 in all four presets, so the manual's Q and E are not the exe's defaults.
+
+**Port.**
+- `client/src/input/shortcuts.ts` (new): the F-key roles, the menu id per F-key, the field and lobby leaf sets, `functionKeyAction` (modifiers, shift option), `functionKeyNames` (live config).
+- `client/src/input/automove.ts` (new): the auto run / walk state machine (edge toggles, a direction key turns it off) and its axes (run fb 128, walk fb 64).
+- `client/src/input/keyconfig.ts`: roles `autorun` / `autowalk`; `bindingKey(i)`; `BINDING.functionKeyInfo` and `BINDING.mainMenu2`.
+- `client/src/classic/fieldmenu.ts`: `openShortcut(id)`: F2..F4 open the leaf in the field, with the validation of the field menu.
+- `client/src/render/fieldhud.ts`: the F-key path before the menu keys; F12 is read through the binding (`bindingKey(BINDING.mainMenu2)`), not the literal `'F12'`.
+- `client/src/classic/lobby.ts`: F5..F8 open the lobby's guild card, mail, symbol list and team list (validated with the lobby's `lobbyMenuRules`); F12 through the binding.
+- `client/src/render/lobbyview.ts`: Q / E (fallback keys) drive the auto move in the movement tick (the view the field uses too).
+- `tests/shortcuts.test.ts` (new): the F-key mapping, the modifier and shift gates, rebinding, the field and lobby entry rules, the auto-move state machine. `tests/options.test.ts`: the `KEYS` expectation gains `autorun` / `autowalk`.
+
+**ASSUMED.**
+- F2..F4 open the leaf with the main panel behind it; the exe may draw the leaf alone.
+- Shift+F uses option 0x2000000 clear (the port has no such flag yet).
+- Q / E are used when rows 4 and 5 are unbound (the manual's keys over the exe's empty presets).
+- Walk is a half forward push and run a full one, the exe passes the speed itself. A direction key turns auto move off (the exe's forward ramp rule, simplified); the exe's stop-without-key rule is left out.
+- Esc is a second Cancel (kept from the menu keys).
+- A disabled shortcut entry does nothing.
+
+**Left.**
+- F1 help window; F9..F11 (team chat window, keyboard control mode); Shift+F (the option); Ctrl+End quick menu; PageUp / PageDown chat log scroll (the Log Window has no scroll state); Tab (no enum role located); Print Screen; numpad with NumLock off.
+- F5..F8 in the field: the windows are lobby-only (the field menu's Guild Card, Simple Mail, Symbol Chat and Team entries are still no-ops there).
+
+**Checks.** `node tests/shortcuts.test.ts`; `fieldhud`, `lobbymenu`, `controls`, `hotbar`, `mobilecontrols`, `fkeys`, `emotes`, `symbolchat`, `options`, `mobileinput` pass; `cd client && tsc --noEmit -p .` clean. Not run in Chrome (no Playwright, per the brief).
