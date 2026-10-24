@@ -129,8 +129,9 @@ import {
   type TechResist,
 } from '../combat/techniques.ts';
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
-import { boxTargetable, enemyBoxTable, slotSetType, slotVariant } from '../formats/enemyboxes.ts';
-import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
+import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
+import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { medicalNeeds, meleeHitStatus, PlayerStatus, STATUS, STATUS_NAME, type StatusType } from '../combat/status.ts';
@@ -6099,9 +6100,11 @@ export class CombatView {
       // counts from its surface in height too.
       // A Barba Ray part's box has radius 50 (BARBA_PART_RADIUS, 0x004ba2d8); ASSUMED: its height window is De Rol Le's.
       const seg = e.ai instanceof DrlSegmentAi || e.ai instanceof BarbaPartAi;
-      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof GoldDragonAi ? GOL_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
+      // A Vol Opt monitor's box is the exe's row for its index (volooptMonitorRows).
+      const monitor = this.voloptMonitorRows(e) !== null;
+      const reach = e.ai instanceof DragonAi ? DRAGON_BODY_BOXES.reach : e.ai instanceof GoldDragonAi ? GOL_BODY_BOXES.reach : e.ai instanceof BarbaPartAi ? BARBA_PART_RADIUS : seg ? DRL_SEGMENT.radius : monitor || e.ai instanceof SmChildAi ? this.hitRadiusOf(e) : 0;
       const dist = Math.hypot(dx, dz) - reach;
-      if (dist > maxDist || Math.abs(p.y - from.y) - (seg ? reach : 0) > 40) continue;
+      if (dist > maxDist || Math.abs(p.y - from.y) - (seg || monitor ? reach : 0) > 40) continue;
       if (!inWeaponCone(dx, dz, me.angle, halfAngle)) continue;
       targets.push(e);
     }
@@ -7019,11 +7022,11 @@ export class CombatView {
   private enemyBoxHits(e: EnemyRuntime): EnemyBoxHit[] {
     const root = e.instance.root;
     const { x, z } = root.position;
-    const b = enemyBoxTable(slotSetType(e.slot), this.area, slotVariant(e.slot));
-    if (!b) return [{ x, z, targetable: true }];
+    const rows = this.voloptMonitorRows(e) ?? enemyBoxTable(slotSetType(e.slot), this.area, slotVariant(e.slot))?.rows ?? null;
+    if (!rows) return [{ x, z, targetable: true }];
     const c = Math.cos(root.rotation.y);
     const s = Math.sin(root.rotation.y);
-    return b.rows.map((r) => {
+    return rows.map((r) => {
       const [ox, , oz] = r.offset;
       return { x: x + ox * c + oz * s, z: z - ox * s + oz * c, targetable: boxTargetable(r) };
     });
@@ -7150,11 +7153,23 @@ export class CombatView {
   // The height an enemy is aimed at: the centre of its hit box (combat/techfire.ts
   // enemyAimHeight, from the type's box table; AIM_HEIGHT where it is not known).
   private aimHeightOf(e: EnemyRuntime): number {
+    const rows = this.voloptMonitorRows(e);
+    if (rows) return rowsAimHeight(rows);
     return enemyAimHeight(slotSetType(e.slot), this.area, slotVariant(e.slot));
+  }
+
+  // A Vol Opt monitor's own box rows (formats/enemyboxes.ts childBoxTable, the exe's
+  // row for the monitor's creation index & 3; ASSUMED: the index is the loop counter).
+  // Null for every other enemy.
+  private voloptMonitorRows(e: EnemyRuntime): readonly CollisionBoxRow[] | null {
+    if (!(e.ai instanceof VoloptPartAi) || e.ai.part.kind !== 'monitor') return null;
+    return childBoxTable(VOLOPT_SET_TYPE, e.ai.part.index)?.rows ?? null;
   }
 
   // An enemy's round hit box (combat/enemyai.ts collisionRadius), once.
   private hitRadiusOf(e: EnemyRuntime): number {
+    const monitor = this.voloptMonitorRows(e);
+    if (monitor) return rowsRadius(monitor) ?? 0;
     let r = this.fireRadius.get(e);
     if (r === undefined && e.ai instanceof DrlSegmentAi) r = DRL_SEGMENT.radius;
     if (r === undefined && e.ai instanceof BarbaPartAi) r = BARBA_PART_RADIUS;

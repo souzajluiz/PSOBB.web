@@ -33,6 +33,7 @@
 //   12.0), +0x128 the hit box (InitEnemyCollisionBoxes_007b9a88).
 
 import { enemyBoxTable } from '../formats/enemyboxes.ts';
+import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
 import { EnemyShot, type ShotEffect, type ShotLook } from './enemyshots.ts';
 import type { AiTarget } from './enemyai.ts';
 import { STATUS } from './status.ts';
@@ -69,8 +70,20 @@ export const AIM_HEIGHT = 22;
 export function enemyAimHeight(type: number | null, area: number | null = null, variant: number | null = null): number {
   const b = enemyBoxTable(type, area, variant);
   if (!b) return AIM_HEIGHT;
-  const row = b.rows.find((r) => (r.flags & 1) !== 0);
+  return rowsAimHeight(b.rows);
+}
+
+// The same rule for a box table the caller already has (a loop-built child's table,
+// formats/enemyboxes.ts childBoxTable): the first enabled row's centre height.
+export function rowsAimHeight(rows: readonly CollisionBoxRow[]): number {
+  const row = rows.find((r) => (r.flags & 1) !== 0);
   return row ? row.offset[1] : AIM_HEIGHT;
+}
+
+// The round radius the same row gives (null when no row is enabled).
+export function rowsRadius(rows: readonly CollisionBoxRow[]): number | null {
+  const row = rows.find((r) => (r.flags & 1) !== 0);
+  return row ? row.radius : null;
 }
 
 export type FireKind = 'foie' | 'gifoie' | 'rafoie' | 'barta' | 'gibarta' | 'rabarta';

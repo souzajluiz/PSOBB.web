@@ -15,7 +15,8 @@
 //
 // Children built in a caller's loop (CHILD_COLLISION_LINKS, Vol Opt 0xc2's 24 monitors) have no
 // set type or record of their own: child k (0-based, creation order) takes variant k & mask
-// (`childBoxTable`). Their box rows are not used by the port's own monitor hit test yet.
+// (`childBoxTable`). The render reads the monitors' rows for their weapon reach, tech radius and
+// aim height (render/combat.ts voloptMonitorRows); the monitor's HP and its hit flow stay in combat/volopt.ts.
 //
 // An indexed link (variants, e.g. Booma 0x44) picks its row set by the variant: the constructor
 // computes table = base + stride * [this+0x370], and that field is the vtable slot's copy of the
@@ -63,6 +64,9 @@ export interface ChildBoxTable {
   table: number;
   rows: readonly CollisionBoxRow[];
 }
+
+// Vol Opt's set type (TBoss3Volopt, enemyids.ts); its 24 monitors are the children of CHILD_COLLISION_LINKS.
+export const VOLOPT_SET_TYPE = 0x00c2;
 
 export function childBoxTable(setType: number | null, child: number): ChildBoxTable | null {
   if (setType === null) return null;

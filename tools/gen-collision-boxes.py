@@ -89,20 +89,39 @@ def text_bytes():
 
 # --- function starts and call graph -----------------------------------------
 
+# The MSVC frame prologue `push ebp; mov ebp, esp`.
+PROLOGUE = b"\x55\x8b\xec"
+
+
 def function_starts(blob):
     starts = []
     pads = (0xCC, 0x90)
     for i in range(2, len(blob)):
         if blob[i] not in pads and blob[i - 1] in pads and blob[i - 2] in pads:
             starts.append(i)
+        elif prologue_after_jump(blob, i):
+            starts.append(i)
     return starts
+
+
+def prologue_after_jump(blob, i):
+    """A prologue right after a short `jmp` (EB xx) or a `ret`, with no padding. Plot Falz's
+    constructor 0x0048d814 is one: `0048d812: eb xx` ends the function before it (the factory 0x0048d764
+    calls it), so the padding guess missed it and its call target folded into the previous function."""
+    if blob[i:i + 3] != PROLOGUE:
+        return False
+    if blob[i - 1] == 0xC3:  # a ret
+        return True
+    # the SEH-style epilogue `xor eax, eax; jmp L` right before it, or one nop after the jump
+    # (0x00662ef0 follows `jmp; nop`: `0662eed: eb xx`, `0662eef: 90`)
+    return (blob[i - 2] == 0xEB and blob[i - 4:i - 2] == b"\x33\xc0") or (blob[i - 1] == 0x90 and blob[i - 3] == 0xEB)
 
 
 def entry_like(blob, i):
     """True when the byte(s) before offset i look like the end of the previous function."""
     if i < 3 or i >= len(blob):
         return False
-    return blob[i - 1] in (0xCC, 0x90, 0xC3) or blob[i - 3] == 0xC2
+    return blob[i - 1] in (0xCC, 0x90, 0xC3) or blob[i - 3] == 0xC2 or prologue_after_jump(blob, i)
 
 
 def section_of(va):
@@ -644,7 +663,7 @@ def fmt_num(v):
 # The factory allocates the enemy and runs its constructor (formats/enemymodels.ts).
 ENEMY_FACTORY_TABLE = 0x009FBA60
 ENEMY_AREAS = 47
-DEPTH_LIMIT = 4  # call-graph depth from a factory to a constructor's box call
+DEPTH_LIMIT = 5  # call-graph depth from a factory to a constructor's box call
 
 
 def enemy_factory_rows():
@@ -780,6 +799,12 @@ def main(argv):
     vt_calls = vtable_calls(blob, func_of, starts_va)
     slot_targets = {t for _, t, _ in vt_calls}
     starts_va = sorted(set(starts_va) | slot_targets)
+    # Function starts read from the disassembly (checked by main): Plot Falz's constructor (after an
+    # `xor; jmp` epilogue, DEVLOG), the SEH epilogue cases 0x662ef0 (after `jmp; nop`), the Dragon's
+    # constructor 0x419214 (the link's func) and the 0x64 factory's constructor 0x5959fc.
+    for must in (0x0048D814, 0x00662EF0, 0x00419214, 0x005959FC, 0x004570B0):
+        if must not in set(starts_va):
+            raise SystemExit(f"function start {must:#x} not detected")
 
     callees = collections.defaultdict(set)
     for site, target in calls:

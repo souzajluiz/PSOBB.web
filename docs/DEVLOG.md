@@ -14671,3 +14671,45 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: Vol Opt's monitor rows in the hit paths; Darvant and Plot Falz constructors (generator starts)
+
+**What changed:** the Vol Opt monitors' exe rows (`childBoxTable(0xc2, k)`, the 0x2c-byte rows of 0x009a5100 + 0x2c * (k & 3)) now drive the player's hit paths in `render/combat.ts`. The generator now finds the constructors that sit behind a `xor eax, eax; jmp` epilogue, which exposed Dark Falz's Darvant constructor and Plot Falz's constructor. `tools/gen-collision-boxes.py` regenerated `collisionboxes.gen.ts`.
+
+**Monitors (exe rows, ported).** Rows (all centre (0,0,0), sphere): k & 3 = 0 radius 20 flags 0x8005, 1 radius 10 flags 0x8003, 2 radius 15 flags 0x8003, 3 radius 10 flags 0x8003 (0x008000 targetable bit on all four). `VoloptMonitor` keeps its own state and HP; the render side reads the row of `e.ai.part.index`:
+- `weaponTargets`: a melee / gun target is a monitor with reach = the row radius (the same surface test as the De Rol Le segments), height window 40 from the surface.
+- `hitRadiusOf` (techfire pick, `tickFire`): the radius of the first enabled row (flags & 1), `rowsRadius` in `combat/techfire.ts`.
+- `aimHeightOf`: the first enabled row's centre height, `rowsAimHeight`. The rows' centre is the monitor's own origin (offset 0), so a technique now aims at the monitor's origin (part y 38 for the big one, 15 for the small ones), not at the old fallback of 22 above the origin.
+- `npcEnemies` / `enemyBoxHits`: the monitor's boxes at its origin.
+- `VOLOPT_SET_TYPE = 0xc2` in `formats/enemyboxes.ts`.
+
+**Dark Falz (0xc8): the Darvant constructor, not the boss.**
+- The ZAKO scene is row 4 of the scene table at 0x009a5940 (stride 0x14: name, enter, leave, lead, all; the name at 0x008ff578 reads "ZAKO", its enter is 0x0044e4a4 at 0x009a5994). Scene 3 (0x0044e4d0, row 3 at 0x009a5980) sets the counter `[this+0x388] = 0x1e`; its `all` (0x0044d5dc, 0x009a598c) counts it down and calls SetScene(4) at 0x0044d621.
+- 0x0044c430 has one caller: 0x0044e4c9 in the ZAKO enter. It is the Darvant grid: rings of ebx = 5, 15, 25, 35 (`add $0xa` at 0x0044c624, `cmp $0x2d` at 0x0044c627), each ring places ebx Darvants at the slice 0x10000 / ebx. Each one is `push eax; call 0x0045fb24` at 0x0044c604..0x0044c605, with the counter `[ebp+0x38c]` (1..0x1fd) as the child's entity offset. 80 per call. This matches the port's ring of 5 / 15 / 25 / 35 (`darkfalz.ts` ringRadius).
+- 0x0045fb24 is the factory (allocates, calls the constructor at 0x0045fbaf). The constructor is 0x0045fbd4 (after `xor eax, eax; jmp` at 0x0045fbcc / 0x0045fbd0). Its init `call 0x007b9a88` is at 0x0045fca0 with table 0x009a67c8: radius 0, flags 0x807a (bit 0 clear, so the row is not enabled in the port's reading). The earlier note's 0x0045fb24 "constructor" is its factory.
+- Dark Falz's own control: the factory 0x0044c88c allocates 0x3b4 bytes and calls the constructor 0x0044c93c (vtable 0xaf6a20 at 0x0044c981). Its direct call tree (E8, depth 8, 549 functions) has no box init. Its virtual calls (`[ebx+0x14c]`, `[eax+0x150]`, slots 0x53 / 0x54 = 0x00786848 and 0x004ADCE0) do not reach one either. ASSUMED: the boss's own body has no box in the exe; its hits go through its forms and the Darvants.
+
+**Plot Falz (0xca): the generator's starts.**
+- Factory 0x0048d764 calls the constructor 0x0048d814 (vtable 0xaf9240 at 0x0048d859), which was missed: `0x0048d80c..0x0048d812: xor eax,eax; jmp` then the prologue. `function_starts` now also takes a prologue (`55 8b ec`) after a `ret`, after the `xor eax,eax; jmp` epilogue, or after `jmp; nop`. `entry_like` takes the same rule for call targets. The check `main` makes sure 0x0048d814, 0x0045fbd4, 0x004570b0, 0x005959fc and 0x00662ef0 are starts.
+- Effect on the generated table: 980 more function starts, none removed. The constructor's direct tree (22 functions) and its two virtual slots (0x00786848, 0x004ADCE0, the same generic loader as 0xc8's) reach no box init. So 0xca still has no own init found (ASSUMED: none; the constructor's indirect call through 0x009a6c64 is not followed).
+- `DEPTH_LIMIT` 4 -> 5: the factory/constructor split adds one level to every tree that used to fold the constructor into its factory. Without it the 0x0064 link (factory 0x0059594c, box 0x9bfd68) was lost.
+
+**Generated table: what changed (checked, not all by hand).**
+- Enemy links: 0xc0 (Dragon) now uses its own constructor 0x00419214 (depth 1, table 0x9a39a0 unchanged); 0x0064 and 0x0065 back with their tables (depth 5 and 3); 0x00cb (TBoss7DeRolLeC, factory 0x004af5b8) gets table 0x009ac120 through the shared constructor 0x004cb480 and helper 0x0051ff3c, which 0x00cc (factory 0x004cb404) reaches too: a pair, ASSUMED (the Canadine rule). 0x00db depth 2.
+- Object types (`TYPE_COLLISION_TABLES`, comment-only consumers in `render/fieldobjects.ts`): about 30 entries changed, because helper edges that used to fold into a neighbour now split. Type 0x02ba is gone: its creator 0x00662ef0 is its own function and does not reach the site 0x00662d10 (the old link came from the fold into 0x00662cbc). Not checked type by type.
+- Summary: sites 243 (199 direct, 16 indexed, 32 via helpers, 27 unresolved, unchanged), tables 246, enemy set types 123, own table 56 (was 55), none 7 (was 8).
+
+**Tests.** `tests/objectcollision.test.ts`: the monitor rows for k = 0..23 (radius 20/10/15/10 by k & 3, aim height 0) and `rowsRadius([])` / `rowsAimHeight([])`. `node tests/objectcollision.test.ts` all checks passed; `node tests/techfire.test.ts` ok; `node tests/combat.test.ts` 5852 checks, 0 failures (`vendor` linked from the main checkout while testing, removed before the commit); `tests/volopt`, `darkfalz`, `dragon`, `collision` pass. `npx tsc --noEmit -p .` in `client/` clean (run with Node 24 directly). Nothing was run in Chrome or Playwright.
+
+**ASSUMED:**
+- The monitor's row is its centre at its origin (offset 0), so the aim is the origin height and the reach is the row radius; the monitor index is the loop counter (carried from the entry above).
+- The 980 new starts are real function boundaries; five were checked by hand (0x48d814, 0x45fbd4, 0x4570b0, 0x5997c8's entry, 0x662ef0) and the rest follow the same epilogue pattern.
+- Dark Falz's own control has no box in the exe (no init in its tree; virtual calls only partly followed).
+- The Darvant grid spawns 80 children per call with the counter starting at 1 (the counter's first write is not read).
+- 0xcb's table through the pair helper.
+
+**Left:**
+- Dark Falz's Darvants: the table 0x009a67c8 (radius 0, flags 0x807a) is not in `CHILD_COLLISION_LINKS`. The generator's CHILD_CALLERS needs an indexed site; this one is a constant table in the constructor 0x0045fbd4 under the factory 0x0045fb24. A constant-table child entry (callee 0x0045fb24, count 80, ctor 0x0045fbd4) is the change to make; the row has no enabled box, so the port would fall back anyway.
+- 0xca's own init: the constructor's indirect call through 0x009a6c64 (`call eax`, 0x0048dada) is not followed, and neither are the vtable targets' callees beyond one level.
+- The object type map (`TYPE_COLLISION_TABLES`) changed for about 30 types; if the object pillars ever read it, check it against the old values.
+- The Vol Opt monitors' own HP / hit flow (`VoloptMonitor`, `voloptPartHit`) is unchanged; the rows only change the reach, radius and aim.
