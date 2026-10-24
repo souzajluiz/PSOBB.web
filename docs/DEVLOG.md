@@ -16094,3 +16094,40 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts`); the per-frame order and the ProcessState call are not wired.
 - The hooks: `groundProbe` (0x004a15fc), `attackDispatch` (0x004a47a8), `spawnRing` (0x004a9174), the S27 lightning objects (0x004a9de0 / 0x004a9869 / 0x0073d160), the S30 beam (0x004aa4b0), the minion ring's particle update (0x004aade4) and the S27 beam value's constants (`g_GalgryphonMinionEffectRandomBias` etc.) have no port here.
 - The -b doc: its S30 section and its per-state offsets still carry the old text (a correction note is added at its top).
+
+## 2026-10-23: Gal Gryphon hook bodies as pure functions (galgryphonfx.ts); two premises corrected
+
+**Premise check.** The brief's "attackDispatch 0x004a47a8 -> DispatchGalGryphonAttackEffect_004a8690" is wrong on both links. 0x004a47a8 is a threshold dispatch (the dump's `UpdateOlgaMinionState_004a47a8`, dump 224813): four `check_entity_animation_elapsed_threshold` tests on the floats at 0x00a475c4 / c8 / cc / d0, and the first that crosses calls one of the minion handlers 0x004a121c / 0x004a115c / 0x004a109c / 0x004a0fdc (or the init 0x004a0fdc). Its only caller is the S21 frame (0x004a4527). The attack 0x004a8690 is not called from there: its caller is the homing minion's update, `UpdateGalgryphonMinion_004ab283` at 0x004ab39e (dump 229617), each tick. The minion ring's particle update (0x004aade4) also calls it, through the variant 0x004a86e0 (dump 229600).
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; objdump of PsoBB.exe; constants with tools/exedata.py):
+- Ground probe 0x004a15fc (dump 223918): `unknown_get_ground_info(pos, 0x16ef)`; a hit with y > 6.0 (0x903ae0) is no landing; else the effect at the hit's height and SFX 0x39b.
+- S33 probe 0x004a1a48 (dump 224063): the probe runs on the 14.0 event.
+- Threshold dispatch 0x004a47a8: tests in order, lazily (above).
+- Spawn ring 0x004a9174 (dump 227626): y rotation = heading; anchor = translate(pos) * rotY(heading) * local (matrix_rotation_y 0x0082d8bc, x' = cos x + sin z, z' = -sin x + cos z; the same convention as darkfalzcamera.ts); each hitbox gets bit 1.
+- S27 beam value (dump 224954; disassembly 0x004a4dd5..0x004a4e7b): `r = get_random_int >> 16`; `value = trunc(((r + 0x903a88) / 0x903d20) * 0x903d1c)` with 0x903a88 = 0.0, 0x903d20 = 65536.0, 0x903d1c = 4.0. The fistp runs under control word 0xc00 (round toward zero), so the value is 0..3, not the ROUND the dump shows. Beam when m % 20 == 0, flag `(m / 20) & 1 == 0`.
+- S27 lightning beam object 0x004a9de0 (dump 228345): y = min(ground y, 6.0) (no ground: 6.0) + 0x90441c (12.0); the constructor offsets are sin / cos of the angle times 0x90440c (5.0).
+- Lightning arc 0x004a9869 (dump 228056): ends at the curve at tu and tv; count = clamp(ROUND(len / 0x9043b0 (16.0)) + 1, 2, 13); points at i / (n - 1) * (tv - tu) + tu; `some_magnitude` = the polyline length. The jitter (`create_jitter_values_for_points`, constants 0x9043ac 32768, 0x9043b8 512, 0x9043bc 64) is not ported.
+- Release 0x0073d160: `*(u16*)(this+8) |= 1` (the delete flag).
+- S30 dive beam 0x004aa4b0 / 0x004aa4ec (dump 228629, 228700; call at dump 225540): start point `from` (50 ahead, 50 up), target `to` with the ground clamp; the object runs frames 40..57 (`0x28`, `0x11`); the constructor arg 0x41a00000 = 20.0.
+- Minion ring 0x004aabd8 (dump 229084): y = 2.0 (0x40000000) over the argument; 0x004aade4 (dump 229207): 32 slots at angle k * 0x800 BAMS, radius counter * 7.0 (0x904488), outer ring + 10.0 (0x904480); spawn state 31 ticks (counter 0..30), then fade; the area hit's speed factor is `(30 - counter) * 1.0 / 30.0 + 1.0` (0x904484, 0x904494, 0x904490); the fade is dead past counter 30.
+- Area hit 0x0051fc9c (dump 303366): the context's +8 float picks the Derolle vtable call, +0x30 above 100.0 (the call takes the float), else +0x34. The transform 0x004a51c0 (dump 225140) builds `[p1, speed3, value, 20.0, p2]`; the attack 0x004a8690 builds `[intensity, speed2, 15.0, 10.0, 1]` (galgryphon.ts, unchanged).
+
+**What changed:**
+- `client/src/combat/galgryphonfx.ts` (new): the pure functions above (`groundProbe`, `s33StageOneProbe`, `minionThresholdDispatch`, `sinowberillBranch`, `sinowberillBurst`, `galgryphonAttackBurst`, `galgryphonVariantContext`, `galgryphonTransformContext`, `ringAnchor`, `activateHitboxes`, `lightningBeamPlacement`, `lightningPointCount`, `lightningArc`, `polylineLength`, `s27BeamValue`, `s27Beam`, `markForDestruction`, `diveBeamPoints`, `minionRingSpawn`, `minionRingTick`) and the constants `GALFX`, `GALFX_S27`, `GALFX_LIGHTNING`, `GALFX_DIVE_BEAM`, `GALFX_RING`, `GALFX_AREA`.
+- `tests/galgryphonfx.test.ts` (new): each function against the exe's branches and the constants.
+- ROADMAP line (Gal Gryphon) updated.
+- `galgryphonstatesb.ts` is not changed: its `attackDispatch` hook name is the wrong address (it is the threshold dispatch) and its `spawnBeam` hook passes the raw random; both need the wiring step to use `minionThresholdDispatch` and `s27Beam`.
+
+**ASSUMED:**
+- The area hit's radius is the context's +8 float (15.0 for the S21 attack, the ring radius for the minion ring) and its power is the intensity; the Derolle vtable bodies (+0x30 / +0x34) are not decoded, so this is a reading, not a proof. The look (colour 0xffa24c, size 3) is the port's choice.
+- The S30 beam's middle point: the wrapper's local triple is read as (to.x, from.y, to.z), as the dump shows it.
+- The lightning beam's angle is the heading in BAMS for the sin / cos offsets.
+- The lightning arc's curve is the caller's (the Bezier of `InterpolateMinionEffectPosition_007be6b8` is not checked here).
+- The threshold floats 0x00a475c4..d0 are runtime values with no writer in the exe image; the caller passes them.
+- The dispatch's handler bodies (0x004a121c and friends) are not ported; they call 0x004ab96c (the transform), 0x51fdf8 (the Derolle display), 0x50b7a4 (the effect) and 0x4a0d3c (the lightning effect) and are the minion handlers, not the Gal Gryphon's.
+- The ring's particle objects and their sounds are not ported; only the positions, the attack and the state.
+
+**Tests.** `node tests/galgryphonfx.test.ts` passes (Node 24); `galgryphonstatesb`, `galgryphonminion` and `galgryphon` tests pass. `cd client && node_modules/typescript/bin/tsc --noEmit -p .` exit 0 (node_modules linked from the main checkout, then removed). Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- Wiring: the hooks in `GalgryphonFxB` (`galgryphonstatesb.ts`, the S0..S17 unification) and `render/combat.ts`; the minion ring's particle objects; the S27 beam spawn `SpawnOlgaMinionEffect_004a5218` (dump 225179: random angle and radius, ground search, `CheckOlgaMinionTargetValidity_004a5428`); the lightning jitter; the Derolle vtable bodies behind the area hit.

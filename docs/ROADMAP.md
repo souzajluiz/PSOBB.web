@@ -65,7 +65,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
    Recon, Epsilon / Epsigard left).
-   Gal Gryphon (2026-10-23): the minion launcher and Effect (`combat/galgryphon.ts`, `combat/galgryphonminion.ts`) and the pattern script that picks its states (`combat/galgryphonscript.ts`, the leader's choice is local, not from the network); the state handlers 18..34 (`combat/galgryphonstatesb.ts`, not wired); left: the handlers 0..17 (`docs/bosses/galgryphon-states-a.md`), the brain's wiring into render/combat.ts, and the attack's area hit.
+   Gal Gryphon (2026-10-23): the minion launcher and Effect (`combat/galgryphon.ts`, `combat/galgryphonminion.ts`) and the pattern script that picks its states (`combat/galgryphonscript.ts`, the leader's choice is local, not from the network); the state handlers 18..34 (`combat/galgryphonstatesb.ts`, not wired); the hook bodies as pure functions (`combat/galgryphonfx.ts`: the ground probe, the minion ring's particle tick and its area hit, the spawn ring's anchor, the S27 lightning and beam value, the S30 dive beam, the S33 probe); left: the handlers 0..17 (`docs/bosses/galgryphon-states-a.md`), the brain's wiring into render/combat.ts, the S27 beam spawn (0x004a5218), the lightning jitter, and the Derolle vtable bodies behind the area hit.
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
