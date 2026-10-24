@@ -429,16 +429,31 @@ function toType1(fi: Fight): void {
   const cellX = Math.trunc((-100 + 235) / 29.375);
   const cellZ = Math.trunc((100 + 235) / 29.375);
   eq(`${f1.gx} ${f1.gz}`, `${cellX} ${cellZ}`, 'aimed at the player\'s cell');
-  fi.log.length = 0;
+  // The exe makes one technique object at timer 38 (0x00456860): a shot of the fight,
+  // not an immediate event. It lives its cast frames and hits the player in its box.
   const st = f1.st;
   const ent = f1.entries;
-  fi.until(() => f1.entries !== ent, 200, 'the beam ends');
-  const tech = fi.log.filter((e) => e.kind === 'tech');
-  eq(tech.length, 1, 'the technique object hits the player in the cell once');
-  const t0 = tech[0];
-  eq(t0.kind === 'tech' && t0.tech, st === F1.beamL ? 'rabarta' : 'rafoie', 'BEAM_L is Rabarta, BEAM_R Rafoie');
-  eq(t0.kind === 'tech' && t0.level, st === F1.beamL ? 6 : 9, 'at row 54 iparam2 / iparam1');
-  eq(t0.kind === 'tech' && t0.x, (cellX + 0.5) * 29.375 - 235, 'at the centre of the cell');
+  fi.shots.length = 0;
+  const shotsSeen = new Set<EnemyShot>();
+  const hitIds = new Set<number>();
+  for (let k = 0; f1.entries === ent && k < 400; k++) {
+    fi.step();
+    for (const s of fi.shots) shotsSeen.add(s);
+    for (const s of shotsSeen) if (!s.done) for (const h of s.tick(fi.targets)) hitIds.add(h.clientId);
+  }
+  eq(f1.entries !== ent, true, 'the beam ends');
+  eq(fi.log.filter((e) => e.kind === 'tech').length, 0, 'no immediate tech event (the shot path does the hit)');
+  eq(shotsSeen.size, 1, 'one technique object of the fight');
+  const s0 = [...shotsSeen][0] as FireShot;
+  eq(s0.fire.kind, st === F1.beamL ? 'rabarta' : 'rafoie', 'BEAM_L is Rabarta, BEAM_R Rafoie');
+  eq(s0.fire.level, st === F1.beamL ? 6 : 9, 'at row 54 iparam2 / iparam1');
+  eq(s0.fire.x, (cellX + 0.5) * 29.375 - 235, 'at the centre of the cell (x)');
+  eq(s0.fire.z, (cellZ + 0.5) * 29.375 - 235, 'at the centre of the cell (z)');
+  eq(s0.fire.y, 0, 'on the ground');
+  // Keep ticking the object until its cast ends.
+  for (let k = 0; k < 600 && !s0.done; k++) for (const h of s0.tick(fi.targets)) hitIds.add(h.clientId);
+  eq(s0.done, true, 'the object ends');
+  eq([...hitIds].join(), '0', 'it hits the player in the cell, once');
 }
 
 {
@@ -595,6 +610,15 @@ function toType2(fi: Fight): void {
   for (let k = 0; k < 12; k++) fi.targets.push(player(10 + k, Math.sin((k * Math.PI) / 6) * 280, Math.cos((k * Math.PI) / 6) * 280));
   fi.until(() => f2.st === F2.beamL || f2.st === F2.beamR, 40000, 'a beam');
   const rabarta = f2.st === F2.beamL;
+  {
+    // The heading D is the body's direction to the target cell's centre (0x0045A790:
+    // +0x3bc..+0x3c4 minus the body +0x38 / +0x40, y zeroed, normalised).
+    const d = f2 as unknown as { beamDx: number; beamDz: number };
+    const dx = (f2.gx + 0.5) * 29.375 - 235 - f2.x;
+    const dz = (f2.gz + 0.5) * 29.375 - 235 - f2.z;
+    const l = Math.hypot(dx, dz);
+    check(Math.abs(d.beamDx - dx / l) < 1e-9 && Math.abs(d.beamDz - dz / l) < 1e-9, `the beam's heading is body to the cell centre (${d.beamDx.toFixed(3)}, ${d.beamDz.toFixed(3)})`);
+  }
   fi.log.length = 0;
   fi.shots.length = 0;
   let balls = 0;

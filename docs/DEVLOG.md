@@ -17016,3 +17016,38 @@ the port applied it to the bare text, which would drop every two-character line 
 "- 2" is the 2-unit language marker (`\tE`) the line carries in the exe's buffer, so `Lobby.sendChat`
 now gates on the marked line: a short plain line is sent, a line with only an emote key is not (the
 emote still plays). ASSUMED: the marker is in the buffer process_chat_message reads.
+
+## 2026-10-23: Dark Falz form 1 beams as shot objects; form 2 beam heading settled; the 0x0080 door icon settled
+
+**What changed:** the form 1 beams (BEAM_L / BEAM_R, `combat/darkfalz1.ts`) no longer fire an immediate `techAt` event. At timer 38 they make one technique object, Rabarta (BEAM_L) or a fixed Rafoie (BEAM_R), at the target cell, through the fight's shot list (`DfFight.shoot`, `enemyFire`), exactly as form 2's balls. The object lives its cast frames and hits each player in its box. The beam adds no radar icon and the object has no motion of its own (it stays at the cell). The form 2 beam heading question (the `+0x3bc..+0x3c4` writes) is settled. The 0x0080 door's icon is settled from its vtable.
+
+**Exe evidence** (`objdump -d` of `~/Downloads/psobb-client/PsoBB.exe`, `tools/ghidra/decomp.sh`, `tools/exedata.py read`):
+- Form 1 beam fire, `0x00456860` (Ghidra FUN_00456860): at `timer == 38` (`DAT_00a45264`) it runs `FUN_006ec8ec(ctrl, ctrl+0x3c0, ctrl+0x3c0, row+0x1c)` when the state is 8 (BEAM_L), else `FUN_006ed87c(ctrl, ctrl+0x3c0, ctrl+0x3c0, row+0x18)` (BEAM_R), the row being `FUN_0077a6cc(0x36)`. The other calls on the path are the SE 0x370 and `FUN_006ff5f8(0xc0, 0xf)` (not identified). No icon call on the path, and no `0x0080575c` caller in `0x006e..0x006f`, where the Rabarta / Rafoie objects are.
+- Form 1 target point: `+0x3c0` / `+0x3c4` / `+0x3c8` = the cell centre (`0x004575b4..0x004575f6`); `+0x3c4` is set to 0.
+- **Form 2 heading** (the open question). The packet receive `0x00459D53` calls the converter `0x00459DF0`, which reads the cell from `+0x3b4` and `+0x3b8` (the packed bits 12-15 and 16-19; the `+0x3b4` shift is ASSUMED from the `sarl` pattern) and writes the cell centre to `+0x3bc` (x), `+0x3c0` (y, `movl $0`) and `+0x3c4` (z). The beam init `0x0045A790` copies `+0x3bc / +0x3c0 / +0x3c4` into D (`+0x400 / +0x404 / +0x408`), then `call 0x0082F9C4` with `ecx = &D` and `edx = &body (+0x38)`. That helper is `ecx = ecx - edx` per component, so D = target - body. It zeroes y, normalises, falls back to (1, 0) under 0.01, and takes `fpatan`. So the source is the target cell's centre minus the body. The mismatch came from the struct's dump names: form 2's struct keeps the cell centre at `+0x3bc / +0x3c4`, where form 1's keeps it at `+0x3c0 / +0x3c8`.
+- The converter's constants: `[0x00900180] = 0.5`, `[0x00A457C4] = 470`, `[0x00A457B0] = 470 / 16 = 29.375` (the init at `0x00459F72..0x00459FBE`), so the centre is `(cell + 0.5) * 29.375 - 235`, the port's formula. The sign of the x87 operand order was taken from the form 1 Transform and not re-derived.
+- **0x0080 door icon.** The 0x0080 TObjDoor ctor `0x006573D4` writes vtable `0x00B32168` (`movl $0xb32168, (%ecx)` at `0x00657419`). Its slot 1 (+4, the per-frame update) is `0x00656E28`, `UpdatePlayerActionState_00656e28`: the icon `FUN_008056b0(pos, colour, yaw, 0, 0)` is red (`0xffff0000`) while its state is 0, green otherwise. The bit 0 icon `UpdateSeabedDolphinPlayerMinimapIcon_00657718` is slot 1 of vtable `0x00B32240`, another class (the 0x0202 door, see the 2026-10-23 door entry). So the 0x0080 door keeps its state icon, which is what the port draws. The open question of the 2026-10-23 minimap entry is closed.
+- Boss door 0x0103: unchanged (the CapMoto capsule machine, no icon).
+
+**Ported:**
+- `combat/darkfalz1.ts`: `fireBeam(rabarta, level)` replaces `techAt` (`enemyFire({ tech, level, x, y: 0, z, heading: 0, fixed: !rabarta, enemy: false })` then `fight.shoot`); the imports (`techReach` out, `enemyFire` in); the header.
+- `combat/darkfalz2.ts`: header and comments only (the heading is no longer ASSUMED).
+- `docs/ROADMAP.md`: the "Minimap left to do" line. The stale form 2 ball entry is corrected to done; the form 1 beams add no icon; the 0x0080 question is settled; the Challenge title is not a radar icon; the Gal Gryphon minion is the only open icon left.
+- `tests/darkfalz.test.ts`: the form 1 beam block checks one shot (kind, level, the cell centre, y 0), that no immediate `tech` event is logged, and that the object hits the player in the cell and ends. The form 2 beam block checks the heading (D = body to the cell centre).
+
+**ASSUMED:**
+- The Rafoie's wait before it hits (the exe's 10 frames, from the earlier note; the shot path's `FireObject` decides the life, not re-read here).
+- The form 1 levels are `row.rabarta` / `row.rafoie` (row 54). The exe reads the same row (`FUN_0077a6cc(0x36)`), so this is exact; form 2's levels stay ASSUMED as before (the exe passes the form 1 animation rows' fields to its constructors).
+- The converter's sign (x87 operand order) follows the form 1 Transform, as the port has used it since its first version.
+
+**Checks:**
+- `node tests/darkfalz.test.ts` passes (Node 24).
+- `node tests/minimap.test.ts` passes (`client/node_modules` linked from the main checkout for the run).
+- `NEWSERV=$PWD/vendor/newserv node tests/combat.test.ts`: 5852 checks, 0 failures (`vendor` linked from the main checkout for the run).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` clean (Node 24).
+- Not run: Playwright, Chrome (per the brief).
+
+**Left:**
+- The Gal Gryphon minion's 1.5 icon (needs the Gal Gryphon brain: the launcher and its state 2, see the 2026-10-23 Gal Gryphon minion entry).
+- The Challenge "Area n" title: `cmode_area_title_buffer` (set by opcode_set_area_title_number, dump 607512) is read by `maybe_update_mainwarp` (dump 510944), which looks like a warp-menu entry label, not a radar icon. Not traced to its drawing code; the warp menu is the place to check.
+- Form 2's levels (ASSUMED, above).
