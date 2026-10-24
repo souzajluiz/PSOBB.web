@@ -14671,3 +14671,30 @@ Brief: the user's GameCube reference of the field main menu (Home): dimmed strip
 - Root cause of the 3D view not shifting in the field: run the probe in the spec once login works, and check which camera and onFrame draw the field.
 - The Status window (0x19): no BB route found. If one is found, port its three pages (Total EXP / To Next Lv / Money, the stats, battle / challenge) from the labels above.
 - The GC overlay and the GC info panel: not ported (not in the exe).
+
+## 2026-10-23: Pioneer 2 in a game: palette and hotbar hidden on safe maps
+
+**Report:** the 2026-10-23 "motion set and hub gates" entry left open whether the exe draws the action palette (3 slots, GUI 0x20 = (484, 368)) and the hotbar (GUI 0x21 = (0, 442)) on Pioneer 2. The creator and the map gate are now traced: the exe hides both on the safe maps. The port drew them on every floor; it now hides them on Pioneer 2, the Lab, the lobby and Episode 4's Pioneer 2.
+
+**Exe evidence (PsoBB.exe, dump `reverse/refsrc/.../src/Psobb.exe-05112026.c`).**
+- The windows are children of the quick menu window. `QuickmenuobjectConstructor_00716354` (dump 677373) is called from `CreateMapObjects_0078243f` (dump ~758825), so it is built on every map load. Its child constructor `SinowberillChallengeMenuWindow_Constructor_0071a3d0` (dump 681747) builds the palette at +0x38 (`CreateSinowberillChallengeObjectListItem_0070f6bc`, GUI 0x20, dump 671457) and the hotbar at +0x3c (`SinowberillChallengeObjectListWindow_Constructor_007104bc`, GUI 0x21, dump 672339), and sets object flag 0x4 (at +8 of each window) on both. Flag 0x4 is the hidden state.
+- The update functions `unknown_update_player_menu_hide_palette` (dump 682035) and `unknown_update_player_menu_hide_hotbar` (dump 682072) return at once while the flag is set. They place the windows: palette y 368 (0x43b80000), 268 (0x43860000) with the main panel open; hotbar y 443 (0x43dd0000), 342 (0x43ab0000) with the panel open.
+- Only one writer clears the flag: `unknown_update_player_menu_corner` (dump 681845), state 0x26 of the window's frame counter (`+0x1e`, starts at 0 on construction, so about 38 frames after the map load). It clears +0x38 and +0x3c only when `is_current_map_safe()` returns nonzero. The dump's name is inverted: `is_current_map_safe` (dump 820975) returns 0 when `current_map` is in the hub table `unknown_safe_maps` (0x0097f1c8 = 0, 15, 18, 45, -1; read with `tools/exedata.py read 0097f1c8 u 6`) and 1 otherwise. So the windows show on an unsafe map and stay hidden on a hub. The other clears of 0x4 in this range (681858, 677543) are on other windows (+0x34, the challenge list; +0x84 entries).
+- Palette input follows the same flag: `unknown_handle_quickmenu` (dump ~682500) returns at once when the palette is hidden and the map is not the lobby.
+- So: Pioneer 2 (map 0), the Lab (0x12), Episode 4's Pioneer 2 (0x2d) and the lobby (0x0f) show neither window; an unsafe map shows both. The palette's own slot-enable check (`is_palette_slot_use_allowed`, dump 597491) is unchanged (the attack slot stays enabled and the press is dropped, see the hub entry).
+- Weapon: already hidden on the hubs (`UpdateItemVisibility_005c3f7c`, the DEVLOG 2026-10-23 weapon visibility entry), no change.
+
+**Port.** `client/src/classic/fieldmenu.ts` `paletteWindowsShown(area)` = `!isSafeMap(area)` (the same table as the hub gate, `SAFE_MAPS`). `client/src/render/fieldhud.ts` draw: the palette (`paletteHud.draw`) and the hotbar (`drawHotbar`) are drawn only when it is true (and still only with the menu closed and no counter). The header comment of `render/fieldhud.ts` lists the rule.
+
+**ASSUMED.**
+- The render walker skips an object with flag 0x4 set. Not traced: the update functions use the flag and nothing in the windows' own render (`SinowberillChallengeObjectListWindow_Render_00731a40`, dump 699098) checks it.
+- The port shows both at once on an unsafe map; the exe shows them after the counter's state 0x26 (about 38 frames after the map load). A short delay is not modelled.
+- The palette's Ctrl flip (`HandlePlayerPaletteToggle_00694f0c`) is not gated by the map in the port; the exe's flip path was not traced for the hidden state (the flip is invisible on a hub, so the port keeps it).
+
+**Tests:** `tests/fieldhud.test.ts` (new check: `paletteWindowsShown` on 0, 0x0f, 0x12, 0x2d, 1, 0x0d, 0x17). Run with Node 24 and `client/node_modules` linked from the main checkout for the run (removed after): `node tests/fieldhud.test.ts`, `tests/telepipe.test.ts`, `tests/hotbar.test.ts`, `tests/lobbymenu.test.ts`, `tests/battletraps.test.ts`, `tests/minimap.test.ts`, `tests/questboard.test.ts`, `tests/shortcuts.test.ts`, `tests/windowanim.test.ts`, `tests/options.test.ts`, `tests/controls.test.ts` all pass. `cd client && npx tsc --noEmit -p .` clean. No Playwright (the brief); no Chrome screenshot of Pioneer 2 or Forest 1.
+
+**Left.**
+- Chrome check: Pioneer 2 shows no palette / hotbar; Forest 1 shows both after the first moments.
+- The quick menu key on a hub: `unknown_handle_quickmenu` returns on the hidden palette outside the lobby. The port's quick-menu behaviour on Pioneer 2 was not compared.
+- The exe's 38-frame delay before the windows show (ASSUMED above).
+- The render walker's flag check (ASSUMED above).

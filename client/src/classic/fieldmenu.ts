@@ -44,6 +44,21 @@ export function isSafeMap(area: number): boolean {
   return SAFE_MAPS.includes(area);
 }
 
+// The action palette (3 slots, GUI 0x20) and the bottom hotbar (GUI 0x21) are
+// shown on an unsafe map only. PsoBB.exe: the quick menu window built by
+// QuickmenuobjectConstructor_00716354 (dump 677373, per map load from
+// CreateMapObjects_0078243f) makes both windows hidden (object flag 0x4 at +8).
+// At state 0x26 of its update counter, unknown_update_player_menu_corner (dump
+// 681845) clears the flag only when is_current_map_safe() != 0; that
+// function (dump 820975) returns 0 for a map in the hub table 0x0097f1c8, so on
+// Pioneer 2, the Lab, the lobby and the Episode 4 Pioneer 2 the windows stay
+// hidden (their update functions return early on the flag). ASSUMED: the draw
+// of a flagged window is skipped by the render walker (not traced); the port
+// shows them at once on an unsafe map, not after the exe's 38-frame delay.
+export function paletteWindowsShown(area: number): boolean {
+  return !isSafeMap(area);
+}
+
 export interface MenuRules {
   lobby: boolean;
   safe: boolean;

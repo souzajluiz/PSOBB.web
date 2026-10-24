@@ -7,7 +7,7 @@
 import { WindowAnim, withElementWipe } from '../client/src/classic/windowanim.ts';
 import { EquipMenu, equipSlots, equipSwap, slotCandidates } from '../client/src/classic/equipmenu.ts';
 import { MagMenu } from '../client/src/classic/magmenu.ts';
-import { validateMenuEntry, isSafeMap, type MenuRules } from '../client/src/classic/fieldmenu.ts';
+import { validateMenuEntry, isSafeMap, paletteWindowsShown, type MenuRules } from '../client/src/classic/fieldmenu.ts';
 import { MENU_LAYER, STATUS_LAYER } from '../client/src/classic/hud.ts';
 import {
   AmountSpinner,
@@ -96,6 +96,11 @@ eq(validateMenuEntry(0x1a, field).enabled, false, 'Trade Window outside Pioneer 
 eq(validateMenuEntry(0x23, field).enabled, false, 'Team without a team');
 eq(validateMenuEntry(9, { ...field, lobby: true }), { id: 10, enabled: false }, 'Equip in the lobby');
 eq([0, 0x0f, 0x12, 0x2d, 1].map(isSafeMap), [true, true, true, true, false], 'safe maps 0x0097f1c8');
+// The action palette (GUI 0x20) and the hotbar (GUI 0x21) on a safe map: hidden
+// (the quick menu's flag 0x4 is cleared only when is_current_map_safe() != 0,
+// dump 681845 state 0x26). Pioneer 2 (0), the lobby, the Lab and Episode 4's
+// Pioneer 2 hide them; the fields show them.
+eq([0, 0x0f, 0x12, 0x2d, 1, 0x0d, 0x17].map(paletteWindowsShown), [false, false, false, false, true, true, true], 'palette and hotbar: unsafe maps only');
 
 // --- item rows ---
 const pmt = new ItemPMT();
