@@ -114,7 +114,9 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   VOL_OPT_CORE: 46,
   VOL_OPT_MONITOR: 46,
   VOL_OPT_PILLAR: 46,
-  // Dark Falz forms 2 / 3: 0x2f, unconditional, at 0x457259, 0x459a7b, 0x45e743 (the phase 1 writer is not traced).
+  // Dark Falz forms 1 / 2 / 3: 0x2f, unconditional, in FUN_004570b0 (call 0x457259, sub-object 0x36 = battleparams
+  // DarkFalzForm1), FUN_004598d0 (call 0x459a7b, 0x37 = Form2), FUN_0045e5a0 (call 0x45e743, 0x38 = Form3).
+  DARK_FALZ_1: 47,
   DARK_FALZ_2: 47,
   DARK_FALZ_3: 47,
   // Olga Flow (both forms): 0x4e, unconditional, at 0x497719 (form 1) and 0x49d495 (form 2).
@@ -185,6 +187,22 @@ export const GRAVE_KILLER_INDEX: Readonly<Record<string, number>> = {
   // ASSUMED: eax is the Ze flag (its source is not traced).
   BOOTA: 96,
   ZE_BOOTA: 97,
+  // Dolmolm / Dolmdarl (0x553fc8; the dump's name InitializeRappyEntity is wrong): [this+0x370] < 1 -> 64 (push at
+  // 0x553fd6, set_enemy_name 0x787550), else 65 (push at 0x553ff9). The flag is the set's param6 (setdata 0xdd).
+  DOLMOLM: 64,
+  DOLMDARL: 65,
+  // Mothmant (ctor FUN_00518bfc, 0x518bfc; the dump has no name for it, ASSUMED from the id): push 3 at 0x518c96, forwarder
+  // call 0x518c9a, unconditional.
+  MOTHMANT: 3,
+  // Hidoom / Migium (ctor FUN_00586bf8, 0x586bf8): [this+0x388] == 0 -> 23 (Hidoom, push at 0x586e52, sub-object 0x32),
+  // else 22 (Migium, push at 0x586e5b, 0x33). The test is at 0x586e4e / jne 0x586e5b.
+  HIDOOM: 23,
+  MIGIUM: 22,
+  // Girtablulu (ctor FUN_005aba28, 0x5aba28): push 0x5d at 0x5abbd7, forwarder call 0x5abc24, unconditional.
+  GIRTABLULU: 93,
+  // Not in the table, so no killer line: DUBWITCH (ctor 0x618ae4 has no setter call, and the enemy base ctor 0x7865e8
+  // zeroes +0x378 at 0x78663d). Olga's sub-object (0x48a4b0) names 85 (0x55), or 86 (0x56) when [this+0x38c] == 1
+  // (cmp at 0x48a661): no port kind has those ids, so nothing is keyed.
 };
 
 // The Rappy family's unitxt ids (the exe's `rappy_unitxt_ids`, 24 int32 at 0x00921a00 in .data,

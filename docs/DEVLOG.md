@@ -52,6 +52,29 @@ BAMS, seam, wrap, snap, range). `tests/questeditor.test.ts` still passes (1424 c
 **Checks:** `node tests/tekker.test.ts` (all checks passed, new block: undroppable tool 0x2a / compact 0x36, equipped saber 0x0c / compact 0x36, untekked and wrapped 0x36). `node tests/shop.test.ts`, `tests/fieldhud.test.ts`, `tests/items.test.ts`, `tests/itemmodels.test.ts` pass (the last two need `vendor/newserv`, linked from the main checkout). `./node_modules/.bin/tsc --noEmit -p .` in `client/` clean. Not run: Chrome (per the brief).
 
 **ASSUMED / open:** the compact row's null-player return (above); the Result's list path (above); the `this+0xdc` flags of `CheckItemEquipConditions` in the undroppable test (above); the `unaff_ESI` / `unaff_retaddr` reads in the Ghidra output of the compact and item_instance validation (the flags come out of an out-parameter that Ghidra does not resolve; the port uses the documented bit 1 = class of `ValidateItemForEquip_005c9e40`).
+## 2026-10-24: Challenge mode: the grave's killer ids, third pass (the open kinds)
+
+**Report:** the second pass left seven kinds open (DUBWITCH, Dark Falz phase 1, Dolmolm / Dolmdarl, Mothmant, Hidoom / Migium, Girtablulu) and the Olga 0x55 / 0x56 writer. This pass decodes six of them and the Dark Falz form ids; DUBWITCH has no writer and gets no entry. Each id is the immediate pushed before the setter (`set_enemy_name`, 0x787550, writes enemy +0x378) or the id forwarder (0x520390), read with objdump; the ctors were read with Ghidra (`tools/ghidra/decomp.sh`).
+
+**Premise, checked:** the prior notes said Hidoom 22 / Migium 23. The exe says the reverse: Hidoom is 0x17 (23), Migium is 0x16 (22). The port's `ENEMY_TYPE_PARAMS` rt values (HIDOOM 0x17, MIGIUM 0x16) agree with the exe.
+
+**Exe, verified (PsoBB.exe at ~/Downloads/psobb-client):**
+- Dolmolm 64 / Dolmdarl 65 (0x553fc8; the dump's name InitializeRappyEntity is wrong, the function is the Dolmolm init): `test eax, eax` / `jg 0x553fef` on [this+0x370] (0x553fd2 / 0x553fd4). Not taken (<= 0): push 0x40 at 0x553fd6, set_enemy_name at 0x553fe8. Taken (>= 1): push 0x41 at 0x553ff9. The flag is set from param6 (setdata `0xdd`: p6 > 0 is Dolmdarl). Matches the port's rt 0x40 / 0x41.
+- Dark Falz phase 1 = 47 (0x2f), with forms 2 and 3. Ghidra: FUN_004570b0 (call 0x457259) builds its sub-objects from battleparams index 0x36 = `ep1_DarkFalzForm1` (54, the port's `DARK_FALZ_1` stats row [54]); FUN_004598d0 (call 0x459a7b) uses 0x37 = Form2 (55); FUN_0045e5a0 (call 0x45e743) uses 0x38 = Form3 (56). Each has an unconditional `push 0x2f` before the setter. The earlier note "which of the three is form 2 / 3" was ASSUMED and is now bound through the battleparams index. The dump's names (VoloptForm7Hazard, InitializeDarkFalzForm3) were not used.
+- Mothmant 3 (ctor FUN_00518bfc, 0x518bfc; no name in the dump): `push 3` at 0x518c96, forwarder call 0x518c9a, straight-line from the function start. ASSUMED that this ctor is the Mothmant's (the id is the port's rt 3, and the ctor sits next to the Monest's at 0x5191c0).
+- Hidoom 23 / Migium 22 (ctor FUN_00586bf8, 0x586bf8): `mov eax, [this+0x388]; test eax, eax; jne 0x586e5b` (0x586e4e / 0x586e50). Zero: push 0x17 at 0x586e52 (Hidoom, its battleparams sub-object 0x32 = 50). Nonzero: push 0x16 at 0x586e5b (Migium, 0x33 = 51).
+- Girtablulu 93 (ctor FUN_005aba28, 0x5aba28): `push 0x5d` at 0x5abbd7, forwarder call 0x5abc24 on the straight-line path. Unconditional.
+- Dubwitch: no id. The ctor (FUN_00618ae4, 0x618ae4) makes no setter call, and the enemy base ctor (0x7865e8) zeroes +0x378 at 0x78663d. The direct +0x378 writes in the exe (0x62ede2, 0x62fc66, 0x639af2 ...) are in other vtables' objects, not the Dubwitch. So the Dubwitch never names a killer: no entry, no line (`graveKillerId` = GRAVE_NO_KILLER). ASSUMED: no Dubwitch update path writes +0x378 (the update functions were not traced).
+
+**Olga 85 / 86 (not keyed):** the Olga sub-object's init (0x48a4b0) calls the setter with 0x55, or 0x56 when `[this+0x38c] == 1` (`cmp eax, 1` at 0x48a661; [this+0x38c] is the caller's param[0x54]). The port has no kind for these ids, and it is not proven that this sub-object is the last attacker a grave records (the exe takes the last enemy attacker, `get_enemy_last_attacker_idx`). Nothing is keyed; the table comment says so.
+
+**Port:** `quest/cmodegrave.ts`: `GRAVE_KILLER_INDEX` gains DARK_FALZ_1 (47), DOLMOLM (64), DOLMDARL (65), MOTHMANT (3), HIDOOM (23), MIGIUM (22), GIRTABLULU (93). The table is 105 rows. `tests/cmode.test.ts`: a third-pass block (the seven ids, the names, Dubwitch and the Olga ids no line); the old "Dark Falz phase 1: not traced" check is replaced.
+
+**ASSUMED:** the Mothmant ctor identity (above); the Dubwitch's update paths; the Olga sub-object's role in the kill.
+
+**Left:** the Olga 85 / 86 kinds (a port kind, if the sub-object is ever the killer); the variant flag sources (+0x3ec, +0x380, +0x408, +0x3f8, esi, eax) still ASSUMED; the grave model; a Chrome check.
+
+**Checks:** `node tests/cmode.test.ts` (OK), client `tsc --noEmit -p client` (clean).
 
 ## 2026-10-24: Optimal PRS parser for quest files
 
