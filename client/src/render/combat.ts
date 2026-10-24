@@ -527,6 +527,8 @@ const TECH_HEIGHT_WINDOW = 40;
 
 export interface CombatOptions {
   log: (msg: string) => void;
+  // The camera's yaw as a BAMS angle (render/gameview.ts): the Rafoie fire sphere's turn.
+  cameraYaw?: () => number;
   // The death fade is over and 6x4E went out (the dead prompt opens), and the
   // player is alive again (6x4F, the prompt closes). combat/playerdamage.ts.
   onRevivable?: () => void;
@@ -706,6 +708,7 @@ export class CombatView {
   private readonly techFire = new TechFire({
     fx: () => this.fx,
     sound: (id, x, y, z) => this.playSeAt(id, this.fireAt.set(x, y, z)),
+    cameraYaw: () => this.opts.cameraYaw?.() ?? 0,
   });
   private readonly fireAt = new THREE.Vector3();
   private fireTargets: TechTarget[] = [];
@@ -7381,9 +7384,10 @@ export class CombatView {
     for (const e of this.enemies.values()) {
       if (e.dead || !e.instance.root.visible || concealed(e)) continue;
       const p = e.instance.root.position;
-      const t = pool[n] ?? (pool[n] = { id: 0, x: 0, z: 0, radius: 0 });
+      const t = pool[n] ?? (pool[n] = { id: 0, x: 0, z: 0, radius: 0, y: 0 });
       t.id = e.index;
       t.x = p.x;
+      t.y = p.y + this.aimHeightOf(e);
       t.z = p.z;
       t.radius = this.hitRadiusOf(e);
       n++;

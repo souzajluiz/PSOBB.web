@@ -430,6 +430,11 @@ export class FieldParticles {
 
   // The model's transform and shade for one particle: T(p) S(size) Rz(z) Rx(x) Ry(angle) (the exe's
   // matrix, dump 291966: the step's Vector3f_GetAnglesZ, then the spin), colour and fade as the particle's.
+  // The colour is the port's shade (ASSUMED). The exe's inputs are not closed: SetColor (dump 287693)
+  // stores the particle's +0x94 / +0x97 bytes (its matrix element, never written by the constructor)
+  // in g_CurrentTargetColor, which set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240,
+  // run by render_animated_xj and RenderXJModel) packs into the vertex diffuse; a < 0 selects the
+  // alpha pass (the same blending as here).
   private placeModel(q: Particle, obj: THREE.Object3D, materials: readonly THREE.Material[]): void {
     const axis = this.pieceAxis;
     const { fade, rgb } = particleShade(q);

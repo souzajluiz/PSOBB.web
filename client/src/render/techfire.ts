@@ -42,6 +42,8 @@ export interface TechFireHost {
   fx(): FieldParticles | null;
   /** play_directional_sound_effect at a world point. */
   sound(id: number, x: number, y: number, z: number): void;
+  /** The camera's yaw as a BAMS angle (the fire sphere's turn, g_pDefaultNPCCameraState->y_rotation). */
+  cameraYaw?(): number;
 }
 
 /** The hit of a player-side object. */
@@ -178,7 +180,7 @@ export class TechFire {
   private sphereSet(fx: FieldParticles): RafoieSpheres {
     if (!this.spheres || this.spheresFx !== fx) {
       this.spheres?.clear();
-      this.spheres = new RafoieSpheres(fx);
+      this.spheres = new RafoieSpheres(fx, () => this.host.cameraYaw?.() ?? 0);
       this.spheresFx = fx;
     }
     return this.spheres;

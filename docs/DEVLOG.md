@@ -17072,3 +17072,42 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 **Checks:** `node tests/lobbymain.test.ts` (block 6 adds the four entries: all source 0) ALL PASS with Node 24. `cd client && tsc --noEmit -p .` clean (Node 24; a temporary `client/node_modules` link to the main checkout, removed afterwards). Not run in Chrome, no Playwright.
 
 **Left:** the field arrival kind (`warpTo`) is not traced against the exe (the telepipe / teleport target path and the floor-order warp); the Meet the User path is not traced; the placement timing after the reset is ASSUMED.
+
+## 2026-10-23: Rafoie sphere yaw, list blast y and the model colour chain (the colour inputs are still not closed; the port keeps its shade)
+
+**What changed.** The Rafoie fire sphere turns with the camera yaw, and the list-form blast follows the target's y each tick as it follows x and z.
+
+- `combat/techfire.ts` `sphereTurnRad(cameraYawBams)`: the sphere's Y turn (BAMS / 0x10000 full turn). `render/rafoiesphere.ts` `RafoieSpheres` takes the yaw getter and sets `rotation.y` each placement. `render/techfire.ts` `TechFireHost.cameraYaw` supplies it; `render/combat.ts` takes `CombatOptions.cameraYaw`; `render/gameview.ts` passes the same camera yaw the HUD uses (the `radToBams` of the view's source and target).
+- `combat/techfire.ts` `TechTarget.y` (optional). `RafoieBlast.step` takes the followed target's y when it has one, so the list form's burst (and the fire sphere, the blast's child) is at the target's y that tick. `render/combat.ts` `tickFire` fills `y` with the enemy's aim height (`p.y + aimHeightOf(e)`, the same point `spawnFire` aims at). A target without a y keeps the blast's y; the fixed form does not follow.
+
+**Premise corrected.** The brief said SetColor writes the TFACTOR. The dump does not write TFACTOR here: SetColor stores its colour in `g_CurrentTargetColor` (`copy_color_to_af0370`, dump 846531). The colour's consumer is found (below), but its inputs are not the particle's own colour data.
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`):
+
+- Sphere turn: `render_bazooka_explosion` (dump 651052, the child's draw at 0x006ee380): `matrix_rotation_y(g_pDefaultNPCCameraState->y_rotation)` after the translation and the scale. The port's yaw is the same kind of angle (ASSUMED).
+- List blast: `update_rafoie` (dump 650640) calls `rafoie_aoe_tick(this, &target->weapon_position)` each tick while the target is targetable; `rafoie_aoe_tick` (dump 650685) copies the point (`param_1[0..2]`) into the blast's +0x20..+0x28 and +0x7c..+0x84 on every tick, and the 10th tick makes the blast particles and the child at `(x, y + 5 + 8, z)` with the tick's values. So the burst is at the target's y that tick. The child's position is set once at its creation; `update_bazooka_explosion` (dump 651000) does not move it, so the sphere is a fixed point (the port's behaviour).
+- Colour consumer: `SetColor` (dump 287693, non-NT `SrcDestBlend_Save(1, 4, 5)`, alpha = byte(+0x97) / 255 - 1; NT: rgb from the dword +0x94 / 255 - 1, alpha 0) stores into `g_CurrentTargetColor`. Its reader in the model path is `set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color` (dump 850240), called by `render_animated_xj` (dump 856943), `RenderXJModel_008317b6` (dump 849874 -> 849891) and the other xj draws. With g_RenderTargetFlags 0x20 (the model branch sets 0x8021): `g_XjVertexShaderBase = 0x10`, `xj_mesh_constant_vertex_color` = ARGB of the colour with `(int)ROUND(c * 255) << 24` etc. (so a byte of -1 + b / 255 gives `(b + 1) & 0xff` in the alpha byte, and rgb 0 for non-NT), and `g_XjTextureTransformFlags |= 5` when a < 0. Flag 1 skips the opaque pass (`uVar1 & 1` with flag 1 clear, dump 850338..850350), so a < 0 draws the mesh in the alpha pass only.
+- The inputs: `+0x94` / `+0x97` of the single particle are its matrix (`ParticleEffectSingleParticle_SetTransform_00508dec`, dump 287983, copies the 16 floats to +0x90..+0xcc; the NT colour reads the dword +0x94, non-NT the top byte +0x97 of the same float). The single-particle constructor (dump 292196, with `particle_effect_single_particle_Constructor_00508460`, dump 287476) never writes +0x90..+0xcc. SetTransform is called only by the owners that place a particle with a matrix (Saint Emilion's 0x15 / 0x58 particles at dump 740506..740524, the motorcycle at 526645 and 661124's helper): so a Rabarta, Rafoie or Barta model particle reads whatever the pool holds at +0x94.
+- The alpha pass also gives transparent drawing, which the port's `transparent = true` with NormalBlending already matches.
+
+**Not closed (the colour).** The exe's model colour is therefore not a function of the particle's data as the port has it: the byte it reads is an uninitialised matrix element for these particles. With a zero matrix the vertex alpha byte would be 1 (nearly invisible under SRCALPHA), so either the pool is not zero or the shader ignores the diffuse alpha for these meshes; neither is traced (the texture stage's colour arguments are not read). The port keeps `particleShade` (the entry's colour ramp times the fade and the tint), which is what the models look like today.
+
+**ASSUMED:**
+
+- The sphere's yaw is the camera yaw in the port's convention (the same quantity as `g_pDefaultNPCCameraState->y_rotation`, the HUD's `cameraYaw`), with the sign of the other exe turns (`rotation.y = bams * 2pi / 0x10000`).
+- The list blast's target y is the enemy's aim height (`aimHeightOf`, the point `spawnFire` aims at); the exe's `weapon_position` of an NPC is not traced to its value.
+- The sphere's position is the blast's y at the burst (the list blast's y that tick, now followed).
+- The model colour stays the port's shade (see above).
+
+**Checks:**
+
+- `node tests/particleorient.test.ts` ALL PASS (new: the list blast takes the target's x, y, z each tick, the y follows on the next tick, a target without y keeps the blast's y, the fixed form does not follow, the sphere turn 0 / 0x4000 / 0x10000).
+- `node tests/techfire.test.ts`, `hitfx`, `particlespawn`, `particleslope`, `telepipe`, `deathfx`, `techlightning`, `dragon`, `techniques`, `enemyfsmep2c` pass (Node 24).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) exit 0; `client/node_modules` linked from the main checkout for the run and removed before the commit.
+- Not run in Chrome, no Playwright (per the brief): the sphere's turn and the list blast's y are not seen on screen.
+
+**Left:**
+
+- The model particle's colour / alpha inputs: which bytes the pool holds at a model particle's +0x94 (the arena's contents, or a particle with SetTransform), and the texture stage's colour arguments that the diffuse goes into.
+- The `cameraYaw` source: the HUD's yaw (the view's source / target) against `g_pDefaultNPCCameraState->y_rotation` is not checked on screen.
+- The Rafoie ring's cloak shader and the advanced effects setting (as before).

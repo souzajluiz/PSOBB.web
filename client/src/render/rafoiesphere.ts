@@ -4,12 +4,12 @@
 // (render/hitmodels.ts particleModel), each sphere has its own copy, and the copy is removed when
 // the sphere's life ends.
 //
-// ASSUMED: the sphere is not turned by the camera yaw (the exe's matrix_rotation_y of
-// g_pDefaultNPCCameraState->y_rotation is not wired here), its fade is the material opacity with
-// normal blending (the exe sets no blend in this draw), and its colour is white.
+// The sphere turns with the camera yaw (matrix_rotation_y of g_pDefaultNPCCameraState->y_rotation,
+// combat/techfire.ts sphereTurnRad). ASSUMED: its fade is the material opacity with normal blending
+// (the exe sets no blend in this draw), and its colour is white.
 
 import * as THREE from 'three';
-import { SPHERE_CHUNK, type RafoieSphere } from '../combat/techfire.ts';
+import { SPHERE_CHUNK, sphereTurnRad, type RafoieSphere } from '../combat/techfire.ts';
 import type { FieldParticles } from './hitfx.ts';
 import { instanceParticleModel, type ParticleModelPiece } from './hitmodels.ts';
 
@@ -21,9 +21,12 @@ interface Shown {
 export class RafoieSpheres {
   private shown: Shown[] = [];
   private readonly fx: FieldParticles;
+  /** The camera's yaw as a BAMS angle (g_pDefaultNPCCameraState->y_rotation). */
+  private readonly yaw: () => number;
 
-  constructor(fx: FieldParticles) {
+  constructor(fx: FieldParticles, yaw: () => number = () => 0) {
     this.fx = fx;
+    this.yaw = yaw;
   }
 
   /** The sphere is shown from the next tick (its first update comes then, as the exe's entity update). */
@@ -71,6 +74,7 @@ export class RafoieSpheres {
     const sp = s.sphere;
     r.visible = sp.fade > 0;
     r.position.set(sp.x, sp.y, sp.z);
+    r.rotation.set(0, sphereTurnRad(this.yaw()), 0);
     r.scale.setScalar(Math.max(sp.scale, 0.001));
     for (const mat of piece.materials) {
       const mm = mat as THREE.MeshBasicMaterial;
