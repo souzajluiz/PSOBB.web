@@ -112,6 +112,12 @@ export const BARBA_PHASE = {
   run2: 0x14,
   wall0: 0x15,
   wall2: 0x16,
+  drop: 0x0d, // 0x004b7040 (HandleSinowberillMovementState)
+  volopt0: 0x0f, // 0x004b2cd0 (ProcessPlayerVoloptInteractionState2, side 0)
+  volopt2: 0x10, // 0x004b2cd0 (side 2)
+  beam: 0x17, // 0x004b6d08 (ProcessSinowberillActionState)
+  shot0: 0x19, // 0x004b4684 (ProcessSinowberillAction)
+  shot2: 0x1a, // 0x004b4684 (the same handler)
   arc0: 0x04, // 0x004b0ee0 (Ghidra dispatch: FUN_004b0ee0(p, 0, 2))
   arc2: 0x0a, // 0x004b0ee0 (FUN_004b0ee0(p, 2, 0))
   timed: 0x1b, // 0x004b60c4
@@ -131,6 +137,7 @@ export const BARBA_SE = {
   hit: 0x3fa, // root hit with flag 8 and a broken part's drain
   finaleCut: 0x3fb, // 0x1c phase 0 at timer 85.0
   pigShot: 0x3ed, // 0x004b4684 at 8.0
+  volopt: 0x3f8, // UpdateVoloptInteractionPoint (0x004b2cd0): one a point, at the part's row
   beamFlash: 0x3ec, // 0x17 at 10.0
 } as const;
 export const BARBA_FX = {
@@ -212,6 +219,24 @@ export function isBarbaTransition(phase: number): boolean {
   return phase === 0x28 || phase === 0x29 || BARBA_MOVES[phase] !== undefined;
 }
 
+// The phases whose event 9 steps the table once their own sequence is done (the leader's step).
+export function isSequenced(phase: number): boolean {
+  return isBarbaTransition(phase) || phase === BARBA_PHASE.drop || isVoloptPhase(phase) || phase === BARBA_PHASE.beam || isShotPhase(phase);
+}
+
+function isVoloptPhase(phase: number): boolean {
+  return phase === BARBA_PHASE.volopt0 || phase === BARBA_PHASE.volopt2;
+}
+
+function isShotPhase(phase: number): boolean {
+  return phase === BARBA_PHASE.shot0 || phase === BARBA_PHASE.shot2;
+}
+
+// The phases whose step waits on the motion chain or the part rows (the dwell guards them).
+function isMotionPhase(phase: number): boolean {
+  return isVoloptPhase(phase) || phase === BARBA_PHASE.beam || isShotPhase(phase);
+}
+
 // --- the action table (0x004b8e3c, the same switch as 0x004b8584 / 0x004b0910) ---
 
 export interface BarbaStep {
@@ -291,6 +316,34 @@ export const BARBA_TRANSITION = {
   tickWait: 0.1,
   doneWait: 0.9,
   waitDown: 0.3,
+} as const;
+
+// Phase 0x0d (0x004b7040): the fall (sub 0, 21 ticks), the drop's sub-states (0x734: 0 wait for
+// the timer 10.5, 1 the lift timer 16, 2 the speed halved at 22, 3 at 29), the rise by the
+// z easing (ez, 7 / 0.2 / 0.05). The exe's floats (exedata): 906d28 0.5, 906d1c 2.0, 906e74 7.0
+// (the fall's speed clamp), 906cec 300, 906cf0 10.5, 906cf4 40, 906cf8 16, 906cfc 22, 906d00 29,
+// 906d20 4.0, 906cd8 13.5, 906cd0 180, 906cd4 50, 906cdc -20, 906ce0 50, 906ce4 26, 906ce8 21,
+// 906ccc 500, 906cc8 0.3, 906d24 0.0, 906f64 0.2. ASSUMED: a47a9c (A) 1.0, a47a98 (B) 30.0 and
+// a47aa0 0.0 are .bss (dynamic, written at run time, no value in the image). B is a divisor
+// (it must not be 0); 30 is the ticks a second the port uses elsewhere (BARBA_PACE).
+export const BARBA_DROP = {
+  fallWait: 20, // sub 0 ends when the counter passes 20
+  vyStep: 0.2,
+  vyMin: -7,
+  wait0: 10.5,
+  wait1: 16,
+  wait2: 22,
+  wait3: 29,
+  attackLo: 21, // the attack object's timer band (ASSUMED path, not spawned)
+  attackHi: 26,
+  attackA: 1.0, // ASSUMED a47a9c
+  attackB: 30.0, // ASSUMED a47a98
+  liftZero: 0.0, // ASSUMED a47aa0
+  z0: 300,
+  zTarget: 500,
+  zMaxRise: 7,
+  zAccel: 0.2,
+  zDecel: 0.05,
 } as const;
 
 // A velocity-easing record of the exe (InitializeMovementTargetStruct_00434ac4 /
@@ -518,6 +571,12 @@ export class BarbaRayAi extends BrainBase {
   private moveCounter = 0;
   private arcSub = 0;
   private moveCount = 0;
+  // Phase 0x0d: the 0x734 sub-state of the drop and its counter (+0x734 / +0x73c).
+  private dropSub = 0;
+  private dropCount = 0;
+  // Phase 0x0f / 0x10: the sweep's sub-state (+0x734) and the volopt kind (+0x70c, 0..2).
+  private voloptSub = 0;
+  private voloptKind = 0;
   private followSpeed = 0;
   f744 = 0;
   f74c = 0;
@@ -657,6 +716,8 @@ export class BarbaRayAi extends BrainBase {
   // the slot. `side` is +0x1b2.
   slotOnEnter(phase: number): number | null {
     switch (phase) {
+      case 0:
+        return 1; // 0x004b9e54 enter (SetEnemyAnimationState): the slot 1 (idle), nothing else
       case 1:
         return 0;
       case 0x13:
@@ -684,7 +745,7 @@ export class BarbaRayAi extends BrainBase {
       case 0x12:
         return this.side === 0 ? 7 : 8; // ASSUMED: the write of 1 first, then the side (order not traced)
       case 0x0d:
-        return 4; // 0x004b7040: 1, then 4 (the 1 is not kept)
+        return 1; // 0x004b7040 enter writes 1; the frame writes 4 when the fall's 21 ticks are over
       case 3:
       case 5:
       case 6:
@@ -731,6 +792,10 @@ export class BarbaRayAi extends BrainBase {
     const s = this.slotOnEnter(phase);
     if (s !== null) this.setSlot(s);
     if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) this.enterFollow();
+    else if (phase === BARBA_PHASE.drop) this.enterDrop();
+    else if (phase === BARBA_PHASE.beam) this.enterBeam();
+    else if (isShotPhase(phase)) this.enterShot();
+    else if (phase === BARBA_PHASE.volopt0 || phase === BARBA_PHASE.volopt2) this.enterVolopt(phase === BARBA_PHASE.volopt2 ? 2 : 0);
     else if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2) this.enterSwim();
     else if (phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.enterArc();
     if (phase === 0x28 || phase === 0x29) {
@@ -761,6 +826,11 @@ export class BarbaRayAi extends BrainBase {
     // 0x0ee0 leave also takes the table's flag as the side (asm 0x004b0f26).
     if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2 || phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.flags &= ~4;
     if (phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.side = this.variant;
+    // Event 5 of 0x0d (asm: 0x6c8 = 1, the gate block cleared).
+    if (phase === BARBA_PHASE.drop) {
+      this.tFrom = 1;
+      this.flags &= ~4;
+    }
     if (isBarbaTransition(phase)) this.leaveTransition();
   }
 
@@ -1044,6 +1114,213 @@ export class BarbaRayAi extends BrainBase {
   // Event 5 of 0x004b1e98 (the leave): the anchor the body reached is the current one.
   private leaveTransition(): void {
     this.tFrom = this.tTo;
+  }
+
+  // 0x004b4684 enter (event 4, phases 0x19 and 0x1a): the gate open (0x630: bit 2 cleared, bit 8
+  // set), slot 0xe (set by slotOnEnter), the body to anchor 3 (ProcessPlayerAction4).
+  private enterShot(): void {
+    this.flags = (this.flags & ~4) | 0x100;
+    this.tFrom = 3;
+    this.teleport(3);
+  }
+
+  // Event 0 of 0x19 / 0x1a (asm 0x004b4684): the shot's sound (0x3ed) at the timer's crossing of
+  // 8.0 (ASSUMED stride 1). ASSUMED: +0xc0 (the animation clock) advances a tick.
+  private shotFrame(): void {
+    this.timer += 1;
+    if (this.timer > 8 && this.timer <= 9) this.events.push({ kind: 'se', id: BARBA_SE.pigShot });
+  }
+
+  // 0x004b6d08 enter (event 4): the gate open (0x630: bit 2 cleared, bit 8 set), the body to
+  // anchor 3 (ProcessPlayerAction4), slot 0xc (beam_a, set by slotOnEnter), the counter 730 = 0.
+  private enterBeam(): void {
+    this.flags = (this.flags & ~4) | 0x100;
+    this.tFrom = 3;
+    this.teleport(3);
+    this.moveSub = 0;
+  }
+
+  // Event 0 of 0x17 (asm 0x004b6d08): the counter (730) counts the frames; at timers 10..14 with
+  // the counter at 3 or more the counter restarts and the attack object (UpdateSinowberillAttackPos3,
+  // 0x201, at (x + 30 r, -5, z + 80)) is made. ASSUMED: the attack object is not spawned and its
+  // random draw is not taken. The beam sound (0x3ec) at the timer's crossing of 10.0 (ASSUMED stride 1).
+  private beamFrame(): void {
+    this.timer += 1; // ASSUMED: +0xc0 (the animation clock) advances a tick
+    this.moveSub += 1;
+    if (this.timer >= 10 && this.timer <= 14 && this.moveSub >= 3) {
+      this.moveSub = 0;
+      // ASSUMED: the attack object is not made (see above).
+    }
+    if (this.timer > 10 && this.timer <= 11) this.events.push({ kind: 'se', id: BARBA_SE.beamFlash });
+  }
+
+  // 0x004b2cd0 enter (event 4, side = 0 for 0x0f, 2 for 0x10): the gate block and 0x100 cleared,
+  // 0x6c8 = side and the body to that anchor (ProcessPlayerAction4), f74c = -1000, the sweep at
+  // point 0, and the volopt kind cycles 0, 1, 2 (+0x70c).
+  private enterVolopt(side: number): void {
+    this.flags &= ~0x104;
+    this.tFrom = side;
+    this.teleport(side);
+    this.f74c = -1000; // 0xc47a0000
+    this.moveSub = 0;
+    this.voloptSub = 0;
+    this.voloptKind = this.voloptKind < 2 ? this.voloptKind + 1 : 0;
+  }
+
+  // Event 0 of 0x0f / 0x10 (asm 0x004b2cd0). Sub 0 places point 0 (UpdateVoloptInteractionPoint)
+  // and goes to sub 1; sub 1 places the next point each time row i's y is below row i + 1's y
+  // (the part rows, root+0x538), and sub 2 once the index reaches 4 (0x906ee4). ASSUMED: the
+  // animation hold (0xb0 bit 4) is clear. The point's visual is not drawn (the sub-entity).
+  private voloptFrame(): void {
+    if (this.voloptSub === 0) {
+      this.updateVolopt();
+      this.voloptSub = 1;
+    } else if (this.voloptSub === 1) {
+      const i = this.moveSub;
+      if (this.rows[i]![1] < this.rows[i + 1]![1]) {
+        this.moveSub = i + 1;
+        if (this.moveSub >= 4) this.voloptSub = 2;
+        this.updateVolopt();
+      }
+    }
+  }
+
+  // UpdateVoloptInteractionPoint (asm 0x004b2cd0's helper): the point's sound at row i. The
+  // sub-entity (the drawn point, the angle from i) is ASSUMED not drawn.
+  private updateVolopt(): void {
+    this.events.push({ kind: 'se', id: BARBA_SE.volopt });
+  }
+
+  // 0x004b7040 enter (event 4): the gate block set and 0x100 cleared, the body to anchor 3
+  // (ProcessPlayerAction4 writes 0x6c8 = 3), the movement words zeroed.
+  private enterDrop(): void {
+    this.flags = (this.flags & ~0x100) | 4;
+    this.tFrom = 3;
+    this.teleport(3);
+    this.moveSub = 0;
+    this.moveCounter = 0;
+    this.dropSub = 0;
+    this.dropCount = 0;
+    this.f74c = 0;
+    this.f750 = 0;
+    this.f754 = 0;
+    this.f758 = 0;
+  }
+
+  // Event 0 of 0x0d. ASSUMED: +0xc0 (the timer) is the animation clock, one a tick (Player__Animate
+  // is not ported), and the animation hold (0xb0 bit 4) is clear, so sub 1 passes in one tick.
+  private dropFrame(): void {
+    this.timer += 1;
+    if (this.moveSub === 0) {
+      // The fall: 21 ticks, the speed drops 0.2 a tick to -7 and z follows it.
+      this.moveCounter += 1;
+      if (this.moveCounter > BARBA_DROP.fallWait) {
+        this.moveSub = 1;
+        this.setSlot(4);
+      }
+      this.f754 = Math.max(this.f754 - BARBA_DROP.vyStep, BARBA_DROP.vyMin);
+      this.z += this.f754;
+      return;
+    }
+    if (this.moveSub === 1) {
+      this.moveSub = 2;
+      return;
+    }
+    if (this.moveSub !== 2) return; // 3: done (the leader's table step)
+    this.dropTimers();
+    this.dropCounters();
+    // ASSUMED: the sounds (0x3ec / 0x3ed by check_entity_animation_elapsed_threshold) and
+    // ProcessAnimationPhase are not ported.
+    this.dropMotion();
+  }
+
+  // The 0x730 == 2 sub-states (0x734) by the timer (asm 0x004b7040, the ladder after the fall).
+  private dropTimers(): void {
+    const { attackA: A, attackB: B } = BARBA_DROP;
+    const t = this.timer;
+    switch (this.dropSub) {
+      case 0:
+        if (BARBA_DROP.wait0 <= t) {
+          // The lift's speed for the rise: ((A + B) * -vy + (300 - z)) / ((0.5 A + B) A).
+          this.f758 = ((A + B) * -this.f754 + (BARBA_DROP.z0 - this.z)) / ((0.5 * A + B) * A);
+          this.dropSub = 1;
+          this.dropCount = 0;
+        }
+        break;
+      case 1:
+        if (BARBA_DROP.wait1 <= t) {
+          const f = ((40 - this.y) * 4.0) / B;
+          this.dropSub = 2;
+          this.f74c = f;
+          this.f750 = (f * 2.0) / B;
+          this.dropCount = 0;
+        }
+        break;
+      case 2:
+        if (BARBA_DROP.wait2 <= t) {
+          this.f754 *= 0.5;
+          this.dropSub = 3;
+          this.f758 = 0;
+        }
+        break;
+      case 3:
+        if (BARBA_DROP.wait3 <= t) this.dropSub = 4;
+        break;
+      default:
+        break;
+    }
+  }
+
+  // The 0x734 counters of the attack objects (asm 0x004b7040, the two branches before the
+  // motion). The attack itself (UpdateSinowberillAttackPos3, object 0x201) is ASSUMED not
+  // spawned and its random draw is not taken.
+  private dropCounters(): void {
+    if (this.dropSub === 1) {
+      this.dropCount += 1;
+      if (this.timer >= 13.5 && this.dropCount >= 2) this.dropCount = 0; // 0x906cd8
+    } else if (this.dropSub === 2 || this.dropSub === 3) {
+      this.dropCount += 1;
+      if (this.dropCount >= 2 && this.timer >= BARBA_DROP.attackLo && this.timer <= BARBA_DROP.attackHi) this.dropCount = 0;
+    }
+  }
+
+  // The body's motion by 0x734 (asm 0x004b7040, after the ladder; fVar6 is 0.3 and fVar3 0.0 here).
+  private dropMotion(): void {
+    switch (this.dropSub) {
+      case 0: {
+        this.f754 = Math.max(this.f754 - BARBA_DROP.vyStep, BARBA_DROP.vyMin);
+        this.z += this.f754;
+        break;
+      }
+      case 1:
+        this.f754 += this.f758;
+        this.z += this.f754;
+        this.f74c = this.y; // ASSUMED: GetPlayerLocalY (the model's node height) is the body's y
+        break;
+      case 2:
+        this.z += this.f754;
+        this.lift += this.f74c;
+        this.f74c -= this.f750;
+        this.timer -= 0.3 - BARBA_DROP.liftZero; // 0x906cc8 minus a47aa0
+        break;
+      default:
+        // Sub 3 / 4: the rise by the z easing once its speed is positive (f758 > 0), else the
+        // speed falls until it reaches 0 and the easing takes over (ez: 7 / 0.2 / 0.05).
+        if (this.f758 > 0) {
+          if (this.ez.tick() === 3) this.moveSub = 3;
+          else this.z = this.f754 - this.ez.pos;
+        } else {
+          this.f754 -= BARBA_DROP.vyStep;
+          if (this.f754 <= 0) {
+            this.f758 = 1;
+            this.ez.init(BARBA_DROP.zMaxRise, Math.abs(BARBA_DROP.zTarget - this.z), BARBA_DROP.zAccel, BARBA_DROP.zDecel);
+            this.f754 = this.z;
+          } else {
+            this.z += this.f754;
+          }
+        }
+        break;
+    }
   }
 
   // Event 0 of 0x13 / 0x14 (asm 0x004b3d3a): the wait, then one follower target every
@@ -1346,6 +1623,18 @@ export class BarbaRayAi extends BrainBase {
     this.applyPhase(phase, null);
   }
 
+  // Whether the sequenced phase has reached its done state (the leader's table step, event 9):
+  // transitions at 0x730 == 1, the drop at 0x730 == 3, the volopt sweep at 0x734 == 2.
+  private phaseDone(): boolean {
+    if (this.phase === BARBA_PHASE.drop) return this.moveSub === 3;
+    if (isVoloptPhase(this.phase)) return this.voloptSub === 2;
+    // The beam (0x17): event 9 steps once the beam_a motion has chained into beamwait (slot 15).
+    if (this.phase === BARBA_PHASE.beam) return this.slot === 15;
+    // The shot (0x19 / 0x1a): event 9 steps at slot 1 (the beam_c motion chained into idle).
+    if (isShotPhase(this.phase)) return this.slot === 1;
+    return this.moveSub === 1;
+  }
+
   // The state's own frame (event 0). Decoded: 0x1c, 0x1d, 0x1b, the spawner, and the
   // movement of 0x13 / 0x14, 0x15 / 0x16, 0x4 / 0xa (the arc) and the corner transitions.
   private stateFrame(targets: readonly AiTarget[]): void {
@@ -1356,6 +1645,20 @@ export class BarbaRayAi extends BrainBase {
     switch (this.phase) {
       case BARBA_PHASE.finale:
         this.finaleFrame();
+        return;
+      case BARBA_PHASE.drop:
+        this.dropFrame();
+        return;
+      case BARBA_PHASE.volopt0:
+      case BARBA_PHASE.volopt2:
+        this.voloptFrame();
+        return;
+      case BARBA_PHASE.beam:
+        this.beamFrame();
+        return;
+      case BARBA_PHASE.shot0:
+      case BARBA_PHASE.shot2:
+        this.shotFrame();
         return;
       case BARBA_PHASE.timed:
         this.timedFrame();
@@ -1397,11 +1700,12 @@ export class BarbaRayAi extends BrainBase {
     if (this.leader() && !this.dead) {
       if (this.phase === BARBA_PHASE.finale) {
         this.doneCheck();
-      } else if (isBarbaTransition(this.phase)) {
+      } else if (isSequenced(this.phase)) {
         // Event 9 of 0x004b1e98 (0x730 == 1, the transition is done): the next table step at
         // once, not paced (ASSUMED: the gate's 0x1b is not sent during a transition). With the
         // gate closed the step waits BARBA_DWELL ticks, as the other undecoded waits do.
-        if (this.moveSub === 1) {
+        // Event 9 of 0x0d is the same step at 0x730 == 3 (the drop is done).
+        if (this.phaseDone()) {
           if (this.gateOpen) {
             this.tableLoop();
           } else {
@@ -1410,6 +1714,15 @@ export class BarbaRayAi extends BrainBase {
               this.dwell = 0;
               this.tableLoop();
             }
+          }
+        } else if (isMotionPhase(this.phase)) {
+          // The sweep waits for the part rows to rise (the renderer's positions), the beam for
+          // its motion chain (slot 15). ASSUMED: one that does not advance (flat rows, no model,
+          // no motion end) falls back to the dwell, so the brain never hangs.
+          this.dwell++;
+          if (this.dwell >= BARBA_DWELL) {
+            this.dwell = 0;
+            this.tableLoop();
           }
         }
       } else if (this.gateOpen) {
@@ -1442,7 +1755,7 @@ export class BarbaRayAi extends BrainBase {
       this.phase === BARBA_PHASE.timed ||
       this.phase === BARBA_PHASE.finale ||
       this.phase === BARBA_PHASE.dead ||
-      isBarbaTransition(this.phase) ||
+      isSequenced(this.phase) ||
       (this.phase >= BARBA_PHASE.spawn0 && this.phase <= BARBA_PHASE.spawn2)
     );
   }

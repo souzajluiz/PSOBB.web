@@ -804,6 +804,221 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   }
   check(sentTick > 150 && sentTick < 260, `gate open: the step follows the done walk, not the pace (sent at ${sentTick})`);
 }
+// --- phase 0x0d (0x004b7040, the fall, the drop's sub-states and the rise) ---------------
+{
+  // Enter (event 4): the body to anchor 3 (one warp), the gate block set, 0x100 cleared,
+  // the slot 1 (the exe writes 1 first).
+  const b = brain({ leader: false });
+  const w = b.warps;
+  b.applyPhase(BARBA_PHASE.drop, null);
+  eq(b.warps, w + 1, 'drop enter: one warp');
+  eq(b.tFrom, 3, 'drop enter: 0x6c8 = 3');
+  eq(b.x, BARBA_ANCHORS[3]![0], 'drop enter: x of anchor 3');
+  eq(b.z, BARBA_ANCHORS[3]![2], 'drop enter: z of anchor 3');
+  check((b.flags & 4) !== 0 && (b.flags & 0x100) === 0, 'drop enter: flags 4 set, 0x100 clear');
+  eq(b.slot, 1, 'drop enter: slot 1');
+  // The fall: 20 ticks keep sub 0; the 21st moves to sub 1 and writes slot 4.
+  for (let k = 0; k < 20; k++) b.tick([]);
+  eq(b.moveSub, 0, 'drop fall: sub 0 for 20 ticks');
+  const zBefore = b.z;
+  b.tick([]);
+  eq(b.moveSub, 1, 'drop fall: sub 1 at tick 21');
+  eq(b.slot, 4, 'drop fall: slot 4 after the fall');
+  // The speed: -0.2 a tick, so 21 ticks reach -4.2 and z dropped by sum(-0.2 k) = -(0.2 * 21 * 22 / 2).
+  near(b.f754, -4.2, 'drop fall: speed -0.2 a tick');
+  near(b.z - zBefore, -0.2 * 21, 'drop fall: z moves with the last speed only (tick 21)');
+  // The leader's table step waits for sub 3 (the done state): a follower never steps.
+  let done = -1;
+  for (let k = 0; k < 3000 && b.moveSub !== 3; k++) {
+    b.tick([]);
+    if (b.moveSub === 3) done = k;
+  }
+  check(b.moveSub === 3, `drop: reaches sub 3 (done) within 3000 ticks (got ${b.moveSub})`);
+  check(Number.isFinite(b.x) && Number.isFinite(b.y) && Number.isFinite(b.z) && Number.isFinite(b.lift), 'drop: the body stays finite');
+  check(sends(b.drain()).length === 0, 'drop: a follower sends nothing');
+  void done;
+}
+{
+  // The speed clamp: the fall never goes below -7 (the 906e74 clamp).
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.drop, null);
+  for (let k = 0; k < 21; k++) b.tick([]);
+  for (let k = 0; k < 40; k++) b.tick([]);
+  check(b.f754 >= -7 - 1e-9, `drop: speed clamped at -7 (got ${b.f754})`);
+}
+{
+  // Leader with the gate open: the table steps once the drop is done (event 9), not on the pace.
+  const b = brain({ leader: true });
+  b.bodyHp = 0; // gateOpen
+  b.applyPhase(BARBA_PHASE.drop, null);
+  let sentTick = -1;
+  for (let k = 0; k < 3000 && sentTick < 0; k++) {
+    b.tick([]);
+    if (sends(b.drain()).length > 0) sentTick = k;
+  }
+  check(sentTick > 20, `drop: the leader's step comes after the fall (sent at ${sentTick})`);
+  check(b.moveSub === 3 || b.phase !== BARBA_PHASE.drop, 'drop: the step follows sub 3');
+}
+{
+  // Leave (event 5): 0x6c8 = 1 and the gate block cleared; the next phase applies on top.
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.drop, null);
+  b.applyPhase(1, null);
+  eq(b.tFrom, 1, 'drop leave: 0x6c8 = 1');
+  check((b.flags & 4) === 0, 'drop leave: gate block cleared');
+}
+// --- phases 0x0f / 0x10 (0x004b2cd0, the volopt sweep over the part rows) ----------------
+{
+  // Enter (side 0): the body to anchor 0 (one warp), 0x6c8 = 0, the gate block and 0x100 cleared,
+  // the slot 3, and the sweep at point 0. The first tick places point 0 (one 0x3f8 sound).
+  const b = brain({ leader: false });
+  for (let i = 0; i < 10; i++) b.rows[i] = [0, i * 10, 0];
+  b.drain();
+  const w = b.warps;
+  b.applyPhase(BARBA_PHASE.volopt0, null);
+  eq(b.warps, w + 1, 'volopt 0x0f: one warp');
+  eq(b.tFrom, 0, 'volopt 0x0f: 0x6c8 = side 0');
+  eq(b.x, BARBA_ANCHORS[0]![0], 'volopt 0x0f: x of anchor 0');
+  eq(b.slot, 3, 'volopt 0x0f: slot 3');
+  check((b.flags & 0x104) === 0, 'volopt 0x0f: gate block and 0x100 clear');
+  eq(b.f74c, -1000, 'volopt 0x0f: 0x74c = -1000');
+  b.tick([]);
+  eq(b.voloptSub, 1, 'volopt 0x0f: sub 1 after the first point');
+  const ses0 = b.drain().filter((e) => e.kind === 'se' && e.id === 0x3f8).length;
+  eq(ses0, 1, 'volopt 0x0f: point 0 plays 0x3f8');
+  // Each tick row i is below row i + 1 (y rises along the rows): the sweep reaches index 4 in four
+  // steps, then sub 2.
+  let n = 0;
+  while (b.voloptSub !== 2 && n < 20) {
+    b.tick([]);
+    n++;
+  }
+  eq(b.moveSub, 4, 'volopt 0x0f: the index reaches 4');
+  eq(b.voloptSub, 2, 'volopt 0x0f: sub 2 at index 4');
+  eq(n, 4, 'volopt 0x0f: four steps (one a tick)');
+  const ses = b.drain().filter((e) => e.kind === 'se' && e.id === 0x3f8).length;
+  eq(ses, 4, 'volopt 0x0f: the four further points play 0x3f8');
+}
+{
+  // Side 2 (0x10): the anchor 2 and 0x6c8 = 2.
+  const b = brain({ leader: false });
+  b.applyPhase(BARBA_PHASE.volopt2, null);
+  eq(b.tFrom, 2, 'volopt 0x10: 0x6c8 = side 2');
+  eq(b.x, BARBA_ANCHORS[2]![0], 'volopt 0x10: x of anchor 2');
+}
+{
+  // A flat spine (every row at the same y) never advances past point 0.
+  const b = brain({ leader: false });
+  for (let i = 0; i < 10; i++) b.rows[i] = [0, 5, 0];
+  b.applyPhase(BARBA_PHASE.volopt0, null);
+  for (let k = 0; k < 100; k++) b.tick([]);
+  eq(b.moveSub, 0, 'volopt: a flat spine stays at point 0');
+  eq(b.voloptSub, 1, 'volopt: a flat spine stays in sub 1');
+}
+{
+  // The kind (+0x70c) cycles 1, 2, 0 over the enters.
+  const b = brain({ leader: false });
+  const kinds: number[] = [];
+  for (let k = 0; k < 3; k++) {
+    b.applyPhase(BARBA_PHASE.volopt0, null);
+    kinds.push(b.voloptKind);
+  }
+  eq(kinds.join(','), '1,2,0', 'volopt: the kind cycles 1, 2, 0');
+}
+{
+  // The leader (gate open) steps the table once the sweep is done (event 9).
+  const b = brain({ leader: true });
+  for (let i = 0; i < 10; i++) b.rows[i] = [0, i * 10, 0];
+  b.bodyHp = 0;
+  b.applyPhase(BARBA_PHASE.volopt0, null);
+  let sentTick = -1;
+  for (let k = 0; k < 100 && sentTick < 0; k++) {
+    b.tick([]);
+    if (sends(b.drain()).length > 0) sentTick = k;
+  }
+  check(sentTick >= 4 && sentTick <= 6, `volopt: the leader steps when the sweep is done (sent at ${sentTick})`);
+}
+// --- phase 0x17 (0x004b6d08, the beam_a motion chained into beamwait) --------------------
+{
+  // Enter: the gate open (0x100 set, 4 clear), the body to anchor 3 (one warp), slot 0xc.
+  const b = brain({ leader: false });
+  const w = b.warps;
+  b.applyPhase(BARBA_PHASE.beam, null);
+  eq(b.warps, w + 1, 'beam enter: one warp');
+  eq(b.tFrom, 3, 'beam enter: 0x6c8 = 3');
+  eq(b.slot, 12, 'beam enter: slot 0xc (beam_a)');
+  check((b.flags & 4) === 0 && (b.flags & 0x100) !== 0, 'beam enter: gate open (0x100 set, 4 clear)');
+  // The beam sound at timer 11 (the crossing of 10.0), once.
+  b.drain();
+  let se = 0;
+  for (let k = 0; k < 12; k++) {
+    b.tick([]);
+    se += b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ec).length;
+  }
+  eq(se, 1, 'beam: the 0x3ec sound once at the timer 10 crossing');
+  // The motion's end chains beam_a (12) into beamwait (15): event 9 is then the table step.
+  b.tick([], true);
+  eq(b.slot, 15, 'beam: beam_a chains into beamwait (slot 15)');
+}
+{
+  // The leader steps the table once beamwait is reached (the gate open).
+  const b = brain({ leader: true });
+  b.bodyHp = 0;
+  b.applyPhase(BARBA_PHASE.beam, null);
+  let sentTick = -1;
+  for (let k = 0; k < 200 && sentTick < 0; k++) {
+    b.tick([], k === 30);
+    if (sends(b.drain()).length > 0) sentTick = k;
+  }
+  check(sentTick === 30 || sentTick === 31, `beam: the leader steps at beamwait (sent at ${sentTick}; the chain is applied after the leader's step, so 30 or 31)`);
+}
+// --- phases 0x19 / 0x1a (0x004b4684, the shot: beam_c chained into idle) -----------------------
+for (const phase of [0x19, 0x1a]) {
+  // Enter: the gate open, the body to anchor 3 (one warp), slot 0xe.
+  const b = brain({ leader: false });
+  const w = b.warps;
+  b.applyPhase(phase, null);
+  eq(b.warps, w + 1, `shot ${phase.toString(16)}: one warp`);
+  eq(b.tFrom, 3, `shot ${phase.toString(16)}: 0x6c8 = 3`);
+  eq(b.slot, 14, `shot ${phase.toString(16)}: slot 0xe (beam_c)`);
+  check((b.flags & 4) === 0 && (b.flags & 0x100) !== 0, `shot ${phase.toString(16)}: gate open`);
+  b.drain();
+  let se = 0;
+  for (let k = 0; k < 10; k++) {
+    b.tick([]);
+    se += b.drain().filter((e) => e.kind === 'se' && e.id === 0x3ed).length;
+  }
+  eq(se, 1, `shot ${phase.toString(16)}: the 0x3ed sound once at the timer's 8.0 crossing`);
+  b.tick([], true);
+  eq(b.slot, 1, `shot ${phase.toString(16)}: beam_c chains into idle (slot 1)`);
+}
+{
+  // The leader steps at idle (slot 1), the gate open.
+  const b = brain({ leader: true });
+  b.bodyHp = 0;
+  b.applyPhase(0x19, null);
+  let sentTick = -1;
+  for (let k = 0; k < 200 && sentTick < 0; k++) {
+    b.tick([], k === 30);
+    if (sends(b.drain()).length > 0) sentTick = k;
+  }
+  check(sentTick === 30 || sentTick === 31, `shot: the leader steps at idle (sent at ${sentTick})`);
+}
+// --- dispatch 0 (0x004b9e54, SetEnemyAnimationState): the idle hold ------------------------------
+{
+  // Enter writes slot 1 and nothing else: the body stays where it is, no state change on a frame.
+  const b = brain({ leader: false });
+  const x0 = b.x;
+  const z0 = b.z;
+  const w = b.warps;
+  b.applyPhase(0, null);
+  eq(b.slot, 1, 'dispatch 0: enter writes slot 1');
+  eq(b.warps, w, 'dispatch 0: no warp');
+  for (let k = 0; k < 50; k++) b.tick([]);
+  eq(b.phase, 0, 'dispatch 0: the frame does not leave the phase by itself (the leader steps it)');
+  eq(b.x, x0, 'dispatch 0: x unchanged');
+  eq(b.z, z0, 'dispatch 0: z unchanged');
+}
 void BARBA_PHASE;
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

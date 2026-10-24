@@ -1,5 +1,33 @@
 # Devlog
 
+## 2026-10-24: Barba Ray: the phases 0x0d, 0x0f/0x10, 0x17, 0x19/0x1a and dispatch 0
+
+**What changed:** `combat/barbaray.ts` now ports five more body phases and the dispatch 0 idle, each with a test in `tests/barbaray.test.ts`. The leader's table step (event 9) runs for them the way it does for the corner transitions: once the phase's own sequence is done, not on the 30-tick pace. Ported:
+
+- **0x0d** (`HandleSinowberillMovementState_004b7040`): the enter writes slot 1 and teleports to anchor 3 (`0x6c8 = 3`, `ProcessPlayerAction4`), the gate block set and 0x100 cleared. The frame runs the fall (sub 0: 21 ticks, the speed drops 0.2 a tick to -7 and z follows it; the slot becomes 4 after 20 ticks), then the drop's 0x734 sub-states by the timer (10.5 / 16 / 22 / 29), then the rise by the z easing (7 / 0.2 / 0.05). Done is 0x730 == 3. The leave sets `0x6c8 = 1` and clears the gate block. The enter's slot is 1 (the old port wrote 4; the exe writes 1 and the frame writes 4).
+- **0x0f / 0x10** (`ProcessPlayerVoloptInteractionState2_004b2cd0`): the enter teleports to the side (0 for 0x0f, 2 for 0x10), `0x6c8 = side`, the volopt kind cycles 1, 2, 0 (0x70c). The sweep places point 0, then point i+1 each time the part row i's y is below row i+1's y (the rows are `root+0x538`), and stops at index 4 (0x906ee4 = 4.0). Each point plays 0x3f8 (`UpdateVoloptInteractionPoint`).
+- **0x17** (`ProcessSinowberillActionState_004B6D08`): the enter sets the gate open (0x630 bit 2 clear, bit 8 set), teleports to anchor 3, slot 0xc (beam_a). The frame counts 730 and restarts it at timers 10..14 with 730 >= 3 (the attack object, not spawned). 0x3ec plays at the timer's crossing of 10.0. Done is slot 15 (beamwait), which beam_a chains into (`BARBA_SLOTS[12]`, mode 2, next 15). Event 9 is gated on `b8 == 0xf` in the exe.
+- **0x19 / 0x1a** (`ProcessSinowberillAction_004b4684`, short: the 0x004b48f0 function below it is another handler): the enter sets the gate open, teleports to anchor 3, slot 0xe (beam_c). The frame plays 0x3ed at the crossing of 8.0. Event 9 and the ack are gated on `b8 == 1`, which beam_c chains into (`BARBA_SLOTS[14]`, next 1).
+- **dispatch 0** (`SetEnemyAnimationState_004b9e54`): the enter writes slot 1 and nothing else; the frame only runs `Player__Animate`. The brain holds in it until the leader steps it.
+
+**Not ported (read, with the blocker):**
+- **0x11 / 0x12** (`ProcessPlayerAction4_004b30fc`): a jump (slots 7 / 8 by side, 0x74c = -1 / +1) on an animation-time chain of seven marks (906e8c..906ea8), a landing that sets 0x200, plays 0x3ee and makes a minion, and camera shake. Its event 2 is the local player's keyboard (the 0xa9 sends on keys 0xc / 0xe) and its motion uses the .bss constants a47a80..a47a8c. Blockers: the input, the .bss values, the particles and the minion.
+- **0x18** (`ProcessSinowberillPlayerState_004b6300`): an attack on a chosen player (`FindAndProcessSinowberillTarget_00521324`, the player list `g_EntityArray`), a map ray cast (`cast_ray_at_map_collision_geometry`), the aura and attack sub-entities. The enter is slot 0xf, gate open, anchor 3; the sub-states are 730 0 (20 ticks, then slot 0xd and the target), 1 (until the attack thresholds), 2 (the ray cast and the attack effects). Blocker: the player targets and the attack effects.
+- **dispatch 1** (`HandleSinowberillSpecialAttackState_004b8034`, the phase the brain starts in): the intro. Its frame waits on `unknown_photon_blast_related_()`, sets the NPC camera (`SetDefaultNpcCamera(5)`), runs particle and sound cues at the timers 60 / 83 / 105 / 85 / 98, and its table step needs `GetGlobalGameState()+2 & 1` (a global flag). Its enter writes slot 0, the lift 0 and 734 = 0. The port keeps the dwell fallback for it (ASSUMED).
+- **dispatch 2** (`HandleSinowberillInputState_004b7860`): the local player's keyboard (`g_KeyboardSharedState`, bits 8 / 10 / 9 / e / c / d) sends the 0xa9 codes, and key 0xd on side 0 sets z = -210 (0xc3520000) with the send 6. Blocker: input is not in the brain.
+
+**ASSUMED (each is marked in the code):**
+- The .bss constants of 0x0d: a47a9c = 1.0, a47a98 = 30.0 (a divisor, must not be 0), a47aa0 = 0.0. The exe does not hold them (dynamic, `DAT_00a47a98` and friends in the dump), so the rise's speed and the lift timer are only as good as those picks.
+- +0xc0 (the timer) is the animation clock, one a tick in the port (`Player__Animate` is not ported). The sound's `check_entity_animation_elapsed_threshold` uses a stride of 1 (the crossing of 10.0 / 8.0).
+- The animation hold (0xb0 bit 4) is clear, so the sub 1 waits pass in a tick. The volopt's done (event 9) assumes the 0xb0 bit 0x10 is set at the sweep's end.
+- The acks (event 2, 0x2a9 / 0x3aa sends) are not sent, as for the transitions. The attack objects (`UpdateSinowberillAttackPos3`, object 0x201) are not spawned, so their random draws are not taken either, and the rng sequence after them differs from the exe.
+- GetPlayerLocalY (the node height of the model) is the body's y.
+- The sweep and the beam and shot waits fall back to `BARBA_DWELL` when the rows or the motion chain never move (flat rows, no model), so the brain never hangs.
+
+**Renderer:** unchanged. The points, the attack objects and the sounds are events the renderer already knows (0x3ec, 0x3ed, 0x3f8).
+
+**Checks:** `node tests/barbaray.test.ts` ALL PASS (new: the 0x0d fall, the speed clamp, the leader's step after the drop; the 0x0f / 0x10 side teleports, the sweep and the four further points, the flat-spine dwell, the kind cycle, the leader step; the 0x17 beam sound once, the chain into slot 15, the leader step; the 0x19 / 0x1a sound, the chain into slot 1; dispatch 0 holds). `NEWSERV=/Users/junior/Downloads/psobb-master/web/vendor/newserv node tests/combat.test.ts` 5852 checks, 0 failures. `client/node_modules/.bin/tsc --noEmit -p client` exit 0. Not run in Chrome.
+
 ## 2026-10-24: Battle traps: the remote 6x83 map gate, the blast's room and invincibility checks, the Ultimate branch
 
 **What changed:** `quest/battletraps.ts` and `quest/battlerun.ts` port three of the open trap items. (1) A remote 6x83 is placed only when the receiving client's map permits the 0x83 row (`PlaceContext.map`, the same `trapPlacePermitted` test as the local dispatch). (2) The blast (update_trap state 4) skips a target that is dead or has `maybe_invuln`, applies the room test, refuses a player's hit at +0x32c == 2 (the announce still runs), and uses the trap's own blast radius for the chain. (3) The Ultimate branch of trap_constructor: arm 0x3c, blast 80.0, and the battle's owner-targeting rule cleared by the trap that ran it. The trigger's owner rule was also wrong in the port (see below).

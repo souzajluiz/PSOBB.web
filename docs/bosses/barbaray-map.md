@@ -677,3 +677,44 @@ Constants are the exe's (exedata): see DEVLOG 2026-10-24. Open: the volopt holde
 the animation-speed ramp (+0xc8 shared), the arrival ack (event 2), and the phases listed in the
 DEVLOG entry. CONFLICT (not resolved): the arc's enter teleports to `side` (asm), but the dispatch
 passes (0, 2) and (2, 0); for phase 0xa the from anchor is 2.
+
+## Pass 8: the body phases (0x0d, 0x0f/0x10, 0x17, 0x19/0x1a, dispatch 0)
+
+Ported in `combat/barbaray.ts` (2026-10-24, DEVLOG). Each has a test in `tests/barbaray.test.ts`.
+This supersedes the "still open" list of pass 7 for these phases.
+
+| Phase | Handler (Ghidra name) | Status | Decisive fact (address) |
+| --- | --- | --- | --- |
+| 0x0d | `HandleSinowberillMovementState_004b7040` | ported | enter: slot 1, `0x6c8 = 3`, teleport 3; event 9 at 0x730 == 3; event 5: `0x6c8 = 1`, gate block clear |
+| 0x0f | `ProcessPlayerVoloptInteractionState2_004b2cd0` (side 0) | ported | enter: `0x6c8 = param`, slot 3; sweep: row i y < row i+1 y, index 4 = `0x906ee4` |
+| 0x10 | same (side 2) | ported | as 0x0f with side 2 |
+| 0x11 / 0x12 | `ProcessPlayerAction4_004b30fc` | open | jump on the animation chain (906e8c..906ea8); event 2 is the keyboard (keys 0xc / 0xe); .bss a47a80..8c |
+| 0x17 | `ProcessSinowberillActionState_004B6D08` | ported | enter: slot 0xc, gate open, anchor 3; event 9 at `b8 == 0xf`; 0x3ec at timer 10.0 |
+| 0x18 | `ProcessSinowberillPlayerState_004b6300` | open | targets a player (`FindAndProcessSinowberillTarget_00521324`), map ray cast, attack sub-entities |
+| 0x19 / 0x1a | `ProcessSinowberillAction_004b4684` | ported | enter: slot 0xe, gate open; event 9 at `b8 == 1`; 0x3ed at timer 8.0 |
+| dispatch 0 | `SetEnemyAnimationState_004b9e54` | ported | enter writes `b8 = 1`; the frame runs `Player__Animate` only |
+| dispatch 1 | `HandleSinowberillSpecialAttackState_004b8034` | open | the intro: photon-blast check, NPC camera, cues at 60 / 83 / 105 / 85 / 98; table step on `GetGlobalGameState()+2 & 1` |
+| dispatch 2 | `HandleSinowberillInputState_004b7860` | open | the local keyboard (`g_KeyboardSharedState`); key 0xd on side 0 sets z = -210 |
+
+**The sequence of a ported phase.** Event 0 is the phase's frame; the leader's event 9 is the table
+step once the phase reports done. For the drop (0x0d) done is 0x730 == 3; for the volopt (0x0f / 0x10)
+it is the sweep's index 4 (0x734 == 2); for the beam (0x17) it is slot 15 (beamwait), reached through
+the beam_a chain (`BARBA_SLOTS[12]`, mode 2, next 15); for the shot (0x19 / 0x1a) it is slot 1,
+reached through the beam_c chain (`BARBA_SLOTS[14]`, next 1). The volopt, beam and shot waits fall back
+to `BARBA_DWELL` when they never finish (ASSUMED: flat rows, no model, no motion end), so the brain
+never hangs.
+
+**The .bss constants.** 0x0d reads `DAT_00a47a9c`, `DAT_00a47a98` and `DAT_00a47aa0`, which are
+dynamic (written at run time, no value in the image). The port uses 1.0, 30.0 and 0.0 (ASSUMED: a98 is
+a divisor, so it cannot be 0). The 0x11 / 0x12 jump reads `DAT_00a47a80` .. `DAT_00a47a8c` (the same
+kind, not ported).
+
+**ASSUMED (all marked in the code):** +0xc0 is the animation clock (one a tick); the animation hold
+(0xb0 bit 4) is clear; the volopt's done assumes 0xb0 bit 0x10 is set; the acks (event 2, 0x2a9 / 0x3aa)
+are not sent; the attack objects (`UpdateSinowberillAttackPos3`, 0x201) are not spawned, so their random
+draws are not taken; the per-frame sounds use a stride of 1 at the threshold crossing;
+`GetPlayerLocalY` is the body's y.
+
+**Open for the next pass:** 0x11 / 0x12 (the input, the .bss values, particles, the minion), 0x18 (the
+player targets and the attack effects), dispatch 1 (the global game-state flag and the camera),
+dispatch 2 (the input). The attack object (0x201) is the largest unported effect; the port draws none.
