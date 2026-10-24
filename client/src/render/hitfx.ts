@@ -14,14 +14,14 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelOpaquePassSkipped, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
 import { ICE_SHATTER_PIECES, velocityAngles } from '../combat/hitmodels.ts';
 import { BloodDecals } from './blooddecals.ts';
 import { FragmentEffects } from './fragments.ts';
-import { HitModels, instanceParticleModel, type IceHost, type ParticleModel, type ParticleModelPiece } from './hitmodels.ts';
+import { HitModels, instanceParticleModel, opaqueStripMaterials, type IceHost, type ParticleModel, type ParticleModelPiece } from './hitmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
 import { advancedEffectsOn } from './advancedeffects.ts';
 
@@ -445,7 +445,7 @@ export class FieldParticles {
       }
       piece.root.visible = true;
       piece.animator?.pose(Math.min(q.anim, last));
-      this.placeModel(q, piece.root, piece.materials);
+      this.placeModel(q, piece.root, piece.materials, true);
     }
   }
 
@@ -456,7 +456,7 @@ export class FieldParticles {
   // in g_CurrentTargetColor, which set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color (dump 850240,
   // run by render_animated_xj and RenderXJModel) packs into the vertex diffuse; a < 0 selects the
   // alpha pass (the same blending as here).
-  private placeModel(q: Particle, obj: THREE.Object3D, materials: readonly THREE.Material[]): void {
+  private placeModel(q: Particle, obj: THREE.Object3D, materials: readonly THREE.Material[], exeAlpha = false): void {
     const axis = this.pieceAxis;
     const { fade, rgb } = particleShade(q);
     obj.visible = fade > 0;
@@ -474,12 +474,17 @@ export class FieldParticles {
     const nt = particleIsNt(this.slots.get(q.e.entry.gbix));
     const blend = modelParticleBlend(nt);
     const blending = blend.dst === D3DBLEND.ONE ? THREE.AdditiveBlending : THREE.NormalBlending;
+    // The exe's alpha test (modelOpaquePassSkipped, dump 849892): a technique model's copy with alpha
+    // below 0 draws its alpha strips only, so its opaque strips are hidden. Other models share their
+    // materials between particles, so they keep the old shade.
+    const skipOpaque = exeAlpha && modelOpaquePassSkipped(nt, fade);
     for (const mat of materials) {
       const mm = mat as THREE.MeshBasicMaterial;
       mm.opacity = fade;
       mm.transparent = true;
       mm.blending = blending;
       mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
+      if (exeAlpha) mm.visible = !(skipOpaque && opaqueStripMaterials.has(mm));
     }
   }
 

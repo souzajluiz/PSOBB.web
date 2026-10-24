@@ -134,7 +134,7 @@ import {
 import { bulletMissed, bulletSpeed, EGG_PARTICLE, firesGunBullet, MUZZLE_PARTICLE, movedTowards, pelletAngleBams, pelletCount, pelletTargetIndex, planGunShot, shotVisualOf, ShotEffect, type GunShot } from '../combat/gunbullet.ts';
 import { boxTargetable, childBoxTable, enemyBoxTable, slotSetType, slotVariant, VOLOPT_SET_TYPE } from '../formats/enemyboxes.ts';
 import type { CollisionBoxRow } from '../formats/collisionboxes.gen.ts';
-import { enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, WEAPON_HEIGHT, type Candidate, type TechTarget } from '../combat/techfire.ts';
+import { castOriginY, enemyAimHeight, FIRE_SE, FireShot, isFireTech, makeFireObject, pickTechTargets, rowsAimHeight, rowsRadius, type Candidate, type TechTarget } from '../combat/techfire.ts';
 import { gunBulletStart, weaponPositionY, type WeaponOriginProvider } from '../combat/weaponorigin.ts';
 import { antiCures, EntityBuffs, GROUP, NO_CLIENT, nearbyAtomizerList, remoteTechLevel, reviveRestore, statusIcon, supportPower, type BuffGroup } from '../combat/buffs.ts';
 import { STATUS_ICON_BLAST_FIRST } from '../classic/hud.ts';
@@ -7474,7 +7474,7 @@ export class CombatView {
       tech,
       level,
       x: rafoie && aim ? aim.x : from.x,
-      y: rafoie && aim ? aim.y : from.y + WEAPON_HEIGHT,
+      y: rafoie && aim ? aim.y : castOriginY(tech, from.y),
       z: rafoie && aim ? aim.z : from.z,
       heading: aim && !rafoie ? Math.atan2(aim.x - from.x, aim.z - from.z) : heading,
       aim: rafoie ? null : aim,

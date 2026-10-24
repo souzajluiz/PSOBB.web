@@ -99,6 +99,16 @@ const KIND_OF: Record<number, FireKind> = {
   [TECH.rabarta]: 'rabarta',
 };
 
+// The height of a technique object's start over the caster's feet. Barta (an undirected or a
+// directed one) is constructed at the caster's own position, `&caster->x` (unknown_cast_tech
+// 0x006e4ax, dump 641918 and 641930: AntiTechEntity_Constructor_006dd7e4 / CreateAntiTechEntity
+// _006dddac get `&caster->x`), so its start is the feet (+5 when undirected, BARTA_START_LIFT).
+// The other families are made at the cast point (`local_28`, unknown_get_tech_cast_location),
+// which the port keeps at WEAPON_HEIGHT above the feet (ASSUMED, see WEAPON_HEIGHT).
+export function castOriginY(tech: number, feetY: number): number {
+  return tech === TECH.barta ? feetY : feetY + WEAPON_HEIGHT;
+}
+
 export function isFireTech(tech: number): boolean {
   return KIND_OF[tech] !== undefined;
 }

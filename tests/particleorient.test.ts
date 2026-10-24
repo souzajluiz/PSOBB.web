@@ -16,7 +16,7 @@
 // destroys (dump line 288330) and the single particle update never submits (dump 291923).
 // Run: node tests/particleorient.test.ts
 
-import { NT_FLAGS, ParticleSystem, NO_ORIENT, modelParticleBlend, orientOfDirection, parseParticleEntry, particleIsNt, turnStep, type Orient } from '../client/src/classic/particles.ts';
+import { NT_FLAGS, ParticleSystem, NO_ORIENT, modelOpaquePassSkipped, modelParticleBlend, orientOfDirection, parseParticleEntry, particleIsNt, turnStep, type Orient } from '../client/src/classic/particles.ts';
 import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, RafoieBlast, RafoieSphere, emitterFx, objectEmitterOrient, rafoieBlastEmitters, sphereTurnRad, startEmitters, type FireKind, type FireObject, type FxEmitter, type TechTarget } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
 import { advancedEffectsOn, setAdvancedEffects } from '../client/src/render/advancedeffects.ts';
@@ -330,6 +330,12 @@ check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie
   near(sphereTurnRad(0x4000), Math.PI / 2, 'sphere turn: 0x4000 is a quarter turn');
   near(sphereTurnRad(0), 0, 'sphere turn: 0 is no turn');
   near(sphereTurnRad(0x10000), Math.PI * 2, 'sphere turn: 0x10000 is a full turn');
+  // The model particle's alpha test (SetColor_00508958 + dump 850240): a non-NT particle's alpha is
+  // byte / 255 - 1, so the opaque pass is skipped below full alpha; an NT particle's alpha is 0.
+  check('model alpha: a non-NT particle at full fade keeps the opaque pass', modelOpaquePassSkipped(false, 1) === false);
+  check('model alpha: a non-NT particle at half fade skips the opaque pass', modelOpaquePassSkipped(false, 0.5) === true);
+  check('model alpha: an NT particle never skips it (its alpha is 0, not below 0)', modelOpaquePassSkipped(true, 0.2) === false);
+  check('model alpha: a fade of 0 skips it too', modelOpaquePassSkipped(false, 0) === true);
 }
 
 if (failures) {
