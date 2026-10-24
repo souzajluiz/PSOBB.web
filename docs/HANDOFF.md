@@ -174,8 +174,11 @@ worktrees are left.
    De Rol Le (2026-10-21 pass: the segment plates take the hit flash, the beam has its particles 0x126 / 0x177 /
    0x176): still UNCLEAR are the 0x176 point (the port puts it at the beam's end), when the exe makes 0x177 and
    the 0x122 cue; see that DEVLOG entry.
-   Nothing of these passes was seen in Chrome (check the Saint-Milion arena: tentacle poses, part boxes on the
-   model nodes, the 6xDC flow with two clients; De Rol Le's plates flash cyan and the beam's emitter follows the muzzle).
+   Seen in Chrome (2026-10-24, DEVLOG "Boss leftovers in Chrome", `client/e2e/saintmilion-arena.spec.ts` and
+   `client/e2e/derolle-plates.spec.ts`, PASS): the Saint-Milion tentacle poses and part boxes on the model nodes; De Rol
+   Le's plate flashes cyan and fades back to white; the beam's emitter sits on the muzzle. Still open: the 6xDC flow with
+   two clients (not run), the emitter following a MOVING muzzle (the body is still while it fires), and the muzzle is a
+   brain estimate, not a model node (ASSUMED in combat/derolle.ts).
 5. **Phones**: verify on real devices the soft keyboard (iOS / Android), the rotation
    and `screen.orientation.lock`, the adaptive resolution and the batching gain; the
    Forest 1 leaves differ in 1.07% of pixels from the unbatched draw (`?transparent=0`
