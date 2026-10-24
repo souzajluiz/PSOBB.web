@@ -234,6 +234,8 @@ function makeEnv(character: CharacterFile, calls: string[], shopItems: ItemData[
   eq(calls, ['6xB5 1'], '6xB5 sent for the weapon list');
   eq(c.state().message, '#b', 'What would you like to buy?');
   eq(c.state().list?.length, 2, 'two items listed');
+  // The buy list's detail is the 0x29 window with the equipment stat rows (ShopDialog_UpdateItemDisplay_006d600c).
+  eq(c.state().panel, true, 'buy list: the weapon detail is the stat panel');
   await press(c, 'Enter');
   eq(c.state().choice, ['#4', '#5'], 'Buy / Cancel');
   await press(c, 'Enter');
@@ -267,6 +269,7 @@ function makeEnv(character: CharacterFile, calls: string[], shopItems: ItemData[
   await press(c, 'Backspace', 'ArrowDown', 'Enter');
   eq(c.state().message, '#c', 'What do you want to sell?');
   eq(c.state().list?.length, 1, 'the Monomates');
+  eq(c.state().panel, true, 'sell list: the same 0x29 detail as the buy list');
   await press(c, 'Enter');
   eq(c.state().amount, 1, 'spinner for a stack of 3');
   await press(c, 'ArrowUp', 'ArrowUp', 'Enter', 'Enter');

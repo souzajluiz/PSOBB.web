@@ -426,7 +426,8 @@ interface ItemList {
   // list's max is above 0): the bank's take list only. null: no line.
   capacity: number | null;
   // The stat panel instead of the description for a weapon / armour / shield (the
-  // bank's take list: its detail window draws the equipment rows, see drawEquipPanel).
+  // bank's take list and the shops' buy / sell lists: their 0x29 detail window draws
+  // the equipment rows, see drawEquipPanel).
   panel: boolean;
 }
 
@@ -773,6 +774,7 @@ abstract class CounterBase {
     amount: number | null;
     picture: boolean;
     capacity: number | null;
+    panel: boolean | null; // the list's detail is the equipment stat panel (null: no list)
   } {
     return {
       message: this.clerk.text,
@@ -782,6 +784,7 @@ abstract class CounterBase {
       amount: this.amount?.spinner.value ?? null,
       picture: this.picture !== null,
       capacity: this.list?.capacity ?? null,
+      panel: this.list ? this.list.panel : null,
     };
   }
 }
@@ -855,6 +858,9 @@ export class ShopCounter extends CounterBase {
       entries.map((e) => shopRow(e.item, String(e.price), ctx)),
       entries.map((e) => e.item),
       quantity && c ? (i) => carriedCount(c.inventory, entries[i].item) : null,
+      // The buy list's detail is the same 0x29 window as the Check Room's (ShopDialog_UpdateItemDisplay_006d600c
+      // -> GameList_RenderSelectionDisplay_00727450): a weapon / armour / shield gets the stat rows.
+      { panel: true },
     );
   }
 
@@ -972,6 +978,7 @@ export class ShopCounter extends CounterBase {
         sellable.map((it, i) => ({ ...itemRow(it, ctx), count: String(prices[i]) })),
         sellable.map((it) => it.data),
         (i) => stackSize(sellable[i].data),
+        { panel: true }, // the same 0x29 detail as the buy list (see showShopList)
       );
       this.say(MSG.whatSell);
       const i = await this.pick();
