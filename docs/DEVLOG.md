@@ -17780,3 +17780,7 @@ Trap Vision (tool, item 8):
 - The Result's page 2/3 panel and the arrows: only if another build's code is found (not in PsoBB.exe).
 - The picture frame against the reference (ASSUMED above): compare once the talk step works.
 - The talk step of the e2e in this environment (the same failure as `pioneer2-shop.spec.ts`).
+
+## 2026-10-23: correction to the tekker Result entry
+
+The tekker Result entry says ItemAttributesPanel_Update_00726ee2 and the page 2/3 panel are unreachable. That is wrong: 0x726ee2 sits inside FUN_00726dc8, which is entry 1 of the weapon row of the kind x page table at 0x009f2520, dispatched by GameList_RenderSelectionDisplay_00727450 (`call *0x9f2520(,%ebx,4)` at 0x7275a7). See the "item detail pages" entry. Which windows draw the paged panel is still being traced.
