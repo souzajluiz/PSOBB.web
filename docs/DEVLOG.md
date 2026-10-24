@@ -15806,3 +15806,42 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 - Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts` has no brain for it). The S7 throw (`galMinions.throw()`, anim 20.5) has no caller until the states exist.
 - The follower's apply (SetEnemyAiState on the synced state, then the next advance reads the stale seed S33 at `+0x4b0`; UNCLEAR whether that is intended).
 - The attack's area hit (`0x0051fc9c`, the DrlBurst-style helper) and the launcher's particles and sounds.
+
+## 2026-10-23: Gal Gryphon brain states 0..17 ported (`combat/galgryphonstatesa.ts`; not wired)
+
+**What changed:** the handlers of the ProcessState slots 0..17 (table `0x009a7e40`) are in `combat/galgryphonstatesa.ts`: `GALGRYPHON_STATES_A`, keyed by state number, each `(ctx) => void` with the phase in `ctx.phase`. The shared context is `GalgryphonStateCtx` (boss fields `GalgryphonBody`, motion, FX, cine, world, death, net, and the minion throw, queue, presence, advance / changeState / walkDefault); part B (S18..S34, `galgryphonstatesb.ts`) imports the same interface and the helpers `stepVelocity`, `turnToward`, `steerToTarget`, `targetVector`, `sin16` / `cos16`, `angle16FromRadians`. Nothing calls the table yet: `render/combat.ts` is not touched.
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; decompile of the unnamed handlers with `tools/ghidra/decomp.sh` (S3, S5, S8..S17); disassembly with `objdump` for the sin / cos arguments):
+- S0 `0x004a8e34` empty. S1 `0x004a0d8c`, S2 `0x004a0dd8`, S4 `0x004a22b0` (`GalgryphonUpdateState_004a22b0`), S6 `0x004a1368`, S7 `0x004a1678` (`HandleOlgaMinionAction_004a1678`, the minion throw at 20.5 through `CreateGalgryphonMinion_004aa808`): named in the dump, read in full.
+- sin16 / cos16 (`0x0082dcbc` / `0x0082ddd8`) take a 16-bit BAMS angle in ecx (the table `0x0098b560`, sine of `k * 2pi / 4096`). Their arguments are `(int)(frame * 16384 / D)` (fistp, truncating): S12 sub 0 D = 18, S17 sub 0 D = 9, S16 sub 1 `(frame - 10) * 16384 / (+0xc4 - 10)`; the sub-1 cosines of S12 / S17 are `n * 16384 / 15` (S12) and `/ 10` (S17) with `n` the count, or `2N - count` past the half (the pitch uses the same `n`); S16 sub 0 `n * 16384 / 19.5` with `n = count` or `39 - count`. `0x903eac`, `0x903de4`, `0x903e10` are 16384.0; `0x903e98` 18.0, `0x903dd0` 9.0.
+- The turn helper `SetGalgryphonRotationAngle_004a5e10` (dump 225565, used by S9, S10 and the steer) is `turn -= clamp(turn - ROUND(0.6 * (target - heading)), +-rate)`; `FUN_007a900c` is `(short)(b - a)`.
+- S10 `0x004a1be0`: the disassembly stores `dx = r.a - x`, `dz = r.b - z` and `dx*dx + dz*dz` at 0x18 / 0x1c / 0x20; the test is `dist^2 < 10.0` (`0x903f30`), not the distance.
+- Frame thresholds of S4 from the instruction immediates (`objdump` of `0x004a22b0..0x004a2640`): 68, 100, 210, 265, 290, 405, 420, 455, 463 (decimal; the doc's 212 and 418 are wrong).
+
+**Corrections to `docs/bosses/galgryphon-states-a.md`** (the exe is followed):
+- S5 enter sets the height to 360 (`0x43b40000`) after the 180 write, not 180; the boss is at 600 from the origin facing it.
+- S4 frame thresholds: 210 (not 212), 420 (not 418). The doc has S4 freeze and release the players (`FUN_00717f74` / `FUN_00717f38`) at its motion end and on leave; the decompile calls neither in S4 (S5 is the one that freezes and releases).
+- S16 sub 0: the pitch and the cosine use `39 - count` past count 19.5 (the doc had `count` for the pitch).
+- S2 frame: the target vector is `InitializeEnemyAnimationVelocity` (dump 305158: target - pos, the length), not `FUN_00521410`; the sound is `FUN_004a0f10` (frames 21, 5, 20, 8).
+- S7: no `FUN_004a15ac` call in the handler (the decompile has none); the 20.5 offset is `(150 sin, -muzzle.y / 2, 150 cos)` with the muzzle at `+0x44c`; the muzzle FX is slot 4 (`+0x5f8 + 0x10`), the beam is slot 3 (`+0x5f8 + 0xc`). The doc's "slot 0x10" is a byte offset.
+- S3 enter is a raw write of `+0xb8` (no set-animation call); S3's frame does not tick the motion.
+
+**ASSUMED:**
+- `DAT_00a47564` (default height), `DAT_00a47590` / `DAT_00a475a8` / `DAT_00a475ac` (S12 / S16 / S17 base height) are `.bss` and never written in the dump: 0. The S4 pitch raw word (`0x903ec0`, NaN bits) is ported as 0; the heading `0x903ec4` (36734) is used.
+- S15's Bezier control points have x and z 0 (`.bss`); only the y values 67, 107, 147 and `g` are written by the exe.
+- sin16 / cos16 are `Math.sin` / `Math.cos` of the BAMS angle (the table's low-nibble interpolation is not replicated; within 1e-4).
+- `ROUND` is `floor(x + 0.5)`. `short()` is the 16-bit wrap of the `(short)` casts.
+- The target vector is not normalised (the states use only its angle and length).
+- The walk, the sync, the aura, the camera, the FX and the sphere query are host hooks (`GalgryphonStateCtx`); their exe internals are not decoded here (the shot values `DAT_00a47568..74`, the landing, the aura).
+- S14's tilt divides by the record's duration when it is 6 or less; a duration of 0 is skipped (the exe would divide by zero).
+
+**Checks:**
+- `node tests/galgryphonstatesa.test.ts` (new): the table covers 0..17 only; S0 is a no-op; the helpers (the quarter angles, the step, the turn clamp, the target steer); each state's enter, frame and leave against a recording fake (the motion slots, the sub-steps and the counters, the S3 150-tick wait, the S4 home copy and the walk on phase 2 / 9, the S5 position and the 50-tick advance, the S6 parabola, the S7 throw's origin / offset / target / slot and the beam window, the S9 sign, the S10 squared distance, the S12 / S16 / S17 heights and pitches, the S15 Bezier at t 0.5); the body stays finite through enter, frame and leave for every state.
+- `cd client && npx tsc --noEmit -p .` exit 0 (node_modules linked from the main checkout for the run, then removed).
+- Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- States 18..34 (`galgryphon-states-b.md`), part B, using the same context.
+- The re-arm question: the leader's default walk runs only in S4 at sub 1, and no state in 0..17 writes sub 1 except S4's own motion end. After one choice the next record is the stale seed (S33, infinite), so the boss idles unless something outside 0..17 re-enters S4 or re-arms it. Not decided here.
+- S3's phase-3 dispatcher (UNCLEAR, `galgryphon-states-a.md` 5.1).
+- Wiring: `render/combat.ts` (no brain for `TBoss5Gryphon` yet), the S7 throw's caller (`GalgryphonMinionManager.throw`), the host implementations of the hooks above, the attack's area hit.

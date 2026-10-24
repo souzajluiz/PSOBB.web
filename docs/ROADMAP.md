@@ -65,7 +65,7 @@ Login 8, Quest loading screen 7, Sinow Beat 6, Dragon 5. Areas with none
    are done; Gee, Ul / Zol Gibbon, Mericarol family, Gibbles, Gi Gue, Sinow
    Berill / Spigell, Sinow Zoa / Zele, Deldepth, Delbiter, Morfos, Recobox /
    Recon, Epsilon / Epsigard left).
-   Gal Gryphon (2026-10-23): the minion launcher and Effect (`combat/galgryphon.ts`, `combat/galgryphonminion.ts`) and the pattern script that picks its states (`combat/galgryphonscript.ts`, the leader's choice is local, not from the network); left: its 35 state handlers (`docs/bosses/galgryphon-states-a.md`, `-b.md`), the brain's wiring into render/combat.ts, and the attack's area hit.
+   Gal Gryphon (2026-10-23): the minion launcher and Effect (`combat/galgryphon.ts`, `combat/galgryphonminion.ts`), the pattern script that picks its states (`combat/galgryphonscript.ts`, the leader's choice is local, not from the network), and the state handlers 0..17 (`combat/galgryphonstatesa.ts`, the shared context for 18..34); left: states 18..34 (`galgryphon-states-b.md`, part B), the brain's wiring into render/combat.ts, the attack's area hit, and the S3 phase-3 dispatcher and the S4 walk's re-arm (UNCLEAR).
 
 ## Web platform (browser conveniences, not in PsoBB.exe)
 - [x] Fullscreen (Alt+Enter, CSS fallback on iPhone), mute (Alt+M, stored; muted by default under the dev server) and the touch pad: stick + palette / menu keys fed as key events (`ui/webcontrols.ts`, `tests/mobilecontrols.test.ts`)
