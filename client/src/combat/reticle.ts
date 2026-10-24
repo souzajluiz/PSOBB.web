@@ -83,3 +83,36 @@ export function reticleOutlineVisible(opacity: number): boolean {
 export function bamsToRadians(bams: number): number {
   return (bams / 0x10000) * Math.PI * 2;
 }
+
+// The support target of a palette technique (Resta, Anti, Reverser): the ally its
+// targeting record picks. find_targets_for_weapons_and_techs sorts a record's targets
+// by distance, nearest first; check_enemy_is_targetable skips the caster itself
+// (`player->player_idx == target->entity_index`). Reverser's record takes a dead
+// party member (ASSUMED: the port's reverserTarget picks it the same way). The
+// distance is the horizontal one of the port's playerTargets.
+export interface SupportCandidate {
+  id: number;
+  x: number;
+  z: number;
+  dead: boolean;
+}
+
+export function nearestSupportTarget(
+  from: { x: number; z: number },
+  candidates: readonly SupportCandidate[],
+  rangeH: number,
+  wantDead: boolean,
+): { id: number; distance: number } | null {
+  let best: { id: number; distance: number } | null = null;
+  for (const c of candidates) {
+    if (c.dead !== wantDead) continue;
+    const distance = Math.hypot(c.x - from.x, c.z - from.z);
+    if (distance > rangeH) continue;
+    if (best === null || distance < best.distance) best = { id: c.id, distance };
+  }
+  return best;
+}
+
+// The height of a player's cursor above its position (ASSUMED: the enemy cursor sits
+// at the hitbox centre, +22; a player's chest is about +12 above its feet).
+export const PLAYER_RETICLE_HEIGHT = 12;

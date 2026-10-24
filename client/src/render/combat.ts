@@ -159,8 +159,8 @@ import { modelTriangles } from '../formats/minimap.ts';
 import { parseNinjaChunkFile } from '../formats/njcm.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { graveKillerId } from '../quest/cmodegrave.ts';
-import { reticleRow } from '../combat/reticle.ts';
-import { targetCardText, type TargetCardText } from '../combat/targetcard.ts';
+import { nearestSupportTarget, PLAYER_RETICLE_HEIGHT, reticleRow, type SupportCandidate } from '../combat/reticle.ts';
+import { playerTargetCardText, targetCardText, type PlayerTargetCardText, type TargetCardText } from '../combat/targetcard.ts';
 import { expandEnemySets, type EnemySlot } from '../formats/enemyslots.ts';
 import { parseItemPMT, type ItemPMT, type WeaponRange } from '../formats/itempmt.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
@@ -248,6 +248,12 @@ const ENEMY_BASE_FLAGS = 0x20000000 | 0x00800000 | 0x00100000;
 // The four movement bindings (Move Forward / Backward / Left / Right: the
 // freeze mash counts presses of these, FUN_0078fd68 over bindings 0..3).
 const MOVE_KEYS = [KEYS.moveForward, KEYS.moveBackward, KEYS.moveLeft, KEYS.moveRight] as const;
+
+// The techniques whose targeting record picks a party member (the reticle's light-blue row):
+// Resta (dump's resta, the GetTechniqueData(resta, 0xe) record of
+// unknown_update_equipment_properties_from_pmt, reticle type 4 / 10), Reverser (type 4 / 9)
+// and Anti. ASSUMED: Anti's record (the port's playerTargets, not traced in the dump).
+const SUPPORT_TARGET_TECHS: readonly number[] = [TECH.resta, TECH.anti, TECH.reverser];
 
 // Action palette keys (input/keyconfig.ts: Left / Down / Right in the BB
 // default key config) and what they do: the palette slot's group 1 = 2 is an
@@ -639,6 +645,9 @@ export class CombatView {
   private readonly smoothHook = () => this.smoothDraw();
   private readonly reticleAt = new THREE.Vector3();
   private lockOn: EnemyRuntime | null = null;
+  // The support target (client id) of a palette Resta / Anti / Reverser: its own cursor
+  // (the light-blue row) and the player card (updateLockOn).
+  private allyLock: number | null = null;
   // Remote players in a hit / death motion: LobbyView must not play their gait.
   private hurt = new Set<number>();
   private hpReadout: HTMLElement | null = null;
@@ -862,6 +871,12 @@ export class CombatView {
       const p = s.drawnPosition(lock.instance.root, this.reticleAt);
       p.y += 22;
       this.overlay.setTarget(p, { row: reticleRow('enemy'), camera: this.viewer.camera });
+    }
+    // The support target's cursor follows the player's drawn position (the cursor is set
+    // from the same positions in updateAllyLock each tick).
+    const ally = this.allyLock === null ? undefined : this.view?.playerPositions().get(this.allyLock);
+    if (ally && this.overlay) {
+      this.overlay.setTarget({ x: ally.x, y: ally.y + PLAYER_RETICLE_HEIGHT, z: ally.z }, { row: reticleRow('support'), camera: this.viewer.camera, ally: true });
     }
   }
 
@@ -5734,8 +5749,13 @@ export class CombatView {
     const from = view.playerPositions().get(me.clientId);
     if (!from || this.damage.dead) {
       this.overlay.setTarget(null, { row: 0, camera: this.viewer.camera });
-      if (this.hud) this.hud.targetCard = null;
+      this.overlay.setTarget(null, { row: 0, camera: this.viewer.camera, ally: true });
+      if (this.hud) {
+        this.hud.targetCard = null;
+        this.hud.allyCard = null;
+      }
       this.lockOn = null;
+      this.allyLock = null;
       return;
     }
     let best: EnemyRuntime | null = null;
@@ -5757,6 +5777,56 @@ export class CombatView {
       camera: this.viewer.camera,
     });
     if (this.hud) this.hud.targetCard = best ? this.targetCardOf(best) : null;
+    this.updateAllyLock(from);
+  }
+
+  // The support target: the nearest eligible party member for each Resta / Anti / Reverser
+  // on the palette (group 1 = 3, not disabled), the nearest of those. Resta and Anti pick a
+  // living ally, Reverser a dead one (reverserTarget). Not in a Challenge game for Reverser
+  // (CanPlayerCastTechnique_0069a0c4). ASSUMED: the exe shows one cursor per configured
+  // record; here one cursor, the nearest.
+  private updateAllyLock(from: { x: number; z: number }): void {
+    const me = this.game.self;
+    const view = this.view;
+    this.allyLock = null;
+    if (!me || !view || !this.overlay) return;
+    const techs = new Set<number>();
+    for (let i = 0; i < 10; i++) {
+      const slot = this.opts.paletteSlot?.(i);
+      if (slot && !slot.disabled && slot.group1 === 3 && SUPPORT_TARGET_TECHS.includes(slot.group2)) techs.add(slot.group2);
+    }
+    const candidates: SupportCandidate[] = [];
+    for (const [id, p] of view.playerPositions()) {
+      if (id === me.clientId) continue;
+      candidates.push({ id, x: p.x, z: p.z, dead: this.isPlayerDead(id) });
+    }
+    let best: { id: number; distance: number; tech: number } | null = null;
+    for (const tech of techs) {
+      if (tech === TECH.reverser && this.game.info?.challenge) continue;
+      const level = this.techLevel(tech);
+      if (level === null) continue;
+      const hit = nearestSupportTarget(from, candidates, techData(tech, level, me.charClass).rangeH, tech === TECH.reverser);
+      if (hit && (!best || hit.distance < best.distance)) best = { ...hit, tech };
+    }
+    const row = reticleRow('support');
+    if (!best) {
+      this.overlay.setTarget(null, { row, camera: this.viewer.camera, ally: true });
+      if (this.hud) this.hud.allyCard = null;
+      return;
+    }
+    this.allyLock = best.id;
+    const p = view.playerPositions().get(best.id);
+    if (p) {
+      this.overlay.setTarget({ x: p.x, y: p.y + PLAYER_RETICLE_HEIGHT, z: p.z }, { row, camera: this.viewer.camera, ally: true });
+    }
+    if (this.hud) this.hud.allyCard = p ? this.allyCardOf(best.id) : null;
+  }
+
+  // The player card's text for a party member (QuickMenuUpdatePlayerInfo: the name, the section ID).
+  private allyCardOf(clientId: number): PlayerTargetCardText | null {
+    const p = this.game.players.get(clientId);
+    if (!p) return null;
+    return playerTargetCardText({ name: p.name, sectionId: p.sectionId ?? 9 });
   }
 
   // The lock-on cursor's model: bm_ply_lock_on_cursor.bml (LoadReticleModel_007a41d0),

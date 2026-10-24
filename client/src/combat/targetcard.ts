@@ -84,3 +84,37 @@ export function targetCardText(opts: {
     argb: TARGET_ATTR_ARGB[index],
   };
 }
+
+// The player (ally) target card: ChallengeMenuObject_UpdatePlayerTarget_0073220c (dump 699599)
+// builds it with QuickMenuUpdatePlayerInfo_00742454 (dump 712821): the player's name is its
+// one text line (TextRenderer_SetText, width 0xa0). Its window height is 49.0 (0x42440000,
+// stored at this + 0x3c) and its y is get_gui_position_y(0x1f) - 49.0 * this + 0x6c (ASSUMED
+// scale 1 here), so its bottom edge is the slot's y (437). The section ID icon beside the name
+// is not traced in the exe (its texture); its colours are ASSUMED (SECTION_ARGB).
+export const PLAYER_CARD_HEIGHT = 49;
+
+// ASSUMED: the section ID icon's colour (ARGB) by section_id (the dump's enum section_id:
+// 0 viridia .. 9 whitill). The vanilla reference screenshot shows a green, a blue and a red
+// hexagon on three party cards (fits viridia, bluefull, redria); the others are ASSUMED.
+export const SECTION_ARGB = [
+  0xff40e040, // viridia
+  0xff9be040, // greenill
+  0xff60d8ff, // skyly
+  0xff3060ff, // bluefull
+  0xffb050ff, // purplenum
+  0xffff70d0, // pinkal
+  0xffff3030, // redria
+  0xffff9030, // oran
+  0xffffe040, // yellowboze
+  0xffffffff, // whitill
+] as const;
+
+export interface PlayerTargetCardText {
+  name: string;
+  argb: number; // the section ID icon's colour
+}
+
+// The player card's text for a party member. An unknown section falls back to white.
+export function playerTargetCardText(opts: { name: string; sectionId: number }): PlayerTargetCardText {
+  return { name: opts.name, argb: SECTION_ARGB[opts.sectionId] ?? SECTION_ARGB[9] };
+}

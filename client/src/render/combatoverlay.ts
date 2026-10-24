@@ -131,8 +131,11 @@ export class CombatOverlay {
   private scene: THREE.Scene;
   private numbers: Floating[] = [];
   private effects: Array<Floating & { radius: number }> = [];
-  // The lock-on cursor: null until setReticleModels (the BML is loaded).
+  // The lock-on cursors: null until setReticleModels (the BML is loaded). `reticle` is the
+  // enemy's; `allyReticle` the support target's (a second reticle object of the same model,
+  // the exe's one object per target, find_targets_for_weapons_and_techs).
   private reticle: ReticleParts | null = null;
+  private allyReticle: ReticleParts | null = null;
   // The HUD's floating texts (render/playerhud.ts hitPopup); false when its
   // font is not there yet.
   text: ((spec: FloatSpec, x: number, y: number, z: number) => boolean) | null = null;
@@ -145,7 +148,8 @@ export class CombatOverlay {
   setReticleModels(main: THREE.BufferGeometry, outline: THREE.BufferGeometry): void {
     if (this.reticle) return;
     this.reticle = reticleGroup(main, outline);
-    this.scene.add(this.reticle.group);
+    this.allyReticle = reticleGroup(main, outline);
+    this.scene.add(this.reticle.group, this.allyReticle.group);
   }
 
   // One hit box's number over (x, y, z). `_critical` does not change the look.
@@ -184,8 +188,12 @@ export class CombatOverlay {
   // point, moved toward the camera by `radius` (CalculatePositionTowardsCamera_006ea73c,
   // ASSUMED 0: the hitbox radius is not passed here); the cursor's colour is the
   // reticle table row `row` (combat/reticle.ts reticleRow) and it turns to face `camera`.
-  setTarget(pos: { x: number; y: number; z: number } | null, opts: { row: number; camera: THREE.Camera; radius?: number }): void {
-    const r = this.reticle;
+  // `ally` moves the support target's cursor instead of the enemy's.
+  setTarget(
+    pos: { x: number; y: number; z: number } | null,
+    opts: { row: number; camera: THREE.Camera; radius?: number; ally?: boolean },
+  ): void {
+    const r = opts.ally ? this.allyReticle : this.reticle;
     if (!r) return;
     r.group.visible = pos !== null;
     if (!pos) return;
@@ -243,10 +251,12 @@ export class CombatOverlay {
       (f.sprite.material as THREE.SpriteMaterial).dispose();
     }
     this.effects = [];
-    if (this.reticle) {
-      this.scene.remove(this.reticle.group);
-      for (const m of [...this.reticle.bodies, ...this.reticle.outlines]) m.dispose();
-      this.reticle = null;
+    for (const r of [this.reticle, this.allyReticle]) {
+      if (!r) continue;
+      this.scene.remove(r.group);
+      for (const m of [...r.bodies, ...r.outlines]) m.dispose();
     }
+    this.reticle = null;
+    this.allyReticle = null;
   }
 }
