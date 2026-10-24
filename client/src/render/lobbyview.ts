@@ -105,7 +105,8 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
     data.sections = rooms;
     const raw = await files.read(`map_${area}o.dat`);
     const sets = parseObjectSets(raw);
-    const mains = parseSetObjects(raw).filter((o) => o.type === 0x0182);
+    // TObjLobbyMain (0x0182) and the centre teleporter TObjWarpLobby (0x0181, the beam).
+    const mains = parseSetObjects(raw).filter((o) => o.type === 0x0182 || o.type === 0x0181);
     if (mains.length) data.mainObjects = placeEntities(mains, rooms, 1);
     const all = playerSpawns(sets);
     data.hasSpawnSets = all.length > 0;
@@ -315,7 +316,7 @@ export class LobbyView {
       // lobby's 64 join); a load error only leaves the decoration out.
       const layer = new ObjectLayer(viewer, mapData.files);
       this.mainObjects = layer;
-      layer.show(mapData.mainObjects, { area: 0, episode: 1, event: lobby.event }).catch((err) => console.warn('lobby objects:', err));
+      layer.show(mapData.mainObjects, { area: 0, episode: 1, event: lobby.event, lobby: true }).catch((err) => console.warn('lobby objects:', err));
     }
     // The map is unlit (vertex colors); the player materials are Lambert, lit by
     // the area light the viewer takes from lightentry.bin (MapViewer.setArea).

@@ -17188,3 +17188,42 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 - The Gal Gryphon minion's 1.5 icon (needs the Gal Gryphon brain: the launcher and its state 2, see the 2026-10-23 Gal Gryphon minion entry).
 - The Challenge "Area n" title: `cmode_area_title_buffer` (set by opcode_set_area_title_number, dump 607512) is read by `maybe_update_mainwarp` (dump 510944), which looks like a warp-menu entry label, not a radar icon. Not traced to its drawing code; the warp menu is the place to check.
 - Form 2's levels (ASSUMED, above).
+
+## 2026-10-23: lobby centre teleporter (TObjWarpLobby) drawn; the lobby "cape" shapes not identified
+
+**What changed:** the lobby's centre teleporter is the set object 0x0181 (one per lobby, at (0, 3, 240), params [15, 1, 1, 0, 1, 0]). It had no model in the port (`objectmodels.ts` had no case; `lobbyview.ts` drew only 0x0182). It now draws the exe's model: `lobbyWarpSpec` in `formats/objectmodels.ts` (case 0x0181, only when `ObjectModelContext.lobby`), and `render/lobbyview.ts` places 0x0181 with 0x0182 and passes `lobby: true`. Tests: `tests/lobbymain.test.ts` section 7.
+
+**Exe evidence** (`objdump -d` of `~/Downloads/psobb-client/PsoBB.exe`; the type table read by a PE scan, `pedump` on the image):
+- Type table rows of 16 bytes (`type, create, 0x48742400, 0`): 0x0181 -> create `CreateSeabedTuriganeWarpObjectVariant3_007bb0b4` (0x007bb0b4, table at VA 0x00a0ec94; the same row exists at 0x00a06584), 0x0182 -> 0x00672254 (TObjLobbyMain, already ported). The dump's names say SeabedTuriganeWarp / Variant3 because they were copied; the object is the lobby warp.
+- Ctor 0x0066dd9c: `movl $0xb35800, (%ebx)` (vtable 0x00b35800); model/motion from `g_LobbyWarpBmlData_00a8fd68` (`bm_obj_lobby_warp.bml`, loaded by `InitializeLobbyWarpObjectModel_0066e1e0` with `LoadBML_005b7a84(this, 1, ...)`), motion pointer `*(bml+0x430)+4` stored at +0xdc. Visible flag +0xd0 is set from +0x88 before the set params are applied (ASSUMED shown; the set's params[4] = 1 would hide it if the ctor saw it).
+- Vtable 0xb35800: slot 1 update 0x0066de54, slot 2 render 0x0066e0dc, slot 5 ApplyObjectInitData 0x007ba33c, slot 9 view-distance 0x007ba468 (the render calls it with 400.0 / 20.0, floats 0x00939ea8 / 0x00939eac).
+- Render 0x0066e0dc: returns when +0xd0 is 0 or the distance test fails; else `set_current_renderer_nj_texturelist` (the BML's list), translate by the object's position (+0x38), rotate Y by the heading (+0x60), `FogEnable(False)`, `render_animated_xj(model (+0x42c)+8, motion (+0x430)+4, frame +0xcc)`, fog back on.
+- Update 0x0066de54: frame +0xcc += 4.0 (the constant 0x00939eb0), and set to 0 when (last frame) < (new frame), i.e. `restart` at speed 4. The same +4 step as the Ragol beams. +0xc8 += 336.0 (0x00939eb4) is the menu timer, not drawn. The rest of the update is the lobby warp list (`unknown_handle_lobby_warp_list`, dump line 535707), which the port already has (`classic` lobby teleporter).
+- The BML (`data.gsl`, read with `GSLArchive` / `BmlArchive`): entry 0 `de_obj_citybeam.xj`, entry 1 `de_obj_citybeam.njm` (motion 0). It is the Ragol city's beam (`TObjCityAreaWarp` 0x0044 uses `bm_obj_city_common.bml` model 1). No collision: the round box is TObjLobbyMain's only (the lobby collision comment is right).
+- Lobby sets: `map_lobby_01o..10o.dat` each have one 0x0181 at (0, 3, 240) (survey with `parseObjectSets`).
+
+**Ported:** `formats/objectmodels.ts` (`lobbyWarpSpec`: model 0, motion 0, drive `restart`, speed 4; `ObjectModelContext.lobby`), `render/lobbyview.ts` (the filter and the context flag), `tests/lobbymain.test.ts` (spec, no collision, not drawn outside the lobby, the BML entries, one warp per lobby at (0, 3, 240)). The fog-off draw is not modelled (the port's objects draw with the scene's fog; ASSUMED no visible effect in the lobby).
+
+**ASSUMED:**
+- The beam's texture sheet: `bm_obj_city_common.xvm` (the exe passes no texture name to `LoadBML_005b7a84` for this BML; the same beam in the city uses that sheet).
+- The wrap boundary: `restart` resets when the frame passes the last frame; the exe's compare is `count - 1 < frame + 4`, so the last frame is shown once (ASSUMED the port's `restart` does the same).
+- The visible flag (+0xd0), see the ctor above.
+
+**Screenshot (Chrome-free, Playwright, one temporary spec, removed; port on a worktree Vite, newserv + bridge from the main checkout):** the port's lobby 01 now shows the beam at the pedestal (stacked translucent rings, green, in lobby 01's green theme). Before the change the pedestal had no beam. The user's reference frame (16.png / 17.png) shows a pink-white glowing orb with a yellow concentric ring on the floor and cyan / blue floor plates, which is not lobby 01's look. So the shape is in the right place; the colour is not confirmed (ASSUMED texture, or another lobby theme). The yellow floor ring is not checked (it may be part of the lobby map mesh, which the port already draws).
+
+**The cape shapes (cyan behind the left player, yellow behind the right): NOT identified.** Candidates checked:
+- Section ID aura (best fit by colour): cyan ~ Skyly (`SECTION_ARGB` 0xff60d8ff in `combat/targetcard.ts`), yellow ~ Yellowboze (0xffffe040). Both values are ASSUMED (from a vanilla hexagon screenshot). The exe has no ARGB table for the sections: a dword scan of PsoBB.exe finds neither 0xff60d8ff nor 0xff3060ff etc.; the one hit of 0xffffe040 (file 0x301570) is code bytes. So no exe source for the section colours was found.
+- Lobby slot colour (`PLAYER_COLORS`, 0x0097eaa0: red, green, yellow, blue; `classic/minimap.ts`): yellow fits the right shape, but no slot colour is cyan, so the left one does not fit.
+- Battle team colours (`TEAM_COLORS`: red, green): no.
+- Player model "cap" parts (plXcapNN.nj): these are headgear on node 59 with the hair (`render/playermodel.ts`), not capes.
+- Chair (fs_obj_lobby_isu), the Lobby Action emote props, team flag (team_flag[2048]), event costumes (the armour cloak items in `on_unequip_armor`, dump line 436564, are tech-boost armour only): not the shapes.
+- Name tags: no exe code (`classic/lobby.ts` comment), so no colour table there.
+
+Next step to settle it: ask the user which section IDs the two characters in the reference have (if left = Skyly and right = Yellowboze, the section aura is the candidate), or trace the lobby player draw (the caller of the model draw for players, near FUN_0068a088 in `render/playermodel.ts` notes) with REA / Ghidra.
+
+**Checks:** `node tests/lobbymain.test.ts` ALL PASS (Node 24, `data.gsl` from `~/Downloads/psobb-client/data`). `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` clean (Node 24).
+
+**Left:**
+- The cape / aura shapes (above): not identified, not ported.
+- The beam's colour and texture (ASSUMED sheet; compare with the reference in a lobby with the pink orb).
+- The yellow floor ring at the pedestal: not checked against the lobby map mesh.
