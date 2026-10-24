@@ -16,7 +16,6 @@
 // Everything the map leaves ASSUMED or open is tagged in the comments below.
 import { BrainBase } from './enemyfsm.ts';
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyBrain } from './enemyai.ts';
-import { DrlEasing } from './derolle.ts';
 import type { EnemyMovementData } from '../formats/battleparams.ts';
 
 // --- constants --------------------------------------------------------------
@@ -113,6 +112,8 @@ export const BARBA_PHASE = {
   run2: 0x14,
   wall0: 0x15,
   wall2: 0x16,
+  arc0: 0x04, // 0x004b0ee0 (Ghidra dispatch: FUN_004b0ee0(p, 0, 2))
+  arc2: 0x0a, // 0x004b0ee0 (FUN_004b0ee0(p, 2, 0))
   timed: 0x1b, // 0x004b60c4
   finale: 0x1c, // 0x004b5d1c
   dead: 0x1d, // 0x004b5c98
@@ -176,6 +177,9 @@ export function barbaPigMode(count: number): 0 | 1 {
 
 // Corner moves of the 0x004b1e98 transitions (from, to) by phase. ASSUMED
 // meaning of the sides: 0..3 are the anchors 0..3 (see BARBA_ANCHORS).
+// The Ghidra dispatch 0x004b02b4 (case values): 0x28 / 0x29 go from the current anchor
+// (+0x6c8) to the one 5 below (when > 4) or 5 above it; the rest are fixed pairs (anchors
+// 5..9 are the raised ring, y = -100).
 export const BARBA_MOVES: Readonly<Record<number, readonly [number, number]>> = {
   0x03: [0, 1],
   0x05: [0, 3],
@@ -185,7 +189,28 @@ export const BARBA_MOVES: Readonly<Record<number, readonly [number, number]>> = 
   0x0b: [2, 1],
   0x0c: [3, 0],
   0x0e: [3, 2],
+  0x2a: [6, 7],
+  0x2b: [7, 8],
+  0x2c: [8, 5],
+  0x2d: [5, 6],
+  0x2e: [6, 5],
+  0x2f: [5, 8],
+  0x30: [8, 7],
+  0x31: [7, 6],
+  0x32: [6, 9],
+  0x33: [9, 8],
+  0x34: [8, 9],
+  0x35: [9, 6],
+  0x36: [5, 9],
+  0x37: [9, 7],
+  0x38: [7, 9],
+  0x39: [9, 5],
 };
+
+// The phases that run 0x004b1e98 (the dispatch's ProcessPlayerInteractionState cases).
+export function isBarbaTransition(phase: number): boolean {
+  return phase === 0x28 || phase === 0x29 || BARBA_MOVES[phase] !== undefined;
+}
 
 // --- the action table (0x004b8e3c, the same switch as 0x004b8584 / 0x004b0910) ---
 
@@ -247,6 +272,108 @@ export const BARBA_SWIM = { speed0: 0x500, speedStep: 256, speedMax: 16384, vx: 
 export const BARBA_FOLLOW = { wait: 40, interval: 180, speed0: 120, limit: 600, count: 4, radius: 120 } as const;
 // Lift pull (FUN_004b1c94, used by the arc): 0.4 a tick toward 0 (0x906f5c / 0x906f60).
 const LIFT_STEP = 0.4;
+
+// Corner transitions (0x004b1e98, ProcessPlayerInteractionState). The constants are the
+// exe's floats (exedata.py): 0x906f18 5.0, 0x906f1c 0.2, 0x906f20 7.0, 0x906f24 0.08,
+// 0x906f28 3.0, 0x906f2c 10.0, 0x906f30 0.4, 0x906f34 14.0, 0x906f38 0.16, 0x906f3c 6.0;
+// the waits 0x906ef4 380 (sub 1), 0x906ef8 160 (sub 2), 0x906efc 200 (sub 2, state 3),
+// 0x906f04 100 (sub 3), 0x906ee8 30 (sub 0), 0x906f08 0.9 and 0x906f0c 0.1 (the wait
+// counter, +0xc8). The sub 0 z velocity clamp is 0x906eec 4.0 and its step 0x906ef0 0.1.
+export const BARBA_TRANSITION = {
+  near: 5, // to < 5 takes the low curve (the ground anchors 0..3 and the centre 4)
+  wait1: 380,
+  wait2: 160,
+  wait2z: 200,
+  wait3: 100,
+  approachX: 30,
+  zVelClamp: 4,
+  zVelStep: 0.1,
+  tickWait: 0.1,
+  doneWait: 0.9,
+  waitDown: 0.3,
+} as const;
+
+// A velocity-easing record of the exe (InitializeMovementTargetStruct_00434ac4 /
+// _00434afc, NormalizeMovementTarget_00434a3c, Player__ApplyVelocityEasing 0x0042c9a0).
+// Fields in the exe's order: state +0, accel +4, decel +8, max +0xc, v +0x10, dist +0x14,
+// pos +0x18 (the output, clamped to dist), brake +0x1c (the decel point, a pos value).
+// The same curve as DrlEasing (derolle.ts), but the arguments are the exe's own order and
+// the struct is reused in place (no allocation per transition or arc).
+export class BarbaEase {
+  state = 0;
+  accel = 0;
+  decel = 0;
+  max = 0;
+  v = 0;
+  dist = 0;
+  pos = 0;
+  brake = 0;
+  // 00434ac4(max, dist, accel, decel): the exe's p3 is accel (+4), p4 decel (+8).
+  init(max: number, dist: number, accel: number, decel: number): void {
+    this.state = 0;
+    this.accel = accel;
+    this.decel = decel;
+    this.max = max;
+    this.v = 0;
+    this.dist = dist;
+    this.pos = 0;
+    this.normalize();
+  }
+  // 00434afc(max, dist, rate): accel and decel are both the rate.
+  initSym(max: number, dist: number, rate: number): void {
+    this.init(max, dist, rate, rate);
+  }
+  // NormalizeMovementTarget_00434a3c: k = 1 / accel + 1 / decel; the brake point is
+  // dist - max^2 / (2 decel), with the max lowered when the curve cannot reach it.
+  private normalize(): void {
+    const d = -this.decel; // fVar2 (the exe keeps decel negated here)
+    const k = 1 / this.accel - 1 / d; // 1 * (1 / accel) + (-1) / d
+    const t = (this.v * this.v) / (-2 * d) + this.dist;
+    if (t < this.v * this.v * 0.5 * k) this.max = Math.sqrt(Math.max(0, (t + t) / k));
+    this.brake = (this.max * this.max * 0.5) / d + this.dist;
+  }
+  // One tick: returns the state (3 = arrived). The output pos is min(pos + v, dist).
+  tick(): number {
+    let next: number;
+    switch (this.state) {
+      case 0:
+        next = this.v + this.accel;
+        if (next <= this.max) {
+          this.v = next;
+        } else {
+          this.state = 1;
+          this.v = this.max;
+          next = this.max;
+        }
+        break;
+      case 1:
+        if (this.pos <= this.brake) {
+          next = this.v;
+        } else {
+          this.v -= this.decel;
+          this.state = 2;
+          next = this.v;
+        }
+        break;
+      case 2:
+        next = this.v - this.decel;
+        if (next >= 0) {
+          this.v = next;
+        } else {
+          this.state = 3;
+          this.v = 0;
+          next = 0;
+        }
+        break;
+      default:
+        next = this.v;
+        break;
+    }
+    const p = this.pos + next;
+    this.pos = p < this.dist ? p : this.dist;
+    return this.state;
+  }
+}
 
 // One of the four path followers (root+0x6e4..0x6f4). Their own update is not
 // decoded: ASSUMED to move straight at speed / 30 a tick and to arrive (state 4) on
@@ -399,8 +526,29 @@ export class BarbaRayAi extends BrainBase {
   f758 = 0;
   f75c = 0;
   f760 = 0;
-  // The arc's easing (0x00434ac4, DrlEasing) from phase 5 / 6 sub 3.
-  arc: DrlEasing | null = null;
+  // The arc's easing (0x00434ac4) from phase 5 / 6 sub 3, reused in place.
+  readonly arcEase = new BarbaEase();
+  arcStarted = false;
+  // The corner transition (phases 3, 5, 6, 8, 9, 0xb, 0xc, 0xe): the 0x638 / 0x658 /
+  // 0x678 easings for x, y, z; the sign of each axis's move (+0x754 / +0x760 / +0x758);
+  // the start (+0x74c / +0x75c / +0x750); the from / to anchors (+0x6c8 / +0x6cc); the
+  // sub-states (+0x734 sub, +0x6d0 / +0x6d8 state, +0x6d4 done flag, +0xc8 wait).
+  readonly ex = new BarbaEase();
+  readonly ey = new BarbaEase();
+  readonly ez = new BarbaEase();
+  sgnX = 0;
+  sgnY = 0;
+  sgnZ = 0;
+  tBaseX = 0;
+  tBaseY = 0;
+  tBaseZ = 0;
+  tFrom = 0;
+  tTo = 0;
+  tSub = 0;
+  tA = 0;
+  tB = 0;
+  tDone = 0;
+  tWait = 0;
   readonly followers: BarbaFollower[] = Array.from({ length: BARBA_FOLLOW.count }, () => new BarbaFollower());
   readonly parts: BarbaPart[];
   // Two buffers swapped by drain(), so a tick allocates nothing.
@@ -528,7 +676,7 @@ export class BarbaRayAi extends BrainBase {
         return 0x10;
       case 4:
       case 0x0a:
-        return this.side === 0 ? 5 : 6;
+        return this.side === 0 ? 5 : 6; // the arc (0x004b0ee0, Ghidra dispatch 0x004b02b4)
       case 0x0f:
       case 0x10:
         return 3;
@@ -537,16 +685,15 @@ export class BarbaRayAi extends BrainBase {
         return this.side === 0 ? 7 : 8; // ASSUMED: the write of 1 first, then the side (order not traced)
       case 0x0d:
         return 4; // 0x004b7040: 1, then 4 (the 1 is not kept)
+      case 3:
       case 5:
       case 6:
-        return this.side === 0 ? 5 : 6; // 0x004b0ee0 enter (asm: 5 on side 0, else 6)
-      case 3:
       case 8:
       case 9:
       case 0x0b:
       case 0x0c:
       case 0x0e:
-        return 1;
+        return 1; // the corner transitions (0x004b1e98): slot 1 as the other transitions (ASSUMED)
       default:
         return null;
     }
@@ -585,7 +732,15 @@ export class BarbaRayAi extends BrainBase {
     if (s !== null) this.setSlot(s);
     if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) this.enterFollow();
     else if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2) this.enterSwim();
-    else if (phase === 5 || phase === 6) this.enterArc();
+    else if (phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.enterArc();
+    if (phase === 0x28 || phase === 0x29) {
+      // The dispatch reads the current anchor (+0x6c8) before the enter writes it.
+      const cur = this.tFrom;
+      this.enterTransition(cur, cur > 4 ? cur - 5 : cur + 5);
+    } else {
+      const move = BARBA_MOVES[phase];
+      if (move) this.enterTransition(move[0], move[1]);
+    }
     if (phase === BARBA_PHASE.finale) this.enterFinale();
     else if (phase === BARBA_PHASE.dead) this.enterDead();
     else if (phase === BARBA_PHASE.timed) this.countdown = 0; // ASSUMED: the 0x1be start is not traced
@@ -604,8 +759,9 @@ export class BarbaRayAi extends BrainBase {
     if (phase === BARBA_PHASE.run0 || phase === BARBA_PHASE.run2) for (const f of this.followers) f.stop();
     // Event 5 of 0x15 / 0x16 and of 0x0ee0 clears the gate block (+0x630 bit 2); the
     // 0x0ee0 leave also takes the table's flag as the side (asm 0x004b0f26).
-    if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2 || phase === 5 || phase === 6) this.flags &= ~4;
-    if (phase === 5 || phase === 6) this.side = this.variant;
+    if (phase === BARBA_PHASE.wall0 || phase === BARBA_PHASE.wall2 || phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.flags &= ~4;
+    if (phase === BARBA_PHASE.arc0 || phase === BARBA_PHASE.arc2) this.side = this.variant;
+    if (isBarbaTransition(phase)) this.leaveTransition();
   }
 
   // 0x1c enter (0x004b5d1c, param 4): the state is 0x10, the side 3, the body
@@ -656,6 +812,7 @@ export class BarbaRayAi extends BrainBase {
     this.z = BARBA_SIDE_ENTRY.z;
     this.lift = BARBA_SIDE_ENTRY.lift;
     this.setYaw(s0 ? BARBA_SIDE_ENTRY.yaw : -BARBA_SIDE_ENTRY.yaw);
+    this.warps++; // a jump from wherever the body was (the smooth renderer must not slide)
   }
 
   // Phase 0x13 / 0x14 enter (0x004b3c2c, event 4): side entry, the wait (+0x73c 180,
@@ -687,7 +844,7 @@ export class BarbaRayAi extends BrainBase {
     this.flags &= ~0x200;
   }
 
-  // Phase 5 / 6 enter (0x004b0ee0, event 4): the body moves to anchor `side`, dir
+  // Phase 4 / 0xa enter (0x004b0ee0, event 4; the dispatch passes (0, 2) and (2, 0)): the body moves to anchor `side`, dir
   // (+0x74c) = -1 on side 0 else +1, every movement word zeroed, sub-state 0.
   private enterArc(): void {
     this.flags |= 4;
@@ -703,7 +860,190 @@ export class BarbaRayAi extends BrainBase {
     this.moveCounter = 0;
     this.arcSub = 0;
     this.moveCount = 0;
-    this.arc = null;
+    this.arcStarted = false;
+  }
+
+  // 0x004b1e98 enter (event 4, from / to are the dispatch's two anchors). The body goes to
+  // anchor `from` (ProcessPlayerAction4: lift and heading zeroed, a warp), then each axis
+  // is an easing from that anchor toward `to`, signed by the direction of the move. The
+  // curve's max and accel depend on `to` (< 5: the low curve) and on the z sign.
+  private enterTransition(from: number, to: number): void {
+    this.flags = (this.flags & ~4) | 0x100; // gate open (0x630: bit 2 cleared, bit 8 set)
+    this.tFrom = from;
+    this.tTo = to;
+    this.teleport(from);
+    this.tBaseX = this.x;
+    this.tBaseY = this.y;
+    this.tBaseZ = this.z;
+    const a = BARBA_ANCHORS[from]!;
+    const b = BARBA_ANCHORS[to]!;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const dz = b[2] - a[2];
+    this.sgnX = Math.sign(dx);
+    this.sgnY = Math.sign(dy);
+    this.sgnZ = Math.sign(dz);
+    const low = to < BARBA_TRANSITION.near;
+    // x and y: max 3 / accel 0.08 (to < 5) or 6 / 0.16. Same curve for both axes.
+    const maxXY = low ? 3 : 6;
+    const rateXY = low ? 0.08 : 0.16;
+    this.ex.initSym(maxXY, Math.abs(dx), rateXY); // 0x638: 00434afc
+    this.ey.initSym(maxXY, Math.abs(dy), rateXY); // 0x658: 00434afc
+    // z: the z-down side (sign <= 0) uses 7 / 0.2 (low) or 14 / 0.4 with decel 0.05 (the
+    // ac4 call); the other side 5 / 0.08 or 10 / 0.16 (the afc call).
+    if (this.sgnZ <= 0) {
+      this.ez.init(low ? 7 : 14, Math.abs(dz), low ? 0.2 : 0.4, 0.05); // 0x678: 00434ac4
+    } else {
+      this.ez.initSym(low ? 5 : 10, Math.abs(dz), low ? 0.08 : 0.16); // 0x678: 00434afc
+    }
+    this.moveSub = 0;
+    this.tDone = 0;
+    this.tA = this.sgnZ === 0 ? 1 : 0;
+    if (this.sgnZ <= 0) this.tB = this.sgnX === 0 ? 2 : 0;
+    else this.tB = this.sgnX === 0 ? 3 : 1;
+    if (this.sgnY === 0) {
+      // Sub-state by the anchors: the approach (0), the x-first (1, 2) or the z-first (3).
+      if (from === 1 || from === 6) this.tSub = 2;
+      else if (from === 3 || from === 8) this.tSub = 0;
+      else if (to === 1 || to === 6) this.tSub = 1;
+      else this.tSub = 3;
+    } else {
+      // A climb or a drop: sub 4 waits for all three easings, and the volopt flag (0x400)
+      // and its sound follow the direction (ASSUMED: the flag's pillar objects are not drawn).
+      this.tSub = 4;
+      if (this.sgnY > 0) {
+        this.flags &= ~0x400;
+        this.events.push({ kind: 'se', id: 0x3e9 });
+      } else {
+        this.flags |= 0x400;
+        this.events.push({ kind: 'se', id: 1000 });
+      }
+    }
+  }
+
+  // The transition's frame (event 0): the sub-state, then the body is each axis's
+  // easing output, signed, from the start. The done flag (0x730 = 1) is the leader's cue
+  // for the next table step (event 9).
+  private transitionFrame(): void {
+    let done = false;
+    switch (this.tSub) {
+      case 0:
+        done = this.approachStep();
+        break;
+      case 1:
+        done = this.xFirstStep();
+        break;
+      case 2:
+        done = this.xThenZStep();
+        break;
+      case 3:
+        done = this.zFirstStep();
+        break;
+      case 4:
+        done = this.settleStep();
+        break;
+      default:
+        break;
+    }
+    if (done) this.moveSub = 1;
+    this.x = this.ex.pos * this.sgnX + this.tBaseX;
+    this.y = this.ey.pos * this.sgnY + this.tBaseY;
+    this.z = this.ez.pos * this.sgnZ + this.tBaseZ;
+  }
+
+  private bumpWait(): void {
+    const w = this.tWait + BARBA_TRANSITION.tickWait;
+    this.tWait = w < BARBA_TRANSITION.doneWait ? w : BARBA_TRANSITION.doneWait;
+  }
+
+  // Sub 0 (ProcessPlayerApproachPhase): x and y ease; z runs on its own velocity (state 1,
+  // clamped to -4 a tick and the step 0.1) until x passes 30, then z eases (state 3).
+  private approachStep(): boolean {
+    this.ex.tick();
+    if (this.ey.tick() === 3) this.tDone = 1;
+    let st = this.tB;
+    if (st === 1) {
+      let vz = this.ez.v - BARBA_TRANSITION.zVelStep;
+      if (vz < -BARBA_TRANSITION.zVelClamp) vz = -BARBA_TRANSITION.zVelClamp;
+      this.ez.v = vz;
+      this.ez.pos += vz;
+      if (BARBA_TRANSITION.approachX < this.ex.pos) st = 3;
+    } else if (st === 3) {
+      if (this.ez.tick() === 3) st = 4;
+    }
+    this.tB = st;
+    this.bumpWait();
+    return st === 4 && this.tDone === 1;
+  }
+
+  // Sub 1 (ProcessSinowberillMovementState_004b2b14): z eases; x follows once z passed 380.
+  private xFirstStep(): boolean {
+    this.ez.tick();
+    if (this.ey.tick() === 3) this.tDone = 1;
+    let st = this.tA;
+    if (st === 0) {
+      if (BARBA_TRANSITION.wait1 < this.ez.pos) st = 1;
+    } else if (st === 1) {
+      if (this.ex.tick() === 3) st = 2;
+    }
+    this.tA = st;
+    this.bumpWait();
+    return st === 2 && this.tDone === 1;
+  }
+
+  // Sub 2 (ProcessSinowberillMovementState_004b2a24): x eases; z starts once x passes 160,
+  // and runs its own easing from the wait (0.3), then sub 4's gate.
+  private xThenZStep(): boolean {
+    this.ex.tick();
+    if (this.ey.tick() === 3) this.tDone = 1;
+    let st = this.tB;
+    if (st === 0) {
+      if (BARBA_TRANSITION.wait2 < this.ex.pos) st = 2;
+    } else if (st === 2) {
+      this.tWait = BARBA_TRANSITION.waitDown; // 0xc8 = 0.3 (0x3e99999a)
+      st = 3;
+    } else if (st === 3) {
+      if (this.ez.tick() === 3) st = 4;
+      if (BARBA_TRANSITION.wait2z < this.ez.pos) this.bumpWait();
+    }
+    this.tB = st;
+    return st === 4 && this.tDone === 1;
+  }
+
+  // Sub 3 (ProcessSinowberillMovementState_004b2954): z eases first; x follows once z
+  // passes 100; the wait saturates at 0.9 while z is past 100.
+  private zFirstStep(): boolean {
+    this.ez.tick();
+    if (this.ey.tick() === 3) this.tDone = 1;
+    let st = this.tA;
+    if (st === 0) {
+      this.tWait = BARBA_TRANSITION.waitDown;
+      if (BARBA_TRANSITION.wait3 < this.ez.pos) st = 1;
+    } else if (st === 1) {
+      if (this.ex.tick() === 3) st = 2;
+    }
+    this.tA = st;
+    if (BARBA_TRANSITION.wait3 < this.ez.pos) this.tWait = BARBA_TRANSITION.doneWait;
+    return st === 2 && this.tDone === 1;
+  }
+
+  // Sub 4 (the event 0 case 4): all three easings done and the wait past 0.9 (0.1 a tick).
+  // While not all are done, a descent (sign y < 0) holds the wait at 0.3.
+  private settleStep(): boolean {
+    const sz = this.ez.tick();
+    const sx = this.ex.tick();
+    const sy = this.ey.tick();
+    if (sz === 3 && sx === 3 && sy === 3) {
+      this.tWait += BARBA_TRANSITION.tickWait;
+      return BARBA_TRANSITION.doneWait < this.tWait;
+    }
+    if (this.sgnY < 0) this.tWait = BARBA_TRANSITION.waitDown;
+    return false;
+  }
+
+  // Event 5 of 0x004b1e98 (the leave): the anchor the body reached is the current one.
+  private leaveTransition(): void {
+    this.tFrom = this.tTo;
   }
 
   // Event 0 of 0x13 / 0x14 (asm 0x004b3d3a): the wait, then one follower target every
@@ -843,13 +1183,15 @@ export class BarbaRayAi extends BrainBase {
         if (this.timer >= 45) {
           this.arcSub = 4;
           this.f75c = (-30 / 2) * this.f74c; // 0x907000 / 0xa47a6c
-          // FUN_00434ac4(7.0, |25 - z|, 0.2, 0.05): the arc's easing (ASSUMED decel guard).
-          this.arc = new DrlEasing(7, Math.max(Math.abs(25 - this.z), 1e-3), 0.2, 0.05);
+          // 0x004b0ee0 sub 3 (refsrc Psobb.exe-05112026.c:233873): 00434ac4(max 7.0, dist |25 - z|, accel 0.2, decel 0.05).
+          this.arcEase.init(7, Math.abs(25 - this.z), 0.2, 0.05);
+          this.arcStarted = true;
           this.f758 = this.z;
         }
         break;
       case 4:
-        if (this.timer >= 70) {
+        // 0x906fb8 = 46.0 (exedata; the older note said 70). Refsrc 233881.
+        if (this.timer >= 46) {
           this.arcSub = 5;
           this.f75c = ((-175 - this.x * this.f74c) / 36) * this.f74c; // 0x906fb4 / 0xa47a68
         }
@@ -890,13 +1232,13 @@ export class BarbaRayAi extends BrainBase {
         this.x += this.f75c;
         this.pullLift();
         this.arcStep();
-        this.z = this.f758 - (this.arc?.pos ?? 0);
+        this.z = this.f758 - this.arcEase.pos;
         break;
       case 6: {
         this.pullLift();
         const st = this.arcStep();
         if (st === 3) this.moveSub = 2; // FUN_0042cdc0 returns 3: done, the table goes on
-        this.z = this.f758 - (this.arc?.pos ?? 0);
+        this.z = this.f758 - this.arcEase.pos;
         if (this.slot === 1) this.flags |= 0x100;
         break;
       }
@@ -905,9 +1247,9 @@ export class BarbaRayAi extends BrainBase {
     }
   }
 
-  // One tick of the arc's easing (FUN_0042cdc0, ASSUMED to be the DrlEasing); 0 without it.
+  // One tick of the arc's easing (ASSUMED: FUN_0042cdc0 is this record's tick, returns 3 when done).
   private arcStep(): number {
-    return this.arc ? this.arc.tick() : 0;
+    return this.arcEase.tick();
   }
 
   // Event 0 of 0x1c (the frame): the cut timers (FUN_007aaa30 is a timer
@@ -1005,8 +1347,12 @@ export class BarbaRayAi extends BrainBase {
   }
 
   // The state's own frame (event 0). Decoded: 0x1c, 0x1d, 0x1b, the spawner, and the
-  // movement of 0x13 / 0x14, 0x15 / 0x16 and 0x5 / 0x6.
+  // movement of 0x13 / 0x14, 0x15 / 0x16, 0x4 / 0xa (the arc) and the corner transitions.
   private stateFrame(targets: readonly AiTarget[]): void {
+    if (isBarbaTransition(this.phase)) {
+      this.transitionFrame();
+      return;
+    }
     switch (this.phase) {
       case BARBA_PHASE.finale:
         this.finaleFrame();
@@ -1022,8 +1368,8 @@ export class BarbaRayAi extends BrainBase {
       case BARBA_PHASE.wall2:
         this.swimFrame();
         return;
-      case 5:
-      case 6:
+      case BARBA_PHASE.arc0:
+      case BARBA_PHASE.arc2:
         this.arcFrame();
         return;
       default:
@@ -1051,6 +1397,21 @@ export class BarbaRayAi extends BrainBase {
     if (this.leader() && !this.dead) {
       if (this.phase === BARBA_PHASE.finale) {
         this.doneCheck();
+      } else if (isBarbaTransition(this.phase)) {
+        // Event 9 of 0x004b1e98 (0x730 == 1, the transition is done): the next table step at
+        // once, not paced (ASSUMED: the gate's 0x1b is not sent during a transition). With the
+        // gate closed the step waits BARBA_DWELL ticks, as the other undecoded waits do.
+        if (this.moveSub === 1) {
+          if (this.gateOpen) {
+            this.tableLoop();
+          } else {
+            this.dwell++;
+            if (this.dwell >= BARBA_DWELL) {
+              this.dwell = 0;
+              this.tableLoop();
+            }
+          }
+        }
       } else if (this.gateOpen) {
         if (this.pace <= 0) {
           this.pace = BARBA_PACE;
@@ -1077,7 +1438,13 @@ export class BarbaRayAi extends BrainBase {
 
   // States with a decoded frame of their own (their exits are not the dwell).
   private hasDecodedExit(): boolean {
-    return this.phase === BARBA_PHASE.timed || this.phase === BARBA_PHASE.finale || this.phase === BARBA_PHASE.dead || (this.phase >= BARBA_PHASE.spawn0 && this.phase <= BARBA_PHASE.spawn2);
+    return (
+      this.phase === BARBA_PHASE.timed ||
+      this.phase === BARBA_PHASE.finale ||
+      this.phase === BARBA_PHASE.dead ||
+      isBarbaTransition(this.phase) ||
+      (this.phase >= BARBA_PHASE.spawn0 && this.phase <= BARBA_PHASE.spawn2)
+    );
   }
 
   onDamage(clientId: number): void {

@@ -649,3 +649,31 @@ Result: the body moves in the 0x13 side entries (x = -100 / +100, z = 10, headin
 0x15 swim (x and z drift, the heading turns, the teleport back at the exit) and the 0x5 /
 0x6 arcs (teleport to the side anchor, x and z moves). The e2e records the body place per
 sample (barbaray-smoke.spec.ts).
+
+## Pass 7: the phase dispatch (Ghidra) and the corner transitions
+
+Source: `tools/ghidra/decomp.sh 0x004b02b4` (the dispatcher `FUN_004b02b4`, the switch on the
+phase). It corrects pass 6: the arc is phases 4 and 0xa (`FUN_004b0ee0(p, 0, 2)` /
+`(p, 2, 0)`); 5 and 6 are corner transitions (`FUN_004b1e98(p, 0, 3)` / `(p, 1, 2)`).
+Full map: 3 (0,1), 5 (0,3), 6 (1,2), 8 (1,0), 9 (2,3), 0xb (2,1), 0xc (3,0), 0xe (3,2);
+0x28 / 0x29 (current anchor -> its 5 below / above); 0x2a..0x39 fixed (6,7) (7,8) (8,5)
+(5,6) (6,5) (5,8) (8,7) (7,6) (6,9) (9,8) (8,9) (9,6) (5,9) (9,7) (7,9) (9,5);
+0x0d 0x004b7040; 0x0f / 0x10 0x004b2cd0; 0x11 / 0x12 0x004b30fc; 0x13 / 0x14 0x004b3c2c;
+0x15 / 0x16 0x004b41ac; 0x17 0x004b6d08; 0x18 0x004b6300; 0x19 / 0x1a 0x004b4684;
+0x1b 0x004b60c4; 0x1c 0x004b5d1c; 0x1d 0x004b5c98; 0x3a..0x3c the spawner (0x004b4e6c).
+Dispatch 0 / 1 / 2: 0x004b9e54 / 0x004b8034 / 0x004b7860 (the pull-back to z = -210).
+
+The transition body 0x004b1e98 (ported, `BarbaRayAi.enterTransition` / `transitionFrame`):
+enter (event 4): the body to anchor `from` (0x004b1e58 via ProcessPlayerAction4, lift 0,
+heading 0); the x, y, z origins are the body; signs +0x754 / +0x760 / +0x758 are sign(to - from)
+per axis; the x and y easings are 00434afc(max 3 / 6, dist, rate 0.08 / 0.16) (low when to < 5);
+the z easing is 00434ac4(max 7 / 14, dist, accel 0.2 / 0.4, decel 0.05) when the z sign is <= 0,
+else 00434afc(max 5 / 10, dist, rate 0.08 / 0.16); the sub-state (+0x734) is 1 / 2 / 3 by the
+anchors when y does not move, 4 when it does. Frame (event 0): the sub-state (approach 0,
+x-first 1, x-then-z 2, z-first 3, settle 4), then x = out_x * sign_x + x0, y and z alike. Done
+(0x730 = 1) sets the leader's cue (event 9): the next table step.
+
+Constants are the exe's (exedata): see DEVLOG 2026-10-24. Open: the volopt holders (+0x6e4),
+the animation-speed ramp (+0xc8 shared), the arrival ack (event 2), and the phases listed in the
+DEVLOG entry. CONFLICT (not resolved): the arc's enter teleports to `side` (asm), but the dispatch
+passes (0, 2) and (2, 0); for phase 0xa the from anchor is 2.

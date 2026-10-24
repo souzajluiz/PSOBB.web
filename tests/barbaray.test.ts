@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import {
   BARBA_ANCHORS,
   BARBA_CAPTURE_COUNT,
+  BARBA_DWELL,
   BARBA_CAPTURE_OFFSETS,
   BARBA_HP,
   BARBA_PACE,
@@ -641,11 +642,11 @@ const runTicks = (b: BarbaRayAi, n: number) => {
   eq(b.flags & 4, 0, 'swim leave clears the gate block');
 }
 {
-  // Arc (phase 5, side 0, asm 0x004b0ee0): the enter teleports to anchor 0; the sub-states
-  // follow the timer marks 10 / 20 / 28 / 45 / 70 (64 is already past at sub 5).
+  // Arc (phase 4, side 0, asm 0x004b0ee0; Ghidra dispatch (0, 2)): the enter teleports to
+  // anchor 0; the sub-states follow the timer marks 10 / 20 / 28 / 45 / 46 (exe 0x906fb8) / 64.
   const b = brain({ leader: false });
   b.side = 0;
-  b.applyPhase(5, null);
+  b.applyPhase(4, null);
   eq(b.slot, 5, 'arc side 0: slot 5');
   eq(b.f74c, -1, 'arc side 0: dir -1');
   eq(b.x, BARBA_ANCHORS[0]![0], 'arc enter: anchor 0 x');
@@ -675,32 +676,134 @@ const runTicks = (b: BarbaRayAi, n: number) => {
     n++;
   }
   eq(b.arcSub, 4, 'arc: sub 4 at timer 45');
-  check(b.arc !== null, 'arc sub 4: the easing (0x00434ac4) is set');
+  check(b.arcStarted && b.arcEase.max === 7 && b.arcEase.accel === 0.2 && b.arcEase.decel === 0.05, 'arc sub 3: the easing 00434ac4(7, |25 - z|, 0.2, 0.05)');
   near(b.f75c, (-30 / 2) * -1, 'arc sub 4: vx = (-30/2) * dir');
   while (b.arcSub === 4 && n < 220) {
     b.tick([]);
     n++;
     check(finite(b), `arc: finite at tick ${n}`);
   }
-  eq(b.arcSub, 5, 'arc: sub 5 at timer 70');
+  eq(b.arcSub, 5, 'arc: sub 5 at timer 46');
   while (b.moveSub === 1 && n < 400) {
     b.tick([]);
     n++;
     check(Math.abs(b.x) < 1000 && Math.abs(b.z) < 2000, `arc: bounded at tick ${n}`);
   }
-  eq(b.moveSub, 2, 'arc: done (sub 6 returns 3) after the timer passes 70');
+  eq(b.moveSub, 2, 'arc: done (sub 6 returns 3) after the timer passes 64');
 }
 {
   // Arc on side 1 teleports to anchor 1 (0, 7, 500) and runs dir +1.
   const b = brain({ leader: false });
   b.side = 1;
-  b.applyPhase(6, null);
+  b.applyPhase(0x0a, null);
   eq(b.slot, 6, 'arc side 1: slot 6');
   eq(b.f74c, 1, 'arc side 1: dir +1');
   eq(b.x, BARBA_ANCHORS[1]![0], 'arc side 1: anchor 1 x');
   eq(b.z, BARBA_ANCHORS[1]![2], 'arc side 1: anchor 1 z');
 }
 
+// --- corner transitions (0x004b1e98: phases 3, 5, 6, 8, 9, 0xb, 0xc, 0xe and 0x28 .. 0x39) --
+{
+  // 0x03 (anchor 0 -> 1): the enter teleports to anchor 0 (one warp), the signs are (+, 0, +),
+  // the curves are the low ones (max 3 / 0.08 in x, 5 / 0.08 in z for sign z > 0), sub 1.
+  const b = brain({ leader: false });
+  const ex = b.ex;
+  const w = b.warps;
+  b.applyPhase(3, null);
+  eq(b.phase, 3, 'transition 3: phase');
+  eq(b.warps, w + 1, 'transition 3: the enter is one warp');
+  eq(b.x, BARBA_ANCHORS[0]![0], 'transition 3: teleport to anchor 0 x');
+  eq(b.z, BARBA_ANCHORS[0]![2], 'transition 3: teleport to anchor 0 z');
+  eq(b.sgnX, 1, 'transition 3: x sign +1');
+  eq(b.sgnY, 0, 'transition 3: y sign 0 (both at height 7)');
+  eq(b.sgnZ, 1, 'transition 3: z sign +1');
+  eq(b.tSub, 1, 'transition 3: sub 1 (to anchor 1, y level)');
+  near(b.ex.dist, 175, 'transition 3: x distance 175');
+  near(b.ez.dist, 475, 'transition 3: z distance 475');
+  eq(b.ex.max, 3, 'transition 3: x max 3');
+  eq(b.ez.max, 5, 'transition 3: z max 5 (afc, sign +)');
+  let n = 0;
+  let warpsDuring = 0;
+  while (b.moveSub === 0 && n < 400) {
+    const w2 = b.warps;
+    b.tick([]);
+    warpsDuring += b.warps - w2;
+    n++;
+    check(Number.isFinite(b.x) && Number.isFinite(b.z), `transition 3: finite at tick ${n}`);
+  }
+  check(b.moveSub === 1, 'transition 3: done within 400 ticks');
+  check(n > 100 && n < 260, `transition 3: the walk takes 100..260 ticks (got ${n})`);
+  eq(warpsDuring, 0, 'transition 3: no warp during the walk');
+  check(Math.abs(b.x - BARBA_ANCHORS[1]![0]) < 2 && Math.abs(b.z - BARBA_ANCHORS[1]![2]) < 1e-6, `transition 3: ends at anchor 1 (got ${b.x}, ${b.z})`);
+  check(ex === b.ex, 'transition: the easing records are reused (no allocation per transition)');
+}
+{
+  // 0x28 from anchor 0 goes to anchor 5 (-205, -100, 25): a drop, so sub 4 (the settle) and
+  // the volopt flag 0x400 off, the SE 0x3e9 (sign y < 0 takes the else branch: flag on, SE 1000).
+  const b = brain({ leader: false });
+  b.applyPhase(0x28, null);
+  eq(b.tSub, 4, 'transition 0x28: a y move is sub 4');
+  check((b.flags & 0x400) !== 0, 'transition 0x28: a drop sets flag 0x400');
+  check(b.drain().some((e) => e.kind === 'se' && e.id === 1000), 'transition 0x28: SE 1000 on the drop');
+  let n = 0;
+  while (b.moveSub === 0 && n < 400) {
+    b.tick([]);
+    n++;
+  }
+  check(b.moveSub === 1, 'transition 0x28: done within 400 ticks');
+  check(Math.abs(b.y - BARBA_ANCHORS[5]![1]) < 1e-6 && Math.abs(b.x - BARBA_ANCHORS[5]![0]) < 2, `transition 0x28: lands on anchor 5 (got ${b.x}, ${b.y})`);
+  // The next 0x28 starts from anchor 5 (+0x6c8, the leave's `from := to`), so it goes to 0.
+  b.applyPhase(0x28, null);
+  eq(b.tTo, 0, 'transition 0x28 again: from anchor 5 to anchor 0 (5 > 4 is 5 - 5)');
+}
+{
+  // Phases 5 / 6 are transitions (0 -> 3 and 1 -> 2), not the arc (the arc is 4 / 0xa).
+  const b = brain({ leader: false });
+  b.applyPhase(5, null);
+  eq(b.tTo, 3, 'phase 5: anchor 0 to 3');
+  eq(b.x, BARBA_ANCHORS[0]![0], 'phase 5: teleport to anchor 0');
+  eq(b.arcStarted, false, 'phase 5: no arc');
+  b.applyPhase(6, null);
+  eq(b.tTo, 2, 'phase 6: anchor 1 to 2');
+  eq(b.x, BARBA_ANCHORS[1]![0], 'phase 6: teleport to anchor 1');
+}
+{
+  // The leader's next table step after a transition: a closed gate waits BARBA_DWELL ticks.
+  const b = brain({ leader: true });
+  b.applyPhase(3, null);
+  let n = 0;
+  while (b.moveSub === 0 && n < 400) {
+    b.tick([]);
+    n++;
+  }
+  b.drain();
+  let sent = -1;
+  for (let k = 1; k <= BARBA_DWELL + 5 && sent < 0; k++) {
+    b.tick([]);
+    if (sends(b.drain()).length > 0) sent = k;
+  }
+  check(sent >= BARBA_DWELL - 2 && sent <= BARBA_DWELL + 2, `transition done, gate closed: the next step after the dwell (got ${sent})`);
+}
+{
+  // A side entry (0x13 / 0x15 enter, FUN_004b416c) jumps: one warp.
+  const b = brain({ leader: false });
+  const w = b.warps;
+  b.applyPhase(BARBA_PHASE.run0, null);
+  eq(b.warps, w + 1, 'side entry: one warp (the body jumps to the side)');
+}
+{
+  // The gate-open leader steps the table at once when the transition is done (event 9).
+  const b = brain({ leader: true });
+  b.bodyHp = 0; // gateOpen: the pool is empty and the gate block is clear
+  b.applyPhase(3, null);
+  // The first send comes when the walk is done (about 200 ticks), not on the 30-tick pace.
+  let sentTick = -1;
+  for (let k = 0; k < 400 && sentTick < 0; k++) {
+    b.tick([]);
+    if (sends(b.drain()).length > 0) sentTick = k;
+  }
+  check(sentTick > 150 && sentTick < 260, `gate open: the step follows the done walk, not the pace (sent at ${sentTick})`);
+}
 void BARBA_PHASE;
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);
