@@ -25,6 +25,7 @@ import {
   FloatingTexts,
   expText,
   glyphTextWidth,
+  hitText,
   levelUpText,
   MessageLines,
   MESSAGE_LINE_FRAMES,
@@ -250,6 +251,17 @@ const tex = { panel: { name: 'panel' }, icons: { name: 'icons' }, font: { name: 
   f.add(expText(12, () => ({ x: 320, y: 200 })));
   f.add(levelUpText(false, () => ({ x: 320, y: 100 })));
   check(expText(12, () => null).text === 'EXP+12', 'EXP text');
+  // handle_experience -> display_special_attack_text_effect(pos, 0xffff00ff, 0x14, 0x14, "EXP", n):
+  // magenta (ARGB ff ff 00 ff), delay 0x14, duration 0x14 (exe, `.c:762740`).
+  check(expText(12, () => null).rgb === 0xff00ff && expText(-3, () => null).text === 'EXP-3', 'EXP text colour and sign');
+  // Resta's "HP+n" (CreateFloatingTextObject_0078a944(pos, 0xff00ff00, 0x14, 0, ...), `.c:748195`) and the
+  // damage number: no delay, 0x14 frames.
+  const h = new FloatingTexts();
+  h.add(hitText('HP+25', 0x00ff00, () => ({ x: 10, y: 10 })));
+  h.tick();
+  check(h.size === 1, 'a hit text with no delay is alive after one tick');
+  for (let i = 0; i < 19; i++) h.tick();
+  check(h.size === 0, 'a hit text lives 0x14 frames');
   for (let i = 0; i < 39; i++) f.tick();
   check(f.size === 2, 'both alive at frame 39');
   f.tick();
