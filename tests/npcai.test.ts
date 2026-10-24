@@ -37,6 +37,16 @@ import {
   HEAD_STATE_MOVE,
   HEAD_TWO_TECH_TABLE,
   HEAD_WALL_MASK,
+  HEAD_RAY_HEIGHT,
+  HEAD_FLAG_ARRIVE,
+  HEAD_FLAG_AVOID,
+  adjustTargetForCollision,
+  calculateAvoidanceTarget,
+  distancePointToLine,
+  pointToSegmentDistance,
+  rotYBams,
+  updateTargetPosition,
+  type WallHit,
   NpcHead,
 } from '../client/src/quest/npchead.ts';
 import { buildNpcMove } from '../client/src/net/game.ts';
@@ -48,6 +58,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// A wall hit for the stubs (the object's point and its surface normal).
+const HIT_ANY: WallHit = { point: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } };
+const HIT = { point: { x: 25, y: 0, z: 0 }, normal: { x: -1, y: 0, z: 0 } };
 
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
@@ -292,20 +305,20 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   return h;
 };
 {
-  const noWall = () => false;
+  const noWall = () => null;
   check(headSpawnRange(13) === 25 && headSpawnRange(18) === 30 && headSpawnRange(28) === 40 && headSpawnRange(50) === 40, 'spawn range: min(40, leash + 12) (DAT_0097dd8c / dd90)');
   const m = headMidpoint({ x: 0, y: 0, z: 0 }, { x: 10, y: 4, z: -6 });
   check(m.x === 5 && m.y === 2 && m.z === -3, 'midpoint of the NPC and the anchor, k = 0.5 (DAT_0097dd84)');
 
-  // Pioneer 2: the anchor is the owner, the state is 1 (move), flag 0x20 with 0x1010 cleared.
+  // Pioneer 2: the anchor is the owner, the state is 1 (move), flags 0xffffefef | 0x20 (0x10 clears, 0x1000 stays).
   const h = headWith(13);
   h.flags = 0x1010;
   h.pioneerUpdateState({ x: 50, y: 0, z: 0 });
-  check(h.state === HEAD_STATE_MOVE && h.flags === 0x20 && h.anchor.x === 50, 'Pioneer 2 update state: anchor = owner, state 1, flags 0x20 (0x1010 cleared)');
+  check(h.state === HEAD_STATE_MOVE && h.flags === 0x20 && h.anchor.x === 50, 'Pioneer 2 update state: anchor = owner, state 1, flags & ~0x1010 | 0x20 (0xffffefef)');
 
   // A far owner: the send target becomes the midpoint (25), and a run follows from the sender.
   let seenMask = -1;
-  let wallAnswer = false;
+  let wallAnswer: WallHit | null = null;
   const wall = (_a: unknown, _b: unknown, mask: number) => {
     seenMask = mask;
     return wallAnswer;
@@ -338,12 +351,21 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   w.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 40, y: 0, z: 0 }, wall: noWall });
   check(w.sendTarget.x === 20 && new NpcMoveSender().tick(20, 25) === 'walk', 'a send distance within the leash is a walk (6x40)');
 
-  // A wall between the NPC and the anchor: the answer is recorded (the branch is ASSUMED: the midpoint).
-  const blocked = headWith(13);
-  blocked.pioneerUpdateState({ x: 50, y: 0, z: 0 });
-  wallAnswer = true;
-  blocked.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, wall });
-  check(blocked.wallHit === true && blocked.sendTarget.x === 25, 'a wall on the ray is recorded; the avoidance branch is not ported (ASSUMED midpoint)');
+  // A wall on the NPC's ray (CheckWall_007b18e0): the owner's ray is clear, so the avoidance point beside the wall
+  // (perp of the normal (-1,0,0) is (0,0,1), at the weapon, 1.5 * 25 = 37.5 out) is clear: the target is beyond
+  // it, (0,0,5) (the owner's ray at the owner's closest point, 5 out). Flag 1 (avoid) is set.
+  const clearHead = headWith(13);
+  clearHead.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  wallAnswer = HIT;
+  clearHead.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, wall: (f: { x: number; y: number; z: number }) => (f.y === HEAD_RAY_HEIGHT && f.x === 0 ? HIT : null) });
+  check(clearHead.wallHit === true && Math.abs(clearHead.moveTarget.z - 5) < 1e-9 && Math.abs(clearHead.moveTarget.x) < 1e-9, 'a wall with a clear owner ray: the target is the point beyond the wall, (0,0,5) (CalculateAvoidanceTarget clear branch)');
+  check((clearHead.flags & HEAD_FLAG_AVOID) !== 0, 'a wall hit sets flag 1 (the avoidance target is in use)');
+  // A blocked owner ray: the step-back point (38 out from the avoidance target along the anchor direction, DAT_0097dd7c)
+  // is the move, with the arrival flag 2 set.
+  const blockedHead = headWith(13);
+  blockedHead.pioneerUpdateState({ x: 50, y: 0, z: 0 });
+  blockedHead.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, wall: (f: { x: number; y: number; z: number }) => (f.x === 50 || (f.y === HEAD_RAY_HEIGHT && f.x === 0) ? HIT : null) });
+  check((blockedHead.flags & HEAD_FLAG_ARRIVE) !== 0 && (blockedHead.flags & HEAD_FLAG_AVOID) === 0 && blockedHead.moveTarget.x > 60, 'a blocked owner ray: the avoidance step (40 along the anchor direction) with the arrival flag 2');
 
   // The cast states (HandlePlayerTechCastState_007b2bc0 .c:797215): Resta / Anti 0x16, Foie / Barta / Zonde 0x17, others 2.
   check(headCastInputState(0xf) === 0x16 && headCastInputState(0x10) === 0x16, 'Resta and Anti: input state 0x16');
@@ -358,12 +380,52 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   check(headTwoTech(0x10, false, 0, 0) === 6 && headTwoTech(0x10, true, 0, 0) === 8, 'tier 2: Zonde, or Razonde when strong');
   check(headTwoTech(0, false, 5, 10) === null && headTwoTech(0, false, 0.5, 10) === 0, 'a weak roll above the head byte +0x53 * 0.1 skips the cast (.c:797388)');
   check(headTwoTech(0, true, 5, 10) === 1, 'a strong cast is not skipped by the roll');
+  // The avoidance and the segment helpers (SinowberillHead_CalculatePointToSegmentDistance_007b20ac, AdjustTargetForCollision_007b25c0,
+  // UpdateTargetPosition_007b1ad0, the BAMS rotation of matrix_rotation_y).
+  const seg = pointToSegmentDistance({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 5, y: 0, z: 0 });
+  check(seg.dist === 7 && seg.dir.x === -1, 'segment distance: two equal line distances take 7 and the mean direction (.c:796771)');
+  const seg2 = pointToSegmentDistance({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, { x: 0, y: 0, z: 10 }, { x: 10, y: 0, z: 10 }, { x: 5, y: 0, z: 2 });
+  check(seg2.dist === 15 && seg2.dir.x === -1 && seg2.dir.z === 0, 'segment distance: the nearer line (A, 2 away) gives B when B is farther: dist = (len B * 0.5 + 10 - door dist) + 10 (.c:796771)');
+  check(distancePointToLine({ x: 5, y: 0, z: 2 }, { x: 10, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }).dist === 2, 'the distance to the infinite line through a point with a direction (GetDistancePointToLineSegment)');
+  const pulled = adjustTargetForCollision({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 10 }, (_f, _t) => ({ point: { x: 0, y: 3, z: 10 }, normal: { x: 0, y: 1, z: 0 } }));
+  check(pulled !== null && Math.abs(pulled.z - 0) < 1e-9 && pulled.y === 3, 'AdjustTargetForCollision: a hit pulls the target 10 back along the xz direction (DAT_0097dd38)');
+  check(adjustTargetForCollision({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 10 }, () => null) === null, 'AdjustTargetForCollision: a clear ray keeps the target');
+  const rot = rotYBams({ x: 1, y: 0, z: 0 }, 0x4000);
+  check(Math.abs(rot.x) < 1e-9 && Math.abs(rot.z + 1) < 1e-9, 'matrix_rotation_y: +90 degrees (0x4000) turns (1,0,0) to (0,0,-1)');
+  const ut = updateTargetPosition({ npc: { x: 0, y: 0, z: 10 }, anchor: { x: 0, y: 0, z: -30 }, rec: { vx: 0, vz: 0, type: 0, centre: { x: 0, y: 0, z: 0 }, heading: 0 }, counter: 0, ray: () => null });
+  check(Math.abs(ut.x - 20 / Math.SQRT2) < 1e-9 && Math.abs(ut.z - 20 / Math.SQRT2) < 1e-9, 'UpdateTargetPosition, simple branch: 20 out from the centre along the side turned by the anchor (.c:796511)');
+
+  // The per-tick reset (ResetEntityHitboxes_007b34e8): the bits clear every tick; the first tick places the move target.
+  const rs = headWith(13);
+  rs.npcNeed8c = 0x2a;
+  rs.ownerNeed8c = 2;
+  rs.resetEntityBits({ x: 7, y: 0, z: 9 });
+  check(rs.npcNeed8c === 0 && rs.ownerNeed8c === 0, 'ResetEntityHitboxes: B and Q +0x8c clear every tick');
+  check(rs.moveTarget.x === 7 && rs.moveTarget.z === 27 && rs.sendTarget.x === 7 && rs.initDone, 'the first tick: move target = owner + (0, 0, 18), send target = owner (UpdatePosition_007b3458)');
+  rs.moveTarget = { x: 1, y: 0, z: 1 };
+  rs.resetEntityBits({ x: 50, y: 0, z: 50 });
+  check(rs.moveTarget.x === 1, 'the init runs once: later ticks keep the move target');
+  // The probe's bits (7af7ec's loop): an enemy sets 0x80 (the counter stops), an object sets 0x20 and its record.
+  const pr = headWith(13);
+  pr.prevNpc = { x: 0, y: 0, z: 0 };
+  pr.state = HEAD_STATE_MOVE;
+  pr.headStateUpdate({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, cands: [], probe: () => ({ kind: 'enemy' }) });
+  check((pr.npcNeed8c & 0x80) !== 0 && pr.wall8c === 0, 'the probe hits an enemy: B +0x8c bit 0x80, and the wall counter stays 0');
+  const pr2 = headWith(13);
+  pr2.prevNpc = { x: 0, y: 0, z: 0 };
+  pr2.headStateUpdate({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 50, y: 0, z: 0 }, cands: [], probe: () => ({ kind: 'object', rec: { vx: 1, vz: 2, type: 0, centre: { x: 3, y: 0, z: 4 }, heading: 0 } }) });
+  check((pr2.npcNeed8c & 0x20) !== 0 && pr2.record?.vx === 1, 'the probe hits an object: B +0x8c bit 0x20 and the collision record');
+
+  // The chooser's head writes: flag 0x200 when B +0x8c has bit 2 and the owner's bit is in (bVar7 == 3).
+  const fc = new NpcHeadChooser().choose(1, { owner90: 0, owner8c: 4, npc90: 0, npc8c: 4, head34: 0, head84: 0, hasTarget: false, hasItem: () => false, canCast: () => true, lockedInRadius: () => false });
+  check(fc.flag200 === true && fc.attack === false, 'the chooser sets flag 0x200 when both need bits are in (.c:795912)');
+
   const combatSrc = readFileSync(join(HERE, '../client/src/render/combat.ts'), 'utf8');
-  check(/npcWallBlocks\(from: \{[^}]*\}, to: \{[^}]*\}, mask: number\): boolean/.test(combatSrc), 'combat view exposes the NPC head wall ray with the mask');
+  check(/npcWallHit\(from: \{[^}]*\}, to: \{[^}]*\}, mask: number\)/.test(combatSrc), 'combat view exposes the NPC head wall ray with the mask and the hit normal');
   const townSrc2 = readFileSync(join(HERE, '../client/src/quest/town.ts'), 'utf8');
   check(townSrc2.includes('this.stepNpcHead(slot, p, leader, row, sender)'), 'the owner follows through the head (town.ts stepNpcHead, the stat row)');
   check(townSrc2.includes("if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);"), 'the 6x40 / 6x42 carry the head send target (goal = head.sendTarget)');
-  check(townSrc2.includes('combat.npcWallBlocks(a, b, mask)'), 'the head wall ray comes from the combat view');
+  check(townSrc2.includes('combat.npcWallHit(a, b, mask)'), 'the head wall ray comes from the combat view (with the hit normal)');
 }
 
 // --- the stat rows and the head's fields (exe: DAT_00a02ea0 + row * 0x28, the constructor .c:794403..794413)
@@ -427,7 +489,7 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   // CheckPathAndTarget: the first candidate with a clear ray is locked; the anchor is the first candidate.
   const rayFirstBlocked = (_from: unknown, to: { x: number; z: number }, mask: number) => {
     check(mask === 0x2100, 'CheckPathAndTarget: the ray mask is 0x2100');
-    return to.x === 30 && to.z === 0; // the first target is behind a wall
+    return to.x === 30 && to.z === 0 ? HIT_ANY : null; // the first target is behind a wall
   };
   const targets = [
     { id: 1, id2: 2, pos: { x: 30, y: 0, z: 0 } },
@@ -438,12 +500,12 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
   check(picked && cp.lockedPrimary === 3 && cp.lockedSecond === 4, 'CheckPathAndTarget: the second target is picked when the first is behind a wall');
   check((cp.flags & 0x1000) === 0 && cp.anchor.x === 30 && cp.anchor.z === 0, 'CheckPathAndTarget: the anchor is the first candidate; 30 (path 20 + 10) is not beyond 30 (no 0x1000)');
   const cp2 = headWith(13, { targets, pathRadius: 30 });
-  cp2.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 5, z: 0 }, ray: () => false });
+  cp2.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 5, z: 0 }, ray: () => null });
   check((cp2.flags & 0x1000) !== 0, 'CheckPathAndTarget: the far anchor (30 + 10 beyond the NPC) sets 0x1000');
   const cp3 = headWith(13);
-  check(!cp3.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: () => false }) && (cp3.flags & 0x40) === 0, 'CheckPathAndTarget: no candidates: no target and no 0x40 (the exe skips the block under B count != 0)');
+  check(!cp3.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: () => null }) && (cp3.flags & 0x40) === 0, 'CheckPathAndTarget: no candidates: no target and no 0x40 (the exe skips the block under B count != 0)');
   const cp4 = headWith(13, { targets });
-  check(!cp4.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: () => true }) && (cp4.flags & 0x40) !== 0, 'CheckPathAndTarget: every candidate blocked: flag 0x40');
+  check(!cp4.checkPathAndTarget({ npc: { x: 0, y: 0, z: 0 }, npcWeapon: { x: 0, y: 0, z: 0 }, ray: () => HIT_ANY }) && (cp4.flags & 0x40) !== 0, 'CheckPathAndTarget: every candidate blocked: flag 0x40');
 
   // UpdateAttackTarget (.c:796082): a second target with the stand-off bit pushes the anchor away from the NPC.
   const ua = headWith(13, { head34: 0x80, anchor: { x: 10, y: 0, z: 0 }, dist88: 25, standOff: 5 });
@@ -465,13 +527,13 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
 
   // The wall counter: at 0x1f the move is refused and the counter goes to 0x1e (AIUpdateState_007b267c).
   const clamp = headWith(13, { wall8c: 0x1f, anchor: { x: 100, y: 0, z: 0 } });
-  clamp.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 100, y: 0, z: 0 }, wall: () => false });
+  clamp.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 100, y: 0, z: 0 }, wall: () => null });
   check(clamp.wall8c === 0x1e && (clamp.flags & 0x4000) !== 0, 'the wall counter at 0x1f refuses the move, sets 0x1e and flag 0x4000');
   check(clamp.sendTarget.x === 0 && clamp.sendTarget.z === 0, 'the refused move sends the NPC its own position');
 
   // The stuck band (15..29) takes CalculateTarget (AIUpdateMovement .c:796237..796244).
   const band = headWith(13, { wall8c: 15, anchor: { x: 30, y: 0, z: 30 }, moveRef: { x: -1, y: 0, z: 0 } });
-  band.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 30, y: 0, z: 30 }, wall: () => false });
+  band.update({ npc: { x: 0, y: 0, z: 0 }, owner: { x: 30, y: 0, z: 30 }, wall: () => null });
   check(Math.abs(band.moveTarget.z + 20) < 1e-9 && Math.abs(band.moveTarget.x) < 1e-9, 'the wall band (counter 15) uses CalculateTarget for the move target');
 }
 
@@ -484,7 +546,7 @@ const headWith = (leash: number, extra: Partial<NpcHead> = {}): NpcHead => {
     allowed: false,
     roll: 0,
     npcStatus8: false,
-    ray: () => false,
+    ray: () => null,
     chooser: () => false,
   };
   // Mode 0, no B +0x8c bit 2: the chooser refuses, the NPC walks to the owner (UpdateAttackTarget), flag 0x20, mode stays 0.

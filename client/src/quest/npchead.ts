@@ -1,68 +1,52 @@
 // The NPC's head (SinowberillHead_*): where the owner's client sends the NPC to walk, whether
-// a move is needed, the target pick of the field, and the attack state machine. The exe keeps
-// one head record per NPC (P) with the owner entity Q = P+0x74 and the NPC entity B = P+0x78
-// (B+0x94 is the NPC's player record: its position +0x38, weapon +0x300, height +0x304, TP +0x336).
+// a move is needed, the target pick of the field, the wall avoidance, and the state dispatch.
+// The exe keeps one head record per NPC (P) with the owner entity Q = P+0x74 and the NPC entity
+// B = P+0x78 (B+0x94 is the NPC's player record: its position +0x38, weapon +0x300, +0x304 y).
 // The dump's Sinowberill / Head names are community guesses; the bodies are what is used.
 //
-// Head fields (P): +0x30 / +0x34 raw row words (+0x34 = the tier word, 0x40 = no state-2 cast),
-// +0x38 acquire range, +0x40 leash, +0x44 far radius (TryAttack's near test is the far test:
-// (P+0x44)^2 <= P+0x58), +0x48 attack radius, +0x4c path radius, +0x50 level byte, +0x52 / +0x53
-// need bytes, +0x54 stand-off, +0x58 owner-NPC distance^2, +0x66 TryAttack counter, +0x68 path
-// counter, +0x7c state, +0x80 flags, +0x88 spawn distance^2, +0x8c / +0x8d wall counters,
-// +0x8e cooldown, +0xac send target, +0xd0 move target, +0xdc anchor.
-// B fields: +0x0 candidate count and triples (id, box, distance^2), +0x7c / +0x84 the locked
-// id and box (+0x80 the previous id), +0x8c need bits (0x1 moved, 0x2 acquired a target, 0x20 /
-// 0x80 avoidance, ASSUMED not written here), +0x90 status bits, +0x9c the last move origin.
+// Head fields (P): +0x28 the one-time init, +0x30 / +0x34 raw row words (+0x34 = the tier word, 0x40 =
+// no state-2 cast), +0x38 acquire range, +0x40 leash, +0x44 far radius, +0x48 attack radius, +0x4c path
+// radius, +0x50 level byte, +0x52 / +0x53 need bytes, +0x54 stand-off, +0x58 owner-NPC distance^2,
+// +0x66 TryAttack counter, +0x68 path counter, +0x7c state, +0x80 flags, +0x88 spawn distance^2,
+// +0x8c / +0x8d wall counters, +0x8e cooldown, +0x90 the arrival counter (short), +0x92 the action,
+// +0x94 the avoidance direction, +0xa0 the avoidance target, +0xac send target, +0xd0 move target,
+// +0xdc anchor, +0xd8..+0x104 the collision record (B's, see HeadRecord).
+// B fields: +0x0 candidate count and triples (id, box, distance^2), +0x7c / +0x84 the locked id and
+// box (+0x80 the previous id), +0x8c need bits (0x1 moved, 0x2 acquired a target, 0x4 need, 0x20 / 0x80
+// the collision probe), +0x90 status bits, +0x9c the last move origin.
 //
 // Traced (dump /Users/junior/Downloads/psobb-master/reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c):
-//  - the update chain (SinowberillChallengePlayer_Update_007aefd4, .c:794690): UpdateState_007af1a8
-//    (the owner's bit 2 on Q), SinowberillHead_UpdateState_007af7ec (.c:795069: the distance, the
-//    B acquire, the wall counter), SinowberillHead_UpdateState_007b00bc (.c:795481: the Pioneer 2
-//    branch, or the field's mode 0 / mode 1), SinowberillHead_AIUpdate_007b1134 (.c:796128), and the
-//    state dispatch SinowberillHead_AIUpdateState_007b2764 (.c:796961) with its +0x328 & 2 gate.
-//  - the stat row (SinowberillChallenge_InitializePlayerStats_007adbe0, .c:794403..794413; see
-//    npcai.ts NPC_ATTACK_ROWS): every field above that comes from the table.
-//  - the mode-1 entry: AcquireTarget (SinowberillHead_AcquireTarget_007afc2c, .c:795255) sets B +0x8c
-//    bit 2 when EnemyAI_AcquireClosestTargetInRange (.c:794836) finds a candidate within the range
-//    P+0x38 of the NPC; the owner's bit (Q +0x8c bit 2, UpdateState_007af1a8, .c:794797) is set the
-//    same way with range 30 around the owner. Neither bit is cleared in the traced code (only reset).
-//  - the candidate list: AcquireClosestTargetInRange fills B's triples (count at B+0x0, at most 9,
-//    sorted ascending by the box's xz distance^2 from the NPC): enemies with state flags and entity
-//    flag 0x20000000, per box with flag 0x8000 within the range.
-//  - the wall counter (+0x8c, UpdateState_007af7ec .c:795227): CheckHeadDistance (SinowberillCheckHeadDistance_007af628,
-//    .c:794983: the NPC moved more than 0.4 since the last copy) resets it; otherwise in state 1 it counts up
-//    (+0x8d capped at 0x1e) unless B +0x8c & 0x80. The moved case copies the move origin (B+0x9c).
-//  - the move gate (AIUpdateState_007b267c, .c:796915) and the spawn check (CheckSpawnValidity_007b1220,
-//    .c:796178: flag 0x10 bypasses the range, the squared distance goes to +0x88).
-//  - the mode-0 tail (.c:795669..795730): B +0x8c & 2 enters mode 1 (flags & 0xffffefcf, state 0,
-//    anchor = the NPC); otherwise AIProcessState(1) (the attack chooser) decides attack or move.
-//  - mode 1 (.c:795510..795700): the cooldown roll, TryAttack, CheckPathAndTarget, the chooser
-//    transitions, and the attack anchor = the NPC (B.player weapon), not the owner.
-//  - TryAttack (.c:795725), CheckPathAndTarget (.c:795775: the ray from the NPC's weapon to each
-//    candidate, mask 0x2100; flag 0x1000 when (path+10)^2 > the anchor's distance^2; 0x40 when none).
-//  - the state-2 cast (SinowberillHead_CastTechnique_007b2e20, .c:797346): the table word 0x40 of +0x34
-//    blocks it; the tier from +0x34; the strong pick needs P+0x80 & 0x2000 and B+0x90 & 0x1000, else the
-//    roll |rand / 32768 * 10| against +0x53 * 0.1; the TP gate (B.player +0x336 against the cost / +0x2be)
-//    only sets the input state 3 and the chat bubble; HandlePlayerTechCastState_007b2bc0 (.c:797215) sets
-//    the input state (0x16 / 0x17 / 2) and sends the cast with the targets B +0x7c / +0x84.
-//  - the 0x16 / 0x17 input states are the player's own action dispatch (PlayerActionDispatch, .c:232924:
-//    case 0x16 -> ProcessSinowberillSpecialAttack_004b41ac(param 2), case 0x17 -> ProcessSinowberillActionState_004B6D08(param 2)).
-//    No head writer produces them except HandlePlayerTechCastState; whether the head's +0x24 reaches that
-//    table is not traced.
+//  - the per-tick chain (SinowberillChallengePlayer_Update_007aefd4, .c:794690): ResetEntityHitboxes_007b34e8
+//    (.c:797677: Q and B +0x8c / +0x90 cleared every tick; the one-time UpdatePosition_007b3458 when P+0x28 is 0),
+//    UpdateState_007af1a8 (the owner's bit 2 on Q, range 30), SinowberillHead_UpdateState_007af7ec (.c:795069: the
+//    owner-NPC distance, the B acquire, the collision probe's bits 0x20 / 0x80, the moved test and the wall
+//    counter), SinowberillHead_UpdateState_007b00bc (.c:795481), SinowberillHead_AIUpdate_007b1134 (.c:796128),
+//    and the state dispatch SinowberillHead_AIUpdateState_007b2764 (.c:796961) with its B +0x328 & 2 gate.
+//  - the stat row (SinowberillChallenge_InitializePlayerStats_007adbe0, .c:794403..794413; see npcai.ts NPC_ATTACK_ROWS).
+//  - the mode-1 entry (AcquireTarget_007afc2c, .c:795255): B +0x8c bit 2 when a candidate is within the range.
+//  - the candidate list: EnemyAI_AcquireClosestTargetInRange (.c:794836), B's triples, at most 9, nearest first.
+//  - the move target (AIUpdateMovement_007b1298, .c:796204..796410): the midpoint, the stuck target
+//    (CalculateTarget_007b193c) in the wall counter's band, UpdateTargetPosition_007b1ad0 with the 0x20 bit, and on a
+//    wall hit (CheckWall_007b18e0) CalculateAvoidanceTarget_007b23a4, AdjustTargetForCollision_007b25c0 and
+//    CalculatePointToSegmentDistance_007b20ac (the helpers below).
+//  - the move gate (AIUpdateState_007b267c, .c:796915), the spawn check (CheckSpawnValidity_007b1220, .c:796178).
+//  - the mode-0 tail (.c:795669..795730) and mode 1 (.c:795510..795700), TryAttack (.c:795725), CheckPathAndTarget
+//    (.c:795775), the state-2 cast (CastTechnique_007b2e20, .c:797346) and HandlePlayerTechCastState_007b2bc0 (.c:797215).
+//  - ExecuteAttack (SinowberillHead_ExecuteAttack_007b2ae8, .c:797151): state 8 runs it with the action +0x92.
+//    The 0x16 / 0x17 input states are the player's action dispatch (PlayerActionDispatch, .c:232924).
 //
 // ASSUMED (not traced here):
-//  - B +0x90 & 0x1000 (the strong bit) and B +0x90 & 8 / 0x10 are not written in the traced code (the
-//    status comes from the server); the port keeps them 0, so the state-2 cast is always the roll.
-//  - B.player +0x44 (the NPC's last position for CheckHeadDistance) is modelled as the position at the
-//    last tick: the moved test is the NPC's own movement since the last tick.
-//  - the owner's and the NPC's bits 0x20 / 0x80 of B +0x8c are set by the collision loop of
-//    UpdateState_007af7ec (not ported): 0 here.
-//  - the second-target branches (P +0x84 != 0) are dormant: P+0x84 is not written in the traced code.
-//  - the wall branch of AIUpdateMovement (CalculateAvoidanceTarget, AdjustTargetForCollision,
-//    UpdateTargetPosition) is the midpoint.
-//  - the input states of the head (+0x24) and the timers +0x5c / +0x6a / +0x6c / +0x70 / +0x100 are not modelled.
-//  - the cast's release timing (quest/npcai.ts, combat.ts npcCastTechnique): the charge ticks.
-//  - the Pioneer 2 test (map_is_pioneer2_) is the floor 0 of the lobby (ASSUMED).
+//  - the collision probe (B+0xa8, GetCollisionDataForEntity_007b65b4 / CheckTwoHitboxCollision_007b5e40) is
+//    not ported: the caller passes no probe, so bits 0x20 / 0x80 stay 0 and UpdateTargetPosition is dormant.
+//  - the weapon (B.player +0x300) is the NPC's feet position; the object of CheckWall is the hit point and
+//    its normal is the surface normal (ground_info object x,y,z assumed to be the hit point).
+//  - the threshold of GetDistancePointToLineSegment (g_DistancePointToLineSegmentThresholdSq) is 0.
+//  - the strong bit B +0x90 & 0x1000 and status bits 8 / 0x10 come from the server (0 here).
+//  - B.player +0x44 (the NPC's last position for CheckHeadDistance) is the position at the last tick.
+//  - the input states of the head (+0x24) and the timers +0x5c / +0x5e / +0x6a / +0x6c / +0x70 / +0x100 are
+//    not modelled; the busy time of a cast is the charge ticks (quest/npcai.ts, combat.ts npcCastTechnique).
+//  - the Pioneer 2 test (map_is_pioneer2_) is the floor 0 of the lobby.
+//  - the 2764 gate (B.player +0x328 & 2) is treated as set for a live NPC record (no writer traced).
 
 // DAT_0097dd84 (.c:796204): the midpoint factor.
 export const HEAD_MIDPOINT = 0.5;
@@ -71,37 +55,59 @@ export const HEAD_MOVE_GATE_SQ = 100;
 // DAT_0097dd8c = 40 and DAT_0097dd90 = 12: the spawn check's range is min(40, leash + 12).
 export const HEAD_SPAWN_CAP = 40;
 export const HEAD_SPAWN_PAD = 12;
-// The wall ray's mask (SinowberillHead_CheckWall_007b18e0, .c:796427).
+// The wall ray's mask (SinowberillHead_CheckWall_007b18e0, .c:796427; the same mask in AdjustTarget and the avoidance).
 export const HEAD_WALL_MASK = 0x2100;
-// ASSUMED: the owner's weapon height above its feet for the wall ray (see the comment above).
+// ASSUMED: the owner's weapon height above its feet for the wall ray.
 export const HEAD_RAY_HEIGHT = 5;
-// DAT_0097dd6c = 20: CalculateTarget's offset (.c:796453).
+// DAT_0097dd6c = 20: CalculateTarget's offset (.c:796453) and DAT_0097dd60 = 20 (UpdateTargetPosition's radius offset).
 export const HEAD_STUCK_OFFSET = 20;
-// DAT_0097dd9c = 900: the squared distance under which the attack starts (30^2) and DAT_0097dd98 = 10
-// (CheckPathAndTarget's margin).
+export const HEAD_TARGET_RADIUS_OFFSET = 20;
+// DAT_0097dd9c = 900: the squared distance under which the attack starts (30^2); DAT_0097dd98 = 10 (CheckPathAndTarget's margin).
 export const HEAD_ATTACK_START_SQ = 900;
 export const HEAD_PATH_MARGIN = 10;
 // DAT_0097dddc = 0.4: the distance the NPC must move for CheckHeadDistance to count it as moved.
 export const HEAD_MOVED_DIST = 0.4;
-// DAT_0097dd14 = 0.2 is the TP gate of CastTechnique (the input state 3 only); the owner's acquire
-// range is 30 (EnemyAI_AcquireClosestTargetInRange(Q, 30.0, ...), .c:794816).
-export const HEAD_OWNER_ACQUIRE = 30;
+// DAT_0097dcd8 = 18 (UpdatePosition_007b3458): the first move target is the owner's position + (0, 0, 18).
+export const HEAD_SPAWN_Z = 18;
+// DAT_0097dd38 = 10 (AdjustTargetForCollision's pull-back) and DAT_0097dd54 = 10 (the segment distance's offset).
+export const HEAD_PULL_BACK = 10;
+export const HEAD_SEG_OFFSET = 10;
+// The avoidance (CalculateAvoidanceTarget): DAT_0097dd48 = 1.5 and DAT_0097dd44 = 20 (the floor of the step),
+// DAT_0097dd40 = 5 (the owner-ray point), DAT_0097dd7c = 40 (the step along the avoidance direction).
+export const HEAD_AVOID_SCALE = 1.5;
+export const HEAD_AVOID_FLOOR = 20;
+export const HEAD_AVOID_OWNER = 5;
+export const HEAD_AVOID_STEP = 40;
+// The arrival tests: DAT_0097dd78 = 5 (blocked branch with the arrive flag), DAT_0097dd74 = 1.5 (clear branch),
+// DAT_0097dd80 = 1.0 (the step-back arrival, AIUpdateMovement's blocked branch).
+export const HEAD_ARRIVE_BLOCKED = 5;
+export const HEAD_ARRIVE_CLEAR = 1.5;
+export const HEAD_ARRIVE_STEP = 1;
+// DAT_0097dd68 = 12: UpdateTargetPosition's simple-branch test on B +0xe8.
+export const HEAD_RECORD_SIMPLE = 12;
+// DAT_0097dd2c = 1.0: the send stop distance (SendMove family, .c:797009).
+export const HEAD_STOP_DISTANCE = 1;
+// ValidateDoorAnimation's squared distance floor (the port's 0x00836208 reading: under 0.025 reads as 0).
+const DOOR_FLOOR_SQ = 0.025;
 // The max candidates of the target list (EnemyAI_AcquireClosestTargetInRange: the list stops at 9).
 export const HEAD_MAX_TARGETS = 9;
+// The owner's acquire range (EnemyAI_AcquireClosestTargetInRange(Q, 30.0, ...), .c:794816).
+export const HEAD_OWNER_ACQUIRE = 30;
 
-// Head flags (+0x80) this module writes.
+// Head flags (+0x80) this module writes or reads.
+export const HEAD_FLAG_AVOID = 0x1; // +0x80 & 1: the avoidance target is in use (AIUpdateMovement)
+export const HEAD_FLAG_ARRIVE = 0x2; // +0x80 & 2: the blocked / clear arrival test is pending
 export const HEAD_FLAG_RUN = 0x8; // +0x80 & 8: a run was sent this move (2764)
+export const HEAD_FLAG_ACTION = 0x10; // +0x80 & 0x10: the cast request (state 2)
 export const HEAD_FLAG_MOVE = 0x20; // +0x80 & 0x20: a move was requested (UpdateState_007b00bc)
 export const HEAD_FLAG_TARGET_LOCKED = 0x40; // +0x80 & 0x40: no path target (CheckPathAndTarget)
-export const HEAD_FLAG_ACTION = 0x10; // +0x80 & 0x10: the cast request (state 2)
+export const HEAD_FLAG_SECOND = 0x80; // +0x80 & 0x80: the second target is in range (TryAttack, 0x8080)
+export const HEAD_FLAG_ATTACK_SET = 0x100; // +0x80 & 0x100: TryAttack's attack flag
+export const HEAD_FLAG_NEXT = 0x200; // +0x80 & 0x200: an attack is chosen (the chooser's result)
 export const HEAD_FLAG_STRONG = 0x1000; // +0x80 & 0x1000: the target is near the anchor (CheckPathAndTarget)
 export const HEAD_FLAG_TOO_CLOSE = 0x2000; // +0x80 & 0x2000: three or more targets (CheckPathAndTarget)
 export const HEAD_FLAG_WALL_CLAMP = 0x4000; // +0x80 & 0x4000: the wall counter reached 0x1f
-export const HEAD_FLAG_AVOID = 0x1; // +0x80 & 1: the avoidance target is in use (AIUpdateMovement)
-export const HEAD_FLAG_NEXT = 0x200; // +0x80 & 0x200: an attack is chosen (the AIProcessState result)
-export const HEAD_FLAG_ATTACK_SET = 0x100; // +0x80 & 0x100: TryAttack's attack flag
 export const HEAD_FLAG_TARGET_HIT = 0x8000; // +0x80 & 0x8000: the target was re-picked and is in range (TryAttack)
-export const HEAD_FLAG_SECOND = 0x80; // +0x80 & 0x80: the second target is in range (TryAttack, 0x8080)
 export const HEAD_FLAG_BIG = 0x8000; // +0x80 & 0x8000: the cooldown roll's multiplier 2 (DAT_0097ddac)
 
 // Head states (+0x7c). 0 = idle, 1 = move, 2 = cast, 8 = attack (AIUpdateState_007b2764).
@@ -113,8 +119,8 @@ export const HEAD_STATE_ATTACK = 8;
 // B +0x8c need bits this module reads or writes.
 export const HEAD_NEED_MOVED = 0x1;
 export const HEAD_NEED_ACQUIRED = 0x2;
-export const HEAD_NEED_0X20 = 0x20;
-export const HEAD_NEED_0X80 = 0x80;
+export const HEAD_NEED_0X20 = 0x20; // the probe hit an object: the collision record is set
+export const HEAD_NEED_0X80 = 0x80; // the probe hit an enemy
 
 export interface HeadPoint {
   x: number;
@@ -127,6 +133,27 @@ export function xzDistSq(a: { x: number; z: number }, b: { x: number; z: number 
   return (a.x - b.x) ** 2 + (a.z - b.z) ** 2;
 }
 
+const vlen = (v: HeadPoint): number => Math.hypot(v.x, v.y, v.z);
+// vec3_normalize: the vector is divided by its length only when that is not 0.
+const vnorm = (v: HeadPoint): HeadPoint => {
+  const l = vlen(v);
+  return l !== 0 ? { x: v.x / l, y: v.y / l, z: v.z / l } : { x: v.x, y: v.y, z: v.z };
+};
+const vdot = (a: HeadPoint, b: HeadPoint): number => a.x * b.x + a.y * b.y + a.z * b.z;
+const vadd = (a: HeadPoint, b: HeadPoint): HeadPoint => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+const vsub = (a: HeadPoint, b: HeadPoint): HeadPoint => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const vscale = (a: HeadPoint, k: number): HeadPoint => ({ x: a.x * k, y: a.y * k, z: a.z * k });
+const xzOf = (v: HeadPoint): HeadPoint => ({ x: v.x, y: 0, z: v.z });
+
+// matrix_rotation_y with a BAMS angle (0x10000 = a full turn): x' = x cos + z sin, z' = z cos - x sin
+// (the convention of CalculateTarget's +90 side, .c:796453).
+export function rotYBams(v: HeadPoint, bams: number): HeadPoint {
+  const a = ((bams & 0xffff) / 0x10000) * 2 * Math.PI;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return { x: v.x * c + v.z * s, y: v.y, z: v.z * c - v.x * s };
+}
+
 // The spawn check's range (SinowberillChallengeBoss_CheckSpawnValidity_007b1220): min(40, leash + 12).
 export function headSpawnRange(leash: number): number {
   const r = HEAD_SPAWN_PAD + leash;
@@ -135,11 +162,7 @@ export function headSpawnRange(leash: number): number {
 
 // The midpoint of the NPC and the anchor (AIUpdateMovement_007b1298, the k = 0.5 branch).
 export function headMidpoint(npc: HeadPoint, anchor: HeadPoint): HeadPoint {
-  return {
-    x: npc.x + (anchor.x - npc.x) * HEAD_MIDPOINT,
-    y: npc.y + (anchor.y - npc.y) * HEAD_MIDPOINT,
-    z: npc.z + (anchor.z - npc.z) * HEAD_MIDPOINT,
-  };
+  return vadd(npc, vscale(vsub(anchor, npc), HEAD_MIDPOINT));
 }
 
 // SinowberillHead_CalculateTarget_007b193c (.c:796453): the stuck target. v is the reversed
@@ -170,15 +193,140 @@ export function headCalculateTarget(npc: HeadPoint, anchor: HeadPoint, move: { x
   return { x: npc.x + dir.x * k, y: npc.y, z: npc.z + dir.z * k };
 }
 
-// The wall ray between the NPC and the anchor (SinowberillHead_CheckWall_007b18e0). The
-// caller passes the map's ray with the mask (combat view's npcWallBlocks).
-export type WallRay = (from: HeadPoint, to: HeadPoint, mask: number) => boolean;
+// A wall hit of the map ray (SinowberillHead_CheckWall_007b18e0): the object's position (ASSUMED the hit
+// point) and its normal. `null` is no hit.
+export interface WallHit {
+  point: HeadPoint;
+  normal: HeadPoint;
+}
+export type WallRay = (from: HeadPoint, to: HeadPoint, mask: number) => WallHit | null;
 
 const raised = (p: HeadPoint): HeadPoint => ({ x: p.x, y: p.y + HEAD_RAY_HEIGHT, z: p.z });
 
-// A candidate enemy as the head reads it (combat.npcEnemies): the entity id, the xz of its hit
-// point (+0x38 / +0x40 of the target, the anchor), and one box per collision box (xz centre and
-// the flag 0x8000 of the box, formats/enemyboxes.ts).
+// GetDistancePointToLineSegment_0083a0dc (.c:855683): the distance from p to the line through `o` with
+// direction `d` (the exe does not clamp it to a segment), and the closest point on it. A squared distance
+// under the threshold reads as 0 (ASSUMED threshold 0: g_DistancePointToLineSegmentThresholdSq is not traced).
+export function distancePointToLine(p: HeadPoint, o: HeadPoint, d: HeadPoint): { dist: number; closest: HeadPoint } {
+  const dd = d.z * d.z + d.x * d.x + d.y * d.y;
+  const t = dd === 0 ? 0 : ((p.z - o.z) * d.z + (p.y - o.y) * d.y + (p.x - o.x) * d.x) / dd;
+  const closest = { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
+  const sq = (p.x - closest.x) ** 2 + (p.y - closest.y) ** 2 + (p.z - closest.z) ** 2;
+  return { dist: Math.sqrt(sq), closest };
+}
+
+// ValidateDoorAnimation_00836208 (.c:852670, the port's 0x00836208 reading): the distance, 0 under 0.025 squared.
+export function doorDistance(a: HeadPoint, b: HeadPoint): number {
+  const sq = (a.z - b.z) ** 2 + (a.y - b.y) ** 2 + (a.x - b.x) ** 2;
+  return sq < DOOR_FLOOR_SQ ? 0 : Math.sqrt(sq);
+}
+
+// SinowberillHead_CalculatePointToSegmentDistance_007b20ac (.c:796696): the direction and the distance from the
+// point p5 to the two segments (p1,p2) and (p3,p4). The first segment's measure is the mid of (p1,p2) against its
+// closest point; the second's uses the same mid (the exe reads p1 and p2 twice) and the length of (p3,p4).
+export function pointToSegmentDistance(p1: HeadPoint, p2: HeadPoint, p3: HeadPoint, p4: HeadPoint, p5: HeadPoint): { dir: HeadPoint; dist: number } {
+  const sA = vsub(p1, p2);
+  const lenA = vlen(sA);
+  const dirA = vnorm(sA);
+  const sB = vsub(p3, p4);
+  const lenB = vlen(sB);
+  const dirB = vnorm(sB);
+  const a = distancePointToLine(p5, p2, dirA);
+  const b = distancePointToLine(p5, p4, dirB);
+  const mid = vscale(vadd(p1, p2), 0.5);
+  let localA = lenA * 0.5 + HEAD_SEG_OFFSET - doorDistance(mid, a.closest);
+  if (localA < 0) localA = lenA * 0.5;
+  let localB = lenB * 0.5 + HEAD_SEG_OFFSET - doorDistance(mid, b.closest);
+  if (localB < 0) localB = lenB * 0.5;
+  if (b.dist < a.dist) return { dir: dirA, dist: localA + HEAD_SEG_OFFSET };
+  if (b.dist !== a.dist) return { dir: dirB, dist: localB + HEAD_SEG_OFFSET };
+  return { dir: vscale(vadd(dirA, dirB), 0.5), dist: 7 };
+}
+
+// SinowberillHead_AdjustTargetForCollision_007b25c0 (.c:796875): a clear ray from `origin` to `target` keeps
+// the target (null); a hit returns the hit object's position pulled back 10 along the xz direction.
+export function adjustTargetForCollision(origin: HeadPoint, target: HeadPoint, ray: WallRay): HeadPoint | null {
+  const hit = ray(origin, target, HEAD_WALL_MASK);
+  if (!hit) return null;
+  const d = vscale(vnorm(xzOf(vsub(target, origin))), HEAD_PULL_BACK);
+  return { x: hit.point.x - d.x, y: hit.point.y - d.y, z: hit.point.z - d.z };
+}
+
+export interface AvoidanceTarget {
+  clear: boolean; // CalculateAvoidanceTarget's return (1: the owner's ray is clear)
+  toward: HeadPoint; // param_5 (set when blocked)
+  beyond: HeadPoint | null; // param_6 (set when clear)
+}
+
+// SinowberillHead_CalculateAvoidanceTarget_007b23a4 (.c:796797): the avoidance point beside the wall hit. The
+// side is the hit normal's perpendicular, turned to the NPC's side; the point is on the NPC's weapon at
+// max(1.5 * dist, 20). It is clear when the owner's weapon has a clear ray to the closest point on that line.
+export function calculateAvoidanceTarget(i: { anchor: HeadPoint; weapon: HeadPoint; ownerWeapon: HeadPoint; hit: WallHit; ray: WallRay }): AvoidanceTarget {
+  const v = vnorm(xzOf(vsub(i.hit.point, i.weapon)));
+  const l = Math.hypot(i.hit.point.x - i.weapon.x, i.hit.point.z - i.weapon.z);
+  let perp: HeadPoint = { x: i.hit.normal.z, y: 0, z: -i.hit.normal.x };
+  if (vdot(v, perp) < 0) perp = { x: -perp.x, y: 0, z: -perp.z };
+  const onLine = distancePointToLine(i.anchor, i.weapon, perp).closest;
+  const far = Math.max(l * HEAD_AVOID_SCALE, HEAD_AVOID_FLOOR);
+  const toward: HeadPoint = { x: perp.x * far + i.weapon.x, y: i.weapon.y, z: perp.z * far + i.weapon.z };
+  if (i.ray(i.ownerWeapon, onLine, HEAD_WALL_MASK) !== null) return { clear: false, toward, beyond: null };
+  return {
+    clear: true,
+    toward,
+    beyond: { x: perp.x * HEAD_AVOID_OWNER + onLine.x, y: 0, z: perp.z * HEAD_AVOID_OWNER + onLine.z },
+  };
+}
+
+// The collision record of B (the probe's box, B +0xd8..0x104): the fields UpdateTargetPosition reads.
+// vx / vz are B +0xe4 / +0xe8, type is +0xec, centre is +0xf4..0xfc, heading is +0x104 (bams).
+export interface HeadRecord {
+  vx: number;
+  vz: number;
+  type: number;
+  centre: HeadPoint;
+  heading: number;
+}
+
+// SinowberillHead_UpdateTargetPosition_007b1ad0 (.c:796511): the target beside the probe's record (the 0x20 bit).
+// The simple branch (type 0, or type 1 with a short vz equal to vx) sits on the record's centre, 20 + vx out
+// along the perpendicular of the owner-NPC line, turned by the anchor side; the rotated branch takes the two
+// segments of the record's extents (heading + 90) and the NPC's distance to them. `counter` is head +0x8c.
+export function updateTargetPosition(i: { npc: HeadPoint; anchor: HeadPoint; rec: HeadRecord; counter: number; ray: WallRay }): HeadPoint {
+  const c = i.rec.centre;
+  if (i.rec.type === 0 || (i.rec.vz <= HEAD_RECORD_SIMPLE && i.rec.type === 1 && i.rec.vz === i.rec.vx)) {
+    const fVar3 = i.rec.vx + HEAD_TARGET_RADIUS_OFFSET;
+    const l2c = vnorm({ x: i.npc.x - c.x, y: 0, z: i.npc.z - c.z });
+    let l20 = vnorm({ x: l2c.z, y: 0, z: -l2c.x });
+    const l14 = vnorm({ x: i.anchor.x - c.x, y: 0, z: i.anchor.z - c.z });
+    if (vdot(l20, l14) < 0) l20 = { x: -l20.x, y: 0, z: -l20.z };
+    l20 = vnorm(vadd(l20, l2c));
+    const out = vadd(vscale(l20, fVar3), c);
+    return i.counter > 10 ? vadd(vscale(l20, -fVar3), c) : out;
+  }
+  // The rotated branch: the record's extents at heading + 90 (matrix_rotation_y(B+0x104 + 0x4000)).
+  const ang = i.rec.heading + 0x4000;
+  const v = rotYBams({ x: i.rec.vx, y: 0, z: 0 }, ang);
+  const w = rotYBams({ x: 0, y: 0, z: i.rec.vz }, ang);
+  const p1 = vadd(c, v);
+  const p2 = vsub(c, v);
+  const p3 = vadd(c, w);
+  const p4 = vsub(c, w);
+  const toNpc = vnorm(vsub(i.npc, c));
+  const seg = pointToSegmentDistance(p1, p2, p3, p4, i.npc);
+  let a8 = { x: seg.dir.x, y: seg.dir.y, z: seg.dir.z };
+  if (vdot(toNpc, a8) < 0) a8 = { x: -a8.x, y: a8.y, z: -a8.z };
+  let out: HeadPoint = { x: a8.x * seg.dist + i.npc.x, y: a8.y * seg.dist + i.npc.y, z: a8.z * seg.dist + i.npc.z };
+  const adj = adjustTargetForCollision(i.npc, out, i.ray);
+  if (adj) out = adj;
+  if (i.counter > 0xf) {
+    let b4 = { x: a8.z, y: 0, z: a8.x };
+    if (vdot(toNpc, b4) < 0) b4 = { x: -b4.x, y: 0, z: -b4.z };
+    out = { x: b4.x * seg.dist + i.npc.x, y: i.npc.y, z: b4.z * seg.dist + i.npc.z };
+  }
+  return out;
+}
+
+// The candidate enemy as the head reads it (combat.npcEnemies): the entity id, the xz of its hit point (the
+// anchor), and one box per collision box (xz centre and the flag 0x8000 of the box, formats/enemyboxes.ts).
 export interface HeadCandidate {
   id: number;
   x: number;
@@ -206,9 +354,9 @@ export interface PathTarget {
   pos: HeadPoint | null;
 }
 
-// EnemyAI_AcquireClosestTargetInRange_007af2a0 (.c:794836): the candidates of one box within
-// `range` (xz distance^2 from the origin to the box centre), nearest first, at most 9. The
-// target's position is its hit point (ASSUMED: the exe reads +0x300 / +0x38 of the entity).
+// EnemyAI_AcquireClosestTargetInRange_007af2a0 (.c:794836): the candidates of one box within `range` (xz
+// distance^2 from the origin to the box centre), nearest first, at most 9. The target's position is its hit
+// point (ASSUMED: the exe reads +0x300 / +0x38 of the entity).
 export function acquireClosestTargets(origin: HeadPoint, range: number, cands: readonly HeadCandidate[]): PathTarget[] {
   const found: { entry: PathTarget; d: number }[] = [];
   for (const c of cands) {
@@ -223,28 +371,38 @@ export function acquireClosestTargets(origin: HeadPoint, range: number, cands: r
   return found.slice(0, HEAD_MAX_TARGETS).map((f) => f.entry);
 }
 
+// The collision probe of 7af7ec's loop (B +0xa8 against the entities): an enemy (0x80) or an object with
+// its record (0x20). The caller returns the first hit; null when none (not wired: see the header).
+export type HeadProbeHit = { kind: 'enemy' } | { kind: 'object'; rec: HeadRecord };
+export type HeadProbe = (npc: HeadPoint) => HeadProbeHit | null;
+
 export interface HeadUpdateInput {
   npc: HeadPoint; // the NPC's position (B +0x94 +0x38; y for the ray)
-  owner: HeadPoint; // the owner's position (Q.player +0x38; the anchor on Pioneer 2)
+  owner: HeadPoint; // the owner's position (Q.player +0x38; the owner's weapon, ASSUMED)
   wall: WallRay;
 }
 
 // One NPC's head. The exe's record is one object per NPC; the port keeps one per slot
-// (quest/town.ts). A fresh head is the zeroed record of the exe with its row copied in
-// (configure).
+// (quest/town.ts). A fresh head is the zeroed record of the exe with its row copied in (configure).
 export class NpcHead {
   state = HEAD_STATE_IDLE; // +0x7c
   flags = 0; // +0x80
   anchor: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xdc
   moveTarget: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xd0
   sendTarget: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xac
+  avoidTarget: HeadPoint = { x: 0, y: 0, z: 0 }; // +0xa0
+  avoidDir: HeadPoint = { x: 0, y: 0, z: 0 }; // +0x94
   // The map-mode branch's mode (head +0x1c): 0 = the follow / chooser tail, 1 = field attack.
   mode = 0;
+  initDone = false; // +0x28: UpdatePosition_007b3458 ran
   counter66 = 0; // +0x66: TryAttack's retarget counter (3)
   counter68 = 0; // +0x68: CheckPathAndTarget's counter (100)
   cooldown8e = 0; // +0x8e: the attack cooldown from the roll (AIUpdateState cooldown)
   wall8c = 0; // +0x8c (byte): the wall counter (CalculateTarget at 15..29, stuck at 0x1f)
   wall8d = 0; // +0x8d (byte): the counter's reset guard
+  arrive90 = 0; // +0x90 (short): the arrival counter of the avoidance (AIUpdateMovement)
+  action = 0; // +0x92 (short): the chooser's action (ExecuteAttack's parameter)
+  itemFlag = false; // B +0x90 & 0x20: the action is an item use
   dist58 = 0; // +0x58: the owner-NPC distance^2 (UpdateState_007af7ec)
   dist88 = 0; // +0x88: the spawn check's distance^2 (CheckSpawnValidity)
   // The row (npcai.ts NpcAttackRow, copied by configure).
@@ -257,17 +415,19 @@ export class NpcHead {
   standOff = 0; // +0x54
   leash = 0; // +0x40
   acquireRange = 0; // +0x38
-  // B's fields the head reads and writes.
-  npcNeed8c = 0; // B +0x8c (the bits 0x1, 0x2, 0x20, 0x80)
+  // B's fields the head reads and writes (reset every tick: ResetEntityHitboxes_007b34e8).
+  npcNeed8c = 0; // B +0x8c (the bits 0x1, 0x2, 0x4, 0x20, 0x80)
   ownerNeed8c = 0; // Q +0x8c (bit 2: the owner has a candidate within 30)
+  record: HeadRecord | null = null; // B +0xd8..0x104 (set by the probe's object hit)
   targets: PathTarget[] = []; // B's candidate triples (B +0x0 count)
   lockedPrimary = 0; // B +0x7c: the locked target id (0 = none)
   lockedSecond = 0; // B +0x84: the locked target's box
-  lockedPrevious = 0; // B +0x80: the previous locked id (CastTechnique's 0xffff test is not ported)
+  lockedPrevious = 0; // B +0x80: the previous locked id
   moveRef: HeadPoint = { x: 0, y: 0, z: 0 }; // B +0x9c: the move origin
   prevNpc: HeadPoint | null = null; // the NPC's position at the last tick (B.player +0x44, ASSUMED)
-  castTicks = 0; // the state-2 cast's busy ticks (ASSUMED: the technique's charge + cast)
-  wallHit = false; // the wall ray's answer for the last movement (the branch it picks is ASSUMED)
+  castTicks = 0; // the cast's busy ticks (ASSUMED: the technique's charge + cast)
+  wallHit = false; // the wall ray's answer for the last movement
+  npcPos: HeadPoint | null = null; // the NPC's position for TryAttack and CheckPathAndTarget
 
   // Copies the stat row (the head's constructor, .c:794403..794413).
   configure(r: HeadRow): void {
@@ -282,21 +442,44 @@ export class NpcHead {
     this.standOff = r.standOff;
   }
 
-  // UpdateState_007b00bc on Pioneer 2 (.c:795492): the anchor is the owner's position
-  // (UpdateAttackTarget with no second target), the state is 1 (move) and the flags get 0x20
-  // with 0x1010 cleared.
+  // ResetEntityHitboxes_007b34e8 (.c:797677): Q and B +0x8c / +0x90 are cleared every tick, then the first
+  // tick's UpdatePosition_007b3458 (.c:797632) puts the move target at the owner + (0, 0, 18) and the send
+  // target on the owner. The collision record goes with the bits (the probe sets it again).
+  resetEntityBits(owner: HeadPoint): void {
+    this.ownerNeed8c = 0;
+    this.npcNeed8c = 0;
+    this.record = null;
+    if (!this.initDone) {
+      this.initDone = true;
+      this.moveTarget = { x: owner.x, y: owner.y, z: owner.z + HEAD_SPAWN_Z };
+      this.sendTarget = { ...owner };
+    }
+  }
+
+  // UpdateState_007b00bc on Pioneer 2 (.c:795492): the anchor is the owner's position (UpdateAttackTarget with
+  // no second target), the state is 1 (move) and the flags get 0x20 with 0x1010 cleared (0xffffefef = ~0x1010).
   pioneerUpdateState(owner: HeadPoint): void {
     this.anchor = { x: owner.x, y: owner.y, z: owner.z };
     this.state = HEAD_STATE_MOVE;
     this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
   }
 
-  // SinowberillHead_UpdateState_007af7ec (.c:795069), the parts the field reads, in the exe's order:
-  // the owner-NPC distance (+0x58), the moved test and the wall counter, the B acquire (AcquireTarget,
-  // range +0x38, sets B +0x8c bit 2 when it finds a candidate), and the owner's bit (UpdateState_007af1a8,
-  // range 30 around the owner). The candidate list is B's triples for CheckPathAndTarget.
-  headStateUpdate(i: { npc: HeadPoint; owner: HeadPoint; cands: readonly HeadCandidate[] }): void {
+  // SinowberillHead_UpdateState_007af7ec (.c:795069), the parts the field reads, in the exe's order: the
+  // owner-NPC distance (+0x58), the owner's bit (UpdateState_007af1a8, range 30 around the owner), the B
+  // acquire (AcquireTarget, range +0x38, sets B +0x8c bit 2), the collision probe (bits 0x20 / 0x80), then the
+  // moved test and the wall counter (CheckHeadDistance). The candidate list is B's triples for CheckPathAndTarget.
+  headStateUpdate(i: { npc: HeadPoint; owner: HeadPoint; cands: readonly HeadCandidate[]; probe?: HeadProbe }): void {
+    if (acquireClosestTargets(i.owner, HEAD_OWNER_ACQUIRE, i.cands).length > 0) this.ownerNeed8c |= HEAD_NEED_ACQUIRED;
     this.dist58 = xzDistSq(i.owner, i.npc);
+    this.targets = acquireClosestTargets(i.npc, this.acquireRange, i.cands);
+    if (this.targets.length > 0) this.npcNeed8c |= HEAD_NEED_ACQUIRED;
+    const hit = i.probe ? i.probe(i.npc) : null;
+    if (hit?.kind === 'enemy') {
+      this.npcNeed8c |= HEAD_NEED_0X80;
+    } else if (hit?.kind === 'object') {
+      this.npcNeed8c |= HEAD_NEED_0X20;
+      this.record = hit.rec;
+    }
     const moved = this.prevNpc === null || Math.hypot(i.npc.x - this.prevNpc.x, i.npc.y - this.prevNpc.y, i.npc.z - this.prevNpc.z) > HEAD_MOVED_DIST;
     if (moved) {
       this.npcNeed8c |= HEAD_NEED_MOVED;
@@ -312,9 +495,6 @@ export class NpcHead {
         this.wall8d = 0;
       }
     }
-    this.targets = acquireClosestTargets(i.npc, this.acquireRange, i.cands);
-    if (this.targets.length > 0) this.npcNeed8c |= HEAD_NEED_ACQUIRED;
-    if (acquireClosestTargets(i.owner, HEAD_OWNER_ACQUIRE, i.cands).length > 0) this.ownerNeed8c |= HEAD_NEED_ACQUIRED;
   }
 
   // The move gate (SinowberillHead_AIUpdateState_007b267c, .c:796915). True when a move is
@@ -330,6 +510,96 @@ export class NpcHead {
     this.wall8c = 0x1e;
     this.flags |= HEAD_FLAG_WALL_CLAMP;
     return false;
+  }
+
+  // AIUpdateMovement_007b1298 (.c:795298). Without a wall hit: the midpoint, the stuck target in the wall
+  // counter's band, or UpdateTargetPosition with the 0x20 bit. With a hit: the avoidance (the anchor and
+  // the direction of the avoidance target), then the arrival tests (flag 2, the arrival counter +0x90).
+  private movement(i: HeadUpdateInput): void {
+    const npc = i.npc;
+    const anchor = this.anchor;
+    const hit = i.wall(raised(npc), raised(anchor), HEAD_WALL_MASK);
+    this.wallHit = hit !== null;
+    if (hit === null) {
+      const mid = headMidpoint(npc, anchor);
+      if ((this.npcNeed8c & HEAD_NEED_0X20) === 0) {
+        if ((this.npcNeed8c & HEAD_NEED_0X80) === 0) {
+          if (this.wall8c < 0xf || this.wall8c > 0x1d) {
+            if (this.wall8d > 0xf) this.wall8c = 0;
+            this.moveTarget = mid;
+          } else {
+            const move = { x: npc.x - this.moveRef.x, z: npc.z - this.moveRef.z };
+            this.moveTarget = headCalculateTarget(npc, anchor, move, this.wall8c);
+          }
+        } else {
+          this.moveTarget = mid;
+        }
+      } else {
+        const ut = this.record ? updateTargetPosition({ npc, anchor, rec: this.record, counter: this.wall8c, ray: i.wall }) : mid;
+        if (this.wall8c < 0x1e) {
+          this.moveTarget = ut;
+        } else {
+          if (this.wall8d > 0xf) this.wall8c = 0;
+          this.moveTarget = mid;
+        }
+      }
+      this.flags &= ~HEAD_FLAG_AVOID; // 0x80 & 0xfffffffe (.c:796296)
+      this.arrive90 = 0;
+      return;
+    }
+    const av = calculateAvoidanceTarget({ anchor, weapon: npc, ownerWeapon: i.owner, hit, ray: i.wall });
+    const f = this.flags;
+    if ((f & HEAD_FLAG_AVOID) === 0) {
+      let a0: HeadPoint;
+      if (!av.clear) {
+        const toward = { x: av.toward.x, y: anchor.y, z: av.toward.z };
+        a0 = adjustTargetForCollision(anchor, toward, i.wall) ?? toward;
+      } else {
+        a0 = av.beyond ?? av.toward;
+      }
+      this.avoidTarget = { ...a0 };
+      this.avoidDir = vnorm({ x: anchor.x - a0.x, y: 0, z: anchor.z - a0.z });
+      this.flags |= HEAD_FLAG_AVOID;
+    }
+    if (!av.clear) {
+      if ((f & HEAD_FLAG_ARRIVE) !== 0) {
+        const old = { x: this.moveTarget.x - npc.x, z: this.moveTarget.z - npc.z };
+        if (Math.hypot(old.x, old.z) <= HEAD_ARRIVE_BLOCKED) {
+          const adj = adjustTargetForCollision(npc, av.toward, i.wall);
+          this.moveTarget = adj ?? { ...av.toward };
+          this.flags &= ~HEAD_FLAG_ARRIVE;
+          this.arrive90 = this.arrive90 + 1 < 100 ? this.arrive90 + 1 : 100;
+        } else {
+          this.arrive90 = this.arrive90 + 1 < 100 ? this.arrive90 + 1 : 100;
+        }
+        return;
+      }
+      this.arrive90 = 0;
+      const old = { x: this.moveTarget.x - npc.x, z: this.moveTarget.z - npc.z };
+      this.moveTarget = { ...this.avoidTarget };
+      if (Math.hypot(old.x, old.z) < HEAD_ARRIVE_STEP) {
+        this.moveTarget = {
+          x: this.avoidDir.x * HEAD_AVOID_STEP + this.avoidTarget.x,
+          y: this.avoidDir.y * HEAD_AVOID_STEP + this.avoidTarget.y,
+          z: this.avoidDir.z * HEAD_AVOID_STEP + this.avoidTarget.z,
+        };
+        this.arrive90 = 0;
+        this.flags = (this.flags & ~HEAD_FLAG_AVOID) | HEAD_FLAG_ARRIVE;
+      }
+      return;
+    }
+    // The clear branch (iVar4 != 0): the owner's ray is clear; the beyond point is the target.
+    this.arrive90 = 0;
+    const beyond = av.beyond ?? av.toward;
+    if ((f & HEAD_FLAG_ARRIVE) === 0) {
+      this.moveTarget = { ...beyond };
+      return;
+    }
+    const d = { x: this.moveTarget.x - npc.x, z: this.moveTarget.z - npc.z };
+    if (Math.hypot(d.x, d.z) <= HEAD_ARRIVE_CLEAR) {
+      this.moveTarget = { ...beyond };
+      this.flags &= ~HEAD_FLAG_ARRIVE;
+    }
   }
 
   // SinowberillHead_AIUpdate_007b1134 (.c:796128) with its movement and state gate. Inside
@@ -349,30 +619,11 @@ export class NpcHead {
       this.prevNpc = { ...i.npc };
       return; // the send target is not written on this path (.c:796131)
     }
-    // AIUpdateMovement (.c:796204): the midpoint, or the stuck target at the wall counter's band.
-    const move = { x: i.npc.x - this.moveRef.x, z: i.npc.z - this.moveRef.z };
-    const mid = headMidpoint(i.npc, this.anchor);
-    const wallHit = i.wall(raised(i.npc), raised(this.anchor), HEAD_WALL_MASK);
-    this.wallHit = wallHit;
-    if (!wallHit &&  (this.npcNeed8c & HEAD_NEED_0X20) === 0 && (this.npcNeed8c & HEAD_NEED_0X80) === 0) {
-      if (this.wall8c < 0xf || this.wall8c > 0x1d) {
-        if (this.wall8d > 0xf) this.wall8c = 0;
-        this.moveTarget = mid;
-      } else {
-        this.moveTarget = headCalculateTarget(i.npc, this.anchor, move, this.wall8c);
-      }
-    } else {
-      // The wall branch (avoidance, UpdateTargetPosition) is ASSUMED to be the midpoint.
-      this.moveTarget = mid;
-    }
-    this.flags &= ~HEAD_FLAG_AVOID; // 0x80 & 0xfffffffe (.c:796296)
+    this.movement(i);
     // AIUpdateState_007b267c (.c:796915): a move is needed when the send target is more than 10 away.
     if (this.moveGate()) {
       this.sendTarget = { ...this.moveTarget };
-      if (this.state !== HEAD_STATE_CAST) {
-        this.state = HEAD_STATE_MOVE;
-        this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
-      }
+      if (this.state !== HEAD_STATE_CAST) this.setMove();
     } else {
       // No move: the send target is the NPC's own position (AIUpdate_007b1134 .c:796149).
       this.sendTarget = { x: i.npc.x, y: i.npc.y, z: i.npc.z };
@@ -412,9 +663,6 @@ export class NpcHead {
     return false;
   }
 
-  // The NPC's position for TryAttack and CheckPathAndTarget (set by fieldUpdate and headStateUpdate callers).
-  npcPos: HeadPoint | null = null;
-
   // SinowberillHead_CheckPathAndTarget_007b086c (.c:795775). The count of B's candidates decides
   // the flag 0x2000 and the counter +0x68. The first candidate with a clear ray from the NPC's weapon
   // (mask 0x2100, to the candidate at the NPC's height) becomes the locked one: B +0x7c / +0x84 take its
@@ -436,7 +684,7 @@ export class NpcHead {
     for (const e of this.targets) {
       if (!e.pos) continue;
       const to = { x: e.pos.x, y: t.npcWeapon.y, z: e.pos.z };
-      if (t.ray(t.npcWeapon, to, HEAD_WALL_MASK)) continue;
+      if (t.ray(t.npcWeapon, to, HEAD_WALL_MASK) !== null) continue;
       this.lockedPrevious = this.lockedPrimary;
       this.lockedPrimary = e.id;
       this.lockedSecond = e.id2;
@@ -598,14 +846,13 @@ export class NpcHead {
     }
   }
 
-  // The state-8 switch of the field (.c:795580 / .c:795700): input state 0x13 is the head's action
-  // input (ASSUMED not modelled), the anchor is the NPC's own weapon position.
+  // The state-8 switch of the field (.c:795580 / .c:795700): the anchor is the NPC's own weapon position.
   private toAttack(npc: HeadPoint): void {
     this.state = HEAD_STATE_ATTACK;
     this.anchor = { ...npc };
   }
 
-  // State 1 with the move flags (0xffffefef | 0x20).
+  // State 1 with the move flags (0xffffefef = ~0x1010 | 0x20).
   private setMove(): void {
     this.state = HEAD_STATE_MOVE;
     this.flags = (this.flags & ~0x1010) | HEAD_FLAG_MOVE;
@@ -644,8 +891,7 @@ export function headSendDistance(head: NpcHead, npc: { x: number; z: number }): 
 
 // The input state the head's cast sets on the NPC (+0x24): 0xf (Resta) and 0x10 (Anti) are
 // 0x16, 0 / 3 / 6 (Foie, Barta, Zonde) are 0x17, the other techniques 2. The release of the
-// cast (the end of these states, handle_input_state_0x57 / dispatch_action_emote) is not
-// traced: quest/npcai.ts keeps the port's charge + cast ticks as the busy time (ASSUMED).
+// cast (the end of these states) is not traced: quest/npcai.ts keeps the port's charge + cast ticks as the busy time (ASSUMED).
 export const HEAD_INPUT_STATE_SUPPORT = 0x16;
 export const HEAD_INPUT_STATE_ATTACK = 0x17;
 export function headCastInputState(tech: number): number {

@@ -481,6 +481,9 @@ export interface HeadChoice {
   attack: boolean; // the chooser's return value
   action: number; // the head's +0x92 after the call (ExecuteAttack's action)
   item: boolean; // B +0x90 0x20: the action is an item use
+  flag200: boolean; // the head's flag 0x200 (.c:795912: bVar7 == 3, B +0x8c bits 1 and 2)
+  lock: boolean; // the counter re-pick found the target in range: head +0xdc = the target, flags 0x8080
+  counterExpired: boolean; // the +0x66 counter reached 0x1e: flag 0x8000 is cleared (.c:795897)
 }
 
 export const HEAD_COUNTER_THRESHOLD = 0x1e; // +0x66 in AIProcessState (.c:795905); TryAttack's own counter uses 3
@@ -492,10 +495,12 @@ export class NpcHeadChooser {
 
   choose(mode: 0 | 1, i: HeadChooseInput): HeadChoice {
     let item = false;
-    const none = (): HeadChoice => ({ attack: false, action: this.action, item: false });
+    let set200 = false;
+    let expired = false;
+    const none = (): HeadChoice => ({ attack: false, action: this.action, item: false, flag200: set200, lock: false, counterExpired: expired });
     const act = (a: number): HeadChoice => {
       this.action = a;
-      return { attack: true, action: a, item };
+      return { attack: true, action: a, item, flag200: set200, lock: false, counterExpired: expired };
     };
     const free = (i.head34 & 0x40) === 0;
     let v = i.npc8c & HEAD_NEED_BIT ? 1 : 0;
@@ -506,9 +511,11 @@ export class NpcHeadChooser {
         this.counter++;
       } else {
         this.counter = 0;
-        if (i.lockedInRadius()) return { attack: true, action: this.action, item: false };
+        expired = true;
+        if (i.lockedInRadius()) return { attack: true, action: this.action, item: false, flag200: false, lock: true, counterExpired: true };
       }
     }
+    set200 = v === 3; // .c:795625: bVar7 == 3 sets flag 0x200 before the branch
 
     if (v === 1 || v === 3) {
       if ((i.npc90 & HEAD_FLAG_STATUS) === 0) {

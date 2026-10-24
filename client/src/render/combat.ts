@@ -554,7 +554,7 @@ export interface CombatOptions {
   // wall stands between the two points (combat/gunbullet.ts; the slime's crawl passes 0x8000).
   wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask?: number) => boolean;
   // The same ray's hit point (the Megid orb stops at it): null when nothing is hit.
-  wallHit?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number) => { x: number; y: number; z: number } | null;
+  wallHit?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number) => { x: number; y: number; z: number; normal?: { x: number; y: number; z: number } } | null;
   // The owner's body node's world point for a gun's bullet start (combat/weaponorigin.ts);
   // default: the local player's skeleton in the lobby view. False / absent: WEAPON_HEIGHT above the feet.
   weaponOrigin?: WeaponOriginProvider;
@@ -7166,10 +7166,13 @@ export class CombatView {
     return true;
   }
 
-  // The map's wall ray for the NPC follower's head (SinowberillHead_CheckWall_007b18e0 with the
-  // given mask; 0x2100 for the move target). False when no map collision is loaded.
-  npcWallBlocks(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number): boolean {
-    return this.opts.wallBlocks ? this.opts.wallBlocks(from, to, mask) : false;
+  // The map's wall ray for the NPC follower's head (SinowberillHead_CheckWall_007b18e0 with the given mask;
+  // 0x2100 for the move target): the hit point and its surface normal, or null when the ray is clear or no map
+  // collision is loaded. The normal is ASSUMED up when the map gives none.
+  npcWallHit(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number): { point: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number } } | null {
+    const hit = this.opts.wallHit?.(from, to, mask);
+    if (!hit) return null;
+    return { point: { x: hit.x, y: hit.y, z: hit.z }, normal: hit.normal ?? { x: 0, y: 1, z: 0 } };
   }
 
   // The live enemies as the NPC attack AI reads them (quest/npcai.ts pickAttackTarget):
