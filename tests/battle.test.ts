@@ -16,9 +16,12 @@ import {
   BattleController, BattleRecords, BattleSetup, PlayerScore, assignTeams, baInitialFloor, build6x8F, build6xCF, build6xD0, build7D,
   decodeBattleRules, effectiveRules, encodeBattleRules, formatBattleTimer, localRestrictions, newBattleRules, parse7D, rankPlayers,
   roundEven, shuffleStarts, trapNumber, weightFromRegs, winParticleHolders, WIN_PARTICLE, ACK_FRAMES, LOADING_FRAMES, RULES_FRAMES,
-  type Battle7D, type BattleHost,
+  SonarStock, type BattleRules, type Battle7D, type BattleHost,
 } from '../client/src/quest/battle.ts';
 import { QuestSession } from '../client/src/quest/session.ts';
+import { buildBattleOverlay } from '../client/src/quest/battleoverlay.ts';
+import type { LevelTable } from '../client/src/formats/plyleveltbl.ts';
+import type { CharacterFile, InventoryItem } from '../client/src/net/charfile.ts';
 import type { LoadedQuest } from '../client/src/net/quests.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -107,7 +110,55 @@ eq([baInitialFloor(0), baInitialFloor(1), baInitialFloor(2), baInitialFloor(3), 
   check(e.teams === 0 && e.trapCounts[0] === 20 && e.lives === 0 && e.maxTechLevel === 0, 'effective rules: no teams below four players, trap counts <= 20, bad values -> 0');
   check(effectiveRules(r, 4).teams === 1, 'teams with four players');
   const lr = localRestrictions(effectiveRules({ ...r, respawn: 2, tool: 2, mag: 1, meseta: 1, replaceChar: 1, trapMode: 1 }, 4));
-  check(lr.removeRareWeapons && !lr.removeWeapons && lr.limitTechLevel === 9 && lr.lives === 7 && lr.removeTools && lr.removeMags && lr.clearMeseta && lr.replaceCharLevel === 50 && lr.traps?.[3] === 4, 'local restrictions');
+  check(lr.removeWeapons && lr.limitTechLevel === 9 && lr.lives === 7 && lr.removeTools && lr.removeMags && lr.clearMeseta && lr.replaceCharLevel === 50 && lr.traps?.[3] === 4 && lr.sonarCount === null, 'local restrictions');
+}
+
+// --- the battle overlay and the sonar stock (quest/battleoverlay.ts, quest/battle.ts SonarStock) -----
+{
+  const lrOf = (o: Partial<BattleRules>, n = 4) => localRestrictions(effectiveRules({ ...newBattleRules(), ...o }, n));
+  eq([lrOf({ weaponAndArmor: 1 }).removeWeapons, lrOf({ weaponAndArmor: 2 }).removeWeapons, lrOf({ weaponAndArmor: 3 }).removeWeapons, lrOf({ weaponAndArmor: 0 }).removeWeapons], [true, true, true, false], 'weapons and armor: phases 1..3 (exe ValidateChallengePhaseIndex_006a8ecc) all remove');
+  eq([lrOf({ tool: 1 }).removeTools, lrOf({ tool: 2 }).removeTools, lrOf({ tool: 0 }).removeTools], [true, true, false], 'tools: wave 1..2 (exe ValidateChallengeWaveIndex_006a8eec)');
+  eq([lrOf({ mag: 1 }).removeMags, lrOf({ mag: 0 }).removeMags], [true, false], 'mags: subphase 1 (exe ValidateChallengeSubPhaseIndex_006a8edc)');
+  eq([lrOf({ sonar: 1, sonarCount: 5 }).sonarCount, lrOf({ sonar: 0, sonarCount: 5 }).sonarCount, lrOf({ sonar: 1, sonarCount: 100 }).sonarCount], [5, null, 0], 'sonar count only with the enable (count >= 100 -> 0)');
+
+  const sonar = new SonarStock();
+  sonar.setFromRules(5);
+  eq([sonar.use(false), sonar.count, sonar.use(true), sonar.count, sonar.active], [false, 5, true, 4, true], 'sonar: a use needs a battle map, then takes one');
+  eq(sonar.use(true), false, 'sonar: no second use while the manager lives');
+  for (let i = 0; i < 0x1e; i++) sonar.tick();
+  eq([sonar.active, sonar.use(true), sonar.count], [false, true, 3], 'sonar: the manager ends after its frames, the next use takes another');
+  sonar.setFromRules(0);
+  sonar.tick();
+  eq([sonar.use(true), sonar.count], [false, 0], 'sonar: an empty stock is refused');
+
+  // A fake level table (the real one is PlyLevelTbl.prs): base 10 per stat, +1 per stat per level, EXP 100 * level.
+  const cls = 0;
+  const table = {
+    base: [{ atp: 10, mst: 10, evp: 10, hp: 10, dfp: 10, ata: 10, lck: 10 }],
+    delta: (_c: number, l: number) => ({ atp: 1, mst: 1, evp: 1, hp: 1, dfp: 1, ata: 1, lck: 1, exp: 100 * l }),
+    expForLevel: (_c: number, l: number) => 100 * l,
+  } as unknown as LevelTable;
+  const item = (type: number, sub: number, id: number, equipped = false): InventoryItem => ({
+    index: 0, state: equipped ? 2 : 1, flags: 0, extensionData1: 0, extensionData2: 0, equipped,
+    data: { data1: Uint8Array.from([type, sub, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]), id, data2: new Uint8Array(4) },
+  });
+  const base = {
+    name: 'T', guildCardNumber: 1, charClass: cls, sectionId: 0, level: 30, exp: 9999, meseta: 500,
+    stats: { atp: 1, mst: 2, evp: 3, hp: 4, dfp: 5, ata: 6, lck: 7, esp: 8 }, hpFromMaterials: 5, tpFromMaterials: 4,
+    inventory: [item(0, 1, 1, true), item(1, 2, 2, true), item(2, 0, 3), item(3, 9, 4), item(3, 0, 5), item(3, 0, 6)],
+    bank: { meseta: 0, items: [] }, techLevels: [9, 3, null, 1, ...new Array<number | null>(15).fill(null)],
+    playTimeSeconds: 0, deathCount: 0, guildCard: { number: 1, name: '', teamName: '', description: '', language: 1 },
+    infoBoard: '', autoReply: '', teamName: '',
+  } as unknown as CharacterFile;
+  const o = buildBattleOverlay(base, effectiveRules({ ...newBattleRules(), weaponAndArmor: 1, mag: 1, tool: 0, forbidScapeDolls: 1, meseta: 1 }, 4), table);
+  eq(o.inventory.map((i) => [i.index, i.data.id]), [[0, 5], [1, 6]], 'weapon, armor, mag and scape doll out; the monomates stay, renumbered');
+  eq([o.meseta, o.stats.atp, o.hpFromMaterials], [0, 1, 5], 'meseta cleared; the stats untouched without replace-char');
+  eq(base.inventory.length, 6, 'the base is not touched');
+  const r = buildBattleOverlay(base, effectiveRules({ ...newBattleRules(), replaceChar: 1, charLevel: 10, techDisk: 2, maxTechLevel: 5 }, 4), table);
+  eq([r.level, r.exp, r.stats.atp, r.stats.esp, r.hpFromMaterials, r.tpFromMaterials], [11, 1000, 20, 40, 0, 0], 'replace-char: level 10 (displayed 11), base + 10 gains, EXP at 10, ESP 40, no materials');
+  eq(r.techLevels.slice(0, 4), [6, 3, null, 1], 'limit level: a level above the rule (5, displayed 6) is capped; the rest kept');
+  const f = buildBattleOverlay(base, effectiveRules({ ...newBattleRules(), techDisk: 1 }, 4), table);
+  check(f.techLevels.every((x) => x === null) && base.techLevels[0] === 9, 'forbid all: no technique; the base keeps its levels');
 }
 
 // --- teams, scores, places --------------------------------------------------------
