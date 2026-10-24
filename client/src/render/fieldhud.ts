@@ -33,6 +33,9 @@ import { anchorX } from '../classic/ingame.ts';
 import { drawTextWindow, INSET, LINE } from '../classic/fieldwindows.ts';
 import { gameTextWidth } from '../classic/gametext.ts';
 import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } from '../classic/fieldmenu.ts';
+import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
+import { type HomeLeafServices } from '../classic/homeleaves.ts';
+import { isInTeam } from '../classic/teammenu.ts';
 import { equipProblems, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
 import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
@@ -122,6 +125,8 @@ export interface FieldHudOptions {
   // Trade Window offers; null when the game has no session. The session's timers run
   // each frame, and a partner's proposal opens the accept prompt (classic/trade.ts).
   trade?: () => { session: TradeSession; partners: () => { id: number; name: string }[] } | null;
+  // The Home menu's shared leaves' services (classic/homeleaves.ts); null with no session.
+  home?: () => HomeLeafServices | null;
   // Another window (a warp menu) has the keyboard.
   blocked: () => boolean;
   // Sends a command to the game server (the Options window's 0x01ED).
@@ -192,6 +197,8 @@ export class FieldHud {
   hudFlags = 0;
   // Held keys and the mouse, for the Area Map (menu inputs read each frame).
   private held = new Set<string>();
+  // The F1 help list (exe unknown_render_help_menu, flag 0x200): the 12 rows of group 11 0x161..0x16c.
+  private helpOpen = false;
   private mouse = { down: false, x: 0, y: 0 };
   private onKeyUp = (e: KeyboardEvent) => {
     this.held.delete(e.key.toLowerCase());
@@ -229,7 +236,7 @@ export class FieldHud {
       text: (g, i) => this.text(g, i),
       rules: () => {
         const area = this.opts.area();
-        return { lobby: area === 0x0f, safe: isSafeMap(area), online: true, questStarted: this.opts.questStarted(), inTeam: false };
+        return { lobby: area === 0x0f, safe: isSafeMap(area), online: true, questStarted: this.opts.questStarted(), inTeam: isInTeam(this.opts.home?.()?.team() ?? null) };
       },
       android: () => ANDROID_CLASSES.has(this.opts.character()?.charClass ?? 0),
       itemPack: {
@@ -280,6 +287,10 @@ export class FieldHud {
         text: (g, i) => this.text(g, i),
       },
       trade: () => this.tradeEnv(),
+      home: () => {
+        const s = this.opts.home?.() ?? null;
+        return s ? { ...s, text: (g, i) => this.text(g, i) } : null;
+      },
       questBoard: {
         vm: () => this.opts.quest?.()?.vm ?? null,
         questName: () => this.opts.quest?.()?.name ?? '',
@@ -679,6 +690,12 @@ export class FieldHud {
     // The function-key shortcuts (input/shortcuts.ts): F2..F4 open the field's leaves.
     if (!this.menu.isOpen && this.tex) {
       const a = functionKeyAction(e, functionKeyNames());
+      if (a?.kind === 'help') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.helpOpen = !this.helpOpen;
+        return;
+      }
       if (a?.kind === 'menu' && this.menu.openShortcut(a.id)) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -695,6 +712,18 @@ export class FieldHud {
     // Ctrl is also the Area Map's zoom out; HandlePlayerPaletteToggle_00694f0c
     // does nothing while the menu (which holds the Area Map) is open, as here.
     if (e.key === 'Control' && !e.repeat && this.palette) this.paletteHud.flip(this.palette);
+  }
+
+  // The F1 help list: 12 rows, group 11 0x161..0x16c (exe unknown_render_help_menu). ASSUMED:
+  // the geometry (the exe's list is built at 320 x 240 with width 0.1, row step not read here).
+  private drawHelp(ctx: CanvasRenderingContext2D, extra: number, bottom: number): void {
+    if (!this.tex) return;
+    const lines = Array.from({ length: 12 }, (_, i) => this.text(11, 0x161 + i)).join('\n');
+    const w = 360;
+    const h = 12 * HELP_ROW + 2 * INSET;
+    const x = anchorX(320 - w / 2, w, extra);
+    const y = 240 - h / 2 + bottom;
+    drawTextWindow(ctx, this.tex.skin, { x, y, w, h }, lines);
   }
 
   private frame(dt: number): void {
@@ -795,6 +824,7 @@ export class FieldHud {
       drawTextWindow(ctx, this.tex.skin, { x: anchorX(PROMPT_POS[0], w, extra), y: PROMPT_POS[1], w, h: LINE + 2 * INSET }, prompt);
     }
     this.menu.draw(ctx, this.tex.skin, this.tex.menu, extra, bands.bottom);
+    if (this.helpOpen && !this.menu.isOpen) this.drawHelp(ctx, extra, bands.bottom);
     if (this.minimapShown()) {
       // The enemies' icons (unknown_add_minimap_icon from each enemy's update).
       for (const e of this.opts.minimap?.enemies() ?? []) {

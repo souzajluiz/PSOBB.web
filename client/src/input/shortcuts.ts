@@ -8,8 +8,9 @@
 //   - Shift: with the character option 0x2000000 clear, Shift must NOT be held; with it
 //     set, Shift must be held (the chat shortcut form). The port has no such option
 //     flag yet, so the option is taken as clear (ASSUMED);
-//   - F1 function_key_info_menu toggles the F-key help window (flags 0x200 / 0x400 at
-//     the UI element, unknown_render_help_menu): not ported;
+//   - F1 function_key_info_menu toggles the F-key help list (flag 0x200 at the player
+//     menu object, unknown_render_help_menu; the 0x400 branch when CanEnter is non-zero
+//     is not read by the render): the field draws it (render/fieldhud.ts, ASSUMED geometry);
 //   - F2 equipment_menu_shortcut -> 0x09 (Equip), F3 technique_menu_shortcut -> 0x03
 //     (Technique), F4 mag_menu_shortcut -> 0x17 (MAG), F5 guild_card_menu_shortcut ->
 //     0x0E (Guild Card), F6 simple_mail_menu_shortcut -> 0x13 (Simple Mail),
@@ -49,7 +50,8 @@ export const FKEY_ROLES: readonly string[] = [
 export const FKEY_MENU_ID: Readonly<Record<number, number>> = { 2: 0x09, 3: 0x03, 4: 0x17, 5: 0x0e, 6: 0x13, 7: 0x12, 8: 0x25 };
 
 // The leaves the field menu has (classic/fieldmenu.ts open()); the others are not in it.
-export const FIELD_SHORTCUT_LEAVES: ReadonlySet<number> = new Set([0x09, 0x03, 0x17]);
+// The Home leaves 0x0E / 0x12 / 0x13 / 0x25 are shared with the lobby (classic/homeleaves.ts).
+export const FIELD_SHORTCUT_LEAVES: ReadonlySet<number> = new Set([0x09, 0x03, 0x17, 0x0e, 0x12, 0x13, 0x25]);
 // The leaves the lobby's Home menu has for a shortcut (classic/lobby.ts menuAction).
 export const LOBBY_SHORTCUT_LEAVES: ReadonlySet<number> = new Set([0x0e, 0x12, 0x13, 0x25]);
 
@@ -73,7 +75,7 @@ export interface KeyLike {
   shiftKey: boolean;
 }
 
-export type FKeyAction = { kind: 'menu'; id: number } | { kind: 'mainMenu' };
+export type FKeyAction = { kind: 'menu'; id: number } | { kind: 'mainMenu' } | { kind: 'help' };
 
 // What a function key does (null for none). shiftOption is the character option
 // 0x2000000 (Shift is then required, not forbidden).
@@ -83,6 +85,7 @@ export function functionKeyAction(e: KeyLike, names: readonly string[], shiftOpt
   if (n === FKEY_COUNT) return { kind: 'mainMenu' };
   if (e.ctrlKey || e.altKey) return null;
   if (shiftOption ? !e.shiftKey : e.shiftKey) return null;
+  if (n === 1) return { kind: 'help' };
   const id = FKEY_MENU_ID[n];
   return id === undefined ? null : { kind: 'menu', id };
 }

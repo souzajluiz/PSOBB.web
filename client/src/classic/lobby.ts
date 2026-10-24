@@ -43,18 +43,15 @@ import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
-import { Question, TeamInfoWindow, TeamMemberListWindow, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
+import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
+import { HomeLeaves, HOME_LEAF_IDS } from './homeleaves.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
-import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
-import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { se, SE } from '../audio/se.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { drawLobbyNameWindow, InfoWindow, inGameSpace, WINDOW_POS } from './ingame.ts';
 import { validateMenuEntry, type MenuRules } from './fieldmenu.ts';
 import { ItemListWindow, MAIN_MENU, MainMenu, menuViewShift, type MainMenuTextures } from './mainmenu.ts';
-import { SymbolChatList } from './symbolchatlist.ts';
-import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import type { ItemRow } from './itempack.ts';
 import { characterOptionsEnv, cursorSaved, OptionsMenu, readOptionFlags, restoreBrightness } from './options.ts';
@@ -143,26 +140,16 @@ export class LobbyScreen implements Screen {
   private counter: InfoCounter;
   private party: PartyMenus | null = null;
   private team: TeamMenus | null = null;
-  // Home menu > Team > Team Member List (0x25, teammenu.ts TeamMemberListWindow).
-  private teamList: TeamMemberListWindow | null = null;
-  // Home menu > Team > Team Info (0x2b, teammenu.ts TeamInfoWindow): 18EA / 19EA answers.
-  private teamInfo: TeamInfoWindow | null = null;
-  // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list (simplemail.ts MailCompose).
-  private teamMail: MailCompose | null = null;
+  // The Home menu's shared leaves (classic/homeleaves.ts): Guild Card, Symbol Chat, Simple Mail, Team Member List, Team Info.
+  private home: HomeLeaves;
   // The info window [15:6] shown from Change SHIP / Change BLOCK until the
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
   private itemList: ItemListWindow | null = null;
-  // Home menu > Chat > Symbol Chat (0x12): the 12 saved chats, a decided row previews it (symbolchatlist.ts).
-  private symbolList: SymbolChatList | null = null;
-  // Home menu > Guild Card (0xe): the Guild Card menu and its card list (guildcardmenu.ts).
-  private guildCard: GuildCardMenu | null = null;
   // Home menu > Simple Mail / Info Board: the Info Board window (infoboard.ts). infoOwn is the
   // text the keyboard accepted this session (the character's own board until then).
   private infoBoard: InfoBoardMenu | null = null;
   private infoOwn: string | null = null;
-  // Home menu > Simple Mail (0x13): the window (classic/simplemail.ts); its store is the session's mailbox.
-  private mail: SimpleMailMenu | null = null;
   // Home menu > Trade Window (0x1a, classic/trade.ts); also opened by a partner's proposal.
   private trade: TradeMenu | null = null;
   private options: OptionsMenu | null = null;
@@ -204,6 +191,18 @@ export class LobbyScreen implements Screen {
     this.menu.cursorSaved = () => cursorSaved(readOptionFlags(hud.fullCharacter?.() ?? null));
     // ValidateMenuItemCondition_00732620 with the lobby's rules (see lobbyMenuRules).
     this.menu.validate = (id) => validateMenuEntry(id, lobbyMenuRules(!!hud.team && teamMember(hud)));
+    this.home = new HomeLeaves(() => ({
+      text: (g, i) => hud.text(g, i),
+      lobby,
+      guildCards: () => hud.guildCards?.() ?? null,
+      guildCardClient: () => hud.guildCardClient?.() ?? null,
+      mailbox: () => hud.mailbox?.() ?? null,
+      fullCharacter: () => hud.fullCharacter?.() ?? null,
+      team: () => hud.team ?? null,
+    }));
+    this.home.onAllClosed = () => {
+      this.menu.leafOpen = false;
+    };
     restoreBrightness();
     const t15 = (i: number) => hud.text(0x0f, i);
     const counterText: CounterText = {
@@ -265,7 +264,7 @@ export class LobbyScreen implements Screen {
   }
 
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.teamList || !!this.teamInfo || !!this.transporting || !!this.quit || !!this.guildCard || !!this.infoBoard || !!this.mail || !!this.trade || !!this.symbolList || !!this.teamMail;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.infoBoard || !!this.trade || this.home.open;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -326,39 +325,16 @@ export class LobbyScreen implements Screen {
   }
 
   private menuAction(id: number): void {
+    if (HOME_LEAF_IDS.has(id)) {
+      if (this.home.openLeaf(id)) this.menu.leafOpen = true;
+      return;
+    }
     if (id === 0xb) {
       const rows = this.hud.inventory();
       this.itemList = new ItemListWindow(this.hud.text(0x0b, 0x37), rows ?? [], this.hud.text(11, 0xee));
       this.menu.leafOpen = true;
     } else if (id === 0x15) {
       this.logWindow = true;
-      this.menu.leafOpen = true;
-    } else if (id === 0xe) {
-      const host: GuildCardHost = {
-        book: () => this.hud.guildCards?.() ?? null,
-        client: () => this.hud.guildCardClient?.() ?? null,
-        selfGuildCard: () => this.lobby.self?.guildCardNumber ?? null,
-        // The other players of the lobby (the add-from-player list; the record's guild card number, name, section, class).
-        lobbyPlayers: () =>
-          [...this.lobby.players.values()]
-            .filter((p) => p.clientId !== this.lobby.selfId)
-            .map((p) => ({ slot: p.clientId, name: p.name, guildCardNumber: p.guildCardNumber, sectionId: p.sectionId, charClass: p.charClass })),
-        loggedIn: true,
-        unitxt: (group, index) => this.hud.text(group, index),
-      };
-      this.guildCard = new GuildCardMenu((i) => this.hud.text(11, i), host);
-      this.menu.leafOpen = true;
-    } else if (id === 0x12) {
-      // handle_player_menu_select symbol_chat_menu (0x12): the list of the 12 saved chats
-      // (symbolchatlist.ts, mode 'home'). A decided row previews it; the leaf's option list
-      // and icon editor are not ported.
-      const raw = this.hud.fullCharacter?.() ?? null;
-      const entries = raw ? parseCharacterFile(raw).symbolChats : [];
-      const rows = symbolChatRows(entries, (g, i) => this.hud.text(g, i));
-      this.symbolList = new SymbolChatList('home', this.hud.text(11, SYMBOL_TEXT.title), rows, (row) => {
-        this.previewSymbol(row);
-        return false; // the Home leaf's window stays open
-      });
       this.menu.leafOpen = true;
     } else if (id === 0x16) {
       // handle_player_menu_select info_board_menu (0x16): the Info Board window (classic/infoboard.ts,
@@ -383,48 +359,12 @@ export class LobbyScreen implements Screen {
       };
       this.infoBoard = new InfoBoardMenu((i) => this.hud.text(11, i), host);
       this.menu.leafOpen = true;
-    } else if (id === 0x13) {
-      // handle_player_menu_select simple_mail_menu1 (0x13): the Simple Mail window (classic/simplemail.ts,
-      // the exe's state handler FUN_0075596c). Needs the lobby's connection for its packets.
-      const box = this.hud.mailbox?.() ?? null;
-      if (!box) {
-        console.info('[classic] Simple Mail: no lobby connection yet');
-        return;
-      }
-      const host: SimpleMailHost = {
-        box,
-        book: () => this.hud.guildCards?.() ?? null,
-        client: () => this.hud.guildCardClient?.() ?? null,
-        self: () => ({ guildCard: this.lobby.self?.guildCardNumber ?? 0, name: this.lobby.self?.name ?? '' }),
-        unitxt: (group, index) => this.hud.text(group, index),
-        // The window's destructor: the answer service packets (C7 / C8) and the unread bits.
-        onClose: () => {
-          box.closeWindow();
-          box.store.clearUnread();
-        },
-      };
-      this.mail = new SimpleMailMenu((i) => this.hud.text(11, i), host);
-      this.menu.leafOpen = true;
     } else if (id === 0x1a) {
       // handle_player_menu_select trade_invite_menu1 (classic/trade.ts). The lobby has no
       // window check of its own (ValidateMenuItemCondition_00732620 allows 0x1a in a safe
       // online map, the lobby is one); newserv refuses 6xA6 / D0..D4 outside a game, so
       // the proposal gets no answer there (see the DEVLOG entry of 2026-10-23).
       this.trade = new TradeMenu(this.tradeEnv());
-      this.menu.leafOpen = true;
-    } else if (id === 0x25 && this.hud.team) {
-      // handle_player_menu_select team_member_list_menu (classic/teammenu.ts): the list of the team's members.
-      this.teamList = new TeamMemberListWindow(this.hud.team, {
-        t11: (i) => this.hud.text(0x0b, i),
-        t12: (i) => this.hud.text(0x0c, i),
-        t15: (i) => this.hud.text(0x0f, i),
-      });
-      this.teamList.show();
-      this.menu.leafOpen = true;
-    } else if (id === 0x2b && this.hud.team) {
-      // handle_player_menu_select team_info_menu (classic/teammenu.ts TeamInfoWindow).
-      this.teamInfo = new TeamInfoWindow(this.hud.team, (i) => this.hud.text(0x0b, i));
-      this.teamInfo.show();
       this.menu.leafOpen = true;
     } else if (id === 6) {
       const full = () => this.hud.fullCharacter?.() ?? null;
@@ -439,14 +379,6 @@ export class LobbyScreen implements Screen {
       // A leaf window the port does not have yet: no window opens, the menu stays.
       console.info(`[classic] Home menu entry 0x${id.toString(16)}: no window in the port yet (not ported)`);
     }
-  }
-
-  // The preview of a saved chat: its picture over our own head, with the chat's sound (the exe's
-  // ProcessChatMessageType_0077d880 plays the sound; the balloon is ASSUMED).
-  // ProcessChatMessageType_0077d880 (state 2 of the Home leaf): the row's sound only.
-  // Nothing is sent and no balloon is shown (the exe's leaf sends from its option list, not ported).
-  private previewSymbol(row: SymbolRow): void {
-    if (row.sound !== null) se(row.sound);
   }
 
   private applyViewShift(): void {
@@ -474,13 +406,7 @@ export class LobbyScreen implements Screen {
     this.menu.tick();
     this.options?.tick();
     // Meet the User's 450 frames end in the owner callback, which closes the list (teammenu.ts tick).
-    if (this.teamList) {
-      this.teamList.tick();
-      if (!this.teamList.open) {
-        this.teamList = null;
-        this.menu.leafOpen = false;
-      }
-    }
+    this.home.tick();
     // The session's timers run whether or not a window is open (a partner's proposal
     // arrives with no window). A proposal with no window opens the accept prompt (ASSUMED:
     // the exe's trade_invite_menu2/3 window, not traced).
@@ -540,38 +466,14 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
-    if (this.symbolList) {
-      e.preventDefault();
-      this.symbolList.key(e);
-      if (!this.symbolList.open) {
-        this.symbolList = null;
-        this.menu.leafOpen = false;
-      }
+    if (this.home.open) {
+      this.home.key(e);
       return;
     }
     if (this.trade) {
       e.preventDefault();
       if (!this.trade.key(e)) {
         this.trade = null;
-        this.menu.leafOpen = false;
-      }
-      return;
-    }
-    if (this.guildCard) {
-      e.preventDefault();
-      const action = this.guildCard.key(e);
-      if (action) console.info(`[classic] Guild Card: state 0x${action.state.toString(16)} (row ${action.card}) not ported yet`);
-      if (!this.guildCard.open) {
-        this.guildCard = null;
-        this.menu.leafOpen = false;
-      }
-      return;
-    }
-    if (this.mail) {
-      e.preventDefault();
-      this.mail.key(e);
-      if (!this.mail.open) {
-        this.mail = null;
         this.menu.leafOpen = false;
       }
       return;
@@ -613,28 +515,6 @@ export class LobbyScreen implements Screen {
     if (this.team?.open) {
       e.preventDefault();
       this.team.key(e);
-      return;
-    }
-    if (this.teamMail) {
-      e.preventDefault();
-      this.teamMail.key(e);
-      if (!this.teamMail.open) this.teamMail = null;
-      return;
-    }
-    if (this.teamList) {
-      e.preventDefault();
-      if (!this.teamList.key(e)) {
-        this.teamList = null;
-        this.menu.leafOpen = false;
-      } else this.openTeamMail();
-      return;
-    }
-    if (this.teamInfo) {
-      e.preventDefault();
-      if (!this.teamInfo.key(e)) {
-        this.teamInfo = null;
-        this.menu.leafOpen = false;
-      }
       return;
     }
     // The function-key shortcuts (input/shortcuts.ts): F5..F8 open the lobby's leaves.
@@ -692,52 +572,15 @@ export class LobbyScreen implements Screen {
     this.keys.clear();
   }
 
-  // Team Member List > Send Mail: the keyboard opens for the searched member's card. The mail
-  // goes through the session's Simple Mail sender (net/simplemail.ts send, the exe's 0x81); the
-  // list's action rows come back when the keyboard ends (sent or cancelled).
-  private openTeamMail(): void {
-    const list = this.teamList;
-    const to = list?.mailTarget ?? null;
-    if (!list || to === null || this.teamMail) return;
-    const box = this.hud.mailbox?.() ?? null;
-    const finish = () => {
-      this.teamMail = null;
-      list.mailDone();
-    };
-    if (!box) {
-      console.info('[classic] Team Send Mail: no lobby connection yet');
-      finish();
-      return;
-    }
-    this.teamMail = new MailCompose(
-      (i) => this.hud.text(11, i),
-      (text) => {
-        box.send({ guildCard: this.lobby.self?.guildCardNumber ?? 0, name: this.lobby.self?.name ?? '' }, to, text);
-        finish();
-      },
-      finish,
-    );
-  }
-
   leave(): void {
     this.keys.clear();
     this.quit = null;
-    this.guildCard = null;
     this.infoBoard = null;
     // The close actions send the answer packets; the connection may be gone by now.
-    try {
-      this.mail?.dispose();
-    } catch {
-      // ignored: nothing to send on a closed connection
-    }
-    this.mail = null;
+    this.home.close();
     this.trade = null;
     this.party?.close();
     this.team?.close();
-    this.teamList = null;
-    this.teamInfo = null;
-    this.teamMail = null;
-    this.symbolList = null;
     this.closeOptions();
     this.menu.close();
   }
@@ -764,16 +607,12 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.counter.draw(ctx, this.hud.skin, extra));
       this.party?.draw(ctx, this.hud.skin, extra, bands.bottom);
       inBand(ctx, bands.mid, () => this.team?.draw(ctx, this.hud.skin, extra));
-      inBand(ctx, bands.mid, () => this.teamList?.draw(ctx, this.hud.skin, extra));
-      inBand(ctx, bands.mid, () => this.teamInfo?.draw(ctx, this.hud.skin, extra));
-      inBand(ctx, bands.mid, () => this.teamMail?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.home.drawTeam(ctx, this.hud.skin, extra));
       inBand(ctx, bands.bottom, () => this.transporting?.draw(ctx, this.hud.skin, extra));
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
-      inBand(ctx, bands.mid, () => this.symbolList?.draw(ctx, this.hud.skin));
-      inBand(ctx, bands.mid, () => this.guildCard?.draw(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.home.drawOther(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
-      inBand(ctx, bands.mid, () => this.mail?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
