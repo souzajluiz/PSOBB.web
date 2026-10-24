@@ -980,6 +980,7 @@ def main(argv):
     lines.append("  func: number;")
     lines.append("  table: number | null; // null for an indexed site")
     lines.append("  via: number | null;")
+    lines.append("  variants: Readonly<Record<number, number>> | null; // indexed sites: index value -> table VA")
     lines.append("}")
     lines.append("")
     lines.append("export interface CollisionTableLink {")
@@ -1017,7 +1018,8 @@ def main(argv):
     for s in sites:
         via = "null" if s["via"] is None else f"0x{s['via']:08x}"
         table = "null" if s["table"] is None else f"0x{s['table']:08x}"
-        lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: {table}, via: {via} }},")
+        variants = variants_text(s["indexed"]["variants"]) if s["table"] is None else "null"
+        lines.append(f"  {{ site: 0x{s['site']:08x}, func: 0x{s['func']:08x}, table: {table}, via: {via}, variants: {variants} }},")
     lines.append("];")
     lines.append("")
     lines.append("// Enemy .dat set type -> its factory links (one per factory; areas where it is used).")
