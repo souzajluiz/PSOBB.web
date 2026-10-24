@@ -593,7 +593,24 @@ eq(killExp(100, { episode2: true, killer: false }), 104, 'no Challenge multiplie
   eq(graveKillerName(46), 'Vol Opt', 'the Vol Opt name');
   eq(graveKillerName(104), 'Sand Rappy', 'the Sand Rappy name');
   eq(graveKillerName(graveKillerId('DUBWITCH')), null, 'the Dubwitch: no decoded id, no line');
-  eq(graveKillerId('DARK_FALZ_1'), GRAVE_NO_KILLER, 'Dark Falz phase 1: not traced');
+}
+
+// The third pass (2026-10-24): the open kinds, each id from the exe (objdump, Ghidra for the ctors).
+{
+  const cases: Array<[string, number]> = [
+    ['DARK_FALZ_1', 47], ['DOLMOLM', 64], ['DOLMDARL', 65], ['MOTHMANT', 3], ['HIDOOM', 23], ['MIGIUM', 22], ['GIRTABLULU', 93],
+  ];
+  for (const [kind, id] of cases) eq(graveKillerId(kind), id, `${kind} is exe id ${id}`);
+  eq(graveKillerName(47), 'Dark Falz', 'the Dark Falz forms share one name');
+  eq(graveKillerName(64), 'Dolmolm', 'the Dolmolm name');
+  eq(graveKillerName(65), 'Dolmdarl', 'the Dolmdarl name');
+  eq(graveKillerName(3), 'Mothmant', 'the Mothmant name');
+  eq(graveKillerName(23), 'Hidoom', 'the Hidoom name');
+  eq(graveKillerName(22), 'Migium', 'the Migium name');
+  eq(graveKillerName(93), 'Girtablulu', 'the Girtablulu name');
+  eq(graveKillerId('DUBWITCH'), GRAVE_NO_KILLER, 'Dubwitch: its ctor never names it (0x618ae4), no entry');
+  eq(graveKillerName(85), null, 'Olga sub-object 0x55: no port kind, no line');
+  eq(graveKillerName(86), null, 'Olga sub-object 0x56: no port kind, no line');
 }
 
 // The Rappy family: rappy_unitxt_ids (0x00921a00, read from PsoBB.exe) by (episode, seasonal, rare).
