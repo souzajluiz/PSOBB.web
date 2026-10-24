@@ -560,6 +560,19 @@ export function modelParticleBlend(nt: boolean): { src: number; dst: number } {
   return { src: D3DBLEND.SRCALPHA, dst: nt ? D3DBLEND.ONE : D3DBLEND.INVSRCALPHA };
 }
 
+// The opaque pass of a model particle is skipped when its alpha is below 0. SetColor
+// (ParticleEffectSingleParticle_SetColor_00508958, dump 287693) gives a non-NT particle the colour
+// alpha byte(+0x97) / 255 + g_ParticleBaseAlpha (0x00920040 = -1.0), so it is below 0 for every
+// byte under 255; an NT particle's alpha is 0. set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color
+// (dump 850240) then sets transform flag 1 (flags |= 5) in the 0x20 branch, and the opaque pass
+// (`(flags & 1) == 0`, dump 849892) does not run; only the alpha strips are drawn.
+// ASSUMED: the byte is the particle's fade in 0..255 (the port's fade; the exe's alpha byte is not traced).
+export function modelOpaquePassSkipped(nt: boolean, fade: number): boolean {
+  if (nt) return false;
+  const byte = Math.max(0, Math.min(255, Math.round(fade * 255)));
+  return byte / 255 - 1 < 0;
+}
+
 // Additive tint of a texture (vertex color x texel), cached per color step.
 export function makeTinter(): (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource {
   const cache = new Map<string, OffscreenCanvas>();

@@ -17438,3 +17438,38 @@ Trap Vision (item 8: `init_item_tool_8` 0x005df848, constructor 0x005df8dc, vtab
 - The stalactite's five debris parts (0x00679b70: the DerollePart bodies with the BML chunks and their physics); the record path of the shatter (+0x80: box status and 0x007b5038).
 - The destructible rock's break effects (0x006759d4, and the 0x006336f8 calls to 0x0050b510 with the SE / particle ids 0x45 and 0x46).
 - Trap Vision: no duration exists in the exe client (the value is a stack count). Open: the callers of 0x005de46c and 0x005de4a0 (the consume / add of the item's stack), and whether the use path's technique 14 cast (0x006e0780, case 14) has any Trap Vision effect (not traced; the dump names this function `use_telepipe`, so the vtable may belong to the Telepipe).
+
+## 2026-10-23: Barta's start at the feet and the model alpha pass (Rabarta's opaque planes); Gifoie's emitter scale checked
+
+**What changed.**
+- Barta's object starts at the caster's feet, not the cast point: `castOriginY` (`combat/techfire.ts`) gives Barta `feet` and the other families `feet + WEAPON_HEIGHT`. `render/combat.ts` `spawnFire` uses it. An undirected Barta then rides `BARTA_START_LIFT` (5) above the feet and the ground probe (`BartaEntity_UpdatePhysics_006f0568`) sets it to the floor + 5 on its first step, so its tier 5 model entries (0x193 / 0x1d8 / 0x1d7, `follow`) sit at the floor + 5 instead of the feet + 25.
+- Model particles with the exe's alpha test: `modelOpaquePassSkipped` (`classic/particles.ts`) is true for a non-NT particle whose alpha byte / 255 - 1 is below 0 (any fade below 1). `render/hitfx.ts` `placeModel` then hides the opaque strips of a technique model copy (`drawAnimated` only); the alpha strips still draw. `render/hitmodels.ts` `instanceParticleModel` records the opaque strips (`opaqueStripMaterials`, the materials not transparent when built, njcmmesh.ts).
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`; addresses are VAs).
+- Barta, the caster's position: `unknown_cast_tech` 0x006e4ax (dump 641918 and 641930): the undirected case calls `AntiTechEntity_Constructor_006dd7e4((undefined *)caster, &caster->x, heading, level)` and the directed one `CreateAntiTechEntity_006dddac(caster, &caster->x, &local_1c, level)`. Gibarta, Foie and Gifoie pass `&local_28` (the cast point from `unknown_get_tech_cast_location`), so only Barta is at the feet.
+- `TechniqueEntity_Constructor_006efe50` (dump 652194): `+0x20 = param_2->x`, `+0x24 = param_2->y`, `+0x28 = param_2->z`. `AntiTechEntity_Constructor_006dd85c` (dump 640449 ff.) adds `_DAT_0096c9b4` (5) to `+0x24` for the undirected case (`local_24[9]`), then `create_particle_effect5` / `3` with `local_24 + 8` (the position) for every entry.
+- The physics: `BartaEntity_UpdatePhysics_006f0568` (dump 652518): probe at `y + 10` (`_g_BartaDefaultY_0096deac`), the new `y = ground + 5` (`_g_BartaDefaultGroundY_0096dea8`), ends when the change is above 12 (`_g_BartaMaxVerticalDist_0096dea4`).
+- The alpha: `ParticleEffectSingleParticle_SetColor_00508958` (dump 287693): non-NT blend (1,4,5), colour `(0, 0, 0, byte(+0x97) / 255 + g_ParticleBaseAlpha)`, `g_ParticleBaseAlpha_00920040 = -1.0` (read with `tools/exedata.py`); NT blend (1,4,1), alpha 0. `copy_color_to_af0370` (dump 846531) stores it in `g_CurrentTargetColor`.
+- `set_rs_DiffuseAmbientMaterial_Source_and_xj_vertex_color` (dump 850240): the 0x20 branch packs `g_CurrentTargetColor` into the constant vertex colour and, when `a < 0`, sets transform flag 5 (`|= 5`, bit 1 = the opaque-pass skip). The opaque pass of the XJ draw (`(uVar3 & 1) != 0 && (g_XjTextureTransformFlags & 1) == 0`, dump 849892) then does not run, so only the alpha strips are drawn.
+
+**ASSUMED:**
+- The particle alpha byte (+0x97) is the port's fade in 0..255. The exe's writer of the packed colour (`unk_particle_struct.color`, dump 291671: the ARGB from a per-update channel chain) is not ported; the port keeps its fade and rgb shade.
+- The colour: the exe's non-NT SetColor colour is black (0, 0, 0). Taken literally, a non-NT model particle would be black. Not ported: the diffuse path of the constant-colour shader (`g_XjVertexShaderBase = 0x10`) is not traced, so the port keeps the particle's rgb.
+- The vertex alpha wrap: `ROUND(a * 255)` with a < 0 packs `(byte + 1) & 0xff`. Not ported (the port uses the fade).
+- Which materials are "opaque" is the strip flag (STRIP_USE_ALPHA, njcmmesh.ts), the same split the exe's OpaqueUP / AlphaUP passes use.
+
+**Gifoie's emitter size (item 3).** `create_gifoie`'s emitter loop (dump 644560..644675) creates each spiral emitter with `create_particle_effect2` at the emitter point (its +0x44 / +0x48 default 1.0). The loop sets 1.3 / 1.3 (levels 15..24) or 1.3 / 1.8 (25..29) on the first two emitters, but only when the data index (`gifoie_particle_data[tier]`, `+0x7a`) is 2, and the level is read from `+0x78` (dump's `local_5c + 0x1e`), which is not the port's `+0xc4` level field. Not ported: the tier 3..5 emitters (the e2e level 30) are scale 1.0 in both, so the port's scale 1 is the exe's for those. The planes' size is the renderer's half size times the particle size (`particleQuad`, NT_LAYOUT); no change made. The planes stay open until a capture at a known distance is checked.
+
+**Checks.**
+- `node tests/techfire.test.ts`: techfire: ok (new: `castOriginY`, the undirected Barta's +5).
+- `node tests/particleorient.test.ts`: ALL PASS (new: `modelOpaquePassSkipped` for non-NT at full, half and zero fade, and NT).
+- `node tests/particleframes.test.ts`, `particleslope`, `particlespawn`, `hitfx`, `techniques`, `techlightning`, `deathfx`: pass (Node 24).
+- `node tests/weaponorigin.test.ts`: not run here (it needs `vendor/newserv/build/newserv`, absent from this worktree; environmental).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24, `client/node_modules` linked from the main checkout for the run, removed before the commit): clean.
+- Not run: `client/e2e/techvisuals.spec.ts` (needs newserv and the bridge running; the disk is short). Not seen in Chrome: the Barta cube's height and the Rabarta planes' look.
+
+**Left.**
+- The planes' colour: the exe's non-NT colour is black (SetColor), the port keeps rgb; decide with a capture of a Rabarta cast after the opaque skip.
+- The packed colour's alpha (dump 291671) and the fade it comes from: the port's fade stands in for the byte.
+- Gifoie: the tier-2 scale branch (level field `+0x78` vs `+0xc4`), and the big planes' size (no capture at a known distance).
+- Barta's cube: `create_particle_effect5` position updates for the `follow` model particles (the port's convention: the object's y each tick; the exe's effect position update not traced).

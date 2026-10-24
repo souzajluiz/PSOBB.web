@@ -4,10 +4,12 @@
 // Run: node tests/techfire.test.ts
 import {
   BartaBolt,
+  BARTA_START_LIFT,
   effectTier,
   enemyAimHeight,
   AIM_HEIGHT,
   WEAPON_HEIGHT,
+  castOriginY,
   enemyFire,
   FIRE_SE,
   FireShot,
@@ -447,6 +449,12 @@ check(enemyAimHeight(0x44, null, 2) === 15, `Gigobooma (variant 2) aims at its b
 check(enemyAimHeight(0x44, null, 3) === AIM_HEIGHT, 'a Booma variant with no box row set falls back to AIM_HEIGHT');
 check(enemyAimHeight(null) === AIM_HEIGHT, 'no type falls back to AIM_HEIGHT');
 check(enemyAimHeight(0xfff0) === AIM_HEIGHT, 'a type with no table falls back');
+// The start height: Barta is made at the caster's feet (`&caster->x`, dump 641918 / 641930), the
+// others at the cast point (feet + WEAPON_HEIGHT, ASSUMED).
+check(castOriginY(TECH.barta, 100) === 100, 'Barta starts at the feet, not the cast point');
+check(castOriginY(TECH.barta, 100) + BARTA_START_LIFT === 105, 'an undirected Barta then rides 5 above that (BARTA_START_LIFT)');
+check(castOriginY(TECH.foie, 100) === 100 + WEAPON_HEIGHT, 'Foie starts at the cast point (feet + WEAPON_HEIGHT)');
+check(castOriginY(TECH.gibarta, 100) === 100 + WEAPON_HEIGHT, 'Gibarta starts at the cast point');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

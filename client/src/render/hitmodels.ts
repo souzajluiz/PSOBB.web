@@ -131,16 +131,26 @@ export interface ParticleModelPiece {
 }
 
 /** A copy of a template for one particle: the clone shares geometry; its materials and nodes are its own. */
+// The materials of opaque strips (not transparent when built, njcmmesh.ts): the exe draws them in
+// its opaque pass, which a model particle with alpha below 0 skips (classic/particles.ts
+// modelOpaquePassSkipped). Copies of a particle model register their own clones here.
+export const opaqueStripMaterials = new WeakSet<THREE.Material>();
+
 export function instanceParticleModel(t: ParticleModel): ParticleModelPiece {
   const root = t.root.clone(true);
   const materials: THREE.Material[] = [];
   root.traverse((o) => {
     if (!(o instanceof THREE.Mesh)) return;
+    const copy = (m: THREE.Material): THREE.Material => {
+      const c = m.clone();
+      if (!m.transparent) opaqueStripMaterials.add(c);
+      return c;
+    };
     if (Array.isArray(o.material)) {
-      o.material = o.material.map((m) => m.clone());
+      o.material = o.material.map(copy);
       materials.push(...o.material);
     } else {
-      o.material = o.material.clone();
+      o.material = copy(o.material);
       materials.push(o.material);
     }
   });
