@@ -1,5 +1,24 @@
 # Devlog
 
+## 2026-10-24: PSO V2 download payload (non-BB quest writers)
+
+**Question:** the ROADMAP's last quest-writer item is the PSO V2 encrypted download format of DC v2 / PC / GC quests. What does newserv write, and can the port write the cipher and the payload byte-identical to it?
+
+**Reference (newserv, `vendor/newserv/src`):**
+- Cipher: `PSOEncryption.cc` `PSOV2Encryption` (constructor line 76, `update_stream` 90, `single` 104, closed form at 129), `PSOLFGEncryption::next` 38 and `encrypt_t<false>` in `PSOEncryption.hh`; decrypt is an alias of encrypt (`PSOEncryption::decrypt`, line 27).
+- Header: `Quest.cc` `PSODownloadQuestHeader` at line 173 (`u32 size`, `u32 encryption_seed`, both LE).
+- Writer: `Quest.cc` `encode_download_quest_data` at line 839 (header, then the payload encrypted with `PSOV2Encryption(seed)`, the seed random when 0); `create_download_quest` at 868 builds the `.bin` (re-compressed) and `.dat` (already compressed) with it.
+- Reader: `Quest.cc` `decode_dlq_data` (line 1055; the header size checked against the PRS stream).
+- The `.qst` packing for these versions is `encode_qst_file` (`Quest.cc` 1291): the DC / PC / GC open-file structs (`S_OpenFile_DC_44_A6`, `S_OpenFile_PC_GC_44_A6`) with the `PSOCommandHeaderDCV3` / `PSOCommandHeaderPC` headers. Not ported this round.
+
+**Port:** `client/src/formats/psov2.ts`: `PsoV2Cipher` (the constructor's first loop, the five warm-ups, `updateStream`, `next`, `apply` as `encrypt_t<false>`), `psoV2First` (the closed form), `psoV2Crypt`, `encodeDownloadQuestData(compressed, seed, decompressedSize?)`, `decodeDownloadQuestData`. The seed is required and nonzero (newserv's 0 means random; the port keeps output reproducible). Encrypting the exact length gives the same bytes as newserv's pad-then-trim.
+
+**Verification:** no newserv build is run. The known answers come from an independent Python transcription of the C++ loop (`PSOV2Encryption` constructor and `update_stream`): keystream for seed `0x12345678` starts `DAE88B96 CB3060B9`, the closed form matches the first word for random seeds, and the 11-byte known-answer payload is `3412000078563412968aead9bd6536cc604746`.
+
+**Tests:** `node tests/psov2.test.ts` OK (keystream and refill words, closed form, round trips for lengths 0..4096, the PRS round trip through decode, wrong size refused, seed 0 refused). `tsc --noEmit -p client` clean. `tests/prscompress.test.ts` still OK.
+
+**Left open:** the non-BB `.qst` command structs and the writer hook-up (`createDownloadQuest` language override of the `.bin` header, the download-quest menu). The cipher is not yet checked against a newserv binary's output.
+
 ## 2026-10-24: De Rol Le beam muzzle: the exe's emitter is the cast point plus its velocity, no model node
 
 **Question:** the port puts the beam emitter at the brain estimate `[x, drawY + 10, z + 30]` (ASSUMED). Which model node or bone does the exe copy into the emitter's position each frame?

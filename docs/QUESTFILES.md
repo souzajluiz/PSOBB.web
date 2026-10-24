@@ -99,7 +99,36 @@ order) and write commands whose size includes the 4 padding bytes. Download ques
 A7 (write) instead of 44 / 13: `parseQst` reads them (`download: true`) and `packQst(..., { download: true })` writes them.
 ASSUMED: the BB A6/A7 files are plain PRS, like the 44 / 13 ones (the exe's receive path decompresses them without a
 decrypt). The PSO V2 encrypted download format (newserv `encode_download_quest_data`: an 8-byte header, then the PRS
-stream encrypted with PSO V2) is the DC / PC / GC / XB one; it is not decoded, and `parseQst` still rejects non-BB files.
+stream encrypted with PSO V2) is the DC / PC / GC / XB one; `parseQst` still rejects non-BB files. The cipher and the
+payload are ported (see the next section); the non-BB `.qst` command structs are not.
+
+## PSO V2 download payload
+
+`formats/psov2.ts`, ported from newserv `src/PSOEncryption.cc` (`PSOV2Encryption`, `PSOLFGEncryption::encrypt_t`) and
+`src/Quest.cc` (`PSODownloadQuestHeader` at line 173, `encode_download_quest_data` at line 839, `decode_dlq_data`).
+The download quest `.bin` and `.dat` for DC v2, PC, GC and XB are written as:
+
+- bytes 0-3: `u32le` decompressed size (the PRS stream's, or the `.dat`'s when the caller passes none);
+- bytes 4-7: `u32le` encryption seed (newserv picks a random one when it is 0; the port refuses 0);
+- bytes 8 on: the PRS stream XORed with the V2 keystream for that seed. The header is not encrypted.
+
+The keystream (`PsoV2Cipher`): state `stream[0..0x38]`, seeded from the seed by the first loop (`stream[0x37] = seed`,
+then 54 steps of `a, b = b - a, a` into `stream[(21k) % 0x37]`), five `update_stream` warm-ups, then 0x38 words per
+refill: `stream[z] -= stream[z+0x1F]` for z in 1..0x18, `stream[z] -= stream[z-0x18]` for z in 0x19..0x37, and reads
+start at index 1. Word `k` XORs the next 4 bytes little endian; a partial last word XORs its low bytes. Encryption and
+decryption are the same XOR. `psoV2First(seed)` is newserv's closed form of the first word, `0xC6DCAB76 * seed - 0x9E1977BA`.
+
+Tests: `tests/psov2.test.ts` (synthetic data only). The known answers come from an independent Python transcription of the
+C++ loop (not from the port): seed `0x12345678` gives the keystream `DAE88B96 CB3060B9 AE4C4E68 F0EE2029 B20BA18A
+33F1123F 3EAA77D2 03F5454B`, the first words after one refill are `EEF55018 848B6582`, and `encodeDownloadQuestData` of
+bytes 0..10 with size 0x1234 gives `3412000078563412968aead9bd6536cc604746`. Round trips cover every length 0..4096
+(including partial words), a PRS stream through `decodeDownloadQuestData`, and a wrong size on decode.
+
+Not ported: the `.qst` command structs for these versions (newserv `encode_qst_file`: `S_OpenFile_DC_44_A6`,
+`S_OpenFile_PC_GC_44_A6`, `S_OpenFile_XB_44_A6` and the `PSOCommandHeaderDCV3` / `PSOCommandHeaderPC` write commands,
+with the `xb_filename` and the quest number), the `create_download_quest` language override of the `.bin` header, and
+the download-quest menu. The cipher is not yet checked against a newserv build's output (no build is run here; the
+Python transcription is the reference).
 
 ## Script text
 
