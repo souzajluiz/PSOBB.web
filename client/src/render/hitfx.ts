@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, frameUv, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -62,6 +62,8 @@ export class FieldParticles {
   private entries = new Map<number, ParticleEntry | null>();
   private bitmaps: ImageBitmap[] = [];
   private textures = new Map<number, THREE.Texture>();
+  // One view per (texture, frame) of a multi-frame texture (frameTexture); they share the image.
+  private frameTextures = new Map<string, THREE.Texture>();
   private slots = new Map<number, number>();
   private gbixOfSlot: number[] = [];
   private loaded: Promise<void> | null = null;
@@ -168,6 +170,25 @@ export class FieldParticles {
     tex.needsUpdate = true;
     this.textures.set(gbix, tex);
     return tex;
+  }
+
+  // The texture a particle shows: the whole image, or for a multi-frame texture (effect_nt
+  // unk_count 16: the Gifoie / Gibarta / Barta dot sheets) the UV rect of its frame, a view of the
+  // same image (classic/particles.ts frameUv; the exe's unk_float_ptr list, ASSUMED a 4 x 4 grid).
+  private frameTexture(b: Burst, q: Particle): THREE.Texture | null {
+    const base = this.texture(q.e.entry.gbix);
+    const count = b.particles.frameCount(q.e);
+    if (!base || count <= 1) return base;
+    const key = `${q.e.entry.gbix}:${q.frame}`;
+    let t = this.frameTextures.get(key);
+    if (!t) {
+      const [u0, v0, u1, v1] = frameUv(count, q.frame);
+      t = base.clone();
+      t.offset.set(u0, v0);
+      t.repeat.set(u1 - u0, v1 - v0);
+      this.frameTextures.set(key, t);
+    }
+    return t;
   }
 
   /**
@@ -491,7 +512,7 @@ export class FieldParticles {
       }
       const d = q.e.entry;
       const mat = s.material;
-      const tex = this.texture(d.gbix);
+      const tex = this.frameTexture(b, q);
       if (mat.map !== tex) {
         mat.map = tex;
         mat.needsUpdate = true;
@@ -526,5 +547,7 @@ export class FieldParticles {
     this.bursts = [];
     for (const t of this.textures.values()) t.dispose();
     this.textures.clear();
+    for (const t of this.frameTextures.values()) t.dispose();
+    this.frameTextures.clear();
   }
 }

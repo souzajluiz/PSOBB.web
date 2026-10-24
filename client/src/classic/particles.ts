@@ -193,12 +193,34 @@ export interface Particle {
   spinSign: number;
   /** njm_elapsed (the model's motion frame, not clamped here: the drawer clamps to the last frame). */
   anim: number;
+  /** The particle's frame of a multi-frame texture (the exe's unk_particle_struct.unk_index, see NT_FRAME_COUNT). */
+  frame: number;
   // A type 1 particle: its centre, angle (BAMS), angular step (BAMS), radius,
   // rise per frame and the height gained so far.
   ring?: { c: [number, number, number]; ang: number; omega: number; r: number; rise: number; dy: number };
 }
 
 export const NT_SIZE = 16; // effect_nt metadata width (see title.ts)
+
+// effect_nt_metadata.unk_count (+0x0c of each record, 0x00a101c0; read from PsoBB.exe with
+// tools/exedata.py): the number of frames of a texture's UV list (unk_float_ptr, +0x10). Slots
+// 34, 40..50 have 16 frames, all sharing one list (0x00aaed20, built at run time); the others 1
+// (their list is 0,0,1,1 at 0x00a112cc). Used by the particle's frame (unk_index, 0x0050e0xx area).
+export const NT_FRAME_COUNT: Readonly<Record<number, number>> = Object.freeze(
+  Object.fromEntries([34, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50].map((s) => [s, 16])),
+);
+
+// The UV rect (u0, v0, u1, v1, top-left origin) of a frame of a texture with `count` frames. ASSUMED:
+// the 16-frame list is a uniform 4 x 4 grid in row-major order (the list's floats are not in the
+// exe's data section; the sheets of effect_nt.xvm slots 42 and 43 are such grids of 32-pixel cells).
+export function frameUv(count: number, frame: number): readonly [number, number, number, number] {
+  if (count <= 1) return [0, 0, 1, 1];
+  const cols = Math.max(1, Math.round(Math.sqrt(count)));
+  const f = Math.max(0, Math.min(count - 1, frame));
+  const c = f % cols;
+  const r = Math.floor(f / cols);
+  return [c / cols, r / cols, (c + 1) / cols, (r + 1) / cols];
+}
 
 // effect_nt_metadata (0x00a101c0, 0x28 bytes per effect_nt.xvm slot, 0x36
 // slots; the next 0x36 are the tex_flags 0x20 copies): [half size (+0x14 =
@@ -384,7 +406,7 @@ export class ParticleSystem {
       };
       ring.omega = Math.round(((r() * d.ring.omega[1] + d.ring.omega[0]) * 0x10000) / 360);
       ring.rise = r() * d.ring.rise[1] + d.ring.rise[0];
-      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, angle: 0, spinSign: 0, anim: 0, ring };
+      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, angle: 0, spinSign: 0, anim: 0, frame: 0, ring };
     }
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
@@ -396,7 +418,17 @@ export class ParticleSystem {
     const spins = d.gravity !== 0 || d.vel0[0] !== 0 || d.vel0[1] !== 0;
     const angle = this.models && spins ? Math.round(r() * 65536) & 0xffff : 0;
     const spinSign = this.models && spins ? r() - 0.5 : 0;
-    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt, angle, spinSign, anim: 0 };
+    // The frame of a multi-frame texture: flag 0x10 draws one frame for the particle's life
+    // (index = (count - 1) * the spawn's fraction, ASSUMED a random fraction); else it starts at 0.
+    const count = this.frameCount(e);
+    const frame = count > 1 && (d.flags & 0x10) !== 0 ? Math.trunc((count - 1) * r()) : 0;
+    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt, angle, spinSign, anim: 0, frame };
+  }
+
+  /** The texture's frame count (NT_FRAME_COUNT of the emitter's slot; 1 for a plain texture). */
+  frameCount(e: Emitter): number {
+    const slot = this.slots.get(e.entry.gbix);
+    return slot === undefined ? 1 : (NT_FRAME_COUNT[slot] ?? 1);
   }
 
   private update(q: Particle): void {
@@ -419,6 +451,10 @@ export class ParticleSystem {
     q.step = turnStep(q.e.orient, q.v, q.e.fx);
     q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
     q.age += q.dt;
+    // update_particle_effect_single_particle: without texture flag 0x10 the frame steps once an update
+    // (unk_index + 1, back to 0 past the last frame).
+    const count = this.frameCount(q.e);
+    if (count > 1 && (d.flags & 0x10) === 0) q.frame = q.frame + 1 < count ? q.frame + 1 : 0;
     if (this.models) this.modelStep(q);
     // njm_elapsed += +0x114 (the last statement of update_particle_effect_single_particle, dump 291756).
     if (q.e.fx.model) q.anim += q.e.fx.model.speed;
@@ -438,6 +474,13 @@ export class ParticleSystem {
       const n = Math.trunc((v * 65536) / 360);
       q.angle = (q.spinSign < 0 ? q.angle + n : q.angle - n) & 0xffff;
     }
+  }
+
+  // The source rectangle of a particle's frame in its texture image (the whole image for a plain texture).
+  private frameRect(img: CanvasImageSource, q: Particle): [number, number, number, number] {
+    const { width: w, height: h } = img as { width: number; height: number };
+    const [u0, v0, u1, v1] = frameUv(this.frameCount(q.e), q.frame);
+    return [u0 * w, v0 * h, (u1 - u0) * w, (v1 - v0) * h];
   }
 
   draw(ctx: CanvasRenderingContext2D, texture: (gbix: number) => CanvasImageSource | null, tint: (img: CanvasImageSource, key: string, r: number, g: number, b: number) => CanvasImageSource): void {
@@ -471,10 +514,10 @@ export class ParticleSystem {
         ctx.save();
         ctx.translate(sx, sy);
         ctx.rotate(Math.atan2(ey - sy, ex - sx));
-        ctx.drawImage(tinted, -hw, -hh, hw * 2, hh * 2);
+        ctx.drawImage(tinted, ...this.frameRect(tinted, q), -hw, -hh, hw * 2, hh * 2);
         ctx.restore();
       } else {
-        ctx.drawImage(tinted, sx - hw, sy - hh, hw * 2, hh * 2);
+        ctx.drawImage(tinted, ...this.frameRect(tinted, q), sx - hw, sy - hh, hw * 2, hh * 2);
       }
     }
     ctx.restore();
