@@ -2,7 +2,7 @@
 // and taken, the 100 cap and its 6x39 / 6x3A events, every basic blast's
 // power formula and the 6x49 / 6x37 / 6x39 bytes.
 // Run: node tests/photonblast.test.ts
-import { PB_BASE, PB_FULL, pbBasePower, pbDamage, pbGain, pbPower, PhotonBlastGauge, type PbCaster } from '../client/src/combat/photonblast.ts';
+import { PB_BASE, PB_FULL, PB_SLOT_BLAST, PB_SLOT_ONE, pbBasePower, pbDamage, pbGain, pbPower, PhotonBlastGauge, PhotonBlastSlots, type PbCaster } from '../client/src/combat/photonblast.ts';
 import { Game } from '../client/src/net/game.ts';
 
 let failures = 0;
@@ -63,6 +63,33 @@ near(pbDamage(1000, 20), 1000 * 80 * 0.002, 'group 4 damage vs ELT 20');
   eq(hex(sent[1]), '37 02 02 00 64 00 00 00', '6x37');
   eq(hex(sent[2]), '39 01 02 00', '6x39');
   eq(hex(sent[3]), '3a 01 02 00', '6x3A');
+}
+
+// 7. Per-slot blast state (something_about_photon_blasts): the constructor sets 2 for
+// each participant below 4; the destructor clears them when the caster is below 4;
+// the icon follows GetPhotonBlastData (1 or 2), never the gauge.
+{
+  const s = new PhotonBlastSlots();
+  eq([0, 1, 2, 3].map((i) => s.active(i)), [false, false, false, false], 'no blast: no icon');
+  s.start([1]);
+  eq([0, 1, 2, 3].map((i) => s.get(i)), [0, 2, 0, 0], 'start sets state 2 for the caster slot only');
+  eq(s.active(1), true, 'state 2 shows the icon');
+  s.start([2, 7]);
+  eq(s.get(2), 2, 'participant 2 set');
+  eq(s.get(7), 0, 'slot 7 (out of range) ignored');
+  s.end(1, [1]);
+  eq(s.get(1), 0, 'end clears the participant when the caster is below 4');
+  eq(s.get(2), 2, 'end leaves other slots alone');
+  s.start([0]);
+  s.end(5, [0]);
+  eq(s.get(0), 2, 'caster 5 (not below 4): the destructor does not clear');
+  s.reset();
+  eq([0, 1, 2, 3].map((i) => s.active(i)), [false, false, false, false], 'reset clears all four');
+  // The exe never stores 1 (the only stores to the array are 0 and 2), so the
+  // icon state is never 1 in a live blast.
+  s.start([3]);
+  eq(s.get(3) === PB_SLOT_ONE, false, 'a started blast is state 2, not 1');
+  eq(PB_SLOT_BLAST, 2, 'state 2 constant');
 }
 
 if (failures) {
