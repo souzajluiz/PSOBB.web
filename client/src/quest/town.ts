@@ -52,6 +52,7 @@ import type { WeaponReach } from '../combat/weaponaim.ts';
 import type { NpcInstance } from '../render/npcview.ts';
 import { followTick, fromBams, toBams } from '../render/playermove.ts';
 import { followPoint, headStatusFlags, NO_LEADER, NpcAi, NpcAttackAi, NpcHeadChooser, NpcMoveSender, npcAttackCast, npcAttackRow, type EnemyCandidate } from './npcai.ts';
+import { headSendDistance, NpcHead } from './npchead.ts';
 import { QuestUi } from './questui.ts';
 import type { QuestSession } from './session.ts';
 import { QuestVM, type QuestCoordsHandler, type QuestMessage, type QuestNpcRequest, type QuestThread, type QuestVMHost } from './vm.ts';
@@ -97,6 +98,8 @@ export class QuestTown {
   private readonly npcMoves = new Map<number, NpcMoveSender>();
   // The head's action chooser of those NPCs (quest/npcai.ts NpcHeadChooser), by slot.
   private readonly npcHeads = new Map<number, NpcHeadChooser>();
+  // The follow head of the NPCs this client owns, by slot (quest/npchead.ts NpcHead).
+  private readonly npcFollowHeads = new Map<number, NpcHead>();
   private counterOpen = false;
   private rewarded: QuestSession | null = null;
   // The leader's challenge quest dialog while it is open (quest/challengedialog.ts), and who
@@ -702,6 +705,7 @@ export class QuestTown {
     this.npcAi.remove(slot);
     this.npcAttacks.delete(slot);
     this.npcMoves.delete(slot);
+    this.npcFollowHeads.delete(slot);
     this.game.removeLocalPlayer(slot);
   }
 
@@ -713,8 +717,10 @@ export class QuestTown {
     void this.npcControl(c, true);
   }
 
-  // The NPC players follow their leader (quest/npcai.ts; the walk is the render-side followTick).
-  // Every client runs it from the leaders' synced positions (ASSUMED sync, see npcai.ts).
+  // The NPC players follow their leader. The owner's client runs the NPC's head (quest/npchead.ts,
+  // SinowberillHead_AIUpdate_007b1134): the walk goes to the head's send target and the 6x40 /
+  // 6x42 carry it. The other clients keep the render-side follow point until the packets arrive
+  // (ASSUMED, see npcai.ts). Every client runs the followers from the leaders' synced positions.
   private stepNpcFollowers(): void {
     for (const slot of this.npcAi.slots()) {
       const st = this.npcAi.get(slot);
@@ -722,12 +728,17 @@ export class QuestTown {
       if (!st || !p || p.npcTemplate === undefined || st.leader === NO_LEADER) continue;
       const leader = this.game.players.get(st.leader);
       if (!leader) continue;
-      const goal = followPoint(p.position, leader.position);
       let sender = this.npcMoves.get(slot);
       if (!sender) {
         sender = new NpcMoveSender();
         this.npcMoves.set(slot, sender);
       }
+      const row = npcAttackRow(p.npcTemplate);
+      if (st.owner && row) {
+        this.stepNpcHead(slot, p, leader, row.leash, sender);
+        continue;
+      }
+      const goal = followPoint(p.position, leader.position);
       if (goal.x === p.position.x && goal.z === p.position.z) {
         sender.reset();
         if (p.moving) {
@@ -736,7 +747,6 @@ export class QuestTown {
         }
         continue;
       }
-      const dist = Math.hypot(goal.x - p.position.x, goal.z - p.position.z);
       const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
       followTick(f, goal.x, goal.z, false);
       p.position = { x: f.x, y: leader.position.y, z: f.z };
@@ -745,14 +755,45 @@ export class QuestTown {
       p.gait = 'walk';
       p.floor = leader.floor;
       this.game.notifyMoved(p);
-      // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id). The exe
-      // sends the head's move target; the port sends the NPC's position after its step (ASSUMED).
-      const row = npcAttackRow(p.npcTemplate);
-      if (st.owner && row) {
-        const send = sender.tick(dist, row.leash);
-        if (send) this.game.sendNpcMove(slot, send === 'run', p.position.x, p.position.z);
-      }
     }
+  }
+
+  // The owner's head of one NPC follower (SinowberillChallengePlayer_Update_007aefd4's chain
+  // UpdateState_007b00bc -> AIUpdate_007b1134 -> AIUpdateState_007b2764, quest/npchead.ts).
+  // The head's update state is the Pioneer 2 branch on every map (ASSUMED for the field: the
+  // map-mode branch is not traced). The walk goes to the send target; the sends are the
+  // NpcMoveSender's choice from that target (the run flag is the head's 0x8).
+  private stepNpcHead(slot: number, p: LobbyPlayer, leader: LobbyPlayer, leash: number, sender: NpcMoveSender): void {
+    let head = this.npcFollowHeads.get(slot);
+    if (!head) {
+      head = new NpcHead();
+      this.npcFollowHeads.set(slot, head);
+    }
+    const combat = this.view.combat;
+    const npc = { x: p.position.x, y: p.position.y, z: p.position.z };
+    const owner = { x: leader.position.x, y: leader.position.y, z: leader.position.z };
+    head.pioneerUpdateState(owner);
+    head.update({ npc, owner, leash, wall: (a, b, mask) => combat.npcWallBlocks(a, b, mask) });
+    const dist = headSendDistance(head, npc);
+    // Not in state 1: no send, and the run flag is cleared (2764's flag 0x8 reset).
+    let send: 'walk' | 'run' | null = null;
+    if (dist === null) sender.reset();
+    else send = sender.tick(dist, leash);
+    const goal = head.sendTarget;
+    const wasMoving = p.moving;
+    const f = { x: p.position.x, z: p.position.z, heading: toBams(p.angle) };
+    const moved = followTick(f, goal.x, goal.z, sender.isRunning);
+    if (moved) {
+      p.position = { x: f.x, y: leader.position.y, z: f.z };
+      p.angle = fromBams(f.heading);
+      p.gait = sender.isRunning ? 'run' : 'walk';
+      p.floor = leader.floor;
+    }
+    p.moving = moved;
+    if (moved || wasMoving) this.game.notifyMoved(p);
+    // The owner's client sends the NPC's walk / run (6x40 / 6x42 with the NPC's id) at the head's
+    // send target (SendMoveStart_007b298c / SendMove_007b29f0).
+    if (send) this.game.sendNpcMove(slot, send === 'run', goal.x, goal.z);
   }
 
   // The attack AI of the NPCs this client owns (SinowberillChallengePlayer_Update_007aefd4,
@@ -867,6 +908,7 @@ export class QuestTown {
       this.npcAi.clear();
       this.npcAttacks.clear();
       this.npcMoves.clear();
+      this.npcFollowHeads.clear();
       for (const [id, p] of [...this.game.players]) if (p.npcTemplate !== undefined) this.game.removeLocalPlayer(id);
     }
   }

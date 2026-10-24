@@ -7080,6 +7080,12 @@ export class CombatView {
     return true;
   }
 
+  // The map's wall ray for the NPC follower's head (SinowberillHead_CheckWall_007b18e0 with the
+  // given mask; 0x2100 for the move target). False when no map collision is loaded.
+  npcWallBlocks(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number): boolean {
+    return this.opts.wallBlocks ? this.opts.wallBlocks(from, to, mask) : false;
+  }
+
   // The live enemies as the NPC attack AI reads them (quest/npcai.ts pickAttackTarget):
   // entity id (0x1000 | index), the xz of the hit point, and one entry per collision box
   // (xz of the box centre, targetable = flag 0x8000, formats/enemyboxes.ts boxTargetable).
