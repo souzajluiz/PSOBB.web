@@ -18990,3 +18990,15 @@ frames during DEMO_WARP0: 217 (rAF ticks in about 4 s); failed requests: 0; page
 **ASSUMED / open.** That the S7 throw is the only creator of the Effect in the exe (the dump has one call of `_004aa808`; the Effect's other callers were not searched beyond `CreateGalgryphonMinionEffect_004ab138`, which is called only from the launcher). The S7 animation time is the port's motion frame (`crossed(20.5)`), taken as equal to the exe's `check_entity_animation_elapsed_threshold` (the same crossing test). The minion's ground lookup and the sound 0x3ad are not checked in Chrome. Still open from the older notes: the Effect's sound 0x39f and the attack dispatch's area hit (unchanged).
 
 **Checks.** `node tests/galgryphon.test.ts`, `galgryphonminion.test.ts`, `galgryphonstatesa.test.ts`, `galgryphonai.test.ts`: all pass. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean.
+
+## 2026-10-24: IMAGE_DATA labels printed decompressed (the compressed images round-trip)
+
+**What was there.** The quest disassembler printed every `IMAGE_DATA` label (the `call_image_data` image, newserv's `DataType::IMAGE_DATA`) as `.data` hex, the PRS stream as it sits in the file. newserv's listing (`src/QuestScript.cc`, `disassemble_label_as_image_data`, around line 3312) prints the decompressed image, with an "Extra data after compressed data" block for bytes past the stream, and its reassembly mode prints the raw stream as `.data`.
+
+**What changed.** A label that a `call_image_data` reference types is printed as `.struct IMAGE_DATA` followed by `.data` hex of the decompressed image. The typed form is used only when `prsCompressOptimal` of that image gives back the label's stream at its start. Bytes past the stream follow an `.extra` line. The assembler decompresses nothing: it compresses the `.data` lines with `prsCompressOptimal` and appends the `.extra` bytes, so a typed label re-assembles to its input bytes by construction. Code: `formats/questasm.ts` (`typedLines`, the `.struct` assembler branch, the `.extra` item collection). Docs: `docs/QUESTFILES.md`, the ROADMAP line.
+
+**Result on the shipped quests.** Four BB copies reference an image (q142 and q143, `-bb-e` and `-bb-j`). None types: their streams differ from `prsCompressOptimal`'s parse at byte 18 (the copies were made by another encoder), so they stay hex and still round-trip. The 335-quest round trip (`tests/questwrite.test.ts`) is unchanged and passes. The question for those four, whether a different PRS parse reproduces them, is open.
+
+**Test.** `tests/questimage.test.ts`: a synthetic image (noise, a repeated tile, a flat run) typed and re-assembled byte for byte; a parsed `.bin` gives the same text; an empty image; trailing bytes after the stream (`.extra`); non-PRS bytes stay hex; the `.struct IMAGE_DATA` assembler errors.
+
+**Not done.** The PSO V2 encrypted download format of the non-BB versions (newserv `src/Quest.cc` / `DownloadSession`), which is a separate and larger piece.

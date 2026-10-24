@@ -25,9 +25,14 @@
 // argument data type, questopcodes.ts): a string (`.cstr "..."`) or a structure
 // (`.struct KIND` with one `.field name value` line per field, or `.vector x y z t`
 // lines for VECTOR4F_LIST; questdata.ts). A typed form is used only when it
-// re-encodes to the same bytes. Text after `//` is a comment.
+// re-encodes to the same bytes. An IMAGE_DATA label (a PRS-compressed image)
+// is `.struct IMAGE_DATA` followed by `.data` hex lines of the decompressed
+// image; the assembler compresses them with prsCompressOptimal, which is
+// used only when it reproduces the label's bytes. Text after `//` is a comment.
 
 import { decodeInstruction, questCodeEnd, type QuestBin, type QuestFloorAssignment, type QuestInstruction, type QuestInstructionArg } from './questbin.ts';
+import { prsDecompress } from './prs.ts';
+import { prsCompressOptimal } from './prscompress.ts';
 import { decodeCString, decodeTypedData, encodeTypedData, typedLayout, TYPED_DATA_KINDS, type FieldValue, type TypedDataKind, type TypedRecord } from './questdata.ts';
 import { F_ARGS, F_CLEAR_ARGS, F_PUSH_ARG, questOpcodeByName, type QuestArg, type QuestArgDataType, type QuestOpcodeDef } from './questopcodes.ts';
 import { buildQuestBin } from './questwrite.ts';
@@ -255,6 +260,22 @@ function typedLines(bytes: Uint8Array, type: QuestArgDataType): string[] | null 
   if (type === 'CSTRING') {
     const s = decodeCString(bytes);
     return s === null ? null : [`  .cstr ${quote(s)}`];
+  }
+  if (type === 'IMAGE_DATA') {
+    // The decompressed image, only when the compressor gives back the stream
+    // at the start of the label. Bytes after the stream (the label's section
+    // runs to the next label) follow an `.extra` line, as newserv prints them.
+    let image: Uint8Array;
+    try {
+      image = prsDecompress(bytes);
+    } catch {
+      return null;
+    }
+    const packed = prsCompressOptimal(image);
+    if (packed.length > bytes.length || !bytesEqual(packed, bytes.subarray(0, packed.length))) return null;
+    const lines = ['  .struct IMAGE_DATA', ...dataLines(image)];
+    if (packed.length < bytes.length) lines.push('  .extra', ...dataLines(bytes.subarray(packed.length)));
+    return lines;
   }
   if (!(TYPED_DATA_KINDS as readonly string[]).includes(type)) return null;
   const kind = type as TypedDataKind;
@@ -714,7 +735,7 @@ interface ParsedLine {
   kind: 'label' | 'directive' | 'insn';
   head: string; // label name / directive / opcode name
   rest: string;
-  items?: ParsedLine[]; // a `.struct` line's `.field` / `.vector` lines
+  items?: ParsedLine[]; // a `.struct` line's `.field` / `.vector` lines (`.data` for IMAGE_DATA)
 }
 
 export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions = {}): QuestBin {
@@ -736,7 +757,12 @@ export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions
   for (let i = 0; i < parsed.length; i++) {
     if (parsed[i].kind !== 'directive' || parsed[i].head !== '.struct') continue;
     const items: ParsedLine[] = [];
-    while (i + 1 < parsed.length && parsed[i + 1].kind === 'directive' && (parsed[i + 1].head === '.field' || parsed[i + 1].head === '.vector')) {
+    const isImage = parsed[i].rest.trim() === 'IMAGE_DATA';
+    while (
+      i + 1 < parsed.length &&
+      parsed[i + 1].kind === 'directive' &&
+      (parsed[i + 1].head === '.field' || parsed[i + 1].head === '.vector' || (isImage && (parsed[i + 1].head === '.data' || parsed[i + 1].head === '.extra')))
+    ) {
       items.push(parsed[i + 1]);
       parsed.splice(i + 1, 1);
     }
@@ -1044,6 +1070,26 @@ export function assembleQuest(text: string, headerOptions: AssembleHeaderOptions
         }
         case '.struct': {
           const kind = rest.trim();
+          if (kind === 'IMAGE_DATA') {
+            // `.data` lines are the decompressed image; the `.extra` line
+            // starts the bytes that follow the compressed stream.
+            const image: number[] = [];
+            const extra: number[] = [];
+            let inExtra = false;
+            for (const it of l.items ?? []) {
+              if (it.head === '.extra') {
+                if (inExtra) throw new QuestAssemblyError(it.no, 'a second .extra in .struct IMAGE_DATA');
+                inExtra = true;
+                continue;
+              }
+              const hexBytes = it.rest.replace(/\s+/g, '');
+              if (!/^([0-9a-fA-F]{2})*$/.test(hexBytes)) throw new QuestAssemblyError(it.no, '.data takes hex bytes');
+              for (const b of hexBytes.match(/../g) ?? []) (inExtra ? extra : image).push(parseInt(b, 16));
+            }
+            code.bytes(prsCompressOptimal(Uint8Array.from(image)));
+            code.bytes(Uint8Array.from(extra));
+            break;
+          }
           if (!(TYPED_DATA_KINDS as readonly string[]).includes(kind)) throw new QuestAssemblyError(no, `unknown .struct kind ${kind}`);
           try {
             code.bytes(encodeTypedData(kind as TypedDataKind, parseStructItems(kind as TypedDataKind, l.items ?? [])));
