@@ -84,6 +84,26 @@ export function parseEmoteKeys(text: string): string[] {
   return out;
 }
 
+// process_chat_message's return (0x0077cbf3..0x0077cd1b): the line's length less
+// each recognised emote token (`{`, the key, `}`) less 2, or -2 for an empty line
+// (0x0077cd1b, `(iVar3 - iVar4) + -2`). send_chat_message_text (dump
+// Psobb.exe-05112026.c 754354; ProcessAndSendChatMessage_0077d7cc 754336 has the
+// same gate) sends the line only when that value is not 0 (`if (iVar2 == 0) return`).
+// The emote tokens are counted with their braces. So a line of
+// two plain characters, or of one emote token and two characters, is not sent.
+// The queueing of the emote keys happens inside the same call, before the return.
+export function chatSendValue(text: string): number {
+  let tokens = 0;
+  for (const key of parseEmoteKeys(text)) tokens += key.length + 2;
+  return text.length - tokens - 2;
+}
+
+// send_chat_message_text: the line goes to the server (ASSUMED: the exe checks
+// the empty line first, the port's lobby and field sends are the same path).
+export function chatLineSends(text: string): boolean {
+  return text.length > 0 && chatSendValue(text) !== 0;
+}
+
 // The emote slot of a key in the lobby (field = false) or a game (field = true).
 export function emoteSlot(key: string, field: boolean): number | undefined {
   return (field ? EMOTE_SLOTS.field : EMOTE_SLOTS.town)[key];

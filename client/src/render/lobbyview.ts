@@ -18,6 +18,7 @@ import type { DataSource } from '../data/source.ts';
 import { parseMapCRel } from '../formats/crel.ts';
 import { parseMapNRel, type MapSection } from '../formats/nrel.ts';
 import { playerRoomAt } from '../formats/playerroom.ts';
+import { lobbySpawnAt, type LobbySpawn } from '../formats/lobbyspawn.ts';
 import { parseObjectSets, playerSpawns, roomToWorld } from '../formats/objset.ts';
 import { parseObjectSets as parseSetObjects, placeEntities, type PlacedEntity } from '../formats/setdata.ts';
 import { ObjectLayer } from './objectview.ts';
@@ -48,16 +49,13 @@ function lobbyArea(lobbyNumber: number): string {
   return `lobby_${String((lobbyNumber % 10) + 1).padStart(2, '0')}`;
 }
 
-export interface LobbySpawn {
-  x: number;
-  y: number;
-  z: number;
-  angle: number; // radians, same convention as LobbyPlayer.angle
-}
+export type { LobbySpawn };
 
 export interface LobbyMapData {
   collision: CollisionWorld | null;
-  spawns: Map<number, LobbySpawn>; // by client id
+  spawns: Map<number, LobbySpawn>; // by client id, the sets of the arrival source
+  // The map has player sets of any source (lobbySpawnAt); unset: spawns.size > 0.
+  hasSpawnSets?: boolean;
   // Client files for the player models and motions (null: capsules only).
   files: ClientFiles | null;
   // TObjInfoCol (object type 0x0180): information counter trigger circles,
@@ -90,8 +88,10 @@ export function lobbyMainBody(x: number, z: number): Body {
 
 // Loads the lobby's collision (scene/map_lobby_NNc.rel) and player spawn points
 // (map_lobby_NNo.dat from data.gsl, positions relative to the n.rel rooms).
-// Missing files only degrade the view, so errors are reported and swallowed.
-export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, log: (msg: string) => void = () => {}): Promise<LobbyMapData> {
+// `arrival` is the arrival source (lobbyArrivalSource); every lobby set is source 0
+// in the data, so the default 0 finds them all. Missing files only degrade the
+// view, so errors are reported and swallowed.
+export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, log: (msg: string) => void = () => {}, arrival = 0): Promise<LobbyMapData> {
   const area = lobbyArea(lobbyNumber);
   const files = new ClientFiles(source);
   const data: LobbyMapData = { collision: null, spawns: new Map(), files, infoCols: [] };
@@ -107,8 +107,10 @@ export async function loadLobbyMapData(source: DataSource, lobbyNumber: number, 
     const sets = parseObjectSets(raw);
     const mains = parseSetObjects(raw).filter((o) => o.type === 0x0182);
     if (mains.length) data.mainObjects = placeEntities(mains, rooms, 1);
-    for (const s of playerSpawns(sets)) {
-      if (s.source !== 0 || data.spawns.has(s.clientId)) continue;
+    const all = playerSpawns(sets);
+    data.hasSpawnSets = all.length > 0;
+    for (const s of all) {
+      if (s.source !== arrival || data.spawns.has(s.clientId)) continue;
       const room = rooms.find((r) => r.id === s.room);
       const [x, y, z] = roomToWorld(s.position, room);
       data.spawns.set(s.clientId, { x, y, z, angle: (s.angleY / 0x10000) * Math.PI * 2 + (room?.rotation[1] ?? 0) });
@@ -244,6 +246,8 @@ export class LobbyView {
   private disposers: Array<() => void> = [];
   private collision: CollisionWorld | null;
   private spawns: Map<number, LobbySpawn>;
+  // The map has player sets (of any source): a missing one is the exe's origin (lobbySpawnAt).
+  private hasSpawnSets: boolean;
   private mainObjects: ObjectLayer | null = null; // TObjLobbyMain models (disposed with the view)
   private files: ClientFiles | null;
   private assets = new Map<number, Promise<PlayerAssets>>();
@@ -304,6 +308,7 @@ export class LobbyView {
     this.collision = mapData.collision;
     (globalThis as { lobbyView?: LobbyView }).lobbyView = this; // console/automation access
     this.spawns = mapData.spawns;
+    this.hasSpawnSets = mapData.hasSpawnSets ?? mapData.spawns.size > 0;
     this.files = mapData.files;
     if (mapData.files && mapData.mainObjects?.length) {
       // The seasonal decoration of TObjLobbyMain for this session's event (the
@@ -365,7 +370,7 @@ export class LobbyView {
   // The client puts a player joining a lobby on the TObjPlayerSet whose param1
   // equals its client id (12 per lobby, ids 0-11).
   private spawnFor(clientId: number): LobbySpawn | null {
-    const s = this.spawns.get(clientId);
+    const s = lobbySpawnAt(this.spawns, clientId, this.hasSpawnSets);
     if (!s) return null;
     return { ...s, y: this.ground(s.x, s.z, s.y + STEP_UP) ?? s.y };
   }

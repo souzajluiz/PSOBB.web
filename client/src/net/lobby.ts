@@ -15,7 +15,7 @@ import { readUtf16, type BBConnection, type Command } from './bbconnection.ts';
 import type { PlayerAppearance } from '../render/playermodel.ts';
 import type { CombatStats } from '../combat/pvp.ts';
 import { applyRemoteEquip, equippedWeaponOf, INVENTORY_BYTES } from './playerweapon.ts';
-import { EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
+import { chatLineSends, EmoteQueue, parseEmoteKeys, parseEmoteSubcommand, parseSitSubcommand } from '../formats/emotes.ts';
 import type { SetPositionState } from './game.ts';
 import { TradeSession, TRADE_SUB, TRADE_SUB_SIZE } from './trade.ts';
 import type { SymbolChat } from './symbolchat.ts';
@@ -474,6 +474,8 @@ export class Lobby {
   sendChat(text: string): void {
     // process_chat_message on the sent line: its emote keys queue for this player.
     this.emoteQueue.push(parseEmoteKeys(text));
+    // send_chat_message_text sends only when process_chat_message's value is not 0 (formats/emotes.ts).
+    if (!chatLineSends(text)) return;
     const s = `\tE${text}`;
     const body = new Uint8Array(8 + (s.length + 1) * 2 + 2);
     const dv = new DataView(body.buffer);

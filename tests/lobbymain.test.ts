@@ -11,6 +11,8 @@ import { GSLArchive } from '../client/src/formats/archives.ts';
 import { BmlArchive } from '../client/src/formats/bml.ts';
 import { lobbyMainChunk, objectModelFor, type ObjectModelContext } from '../client/src/formats/objectmodels.ts';
 import { parseObjectSets as parseSetObjects, type ObjectSet } from '../client/src/formats/setdata.ts';
+import { parseObjectSets, playerSpawns } from '../client/src/formats/objset.ts';
+import { lobbyArrivalSource, lobbySpawnAt, type LobbySpawn } from '../client/src/formats/lobbyspawn.ts';
 
 const DATA = process.env.PSOBB_DATA ?? join(process.env.HOME!, 'Downloads/psobb-client/data');
 const gslPath = join(DATA, 'data.gsl');
@@ -106,6 +108,36 @@ if (existsSync(gslPath)) {
   console.log(`TObjLobbyMain: ${sets} sets in lobbies 01..10; ${names.length} BML entries`);
 } else {
   console.log(`SKIP data.gsl not found at ${gslPath}`);
+}
+
+// 6. The lobby spawn lookup (SinowberillChallengePlayer_UpdatePosition_006884ac,
+// formats/lobbyspawn.ts). The arrival source of a get_warp_type value: 1 and 2
+// are source 0, the rest (0, 3, 4) source 1 (lines 554167..554176).
+for (const [wt, want] of [[0, 1], [1, 0], [2, 0], [3, 1], [4, 1], [-1, 1]] as const) {
+  if (lobbyArrivalSource(wt) !== want) fail(`get_warp_type ${wt}: source ${lobbyArrivalSource(wt)} != ${want}`);
+}
+// A map with sets but none for the arrival source puts the player at the origin
+// (line 554194); a map with no sets at all keeps the caller's fallback (null).
+const one: LobbySpawn = { x: 5, y: 6, z: 7, angle: 1 };
+const sourceZero = new Map<number, LobbySpawn>([[2, one]]);
+if (lobbySpawnAt(sourceZero, 2)?.x !== 5) fail('lobby spawn: the set of the id is used');
+if (lobbySpawnAt(sourceZero, 2) === sourceZero.get(2)) fail('lobby spawn: the result is a copy');
+const origin = lobbySpawnAt(new Map(), 3, true);
+if (!origin || origin.x !== 0 || origin.y !== 0 || origin.z !== 0) fail('lobby spawn: no set for the source is the origin');
+if (lobbySpawnAt(new Map(), 3, false) !== null) fail('lobby spawn: no sets at all is the caller fallback');
+if (lobbySpawnAt(sourceZero, 9, true)?.x !== 0) fail('lobby spawn: an id with no set is the origin');
+// The real lobbies: every player set is source 0, ids 0..11 each once, so the
+// default arrival source (0) finds the spawn of every client id.
+if (existsSync(gslPath)) {
+  const gsl = new GSLArchive(new Uint8Array(readFileSync(gslPath)));
+  for (let n = 1; n <= 10; n++) {
+    const name = `map_lobby_${String(n).padStart(2, '0')}o.dat`;
+    if (!gsl.has(name)) continue;
+    const ps = playerSpawns(parseObjectSets(gsl.get(name)));
+    const ids = ps.map((s) => s.clientId).sort((a, b) => a - b);
+    if (ps.some((s) => s.source !== 0)) fail(`${name}: a player set has source ${ps.find((s) => s.source !== 0)?.source}`);
+    if (ids.join(',') !== '0,1,2,3,4,5,6,7,8,9,10,11') fail(`${name}: player set ids ${ids.join(',')}`);
+  }
 }
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');

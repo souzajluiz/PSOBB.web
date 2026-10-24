@@ -8,6 +8,8 @@ import { setPositionBody } from '../client/src/net/game.ts';
 import {
   ALT_EMOTE_ORDER,
   altEmoteKey,
+  chatLineSends,
+  chatSendValue,
   sitEndKey,
   EMOTE_KEYS,
   EMOTE_OPCODE,
@@ -146,6 +148,25 @@ eq(threw, true, 'a slot that is not a field emote slot throws');
   const plain = setPositionBody({ angle: 0, floor: 0, position: { x: 0, y: 0, z: 0 } }, { guard: false, room: 0 });
   eq(new DataView(plain.buffer).getUint16(0, true), 0, '6x3F guard off');
   eq(plain.length, 0x14, '6x3F body is 20 bytes');
+}
+
+// The chat send gate (process_chat_message's value, send_chat_message_text 754354):
+// the value is the length less each emote token (braces included) less 2; 0 is
+// not sent. Plain two-character lines, and one token with two characters, are not.
+eq(chatSendValue('hello'), 3, 'chat value: plain text is length - 2');
+eq(chatLineSends('hi'), false, 'chat gate: a two-character line is not sent (exe value 0)');
+eq(chatLineSends('hey'), true, 'chat gate: three characters are sent');
+eq(chatLineSends(''), false, 'chat gate: an empty line is not sent');
+eq(chatSendValue('{f1}'), -2, 'chat value: a token alone is -2 (sent)');
+eq(chatLineSends('{f1}'), true, 'chat gate: a token alone is sent');
+eq(chatLineSends('{f1}ab'), false, 'chat gate: token + two characters is 0 (not sent)');
+eq(chatLineSends('{f1}abc'), true, 'chat gate: token + three characters is sent');
+eq(chatSendValue('{F1}{Zz}ab'), 4, 'chat value: an unknown name is not a token (its length stays): 10 - 4 - 2');
+eq(chatSendValue('{f1}{f2}ab'), 0, 'chat value: two tokens: 10 - 8 - 2 = 0 (not sent)');
+{
+  const q = new EmoteQueue();
+  q.push(parseEmoteKeys('{f1}ab'));
+  eq(q.head(), 'f1', 'chat gate: the token still queues when the line is not sent');
 }
 
 if (failures) {
