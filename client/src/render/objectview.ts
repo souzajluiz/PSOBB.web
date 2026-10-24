@@ -108,6 +108,24 @@ function ownMeshes(node: THREE.Object3D, nodes: ReadonlySet<THREE.Object3D>): TH
   return node.children.filter((c) => !nodes.has(c));
 }
 
+// A debris chunk's colour alpha (the exe's {life, 1, 1, 1} colour, 0x0082d710) and its blend (flag 4, 0x810):
+// the template's own opacity is kept as the base, so a chunk only fades by the particle's life.
+function setChunkAlpha(root: THREE.Object3D, alpha: number, blend: boolean): void {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
+      if (m.userData.baseOpacity === undefined) {
+        m.userData.baseOpacity = m.opacity;
+        m.userData.baseTransparent = m.transparent;
+      }
+      m.opacity = (m.userData.baseOpacity as number) * alpha;
+      m.transparent = (m.userData.baseTransparent as boolean) || blend;
+    }
+  });
+}
+
 export class ObjectLayer {
   private viewer: MapViewer;
   private cache: EnemyArchiveCache;
@@ -489,8 +507,14 @@ export class ObjectLayer {
       }
       let g = this.chunkPool[used];
       if (!g || g.userData.key !== key) {
+        // clone(true) shares the materials: each pooled chunk gets its own, so its alpha is its own.
         const fresh = tpl.clone(true);
         fresh.userData.key = key;
+        fresh.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          mesh.material = Array.isArray(mesh.material) ? mesh.material.map((m) => m.clone()) : mesh.material.clone();
+        });
         if (g) this.chunkGroup.remove(g);
         this.chunkGroup.add(fresh);
         this.chunkPool[used] = fresh;
@@ -498,7 +522,11 @@ export class ObjectLayer {
       }
       g.visible = true;
       g.position.set(chunk.pos[0], chunk.pos[1], chunk.pos[2]);
+      // Euler 'YXZ' is R = Ry * Rx * Rz, the exe's 0x0083a314 order (y, then x, then z on the matrix top).
+      g.rotation.order = 'YXZ';
       g.rotation.set(chunk.ang[0], chunk.ang[1], chunk.ang[2]);
+      g.scale.setScalar(chunk.scale); // 0x0082fa0c: the object's +0x60 on all three axes
+      setChunkAlpha(g, chunk.alpha, chunk.blend);
       used++;
     }
     for (let i = used; i < this.chunkPool.length; i++) this.chunkPool[i].visible = false;
