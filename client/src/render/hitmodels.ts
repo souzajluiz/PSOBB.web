@@ -13,6 +13,8 @@ import {
   ICE_RING_PARTICLE,
   ICE_SHARD_MODEL,
   IceBlock,
+  TECH_PARTICLE_BML,
+  TECH_PARTICLE_TEXTURES,
   type FlashFrame,
   type IceStep,
 } from '../combat/hitmodels.ts';
@@ -107,6 +109,50 @@ const flagsOf = (o: NjObject, out: number[] = []): number[] => {
   for (const c of o.children) flagsOf(c, out);
   return out;
 };
+
+/**
+ * A model particle's template (classic/particles.ts EffectFx.model): one BML model as a
+ * tree, never drawn itself. `motion` is the njm the particle plays (null: a static model).
+ * `order` numbers the template's objects depth-first, so a copy's nodes are found by index.
+ */
+export interface ParticleModel {
+  root: THREE.Object3D;
+  nodes: THREE.Object3D[];
+  flags: number[];
+  motion: ReturnType<EnemyArchive['motion']> | null;
+  order: Map<THREE.Object3D, number>;
+}
+
+/** One particle's own copy of a model: shared geometry, its own materials and pose (NodeAnimator). */
+export interface ParticleModelPiece {
+  root: THREE.Object3D;
+  animator: NodeAnimator | null;
+  materials: THREE.Material[];
+}
+
+/** A copy of a template for one particle: the clone shares geometry; its materials and nodes are its own. */
+export function instanceParticleModel(t: ParticleModel): ParticleModelPiece {
+  const root = t.root.clone(true);
+  const materials: THREE.Material[] = [];
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    if (Array.isArray(o.material)) {
+      o.material = o.material.map((m) => m.clone());
+      materials.push(...o.material);
+    } else {
+      o.material = o.material.clone();
+      materials.push(o.material);
+    }
+  });
+  let animator: NodeAnimator | null = null;
+  if (t.motion) {
+    const all: THREE.Object3D[] = [];
+    root.traverse((o) => all.push(o));
+    const nodes = t.nodes.map((n) => all[t.order.get(n)!]);
+    animator = new NodeAnimator(nodes, t.flags, t.motion, 1, false);
+  }
+  return { root, animator, materials };
+}
 
 export class HitModels {
   private viewer: MapViewer;
@@ -241,6 +287,64 @@ export class HitModels {
     return this.shardLoad;
   }
 
+  // bm_technic.bml (with technic.xvm) read once: the model entries of the technique table's flag 0x20.
+  private techBml: Promise<{ archive: EnemyArchive; list: THREE.Texture[] } | null> | null = null;
+  private particleModels = new Map<string, Promise<ParticleModel | null>>();
+  private particleCleanup: (() => void)[] = [];
+
+  /**
+   * The technique BML's model `chunk` (njcm) with its motion (njm, or none), for a model particle
+   * (combat/techfire.ts FxEmitter.model; the particle's own copies are instanceParticleModel).
+   */
+  particleModel(chunk: number, motion: number | null): Promise<ParticleModel | null> {
+    const key = `${chunk}:${motion}`;
+    let p = this.particleModels.get(key);
+    if (!p) {
+      p = (async () => {
+        this.techBml ??= (async () => {
+          try {
+            const archive = new EnemyArchive(TECH_PARTICLE_BML, await this.files.read(TECH_PARTICLE_BML), 12);
+            const list = texturesFromXvm(await this.files.read(TECH_PARTICLE_TEXTURES));
+            this.particleCleanup.push(() => {
+              for (const t of list) t.dispose();
+              archive.dispose();
+            });
+            return { archive, list };
+          } catch (err) {
+            this.log(`hit effects: technique models unavailable (${(err as Error).message})`);
+            return null;
+          }
+        })();
+        const tech = await this.techBml;
+        if (!tech || this.disposed) return null;
+        try {
+          const m = tech.archive.model(chunk);
+          if (m.kind !== 'xj') return null;
+          const cache = new MaterialCache((id) => tech.list[id] ?? null);
+          this.particleCleanup.push(() => cache.dispose());
+          const built = buildObjectTreeWithNodes(m.object, cache);
+          const order = new Map<THREE.Object3D, number>();
+          let k = 0;
+          built.root.traverse((o) => {
+            order.set(o, k++);
+          });
+          return {
+            root: built.root,
+            nodes: built.nodes,
+            flags: flagsOf(m.object),
+            motion: motion === null ? null : tech.archive.motion(motion, built.nodes.length),
+            order,
+          };
+        } catch (err) {
+          this.log(`hit effects: technique model ${chunk} unavailable (${(err as Error).message})`);
+          return null;
+        }
+      })();
+      this.particleModels.set(key, p);
+    }
+    return p;
+  }
+
   // One game frame of an ice block.
   private stepIce(f: IceFx): void {
     if (f.over) return;
@@ -366,6 +470,9 @@ export class HitModels {
     this.ices = [];
     this.shardCleanup?.();
     this.shardCleanup = null;
+    for (const c of this.particleCleanup) c();
+    this.particleCleanup = [];
+    this.particleModels.clear();
     this.geometry?.dispose();
     for (const t of this.rings) t.dispose();
     this.rings = [];

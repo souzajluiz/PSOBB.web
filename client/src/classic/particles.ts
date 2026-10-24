@@ -146,11 +146,19 @@ export const NO_ORIENT: Orient = [0, 0, 0];
  * - matrix: particle flag 0x20 (the effect's +0x2e, set by ParticleEffectSingleParticle_
  *   SetTransform_00508dec). The effect's own matrix (+0x90, its 3x3 _11.._33 row-major here)
  *   is copied into the particle's +0xc0 at spawn (flag 0x200000) and multiplied in first.
+ * - model: particle flag 0x200 (the effect's +0x2c, set by the technique loops for the table's
+ *   flag 0x20: create_particle_effect3 / 5 then `+0x2c |= 0x200`, dump lines 640489 (Barta) and
+ *   644166 (Gibarta)). The particle is drawn as that BML model, not a quad
+ *   (update_particle_effect_single_particle, the else branch of `flags & 0x200`, dump 291966).
+ *   chunk = the njcm chunk of the technique BML (the effect's +0x50); motion = the njm chunk
+ *   (+0x58, Barta's 0, Gibarta's none: its loop sets +0x58 = 0.0, so the model is static);
+ *   speed = the frames the motion advances per update (+0x60 = 1.0, the particle's +0x114).
  */
 export interface EffectFx {
   flag2?: boolean;
   noDraw?: boolean;
   matrix?: readonly number[];
+  model?: { chunk: number; motion: number | null; speed: number };
 }
 
 export interface Emitter {
@@ -176,6 +184,8 @@ export interface Particle {
   angle: number;
   /** field47_0x6c = rand - 0.5: the spin goes one way when it is below 0, the other when not. */
   spinSign: number;
+  /** njm_elapsed (the model's motion frame, not clamped here: the drawer clamps to the last frame). */
+  anim: number;
   // A type 1 particle: its centre, angle (BAMS), angular step (BAMS), radius,
   // rise per frame and the height gained so far.
   ring?: { c: [number, number, number]; ang: number; omega: number; r: number; rise: number; dy: number };
@@ -345,7 +355,7 @@ export class ParticleSystem {
       };
       ring.omega = Math.round(((r() * d.ring.omega[1] + d.ring.omega[0]) * 0x10000) / 360);
       ring.rise = r() * d.ring.rise[1] + d.ring.rise[0];
-      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, angle: 0, spinSign: 0, ring };
+      return { e, p: [...c], v: [0, 0, 0], step: [0, 0, 0], size, age: 0, dt, angle: 0, spinSign: 0, anim: 0, ring };
     }
     const vx = r() * d.velRand[0] + d.vel0[0];
     const vy = r() * d.velRand[1] + d.vel0[1];
@@ -357,7 +367,7 @@ export class ParticleSystem {
     const spins = d.gravity !== 0 || d.vel0[0] !== 0 || d.vel0[1] !== 0;
     const angle = this.models && spins ? Math.round(r() * 65536) & 0xffff : 0;
     const spinSign = this.models && spins ? r() - 0.5 : 0;
-    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt, angle, spinSign };
+    return { e, p, v: [vx * Math.cos(a), vy, -vx * Math.sin(a)], step: [0, 0, 0], size, age: 0, dt, angle, spinSign, anim: 0 };
   }
 
   private update(q: Particle): void {
@@ -381,6 +391,8 @@ export class ParticleSystem {
     q.p = [q.p[0] + q.step[0], q.p[1] + q.step[1], q.p[2] + q.step[2]];
     q.age += q.dt;
     if (this.models) this.modelStep(q);
+    // njm_elapsed += +0x114 (the last statement of update_particle_effect_single_particle, dump 291756).
+    if (q.e.fx.model) q.anim += q.e.fx.model.speed;
   }
 
   // The parts of update_particle_effect_single_particle (0x0050dbb8) a model particle shows:

@@ -152,6 +152,20 @@ export const ICE_SHATTER_PIECES = 0x153;
 export const ICE_SHATTER_BREAK = 0x33;
 /** The pieces' emitter: HandleFlameEnemyLogic_00500e08 flags it 0x200 and gives it the model (below), no texture list of its own (the current xvm: technic.xvm), motion speed 1. */
 export const ICE_SHARD_MODEL = { bml: 'bm_technic.bml', model: 5, textures: 'technic.xvm' } as const;
+/**
+ * The models of the technique table's flag 0x20 entries: the BML is the one the technique's
+ * init loaded (bm_technic.bml, InitializeTechniqueAnimations_006e2318 -> g_CurrentBmlBuffer),
+ * the texture list g_CurrentXvmTexture (Technic.gvm, read as technic.xvm as the ice shard does).
+ * - Barta (AntiTechEntity_Constructor_006dd85c, dump 640489): njcm chunk 0 and njm chunk 0,
+ *   the particle's z2 = 1.0 (one motion frame per update), so the model is animated.
+ * - Gibarta (InitializeTechniqueVisuals_006e3ba0, dump 644166): njcm chunk = the table flags'
+ *   high word (0x20022 / 0x20062 -> 2, 0x30062 -> 3), z = 0.0 (no motion: a static model).
+ * ASSUMED: the loops pass no other per-entry index, so Barta's entries share one model.
+ */
+export const TECH_PARTICLE_BML = 'bm_technic.bml';
+export const TECH_PARTICLE_TEXTURES = 'technic.xvm';
+export const BARTA_PARTICLE_MODEL = { chunk: 0, motion: 0, speed: 1 } as const;
+export const GIBARTA_PARTICLE_MODEL = (chunk: number) => ({ chunk, motion: null, speed: 1 }) as const;
 /** Pieces made by the emitter 0x153 in its one burst (rate +0x44 = 20, once: the emitter lives one update). */
 export const ICE_SHARD_COUNT = 20;
 /** The model's strips use texture id 2 of the list, additive (source alpha / one). */

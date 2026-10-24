@@ -252,6 +252,17 @@ export class NodeAnimator {
     return this.motion.frameCount;
   }
 
+  /**
+   * Sets the pose to a frame the caller keeps (a model particle's njm_elapsed, which
+   * the particle's own update advances). Held at the motion's last frame, like the
+   * exe's clamp (update_particle_effect_single_particle, dump 291756..291766).
+   */
+  pose(frame: number): void {
+    const last = Math.max(0, this.motion.frameCount - 1);
+    this.frame = Math.min(Math.max(0, frame), last);
+    this.apply(this.frame);
+  }
+
   update(dt: number): void {
     const m = this.motion;
     if (m.frameCount <= 1 || this.paused) return;

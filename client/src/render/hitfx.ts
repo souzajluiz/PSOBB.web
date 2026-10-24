@@ -14,14 +14,14 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type ParticleEntry } from '../classic/particles.ts';
+import { MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
 import { ICE_SHATTER_PIECES, velocityAngles } from '../combat/hitmodels.ts';
 import { BloodDecals } from './blooddecals.ts';
 import { FragmentEffects } from './fragments.ts';
-import { HitModels, type IceHost } from './hitmodels.ts';
+import { HitModels, instanceParticleModel, type IceHost, type ParticleModel, type ParticleModelPiece } from './hitmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
 
 const FRAME = 1 / 30;
@@ -45,6 +45,8 @@ interface Burst {
   alive: (() => boolean) | null; // an emitter its owner kills (the destructor sets the effect's flag |= 1): stops emitting when this says false
   model: THREE.Mesh | null; // a model particle's template (flag 0x200): drawn as this model per particle, not as a quad
   pieces: THREE.Mesh[]; // the model particle's meshes, one per live particle
+  // A technique model particle (EffectFx.model): each live particle has its own copy and motion frame.
+  anim?: { model: ParticleModel; byParticle: Map<Particle, ParticleModelPiece>; free: ParticleModelPiece[] };
 }
 
 export class FieldParticles {
@@ -181,8 +183,13 @@ export class FieldParticles {
     const e = this.entry(p.id);
     const pos = typeof at === 'function' ? at() : at;
     if (!e || !pos) return;
+    // A model effect (EffectFx.model, the technique BML's model) is drawn as that model.
+    const fxModel = p.fx?.model;
+    const model = fxModel ? await this.models.particleModel(fxModel.chunk, fxModel.motion) : null;
+    if (this.disposed || (fxModel && !model)) return;
     const particles = new ParticleSystem();
     particles.slots = this.slots;
+    particles.models = !!fxModel;
     const base = pos.clone();
     const origin = pos.clone();
     origin.y += p.dy ?? 0;
@@ -202,6 +209,7 @@ export class FieldParticles {
       alive,
       model: null,
       pieces: [],
+      ...(model ? { anim: { model, byParticle: new Map<Particle, ParticleModelPiece>(), free: [] } } : {}),
     };
     if (p.duration === undefined) {
       // The one emission: at least one particle (the spawn loop runs while
@@ -357,6 +365,8 @@ export class FieldParticles {
     for (const s of b.sprites) s.material.dispose();
     // A model particle's meshes share the template's geometry; each owns its materials.
     for (const p of b.pieces) for (const m of Array.isArray(p.material) ? p.material : [p.material]) m.dispose();
+    // A technique model's copies: their materials are their own (the geometry is shared with the template).
+    if (b.anim) for (const piece of [...b.anim.byParticle.values(), ...b.anim.free]) for (const m of piece.materials) m.dispose();
   }
 
   // The particles of a model burst as the template mesh each: T(p) S(size) Rz(z) Rx(x) Ry(angle),
@@ -371,34 +381,69 @@ export class FieldParticles {
       b.group.add(m);
       b.pieces.push(m);
     }
-    const axis = this.pieceAxis;
     b.pieces.forEach((m, i) => {
       const q = live[i];
       if (!q) {
         m.visible = false;
         return;
       }
-      const { fade, rgb } = particleShade(q);
-      m.visible = fade > 0;
-      m.position.set(q.p[0], q.p[1], q.p[2]);
-      m.scale.setScalar(Math.max(q.size, 0.001));
-      const a = velocityAngles(q.step[0], q.step[1], q.step[2]);
-      this.pieceRotation.setFromAxisAngle(axis.z, a.z);
-      this.pieceTurn.setFromAxisAngle(axis.x, a.x);
-      this.pieceRotation.multiply(this.pieceTurn);
-      this.pieceTurn.setFromAxisAngle(axis.y, q.angle * BAMS_RAD);
-      m.quaternion.copy(this.pieceRotation.multiply(this.pieceTurn));
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-        const mm = mat as THREE.MeshBasicMaterial;
-        mm.opacity = fade;
-        mm.transparent = true;
-        mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
-      }
+      this.placeModel(q, m, Array.isArray(m.material) ? m.material : [m.material]);
     });
+  }
+
+  // A model particle's copy (per particle, its motion frame is the particle's njm_elapsed):
+  // the particle's own copies are kept by particle and reused when it dies (drawModels reuses by index).
+  private drawAnimated(b: Burst, anim: NonNullable<Burst['anim']>): void {
+    const live = b.particles.live;
+    const alive = new Set<Particle>(live);
+    for (const [q, piece] of [...anim.byParticle]) {
+      if (alive.has(q)) continue;
+      piece.root.visible = false;
+      anim.byParticle.delete(q);
+      anim.free.push(piece);
+    }
+    const last = anim.model.motion ? anim.model.motion.frameCount - 1 : 0;
+    for (const q of live) {
+      let piece = anim.byParticle.get(q);
+      if (!piece) {
+        piece = anim.free.pop() ?? instanceParticleModel(anim.model);
+        if (piece.root.parent !== b.group) b.group.add(piece.root);
+        anim.byParticle.set(q, piece);
+      }
+      piece.root.visible = true;
+      piece.animator?.pose(Math.min(q.anim, last));
+      this.placeModel(q, piece.root, piece.materials);
+    }
+  }
+
+  // The model's transform and shade for one particle: T(p) S(size) Rz(z) Rx(x) Ry(angle) (the exe's
+  // matrix, dump 291966: the step's Vector3f_GetAnglesZ, then the spin), colour and fade as the particle's.
+  private placeModel(q: Particle, obj: THREE.Object3D, materials: readonly THREE.Material[]): void {
+    const axis = this.pieceAxis;
+    const { fade, rgb } = particleShade(q);
+    obj.visible = fade > 0;
+    obj.position.set(q.p[0], q.p[1], q.p[2]);
+    obj.scale.setScalar(Math.max(q.size, 0.001));
+    const a = velocityAngles(q.step[0], q.step[1], q.step[2]);
+    this.pieceRotation.setFromAxisAngle(axis.z, a.z);
+    this.pieceTurn.setFromAxisAngle(axis.x, a.x);
+    this.pieceRotation.multiply(this.pieceTurn);
+    this.pieceTurn.setFromAxisAngle(axis.y, q.angle * BAMS_RAD);
+    obj.quaternion.copy(this.pieceRotation.multiply(this.pieceTurn));
+    for (const mat of materials) {
+      const mm = mat as THREE.MeshBasicMaterial;
+      mm.opacity = fade;
+      mm.transparent = true;
+      mm.color?.setRGB(rgb[0], rgb[1], rgb[2]);
+    }
   }
 
   // Additive sprites like render/levelupfx.ts, moved with the entity (flag 0x10).
   private draw(b: Burst): void {
+    if (b.anim) {
+      this.drawAnimated(b, b.anim);
+      return;
+    }
     if (b.model) {
       this.drawModels(b);
       return;

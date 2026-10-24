@@ -105,8 +105,11 @@ vecNear(objectEmitterOrient(foie(0, false), 'half'), [HALF + Math.PI, 0, 0], 'Fo
 vecNear(objectEmitterOrient(foie(0, true), 'half'), [Math.PI, 0, 0], 'Foie flag 1 (0xac), directed: X a half turn');
 
 // The emitter tables by kind: the angles (object, or half for flag 1) and the hidden ones (flag 0x1000).
+// A model entry (the table's flag 0x20) is marked $chunk, with m<motion> when it has a motion.
 const kindsOf = (k: FireKind, tier: number) =>
-  startEmitters(k, tier).map((e) => `${e.id.toString(16)}:${e.angles ?? '-'}${e.hidden ? '!' : ''}`).join(' ');
+  startEmitters(k, tier)
+    .map((e) => `${e.id.toString(16)}:${e.angles ?? '-'}${e.hidden ? '!' : ''}${e.model ? `$${e.model.chunk}${e.model.motion === null ? '' : `m${e.model.motion}`}` : ''}`)
+    .join(' ');
 
 // The Foie table (tier 5): the muzzle burst, then 0x19e (flag 0x1000: hidden, no angles), 0x14 and 0x19c (flag 2), 0xac (flag 1).
 {
@@ -119,8 +122,14 @@ const kindsOf = (k: FireKind, tier: number) =>
   const b0 = kindsOf('barta', 0), b3 = kindsOf('barta', 3), g0 = kindsOf('gibarta', 0), g5 = kindsOf('gibarta', 5);
   check(`Barta tier 0 emitters [${b0}]`, b0 === '190:object 191:object 192:-');
   check(`Barta tier 3 emitters [${b3}]`, b3 === '190:object 191:object 192:- 198:half');
-  check(`Gibarta tier 0 emitters [${g0}]`, g0 === '180:- 181:object');
-  check(`Gibarta tier 5 emitters [${g5}]`, g5 === '181:object 1e0:- 1e1:-');
+  check(`Gibarta tier 0 emitters [${g0}]`, g0 === '180:- 181:object 182:object$2');
+  check(`Gibarta tier 5 emitters [${g5}]`, g5 === '181:object 18e:object$3 1e0:- 1e1:-');
+  // Gibarta's model chunk is the table flags' high word (0x20022 / 0x20062 -> 2, 0x30062 -> 3); no motion.
+  const gChunks = [0, 1, 2, 3, 4].map((t) => kindsOf('gibarta', t).split(' ').filter((x) => x.includes('$')).join(' ')).join(' | ');
+  check(`Gibarta model entries by tier [${gChunks}]`, gChunks === '182:object$2 | 183:object$2 | 184:object$2 | 185:object$3 | 186:object$3');
+  // Barta tier 5: 0x193 / 0x1d8 / 0x1d7 (flag 0x20, no angles), njcm chunk 0 and njm 0 (dump 640489).
+  const b5 = kindsOf('barta', 5);
+  check(`Barta tier 5 emitters [${b5}]`, b5 === '190:object 191:object 192:- 198:half 193:-$0m0 1d8:-$0m0 1d7:-$0m0');
   const rabarta = [0, 1, 2, 3, 4, 5].map((t) => kindsOf('rabarta', t)).join(' | ');
   check('Rabarta: no emitter has angles (create_particle_effect3 only)', !/object|half/.test(rabarta));
   // Barta / Gibarta object angles: the heading's when undirected, none when aimed (EffectEntityBase).
@@ -166,6 +175,33 @@ check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie
       vecNear(turnStep(o, v as [number, number, number], { flag2: true, matrix: flat }), apply(tr(M), f2), `flag 0x20 with flag 2 at [${o.map((x) => x.toFixed(1))}] on [${v}]`);
     }
   }
+}
+
+// Model effects: the emitter's model state (chunk, motion) and the model branch's speed; a model particle's
+// motion frame (njm_elapsed, +0x110) is advanced once per update and is the particle's own.
+{
+  const barta5 = startEmitters('barta', 5).find((e) => e.id === 0x193)!;
+  const gib2 = startEmitters('gibarta', 0).find((e) => e.id === 0x182)!;
+  check('emitterFx: Barta 0x193 is model chunk 0 with motion 0, speed 1', JSON.stringify(emitterFx(barta5).model) === '{"chunk":0,"motion":0,"speed":1}');
+  check('emitterFx: Gibarta 0x182 is model chunk 2, no motion, speed 1', JSON.stringify(emitterFx(gib2).model) === '{"chunk":2,"motion":null,"speed":1}');
+  check('emitterFx: a quad emitter has no model', emitterFx(startEmitters('barta', 5)[0]).model === undefined);
+  const dat = new Uint8Array(0x98);
+  const dv = new DataView(dat.buffer);
+  const f = (o: number, v: number) => dv.setFloat32(o, v, true);
+  f(0x34, 2); f(0x44, 1); dv.setInt32(0x48, 10, true); dv.setInt32(0x4c, 0, true); f(0x50, 1); f(0x24, 1); f(0x2c, 1);
+  const e = parseParticleEntry(dat, 0);
+  const sys = new ParticleSystem();
+  sys.models = true;
+  sys.add(e, [0, 0, 0], null, undefined, { model: { chunk: 0, motion: 0, speed: 1 } });
+  sys.step(true);
+  sys.step(false);
+  sys.step(false);
+  check('model: the motion frame is 3 after the spawn update and two more (anim = 3)', sys.live[0]?.anim === 3);
+  const quad = new ParticleSystem();
+  quad.add(e, [0, 0, 0], null);
+  quad.step(true);
+  quad.step(false);
+  check('a quad particle keeps anim 0', quad.live[0]?.anim === 0);
 }
 
 // noDraw: the particle is made and stepped but never drawn (live is empty; a plain one is drawn).
