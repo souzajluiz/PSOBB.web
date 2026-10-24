@@ -54,12 +54,35 @@
 //
 // The lobby does not open it (fieldmenu.ts: id 0 is not in the lobby; the lobby's Customize row
 // says "Customizing Action Palette is not allowed in the lobby." (unitxt group 11 index 1)).
+//
+// Drawing: the description window is GUI entry 0x11 = (450, 256) (CreatePlayerMenuListWindow_0073aa40
+// from customize_menu_constructor; its text is probably_get_item_description, see actionDescription).
+// The grid's cell is 66 x 51, icon at (9, 8) in it, the palette's icon (paletteIcon: the same textures
+// as the palette, PaletteMenu_UpdateTextures) with its count at the palette's count offset, a disabled
+// cell tinted 0xff404040; the cursor bar at (col * 66 + 1, row * 51 - 5); the list scrolls to
+// row * 51 - 48. Empty cells (category 0) draw nothing. The slot list's rows show the palette icon of
+// each slot. Not ported: the scroll bar (RenderScrollbarPrimitives), the preview element the slot-list
+// update sets (GuildCardListWindow_UpdatePaletteUI), the window's background (the frame stands in for
+// unknown_render_background_for_menus), the element wipe's per-element timing beyond the leaf's own.
+// ASSUMED: the grid's icon scale (GRID_ICON_SCALE), the viewport height (GRID_VIEW_H), the slot list's
+// icon size, the description window's width (the exe passes host+0x58 minus 0 or 2 to
+// ListWindowObject_SetWidth; the value is not traced, 179 is kept), the count offset in the grid.
 
 import { HOTBAR_KEYS, menuKeyOf } from '../input/keyconfig.ts';
 import { se, SE } from '../audio/se.ts';
-import { PALETTE_ITEMS } from './palette.ts';
-import { drawListWindow, INSET, type ListItem, TITLE_GAP } from './fieldwindows.ts';
-import type { WindowSkin } from './stage.ts';
+import {
+  drawDigits,
+  drawTintedRect,
+  ICON_H,
+  ICON_W,
+  PALETTE_ITEMS,
+  paletteIcon,
+  type PaletteTextures,
+  slotCount,
+} from './palette.ts';
+import { drawGameText } from './gametext.ts';
+import { drawTextWindow, drawWindowTitle, INSET, listWindowHeight, ROW, SELECTED, TITLE_GAP } from './fieldwindows.ts';
+import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
 import { withElementWipe, type WindowAnim } from './windowanim.ts';
 
 export const CONFIG_SIZE = 0xe8;
@@ -69,6 +92,36 @@ const SLOT_COUNT = 13;
 export const HOTBAR_FIRST = 3; // flat index of hotbar slot 1
 export const SLOT_LIST_POS = { x: 0, y: 256, w: 179 } as const; // GUI entry 0x0F
 export const ACTION_LIST_POS = { x: 214, y: 256, w: 179 } as const; // GUI entry 0x10
+export const DESCRIPTION_POS = { x: 450, y: 256, w: 179 } as const; // GUI entry 0x11 (w ASSUMED, see the header)
+
+// Grid geometry (render_customize_menu_action_list, dump 718800; the exe globals read with
+// tools/exedata.py). A cell is 66 x 51 (g_CustomizeMenuGridCellWidth 0x00973784 = 66,
+// g_CustomizeMenuGridCellHeight 0x00973780 = 51); the icon element sits at (9, 8) in its cell
+// (g_CustomizeMenuGridItemXOffset 0x009737ac = 9, g_CustomizeMenuGridItemYOffset2 0x009737b8 = 8).
+export const GRID_CELL = { w: 66, h: 51 } as const;
+const GRID_ICON_DX = 9;
+const GRID_ICON_DY = 8;
+// The cursor's highlight: (col * 66 + 1, row * 51 - 5) (DAT_00973760 = 1.0, DAT_0097375c = -5.0;
+// RenderActionListItem_0074a8e8, alpha 0.4 in the exe, drawn here with the select bar).
+const GRID_HILITE_DX = 1;
+const GRID_HILITE_DY = -5;
+// The list's Y for the cursor row: row * 51 + 33 - 81 (g_CustomizeMenuListYOffsetConstants 0x00973794 = 51,
+// g_CustomizeMenuListBaseYOffset 0x00973798 = 33, g_CustomizeMenuListYOffsets 0x00973790 = -81),
+// clamped by the list's scrollbar (ClampRenderPosition, the clamp range is ASSUMED below).
+const GRID_SCROLL_STEP = 51;
+const GRID_SCROLL_BASE = 33 - 81;
+// ASSUMED: the visible grid height (the exe's viewport is 0x0097377c = 55 below the list top, not traced
+// further); the clamp is [0, rows * 51 - GRID_VIEW_H].
+export const GRID_VIEW_H = 208;
+// ASSUMED: the icon's scale in the 66 x 51 cell (the exe's element size is not traced; the hotbar uses 0.7).
+export const GRID_ICON_SCALE = 0.7;
+// The palette's count offset from the icon origin (palette.ts COUNT_DX / COUNT_DY, PaletteMenu_UpdateSlotIcon).
+const COUNT_DX = 25;
+const COUNT_DY = 28;
+const DIGIT_W = 10;
+// The slot list's icons: ASSUMED height (one list row), the width keeps the 50 x 43 aspect.
+const SLOT_ICON_H = 16;
+const SLOT_ICON_W = (ICON_W * SLOT_ICON_H) / ICON_H;
 
 // Slot list cursor value -> flat palette slot index (GuildCardListWindowGetPaletteSlotIndex): Left, Bottom, Right.
 export const SLOT_LIST_FLAT = [1, 0, 2] as const;
@@ -171,6 +224,10 @@ export interface CustomizeEnv {
   weaponEquipped: () => boolean;
   // The Battle Mode trap stock of a type (0..3).
   trapStock: (type: number) => number;
+  // The bag's stack count of a palette item index (the grid's count digits); 0 when absent.
+  itemCount?: (index: number) => number;
+  // The trap counts for the grid's trap cells (0..3); 0 when absent.
+  trapCount?: (type: number) => number;
   // An android (player gender_race_job_flags & Android): the android table.
   android: () => boolean;
   // The current 0xE8 config (a copy).
@@ -201,6 +258,48 @@ export function actionEnabled(category: number, action: number, env: CustomizeEn
   return false;
 }
 
+// The description window's text for a grid cell (probably_get_item_description, dump 717482):
+// attack = unitxt group 7 0x13 + action (empty for Extra Attack with no weapon); technique = its
+// name (group 5) and its description (group 7, index = technique), only when learned; item =
+// group 7 0x16 + action, only when in the bag; trap = the same group with the trap's index, shown
+// here when its stock is above 0 (ASSUMED: GetChallengeItemInstanceId is not traced for traps).
+// ASSUMED: the technique's level and TP cost lines (the exe appends them between the two) are not
+// shown: the env has no level or cost. Empty cells and unavailable cells give ''.
+export function actionDescription(category: number, action: number, env: CustomizeEnv): string {
+  if (category === 2) {
+    if (action === 2 && !env.weaponEquipped()) return '';
+    return env.text(7, 0x13 + action);
+  }
+  if (category === 3) {
+    if (!env.learned(action)) return '';
+    return `${env.text(5, action)}\n${env.text(7, action)}`;
+  }
+  if (category === 4) {
+    const ok = action < ITEM_COUNT ? env.hasItem(action) : env.trapStock(action - TRAP_ACTION_FIRST) > 0;
+    return ok ? env.text(7, 0x16 + action) : '';
+  }
+  return '';
+}
+
+// Grid geometry: the row count and the cell's origin / highlight, window-relative (before the scroll).
+export function gridRows(android: boolean): number {
+  return actionCells(android).length / GRID_COLUMNS;
+}
+
+export function gridCellOrigin(row: number, col: number): { x: number; y: number } {
+  return { x: col * GRID_CELL.w, y: row * GRID_CELL.h };
+}
+
+export function gridHighlight(row: number, col: number): { x: number; y: number } {
+  return { x: col * GRID_CELL.w + GRID_HILITE_DX, y: row * GRID_CELL.h + GRID_HILITE_DY };
+}
+
+// The list's Y offset for the cursor row (see GRID_SCROLL_STEP), clamped to the grid's height.
+export function gridScroll(row: number, rows: number): number {
+  const max = Math.max(0, rows * GRID_CELL.h - GRID_VIEW_H);
+  return Math.min(max, Math.max(0, row * GRID_SCROLL_STEP + GRID_SCROLL_BASE));
+}
+
 // Slot list label: the palette slot's name and its action (or '-').
 function slotLabel(flat: number, config: Uint8Array, p: 0 | 1, env: CustomizeEnv): string {
   const r = readRow(config, p, flat);
@@ -226,27 +325,6 @@ export class CustomizeMenu {
 
   constructor(env: CustomizeEnv) {
     this.env = env;
-  }
-
-  private slotItems(): ListItem[] {
-    const config = this.env.config();
-    return SLOT_LIST_FLAT.map((flat, v) => ({ label: slotLabel(flat, config, this.which, this.env), value: v, enabled: true }));
-  }
-
-  // The grid as a list (empty cells are not listed); `cursor` is the highlighted entry or -1 on an empty cell.
-  private gridItems(): { items: ListItem[]; cursor: number } {
-    const items: ListItem[] = [];
-    let cursor = -1;
-    actionCells(this.env.android()).forEach(([category, action], cell) => {
-      if (category === 0) return;
-      if (cell === this.row * GRID_COLUMNS + this.col) cursor = items.length;
-      items.push({
-        label: actionText(category, action, this.env.text),
-        value: cell,
-        enabled: actionEnabled(category, action, this.env),
-      });
-    });
-    return { items, cursor };
   }
 
   // The highlighted grid cell's [category, action] (an empty cell is [0, 0]).
@@ -334,16 +412,101 @@ export class CustomizeMenu {
     return false;
   }
 
-  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim).
-  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0, wipe?: WindowAnim): void {
+  // The description text of the highlighted cell.
+  description(): string {
+    const [category, action] = this.cell();
+    return actionDescription(category, action, this.env);
+  }
+
+  // `wipe`: the leaf's opening animation (FieldMenu's leafAnim). `pal`: the palette's textures (icons,
+  // digits); without them the icons are not drawn (tests).
+  draw(ctx: CanvasRenderingContext2D, skin: WindowSkin, extra = 0, wipe?: WindowAnim, pal?: PaletteTextures): void {
     const S = SLOT_LIST_POS;
     const A = { ...ACTION_LIST_POS, x: ACTION_LIST_POS.x + extra };
-    const grid = this.gridItems();
-    withElementWipe(wipe, S.x + INSET, S.y + INSET + TITLE_GAP, S.w - 2 * INSET, () =>
-      drawListWindow(ctx, skin, S.x, S.y, S.w, this.env.text(11, 0x36), this.slotItems(), this.slot, this.focus === 'slots'),
-    );
-    withElementWipe(wipe, A.x + INSET, A.y + INSET + TITLE_GAP, A.w - 2 * INSET, () =>
-      drawListWindow(ctx, skin, A.x, A.y, A.w, this.env.text(11, 0x35), grid.items, grid.cursor, this.focus === 'actions'),
-    );
+    const D = { ...DESCRIPTION_POS, x: DESCRIPTION_POS.x + extra };
+    const config = this.env.config();
+    const sx = S.x + INSET;
+    const sy = S.y + INSET + TITLE_GAP;
+    const sw = S.w - 2 * INSET;
+
+    // The slot list: frame, title, the cursor bar, then each row's icon and name (Left, Bottom, Right).
+    drawWindowFrame(ctx, skin.frame, S.x, S.y, S.w, listWindowHeight(SLOT_LIST_FLAT.length, true));
+    if (this.focus === 'slots') withElementWipe(wipe, sx, sy + this.slot * ROW, sw, () => drawSelectBar(ctx, skin.bars, sx, sy + this.slot * ROW, sw, 16));
+    SLOT_LIST_FLAT.forEach((flat, v) => {
+      const ty = sy + v * ROW;
+      const r = readRow(config, this.which, flat);
+      const label = slotLabel(flat, config, this.which, this.env);
+      const lit = this.focus === 'slots' && v === this.slot;
+      const color = lit ? SELECTED : '#ffffff';
+      const tx = sx + (pal && r.group1 !== 0 ? SLOT_ICON_W + 4 : 0);
+      withElementWipe(wipe, sx, ty, sw, () => {
+        if (pal && r.group1 !== 0) {
+          const ic = paletteIcon(r.group1, r.group2);
+          drawTintedRect(ctx, pal.icons[ic.texture], ic.u, ic.v, ICON_W, ICON_H, sx, ty, SLOT_ICON_W, SLOT_ICON_H, 1);
+        }
+        drawGameText(ctx, label, tx, ty + 1, color);
+      });
+    });
+    drawWindowTitle(ctx, skin, S.x, S.y, this.env.text(11, 0x36));
+
+    // The action grid: frame, title, the cells in three columns scrolled to the cursor row, clipped to
+    // the grid's band; the highlighted cell's bar; the description window on the right.
+    const gh = INSET + TITLE_GAP + GRID_VIEW_H + INSET;
+    drawWindowFrame(ctx, skin.frame, A.x, A.y, A.w, gh);
+    const clipX = A.x + INSET;
+    const clipY = A.y + INSET + TITLE_GAP;
+    const clipW = A.w - 2 * INSET;
+    const scroll = gridScroll(this.row, gridRows(this.env.android()));
+    const oy = clipY - scroll;
+    withElementWipe(wipe, clipX, clipY, clipW, () => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(clipX, clipY, clipW, GRID_VIEW_H);
+      ctx.clip();
+      if (this.focus === 'actions') {
+        const h = gridHighlight(this.row, this.col);
+        drawSelectBar(ctx, skin.bars, clipX + h.x, oy + h.y, GRID_CELL.w, GRID_CELL.h);
+      }
+      if (pal) this.drawCells(ctx, pal, clipX, oy, clipY);
+      ctx.restore();
+    });
+    drawWindowTitle(ctx, skin, A.x, A.y, this.env.text(11, 0x35));
+
+    const text = this.description();
+    const dh = Math.max(1, text.split('\n').length) * ROW + 2 * INSET;
+    withElementWipe(wipe, D.x + INSET, D.y + INSET, D.w - 2 * INSET, () => drawTextWindow(ctx, skin, { x: D.x, y: D.y, w: D.w, h: dh }, text));
+  }
+
+  // The grid's icons, counts and disabled tints (render_customize_menu_action_list, dump 718800).
+  // `ox`, `oy`: the grid's origin (the scroll applied); cells outside the band are skipped.
+  private drawCells(ctx: CanvasRenderingContext2D, pal: PaletteTextures, ox: number, oy: number, clipY: number): void {
+    const android = this.env.android();
+    const counts = { itemCount: this.env.itemCount ?? (() => 0), trapCount: this.env.trapCount ?? (() => 0) };
+    actionCells(android).forEach(([category, action], cell) => {
+      if (category === 0) return;
+      const row = Math.floor(cell / GRID_COLUMNS);
+      const col = cell % GRID_COLUMNS;
+      const top = oy + row * GRID_CELL.h;
+      if (top + GRID_CELL.h < clipY || top > clipY + GRID_VIEW_H) return;
+      const ix = ox + col * GRID_CELL.w + GRID_ICON_DX;
+      const iy = top + GRID_ICON_DY;
+      const ic = paletteIcon(category, action);
+      const enabled = actionEnabled(category, action, this.env);
+      drawTintedRect(
+        ctx,
+        pal.icons[ic.texture],
+        ic.u,
+        ic.v,
+        ICON_W,
+        ICON_H,
+        ix,
+        iy,
+        ICON_W * GRID_ICON_SCALE,
+        ICON_H * GRID_ICON_SCALE,
+        enabled ? 1 : 0x40 / 0xff,
+      );
+      const n = slotCount({ group1: category, group2: action, disabled: false }, counts);
+      if (n > 0) drawDigits(ctx, pal.digits, n, ix + COUNT_DX + (String(n).length * DIGIT_W) / 2, iy + COUNT_DY);
+    });
   }
 }

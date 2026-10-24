@@ -326,6 +326,8 @@ export class FieldHud {
         // ValidatePlayerAction's weapon test (ASSUMED: a weapon is item type 0, equipped).
         weaponEquipped: () => (this.opts.character()?.inventory ?? []).some((x) => x.equipped && x.data.data1[0] === 0),
         trapStock: (t) => this.trapCount?.(t) ?? 0,
+        itemCount: (i) => this.itemCount(i),
+        trapCount: (t) => this.trapCount?.(t) ?? 0,
         android: () => isAndroid(this.opts.character()?.charClass ?? -1),
         config: () => this.paletteConfig(),
         setConfig: (cfg) => this.setPaletteConfig(cfg),
@@ -744,10 +746,11 @@ export class FieldHud {
     this.groups = parseUnitxt(data);
     if (this.disposed) return;
     const skin = { frame: hyouji[1], bars: hyouji[2] };
+    const palette = { bg: hyouji[2], tabs: hyouji[0], icons: { 5: hyouji[5], 6: hyouji[6], 7: hyouji[7] }, digits: jp[0] };
     this.tex = {
       skin,
-      menu: { menu: { panel: hyouji[13], labels: jp[2] }, icons: hyouji[1], arrows: hyouji[0], bars: hyouji[2], digits: jp[0] },
-      palette: { bg: hyouji[2], tabs: hyouji[0], icons: { 5: hyouji[5], 6: hyouji[6], 7: hyouji[7] }, digits: jp[0] },
+      menu: { menu: { panel: hyouji[13], labels: jp[2] }, icons: hyouji[1], arrows: hyouji[0], bars: hyouji[2], digits: jp[0], palette },
+      palette,
     };
   }
 

@@ -8,6 +8,7 @@ import { applyKeyConfig, KEYS } from '../client/src/input/keyconfig.ts';
 import { parsePalette } from '../client/src/classic/palette.ts';
 import {
   actionCells,
+  actionDescription,
   actionEnabled,
   actionText,
   assignHotbar,
@@ -15,6 +16,10 @@ import {
   CONFIG_SIZE,
   CustomizeMenu,
   customizeBody,
+  gridCellOrigin,
+  gridHighlight,
+  gridRows,
+  gridScroll,
   HOTBAR_FIRST,
   readRow,
   slotOffset,
@@ -286,6 +291,33 @@ applyKeyConfig(null);
   s.fullCharacter = new Uint8Array(10);
   s.sendSaveFile();
   eq(sent.length, 0, 'a short save is not sent');
+}
+
+// 13. The drawing (render_customize_menu_action_list, dump 718800; the description, 717482): the cell
+// origins, the cursor's bar, the scroll, and the description text per kind.
+{
+  eq(gridCellOrigin(0, 0), { x: 0, y: 0 }, 'cell (0,0) at the origin');
+  eq(gridCellOrigin(2, 1), { x: 66, y: 102 }, 'cell (row 2, col 1): 66 x 51 pitch');
+  eq(gridHighlight(0, 0), { x: 1, y: -5 }, 'the highlight of (0,0): (1, -5)');
+  eq(gridHighlight(1, 2), { x: 133, y: 46 }, 'the highlight of (1,2): (col*66+1, row*51-5)');
+  eq(gridRows(false), 13, 'fleshie grid: 13 rows');
+  eq(gridRows(true), 6, 'android grid: 6 rows');
+  eq(gridScroll(0, 13), 0, 'scroll of the first row is clamped to 0');
+  eq(gridScroll(3, 13), 105, 'scroll of row 3: 3*51 + 33 - 81');
+  eq(gridScroll(12, 13), 13 * 51 - 208, 'scroll of the last row is clamped to the grid height');
+  eq(gridScroll(1, 2), 0, 'short grids never scroll');
+
+  const desc = (c: number, a: number, over: Partial<CustomizeEnv> = {}) => actionDescription(c, a, fakeEnv(new Set([0, 5]), () => {}, { config: sample() }, over));
+  eq(desc(2, 0), 'g7:19', 'Attack: group 7 0x13 + action');
+  eq(desc(2, 2), '', 'Extra Attack with no weapon: no description');
+  eq(desc(2, 2, { weaponEquipped: () => true }), 'g7:21', 'Extra Attack with a weapon');
+  eq(desc(3, 5), 'g5:5\ng7:5', 'a learned technique: name, then its description');
+  eq(desc(3, 1), '', 'an unlearned technique: no description');
+  eq(desc(4, 2), 'g7:24', 'an item in the bag: group 7 0x16 + action');
+  eq(desc(4, 2, { hasItem: () => false }), '', 'an item not in the bag: no description');
+  eq(desc(4, 13), '', 'a trap with no stock: no description');
+  eq(desc(4, 13, { trapStock: () => 2 }), 'g7:35', 'a trap with stock: group 7 0x16 + action');
+  eq(desc(0, 0), '', 'an empty cell: no description');
 }
 
 applyKeyConfig(null);
