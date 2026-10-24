@@ -159,6 +159,13 @@ export interface EffectFx {
   noDraw?: boolean;
   matrix?: readonly number[];
   model?: { chunk: number; motion: number | null; speed: number };
+  /**
+   * Particle flag 0x400 (the table's 0x400, Rafoie's ring 0x600 = model | cloak). The model branch
+   * draws it only with the advanced effects setting (update_particle_effect_single_particle, dump
+   * 291946: `(advanced || (flags & 0x400) == 0) && xvm && njcm`), through the cloak; without it the
+   * particle is not drawn. render/hitfx.ts gates it on advancedEffectsOn().
+   */
+  cloak?: boolean;
 }
 
 export interface Emitter {
@@ -204,6 +211,28 @@ export const NT_LAYOUT: readonly (readonly [number, 3 | 4])[] = [
   [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 3], [16, 4], [16, 4], [16, 3], [16, 4],
   [32, 4], [8, 4], [16, 3], [32, 4],
 ];
+
+// effect_nt_metadata.flags (+0x00 of each 0x28-byte record, 0x00a101c0; the table is 108 records,
+// the second 0x36 are the tex_flags 0x20 copies). IsNTParticle (ParticleEffectSingleParticle_
+// IsNTParticle_00508a30, dump 287725) is `particle_renderers[texture_index]->effect_nt->flags & 1`.
+// Read from PsoBB.exe with tools/exedata.py (the copies' flags differ from the first 0x36).
+// Only bit 0 is used here: 1 and 5 are NT, 2 and 6 are not.
+export const NT_FLAGS: readonly number[] = [
+  2, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 2, 1, 2, 6, 5, 6, 5, 6, 5,
+  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+  5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6,
+  5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 5, 6,
+];
+
+/** IsNTParticle for a renderer slot (the particle's texture_index; unknown slots are not NT). */
+export function particleIsNt(slot: number | undefined): boolean {
+  return slot !== undefined && ((NT_FLAGS[slot] ?? 0) & 1) !== 0;
+}
 
 // The quad of a particle in its renderer's terms: half width / height in
 // world units at the particle (times the projection), and whether it turns

@@ -363,6 +363,10 @@ check(!circleHits(0, 0, 400, T(1, 120, 0, 8), 100) && circleHits(0, 0, 400, T(1,
       spawns.push({ id: p.id, persistent: p.duration !== undefined, track, alive, scale: p.scale?.[0] ?? 1, at });
       return Promise.resolve();
     },
+    // The fire sphere's model (render/rafoiesphere.ts): no model in the test, so no sphere object.
+    models: { particleModel: () => Promise.resolve(null) },
+    attach() {},
+    detach() {},
   } as unknown as FieldParticles;
   const make = () => new TechFire({ fx: () => fx, sound: (id, x, y, z) => sounds.push([id, x, y, z]) });
 

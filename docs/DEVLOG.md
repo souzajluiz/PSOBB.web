@@ -16799,3 +16799,52 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - The Trap Vision tool's duration: the value at `+0x104` (XOR-coded) has no writer in the ctors traced (`FUN_005c3a94`, `FUN_005de2d8`, `ConstructToolType8_005df8dc`); find the store (a writer of `+0x104` on the tool's use path, 0x005de3fc..) and the meaning of the 1 / 10 / 99 from `FUN_005d6430`.
 - The battle trap's revealed state 2: the owner's position copy (`+0x33c..0x344`, offsets UNCLEAR) and the owner's lock-on of the trap through `CheckEnemyTargetability_006945fc`.
 - The enemy-side `check_enemy_is_targetable` (0x007a2b5c) for the Seabed cursor, so the cursor follows the record's range and facing.
+## 2026-10-23: Rafoie fire sphere, NT blend and the advanced effects switch (the sphere's update and draw are the exe's; the colour inputs are not closed)
+
+**What changed.** Rafoie's blast now makes its fire sphere (the child object of `rafoie_aoe_tick`), drawn as the technique BML's njcm chunk 11. Model particles blend by the renderer's NT flag, not always non-NT. The ring's cloak flag (0x400) is gated on the advanced effects setting.
+
+- `combat/techfire.ts` `RafoieSphere`: the pure state of the child (fixed point at (x, y + 5, z), scale 1.2 lerped toward 1.9, colour alpha 1 falling 0.035 an update, life 110 updates, the 0..15 counter). `render/rafoiesphere.ts` `RafoieSpheres`: one model copy per sphere (`particleModel(11, null)`), placed each tick, removed when the life ends or the field is cleared. `render/techfire.ts` makes one on the blast's burst (the 10th update) and steps the spheres at the start of `tick()`.
+- `classic/particles.ts` `NT_FLAGS` (108 records, from 0x00a101c0 +0x00) and `particleIsNt(slot)`. `render/hitfx.ts` `placeModel` takes NT from the particle's own slot (`this.slots` of its gbix), so an NT model particle is SRCALPHA / ONE (AdditiveBlending).
+- `EffectFx.cloak` (particle flag 0x400): set for the Rafoie ring (`RAFOIE_RING` cloak: true, from the table's 0x600). `render/hitfx.ts` `spawn` returns without a model when `advancedEffectsOn()` is off.
+- `render/advancedeffects.ts`: the setting (on by default, ASSUMED; no settings screen yet). `FieldParticles.attach / detach` put an object in the field's scene.
+
+**Premise corrected.** The brief named a "texture scroll" for the sphere. The draw has none: the +0x5c counter cycles 0..15 and nothing in the draw path reads it. The IndTex stage that would scroll a texture is never on (see Exe evidence). The sphere is not turned by the camera yaw (the exe's `matrix_rotation_y(g_pDefaultNPCCameraState->y_rotation)` is not ported).
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`; the dump's names for the child are wrong; addresses from `objdump -d` and `tools/exedata.py`):
+
+- Child object: `rafoie_aoe_tick` (dump 650685), the 10th tick: `base_game_object` of 100 bytes, vtable `g_ParticleEffectEntity_vtbl` = 0x00b3e078 (`ParticleEffectEntityBase_Destructor_006ed318` stores it, slots: destruct 0x006ed2f4, update 0x006ee2b4, render 0x006ee380). The update is `update_bazooka_explosion` (dump 651000) and the render is `render_bazooka_explosion` (dump 651052): the dump has them unnamed at those addresses, identified by the vtable slots. +0x20 tier (ushort), +0x22 = 10 (so the render's tier scale branch never runs), +0x28 / +0x2c / +0x30 = x / y + 5 / z (g_RafoieParticleYOffset 0x0096dda4 = 5.0; the particles add _DAT_0096dda0 = 8.0 more), +0x34..+0x3c = 1.2 (0x3f99999a), +0x40 = 1.9 (0x3ff33333), +0x48..+0x54 = 1.0 (colour, `copy_color_to_af0370` sets {a, r, g, b} at 0x00af0370), +0x58 counter, +0x5c 0..15, +0x60 = 1 (cleared on the else branch of the scale), +0x24 = the IndTex object (`IndTexObject_Constructor_00504b58`, 0x20 bytes, byte +0x1c = 0x11, vtable 0x00afeae8 = `g_ChallengeEnemyEntity_vtable`, whose update and render are the pure-virtual placeholder 0x0061cdb0; it has no draw of its own).
+- Update (0x006ee2b4): counter +0x58 and +0x5c; `if (0x6e < counter)` sets the entity's flag bit 1 (life 110). Scale: `Vec3LerpIfDistance_00501be8(+0x34, (s, s, s) = +0x40, rate)` with rate 0.15 when `g_BazookaExplosionLerpThreshold + target > scale` (0x0096dcd0 = -1.0) else 0.05 and +0x60 = 0 (0x006ee2ec..0x006ee351). `Vec3LerpIfDistance` moves by `length * rate` when `length > rate`, the length being sqrt(3) |diff| for equal components, so the approach is slow: about 1.81 at update 110. Colour: `LerpFloat_00501b34(+0x48, 0, 0.035)` (0x006ee370), i.e. alpha - 0.035 a step, never below 0.
+- Draw (0x006ee380): `is_current_map_safe`, fog off, `g_RenderTargetFlags |= 0x200010`, the colour copied, translation +0x28, scale (+0x34, +0x38, +0x3c), `matrix_rotation_y(camera y_rotation)`, texture list `g_CurrentXvmTexture`, `ConfigureIndTexStageForMesh_00504c04(+0x24, 2, 0)` when +0x24 is set, the model `unknown_get_njcm_chunks(g_CurrentBmlBuffer, 0xb)` through `RenderXJModel_008317b6`, cull CW then None, `ClearIndTexState_00504c78(0)`.
+- IndTex never on: `g_IndTexActiveList_00a72b10` / `g_IndTexActiveCount_00a72b0c` are only read (`ConfigureIndTexStageForMesh_00504c04` finds no entry, so it returns) and reset (0x00503701..0x0050371a in the function at 0x005036c8, and `ResetIndirectTexState_00504cd0`). `tools/exedata.py xref 0x00a72b0c` lists the reads and the reset; no writer of the count or the list. So the stage 1 set-up (`ConfigureIndTexStage_00504ae4`) is dead in this build (ASSUMED: no writer under another address form; the xref covers the absolute form only).
+- NT: `ParticleEffectSingleParticle_IsNTParticle_00508a30` (dump 287725) is `particle_renderers[texture_index]->effect_nt->flags & 1`. `effect_nt_metadata` (dump 69552) is 0x28 bytes: flags +0x00, xvm +0x04, texture_index +0x08, width / height +0x14 / +0x18, renderer type +0x24. The 108 records at 0x00a101c0 hold flags 1, 2, 5, 6 (bit 0: 1 and 5). The second 0x36 are copies with their own flags. The model branch uses texture_index with no +0x36 (the quad branch adds it for tex_flags 0x20): ASSUMED that the particle's texture_index is the plain slot.
+- Model draw gate (`update_particle_effect_single_particle`, dump 291946): `(advanced || (flags & 0x400) == 0) && xvm && njcm`. With 0x400 and advanced on: `unknown_set_advanced_effect_cloaked` (dump 282405: stage 1 = g_pFontTextureData2, a viewport-scaled texture matrix); with 0x400 and advanced off the particle is not drawn.
+- Advanced effects: `get_settings_advanced_effect` (dump 202696) returns `g_settings_advanced_effect`, read from the external settings and clamped to 0..1 (dump 202859..202863; the default before the read is 0, dump 202809).
+- Colour (SetColor, `ParticleEffectSingleParticle_SetColor_00508958`, dump 287693): non-NT: `SrcDestBlend_Save(1, 4, 5)` and a = byte(+0x97) / 255 + (-1.0 at 0x00920040; 255.0 at 0x0092003c), r = g = b = 0. NT: `SrcDestBlend_Save(1, 4, 1)`, rgb = bytes of the dword +0x94 / 255 - 1, a = 0. Then `copy_color_to_af0370`.
+
+**Not closed (the colour inputs).** The -1 base makes every value in [-1, 0]: the non-NT alpha and the NT rgb are never positive as written, so something downstream of `g_CurrentTargetColor` must add 1 back (or the byte / dword are not the particle's own fields). The +0x94 of the particle is a matrix element (`ParticleEffectSingleParticle_SetTransform_00508dec` stores `param_2[1]` there, dump 287983) and +0x97 is its top byte, so the NT / non-NT reads look like matrix bits, not a colour. The tint (SetId, dump 288013: flag 0x100, dword at +0x4c) is the only colour write to a particle I found. `copy_color_to_af0370` writes the global at 0x00af0370 and about 50 reference sites read that global (`tools/exedata.py xref 0x00af0370`), so its consumer was not traced. The port keeps its shade (`particleShade`).
+
+**ASSUMED:**
+
+- The sphere is drawn with normal blending and white colour, its alpha is the material opacity; the exe sets no blend in its draw (the blend of the last model particle stays).
+- The sphere is not turned by the camera yaw (not wired; `render/fieldhud.ts` has `cameraYaw` for the HUD only).
+- The advanced effects setting is on (the trap draw already passes true); the exe's registry default is not traced.
+- The cloak itself is not modelled: a 0x400 particle is drawn as the plain model when the setting is on.
+- NT is the particle's slot (texture_index without +0x36).
+- The sphere's y follows the blast's y at the burst (the list form's y is not updated from the target in `RafoieBlast`, as before).
+
+**Checks:**
+
+- `node tests/particleorient.test.ts` ALL PASS (new: the NT table length and the flags of slots 0, 1, 54, 55, the NT / non-NT blend, the ring's cloak and the mark's lack of it, the setting, the sphere's position, first step, fade, life 110 / 111, the scale at 110 and settled).
+- `node tests/techfire.test.ts` ALL PASS (the test's fake field now has `models`, `attach` and `detach`; the sphere's model is null there).
+- `hitfx`, `particlespawn`, `particleslope`, `telepipe`, `techlightning`, `deathfx`, `dragon`, `techniques`, `enemyfsmep2c` pass (Node 24).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` (Node 24) exit 0; `client/node_modules` linked from the main checkout for the run and removed before the commit.
+- The NT table was compared with a fresh `tools/exedata.py` read of the 108 records: equal.
+- Not run in Chrome, no Playwright (per the brief): the sphere, the NT blend and the ring's gate are not seen on screen.
+
+**Left:**
+
+- The colour / alpha path of a model particle (see "Not closed"): the -1 base and the consumer of `g_CurrentTargetColor`.
+- The sphere's camera yaw, and the cloak shader (`unknown_set_advanced_effect_cloaked`) for the ring and the trap.
+- The advanced effects setting has no screen; the registry value is not read by the port.
+- The list form's y of the blast (the target's weapon position y each tick, as `rafoie_aoe_tick` copies it) is not followed by `RafoieBlast`; only x and z are.
+- The sphere is not seen in Chrome.
