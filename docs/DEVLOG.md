@@ -18099,3 +18099,13 @@ The previous entry's `modelParticleColour` (black for a non-NT model particle) i
 - The Item Pack and the shops: no 0xC (the Item Pack) and no page writer (the shops), so no pages there. Their stat rows (page 0) are the shops' open item.
 - The page slide, and the item picture of 0xC (the asset of the item picture).
 - The page-1 row layout (the exe's element offsets), the photon empty-row text, and the Photon Blast window's text (state 0xE, entry 0xA).
+
+## 2026-10-23 (e2e talk key: Middle, not Enter)
+
+**Bug:** in Pioneer 2 the e2e specs for the shop (1008), tekker (1009), guild (1011) and bank (1010) clerks never opened the counter.
+
+**Root cause:** commit d1ec129 ("Middle key talks or picks up the target in weapon reach") moved the NPC talk from Enter to the action palette's Middle key (ArrowDown by default; exe 0x0068c31d, the middle-slot override). Enter is Decide and no longer talks, as the commit message says. The specs still sent Enter to start the talk and were not updated. The client code is right; nothing in `render/combat.ts`, `quest/town.ts`, `npcview.ts` or the safe-map palette/hotbar hiding is broken. A talk that was verified by hand with ArrowDown opens the counter.
+
+**Fix:** `e2e/classic.ts` `talkKey` (ArrowDown held 150 ms so a 30 fps frame sees it, as `pioneer2-quest.spec.ts` already did) now starts the talk in `pioneer2-shop`, `tekker-result`, `pioneer2-counter`, `battle-traps`. New spec `e2e/bank-check-room.spec.ts` (bank Check Room take list) uses it too.
+
+**Tests:** `pioneer2-shop.spec.ts` and `bank-check-room.spec.ts` pass. `tekker-result.spec.ts` now opens the counter and takes the weapon, but still stops at the Result step (no picture; the 2026-10-23 tekker entry already says the spec does not reach the Result), not related to the talk key.

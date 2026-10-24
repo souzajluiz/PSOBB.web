@@ -16,7 +16,7 @@
 // The subcommands are read by wrapping Game.sendSubcommand on the page (the test's own
 // observer; nothing in the port changes).
 import { expect, test } from '@playwright/test';
-import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby } from './classic.ts';
+import { consoleLog, cursorTo, expectInGame, key, leaveToLobby, logIn, openPartyMenu, peek, reachLobby, talkKey } from './classic.ts';
 
 // The battle account: a copy of webtest's save (vendor/newserv/system/players/, see e2e/README.md).
 const USER = process.env.PSO_USER ?? 'webbattle';
@@ -80,7 +80,7 @@ test('Battle Mode: a trap is placed from the palette, sent as 6x83, and it is ar
       const p = v.npcs.byAction(1011).root.position;
       v.placePlayer(w.classicGame.game.selfId, p.x, p.y, p.z + 8, Math.PI);
     });
-    await key(page, 'Enter');
+    await talkKey(page);
     await expect
       .poll(
         async () => {

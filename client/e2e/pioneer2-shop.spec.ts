@@ -13,7 +13,7 @@
 // NEWSERV_LOG (optional): newserv's log file, checked for the purchase line.
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { consoleLog, key, leaveToLobby, peek } from './classic.ts';
+import { consoleLog, key, leaveToLobby, peek, talkKey } from './classic.ts';
 import { enterFreshField } from './fresh-field.ts';
 
 // The meseta the character is funded with: the buy stays within it (the bought item costs at
@@ -68,7 +68,7 @@ test('the item store counter sells a cheap item on the classic field', async ({ 
       const p = v.npcs.byAction(1008).root.position;
       v.placePlayer(w.classicGame.game.selfId, p.x, p.y, p.z + 8, Math.PI);
     });
-    await key(page, 'Enter');
+    await talkKey(page);
     // The greeting lines wait for Enter; the Buy / Sell choice then shows.
     await expect
       .poll(

@@ -6,7 +6,7 @@
 //
 // Against a local newserv, like the other classic e2e tests (e2e/classic.ts).
 import { expect, test, type Page } from '@playwright/test';
-import { consoleLog, key, peek } from './classic.ts';
+import { consoleLog, key, peek, talkKey } from './classic.ts';
 import { enterFreshField } from './fresh-field.ts';
 
 // The counter's window state (classic/shop.ts state(), render/fieldhud.ts debug().counter).
@@ -35,7 +35,7 @@ test('the tekker shows the Result with the picture window for an identified weap
         const p = v.npcs.byAction(1009).root.position;
         v.placePlayer(w.classicGame.game.selfId, p.x + ox, p.y, p.z + oz, Math.atan2(-ox, -oz));
       }, [dx, dz]);
-      await key(page, 'Enter');
+      await talkKey(page);
       await page.waitForTimeout(2000);
       if ((await counterState(page)) !== null) {
         open = true;
