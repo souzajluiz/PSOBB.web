@@ -102,3 +102,76 @@ export class OlgaSwordTrail {
     this.prev = null;
   }
 }
+
+// --- Pass 5: the sword stab (rows 11..20) -------------------------------------------------------------
+//
+// Exe (dump Psobb.exe-05112026.c): the frame fn Olga1HandleSwordStabAttack_004986c8 (line 217265) calls
+// CheckOlga1SwordStab_00495508 every tick (215080). That spawns a stab OBJECT at the sword's ground point
+// (create_olga_sword_stab_objects, 212446; vtable g_Olga1SwordStabVtable; fields: +0x1c = the beast, +0x20 =
+// position, +0x2c = range, +0x30 = the tick counter, +0x34 = the power). The object's update is
+// olga1_sword_stab_update_(212391, bound to the vtable by name: ASSUMED, the Ghidra provider did not launch):
+// every tick, each player on the Olga map (can_olga_hit_player) within `range` on the XZ plane (Y zeroed) takes
+// entity_hit_by_tech (group 0, fixed_damage_maybe, power = randomly_adjust(+0x34, 0.1) at each hit). The counter
+// is incremented and the object is destroyed when it passes 7 (8 updates in all). No latch: every update hits.
+//
+// NOT the stab's damage: UpdateVoloptForm7State (line 195333) only moves an anim index (+0x20 == 1 -> +0x1c = 2)
+// and the hit-position object's state 1 (UpdateOlgaHitPositionObjectState_00491980) is a different object.
+//
+// The spawn (CheckOlga1SwordStab, 215080): the sword tip (+0x5ec) and the sword's other point (+0x5e0) must
+// cross the Y plane g_OlgaSwordStabYPlane with both |y| <= g_OlgaSwordStabYAxisThreshold; the ground point is
+// a + (tip - a) * t with t = -a.y / (tip.y - a.y) when tip.y - a.y > g_OlgaSwordStabEpsilon, else t = 1, at y = 0.
+// The formula is PROVEN; the three constants are NOT decoded (no address in the dump), so the values below are
+// ASSUMED placeholders. The range is maybe_olga1_sword_stab_ranges[difficulty] (not decoded): ASSUMED.
+
+export interface XYZ {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export const OLGA_SWORD_STAB = {
+  // The object lives for 8 updates (counter +0x30 0..7; destroyed when > 7). PROVEN.
+  lifeTicks: 8,
+  // ASSUMED placeholders for the decoded-address-less constants and the per-difficulty range.
+  floorPlane: 0,
+  axisThreshold: 30,
+  epsilon: 0,
+  range: 20,
+} as const;
+
+// The stab's ground point (CheckOlga1SwordStab_00495508 on the XZ plane), or null when the sword does not
+// cross the stab plane or is outside the axis threshold. The gate's constants are ASSUMED (see above).
+export function stabGroundPoint(a: XYZ, tip: XYZ): XZ | null {
+  const P = OLGA_SWORD_STAB;
+  const crosses = (tip.y < a.y && tip.y < P.floorPlane) || (a.y < tip.y && P.floorPlane < tip.y);
+  if (!crosses || Math.abs(a.y) > P.axisThreshold || Math.abs(tip.y) > P.axisThreshold) return null;
+  const dy = tip.y - a.y;
+  const t = P.epsilon < dy ? -a.y / dy : 1;
+  return { x: (tip.x - a.x) * t + a.x, z: (tip.z - a.z) * t + a.z };
+}
+
+// One stab object: created at `pos`, hits every player within its range for its life.
+export class OlgaStabObject {
+  age = 0;
+  readonly pos: XZ;
+  readonly range: number;
+
+  constructor(pos: XZ, range: number = OLGA_SWORD_STAB.range) {
+    this.pos = pos;
+    this.range = range;
+  }
+
+  get alive(): boolean {
+    return this.age < OLGA_SWORD_STAB.lifeTicks;
+  }
+
+  // The players this update hits: the XZ distance (Y zeroed) at most the range, inclusive (`<=`, exe 212419).
+  touches(p: XZ): boolean {
+    return Math.hypot(p.x - this.pos.x, p.z - this.pos.z) <= this.range;
+  }
+
+  // One update: returns whether the object hits this tick (the caller checks the players), then ages it.
+  tick(): void {
+    this.age += 1;
+  }
+}

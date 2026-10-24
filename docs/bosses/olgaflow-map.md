@@ -706,3 +706,74 @@ the same row as the stats.
 2. The tail swipe's hit (the anchor +0x640..+0x654 is unbound); the lancer (row 22, `CheckOlga1SwordWaveHit_0049592c`, `SetOlga1AttackPosition3`).
 3. The first block of UpdateOlga1Rotation (the `+0x5c` facing) and the display height of UpdateOlga1Position (+0x304).
 4. Sounds and particles of the wave (0x3bd, 0x3be, 0x3c0 / 0x3c1), the ground strike, the `DmBall` objects (CreateOlgaDmBall).
+
+## 15. Pass 5 (2026-10-24): the stab's hit, the tail anchor, the lancer
+
+Sources: the dump `reverse/refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c` (line numbers below).
+`tools/exedata.py read` for the scalars. The Ghidra provider (REA `open_binary` / `search_procedures`) failed to
+launch twice in this pass, so no address was bound through it; the names below are the dump's.
+
+### 15.1 The stab: the damage is the stab OBJECT's update, not UpdateVoloptForm7State (PROVEN, bound by name)
+
+- The frame fn Olga1HandleSwordStabAttack_004986c8 (217265) calls CheckOlga1SwordStab_00495508 (215080) on every tick
+  of rows 11..20. That spawns objects with create_olga_sword_stab_objects (212446) and
+  olga1_sword_stab_constructor (212478): +0x1c = the beast (`field9_0x1c`), +0x20 = the spawn position, +0x2c = range
+  (`maybe_range`), +0x30 = a tick counter (0), +0x34 = power (`probably_power`: BattleParam row 43 field 0 rounded, or
+  0x14 when the field equals the sentinel `g_Olga1SwordStabParticleScaleMaxRange`).
+- The hit is `olga1_sword_stab_update` (212391), line 212391 of the dump. Each update, if `unknown_photon_blast_related_()`
+  is 0: every player with `can_olga_hit_player` whose XZ distance (Y zeroed) to +0x20 is `<= +0x2c` takes
+  `entity_hit_by_tech(player, beast, fixed_damage_maybe, randomly_adjust(+0x34, 0.1), 0, ~foie, -1)`. Then +0x30 is
+  incremented, and the object is destroyed (flag +0x8 |= 1) when it passes 7: 8 updates in all. No latch.
+- UpdateVoloptForm7State (195333) is NOT the damage: it only tests the anim index +0x20 == 1, then sets +0x24 = 0 and
+  the index's state +0x1c = 2. It moves no HP. The hit-position object's state 1 (UpdateOlgaHitPositionObjectState_00491980,
+  212578) is a different object (`OlgaHitPositionObject`, the energy-wave family), not the stab.
+- Its proximity state 0 (CheckOlgaHitPositionPlayerCollision_00491b40) and the effect (Olga1SwordStabEffectUpdate_00491a28)
+  have no damage either. unknown_olga_launcher_attacks_hit_player_check (210066) is the lock-on targeting (no damage).
+- The vtable binding of olga1_sword_stab_update to g_Olga1SwordStabVtable (the update slot): ASSUMED by name and by the
+  struct (the constructor's +0x34 / +0x2c / +0x30 fields match the body). Not bound through the Ghidra provider.
+
+### 15.2 The stab's spawn (PROVEN formula; the constants NOT decoded)
+
+- Gate (215095..215102): with the tip `+0x5ec` and the other point `+0x5e0`: `(tip.y < other.y && tip.y < g_OlgaSwordStabYPlane)
+  || (other.y < tip.y && g_OlgaSwordStabYPlane < tip.y)`, and `|other.y| <= g_OlgaSwordStabYAxisThreshold`, `|tip.y| <=` the
+  same. Ground point (215108..215113): `t = (g_OlgaSwordStabEpsilon < tip.y - other.y) ? -other.y / (tip.y - other.y) : 1`,
+  point = other + (tip - other) * t on XZ, y = 0. Range = `maybe_olga1_sword_stab_ranges[difficulty]` (215121).
+- The three constants (g_OlgaSwordStabYPlane, g_OlgaSwordStabYAxisThreshold, g_OlgaSwordStabEpsilon) and the range array
+  have no address in the dump: their values are NOT decoded. The port uses ASSUMED placeholders (0, 30, 0, 20).
+- The sword points: the sword tip / other point are not written in any decoded function (15.4 of pass 4, unchanged).
+  ASSUMED: the tip is the model's bone 4 (as the wave) and the other point is the previous tick's tip.
+- The mult-4 flag (`(+0x410 & 3) == 0`, 215117) gates only the particles, the sound 0x3c4 and the lock-on call; the
+  spawn runs every tick. The spawn position is the object's +0x20 (the `position` argument).
+
+### 15.3 The tail: the anchor +0x640..+0x654 (UNCLEAR: no decoded writer in the Olga code)
+
+- Olga1TailSwipe_00495684 (215137) reads +0x640 / +0x644 / +0x648 / +0x64c / +0x654 of the beast (`local_8c..local_78`)
+  and +0x4d0 (the previous tick's +0x64c, copied at 215236..215238 into the casting info +0x70/+0x74/+0x78 of +0x460,
+  which is +0x4d0 / +0x4d4 / +0x4d8). PROVEN (offsets). The triangle test and the damage (215190..215226) are as in pass 4.
+- The writes I found: dragon_constructor (158059..158064) writes +0x644..+0x658 of the DRAGON (`this` there is the dragon),
+  NOT the beast. The Olga constructor (216570..216640) writes +0x65c, +0x658, +0x660, +0x674 and +0x440 but NOT +0x640..+0x654.
+  No `+ 0x64x` write sits in the Olga range of the dump (216000..217900). The writer is therefore either a generic
+  per-entity position copy through an index (not found by offset grep) or a sub-object (`InitializeOlgaSubObjectManager_004a03f8`,
+  216580, not decoded). The tail hit is NOT PORTED.
+
+### 15.4 The lancer (row 22, 0x0049876c): NOT PORTED
+
+- Olga1HandleFireLancerMoveAttack_0049876c (217344) calls CheckOlga1SwordWaveHit_0049592c (215247), a body with a
+  player loop (`can_olga_hit_player`) and the power from `local_bc` / the BattleParam; its transition is ASSUMED (row 22 -> 1).
+  Not read in full in this pass.
+
+### 15.5 Port (combat/olgaflowhits.ts, combat/olgaflowai.ts, render/combat.ts)
+
+- `OlgaStabObject` (8 updates, the XZ range test `<=`), `stabGroundPoint` (the verified formula, the gate's constants ASSUMED),
+  the brain's `stabTick` (rows 11..20), and `olgaSwordStab` in render/combat.ts (spawn on stabTick at the ground point, every
+  live object hits the local player's range each tick with the group-0 tech damage and the 0.1-adjusted power).
+- ASSUMED list for the stab: the vtable binding by name; the three constants (0, 30, 0); the range (20, a placeholder: the
+  per-difficulty array is not decoded); the bone pair (tip = bone 4, previous tip); the spawn every tick (the mult-4 gate
+  only touches the particles and the lock-on, unported).
+
+### 15.6 Left
+
+1. The tail swipe's hit: the anchor writer (15.3).
+2. The lancer (15.4).
+3. The stab's constants and ranges (15.2): the three floats and the per-difficulty array need their addresses (the dump's
+   globals are declared without them; Ghidra decompile of 0x00495508 would show the DAT_ addresses once the provider launches).

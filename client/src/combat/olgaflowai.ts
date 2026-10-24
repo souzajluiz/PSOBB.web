@@ -283,6 +283,8 @@ export class OlgaFlowAi extends BrainBase {
   // True on a tick whose frame fn runs the sword wave's hit test (CheckForSwordWaveHittingPlayers):
   // the states 5..10 with the anim window (see swordWaveWindow). Read by render/combat.ts after tick().
   waveTick = false;
+  // The sword stab's spawn runs in the frame fns of rows 11..20 (0x004986c8 calls CheckOlga1SwordStab every tick).
+  stabTick = false;
   private pendingMotion: EnemyAiMotion | null = null;
 
   constructor(init: OlgaFlowInit) {
@@ -351,6 +353,7 @@ export class OlgaFlowAi extends BrainBase {
   tick(_targets: readonly AiTarget[], _animationEnded?: boolean): AiFrame {
     const out = this.frame();
     this.waveTick = false;
+    this.stabTick = false;
     if (this.dead) return this.finish(out);
     if (this.dying) {
       this.deathTimer -= 1;
@@ -363,6 +366,7 @@ export class OlgaFlowAi extends BrainBase {
     }
     this.stateTicks += 1;
     this.waveTick = this.swordWaveWindow();
+    this.stabTick = this.stabWindow();
     // The frame fn's arc (SetOlga1AttackPosition2) runs on the timer before it counts down.
     if (OLGA1_ARC_ROWS.has(this.stateIndex)) this.moveArc(this.timer, this.total);
     this.timer -= 1;
@@ -448,6 +452,12 @@ export class OlgaFlowAi extends BrainBase {
     }
     this.timer = this.durationOf(index);
     this.total = this.timer;
+  }
+
+  // The stab's spawn runs in the frame fn of rows 11..20 (exe 0x004986c8, every tick of the row).
+  private stabWindow(): boolean {
+    const n = this.stateIndex;
+    return n >= OLGA1.swordStabLow && n <= OLGA1.swordStabTop;
   }
 
   // The sword wave's test runs in the frame fns of rows 5..10 (0x00498634, 0x00498674). ASSUMED: the
