@@ -35,13 +35,14 @@ import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } fro
 import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
 import { isInTeam } from '../classic/teammenu.ts';
-import { equipProblems, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
+import { equipProblems, itemRowName, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
+import type { FieldQuickEnv } from '../classic/field.ts';
 import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
 import { createCounter, type Counter, type CounterKind, type CounterMusic } from '../classic/shop.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
 import { applyMenuViewShift } from './viewshift.ts';
-import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
+import { characterOptionsEnv, readOptionFlags, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, CONFIG_OFFSET, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { CONFIG_SIZE } from '../classic/customize.ts';
 import { drawHotbar, HOTBAR_POS, hotbarY } from '../classic/hotbar.ts';
@@ -567,6 +568,36 @@ export class FieldHud {
   }
 
   // unitxt string without the language markers (render/warpmenu.ts).
+  // The End key's quick menu (classic/quickmenuwindow.ts) and its start rules (classic/field.ts).
+  // The weapon and technique rows and their actions are the field's own (the Equip and
+  // Technique leaves' env). IsPlayerActionAllowed is ASSUMED true here.
+  fieldQuickEnv(skin: WindowSkin): FieldQuickEnv {
+    const tech = {
+      text: (g: number, i: number) => this.text(g, i),
+      level: (t: number) => this.opts.character()?.techLevels[t] ?? null,
+      canCast: () => !isSafeMap(this.opts.area()),
+      cast: (t: number) => this.opts.cast?.(t) ?? false,
+    };
+    return {
+      skin,
+      menu: {
+        text: (g, i) => this.text(g, i),
+        character: () => this.opts.character(),
+        itemName: (it) => itemRowName(it.data, this.names()),
+        tech,
+        equip: {
+          equip: (id, slot) => this.opts.items.equip(id, slot),
+          unequip: (id) => this.opts.items.unequip(id),
+        },
+        allowed: () => true,
+      },
+      mode: () => ((readOptionFlags(this.opts.fullCharacter()) ?? 0) & 0x30000) >>> 16,
+      // Battle mode: a battle team is set while the battle runs (quest/battlerun.ts).
+      battle: () => this.battleTeam !== null,
+      android: () => ANDROID_CLASSES.has(this.opts.character()?.charClass ?? 0),
+    };
+  }
+
   private text(group: number, index: number): string {
     return (this.groups?.[group]?.[index] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, '');
   }

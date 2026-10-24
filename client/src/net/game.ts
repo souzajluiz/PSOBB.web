@@ -620,7 +620,7 @@ export class Game extends Lobby {
     void rest();
   }
 
-  // Sends one symbol chat to the room (6x07, symbolchat.ts). The End-key picker is
+  // Sends one symbol chat to the room (6x07, symbolchat.ts). The symbol picker is
   // classic/symbolchatlist.ts; the sender's own balloon is the screen's.
   sendSymbolChat(chat: SymbolChat): void {
     this.sendSubcommand(SYMBOL_CHAT_SUBCOMMAND, symbolChatSubcommandPayload(this.selfId, chat));
