@@ -15008,3 +15008,25 @@ Scope: the main menu's Customize row (menu id 0, "Customizes the Action Menu.") 
 4. The cooldown's real guard (the quick menu panel `+0x38`), and the quick menu for End (stand-in picker, as before).
 5. The Log Window's list animation (the +0x50 state) and the Up / Down progress keys (g_KeyboardSharedState 8 / 9, +-6).
 6. The field's Log Window leaf (menu 0x15 in the field menu) if the exe opens it there.
+
+## 2026-10-23: Grants and Megid: the map ray
+
+**What changed.** The Megid orb now stops at the map: the flight's ray from the old point to the new one (`combat/techlightning.ts` `MegidFlight.tick(candidates, wall)`, `MEGID_WALL_MASK` 0x100) moves it to the hit point and ends it. Before, the port flew through walls. The same ray serves the player's orb (`render/techlightning.ts` `TechWorld.wall`, `render/combat.ts` `techWall`) and the enemies' Megid (`MegidOrb`, a new last argument), through the game view's `wallHit` option (`render/gameview.ts`, `CollisionWorld.segmentHit` with the mask, returning the hit point). Grants needed no change: the constructor, stats, tracker, sounds and the 31st-update hit were re-traced and match the port (`GrantsTimeline`).
+
+**Exe evidence** (named dump `refsrc/.../Psobb.exe-05112026.c`, values read with `tools/exedata.py read`):
+- `update_megid` (line 648165): the emitter loop (copies the object's point to each particle; flag 4 would offset it by (0, 0, -5) turned by the yaw, and no tier sets flag 4), then `TechniqueEntity_UpdatePosition_006f0474`, `TechniqueEntity_CheckDuration_006f053c`, `TechniqueEntity_UpdateTargeting_006f0798`, in that order: the ray runs first, the hit test after it, on the same update.
+- `UpdateTechniqueEntityPositionWithRaycast_006f04c0` (line 652470): `cast_ray_at_map_collision_geometry(old, new, 0x100)`. On a hit the position becomes the ground info's object point, vtable +0x10 is called and the ended flag (+8 bit 0) is set. `old` is +0x78..+0x80, saved by the position update.
+- `cast_ray_at_map_collision_geometry` (line 756928) and `line_segment_intersects_triangle` (line 757050): with `unk_enum` 0 the nearest front face on the segment writes its intersection point into `g_CurrentGroundObject` (x/y/z), so the hit point is that point.
+- The tier emitter table at 0x0096da78 (pointer and count pairs; 0xc-byte entries {id, flags, param}): tier 0 `1c5 1c8` flags 0; tiers 1-2 the same with flag 0x40 and scales 1.4 / 1.8; tiers 3-4 add `1c4` (flag 2) and scales 2.2 / 2.6; tier 5 adds `1c7` and `1cf` (flags 0x1002), scale 3. No entry has flag 0x20 (no model).
+- `UpdateTargeting` (line 652631): the candidate is the first entry of `UpdateAoECollision_006ea7c4` (up to 15, EntityArray order; the function always returns its list), `is_npc_targetable` gates the hit, and `MegidEntity_ProcessHit_006ea310` skips a player already in its list of 32. The port's rule (first overlapping entity, struck list) matches.
+- Megid's sounds (`PlayMegidSoundEffects_006e9d24`, line 647956): SE 0x92 by tier: 0 +0x100, 1 none, 2-3 -0x180, 4 -0x250 (as `TECH_PITCH`).
+- Grants (`UpdateTechniqueTargetingEntity_006e6efc`, line 645959): the tracker is made only when the target is valid and the counter is 0, at the target's position (fixed), with flag 0x10 emitters, SE 0x93 with the tier's pitch (0x100 / none / -0x180 / -0x180 / -0x250 / -0x100), and the hit goes through `UpdateCastGrantEffectEffect_006e6ec0` on the 31st update.
+
+**ASSUMED:**
+- The orb's end callback (vtable +0x10 on a wall hit) is not decoded; the port only ends the flight (no visible effect is known for it).
+- The enemy orb (`MegidOrb`) takes the same ray: its caster is the same TechniqueEntity; no separate enemy path was read.
+- The map ray uses the port's `segmentHit` (face-flag mask, nearest front face), the same rule as the gun's `0x8100` wall test.
+
+**Checks:** `node tests/techlightning.test.ts` (new: the ray runs from the old to the new point; a wall at z 8 ends the orb at its hit point; the entity at the hit point is hit on the wall update; an enemy orb stops at the wall), `techfire`, `techniques`, `hitfx`, `gunbullet`, `enemyfsmruins` pass; `cd client && npx tsc --noEmit -p .` exit 0. `tests/combat.test.ts` needs `vendor/newserv/build/newserv` (not built in this worktree, not run). Not run in Chrome.
+
+**Left:** Megid's tier 3-5 two-point emitters (`0x1c4` flag 2, `0x1cf` flag 0x1002): `create_particle_effect2` takes a second vector, the object's angles (`+0x54` / `+0x5c`, from `Vector3f_GetAnglesZ` of the direction), which the particle engine has no orientation for (the same gap as Foie's flag 2 entries); the cast light on the caster (`CAST_LIGHT`, not drawn); the Galgryphon's and Jungle Tank trap's bolts.
