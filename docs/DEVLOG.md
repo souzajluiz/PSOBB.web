@@ -16215,3 +16215,52 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - The safe-map table (`unknown_safe_maps`) and the battle arena's map id, so the sonar gate reads the real map.
 - The skip flag `0x800` on the other players, and the directional sound's position.
 - The Chrome check of the sonar ping and the rows.
+
+## 2026-10-23: Battle item list window in the Item Pack; the quick menu's row 4 is the sonar
+
+**What changed:** `classic/itempack.ts` (the Item Pack's rows: the five status rows with a count above 0 after the items, the meseta row greyed in every mode; a status row's one-row menu on GUI entry 4 with title 0x39, which shares the Purpose window's place; `ChallengeListEnv` in `ItemPackEnv`), `quest/battleitems.ts` (`isBattleArena`, the battle arena map ids 16 / 17), `quest/battlerun.ts` (`useSonar` takes the gate from the floor's area; `battleItemsHook` fills `view.hud.battleItems` while the battle runs, cleared on dispose), `render/fieldhud.ts` (`BattleItemsHook`, the Item Pack's `challenge` env, the quick menu's row 4 = `stock` the sonar count, `managerExists` the sonar's life, `useSonar`; the `placeTrap` option and `battleStockType` are gone), `render/gameview.ts` (the `placeTrap` wire removed), `classic/quickmenu.ts` (`trapDecide` row 4 returns kind `sonar`), `classic/quickmenuwindow.ts` and `classic/lobby.ts` (the env's `useSonar`). Tests: `tests/battle.test.ts` (arena gate, sonar stock), `tests/fieldhud.test.ts` (the Item Pack's battle rows, the one-row menu, the greyed menu), `tests/quickmenu.test.ts` (row 4 is the sonar, not a palette packet). The ROADMAP battle line is updated.
+
+**Premise corrections (exe):**
+- The brief put the one-row menu on GUI entry 5. The exe builds it with `get_gui_position(4)` (`ChallengePlayer_CreateSelectionListWindow_00751284`, dump 723636, the title is unitxt group 11 string 0x39). Entry 5 (0x00971f68 = (324, 318)) is the Amount / Sort window. The "5" the brief had in mind is the menu value of the sonar row (`AddMenuItemList`: value 5 when the status index is 4).
+- Quick menu row 4 is the sonar stock, and its decide is the sonar's creation (state 0x11), not a trap placement. The port's row 4 placed a trap through `placeTrap` until this pass.
+
+**Exe evidence:**
+- Item Pack: `handle_player_menu_select` case 0xb (dump 700197..700204) -> `GuildCardSearchWindow_Constructor_0075086c` (misnamed, vtable 0x00b422c0) -> the state machine `ChallengePlayer_StateMachine_00750954` (dump 723211). The port's `ItemPackMenu` is this window.
+- `ChallengePlayer_CreateItemList_00751ae0` (dump 724311): the inventory in slot order, then `ChallengePlayerListWindowUpdateStatusItem_00737ec4(param_1, i, -16 + i, 0)` for i = 0..4, then the meseta row with value -255 when `battleparams_stats->meseta_unused_for_monsters` > 0, then `ListWindowObject_UpdateVisibility`.
+- `ChallengePlayerListWindowUpdateStatusItem_00737ec4` (dump 704479): i < 4 -> `SinowberillChallengePlayer_GetStatusOrAction(+0x89c, i)` (signed byte), i = 4 -> `ClampValue(+0x8a0)`; a count above 0 adds the row with label unitxt 0x11, 0x13 + i.
+- Greying: `ChallengePlayer_SetMenuItemsDisabled_00751c80` (dump 724449) sets the status rows (value & 0xfffffff0 == 0xfffffff0) to 0xffaaaaaa / 0xff909090 / 0xff909090 and flag 0x80; `ChallengePlayer_SetMenuItemsEnabled_00751bd4` (dump 724376, despite its name) sets the -255 row to 0xffaaaaaa and 0xff909090 with flag 0x80. Both run from the list's refresh (states 0, 8, 10 and the window's first refresh, dump 721470).
+- The item selected in the list (state 3): `ChallengePlayer_CreateSelectionListWindow_00751284` (dump 723636): value 0xffffff01 -> the random (meseta) list; `value & 0xfffffff0 == 0xfffffff0` -> `ChallengePlayer_AddMenuItemList_007518b0` (dump 724163): value 5 when `(value & 0xf) == 4`, else 4; label unitxt 0x11, 0x0f; flags 0x26 (selectable) when `is_current_map_safe() != 0` and not `current_map_is_boss_map()`, else 6. State 3 does not call `ListWindowObject_AdjustSelectedLinePosition` (the item menu's state 0xc does), so the item list keeps its height behind the one-row menu.
+- State 4 -> `ChallengePlayer_ProcessListSelection_0075158c` (dump 723874): 4 -> state 0xf / 0x10 (`SinowberillChallengePlayer_HandleSpecialPaletteInput_006959c0` with `& 0xf`, which is the trap type = the status index), 5 -> state 0x11 / 0x12 (`CreateSinowberillChallengeEntityManager_006b08b8` must return 1, then `DecrementCounterAndClamp_00697968(+0x8a0, 1)`). Both back to state 1 (the list). The key is `g_KeyboardSharedState[0xd]`, the sound 0x585.
+- GUI table (0x00971f40, 8-byte entries, `tools/exedata.py read`): entry 2 (0x00971f50) = (324, 256), entry 3 (0x00971f58) = (13, 256), entry 4 (0x00971f60) = (324, 256), entry 5 (0x00971f68) = (324, 318).
+- Map ids: the dump's map enum (dump 68680..68690): battle_spaceship = 16, battle_ruins = 17, lobby = 15. The port's areas are these ids (`AREA_NAMES`), and an Episode 1 floor is its own area (`floorToArea`, identity below 0x12), so the battle floors 0x10 / 0x11 that `ba_initial_floor` starts on are areas 16 / 17.
+
+**Ported:**
+- The Item Pack's rows (`itemRows` with the status rows between the items and the meseta), `challengeStatusRows` (labels 0x11 / 0x13 + i, counts from `TrapCounters` for 0..3 and the sonar stock for 4).
+- A status row opens `ItemPackMenu` state `challenge`: one row (`challengeMenuItems`), the Purpose window's place (GUI 4), title 0x39, the item list not collapsed. Enter runs `BattleRun.activateStatusRow(index, value)` (trap palette or sonar), then the list returns rebuilt. A greyed row (the map is a hub or a boss map) does nothing. Backspace returns to the list.
+- The quick menu's row 4: `useSonar` -> `BattleRun.useSonar` (the gate is `isBattleArena(view.current.area)`), the row's stock is the sonar count, the manager state is `SonarStock.active`.
+
+### ASSUMED
+
+- The count text of a status row is "×n" (the exe's `UIElement_SetItemDisplay_0072ca10` is not traced).
+- The colour fields: the port maps `+0x2c` to the name colour, `+0x34` to the count colour, `+0x30` to the icon colour, from the two greying functions' writes; which field draws which is not traced.
+- The meseta row is greyed in the Item Pack of every mode (the exe's `SetMenuItemsEnabled` runs in every mode). The port drew it white before this entry.
+- A greyed status row stays selectable (the exe's state 3 tests the list's select bit, not flag 0x80); only its colour is taken from flag 0x80.
+- A refused one-row action returns to the list with a buzzer; the exe keeps the palette state until it can run.
+- The trap status index is the port's `TrapCounters` type (the palette's type); the exe's `+0x89c` is taken as the same index.
+- The arena's area is the floor's area id; a quest's map designation for floor 0x10 / 0x11 is not checked.
+- The quick menu's rows 0..3 still read zero statuses (their decide sends 6x60 0x83 through `challengeTrap`); not changed here.
+- The Item Pack's status rows and the one-row menu use the port's `placeTrap` (a local placement) as the palette does; the exe's palette packet path is the one the quick menu's rows 0..3 use.
+
+### Checks
+
+- `node tests/battle.test.ts`, `node tests/fieldhud.test.ts`, `node tests/quickmenu.test.ts`, `node tests/battletraps.test.ts`: ALL PASS (the new cases included).
+- Every other `tests/*.test.ts` passes with `vendor/` present (eight need `vendor/newserv`, which this worktree does not have; the link was made for the run and removed before the commit).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .` with Node 24: clean (client/node_modules linked from the main checkout for the run, removed before the commit).
+- No Playwright, no Chrome.
+
+### Left
+
+- The Chrome check of the Item Pack's battle rows, the one-row menu and the quick menu's row 4 (the sonar ping and the stock labels).
+- The quick menu's trap rows 0..3: their statuses (+0x89c) are zero in the quick menu, so the statuses of the item list and of the quick menu can disagree; wire both to the trap stock once the palette packet path is settled.
+- The status row's count text and colour mapping (`UIElement_SetItemDisplay_0072ca10`, the item struct's fields).
+- `ValidateMenuItemCondition_00732620` (the inventory row's opening gate) is still not traced.

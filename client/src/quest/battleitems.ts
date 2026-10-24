@@ -143,3 +143,13 @@ export function battleRowAction(statusIndex: number, menuValue: number): BattleR
   if (a === 'sonar') return { kind: 'sonar' };
   return null;
 }
+
+// The battle arena maps the sonar may be used on (CreateSinowberillChallengeEntityManager_006b08b8,
+// dump 602277: map 16 battle_spaceship or 17 battle_ruins; the map enum at dump 68689). The port's
+// area ids are the exe's map ids (AREA_NAMES in render/gameview.ts), and an Episode 1 floor is its
+// own area (net/game.ts floorToArea), so the battle floors 0x10 / 0x11 that ba_initial_floor
+// starts on are areas 16 / 17. ASSUMED: a quest's map designation does not move a battle floor.
+export const BATTLE_ARENA_MAPS = [0x10, 0x11] as const;
+export function isBattleArena(area: number): boolean {
+  return (BATTLE_ARENA_MAPS as readonly number[]).includes(area);
+}

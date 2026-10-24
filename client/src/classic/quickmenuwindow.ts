@@ -13,9 +13,11 @@
 //     plays SE 0x585. The per-frame tool slot action (UpdateQuickMenuToolTechSlotState_00741c08,
 //     dump 712261) is not ported.
 //   - Traps (cases 6..8, dump 711817): Enter on rows 0..3 sends the 6x60 subcommand 0x83
-//     (SinowberillChallengePlayer_HandleSpecialPaletteInput, dump 576703); row 4 places a Battle
-//     Mode trap from the stock (CreateSinowberillChallengeEntityManager_006b08b8, dump 602277) and
-//     takes one from the stock. The row values and the decide are quickmenu.ts trapDecide.
+//     (SinowberillChallengePlayer_HandleSpecialPaletteInput, dump 576703); row 4 is the SONAR
+//     stock (+0x8a0, not a trap stock): its decide creates the sonar manager
+//     (CreateSinowberillChallengeEntityManager_006b08b8, dump 602277) and takes one from the
+//     stock (DecrementCounterAndClamp, state 0x11). The row values and the decide are quickmenu.ts
+//     trapDecide; the manager is quest/battle.ts SonarStock through BattleRun.useSonar.
 //   - Weapon compare (case 1, dump 711680): key 0xe toggles the gui 2 compare list (opened by
 //     CreateEquipListWindowObject_00725d18). Its stat rows are not ported (names only).
 //   - Technique swap (case 0xa, dump 711875): key 0xe marks the selected row, the next press swaps
@@ -72,18 +74,19 @@ export interface QuickTrapEnv {
   // Rows 0..3: the challenge status counts (+0x89c). ASSUMED zeros in the port: it has no
   // Sinowberill challenge player state.
   statuses: () => readonly number[];
-  // Row 4: the Battle Mode trap stock.
+  // Row 4: the Battle Mode sonar stock (+0x8a0, quest/battle.ts SonarStock). Not a trap stock.
   stock: () => number;
   // The row is enabled when the map is safe (is_current_map_safe) and not a boss map. The field
   // passes !isSafeMap (the hub list, classic/fieldmenu.ts) and not a boss area.
   safeNotBoss: () => boolean;
   // The area, for the battle map gate of row 4 (battle_spaceship 16, battle_ruins 17).
   map: () => number;
-  // The Sinowberill entity manager exists (one at a time). ASSUMED false: the port's trap field
-  // holds several traps, so the exe's single manager is not mapped.
+  // The Sinowberill entity manager exists (one at a time): the sonar manager is alive
+  // (quest/battle.ts SonarStock.active).
   managerExists: () => boolean;
-  // Row 4 decide: places a trap from the stock through render/combat.ts placeTrap. False when refused.
-  placeStock: () => boolean;
+  // Row 4 decide: uses the sonar (quest/battlerun.ts useSonar, which checks the battle arena map).
+  // False when refused.
+  useSonar: () => boolean;
   // Rows 0..3 decide: the 6x60 subcommand 0x83 for (row, count).
   sendStatus: (row: number, count: number) => void;
 }
@@ -326,8 +329,8 @@ export class QuickMenu {
     });
     if (d.kind === 'palette' && d.packet) {
       t.sendStatus(d.packet.row, d.packet.count);
-    } else if (d.kind === 'trap') {
-      if (!t.placeStock()) {
+    } else if (d.kind === 'sonar') {
+      if (!t.useSonar()) {
         se(SE.cancel);
         return;
       }

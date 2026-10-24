@@ -35,7 +35,8 @@ import { FieldMenu, isSafeMap, paletteWindowsShown, type FieldMenuTextures } fro
 import { ROW as HELP_ROW } from '../classic/fieldwindows.ts';
 import { type HomeLeafServices } from '../classic/homeleaves.ts';
 import { isInTeam } from '../classic/teammenu.ts';
-import { equipProblems, itemRowName, itemRows, undroppable, type RowContext } from '../classic/itempack.ts';
+import { equipProblems, itemRowName, itemRows, undroppable, type ChallengeListEnv, type RowContext } from '../classic/itempack.ts';
+import { menuRowSelectable } from '../quest/battleitems.ts';
 import type { FieldQuickEnv } from '../classic/field.ts';
 import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
@@ -96,6 +97,17 @@ export interface RaderCol {
 // newserv class_flags_for_class: bit 0x10 = android.
 const ANDROID_CLASSES = new Set([2, 4, 5, 9]);
 
+// The Battle Mode hooks the field's windows read (quest/battlerun.ts fills them while a battle
+// runs): the trap stock by type, the sonar stock and manager, and the one-row menus' actions.
+export interface BattleItemsHook {
+  traps: () => readonly number[];
+  sonar: () => number;
+  sonarActive: () => boolean;
+  useSonar: () => boolean;
+  // A status row's one-row menu (menu value 4 trap, 5 sonar): false when the action did not run.
+  activate: (statusIndex: number, menuValue: number) => boolean;
+}
+
 export interface FieldHudOptions {
   character: () => CharacterFile | null;
   fullCharacter: () => Uint8Array | null;
@@ -117,9 +129,6 @@ export interface FieldHudOptions {
   // Starts a technique cast from the Technique menu (render/combat.ts
   // castTechnique); false when it cannot be cast.
   cast?: (tech: number) => boolean;
-  // Places a Battle Mode trap of `type` from the stock (render/combat.ts placeTrap, the quick
-  // menu's trap row 4); false when refused.
-  placeTrap?: (type: number) => boolean;
   // The challenge palette's 6x60 subcommand 0x83 for a quick menu status row (rows 0..3).
   challengeTrap?: (row: number, count: number) => void;
   // Whether a telepipe can be opened here (render/telepipe.ts): the Telepipe
@@ -189,6 +198,8 @@ export class FieldHud {
   private paletteHud = new PaletteHud();
   // Battle Mode trap stock by type 0..3 (set by quest/battlerun.ts while a battle runs).
   trapCount: ((type: number) => number) | null = null;
+  // Battle Mode sonar and item list hooks (set by quest/battlerun.ts while a battle runs; null: none).
+  battleItems: BattleItemsHook | null = null;
   // Battle Mode team of a client slot (set by quest/battlerun.ts while a battle runs; null: none).
   battleTeam: ((clientId: number) => number | null) | null = null;
   readonly menu: FieldMenu;
@@ -261,6 +272,7 @@ export class FieldHud {
       itemPack: {
         character: () => this.opts.character(),
         rowContext: () => this.rowContext(),
+        challenge: () => this.challengeListEnv(),
         purposeContext: () => ({
           lobby: this.opts.area() === 0x0f,
           canUse: (it) => this.opts.items.canUse(it, this.rules()),
@@ -611,22 +623,19 @@ export class FieldHud {
         tools: { use: (id) => this.opts.items.use(id, this.rules()) },
         isRare: (it) => this.names()?.isRare(it.data) ?? false,
         traps: {
-          // ASSUMED zeros: the port has no Sinowberill challenge player (+0x89c).
+          // ASSUMED zeros: the quick menu's trap rows 0..3 are not wired to the trap stock here
+          // (their decide sends 6x60 0x83, challengeTrap); the item list's status rows use the stock.
           statuses: () => [0, 0, 0, 0],
-          stock: () => {
-            const t = this.battleStockType();
-            return t === null ? 0 : (this.trapCount?.(t) ?? 0);
-          },
+          // Row 4 is the sonar stock (+0x8a0), not a trap stock (classic/quickmenu.ts trapRows).
+          stock: () => this.battleItems?.sonar() ?? 0,
           // is_current_map_safe is the inverse of the hub list here (see paletteWindowsShown),
           // so a trap row is enabled off the hub and off a boss area.
           safeNotBoss: () => !isSafeMap(this.opts.area()) && !BOSS_AREAS.includes(this.opts.area()),
           map: () => this.opts.area(),
-          // ASSUMED false: the exe's entity manager is one at a time; the port's trap field is not mapped to it.
-          managerExists: () => false,
-          placeStock: () => {
-            const t = this.battleStockType();
-            return t !== null && (this.opts.placeTrap?.(t) ?? false);
-          },
+          // The sonar manager is one at a time (quest/battle.ts SonarStock.active).
+          managerExists: () => this.battleItems?.sonarActive() ?? false,
+          // Row 4 decide: the sonar use (quest/battlerun.ts useSonar; the battle arena gate is there).
+          useSonar: () => this.battleItems?.useSonar() ?? false,
           sendStatus: (row, count) => this.opts.challengeTrap?.(row, count),
         },
         techOrder: {
@@ -643,11 +652,20 @@ export class FieldHud {
     };
   }
 
-  // The Battle Mode trap type the quick menu's stock row uses: the first type with a stock
-  // (ASSUMED: the exe's row 4 has one stock, the port keeps four by type).
-  private battleStockType(): number | null {
-    for (let t = 0; t < 4; t++) if ((this.trapCount?.(t) ?? 0) > 0) return t;
-    return null;
+  // The Item Pack's Battle Mode rows (classic/itempack.ts ChallengeListEnv); null outside a battle.
+  // The one-row menu's selectable flag is AddMenuItemList's: not a hub map and not a boss map.
+  private challengeListEnv(): ChallengeListEnv | null {
+    const b = this.battleItems;
+    if (!b) return null;
+    return {
+      traps: () => b.traps(),
+      sonar: () => b.sonar(),
+      selectable: () => {
+        const a = this.opts.area();
+        return menuRowSelectable(!isSafeMap(a), BOSS_AREAS.includes(a));
+      },
+      activate: (statusIndex, menuValue) => b.activate(statusIndex, menuValue),
+    };
   }
 
   private text(group: number, index: number): string {
