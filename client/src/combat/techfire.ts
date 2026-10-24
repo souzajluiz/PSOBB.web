@@ -134,6 +134,8 @@ export interface TechTarget {
   x: number;
   z: number;
   radius: number;
+  /** The target's aim height (the point a Rafoie list-form blast copies each tick, rafoie_aoe_tick). */
+  y?: number;
 }
 
 // GetCollisionDataForEntity_007b65b4's cut-off: the centres must be within
@@ -558,6 +560,9 @@ export class RafoieBlast extends FireObject {
       }
       this.bx = this.x = t.x;
       this.bz = this.z = t.z;
+      // rafoie_aoe_tick copies the target's point (x, y, z) into the blast every tick (dump 650685):
+      // the list form's y follows the target too, so the burst is at the target's y that tick.
+      if (t.y !== undefined) this.y = t.y;
     }
     if (++this.count !== RAFOIE_DELAY) return;
     this.burst = true;
@@ -583,6 +588,15 @@ const SPHERE_LERP_NEAR = f32(0.15); // 0x3e19999a: while scale < g_BazookaExplos
 const SPHERE_LERP_FAR = f32(0.05); // 0x3d4ccccd: otherwise
 const SPHERE_LERP_THRESHOLD = -1; // 0x0096dcd0 (g_BazookaExplosionLerpThreshold, read from the exe)
 const SPHERE_FADE = f32(0.035); // 0x3d0f5c29: LerpFloat step of +0x48
+
+/**
+ * The sphere's turn about Y: matrix_rotation_y(g_pDefaultNPCCameraState->y_rotation) in its draw
+ * (render_bazooka_explosion, dump 651052), the camera's yaw as a BAMS angle (0x10000 = a turn).
+ * ASSUMED: the port's camera yaw (render/gameview.ts cameraYaw, the HUD's) is the same quantity.
+ */
+export function sphereTurnRad(cameraYawBams: number): number {
+  return (cameraYawBams * Math.PI * 2) / 0x10000;
+}
 
 /**
  * The fire sphere a Rafoie blast makes on its 10th update (rafoie_aoe_tick, dump 650685, the child

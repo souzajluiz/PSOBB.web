@@ -191,6 +191,10 @@ export class GameView {
     // Combat lives in render/combat.ts; the view only hands it the floor.
     this.combat = new CombatView(viewer, game, this.files, this.enemyLayer, {
       log,
+      cameraYaw: () => {
+        const v = this.view?.cameraView();
+        return v ? radToBams(Math.atan2(v.source.x - v.target.x, v.source.z - v.target.z)) : 0;
+      },
       floorFilesFor: (f) => this.floorFilesFor(f),
       ground: (x, z, fromY) => (this.collision ? this.collision.groundHeight(x, z, fromY) : viewer.groundHeight(x, z, fromY)),
       // cast_ray_at_map_collision_geometry(from, to, 0x8100) for a gun's bullet (combat/gunbullet.ts).

@@ -17,7 +17,7 @@
 // Run: node tests/particleorient.test.ts
 
 import { NT_FLAGS, ParticleSystem, NO_ORIENT, modelParticleBlend, orientOfDirection, parseParticleEntry, particleIsNt, turnStep, type Orient } from '../client/src/classic/particles.ts';
-import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, RafoieSphere, emitterFx, objectEmitterOrient, rafoieBlastEmitters, startEmitters, type FireKind, type FireObject, type FxEmitter } from '../client/src/combat/techfire.ts';
+import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, RafoieBlast, RafoieSphere, emitterFx, objectEmitterOrient, rafoieBlastEmitters, sphereTurnRad, startEmitters, type FireKind, type FireObject, type FxEmitter, type TechTarget } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
 import { advancedEffectsOn, setAdvancedEffects } from '../client/src/render/advancedeffects.ts';
 
@@ -311,6 +311,25 @@ check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie
   for (let i = 110; i < 5000; i++) long.step();
   check('sphere: the scale settles near 1.9 (the rate 0.05 stops the lerp at a length of 0.05)', Math.abs(long.scale - 1.9) < 0.03 && long.scale <= 1.9 + 1e-6);
   check('sphere: the 0..15 counter wraps', long.ring === 5000 % 16);
+  // The list form's blast follows the target's y as well as x and z (rafoie_aoe_tick copies the
+  // target's point into the blast each tick, dump 650685): the burst is at the target's y that tick.
+  const lf = new RafoieBlast({ level: 0, x: 0, y: 0, z: 0, heading: 0 }, 7);
+  const tgt = (y: number) => ({ id: 7, x: 3, z: 4, radius: 1, y });
+  const hitsL: TechTarget[] = [];
+  lf.step([tgt(40)], 1, hitsL);
+  check('rafoie list: the blast takes the target\'s x, y and z each tick', lf.x === 3 && lf.y === 40 && lf.z === 4);
+  lf.step([tgt(55)], 1, hitsL);
+  check('rafoie list: the y follows the target on the next tick', lf.y === 55 && lf.bx === 3 && lf.bz === 4);
+  const noY = new RafoieBlast({ level: 0, x: 0, y: 9, z: 0, heading: 0 }, 7);
+  noY.step([{ id: 7, x: 1, z: 1, radius: 1 }], 1, hitsL);
+  check('rafoie list: a target without a y keeps the blast\'s y', noY.y === 9 && noY.x === 1);
+  const fixedY = new RafoieBlast({ level: 0, x: 10, y: 6, z: 10, heading: 0, enemy: true }, null);
+  fixedY.step([tgt(99)], 1, hitsL);
+  check('rafoie fixed: the point does not follow the target', fixedY.y === 6 && fixedY.x === 10);
+  // The sphere's turn is the camera's yaw as BAMS: a quarter turn is 0x4000 = pi / 2.
+  near(sphereTurnRad(0x4000), Math.PI / 2, 'sphere turn: 0x4000 is a quarter turn');
+  near(sphereTurnRad(0), 0, 'sphere turn: 0 is no turn');
+  near(sphereTurnRad(0x10000), Math.PI * 2, 'sphere turn: 0x10000 is a full turn');
 }
 
 if (failures) {
