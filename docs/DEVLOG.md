@@ -1,5 +1,25 @@
 # Devlog
 
+## 2026-10-24: De Rol Le beam cast point: writer not found in the exe, no port
+
+**Question:** which code writes the beam's cast point (`player+0x4f0`) and velocity (`+0x4fc`, `+0x500`, `+0x504`) for De Rol Le before the state 0x6e8 == 2 emitter (0x177) reads them?
+
+**Exe facts (verified in the dump and the asm):**
+- The per-frame emitter formula in `DerollePlayerSpecialAttackState` reads `+0x4f0..+0x504` only. The same pair is read again in `DerolleUpdateTargetPosition` (dump line ~173294): `+0x6c4 = +0x4f0 + +0x4fc * _s_ModelBeamrWing_NJ`, `+0x6c8 = +0x4f4 + +0x500 * _s_ModelBeamrWing_NJ`, `+0x6cc = +0x4f8 + +0x504 * _s_ModelBeamrWing_NJ`. So the cast point plus velocity is the exe's target-position model, not a bone.
+- The only De Rol writer in the De Rol range is `DerolleObjectConstructor_0042ad4c` (asm 0x42b178..0x42b1aa): it zeroes `+0x4f0..+0x504` at construction (and `+0x41c..+0x51c`). It never stores a non-zero cast point.
+- Nothing in 0x00420000..0x0043ffff stores to `+0x4f0..+0x504` except that zeroing (checked for `mov`, `fstp`, `movq`/`movss`/`movups` forms). The 0x429d1e store is Sinowbeat's constructor (vtable 0xaf42a8), not De Rol's.
+- `DerolleSetTargetPosition` (170234) writes `+0x38..+0x40` and `+0x6ac`, not the cast point. `DerolleAction` (174932) is the ceiling-rock path and computes from a model node; it is not the beam.
+- **Correction to the previous entry's lead:** the block at 0x004a6b4f is inside `galgryphon_constructor` (`CreateGalgryphonObject_004a6744`, dump line ~225742). It copies that object's own `+0x38..+0x40` into its own `+0x3c8..+0x564` and `+0x4f0..+0x504` (Galgryphon's 0x784-byte object). It is Galgryphon-only, not generic, and it does not apply to De Rol.
+- Other stores to `+0x4f0` outside the De Rol range (0x4492cf, 0x492f29, 0x4982xx, 0x49e1xx, 0x5587xx..0x559fxx, 0x59bxxx) use integer or constant values that look like other entities' state. I did not map their owners (the `refsrc.sh addr` lookup needs an exact function start), so they are unverified for De Rol.
+
+**Writer:** unknown. The exe's constructor zeroes the cast point, so a non-zero value must come from a write I could not place (a pointer-passed setter, the network/action handler `HandleDerolleAction_0042e824`, or one of the unmapped sites above). Until one is traced, the cast point is not in the port.
+
+**Port:** none. No code changed. `node tests/derolle.test.ts` ALL PASS (unchanged).
+
+**ASSUMED (unchanged):** the muzzle estimate `[x, drawY + 10, z + 30]` in `combat/derolle.ts` tickBeam, and no emitter drift in the port.
+
+**Open:** trace the non-zero writer of `+0x4f0..+0x504` on the De Rol object (candidates: `HandleDerolleAction_0042e824`, the unmapped sites above). Once found, port the cast point plus the `dt * g_DerolleSpecialAttackHitRate` drift.
+
 ## 2026-10-24: De Rol Le beam muzzle: the exe's emitter is the cast point plus its velocity, no model node
 
 **Question:** the port puts the beam emitter at the brain estimate `[x, drawY + 10, z + 30]` (ASSUMED). Which model node or bone does the exe copy into the emitter's position each frame?
