@@ -113,6 +113,9 @@ export class MainMenu {
   open = false;
   // Optional ValidateMenuItemCondition_00732620 rules (the field sets them).
   validate: MenuValidate | null = null;
+  // Text for a greyed row chosen with Decide (the lobby's Customize: unitxt group 11 index 1), shown
+  // in the help window instead of the row's help. Null: only the buzzer.
+  disabledNotice: ((id: number) => string | null) | null = null;
   // Cursor Position option (classic/options.ts cursorSaved): true = "Saved".
   cursorSaved: () => boolean = () => true;
   private kept: KeptCursor[] = [];
@@ -220,6 +223,8 @@ export class MainMenu {
       const it = lv.entries[lv.cursor];
       if (!it.enabled) {
         se(SE.buzzer);
+        const notice = this.disabledNotice?.(it.id);
+        if (notice) this.help.set(notice);
         return;
       }
       se(SE.ok);
