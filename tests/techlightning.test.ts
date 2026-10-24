@@ -254,6 +254,33 @@ eq([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0], [1, 1, 1], [2, 1, 0], [0, 1, 1],
   eq([...Array(12).keys()].filter((c) => techBoost(c, TECH.megid) === 1), [8], 'only FOnewearl (class 8) pierces');
   const at = MegidFlight.at({ x: 0, y: 0, z: 0 }, { x: 0, y: 10, z: 10 }, 1, 100, false);
   near(at.dir.y, Math.SQRT1_2, 'a target flight is 3D');
+  // The map ray (UpdateTechniqueEntityPositionWithRaycast_006f04c0): from the old point to the new one, mask 0x100.
+  const rays: Array<[Vec3, Vec3]> = [];
+  const wall = (a: Vec3, b: Vec3): Vec3 | null => {
+    rays.push([a, b]);
+    return b.z > 7 ? { x: 0, y: 3, z: 7.5 } : null; // a wall across z 7.5
+  };
+  const w = MegidFlight.along(O, 0, 2, 100, true);
+  w.tick([], wall);
+  w.tick([], wall);
+  eq([rays[1][0].z, rays[1][1].z], [2, 4], 'the ray runs from the old point to the new one');
+  check(!w.done, 'no wall on z 4');
+  const w2 = MegidFlight.along(O, 0, 2, 100, true);
+  for (let i = 0; i < 4; i++) w2.tick([], wall);
+  eq([w2.done, w2.z, w2.y], [true, 7.5, 3], 'a wall at z 8 ends the orb at the hit point');
+  eq(w2.tick([], wall), null, 'nothing more after the wall');
+  // The hit of the same update still counts: the orb moves to the hit point, then looks for the entity there.
+  const w3 = MegidFlight.along(O, 0, 2, 100, true);
+  for (let i = 0; i < 3; i++) w3.tick([], wall);
+  eq(w3.tick([{ id: 5, x: 0, y: 3, z: 7.5, radius: 0 }], wall)?.id ?? null, 5, 'the entity at the hit point is hit on the wall update');
+  // The enemy orb takes the same ray: it stops at the wall and its hit point is the last point.
+  const ord = new MegidOrb({ x: 0, y: 0, z: 0 }, 0, 0, 100, 27, 5, 0, undefined, wall);
+  let ot = 0;
+  while (!ord.done && ot < 50) {
+    ord.tick([]);
+    ot++;
+  }
+  eq([ot, ord.z], [4, 7.5], 'an enemy orb stops at the wall too (4 updates: z 8 is past the wall)');
 }
 
 // 9. Grants (UpdateTechniqueTargetingEntity_006e6efc and its tracker 0x006e72bc).

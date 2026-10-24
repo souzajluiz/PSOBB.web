@@ -43,6 +43,7 @@ import {
   type TechFxEvent,
   type TechShot,
   type Vec3,
+  type WallHit,
 } from '../combat/techlightning.ts';
 import { TECH } from '../combat/techniques.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
@@ -481,6 +482,8 @@ export interface TechWorld {
   origin(id: number): Vec3 | null;
   /** The hit box position of a 6x47 entity (the exe's hitbox[+0x136]). */
   point(id: number): Vec3 | null;
+  /** The map ray of a technique object (cast_ray_at_map_collision_geometry, mask 0x100): the hit point or null. */
+  wall?: WallHit;
   /** entity_hit_by_tech of the local player's object on that entity. */
   hit(id: number, tech: number, level: number): void;
   rng: Rng;
@@ -661,7 +664,7 @@ export class TechObjects {
     }
     this.grants = this.grants.filter((g) => !g.timeline.done);
     for (const o of this.orbs) {
-      const hit = o.flight.tick(this.world.enemies());
+      const hit = o.flight.tick(this.world.enemies(), this.world.wall);
       o.pos.x = o.flight.x;
       o.pos.y = o.flight.y;
       o.pos.z = o.flight.z;

@@ -198,7 +198,7 @@ import { FieldParticles } from './hitfx.ts';
 import { TechFire } from './techfire.ts';
 import { bulletTextureIndex, GunTracers, loadGunBulletModels } from './guntracer.ts';
 import { TechEffects, TechObjects, ownsTechnique, type TechWorld } from './techlightning.ts';
-import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3 } from '../combat/techlightning.ts';
+import { CAST_HEIGHT, CHARGE_SE, CHARGE_SE_PADDING, GizondeStrike, GrantsStrike, MEGID_WALL_MASK, MegidOrb, PlainBolt, SE, specialStart, SPECIAL_ID, TechShot, type FxSound, type Vec3 as TechVec3, type WallHit } from '../combat/techlightning.ts';
 import { setModelOpacity } from './hitmodels.ts';
 import { DeathRun, deathPlanFor, mothmantDeathPlan, type DeathActions, type DeathPoint } from '../combat/deathfx.ts';
 import { Dissolve, ICE_DEFAULT_RADIUS, iceRadius } from '../combat/hitmodels.ts';
@@ -547,6 +547,8 @@ export interface CombatOptions {
   // The map's wall ray (cast_ray_at_map_collision_geometry, mask 0x8100 by default): true when a
   // wall stands between the two points (combat/gunbullet.ts; the slime's crawl passes 0x8000).
   wallBlocks?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask?: number) => boolean;
+  // The same ray's hit point (the Megid orb stops at it): null when nothing is hit.
+  wallHit?: (from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }, mask: number) => { x: number; y: number; z: number } | null;
   // The owner's body node's world point for a gun's bullet start (combat/weaponorigin.ts);
   // default: the local player's skeleton in the lobby view. False / absent: WEAPON_HEIGHT above the feet.
   weaponOrigin?: WeaponOriginProvider;
@@ -4128,7 +4130,7 @@ export class CombatView {
     }
     if (t.id === TECH.megid) {
       const aim = best ? { x: best.x, y: ground + 10, z: best.z } : undefined;
-      return new MegidOrb(from, b.angle, t.level, techData(TECH.megid, t.level).rangeH, power, PLAYER_RADIUS, ground, aim);
+      return new MegidOrb(from, b.angle, t.level, techData(TECH.megid, t.level).rangeH, power, PLAYER_RADIUS, ground, aim, this.techWall());
     }
     // Gizonde with nobody in front is the Gibbon's plain bolt; Grants needs its target.
     if (!best) return t.id === TECH.gizonde ? new PlainBolt(from, b.angle, b.range, () => this.rng()) : null;
@@ -7344,11 +7346,17 @@ export class CombatView {
   // What the technique objects ask of the world: the live enemies as sphere
   // targets, entities by their 6x47 id (0x1000 | enemy index, else a client id),
   // and the damage of the local player's objects (techHitEnemy).
+  // The Megid's map ray (cast_ray_at_map_collision_geometry, mask 0x100; no collision: no wall).
+  private techWall(): WallHit {
+    return (from, to) => this.opts.wallHit?.(from, to, MEGID_WALL_MASK) ?? null;
+  }
+
   private techWorld(): TechWorld {
     const live = (e: EnemyRuntime | undefined): e is EnemyRuntime => !!e && !e.dead && e.instance.root.visible && !concealed(e);
     const enemyOf = (id: number): EnemyRuntime | undefined => (id >= 0x1000 ? this.enemies.get(id - 0x1000) : undefined);
     return {
       rng: () => this.rng(),
+      wall: this.techWall(),
       enemies: () => {
         const out = [];
         for (const e of this.enemies.values()) {

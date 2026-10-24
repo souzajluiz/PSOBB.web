@@ -594,7 +594,8 @@ export class RafoieBall {
 // _006e9be8: speed (level / 5) * 2 + 2.0 a tick, range range_h. update_megid
 // (0x006ea3b0): the particle emitters of the tier follow its position, then
 // TechniqueEntity_UpdatePosition_006f0474 (pos += dir * speed; a map ray
-// from the old to the new point ends it, ground / wall: not reproduced),
+// from the old to the new point (cast_ray_at_map_collision_geometry, mask 0x100)
+// moves it to the hit point and ends it, the rest of the update still runs),
 // TechniqueEntity_CheckDuration_006f053c (ends when range < travelled, else
 // travelled += speed) and TechniqueEntity_UpdateTargeting_006f0798: a sphere of
 // radius 5 (the box +0x108) at the object against the hit boxes; only the
@@ -608,6 +609,10 @@ export class RafoieBall {
 export const MEGID_RADIUS = 5; // 0x00000108 box radius
 export const MEGID_BASE_SPEED = 2; // technique_data speed
 export const MEGID_MAX_HITS = 32;
+export const MEGID_WALL_MASK = 0x100; // UpdateTechniqueEntityPositionWithRaycast_006f04c0 (0x006f04c0)
+
+/** The map ray of a technique object: the hit point of the segment from -> to, or null. */
+export type WallHit = (from: Vec3, to: Vec3) => Vec3 | null;
 
 export interface EmitterSpec {
   id: number;
@@ -670,13 +675,26 @@ export class MegidFlight {
   }
 
   /**
-   * One update. Moves, checks the range, then looks for the first entity inside
-   * the sphere (the list order is the caller's); returns it when it is new.
+   * One update. Moves, then the map ray from the old point to the new one (a
+   * hit moves the orb to the hit point and ends it), checks the range, then looks
+   * for the first entity inside the sphere (the list order is the caller's);
+   * returns it when it is new. ASSUMED: the ray's hit point is the object's
+   * x/y/z (ground_info.object, written by line_segment_intersects_triangle).
    */
-  tick(candidates: readonly FlightTarget[]): FlightTarget | null {
+  tick(candidates: readonly FlightTarget[], wall?: WallHit): FlightTarget | null {
+    const from = { x: this.x, y: this.y, z: this.z };
     this.x += this.dir.x * this.speed;
     this.y += this.dir.y * this.speed;
     this.z += this.dir.z * this.speed;
+    if (wall) {
+      const hit = wall(from, { x: this.x, y: this.y, z: this.z });
+      if (hit) {
+        this.x = hit.x;
+        this.y = hit.y;
+        this.z = hit.z;
+        this.done = true;
+      }
+    }
     if (this.range < this.travelled) this.done = true;
     else this.travelled += this.speed;
     for (const c of candidates) {
@@ -961,10 +979,11 @@ export class MegidOrb extends TechShot {
   readonly speed: number;
   private radius: number;
   private ground: number;
+  private wall: WallHit | undefined;
 
   // `aim`: a player in front of the caster (create_megid flies at its hit box, 3D);
-  // without one it is create_megid1, along the heading.
-  constructor(from: Vec3, heading: number, level: number, range: number, power: number, playerRadius: number, ground: number, aim?: Vec3) {
+  // without one it is create_megid1, along the heading. `wall`: the map ray of its flight.
+  constructor(from: Vec3, heading: number, level: number, range: number, power: number, playerRadius: number, ground: number, aim?: Vec3, wall?: WallHit) {
     super(from.x, from.y, from.z);
     this.ground = ground;
     this.tier = effectTier(level);
@@ -972,6 +991,7 @@ export class MegidOrb extends TechShot {
     this.flight = aim ? MegidFlight.at(from, aim, this.speed, range, true) : MegidFlight.along(from, heading, this.speed, range, true);
     this.effect = { kind: 'megid', power };
     this.radius = playerRadius;
+    this.wall = wall;
     this.events.push({ t: 'se', s: techSound(SE.megid, from, this.tier) });
     this.events.push({ t: 'follow', emitters: MEGID_EMITTERS[this.tier], frames: Math.ceil(range / this.speed) + 2 });
   }
@@ -980,7 +1000,7 @@ export class MegidOrb extends TechShot {
     if (this.done) return [];
     this.frames++;
     const list: FlightTarget[] = targets.filter((t) => !t.dead).map((t) => ({ id: t.clientId, x: t.x, y: this.ground + PLAYER_POINT, z: t.z, radius: this.radius }));
-    const hit = this.flight.tick(list);
+    const hit = this.flight.tick(list, this.wall);
     this.x = this.flight.x;
     this.y = this.flight.y;
     this.z = this.flight.z;
