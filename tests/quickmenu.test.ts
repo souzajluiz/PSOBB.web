@@ -5,6 +5,17 @@
 // (0x00972ea0) and the gui positions (0x00971f40).
 // Run: node tests/quickmenu.test.ts
 import {
+  quickMenuMotionCategoryRows,
+  quickMenuMotionSubRows,
+  quickMenuStepBack,
+  quickMenuTechRows,
+  quickMenuWeaponRows,
+  QUICK_MENU_TECH_COUNT,
+} from '../client/src/classic/quickmenu.ts';
+import { QuickMenu, type QuickMenuEnv } from '../client/src/classic/quickmenuwindow.ts';
+import { KEYS } from '../client/src/input/keyconfig.ts';
+import { SLOT_WEAPON } from '../client/src/net/items.ts';
+import {
   QUICK_MENU_GUI,
   QUICK_MENU_LOBBY_CURSOR,
   QUICK_MENU_LOBBY_TAB,
@@ -69,9 +80,125 @@ check('motions: row 7 is Photon Chair (0x08, 2 entries)', QUICK_MENU_MOTION_ROWS
 
 // GUI positions: get_gui_position(n) = 0x00971f40 + 8n.
 check('gui: gui 1 (weapon / technique list) is (13, 317)', QUICK_MENU_GUI.list.x === 13 && QUICK_MENU_GUI.list.y === 317);
-check('gui: gui 2 (two-handed list) is (324, 256)', QUICK_MENU_GUI.twoHandedList.x === 324 && QUICK_MENU_GUI.twoHandedList.y === 256);
+check('gui: gui 2 (the weapon compare list) is (324, 256)', QUICK_MENU_GUI.compareList.x === 324 && QUICK_MENU_GUI.compareList.y === 256);
 check('gui: gui 0xe1 (motion list) is (13, 276)', QUICK_MENU_GUI.motionList.x === 13 && QUICK_MENU_GUI.motionList.y === 276);
 check('gui: gui 0xe2 (motion sub-list) is (13, 317)', QUICK_MENU_GUI.motionSubList.x === 13 && QUICK_MENU_GUI.motionSubList.y === 317);
+
+
+// ---- Rows and the window (quickmenu.ts row builders, quickmenuwindow.ts QuickMenu) ----
+
+// Fake inventory: a weapon equipped (id 0x100), an unequipped weapon (0x101), a wrapped weapon
+// (0x102, data1[4] & 0x40), an armor (0x103, data1[0] = 1).
+const weapon = (id: number, equipped: boolean, wrapped = false) => ({
+  equipped,
+  data: { id, data1: new Uint8Array([0, 1, 0, 0, wrapped ? 0x40 : 0]) },
+});
+const armor = { equipped: false, data: { id: 0x103, data1: new Uint8Array([1, 1, 0, 0, 0]) } };
+const INV = [weapon(0x100, true), weapon(0x101, false), weapon(0x102, false, true), armor];
+const nameOf = (it: { data: { id: number } }) => `item${it.data.id.toString(16)}`;
+
+const rowsW = quickMenuWeaponRows(INV, nameOf);
+check('weapons: the unequipped weapon, then the equipped one (wrapped and armor left out)',
+  rowsW.map((r) => r.value).join(',') === '257,256', rowsW.map((r) => r.value).join(','));
+check('weapons: the labels come from the item name', rowsW[0].label === 'item101');
+
+const TEXT = (g: number, i: number) => `t${g}.${i}`;
+const learnedOnly = (t: number) => (t === 0 || t === 18 ? 1 : null);
+const techRows = quickMenuTechRows(TEXT, learnedOnly, true);
+check('techniques: 19 rows', techRows.length === QUICK_MENU_TECH_COUNT && techRows.length === 19);
+check('techniques: an unlearned technique is disabled', techRows[1].enabled === false && techRows[0].enabled === true);
+check('techniques: label is unitxt group 5 by technique number', techRows[18].label === 't5.18');
+check('techniques: a learned technique that cannot be cast here is drawn in the red colour',
+  quickMenuTechRows(TEXT, learnedOnly, false)[0].color === '#fd3901' && quickMenuTechRows(TEXT, learnedOnly, true)[0].color === undefined);
+
+const cats = quickMenuMotionCategoryRows(TEXT);
+check('motions: 8 categories, unitxt group 0x42 indices 0..7', cats.length === 8 && cats[3].label === 't66.3' && cats[3].value === 3);
+const sub1 = quickMenuMotionSubRows(1, TEXT);
+check('motions: category 1 has 5 rows, text 15+k, values 7+k', sub1.length === 5 && sub1[0].label === 't66.15' && sub1[4].value === 11);
+check('motions: a bad category has no rows', quickMenuMotionSubRows(9, TEXT).length === 0);
+
+check('step back: 0 goes to 3 (no traps, human)', quickMenuStepBack(0, false, false) === 3);
+check('step back: 3 goes to 1 without traps', quickMenuStepBack(3, false, false) === 1);
+check('step back: 0 goes to 3 with traps', quickMenuStepBack(0, true, false) === 3);
+check('step back: an Android 0 goes to 2 (skips 3)', quickMenuStepBack(0, true, true) === 2);
+
+// The window: a fake env that records the actions.
+function fakeEnv(opts: { character?: boolean; canCast?: boolean; allowed?: boolean } = {}) {
+  const calls: string[] = [];
+  const env: QuickMenuEnv = {
+    text: TEXT,
+    character: () => (opts.character === false ? null : ({ inventory: INV } as never)),
+    itemName: nameOf,
+    tech: {
+      text: TEXT,
+      level: learnedOnly,
+      canCast: () => opts.canCast ?? true,
+      cast: (t) => {
+        calls.push(`cast ${t}`);
+        return true;
+      },
+    },
+    equip: {
+      equip: (id, slot) => calls.push(`equip ${id.toString(16)} ${slot}`),
+      unequip: (id) => calls.push(`unequip ${id.toString(16)}`),
+    },
+    allowed: () => opts.allowed ?? true,
+    emote: (slot) => calls.push(`emote ${slot}`),
+  };
+  return { env, calls };
+}
+const key = (k: string) => ({ key: k });
+
+{
+  const { env, calls } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  check('window: a field menu starts on the weapon tab (state 0)', m.tab === 0 && m.open);
+  m.key(key(KEYS.selectRight));
+  check('window: Right steps to the two-handed tab (state 3), which has no rows here', m.tab === 3 && m.rows().length === 0);
+  m.key(key(KEYS.selectRight));
+  check('window: Right again skips 2 (no traps) to the technique tab (9)', m.tab === 9);
+  m.key(key(KEYS.selectRight));
+  check('window: Right from 9 wraps to the weapon tab (0)', m.tab === 0);
+  const w = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  w.key(key(KEYS.decide));
+  check('window: deciding a weapon equips it in the weapon slot, then the menu closes',
+    calls.join(';') === 'unequip 100;equip 101 ' + SLOT_WEAPON && !w.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ allowed: false });
+  const m = new QuickMenu(env, { lobby: false, mode: 0, traps: false, android: false });
+  m.key(key(KEYS.decide));
+  check('window: a weapon is not equipped when the action is not allowed (the menu stays open)', calls.length === 0 && m.open);
+}
+{
+  const { env, calls } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: false, mode: 3, traps: false, android: false });
+  check('window: mode 3 starts on the technique tab (9)', m.tab === 9);
+  m.key(key(KEYS.decide));
+  check('window: the cursor 0 technique is learned, cast, and the menu closes', calls.join(';') === 'cast 0' && !m.open, calls.join(';'));
+}
+{
+  const { env, calls } = fakeEnv({ canCast: false });
+  const m = new QuickMenu(env, { lobby: false, mode: 3, traps: false, android: false });
+  m.key(key(KEYS.decide));
+  check('window: a technique is not cast on a safe map (the menu stays open)', calls.length === 0 && m.open);
+}
+{
+  const { env, calls } = fakeEnv();
+  const m = new QuickMenu(env, { lobby: true, mode: 0, traps: false, android: false });
+  check('window: the lobby starts on the motion tab (0x0c)', m.tab === 0x0c && m.lobby);
+  m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.decide));
+  check('window: deciding a category opens its sub-list (category 1 has 5 rows)', m.rows().length === 5 && m.open);
+  m.key(key('escape'));
+  check('window: Cancel in a sub-list goes back to the categories', m.rows().length === 8 && m.open);
+  m.key(key(KEYS.decide));
+  check('window: the category cursor stayed on 1, so deciding reopens it', m.rows().length === 5);
+  m.key(key(KEYS.selectDown));
+  m.key(key(KEYS.decide));
+  check('window: deciding a motion sends its emote slot (category 1 row 1 = slot 8) and closes',
+    calls.join(';') === 'emote 8' && !m.open, calls.join(';'));
+}
 
 console.log(failures ? `${failures} FAILED` : 'ALL PASS');
 process.exit(failures ? 1 : 0);

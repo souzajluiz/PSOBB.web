@@ -46,6 +46,8 @@ import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
 import { HomeLeaves, HOME_LEAF_IDS } from './homeleaves.ts';
+import { QuickMenu, type QuickMenuEnv } from './quickmenuwindow.ts';
+import { emotePayload } from '../formats/emotes.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { InfoBoardMenu, type InfoBoardHost } from './infoboard.ts';
 import { se, SE } from '../audio/se.ts';
@@ -146,6 +148,8 @@ export class LobbyScreen implements Screen {
   private team: TeamMenus | null = null;
   // The Home menu's shared leaves (classic/homeleaves.ts): Guild Card, Symbol Chat, Simple Mail, Team Member List, Team Info.
   private home: HomeLeaves;
+  // The End key's quick menu in the lobby: the motion menu (quickmenuwindow.ts).
+  private quick: QuickMenu | null = null;
   // The info window [15:6] shown from Change SHIP / Change BLOCK until the
   // server's menu replaces this screen.
   private transporting: InfoWindow | null = null;
@@ -268,8 +272,22 @@ export class LobbyScreen implements Screen {
     return this.team?.textInput() ?? this.party?.textInput() ?? null;
   }
 
+  // The lobby's quick menu env: only the motion menu is live here (no character tabs in the lobby).
+  private quickEnv(): QuickMenuEnv {
+    return {
+      text: (g, i) => this.hud.text(g, i),
+      character: () => null,
+      itemName: () => '',
+      tech: { text: (g, i) => this.hud.text(g, i), level: () => null, canCast: () => false },
+      equip: { equip: () => {}, unequip: () => {} },
+      allowed: () => false,
+      // A motion's emote: 6x58 with the town emote slot (formats/emotes.ts EMOTE_SLOTS.town).
+      emote: (slot) => this.lobby.sendSubcommand(0x58, emotePayload(slot, false)),
+    };
+  }
+
   private get busy(): boolean {
-    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.infoBoard || !!this.trade || this.home.open;
+    return this.chat.open || this.menu.open || this.counter.open || !!this.party?.open || !!this.team?.open || !!this.transporting || !!this.quit || !!this.infoBoard || !!this.trade || this.home.open || !!this.quick;
   }
 
   // ResetLobbyStateAndReturnToShipSelect / ExecuteLobbyJoinPartyAction: every
@@ -467,6 +485,12 @@ export class LobbyScreen implements Screen {
       }
       return;
     }
+    if (this.quick) {
+      e.preventDefault();
+      this.quick.key(e);
+      if (!this.quick.open) this.quick = null;
+      return;
+    }
     if (this.home.open) {
       this.home.key(e);
       return;
@@ -542,6 +566,12 @@ export class LobbyScreen implements Screen {
       }
     }
     const fk = e.key.toLowerCase();
+    if (KEYS.symbolChat && fk === KEYS.symbolChat && !this.busy) {
+      // The End key (role 14 = quickmenu, dump 86172): the lobby's motion menu.
+      e.preventDefault();
+      this.quick = new QuickMenu(this.quickEnv(), { lobby: true, mode: 0, traps: false, android: false });
+      return;
+    }
     if (fk === KEYS.menu || fk === bindingKey(BINDING.mainMenu2)) {
       e.preventDefault();
       if (!this.counter.open) {
@@ -591,6 +621,7 @@ export class LobbyScreen implements Screen {
     this.infoBoard = null;
     // The close actions send the answer packets; the connection may be gone by now.
     this.home.close();
+    this.quick = null;
     this.trade = null;
     this.party?.close();
     this.team?.close();
@@ -625,6 +656,7 @@ export class LobbyScreen implements Screen {
       this.menu.draw(ctx, this.hud.skin, this.hud.menu, bands.bottom);
       inBand(ctx, bands.mid, () => this.itemList?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.home.drawOther(ctx, this.hud.skin));
+      inBand(ctx, bands.mid, () => this.quick?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.infoBoard?.draw(ctx, this.hud.skin));
       inBand(ctx, bands.mid, () => this.trade?.draw(ctx, this.hud.skin, this.hud.itemIcons));
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));

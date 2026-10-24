@@ -13,32 +13,33 @@
 // The Pioneer 2 NPC talk, counters and quests are the town's
 // (classic/townfield.ts, keys on the 3D canvas).
 //
-// The symbol chat key (the key config's Symbol Chat, End by default) opens the
-// 12-row picker (classic/symbolchatlist.ts, mode 'chat'); a decided row is sent
-// (Game.sendSymbolChat) and shown over the player too. A send waits for the chat
-// cooldown (symbolchat.ts chatCooldownOver, dump 679808): a decided row that comes
-// too soon is kept and sent when the cooldown ends. A 6x07 from another player
-// shows its picture over that player (ChatLine.receiveSymbol).
+// The End key (the key config's Symbol Chat, role 14 = `quickmenu` in the exe,
+// dump 86172) opens the quick menu (classic/quickmenuwindow.ts): the weapon and
+// technique tabs of the field (the two-handed and traps tabs are not ported). The
+// symbol chat picker is the main menu's Chat > Symbol Chat (classic/homeleaves.ts,
+// leaf 0x12). A 6x07 from another player shows its picture over that player
+// (ChatLine.receiveSymbol).
 
 import type { Game } from '../net/game.ts';
 import type { GameView } from '../render/gameview.ts';
-import type { SymbolChatEntry } from '../net/symbolchat.ts';
 import { KEYS } from '../input/keyconfig.ts';
 import { ChatBubble, ChatLine, projectHead, type BubbleTextures } from './chat.ts';
 import { PING_FRAMES } from './lobby.ts';
 import { inGameSpace } from './ingame.ts';
-import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
 import { parseChatShortcut } from '../net/chatshortcut.ts';
 import type { SymbolChat } from '../net/symbolchat.ts';
-import { SymbolChatList } from './symbolchatlist.ts';
+import { QuickMenu, type QuickMenuEnv } from './quickmenuwindow.ts';
 import { bandsOf, type Screen, type Stage, type TextInputState, type WindowSkin } from './stage.ts';
 
-// What the picker needs from the screen: the window skin, the saved chats of the
-// character and the unitxt texts (group 11).
-export interface FieldSymbolEnv {
+// What the quick menu needs from the field: its window env, the window skin, the
+// character option mode (bits 16..17 of the option word), battle mode and the
+// Android rule (should_have_traps_quick_menu, dump 712522). Built by FieldHud.fieldQuickEnv.
+export interface FieldQuickEnv {
   skin: WindowSkin;
-  symbolChats: () => readonly SymbolChatEntry[];
-  text: (group: number, index: number) => string;
+  menu: QuickMenuEnv;
+  mode: () => number;
+  battle: () => boolean;
+  android: () => boolean;
 }
 
 const FRAME = 1 / 30;
@@ -54,10 +55,9 @@ export class FieldScreen implements Screen {
   private bubble: BubbleTextures;
   private acc = 0;
   private frame = 0;
-  private symbolEnv: FieldSymbolEnv;
-  symbolList: SymbolChatList | null = null;
-  // The row of the End-key picker that waits for the chat cooldown (ChatLine.cooldownOver).
-  private pendingSymbol: SymbolRow | null = null;
+  // The quick menu window (End key); null when closed.
+  quick: QuickMenu | null = null;
+  private quickEnv: FieldQuickEnv;
   private extra = 0;
   // Virtual height of the frame (480, or the phone's tall fill: stage.ts vh).
   private vh = 480;
@@ -66,7 +66,7 @@ export class FieldScreen implements Screen {
   readonly phoneLayout: boolean;
   readonly phoneFill: boolean;
 
-  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures, phone: boolean, symbol: FieldSymbolEnv) {
+  constructor(view: GameView, target: HTMLElement, stage: HTMLElement, bubble: BubbleTextures, phone: boolean, quick: FieldQuickEnv) {
     this.phoneLayout = phone;
     this.phoneFill = phone;
     this.view = view;
@@ -74,11 +74,11 @@ export class FieldScreen implements Screen {
     this.target = target;
     this.stage = stage;
     this.bubble = bubble;
-    this.symbolEnv = symbol;
+    this.quickEnv = quick;
     this.chat = new ChatLine((text) => this.game.sendChat(text));
     this.chat.sendSymbol = (chat) => this.sendSymbolChat(chat);
     this.chat.sendWord = (message) => this.game.sendWordSelect(message);
-    view.inputBlocked = () => this.chat.open || this.symbolList !== null;
+    view.inputBlocked = () => this.chat.open || this.quick !== null;
     // The chat shortcuts (Shift+F or the F keys in the chat form, render/fieldhud.ts key()).
     view.chatShortcut = (index, full) => {
       this.chat.useShortcut(parseChatShortcut(full, index));
@@ -108,13 +108,6 @@ export class FieldScreen implements Screen {
   private tick(): void {
     if (++this.frame % PING_FRAMES === 0) this.game.conn.send(0x1d, 0);
     this.chat.tickCooldown();
-    if (this.pendingSymbol && this.chat.cooldownOver()) {
-      const row = this.pendingSymbol;
-      this.pendingSymbol = null;
-      this.sendSymbol(row);
-      this.symbolList?.close();
-      this.symbolList = null;
-    }
     const cam = this.view.camera;
     const width = 640 + this.extra;
     ChatBubble.screenW = width;
@@ -141,7 +134,7 @@ export class FieldScreen implements Screen {
       ctx.translate(0, bands.bottom);
       this.chat.input.draw(ctx, this.frame);
       ctx.restore();
-      this.symbolList?.draw(ctx, this.symbolEnv.skin);
+      this.quick?.draw(ctx, this.quickEnv.skin);
     });
   }
 
@@ -164,27 +157,12 @@ export class FieldScreen implements Screen {
     if (!this.target.dispatchEvent(copy)) e.preventDefault();
   }
 
-  // The End-key picker: a decided row goes to the room, and the sender's own balloon shows it too.
-  private openSymbolList(): void {
-    const rows = symbolChatRows(this.symbolEnv.symbolChats(), this.symbolEnv.text);
-    this.symbolList = new SymbolChatList('chat', this.symbolEnv.text(11, SYMBOL_TEXT.title), rows, (row) => this.decideSymbol(row));
-  }
-
-  // Returns true when the row was sent now (the picker closes); false when it waits.
-  private decideSymbol(row: SymbolRow): boolean {
-    if (!row.chat) return false;
-    if (!this.chat.cooldownOver()) {
-      this.pendingSymbol = row;
-      return false;
-    }
-    this.sendSymbol(row);
-    return true;
-  }
-
-  private sendSymbol(row: SymbolRow): void {
-    if (!row.chat) return;
-    this.chat.startCooldown();
-    this.sendSymbolChat(row.chat);
+  // The End key: the quick menu. The character option mode and the traps rule are read
+  // when it opens (quick_menu_constructor, dump 711543).
+  private openQuickMenu(): void {
+    const q = this.quickEnv;
+    const android = q.android();
+    this.quick = new QuickMenu(q.menu, { lobby: false, mode: q.mode(), traps: q.battle() || android, android });
   }
 
   // The 6x07 to the room and the sender's own balloon (the shortcut and the picker share it).
@@ -198,18 +176,15 @@ export class FieldScreen implements Screen {
       this.chat.key(e);
       return;
     }
-    if (this.symbolList) {
+    if (this.quick) {
       e.preventDefault();
-      this.symbolList.key(e);
-      if (!this.symbolList.open) {
-        this.symbolList = null;
-        this.pendingSymbol = null; // Cancel drops a row that waited for the cooldown
-      }
+      this.quick.key(e);
+      if (!this.quick.open) this.quick = null;
       return;
     }
     if (KEYS.symbolChat && e.key.toLowerCase() === KEYS.symbolChat) {
       e.preventDefault();
-      this.openSymbolList();
+      this.openQuickMenu();
       return;
     }
     if (e.key === ' ') {

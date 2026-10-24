@@ -341,11 +341,7 @@ async function main(): Promise<void> {
         void load.then((view) => {
           console.log(`[classic] entered game "${game.name}"`);
           showWorld(true);
-          const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled, {
-            skin: titleAssets.skin,
-            symbolChats: () => session?.character?.symbolChats ?? [],
-            text: (g, i) => (unitxt?.[g]?.[i] ?? '').replace(/\t[CEJ][0-9A-Za-z]?/g, ''),
-          });
+          const field = new FieldScreen(view, worldCanvas, canvas, bubble, fit.enabled, view.hud.fieldQuickEnv(titleAssets.skin));
           Object.assign(window, { classicGame: field, classicLobby: undefined });
           show(field);
         }),

@@ -15191,3 +15191,47 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 - The 6x40 flags word is 0 (the 0x100000 bit of the NPC's +0x30 is not read).
 
 **Checks:** `node tests/npcai.test.ts` ok (new cases above); `techniques`, `npcs`, `questflow`, `quests`, `questmisc`, `questboard` pass with Node 24 (`client/node_modules` symlinked to the main checkout's for the run, removed before the commit). `cd client && npx tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
+
+## 2026-10-23: quick menu windows: the End key opens the weapon, technique and motion windows
+
+**What changed.** The End key now opens the quick menu window (`classic/quickmenuwindow.ts`, `QuickMenu`) in the field (`classic/field.ts`) and in the lobby (`classic/lobby.ts`, the motion menu). The 12-row symbol chat stand-in is gone from End. The Chat > Symbol Chat leaf (0x12) is main's `classic/homeleaves.ts` in the lobby and the field (preview only); the field's sending is the chat shortcuts on main. The End picker's chat cooldown was moved to main's ChatLine; the quick menu does not use it. `classic/quickmenu.ts` gets the row builders (weapon, technique, motion categories and sub-lists) and the step back. `tests/quickmenu.test.ts` now has 53 checks (rows, the window's keys and actions with a fake env). The ROADMAP Classic HUD line is updated.
+
+**Correction to the previous entry.** `QUICK_MENU_GUI.twoHandedList` (gui 2) was wrong. Every tab's list is gui 1: `update_quickmenu` calls `get_gui_position(1)` in cases 0, 3, 6 and 9. Gui 2 is the weapon tab's compare list (`CreateEquipListWindowObject_00725d18`, opened by key 0xe in state 1, not a tab). The constant is now `QUICK_MENU_GUI.compareList`.
+
+**Exe evidence** (`refsrc/original-psobb-client-source/src/Psobb.exe-05112026.c`; bytes from `tools/exedata.py`, `objdump` for the thunks):
+- `quick_menu_constructor` (711543): the start cursor from the option mode, Android 3 -> 0; the lobby cursor 0xff, tab 0x0c.
+- `update_quickmenu` (711625) cases, by tab state byte 0x1d:
+  - 0 weapons (711680): `ListWindowObject_PopulateEquippableWeapons` (719571): inventory weapons not equipped (flags & 8 clear) with attack data type 8 and a valid equip, then the equipped weapon last. Decide (state 2, 711820 area): `IsPlayerActionAllowed`, then `HandleItemEquipSwap` (the port's `equipSwap`), then the menu closes (flag 1).
+  - 3 "tools" (711755, populate named `ListWindowObject_PopulateTwoHandedWeapons` 0x74b620): inventory items with attack data type 2 and not type 1, not rare. The name and the state 4-5 path (`UpdateQuickMenuToolTechSlotState`, tools_techs group, tool slot 4, `ProcessToolTechUse`) disagree; the list is ported from the populate call, its classifier is not decoded.
+  - 6 traps (711817): `ListWindowObject_ResetAndRefresh` (719825): `ChallengePlayerListWindow_InitializeItems` with 5 status rows (challenge / Battle Mode traps). Decide (state 8): `SinowberillChallengePlayer_HandleSpecialPaletteInput(player, row & 0xf)`; row 4 creates the Sinowberill entity manager. Not ported.
+  - 9 techniques (711875): `CreateTechniqueListWindow_00741c88` (gui 1, 19 rows, `UpdateTechniqueListItem_0075e7e0`); decide (0xb, 711960 area): `SendCastTechPacket_0069a2f0`, then the menu closes when it was sent.
+  - 0xc lobby motion (711997): `unknown_list_gui_constructor(gui 0xe1, 8 rows)`, labels `unitxt_get_string(0x42, i)`, height 165.
+  - 0xe sub-list (712010): gui 0xe2, rows from the table at 0x00972ea0 (text base, value base, count): row k is unitxt(0x42, textBase + k), value valueBase + k.
+  - 0x10 / 0x11 (`HandleCharacterOptionSelection_00741e94`, 712415): the sub-list value indexes `g_CharacterOptionCallbacks_009f35e0` (8-byte entries, the callback pointers are 12 bytes apart at 0x740848, 0x740854, ...). Each callback is a thunk: `movl (%ecx),%eax; movl off(%eax),%edx; jmpl *%edx`, a virtual call on the player with a different vtable offset per entry (0xac, 0xb0, 0xdc, 0xe4, ...). So the value is an emote dispatch on the player, the 6x58 path (`formats/emotes.ts`: slot, flags). ASSUMED: each thunk is the dispatch of that emote slot.
+- Step: `InformationCounterListWindow_HandleInput_007419d4` (712096): +1 with wrap, 2 skipped without traps, 3 skipped for an Android, held key 0x10 (character option 2) else 0x11; no step in the lobby or while the compare list is open.
+- Lists: `InformationCounterListWindow_UpdateItemStates` closes all four list windows on a tab change (741b6c).
+
+**Ported.**
+- Field: the weapon tab (equippable weapons, the equipped one last, equip swap on decide, closes); the technique tab (19 rows, not-learned disabled, the here colour, cast on decide, closes); Left / Right step the tab with the model's rules; the start tab from the option mode (`readOptionFlags` bits 16..17) and the traps / Android rules.
+- Lobby: the 8 motion categories, the sub-lists, decide sends the emote (6x58 via `Lobby.sendSubcommand`) and closes; Cancel goes back a level, then closes.
+- Menu: Chat > Symbol Chat (0x12) is main's HomeLeaves path (no change from this branch).
+
+**ASSUMED** (also marked in the code):
+- Tab stepping uses the Left / Right menu keys (the exe steps +1 while the 0x10 / 0x11 key is held).
+- Lists are 308 wide, 124 high, untitled (g_QuickMenuEquipListConfig is not read; the titles are not located).
+- The weapon list does not check class or level (`ValidateItemInstanceForEquip` not ported).
+- The technique order is the default 0..18 (the swap key 0xe is not ported).
+- `IsPlayerActionAllowed` is true in the field.
+- Battle mode is `FieldHud.battleTeam !== null` (the traps rule); the field has no battle-traps tab yet.
+- The lobby's emote is sent with the opposite-gender flag off; the field's emote path is not used by the quick menu.
+- Every cancel plays SE 0x585 (the exe plays it only in some states).
+- The 'chat' mode of symbolchatlist.ts (sends a decided row) has no opener left after this change; the field's Symbol Chat leaf previews only (main).
+
+**Tests.** `node tests/quickmenu.test.ts` (Node 24): ALL PASS (53 checks). `node tests/symbolchat.test.ts`, `tests/fieldhud.test.ts`, `tests/lobbymenu.test.ts`, `tests/mainmenulayout.test.ts`: pass. `cd client && npx tsc --noEmit -p .`: exit 0. Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The two-handed tab's classifier (the attack data types of the PMT weapon table) and the tool slot path (state 4-5, `ProcessToolTechUse`).
+2. The traps tab: the 5 challenge status rows, the Sinowberill palette input (state 8), and the Battle Mode trap stock (`FieldHud.trapCount`).
+3. The compare list (gui 2, key 0xe in the weapon tab), the technique swap (state 0xa, key 0xe), the player equip toggle (state 0xd / 0xf, texts 0x42 0x38 / 0x39).
+4. The quick menu's open gates (`unknown_handle_quickmenu`: the player, the UI block, the `g_pUITextColorTable` bits) and the trade path (states 0x13..0x20).
+5. The window's draw animation (the exe's open / close wipe) and the list titles.
