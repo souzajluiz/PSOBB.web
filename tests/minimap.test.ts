@@ -6,7 +6,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { minimapFileFor, modelTriangles, parseMinimapRel } from '../client/src/formats/minimap.ts';
-import { stepKomo } from '../client/src/render/fieldobjects.ts';
+import { collectFieldObjects, doorMapLocked, stepBitDoor, stepKomo, type FieldDoor } from '../client/src/render/fieldobjects.ts';
+import type { PlacedEntity } from '../client/src/formats/setdata.ts';
 import {
   cameraUp,
   clampPan,
@@ -434,6 +435,47 @@ eq(fadeColor(0xffffffff, 0xffff0000), 0xffffefef, 'fade: green and blue (255) st
   eq(stepKomo(k, false), 1, 'Komo: a frame with the flag off still draws green');
   eq(k.state, 0, 'Komo: StateIdle moves back to 0 when the flag is not set');
   eq(komoVariant6Icon(k.value, k.shown, 0, k).color, ICON_GREEN, 'Komo: the last frame drew state 1, so its icon is green');
+}
+// Beam-family doors (0x0202 TObjDoorJung, 0x0204 beam): bit 0 of +0xd0 is the unlock and the
+// minimap colour (lock slots 0x00657b20 / 0x00658410, update 0x00657718 / 0x00657e00).
+{
+  const door = (type: number, p4: number, p5: number, x = 0, z = 0): FieldDoor => {
+    const placed = {
+      entity: { kind: 'object', index: 7, type, floor: 0, section: 0, position: [x, 0, z], rotation: [0, 0, 0], group: 0, unknownA3: 0, params: [0, 0, 0, p4, p5, 0] },
+      name: 'x',
+      category: 'object',
+      world: [x, 0, z],
+      yaw: 0,
+      sectionFound: true,
+    } as unknown as PlacedEntity;
+    const found = collectFieldObjects([placed], { episode: 0, floor: 0, area: 0x17 }).doors;
+    return found[0]!;
+  };
+  // 0x0202: the flags p4 .. p4 + n - 1 (n = clamp(param5, 0..4)); bit 0 follows them every frame.
+  const a = door(0x0202, 3, 2);
+  eq(a.bitRule, 'switches', 'beam-family: 0x0202 uses the switch rule');
+  eq(a.flags, [3, 4], 'beam-family: 0x0202 waits for flags p4 and p4 + 1 (param5 = 2)');
+  eq(doorMapLocked(a), true, 'beam-family: 0x0202 is red at bit 0 clear');
+  stepBitDoor(a, (f) => f === 3, []);
+  eq(a.bit0, false, 'beam-family: 0x0202 bit 0 stays clear with one of two flags');
+  stepBitDoor(a, (f) => f === 3 || f === 4, []);
+  eq([a.bit0, doorMapLocked(a)], [true, false], 'beam-family: 0x0202 bit 0 set once both flags are on, green');
+  stepBitDoor(a, (f) => f === 3, []);
+  eq(a.bit0, false, 'beam-family: 0x0202 bit 0 follows the flags back down (the lock slot clears it)');
+  const none = door(0x0202, 3, 0);
+  stepBitDoor(none, () => false, []);
+  eq(none.bit0, true, 'beam-family: 0x0202 with param5 0 has no flags, so bit 0 is set');
+  // 0x0204: flags 0x46..0x48 and a player within 50 (XZ, squared 2500) of the door; then latched.
+  const beam = door(0x0204, 0, 0, 100, 100);
+  const all = (f: number) => f >= 0x46 && f <= 0x48;
+  stepBitDoor(beam, all, [{ x: 100 + 60, y: 0, z: 100 }]);
+  eq(beam.bit0, false, 'beam: 60 units away does not open the beam door');
+  stepBitDoor(beam, (f) => f !== 0x48, [{ x: 100 + 10, y: 0, z: 100 }]);
+  eq(beam.bit0, false, 'beam: two of the three flags do not open it');
+  stepBitDoor(beam, all, [{ x: 100 + 10, y: 900, z: 100 }]);
+  eq(beam.bit0, true, 'beam: the three flags and a player 10 units away in XZ (height ignored) open it');
+  stepBitDoor(beam, () => false, []);
+  eq([beam.bit0, doorMapLocked(beam)], [true, false], 'beam: once open, bit 0 is latched (the lock slot returns early)');
 }
 if (failures) {
   console.log(`${failures} failure(s)`);
