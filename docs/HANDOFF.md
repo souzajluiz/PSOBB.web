@@ -163,7 +163,7 @@ worktrees are left.
 3. **Captures to close the classic screens item**: character creation and Input
    UserID need captures of the original client in `client/public/ref/` (not committed)
    to measure SSIM. Title 0.77 and select character 0.92 are measured.
-4. **Boss leftovers** (2026-10-20 passes done: De Rol Le fin chains + helm / shell debris + the segments as hit
+4. **Boss leftovers** (2026-10-24: De Rol Le beam muzzle traced in the exe, DEVLOG "De Rol Le beam muzzle": the emitter is the cast point `player+0x4f0` plus velocity each frame, no model node is copied; the port's muzzle estimate stays ASSUMED. Open: the writer of the cast point and velocity, the spawn block at 0x004a6b4f is generic and unconfirmed. 2026-10-20 passes done: De Rol Le fin chains + helm / shell debris + the segments as hit
    targets, Vol Opt bars / cage / lid logic, Dragon body and tail hit boxes, Belra's thrown arms, the Saint-Milion
    brain; see their DEVLOG entries). Still open: Saint-Milion's laser aim (the laser's hit, life and sound loop are in, 2026-10-21; no writer of its aim (+0x44) or origin (+0x38) is in the exe on the traced paths, so the sweep 0x8000 and reach 620 stay ASSUMED, and the wall cut and impact particle are not reproduced; see the two DEVLOG entries),
    its cutscene states (they end with their animation), camera / sounds / particles;

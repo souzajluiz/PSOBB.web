@@ -1,5 +1,27 @@
 # Devlog
 
+## 2026-10-24: De Rol Le beam muzzle: the exe's emitter is the cast point plus its velocity, no model node
+
+**Question:** the port puts the beam emitter at the brain estimate `[x, drawY + 10, z + 30]` (ASSUMED). Which model node or bone does the exe copy into the emitter's position each frame?
+
+**Exe decision (verified in the asm of `DerollePlayerSpecialAttackState`, 0x0042f96c, the state 0x6e8 == 2 branch):**
+- The emitter 0x177 is created at 0x00430205: `create_particle_effect4(player + 0x4f0, 0x177, 0x40)`. `player + 0x4f0` is `currently_casting_tech_info.field_0x90`, passed as a pointer to the cast point, not as a node position.
+- Each frame (0x0042fb53 to 0x0042fbd0) the exe builds a stack vector P from the cast point and its velocity, then calls `copy_pos_to_particle` (0x00508db8) with P pushed:
+  - X = `[+0x4f0] + [+0x4fc] * dt * g_DerolleSpecialAttackHitRate`
+  - Y = `[+0x4f4] + [+0x500] * dt`
+  - Z = `[+0x4f8] + [+0x504] * dt`
+  - `dt` is the constant at `_DAT_008fcf04`. The dump's `stack0xffffff34` at `Psobb.exe-05112026.c:173089` is this P (the asm pushes it at 0x0042fb61); the decompile lost the push.
+- The projectile arc that follows (0x0042fbd5 to 0x0042fc46, into a local at `ebp - 0xbc`, then `cast_ray_at_map_collision_geometry` with 0x16ef at 0x0042ffee) is the ground hit test, not the emitter.
+- No node read is involved. Nothing in 0x0042f96c to 0x00430800 writes `+0x4f0` to `+0x504`; the function only reads them. A search of the whole exe for stores to those offsets found a spawn-time block at 0x004a6b4f that copies the entity's three words at `+0x38` to `+0x40` into a run of fields, including `+0x4f0` to `+0x504`. That block is generic (not De Rol-specific), and I did not identify which spawn path calls it for the boss. It is a lead, not a port.
+
+**Port:** none. The premise (a model node copied each frame) is not in the exe, so there is no node or offset to port. `combat/derolle.ts` tickBeam keeps the brain estimate. The exe's cast point plus velocity is not modelled by the port, which sets no velocity.
+
+**ASSUMED (unchanged):** the muzzle estimate `[x, drawY + 10, z + 30]`, and the emitter's motion in the port (none).
+
+**Open:** which code writes the beam's cast point (`+0x4f0`) and velocity (`+0x4fc` to `+0x504`) before the state 0x6e8 == 2 for De Rol. The spawn block at 0x004a6b4f is the only writer found, and it is generic. Until that is traced, the exe's emitter drift is not reproduced.
+
+**Tests:** `node tests/derolle.test.ts` ALL PASS (no code change).
+
 ## 2026-10-24: NPC attack AI: the cast eligibility of the head's chooser (CanPlayerCastTechnique)
 
 **Question:** the ROADMAP's "NPC players' attack AI" line lists the NPC's own level / MST / eligibility as open. The chooser (`NpcHeadChooser`, AIProcessState) asked `canCast` and the town answered `true`. What does the exe's eligibility test check for B's player?
