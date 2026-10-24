@@ -8,7 +8,7 @@
 // families"): the model particles of Barta, Gibarta, Rabarta and Rafoie's ring are
 // drawn (FieldParticles model bursts, DEVLOG 2026-10-23 "Barta and Gibarta model
 // particles" and "Rabarta and Rafoie model particles"); Rafoie's fire sphere (the
-// blast's child object) is not, the emitters' orientation
+// blast's child object) is drawn (render/rafoiesphere.ts); the emitters' orientation
 // (the exe turns them by the object's angles; the particle engine here only
 // has a pitch), the dynamic light of the cast, the pitch of the creation
 // sounds, the wall impact of a Foie and the 0x18a stream of a level 25+ Barta.
@@ -23,6 +23,7 @@ import {
   objectEmitterOrient,
   RAFOIE_BLAST_LIFT,
   RafoieBlast,
+  RafoieSphere,
   rafoieBlastEmitters,
   startEmitters,
   type FireObject,
@@ -30,6 +31,7 @@ import {
   type TechTarget,
 } from '../combat/techfire.ts';
 import type { FieldParticles } from './hitfx.ts';
+import { RafoieSpheres } from './rafoiesphere.ts';
 import type { Orient } from '../classic/particles.ts';
 
 // A persistent emitter lasts until its object is gone (the effect's destructor
@@ -60,6 +62,9 @@ export class TechFire {
   private readonly host: TechFireHost;
   private readonly hits: TechTarget[] = [];
   private readonly tmp = new THREE.Vector3();
+  // Rafoie's fire spheres (the blast's child objects), on the field they were made on.
+  private spheres: RafoieSpheres | null = null;
+  private spheresFx: FieldParticles | null = null;
 
   constructor(host: TechFireHost) {
     this.host = host;
@@ -87,6 +92,7 @@ export class TechFire {
   /** One game tick: steps the player-side objects against `targets` and plays what
    * every object did this tick. */
   tick(targets: readonly TechTarget[], n: number): void {
+    this.spheres?.tick();
     let ended = false;
     for (let i = 0; i < this.live.length; i++) {
       const l = this.live[i];
@@ -103,6 +109,7 @@ export class TechFire {
   clear(): void {
     for (const l of this.live) l.obj.done = true; // the emitters see it and stop
     this.live = [];
+    this.spheres?.clear();
   }
 
   // The creation: sound, the emitters of the tier.
@@ -162,7 +169,19 @@ export class TechFire {
       this.host.sound(FIRE_SE.rafoieBlast, o.bx, y, o.bz);
       const fx = this.host.fx();
       if (fx) for (const e of rafoieBlastEmitters(o.tier)) this.burst(fx, e, o.bx, y + RAFOIE_BLAST_LIFT, o.bz);
+      // The fire sphere, the blast's child (rafoie_aoe_tick makes it on the same update, dump 650685).
+      if (fx) this.sphereSet(fx).start(new RafoieSphere(o.bx, y, o.bz));
     }
+  }
+
+  // The fire spheres of one field (a new field drops the old set).
+  private sphereSet(fx: FieldParticles): RafoieSpheres {
+    if (!this.spheres || this.spheresFx !== fx) {
+      this.spheres?.clear();
+      this.spheres = new RafoieSpheres(fx);
+      this.spheresFx = fx;
+    }
+    return this.spheres;
   }
 
   /** Foie's wall impact particles (TechniqueEntity_CreateParticleEffects_006e37b0). */

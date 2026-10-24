@@ -14,7 +14,7 @@
 // scales the drawn quad.
 
 import * as THREE from 'three';
-import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, modelParticleBlend, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
+import { D3DBLEND, MAP_PARTICLE_COUNT, MAP_PARTICLE_FIRST, modelParticleBlend, particleIsNt, particleMapFile, parseParticleEntry, particleQuad, particleShade, ParticleSystem, type Particle, type ParticleEntry } from '../classic/particles.ts';
 import { textureBitmaps } from '../classic/stage.ts';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import type { ParticleSpawn } from '../combat/hitfx.ts';
@@ -23,6 +23,7 @@ import { BloodDecals } from './blooddecals.ts';
 import { FragmentEffects } from './fragments.ts';
 import { HitModels, instanceParticleModel, type IceHost, type ParticleModel, type ParticleModelPiece } from './hitmodels.ts';
 import type { MapViewer } from './mapviewer.ts';
+import { advancedEffectsOn } from './advancedeffects.ts';
 
 const FRAME = 1 / 30;
 const MAX_BURSTS = 80;
@@ -185,6 +186,8 @@ export class FieldParticles {
     if (!e || !pos) return;
     // A model effect (EffectFx.model, the technique BML's model) is drawn as that model.
     const fxModel = p.fx?.model;
+    // Particle flag 0x400 (the cloak branch) is drawn only with the advanced effects setting (dump 291946).
+    if (p.fx?.cloak && !advancedEffectsOn()) return;
     const model = fxModel ? await this.models.particleModel(fxModel.chunk, fxModel.motion) : null;
     if (this.disposed || (fxModel && !model)) return;
     const particles = new ParticleSystem();
@@ -360,6 +363,15 @@ export class FieldParticles {
     });
   }
 
+  /** Adds a model object to the field's scene (render/rafoiesphere.ts); detach removes it. */
+  attach(obj: THREE.Object3D): void {
+    this.viewer.scene.add(obj);
+  }
+
+  detach(obj: THREE.Object3D): void {
+    this.viewer.scene.remove(obj);
+  }
+
   private remove(b: Burst): void {
     this.viewer.scene.remove(b.group);
     for (const s of b.sprites) s.material.dispose();
@@ -431,9 +443,9 @@ export class FieldParticles {
     this.pieceTurn.setFromAxisAngle(axis.y, q.angle * BAMS_RAD);
     obj.quaternion.copy(this.pieceRotation.multiply(this.pieceTurn));
     // The blend is the exe's (modelParticleBlend): SRCALPHA / INVSRCALPHA for a non-NT particle, which
-    // is three's NormalBlending; SRCALPHA / ONE (AdditiveBlending) for NT. The port does not carry the
-    // NT flag (effect_nt flag 1 of the renderer), so every model particle is non-NT here (ASSUMED).
-    const nt = false;
+    // is three's NormalBlending; SRCALPHA / ONE (AdditiveBlending) for NT. NT is the renderer's
+    // effect_nt flag 1 (IsNTParticle, classic/particles.ts particleIsNt) of the particle's own texture slot.
+    const nt = particleIsNt(this.slots.get(q.e.entry.gbix));
     const blend = modelParticleBlend(nt);
     const blending = blend.dst === D3DBLEND.ONE ? THREE.AdditiveBlending : THREE.NormalBlending;
     for (const mat of materials) {

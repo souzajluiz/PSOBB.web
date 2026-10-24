@@ -569,6 +569,69 @@ export class RafoieBlast extends FireObject {
   }
 }
 
+// --- Rafoie's fire sphere ------------------------------------------------------
+
+/** The technique BML's njcm chunk of the fire sphere (unknown_get_njcm_chunks(g_CurrentBmlBuffer, 0xb) in render_bazooka_explosion, dump 651052). */
+export const SPHERE_CHUNK = 11;
+/** Its life: the child updates 110 times and is gone on the 111th (update_bazooka_explosion, `0x6e < +0x58`, dump 651000). */
+export const SPHERE_LIFE = 110;
+/** The sphere's height above the blast point: 5 (g_RafoieParticleYOffset, 0x0096dda4); the blast particles add 8 more. */
+export const SPHERE_LIFT = 5;
+const SPHERE_SCALE0 = f32(1.2); // 0x3f99999a, the +0x34 / +0x38 / +0x3c of the child's constructor
+const SPHERE_TARGET = f32(1.9); // 0x3ff33333, +0x40
+const SPHERE_LERP_NEAR = f32(0.15); // 0x3e19999a: while scale < g_BazookaExplosionLerpThreshold + target
+const SPHERE_LERP_FAR = f32(0.05); // 0x3d4ccccd: otherwise
+const SPHERE_LERP_THRESHOLD = -1; // 0x0096dcd0 (g_BazookaExplosionLerpThreshold, read from the exe)
+const SPHERE_FADE = f32(0.035); // 0x3d0f5c29: LerpFloat step of +0x48
+
+/**
+ * The fire sphere a Rafoie blast makes on its 10th update (rafoie_aoe_tick, dump 650685, the child
+ * of IndTexObject_Constructor_00504b58: a base_game_object with vtable g_ParticleEffectEntity_vtbl
+ * 0x00b3e078 (update 0x006ee2b4 = update_bazooka_explosion, render 0x006ee380 =
+ * render_bazooka_explosion; the dump names are wrong). It is a fixed point at (x, y + 5, z), not
+ * following the target. Its scale grows toward 1.9 (Vec3LerpIfDistance, rate 0.05 here), its colour
+ * alpha falls by 0.035 an update (LerpFloat on +0x48), and it is drawn as njcm chunk 11 with a Y turn.
+ *
+ * ASSUMED: the texture scroll (the +0x5c ring, 0..15) and the IndTex stage (the child's +0x24 object)
+ * have no effect here: the active IndTex list (g_IndTexActiveList_00a72b10) is only ever reset and
+ * read, never filled (exe xref 0x00a72b0c / 0x00a72b10), so ConfigureIndTexStageForMesh does nothing.
+ */
+export class RafoieSphere {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  /** The uniform scale (+0x34 = +0x38 = +0x3c). */
+  scale = SPHERE_SCALE0;
+  /** The colour alpha (+0x48; +0x4c..+0x54 stay 1.0, so the colour is white). */
+  fade = 1;
+  /** Updates made (+0x58). */
+  ticks = 0;
+  /** The 0..15 counter (+0x5c), not read by the draw. */
+  ring = 0;
+  /** False once the life is over (+0x08 bit 0 set by the 111th update). */
+  alive = true;
+
+  constructor(x: number, y: number, z: number) {
+    this.x = x;
+    this.y = y + SPHERE_LIFT;
+    this.z = z;
+  }
+
+  /** One update (the child's entity update). The life ends on the update that passes SPHERE_LIFE; the scale and fade still move on it. */
+  step(): void {
+    this.ticks++;
+    this.ring = this.ring + 1 < 16 ? this.ring + 1 : 0;
+    if (this.ticks > SPHERE_LIFE) this.alive = false;
+    // Vec3LerpIfDistance_00501be8: the three components are equal, so the length is sqrt(3) * |scale - target|.
+    // The rate is 0.15 while scale < threshold + target (update_bazooka_explosion, 0x006ee2ec..0x006ee329), else 0.05.
+    const rate = SPHERE_LERP_THRESHOLD + SPHERE_TARGET > this.scale ? SPHERE_LERP_NEAR : SPHERE_LERP_FAR;
+    const dist = f32(Math.sqrt(3) * Math.abs(this.scale - SPHERE_TARGET));
+    if (dist > rate) this.scale = f32(this.scale + (SPHERE_TARGET - this.scale) * f32(dist * rate));
+    // LerpFloat_00501b34 towards 0 by the step (0x006ee370): never below 0.
+    this.fade = Math.max(0, f32(this.fade - SPHERE_FADE));
+  }
+}
+
 // --- Rabarta -------------------------------------------------------------------
 
 /** Rabarta: RabartaEntity_vtbl (0x00b3dee0, unknown_update_rabarta 0x006ecd4c,
@@ -758,6 +821,8 @@ export interface FxEmitter {
   hidden?: boolean;
   /** The table's flag 0x20: the particle is the technique BML's model (EffectFx.model; the njcm chunk, and the njm chunk or none). */
   model?: { chunk: number; motion: number | null };
+  /** The table's flag 0x400 (particle flag 0x400, the cloak branch; EffectFx.cloak). */
+  cloak?: boolean;
 }
 
 const E = (id: number, scale: number, mode: FxEmitter['mode'], extra: Partial<FxEmitter> = {}): FxEmitter => ({ id, scale, mode, ...extra });
@@ -799,6 +864,7 @@ export function emitterFx(e: FxEmitter): EffectFx {
   const fx: EffectFx = {};
   if (e.hidden) fx.noDraw = true;
   if (e.model) fx.model = { chunk: e.model.chunk, motion: e.model.motion, speed: 1 };
+  if (e.cloak) fx.cloak = true;
   return fx;
 }
 
@@ -888,8 +954,9 @@ const RAFOIE_BLAST: readonly (readonly FxEmitter[])[] = [
 // rafoie_constructor 0x006ed8f4, dump 650318 / 650527): the fixed form makes the ring 0x1a at the
 // point, then 0x3a and 0x3b; the list form makes 0x39 at the target's weapon position, then the ring
 // 0x1a there. The ring is the technique BML's njcm chunk 9 with no motion (z = 0.0), z2 = 1.0, flags
-// 0x600 = model | 0x400 (the cloak branch, not modelled: the port always draws it, ASSUMED).
-const RAFOIE_RING = { model: { chunk: 9, motion: null } } as const;
+// 0x600 = model | 0x400: the cloak branch, drawn only with the advanced effects setting (EffectFx.cloak,
+// render/hitfx.ts; the cloak itself is not modelled, ASSUMED: drawn as the plain model).
+const RAFOIE_RING = { model: { chunk: 9, motion: null }, cloak: true } as const;
 export const RAFOIE_MARK_LIST: readonly FxEmitter[] = [E(0x39, 1, 'burst'), E(0x1a, 1, 'burst', RAFOIE_RING)];
 export const RAFOIE_MARK_FIXED: readonly FxEmitter[] = [E(0x1a, 1, 'burst', RAFOIE_RING), E(0x3a, 1, 'burst'), E(0x3b, 1, 'burst')];
 

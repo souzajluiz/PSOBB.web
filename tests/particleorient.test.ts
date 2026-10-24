@@ -16,9 +16,10 @@
 // destroys (dump line 288330) and the single particle update never submits (dump 291923).
 // Run: node tests/particleorient.test.ts
 
-import { ParticleSystem, NO_ORIENT, modelParticleBlend, orientOfDirection, parseParticleEntry, turnStep, type Orient } from '../client/src/classic/particles.ts';
-import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, emitterFx, objectEmitterOrient, rafoieBlastEmitters, startEmitters, type FireKind, type FireObject, type FxEmitter } from '../client/src/combat/techfire.ts';
+import { NT_FLAGS, ParticleSystem, NO_ORIENT, modelParticleBlend, orientOfDirection, parseParticleEntry, particleIsNt, turnStep, type Orient } from '../client/src/classic/particles.ts';
+import { RAFOIE_MARK_FIXED, RAFOIE_MARK_LIST, RafoieSphere, emitterFx, objectEmitterOrient, rafoieBlastEmitters, startEmitters, type FireKind, type FireObject, type FxEmitter } from '../client/src/combat/techfire.ts';
 import { MEGID_EMITTERS, MegidOrb } from '../client/src/combat/techlightning.ts';
+import { advancedEffectsOn, setAdvancedEffects } from '../client/src/render/advancedeffects.ts';
 
 let failures = 0;
 const near = (a: number, b: number, what: string) => {
@@ -259,6 +260,57 @@ check('emitterFx: a visible emitter has no flags', emitterFx(startEmitters('foie
   const aimed = new MegidOrb({ x: 0, y: 0, z: 0 }, 0, 0, 100, 27, 5, 0, { x: 0, y: 0, z: 40 });
   const ev2 = aimed.events.find((x) => x.t === 'follow');
   vecNear(ev2 && ev2.t === 'follow' ? ev2.base : [9, 9, 9], [0, 0, 0], 'Megid aimed: the event base is none');
+}
+
+// NT (effect_nt flag 1, IsNTParticle 0x00508a30) and the table read from the exe at 0x00a101c0.
+{
+  check('NT table: 108 records (effect_nt_metadata[108])', NT_FLAGS.length === 108);
+  check('NT: slot 1 (flags 1) is NT', particleIsNt(1) === true);
+  check('NT: slot 0 (flags 2) is not', particleIsNt(0) === false);
+  check('NT: slot 55 (flags 5, bit 0) is NT', particleIsNt(55) === true);
+  check('NT: slot 54 (flags 6) is not', particleIsNt(54) === false);
+  check('NT: an unknown slot is not NT', particleIsNt(undefined) === false && particleIsNt(500) === false);
+  // A model particle of a NT slot blends SRCALPHA / ONE, a non-NT one SRCALPHA / INVSRCALPHA.
+  check('NT blend: SRCALPHA / ONE', modelParticleBlend(particleIsNt(1)).dst === 2 && modelParticleBlend(particleIsNt(1)).src === 5);
+  check('non-NT blend: SRCALPHA / INVSRCALPHA', modelParticleBlend(particleIsNt(0)).dst === 6);
+}
+
+// Rafoie's ring: the cloak flag (0x400) and the advanced effects setting (render/advancedeffects.ts).
+{
+  const ring = startEmitters('rafoie', 0, true)[0];
+  check('Rafoie ring: the ring 0x1a is the model with the cloak flag', ring.id === 0x1a && emitterFx(ring).cloak === true && emitterFx(ring).model?.chunk === 9);
+  check('Rafoie mark 0x39 is not cloaked', emitterFx(startEmitters('rafoie', 0, false)[0]).cloak === undefined);
+  check('advanced effects default on (ASSUMED)', advancedEffectsOn() === true);
+  setAdvancedEffects(false);
+  check('advanced effects switch off', advancedEffectsOn() === false);
+  setAdvancedEffects(true);
+}
+
+// Rafoie's fire sphere (combat/techfire.ts RafoieSphere): the child's life, scale and fade.
+{
+  const s = new RafoieSphere(1, 2, 3);
+  check('sphere: at the blast point, lifted 5 (g_RafoieParticleYOffset)', s.x === 1 && s.y === 7 && s.z === 3);
+  check('sphere: scale starts at 1.2, alpha 1', Math.abs(s.scale - 1.2) < 1e-6 && s.fade === 1);
+  s.step();
+  // Vec3LerpIfDistance with rate 0.05: dist = sqrt(3) * 0.7, factor = dist * 0.05.
+  const want = 1.2 + 0.7 * Math.sqrt(3) * 0.7 * 0.05;
+  check('sphere: the first update grows the scale by the exe lerp', Math.abs(s.scale - want) < 1e-4);
+  check('sphere: the fade falls 0.035 an update', Math.abs(s.fade - (1 - 0.035)) < 1e-6);
+  for (let i = 0; i < 28; i++) s.step();
+  check('sphere: the fade reaches 0 after 29 updates and stays there', s.fade === 0);
+  check('sphere: alive through the 110th update', s.alive === true && s.ticks === 29);
+  for (let i = 29; i < 110; i++) s.step();
+  check('sphere: alive on update 110', s.alive === true && s.ticks === 110);
+  s.step();
+  check('sphere: gone on update 111 (0x6e < counter)', s.alive === false && s.ticks === 111);
+  // The lerp factor is the distance times 0.05 (the length is sqrt(3) |diff|), so the gap shrinks by
+  // about 0.0866 * gap^2 a step: the scale is still short of 1.9 at the end of the life (about 1.81 at 110).
+  const long = new RafoieSphere(0, 0, 0);
+  for (let i = 0; i < 110; i++) long.step();
+  check('sphere: the scale is about 1.81 at update 110 (approaches 1.9 slowly)', long.scale > 1.79 && long.scale < 1.83);
+  for (let i = 110; i < 5000; i++) long.step();
+  check('sphere: the scale settles near 1.9 (the rate 0.05 stops the lerp at a length of 0.05)', Math.abs(long.scale - 1.9) < 0.03 && long.scale <= 1.9 + 1e-6);
+  check('sphere: the 0..15 counter wraps', long.ring === 5000 % 16);
 }
 
 if (failures) {
