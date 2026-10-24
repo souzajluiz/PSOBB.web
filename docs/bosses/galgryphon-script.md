@@ -309,6 +309,11 @@ advance states; which one the seed script enters on death is UNCLEAR.
 
 ## 6. What still blocks a port
 
+**Correction (2026-10-23, DEVLOG):** item 1 below is wrong for the leader. The leader picks its
+states locally (the default list from S4, RNG and the table) and its packet loops back through the
+local 0xA0 dispatch; only followers take records from the network. The HP gate (4.3) runs the death
+script once. Ported in `client/src/combat/galgryphonscript.ts`; the state handlers are still open.
+
 1. **Authority's record stream.** Who builds the 0x14 records that come in over 0xA0, and from what
    table. Only the seed (S33, infinite) is found. Until that is known, the state graph is not.
 2. **HP gate vs HP ratio** (section 4.3). Which one is live.

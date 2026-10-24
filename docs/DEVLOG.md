@@ -15766,3 +15766,43 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 1. The boss door 0x0103: its vtable's slot 1 (0x00615a2c) and the lock path (no slot 12); then the model, collision and the state through the bit (the dump's 0x00619e34 rule belongs to other vtables). Not a port object.
 2. The beam's motion when bit 0 is set (0x00657e00: +0xb4 / +0xb8, SFX 0x4dc, particles 0x229), the event 0x007b5038 of the lock, and the entity flag 8 pair (FUN_007b52c4 / 52ec); the port's beam door keeps its generic panel motion.
 3. The Challenge "Area n" title: the dump's "Area" strings are the Area Map's name line (`s_AreaName_Format`, dump 789475, in the debug map menu) and a debug object text (`s_WarpObjectAreaNumFormat` on text id 0x130020, dump 533004); neither is the Challenge title. Not traced further.
+
+## 2026-10-23: Gal Gryphon pattern script ported; the premise (network records) is wrong for the leader
+
+**Premise correction.** `docs/bosses/galgryphon-script.md` section 6 says the state records come from the authority's 0xA0 stream and cannot be ported. The exe says otherwise. The leader makes the choice itself, from the pattern table and `rand()`; its own packet comes back to it through the local dispatch. Only followers take their state from the network. The HP gate in section 4.3 is not a contradiction either: it runs the death script, and the alive choices come from the default list and the state handlers.
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; table bytes from `tools/gen-galgryphon-script.py`):
+- Follower flag `+0x4e8` (`field_0xa0`): set in `galgryphon_constructor` (dump 225773, lines 226009-226017) from the logged-in check and the party-leader check. `update_gal_gryphon` (dump 226140): flag 1 (follower) only calls phases 8 and 0 of the state; flag 0 (leader) calls `HandleGalgryphonState9_004a7360` (dump 226240) and then phases 8 and 0.
+- Death gate `HandleGalgryphonState9_004a7360` (objdump 0x004a7360..0x004a7388, PROVEN): the pattern runs iff `(flags & 0xc) == 0` and cur HP `+0x334 <= 0` (`jle`); otherwise phase 9. Bit 0x8 is set by the pattern and never cleared in the dump, so the death script runs once. Its stage lists are `+0x64` (other), `+0x68` (1), `+0x6c` (3), `+0x70` (2).
+- Alive choice: the entry state S4 (`GalgryphonUpdateState_004a22b0`, dump 224151) sets sub-step `+0x6e4 = 1` when the entry motion ends (`+0xb0 & 0x10`, dump 224256). Phase 2/9 with sub-step 1 calls `ProcessGalgryphonDefaultSubcommandPacket_004a8d5c` (dump 227369): the walk starts at table `+0x00`.
+- Loop-back: `SendGalgryphonActionPacket_004a7b28` (dump 226584) calls `checked_call_packet0x60_subcommand` (dump 815078), which sends the packet and then runs the local table entry for 0xA0 (`(*action_func)(data)`, behind the map permission check). That entry is `SyncPlayerToEntityTransform_004a7034` (dump 226104), which sets the state through `SetEnemyAiState`.
+- Packet: 0x28 bytes; u16 id @2, float pos @4/8/c, heading @0x10, the resolved record @0x14 (op short = state, roll short = duration). The receiver's `SUB42` reads op from @0x14.
+- Branch rules (`SelectGalgryphonRandomState_004a771c`, dump 226437): all seven types checked against the decompile. One correction to the doc: the branch index P is `g_GalgryphonAnimationSpeeds[2]->field10_0x28` in the decompile, not `DAT_00a47640+0x28` (see ASSUMED).
+- Op 0x21 is both the branch opcode and state 33's index: the seed record (state 0x21) is S33. Op 0x22 is a hold; a death list ends in a hold, so the packet with op 34 (S34, remove) ends the script. Stage lists: other = S6, S5, S34; 1 = S5, S34; 3 = S30, S6, S5, S34; 2 = S16, S5, S34.
+
+**What changed:**
+- `tools/gen-galgryphon-script.py`: reads the 29 list pointers at `0x009ab820` and the 188 records (0x48 bytes) from the exe; `--dump` lists them. Writes numbers only, no exe bytes.
+- `client/src/combat/galgryphonscriptdata.ts` (generated): the lists.
+- `client/src/combat/galgryphonscript.ts`: `GalgryphonScript` (cursor, branch rules, roll, op handlers 0x09 / 0x0a / 0x0e / 0x1b / 0x1e, hold), `galgryphonStageDue` (the death gate), `decodeGalgryphonSync` (the 0xA0 packet's fields).
+- `tests/galgryphonscript.test.ts` (new): data counts, every branch type, the HP branch and its 0x200 flag, the default list walk, the death script, the handlers, the gate, the sync decode.
+
+**ASSUMED:**
+- P is animation speed entry 2, field 0x28 (the decompile), not the doc's `DAT_00a47640+0x28`. Clamped to 0..7.
+- Order of the random draws inside the handlers (0x09: count, +0xc, +0x10, sign; 0x0a: t, speed, +0xc, count).
+- Ops 0x08 and 0x0e leave `+4` at 0 (their helpers 0x4a6250 / 0x4a62b4 and `f(rec,1)*f(rec,0)` are UNCLEAR).
+- The 0x0a heading comes from the caller (the exe's fpatan source is not read).
+- `ROUND` is `floor(x + 0.5)` (negative values unchecked).
+- The packet's record tail is the resolved record: the stack pairs `local_38` with `local_24` at +0x14 in `ProcessGalgryphonSubcommandPacket_004a7390`.
+- The leader's loop-back is not checked against the map permission table for the Gryphon's map.
+- The 0x200 flag's set / clear rule is taken as decompiled.
+
+**Checks:**
+- `node tests/galgryphonscript.test.ts` (new), `node tests/galgryphon.test.ts`, `node tests/galgryphonminion.test.ts` pass (Node 24).
+- `cd client && npx tsc --noEmit -p .` exit 0 (node_modules linked from the main checkout for the run, then removed).
+- Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- The 35 state handlers (`docs/bosses/galgryphon-states-a.md`, `-b.md`) and the sub-step writes that re-arm the default list after each state. Without them the leader makes one choice and then idles. This is the rest of the brain.
+- Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts` has no brain for it). The S7 throw (`galMinions.throw()`, anim 20.5) has no caller until the states exist.
+- The follower's apply (SetEnemyAiState on the synced state, then the next advance reads the stale seed S33 at `+0x4b0`; UNCLEAR whether that is intended).
+- The attack's area hit (`0x0051fc9c`, the DrlBurst-style helper) and the launcher's particles and sounds.
