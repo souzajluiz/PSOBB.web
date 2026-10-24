@@ -8,7 +8,13 @@
 // meaning is a guess (marked where it is used). Not here (left, see the map section 11 and the
 // DEVLOG): the attack hit geometry (sword stab, sword wave, tail swipe, fire lancer, mines), the
 // controller's 9 sub-states (spawn, fade, kill), the form 2 entity (unreached in this build, map 12.2),
-// the beast's movement (UpdateOlga1Position / Rotation, 0x931c0 / 0x93080), effects and sounds.
+// the beast's movement beyond the arcs and the turn (see below), effects and sounds.
+// The sword wave's hit window is the brain's `waveTick` (combat/olgaflowhits.ts; the hit test and the
+// damage are render/combat.ts's). The stab, the tail swipe and the lancer hits are not ported.
+//
+// The beast's movement (map 14): the attack frames of OLGA1_ARC_ROWS move it along an arc toward its
+// home (SetOlga1AttackPosition2_00496d4c, the spawn point), and every tick it turns to face away from
+// the origin (+0x440 = 1) or toward it (+0x440 = 0) by at most 0x1b4 / 0x1555 BAMS (UpdateOlga1Rotation_00493080).
 //
 // The table: the beast's 40 state rows at 0x009a70a4 (stride 0x18: motion-pair row, value (+0x420),
 // enter fn, leader fn, frame fn; exe, read with tools/exedata.py). Each tick the exe runs the frame fn
@@ -23,7 +29,8 @@
 // is a fixed Int32Array).
 
 import { BAMS_TO_RAD, type AiFrame, type AiTarget, type EnemyAiMotion } from './enemyai.ts';
-import { BrainBase, loop, once } from './enemyfsm.ts';
+import { BrainBase, loop, once, turnToward } from './enemyfsm.ts';
+import { OLGA_SWORD_WAVE } from './olgaflowhits.ts';
 
 // --- wire ----------------------------------------------------------------------
 
@@ -248,7 +255,10 @@ export class OlgaFlowAi extends BrainBase {
   // two attack flags (+0x440 and +0x41c, the packet's bytes +8 and +9).
   stateIndex: number = OLGA1.entrance;
   timer = 0;
-  flag440 = 0;
+  // The turn flag (+0x440): the ctor sets 1 (InitializeOlga1Form1, dump line 216598); the attack
+  // starts set 1 before their send (StartOlga1Attack, SelectAndSendOlga1Attack); 0 is set by rows the brain
+  // does not bind (olga1_DOWN_CENTOP_func3), so it stays 1 here (ASSUMED).
+  flag440 = 1;
   flag41c = 0;
   rnd424 = 0;
   // The HP at the hub entry (+0x4b8).
@@ -257,13 +267,22 @@ export class OlgaFlowAi extends BrainBase {
   dead = false;
   // Set on the first hit that takes the HP to 0 (the body's death starts; the kill comes after the hold).
   dying = false;
-  readonly height: number;
+  // The body's height (+0x3c): the spawn height, moved by the arc (ASSUMED the selection's height is this).
+  height: number;
+  // The home of the arc (+0x428 / +0x42c / +0x430): the spawn point (the ctor copies the spawn position).
+  private readonly home: { x: number; y: number; z: number };
+  // The state's total duration (+0x414), the arc's denominator: the timer that enter set (ASSUMED).
+  private total = 0;
   private readonly isLeader: () => boolean;
   private readonly frames: (motion: number) => number;
   private readonly hist = new Int32Array(HIST);
   private events: OlgaEvent[] = [];
   private motionRow = -1;
   private deathTimer = 0;
+  private stateTicks = 0;
+  // True on a tick whose frame fn runs the sword wave's hit test (CheckForSwordWaveHittingPlayers):
+  // the states 5..10 with the anim window (see swordWaveWindow). Read by render/combat.ts after tick().
+  waveTick = false;
   private pendingMotion: EnemyAiMotion | null = null;
 
   constructor(init: OlgaFlowInit) {
@@ -273,6 +292,7 @@ export class OlgaFlowAi extends BrainBase {
     this.maxHp = init.maxHp;
     this.snapshot = init.hp;
     this.height = init.height;
+    this.home = { x: init.x, y: init.height, z: init.z };
     this.isLeader = init.leader;
     this.frames = init.frames ?? (() => 30);
     this.state = 'olga1:0';
@@ -330,6 +350,7 @@ export class OlgaFlowAi extends BrainBase {
   // brain counts its own timers, so a motion never holds a state).
   tick(_targets: readonly AiTarget[], _animationEnded?: boolean): AiFrame {
     const out = this.frame();
+    this.waveTick = false;
     if (this.dead) return this.finish(out);
     if (this.dying) {
       this.deathTimer -= 1;
@@ -340,6 +361,10 @@ export class OlgaFlowAi extends BrainBase {
       }
       return this.finish(out);
     }
+    this.stateTicks += 1;
+    this.waveTick = this.swordWaveWindow();
+    // The frame fn's arc (SetOlga1AttackPosition2) runs on the timer before it counts down.
+    if (OLGA1_ARC_ROWS.has(this.stateIndex)) this.moveArc(this.timer, this.total);
     this.timer -= 1;
     // The frame fn of the row: a timer that has run out transitions (the no-hang rule).
     if (this.timer < 0) this.transition();
@@ -347,7 +372,45 @@ export class OlgaFlowAi extends BrainBase {
       out.motion = this.pendingMotion;
       this.pendingMotion = null;
     }
+    this.turn();
     return this.finish(out);
+  }
+
+  // SetOlga1AttackPosition2_00496d4c: the beast's arc toward its home. `r` is the timer (+0x418), `n` the
+  // state's total (+0x414). The radius, the angle and the height each move by the fraction k toward the
+  // home's (k = 1 / n, or 2 sin(32768 r / n) / n when n >= 11 and r / n > 0.1); at r <= 0 it snaps home.
+  // ASSUMED: the angle's short difference is home - current (b_minus_a) and the fraction k is the same for all.
+  private moveArc(r: number, n: number): void {
+    if (n < 1) return;
+    const home = this.home;
+    if (r <= 0) {
+      this.x = home.x;
+      this.height = home.y;
+      this.z = home.z;
+      return;
+    }
+    const radiusCur = Math.hypot(this.x, this.z);
+    const angCur = Math.atan2(this.x, this.z);
+    const radiusHome = Math.hypot(home.x, home.z);
+    const angHome = Math.atan2(home.x, home.z);
+    let k: number;
+    if (n < 11 || r / n <= OLGA_ARC.threshold) k = OLGA_ARC.normalization / n;
+    else k = (2 * Math.sin(Math.round(OLGA_ARC.scale * (r / n)) * BAMS_TO_RAD)) / n;
+    const radius = (radiusHome - radiusCur) * k + radiusCur;
+    const delta = Math.atan2(Math.sin(angHome - angCur), Math.cos(angHome - angCur));
+    const ang = angCur + delta * k;
+    this.x = Math.sin(ang) * radius;
+    this.z = Math.cos(ang) * radius;
+    this.height = (home.y - this.height) * k + this.height;
+  }
+
+  // UpdateOlga1Rotation_00493080: the heading (+0x60) turns toward the origin (+0x440 = 0) or away from it
+  // (+0x440 = 1) by at most 0x1555 BAMS when +0x41c is set, else 0x1b4. Nothing turns at the origin.
+  private turn(): void {
+    if (!(Math.hypot(this.x, this.z) > OLGA_TURN.minDistance)) return;
+    const want = Math.atan2(-this.x, -this.z) + (this.flag440 !== 0 ? Math.PI : 0);
+    const max = (this.flag41c !== 0 ? OLGA_TURN.slow : OLGA_TURN.fast) * BAMS_TO_RAD;
+    this.angle = turnToward(this.angle, want, max);
   }
 
   onDamage(_clientId: number): void {}
@@ -369,6 +432,7 @@ export class OlgaFlowAi extends BrainBase {
   // (the body model's motion; mode 2 plays once), and the timer that the row's enter sets.
   private enter(index: number): void {
     this.stateIndex = index;
+    this.stateTicks = 0;
     this.state = `olga1:${index}`;
     this.hist.copyWithin(1, 0, HIST - 1);
     this.hist[0] = index;
@@ -383,6 +447,16 @@ export class OlgaFlowAi extends BrainBase {
       this.pendingMotion = m;
     }
     this.timer = this.durationOf(index);
+    this.total = this.timer;
+  }
+
+  // The sword wave's test runs in the frame fns of rows 5..10 (0x00498634, 0x00498674). ASSUMED: the
+  // anim time is the ticks since the state entered (the exe's animation_counter is not bound), and the
+  // chunk test (46) is taken as met inside these rows.
+  private swordWaveWindow(): boolean {
+    const n = this.stateIndex;
+    if (n < OLGA1.swordWaveTop || n > OLGA1.swordWaveMoveTop + 2) return false;
+    return this.stateTicks >= OLGA_SWORD_WAVE.animStart && this.stateTicks <= OLGA_SWORD_WAVE.animEnd;
   }
 
   private durationOf(index: number): number {
@@ -478,6 +552,7 @@ export class OlgaFlowAi extends BrainBase {
   // The 0x18 / 0x1c attack that the HP progress picks (SelectAndSendOlga1Attack_00494b20): the
   // heading, the kind, and 0x18 or 0x1c. ASSUMED the 0xfb branch is the rare variant.
   private selectAndSend(): void {
+    this.flag440 = 1; // the exe sets +0x440 = 1 before its send (SelectAndSendOlga1Attack_00494b20, dump line 214743)
     const dir = this.headingByte() + Math.round((this.rng() - 0.5) * 2 * 10);
     this.send(0x18, dir, 0x1c, this.rng() < 0.5 ? 0xfb : 0x14);
   }
@@ -485,6 +560,7 @@ export class OlgaFlowAi extends BrainBase {
   // The state-start attack (StartOlga1Attack_00494290 / GetOlga1AttackDirection_0049448c): the
   // target's heading byte plus a random offset (+-80, 0x00902ba0 = 160), the kind 0x12 or 0x1c.
   private startAttack(): void {
+    this.flag440 = 1; // StartOlga1Attack sets +0x440 = 1 before its send (dump StartOlga1Attack_00494290, lines 214285 and 214466)
     const dir = this.attackDirection();
     this.send(OLGA1.attackStart, dir.dir, dir.kind, 10);
   }
@@ -563,6 +639,15 @@ export class OlgaFlowAi extends BrainBase {
     return s8(h16 >> 8);
   }
 }
+
+// The arc's constants (exe): 0x009029fc = 1.0 (normalization), 0x00902a00 = 32768 (scale), 0x009026fc = 0.1 (threshold).
+const OLGA_ARC = { normalization: 1, scale: 32768, threshold: 0.1 } as const;
+// The turn's constants (exe): 0x00902c68 = 1e-5 (the distance from the origin), g_Olga1RotationParams 0x1555 (+0x41c set)
+// and 0x1b4 (clear).
+const OLGA_TURN = { minDistance: 1e-5, slow: 0x1555, fast: 0x1b4 } as const;
+// The rows whose frame fn runs the arc: 2 (RandomMove, ASSUMED by address), 4 (SpreadMove, 0x004985e0), 8..10
+// (the wave move), 11..20 (the stab), 21 (the tail). The rows 3, 5..7 and 1 have no arc (their frames do not call it).
+const OLGA1_ARC_ROWS: ReadonlySet<number> = new Set([2, 4, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
 
 // The attack's chance and the rand scale: g_Olga1AttackInitiationChance (dump; the address is not
 // bound): ASSUMED 0.5.

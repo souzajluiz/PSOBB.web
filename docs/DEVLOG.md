@@ -19107,3 +19107,14 @@ Floor 1 totals: 14 groups changed; 3 with a trigger but no change (20/1 idle, 70
 **Test.** `tests/questimage.test.ts`: a synthetic image (noise, a repeated tile, a flat run) typed and re-assembled byte for byte; a parsed `.bin` gives the same text; an empty image; trailing bytes after the stream (`.extra`); non-PRS bytes stay hex; the `.struct IMAGE_DATA` assembler errors.
 
 **Not done.** The PSO V2 encrypted download format of the non-BB versions (newserv `src/Quest.cc` / `DownloadSession`), which is a separate and larger piece.
+## 2026-10-24: Olga Flow form 1: the sword wave lands, the beast arcs and turns (map section 14)
+
+**Finding.** The hit of the sword wave is made by `CheckForSwordWaveHittingPlayers_00494f58` (dump 214878), which the frame fns `Olga1HandleSwordWaveAttack_00498634` (states 5..7) and `Olga1HandleSwordWaveMoveAttack_00498674` (states 8..10) call every tick. It tests each Olga-map player against the sword's line on the XZ plane (distance `<= 15.0`, `0x00902b04`, and the closest point between the two sword points) and calls `entity_hit_by_tech` (group 0) with power `randomly_adjust(+0x484, 0.1)`. `+0x484` is the beast's animation speed BattleParam row 43 (`fparam1`, or 20). The window is the wave's chunk 46 with anim time in [12.5, 22]. The body moves by the arc `SetOlga1AttackPosition2_00496d4c` (dump 216136) in the frames of rows 2, 4, 8..21, and turns each tick by `UpdateOlga1Rotation_00493080` (dump 213559).
+
+**Port.** `client/src/combat/olgaflowhits.ts` (new): the line test, the power, the sword trail. `client/src/combat/olgaflowai.ts`: `waveTick` (the window), `moveArc`, `turn`, the flag 0x440 starts at 1 (ctor) and the attack starts set it (the exe's sends). `client/src/render/combat.ts`: `olgaSwordWave` (the local player's test, the tech damage through `enemyTechHitsPlayer`), `tickOlga` calls it. `tests/olgaflowai.test.ts`: the wave geometry, the power bounds, the window (ticks 13..22), the arc (snap at the timer's end), the turn.
+
+**Not ported.** The stab's damage (the stab object's state 1, `UpdateVoloptForm7State`, is unbound), the tail swipe's hit (its anchor `+0x640..+0x654` has no decoded writer), the lancer. The tail's triangle test is decoded and recorded in the map.
+
+**ASSUMED.** The sword tip is model node 4 (the first entry of the wave bone table 0x00902678) and the other point is the previous tip: the exe's writers of `position_of_sword` / `unk_0x5e0` are not bound. Anim time = ticks in the state. The XZ dot. Row 2's arc (by address). The flag 0x440 stays 1 (the rows that clear it are unbound).
+
+**Checks.** `node tests/olgaflowai.test.ts`: all pass. `node tests/combat.test.ts`: 5852 checks, 0 failures (needs `vendor/newserv` linked in a worktree). `client/node_modules/.bin/tsc --noEmit -p client`: clean.

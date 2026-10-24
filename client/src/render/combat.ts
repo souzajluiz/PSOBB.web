@@ -73,6 +73,7 @@ import { VoloptForm2Ai, FORM2_SLOTS } from '../combat/volopt2.ts';
 import { GalgryphonMinionManager } from '../combat/galgryphon.ts';
 import { GalgryphonAi } from '../combat/galgryphonai.ts';
 import { OlgaFlowAi, decodeOlgaA4 } from '../combat/olgaflowai.ts';
+import { OLGA_AREA, OLGA_SWORD_WAVE, OlgaSwordTrail, randomlyAdjust, olgaBattlePower, swordWaveTouches } from '../combat/olgaflowhits.ts';
 import { galgryphonAttackBurst, GALFX_RING, GALFX_RING_PARTICLES } from '../combat/galgryphonfx.ts';
 import { DarkFalzAi, DarkFalzPartAi, DF_ID, SCENE_NAMES } from '../combat/darkfalz.ts';
 import { DEMO_WARP_PARTS } from '../formats/enemymodels.ts';
@@ -241,6 +242,9 @@ const buffName = (type: number): string => ({ 9: 'Shifta', 10: 'Deband', 11: 'Je
 // GC-ForestGameRareMagFeed sends 0x20900E00 for a killing hit).
 // play_directional_sound_effect: a sound this far from the listener is dropped.
 const SE_CUTOFF = 300;
+// The beast's BattleParam row (Olga Flow form 1: enemy row 43 for the stats and the animation speeds,
+// exe ep1_None__ep2_OlgaFlowForm1__ep4_SpinnerKondrieu2 = 43, map docs/bosses/olgaflow-map.md 6).
+const OLGA_ANIM_ROW = 43;
 // The Moon Atomizer's object range (FUN_0069a1e0: 0x41200000 = 10.0).
 const ATOMIZER_RANGE = 10;
 // The 6x33 object: CreateTechniqueEntity_006ef8a4(sender, pos, [target], 0x1d). The
@@ -2863,6 +2867,35 @@ export class CombatView {
   // The brain owns the body and its attack states; the leader's sends go out as 6xA4 (events), and the
   // death is the brain's: 'killed' runs the kill once (bossKilled: the drop, EXP, the 6x76 flag).
   private olgaLastHit = new Map<number, boolean>();
+  private olgaTrails = new Map<number, OlgaSwordTrail>();
+
+  // The sword wave's hit (CheckForSwordWaveHittingPlayers, combat/olgaflowhits.ts): on the brain's
+  // waveTick, the local player is tested against the sword line (the sword tip = the model's bone, ASSUMED)
+  // and takes the group-0 tech damage. Each client resolves its own player (as tickShots does).
+  private olgaSwordWave(e: EnemyRuntime, ai: OlgaFlowAi): void {
+    let trail = this.olgaTrails.get(e.index);
+    if (!trail) {
+      trail = new OlgaSwordTrail();
+      this.olgaTrails.set(e.index, trail);
+    }
+    if (!ai.waveTick) {
+      trail.reset();
+      return;
+    }
+    const inst = e.instance;
+    const bone = inst.nodes?.[0]?.[OLGA_SWORD_WAVE.swordBone];
+    if (!bone) return;
+    inst.root.updateWorldMatrix(true, true);
+    const w = bone.getWorldPosition(new THREE.Vector3());
+    const { a, tip } = trail.step({ x: w.x, z: w.z });
+    const me = this.view?.playerPositions().get(this.game.selfId);
+    if (!me || this.area !== OLGA_AREA || this.damage.dead) return;
+    if (!swordWaveTouches({ x: me.x, z: me.z }, a, tip)) return;
+    const ctx = this.difficultyParams;
+    const speed = ctx?.params ? ctx.params.movement(ctx.difficulty, OLGA_ANIM_ROW) : null;
+    const power = randomlyAdjust(olgaBattlePower(speed?.fparam1 ?? 0), 0.1, this.rng());
+    this.enemyTechHitsPlayer(e, power, tip.x, tip.z, `E-${e.index.toString(16)} (${e.slot.type}) sword wave`);
+  }
 
   private tickOlga(e: EnemyRuntime, ai: OlgaFlowAi, targets: AiTarget[]): void {
     const inst = e.instance;
@@ -2870,6 +2903,8 @@ export class CombatView {
     const r = ai.tick(targets);
     root.position.set(r.x, root.position.y, r.z);
     root.rotation.y = r.angle;
+    // After the placement, so the sword bone is read at this tick's body (ASSUMED: the pose is last frame's).
+    this.olgaSwordWave(e, ai);
     const body = r.motion;
     if (body) {
       // The leg model (animator 0 in the spec order) plays the row's leg motion; the others the body's.
