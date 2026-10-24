@@ -340,6 +340,49 @@ export function menuViewShift(f: number): { ox: number; oy: number; s: number } 
   return { ox: (80 / 320) * t, oy: (115.2 / 240) * t, s: 1 - (80 / 320) * t };
 }
 
+// The 3D view's visible rectangle while the menu is open, as the exe records it
+// (render_player_menu_background, dump 700858: UIElementSetArrayElement_00719978
+// / UIElementSetArrayElement6_0071998c, which write the global rect at 0x00a98480
+// +0xc (min x) and +0x18 (max y); the element index passed is the player slot
+// and is ignored, 0x00719960 returns the one global). Open: min x =
+// 0x009712e0 (160) / 3 * frame, max y = frame * (0x009712dc (230.4) / 0x009712e8
+// (-3)) + 0x009712ec (480). The rect is the clamp of the chat bubbles (callers
+// 0x0071e5xx..0x00721dxx); nothing in the exe reads it to draw a panel. The
+// port uses it as the extent of the menu's backdrop (ASSUMED look, see
+// drawMenuPanel): the 3D view keeps the right of minX and the top of maxY.
+export function menuViewRect(f: number): { minX: number; maxY: number } {
+  return { minX: (160 / 3) * f, maxY: f * (230.4 / -3) + 480 };
+}
+
+// The backdrop behind the menu windows: the L-shaped area outside menuViewRect
+// (left of minX and below maxY), filled with the window body's scanline tile
+// (f256_hyouji.prs texture 1 texels 32..64 x 32..64, the centre of the window
+// frame) and edged with a 2 px cyan line along the 3D view. ASSUMED: the exe
+// routine that paints it was not found (see DEVLOG 2026-10-23); the rectangle
+// is the exe's, the tile and the line colour are the window skin's.
+export function drawMenuPanel(ctx: CanvasRenderingContext2D, frameTex: CanvasImageSource, f: number): void {
+  if (f <= 0) return;
+  const { minX, maxY } = menuViewRect(f);
+  const BIG = 4000; // the canvas clips: the panel reaches the screen edges of a wide frame
+  ctx.fillStyle = '#063a42'; // ASSUMED: the tile is translucent, so an opaque base keeps the 3D view out
+  const fill = (x: number, y: number, w: number, h: number): void => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.fillRect(x, y, w, h);
+    for (let yy = Math.floor(y / 32) * 32; yy < y + h; yy += 32) {
+      for (let xx = Math.floor(x / 32) * 32; xx < x + w; xx += 32) ctx.drawImage(frameTex, 32, 32, 32, 32, xx, yy, 32, 32);
+    }
+    ctx.restore();
+  };
+  fill(-BIG / 4, -BIG / 4, minX + BIG / 4, 480 + BIG / 2); // left strip
+  fill(minX, maxY, 640 + BIG / 4 - minX, 480 + BIG / 4 - maxY); // bottom band
+  ctx.fillStyle = '#4fe3f5';
+  ctx.fillRect(minX - 1, -BIG / 4, 2, maxY + BIG / 4);
+  ctx.fillRect(minX - 1, maxY - 1, 640 + BIG / 4 - minX, 2);
+}
+
 // ---------------------------------------------------------------------------
 // Item List window (main menu > Item Pack > Items, id 0xb): FUN_0075086c ->
 // FUN_0075198c(table entry 3 = (13, 256), size 308 x 184 (0x00973ca0), 0x24

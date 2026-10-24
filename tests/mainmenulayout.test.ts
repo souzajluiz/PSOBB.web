@@ -12,7 +12,7 @@
 //   - the view shift constants: 80 / 115.2 at 0x009712c8 / 0x009712cc, the frame
 //     count 3 at 0x00971300.
 // Run: node tests/mainmenulayout.test.ts
-import { LABEL_UV, MAIN_MENU, MAIN_MENU_ANDROID, MENU_POS, menuViewShift, type MenuEntry } from '../client/src/classic/mainmenu.ts';
+import { LABEL_UV, MAIN_MENU, MAIN_MENU_ANDROID, MENU_POS, menuViewRect, menuViewShift, type MenuEntry } from '../client/src/classic/mainmenu.ts';
 
 let failures = 0;
 const eq = (a: unknown, b: unknown, what: string) => {
@@ -60,6 +60,14 @@ const s3 = menuViewShift(3);
 eq(Math.abs(s3.ox - 0.25) < 1e-9 && Math.abs(s3.oy - 0.48) < 1e-9, true, 'view shift at frame 3 (80 / 320, 115.2 / 240)');
 eq(Math.abs(s3.s - 0.75) < 1e-9, true, 'view scale at frame 3 (1 - 80 / 320)');
 eq(Math.abs(menuViewShift(1).ox - 0.25 / 3) < 1e-9, true, 'view shift is linear over the 3 frames');
+
+// --- the 3D view rect (0x00719978 / 0x0071998c; 0x009712e0 = 160, 0x009712dc = 230.4, 0x009712e8 = -3, 0x009712ec = 480)
+const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9;
+eq(menuViewRect(0), { minX: 0, maxY: 480 }, 'view rect at frame 0 is the whole screen');
+eq(near(menuViewRect(3).minX, 160) && near(menuViewRect(3).maxY, 249.6), true, 'view rect at frame 3: x >= 160, y <= 249.6');
+eq(near(menuViewRect(1).minX, 160 / 3) && near(menuViewRect(2).maxY, 480 - 2 * 76.8), true, 'view rect is linear over the 3 frames');
+// The 3D view of the shift covers x from 320 + 80 - 0.75 * 320 = 160: the rect's left edge.
+eq(near(320 + 80 - 0.75 * 320, menuViewRect(3).minX), true, 'rect left edge = the shifted 3D view left edge');
 
 if (failures) {
   console.log(`${failures} failure(s)`);
