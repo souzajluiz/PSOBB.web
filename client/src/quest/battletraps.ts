@@ -24,8 +24,8 @@
 // earlier trace and were not re-checked. The validator's predicate (dump line 595030,
 // is_packet0x60_subcommand_sent_by_self) refuses a 6x83 that the client sent itself unless
 // g_IsActionExecuting is set, so a self echo is not placed twice; the local placement runs
-// during the palette action. UNCLEAR: how the exe dispatches its own send (checked_call_
-// packet0x60_subcommand) was not traced, and the server's echo behaviour is not checked.
+// during the palette action. VERIFIED (2026-10-24): checked_call_packet0x60_subcommand (dump 815078)
+// sends first and runs the local handler only when the map permits. The server's echo is not checked.
 //
 // The trap object (vtable 0x00b2a5c0; constructor 0x0062f9a8 with the base 0x0062ed74):
 //   VERIFIED: +0x35c effect group: type 0 -> 1 (damage), type 2 -> 0x11 (slow),
@@ -33,20 +33,19 @@
 //   types 2 and 3. +0x388 "announced" = 0. +0x386 is the trap number (its store is on
 //   the path after the constructor; the formula is ASSUMED: count + client * 0x50 +
 //   type * 0x14, see battle.ts trapNumber).
-//   ASSUMED: arming delay +0x84 = 0x96 frames, fuse +0x88 = 0x1e frames (the exe does not
-//   store these as immediates in the trap code; the place they are set is not traced);
-//   trigger radius +0x354 and blast radius +0x358 = 50.0 (0x42480000), 80.0 in Ultimate
-//   outside battle (the float literals exist in the exe but the trap-specific store was
-//   not located).
+//   VERIFIED (trap_constructor, dump 492906..493000): arming +0x84 = 0x96, fuse +0x88 = 0x1e,
+//   trigger +0x354 and blast +0x358 = 50.0; the Ultimate branch sets +0x84 = 0x3c and +0x358 = 80.0.
 //
 // The state machine (update_trap 0x0062f4a4, the 6x80 handler 0x0062f2d4):
-//   state 0: ASSUMED: the delay counts down; then the first live player on the floor
-//     within the trigger radius stuns the trap into state 3 (the owner only when
-//     g_BATrapsCanTargetOwnerPlayer).
+//   state 0 (VERIFIED 2026-10-24, trap_is_primed_and_has_target ~493012): the delay counts down; then the
+//     first live player on the floor within the trigger radius stuns the trap into state 3. The owner is
+//     skipped only when g_BATrapsCanTargetOwnerPlayer is off AND the Pioneer2 challenge byte is 1
+//     (triggerSkipsOwner); the byte is ASSUMED 0 in a battle, so the owner triggers its own trap.
 //   state 3: ASSUMED: the fuse counts down; when it was already negative the state becomes
 //     4 and 6x80 {trap number, what 2} is sent.
-//   state 4: ASSUMED: the blast hits every other live entity in the blast radius (a
-//     remote player is left to its own client); another trap in range is hit
+//   state 4: the blast hits every other live entity in the blast radius (a remote player is
+//     left to its own client; the dead / maybe_invuln / room / +0x32c == 2 checks are VERIFIED
+//     2026-10-24, see the blast loop in TrapField.tick); another trap in range is hit
 //     (unknown_player_hit_trap 0x0062f1f0): a trap in state 0 is stunned and its fuse is
 //     capped at 0xf (VERIFIED: 0x0062f269..0x0062f274 cmp 0x10 / movl $0xf to +0x88), a
 //     trap in state 3 goes to state 4 at once with its own 6x80 (VERIFIED: the state 3
@@ -63,14 +62,28 @@ export { trapNumber };
 
 // The constructor's stores (trap_constructor, dump 492906..493000, 2026-10-24 pass): +0x84 arm = 0x96
 // and +0x88 fuse = 0x1e are immediate stores; +0x354 trigger and +0x358 blast = 0x42480000 (50.0).
-// The Ultimate branch (g_CurrentFloor == ultimate and is_value_less_than_2(g_Pioneer2MapInitData) == 0)
-// stores arm 0x3c and blast 0x42a00000 (80.0) and sets g_BATrapsCanTargetOwnerPlayer = 0. Not ported:
-// the port has no floor id for `ultimate` and is_value_less_than_2 is not traced (UNCLEAR).
+// The Ultimate branch (dump 492994..493002): g_CurrentFloor == ultimate (difficulty_level 3, enum at
+// dump 86140) and is_value_less_than_2(g_Pioneer2MapInitData) == 0 stores arm 0x3c and blast 0x42a00000
+// (80.0), sets g_BATrapsCanTargetOwnerPlayer = 0 and g_BATrapOwnerTargetingDisabled = 1. The second global
+// has no reader in the dump (VERIFIED: its only uses are the writes at 492998, 612247, 612256).
 export const TRAP_ARM_FRAMES = 0x96; // VERIFIED (trap_constructor store to +0x84)
 export const TRAP_FUSE_FRAMES = 0x1e; // VERIFIED (trap_constructor store to +0x88)
 export const TRAP_CHAIN_FUSE = 0x0f; // VERIFIED (0x0062f274)
 export const TRAP_TRIGGER_RADIUS = 50; // VERIFIED (trap_constructor store to +0x354 = 0x42480000)
-export const TRAP_BLAST_RADIUS = 50; // VERIFIED (trap_constructor store to +0x358 = 0x42480000; Ultimate 80.0 not ported)
+export const TRAP_BLAST_RADIUS = 50; // VERIFIED (trap_constructor store to +0x358 = 0x42480000)
+export const TRAP_ULTIMATE_ARM_FRAMES = 0x3c; // VERIFIED (Ultimate branch store to +0x84)
+export const TRAP_ULTIMATE_BLAST_RADIUS = 80; // VERIFIED (Ultimate branch store 0x42a00000 = 80.0 to +0x358)
+export const DIFFICULTY_ULTIMATE = 3; // VERIFIED (enum difficulty_level, dump 86140)
+// character_flags bits read by the blast (update_trap, dump 492596..492700): VERIFIED from the enum (70177).
+export const CHARACTER_FLAG_DEAD = 0x800;
+export const CHARACTER_FLAG_MAYBE_INVULN = 0x4000000;
+// is_value_less_than_2 (dump 594289): returns the byte when it is < 2, else 0. So it is 1 only for a
+// byte of 1 and 0 for a byte of 0 or 2..255. VERIFIED. The byte is g_Pioneer2MapInitData[0], set by
+// SetSinowberillChallengeActive (dump 594094) from the challenge setup (601954) and the challenge editor
+// config (594990). ASSUMED: a battle is not a Sinowberill challenge, so the port's byte is 0.
+export function challengeFlagValue(byte: number): number {
+  return byte >= 0 && byte < 2 ? byte : 0;
+}
 
 // The placing permission. handle_packet0x60_subcommand0x83's row in g_Packet0x60SubcommandTable
 // (0x00a0fba0 + 95 * 8: action 0x83, permission 0x0006, handler 0x00695930, VERIFIED by reading the
@@ -85,7 +98,13 @@ export const MAP_ACTION_PERMISSION: readonly number[] = [
   0x04, 0x04, 0x02, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
   0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x02, 0x04, 0x00,
 ];
-// Whether the local handler runs for a 6x83 on this map (ASSUMED: the port's area is get_current_map).
+// The remote side (VERIFIED, 2026-10-24): a 0x60 packet from the ship goes to handle_packet0x60_and_0x62
+// (dump 809756) and a 0x6c/0x6d one to handle_packet0x6c_and_0x6d (dump 810073); both call
+// TeamQuest_ProcessSubcommands_00800860 (dump 815369), which walks the subcommands, finds the row, and
+// runs its action_func only when `map_action_permission_levels[get_current_map()] & row.permission` is
+// non-zero. So a remote 6x83 is gated by the RECEIVING client's map, the same test as the local one.
+// (The caller of handle_packet0x60_and_0x62 is not traced: ASSUMED it is the 0x60 receive routing.)
+// Whether the handler runs for a 6x83 on this map (ASSUMED: the port's area is get_current_map).
 export function trapPlacePermitted(map: number): boolean {
   const v = Number.isInteger(map) ? MAP_ACTION_PERMISSION[map] : undefined;
   return v !== undefined && (v & TRAP_ACTION_PERMISSION) !== 0;
@@ -194,6 +213,14 @@ export interface PlaceContext {
   ownerFloor: number;
   ownerPos: { x: number; y: number; z: number };
   ownerAngle: number;
+  // The receiving client's map (get_current_map). When set, the 0x83 permission gate applies to the
+  // placement (both the local dispatch and the remote TeamQuest_ProcessSubcommands path, see trapPlacePermitted).
+  map?: number;
+  // The owner's room words (+0x28 room_id_1 and +0x2e room_id_2, copied by trap_constructor). Undefined:
+  // the port has no room data (ASSUMED: the blast's room test then passes).
+  ownerRoom?: { room1: number; room2: number };
+  difficulty?: number; // g_CurrentFloor, the difficulty of the game (info.difficulty); 3 = Ultimate (default 0)
+  pioneer2Byte?: number; // g_Pioneer2MapInitData[0] (default 0, see challengeFlagValue)
 }
 
 // The palette slot that places a trap: group 1 = 4 (item) and group 2 = 0x0d..0x10; the trap
@@ -217,8 +244,14 @@ export type TrapState = 0 | 3 | 4 | 5;
 
 export class BattleTrap {
   state: TrapState = 0;
-  delay = TRAP_ARM_FRAMES; // ASSUMED
+  delay = TRAP_ARM_FRAMES; // ASSUMED (the Ultimate branch sets 0x3c, VERIFIED)
   fuse = TRAP_FUSE_FRAMES; // ASSUMED
+  blast = TRAP_BLAST_RADIUS; // +0x358 (50.0; 80.0 in the Ultimate branch, VERIFIED)
+  // The owner's room words copied at placement (+0x28 and +0x2e). Undefined when the placer had no room data.
+  room1?: number | undefined;
+  room2?: number | undefined;
+  // The Ultimate branch ran for this trap (it cleared g_BATrapsCanTargetOwnerPlayer; the caller applies it).
+  ultimate = false;
   readonly number: number;
   announced = false; // +0x388: the "<name> TRAP" line was shown
   // +0xa4 (the trap's hitboxes field, TrapProcessHitbox_0062ea74): 0 hidden, 2 revealed to the owner
@@ -258,6 +291,14 @@ export interface TrapTarget {
   // type, so the battle players are taken as type 1 by the caller.
   trapVision?: boolean;
   challengeOne?: boolean;
+  // The blast's checks (update_trap state 4, dump 492596..492700). VERIFIED: the outer filter is
+  // (character_flags & (maybe_invuln | dead)) == 0 and the room test; then a player's hit is refused when
+  // unknown_flags_invincibility (+0x32c) == 2 (the announce is not refused). The port does not model
+  // these player words: the caller passes them when it knows them (undefined: false / no room data, ASSUMED).
+  invulnerable?: boolean; // character_flags & maybe_invuln (0x4000000)
+  challengeTwo?: boolean; // +0x32c == 2
+  room1?: number; // +0x28 (u16), the room words of the trap's room test
+  room2?: number; // +0x2e (u16)
 }
 
 export type TrapEvent =
@@ -271,9 +312,27 @@ export interface TrapRules {
   // get_player_room_id(trap) == get_player_room_id(owner) (the reveal's room test). ASSUMED false when
   // the caller has no room data (the battle field has none in this port), so only the range counts.
   sameRoom?: (t: BattleTrap, owner: TrapTarget) => boolean;
+  // is_value_less_than_2(g_Pioneer2MapInitData) as the trigger scan reads it (challengeFlagValue). Default 0.
+  challengeFlag?: number;
 }
 
 const dist2 = (ax: number, az: number, bx: number, bz: number): number => (ax - bx) * (ax - bx) + (az - bz) * (az - bz);
+
+// The blast's room test (update_trap state 4, dump 492608..492614, VERIFIED): the target's room_id_2 is
+// the trap's +0x2e, or the target's room_id_1 is the trap's +0x28, or the target's room_id_1 is the trap's
+// +0x2e. ASSUMED: with no room data on either side (undefined) the test passes.
+export function blastRoomMatch(t: BattleTrap, g: TrapTarget): boolean {
+  if (t.room1 === undefined || t.room2 === undefined || g.room1 === undefined || g.room2 === undefined) return true;
+  return g.room2 === t.room2 || g.room1 === t.room1 || g.room1 === t.room2;
+}
+
+// The trigger's owner rule (trap_is_primed_and_has_target, dump 492890..492898, VERIFIED): the owner is
+// skipped only when the owner's trap cannot target the owner (g_BATrapsCanTargetOwnerPlayer != 1) AND
+// is_value_less_than_2(g_Pioneer2MapInitData) is non-zero (i.e. the byte is 1). With the byte at 0 the owner
+// is NOT skipped, so it can trigger its own trap whatever the rule. Returns true when the owner is skipped.
+export function triggerSkipsOwner(trapsHitOwner: boolean, challengeFlag: number): boolean {
+  return !trapsHitOwner && challengeFlag !== 0;
+}
 
 // TrapProcessHitbox_0062ea74 (hitboxes == 0 branch, VERIFIED from the disassembly 0x0062ea74..0x0062eb32):
 // the owner (GetPlayer(+0xa8)) must exist, have the challenge word 1 (+0x32c) and the vision bit
@@ -297,7 +356,19 @@ export class TrapField {
     // sends more (the counter clamps to 0..0x14, 0x00698984, VERIFIED).
     if (p.count > TRAP_MAX_COUNT) return null;
     if (ctx.ownerFloor !== ctx.floor || ctx.bossMap || !ctx.fieldMap) return null; // VERIFIED shape, ASSUMED mapping
+    // The 0x83 permission row (checked_call_packet0x60_subcommand 815078 for the local dispatch,
+    // TeamQuest_ProcessSubcommands 815369 for a remote one): refused before the handler runs.
+    if (ctx.map !== undefined && !trapPlacePermitted(ctx.map)) return null;
     const t = new BattleTrap(p.clientId, p.type, p.count, ctx.ownerPos.x, ctx.ownerPos.y, ctx.ownerPos.z, ctx.floor, ctx.ownerAngle);
+    t.room1 = ctx.ownerRoom?.room1;
+    t.room2 = ctx.ownerRoom?.room2;
+    // trap_constructor's Ultimate branch (VERIFIED, dump 492994): arm 0x3c, blast 80.0, and the rule
+    // g_BATrapsCanTargetOwnerPlayer = 0 (the caller clears TrapRules.trapsHitOwner from `ultimate`).
+    if ((ctx.difficulty ?? 0) === DIFFICULTY_ULTIMATE && challengeFlagValue(ctx.pioneer2Byte ?? 0) === 0) {
+      t.delay = TRAP_ULTIMATE_ARM_FRAMES;
+      t.blast = TRAP_ULTIMATE_BLAST_RADIUS;
+      t.ultimate = true;
+    }
     this.traps.push(t);
     counters.decrement(p.type);
     return t;
@@ -337,6 +408,7 @@ export class TrapField {
   // One 30 Hz frame of every trap (update_trap). `targets` are the players in the game.
   tick(targets: readonly TrapTarget[], rules: TrapRules): TrapEvent[] {
     const events: TrapEvent[] = [];
+    const challengeFlag = rules.challengeFlag ?? 0;
     // TrapProcessHitbox_0062ea74: a hidden trap is revealed to its owner (hitbox 0 -> 2), once.
     for (const t of this.traps) {
       if (t.hitbox !== 0 || t.state === 5) continue;
@@ -351,7 +423,7 @@ export class TrapField {
         }
         for (const g of targets) {
           if (g.dead || g.floor !== t.floor) continue;
-          if (g.id === t.owner && !rules.trapsHitOwner) continue;
+          if (g.id === t.owner && triggerSkipsOwner(rules.trapsHitOwner, challengeFlag)) continue;
           if (dist2(t.x, t.z, g.x, g.z) < TRAP_TRIGGER_RADIUS * TRAP_TRIGGER_RADIUS) {
             this.stun(t);
             break;
@@ -364,11 +436,15 @@ export class TrapField {
           events.push({ kind: 'send80', trap: t, what: 2 });
         }
       } else if (t.state === 4) {
+        // update_trap state 4 (dump 492596..492700): the outer filter is (character_flags & (maybe_invuln |
+        // dead)) == 0, the room test and the owner rule, then the range (strictly under the blast radius).
+        // A player's hit is refused at +0x32c == 2; the announce still runs (it is in the outer block).
         for (const g of targets) {
-          if (g.dead || g.floor !== t.floor) continue;
+          if (g.dead || g.invulnerable || g.floor !== t.floor) continue;
           if (g.id === t.owner && !rules.trapsHitOwner) continue;
-          if (dist2(t.x, t.z, g.x, g.z) >= TRAP_BLAST_RADIUS * TRAP_BLAST_RADIUS) continue;
-          if (g.local) events.push({ kind: 'hit', trap: t, target: g });
+          if (!blastRoomMatch(t, g)) continue;
+          if (dist2(t.x, t.z, g.x, g.z) >= t.blast * t.blast) continue;
+          if (g.local && !g.challengeTwo) events.push({ kind: 'hit', trap: t, target: g });
           if (!t.announced) {
             t.announced = true;
             events.push({ kind: 'announce', trap: t });
@@ -376,7 +452,7 @@ export class TrapField {
         }
         for (const o of this.traps) {
           if (o === t || o.state === 5) continue;
-          if (dist2(t.x, t.z, o.x, o.z) < TRAP_BLAST_RADIUS * TRAP_BLAST_RADIUS) this.chainHit(o, events);
+          if (dist2(t.x, t.z, o.x, o.z) < t.blast * t.blast) this.chainHit(o, events);
         }
         t.state = 5;
         events.push({ kind: 'burst', trap: t });
