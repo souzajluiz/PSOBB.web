@@ -52,6 +52,7 @@
 import type { ItemData } from '../formats/itemnames.ts';
 import { magStats } from '../formats/itemnames.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
+import type { WeaponRangeInput } from '../combat/playerstats.ts';
 
 export const MAG_LEVEL_LABEL = 0xc0;
 export const SYNCHRO_LABEL = 0xc1;
@@ -136,6 +137,14 @@ export interface EquipStatRow {
   color: string;
 }
 
+// The weapon's range input (atp min / max + grind) for playerstats, or null for a non-weapon.
+export function weaponRange(item: ItemData, pmt: ItemPMT): WeaponRangeInput | null {
+  const d = item.data1;
+  if (d[0] !== 0) return null;
+  const w = pmt.getWeapon(d[1], d[2]);
+  return w ? { atpMin: w.atpMin, atpMax: w.atpMax, grind: d[3] } : null;
+}
+
 // The panel rows for the cursor item. `equipped` is the item already in its
 // slot (no delta); `old` is the item in that slot when the candidate is not
 // equipped; `equippable` is ValidateItemForEquip's answer (not equippable =
@@ -151,6 +160,9 @@ export function equipStatRows(
   const cand = equipped
     ? current
     : candidateStats(current, equipContribution(item, pmt), old ? equipContribution(old, pmt) : {});
+  // The Item Pack detail (ChallengePlayerListWindow_UpdateItemDetail_0073175c, dump 698949) does
+  // not call PlayerRecalculateStats_0068e030, so this panel keeps the item-only delta; the quick
+  // menu compare list uses combat/playerstats.ts (candidateAtp / recalculateCandidate).
   return EQUIP_STAT_ROWS.map(({ key, label }) => {
     const cur = current[key];
     const it = cand[key];
