@@ -993,7 +993,8 @@ for (const n of [1, 2, 5]) {
 // 29. The dive's particle sites (DEVLOG "Dragon particles: the unresolved sites",
 //     resolved in the next pass): the dive's impact calls the emerge / dive helper
 //     (0x0041fa7b, gate alt <= 0 and the impact not yet done), the take-off in the
-//     dive's turn (0x0041ff7a, frame 14) and flyShoot's aim (0x4221b0, frame 14).
+//     dive's turn (0x0041ff7a, frame 14) and flyAcross's take-off (0x4221b0, frame 14;
+//     2026-10-24: it was filed under flyShoot).
 {
   const at = (ultimate: boolean, s: number, setup: (a: DragonAi) => void = () => {}) => {
     const ai = brain({ ultimate });
@@ -1060,12 +1061,17 @@ for (const n of [1, 2, 5]) {
     check(u.some((e) => e.id === U.f04), 'Ultimate dive turn frame 14: the take-off id 513');
   }
 
-  // flyShoot's aim (0x4221b0, sub-state 0): the take-off at frame 14 before the aim.
+  // flyAcross (0x00421ecc case 0, the call at 0x004221b0): the take-off at frame 14, in
+  // both sub-states, and not at frame 12. flyShoot's aim (0x00421494 case 0) has none.
   {
-    const t = parts(frame(at(false, S.flyShoot, (a) => (a.c86c = 0)), 13));
-    check(t.some((e) => e.id === N.f04 && e.x === 10 && e.z === 20), 'flyShoot aim frame 14: the take-off id 76 at the body');
-    const u = parts(frame(at(true, S.flyShoot, (a) => (a.c86c = 0)), 13));
-    check(u.some((e) => e.id === U.f04), 'Ultimate flyShoot aim frame 14: the take-off id 513');
+    const t = parts(frame(at(false, S.flyAcross, (a) => (a.c86c = 0)), 13));
+    check(t.some((e) => e.id === N.f04 && e.x === 10 && e.z === 20), 'flyAcross frame 14: the take-off id 76 at the body');
+    const early = parts(frame(at(false, S.flyAcross, (a) => (a.c86c = 0)), 11));
+    check(!early.some((e) => e.id === N.f04), 'flyAcross at frame 12: no take-off');
+    const u = parts(frame(at(true, S.flyAcross, (a) => (a.c86c = 1)), 13));
+    check(u.some((e) => e.id === U.f04), 'Ultimate flyAcross glide frame 14: the take-off id 513');
+    const aim = parts(frame(at(false, S.flyShoot, (a) => (a.c86c = 0)), 13));
+    check(!aim.some((e) => e.id === N.f04), 'flyShoot aim frame 14: no take-off (0x00421494 case 0 makes none)');
   }
 }
 

@@ -114,6 +114,8 @@ export const DRAGON_SLOTS: readonly DragonSlot[] = [
 // The states (+0x32e). The names are this port's. Sids 0x19 (teleport, 0x0041c7f8)
 // and 0x1a (fly move, 0x0041c168) are not listed: only the pad-driven pick (phases 2
 // and 0xb) writes them, and no stock quest enables it (DEVLOG 2026-10-21, test section 31).
+// The 2026-10-24 pass checked the writers again (DEVLOG 2026-10-24): every write of
+// 0x19 / 0x1a is in phase 2 or 0xb of a handler, and the sequence tables hold neither.
 export const DRAGON_STATE = {
   wait: 0x00, // 0x004258ac: picks the first action
   walk: 0x02, // 0x00423070: stomping walk toward the target
@@ -1909,8 +1911,11 @@ export class DragonAi extends BrainBase {
   // 0x00421ecc phase 0: turn along the easing, then glide across.
   private tickFlyAcross(): void {
     this.animate();
-    // 0x00421ecc case 0: 0x0041ebc0 (SE 0x318 at frame 5) every tick.
+    // 0x00421ecc case 0: 0x0041ebc0 (SE 0x318 at frame 5) every tick, then the take-off
+    // helper 0x0041c768 (particle +0x04 at the body, gated on frame 14; 0x004221a9 and
+    // 0x004221b0 in this function, DEVLOG 2026-10-24).
     this.animSound();
+    if (this.crossed(14)) this.emitBody(this.pids().f04);
     if (this.c86c === 0) {
       this.f884 += 1;
       this.yaw = Math.trunc(this.i87c + this.sign664 * this.headProfile.value(this.f884));
@@ -1958,8 +1963,7 @@ export class DragonAi extends BrainBase {
     }
     if (sub === 4) return;
     if (sub === 0) {
-      // 0x4221b0 (case 0, before the sub-state test): the take-off helper (+0x04) at frame 14.
-      if (this.crossed(14)) this.emitBody(this.pids().f04);
+      // 0x00421494 case 0 has no take-off (the call at 0x004221b0 is flyAcross's, DEVLOG 2026-10-24).
       this.aimVolley();
       this.c86c = 1;
       this.sign664 = turnTo(this.yaw, this.i87c) >= 0 ? 1 : -1;

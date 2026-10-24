@@ -261,8 +261,8 @@ cleared by the tick's animate (ASSUMED for the Dragon's flags).
 
 Found on the way, not changed: `0x00421ecc` (flyAcross, state 6) also calls
 `0x0041c768` (the take-off helper, particle +0x04 at frame 14, as roarAir does);
-the port's `tickFlyAcross` has no take-off particle. The older table row for
-`0x004221b0` (flyShoot) is off: Ghidra puts the call at `0x004221a9` in
+the port's `tickFlyAcross` had no take-off particle (ported 2026-10-24). The older table row for
+`0x004221b0` (flyShoot) was off: Ghidra puts the call at `0x004221a9` in
 `0x00421ecc` (flyAcross), while the flyShoot take-off at `0x0042197a` is the
 port's flyShoot sub 1.
 
@@ -8078,7 +8078,7 @@ The helper's counter (+0x6ac) is zero at the spawn (0x004197a1). The emerge and 
 **UNCLEAR.**
 - The intro's six (0x0041b5b3, 0x0041b98e, 0x0041b69a, 0x0041b7ea, 0x0041ba5f, 0x0041b6a7): their sub-states 0x874 / 0x86c are not in the port (unchanged).
 - The dive's call 0x0041fa7b: the gate is `[+0x5e4] - [+0x5e8] <= 0` and `[+0x8b0] == 0`, on an x87 stack whose second test reads an empty stack in one path. Not resolved here.
-- The take-off's other callers 0x0041c5b1, 0x0041cc87, 0x0041ff7a: their functions are not named in the dump and their states are not mapped. 0x004221b0 is not the same block as 0x0042197a: it sits in the flyShoot function (0x00421494..0x00422a08), in the block at 0x004221a0 (c86c == 0 path), whose case is not mapped.
+- The take-off's other callers 0x0041c5b1, 0x0041cc87, 0x0041ff7a: their functions are not named in the dump and their states are not mapped. 0x004221b0 is not the same block as 0x0042197a: it sits in flyAcross (0x00421ecc, case 0; corrected 2026-10-24: the flyShoot function ends before 0x00421ecc, so it is not flyShoot's).
 - The collapse's `strike` calls at frames 7 and 14 (the port's guesses, unchanged).
 
 **Decisive spot-check.** In the exe, 0x00421667: the flame's handle is stopped when the motion frame is above 40 (`ja` against 0x008fbc48 = 40.0), and `movl $0, 0x8b4(%edx)` drops it. If that constant or the branch is wrong, the flame's lifetime is wrong.
@@ -8143,7 +8143,7 @@ So the gate is X <= 0 (0.0) and `[+0x8b0] == 0`, the port's `alt <= 0 && !dug` i
 | caller | containing function | sid (table) | phase / sub-state | gate | port state and frame |
 |---|---|---|---|---|---|
 | 0x0041ff7a | the dive, 0x0041f6cc | 0x0f (dive) | phase 0, sub-state 0 (block 0x0041ff6f, reached from 0x0041f9fa `je`) | crossed(14) (0x41600000), each tick, before the turn (0x0041ffc0) | `tickDive` sub 0, before `turnStep`: take-off (id +0x04) at the body. **SPAWNED** |
-| 0x004221b0 | flyShoot, 0x004214ac (`sub esp, 0xbc`) | 0x07 (flyShoot) | phase 0, block 0x004221a0 (Player__Animate, 0x41ebc0, then the take-off), sub-state 0 (the `jne 0x422244` at 0x004221bd) | crossed(14), before the aim | `tickFlyShoot` sub 0, before `aimVolley`: take-off (id +0x04). **SPAWNED** |
+| 0x004221b0 | flyAcross, 0x00421ecc (Ghidra's bounds; corrected 2026-10-24: it was filed under flyShoot) | 0x06 (flyAcross) | phase 0 (0x004221a9 0x0041ebc0, then the take-off at 0x004221b0), every tick of phase 0 | crossed(14) | `tickFlyAcross`: take-off (id +0x04). **SPAWNED 2026-10-24** (before, `tickFlyShoot` sub 0 made it; that path has no call to 0x41c768) |
 | 0x0041c5b1 | ProcessEnemySinowbeatActionState, 0x0041c168 (`sub esp, 0xa8`; dump's `fly_move`) | 0x1a (dispatcher case at 0x00419bc9, table k=26) | phase 0 (block 0x0041c5a1: animate, 0x41ebc0, the take-off, then the turn toward `[+0x87c]` at 0x200 a tick) | crossed(14) | NOT SPAWNED: the port has no sid 0x1a (`DRAGON_STATE` and the sequences do not use it). |
 | 0x0041cc87 | ProcessEnemySinowbeatTeleportState, 0x0041c7f8 (`sub esp, 0xa0`; dump's `case 0x19`) | 0x19 (dispatcher case at 0x00419bda, table k=25) | phase 0 (block 0x0041cc77: animate, 0x41ebc0, the take-off) | crossed(14) | NOT SPAWNED: the port has no sid 0x19. |
 
@@ -18990,3 +18990,23 @@ frames during DEMO_WARP0: 217 (rAF ticks in about 4 s); failed requests: 0; page
 **ASSUMED / open.** That the S7 throw is the only creator of the Effect in the exe (the dump has one call of `_004aa808`; the Effect's other callers were not searched beyond `CreateGalgryphonMinionEffect_004ab138`, which is called only from the launcher). The S7 animation time is the port's motion frame (`crossed(20.5)`), taken as equal to the exe's `check_entity_animation_elapsed_threshold` (the same crossing test). The minion's ground lookup and the sound 0x3ad are not checked in Chrome. Still open from the older notes: the Effect's sound 0x39f and the attack dispatch's area hit (unchanged).
 
 **Checks.** `node tests/galgryphon.test.ts`, `galgryphonminion.test.ts`, `galgryphonstatesa.test.ts`, `galgryphonai.test.ts`: all pass. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean.
+
+## 2026-10-24: Dragon: the take-off at 0x004221b0 is flyAcross's (ported); who writes sids 0x19 and 0x1a
+
+**Finding (exe).** 0x004221b0 is inside `FUN_00421ecc` (flyAcross, state 0x06). Ghidra's decompile of that function's case 0 is `FUN_007aa094(); FUN_0041ebc0(); FUN_0041c768();`, and the E8 calls are at 0x004221a9 (0x0041ebc0) and 0x004221b0 (0x0041c768). The flyShoot function (0x00421494) ends before the next entry 0x00421ecc and makes no call to 0x0041c768; its only take-off call is 0x0042197a (the turn, sub-state 1), which the port already has. So the flyShoot aim take-off the port had at sub 0 was flyAcross's, filed under the wrong state.
+
+0x0041c768 is `if (FUN_007aaa30(14.0f)) FUN_0041c784();`, and 0x0041c784 is `create_particle_effect_3(this + 0x38, table(+0x780)->+0x04, 0x40)`. So the take-off is the body's particle +0x04 at frame 14 (`crossed(14)`), the same helper roarAir and the dive use.
+
+**Who writes sids 0x19 and 0x1a (VERIFIED from the dump and the exe).**
+- The dispatcher `0x00419b14` (jump table 0x008fb1a0) runs sid 0x19 as `0x0041c7f8` (teleport) and sid 0x1a as `0x0041c168` (fly move). The dump's `case 0x19` / `case fly_move` agree. The dispatcher's own calls to both are at 0x00419bd0 and 0x00419be1.
+- Every send of 0x19 or 0x1a is in phase 2 or phase 0xb of a handler, and each is the pad-driven pick: `dispatch(next, 6)`, then a 6x12 packet with `next` through `checked_call_packet0x60_subcommand`. 0x19 is sent by fly move (0x0041c168: dump lines 160022 and 160130, phase 2 gated by `+0x870 == 1`), by flyShoot (dump 163982, gated by `+0x86c == 3`), by the dive (dump 164146), by the state 0x22 handler (rain, 0x0041a888; dump 159111), and per the 2026-10-21 table by the emerge and flyAcross. 0x1a is sent by teleport (0x0041c7f8: dump 160324, when the player is beyond `g_SinowbeatDragonHoverDistanceThreshold`, and phase 0xb at 160414).
+- The gates of the pick (UpdateDragonAiState 0x00423f74): phase 2 runs when the flag 0x00a4377c is set, phase 0xb when `+0x768` is set. 0x00a4377c is written 1 only by `EnableDragonControl` (0x004250d4), whose only caller is the thunk 0x006b4660; that thunk is the quest opcode pad_dragon (ASSUMED, from 2026-10-21). The dump's name `gDragonControlActive_008fbb34` is wrong: 0x008fbb34 holds a float (0x3F2A7EFA, read as `_DAT_008fbb34` in the dump).
+- The table pick never yields them. The four sequence tables (0x009a3cb0, 0x009a3cf0, 0x009a3d28, 0x009a3d78, read with `tools/exedata.py read ... u N`) hold only the values the port has: 2..8, 15..19, 33 / 34 / 35 and the 0x20 / 0x21 markers. Neither 25 (0x19) nor 26 (0x1a) is in any of them.
+
+**Verdict.** Sids 0x19 and 0x1a are reachable only through the pad path (phase 2 needs 0x00a4377c, phase 0xb needs `+0x768`), which only a quest with the pad_dragon opcode can enable. No stock quest is known to use it (DEVLOG 2026-10-21, test section 31). So they are not ported. Their 0x318 calls (0x0041ebc0 at 0x0041c5aa in 0x1a and at 0x0041cc80 in 0x19) and their take-offs (0x0041c5b1, 0x0041cc87) stay unported with them.
+
+**Changes.** `client/src/combat/dragon.ts`: `tickFlyAcross` makes the take-off at frame 14 after its 0x318 (every tick of phase 0, both sub-states, the Ultimate's id 513); `tickFlyShoot` sub 0 no longer makes it (its aim has no call). The state-table comment and the flyAcross comment are corrected. `tests/dragon.test.ts` section 29: the flyAcross take-off at frame 14 (normal id 76 at the body, Ultimate glide id 513), none at frame 12, and none in flyShoot's aim. `docs/DEVLOG.md`: the 2026-10-21 note and the table row for 0x004221b0 are corrected (they said flyShoot). `docs/HANDOFF.md`: the Dragon item.
+
+**ASSUMED / open.** That thunk 0x006b4660 is the pad_dragon opcode (the 2026-10-21 entry's ASSUMED, not re-checked here). That the take-off gate is the port's `crossed(14)`: the exe's `FUN_007aaa30` also needs `+0xb0 & 4 == 0` (or `& 1`) and `FUN_007a9970 == 0`, which the port does not model for any frame-gated site. The stock quest opcode scan was not redone.
+
+**Checks.** `node tests/dragon.test.ts`: ok. `node tests/bossrooms.test.ts`, `tests/fieldbgm.test.ts`, `tests/enemyfsmcaves.test.ts`: pass. `client/node_modules/.bin/tsc --noEmit -p client` (Node 24): clean. Playwright not run (per the task).
