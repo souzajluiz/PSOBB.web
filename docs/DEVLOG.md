@@ -86,6 +86,26 @@ Checked on the real data (`PSOBB_DATA`, floor 5, variant 1, `map_jungle01_01`): 
 **Checks:** `node tests/battletraps.test.ts` (new cases: the remote map gate on 15 / 47 / 16, the Ultimate arm and blast with the byte at 0, 1 and 2, the 80 reach, the dead / maybe_invuln / +0x32c / room cases, the trigger owner table); `node tests/battle.test.ts` and `node tests/pvp.test.ts` pass; `client/node_modules/.bin/tsc --noEmit -p client` is clean.
 
 **Left:** the `Trap_CheckPlayerInBattleAndGetName` return value (the announce is assumed once), the trap's own character_flags for the chain, the 0x0 / 0x1 what-0 vtable call in the 6x80 handler (not traced), a Chrome check.
+## 2026-10-24: Boss leftovers in Chrome: Saint-Milion's arena and De Rol Le's plates and beam
+
+**What changed:** two e2e specs, no port code. `client/e2e/saintmilion-arena.spec.ts` (Episode 4, floor 9) and `client/e2e/derolle-plates.spec.ts` (Episode 1, floor 12). Both PASS on this worktree's Vite (`PW_BASE_URL`, Chrome, the local newserv). Screenshots go to `client/test-results` (not committed).
+
+**What was seen in Chrome (the HANDOFF item 4 list):**
+- Saint-Milion, 30 s watched with nothing forced (the player walks into the arena at (-50, 24)): the brain runs (sid 0 -> 25 -> 2, i.e. states 0x0, 0x19, 0x2, changing in the page), no hang (the rAF counter ran at ~60 fps, the largest gap between samples was ~0.9 s with the screenshot excluded), no page error, no failed request.
+- Tentacles are posed: on the visible spinners, node 3 sits at the entity's rise (error 0.0) and node 46 at 1 - 0.9 shrink (error ~3e-8) on all 278 samples; the rise goes 0 -> 50 on spinner 3, the leads 0 / 4 / 8 / 12 shrink to ~0.96. The screenshot shows a tentacle standing in the arena.
+- Part hit boxes sit on the model nodes: each part's enemy is at the captured node (ai.node(5 + i), SM_NODES) exactly, and the captured node is at the live node's world position (diff 0.000) on all 312 hittable samples.
+- De Rol Le, plate hit through `applyEnemyHit` on segment 0 (the body's index + 1): the brain's flash is 1.0 at the hit, the plate material goes cyan (0x00ffff, then 0x1affff, 0x26ffff ...) and fades back to white (0xffffff) in about 0.7 s, the flash falling 0.05 a tick (about 20 ticks at 30 Hz). The first frame still shows white (the render takes the colour a frame later).
+- De Rol Le beam: the body fires it on its own (state 0x1b); the wait was 179 to 191 s in the two runs (random pick). The beam lasted 448 ms (28 frames, about 14 brain ticks as the code says). On every frame the beam's tracked emitter (0x177) sits on `beam.from` (error 0.0), but `beam.from` did not move in those frames: the body stays put while it fires, so the emitter's follow over moving frames is NOT checked here.
+
+**Open (not changed, no exe evidence in this pass):**
+- De Rol Le's beam muzzle is a brain estimate `[x, drawY + 10, z + 30]` (combat/derolle.ts tickBeam, ASSUMED in the code), not a model node. The exe's beam point is the cast point `currently_casting_tech_info.field_0x90` (`DerollePlayerSpecialAttackState` in `Psobb.exe-05112026.c`, the state-2 `create_particle_effect4(.., 0x177, ..)`), and the per-frame emitter position there is a local (`stack0xffffff34`) that the dump does not name. The port matches the emitter to its own muzzle, which is what this check can see.
+- Saint-Milion's first states after the wake are sid 25 (0x19, `form` reads 2 because sid >= 11) and then sid 2 (form 1). No kill happened in the run, so it is not the form change of the ep4 spec's strikes. Whether 0x19 is the exe's wake sequence is not checked.
+- The brief named De Rol Le's floor as a "Cave" floor. The area table (`questeditor/areas.ts`, `floorToArea(1)`) gives De Rol Le = area 0x0c = floor 12; there is no Cave floor for it.
+- Not run: the two-client 6xDC flow (optional in the brief).
+
+**Port bugs found:** none in this pass. The one check that failed (the De Rol Le plate's first frame) was the spec's own timing (a page call per sample is too slow for a 0.05-a-tick fade); the spec now records the fade inside the page per frame.
+
+**Tests:** `client/node_modules/.bin/tsc --noEmit -p client` clean. Both specs pass against the worktree Vite (`PW_BASE_URL=http://127.0.0.1:5185`).
 
 ## 2026-10-24: Challenge: the S-rank prize name window (the exe's TKeyboardControl, no prompt)
 
