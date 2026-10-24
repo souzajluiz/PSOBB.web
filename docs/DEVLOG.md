@@ -17188,3 +17188,26 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 - The Gal Gryphon minion's 1.5 icon (needs the Gal Gryphon brain: the launcher and its state 2, see the 2026-10-23 Gal Gryphon minion entry).
 - The Challenge "Area n" title: `cmode_area_title_buffer` (set by opcode_set_area_title_number, dump 607512) is read by `maybe_update_mainwarp` (dump 510944), which looks like a warp-menu entry label, not a radar icon. Not traced to its drawing code; the warp menu is the place to check.
 - Form 2's levels (ASSUMED, above).
+
+## 2026-10-23: Rare pickup notice ("Laura found a / Soul Banish.") is not in the exe; nothing ported
+
+**What changed:** nothing in the client. The user's reference (14.png) shows four orange field lines at the right, "Laura found a / Soul Banish." and "Laura found a / Photon Drop.", next to a rare item box. The exe has no such text and no drawer for it, so the port keeps what the exe does on a pickup: the 0x9B ring and SE 0x571 (`render/flooritems.ts`). ROADMAP gained a checked line with this finding.
+
+**Exe evidence** (`~/Downloads/psobb-client/PsoBB.exe`, the named dump `Psobb.exe-05112026.c`):
+- **Text search.** "found a" is not in PsoBB.exe as ASCII, as UTF-16LE (`f\0o\0u\0n\0d\0 \0a\0`), or as Shift-JIS (見つけ, 8C A9 82 C2 82 AF). "Soul Banish" is not in the exe either (UTF-16LE). The data files (`data/*.prs`, the Japanese `textjapanese.pr2/pr3`) have no "found a" in Shift-JIS.
+- **English unitxt.** newserv's `system/text-sets/bb-v4/unitxt_e.prs` (decoded with `formats/prs.ts`) has no "found a" line. "found" appears only in item descriptions ("found in the ancient ruins", "found only on Mount Kongo"), and there is no `%s` placeholder in any string. "Photon Drop" and "Rare super pure crystal" are there; "Soul Banish" is not.
+- **Pickup path.** `action_pick_up_dropped_item` (6x59, dump 413574) → `ProcessItemAction_005c4bd4` (remove from the floor, add to the inventory) → `HandlePlayerPickupSuccess_005c4c1c` (dump 413682). The last one draws nothing but `create_particle_effect(item + 0x38, 0x9b)` and `play_sound_effect_at_player(player, 0x571)`, which the port already has.
+- **Drop path.** `handle_packet0x60_subcommand0x5f` (6x5F, dump 439150) only updates the enemy/box status tables. `action_drop_item` (dump 570522) only removes the item and creates the box. `HandleItemDrop_006d9d94` (dump 637301) is the Appraise result window (a list window with `ListWindowObject_Create_0073ff34`, the equip list and the item detail), not a notice.
+- **Newserv.** The only rare-item message is `send_item_notification_if_needed` (`src/ReceiveSubcommands.cc:2167`), which sends a chat-style text "$C6Rare item dropped:" + name. No "found a" wording and no big on-field line.
+- **Reference overlay.** The same screenshot shows the "Item Reader - Mags", "Player Reader - All Players", "Monster Reader - HP" and "Item Reader - AIO" windows. None of their titles is in the exe (ASCII grep), so the reference is taken with an overlay or mod. The "found a" lines are probably from that overlay too (ASSUMED).
+
+**Ported:** nothing. A drawer for a text that the exe does not have would have to invent the wording, the trigger (rarity, whose pickup) and the placement, so it would be a guess and not a port.
+
+**ASSUMED:**
+- The reference's lines come from the overlay or mod, not from the server (no text reaches the client as a big notice for this case, per the newserv path above).
+
+**Checks:**
+- Docs only: `docs/ROADMAP.md` and `docs/DEVLOG.md`. No code, so no test change.
+
+**Left:**
+- If the user wants this notice as a feature, it needs a design decision (a new server message, or a client-side overlay like the reference's), not an exe port.
