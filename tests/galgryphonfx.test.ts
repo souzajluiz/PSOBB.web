@@ -5,17 +5,22 @@
 // Run: node tests/galgryphonfx.test.ts
 import {
   GALFX,
+  GALFX_OLGA,
   GALFX_RING,
   activateHitboxes,
   diveBeamPoints,
   galgryphonAttackBurst,
   galgryphonTransformContext,
   groundProbe,
+  jitteredBolt,
   lightningArc,
   lightningBeamPlacement,
   lightningPointCount,
   markForDestruction,
   minionRingSpawn,
+  olgaBeamPoints,
+  olgaMinionSpawn,
+  olgaMinionTarget,
   minionRingTick,
   minionThresholdDispatch,
   polylineLength,
@@ -188,6 +193,81 @@ const target = (clientId: number, x: number, z: number): AiTarget => ({ clientId
   const fadeOut = minionRingTick(1, 30, { x: 0, z: 0 }, opts);
   eq([fadeOut.counter, fadeOut.dead], [31, true], 'ring: fade past 30 is dead');
   check(GALFX_RING.spawnFrames === 31 && GALFX_RING.lastFrame === 30, 'ring: 31 spawn frames, last frame 30');
+}
+
+// ---- the S27 beam: the target check (0x004a5428), the spawn (0x004a5218), the jitter (0x006f316c) ----
+{
+  const at = (got: number, want: number, msg = 'value') => check(near(got, want, 1e-6), `${msg}: got ${got}, want ${want}`);
+  const boss = { x: 0, y: 180, z: 0, heading: 0 };
+  const minion = { x: 10, y: 50, z: 0 };
+  const far = { x: 200, y: 7, z: 0 };
+  // The player within 100 units of the boss is no target (dist2 < 10000).
+  eq(olgaMinionTarget(boss, 0, { x: 50, y: 0, z: 0 }, minion), null, 'olga: a player within 100 is no target');
+  // atan2(190, 0) = 90 degrees = BAMS 16384; d = (0 - 16384) & 0xffff = 49152: selector 0 needs d >= 20480, selector 1 d <= 45056.
+  eq(olgaMinionTarget(boss, 0, far, minion), far, 'olga: selector 0 accepts the far player');
+  eq(olgaMinionTarget(boss, 1, far, minion), null, 'olga: selector 1 refuses d = 49152');
+  eq(GALFX_OLGA.radius, 100, 'olga: R = 100 (0x903cec)');
+  eq(GALFX_OLGA.angleOffset, 20480, 'olga: selector-1 angle offset 20480 (0x903cf4)');
+
+  // Random 0 for both: radius 100, angle 0, the ring point straight ahead (+z) at the boss's height.
+  const zeros = () => 0;
+  const s0 = olgaMinionSpawn(boss, 0, null, minion, zeros, () => null)!;
+  at(s0.target.x, 0);
+  at(s0.target.y, 180);
+  at(s0.target.z, 100);
+  eq(s0.onPlayer, false, 'olga: no player, the ring point');
+  // The middle point: 0.5 * (minion + target) in x and z, the minion's height + 250.
+  at(s0.mid.x, 5);
+  at(s0.mid.y, 300);
+  at(s0.mid.z, 50);
+  eq(olgaMinionSpawn(boss, 0, null, null, zeros, () => null), null, 'olga: no minion, no spawn (after the two randoms)');
+
+  // The first random 32768 gives radius 150; a ground of 3.0 keeps it, a ground of 10.0 falls back to 100.
+  const seq = (...v: number[]) => {
+    let i = 0;
+    return () => v[i++];
+  };
+  const kept = olgaMinionSpawn(boss, 0, null, minion, seq(32768, 0), () => ({ y: 3 }))!;
+  at(kept.target.z, 150);
+  const fell = olgaMinionSpawn(boss, 0, null, minion, seq(32768, 0), () => ({ y: 10 }))!;
+  at(fell.target.z, 100);
+  // Selector 1 adds 20480 (112.5 degrees): sin = 0.92388, cos = -0.38268 at radius 150.
+  const second = olgaMinionSpawn(boss, 1, null, minion, seq(32768, 0), () => ({ y: 3 }))!;
+  at(second.target.x, 150 * Math.sin((20480 / 65536) * 2 * Math.PI));
+  at(second.target.z, 150 * Math.cos((20480 / 65536) * 2 * Math.PI));
+  // A player target skips the probe.
+  const hitPlayer = olgaMinionSpawn(boss, 0, far, minion, zeros, () => {
+    throw new Error('no probe on a player target');
+  })!;
+  eq(hitPlayer.target, far, 'olga: the player point is the target');
+  eq(hitPlayer.onPlayer, true, 'olga: the target is the player');
+
+  // The beam's three points: the target's ground height clamped to 6.0 (no ground: 6.0).
+  const pts = olgaBeamPoints(s0, () => ({ y: 10 }));
+  at(pts[2].y, 6);
+  at(olgaBeamPoints(s0, () => ({ y: 3 }))[2].y, 3);
+  at(olgaBeamPoints(s0, () => null)[2].y, 6);
+  eq(pts[0], s0.minion, 'olga beam: the minion is the first point');
+
+  // The jitter: the ends carry no scale, the inner point one scale in +-8, the first update floors the
+  // inner scales at 1.0 and leaves the ends on their base points.
+  let k = 1;
+  const lcg = () => {
+    k = (k * 1103515245 + 12345) % 2147483648;
+    return k / 2147483648;
+  };
+  const bolt = jitteredBolt(pts, lcg, 1.8, 17);
+  eq(bolt.scale[0], 0, 'jitter: the first end has no scale');
+  eq(bolt.scale[2], 0, 'jitter: the last point has no scale');
+  check(Math.abs(bolt.scale[1]) <= 8, 'jitter: the inner scale is within 8');
+  const jl = Math.hypot(bolt.jitter[3], bolt.jitter[4], bolt.jitter[5]);
+  at(jl, 1, 'jitter: the direction of point 1 is unit');
+  eq(bolt.base[12 * 3], pts[2].x, 'jitter: the padding copies the last point');
+  bolt.tick();
+  // ProcessParticleEffect_006f4004 runs its floor over every point, the ends too: after the first update
+  // each point is base + jitter * max(scale - 0.05, 1.0), so the ends move by their direction.
+  for (let c = 0; c < 3; c++) at(bolt.points[c * 3], bolt.base[c * 3] + bolt.jitter[c * 3] * 1, 'jitter: the point is base + jitter * 1 (x)');
+  check(bolt.scale[1] >= 1, 'jitter: the decay floors the inner scale at 1.0');
 }
 
 if (failures) {

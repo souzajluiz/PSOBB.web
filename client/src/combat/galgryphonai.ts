@@ -56,13 +56,20 @@ import {
   type GalgryphonSync,
 } from './galgryphonscript.ts';
 import {
+  GALFX_BEAM_THICKNESS,
+  GALFX_OLGA,
   GALFX_RING,
   groundProbe as groundProbeOutcome,
+  jitteredBolt,
   minionRingTick,
+  olgaBeamPoints,
+  olgaMinionSpawn,
   sinowberillBurst,
+  diveBeamPoints,
   type GroundHit,
   type Vec3,
 } from './galgryphonfx.ts';
+import type { LightningBolt } from './techlightning.ts';
 import type { EnemyShot } from './enemyshots.ts';
 import type { AiFrame, AiTarget, EnemyAiMotion } from './enemyai.ts';
 
@@ -380,6 +387,10 @@ export interface GalgryphonAiOptions {
   queue?: (tag: number, arg: number) => void;
   /** A sound at the boss (the probe's 0x39b); the host plays it. */
   sfx?: (id: number) => void;
+  /** A lightning beam (the S27 beam, the S30 dive beam) to draw; the host adds it to its bolts. */
+  bolt?: (b: LightningBolt) => void;
+  /** The minion point for the S27 beam, by selector (0 or 1); ASSUMED the boss's own point when not given. */
+  minionAt?: (sel: number) => Vec3 | null;
   /** Host overrides of the hook groups (the defaults are no-ops). */
   fx?: Partial<GalgryphonFx>;
   cine?: Partial<GalgryphonCine>;
@@ -424,6 +435,9 @@ export class GalgryphonAi {
   private ring: { state: 0 | 1; counter: number; x: number; z: number } | null = null;
   // The area hits and projectiles of this tick, handed to the host (frameOut's `shots`).
   private shotsOut: EnemyShot[] = [];
+  // The brain's clock (game ticks) and the beams waiting for their frame (the beam object's +0x98).
+  private clock = 0;
+  private pendingBolts: { due: number; bolt: LightningBolt }[] = [];
 
   constructor(opts: GalgryphonAiOptions) {
     this.opts = opts;
@@ -491,6 +505,8 @@ export class GalgryphonAi {
   /** One game tick (update_gal_gryphon, dump 226140). `targets` are the live players the search reads. */
   tick(targets: readonly AiTarget[] = [], _animationEnded?: boolean): AiFrame {
     this.targets = targets;
+    this.clock += 1;
+    this.flushBolts();
     if (!this.removed) {
       if (this.opts.leader()) {
         this.stageGate();
@@ -515,6 +531,20 @@ export class GalgryphonAi {
 
   kill(): void {
     this.removed = true;
+  }
+
+  /** Draws the beams whose frame has come (the host's bolt hook). */
+  private flushBolts(): void {
+    if (this.pendingBolts.length === 0) return;
+    const due = this.pendingBolts.filter((p) => p.due <= this.clock);
+    if (due.length === 0) return;
+    this.pendingBolts = this.pendingBolts.filter((p) => p.due > this.clock);
+    for (const p of due) this.opts.bolt?.(p.bolt);
+  }
+
+  /** A beam object made now: it is drawn `after` ticks later (the object's counter starts at 0). */
+  private scheduleBolt(after: number, bolt: LightningBolt): void {
+    this.pendingBolts.push({ due: this.clock + after, bolt });
   }
 
   /** The 0xA0 from the leader (a follower's apply; the leader's own packets come back through emit()). */
@@ -711,6 +741,11 @@ export class GalgryphonAi {
     };
   }
 
+  /** unknown_get_ground_info(p, 0x16ef) at p's (x, z): the ground object's height, or null. */
+  private groundHitAt(p: Vec3): GroundHit | null {
+    return this.opts.ground?.(p.x, p.z, p.y) ?? null;
+  }
+
   /** The default hooks: no-ops, except the target search and send, which the brain needs. */
   private defaultHooks(): { fx: GalgryphonFx; cine: GalgryphonCine; world: GalgryphonWorld; death: GalgryphonDeath; net: GalgryphonNet } {
     const o = this.opts;
@@ -758,14 +793,37 @@ export class GalgryphonAi {
       playerPos: (slot) => o.playerPos?.(slot) ?? null,
       lightningUnderBody: noop,
       lightningTransform: noop,
-      spawnBeam: noop,
+      spawnBeam: (flag, value) => {
+        // SpawnOlgaMinionEffect_004a5218 (dump 225179): the minion point by selector, the player in slot
+        // `value` (the S27 random), the ring point or the player's point, then the beam object (its
+        // lightning is the three points of olgaBeamPoints, drawn from frame 20 for 17 frames).
+        // param_1 is ((m / 20) & 1) == 0 at the S27 call (dump 225013): the flag itself, so it is 1 when true.
+        const sel = flag ? 1 : 0;
+        const at = o.minionAt ? o.minionAt(sel) : { x: b.x, y: b.h, z: b.z };
+        const spawn = olgaMinionSpawn(
+          { x: b.x, y: b.h, z: b.z, heading: b.heading },
+          sel,
+          o.playerPos?.(value) ?? null,
+          at,
+          () => this.ctx.rng.next16(),
+          (p) => this.groundHitAt(p),
+        );
+        if (!spawn) return;
+        const pts = olgaBeamPoints(spawn, (p) => this.groundHitAt(p));
+        this.scheduleBolt(GALFX_OLGA.start, jitteredBolt(pts, o.rand, GALFX_BEAM_THICKNESS, GALFX_OLGA.length));
+      },
       lightningSetup: noop,
       lightningRelease: noop,
       spawnMinionRing: (x, _y, z) => {
         // CreateGalgryphonMinion_004aabd8 (dump 229084): the ring starts at counter 0 in its spawn state.
         this.ring = { state: 0, counter: 0, x, z };
       },
-      diveBeam: noop,
+      diveBeam: (from, to) => {
+        // CreateGalgryphonLightningBeamEffectWrapper_004aa4b0 (dump 228629): the beam from the boss to the
+        // target, every 5 ticks (the caller's gate); its window is diveBeamPoints' start and end.
+        const d = diveBeamPoints(from, to, this.groundHitAt(to));
+        this.scheduleBolt(d.start, jitteredBolt(d.points, o.rand, GALFX_BEAM_THICKNESS, d.end - d.start));
+      },
       updateTargeting: noop,
       initVelocity: noop,
     };
