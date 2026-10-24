@@ -15806,3 +15806,30 @@ needs `vendor/newserv/build/newserv`, which this worktree does not have (ENOENT 
 - Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts` has no brain for it). The S7 throw (`galMinions.throw()`, anim 20.5) has no caller until the states exist.
 - The follower's apply (SetEnemyAiState on the synced state, then the next advance reads the stale seed S33 at `+0x4b0`; UNCLEAR whether that is intended).
 - The attack's area hit (`0x0051fc9c`, the DrlBurst-style helper) and the launcher's particles and sounds.
+## 2026-10-23: word select table (ws_data_jp.bin) read and the 6x74 parse; the picker and the balloon text are not ported
+
+**What changed.** `net/wordselect.ts` (new): `loadWordSelectTable(dataFile, textFile)` (PRC decode of `ws_data_jp.bin`, the unitxt_ws group 0 phrases), `parseWordSelectTable` (token id -> phrase, 0x68C tokens), `wordSelectPhrase`, `parseWordSelectSubcommand` (6x74: client id u16 at +2, the 0x1C message at +4), `wordSelectItemId` (SetSelectedItemID_007078a0). `net/game.ts`: case 0x74 emits `wordSelect` (clientId, message); `net/lobby.ts` declares the event. Tests: `tests/wordselect.test.ts` (new). `client/src/classic/chat.ts` and the field / lobby are unchanged: no balloon yet.
+
+**Premise check (per the exe).** The brief named `data.gsl` or loose files and `vendor/newserv` for the word table. Both have it, and the port needs only the loose files:
+- The client folder has `ws_data_jp.bin` (21815 bytes, md5 6fff0898..., identical to newserv's `notes/psobb/jpbb-resources/ws_data_jp.bin`) and `unitxt_ws_j.prs` (19506 bytes). The exe names both (string pool: unitxt_ws_j/e/g/f/s.prs, ws_data_jp/us/es/de/fr.bin).
+- `LoadLocaleData_00705eb8` (dump 662480): the JP case calls `ParseUnitxtFileList_0070b084(s_LocaleFile_WordSelect_JP)` (the phrases) and `LoadAndProcessRelAsset_005b9568(s_WorldSelectLocaleData_JP)` (the table). So the exe reads the same two files at runtime; nothing is in `data.gsl` for this.
+- newserv's `WordSelectSet` (`vendor/newserv/src/WordSelectTable.cc`, `parse_windows_t<BBRoot, 0x68C>`) reads the same layout, with the phrases from `unitxt_ws_e.prs` group 0 (`DataIndex.cc` 1685). The JP file decodes with the same reader: token 0x7F = "Are you free?", 0x68B = "Please select a subject.", and the 1569 phrase ids are all in range.
+- newserv translates word select between versions (`WordSelectTable::translate`) through its 12-version index. The port has one version (JP), so that table is not needed.
+- The exe's item range (SetSelectedItemID_007078a0 / IsValidItemIDRange_007078cd: 0x7E < id < 0x139) matches the tokens in the JP table that are item ids.
+
+**Exe evidence.**
+- `handle_packet0x60_subcommand0x74` (dump 664363): `CreateItemObject_006dc358` gate; if the sender (the header's client id, a byte pair) is not `g_CurrentPlayerSlotIndex`, `SetSelectedItemID_007078a0(msg)`; it fills the picker's name list (0x2C7 header, the 0x68C.. names of the twelve player slots, `_wcsncpy` of 0x18 characters); then `WordSelectMenu_DisplayItemBubble_007078f1(msg, client_id)`, which builds the text with `WordSelectMenu_ProcessStringByLocale_0070717d` into `g_pWordSelectMenuBubbleStringBuffer` and calls `DisplayChatBubble_007184f8(client_id, buf, 0x4F)`. So the receive shows a balloon only: no log line.
+- JP (`word_select_locale == 0`) builds the text with `WordSelectMenu_ProcessSelectionType_00703690` (dump 659612): the message's first u16 is the count, the second is the selection type (1..6), the tokens start at +4. Types 1 (`ProcessWordSelectStringData_00706490`), 2 (up to three phrases joined by a space, then `?`, `AppendWordSelectEntry_007069b8` and the default string), 3 (wrapped lines), 5 and 6 (`ProcessStringVariant_007069fc`, which joins lines and adds newlines (0x0A)). The separators are wide characters: 0x0A newline, 0x20 space, 0x3F "?", and `AppendWordSelectEntry` writes "\n> " (0x0A 0x3E 0x20).
+- `send_chat_message_word_select` (664328): unchanged from the earlier note.
+
+**ASSUMED / not ported:**
+- The balloon text. The renderer above is only partly traced (the `GetStringResource_0070651d` input register of the type 1 path, the `ProcessStringFormat` / `AppendStringToBuffer_007067f0` details, and the wrap rule). No text is drawn for a received 6x74 yet; the event is emitted and has no listener.
+- The 6x74 header: the client id is read as u16 at +2 (newserv's G_WordSelectT_6x74 says the GC client id is big-endian; BB is little-endian), as the port's other subcommands do.
+- The table file names are the exe's JP strings by their order in the string pool (the names are in the exe; the mapping of ws_data_jp.bin to s_WorldSelectLocaleData_JP is from that order).
+
+**Checks.** `node tests/wordselect.test.ts` (the token table on a synthetic REL with the BB root, the phrase lookups and the empty cases, the 6x74 parse and its refusals, the item range, and the real JP table when `~/Downloads/psobb-client/data` has it, else SKIP). `node tests/chatshortcut.test.ts`, `chatline`, `chatshortcutmenu`, `symbolchat` pass under Node 24 (the first three with `client/node_modules` linked from the main checkout, removed after). `cd client && npx tsc --noEmit -p .` exit 0. `tests/shortcuts.test.ts` needs `three` and was not run here (no node_modules in the worktree). Not run in Chrome (no Playwright, per the brief).
+
+**Left (in order):**
+1. The JP renderer for received word select messages (`WordSelectMenu_ProcessSelectionType_00703690` and its helpers), then the balloon through `ChatBubbles` (the message's sender is `client_id`; the exe's text cap is 0x4F). Lobby 6x74 is the same handler in the exe; the port's lobby has no listener yet.
+2. The word select picker (`CreateWordSelectMenuEntity_00701d00`, the word menu and its category data from `LoadLocaleData_00705eb8`'s REL tables): not started.
+3. The Chat > Shortcut type / symbol keyboard's first picker (the word one), which needs item 2.

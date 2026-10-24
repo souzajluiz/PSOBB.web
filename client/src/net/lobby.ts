@@ -71,6 +71,8 @@ export interface LobbyEvents {
   chat: (from: LobbyPlayer | null, guildCardNumber: number, text: string) => void;
   // 6x07: a symbol chat said in the room (symbolchat.ts; the bubble is not drawn yet).
   symbolChat: (clientId: number, chat: SymbolChat) => void;
+  // 6x74: a word select message from a player in the room (net/wordselect.ts; no balloon yet).
+  wordSelect: (clientId: number, message: WordSelectMessage) => void;
   subcommand: (sub: number, clientId: number, data: Uint8Array) => void;
   // 6x06: a guild card another player sent (the 0x108 card at +4; exe handle_packet0x60_subcommand0x6).
   guildCardSent: (body: Uint8Array) => void;
