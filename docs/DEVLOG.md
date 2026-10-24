@@ -17220,3 +17220,46 @@ emote still plays). ASSUMED: the marker is in the buffer process_chat_message re
 - `returnToGuild` (p_return_guild) and the Pioneer 2 return keep their explicit source 0 (see above).
 
 **Left:** the telepipe's `+0x91c` target from another player (`GetTeleportTargetDataForPlayer` with a player index: the port's telepipe.ts arrival is not traced against `+0x90c` / `+0x918`); the p_return_guild path; the Chrome check of the origin placement on the 4-set floors; the quest designation's map for the Vol Opt check.
+
+## 2026-10-23: compare list absolute candidates (PlayerRecalculateStats); the ATA unit settled
+
+**Goal:** replace the compare list's delta model (current + candidate - slot) with the exe's absolute candidates for all six rows, port the parts of `PlayerRecalculateStats_0068e030` that the candidate needs, and settle the ATA unit.
+
+**Exe evidence** (PsoBB.exe 1.25.13; dump `Psobb.exe-05112026.c`; disasm from `exe.s`, values from `tools/exedata.py`):
+- The blocks (`PlayerRecalculateStats_0068e030`, dump 569766): stat block `+0x2b4` (`stat[0]` ATP base, `[1]` MST, `[2]` EVP, `[4]` DFP, `[5]` ATA, `[6]` LCK; the clamp at those indices), range `+0x31c` (`atp_range_min/max`, `ata_range_min`), resist `+0x320` (`[0]` EVP modifier, dword `+0x1c` DFP modifier). The displayed sums are the same blocks: ATP = `base + rmax` (`init` dump 746015..746023 writes `base_atp = stats->atp`, variance = max - min), DFP = `stats->dfp + resists->dfp_mod`, EVP likewise, `total_ata = ROUND((ata_range_min + stats->ata) * g_AttackStatMultiplier)`.
+- The candidate's six outputs come from `CalculateChallengeDamage_0069807c` (dump 578524): `out[0]` = rmax + atp (then the ATP line), `out[1]` DFP = max(0, dfp + dfp_mod), `out[2]` MST = mst, `out[3]` ATA = `ROUND((ata_range_min + ata) * 0.1)` (fmuls at 0x6980d5 on the float at 0x0093ca14 = 0.1f), `out[4]` EVP = max(0, evp + evp_mod), `out[5]` LCK = lck. `PlayerCalculateItemStats_0068e4e8` (the worn item) calls the same function (dump 570065), with no candidate applied and no clamp.
+- The worn item comes out through the item vtable `+0x5c` (`UnknownItemFunction19_005d22cc`, dump 425324: subtracts the stored bonuses). The candidate goes in through `ApplyEquipmentBonuses_005d330c` (dump 426168):
+  - weapon (type 0): range min / max += `(atp_min or atp_max) + 2 * grind` times `get_equipment_set_atp_bonus_weapon` (default 1.0 at 0x0092c470, read from the exe) plus `morning_glory_atp_bonus` (base 0.0 at 0x0092c448, the beat-time branch only for the item byte 1 = 0x94); `ata_range_min += ata * 10` plus `10 * byte` for each special slot whose byte is 5; stat MST += pmt mst.
+  - armour (type 1 sub 1, `ApplyWeaponStats_005d4840`, dump 426949): resist EVP += pmt evp (`ppVar2->atp_min` = offset 0x0e) + `get_armor_evp` (item bytes 8..9); resist DFP += pmt dfp (offset 0x0c, the `classes` pair) + `get_armor_dfp` (item bytes 6..7). The set factors are the armour's defaults (1.0 at 0x0092c4a0 / 0x0092c4a4).
+  - shield (type 1 sub 2): `ApplyWeaponStatsVariant_005d4774` (not decoded).
+  - the option row, `ApplyEquipmentBonuses_005d490c` (dump 427003) with `GetItemOptTable_005e5518` (dump 440594): the weapon's index is pmt `+0x1e`, the armour's `+0x1c`, the rows are the pmt STAT_BOOST table at root `+0x38` (6-byte rows). Types 1..8 are (range, ata*10, resist EVP, resist DFP, MST, LCK) (type 6 is HP), 9..16 are their negatives. The port's `statBoostEntryIndex` (weapon `+0x1e`, armour `+0x1c`) is this index; it was not used before.
+- Clamp (dump 569894..569912): each stat-block value to `[0, g_ClassMaxStats row]` (`class_max_stats`: atp, mst, evp, hp, dfp, ata, lck, esp). The ATA column of the table was read this session: row 0 1355, 1 1388, 2 1300, 3 1739, 4 1530, 5 1580, 6 1088, 7 1200, 8 1260, 9 1500, 10 1010, 11 1730 (`tools/exedata.py read 00968560 h 216`, stride 18 shorts).
+- The unit loop (`unit1..unit4`, eVar7 += mag, while < 0xd) subtracts the units' bonuses when the old slot item is an armour (group 1 = 1, group 2 = 1); the units' own apply (`ApplyItemStatBonuses_005d41a0`) is not decoded.
+
+**ATA unit (settled for the compare list):** the candidate `out[3]` and the displayed `total_ata` are the same formula, so both are ATA points (65 for a bare HUmar saber base). The combat hit check reads `attacker->total_ata` directly (dump lines 579974, 747387, 749830). ASSUMED: the file's `ata` is the displayed `total_ata`; see the open question below.
+
+**Ported** (`client/src/combat/playerstats.ts`):
+- `applyItem(blocks, item, pmt, sign)`: the weapon, armour and shield contributions and the option row (the exe's `ApplyEquipmentBonuses`), with `sign = -1` as the vtable `+0x5c` subtraction.
+- `blocksFromFile(file, worn, charClass, pmt)`: the blocks the displayed stats stand for (the worn items come out of the sums; ATA centre of the rounding; the resist block's non-equipment part 0).
+- `recalculateCandidate(file, item, worn, charClass, pmt)` (not worn: old out, candidate in, clamp, `challengeOutputs`) and `equippedCandidate(file, item, worn, charClass, pmt)` (worn: the item out, no clamp). `wornEquipment(equipped)` gives the per-slot worn items.
+- `challengeOutputs`: `CalculateChallengeDamage` plus the ATP line with m = 0 and the DFP line with md = 0.
+- `client/src/combat/materials.ts`: `CLASS_MAX_STATS` rows gain `ata` (the exe's column, read above).
+- `client/src/render/fieldhud.ts` `compareRows`: builds the worn set from the equipped inventory and calls the new signatures. All six rows are absolute now.
+- The combat attacker (`playerAttacker`, `splitAttack`) is unchanged.
+
+**ASSUMED** (marked in code): buff multipliers m / md = 0; set factors 1.0 (the set tables of `get_equipment_set_atp_bonus_weapon` and the armour set functions are not ported); shields use the armour formula; the resist block has no non-equipment part; units and mags add nothing; colored rings and the item set bonus (`colored_ring_matching_boosts`, `handle_item_set_bonus`) are not applied; the file's ATA is exact only up to the rounding of `total_ata` (centre taken); the stored values of an item equal its current PMT / item bytes (for the subtraction).
+
+**OPEN (important, not settled here):** whether the saved stats (`PlayerDispData`, `net/charfile.ts`) are the displayed totals (the port's model: the compare's current row, `splitAttack`, and this candidate all read them that way) or the stat block without the worn items (`bridge/admin-chars.mjs` recomputes them "for the class", which reads like the base). The two models disagree by the worn items. Also the combat ATA `playerAttacker`: `ROUND((cls min_ata + stats.ata) * 0.1) + weapon.ata` equals the exe's `total_ata` only if `stats.ata` is the stat block's ATA, not the displayed total; under the displayed-total model it adds the class minimum and the weapon ATA again (for a fresh HUmar with a saber, 75 against the exe's 68 with the displayed 68). Needs a live check (a character file with a weapon, the in-game ATA row) before either formula moves.
+
+**Tests:**
+- `node tests/playerstats.test.ts`: ALL PASS (rewritten for the absolute model: the blocks, the not-worn candidates for a sword into an empty slot, a short sword over the sword, armour over armour, the worn armour as a candidate, the clamp (not worn only), the worn sword and armour, the option row (MST +3), the compare rows' colours, the Item Pack's unchanged delta).
+- `node tests/playerstatsatp.test.ts`: 15/15. `node tests/fieldhud.test.ts`: all passed. `node tests/quickmenu.test.ts`: ALL PASS. `node tests/materials.test.ts`: 50/50. `node tests/items.test.ts`: all passed.
+- `node tests/combat.test.ts`: 5852 checks, 0 failures. `node tests/combatdepth.test.ts`: 836 checks, 0 failures (Node 24, `vendor/` linked from the main checkout, removed before commit).
+- `cd client && node node_modules/typescript/bin/tsc --noEmit -p .`: exit 0 (Node 24, `client/node_modules` linked from the main checkout, removed before commit). No Playwright.
+
+**Left (in order):**
+1. The open question above (saved stats = totals or base; combat ATA double count under the totals model).
+2. The weapon set bonus table (`get_equipment_set_atp_bonus_weapon`, floats 1.2 / 1.3 / 1.5 at 0x0092c46c..0x0092c47c are its values) and the armour set functions (`get_equipment_set_dfp_bonus`, `get_equipment_set_evp_bonus`): ported as 1.0.
+3. `ApplyWeaponStatsVariant_005d4774` (shields), `ApplyItemStatBonuses_005d41a0` (units), the unit loop's subtraction, `ApplyEquipmentBonuses_005d490c`'s colored rings (`colored_ring_matching_boosts`) and `handle_item_set_bonus`.
+4. The buff multipliers m / md from the live buffs (the compare uses 0).
+5. The Item Pack panel keeps the delta model (`equipStatRows`, `candidateStats`), as the exe's Item Pack path does not call these functions.

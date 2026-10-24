@@ -1,52 +1,61 @@
 import type { ItemData } from '../formats/itemnames.ts';
 import type { ItemPMT } from '../formats/itempmt.ts';
-// The equipment compare list's candidate values, as PsoBB.exe computes them.
+import { roundHalfEven } from './buffs.ts';
+import { CLASS_MAX_STATS } from './materials.ts';
+// The equipment compare list's candidate values, as PsoBB.exe computes them (absolute, not a delta).
 //
-// Callers: UpdateEquipmentStatDisplay_007258dc (dump 689847), reached from
-// EquipmentStatDisplayObject_UpdateEquipState_0072582a (dump 689797, the cursor item
-// is not worn) and _UpdateUnequipState_00725b7e (dump 689960, the cursor item is worn).
-// The compare list is the quick menu's weapon / armour rows (classic/quickmenuwindow.ts).
-// The Item Pack's panel is a different path (ChallengePlayerListWindow_UpdateItemDetail_
-// 0073175c, dump 698949): it does not call these functions, so it keeps the item-only
-// rows of classic/itemdetail.ts.
+// Callers: UpdateEquipmentStatDisplay_007258dc (dump 689847, the compare rows), through
+// EquipmentStatDisplayObject_UpdateEquipState_0072582a (dump 689797, the cursor item is not
+// worn: PlayerRecalculateStats_0068e030) and _UpdateUnequipState_00725b7e (dump 689960, the
+// cursor item is worn: PlayerCalculateItemStats_0068e4e8, see IsEquippedItemValid_00725b14).
+// The Item Pack's panel (ChallengePlayerListWindow_UpdateItemDetail_0073175c, dump 698949)
+// does not call these functions and keeps the item-only rows of classic/itemdetail.ts.
 //
-// Evidence (PsoBB.exe 1.25.13; the asm was read at 0x68e030..0x68e43a and 0x68e4e8..0x68e816):
-//   - PlayerRecalculateStats_0068e030 (dump 569766) and PlayerCalculateItemStats_0068e4e8
-//     (dump 569928) store exactly two shorts into the caller's buffer: [0] = ATP
-//     (`mov word ptr [ebp], bx`, 0x68e3e2) and [1] = DFP (`mov word ptr [ebp+2], si`,
-//     0x68e42c). Nothing else is written; the function returns 1 (2 for the item path).
-//   - The DFP is computed from the buffer's own [1] (`movsx ecx, word ptr [ebp+2]`, 0x68e328),
-//     and the caller zeroes that buffer (dump 689847 `local_2c = 0`). So the DFP is 0 for
-//     every candidate, and MST / ATA / EVP / LCK (the buffer's other shorts) are 0 too.
-//     The port shows the exe's values, not the old delta model; see DEVLOG.
-//   - The ATP is `ROUND(atp * m + (rmin + atp)) + ROUND(span + m * span)` with the clamped
-//     stat block's ATP as `atp`, rmin / rmax the battleparams ATP range, span = rmax - rmin,
-//     m = attack_buff_multiplier. With m = 0 it is atp + rmax.
-//   - The stat block and the range are edited through the item vtable's slot +0x5c.
-//     For the weapon class that is UnknownItemFunction19_005d22cc (dump 425324, the handler
-//     at 0x5d22cc): it SUBTRACTS the item's stored bonuses (the range min / max at item
-//     +0x124 / +0x126, the stat block at +0x100..). PlayerRecalculateStats calls it on the
-//     slot's old item, then ApplyEquipmentBonuses_005d330c (dump 426168) adds the candidate
-//     (the weapon: ATP min / max + 2 * grind into the range, MST into the stat block; the
-//     armour's DFP / EVP into the stat block). Then it clamps the stat block to the class
-//     max (g_ClassMaxStats, combat/materials.ts).
-//   - The PlayerCalculateItemStats path calls the same slot +0x5c on the worn item (no
-//     candidate is applied) and does not clamp. Its field23 call's arguments are not in
-//     the dump (the decompile shows none); the same three arrays are ASSUMED.
+// The exe's working blocks (PlayerRecalculateStats_0068e030 locals; PlayerCalculateItemStats
+// copies the same three):
+//   stat   (player +0x2b4, battleparams_stats): [0] ATP base, [1] MST, [2] EVP, [4] DFP,
+//          [5] ATA, [6] LCK (the clamp at [0], [1], [2], [4], [5], [6]).
+//   range  (player +0x31c, battleparams_attacks): [0] atp_range_min, [1] atp_range_max,
+//          [2] ata_range_min (tenths of an ATA).
+//   resist (player +0x320): [0] the EVP modifier, dword +0x1c the DFP modifier.
+// CalculateChallengeDamage_0069807c (dump 578524) turns them into the six shorts the list
+// shows: out[0] ATP = atp + range_max (the ATP line of PlayerRecalculateStats), out[1] DFP =
+// max(0, dfp + dfp_mod), out[2] MST = mst, out[3] ATA = ROUND((ata_range_min + ata) * 0.1),
+// out[4] EVP = max(0, evp + evp_mod), out[5] LCK = lck. The 0.1 is the float at 0x0093ca14
+// (fmuls at 0x6980d5). total_ata (the displayed ATA, dump 746023) is the same formula, so the
+// displayed and the candidate ATA share one unit.
 //
-// The model below is therefore a delta of the file's absolute stats (the file's stat
-// block already holds the worn equipment): candidate ATP = current ATP + the change of
-// the weapon's ATP max (+ 2 * grind), DFP = 0 (the exe's read), other rows 0.
+// The item part (ApplyEquipmentBonuses_005d330c, dump 426168, and its helpers):
+//   - weapon (type 0): range min / max += atp_min / atp_max + 2 * grind (the set factor
+//     get_equipment_set_atp_bonus_weapon is 1.0 unless its set matches, and the morning glory
+//     base g_MorningGlory_ATP_Bonus_Base is 0.0 at 0x0092c448); ata_range_min += ata * 10 plus
+//     10 * (next byte) for each special slot whose byte is 5; stat MST += mst.
+//   - armour (type 1, sub 1, ApplyWeaponStats_005d4840, dump 426949): resist EVP += pmt evp
+//     (0x0e) + get_armor_evp (item bytes 8..9); resist DFP dword += pmt dfp (0x0c) +
+//     get_armor_dfp (item bytes 6..7). The set factors are 1.0.
+//   - shield (type 1, sub 2): the exe calls ApplyWeaponStatsVariant_005d4774 (not decoded);
+//     the armour formula is used here (ASSUMED).
+//   - the option row (ApplyEquipmentBonuses_005d490c, dump 427003): the entry index is pmt
+//     +0x1e for a weapon and +0x1c for armour (statBoostEntryIndex in itempmt.ts), and the rows
+//     are the pmt's STAT_BOOST table at root +0x38 (6-byte rows: type, then amount as a short at
+//     +2). Types 1..8 add (range, ata * 10, resist EVP, resist DFP, MST, LCK), 9..16 are their
+//     negatives; type 6 (HP) is not one of the six stats.
+// PlayerRecalculateStats clamps each stat-block value to [0, g_ClassMaxStats row]
+// (get_player_class_max_stats, dump 598456). PlayerCalculateItemStats does not clamp.
 //
-// ASSUMED: m = 0 (no Shifta / Deband / Jellen at rest; the buffs are not in the file);
-// the set bonus and the morning glory bonus are 1.0 and 0 (ApplyEquipmentBonuses_005d330c
-// reads them through get_equipment_set_bonus, not decoded here); the clamp is not applied
-// to the delta (the file's ATP is taken to be inside the class max); the battleparams
-// base range is not in the file, so only its equipment part is tracked; units and mags
-// add nothing (the port's contribution model, see classic/itemdetail.ts).
+// The file's displayed stats (PlayerDispData, net/charfile.ts) are the sums of these blocks,
+// so the port rebuilds the blocks from the displayed values with the worn items' contributions
+// (blocksFromFile). That is exact for ATP, MST, DFP, EVP and LCK; the ATA is exact only up to
+// the rounding of total_ata (ASSUMED: the centre of the rounding interval).
+//
+// ASSUMED (marked in code): the buff multipliers m / md are 0 (no Shifta / Deband / Jellen /
+// Megid in the file); the set factors are 1.0; shields use the armour formula; the resist
+// block has no non-equipment part (the file's EVP / DFP are stat + worn resist); units and mags
+// add nothing (the exe's unit loop, subtracting units when the old armour is worn, and
+// ApplyItemStatBonuses_005d41a0 are not decoded); colored rings and the item set bonus
+// (colored_ring_matching_boosts, handle_item_set_bonus) are not applied (not decoded).
 
-
-// The file's absolute stats the compare list reads (PlayerDispData stats, charfile.ts).
+// The file's displayed stats the compare list reads (PlayerDispData stats, net/charfile.ts).
 export interface CompareStats {
   atp: number;
   dfp: number;
@@ -75,27 +84,206 @@ export function equipmentRange(item: ItemData, pmt: ItemPMT): EquipmentRange {
   return { min: w.atpMin + grind2, max: w.atpMax + grind2 };
 }
 
-// The ATP the exe's formula gives for a range (the change matters, the base is in the file).
-function atpFor(range: EquipmentRange): number {
-  return range.max;
+// The worn items the candidate needs: one per slot (the first equipped of the kind).
+export interface WornEquipment {
+  weapon: ItemData | null;
+  armour: ItemData | null;
+  shield: ItemData | null;
 }
 
-// PlayerRecalculateStats_0068e030: the candidate `item` in the slot of `old` (the worn item
-// of that slot, or null). Returns the six values the caller stores (ATP and DFP are the
-// exe's two writes; the rest are the caller's zeros).
-export function recalculateCandidate(stats: CompareStats, item: ItemData, old: ItemData | null, pmt: ItemPMT): CandidateStats {
-  const now = old ? equipmentRange(old, pmt) : { min: 0, max: 0 };
-  const next = equipmentRange(item, pmt);
-  const atp = Math.round(stats.atp + atpFor(next) - atpFor(now));
-  return { atp, dfp: 0, mst: 0, ata: 0, evp: 0, lck: 0 };
+export type CompareSlot = keyof WornEquipment;
+
+// The slot a compare candidate goes to (the exe's equipment_slot of the item's type).
+export function compareSlot(item: ItemData): CompareSlot | null {
+  const d = item.data1;
+  if (d[0] === 0) return 'weapon';
+  if (d[0] === 1 && d[1] === 1) return 'armour';
+  if (d[0] === 1 && d[1] === 2) return 'shield';
+  return null;
 }
 
-// PlayerCalculateItemStats_0068e4e8: the worn `item` itself (the stat block without it).
-// The exe returns 2 here and writes the same two values.
-export function equippedCandidate(stats: CompareStats, item: ItemData, pmt: ItemPMT): CandidateStats {
-  const own = equipmentRange(item, pmt);
-  const atp = Math.round(stats.atp - atpFor(own));
-  return { atp, dfp: 0, mst: 0, ata: 0, evp: 0, lck: 0 };
+export function wornEquipment(equipped: readonly ItemData[]): WornEquipment {
+  const w: WornEquipment = { weapon: null, armour: null, shield: null };
+  for (const it of equipped) {
+    const slot = compareSlot(it);
+    if (slot && !w[slot]) w[slot] = it;
+  }
+  return w;
+}
+
+// The exe's three blocks (see the header). Zero-based for an item's own contribution.
+export interface CandidateBlocks {
+  atp: number; // stat [0]
+  mst: number; // stat [1]
+  evp: number; // stat [2]
+  dfp: number; // stat [4]
+  ata: number; // stat [5]
+  lck: number; // stat [6]
+  rmin: number; // range [0]
+  rmax: number; // range [1]
+  ataMin: number; // range [2]
+  resEvp: number; // resist [0]
+  resDfp: number; // resist dword +0x1c
+}
+
+const zeroBlocks = (): CandidateBlocks => ({
+  atp: 0, mst: 0, evp: 0, dfp: 0, ata: 0, lck: 0, rmin: 0, rmax: 0, ataMin: 0, resEvp: 0, resDfp: 0,
+});
+
+// A little-endian signed short from two bytes (the exe's (short) of a byte pair).
+function s16(lo: number, hi: number): number {
+  const v = (lo & 0xff) | ((hi & 0xff) << 8);
+  return v >= 0x8000 ? v - 0x10000 : v;
+}
+
+// The 16-bit wrap the exe's shorts apply to every sum.
+const wrap16 = (v: number): number => ((v & 0xffff) << 16) >> 16;
+
+// The ATA of a weapon's three special slots (bytes 6..11): a type 5 adds 10 * the next byte.
+function ataSpecials(d: Uint8Array | number[]): number {
+  let ata = 0;
+  for (let i = 0; i < 3; i++) if (d[6 + 2 * i] === 5) ata += d[7 + 2 * i] * 10;
+  return ata;
+}
+
+// ApplyEquipmentBonuses_005d490c (dump 427003): the option row of the item's entry.
+function applyOption(b: CandidateBlocks, index: number, pmt: ItemPMT, sign: 1 | -1): void {
+  const e = pmt.statBoosts[index];
+  if (!e) return;
+  const v = s16(e.amount1 & 0xff, e.amount1 >> 8);
+  const t = e.stat1;
+  const neg = t >= 9 && t <= 16;
+  const k = sign * (neg ? -v : v);
+  switch (neg ? t - 8 : t) {
+    case 1:
+      b.rmin += k;
+      b.rmax += k;
+      break;
+    case 2:
+      b.ataMin += 10 * k;
+      break;
+    case 3:
+      b.resEvp += k;
+      break;
+    case 4:
+      b.resDfp += k;
+      break;
+    case 5:
+      b.mst += k;
+      break;
+    case 7:
+      b.lck += k;
+      break;
+    case 8:
+      b.rmin += k;
+      b.rmax += k;
+      b.ataMin += 10 * k;
+      b.resEvp += k;
+      b.resDfp += k;
+      b.mst += k;
+      b.lck += k;
+      break;
+    default:
+      // 0 and 6 (the HP field, not one of the six stats) change nothing here.
+      break;
+  }
+}
+
+// The item's contribution to the blocks, added (sign 1) or taken away (sign -1). The exe takes
+// an item away with its stored bonuses (UnknownItemFunction19_005d22cc); the same formula with
+// sign -1 is equal when the stored values are the current ones (ASSUMED).
+export function applyItem(b: CandidateBlocks, item: ItemData, pmt: ItemPMT, sign: 1 | -1): void {
+  const d = item.data1;
+  if (d[0] === 0) {
+    const w = pmt.getWeapon(d[1], d[2]);
+    if (!w) return;
+    const g2 = 2 * d[3];
+    b.rmin += sign * (w.atpMin + g2);
+    b.rmax += sign * (w.atpMax + g2);
+    b.ataMin += sign * (w.ata * 10 + ataSpecials(d));
+    b.mst += sign * w.mst;
+    applyOption(b, w.statBoostEntryIndex, pmt, sign);
+    return;
+  }
+  if (d[0] === 1 && (d[1] === 1 || d[1] === 2)) {
+    const a = (d[1] === 1 ? pmt.armors : pmt.shields)[d[2]];
+    if (!a) return;
+    b.resDfp += sign * (a.dfp + s16(d[6], d[7]));
+    b.resEvp += sign * (a.evp + s16(d[8], d[9]));
+    applyOption(b, a.statBoostEntryIndex, pmt, sign);
+  }
+}
+
+// The blocks the displayed stats of the file stand for. The file holds the sums (ATP = atp +
+// range max, DFP = dfp + resist DFP, EVP = evp + resist EVP, ATA = ROUND((ata_min + ata) * 0.1)),
+// so the worn items' contributions are taken out of them. The resist block's non-equipment part
+// is taken as 0 (ASSUMED).
+export function blocksFromFile(file: CompareStats, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateBlocks {
+  const cls = PLAYER_CLASS_ATTACK[charClass] ?? PLAYER_CLASS_ATTACK[0];
+  const wz = zeroBlocks();
+  for (const it of [worn.weapon, worn.armour, worn.shield]) if (it) applyItem(wz, it, pmt, 1);
+  const rmax = cls[1] + wz.rmax;
+  const ataMin = cls[2] + wz.ataMin;
+  return {
+    atp: file.atp - rmax,
+    mst: file.mst, // the stat MST holds the worn weapon's and the options' MST (A[1])
+    evp: file.evp - wz.resEvp,
+    dfp: file.dfp - wz.resDfp,
+    ata: file.ata * 10 - ataMin, // ASSUMED: the centre of the total_ata rounding
+    lck: file.lck, // the stat LCK holds the options' LCK (A[6])
+    rmin: cls[0] + wz.rmin,
+    rmax,
+    ataMin,
+    resEvp: wz.resEvp,
+    resDfp: wz.resDfp,
+  };
+}
+
+// CalculateChallengeDamage_0069807c's six outputs, with the ATP line of PlayerRecalculateStats
+// (m = 0: ROUND(atp + rmin) + ROUND(rmax - rmin) = atp + rmax) and md = 0.
+function challengeOutputs(s: CandidateBlocks): CompareStats {
+  const ataFloat = Math.fround(Math.fround(s.ataMin + s.ata) * Math.fround(0.1));
+  return {
+    atp: wrap16(s.atp + s.rmax),
+    dfp: Math.max(0, wrap16(s.dfp + s.resDfp)),
+    mst: wrap16(s.mst),
+    ata: wrap16(roundHalfEven(ataFloat)),
+    evp: Math.max(0, wrap16(s.evp + s.resEvp)),
+    lck: wrap16(s.lck),
+  };
+}
+
+// The stat block's clamp to the class maximum (PlayerRecalculateStats_0068e030, dump 569766).
+function clampToClass(s: CandidateBlocks, charClass: number): void {
+  const m = CLASS_MAX_STATS[charClass] ?? CLASS_MAX_STATS[0];
+  const clamp = (v: number, hi: number) => Math.min(Math.max(v, 0), hi);
+  s.atp = clamp(s.atp, m.atp);
+  s.mst = clamp(s.mst, m.mst);
+  s.evp = clamp(s.evp, m.evp);
+  s.dfp = clamp(s.dfp, m.dfp);
+  s.ata = clamp(s.ata, m.ata);
+  s.lck = clamp(s.lck, m.lck);
+}
+
+// PlayerRecalculateStats_0068e030, the cursor item not worn: the slot's worn item comes out
+// (vtable 0x5c), the candidate goes in (ApplyEquipmentBonuses), the stat block is clamped, and
+// CalculateChallengeDamage gives the six values.
+export function recalculateCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
+  const s = blocksFromFile(file, worn, charClass, pmt);
+  const slot = compareSlot(item);
+  const old = slot ? worn[slot] : null;
+  if (old) applyItem(s, old, pmt, -1);
+  applyItem(s, item, pmt, 1);
+  clampToClass(s, charClass);
+  return challengeOutputs(s);
+}
+
+// PlayerCalculateItemStats_0068e4e8, the cursor item worn: the item comes out of the copies
+// (no candidate, no clamp), then CalculateChallengeDamage.
+export function equippedCandidate(file: CompareStats, item: ItemData, worn: WornEquipment, charClass: number, pmt: ItemPMT): CandidateStats {
+  const s = blocksFromFile(file, worn, charClass, pmt);
+  applyItem(s, item, pmt, -1);
+  return challengeOutputs(s);
 }
 
 // ---- (merged) ATP split, PLAYER_CLASS_ATTACK, candidate ATP ----
