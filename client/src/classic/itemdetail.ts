@@ -162,7 +162,7 @@ export function equipStatRows(
     : candidateStats(current, equipContribution(item, pmt), old ? equipContribution(old, pmt) : {});
   // The Item Pack detail (ChallengePlayerListWindow_UpdateItemDetail_0073175c, dump 698949) does
   // not call PlayerRecalculateStats_0068e030, so this panel keeps the item-only delta; the quick
-  // menu compare list uses combat/playerstats.ts (candidateAtp / recalculateCandidate).
+  // menu compare list uses combat/playerstats.ts (recalculateCandidate / equippedCandidate).
   return EQUIP_STAT_ROWS.map(({ key, label }) => {
     const cur = current[key];
     const it = cand[key];
