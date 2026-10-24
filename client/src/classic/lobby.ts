@@ -42,6 +42,7 @@ import { TradeMenu, type TradeEnv } from './trade.ts';
 import type { LobbyView } from '../render/lobbyview.ts';
 import type { MapViewer } from '../render/mapviewer.ts';
 import { ChatBubble, ChatLine, drawLogWindow, projectHead, type BubbleTextures } from './chat.ts';
+import { drawTeamLog, type TeamChat } from './teamchat.ts';
 import { InfoCounter, type CounterText, type InfoCol } from './counter.ts';
 import { PartyMenus, T15, type PartyHost } from './gamelist.ts';
 import { Question, TeamMenus, teamRowsDisabled, type TeamHost } from './teammenu.ts';
@@ -110,6 +111,8 @@ export interface LobbyHud {
   infoBoardClient?: () => InfoBoardClient | null;
   // The Simple Mail store and answer service (net/simplemail.ts), null before the lobby's connection.
   mailbox?: () => SimpleMailBox | null;
+  // The team chat window and its log (classic/teamchat.ts), shared with the field.
+  teamChat?: TeamChat;
 }
 
 export interface TransportHost {
@@ -252,6 +255,8 @@ export class LobbyScreen implements Screen {
     };
     this.chat = new ChatLine((text) => lobby.sendChat(text));
     this.chat.sendWord = (message) => lobby.sendWordSelect(message);
+    this.chat.team = hud.teamChat ?? null;
+    this.chat.teamSender = () => lobby.players.get(lobby.selfId)?.name ?? '';
     lobby.on('chat', (from, gc, text) => this.chat.receive(from, gc, text, (id) => this.distanceTo(id)));
     lobby.on('playerLeft', (id) => this.heights.delete(id));
     // A guild card sent by a player (6x06): the book takes a known card; others wait (ASSUMED: no window).
@@ -550,6 +555,13 @@ export class LobbyScreen implements Screen {
     const full = this.hud.fullCharacter?.() ?? null;
     if (!this.menu.open && !this.counter.open) {
       const a = functionKeyAction(e, functionKeyNames(), chatFormOption(full));
+      // F9 / F10: the team chat window and its lock (classic/teamchat.ts).
+      if (this.hud.teamChat && (a?.kind === 'teamChat' || a?.kind === 'teamChatLock')) {
+        e.preventDefault();
+        if (a.kind === 'teamChat') this.hud.teamChat.toggle();
+        else this.hud.teamChat.toggleLock();
+        return;
+      }
       if (a?.kind === 'menu' && LOBBY_SHORTCUT_LEAVES.has(a.id) && validateMenuEntry(a.id, lobbyMenuRules(!!this.hud.team && teamMember(this.hud))).enabled) {
         e.preventDefault();
         this.keys.clear();
@@ -662,6 +674,7 @@ export class LobbyScreen implements Screen {
       inBand(ctx, bands.mid, () => this.quit?.draw(ctx, this.hud.skin, this.hud.text(0x0b, 0x6e), this.hud.text(0x0b, 0x6f)));
       inBand(ctx, bands.bottom, () => this.options?.draw(ctx, this.hud.skin, extra));
       if (this.logWindow) drawLogWindow(ctx, this.hud.skin, this.chat.log);
+      if (this.hud.teamChat?.open) drawTeamLog(ctx, this.hud.skin, this.hud.teamChat.log);
     });
   }
 

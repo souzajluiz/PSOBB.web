@@ -20,8 +20,8 @@ the port). File references are to `client/src/`.
 | F6 | simple_mail_menu_shortcut (25) -> 0x13 | wired | `classic/homeleaves.ts` (Simple Mail, `classic/simplemail.ts`) | Field and lobby. Needs the session's mailbox (no-op before the lobby connection). |
 | F7 | symbol_chat_menu_shortcut (26) -> 0x12 | wired | `classic/homeleaves.ts` (Symbol Chat list, `classic/symbolchatlist.ts`) | Field and lobby. The End key's field picker (`classic/field.ts` key()) is a different window (send). |
 | F8 | team_menu_shortcut (27) -> 0x25 | wired (needs a team) | `classic/homeleaves.ts` (Team Member List, `classic/teammenu.ts`) | Field and lobby. Greyed out of a team (ValidateMenuItemCondition, `classic/fieldmenu.ts` validateMenuEntry). |
-| F9 | team_chat (28) | missing | not ported | Exe: `TeamChatMenu_Update_00717260` (dump 678207, called from 677720): opens and closes the per-slot team window. The port has the 07EA send and receive (`net/team.ts`) but no team chat line or window (DEVLOG 2026-10-23, team chat). |
-| F10 | team_chat_toggle (29) | missing | not ported | Exe: dump 678385: while that window is open, toggles the lock bit (0x80) that sends the chat line as team chat (`SendChatMessageDispatcher_0077d710`, dump 754350). Same reason as F9. |
+| F9 | team_chat (28) | wired | `classic/teamchat.ts` (window), `classic/lobby.ts`, `render/fieldhud.ts` | Lobby and field. Exe: `TeamChatMenu_Update_00717260` (dump 678207, called from 677720): toggles the team log window (the quick menu's +0x48 list, position (8, 380) as literals at dump 677488). Opening sets the lock too (0x180). No team test, as in the exe. Same Shift test as the menu keys (option 0x2000000 clear: no Shift). |
+| F10 | team_chat_toggle (29) | wired (window open) | `classic/teamchat.ts` (lock), `classic/chat.ts` ChatLine.sendText | Lobby and field, only while the team window is open. Exe: dump 678385 toggles the lock bit 0x80; `SendChatMessageDispatcher_0077d710` (754225) then sends the typed or shortcut line as team chat (07EA via `HandleTeamOperationSuccessFromChat_0077d784`, 754294, scene logged_in 0x0b). Received 07EA lines are kept in the team log (handler 0x007c1a4c). |
 | F11 | keyboard_controls_toggle (30) | missing | not ported | Exe: `ChallengePlayerInfoWindow_UpdateTextInputHandler_0072f130` (dump 697159), character option 0x1000000. The port has no mouse-control mode. |
 | F12 | main_menu_2 (31) | wired | `render/fieldhud.ts` key(), `classic/lobby.ts` key() | Read through `bindingKey(BINDING.mainMenu2)`, so a rebound F12 follows the config. |
 | Shift+F1..F12 | handle_chat_shortcuts (dump 674857): the raw F keys, slots 0..11 | partial | `input/shortcuts.ts` chatShortcutIndex; `render/fieldhud.ts` key(); `classic/lobby.ts` key(); `classic/chat.ts` ChatLine.useShortcut; `net/chatshortcut.ts` | Option 0x2000000 clear (the default): Shift+F sends the slot, plain F is the menu key. Option set: plain F sends the slot and Shift+F is the menu (the Options window's Function Key row). A slot is the save's record at 0x1FAC (text or symbol chat), sent with the chat cooldown (dropped while it runs). Not ported: the Chat > Shortcut leaf (0x11) editor. A word-select record (type 2) sends 6x74 (`Lobby.sendWordSelect`, 2026-10-23). |
@@ -54,7 +54,7 @@ the port). File references are to `client/src/`.
   Alt emotes, Q / E auto run and walk (the manual's keys, see the ASSUMED list).
 - **Partial:** F1 (help list, field only), numpad (NumLock on only), Shift+F chat shortcuts
   (no slot editor; word select sends 6x74, receive is not ported), PageUp / PageDown (lobby Log Window only).
-- **Missing:** F9..F11 (team chat window and keyboard control mode), Ctrl+End (quick menu),
+- **Missing:** F11 (keyboard control mode), Ctrl+End (quick menu),
   Tab, Print Screen.
 
 ## ASSUMED

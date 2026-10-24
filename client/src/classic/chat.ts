@@ -36,6 +36,7 @@ import { drawWindowFrame, type WindowSkin } from './stage.ts';
 import { CHAT_COOLDOWN_FRAMES, chatCooldownOver, chatCooldownTick, drawSymbolParts, symbolSoundId, SYMBOL_CHAT_FRAMES, SYMBOL_PLATE, type TintFn } from './symbolchat.ts';
 import type { SymbolChat } from '../net/symbolchat.ts';
 import type { ChatShortcut, WordSelectMessage } from '../net/chatshortcut.ts';
+import type { TeamChat } from './teamchat.ts';
 
 export const CHAT_LOG_LINES = 0x1e; // FUN_0073b71c / FUN_0073b858
 export const CHAT_MAX_LENGTH = 0x4f; // FUN_00713540 -> FUN_007312f0
@@ -867,6 +868,11 @@ export class ChatLine {
   sendSymbol: ((chat: SymbolChat) => void) | null = null;
   // Sends a word select chat (a word-select shortcut): the 6x74 message (Lobby.sendWordSelect).
   sendWord: ((message: WordSelectMessage) => void) | null = null;
+  // The team chat window (classic/teamchat.ts). While it routes (open and locked, F10), a typed
+  // line or a text shortcut goes to the team instead of `send` (SendChatMessageDispatcher_0077d710).
+  team: TeamChat | null = null;
+  // The sender's name on a team line (07EA).
+  teamSender: () => string = () => '';
 
   // send: the text Enter sends (the chat packet 06 of the lobby or the game).
   constructor(send: (text: string) => void) {
@@ -900,7 +906,13 @@ export class ChatLine {
 
   private dispatch(text: string): void {
     this.startCooldown();
-    this.send(text);
+    this.sendText(text);
+  }
+
+  // The text sender of the dispatcher: the team when the team lock routes it, else the chat.
+  private sendText(text: string): void {
+    if (this.team?.routes()) this.team.submit(this.teamSender(), text);
+    else this.send(text);
   }
 
   // Space (begin_chat_input) opens the line; a held line keeps it open until it goes.
@@ -936,7 +948,7 @@ export class ChatLine {
     if (!this.cooldownOver()) return false;
     this.startCooldown();
     if (!s) return true;
-    if (s.type === 1 && s.text) this.send(s.text);
+    if (s.type === 1 && s.text) this.sendText(s.text);
     else if (s.type === 2 && s.word) this.sendWord?.(s.word);
     else if (s.type === 3 && s.symbol) this.sendSymbol?.(s.symbol);
     return true;

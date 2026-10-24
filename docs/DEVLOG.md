@@ -15313,3 +15313,35 @@ The entry above says the 3D view is not shifted in Chrome. That was a misreading
 **Left:**
 - The Gal Gryphon brain: the 35 state handlers (`docs/bosses/galgryphon-states-a.md`, `-b.md`), the S7 throw at 20.5, and the state records that the docs say come from the network (the authority's 0xA0 stream, `docs/bosses/galgryphon-script.md` section 6). Until the brain drives S7, `galMinions.throw()` has no caller and the Gryphon stays on its generic `EnemyAi`.
 - The launcher's particles and sounds (0x3ad, the frustum sets), the Sinow-style attack's area hit (`0x0051fc9c`, the same helper `derolle.ts` DrlBurst reuses), and the Effect's sound 0x39f.
+## 2026-10-23: team chat (F9 window, F10 lock, 07EA lines in the team log)
+
+**Exe.** Named dump `Psobb.exe-05112026.c`; Ghidra for what the dump does not name.
+- `TeamChatMenu_Update_00717260` (dump 678207, called from 677720) is the per-frame update of the quick menu object. F9 (`was_input_pressed(team_chat)`, dump 678299) with the slot's element hidden sets 0x180 on it (`UIElement_SetLockAndVisibilityState_00716188`: visible and locked); visible clears 0x180 (`UIElement_Update_00716198`). F10 (`team_chat_toggle`, dump 678385) acts only while the element is visible: it toggles the lock bit 0x80 (`UIElement_IsLocked_00716064` reads it). The keys take the menu keys' Shift test (option 0x2000000 clear: no Shift). The F9 path has no team test; the early return is the element's focus bit 0x1 (`UIElement_IsVisible_0071602c`), not visibility.
+- The window is the team log list: the quick menu object's +0x48 is made by `CreateListWindowObject_00721558` (dump 677488) with position (8, 380) and render vector (624, 94) as literals (not from the GUI table 0x00971f40), 30 rows (0x1e), stored lines at most 0x8f units (`TeamLogListWindow_Initialize_007215dc`, dump 686872).
+- `SendChatMessageDispatcher_0077d710` (dump 754225): a text or shortcut line with the lock on (`UIPanel_IsElementLocked_00718ee4`, 0x80) and no input block goes to `HandleTeamOperationSuccessFromChat_0077d784` (754294), which sends 07EA only in scene 0x0b (`logged_in`, dump 90487 enum: the lobby and the field). It does not fall back to chat.
+- The 07EA sender is `SendTeamOperationSuccessPacket_007f32ac` (dump 814481): name 0x10 units at payload 0, text at payload 0x20 (`net/team.ts` layout confirmed).
+- The 07EA receive handler: EA table 0x00a0f800 entry 7 = 0x007c1a4c (`tools/exedata.py read 0x00a0f800 u 40`). Not in the dump's names; Ghidra (`tools/ghidra/decomp.sh 0x007c1a4c`) decompiles it: it calls the callback at this+0x1e138 with (text at packet+0x28, sender at packet+8). The writer is `TeamLogHandler_AddMessage_007190b0` (dump 680596) -> `TeamLogListWindow_AddMessage_00721a10`; a line with a sender is `sender > text` (`GuildChatLogFormat_WithSender`, the string's text is not read), without one the text alone; newlines become spaces (dump 680540).
+
+**Port.**
+- `client/src/classic/teamchat.ts` (new): `TeamChat` (the window `open` = 0x100, the lock `locked` = 0x80; `toggle` (F9), `toggleLock` (F10, window open only), `routes()`, `submit`, `receive`), `TeamLog` (30 lines, 0x8f units), `drawTeamLog`, `TEAM_LOG_WINDOW`.
+- `client/src/classic/chat.ts` `ChatLine`: `team` and `teamSender`; the typed line and the text shortcut go through `sendText`, which sends to the team while the window routes (the dispatcher's order).
+- `client/src/input/shortcuts.ts`: `functionKeyAction` returns `teamChat` (F9) and `teamChatLock` (F10); F11 stays none.
+- `client/src/classic/lobby.ts` and `client/src/render/fieldhud.ts`: the F9 / F10 keys and the window draw (the lobby through `hud.teamChat`, the field through the game view's `teamChat`).
+- `client/src/classic/main.ts`: one `TeamChat` per session; the team client's `onChat` writes the log; `submit` sends through `TeamClient.chat` on the session's lobby connection.
+- `client/src/render/gameview.ts`, `client/src/classic/field.ts`: pass and wire it.
+
+**ASSUMED.**
+- Out of a team the window opens (F9 has no team test in the exe, the brief's gate was dropped). A routed line goes out as 07EA anyway, as the exe's send does (the scene 0x0b gate is the screen's: lobby and field are logged_in). newserv relays a team chat only to team members, so out of a team the line reaches nobody (ASSUMED on the server side; the port does not drop it locally).
+- The window's size: the render vector (624, 94) read as width and height, 4 rows (the chat log's row formula). Its draw over the chat input line (y 397) is not checked.
+- The team log line format is the chat log's `sender > text` (the exe's format string is not read). Team lines go to the team log only, not the main chat log; the exe's chat callback (this+0x1e138) is not decoded.
+- The lock is on when the window opens (0x180), as the exe's F9 sets it.
+- `FUN_00813a78` in the 07EA handler (copies the text) is taken as a copy; the MessageBoxA calls in the dump are debug leftovers and not ported.
+- The blocked-input test (`IsPlayerSlotUIBlockingInput`) is taken as false; the team log's file write (ChatLog file) is not ported.
+
+**Checks.** `node tests/chatline.test.ts` (added: the routing with the lock, F10 and F9 toggles, the shortcut route, out of a team, the log cap and the newline / 0x8f rules), `node tests/shortcuts.test.ts` (F9 / F10 map, Shift and Ctrl refused, the option set), `node tests/team.test.ts` (07EA round trip). Existing and passing: `homeleaves`, `fkeys`, `fieldhud`, `lobbymenu`, `controls`, `teammenu`, `symbolchat`, `emotes`, `options`, `mobileinput`, `customize`, `chatshortcut`. `cd client && npx tsc --noEmit -p .` exit 0. Not run in Chrome (no Playwright, per the brief).
+
+**Left.**
+- The window's position, size, row colours and the title are ASSUMED from the literals above; the team log's list item colour (the 0x540 argument of `ListWindowObject_AddItem`) is not read.
+- The team chat in Chrome (the window's draw and the F10 lock in the field).
+- The exe's F9 / F10 focus bit (0x1) early return and the blocked-input test are not modelled.
+- F11 (keyboard control mode) and the team log's file write.

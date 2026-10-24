@@ -78,6 +78,9 @@ export class FieldScreen implements Screen {
     this.chat = new ChatLine((text) => this.game.sendChat(text));
     this.chat.sendSymbol = (chat) => this.sendSymbolChat(chat);
     this.chat.sendWord = (message) => this.game.sendWordSelect(message);
+    // The team chat window (F9 / F10) and its sender name (classic/teamchat.ts).
+    this.chat.team = view.teamChat;
+    this.chat.teamSender = () => this.game.playerName(this.game.selfId);
     view.inputBlocked = () => this.chat.open || this.quick !== null;
     // The chat shortcuts (Shift+F or the F keys in the chat form, render/fieldhud.ts key()).
     view.chatShortcut = (index, full) => {

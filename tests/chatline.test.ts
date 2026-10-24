@@ -232,6 +232,65 @@ lg.add('P', 'new');
 eq(lg.back, 0, 'log: a new line returns the view to the bottom');
 eq(logWindowRows(lg.wrapped(), LOG_FIT, 0).at(-1), 'P > new', 'log: the new line is shown');
 
+// The team chat (classic/teamchat.ts, F9 window and F10 lock): while the window is open and
+// locked, a typed line and a text shortcut go to the team (SendChatMessageDispatcher_0077d710).
+const { TeamChat, TeamLog, teamLogLine, TEAM_LOG_LINES, TEAM_LOG_TEXT_MAX } = await import('../client/src/classic/teamchat.ts');
+const typeLine = (l: InstanceType<typeof ChatLine>, text: string) => {
+  l.begin();
+  for (const k of text) l.key(press(k));
+  l.key(press('Enter'));
+};
+const wait = (l: InstanceType<typeof ChatLine>) => {
+  for (let i = 0; i < 0x2d + 1; i++) l.tickCooldown();
+};
+{
+  const teamOut: string[] = [];
+  const chatOut: string[] = [];
+  const tc = new TeamChat((s, t) => teamOut.push(`${s}|${t}`));
+  const tl = new ChatLine((t) => chatOut.push(t));
+  tl.team = tc;
+  tl.teamSender = () => 'Me';
+  typeLine(tl, 'a');
+  eq(chatOut, ['a'], 'team: closed window sends the line as chat');
+  wait(tl);
+  tc.toggle();
+  eq([tc.open, tc.locked], [true, true], 'team: F9 opens the window in team mode (0x180)');
+  typeLine(tl, 'b');
+  eq([teamOut, chatOut], [['Me|b'], ['a']], 'team: an open, locked window sends the line to the team');
+  wait(tl);
+  tc.toggleLock();
+  eq(tc.routes(), false, 'team: F10 clears the lock');
+  typeLine(tl, 'c');
+  eq(chatOut, ['a', 'c'], 'team: unlocked, the line is chat again');
+  wait(tl);
+  tc.toggleLock();
+  tl.useShortcut({ type: 1, text: 'd' } as never);
+  eq(teamOut.at(-1), 'Me|d', 'team: a text shortcut follows the lock too');
+  wait(tl);
+  tc.toggle();
+  eq([tc.open, tc.routes()], [false, false], 'team: F9 again closes the window and drops the lock');
+  typeLine(tl, 'e');
+  eq(chatOut.at(-1), 'e', 'team: a closed window sends the line as chat');
+  wait(tl);
+  tc.toggleLock();
+  eq(tc.locked, false, 'team: F10 does nothing with the window closed');
+  tc.toggle();
+  wait(tl);
+  typeLine(tl, 'f');
+  eq(teamOut.at(-1), 'Me|f', 'team: F9 opens the window out of a team too (the exe has no team test)');
+  eq(chatOut.at(-1), 'e', 'team: a routed line does not fall back to chat');
+  wait(tl);
+  tc.toggle();
+  const lg = new TeamLog();
+  tc.receive('Ann', 'hi');
+  eq(tc.log.lines, ['Ann > hi'], 'team: a received 07EA line is logged');
+  eq(teamLogLine('', 'bare'), 'bare', 'team log: a line without a sender is the text alone');
+  eq(teamLogLine('A', 'x\ny'), 'A > x y', 'team log: newlines become spaces');
+  eq(teamLogLine('A', 'z'.repeat(0x100)).length, 'A > '.length + TEAM_LOG_TEXT_MAX, 'team log: the text is capped at 0x8f units');
+  for (let i = 0; i < TEAM_LOG_LINES + 2; i++) lg.add('B', String(i));
+  eq([lg.lines.length, lg.lines[0]], [TEAM_LOG_LINES, 'B > 2'], 'team log: 30 lines, the oldest go first');
+}
+
 if (failures) {
   console.log(`${failures} failure(s)`);
   process.exit(1);
