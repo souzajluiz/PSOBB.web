@@ -8,12 +8,23 @@
 // the client's font (classic/hud.ts FloatingTexts). The "MISS" of a failed
 // accuracy roll is the same object in red. Without the HUD's font (not
 // loaded) the number falls back to a canvas sprite. The reticle is
-// `enable_reticle`, which every enemy AI state calls after
-// `SetDerolleLockonTarget_0078730c` picked the lock-on target
-// (combat/enemyai.ts); its look is drawn here with a canvas sprite (ASSUMED).
+// `enable_reticle` (every enemy AI state calls it after
+// `SetDerolleLockonTarget_0078730c` picked the lock-on target, combat/enemyai.ts)
+// and its drawing (`PositionAndRenderReticlePrimitives_007a360c`): three copies
+// of bm_ply_lock_on_cursor.bml's cursor on a circle round the target, each with
+// a black outline (combat/reticle.ts has the exe's constants and colour rows).
 
 import * as THREE from 'three';
 import { damageFloat, missFloat, type FloatSpec } from '../combat/hitfx.ts';
+import {
+  RETICLE_BAMS,
+  RETICLE_MODEL_Z,
+  RETICLE_NOTCH,
+  RETICLE_OUTLINE_THRESHOLD,
+  RETICLE_Z_OFFSET,
+  bamsToRadians,
+  reticleColor,
+} from '../combat/reticle.ts';
 
 const FLOAT_SPEED = 26; // world units per second the number rises
 const LIFETIME = 20 / 30; // seconds (the object lives 0x14 frames)
@@ -42,34 +53,42 @@ function numberSprite(text: string, red: boolean): THREE.Sprite {
   return sprite;
 }
 
-function reticleSprite(): THREE.Sprite {
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const c = canvas.getContext('2d')!;
-  c.strokeStyle = '#ffe36b';
-  c.lineWidth = 6;
-  c.beginPath();
-  c.arc(size / 2, size / 2, size / 2 - 12, 0, Math.PI * 2);
-  c.stroke();
-  // Four ticks, like the client's lock-on cursor.
-  c.lineWidth = 8;
-  for (let i = 0; i < 4; i++) {
-    const a = (i * Math.PI) / 2 + Math.PI / 4;
-    const r0 = size / 2 - 22;
-    const r1 = size / 2 - 2;
-    c.beginPath();
-    c.moveTo(size / 2 + Math.cos(a) * r0, size / 2 + Math.sin(a) * r0);
-    c.lineTo(size / 2 + Math.cos(a) * r1, size / 2 + Math.sin(a) * r1);
-    c.stroke();
+// The lock-on cursor: the three rotated copies of the cursor model, each with its
+// black outline, under one group that is moved to the target and turned to face
+// the camera (render_reticle / PositionAndRenderReticlePrimitives_007a360c).
+// `main` is the cursor's triangle (njcm chunk 0), `outline` the black shape (chunk 2).
+interface ReticleParts {
+  group: THREE.Group;
+  bodies: THREE.MeshBasicMaterial[]; // the coloured cursors (one per copy)
+  outlines: THREE.MeshBasicMaterial[]; // the black outlines (one per copy)
+}
+
+function reticleGroup(main: THREE.BufferGeometry, outline: THREE.BufferGeometry): ReticleParts {
+  const group = new THREE.Group();
+  const bodies: THREE.MeshBasicMaterial[] = [];
+  const outlines: THREE.MeshBasicMaterial[] = [];
+  for (const bams of RETICLE_BAMS) {
+    // The exe rotates the frame, then translates it out to the notch distance.
+    const arm = new THREE.Group();
+    arm.rotation.z = bamsToRadians(bams);
+    group.add(arm);
+    const notch = new THREE.Group();
+    notch.position.set(0, RETICLE_NOTCH, RETICLE_Z_OFFSET);
+    arm.add(notch);
+    const black = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, depthTest: false, transparent: true });
+    const blackMesh = new THREE.Mesh(outline, black);
+    blackMesh.renderOrder = 18;
+    notch.add(blackMesh);
+    outlines.push(black);
+    const colour = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthTest: false, transparent: true });
+    const body = new THREE.Mesh(main, colour);
+    body.position.z = RETICLE_MODEL_Z;
+    body.renderOrder = 19;
+    notch.add(body);
+    bodies.push(colour);
   }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, opacity: 0.85 }));
-  sprite.scale.set(16, 16, 1);
-  sprite.renderOrder = 19;
-  sprite.visible = false;
-  return sprite;
+  group.visible = false;
+  return { group, bodies, outlines };
 }
 
 interface Floating {
@@ -112,15 +131,21 @@ export class CombatOverlay {
   private scene: THREE.Scene;
   private numbers: Floating[] = [];
   private effects: Array<Floating & { radius: number }> = [];
-  private reticle: THREE.Sprite;
+  // The lock-on cursor: null until setReticleModels (the BML is loaded).
+  private reticle: ReticleParts | null = null;
   // The HUD's floating texts (render/playerhud.ts hitPopup); false when its
   // font is not there yet.
   text: ((spec: FloatSpec, x: number, y: number, z: number) => boolean) | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.reticle = reticleSprite();
-    scene.add(this.reticle);
+  }
+
+  // The cursor's two models (bm_ply_lock_on_cursor.bml, chunks 0 and 2).
+  setReticleModels(main: THREE.BufferGeometry, outline: THREE.BufferGeometry): void {
+    if (this.reticle) return;
+    this.reticle = reticleGroup(main, outline);
+    this.scene.add(this.reticle.group);
   }
 
   // One hit box's number over (x, y, z). `_critical` does not change the look.
@@ -155,10 +180,25 @@ export class CombatOverlay {
     this.effects.push({ sprite, age: 0, radius: Math.max(6, radius) });
   }
 
-  // Lock-on cursor over the current target (null hides it).
-  setTarget(pos: { x: number; y: number; z: number } | null): void {
-    this.reticle.visible = pos !== null;
-    if (pos) this.reticle.position.set(pos.x, pos.y, pos.z);
+  // Lock-on cursor over the current target (null hides it). `pos` is the target's
+  // point, moved toward the camera by `radius` (CalculatePositionTowardsCamera_006ea73c,
+  // ASSUMED 0: the hitbox radius is not passed here); the cursor's colour is the
+  // reticle table row `row` (combat/reticle.ts reticleRow) and it turns to face `camera`.
+  setTarget(pos: { x: number; y: number; z: number } | null, opts: { row: number; camera: THREE.Camera; radius?: number }): void {
+    const r = this.reticle;
+    if (!r) return;
+    r.group.visible = pos !== null;
+    if (!pos) return;
+    const cam = opts.camera.position;
+    const dir = new THREE.Vector3(cam.x - pos.x, cam.y - pos.y, cam.z - pos.z).normalize();
+    r.group.position.set(pos.x + dir.x * (opts.radius ?? 0), pos.y + dir.y * (opts.radius ?? 0), pos.z + dir.z * (opts.radius ?? 0));
+    r.group.quaternion.copy(opts.camera.quaternion);
+    const [opacity, cr, cg, cb] = reticleColor(opts.row);
+    for (const m of r.bodies) {
+      m.color.setRGB(cr, cg, cb, THREE.SRGBColorSpace);
+      m.opacity = opacity;
+    }
+    for (const m of r.outlines) m.opacity = opacity > RETICLE_OUTLINE_THRESHOLD ? 1 : 0;
   }
 
   update(dt: number): void {
@@ -203,9 +243,10 @@ export class CombatOverlay {
       (f.sprite.material as THREE.SpriteMaterial).dispose();
     }
     this.effects = [];
-    this.scene.remove(this.reticle);
-    const rm = this.reticle.material as THREE.SpriteMaterial;
-    rm.map?.dispose();
-    rm.dispose();
+    if (this.reticle) {
+      this.scene.remove(this.reticle.group);
+      for (const m of [...this.reticle.bodies, ...this.reticle.outlines]) m.dispose();
+      this.reticle = null;
+    }
   }
 }

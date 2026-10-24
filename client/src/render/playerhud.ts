@@ -9,6 +9,9 @@ import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { anchorX } from '../classic/ingame.ts';
 import {
+  drawGlyphText,
+  glyphTextWidth,
+  GLYPH_HEIGHT,
   expText,
   hitText,
   FloatingTexts,
@@ -23,6 +26,8 @@ import {
   type StatusValues,
 } from '../classic/hud.ts';
 import { bandsOf, overlayFrame, textureBitmap, VW } from '../classic/stage.ts';
+import { TARGET_CARD_ANCHOR } from '../combat/targetcard.ts';
+import type { TargetCardText } from '../combat/targetcard.ts';
 import { GAME_TICKS_PER_SECOND } from './playeranim.ts';
 import type { MapViewer } from './mapviewer.ts';
 
@@ -50,6 +55,8 @@ export class PlayerHud {
   // The HUD's flags (+0x1c; bit 1 = the full map is up, render/fieldhud.ts):
   // the status window closes while bits 1 / 0x10 are set.
   hudFlags: () => number = () => 0;
+  // The target card of the lock-on target (combat/targetcard.ts); null = none.
+  targetCard: TargetCardText | null = null;
 
   constructor(viewer: MapViewer, files: ClientFiles) {
     this.viewer = viewer;
@@ -188,10 +195,34 @@ export class PlayerHud {
     this.status.draw(ctx, tex);
     this.party.draw(ctx, tex);
     this.floats.draw(ctx, tex.font);
+    this.drawTargetCard(ctx, tex.font);
     ctx.save();
     ctx.translate(0, bandsOf(f.vh, f.fill).mid);
     this.messages.draw(ctx, anchorX(MESSAGE_WINDOW.x, MESSAGE_WINDOW.w, this.extra));
     ctx.restore();
+  }
+
+  // The bottom-left target card (ui_target_window_attribute): the monster's name and
+  // "Attribute:" with the attribute in its colour. ASSUMED box: the exe's window
+  // size is not traced, so the box is placed from the reference screenshot (top
+  // 369, 97 high, the anchor's x), its padding is ASSUMED too.
+  private drawTargetCard(ctx: CanvasRenderingContext2D, font: CanvasImageSource): void {
+    const t = this.targetCard;
+    if (!t) return;
+    const pad = 10;
+    const x = TARGET_CARD_ANCHOR.x;
+    const y = 369;
+    const valueX = glyphTextWidth(t.label) + 4; // ASSUMED gap between the label and the value
+    const width = Math.max(120, Math.max(glyphTextWidth(t.name), valueX + glyphTextWidth(t.value)) + pad * 2);
+    ctx.fillStyle = 'rgba(6, 18, 30, 0.78)';
+    ctx.fillRect(x, y, width, 97);
+    ctx.strokeStyle = 'rgba(90, 220, 240, 0.9)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, 96);
+    drawGlyphText(ctx, font, t.name, x + pad, y + pad, 0xffffffff);
+    const row = y + pad + GLYPH_HEIGHT + 10;
+    drawGlyphText(ctx, font, t.label, x + pad, row, 0xffffffff);
+    drawGlyphText(ctx, font, t.value, x + pad + valueX, row, t.argb);
   }
 
   dispose(): void {
