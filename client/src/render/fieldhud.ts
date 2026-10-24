@@ -24,7 +24,6 @@
 // Windows use the in-game space of classic/ingame.ts: a uniform scale by
 // height, windows on the right half following the right edge.
 
-import * as THREE from 'three';
 import type { ClientFiles } from '../data/clientfiles.ts';
 import { parseUnitxt } from '../classic/charcreate_text.ts';
 import { MENU_LAYER } from '../classic/hud.ts';
@@ -41,7 +40,7 @@ import type { TradeEnv } from '../classic/trade.ts';
 import { TRADE_STATUS, type TradeSession } from '../net/trade.ts';
 import { createCounter, type Counter, type CounterKind, type CounterMusic } from '../classic/shop.ts';
 import { ReturnPrompt, RETURN_NO, RETURN_TEXT, RETURN_YES } from '../classic/returnprompt.ts';
-import { menuViewShift } from '../classic/mainmenu.ts';
+import { applyMenuViewShift } from './viewshift.ts';
 import { characterOptionsEnv, restoreBrightness } from '../classic/options.ts';
 import { currentPalette, CONFIG_OFFSET, PALETTE_ITEMS, PALETTE_POS, PALETTE_SIZE, PaletteHud, paletteFromCharacter, type PaletteData, type PaletteSlot, type PaletteTextures } from '../classic/palette.ts';
 import { CONFIG_SIZE } from '../classic/customize.ts';
@@ -678,14 +677,7 @@ export class FieldHud {
     const inner = this.viewer.onFrame;
     this.viewer.onFrame = (dt, keys) => {
       inner?.(dt, this.menu.isOpen || this.counter || this.returnPrompt ? NO_KEYS : keys);
-      const cam = this.viewer.camera;
-      cam.updateProjectionMatrix();
-      const f = this.menu.shift;
-      if (f) {
-        const { ox, oy, s } = menuViewShift(f);
-        cam.projectionMatrix.premultiply(new THREE.Matrix4().set(s, 0, 0, ox, 0, s, 0, oy, 0, 0, 1, 0, 0, 0, 0, 1));
-        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
-      }
+      applyMenuViewShift(this.viewer.camera, this.menu.shift);
     };
   }
 
