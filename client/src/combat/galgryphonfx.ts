@@ -183,8 +183,12 @@ export function sinowberillBranch(ctx: AreaContext): 'x30' | 'x34' {
 
 /**
  * The area hit as a burst: the radius is the context's +8 float and the power is the first word.
- * ASSUMED: the Derolle vtable bodies (+0x30 / +0x34) are not decoded, so reading the +8 float as the
- * radius, the intensity as the power and the look are the port's guesses; the branch is exact.
+ * Decoded so far (ASSUMED past this): the dispatch's singleton (0x00a72eb4, built by 0x00521bbc with vtable
+ * 0x00b009a0). Its slot +0x34 (0x00521cdc) pushes 100.0 and calls +0x30 with the same arguments; its +0x30
+ * (0x00521cf8) walks the 64-entry list at 0x00aad6e0, skips the owner (+0xac) and hidden entities (0x4000000),
+ * keeps a de-duplicated hit list of up to 5 per call, and calls the entity's vtable +0x60 (the per-entity test,
+ * 0x0052...-range, not decoded) and +0x48 (the hit). The radius and power are not yet read through that path,
+ * so the look, the radius and the power here stay ASSUMED.
  */
 export function sinowberillBurst(point: Vec3, ctx: AreaContext, only: readonly number[] | null = null): DrlBurst {
   const effect: ShotEffect = { kind: 'tech', power: Math.max(0, ctx[0]) };
@@ -309,6 +313,92 @@ export function s27Beam(m: number, rand16: () => number): { flag: boolean; value
   if (m % GALFX_S27.period !== 0) return null;
   const k = Math.trunc(m / GALFX_S27.period);
   return { flag: (k & 1) === 0, value: s27BeamValue(rand16()) };
+}
+
+// ---- the S27 under-body arc (0x004a4fc4, create_gal_gryphon_lightning_effect_under_body, dump 225036) ----
+
+/**
+ * The under-body arc's constants (each value read with tools/exedata.py; the code is 0x004a4fc4..0x004a51b9).
+ * Its randoms are the C rand (_rand, 0..32767), not the boss's 16-bit rng. The dump's names for the three
+ * control points are misleading; the disassembly is the order used here.
+ */
+export const GALFX_UNDERBODY = {
+  /** 0x00903cfc = 70.0 (g_GalGryphonLightningEffectRadius): the control points' radius around the boss. */
+  radius: 70.0,
+  /** 0x00903d14 = 32768.0: the rand divisor. */
+  randDivisor: 32768.0,
+  /** 0x00903d18 = 65536.0: a random fraction of a turn in BAMS (the angle scale). */
+  angleScale: 65536.0,
+  /** 0x00903d0c = 0.5: the middle angle is trunc((a1 + a2) * 0.5); the third random above it adds 0x8000. */
+  angleFactor: 0.5,
+  /** 0x41200000 = 10.0 (a literal in the code): the middle control point's height. */
+  topY: 10.0,
+  /** The arc's life in ticks. ASSUMED: the base effect's count of 4 (pushed by 0x004a980c), not decoded. */
+  hold: 4,
+} as const;
+
+/**
+ * The arc's three control points, in the array order the exe passes (the object at esp-0x80, stride 0x10):
+ * [P(a1) at height 0, P(c) at height 10, P(a2) at height 0], where a1 and a2 are two random angles (BAMS,
+ * trunc of rand / 32768 * 65536) and c = trunc((a1 + a2) * 0.5), plus 0x8000 when a third random is above 0.5.
+ * Each point is (boss.x + sin(a) * 70, y, boss.z + cos(a) * 70).
+ */
+export function underBodyControlPoints(boss: { x: number; z: number }, rand15: () => number): [Vec3, Vec3, Vec3] {
+  const r = GALFX_UNDERBODY;
+  const a1 = Math.trunc((rand15() / r.randDivisor) * r.angleScale);
+  const a2 = Math.trunc((rand15() / r.randDivisor) * r.angleScale);
+  let c = Math.trunc((a1 + a2) * r.angleFactor);
+  if (r.angleFactor < rand15() / r.randDivisor) c += 0x8000;
+  const at = (a: number, y: number): Vec3 => ({ x: bamsSin(a) * r.radius + boss.x, y, z: bamsCos(a) * r.radius + boss.z });
+  return [at(a1, 0), at(c, r.topY), at(a2, 0)];
+}
+
+/**
+ * The quadratic Bernstein curve through three control points, which is what InterpolateMinionEffectPosition_007be6b8
+ * (dump 806436, the flag-0 branch for n = 3) evaluates: (1-t)^2 P0 + 2t(1-t) P1 + t^2 P2.
+ */
+export function bezier3(p: readonly [Vec3, Vec3, Vec3], t: number): Vec3 {
+  const u = 1 - t;
+  const a = u * u;
+  const b = 2 * u * t;
+  const c = t * t;
+  return {
+    x: a * p[0].x + b * p[1].x + c * p[2].x,
+    y: a * p[0].y + b * p[1].y + c * p[2].y,
+    z: a * p[0].z + b * p[1].z + c * p[2].z,
+  };
+}
+
+/**
+ * The under-body arc: the curve from its first control point to its last (tu 0, tv 1), with the arc's point
+ * count and points (lightningArc), before the jitter (jitteredBolt makes the bolt).
+ */
+export function underBodyArc(boss: { x: number; z: number }, rand15: () => number): { points: Vec3[]; length: number } {
+  const ctrl = underBodyControlPoints(boss, rand15);
+  return lightningArc((t) => bezier3(ctrl, t), 0, 1);
+}
+
+// ---- the minion ring's particles (0x004aabd8 and 0x004aade4, the table at 0x00904470) ----
+
+/**
+ * The ring's particle ids. The pointer g_pGalgryphonMinionParticleEffectParams (0x00a476f4) has one writer in the
+ * exe: CheckGalgryphonMinionCameraFrustum_004ab058 (0x004ab061) sets it to 0x00904470, whose four u32 are these ids
+ * (tools/exedata.py read 0x904470 u 4). Its other readers are 0x004aafce / 0x004ab039 and 0x004aac64 / 0x004aac75.
+ */
+export const GALFX_RING_PARTICLES = {
+  /** params[0], create_particle_effect4 with flags 0x2040 per slot (the particle flag 0x2000: destroyed at birth, not drawn). */
+  primary: 521,
+  /** params[1], create_particle_effect4 with flags 0x40 per outer slot: a model particle (the lightning BML's chunk 1). */
+  outer: 539,
+  /** params[3] (0x0090447c), the first one-shot create_particle_effect_3 at the ring's centre (0x40). */
+  startFirst: 538,
+  /** params[2] (0x00904478), the second one-shot at the ring's centre (0x40). */
+  startSecond: 540,
+} as const;
+
+/** A ring slot's particle point: the slot's (x, z) with y 0 (copy_pos_to_particle's flY = 0.0 in UpdateGalgryphonMinionParticles). */
+export function ringSlotAt(p: { x: number; z: number }): Vec3 {
+  return { x: p.x, y: 0, z: p.z };
 }
 
 /** 0x0073d160: the release sets bit 0 of the u16 at +8 (the delete flag). */

@@ -7,6 +7,12 @@ import {
   GALFX,
   GALFX_OLGA,
   GALFX_RING,
+  GALFX_RING_PARTICLES,
+  GALFX_UNDERBODY,
+  bezier3,
+  ringSlotAt,
+  underBodyArc,
+  underBodyControlPoints,
   activateHitboxes,
   diveBeamPoints,
   galgryphonAttackBurst,
@@ -268,6 +274,60 @@ const target = (clientId: number, x: number, z: number): AiTarget => ({ clientId
   // each point is base + jitter * max(scale - 0.05, 1.0), so the ends move by their direction.
   for (let c = 0; c < 3; c++) at(bolt.points[c * 3], bolt.base[c * 3] + bolt.jitter[c * 3] * 1, 'jitter: the point is base + jitter * 1 (x)');
   check(bolt.scale[1] >= 1, 'jitter: the decay floors the inner scale at 1.0');
+}
+
+
+// ---- the S27 under-body arc (0x004a4fc4) and the minion ring's particle ids (0x00904470) ----
+{
+  const at = (got: number, want: number, msg: string) => check(near(got, want, 1e-6), `${msg}: got ${got}, want ${want}`);
+  // The randoms are the C rand (0..32767): r1 = 8192 -> a1 = 16384 (a quarter turn), r2 = 16384 -> a2 = 32768 (a half turn),
+  // c = trunc((16384 + 32768) * 0.5) = 24576, and the third random 0 keeps c (no 0x8000 flip).
+  const seq = [8192, 16384, 0];
+  let i = 0;
+  const rnd = () => seq[i++]!;
+  const boss = { x: 100, z: -50 };
+  const ctrl = underBodyControlPoints(boss, rnd);
+  // The array order is [a1 at height 0, c at height 10, a2 at height 0] (the exe's esp-0x80, stride 0x10).
+  at(ctrl[0].x, boss.x + 70, 'under-body: P(a1) x is the boss x + 70 * sin(90 deg)');
+  at(ctrl[0].z, boss.z, 'under-body: P(a1) z is the boss z + 70 * cos(90 deg)');
+  eq(ctrl[0].y, 0, 'under-body: P(a1) is on the ground');
+  eq(ctrl[1].y, GALFX_UNDERBODY.topY, 'under-body: the middle control point is at height 10');
+  at(ctrl[2].x, boss.x, 'under-body: P(a2) x is the boss x (sin 180 deg)');
+  at(ctrl[2].z, boss.z - 70, 'under-body: P(a2) z is the boss z - 70 (cos 180 deg)');
+  // c = 24576 is 3/8 of a turn (135 degrees): sin = cos * -1 = 1 / sqrt 2 with the sign of cos negative.
+  const k70 = 70 * Math.SQRT1_2;
+  at(ctrl[1].x, boss.x + k70, 'under-body: c = 24576 (135 degrees) gives sin +1/sqrt2');
+  at(ctrl[1].z, boss.z - k70, 'under-body: c = 24576 (135 degrees) gives cos -1/sqrt2');
+  // A third random above 0.5 adds 0x8000 (half a turn): c = 57344 (315 degrees), so the middle point flips.
+  i = 0;
+  const seqB = [8192, 16384, 32767];
+  const rndB = () => seqB[i++]!;
+  const flipped = underBodyControlPoints(boss, rndB);
+  at(flipped[1].x, boss.x - k70, 'under-body: the 0x8000 flip (third random above 0.5) moves c by half a turn');
+  at(flipped[1].z, boss.z + k70, 'under-body: the flipped middle point is on the other side (z)');
+  // Bernstein: the curve is P0 at t = 0, P2 at t = 1, and the mid-point is (P0 + 2 P1 + P2) / 4 at t = 0.5.
+  const p = bezier3(ctrl, 0);
+  at(p.x, ctrl[0].x, 'bezier3: t = 0 is the first control point');
+  const q = bezier3(ctrl, 1);
+  at(q.z, ctrl[2].z, 'bezier3: t = 1 is the last control point');
+  const m = bezier3(ctrl, 0.5);
+  at(m.y, (ctrl[0].y + 2 * ctrl[1].y + ctrl[2].y) / 4, 'bezier3: the mid-point height is the Bernstein weight 1/4 2/4 1/4');
+  // The arc runs from P(a1) to P(a2) with the lightning point count (ROUND(length / 16) + 1, 2..13).
+  let j = 0;
+  const rndC = () => [8192, 16384, 0][j++ % 3]!;
+  const arc = underBodyArc(boss, rndC);
+  const endA = arc.points[0]!;
+  const endB = arc.points[arc.points.length - 1]!;
+  at(endA.x, boss.x + 70, 'under-body arc: the first point is P(a1)');
+  at(endB.z, boss.z - 70, 'under-body arc: the last point is P(a2)');
+  check(arc.points.length >= 2 && arc.points.length <= 13, `under-body arc: 2..13 points (got ${arc.points.length})`);
+  // Ring particles: the table's ids in the exe's order, and the outer slot's point is at height 0.
+  eq(GALFX_RING_PARTICLES.primary, 521, 'ring particles: params[0] is 521');
+  eq(GALFX_RING_PARTICLES.outer, 539, 'ring particles: params[1] is 539');
+  eq(GALFX_RING_PARTICLES.startSecond, 540, 'ring particles: params[2] (the second one-shot) is 540');
+  eq(GALFX_RING_PARTICLES.startFirst, 538, 'ring particles: params[3] (the first one-shot) is 538');
+  eq(ringSlotAt({ x: 3, z: -4 }).y, 0, 'ring particles: a slot point is at height 0');
+  eq(GALFX_RING.slots, 32, 'ring particles: 32 slots');
 }
 
 if (failures) {

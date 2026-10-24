@@ -61,11 +61,15 @@ import {
   GALFX_RING,
   groundProbe as groundProbeOutcome,
   jitteredBolt,
+  minionRingSpawn,
   minionRingTick,
   olgaBeamPoints,
   olgaMinionSpawn,
+  ringSlotAt,
   sinowberillBurst,
   diveBeamPoints,
+  underBodyArc,
+  GALFX_UNDERBODY,
   type GroundHit,
   type Vec3,
 } from './galgryphonfx.ts';
@@ -391,6 +395,12 @@ export interface GalgryphonAiOptions {
   bolt?: (b: LightningBolt) => void;
   /** The minion point for the S27 beam, by selector (0 or 1); ASSUMED the boss's own point when not given. */
   minionAt?: (sel: number) => Vec3 | null;
+  /**
+   * The minion ring's particles (CreateGalgryphonMinion_004aabd8 and UpdateGalgryphonMinionParticles_004aade4):
+   * start at the ring's centre (the two one-shots, and the 32 outer emitters), then slot(k, at) each spawn tick
+   * with the k-th outer slot's point (the emitters follow it while they emit).
+   */
+  ringParticles?: { start: (centre: Vec3) => void; slot: (k: number, at: Vec3) => void };
   /** Host overrides of the hook groups (the defaults are no-ops). */
   fx?: Partial<GalgryphonFx>;
   cine?: Partial<GalgryphonCine>;
@@ -574,6 +584,7 @@ export class GalgryphonAi {
     const t = minionRingTick(r.state, r.counter, { x: r.x, z: r.z }, { speed0: 1, variant: 0, variantParam2: 1 });
     r.state = t.state;
     r.counter = t.counter;
+    if (t.slots) t.slots.forEach((s, k) => this.opts.ringParticles?.slot(k, ringSlotAt(s.outer)));
     if (t.attack) {
       // The variant context is [variant, speed, radius, 10, param2]: its radius is the ring's, not 15.
       this.shotsOut.push(sinowberillBurst({ x: r.x, y: GALFX_RING.y, z: r.z }, t.attack));
@@ -791,7 +802,13 @@ export class GalgryphonAi {
       sfx: noop,
       groundAt: (x, z) => o.ground?.(x, z, b.h)?.y ?? null,
       playerPos: (slot) => o.playerPos?.(slot) ?? null,
-      lightningUnderBody: noop,
+      lightningUnderBody: () => {
+        // create_gal_gryphon_lightning_effect_under_body (0x004a4fc4, dump 225036): one arc under the boss each
+        // S27 tick (P > 1), from the first control point to the last, jittered as the Zonde bolt. Its randoms
+        // are the C rand (0..32767): the brain's rand() is in [0, 1), so the value is scaled back.
+        const arc = underBodyArc({ x: b.x, z: b.z }, () => Math.floor(o.rand() * 32768));
+        o.bolt?.(jitteredBolt(arc.points, o.rand, GALFX_BEAM_THICKNESS, GALFX_UNDERBODY.hold));
+      },
       lightningTransform: noop,
       spawnBeam: (flag, value) => {
         // SpawnOlgaMinionEffect_004a5218 (dump 225179): the minion point by selector, the player in slot
@@ -815,8 +832,10 @@ export class GalgryphonAi {
       lightningSetup: noop,
       lightningRelease: noop,
       spawnMinionRing: (x, _y, z) => {
-        // CreateGalgryphonMinion_004aabd8 (dump 229084): the ring starts at counter 0 in its spawn state.
+        // CreateGalgryphonMinion_004aabd8 (dump 229084): the ring starts at counter 0 in its spawn state, and its
+        // one-shots and emitters are made at its centre (x, 2.0, z).
         this.ring = { state: 0, counter: 0, x, z };
+        o.ringParticles?.start(minionRingSpawn({ x, z }));
       },
       diveBeam: (from, to) => {
         // CreateGalgryphonLightningBeamEffectWrapper_004aa4b0 (dump 228629): the beam from the boss to the
