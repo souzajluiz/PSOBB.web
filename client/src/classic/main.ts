@@ -21,7 +21,7 @@ import { FieldScreen } from './field.ts';
 import { FieldTown } from './townfield.ts';
 import type { PartyHost } from './gamelist.ts';
 import { LobbyScreen, type LobbyHud, type TransportHost } from './lobby.ts';
-import type { TeamHost } from './teammenu.ts';
+import type { TeamHost, TeamItemRow } from './teammenu.ts';
 import { QuestLoadingScreen } from './questloading.ts';
 import { parseItemPMT } from '../formats/itempmt.ts';
 import { ItemNames } from '../formats/itemnames.ts';
@@ -337,7 +337,8 @@ async function main(): Promise<void> {
           guildCardClient: () => session?.guildCardClient ?? null,
           mailbox: () => session?.mailbox ?? null,
           fullCharacter: () => session?.fullCharacter ?? null,
-          team: () => teamHost(game.conn) ?? null,
+          team: () => teamHost(game, shipName) ?? null,
+          meetUser: (reply) => meetWith(reply, shipName),
         }),
         teamChat,
       });
@@ -411,10 +412,28 @@ async function main(): Promise<void> {
   // The last Guild Card search reply of the member list (the exe keeps the 0041 copy in the
   // list window, +0x9c): Meet the User reconnects with it (BBSession.meetUser).
   let memberReply: GuildCardSearchResult | null = null;
-  const teamHost = (conn: Lobby['conn'], shipName = ''): TeamHost | undefined => {
+  // Meet the User (BBSession.meetUser): reconnects with a Guild Card search reply and shows the
+  // new lobby. The Team Member List and the Guild Card search result both come here.
+  const meetWith = (reply: GuildCardSearchResult, shipName: string) => {
+    const s = session;
+    if (!s) return;
+    s.meetUser(reply).then(
+      (next) => enterLobby(next, shipName),
+      (err: unknown) => console.error(err),
+    );
+  };
+  // The local inventory as the Sent Item list wants it (the meseta row is left out by the window).
+  const teamItemRows = (): TeamItemRow[] => {
+    const c = session?.character;
+    if (!c) return [];
+    const rows = itemRows(c, { names: itemNames, charClass: c.charClass, level: c.level, stats: c.stats, lobby: true }, '');
+    return rows.map((r) => ({ id: r.id, name: r.name, count: Number.parseInt(r.count.replace(/\D/g, ''), 10) || 1 }));
+  };
+  const teamHost = (owner: Lobby, shipName = ''): TeamHost | undefined => {
     const s = session;
     if (!s?.init) return undefined;
     const gc = s.init.guildCardNumber;
+    const conn = owner.conn;
     const c = teamClientFor(conn, gc);
     c.membership = membershipFromSave(s.fullCharacter);
     return {
@@ -437,13 +456,26 @@ async function main(): Promise<void> {
       // Meet the User: reconnect to the searched member's server with the reply (state 0x12).
       meetMember: (card) => {
         const reply = memberReply;
-        const s = session;
-        if (!s || !reply || reply.guildCardNumber !== card) return;
+        if (!session || !reply || reply.guildCardNumber !== card) return;
         memberReply = null;
-        s.meetUser(reply).then(
-          (next) => enterLobby(next, shipName),
-          (err: unknown) => console.error(err),
-        );
+        meetWith(reply, shipName);
+      },
+      // Sent Item (state 0x15): the trade-state bit of the local slot (IsTradeStateFlagSet_00825abc
+      // on the local player's slot, the trade zone), the inventory rows, and the 6xCB send.
+      tradeState: () => owner.tradeZone.bit(owner.selfId),
+      itemRows: teamItemRows,
+      sendItem: async (card, itemId, amount) => {
+        // Player_UnequipWeapon_0068ecf8: no packet while the gate is shut, or in a lobby (the exe's
+        // player_is_in_lobby); the answer is the server's 16EA flag (newserv on_transfer_item_via_mail_message_bb).
+        if (!owner.tradeZone.bit(owner.selfId) || !(owner instanceof Game)) return -1;
+        const payload = new Uint8Array(12);
+        const v = new DataView(payload.buffer);
+        v.setUint32(0, itemId >>> 0, true);
+        v.setUint32(4, amount >>> 0, true);
+        v.setUint32(8, card >>> 0, true);
+        const answer = conn.waitFor(0x16ea);
+        owner.sendSubcommand(0xcb, payload);
+        return (await answer).flag;
       },
     };
   };
@@ -473,9 +505,10 @@ async function main(): Promise<void> {
     console.info(`[lobby#${lobby.seq}] lobby view built: lobby ${lobby.lobbyNumber}, ${lobby.players.size} players, markers [${lobbyView.markerIds()}]`);
     const hud = await loadHud(mapData.infoCols ?? []);
     hud.party = partyHost(lobby, shipName);
-    const team = teamHost(lobby.conn, shipName);
+    const team = teamHost(lobby, shipName);
     if (team) hud.team = team;
     hud.teamChat = teamChat;
+    hud.meetUser = (reply) => meetWith(reply, shipName);
     hud.transport = transportHost(shipName);
     hud.guildCards = () => session?.guildCards ?? null;
     hud.guildCardClient = () => session?.guildCardClient ?? null;

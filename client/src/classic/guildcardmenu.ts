@@ -123,8 +123,10 @@
 // list's comment box is at the same position (419, 256) in the exe too and the port's
 // comment box stays where it was (overlap not resolved, see ASSUMED).
 //
-// NOT ported (logged no-ops, the menu stays open): the search result window 0x8d and
-// its option list 0x8e (row 0x67's choice), the row 0x65 sub-list's 0x62 send and rename,
+// The search result's option list 0x8e (row 0x67's choice) is drawn; its Send Mail (0x21) and
+// Meet the User (0x25) rows act through classic/homeleaves.ts searchAction (2026-10-23 DEVLOG).
+// NOT ported (logged no-ops, the menu stays open): the search result window 0x8d (not drawn),
+// the row 0x65 sub-list's 0x62 send and rename,
 // the own card's window 0x84, and the send packet 0xc0.
 //
 // ASSUMED (not traced):
@@ -752,7 +754,8 @@ export class GuildCardMenu {
   }
 
   // The option list (state 0x20): cancel -> the recent list (state 0x1d); a row reports its state
-  // (0x21 keyboard, 0x25) for the recent row, not ported; the list stays.
+  // (0x21 Send Mail, unitxt 0x6a; 0x25 Meet the User, unitxt 0x6b, ASSUMED label) and the recent
+  // index. The owner (classic/homeleaves.ts searchAction) acts on it; the list stays drawn.
   private searchOptsKey(e: MenuKey): UnportedAction | null {
     const r = listKey(e, this.searchOpts, this.searchState);
     if (r === 'cancel') {

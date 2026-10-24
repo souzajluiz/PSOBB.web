@@ -104,6 +104,12 @@ export class TradeZone {
     return ((this.flags >> slot) & 1) === 1;
   }
 
+  // The raw bit of a slot, with no permissive default: Sent Item's gate (CreateMenuList_0074ea28,
+  // Player_UnequipWeapon's trade check) reads the flag as it is, so outside a field it is 0.
+  bit(slot: number): boolean {
+    return ((this.flags >> slot) & 1) === 1;
+  }
+
   check(obj: TradeZoneObject, world: TradeZoneWorld): void {
     this.hasObject = true;
     this.flags = tradeZoneCheck(this.flags, obj, world);

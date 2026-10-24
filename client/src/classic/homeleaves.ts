@@ -11,15 +11,15 @@
 // ValidateMenuItemCondition_00732620 only greys the team rows out of a team (fieldmenu.ts).
 
 import type { Lobby } from '../net/lobby.ts';
-import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { GuildCardBook, GuildCardClient, GuildCardSearchResult } from '../net/guildcard.ts';
 import type { SimpleMailBox } from '../net/simplemail.ts';
 import { parseCharacterFile } from '../net/charfile.ts';
 import { se } from '../audio/se.ts';
-import { GuildCardMenu, type GuildCardHost } from './guildcardmenu.ts';
+import { GUILD_SEARCH_OPTION, GuildCardMenu, type GuildCardHost, type UnportedAction } from './guildcardmenu.ts';
 import { MailCompose, SimpleMailMenu, type SimpleMailHost } from './simplemail.ts';
 import { SymbolChatList } from './symbolchatlist.ts';
 import { symbolChatRows, SYMBOL_TEXT, type SymbolRow } from './symbolchat.ts';
-import { TeamInfoWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
+import { MEET_FRAMES, TeamInfoWindow, TeamMemberListWindow, type TeamHost } from './teammenu.ts';
 import type { WindowSkin } from './stage.ts';
 
 export const HOME_LEAF_IDS: ReadonlySet<number> = new Set([0x0e, 0x12, 0x13, 0x25, 0x2b]);
@@ -34,6 +34,9 @@ export interface HomeLeafServices {
   mailbox: () => SimpleMailBox | null;
   fullCharacter: () => Uint8Array | null;
   team: () => TeamHost | null;
+  // Guild Card > Search > Meet the User (state 0x25): reconnects with the search result
+  // (BBSession.meetUser). Optional: a host without a session leaves the row a no-op.
+  meetUser?: (reply: GuildCardSearchResult) => void;
 }
 
 export interface HomeLeafHost extends HomeLeafServices {
@@ -48,6 +51,10 @@ export class HomeLeaves {
   private teamInfo: TeamInfoWindow | null = null;
   // Team Member List > Send Mail (exe states 0xb..0xe): the keyboard over the list.
   private teamMail: MailCompose | null = null;
+  // Guild Card > Search > Send Mail (state 0x21): the keyboard for the result's card.
+  private searchMail: MailCompose | null = null;
+  // Guild Card > Search > Meet the User (state 0x25): the frames of the phase label (null when idle).
+  private meetFrames: number | null = null;
   // Called when the last window goes away by its own key (the owner's menu takes the keys again).
   onAllClosed: () => void = () => {};
 
@@ -58,7 +65,7 @@ export class HomeLeaves {
   }
 
   get open(): boolean {
-    return !!(this.guildCard || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamMail);
+    return !!(this.guildCard || this.mail || this.symbolList || this.teamList || this.teamInfo || this.teamMail || this.searchMail);
   }
 
   // Opens the leaf for a Home menu id; false when this leaf cannot open here (no session, no team).
@@ -153,25 +160,42 @@ export class HomeLeaves {
         this.settle();
       }
     }
+    // Guild Card > Search > Meet the User (state 0x25, dump 715371): the entry tick sets the counter
+    // to 1 and each state 0x26 tick adds one; the owner's close runs when the counter read is above
+    // 0x1c2, i.e. on the 452nd tick after the key (one more than the Team Member List's count).
+    if (this.meetFrames !== null) {
+      this.meetFrames++;
+      if (this.meetFrames > MEET_FRAMES + 1) {
+        this.meetFrames = null;
+        this.guildCard = null;
+        this.settle();
+      }
+    }
   }
 
   // Routes a key to the open window (the caller checks `open` first).
   key(e: KeyboardEvent): void {
     const h = this.host();
     e.preventDefault();
-    if (this.symbolList) {
+    if (this.meetFrames !== null) return; // the phase label takes no keys (state 0x26)
+    if (this.searchMail) {
+      const m = this.searchMail;
+      m.key(e); // its callbacks may clear the field, so the check uses the local
+      if (!m.open) this.searchMail = null;
+    } else if (this.symbolList) {
       this.symbolList.key(e);
       if (!this.symbolList.open) this.symbolList = null;
     } else if (this.guildCard) {
       const action = this.guildCard.key(e);
-      if (action) console.info(`[classic] Guild Card: state 0x${action.state.toString(16)} (row ${action.card}) not ported yet`);
-      if (!this.guildCard.open) this.guildCard = null;
+      if (action) this.searchAction(h, action);
+      if (!this.guildCard?.open) this.guildCard = null;
     } else if (this.mail) {
       this.mail.key(e);
       if (!this.mail.open) this.mail = null;
     } else if (this.teamMail) {
-      this.teamMail.key(e);
-      if (!this.teamMail.open) this.teamMail = null;
+      const m = this.teamMail;
+      m.key(e); // its callbacks may clear the field, so the check uses the local
+      if (!m.open) this.teamMail = null;
     } else if (this.teamList) {
       if (!this.teamList.key(e)) this.teamList = null;
       else this.openTeamMail(h);
@@ -188,12 +212,13 @@ export class HomeLeaves {
     const list = this.teamList;
     const to = list?.mailTarget ?? null;
     if (!list || to === null || this.teamMail || !h) return;
+    const give = list.giveItem;
     const box = h.mailbox();
     const finish = () => {
       this.teamMail = null;
       list.mailDone();
     };
-    if (!box) {
+    if (!give && !box) {
       console.info('[classic] Team Send Mail: no lobby connection yet');
       finish();
       return;
@@ -201,11 +226,81 @@ export class HomeLeaves {
     this.teamMail = new MailCompose(
       (i) => h.text(11, i),
       (text) => {
-        box.send({ guildCard: h.lobby.self?.guildCardNumber ?? 0, name: h.lobby.self?.name ?? '' }, to, text);
+        if (give) {
+          this.teamMail = null;
+          this.sendTeamItem(h, list, to, give, text, box);
+          return;
+        }
+        box?.send({ guildCard: h.lobby.self?.guildCardNumber ?? 0, name: h.lobby.self?.name ?? '' }, to, text);
         finish();
       },
       finish,
     );
+  }
+
+  // Team Member List > Sent Item, Yes: the item goes first (TeamHost.sendItem, 6xCB); the text
+  // is mailed only when the server answers 1 (exe state 0x1a: the mail follows the 0x60 answer,
+  // e0a4). A closed gate (-1) or a refusal sends no mail. The list closes to the member list.
+  private sendTeamItem(
+    h: HomeLeafHost,
+    list: TeamMemberListWindow,
+    to: number,
+    give: { itemId: number; amount: number },
+    text: string,
+    box: SimpleMailBox | null,
+  ): void {
+    const team = h.team();
+    const done = (flag: number) => {
+      if (flag === 1 && box) box.send({ guildCard: h.lobby.self?.guildCardNumber ?? 0, name: h.lobby.self?.name ?? '' }, to, text);
+      else if (flag === 1) console.info('[classic] Team Sent Item: no lobby connection for the mail');
+      list.giveDone();
+    };
+    if (!team?.sendItem) {
+      done(-1);
+      return;
+    }
+    team.sendItem(to, give.itemId, give.amount).then(done, () => done(-1));
+  }
+
+  // Guild Card > recent row > option list (exe states 0x21 / 0x25, dump 715298 / 715371). The
+  // row's value is the recent entry's index (GuildCardClient.recent), the result is its 0041 copy.
+  // Send Mail (0x6a, value 0x21): the keyboard for the result's card; Enter asks the confirm
+  // (MailCompose) and the mail goes through the Simple Mail sender (0x81). The menu is back at its
+  // root (state 1) while the keyboard runs. Meet the User (0x6b, value 0x25): the host reconnects
+  // with the result; the menu stays up for 450 frames (tick), then closes.
+  private searchAction(h: HomeLeafHost | null, action: UnportedAction): void {
+    if (action.state !== GUILD_SEARCH_OPTION.keyboard && action.state !== GUILD_SEARCH_OPTION.option25) {
+      console.info(`[classic] Guild Card: state 0x${action.state.toString(16)} (row ${action.card}) not ported yet`);
+      return;
+    }
+    const reply = h?.guildCardClient()?.recent[action.card] ?? null;
+    if (!this.guildCard || !h || !reply) return;
+    this.guildCard.phase = 'menu';
+    if (action.state === GUILD_SEARCH_OPTION.keyboard) {
+      const box = h.mailbox();
+      if (!box) {
+        console.info('[classic] Guild Card Send Mail: no lobby connection yet');
+        return;
+      }
+      const to = reply.guildCardNumber;
+      this.searchMail = new MailCompose(
+        (i) => h.text(11, i),
+        (text) => {
+          box.send({ guildCard: h.lobby.self?.guildCardNumber ?? 0, name: h.lobby.self?.name ?? '' }, to, text);
+          this.searchMail = null;
+        },
+        () => {
+          this.searchMail = null;
+        },
+      );
+    } else if (action.state === GUILD_SEARCH_OPTION.option25) {
+      if (!h.meetUser) {
+        console.info('[classic] Guild Card Meet the User: no session');
+        return;
+      }
+      this.meetFrames = 0;
+      h.meetUser(reply);
+    }
   }
 
   // Draws the team windows (the lobby's and the field's middle band, with the view's extra width).
@@ -218,6 +313,7 @@ export class HomeLeaves {
   drawOther(ctx: CanvasRenderingContext2D, skin: WindowSkin): void {
     this.symbolList?.draw(ctx, skin);
     this.guildCard?.draw(ctx, skin);
+    this.searchMail?.draw(ctx, skin);
     this.mail?.draw(ctx, skin);
   }
 
@@ -234,6 +330,8 @@ export class HomeLeaves {
     this.teamList = null;
     this.teamInfo = null;
     this.teamMail = null;
+    this.searchMail = null;
+    this.meetFrames = null;
     this.symbolList = null;
   }
 

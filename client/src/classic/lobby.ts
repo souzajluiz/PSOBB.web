@@ -32,7 +32,7 @@ import { BINDING, bindingKey, menuKeyOf } from '../input/keyconfig.ts';
 import { chatFormOption, chatShortcutIndex, functionKeyAction, functionKeyNames, LOBBY_SHORTCUT_LEAVES } from '../input/shortcuts.ts';
 import { parseChatShortcut } from '../net/chatshortcut.ts';
 import * as THREE from 'three';
-import type { GuildCardBook, GuildCardClient } from '../net/guildcard.ts';
+import type { GuildCardBook, GuildCardClient, GuildCardSearchResult } from '../net/guildcard.ts';
 import type { InfoBoardClient } from '../net/infoboard.ts';
 import type { SimpleMailBox } from '../net/simplemail.ts';
 import type { CharacterFile } from '../net/charfile.ts';
@@ -113,6 +113,8 @@ export interface LobbyHud {
   mailbox?: () => SimpleMailBox | null;
   // The team chat window and its log (classic/teamchat.ts), shared with the field.
   teamChat?: TeamChat;
+  // Meet the User from a Guild Card search result (BBSession.meetUser, set by the owner).
+  meetUser?: (reply: GuildCardSearchResult) => void;
 }
 
 export interface TransportHost {
@@ -213,6 +215,7 @@ export class LobbyScreen implements Screen {
       mailbox: () => hud.mailbox?.() ?? null,
       fullCharacter: () => hud.fullCharacter?.() ?? null,
       team: () => hud.team ?? null,
+      meetUser: (reply) => hud.meetUser?.(reply),
     }));
     this.home.onAllClosed = () => {
       this.menu.leafOpen = false;
