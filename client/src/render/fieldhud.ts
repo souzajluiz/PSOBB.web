@@ -510,12 +510,12 @@ export class FieldHud {
     // The session's stats are the save's stat block (see combat/playerstats.ts); the current row
     // shows the displayed totals, as UpdatePlayerDisplayStats does.
     const file: CompareStats = {
-      atp: rc.stats.atp,
-      dfp: rc.stats.dfp ?? 0,
-      mst: rc.stats.mst,
-      ata: rc.stats.ata,
-      evp: rc.stats.evp ?? 0,
-      lck: rc.stats.lck ?? 0,
+      atp: c.stats.atp,
+      dfp: c.stats.dfp,
+      mst: c.stats.mst,
+      ata: c.stats.ata,
+      evp: c.stats.evp,
+      lck: c.stats.lck,
     };
     const worn = wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data));
     const current: StatBlock = displayedStats(file, worn, c.charClass, pmt);
@@ -527,20 +527,28 @@ export class FieldHud {
     return compareStatRows(current, cand, problems === 0);
   }
 
+  // The row context carries the DISPLAYED totals (displayedStats: saved ATP + class / weapon range
+  // max, the ATA blend, EVP / DFP with the worn resist), which is what the exe's requirement check
+  // and the Item Pack's current row read (ValidateItemForEquip_005c9e40, CalculateChallengeDamage).
   private rowContext(): RowContext {
     const c = this.opts.character();
+    const pmt = this.names()?.pmt;
+    const file: CompareStats = {
+      atp: c?.stats.atp ?? 0,
+      dfp: c?.stats.dfp ?? 0,
+      mst: c?.stats.mst ?? 0,
+      ata: c?.stats.ata ?? 0,
+      evp: c?.stats.evp ?? 0,
+      lck: c?.stats.lck ?? 0,
+    };
+    const worn = c ? wornEquipment(c.inventory.filter((o) => o.equipped).map((o) => o.data)) : null;
+    const shown = c && pmt && worn ? displayedStats(file, worn, c.charClass, pmt) : file;
     return {
       names: this.names(),
       charClass: c?.charClass ?? 0,
       level: c?.level ?? 1,
-      stats: {
-        atp: c?.stats.atp ?? 0,
-        mst: c?.stats.mst ?? 0,
-        ata: c?.stats.ata ?? 0,
-        dfp: c?.stats.dfp ?? 0,
-        evp: c?.stats.evp ?? 0,
-        lck: c?.stats.lck ?? 0,
-      },
+      stats: { atp: shown.atp, mst: shown.mst, ata: shown.ata, dfp: shown.dfp, evp: shown.evp, lck: shown.lck },
+      wornWeapon: worn?.weapon ?? null,
       lobby: this.opts.area() === 0x0f,
     };
   }

@@ -21,6 +21,7 @@ import { ItemNames } from '../formats/itemnames.ts';
 import { CLASS_NAMES, SECTION_IDS, type BBSession } from '../net/bbsession.ts';
 import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { stackSize } from '../net/items.ts';
+import { displayedStats, wornEquipment } from '../combat/playerstats.ts';
 
 export interface InventoryActions {
   equip(itemId: number): void;
@@ -136,12 +137,24 @@ export function initInventoryPanel(after: HTMLElement, log: (msg: string) => voi
       panel.hidden = !c;
       if (!c) return;
       q('.inv-char').textContent = `· ${c.name}, Lv ${c.level} ${CLASS_NAMES[c.charClass] ?? ''} · ${SECTION_IDS[c.sectionId] ?? ''}`;
-      const s = c.stats;
+      // The file's stats are the stat block (the save, combat/playerstats.ts); the panel shows the
+      // displayed totals (UpdatePlayerDisplayStats): ATP = saved + class / weapon range max, EVP / DFP
+      // with the worn resist, ATA blended. HP and LCK are the file's (LCK has no range part).
+      const file = c.stats;
+      const pmt = names?.pmt;
+      const s = pmt
+        ? displayedStats(
+            { atp: file.atp, dfp: file.dfp, mst: file.mst, ata: file.ata, evp: file.evp, lck: file.lck },
+            wornEquipment(c.inventory.filter((it) => it.equipped).map((it) => it.data)),
+            c.charClass,
+            pmt,
+          )
+        : file;
       const rows: Array<[string, string | number]> = [
         ['Level', c.level],
         ['EXP', c.exp],
         ['Meseta', c.meseta],
-        ['HP', s.hp],
+        ['HP', file.hp],
         ['ATP', s.atp],
         ['DFP', s.dfp],
         ['MST', s.mst],

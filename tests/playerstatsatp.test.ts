@@ -1,6 +1,7 @@
-// Player ATP as the exe keeps it (client/src/combat/playerstats.ts): the displayed ATP is
-// base + variance + battleparams rmin, the equip compare's ATP candidate is
-// PlayerRecalculateStats' output, and the attacker split agrees with the displayed sum.
+// Player ATP as the exe keeps it (client/src/combat/playerstats.ts): the saved ATP is the base
+// (the stat block, +0x2cc), the displayed ATP is base + variance + battleparams rmin = base + rmax,
+// the attack range is [base + rmin, base + rmax], and the equip compare's ATP candidate is
+// PlayerRecalculateStats' output (DEVLOG 2026-10-23, the stat block).
 //
 // Run: node tests/playerstats.test.ts
 import { classAttackRange, candidateAtp, splitAttack, weaponAttackRange } from '../client/src/combat/playerstats.ts';
@@ -25,20 +26,25 @@ eq(classAttackRange(99), classAttackRange(0), 'unknown class falls back to class
 eq(weaponAttackRange({ atpMin: 40, atpMax: 55, grind: 10 }), { min: 60, max: 75 }, 'weapon range with grind');
 eq(weaponAttackRange(null), { min: 0, max: 0 }, 'no weapon: no range');
 
-// The displayed ATP split: base + variance + rmin gives the displayed value back.
-for (const [disp, cls, w] of [
+// The attacker split from the saved ATP: base = saved, variance = rmax - rmin, rmin = class min + weapon min.
+eq(splitAttack(500, 0, { atpMin: 40, atpMax: 55, grind: 10 }), { base: 500, variance: 20, rmin: 65 }, 'HUmar +10 Saber split');
+eq(splitAttack(100, 9, null), { base: 100, variance: 5, rmin: 5 }, 'HUcaseal bare hands split');
+
+// The displayed ATP (the compare / character window) is saved + rmax: base + variance + rmin.
+for (const [saved, cls, w] of [
   [500, 0, { atpMin: 40, atpMax: 55, grind: 10 }],
   [100, 9, null],
   [321, 4, { atpMin: 10, atpMax: 20, grind: 0 }],
 ] as const) {
-  const s = splitAttack(disp, cls, w);
-  eq(s.base + s.variance + s.rmin, disp, `split sums back to ${disp}`);
+  const s = splitAttack(saved, cls, w);
+  const rmax = classAttackRange(cls).max + weaponAttackRange(w).max;
+  eq(s.base + s.variance + s.rmin, saved + rmax, `displayed = saved + rmax for ${saved}`);
+  eq(s.base + s.rmin, saved + classAttackRange(cls).min + weaponAttackRange(w).min, `range min for ${saved}`);
 }
-eq(splitAttack(500, 0, { atpMin: 40, atpMax: 55, grind: 10 }), { base: 415, variance: 20, rmin: 65 }, 'HUmar +10 Saber split');
 
-// The combat attacker takes the split: +0x2cc base, +0x2ce variance, +0x31c equipment ATP.
+// The combat attacker takes the split: +0x2cc base (the saved ATP), +0x2ce variance, +0x31c equipment ATP.
 const a = playerAttacker(0, { atp: 500, ata: 150, lck: 30 }, { atpMin: 40, atpMax: 55, grind: 10, ata: 30 });
-eq([a.atp, a.atpSpread, a.equipAtp], [415, 20, 65], 'attacker split from the displayed ATP');
+eq([a.atp, a.atpSpread, a.equipAtp], [500, 20, 65], 'attacker split from the saved ATP');
 
 // The compare candidate (m = 0): the displayed ATP with the weapon's range max swapped.
 eq(candidateAtp(40, null, null), 40, 'no candidate weapon: the displayed ATP');

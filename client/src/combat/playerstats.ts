@@ -297,6 +297,15 @@ function applyUnit(b: CandidateBlocks, d: Uint8Array | number[], pmt: ItemPMT, s
   }
 }
 
+// One item's stat-block contribution (stat [0] ATP, [1] MST, [5] ATA): what ApplyEquipmentBonuses_005d330c
+// adds to the stat block (its param_4). ValidateItemForEquip_005c9e40 (dump 418164) takes it off the
+// displayed stats of the worn weapon before it compares a candidate's requirements (see itempack.ts).
+export function statContribution(item: ItemData, pmt: ItemPMT): { atp: number; mst: number; ata: number } {
+  const b = zeroBlocks();
+  applyItem(b, item, pmt, 1);
+  return { atp: b.atp, mst: b.mst, ata: b.ata };
+}
+
 // The blocks of the current state. The file's stats are the stat block (the save, see the
 // header), so the stat fields are taken as they are; the range (class + worn weapon and options)
 // and the resist (worn armour / shield and options) come from the class and the worn items. The
@@ -401,12 +410,12 @@ export function equippedCandidate(file: CompareStats, item: ItemData, worn: Worn
 //     ROUND(-m * atp_variance) (dump 750440). Shifta is therefore already inside the
 //     displayed sum, and the exe's ATP row needs no separate m.
 //
-// Derived split: the displayed ATP is base + variance + rmin. Since variance + rmin = rmax,
-// base = ATP - rmax, the variance is rmax - rmin, and rmin is the equipment ATP the damage
-// formula reads at +0x31c. STALE INPUT (2026-10-23): splitAttack is fed the saved ATP, which the
-// exe keeps as the base only (see the header, "WHAT THE SAVE HOLDS"), so base = saved ATP is the
-// exe's split and this subtraction under-counts the base by rmax. Not changed here: combat is
-// left for the user's decision (DEVLOG 2026-10-23, the combat follow-up).
+// Settled split (2026-10-23, DEVLOG "the save holds the stat block"): the saved ATP IS the
+// base (+0x2cc, base_atp = stats->atp in the init, dump 746015). The exe's range is
+// [base + rmin, base + rmax]: variance = rmax - rmin (+0x2ce, the init's sVar2) and rmin = the
+// class range min + the weapon's range min (+0x31c, atp_range_min, ApplyItemStatsToPlayer_005d1f0c).
+// The displayed ATP (UpdatePlayerDisplayStats, dump 728017) is base + variance + rmin = base + rmax,
+// so the displayed value is NOT the saved one: it is saved + rmax.
 //
 // ASSUMED: the class range is PLAYER_CLASS_ATTACK (formulas.ts: min / max / min ATA of the
 // class AttackData 0x00968a60); an item's range is atp_min + 2 x grind (min) and atp_max +
@@ -448,14 +457,14 @@ export interface AttackSplit {
   rmin: number; // +0x31c -> atp_range_min, the equipment ATP
 }
 
-// The exe's displayed ATP split into its parts (see the header). base + variance + rmin
-// is the input again, so the current row and the combat attacker agree.
-export function splitAttack(displayedAtp: number, charClass: number, weapon: WeaponRangeInput | null): AttackSplit {
+// The attacker's ATP split from the saved ATP (the base, see the header): {base, variance, rmin}.
+// The damage roll reads base + variance * r + rmin, so its range is [base + rmin, base + rmax].
+export function splitAttack(savedAtp: number, charClass: number, weapon: WeaponRangeInput | null): AttackSplit {
   const c = classAttackRange(charClass);
   const w = weaponAttackRange(weapon);
   const rmin = c.min + w.min;
   const rmax = c.max + w.max;
-  return { base: displayedAtp - rmax, variance: rmax - rmin, rmin };
+  return { base: savedAtp, variance: rmax - rmin, rmin };
 }
 
 // PlayerRecalculateStats' ATP output (dump 569766) for a candidate weapon in the slot

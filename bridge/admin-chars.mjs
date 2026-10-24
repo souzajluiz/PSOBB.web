@@ -30,6 +30,10 @@ export const TECHNIQUES = [
 ];
 export const SECTION_IDS = ['Viridia', 'Greenill', 'Skyly', 'Bluefull', 'Purplenum', 'Pinkal', 'Redria', 'Oran', 'Yellowboze', 'Whitill'];
 export const CHAR_CLASSES = ['HUmar', 'HUnewearl', 'HUcast', 'RAmar', 'RAcast', 'RAcaseal', 'FOmarl', 'FOnewm', 'FOnewearl', 'HUcaseal', 'FOmar', 'RAmarl'];
+// The save's stats are the STAT BLOCK (player +0x2b4), not the displayed totals (exe: ClampPlayerStats_006948dc,
+// dump 575719; DEVLOG 2026-10-23 "the save holds the stat block"). The displayed ATP is atp + the class and
+// weapon range max (client/src/combat/playerstats.ts displayedStats); the level table's BaseStats / LevelDeltas
+// are stat-block values too (statsForLevel in admin-items.mjs).
 const STAT_KEYS = ['atp', 'mst', 'evp', 'hp', 'dfp', 'ata', 'lck'];
 
 export class CharError extends Error {

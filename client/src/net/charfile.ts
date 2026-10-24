@@ -93,6 +93,10 @@ export interface CharacterStats {
   esp: number;
 }
 
+// The save's PlayerDispData stats are the STAT BLOCK (player +0x2b4, clamped; SerializePlayerDataToBuffer_006aa4b0,
+// dump 596129), NOT the displayed totals: ATP here has no class / weapon range, EVP / DFP no worn resist,
+// ATA no range ATA. The displayed values are combat/playerstats.ts displayedStats() (DEVLOG 2026-10-23,
+// "the save holds the stat block").
 export interface CharacterFile {
   name: string;
   guildCardNumber: number;
@@ -170,6 +174,7 @@ export function parseCharacterFile(data: Uint8Array): CharacterFile {
     guildCardNumber: u32(gc),
     sectionId: data[shared + 0x20],
     charClass: data[shared + 0x21],
+    // The stat block (see CharacterFile), not the displayed totals.
     stats: {
       atp: u16(disp),
       mst: u16(disp + 2),

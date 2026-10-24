@@ -77,6 +77,7 @@ import type { CharacterFile, InventoryItem } from '../net/charfile.ts';
 import { MESETA_ITEM_ID, isEquippable, stackSize } from '../net/items.ts';
 import { isSRankWeapon, maxStackSize, type ItemData, type ItemNames } from '../formats/itemnames.ts';
 import { SPECIAL_STARS_BEGIN_INDEX } from '../formats/itempmt.ts';
+import { statContribution } from '../combat/playerstats.ts';
 import { drawGameText, gameTextWidth } from './gametext.ts';
 import { DISABLED, drawListWindow, drawPill, drawTextWindow, drawWindowTitle, INSET, listKey, listWindowHeight, ROW, TITLE_GAP, type ListItem } from './fieldwindows.ts';
 import { drawSelectBar, drawWindowFrame, type WindowSkin } from './stage.ts';
@@ -167,14 +168,21 @@ export interface RowContext {
   names: ItemNames | null;
   charClass: number;
   level: number; // displayed level (1-based)
-  // dfp / evp / lck: the character's stats for the equipment panel (0 when absent).
+  // The character's DISPLAYED totals (displayedStats, combat/playerstats.ts): the exe's challenge
+  // stats (CalculateChallengeDamage, dump 578524) give ATP = stat + range max, ATA blended, MST = stat.
+  // dfp / evp / lck: the same totals for the equipment panel (0 when absent).
   stats: { atp: number; mst: number; ata: number; dfp?: number; evp?: number; lck?: number };
+  // The equipped weapon (get_equipment_slot(weapon), dump 418164): a candidate weapon's requirement
+  // is checked after its stat part is taken off (see equipProblems).
+  wornWeapon?: ItemData | null;
   lobby: boolean;
 }
 
-// ValidateItemForEquip_005c9e40: bit 1 = the class cannot use it, 2 / 4 / 8 =
-// the ATP / ATA / MST requirement is not met (the client compares the
-// player's current stats; the web client has the character file's).
+// ValidateItemForEquip_005c9e40 (dump 418164): bit 1 = the class cannot use it, 2 / 4 / 8 =
+// the ATP / ATA / MST requirement is not met. The weapon branch compares the displayed totals
+// (CalculateChallengeDamage: result[0] ATP, result[3] ATA, result[2] MST); with a weapon worn in
+// the slot the worn weapon's stat-block part (asStack_ac[0x28] ATP, [0x29] MST, [0x2d] ATA, from
+// ApplyEquipmentBonuses on the worn item) is subtracted first, floored at 0.
 export function equipProblems(item: ItemData, ctx: RowContext): number {
   const d = item.data1;
   const pmt = ctx.names?.pmt;
@@ -183,9 +191,13 @@ export function equipProblems(item: ItemData, ctx: RowContext): number {
     const w = pmt.getWeapon(d[1], d[2]);
     if (!w) return 0;
     let f = classCanUse(ctx.charClass, w.usabilityFlags) ? 0 : 1;
-    if (ctx.stats.atp < w.atpRequired) f |= 2;
-    if (ctx.stats.ata < w.ataRequired) f |= 4;
-    if (ctx.stats.mst < w.mstRequired) f |= 8;
+    const worn = ctx.wornWeapon ? statContribution(ctx.wornWeapon, pmt) : { atp: 0, mst: 0, ata: 0 };
+    const atp = Math.max(0, ctx.stats.atp - worn.atp);
+    const ata = Math.max(0, ctx.stats.ata - worn.ata);
+    const mst = Math.max(0, ctx.stats.mst - worn.mst);
+    if (atp < w.atpRequired) f |= 2;
+    if (ata < w.ataRequired) f |= 4;
+    if (mst < w.mstRequired) f |= 8;
     return f;
   }
   if (d[0] === 1 && (d[1] === 1 || d[1] === 2)) {
