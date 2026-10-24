@@ -16056,3 +16056,41 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - The head's input states (+0x24) and the +0x6a / +0x5c timers are not modelled.
 
 **Checks:** `node tests/npcai.test.ts` ok (new cases: CalculateTarget sides and counter sign, the wall counter's clamp and band, TryAttack's counter cycle and 0x8080, CheckPathAndTarget's pick, anchor and 0x1000, UpdateAttackTarget's stand-off, the field branch's walk / state 2 / state 8 / mode exit, source checks of the fire path and town's state-2 cast). `npcs`, `techniques`, `questflow`, `quests`, `questmisc`, `questboard`, `techfire` pass with Node 24. `cd client && tsc --noEmit -p .` clean. Not run in Chrome, no Playwright.
+
+## 2026-10-23: Gal Gryphon state handlers 18..34 ported (not wired); the -b doc's offsets corrected
+
+**Premise check.** The brief's "anim 22.0" is the frame event 22.0 (`check_entity_animation_elapsed_threshold`), not an anim index. The S31 handler (dump 225636) makes the 0x130 minion ring (`CreateGalgryphonMinion_004aabd8`, dump 229084) at that event; the ring's particle update is `UpdateGalgryphonMinionParticles_004aade4` (dump 229200). S30, S16, S6, S5 are the death list (DEVLOG 2026-10-23 pattern script: other = S6, S5, S34; stage 3 = S30, S6, S5, S34; stage 2 = S16, S5, S34). The premise holds.
+
+**Correction to `docs/bosses/galgryphon-states-b.md`.** Its per-state counters `+0x1b9..+0x1c9` are Ghidra int indices: the byte offsets are `+0x6e4` (sub-phase), `+0x6e8` (counter n), `+0x6ec` (frame counter m), `+0x6f0` (beam counter k), `+0x6fc` (slope), `+0x700`. Objdump of 0x004a3f20..0x004a6200 has no `0x1b9` / `0x1ba` displacement; it has `0x6e4` .. `0x6fc` (checked with `objdump -d`). The doc's other int-index names (`+0x13b` = 0x4ec, `+0x13a` = 0x4e8, `+0x132` = 0x4c8, `+0x17` = 0x5c, `+0x2d` = 0xb4) are the same rule.
+
+**Corrections found in the dump for S30** (the doc's S30 is wrong on these): the dive's sub-phases are the dump's (`+0x6e4` 0 dive, 1 pitch ramp, 2 fall, 3 done); the heading is steered (`SetGalgryphonRotationAngle_004a5e10(this, 0x100, angle)`, not set); the pitch ramp uses the motion time (`0x007aabd8`, whose dump name `MapObject_GetYCoordinateWithFlagCheck` is wrong); the beam emitter runs in sub 0 every 5 ticks; the S30 phase 8 hook runs in sub 0 and 1. Also `SetGalgryphonMovementDirection_004a5e90(this, 3.0)` is a forward speed toward `atan2(+0x3a8, +0x3b0)`.
+
+**Exe evidence** (dump `Psobb.exe-05112026.c`; objdump of PsoBB.exe, `ProcessState` table at 0x009a7e40 read with tools/exedata.py, indices 18..34 match the doc):
+- S31 (dump 225636): enter anim 2, stage 0, y = DAT_00a47564. Frame: event 22.0 -> midpoint of `+0x3d4/+0x3e0` etc. (`* 0.5`), `CreateGalgryphonMinion_004aabd8` into `+0x4cc`, camera shake, SFX 0x3a0; advance when `+0xc8 <= 0`.
+- S27 (dump 224954): enter anim 17, stage 0, ring (`0x004a9174`), counter m = 0, lightning setup, reseed. Frame: `0x004a4ae8` (battle-stat gate, not an emitter), P > 1 -> under-body effect + transform 60.0, P > 3 and m % 20 == 0 -> beam with flag `(m/20) & 1 == 0`, SFX 0x3ab, m++. Leave: release + disable.
+- S30 (dump 225347): see the correction above; constants `0x903c94` (4.0, player slot), `0x903c98` (0.5, player test), `0x903ca0` (102400 = 320^2), `0x903ca8` (933.7857), `0x903cb0` (-49152), `0x903cb4` (65536), `0x903cc0` / `0x903cac` (-7).
+- Helpers (dump 223894, 224080, 225565, 225596): `OlgaMinionUpdateAnimation_004a15ac` = velX += sin(h)*s, velZ += cos(h)*s; `_004a1b84` = steer toward atan2(dir) at a rate; `_004a5e10` = `headingVel -= clamp(headingVel - 0.6*wrap(target - heading), ±rate)`; `_004a5e90` = forward speed toward atan2(dir).
+- S18..S26, S28, S29, S32, S33, S34: the -b doc's specs (disassembly-checked for the stores and the calls, offsets corrected as above).
+
+**What changed:**
+- `client/src/combat/galgryphonstatesb.ts` (new): the handlers 18..34 (`galStateB18`..`galStateB34`, table `GALGRYPHON_STATE_HANDLERS_B`, runner `runGalgryphonStateB`), the field map `GalgryphonBodyB` (byte offsets), the motion interface, the rng, the runtime values, and the hooks `GalgryphonFxB` (each names its exe address). The local ctx `GalgryphonStateCtxB` is minimal; it is to be unified with the S0..S17 `GalgryphonStateCtx` when that merges.
+- `tests/galgryphonstatesb.test.ts` (new): the table, BAMS helpers, steer and damping, and each state's enter / frame / leave / transition against a fake ctx with an exe-ordered motion.
+- ROADMAP line (Gal Gryphon) updated; this entry.
+
+**ASSUMED:**
+- Trig argument scale in S19 (`cos(39 - n)`, `sin(n)`) and S19 sub 1 (`cos(motion time)`): the doc's `0x0082ddd8` is a table function whose argument scale is not decoded.
+- Runtime `.bss` values (`DAT_00a475b0`, `b4..c0`, `d4`, `DAT_00a47564`) are ctx inputs with ASSUMED defaults (`RT` in the test); no init site found.
+- S30: the clamps `ClampTextureCoordinate_0083a248(75.0)` and `(32.5)` are taken as the literal values; the ground-search radii (360 and 50, the `unaff_EBP` multiplier taken as 1.0), the probe loop bounds (64 / 256 tries; the exe loops until a hit), the player-branch height offset `0x903c90` (50 assumed) and the `0x2000` angle step are assumed.
+- S18: the effect id from the `+0x17e` struct, and the curve's control heights (67, 157, 307, default y) are from the doc's `0x00a47524 / 534 / 544` inits.
+- S22 and S29: the local-speed reading (speed is per tick, only the event adds to it) and the S29 `t = elapsed(0.28)` argument (the exe passes the time; the 0.28 is not used).
+- S26: `+0xb4 == 0x11` is the chain test; S23 `== 0xe`; S20 `== 0xb` (record flags of the chain).
+- S33 stage 1 probe at event 14 is the `0x004a1a48` helper (its body not read here).
+- The per-frame order of the handlers within a frame (the ProcessState call from the frame update, dump 226140) is the caller's, not decided here.
+
+**Tests.** `node tests/galgryphonstatesb.test.ts` passes (Node 24). `cd client && npx tsc --noEmit -p .` exit 0 (node_modules linked from the main checkout, then removed). Not run: Playwright (per the brief), Chrome.
+
+**Left:**
+- States 0..17 (`docs/bosses/galgryphon-states-a.md`, the other agent's file) and the unification of `GalgryphonStateCtxB` with `GalgryphonStateCtx`.
+- Wiring: `TBoss5Gryphon` still runs the generic `EnemyAi` (`render/combat.ts`); the per-frame order and the ProcessState call are not wired.
+- The hooks: `groundProbe` (0x004a15fc), `attackDispatch` (0x004a47a8), `spawnRing` (0x004a9174), the S27 lightning objects (0x004a9de0 / 0x004a9869 / 0x0073d160), the S30 beam (0x004aa4b0), the minion ring's particle update (0x004aade4) and the S27 beam value's constants (`g_GalgryphonMinionEffectRandomBias` etc.) have no port here.
+- The -b doc: its S30 section and its per-state offsets still carry the old text (a correction note is added at its top).

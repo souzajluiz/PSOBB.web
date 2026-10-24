@@ -1,5 +1,9 @@
 # Gal Gryphon (Ep2 boss, TBoss5Gryphon): states 18..34 (exe map, part B)
 
+> **Correction (2026-10-23, DEVLOG):** the `+0x1b9..+0x1cd` counters below are Ghidra int indices;
+> the byte offsets are `0x6e4` (sub-phase), `0x6e8`, `0x6ec`, `0x6f0`, `0x6fc` (x4). The S30
+> section is superseded by the dump (dump 225347) and by `client/src/combat/galgryphonstatesb.ts`.
+
 Scope: state handlers 18..34 of the ProcessState table at `0x009a7e40`, the frame update
 `0x004a70e0`, the constructor `0x004a67c0`, and the helpers they call. States 0..17 are in
 `galgryphon-states-a.md` (not written here). No code change; this is a reading of PsoBB.exe.
