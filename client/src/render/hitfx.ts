@@ -484,7 +484,11 @@ export class FieldParticles {
       mm.opacity = fade;
       mm.transparent = true;
       mm.blending = blending;
-      const c = modelParticleColour(nt, rgb);
+      // Coordinator hold (2026-10-23): modelParticleColour (black for non-NT) is not applied yet. The exe alpha
+      // is byte/255 - 1 <= 0, which the port does not use (opacity = fade), so black at the fade opacity
+      // would draw dark planes the exe may never show (alpha packed to 0). Needs the packed-alpha path
+      // (dump 291671) and a capture first.
+      const c = nt ? modelParticleColour(nt, rgb) : rgb;
       mm.color?.setRGB(c[0], c[1], c[2]);
       if (exeAlpha) mm.visible = !(skipOpaque && opaqueStripMaterials.has(mm));
     }

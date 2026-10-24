@@ -17999,3 +17999,7 @@ Pofuilly state 11:
 - The setter of +0xb0 bit 0x10 (the generic animation step's end) and the arm's frame timing against the port's animator.
 - Pofuilly state 11's trigger: who sets +0x30 bit 0x100, the +0x88 test (its slot 0x88 of the slime), and the effect 0xe0 every 4th frame (0x0050b510 not traced).
 - The Recon's launch in the absolute frame (the hover is absolute in the exe); the port keeps the ground-relative lift.
+
+## 2026-10-23: Rabarta model colour held back
+
+The previous entry's `modelParticleColour` (black for a non-NT model particle) is merged but not applied in `render/hitfx.ts`: the exe's alpha for that draw is byte/255 - 1 (at most 0), and the port draws with opacity = fade, so black at the fade opacity would add dark planes. Whether the packed diffuse alpha clamps to 0 (model invisible) or wraps (the earlier note: (byte+1)&0xff) decides the look; trace the packing (dump 291671, 850240) and take a capture before switching the colour.
