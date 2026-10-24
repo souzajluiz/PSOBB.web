@@ -1062,6 +1062,11 @@ export class Game extends Lobby {
   // 0x008003e0): 6x12 G_DragonBossActions (0x14)
   // {12, 05, entity} {u16 state, u16 cursor (+0x684), u32 target client id
   // (+0x394, 0xFFFF none), f32 x, f32 z}. combat/dragon.ts.
+  /** The Gal Gryphon's 0xA0 (the pattern step) or 0x9F (the target), built by combat/galgryphonai.ts. */
+  sendGalgryphonPacket(packet: Uint8Array): void {
+    this.conn.send(0x60, 0, packet);
+  }
+
   sendDragonAction(entityId: number, state: number, cursor: number, target: number | null, x: number, z: number): void {
     const b = new Uint8Array(0x14);
     const dv = new DataView(b.buffer);

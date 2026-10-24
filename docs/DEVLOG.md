@@ -16691,3 +16691,53 @@ Follow-up to "Customize: the action grid from the exe" (above): the grid was a t
 - NT flag per particle (effect_nt flag 1 of the renderer), so NT model particles get SRCALPHA / ONE.
 
 - The list form's mark (0x39) and ring (0x1a) are made once at the start, at the target's position then, and do not follow it (the existing mark's behaviour, not checked against the exe's follow of the entity).
+
+## 2026-10-23: Gal Gryphon brain wired (`combat/galgryphonai.ts`); the S0..S17 re-arm question answered from the exe
+
+**Re-arm (the open question of the S0..S17 entry). Nothing re-enters S4 or sub 1.** The chain is the leader's pattern executor, `ProcessGalgryphonAction_004a7b58` (dump 226598), which update_gal_gryphon (dump 226140) calls between `HandleGalgryphonState9_004a7360` and phase 8. It runs when `+0x4c8 & 2` is set and the cursor `+0x4c4` is at or past the seed `+0x4b0`.
+- Every 0xA0 sets that bit (`SyncPlayerToEntityTransform_004a7034`, dump 226104: `this[1].spawn_initdata |= 2`) and points the cursor at the synced record `+0x49c`.
+- The synced record ends by its duration or by a handler's advance. The duration countdown is `ProcessGalGryphonAttackCooldown_004a7de8` (dump 226721): it reads `(player+0x460+0x64)+2`, which is the cursor's +2 (the record's duration). The tech-info struct sits at +0x460 (the dump's field list: `unk1` at +0x45c, the struct after it), so its `field_0x64` is +0x4c4. The countdown skips state 4. At zero it calls `FUN_004a7e20`, so the cursor moves to `+0x4b0`, the seed (S33, infinite).
+- The executor then clears bit 2, walks the pattern stream at `+0x77c` by one packet (the branch loop, `CalculateGalgryphonRandomPacketValue_004a8c9c`, the op handler), and sends it through `SendGalgryphonActionPacket_004a7b28` -> `checked_call_packet0x60_subcommand` -> the loopback. The loopback writes the next record and sets the state. The chain goes on with no S4 involvement.
+- S4 is entered once. No record in `galgryphonscriptdata.ts` has op 4 (the ops present are 0, 2, 5-7, 9-24, 26-34; not 1, 3, 4, 8 or 25), so sub 1 is reached once per fight and the default walk runs once.
+- The previous entry's "the boss idles" is wrong: it missed the executor (the -b doc's `0x004a7b58` line describes it).
+
+**Other premise corrections (exe).**
+- The follower path (dump 226190-226212): flag 1 runs only phase 0 of the state. The leader runs `HandleGalgryphonState9`, the executor, phase 8, phase 0. The pattern entry said the follower runs 8 and 0: corrected.
+- The 6x9F (`SendOlgaMinionActionPacket_004a1328`, dump 223787): `[0x9f, 4]`, u16 entity id @2, u32 target id @4 (+0x394), f32 x @8 (+0x39c), f32 z @0xc (+0x3a4). 16 bytes. Sent from the leader's phase 8 (`OlgaMinionUpdateTargeting_004a12dc`, dump 223761).
+- `UpdateGalGryphon_004a7c44` (dump 226645): with flag 0x10 the x and z are skipped (its hit check, `ExecuteGalGryphonHitCheck_00520750`, is not ported); `heading += +0x488`; then `ScaleOlgaMinionTransform_004a4814` (dump 224860) damps: `+0x488 = ROUND(+0x488 * c)`, `+0x480 *= b`, `+0x47c *= a`, `+0x484 *= a`. The tables are written at the top of the function: a = 0.3 / 0.75 / 0.75, b = 0 / DAT_00a475f8 / DAT_00a475f8, c = 0 / 0.75 / 0.75 (stage 0 / 1 / 2).
+- `GalGryphonUpdatePosition_004a7dac` (dump 226664) adds `+0x48c` / `+0x494` to x / z once per tick and clears them. The sync's position is a delta for these (`vec3_subtract(x5, x2)`); ASSUMED to be those two words.
+- `SetEnemyAiState` order: the sync writes the record, the cursor and the pose, then the state changes (phase 5 on the old state, phase 4 on the new). S4's leave writes its home pose, so a follower's height and heading read S4's values after the first change, as in the exe.
+
+**Unification (one context for S0..S34).** `GalgryphonStateCtx` (galgryphonstatesa.ts) is the only context. `GalgryphonBody` gains `m` (+0x6ec), `slope` (+0x6fc), `vy` (+0x480), `pA` / `pB`; `GalgryphonMotion` gains `setFlagsB0`; `GalgryphonFx extends GalgryphonFxB`; the context gains `rng`, `rt`, `players`. Part B keeps its handler signature and gets a `GalgryphonStateCtxB` from `viewStateCtxB(ctx)` (cached per context): getters over the same storage (y = h, velX / velY / velZ = vx / vy / vz, headingVel = turn, dirX / dirZ = toTargetX / toTargetZ, n = aux, pitchB = tilt, k = aura at +0x6f0, which S4's aura and S30's beam counter share; they never run together). `attackDispatch` is renamed `thresholdDispatch` (0x004a47a8, per the galgryphonfx entry). S27's beam goes through `s27Beam` (galgryphonfx.ts) instead of the raw random.
+
+**The brain (`client/src/combat/galgryphonai.ts`, new).** `GalgryphonAi` owns the body, a `GalgryphonMotionPlayer` (the states' motion calls over the doc's row table), the records (+0x49c synced, +0x4b0 seed, and the cursor), the walker (`GalgryphonScript`), and the timers. `tick` is update_gal_gryphon: the leader runs `stageGate` (the death script when HP <= 0 and flags & 0xc == 0, once; else phase 9), the executor, phase 8, phase 0; a follower runs phase 0. Then `integrate` and `cooldown`. `receive(view)` applies a 0xA0 (follower) and `receiveTarget(view)` a 0x9F; the leader's own packets go out through `emit` and loop back through the same apply, as the exe does. `encodeGalgryphonSync` / `encodeGalgryphonTarget` write the wire bytes. Hooks: `opts.fx / cine / world / death / net` override the defaults (no-ops; the target search and the 9F send are real).
+
+**Wiring (`render/combat.ts`, `net/game.ts`).** `TBoss5Gryphon` gets its own spawn branch (before the generic `EnemyAi`), a `tickGalgryphon` in the enemy loop (`setHp` each tick; the motion plays on a row change), `onGalgryphonSub` for 0xA0 / 0x9F (non-leaders), and `game.sendGalgryphonPacket` (the 0x60 subcommand). The S7 throw calls `GalgryphonMinionManager.throw` through the `throwMinion` option.
+
+**ASSUMED.**
+- Motion rows: the doc's table for slots 0, 1, 3..9, 19, 20, 24..26; other slots stand (motion 9), loop, speed 1. A raw write (`+0xb8` only) loads its row on the next tick (the S4 entrance writes slot 25 and needs its 500 frames). The play / loop / chain / once rules approximate `FUN_007aa094`.
+- Slot vs anim: part B's `setAnim` passes its `GALGRYPHON_ANIM_B` names (the doc's motion indices) as slots. The doc's indices and the table's slots are not reconciled (kiri is motion 17 and slot 20). Check the S18..S34 motions before trusting them.
+- `+0xb4` is read as the playing slot (A) and as the record flags (B): the same byte.
+- The sync's x / z delta goes to +0x48c / +0x494 (see above). The height and heading are set from the sync.
+- DAT_00a475f8 = 0 (no writer in the image).
+- P = the live target count; the heading is the spawn yaw in BAMS (`round(yaw * 65536 / 2pi)`).
+- The leader's target: the nearest live player in XZ (EnemyEntity_FindTargetInRange not decoded), sent as 0x9F from phase 8 and applied locally.
+- Past the seed the advance is a no-op (the exe would read beyond; the data does not reach it).
+- The body stays at its own height (no ground follow). The entrance: the constructor enters S4.
+- The rng is the host's `rand`; `reseed` (init_rng from the record) is a no-op.
+- The record's four words are float bit patterns in the 0xA0 (the receiver reads op and duration; the exe's float / int mix is not decoded).
+
+**Tests.**
+- `tests/galgryphonai.test.ts` (new): the wire codec, the motion player (loop wrap, the once row at 500 frames, chain 6 -> 7, raw write), the leader's entrance and first default packet (S0, roll 2), the re-arm (expired record -> S33 -> next packet S12; nothing sent while the synced record runs), the death gate (the stage walk runs once), the follower (apply, delta, no packets, expiry into S33), the 9F, and the part B view's aliases.
+- `tests/galgryphonstatesb.test.ts`: the `thresholdDispatch` name; the S27 beam value scaled (1 for the raw 16384).
+- Passing: `galgryphonstatesa`, `galgryphonscript`, `galgryphon`, `galgryphonminion`, `galgryphonfx`.
+- `node tests/combat.test.ts`: 5852 checks, 0 failures (vendor linked from the main checkout for the run, then removed).
+- `cd client && node_modules/typescript/bin/tsc --noEmit -p .` exit 0 (Node 24; node_modules linked from the main checkout, then removed).
+- Not run: Playwright (per the brief), Chrome.
+
+**Left.**
+- Effect objects: the ring particles, the S30 beam, the lightning, the dive, the sounds. The hook bodies in galgryphonfx.ts are pure and not yet called from the default hooks.
+- The S27 beam spawn (0x004a5218: random angle and radius, the ground search) and the lightning jitter.
+- The area hit: the attack 0x004a8690 from the homing minion update (galgryphon.ts) and the minion ring's variant. Not called yet.
+- The walk mode's hit check (0x00520750) and the ground follow; the damage and hit reactions (`onDamage` is a no-op).
+- The motion's real timing and the slot / anim reconciliation above.
